@@ -264,7 +264,7 @@ impl SimulationContext {
   }
 
   /// TODO: Document this item
-  pub fn create_empty_scene(&self) -> EngineResult<u64> {
+  pub fn create_empty_scene(&self, spawn_fallback_camera: bool) -> EngineResult<u64> {
     let (scene, root_entity) = empty_scene_object(Arc::clone(&self.texture_cache))?;
     
     // 1. Cursor Entity
@@ -299,44 +299,54 @@ impl SimulationContext {
       },
     )?;
 
-    // 3. Camera Entity
-    let home_position = Vec3f32::from_components(0.0115, 0.0115, 0.0115);
-    let camera_entity = scene.spawn_entity("camera");
-    scene.set_parent(camera_entity, Some(root_entity));
-    
-    scene.add_component(
-      camera_entity,
-      crate::scene::TransformComponent {
-        position: home_position,
-        rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-      },
-    )?;
-    scene.add_component(
-      camera_entity,
-      crate::scene::CameraComponent {
-        projection: crate::scene::CameraProjection::Perspective {
-          fov: 60.0_f32.to_radians(),
-          aspect_ratio: 16.0 / 9.0,
-          near: 0.0001,
-          far: 1000.0,
+    // 3. Camera Entity & 4. Sky Entity
+    let mut camera_id = None;
+    let mut sky_id = None;
+    if spawn_fallback_camera {
+      let home_position = Vec3f32::from_components(0.0115, 0.0115, 0.0115);
+      let camera_entity = scene.spawn_entity("camera");
+      scene.set_parent(camera_entity, Some(root_entity));
+      
+      scene.add_component(
+        camera_entity,
+        crate::scene::TransformComponent {
+          position: home_position,
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
         },
-      },
-    )?;
+      )?;
+      scene.add_component(
+        camera_entity,
+        crate::scene::CameraComponent {
+          projection: crate::scene::CameraProjection::Perspective {
+            fov: 60.0_f32.to_radians(),
+            aspect_ratio: 16.0 / 9.0,
+            near: 0.01,
+            far: 1000.0,
+          },
+        },
+      )?;
 
-    // 4. Sky Entity
-    let sky_entity = scene.spawn_entity("sky");
-    scene.set_parent(sky_entity, Some(camera_entity));
-    scene.add_component(sky_entity, crate::scene::SkyComponent {})?;
+      let sky_entity = scene.spawn_entity("sky");
+      scene.set_parent(sky_entity, Some(camera_entity));
+      scene.add_component(sky_entity, crate::scene::SkyComponent {})?;
+
+      camera_id = Some(camera_entity);
+      sky_id = Some(sky_entity);
+    }
 
     let mut scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity).with_physics_scene();
     scene_ctx_obj.cursor_entity = Some(cursor_entity);
     scene_ctx_obj.sun_entity = Some(sun_entity);
-    scene_ctx_obj.sky_entity = Some(sky_entity);
+    if let Some(c) = camera_id {
+      scene_ctx_obj.register_entity(c);
+    }
+    if let Some(s) = sky_id {
+      scene_ctx_obj.sky_entity = Some(s);
+      scene_ctx_obj.register_entity(s);
+    }
     scene_ctx_obj.register_entity(cursor_entity);
     scene_ctx_obj.register_entity(sun_entity);
-    scene_ctx_obj.register_entity(camera_entity);
-    scene_ctx_obj.register_entity(sky_entity);
 
     let scene_ctx = Arc::new(RwLock::new(scene_ctx_obj));
     Ok(self.scenes.write().insert_scene(scene_ctx))
@@ -349,7 +359,7 @@ impl SimulationContext {
 
   // TODO remove
   /// TODO: Document this item
-  pub fn create_default_scene(&self) -> EngineResult<u64> {
+  pub fn create_default_scene(&self, spawn_fallback_camera: bool) -> EngineResult<u64> {
     oshal::log!("create_default_scene: START");
     let (scene, root_entity) = empty_scene_object(Arc::clone(&self.texture_cache))?;
     oshal::log!("create_default_scene: empty_scene_object OK, root={:?}", root_entity);
@@ -397,28 +407,48 @@ impl SimulationContext {
     )?;
     oshal::log!("create_default_scene: sun PhysicalMeshComponent OK");
 
-    let camera_entity = scene.spawn_entity("camera");
-    let pos = 0.02 / f32::sqrt(3.0);
-    // Look at origin from first octant
-    let look_dir = Vec3f32::from_components(-pos, -pos, -pos).normalize();
-    let up = Vec3f32::from_components(0.0, 0.0, 1.0);
-    let right = look_dir.cross(up).normalize();
-    let true_up = right.cross(look_dir).normalize();
-    
-    // In our coordinate system: +x=right, -y=forward, +z=up.
-    let mat = <oshal::math::matrix::mat4::Mat4x4f32 as oshal::math::matrix::Matrix4>::look_at_axes(right, look_dir, true_up, Vec3f32::from_components(pos, pos, pos));
-    let rot = <oshal::math::matrix::mat4::Mat4x4f32 as oshal::math::matrix::Matrix4>::to_quat_custom_frame(&mat);
-    scene.add_component(
-      camera_entity,
-      TransformComponent {
-        position: Vec3f32::from_components(pos, pos, pos),
-        rotation: rot,
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-      },
-    )?;
-    scene.add_component(camera_entity, crate::scene::CameraComponent::new_persp(45.0, 1.0, 0.0001, 1000.0))?;
-    scene.set_parent(camera_entity, Some(root_entity));
-    oshal::log!("create_default_scene: camera OK");
+    let mut camera_id = None;
+    let mut sky_id = None;
+    if spawn_fallback_camera {
+      let camera_entity = scene.spawn_entity("camera");
+      let pos = 0.02 / f32::sqrt(3.0);
+      // Look at origin from first octant
+      let look_dir = Vec3f32::from_components(-pos, -pos, -pos).normalize();
+      let up = Vec3f32::from_components(0.0, 0.0, 1.0);
+      let right = look_dir.cross(up).normalize();
+      let true_up = right.cross(look_dir).normalize();
+      
+      // In our coordinate system: +x=right, -y=forward, +z=up.
+      let mat = <oshal::math::matrix::mat4::Mat4x4f32 as oshal::math::matrix::Matrix4>::look_at_axes(right, look_dir, true_up, Vec3f32::from_components(pos, pos, pos));
+      let rot = <oshal::math::matrix::mat4::Mat4x4f32 as oshal::math::matrix::Matrix4>::to_quat_custom_frame(&mat);
+      scene.add_component(
+        camera_entity,
+        TransformComponent {
+          position: Vec3f32::from_components(pos, pos, pos),
+          rotation: rot,
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )?;
+      scene.add_component(camera_entity, crate::scene::CameraComponent::new_persp(45.0, 1.0, 0.01, 1000.0))?;
+      scene.set_parent(camera_entity, Some(root_entity));
+      oshal::log!("create_default_scene: camera OK");
+
+      let sky_entity = scene.spawn_entity("sky");
+      scene.add_component(sky_entity, SkyComponent {})?;
+      scene.add_component(
+        sky_entity,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )?;
+      scene.set_parent(sky_entity, Some(root_entity));
+      oshal::log!("create_default_scene: sky OK");
+
+      camera_id = Some(camera_entity);
+      sky_id = Some(sky_entity);
+    }
 
     let grid_entity = scene.spawn_entity("grid");
     scene.add_component(
@@ -432,19 +462,6 @@ impl SimulationContext {
     scene.add_component(grid_entity, GridComponent {})?;
     scene.set_parent(grid_entity, Some(root_entity));
     oshal::log!("create_default_scene: grid OK");
-
-    let sky_entity = scene.spawn_entity("sky");
-    scene.add_component(sky_entity, SkyComponent {})?;
-    scene.add_component(
-      sky_entity,
-      TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 0.0),
-        rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-      },
-    )?;
-    scene.set_parent(sky_entity, Some(root_entity));
-    oshal::log!("create_default_scene: sky OK");
 
     let cursor_entity = scene.spawn_entity("cursor");
     scene.add_component(
@@ -471,10 +488,13 @@ impl SimulationContext {
     let mut scene_ctx_obj = scene_ctx_obj
       .with_grid_entity(grid_entity)?;
     oshal::log!("create_default_scene: with_grid_entity OK");
-    let mut scene_ctx_obj = scene_ctx_obj
-      .with_sky_entity(sky_entity)?;
-    oshal::log!("create_default_scene: with_sky_entity OK");
-    scene_ctx_obj.register_entity(camera_entity);
+    if let Some(s) = sky_id {
+      scene_ctx_obj = scene_ctx_obj.with_sky_entity(s)?;
+      oshal::log!("create_default_scene: with_sky_entity OK");
+    }
+    if let Some(c) = camera_id {
+      scene_ctx_obj.register_entity(c);
+    }
     
     let scene_ctx = Arc::new(RwLock::new(scene_ctx_obj));
 
@@ -753,14 +773,15 @@ impl SimulationContext {
         )?;
         scene_ctx.scene.add_component(comet_id, KinematicComponent::default())?;
         // For Kinematic bodies, they are driven by the Almanac.
-        scene_ctx.scene.add_component(
-          comet_id,
-          crate::simulation::almanac::AlmanacPlanetComponent {
-            // TODO: In a real implementation we would parse the SPK ID from the name/designation or pass it via SpawnComet parameters.
-            // Using 0 as a placeholder for now until SPK loading flow dictates the real ID.
-            spk_id: 0,
-          },
-        )?;
+          scene_ctx.scene.add_component(
+            comet_id,
+            crate::scene::almanac_planet::AlmanacPlanet {
+              naif_id: 0, // Placeholder
+              rot_period: 0.0,
+              mu: 0.0,
+              bf_to_pa: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+            },
+          )?;
       }
       2 => {
         // Dynamic: full rigid-body physics.
@@ -783,6 +804,70 @@ impl SimulationContext {
     let comet_ext_id = scene_ctx.register_entity(comet_id);
 
     Ok((lca_ext_id, comet_ext_id))
+  }
+
+  pub fn spawn_trajectory_internal(
+    &self,
+    scene_id: u64,
+    parent_entity: u64,
+    entity_name: &str,
+    trajectory: crate::gpu::TrajectoryGpu,
+    segments: &[crate::gpu::RationalBezierGpu],
+  ) -> EngineResult<u64> {
+    use crate::scene::{TransformComponent, trajectory::TrajectoryComponent};
+    use aethervk_oshal_rlib::math::matrix::SquareMatrix;
+    use aethervk_oshal_rlib::math::vector::vec4::Quat;
+    use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+
+    let scene_ctx_lock = {
+      let scenes = self.scenes.read();
+      scenes
+        .get_scene(scene_id)
+        .ok_or(EngineError::InvalidOperation("spawn_trajectory: scene not found"))?
+    };
+    let mut scene_ctx = scene_ctx_lock.write();
+
+    let entity_id = scene_ctx.scene.spawn_entity(entity_name);
+
+    // Transform relative to parent
+    scene_ctx.scene.add_component(
+      entity_id,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )?;
+
+    // Link parent
+    if parent_entity > 0 {
+      if let Some(parent_id) = scene_ctx.get_entity(parent_entity) {
+        scene_ctx.scene.set_parent(entity_id, Some(parent_id));
+      }
+    }
+
+    // Build control points array
+    let mut control_points = alloc::vec::Vec::with_capacity(segments.len() * 4);
+    for seg in segments {
+      control_points.push(seg.cp0);
+      control_points.push(seg.cp1);
+      control_points.push(seg.cp2);
+      control_points.push(seg.cp3);
+    }
+
+    // Default subdivisions to 64 per segment for smoothness
+    let traj_comp = TrajectoryComponent::new(
+      control_points,
+      trajectory.color,
+      trajectory.line_width,
+      trajectory.texture_id,
+      64,
+    );
+
+    scene_ctx.scene.add_component(entity_id, traj_comp)?;
+    let ext_id = scene_ctx.register_entity(entity_id);
+
+    Ok(ext_id)
   }
 
   /// Atomically spawns the LCA micro-frame entity and the static mesh entity
@@ -960,7 +1045,7 @@ pub(crate) fn empty_scene_object(
       crate::scene::ReferenceFrameComponent {
         frame_type: crate::scene::ReferenceFrameType::Macro,
         scale: 1.0,
-        soi_radius: f32::MAX,
+        soi_radius: 1000.0,
         _padding: 0,
       },
     )
@@ -968,3 +1053,4 @@ pub(crate) fn empty_scene_object(
 
   Ok((scene, root_entity))
 }
+

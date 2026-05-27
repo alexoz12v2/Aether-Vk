@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using AetherVk.Logic.Models;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
 using Xunit;
@@ -46,27 +47,41 @@ public class SpawnCometViewModelTests
 
     var vm = new SpawnCometViewModel(models, horizonService, timelineService, breadcrumb);
 
-    Assert.True(vm.CanGoNext); // Model is selected in constructor if list has items
+    // Step 1: model is selected → can proceed
+    Assert.True(vm.CanGoNext);
     
     vm.NextStepCommand.Execute(null);
     Assert.Equal(2, vm.CurrentStep);
     Assert.True(vm.CanGoBack);
     
+    // Step 2: any valid physics type → can proceed
     vm.PhysicsType = "Dynamic";
     Assert.True(vm.CanGoNext);
     
     vm.NextStepCommand.Execute(null);
     Assert.Equal(3, vm.CurrentStep);
-    
-    // Cannot go next in step 3 until FetchedOrbitData is set
+    Assert.False(vm.IsFinalStep); // step 4 is the final step now
+
+    // Step 3 with Dynamic: requires both SelectedSpkRecord AND FetchedOrbitData
     Assert.False(vm.CanGoNext);
     vm.FetchedOrbitData = new PlanetOrbitData();
+    Assert.False(vm.CanGoNext); // still false: SelectedSpkRecord is null
+    vm.SelectedSpkRecord = new SpkRecordItem { RecordId = "90000030", EpochYear = "1986", Name = "Halley" };
     Assert.True(vm.CanGoNext);
-    
-    Assert.True(vm.IsFinalStep);
-    
+
+    vm.NextStepCommand.Execute(null);
+    Assert.Equal(4, vm.CurrentStep);
+    Assert.True(vm.IsFinalStep); // step 4 is the final step
+
+    // Step 4: always can proceed (placement is optional)
+    Assert.True(vm.CanGoNext);
+
     vm.PreviousStepCommand.Execute(null);
-    Assert.Equal(2, vm.CurrentStep);
+    Assert.Equal(3, vm.CurrentStep);
+
+    // Step 3 with Static: can skip JPL data
+    vm.PhysicsType = "Static";
+    Assert.True(vm.CanGoNext);
   }
 
   [Fact]

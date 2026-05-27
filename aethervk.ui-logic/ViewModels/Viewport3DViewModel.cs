@@ -147,19 +147,16 @@ public partial class Viewport3DViewModel
       }
   }
 
-  // HOME_POSITION: camera starts 0.02 AU from the Sun, equally distributed across x/y/z (first octant).
-  // Coordinate system: +x=right, -y=forward, +z=up. Distance = 0.02 AU → each component = 0.02/√3 ≈ 0.011547.
-  private const float HomeDistanceAu = 0.02f;
-  // 0.02 / Math.Sqrt(3) precomputed
-  private const float HomePosComponent = 0.011547005f;
+  // HOME_POSITION: (AU) 0.049,0.034,0.039
+  private const float HomePosX = 0.049f;
+  private const float HomePosY = 0.034f;
+  private const float HomePosZ = 0.039f;
 
-  // Look-at quaternion: camera at (p,p,p) facing origin with +z=up.
-  // look_dir = normalize(-1,-1,-1), right = normalize(look_dir × up), true_up = right × look_dir.
-  // Computed offline to match the Rust create_default_scene look_at_axes output.
-  private const float HomeRotW =  0.7010574f;
-  private const float HomeRotX = -0.4304593f;
-  private const float HomeRotY =  0.0922958f;
-  private const float HomeRotZ =  0.5609855f;
+  // Rotation: x=0.251,y=-0.131,z=-0.443,w=0.851
+  private const float HomeRotW =  0.851f;
+  private const float HomeRotX =  0.251f;
+  private const float HomeRotY = -0.131f;
+  private const float HomeRotZ = -0.443f;
 
   private void SetupViewport()
   {
@@ -220,29 +217,9 @@ public partial class Viewport3DViewModel
       return;
     }
 
-    // Seed the new camera at the default scene camera's home position + look-at rotation.
-    var sceneCamera = _runtimeService.GetEntityByName(SceneId, "camera");
-    if (sceneCamera != null && sceneCamera.Id != CameraId)
-    {
-      var sceneTransform = sceneCamera.Components
-        .OfType<AetherVk.Logic.Models.TransformComponent>()
-        .FirstOrDefault();
-      if (sceneTransform != null
-          && (sceneTransform.PosX != 0f || sceneTransform.PosY != 0f || sceneTransform.PosZ != 0f))
-      {
-        System.Console.WriteLine($"[SetupViewport] Seeding from scene 'camera': pos=({sceneTransform.PosX},{sceneTransform.PosY},{sceneTransform.PosZ})");
-        _runtimeService.SetTransformComponent(SceneId, CameraId,
-          sceneTransform.PosX, sceneTransform.PosY, sceneTransform.PosZ,
-          sceneTransform.RotW, sceneTransform.RotX, sceneTransform.RotY, sceneTransform.RotZ,
-          1f, 1f, 1f);
-        return;
-      }
-    }
-
-    // Fallback: canonical home position looking at origin.
-    System.Console.WriteLine($"[SetupViewport] Using fallback home pos={HomePosComponent}");
+    System.Console.WriteLine($"[SetupViewport] Applying default viewport camera position: pos=({HomePosX}, {HomePosY}, {HomePosZ})");
     _runtimeService.SetTransformComponent(SceneId, CameraId,
-      HomePosComponent, HomePosComponent, HomePosComponent,
+      HomePosX, HomePosY, HomePosZ,
       HomeRotW, HomeRotX, HomeRotY, HomeRotZ,
       1f, 1f, 1f);
   }

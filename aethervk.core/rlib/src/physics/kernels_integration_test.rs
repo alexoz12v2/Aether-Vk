@@ -6,7 +6,10 @@ mod tests {
   use crate::gpu_backends::vulkan::physics::VulkanComputeKernels;
 
   #[test]
-  #[ignore] // Run this with cargo test -- --ignored to execute full pipeline on GPU
+  // Placeholder stub — body is empty.  Implement and un-ignore once a real
+  // end-to-end GPU pipeline test (motion_bounds + lbvh_prepass + lbvh_build)
+  // has been written.  Run with: cargo test -- --ignored
+  #[ignore]
   fn test_motion_blas_full_pipeline() {
     // This is an integration test to run the full Motion BLAS pipeline end-to-end:
     // 1. Allocation (respecting is_list)

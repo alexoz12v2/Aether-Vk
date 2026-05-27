@@ -38,7 +38,7 @@ fn test_gpu_collision_pipeline_integration() {
   // 1. Create two intersecting spheres (rigidbodies)
   let entities = vec![
     EntityGpu {
-            bvh: bvh_addr,
+      bvh: bvh_addr,
       transform: [
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
@@ -63,7 +63,7 @@ fn test_gpu_collision_pipeline_integration() {
       shape_data: [0.0; 3],
     },
     EntityGpu {
-            bvh: bvh_addr,
+      bvh: bvh_addr,
       transform: [
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],

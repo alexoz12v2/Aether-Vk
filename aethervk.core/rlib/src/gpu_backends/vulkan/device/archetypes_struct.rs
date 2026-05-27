@@ -4,18 +4,17 @@ use crate::{
   gpu::{
     PipelineKeyable,
     vulkan::device::{
-        LogicalDevice, Queue,
-        locks::DebugTrackedRwLock,
-        pipelines::{
-          FragmentOut, FragmentShader, GraphicsInfo, PipelineFlags, PreRasterization,
-          StencilCompareOp, StencilLogicOp, VertexIn,
-        },
-        renderpasses,
-        resources,
-        resources::ForwardMeshRenderResourceArchetype,
-        shader_manager,
-        shader_manager::ShaderKey,
+      LogicalDevice, Queue,
+      locks::DebugTrackedRwLock,
+      pipelines::{
+        FragmentOut, FragmentShader, GraphicsInfo, PipelineFlags, PreRasterization,
+        StencilCompareOp, StencilLogicOp, VertexIn,
       },
+      renderpasses, resources,
+      resources::ForwardMeshRenderResourceArchetype,
+      shader_manager,
+      shader_manager::ShaderKey,
+    },
   },
   gpu_backends::vulkan::device::{pipelines, utils},
   simulation::comet::{NORMAL_COMPONENTS, POSITION_COMPONENTS, UV_COMPONENTS},
@@ -864,9 +863,7 @@ impl Archetypes {
           .pipeline_layout
           .get(),
       )
-      .with_pipeline_flags(
-        PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE,
-      )
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
       .with_stencil_compare_op(StencilCompareOp::Always)
       .with_stencil_logic_op(StencilLogicOp::Replace)
       .with_stencil_reference(255)
@@ -1561,9 +1558,7 @@ impl Archetypes {
           .with_stencil_attachment_format(depth_stencil_format),
       )
       .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
-      .with_pipeline_flags(
-        PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE,
-      )
+      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
       .with_stencil_compare_op(StencilCompareOp::Always)
       .with_stencil_logic_op(StencilLogicOp::Replace)
       .with_stencil_reference(255)

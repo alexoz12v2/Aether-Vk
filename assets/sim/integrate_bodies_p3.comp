@@ -20,6 +20,15 @@
 // Orientation update (first-order Lie group):
 //   q_{n+1} = normalize(q_n + (dt/2) · [ω_mid_world, 0] ⊗ q_n)
 //
+// External Gravity Emitters (type_id == 0):
+//   Emitter position is stored in macro world-space (AU).
+//   Each rigid body knows its parent frame via body.frame_idx.
+//   The shader transforms the emitter position into the body's local frame
+//   using pc.frames (GpuReferenceFrameArray BDA):
+//     • Macro frame (frame_type == 0): convert AU distance to km, mu already in km³/s².
+//     • Micro frame              : r_local = (em_pos_AU - frame.center_AU) / frame.scale
+//   beta (radiation-pressure) compensation: mu_eff = mu × (1 − beta).
+//
 // After integration, the wrench is CLEARED so force generators can accumulate
 // F(x_{n+1}) for the next frame.
 //
@@ -30,6 +39,7 @@
 //   angular_vel_drag   = (xyz angular vel, w drag coeff — unused here)
 //   inertia_tensor_inv = (xyz diagonal local I⁻¹)
 //   wrench_idx         = index into WrenchArray (CoM wrench)
+//   frame_idx          = index into GpuReferenceFrameArray
 //
 // Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
 
@@ -44,13 +54,14 @@
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant, std430) uniform PushConstants {
-    RigidBodyArray rigid_bodies;
-    WrenchArray wrenches;
-    EmitterArray emitters;
+    RigidBodyArray         rigid_bodies;
+    WrenchArray            wrenches;
+    EmitterArray           emitters;
+    GpuReferenceFrameArray frames;  // BDA — macro GpuReferenceFrame[]; used for emitter transform
     float dt;
-    uint n_bodies;
-    uint n_iterations;
-    uint num_emitters;
+    uint  n_bodies;
+    uint  n_iterations;
+    uint  num_emitters;
 } pc;
 
 void main() {
@@ -70,19 +81,46 @@ void main() {
     vec3 f_n = vec3(uintBitsToFloat(wrench.force_x), uintBitsToFloat(wrench.force_y), uintBitsToFloat(wrench.force_z));
     vec3 t_n = vec3(uintBitsToFloat(wrench.torque_x), uintBitsToFloat(wrench.torque_y), uintBitsToFloat(wrench.torque_z));
 
-    for (uint e = 0; e < pc.num_emitters; ++e) {
-        vec3 em_pos = pc.emitters.emitters[e].position; float em_mu = pc.emitters.emitters[e].mu;
-        vec3 em_norm = pc.emitters.emitters[e].normal; uint em_type = pc.emitters.emitters[e].type_id;
-        float em_trunc = pc.emitters.emitters[e].trunc_distance; float em_scale = pc.emitters.emitters[e].scale_factor;
+    // ── External force emitters ───────────────────────────────────────────────
+    uint fi = body.frame_idx;
+    GpuReferenceFrame frame = pc.frames.frames[fi];
 
-        if (em_type == 0) {
-            vec3 r = em_pos - pos_n; float s_dist_sq = dot(r, r) * em_scale * em_scale;
-            if (s_dist_sq > 1e-6) {
-                float s_dist = sqrt(s_dist_sq); float s_dist3 = s_dist_sq * s_dist; float s_dist5 = s_dist3 * s_dist_sq;
-                float softening = 1.0 - exp(-s_dist5); float force_mag = (em_mu * mass * softening) / s_dist_sq;
-                f_n += normalize(r) * force_mag;
+    for (uint e = 0; e < pc.num_emitters; ++e) {
+        vec3  em_pos   = pc.emitters.emitters[e].position;   // AU (macro world-space)
+        float em_mu    = pc.emitters.emitters[e].mu;         // km³/s² (JPL default)
+        vec3  em_norm  = pc.emitters.emitters[e].normal;
+        uint  em_type  = pc.emitters.emitters[e].type_id;
+        float em_trunc = pc.emitters.emitters[e].trunc_distance;
+        float em_beta  = pc.emitters.emitters[e].beta;       // radiation-pressure β
+
+        if (em_type == 0u) {
+            // ── Gravity emitter ────────────────────────────────────────────
+            // Transform macro AU emitter position to body's local frame (km).
+            // frame.scale = AU/km  (small number, e.g. 6.685e-9 for 1 AU ≡ 1.496e8 km)
+            // frame.frame_type == 0 → body IS in macro frame; convert distance AU→km.
+            // frame.frame_type == 1 → body is in microframe; use frame center+scale.
+            vec3 r_local;
+            if (frame.frame_type == 0u) {
+                // Body position pos_n is in AU; convert distance to km before gravity.
+                r_local = (em_pos - pos_n) * AU_TO_KM;
+            } else {
+                // Microframe: r_local(km) = (em_pos(AU) − center(AU)) / scale(AU/km)
+                //                          − pos_n(km)
+                r_local = (em_pos - frame.center_pos) / frame.scale - pos_n;
             }
-        } else if (em_type == 1) {
+
+            float dist_sq = dot(r_local, r_local);
+            if (dist_sq > 1e-6) {
+                float dist      = sqrt(dist_sq);
+                float dist3     = dist_sq * dist;
+                float dist5     = dist3 * dist_sq;
+                float softening = 1.0 - exp(-dist5);        // quintic softening
+                float mu_eff    = em_mu * (1.0 - em_beta);  // β compensation
+                float force_mag = (mu_eff * mass * softening) / dist_sq;
+                f_n += (r_local / dist) * force_mag;
+            }
+        } else if (em_type == 1u) {
+            // ── Planar emitter (unchanged; local-frame only, no cross-frame) ──
             float dist = dot(pos_n - em_pos, em_norm);
             if (dist >= 0.0 && dist <= em_trunc) f_n += em_norm * em_mu;
         }

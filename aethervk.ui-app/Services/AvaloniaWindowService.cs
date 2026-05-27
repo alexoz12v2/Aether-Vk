@@ -247,6 +247,20 @@ namespace AetherVk.Services
         _sceneStateManager.SetComet(1, meshId);
       }
 
+      if (result.OrbitData != null)
+      {
+        var trajName = $"{result.EntityName}_trajectory";
+        _runtimeService.SpawnTrajectoryFromElements(
+          1,
+          trajName,
+          result.OrbitData.SemiMajorAxis,
+          result.OrbitData.Eccentricity,
+          result.OrbitData.Inclination,
+          result.OrbitData.AscendingNodeLongitude,
+          result.OrbitData.ArgumentOfPerifocus
+        );
+      }
+
       return meshId;
     }
 

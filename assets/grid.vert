@@ -9,22 +9,22 @@ layout(push_constant) uniform Push {
   vec3 gridColor;
 } push;
 
-layout(location = 0) out vec4 outUnprojectedNear;
-layout(location = 1) out vec4 outUnprojectedFar;
+layout(location = 0) out vec2 outNDC;
 
-const vec2 quad[4] = vec2[] (
-  vec2(-1.0, -1.0),
-  vec2(-1.0,  1.0),
-  vec2( 1.0, -1.0),
-  vec2( 1.0,  1.0)
-);
-
+// A single full-screen triangle covers the viewport with no diagonal seam.
+// gl_VertexIndex 0,1,2 produce NDC corners that fully enclose [-1,+1]^2.
+// Using this instead of a 4-vertex TRIANGLE_STRIP eliminates the triangle-edge
+// discontinuity that caused fwidth() to produce wrong values along the diagonal.
 void main() {
-  vec2 uv = quad[gl_VertexIndex];
-  
-  mat4 invViewProj = inverse(push.viewProj);
-  outUnprojectedNear = invViewProj * vec4(uv.x, uv.y, 0.0, 1.0);
-  outUnprojectedFar  = invViewProj * vec4(uv.x, uv.y, 1.0, 1.0);
-  
+  // Generates:
+  //  0: (-1, -1)
+  //  1: (-1,  3)
+  //  2: ( 3, -1)
+  vec2 uv = vec2(
+    -1.0 + float((gl_VertexIndex & 1) << 2),
+    -1.0 + float((gl_VertexIndex & 2) << 1)
+  );
+
+  outNDC = uv;
   gl_Position = vec4(uv.x, uv.y, 0.0, 1.0);
 }

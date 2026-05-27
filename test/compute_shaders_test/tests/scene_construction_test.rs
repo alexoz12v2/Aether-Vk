@@ -16,7 +16,7 @@ fn test_scene_construction() {
 
   // 1. Initialize Simulation Context
   let simulation_context = SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, None).unwrap();
-  let scene_id = simulation_context.create_default_scene().unwrap();
+  let scene_id = simulation_context.create_default_scene(true).unwrap();
 
   // 2. Load Mesh
   let model_path = assets_dir.join("Comet.glb");

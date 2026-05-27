@@ -37,8 +37,11 @@ pub struct RigidBody {
 pub enum ForceEmitter {
   Gravity {
     position: Vec3f32,
-    /// Standard gravitational parameter (G * M)
+    /// Standard gravitational parameter G*M in **km³/s²** (JPL Horizons default).
     mu: f32,
+    /// Radiation-pressure β = F_rad / F_grav.  mu_eff = (1−β) · mu.
+    /// 0.0 = pure gravity; 1.0 = radiation-blown (force-free).
+    beta: f32,
   },
   Planar {
     origin: Vec3f32,
@@ -51,19 +54,34 @@ pub enum ForceEmitter {
 // --- Educational IMEX Simulation Loop ---
 
 /// Evaluates position-dependent forces (e.g., gravity) for all particles.
-/// This should be called once at initialization (t=0) and then internally during Phase 5.
-pub fn compute_particle_forces(particles: &mut [Particle], emitters: &[ForceEmitter]) {
+///
+/// Particles live in a **microframe** whose macro-space center is `frame_center_au`
+/// (in AU) and whose scale factor is `frame_scale_au_per_km` (AU/km, e.g. \~6.685e-9).
+/// Emitter positions are given in macro world-space AU.
+/// `mu` values must be in **km³/s²** (JPL Horizons default).
+///
+/// This should be called once at initialisation (t=0) and then at the end of every
+/// IMEX step to prepare F_{n+1} for the next frame's Phase 1 half-kick.
+pub fn compute_particle_forces(
+  particles: &mut [Particle],
+  emitters: &[ForceEmitter],
+  frame_center_au: Vec3f32,
+  frame_scale_au_per_km: f32,
+) {
   for p in particles.iter_mut() {
     let mut f = Vec3f32::zero();
     for e in emitters {
       match e {
-        ForceEmitter::Gravity { position, mu } => {
-          let r = *position - p.position;
+        ForceEmitter::Gravity { position, mu, beta } => {
+          // Transform emitter macro AU position into particle's local km frame.
+          // frame_scale_au_per_km = AU/km  ⇒  r_km = (pos_AU − center_AU) / scale
+          let r = (*position - frame_center_au) / frame_scale_au_per_km - p.position;
           let dist_sq = r.length_squared();
           if dist_sq > 1e-6 {
             let dist = dist_sq.sqrt();
-            // F = (mu * m / dist^3) * r
-            f += r * (*mu * p.mass / (dist_sq * dist));
+            let mu_eff = *mu * (1.0 - beta);
+            // F = mu_eff * m / r²  (direction toward emitter)
+            f += r * (mu_eff * p.mass / (dist_sq * dist));
           }
         }
         ForceEmitter::Planar {
@@ -277,7 +295,7 @@ pub fn imex_step(
 
     for e in emitters {
       match e {
-        ForceEmitter::Gravity { position, mu } => {
+        ForceEmitter::Gravity { position, mu, beta } => {
           let r = *position - x_mid;
           let dist_sq = r.length_squared();
           if dist_sq > 1e-6 {
@@ -285,7 +303,8 @@ pub fn imex_step(
             let dist3 = dist_sq * dist;
             let dist5 = dist3 * dist_sq;
 
-            let coeff = *mu * rigid_body.mass / dist3;
+            let mu_eff = *mu * (1.0 - beta);
+            let coeff = mu_eff * rigid_body.mass / dist3;
             f_world += r * coeff;
 
             // dF/dx = K
@@ -297,7 +316,7 @@ pub fn imex_step(
               z: r * r.z(),
             };
 
-            let term2 = rr_t * (3.0 * *mu * rigid_body.mass / dist5);
+            let term2 = rr_t * (3.0 * mu_eff * rigid_body.mass / dist5);
 
             k_translation = k_translation + term1 + term2;
           }
@@ -350,9 +369,11 @@ pub fn imex_step(
     p.position += p.velocity * (h / 2.0);
   }
 
-  // Evaluate forces at the new t_{n+1} configurations
-  // This perfectly prepares F_{n+1} for Phase 1 of the NEXT step!
-  compute_particle_forces(particles, emitters);
+  // Evaluate forces at the new t_{n+1} configurations.
+  // NOTE: callers must supply frame context so the macro→micro transform is correct.
+  // For now we pass the macro-frame sentinel (center=0, scale=1) which keeps the
+  // old behaviour; callers that know the frame must supply real values.
+  compute_particle_forces(particles, emitters, Vec3f32::zero(), 1.0);
 
   for p in particles.iter_mut() {
     p.velocity += p.accumulated_force * (h / (2.0 * p.mass));
@@ -443,3 +464,110 @@ pub fn solve_lcp_pgs(a: &[Vec<f32>], b: &[f32], max_iters: usize) -> Vec<f32> {
   }
   x
 }
+
+// ============================================================================
+// Unit Tests — Cross-Frame Force Scaling & Beta Compensation
+// ============================================================================
+#[cfg(test)]
+mod physics_tests {
+  use super::*;
+  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+
+  const AU_TO_KM: f32 = 149_597_870.7_f32;
+  const KM_TO_AU: f32 = 1.0 / 149_597_870.7_f32;
+  /// Sun GM in km³/s² (JPL Horizons default)
+  const MU_SUN: f32 = 1.327_124_4e11_f32;
+
+  fn make_particle(pos_km: Vec3f32, mass_kg: f32) -> Particle {
+    Particle { position: pos_km, velocity: Vec3f32::zero(), mass: mass_kg, accumulated_force: Vec3f32::zero() }
+  }
+
+  // T1: transform places emitter behind particle → force in −x ───────────────
+  #[test]
+  fn test_macro_to_micro_position_transform() {
+    let frame_center = Vec3f32::from_array([1.0_f32, 0.0, 0.0]); // AU
+    let scale = KM_TO_AU; // AU/km
+    // Emitter at frame center (r_world = 0) → r_local = -particle_pos
+    let emitters = [ForceEmitter::Gravity { position: frame_center, mu: MU_SUN, beta: 0.0 }];
+    let mut p = [make_particle(Vec3f32::from_array([1000.0_f32, 0.0, 0.0]), 1.0)];
+    compute_particle_forces(&mut p, &emitters, frame_center, scale);
+    assert!(p[0].accumulated_force.x() < 0.0, "force must be −x, got {}", p[0].accumulated_force.x());
+  }
+
+  // T2: magnitude at 1 AU within 0.01% of Newtonian value ───────────────────
+  #[test]
+  fn test_gravity_force_magnitude_sun_1au() {
+    let r = AU_TO_KM;
+    let a_expected = MU_SUN / (r * r); // km/s²
+    let frame_center = Vec3f32::from_array([1.0_f32, 0.0, 0.0]);
+    let emitters = [ForceEmitter::Gravity { position: Vec3f32::zero(), mu: MU_SUN, beta: 0.0 }];
+    let mut p = [make_particle(Vec3f32::zero(), 1.0)]; // local origin = 1 AU from Sun
+    compute_particle_forces(&mut p, &emitters, frame_center, KM_TO_AU);
+    let a_got = p[0].accumulated_force.length();
+    let rel_err = (a_got - a_expected).abs() / a_expected;
+    assert!(rel_err < 1e-4, "acceleration: expected {:.4e}, got {:.4e} (rel_err {:.2e})", a_expected, a_got, rel_err);
+  }
+
+  // T3: beta compensation — 0, 0.5, 1.0 ─────────────────────────────────────
+  #[test]
+  fn test_beta_compensation_three_levels() {
+    let fc = Vec3f32::from_array([1.0_f32, 0.0, 0.0]);
+    let compute = |beta: f32| {
+      let emitters = [ForceEmitter::Gravity { position: Vec3f32::zero(), mu: MU_SUN, beta }];
+      let mut p = [make_particle(Vec3f32::zero(), 1.0)];
+      compute_particle_forces(&mut p, &emitters, fc, KM_TO_AU);
+      p[0].accumulated_force.length()
+    };
+    let (f0, fh, f1) = (compute(0.0), compute(0.5), compute(1.0));
+    assert!((f0 / fh - 2.0).abs() < 1e-5, "ratio should be 2.0, got {}", f0 / fh);
+    assert!(f1 < 1e-8, "f(beta=1) should be ~0, got {:.4e}", f1);
+  }
+
+  // T4: macro-frame sentinel (center=0, scale=1) gives correct direction ─────
+  #[test]
+  fn test_macro_frame_sentinel_direction() {
+    let emitters = [ForceEmitter::Gravity { position: Vec3f32::zero(), mu: MU_SUN, beta: 0.0 }];
+    let mut p = [make_particle(Vec3f32::from_array([1.0_f32, 0.0, 0.0]), 1.0)];
+    compute_particle_forces(&mut p, &emitters, Vec3f32::zero(), 1.0);
+    assert!(p[0].accumulated_force.x() < 0.0, "force must point toward origin");
+  }
+
+  // T5: beta field preserved through ForceEmitter struct ────────────────────
+  #[test]
+  fn test_force_emitter_beta_roundtrip() {
+    let e = ForceEmitter::Gravity { position: Vec3f32::zero(), mu: 1.327e11, beta: 0.47 };
+    match e { ForceEmitter::Gravity { mu, beta, .. } => {
+      assert!((mu - 1.327e11).abs() < 1e4);
+      assert!((beta - 0.47).abs() < 1e-6);
+    } _ => panic!("wrong variant") }
+  }
+
+  // T6: Velocity-Verlet Kepler orbit conserves semi-major axis < 0.1% ────────
+  #[test]
+  fn test_kepler_orbit_energy_conservation() {
+    let r0 = AU_TO_KM;
+    let v0 = (MU_SUN / r0).sqrt();
+    let period = 2.0 * core::f32::consts::PI * r0 / v0;
+    let n = 1000_usize;
+    let h = period / n as f32;
+
+    let grav = |pos: Vec3f32| {
+      let r = Vec3f32::zero() - pos;
+      let d2 = r.length_squared(); let d = d2.sqrt();
+      r * (MU_SUN / (d2 * d))
+    };
+
+    let mut pos = Vec3f32::from_array([r0, 0.0, 0.0]);
+    let mut vel = Vec3f32::from_array([0.0, v0, 0.0]);
+    let mut acc = grav(pos);
+    for _ in 0..n {
+      vel = vel + acc * (h * 0.5);
+      pos = pos + vel * h;
+      acc = grav(pos);
+      vel = vel + acc * (h * 0.5);
+    }
+    let rel_err = (pos.length() - r0).abs() / r0;
+    assert!(rel_err < 1e-3, "semi-major axis drift: {:.4e}", rel_err);
+  }
+}
+

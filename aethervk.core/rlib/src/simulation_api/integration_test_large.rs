@@ -53,7 +53,7 @@ mod tests {
     if let Some(ctx_ptr) = get_test_context() {
       unsafe {
         let ctx = &mut *ctx_ptr;
-        let scene_id = ctx.create_empty_scene().unwrap();
+        let scene_id = ctx.create_empty_scene(true).unwrap();
 
         // Ensure we use Vulkan physics engine
         let _ = ctx.threads.logic_thread.tx().try_send(LogicCommand::SetPhysicsEngineType {
@@ -207,7 +207,7 @@ mod tests {
 
       unsafe {
         let ctx = &mut *ctx_ptr;
-        let scene_id = ctx.create_default_scene().unwrap();
+        let scene_id = ctx.create_default_scene(true).unwrap();
 
         // 1. Setup Vulkan Compute Physics
         let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::SetPhysicsEngineType {

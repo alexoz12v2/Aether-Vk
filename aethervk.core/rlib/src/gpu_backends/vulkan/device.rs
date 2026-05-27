@@ -702,6 +702,13 @@ impl DeviceResources {
       }
     }
 
+    // BUG FIX (2025-05): The original code called pe_state.value_mut().cleanup(device) HERE
+    // in addition to the removal loop at the bottom of this function.  That caused every
+    // swapchain semaphore, fence, and image to be destroyed twice, producing
+    // VK_ERROR_UNKNOWN / VUID-vkDestroySemaphore validation errors.
+    // Fix: only call archetypes_mut().discard() here (to enqueue pipeline-layout / buffer
+    // handles into the discard_pool before the arenas are unwrapped below).  The actual
+    // PE Vulkan objects are destroyed exactly once in the removal loop further below.
     for mut pe_state in self.live_presentation_engines.iter_mut() {
       pe_state.value_mut().archetypes_mut().discard(device, &self.discard_pool);
     }

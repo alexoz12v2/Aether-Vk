@@ -207,7 +207,7 @@ pub struct ImexParticlesP12PushConstants {
   pub total_particles: u32,
 }
 
-/// `integrate_bodies_p3.comp` — 32 bytes
+/// `integrate_bodies_p3.comp` — 40 bytes
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ImexBodiesP3PushConstants {
@@ -216,6 +216,8 @@ pub struct ImexBodiesP3PushConstants {
   /// BDA to WrenchArray (6-float Wrench per entry)
   pub wrenches: u64,
   pub emitters: u64,
+  /// BDA to GpuReferenceFrameArray — used for macro→micro position transform
+  pub frames: u64,
   /// Physical dt in seconds
   pub dt: f32,
   pub n_bodies: u32,
@@ -387,6 +389,21 @@ pub struct BpParticleSelfPushConstants {
   pub stiffness: f32,
 }
 
+/// `apply_emitters_to_particles.comp` — 40 bytes
+///
+/// Applies macro-frame gravity emitters to microframe particles, performing
+/// GPU-inline macro (AU) → micro (km) coordinate transform per particle frame.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ApplyEmittersPushConstants {
+  pub particles:          u64,  // BDA to AOSOA particle float buffer
+  pub emitters:           u64,  // BDA to EmitterArray
+  pub frames:             u64,  // BDA to GpuReferenceFrameArray
+  pub particle_frame_ids: u64,  // BDA to u32[] — one frame index per particle
+  pub num_emitters:       u32,
+  pub total_particles:    u32,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -436,6 +453,8 @@ pub struct PhysicsPipelines {
   pub integrate_bodies_p3: vk::Pipeline,
   /// VV corrector: v_{n+½} → v_{n+1}; advances 64-bit engine clock
   pub integrate_particles_p4_5: vk::Pipeline,
+  /// External gravity emitters → particle force accumulation (macro→micro transform)
+  pub apply_emitters_to_particles: vk::Pipeline,
   // ── Narrow Phase ──────────────────────────────────────────────────────────
 
   #[cfg(any(test, feature = "collisions"))]
@@ -602,6 +621,10 @@ impl PhysicsPipelines {
           "{}/integrate_particles_p4_5.comp.spv",
           sim_dir
         ))?,
+        apply_emitters_to_particles: create_pipeline(&alloc::format!(
+          "{}/apply_emitters_to_particles.comp.spv",
+          sim_dir
+        ))?,
 
         #[cfg(any(test, feature = "collisions"))]
         narrow_ccd: create_pipeline(&alloc::format!("{}/narrow_ccd.comp.spv", sim_dir))?,
@@ -676,6 +699,11 @@ impl PhysicsPipelines {
     discard_pool.discard_pipeline(self.integrate_particles_p1_p2, timeline);
     discard_pool.discard_pipeline(self.integrate_bodies_p3, timeline);
     discard_pool.discard_pipeline(self.integrate_particles_p4_5, timeline);
+    // BUG FIX (2025-05): apply_emitters_to_particles was created in PhysicsPipelines::new()
+    // but was accidentally omitted from this discard list.  At vkDestroyDevice the
+    // validation layer reported "VkPipeline 0x... has not been destroyed"
+    // (VUID-vkDestroyDevice-device-05137).  Added here to close the leak.
+    discard_pool.discard_pipeline(self.apply_emitters_to_particles, timeline);
 
     #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.narrow_ccd, timeline);
@@ -1691,6 +1719,29 @@ impl VulkanComputeKernels {
     Ok((buffer, metadata))
   }
 
+  fn build_particle_frame_ids(
+    &self,
+    device: &LogicalDevice,
+    allocator: vk_mem::AllocatorView,
+    rollback: &mut utils::RollbackContext<'_>,
+    _cmd: &mut VulkanCommandBuffer,
+    particle_metadata: &[gpu::ParticleMetadata],
+  ) -> GpuResult<VulkanBuffer<u32>> {
+    // Extract parent_frame_id in AOSOA order (same order build_particles emits particles)
+    let ids: alloc::vec::Vec<u32> = if particle_metadata.is_empty() {
+      alloc::vec![0u32]  // dummy — shader guards on total_particles
+    } else {
+      particle_metadata.iter().map(|m| m.parent_frame_id).collect()
+    };
+    self.allocate_and_upload::<u32>(
+      device,
+      allocator,
+      &ids,
+      vk::BufferUsageFlags::STORAGE_BUFFER,
+      rollback,
+    )
+  }
+
   fn build_emitters(
     &self,
     device: &LogicalDevice,
@@ -1702,14 +1753,14 @@ impl VulkanComputeKernels {
     let mut emitters = Vec::new();
     scene0.query2::<crate::scene::TransformComponent, crate::scene::ForceEmitterComponent, _>(
       |_, t, emitter| match emitter {
-        crate::scene::ForceEmitterComponent::Gravity { mu } => {
+        crate::scene::ForceEmitterComponent::Gravity { mu, beta } => {
           emitters.push(gpu::ForceEmitter {
             position: [t.position.x(), t.position.y(), t.position.z()],
             mu: *mu,
             normal: [0.0, 0.0, 0.0],
             type_id: 0,
             trunc_distance: 0.0,
-            scale_factor: 1.0,
+            beta: *beta,
             _pad: [0, 0],
           });
         }
@@ -1724,7 +1775,7 @@ impl VulkanComputeKernels {
             normal: [normal.x(), normal.y(), normal.z()],
             type_id: 1,
             trunc_distance: *trunc_distance,
-            scale_factor: 1.0,
+            beta: 0.0,
             _pad: [0, 0],
           });
         }
@@ -1875,6 +1926,7 @@ impl VulkanComputeKernels {
   ///
   /// `rigid_bodies_addr` — BDA to `RigidBodyArray` (imex_math.glsl layout: quaternion + wrench_idx).
   /// `wrenches_addr`     — BDA to `WrenchArray` (6-float `Wrench` per entry).
+  /// `frames_addr`       — BDA to `GpuReferenceFrameArray` (for macro→micro transform).
   /// `n_iterations`      — Picard iteration count; 4 suffices for most scenes.
   pub fn imex_integrate_bodies_p3(
     &self,
@@ -1883,6 +1935,7 @@ impl VulkanComputeKernels {
     rigid_bodies_addr: u64,
     wrenches_addr: u64,
     emitters_addr: u64,
+    frames_addr: u64,
     n_bodies: u32,
     num_emitters: u32,
     dt: timeus_t,
@@ -1896,6 +1949,7 @@ impl VulkanComputeKernels {
       rigid_bodies: rigid_bodies_addr,
       wrenches: wrenches_addr,
       emitters: emitters_addr,
+      frames: frames_addr,
       dt: dt_sec,
       n_bodies,
       n_iterations,
@@ -1974,6 +2028,71 @@ impl VulkanComputeKernels {
         cmd.cmd,
         vk::PipelineBindPoint::COMPUTE,
         self.pipelines.integrate_particles_p4_5,
+      );
+      device.cmd_push_constants(
+        cmd.cmd,
+        self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes,
+      );
+      if groups > 0 { device.cmd_dispatch(cmd.cmd, groups, 1, 1); }
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
+    }
+  }
+
+  /// Dispatches `apply_emitters_to_particles.comp`.
+  ///
+  /// Applies macro-frame gravity emitters (e.g. the Sun) to microframe particles.
+  /// Must run **after** Barnes-Hut (self-gravity) and before P4_5 (VV corrector)
+  /// so that external forces are included in F(x_{n+1}).
+  ///
+  /// `particles_addr`         — BDA to AOSOA particle float buffer.
+  /// `emitters_addr`          — BDA to EmitterArray.
+  /// `frames_addr`            — BDA to GpuReferenceFrameArray.
+  /// `particle_frame_ids_addr`— BDA to u32[]; one frame index per particle (AOSOA order).
+  pub fn apply_emitters_to_particles(
+    &self,
+    device: &LogicalDevice,
+    cmd: &mut VulkanCommandBuffer,
+    particles_addr: u64,
+    emitters_addr: u64,
+    frames_addr: u64,
+    particle_frame_ids_addr: u64,
+    num_emitters: u32,
+    total_particles: u32,
+  ) {
+    if num_emitters == 0 || total_particles == 0 { return; }
+    let wg_size = 128u32;
+    let groups = (total_particles + wg_size - 1) / wg_size;
+
+    let pc = ApplyEmittersPushConstants {
+      particles:          particles_addr,
+      emitters:           emitters_addr,
+      frames:             frames_addr,
+      particle_frame_ids: particle_frame_ids_addr,
+      num_emitters,
+      total_particles,
+    };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
+    };
+    unsafe {
+      device.cmd_bind_pipeline(
+        cmd.cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.apply_emitters_to_particles,
       );
       device.cmd_push_constants(
         cmd.cmd,
@@ -3815,6 +3934,22 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
+  fn build_particle_frame_ids(
+    &self,
+    cmd: &mut Self::Cmd,
+    particle_metadata: &[gpu::ParticleMetadata],
+  ) -> EngineResult<Self::Buffer<u32>> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |res_guard, _| {
+        Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
+      })?
+      .execute(|allocator, rollback| {
+        self.kernels.build_particle_frame_ids(&self.device, allocator, rollback, cmd, particle_metadata)
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(|e| EngineError::from(e))
+  }
+
   fn build_emitters(
     &self,
     cmd: &mut Self::Cmd,
@@ -4286,6 +4421,7 @@ impl Kernels for Device {
     bodies: &mut Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
     emitters: &Self::Buffer<crate::gpu::ForceEmitter>,
+    frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
     dt: timeus_t,
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
@@ -4297,6 +4433,7 @@ impl Kernels for Device {
           bodies.address,
           wrenches.address,
           emitters.address,
+          frames.address,
           bodies.capacity() as u32,
           emitters.capacity() as u32,
           dt,
@@ -4356,6 +4493,34 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
+  fn apply_emitters_to_particles(
+    &self,
+    cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<f32>,
+    emitters: &Self::Buffer<crate::gpu::ForceEmitter>,
+    frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    particle_frame_ids: &Self::Buffer<u32>,
+    num_emitters: u32,
+  ) -> EngineResult<()> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
+      .execute(|(), _rollback| {
+        let total_particles = (particles.capacity() as u32 / 320) * 32;
+        self.kernels.apply_emitters_to_particles(
+          &self.device,
+          cmd,
+          particles.address,
+          emitters.address,
+          frames.address,
+          particle_frame_ids.address,
+          num_emitters,
+          total_particles,
+        );
+        Ok(())
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
+  }
 
   #[cfg(any(test, feature = "collisions"))]
   fn bp_clear(

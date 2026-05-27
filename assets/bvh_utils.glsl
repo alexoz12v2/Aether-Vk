@@ -115,13 +115,15 @@ struct RigidBody {
 };
 struct Wrench { uint force_x; uint force_y; uint force_z; uint torque_x; uint torque_y; uint torque_z; };
 struct ForceEmitter {
-    vec3 position;
-    float mu; // type_id = 0 -> G * M, type_id = 1 -> base force
-    vec3 normal; // type_id = 0 -> unused, type_id = 1 -> plane normal
-    uint type_id; // 0 = Gravity, 1 = Planar
-    float trunc_distance; // type_id = 0 -> unused, type_id = 1 -> max distance point - plane over which force is applied
-    float scale_factor;
-    uint _pad[2];
+    // Gravity (type_id=0): position is emitter world-space in AU; mu is G*M in km³/s² (JPL default).
+    // Planar  (type_id=1): position is plane origin; mu is base force magnitude.
+    vec3  position;
+    float mu;
+    vec3  normal;           // Planar: plane normal. Gravity: unused.
+    uint  type_id;          // 0 = Gravity, 1 = Planar
+    float trunc_distance;   // Planar: max signed dist above which force is zero. Gravity: unused.
+    float beta;             // Radiation-pressure β; mu_eff = (1−β)·mu. 0 = pure gravity.
+    uint  _pad[2];
 };
 struct KinematicBody { uint own_frame_id; float scale; vec3 position; uint frame_type; float mu; };
 struct GpuReferenceFrame {

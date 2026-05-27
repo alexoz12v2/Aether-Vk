@@ -106,6 +106,27 @@ public partial class TransformComponent : NativeComponent
       ScaleZ = data.Sz;
     }
   }
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private void CopyPosition()
+  {
+    string json = $"{{ \"x\": {PosX.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"y\": {PosY.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"z\": {PosZ.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}";
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(new AetherVk.Logic.Messages.CopyToClipboardMessage(json));
+  }
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private void CopyRotation()
+  {
+    string json = $"{{ \"x\": {RotX.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"y\": {RotY.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"z\": {RotZ.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"w\": {RotW.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}";
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(new AetherVk.Logic.Messages.CopyToClipboardMessage(json));
+  }
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private void CopyScale()
+  {
+    string json = $"{{ \"x\": {ScaleX.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"y\": {ScaleY.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"z\": {ScaleZ.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}";
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(new AetherVk.Logic.Messages.CopyToClipboardMessage(json));
+  }
 }
 
 public partial class CameraComponent : NativeComponent
@@ -121,7 +142,7 @@ public partial class CameraComponent : NativeComponent
   private float _aspectRatio = 1.77f;
 
   [ObservableProperty]
-  private float _nearPlane = 0.1f;
+  private float _nearPlane = 0.01f;
 
   [ObservableProperty]
   private float _farPlane = 10000.0f;
@@ -159,10 +180,10 @@ public partial class CameraComponent : NativeComponent
   // Near must be positive and strictly less than Far.
   partial void OnNearPlaneChanged(float value)
   {
-    const float minNear = 1e-6f;
+    const float minNear = 0.01f;
     float clamped = System.Math.Max(value, minNear);
     if (clamped >= FarPlane)
-      clamped = System.Math.Max(FarPlane - 1e-6f, minNear);
+      clamped = System.Math.Max(FarPlane - 0.0001f, minNear);
     if (clamped != value)
       NearPlane = clamped;
   }
@@ -170,7 +191,7 @@ public partial class CameraComponent : NativeComponent
   // Far must be strictly greater than Near and at most 10 000 AU.
   partial void OnFarPlaneChanged(float value)
   {
-    float clamped = System.Math.Min(System.Math.Max(value, NearPlane + 1e-6f), 10_000.0f);
+    float clamped = System.Math.Min(System.Math.Max(value, NearPlane + 0.0001f), 10_000.0f);
     if (clamped != value)
       FarPlane = clamped;
   }
@@ -183,8 +204,8 @@ public partial class CameraComponent : NativeComponent
     // Additional safety clamp: never send invalid values to native even if
     // the OnXxxChanged correction hasn't fired yet.
     float safeFov = System.Math.Min(System.Math.Max(Fov, 0.1f), 179.0f);
-    float safeNear = System.Math.Max(NearPlane, 1e-6f);
-    float safeFar = System.Math.Max(FarPlane, safeNear + 1e-6f);
+    float safeNear = System.Math.Max(NearPlane, 0.01f);
+    float safeFar = System.Math.Max(FarPlane, safeNear + 0.0001f);
 
     var data = new NativeInterop.FfiCamera
     {
@@ -205,6 +226,9 @@ public partial class CameraComponent : NativeComponent
       EntityId,
       in data
     );
+
+    // Pull from native immediately to update the projection matrix preview
+    PullFromNative();
   }
 
   protected override void PullFromNativeImpl()
@@ -229,10 +253,10 @@ public partial class CameraComponent : NativeComponent
       OrthoTop = data.OrthoTop;
 
       ProjectionMatrixPreview =
-        $"[{data.Proj00:F2}, {data.Proj10:F2}, {data.Proj20:F2}, {data.Proj30:F2}]\n"
-        + $"[{data.Proj01:F2}, {data.Proj11:F2}, {data.Proj21:F2}, {data.Proj31:F2}]\n"
-        + $"[{data.Proj02:F2}, {data.Proj12:F2}, {data.Proj22:F2}, {data.Proj32:F2}]\n"
-        + $"[{data.Proj03:F2}, {data.Proj13:F2}, {data.Proj23:F2}, {data.Proj33:F2}]";
+        $"[ {data.Proj00,7:F2} {data.Proj10,7:F2} {data.Proj20,7:F2} {data.Proj30,7:F2} ]\n"
+        + $"[ {data.Proj01,7:F2} {data.Proj11,7:F2} {data.Proj21,7:F2} {data.Proj31,7:F2} ]\n"
+        + $"[ {data.Proj02,7:F2} {data.Proj12,7:F2} {data.Proj22,7:F2} {data.Proj32,7:F2} ]\n"
+        + $"[ {data.Proj03,7:F2} {data.Proj13,7:F2} {data.Proj23,7:F2} {data.Proj33,7:F2} ]";
     }
   }
 }

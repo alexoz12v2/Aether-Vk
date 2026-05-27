@@ -86,7 +86,7 @@ pub fn get_monotonic_time() -> timeus_t {
     {
       clock_id = CLOCK_MONOTONIC as _;
     }
-    unsafe { clock_gettime(clock_id, &mut tp) };
+    unsafe { clock_gettime(clock_id as _, &mut tp) };
     (tp.tv_sec as timeus_t) * 1_000_000 + (tp.tv_nsec as timeus_t) / 1000
   }
 }

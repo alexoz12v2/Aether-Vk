@@ -202,7 +202,7 @@ struct SimulationPlaygroundDelegate {
 
 impl SimulationDelegate for SimulationPlaygroundDelegate {
   fn create_scene(&mut self, ctx: &mut SimulationContext) -> EngineResult<u64> {
-    ctx.create_default_scene()
+    ctx.create_default_scene(true)
   }
 
   fn on_setup(
@@ -1041,7 +1041,7 @@ mod depth_tests {
       SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, Some(panic_cb)).unwrap();
     let ctx = ctx_box.as_mut();
 
-    let scene_id = ctx.create_empty_scene().unwrap();
+    let scene_id = ctx.create_empty_scene(true).unwrap();
     let width = 64;
     let height = 64;
     let _pe = ctx.create_presentation_engine(scene_id, width, height).unwrap();
@@ -1306,7 +1306,7 @@ mod depth_tests {
       SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, Some(panic_cb)).unwrap();
     let ctx = ctx_box.as_mut();
 
-    let scene_id = ctx.create_empty_scene().unwrap();
+    let scene_id = ctx.create_empty_scene(true).unwrap();
     let width = 256;
     let height = 256;
     let _pe = ctx.create_presentation_engine(scene_id, width, height).unwrap();

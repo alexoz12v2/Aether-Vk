@@ -244,11 +244,17 @@ impl Kernels for CpuScalarKernels {
     scene: &Scene,
   ) -> EngineResult<(Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)> {
     Ok((
-      CpuBuffer {
-        data: alloc::vec::Vec::new(),
-      },
+      CpuBuffer { data: alloc::vec::Vec::new() },
       alloc::vec::Vec::new(),
     ))
+  }
+
+  fn build_particle_frame_ids(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _particle_metadata: &[ParticleMetadata],
+  ) -> EngineResult<Self::Buffer<u32>> {
+    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
   }
 
   fn build_emitters(
@@ -388,6 +394,7 @@ impl Kernels for CpuScalarKernels {
     bodies: &mut Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
     emitters: &Self::Buffer<ForceEmitter>,
+    _frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
     dt: timeus_t,
   ) -> EngineResult<()> {
     Ok(())
@@ -451,6 +458,19 @@ impl Kernels for CpuScalarKernels {
 
     // In the CPU path, clock advancement is likely handled by the top-level
     // Engine/PhysicsScene manager rather than thread 0 of this kernel.
+    Ok(())
+  }
+
+  fn apply_emitters_to_particles(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _particles: &mut Self::Buffer<f32>,
+    _emitters: &Self::Buffer<ForceEmitter>,
+    _frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    _particle_frame_ids: &Self::Buffer<u32>,
+    _num_emitters: u32,
+  ) -> EngineResult<()> {
+    // TODO: implement CPU-path cross-frame particle emitter force accumulation
     Ok(())
   }
 
@@ -816,6 +836,14 @@ impl Kernels for CpuSimdKernels {
     ))
   }
 
+  fn build_particle_frame_ids(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _particle_metadata: &[ParticleMetadata],
+  ) -> EngineResult<Self::Buffer<u32>> {
+    Ok(CpuBuffer { data: alloc::vec::Vec::new() })
+  }
+
   fn build_emitters(
     &self,
     cmd: &mut Self::Cmd,
@@ -893,6 +921,7 @@ impl Kernels for CpuSimdKernels {
     bodies: &mut Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
     emitters: &Self::Buffer<ForceEmitter>,
+    _frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
     dt: timeus_t,
   ) -> EngineResult<()> {
     Ok(())
@@ -913,6 +942,18 @@ impl Kernels for CpuSimdKernels {
     particles: &mut Self::Buffer<f32>,
     dt: timeus_t,
     current_time_us: timeus_t,
+  ) -> EngineResult<()> {
+    Ok(())
+  }
+
+  fn apply_emitters_to_particles(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _particles: &mut Self::Buffer<f32>,
+    _emitters: &Self::Buffer<ForceEmitter>,
+    _frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    _particle_frame_ids: &Self::Buffer<u32>,
+    _num_emitters: u32,
   ) -> EngineResult<()> {
     Ok(())
   }

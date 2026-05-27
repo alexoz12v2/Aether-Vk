@@ -22,7 +22,7 @@ struct ParticleTestDelegate {
 
 impl SimulationDelegate for ParticleTestDelegate {
   fn create_scene(&mut self, ctx: &mut SimulationContext) -> EngineResult<u64> {
-    ctx.create_empty_scene()
+    ctx.create_empty_scene(true)
   }
 
   fn on_setup(

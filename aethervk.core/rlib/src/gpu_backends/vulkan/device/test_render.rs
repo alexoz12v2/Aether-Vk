@@ -3139,7 +3139,6 @@ fn test_outline_toggled_after_upload() {
 }
 
 #[test]
-#[ignore]
 fn test_render_concurrent_resize() {
   setup_assets_dir();
   let (pool_arc, render_frontend, render_device_handle, _) = setup_render_frontend_for_tests(false);
@@ -4512,7 +4511,7 @@ fn test_render_weather_ui() {
       // NDC Y: (200 / 600) * 2 - 1 = -0.33
       // Size pct: 100 / 800 = 0.125
       let mut t = TransformComponent::default();
-      t.position = Vec3f32::from_array([-0.55, -0.33, 0.0]);
+      t.position = Vec3f32::from_array([-0.55, -0.33, 0.99]);
       scene.add_component(sun_e, t).unwrap();
       scene
         .add_component(
@@ -4530,7 +4529,7 @@ fn test_render_weather_ui() {
       let cloud_e = scene.spawn_entity("cloud_icon");
       scene.set_parent(cloud_e, Some(root_e));
       let mut t = TransformComponent::default();
-      t.position = Vec3f32::from_array([-0.45, -0.25, 0.0]); // overlapping sun
+      t.position = Vec3f32::from_array([-0.45, -0.25, 0.98]); // overlapping sun
       scene.add_component(cloud_e, t).unwrap();
       scene
         .add_component(
@@ -4778,6 +4777,10 @@ fn test_render_weather_ui() {
       crate::types::GpuResult::Ok(())
     })
     .unwrap();
+
+  render_frontend.with_device(render_device_handle, |device| {
+    device.destroy_presentation_engine(presentation_engine)
+  }).unwrap();
 
   drop(render_frontend);
 }
@@ -5749,6 +5752,13 @@ fn test_render_text2_street_art() {
 }
 
 #[test]
+// FIXME: This test panics with "Unable to load signal_semaphore" because it
+// bypasses the engine's LogicalDevice abstraction and calls signal_semaphore
+// directly on the raw `ash::Device` handle (`vulkan_device.device.handle`),
+// which does not have the VK_KHR_timeline_semaphore function pointer loaded.
+// The fix is to use the promoted Vulkan 1.2 path (device.handle with 1.2
+// core promotions loaded) or the engine's own timeline manager API instead
+// of reaching into the raw ash device.
 #[ignore]
 fn test_cross_queue_sync_timeline_semaphore() {
   setup_assets_dir();

@@ -723,9 +723,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     ulong presentationEngineId,
     string name,
     float left,
+    float right,
     float bottom,
-    float near,
-    float far
+    float top
   )
   {
     if (_simulationContext == IntPtr.Zero)
@@ -737,9 +737,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       presentationEngineId,
       name,
       left,
+      right,
       bottom,
-      near,
-      far
+      top
     );
 
     if (id > 0)
@@ -1305,6 +1305,135 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
     return (0, 0);
   }
+
+  public ulong SpawnTrajectory(
+    ulong sceneId,
+    ulong parentEntity,
+    string name,
+    TrajectoryGpu trajectory,
+    RationalBezierGpu[] segments
+  )
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return 0;
+
+    var entityId = NativeInterop.avkSimulationContext_spawnTrajectory(
+      _simulationContext,
+      sceneId,
+      parentEntity,
+      name,
+      ref trajectory,
+      segments,
+      (uint)segments.Length
+    );
+
+    if (entityId > 0)
+    {
+      var trajEntity = new Entity(sceneId, entityId, name);
+      var state = _sceneStateManager.GetOrCreateScene(sceneId);
+      state.EntityMap[entityId] = trajEntity;
+      
+      // If parentEntity is 0, add to root (though usually it will be RootEntity.EntityId)
+      // We assume it's attached to root for now
+      if (parentEntity == 0 || (state.RootEntities.Count > 0 && state.RootEntities[0].Id == parentEntity)) {
+        state.RootEntities.FirstOrDefault()?.Children.Add(trajEntity);
+      } else if (state.EntityMap.TryGetValue(parentEntity, out var parent)) {
+        parent.Children.Add(trajEntity);
+      }
+    }
+
+    return entityId;
+  }
+
+  public ulong SpawnTrajectoryFromElements(
+    ulong sceneId,
+    string name,
+    double a, double e, double iDeg, double omegaNodeDeg, double argPeriDeg, float lineWidth = 2.0f)
+  {
+    double i = iDeg * Math.PI / 180.0;
+    double Omega = omegaNodeDeg * Math.PI / 180.0;
+    double omega = argPeriDeg * Math.PI / 180.0;
+
+    double b = a * Math.Sqrt(Math.Max(0.0, 1.0 - e * e));
+    double c = a * e;
+
+    double wInner = (1.0 + Math.Sqrt(2.0)) / 3.0;
+    double k = 2.0 - Math.Sqrt(2.0);
+
+    // Format: [[CP0], [CP1], [CP2], [CP3]]
+    // Each CP is [Cartesian X, Cartesian Y, Weight]
+    double[][][] quadrants = new double[][][]
+    {
+      new double[][] { new double[] { a, 0, 1.0 }, new double[] { a, b * k, wInner }, new double[] { a * k, b, wInner }, new double[] { 0, b, 1.0 } },
+      new double[][] { new double[] { 0, b, 1.0 }, new double[] { -a * k, b, wInner }, new double[] { -a, b * k, wInner }, new double[] { -a, 0, 1.0 } },
+      new double[][] { new double[] { -a, 0, 1.0 }, new double[] { -a, -b * k, wInner }, new double[] { -a * k, -b, wInner }, new double[] { 0, -b, 1.0 } },
+      new double[][] { new double[] { 0, -b, 1.0 }, new double[] { a * k, -b, wInner }, new double[] { a, -b * k, wInner }, new double[] { a, 0, 1.0 } }
+    };
+
+    var segmentsForSsbo = new System.Collections.Generic.List<RationalBezierGpu>();
+
+    foreach (var quad in quadrants)
+    {
+      var seg = new RationalBezierGpu();
+      for (int ptIdx = 0; ptIdx < quad.Length; ptIdx++)
+      {
+        double xCart = quad[ptIdx][0];
+        double yCart = quad[ptIdx][1];
+        float weight = (float)quad[ptIdx][2];
+
+        double xShifted = xCart - c;
+        double yShifted = yCart;
+        double zShifted = 0.0;
+
+        // Apply orbital rotations
+        // 1. Z-axis by omega
+        var (rx1, ry1, rz1) = RotateZ(xShifted, yShifted, zShifted, omega);
+        // 2. X-axis by i
+        var (rx2, ry2, rz2) = RotateX(rx1, ry1, rz1, i);
+        // 3. Z-axis by Omega
+        var (xRot, yRot, zRot) = RotateZ(rx2, ry2, rz2, Omega);
+
+        // Pack into pre-multiplied Homogeneous vec4
+        var vec4 = new AetherVk.Logic.Models.Float4((float)xRot * weight, (float)yRot * weight, (float)zRot * weight, weight);
+        
+        if (ptIdx == 0) seg.Cp0 = vec4;
+        else if (ptIdx == 1) seg.Cp1 = vec4;
+        else if (ptIdx == 2) seg.Cp2 = vec4;
+        else if (ptIdx == 3) seg.Cp3 = vec4;
+      }
+      segmentsForSsbo.Add(seg);
+    }
+
+    var trajectoryGpu = new TrajectoryGpu
+    {
+      Color = new AetherVk.Logic.Models.Float4(1.0f, 1.0f, 1.0f, 0.5f),
+      LineWidth = lineWidth, // Line width in pixels (will be resolution independent via shader)
+      TextureId = 0xFFFFFFFF,
+      SegmentsPtr = 0
+    };
+
+    ulong rootEntity = GetRootEntityId(sceneId);
+
+    return SpawnTrajectory(sceneId, rootEntity, name, trajectoryGpu, segmentsForSsbo.ToArray());
+  }
+
+  private ulong GetRootEntityId(ulong sceneId)
+  {
+    var state = _sceneStateManager.GetOrCreateScene(sceneId);
+    var root = state.RootEntities.FirstOrDefault(e => e.Name == "root");
+    return root?.Id ?? 0;
+  }
+
+  private (double x, double y, double z) RotateZ(double x, double y, double z, double angle)
+  {
+    return (x * Math.Cos(angle) - y * Math.Sin(angle), x * Math.Sin(angle) + y * Math.Cos(angle), z);
+  }
+
+  private (double x, double y, double z) RotateX(double x, double y, double z, double angle)
+  {
+    return (x, y * Math.Cos(angle) - z * Math.Sin(angle), y * Math.Sin(angle) + z * Math.Cos(angle));
+  }
+
 
   public Entity? SpawnEntity(ulong sceneId, string name)
   {
