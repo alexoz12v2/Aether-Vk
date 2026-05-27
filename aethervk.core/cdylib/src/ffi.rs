@@ -463,11 +463,11 @@ pub unsafe extern "C" fn avkSimulationContext_spawnComet(
   rot_y: f32,
   rot_z: f32,
   radius_km: f32,
+  mass_kg: f32,
   physics_type: u32,
-  out_micro_id: *mut u64,
-  out_comet_id: *mut u64,
+  out_result: *mut FfiSpawnCometResult,
 ) -> bool {
-  if ctx.is_null() || name.is_null() || out_micro_id.is_null() || out_comet_id.is_null() {
+  if ctx.is_null() || name.is_null() || out_result.is_null() {
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
@@ -480,17 +480,18 @@ pub unsafe extern "C" fn avkSimulationContext_spawnComet(
     Vec3f32::from_components(pos_x, pos_y, pos_z),
     Quat::from_components(rot_w, rot_x, rot_y, rot_z),
     radius_km,
+    mass_kg,
     physics_type,
   ) {
     Ok((micro_id, comet_id)) => {
       unsafe {
-        *out_micro_id = micro_id;
-        *out_comet_id = comet_id;
+        (*out_result).lca_frame_id = micro_id;
+        (*out_result).comet_entity_id = comet_id;
       }
       true
     }
     Err(e) => {
-      oshal::log!("spawn_comet_hierarchy failed: {}", e);
+      oshal::log!("avkSimulationContext_spawnComet failed: {:?}", e);
       false
     }
   }

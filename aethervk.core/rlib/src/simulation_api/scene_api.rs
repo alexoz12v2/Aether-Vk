@@ -592,6 +592,7 @@ impl SimulationContext {
     pos: Vec3f32,
     rotation: Quat,
     radius_km: f32,
+    mass_kg: f32,
     physics_type: u32,
   ) -> EngineResult<(u64, u64)> {
     use crate::scene::ReferenceFrameComponent;
@@ -751,11 +752,29 @@ impl SimulationContext {
           },
         )?;
         scene_ctx.scene.add_component(comet_id, KinematicComponent::default())?;
+        // For Kinematic bodies, they are driven by the Almanac.
+        scene_ctx.scene.add_component(
+          comet_id,
+          crate::simulation::almanac::AlmanacPlanetComponent {
+            // TODO: In a real implementation we would parse the SPK ID from the name/designation or pass it via SpawnComet parameters.
+            // Using 0 as a placeholder for now until SPK loading flow dictates the real ID.
+            spk_id: 0,
+          },
+        )?;
       }
       2 => {
         // Dynamic: full rigid-body physics.
         // KinematicComponent carries velocity/angular-velocity state.
         scene_ctx.scene.add_component(comet_id, KinematicComponent::default())?;
+        scene_ctx.scene.add_component(
+          comet_id,
+          ColliderComponent {
+            shape: crate::scene::ColliderShape::Sphere { radius: radius_km },
+            mass: mass_kg,
+            restitution: 0.3,
+            friction: 0.6,
+          },
+        )?;
       }
       _ => {}
     }

@@ -480,8 +480,9 @@ public static class NativeInterop
     float posX, float posY, float posZ,
     float rotW, float rotX, float rotY, float rotZ,
     float radiusKm,
+    float massKg,
     uint physicsType,
-    out FfiSpawnCometResult result
+    out FfiSpawnCometResult outResult
   );
 
   /// <summary>

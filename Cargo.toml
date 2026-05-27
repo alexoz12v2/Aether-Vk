@@ -16,7 +16,7 @@ members = [
     "test/test_paint",
     "test/test_ui",
     "test/test_utils",
-    "test/windowless_export", "test_slotmap",
+    "test/windowless_export",
 ]
 default-members = [
     "aethervk.core/cdylib",

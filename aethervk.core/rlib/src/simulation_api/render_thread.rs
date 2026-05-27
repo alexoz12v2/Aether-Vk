@@ -28,6 +28,7 @@ pub fn start_render_thread(
   render_params: RenderThreadContext,
 ) -> EngineResult<Thread> {
   thread::spawn(move || {
+    oshal::os::debug::fpe::unmask_fpu_for_current_thread();
     let mut first_render_map: hashbrown::HashMap<PresentationEngineHandle, bool> =
       hashbrown::HashMap::new();
     let render_device_handle = render_params.render_device_handle;

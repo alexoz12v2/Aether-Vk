@@ -618,7 +618,20 @@ pub mod fpe {
 
   pub fn setup_fpu_panic() {
     unsafe {
+      let env_var = libc::getenv(b"AETHERVK_DISABLE_FPE\0".as_ptr() as *const libc::c_char);
+      if !env_var.is_null() {
+        return;
+      }
       register_os_handler();
+    }
+  }
+
+  pub fn unmask_fpu_for_current_thread() {
+    unsafe {
+      let env_var = libc::getenv(b"AETHERVK_DISABLE_FPE\0".as_ptr() as *const libc::c_char);
+      if !env_var.is_null() {
+        return;
+      }
       unmask_fpu_exceptions();
     }
   }
@@ -680,6 +693,7 @@ mod tests {
   fn test_nan_generation_panicsest_nan_generation_panics() {
     // 1. Hardware and OS trap on
     fpe::setup_fpu_panic();
+    fpe::unmask_fpu_for_current_thread();
 
     // 2. Operands not optimized away using `core::hint::black_box`
     let a = core::hint::black_box(0.0_f32);
