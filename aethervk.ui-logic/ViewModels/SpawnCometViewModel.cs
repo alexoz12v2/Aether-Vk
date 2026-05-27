@@ -28,7 +28,7 @@ public partial class SpawnCometViewModel : ObservableObject
   public bool IsStep2 => CurrentStep == 2;
   public bool IsStep3 => CurrentStep == 3;
 
-  public bool IsFinalStep => PhysicsType == "Static" ? IsStep2 : IsStep3;
+  public bool IsFinalStep => IsStep3;
 
   public bool CanGoBack => CurrentStep > 1;
 

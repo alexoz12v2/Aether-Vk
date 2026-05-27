@@ -55,7 +55,7 @@ public class HorizonJplService
   //  1. COMET LIST  (SBDB JSON — only place we use JSON, because it's clean)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  public async Task FetchCometsAsync()
+  public virtual async Task FetchCometsAsync()
   {
     var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading comet database…");
     try
@@ -310,7 +310,7 @@ public class HorizonJplService
   /// <summary>
   /// Fetches osculating orbital elements (EPA) for the given target.
   /// </summary>
-  public async Task<PlanetOrbitData?> FetchEpaAsync(
+  public virtual async Task<PlanetOrbitData?> FetchPlanetOrbitDataAsync(
     string targetId,
     string center,
     DateTime startDate,
@@ -375,7 +375,7 @@ public class HorizonJplService
   //     Used by SpawnCometViewModel Step 3 "Fetch Orbit Data" button.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  public async Task<PlanetOrbitData?> GetPlanetDataAsync(string targetId, string center, DateTime startDate, DateTime stopDate, string stepSize)
+  public virtual async Task<PlanetOrbitData?> GetPlanetDataAsync(string targetId, string center, DateTime startDate, DateTime stopDate, string stepSize)
   {
     var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Fetching orbital data...");
     try

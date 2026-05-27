@@ -953,7 +953,8 @@ impl Archetypes {
 
     let pipeline_graphics_info = GraphicsInfo::default()
       .with_vertex_in(
-        VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP).clone(),
+        // Single full-screen triangle: TRIANGLE_LIST with 3 verts, no strip seam.
+        VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_LIST).clone(),
       )
       .with_pre_rasterization(
         PreRasterization::default().with_vertex_module(vertex_shader.module.get()).clone(),

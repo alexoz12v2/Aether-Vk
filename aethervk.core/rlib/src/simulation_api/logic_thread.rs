@@ -54,6 +54,7 @@ pub fn start_logic_thread(
   context: alloc::sync::Arc<LogicThreadContext>,
 ) -> EngineResult<Thread> {
   thread::spawn(move || {
+    oshal::os::debug::fpe::unmask_fpu_for_current_thread();
     let target_frame_time = oshal::os::time::timeus_milliseconds(16); // ~60 FPS
     let mut play_controls: hashbrown::HashMap<u64, PlayControl> = hashbrown::HashMap::new();
 

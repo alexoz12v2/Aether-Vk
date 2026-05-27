@@ -1237,10 +1237,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     string name,
     float posX, float posY, float posZ,
     float rotW, float rotX, float rotY, float rotZ,
-    float radiusKm
+    float radiusKm,
+    float massKg
   )
   {
-    var result = SpawnComet(sceneId, modelId, name, posX, posY, posZ, rotW, rotX, rotY, rotZ, radiusKm, 1); // 1 = PhysicsType.Kinematic / whatever default is
+    var result = SpawnComet(sceneId, modelId, name, posX, posY, posZ, rotW, rotX, rotY, rotZ, radiusKm, massKg, 1); // 1 = PhysicsType.Kinematic / whatever default is
     return result.CometEntityId;
   }
 
@@ -1251,6 +1252,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     float posX, float posY, float posZ,
     float rotW, float rotX, float rotY, float rotZ,
     float radiusKm,
+    float massKg,
     uint physicsType
   )
   {
@@ -1265,6 +1267,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       posX, posY, posZ,
       rotW, rotX, rotY, rotZ,
       radiusKm,
+      massKg,
       physicsType,
       out var result
     ))

@@ -142,7 +142,7 @@ pub struct MarkerDrawCall {
 }
 
 impl MarkerDrawCall {
-  const VERTEX_COUNT_VK: u32 = 4;
+  const VERTEX_COUNT_VK: u32 = 3; // single full-screen triangle u2014 no diagonal seam
   /// TODO: Document this item
   pub fn from_values(
     pipeline: PipelineKey,
@@ -225,7 +225,7 @@ pub struct BillboardDrawCall {
 }
 
 impl BillboardDrawCall {
-  const VERTEX_COUNT_VK: u32 = 4;
+  const VERTEX_COUNT_VK: u32 = 3; // single full-screen triangle u2014 no diagonal seam
   /// TODO: Document this item
   pub fn from_data(
     pipeline: PipelineKey,
@@ -343,7 +343,7 @@ pub struct GridDrawCall {
 }
 
 impl GridDrawCall {
-  const VERTEX_COUNT_VK: u32 = 4;
+  const VERTEX_COUNT_VK: u32 = 3; // single full-screen triangle u2014 no diagonal seam
   /// TODO: Document this item
   pub fn new(pipeline: PipelineKey, density: f32, grid_size: f32, grid_color: [f32; 3]) -> Self {
     Self {

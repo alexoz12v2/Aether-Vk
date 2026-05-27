@@ -74,6 +74,8 @@ mod tests {
   #[test]
   fn test_single_frame_all_shapes_collision_full() {
     aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    debug::fpe::unmask_fpu_for_current_thread();
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
     )));
@@ -182,6 +184,8 @@ mod tests {
   #[test]
   fn test_single_frame_all_shapes_collisionless() {
     aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    debug::fpe::unmask_fpu_for_current_thread();
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
     )));
@@ -290,6 +294,8 @@ mod tests {
   #[test]
   fn test_cross_frame_lca_collision_collision_full() {
     aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    debug::fpe::unmask_fpu_for_current_thread();
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
     )));
@@ -415,6 +421,8 @@ mod tests {
   #[test]
   fn test_cross_frame_lca_collision_collisionless() {
     aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    debug::fpe::unmask_fpu_for_current_thread();
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
     )));
@@ -781,6 +789,8 @@ mod tests {
   fn test_backend_determinism() {
     use aethervk_oshal_rlib::os::debug;
     debug::fpe::setup_fpu_panic();
+    aethervk_oshal_rlib::os::debug::fpe::setup_fpu_panic();
+    debug::fpe::unmask_fpu_for_current_thread();
     let pool = Arc::new(ThreadPool::new(4).unwrap());
 
     let setup_scene = || -> (Scene, EntityId, EntityId) {

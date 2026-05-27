@@ -228,32 +228,19 @@ namespace AetherVk.Services
         _           => 0,  // Static
       };
 
-      ulong meshId = 0;
-      if (physicsTypeIdx == 0)
-      {
-        var (_, id) = _runtimeService.SpawnStaticMesh(
-          sceneId:     1,
-          modelId:     result.Model.Id,
-          entityName:  result.EntityName,
-          posX: result.PosX, posY: result.PosY, posZ: result.PosZ,
-          rotW: result.RotW, rotX: result.RotX, rotY: result.RotY, rotZ: result.RotZ,
-          radiusKm:    result.CometRadiusKm
-        );
-        meshId = id;
-      }
-      else
-      {
-        var (_, id) = _runtimeService.SpawnComet(
-          sceneId:     1,
-          modelId:     result.Model.Id,
-          name:  result.EntityName,
-          posX: result.PosX, posY: result.PosY, posZ: result.PosZ,
-          rotW: result.RotW, rotX: result.RotX, rotY: result.RotY, rotZ: result.RotZ,
-          radiusKm:    result.CometRadiusKm,
-          physicsType: physicsTypeIdx
-        );
-        meshId = id;
-      }
+      float massKg = (float)(result.OrbitData?.MassKg ?? 1e13);
+
+      var (_, id) = _runtimeService.SpawnComet(
+        sceneId:     1,
+        modelId:     result.Model.Id,
+        name:  result.EntityName,
+        posX: result.PosX, posY: result.PosY, posZ: result.PosZ,
+        rotW: result.RotW, rotX: result.RotX, rotY: result.RotY, rotZ: result.RotZ,
+        radiusKm:    result.CometRadiusKm,
+        massKg:      massKg,
+        physicsType: physicsTypeIdx
+      );
+      ulong meshId = id;
 
       if (meshId > 0)
       {

@@ -40,6 +40,12 @@ pub struct KinematicState {
   pub angular_velocity: Option<Vec3f32>,
 }
 
+/// Component used to drive kinematic planets based on an SPK ephemeris trajectory.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlmanacPlanetComponent {
+  pub spk_id: i32,
+}
+
 /// There is no need to track [`bytes::Bytes`] of SPK data cause it's an Arc based type, meaning
 /// as long as ['anise::almanac::Almanac'] holds onto it, we are fine
 #[derive(Default)]
