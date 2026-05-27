@@ -39,10 +39,18 @@ public partial class SpawnCometViewModel : ObservableObject
     {
       1 => SelectedModel != null,
       2 => PhysicsType == "Static" || PhysicsType == "Kinematic" || PhysicsType == "Dynamic",
-      3 => PhysicsType == "Static" || (SelectedSpkRecord != null && FetchedOrbitData != null),
+      3 => SelectedSpkRecord != null && FetchedOrbitData != null,
       4 => true,
       _ => false,
     };
+
+  public bool IsStaticMode => PhysicsType == "Static";
+
+  // Computed mass visibility for Step 4
+  /// <summary>True when JPL returned a valid GM for this comet.</summary>
+  public bool IsMassKnownFromJpl => FetchedOrbitData?.MassKg != null;
+  /// <summary>Show mass slider in Step 4 only for Dynamic when no JPL GM is available.</summary>
+  public bool ShowMassSlider => PhysicsType == "Dynamic" && !IsMassKnownFromJpl;
 
   // --- Step 1 ---
   public ObservableCollection<ImportedModelItem> ImportedModels { get; } = new();
@@ -58,6 +66,7 @@ public partial class SpawnCometViewModel : ObservableObject
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(CanGoNext))]
   [NotifyPropertyChangedFor(nameof(IsFinalStep))]
+  [NotifyPropertyChangedFor(nameof(IsStaticMode))]
   private string _physicsType = "Static"; // Static, Kinematic, Dynamic
 
   // --- Step 3 (Horizon Data) ---
@@ -94,6 +103,11 @@ public partial class SpawnCometViewModel : ObservableObject
   private bool _isFetchingHorizonData;
 
   // --- Step 4 ---
+  // Mass override for Dynamic mode when JPL doesn't supply GM
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ShowMassSlider))]
+  private double _dynamicMassKg = 1e13;  // seeded from density estimate in OnFetchedOrbitDataChanged
+
   [ObservableProperty]
   private float _posX = 0f;
 
@@ -157,9 +171,13 @@ public partial class SpawnCometViewModel : ObservableObject
     {
       _jplRadiusKm  = (float)value.CometRadiusKm;
       CometRadiusKm = _jplRadiusKm;
+      // Seed the mass slider default: JPL mass if available, otherwise density estimate.
+      DynamicMassKg = value.MassKg ?? value.EstimatedMassKg;
     }
     OnPropertyChanged(nameof(CanGoNext));
     OnPropertyChanged(nameof(IsRadiusOverridden));
+    OnPropertyChanged(nameof(IsMassKnownFromJpl));
+    OnPropertyChanged(nameof(ShowMassSlider));
   }
 
   partial void OnSelectedModelChanged(ImportedModelItem? value)
@@ -266,6 +284,11 @@ public partial class SpawnCometViewModel : ObservableObject
       {
         return;
       }
+      if (SelectedSpkRecord == null)
+      {
+        await _breadcrumbService.ShowMessageAsync("No Record Selected", "Please select an SPK record from the list before fetching orbit data.", default, 4);
+        return;
+      }
       if (string.IsNullOrWhiteSpace(EpaStepSize))
       {
         return;
@@ -276,11 +299,9 @@ public partial class SpawnCometViewModel : ObservableObject
       var startDate = new DateTimeOffset(OrbitYear - 1, 1, 1, 0, 0, 0, TimeSpan.Zero);
       var stopDate = new DateTimeOffset(OrbitYear + 1, 12, 31, 23, 59, 59, TimeSpan.Zero);
 
-      // For periodic comets the API requires a specific numeric SPK record ID;
-      // falling back to PrimaryDesignation would return a multiple-matches page and 0.0 elements.
-      string targetId = (PhysicsType != "Static" && SelectedSpkRecord != null)
-        ? SelectedSpkRecord.RecordId
-        : SelectedComet.PrimaryDesignation;
+      // Always use the selected SPK record ID — a numeric ID (e.g. "90000031") never produces
+      // a disambiguation page, eliminating the $$SOE-not-found crash.
+      string targetId = SelectedSpkRecord.RecordId;
 
       FetchedOrbitData = await _horizonService.GetPlanetDataAsync(
         targetId,
@@ -318,7 +339,7 @@ public partial class SpawnCometViewModel : ObservableObject
             M01 = 2.0f * (xy + wz),        M11 = 1.0f - 2.0f * (xx + zz), M21 = 2.0f * (yz - wx),
             M02 = 2.0f * (xz - wy),        M12 = 2.0f * (yz + wx),        M22 = 1.0f - 2.0f * (xx + yy)
         };
-        SelectedModel.RuntimeService.OverrideModelSpherical(SelectedModel.Id, (float)CometRadiusKm, (float)FetchedOrbitData.MassKg, ref userFrame);
+        SelectedModel.RuntimeService.OverrideModelSpherical(SelectedModel.Id, (float)CometRadiusKm, (float)(FetchedOrbitData.MassKg ?? FetchedOrbitData.EstimatedMassKg), ref userFrame);
         
         // Refresh properties display
         OnPropertyChanged(nameof(SimulationLocalFrameString));

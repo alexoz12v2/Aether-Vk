@@ -19,6 +19,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   private bool _isRunning;
 
   private IntPtr _simulationContext = IntPtr.Zero;
+  /// <summary>Raw simulation context pointer — for direct P/Invoke calls that don't have a wrapper yet.</summary>
+  public IntPtr SimulationContext => _simulationContext;
   private readonly object _nativeLock = new object();
   private int _activeDownloads = 0;
   private bool _isDisposing = false;
@@ -1350,71 +1352,32 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     string name,
     double a, double e, double iDeg, double omegaNodeDeg, double argPeriDeg, float lineWidth = 2.0f)
   {
-    double i = iDeg * Math.PI / 180.0;
-    double Omega = omegaNodeDeg * Math.PI / 180.0;
-    double omega = argPeriDeg * Math.PI / 180.0;
-
-    double b = a * Math.Sqrt(Math.Max(0.0, 1.0 - e * e));
-    double c = a * e;
-
-    double wInner = (1.0 + Math.Sqrt(2.0)) / 3.0;
-    double k = 2.0 - Math.Sqrt(2.0);
-
-    // Format: [[CP0], [CP1], [CP2], [CP3]]
-    // Each CP is [Cartesian X, Cartesian Y, Weight]
-    double[][][] quadrants = new double[][][]
-    {
-      new double[][] { new double[] { a, 0, 1.0 }, new double[] { a, b * k, wInner }, new double[] { a * k, b, wInner }, new double[] { 0, b, 1.0 } },
-      new double[][] { new double[] { 0, b, 1.0 }, new double[] { -a * k, b, wInner }, new double[] { -a, b * k, wInner }, new double[] { -a, 0, 1.0 } },
-      new double[][] { new double[] { -a, 0, 1.0 }, new double[] { -a, -b * k, wInner }, new double[] { -a * k, -b, wInner }, new double[] { 0, -b, 1.0 } },
-      new double[][] { new double[] { 0, -b, 1.0 }, new double[] { a * k, -b, wInner }, new double[] { a, -b * k, wInner }, new double[] { a, 0, 1.0 } }
-    };
-
-    var segmentsForSsbo = new System.Collections.Generic.List<RationalBezierGpu>();
-
-    foreach (var quad in quadrants)
-    {
-      var seg = new RationalBezierGpu();
-      for (int ptIdx = 0; ptIdx < quad.Length; ptIdx++)
-      {
-        double xCart = quad[ptIdx][0];
-        double yCart = quad[ptIdx][1];
-        float weight = (float)quad[ptIdx][2];
-
-        double xShifted = xCart - c;
-        double yShifted = yCart;
-        double zShifted = 0.0;
-
-        // Apply orbital rotations
-        // 1. Z-axis by omega
-        var (rx1, ry1, rz1) = RotateZ(xShifted, yShifted, zShifted, omega);
-        // 2. X-axis by i
-        var (rx2, ry2, rz2) = RotateX(rx1, ry1, rz1, i);
-        // 3. Z-axis by Omega
-        var (xRot, yRot, zRot) = RotateZ(rx2, ry2, rz2, Omega);
-
-        // Pack into pre-multiplied Homogeneous vec4
-        var vec4 = new AetherVk.Logic.Models.Float4((float)xRot * weight, (float)yRot * weight, (float)zRot * weight, weight);
-        
-        if (ptIdx == 0) seg.Cp0 = vec4;
-        else if (ptIdx == 1) seg.Cp1 = vec4;
-        else if (ptIdx == 2) seg.Cp2 = vec4;
-        else if (ptIdx == 3) seg.Cp3 = vec4;
-      }
-      segmentsForSsbo.Add(seg);
-    }
-
-    var trajectoryGpu = new TrajectoryGpu
-    {
-      Color = new AetherVk.Logic.Models.Float4(1.0f, 1.0f, 1.0f, 0.5f),
-      LineWidth = lineWidth, // Line width in pixels (will be resolution independent via shader)
-      TextureId = 0xFFFFFFFF,
-      SegmentsPtr = 0
-    };
+    // a is in AU (converted at parse time in HorizonJplService)
+    // All Bézier construction now happens in Rust via avkSimulationContext_spawnTrajectoryFromElements.
+    if (_simulationContext == IntPtr.Zero)
+      return 0;
 
     ulong rootEntity = GetRootEntityId(sceneId);
 
-    return SpawnTrajectory(sceneId, rootEntity, name, trajectoryGpu, segmentsForSsbo.ToArray());
+    var entityId = NativeInterop.avkSimulationContext_spawnTrajectoryFromElements(
+      _simulationContext,
+      sceneId,
+      rootEntity,
+      name,
+      a, e, iDeg, omegaNodeDeg, argPeriDeg,
+      1.0f, 1.0f, 1.0f, 0.5f,  // white, 50% alpha
+      lineWidth
+    );
+
+    if (entityId > 0)
+    {
+      var trajEntity = new Entity(sceneId, entityId, name);
+      var state = _sceneStateManager.GetOrCreateScene(sceneId);
+      state.EntityMap[entityId] = trajEntity;
+      state.RootEntities.FirstOrDefault()?.Children.Add(trajEntity);
+    }
+
+    return entityId;
   }
 
   private ulong GetRootEntityId(ulong sceneId)
@@ -1424,16 +1387,134 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return root?.Id ?? 0;
   }
 
-  private (double x, double y, double z) RotateZ(double x, double y, double z, double angle)
+  // ─── New post-spawn component setters ────────────────────────────────────────
+
+  /// <summary>
+  /// Patches the NAIF/SPK id into a Kinematic comet entity's AlmanacPlanet component.
+  /// Must be called after SpawnComet(physicsType=1) so the logic thread queries the
+  /// correct body instead of the placeholder id 0 (Solar System Barycenter).
+  /// </summary>
+  public bool SetAlmanacPlanetNaifId(ulong sceneId, ulong entityId, int naifId)
   {
-    return (x * Math.Cos(angle) - y * Math.Sin(angle), x * Math.Sin(angle) + y * Math.Cos(angle), z);
+    if (_simulationContext == IntPtr.Zero) return false;
+    var ok = NativeInterop.avkSimulationContext_setAlmanacPlanetNaifId(
+      _simulationContext, sceneId, entityId, naifId);
+    if (!ok)
+      _consoleService.Log($"[Runtime] SetAlmanacPlanetNaifId: entity {entityId} has no AlmanacPlanet component.");
+    return ok;
   }
 
-  private (double x, double y, double z) RotateX(double x, double y, double z, double angle)
+  /// <summary>
+  /// Injects the initial velocity (km/s, ecliptic J2000) into a Dynamic comet entity.
+  /// Rust converts km/s → AU/s before storing on KinematicComponent.velocity.
+  /// Must be called after SpawnComet(physicsType=2) and before simulation start.
+  /// </summary>
+  public bool SetKinematicVelocity(ulong sceneId, ulong entityId, float vxKmS, float vyKmS, float vzKmS)
   {
-    return (x, y * Math.Cos(angle) - z * Math.Sin(angle), y * Math.Sin(angle) + z * Math.Cos(angle));
+    if (_simulationContext == IntPtr.Zero) return false;
+    var ok = NativeInterop.avkSimulationContext_setKinematicVelocity(
+      _simulationContext, sceneId, entityId, vxKmS, vyKmS, vzKmS);
+    if (!ok)
+      _consoleService.Log($"[Runtime] SetKinematicVelocity: entity {entityId} has no KinematicComponent.");
+    return ok;
   }
 
+  /// <summary>
+  /// Shows or hides an entity (adds/removes HiddenComponent in Rust).
+  /// </summary>
+  public bool SetEntityVisibility(ulong sceneId, ulong entityId, bool visible)
+  {
+    if (_simulationContext == IntPtr.Zero) return false;
+    // avkSimulationContext_setEntityVisibility returns void; treat call success as true.
+    NativeInterop.avkSimulationContext_setEntityVisibility(
+      _simulationContext, sceneId, entityId, visible);
+    return true;
+  }
+
+  // ─── Kepler → Cartesian initial conditions for Dynamic spawn ──────────────────
+
+  /// <summary>
+  /// Converts Keplerian osculating elements to ecliptic J2000 position (AU) and
+  /// velocity (km/s). Uses Newton-Raphson to solve Kepler's equation and the vis-viva
+  /// relation for speed. Returns false when eccentricity ≥ 1 (parabolic/hyperbolic).
+  /// </summary>
+  public static bool KeplerToCartesian(
+    double a_au,      // semi-major axis in AU
+    double e,         // eccentricity
+    double i_deg,     // inclination (degrees)
+    double om_deg,    // longitude of ascending node Ω (degrees)
+    double w_deg,     // argument of periapsis ω (degrees)
+    double M_deg,     // mean anomaly M (degrees)
+    out double px, out double py, out double pz,
+    out double vx, out double vy, out double vz
+  )
+  {
+    px = py = pz = vx = vy = vz = 0.0;
+    if (e >= 1.0) return false; // not an elliptic orbit
+
+    const double AU = 149_597_870.7;          // km per AU
+    const double GM_SUN = 1.32712440018e11;   // km³/s²
+
+    double a = a_au * AU;
+    double i = i_deg * Math.PI / 180.0;
+    double Om = om_deg * Math.PI / 180.0;
+    double w  = w_deg  * Math.PI / 180.0;
+    double M  = M_deg  * Math.PI / 180.0;
+
+    // Solve Kepler's equation M = E - e·sin(E) via Newton-Raphson
+    double E = M;
+    for (int iter = 0; iter < 100; iter++)
+    {
+      double dE = (M - E + e * Math.Sin(E)) / (1.0 - e * Math.Cos(E));
+      E += dE;
+      if (Math.Abs(dE) < 1e-12) break;
+    }
+
+    // True anomaly
+    double nu = 2.0 * Math.Atan2(
+      Math.Sqrt(1.0 + e) * Math.Sin(E / 2.0),
+      Math.Sqrt(1.0 - e) * Math.Cos(E / 2.0));
+
+    // Perifocal position (km) and velocity (km/s)
+    double p    = a * (1.0 - e * e);
+    double r    = p / (1.0 + e * Math.Cos(nu));
+    double cosV = Math.Cos(nu), sinV = Math.Sin(nu);
+    double sqGMp = Math.Sqrt(GM_SUN / p);
+
+    double xp = r * cosV;         double yp = r * sinV;
+    double vxp = -sqGMp * sinV;   double vyp = sqGMp * (e + cosV);
+
+    // Perifocal → ecliptic J2000 rotation matrix R = Rz(-Ω)·Rx(-i)·Rz(-ω)
+    double cosO = Math.Cos(Om), sinO = Math.Sin(Om);
+    double cosI = Math.Cos(i),  sinI = Math.Sin(i);
+    double cosW = Math.Cos(w),  sinW = Math.Sin(w);
+
+    double Rxx =  cosO * cosW - sinO * sinW * cosI;
+    double Rxy = -cosO * sinW - sinO * cosW * cosI;
+    double Ryx =  sinO * cosW + cosO * sinW * cosI;
+    double Ryy = -sinO * sinW + cosO * cosW * cosI;
+    double Rzx =  sinW * sinI;
+    double Rzy =  cosW * sinI;
+
+    // Position in AU
+    px = (Rxx * xp + Rxy * yp) / AU;
+    py = (Ryx * xp + Ryy * yp) / AU;
+    pz = (Rzx * xp + Rzy * yp) / AU;
+
+    // Velocity in km/s
+    vx = Rxx * vxp + Rxy * vyp;
+    vy = Ryx * vxp + Ryy * vyp;
+    vz = Rzx * vxp + Rzy * vyp;
+
+    return true;
+  }
+
+  // Rotation helpers used by SpawnTrajectoryFromElements
+  private static (double x, double y, double z) RotateZ(double x, double y, double z, double angle)
+    => (x * Math.Cos(angle) - y * Math.Sin(angle), x * Math.Sin(angle) + y * Math.Cos(angle), z);
+
+  private static (double x, double y, double z) RotateX(double x, double y, double z, double angle)
+    => (x, y * Math.Cos(angle) - z * Math.Sin(angle), y * Math.Sin(angle) + z * Math.Cos(angle));
 
   public Entity? SpawnEntity(ulong sceneId, string name)
   {
@@ -1489,12 +1570,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   /// Overrides the physical properties (mass, radius, inertia) of a model,
   /// assuming a spherical shape, and aligns its simulation frame with the given user frame.
   /// </summary>
-  public bool OverrideModelSpherical(ulong modelId, float radiusKm, float massKg, ref NativeInterop.FfiMat3 userFrame)
+  public bool OverrideModelSpherical(ulong modelId, float radiusKm, double massKg, ref NativeInterop.FfiMat3 userFrame)
   {
     if (_simulationContext == IntPtr.Zero)
       return false;
 
-    return NativeInterop.avkSimulationContext_overrideModelSpherical(_simulationContext, modelId, radiusKm, massKg, ref userFrame);
+    return NativeInterop.avkSimulationContext_overrideModelSpherical(_simulationContext, modelId, radiusKm, (float)massKg, ref userFrame);
   }
 
   /// <summary>

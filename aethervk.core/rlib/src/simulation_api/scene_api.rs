@@ -324,6 +324,7 @@ impl SimulationContext {
             near: 0.01,
             far: 1000.0,
           },
+          focus_distance: 1.0,
         },
       )?;
 

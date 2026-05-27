@@ -559,14 +559,10 @@ fn process_command_internal(
       delta_y,
     }) => {
       let scene_read = scene.read();
-      let (cursor_entity, _) =
-        scene_read.scene.query1_first_res::<CursorComponent, _, _>(|id, _| Some(id)).ok_or(
-          EngineError::InvalidOperation("logic_thread:RotateCamera | scene doesn't have cursor"),
-        )?;
       let rotation_speed: f32 = 0.005;
-      scene_read.scene.orbit_camera(
+      use crate::scene::camera::SceneCameraExt;
+      scene_read.scene.orbit_camera_focus(
         camera_entity,
-        cursor_entity,
         -delta_x * rotation_speed, // negate for natural mouse drag
         -delta_y * rotation_speed,
       )?;
@@ -586,49 +582,60 @@ fn process_command_internal(
       amount,
     }) => {
       let scene_read = scene.read();
-      let is_ortho = scene_read
-        .scene
-        .with_component(camera_entity, |c: &CameraComponent| {
-          matches!(
-            c.projection,
-            crate::scene::CameraProjection::Orthographic { .. }
-          )
-        })
-        .ok_or(EngineError::InvalidOperation(
-          "logic_thread:ZoomCamera | scene doesn't have CameraComponent",
-        ))?;
+      let mut is_ortho = false;
+      let mut focus_dist = 10.0;
+      
+      let _ = scene_read.scene.with_component(camera_entity, |c: &CameraComponent| {
+        is_ortho = matches!(c.projection, crate::scene::CameraProjection::Orthographic { .. });
+        focus_dist = c.focus_distance;
+      });
+
       if is_ortho {
+        let zoom_factor = 1.0 - (amount * 0.1);
+        let _ = scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
+          if let crate::scene::CameraProjection::Orthographic { ref mut left, ref mut right, ref mut bottom, ref mut top, .. } = c.projection {
+            *left *= zoom_factor;
+            *right *= zoom_factor;
+            *bottom *= zoom_factor;
+            *top *= zoom_factor;
+          }
+        });
+        if let Some(ext_id) = scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k) {
+          scene_read.mark_component_changed(
+            ext_id,
+            <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          );
+        }
         return Ok(SimulationTaskResult::None);
       }
 
-      let cursor_pos = scene_read
-        .scene
-        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
-        .and_then(|(id, _)| {
-          scene_read.scene.with_component(id, |t: &TransformComponent| t.position)
-        })
-        .unwrap_or(Vec3f32::zero());
-
-      let dist = scene_read
-        .scene
-        .with_component(camera_entity, |t: &TransformComponent| {
-          (t.position - cursor_pos).length().max(0.1)
-        })
-        .unwrap_or(100.0);
-
       use crate::scene::camera::SceneCameraExt;
-      let zoom_speed = dist * 0.3; // middle ground between 0.1 and 1.0
+      let zoom_speed = focus_dist.max(0.1) * 0.3;
+      let move_amount = -amount * zoom_speed;
+
+      // Update focus distance
+      focus_dist -= move_amount;
+      if focus_dist < 0.001 { focus_dist = 0.001; }
+      
+      let _ = scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
+        c.focus_distance = focus_dist;
+      });
 
       scene_read.scene.translate_camera_local(
         camera_entity,
-        Vec3f32::from_components(0.0, -amount * zoom_speed, 0.0),
+        Vec3f32::from_components(0.0, move_amount, 0.0),
       )?;
+      
       if let Some(ext_id) =
         scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
       {
         scene_read.mark_component_changed(
           ext_id,
           <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
+        scene_read.mark_component_changed(
+          ext_id,
+          <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
         );
       }
       Ok(SimulationTaskResult::None)
@@ -665,13 +672,17 @@ fn process_command_internal(
 
       scene_read
         .scene
-        .with_component_mut(camera_entity, |c: &mut TransformComponent| {
-          c.position = cursor_pos + offset;
-          c.rotation = q;
+        .with_component_mut(camera_entity, |t: &mut TransformComponent| {
+          t.position = cursor_pos + offset;
+          t.rotation = q;
         })
         .ok_or(EngineError::InvalidOperation(
           "logic_thread:ResetCamera | camera entity doesn't have TransformComponent",
         ))?;
+        
+      let _ = scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
+          c.focus_distance = 10.0;
+      });
       if let Some(ext_id) =
         scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
       {
@@ -689,30 +700,10 @@ fn process_command_internal(
       delta_y,
     }) => {
       let scene_read = scene.read();
-      let (cursor_entity, _) =
-        scene_read.scene.query1_first_res::<CursorComponent, _, _>(|id, _| Some(id)).ok_or(
-          EngineError::InvalidOperation("logic_thread:PanCamera | scene doesn't have cursor"),
-        )?;
       use crate::scene::camera::SceneCameraExt;
-      scene_read.scene.pan_camera_and_cursor(camera_entity, cursor_entity, delta_x, delta_y)?;
+      scene_read.scene.pan_camera_focus(camera_entity, delta_x, delta_y)?;
       if let Some(ext_id) =
         scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
-      {
-        scene_read.mark_component_changed(
-          ext_id,
-          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-        );
-      }
-      if let Some(ext_id) =
-        scene_read.entity_map.iter().find(|&(_, v)| *v == cursor_entity).map(|(k, _)| *k)
-      {
-        scene_read.mark_component_changed(
-          ext_id,
-          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-        );
-      }
-      if let Some(ext_id) =
-        scene_read.entity_map.iter().find(|&(_, v)| *v == cursor_entity).map(|(k, _)| *k)
       {
         scene_read.mark_component_changed(
           ext_id,
@@ -1105,7 +1096,7 @@ fn process_command_internal(
       if let Some((sun_id, _)) =
         scene_guard.scene.query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
       {
-        if let Some(pos) = scene_guard.scene.global_transform(sun_id).map(|t| t.position) {
+        if let Some(pos) = { #[allow(deprecated)] scene_guard.scene.global_transform(sun_id) }.map(|t| t.position) {
           sun_pos = pos;
         }
       }
@@ -1609,7 +1600,7 @@ fn try_snap_entity(
 ) -> EngineResult<()> {
   let (target_pos, target_rot) = {
     let t =
-      scene_read.scene.global_transform(target_entity).ok_or(EngineError::InvalidOperation(
+      { #[allow(deprecated)] scene_read.scene.global_transform(target_entity) }.ok_or(EngineError::InvalidOperation(
         "logic_thread:SnapToEntity | snap target doesn't have TransformComponent",
       ))?;
     (t.position, t.rotation)

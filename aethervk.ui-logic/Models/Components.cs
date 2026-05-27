@@ -163,6 +163,24 @@ public partial class CameraComponent : NativeComponent
   private bool _isOrthographic;
 
   [ObservableProperty]
+  private float _focusDistance = 10.0f;
+
+  partial void OnIsOrthographicChanged(bool value)
+  {
+    if (value && SuspendNotifications == false)
+    {
+      double fovRad = Fov * System.Math.PI / 180.0;
+      double height = 2.0 * FocusDistance * System.Math.Tan(fovRad / 2.0);
+      double width = height * AspectRatio;
+
+      OrthoTop = (float)(height / 2.0);
+      OrthoBottom = (float)(-height / 2.0);
+      OrthoRight = (float)(width / 2.0);
+      OrthoLeft = (float)(-width / 2.0);
+    }
+  }
+
+  [ObservableProperty]
   private string _projectionMatrixPreview = "View / Projection Matrix Readonly Data";
 
   protected override bool ShouldPushToNative(string? propertyName)
@@ -218,6 +236,7 @@ public partial class CameraComponent : NativeComponent
       OrthoRight = OrthoRight,
       OrthoBottom = OrthoBottom,
       OrthoTop = OrthoTop,
+      FocusDistance = FocusDistance,
       // proj array doesn't matter for pushing
     };
     NativeInterop.avkSimulationContext_setCameraComponent(
@@ -247,10 +266,15 @@ public partial class CameraComponent : NativeComponent
       AspectRatio = data.Aspect;
       NearPlane = data.Near;
       FarPlane = data.Far;
-      OrthoLeft = data.OrthoLeft;
-      OrthoRight = data.OrthoRight;
-      OrthoBottom = data.OrthoBottom;
-      OrthoTop = data.OrthoTop;
+      FocusDistance = data.FocusDistance;
+      
+      if (data.IsOrthographic)
+      {
+        OrthoLeft = data.OrthoLeft;
+        OrthoRight = data.OrthoRight;
+        OrthoBottom = data.OrthoBottom;
+        OrthoTop = data.OrthoTop;
+      }
 
       ProjectionMatrixPreview =
         $"[ {data.Proj00,7:F2} {data.Proj10,7:F2} {data.Proj20,7:F2} {data.Proj30,7:F2} ]\n"
