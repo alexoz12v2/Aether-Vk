@@ -508,7 +508,7 @@ pub mod fpe {
   /// Bit 7 is the Invalid Operation Mask (IM), set to 1 (Masked) by default. We must clear it to 0
   #[cfg(target_arch = "x86_64")]
   unsafe fn unmask_fpu_exceptions() {
-    let mut mxcsr: u32;
+    let mut mxcsr: u32 = 0;
     unsafe {
       core::arch::asm!("stmxcsr [{}]", in(reg) &mut mxcsr);
       mxcsr &= !(1 << 7); // Clear bit 7 (Invalid Operation Mask)

@@ -45,7 +45,7 @@ fn test_time_api() {
   if let Some(ctx_ptr) = get_test_context() {
     unsafe {
       let ctx = &mut *ctx_ptr;
-      let scene_id = ctx.create_empty_scene().unwrap();
+      let scene_id = ctx.create_empty_scene(true).unwrap();
 
       // Default time
       let initial_time = ctx.get_simulation_time(scene_id);
@@ -81,7 +81,7 @@ fn test_entity_transform_api() {
     unsafe {
       let ctx = &mut *ctx_ptr;
 
-      let scene_id = ctx.create_empty_scene().unwrap();
+      let scene_id = ctx.create_empty_scene(true).unwrap();
       let name = alloc::ffi::CString::new("TestEntity").unwrap();
       let entity_id = ctx.spawn_entity(scene_id, name.to_str().unwrap()).unwrap();
 
@@ -130,7 +130,7 @@ fn test_camera_api() {
     unsafe {
       let ctx = &mut *ctx_ptr;
 
-      let scene_id = ctx.create_empty_scene().unwrap();
+      let scene_id = ctx.create_empty_scene(true).unwrap();
       let name = alloc::ffi::CString::new("CameraEntity").unwrap();
       let entity_id = ctx.spawn_entity(scene_id, name.to_str().unwrap()).unwrap();
 
@@ -159,7 +159,7 @@ fn test_scene_entities_api() {
   if let Some(ctx_ptr) = get_test_context() {
     unsafe {
       let ctx = &mut *ctx_ptr;
-      let scene_id = ctx.create_empty_scene().unwrap();
+      let scene_id = ctx.create_empty_scene(true).unwrap();
 
       let initial_count = ctx.get_entity_count(scene_id).unwrap_or(0);
 
@@ -212,7 +212,7 @@ fn test_simulation_context_text_rendering() {
   if let Some(ctx_ptr) = get_test_context() {
     unsafe {
       let ctx = &mut *ctx_ptr;
-      let scene_id = ctx.create_default_scene().unwrap();
+      let scene_id = ctx.create_default_scene(true).unwrap();
 
       let width = 256;
       let height = 256;
@@ -272,7 +272,7 @@ fn test_components_api() {
   if let Some(ctx_ptr) = super::tests::get_test_context() {
     unsafe {
       let ctx = &mut *ctx_ptr;
-      let scene_id = ctx.create_empty_scene().unwrap();
+      let scene_id = ctx.create_empty_scene(true).unwrap();
       let name = alloc::ffi::CString::new("TestEntity").unwrap();
       let entity_id = ctx.spawn_entity(scene_id, name.to_str().unwrap()).unwrap();
 
@@ -343,7 +343,7 @@ fn test_scene_api() {
   if let Some(ctx_ptr) = super::tests::get_test_context() {
     unsafe {
       let ctx = &mut *ctx_ptr;
-      let scene_id = ctx.create_empty_scene().unwrap();
+      let scene_id = ctx.create_empty_scene(true).unwrap();
       let parent_name = alloc::ffi::CString::new("Parent").unwrap();
       let parent_id = ctx.spawn_entity(scene_id, parent_name.to_str().unwrap()).unwrap();
       ctx
@@ -398,7 +398,7 @@ fn test_core_api() {
   if let Some(ctx_ptr) = super::tests::get_test_context() {
     unsafe {
       let ctx = &mut *ctx_ptr;
-      let scene_id = ctx.create_empty_scene().unwrap();
+      let scene_id = ctx.create_empty_scene(true).unwrap();
 
       let cam_name = alloc::ffi::CString::new("Cam").unwrap();
       let cam_id = ctx.spawn_entity(scene_id, cam_name.to_str().unwrap()).unwrap();
@@ -453,7 +453,7 @@ fn test_misc_and_models_api_direct() {
   if let Some(ctx_ptr) = super::tests::get_test_context() {
     unsafe {
       let ctx = &mut *ctx_ptr;
-      let scene_id = ctx.create_empty_scene().unwrap();
+      let scene_id = ctx.create_empty_scene(true).unwrap();
 
       let mut count = 0;
       let ptr = ctx.get_almanac_loaded_files(&mut count);
@@ -546,7 +546,7 @@ fn test_snapshot_and_restore() {
   let ctx =
     SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, Some(panic_error_callback)).unwrap();
   println!("test_snapshot_and_restore: 2. created SimulationContext");
-  let scene_id = ctx.create_empty_scene().unwrap();
+  let scene_id = ctx.create_empty_scene(true).unwrap();
   println!("test_snapshot_and_restore: 3. created empty scene");
 
   // Spawn an entity and set position
@@ -608,4 +608,106 @@ fn test_snapshot_and_restore() {
   assert_eq!(restored_pos.x(), initial_pos.x());
   assert_eq!(restored_pos.y(), initial_pos.y());
   assert_eq!(restored_pos.z(), initial_pos.z());
+}
+
+#[test]
+fn test_spawn_comet_internal_bounds_and_hierarchy() {
+  set_asset_directory_for_tests();
+  if let Some(ctx_ptr) = get_test_context() {
+    unsafe {
+      let ctx = &mut *ctx_ptr;
+      let scene_id = ctx.create_empty_scene(true).unwrap();
+
+      // Register a dummy model
+      let model_id = 999;
+      let path = "test_comet.glb";
+      {
+        let mut scenes = ctx.scenes.write();
+        scenes.model_registry.insert(model_id, path.into());
+        let dummy_mesh = crate::simulation::comet::Comet {
+          id: 0,
+          vertices: alloc::vec![
+            crate::simulation::comet::Vertex {
+              position: [0.0, 0.0, 2.5],
+              uv: [0.0, 0.0],
+              normal: [0.0, 1.0, 0.0],
+              tangent: [1.0, 0.0, 0.0, 1.0],
+            }
+          ],
+          indices: alloc::vec![],
+          albedo_map: None,
+          normal_map: None,
+          roughness_map: None,
+          ao_map: None,
+          mass_properties: polyhedral_mass_properties::MassProperties::from_contrib_sum(
+            polyhedral_mass_properties::TriangleContrib::new([-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [0.5, 1.0, 0.0])
+          ).unwrap(),
+          bvh: None,
+          pa_basis_bf: None,
+          bf_to_pa: None,
+        };
+        scenes.mesh_cache.insert(path.into(), dummy_mesh);
+      }
+
+      let pos = Vec3f32::from_components(2.0, 0.0, 0.0);
+      let rot = Quat::identity();
+      let radius_km = 2.5;
+      let mass_kg = 1e13;
+      let physics_type = 2; // Dynamic
+
+      let (lca_ext_id, comet_ext_id) = ctx.spawn_comet_internal(
+        scene_id,
+        model_id,
+        "Halley",
+        pos,
+        rot,
+        radius_km,
+        mass_kg,
+        physics_type
+      ).expect("spawn_comet_internal should succeed");
+
+      let scenes = ctx.scenes.read();
+      let scene_arc = scenes.get_scene(scene_id).unwrap();
+      let scene_ctx = scene_arc.read();
+      let lca_id = scene_ctx.entity_map.get(&lca_ext_id).unwrap().clone();
+      let comet_id = scene_ctx.entity_map.get(&comet_ext_id).unwrap().clone();
+
+      // 1. Assert microframe is there on the specified position (2.0 AU)
+      let lca_transform = scene_ctx.scene.with_component(lca_id, |c: &crate::scene::TransformComponent| *c).unwrap();
+      assert_eq!(lca_transform.position.x(), 2.0);
+      assert_eq!(lca_transform.position.y(), 0.0);
+      assert_eq!(lca_transform.position.z(), 0.0);
+
+      // 2. Assert microframe scale bounds don't overlap with sun bounds.
+      let lca_ref = scene_ctx.scene.with_component(lca_id, |c: &crate::scene::ReferenceFrameComponent| c.clone()).unwrap();
+      assert_eq!(lca_ref.scale, 1.0); // Capped at 1.0 AU
+      assert_eq!(lca_ref.soi_radius, 1.0);
+      let min_x = lca_transform.position.x() - lca_ref.soi_radius;
+      assert!(min_x > 0.0, "Microframe bounds overlap with sun at origin!");
+
+      // 3. Assert comet is child of microframe
+      assert_eq!(scene_ctx.scene.get_parent(comet_id).unwrap(), lca_id);
+
+      // 4. Assert comet is in the center of the microframe
+      let comet_transform = scene_ctx.scene.with_component(comet_id, |c: &crate::scene::TransformComponent| *c).unwrap();
+      assert_eq!(comet_transform.position.x(), 0.0);
+      assert_eq!(comet_transform.position.y(), 0.0);
+      assert_eq!(comet_transform.position.z(), 0.0);
+
+      // 5. Assert comet is occupying specified radius in km.
+      // Derived scale = 2.5 / 2.5 = 1.0
+      assert_eq!(comet_transform.scale.x(), 1.0);
+      assert_eq!(comet_transform.scale.y(), 1.0);
+      assert_eq!(comet_transform.scale.z(), 1.0);
+
+      let comet_mesh_radius = scene_ctx.scene.with_component(comet_id, |c: &crate::scene::PhysicalMeshComponent| c.sphere_radius).unwrap();
+      assert_eq!(comet_mesh_radius, 2.5);
+
+      drop(scene_ctx);
+      drop(scene_arc);
+      drop(scenes);
+
+      let _ = alloc::boxed::Box::from_raw(ctx_ptr);
+    }
+  }
 }

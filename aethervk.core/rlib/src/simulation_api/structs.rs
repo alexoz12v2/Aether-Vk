@@ -1041,6 +1041,7 @@ pub enum MockTargetShader {
   BpClassify,
   BpCrossLca,
   BpParticleSelf,
+  ApplyEmitters,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

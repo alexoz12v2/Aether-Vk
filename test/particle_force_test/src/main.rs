@@ -35,7 +35,7 @@ struct ForceTestDelegate {
 
 impl SimulationDelegate for ForceTestDelegate {
   fn create_scene(&mut self, ctx: &mut SimulationContext) -> EngineResult<u64> {
-    ctx.create_empty_scene()
+    ctx.create_empty_scene(true)
   }
 
   fn on_setup(
@@ -305,7 +305,7 @@ mod tests {
     let mut ctx =
       SimulationContext::startup(aethervk_core_rlib::gpu::VULKAN_RENDER_BACKEND, None).unwrap();
 
-    let scene_id = ctx.create_empty_scene().unwrap();
+    let scene_id = ctx.create_empty_scene(true).unwrap();
     let root_entity = ctx.spawn_entity(scene_id, "root").unwrap();
     ctx
       .add_transform_component(

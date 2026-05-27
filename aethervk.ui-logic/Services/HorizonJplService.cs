@@ -17,6 +17,8 @@ public class PlanetOrbitData
   public double Eccentricity   { get; set; }
   public double Inclination    { get; set; }
   public double MeanAnomaly    { get; set; }
+  public double AscendingNodeLongitude { get; set; }
+  public double ArgumentOfPerifocus { get; set; }
   public string RawConstants   { get; set; } = string.Empty;
   public double CometRadiusKm  { get; set; } = 1.0;
   public double MassKg         { get; set; } = 1e13;
@@ -27,7 +29,7 @@ public class PlanetOrbitData
 public class HorizonJplService
 {
   // ── Infrastructure
-  private readonly HttpClient          _httpClient;
+  public HttpClient _httpClient;
   private readonly ConsoleService      _console;
   private readonly BreadcrumbService   _breadcrumb;
   private readonly ILocalStorageService _storage;
@@ -74,7 +76,7 @@ public class HorizonJplService
       {
         var url = $"{SbdbBase}?sb-kind=c&fields=full_name,pdes";
         _console.Log($"[HorizonJpl] GET {url}");
-        var resp = await _httpClient.GetAsync(url);
+        using var resp = await _httpClient.GetAsync(url);
         if (!resp.IsSuccessStatusCode)
         {
           await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status {(int)resp.StatusCode}");
@@ -130,16 +132,19 @@ public class HorizonJplService
     var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Enumerating SPK records…");
     try
     {
-      // For small-body designation queries we use DES= prefix and NO semicolon
-      var desEncoded = Uri.EscapeDataString(pdes);
-      var start      = Uri.EscapeDataString(startTime);
-      var stop       = Uri.EscapeDataString(stopTime);
+      // DES= prefix causes Horizons to list all SPK records for the designation.
+      // The semicolon must be literal inside the single-quoted value; do NOT percent-encode it.
+      var start = Uri.EscapeDataString(startTime);
+      var stop  = Uri.EscapeDataString(stopTime);
 
-      var url = $"{HorizonsBase}?format=text&COMMAND='DES={desEncoded}'&EPHEM_TYPE=SPK" +
-                $"&START_TIME='{start}'&STOP_TIME='{stop}'&MAKE_EPHEM=YES&OBJ_DATA=NO";
+      var url = $"{HorizonsBase}?format=text"
+              + $"&COMMAND='DES={pdes};'"
+              + $"&MAKE_EPHEM=YES&EPHEM_TYPE=SPK&OBJ_DATA=NO"
+              + $"&CENTER='@10'"
+              + $"&START_TIME='{start}'&STOP_TIME='{stop}'&STEP_SIZE='1d'";
 
       _console.Log($"[HorizonJpl] SPK Records: {url}");
-      var resp = await _httpClient.GetAsync(url);
+      using var resp = await _httpClient.GetAsync(url);
       if (!resp.IsSuccessStatusCode)
       {
         await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status {(int)resp.StatusCode}", status: 3);
@@ -226,11 +231,17 @@ public class HorizonJplService
       }
       else
       {
-        var cmd = Uri.EscapeDataString($"{targetId};");
-        var url = $"{HorizonsBase}?format=text&COMMAND='{cmd}'&OBJ_DATA=YES&MAKE_EPHEM=NO";
+        var cmd = Uri.EscapeDataString($"'{targetId};'");
+        var cen = Uri.EscapeDataString("'@10'");
+        var no = Uri.EscapeDataString("'NO'");
+        var yes = Uri.EscapeDataString("'YES'");
+
+        var url = $"{HorizonsBase}?format=text"
+                + $"&COMMAND={cmd}"
+                + $"&MAKE_EPHEM={no}&OBJ_DATA={yes}&CENTER={cen}";
         _console.Log($"[HorizonJpl] Object Constants: {url}");
 
-        var resp = await _httpClient.GetAsync(url);
+        using var resp = await _httpClient.GetAsync(url);
         if (!resp.IsSuccessStatusCode)
         {
           await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status {(int)resp.StatusCode}", status: 3);
@@ -320,18 +331,23 @@ public class HorizonJplService
     var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Fetching orbital elements…");
     try
     {
-      var cmd      = Uri.EscapeDataString($"{targetId};");
-      var ctr      = Uri.EscapeDataString(center);
-      var start    = Uri.EscapeDataString(startDate.ToString("yyyy-MM-dd"));
-      var stop     = Uri.EscapeDataString(stopDate.ToString("yyyy-MM-dd"));
-      var step     = Uri.EscapeDataString(stepSize);
+      var start = Uri.EscapeDataString($"'{startDate.ToString("yyyy-MM-dd")}'");
+      var stop  = Uri.EscapeDataString($"'{stopDate.ToString("yyyy-MM-dd")}'");
+      var step  = Uri.EscapeDataString($"'{stepSize}'");
+      var cmd   = Uri.EscapeDataString($"'{targetId};'");
+      var cen   = Uri.EscapeDataString($"'{center}'");
+      var yes   = Uri.EscapeDataString("'YES'");
+      var no    = Uri.EscapeDataString("'NO'");
+      var elems = Uri.EscapeDataString("'ELEMENTS'");
 
-      var url = $"{HorizonsBase}?format=text&COMMAND='{cmd}'&MAKE_EPHEM=YES" +
-                $"&EPHEM_TYPE=ELEMENTS&CENTER='{ctr}'" +
-                $"&START_TIME='{start}'&STOP_TIME='{stop}'&STEP_SIZE='{step}'&OBJ_DATA=NO";
+      var url = $"{HorizonsBase}?format=text"
+              + $"&COMMAND={cmd}"
+              + $"&MAKE_EPHEM={yes}&EPHEM_TYPE={elems}&OBJ_DATA={no}"
+              + $"&CENTER={cen}"
+              + $"&START_TIME={start}&STOP_TIME={stop}&STEP_SIZE={step}";
 
       _console.Log($"[HorizonJpl] EPA: {url}");
-      var resp = await _httpClient.GetAsync(url);
+      using var resp = await _httpClient.GetAsync(url);
       if (!resp.IsSuccessStatusCode)
       {
         await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status {(int)resp.StatusCode}", status: 3);
@@ -359,6 +375,8 @@ public class HorizonJplService
         Eccentricity  = ParseValue(epaBlock, @"EC\s*=\s*([^\s,]+)"),
         Inclination   = ParseValue(epaBlock, @"IN\s*=\s*([^\s,]+)"),
         MeanAnomaly   = ParseValue(epaBlock, @"MA\s*=\s*([^\s,]+)"),
+        AscendingNodeLongitude = ParseValue(epaBlock, @"OM\s*=\s*([^\s,]+)"),
+        ArgumentOfPerifocus = ParseValue(epaBlock, @"W\s*=\s*([^\s,]+)"),
       };
     }
     catch (Exception ex)
@@ -397,44 +415,48 @@ public class HorizonJplService
       }
       else
       {
-          var targetIdEncoded = Uri.EscapeDataString(targetId.EndsWith(";") ? targetId : targetId + ";");
-          
+          var start  = Uri.EscapeDataString($"'{startDateStr}'");
+          var stop   = Uri.EscapeDataString($"'{stopDateStr}'");
+          var step   = Uri.EscapeDataString($"'{stepSize}'");
+          var cmd    = Uri.EscapeDataString($"'{targetId};'");
+          var cen    = Uri.EscapeDataString($"'{center}'");
+          var yes    = Uri.EscapeDataString("'YES'");
+          var no     = Uri.EscapeDataString("'NO'");
+          var elems  = Uri.EscapeDataString("'ELEMENTS'");
+
           // 1. Fetch Object Constants
-          var objUrl = $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text"
-            + $"&COMMAND='{targetIdEncoded}'"
-            + $"&OBJ_DATA='YES'"
-            + $"&MAKE_EPHEM='NO'";
+          var objUrl = $"{HorizonsBase}?format=text"
+            + $"&COMMAND={cmd}"
+            + $"&MAKE_EPHEM={no}&OBJ_DATA={yes}&CENTER={cen}";
 
           _console.Log($"[HorizonJpl] GET Object Data: {objUrl}");
-          var objResponse = await _httpClient.GetAsync(objUrl);
-          if (!objResponse.IsSuccessStatusCode)
+          using (var objResponse = await _httpClient.GetAsync(objUrl))
           {
-            await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status: {(int)objResponse.StatusCode}");
-            return null;
+            if (!objResponse.IsSuccessStatusCode)
+            {
+              throw new Exception($"Horizon API Error: GET Object Data failed with Status: {(int)objResponse.StatusCode}. URL: {objUrl}");
+            }
+            objDataText = await objResponse.Content.ReadAsStringAsync();
+            _console.Log($"[HorizonJpl] Object Data Response:\n{objDataText}");
           }
-          objDataText = await objResponse.Content.ReadAsStringAsync();
-          _console.Log($"[HorizonJpl] Object Data Response:\n{objDataText}");
 
           // 2. Fetch EPA
-          var epaUrl = $"https://ssd.jpl.nasa.gov/api/horizons.api?format=text"
-            + $"&COMMAND='{targetIdEncoded}'"
-            + $"&MAKE_EPHEM='YES'"
-            + $"&EPHEM_TYPE='ELEMENTS'"
-            + $"&CENTER='{Uri.EscapeDataString(center)}'"
-            + $"&START_TIME='{Uri.EscapeDataString(startDateStr)}'"
-            + $"&STOP_TIME='{Uri.EscapeDataString(stopDateStr)}'"
-            + $"&STEP_SIZE='{Uri.EscapeDataString(stepSize)}'"
-            + $"&OBJ_DATA='NO'";
+          var epaUrl = $"{HorizonsBase}?format=text"
+            + $"&COMMAND={cmd}"
+            + $"&MAKE_EPHEM={yes}&EPHEM_TYPE={elems}&OBJ_DATA={no}"
+            + $"&CENTER={cen}"
+            + $"&START_TIME={start}&STOP_TIME={stop}&STEP_SIZE={step}";
 
           _console.Log($"[HorizonJpl] GET EPA Data: {epaUrl}");
-          var epaResponse = await _httpClient.GetAsync(epaUrl);
-          if (!epaResponse.IsSuccessStatusCode)
+          using (var epaResponse = await _httpClient.GetAsync(epaUrl))
           {
-            await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status: {(int)epaResponse.StatusCode}");
-            return null;
+            if (!epaResponse.IsSuccessStatusCode)
+            {
+              throw new Exception($"Horizon API Error: GET EPA Data failed with Status: {(int)epaResponse.StatusCode}. URL: {epaUrl}");
+            }
+            epaText = await epaResponse.Content.ReadAsStringAsync();
+            _console.Log($"[HorizonJpl] EPA Response:\n{epaText}");
           }
-          epaText = await epaResponse.Content.ReadAsStringAsync();
-          _console.Log($"[HorizonJpl] EPA Response:\n{epaText}");
 
           await _storage.SaveSessionAsync(cacheKey, System.Text.Encoding.UTF8.GetBytes(epaText));
           await _storage.SaveSessionAsync(cacheKey + ".obj", System.Text.Encoding.UTF8.GetBytes(objDataText));
@@ -442,10 +464,21 @@ public class HorizonJplService
 
       string constantsBlock = ExtractConstantsBlock(objDataText);
 
-      double a = ParseValue(epaText, @"A\s*=\s*([^\s,]+)");
-      double ec = ParseValue(epaText, @"EC\s*=\s*([^\s,]+)");
-      double in_ = ParseValue(epaText, @"IN\s*=\s*([^\s,]+)");
-      double ma = ParseValue(epaText, @"MA\s*=\s*([^\s,]+)");
+      // Extract only the ephemeris data block to avoid matching header values
+      int soeIdx = epaText.IndexOf("$$SOE");
+      int eoeIdx = epaText.IndexOf("$$EOE");
+      if (soeIdx == -1 || eoeIdx <= soeIdx)
+      {
+        throw new Exception($"Horizon API Error: $$SOE not found. EPA Text length: {epaText.Length}. Content: {epaText.Substring(0, Math.Min(200, epaText.Length))}");
+      }
+      var epaBlock = epaText.Substring(soeIdx + 5, eoeIdx - (soeIdx + 5)).Trim();
+
+      double a = ParseValue(epaBlock, @"A\s*=\s*([^\s,]+)");
+      double ec = ParseValue(epaBlock, @"EC\s*=\s*([^\s,]+)");
+      double in_ = ParseValue(epaBlock, @"IN\s*=\s*([^\s,]+)");
+      double ma = ParseValue(epaBlock, @"MA\s*=\s*([^\s,]+)");
+      double om = ParseValue(epaBlock, @"OM\s*=\s*([^\s,]+)");
+      double w = ParseValue(epaBlock, @"W\s*=\s*([^\s,]+)");
 
       // Nucleus radius: try volumetric-equivalent radius first (R_vol, km),
       // then the generic RAD field. Default to 1 km if absent.
@@ -476,6 +509,8 @@ public class HorizonJplService
         Eccentricity = ec,
         Inclination = in_,
         MeanAnomaly = ma,
+        AscendingNodeLongitude = om,
+        ArgumentOfPerifocus = w,
         RawConstants = constantsBlock,
         CometRadiusKm = radiusKm,
         MassKg = massKg,
@@ -485,7 +520,7 @@ public class HorizonJplService
     {
       _console.Log($"[HorizonJpl] GetPlanetDataAsync Exception: {ex.Message}");
       await _breadcrumb.ShowMessageAsync("Horizon API Exception", ex.Message);
-      return null;
+      throw; // Rethrow to fail tests explicitly
     }
     finally
     {
@@ -499,31 +534,109 @@ public class HorizonJplService
 
   public async Task<string?> DownloadSpkByIdAsync(string pdes, string spkId, string savePath, string startTime, string stopTime)
   {
+    // ── Persistent cache: SPK data is immutable for a given ID + epoch range ──
+    var cacheKey  = $"spk_{Sanitize(spkId)}_{Sanitize(startTime)}_{Sanitize(stopTime)}.bsp";
+    var cachePath = _storage.GetPersistentPath(cacheKey);
+
+    if (File.Exists(cachePath) && new FileInfo(cachePath).Length > 0)
+    {
+      _console.Log($"[HorizonJpl] SPK persistent cache hit: {cacheKey}");
+      // Copy to caller-requested path if different
+      if (!string.Equals(cachePath, savePath, StringComparison.OrdinalIgnoreCase))
+        File.Copy(cachePath, savePath, overwrite: true);
+      return cachePath;
+    }
+
     try
     {
-      var cmd   = Uri.EscapeDataString($"{spkId};");
-      var start = Uri.EscapeDataString(startTime);
-      var stop  = Uri.EscapeDataString(stopTime);
-      var url   = $"{HorizonsBase}?format=text&COMMAND='{cmd}'&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=SPK&START_TIME='{start}'&STOP_TIME='{stop}'";
+      var start = Uri.EscapeDataString($"'{startTime}'");
+      var stop  = Uri.EscapeDataString($"'{stopTime}'");
+      var cmd   = Uri.EscapeDataString($"'{spkId};'");
+      var yes   = Uri.EscapeDataString("'YES'");
+      var no    = Uri.EscapeDataString("'NO'");
+      var spk   = Uri.EscapeDataString("'SPK'");
 
-      _console.Log($"[HorizonJpl] SPK download: {url}");
-      var resp = await _httpClient.GetAsync(url);
-      if (!resp.IsSuccessStatusCode) return null;
+      var url   = $"{HorizonsBase}?format=text"
+                + $"&COMMAND={cmd}"
+                + $"&MAKE_EPHEM={yes}&EPHEM_TYPE={spk}&OBJ_DATA={no}"
+                + $"&START_TIME={start}&STOP_TIME={stop}";
 
-      var text     = await resp.Content.ReadAsStringAsync();
-      _console.Log($"[HorizonJpl] SPK fetched ({text.Length} bytes).");
-      int startIdx = text.IndexOf("REFGL1NQ");
-      if (startIdx == -1) { _console.Log("[HorizonJpl] SPK binary marker not found."); return null; }
+      _console.Log($"[HorizonJpl] SPK download (streaming): {url}");
 
-      var lines      = text.Substring(startIdx).Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-      var base64Data = string.Join("", lines.TakeWhile(l => !string.IsNullOrWhiteSpace(l)));
-      var bytes      = Convert.FromBase64String(base64Data);
+      // Stream response line-by-line to avoid Large Object Heap allocations.
+      // Base64 content is decoded in 4 096-char chunks (staying well under the 85 kB LOH threshold).
+      using var resp = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+      if (!resp.IsSuccessStatusCode)
+      {
+        _console.Log($"[HorizonJpl] SPK download HTTP {(int)resp.StatusCode}");
+        return null;
+      }
 
-      using var fs = new FileStream(savePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true);
-      await fs.WriteAsync(bytes, 0, bytes.Length);
-      return savePath;
+      using var netStream = await resp.Content.ReadAsStreamAsync();
+      using var reader    = new StreamReader(netStream, System.Text.Encoding.ASCII, detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true);
+      using var outFs     = new FileStream(cachePath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true);
+
+      const int ChunkChars = 4096; // divisible by 4 → clean Base64 boundary
+      var sb          = new System.Text.StringBuilder(ChunkChars + 80);
+      bool markerSeen = false;
+      string? line;
+      long totalDecoded = 0;
+
+      while ((line = await reader.ReadLineAsync()) != null)
+      {
+        if (!markerSeen)
+        {
+          if (line.Contains("REFGL1NQ")) { markerSeen = true; sb.Append(line.Trim()); }
+          continue;
+        }
+        if (string.IsNullOrWhiteSpace(line)) break; // end of base64 block
+        sb.Append(line.Trim());
+
+        // Decode and flush full 4 096-char (3 072-byte) chunks
+        while (sb.Length >= ChunkChars)
+        {
+          var chunk   = sb.ToString(0, ChunkChars);
+          sb.Remove(0, ChunkChars);
+          var decoded = Convert.FromBase64String(chunk);
+          await outFs.WriteAsync(decoded, 0, decoded.Length);
+          totalDecoded += decoded.Length;
+        }
+      }
+
+      // Flush any remainder (pad to 4-char boundary if needed)
+      if (sb.Length > 0)
+      {
+        while (sb.Length % 4 != 0) sb.Append('=');
+        var decoded = Convert.FromBase64String(sb.ToString());
+        await outFs.WriteAsync(decoded, 0, decoded.Length);
+        totalDecoded += decoded.Length;
+      }
+
+      if (!markerSeen || totalDecoded == 0)
+      {
+        _console.Log("[HorizonJpl] SPK binary marker not found or empty payload.");
+        outFs.Close();
+        File.Delete(cachePath);
+        return null;
+      }
+
+      _console.Log($"[HorizonJpl] SPK saved to persistent cache ({totalDecoded:N0} bytes): {cacheKey}");
+
+      outFs.Close(); // MUST close the FileShare.None handle before we can copy the file!
+      
+      // Copy to caller-requested path if different
+      if (!string.Equals(cachePath, savePath, StringComparison.OrdinalIgnoreCase))
+        File.Copy(cachePath, savePath, overwrite: true);
+
+      return cachePath;
     }
-    catch (Exception ex) { _console.Log($"[HorizonJpl] SPK download error: {ex.Message}"); return null; }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] SPK download error: {ex.Message}");
+      // Clean up partial file
+      if (File.Exists(cachePath)) File.Delete(cachePath);
+      return null;
+    }
   }
 
   public async Task<bool> DownloadObservationAsync(string pdes, string spkId, DateTimeOffset start, DateTimeOffset stop, string savePath)

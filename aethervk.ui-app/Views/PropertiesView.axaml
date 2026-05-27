@@ -38,7 +38,15 @@
                     <DataTemplate DataType="models:TransformComponent">
                         <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
                             <StackPanel Spacing="4" IsEnabled="{Binding IsEditable}">
-                                <Expander Header="Position" HorizontalAlignment="Stretch">
+                                <Expander HorizontalAlignment="Stretch">
+                                    <Expander.Header>
+                                        <Grid ColumnDefinitions="*, Auto">
+                                            <TextBlock Text="Position" VerticalAlignment="Center"/>
+                                            <Button Grid.Column="1" Classes="icon" Command="{Binding CopyPositionCommand}" ToolTip.Tip="Copy to Clipboard" Background="Transparent" Padding="4" Margin="8,0,0,0">
+                                                <PathIcon Data="M19,21H8V7H19M19,5H14.82C14.4,3.84 13.3,3 12,3C10.7,3 9.6,3.84 9.18,5H5V21A2,2 0 0,0 7,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M12,5A1,1 0 0,1 13,6A1,1 0 0,1 12,7A1,1 0 0,1 11,6A1,1 0 0,1 12,5Z" Width="14" Height="14" />
+                                            </Button>
+                                        </Grid>
+                                    </Expander.Header>
                                     <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
                                         <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                         <controls:UnboundedSlider Grid.Column="1" Value="{Binding PosX}" Margin="0,0,8,0"/>
@@ -49,7 +57,15 @@
                                     </Grid>
                                 </Expander>
 
-                                <Expander Header="Rotation (Quat)" HorizontalAlignment="Stretch">
+                                <Expander HorizontalAlignment="Stretch">
+                                    <Expander.Header>
+                                        <Grid ColumnDefinitions="*, Auto">
+                                            <TextBlock Text="Rotation (Quat)" VerticalAlignment="Center"/>
+                                            <Button Grid.Column="1" Classes="icon" Command="{Binding CopyRotationCommand}" ToolTip.Tip="Copy to Clipboard" Background="Transparent" Padding="4" Margin="8,0,0,0">
+                                                <PathIcon Data="M19,21H8V7H19M19,5H14.82C14.4,3.84 13.3,3 12,3C10.7,3 9.6,3.84 9.18,5H5V21A2,2 0 0,0 7,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M12,5A1,1 0 0,1 13,6A1,1 0 0,1 12,7A1,1 0 0,1 11,6A1,1 0 0,1 12,5Z" Width="14" Height="14" />
+                                            </Button>
+                                        </Grid>
+                                    </Expander.Header>
                                     <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,*">
                                         <TextBlock Grid.Column="0" Text="W:" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                         <controls:UnboundedSlider Grid.Column="1" Value="{Binding RotW}" Margin="0,0,8,0"/>
@@ -62,7 +78,15 @@
                                     </Grid>
                                 </Expander>
 
-                                <Expander Header="Scale" HorizontalAlignment="Stretch">
+                                <Expander HorizontalAlignment="Stretch">
+                                    <Expander.Header>
+                                        <Grid ColumnDefinitions="*, Auto">
+                                            <TextBlock Text="Scale" VerticalAlignment="Center"/>
+                                            <Button Grid.Column="1" Classes="icon" Command="{Binding CopyScaleCommand}" ToolTip.Tip="Copy to Clipboard" Background="Transparent" Padding="4" Margin="8,0,0,0">
+                                                <PathIcon Data="M19,21H8V7H19M19,5H14.82C14.4,3.84 13.3,3 12,3C10.7,3 9.6,3.84 9.18,5H5V21A2,2 0 0,0 7,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M12,5A1,1 0 0,1 13,6A1,1 0 0,1 12,7A1,1 0 0,1 11,6A1,1 0 0,1 12,5Z" Width="14" Height="14" />
+                                            </Button>
+                                        </Grid>
+                                    </Expander.Header>
                                     <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
                                         <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                         <controls:UnboundedSlider Grid.Column="1" Value="{Binding ScaleX}" Margin="0,0,8,0"/>
@@ -106,7 +130,7 @@
                                         <TextBlock Grid.Row="5" Grid.Column="0" Text="Near (AU):" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                         <NumericUpDown Grid.Row="5" Grid.Column="1"
                                                        Value="{Binding NearPlane}"
-                                                       Minimum="0.000001" Maximum="9999.999"
+                                                       Minimum="0.01" Maximum="9999.999"
                                                        Increment="0.001" FormatString="0.######"/>
 
                                         <TextBlock Grid.Row="6" Grid.Column="0" Text="Far (AU):" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -118,7 +142,7 @@
                                 </Expander>
 
                                 <TextBlock Text="Projection Matrix Preview" FontWeight="SemiBold" Margin="0,8,0,0"/>
-                                <TextBlock Text="{Binding ProjectionMatrixPreview}" Foreground="{DynamicResource Text.Secondary}" />
+                                <TextBlock Text="{Binding ProjectionMatrixPreview}" FontFamily="Consolas, Monospace" Foreground="{DynamicResource Text.Secondary}" />
                             </StackPanel>
                         </Expander>
                     </DataTemplate>
@@ -197,7 +221,7 @@
                                 <TextBlock Text="{Binding PositionX, StringFormat='Pos X: {0}'}" />
                                 <TextBlock Text="{Binding VelocityY, StringFormat='Vel Y: {0}'}" />
                                 <TextBlock Text="Inertia Tensor:" FontWeight="SemiBold" Margin="0,4,0,0"/>
-                                <TextBlock Text="{Binding InertiaTensor}" FontFamily="Consolas" />
+                                <TextBlock Text="{Binding InertiaTensor}" FontFamily="Consolas, Monospace" />
 
                                 <CheckBox Content="Follow" IsChecked="{Binding $parent[UserControl].((vm:PropertiesViewModel)DataContext).IsFollowingEntity}" />
                                 <Button Content="Snap Camera" Command="{Binding $parent[UserControl].((vm:PropertiesViewModel)DataContext).SnapToSelectedEntityCommand}" Classes="accent" Margin="0,8,0,0" HorizontalAlignment="Right" />

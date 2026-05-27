@@ -609,7 +609,13 @@ impl Component for HiddenComponent {}
 #[derive(Clone, Copy, Debug)]
 pub enum ForceEmitterComponent {
   Gravity {
+    /// Standard gravitational parameter G*M in **km³/s²** (JPL Horizons default).
+    /// Examples: Sun ≈ 1.32712440018e11, Earth ≈ 3.986004418e5.
     mu: f32,
+    /// Radiation-pressure ratio β = F_rad / F_grav.
+    /// Net effective parameter: mu_eff = (1 − β) · mu.
+    /// 0.0 = pure gravity; 1.0 = radiation-blown (force-free); typical comet dust: 0.1–1.0.
+    beta: f32,
   },
   Planar {
     normal: Vec3f32,

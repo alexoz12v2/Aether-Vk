@@ -37,6 +37,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     fn build_rigid_bodies(&self, cmd: &mut Self::Cmd, scene: &PhysicsScene, scene0: &Scene) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>)> { self.base.build_rigid_bodies(cmd, scene, scene0) }
     fn build_frames(&self, cmd: &mut Self::Cmd, scene: &PhysicsScene) -> EngineResult<Self::Buffer<GpuReferenceFrame>> { self.base.build_frames(cmd, scene) }
     fn build_particles(&self, cmd: &mut Self::Cmd, scene: &Scene) -> EngineResult<(Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)> { self.base.build_particles(cmd, scene) }
+    fn build_particle_frame_ids(&self, cmd: &mut Self::Cmd, particle_metadata: &[ParticleMetadata]) -> EngineResult<Self::Buffer<u32>> { self.base.build_particle_frame_ids(cmd, particle_metadata) }
     fn build_emitters(&self, cmd: &mut Self::Cmd, scene: &Scene) -> EngineResult<Self::Buffer<ForceEmitter>> { self.base.build_emitters(cmd, scene) }
     
     // --- MOCKED DISPATCH METHODS ---
@@ -83,9 +84,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         Ok(())
     }
 
-    fn imex_integrate_bodies_p3(&self, cmd: &mut Self::Cmd, bodies: &mut Self::Buffer<RigidBodyImex>, wrenches: &mut Self::Buffer<Wrench>, emitters: &Self::Buffer<ForceEmitter>, dt: timeus_t) -> EngineResult<()> { 
+    fn imex_integrate_bodies_p3(&self, cmd: &mut Self::Cmd, bodies: &mut Self::Buffer<RigidBodyImex>, wrenches: &mut Self::Buffer<Wrench>, emitters: &Self::Buffer<ForceEmitter>, frames: &Self::Buffer<GpuReferenceFrame>, dt: timeus_t) -> EngineResult<()> { 
         if self.target == MockTargetShader::IntegrateBodiesP3 {
-            self.base.imex_integrate_bodies_p3(cmd, bodies, wrenches, emitters, dt)?;
+            self.base.imex_integrate_bodies_p3(cmd, bodies, wrenches, emitters, frames, dt)?;
         }
         Ok(())
     }
@@ -100,6 +101,13 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     fn imex_integrate_particles_p4_5(&self, cmd: &mut Self::Cmd, particles: &mut Self::Buffer<f32>, dt: timeus_t, current_time_us: timeus_t) -> EngineResult<()> { 
         if self.target == MockTargetShader::IntegrateParticlesP4P5 {
             self.base.imex_integrate_particles_p4_5(cmd, particles, dt, current_time_us)?;
+        }
+        Ok(())
+    }
+
+    fn apply_emitters_to_particles(&self, cmd: &mut Self::Cmd, particles: &mut Self::Buffer<f32>, emitters: &Self::Buffer<ForceEmitter>, frames: &Self::Buffer<GpuReferenceFrame>, particle_frame_ids: &Self::Buffer<u32>, num_emitters: u32) -> EngineResult<()> {
+        if self.target == MockTargetShader::ApplyEmitters {
+            self.base.apply_emitters_to_particles(cmd, particles, emitters, frames, particle_frame_ids, num_emitters)?;
         }
         Ok(())
     }

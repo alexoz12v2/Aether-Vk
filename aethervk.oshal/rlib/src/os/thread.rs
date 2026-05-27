@@ -129,7 +129,7 @@ impl Builder {
         let name_c = alloc::ffi::CString::new(name).unwrap();
         #[cfg(not(target_vendor = "apple"))]
         {
-          unsafe { libc::pthread_setname_np(native, name_c.as_ptr() as *const c_char) };
+          unsafe { libc::pthread_setname_np(native, name_c.as_ptr() as *const core::ffi::c_char) };
         }
       }
 

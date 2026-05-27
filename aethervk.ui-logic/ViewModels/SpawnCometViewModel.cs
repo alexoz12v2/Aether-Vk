@@ -21,14 +21,16 @@ public partial class SpawnCometViewModel : ObservableObject
   [NotifyPropertyChangedFor(nameof(IsStep1))]
   [NotifyPropertyChangedFor(nameof(IsStep2))]
   [NotifyPropertyChangedFor(nameof(IsStep3))]
+  [NotifyPropertyChangedFor(nameof(IsStep4))]
   [NotifyPropertyChangedFor(nameof(IsFinalStep))]
   private int _currentStep = 1;
 
   public bool IsStep1 => CurrentStep == 1;
   public bool IsStep2 => CurrentStep == 2;
   public bool IsStep3 => CurrentStep == 3;
+  public bool IsStep4 => CurrentStep == 4;
 
-  public bool IsFinalStep => IsStep3;
+  public bool IsFinalStep => IsStep4;
 
   public bool CanGoBack => CurrentStep > 1;
 
@@ -37,7 +39,8 @@ public partial class SpawnCometViewModel : ObservableObject
     {
       1 => SelectedModel != null,
       2 => PhysicsType == "Static" || PhysicsType == "Kinematic" || PhysicsType == "Dynamic",
-      3 => PhysicsType == "Static" || FetchedOrbitData != null,
+      3 => PhysicsType == "Static" || (SelectedSpkRecord != null && FetchedOrbitData != null),
+      4 => true,
       _ => false,
     };
 
@@ -58,10 +61,18 @@ public partial class SpawnCometViewModel : ObservableObject
   private string _physicsType = "Static"; // Static, Kinematic, Dynamic
 
   // --- Step 3 (Horizon Data) ---
-  public ObservableCollection<CometSearchResult> CometsData => _horizonService.CometsData;
+  public ObservableCollection<CometSearchResult> CometsData  => _horizonService.CometsData;
+  public ObservableCollection<SpkRecordItem>     SpkRecordsData => _horizonService.SpkRecordsData;
 
   [ObservableProperty]
   private CometSearchResult? _selectedComet;
+
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(CanGoNext))]
+  private SpkRecordItem? _selectedSpkRecord;
+
+  public bool HasSpkRecords   => SpkRecordsData.Count > 0;
+  public bool HasNoSpkRecords => !HasSpkRecords;
 
   [ObservableProperty]
   private int _orbitYear = DateTime.Now.Year;
@@ -72,7 +83,7 @@ public partial class SpawnCometViewModel : ObservableObject
   [ObservableProperty]
   private string _epaStepSize = "1 d";
 
-  public bool HasComets => CometsData.Count > 0;
+  public bool HasComets   => CometsData.Count > 0;
   public bool HasNoComets => CometsData.Count == 0;
 
   [ObservableProperty]
@@ -234,6 +245,21 @@ public partial class SpawnCometViewModel : ObservableObject
   }
 
   [RelayCommand]
+  private async Task FetchSpkRecordsAsync()
+  {
+    if (SelectedComet == null) return;
+    IsFetchingHorizonData = true;
+    SelectedSpkRecord = null;
+    var start = $"{OrbitYear - 5}-01-01";
+    var stop  = $"{OrbitYear + 5}-12-31";
+    await _horizonService.FetchSpkRecordsAsync(SelectedComet.PrimaryDesignation, start, stop);
+    IsFetchingHorizonData = false;
+    OnPropertyChanged(nameof(HasSpkRecords));
+    OnPropertyChanged(nameof(HasNoSpkRecords));
+    OnPropertyChanged(nameof(CanGoNext));
+  }
+
+  [RelayCommand]
   private async Task FetchOrbitDataAsync()
   {
       if (SelectedComet == null)
@@ -250,8 +276,14 @@ public partial class SpawnCometViewModel : ObservableObject
       var startDate = new DateTimeOffset(OrbitYear - 1, 1, 1, 0, 0, 0, TimeSpan.Zero);
       var stopDate = new DateTimeOffset(OrbitYear + 1, 12, 31, 23, 59, 59, TimeSpan.Zero);
 
+      // For periodic comets the API requires a specific numeric SPK record ID;
+      // falling back to PrimaryDesignation would return a multiple-matches page and 0.0 elements.
+      string targetId = (PhysicsType != "Static" && SelectedSpkRecord != null)
+        ? SelectedSpkRecord.RecordId
+        : SelectedComet.PrimaryDesignation;
+
       FetchedOrbitData = await _horizonService.GetPlanetDataAsync(
-        SelectedComet.PrimaryDesignation,
+        targetId,
         EpaCenter,
         startDate.DateTime,
         stopDate.DateTime,

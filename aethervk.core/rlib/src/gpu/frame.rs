@@ -225,7 +225,7 @@ pub struct BillboardDrawCall {
 }
 
 impl BillboardDrawCall {
-  const VERTEX_COUNT_VK: u32 = 3; // single full-screen triangle u2014 no diagonal seam
+  const VERTEX_COUNT_VK: u32 = 4; // four vertices for triangle strip
   /// TODO: Document this item
   pub fn from_data(
     pipeline: PipelineKey,

@@ -197,14 +197,21 @@ pub struct DynamicBody {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-/// TODO: Document this item
+/// GPU-side representation of a force emitter.
+///
+/// For `type_id == 0` (Gravity): `mu` is the standard gravitational parameter G*M
+/// in **km³/s²** (JPL Horizons default). `position` is the emitter's world-space
+/// position in **AU** (macro frame). The shader transforms it into the target
+/// body's local frame using a `GpuReferenceFrameArray` BDA.
+///
+/// For `type_id == 1` (Planar): `mu` holds the base force magnitude, `beta` is unused.
 pub struct ForceEmitter {
   pub position: [f32; 3],
-  pub mu: f32, // or base_force
+  pub mu: f32,        // G*M in km³/s² for Gravity; base_force for Planar
   pub normal: [f32; 3],
-  pub type_id: u32, // 0 = Gravity, 1 = Planar
+  pub type_id: u32,   // 0 = Gravity, 1 = Planar
   pub trunc_distance: f32,
-  pub scale_factor: f32,
+  pub beta: f32,      // radiation-pressure β; mu_eff = (1−β)·mu. 0 = pure gravity.
   pub _pad: [u32; 2],
 }
 
@@ -1951,6 +1958,21 @@ pub trait Kernels: Send + Sync {
     cmd: &mut Self::Cmd,
     scene: &Scene,
   ) -> EngineResult<(Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)>;
+
+  /// Uploads the `parent_frame_id` field from each `ParticleMetadata` entry as a
+  /// tightly-packed `u32[]` GPU buffer in AOSOA invocation order (same order as the
+  /// particle float buffer produced by [`build_particles`]).
+  ///
+  /// This is the BDA the `apply_emitters_to_particles.comp` shader reads via
+  /// `particle_frame_ids.frame_ids[gid]`.
+  ///
+  /// Cheap: just one host→device upload per frame, zero extra scene queries.
+  fn build_particle_frame_ids(
+    &self,
+    cmd: &mut Self::Cmd,
+    particle_metadata: &[ParticleMetadata],
+  ) -> EngineResult<Self::Buffer<u32>>;
+
   fn build_emitters(
     &self,
     cmd: &mut Self::Cmd,
@@ -2028,6 +2050,7 @@ pub trait Kernels: Send + Sync {
     bodies: &mut Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
     emitters: &Self::Buffer<ForceEmitter>,
+    frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
     dt: timeus_t,
   ) -> EngineResult<()>;
 
@@ -2049,6 +2072,20 @@ pub trait Kernels: Send + Sync {
     particles: &mut Self::Buffer<f32>,
     dt: timeus_t,
     current_time_us: timeus_t,
+  ) -> EngineResult<()>;
+
+  /// Applies macro-frame gravity emitters to microframe particles (GPU-inline frame transform).
+  ///
+  /// Must run between Barnes-Hut self-gravity and the P4_5 VV corrector.
+  /// `particle_frame_ids` — one `u32` frame index per particle in AOSOA invocation order.
+  fn apply_emitters_to_particles(
+    &self,
+    cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<f32>,
+    emitters: &Self::Buffer<ForceEmitter>,
+    frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    particle_frame_ids: &Self::Buffer<u32>,
+    num_emitters: u32,
   ) -> EngineResult<()>;
 
   // ── New Broad-Phase Suite ──────────────────────────────────────────────────

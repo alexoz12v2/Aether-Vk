@@ -33,7 +33,7 @@ impl TestUiDelegate {
 
 impl SimulationDelegate for TestUiDelegate {
   fn create_scene(&mut self, ctx: &mut SimulationContext) -> EngineResult<u64> {
-    let scene_id = ctx.create_empty_scene()?;
+    let scene_id = ctx.create_empty_scene(true)?;
     Ok(scene_id)
   }
 

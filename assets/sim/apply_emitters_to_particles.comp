@@ -1,0 +1,114 @@
+// @assets/sim/apply_emitters_to_particles.comp
+//
+// External Gravity Emitter → Particle Force Accumulation
+// ───────────────────────────────────────────────────────
+// Applies macro-frame gravity emitters (e.g. the Sun) to microframe particles.
+//
+// Pipeline position:
+//   P1_P2  → [barnes_hut self-gravity]  → [bp_particle_self]
+//          → **apply_emitters_to_particles**  → P4_5
+//
+// One invocation per particle. For each Gravity emitter:
+//   1. Read the particle's parent frame from particle_frame_ids[gid].
+//   2. Look up GpuReferenceFrame via pc.frames.
+//   3. Transform emitter AU position → particle km local frame.
+//   4. Compute F = mu_eff * m / r²  with mu_eff = mu * (1 − β).
+//   5. AtomicAdd into AOSOA force slots 7/8/9.
+//
+// Emitter positions are in macro world-space (AU).
+// mu is in km³/s² (JPL Horizons default).
+// Particle AOSOA layout (10 floats × SUBGROUP_SIZE per block):
+//   slots 0-2: position (km, local frame)
+//   slots 3-5: velocity (km/s, local frame)
+//   slot  6  : mass (kg)
+//   slots 7-9: accumulated force (km/s² × kg = kg·km/s², i.e. force in micro units)
+//
+// Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
+
+#version 450 core
+#extension GL_EXT_buffer_reference2         : require
+#extension GL_EXT_buffer_reference_uvec2    : require
+#extension GL_KHR_shader_subgroup_basic     : require
+#extension GL_GOOGLE_include_directive      : require
+
+#include "../bvh_utils.glsl"
+#include "imex_math.glsl"
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+// u32[] — one frame index per particle (in AOSOA invocation order)
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer ParticleFrameIds {
+    uint frame_ids[];
+};
+
+layout(push_constant, std430) uniform PushConstants {
+    ParticleData           particles;          // AOSOA float buffer
+    EmitterArray           emitters;           // ForceEmitter[]
+    GpuReferenceFrameArray frames;             // GpuReferenceFrame[]
+    ParticleFrameIds       particle_frame_ids; // u32[] — frame per particle
+    uint num_emitters;
+    uint total_particles;
+} pc;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.total_particles) return;
+
+    // Decode AOSOA base index for this invocation
+    uint block = gid / SUBGROUP_SIZE;
+    uint lane  = gid % SUBGROUP_SIZE;
+    uint base  = block * (10u * SUBGROUP_SIZE) + lane;
+
+    float mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
+    if (mass <= 0.0) return;
+
+    // Particle position in its local frame (km)
+    vec3 pos = vec3(
+        P_READ(pc.particles, base + 0u * SUBGROUP_SIZE),
+        P_READ(pc.particles, base + 1u * SUBGROUP_SIZE),
+        P_READ(pc.particles, base + 2u * SUBGROUP_SIZE)
+    );
+
+    // Look up this particle's reference frame
+    uint fi = pc.particle_frame_ids.frame_ids[gid];
+    GpuReferenceFrame frame = pc.frames.frames[fi];
+
+    vec3 f_acc = vec3(0.0);
+
+    for (uint e = 0u; e < pc.num_emitters; ++e) {
+        uint em_type = pc.emitters.emitters[e].type_id;
+        if (em_type != 0u) continue;  // Only Gravity emitters matter here
+
+        vec3  em_pos  = pc.emitters.emitters[e].position;  // macro AU
+        float em_mu   = pc.emitters.emitters[e].mu;        // km³/s²
+        float em_beta = pc.emitters.emitters[e].beta;      // radiation-pressure β
+
+        // ── Transform emitter AU position → particle local frame (km) ────────
+        vec3 r_local;
+        if (frame.frame_type == 0u) {
+            // Particle is in the macro frame: pos is in AU, convert r to km
+            r_local = (em_pos - pos) * AU_TO_KM;
+        } else {
+            // Microframe: r_local(km) = (em_pos(AU) − frame.center(AU)) / scale(AU/km) − pos(km)
+            r_local = (em_pos - frame.center_pos) / frame.scale - pos;
+        }
+
+        float dist_sq = dot(r_local, r_local);
+        if (dist_sq > 1e-6) {
+            float dist      = sqrt(dist_sq);
+            float dist3     = dist_sq * dist;
+            float dist5     = dist3 * dist_sq;
+            float softening = 1.0 - exp(-dist5);
+            float mu_eff    = em_mu * (1.0 - em_beta);
+            float force_mag = (mu_eff * mass * softening) / dist_sq;
+            f_acc += (r_local / dist) * force_mag;
+        }
+    }
+
+    // AtomicAdd accumulated force into AOSOA force slots 7/8/9
+    if (f_acc.x != 0.0 || f_acc.y != 0.0 || f_acc.z != 0.0) {
+        ATOMIC_ADD_FLOAT(pc.particles.data[base + 7u * SUBGROUP_SIZE], f_acc.x);
+        ATOMIC_ADD_FLOAT(pc.particles.data[base + 8u * SUBGROUP_SIZE], f_acc.y);
+        ATOMIC_ADD_FLOAT(pc.particles.data[base + 9u * SUBGROUP_SIZE], f_acc.z);
+    }
+}

@@ -168,7 +168,7 @@ pub unsafe extern "C" fn avkSimulationContext_createEmptyScene(ctx: *mut Simulat
     return 0;
   }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.create_empty_scene().unwrap_or_else(|e| {
+  ctx_ref.create_empty_scene(false).unwrap_or_else(|e| {
     oshal::log!("create_empty_scene failed: {}", e);
     0
   })
@@ -332,7 +332,7 @@ pub unsafe extern "C" fn avkSimulationContext_createDefaultScene(
     return 0;
   }
   let ctx_ref = unsafe { &*ctx };
-  match ctx_ref.create_default_scene() {
+  match ctx_ref.create_default_scene(false) {
     Ok(id) => {
       oshal::log!("create_default_scene SUCCESS: {}", id);
       id
@@ -485,14 +485,47 @@ pub unsafe extern "C" fn avkSimulationContext_spawnComet(
   ) {
     Ok((micro_id, comet_id)) => {
       unsafe {
-        (*out_result).lca_frame_id = micro_id;
-        (*out_result).comet_entity_id = comet_id;
+        core::ptr::write_unaligned(
+          out_result,
+          FfiSpawnCometResult {
+            lca_frame_id: micro_id,
+            comet_entity_id: comet_id,
+          },
+        );
       }
       true
     }
     Err(e) => {
       oshal::log!("avkSimulationContext_spawnComet failed: {:?}", e);
       false
+    }
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_spawnTrajectory(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  parent_entity: u64,
+  name: *const c_char,
+  trajectory: *mut aethervk_core_rlib::gpu::TrajectoryGpu,
+  segments: *const aethervk_core_rlib::gpu::RationalBezierGpu,
+  segment_count: u32,
+) -> u64 {
+  if ctx.is_null() || name.is_null() || trajectory.is_null() || segments.is_null() || segment_count == 0 {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let name_str = unsafe { CStr::from_ptr(name).to_str().unwrap_or("Trajectory") };
+  let traj = unsafe { *trajectory };
+  let segments_slice = unsafe { core::slice::from_raw_parts(segments, segment_count as usize) };
+
+  match ctx_ref.spawn_trajectory_internal(scene_id, parent_entity, name_str, traj, segments_slice) {
+    Ok(entity_id) => entity_id,
+    Err(e) => {
+      oshal::log!("avkSimulationContext_spawnTrajectory failed: {:?}", e);
+      0
     }
   }
 }
@@ -1425,8 +1458,13 @@ pub unsafe extern "C" fn avkSimulationContext_spawnStaticMesh(
   match ctx_ref.spawn_static_mesh_internal(scene_id, model_id, name, pos, rot, scale) {
     Ok((lca_id, mesh_id)) => {
       unsafe {
-        (*out_result).lca_frame_id = lca_id;
-        (*out_result).comet_entity_id = mesh_id;
+        core::ptr::write_unaligned(
+          out_result,
+          FfiSpawnCometResult {
+            lca_frame_id: lca_id,
+            comet_entity_id: mesh_id,
+          },
+        );
       }
       true
     }

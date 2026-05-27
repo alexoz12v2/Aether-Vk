@@ -485,6 +485,17 @@ public static class NativeInterop
     out FfiSpawnCometResult outResult
   );
 
+  [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_spawnTrajectory(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong parentEntity,
+    string name,
+    ref AetherVk.Logic.Models.TrajectoryGpu trajectory,
+    [In] AetherVk.Logic.Models.RationalBezierGpu[] segments,
+    uint segmentCount
+  );
+
   /// <summary>
   /// Result written by <see cref="avkSimulationContext_spawnStaticMesh"/>.
   /// Both fields are external entity ids (&gt; 0 on success).

@@ -232,6 +232,12 @@ where
   let mut wrenches = AutoDiscard::new(wr_buf, |b| kernels.discard_buffer(b));
   let (p_buf, particle_metadata) = kernels.build_particles(&mut cmd, scene)?;
   let mut particles = AutoDiscard::new(p_buf, |b| kernels.discard_buffer(b));
+  // Upload per-particle frame indices derived from ParticleMetadata.parent_frame_id.
+  // Consumed by apply_emitters_to_particles.comp via BDA.
+  let particle_frame_ids = AutoDiscard::new(
+    kernels.build_particle_frame_ids(&mut cmd, &particle_metadata)?,
+    |b| kernels.discard_buffer(b),
+  );
   let emitters = AutoDiscard::new(kernels.build_emitters(&mut cmd, scene)?, |b| {
     kernels.discard_buffer(b)
   });
@@ -275,7 +281,7 @@ where
 
     // RB: accumulate forces then IMR solve
     kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches)?;
-    kernels.imex_integrate_bodies_p3(&mut cmd, &mut rigid_bodies, &mut wrenches, &emitters, dt)?;
+    kernels.imex_integrate_bodies_p3(&mut cmd, &mut rigid_bodies, &mut wrenches, &emitters, &frames, dt)?;
 
     // Build motion BVH for self-gravity
     let bvh = AutoDiscard::new(
@@ -283,6 +289,16 @@ where
       |b| kernels.discard_bvh(b),
     );
     kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
+
+    // Apply macro-frame gravity emitters to microframe particles (cross-frame transform)
+    kernels.apply_emitters_to_particles(
+      &mut cmd,
+      &mut particles,
+      &emitters,
+      &frames,
+      &particle_frame_ids,
+      emitters.capacity() as u32,
+    )?;
 
     // VV corrector: v_{n+1/2} → v_{n+1} using F(x_{n+1})
     kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, dt, current_time)?;
@@ -312,6 +328,7 @@ where
         &mut rigid_bodies,
         &mut wrenches,
         &emitters,
+        &frames,
         dt,
       )?;
 
@@ -320,6 +337,15 @@ where
         |b| kernels.discard_bvh(b),
       );
       kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
+      // Cross-frame gravity: macro emitters → micro particles
+      kernels.apply_emitters_to_particles(
+        &mut cmd,
+        &mut particles,
+        &emitters,
+        &frames,
+        &particle_frame_ids,
+        emitters.capacity() as u32,
+      )?;
       kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, dt, current_time)?;
 
       // ── New broad-phase suite ─────────────────────────────────────────────
@@ -596,6 +622,7 @@ where
           &mut rigid_bodies,
           &mut wrenches,
           &emitters,
+          &frames,
           t_c,
         )?;
 
@@ -604,6 +631,10 @@ where
           |b| kernels.discard_bvh(b),
         );
         kernels.compute_self_gravity(&mut cmd, &rewind_bvh, &mut particles)?;
+        kernels.apply_emitters_to_particles(
+          &mut cmd, &mut particles, &emitters, &frames, &particle_frame_ids,
+          emitters.capacity() as u32,
+        )?;
         kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, t_c, current_time)?;
 
         // Apply either an elastic or inelastic response at the proper time t_c
@@ -628,6 +659,7 @@ where
               &mut rigid_bodies,
               &mut wrenches,
               &emitters,
+              &frames,
               remaining_dt,
             )?;
             let final_bvh = kernels.build_motion_bvh(
@@ -638,6 +670,10 @@ where
               remaining_dt,
             )?;
             kernels.compute_self_gravity(&mut cmd, &final_bvh, &mut particles)?;
+            kernels.apply_emitters_to_particles(
+              &mut cmd, &mut particles, &emitters, &frames, &particle_frame_ids,
+              emitters.capacity() as u32,
+            )?;
             kernels.imex_integrate_particles_p4_5(
               &mut cmd,
               &mut particles,

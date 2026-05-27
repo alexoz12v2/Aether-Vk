@@ -44,7 +44,7 @@ public class SpawnCometFlowE2ETests
     
     // Load a mock GLTF model (we need a valid file so the C++ engine doesn't crash on load)
     // There is an asset comet in aethervk.core/assets/Comet.glb
-    string assetPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../aethervk.core/assets/Comet.glb"));
+    string assetPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../assets/Comet.glb"));
     ulong modelId = 1;
     if (File.Exists(assetPath))
     {
@@ -57,8 +57,27 @@ public class SpawnCometFlowE2ETests
        // The native runtime requires a valid GLTF.
     }
 
-    // Spawn Comet
-    var (lcaId, cometId) = nativeRuntime.SpawnComet(defaultSceneId, modelId, "TestComet", 0f, 0f, 0f, 1f, 0f, 0f, 0f, 2.5f, 1e13f, 2);
+    // Spawn Comet at 2 AU to avoid overlapping with sun bounds (Sun is typically at origin)
+    var (lcaId, cometId) = nativeRuntime.SpawnComet(defaultSceneId, modelId, "TestComet", 2f, 0f, 0f, 1f, 0f, 0f, 0f, 2.5f, 1e13f, 2);
+
+    // Verify Hierarchy
+    Assert.True(lcaId > 0, "LCA ID should be valid");
+    Assert.True(cometId > 0, "Comet ID should be valid");
+
+    // Assert that state manager tracked the newly spawned entities correctly
+    var sceneState = sceneStateManager.GetOrCreateScene(defaultSceneId);
+        
+    Assert.True(sceneState.EntityMap.ContainsKey(lcaId), "LCA Frame should be mapped");
+    Assert.True(sceneState.EntityMap.ContainsKey(cometId), "Comet Mesh should be mapped");
+
+    var lcaEntity = sceneState.EntityMap[lcaId];
+    var cometEntity = sceneState.EntityMap[cometId];
+
+    Assert.Equal("TestComet_LCA", lcaEntity.Name);
+    Assert.Equal("TestComet", cometEntity.Name);
+
+    // Check Parent-Child Hierarchy constructed by NativeRuntimeService
+    Assert.Contains(cometEntity, lcaEntity.Children);
 
     // Start simulation to catch any physics engine NaNs
     nativeRuntime.IsRunning = true;
@@ -103,6 +122,38 @@ public class SpawnCometFlowE2ETests
     }
     Assert.True(hasNonZeroPixel, "Image should not be completely empty (Alpha check)");
     Assert.True(hasColorPixel, "Image should have non-black colored pixels");
+
+    // Save image to disk so user can verify
+    try
+    {
+        int width = 512;
+        int height = 512;
+        byte[] bmp = new byte[54 + pixels.Length];
+        bmp[0] = 0x42; bmp[1] = 0x4D; // BM
+        int size = bmp.Length;
+        bmp[2] = (byte)(size); bmp[3] = (byte)(size >> 8); bmp[4] = (byte)(size >> 16); bmp[5] = (byte)(size >> 24);
+        bmp[10] = 54; // offset
+        bmp[14] = 40; // header size
+        bmp[18] = (byte)(width); bmp[19] = (byte)(width >> 8);
+        int h = -height; // top-down
+        bmp[22] = (byte)(h); bmp[23] = (byte)(h >> 8); bmp[24] = (byte)(h >> 16); bmp[25] = (byte)(h >> 24);
+        bmp[26] = 1; // planes
+        bmp[28] = 32; // bpp
+
+        for(int i = 0; i < pixels.Length; i+=4) {
+            bmp[54 + i] = pixels[i+2];     // B
+            bmp[54 + i + 1] = pixels[i+1]; // G
+            bmp[54 + i + 2] = pixels[i];   // R
+            bmp[54 + i + 3] = pixels[i+3]; // A
+        }
+
+        string outPath = "/Volumes/ExtData/alessioext/.gemini/antigravity-cli/brain/ea0ff329-3e19-4520-8409-cec2fe2f95e3/test_output.bmp";
+        File.WriteAllBytes(outPath, bmp);
+    }
+    catch (Exception ex)
+    {
+        File.WriteAllText("/Volumes/ExtData/alessioext/.gemini/antigravity-cli/brain/ea0ff329-3e19-4520-8409-cec2fe2f95e3/test_output.log", "Failed to save image: " + ex.ToString());
+    }
 
     Marshal.FreeHGlobal(unmanagedBuffer);
   }

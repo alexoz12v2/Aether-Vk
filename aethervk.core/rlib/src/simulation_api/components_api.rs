@@ -422,11 +422,24 @@ impl SimulationContext {
       entity,
       "component_api:add_sun_component"
     );
-    scene
-      .write()
+    let mut scene_guard = scene.write();
+    scene_guard
       .scene
       .add_component(entity_id, SunComponent { resolution, radius })
-      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;
+
+    scene_guard
+      .scene
+      .add_component(
+        entity_id,
+        crate::scene::ForceEmitterComponent::Gravity {
+          mu: 1.3271244e11_f32,
+          beta: 0.0,
+        },
+      )
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;
+
+    Ok(())
   }
 
   /// TODO: Document this item
