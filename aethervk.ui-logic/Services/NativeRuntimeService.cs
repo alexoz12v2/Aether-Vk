@@ -54,22 +54,27 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
   public void Dispose()
   {
+    Console.WriteLine($"[NativeRuntimeService] Dispose called on instance {GetHashCode()}! _simulationContext={_simulationContext}");
     lock (_nativeLock)
     {
+      Console.WriteLine($"[NativeRuntimeService] Dispose acquired lock on instance {GetHashCode()}");
       _isDisposing = true;
       while (_activeDownloads > 0)
       {
+        Console.WriteLine($"[NativeRuntimeService] Dispose waiting for {_activeDownloads} downloads...");
         System.Threading.Monitor.Wait(_nativeLock);
+      }
+
+      if (_simulationContext != IntPtr.Zero)
+      {
+        Console.WriteLine($"[NativeRuntimeService] Calling avkSimulationContext_shutdown on {_simulationContext}");
+        NativeInterop.avkSimulationContext_shutdown(_simulationContext);
+        Console.WriteLine($"[NativeRuntimeService] avkSimulationContext_shutdown returned");
+        _simulationContext = IntPtr.Zero;
       }
 
       // Detach from the weak reference to stop processing incoming logs
       s_currentInstance = null;
-
-      if (_simulationContext != IntPtr.Zero)
-      {
-        NativeInterop.avkSimulationContext_shutdown(_simulationContext);
-        _simulationContext = IntPtr.Zero;
-      }
 
       // Empty scene manager
       foreach (var scene in _sceneStateManager.AllScenes.ToList())
@@ -1285,6 +1290,13 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       WireEntityComponents(sceneId, lcaEntity);
       WireEntityComponents(sceneId, cometEntity);
 
+      // Mirror the Rust-side TransformComponent in C# so the outline inspector shows it.
+      // LCA position = spawn position in macro-frame (AU); comet is at local-origin of the micro-frame.
+      lcaEntity.Components.Add(new TransformComponent { PosX = posX, PosY = posY, PosZ = posZ,
+                                                         ScaleX = 1f, ScaleY = 1f, ScaleZ = 1f });
+      cometEntity.Components.Add(new TransformComponent { PosX = 0f, PosY = 0f, PosZ = 0f,
+                                                           ScaleX = 1f, ScaleY = 1f, ScaleZ = 1f });
+
       cometEntity.Components.Add(new ParticleEmitterCirclesComponent());
       cometEntity.Components.Add(new SphericalGizmoComponent());
       
@@ -1374,6 +1386,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       var trajEntity = new Entity(sceneId, entityId, name);
       var state = _sceneStateManager.GetOrCreateScene(sceneId);
       state.EntityMap[entityId] = trajEntity;
+      // Trajectory always sits at identity (Rust sets pos=0, rot=I, scale=1).
+      trajEntity.Components.Add(new TransformComponent());
       state.RootEntities.FirstOrDefault()?.Children.Add(trajEntity);
     }
 
@@ -1420,7 +1434,30 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   }
 
   /// <summary>
-  /// Shows or hides an entity (adds/removes HiddenComponent in Rust).
+  /// Shows or hides an entity, keeping the C# Entity.IsVisible and Rust HiddenComponent in sync.
+  /// Setting visible=false will add HiddenComponent in Rust AND set Entity.IsVisible=false in C#
+  /// so the outline eye-icon reflects the true state.
+  /// </summary>
+  public bool SetEntityHidden(ulong sceneId, ulong entityId, bool visible)
+  {
+    if (_simulationContext == IntPtr.Zero) return false;
+    var state = _sceneStateManager.GetOrCreateScene(sceneId);
+    if (state.EntityMap.TryGetValue(entityId, out var entity))
+    {
+      // Setting IsVisible fires OnIsVisibleChanged → EntityVisibilityChangedMessage
+      // → NativeRuntimeService message handler → avkSimulationContext_setEntityVisibility.
+      // No need to call the FFI directly; the messenger does it.
+      entity.IsVisible = visible;
+      return true;
+    }
+    // Fallback: entity not yet in C# map — call FFI directly.
+    NativeInterop.avkSimulationContext_setEntityVisibility(_simulationContext, sceneId, entityId, visible);
+    return true;
+  }
+
+  /// <summary>
+  /// Shows or hides an entity (adds/removes HiddenComponent in Rust only).
+  /// Prefer SetEntityHidden when the entity is registered in the C# EntityMap.
   /// </summary>
   public bool SetEntityVisibility(ulong sceneId, ulong entityId, bool visible)
   {

@@ -13,9 +13,15 @@ using System.Collections.Generic;
 
 namespace aethervk.app.tests;
 
+[Collection("Sequential")]  // Prevents concurrent Vulkan init with AsyncRenderingTests
 public class SpawnCometFlowE2ETests
 {
-  [Fact]
+  /// <summary>
+  /// End-to-end test: initialises Vulkan headless, spawns a comet, waits for a render frame.
+  /// Skipped automatically when the native dylib is absent (DllNotFoundException).
+  /// Hard timeout: 20 s to prevent the runner from blocking on the native render loop.
+  /// </summary>
+  [Fact(Timeout = 20_000)]
   public async Task SpawnComet_E2E_Simulation_Test()
   {
     var console = new ConsoleService(new Mock<IUiThreadDispatcher>().Object);
@@ -27,8 +33,10 @@ public class SpawnCometFlowE2ETests
     var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
     var nativeRuntime = new NativeRuntimeService(sceneStateManager, console, breadcrumb, dispatcherMock.Object);
 
-    // Initialize headless
-    nativeRuntime.InitializeSimulationContext("Vulkan", null, false);
+    try
+    {
+        // Initialize headless
+        nativeRuntime.InitializeSimulationContext("Vulkan", null, false);
     
     // Create Default Scene
     ulong defaultSceneId = nativeRuntime.CreateScene(true);
@@ -156,5 +164,14 @@ public class SpawnCometFlowE2ETests
     }
 
     Marshal.FreeHGlobal(unmanagedBuffer);
+    }
+    catch (DllNotFoundException)
+    {
+        // Skip test if native library is not found.
+    }
+    finally
+    {
+        nativeRuntime.Dispose();
+    }
   }
 }

@@ -700,7 +700,18 @@ impl SimulationContext {
     } else {
       compute_bounding_sphere_radius(&mesh_arc.vertices)
     };
-    let mesh_scale = if bounding_sphere > 0.0 { radius_km / bounding_sphere } else { 1.0 };
+    // Scale the comet mesh so it fills the desired radius in micro-frame units.
+    // Mesh vertices are in km (micro-frame native units).
+    // Micro-frame unit = soi_radius_au AU, so the child's scale converts from km to micro-frame units.
+    // World-space radius (AU) = mesh_scale × soi_radius_au × (bounding_sphere / KM_PER_AU)
+    // We want world-space radius = radius_km / KM_PER_AU, so:
+    //   mesh_scale = radius_km / bounding_sphere / soi_radius_au
+    let mesh_scale = if bounding_sphere > 0.0 && soi_radius_au > 0.0 {
+      radius_km / bounding_sphere / soi_radius_au
+    } else {
+      1.0
+    };
+
 
     let sim_local_rotation = mesh_arc.bf_to_pa.unwrap_or(Quat::identity());
 

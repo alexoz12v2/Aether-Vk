@@ -224,6 +224,10 @@ public class HorizonJplService
         var prim  = parts[3];
         var name  = string.Join(" ", parts.Skip(4));
 
+        // Skip placeholder / informational rows whose id isn't a valid positive integer
+        // e.g. "(9 match — enter record # (integer), followed by semi-colon.)"
+        if (!int.TryParse(id, out int numId) || numId <= 0) continue;
+
         bool include = true;
         if (int.TryParse(epoch, out int ey))
           include = ey >= startYear && ey <= stopYear;

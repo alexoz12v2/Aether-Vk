@@ -190,9 +190,9 @@
           </ListBox>
         </StackPanel>
 
-        <!-- Nucleus & Orbit Data (visible once a SPK record is selected) -->
+        <!-- Nucleus & Orbit Data (visible once a valid SPK record is selected) -->
         <StackPanel Spacing="16" Margin="0,16,0,0"
-                    IsVisible="{Binding SelectedSpkRecord, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    IsVisible="{Binding HasValidSpkRecord}">
           <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="16">
             <StackPanel Spacing="12">
               <TextBlock Text="Object Parameters" FontWeight="Bold" FontSize="14" />

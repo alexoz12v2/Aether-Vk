@@ -33,6 +33,7 @@ public class ConsoleService : ObservableObject, IDisposable
   public void Log(string message)
   {
     var msg = $"[{DateTime.Now:HH:mm:ss}] {message}";
+    Console.WriteLine(msg);
     _messageQueue.Enqueue(msg);
   }
 

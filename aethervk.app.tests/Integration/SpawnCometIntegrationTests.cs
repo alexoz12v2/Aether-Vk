@@ -10,7 +10,12 @@ namespace aethervk.app.tests.Integration;
 
 public class SpawnCometIntegrationTests
 {
-    [AvaloniaFact]
+    /// <summary>
+    /// Integration test: requires live access to the NASA JPL Horizons API.
+    /// Times out at 10 s so the test runner does not block for the full
+    /// 3-minute HttpClient timeout when the network is unavailable.
+    /// </summary>
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task ViewModel_Integration_Flow_Test()
     {
         // Setup real services

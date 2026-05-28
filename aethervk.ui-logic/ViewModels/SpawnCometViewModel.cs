@@ -39,7 +39,7 @@ public partial class SpawnCometViewModel : ObservableObject
     {
       1 => SelectedModel != null,
       2 => PhysicsType == "Static" || PhysicsType == "Kinematic" || PhysicsType == "Dynamic",
-      3 => SelectedSpkRecord != null && FetchedOrbitData != null,
+      3 => HasValidSpkRecord && FetchedOrbitData != null,
       4 => true,
       _ => false,
     };
@@ -78,7 +78,11 @@ public partial class SpawnCometViewModel : ObservableObject
 
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(CanGoNext))]
+  [NotifyPropertyChangedFor(nameof(HasValidSpkRecord))]
   private SpkRecordItem? _selectedSpkRecord;
+
+  /// <summary>True when the selected SPK record is a real numeric id (not the SBDB placeholder row).</summary>
+  public bool HasValidSpkRecord => SelectedSpkRecord?.IsValid == true;
 
   public bool HasSpkRecords   => SpkRecordsData.Count > 0;
   public bool HasNoSpkRecords => !HasSpkRecords;
@@ -162,6 +166,14 @@ public partial class SpawnCometViewModel : ObservableObject
   private void ResetRadius()
   {
     CometRadiusKm = _jplRadiusKm;
+  }
+
+  partial void OnSelectedSpkRecordChanged(SpkRecordItem? value)
+  {
+    // Reset EPA data so the orbit section hides and Next re-gates when the user picks a different record.
+    FetchedOrbitData = null;
+    OnPropertyChanged(nameof(CanGoNext));
+    OnPropertyChanged(nameof(HasValidSpkRecord));
   }
 
   /// <summary>Called automatically by the MVVM toolkit when FetchedOrbitData changes.</summary>
