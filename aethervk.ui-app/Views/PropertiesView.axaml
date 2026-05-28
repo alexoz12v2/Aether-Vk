@@ -37,7 +37,7 @@
                     <!-- Transform Component -->
                     <DataTemplate DataType="models:TransformComponent">
                         <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
-                            <StackPanel Spacing="4" IsEnabled="{Binding IsEditable}">
+                            <StackPanel Spacing="4">
                                 <Expander HorizontalAlignment="Stretch">
                                     <Expander.Header>
                                         <Grid ColumnDefinitions="*, Auto">
@@ -47,7 +47,7 @@
                                             </Button>
                                         </Grid>
                                     </Expander.Header>
-                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" IsEnabled="{Binding IsEditable}">
                                         <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                         <controls:UnboundedSlider Grid.Column="1" Value="{Binding PosX}" Margin="0,0,8,0"/>
                                         <TextBlock Grid.Column="2" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
@@ -66,7 +66,7 @@
                                             </Button>
                                         </Grid>
                                     </Expander.Header>
-                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,*">
+                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,*" IsEnabled="{Binding IsEditable}">
                                         <TextBlock Grid.Column="0" Text="W:" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                         <controls:UnboundedSlider Grid.Column="1" Value="{Binding RotW}" Margin="0,0,8,0"/>
                                         <TextBlock Grid.Column="2" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
@@ -87,7 +87,7 @@
                                             </Button>
                                         </Grid>
                                     </Expander.Header>
-                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" IsEnabled="{Binding IsEditable}">
                                         <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                         <controls:UnboundedSlider Grid.Column="1" Value="{Binding ScaleX}" Margin="0,0,8,0"/>
                                         <TextBlock Grid.Column="2" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>

@@ -64,9 +64,9 @@ public class SpawnCometViewModelTests
 
     // Step 3 with Dynamic: requires both SelectedSpkRecord AND FetchedOrbitData
     Assert.False(vm.CanGoNext);
-    vm.FetchedOrbitData = new PlanetOrbitData();
-    Assert.False(vm.CanGoNext); // still false: SelectedSpkRecord is null
     vm.SelectedSpkRecord = new SpkRecordItem { RecordId = "90000030", EpochYear = "1986", Name = "Halley" };
+    Assert.False(vm.CanGoNext); // still false: FetchedOrbitData is null
+    vm.FetchedOrbitData = new PlanetOrbitData();
     Assert.True(vm.CanGoNext);
 
     vm.NextStepCommand.Execute(null);

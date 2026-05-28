@@ -551,7 +551,6 @@ fn process_command_internal(
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::Shutdown => Ok(SimulationTaskResult::None),
-    // TODO camera movement commands should use methods from [`crate::scene::camera`]
     LogicCommand::RotateCamera(crate::simulation_api::structs::RotateCamera {
       camera_entity,
       scene,
@@ -559,13 +558,30 @@ fn process_command_internal(
       delta_y,
     }) => {
       let scene_read = scene.read();
-      let rotation_speed: f32 = 0.005;
+      
+      let cursor_entity_id = scene_read
+        .scene
+        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
+        .map(|(id, _)| id);
+
       use crate::scene::camera::SceneCameraExt;
-      scene_read.scene.orbit_camera_focus(
-        camera_entity,
-        -delta_x * rotation_speed, // negate for natural mouse drag
-        -delta_y * rotation_speed,
-      )?;
+      let rotation_speed: f32 = 0.005;
+      
+      if let Some(cursor_id) = cursor_entity_id {
+        scene_read.scene.orbit_camera(
+          camera_entity,
+          cursor_id,
+          delta_x * rotation_speed,
+          delta_y * rotation_speed,
+        )?;
+      } else {
+        scene_read.scene.rotate_camera(
+          camera_entity,
+          delta_x * rotation_speed,
+          delta_y * rotation_speed,
+        )?;
+      }
+
       if let Some(ext_id) =
         scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
       {
@@ -609,17 +625,24 @@ fn process_command_internal(
         return Ok(SimulationTaskResult::None);
       }
 
-      use crate::scene::camera::SceneCameraExt;
-      let zoom_speed = focus_dist.max(0.1) * 0.3;
-      let move_amount = -amount * zoom_speed;
+      let cursor_pos = scene_read
+        .scene
+        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
+        .and_then(|(id, _)| {
+          scene_read.scene.with_component(id, |t: &crate::scene::TransformComponent| t.position)
+        })
+        .unwrap_or(Vec3f32::zero());
 
-      // Update focus distance
-      focus_dist -= move_amount;
-      if focus_dist < 0.001 { focus_dist = 0.001; }
-      
-      let _ = scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
-        c.focus_distance = focus_dist;
-      });
+      let dist = scene_read
+        .scene
+        .with_component(camera_entity, |t: &crate::scene::TransformComponent| {
+          (t.position - cursor_pos).length().max(0.1)
+        })
+        .unwrap_or(100.0);
+
+      use crate::scene::camera::SceneCameraExt;
+      let zoom_speed = dist * 0.3; // proportional to distance
+      let move_amount = -amount * zoom_speed;
 
       scene_read.scene.translate_camera_local(
         camera_entity,
@@ -632,10 +655,6 @@ fn process_command_internal(
         scene_read.mark_component_changed(
           ext_id,
           <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-        );
-        scene_read.mark_component_changed(
-          ext_id,
-          <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
         );
       }
       Ok(SimulationTaskResult::None)
@@ -700,10 +719,24 @@ fn process_command_internal(
       delta_y,
     }) => {
       let scene_read = scene.read();
+      let (cursor_entity, _) = scene_read
+        .scene
+        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
+        .ok_or(EngineError::InvalidOperation(
+          "logic_thread:PanCamera | scene doesn't have cursor",
+        ))?;
       use crate::scene::camera::SceneCameraExt;
-      scene_read.scene.pan_camera_focus(camera_entity, delta_x, delta_y)?;
+      scene_read.scene.pan_camera_and_cursor(camera_entity, cursor_entity, delta_x, delta_y)?;
       if let Some(ext_id) =
         scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
+      {
+        scene_read.mark_component_changed(
+          ext_id,
+          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
+      }
+      if let Some(ext_id) =
+        scene_read.entity_map.iter().find(|&(_, v)| *v == cursor_entity).map(|(k, _)| *k)
       {
         scene_read.mark_component_changed(
           ext_id,

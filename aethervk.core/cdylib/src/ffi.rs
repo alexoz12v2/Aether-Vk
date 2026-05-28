@@ -29,7 +29,7 @@ pub static mut PANIC_CALLBACK: Option<PanicCallback> = None;
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_registerPanicCallback(cb: PanicCallback) {
-  PANIC_CALLBACK = Some(cb);
+  unsafe { PANIC_CALLBACK = Some(cb); }
 }
 
 // -------------------- C Exposed API (Async & Stateless) ----------------------------
@@ -69,14 +69,19 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_shutdown(ctx: *mut SimulationContext) {
+  oshal::log!(">>> avkSimulationContext_shutdown called!");
   if !ctx.is_null() {
+    oshal::log!(">>> ctx is not null, from_raw...");
     let ctx_box = unsafe { Box::from_raw(ctx) };
+    oshal::log!(">>> sending shutdown...");
     let _ = ctx_box
       .threads
       .logic_thread
       .tx()
       .try_send(aethervk_core_rlib::simulation_api::structs::LogicCommand::Shutdown);
+    oshal::log!(">>> shutdown sent, dropping box...");
   }
+  oshal::log!(">>> avkSimulationContext_shutdown returning.");
 }
 
 #[unsafe(no_mangle)]
@@ -2449,10 +2454,12 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraComponent(
   let _ = ctx_ref.set_camera_component(scene_id, entity, params);
   
   if let Some(s) = ctx_ref.get_scene(scene_id) {
-    if let Some(e) = s.read().get_entity(entity) {
+    let e_opt = s.read().get_entity(entity);
+    if let Some(e) = e_opt {
       let mut scene_write = s.write();
       let _ = scene_write.scene.with_component_mut(e, |comp: &mut aethervk_core_rlib::scene::CameraComponent| {
         comp.focus_distance = c.focus_distance;
+        true
       });
     }
   }
@@ -2476,9 +2483,10 @@ pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
     let mut arr = [0.0; 16];
 
     let _ = ctx_ref.get_scene(scene_id).map(|s| {
-      if let Some(e) = s.read().get_entity(entity) {
+      let s_guard = s.read();
+      if let Some(e) = s_guard.get_entity(entity) {
         let _ =
-          s.read().scene.with_component(e, |c: &aethervk_core_rlib::scene::CameraComponent| {
+          s_guard.scene.with_component(e, |c: &aethervk_core_rlib::scene::CameraComponent| {
             arr = c.get_projection_matrix().into();
           });
       }
@@ -2516,8 +2524,9 @@ pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
 
       // Update focus distance dynamically
       let _ = ctx_ref.get_scene(scene_id).map(|s| {
-        if let Some(e) = s.read().get_entity(entity) {
-          let _ = s.read().scene.with_component(e, |c: &aethervk_core_rlib::scene::CameraComponent| {
+        let s_guard = s.read();
+        if let Some(e) = s_guard.get_entity(entity) {
+          let _ = s_guard.scene.with_component(e, |c: &aethervk_core_rlib::scene::CameraComponent| {
             (*out_camera).focus_distance = c.focus_distance;
           });
         }

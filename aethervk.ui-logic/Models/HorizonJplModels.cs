@@ -15,6 +15,12 @@ public class SpkRecordItem
     public string MatchDesig { get; set; } = string.Empty;
     public string PrimaryDesig { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// True when RecordId is a parseable positive integer — i.e. a real SPK record,
+    /// not the SBDB placeholder row "(9 match — enter record # …)".
+    /// </summary>
+    public bool IsValid => int.TryParse(RecordId, out int id) && id > 0;
 }
 
 public class ObjectDataProperty

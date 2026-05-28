@@ -349,8 +349,10 @@ namespace AetherVk.Services
         );
         if (orbitId > 0)
         {
-          // Hide immediately; user can toggle from the scene outline.
-          _runtimeService.SetEntityVisibility(1, orbitId, visible: false);
+          // Hide immediately via the synced wrapper so C# Entity.IsVisible and
+          // the Rust HiddenComponent are set atomically; the outline eye-icon will
+          // correctly reflect the hidden state and toggle on first click.
+          _runtimeService.SetEntityHidden(1, orbitId, visible: false);
           _consoleService.Log($"[Spawn] Orbit trajectory '{orbitName}' spawned (hidden, id={orbitId}).");
         }
       }
