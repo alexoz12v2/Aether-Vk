@@ -48,10 +48,9 @@ jobs:
         targets: ${{ matrix.target }}
 
     - name: Setup Vulkan SDK
-      uses: humbletim/install-vulkan-sdk@v1.1.1
+      uses: jakoch/install-vulkan-sdk-action@v1.5.2
       with:
-        version: 1.3.296.0
-        mac-vulkan-components: 'Vulkan-Headers Vulkan-Loader MoltenVK'
+        vulkan_version: '1.3.296.0'
 
     - name: Cargo Check
       run: cargo check --target ${{ matrix.target }}
