@@ -108,7 +108,11 @@ public struct CameraActionParams
 
 public class SimulationInitializedMessage { }
 
-public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnloadedMessage>, IRecipient<ImportModelRequestMessage>, IRecipient<SimulationInitializedMessage>
+public partial class MainWindowViewModel : ViewModelBase,
+  IRecipient<ModelUnloadedMessage>,
+  IRecipient<ImportModelRequestMessage>,
+  IRecipient<SimulationInitializedMessage>,
+  IRecipient<AetherVk.Logic.Messages.OpenSpawnCometDialogMessage>
 {
   private readonly NativeRuntimeService _runtimeService;
   private readonly BreadcrumbService _breadcrumbService;
@@ -147,6 +151,7 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
     WeakReferenceMessenger.Default.Register<ModelUnloadedMessage>(this);
     WeakReferenceMessenger.Default.Register<ImportModelRequestMessage>(this);
     WeakReferenceMessenger.Default.Register<SimulationInitializedMessage>(this);
+    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.OpenSpawnCometDialogMessage>(this);
 
     SyncModels();
   }
@@ -177,6 +182,46 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   public void Receive(SimulationInitializedMessage message)
   {
     _dispatcher.Dispatch(SyncModels);
+    // Auto-import the bundled Comet.glb on a background thread so we never
+    // block (or contend with) the UI thread's FFI calls.
+    Task.Run(async () =>
+    {
+      await ImportBundledCometModelAsync();
+    });
+  }
+
+  /// <summary>
+  /// Imports the Comet.glb model bundled with the application as a startup default.
+  /// Runs on a background thread; only touches ImportedModels via the UI dispatcher.
+  /// </summary>
+  private async Task ImportBundledCometModelAsync()
+  {
+    var basePath = System.AppDomain.CurrentDomain.BaseDirectory;
+    var cometPath = System.IO.Path.Combine(basePath, "assets", "Comet.glb");
+    if (!System.IO.File.Exists(cometPath))
+      return;
+
+    try
+    {
+      // ImportModelAsync → PollTaskAsync runs on this background thread,
+      // so it won't starve or block the UI thread.
+      var modelId = await _runtimeService.ImportModelAsync(cometPath);
+      if (modelId > 0)
+      {
+        // Touch the ObservableCollection on the UI thread.
+        _dispatcher.Dispatch(() =>
+        {
+          if (!System.Linq.Enumerable.Any(ImportedModels, m => m.Id == modelId))
+          {
+            ImportedModels.Add(new ImportedModelItem(modelId, "Comet.glb", cometPath, _runtimeService, _windowService));
+          }
+        });
+      }
+    }
+    catch (System.Exception ex)
+    {
+      System.Console.WriteLine($"[MainWindowViewModel] Failed to auto-import Comet.glb: {ex.Message}");
+    }
   }
 
   [RelayCommand]
@@ -251,6 +296,11 @@ public partial class MainWindowViewModel : ViewModelBase, IRecipient<ModelUnload
   {
     SyncModels();
     await _windowService.ShowSpawnCometDialogAsync(ImportedModels);
+  }
+
+  public void Receive(AetherVk.Logic.Messages.OpenSpawnCometDialogMessage message)
+  {
+    _dispatcher.DispatchAsync(async () => await _windowService.ShowSpawnCometDialogAsync(ImportedModels));
   }
 
   [RelayCommand]

@@ -12,13 +12,6 @@
                PointerReleased="OnPointerReleased"
                PointerMoved="OnPointerMoved"
                PointerWheelChanged="OnPointerWheelChanged">
-            <Image.ContextMenu>
-                <ContextMenu>
-                    <!-- Fallback if context is not main window -->
-                    <MenuItem Header="Spawn Comet" Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).OpenSpawnCometDialogCommand, FallbackValue={x:Null}}" />
-                    <MenuItem Header="Insert Image Billboard" Command="{Binding $parent[UserControl].((vm:Viewport3DViewModel)DataContext).InsertBillboardCommand, FallbackValue={x:Null}}" />
-                </ContextMenu>
-            </Image.ContextMenu>
         </Image>
 
         <ItemsControl ItemsSource="{Binding Billboards}" IsHitTestVisible="False">
@@ -47,6 +40,98 @@
                 </Style>
             </ItemsControl.Styles>
         </ItemsControl>
+
+        <!-- ── Radial Menu Overlay (Alt+S hold) ─────────────────────────────── -->
+        <Canvas IsHitTestVisible="False" IsVisible="{Binding IsRadialMenuOpen}">
+            <Canvas.Styles>
+                <Style Selector="Border.radial-item">
+                    <Setter Property="Background" Value="{DynamicResource Bg.Surface}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource Bg.Outline}"/>
+                    <Setter Property="BorderThickness" Value="1"/>
+                    <Setter Property="CornerRadius" Value="12"/>
+                    <Setter Property="Width" Value="80"/>
+                    <Setter Property="Height" Value="80"/>
+                    <Setter Property="Padding" Value="6"/>
+                    <Setter Property="Opacity" Value="0.92"/>
+                    <Setter Property="Transitions">
+                        <Transitions>
+                            <DoubleTransition Property="Opacity" Duration="0:0:0.1"/>
+                            <BrushTransition Property="BorderBrush" Duration="0:0:0.1"/>
+                            <ThicknessTransition Property="BorderThickness" Duration="0:0:0.1"/>
+                        </Transitions>
+                    </Setter>
+                </Style>
+                <Style Selector="Border.radial-item.hovered">
+                    <Setter Property="Background" Value="{DynamicResource Bg.Raised}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource Accent.Primary}"/>
+                    <Setter Property="BorderThickness" Value="2"/>
+                    <Setter Property="Opacity" Value="1"/>
+                </Style>
+                <Style Selector="Border.radial-item TextBlock.label">
+                    <Setter Property="FontSize" Value="10"/>
+                    <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+                    <Setter Property="TextAlignment" Value="Center"/>
+                    <Setter Property="TextWrapping" Value="Wrap"/>
+                </Style>
+                <Style Selector="Border.radial-item TextBlock.icon">
+                    <Setter Property="FontSize" Value="22"/>
+                    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+                    <Setter Property="HorizontalAlignment" Value="Center"/>
+                </Style>
+            </Canvas.Styles>
+
+            <!-- Central hub indicator -->
+            <Ellipse Width="16" Height="16"
+                     Fill="{DynamicResource Accent.Primary}" Opacity="0.7"
+                     Canvas.Left="{Binding RadialHubLeft}"
+                     Canvas.Top="{Binding RadialHubTop}"/>
+
+            <!-- Radial item: Spawn Comet — top -->
+            <Border Classes="radial-item"
+                    Classes.hovered="{Binding IsCometHovered}"
+                    Canvas.Left="{Binding RadialCometLeft}"
+                    Canvas.Top="{Binding RadialCometTop}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Classes="icon" Text="☄"/>
+                    <TextBlock Classes="label" Text="Spawn&#x0a;Comet"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Radial item: Insert Billboard — top-right -->
+            <Border Classes="radial-item"
+                    Classes.hovered="{Binding IsBillboardHovered}"
+                    Canvas.Left="{Binding RadialBillboardLeft}"
+                    Canvas.Top="{Binding RadialBillboardTop}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Classes="icon" Text="🖼"/>
+                    <TextBlock Classes="label" Text="Billboard"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Radial item: Reset Camera — right -->
+            <Border Classes="radial-item"
+                    Classes.hovered="{Binding IsResetCameraHovered}"
+                    Canvas.Left="{Binding RadialResetCameraLeft}"
+                    Canvas.Top="{Binding RadialResetCameraTop}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Classes="icon" Text="🎥"/>
+                    <TextBlock Classes="label" Text="Reset&#x0a;Camera"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Radial item: Snap to Selected — bottom-right -->
+            <Border Classes="radial-item"
+                    Classes.hovered="{Binding IsSnapHovered}"
+                    Canvas.Left="{Binding RadialSnapLeft}"
+                    Canvas.Top="{Binding RadialSnapTop}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Classes="icon" Text="🔍"/>
+                    <TextBlock Classes="label" Text="Snap to&#x0a;Selected"/>
+                </StackPanel>
+            </Border>
+        </Canvas>
+
+
 
         <StackPanel HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10" Spacing="5" IsVisible="{Binding IsInitialized}">
             <Border Padding="5" CornerRadius="4" Background="{DynamicResource Bg.Surface}" Opacity="0.8" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1">

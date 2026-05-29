@@ -10,7 +10,7 @@ namespace AetherVk.Controls;
 /// A 3-axis rotation gizmo.
 /// Axes in local 3D space:
 ///   Red   = +X (Right)
-///   Green = -Y (Forward / into screen top)
+///   Green = -Y (Forward — foreshortened 45°, always visible)
 ///   Blue  = +Z (Up)
 /// Mouse drag: horizontal → Yaw, vertical → Pitch.
 /// </summary>
@@ -90,17 +90,23 @@ public partial class RotationGizmo : UserControl
     return m;
   }
 
-  // Project a 3-D unit vector to canvas 2-D (isometric-like: X→right, Z→up, Y→depth foreshortened).
+  // Project a 3-D unit vector to canvas 2-D using cabinet (oblique) projection:
+  //   X → screen right, Z → screen up (−canvas Y),
+  //   Y → foreshortened at 45°, blended into both axes so all three
+  //       axes remain visible regardless of orientation.
   private static (double px, double py) Project(double[,] rot, double x, double y, double z, double r)
   {
-    // Transform local axis vector by rotation matrix
+    // Transform local axis vector by the current rotation matrix.
     double wx = rot[0, 0] * x + rot[0, 1] * y + rot[0, 2] * z;
     double wy = rot[1, 0] * x + rot[1, 1] * y + rot[1, 2] * z;
     double wz = rot[2, 0] * x + rot[2, 1] * y + rot[2, 2] * z;
 
-    // Screen projection: X→screen X, Z→screen -Y, Y→depth (foreshortened with cos(45°))
-    double px = wx * r;
-    double py = -wz * r;               // Z is "up" → negate for canvas (Y grows down)
+    // Cabinet oblique: Y depth projected at 45°, scaled to 50% length.
+    const double cosA = 0.35355339;   // cos(45°) × 0.5
+    const double sinA = 0.35355339;   // sin(45°) × 0.5
+
+    double px = (wx + wy * cosA) * r;
+    double py = (-wz - wy * sinA) * r;   // Z is "up" → negate for canvas
     return (px, py);
   }
 

@@ -167,14 +167,14 @@ public partial class PropertiesViewModel
           }
           PropertiesExpanders.Add(existing);
         }
-        else if (name.Contains("SphericalGizmo"))
+        else if (name.Contains("SphereGizmo"))
         {
           var existing = SelectedEntity.Components
-            .OfType<SphericalGizmoComponent>()
+            .OfType<SphereGizmoComponent>()
             .FirstOrDefault();
           if (existing == null)
           {
-            existing = new SphericalGizmoComponent();
+            existing = new SphereGizmoComponent();
             SelectedEntity.Components.Add(existing);
           }
           PropertiesExpanders.Add(existing);

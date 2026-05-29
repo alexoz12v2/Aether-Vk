@@ -21,6 +21,7 @@ namespace AetherVk.Logic.Tests
         _stateManager,
         new ConsoleService(dispatcherMock.Object),
         new BreadcrumbService(dispatcherMock.Object),
+        new AetherVk.Logic.Services.NativeBufferPoolService(),
         dispatcherMock.Object
       );
       _trajectoryService = new TrajectoryManagerService(_runtimeService, _stateManager);

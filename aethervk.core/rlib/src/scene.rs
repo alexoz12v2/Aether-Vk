@@ -343,7 +343,10 @@ impl ForeignSerializable for CameraComponent {
       } => CameraDTO {
         is_orthographic: true,
         fov: 0.0,
-        aspect: 0.0,
+        aspect: {
+          let h = top - bottom;
+          if h.abs() > 1e-6 { (right - left) / h } else { 1.0 }
+        },
         near,
         far,
         ortho_left: left,

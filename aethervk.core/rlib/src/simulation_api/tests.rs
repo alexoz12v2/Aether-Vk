@@ -680,8 +680,9 @@ fn test_spawn_comet_internal_bounds_and_hierarchy() {
 
       // 2. Assert microframe scale bounds don't overlap with sun bounds.
       let lca_ref = scene_ctx.scene.with_component(lca_id, |c: &crate::scene::ReferenceFrameComponent| c.clone()).unwrap();
-      assert_eq!(lca_ref.scale, 1.0); // Capped at 1.0 AU
-      assert_eq!(lca_ref.soi_radius, 1.0);
+      let expected_soi = 2.0_f32 - 0.00465_f32; // 1.99535
+      assert!((lca_ref.scale - expected_soi).abs() < 1e-4); 
+      assert!((lca_ref.soi_radius - expected_soi).abs() < 1e-4);
       let min_x = lca_transform.position.x() - lca_ref.soi_radius;
       assert!(min_x > 0.0, "Microframe bounds overlap with sun at origin!");
 
@@ -694,11 +695,13 @@ fn test_spawn_comet_internal_bounds_and_hierarchy() {
       assert_eq!(comet_transform.position.y(), 0.0);
       assert_eq!(comet_transform.position.z(), 0.0);
 
-      // 5. Assert comet is occupying specified radius in km.
-      // Derived scale = 2.5 / 2.5 = 1.0
-      assert_eq!(comet_transform.scale.x(), 1.0);
-      assert_eq!(comet_transform.scale.y(), 1.0);
-      assert_eq!(comet_transform.scale.z(), 1.0);
+      // 5. Assert comet occupies specified radius in km.
+      // mesh_scale = (radius_km / KM_PER_AU) / (soi_radius_au * bounding_sphere)
+      //            = (2.5 / 149_597_870.7) / (1.99535 * 2.5)
+      let expected_mesh_scale = (2.5_f32 / 149_597_870.7_f32) / (expected_soi * 2.5_f32);
+      assert!((comet_transform.scale.x() - expected_mesh_scale).abs() < expected_mesh_scale * 0.01);
+      assert!((comet_transform.scale.y() - expected_mesh_scale).abs() < expected_mesh_scale * 0.01);
+      assert!((comet_transform.scale.z() - expected_mesh_scale).abs() < expected_mesh_scale * 0.01);
 
       let comet_mesh_radius = scene_ctx.scene.with_component(comet_id, |c: &crate::scene::PhysicalMeshComponent| c.sphere_radius).unwrap();
       assert_eq!(comet_mesh_radius, 2.5);

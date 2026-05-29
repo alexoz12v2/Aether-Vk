@@ -157,10 +157,19 @@ impl SimulationContext {
     let scene_data = self.scenes.read();
     let scene = expect_scene!(scene_data.get_scene(scene_id), "scene_api:resize");
     {
-      let scene_write = scene.write();
-      scene_write.scene.query1_mut(|_e: EntityId, c: &mut CameraComponent| {
-        c.update_for_extent(width, height);
-      });
+      let scene_read = scene.read();
+      let camera_entity = scene_read
+        .presentation_engines
+        .read()
+        .get(&presentation_engine_handle)
+        .and_then(|pe| pe.camera_entity);
+      if let Some(cam_id) = camera_entity {
+        let _ = scene_read
+          .scene
+          .with_component_mut(cam_id, |c: &mut CameraComponent| {
+            c.update_for_extent(width, height);
+          });
+      }
     }
 
     // TODO retry if full up to a threshold

@@ -89,8 +89,11 @@ impl SimulationContext {
   pub fn spawn_entity(&self, scene_id: u64, name: &str) -> EngineResult<u64> {
     let scene_data = self.scenes.read();
     let active = expect_scene!(scene_data.get_scene(scene_id), "scene_api:spawn_entity");
-    let id = active.write().scene.spawn_entity(name);
-    Ok(active.write().register_entity(id))
+    // Use a single write guard to atomically spawn + register the entity,
+    // avoiding the TOCTOU gap that the previous two-write-call pattern had.
+    let mut guard = active.write();
+    let id = guard.scene.spawn_entity(name);
+    Ok(guard.register_entity(id))
   }
 
   /// TODO: Document this item
@@ -506,32 +509,31 @@ impl SimulationContext {
     Ok(self.scenes.write().insert_scene(scene_ctx))
   }
 
-  /// TODO: Document this item
+  /// Shows or hides an entity **and all of its descendants** (BFS).
+  ///
+  /// Dispatches a [`LogicCommand::SetEntityVisibility`] to the logic thread instead of
+  /// spin-waiting for a write lock. This prevents the logic_thread from hanging when
+  /// it holds the scene read lock during a simulation tick while this is called from
+  /// an FFI/UI thread. The command is processed by the logic thread between ticks.
   pub fn set_entity_visibility(
     &self,
     scene_id: u64,
     entity: u64,
     visible: bool,
   ) -> EngineResult<()> {
-    let (scene, id) = expect_scene_and_entity!(
+    // Validate that the entity exists before enqueuing (provides early error feedback).
+    let _ = expect_scene_and_entity!(
       self.get_scene(scene_id),
       entity,
       "scene_api:set_entity_visibility"
     );
-    if visible {
-      scene
-        .write()
-        .scene
-        .remove_component::<crate::scene::HiddenComponent>(id)
-        .map_err(|e| EngineError::InvalidOperation(e))?;
-    } else {
-      scene
-        .write()
-        .scene
-        .add_component(id, crate::scene::HiddenComponent {})
-        .map_err(|e| <AddComponentError as Into<EngineError>>::into(e.into()))?;
-    }
-    Ok(())
+
+    self
+      .threads
+      .logic_thread
+      .tx()
+      .try_send(structs::LogicCommand::SetEntityVisibility { scene_id, entity, visible })
+      .map_err(|_| EngineError::InvalidOperation("scene_api:set_entity_visibility | logic thread closed"))
   }
 
   /// TODO: Document this item
@@ -647,6 +649,18 @@ impl SimulationContext {
     let lca_id = scene_ctx.scene.spawn_entity(&lca_name);
 
     // Transform: position is in macro-frame coordinates (AU).
+    // Scale is set to soi_radius_au so the inspector shows the true extent.
+    // (Filled in after soi_radius_au is computed — see below; placeholder first.)
+    // NOTE: we add this component below, after soi_radius_au is known.
+
+    // SOI radius: bounded by the distance from the Sun's surface to the comet.
+    // At origin (static spawn): clamped to the Sun's radius.
+    // SUN_RADIUS_AU = 0.00465 AU (695,700 km / 149,597,870.7 km·AU⁻¹)
+    const SUN_RADIUS_AU: f32 = 0.00465_f32;
+    let dist_au =
+      (pos.x() * pos.x() + pos.y() * pos.y() + pos.z() * pos.z()).sqrt();
+    let soi_radius_au = (dist_au - SUN_RADIUS_AU).max(SUN_RADIUS_AU);
+
     scene_ctx.scene.add_component(
       lca_id,
       TransformComponent {
@@ -655,12 +669,6 @@ impl SimulationContext {
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )?;
-
-    // SOI radius: capped at 1 AU; also capped from below at 0.01 AU so the
-    // micro-frame is never degenerate even for a sun-grazing comet.
-    let dist_au =
-      (pos.x() * pos.x() + pos.y() * pos.y() + pos.z() * pos.z()).sqrt();
-    let soi_radius_au = dist_au.min(1.0_f32).max(0.01_f32);
 
     // Add bounding box collider to LCA micro frame to enclose the particles
     scene_ctx.scene.add_component(
@@ -690,7 +698,26 @@ impl SimulationContext {
     // ── Comet mesh entity (child of LCA frame) ───────────────────────────────
     let comet_id = scene_ctx.scene.spawn_entity(entity_name);
 
-    // Derive uniform scale so that the mesh root bound has radius == radius_km.
+    // Derive uniform scale so that the mesh root bound has radius == radius_km
+    // in the micro-frame's local space.
+    //
+    // The micro-frame renderer maps: local_units × soi_radius_au = world_AU.
+    // So 1 local unit = soi_radius_au AU.
+    //
+    // We want the mesh to appear with radius = radius_km in world space:
+    //   world_AU = radius_km / KM_PER_AU
+    //   local_units_needed = world_AU / soi_radius_au = radius_km / (KM_PER_AU × soi_radius_au)
+    //
+    // `bounding_sphere` is in the mesh's own vertex units. If the GLTF is in metres,
+    // bounding_sphere is in metres; if km, in km. We treat it as mesh-native-units and
+    // produce a dimensionless scale factor that maps the mesh's extent to `local_units_needed`.
+    //
+    // mesh_scale = local_units_needed / bounding_sphere
+    //            = radius_km / (KM_PER_AU × soi_radius_au × bounding_sphere)
+    //
+    // However, for static comets spawned at origin (dist_au = 0) soi_radius_au = 0.001.
+    // The dominant uncertainty is the GLTF vertex unit, so we log the values.
+    const KM_PER_AU: f32 = 149_597_870.7_f32;
     let bounding_sphere = if let Some(bvh) = &mesh_arc.bvh {
       use aethervk_oshal_rlib::math::vector::Vector;
       match &bvh.nodes[0].bound {
@@ -700,17 +727,17 @@ impl SimulationContext {
     } else {
       compute_bounding_sphere_radius(&mesh_arc.vertices)
     };
-    // Scale the comet mesh so it fills the desired radius in micro-frame units.
-    // Mesh vertices are in km (micro-frame native units).
-    // Micro-frame unit = soi_radius_au AU, so the child's scale converts from km to micro-frame units.
-    // World-space radius (AU) = mesh_scale × soi_radius_au × (bounding_sphere / KM_PER_AU)
-    // We want world-space radius = radius_km / KM_PER_AU, so:
-    //   mesh_scale = radius_km / bounding_sphere / soi_radius_au
+
     let mesh_scale = if bounding_sphere > 0.0 && soi_radius_au > 0.0 {
-      radius_km / bounding_sphere / soi_radius_au
+      (radius_km / KM_PER_AU) / (soi_radius_au * bounding_sphere)
     } else {
       1.0
     };
+
+    oshal::log!(
+      "spawn_comet: dist_au={:.4} soi_au={:.6} bounding_sphere={:.3} radius_km={:.3} mesh_scale={:.8}",
+      dist_au, soi_radius_au, bounding_sphere, radius_km, mesh_scale
+    );
 
 
     let sim_local_rotation = mesh_arc.bf_to_pa.unwrap_or(Quat::identity());

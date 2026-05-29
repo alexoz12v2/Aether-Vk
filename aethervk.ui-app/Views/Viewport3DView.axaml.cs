@@ -40,6 +40,7 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
     _resizeTimer.Tick += OnResizeTimerTick;
 
     SizeChanged += OnSizeChanged;
+    KeyUp += OnKeyUp;
   }
 
   private void OnSizeChanged(object? sender, SizeChangedEventArgs e)
@@ -163,10 +164,25 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
     RenderTargetImage.InvalidateVisual();
   }
 
+  /// <summary>
+  /// Catches Alt key release so the radial menu doesn't get stuck when the user
+  /// releases Alt before S (the GlobalInputRouter chord won't match in that case).
+  /// </summary>
+  private void OnKeyUp(object? sender, KeyEventArgs e)
+  {
+    if (_viewModel?.IsRadialMenuOpen == true &&
+        (e.Key == Key.LeftAlt || e.Key == Key.RightAlt))
+    {
+      _viewModel.CommitRadialMenuSelection();
+      e.Handled = true;
+    }
+  }
+
   private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
   {
     var point = e.GetCurrentPoint(RenderTargetImage);
     _lastPointerPos = point.Position;
+
 
     if (point.Properties.IsRightButtonPressed && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
     {
@@ -176,6 +192,13 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
         RenderTargetImage.Bounds.Width,
         RenderTargetImage.Bounds.Height
       );
+      e.Handled = true;
+      return;
+    }
+
+    // Suppress native right-click context menu (radial menu is opened via Alt+S instead).
+    if (point.Properties.IsRightButtonPressed)
+    {
       e.Handled = true;
       return;
     }
@@ -193,6 +216,21 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
     var deltaY = (float)(currentPos.Y - _lastPointerPos.Y);
 
     _viewModel?.OperatorStack.ProcessPointerDelta(deltaX, deltaY);
+
+    if (_viewModel != null)
+    {
+      if (_viewModel.IsRadialMenuOpen)
+      {
+        // When radial menu is open, track hover instead of updating anchor position
+        _viewModel.UpdateRadialMenuHover(currentPos.X, currentPos.Y);
+      }
+      else
+      {
+        // Keep last pointer position so the radial menu opens at the right spot
+        _viewModel.RadialMenuX = currentPos.X;
+        _viewModel.RadialMenuY = currentPos.Y;
+      }
+    }
 
     _lastPointerPos = currentPos;
   }

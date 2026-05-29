@@ -186,9 +186,14 @@ pub struct SimulationThreads {
 impl Drop for SimulationThreads {
   fn drop(&mut self) {
     oshal::log!("SimulationThreads drop started");
-    if let Some(tx) = self.logic_thread.tx.take() {
-      let _ = tx.try_send(LogicCommand::Shutdown);
-    }
+
+    // Drop the sender — this closes the channel from the sender side.
+    // The logic thread's try_recv loop returns on TryRecvError::Closed (line ~326
+    // of logic_thread.rs), so closing the channel is the reliable shutdown signal.
+    // Using try_send(Shutdown) was unreliable: if the 128-slot channel is full
+    // (e.g. many commands queued during heavy use), try_send silently fails and
+    // handle.join() hangs forever.
+    self.logic_thread.tx.take();
     self.logic_feedback_rx = None;
     if let Some(handle) = self.logic_thread.handle.take() {
       let _ = handle.join();
@@ -198,9 +203,8 @@ impl Drop for SimulationThreads {
     oshal::log!("SimulationThreads waiting for thread pool tasks to complete...");
     self.pool.gather();
 
-    if let Some(tx) = self.render_thread.tx.take() {
-      let _ = tx.try_send(RenderCommand::Shutdown);
-    }
+    // Same pattern for render thread.
+    self.render_thread.tx.take();
     self.render_feedback_rx = None;
     if let Some(handle) = self.render_thread.handle.take() {
       let _ = handle.join();
@@ -774,6 +778,19 @@ pub enum LogicCommand {
   },
   RestoreSnapshot {
     scene_id: u64,
+  },
+  /// Set the visibility (hidden/visible) of an entity and all its descendants.
+  /// Dispatched asynchronously to the logic thread to avoid spin-wait deadlocks.
+  SetEntityVisibility {
+    scene_id: u64,
+    entity: u64,
+    visible: bool,
+  },
+  /// Seek to a specific epoch, recomputing ephemeris positions and rebuilding TLAS.
+  /// Dispatched from the FFI scrubbing API so the logic thread performs the full update.
+  SeekEpoch {
+    scene_id: u64,
+    epoch_tai_seconds: f64,
   },
 }
 

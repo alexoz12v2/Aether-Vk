@@ -21,6 +21,7 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<ConsoleService>();
     collection.AddSingleton<BreadcrumbService>();
     collection.AddSingleton<HorizonJplService>();
+    collection.AddSingleton<INativeBufferPoolService, NativeBufferPoolService>();
     collection.AddSingleton<SceneStateManager>();
     collection.AddSingleton<NativeRuntimeService>();
     collection.AddSingleton<TrajectoryManagerService>();

@@ -147,12 +147,15 @@
           <Button Content="Load JPL Comets Database" Command="{Binding FetchCometsCommand}" Classes="accent" HorizontalAlignment="Left" IsVisible="{Binding HasNoComets}" />
           
         <StackPanel Spacing="12" IsVisible="{Binding HasComets}">
-          <AutoCompleteBox ItemsSource="{Binding CometsData}" 
+          <AutoCompleteBox Name="CometsAutoCompleteBox"
+                           ItemsSource="{Binding CometsData}" 
                            SelectedItem="{Binding SelectedComet}" 
                            ValueMemberBinding="{Binding Name, DataType=models:CometSearchResult}"
                            FilterMode="Contains"
+                           MinimumPrefixLength="0"
                            Watermark="Type to search comets..."
                            MaxDropDownHeight="300"
+                           DoubleTapped="CometsAutoCompleteBox_DoubleTapped"
                            HorizontalAlignment="Stretch" />
         </StackPanel>
         </StackPanel>

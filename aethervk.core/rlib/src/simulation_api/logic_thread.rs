@@ -205,7 +205,8 @@ pub fn start_logic_thread(
 
                           // For error frames, fire immediately with the sentinel value.
                           if self.task_id_val == u64::MAX {
-                            let cb: extern "C" fn(u64, u64, u64) = unsafe { core::mem::transmute(fptr) };
+                            let cb: extern "C" fn(u64, u64, u64) =
+                              unsafe { core::mem::transmute(fptr) };
                             cb(self.scene_id, self.pe_handle, u64::MAX);
                             return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
                           }
@@ -226,7 +227,8 @@ pub fn start_logic_thread(
                             .unwrap_or(true);
 
                           if completed {
-                            let cb: extern "C" fn(u64, u64, u64) = unsafe { core::mem::transmute(fptr) };
+                            let cb: extern "C" fn(u64, u64, u64) =
+                              unsafe { core::mem::transmute(fptr) };
                             cb(self.scene_id, self.pe_handle, self.task_id_val);
                             aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete
                           } else {
@@ -234,15 +236,19 @@ pub fn start_logic_thread(
                           }
                         }
 
-                        fn tasklet_id(&self) -> Option<usize> { None }
+                        fn tasklet_id(&self) -> Option<usize> {
+                          None
+                        }
                       }
 
-                      let _ = context.thread_pool.scatter(alloc::vec![alloc::boxed::Box::new(WindowlessCallbackWorkload {
-                        ctx_ptr: context.ctx_ptr,
-                        task_id_val: captured_task_id_val,
-                        scene_id,
-                        pe_handle,
-                      })]);
+                      let _ = context.thread_pool.scatter(alloc::vec![alloc::boxed::Box::new(
+                        WindowlessCallbackWorkload {
+                          ctx_ptr: context.ctx_ptr,
+                          task_id_val: captured_task_id_val,
+                          scene_id,
+                          pe_handle,
+                        }
+                      )]);
                     }
                   }
                 }
@@ -293,6 +299,7 @@ pub fn start_logic_thread(
                   LogicCommand::PauseScene { .. } => "Pause Scene".to_string(),
                   LogicCommand::StepScene { .. } => "Step Scene".to_string(),
                   LogicCommand::SetSceneTimeScale { .. } => "Set Time Scale".to_string(),
+                  LogicCommand::SeekEpoch { .. } => "Seek Epoch".to_string(),
                   _ => "Logic Task".to_string(),
                 };
 
@@ -466,7 +473,7 @@ impl oshal::os::pool::Workload for LogicWorkload {
 // TODO - I/O Heavy tasks should be dispatched to thread pool and feedback immediately to return task id. Then, task should be polled
 fn process_command_internal(
   command: LogicCommand,
-  ctx: &LogicThreadContext,
+  ctx: &alloc::sync::Arc<LogicThreadContext>,
 ) -> EngineResult<SimulationTaskResult> {
   match command {
     LogicCommand::SnapshotScene { scene_id } => {
@@ -550,6 +557,46 @@ fn process_command_internal(
       }
       Ok(SimulationTaskResult::None)
     }
+    LogicCommand::SetEntityVisibility { scene_id, entity, visible } => {
+      use crate::scene::EntityId;
+      let scenes = ctx.scenes.read();
+      if let Some(scene_ctx_guard) = scenes.get(&scene_id) {
+        // Resolve external entity id to internal id.
+        let root_id: EntityId = {
+          let r = scene_ctx_guard.read();
+          match r.get_entity(entity) {
+            Some(id) => id,
+            None => return Ok(SimulationTaskResult::None),
+          }
+        };
+        // Collect full subtree under a short-lived read lock.
+        let to_update: alloc::vec::Vec<EntityId> = {
+          let r = scene_ctx_guard.read();
+          let mut queue = alloc::vec![root_id];
+          let mut all   = alloc::vec![root_id];
+          while let Some(current) = queue.pop() {
+            if let Some(children) = r.scene.get_children(current) {
+              for child in children {
+                queue.push(child);
+                all.push(child);
+              }
+            }
+          }
+          all
+        };
+        // Now acquire the write lock — safe here since the logic thread is between ticks
+        // and holds no conflicting read lock at this point.
+        let scene_ctx = scene_ctx_guard.write();
+        for id in &to_update {
+          if visible {
+            let _ = scene_ctx.scene.remove_component::<crate::scene::HiddenComponent>(*id);
+          } else {
+            let _ = scene_ctx.scene.add_component(*id, crate::scene::HiddenComponent {});
+          }
+        }
+      }
+      Ok(SimulationTaskResult::None)
+    }
     LogicCommand::Shutdown => Ok(SimulationTaskResult::None),
     LogicCommand::RotateCamera(crate::simulation_api::structs::RotateCamera {
       camera_entity,
@@ -558,29 +605,39 @@ fn process_command_internal(
       delta_y,
     }) => {
       let scene_read = scene.read();
-      
-      let cursor_entity_id = scene_read
-        .scene
-        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
-        .map(|(id, _)| id);
+
+      let mut cursor_pos = None;
+      if let Some((cursor_id, _)) =
+        scene_read.scene.query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
+      {
+        if let Some(pos) =
+          scene_read.scene.with_component(cursor_id, |t: &TransformComponent| t.position)
+        {
+          cursor_pos = Some(pos);
+
+          // Optional: Sync focus distance dynamically so your zoom/pan speeds stay stable
+          // based on the distance to the cursor object you are pivoting around.
+          if let Some(cam_pos) =
+            scene_read.scene.with_component(camera_entity, |t: &TransformComponent| t.position)
+          {
+            let dist = (pos - cam_pos).length();
+            let _ =
+              scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
+                c.focus_distance = dist.max(0.1);
+              });
+          }
+        }
+      }
 
       use crate::scene::camera::SceneCameraExt;
       let rotation_speed: f32 = 0.005;
-      
-      if let Some(cursor_id) = cursor_entity_id {
-        scene_read.scene.orbit_camera(
-          camera_entity,
-          cursor_id,
-          delta_x * rotation_speed,
-          delta_y * rotation_speed,
-        )?;
-      } else {
-        scene_read.scene.rotate_camera(
-          camera_entity,
-          delta_x * rotation_speed,
-          delta_y * rotation_speed,
-        )?;
-      }
+
+      scene_read.scene.orbit_camera(
+        camera_entity,
+        -delta_x * rotation_speed,
+        -delta_y * rotation_speed,
+        cursor_pos,
+      )?;
 
       if let Some(ext_id) =
         scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
@@ -592,6 +649,7 @@ fn process_command_internal(
       }
       Ok(SimulationTaskResult::None)
     }
+
     LogicCommand::ZoomCamera(crate::simulation_api::structs::ZoomCamera {
       camera_entity,
       scene,
@@ -600,23 +658,35 @@ fn process_command_internal(
       let scene_read = scene.read();
       let mut is_ortho = false;
       let mut focus_dist = 10.0;
-      
+
       let _ = scene_read.scene.with_component(camera_entity, |c: &CameraComponent| {
-        is_ortho = matches!(c.projection, crate::scene::CameraProjection::Orthographic { .. });
+        is_ortho = matches!(
+          c.projection,
+          crate::scene::CameraProjection::Orthographic { .. }
+        );
         focus_dist = c.focus_distance;
       });
 
       if is_ortho {
         let zoom_factor = 1.0 - (amount * 0.1);
         let _ = scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
-          if let crate::scene::CameraProjection::Orthographic { ref mut left, ref mut right, ref mut bottom, ref mut top, .. } = c.projection {
+          if let crate::scene::CameraProjection::Orthographic {
+            ref mut left,
+            ref mut right,
+            ref mut bottom,
+            ref mut top,
+            ..
+          } = c.projection
+          {
             *left *= zoom_factor;
             *right *= zoom_factor;
             *bottom *= zoom_factor;
             *top *= zoom_factor;
           }
         });
-        if let Some(ext_id) = scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k) {
+        if let Some(ext_id) =
+          scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
+        {
           scene_read.mark_component_changed(
             ext_id,
             <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
@@ -625,36 +695,40 @@ fn process_command_internal(
         return Ok(SimulationTaskResult::None);
       }
 
-      let cursor_pos = scene_read
-        .scene
-        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
-        .and_then(|(id, _)| {
-          scene_read.scene.with_component(id, |t: &crate::scene::TransformComponent| t.position)
-        })
-        .unwrap_or(Vec3f32::zero());
-
       let dist = scene_read
         .scene
-        .with_component(camera_entity, |t: &crate::scene::TransformComponent| {
-          (t.position - cursor_pos).length().max(0.1)
+        .with_component(camera_entity, |c: &crate::scene::CameraComponent| {
+          c.focus_distance
         })
-        .unwrap_or(100.0);
+        .unwrap_or(10.0);
 
       use crate::scene::camera::SceneCameraExt;
-      let zoom_speed = dist * 0.3; // proportional to distance
+      let zoom_speed = dist * 0.05; // proportional to distance
       let move_amount = -amount * zoom_speed;
 
       scene_read.scene.translate_camera_local(
         camera_entity,
         Vec3f32::from_components(0.0, move_amount, 0.0),
       )?;
-      
+
+      // Update focus distance so the invisible View Center stays in the exact same world position!
+      let _ = scene_read.scene.with_component_mut(
+        camera_entity,
+        |c: &mut crate::scene::CameraComponent| {
+          c.focus_distance = (c.focus_distance + move_amount).max(0.1);
+        },
+      );
+
       if let Some(ext_id) =
         scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
       {
         scene_read.mark_component_changed(
           ext_id,
           <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
+        scene_read.mark_component_changed(
+          ext_id,
+          <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
         );
       }
       Ok(SimulationTaskResult::None)
@@ -684,10 +758,11 @@ fn process_command_internal(
         });
       }
 
+      const HOME_DISTANCE: f32 = 0.07;
       let pitch = (-1.0_f32 / 3.0_f32.sqrt()).asin();
       let yaw = -core::f32::consts::FRAC_PI_4;
       let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
-      let offset = q.rotate_vector(Vec3f32::from_components(0.0, 10.0, 0.0));
+      let offset = q.rotate_vector(Vec3f32::from_components(0.0, HOME_DISTANCE, 0.0));
 
       scene_read
         .scene
@@ -698,9 +773,9 @@ fn process_command_internal(
         .ok_or(EngineError::InvalidOperation(
           "logic_thread:ResetCamera | camera entity doesn't have TransformComponent",
         ))?;
-        
+
       let _ = scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
-          c.focus_distance = 10.0;
+        c.focus_distance = HOME_DISTANCE;
       });
       if let Some(ext_id) =
         scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
@@ -719,24 +794,10 @@ fn process_command_internal(
       delta_y,
     }) => {
       let scene_read = scene.read();
-      let (cursor_entity, _) = scene_read
-        .scene
-        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
-        .ok_or(EngineError::InvalidOperation(
-          "logic_thread:PanCamera | scene doesn't have cursor",
-        ))?;
       use crate::scene::camera::SceneCameraExt;
-      scene_read.scene.pan_camera_and_cursor(camera_entity, cursor_entity, delta_x, delta_y)?;
+      scene_read.scene.pan_camera(camera_entity, delta_x, delta_y)?;
       if let Some(ext_id) =
         scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
-      {
-        scene_read.mark_component_changed(
-          ext_id,
-          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-        );
-      }
-      if let Some(ext_id) =
-        scene_read.entity_map.iter().find(|&(_, v)| *v == cursor_entity).map(|(k, _)| *k)
       {
         scene_read.mark_component_changed(
           ext_id,
@@ -783,7 +844,58 @@ fn process_command_internal(
       scene,
     }) => {
       let scene_read = scene.read();
-      try_snap_entity(snap_entity, target_entity, &scene_read)?;
+      // 'F' behavior: move cursor to target entity position, then position the
+      // camera (snap_entity) at 0.7 AU toward the bisector of the first octant.
+      const SNAP_DISTANCE: f32 = 0.7;
+      let target_pos = {
+        #[allow(deprecated)]
+        scene_read.scene.global_transform(target_entity)
+          .map(|t| t.position)
+          .ok_or(EngineError::InvalidOperation(
+            "logic_thread:SnapToEntity | target entity doesn't have TransformComponent",
+          ))?
+      };
+
+      // Move cursor to target entity world position.
+      if let Some((cursor_id, _)) =
+        scene_read.scene.query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
+      {
+        let _ = scene_read.scene.with_component_mut(cursor_id, |c: &mut TransformComponent| {
+          c.position = target_pos;
+        });
+        // Mark cursor entity as changed.
+        if let Some(ext_id) =
+          scene_read.entity_map.iter().find(|&(_, v)| *v == cursor_id).map(|(k, _)| *k)
+        {
+          scene_read.mark_component_changed(
+            ext_id,
+            <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          );
+        }
+      }
+
+      // Position camera at 0.7 AU offset along bisector of first octant from target pos.
+      let pitch = (-1.0_f32 / 3.0_f32.sqrt()).asin();
+      let yaw = -core::f32::consts::FRAC_PI_4;
+      let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
+      let offset = q.rotate_vector(Vec3f32::from_components(0.0, SNAP_DISTANCE, 0.0));
+
+      let _ = scene_read.scene.with_component_mut(snap_entity, |t: &mut TransformComponent| {
+        t.position = target_pos + offset;
+        t.rotation = q;
+      });
+      let _ = scene_read.scene.with_component_mut(snap_entity, |c: &mut CameraComponent| {
+        c.focus_distance = SNAP_DISTANCE;
+      });
+
+      if let Some(ext_id) =
+        scene_read.entity_map.iter().find(|&(_, v)| *v == snap_entity).map(|(k, _)| *k)
+      {
+        scene_read.mark_component_changed(
+          ext_id,
+          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
+      }
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::FollowEntity(crate::simulation_api::structs::FollowEntity {
@@ -929,6 +1041,32 @@ fn process_command_internal(
         let mut time_state = read_ctx.time_state.write();
         time_state.manual_step_requests += step_days;
       }
+      Ok(SimulationTaskResult::None)
+    }
+    LogicCommand::SeekEpoch { scene_id, epoch_tai_seconds } => {
+      let new_epoch = anise::time::Epoch::from_tai_seconds(epoch_tai_seconds);
+      let fixed_dt_us;
+
+      // 1. Update epoch, reset elapsed, get fixed_dt_us, mark TLAS dirty — then release all locks
+      {
+        let scenes = ctx.scenes.read();
+        if let Some(scene_ctx) = scenes.get(&scene_id) {
+          let scene_read = scene_ctx.read();
+          {
+            let mut ts = scene_read.time_state.write();
+            ts.current_epoch = new_epoch;
+            ts.st_seconds_elapsed = 0.0;
+          }
+          fixed_dt_us = scene_read.time_state.read().time_info.read()
+            .fixed_delta_time.load(core::sync::atomic::Ordering::Relaxed);
+          scene_read.is_static_tlas_dirty.store(true, core::sync::atomic::Ordering::Relaxed);
+        } else {
+          return Ok(SimulationTaskResult::None);
+        }
+      }
+
+      // 2. Recompute body positions from ephemeris at the new epoch (acquires its own scene lock)
+      let _ = dispatch_physics_step(scene_id, ctx, 0.0, new_epoch, fixed_dt_us);
       Ok(SimulationTaskResult::None)
     }
 
@@ -1129,7 +1267,12 @@ fn process_command_internal(
       if let Some((sun_id, _)) =
         scene_guard.scene.query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
       {
-        if let Some(pos) = { #[allow(deprecated)] scene_guard.scene.global_transform(sun_id) }.map(|t| t.position) {
+        if let Some(pos) = {
+          #[allow(deprecated)]
+          scene_guard.scene.global_transform(sun_id)
+        }
+        .map(|t| t.position)
+        {
           sun_pos = pos;
         }
       }
@@ -1260,6 +1403,16 @@ fn execute_simulation_tick(
           let step = scale_days_per_sec * fixed_sim_seconds;
           if step > 0.0 {
             ts_write.current_epoch = ts_write.current_epoch + anise::time::Unit::Day * step;
+            // Auto-pause at epoch boundaries to prevent almanac lookup failures
+            if ts_write.current_epoch >= ts_write.epoch_end {
+              ts_write.current_epoch = ts_write.epoch_end;
+              ts_write.is_playing = false;
+              aethervk_oshal_rlib::log!("Auto-paused: reached epoch end");
+            } else if ts_write.current_epoch <= ts_write.epoch_start {
+              ts_write.current_epoch = ts_write.epoch_start;
+              ts_write.is_playing = false;
+              aethervk_oshal_rlib::log!("Auto-paused: reached epoch start");
+            }
           }
           (false, step, fixed_dt_us, ts_write.current_epoch)
         } else {
@@ -1289,6 +1442,35 @@ fn execute_simulation_tick(
     let scenes = ctx.scenes.read();
     if let Some(scene_ctx_guard) = scenes.get(&scene_id) {
       let scene_ctx = scene_ctx_guard.read();
+
+      // Ensure focus distance is fixed to the cursor plane on each tick update
+      if let Some((cursor_id, _)) =
+        scene_ctx.scene.query1_first_res::<CursorComponent, _, _>(|id, _| Some(id))
+      {
+        if let Some(cursor_pos) =
+          scene_ctx.scene.with_component(cursor_id, |t: &TransformComponent| t.position)
+        {
+          let mut cam_updates = alloc::vec::Vec::new();
+          let _ = scene_ctx.scene.query1_res_mut(|id, _: &mut CameraComponent| {
+            cam_updates.push(id);
+            Some(())
+          });
+          for cam_id in cam_updates {
+            if let Some((cam_pos, cam_rot)) = scene_ctx
+              .scene
+              .with_component(cam_id, |t: &TransformComponent| (t.position, t.rotation))
+            {
+              let fwd = cam_rot.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+              let dist = (cursor_pos - cam_pos).dot(fwd);
+              if dist > 0.1 {
+                let _ = scene_ctx.scene.with_component_mut(cam_id, |cam: &mut CameraComponent| {
+                  cam.focus_distance = dist;
+                });
+              }
+            }
+          }
+        }
+      }
 
       if any_fixed_step {
         for (ext_id, ent_id) in scene_ctx.entity_map.iter() {
@@ -1632,10 +1814,13 @@ fn try_snap_entity(
   scene_read: &RwLockReadGuard<SceneContext>,
 ) -> EngineResult<()> {
   let (target_pos, target_rot) = {
-    let t =
-      { #[allow(deprecated)] scene_read.scene.global_transform(target_entity) }.ok_or(EngineError::InvalidOperation(
-        "logic_thread:SnapToEntity | snap target doesn't have TransformComponent",
-      ))?;
+    let t = {
+      #[allow(deprecated)]
+      scene_read.scene.global_transform(target_entity)
+    }
+    .ok_or(EngineError::InvalidOperation(
+      "logic_thread:SnapToEntity | snap target doesn't have TransformComponent",
+    ))?;
     (t.position, t.rotation)
   };
   let res = scene_read.scene.set_global_position_and_rotation(snap_entity, target_pos, target_rot);

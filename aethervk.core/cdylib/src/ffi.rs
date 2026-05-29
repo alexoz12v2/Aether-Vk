@@ -368,6 +368,75 @@ pub unsafe extern "C" fn avkSimulationContext_setSceneDebugName(
 
 // --- Entity Management (Async) ---
 
+/// Prints the full scene hierarchy to the log in a tree format (debug builds only).
+#[cfg(debug_assertions)]
+fn debug_print_scene_hierarchy(ctx_ref: &aethervk_core_rlib::simulation_api::SimulationContext, scene_id: u64) {
+  let scene_arc = match ctx_ref.scenes.read().get_scene(scene_id) {
+    Some(s) => s,
+    None => {
+      oshal::log!("[Scene Hierarchy] scene {} not found", scene_id);
+      return;
+    }
+  };
+  let scene_ctx = scene_arc.read();
+
+  // Find root entities (those with no parent).
+  let all_ext_ids: alloc::vec::Vec<u64> = scene_ctx.entity_map.keys().copied().collect();
+  let mut roots: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+  for &ext_id in &all_ext_ids {
+    if let Some(int_id) = scene_ctx.get_entity(ext_id) {
+      let parent = scene_ctx.scene.get_parent(int_id);
+      if parent.is_none() {
+        roots.push(ext_id);
+      }
+    }
+  }
+
+  oshal::log!("[Scene Hierarchy] scene={} total_entities={}", scene_id, all_ext_ids.len());
+
+  // DFS print helper using an explicit stack to avoid recursion in no_std.
+  // Stack entries: (ext_id, depth)
+  let mut stack: alloc::vec::Vec<(u64, usize)> = roots.iter().map(|&id| (id, 0)).collect();
+  // Reverse so first root prints first.
+  stack.reverse();
+
+  while let Some((ext_id, depth)) = stack.pop() {
+    let int_id = match scene_ctx.get_entity(ext_id) {
+      Some(id) => id,
+      None => continue,
+    };
+    let name = scene_ctx
+      .scene
+      .get_name(int_id)
+      .unwrap_or_else(|| alloc::string::String::from("<unnamed>"));
+    let components = scene_ctx.scene.get_entity_component_names(int_id);
+    let indent: alloc::string::String = (0..depth).map(|_| "  ").collect();
+    let comp_str = if components.is_empty() {
+      alloc::string::String::from("(no components)")
+    } else {
+      components.join(", ")
+    };
+    oshal::log!("{}├─ \"{}\" [ext={}] {{{}}}", indent, name, ext_id, comp_str);
+
+    // Push children in reverse order so first child prints first.
+    if let Some(children) = scene_ctx.scene.get_children(int_id) {
+      // Map internal ids back to external ids.
+      let mut child_ext: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+      for child_int in &children {
+        if let Some((&child_ext_id, _)) =
+          scene_ctx.entity_map.iter().find(|&(_, &v)| v == *child_int)
+        {
+          child_ext.push(child_ext_id);
+        }
+      }
+      child_ext.reverse();
+      for cext in child_ext {
+        stack.push((cext, depth + 1));
+      }
+    }
+  }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_spawnEntity(
@@ -380,11 +449,17 @@ pub unsafe extern "C" fn avkSimulationContext_spawnEntity(
   }
   let ctx_ref = unsafe { &*ctx };
   let name_str = unsafe { CStr::from_ptr(name).to_str().unwrap_or("Entity") };
-  ctx_ref.spawn_entity(scene_id, name_str).unwrap_or_else(|e| {
+  let result = ctx_ref.spawn_entity(scene_id, name_str).unwrap_or_else(|e| {
     oshal::log!("spawn_entity failed: {}", e);
     0
-  })
+  });
+
+  #[cfg(debug_assertions)]
+  debug_print_scene_hierarchy(ctx_ref, scene_id);
+
+  result
 }
+
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -413,6 +488,62 @@ pub unsafe extern "C" fn avkSimulationContext_setParent(
   }
   let ctx_ref = unsafe { &*ctx };
   ctx_ref.set_parent(scene_id, entity, parent).is_ok()
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SceneHierarchyNodeDTO {
+  pub entity_id: u64,
+  pub parent_id: u64, // 0 denotes a root entity with no parent
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getSceneHierarchy(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  out_buffer: *mut SceneHierarchyNodeDTO,
+  capacity: u32,
+  out_count: *mut u32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  if let Some(scene_ctx_rw) = ctx_ref.get_scene(scene_id) {
+    let scene_ctx = scene_ctx_rw.read();
+    let count = scene_ctx.entity_map.len() as u32;
+    if !out_count.is_null() {
+      unsafe {
+        *out_count = count;
+      }
+    }
+    if capacity < count || out_buffer.is_null() {
+      return false;
+    }
+    
+    let mut reverse_map = alloc::collections::BTreeMap::new();
+    for (&ext_id, &int_id) in scene_ctx.entity_map.iter() {
+      reverse_map.insert(int_id, ext_id);
+    }
+    
+    let mut idx = 0;
+    for (&ext_id, &int_id) in scene_ctx.entity_map.iter() {
+      // Scene has a method to get parent directly, or we can add it
+      let parent_internal = scene_ctx.scene.get_parent(int_id);
+      let parent_id = parent_internal.and_then(|pid| reverse_map.get(&pid).copied()).unwrap_or(0);
+      let dto = SceneHierarchyNodeDTO {
+        entity_id: ext_id,
+        parent_id,
+      };
+      unsafe {
+        out_buffer.add(idx).write(dto);
+      }
+      idx += 1;
+    }
+    return true;
+  }
+  false
 }
 
 #[unsafe(no_mangle)]
@@ -2509,8 +2640,11 @@ pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
         },
         CameraParams::Orthographic(o) => FfiCamera {
           is_orthographic: true,
-          fov: 45.0,   
-          aspect: 1.0, 
+          fov: 0.0,
+          aspect: {
+            let h = o.top - o.bottom;
+            if h.abs() > 1e-6 { (o.right - o.left) / h } else { 1.0 }
+          },
           near: o.near,
           far: o.far,
           ortho_left: o.left,
@@ -3102,6 +3236,27 @@ pub unsafe extern "C" fn avkSimulationContext_setSimulationTime(
 ) {
   let ctx = unsafe { &*ctx };
   ctx.set_simulation_time(scene_id, time_tai);
+}
+
+/// Seek the simulation to a specific epoch, recomputing all ephemeris body positions and
+/// rebuilding the TLAS. Dispatches a `SeekEpoch` command to the logic thread.
+///
+/// P/Invoke: `avkSimulationContext_seekEpoch(IntPtr ctx, ulong sceneId, double epochTai)`
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_seekEpoch(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  epoch_tai: f64,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::SeekEpoch {
+    scene_id,
+    epoch_tai_seconds: epoch_tai,
+  });
 }
 
 #[unsafe(no_mangle)]

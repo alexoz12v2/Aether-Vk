@@ -105,7 +105,171 @@ public partial class Viewport3DViewModel
   [ObservableProperty]
   private bool _showMeasurementIndicator = false;
 
+  // ── Radial Menu ───────────────────────────────────────────────────────────
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(RadialHubLeft), nameof(RadialHubTop),
+                            nameof(RadialCometLeft), nameof(RadialCometTop),
+                            nameof(RadialBillboardLeft), nameof(RadialBillboardTop),
+                            nameof(RadialResetCameraLeft), nameof(RadialResetCameraTop),
+                            nameof(RadialSnapLeft), nameof(RadialSnapTop))]
+  private bool _isRadialMenuOpen = false;
+
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(RadialHubLeft), nameof(RadialCometLeft),
+                            nameof(RadialBillboardLeft), nameof(RadialResetCameraLeft),
+                            nameof(RadialSnapLeft))]
+  private double _radialMenuX = 0.0;
+
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(RadialHubTop), nameof(RadialCometTop),
+                            nameof(RadialBillboardTop), nameof(RadialResetCameraTop),
+                            nameof(RadialSnapTop))]
+  private double _radialMenuY = 0.0;
+
+  /// <summary>Tracks which radial item the cursor is currently hovering over (null = none).</summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(IsCometHovered), nameof(IsBillboardHovered),
+                            nameof(IsResetCameraHovered), nameof(IsSnapHovered))]
+  private string? _hoveredRadialItem;
+
+  public bool IsCometHovered => HoveredRadialItem == "comet";
+  public bool IsBillboardHovered => HoveredRadialItem == "billboard";
+  public bool IsResetCameraHovered => HoveredRadialItem == "resetcamera";
+  public bool IsSnapHovered => HoveredRadialItem == "snap";
+
+  private const double RadialRadius = 100.0;
+  private const double ItemSize    = 80.0;
+  private const double HalfItem    = ItemSize / 2.0;
+  private const double HubSize     = 16.0;
+
+  // Central hub
+  public double RadialHubLeft => RadialMenuX - HubSize / 2;
+  public double RadialHubTop  => RadialMenuY - HubSize / 2;
+
+  // Top ("up")
+  public double RadialCometLeft => RadialMenuX - HalfItem;
+  public double RadialCometTop  => RadialMenuY - RadialRadius - HalfItem;
+
+  // Top-right (45°)
+  private static readonly double _cos45 = Math.Cos(Math.PI / 4.0);
+  public double RadialBillboardLeft => RadialMenuX + RadialRadius * _cos45 - HalfItem;
+  public double RadialBillboardTop  => RadialMenuY - RadialRadius * _cos45 - HalfItem;
+
+  // Right (0°)
+  public double RadialResetCameraLeft => RadialMenuX + RadialRadius - HalfItem;
+  public double RadialResetCameraTop  => RadialMenuY - HalfItem;
+
+  // Bottom-right (135°)
+  public double RadialSnapLeft => RadialMenuX + RadialRadius * _cos45 - HalfItem;
+  public double RadialSnapTop  => RadialMenuY + RadialRadius * _cos45 - HalfItem;
+
+
+  /// <summary>Opens the radial menu anchored at the given viewport position.</summary>
+  public void OpenRadialMenuAt(double x, double y)
+  {
+    RadialMenuX = x;
+    RadialMenuY = y;
+    HoveredRadialItem = null;
+    IsRadialMenuOpen = true;
+  }
+
+  public void CloseRadialMenu()
+  {
+    IsRadialMenuOpen = false;
+    HoveredRadialItem = null;
+  }
+
+  /// <summary>
+  /// Called when Alt+S is released. Executes the action for whatever item the cursor is hovering over,
+  /// then closes the menu.
+  /// </summary>
+  public void CommitRadialMenuSelection()
+  {
+    var item = HoveredRadialItem;
+    CloseRadialMenu();
+
+    switch (item)
+    {
+      case "comet":
+        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+          new AetherVk.Logic.Messages.OpenSpawnCometDialogMessage()
+        );
+        break;
+      case "billboard":
+        InsertBillboardCommand.Execute(null);
+        break;
+      case "resetcamera":
+        RuntimeService.ResetCamera(SceneId, CameraId);
+        break;
+      case "snap":
+        var selected = SelectedEntity;
+        if (selected != null)
+          RuntimeService.SnapToEntity(SceneId, CameraId, selected.Id);
+        break;
+      // null or unrecognized: just close, no action
+    }
+  }
+
+  /// <summary>
+  /// Hit-tests the pointer position against radial menu items and updates HoveredRadialItem.
+  /// </summary>
+  public void UpdateRadialMenuHover(double pointerX, double pointerY)
+  {
+    if (!IsRadialMenuOpen)
+      return;
+
+    if (HitTestItem(pointerX, pointerY, RadialCometLeft, RadialCometTop))
+      HoveredRadialItem = "comet";
+    else if (HitTestItem(pointerX, pointerY, RadialBillboardLeft, RadialBillboardTop))
+      HoveredRadialItem = "billboard";
+    else if (HitTestItem(pointerX, pointerY, RadialResetCameraLeft, RadialResetCameraTop))
+      HoveredRadialItem = "resetcamera";
+    else if (HitTestItem(pointerX, pointerY, RadialSnapLeft, RadialSnapTop))
+      HoveredRadialItem = "snap";
+    else
+      HoveredRadialItem = null;
+  }
+
+  private bool HitTestItem(double px, double py, double itemLeft, double itemTop)
+  {
+    return px >= itemLeft && px <= itemLeft + ItemSize &&
+           py >= itemTop && py <= itemTop + ItemSize;
+  }
+
+  [RelayCommand]
+  private void CloseRadialMenuCmd() => CloseRadialMenu();
+
+  [RelayCommand]
+  private void ResetCameraFromRadial()
+  {
+    CloseRadialMenu();
+    RuntimeService.ResetCamera(SceneId, CameraId);
+  }
+
+  [RelayCommand]
+  private void SnapToSelectedFromRadial()
+  {
+    CloseRadialMenu();
+    var selected = SelectedEntity;
+    if (selected != null)
+      RuntimeService.SnapToEntity(SceneId, CameraId, selected.Id);
+  }
+
+  [RelayCommand]
+  private void CloseRadialMenuAndSpawnComet()
+  {
+    CloseRadialMenu();
+    // Send a message to open spawn comet dialog from main window.
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+      new AetherVk.Logic.Messages.OpenSpawnCometDialogMessage()
+    );
+  }
+
   public ulong CameraId { get; private set; }
+
+  /// <summary>Returns the currently selected entity in this viewport's scene, or null.</summary>
+  public AetherVk.Logic.Models.Entity? SelectedEntity =>
+    _sceneStateManager.GetOrCreateScene(SceneId).SelectedEntity;
 
   private static int _measurementCounter = 1;
 
