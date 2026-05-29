@@ -1,10 +1,10 @@
 //! linear_bvh module.
 
-use crate::math::collision::multi_bvh::TlasMultiNode;
 use crate::{
   math::collision::{
     bounds::{AABB, OBB},
     bvh_builder::{BVHNode, BoundNode},
+    multi_bvh::TlasMultiNode,
   },
   scene::EntityId,
   simulation::comet::Vertex,
@@ -114,7 +114,12 @@ where
     }
   }
 
-  fn find_path_recursive(&self, node_idx: u32, target_prim_idx: usize, path: &mut alloc::vec::Vec<u32>) -> bool {
+  fn find_path_recursive(
+    &self,
+    node_idx: u32,
+    target_prim_idx: usize,
+    path: &mut alloc::vec::Vec<u32>,
+  ) -> bool {
     path.push(node_idx);
     let node = &self.nodes[node_idx as usize];
 
@@ -140,7 +145,6 @@ where
     path.pop();
     false
   }
-
 
   fn flatten_node(
     node: &BVHNode<S>,
@@ -1091,63 +1095,69 @@ pub fn raycast_scene(
           let entity_id = crate::scene::EntityId::from(key_data);
 
           if let Some(transform) = scene.scene.global_transform(entity_id) {
-            scene.scene.with_component(entity_id, |mesh: &crate::scene::PhysicalMeshComponent| {
-              use aethervk_oshal_rlib::math::matrix::{Matrix4, MatrixVectorMul, SquareMatrix};
-              use aethervk_oshal_rlib::math::vector::{Vector4, Vector3, Vector};
+            scene
+              .scene
+              .with_component(entity_id, |mesh: &crate::scene::PhysicalMeshComponent| {
+                use aethervk_oshal_rlib::math::{
+                  matrix::{Matrix4, MatrixVectorMul, SquareMatrix},
+                  vector::{Vector, Vector3, Vector4},
+                };
 
-              let model_matrix = <Mat4x4f32 as Matrix4>::translation(transform.position)
+                let model_matrix = <Mat4x4f32 as Matrix4>::translation(transform.position)
                   * <Mat4x4f32 as Matrix4>::from_quat_custom_frame(transform.rotation)
                   * <Mat4x4f32 as Matrix4>::from_scale(transform.scale);
 
-              let inv_model = model_matrix.inverse().unwrap_or_else(|| <Mat4x4f32 as SquareMatrix>::identity());
+                let inv_model = model_matrix
+                  .inverse()
+                  .unwrap_or_else(|| <Mat4x4f32 as SquareMatrix>::identity());
 
-              let ro_local_v4 = inv_model.mul_vector(<Vec4f32 as Vector4>::from_components(
-                ray_origin.x(),
-                ray_origin.y(),
-                ray_origin.z(),
-                1.0,
-              ));
-              let ro_local = Vec3f32::from_components(ro_local_v4.x(), ro_local_v4.y(), ro_local_v4.z());
+                let ro_local_v4 = inv_model.mul_vector(<Vec4f32 as Vector4>::from_components(
+                  ray_origin.x(),
+                  ray_origin.y(),
+                  ray_origin.z(),
+                  1.0,
+                ));
+                let ro_local =
+                  Vec3f32::from_components(ro_local_v4.x(), ro_local_v4.y(), ro_local_v4.z());
 
-              let rd_local_v4 = inv_model.mul_vector(<Vec4f32 as Vector4>::from_components(
-                ray_dir.x(),
-                ray_dir.y(),
-                ray_dir.z(),
-                0.0,
-              ));
-              let rd_local = Vec3f32::from_components(rd_local_v4.x(), rd_local_v4.y(), rd_local_v4.z()).normalize();
+                let rd_local_v4 = inv_model.mul_vector(<Vec4f32 as Vector4>::from_components(
+                  ray_dir.x(),
+                  ray_dir.y(),
+                  ray_dir.z(),
+                  0.0,
+                ));
+                let rd_local =
+                  Vec3f32::from_components(rd_local_v4.x(), rd_local_v4.y(), rd_local_v4.z())
+                    .normalize();
 
-              if let Some(bvh) = &mesh.mesh.bvh {
-                if let Some((_, p_loc, n_loc)) =
-                  bvh.raycast(ro_local, rd_local, &mesh.mesh.vertices, &mesh.mesh.indices)
-                {
-                  let p_world_v4 = model_matrix.mul_vector(<Vec4f32 as Vector4>::from_components(
-                    p_loc.x(),
-                    p_loc.y(),
-                    p_loc.z(),
-                    1.0,
-                  ));
-                  let p_world = Vec3f32::from_components(p_world_v4.x(), p_world_v4.y(), p_world_v4.z());
+                if let Some(bvh) = &mesh.mesh.bvh {
+                  if let Some((_, p_loc, n_loc)) =
+                    bvh.raycast(ro_local, rd_local, &mesh.mesh.vertices, &mesh.mesh.indices)
+                  {
+                    let p_world_v4 = model_matrix.mul_vector(
+                      <Vec4f32 as Vector4>::from_components(p_loc.x(), p_loc.y(), p_loc.z(), 1.0),
+                    );
+                    let p_world =
+                      Vec3f32::from_components(p_world_v4.x(), p_world_v4.y(), p_world_v4.z());
 
-                  let n_world_v4 = model_matrix.mul_vector(<Vec4f32 as Vector4>::from_components(
-                    n_loc.x(),
-                    n_loc.y(),
-                    n_loc.z(),
-                    0.0,
-                  ));
-                  let n_world = Vec3f32::from_components(n_world_v4.x(), n_world_v4.y(), n_world_v4.z()).normalize();
+                    let n_world_v4 = model_matrix.mul_vector(
+                      <Vec4f32 as Vector4>::from_components(n_loc.x(), n_loc.y(), n_loc.z(), 0.0),
+                    );
+                    let n_world =
+                      Vec3f32::from_components(n_world_v4.x(), n_world_v4.y(), n_world_v4.z())
+                        .normalize();
 
-                  let t_world = (p_world - ray_origin).length();
+                    let t_world = (p_world - ray_origin).length();
 
-                  if t_world < closest_t {
-                    closest_t = t_world;
-                    closest_point = p_world;
-                    closest_normal = n_world;
-                    closest_entity = Some(entity_id);
+                    if t_world < closest_t {
+                      closest_t = t_world;
+                      closest_point = p_world;
+                      closest_normal = n_world;
+                      closest_entity = Some(entity_id);
+                    }
                   }
                 }
-              }
-            });
+              });
           }
         } else {
           // Internal node

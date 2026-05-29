@@ -241,7 +241,9 @@ impl RenderSceneExtraction {
       let pipeline = match device.get_measurement_resources(presentation_engine_handle) {
         Ok(r) => r.pipeline,
         Err(_) => {
-          device.create_measurement_resources(cmd_buffer, presentation_engine_handle)?.pipeline
+          device
+            .create_measurement_resources(cmd_buffer, presentation_engine_handle)?
+            .pipeline
         }
       };
       for (p1, p2, points, significant_digits) in self.extracted_measurements {
@@ -262,7 +264,9 @@ impl RenderSceneExtraction {
       let pipeline = match device.get_billboard_resources(presentation_engine_handle) {
         Ok(r) => r.pipeline,
         Err(_) => {
-          device.create_billboard_resources(cmd_buffer, presentation_engine_handle)?.pipeline
+          device
+            .create_billboard_resources(cmd_buffer, presentation_engine_handle)?
+            .pipeline
         }
       };
       for (mat, texture_id, billboard_type) in self.extracted_billboards {
@@ -586,11 +590,14 @@ impl SceneConversionExt for crate::scene::Scene {
 
             let bvh_data = if let Some((nodes, comp)) = bvh {
               let mut extracted = Vec::with_capacity(nodes.len());
-              comp.node_render_states.iter().zip(nodes.iter()).filter(|&(show, _)| *show).for_each(
-                |(_, node)| {
+              comp
+                .node_render_states
+                .iter()
+                .zip(nodes.iter())
+                .filter(|&(show, _)| *show)
+                .for_each(|(_, node)| {
                   extracted.push(node.bound.clone());
-                },
-              );
+                });
               Some((comp, extracted, t.to_mat4(), id))
             } else {
               None
@@ -636,11 +643,14 @@ impl SceneConversionExt for crate::scene::Scene {
           });
           if let Some((nodes, comp)) = bvh {
             let mut extracted = Vec::with_capacity(nodes.len());
-            comp.node_render_states.iter().zip(nodes.iter()).filter(|&(show, _)| *show).for_each(
-              |(_, node)| {
+            comp
+              .node_render_states
+              .iter()
+              .zip(nodes.iter())
+              .filter(|&(show, _)| *show)
+              .for_each(|(_, node)| {
                 extracted.push(node.bound.clone());
-              },
-            );
+              });
             extracted_bvhs.push((comp, extracted, t.to_mat4(), id));
           }
           extracted_meshes.push(m);
@@ -740,7 +750,9 @@ impl SceneConversionExt for crate::scene::Scene {
         if hidden_set.contains(&id) {
           return None;
         }
-        self.get_relative_transform(id, camera_entity).map(|t| (t.to_mat4::<Mat4x4f32>(), s.radius))
+        self
+          .get_relative_transform(id, camera_entity)
+          .map(|t| (t.to_mat4::<Mat4x4f32>(), s.radius))
       },
     );
 

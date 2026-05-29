@@ -698,7 +698,10 @@ impl DeviceResources {
   fn cleanup(&mut self, device: &LogicalDevice) {
     for (_, mut download) in DebugTrackedRwLock::write(&self.pending_downloads).drain() {
       unsafe {
-        self.allocator.allocator.destroy_buffer(download.staging_buffer, &mut download.allocation);
+        self
+          .allocator
+          .allocator
+          .destroy_buffer(download.staging_buffer, &mut download.allocation);
       }
     }
 
@@ -1153,8 +1156,9 @@ impl LogicalDevice {
       return;
     }
     let name_cstr = alloc::ffi::CString::from_str(name).unwrap();
-    let name_info =
-      vk::DebugUtilsObjectNameInfoEXT::default().object_handle(object).object_name(&name_cstr);
+    let name_info = vk::DebugUtilsObjectNameInfoEXT::default()
+      .object_handle(object)
+      .object_name(&name_cstr);
 
     unsafe {
       self
@@ -1517,7 +1521,9 @@ impl Device {
         vk::Format::D32_SFLOAT_S8_UINT,
       ] {
         unsafe {
-          instance.instance.get_physical_device_format_properties2(physical_device, f, &mut props)
+          instance
+            .instance
+            .get_physical_device_format_properties2(physical_device, f, &mut props)
         };
         if props
           .format_properties
@@ -2414,9 +2420,15 @@ impl RenderDevice for Device {
         Ok::<_, GpuError>(handle)
       })?
       .execute(|handle, rollback| {
-        let entry = self.instance.entry_wrapper.weak_entry().upgrade().ok_or(
-          GpuError::BackendSpecific("Vulkan Entry wasn't loaded".to_string()),
-        )?;
+        let entry =
+          self
+            .instance
+            .entry_wrapper
+            .weak_entry()
+            .upgrade()
+            .ok_or(GpuError::BackendSpecific(
+              "Vulkan Entry wasn't loaded".to_string(),
+            ))?;
         let physical_device_handle =
           unsafe { NonZeroHandle::new_unchecked(self.physical_device()) };
 
@@ -4487,8 +4499,10 @@ impl RenderDevice for Device {
           }
 
           // Lock-free descriptor set update
-          let buffer_info_vk =
-            vk::DescriptorBufferInfo::default().buffer(vk_buf).offset(0).range(vk::WHOLE_SIZE);
+          let buffer_info_vk = vk::DescriptorBufferInfo::default()
+            .buffer(vk_buf)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
 
           let write = vk::WriteDescriptorSet::default()
             .dst_set(descriptor_set)
@@ -4859,7 +4873,9 @@ impl RenderDevice for Device {
 
     for id in to_remove {
       if let Some(alloc) = arena_mut.curves.remove(&id) {
-        arena_mut.segment_allocator.free(alloc.segments_offset, alloc.segment_capacity as u64);
+        arena_mut
+          .segment_allocator
+          .free(alloc.segments_offset, alloc.segment_capacity as u64);
       }
     }
 
@@ -5062,8 +5078,10 @@ impl RenderDevice for Device {
         }
       }
 
-      let staging_buffer =
-        DebugTrackedRwLock::write(&res_guard.frame_staging_arena).as_mut().unwrap().buffer;
+      let staging_buffer = DebugTrackedRwLock::write(&res_guard.frame_staging_arena)
+        .as_mut()
+        .unwrap()
+        .buffer;
 
       let mut vk_buffer_copies = alloc::vec::Vec::new();
       for (src_offset, dst_offset, size) in segment_copies {
@@ -5426,7 +5444,10 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let pe = wait_for_pe!(res_guard, handle)?;
     let sun_archetype = DebugTrackedRwLock::read(&pe.archetypes().sun_render_archetype);
-    sun_archetype.as_ref().map(|a| a.pipeline_key).ok_or(gpu_err_pipeline_key_absent!())
+    sun_archetype
+      .as_ref()
+      .map(|a| a.pipeline_key)
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
   #[named]
@@ -5434,7 +5455,10 @@ impl RenderDevice for Device {
     let res_guard = DebugTrackedRwLock::read(&self.res);
     let pe = wait_for_pe!(res_guard, handle)?;
     let sky_archetype = DebugTrackedRwLock::read(&pe.archetypes().sky_render_archetype);
-    sky_archetype.as_ref().map(|a| a.pipeline_key).ok_or(gpu_err_pipeline_key_absent!())
+    sky_archetype
+      .as_ref()
+      .map(|a| a.pipeline_key)
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
   #[named]
@@ -5446,7 +5470,10 @@ impl RenderDevice for Device {
     let pe = wait_for_pe!(res_guard, handle)?;
     let background_archetype =
       DebugTrackedRwLock::read(&pe.archetypes().background_render_archetype);
-    background_archetype.as_ref().map(|a| a.pipeline_key).ok_or(gpu_err_pipeline_key_absent!())
+    background_archetype
+      .as_ref()
+      .map(|a| a.pipeline_key)
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
   #[named]
@@ -5455,7 +5482,10 @@ impl RenderDevice for Device {
     let pe_lock = &res_guard.live_presentation_engines;
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?;
     let grid_archetype = DebugTrackedRwLock::read(&pe.archetypes().grid_render_archetype);
-    grid_archetype.as_ref().map(|a| a.pipeline_key).ok_or(gpu_err_pipeline_key_absent!())
+    grid_archetype
+      .as_ref()
+      .map(|a| a.pipeline_key)
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
   #[named]
@@ -5464,7 +5494,10 @@ impl RenderDevice for Device {
     let pe_lock = &res_guard.live_presentation_engines;
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?;
     let bvh_archetype = DebugTrackedRwLock::read(&pe.archetypes().bvh_render_archetype);
-    bvh_archetype.as_ref().map(|a| a.pipeline_key).ok_or(gpu_err_pipeline_key_absent!())
+    bvh_archetype
+      .as_ref()
+      .map(|a| a.pipeline_key)
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
   #[named]
@@ -5473,7 +5506,10 @@ impl RenderDevice for Device {
     let pe_lock = &res_guard.live_presentation_engines;
     let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?;
     let bvh_archetype = DebugTrackedRwLock::read(&pe.archetypes().bvhwire2_render_archetype);
-    bvh_archetype.as_ref().map(|a| a.pipeline_key).ok_or(gpu_err_pipeline_key_absent!())
+    bvh_archetype
+      .as_ref()
+      .map(|a| a.pipeline_key)
+      .ok_or(gpu_err_pipeline_key_absent!())
   }
 
   // In device.rs
@@ -5489,8 +5525,11 @@ impl RenderDevice for Device {
 
     crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read(handle, |state, _| {
-        let a1_arc =
-          state.text_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent text1"))?.clone();
+        let a1_arc = state
+          .text_render_archetype_arena
+          .as_ref()
+          .ok_or(gpu_err!("arena absent text1"))?
+          .clone();
         let a2_arc = state
           .text2_render_archetype_arena
           .as_ref()
@@ -5597,8 +5636,11 @@ impl RenderDevice for Device {
   fn free_rasterized_font_atlas(&self, hash: u64, _font_atlas_id: u32) -> GpuResult<()> {
     crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |state, _| {
-        let a1_arc =
-          state.text_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent text1"))?.clone();
+        let a1_arc = state
+          .text_render_archetype_arena
+          .as_ref()
+          .ok_or(gpu_err!("arena absent text1"))?
+          .clone();
         let a2_arc = state
           .text2_render_archetype_arena
           .as_ref()
@@ -5749,8 +5791,9 @@ impl RenderDevice for Device {
     oshal::log!("DEBUG RUST: timeline {} reached", wait_value);
 
     // Staging buffer creation
-    let buffer_info =
-      vk::BufferCreateInfo::default().size(buffer_size).usage(vk::BufferUsageFlags::TRANSFER_DST);
+    let buffer_info = vk::BufferCreateInfo::default()
+      .size(buffer_size)
+      .usage(vk::BufferUsageFlags::TRANSFER_DST);
 
     let mut alloc_info = vk_mem::AllocationCreateInfo::default();
     alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
@@ -6133,7 +6176,9 @@ impl RenderDevice for Device {
     let cmd = self.get_cmd(cmd_buffer)?;
 
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
+      self
+        .device
+        .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
     }
 
     {
@@ -6304,8 +6349,9 @@ impl RenderDevice for Device {
 
       let physical_mesh_render_archetype_guard =
         DebugTrackedRwLock::read(&pe.archetypes().physical_mesh_render_archetype);
-      let archetype =
-        physical_mesh_render_archetype_guard.as_ref().ok_or(gpu_err_archetype_absent!())?;
+      let archetype = physical_mesh_render_archetype_guard
+        .as_ref()
+        .ok_or(gpu_err_archetype_absent!())?;
 
       (
         resource.position_vertex_buffer.buffer.get(),
@@ -7104,7 +7150,9 @@ impl RenderDevice for Device {
           match res {
             ExecuteResult::Created(mut new_resource) => {
               new_resource.is_generated = true;
-              state.sun_resources.insert(entity_id, resources::ResourceState::Ready(new_resource));
+              state
+                .sun_resources
+                .insert(entity_id, resources::ResourceState::Ready(new_resource));
             }
             ExecuteResult::Updated => {
               if let Some(mut entry) = state.sun_resources.get_mut(&entity_id) {
@@ -7234,8 +7282,10 @@ impl RenderDevice for Device {
   #[named]
   fn allocate_sphere_gizmo_instance(&self, entity: crate::scene::EntityId) -> GpuResult<u32> {
     let res = DebugTrackedRwLock::read(&self.res);
-    let arena_arc =
-      res.sphere_gizmo_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+    let arena_arc = res
+      .sphere_gizmo_render_archetype_arena
+      .as_ref()
+      .ok_or(gpu_err!("arena absent"))?;
     let mut arena = DebugTrackedRwLock::write(&*arena_arc);
     arena.allocate_sphere_gizmo_instance(entity)
   }
@@ -7243,8 +7293,10 @@ impl RenderDevice for Device {
   #[named]
   fn free_sphere_gizmo_instance(&self, entity: crate::scene::EntityId) -> GpuResult<()> {
     let res = DebugTrackedRwLock::read(&self.res);
-    let arena_arc =
-      res.sphere_gizmo_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+    let arena_arc = res
+      .sphere_gizmo_render_archetype_arena
+      .as_ref()
+      .ok_or(gpu_err!("arena absent"))?;
     let mut arena = DebugTrackedRwLock::write(&*arena_arc);
     arena.free_sphere_gizmo_instance(entity);
     Ok(())
@@ -7286,8 +7338,10 @@ impl RenderDevice for Device {
     let (cmd, layout) = {
       let res = DebugTrackedRwLock::read(&self.res);
       let (cmd, _) = self.get_cmd_and_pe(cmd_buffer)?;
-      let arena_arc =
-        res.sphere_gizmo_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena_arc = res
+        .sphere_gizmo_render_archetype_arena
+        .as_ref()
+        .ok_or(gpu_err!("arena absent"))?;
       let arena = DebugTrackedRwLock::read(&*arena_arc);
       (cmd, arena.pipeline_layout.get())
     };
@@ -7342,8 +7396,10 @@ impl RenderDevice for Device {
         "SphereGizmo missing staging arena".to_string(),
       ))?;
 
-      let arena_arc =
-        res.sphere_gizmo_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena_arc = res
+        .sphere_gizmo_render_archetype_arena
+        .as_ref()
+        .ok_or(gpu_err!("arena absent"))?;
       let arena = DebugTrackedRwLock::read(&*arena_arc);
       let data_buffer = arena.data_buffer;
       let data_ptr = arena.data_ptr;
@@ -7379,8 +7435,10 @@ impl RenderDevice for Device {
       }
     }
 
-    let copy_region =
-      vk::BufferCopy::default().size(data_size).src_offset(staging_offset as u64).dst_offset(0);
+    let copy_region = vk::BufferCopy::default()
+      .size(data_size)
+      .src_offset(staging_offset as u64)
+      .dst_offset(0);
 
     unsafe {
       self.device.cmd_copy_buffer(cmd, staging_buffer, data_buffer, &[copy_region]);
@@ -7476,8 +7534,10 @@ impl RenderDevice for Device {
       );
     }
 
-    let copy_region =
-      vk::BufferCopy::default().size(data_size).src_offset(staging_offset as u64).dst_offset(0);
+    let copy_region = vk::BufferCopy::default()
+      .size(data_size)
+      .src_offset(staging_offset as u64)
+      .dst_offset(0);
 
     unsafe {
       self.device.cmd_copy_buffer(cmd, staging_buffer, data_buffer, &[copy_region]);
@@ -7525,8 +7585,10 @@ impl RenderDevice for Device {
         .pipeline_pool
         .get_graphics_pipeline(archetype.pipeline_key)
         .ok_or(gpu_err_pipeline_absent!())?;
-      let arena_arc =
-        res_guard.gizmo_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena_arc = res_guard
+        .gizmo_render_archetype_arena
+        .as_ref()
+        .ok_or(gpu_err!("arena absent"))?;
       let arena = DebugTrackedRwLock::read(&*arena_arc);
       (
         cmd,
@@ -7576,9 +7638,10 @@ impl RenderDevice for Device {
       let resource_ref =
         sun_resource.get(&entity).ok_or(gpu_err!("couldn't find sun descriptor set"))?;
       let ds = match resource_ref.value() {
-        resources::ResourceState::Ready(s) => {
-          s.descriptor_set.map(|d| d.get()).ok_or(gpu_err!("couldn't find sun descriptor set"))?
-        }
+        resources::ResourceState::Ready(s) => s
+          .descriptor_set
+          .map(|d| d.get())
+          .ok_or(gpu_err!("couldn't find sun descriptor set"))?,
         _ => return Err(gpu_err!("sun resource not ready")),
       };
       (layout, ds)
@@ -7617,8 +7680,10 @@ impl RenderDevice for Device {
         .pipeline_pool
         .get_graphics_pipeline(pipeline)
         .ok_or(gpu_err_pipeline_absent!())?;
-      let arena_arc =
-        res_guard.particle_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena_arc = res_guard
+        .particle_render_archetype_arena
+        .as_ref()
+        .ok_or(gpu_err!("arena absent"))?;
       let arena = DebugTrackedRwLock::read(&*arena_arc);
 
       (
@@ -7660,8 +7725,10 @@ impl RenderDevice for Device {
       let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
 
       let p = res_guard.pipeline_pool.get_graphics_pipeline(archetype.pipeline_key).unwrap();
-      let arena_arc =
-        res_guard.particle2_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena_arc = res_guard
+        .particle2_render_archetype_arena
+        .as_ref()
+        .ok_or(gpu_err!("arena absent"))?;
       let arena = DebugTrackedRwLock::read(&*arena_arc);
 
       (
@@ -7703,8 +7770,10 @@ impl RenderDevice for Device {
       let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
 
       let p = res_guard.pipeline_pool.get_graphics_pipeline(archetype.pipeline_key).unwrap();
-      let arena_arc =
-        res_guard.trajectory_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
+      let arena_arc = res_guard
+        .trajectory_render_archetype_arena
+        .as_ref()
+        .ok_or(gpu_err!("arena absent"))?;
       let arena = DebugTrackedRwLock::read(&*arena_arc);
 
       (
@@ -7804,8 +7873,11 @@ impl RenderDevice for Device {
           return Err(gpu_err_archetype_absent!());
         }
 
-        let arena_arc =
-          state.sky_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?.clone();
+        let arena_arc = state
+          .sky_render_archetype_arena
+          .as_ref()
+          .ok_or(gpu_err!("arena absent"))?
+          .clone();
 
         // 4. Extract needed layouts and check if allocation is necessary
         let (do_alloc, layout, pipeline_layout, existing_set) = {
@@ -8046,7 +8118,9 @@ impl RenderDevice for Device {
     };
 
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
+      self
+        .device
+        .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
 
       let mut push_bytes = [0u8; 544];
 
@@ -8366,8 +8440,8 @@ impl RenderDevice for Device {
 
         let mut alloc_info = vk_mem::AllocationCreateInfo::default();
         alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
-        alloc_info.flags = vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM
-          | vk_mem::AllocationCreateFlags::MAPPED;
+        alloc_info.flags =
+          vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED;
         crate::apply_test_dedicated_alloc!(alloc_info);
 
         // Lock-free allocation
@@ -8740,7 +8814,9 @@ impl RenderDevice for Device {
             let registry =
               crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&task_registry);
             if let Some(entry) = registry.get(&tid) {
-              entry.target_value.store(next_timeline_value, core::sync::atomic::Ordering::Release);
+              entry
+                .target_value
+                .store(next_timeline_value, core::sync::atomic::Ordering::Release);
             }
           }
 
@@ -8873,7 +8949,10 @@ impl Device {
     let submit_info = vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&cmd));
     let fence = unsafe { self.device.create_fence(&vk::FenceCreateInfo::default(), None) }?;
 
-    self.device.locked_queue_submit(queue.handle, &[submit_info], fence).map_err(GpuError::from)?;
+    self
+      .device
+      .locked_queue_submit(queue.handle, &[submit_info], fence)
+      .map_err(GpuError::from)?;
     unsafe {
       self.device.wait_for_fences(&[fence], true, u64::MAX)?;
       self.device.destroy_fence(fence, None);
@@ -9135,14 +9214,19 @@ impl Device {
       .prepare_read((), |state, _| {
         // 2. Fetch Sun Image and Resolution
         let sun_map = &state.sun_resources;
-        let sun_res_ref =
-          sun_map.get(&entity_id).ok_or(gpu_invalid_arg!("invalid sun entity: {:?}", entity_id))?;
+        let sun_res_ref = sun_map
+          .get(&entity_id)
+          .ok_or(gpu_invalid_arg!("invalid sun entity: {:?}", entity_id))?;
         let sun_res = match sun_res_ref.value() {
           resources::ResourceState::Ready(r) => r,
           _ => return Err(gpu_err!("sun resource not ready")),
         };
-        let sun_image =
-          sun_res.image.as_ref().ok_or(gpu_err!("sun resource doesn't have image"))?.image.get();
+        let sun_image = sun_res
+          .image
+          .as_ref()
+          .ok_or(gpu_err!("sun resource doesn't have image"))?
+          .image
+          .get();
 
         let (width, height, depth) = sun_res.resolution;
 

@@ -49,6 +49,7 @@ public partial class SpawnCometViewModel : ObservableObject
   // Computed mass visibility for Step 4
   /// <summary>True when JPL returned a valid GM for this comet.</summary>
   public bool IsMassKnownFromJpl => FetchedOrbitData?.MassKg != null;
+
   /// <summary>Show mass slider in Step 4 only for Dynamic when no JPL GM is available.</summary>
   public bool ShowMassSlider => PhysicsType == "Dynamic" && !IsMassKnownFromJpl;
 
@@ -70,8 +71,8 @@ public partial class SpawnCometViewModel : ObservableObject
   private string _physicsType = "Static"; // Static, Kinematic, Dynamic
 
   // --- Step 3 (Horizon Data) ---
-  public ObservableCollection<CometSearchResult> CometsData  => _horizonService.CometsData;
-  public ObservableCollection<SpkRecordItem>     SpkRecordsData => _horizonService.SpkRecordsData;
+  public ObservableCollection<CometSearchResult> CometsData => _horizonService.CometsData;
+  public ObservableCollection<SpkRecordItem> SpkRecordsData => _horizonService.SpkRecordsData;
 
   [ObservableProperty]
   private CometSearchResult? _selectedComet;
@@ -84,7 +85,7 @@ public partial class SpawnCometViewModel : ObservableObject
   /// <summary>True when the selected SPK record is a real numeric id (not the SBDB placeholder row).</summary>
   public bool HasValidSpkRecord => SelectedSpkRecord?.IsValid == true;
 
-  public bool HasSpkRecords   => SpkRecordsData.Count > 0;
+  public bool HasSpkRecords => SpkRecordsData.Count > 0;
   public bool HasNoSpkRecords => !HasSpkRecords;
 
   [ObservableProperty]
@@ -96,7 +97,7 @@ public partial class SpawnCometViewModel : ObservableObject
   [ObservableProperty]
   private string _epaStepSize = "1 d";
 
-  public bool HasComets   => CometsData.Count > 0;
+  public bool HasComets => CometsData.Count > 0;
   public bool HasNoComets => CometsData.Count == 0;
 
   [ObservableProperty]
@@ -110,7 +111,7 @@ public partial class SpawnCometViewModel : ObservableObject
   // Mass override for Dynamic mode when JPL doesn't supply GM
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(ShowMassSlider))]
-  private double _dynamicMassKg = 1e13;  // seeded from density estimate in OnFetchedOrbitDataChanged
+  private double _dynamicMassKg = 1e13; // seeded from density estimate in OnFetchedOrbitDataChanged
 
   [ObservableProperty]
   private float _posX = 0f;
@@ -181,7 +182,7 @@ public partial class SpawnCometViewModel : ObservableObject
   {
     if (value != null)
     {
-      _jplRadiusKm  = (float)value.CometRadiusKm;
+      _jplRadiusKm = (float)value.CometRadiusKm;
       CometRadiusKm = _jplRadiusKm;
       // Seed the mass slider default: JPL mass if available, otherwise density estimate.
       DynamicMassKg = value.MassKg ?? value.EstimatedMassKg;
@@ -199,12 +200,14 @@ public partial class SpawnCometViewModel : ObservableObject
     {
       if (value.RuntimeService.GetModelLocalFrames(value.Id, out var userFrame, out var simFrame))
       {
-        UserLocalFrameString = $"[{userFrame.M00:F2}, {userFrame.M01:F2}, {userFrame.M02:F2}]\n" +
-                               $"[{userFrame.M10:F2}, {userFrame.M11:F2}, {userFrame.M12:F2}]\n" +
-                               $"[{userFrame.M20:F2}, {userFrame.M21:F2}, {userFrame.M22:F2}]";
-        SimulationLocalFrameString = $"[{simFrame.M00:F2}, {simFrame.M01:F2}, {simFrame.M02:F2}]\n" +
-                                     $"[{simFrame.M10:F2}, {simFrame.M11:F2}, {simFrame.M12:F2}]\n" +
-                                     $"[{simFrame.M20:F2}, {simFrame.M21:F2}, {simFrame.M22:F2}]";
+        UserLocalFrameString =
+          $"[{userFrame.M00:F2}, {userFrame.M01:F2}, {userFrame.M02:F2}]\n"
+          + $"[{userFrame.M10:F2}, {userFrame.M11:F2}, {userFrame.M12:F2}]\n"
+          + $"[{userFrame.M20:F2}, {userFrame.M21:F2}, {userFrame.M22:F2}]";
+        SimulationLocalFrameString =
+          $"[{simFrame.M00:F2}, {simFrame.M01:F2}, {simFrame.M02:F2}]\n"
+          + $"[{simFrame.M10:F2}, {simFrame.M11:F2}, {simFrame.M12:F2}]\n"
+          + $"[{simFrame.M20:F2}, {simFrame.M21:F2}, {simFrame.M22:F2}]";
       }
     }
   }
@@ -216,11 +219,14 @@ public partial class SpawnCometViewModel : ObservableObject
   public (float w, float x, float y, float z) GetRotationQuaternion()
   {
     double pitchRad = Pitch * Math.PI / 180.0;
-    double yawRad   = Yaw   * Math.PI / 180.0;
-    double rollRad  = Roll  * Math.PI / 180.0;
-    double cy = Math.Cos(yawRad   * 0.5), sy = Math.Sin(yawRad   * 0.5);
-    double cp = Math.Cos(pitchRad * 0.5), sp = Math.Sin(pitchRad * 0.5);
-    double cr = Math.Cos(rollRad  * 0.5), sr = Math.Sin(rollRad  * 0.5);
+    double yawRad = Yaw * Math.PI / 180.0;
+    double rollRad = Roll * Math.PI / 180.0;
+    double cy = Math.Cos(yawRad * 0.5),
+      sy = Math.Sin(yawRad * 0.5);
+    double cp = Math.Cos(pitchRad * 0.5),
+      sp = Math.Sin(pitchRad * 0.5);
+    double cr = Math.Cos(rollRad * 0.5),
+      sr = Math.Sin(rollRad * 0.5);
     double w = cr * cp * cy + sr * sp * sy;
     double x = sr * cp * cy - cr * sp * sy;
     double y = cr * sp * cy + sr * cp * sy;
@@ -239,7 +245,8 @@ public partial class SpawnCometViewModel : ObservableObject
   {
     _horizonService = horizonService;
     _breadcrumbService = breadcrumbService;
-    if (DateTimeOffset.TryParse(timelineService.UtcTime, out var dt)) {
+    if (DateTimeOffset.TryParse(timelineService.UtcTime, out var dt))
+    {
       _orbitYear = dt.Year;
     }
     foreach (var model in models)
@@ -277,11 +284,12 @@ public partial class SpawnCometViewModel : ObservableObject
   [RelayCommand]
   private async Task FetchSpkRecordsAsync()
   {
-    if (SelectedComet == null) return;
+    if (SelectedComet == null)
+      return;
     IsFetchingHorizonData = true;
     SelectedSpkRecord = null;
     var start = $"{OrbitYear - 5}-01-01";
-    var stop  = $"{OrbitYear + 5}-12-31";
+    var stop = $"{OrbitYear + 5}-12-31";
     await _horizonService.FetchSpkRecordsAsync(SelectedComet.PrimaryDesignation, start, stop);
     IsFetchingHorizonData = false;
     OnPropertyChanged(nameof(HasSpkRecords));
@@ -292,72 +300,100 @@ public partial class SpawnCometViewModel : ObservableObject
   [RelayCommand]
   private async Task FetchOrbitDataAsync()
   {
-      if (SelectedComet == null)
-      {
-        return;
-      }
-      if (SelectedSpkRecord == null)
-      {
-        await _breadcrumbService.ShowMessageAsync("No Record Selected", "Please select an SPK record from the list before fetching orbit data.", default, 4);
-        return;
-      }
-      if (string.IsNullOrWhiteSpace(EpaStepSize))
-      {
-        return;
-      }
+    if (SelectedComet == null)
+    {
+      return;
+    }
+    if (SelectedSpkRecord == null)
+    {
+      await _breadcrumbService.ShowMessageAsync(
+        "No Record Selected",
+        "Please select an SPK record from the list before fetching orbit data.",
+        default,
+        4
+      );
+      return;
+    }
+    if (string.IsNullOrWhiteSpace(EpaStepSize))
+    {
+      return;
+    }
 
-      IsFetchingHorizonData = true;
-      // Construct date interval for the requested year +/- 1 year
-      var startDate = new DateTimeOffset(OrbitYear - 1, 1, 1, 0, 0, 0, TimeSpan.Zero);
-      var stopDate = new DateTimeOffset(OrbitYear + 1, 12, 31, 23, 59, 59, TimeSpan.Zero);
+    IsFetchingHorizonData = true;
+    // Construct date interval for the requested year +/- 1 year
+    var startDate = new DateTimeOffset(OrbitYear - 1, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    var stopDate = new DateTimeOffset(OrbitYear + 1, 12, 31, 23, 59, 59, TimeSpan.Zero);
 
-      // Always use the selected SPK record ID — a numeric ID (e.g. "90000031") never produces
-      // a disambiguation page, eliminating the $$SOE-not-found crash.
-      string targetId = SelectedSpkRecord.RecordId;
+    // Always use the selected SPK record ID — a numeric ID (e.g. "90000031") never produces
+    // a disambiguation page, eliminating the $$SOE-not-found crash.
+    string targetId = SelectedSpkRecord.RecordId;
 
-      FetchedOrbitData = await _horizonService.GetPlanetDataAsync(
-        targetId,
-        EpaCenter,
-        startDate.DateTime,
-        stopDate.DateTime,
-        EpaStepSize);
+    FetchedOrbitData = await _horizonService.GetPlanetDataAsync(
+      targetId,
+      EpaCenter,
+      startDate.DateTime,
+      stopDate.DateTime,
+      EpaStepSize
+    );
 
-      IsFetchingHorizonData = false;
+    IsFetchingHorizonData = false;
 
-      if (FetchedOrbitData != null)
+    if (FetchedOrbitData != null)
+    {
+      _jplRadiusKm = (float)FetchedOrbitData.CometRadiusKm;
+      CometRadiusKm = (float)FetchedOrbitData.CometRadiusKm;
+    }
+    else
+    {
+      _breadcrumbService.ShowMessageAsync(
+        "No Data Found",
+        $"No ephemeris data was found for {OrbitYear}. Try a different year.",
+        default,
+        5
+      );
+      return;
+    }
+
+    OnPropertyChanged(nameof(CanGoNext));
+
+    if (SelectedModel != null && FetchedOrbitData != null)
+    {
+      var q = GetRotationQuaternion();
+      // Convert quaternion to 3x3 rotation matrix
+      float xx = q.x * q.x,
+        yy = q.y * q.y,
+        zz = q.z * q.z;
+      float xy = q.x * q.y,
+        xz = q.x * q.z,
+        yz = q.y * q.z;
+      float wx = q.w * q.x,
+        wy = q.w * q.y,
+        wz = q.w * q.z;
+
+      var userFrame = new NativeInterop.FfiMat3
       {
-        _jplRadiusKm = (float)FetchedOrbitData.CometRadiusKm;
-        CometRadiusKm = (float)FetchedOrbitData.CometRadiusKm;
-      }
-      else
-      {
-         _breadcrumbService.ShowMessageAsync("No Data Found", $"No ephemeris data was found for {OrbitYear}. Try a different year.", default, 5);
-         return;
-      }
+        M00 = 1.0f - 2.0f * (yy + zz),
+        M10 = 2.0f * (xy - wz),
+        M20 = 2.0f * (xz + wy),
+        M01 = 2.0f * (xy + wz),
+        M11 = 1.0f - 2.0f * (xx + zz),
+        M21 = 2.0f * (yz - wx),
+        M02 = 2.0f * (xz - wy),
+        M12 = 2.0f * (yz + wx),
+        M22 = 1.0f - 2.0f * (xx + yy),
+      };
+      SelectedModel.RuntimeService.OverrideModelSpherical(
+        SelectedModel.Id,
+        (float)CometRadiusKm,
+        (float)(FetchedOrbitData.MassKg ?? FetchedOrbitData.EstimatedMassKg),
+        ref userFrame
+      );
 
-      OnPropertyChanged(nameof(CanGoNext));
-      
-      if (SelectedModel != null && FetchedOrbitData != null)
-      {
-        var q = GetRotationQuaternion();
-        // Convert quaternion to 3x3 rotation matrix
-        float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
-        float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
-        float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
-        
-        var userFrame = new NativeInterop.FfiMat3
-        {
-            M00 = 1.0f - 2.0f * (yy + zz), M10 = 2.0f * (xy - wz),        M20 = 2.0f * (xz + wy),
-            M01 = 2.0f * (xy + wz),        M11 = 1.0f - 2.0f * (xx + zz), M21 = 2.0f * (yz - wx),
-            M02 = 2.0f * (xz - wy),        M12 = 2.0f * (yz + wx),        M22 = 1.0f - 2.0f * (xx + yy)
-        };
-        SelectedModel.RuntimeService.OverrideModelSpherical(SelectedModel.Id, (float)CometRadiusKm, (float)(FetchedOrbitData.MassKg ?? FetchedOrbitData.EstimatedMassKg), ref userFrame);
-        
-        // Refresh properties display
-        OnPropertyChanged(nameof(SimulationLocalFrameString));
-        OnPropertyChanged(nameof(UserLocalFrameString));
-      }
-      IsFetchingHorizonData = false;
+      // Refresh properties display
+      OnPropertyChanged(nameof(SimulationLocalFrameString));
+      OnPropertyChanged(nameof(UserLocalFrameString));
+    }
+    IsFetchingHorizonData = false;
   }
 
   [RelayCommand]

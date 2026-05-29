@@ -167,7 +167,9 @@ impl TimeInfo {
     let idx = self.m_deltas_index.load(Ordering::Relaxed) as usize;
     // TODO array of refcells cause delta_index load protects this acces
     self.m_deltas[idx] = delta;
-    self.m_deltas_index.store(((idx + 1) % DELTAS_WINDOW_COUNT) as u32, Ordering::Release);
+    self
+      .m_deltas_index
+      .store(((idx + 1) % DELTAS_WINDOW_COUNT) as u32, Ordering::Release);
 
     self.m_last_raw_delta.store(delta_raw, Ordering::Release);
     self.m_last_real_update.store(time_raw, Ordering::Release);

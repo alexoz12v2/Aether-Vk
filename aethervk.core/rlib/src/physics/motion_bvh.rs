@@ -247,50 +247,51 @@ impl MotionBvhTree {
   pub fn generate_depth_sorted_indices(&self) -> alloc::vec::Vec<u32> {
     let mut depths = alloc::vec::Vec::new();
     depths.resize(self.nodes.len(), -1i32);
-    
+
     // Compute depth for all nodes (post-order traversal implicitly done via recursive helper)
     let mut max_depth = -1i32;
     if let Some(root) = self.root {
       max_depth = self.compute_depth(root, &mut depths);
     }
-    
+
     if max_depth < 0 {
       return alloc::vec::Vec::new(); // No internal nodes
     }
-    
+
     let mut depth_groups = alloc::vec::Vec::new();
     depth_groups.resize((max_depth + 1) as usize, alloc::vec::Vec::new());
-    
+
     for (idx, &d) in depths.iter().enumerate() {
-      if d >= 0 { // Only internal nodes
+      if d >= 0 {
+        // Only internal nodes
         depth_groups[d as usize].push(idx as u32);
       }
     }
-    
+
     let mut sorted_indices = alloc::vec::Vec::new();
     for group in depth_groups {
       sorted_indices.extend(group);
     }
-    
+
     sorted_indices
   }
-  
+
   fn compute_depth(&self, node_idx: u32, depths: &mut [i32]) -> i32 {
     let node = &self.nodes[node_idx as usize];
     if node.data_index.is_some() {
       return -1; // Leaf
     }
-    
+
     let mut left_depth = -1;
     if let Some(left) = node.left_child {
       left_depth = self.compute_depth(left, depths);
     }
-    
+
     let mut right_depth = -1;
     if let Some(right) = node.right_child {
       right_depth = self.compute_depth(right, depths);
     }
-    
+
     let d = core::cmp::max(left_depth, right_depth) + 1;
     depths[node_idx as usize] = d;
     d

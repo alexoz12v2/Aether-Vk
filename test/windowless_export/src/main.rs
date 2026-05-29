@@ -279,12 +279,12 @@ fn main() {
           })?;
 
         let mut buffer = vec![0u8; (width * height * 4) as usize];
-        device.download_windowless_image(presentation_engine, &mut buffer, Some(1)).map_err(
-          |e| {
+        device
+          .download_windowless_image(presentation_engine, &mut buffer, Some(1))
+          .map_err(|e| {
             println!("download_windowless_image failed: {:?}", e);
             e
-          },
-        )?;
+          })?;
 
         println!("First few bytes: {:?}", &buffer[0..16]);
         let mut unique_pixels = std::collections::HashSet::new();

@@ -269,10 +269,22 @@ public static class NativeInterop
     public float OrthoTop;
     public float FocusDistance;
 
-    public float Proj00, Proj01, Proj02, Proj03;
-    public float Proj10, Proj11, Proj12, Proj13;
-    public float Proj20, Proj21, Proj22, Proj23;
-    public float Proj30, Proj31, Proj32, Proj33;
+    public float Proj00,
+      Proj01,
+      Proj02,
+      Proj03;
+    public float Proj10,
+      Proj11,
+      Proj12,
+      Proj13;
+    public float Proj20,
+      Proj21,
+      Proj22,
+      Proj23;
+    public float Proj30,
+      Proj31,
+      Proj32,
+      Proj33;
   }
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -299,7 +311,8 @@ public static class NativeInterop
     ulong sceneId,
     [Out] SceneHierarchyNodeDTO[] outBuffer,
     uint capacity,
-    out uint outCount);
+    out uint outCount
+  );
 
   [StructLayout(LayoutKind.Sequential)]
   public struct FfiBvhNode
@@ -416,7 +429,10 @@ public static class NativeInterop
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.I1)]
-  public static extern bool avkSimulationContext_parseEpochToTaiSec(string epoch_raw, out double taiSec);
+  public static extern bool avkSimulationContext_parseEpochToTaiSec(
+    string epoch_raw,
+    out double taiSec
+  );
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_loadCometSpk(
@@ -509,6 +525,7 @@ public static class NativeInterop
   {
     /// <summary>External entity id of the LCA micro-frame parent entity.</summary>
     public ulong LcaFrameId;
+
     /// <summary>External entity id of the comet mesh child entity.</summary>
     public ulong CometEntityId;
   }
@@ -524,8 +541,13 @@ public static class NativeInterop
     ulong sceneId,
     ulong modelId,
     string entityName,
-    float posX, float posY, float posZ,
-    float rotW, float rotX, float rotY, float rotZ,
+    float posX,
+    float posY,
+    float posZ,
+    float rotW,
+    float rotX,
+    float rotY,
+    float rotZ,
     float radiusKm,
     float massKg,
     uint physicsType,
@@ -561,7 +583,10 @@ public static class NativeInterop
     double iDeg,
     double omegaDeg,
     double argPeriDeg,
-    float colR, float colG, float colB, float colA,
+    float colR,
+    float colG,
+    float colB,
+    float colA,
     float lineWidth
   );
 
@@ -574,6 +599,7 @@ public static class NativeInterop
   {
     /// <summary>External entity id of the LCA micro-frame parent entity.</summary>
     public ulong LcaFrameId;
+
     /// <summary>External entity id of the static mesh child entity.</summary>
     public ulong MeshEntityId;
   }
@@ -589,8 +615,13 @@ public static class NativeInterop
     ulong sceneId,
     ulong modelId,
     string entityName,
-    float posX, float posY, float posZ,
-    float rotW, float rotX, float rotY, float rotZ,
+    float posX,
+    float posY,
+    float posZ,
+    float rotW,
+    float rotX,
+    float rotY,
+    float rotZ,
     float radiusKm,
     out FfiSpawnStaticMeshResult result
   );
@@ -598,9 +629,15 @@ public static class NativeInterop
   [StructLayout(LayoutKind.Sequential)]
   public struct FfiMat3
   {
-      public float M00, M10, M20;
-      public float M01, M11, M21;
-      public float M02, M12, M22;
+    public float M00,
+      M10,
+      M20;
+    public float M01,
+      M11,
+      M21;
+    public float M02,
+      M12,
+      M22;
   }
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -749,7 +786,7 @@ public static class NativeInterop
     float meanVelocity
   );
 
-   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_addImageBillboardComponent(
     IntPtr ctx,
     ulong sceneId,

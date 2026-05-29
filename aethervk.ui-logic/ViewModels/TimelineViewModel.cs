@@ -10,8 +10,8 @@ namespace AetherVk.Logic.ViewModels;
 
 public class TimeScaleOption
 {
-    public string DisplayName { get; init; } = "";
-    public uint Value { get; init; }
+  public string DisplayName { get; init; } = "";
+  public uint Value { get; init; }
 }
 
 public partial class TimelineViewModel : TabItemViewModel, IDisposable
@@ -29,12 +29,13 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   [ObservableProperty]
   private ulong _currentSceneId;
 
-  public ObservableCollection<TimeScaleOption> TimeScaleOptions { get; } = new()
-  {
+  public ObservableCollection<TimeScaleOption> TimeScaleOptions { get; } =
+    new()
+    {
       new TimeScaleOption { DisplayName = "1 Day/sec", Value = 1 },
       new TimeScaleOption { DisplayName = "1 Week/sec", Value = 2 },
       new TimeScaleOption { DisplayName = "1 Month/sec", Value = 3 },
-  };
+    };
 
   [ObservableProperty]
   private TimeScaleOption _selectedTimeScale;
@@ -112,8 +113,8 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   private bool _hasSnapshotted;
 
   /// <summary>
-  /// Initiates scene playback. 
-  /// Automatically captures a snapshot of the simulation state if it's the first time playing, 
+  /// Initiates scene playback.
+  /// Automatically captures a snapshot of the simulation state if it's the first time playing,
   /// sets the simulation timescale, and pushes the PlayScene command down to the native logic thread.
   /// Warns if a comet exists without jets, but does not block playback.
   /// </summary>
@@ -129,7 +130,9 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
         var comet = _runtimeService.GetEntityById(CurrentSceneId, state.CometEntityId.Value);
         if (comet != null)
         {
-          var emitter = comet.Components.OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>().FirstOrDefault();
+          var emitter = comet
+            .Components.OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>()
+            .FirstOrDefault();
           if (emitter != null && emitter.Circles.Count > 0)
           {
             hasJets = true;
@@ -138,7 +141,12 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
 
         if (!hasJets)
         {
-          _breadcrumbService.ShowMessageAsync("No Jets", "Comet has no jets configured. Particle simulation will not run.", default, 5);
+          _breadcrumbService.ShowMessageAsync(
+            "No Jets",
+            "Comet has no jets configured. Particle simulation will not run.",
+            default,
+            5
+          );
         }
       }
 
@@ -170,7 +178,7 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
 
   /// <summary>
   /// Stops playback entirely and rewinds the simulation.
-  /// Resets the time scale, pauses the logic engine, and gracefully restores 
+  /// Resets the time scale, pauses the logic engine, and gracefully restores
   /// the simulation state from the initial snapshot if one exists.
   /// If no snapshot exists, seeks to the initial epoch instead.
   /// </summary>
@@ -195,15 +203,18 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
     }
   }
 
-
-
   [RelayCommand]
   private async System.Threading.Tasks.Task UpdateTrajectoriesAsync()
   {
     if (_runtimeService.IsInitialized)
     {
       double stepDays = 1.0;
-      await _trajectoryManager.UpdateAllTrajectoriesAsync(CurrentSceneId, Timeline.MinTai, Timeline.MaxTai, stepDays);
+      await _trajectoryManager.UpdateAllTrajectoriesAsync(
+        CurrentSceneId,
+        Timeline.MinTai,
+        Timeline.MaxTai,
+        stepDays
+      );
     }
   }
 

@@ -218,12 +218,18 @@ fn test_simulation_context_text_rendering() {
       let height = 256;
 
       let pe_handle = ctx.create_presentation_engine(scene_id, width, height).unwrap();
-      ctx.add_perspective_camera(scene_id, pe_handle, "camera", 45.0, 0.1, 100.0).unwrap();
+      ctx
+        .add_perspective_camera(scene_id, pe_handle, "camera", 45.0, 0.1, 100.0)
+        .unwrap();
 
       SimulationContext::set_render_callback(Some(render_callback_impl));
 
       // Let the logic thread tick and call RENDER_CALLBACK
-      let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::PlayScene { scene_id });
+      let _ = ctx
+        .threads
+        .logic_thread
+        .tx()
+        .try_send(structs::LogicCommand::PlayScene { scene_id });
 
       let mut attempts = 0;
       let mut task_id = 0;
@@ -377,7 +383,7 @@ fn test_scene_api() {
       let (count, missing) = ctx.get_entity_ids(scene_id, &mut out_ids).unwrap();
       assert!(count > 0);
 
-      let mut out_name = vec![0i8; 100];
+      let mut out_name = vec![0i8 as core::ffi::c_char; 100];
       let missing_name = ctx.get_entity_name(scene_id, child_id, &mut out_name).unwrap();
       let name_str = core::ffi::CStr::from_ptr(out_name.as_ptr()).to_str().unwrap();
       assert_eq!(name_str, "Child");
@@ -494,19 +500,28 @@ fn test_misc_and_models_api_direct() {
       let _ = ctx.get_task_result_kinematic_state(0, &mut out_state);
 
       let pe_handle = ctx.create_presentation_engine(scene_id, 100, 100).unwrap();
-      ctx.add_perspective_camera(scene_id, pe_handle, "camera", 45.0, 0.1, 100.0).unwrap();
+      ctx
+        .add_perspective_camera(scene_id, pe_handle, "camera", 45.0, 0.1, 100.0)
+        .unwrap();
       let _ = ctx.resize(scene_id, pe_handle, 200, 200);
 
       let mut buffer = [0u8; 10];
       let _ = ctx.download_image(0, buffer.as_mut_ptr(), 10);
 
       // Logic thread commands that missed coverage
-      let _ =
-        ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::PauseScene { scene_id });
-      let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::SetSceneTimeScale {
-        scene_id,
-        scale: structs::TimeScale::OneMonth,
-      });
+      let _ = ctx
+        .threads
+        .logic_thread
+        .tx()
+        .try_send(structs::LogicCommand::PauseScene { scene_id });
+      let _ = ctx
+        .threads
+        .logic_thread
+        .tx()
+        .try_send(structs::LogicCommand::SetSceneTimeScale {
+          scene_id,
+          scale: structs::TimeScale::OneMonth,
+        });
       let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::SetSceneEpoch {
         scene_id,
         epoch_tai_seconds: 0.0,
@@ -576,7 +591,11 @@ fn test_snapshot_and_restore() {
     .set_parent(entity_internal, Some(root_entity));
 
   // Take snapshot
-  let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::SnapshotScene { scene_id });
+  let _ = ctx
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::SnapshotScene { scene_id });
 
   // Wait for logic thread to process snapshot
   oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
@@ -597,8 +616,11 @@ fn test_snapshot_and_restore() {
   assert_eq!(new_pos.x(), 5.0);
 
   // Restore snapshot
-  let _ =
-    ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::RestoreSnapshot { scene_id });
+  let _ = ctx
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::RestoreSnapshot { scene_id });
 
   // Wait for logic thread to process restore
   oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
@@ -626,22 +648,25 @@ fn test_spawn_comet_internal_bounds_and_hierarchy() {
         scenes.model_registry.insert(model_id, path.into());
         let dummy_mesh = crate::simulation::comet::Comet {
           id: 0,
-          vertices: alloc::vec![
-            crate::simulation::comet::Vertex {
-              position: [0.0, 0.0, 2.5],
-              uv: [0.0, 0.0],
-              normal: [0.0, 1.0, 0.0],
-              tangent: [1.0, 0.0, 0.0, 1.0],
-            }
-          ],
+          vertices: alloc::vec![crate::simulation::comet::Vertex {
+            position: [0.0, 0.0, 2.5],
+            uv: [0.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+          }],
           indices: alloc::vec![],
           albedo_map: None,
           normal_map: None,
           roughness_map: None,
           ao_map: None,
           mass_properties: polyhedral_mass_properties::MassProperties::from_contrib_sum(
-            polyhedral_mass_properties::TriangleContrib::new([-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [0.5, 1.0, 0.0])
-          ).unwrap(),
+            polyhedral_mass_properties::TriangleContrib::new(
+              [-1.0, 0.0, -1.0],
+              [1.0, 0.0, -1.0],
+              [0.5, 1.0, 0.0],
+            ),
+          )
+          .unwrap(),
           bvh: None,
           pa_basis_bf: None,
           bf_to_pa: None,
@@ -655,16 +680,18 @@ fn test_spawn_comet_internal_bounds_and_hierarchy() {
       let mass_kg = 1e13;
       let physics_type = 2; // Dynamic
 
-      let (lca_ext_id, comet_ext_id) = ctx.spawn_comet_internal(
-        scene_id,
-        model_id,
-        "Halley",
-        pos,
-        rot,
-        radius_km,
-        mass_kg,
-        physics_type
-      ).expect("spawn_comet_internal should succeed");
+      let (lca_ext_id, comet_ext_id) = ctx
+        .spawn_comet_internal(
+          scene_id,
+          model_id,
+          "Halley",
+          pos,
+          rot,
+          radius_km,
+          mass_kg,
+          physics_type,
+        )
+        .expect("spawn_comet_internal should succeed");
 
       let scenes = ctx.scenes.read();
       let scene_arc = scenes.get_scene(scene_id).unwrap();
@@ -673,16 +700,28 @@ fn test_spawn_comet_internal_bounds_and_hierarchy() {
       let comet_id = scene_ctx.entity_map.get(&comet_ext_id).unwrap().clone();
 
       // 1. Assert microframe is there on the specified position (2.0 AU)
-      let lca_transform = scene_ctx.scene.with_component(lca_id, |c: &crate::scene::TransformComponent| *c).unwrap();
+      let lca_transform = scene_ctx
+        .scene
+        .with_component(lca_id, |c: &crate::scene::TransformComponent| *c)
+        .unwrap();
       assert_eq!(lca_transform.position.x(), 2.0);
       assert_eq!(lca_transform.position.y(), 0.0);
       assert_eq!(lca_transform.position.z(), 0.0);
 
       // 2. Assert microframe scale is AU/km unit conversion (not soi_radius).
-      let lca_ref = scene_ctx.scene.with_component(lca_id, |c: &crate::scene::ReferenceFrameComponent| c.clone()).unwrap();
+      let lca_ref = scene_ctx
+        .scene
+        .with_component(lca_id, |c: &crate::scene::ReferenceFrameComponent| {
+          c.clone()
+        })
+        .unwrap();
       let expected_soi = 2.0_f32 - 0.0046524726_f32; // dist_au - SUN_RADIUS_AU
       let expected_scale = 1.0_f32 / 149_597_870.7_f32; // AU/km
-      assert!((lca_ref.scale - expected_scale).abs() < 1e-15, "scale should be AU/km, got {}", lca_ref.scale);
+      assert!(
+        (lca_ref.scale - expected_scale).abs() < 1e-15,
+        "scale should be AU/km, got {}",
+        lca_ref.scale
+      );
       assert!((lca_ref.soi_radius - expected_soi).abs() < 1e-4);
       let min_x = lca_transform.position.x() - lca_ref.soi_radius;
       assert!(min_x > 0.0, "Microframe bounds overlap with sun at origin!");
@@ -691,7 +730,10 @@ fn test_spawn_comet_internal_bounds_and_hierarchy() {
       assert_eq!(scene_ctx.scene.get_parent(comet_id).unwrap(), lca_id);
 
       // 4. Assert comet is in the center of the microframe
-      let comet_transform = scene_ctx.scene.with_component(comet_id, |c: &crate::scene::TransformComponent| *c).unwrap();
+      let comet_transform = scene_ctx
+        .scene
+        .with_component(comet_id, |c: &crate::scene::TransformComponent| *c)
+        .unwrap();
       assert_eq!(comet_transform.position.x(), 0.0);
       assert_eq!(comet_transform.position.y(), 0.0);
       assert_eq!(comet_transform.position.z(), 0.0);
@@ -701,12 +743,21 @@ fn test_spawn_comet_internal_bounds_and_hierarchy() {
       // bounding_sphere = 2.5 (from the test mesh: 5 vertices spanning [-5..5])
       let bounding_sphere = 2.5_f32; // half-extent length of the test mesh
       let expected_mesh_scale = 2.5_f32 / bounding_sphere;
-      assert!((comet_transform.scale.x() - expected_mesh_scale).abs() < expected_mesh_scale * 0.01,
-        "mesh scale: got {} expected {}", comet_transform.scale.x(), expected_mesh_scale);
+      assert!(
+        (comet_transform.scale.x() - expected_mesh_scale).abs() < expected_mesh_scale * 0.01,
+        "mesh scale: got {} expected {}",
+        comet_transform.scale.x(),
+        expected_mesh_scale
+      );
       assert!((comet_transform.scale.y() - expected_mesh_scale).abs() < expected_mesh_scale * 0.01);
       assert!((comet_transform.scale.z() - expected_mesh_scale).abs() < expected_mesh_scale * 0.01);
 
-      let comet_mesh_radius = scene_ctx.scene.with_component(comet_id, |c: &crate::scene::PhysicalMeshComponent| c.sphere_radius).unwrap();
+      let comet_mesh_radius = scene_ctx
+        .scene
+        .with_component(comet_id, |c: &crate::scene::PhysicalMeshComponent| {
+          c.sphere_radius
+        })
+        .unwrap();
       assert_eq!(comet_mesh_radius, 2.5);
 
       drop(scene_ctx);

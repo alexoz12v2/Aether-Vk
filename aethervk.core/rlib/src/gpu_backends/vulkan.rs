@@ -20,15 +20,13 @@ use heapless::index_map::FnvIndexMap;
 
 pub mod device;
 pub mod instance;
-pub mod utils;
 pub mod physics;
+pub mod utils;
 
 pub mod shader_tests;
 
 #[cfg(test)]
 pub mod mock_kernels;
-
-
 
 #[cfg(test)]
 pub mod mock_scene_data;
@@ -122,7 +120,6 @@ impl VulkanRenderContext {
   }
 }
 
-
 // TODO inject runtime callbacks (eg logging)
 impl InitWithRuntime<VulkanRenderContext> for VulkanRenderContext {
   fn init_with_runtime(params: &RuntimeParams) -> EngineResult<Self> {
@@ -201,7 +198,7 @@ impl RenderContext for VulkanRenderContext {
 
     if !core.live_devices.contains_key(&handle) {
       let instance = alloc::sync::Arc::clone(&core.instance);
-      
+
       // 1. We need to reserve space in the heapless map.
       // Since heapless doesn't have an 'entry' API for uninitialized memory,
       // we insert a "dummy" (zeroed) value first.
@@ -224,7 +221,7 @@ impl RenderContext for VulkanRenderContext {
           }
         }
       }
-      
+
       let mut guard = UninitGuard {
         map: &mut core.live_devices,
         handle,
@@ -236,17 +233,12 @@ impl RenderContext for VulkanRenderContext {
 
       // 3. Construct the device directly into that heap location.
       unsafe {
-        let init_result = device::Device::init_at_ptr(
-          dst_ptr,
-          instance,
-          index,
-          &query_input,
-        );
+        let init_result = device::Device::init_at_ptr(dst_ptr, instance, index, &query_input);
         if let Err(e) = init_result {
           return Err(e);
         }
       }
-      
+
       guard.defused = true;
     }
 

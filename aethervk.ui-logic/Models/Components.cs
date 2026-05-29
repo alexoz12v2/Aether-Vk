@@ -60,7 +60,9 @@ public partial class TransformComponent : NativeComponent
     if (SimulationContext == IntPtr.Zero)
       return;
 
-    System.Console.WriteLine($"[TransformComponent] PushToNativeImpl called! X={PosX}, Y={PosY}, Z={PosZ}. StackTrace:\n{new System.Diagnostics.StackTrace()}");
+    System.Console.WriteLine(
+      $"[TransformComponent] PushToNativeImpl called! X={PosX}, Y={PosY}, Z={PosZ}. StackTrace:\n{new System.Diagnostics.StackTrace()}"
+    );
 
     var data = new NativeInterop.FfiTransform
     {
@@ -110,22 +112,31 @@ public partial class TransformComponent : NativeComponent
   [CommunityToolkit.Mvvm.Input.RelayCommand]
   private void CopyPosition()
   {
-    string json = $"{{ \"x\": {PosX.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"y\": {PosY.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"z\": {PosZ.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}";
-    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(new AetherVk.Logic.Messages.CopyToClipboardMessage(json));
+    string json =
+      $"{{ \"x\": {PosX.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"y\": {PosY.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"z\": {PosZ.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}";
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+      new AetherVk.Logic.Messages.CopyToClipboardMessage(json)
+    );
   }
 
   [CommunityToolkit.Mvvm.Input.RelayCommand]
   private void CopyRotation()
   {
-    string json = $"{{ \"x\": {RotX.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"y\": {RotY.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"z\": {RotZ.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"w\": {RotW.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}";
-    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(new AetherVk.Logic.Messages.CopyToClipboardMessage(json));
+    string json =
+      $"{{ \"x\": {RotX.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"y\": {RotY.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"z\": {RotZ.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"w\": {RotW.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}";
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+      new AetherVk.Logic.Messages.CopyToClipboardMessage(json)
+    );
   }
 
   [CommunityToolkit.Mvvm.Input.RelayCommand]
   private void CopyScale()
   {
-    string json = $"{{ \"x\": {ScaleX.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"y\": {ScaleY.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"z\": {ScaleZ.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}";
-    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(new AetherVk.Logic.Messages.CopyToClipboardMessage(json));
+    string json =
+      $"{{ \"x\": {ScaleX.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"y\": {ScaleY.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"z\": {ScaleZ.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}";
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+      new AetherVk.Logic.Messages.CopyToClipboardMessage(json)
+    );
   }
 }
 
@@ -276,7 +287,7 @@ public partial class CameraComponent : NativeComponent
       NearPlane = data.Near;
       FarPlane = data.Far;
       FocusDistance = data.FocusDistance;
-      
+
       if (data.IsOrthographic)
       {
         OrthoLeft = data.OrthoLeft;
@@ -286,10 +297,10 @@ public partial class CameraComponent : NativeComponent
       }
 
       ProjectionMatrixPreview =
-        $"[ {data.Proj00,7:F2} {data.Proj10,7:F2} {data.Proj20,7:F2} {data.Proj30,7:F2} ]\n"
-        + $"[ {data.Proj01,7:F2} {data.Proj11,7:F2} {data.Proj21,7:F2} {data.Proj31,7:F2} ]\n"
-        + $"[ {data.Proj02,7:F2} {data.Proj12,7:F2} {data.Proj22,7:F2} {data.Proj32,7:F2} ]\n"
-        + $"[ {data.Proj03,7:F2} {data.Proj13,7:F2} {data.Proj23,7:F2} {data.Proj33,7:F2} ]";
+        $"[ {data.Proj00, 7:F2} {data.Proj10, 7:F2} {data.Proj20, 7:F2} {data.Proj30, 7:F2} ]\n"
+        + $"[ {data.Proj01, 7:F2} {data.Proj11, 7:F2} {data.Proj21, 7:F2} {data.Proj31, 7:F2} ]\n"
+        + $"[ {data.Proj02, 7:F2} {data.Proj12, 7:F2} {data.Proj22, 7:F2} {data.Proj32, 7:F2} ]\n"
+        + $"[ {data.Proj03, 7:F2} {data.Proj13, 7:F2} {data.Proj23, 7:F2} {data.Proj33, 7:F2} ]";
     }
   }
 }
@@ -448,13 +459,13 @@ public partial class JetMarker : ObservableObject
 
   public float RadiusKm
   {
-      get => Radius / 1000f;
-      set => Radius = value * 1000f;
+    get => Radius / 1000f;
+    set => Radius = value * 1000f;
   }
 
   partial void OnRadiusChanged(float value)
   {
-      OnPropertyChanged(nameof(RadiusKm));
+    OnPropertyChanged(nameof(RadiusKm));
   }
 
   [ObservableProperty]
@@ -468,13 +479,13 @@ public partial class JetMarker : ObservableObject
 
   public float MassGrams
   {
-      get => Mass * 1000f;
-      set => Mass = value / 1000f;
+    get => Mass * 1000f;
+    set => Mass = value / 1000f;
   }
 
   partial void OnMassChanged(float value)
   {
-      OnPropertyChanged(nameof(MassGrams));
+    OnPropertyChanged(nameof(MassGrams));
   }
 
   [ObservableProperty]
@@ -532,8 +543,6 @@ public partial class CometComponent : ObservableObject, IComponent
 // Spherical Gizmo Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Particle Emitter Circles
 // ─────────────────────────────────────────────────────────────────────────────
@@ -564,20 +573,27 @@ public partial class EmissionCircleItem : ObservableObject
 
   public float MassGrams
   {
-      get => Mass * 1000f;
-      set => Mass = value / 1000f;
+    get => Mass * 1000f;
+    set => Mass = value / 1000f;
   }
 
   partial void OnMassChanged(float value)
   {
-      OnPropertyChanged(nameof(MassGrams));
+    OnPropertyChanged(nameof(MassGrams));
   }
 
   // ── Colour ──────────────────────────────────────────────────────────────────
-  [ObservableProperty] private float _colorR = 1.0f;
-  [ObservableProperty] private float _colorG = 0.6f;
-  [ObservableProperty] private float _colorB = 0.2f;
-  [ObservableProperty] private float _colorA = 1.0f;
+  [ObservableProperty]
+  private float _colorR = 1.0f;
+
+  [ObservableProperty]
+  private float _colorG = 0.6f;
+
+  [ObservableProperty]
+  private float _colorB = 0.2f;
+
+  [ObservableProperty]
+  private float _colorA = 1.0f;
 
   // ── Emission Params ─────────────────────────────────────────────────────────
   [ObservableProperty]
@@ -591,13 +607,13 @@ public partial class EmissionCircleItem : ObservableObject
 
   public float MeanVelocityKms
   {
-      get => MeanVelocity / 1000f;
-      set => MeanVelocity = value * 1000f;
+    get => MeanVelocity / 1000f;
+    set => MeanVelocity = value * 1000f;
   }
 
   partial void OnMeanVelocityChanged(float value)
   {
-      OnPropertyChanged(nameof(MeanVelocityKms));
+    OnPropertyChanged(nameof(MeanVelocityKms));
   }
 }
 
@@ -616,7 +632,8 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
   {
     Circles.CollectionChanged += (s, e) =>
     {
-      if (_isSyncing) return;
+      if (_isSyncing)
+        return;
       if (e.NewItems != null)
       {
         foreach (EmissionCircleItem item in e.NewItems)
@@ -631,9 +648,13 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
     };
   }
 
-  private void Item_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+  private void Item_PropertyChanged(
+    object? sender,
+    System.ComponentModel.PropertyChangedEventArgs e
+  )
   {
-    if (_isSyncing) return;
+    if (_isSyncing)
+      return;
     PushToNativeImpl();
   }
 
@@ -647,7 +668,8 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
 
   protected override void PushToNativeImpl()
   {
-    if (SimulationContext == IntPtr.Zero) return;
+    if (SimulationContext == IntPtr.Zero)
+      return;
 
     var arr = new AetherVk.Logic.Services.NativeInterop.FfiEmissionCircle[Circles.Count];
     for (int i = 0; i < Circles.Count; i++)
@@ -669,17 +691,31 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
       };
     }
     AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setParticleEmitterCirclesComponent(
-      SimulationContext, SceneId, EntityId, arr, (uint)arr.Length);
+      SimulationContext,
+      SceneId,
+      EntityId,
+      arr,
+      (uint)arr.Length
+    );
   }
 
   protected override void PullFromNativeImpl()
   {
-    if (SimulationContext == IntPtr.Zero) return;
+    if (SimulationContext == IntPtr.Zero)
+      return;
 
     uint maxCount = 64;
     var arr = new AetherVk.Logic.Services.NativeInterop.FfiEmissionCircle[maxCount];
-    if (AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getParticleEmitterCirclesComponent(
-      SimulationContext, SceneId, EntityId, arr, maxCount, out uint actualCount))
+    if (
+      AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getParticleEmitterCirclesComponent(
+        SimulationContext,
+        SceneId,
+        EntityId,
+        arr,
+        maxCount,
+        out uint actualCount
+      )
+    )
     {
       _isSyncing = true;
       foreach (var c in Circles)
@@ -725,16 +761,28 @@ public partial class SphereGizmoComponent : NativeComponent
 
   protected override void PushToNativeImpl()
   {
-    if (SimulationContext == IntPtr.Zero) return;
+    if (SimulationContext == IntPtr.Zero)
+      return;
     AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setSphereGizmoVisibility(
-      SimulationContext, SceneId, EntityId, IsVisible);
+      SimulationContext,
+      SceneId,
+      EntityId,
+      IsVisible
+    );
   }
 
   protected override void PullFromNativeImpl()
   {
-    if (SimulationContext == IntPtr.Zero) return;
-    if (AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getSphereGizmoVisibility(
-      SimulationContext, SceneId, EntityId, out bool isVisible))
+    if (SimulationContext == IntPtr.Zero)
+      return;
+    if (
+      AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getSphereGizmoVisibility(
+        SimulationContext,
+        SceneId,
+        EntityId,
+        out bool isVisible
+      )
+    )
     {
       IsVisible = isVisible;
     }
@@ -743,60 +791,75 @@ public partial class SphereGizmoComponent : NativeComponent
 
 public partial class ScreenSpaceBillboardComponent : NativeComponent
 {
-    public override string Name => "Screen Space Billboard";
+  public override string Name => "Screen Space Billboard";
 
-    [ObservableProperty]
-    private string _imagePath = "";
+  [ObservableProperty]
+  private string _imagePath = "";
 
-    [ObservableProperty]
-    private float _ndcX;
+  [ObservableProperty]
+  private float _ndcX;
 
-    [ObservableProperty]
-    private float _ndcY;
+  [ObservableProperty]
+  private float _ndcY;
 
-    [ObservableProperty]
-    private float _scale = 1.0f;
+  [ObservableProperty]
+  private float _scale = 1.0f;
 
-    [ObservableProperty]
-    private float _rotationDeg;
+  [ObservableProperty]
+  private float _rotationDeg;
 
-    [ObservableProperty]
-    private float _opacity = 1.0f;
+  [ObservableProperty]
+  private float _opacity = 1.0f;
 
-    [ObservableProperty]
-    private int _zIndex = 1;
+  [ObservableProperty]
+  private int _zIndex = 1;
 
-    [ObservableProperty]
-    private ulong _viewportId;
+  [ObservableProperty]
+  private ulong _viewportId;
 
-    protected override bool ShouldPushToNative(string? propertyName)
+  protected override bool ShouldPushToNative(string? propertyName)
+  {
+    // ImagePath and ViewportId are set at creation only, not pushed on change
+    return propertyName != nameof(ImagePath) && propertyName != nameof(ViewportId);
+  }
+
+  protected override void PushToNativeImpl()
+  {
+    if (SimulationContext == IntPtr.Zero)
+      return;
+    NativeInterop.avkSimulationContext_setScreenSpaceBillboard(
+      SimulationContext,
+      SceneId,
+      EntityId,
+      NdcX,
+      NdcY,
+      Scale,
+      RotationDeg,
+      Opacity,
+      ZIndex
+    );
+  }
+
+  protected override void PullFromNativeImpl()
+  {
+    if (SimulationContext == IntPtr.Zero)
+      return;
+    if (
+      NativeInterop.avkSimulationContext_getScreenSpaceBillboard(
+        SimulationContext,
+        SceneId,
+        EntityId,
+        out var data
+      )
+    )
     {
-        // ImagePath and ViewportId are set at creation only, not pushed on change
-        return propertyName != nameof(ImagePath) && propertyName != nameof(ViewportId);
+      NdcX = data.NdcX;
+      NdcY = data.NdcY;
+      Scale = data.Scale;
+      RotationDeg = data.RotationDeg;
+      Opacity = data.Opacity;
+      ZIndex = data.ZIndex;
+      ViewportId = data.ViewportId;
     }
-
-    protected override void PushToNativeImpl()
-    {
-        if (SimulationContext == IntPtr.Zero) return;
-        NativeInterop.avkSimulationContext_setScreenSpaceBillboard(
-            SimulationContext, SceneId, EntityId,
-            NdcX, NdcY, Scale, RotationDeg, Opacity, ZIndex
-        );
-    }
-
-    protected override void PullFromNativeImpl()
-    {
-        if (SimulationContext == IntPtr.Zero) return;
-        if (NativeInterop.avkSimulationContext_getScreenSpaceBillboard(
-                SimulationContext, SceneId, EntityId, out var data))
-        {
-            NdcX = data.NdcX;
-            NdcY = data.NdcY;
-            Scale = data.Scale;
-            RotationDeg = data.RotationDeg;
-            Opacity = data.Opacity;
-            ZIndex = data.ZIndex;
-            ViewportId = data.ViewportId;
-        }
-    }
+  }
 }

@@ -345,7 +345,11 @@ impl ForeignSerializable for CameraComponent {
         fov: 0.0,
         aspect: {
           let h = top - bottom;
-          if h.abs() > 1e-6 { (right - left) / h } else { 1.0 }
+          if h.abs() > 1e-6 {
+            (right - left) / h
+          } else {
+            1.0
+          }
         },
         near,
         far,
@@ -1500,8 +1504,9 @@ impl Scene {
       let mut target_component_types = src_archetype.component_types.clone();
       target_component_types.insert(new_component_type);
 
-      let found_index =
-        archetypes.iter().position(|arch| arch.component_types == target_component_types);
+      let found_index = archetypes
+        .iter()
+        .position(|arch| arch.component_types == target_component_types);
       (found_index, found_index.is_none())
     };
 
@@ -1513,8 +1518,9 @@ impl Scene {
       let mut target_component_types = src_archetype.component_types.clone();
       target_component_types.insert(new_component_type);
 
-      if let Some(index) =
-        archetypes.iter().position(|arch| arch.component_types == target_component_types)
+      if let Some(index) = archetypes
+        .iter()
+        .position(|arch| arch.component_types == target_component_types)
       {
         index
       } else {
@@ -1624,8 +1630,9 @@ impl Scene {
       let mut target_component_types = src_archetype.component_types.clone();
       target_component_types.remove(&type_id_to_remove);
 
-      let found_index =
-        archetypes.iter().position(|arch| arch.component_types == target_component_types);
+      let found_index = archetypes
+        .iter()
+        .position(|arch| arch.component_types == target_component_types);
       (found_index, found_index.is_none())
     };
 
@@ -1639,8 +1646,9 @@ impl Scene {
       target_component_types.remove(&type_id_to_remove);
 
       // Re-check to prevent race conditions during write lock acquisition
-      if let Some(index) =
-        archetypes.iter().position(|arch| arch.component_types == target_component_types)
+      if let Some(index) = archetypes
+        .iter()
+        .position(|arch| arch.component_types == target_component_types)
       {
         index
       } else {
@@ -1767,8 +1775,9 @@ impl Scene {
   /// TODO: Document this item
   pub fn has_component<T: Component>(&self, entity_id: EntityId) -> HasComponentResultEnum {
     let archetypes = self.archetypes.read();
-    let archetype =
-      archetypes.iter().find(|archetype| archetype.entities.iter().any(|e| *e == Some(entity_id)));
+    let archetype = archetypes
+      .iter()
+      .find(|archetype| archetype.entities.iter().any(|e| *e == Some(entity_id)));
     if archetype.is_none() {
       return HasComponentResultEnum::EntityNotFound;
     }
@@ -3129,10 +3138,14 @@ impl Scene {
         let mut comp_storage1 = archetype.components.get(&type_t1).unwrap().write();
         let mut comp_storage2 = archetype.components.get(&type_t2).unwrap().write();
 
-        let components_vec1 =
-          comp_storage1.as_mut_any().downcast_mut::<alloc::vec::Vec<Option<T1>>>().unwrap();
-        let components_vec2 =
-          comp_storage2.as_mut_any().downcast_mut::<alloc::vec::Vec<Option<T2>>>().unwrap();
+        let components_vec1 = comp_storage1
+          .as_mut_any()
+          .downcast_mut::<alloc::vec::Vec<Option<T1>>>()
+          .unwrap();
+        let components_vec2 = comp_storage2
+          .as_mut_any()
+          .downcast_mut::<alloc::vec::Vec<Option<T2>>>()
+          .unwrap();
 
         for (i, opt_entity) in archetype.entities.iter().enumerate() {
           if let (Some(entity), Some(c1), Some(c2)) =

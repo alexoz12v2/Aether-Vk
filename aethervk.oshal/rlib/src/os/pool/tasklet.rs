@@ -32,7 +32,12 @@ impl<R> TaskletHandle<R> {
       core::hint::spin_loop();
     }
 
-    self.state.result.lock().take().expect("Result missing (tasklet panicked or was dropped)")
+    self
+      .state
+      .result
+      .lock()
+      .take()
+      .expect("Result missing (tasklet panicked or was dropped)")
   }
 }
 

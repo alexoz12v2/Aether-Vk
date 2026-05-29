@@ -66,7 +66,7 @@ impl SimulationContext {
         crate::simulation_api::structs::KernelsEnum::VulkanCompute(
           render_thread_params.render_frontend.weak_self(),
           render_thread_params.render_device_handle,
-        )
+        ),
       ));
       let logic_thread_params = LogicThreadParams::new(
         logic_thread_thread_pool,
@@ -171,8 +171,10 @@ impl SimulationContext {
       "scene_api:create_presentation_engine"
     );
     let mut scene_write = scene_ctx.write();
-    let root_entity =
-      scene_write.scene.get_root().ok_or(EngineError::InvalidOperation("empty scene"))?;
+    let root_entity = scene_write
+      .scene
+      .get_root()
+      .ok_or(EngineError::InvalidOperation("empty scene"))?;
     let camera_entity = {
       let mut presentation_engines = scene_write.presentation_engines.write();
       let presentation_engine_data = presentation_engines.get_mut(&presentation_engine).ok_or(EngineError::InvalidOperation("[SimulationContext] core_api:add_perspective_camera: inexistent presentation engine for given scene"))?;
@@ -212,8 +214,10 @@ impl SimulationContext {
       "scene_api:create_presentation_engine"
     );
     let mut scene_write = scene_ctx.write();
-    let root_entity =
-      scene_write.scene.get_root().ok_or(EngineError::InvalidOperation("empty scene"))?;
+    let root_entity = scene_write
+      .scene
+      .get_root()
+      .ok_or(EngineError::InvalidOperation("empty scene"))?;
     let camera_entity = {
       let mut presentation_engines = scene_write.presentation_engines.write();
       let presentation_engine_data = presentation_engines.get_mut(&presentation_engine).ok_or(EngineError::InvalidOperation("[SimulationContext] core_api:add_perspective_camera: inexistent presentation engine for given scene"))?;
@@ -302,11 +306,11 @@ impl SimulationContext {
       "core_api:set_camera_for_presentation_engine"
     );
     let scene_read = scene_ctx.read();
-    let internal_id = scene_read
-      .get_entity(camera_entity_external_id)
-      .ok_or_else(|| EngineError::InvalidOperation(
+    let internal_id = scene_read.get_entity(camera_entity_external_id).ok_or_else(|| {
+      EngineError::InvalidOperation(
         "[SimulationContext] core_api:set_camera_for_presentation_engine: entity not found",
-      ))?;
+      )
+    })?;
     let mut presentation_engines = scene_read.presentation_engines.write();
     let pe_data = presentation_engines
       .get_mut(&presentation_engine)

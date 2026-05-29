@@ -12,19 +12,29 @@ public class TrajectoryManagerService
   private readonly SceneStateManager _sceneStateManager;
   private readonly Dictionary<int, ulong> _spkTrajectoryEntities = new();
 
-  public TrajectoryManagerService(NativeRuntimeService runtimeService, SceneStateManager sceneStateManager)
+  public TrajectoryManagerService(
+    NativeRuntimeService runtimeService,
+    SceneStateManager sceneStateManager
+  )
   {
     _runtimeService = runtimeService;
     _sceneStateManager = sceneStateManager;
   }
 
-  public async Task EnsureTrajectoryForSpkAsync(ulong sceneId, int spkId, double startTai, double endTai, double stepDays)
+  public async Task EnsureTrajectoryForSpkAsync(
+    ulong sceneId,
+    int spkId,
+    double startTai,
+    double endTai,
+    double stepDays
+  )
   {
     if (!_spkTrajectoryEntities.TryGetValue(spkId, out ulong entityId))
     {
       // Spawn new entity
       var entity = _runtimeService.SpawnEntity(sceneId, $"Trajectory_SPK_{spkId}");
-      if (entity == null) return;
+      if (entity == null)
+        return;
       entityId = entity.Id;
 
       var root = _runtimeService.GetEntityByName(sceneId, "root");
@@ -38,14 +48,33 @@ public class TrajectoryManagerService
       _spkTrajectoryEntities[spkId] = entityId;
     }
 
-    await _runtimeService.UpdateTrajectoryForSpkAsync(sceneId, entityId, spkId, startTai, endTai, stepDays);
+    await _runtimeService.UpdateTrajectoryForSpkAsync(
+      sceneId,
+      entityId,
+      spkId,
+      startTai,
+      endTai,
+      stepDays
+    );
   }
 
-  public async Task UpdateAllTrajectoriesAsync(ulong sceneId, double startTai, double endTai, double stepDays)
+  public async Task UpdateAllTrajectoriesAsync(
+    ulong sceneId,
+    double startTai,
+    double endTai,
+    double stepDays
+  )
   {
     foreach (var kvp in _spkTrajectoryEntities)
     {
-      await _runtimeService.UpdateTrajectoryForSpkAsync(sceneId, kvp.Value, kvp.Key, startTai, endTai, stepDays);
+      await _runtimeService.UpdateTrajectoryForSpkAsync(
+        sceneId,
+        kvp.Value,
+        kvp.Key,
+        startTai,
+        endTai,
+        stepDays
+      );
     }
   }
 }

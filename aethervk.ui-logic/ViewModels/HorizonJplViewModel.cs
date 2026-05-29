@@ -51,10 +51,11 @@ public partial class HorizonJplViewModel : TabItemViewModel
   private bool _isDownloading;
 
   public HorizonJplViewModel(
-      HorizonJplService horizonService, 
-      ILocalStorageService localStorage, 
-      BreadcrumbService breadcrumb,
-      TimelineService timelineService)
+    HorizonJplService horizonService,
+    ILocalStorageService localStorage,
+    BreadcrumbService breadcrumb,
+    TimelineService timelineService
+  )
     : base("Horizon JPL")
   {
     _horizonService = horizonService;
@@ -86,7 +87,7 @@ public partial class HorizonJplViewModel : TabItemViewModel
   {
     if (SelectedComet == null)
       return;
-      
+
     var pdes = SelectedComet.PrimaryDesignation.Trim();
     string startStr = _timelineService.StartDate.ToString("yyyy-MM-dd");
     string stopStr = _timelineService.StopDate.ToString("yyyy-MM-dd");
@@ -116,11 +117,18 @@ public partial class HorizonJplViewModel : TabItemViewModel
     var start = _timelineService.StartDate;
     var stop = _timelineService.StopDate;
 
-    var fileName = $"spk-kernels/{pdes}-{spkId}-{start.ToString("yyyy-MM-dd")}-{stop.ToString("yyyy-MM-dd")}.spk";
+    var fileName =
+      $"spk-kernels/{pdes}-{spkId}-{start.ToString("yyyy-MM-dd")}-{stop.ToString("yyyy-MM-dd")}.spk";
     var savePath = _localStorage.GetPersistentPath(fileName);
 
     IsDownloading = true;
-    var success = await _horizonService.DownloadObservationAsync(pdes, spkId, start, stop, savePath);
+    var success = await _horizonService.DownloadObservationAsync(
+      pdes,
+      spkId,
+      start,
+      stop,
+      savePath
+    );
     IsDownloading = false;
   }
 

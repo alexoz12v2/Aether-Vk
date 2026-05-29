@@ -1,4 +1,5 @@
 //! misc_api module.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use crate::{
   expect_scene,
@@ -6,16 +7,11 @@ use crate::{
   scene::{CameraComponent, EntityId},
   simulation_api::{
     BREADCRUMB_CALLBACK, SimulationContext,
-    structs::{
-      RaycastResult, RenderCommand, Resize,
-      SimulationTaskResult, TaskStatusCode,
-    },
+    structs::{RaycastResult, RenderCommand, Resize, SimulationTaskResult, TaskStatusCode},
   },
   types::{EngineError, EngineResult},
 };
-use aethervk_oshal_rlib::{
-  self as oshal,
-};
+use aethervk_oshal_rlib::{self as oshal};
 use core::ffi::c_char;
 
 impl SimulationContext {
@@ -164,11 +160,9 @@ impl SimulationContext {
         .get(&presentation_engine_handle)
         .and_then(|pe| pe.camera_entity);
       if let Some(cam_id) = camera_entity {
-        let _ = scene_read
-          .scene
-          .with_component_mut(cam_id, |c: &mut CameraComponent| {
-            c.update_for_extent(width, height);
-          });
+        let _ = scene_read.scene.with_component_mut(cam_id, |c: &mut CameraComponent| {
+          c.update_for_extent(width, height);
+        });
       }
     }
 

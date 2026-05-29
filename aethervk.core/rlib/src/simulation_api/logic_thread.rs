@@ -537,7 +537,9 @@ fn process_command_internal(
         time_state.time_info.write().ut_discard_accumulator();
 
         // 3. Mark the Top-Level Acceleration Structure as dirty so it reconstructs bounding volumes
-        scene_ctx.is_static_tlas_dirty.store(true, core::sync::atomic::Ordering::Relaxed);
+        scene_ctx
+          .is_static_tlas_dirty
+          .store(true, core::sync::atomic::Ordering::Relaxed);
 
         // 4. Force rendering pipeline updates for the restored entity transforms
         let ext_ids: alloc::vec::Vec<u64> = scene_ctx.entity_map.keys().copied().collect();
@@ -557,7 +559,11 @@ fn process_command_internal(
       }
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::SetEntityVisibility { scene_id, entity, visible } => {
+    LogicCommand::SetEntityVisibility {
+      scene_id,
+      entity,
+      visible,
+    } => {
       use crate::scene::EntityId;
       let scenes = ctx.scenes.read();
       if let Some(scene_ctx_guard) = scenes.get(&scene_id) {
@@ -573,7 +579,7 @@ fn process_command_internal(
         let to_update: alloc::vec::Vec<EntityId> = {
           let r = scene_ctx_guard.read();
           let mut queue = alloc::vec![root_id];
-          let mut all   = alloc::vec![root_id];
+          let mut all = alloc::vec![root_id];
           while let Some(current) = queue.pop() {
             if let Some(children) = r.scene.get_children(current) {
               for child in children {
@@ -607,8 +613,9 @@ fn process_command_internal(
       let scene_read = scene.read();
 
       let mut cursor_pos = None;
-      if let Some((cursor_id, _)) =
-        scene_read.scene.query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
+      if let Some((cursor_id, _)) = scene_read
+        .scene
+        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
       {
         if let Some(pos) =
           scene_read.scene.with_component(cursor_id, |t: &TransformComponent| t.position)
@@ -617,8 +624,9 @@ fn process_command_internal(
 
           // Optional: Sync focus distance dynamically so your zoom/pan speeds stay stable
           // based on the distance to the cursor object you are pivoting around.
-          if let Some(cam_pos) =
-            scene_read.scene.with_component(camera_entity, |t: &TransformComponent| t.position)
+          if let Some(cam_pos) = scene_read
+            .scene
+            .with_component(camera_entity, |t: &TransformComponent| t.position)
           {
             let dist = (pos - cam_pos).length();
             let _ =
@@ -639,8 +647,11 @@ fn process_command_internal(
         cursor_pos,
       )?;
 
-      if let Some(ext_id) =
-        scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
+      if let Some(ext_id) = scene_read
+        .entity_map
+        .iter()
+        .find(|&(_, v)| *v == camera_entity)
+        .map(|(k, _)| *k)
       {
         scene_read.mark_component_changed(
           ext_id,
@@ -684,8 +695,11 @@ fn process_command_internal(
             *top *= zoom_factor;
           }
         });
-        if let Some(ext_id) =
-          scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
+        if let Some(ext_id) = scene_read
+          .entity_map
+          .iter()
+          .find(|&(_, v)| *v == camera_entity)
+          .map(|(k, _)| *k)
         {
           scene_read.mark_component_changed(
             ext_id,
@@ -719,8 +733,11 @@ fn process_command_internal(
         },
       );
 
-      if let Some(ext_id) =
-        scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
+      if let Some(ext_id) = scene_read
+        .entity_map
+        .iter()
+        .find(|&(_, v)| *v == camera_entity)
+        .map(|(k, _)| *k)
       {
         scene_read.mark_component_changed(
           ext_id,
@@ -740,8 +757,9 @@ fn process_command_internal(
       let scene_read = scene.read();
 
       let mut cursor_pos = Vec3f32::zero();
-      if let Some((sun_id, _)) =
-        scene_read.scene.query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
+      if let Some((sun_id, _)) = scene_read
+        .scene
+        .query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
       {
         if let Some(pos) =
           scene_read.scene.with_component(sun_id, |t: &TransformComponent| t.position)
@@ -750,8 +768,9 @@ fn process_command_internal(
         }
       }
 
-      if let Some((cursor_id, _)) =
-        scene_read.scene.query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
+      if let Some((cursor_id, _)) = scene_read
+        .scene
+        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
       {
         let _ = scene_read.scene.with_component_mut(cursor_id, |c: &mut TransformComponent| {
           c.position = cursor_pos;
@@ -777,8 +796,11 @@ fn process_command_internal(
       let _ = scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
         c.focus_distance = HOME_DISTANCE;
       });
-      if let Some(ext_id) =
-        scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
+      if let Some(ext_id) = scene_read
+        .entity_map
+        .iter()
+        .find(|&(_, v)| *v == camera_entity)
+        .map(|(k, _)| *k)
       {
         scene_read.mark_component_changed(
           ext_id,
@@ -796,8 +818,11 @@ fn process_command_internal(
       let scene_read = scene.read();
       use crate::scene::camera::SceneCameraExt;
       scene_read.scene.pan_camera(camera_entity, delta_x, delta_y)?;
-      if let Some(ext_id) =
-        scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k)
+      if let Some(ext_id) = scene_read
+        .entity_map
+        .iter()
+        .find(|&(_, v)| *v == camera_entity)
+        .map(|(k, _)| *k)
       {
         scene_read.mark_component_changed(
           ext_id,
@@ -849,16 +874,17 @@ fn process_command_internal(
       const SNAP_DISTANCE: f32 = 0.7;
       let target_pos = {
         #[allow(deprecated)]
-        scene_read.scene.global_transform(target_entity)
-          .map(|t| t.position)
-          .ok_or(EngineError::InvalidOperation(
+        scene_read.scene.global_transform(target_entity).map(|t| t.position).ok_or(
+          EngineError::InvalidOperation(
             "logic_thread:SnapToEntity | target entity doesn't have TransformComponent",
-          ))?
+          ),
+        )?
       };
 
       // Move cursor to target entity world position.
-      if let Some((cursor_id, _)) =
-        scene_read.scene.query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
+      if let Some((cursor_id, _)) = scene_read
+        .scene
+        .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
       {
         let _ = scene_read.scene.with_component_mut(cursor_id, |c: &mut TransformComponent| {
           c.position = target_pos;
@@ -1043,7 +1069,10 @@ fn process_command_internal(
       }
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::SeekEpoch { scene_id, epoch_tai_seconds } => {
+    LogicCommand::SeekEpoch {
+      scene_id,
+      epoch_tai_seconds,
+    } => {
       let new_epoch = anise::time::Epoch::from_tai_seconds(epoch_tai_seconds);
       let fixed_dt_us;
 
@@ -1057,9 +1086,16 @@ fn process_command_internal(
             ts.current_epoch = new_epoch;
             ts.st_seconds_elapsed = 0.0;
           }
-          fixed_dt_us = scene_read.time_state.read().time_info.read()
-            .fixed_delta_time.load(core::sync::atomic::Ordering::Relaxed);
-          scene_read.is_static_tlas_dirty.store(true, core::sync::atomic::Ordering::Relaxed);
+          fixed_dt_us = scene_read
+            .time_state
+            .read()
+            .time_info
+            .read()
+            .fixed_delta_time
+            .load(core::sync::atomic::Ordering::Relaxed);
+          scene_read
+            .is_static_tlas_dirty
+            .store(true, core::sync::atomic::Ordering::Relaxed);
         } else {
           return Ok(SimulationTaskResult::None);
         }
@@ -1264,8 +1300,9 @@ fn process_command_internal(
 
       // Update TransformComponent to match the Sun's position
       let mut sun_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
-      if let Some((sun_id, _)) =
-        scene_guard.scene.query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
+      if let Some((sun_id, _)) = scene_guard
+        .scene
+        .query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
       {
         if let Some(pos) = {
           #[allow(deprecated)]
@@ -1376,8 +1413,11 @@ fn execute_simulation_tick(
 
     let (is_manual, step_days, fixed_dt_us, current_epoch) = {
       let mut ts_write = time_state_arc.write();
-      let fixed_dt_us =
-        ts_write.time_info.read().fixed_delta_time.load(core::sync::atomic::Ordering::Relaxed);
+      let fixed_dt_us = ts_write
+        .time_info
+        .read()
+        .fixed_delta_time
+        .load(core::sync::atomic::Ordering::Relaxed);
       if ts_write.manual_step_requests > 0.0 {
         let step = ts_write.manual_step_requests;
         ts_write.manual_step_requests = 0.0;
@@ -1592,7 +1632,7 @@ fn execute_simulation_tick(
         for (ext_id, comp_id, boxed_dto) in changes_to_stream {
           let data_ptr = match &boxed_dto {
             Some(dto) => &**dto as *const _ as *const core::ffi::c_void,
-            None => core::ptr::null(),  // Pull-signal: C# will call PullFromNative()
+            None => core::ptr::null(), // Pull-signal: C# will call PullFromNative()
           };
           cb(scene_id, ext_id, comp_id, data_ptr);
         }
@@ -1834,7 +1874,9 @@ fn try_snap_entity(
     ))?;
     (t.position, t.rotation)
   };
-  let res = scene_read.scene.set_global_position_and_rotation(snap_entity, target_pos, target_rot);
+  let res = scene_read
+    .scene
+    .set_global_position_and_rotation(snap_entity, target_pos, target_rot);
   if res.is_ok() {
     if let Some(ext_id) =
       scene_read.entity_map.iter().find(|&(_, v)| *v == snap_entity).map(|(k, _)| *k)

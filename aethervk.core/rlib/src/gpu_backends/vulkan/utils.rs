@@ -78,8 +78,9 @@ impl PhysicalDeviceQueryInput {
     #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
     let visual_id: vk::VisualID = *_value.get(&super::DEVICE_ADDIDITIONAL_PARAM_VISUAL_ID)? as _;
 
-    let debug_shaders =
-      _value.get(&super::DEVICE_ADDIDITIONAL_PARAM_DEBUG_SHADERS).map_or(false, |v| *v != 0);
+    let debug_shaders = _value
+      .get(&super::DEVICE_ADDIDITIONAL_PARAM_DEBUG_SHADERS)
+      .map_or(false, |v| *v != 0);
 
     Some(Self {
       #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
@@ -212,7 +213,10 @@ impl PhysicalDeviceQueryResult {
     let mut the_vec: Vec<*const c_char> =
       required_device_extensions().iter().map(|cstr| cstr.as_ptr()).collect();
 
-    if self.optional_extensions.contains(OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1) {
+    if self
+      .optional_extensions
+      .contains(OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1)
+    {
       the_vec.push(ash::ext::swapchain_maintenance1::NAME.as_ptr());
     }
 
@@ -668,8 +672,9 @@ pub(super) fn first_unsupported_extension<'a>(
   properties: &'a [vk::ExtensionProperties],
 ) -> Option<&'a CStr> {
   for desired_name in desired_names {
-    if let None =
-      properties.iter().find(|&prop| *desired_name == prop.extension_name_as_c_str().unwrap())
+    if let None = properties
+      .iter()
+      .find(|&prop| *desired_name == prop.extension_name_as_c_str().unwrap())
     {
       return Some(desired_name);
     }

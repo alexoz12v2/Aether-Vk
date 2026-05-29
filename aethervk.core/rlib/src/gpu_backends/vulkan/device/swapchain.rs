@@ -745,9 +745,15 @@ impl WindowedPresentationState {
       let new_len = self.images.len();
       for i in new_len..self.frames.len() {
         let mut orphaned = core::mem::take(&mut self.frame_discards[i]);
-        self.frame_discards[0].discarded_swapchains.append(&mut orphaned.discarded_swapchains);
-        self.frame_discards[0].discarded_semaphores.append(&mut orphaned.discarded_semaphores);
-        self.frame_discards[0].discarded_image_views.append(&mut orphaned.discarded_image_views);
+        self.frame_discards[0]
+          .discarded_swapchains
+          .append(&mut orphaned.discarded_swapchains);
+        self.frame_discards[0]
+          .discarded_semaphores
+          .append(&mut orphaned.discarded_semaphores);
+        self.frame_discards[0]
+          .discarded_image_views
+          .append(&mut orphaned.discarded_image_views);
         self.frame_discards[0].discarded_fences.append(&mut orphaned.discarded_fences);
         self.frame_discards[0]
           .discarded_present_fences_to_wait
@@ -756,7 +762,9 @@ impl WindowedPresentationState {
           .discarded_present_fences_to_destroy
           .append(&mut orphaned.discarded_present_fences_to_destroy);
         self.frame_discards[0].discarded_images.append(&mut orphaned.discarded_images);
-        self.frame_discards[0].discarded_memories.append(&mut orphaned.discarded_memories);
+        self.frame_discards[0]
+          .discarded_memories
+          .append(&mut orphaned.discarded_memories);
 
         // Pass down legacy protections if applicable
         self.frame_discards[0].skip_cycles =
@@ -2049,12 +2057,20 @@ impl WindowlessPresentationState {
       let new_len = image_count;
       for i in new_len..self.frame_discards.len() {
         let mut orphaned = core::mem::take(&mut self.frame_discards[i]);
-        self.frame_discards[0].discarded_swapchains.append(&mut orphaned.discarded_swapchains);
-        self.frame_discards[0].discarded_semaphores.append(&mut orphaned.discarded_semaphores);
-        self.frame_discards[0].discarded_image_views.append(&mut orphaned.discarded_image_views);
+        self.frame_discards[0]
+          .discarded_swapchains
+          .append(&mut orphaned.discarded_swapchains);
+        self.frame_discards[0]
+          .discarded_semaphores
+          .append(&mut orphaned.discarded_semaphores);
+        self.frame_discards[0]
+          .discarded_image_views
+          .append(&mut orphaned.discarded_image_views);
         self.frame_discards[0].discarded_fences.append(&mut orphaned.discarded_fences);
         self.frame_discards[0].discarded_images.append(&mut orphaned.discarded_images);
-        self.frame_discards[0].discarded_memories.append(&mut orphaned.discarded_memories);
+        self.frame_discards[0]
+          .discarded_memories
+          .append(&mut orphaned.discarded_memories);
       }
       self.frame_discards.truncate(new_len);
     }

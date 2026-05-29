@@ -29,7 +29,9 @@ pub static mut PANIC_CALLBACK: Option<PanicCallback> = None;
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_registerPanicCallback(cb: PanicCallback) {
-  unsafe { PANIC_CALLBACK = Some(cb); }
+  unsafe {
+    PANIC_CALLBACK = Some(cb);
+  }
 }
 
 // -------------------- C Exposed API (Async & Stateless) ----------------------------
@@ -53,13 +55,13 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
     unsafe { CStr::from_ptr(backend).to_str().unwrap_or("") }
   };
   if let Some(backend) = backend_id_from_str(backend_str) {
-    SimulationContext::startup(backend, None).map(|boxed| Box::into_raw(boxed)).unwrap_or_else(
-      |e| {
+    SimulationContext::startup(backend, None)
+      .map(|boxed| Box::into_raw(boxed))
+      .unwrap_or_else(|e| {
         oshal::log!("avkSimulationContext_startup failed: {}", e.to_string());
         emit_breadcrumb(1, &alloc::format!("Startup failed: {}", e.to_string()));
         core::ptr::null_mut()
-      },
-    )
+      })
   } else {
     oshal::log!("Unsupported backend: {}", backend_str);
     core::ptr::null_mut()
@@ -290,7 +292,10 @@ pub unsafe extern "C" fn avkSimulationContext_createPresentationEngine(
     return 0;
   }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.create_presentation_engine(scene_id, width, height).map(|h| h.0).unwrap_or(0)
+  ctx_ref
+    .create_presentation_engine(scene_id, width, height)
+    .map(|h| h.0)
+    .unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
@@ -370,7 +375,10 @@ pub unsafe extern "C" fn avkSimulationContext_setSceneDebugName(
 
 /// Prints the full scene hierarchy to the log in a tree format (debug builds only).
 #[cfg(debug_assertions)]
-fn debug_print_scene_hierarchy(ctx_ref: &aethervk_core_rlib::simulation_api::SimulationContext, scene_id: u64) {
+fn debug_print_scene_hierarchy(
+  ctx_ref: &aethervk_core_rlib::simulation_api::SimulationContext,
+  scene_id: u64,
+) {
   let scene_arc = match ctx_ref.scenes.read().get_scene(scene_id) {
     Some(s) => s,
     None => {
@@ -392,7 +400,11 @@ fn debug_print_scene_hierarchy(ctx_ref: &aethervk_core_rlib::simulation_api::Sim
     }
   }
 
-  oshal::log!("[Scene Hierarchy] scene={} total_entities={}", scene_id, all_ext_ids.len());
+  oshal::log!(
+    "[Scene Hierarchy] scene={} total_entities={}",
+    scene_id,
+    all_ext_ids.len()
+  );
 
   // DFS print helper using an explicit stack to avoid recursion in no_std.
   // Stack entries: (ext_id, depth)
@@ -416,7 +428,13 @@ fn debug_print_scene_hierarchy(ctx_ref: &aethervk_core_rlib::simulation_api::Sim
     } else {
       components.join(", ")
     };
-    oshal::log!("{}├─ \"{}\" [ext={}] {{{}}}", indent, name, ext_id, comp_str);
+    oshal::log!(
+      "{}├─ \"{}\" [ext={}] {{{}}}",
+      indent,
+      name,
+      ext_id,
+      comp_str
+    );
 
     // Push children in reverse order so first child prints first.
     if let Some(children) = scene_ctx.scene.get_children(int_id) {
@@ -459,7 +477,6 @@ pub unsafe extern "C" fn avkSimulationContext_spawnEntity(
 
   result
 }
-
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -521,12 +538,12 @@ pub unsafe extern "C" fn avkSimulationContext_getSceneHierarchy(
     if capacity < count || out_buffer.is_null() {
       return false;
     }
-    
+
     let mut reverse_map = alloc::collections::BTreeMap::new();
     for (&ext_id, &int_id) in scene_ctx.entity_map.iter() {
       reverse_map.insert(int_id, ext_id);
     }
-    
+
     let mut idx = 0;
     for (&ext_id, &int_id) in scene_ctx.entity_map.iter() {
       // Scene has a method to get parent directly, or we can add it
@@ -577,7 +594,16 @@ pub unsafe extern "C" fn avkSimulationContext_spawnBillboard(
       1.0,  // height
     );
     let _ = ctx_ref.add_screen_space_billboard_component(
-      scene_id, entity_id, image_path_str, 0.0, 0.0, 1.0, 0.0, 1.0, 1, 0,
+      scene_id,
+      entity_id,
+      image_path_str,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      1,
+      0,
     );
     unsafe {
       *out_entity_id = entity_id;
@@ -652,7 +678,12 @@ pub unsafe extern "C" fn avkSimulationContext_spawnTrajectory(
   segments: *const aethervk_core_rlib::gpu::RationalBezierGpu,
   segment_count: u32,
 ) -> u64 {
-  if ctx.is_null() || name.is_null() || trajectory.is_null() || segments.is_null() || segment_count == 0 {
+  if ctx.is_null()
+    || name.is_null()
+    || trajectory.is_null()
+    || segments.is_null()
+    || segment_count == 0
+  {
     return 0;
   }
   let ctx_ref = unsafe { &*ctx };
@@ -710,43 +741,69 @@ pub unsafe extern "C" fn avkSimulationContext_spawnTrajectoryFromElements(
   // Standard NURBS-circle approximation adapted for an ellipse.
   const PI: f64 = core::f64::consts::PI;
 
-  let a  = a_au;
-  let b  = a * (1.0_f64 - e * e).max(0.0).sqrt();
-  let c  = a * e;  // focus offset (shift ellipse so focus is at origin)
+  let a = a_au;
+  let b = a * (1.0_f64 - e * e).max(0.0).sqrt();
+  let c = a * e; // focus offset (shift ellipse so focus is at origin)
 
   // Bézier weight for the middle control points of a 90° conic arc
   let w_inner: f64 = (1.0 + 2.0_f64.sqrt()) / 3.0;
-  let k:       f64 = 2.0 - 2.0_f64.sqrt();
+  let k: f64 = 2.0 - 2.0_f64.sqrt();
 
   // 4 quadrant arcs (perifocal frame, focus at origin via -c shift)
   //   Each arc: [CP0, CP1, CP2, CP3] where CP = [x, y, weight]
   let quads: [[[f64; 3]; 4]; 4] = [
-    [[ a, 0.0, 1.0], [ a, b*k, w_inner], [ a*k, b, w_inner], [0.0, b, 1.0]],
-    [[0.0, b, 1.0], [-a*k, b, w_inner], [-a, b*k, w_inner], [-a, 0.0, 1.0]],
-    [[-a, 0.0, 1.0], [-a, -b*k, w_inner], [-a*k, -b, w_inner], [0.0, -b, 1.0]],
-    [[0.0, -b, 1.0], [ a*k, -b, w_inner], [ a, -b*k, w_inner], [ a, 0.0, 1.0]],
+    [
+      [a, 0.0, 1.0],
+      [a, b * k, w_inner],
+      [a * k, b, w_inner],
+      [0.0, b, 1.0],
+    ],
+    [
+      [0.0, b, 1.0],
+      [-a * k, b, w_inner],
+      [-a, b * k, w_inner],
+      [-a, 0.0, 1.0],
+    ],
+    [
+      [-a, 0.0, 1.0],
+      [-a, -b * k, w_inner],
+      [-a * k, -b, w_inner],
+      [0.0, -b, 1.0],
+    ],
+    [
+      [0.0, -b, 1.0],
+      [a * k, -b, w_inner],
+      [a, -b * k, w_inner],
+      [a, 0.0, 1.0],
+    ],
   ];
 
-  let i   = i_deg   * PI / 180.0;
-  let Om  = omega_deg   * PI / 180.0;
-  let w   = argperi_deg * PI / 180.0;
+  let i = i_deg * PI / 180.0;
+  let Om = omega_deg * PI / 180.0;
+  let w = argperi_deg * PI / 180.0;
 
-  let cos_Om = Om.cos(); let sin_Om = Om.sin();
-  let cos_i  = i.cos();  let sin_i  = i.sin();
-  let cos_w  = w.cos();  let sin_w  = w.sin();
+  let cos_Om = Om.cos();
+  let sin_Om = Om.sin();
+  let cos_i = i.cos();
+  let sin_i = i.sin();
+  let cos_w = w.cos();
+  let sin_w = w.sin();
 
   // Rotation matrix rows (perifocal → ecliptic J2000)
-  let rxx =  cos_Om * cos_w - sin_Om * sin_w * cos_i;
+  let rxx = cos_Om * cos_w - sin_Om * sin_w * cos_i;
   let rxy = -cos_Om * sin_w - sin_Om * cos_w * cos_i;
-  let ryx =  sin_Om * cos_w + cos_Om * sin_w * cos_i;
+  let ryx = sin_Om * cos_w + cos_Om * sin_w * cos_i;
   let ryy = -sin_Om * sin_w + cos_Om * cos_w * cos_i;
-  let rzx =  sin_w * sin_i;
-  let rzy =  cos_w * sin_i;
+  let rzx = sin_w * sin_i;
+  let rzy = cos_w * sin_i;
 
-  let mut segs: [aethervk_core_rlib::gpu::RationalBezierGpu; 4] = [
-    aethervk_core_rlib::gpu::RationalBezierGpu { cp0: [0.0; 4], cp1: [0.0; 4], cp2: [0.0; 4], cp3: [0.0; 4] };
-    4
-  ];
+  let mut segs: [aethervk_core_rlib::gpu::RationalBezierGpu; 4] =
+    [aethervk_core_rlib::gpu::RationalBezierGpu {
+      cp0: [0.0; 4],
+      cp1: [0.0; 4],
+      cp2: [0.0; 4],
+      cp3: [0.0; 4],
+    }; 4];
 
   for (qi, quad) in quads.iter().enumerate() {
     let cps = [
@@ -756,7 +813,7 @@ pub unsafe extern "C" fn avkSimulationContext_spawnTrajectoryFromElements(
       &mut segs[qi].cp3,
     ];
     for (pi, cp) in cps.into_iter().enumerate() {
-      let xp = quad[pi][0] - c;  // shift: focus at origin
+      let xp = quad[pi][0] - c; // shift: focus at origin
       let yp = quad[pi][1];
       let wt = quad[pi][2] as f32;
 
@@ -779,7 +836,10 @@ pub unsafe extern "C" fn avkSimulationContext_spawnTrajectoryFromElements(
   match ctx_ref.spawn_trajectory_internal(scene_id, parent_entity, name_str, traj, &segs) {
     Ok(entity_id) => entity_id,
     Err(e) => {
-      oshal::log!("avkSimulationContext_spawnTrajectoryFromElements failed: {:?}", e);
+      oshal::log!(
+        "avkSimulationContext_spawnTrajectoryFromElements failed: {:?}",
+        e
+      );
       0
     }
   }
@@ -969,7 +1029,9 @@ pub unsafe extern "C" fn avkSimulationContext_setParticleEmitterCirclesComponent
     });
   }
 
-  ctx_ref.set_particle_emitter_circles_component(scene_id, entity, rust_circles).is_ok()
+  ctx_ref
+    .set_particle_emitter_circles_component(scene_id, entity, rust_circles)
+    .is_ok()
 }
 
 #[unsafe(no_mangle)]
@@ -1230,7 +1292,8 @@ pub unsafe extern "C" fn avkSimulationContext_setKinematicVelocity(
         let _ = scene_ctx.scene.with_component_mut(
           internal_id,
           |kin: &mut aethervk_core_rlib::scene::KinematicComponent| {
-            kin.velocity = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(vx, vy, vz);
+            kin.velocity =
+              aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(vx, vy, vz);
             found = true;
           },
         );
@@ -1240,7 +1303,6 @@ pub unsafe extern "C" fn avkSimulationContext_setKinematicVelocity(
   }
   false
 }
-
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -1595,10 +1657,14 @@ pub unsafe extern "C" fn avkSimulationContext_unloadAlmanacFile(
   let ctx_ref = unsafe { &*ctx };
   let path_str = unsafe { CStr::from_ptr(path).to_str().unwrap_or("").to_string() };
   let task_id = ctx_ref.task_manager.write().create_task().get();
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::UnloadAlmanac {
-    task_id,
-    path: path_str,
-  });
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::UnloadAlmanac {
+      task_id,
+      path: path_str,
+    });
   task_id
 }
 
@@ -1673,8 +1739,11 @@ pub unsafe extern "C" fn avkSimulationContext_getEphemerisPosition(
   let frame = anise::constants::frames::SUN_J2000;
   let epoch = anise::time::Epoch::from_tai_seconds(epoch_tai_sec);
 
-  if let Ok(state) =
-    ctx_ref.logic_state.read().almanac_data.get_ephem_full(spk_id, frame, epoch, true, false)
+  if let Ok(state) = ctx_ref
+    .logic_state
+    .read()
+    .almanac_data
+    .get_ephem_full(spk_id, frame, epoch, true, false)
   {
     unsafe {
       *out_pos = FfiKinematicState::from(state);
@@ -1703,15 +1772,19 @@ pub unsafe extern "C" fn avkSimulationContext_updateTrajectoryForSpk(
 
   let task_id = ctx_ref.task_manager.write().create_task().get();
   let _ =
-    ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::UpdateTrajectoryForSpk {
-      task_id,
-      scene_id,
-      entity_id,
-      spk_id,
-      start_epoch_tai_sec,
-      end_epoch_tai_sec,
-      sample_step_days,
-    });
+    ctx_ref
+      .threads
+      .logic_thread
+      .tx()
+      .try_send(structs::LogicCommand::UpdateTrajectoryForSpk {
+        task_id,
+        scene_id,
+        entity_id,
+        spk_id,
+        start_epoch_tai_sec,
+        end_epoch_tai_sec,
+        sample_step_days,
+      });
   task_id
 }
 
@@ -1733,12 +1806,16 @@ pub unsafe extern "C" fn avkSimulationContext_spawnModelInstance(
     unsafe { CStr::from_ptr(name).to_str().unwrap_or("ModelInstance").to_string() }
   };
   let task_id = ctx_ref.task_manager.write().create_task().get();
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::SpawnModelInstance {
-    task_id,
-    scene_id,
-    model_id,
-    name: name_str,
-  });
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::SpawnModelInstance {
+      task_id,
+      scene_id,
+      model_id,
+      name: name_str,
+    });
   task_id
 }
 
@@ -1819,7 +1896,10 @@ pub unsafe extern "C" fn avkSimulationContext_raycastNdc(
     return 0;
   }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.raycast_ndc(scene_id, camera_id, ndc_x, ndc_y).map(|id| id.get()).unwrap_or(0)
+  ctx_ref
+    .raycast_ndc(scene_id, camera_id, ndc_x, ndc_y)
+    .map(|id| id.get())
+    .unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
@@ -1835,10 +1915,12 @@ pub unsafe extern "C" fn avkSimulationContext_spawnProceduralSphere(
     return 0;
   }
   let ctx_ref = unsafe { &*ctx };
-  ctx_ref.spawn_procedural_sphere(scene_id, name, radius, mass).unwrap_or_else(|e| {
-    oshal::log!("spawn_procedural_sphere failed: {}", e);
-    0
-  })
+  ctx_ref
+    .spawn_procedural_sphere(scene_id, name, radius, mass)
+    .unwrap_or_else(|e| {
+      oshal::log!("spawn_procedural_sphere failed: {}", e);
+      0
+    })
 }
 
 // --- Camera & Cursor Commands ---
@@ -2121,12 +2203,16 @@ pub unsafe extern "C" fn avkSimulationContext_unfollowEntity(
     None => return 0,
   };
   let task_id = ctx_ref.task_manager.write().create_task().get();
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::UnfollowEntity(
-    structs::UnfollowEntity {
-      entity_id: internal_entity,
-      scene,
-    },
-  ));
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::UnfollowEntity(
+      structs::UnfollowEntity {
+        entity_id: internal_entity,
+        scene,
+      },
+    ));
   task_id
 }
 
@@ -2365,7 +2451,11 @@ pub unsafe extern "C" fn avkSimulationContext_playScene(
     return;
   }
   let ctx_ref = unsafe { &*ctx };
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::PlayScene { scene_id });
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::PlayScene { scene_id });
 }
 
 #[unsafe(no_mangle)]
@@ -2378,8 +2468,11 @@ pub unsafe extern "C" fn avkSimulationContext_snapshotScene(
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  let _ =
-    ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::SnapshotScene { scene_id });
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::SnapshotScene { scene_id });
   true
 }
 
@@ -2393,8 +2486,11 @@ pub unsafe extern "C" fn avkSimulationContext_restoreSnapshot(
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  let _ =
-    ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::RestoreSnapshot { scene_id });
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::RestoreSnapshot { scene_id });
   true
 }
 
@@ -2408,8 +2504,11 @@ pub unsafe extern "C" fn avkSimulationContext_pauseScene(
     return;
   }
   let ctx_ref = unsafe { &*ctx };
-  let _ =
-    ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::PauseScene { scene_id });
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::PauseScene { scene_id });
 }
 
 #[unsafe(no_mangle)]
@@ -2429,10 +2528,14 @@ pub unsafe extern "C" fn avkSimulationContext_setTimeScale(
     3 => structs::TimeScale::OneMonth,
     _ => structs::TimeScale::Stopped,
   };
-  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::SetSceneTimeScale {
-    scene_id,
-    scale: time_scale,
-  });
+  let _ = ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(structs::LogicCommand::SetSceneTimeScale {
+      scene_id,
+      scale: time_scale,
+    });
 }
 
 /// the C# caller should be responsible for polling getTaskStatus and only calling download_image once the status is completed.
@@ -2586,18 +2689,21 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraComponent(
     })
   };
   let _ = ctx_ref.set_camera_component(scene_id, entity, params);
-  
+
   if let Some(s) = ctx_ref.get_scene(scene_id) {
     let e_opt = s.read().get_entity(entity);
     if let Some(e) = e_opt {
       let mut scene_write = s.write();
-      let _ = scene_write.scene.with_component_mut(e, |comp: &mut aethervk_core_rlib::scene::CameraComponent| {
-        comp.focus_distance = c.focus_distance;
-        true
-      });
+      let _ = scene_write.scene.with_component_mut(
+        e,
+        |comp: &mut aethervk_core_rlib::scene::CameraComponent| {
+          comp.focus_distance = c.focus_distance;
+          true
+        },
+      );
     }
   }
-  
+
   true
 }
 
@@ -2620,9 +2726,11 @@ pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
       let s_guard = s.read();
       if let Some(e) = s_guard.get_entity(entity) {
         let _ =
-          s_guard.scene.with_component(e, |c: &aethervk_core_rlib::scene::CameraComponent| {
-            arr = c.get_projection_matrix().into();
-          });
+          s_guard
+            .scene
+            .with_component(e, |c: &aethervk_core_rlib::scene::CameraComponent| {
+              arr = c.get_projection_matrix().into();
+            });
       }
     });
 
@@ -2646,7 +2754,11 @@ pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
           fov: 0.0,
           aspect: {
             let h = o.top - o.bottom;
-            if h.abs() > 1e-6 { (o.right - o.left) / h } else { 1.0 }
+            if h.abs() > 1e-6 {
+              (o.right - o.left) / h
+            } else {
+              1.0
+            }
           },
           near: o.near,
           far: o.far,
@@ -2663,12 +2775,15 @@ pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
       let _ = ctx_ref.get_scene(scene_id).map(|s| {
         let s_guard = s.read();
         if let Some(e) = s_guard.get_entity(entity) {
-          let _ = s_guard.scene.with_component(e, |c: &aethervk_core_rlib::scene::CameraComponent| {
-            (*out_camera).focus_distance = c.focus_distance;
-          });
+          let _ =
+            s_guard
+              .scene
+              .with_component(e, |c: &aethervk_core_rlib::scene::CameraComponent| {
+                (*out_camera).focus_distance = c.focus_distance;
+              });
         }
       });
-      
+
       true
     }
   } else {
@@ -2741,7 +2856,16 @@ pub unsafe extern "C" fn avkSimulationContext_addScreenSpaceBillboard(
   let path_str = unsafe { CStr::from_ptr(image_path).to_str().unwrap_or("") };
   ctx_ref
     .add_screen_space_billboard_component(
-      scene_id, entity, path_str, ndc_x, ndc_y, scale, rotation_deg, opacity, z_index, viewport_id,
+      scene_id,
+      entity,
+      path_str,
+      ndc_x,
+      ndc_y,
+      scale,
+      rotation_deg,
+      opacity,
+      z_index,
+      viewport_id,
     )
     .is_ok()
 }
@@ -2764,7 +2888,16 @@ pub unsafe extern "C" fn avkSimulationContext_setScreenSpaceBillboard(
   }
   let ctx_ref = unsafe { &*ctx };
   ctx_ref
-    .set_screen_space_billboard(scene_id, entity, ndc_x, ndc_y, scale, rotation_deg, opacity, z_index)
+    .set_screen_space_billboard(
+      scene_id,
+      entity,
+      ndc_x,
+      ndc_y,
+      scale,
+      rotation_deg,
+      opacity,
+      z_index,
+    )
     .is_ok()
 }
 

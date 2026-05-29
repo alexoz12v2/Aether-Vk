@@ -68,6 +68,7 @@ impl SimulationContext {
     }
   }
 
+  #[allow(clippy::not_unsafe_ptr_arg_deref)]
   /// TODO: Document this item
   pub fn get_epoch_limits(&self, scene_id: u64, start_tai: *mut f64, end_tai: *mut f64) -> bool {
     if let Some(scene) = self.get_scene(scene_id) {

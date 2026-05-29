@@ -5,29 +5,34 @@ using Avalonia.Media.Imaging;
 
 namespace AetherVk.Converters
 {
-    public class FilePathToBitmapConverter : IValueConverter
+  public class FilePathToBitmapConverter : IValueConverter
+  {
+    public static readonly FilePathToBitmapConverter Instance = new();
+
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        public static readonly FilePathToBitmapConverter Instance = new();
-
-        public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+      if (value is string path && System.IO.File.Exists(path))
+      {
+        try
         {
-            if (value is string path && System.IO.File.Exists(path))
-            {
-                try
-                {
-                    return new Bitmap(path);
-                }
-                catch
-                {
-                    return null;
-                }
-            }
-            return null;
+          return new Bitmap(path);
         }
-
-        public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        catch
         {
-            throw new NotSupportedException();
+          return null;
         }
+      }
+      return null;
     }
+
+    public object? ConvertBack(
+      object? value,
+      Type targetType,
+      object? parameter,
+      CultureInfo culture
+    )
+    {
+      throw new NotSupportedException();
+    }
+  }
 }

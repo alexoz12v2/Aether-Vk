@@ -61,7 +61,9 @@ impl Instance {
     {
       let layer_properties = unsafe { vk_entry.enumerate_instance_layer_properties() }?;
       for desired_layer_name in &LAYER_NAMES {
-        if layer_properties.iter().any(|p| p.layer_name_as_c_str().unwrap() == *desired_layer_name)
+        if layer_properties
+          .iter()
+          .any(|p| p.layer_name_as_c_str().unwrap() == *desired_layer_name)
         {
           desired_layer_names.push(desired_layer_name);
           if *desired_layer_name == c"VK_LAYER_KHRONOS_validation" {
@@ -138,13 +140,13 @@ impl Instance {
     // 3. Setup Validation Features & Debug Messenger
     // =========================================================================
     #[cfg(debug_assertions)]
-    let mut printf_features = alloc::vec![
-      vk::ValidationFeatureEnableEXT::DEBUG_PRINTF,
-    ];
+    let mut printf_features = alloc::vec![vk::ValidationFeatureEnableEXT::DEBUG_PRINTF,];
 
     #[cfg(debug_assertions)]
     if cfg!(target_vendor = "apple") {
-      aethervk_oshal_rlib::log!("Disabling GPU-Assisted Validation on Apple platforms due to MoltenVK/SPIRV-Cross bug with Physical Storage Buffers.");
+      aethervk_oshal_rlib::log!(
+        "Disabling GPU-Assisted Validation on Apple platforms due to MoltenVK/SPIRV-Cross bug with Physical Storage Buffers."
+      );
     } else {
       printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
     }
@@ -199,8 +201,9 @@ impl Instance {
 
     #[cfg(debug_assertions)]
     {
-      instance_create_info =
-        instance_create_info.enabled_layer_names(&enabled_layers).push_next(&mut msg_create_info);
+      instance_create_info = instance_create_info
+        .enabled_layer_names(&enabled_layers)
+        .push_next(&mut msg_create_info);
 
       // Only attach the features struct if the extension is actually supported/visible
       if has_validation_features {
@@ -276,7 +279,10 @@ impl Instance {
         let graphics_queue_family_index = queue_family_properties.iter().enumerate().position(
           |(queue_family_index, queue_props)| {
             // first queue family supporting graphics and presentation
-            queue_props.queue_family_properties.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+            queue_props
+              .queue_family_properties
+              .queue_flags
+              .contains(vk::QueueFlags::GRAPHICS)
               && query_input.supports_presentation(
                 entry.as_ref(),
                 physical_device,

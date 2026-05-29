@@ -108,8 +108,10 @@ impl SimulationDelegate for ForceTestDelegate {
 
     drop(scene_ctx_write); // Drop write lock to call add_perspective_camera
 
-    let camera_entity =
-      ctx.add_perspective_camera(scene_id, pe_handle, "camera", 45.0, 0.1, 1000.0).unwrap().get();
+    let camera_entity = ctx
+      .add_perspective_camera(scene_id, pe_handle, "camera", 45.0, 0.1, 1000.0)
+      .unwrap()
+      .get();
     ctx.set_parent(scene_id, camera_entity, root_entity).unwrap();
     ctx
       .set_transform_component(
@@ -353,7 +355,13 @@ mod tests {
       });
     }
 
-    ctx.get_scene(scene_id).unwrap().write().scene.add_component(ps_entity, ps_comp).unwrap();
+    ctx
+      .get_scene(scene_id)
+      .unwrap()
+      .write()
+      .scene
+      .add_component(ps_entity, ps_comp)
+      .unwrap();
 
     let thread_pool =
       std::sync::Arc::new(aethervk_oshal_rlib::os::pool::ThreadPool::new(4).unwrap());
@@ -392,7 +400,9 @@ mod tests {
       )
       .unwrap();
 
-    cpu_kernels.compute_self_gravity(&mut cpu_cmd, &cpu_bvh, &mut cpu_particles).unwrap();
+    cpu_kernels
+      .compute_self_gravity(&mut cpu_cmd, &cpu_bvh, &mut cpu_particles)
+      .unwrap();
     cpu_cmd.submit().unwrap();
 
     let cpu_result = cpu_particles.data.clone();
@@ -437,7 +447,9 @@ mod tests {
           )
           .unwrap();
 
-        gpu_kernels.compute_self_gravity(&mut gpu_cmd, &g_bvh, &mut g_particles).unwrap();
+        gpu_kernels
+          .compute_self_gravity(&mut gpu_cmd, &g_bvh, &mut g_particles)
+          .unwrap();
 
         let read_handle = g_particles.enqueue_read_to_cpu(&mut gpu_cmd).unwrap();
 

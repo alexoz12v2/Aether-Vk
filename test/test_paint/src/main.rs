@@ -434,10 +434,17 @@ impl SimulationDelegate for PaintDelegate {
     let grid_e = active_scene.scene.spawn_entity("grid");
     active_scene.scene.set_parent(grid_e, Some(root_entity));
     active_scene.scene.add_component(grid_e, TransformComponent::default()).unwrap();
-    active_scene.scene.add_component(grid_e, aethervk_core_rlib::scene::GridComponent {}).unwrap();
+    active_scene
+      .scene
+      .add_component(grid_e, aethervk_core_rlib::scene::GridComponent {})
+      .unwrap();
 
-    active_scene.presentation_engines.write().get_mut(&_pe_handle).unwrap().camera_entity =
-      Some(cam_e);
+    active_scene
+      .presentation_engines
+      .write()
+      .get_mut(&_pe_handle)
+      .unwrap()
+      .camera_entity = Some(cam_e);
 
     let ui_builder = UiBuilder::new(&active_scene.scene);
     let ui_text = ui_builder.build_text(

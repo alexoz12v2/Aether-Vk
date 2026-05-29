@@ -21,7 +21,10 @@ pub struct RigidBodyLegacyGpu {
 
 /// Backward-compat alias so existing code compiles while migrating.
 #[allow(deprecated)]
-#[deprecated(since = "0.0.0", note = "Use `RigidBodyImex` for the new IMEX pipeline")]
+#[deprecated(
+  since = "0.0.0",
+  note = "Use `RigidBodyImex` for the new IMEX pipeline"
+)]
 pub type RigidBodyGpu = RigidBodyLegacyGpu;
 
 // ── IMEX format (quaternion based) — matches `imex_math.glsl RigidBody` ───────
@@ -72,7 +75,6 @@ pub struct Wrench {
   pub torque: [f32; 3],
   pub _pad1: f32,
 }
-
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

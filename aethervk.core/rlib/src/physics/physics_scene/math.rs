@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 
 /// TODO: Document this item
 pub trait PhysicsSceneMathExt {
-/// Broadphase: Traverses the top-level World BVH using a stack to find all
+  /// Broadphase: Traverses the top-level World BVH using a stack to find all
   /// entities whose bounding volumes intersect the ray.
   // fn intersect_world_bvh_math(&self, ray: &Ray<Vec3f32>) -> Vec<EntityId>; // Removed as requested
 
@@ -212,7 +212,8 @@ mod tests {
       soi_radius: 100.0,
       frame_type: 0,
       parent_frame_idx: u32::MAX,
-      bvh_root_index: 0, _pad0: 0,
+      bvh_root_index: 0,
+      _pad0: 0,
       entity_id_raw: 1,
       frame_bda: 0,
     }];
@@ -313,7 +314,6 @@ mod tests {
       grid_density: 1.0,
     }
   }
-
 
   #[test]
   fn perf_test_intersect_mesh_bvh_math() {

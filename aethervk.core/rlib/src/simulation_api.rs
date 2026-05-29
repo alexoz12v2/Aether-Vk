@@ -9,9 +9,7 @@ use crate::{
   },
   simulation,
   simulation::texture_cache::TextureCache,
-  simulation_api::structs::{
-    SceneContext, SimulationSceneData, SimulationTaskManager,
-  },
+  simulation_api::structs::{SceneContext, SimulationSceneData, SimulationTaskManager},
   types::{EngineError, EngineResult, GpuResult},
 };
 use aethervk_oshal_rlib as oshal;
@@ -28,6 +26,7 @@ use oshal::{
 };
 use spin::rwlock::RwLock;
 
+pub mod comet_api;
 pub mod components_api;
 pub mod core_api;
 pub mod logic_thread;
@@ -37,7 +36,6 @@ pub mod render_thread;
 pub mod scene_api;
 pub mod structs;
 pub mod time_api;
-pub mod comet_api;
 
 #[cfg(test)]
 mod tests;
@@ -80,7 +78,9 @@ impl SimulationContext {
       self.render_proxy.0.as_frontend().ok_or(EngineError::InvalidOperation(
         "SimulationContext::with_device | couldn't upgrade weak pointer to render context",
       ))?;
-    render_frontend.with_device(render_device_handle, f).map_err(|e| EngineError::from(e))
+    render_frontend
+      .with_device(render_device_handle, f)
+      .map_err(|e| EngineError::from(e))
   }
 
   /// TODO: Document this item
@@ -118,9 +118,14 @@ macro_rules! expect_scene_and_entity {
     let scene = $crate::expect_scene!($scene_expr, $context);
 
     // Extract the entity
-    let entity = scene.read().get_entity($entity_expr).ok_or(EngineError::InvalidOperation(
-      concat!($context, " | child entity not found"),
-    ))?;
+    let entity =
+      scene
+        .read()
+        .get_entity($entity_expr)
+        .ok_or(EngineError::InvalidOperation(concat!(
+          $context,
+          " | child entity not found"
+        )))?;
 
     // Return both so they can be destructured
     (scene, entity)

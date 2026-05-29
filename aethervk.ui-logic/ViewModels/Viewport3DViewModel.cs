@@ -6,8 +6,9 @@ using System.Threading.Tasks;
 using AetherVk.Logic.Input;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Messaging;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
+
 namespace AetherVk.Logic.ViewModels;
 
 public partial class Viewport3DViewModel
@@ -25,7 +26,8 @@ public partial class Viewport3DViewModel
 
   public OperatorStack OperatorStack { get; }
 
-  public System.Collections.ObjectModel.ObservableCollection<BillboardViewModel> Billboards { get; } = new();
+  public System.Collections.ObjectModel.ObservableCollection<BillboardViewModel> Billboards { get; } =
+    new();
 
   [ObservableProperty]
   private uint _width = 800;
@@ -35,26 +37,29 @@ public partial class Viewport3DViewModel
 
   partial void OnWidthChanged(uint value)
   {
-      UpdateCameraAspectRatio();
+    UpdateCameraAspectRatio();
   }
 
   partial void OnHeightChanged(uint value)
   {
-      UpdateCameraAspectRatio();
+    UpdateCameraAspectRatio();
   }
 
   private void UpdateCameraAspectRatio()
   {
-      if (Width <= 0 || Height <= 0 || _sceneStateManager == null || SceneId == 0) return;
-      var state = _sceneStateManager.GetOrCreateScene(SceneId);
-      if (state.EntityMap.TryGetValue(CameraId, out var entity))
+    if (Width <= 0 || Height <= 0 || _sceneStateManager == null || SceneId == 0)
+      return;
+    var state = _sceneStateManager.GetOrCreateScene(SceneId);
+    if (state.EntityMap.TryGetValue(CameraId, out var entity))
+    {
+      var camera = entity
+        .Components.OfType<AetherVk.Logic.Models.CameraComponent>()
+        .FirstOrDefault();
+      if (camera != null)
       {
-          var camera = entity.Components.OfType<AetherVk.Logic.Models.CameraComponent>().FirstOrDefault();
-          if (camera != null)
-          {
-              camera.AspectRatio = (float)Width / Height;
-          }
+        camera.AspectRatio = (float)Width / Height;
       }
+    }
   }
 
   [ObservableProperty]
@@ -107,29 +112,48 @@ public partial class Viewport3DViewModel
 
   // ── Radial Menu ───────────────────────────────────────────────────────────
   [ObservableProperty]
-  [NotifyPropertyChangedFor(nameof(RadialHubLeft), nameof(RadialHubTop),
-                            nameof(RadialCometLeft), nameof(RadialCometTop),
-                            nameof(RadialBillboardLeft), nameof(RadialBillboardTop),
-                            nameof(RadialResetCameraLeft), nameof(RadialResetCameraTop),
-                            nameof(RadialSnapLeft), nameof(RadialSnapTop))]
+  [NotifyPropertyChangedFor(
+    nameof(RadialHubLeft),
+    nameof(RadialHubTop),
+    nameof(RadialCometLeft),
+    nameof(RadialCometTop),
+    nameof(RadialBillboardLeft),
+    nameof(RadialBillboardTop),
+    nameof(RadialResetCameraLeft),
+    nameof(RadialResetCameraTop),
+    nameof(RadialSnapLeft),
+    nameof(RadialSnapTop)
+  )]
   private bool _isRadialMenuOpen = false;
 
   [ObservableProperty]
-  [NotifyPropertyChangedFor(nameof(RadialHubLeft), nameof(RadialCometLeft),
-                            nameof(RadialBillboardLeft), nameof(RadialResetCameraLeft),
-                            nameof(RadialSnapLeft))]
+  [NotifyPropertyChangedFor(
+    nameof(RadialHubLeft),
+    nameof(RadialCometLeft),
+    nameof(RadialBillboardLeft),
+    nameof(RadialResetCameraLeft),
+    nameof(RadialSnapLeft)
+  )]
   private double _radialMenuX = 0.0;
 
   [ObservableProperty]
-  [NotifyPropertyChangedFor(nameof(RadialHubTop), nameof(RadialCometTop),
-                            nameof(RadialBillboardTop), nameof(RadialResetCameraTop),
-                            nameof(RadialSnapTop))]
+  [NotifyPropertyChangedFor(
+    nameof(RadialHubTop),
+    nameof(RadialCometTop),
+    nameof(RadialBillboardTop),
+    nameof(RadialResetCameraTop),
+    nameof(RadialSnapTop)
+  )]
   private double _radialMenuY = 0.0;
 
   /// <summary>Tracks which radial item the cursor is currently hovering over (null = none).</summary>
   [ObservableProperty]
-  [NotifyPropertyChangedFor(nameof(IsCometHovered), nameof(IsBillboardHovered),
-                            nameof(IsResetCameraHovered), nameof(IsSnapHovered))]
+  [NotifyPropertyChangedFor(
+    nameof(IsCometHovered),
+    nameof(IsBillboardHovered),
+    nameof(IsResetCameraHovered),
+    nameof(IsSnapHovered)
+  )]
   private string? _hoveredRadialItem;
 
   public bool IsCometHovered => HoveredRadialItem == "comet";
@@ -138,31 +162,30 @@ public partial class Viewport3DViewModel
   public bool IsSnapHovered => HoveredRadialItem == "snap";
 
   private const double RadialRadius = 100.0;
-  private const double ItemSize    = 80.0;
-  private const double HalfItem    = ItemSize / 2.0;
-  private const double HubSize     = 16.0;
+  private const double ItemSize = 80.0;
+  private const double HalfItem = ItemSize / 2.0;
+  private const double HubSize = 16.0;
 
   // Central hub
   public double RadialHubLeft => RadialMenuX - HubSize / 2;
-  public double RadialHubTop  => RadialMenuY - HubSize / 2;
+  public double RadialHubTop => RadialMenuY - HubSize / 2;
 
   // Top ("up")
   public double RadialCometLeft => RadialMenuX - HalfItem;
-  public double RadialCometTop  => RadialMenuY - RadialRadius - HalfItem;
+  public double RadialCometTop => RadialMenuY - RadialRadius - HalfItem;
 
   // Top-right (45°)
   private static readonly double _cos45 = Math.Cos(Math.PI / 4.0);
   public double RadialBillboardLeft => RadialMenuX + RadialRadius * _cos45 - HalfItem;
-  public double RadialBillboardTop  => RadialMenuY - RadialRadius * _cos45 - HalfItem;
+  public double RadialBillboardTop => RadialMenuY - RadialRadius * _cos45 - HalfItem;
 
   // Right (0°)
   public double RadialResetCameraLeft => RadialMenuX + RadialRadius - HalfItem;
-  public double RadialResetCameraTop  => RadialMenuY - HalfItem;
+  public double RadialResetCameraTop => RadialMenuY - HalfItem;
 
   // Bottom-right (135°)
   public double RadialSnapLeft => RadialMenuX + RadialRadius * _cos45 - HalfItem;
-  public double RadialSnapTop  => RadialMenuY + RadialRadius * _cos45 - HalfItem;
-
+  public double RadialSnapTop => RadialMenuY + RadialRadius * _cos45 - HalfItem;
 
   /// <summary>Opens the radial menu anchored at the given viewport position.</summary>
   public void OpenRadialMenuAt(double x, double y)
@@ -232,8 +255,7 @@ public partial class Viewport3DViewModel
 
   private bool HitTestItem(double px, double py, double itemLeft, double itemTop)
   {
-    return px >= itemLeft && px <= itemLeft + ItemSize &&
-           py >= itemTop && py <= itemTop + ItemSize;
+    return px >= itemLeft && px <= itemLeft + ItemSize && py >= itemTop && py <= itemTop + ItemSize;
   }
 
   [RelayCommand]
@@ -287,70 +309,79 @@ public partial class Viewport3DViewModel
   [RelayCommand]
   private async Task InsertBillboard()
   {
-      var filters = new[] { "png", "jpg", "jpeg", "bmp" };
+    var filters = new[] { "png", "jpg", "jpeg", "bmp" };
 
-      var path = await _fileDialogService.ShowOpenFileDialogAsync("Select Billboard Image", filters);
-      if (!string.IsNullOrEmpty(path))
+    var path = await _fileDialogService.ShowOpenFileDialogAsync("Select Billboard Image", filters);
+    if (!string.IsNullOrEmpty(path))
+    {
+      try
       {
-          try
+        // Place billboard at center of viewport, NDC [0..1]
+        float ndcX = 0.5f;
+        float ndcY = 0.5f;
+
+        // Spawn ECS entity with ScreenSpaceBillboardComponent in Rust
+        var entityId = _runtimeService.SpawnBillboard(
+          SceneId,
+          path,
+          ndcX,
+          ndcY,
+          1.0f,
+          1.0f,
+          PresentationEngineId
+        );
+
+        if (entityId == 0)
+        {
+          _breadcrumbService.ShowMessageAsync("Error", "Failed to create billboard entity.");
+          return;
+        }
+
+        // Create the Avalonia-side ViewModel linked to this entity
+        var billboard = new BillboardViewModel
+        {
+          EntityId = entityId,
+          ImageSource = path,
+          X = (Width / 2.0) - 50,
+          Y = (Height / 2.0) - 50,
+          Width = 100,
+          Height = 100,
+          ZIndex = 1,
+          Opacity = 1.0,
+          Scale = 1.0,
+          Rotation = 0.0,
+        };
+
+        Billboards.Add(billboard);
+
+        // Wire the entity in the scene with the NativeComponent
+        var state = _sceneStateManager.GetOrCreateScene(SceneId);
+        if (state.EntityMap.TryGetValue(entityId, out var entity))
+        {
+          var nativeComp = new AetherVk.Logic.Models.ScreenSpaceBillboardComponent
           {
-              // Place billboard at center of viewport, NDC [0..1]
-              float ndcX = 0.5f;
-              float ndcY = 0.5f;
+            ImagePath = path,
+            NdcX = ndcX,
+            NdcY = ndcY,
+            Scale = 1.0f,
+            RotationDeg = 0.0f,
+            Opacity = 1.0f,
+            ZIndex = 1,
+            ViewportId = PresentationEngineId,
+          };
+          entity.Components.Add(nativeComp);
+        }
 
-              // Spawn ECS entity with ScreenSpaceBillboardComponent in Rust
-              var entityId = _runtimeService.SpawnBillboard(
-                  SceneId, path, ndcX, ndcY, 1.0f, 1.0f, PresentationEngineId
-              );
-
-              if (entityId == 0)
-              {
-                  _breadcrumbService.ShowMessageAsync("Error", "Failed to create billboard entity.");
-                  return;
-              }
-
-              // Create the Avalonia-side ViewModel linked to this entity
-              var billboard = new BillboardViewModel
-              {
-                  EntityId = entityId,
-                  ImageSource = path,
-                  X = (Width / 2.0) - 50,
-                  Y = (Height / 2.0) - 50,
-                  Width = 100,
-                  Height = 100,
-                  ZIndex = 1,
-                  Opacity = 1.0,
-                  Scale = 1.0,
-                  Rotation = 0.0,
-              };
-
-              Billboards.Add(billboard);
-
-              // Wire the entity in the scene with the NativeComponent
-              var state = _sceneStateManager.GetOrCreateScene(SceneId);
-              if (state.EntityMap.TryGetValue(entityId, out var entity))
-              {
-                  var nativeComp = new AetherVk.Logic.Models.ScreenSpaceBillboardComponent
-                  {
-                      ImagePath = path,
-                      NdcX = ndcX,
-                      NdcY = ndcY,
-                      Scale = 1.0f,
-                      RotationDeg = 0.0f,
-                      Opacity = 1.0f,
-                      ZIndex = 1,
-                      ViewportId = PresentationEngineId,
-                  };
-                  entity.Components.Add(nativeComp);
-              }
-
-              _breadcrumbService.ShowMessageAsync("Billboard Added", $"Loaded image {System.IO.Path.GetFileName(path)}");
-          }
-          catch (Exception ex)
-          {
-              _breadcrumbService.ShowMessageAsync("Error", $"Failed to load image: {ex.Message}");
-          }
+        _breadcrumbService.ShowMessageAsync(
+          "Billboard Added",
+          $"Loaded image {System.IO.Path.GetFileName(path)}"
+        );
       }
+      catch (Exception ex)
+      {
+        _breadcrumbService.ShowMessageAsync("Error", $"Failed to load image: {ex.Message}");
+      }
+    }
   }
 
   /// <summary>
@@ -359,13 +390,14 @@ public partial class Viewport3DViewModel
   [RelayCommand]
   private void RemoveBillboard(BillboardViewModel? billboard)
   {
-      if (billboard == null) return;
+    if (billboard == null)
+      return;
 
-      if (billboard.EntityId != 0)
-      {
-          RuntimeService.RemoveEntity(SceneId, billboard.EntityId);
-      }
-      Billboards.Remove(billboard);
+    if (billboard.EntityId != 0)
+    {
+      RuntimeService.RemoveEntity(SceneId, billboard.EntityId);
+    }
+    Billboards.Remove(billboard);
   }
 
   // HOME_POSITION: (AU) 0.049,0.034,0.039
@@ -374,14 +406,16 @@ public partial class Viewport3DViewModel
   private const float HomePosZ = 0.039f;
 
   // Rotation: x=0.251,y=-0.131,z=-0.443,w=0.851
-  private const float HomeRotW =  0.851f;
-  private const float HomeRotX =  0.251f;
+  private const float HomeRotW = 0.851f;
+  private const float HomeRotX = 0.251f;
   private const float HomeRotY = -0.131f;
   private const float HomeRotZ = -0.443f;
 
   private void SetupViewport()
   {
-    System.Console.WriteLine($"[SetupViewport] Called. IsInitialized={_runtimeService.IsInitialized}  AllScenes={_sceneStateManager.AllScenes.Count(s => s.SceneId != 0)}  SceneId={SceneId}  PE={PresentationEngineId}  Cam={CameraId}");
+    System.Console.WriteLine(
+      $"[SetupViewport] Called. IsInitialized={_runtimeService.IsInitialized}  AllScenes={_sceneStateManager.AllScenes.Count(s => s.SceneId != 0)}  SceneId={SceneId}  PE={PresentationEngineId}  Cam={CameraId}"
+    );
 
     if (!_runtimeService.IsInitialized)
       return;
@@ -391,14 +425,18 @@ public partial class Viewport3DViewModel
     var existingScene = _sceneStateManager.AllScenes.FirstOrDefault(s => s.SceneId != 0);
     if (existingScene == null)
     {
-      System.Console.WriteLine("[SetupViewport] No valid scene yet — will retry on SimulationStateUpdatedMessage.");
+      System.Console.WriteLine(
+        "[SetupViewport] No valid scene yet — will retry on SimulationStateUpdatedMessage."
+      );
       return;
     }
 
     if (SceneId == 0)
       SceneId = existingScene.SceneId;
 
-    System.Console.WriteLine($"[SetupViewport] Using SceneId={SceneId}  EntityMap.Count={existingScene.EntityMap.Count}");
+    System.Console.WriteLine(
+      $"[SetupViewport] Using SceneId={SceneId}  EntityMap.Count={existingScene.EntityMap.Count}"
+    );
 
     if (PresentationEngineId == 0)
     {
@@ -408,16 +446,22 @@ public partial class Viewport3DViewModel
 
     if (CameraId != 0)
     {
-      System.Console.WriteLine($"[SetupViewport] Camera already wired (CameraId={CameraId}), done.");
+      System.Console.WriteLine(
+        $"[SetupViewport] Camera already wired (CameraId={CameraId}), done."
+      );
       return;
     }
 
     // Check the entity tree is populated before trying to add a camera.
     var rootEntity = _runtimeService.GetEntityByName(SceneId, "root");
-    System.Console.WriteLine($"[SetupViewport] root entity = {rootEntity?.Id.ToString() ?? "NULL"}");
+    System.Console.WriteLine(
+      $"[SetupViewport] root entity = {rootEntity?.Id.ToString() ?? "NULL"}"
+    );
     if (rootEntity == null)
     {
-      System.Console.WriteLine("[SetupViewport] root not found — waiting for SimulationStateUpdatedMessage.");
+      System.Console.WriteLine(
+        "[SetupViewport] root not found — waiting for SimulationStateUpdatedMessage."
+      );
       return;
     }
 
@@ -426,8 +470,8 @@ public partial class Viewport3DViewModel
       PresentationEngineId,
       $"viewport_camera_{PresentationEngineId}",
       45f,
-      0.0001f,   // near  (~15 000 km at AU scale)
-      1000.0f    // far   (1 000 AU covers solar system)
+      0.0001f, // near  (~15 000 km at AU scale)
+      1000.0f // far   (1 000 AU covers solar system)
     );
 
     System.Console.WriteLine($"[SetupViewport] AddPerspectiveCamera => CameraId={CameraId}");
@@ -438,11 +482,23 @@ public partial class Viewport3DViewModel
       return;
     }
 
-    System.Console.WriteLine($"[SetupViewport] Applying default viewport camera position: pos=({HomePosX}, {HomePosY}, {HomePosZ})");
-    _runtimeService.SetTransformComponent(SceneId, CameraId,
-      HomePosX, HomePosY, HomePosZ,
-      HomeRotW, HomeRotX, HomeRotY, HomeRotZ,
-      1f, 1f, 1f);
+    System.Console.WriteLine(
+      $"[SetupViewport] Applying default viewport camera position: pos=({HomePosX}, {HomePosY}, {HomePosZ})"
+    );
+    _runtimeService.SetTransformComponent(
+      SceneId,
+      CameraId,
+      HomePosX,
+      HomePosY,
+      HomePosZ,
+      HomeRotW,
+      HomeRotX,
+      HomeRotY,
+      HomeRotZ,
+      1f,
+      1f,
+      1f
+    );
   }
 
   public Viewport3DViewModel(
@@ -504,8 +560,12 @@ public partial class Viewport3DViewModel
 
     _sceneStateManager.PropertyChanged += (s, e) =>
     {
-       // If entities changed or camera changed, we should re-eval measurement
-       _uiThreadDispatcher.DispatchAsync(() => { UpdateMeasurementIndicator(); return Task.CompletedTask; });
+      // If entities changed or camera changed, we should re-eval measurement
+      _uiThreadDispatcher.DispatchAsync(() =>
+      {
+        UpdateMeasurementIndicator();
+        return Task.CompletedTask;
+      });
     };
 
     if (IsInitialized)
@@ -533,17 +593,17 @@ public partial class Viewport3DViewModel
   {
     if (isPressed && action.Id == "viewport.delete")
     {
-        var selected = Billboards.FirstOrDefault(b => b.IsSelected);
-        if (selected != null)
+      var selected = Billboards.FirstOrDefault(b => b.IsSelected);
+      if (selected != null)
+      {
+        // Remove the Rust ECS entity if this billboard is linked to one
+        if (selected.EntityId != 0)
         {
-            // Remove the Rust ECS entity if this billboard is linked to one
-            if (selected.EntityId != 0)
-            {
-                RuntimeService.RemoveEntity(SceneId, selected.EntityId);
-            }
-            Billboards.Remove(selected);
-            return true;
+          RuntimeService.RemoveEntity(SceneId, selected.EntityId);
         }
+        Billboards.Remove(selected);
+        return true;
+      }
     }
     return OperatorStack.ProcessAction(action, isPressed);
   }
@@ -596,12 +656,12 @@ public partial class Viewport3DViewModel
             var worldPt = new System.Numerics.Vector3(res.px, res.py, res.pz);
             var worldPos = new System.Numerics.Vector3(tx.PosX, tx.PosY, tx.PosZ);
             var worldRot = new System.Numerics.Quaternion(tx.RotX, tx.RotY, tx.RotZ, tx.RotW);
-            
+
             var localPt = System.Numerics.Vector3.Transform(
               worldPt - worldPos,
               System.Numerics.Quaternion.Inverse(worldRot)
             );
-            
+
             // Normalize to get spherical coordinates
             var normalizedPt = System.Numerics.Vector3.Normalize(localPt);
             float latitude = (float)(Math.Asin(normalizedPt.Z) * 180.0 / Math.PI);
@@ -616,7 +676,7 @@ public partial class Viewport3DViewModel
               ColorR = 1.0f,
               ColorG = 0.5f,
               ColorB = 0.0f,
-              ColorA = 1.0f
+              ColorA = 1.0f,
             };
 
             emitter.Circles.Add(newCircle);
@@ -683,17 +743,19 @@ public partial class Viewport3DViewModel
       float dy = y - FirstMeasurementPointY;
       float dz = z - FirstMeasurementPointZ;
       float distance = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
-      
+
       // Calculate midpoint to place the label approximately (in 2D space this requires projection, but we can just put it at 10,10 for now, or 3D project it later. We will just add the billboard with the text)
-      Billboards.Add(new BillboardViewModel
-      {
+      Billboards.Add(
+        new BillboardViewModel
+        {
           Text = $"{distance:F2} km",
           X = Width / 2.0 - 50,
           Y = Height / 2.0 - 50,
           Width = 100,
           Height = 40,
-          ZIndex = 10
-      });
+          ZIndex = 10,
+        }
+      );
 
       HasFirstMeasurementPoint = false;
       IsMeasuringMode = false;
@@ -795,7 +857,11 @@ public partial class Viewport3DViewModel
 
       try
       {
-        bool downloaded = await _runtimeService.DownloadImageAsync(_lastRenderTaskId, unmanagedBuffer, bufferSize);
+        bool downloaded = await _runtimeService.DownloadImageAsync(
+          _lastRenderTaskId,
+          unmanagedBuffer,
+          bufferSize
+        );
         if (downloaded)
         {
           await _uiThreadDispatcher.DispatchAsync(() =>
@@ -807,8 +873,8 @@ public partial class Viewport3DViewModel
         else
         {
           System.Console.WriteLine(
-            $"[ProcessFrameAsync] DownloadImageAsync returned false for taskId={_lastRenderTaskId}. " +
-            "Frame skipped."
+            $"[ProcessFrameAsync] DownloadImageAsync returned false for taskId={_lastRenderTaskId}. "
+              + "Frame skipped."
           );
         }
       }
@@ -825,12 +891,15 @@ public partial class Viewport3DViewModel
 
   private void UpdateMeasurementIndicator()
   {
-    if (Width <= 0 || Height <= 0) return;
+    if (Width <= 0 || Height <= 0)
+      return;
 
     var state = _sceneStateManager.GetOrCreateScene(SceneId);
     if (state.EntityMap.TryGetValue(CameraId, out var entity))
     {
-      var camera = entity.Components.OfType<AetherVk.Logic.Models.CameraComponent>().FirstOrDefault();
+      var camera = entity
+        .Components.OfType<AetherVk.Logic.Models.CameraComponent>()
+        .FirstOrDefault();
       if (camera != null)
       {
         double target_px_width = Math.Max(24.0, Width * 0.07);
@@ -882,22 +951,28 @@ public partial class Viewport3DViewModel
 
   private double GetNiceNumber(double value)
   {
-    if (value <= 0) return 1.0;
+    if (value <= 0)
+      return 1.0;
     double exponent = Math.Floor(Math.Log10(value));
     double fraction = value / Math.Pow(10, exponent);
-    
+
     double niceFraction;
-    if (fraction <= 1.0) niceFraction = 1.0;
-    else if (fraction <= 2.0) niceFraction = 2.0;
-    else if (fraction <= 5.0) niceFraction = 5.0;
-    else niceFraction = 10.0;
-    
+    if (fraction <= 1.0)
+      niceFraction = 1.0;
+    else if (fraction <= 2.0)
+      niceFraction = 2.0;
+    else if (fraction <= 5.0)
+      niceFraction = 5.0;
+    else
+      niceFraction = 10.0;
+
     return niceFraction * Math.Pow(10, exponent);
   }
 
   private string FormatNiceNumber(double value)
   {
-    if (value >= 1.0) return value.ToString("0");
+    if (value >= 1.0)
+      return value.ToString("0");
     return value.ToString("0.#####");
   }
 

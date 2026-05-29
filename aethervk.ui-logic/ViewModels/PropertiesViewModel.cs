@@ -95,12 +95,14 @@ public partial class PropertiesViewModel
         CurrentSceneId,
         SelectedEntity.Id
       );
-      
+
       // If it's a Screen Space Billboard, show the billboard-specific properties
-      var ssBillboardComp = SelectedEntity.Components.OfType<ScreenSpaceBillboardComponent>().FirstOrDefault();
+      var ssBillboardComp = SelectedEntity
+        .Components.OfType<ScreenSpaceBillboardComponent>()
+        .FirstOrDefault();
       if (ssBillboardComp != null)
       {
-          PropertiesExpanders.Add(ssBillboardComp);
+        PropertiesExpanders.Add(ssBillboardComp);
       }
 
       bool hasCamera = componentNames.Any(n => n.EndsWith("CameraComponent"));
@@ -154,8 +156,8 @@ public partial class PropertiesViewModel
         {
           // Build a fresh observable model for the circle-emitter component.
           // In a future sprint this could be populated from native data.
-          var existing = SelectedEntity.Components
-            .OfType<ParticleEmitterCirclesComponent>()
+          var existing = SelectedEntity
+            .Components.OfType<ParticleEmitterCirclesComponent>()
             .FirstOrDefault();
           if (existing == null)
           {
@@ -166,9 +168,7 @@ public partial class PropertiesViewModel
         }
         else if (name.Contains("SphereGizmo"))
         {
-          var existing = SelectedEntity.Components
-            .OfType<SphereGizmoComponent>()
-            .FirstOrDefault();
+          var existing = SelectedEntity.Components.OfType<SphereGizmoComponent>().FirstOrDefault();
           if (existing == null)
           {
             existing = new SphereGizmoComponent();

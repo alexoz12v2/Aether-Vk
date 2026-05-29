@@ -1,4 +1,5 @@
 //! models_api module.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use super::*;
 use crate::{
@@ -10,7 +11,13 @@ use core::ffi::{CStr, c_char};
 use oshal::math::vector::{vec3::Vec3f32, vec4::Quat};
 
 impl SimulationContext {
-  pub fn get_model_local_frames(&self, model_id: u64) -> Option<(oshal::math::matrix::mat3::Mat3f32, oshal::math::matrix::mat3::Mat3f32)> {
+  pub fn get_model_local_frames(
+    &self,
+    model_id: u64,
+  ) -> Option<(
+    oshal::math::matrix::mat3::Mat3f32,
+    oshal::math::matrix::mat3::Mat3f32,
+  )> {
     let scenes = self.scenes.read();
     let path = scenes.model_registry.get(&model_id)?;
     let mesh = scenes.mesh_cache.get(path)?;
@@ -35,17 +42,17 @@ impl SimulationContext {
 
     if let Some(mesh_arc) = scenes.mesh_cache.get(&path) {
       let mut new_mesh = (*mesh_arc).clone();
-      
+
       let volume = new_mesh.mass_properties.volume();
       let new_density = if volume > 0.0 {
         mass_kg as f64 / volume
       } else {
         1.0
       };
-      
+
       new_mesh.mass_properties = new_mesh.mass_properties.with_density(new_density);
       new_mesh.pa_basis_bf = Some(user_frame);
-      
+
       scenes.mesh_cache.insert(path, new_mesh);
       true
     } else {

@@ -197,7 +197,6 @@ namespace AetherVk.Logic.Tests
       catch (System.DllNotFoundException) { }
     }
 
-
     [Fact]
     public void GetEphemerisPosition_WithoutAlmanac_ShouldReturnNull()
     {
@@ -207,14 +206,12 @@ namespace AetherVk.Logic.Tests
         ulong sceneId = _service.CreateScene(true);
 
         var pos = _service.GetEphemerisPosition(399, 0.0);
-        
+
         // Almanac is not loaded synchronously, so it should be null or fail gracefully
         Assert.Null(pos);
       }
       catch (System.DllNotFoundException) { }
     }
-
-
 
     [Fact]
     public async Task RaycastNdc_ShouldCompleteSuccessfully()
@@ -388,8 +385,8 @@ namespace AetherVk.Logic.Tests
             .GetField(
               "_simulationContext",
               System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
-            )?
-            .GetValue(_service) as IntPtr?
+            )
+            ?.GetValue(_service) as IntPtr?
           ?? IntPtr.Zero;
 
         var camData = new AetherVk.Logic.Services.NativeInterop.FfiCamera
@@ -463,7 +460,7 @@ namespace AetherVk.Logic.Tests
 
         // Spawn a parent entity
         var parentEntity = _service.SpawnEntity(sceneId, "ParentNode");
-        
+
         // Spawn a child entity
         var childEntity = _service.SpawnEntity(sceneId, "ChildNode", parentEntity);
 

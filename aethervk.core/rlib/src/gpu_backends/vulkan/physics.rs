@@ -3,25 +3,28 @@
 //! This module scaffolds the execution of the massive compute-shader pipeline.
 //! It assumes Vulkan 1.1 with `VK_KHR_buffer_device_address` and `VK_KHR_shader_subgroup_basic`.
 
-use crate::gpu::compute_push_constants::ApplyImpulsesPushConstants;
-use crate::gpu::compute_push_constants::{RigidBodyImex, Wrench};
-use crate::gpu::vulkan::device::{self, Device, LogicalDevice, commands, resources};
-use crate::gpu::vulkan::utils;
-use crate::gpu::{
-  self, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, Kernels, KinematicBody, WaitHandle,
+use crate::{
+  gpu::{
+    self, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, Kernels, KinematicBody, WaitHandle,
+    compute_push_constants::{ApplyImpulsesPushConstants, RigidBodyImex, Wrench},
+    vulkan::{
+      device::{self, Device, LogicalDevice, commands, resources},
+      utils,
+    },
+  },
+  gpu_err,
+  physics::physics_scene::{GpuReferenceFrame, PhysicsScene},
+  scene::Scene,
+  types::{EngineError, EngineResult, GpuError, GpuResult},
 };
-use crate::gpu_err;
-use crate::physics::physics_scene::GpuReferenceFrame;
-use crate::physics::physics_scene::PhysicsScene;
-use crate::scene::Scene;
-use crate::types::{EngineError, EngineResult, GpuError, GpuResult};
-use aethervk_oshal_rlib::math::matrix::Matrix4;
-use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-use aethervk_oshal_rlib::math::vector::vec4::Quat;
-use aethervk_oshal_rlib::math::vector::{Vector, Vector3, Vector4};
-use aethervk_oshal_rlib::os::time::timeus_t;
-use alloc::format;
-use alloc::vec::Vec;
+use aethervk_oshal_rlib::{
+  math::{
+    matrix::Matrix4,
+    vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
+  },
+  os::time::timeus_t,
+};
+use alloc::{format, vec::Vec};
 use ash::vk;
 
 #[repr(C)]
@@ -396,12 +399,12 @@ pub struct BpParticleSelfPushConstants {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ApplyEmittersPushConstants {
-  pub particles:          u64,  // BDA to AOSOA particle float buffer
-  pub emitters:           u64,  // BDA to EmitterArray
-  pub frames:             u64,  // BDA to GpuReferenceFrameArray
-  pub particle_frame_ids: u64,  // BDA to u32[] — one frame index per particle
-  pub num_emitters:       u32,
-  pub total_particles:    u32,
+  pub particles: u64,          // BDA to AOSOA particle float buffer
+  pub emitters: u64,           // BDA to EmitterArray
+  pub frames: u64,             // BDA to GpuReferenceFrameArray
+  pub particle_frame_ids: u64, // BDA to u32[] — one frame index per particle
+  pub num_emitters: u32,
+  pub total_particles: u32,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -456,7 +459,6 @@ pub struct PhysicsPipelines {
   /// External gravity emitters → particle force accumulation (macro→micro transform)
   pub apply_emitters_to_particles: vk::Pipeline,
   // ── Narrow Phase ──────────────────────────────────────────────────────────
-
   #[cfg(any(test, feature = "collisions"))]
   pub narrow_ccd: vk::Pipeline,
 
@@ -466,7 +468,6 @@ pub struct PhysicsPipelines {
   /// Leaf-wrench → CoM-wrench reduction (one WG per RB)
   pub rb_force_assign: vk::Pipeline,
   // ── Broad-phase suite ─────────────────────────────────────────────────────
-
   #[cfg(any(test, feature = "collisions"))]
   pub bp_clear: vk::Pipeline,
 
@@ -535,8 +536,9 @@ impl PhysicsPipelines {
       });
       spec_data.extend_from_slice(&debug_shaders_val.to_le_bytes());
 
-      let spec_info =
-        vk::SpecializationInfo::default().map_entries(&spec_map_entries).data(&spec_data);
+      let spec_info = vk::SpecializationInfo::default()
+        .map_entries(&spec_map_entries)
+        .data(&spec_data);
 
       let stage_info = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
@@ -544,8 +546,9 @@ impl PhysicsPipelines {
         .name(&main_name)
         .specialization_info(&spec_info);
 
-      let compute_info =
-        vk::ComputePipelineCreateInfo::default().stage(stage_info).layout(pipeline_layout);
+      let compute_info = vk::ComputePipelineCreateInfo::default()
+        .stage(stage_info)
+        .layout(pipeline_layout);
 
       let pipeline = unsafe {
         device.create_compute_pipelines(
@@ -630,11 +633,13 @@ impl PhysicsPipelines {
         narrow_ccd: create_pipeline(&alloc::format!("{}/narrow_ccd.comp.spv", sim_dir))?,
 
         #[cfg(any(test, feature = "collisions"))]
-        narrow_ccd_cross_lca: create_pipeline(&alloc::format!("{}/narrow_ccd_cross_lca.comp.spv", sim_dir))?,
+        narrow_ccd_cross_lca: create_pipeline(&alloc::format!(
+          "{}/narrow_ccd_cross_lca.comp.spv",
+          sim_dir
+        ))?,
         // ── Force aggregation ───────────────────────────────────────────────
         rb_force_assign: create_pipeline(&alloc::format!("{}/rb_force_assign.comp.spv", sim_dir))?,
         // ── Broad-phase suite ───────────────────────────────────────────────
-
         #[cfg(any(test, feature = "collisions"))]
         bp_clear: create_pipeline(&alloc::format!("{}/bp_clear.comp.spv", sim_dir))?,
 
@@ -1434,8 +1439,10 @@ impl VulkanComputeKernels {
         let vel = scene0
           .with_component(entity, |k: &crate::scene::KinematicComponent| k.velocity)
           .unwrap_or(Vec3f32::zero());
-        let parent_id =
-          scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
+        let parent_id = scene0
+          .get_parent(entity)
+          .map(|id| slotmap::Key::data(&id).as_ffi() as u32)
+          .unwrap_or(0);
         let own_id = slotmap::Key::data(&entity).as_ffi() as u32;
         let (frame_type, scale) = scene0
           .with_component(entity, |f: &crate::scene::ReferenceFrameComponent| {
@@ -1553,8 +1560,15 @@ impl VulkanComputeKernels {
 
     scene0.query2::<crate::scene::TransformComponent, crate::scene::KinematicComponent, _>(
       |entity, transform, kinematic| {
-        let parent_id = scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi()).unwrap_or(0);
-        let frame_idx = _scene.gpu_frames.iter().position(|f| f.entity_id_raw == parent_id).unwrap_or(0xFFFFFFFF) as u32;
+        let parent_id = scene0
+          .get_parent(entity)
+          .map(|id| slotmap::Key::data(&id).as_ffi())
+          .unwrap_or(0);
+        let frame_idx = _scene
+          .gpu_frames
+          .iter()
+          .position(|f| f.entity_id_raw == parent_id)
+          .unwrap_or(0xFFFFFFFF) as u32;
         let mass = scene0
           .with_component(entity, |c: &crate::scene::ColliderComponent| {
             match c.shape {
@@ -1669,7 +1683,9 @@ impl VulkanComputeKernels {
       device,
       allocator,
       capacity,
-      ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::TRANSFER_DST | ash::vk::BufferUsageFlags::TRANSFER_SRC,
+      ash::vk::BufferUsageFlags::STORAGE_BUFFER
+        | ash::vk::BufferUsageFlags::TRANSFER_DST
+        | ash::vk::BufferUsageFlags::TRANSFER_SRC,
       true,
       rollback,
     )
@@ -1729,7 +1745,7 @@ impl VulkanComputeKernels {
   ) -> GpuResult<VulkanBuffer<u32>> {
     // Extract parent_frame_id in AOSOA order (same order build_particles emits particles)
     let ids: alloc::vec::Vec<u32> = if particle_metadata.is_empty() {
-      alloc::vec![0u32]  // dummy — shader guards on total_particles
+      alloc::vec![0u32] // dummy — shader guards on total_particles
     } else {
       particle_metadata.iter().map(|m| m.parent_frame_id).collect()
     };
@@ -1839,7 +1855,9 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
+      if dispatch_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -1902,7 +1920,9 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      if groups > 0 { device.cmd_dispatch(cmd.cmd, groups, 1, 1); }
+      if groups > 0 {
+        device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      }
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
@@ -1971,7 +1991,9 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      if groups > 0 { device.cmd_dispatch(cmd.cmd, groups, 1, 1); }
+      if groups > 0 {
+        device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      }
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
@@ -2036,7 +2058,9 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      if groups > 0 { device.cmd_dispatch(cmd.cmd, groups, 1, 1); }
+      if groups > 0 {
+        device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      }
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
@@ -2073,14 +2097,16 @@ impl VulkanComputeKernels {
     num_emitters: u32,
     total_particles: u32,
   ) {
-    if num_emitters == 0 || total_particles == 0 { return; }
+    if num_emitters == 0 || total_particles == 0 {
+      return;
+    }
     let wg_size = 128u32;
     let groups = (total_particles + wg_size - 1) / wg_size;
 
     let pc = ApplyEmittersPushConstants {
-      particles:          particles_addr,
-      emitters:           emitters_addr,
-      frames:             frames_addr,
+      particles: particles_addr,
+      emitters: emitters_addr,
+      frames: frames_addr,
       particle_frame_ids: particle_frame_ids_addr,
       num_emitters,
       total_particles,
@@ -2101,7 +2127,9 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      if groups > 0 { device.cmd_dispatch(cmd.cmd, groups, 1, 1); }
+      if groups > 0 {
+        device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      }
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
@@ -2156,7 +2184,9 @@ impl VulkanComputeKernels {
         bytes,
       );
       // One WG per body
-      if n_bodies > 0 { device.cmd_dispatch(cmd.cmd, n_bodies, 1, 1); }
+      if n_bodies > 0 {
+        device.cmd_dispatch(cmd.cmd, n_bodies, 1, 1);
+      }
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
@@ -2269,7 +2299,9 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      if groups > 0 { device.cmd_dispatch(cmd.cmd, groups, 1, 1); }
+      if groups > 0 {
+        device.cmd_dispatch(cmd.cmd, groups, 1, 1);
+      }
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
@@ -2601,7 +2633,9 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
+      if dispatch_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -2666,7 +2700,9 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
+      if dispatch_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
 
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -2725,7 +2761,9 @@ impl VulkanComputeKernels {
         0,
         bytes_bh,
       );
-      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
+      if dispatch_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
 
       // TODO swittch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -2790,7 +2828,9 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
+      if dispatch_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -2874,7 +2914,9 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
+      if dispatch_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -2931,13 +2973,14 @@ impl VulkanComputeKernels {
       );
       let wg_size = 256;
       let dispatch_groups = (total_nodes + wg_size - 1) / wg_size;
-      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
+      if dispatch_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
     }
     Ok(())
   }
 
   #[function_name::named]
-
   #[cfg(any(test, feature = "collisions"))]
   fn self_intersect_scene(
     &self,
@@ -2989,7 +3032,9 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
+      if dispatch_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -3008,7 +3053,6 @@ impl VulkanComputeKernels {
 
     Ok(candidates_buffer)
   }
-
 
   #[cfg(any(test, feature = "collisions"))]
   #[deprecated]
@@ -3079,7 +3123,6 @@ impl VulkanComputeKernels {
     Ok(output_list)
   }
 
-
   #[cfg(any(test, feature = "collisions"))]
   fn compact_collisions(
     &self,
@@ -3147,7 +3190,9 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      if dispatch_groups > 0 { device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
+      if dispatch_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -3166,7 +3211,6 @@ impl VulkanComputeKernels {
 
     Ok(packed_out)
   }
-
 
   #[cfg(any(test, feature = "collisions"))]
   fn find_earliest_collision(
@@ -3267,7 +3311,6 @@ impl VulkanComputeKernels {
 
     Ok(out_toi)
   }
-
 
   #[cfg(any(test, feature = "collisions"))]
   fn apply_collision_responses(
@@ -3400,7 +3443,6 @@ impl VulkanComputeKernels {
     Ok(())
   }
 
-
   #[cfg(any(test, feature = "collisions"))]
   fn snapshot_dynamics(
     &self,
@@ -3472,7 +3514,6 @@ impl VulkanComputeKernels {
 
     Ok((rb_snap, p_snap))
   }
-
 
   #[cfg(any(test, feature = "collisions"))]
   fn restore_dynamics(
@@ -3603,7 +3644,6 @@ impl VulkanComputeKernels {
 }
 
 impl Kernels for Device {
-
   #[cfg(any(test, feature = "collisions"))]
   fn narrow_ccd(
     &self,
@@ -3755,11 +3795,14 @@ impl Kernels for Device {
   fn wait_sync(&self, sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> {
     use ash::vk::Handle;
     let sem = ash::vk::Semaphore::from_raw(sync.timeline_semaphore);
-    self.device.wait_for_semaphore_value(sem, sync.timeline_value, u64::MAX).map_err(|e| {
-      crate::types::EngineError::Gpu(crate::types::GpuError::BackendSpecific(alloc::format!(
-        "{:?}", e
-      )))
-    })
+    self
+      .device
+      .wait_for_semaphore_value(sem, sync.timeline_value, u64::MAX)
+      .map_err(|e| {
+        crate::types::EngineError::Gpu(crate::types::GpuError::BackendSpecific(alloc::format!(
+          "{:?}", e
+        )))
+      })
   }
 
   fn upload_motion_tlas(
@@ -3818,7 +3861,11 @@ impl Kernels for Device {
         #[cfg(test)]
         {
           use ash::vk::Handle;
-          self.kernels.tracked_physical_allocations.lock().push(info.device_memory.as_raw());
+          self
+            .kernels
+            .tracked_physical_allocations
+            .lock()
+            .push(info.device_memory.as_raw());
         }
         aethervk_oshal_rlib::log!("upload_motion_tlas alloc: {:?}", alloc.get_raw());
         rollback.defer(move |_| unsafe { allocator.destroy_buffer(buffer, &mut alloc) });
@@ -3895,7 +3942,9 @@ impl Kernels for Device {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
       })?
       .execute(|allocator, rollback| {
-        self.kernels.build_kinematic_bodies(&self.device, allocator, rollback, cmd, scene, scene0)
+        self
+          .kernels
+          .build_kinematic_bodies(&self.device, allocator, rollback, cmd, scene, scene0)
       })
       .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
@@ -3912,7 +3961,9 @@ impl Kernels for Device {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
       })?
       .execute(|allocator, rollback| {
-        self.kernels.build_rigid_bodies_imex(&self.device, allocator, rollback, cmd, scene, scene0)
+        self
+          .kernels
+          .build_rigid_bodies_imex(&self.device, allocator, rollback, cmd, scene, scene0)
       })
       .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
@@ -3944,7 +3995,13 @@ impl Kernels for Device {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
       })?
       .execute(|allocator, rollback| {
-        self.kernels.build_particle_frame_ids(&self.device, allocator, rollback, cmd, particle_metadata)
+        self.kernels.build_particle_frame_ids(
+          &self.device,
+          allocator,
+          rollback,
+          cmd,
+          particle_metadata,
+        )
       })
       .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
@@ -4007,7 +4064,9 @@ impl Kernels for Device {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
       })?
       .execute(|allocator, rollback| {
-        self.kernels.step_ode_p1_p2(&self.device, allocator, rollback, cmd, particles, dt)
+        self
+          .kernels
+          .step_ode_p1_p2(&self.device, allocator, rollback, cmd, particles, dt)
       })
       .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
@@ -4052,7 +4111,9 @@ impl Kernels for Device {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
       })?
       .execute(|allocator, rollback| {
-        self.kernels.compute_self_gravity(&self.device, allocator, rollback, cmd, bvh, particles)
+        self
+          .kernels
+          .compute_self_gravity(&self.device, allocator, rollback, cmd, bvh, particles)
       })
       .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
@@ -4136,7 +4197,6 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
-
   #[cfg(any(test, feature = "collisions"))]
   fn self_intersect_scene(
     &self,
@@ -4153,7 +4213,6 @@ impl Kernels for Device {
       .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
-
 
   #[cfg(any(test, feature = "collisions"))]
   fn intersect_instances(
@@ -4184,7 +4243,6 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
-
   #[cfg(any(test, feature = "collisions"))]
   fn compact_collisions(
     &self,
@@ -4197,12 +4255,13 @@ impl Kernels for Device {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
       })?
       .execute(|allocator, rollback| {
-        self.kernels.compact_collisions(&self.device, allocator, rollback, cmd, globals, time_delta)
+        self
+          .kernels
+          .compact_collisions(&self.device, allocator, rollback, cmd, globals, time_delta)
       })
       .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
-
 
   #[cfg(any(test, feature = "collisions"))]
   fn find_earliest_collision(
@@ -4216,12 +4275,13 @@ impl Kernels for Device {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
       })?
       .execute(|allocator, rollback| {
-        self.kernels.find_earliest_collision(&self.device, allocator, rollback, cmd, compacted, dt)
+        self
+          .kernels
+          .find_earliest_collision(&self.device, allocator, rollback, cmd, compacted, dt)
       })
       .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
-
 
   #[cfg(any(test, feature = "collisions"))]
   fn apply_collision_responses(
@@ -4256,7 +4316,6 @@ impl Kernels for Device {
       .map_err(|e| EngineError::from(e))
   }
 
-
   #[cfg(any(test, feature = "collisions"))]
   fn snapshot_dynamics(
     &self,
@@ -4281,7 +4340,6 @@ impl Kernels for Device {
       .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
   }
-
 
   #[cfg(any(test, feature = "collisions"))]
   fn restore_dynamics(
@@ -4324,8 +4382,10 @@ impl Kernels for Device {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
       })?
       .execute(|allocator, rollback| {
-        let timeline_value =
-          self.kernels.next_submit_value.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+        let timeline_value = self
+          .kernels
+          .next_submit_value
+          .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
         self.kernels.write_back_to_scene(
           &self.device,
           &self.kernels.discard_pool,
@@ -4552,7 +4612,6 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
-
   #[cfg(any(test, feature = "collisions"))]
   fn bp_bounds_gen(
     &self,
@@ -4581,7 +4640,6 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
-
   #[cfg(any(test, feature = "collisions"))]
   fn bp_scene(
     &self,
@@ -4609,7 +4667,6 @@ impl Kernels for Device {
       .commit_read(|_res_guard, result| result)
       .map_err(EngineError::from)
   }
-
 
   #[cfg(any(test, feature = "collisions"))]
   fn bp_classify(
@@ -4645,7 +4702,6 @@ impl Kernels for Device {
       .commit_read(|_res_guard, result| result)
       .map_err(EngineError::from)
   }
-
 
   #[cfg(any(test, feature = "collisions"))]
   fn bp_cross_lca(
@@ -4689,7 +4745,6 @@ impl Kernels for Device {
       .map_err(EngineError::from)
   }
 
-
   #[cfg(any(test, feature = "collisions"))]
   fn bp_particle_self(
     &self,
@@ -4724,7 +4779,6 @@ impl Kernels for Device {
 }
 
 impl Device {
-
   #[cfg(any(test, feature = "collisions"))]
   pub fn narrow_ccd_cross_lca(
     &self,
@@ -4737,7 +4791,6 @@ impl Device {
     dt: f32,
     output_list: &VulkanBuffer<crate::gpu::CollisionPair>,
   ) -> crate::types::EngineResult<()> {
-
     let pc = NarrowCcdPushConstants {
       scene_entities: rigid_bodies.address,
       output_list: output_list.address,
@@ -4770,7 +4823,9 @@ impl Device {
         bytes,
       );
 
-      if dispatch_groups > 0 { self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1); }
+      if dispatch_groups > 0 {
+        self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
     }
     Ok(())
   }
@@ -4786,7 +4841,6 @@ impl Device {
     dt: f32,
     output_list: &VulkanBuffer<crate::gpu::CollisionPair>,
   ) -> crate::types::EngineResult<()> {
-
     let pc = NarrowCcdPushConstants {
       scene_entities: rigid_bodies.address,
       output_list: output_list.address,
@@ -4811,11 +4865,9 @@ impl Device {
         self.kernels.pipelines.narrow_ccd
       };
 
-      self.device.cmd_bind_pipeline(
-        cmd.cmd,
-        ash::vk::PipelineBindPoint::COMPUTE,
-        pipeline,
-      );
+      self
+        .device
+        .cmd_bind_pipeline(cmd.cmd, ash::vk::PipelineBindPoint::COMPUTE, pipeline);
       self.device.cmd_push_constants(
         cmd.cmd,
         self.kernels.pipelines.pipeline_layout,

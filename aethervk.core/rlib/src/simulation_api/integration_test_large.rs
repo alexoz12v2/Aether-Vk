@@ -1,16 +1,24 @@
 #[cfg(test)]
 mod tests {
-  use crate::simulation_api::SimulationContext;
-  use crate::simulation_api::structs::{PhysicsEngineType, TimeScale, LogicCommand};
-  use crate::scene::{CameraComponent, TransformComponent, SunComponent, SkyComponent};
-  use aethervk_oshal_rlib::math::vector::{vec3::Vec3f32, vec4::Quat, Vector, Vector3};
-  use aethervk_oshal_rlib::math::quaternion::Quaternion;
+  use crate::{
+    scene::{
+      CameraComponent, ForceEmitterComponent, SkyComponent, SunComponent, TransformComponent,
+      particles::ParticleSystemComponent,
+    },
+    simulation_api::{
+      SimulationContext,
+      structs::{LogicCommand, PhysicsEngineType, TimeScale},
+    },
+  };
+  use aethervk_oshal_rlib::math::{
+    quaternion::Quaternion,
+    vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
+  };
   use alloc::format;
-  use crate::scene::{ForceEmitterComponent, particles::ParticleSystemComponent};
 
   fn save_state(ctx: &SimulationContext, scene_id: u64, comet_id: u64, filename: &str) {
-    use std::fs::File;
     use core::fmt::Write;
+    use std::fs::File;
     let scene_ctx = ctx.scenes.read().scenes.get(&scene_id).unwrap().clone();
     let mut scene_ctx_w = scene_ctx.write();
     let scene = &mut scene_ctx_w.scene;
@@ -21,13 +29,16 @@ mod tests {
       let _ = writeln!(out, "Comet Pos: {:?}", t.position);
     });
 
-    scene.with_component(comet_eid, |sys: &crate::scene::particles::ParticleSystemComponent| {
-      let particles = sys.particles.read();
-      let _ = writeln!(out, "Particles: {}", particles.len());
-      for (i, p) in particles.iter().take(10).enumerate() {
-        let _ = writeln!(out, "  [{}] pos: {:?}", i, p.position);
-      }
-    });
+    scene.with_component(
+      comet_eid,
+      |sys: &crate::scene::particles::ParticleSystemComponent| {
+        let particles = sys.particles.read();
+        let _ = writeln!(out, "Particles: {}", particles.len());
+        for (i, p) in particles.iter().take(10).enumerate() {
+          let _ = writeln!(out, "  [{}] pos: {:?}", i, p.position);
+        }
+      },
+    );
 
     if let Ok(mut f) = File::create(filename) {
       let _ = std::io::Write::write_all(&mut f, out.as_bytes());
@@ -41,7 +52,10 @@ mod tests {
     let asset_dir = format!("{}/../../assets", env!("CARGO_MANIFEST_DIR"));
     SimulationContext::set_asset_path(&asset_dir);
 
-    let ctx_ptr = SimulationContext::startup(crate::gpu::VULKAN_RENDER_BACKEND, Some(panic_error_callback));
+    let ctx_ptr = SimulationContext::startup(
+      crate::gpu::VULKAN_RENDER_BACKEND,
+      Some(panic_error_callback),
+    );
     if let Ok(boxed) = ctx_ptr {
       return Some(alloc::boxed::Box::into_raw(boxed));
     }
@@ -58,20 +72,22 @@ mod tests {
         // Ensure we use Vulkan physics engine
         let _ = ctx.threads.logic_thread.tx().try_send(LogicCommand::SetPhysicsEngineType {
           scene_id,
-          engine_type: PhysicsEngineType::VulkanCompute
+          engine_type: PhysicsEngineType::VulkanCompute,
         });
 
         // Create Sun (Macroframe) - 1 AU away
         let sun_name = alloc::ffi::CString::new("Sun").unwrap();
         let sun_id = ctx.spawn_entity(scene_id, sun_name.to_str().unwrap()).unwrap();
         let sun_dist = 1.496e11; // 1 AU
-        ctx.add_transform_component(
-          scene_id,
-          sun_id,
-          Vec3f32::from_components(0.0, 0.0, sun_dist as f32),
-          Quat::identity(),
-          Vec3f32::from_components(1.0, 1.0, 1.0),
-        ).unwrap();
+        ctx
+          .add_transform_component(
+            scene_id,
+            sun_id,
+            Vec3f32::from_components(0.0, 0.0, sun_dist as f32),
+            Quat::identity(),
+            Vec3f32::from_components(1.0, 1.0, 1.0),
+          )
+          .unwrap();
         ctx.add_sun_component(scene_id, sun_id, (255, 255, 255), 1.0).unwrap();
 
         // Create Sky
@@ -82,19 +98,23 @@ mod tests {
         // Create Comet (Microframe)
         let comet_name = alloc::ffi::CString::new("Comet").unwrap();
         let comet_id = ctx.spawn_entity(scene_id, comet_name.to_str().unwrap()).unwrap();
-        ctx.add_transform_component(
-          scene_id,
-          comet_id,
-          Vec3f32::from_components(0.0, 0.0, 0.0),
-          Quat::identity(),
-          Vec3f32::from_components(1.0, 1.0, 1.0),
-        ).unwrap();
+        ctx
+          .add_transform_component(
+            scene_id,
+            comet_id,
+            Vec3f32::from_components(0.0, 0.0, 0.0),
+            Quat::identity(),
+            Vec3f32::from_components(1.0, 1.0, 1.0),
+          )
+          .unwrap();
 
         let path = alloc::format!("{}/../../assets/Comet.glb", env!("CARGO_MANIFEST_DIR"));
         let path_buf = aethervk_oshal_rlib::os::fs::PathBuf::from(&path);
 
         // Sphere diameter ~2km -> radius ~1km = 1000m
-        ctx.add_physical_mesh_component(scene_id, comet_id, &path_buf, 1000.0, [1.0, 1.0, 1.0]).unwrap();
+        ctx
+          .add_physical_mesh_component(scene_id, comet_id, &path_buf, 1000.0, [1.0, 1.0, 1.0])
+          .unwrap();
 
         let mut particle_sys = ParticleSystemComponent::new(100_000);
         let comet_radius = 1000.0;
@@ -103,11 +123,14 @@ mod tests {
         // Sun is at Z = 1.496e11. We add a custom force evaluator for beta compensation
         // We will just add a Planar ForceEmitterComponent to simulate constant force
         let comet_eid = slotmap::KeyData::from_ffi(comet_id).into();
-        let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(comet_eid, ForceEmitterComponent::Planar {
-          normal: Vec3f32::from_components(0.0, 0.0, -1.0),
-          base_force: 9.81 * 1000.0, // Compensate mass * g
-          trunc_distance: 2.0e11,
-        });
+        let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(
+          comet_eid,
+          ForceEmitterComponent::Planar {
+            normal: Vec3f32::from_components(0.0, 0.0, -1.0),
+            base_force: 9.81 * 1000.0, // Compensate mass * g
+            trunc_distance: 2.0e11,
+          },
+        );
 
         // Add 10,000 particles at random locations near comet (as a stress test)
         {
@@ -125,29 +148,54 @@ mod tests {
             });
           }
         }
-        let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(comet_eid, particle_sys);
+        let _ = ctx
+          .scenes
+          .read()
+          .scenes
+          .get(&scene_id)
+          .unwrap()
+          .write()
+          .scene
+          .add_component(comet_eid, particle_sys);
 
         // Torque injection via ForceEvaluatorComponent
         // Let's just add a RigidbodyImex manual update or ForceEvaluator if implemented
         // Or we can add angular velocity to the rigid body if it had one.
         // Wait, to do physics, we need a ColliderComponent for the comet!
-        let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(comet_eid, crate::scene::ColliderComponent {
-           shape: crate::scene::ColliderShape::Sphere { radius: comet_radius },
-           mass: 1_000_000.0,
-           friction: 0.5,
-           restitution: 0.5,
-        });
+        let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(
+          comet_eid,
+          crate::scene::ColliderComponent {
+            shape: crate::scene::ColliderShape::Sphere {
+              radius: comet_radius,
+            },
+            mass: 1_000_000.0,
+            friction: 0.5,
+            restitution: 0.5,
+          },
+        );
 
         // Save Initial State
         save_state(ctx, scene_id, comet_id, "initial_state.txt");
 
-        let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::PlayScene { scene_id });
+        let _ = ctx
+          .threads
+          .logic_thread
+          .tx()
+          .try_send(crate::simulation_api::structs::LogicCommand::PlayScene { scene_id });
 
         // Simulate for 10 seconds
-        aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_secs(10));
+        aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_secs(
+          10,
+        ));
 
-        let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::PauseScene { scene_id });
-        aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(100));
+        let _ = ctx
+          .threads
+          .logic_thread
+          .tx()
+          .try_send(crate::simulation_api::structs::LogicCommand::PauseScene { scene_id });
+        aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
+          100,
+        ));
 
         // Save Final State
         save_state(ctx, scene_id, comet_id, "final_state.txt");
@@ -165,25 +213,25 @@ mod tests {
   ];
 
   static PE_IDS: [core::sync::atomic::AtomicU64; 4] = [
-      core::sync::atomic::AtomicU64::new(0),
-      core::sync::atomic::AtomicU64::new(0),
-      core::sync::atomic::AtomicU64::new(0),
-      core::sync::atomic::AtomicU64::new(0),
+    core::sync::atomic::AtomicU64::new(0),
+    core::sync::atomic::AtomicU64::new(0),
+    core::sync::atomic::AtomicU64::new(0),
+    core::sync::atomic::AtomicU64::new(0),
   ];
 
   extern "C" fn visual_render_callback_impl(scene_id: u64, pe_id: u64, render_generation: u64) {
-      aethervk_oshal_rlib::log!("Callback fired for pe_id: {}", pe_id);
-      if pe_id == PE_IDS[0].load(core::sync::atomic::Ordering::Acquire) {
-          LAST_PE_TASK_IDS[0].store(render_generation, core::sync::atomic::Ordering::Release);
-      } else if pe_id == PE_IDS[1].load(core::sync::atomic::Ordering::Acquire) {
-          LAST_PE_TASK_IDS[1].store(render_generation, core::sync::atomic::Ordering::Release);
-      } else if pe_id == PE_IDS[2].load(core::sync::atomic::Ordering::Acquire) {
-          LAST_PE_TASK_IDS[2].store(render_generation, core::sync::atomic::Ordering::Release);
-      } else if pe_id == PE_IDS[3].load(core::sync::atomic::Ordering::Acquire) {
-          LAST_PE_TASK_IDS[3].store(render_generation, core::sync::atomic::Ordering::Release);
-      } else {
-          aethervk_oshal_rlib::log!("pe_id {} DID NOT MATCH ANY PE_IDS!", pe_id);
-      }
+    aethervk_oshal_rlib::log!("Callback fired for pe_id: {}", pe_id);
+    if pe_id == PE_IDS[0].load(core::sync::atomic::Ordering::Acquire) {
+      LAST_PE_TASK_IDS[0].store(render_generation, core::sync::atomic::Ordering::Release);
+    } else if pe_id == PE_IDS[1].load(core::sync::atomic::Ordering::Acquire) {
+      LAST_PE_TASK_IDS[1].store(render_generation, core::sync::atomic::Ordering::Release);
+    } else if pe_id == PE_IDS[2].load(core::sync::atomic::Ordering::Acquire) {
+      LAST_PE_TASK_IDS[2].store(render_generation, core::sync::atomic::Ordering::Release);
+    } else if pe_id == PE_IDS[3].load(core::sync::atomic::Ordering::Acquire) {
+      LAST_PE_TASK_IDS[3].store(render_generation, core::sync::atomic::Ordering::Release);
+    } else {
+      aethervk_oshal_rlib::log!("pe_id {} DID NOT MATCH ANY PE_IDS!", pe_id);
+    }
   }
 
   #[test]
@@ -200,7 +248,9 @@ mod tests {
       struct CtxGuard(*mut SimulationContext);
       impl Drop for CtxGuard {
         fn drop(&mut self) {
-          unsafe { let _ = alloc::boxed::Box::from_raw(self.0); }
+          unsafe {
+            let _ = alloc::boxed::Box::from_raw(self.0);
+          }
         }
       }
       let _guard = CtxGuard(ctx_ptr);
@@ -210,10 +260,12 @@ mod tests {
         let scene_id = ctx.create_default_scene(true).unwrap();
 
         // 1. Setup Vulkan Compute Physics
-        let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::SetPhysicsEngineType {
-          scene_id,
-          engine_type: PhysicsEngineType::VulkanCompute
-        });
+        let _ = ctx.threads.logic_thread.tx().try_send(
+          crate::simulation_api::structs::LogicCommand::SetPhysicsEngineType {
+            scene_id,
+            engine_type: PhysicsEngineType::VulkanCompute,
+          },
+        );
 
         // 2. Setup 4 Windowless Presentation Engines and Cameras
         let width = 512;
@@ -238,114 +290,178 @@ mod tests {
         {
           let scene_ctx = ctx.scenes.read().scenes.get(&scene_id).unwrap().clone();
           let mut scene_write = scene_ctx.write();
-          scene_write.scene.with_component_mut(slotmap::KeyData::from_ffi(cam_1.get()).into(), |t: &mut crate::scene::TransformComponent| {
-            t.position = Vec3f32::from_components(0.0, 100.0, 100.0);
-          });
-          scene_write.scene.with_component_mut(slotmap::KeyData::from_ffi(cam_2.get()).into(), |t: &mut crate::scene::TransformComponent| {
-            t.position = Vec3f32::from_components(100.0, 0.0, 100.0);
-          });
-          scene_write.scene.with_component_mut(slotmap::KeyData::from_ffi(cam_3.get()).into(), |t: &mut crate::scene::TransformComponent| {
-            t.position = Vec3f32::from_components(-100.0, 0.0, 100.0);
-          });
-          scene_write.scene.with_component_mut(slotmap::KeyData::from_ffi(cam_4.get()).into(), |t: &mut crate::scene::TransformComponent| {
-            t.position = Vec3f32::from_components(0.0, -100.0, 100.0);
-          });
+          scene_write.scene.with_component_mut(
+            slotmap::KeyData::from_ffi(cam_1.get()).into(),
+            |t: &mut crate::scene::TransformComponent| {
+              t.position = Vec3f32::from_components(0.0, 100.0, 100.0);
+            },
+          );
+          scene_write.scene.with_component_mut(
+            slotmap::KeyData::from_ffi(cam_2.get()).into(),
+            |t: &mut crate::scene::TransformComponent| {
+              t.position = Vec3f32::from_components(100.0, 0.0, 100.0);
+            },
+          );
+          scene_write.scene.with_component_mut(
+            slotmap::KeyData::from_ffi(cam_3.get()).into(),
+            |t: &mut crate::scene::TransformComponent| {
+              t.position = Vec3f32::from_components(-100.0, 0.0, 100.0);
+            },
+          );
+          scene_write.scene.with_component_mut(
+            slotmap::KeyData::from_ffi(cam_4.get()).into(),
+            |t: &mut crate::scene::TransformComponent| {
+              t.position = Vec3f32::from_components(0.0, -100.0, 100.0);
+            },
+          );
         }
 
         // 3. Setup Scene Entities
         let comet_name = alloc::ffi::CString::new("Comet").unwrap();
         let comet_id = ctx.spawn_entity(scene_id, comet_name.to_str().unwrap()).unwrap();
-        ctx.add_transform_component(
-          scene_id, comet_id, Vec3f32::from_components(0.0, 0.0, 0.0), Quat::identity(), Vec3f32::from_components(1.0, 1.0, 1.0)
-        ).unwrap();
+        ctx
+          .add_transform_component(
+            scene_id,
+            comet_id,
+            Vec3f32::from_components(0.0, 0.0, 0.0),
+            Quat::identity(),
+            Vec3f32::from_components(1.0, 1.0, 1.0),
+          )
+          .unwrap();
 
         let path = alloc::format!("{}/../../assets/Comet.glb", env!("CARGO_MANIFEST_DIR"));
         let path_buf = aethervk_oshal_rlib::os::fs::PathBuf::from(&path);
-        ctx.add_physical_mesh_component(scene_id, comet_id, &path_buf, 10.0, [1.0, 1.0, 1.0]).unwrap();
+        ctx
+          .add_physical_mesh_component(scene_id, comet_id, &path_buf, 10.0, [1.0, 1.0, 1.0])
+          .unwrap();
 
         // Force and Collider
         let comet_eid = slotmap::KeyData::from_ffi(comet_id).into();
-        let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(comet_eid, ForceEmitterComponent::Planar {
-          normal: Vec3f32::from_components(0.0, 1.0, 0.0),
-          base_force: 1000.0,
-          trunc_distance: 1000.0,
-        });
-        let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(comet_eid, crate::scene::ColliderComponent {
-           shape: crate::scene::ColliderShape::Sphere { radius: 10.0 },
-           mass: 10.0,
-           friction: 0.5,
-           restitution: 0.5,
-        });
-        let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(comet_eid, crate::scene::KinematicComponent::default());
+        let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(
+          comet_eid,
+          ForceEmitterComponent::Planar {
+            normal: Vec3f32::from_components(0.0, 1.0, 0.0),
+            base_force: 1000.0,
+            trunc_distance: 1000.0,
+          },
+        );
+        let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(
+          comet_eid,
+          crate::scene::ColliderComponent {
+            shape: crate::scene::ColliderShape::Sphere { radius: 10.0 },
+            mass: 10.0,
+            friction: 0.5,
+            restitution: 0.5,
+          },
+        );
+        let _ = ctx
+          .scenes
+          .read()
+          .scenes
+          .get(&scene_id)
+          .unwrap()
+          .write()
+          .scene
+          .add_component(comet_eid, crate::scene::KinematicComponent::default());
 
         // 4. Hook Callback
         SimulationContext::set_render_callback(Some(visual_render_callback_impl));
 
         let wait_for_images = |tag: &str| {
-            let mut attempts = 0;
-            let mut ready = false;
-            while attempts < 200 {
-                let id1 = LAST_PE_TASK_IDS[0].load(core::sync::atomic::Ordering::Acquire);
-                let id2 = LAST_PE_TASK_IDS[1].load(core::sync::atomic::Ordering::Acquire);
-                let id3 = LAST_PE_TASK_IDS[2].load(core::sync::atomic::Ordering::Acquire);
-                let id4 = LAST_PE_TASK_IDS[3].load(core::sync::atomic::Ordering::Acquire);
-                if id1 > 0 && id2 > 0 && id3 > 0 && id4 > 0 {
-                    ready = true;
-                    break;
-                }
-                std::thread::sleep(core::time::Duration::from_millis(10));
-                attempts += 1;
+          let mut attempts = 0;
+          let mut ready = false;
+          while attempts < 200 {
+            let id1 = LAST_PE_TASK_IDS[0].load(core::sync::atomic::Ordering::Acquire);
+            let id2 = LAST_PE_TASK_IDS[1].load(core::sync::atomic::Ordering::Acquire);
+            let id3 = LAST_PE_TASK_IDS[2].load(core::sync::atomic::Ordering::Acquire);
+            let id4 = LAST_PE_TASK_IDS[3].load(core::sync::atomic::Ordering::Acquire);
+            if id1 > 0 && id2 > 0 && id3 > 0 && id4 > 0 {
+              ready = true;
+              break;
             }
-            if !ready { return; }
+            std::thread::sleep(core::time::Duration::from_millis(10));
+            attempts += 1;
+          }
+          if !ready {
+            return;
+          }
 
-            // Wait for completion and download
-            let tids = [LAST_PE_TASK_IDS[0].load(core::sync::atomic::Ordering::Acquire), LAST_PE_TASK_IDS[1].load(core::sync::atomic::Ordering::Acquire), LAST_PE_TASK_IDS[2].load(core::sync::atomic::Ordering::Acquire), LAST_PE_TASK_IDS[3].load(core::sync::atomic::Ordering::Acquire)];
-            for (i, &tid) in tids.iter().enumerate() {
-                let mut status = ctx.get_task_status(tid);
-                let mut attempt = 0;
-                while matches!(status, crate::simulation_api::structs::TaskStatusCode::Pending) && attempt < 100 {
-                    std::thread::sleep(core::time::Duration::from_millis(10));
-                    status = ctx.get_task_status(tid);
-                    attempt += 1;
-                }
-
-                let mut buffer = vec![0u8; (width * height * 4) as usize];
-                if ctx.download_image(tid, buffer.as_mut_ptr(), buffer.len()) {
-                    let _ = image::save_buffer(
-                        alloc::format!("output_cam_{}_{}.png", i + 1, tag),
-                        &buffer,
-                        width,
-                        height,
-                        image::ColorType::Rgba8
-                    );
-                }
+          // Wait for completion and download
+          let tids = [
+            LAST_PE_TASK_IDS[0].load(core::sync::atomic::Ordering::Acquire),
+            LAST_PE_TASK_IDS[1].load(core::sync::atomic::Ordering::Acquire),
+            LAST_PE_TASK_IDS[2].load(core::sync::atomic::Ordering::Acquire),
+            LAST_PE_TASK_IDS[3].load(core::sync::atomic::Ordering::Acquire),
+          ];
+          for (i, &tid) in tids.iter().enumerate() {
+            let mut status = ctx.get_task_status(tid);
+            let mut attempt = 0;
+            while matches!(
+              status,
+              crate::simulation_api::structs::TaskStatusCode::Pending
+            ) && attempt < 100
+            {
+              std::thread::sleep(core::time::Duration::from_millis(10));
+              status = ctx.get_task_status(tid);
+              attempt += 1;
             }
-            // Reset for next pass
-            LAST_PE_TASK_IDS[0].store(0, core::sync::atomic::Ordering::Release);
-            LAST_PE_TASK_IDS[1].store(0, core::sync::atomic::Ordering::Release);
-            LAST_PE_TASK_IDS[2].store(0, core::sync::atomic::Ordering::Release);
-            LAST_PE_TASK_IDS[3].store(0, core::sync::atomic::Ordering::Release);
+
+            let mut buffer = vec![0u8; (width * height * 4) as usize];
+            if ctx.download_image(tid, buffer.as_mut_ptr(), buffer.len()) {
+              let _ = image::save_buffer(
+                alloc::format!("output_cam_{}_{}.png", i + 1, tag),
+                &buffer,
+                width,
+                height,
+                image::ColorType::Rgba8,
+              );
+            }
+          }
+          // Reset for next pass
+          LAST_PE_TASK_IDS[0].store(0, core::sync::atomic::Ordering::Release);
+          LAST_PE_TASK_IDS[1].store(0, core::sync::atomic::Ordering::Release);
+          LAST_PE_TASK_IDS[2].store(0, core::sync::atomic::Ordering::Release);
+          LAST_PE_TASK_IDS[3].store(0, core::sync::atomic::Ordering::Release);
         };
 
         // Output Initial State
-        let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::SetSceneTimeScale {
-          scene_id,
-          scale: crate::simulation_api::structs::TimeScale::RealTime
-        });
-        let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::PlayScene { scene_id });
+        let _ = ctx.threads.logic_thread.tx().try_send(
+          crate::simulation_api::structs::LogicCommand::SetSceneTimeScale {
+            scene_id,
+            scale: crate::simulation_api::structs::TimeScale::RealTime,
+          },
+        );
+        let _ = ctx
+          .threads
+          .logic_thread
+          .tx()
+          .try_send(crate::simulation_api::structs::LogicCommand::PlayScene { scene_id });
         wait_for_images("initial");
 
         // Wait and Output Final State
         aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_secs(2));
-        let _ = ctx.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::PauseScene { scene_id });
-        aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(100));
+        let _ = ctx
+          .threads
+          .logic_thread
+          .tx()
+          .try_send(crate::simulation_api::structs::LogicCommand::PauseScene { scene_id });
+        aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
+          100,
+        ));
 
         // Final position assertions
         let scene_ctx = ctx.scenes.read().scenes.get(&scene_id).unwrap().clone();
-        scene_ctx.write().scene.with_component(comet_eid, |t: &crate::scene::TransformComponent| {
+        scene_ctx.write().scene.with_component(
+          comet_eid,
+          |t: &crate::scene::TransformComponent| {
             // Started at 0, Force applied along Y axis (0, 1, 0)
-            assert!(t.position.y() > 0.1, "Comet did not move along Y axis! Final pos: {:?}", t.position);
-        });
+            assert!(
+              t.position.y() > 0.1,
+              "Comet did not move along Y axis! Final pos: {:?}",
+              t.position
+            );
+          },
+        );
 
         wait_for_images("final");
 

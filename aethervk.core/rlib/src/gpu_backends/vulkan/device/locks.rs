@@ -37,7 +37,10 @@ pub fn increment_lock_count() {
         return;
       }
       if existing == 0 {
-        if THREAD_HASHES[i].compare_exchange(0, h, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        if THREAD_HASHES[i]
+          .compare_exchange(0, h, Ordering::SeqCst, Ordering::SeqCst)
+          .is_ok()
+        {
           THREAD_COUNTS[i].fetch_add(1, Ordering::SeqCst);
           return;
         } else if THREAD_HASHES[i].load(Ordering::Acquire) == h {

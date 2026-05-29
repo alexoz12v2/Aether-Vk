@@ -13,14 +13,20 @@ use crate::{
     linear_bvh::LinearBVH,
     multi_bvh::{TlasMultiNode, convert_binary_to_multi_bvh},
   },
-  physics::physics_scene::{BVH_SHAPE_SUB_TLAS, BVH_SHAPE_OBB, BVH_SHAPE_SPHERE, PhysicsScene, RootBoundsBvh},
+  physics::physics_scene::{
+    BVH_SHAPE_OBB, BVH_SHAPE_SPHERE, BVH_SHAPE_SUB_TLAS, PhysicsScene, RootBoundsBvh,
+  },
 };
-use aethervk_oshal_rlib::{
-  math::matrix::{
+use aethervk_oshal_rlib::math::{
+  matrix::{
     Matrix, Matrix3, Matrix4, MatrixVectorMul, SquareMatrix, mat3::Mat3f32, mat4::Mat4x4f32,
   },
-  math::quaternion::Quaternion,
-  math::vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Quat, vec4::Vec4f32},
+  quaternion::Quaternion,
+  vector::{
+    Vector, Vector3, Vector4,
+    vec3::Vec3f32,
+    vec4::{Quat, Vec4f32},
+  },
 };
 use alloc::vec::Vec;
 
@@ -54,7 +60,6 @@ impl<const N: usize> FlatNodes<N> {
     base
   }
 }
-
 
 pub fn build_scene_motion_tlas<const N: usize>(physical_scene: &mut PhysicsScene) -> (Vec<u8>, u32)
 where
@@ -180,43 +185,50 @@ fn mark_particle_sentinels<const N: usize>(
 }
 
 pub fn trace_particle_bvh_path(
-    multi_nodes: &[crate::math::collision::multi_bvh::TlasMultiNode<32>],
-    root_idx: u32,
-    target_primitive_idx: u32,
+  multi_nodes: &[crate::math::collision::multi_bvh::TlasMultiNode<32>],
+  root_idx: u32,
+  target_primitive_idx: u32,
 ) -> Option<alloc::vec::Vec<u32>> {
-    let mut stack = alloc::vec![(root_idx, alloc::vec![root_idx])];
-    
-    let target_meta = 0x8000_0000 | target_primitive_idx;
+  let mut stack = alloc::vec![(root_idx, alloc::vec![root_idx])];
 
-    while let Some((node_idx, current_path)) = stack.pop() {
-        if (node_idx as usize) >= multi_nodes.len() { continue; }
-        let node = &multi_nodes[node_idx as usize];
-        
-        for i in 0..32 {
-            let meta = node.metadata[i];
-            if meta == 0 { continue; }
-            
-            let is_leaf = (meta & 0x8000_0000) != 0;
-            if is_leaf {
-                if meta == target_meta {
-                    return Some(current_path);
-                }
-            } else {
-                let child_idx = node.child_indices[i];
-                if child_idx != PARTICLE_BLAS_SENTINEL {
-                    let mut next_path = current_path.clone();
-                    next_path.push(child_idx);
-                    stack.push((child_idx, next_path));
-                }
-            }
-        }
+  let target_meta = 0x8000_0000 | target_primitive_idx;
+
+  while let Some((node_idx, current_path)) = stack.pop() {
+    if (node_idx as usize) >= multi_nodes.len() {
+      continue;
     }
-    None
+    let node = &multi_nodes[node_idx as usize];
+
+    for i in 0..32 {
+      let meta = node.metadata[i];
+      if meta == 0 {
+        continue;
+      }
+
+      let is_leaf = (meta & 0x8000_0000) != 0;
+      if is_leaf {
+        if meta == target_meta {
+          return Some(current_path);
+        }
+      } else {
+        let child_idx = node.child_indices[i];
+        if child_idx != PARTICLE_BLAS_SENTINEL {
+          let mut next_path = current_path.clone();
+          next_path.push(child_idx);
+          stack.push((child_idx, next_path));
+        }
+      }
+    }
+  }
+  None
 }
 
-pub fn build_selection_tlas(scene: &crate::scene::Scene) -> alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>> {
-  use crate::math::collision::multi_bvh::convert_binary_to_multi_bvh;
-  use crate::physics::physics_scene::RootBoundsBvh;
+pub fn build_selection_tlas(
+  scene: &crate::scene::Scene,
+) -> alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>> {
+  use crate::{
+    math::collision::multi_bvh::convert_binary_to_multi_bvh, physics::physics_scene::RootBoundsBvh,
+  };
 
   let mut leaves = alloc::vec::Vec::new();
 
@@ -259,8 +271,24 @@ pub fn build_selection_tlas(scene: &crate::scene::Scene) -> alloc::vec::Vec<crat
     return alloc::vec::Vec::new();
   }
 
-  let binary_leaves: alloc::vec::Vec<(u32, aethervk_oshal_rlib::math::vector::vec3::Vec3f32, aethervk_oshal_rlib::math::vector::vec3::Vec3f32, u32, u32)> =
-      leaves.iter().map(|&(idx, mn, mx, _)| (idx, mn, mx, crate::physics::physics_scene::BVH_SHAPE_AABB, crate::physics::physics_scene::BVH_FRAME_MACRO)).collect();
+  let binary_leaves: alloc::vec::Vec<(
+    u32,
+    aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+    aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
+    u32,
+    u32,
+  )> = leaves
+    .iter()
+    .map(|&(idx, mn, mx, _)| {
+      (
+        idx,
+        mn,
+        mx,
+        crate::physics::physics_scene::BVH_SHAPE_AABB,
+        crate::physics::physics_scene::BVH_FRAME_MACRO,
+      )
+    })
+    .collect();
 
   let bvh = RootBoundsBvh::build(&binary_leaves);
   let mut multi_nodes = convert_binary_to_multi_bvh::<32, RootBoundsBvh>(&bvh);

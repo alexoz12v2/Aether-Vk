@@ -242,7 +242,7 @@ mod windows_debug {
           }
         }
 
-    // Fallback if the symbol wasn't natively resolvable / valid utf-8
+        // Fallback if the symbol wasn't natively resolvable / valid utf-8
         crate::log!("  [{:2}] <unknown> ({:p})", i, addr);
       }
     }
