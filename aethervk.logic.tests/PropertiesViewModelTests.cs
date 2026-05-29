@@ -46,6 +46,7 @@ public class PropertiesViewModelTests
       stateManager,
       new ConsoleService(dispatcherMock.Object),
       breadcrumb,
+      new AetherVk.Logic.Services.NativeBufferPoolService(),
       dispatcherMock.Object
     );
 

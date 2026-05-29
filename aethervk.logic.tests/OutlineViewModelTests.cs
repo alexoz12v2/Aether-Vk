@@ -21,6 +21,7 @@ public class OutlineViewModelTests
       stateManager,
       new ConsoleService(dispatcherMock.Object),
       new BreadcrumbService(dispatcherMock.Object),
+      new AetherVk.Logic.Services.NativeBufferPoolService(),
       dispatcherMock.Object
     );
     var outlineVm = new OutlineViewModel(1, runtimeService, stateManager);

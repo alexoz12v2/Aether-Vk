@@ -31,6 +31,9 @@ public partial class TimelineService : ObservableObject
   [ObservableProperty]
   private DateTimeOffset _stopDate;
 
+  [ObservableProperty]
+  private double _initialEpochTai;
+
   public TimelineService()
   {
     // Default to last 10 years for startup
@@ -45,5 +48,9 @@ public partial class TimelineService : ObservableObject
     MaxTai = max;
     StartDate = start;
     StopDate = stop;
+    if (InitialEpochTai == 0)
+    {
+      InitialEpochTai = min;
+    }
   }
 }

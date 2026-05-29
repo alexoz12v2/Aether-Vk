@@ -167,16 +167,25 @@ public partial class CameraComponent : NativeComponent
 
   partial void OnIsOrthographicChanged(bool value)
   {
-    if (value && SuspendNotifications == false)
+    if (value && SuspendNotifications == false && !IsSyncingFromNative)
     {
       double fovRad = Fov * System.Math.PI / 180.0;
       double height = 2.0 * FocusDistance * System.Math.Tan(fovRad / 2.0);
       double width = height * AspectRatio;
 
-      OrthoTop = (float)(height / 2.0);
-      OrthoBottom = (float)(-height / 2.0);
-      OrthoRight = (float)(width / 2.0);
-      OrthoLeft = (float)(-width / 2.0);
+      SuspendNotifications = true;
+      try
+      {
+        OrthoTop = (float)(height / 2.0);
+        OrthoBottom = (float)(-height / 2.0);
+        OrthoRight = (float)(width / 2.0);
+        OrthoLeft = (float)(-width / 2.0);
+      }
+      finally
+      {
+        SuspendNotifications = false;
+        PushToNativeImpl();
+      }
     }
   }
 
@@ -705,7 +714,7 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
 // Sphere Gizmo Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-public partial class SphericalGizmoComponent : NativeComponent
+public partial class SphereGizmoComponent : NativeComponent
 {
   public override string Name => "Sphere Gizmo";
 

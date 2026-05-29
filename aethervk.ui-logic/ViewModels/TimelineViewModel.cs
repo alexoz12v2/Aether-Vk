@@ -96,7 +96,7 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
     _isDragging = false;
     if (_runtimeService.IsInitialized)
     {
-      _runtimeService.SetSimulationTime(CurrentSceneId, Timeline.TimeTai);
+      _runtimeService.SeekEpoch(CurrentSceneId, Timeline.TimeTai);
       _ = UpdateTrajectoriesAsync();
     }
   }
@@ -114,7 +114,8 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   /// <summary>
   /// Initiates scene playback. 
   /// Automatically captures a snapshot of the simulation state if it's the first time playing, 
-  /// sets the simulation timescale to 1, and pushes the PlayScene command down to the native logic thread.
+  /// sets the simulation timescale, and pushes the PlayScene command down to the native logic thread.
+  /// Warns if a comet exists without jets, but does not block playback.
   /// </summary>
   [RelayCommand]
   private void Play()
@@ -122,24 +123,23 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
     if (_runtimeService.IsInitialized)
     {
       var state = _sceneStateManager.GetOrCreateScene(CurrentSceneId);
-      bool hasJets = false;
       if (state.CometEntityId.HasValue)
       {
-          var comet = _runtimeService.GetEntityById(CurrentSceneId, state.CometEntityId.Value);
-          if (comet != null)
+        bool hasJets = false;
+        var comet = _runtimeService.GetEntityById(CurrentSceneId, state.CometEntityId.Value);
+        if (comet != null)
+        {
+          var emitter = comet.Components.OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>().FirstOrDefault();
+          if (emitter != null && emitter.Circles.Count > 0)
           {
-              var emitter = comet.Components.OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>().FirstOrDefault();
-              if (emitter != null && emitter.Circles.Count > 0)
-              {
-                  hasJets = true;
-              }
+            hasJets = true;
           }
-      }
+        }
 
-      if (!hasJets)
-      {
-          _breadcrumbService.ShowMessageAsync("Cannot Play", "Please add at least 1 jet to the comet before playing the simulation.", default, 5);
-          return;
+        if (!hasJets)
+        {
+          _breadcrumbService.ShowMessageAsync("No Jets", "Comet has no jets configured. Particle simulation will not run.", default, 5);
+        }
       }
 
       if (!_hasSnapshotted)
@@ -172,6 +172,7 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   /// Stops playback entirely and rewinds the simulation.
   /// Resets the time scale, pauses the logic engine, and gracefully restores 
   /// the simulation state from the initial snapshot if one exists.
+  /// If no snapshot exists, seeks to the initial epoch instead.
   /// </summary>
   [RelayCommand]
   private void Stop()
@@ -184,6 +185,11 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
       if (_hasSnapshotted)
       {
         _runtimeService.RestoreSnapshot(CurrentSceneId);
+        _hasSnapshotted = false;
+      }
+      else if (Timeline.InitialEpochTai > 0)
+      {
+        _runtimeService.SeekEpoch(CurrentSceneId, Timeline.InitialEpochTai);
       }
       _ = UpdateTrajectoriesAsync();
     }

@@ -30,6 +30,7 @@ namespace AetherVk.Logic.Tests
         _stateManager,
         console,
         breadcrumb,
+        new AetherVk.Logic.Services.NativeBufferPoolService(),
         dispatcherMock.Object
       );
       var baseDir = AppDomain.CurrentDomain.BaseDirectory;

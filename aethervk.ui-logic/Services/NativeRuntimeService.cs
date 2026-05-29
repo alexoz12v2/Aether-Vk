@@ -29,6 +29,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   private readonly SceneStateManager _sceneStateManager;
   private readonly ConsoleService _consoleService;
   private readonly BreadcrumbService _breadcrumbService;
+  private readonly INativeBufferPoolService _bufferPool;
   private readonly IUiThreadDispatcher _uiThreadDispatcher;
 
   // Keep a weak reference to the instance so we don't artificially keep it alive
@@ -93,12 +94,14 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     SceneStateManager sceneStateManager,
     ConsoleService consoleService,
     BreadcrumbService breadcrumbService,
+    INativeBufferPoolService bufferPool,
     IUiThreadDispatcher uiThreadDispatcher
   )
   {
     _sceneStateManager = sceneStateManager;
     _consoleService = consoleService;
     _breadcrumbService = breadcrumbService;
+    _bufferPool = bufferPool;
     _uiThreadDispatcher = uiThreadDispatcher;
 
     // Register the active instance
@@ -343,6 +346,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
             camera.OrthoRight = dto.OrthoRight;
             camera.OrthoBottom = dto.OrthoBottom;
             camera.OrthoTop = dto.OrthoTop;
+            camera.FocusDistance = dto.FocusDistance;
             camera.SuspendNotifications = false;
           }
         });
@@ -675,14 +679,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       WireEntityComponents(sceneId, entity);
 
       var root = GetEntityByName(sceneId, "root");
-      if (root != null)
-      {
-        root.Children.Add(entity);
-      }
-      else
-      {
-        state.RootEntities.Add(entity);
-      }
+
+      SyncSceneHierarchy(sceneId);
 
       entity.Components.Add(new TransformComponent());
       entity.Components.Add(new CameraComponent());
@@ -757,14 +755,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       WireEntityComponents(sceneId, entity);
 
       var root = GetEntityByName(sceneId, "root");
-      if (root != null)
-      {
-        root.Children.Add(entity);
-      }
-      else
-      {
-        state.RootEntities.Add(entity);
-      }
+
+      SyncSceneHierarchy(sceneId);
 
       entity.Components.Add(new TransformComponent());
       entity.Components.Add(new CameraComponent { IsOrthographic = true });
@@ -1245,10 +1237,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     float posX, float posY, float posZ,
     float rotW, float rotX, float rotY, float rotZ,
     float radiusKm,
-    float massKg
+    float massKg,
+    uint physicsType = 0
   )
   {
-    var result = SpawnComet(sceneId, modelId, name, posX, posY, posZ, rotW, rotX, rotY, rotZ, radiusKm, massKg, 1); // 1 = PhysicsType.Kinematic / whatever default is
+    var result = SpawnComet(sceneId, modelId, name, posX, posY, posZ, rotW, rotX, rotY, rotZ, radiusKm, massKg, physicsType);
     return result.CometEntityId;
   }
 
@@ -1298,17 +1291,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
                                                            ScaleX = 1f, ScaleY = 1f, ScaleZ = 1f });
 
       cometEntity.Components.Add(new ParticleEmitterCirclesComponent());
-      cometEntity.Components.Add(new SphericalGizmoComponent());
+      cometEntity.Components.Add(new SphereGizmoComponent());
       
       // Nest under root
       var root = GetEntityByName(sceneId, "root");
-      if (root != null)
-        root.Children.Add(lcaEntity);
-      else
-        state.RootEntities.Add(lcaEntity);
 
-      // Nest under LCA frame
-      lcaEntity.Children.Add(cometEntity);
+      SyncSceneHierarchy(sceneId);
 
       WeakReferenceMessenger.Default.Send(
         new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
@@ -1653,21 +1641,17 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
     // Nest under root
     var root = GetEntityByName(sceneId, "root");
-    if (root != null)
-      root.Children.Add(lcaEntity);
-    else
-      state.RootEntities.Add(lcaEntity);
 
     // ── Mirror static mesh entity ─────────────────────────────────────────────
     var meshEntity = new Entity(sceneId, ffiResult.MeshEntityId, entityName);
     state.EntityMap[ffiResult.MeshEntityId] = meshEntity;
     WireEntityComponents(sceneId, meshEntity);
     meshEntity.Components.Add(new TransformComponent());  // pos=0 in micro-frame
-    meshEntity.Components.Add(new SphericalGizmoComponent());
+    meshEntity.Components.Add(new SphereGizmoComponent());
     meshEntity.Components.Add(new ParticleEmitterCirclesComponent());
 
     // Nest under LCA frame
-    lcaEntity.Children.Add(meshEntity);
+    SyncSceneHierarchy(sceneId);
 
     WeakReferenceMessenger.Default.Send(
       new AetherVk.Logic.Messages.SimulationStateUpdatedMessage(sceneId)
@@ -1784,6 +1768,19 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     if (_simulationContext != IntPtr.Zero)
     {
       NativeInterop.avkSimulationContext_setSimulationTime(_simulationContext, sceneId, timeTai);
+    }
+  }
+
+  /// <summary>
+  /// Seeks the simulation to a specific epoch, recomputing body positions from ephemeris data
+  /// and marking the scene for TLAS rebuild. Use this instead of SetSimulationTime when you
+  /// need positions to update visually (e.g., during timeline scrubbing).
+  /// </summary>
+  public void SeekEpoch(ulong sceneId, double epochTai)
+  {
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_seekEpoch(_simulationContext, sceneId, epochTai);
     }
   }
 
@@ -2268,14 +2265,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
           // or maybe we should? Tests might want to check RootEntities.
           // Let's add it to a child of root if possible.
           var root = GetEntityByName(sceneId, "root");
-          if (root != null)
-          {
-            root.Children.Add(entity);
-          }
-          else
-          {
-            state.RootEntities.Add(entity);
-          }
+
+          SyncSceneHierarchy(sceneId);
 
           return id;
         }
@@ -2315,13 +2306,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
           parent.Id
         );
       }
+    }
 
-      parent.Children.Add(entity);
-    }
-    else if (nativeId != 1) // Avoid adding root again if called manually without parent
-    {
-      state.RootEntities.Add(entity);
-    }
+    SyncSceneHierarchy(sceneId);
 
     return entity;
   }
@@ -2580,6 +2567,75 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       }
 
       state.EntityMap.Remove(id);
+    }
+  }
+
+  public void SyncSceneHierarchy(ulong sceneId)
+  {
+    if (_simulationContext == IntPtr.Zero) return;
+    
+    NativeInterop.avkSimulationContext_getSceneHierarchy(_simulationContext, sceneId, null, 0, out uint count);
+    if (count == 0) return;
+    
+    using var buffer = _bufferPool.Rent<SceneHierarchyNodeDTO>((int)count);
+    
+    if (!NativeInterop.avkSimulationContext_getSceneHierarchy(_simulationContext, sceneId, buffer.Array, (uint)buffer.Array.Length, out count))
+        return;
+        
+    var state = _sceneStateManager.GetOrCreateScene(sceneId);
+    var activeNodes = buffer.Array.AsSpan(0, (int)count);
+    
+    var rootNodes = new System.Collections.Generic.HashSet<ulong>();
+    var childrenMap = new System.Collections.Generic.Dictionary<ulong, System.Collections.Generic.List<ulong>>();
+    var foundEntityIds = new System.Collections.Generic.HashSet<ulong>();
+    
+    foreach (var node in activeNodes)
+    {
+        foundEntityIds.Add(node.EntityId);
+        if (node.ParentId == 0)
+        {
+            rootNodes.Add(node.EntityId);
+        }
+        else
+        {
+            if (!childrenMap.TryGetValue(node.ParentId, out var list))
+            {
+                list = new System.Collections.Generic.List<ulong>();
+                childrenMap[node.ParentId] = list;
+            }
+            list.Add(node.EntityId);
+        }
+    }
+    
+    // Sync RootEntities
+    for (int i = state.RootEntities.Count - 1; i >= 0; i--)
+    {
+        if (!rootNodes.Contains(state.RootEntities[i].Id))
+            state.RootEntities.RemoveAt(i);
+    }
+    foreach (var id in rootNodes)
+    {
+        if (state.EntityMap.TryGetValue(id, out var entity) && !state.RootEntities.Contains(entity))
+            state.RootEntities.Add(entity);
+    }
+    
+    // Sync Children for all entities
+    foreach (var entity in state.EntityMap.Values)
+    {
+        if (!foundEntityIds.Contains(entity.Id)) continue;
+        
+        var hasChildren = childrenMap.TryGetValue(entity.Id, out var children);
+        for (int i = entity.Children.Count - 1; i >= 0; i--)
+        {
+            if (!hasChildren || !children.Contains(entity.Children[i].Id))
+                entity.Children.RemoveAt(i);
+        }
+        if (hasChildren)
+        {
+            foreach (var childId in children)
+                if (state.EntityMap.TryGetValue(childId, out var child) && !entity.Children.Contains(child))
+                    entity.Children.Add(child);
+        }
     }
   }
 }

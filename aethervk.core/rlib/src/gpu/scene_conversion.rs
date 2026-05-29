@@ -549,7 +549,7 @@ impl SceneConversionExt for crate::scene::Scene {
         if hidden_set.contains(&id) {
           return None;
         }
-        self.global_transform(id)
+        self.get_relative_transform(id, camera_entity)
       })
       .map(|(t, _id)| t);
 

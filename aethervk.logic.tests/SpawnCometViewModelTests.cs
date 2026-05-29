@@ -38,7 +38,7 @@ public class SpawnCometViewModelTests
     var horizonService = new HorizonJplService(console, breadcrumb, storage.Object);
     
     var stateManager = new SceneStateManager();
-    var runtimeService = new NativeRuntimeService(stateManager, console, breadcrumb, dispatcherMock.Object);
+    var runtimeService = new NativeRuntimeService(stateManager, console, breadcrumb, new AetherVk.Logic.Services.NativeBufferPoolService(), dispatcherMock.Object);
     var models = new List<ImportedModelItem>
     {
       new ImportedModelItem(1, "TestModel", "path", runtimeService, new Moq.Mock<IWindowService>().Object)

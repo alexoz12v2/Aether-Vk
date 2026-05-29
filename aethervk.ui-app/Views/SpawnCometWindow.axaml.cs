@@ -2,6 +2,7 @@ using System;
 using AetherVk.Logic.ViewModels;
 using AetherVk.Logic.Services;
 using Avalonia.Controls;
+using Avalonia.Input;
 
 namespace AetherVk.Views;
 
@@ -12,13 +13,23 @@ public partial class SpawnCometWindow : Window
     InitializeComponent();
   }
 
+  private void CometsAutoCompleteBox_DoubleTapped(object? sender, TappedEventArgs e)
+  {
+      if (sender is AutoCompleteBox autoCompleteBox && string.IsNullOrEmpty(autoCompleteBox.Text))
+      {
+          autoCompleteBox.IsDropDownOpen = true;
+      }
+  }
+
   public void CancelCommand()
   {
     Close(null);
   }
 
+  // TODO Command handling moved to view model
   public void SpawnCommand()
   {
+    // TODO breadcrumg
     if (DataContext is not SpawnCometViewModel vm || vm.SelectedModel == null)
       return;
 

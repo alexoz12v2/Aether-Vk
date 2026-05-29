@@ -261,7 +261,7 @@
                                                         </StackPanel>
                                                         <Button Grid.Column="2" Content="Edit Color" Classes="accent" Padding="4,2" FontSize="12" ToolTip.Tip="Change Color"/>
                                                     </Grid>
-                                                    
+
                                                     <Grid ColumnDefinitions="Auto,*,Auto,*" Margin="0,8,0,0">
                                                         <TextBlock Grid.Column="0" Text="Lat (°):" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                                         <NumericUpDown Grid.Column="1" Value="{Binding Latitude}" Minimum="-90" Maximum="90" FormatString="0.0" Margin="0,0,10,0"/>
@@ -306,9 +306,9 @@
                     </DataTemplate>
 
                     <!-- ══════════════════════════════════════════════════════ -->
-                    <!-- Spherical Gizmo Component                              -->
+                    <!-- Sphere Gizmo Component                              -->
                     <!-- ══════════════════════════════════════════════════════ -->
-                    <DataTemplate DataType="models:SphericalGizmoComponent">
+                    <DataTemplate DataType="models:SphereGizmoComponent">
                         <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
                             <StackPanel Spacing="4">
                                 <CheckBox Content="Is Visible" IsChecked="{Binding IsVisible}" />
@@ -325,17 +325,17 @@
                             <StackPanel Spacing="4" Margin="4,4,4,4">
 
                                 <!-- List of emission circles -->
-                                <ItemsControl ItemsSource="{Binding Circles}" x:Name="circlesList">
-                                    <ItemsControl.ItemTemplate>
+                                <ListBox ItemsSource="{Binding Circles}" x:Name="circlesList"
+                                         Classes="list-tray" Background="Transparent" BorderThickness="0">
+                                    <ListBox.ItemTemplate>
                                         <DataTemplate DataType="models:EmissionCircleItem">
-                                            <Border Background="{DynamicResource Bg.Surface}"
-                                                    CornerRadius="6" Margin="0,0,0,4" Padding="10,8">
-                                                <Grid RowDefinitions="Auto,Auto,Auto">
-
+                                            <Border Classes="list-tray-item dense" Background="{DynamicResource Bg.Surface}"
+                                                    CornerRadius="6" Margin="0,0,0,4" Padding="12,8">
+                                                <StackPanel>
                                                     <!-- Row 0: colour swatch + label + remove button -->
-                                                    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto">
-                                                        <Border Grid.Column="0" Width="10" Height="14"
-                                                                CornerRadius="2" Margin="0,0,8,0"
+                                                    <Grid ColumnDefinitions="Auto,*,Auto">
+                                                        <Border Grid.Column="0" Width="16" Height="16"
+                                                                CornerRadius="8" Margin="0,0,12,0"
                                                                 VerticalAlignment="Center">
                                                             <Border.Background>
                                                                 <SolidColorBrush Color="#FFFF9944"/>
@@ -345,89 +345,56 @@
                                                                    FontWeight="SemiBold"
                                                                    VerticalAlignment="Center"/>
                                                         <Button Grid.Column="2" Content="✕"
-                                                                Padding="6,2" FontSize="11"
-                                                                VerticalAlignment="Center"
-                                                                Command="{Binding $parent[ItemsControl].((models:ParticleEmitterCirclesComponent)DataContext).RemoveCircleCommand}"
+                                                                Classes="icon" Padding="6,2" FontSize="11"
+                                                                VerticalAlignment="Center" Background="Transparent"
+                                                                Command="{Binding $parent[ListBox].((models:ParticleEmitterCirclesComponent)DataContext).RemoveCircleCommand}"
                                                                 CommandParameter="{Binding}"
                                                                 ToolTip.Tip="Remove this emission circle"/>
                                                     </Grid>
 
-                                                    <!-- Row 1: latitude / longitude -->
-                                                    <Grid Grid.Row="1"
-                                                          ColumnDefinitions="Auto,*,Auto,*"
-                                                          Margin="0,6,0,0">
-                                                        <TextBlock Grid.Column="0" Text="φ lat (°):"
-                                                                   VerticalAlignment="Center"
-                                                                   Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="1"
-                                                                       Value="{Binding LatitudeDeg}"
-                                                                       Minimum="-90" Maximum="90"
-                                                                       FormatString="0.0"
-                                                                       Margin="0,0,10,0"/>
-                                                        <TextBlock Grid.Column="2" Text="λ lon (°):"
-                                                                   VerticalAlignment="Center"
-                                                                   Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="3"
-                                                                       Value="{Binding LongitudeDeg}"
-                                                                       Minimum="0" Maximum="360"
-                                                                       FormatString="0.0"/>
-                                                    </Grid>
+                                                    <!-- Properties wrapped for responsiveness -->
+                                                    <WrapPanel Margin="0,8,0,0">
+                                                        <!-- Group 1: Lat / Lon -->
+                                                        <StackPanel Orientation="Horizontal" Margin="0,4,16,0">
+                                                            <TextBlock Text="φ lat (°):" VerticalAlignment="Center" Margin="0,0,6,0" Width="60" Foreground="{DynamicResource Text.Secondary}"/>
+                                                            <NumericUpDown Value="{Binding LatitudeDeg}" Minimum="-90" Maximum="90" FormatString="0.0" Width="80"/>
+                                                        </StackPanel>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,4,16,0">
+                                                            <TextBlock Text="λ lon (°):" VerticalAlignment="Center" Margin="0,0,6,0" Width="60" Foreground="{DynamicResource Text.Secondary}"/>
+                                                            <NumericUpDown Value="{Binding LongitudeDeg}" Minimum="0" Maximum="360" FormatString="0.0" Width="80"/>
+                                                        </StackPanel>
 
-                                                    <!-- Row 2: mass / circle radius -->
-                                                    <Grid Grid.Row="2"
-                                                          ColumnDefinitions="Auto,*,Auto,*"
-                                                          Margin="0,4,0,0">
-                                                        <TextBlock Grid.Column="0" Text="Mass (g):"
-                                                                   VerticalAlignment="Center"
-                                                                   Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="1"
-                                                                       Value="{Binding MassGrams}"
-                                                                       Minimum="0"
-                                                                       FormatString="0.000"
-                                                                       Margin="0,0,10,0"/>
-                                                        <TextBlock Grid.Column="2" Text="R (frac):"
-                                                                   VerticalAlignment="Center"
-                                                                   Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="3"
-                                                                       Value="{Binding CircleRadius}"
-                                                                       Minimum="0.001" Maximum="1.0"
-                                                                       FormatString="0.000"/>
-                                                    </Grid>
+                                                        <!-- Group 2: Mass / Radius -->
+                                                        <StackPanel Orientation="Horizontal" Margin="0,4,16,0">
+                                                            <TextBlock Text="Mass (g):" VerticalAlignment="Center" Margin="0,0,6,0" Width="60" Foreground="{DynamicResource Text.Secondary}"/>
+                                                            <NumericUpDown Value="{Binding MassGrams}" Minimum="0" FormatString="0.000" Width="80"/>
+                                                        </StackPanel>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,4,16,0">
+                                                            <TextBlock Text="R (frac):" VerticalAlignment="Center" Margin="0,0,6,0" Width="60" Foreground="{DynamicResource Text.Secondary}"/>
+                                                            <NumericUpDown Value="{Binding CircleRadius}" Minimum="0.001" Maximum="1.0" FormatString="0.000" Width="80"/>
+                                                        </StackPanel>
 
-                                                    <!-- Row 3: Emission Params -->
-                                                    <Grid Grid.Row="3"
-                                                          ColumnDefinitions="Auto,*,Auto,*,Auto,*"
-                                                          Margin="0,4,0,0">
-                                                        <TextBlock Grid.Column="0" Text="Rate:"
-                                                                   VerticalAlignment="Center"
-                                                                   Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="1"
-                                                                       Value="{Binding ParticlesPerTick}"
-                                                                       Minimum="0"
-                                                                       FormatString="0"
-                                                                       Margin="0,0,10,0"/>
-                                                        <TextBlock Grid.Column="2" Text="TTL:"
-                                                                   VerticalAlignment="Center"
-                                                                   Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="3"
-                                                                       Value="{Binding TTL}"
-                                                                       Minimum="1"
-                                                                       FormatString="0"
-                                                                       Margin="0,0,10,0"/>
-                                                        <TextBlock Grid.Column="4" Text="Vel (km/s):"
-                                                                   VerticalAlignment="Center"
-                                                                   Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="5"
-                                                                       Value="{Binding MeanVelocityKms}"
-                                                                       Minimum="0.0"
-                                                                       FormatString="0.00"/>
-                                                    </Grid>
+                                                        <!-- Group 3: Rate / TTL -->
+                                                        <StackPanel Orientation="Horizontal" Margin="0,4,16,0">
+                                                            <TextBlock Text="Rate:" VerticalAlignment="Center" Margin="0,0,6,0" Width="60" Foreground="{DynamicResource Text.Secondary}"/>
+                                                            <NumericUpDown Value="{Binding ParticlesPerTick}" Minimum="0" FormatString="0" Width="80"/>
+                                                        </StackPanel>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,4,16,0">
+                                                            <TextBlock Text="TTL:" VerticalAlignment="Center" Margin="0,0,6,0" Width="60" Foreground="{DynamicResource Text.Secondary}"/>
+                                                            <NumericUpDown Value="{Binding TTL}" Minimum="1" FormatString="0" Width="80"/>
+                                                        </StackPanel>
 
-                                                </Grid>
+                                                        <!-- Group 4: Velocity -->
+                                                        <StackPanel Orientation="Horizontal" Margin="0,4,16,0">
+                                                            <TextBlock Text="Vel (km/s):" VerticalAlignment="Center" Margin="0,0,6,0" Width="60" Foreground="{DynamicResource Text.Secondary}"/>
+                                                            <NumericUpDown Value="{Binding MeanVelocityKms}" Minimum="0.0" FormatString="0.00" Width="80"/>
+                                                        </StackPanel>
+                                                    </WrapPanel>
+                                                </StackPanel>
                                             </Border>
                                         </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
 
                                 <!-- Add circle button -->
                                 <Button Content="＋ Add Emission Circle"

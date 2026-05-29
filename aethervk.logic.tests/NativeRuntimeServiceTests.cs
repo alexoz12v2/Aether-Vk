@@ -22,6 +22,7 @@ namespace AetherVk.Logic.Tests
         _stateManager,
         new ConsoleService(dispatcherMock.Object),
         new BreadcrumbService(dispatcherMock.Object),
+        new AetherVk.Logic.Services.NativeBufferPoolService(),
         dispatcherMock.Object
       );
       var baseDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -447,6 +448,36 @@ namespace AetherVk.Logic.Tests
 
         transformComp.PullFromNative();
         Assert.Equal(100f, transformComp.PosX);
+      }
+      catch (System.DllNotFoundException) { }
+    }
+
+    [Fact]
+    public void SyncSceneHierarchy_ShouldReflectEngineHierarchy()
+    {
+      try
+      {
+        _service.InitializeSimulationContext("Vulkan", _assetPath, false);
+        ulong sceneId = _service.CreateScene(true);
+        var state = _stateManager.GetOrCreateScene(sceneId);
+
+        // Spawn a parent entity
+        var parentEntity = _service.SpawnEntity(sceneId, "ParentNode");
+        
+        // Spawn a child entity
+        var childEntity = _service.SpawnEntity(sceneId, "ChildNode", parentEntity);
+
+        // Manually mess up the C# hierarchy to ensure SyncSceneHierarchy fixes it
+        parentEntity.Children.Clear();
+        state.RootEntities.Clear();
+
+        // Act
+        _service.SyncSceneHierarchy(sceneId);
+
+        // Assert
+        Assert.Contains(parentEntity, state.RootEntities);
+        Assert.Contains(childEntity, parentEntity.Children);
+        Assert.DoesNotContain(childEntity, state.RootEntities);
       }
       catch (System.DllNotFoundException) { }
     }

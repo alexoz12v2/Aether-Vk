@@ -31,7 +31,7 @@ public class SpawnCometFlowE2ETests
 
     var sceneStateManager = new SceneStateManager();
     var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
-    var nativeRuntime = new NativeRuntimeService(sceneStateManager, console, breadcrumb, dispatcherMock.Object);
+    var nativeRuntime = new NativeRuntimeService(sceneStateManager, console, breadcrumb, new AetherVk.Logic.Services.NativeBufferPoolService(), dispatcherMock.Object);
 
     try
     {

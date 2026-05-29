@@ -249,6 +249,30 @@ public partial class App : Application
             );
             inputRegistry.Register(
               "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "D0"),
+              new AetherVk.Logic.Input.AppAction("viewport.reset_camera", "Snap Camera Home")
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "NumPad0"),
+              new AetherVk.Logic.Input.AppAction("viewport.reset_camera", "Snap Camera Home")
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "F"),
+              new AetherVk.Logic.Input.AppAction("viewport.snap_to_selected", "Snap Camera to Selected")
+            );
+            inputRegistry.Register(
+              "Viewport",
+              new AetherVk.Logic.Input.InputChord(Key: "S", Alt: true),
+              new AetherVk.Logic.Input.AppAction(
+                "viewport.open_radial_menu",
+                "Open Radial Menu",
+                "Opens the radial context menu at the current cursor position"
+              )
+            );
+            inputRegistry.Register(
+              "Viewport",
               new AetherVk.Logic.Input.InputChord(Key: "Delete"),
               new AetherVk.Logic.Input.AppAction("viewport.delete", "Delete Selected Object")
             );

@@ -17,8 +17,16 @@ public class ViewportBaseOperator : IActionOperator
 
   public bool ProcessAction(AppAction action, bool isPressed)
   {
+    // Handle radial menu release ("hold to show, release to select")
     if (!isPressed)
+    {
+      if (action.Id == "viewport.open_radial_menu" && _vm.IsRadialMenuOpen)
+      {
+        _vm.CommitRadialMenuSelection();
+        return true;
+      }
       return false;
+    }
 
     switch (action.Id)
     {
@@ -26,6 +34,11 @@ public class ViewportBaseOperator : IActionOperator
         if (_vm.IsAddingJet)
         {
           _vm.IsAddingJet = false;
+          return true;
+        }
+        if (_vm.IsRadialMenuOpen)
+        {
+          _vm.CloseRadialMenu();
           return true;
         }
         return false;
@@ -61,6 +74,17 @@ public class ViewportBaseOperator : IActionOperator
         return true;
       case "viewport.start_zoom_drag":
         _vm.OperatorStack.Push(new ZoomDragOperator(_vm));
+        return true;
+      case "viewport.snap_to_selected":
+      {
+        var selected = _vm.SelectedEntity;
+        if (selected != null)
+          _vm.RuntimeService.SnapToEntity(_vm.SceneId, _vm.CameraId, selected.Id);
+        return true;
+      }
+      case "viewport.open_radial_menu":
+        if (!_vm.IsRadialMenuOpen)
+          _vm.OpenRadialMenuAt(_vm.RadialMenuX, _vm.RadialMenuY);
         return true;
     }
 

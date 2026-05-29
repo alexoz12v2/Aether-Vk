@@ -40,7 +40,7 @@ public class ViewportTrajectoryIntegrationTests : IRecipient<AetherVk.Logic.Mess
         };
         var breadcrumb = new BreadcrumbService(dispatcher);
         var sceneStateManager = new SceneStateManager();
-        var runtimeService = new NativeRuntimeService(sceneStateManager, console, breadcrumb, dispatcher);
+        var runtimeService = new NativeRuntimeService(sceneStateManager, console, breadcrumb, new AetherVk.Logic.Services.NativeBufferPoolService(), dispatcher);
         var storage = new LocalStorageService();
         var horizonService = new HorizonJplService(console, breadcrumb, storage);
 

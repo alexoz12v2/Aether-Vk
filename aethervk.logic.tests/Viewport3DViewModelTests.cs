@@ -21,6 +21,7 @@ public class Viewport3DViewModelTests
       new SceneStateManager(),
       new ConsoleService(dispatcherMock.Object),
       new BreadcrumbService(dispatcherMock.Object),
+      new AetherVk.Logic.Services.NativeBufferPoolService(),
       dispatcherMock.Object
     );
     // Do not call InitializeSimulationContext so it stays in mock state
@@ -49,6 +50,7 @@ public class Viewport3DViewModelTests
       new SceneStateManager(),
       new ConsoleService(dispatcherMock.Object),
       new BreadcrumbService(dispatcherMock.Object),
+      new AetherVk.Logic.Services.NativeBufferPoolService(),
       dispatcherMock.Object
     );
 

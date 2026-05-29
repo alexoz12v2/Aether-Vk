@@ -3,6 +3,13 @@ using System.Runtime.InteropServices;
 
 namespace AetherVk.Logic.Services;
 
+[StructLayout(LayoutKind.Sequential)]
+public struct SceneHierarchyNodeDTO
+{
+  public ulong EntityId;
+  public ulong ParentId;
+}
+
 public static class NativeInterop
 {
   private const string DllName = "aethervk_core_cdylib";
@@ -285,6 +292,14 @@ public static class NativeInterop
     ulong entity,
     out FfiTransform transform
   );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_getSceneHierarchy(
+    IntPtr context,
+    ulong sceneId,
+    [Out] SceneHierarchyNodeDTO[] outBuffer,
+    uint capacity,
+    out uint outCount);
 
   [StructLayout(LayoutKind.Sequential)]
   public struct FfiBvhNode
@@ -643,6 +658,13 @@ public static class NativeInterop
     IntPtr ctx,
     ulong sceneId,
     double timeTai
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_seekEpoch(
+    IntPtr ctx,
+    ulong sceneId,
+    double epochTai
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

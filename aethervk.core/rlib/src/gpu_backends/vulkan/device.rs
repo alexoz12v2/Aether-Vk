@@ -4843,34 +4843,20 @@ impl RenderDevice for Device {
     }
     let archetype = unsafe { archetype_guard.as_mut().unwrap_unchecked() };
 
-    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-      &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
-    )
-    .tick = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-      &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
-    )
-    .tick
-    .wrapping_add(1);
-    let current_tick = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-      &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
-    )
-    .tick;
+    let arena_arc = archetype.deref_arena().ok_or(gpu_err!("arena absent"))?;
+    let mut arena_mut = DebugTrackedRwLock::write(&*arena_arc);
+
+    arena_mut.tick = arena_mut.tick.wrapping_add(1);
+    let current_tick = arena_mut.tick;
 
     // 1. GARBAGE COLLECTION: Purge curves missing for > 10 frames
     let mut to_remove = alloc::vec::Vec::new();
-    for (id, alloc) in crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-      &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
-    )
-    .curves
-    .iter()
-    {
+    for (id, alloc) in arena_mut.curves.iter() {
       if current_tick.saturating_sub(alloc.last_seen_tick) > 10 {
         to_remove.push(*id);
       }
     }
 
-    let arena_arc = archetype.deref_arena().ok_or(gpu_err!("arena absent"))?;
-    let mut arena_mut = DebugTrackedRwLock::write(&*arena_arc);
     for id in to_remove {
       if let Some(alloc) = arena_mut.curves.remove(&id) {
         arena_mut.segment_allocator.free(alloc.segments_offset, alloc.segment_capacity as u64);
