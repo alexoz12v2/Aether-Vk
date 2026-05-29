@@ -507,8 +507,8 @@ pub fn current_exe() -> Result<PathBuf, FsError> {
     loop {
       let result = unsafe {
         libc::readlink(
-          b"/proc/self/exe\0".as_ptr() as *const i8,
-          buffer.as_mut_ptr() as *mut i8,
+          b"/proc/self/exe\0".as_ptr() as *const libc::c_char,
+          buffer.as_mut_ptr() as *mut libc::c_char,
           buffer.len(),
         )
       };

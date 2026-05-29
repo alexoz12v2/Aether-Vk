@@ -376,7 +376,7 @@ namespace AetherVk.Services
       if (result != null && result.Length > 0)
       {
         string imagePath = result[0];
-        _runtimeService.SpawnBillboard(1, imagePath); // Hardcoded SceneId 1 for now
+        _runtimeService.SpawnBillboard(1, imagePath, 0.5f, 0.5f, 1.0f, 1.0f, 0); // Center, default scale/opacity, unscoped viewport
       }
     }
   }

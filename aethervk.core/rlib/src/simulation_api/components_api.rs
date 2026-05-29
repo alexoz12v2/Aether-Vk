@@ -521,6 +521,107 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
+  /// Adds a ScreenSpaceBillboardComponent to an entity.
+  pub fn add_screen_space_billboard_component(
+    &self,
+    scene_id: u64,
+    entity: u64,
+    image_path: &str,
+    ndc_x: f32,
+    ndc_y: f32,
+    scale: f32,
+    rotation_deg: f32,
+    opacity: f32,
+    z_index: i32,
+    viewport_id: u64,
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:add_screen_space_billboard"
+    );
+    scene
+      .write()
+      .scene
+      .add_component(
+        entity_id,
+        crate::scene::ScreenSpaceBillboardComponent {
+          image_path: alloc::string::String::from(image_path),
+          ndc_x,
+          ndc_y,
+          scale,
+          rotation_deg,
+          opacity,
+          z_index,
+          viewport_id,
+        },
+      )
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
+  }
+
+  /// Updates the transform properties of a ScreenSpaceBillboardComponent.
+  pub fn set_screen_space_billboard(
+    &self,
+    scene_id: u64,
+    entity: u64,
+    ndc_x: f32,
+    ndc_y: f32,
+    scale: f32,
+    rotation_deg: f32,
+    opacity: f32,
+    z_index: i32,
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:set_screen_space_billboard"
+    );
+    scene
+      .write()
+      .scene
+      .with_component_mut(entity_id, |c: &mut crate::scene::ScreenSpaceBillboardComponent| {
+        c.ndc_x = ndc_x;
+        c.ndc_y = ndc_y;
+        c.scale = scale;
+        c.rotation_deg = rotation_deg;
+        c.opacity = opacity;
+        c.z_index = z_index;
+      })
+      .ok_or(EngineError::InvalidOperation(
+        "component_api:set_screen_space_billboard couldn't find ScreenSpaceBillboardComponent",
+      ))
+  }
+
+  /// Reads the ScreenSpaceBillboardComponent data into a DTO.
+  pub fn get_screen_space_billboard(
+    &self,
+    scene_id: u64,
+    entity: u64,
+  ) -> EngineResult<crate::scene::ScreenSpaceBillboardDTO> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:get_screen_space_billboard"
+    );
+    scene
+      .read()
+      .scene
+      .with_component(entity_id, |c: &crate::scene::ScreenSpaceBillboardComponent| {
+        crate::scene::ScreenSpaceBillboardDTO {
+          ndc_x: c.ndc_x,
+          ndc_y: c.ndc_y,
+          scale: c.scale,
+          rotation_deg: c.rotation_deg,
+          opacity: c.opacity,
+          z_index: c.z_index,
+          viewport_id: c.viewport_id,
+        }
+      })
+      .ok_or(EngineError::InvalidOperation(
+        "component_api:get_screen_space_billboard couldn't find ScreenSpaceBillboardComponent",
+      ))
+  }
+
   /// TODO: Document this item
   pub fn set_markers<T: Into<Marker> + Copy>(
     &self,

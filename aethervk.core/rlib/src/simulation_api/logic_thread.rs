@@ -1527,39 +1527,47 @@ fn execute_simulation_tick(
 
       for (ext_id, components) in changed.iter() {
         if let Some(internal_entity) = scene_ctx.entity_map.get(ext_id) {
-          // Check for Transform
-          if components.contains(
-            &<crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-          ) {
-            if let Some(dto) = scene_ctx.scene.with_component(
-              *internal_entity,
-              |c: &crate::scene::TransformComponent| {
-                use crate::scene::ForeignSerializable;
-                c.to_foreign()
-              },
-            ) {
-              changes_to_stream.push((*ext_id, <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID, alloc::boxed::Box::new(dto) as alloc::boxed::Box<dyn core::any::Any + Send>));
+          for comp_id in components.iter() {
+            match *comp_id {
+              // ── ForeignSerializable components: send the DTO inline ───────
+              id if id == <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID => {
+                if let Some(dto) = scene_ctx.scene.with_component(
+                  *internal_entity,
+                  |c: &crate::scene::TransformComponent| {
+                    use crate::scene::ForeignSerializable;
+                    c.to_foreign()
+                  },
+                ) {
+                  changes_to_stream.push((
+                    *ext_id,
+                    id,
+                    Some(alloc::boxed::Box::new(dto) as alloc::boxed::Box<dyn core::any::Any + Send>),
+                  ));
+                }
+              }
+              id if id == <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID => {
+                if let Some(dto) = scene_ctx.scene.with_component(
+                  *internal_entity,
+                  |c: &crate::scene::CameraComponent| {
+                    use crate::scene::ForeignSerializable;
+                    c.to_foreign()
+                  },
+                ) {
+                  changes_to_stream.push((
+                    *ext_id,
+                    id,
+                    Some(alloc::boxed::Box::new(dto) as alloc::boxed::Box<dyn core::any::Any + Send>),
+                  ));
+                }
+              }
+              // ── Non-serializable components: send pull-signal (null data) ─
+              // IDs 100 (Comet), 101 (Planet), 102 (Sun), and any future IDs.
+              // C# will call PullFromNative() on the matching component.
+              other_id => {
+                changes_to_stream.push((*ext_id, other_id, None));
+              }
             }
           }
-          // Check for Camera
-          if components.contains(
-            &<crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-          ) {
-            if let Some(dto) = scene_ctx.scene.with_component(
-              *internal_entity,
-              |c: &crate::scene::CameraComponent| {
-                use crate::scene::ForeignSerializable;
-                c.to_foreign()
-              },
-            ) {
-              changes_to_stream.push((
-                *ext_id,
-                <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-                alloc::boxed::Box::new(dto) as alloc::boxed::Box<dyn core::any::Any + Send>,
-              ));
-            }
-          }
-          // We can add more components here as they implement ForeignSerializable
         }
       }
     }
@@ -1582,7 +1590,10 @@ fn execute_simulation_tick(
         let cb: extern "C" fn(u64, u64, u64, *const core::ffi::c_void) =
           unsafe { core::mem::transmute(fptr) };
         for (ext_id, comp_id, boxed_dto) in changes_to_stream {
-          let data_ptr = &*boxed_dto as *const _ as *const core::ffi::c_void;
+          let data_ptr = match &boxed_dto {
+            Some(dto) => &**dto as *const _ as *const core::ffi::c_void,
+            None => core::ptr::null(),  // Pull-signal: C# will call PullFromNative()
+          };
           cb(scene_id, ext_id, comp_id, data_ptr);
         }
       }

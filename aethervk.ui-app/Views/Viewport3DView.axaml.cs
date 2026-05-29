@@ -257,20 +257,56 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
           }
           bvm.IsSelected = true;
 
-          // Select this billboard
-          var entity = new Entity(_viewModel?.SceneId ?? 0, (ulong)bvm.GetHashCode(), "UI Billboard");
-          entity.Components.Add(new BillboardComponent(bvm));
-          
-          if (_viewModel != null)
+          // Select the real ECS entity if the billboard is linked to one
+          if (bvm.EntityId != 0 && _viewModel != null)
           {
-              // _viewModel.SceneStateManager.GetOrCreateScene(_viewModel.SceneId).SelectedEntity = entity;
+              var state = _viewModel.RuntimeService.SceneStateManager
+                  .GetOrCreateScene(_viewModel.SceneId);
+              if (state.EntityMap.TryGetValue(bvm.EntityId, out var entity))
+              {
+                  state.SelectedEntity = entity;
+                  CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+                      new AetherVk.Logic.ViewModels.EntitySelectedMessage(entity)
+                  );
+              }
           }
-          
-          CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
-              new AetherVk.Logic.ViewModels.EntitySelectedMessage(entity)
-          );
 
           e.Handled = true;
+      }
+  }
+
+  private void OnBillboardWheelChanged(object? sender, PointerWheelEventArgs e)
+  {
+      if (sender is Image image && image.DataContext is BillboardViewModel bvm && bvm.IsSelected)
+      {
+          if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+          {
+              // Ctrl + Wheel = uniform scale
+              double delta = e.Delta.Y > 0 ? 0.1 : -0.1;
+              bvm.Scale = Math.Max(0.1, bvm.Scale + delta);
+              e.Handled = true;
+          }
+          else if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+          {
+              // Shift + Wheel = opacity
+              double delta = e.Delta.Y > 0 ? 0.05 : -0.05;
+              bvm.Opacity = Math.Clamp(bvm.Opacity + delta, 0.0, 1.0);
+              e.Handled = true;
+          }
+
+          // Sync back to Rust if ECS-linked
+          if (e.Handled && bvm.EntityId != 0 && _viewModel != null)
+          {
+              _viewModel.RuntimeService.SetScreenSpaceBillboard(
+                  _viewModel.SceneId, bvm.EntityId,
+                  (float)(bvm.X / _viewModel.Width),
+                  (float)(bvm.Y / _viewModel.Height),
+                  (float)bvm.Scale,
+                  (float)bvm.Rotation,
+                  (float)bvm.Opacity,
+                  bvm.ZIndex
+              );
+          }
       }
   }
 }

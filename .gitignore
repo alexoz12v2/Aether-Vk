@@ -890,3 +890,6 @@ assets/sim/metal-cross/
 assets/sim/cross/
 
 .aider*
+scripts/*.bsp
+figma.png
+

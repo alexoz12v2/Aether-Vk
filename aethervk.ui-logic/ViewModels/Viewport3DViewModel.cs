@@ -281,27 +281,69 @@ public partial class Viewport3DViewModel
 
   /// <summary>
   /// Opens a native file dialog to permit selecting an image off the disk.
-  /// Constructs a new <see cref="BillboardViewModel"/> dynamically and pushes it to the UI Layer.
+  /// Spawns a Rust ECS entity with ScreenSpaceBillboardComponent, then creates
+  /// a <see cref="BillboardViewModel"/> linked to it for Avalonia rendering.
   /// </summary>
   [RelayCommand]
   private async Task InsertBillboard()
   {
-      var filters = new[] { "Images|*.png;*.jpg;*.jpeg;*.bmp" };
+      var filters = new[] { "png", "jpg", "jpeg", "bmp" };
 
       var path = await _fileDialogService.ShowOpenFileDialogAsync("Select Billboard Image", filters);
       if (!string.IsNullOrEmpty(path))
       {
           try
           {
-              Billboards.Add(new BillboardViewModel
+              // Place billboard at center of viewport, NDC [0..1]
+              float ndcX = 0.5f;
+              float ndcY = 0.5f;
+
+              // Spawn ECS entity with ScreenSpaceBillboardComponent in Rust
+              var entityId = _runtimeService.SpawnBillboard(
+                  SceneId, path, ndcX, ndcY, 1.0f, 1.0f, PresentationEngineId
+              );
+
+              if (entityId == 0)
               {
+                  _breadcrumbService.ShowMessageAsync("Error", "Failed to create billboard entity.");
+                  return;
+              }
+
+              // Create the Avalonia-side ViewModel linked to this entity
+              var billboard = new BillboardViewModel
+              {
+                  EntityId = entityId,
                   ImageSource = path,
-                  X = 10,
-                  Y = 10,
+                  X = (Width / 2.0) - 50,
+                  Y = (Height / 2.0) - 50,
                   Width = 100,
                   Height = 100,
-                  ZIndex = 1
-              });
+                  ZIndex = 1,
+                  Opacity = 1.0,
+                  Scale = 1.0,
+                  Rotation = 0.0,
+              };
+
+              Billboards.Add(billboard);
+
+              // Wire the entity in the scene with the NativeComponent
+              var state = _sceneStateManager.GetOrCreateScene(SceneId);
+              if (state.EntityMap.TryGetValue(entityId, out var entity))
+              {
+                  var nativeComp = new AetherVk.Logic.Models.ScreenSpaceBillboardComponent
+                  {
+                      ImagePath = path,
+                      NdcX = ndcX,
+                      NdcY = ndcY,
+                      Scale = 1.0f,
+                      RotationDeg = 0.0f,
+                      Opacity = 1.0f,
+                      ZIndex = 1,
+                      ViewportId = PresentationEngineId,
+                  };
+                  entity.Components.Add(nativeComp);
+              }
+
               _breadcrumbService.ShowMessageAsync("Billboard Added", $"Loaded image {System.IO.Path.GetFileName(path)}");
           }
           catch (Exception ex)
@@ -309,6 +351,21 @@ public partial class Viewport3DViewModel
               _breadcrumbService.ShowMessageAsync("Error", $"Failed to load image: {ex.Message}");
           }
       }
+  }
+
+  /// <summary>
+  /// Removes a billboard from the viewport and its backing Rust ECS entity.
+  /// </summary>
+  [RelayCommand]
+  private void RemoveBillboard(BillboardViewModel? billboard)
+  {
+      if (billboard == null) return;
+
+      if (billboard.EntityId != 0)
+      {
+          RuntimeService.RemoveEntity(SceneId, billboard.EntityId);
+      }
+      Billboards.Remove(billboard);
   }
 
   // HOME_POSITION: (AU) 0.049,0.034,0.039
@@ -479,6 +536,11 @@ public partial class Viewport3DViewModel
         var selected = Billboards.FirstOrDefault(b => b.IsSelected);
         if (selected != null)
         {
+            // Remove the Rust ECS entity if this billboard is linked to one
+            if (selected.EntityId != 0)
+            {
+                RuntimeService.RemoveEntity(SceneId, selected.EntityId);
+            }
             Billboards.Remove(selected);
             return true;
         }

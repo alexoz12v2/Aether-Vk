@@ -61,6 +61,7 @@ struct FrameDiscard {
 struct SwapchainFrame {
   pub submission_fence: Option<NonZeroHandle<vk::Fence>>,
   pub acquire_semaphore: Option<NonZeroHandle<vk::Semaphore>>,
+  pub fence_submitted: bool,
 }
 
 /// TODO: Document this item
@@ -347,6 +348,13 @@ impl PresentationState {
     }
   }
 
+  pub(super) fn mark_fence_submitted(&mut self, frame_index: u32) {
+    match self {
+      Self::Windowed(state) => state.frames[frame_index as usize].fence_submitted = true,
+      Self::Windowless(state) => state.frames[frame_index as usize].fence_submitted = true,
+    }
+  }
+
   /// TODO: Document this item
   pub(super) fn is_windowless(&self) -> bool {
     matches!(self, Self::Windowless(_))
@@ -545,9 +553,11 @@ impl WindowedPresentationState {
       .wait_dst_stage_mask(&wait_dst_stage_mask)
       .signal_semaphores(&signal_semaphores);
 
-    device
-      .locked_queue_submit(graphics_queue, core::slice::from_ref(&submit_info), fence)
-      .map_err(GpuError::from)?;
+    if !frame.fence_submitted {
+      device
+        .locked_queue_submit(graphics_queue, core::slice::from_ref(&submit_info), fence)
+        .map_err(GpuError::from)?;
+    }
 
     let swapchains = [self.swapchain.get()];
     let image_indices = [image_index];
@@ -572,6 +582,7 @@ impl WindowedPresentationState {
     };
 
     unsafe { image.reclaim_from_swapchain_frame(frame) };
+    frame.fence_submitted = false;
 
     match present_result {
       Ok(_) | Err(vk::Result::SUBOPTIMAL_KHR) => {
@@ -1527,6 +1538,7 @@ impl Default for SwapchainFrame {
     Self {
       submission_fence: None,
       acquire_semaphore: None,
+      fence_submitted: false,
     }
   }
 }
@@ -1568,6 +1580,7 @@ impl SwapchainFrame {
     debug_assert!(swapchain_image.eligible_for_acquisition() && self.eligible_for_steal());
     self.acquire_semaphore = swapchain_image.acquire_semaphore.take();
     self.submission_fence = swapchain_image.submission_fence.take();
+    self.fence_submitted = false;
   }
 }
 
@@ -1683,13 +1696,16 @@ impl WindowlessPresentationState {
     }
 
     let fence = frame.submission_fence.ok_or(crate::gpu_err_device!())?.get();
-    let submit_info = vk::SubmitInfo::default();
-    unsafe {
-      device
-        .locked_queue_submit(graphics_queue, core::slice::from_ref(&submit_info), fence)
-        .map_err(GpuError::from)?;
-      image.reclaim_from_swapchain_frame(frame);
+    if !frame.fence_submitted {
+      let submit_info = vk::SubmitInfo::default();
+      unsafe {
+        device
+          .locked_queue_submit(graphics_queue, core::slice::from_ref(&submit_info), fence)
+          .map_err(GpuError::from)?;
+      }
     }
+    unsafe { image.reclaim_from_swapchain_frame(frame) };
+    frame.fence_submitted = false;
 
     Ok(())
   }
@@ -2004,6 +2020,7 @@ impl WindowlessPresentationState {
         self.frames.push_unchecked(SwapchainFrame {
           submission_fence: None,
           acquire_semaphore: None,
+          fence_submitted: false,
         });
 
         while self.frame_discards.len() < image_count {

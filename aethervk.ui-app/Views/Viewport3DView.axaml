@@ -5,7 +5,8 @@
              x:DataType="vm:Viewport3DViewModel"
              x:Class="AetherVk.Views.Viewport3DView"
              input:ActionContext.Id="Viewport"
-             input:ActionContext.Handler="{Binding}">
+             input:ActionContext.Handler="{Binding}"
+             xmlns:conv="using:AetherVk.Converters">
     <Grid>
         <Image x:Name="RenderTargetImage" Stretch="Uniform" Focusable="True"
                PointerPressed="OnPointerPressed"
@@ -14,7 +15,7 @@
                PointerWheelChanged="OnPointerWheelChanged">
         </Image>
 
-        <ItemsControl ItemsSource="{Binding Billboards}" IsHitTestVisible="False">
+        <ItemsControl ItemsSource="{Binding Billboards}">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
                     <Canvas />
@@ -22,14 +23,42 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="vm:BillboardViewModel">
-                    <StackPanel Orientation="Vertical">
-                        <Image Source="{Binding ImageSource}" Width="{Binding Width}" Height="{Binding Height}" Opacity="{Binding Opacity}"
-                               IsVisible="{Binding ImageSource, Converter={x:Static ObjectConverters.IsNotNull}}"
-                               PointerPressed="OnBillboardPointerPressed" />
-                        <Border Background="{DynamicResource Bg.Surface}" CornerRadius="4" Padding="4" IsVisible="{Binding Text, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                            <TextBlock Text="{Binding Text}" Foreground="{DynamicResource Text.Primary}" FontWeight="Bold" FontSize="14" HorizontalAlignment="Center"/>
+                    <Grid>
+                        <!-- The billboard content with scale/rotation transforms -->
+                        <StackPanel Orientation="Vertical" RenderTransformOrigin="50%,50%">
+                            <StackPanel.RenderTransform>
+                                <TransformGroup>
+                                    <ScaleTransform ScaleX="{Binding Scale}" ScaleY="{Binding Scale}" />
+                                    <RotateTransform Angle="{Binding Rotation}" />
+                                </TransformGroup>
+                            </StackPanel.RenderTransform>
+
+                            <Image Source="{Binding ImageSource, Converter={x:Static conv:FilePathToBitmapConverter.Instance}}"
+                                   Width="{Binding Width}" Height="{Binding Height}" Opacity="{Binding Opacity}"
+                                   IsVisible="{Binding ImageSource, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                   PointerPressed="OnBillboardPointerPressed"
+                                   PointerWheelChanged="OnBillboardWheelChanged" />
+                            <Border Background="{DynamicResource Bg.Surface}" CornerRadius="4" Padding="4"
+                                    IsVisible="{Binding Text, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <TextBlock Text="{Binding Text}" Foreground="{DynamicResource Text.Primary}"
+                                           FontWeight="Bold" FontSize="14" HorizontalAlignment="Center"/>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- Selection adorner overlay -->
+                        <Border IsVisible="{Binding IsSelected}" IsHitTestVisible="True"
+                                BorderBrush="{DynamicResource Accent.Primary}" BorderThickness="2"
+                                CornerRadius="4" Margin="-4" Padding="0" Background="Transparent">
+                            <!-- Delete button at top-right -->
+                            <Button HorizontalAlignment="Right" VerticalAlignment="Top"
+                                    Width="20" Height="20" Padding="0"
+                                    Background="{DynamicResource Sem.Error}" Foreground="White"
+                                    CornerRadius="10" FontSize="10" Content="✕"
+                                    Command="{Binding $parent[ItemsControl].((vm:Viewport3DViewModel)DataContext).RemoveBillboardCommand}"
+                                    CommandParameter="{Binding}"
+                                    Margin="0,-8,-8,0" />
                         </Border>
-                    </StackPanel>
+                    </Grid>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
             <ItemsControl.Styles>

@@ -9,7 +9,7 @@ aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = fal
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = [
   "console_log",
 ] }
-anise = { version = "0.9.6", path = "../../external/anise/anise" }
+anise = { version = "0.9.6", path = "../../external/anise/anise", default-features = false }
 bytes = "1.11.1"
 heapless = { version = "0.9" }
 image = "0.25.10"
