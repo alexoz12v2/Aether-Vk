@@ -639,7 +639,7 @@ mod tests {
       .add_component(
         obj_micro,
         TransformComponent {
-          position: Vec3f32::from_components(-20.0, 0.0, 0.0),
+          position: Vec3f32::from_components(-30.0, 0.0, 0.0),
           rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
           scale: Vec3f32::from_components(1.0, 1.0, 1.0),
         },
@@ -673,7 +673,7 @@ mod tests {
       .with_device(ctx.device_handle, |dev| {
         let vulkan_device = dev.as_any().downcast_ref::<device::Device>().unwrap();
 
-        let ps = run_simulation(vulkan_device, &mut scene, 2.0, false);
+        let ps = run_simulation(vulkan_device, &mut scene, 0.6, false);
 
         // Verify
         let v_macro = scene.with_component(obj_macro, |k: &KinematicComponent| k.velocity).unwrap();
