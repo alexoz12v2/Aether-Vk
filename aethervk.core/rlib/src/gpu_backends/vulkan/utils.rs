@@ -364,7 +364,148 @@ impl EntryWrapper {
       }
       #[cfg(target_os = "linux")]
       {
-        todo!()
+        // On Linux, the Vulkan loader is libvulkan.so.1 provided by the system or SDK.
+        // The ICD and layer paths are typically managed by the system (mesa, nvidia, etc.)
+        // or by environment variables (VK_ICD_FILENAMES, VK_LAYER_PATH) already set by the
+        // caller / CI environment.
+
+        // If a base_path_override or VULKAN_SDK env var is available, try to configure
+        // layer/ICD paths and load the loader from there first (debug builds).
+        // Otherwise fall back to the system libvulkan.so.1.
+        let sdk_loader: Option<alloc::ffi::CString> = base_path_override
+          .and_then(|base_path| {
+            use aethervk_oshal_rlib::os::fs::{FileSystemObject, Path};
+
+            let base_bytes = base_path.to_bytes();
+            let dir_bytes = match base_bytes.iter().rposition(|&b| b == b'/') {
+              Some(pos) => &base_bytes[..=pos],
+              None => base_bytes,
+            };
+
+            let local_layer = alloc::ffi::CString::new(
+              [dir_bytes, b"vulkan/share/vulkan/explicit_layer.d"].concat(),
+            )
+            .unwrap();
+            let local_icd =
+              alloc::ffi::CString::new([dir_bytes, b"vulkan/share/vulkan/icd.d"].concat()).unwrap();
+            let local_loader =
+              alloc::ffi::CString::new([dir_bytes, b"vulkan/lib/libvulkan.so.1"].concat()).unwrap();
+
+            let local_layer_obj = unsafe {
+              Path::from_slice(core::slice::from_raw_parts(
+                local_layer.as_ptr().cast::<core::ffi::c_char>(),
+                local_layer.as_bytes().len(),
+              ))
+            };
+
+            let local_icd_obj = unsafe {
+              Path::from_slice(core::slice::from_raw_parts(
+                local_icd.as_ptr().cast::<core::ffi::c_char>(),
+                local_icd.as_bytes().len(),
+              ))
+            };
+
+            if local_layer_obj.is_dir() && local_icd_obj.is_dir() {
+              unsafe {
+                libc::setenv(b"VK_LAYER_PATH\0".as_ptr().cast(), local_layer.as_ptr(), 1);
+                libc::setenv(b"VK_ICD_FILENAMES\0".as_ptr().cast(), local_icd.as_ptr(), 1);
+                libc::setenv(b"VK_DRIVER_FILES\0".as_ptr().cast(), local_icd.as_ptr(), 1);
+              }
+              Some(local_loader)
+            } else {
+              None
+            }
+          })
+          .or_else(|| {
+            #[cfg(debug_assertions)]
+            {
+              let env_ptr = unsafe { libc::getenv(b"VULKAN_SDK\0".as_ptr().cast()) };
+              core::ptr::NonNull::new(env_ptr).and_then(|ptr| {
+                let sdk_cstr = unsafe { core::ffi::CStr::from_ptr(ptr.as_ptr()) };
+                let sdk_bytes = sdk_cstr.to_bytes();
+
+                let slash = if sdk_bytes.last() == Some(&b'/') {
+                  b"".as_slice()
+                } else {
+                  b"/".as_slice()
+                };
+
+                let sdk_layer = alloc::ffi::CString::new(
+                  [sdk_bytes, slash, b"share/vulkan/explicit_layer.d"].concat(),
+                )
+                .unwrap();
+                let sdk_icd =
+                  alloc::ffi::CString::new([sdk_bytes, slash, b"share/vulkan/icd.d"].concat())
+                    .unwrap();
+                let sdk_loader =
+                  alloc::ffi::CString::new([sdk_bytes, slash, b"lib/libvulkan.so.1"].concat())
+                    .unwrap();
+
+                unsafe {
+                  libc::setenv(b"VK_LAYER_PATH\0".as_ptr().cast(), sdk_layer.as_ptr(), 1);
+                }
+
+                // Check if the SDK loader actually exists before committing
+                let sdk_loader_path = unsafe {
+                  aethervk_oshal_rlib::os::fs::Path::from_slice(core::slice::from_raw_parts(
+                    sdk_loader.as_ptr().cast::<core::ffi::c_char>(),
+                    sdk_loader.as_bytes().len(),
+                  ))
+                };
+                if sdk_loader_path.is_file() {
+                  Some(sdk_loader)
+                } else {
+                  None
+                }
+              })
+            }
+            #[cfg(not(debug_assertions))]
+            {
+              None
+            }
+          });
+
+        // Load the Vulkan shared library
+        let loader_name = sdk_loader
+          .as_deref()
+          .map(|c| c.as_ptr())
+          .unwrap_or(b"libvulkan.so.1\0".as_ptr().cast());
+
+        // Try RTLD_NOLOAD first (already mapped into the process)
+        let mut lib = unsafe { libc::dlopen(loader_name, libc::RTLD_LAZY | libc::RTLD_NOLOAD) };
+        if lib.is_null() {
+          lib = unsafe { libc::dlopen(loader_name, libc::RTLD_NOW | libc::RTLD_GLOBAL) };
+        }
+
+        if let Some(module_ptr) = core::ptr::NonNull::new(lib) {
+          vulkan_loader_module = module_ptr;
+          let sym = unsafe {
+            libc::dlsym(
+              module_ptr.as_ptr(),
+              b"vkGetInstanceProcAddr\0".as_ptr().cast(),
+            )
+          };
+          get_instance_proc_addr = if let Some(func_addr) = core::ptr::NonNull::new(sym) {
+            unsafe { core::mem::transmute(func_addr) }
+          } else {
+            return Err(GpuError::BackendSpecific(
+              "vkGetInstanceProcAddr not found in libvulkan.so.1".into(),
+            ));
+          };
+        } else {
+          let err_ptr = unsafe { libc::dlerror() };
+          let err_msg = if !err_ptr.is_null() {
+            unsafe { core::ffi::CStr::from_ptr(err_ptr) }
+              .to_str()
+              .unwrap_or("unknown dlerror")
+          } else {
+            "unknown error"
+          };
+          return Err(GpuError::BackendSpecific(alloc::format!(
+            "Failed to load libvulkan.so.1: {}",
+            err_msg
+          )));
+        }
       }
       #[cfg(target_os = "macos")]
       {
