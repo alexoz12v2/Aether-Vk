@@ -3,14 +3,10 @@
 use crate::{
   gpu,
   gpu::{
-    FrameCancelGuard, PresentationEngineHandle, RenderDevice,
-    SwapchainStatus,
+    FrameCancelGuard, PresentationEngineHandle, RenderDevice, SwapchainStatus,
     scene_conversion::{RenderSceneExtraction, SceneConversionExt},
   },
-  simulation_api::structs::{
-    CustomRenderCallback, RenderCommand,
-    RenderThreadContext,
-  },
+  simulation_api::structs::{CustomRenderCallback, RenderCommand, RenderThreadContext},
   types::{EngineError, EngineResult, GpuResult},
 };
 use aethervk_oshal_rlib as oshal;
@@ -142,7 +138,9 @@ fn process_command(
         let is_first_render =
           if first_render_map.contains_key(&render_frame.presentation_engine_handle) {
             *unsafe {
-              first_render_map.get(&render_frame.presentation_engine_handle).unwrap_unchecked()
+              first_render_map
+                .get(&render_frame.presentation_engine_handle)
+                .unwrap_unchecked()
             }
           } else {
             let _ = first_render_map.insert(render_frame.presentation_engine_handle, true);
@@ -168,47 +166,86 @@ fn process_command(
                 acquire_result,
               );
 
-              let extracted_scene = render_frame.extract_scene(extent, Some(&thread_pool))
-                .map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] extract_scene failed: {:?}", e); e })?;
+              let extracted_scene =
+                render_frame.extract_scene(extent, Some(&thread_pool)).map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] extract_scene failed: {:?}", e);
+                  e
+                })?;
 
-              let cmd_buffer = render_device.get_command_buffer()
-                .map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] get_command_buffer failed: {:?}", e); e })?;
-              render_device.set_command_buffer_presentation_engine(
-                cmd_buffer,
-                render_frame.presentation_engine_handle,
-              ).map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] set_cmd_pe failed: {:?}", e); e })?;
+              let cmd_buffer = render_device.get_command_buffer().map_err(|e| {
+                aethervk_oshal_rlib::log!("[render tasklet] get_command_buffer failed: {:?}", e);
+                e
+              })?;
+              render_device
+                .set_command_buffer_presentation_engine(
+                  cmd_buffer,
+                  render_frame.presentation_engine_handle,
+                )
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] set_cmd_pe failed: {:?}", e);
+                  e
+                })?;
               let mut cmd_scope =
-                gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id))
-                  .map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] ScopedCommandBuffer::new failed: {:?}", e); e })?;
+                gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id)).map_err(
+                  |e| {
+                    aethervk_oshal_rlib::log!(
+                      "[render tasklet] ScopedCommandBuffer::new failed: {:?}",
+                      e
+                    );
+                    e
+                  },
+                )?;
 
               let time_readings =
                 render_frame.scene.read().time_state.read().time_info.read().current();
               let debug_name = render_frame.scene.read().debug_name.clone();
 
-              let mut render_scene = extracted_scene.build_render_scene(
-                render_device,
-                render_frame.presentation_engine_handle,
-                cmd_buffer,
-                time_readings,
-                extent.into(),
-                &debug_name,
-              ).map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] build_render_scene failed: {:?}", e); e })?;
+              let mut render_scene = extracted_scene
+                .build_render_scene(
+                  render_device,
+                  render_frame.presentation_engine_handle,
+                  cmd_buffer,
+                  time_readings,
+                  extent.into(),
+                  &debug_name,
+                )
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] build_render_scene failed: {:?}", e);
+                  e
+                })?;
 
               if let Some(sun_call) = &render_scene.sun_call {
-                render_device.update_sun(
-                  cmd_buffer,
-                  sun_call.entity,
-                  (128, 128, 128),
-                  sun_call.radius,
-                ).map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] update_sun failed: {:?}", e); e })?;
+                render_device
+                  .update_sun(
+                    cmd_buffer,
+                    sun_call.entity,
+                    (128, 128, 128),
+                    sun_call.radius,
+                  )
+                  .map_err(|e| {
+                    aethervk_oshal_rlib::log!("[render tasklet] update_sun failed: {:?}", e);
+                    e
+                  })?;
               }
 
               render_device
                 .upload_particle_systems(cmd_buffer, &mut render_scene.particle_calls)
-                .map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] upload_particle_systems failed: {:?}", e); e })?;
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!(
+                    "[render tasklet] upload_particle_systems failed: {:?}",
+                    e
+                  );
+                  e
+                })?;
               render_device
                 .upload_particle2_systems(cmd_buffer, &mut render_scene.particle2_calls)
-                .map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] upload_particle2_systems failed: {:?}", e); e })?;
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!(
+                    "[render tasklet] upload_particle2_systems failed: {:?}",
+                    e
+                  );
+                  e
+                })?;
 
               if is_first_render && render_frame.custom_render_callback.is_some() {
                 let c = unsafe { render_frame.custom_render_callback.as_ref().unwrap_unchecked() };
@@ -218,27 +255,48 @@ fn process_command(
                   render_frame.presentation_engine_handle,
                   &render_scene,
                   c.user_data.0,
-                ).map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] on_first_render_fn failed: {:?}", e); e })?
+                )
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] on_first_render_fn failed: {:?}", e);
+                  e
+                })?
               }
 
-              render_device.begin_render_pass(
-                cmd_buffer,
-                render_frame.presentation_engine_handle,
-                &acquire_result,
-              ).map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] begin_render_pass failed: {:?}", e); e })?;
+              render_device
+                .begin_render_pass(
+                  cmd_buffer,
+                  render_frame.presentation_engine_handle,
+                  &acquire_result,
+                )
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] begin_render_pass failed: {:?}", e);
+                  e
+                })?;
               let render_pass_scope = gpu::ScopedRenderPass::new(render_device, cmd_buffer);
 
-              render_device.set_viewport(cmd_buffer, &gpu::Viewport::from_extent(extent))
-                .map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] set_viewport failed: {:?}", e); e })?;
-              render_device.set_scissor(cmd_buffer, &gpu::Rect2D::from_extent(extent))
-                .map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] set_scissor failed: {:?}", e); e })?;
+              render_device
+                .set_viewport(cmd_buffer, &gpu::Viewport::from_extent(extent))
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] set_viewport failed: {:?}", e);
+                  e
+                })?;
+              render_device
+                .set_scissor(cmd_buffer, &gpu::Rect2D::from_extent(extent))
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] set_scissor failed: {:?}", e);
+                  e
+                })?;
 
               gpu::frame::render_frame(
                 render_device,
                 cmd_buffer,
                 render_frame.presentation_engine_handle,
                 &render_scene,
-              ).map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] render_frame failed: {:?}", e); e })?;
+              )
+              .map_err(|e| {
+                aethervk_oshal_rlib::log!("[render tasklet] render_frame failed: {:?}", e);
+                e
+              })?;
 
               if render_frame.custom_render_callback.is_some() {
                 let c = unsafe { render_frame.custom_render_callback.as_ref().unwrap_unchecked() };
@@ -248,11 +306,20 @@ fn process_command(
                   render_frame.presentation_engine_handle,
                   &render_scene,
                   c.user_data.0,
-                ).map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] after_render_frame_fn failed: {:?}", e); e })?;
+                )
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!(
+                    "[render tasklet] after_render_frame_fn failed: {:?}",
+                    e
+                  );
+                  e
+                })?;
               }
 
-              render_pass_scope.end()
-                .map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] render_pass_scope.end failed: {:?}", e); e })?;
+              render_pass_scope.end().map_err(|e| {
+                aethervk_oshal_rlib::log!("[render tasklet] render_pass_scope.end failed: {:?}", e);
+                e
+              })?;
 
               let is_windowless = unsafe {
                 render_device
@@ -260,20 +327,30 @@ fn process_command(
                   .unwrap_unchecked()
               };
               if is_windowless {
-                render_device.record_windowless_download(cmd_buffer, task_id)
-                  .map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] record_windowless_download failed: {:?}", e); e })?;
+                render_device.record_windowless_download(cmd_buffer, task_id).map_err(|e| {
+                  aethervk_oshal_rlib::log!(
+                    "[render tasklet] record_windowless_download failed: {:?}",
+                    e
+                  );
+                  e
+                })?;
               }
 
               if let Some(task) = render_frame.active_physics_task.lock().take() {
-                if let Some(sync) = task.wait()
-                  .map_err(|e| crate::types::GpuError::InvalidState(alloc::format!("Physics engine error: {:?}", e)))?
-                {
+                if let Some(sync) = task.wait().map_err(|e| {
+                  crate::types::GpuError::InvalidState(alloc::format!(
+                    "Physics engine error: {:?}",
+                    e
+                  ))
+                })? {
                   cmd_scope.set_sync_info(sync);
                 }
               }
 
-              cmd_scope.submit()
-                .map_err(|e| { aethervk_oshal_rlib::log!("[render tasklet] cmd_scope.submit failed: {:?}", e); e })?;
+              cmd_scope.submit().map_err(|e| {
+                aethervk_oshal_rlib::log!("[render tasklet] cmd_scope.submit failed: {:?}", e);
+                e
+              })?;
               present_guard.defuse();
 
               let task_id_feedback = alloc::sync::Arc::clone(&render_frame.task_id);
@@ -282,7 +359,10 @@ fn process_command(
               Ok((cmd_buffer, is_windowless, is_first_render))
             });
             if let Err(ref e) = result {
-              aethervk_oshal_rlib::log!("[render tasklet] tasklet failed, signalling u64::MAX: {:?}", e);
+              aethervk_oshal_rlib::log!(
+                "[render tasklet] tasklet failed, signalling u64::MAX: {:?}",
+                e
+              );
               task_id_feedback_err_clone.store(u64::MAX, core::sync::atomic::Ordering::Release);
             }
             result
@@ -292,7 +372,10 @@ fn process_command(
         if let Ok(handle) = tasklet {
           handles.push((handle, pe_handle, acquire_result));
         } else {
-          aethervk_oshal_rlib::log!("[render thread] spawn_tasklet failed for PE {:?}", pe_handle);
+          aethervk_oshal_rlib::log!(
+            "[render thread] spawn_tasklet failed for PE {:?}",
+            pe_handle
+          );
           task_id_feedback_err.store(u64::MAX, core::sync::atomic::Ordering::Release);
         }
       }
@@ -313,17 +396,26 @@ fn process_command(
               Ok(status) => {
                 oshal::log!(
                   "[Render Thread] Warning: present status={:?} for PE {:?} — may need resize",
-                  status, pe_handle
+                  status,
+                  pe_handle
                 );
               }
               Err(e) => {
-                oshal::log!("[Render Thread] present() error for PE {:?}: {:?}", pe_handle, e);
+                oshal::log!(
+                  "[Render Thread] present() error for PE {:?}: {:?}",
+                  pe_handle,
+                  e
+                );
                 return Err(e);
               }
             }
           }
           Err(e) => {
-            oshal::log!("[Render Thread] tasklet wait() failed for PE {:?}: {:?}", pe_handle, e);
+            oshal::log!(
+              "[Render Thread] tasklet wait() failed for PE {:?}: {:?}",
+              pe_handle,
+              e
+            );
           }
         }
       }

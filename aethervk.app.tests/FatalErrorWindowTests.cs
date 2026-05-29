@@ -1,8 +1,8 @@
+using System.Linq;
 using AetherVk.Views;
 using Avalonia.Controls;
-using Avalonia.LogicalTree;
 using Avalonia.Headless.XUnit;
-using System.Linq;
+using Avalonia.LogicalTree;
 using Xunit;
 
 namespace AetherVk.AppTests;
@@ -13,7 +13,7 @@ public class FatalErrorWindowTests
   public void FatalErrorWindow_Should_Render_And_Initialize()
   {
     var window = new FatalErrorWindow("Test error message");
-    
+
     window.Show();
 
     Assert.NotNull(window);

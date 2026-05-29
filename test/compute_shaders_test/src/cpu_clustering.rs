@@ -27,7 +27,9 @@ pub fn group_and_cluster_collisions(
   time_tolerance: f32,
 ) -> Vec<CollisionCluster> {
   collisions.sort_by(|a, b| {
-    a.time_of_impact.partial_cmp(&b.time_of_impact).unwrap_or(std::cmp::Ordering::Equal)
+    a.time_of_impact
+      .partial_cmp(&b.time_of_impact)
+      .unwrap_or(std::cmp::Ordering::Equal)
   });
 
   let mut collided_entities: HashSet<u32> = HashSet::new();

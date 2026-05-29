@@ -40,8 +40,9 @@ fn setup_render_frontend_for_tests(
   use std::sync::mpsc;
   let (tx, rx) = mpsc::channel();
 
-  let th =
-    aethervk_oshal_rlib::os::thread::Builder::new().stack_size(8 * 1024 * 1024).spawn(move || {
+  let th = aethervk_oshal_rlib::os::thread::Builder::new()
+    .stack_size(8 * 1024 * 1024)
+    .spawn(move || {
       let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
       let pool_arc = Arc::new(pool);
 

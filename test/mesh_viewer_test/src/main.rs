@@ -46,10 +46,19 @@ impl SimulationDelegate for MeshViewerDelegate {
     let scene_lock = ctx.get_scene(scene_id).unwrap();
     {
       let scene_read = scene_lock.read();
-      let camera_entity =
-        scene_read.presentation_engines.read().get(&pe_handle).unwrap().camera_entity.unwrap();
-      self.camera_ext_entity =
-        scene_read.entity_map.iter().find(|&(_, v)| *v == camera_entity).map(|(k, _)| *k).unwrap();
+      let camera_entity = scene_read
+        .presentation_engines
+        .read()
+        .get(&pe_handle)
+        .unwrap()
+        .camera_entity
+        .unwrap();
+      self.camera_ext_entity = scene_read
+        .entity_map
+        .iter()
+        .find(|&(_, v)| *v == camera_entity)
+        .map(|(k, _)| *k)
+        .unwrap();
       ctx.set_transform_component(
         scene_id,
         self.camera_ext_entity,

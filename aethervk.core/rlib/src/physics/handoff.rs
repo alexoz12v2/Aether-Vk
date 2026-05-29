@@ -29,8 +29,9 @@ impl SpheresOfInfluenceSystem {
 
     // 1. Gather all frames natively pulling resolved Velocity momentum
     scene.query2::<TransformComponent, ReferenceFrameComponent, _>(|e, t, f| {
-      let vel =
-        scene.with_component(e, |k: &KinematicComponent| k.velocity).unwrap_or(Vec3f32::zero());
+      let vel = scene
+        .with_component(e, |k: &KinematicComponent| k.velocity)
+        .unwrap_or(Vec3f32::zero());
       let data = FrameData {
         entity_id: e,
         parent_id: scene.get_parent(e),
@@ -56,8 +57,9 @@ impl SpheresOfInfluenceSystem {
 
     // 2. Process Escapes and Captures per frame
     for (_i, frame) in all_frames.iter().enumerate() {
-      let parent_idx =
-        frame.parent_id.and_then(|pid| all_frames.iter().position(|f| f.entity_id == pid));
+      let parent_idx = frame
+        .parent_id
+        .and_then(|pid| all_frames.iter().position(|f| f.entity_id == pid));
       let children_indices = children_map.get(&frame.entity_id).cloned().unwrap_or_default();
 
       scene.with_component(frame.entity_id, |sys: &ParticleSystemComponent| {
@@ -75,7 +77,9 @@ impl SpheresOfInfluenceSystem {
 
         let mut captured_chunks: alloc::vec::Vec<alloc::vec::Vec<alloc::vec::Vec<ParticleData>>> =
           core::iter::repeat_with(|| {
-            core::iter::repeat_with(alloc::vec::Vec::new).take(children_indices.len()).collect()
+            core::iter::repeat_with(alloc::vec::Vec::new)
+              .take(children_indices.len())
+              .collect()
           })
           .take(num_chunks)
           .collect();
@@ -104,7 +108,9 @@ impl SpheresOfInfluenceSystem {
           let escaped_local =
             unsafe { &mut *escaped_ptr.get::<alloc::vec::Vec<ParticleData>>().add(chunk_id) };
           let cap_local_arrays = unsafe {
-            &mut *captured_ptr.get::<alloc::vec::Vec<alloc::vec::Vec<ParticleData>>>().add(chunk_id)
+            &mut *captured_ptr
+              .get::<alloc::vec::Vec<alloc::vec::Vec<ParticleData>>>()
+              .add(chunk_id)
           };
 
           let soi_sq = frame.frame.soi_radius * frame.frame.soi_radius;

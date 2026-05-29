@@ -351,8 +351,16 @@ pub fn build_motion_particle_lbvh(
   for i in 0..num_internal_nodes {
     let (first, last) = determine_range(&morton_entries, i);
     let split = find_split(&morton_entries, first, last);
-    let left_child = if split == first { num_internal_nodes + split } else { split };
-    let right_child = if split + 1 == last { num_internal_nodes + split + 1 } else { split + 1 };
+    let left_child = if split == first {
+      num_internal_nodes + split
+    } else {
+      split
+    };
+    let right_child = if split + 1 == last {
+      num_internal_nodes + split + 1
+    } else {
+      split + 1
+    };
     nodes[i].left_child_or_primitive_offset = left_child as u32;
     nodes[i].right_child_offset = right_child as u32;
   }
@@ -419,7 +427,6 @@ pub fn build_motion_particle_lbvh(
     primitives,
   })
 }
-
 
 /// Educational: Fast BVH Refitting.
 /// Updates the bounding boxes of an existing Linear BVH without changing its topology.

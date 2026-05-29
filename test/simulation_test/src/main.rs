@@ -102,8 +102,9 @@ fn ui_custom_render_fn(
   ];
 
   let mut mem_text = String::new();
-  if let Some(vk_dev) =
-    device.as_any().downcast_ref::<aethervk_core_rlib::gpu_backends::vulkan::device::Device>()
+  if let Some(vk_dev) = device
+    .as_any()
+    .downcast_ref::<aethervk_core_rlib::gpu_backends::vulkan::device::Device>()
   {
     let (budget, usage) = vk_dev.get_vma_budget_usage();
     mem_text.push_str(&format!(
@@ -579,7 +580,12 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
         .unwrap()
         .camera_entity
         .unwrap();
-      read_ctx.entity_map.iter().find(|&(_, &v)| v == int_cam).map(|(&k, _)| k).unwrap()
+      read_ctx
+        .entity_map
+        .iter()
+        .find(|&(_, &v)| v == int_cam)
+        .map(|(&k, _)| k)
+        .unwrap()
     };
 
     let font_path = assets_dir.join("fonts/JetBrainsMono-Regular.ttf");
@@ -1045,8 +1051,10 @@ mod depth_tests {
     let width = 64;
     let height = 64;
     let _pe = ctx.create_presentation_engine(scene_id, width, height).unwrap();
-    let ext_cam =
-      ctx.add_orthographic_camera(scene_id, _pe, "camera", -10.0, -10.0, 0.1, 100.0).unwrap().get();
+    let ext_cam = ctx
+      .add_orthographic_camera(scene_id, _pe, "camera", -10.0, -10.0, 0.1, 100.0)
+      .unwrap()
+      .get();
     ctx
       .set_transform_component(
         scene_id,
@@ -1102,9 +1110,19 @@ mod depth_tests {
 
     if test_outlines {
       ctx.set_entity_selected(scene_id, ext_red, true).unwrap();
-      ctx.get_scene(scene_id).unwrap().read().outlines_enabled.store(true, Ordering::Relaxed);
+      ctx
+        .get_scene(scene_id)
+        .unwrap()
+        .read()
+        .outlines_enabled
+        .store(true, Ordering::Relaxed);
     } else {
-      ctx.get_scene(scene_id).unwrap().read().outlines_enabled.store(false, Ordering::Relaxed);
+      ctx
+        .get_scene(scene_id)
+        .unwrap()
+        .read()
+        .outlines_enabled
+        .store(false, Ordering::Relaxed);
     }
 
     let ext_blue = ctx.spawn_procedural_sphere(scene_id, std::ptr::null(), 5.0, 1.0).unwrap();

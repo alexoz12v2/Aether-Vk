@@ -479,7 +479,12 @@ mod physics_tests {
   const MU_SUN: f32 = 1.327_124_4e11_f32;
 
   fn make_particle(pos_km: Vec3f32, mass_kg: f32) -> Particle {
-    Particle { position: pos_km, velocity: Vec3f32::zero(), mass: mass_kg, accumulated_force: Vec3f32::zero() }
+    Particle {
+      position: pos_km,
+      velocity: Vec3f32::zero(),
+      mass: mass_kg,
+      accumulated_force: Vec3f32::zero(),
+    }
   }
 
   // T1: transform places emitter behind particle → force in −x ───────────────
@@ -488,10 +493,21 @@ mod physics_tests {
     let frame_center = Vec3f32::from_array([1.0_f32, 0.0, 0.0]); // AU
     let scale = KM_TO_AU; // AU/km
     // Emitter at frame center (r_world = 0) → r_local = -particle_pos
-    let emitters = [ForceEmitter::Gravity { position: frame_center, mu: MU_SUN, beta: 0.0 }];
-    let mut p = [make_particle(Vec3f32::from_array([1000.0_f32, 0.0, 0.0]), 1.0)];
+    let emitters = [ForceEmitter::Gravity {
+      position: frame_center,
+      mu: MU_SUN,
+      beta: 0.0,
+    }];
+    let mut p = [make_particle(
+      Vec3f32::from_array([1000.0_f32, 0.0, 0.0]),
+      1.0,
+    )];
     compute_particle_forces(&mut p, &emitters, frame_center, scale);
-    assert!(p[0].accumulated_force.x() < 0.0, "force must be −x, got {}", p[0].accumulated_force.x());
+    assert!(
+      p[0].accumulated_force.x() < 0.0,
+      "force must be −x, got {}",
+      p[0].accumulated_force.x()
+    );
   }
 
   // T2: magnitude at 1 AU within 0.01% of Newtonian value ───────────────────
@@ -500,12 +516,22 @@ mod physics_tests {
     let r = AU_TO_KM;
     let a_expected = MU_SUN / (r * r); // km/s²
     let frame_center = Vec3f32::from_array([1.0_f32, 0.0, 0.0]);
-    let emitters = [ForceEmitter::Gravity { position: Vec3f32::zero(), mu: MU_SUN, beta: 0.0 }];
+    let emitters = [ForceEmitter::Gravity {
+      position: Vec3f32::zero(),
+      mu: MU_SUN,
+      beta: 0.0,
+    }];
     let mut p = [make_particle(Vec3f32::zero(), 1.0)]; // local origin = 1 AU from Sun
     compute_particle_forces(&mut p, &emitters, frame_center, KM_TO_AU);
     let a_got = p[0].accumulated_force.length();
     let rel_err = (a_got - a_expected).abs() / a_expected;
-    assert!(rel_err < 1e-4, "acceleration: expected {:.4e}, got {:.4e} (rel_err {:.2e})", a_expected, a_got, rel_err);
+    assert!(
+      rel_err < 1e-4,
+      "acceleration: expected {:.4e}, got {:.4e} (rel_err {:.2e})",
+      a_expected,
+      a_got,
+      rel_err
+    );
   }
 
   // T3: beta compensation — 0, 0.5, 1.0 ─────────────────────────────────────
@@ -513,33 +539,55 @@ mod physics_tests {
   fn test_beta_compensation_three_levels() {
     let fc = Vec3f32::from_array([1.0_f32, 0.0, 0.0]);
     let compute = |beta: f32| {
-      let emitters = [ForceEmitter::Gravity { position: Vec3f32::zero(), mu: MU_SUN, beta }];
+      let emitters = [ForceEmitter::Gravity {
+        position: Vec3f32::zero(),
+        mu: MU_SUN,
+        beta,
+      }];
       let mut p = [make_particle(Vec3f32::zero(), 1.0)];
       compute_particle_forces(&mut p, &emitters, fc, KM_TO_AU);
       p[0].accumulated_force.length()
     };
     let (f0, fh, f1) = (compute(0.0), compute(0.5), compute(1.0));
-    assert!((f0 / fh - 2.0).abs() < 1e-5, "ratio should be 2.0, got {}", f0 / fh);
+    assert!(
+      (f0 / fh - 2.0).abs() < 1e-5,
+      "ratio should be 2.0, got {}",
+      f0 / fh
+    );
     assert!(f1 < 1e-8, "f(beta=1) should be ~0, got {:.4e}", f1);
   }
 
   // T4: macro-frame sentinel (center=0, scale=1) gives correct direction ─────
   #[test]
   fn test_macro_frame_sentinel_direction() {
-    let emitters = [ForceEmitter::Gravity { position: Vec3f32::zero(), mu: MU_SUN, beta: 0.0 }];
+    let emitters = [ForceEmitter::Gravity {
+      position: Vec3f32::zero(),
+      mu: MU_SUN,
+      beta: 0.0,
+    }];
     let mut p = [make_particle(Vec3f32::from_array([1.0_f32, 0.0, 0.0]), 1.0)];
     compute_particle_forces(&mut p, &emitters, Vec3f32::zero(), 1.0);
-    assert!(p[0].accumulated_force.x() < 0.0, "force must point toward origin");
+    assert!(
+      p[0].accumulated_force.x() < 0.0,
+      "force must point toward origin"
+    );
   }
 
   // T5: beta field preserved through ForceEmitter struct ────────────────────
   #[test]
   fn test_force_emitter_beta_roundtrip() {
-    let e = ForceEmitter::Gravity { position: Vec3f32::zero(), mu: 1.327e11, beta: 0.47 };
-    match e { ForceEmitter::Gravity { mu, beta, .. } => {
-      assert!((mu - 1.327e11).abs() < 1e4);
-      assert!((beta - 0.47).abs() < 1e-6);
-    } _ => panic!("wrong variant") }
+    let e = ForceEmitter::Gravity {
+      position: Vec3f32::zero(),
+      mu: 1.327e11,
+      beta: 0.47,
+    };
+    match e {
+      ForceEmitter::Gravity { mu, beta, .. } => {
+        assert!((mu - 1.327e11).abs() < 1e4);
+        assert!((beta - 0.47).abs() < 1e-6);
+      }
+      _ => panic!("wrong variant"),
+    }
   }
 
   // T6: Velocity-Verlet Kepler orbit conserves semi-major axis < 0.1% ────────
@@ -553,7 +601,8 @@ mod physics_tests {
 
     let grav = |pos: Vec3f32| {
       let r = Vec3f32::zero() - pos;
-      let d2 = r.length_squared(); let d = d2.sqrt();
+      let d2 = r.length_squared();
+      let d = d2.sqrt();
       r * (MU_SUN / (d2 * d))
     };
 
@@ -570,4 +619,3 @@ mod physics_tests {
     assert!(rel_err < 1e-3, "semi-major axis drift: {:.4e}", rel_err);
   }
 }
-

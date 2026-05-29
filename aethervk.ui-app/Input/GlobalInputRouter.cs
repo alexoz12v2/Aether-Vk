@@ -12,8 +12,10 @@ namespace AetherVk.Input;
 public class GlobalInputRouter
 {
   private readonly InputRegistry _registry;
-  private readonly Dictionary<IPointer, (Visual Target, IActionHandler Handler, AppAction Action)> _pressedVisuals = new();
-
+  private readonly Dictionary<
+    IPointer,
+    (Visual Target, IActionHandler Handler, AppAction Action)
+  > _pressedVisuals = new();
 
   public GlobalInputRouter(TopLevel window, InputRegistry registry)
   {
@@ -127,7 +129,7 @@ public class GlobalInputRouter
         {
           _pressedVisuals[e.Pointer] = (target, handler, action);
           e.Pointer.Capture(target as IInputElement);
-          
+
           if (target is InputElement ie && ie.Focusable)
           {
             ie.Focus();
@@ -137,7 +139,11 @@ public class GlobalInputRouter
     }
   }
 
-  private (IActionHandler? Handler, AppAction? Action) RouteAction(Visual focused, InputChord chord, bool isPressed)
+  private (IActionHandler? Handler, AppAction? Action) RouteAction(
+    Visual focused,
+    InputChord chord,
+    bool isPressed
+  )
   {
     var current = focused;
     while (current != null)

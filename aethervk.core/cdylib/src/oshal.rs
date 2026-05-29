@@ -17,11 +17,7 @@ pub use r#impl::SYSTEM_INFO;
 pub unsafe extern "C" fn avkSystemInfo_get(system_info: *mut AvkSystemInfo) {
   if !system_info.is_null() {
     unsafe {
-      ptr::copy_nonoverlapping(
-        SYSTEM_INFO.as_mut_ptr(),
-        system_info,
-        mem::size_of::<AvkSystemInfo>(),
-      );
+      ptr::copy_nonoverlapping(SYSTEM_INFO.as_mut_ptr(), system_info, 1);
     }
   }
 }

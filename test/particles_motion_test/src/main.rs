@@ -48,8 +48,10 @@ impl SimulationDelegate for ParticlesDelegate {
       )
       .unwrap();
 
-    let camera_entity =
-      ctx.add_perspective_camera(scene_id, pe_handle, "camera", 45.0, 0.1, 1000.0).unwrap().get();
+    let camera_entity = ctx
+      .add_perspective_camera(scene_id, pe_handle, "camera", 45.0, 0.1, 1000.0)
+      .unwrap()
+      .get();
     ctx.set_parent(scene_id, camera_entity, root_entity).unwrap();
     ctx
       .set_transform_component(

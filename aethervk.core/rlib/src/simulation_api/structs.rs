@@ -1,4 +1,5 @@
 //! structs module.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use crate::{
   gpu,
@@ -247,10 +248,13 @@ impl LogicThreadContext {
   ) -> EngineResult<RaycastResult> {
     let (ro, rd) = {
       let scenes = self.scenes.read();
-      let active =
-        scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?.read();
-      let active_camera_entity =
-        active.get_entity(camera_id).ok_or(EngineError::InvalidOperation("no camera found"))?;
+      let active = scenes
+        .get(&scene_id)
+        .ok_or(EngineError::InvalidOperation("scene not found"))?
+        .read();
+      let active_camera_entity = active
+        .get_entity(camera_id)
+        .ok_or(EngineError::InvalidOperation("no camera found"))?;
 
       let mut view = Mat4x4f32::identity();
       active
@@ -311,8 +315,10 @@ impl LogicThreadContext {
   ) -> EngineResult<RaycastResult> {
     use crate::physics::physics_scene::math::closest_intersection;
     let scenes = self.scenes.read();
-    let scene_ctx =
-      scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?.read();
+    let scene_ctx = scenes
+      .get(&scene_id)
+      .ok_or(EngineError::InvalidOperation("scene not found"))?
+      .read();
     let ps_lock = scene_ctx
       .physics_scene
       .as_ref()
@@ -337,12 +343,16 @@ impl LogicThreadContext {
       use slotmap::Key;
       let mut stack = alloc::vec![0];
       while let Some(node_idx) = stack.pop() {
-        if node_idx as usize >= st.len() { continue; }
+        if node_idx as usize >= st.len() {
+          continue;
+        }
         let node = &st[node_idx as usize];
 
         for i in 0..32 {
           let meta = node.metadata[i];
-          if meta == 0 { continue; }
+          if meta == 0 {
+            continue;
+          }
 
           let bmin = Vec3f32::from_components(node.min_x[i], node.min_y[i], node.min_z[i]);
           let bmax = Vec3f32::from_components(node.max_x[i], node.max_y[i], node.max_z[i]);
@@ -350,7 +360,8 @@ impl LogicThreadContext {
 
           if crate::math::collision::intersection::intersect_ray_aabb(&ray, &aabb) {
             if (meta & 0x8000_0000) != 0 {
-              let entity_ffi = (((meta & 0x7FFF_FFFF) as u64) << 32) | (node.child_indices[i] as u64);
+              let entity_ffi =
+                (((meta & 0x7FFF_FFFF) as u64) << 32) | (node.child_indices[i] as u64);
               let entity = crate::scene::EntityId::from(slotmap::KeyData::from_ffi(entity_ffi));
               hit_instances.push(entity);
             } else {
@@ -869,7 +880,10 @@ pub enum RenderFeedback {
 }
 
 pub enum KernelsEnum {
-  VulkanCompute(crate::gpu::WeakRenderFrontend, crate::gpu::RenderDeviceHandle),
+  VulkanCompute(
+    crate::gpu::WeakRenderFrontend,
+    crate::gpu::RenderDeviceHandle,
+  ),
   CpuSingleThreaded(crate::physics::cpu_kernels::CpuScalarKernels),
   CpuMultiThreaded(crate::physics::cpu_kernels::CpuSimdKernels),
 }
@@ -909,7 +923,11 @@ pub struct RenderFrame {
   pub custom_render_callback: Option<CustomRenderCallback>,
   pub active_physics_task: alloc::sync::Arc<
     spin::Mutex<
-      Option<aethervk_oshal_rlib::os::pool::tasklet::TaskletHandle<crate::types::EngineResult<Option<crate::gpu::CommandBufferSyncInfo>>>>,
+      Option<
+        aethervk_oshal_rlib::os::pool::tasklet::TaskletHandle<
+          crate::types::EngineResult<Option<crate::gpu::CommandBufferSyncInfo>>,
+        >,
+      >,
     >,
   >,
 }
@@ -1095,10 +1113,15 @@ pub struct SceneContext {
   pub outlines_enabled: Arc<AtomicBool>,
   pub collisions_enabled: Arc<AtomicBool>, // Changed to false for debugging
   pub physics_scene: Option<Arc<RwLock<physics::physics_scene::PhysicsScene>>>,
-  pub selection_tlas: Option<Arc<RwLock<alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>>>>>,
+  pub selection_tlas:
+    Option<Arc<RwLock<alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>>>>>,
   pub active_physics_task: alloc::sync::Arc<
     spin::Mutex<
-      Option<aethervk_oshal_rlib::os::pool::tasklet::TaskletHandle<crate::types::EngineResult<Option<crate::gpu::CommandBufferSyncInfo>>>>,
+      Option<
+        aethervk_oshal_rlib::os::pool::tasklet::TaskletHandle<
+          crate::types::EngineResult<Option<crate::gpu::CommandBufferSyncInfo>>,
+        >,
+      >,
     >,
   >,
   pub physics_engine_type: Arc<RwLock<PhysicsEngineType>>,
@@ -1109,7 +1132,8 @@ pub struct SceneContext {
   pub custom_render_callback: Option<CustomRenderCallback>,
   pub debug_name: alloc::string::String,
   pub scene_snapshot: Option<alloc::boxed::Box<crate::scene::Scene>>,
-  pub static_tlas: Arc<RwLock<alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>>>>,
+  pub static_tlas:
+    Arc<RwLock<alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>>>>,
   pub is_static_tlas_dirty: Arc<AtomicBool>,
 }
 
@@ -1293,7 +1317,10 @@ impl RenderThreadParams {
     };
     let render_device_handle = {
       let params = DeviceAdditionalParams::new();
-      render_frontend.write().init_device(0, &params).map_err(|e| EngineError::from(e))?
+      render_frontend
+        .write()
+        .init_device(0, &params)
+        .map_err(|e| EngineError::from(e))?
     };
 
     render_frontend
@@ -1494,7 +1521,11 @@ impl SimulationTaskManager {
 
   /// TODO: Document this item
   pub fn get_status(&self, id: u64) -> TaskStatusCode {
-    self.tasks.get(&id).map(|t| TaskStatusCode::from_sim(t)).unwrap_or(TaskStatusCode::Invalid)
+    self
+      .tasks
+      .get(&id)
+      .map(|t| TaskStatusCode::from_sim(t))
+      .unwrap_or(TaskStatusCode::Invalid)
   }
 
   /// TODO: Document this item

@@ -115,10 +115,9 @@ namespace AetherVk.Services
         return;
 
       var inputRegistry =
-        Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
-          .GetRequiredService<AetherVk.Logic.Input.InputRegistry>(
-            App.Host!.Services
-          );
+        Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(
+          App.Host!.Services
+        );
 
       var settingsWindow = new Views.SettingsWindow
       {
@@ -157,10 +156,9 @@ namespace AetherVk.Services
           ),
         };
         var inputRegistry =
-          Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
-            .GetRequiredService<AetherVk.Logic.Input.InputRegistry>(
-              App.Host!.Services
-            );
+          Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(
+            App.Host!.Services
+          );
         _ = new AetherVk.Input.GlobalInputRouter(meshViewer, inputRegistry);
         meshViewer.Show(mainWindow);
       }
@@ -196,7 +194,8 @@ namespace AetherVk.Services
     }
 
     public async Task<ulong> ShowSpawnCometDialogAsync(
-      System.Collections.Generic.IEnumerable<AetherVk.Logic.ViewModels.ImportedModelItem> models)
+      System.Collections.Generic.IEnumerable<AetherVk.Logic.ViewModels.ImportedModelItem> models
+    )
     {
       var mainWindow = GetMainWindow();
       if (mainWindow == null)
@@ -215,7 +214,12 @@ namespace AetherVk.Services
 
       var dialog = new Views.SpawnCometWindow
       {
-        DataContext = new SpawnCometViewModel(models, _horizonService, _timelineService, _breadcrumbService),
+        DataContext = new SpawnCometViewModel(
+          models,
+          _horizonService,
+          _timelineService,
+          _breadcrumbService
+        ),
       };
       var result = await dialog.ShowDialog<SpawnCometResult?>(mainWindow);
       if (result == null)
@@ -224,13 +228,17 @@ namespace AetherVk.Services
       uint physicsTypeIdx = result.PhysicsType switch
       {
         "Kinematic" => 1,
-        "Dynamic"   => 2,
-        _           => 0,  // Static
+        "Dynamic" => 2,
+        _ => 0, // Static
       };
 
       // ── Determine spawn position ─────────────────────────────────────────────
-      float spawnPx = result.PosX, spawnPy = result.PosY, spawnPz = result.PosZ;
-      float spawnVx = 0f, spawnVy = 0f, spawnVz = 0f;
+      float spawnPx = result.PosX,
+        spawnPy = result.PosY,
+        spawnPz = result.PosZ;
+      float spawnVx = 0f,
+        spawnVy = 0f,
+        spawnVz = 0f;
 
       if (result.PhysicsType == "Dynamic" && result.OrbitData != null)
       {
@@ -242,15 +250,25 @@ namespace AetherVk.Services
           result.OrbitData.AscendingNodeLongitude,
           result.OrbitData.ArgumentOfPerifocus,
           result.OrbitData.MeanAnomaly,
-          out double kPx, out double kPy, out double kPz,
-          out double kVx, out double kVy, out double kVz
+          out double kPx,
+          out double kPy,
+          out double kPz,
+          out double kVx,
+          out double kVy,
+          out double kVz
         );
         if (ok)
         {
-          spawnPx = (float)kPx; spawnPy = (float)kPy; spawnPz = (float)kPz;
-          spawnVx = (float)kVx; spawnVy = (float)kVy; spawnVz = (float)kVz;
-          _consoleService.Log($"[Spawn] Dynamic initial pos=({spawnPx:F4},{spawnPy:F4},{spawnPz:F4}) AU, " +
-                              $"vel=({spawnVx:F4},{spawnVy:F4},{spawnVz:F4}) km/s");
+          spawnPx = (float)kPx;
+          spawnPy = (float)kPy;
+          spawnPz = (float)kPz;
+          spawnVx = (float)kVx;
+          spawnVy = (float)kVy;
+          spawnVz = (float)kVz;
+          _consoleService.Log(
+            $"[Spawn] Dynamic initial pos=({spawnPx:F4},{spawnPy:F4},{spawnPz:F4}) AU, "
+              + $"vel=({spawnVx:F4},{spawnVy:F4},{spawnVz:F4}) km/s"
+          );
         }
         else
         {
@@ -260,13 +278,18 @@ namespace AetherVk.Services
 
       // ── SpawnComet ───────────────────────────────────────────────────────────
       var (_, id) = _runtimeService.SpawnComet(
-        sceneId:     1,
-        modelId:     result.Model.Id,
-        name:        result.EntityName,
-        posX: spawnPx, posY: spawnPy, posZ: spawnPz,
-        rotW: result.RotW, rotX: result.RotX, rotY: result.RotY, rotZ: result.RotZ,
-        radiusKm:    result.CometRadiusKm,
-        massKg:      result.MassKg,
+        sceneId: 1,
+        modelId: result.Model.Id,
+        name: result.EntityName,
+        posX: spawnPx,
+        posY: spawnPy,
+        posZ: spawnPz,
+        rotW: result.RotW,
+        rotX: result.RotX,
+        rotY: result.RotY,
+        rotZ: result.RotZ,
+        radiusKm: result.CometRadiusKm,
+        massKg: result.MassKg,
         physicsType: physicsTypeIdx
       );
       ulong cometId = id;
@@ -277,7 +300,12 @@ namespace AetherVk.Services
       }
       else
       {
-        await _breadcrumbService.ShowMessageAsync("Spawn Error", "SpawnComet returned entity id 0.", default, 3);
+        await _breadcrumbService.ShowMessageAsync(
+          "Spawn Error",
+          "SpawnComet returned entity id 0.",
+          default,
+          3
+        );
         return 0;
       }
 
@@ -286,24 +314,31 @@ namespace AetherVk.Services
       {
         // 1. Download and load the .bsp ephemeris file from JPL Horizons.
         _consoleService.Log($"[Spawn] Kinematic: downloading SPK {result.SpkNaifId}…");
-        var spkLoadMsg = _breadcrumbService.ShowLoadingMessage("Kinematic Setup", "Downloading SPK ephemeris…");
+        var spkLoadMsg = _breadcrumbService.ShowLoadingMessage(
+          "Kinematic Setup",
+          "Downloading SPK ephemeris…"
+        );
         try
         {
           var savePath = _horizonService.GetSpkSavePath(result.SpkNaifId);
           var startStr = DateTime.UtcNow.AddYears(-5).ToString("yyyy-MM-dd");
-          var stopStr  = DateTime.UtcNow.AddYears(+5).ToString("yyyy-MM-dd");
+          var stopStr = DateTime.UtcNow.AddYears(+5).ToString("yyyy-MM-dd");
 
           var spkPath = await _horizonService.DownloadSpkByIdAsync(
             result.CometDesignation ?? result.SpkNaifId.ToString(),
             result.SpkRecordId ?? result.SpkNaifId.ToString(),
             savePath,
-            startStr, stopStr
+            startStr,
+            stopStr
           );
 
           if (spkPath != null)
           {
             // 2. Load .bsp into Rust AlmanacPackedData.
-            NativeInterop.avkSimulationContext_loadAlmanacFile(_runtimeService.SimulationContext, spkPath);
+            NativeInterop.avkSimulationContext_loadAlmanacFile(
+              _runtimeService.SimulationContext,
+              spkPath
+            );
             _consoleService.Log($"[Spawn] Kinematic: loaded almanac from {spkPath}.");
 
             // Allow the async almanac-load task a moment to register before patching the id.
@@ -311,27 +346,36 @@ namespace AetherVk.Services
 
             // 3. Patch the comet entity's AlmanacPlanet.naif_id with the real NAIF id.
             bool patched = _runtimeService.SetAlmanacPlanetNaifId(1, cometId, result.SpkNaifId);
-            _consoleService.Log($"[Spawn] Kinematic: SetAlmanacPlanetNaifId({result.SpkNaifId}) → {patched}");
+            _consoleService.Log(
+              $"[Spawn] Kinematic: SetAlmanacPlanetNaifId({result.SpkNaifId}) → {patched}"
+            );
           }
           else
           {
             await _breadcrumbService.ShowMessageAsync(
               "SPK Download Failed",
               $"Could not download SPK for record {result.SpkRecordId}. Kinematic comet will not move.",
-              default, 4);
+              default,
+              4
+            );
           }
         }
         catch (Exception ex)
         {
           _consoleService.Log($"[Spawn] Kinematic SPK setup error: {ex.Message}");
         }
-        finally { _breadcrumbService.RemoveMessage(spkLoadMsg); }
+        finally
+        {
+          _breadcrumbService.RemoveMessage(spkLoadMsg);
+        }
       }
       else if (result.PhysicsType == "Dynamic")
       {
         // Inject initial orbital velocity.
         bool velSet = _runtimeService.SetKinematicVelocity(1, cometId, spawnVx, spawnVy, spawnVz);
-        _consoleService.Log($"[Spawn] Dynamic: SetKinematicVelocity({spawnVx:F4},{spawnVy:F4},{spawnVz:F4} km/s) → {velSet}");
+        _consoleService.Log(
+          $"[Spawn] Dynamic: SetKinematicVelocity({spawnVx:F4},{spawnVy:F4},{spawnVz:F4} km/s) → {velSet}"
+        );
       }
 
       // ── Orbit trajectory (hidden by default, named orbit_{name}, child of root) ──
@@ -353,7 +397,9 @@ namespace AetherVk.Services
           // the Rust HiddenComponent are set atomically; the outline eye-icon will
           // correctly reflect the hidden state and toggle on first click.
           _runtimeService.SetEntityHidden(1, orbitId, visible: false);
-          _consoleService.Log($"[Spawn] Orbit trajectory '{orbitName}' spawned (hidden, id={orbitId}).");
+          _consoleService.Log(
+            $"[Spawn] Orbit trajectory '{orbitName}' spawned (hidden, id={orbitId})."
+          );
         }
       }
 
@@ -369,7 +415,7 @@ namespace AetherVk.Services
       var dialog = new Avalonia.Controls.OpenFileDialog
       {
         Title = "Select Billboard Image",
-        AllowMultiple = false
+        AllowMultiple = false,
       };
 
       var result = await dialog.ShowAsync(mainWindow);

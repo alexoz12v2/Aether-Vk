@@ -69,7 +69,10 @@ public partial class OutlineViewModel : TabItemViewModel, IRecipient<EntitySelec
     // scene and notify bindings so the outline tree refreshes.
     runtimeService.PropertyChanged += (s, e) =>
     {
-      if (e.PropertyName == nameof(NativeRuntimeService.IsInitialized) && runtimeService.IsInitialized)
+      if (
+        e.PropertyName == nameof(NativeRuntimeService.IsInitialized)
+        && runtimeService.IsInitialized
+      )
         RefreshSceneId(stateManager);
     };
 

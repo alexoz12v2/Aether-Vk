@@ -50,7 +50,13 @@ public class PropertiesViewModelTests
       dispatcherMock.Object
     );
 
-    var propertiesVm = new PropertiesViewModel(1, stateManager, timelineService, runtimeService, breadcrumb);
+    var propertiesVm = new PropertiesViewModel(
+      1,
+      stateManager,
+      timelineService,
+      runtimeService,
+      breadcrumb
+    );
 
     var entity = new Entity(1, 100, "TestEntity");
     entity.Components.Add(new TransformComponent());

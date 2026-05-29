@@ -101,7 +101,10 @@ impl VulkanContext {
 
         let device_address_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
         let address = unsafe {
-          actual_device.device.buffer_device_address.get_buffer_device_address(&device_address_info)
+          actual_device
+            .device
+            .buffer_device_address
+            .get_buffer_device_address(&device_address_info)
         };
 
         aethervk_core_rlib::types::GpuResult::Ok((buffer, alloc, address))
@@ -202,8 +205,9 @@ pub fn run_compute_shader(
       });
       spec_data.extend_from_slice(&debug_shaders.to_le_bytes());
 
-      let spec_info =
-        vk::SpecializationInfo::default().map_entries(&spec_map_entries).data(&spec_data);
+      let spec_info = vk::SpecializationInfo::default()
+        .map_entries(&spec_map_entries)
+        .data(&spec_data);
 
       let stage_info = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
@@ -211,8 +215,9 @@ pub fn run_compute_shader(
         .name(&main_name)
         .specialization_info(&spec_info);
 
-      let compute_info =
-        vk::ComputePipelineCreateInfo::default().stage(stage_info).layout(pipeline_layout);
+      let compute_info = vk::ComputePipelineCreateInfo::default()
+        .stage(stage_info)
+        .layout(pipeline_layout);
 
       let pipelines = unsafe {
         ash_dev.create_compute_pipelines(
@@ -240,7 +245,9 @@ pub fn run_compute_shader(
       let cmd_buffer = unsafe { ash_dev.allocate_command_buffers(&alloc_info) }.unwrap()[0];
 
       unsafe {
-        ash_dev.begin_command_buffer(cmd_buffer, &vk::CommandBufferBeginInfo::default()).unwrap();
+        ash_dev
+          .begin_command_buffer(cmd_buffer, &vk::CommandBufferBeginInfo::default())
+          .unwrap();
         ash_dev.cmd_bind_pipeline(cmd_buffer, vk::PipelineBindPoint::COMPUTE, pipeline);
         ash_dev.cmd_push_constants(
           cmd_buffer,
@@ -260,7 +267,10 @@ pub fn run_compute_shader(
         let dependency_info =
           vk::DependencyInfo::default().memory_barriers(std::slice::from_ref(&memory_barrier));
 
-        actual_device.device.synchronization2.cmd_pipeline_barrier2(cmd_buffer, &dependency_info);
+        actual_device
+          .device
+          .synchronization2
+          .cmd_pipeline_barrier2(cmd_buffer, &dependency_info);
 
         ash_dev.end_command_buffer(cmd_buffer).unwrap();
 

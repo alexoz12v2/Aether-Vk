@@ -14,7 +14,8 @@ public enum AppTheme
   Dark,
 }
 
-public class ImportModelRequestMessage : CommunityToolkit.Mvvm.Messaging.Messages.AsyncRequestMessage<ImportedModelItem?> { }
+public class ImportModelRequestMessage
+  : CommunityToolkit.Mvvm.Messaging.Messages.AsyncRequestMessage<ImportedModelItem?> { }
 
 public class ImportImageRequestMessage { }
 
@@ -108,11 +109,12 @@ public struct CameraActionParams
 
 public class SimulationInitializedMessage { }
 
-public partial class MainWindowViewModel : ViewModelBase,
-  IRecipient<ModelUnloadedMessage>,
-  IRecipient<ImportModelRequestMessage>,
-  IRecipient<SimulationInitializedMessage>,
-  IRecipient<AetherVk.Logic.Messages.OpenSpawnCometDialogMessage>
+public partial class MainWindowViewModel
+  : ViewModelBase,
+    IRecipient<ModelUnloadedMessage>,
+    IRecipient<ImportModelRequestMessage>,
+    IRecipient<SimulationInitializedMessage>,
+    IRecipient<AetherVk.Logic.Messages.OpenSpawnCometDialogMessage>
 {
   private readonly NativeRuntimeService _runtimeService;
   private readonly BreadcrumbService _breadcrumbService;
@@ -151,7 +153,9 @@ public partial class MainWindowViewModel : ViewModelBase,
     WeakReferenceMessenger.Default.Register<ModelUnloadedMessage>(this);
     WeakReferenceMessenger.Default.Register<ImportModelRequestMessage>(this);
     WeakReferenceMessenger.Default.Register<SimulationInitializedMessage>(this);
-    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.OpenSpawnCometDialogMessage>(this);
+    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.OpenSpawnCometDialogMessage>(
+      this
+    );
 
     SyncModels();
   }
@@ -164,7 +168,9 @@ public partial class MainWindowViewModel : ViewModelBase,
       if (!System.Linq.Enumerable.Any(ImportedModels, im => im.Id == m.Id))
       {
         var fileName = System.IO.Path.GetFileName(m.Path);
-        ImportedModels.Add(new ImportedModelItem(m.Id, fileName, m.Path, _runtimeService, _windowService));
+        ImportedModels.Add(
+          new ImportedModelItem(m.Id, fileName, m.Path, _runtimeService, _windowService)
+        );
       }
     }
   }
@@ -213,14 +219,24 @@ public partial class MainWindowViewModel : ViewModelBase,
         {
           if (!System.Linq.Enumerable.Any(ImportedModels, m => m.Id == modelId))
           {
-            ImportedModels.Add(new ImportedModelItem(modelId, "Comet.glb", cometPath, _runtimeService, _windowService));
+            ImportedModels.Add(
+              new ImportedModelItem(
+                modelId,
+                "Comet.glb",
+                cometPath,
+                _runtimeService,
+                _windowService
+              )
+            );
           }
         });
       }
     }
     catch (System.Exception ex)
     {
-      System.Console.WriteLine($"[MainWindowViewModel] Failed to auto-import Comet.glb: {ex.Message}");
+      System.Console.WriteLine(
+        $"[MainWindowViewModel] Failed to auto-import Comet.glb: {ex.Message}"
+      );
     }
   }
 
@@ -233,16 +249,28 @@ public partial class MainWindowViewModel : ViewModelBase,
     if (!string.IsNullOrEmpty(result))
     {
       var fileName = System.IO.Path.GetFileName(result);
-      var loadingMsg = _breadcrumbService.ShowLoadingMessage("Importing Mesh", $"Loading {fileName} into engine...");
+      var loadingMsg = _breadcrumbService.ShowLoadingMessage(
+        "Importing Mesh",
+        $"Loading {fileName} into engine..."
+      );
       try
       {
         var modelId = await _runtimeService.ImportModelAsync(result);
         if (modelId > 0)
         {
-          var existing = System.Linq.Enumerable.FirstOrDefault(ImportedModels, m => m.Id == modelId);
+          var existing = System.Linq.Enumerable.FirstOrDefault(
+            ImportedModels,
+            m => m.Id == modelId
+          );
           if (existing == null)
           {
-            var newItem = new ImportedModelItem(modelId, fileName, result, _runtimeService, _windowService);
+            var newItem = new ImportedModelItem(
+              modelId,
+              fileName,
+              result,
+              _runtimeService,
+              _windowService
+            );
             ImportedModels.Add(newItem);
             return newItem;
           }
@@ -300,7 +328,9 @@ public partial class MainWindowViewModel : ViewModelBase,
 
   public void Receive(AetherVk.Logic.Messages.OpenSpawnCometDialogMessage message)
   {
-    _dispatcher.DispatchAsync(async () => await _windowService.ShowSpawnCometDialogAsync(ImportedModels));
+    _dispatcher.DispatchAsync(async () =>
+      await _windowService.ShowSpawnCometDialogAsync(ImportedModels)
+    );
   }
 
   [RelayCommand]

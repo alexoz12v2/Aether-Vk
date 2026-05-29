@@ -258,8 +258,10 @@ impl Kernels for CpuKernels {
   ) -> EngineResult<()> {
     let dt_sec = dt as f32 / 1_000_000.0;
     let half_dt = dt_sec * 0.5;
-    let accels =
-      self.dynamic_accelerations.read().map_err(|_| EngineError::InvalidOperation("fail lock"))?;
+    let accels = self
+      .dynamic_accelerations
+      .read()
+      .map_err(|_| EngineError::InvalidOperation("fail lock"))?;
 
     for (i, p) in particles.data.iter_mut().enumerate() {
       p.velocity[0] += accels[i].x() * half_dt;

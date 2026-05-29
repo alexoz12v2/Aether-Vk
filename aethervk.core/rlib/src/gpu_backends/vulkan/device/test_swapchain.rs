@@ -27,7 +27,9 @@ mod tests {
       home_dir.pop();
       iter += 1;
     }
-    crate::gpu::ASSET_DIR.write().replace(home_dir.join("assets").to_str().unwrap().to_string());
+    crate::gpu::ASSET_DIR
+      .write()
+      .replace(home_dir.join("assets").to_str().unwrap().to_string());
 
     fn panic_on_validation_error(msg: &str) {
       panic!("Vulkan validation error occurred during testing: {}", msg);
@@ -272,8 +274,9 @@ mod tests {
     unsafe {
       let size = (width * height * 4) as u64;
 
-      let buf_info =
-        vk::BufferCreateInfo::default().size(size).usage(vk::BufferUsageFlags::TRANSFER_DST);
+      let buf_info = vk::BufferCreateInfo::default()
+        .size(size)
+        .usage(vk::BufferUsageFlags::TRANSFER_DST);
       let buffer = device.create_buffer(&buf_info, None).unwrap();
       let reqs = device.get_buffer_memory_requirements(buffer);
 
@@ -397,8 +400,9 @@ mod tests {
           submit_fence,
           [0.0, 1.0, 0.0, 1.0],
         );
-        let _ =
-          engine.submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32).unwrap();
+        let _ = engine
+          .submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32)
+          .unwrap();
       }
     }
     unsafe { device.queue_wait_idle(queue).unwrap() };
@@ -530,8 +534,9 @@ mod tests {
         submit_fence,
         [1.0, 0.0, 0.0, 1.0],
       );
-      let _ =
-        engine.submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32).unwrap();
+      let _ = engine
+        .submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32)
+        .unwrap();
     }
 
     engine
@@ -625,8 +630,9 @@ mod tests {
         submit_fence,
         [0.0, 0.0, 1.0, 1.0],
       );
-      let _ =
-        engine.submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32).unwrap();
+      let _ = engine
+        .submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32)
+        .unwrap();
     }
 
     if let PresentationState::Windowless(ref state) = engine {
@@ -717,8 +723,9 @@ mod tests {
           submit_fence,
           [0.0, 1.0, 0.0, 1.0],
         );
-        let _ =
-          engine.submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32).unwrap();
+        let _ = engine
+          .submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32)
+          .unwrap();
       }
     }
 
@@ -1071,8 +1078,9 @@ mod tests {
           submit_fence,
           [0.0, 1.0, 0.0, 1.0],
         );
-        let _ =
-          engine.submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32).unwrap();
+        let _ = engine
+          .submit_image(&log_device, queue, acq.image_index, acq.frame_index as u32)
+          .unwrap();
       }
     }
 

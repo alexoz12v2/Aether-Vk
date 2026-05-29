@@ -1,9 +1,14 @@
 #[cfg(test)]
 mod tests {
-  use crate::gpu::compute_push_constants::{LbvhPushConstants, MotionBoundsPushConstants, MotionRefitPushConstants};
-  use crate::gpu::vulkan::device::LogicalDevice;
-  use crate::gpu::vulkan::physics::VulkanCommandBuffer;
-  use crate::gpu_backends::vulkan::physics::VulkanComputeKernels;
+  use crate::{
+    gpu::{
+      compute_push_constants::{
+        LbvhPushConstants, MotionBoundsPushConstants, MotionRefitPushConstants,
+      },
+      vulkan::{device::LogicalDevice, physics::VulkanCommandBuffer},
+    },
+    gpu_backends::vulkan::physics::VulkanComputeKernels,
+  };
 
   #[test]
   // Placeholder stub — body is empty.  Implement and un-ignore once a real
@@ -21,16 +26,20 @@ mod tests {
 
   #[test]
   fn test_physics_scene_tlas_blas_hierarchy() {
-    use crate::scene::{
-      Scene, TransformComponent, KinematicComponent, PhysicalMeshComponent, ReferenceFrameComponent,
-      ReferenceFrameType, particles::ParticleSystemComponent, particles::ParticleData,
+    use crate::{
+      math::collision::{
+        bounds::AABB,
+        linear_bvh::{LinearBVH, LinearBVHNode, LinearBound},
+      },
+      physics::physics_scene::{PhysicsScene, RbNode, pack_meta, *},
+      scene::{
+        KinematicComponent, PhysicalMeshComponent, ReferenceFrameComponent, ReferenceFrameType,
+        Scene, TransformComponent,
+        particles::{ParticleData, ParticleSystemComponent},
+      },
+      simulation::comet::{Comet, Vertex},
     };
-    use crate::physics::physics_scene::{PhysicsScene, RbNode, pack_meta};
-    use crate::physics::physics_scene::*;
     use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-    use crate::math::collision::linear_bvh::{LinearBVH, LinearBVHNode, LinearBound};
-    use crate::math::collision::bounds::AABB;
-    use crate::simulation::comet::{Comet, Vertex};
     use alloc::sync::Arc;
     use spin::RwLock;
 
@@ -38,36 +47,66 @@ mod tests {
       crate::simulation::texture_cache::TextureCache::new("test"),
     )));
     scene.register_all_crate_components();
-    
+
     // 1. Setup Macro Frame
     let macro_entity = scene.spawn_entity("macro");
     scene.add_component(macro_entity, TransformComponent::default()).unwrap();
-    scene.add_component(macro_entity, ReferenceFrameComponent {
-      frame_type: ReferenceFrameType::Macro,
-      scale: 1.0,
-      soi_radius: 1000.0,
-      _padding: 0,
-    }).unwrap();
-    
+    scene
+      .add_component(
+        macro_entity,
+        ReferenceFrameComponent {
+          frame_type: ReferenceFrameType::Macro,
+          scale: 1.0,
+          soi_radius: 1000.0,
+          _padding: 0,
+        },
+      )
+      .unwrap();
+
     // 2. Setup Micro Frame
     let micro_entity = scene.spawn_entity("micro");
-    scene.add_component(micro_entity, TransformComponent {
-      position: Vec3f32::from_array([10.0, 0.0, 0.0]),
-      ..Default::default()
-    }).unwrap();
-    scene.add_component(micro_entity, ReferenceFrameComponent {
-      frame_type: ReferenceFrameType::Micro,
-      scale: 1.0,
-      soi_radius: 100.0,
-      _padding: 0,
-    }).unwrap();
+    scene
+      .add_component(
+        micro_entity,
+        TransformComponent {
+          position: Vec3f32::from_array([10.0, 0.0, 0.0]),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        micro_entity,
+        ReferenceFrameComponent {
+          frame_type: ReferenceFrameType::Micro,
+          scale: 1.0,
+          soi_radius: 100.0,
+          _padding: 0,
+        },
+      )
+      .unwrap();
     scene.set_parent(micro_entity, Some(macro_entity));
 
     let create_dummy_mesh_component = || -> PhysicalMeshComponent {
       let vertices = alloc::vec![
-        Vertex { position: [-1.0, -1.0, 0.0], normal: [0.0, 0.0, 1.0], uv: [0.0, 0.0], tangent: [1.0, 0.0, 0.0, 1.0] },
-        Vertex { position: [1.0, -1.0, 0.0], normal: [0.0, 0.0, 1.0], uv: [1.0, 0.0], tangent: [1.0, 0.0, 0.0, 1.0] },
-        Vertex { position: [0.0, 1.0, 0.0], normal: [0.0, 0.0, 1.0], uv: [0.5, 1.0], tangent: [1.0, 0.0, 0.0, 1.0] },
+        Vertex {
+          position: [-1.0, -1.0, 0.0],
+          normal: [0.0, 0.0, 1.0],
+          uv: [0.0, 0.0],
+          tangent: [1.0, 0.0, 0.0, 1.0]
+        },
+        Vertex {
+          position: [1.0, -1.0, 0.0],
+          normal: [0.0, 0.0, 1.0],
+          uv: [1.0, 0.0],
+          tangent: [1.0, 0.0, 0.0, 1.0]
+        },
+        Vertex {
+          position: [0.0, 1.0, 0.0],
+          normal: [0.0, 0.0, 1.0],
+          uv: [0.5, 1.0],
+          tangent: [1.0, 0.0, 0.0, 1.0]
+        },
       ];
       let indices = alloc::vec![0, 1, 2];
 
@@ -124,7 +163,15 @@ mod tests {
     // 3. Add Mesh in Macro Frame
     let macro_mesh = scene.spawn_entity("mesh");
     scene.add_component(macro_mesh, TransformComponent::default()).unwrap();
-    scene.add_component(macro_mesh, KinematicComponent { velocity: Vec3f32::from_array([1.0, 0.0, 0.0]), ..Default::default() }).unwrap();
+    scene
+      .add_component(
+        macro_mesh,
+        KinematicComponent {
+          velocity: Vec3f32::from_array([1.0, 0.0, 0.0]),
+          ..Default::default()
+        },
+      )
+      .unwrap();
     scene.add_component(macro_mesh, create_dummy_mesh_component()).unwrap();
     scene.set_parent(macro_mesh, Some(macro_entity));
 
@@ -134,8 +181,26 @@ mod tests {
     let sys = ParticleSystemComponent::new(10);
     {
       let mut ps = sys.particles.write();
-      ps.push(ParticleData { id_low: 0, id_high: 0, age_low: 0, age_high: 0, position: [0.0, 0.0, 0.0], velocity: [0.0, 1.0, 0.0], mass: 1.0, active: 1 });
-      ps.push(ParticleData { id_low: 1, id_high: 0, age_low: 0, age_high: 0, position: [1.0, 1.0, 1.0], velocity: [0.0, 0.0, 1.0], mass: 1.0, active: 1 });
+      ps.push(ParticleData {
+        id_low: 0,
+        id_high: 0,
+        age_low: 0,
+        age_high: 0,
+        position: [0.0, 0.0, 0.0],
+        velocity: [0.0, 1.0, 0.0],
+        mass: 1.0,
+        active: 1,
+      });
+      ps.push(ParticleData {
+        id_low: 1,
+        id_high: 0,
+        age_low: 0,
+        age_high: 0,
+        position: [1.0, 1.0, 1.0],
+        velocity: [0.0, 0.0, 1.0],
+        mass: 1.0,
+        active: 1,
+      });
     }
     scene.add_component(micro_particles, sys).unwrap();
     scene.set_parent(micro_particles, Some(micro_entity));
@@ -145,7 +210,9 @@ mod tests {
 
     // Assert macro_tlas parent encompasses children
     fn assert_encompasses(nodes: &[RbNode], idx: u32) {
-      if idx == u32::MAX { return; }
+      if idx == u32::MAX {
+        return;
+      }
       let node = &nodes[idx as usize];
       if let Some(left) = node.left {
         let left_node = &nodes[left as usize];
@@ -186,7 +253,12 @@ mod tests {
       if let Some(meta) = node.leaf_meta {
         let (is_leaf, frame, shape, _idx) = unpack_meta(meta);
         assert!(is_leaf);
-        assert!(shape == BVH_SHAPE_AABB || shape == BVH_SHAPE_SPHERE || shape == BVH_SHAPE_SUB_TLAS, "Invalid shape: {} for frame: {}", shape, frame);
+        assert!(
+          shape == BVH_SHAPE_AABB || shape == BVH_SHAPE_SPHERE || shape == BVH_SHAPE_SUB_TLAS,
+          "Invalid shape: {} for frame: {}",
+          shape,
+          frame
+        );
         assert_eq!(frame, BVH_FRAME_MACRO);
       }
     }
@@ -201,7 +273,12 @@ mod tests {
           let (is_leaf, frame, shape, _idx) = unpack_meta(meta);
           assert!(is_leaf);
           // Leaves in micro frame are only particles (SPHERE) or body (AABB)
-          assert!(shape == BVH_SHAPE_AABB || shape == BVH_SHAPE_SPHERE, "Invalid shape: {} for frame: {}", shape, frame);
+          assert!(
+            shape == BVH_SHAPE_AABB || shape == BVH_SHAPE_SPHERE,
+            "Invalid shape: {} for frame: {}",
+            shape,
+            frame
+          );
           assert_eq!(frame, BVH_FRAME_MICRO);
         }
       }

@@ -1,31 +1,35 @@
 using System;
 using System.Linq;
 using System.Reflection;
-using Xunit;
-using Moq;
-using AetherVk.Logic.Services;
 using AetherVk.Logic.Models;
+using AetherVk.Logic.Services;
+using Moq;
+using Xunit;
 
 namespace aethervk.logic.tests
 {
-    public class HorizonJplServiceTests
+  public class HorizonJplServiceTests
+  {
+    private HorizonJplService CreateService()
     {
-        private HorizonJplService CreateService()
-        {
-            return new HorizonJplService(null!, null!, null!);
-        }
+      return new HorizonJplService(null!, null!, null!);
+    }
 
-        private void InvokeParseObjectDataText(HorizonJplService service, string text)
-        {
-            var method = typeof(HorizonJplService).GetMethod("ParseObjectDataText", BindingFlags.NonPublic | BindingFlags.Instance);
-            method!.Invoke(service, new object[] { text });
-        }
+    private void InvokeParseObjectDataText(HorizonJplService service, string text)
+    {
+      var method = typeof(HorizonJplService).GetMethod(
+        "ParseObjectDataText",
+        BindingFlags.NonPublic | BindingFlags.Instance
+      );
+      method!.Invoke(service, new object[] { text });
+    }
 
-        [Fact]
-        public void ParseObjectDataText_ShouldExtractConstantsAndIgnoreGarbage()
-        {
-            var service = CreateService();
-            string mockResponse = @"
+    [Fact]
+    public void ParseObjectDataText_ShouldExtractConstantsAndIgnoreGarbage()
+    {
+      var service = CreateService();
+      string mockResponse =
+        @"
 *******************************************************************************
  Revised: Jul 31, 2013             Mars (body 499)                         499
 
@@ -44,48 +48,55 @@ Some random ephemeris garbage here
 $$EOE
 ";
 
-            InvokeParseObjectDataText(service, mockResponse);
+      InvokeParseObjectDataText(service, mockResponse);
 
-            var objectData = service.ObjectData;
-            
-            foreach(var item in objectData)
-            {
-                Console.WriteLine($"PROP: '{item.Property}' VAL: '{item.Value}'");
-            }
+      var objectData = service.ObjectData;
 
-            // Should have parsed properties (keys might be mangled by the simplistic split, but values should be there)
-            var hasRadius = objectData.Any(x => x.Value != null && x.Value.Contains("3389.50"));
-            Assert.True(hasRadius, "Radius value not found");
+      foreach (var item in objectData)
+      {
+        Console.WriteLine($"PROP: '{item.Property}' VAL: '{item.Value}'");
+      }
 
-            var hasMass = objectData.Any(x => x.Value != null && x.Value.Contains("6.4171"));
-            Assert.True(hasMass, "Mass value not found");
+      // Should have parsed properties (keys might be mangled by the simplistic split, but values should be there)
+      var hasRadius = objectData.Any(x => x.Value != null && x.Value.Contains("3389.50"));
+      Assert.True(hasRadius, "Radius value not found");
 
-            // Should NOT have garbage from the Ephemeris section or footers
-            var hasGarbage = objectData.Any(x => (x.Property != null && x.Property.Contains("Ephemeris")) || 
-                                                 (x.Value != null && x.Value.Contains("Ephemeris")));
-            Assert.False(hasGarbage, "Garbage from remaining text was included in the data view.");
-            
-            var hasSoe = objectData.Any(x => (x.Property != null && x.Property.Contains("$$SOE")) || 
-                                             (x.Value != null && x.Value.Contains("$$SOE")));
-            Assert.False(hasSoe, "$$SOE marker should not be included.");
-        }
+      var hasMass = objectData.Any(x => x.Value != null && x.Value.Contains("6.4171"));
+      Assert.True(hasMass, "Mass value not found");
 
-        [Fact]
-        public void ParseObjectDataText_NoPhysicalPropertiesHeader_ShouldFallbackCleanly()
-        {
-            var service = CreateService();
-            string mockResponse = @"
+      // Should NOT have garbage from the Ephemeris section or footers
+      var hasGarbage = objectData.Any(x =>
+        (x.Property != null && x.Property.Contains("Ephemeris"))
+        || (x.Value != null && x.Value.Contains("Ephemeris"))
+      );
+      Assert.False(hasGarbage, "Garbage from remaining text was included in the data view.");
+
+      var hasSoe = objectData.Any(x =>
+        (x.Property != null && x.Property.Contains("$$SOE"))
+        || (x.Value != null && x.Value.Contains("$$SOE"))
+      );
+      Assert.False(hasSoe, "$$SOE marker should not be included.");
+    }
+
+    [Fact]
+    public void ParseObjectDataText_NoPhysicalPropertiesHeader_ShouldFallbackCleanly()
+    {
+      var service = CreateService();
+      string mockResponse =
+        @"
 *******************************************************************************
 Some target with no properties block
 ---
 $$SOE
 $$EOE
 ";
-            InvokeParseObjectDataText(service, mockResponse);
-            
-            var objectData = service.ObjectData;
-            var hasGarbage = objectData.Any(x => x.Property.Contains("$$SOE") || (x.Value != null && x.Value.Contains("$$SOE")));
-            Assert.False(hasGarbage, "Garbage like $$SOE was included when fallback was triggered.");
-        }
+      InvokeParseObjectDataText(service, mockResponse);
+
+      var objectData = service.ObjectData;
+      var hasGarbage = objectData.Any(x =>
+        x.Property.Contains("$$SOE") || (x.Value != null && x.Value.Contains("$$SOE"))
+      );
+      Assert.False(hasGarbage, "Garbage like $$SOE was included when fallback was triggered.");
     }
+  }
 }

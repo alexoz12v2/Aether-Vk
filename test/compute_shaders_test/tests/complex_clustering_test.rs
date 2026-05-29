@@ -145,17 +145,24 @@ fn test_complex_compaction_and_clustering() {
   println!("Clustering yielded {} clusters", clusters.len());
 
   // We expect cluster 1 to have 3 events
-  let c1 = clusters.iter().find(|c| c.iter().any(|e| e.entity_a == 1 && e.entity_b == 2)).unwrap();
+  let c1 = clusters
+    .iter()
+    .find(|c| c.iter().any(|e| e.entity_a == 1 && e.entity_b == 2))
+    .unwrap();
   assert_eq!(c1.len(), 3);
 
   // We expect cluster 2 to have 9 events
-  let c2 =
-    clusters.iter().find(|c| c.iter().any(|e| e.entity_a == 10 && e.entity_b == 11)).unwrap();
+  let c2 = clusters
+    .iter()
+    .find(|c| c.iter().any(|e| e.entity_a == 10 && e.entity_b == 11))
+    .unwrap();
   assert_eq!(c2.len(), 9);
 
   // We expect cluster 3 to have 3 events
-  let c3 =
-    clusters.iter().find(|c| c.iter().any(|e| e.entity_a == 30 && e.entity_b == 31)).unwrap();
+  let c3 = clusters
+    .iter()
+    .find(|c| c.iter().any(|e| e.entity_a == 30 && e.entity_b == 31))
+    .unwrap();
   assert_eq!(c3.len(), 3);
 
   println!("All complex groupings match perfectly!");

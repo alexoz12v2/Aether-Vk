@@ -241,8 +241,7 @@ pub fn refit_motion_bounds<V, M>(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-  use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
+  use aethervk_oshal_rlib::math::{matrix::mat3::Mat3f32, vector::vec3::Vec3f32};
 
   #[test]
   fn test_particle_bvh_build_and_refit() {

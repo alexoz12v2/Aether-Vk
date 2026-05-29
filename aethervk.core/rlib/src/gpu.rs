@@ -4,7 +4,7 @@ pub use super::gpu_backends::*;
 use crate::{
   gpu,
   gpu::frame::ResourceUploadResult,
-  physics::physics_scene::{PhysicsScene, GpuReferenceFrame},
+  physics::physics_scene::{GpuReferenceFrame, PhysicsScene},
   scene::{
     EntityId, PhysicalMeshComponent, Scene, TransformComponent,
     text::{FontAtlas, GlyphInfo},
@@ -14,9 +14,9 @@ use crate::{
 };
 use ab_glyph::PxScale;
 use aethervk_oshal_rlib::os::time::timeus_t;
-pub use compute_push_constants::{RigidBodyImex, Wrench};
 use alloc::sync::{Arc, Weak};
 use bitflags::bitflags;
+pub use compute_push_constants::{RigidBodyImex, Wrench};
 use core::{
   ffi,
   hash::{Hash, Hasher},
@@ -60,15 +60,15 @@ impl GpuResourceHandle {
 /// Abstract representation of Vulkan sharing mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SharingMode {
-    Exclusive = 0,
-    Concurrent = 1,
+  Exclusive = 0,
+  Concurrent = 1,
 }
 
 /// Represents queue sharing configuration for GPU resources.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueueSharingInfo {
-    pub mode: SharingMode,
-    pub queue_family_indices: alloc::vec::Vec<u32>,
+  pub mode: SharingMode,
+  pub queue_family_indices: alloc::vec::Vec<u32>,
 }
 
 /// TODO: Document this item
@@ -87,7 +87,10 @@ pub struct KinematicBody {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-#[deprecated(since = "0.0.0", note = "Use `RigidBodyImex` for the new IMEX pipeline")]
+#[deprecated(
+  since = "0.0.0",
+  note = "Use `RigidBodyImex` for the new IMEX pipeline"
+)]
 /// Legacy rigid-body GPU layout (rotation-matrix based).
 /// New code should use [`RigidBodyImex`] (quaternion-based).
 pub struct RigidBodyGpu {
@@ -128,10 +131,7 @@ pub struct ParticleMetadata {
   pub original_index: u32,
 }
 
-pub fn pack_particles_aosoa(
-  particles: &[[f32; 10]],
-  subgroup_size: usize,
-) -> alloc::vec::Vec<f32> {
+pub fn pack_particles_aosoa(particles: &[[f32; 10]], subgroup_size: usize) -> alloc::vec::Vec<f32> {
   let num_particles = particles.len();
   let num_blocks = (num_particles + subgroup_size - 1) / subgroup_size;
   let mut buffer = alloc::vec::Vec::with_capacity(num_blocks * 10 * subgroup_size);
@@ -141,7 +141,7 @@ pub fn pack_particles_aosoa(
     let block = i / subgroup_size;
     let lane = i % subgroup_size;
     let base = block * (10 * subgroup_size) + lane;
-    buffer[base + 0 * subgroup_size] = p[0];
+    buffer[base] = p[0];
     buffer[base + 1 * subgroup_size] = p[1];
     buffer[base + 2 * subgroup_size] = p[2];
     buffer[base + 3 * subgroup_size] = p[3];
@@ -166,7 +166,7 @@ pub fn unpack_particles_aosoa(
     let lane = i % subgroup_size;
     let base = block * (10 * subgroup_size) + lane;
     particles.push([
-      buffer[base + 0 * subgroup_size],
+      buffer[base],
       buffer[base + 1 * subgroup_size],
       buffer[base + 2 * subgroup_size],
       buffer[base + 3 * subgroup_size],
@@ -207,11 +207,11 @@ pub struct DynamicBody {
 /// For `type_id == 1` (Planar): `mu` holds the base force magnitude, `beta` is unused.
 pub struct ForceEmitter {
   pub position: [f32; 3],
-  pub mu: f32,        // G*M in km³/s² for Gravity; base_force for Planar
+  pub mu: f32, // G*M in km³/s² for Gravity; base_force for Planar
   pub normal: [f32; 3],
-  pub type_id: u32,   // 0 = Gravity, 1 = Planar
+  pub type_id: u32, // 0 = Gravity, 1 = Planar
   pub trunc_distance: f32,
-  pub beta: f32,      // radiation-pressure β; mu_eff = (1−β)·mu. 0 = pure gravity.
+  pub beta: f32, // radiation-pressure β; mu_eff = (1−β)·mu. 0 = pure gravity.
   pub _pad: [u32; 2],
 }
 
@@ -627,12 +627,11 @@ impl From<RenderableInstanceId> for GpuResourceHandle {
 /// TODO: Document this item
 pub static ASSET_DIR: spin::RwLock<Option<alloc::string::String>> = spin::RwLock::new(None);
 
-
 /// Information about the synchronization payload after submitting a command buffer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CommandBufferSyncInfo {
-    pub timeline_semaphore: u64, // Opaque handle for the backend
-    pub timeline_value: u64,
+  pub timeline_semaphore: u64, // Opaque handle for the backend
+  pub timeline_value: u64,
 }
 
 /// TODO: Document this item
@@ -1547,7 +1546,9 @@ impl<'a> Drop for FrameCancelGuard<'a> {
     if let Some(ar) = self.acquire_result.take() {
       // Guard fell out of scope without being defused. An error happened!
       // Cancel the frame cleanly to avoid swapchain leaks and deadlocks.
-      let _ = self.device.cancel_acquired_image(self.engine, ar.image_index, ar.frame_index as u32);
+      let _ = self
+        .device
+        .cancel_acquired_image(self.engine, ar.image_index, ar.frame_index as u32);
     }
   }
 }
@@ -1888,7 +1889,6 @@ pub trait Kernels: Send + Sync {
   fn discard_bvh(&self, bvh: Self::MotionBvh);
   fn discard_tlas(&self, tlas: Self::MotionTlas);
 
-
   /// Returns the hardware subgroup size.
   fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize>;
 
@@ -2100,7 +2100,8 @@ pub trait Kernels: Send + Sync {
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
     out_rb_lca_addr: u64,
-    internal_pairs_addr: u64, out_sparse_addr: u64,
+    internal_pairs_addr: u64,
+    out_sparse_addr: u64,
   ) -> EngineResult<()>;
 
   /// Generates one swept AABB (TLASLeaf) per entity.

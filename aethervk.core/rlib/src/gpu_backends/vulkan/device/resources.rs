@@ -2,7 +2,10 @@
 
 use crate::{
   gpu::vulkan::device::{DebugTrackedRwLock, LogicalDevice},
-  gpu_backends::vulkan::{self, device::{VmaDebugNameExt, VulkanDebugNameExt}},
+  gpu_backends::vulkan::{
+    self,
+    device::{VmaDebugNameExt, VulkanDebugNameExt},
+  },
   simulation::comet::Texture,
 };
 use aethervk_oshal_rlib as oshal;
@@ -335,7 +338,10 @@ impl DiscardPool {
           alloc,
           allocator,
         }) => unsafe {
-          aethervk_oshal_rlib::log!("DiscardItem::Buffer destroying buffer! alloc: {:?}", alloc.get_raw());
+          aethervk_oshal_rlib::log!(
+            "DiscardItem::Buffer destroying buffer! alloc: {:?}",
+            alloc.get_raw()
+          );
           vk_mem::ffi::vmaDestroyBuffer(allocator, buffer, alloc.get_raw());
           core::mem::forget(alloc);
         },
@@ -682,8 +688,9 @@ impl Image {
     }
 
     // 1. Allocate staging memory
-    let (staging_offset, staging_ptr) =
-      staging_arena.allocate(image_size as usize, 16).ok_or(crate::gpu_err_device!())?;
+    let (staging_offset, staging_ptr) = staging_arena
+      .allocate(image_size as usize, 16)
+      .ok_or(crate::gpu_err_device!())?;
 
     unsafe {
       core::ptr::copy_nonoverlapping(texture.data.as_ptr(), staging_ptr, texture.data.len());
@@ -768,7 +775,9 @@ impl Image {
     let dependency_info_to_transfer = vk::DependencyInfo::default()
       .image_memory_barriers(core::slice::from_ref(&image_barrier_to_transfer));
     unsafe {
-      device.synchronization2.cmd_pipeline_barrier2(command_buffer, &dependency_info_to_transfer);
+      device
+        .synchronization2
+        .cmd_pipeline_barrier2(command_buffer, &dependency_info_to_transfer);
     }
 
     // 4. Copy buffer to image
@@ -887,7 +896,13 @@ pub(super) struct SunRenderResource {
 
 impl SunRenderResource {
   /// Note: Compute pipeline is not a responsability of resource. Is it correct? Verify TODO
-  pub fn discard(&mut self, device: &LogicalDevice, allocator: vk_mem::AllocatorView, discard_pool: &DiscardPool, timeline: u64) {
+  pub fn discard(
+    &mut self,
+    device: &LogicalDevice,
+    allocator: vk_mem::AllocatorView,
+    discard_pool: &DiscardPool,
+    timeline: u64,
+  ) {
     if let Some(mut img) = self.image.take() {
       unsafe {
         device.destroy_image_view(img.image_view.get(), None);
@@ -905,7 +920,9 @@ impl SunRenderResource {
       unsafe { device.destroy_descriptor_pool(pool, None) };
     }
     if let Some(set_layout) = self.compute_descriptor_set_layout.take() {
-      unsafe {device.destroy_descriptor_set_layout(set_layout, None); }
+      unsafe {
+        device.destroy_descriptor_set_layout(set_layout, None);
+      }
     }
   }
 }
@@ -2945,10 +2962,12 @@ impl ArchetypeArenaCreate for UiRenderResourceArchetypeArena {
       unsafe { allocator.create_buffer(&elements_buffer_info, &elements_alloc_info) }?;
 
     let elements_ptr = unsafe {
-      device.buffer_device_address.get_buffer_device_address(&vk::BufferDeviceAddressInfo {
-        buffer: elements_buffer,
-        ..Default::default()
-      })
+      device
+        .buffer_device_address
+        .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+          buffer: elements_buffer,
+          ..Default::default()
+        })
     };
 
     Ok(Self {
@@ -3294,8 +3313,10 @@ impl ArchetypeArenaCreate for BillboardRenderResourceArchetypeArena {
       .descriptor_pool(descriptor_pool)
       .set_layouts(&layouts);
 
-    let descriptor_set =
-      unsafe { device.allocate_descriptor_sets(&alloc_info) }?.get(0).copied().unwrap();
+    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?
+      .get(0)
+      .copied()
+      .unwrap();
     device.set_debug_name(
       descriptor_set,
       "VkDescriptorSet_Dedicated_BillboardRenderResourceArchetype",
@@ -3484,8 +3505,10 @@ impl ArchetypeArenaCreate for GizmoRenderResourceArchetypeArena {
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
       .descriptor_pool(descriptor_pool)
       .set_layouts(&layouts);
-    let descriptor_set =
-      unsafe { device.allocate_descriptor_sets(&alloc_info) }?.get(0).copied().unwrap();
+    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?
+      .get(0)
+      .copied()
+      .unwrap();
     device.set_debug_name(descriptor_set, "VkDescriptorSet_Gizmo");
 
     Ok(Self {
@@ -3620,8 +3643,10 @@ impl ArchetypeArenaCreate for ParticleRenderResourceArchetypeArena {
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
       .descriptor_pool(descriptor_pool)
       .set_layouts(&set_layouts);
-    let descriptor_set =
-      unsafe { device.allocate_descriptor_sets(&alloc_info) }?.get(0).copied().unwrap();
+    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?
+      .get(0)
+      .copied()
+      .unwrap();
     device.set_debug_name(
       descriptor_set,
       "VkDescriptorSet_Dedicated_ParticleRenderResourceArchetype",
@@ -3713,8 +3738,9 @@ impl ParticleRenderResourceArchetypeArena {
       return Err(gpu_err!("Mega Buffer Full: Max Systems Reached"));
     }
 
-    let particle_offset =
-      self.allocated_particles.fetch_add(particle_count, core::sync::atomic::Ordering::Relaxed);
+    let particle_offset = self
+      .allocated_particles
+      .fetch_add(particle_count, core::sync::atomic::Ordering::Relaxed);
     if particle_offset + particle_count > Self::MAX_PARTICLES {
       return Err(gpu_err!("Mega Buffer Full: Max Particles Reached"));
     }
@@ -3854,8 +3880,10 @@ impl ArchetypeArenaCreate for Particle2RenderResourceArchetypeArena {
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
       .descriptor_pool(descriptor_pool)
       .set_layouts(&set_layouts);
-    let descriptor_set =
-      unsafe { device.allocate_descriptor_sets(&alloc_info) }?.get(0).copied().unwrap();
+    let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?
+      .get(0)
+      .copied()
+      .unwrap();
     device.set_debug_name(
       descriptor_set,
       "VkDescriptorSet_Dedicated_Particle2RenderResourceArchetype",
@@ -3944,8 +3972,9 @@ impl Particle2RenderResourceArchetypeArena {
       return Err(gpu_err!("Mega Buffer Full: Max Systems Reached"));
     }
 
-    let particle_offset =
-      self.allocated_particles.fetch_add(particle_count, core::sync::atomic::Ordering::Relaxed);
+    let particle_offset = self
+      .allocated_particles
+      .fetch_add(particle_count, core::sync::atomic::Ordering::Relaxed);
     if particle_offset + particle_count > Self::MAX_PARTICLES {
       return Err(gpu_err!("Mega Buffer Full: Max Particles Reached"));
     }
@@ -4389,8 +4418,14 @@ impl ArchetypeArenaCreate for ForwardMeshRenderResourceArchetypeArena {
     // TODO Implement a special value for the janitor which means "DYNAMIC_SIZE"
     let mut janitor = DeviceResourceJanitor::<'_, 256>::new(device);
 
-    if !vertex_shader.spv_module.get_shader_stage().contains(ReflectShaderStageFlags::VERTEX)
-      || !fragment_shader.spv_module.get_shader_stage().contains(ReflectShaderStageFlags::FRAGMENT)
+    if !vertex_shader
+      .spv_module
+      .get_shader_stage()
+      .contains(ReflectShaderStageFlags::VERTEX)
+      || !fragment_shader
+        .spv_module
+        .get_shader_stage()
+        .contains(ReflectShaderStageFlags::FRAGMENT)
     {
       return Err(GpuError::InvalidShader);
     }
@@ -4409,8 +4444,10 @@ impl ArchetypeArenaCreate for ForwardMeshRenderResourceArchetypeArena {
       outline_fragment_shader,
     ] {
       let shader_stage = shader.shader_stage;
-      let sets =
-        shader.spv_module.enumerate_descriptor_sets(None).map_err(|_| GpuError::InvalidShader)?;
+      let sets = shader
+        .spv_module
+        .enumerate_descriptor_sets(None)
+        .map_err(|_| GpuError::InvalidShader)?;
 
       for set in sets {
         let bindings_map = merged_sets.entry(set.set).or_default();
@@ -4485,8 +4522,9 @@ impl ArchetypeArenaCreate for ForwardMeshRenderResourceArchetypeArena {
 
       for block in blocks {
         // Find a range with the same offset and size to merge stage flags.
-        if let Some(range) =
-          push_constant_ranges.iter_mut().find(|r| r.offset == block.offset && r.size == block.size)
+        if let Some(range) = push_constant_ranges
+          .iter_mut()
+          .find(|r| r.offset == block.offset && r.size == block.size)
         {
           // Merge shader stages into the existing range.
           range.stage_flags |= shader.shader_stage;
@@ -4652,7 +4690,9 @@ impl ArchetypeArenaCreate for ForwardMeshRenderResourceArchetypeArena {
         let command_buffers = [command_buffer];
         let submits = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
         let fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
-        device.locked_queue_submit(queue.handle, &submits, fence).map_err(GpuError::from)?;
+        device
+          .locked_queue_submit(queue.handle, &submits, fence)
+          .map_err(GpuError::from)?;
         device.wait_for_fences(&[fence], true, u64::MAX)?;
         device.destroy_fence(fence, None);
       };
@@ -4733,7 +4773,8 @@ pub(super) fn create_buffer_with_staging<T: Copy>(
       unsafe { allocator.create_buffer(&device_buffer_info, &device_alloc_info) }
         .map_err(|_| crate::gpu_err!())?;
     aethervk_oshal_rlib::log!("VMA CREATED BUFFER IN RESOURCES: {:?}", device_buffer);
-    Ok((device_buffer, device_alloc)).with_name(device, &alloc::format!("VkBuffer_{}", debug_name))?
+    Ok((device_buffer, device_alloc))
+      .with_name(device, &alloc::format!("VkBuffer_{}", debug_name))?
   };
 
   // 3. Copy data to staging buffer
@@ -4857,8 +4898,14 @@ impl ArchetypeArenaCreate for ForwardMesh2RenderResourceArchetypeArena {
     // TODO Implement a special value for the janitor which means "DYNAMIC_SIZE"
     let mut janitor = DeviceResourceJanitor::<'_, 256>::new(device);
 
-    if !vertex_shader.spv_module.get_shader_stage().contains(ReflectShaderStageFlags::VERTEX)
-      || !fragment_shader.spv_module.get_shader_stage().contains(ReflectShaderStageFlags::FRAGMENT)
+    if !vertex_shader
+      .spv_module
+      .get_shader_stage()
+      .contains(ReflectShaderStageFlags::VERTEX)
+      || !fragment_shader
+        .spv_module
+        .get_shader_stage()
+        .contains(ReflectShaderStageFlags::FRAGMENT)
     {
       return Err(GpuError::InvalidShader);
     }
@@ -4877,8 +4924,10 @@ impl ArchetypeArenaCreate for ForwardMesh2RenderResourceArchetypeArena {
       outline_fragment_shader,
     ] {
       let shader_stage = shader.shader_stage;
-      let sets =
-        shader.spv_module.enumerate_descriptor_sets(None).map_err(|_| GpuError::InvalidShader)?;
+      let sets = shader
+        .spv_module
+        .enumerate_descriptor_sets(None)
+        .map_err(|_| GpuError::InvalidShader)?;
 
       for set in sets {
         let bindings_map = merged_sets.entry(set.set).or_default();
@@ -4958,8 +5007,9 @@ impl ArchetypeArenaCreate for ForwardMesh2RenderResourceArchetypeArena {
 
       for block in blocks {
         // Find a range with the same offset and size to merge stage flags.
-        if let Some(range) =
-          push_constant_ranges.iter_mut().find(|r| r.offset == block.offset && r.size == block.size)
+        if let Some(range) = push_constant_ranges
+          .iter_mut()
+          .find(|r| r.offset == block.offset && r.size == block.size)
         {
           // Merge shader stages into the existing range.
           range.stage_flags |= shader.shader_stage;

@@ -5,10 +5,7 @@ use crate::gpu_backends::vulkan::utils::create_test_attachment;
 use crate::{
   gpu::{PresentationEngineHandle, vulkan::device::swapchain},
   gpu_backends::vulkan::{
-    device::{
-      DeviceResource, resources::DiscardPool,
-      swapchain::PresentationState,
-    },
+    device::{DeviceResource, resources::DiscardPool, swapchain::PresentationState},
     utils::{NonZeroHandle, create_transient_attachment},
   },
   types::GpuResult,

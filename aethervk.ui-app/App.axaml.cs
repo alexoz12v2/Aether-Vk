@@ -19,27 +19,33 @@ public partial class App : Application
   public static IHost? Host { get; set; }
 
   // Keep a static reference so the delegate doesn't get garbage collected
-  private static AetherVk.Logic.Services.NativeInterop.PanicCallbackDelegate _rustPanicCallback = OnRustPanic;
+  private static AetherVk.Logic.Services.NativeInterop.PanicCallbackDelegate _rustPanicCallback =
+    OnRustPanic;
 
   private static void OnRustPanic(IntPtr messagePtr, nuint length)
   {
-      string errorMsg = "Unknown Rust Panic";
-      if (messagePtr != IntPtr.Zero)
+    string errorMsg = "Unknown Rust Panic";
+    if (messagePtr != IntPtr.Zero)
+    {
+      errorMsg =
+        System.Runtime.InteropServices.Marshal.PtrToStringAnsi(messagePtr, (int)length) ?? errorMsg;
+    }
+
+    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+    {
+      if (
+        Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop
+      )
       {
-          errorMsg = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(messagePtr, (int)length) ?? errorMsg;
+        var oldMain = desktop.MainWindow;
+        var errorWindow = new Views.FatalErrorWindow(
+          $"The Rust Core Engine panicked and cannot recover.\n\nDetails:\n{errorMsg}"
+        );
+        desktop.MainWindow = errorWindow;
+        errorWindow.Show();
+        oldMain?.Close();
       }
-      
-      Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-      {
-          if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-          {
-              var oldMain = desktop.MainWindow;
-              var errorWindow = new Views.FatalErrorWindow($"The Rust Core Engine panicked and cannot recover.\n\nDetails:\n{errorMsg}");
-              desktop.MainWindow = errorWindow;
-              errorWindow.Show();
-              oldMain?.Close();
-          }
-      });
+    });
   }
 
   public override void Initialize()
@@ -157,7 +163,9 @@ public partial class App : Application
       }
       else
       {
-        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_registerPanicCallback(_rustPanicCallback);
+        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_registerPanicCallback(
+          _rustPanicCallback
+        );
 
         var runtimeService =
           Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<NativeRuntimeService>(
@@ -260,7 +268,10 @@ public partial class App : Application
             inputRegistry.Register(
               "Viewport",
               new AetherVk.Logic.Input.InputChord(Key: "F"),
-              new AetherVk.Logic.Input.AppAction("viewport.snap_to_selected", "Snap Camera to Selected")
+              new AetherVk.Logic.Input.AppAction(
+                "viewport.snap_to_selected",
+                "Snap Camera to Selected"
+              )
             );
             inputRegistry.Register(
               "Viewport",

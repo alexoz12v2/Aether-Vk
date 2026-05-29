@@ -141,8 +141,9 @@ impl SceneCameraExt for Scene {
   fn pan_camera(&self, camera_entity: EntityId, delta_x: f32, delta_y: f32) -> EngineResult<()> {
     check_for_camera(&self, camera_entity)?;
 
-    let focus_distance =
-      self.with_component(camera_entity, |c: &CameraComponent| c.focus_distance).unwrap_or(1.0);
+    let focus_distance = self
+      .with_component(camera_entity, |c: &CameraComponent| c.focus_distance)
+      .unwrap_or(1.0);
 
     let translation = self
       .with_component(camera_entity, |t: &TransformComponent| {

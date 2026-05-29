@@ -79,7 +79,7 @@ public class EpaRefreshRule : IComponentRule
         circle.PropertyChanged -= Emitter_PropertyChanged;
         circle.PropertyChanged += Emitter_PropertyChanged;
       }
-      
+
       void Emitter_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
       {
         // Actually we only want to do this when paused.

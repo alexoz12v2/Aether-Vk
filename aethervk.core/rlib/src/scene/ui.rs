@@ -191,8 +191,9 @@ fn update_ui_node(
   parent_clip: [f32; 4],
   mut force_dirty: bool,
 ) {
-  let is_clipping: bool =
-    scene.with_component::<UiComponent, _, _>(entity_id, |ui| ui.is_clipping_mask).unwrap_or(false);
+  let is_clipping: bool = scene
+    .with_component::<UiComponent, _, _>(entity_id, |ui| ui.is_clipping_mask)
+    .unwrap_or(false);
 
   let mut new_bounds = parent_bounds;
   let mut new_clip = parent_clip;

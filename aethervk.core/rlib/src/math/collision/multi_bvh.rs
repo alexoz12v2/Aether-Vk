@@ -125,42 +125,52 @@ pub trait BinaryBvh {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct TlasMultiNode<const N: usize> {
-    pub min_x: [f32; N], pub max_x: [f32; N],
-    pub min_y: [f32; N], pub max_y: [f32; N],
-    pub min_z: [f32; N], pub max_z: [f32; N],
-    pub child_indices: [u32; N],
-    pub metadata: [u32; N],
-    pub masses: [f32; N],
-    pub com_x: [f32; N], pub com_y: [f32; N], pub com_z: [f32; N],
-    pub particle_start: [u32; N],
-    pub particle_count: [u32; N],
-    pub valid_mask: [u32; 2],
-    pub parent_idx: u32,
-    pub _pad: u32,
-    /// Precomputed traversal orderings for the 8 ray-sign combinations.
-    /// `permutations[sign_mask][i]` = local child index to visit i-th.
-    /// Stored as `u32` (upper 24 bits unused) so the struct is `bytemuck::Pod`.
-    pub permutations: [[u32; N]; 8],
+  pub min_x: [f32; N],
+  pub max_x: [f32; N],
+  pub min_y: [f32; N],
+  pub max_y: [f32; N],
+  pub min_z: [f32; N],
+  pub max_z: [f32; N],
+  pub child_indices: [u32; N],
+  pub metadata: [u32; N],
+  pub masses: [f32; N],
+  pub com_x: [f32; N],
+  pub com_y: [f32; N],
+  pub com_z: [f32; N],
+  pub particle_start: [u32; N],
+  pub particle_count: [u32; N],
+  pub valid_mask: [u32; 2],
+  pub parent_idx: u32,
+  pub _pad: u32,
+  /// Precomputed traversal orderings for the 8 ray-sign combinations.
+  /// `permutations[sign_mask][i]` = local child index to visit i-th.
+  /// Stored as `u32` (upper 24 bits unused) so the struct is `bytemuck::Pod`.
+  pub permutations: [[u32; N]; 8],
 }
 
 impl<const N: usize> Default for TlasMultiNode<N> {
-    fn default() -> Self {
-        Self {
-            min_x: [0.0; N], max_x: [0.0; N],
-            min_y: [0.0; N], max_y: [0.0; N],
-            min_z: [0.0; N], max_z: [0.0; N],
-            child_indices: [u32::MAX; N],
-            metadata: [0; N],
-            masses: [0.0; N],
-            com_x: [0.0; N], com_y: [0.0; N], com_z: [0.0; N],
-            particle_start: [0; N],
-            particle_count: [0; N],
-            valid_mask: [0; 2],
-            parent_idx: u32::MAX,
-            _pad: 0,
-            permutations: [[0; N]; 8],
-        }
+  fn default() -> Self {
+    Self {
+      min_x: [0.0; N],
+      max_x: [0.0; N],
+      min_y: [0.0; N],
+      max_y: [0.0; N],
+      min_z: [0.0; N],
+      max_z: [0.0; N],
+      child_indices: [u32::MAX; N],
+      metadata: [0; N],
+      masses: [0.0; N],
+      com_x: [0.0; N],
+      com_y: [0.0; N],
+      com_z: [0.0; N],
+      particle_start: [0; N],
+      particle_count: [0; N],
+      valid_mask: [0; 2],
+      parent_idx: u32::MAX,
+      _pad: 0,
+      permutations: [[0; N]; 8],
     }
+  }
 }
 
 // ── `Into<[f32; 6]>` for concrete bound types ────────────────────────────────
@@ -170,27 +180,26 @@ use crate::math::collision::{bounds::AABB, linear_bvh::LinearBound};
 use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32 as Vec3f32Alias};
 
 impl From<AABB<f32>> for [f32; 6] {
-    fn from(val: AABB<f32>) -> Self {
-        let mn: Vec3f32Alias = val.min();
-        let mx: Vec3f32Alias = val.max();
-        [mn.x(), mn.y(), mn.z(), mx.x(), mx.y(), mx.z()]
-    }
+  fn from(val: AABB<f32>) -> Self {
+    let mn: Vec3f32Alias = val.min();
+    let mx: Vec3f32Alias = val.max();
+    [mn.x(), mn.y(), mn.z(), mx.x(), mx.y(), mx.z()]
+  }
 }
 
 impl From<LinearBound<f32>> for [f32; 6] {
-    fn from(val: LinearBound<f32>) -> Self {
-        match val {
-            LinearBound::AABB(a) => a.into(),
-            LinearBound::OBB(o) => {
-                let a = o.to_aabb::<Vec3f32Alias>();
-                let mn: Vec3f32Alias = a.min();
-                let mx: Vec3f32Alias = a.max();
-                [mn.x(), mn.y(), mn.z(), mx.x(), mx.y(), mx.z()]
-            }
-        }
+  fn from(val: LinearBound<f32>) -> Self {
+    match val {
+      LinearBound::AABB(a) => a.into(),
+      LinearBound::OBB(o) => {
+        let a = o.to_aabb::<Vec3f32Alias>();
+        let mn: Vec3f32Alias = a.min();
+        let mx: Vec3f32Alias = a.max();
+        [mn.x(), mn.y(), mn.z(), mx.x(), mx.y(), mx.z()]
+      }
     }
+  }
 }
-
 
 // ── bytemuck::Pod + Zeroable for TlasMultiNode at the three used sizes ───────
 // Safety: TlasMultiNode<N> is #[repr(C)], all fields are f32/u32 (Pod), and the
@@ -207,175 +216,193 @@ unsafe impl bytemuck::Pod for TlasMultiNode<64> {}
 
 ///
 /// # Sign Heuristic & Permutation Ordering
-/// When collapsing a binary treelet into a wide node (e.g., N=32), traversing the children 
-/// front-to-back dynamically based on distances is expensive ($O(N \log N)$ sorting). 
+/// When collapsing a binary treelet into a wide node (e.g., N=32), traversing the children
+/// front-to-back dynamically based on distances is expensive ($O(N \log N)$ sorting).
 /// Instead, we use the **Ray Direction Sign Heuristic**:
 /// 1. A binary node was split along a specific axis (X, Y, or Z).
 /// 2. If a ray's direction sign for that axis is positive, the left child should be visited before the right.
 /// 3. If negative, the right child should be visited first.
-/// 
-/// By evaluating this across the 8 possible ray sign combinations (`[+/-X, +/-Y, +/-Z]`), 
+///
+/// By evaluating this across the 8 possible ray sign combinations (`[+/-X, +/-Y, +/-Z]`),
 /// we precompute 8 exact front-to-back traversal sequences for the `N` children of this wide node.
 /// At runtime, the GPU simply selects the precomputed permutation array using the ray's signs in $O(1)$ time.
 pub fn convert_binary_to_multi_bvh<const N: usize, T: BinaryBvh>(
-    binary_bvh: &T,
+  binary_bvh: &T,
 ) -> Vec<TlasMultiNode<N>>
 where
-    T::Bound: Into<[f32; 6]>, // Assuming Bound can be converted to [min_x, min_y, min_z, max_x, max_y, max_z]
+  T::Bound: Into<[f32; 6]>, // Assuming Bound can be converted to [min_x, min_y, min_z, max_x, max_y, max_z]
 {
-    assert!(N > 1 && N.is_power_of_two() && N <= 64, "N must be a power of two <= 64");
+  assert!(
+    N > 1 && N.is_power_of_two() && N <= 64,
+    "N must be a power of two <= 64"
+  );
 
-    let mut multi_nodes = Vec::new();
+  let mut multi_nodes = Vec::new();
 
-    if let Some(binary_root) = binary_bvh.root() {
-        collapse_binary_to_multi_recursive::<N, T>(binary_root, binary_bvh, &mut multi_nodes);
-    }
+  if let Some(binary_root) = binary_bvh.root() {
+    collapse_binary_to_multi_recursive::<N, T>(binary_root, binary_bvh, &mut multi_nodes);
+  }
 
-    multi_nodes
+  multi_nodes
 }
 
 fn collapse_binary_to_multi_recursive<const N: usize, T: BinaryBvh>(
-    binary_idx: u32,
-    binary_bvh: &T,
-    multi_nodes: &mut Vec<TlasMultiNode<N>>,
+  binary_idx: u32,
+  binary_bvh: &T,
+  multi_nodes: &mut Vec<TlasMultiNode<N>>,
 ) -> u32
 where
-    T::Bound: Into<[f32; 6]>,
+  T::Bound: Into<[f32; 6]>,
 {
-    let multi_idx = multi_nodes.len() as u32;
-    multi_nodes.push(TlasMultiNode::default());
+  let multi_idx = multi_nodes.len() as u32;
+  multi_nodes.push(TlasMultiNode::default());
 
-    #[derive(Clone, Copy)]
-    enum Treelet {
-        Leaf(u32),
-        Node { left: usize, right: usize, axis: u32 },
+  #[derive(Clone, Copy)]
+  enum Treelet {
+    Leaf(u32),
+    Node {
+      left: usize,
+      right: usize,
+      axis: u32,
+    },
+  }
+
+  let mut treelet_nodes = vec![Treelet::Leaf(binary_idx)];
+
+  // Expand the treelet using Breadth-First Search until we hit N leaves or run out of internal nodes
+  loop {
+    let leaf_count = treelet_nodes.iter().filter(|n| matches!(n, Treelet::Leaf(_))).count();
+    if leaf_count >= N {
+      break;
     }
 
-    let mut treelet_nodes = vec![Treelet::Leaf(binary_idx)];
+    let mut expanded = false;
+    for i in 0..treelet_nodes.len() {
+      if let Treelet::Leaf(b_idx) = treelet_nodes[i] {
+        if b_idx != u32::MAX && !binary_bvh.is_leaf(b_idx) {
+          let (l_opt, r_opt) = binary_bvh.children(b_idx);
+          if l_opt.is_some() || r_opt.is_some() {
+            let axis = binary_bvh.split_axis(b_idx);
 
-    // Expand the treelet using Breadth-First Search until we hit N leaves or run out of internal nodes
-    loop {
-        let leaf_count = treelet_nodes.iter().filter(|n| matches!(n, Treelet::Leaf(_))).count();
-        if leaf_count >= N {
-            break;
+            let l_idx = treelet_nodes.len();
+            treelet_nodes.push(Treelet::Leaf(l_opt.unwrap_or(u32::MAX)));
+
+            let r_idx = treelet_nodes.len();
+            treelet_nodes.push(Treelet::Leaf(r_opt.unwrap_or(u32::MAX)));
+
+            treelet_nodes[i] = Treelet::Node {
+              left: l_idx,
+              right: r_idx,
+              axis,
+            };
+            expanded = true;
+            break; // Expand one per iteration to keep breadth-first expansion
+          }
         }
+      }
+    }
+    if !expanded {
+      break;
+    }
+  }
 
-        let mut expanded = false;
-        for i in 0..treelet_nodes.len() {
-            if let Treelet::Leaf(b_idx) = treelet_nodes[i] {
-                if b_idx != u32::MAX && !binary_bvh.is_leaf(b_idx) {
-                    let (l_opt, r_opt) = binary_bvh.children(b_idx);
-                    if l_opt.is_some() || r_opt.is_some() {
-                        let axis = binary_bvh.split_axis(b_idx);
-
-                        let l_idx = treelet_nodes.len();
-                        treelet_nodes.push(Treelet::Leaf(l_opt.unwrap_or(u32::MAX)));
-
-                        let r_idx = treelet_nodes.len();
-                        treelet_nodes.push(Treelet::Leaf(r_opt.unwrap_or(u32::MAX)));
-
-                        treelet_nodes[i] = Treelet::Node { left: l_idx, right: r_idx, axis };
-                        expanded = true;
-                        break; // Expand one per iteration to keep breadth-first expansion
-                    }
-                }
-            }
+  // Collect leaves in base order
+  let mut frontier = Vec::new();
+  fn collect_leaves(idx: usize, tree: &[Treelet], frontier: &mut Vec<u32>) {
+    match tree[idx] {
+      Treelet::Leaf(b_idx) => {
+        if b_idx != u32::MAX {
+          frontier.push(b_idx);
         }
-        if !expanded {
-            break;
-        }
+      }
+      Treelet::Node { left, right, .. } => {
+        collect_leaves(left, tree, frontier);
+        collect_leaves(right, tree, frontier);
+      }
+    }
+  }
+  collect_leaves(0, &treelet_nodes, &mut frontier);
+
+  let mut node = TlasMultiNode::<N>::default();
+  let mut valid_mask_0 = 0u32;
+  let mut valid_mask_1 = 0u32;
+
+  for (i, &child_idx) in frontier.iter().enumerate() {
+    if i < 32 {
+      valid_mask_0 |= 1 << i;
+    } else {
+      valid_mask_1 |= 1 << (i - 32);
     }
 
-    // Collect leaves in base order
-    let mut frontier = Vec::new();
-    fn collect_leaves(idx: usize, tree: &[Treelet], frontier: &mut Vec<u32>) {
-        match tree[idx] {
-            Treelet::Leaf(b_idx) => {
-                if b_idx != u32::MAX {
-                    frontier.push(b_idx);
-                }
-            }
-            Treelet::Node { left, right, .. } => {
-                collect_leaves(left, tree, frontier);
-                collect_leaves(right, tree, frontier);
-            }
-        }
+    let bound: [f32; 6] = binary_bvh.bound(child_idx).into();
+    node.min_x[i] = bound[0];
+    node.min_y[i] = bound[1];
+    node.min_z[i] = bound[2];
+    node.max_x[i] = bound[3];
+    node.max_y[i] = bound[4];
+    node.max_z[i] = bound[5];
+
+    node.masses[i] = binary_bvh.mass(child_idx);
+    let com = binary_bvh.center_of_mass(child_idx);
+    node.com_x[i] = com[0];
+    node.com_y[i] = com[1];
+    node.com_z[i] = com[2];
+    node.particle_start[i] = 0; // TODO: Fetch from binary_bvh if supported
+    node.particle_count[i] = 0;
+
+    if binary_bvh.is_leaf(child_idx) {
+      if let Some(meta) = binary_bvh.leaf_meta(child_idx) {
+        node.metadata[i] = meta;
+      } else {
+        node.metadata[i] = (1 << 31) | child_idx;
+      }
+    } else {
+      let child_multi_idx =
+        collapse_binary_to_multi_recursive::<N, T>(child_idx, binary_bvh, multi_nodes);
+      node.child_indices[i] = child_multi_idx;
+      node.metadata[i] = 0;
     }
-    collect_leaves(0, &treelet_nodes, &mut frontier);
+  }
+  node.valid_mask = [valid_mask_0, valid_mask_1];
 
-    let mut node = TlasMultiNode::<N>::default();
-    let mut valid_mask_0 = 0u32;
-    let mut valid_mask_1 = 0u32;
-
-    for (i, &child_idx) in frontier.iter().enumerate() {
-        if i < 32 {
-            valid_mask_0 |= 1 << i;
-        } else {
-            valid_mask_1 |= 1 << (i - 32);
-        }
-
-        let bound: [f32; 6] = binary_bvh.bound(child_idx).into();
-        node.min_x[i] = bound[0]; node.min_y[i] = bound[1]; node.min_z[i] = bound[2];
-        node.max_x[i] = bound[3]; node.max_y[i] = bound[4]; node.max_z[i] = bound[5];
-        
-        node.masses[i] = binary_bvh.mass(child_idx);
-        let com = binary_bvh.center_of_mass(child_idx);
-        node.com_x[i] = com[0]; node.com_y[i] = com[1]; node.com_z[i] = com[2];
-        node.particle_start[i] = 0; // TODO: Fetch from binary_bvh if supported
-        node.particle_count[i] = 0;
-
-        if binary_bvh.is_leaf(child_idx) {
-            if let Some(meta) = binary_bvh.leaf_meta(child_idx) {
-                node.metadata[i] = meta;
-            } else {
-                node.metadata[i] = (1 << 31) | child_idx;
+  // Generate permutations
+  for sign_mask in 0..8 {
+    let mut perm = Vec::new();
+    fn traverse_perm(
+      idx: usize,
+      tree: &[Treelet],
+      sign_mask: u8,
+      frontier: &[u32],
+      perm: &mut Vec<u8>,
+    ) {
+      match tree[idx] {
+        Treelet::Leaf(b_idx) => {
+          if b_idx != u32::MAX {
+            if let Some(pos) = frontier.iter().position(|&x| x == b_idx) {
+              perm.push(pos as u8);
             }
-        } else {
-            let child_multi_idx = collapse_binary_to_multi_recursive::<N, T>(child_idx, binary_bvh, multi_nodes);
-            node.child_indices[i] = child_multi_idx;
-            node.metadata[i] = 0;
+          }
         }
+        Treelet::Node { left, right, axis } => {
+          let is_negative = (sign_mask & (1 << axis)) != 0;
+          if is_negative {
+            traverse_perm(right, tree, sign_mask, frontier, perm);
+            traverse_perm(left, tree, sign_mask, frontier, perm);
+          } else {
+            traverse_perm(left, tree, sign_mask, frontier, perm);
+            traverse_perm(right, tree, sign_mask, frontier, perm);
+          }
+        }
+      }
     }
-    node.valid_mask = [valid_mask_0, valid_mask_1];
-
-    // Generate permutations
-    for sign_mask in 0..8 {
-        let mut perm = Vec::new();
-        fn traverse_perm(
-            idx: usize,
-            tree: &[Treelet],
-            sign_mask: u8,
-            frontier: &[u32],
-            perm: &mut Vec<u8>
-        ) {
-            match tree[idx] {
-                Treelet::Leaf(b_idx) => {
-                    if b_idx != u32::MAX {
-                        if let Some(pos) = frontier.iter().position(|&x| x == b_idx) {
-                            perm.push(pos as u8);
-                        }
-                    }
-                }
-                Treelet::Node { left, right, axis } => {
-                    let is_negative = (sign_mask & (1 << axis)) != 0;
-                    if is_negative {
-                        traverse_perm(right, tree, sign_mask, frontier, perm);
-                        traverse_perm(left, tree, sign_mask, frontier, perm);
-                    } else {
-                        traverse_perm(left, tree, sign_mask, frontier, perm);
-                        traverse_perm(right, tree, sign_mask, frontier, perm);
-                    }
-                }
-            }
-        }
-        traverse_perm(0, &treelet_nodes, sign_mask, &frontier, &mut perm);
-        for i in 0..perm.len() {
-            node.permutations[sign_mask as usize][i] = perm[i] as u32;
-        }
+    traverse_perm(0, &treelet_nodes, sign_mask, &frontier, &mut perm);
+    for i in 0..perm.len() {
+      node.permutations[sign_mask as usize][i] = perm[i] as u32;
     }
+  }
 
-    multi_nodes[multi_idx as usize] = node;
-    multi_idx
+  multi_nodes[multi_idx as usize] = node;
+  multi_idx
 }
 
 // --- CONVERSION BUILDER ---

@@ -64,8 +64,9 @@ fn setup_render_frontend_for_tests(
   use std::sync::mpsc;
   let (tx, rx) = mpsc::channel();
 
-  let th =
-    aethervk_oshal_rlib::os::thread::Builder::new().stack_size(8 * 1024 * 1024).spawn(move || {
+  let th = aethervk_oshal_rlib::os::thread::Builder::new()
+    .stack_size(8 * 1024 * 1024)
+    .spawn(move || {
       let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
       let pool_arc = Arc::new(pool);
 
@@ -1901,8 +1902,10 @@ fn test_depth_stencil_separation() {
 
       render_pass_guard.end()?;
 
-      let actual_device =
-        device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+      let actual_device = device
+        .as_any()
+        .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+        .unwrap();
       actual_device.record_test_depth_stencil_download(
         cmd_buffer_handle,
         test_data.presentation_engine,
@@ -2219,8 +2222,10 @@ fn test_sun_rendering() {
         device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64), 0.6)?;
 
         // 2. Download the Sun 3D texture
-        let actual_device =
-          device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+        let actual_device = device
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
         // Use a unique task ID just for the map entry, but wait on the command buffer task ID
         let sun_task_id = device.create_task();
         actual_device.record_test_sun_download(cmd_buffer_handle, sun_e, sun_task_id)?;
@@ -2242,9 +2247,13 @@ fn test_sun_rendering() {
         let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
 
         let extent = device.get_presentation_engine_extent(presentation_engine)?;
-        device.set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent)).unwrap();
+        device
+          .set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent))
+          .unwrap();
 
-        device.set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent)).unwrap();
+        device
+          .set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent))
+          .unwrap();
 
         // 4. Render Scene (Draws Physical Mesh, then Sun Volume over it)
         gpu::frame::render_frame(
@@ -2436,8 +2445,10 @@ fn test_sun_rendering_volume_only() {
       device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64), 0.8)?;
 
       // 2. Download the Sun 3D texture
-      let actual_device =
-        device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+      let actual_device = device
+        .as_any()
+        .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+        .unwrap();
       let sun_task_id = device.create_task();
       actual_device.record_test_sun_download(cmd_buffer_handle, sun_e, sun_task_id)?;
 
@@ -2842,8 +2853,12 @@ fn test_outline_rendering_windowless() {
       let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
       let extent = device.get_presentation_engine_extent(presentation_engine)?;
 
-      device.set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent)).unwrap();
-      device.set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent)).unwrap();
+      device
+        .set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent))
+        .unwrap();
+      device
+        .set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent))
+        .unwrap();
 
       gpu::frame::render_frame(
         device,
@@ -3010,8 +3025,12 @@ fn test_outline_toggled_after_upload() {
         let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
         let extent = device.get_presentation_engine_extent(presentation_engine)?;
 
-        device.set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent)).unwrap();
-        device.set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent)).unwrap();
+        device
+          .set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent))
+          .unwrap();
+        device
+          .set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent))
+          .unwrap();
 
         gpu::frame::render_frame(
           device,
@@ -3089,8 +3108,12 @@ fn test_outline_toggled_after_upload() {
         let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
         let extent = device.get_presentation_engine_extent(presentation_engine)?;
 
-        device.set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent)).unwrap();
-        device.set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent)).unwrap();
+        device
+          .set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent(extent))
+          .unwrap();
+        device
+          .set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent(extent))
+          .unwrap();
 
         gpu::frame::render_frame(
           device,
@@ -3774,8 +3797,10 @@ fn test_painting_mode_write_and_verify() {
       // We need to access the mapped memory of the emissive_paint_image.
       // This is inside RenderDevice (Vulkan implementation).
       {
-        let vk_device =
-          device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+        let vk_device = device
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
         let mesh_id = gpu::RenderableInstanceId::from_physical_mesh(mesh_comp.mesh.id);
 
         {
@@ -3830,8 +3855,10 @@ fn test_painting_mode_write_and_verify() {
 
         // Memory barrier to make CPU writes visible to the fragment shader. No layout change.
         {
-          let vk_device =
-            device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+          let vk_device = device
+            .as_any()
+            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+            .unwrap();
           let mesh_id = gpu::RenderableInstanceId::from_physical_mesh(mesh_comp.mesh.id);
           vk_device
             .submit_paint_image_transition(
@@ -4556,7 +4583,9 @@ fn test_render_weather_ui() {
           gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id)).unwrap();
 
         // Ensure billboard resources are created TODO: check move to first frame in scene_extraction. create should do nothing if already existing
-        device.create_billboard_resources(cmd_buffer_handle, presentation_engine).unwrap();
+        device
+          .create_billboard_resources(cmd_buffer_handle, presentation_engine)
+          .unwrap();
 
         let sun_id = if let Some((id, tex)) = sun_tex.take() {
           Some(device.add_billboard_texture(cmd_buffer_handle, id, &tex, 0).unwrap())
@@ -4609,7 +4638,9 @@ fn test_render_weather_ui() {
           )
           .unwrap();
 
-        device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result).unwrap();
+        device
+          .begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)
+          .unwrap();
         let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
 
         device
@@ -4634,7 +4665,9 @@ fn test_render_weather_ui() {
         .unwrap();
 
         // Draw Text Manually for now over the UI
-        device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer_handle).unwrap();
+        device
+          .prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer_handle)
+          .unwrap();
 
         let w = width as f32;
         let h = height as f32;
@@ -4778,9 +4811,11 @@ fn test_render_weather_ui() {
     })
     .unwrap();
 
-  render_frontend.with_device(render_device_handle, |device| {
-    device.destroy_presentation_engine(presentation_engine)
-  }).unwrap();
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      device.destroy_presentation_engine(presentation_engine)
+    })
+    .unwrap();
 
   drop(render_frontend);
 }
@@ -5778,16 +5813,19 @@ fn test_cross_queue_sync_timeline_semaphore() {
       let create_info = ash::vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
 
       // We get the downcasted device to access ash::Device
-      let vulkan_device =
-        device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+      let vulkan_device = device
+        .as_any()
+        .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+        .unwrap();
       let logical_device = &vulkan_device.device.handle;
       let timeline_sem = unsafe { logical_device.create_semaphore(&create_info, None).unwrap() };
 
       let timeline_value = 1;
 
       // We simulate the compute step signaling the timeline semaphore from CPU for test purposes
-      let signal_info =
-        ash::vk::SemaphoreSignalInfo::default().semaphore(timeline_sem).value(timeline_value);
+      let signal_info = ash::vk::SemaphoreSignalInfo::default()
+        .semaphore(timeline_sem)
+        .value(timeline_value);
       unsafe { logical_device.signal_semaphore(&signal_info).unwrap() };
 
       let sync_info = crate::gpu::CommandBufferSyncInfo {
@@ -5808,7 +5846,9 @@ fn test_cross_queue_sync_timeline_semaphore() {
       device.begin_render_pass(cmd_buffer, pe_handle, &acquire_result).unwrap();
       let render_pass_scope = gpu::ScopedRenderPass::new(device, cmd_buffer);
 
-      device.set_viewport(cmd_buffer, &gpu::Viewport::from_extent([256, 256])).unwrap();
+      device
+        .set_viewport(cmd_buffer, &gpu::Viewport::from_extent([256, 256]))
+        .unwrap();
       device.set_scissor(cmd_buffer, &gpu::Rect2D::from_extent([256, 256])).unwrap();
 
       render_pass_scope.end().unwrap();

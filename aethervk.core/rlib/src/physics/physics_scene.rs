@@ -44,10 +44,10 @@ pub struct GpuReferenceFrame {
 }
 
 // Metadata helpers for TLAS
-pub const BVH_FRAME_MACRO:  u32 = 0;
-pub const BVH_FRAME_MICRO:  u32 = 1;
-pub const BVH_SHAPE_AABB:   u32 = 0;
-pub const BVH_SHAPE_OBB:    u32 = 1;
+pub const BVH_FRAME_MACRO: u32 = 0;
+pub const BVH_FRAME_MICRO: u32 = 1;
+pub const BVH_SHAPE_AABB: u32 = 0;
+pub const BVH_SHAPE_OBB: u32 = 1;
 pub const BVH_SHAPE_SPHERE: u32 = 2;
 pub const BVH_SHAPE_SUB_TLAS: u32 = 3;
 
@@ -55,7 +55,9 @@ pub fn pack_meta(is_leaf: bool, frame: u32, shape: u32, index: u32) -> u32 {
   let mut m = index & 0x07FF_FFFF;
   m |= (shape & 0x3) << 27;
   m |= (frame & 0x3) << 29;
-  if is_leaf { m |= 0x8000_0000; }
+  if is_leaf {
+    m |= 0x8000_0000;
+  }
   m
 }
 
@@ -89,8 +91,12 @@ impl RootBoundsBvh {
   ) -> u32 {
     let node_idx = nodes.len() as u32;
     nodes.push(RbNode {
-      min: Vec3f32::zero(), max: Vec3f32::zero(),
-      left: None, right: None, leaf_meta: None, leaf_child_idx: 0,
+      min: Vec3f32::zero(),
+      max: Vec3f32::zero(),
+      left: None,
+      right: None,
+      leaf_meta: None,
+      leaf_child_idx: 0,
     });
 
     let mut mn = Vec3f32::from_array([f32::INFINITY; 3]);
@@ -104,15 +110,24 @@ impl RootBoundsBvh {
       let &(root_idx, _, _, shape, frame) = &leaves[items[0]];
       let meta = pack_meta(true, frame, shape, root_idx);
       nodes[node_idx as usize] = RbNode {
-        min: mn, max: mx, left: None, right: None,
-        leaf_meta: Some(meta), leaf_child_idx: root_idx,
+        min: mn,
+        max: mx,
+        left: None,
+        right: None,
+        leaf_meta: Some(meta),
+        leaf_child_idx: root_idx,
       };
       return node_idx;
     }
 
     let ext = mx - mn;
-    let axis = if ext.x() > ext.y() && ext.x() > ext.z() { 0 }
-               else if ext.y() > ext.z() { 1 } else { 2 };
+    let axis = if ext.x() > ext.y() && ext.x() > ext.z() {
+      0
+    } else if ext.y() > ext.z() {
+      1
+    } else {
+      2
+    };
     items.sort_by(|&a, &b| {
       let ca = (leaves[a].1 + leaves[a].2) * 0.5;
       let cb = (leaves[b].1 + leaves[b].2) * 0.5;
@@ -120,17 +135,20 @@ impl RootBoundsBvh {
     });
     let mid = items.len() / 2;
     let (left_items, right_items) = items.split_at_mut(mid);
-    let left  = Self::build_recursive(left_items,  leaves, nodes);
+    let left = Self::build_recursive(left_items, leaves, nodes);
     let right = Self::build_recursive(right_items, leaves, nodes);
 
     nodes[node_idx as usize] = RbNode {
-      min: mn, max: mx, left: Some(left), right: Some(right),
-      leaf_meta: None, leaf_child_idx: 0,
+      min: mn,
+      max: mx,
+      left: Some(left),
+      right: Some(right),
+      leaf_meta: None,
+      leaf_child_idx: 0,
     };
     node_idx
   }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct CollisionEvent {
@@ -161,13 +179,18 @@ pub struct PhysicsScene {
 
 impl PhysicsScene {
   pub fn build_from_scene(scene: &Scene, dt_s: f32) -> Self {
+    use crate::scene::{
+      KinematicComponent, PhysicalMeshComponent, ReferenceFrameComponent,
+      particles::ParticleSystemComponent,
+    };
     use slotmap::Key;
-    use crate::scene::{KinematicComponent, ReferenceFrameComponent, PhysicalMeshComponent, particles::ParticleSystemComponent};
     let mut frame_map: hashbrown::HashMap<EntityId, u32> = hashbrown::HashMap::new();
     let mut gpu_frames = Vec::new();
 
     scene.query2::<TransformComponent, ReferenceFrameComponent, _>(|e, t, f| {
-      let vel = scene.with_component(e, |k: &KinematicComponent| k.velocity).unwrap_or(Vec3f32::zero());
+      let vel = scene
+        .with_component(e, |k: &KinematicComponent| k.velocity)
+        .unwrap_or(Vec3f32::zero());
       let gpu_frame = GpuReferenceFrame {
         center_pos: [t.position.x(), t.position.y(), t.position.z()],
         scale: f.scale,
@@ -253,11 +276,11 @@ impl PhysicsScene {
           };
           let mut mn = Vec3f32::from_components(p.x() - extents.x(), p.y() - extents.y(), p.z() - extents.z());
           let mut mx = Vec3f32::from_components(p.x() + extents.x(), p.y() + extents.y(), p.z() + extents.z());
-          
+
           let sweep = kinematic.velocity * dt_s;
           mn = mn.min(mn + sweep);
           mx = mx.max(mx + sweep);
-          
+
           frame_leaves.entry(lca_idx).or_default().push((dense_mesh_idx, mn, mx, shape_type, frame_bits));
         }
         None
@@ -274,17 +297,24 @@ impl PhysicsScene {
       let motion_blas = if !ps.is_empty() {
         let transform = scene.global_transform(entity).unwrap_or_default();
         use crate::math::{particles_edu::build_motion_particle_lbvh, physics::Particle};
-        let pars: Vec<Particle> = ps.iter().map(|p| Particle {
-          position: Vec3f32::from_array(p.position),
-          velocity: Vec3f32::from_array(p.velocity),
-          mass: p.mass,
-          accumulated_force: Vec3f32::zero(),
-        }).collect();
+        let pars: Vec<Particle> = ps
+          .iter()
+          .map(|p| Particle {
+            position: Vec3f32::from_array(p.position),
+            velocity: Vec3f32::from_array(p.velocity),
+            mass: p.mass,
+            accumulated_force: Vec3f32::zero(),
+          })
+          .collect();
         let vels: Vec<Vec3f32> = ps.iter().map(|p| Vec3f32::from_array(p.velocity)).collect();
 
         if let Some(lbvh) = build_motion_particle_lbvh(&pars, &vels, 1.0, dt_s) {
           let lca_idx = find_lca_frame_idx(entity, scene, &gpu_frames).unwrap_or(macro_frame_idx);
-          let frame_bits = if lca_idx == macro_frame_idx { BVH_FRAME_MACRO } else { BVH_FRAME_MICRO };
+          let frame_bits = if lca_idx == macro_frame_idx {
+            BVH_FRAME_MACRO
+          } else {
+            BVH_FRAME_MICRO
+          };
           let mut min_bound = Vec3f32::from_array([f32::INFINITY; 3]);
           let mut max_bound = Vec3f32::from_array([f32::NEG_INFINITY; 3]);
           for node in &lbvh.nodes {
@@ -297,7 +327,13 @@ impl PhysicsScene {
             }
           }
           particle_entity_map.push(entity.data().as_ffi() as u32);
-          frame_leaves.entry(lca_idx).or_default().push((entity.data().as_ffi() as u32, min_bound, max_bound, BVH_SHAPE_SPHERE, frame_bits));
+          frame_leaves.entry(lca_idx).or_default().push((
+            entity.data().as_ffi() as u32,
+            min_bound,
+            max_bound,
+            BVH_SHAPE_SPHERE,
+            frame_bits,
+          ));
           Some(lbvh)
         } else {
           None
@@ -317,7 +353,9 @@ impl PhysicsScene {
     }
 
     for (frame_idx, leaves) in frame_leaves {
-      if leaves.is_empty() { continue; }
+      if leaves.is_empty() {
+        continue;
+      }
       let rbvh = RootBoundsBvh::build(&leaves);
 
       let mut mn = Vec3f32::from_array([f32::INFINITY; 3]);
@@ -360,30 +398,34 @@ pub fn build_motion_blas(
     * Mat4x4f32::from_scale(transform.scale);
   let disp = velocity_lca * dt_s;
 
-  let nodes: Vec<LinearBVHNode<f32>> = mesh_bvh.nodes.iter().map(|n| {
-    let swept_bound = match &n.bound {
-      LinearBound::AABB(aabb) => {
-        let world = aabb.transform_f32(&trs);
-        let swept_min = world.min::<Vec3f32>().min(world.min::<Vec3f32>() + disp);
-        let swept_max = world.max::<Vec3f32>().max(world.max::<Vec3f32>() + disp);
-        LinearBound::AABB(AABB::new(swept_min, swept_max))
+  let nodes: Vec<LinearBVHNode<f32>> = mesh_bvh
+    .nodes
+    .iter()
+    .map(|n| {
+      let swept_bound = match &n.bound {
+        LinearBound::AABB(aabb) => {
+          let world = aabb.transform_f32(&trs);
+          let swept_min = world.min::<Vec3f32>().min(world.min::<Vec3f32>() + disp);
+          let swept_max = world.max::<Vec3f32>().max(world.max::<Vec3f32>() + disp);
+          LinearBound::AABB(AABB::new(swept_min, swept_max))
+        }
+        LinearBound::OBB(obb) => {
+          let world = obb.transform_f32(&trs).to_aabb::<Vec3f32>();
+          let swept_min = world.min::<Vec3f32>().min(world.min::<Vec3f32>() + disp);
+          let swept_max = world.max::<Vec3f32>().max(world.max::<Vec3f32>() + disp);
+          LinearBound::AABB(AABB::new(swept_min, swept_max))
+        }
+      };
+      LinearBVHNode {
+        bound: swept_bound,
+        left_child_or_primitive_offset: n.left_child_or_primitive_offset,
+        right_child_offset: n.right_child_offset,
+        primitive_count: n.primitive_count,
+        mass: n.mass,
+        center_of_mass: n.center_of_mass,
       }
-      LinearBound::OBB(obb) => {
-        let world = obb.transform_f32(&trs).to_aabb::<Vec3f32>();
-        let swept_min = world.min::<Vec3f32>().min(world.min::<Vec3f32>() + disp);
-        let swept_max = world.max::<Vec3f32>().max(world.max::<Vec3f32>() + disp);
-        LinearBound::AABB(AABB::new(swept_min, swept_max))
-      }
-    };
-    LinearBVHNode {
-      bound: swept_bound,
-      left_child_or_primitive_offset: n.left_child_or_primitive_offset,
-      right_child_offset: n.right_child_offset,
-      primitive_count: n.primitive_count,
-      mass: n.mass,
-      center_of_mass: n.center_of_mass,
-    }
-  }).collect();
+    })
+    .collect();
 
   LinearBVH {
     header: LinearBVHHeader {
@@ -451,18 +493,30 @@ impl crate::math::collision::multi_bvh::BinaryBvh for RootBoundsBvh {
 impl core::fmt::Debug for PhysicsScene {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("PhysicsScene")
-     .field("gpu_frames", &self.gpu_frames)
-     .field("dt_s", &self.dt_s)
-     .finish()
+      .field("gpu_frames", &self.gpu_frames)
+      .field("dt_s", &self.dt_s)
+      .finish()
   }
 }
 
 #[test]
 fn test_root_bounds_bvh_2_leaves() {
-    let leaves = alloc::vec![
-        (0, aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]), aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 1.0, 1.0]), 0, 0),
-        (1, aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([2.0, 2.0, 2.0]), aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([3.0, 3.0, 3.0]), 1, 0),
-    ];
-    let bvh = RootBoundsBvh::build(&leaves);
-    assert_eq!(bvh.nodes.len(), 3);
+  let leaves = alloc::vec![
+    (
+      0,
+      aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([0.0, 0.0, 0.0]),
+      aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([1.0, 1.0, 1.0]),
+      0,
+      0
+    ),
+    (
+      1,
+      aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([2.0, 2.0, 2.0]),
+      aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([3.0, 3.0, 3.0]),
+      1,
+      0
+    ),
+  ];
+  let bvh = RootBoundsBvh::build(&leaves);
+  assert_eq!(bvh.nodes.len(), 3);
 }

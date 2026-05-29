@@ -1,6 +1,6 @@
 using System;
-using AetherVk.Logic.ViewModels;
 using AetherVk.Logic.Services;
+using AetherVk.Logic.ViewModels;
 using Avalonia.Controls;
 using Avalonia.Input;
 
@@ -15,10 +15,10 @@ public partial class SpawnCometWindow : Window
 
   private void CometsAutoCompleteBox_DoubleTapped(object? sender, TappedEventArgs e)
   {
-      if (sender is AutoCompleteBox autoCompleteBox && string.IsNullOrEmpty(autoCompleteBox.Text))
-      {
-          autoCompleteBox.IsDropDownOpen = true;
-      }
+    if (sender is AutoCompleteBox autoCompleteBox && string.IsNullOrEmpty(autoCompleteBox.Text))
+    {
+      autoCompleteBox.IsDropDownOpen = true;
+    }
   }
 
   public void CancelCommand()
@@ -55,9 +55,15 @@ public partial class SpawnCometWindow : Window
       vm.EntityName,
       vm.PhysicsType,
       vm.FetchedOrbitData,
-      vm.PosX, -vm.PosY, vm.PosZ,
-      vm.ScaleX, vm.ScaleY, vm.ScaleZ,
-      vm.Pitch, vm.Yaw, vm.Roll,
+      vm.PosX,
+      -vm.PosY,
+      vm.PosZ,
+      vm.ScaleX,
+      vm.ScaleY,
+      vm.ScaleZ,
+      vm.Pitch,
+      vm.Yaw,
+      vm.Roll,
       vm.CometRadiusKm,
       massKg,
       vm.SelectedSpkRecord?.RecordId,

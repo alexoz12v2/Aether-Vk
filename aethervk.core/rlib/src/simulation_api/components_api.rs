@@ -91,12 +91,17 @@ impl SimulationContext {
       "component_api:get_transform_component"
     );
     let transform =
-      scene.read().scene.global_transform(entity_id).ok_or(EngineError::InvalidOperation(
-        "component_api:get_transform_component couldn't compute global transform",
-      ))?;
+      scene
+        .read()
+        .scene
+        .global_transform(entity_id)
+        .ok_or(EngineError::InvalidOperation(
+          "component_api:get_transform_component couldn't compute global transform",
+        ))?;
     Ok(transform)
   }
 
+  #[allow(clippy::not_unsafe_ptr_arg_deref)]
   /// TODO: Relative to its frame!
   pub fn get_transform_component(
     &self,
@@ -119,9 +124,13 @@ impl SimulationContext {
       "component_api:get_transform_component"
     );
     let transform =
-      scene.read().scene.global_transform(entity_id).ok_or(EngineError::InvalidOperation(
-        "component_api:get_transform_component couldn't compute global transform",
-      ))?;
+      scene
+        .read()
+        .scene
+        .global_transform(entity_id)
+        .ok_or(EngineError::InvalidOperation(
+          "component_api:get_transform_component couldn't compute global transform",
+        ))?;
     unsafe {
       if !pos_x.is_null() {
         *pos_x = transform.position.x();
@@ -187,9 +196,12 @@ impl SimulationContext {
     if (node_index as usize) < bvh_len {
       let mut dbg_opt = None;
       let _ =
-        scene.read().scene.with_component(entity_id, |dbg: &crate::scene::BvhDebugComponent| {
-          dbg_opt = Some(dbg.node_render_states.clone());
-        });
+        scene
+          .read()
+          .scene
+          .with_component(entity_id, |dbg: &crate::scene::BvhDebugComponent| {
+            dbg_opt = Some(dbg.node_render_states.clone());
+          });
 
       let mut states = match dbg_opt {
         Some(s) => s,
@@ -579,14 +591,17 @@ impl SimulationContext {
     scene
       .write()
       .scene
-      .with_component_mut(entity_id, |c: &mut crate::scene::ScreenSpaceBillboardComponent| {
-        c.ndc_x = ndc_x;
-        c.ndc_y = ndc_y;
-        c.scale = scale;
-        c.rotation_deg = rotation_deg;
-        c.opacity = opacity;
-        c.z_index = z_index;
-      })
+      .with_component_mut(
+        entity_id,
+        |c: &mut crate::scene::ScreenSpaceBillboardComponent| {
+          c.ndc_x = ndc_x;
+          c.ndc_y = ndc_y;
+          c.scale = scale;
+          c.rotation_deg = rotation_deg;
+          c.opacity = opacity;
+          c.z_index = z_index;
+        },
+      )
       .ok_or(EngineError::InvalidOperation(
         "component_api:set_screen_space_billboard couldn't find ScreenSpaceBillboardComponent",
       ))
@@ -606,8 +621,9 @@ impl SimulationContext {
     scene
       .read()
       .scene
-      .with_component(entity_id, |c: &crate::scene::ScreenSpaceBillboardComponent| {
-        crate::scene::ScreenSpaceBillboardDTO {
+      .with_component(
+        entity_id,
+        |c: &crate::scene::ScreenSpaceBillboardComponent| crate::scene::ScreenSpaceBillboardDTO {
           ndc_x: c.ndc_x,
           ndc_y: c.ndc_y,
           scale: c.scale,
@@ -615,8 +631,8 @@ impl SimulationContext {
           opacity: c.opacity,
           z_index: c.z_index,
           viewport_id: c.viewport_id,
-        }
-      })
+        },
+      )
       .ok_or(EngineError::InvalidOperation(
         "component_api:get_screen_space_billboard couldn't find ScreenSpaceBillboardComponent",
       ))
@@ -679,7 +695,10 @@ impl SimulationContext {
           let dir_y = c.latitude_rad.cos() * c.longitude_rad.sin();
           let ray_dir = Vec3f32::from_components(dir_x, dir_y, dir_z).normalize();
 
-          let ray_orig = if let Some(t) = { #[allow(deprecated)] lock.scene.global_transform(entity_id) } {
+          let ray_orig = if let Some(t) = {
+            #[allow(deprecated)]
+            lock.scene.global_transform(entity_id)
+          } {
             Vec3f32::from_components(t.position[0], t.position[1], t.position[2])
           } else {
             Vec3f32::zero()
@@ -713,7 +732,10 @@ impl SimulationContext {
           let dir_y = c.latitude_rad.cos() * c.longitude_rad.sin();
           let ray_dir = Vec3f32::from_components(dir_x, dir_y, dir_z).normalize();
 
-          let ray_orig = if let Some(t) = { #[allow(deprecated)] lock.scene.global_transform(entity_id) } {
+          let ray_orig = if let Some(t) = {
+            #[allow(deprecated)]
+            lock.scene.global_transform(entity_id)
+          } {
             Vec3f32::from_components(t.position[0], t.position[1], t.position[2])
           } else {
             Vec3f32::zero()
@@ -770,8 +792,10 @@ impl SimulationContext {
         },
       );
 
-      let _ =
-        active.write().scene.add_component(child_internal, ParticleSystemComponent::new(1000));
+      let _ = active
+        .write()
+        .scene
+        .add_component(child_internal, ParticleSystemComponent::new(1000));
 
       let _ = active.write().scene.add_component(
         child_internal,

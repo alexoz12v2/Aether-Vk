@@ -208,8 +208,10 @@ macro_rules! impl_update_archetype {
       let mut graphics_info = archetype.graphics_info.clone();
 
       if graphics_info.fragment_out.color_attachment_formats.first() != Some(&color_format) {
-        let depth_stencil_format =
-          graphics_info.fragment_out.depth_attachment_format.unwrap_or(ash::vk::Format::UNDEFINED);
+        let depth_stencil_format = graphics_info
+          .fragment_out
+          .depth_attachment_format
+          .unwrap_or(ash::vk::Format::UNDEFINED);
 
         graphics_info.fragment_out.color_attachment_formats.clear();
         graphics_info.fragment_out.color_attachment_formats.push(color_format);
@@ -263,8 +265,10 @@ macro_rules! impl_update_archetype {
       let mut outline_graphics_info = archetype.outline_graphics_info.clone();
 
       if graphics_info.fragment_out.color_attachment_formats.first() != Some(&color_format) {
-        let depth_stencil_format =
-          graphics_info.fragment_out.depth_attachment_format.unwrap_or(ash::vk::Format::UNDEFINED);
+        let depth_stencil_format = graphics_info
+          .fragment_out
+          .depth_attachment_format
+          .unwrap_or(ash::vk::Format::UNDEFINED);
         graphics_info.fragment_out.color_attachment_formats.clear();
         graphics_info.fragment_out.color_attachment_formats.push(color_format);
         graphics_info.render_pass =
@@ -686,7 +690,9 @@ impl Archetypes {
         VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_LIST).clone(),
       )
       .with_pre_rasterization(
-        PreRasterization::default().with_vertex_module(vertex_shader.module.get()).clone(),
+        PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
       )
       .with_fragment_shader(
         FragmentShader::default()
@@ -954,7 +960,9 @@ impl Archetypes {
         VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_LIST).clone(),
       )
       .with_pre_rasterization(
-        PreRasterization::default().with_vertex_module(vertex_shader.module.get()).clone(),
+        PreRasterization::default()
+          .with_vertex_module(vertex_shader.module.get())
+          .clone(),
       )
       .with_fragment_shader(
         FragmentShader::default()
@@ -1030,7 +1038,9 @@ impl Archetypes {
           .add_scissors(ignored_scissor()),
       )
       .with_fragment_out(
-        pipelines::FragmentOut::default().add_color_attachment_format(color_format).clone(),
+        pipelines::FragmentOut::default()
+          .add_color_attachment_format(color_format)
+          .clone(),
       )
       .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(
@@ -1222,7 +1232,9 @@ impl Archetypes {
 
     let pipeline_graphics_info = pipelines::GraphicsInfo::default()
       .with_vertex_in(
-        pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::LINE_LIST).clone(),
+        pipelines::VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::LINE_LIST)
+          .clone(),
       )
       .with_pre_rasterization(
         pipelines::PreRasterization::default()
@@ -1294,7 +1306,9 @@ impl Archetypes {
 
     let pipeline_graphics_info = pipelines::GraphicsInfo::default()
       .with_vertex_in(
-        pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::LINE_LIST).clone(),
+        pipelines::VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::LINE_LIST)
+          .clone(),
       )
       .with_pre_rasterization(
         pipelines::PreRasterization::default()
@@ -1366,7 +1380,9 @@ impl Archetypes {
 
     let pipeline_graphics_info = pipelines::GraphicsInfo::default()
       .with_vertex_in(
-        pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::LINE_LIST).clone(),
+        pipelines::VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::LINE_LIST)
+          .clone(),
       )
       .with_pre_rasterization(
         pipelines::PreRasterization::default()
@@ -1438,7 +1454,9 @@ impl Archetypes {
 
     let pipeline_graphics_info = pipelines::GraphicsInfo::default()
       .with_vertex_in(
-        pipelines::VertexIn::default().with_topology(vk::PrimitiveTopology::LINE_LIST).clone(),
+        pipelines::VertexIn::default()
+          .with_topology(vk::PrimitiveTopology::LINE_LIST)
+          .clone(),
       )
       .with_pre_rasterization(
         pipelines::PreRasterization::default()

@@ -6,15 +6,16 @@ use crate::{
     CollisionPair, CommandBufferSyncInfo, ForceEmitter, Kernels, KinematicBody, ParticleMetadata,
     RigidBodyImex, Wrench,
   },
-  gpu_backends::vulkan::device::Device,
-  gpu_backends::vulkan::physics::{VulkanBuffer, VulkanCommandBuffer},
-  physics::physics_scene::GpuReferenceFrame,
-  physics::physics_scene::PhysicsScene,
+  gpu_backends::vulkan::{
+    device::Device,
+    physics::{VulkanBuffer, VulkanCommandBuffer},
+  },
+  physics::physics_scene::{GpuReferenceFrame, PhysicsScene},
   scene::{KinematicComponent, ReferenceFrameComponent, Scene, TransformComponent},
   simulation::texture_cache::TextureCache,
   simulation_api::structs::{
-    MockTargetShader, PhysicsEngineType, SimulationSceneData, SimulationThreads,
-    SHADER_MOCK_RESULTS,
+    MockTargetShader, PhysicsEngineType, SHADER_MOCK_RESULTS, SimulationSceneData,
+    SimulationThreads,
   },
 };
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;

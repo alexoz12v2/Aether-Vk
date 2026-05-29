@@ -1,21 +1,25 @@
 #[cfg(test)]
 mod tests {
-  use crate::gpu::vulkan::device;
-  use crate::gpu::{
-    new_render_frontend, simulation_step, DeviceAdditionalParams, RenderFrontend,
-    VULKAN_RENDER_BACKEND,
+  use crate::{
+    gpu::{
+      DeviceAdditionalParams, RenderFrontend, VULKAN_RENDER_BACKEND, new_render_frontend,
+      simulation_step, vulkan::device,
+    },
+    physics::physics_scene::PhysicsScene,
+    scene::{
+      ColliderComponent, ColliderShape, KinematicComponent, PhysicalMeshComponent,
+      ReferenceFrameType, Scene, TransformComponent,
+    },
+    simulation::comet::Comet,
+    types::RuntimeParams,
   };
-  use crate::physics::physics_scene::PhysicsScene;
-  use crate::scene::{
-    ColliderComponent, ColliderShape, KinematicComponent, PhysicalMeshComponent,
-    ReferenceFrameType, Scene, TransformComponent,
+  use aethervk_oshal_rlib::{
+    math::{
+      quaternion::Quaternion,
+      vector::{Vector, Vector3, vec3::Vec3f32},
+    },
+    os::time::timeus_t,
   };
-  use crate::simulation::comet::Comet;
-  use crate::types::RuntimeParams;
-  use aethervk_oshal_rlib::math::quaternion::Quaternion;
-  use aethervk_oshal_rlib::math::vector::Vector3;
-  use aethervk_oshal_rlib::math::vector::{vec3::Vec3f32, Vector};
-  use aethervk_oshal_rlib::os::time::timeus_t;
   use heapless::index_map::FnvIndexMap;
   use polyhedral_mass_properties::{MassProperties, TriangleContrib};
   use std::sync::Arc;
@@ -136,7 +140,6 @@ mod tests {
   #[test]
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_vulkan_single_frame_all_shapes_collision_full() {
-    
     let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
@@ -245,18 +248,34 @@ mod tests {
         assert!(v_obb.x() > 0.0, "OBB should have bounced back");
 
         // Verify collision events
-        println!("RECENT COLLISIONS LEN: {}", ps.recent_collisions.len()); 
+        println!("RECENT COLLISIONS LEN: {}", ps.recent_collisions.len());
         for c in &ps.recent_collisions {
-            println!("Collision: {} vs {}", c.entity_a_name, c.entity_b_name);
+          println!("Collision: {} vs {}", c.entity_a_name, c.entity_b_name);
         }
-        assert!(!ps.recent_collisions.is_empty(), "Expected at least one collision event");
-        let coll = ps.recent_collisions.iter().find(|c| 
-            (c.entity_a_name == "Sphere" && c.entity_b_name == "OBB") ||
-            (c.entity_a_name == "OBB" && c.entity_b_name == "Sphere")
-        ).expect(&alloc::format!("Expected collision between Sphere and OBB, got: {:?}", ps.recent_collisions));
-        
-        assert!(coll.penetration_depth > 0.0, "Penetration depth should be positive");
-        assert_eq!(coll.frame_id, 0, "Collision should happen in root macro frame if not LCA");
+        assert!(
+          !ps.recent_collisions.is_empty(),
+          "Expected at least one collision event"
+        );
+        let coll = ps
+          .recent_collisions
+          .iter()
+          .find(|c| {
+            (c.entity_a_name == "Sphere" && c.entity_b_name == "OBB")
+              || (c.entity_a_name == "OBB" && c.entity_b_name == "Sphere")
+          })
+          .expect(&alloc::format!(
+            "Expected collision between Sphere and OBB, got: {:?}",
+            ps.recent_collisions
+          ));
+
+        assert!(
+          coll.penetration_depth > 0.0,
+          "Penetration depth should be positive"
+        );
+        assert_eq!(
+          coll.frame_id, 0,
+          "Collision should happen in root macro frame if not LCA"
+        );
 
         let tracked_allocs = vulkan_device.kernels.tracked_physical_allocations.lock().clone();
 
@@ -282,7 +301,6 @@ mod tests {
 
   #[test]
   fn test_vulkan_single_frame_all_shapes_collisionless() {
-    
     let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
@@ -416,7 +434,6 @@ mod tests {
   #[test]
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_vulkan_cross_frame_lca_collision_full() {
-    
     let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
@@ -543,18 +560,34 @@ mod tests {
         );
 
         // Verify collision events
-        println!("RECENT COLLISIONS LEN: {}", ps.recent_collisions.len()); 
+        println!("RECENT COLLISIONS LEN: {}", ps.recent_collisions.len());
         for c in &ps.recent_collisions {
-            println!("Collision: {} vs {}", c.entity_a_name, c.entity_b_name);
+          println!("Collision: {} vs {}", c.entity_a_name, c.entity_b_name);
         }
-        assert!(!ps.recent_collisions.is_empty(), "Expected at least one collision event");
-        let coll = ps.recent_collisions.iter().find(|c| 
-            (c.entity_a_name == "ObjMacro" && c.entity_b_name == "ObjMicro") ||
-            (c.entity_a_name == "ObjMicro" && c.entity_b_name == "ObjMacro")
-        ).expect(&alloc::format!("Expected LCA collision between ObjMacro and ObjMicro, got: {:?}", ps.recent_collisions));
-        
-        assert!(coll.penetration_depth > 0.0, "Penetration depth should be positive");
-        assert_ne!(coll.frame_id, 0, "LCA Collision should happen in the microframe");
+        assert!(
+          !ps.recent_collisions.is_empty(),
+          "Expected at least one collision event"
+        );
+        let coll = ps
+          .recent_collisions
+          .iter()
+          .find(|c| {
+            (c.entity_a_name == "ObjMacro" && c.entity_b_name == "ObjMicro")
+              || (c.entity_a_name == "ObjMicro" && c.entity_b_name == "ObjMacro")
+          })
+          .expect(&alloc::format!(
+            "Expected LCA collision between ObjMacro and ObjMicro, got: {:?}",
+            ps.recent_collisions
+          ));
+
+        assert!(
+          coll.penetration_depth > 0.0,
+          "Penetration depth should be positive"
+        );
+        assert_ne!(
+          coll.frame_id, 0,
+          "LCA Collision should happen in the microframe"
+        );
 
         crate::types::GpuResult::Ok(())
       })
@@ -562,7 +595,6 @@ mod tests {
   }
   #[test]
   fn test_vulkan_cross_frame_lca_collisionless() {
-    
     let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(

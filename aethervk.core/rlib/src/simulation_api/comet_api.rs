@@ -14,6 +14,7 @@ use oshal::math::{
 };
 
 pub trait CometApi {
+  #[allow(clippy::too_many_arguments)]
   fn add_jet(
     &self,
     scene_id: u64,
@@ -56,11 +57,9 @@ impl CometApi for SimulationContext {
     let mesh_arc = write_scene
       .scene
       .with_component(entity, |p: &PhysicalMeshComponent| p.mesh.clone())
-      .ok_or(
-        EngineError::InvalidOperation(
-          "comet_api:add_jet | comet entity missing PhysicalMeshComponent",
-        )
-      )?;
+      .ok_or(EngineError::InvalidOperation(
+        "comet_api:add_jet | comet entity missing PhysicalMeshComponent",
+      ))?;
 
     let bounding_sphere = mesh_arc
       .vertices

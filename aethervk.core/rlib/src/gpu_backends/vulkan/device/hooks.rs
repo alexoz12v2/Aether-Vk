@@ -23,7 +23,10 @@ impl DispatchableToDevice for vk::Queue {
 }
 impl DispatchableToDevice for vk::CommandBuffer {
   fn to_device(&self) -> vk::Device {
-    *CMD_BUF_TO_DEVICE.lock().get(self).expect("vk::CommandBuffer not found in tracking map")
+    *CMD_BUF_TO_DEVICE
+      .lock()
+      .get(self)
+      .expect("vk::CommandBuffer not found in tracking map")
   }
 }
 
@@ -68,8 +71,10 @@ pub unsafe extern "system" fn hooked_vkAllocateCommandBuffers(
   p_command_buffers: *mut vk::CommandBuffer,
 ) -> vk::Result {
   assert_no_locks_held();
-  let real_fn =
-    *ALLOCATE_COMMAND_BUFFERS_PTRS.lock().get(&device).expect("vkAllocateCommandBuffers missing");
+  let real_fn = *ALLOCATE_COMMAND_BUFFERS_PTRS
+    .lock()
+    .get(&device)
+    .expect("vkAllocateCommandBuffers missing");
   let res = unsafe { real_fn(device, p_allocate_info, p_command_buffers) };
   if res == vk::Result::SUCCESS {
     let count = unsafe { (*p_allocate_info).command_buffer_count } as usize;
@@ -93,8 +98,10 @@ pub unsafe extern "system" fn hooked_vkFreeCommandBuffers(
   p_command_buffers: *const vk::CommandBuffer,
 ) {
   assert_no_locks_held();
-  let real_fn =
-    *FREE_COMMAND_BUFFERS_PTRS.lock().get(&device).expect("vkFreeCommandBuffers missing");
+  let real_fn = *FREE_COMMAND_BUFFERS_PTRS
+    .lock()
+    .get(&device)
+    .expect("vkFreeCommandBuffers missing");
   unsafe {
     real_fn(
       device,
@@ -246,141 +253,143 @@ pub unsafe fn load_device_with_hooks(
   instance: &ash::Instance,
   physical_device: vk::PhysicalDevice,
   create_info: &vk::DeviceCreateInfo,
-) -> crate::types::GpuResult<ash::Device> { unsafe {
-  let device_handle = {
-    let mut handle = vk::Device::null();
-    let res = (instance.fp_v1_0().create_device)(
-      physical_device,
-      create_info,
-      core::ptr::null(),
-      &mut handle,
+) -> crate::types::GpuResult<ash::Device> {
+  unsafe {
+    let device_handle = {
+      let mut handle = vk::Device::null();
+      let res = (instance.fp_v1_0().create_device)(
+        physical_device,
+        create_info,
+        core::ptr::null(),
+        &mut handle,
+      );
+      if res != vk::Result::SUCCESS {
+        return Err(res.into());
+      }
+      handle
+    };
+
+    let device = ash::Device::load_with(
+      |name| {
+        let name_bytes = name.to_bytes();
+        let real_ptr = (instance.fp_v1_0().get_device_proc_addr)(device_handle, name.as_ptr());
+
+        if name_bytes == b"vkGetDeviceQueue" {
+          {
+            let mut map = GET_DEVICE_QUEUE_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkGetDeviceQueue as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkGetDeviceQueue2" {
+          {
+            let mut map = GET_DEVICE_QUEUE2_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkGetDeviceQueue2 as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkAllocateCommandBuffers" {
+          {
+            let mut map = ALLOCATE_COMMAND_BUFFERS_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkAllocateCommandBuffers as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkFreeCommandBuffers" {
+          {
+            let mut map = FREE_COMMAND_BUFFERS_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkFreeCommandBuffers as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkQueueSubmit" {
+          {
+            let mut map = vkQueueSubmit_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkQueueSubmit as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkQueueWaitIdle" {
+          {
+            let mut map = vkQueueWaitIdle_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkQueueWaitIdle as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkDeviceWaitIdle" {
+          {
+            let mut map = vkDeviceWaitIdle_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkDeviceWaitIdle as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkCreateBuffer" {
+          {
+            let mut map = vkCreateBuffer_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkCreateBuffer as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkDestroyBuffer" {
+          {
+            let mut map = vkDestroyBuffer_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkDestroyBuffer as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkCreateImage" {
+          {
+            let mut map = vkCreateImage_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkCreateImage as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkDestroyImage" {
+          {
+            let mut map = vkDestroyImage_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkDestroyImage as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkCmdDraw" {
+          {
+            let mut map = vkCmdDraw_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkCmdDraw as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkCmdDrawIndexed" {
+          {
+            let mut map = vkCmdDrawIndexed_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkCmdDrawIndexed as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkCmdBindPipeline" {
+          {
+            let mut map = vkCmdBindPipeline_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkCmdBindPipeline as *const core::ffi::c_void;
+        }
+        if name_bytes == b"vkCmdDispatch" {
+          {
+            let mut map = vkCmdDispatch_PTRS.lock();
+            map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
+          }
+          return hooked_vkCmdDispatch as *const core::ffi::c_void;
+        }
+
+        real_ptr.map_or(core::ptr::null(), |p| {
+          p as *const () as *const core::ffi::c_void
+        })
+      },
+      device_handle,
     );
-    if res != vk::Result::SUCCESS {
-      return Err(res.into());
-    }
-    handle
-  };
 
-  let device = ash::Device::load_with(
-    |name| {
-      let name_bytes = name.to_bytes();
-      let real_ptr = (instance.fp_v1_0().get_device_proc_addr)(device_handle, name.as_ptr());
-
-      if name_bytes == b"vkGetDeviceQueue" {
-        {
-          let mut map = GET_DEVICE_QUEUE_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkGetDeviceQueue as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkGetDeviceQueue2" {
-        {
-          let mut map = GET_DEVICE_QUEUE2_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkGetDeviceQueue2 as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkAllocateCommandBuffers" {
-        {
-          let mut map = ALLOCATE_COMMAND_BUFFERS_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkAllocateCommandBuffers as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkFreeCommandBuffers" {
-        {
-          let mut map = FREE_COMMAND_BUFFERS_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkFreeCommandBuffers as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkQueueSubmit" {
-        {
-          let mut map = vkQueueSubmit_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkQueueSubmit as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkQueueWaitIdle" {
-        {
-          let mut map = vkQueueWaitIdle_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkQueueWaitIdle as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkDeviceWaitIdle" {
-        {
-          let mut map = vkDeviceWaitIdle_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkDeviceWaitIdle as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkCreateBuffer" {
-        {
-          let mut map = vkCreateBuffer_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkCreateBuffer as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkDestroyBuffer" {
-        {
-          let mut map = vkDestroyBuffer_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkDestroyBuffer as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkCreateImage" {
-        {
-          let mut map = vkCreateImage_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkCreateImage as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkDestroyImage" {
-        {
-          let mut map = vkDestroyImage_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkDestroyImage as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkCmdDraw" {
-        {
-          let mut map = vkCmdDraw_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkCmdDraw as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkCmdDrawIndexed" {
-        {
-          let mut map = vkCmdDrawIndexed_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkCmdDrawIndexed as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkCmdBindPipeline" {
-        {
-          let mut map = vkCmdBindPipeline_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkCmdBindPipeline as *const core::ffi::c_void;
-      }
-      if name_bytes == b"vkCmdDispatch" {
-        {
-          let mut map = vkCmdDispatch_PTRS.lock();
-          map.insert(device_handle, core::mem::transmute(real_ptr.unwrap()));
-        }
-        return hooked_vkCmdDispatch as *const core::ffi::c_void;
-      }
-
-      real_ptr.map_or(core::ptr::null(), |p| {
-        p as *const () as *const core::ffi::c_void
-      })
-    },
-    device_handle,
-  );
-
-  Ok(device)
-}}
+    Ok(device)
+  }
+}
 
 #[cfg(test)]
 mod tests {

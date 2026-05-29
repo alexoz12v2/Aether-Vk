@@ -10,9 +10,7 @@ use crate::{
   types::GpuResult,
 };
 use alloc::{sync, vec::Vec};
-use ash::vk::{
-  self, Handle, PFN_vkCreateDescriptorPool,
-};
+use ash::vk::{self, Handle, PFN_vkCreateDescriptorPool};
 use core::ptr;
 use function_name::named;
 
@@ -124,7 +122,8 @@ impl DescriptorPools {
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<NonZeroHandle<vk::DescriptorSet>> {
     use crate::gpu_backends::vulkan::utils::RwLockable;
-    let mut inner = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.inner);
+    let mut inner =
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.inner);
     loop {
       let active_pool = inner.active_pool;
       if active_pool == vk::DescriptorPool::null() {
@@ -132,8 +131,9 @@ impl DescriptorPools {
       }
 
       let layouts = [layout];
-      let alloc_info =
-        vk::DescriptorSetAllocateInfo::default().descriptor_pool(active_pool).set_layouts(&layouts);
+      let alloc_info = vk::DescriptorSetAllocateInfo::default()
+        .descriptor_pool(active_pool)
+        .set_layouts(&layouts);
 
       let mut descriptor_set = vk::DescriptorSet::null();
       let res = unsafe {

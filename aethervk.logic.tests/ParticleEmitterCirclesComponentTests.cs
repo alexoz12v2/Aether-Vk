@@ -39,7 +39,7 @@ public class ParticleEmitterCirclesComponentTests
     var comp = new ParticleEmitterCirclesComponent();
     comp.AddCircleCommand.Execute(null);
     var item = comp.Circles[0];
-    
+
     // Changing property should trigger push (which returns early because ptr is zero)
     item.LatitudeDeg = 45.0f;
     Assert.Equal(45.0f, item.LatitudeDeg);

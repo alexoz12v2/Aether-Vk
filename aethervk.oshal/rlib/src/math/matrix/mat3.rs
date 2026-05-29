@@ -3,7 +3,6 @@
 use core::ops;
 
 use crate::math::{
-
   matrix::{Matrix, Matrix3, MatrixVectorMul, SquareMatrix},
   vector::{Vector, Vector3, vec3::Vec3f32},
 };

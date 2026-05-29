@@ -49,23 +49,33 @@ public class SpawnCometResult
     string name,
     string physicsType,
     PlanetOrbitData? orbitData,
-    float px, float py, float pz,
-    float sx, float sy, float sz,
-    float pitchDeg, float yawDeg, float rollDeg,
+    float px,
+    float py,
+    float pz,
+    float sx,
+    float sy,
+    float sz,
+    float pitchDeg,
+    float yawDeg,
+    float rollDeg,
     float cometRadiusKm,
     float massKg,
     string? spkRecordId,
     string? cometDesignation
   )
   {
-    Model    = model;
-    EntityName  = name;
+    Model = model;
+    EntityName = name;
     PhysicsType = physicsType;
-    OrbitData   = orbitData;
-    PosX = px; PosY = py; PosZ = pz;
-    ScaleX = sx; ScaleY = sy; ScaleZ = sz;
+    OrbitData = orbitData;
+    PosX = px;
+    PosY = py;
+    PosZ = pz;
+    ScaleX = sx;
+    ScaleY = sy;
+    ScaleZ = sz;
     CometRadiusKm = cometRadiusKm;
-    MassKg  = massKg;
+    MassKg = massKg;
     SpkRecordId = spkRecordId;
     CometDesignation = cometDesignation;
 
@@ -74,14 +84,14 @@ public class SpawnCometResult
 
     // Convert Euler (degrees) → Quaternion (ZYX extrinsic)
     var pitch = pitchDeg * (float)(System.Math.PI / 180.0);
-    var yaw   = yawDeg   * (float)(System.Math.PI / 180.0);
-    var roll  = rollDeg  * (float)(System.Math.PI / 180.0);
+    var yaw = yawDeg * (float)(System.Math.PI / 180.0);
+    var roll = rollDeg * (float)(System.Math.PI / 180.0);
 
-    float cr = (float)System.Math.Cos(roll  * 0.5);
-    float sr = (float)System.Math.Sin(roll  * 0.5);
+    float cr = (float)System.Math.Cos(roll * 0.5);
+    float sr = (float)System.Math.Sin(roll * 0.5);
     float cp = (float)System.Math.Cos(pitch * 0.5);
     float sp = (float)System.Math.Sin(pitch * 0.5);
-    float cy = (float)System.Math.Cos(yaw   * 0.5);
+    float cy = (float)System.Math.Cos(yaw * 0.5);
     float sy_yaw = (float)System.Math.Sin(yaw * 0.5);
 
     RotW = cr * cp * cy + sr * sp * sy_yaw;

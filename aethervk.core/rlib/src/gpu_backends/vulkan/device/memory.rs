@@ -237,7 +237,10 @@ impl FrameStagingArena {
         return None;
       }
 
-      match self.offset.compare_exchange_weak(current, next, Ordering::SeqCst, Ordering::Relaxed) {
+      match self
+        .offset
+        .compare_exchange_weak(current, next, Ordering::SeqCst, Ordering::Relaxed)
+      {
         Ok(_) => return Some((aligned, unsafe { self.mapped_ptr.add(aligned) })),
         Err(val) => current = val,
       }

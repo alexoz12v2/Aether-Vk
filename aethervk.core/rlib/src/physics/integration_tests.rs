@@ -8,16 +8,16 @@ mod tests {
       physics_scene::PhysicsScene,
     },
     scene::{
-      particles::{ParticleData, ParticleSystemComponent},
       ColliderComponent, ColliderShape, EntityId, KinematicComponent, PhysicalMeshComponent,
       ReferenceFrameComponent, ReferenceFrameType, Scene, TransformComponent,
+      particles::{ParticleData, ParticleSystemComponent},
     },
     simulation::comet::Comet,
   };
   use aethervk_oshal_rlib::{
     math::{
       quaternion::Quaternion,
-      vector::{vec3::Vec3f32, Vector, Vector3},
+      vector::{Vector, Vector3, vec3::Vec3f32},
     },
     os::pool::ThreadPool,
   };
@@ -892,15 +892,19 @@ mod tests {
     let simd_kernels = CpuSimdKernels { thread_pool: pool };
     run_simulation(&simd_kernels, &mut scene_simd, 5.0, true);
 
-    let v_sphere_scalar =
-      scene_scalar.with_component(sphere_scalar, |k: &KinematicComponent| k.velocity).unwrap();
-    let v_sphere_simd =
-      scene_simd.with_component(sphere_simd, |k: &KinematicComponent| k.velocity).unwrap();
+    let v_sphere_scalar = scene_scalar
+      .with_component(sphere_scalar, |k: &KinematicComponent| k.velocity)
+      .unwrap();
+    let v_sphere_simd = scene_simd
+      .with_component(sphere_simd, |k: &KinematicComponent| k.velocity)
+      .unwrap();
 
-    let v_obb_scalar =
-      scene_scalar.with_component(obb_scalar, |k: &KinematicComponent| k.velocity).unwrap();
-    let v_obb_simd =
-      scene_simd.with_component(obb_simd, |k: &KinematicComponent| k.velocity).unwrap();
+    let v_obb_scalar = scene_scalar
+      .with_component(obb_scalar, |k: &KinematicComponent| k.velocity)
+      .unwrap();
+    let v_obb_simd = scene_simd
+      .with_component(obb_simd, |k: &KinematicComponent| k.velocity)
+      .unwrap();
 
     approx::assert_abs_diff_eq!(v_sphere_scalar.x(), v_sphere_simd.x(), epsilon = 1e-4);
     approx::assert_abs_diff_eq!(v_obb_scalar.x(), v_obb_simd.x(), epsilon = 1e-4);

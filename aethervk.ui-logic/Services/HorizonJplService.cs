@@ -15,13 +15,13 @@ public class PlanetOrbitData
 {
   /// <summary>Semi-major axis in AU (converted from km at parse time).</summary>
   public double SemiMajorAxisAu { get; set; }
-  public double Eccentricity    { get; set; }
-  public double Inclination     { get; set; }
-  public double MeanAnomaly     { get; set; }
+  public double Eccentricity { get; set; }
+  public double Inclination { get; set; }
+  public double MeanAnomaly { get; set; }
   public double AscendingNodeLongitude { get; set; }
-  public double ArgumentOfPerifocus    { get; set; }
-  public string RawConstants    { get; set; } = string.Empty;
-  public double CometRadiusKm   { get; set; } = 1.0;
+  public double ArgumentOfPerifocus { get; set; }
+  public string RawConstants { get; set; } = string.Empty;
+  public double CometRadiusKm { get; set; } = 1.0;
 
   /// <summary>
   /// GM in km³/s² as returned by JPL (null / 0 when reported as 'n.a.').
@@ -49,27 +49,31 @@ public class HorizonJplService
 {
   // ── Infrastructure
   public HttpClient _httpClient;
-  private readonly ConsoleService      _console;
-  private readonly BreadcrumbService   _breadcrumb;
+  private readonly ConsoleService _console;
+  private readonly BreadcrumbService _breadcrumb;
   private readonly ILocalStorageService _storage;
 
   private const string HorizonsBase = "https://ssd.jpl.nasa.gov/api/horizons.api";
-  private const string SbdbBase     = "https://ssd-api.jpl.nasa.gov/sbdb_query.api";
+  private const string SbdbBase = "https://ssd-api.jpl.nasa.gov/sbdb_query.api";
 
   // ── Observable collections consumed by ViewModels
-  public ObservableCollection<CometSearchResult>  CometsData    { get; } = new();
-  public ObservableCollection<SpkRecordItem>      SpkRecordsData { get; } = new();
-  public ObservableCollection<ObjectDataProperty> ObjectData    { get; } = new();
+  public ObservableCollection<CometSearchResult> CometsData { get; } = new();
+  public ObservableCollection<SpkRecordItem> SpkRecordsData { get; } = new();
+  public ObservableCollection<ObjectDataProperty> ObjectData { get; } = new();
 
   // ─────────────────────────────────────────────────────── Constructor
 
-  public HorizonJplService(ConsoleService console, BreadcrumbService breadcrumb, ILocalStorageService storage)
+  public HorizonJplService(
+    ConsoleService console,
+    BreadcrumbService breadcrumb,
+    ILocalStorageService storage
+  )
   {
     _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(3) };
     _httpClient.DefaultRequestHeaders.Add("User-Agent", "AetherVk/1.0");
-    _console   = console;
+    _console = console;
     _breadcrumb = breadcrumb;
-    _storage   = storage;
+    _storage = storage;
   }
 
   /// <summary>Returns the session-scoped file path where a downloaded SPK .bsp should be saved.</summary>
@@ -110,14 +114,21 @@ public class HorizonJplService
       }
 
       ParseCometsJson(json);
-      await _breadcrumb.ShowMessageAsync("Horizon API", $"{CometsData.Count} comets loaded.", status: 1);
+      await _breadcrumb.ShowMessageAsync(
+        "Horizon API",
+        $"{CometsData.Count} comets loaded.",
+        status: 1
+      );
     }
     catch (Exception ex)
     {
       _console.Log($"[HorizonJpl] FetchComets error: {ex.Message}");
       await _breadcrumb.ShowMessageAsync("Horizon API Error", ex.Message, status: 3);
     }
-    finally { _breadcrumb.RemoveMessage(loadMsg); }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
+    }
   }
 
   private void ParseCometsJson(string json)
@@ -133,16 +144,27 @@ public class HorizonJplService
           var cols = row.EnumerateArray().ToArray();
           if (cols.Length >= 2)
           {
-            CometsData.Add(new CometSearchResult
-            {
-              Name                = cols[0].ValueKind == System.Text.Json.JsonValueKind.Null ? "" : cols[0].ToString(),
-              PrimaryDesignation  = cols[1].ValueKind == System.Text.Json.JsonValueKind.Null ? "" : cols[1].ToString(),
-            });
+            CometsData.Add(
+              new CometSearchResult
+              {
+                Name =
+                  cols[0].ValueKind == System.Text.Json.JsonValueKind.Null
+                    ? ""
+                    : cols[0].ToString(),
+                PrimaryDesignation =
+                  cols[1].ValueKind == System.Text.Json.JsonValueKind.Null
+                    ? ""
+                    : cols[1].ToString(),
+              }
+            );
           }
         }
       }
     }
-    catch (Exception ex) { _console.Log($"[HorizonJpl] ParseComets: {ex.Message}"); }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] ParseComets: {ex.Message}");
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -158,47 +180,62 @@ public class HorizonJplService
       // All parameter values must be URL-encoded (including the enclosing single-quotes),
       // matching the same pattern used by FetchPlanetOrbitDataAsync and GetPlanetDataAsync.
       var start = Uri.EscapeDataString($"'{startTime}'");
-      var stop  = Uri.EscapeDataString($"'{stopTime}'");
-      var cmd   = Uri.EscapeDataString($"'DES={pdes};'");
-      var cen   = Uri.EscapeDataString("'@10'");
-      var yes   = Uri.EscapeDataString("'YES'");
-      var no    = Uri.EscapeDataString("'NO'");
-      var spk   = Uri.EscapeDataString("'SPK'");
-      var step  = Uri.EscapeDataString("'1 d'");
+      var stop = Uri.EscapeDataString($"'{stopTime}'");
+      var cmd = Uri.EscapeDataString($"'DES={pdes};'");
+      var cen = Uri.EscapeDataString("'@10'");
+      var yes = Uri.EscapeDataString("'YES'");
+      var no = Uri.EscapeDataString("'NO'");
+      var spk = Uri.EscapeDataString("'SPK'");
+      var step = Uri.EscapeDataString("'1 d'");
 
-      var url = $"{HorizonsBase}?format=text"
-              + $"&COMMAND={cmd}"
-              + $"&MAKE_EPHEM={yes}&EPHEM_TYPE={spk}&OBJ_DATA={no}"
-              + $"&CENTER={cen}"
-              + $"&START_TIME={start}&STOP_TIME={stop}&STEP_SIZE={step}";
+      var url =
+        $"{HorizonsBase}?format=text"
+        + $"&COMMAND={cmd}"
+        + $"&MAKE_EPHEM={yes}&EPHEM_TYPE={spk}&OBJ_DATA={no}"
+        + $"&CENTER={cen}"
+        + $"&START_TIME={start}&STOP_TIME={stop}&STEP_SIZE={step}";
 
       _console.Log($"[HorizonJpl] SPK Records GET: {url}");
       using var resp = await _httpClient.GetAsync(url);
       if (!resp.IsSuccessStatusCode)
       {
-        await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status {(int)resp.StatusCode}", status: 3);
+        await _breadcrumb.ShowMessageAsync(
+          "Horizon API Error",
+          $"Status {(int)resp.StatusCode}",
+          status: 3
+        );
         return;
       }
       var text = await resp.Content.ReadAsStringAsync();
       _console.Log($"[HorizonJpl] SPK Records Response:\n{text}");
       ParseSpkRecordsText(text, startTime, stopTime);
-      await _breadcrumb.ShowMessageAsync("Horizon API", $"{SpkRecordsData.Count} records found.", status: 1);
+      await _breadcrumb.ShowMessageAsync(
+        "Horizon API",
+        $"{SpkRecordsData.Count} records found.",
+        status: 1
+      );
     }
     catch (Exception ex)
     {
       _console.Log($"[HorizonJpl] FetchSpkRecords error: {ex.Message}");
       await _breadcrumb.ShowMessageAsync("Horizon API Error", ex.Message, status: 3);
     }
-    finally { _breadcrumb.RemoveMessage(loadMsg); }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
+    }
   }
 
   private void ParseSpkRecordsText(string text, string startTime, string stopTime)
   {
     SpkRecordsData.Clear();
 
-    int startYear = int.MinValue, stopYear = int.MaxValue;
-    if (DateTime.TryParse(startTime, out var dtStart)) startYear = dtStart.Year;
-    if (DateTime.TryParse(stopTime,  out var dtStop))  stopYear  = dtStop.Year;
+    int startYear = int.MinValue,
+      stopYear = int.MaxValue;
+    if (DateTime.TryParse(startTime, out var dtStart))
+      startYear = dtStart.Year;
+    if (DateTime.TryParse(stopTime, out var dtStop))
+      stopYear = dtStop.Year;
 
     var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
     bool inData = false;
@@ -208,32 +245,45 @@ public class HorizonJplService
       var trimmed = line.Trim();
       if (trimmed.StartsWith("---"))
       {
-        if (inData) break;
+        if (inData)
+          break;
         inData = true;
         continue;
       }
-      if (!inData) continue;
-      if (trimmed.StartsWith("*") || string.IsNullOrWhiteSpace(trimmed)) break;
+      if (!inData)
+        continue;
+      if (trimmed.StartsWith("*") || string.IsNullOrWhiteSpace(trimmed))
+        break;
 
       var parts = trimmed.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
       if (parts.Length >= 5)
       {
-        var id    = parts[0];
+        var id = parts[0];
         var epoch = parts[1];
         var match = parts[2];
-        var prim  = parts[3];
-        var name  = string.Join(" ", parts.Skip(4));
+        var prim = parts[3];
+        var name = string.Join(" ", parts.Skip(4));
 
         // Skip placeholder / informational rows whose id isn't a valid positive integer
         // e.g. "(9 match — enter record # (integer), followed by semi-colon.)"
-        if (!int.TryParse(id, out int numId) || numId <= 0) continue;
+        if (!int.TryParse(id, out int numId) || numId <= 0)
+          continue;
 
         bool include = true;
         if (int.TryParse(epoch, out int ey))
           include = ey >= startYear && ey <= stopYear;
 
         if (include)
-          SpkRecordsData.Add(new SpkRecordItem { RecordId = id, EpochYear = epoch, MatchDesig = match, PrimaryDesig = prim, Name = name });
+          SpkRecordsData.Add(
+            new SpkRecordItem
+            {
+              RecordId = id,
+              EpochYear = epoch,
+              MatchDesig = match,
+              PrimaryDesig = prim,
+              Name = name,
+            }
+          );
       }
     }
   }
@@ -253,7 +303,7 @@ public class HorizonJplService
     var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Fetching object constants…");
     try
     {
-      var cacheKey  = $"obj_{Sanitize(targetId)}.txt";
+      var cacheKey = $"obj_{Sanitize(targetId)}.txt";
       var cachePath = _storage.GetPersistentPath(cacheKey);
 
       string text;
@@ -269,15 +319,20 @@ public class HorizonJplService
         var no = Uri.EscapeDataString("'NO'");
         var yes = Uri.EscapeDataString("'YES'");
 
-        var url = $"{HorizonsBase}?format=text"
-                + $"&COMMAND={cmd}"
-                + $"&MAKE_EPHEM={no}&OBJ_DATA={yes}&CENTER={cen}";
+        var url =
+          $"{HorizonsBase}?format=text"
+          + $"&COMMAND={cmd}"
+          + $"&MAKE_EPHEM={no}&OBJ_DATA={yes}&CENTER={cen}";
         _console.Log($"[HorizonJpl] Object Constants: {url}");
 
         using var resp = await _httpClient.GetAsync(url);
         if (!resp.IsSuccessStatusCode)
         {
-          await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status {(int)resp.StatusCode}", status: 3);
+          await _breadcrumb.ShowMessageAsync(
+            "Horizon API Error",
+            $"Status {(int)resp.StatusCode}",
+            status: 3
+          );
           return (1.0, 1e13);
         }
         text = await resp.Content.ReadAsStringAsync();
@@ -288,13 +343,15 @@ public class HorizonJplService
       ParseObjectDataText(text);
 
       double radiusKm = ParseValue(text, @"R_vol\s*=\s*([^\s,+]+)");
-      if (radiusKm <= 0) radiusKm = ParseValue(text, @"RAD\s*=\s*([^\s,+]+)");
-      if (radiusKm <= 0) radiusKm = 1.0;
+      if (radiusKm <= 0)
+        radiusKm = ParseValue(text, @"RAD\s*=\s*([^\s,+]+)");
+      if (radiusKm <= 0)
+        radiusKm = 1.0;
 
       double gm = ParseValue(text, @"GM\s*=\s*([^\s,+]+)");
       double massKg;
       if (gm > 0)
-        massKg = gm / 6.6743e-20;           // G in km³/(kg·s²)
+        massKg = gm / 6.6743e-20; // G in km³/(kg·s²)
       else
       {
         double rm = radiusKm * 1000.0;
@@ -309,12 +366,15 @@ public class HorizonJplService
       await _breadcrumb.ShowMessageAsync("Horizon API Error", ex.Message, status: 3);
       return (1.0, 1e13);
     }
-    finally { _breadcrumb.RemoveMessage(loadMsg); }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
+    }
   }
 
   // kept for HorizonJplViewModel download flow
-  public async Task FetchObjectDataAsync(string targetId)
-    => await FetchObjectConstantsAsync(targetId);
+  public async Task FetchObjectDataAsync(string targetId) =>
+    await FetchObjectConstantsAsync(targetId);
 
   private void ParseObjectDataText(string text)
   {
@@ -323,19 +383,23 @@ public class HorizonJplService
     var lines = block.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
     foreach (var line in lines)
     {
-      if (line.StartsWith("*") || string.IsNullOrWhiteSpace(line)) continue;
-      var norm  = Regex.Replace(line, @"([=:])\s+", "$1");
+      if (line.StartsWith("*") || string.IsNullOrWhiteSpace(line))
+        continue;
+      var norm = Regex.Replace(line, @"([=:])\s+", "$1");
       var parts = norm.Split(new[] { "  ", "\t" }, StringSplitOptions.RemoveEmptyEntries);
       foreach (var part in parts)
       {
         var p = part.Trim();
-        if (string.IsNullOrEmpty(p)) continue;
+        if (string.IsNullOrEmpty(p))
+          continue;
         if (p.Contains('=') || p.Contains(':'))
         {
           var sep = p.Contains('=') ? '=' : ':';
-          var kv  = p.Split(new[] { sep }, 2, StringSplitOptions.RemoveEmptyEntries);
+          var kv = p.Split(new[] { sep }, 2, StringSplitOptions.RemoveEmptyEntries);
           if (kv.Length == 2)
-            ObjectData.Add(new ObjectDataProperty { Property = kv[0].Trim(), Value = kv[1].Trim() });
+            ObjectData.Add(
+              new ObjectDataProperty { Property = kv[0].Trim(), Value = kv[1].Trim() }
+            );
           else
             ObjectData.Add(new ObjectDataProperty { Property = "Info", Value = p });
         }
@@ -359,35 +423,41 @@ public class HorizonJplService
     string center,
     DateTime startDate,
     DateTime stopDate,
-    string  stepSize)
+    string stepSize
+  )
   {
     var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Fetching orbital elements…");
     try
     {
       var start = Uri.EscapeDataString($"'{startDate.ToString("yyyy-MM-dd")}'");
-      var stop  = Uri.EscapeDataString($"'{stopDate.ToString("yyyy-MM-dd")}'");
-      var step  = Uri.EscapeDataString($"'{stepSize}'");
-      var cmd   = Uri.EscapeDataString($"'{targetId};'");
-      var cen   = Uri.EscapeDataString($"'{center}'");
-      var yes   = Uri.EscapeDataString("'YES'");
-      var no    = Uri.EscapeDataString("'NO'");
+      var stop = Uri.EscapeDataString($"'{stopDate.ToString("yyyy-MM-dd")}'");
+      var step = Uri.EscapeDataString($"'{stepSize}'");
+      var cmd = Uri.EscapeDataString($"'{targetId};'");
+      var cen = Uri.EscapeDataString($"'{center}'");
+      var yes = Uri.EscapeDataString("'YES'");
+      var no = Uri.EscapeDataString("'NO'");
       var elems = Uri.EscapeDataString("'ELEMENTS'");
 
-      var url = $"{HorizonsBase}?format=text"
-              + $"&COMMAND={cmd}"
-              + $"&MAKE_EPHEM={yes}&EPHEM_TYPE={elems}&OBJ_DATA={no}"
-              + $"&CENTER={cen}"
-              + $"&START_TIME={start}&STOP_TIME={stop}&STEP_SIZE={step}";
+      var url =
+        $"{HorizonsBase}?format=text"
+        + $"&COMMAND={cmd}"
+        + $"&MAKE_EPHEM={yes}&EPHEM_TYPE={elems}&OBJ_DATA={no}"
+        + $"&CENTER={cen}"
+        + $"&START_TIME={start}&STOP_TIME={stop}&STEP_SIZE={step}";
 
       _console.Log($"[HorizonJpl] EPA: {url}");
       using var resp = await _httpClient.GetAsync(url);
       if (!resp.IsSuccessStatusCode)
       {
-        await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status {(int)resp.StatusCode}", status: 3);
+        await _breadcrumb.ShowMessageAsync(
+          "Horizon API Error",
+          $"Status {(int)resp.StatusCode}",
+          status: 3
+        );
         return null;
       }
 
-      var text   = await resp.Content.ReadAsStringAsync();
+      var text = await resp.Content.ReadAsStringAsync();
       _console.Log($"[HorizonJpl] EPA Response:\n{text}");
       int soeIdx = text.IndexOf("$$SOE");
       int eoeIdx = text.IndexOf("$$EOE");
@@ -395,8 +465,14 @@ public class HorizonJplService
       if (soeIdx == -1 || eoeIdx <= soeIdx)
       {
         // Log portion of the response for debugging
-        _console.Log($"[HorizonJpl] EPA: $$SOE not found. Response snippet:\n{text.Substring(0, Math.Min(600, text.Length))}");
-        await _breadcrumb.ShowMessageAsync("Horizon API", "No orbital elements returned.", status: 2);
+        _console.Log(
+          $"[HorizonJpl] EPA: $$SOE not found. Response snippet:\n{text.Substring(0, Math.Min(600, text.Length))}"
+        );
+        await _breadcrumb.ShowMessageAsync(
+          "Horizon API",
+          "No orbital elements returned.",
+          status: 2
+        );
         return null;
       }
 
@@ -406,9 +482,9 @@ public class HorizonJplService
       return new PlanetOrbitData
       {
         SemiMajorAxisAu = ParseValue(epaBlock, @"(?<![A-Za-z])A\s*=\s*([^\s,]+)") / KmPerAu2,
-        Eccentricity  = ParseValue(epaBlock, @"EC\s*=\s*([^\s,]+)"),
-        Inclination   = ParseValue(epaBlock, @"IN\s*=\s*([^\s,]+)"),
-        MeanAnomaly   = ParseValue(epaBlock, @"MA\s*=\s*([^\s,]+)"),
+        Eccentricity = ParseValue(epaBlock, @"EC\s*=\s*([^\s,]+)"),
+        Inclination = ParseValue(epaBlock, @"IN\s*=\s*([^\s,]+)"),
+        MeanAnomaly = ParseValue(epaBlock, @"MA\s*=\s*([^\s,]+)"),
         AscendingNodeLongitude = ParseValue(epaBlock, @"OM\s*=\s*([^\s,]+)"),
         ArgumentOfPerifocus = ParseValue(epaBlock, @"W\s*=\s*([^\s,]+)"),
       };
@@ -419,7 +495,10 @@ public class HorizonJplService
       await _breadcrumb.ShowMessageAsync("Horizon API Error", ex.Message, status: 3);
       return null;
     }
-    finally { _breadcrumb.RemoveMessage(loadMsg); }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -427,73 +506,88 @@ public class HorizonJplService
   //     Used by SpawnCometViewModel Step 3 "Fetch Orbit Data" button.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  public virtual async Task<PlanetOrbitData?> GetPlanetDataAsync(string targetId, string center, DateTime startDate, DateTime stopDate, string stepSize)
+  public virtual async Task<PlanetOrbitData?> GetPlanetDataAsync(
+    string targetId,
+    string center,
+    DateTime startDate,
+    DateTime stopDate,
+    string stepSize
+  )
   {
     var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Fetching orbital data...");
     try
     {
       string startDateStr = startDate.ToString("yyyy-MM-dd");
       string stopDateStr = stopDate.ToString("yyyy-MM-dd");
-      
+
       var cacheKey = $"planet_data_{targetId.Replace("/", "_")}_{startDateStr}_{stopDateStr}.txt";
       var cacheFile = _storage.GetSessionPath(cacheKey);
-      
+
       string epaText = "";
       string objDataText = "";
 
       if (System.IO.File.Exists(cacheFile) && System.IO.File.Exists(cacheFile + ".obj"))
       {
-          _console.Log($"[HorizonJpl] Loading orbital data from cache: {cacheKey}");
-          epaText = System.IO.File.ReadAllText(cacheFile);
-          objDataText = System.IO.File.ReadAllText(cacheFile + ".obj");
+        _console.Log($"[HorizonJpl] Loading orbital data from cache: {cacheKey}");
+        epaText = System.IO.File.ReadAllText(cacheFile);
+        objDataText = System.IO.File.ReadAllText(cacheFile + ".obj");
       }
       else
       {
-          var start  = Uri.EscapeDataString($"'{startDateStr}'");
-          var stop   = Uri.EscapeDataString($"'{stopDateStr}'");
-          var step   = Uri.EscapeDataString($"'{stepSize}'");
-          var cmd    = Uri.EscapeDataString($"'{targetId};'");
-          var cen    = Uri.EscapeDataString($"'{center}'");
-          var yes    = Uri.EscapeDataString("'YES'");
-          var no     = Uri.EscapeDataString("'NO'");
-          var elems  = Uri.EscapeDataString("'ELEMENTS'");
+        var start = Uri.EscapeDataString($"'{startDateStr}'");
+        var stop = Uri.EscapeDataString($"'{stopDateStr}'");
+        var step = Uri.EscapeDataString($"'{stepSize}'");
+        var cmd = Uri.EscapeDataString($"'{targetId};'");
+        var cen = Uri.EscapeDataString($"'{center}'");
+        var yes = Uri.EscapeDataString("'YES'");
+        var no = Uri.EscapeDataString("'NO'");
+        var elems = Uri.EscapeDataString("'ELEMENTS'");
 
-          // 1. Fetch Object Constants
-          var objUrl = $"{HorizonsBase}?format=text"
-            + $"&COMMAND={cmd}"
-            + $"&MAKE_EPHEM={no}&OBJ_DATA={yes}&CENTER={cen}";
+        // 1. Fetch Object Constants
+        var objUrl =
+          $"{HorizonsBase}?format=text"
+          + $"&COMMAND={cmd}"
+          + $"&MAKE_EPHEM={no}&OBJ_DATA={yes}&CENTER={cen}";
 
-          _console.Log($"[HorizonJpl] GET Object Data: {objUrl}");
-          using (var objResponse = await _httpClient.GetAsync(objUrl))
+        _console.Log($"[HorizonJpl] GET Object Data: {objUrl}");
+        using (var objResponse = await _httpClient.GetAsync(objUrl))
+        {
+          if (!objResponse.IsSuccessStatusCode)
           {
-            if (!objResponse.IsSuccessStatusCode)
-            {
-              throw new Exception($"Horizon API Error: GET Object Data failed with Status: {(int)objResponse.StatusCode}. URL: {objUrl}");
-            }
-            objDataText = await objResponse.Content.ReadAsStringAsync();
-            _console.Log($"[HorizonJpl] Object Data Response:\n{objDataText}");
+            throw new Exception(
+              $"Horizon API Error: GET Object Data failed with Status: {(int)objResponse.StatusCode}. URL: {objUrl}"
+            );
           }
+          objDataText = await objResponse.Content.ReadAsStringAsync();
+          _console.Log($"[HorizonJpl] Object Data Response:\n{objDataText}");
+        }
 
-          // 2. Fetch EPA
-          var epaUrl = $"{HorizonsBase}?format=text"
-            + $"&COMMAND={cmd}"
-            + $"&MAKE_EPHEM={yes}&EPHEM_TYPE={elems}&OBJ_DATA={no}"
-            + $"&CENTER={cen}"
-            + $"&START_TIME={start}&STOP_TIME={stop}&STEP_SIZE={step}";
+        // 2. Fetch EPA
+        var epaUrl =
+          $"{HorizonsBase}?format=text"
+          + $"&COMMAND={cmd}"
+          + $"&MAKE_EPHEM={yes}&EPHEM_TYPE={elems}&OBJ_DATA={no}"
+          + $"&CENTER={cen}"
+          + $"&START_TIME={start}&STOP_TIME={stop}&STEP_SIZE={step}";
 
-          _console.Log($"[HorizonJpl] GET EPA Data: {epaUrl}");
-          using (var epaResponse = await _httpClient.GetAsync(epaUrl))
+        _console.Log($"[HorizonJpl] GET EPA Data: {epaUrl}");
+        using (var epaResponse = await _httpClient.GetAsync(epaUrl))
+        {
+          if (!epaResponse.IsSuccessStatusCode)
           {
-            if (!epaResponse.IsSuccessStatusCode)
-            {
-              throw new Exception($"Horizon API Error: GET EPA Data failed with Status: {(int)epaResponse.StatusCode}. URL: {epaUrl}");
-            }
-            epaText = await epaResponse.Content.ReadAsStringAsync();
-            _console.Log($"[HorizonJpl] EPA Response:\n{epaText}");
+            throw new Exception(
+              $"Horizon API Error: GET EPA Data failed with Status: {(int)epaResponse.StatusCode}. URL: {epaUrl}"
+            );
           }
+          epaText = await epaResponse.Content.ReadAsStringAsync();
+          _console.Log($"[HorizonJpl] EPA Response:\n{epaText}");
+        }
 
-          await _storage.SaveSessionAsync(cacheKey, System.Text.Encoding.UTF8.GetBytes(epaText));
-          await _storage.SaveSessionAsync(cacheKey + ".obj", System.Text.Encoding.UTF8.GetBytes(objDataText));
+        await _storage.SaveSessionAsync(cacheKey, System.Text.Encoding.UTF8.GetBytes(epaText));
+        await _storage.SaveSessionAsync(
+          cacheKey + ".obj",
+          System.Text.Encoding.UTF8.GetBytes(objDataText)
+        );
       }
 
       string constantsBlock = ExtractConstantsBlock(objDataText);
@@ -503,8 +597,14 @@ public class HorizonJplService
       int eoeIdx = epaText.IndexOf("$$EOE");
       if (soeIdx == -1 || eoeIdx <= soeIdx)
       {
-        _console.Log($"[HorizonJpl] GetPlanetData: $$SOE not found. EPA Text length: {epaText.Length}. Snippet:\n{epaText.Substring(0, Math.Min(400, epaText.Length))}");
-        await _breadcrumb.ShowMessageAsync("Horizon API", "No ephemeris data returned for this record. Try a different SPK record or date range.", status: 2);
+        _console.Log(
+          $"[HorizonJpl] GetPlanetData: $$SOE not found. EPA Text length: {epaText.Length}. Snippet:\n{epaText.Substring(0, Math.Min(400, epaText.Length))}"
+        );
+        await _breadcrumb.ShowMessageAsync(
+          "Horizon API",
+          "No ephemeris data returned for this record. Try a different SPK record or date range.",
+          status: 2
+        );
         return null;
       }
       var epaBlock = epaText.Substring(soeIdx + 5, eoeIdx - (soeIdx + 5)).Trim();
@@ -514,11 +614,11 @@ public class HorizonJplService
       // so we never accidentally capture the A-suffix of another two-letter field name.
       const double KmPerAu = 149_597_870.7;
       double a_km = ParseValue(epaBlock, @"(?<![A-Za-z])A\s*=\s*([^\s,]+)");
-      double ec    = ParseValue(epaBlock, @"EC\s*=\s*([^\s,]+)");
-      double in_   = ParseValue(epaBlock, @"IN\s*=\s*([^\s,]+)");
-      double ma    = ParseValue(epaBlock, @"MA\s*=\s*([^\s,]+)");
-      double om    = ParseValue(epaBlock, @"OM\s*=\s*([^\s,]+)");
-      double w     = ParseValue(epaBlock, @"W\s*=\s*([^\s,]+)");
+      double ec = ParseValue(epaBlock, @"EC\s*=\s*([^\s,]+)");
+      double in_ = ParseValue(epaBlock, @"IN\s*=\s*([^\s,]+)");
+      double ma = ParseValue(epaBlock, @"MA\s*=\s*([^\s,]+)");
+      double om = ParseValue(epaBlock, @"OM\s*=\s*([^\s,]+)");
+      double w = ParseValue(epaBlock, @"W\s*=\s*([^\s,]+)");
 
       // ── Physical constants
       double radiusKm = ParseValue(objDataText, @"R_vol\s*=\s*([^\s,+]+)");
@@ -538,16 +638,16 @@ public class HorizonJplService
 
       return new PlanetOrbitData
       {
-        SemiMajorAxisAu       = a_km / KmPerAu,   // convert km → AU for trajectory renderer
-        Eccentricity          = ec,
-        Inclination           = in_,
-        MeanAnomaly           = ma,
+        SemiMajorAxisAu = a_km / KmPerAu, // convert km → AU for trajectory renderer
+        Eccentricity = ec,
+        Inclination = in_,
+        MeanAnomaly = ma,
         AscendingNodeLongitude = om,
-        ArgumentOfPerifocus   = w,
-        RawConstants  = constantsBlock,
+        ArgumentOfPerifocus = w,
+        RawConstants = constantsBlock,
         CometRadiusKm = radiusKm,
-        GmKm3s2       = gm,
-        MassKg        = massKg,
+        GmKm3s2 = gm,
+        MassKg = massKg,
       };
     }
     catch (Exception ex)
@@ -566,10 +666,16 @@ public class HorizonJplService
   //  6. SPK BINARY DOWNLOAD
   // ═══════════════════════════════════════════════════════════════════════════
 
-  public async Task<string?> DownloadSpkByIdAsync(string pdes, string spkId, string savePath, string startTime, string stopTime)
+  public async Task<string?> DownloadSpkByIdAsync(
+    string pdes,
+    string spkId,
+    string savePath,
+    string startTime,
+    string stopTime
+  )
   {
     // ── Persistent cache: SPK data is immutable for a given ID + epoch range ──
-    var cacheKey  = $"spk_{Sanitize(spkId)}_{Sanitize(startTime)}_{Sanitize(stopTime)}.bsp";
+    var cacheKey = $"spk_{Sanitize(spkId)}_{Sanitize(startTime)}_{Sanitize(stopTime)}.bsp";
     var cachePath = _storage.GetPersistentPath(cacheKey);
 
     if (File.Exists(cachePath) && new FileInfo(cachePath).Length > 0)
@@ -584,16 +690,17 @@ public class HorizonJplService
     try
     {
       var start = Uri.EscapeDataString($"'{startTime}'");
-      var stop  = Uri.EscapeDataString($"'{stopTime}'");
-      var cmd   = Uri.EscapeDataString($"'{spkId};'");
-      var yes   = Uri.EscapeDataString("'YES'");
-      var no    = Uri.EscapeDataString("'NO'");
-      var spk   = Uri.EscapeDataString("'SPK'");
+      var stop = Uri.EscapeDataString($"'{stopTime}'");
+      var cmd = Uri.EscapeDataString($"'{spkId};'");
+      var yes = Uri.EscapeDataString("'YES'");
+      var no = Uri.EscapeDataString("'NO'");
+      var spk = Uri.EscapeDataString("'SPK'");
 
-      var url   = $"{HorizonsBase}?format=text"
-                + $"&COMMAND={cmd}"
-                + $"&MAKE_EPHEM={yes}&EPHEM_TYPE={spk}&OBJ_DATA={no}"
-                + $"&START_TIME={start}&STOP_TIME={stop}";
+      var url =
+        $"{HorizonsBase}?format=text"
+        + $"&COMMAND={cmd}"
+        + $"&MAKE_EPHEM={yes}&EPHEM_TYPE={spk}&OBJ_DATA={no}"
+        + $"&START_TIME={start}&STOP_TIME={stop}";
 
       _console.Log($"[HorizonJpl] SPK download (streaming): {url}");
 
@@ -607,11 +714,24 @@ public class HorizonJplService
       }
 
       using var netStream = await resp.Content.ReadAsStreamAsync();
-      using var reader    = new StreamReader(netStream, System.Text.Encoding.ASCII, detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true);
-      using var outFs     = new FileStream(cachePath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true);
+      using var reader = new StreamReader(
+        netStream,
+        System.Text.Encoding.ASCII,
+        detectEncodingFromByteOrderMarks: false,
+        bufferSize: 4096,
+        leaveOpen: true
+      );
+      using var outFs = new FileStream(
+        cachePath,
+        FileMode.Create,
+        FileAccess.Write,
+        FileShare.None,
+        65536,
+        true
+      );
 
       const int ChunkChars = 4096; // divisible by 4 → clean Base64 boundary
-      var sb          = new System.Text.StringBuilder(ChunkChars + 80);
+      var sb = new System.Text.StringBuilder(ChunkChars + 80);
       bool markerSeen = false;
       string? line;
       long totalDecoded = 0;
@@ -620,16 +740,21 @@ public class HorizonJplService
       {
         if (!markerSeen)
         {
-          if (line.Contains("REFGL1NQ")) { markerSeen = true; sb.Append(line.Trim()); }
+          if (line.Contains("REFGL1NQ"))
+          {
+            markerSeen = true;
+            sb.Append(line.Trim());
+          }
           continue;
         }
-        if (string.IsNullOrWhiteSpace(line)) break; // end of base64 block
+        if (string.IsNullOrWhiteSpace(line))
+          break; // end of base64 block
         sb.Append(line.Trim());
 
         // Decode and flush full 4 096-char (3 072-byte) chunks
         while (sb.Length >= ChunkChars)
         {
-          var chunk   = sb.ToString(0, ChunkChars);
+          var chunk = sb.ToString(0, ChunkChars);
           sb.Remove(0, ChunkChars);
           var decoded = Convert.FromBase64String(chunk);
           await outFs.WriteAsync(decoded, 0, decoded.Length);
@@ -640,7 +765,8 @@ public class HorizonJplService
       // Flush any remainder (pad to 4-char boundary if needed)
       if (sb.Length > 0)
       {
-        while (sb.Length % 4 != 0) sb.Append('=');
+        while (sb.Length % 4 != 0)
+          sb.Append('=');
         var decoded = Convert.FromBase64String(sb.ToString());
         await outFs.WriteAsync(decoded, 0, decoded.Length);
         totalDecoded += decoded.Length;
@@ -654,10 +780,12 @@ public class HorizonJplService
         return null;
       }
 
-      _console.Log($"[HorizonJpl] SPK saved to persistent cache ({totalDecoded:N0} bytes): {cacheKey}");
+      _console.Log(
+        $"[HorizonJpl] SPK saved to persistent cache ({totalDecoded:N0} bytes): {cacheKey}"
+      );
 
       outFs.Close(); // MUST close the FileShare.None handle before we can copy the file!
-      
+
       // Copy to caller-requested path if different
       if (!string.Equals(cachePath, savePath, StringComparison.OrdinalIgnoreCase))
         File.Copy(cachePath, savePath, overwrite: true);
@@ -668,26 +796,38 @@ public class HorizonJplService
     {
       _console.Log($"[HorizonJpl] SPK download error: {ex.Message}");
       // Clean up partial file
-      if (File.Exists(cachePath)) File.Delete(cachePath);
+      if (File.Exists(cachePath))
+        File.Delete(cachePath);
       return null;
     }
   }
 
-  public async Task<bool> DownloadObservationAsync(string pdes, string spkId, DateTimeOffset start, DateTimeOffset stop, string savePath)
+  public async Task<bool> DownloadObservationAsync(
+    string pdes,
+    string spkId,
+    DateTimeOffset start,
+    DateTimeOffset stop,
+    string savePath
+  )
   {
     var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading observation package…");
     try
     {
       string startStr = start.ToString("yyyy-MM-dd");
-      string stopStr  = stop.ToString("yyyy-MM-dd");
+      string stopStr = stop.ToString("yyyy-MM-dd");
 
       var spkResult = await DownloadSpkByIdAsync(pdes, spkId, savePath, startStr, stopStr);
-      if (spkResult == null) throw new Exception("SPK download failed.");
+      if (spkResult == null)
+        throw new Exception("SPK download failed.");
 
       await FetchObjectDataAsync(spkId);
       // EPA stored in ObjectData display; call FetchEpaAsync if needed separately
 
-      await _breadcrumb.ShowMessageAsync("Horizon API", $"Observation saved to {savePath}", status: 1);
+      await _breadcrumb.ShowMessageAsync(
+        "Horizon API",
+        $"Observation saved to {savePath}",
+        status: 1
+      );
       return true;
     }
     catch (Exception ex)
@@ -696,7 +836,10 @@ public class HorizonJplService
       await _breadcrumb.ShowMessageAsync("Horizon API Error", ex.Message, status: 3);
       return false;
     }
-    finally { _breadcrumb.RemoveMessage(loadMsg); }
+    finally
+    {
+      _breadcrumb.RemoveMessage(loadMsg);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -722,13 +865,18 @@ public class HorizonJplService
   private static double ParseValue(string text, string pattern)
   {
     var m = Regex.Match(text, pattern, RegexOptions.IgnoreCase);
-    if (m.Success && double.TryParse(m.Groups[1].Value,
-          System.Globalization.NumberStyles.Any,
-          System.Globalization.CultureInfo.InvariantCulture, out double v))
+    if (
+      m.Success
+      && double.TryParse(
+        m.Groups[1].Value,
+        System.Globalization.NumberStyles.Any,
+        System.Globalization.CultureInfo.InvariantCulture,
+        out double v
+      )
+    )
       return v;
     return 0.0;
   }
 
-  private static string Sanitize(string s)
-    => Regex.Replace(s, @"[^a-zA-Z0-9_\-]", "_");
+  private static string Sanitize(string s) => Regex.Replace(s, @"[^a-zA-Z0-9_\-]", "_");
 }

@@ -1,7 +1,7 @@
 using System;
+using AetherVk.Logic.ViewModels;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Messaging;
-using AetherVk.Logic.ViewModels;
 
 namespace AetherVk.Logic.Services;
 
