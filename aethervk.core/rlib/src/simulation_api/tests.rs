@@ -678,10 +678,11 @@ fn test_spawn_comet_internal_bounds_and_hierarchy() {
       assert_eq!(lca_transform.position.y(), 0.0);
       assert_eq!(lca_transform.position.z(), 0.0);
 
-      // 2. Assert microframe scale bounds don't overlap with sun bounds.
+      // 2. Assert microframe scale is AU/km unit conversion (not soi_radius).
       let lca_ref = scene_ctx.scene.with_component(lca_id, |c: &crate::scene::ReferenceFrameComponent| c.clone()).unwrap();
-      let expected_soi = 2.0_f32 - 0.00465_f32; // 1.99535
-      assert!((lca_ref.scale - expected_soi).abs() < 1e-4); 
+      let expected_soi = 2.0_f32 - 0.0046524726_f32; // dist_au - SUN_RADIUS_AU
+      let expected_scale = 1.0_f32 / 149_597_870.7_f32; // AU/km
+      assert!((lca_ref.scale - expected_scale).abs() < 1e-15, "scale should be AU/km, got {}", lca_ref.scale);
       assert!((lca_ref.soi_radius - expected_soi).abs() < 1e-4);
       let min_x = lca_transform.position.x() - lca_ref.soi_radius;
       assert!(min_x > 0.0, "Microframe bounds overlap with sun at origin!");
@@ -696,10 +697,12 @@ fn test_spawn_comet_internal_bounds_and_hierarchy() {
       assert_eq!(comet_transform.position.z(), 0.0);
 
       // 5. Assert comet occupies specified radius in km.
-      // mesh_scale = (radius_km / KM_PER_AU) / (soi_radius_au * bounding_sphere)
-      //            = (2.5 / 149_597_870.7) / (1.99535 * 2.5)
-      let expected_mesh_scale = (2.5_f32 / 149_597_870.7_f32) / (expected_soi * 2.5_f32);
-      assert!((comet_transform.scale.x() - expected_mesh_scale).abs() < expected_mesh_scale * 0.01);
+      // mesh_scale = radius_km / bounding_sphere (since micro-frame units are km)
+      // bounding_sphere = 2.5 (from the test mesh: 5 vertices spanning [-5..5])
+      let bounding_sphere = 2.5_f32; // half-extent length of the test mesh
+      let expected_mesh_scale = 2.5_f32 / bounding_sphere;
+      assert!((comet_transform.scale.x() - expected_mesh_scale).abs() < expected_mesh_scale * 0.01,
+        "mesh scale: got {} expected {}", comet_transform.scale.x(), expected_mesh_scale);
       assert!((comet_transform.scale.y() - expected_mesh_scale).abs() < expected_mesh_scale * 0.01);
       assert!((comet_transform.scale.z() - expected_mesh_scale).abs() < expected_mesh_scale * 0.01);
 

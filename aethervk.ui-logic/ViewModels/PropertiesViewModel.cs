@@ -96,14 +96,11 @@ public partial class PropertiesViewModel
         SelectedEntity.Id
       );
       
-      // If it's a UI Billboard, it won't have native components
-      if (SelectedEntity.Name == "UI Billboard")
+      // If it's a Screen Space Billboard, show the billboard-specific properties
+      var ssBillboardComp = SelectedEntity.Components.OfType<ScreenSpaceBillboardComponent>().FirstOrDefault();
+      if (ssBillboardComp != null)
       {
-          var billboardComp = SelectedEntity.Components.OfType<BillboardComponent>().FirstOrDefault();
-          if (billboardComp != null)
-          {
-              PropertiesExpanders.Add(billboardComp);
-          }
+          PropertiesExpanders.Add(ssBillboardComp);
       }
 
       bool hasCamera = componentNames.Any(n => n.EndsWith("CameraComponent"));

@@ -648,19 +648,18 @@ impl SimulationContext {
     let lca_name = alloc::format!("{}_microframe", entity_name);
     let lca_id = scene_ctx.scene.spawn_entity(&lca_name);
 
-    // Transform: position is in macro-frame coordinates (AU).
-    // Scale is set to soi_radius_au so the inspector shows the true extent.
-    // (Filled in after soi_radius_au is computed — see below; placeholder first.)
-    // NOTE: we add this component below, after soi_radius_au is known.
-
     // SOI radius: bounded by the distance from the Sun's surface to the comet.
     // At origin (static spawn): clamped to the Sun's radius.
     // SUN_RADIUS_AU = 0.00465 AU (695,700 km / 149,597,870.7 km·AU⁻¹)
-    const SUN_RADIUS_AU: f32 = 0.00465_f32;
+    const SUN_RADIUS_AU: f32 = 0.0046524726_f32;
+    const KM_PER_AU: f32 = 149_597_870.7_f32;
     let dist_au =
       (pos.x() * pos.x() + pos.y() * pos.y() + pos.z() * pos.z()).sqrt();
     let soi_radius_au = (dist_au - SUN_RADIUS_AU).max(SUN_RADIUS_AU);
 
+    // Transform: position is in macro-frame coordinates (AU).
+    // Scale is (1,1,1) — the frame extent is driven by soi_radius,
+    // not by TransformComponent::scale.
     scene_ctx.scene.add_component(
       lca_id,
       TransformComponent {
@@ -681,11 +680,17 @@ impl SimulationContext {
       }
     )?;
 
+    // ReferenceFrameComponent::scale = AU/km (the factor that converts
+    // micro-frame km to macro-frame AU).  This is the ONLY correct value
+    // for physics: the compute shaders do
+    //   r_local_km = (em_pos_AU − center_AU) / scale
+    // and micro_to_macro does
+    //   p_AU = center_AU + p_km * scale.
     scene_ctx.scene.add_component(
       lca_id,
       ReferenceFrameComponent {
         frame_type: crate::scene::ReferenceFrameType::Micro,
-        scale: soi_radius_au,
+        scale: 1.0 / KM_PER_AU,
         soi_radius: soi_radius_au,
         _padding: 0,
       },
@@ -698,26 +703,15 @@ impl SimulationContext {
     // ── Comet mesh entity (child of LCA frame) ───────────────────────────────
     let comet_id = scene_ctx.scene.spawn_entity(entity_name);
 
-    // Derive uniform scale so that the mesh root bound has radius == radius_km
-    // in the micro-frame's local space.
+    // Derive uniform scale: everything inside the micro-frame is in km.
+    // `bounding_sphere` is in the mesh's own vertex units (whatever the GLTF
+    // stores — metres, km, etc).  We want the rendered mesh to have radius
+    // == `radius_km` in the micro-frame's local km space.
     //
-    // The micro-frame renderer maps: local_units × soi_radius_au = world_AU.
-    // So 1 local unit = soi_radius_au AU.
+    //   mesh_scale = radius_km / bounding_sphere
     //
-    // We want the mesh to appear with radius = radius_km in world space:
-    //   world_AU = radius_km / KM_PER_AU
-    //   local_units_needed = world_AU / soi_radius_au = radius_km / (KM_PER_AU × soi_radius_au)
-    //
-    // `bounding_sphere` is in the mesh's own vertex units. If the GLTF is in metres,
-    // bounding_sphere is in metres; if km, in km. We treat it as mesh-native-units and
-    // produce a dimensionless scale factor that maps the mesh's extent to `local_units_needed`.
-    //
-    // mesh_scale = local_units_needed / bounding_sphere
-    //            = radius_km / (KM_PER_AU × soi_radius_au × bounding_sphere)
-    //
-    // However, for static comets spawned at origin (dist_au = 0) soi_radius_au = 0.001.
-    // The dominant uncertainty is the GLTF vertex unit, so we log the values.
-    const KM_PER_AU: f32 = 149_597_870.7_f32;
+    // The rendering pipeline's `get_relative_transform` will then multiply
+    // by `frame.scale` (AU/km) to produce the correct macro-frame size.
     let bounding_sphere = if let Some(bvh) = &mesh_arc.bvh {
       use aethervk_oshal_rlib::math::vector::Vector;
       match &bvh.nodes[0].bound {
@@ -728,15 +722,15 @@ impl SimulationContext {
       compute_bounding_sphere_radius(&mesh_arc.vertices)
     };
 
-    let mesh_scale = if bounding_sphere > 0.0 && soi_radius_au > 0.0 {
-      (radius_km / KM_PER_AU) / (soi_radius_au * bounding_sphere)
+    let mesh_scale = if bounding_sphere > 0.0 {
+      radius_km / bounding_sphere
     } else {
       1.0
     };
 
     oshal::log!(
-      "spawn_comet: dist_au={:.4} soi_au={:.6} bounding_sphere={:.3} radius_km={:.3} mesh_scale={:.8}",
-      dist_au, soi_radius_au, bounding_sphere, radius_km, mesh_scale
+      "spawn_comet: dist_au={:.4} soi_au={:.6} bounding_sphere={:.3} radius_km={:.3} mesh_scale={:.8} frame_scale={:.10e}",
+      dist_au, soi_radius_au, bounding_sphere, radius_km, mesh_scale, 1.0 / KM_PER_AU
     );
 
 
@@ -972,13 +966,17 @@ impl SimulationContext {
     // SOI radius: static meshes might not have a massive SOI, we use a generic scale or compute it
     let dist_au =
       (pos.x() * pos.x() + pos.y() * pos.y() + pos.z() * pos.z()).sqrt();
-    let soi_radius_au = dist_au.min(1.0_f32).max(0.01_f32);
+    const SUN_RADIUS_AU: f32 = 0.0046524726_f32;
+    const KM_PER_AU: f32 = 149_597_870.7_f32;
+    let soi_radius_au = (dist_au - SUN_RADIUS_AU).max(SUN_RADIUS_AU);
 
+    // ReferenceFrameComponent::scale = AU/km (unit conversion only).
+    // soi_radius is the visual extent, not the scale.
     scene_ctx.scene.add_component(
       lca_id,
       ReferenceFrameComponent {
         frame_type: crate::scene::ReferenceFrameType::Micro,
-        scale: soi_radius_au,
+        scale: 1.0 / KM_PER_AU,
         soi_radius: soi_radius_au,
         _padding: 0,
       },

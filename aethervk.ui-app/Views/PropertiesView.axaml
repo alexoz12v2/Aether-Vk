@@ -147,15 +147,27 @@
                         </Expander>
                     </DataTemplate>
 
-                    <DataTemplate DataType="models:BillboardComponent">
+                    <DataTemplate DataType="models:ScreenSpaceBillboardComponent">
                         <Expander IsExpanded="{Binding $parent[UserControl].((vm:PropertiesViewModel)DataContext).AreAllExpanded, FallbackValue=False}" Classes="ComponentExpander">
                             <Expander.Header>
                                 <TextBlock Text="{Binding Name}" FontWeight="Bold" />
                             </Expander.Header>
                             <StackPanel Spacing="5" Margin="5">
                                 <Grid ColumnDefinitions="*,2*">
+                                    <TextBlock Text="Image:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+                                    <TextBlock Grid.Column="1" Text="{Binding ImagePath}" Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis" />
+                                </Grid>
+                                <Grid ColumnDefinitions="*,2*">
                                     <TextBlock Text="Opacity:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-                                    <NumericUpDown Grid.Column="1" Value="{Binding Opacity}" Minimum="0" Maximum="1" Increment="0.1" FormatString="0.00" />
+                                    <NumericUpDown Grid.Column="1" Value="{Binding Opacity}" Minimum="0" Maximum="1" Increment="0.05" FormatString="0.00" />
+                                </Grid>
+                                <Grid ColumnDefinitions="*,2*">
+                                    <TextBlock Text="Scale:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+                                    <NumericUpDown Grid.Column="1" Value="{Binding Scale}" Minimum="0.1" Maximum="10" Increment="0.1" FormatString="0.0" />
+                                </Grid>
+                                <Grid ColumnDefinitions="*,2*">
+                                    <TextBlock Text="Rotation:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+                                    <NumericUpDown Grid.Column="1" Value="{Binding RotationDeg}" Minimum="-360" Maximum="360" Increment="5" FormatString="0.0°" />
                                 </Grid>
                             </StackPanel>
                         </Expander>

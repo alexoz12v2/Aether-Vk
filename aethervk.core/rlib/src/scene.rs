@@ -554,6 +554,49 @@ pub struct ImageBillboardComponent {
 }
 impl Component for ImageBillboardComponent {}
 
+/// Screen-space billboard storing all data needed for C# UI projection.
+/// Position coordinates are normalized [0..1] viewport space.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScreenSpaceBillboardComponent {
+  pub image_path: alloc::string::String,
+  pub ndc_x: f32,
+  pub ndc_y: f32,
+  pub scale: f32,
+  pub rotation_deg: f32,
+  pub opacity: f32,
+  pub z_index: i32,
+  pub viewport_id: u64,
+}
+
+impl Default for ScreenSpaceBillboardComponent {
+  fn default() -> Self {
+    Self {
+      image_path: alloc::string::String::new(),
+      ndc_x: 0.0,
+      ndc_y: 0.0,
+      scale: 1.0,
+      rotation_deg: 0.0,
+      opacity: 1.0,
+      z_index: 1,
+      viewport_id: 0,
+    }
+  }
+}
+
+impl Component for ScreenSpaceBillboardComponent {}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenSpaceBillboardDTO {
+  pub ndc_x: f32,
+  pub ndc_y: f32,
+  pub scale: f32,
+  pub rotation_deg: f32,
+  pub opacity: f32,
+  pub z_index: i32,
+  pub viewport_id: u64,
+}
+
 /// Tags an entity as a Renderable Sun
 #[derive(Clone, Copy, Debug)]
 pub struct SunComponent {

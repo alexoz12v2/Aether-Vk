@@ -242,10 +242,21 @@ mod windows_debug {
           }
         }
 
-        // Fallback if the symbol wasn't natively resolvable / valid utf-8
+    // Fallback if the symbol wasn't natively resolvable / valid utf-8
         crate::log!("  [{:2}] <unknown> ({:p})", i, addr);
       }
     }
+  }
+
+  pub fn resolve_and_print_trace(trace: &[usize]) {
+    crate::log!("  (Symbol resolution from trace not natively supported on Windows yet)");
+    for (i, &addr) in trace.iter().enumerate() {
+      crate::log!("  [{:2}] {:#X}", i, addr);
+    }
+  }
+
+  pub fn print_aethervk_stacktrace(_skip: usize, _max: usize) {
+    crate::log!("AetherVk Stacktrace: Not natively supported by libc in this target environment.");
   }
 }
 
@@ -531,7 +542,7 @@ pub mod fpe {
   ///    exceptions from Structured Exception Handling (SEH) (Source: Windows Via C/C++ 5th ed)
   /// This function is the exception handling routine
   #[cfg(windows)]
-  unsafe extern "system-unwind" fn veh_handler(
+  unsafe extern "system" fn veh_handler(
     exception_info: *mut windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
   ) -> i32 {
     let record = (*exception_info).ExceptionRecord;
@@ -620,9 +631,12 @@ pub mod fpe {
 
   pub fn setup_fpu_panic() {
     unsafe {
-      let env_var = libc::getenv(b"AETHERVK_DISABLE_FPE\0".as_ptr() as *const libc::c_char);
-      if !env_var.is_null() {
-        return;
+      #[cfg(not(windows))]
+      {
+        let env_var = libc::getenv(b"AETHERVK_DISABLE_FPE\0".as_ptr() as *const libc::c_char);
+        if !env_var.is_null() {
+          return;
+        }
       }
       register_os_handler();
     }
@@ -630,9 +644,12 @@ pub mod fpe {
 
   pub fn unmask_fpu_for_current_thread() {
     unsafe {
-      let env_var = libc::getenv(b"AETHERVK_DISABLE_FPE\0".as_ptr() as *const libc::c_char);
-      if !env_var.is_null() {
-        return;
+      #[cfg(not(windows))]
+      {
+        let env_var = libc::getenv(b"AETHERVK_DISABLE_FPE\0".as_ptr() as *const libc::c_char);
+        if !env_var.is_null() {
+          return;
+        }
       }
       unmask_fpu_exceptions();
     }

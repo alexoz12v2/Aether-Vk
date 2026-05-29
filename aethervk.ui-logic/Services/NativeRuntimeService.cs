@@ -27,6 +27,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   private readonly HashSet<ulong> _activePresentationEngines = new();
 
   private readonly SceneStateManager _sceneStateManager;
+  public SceneStateManager SceneStateManager => _sceneStateManager;
   private readonly ConsoleService _consoleService;
   private readonly BreadcrumbService _breadcrumbService;
   private readonly INativeBufferPoolService _bufferPool;
@@ -292,20 +293,14 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     IntPtr dataPtr
   )
   {
-    if (dataPtr == IntPtr.Zero)
-      return;
-
-    // In a real scenario with a proper byte buffer, we'd copy the data out immediately.
-    // Since our Rust implementation currently passes a pointer to a Boxed trait object,
-    // we must process it synchronously or copy it immediately before the pointer becomes invalid.
-
-    // For this implementation, we will process it directly here to update the underlying models,
-    // and then queue a generic "scene updated" message for the UI.
+    // dataPtr may be null for "pull-signal" component IDs (100/101/102 etc.)
+    // where Rust tells C# a component changed but doesn't inline the DTO.
+    // The per-branch checks below handle null vs non-null appropriately.
 
     var state = _sceneStateManager.GetOrCreateScene(sceneId);
     if (state.EntityMap.TryGetValue(entityId, out var entity))
     {
-      if (componentId == 1) // Transform
+      if (componentId == 1 && dataPtr != IntPtr.Zero) // Transform (inline DTO)
       {
         var dto = Marshal.PtrToStructure<NativeInterop.FfiTransform>(dataPtr);
         _uiThreadDispatcher?.Dispatch(() =>
@@ -328,7 +323,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
           }
         });
       }
-      else if (componentId == 2) // Camera
+      else if (componentId == 2 && dataPtr != IntPtr.Zero) // Camera (inline DTO)
       {
         var dto = Marshal.PtrToStructure<NativeInterop.FfiCamera>(dataPtr);
         _uiThreadDispatcher?.Dispatch(() =>
@@ -348,6 +343,62 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
             camera.OrthoTop = dto.OrthoTop;
             camera.FocusDistance = dto.FocusDistance;
             camera.SuspendNotifications = false;
+          }
+        });
+      }
+      else
+      {
+        // ── Pull-signal: Rust marked this component as changed but sent
+        //    no inline data (null pointer).  For derived-data components
+        //    (100/101/102), copy position from the entity's Transform.
+        //    For unknown IDs, pull all NativeComponents as a fallback.
+        _uiThreadDispatcher?.Dispatch(() =>
+        {
+          switch (componentId)
+          {
+            case 100: // Comet
+            {
+              var transform = entity.Components.OfType<TransformComponent>().FirstOrDefault();
+              var comet = entity.Components.OfType<CometComponent>().FirstOrDefault();
+              if (transform != null && comet != null)
+              {
+                comet.PositionX = transform.PosX;
+                comet.PositionY = transform.PosY;
+                comet.PositionZ = transform.PosZ;
+              }
+              break;
+            }
+            case 101: // Planet
+            {
+              var transform = entity.Components.OfType<TransformComponent>().FirstOrDefault();
+              var planet = entity.Components.OfType<PlanetComponent>().FirstOrDefault();
+              if (transform != null && planet != null)
+              {
+                planet.PositionX = transform.PosX;
+                planet.PositionY = transform.PosY;
+                planet.PositionZ = transform.PosZ;
+              }
+              break;
+            }
+            case 102: // Sun
+            {
+              var transform = entity.Components.OfType<TransformComponent>().FirstOrDefault();
+              var sun = entity.Components.OfType<SunComponent>().FirstOrDefault();
+              if (transform != null && sun != null)
+              {
+                sun.PositionX = transform.PosX;
+                sun.PositionY = transform.PosY;
+                sun.PositionZ = transform.PosZ;
+              }
+              break;
+            }
+            default:
+            {
+              // Unknown component ID — try pulling any NativeComponents on this entity
+              foreach (var comp in entity.Components.OfType<NativeComponent>())
+                comp.PullFromNative();
+              break;
+            }
           }
         });
       }
@@ -1283,17 +1334,17 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       WireEntityComponents(sceneId, lcaEntity);
       WireEntityComponents(sceneId, cometEntity);
 
-      // Mirror the Rust-side TransformComponent in C# so the outline inspector shows it.
-      // LCA position = spawn position in macro-frame (AU); comet is at local-origin of the micro-frame.
-      lcaEntity.Components.Add(new TransformComponent { PosX = posX, PosY = posY, PosZ = posZ,
-                                                         ScaleX = 1f, ScaleY = 1f, ScaleZ = 1f });
-      cometEntity.Components.Add(new TransformComponent { PosX = 0f, PosY = 0f, PosZ = 0f,
-                                                           ScaleX = 1f, ScaleY = 1f, ScaleZ = 1f });
+      // Query the true Rust-side components.  WireEntityComponents sets up
+      // the CollectionChanged handler so any NativeComponent added to Components
+      // gets BindToNative + PullFromNative called immediately.
+      //
+      // Add empty shells — PullFromNative will populate them from the Rust ECS.
+      lcaEntity.Components.Add(new TransformComponent());
 
+      cometEntity.Components.Add(new TransformComponent());
       cometEntity.Components.Add(new ParticleEmitterCirclesComponent());
       cometEntity.Components.Add(new SphereGizmoComponent());
-      
-      // Nest under root
+      cometEntity.Components.Add(new CometComponent());
       var root = GetEntityByName(sceneId, "root");
 
       SyncSceneHierarchy(sceneId);
@@ -1637,7 +1688,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     var lcaEntity = new Entity(sceneId, ffiResult.LcaFrameId, lcaFrameName);
     state.EntityMap[ffiResult.LcaFrameId] = lcaEntity;
     WireEntityComponents(sceneId, lcaEntity);
-    lcaEntity.Components.Add(new TransformComponent { PosX = posX, PosY = posY, PosZ = posZ });
+    lcaEntity.Components.Add(new TransformComponent()); // PullFromNative fills position/scale
 
     // Nest under root
     var root = GetEntityByName(sceneId, "root");
@@ -1646,7 +1697,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     var meshEntity = new Entity(sceneId, ffiResult.MeshEntityId, entityName);
     state.EntityMap[ffiResult.MeshEntityId] = meshEntity;
     WireEntityComponents(sceneId, meshEntity);
-    meshEntity.Components.Add(new TransformComponent());  // pos=0 in micro-frame
+    meshEntity.Components.Add(new TransformComponent());  // PullFromNative fills pos/scale
     meshEntity.Components.Add(new SphereGizmoComponent());
     meshEntity.Components.Add(new ParticleEmitterCirclesComponent());
 
@@ -1709,7 +1760,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
-  public ulong SpawnBillboard(ulong sceneId, string imagePath)
+  public ulong SpawnBillboard(ulong sceneId, string imagePath, float ndcX, float ndcY, float scale, float opacity, ulong viewportId)
   {
     lock (_nativeLock)
     {
@@ -1717,7 +1768,13 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       {
         if (NativeInterop.avkSimulationContext_spawnBillboard(_simulationContext, sceneId, imagePath, out ulong entityId))
         {
-          var entity = new Entity(sceneId, entityId, "Billboard");
+          // Also add the screen-space billboard component with full state
+          NativeInterop.avkSimulationContext_addScreenSpaceBillboard(
+            _simulationContext, sceneId, entityId, imagePath,
+            ndcX, ndcY, scale, 0.0f, opacity, 1, viewportId
+          );
+
+          var entity = new Entity(sceneId, entityId, $"Billboard ({System.IO.Path.GetFileName(imagePath)})");
           var state = _sceneStateManager.GetOrCreateScene(sceneId);
           state.EntityMap[entityId] = entity;
           state.RootEntities.Add(entity);
@@ -1725,6 +1782,34 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         }
       }
       return 0;
+    }
+  }
+
+  public void SetScreenSpaceBillboard(ulong sceneId, ulong entityId, float ndcX, float ndcY, float scale, float rotationDeg, float opacity, int zIndex)
+  {
+    lock (_nativeLock)
+    {
+      if (_simulationContext != IntPtr.Zero)
+      {
+        NativeInterop.avkSimulationContext_setScreenSpaceBillboard(
+          _simulationContext, sceneId, entityId, ndcX, ndcY, scale, rotationDeg, opacity, zIndex
+        );
+      }
+    }
+  }
+
+  public bool GetScreenSpaceBillboard(ulong sceneId, ulong entityId, out NativeInterop.FfiScreenSpaceBillboard data)
+  {
+    data = default;
+    lock (_nativeLock)
+    {
+      if (_simulationContext != IntPtr.Zero)
+      {
+        return NativeInterop.avkSimulationContext_getScreenSpaceBillboard(
+          _simulationContext, sceneId, entityId, out data
+        );
+      }
+      return false;
     }
   }
 

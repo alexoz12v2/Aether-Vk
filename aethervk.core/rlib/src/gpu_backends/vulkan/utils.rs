@@ -138,7 +138,7 @@ impl PhysicalDeviceQueryInput {
         .get_physical_device_xlib_presentation_support(
           _physical_device,
           _queue_family_index,
-          self.dpy,
+          self.dpy.as_ptr(),
           self.visual_id,
         );
     }

@@ -8758,7 +8758,8 @@ impl RenderDevice for Device {
         let (mut data, pe_handle, is_resize_required, next_timeline_value, cmd_pools) =
           execute_result?;
 
-        if let Some(pe) = state.live_presentation_engines.get(&pe_handle) {
+        if let Some(mut pe) = state.live_presentation_engines.get_mut(&pe_handle) {
+          pe.mark_fence_submitted(data.presentation.unwrap().acquire_result.frame_index as u32);
           if let swapchain::PresentationState::Windowless(windowless) = pe.value() {
             windowless
               .last_timeline_value

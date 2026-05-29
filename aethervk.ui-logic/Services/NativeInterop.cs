@@ -749,7 +749,7 @@ public static class NativeInterop
     float meanVelocity
   );
 
-  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_addImageBillboardComponent(
     IntPtr ctx,
     ulong sceneId,
@@ -757,6 +757,57 @@ public static class NativeInterop
     [MarshalAs(UnmanagedType.I1)] bool isScreenSpace,
     float width,
     float height
+  );
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct FfiScreenSpaceBillboard
+  {
+    public float NdcX;
+    public float NdcY;
+    public float Scale;
+    public float RotationDeg;
+    public float Opacity;
+    public int ZIndex;
+    public ulong ViewportId;
+  }
+
+  [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_addScreenSpaceBillboard(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity,
+    [MarshalAs(UnmanagedType.LPStr)] string imagePath,
+    float ndcX,
+    float ndcY,
+    float scale,
+    float rotationDeg,
+    float opacity,
+    int zIndex,
+    ulong viewportId
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_setScreenSpaceBillboard(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity,
+    float ndcX,
+    float ndcY,
+    float scale,
+    float rotationDeg,
+    float opacity,
+    int zIndex
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_getScreenSpaceBillboard(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity,
+    out FfiScreenSpaceBillboard data
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

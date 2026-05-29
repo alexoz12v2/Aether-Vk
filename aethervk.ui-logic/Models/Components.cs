@@ -741,26 +741,62 @@ public partial class SphereGizmoComponent : NativeComponent
   }
 }
 
-public partial class BillboardComponent : ObservableObject, IComponent
+public partial class ScreenSpaceBillboardComponent : NativeComponent
 {
-    public string Name => "UI Billboard";
+    public override string Name => "Screen Space Billboard";
 
-    public ViewModels.BillboardViewModel ViewModel { get; }
+    [ObservableProperty]
+    private string _imagePath = "";
 
-    public BillboardComponent(ViewModels.BillboardViewModel viewModel)
+    [ObservableProperty]
+    private float _ndcX;
+
+    [ObservableProperty]
+    private float _ndcY;
+
+    [ObservableProperty]
+    private float _scale = 1.0f;
+
+    [ObservableProperty]
+    private float _rotationDeg;
+
+    [ObservableProperty]
+    private float _opacity = 1.0f;
+
+    [ObservableProperty]
+    private int _zIndex = 1;
+
+    [ObservableProperty]
+    private ulong _viewportId;
+
+    protected override bool ShouldPushToNative(string? propertyName)
     {
-        ViewModel = viewModel;
-        ViewModel.PropertyChanged += (s, e) => {
-            if (e.PropertyName == nameof(ViewModels.BillboardViewModel.Opacity))
-            {
-                OnPropertyChanged(nameof(Opacity));
-            }
-        };
+        // ImagePath and ViewportId are set at creation only, not pushed on change
+        return propertyName != nameof(ImagePath) && propertyName != nameof(ViewportId);
     }
 
-    public double Opacity
+    protected override void PushToNativeImpl()
     {
-        get => ViewModel.Opacity;
-        set => ViewModel.Opacity = value;
+        if (SimulationContext == IntPtr.Zero) return;
+        NativeInterop.avkSimulationContext_setScreenSpaceBillboard(
+            SimulationContext, SceneId, EntityId,
+            NdcX, NdcY, Scale, RotationDeg, Opacity, ZIndex
+        );
+    }
+
+    protected override void PullFromNativeImpl()
+    {
+        if (SimulationContext == IntPtr.Zero) return;
+        if (NativeInterop.avkSimulationContext_getScreenSpaceBillboard(
+                SimulationContext, SceneId, EntityId, out var data))
+        {
+            NdcX = data.NdcX;
+            NdcY = data.NdcY;
+            Scale = data.Scale;
+            RotationDeg = data.RotationDeg;
+            Opacity = data.Opacity;
+            ZIndex = data.ZIndex;
+            ViewportId = data.ViewportId;
+        }
     }
 }
