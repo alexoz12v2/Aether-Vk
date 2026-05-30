@@ -14,7 +14,7 @@ heapless = { version = "0.9" }
 image = "0.25.10"
 raw-window-handle = "0.6"
 winit = { version = "0.29.15", features = ["rwh_06"] }
-reqwest = { version = "0.12", features = ["blocking", "json", "default-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"], default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 base64 = "0.22"

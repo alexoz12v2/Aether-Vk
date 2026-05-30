@@ -1838,6 +1838,7 @@ fn dispatch_physics_step(
           scene_arc.as_ref(),
           &mut update_comp.entities,
           &mut update_comp.arbitrary_data,
+          update_comp.user_data.as_mut(),
           dt_seconds,
         );
       },
@@ -1850,6 +1851,7 @@ fn dispatch_physics_step(
           scene_arc.as_ref(),
           &mut update_comp.entities,
           &mut update_comp.arbitrary_data,
+          update_comp.user_data.as_mut(),
           dt_seconds,
         );
       },

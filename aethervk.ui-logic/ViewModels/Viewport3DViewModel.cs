@@ -370,6 +370,13 @@ public partial class Viewport3DViewModel
             ViewportId = PresentationEngineId,
           };
           entity.Components.Add(nativeComp);
+          entity.IsDeletable = true;
+
+          // Bind to Rust so property changes push to native
+          nativeComp.BindToNative(_runtimeService.SimulationContext, SceneId, entityId);
+
+          // Link to the overlay ViewModel for bidirectional sync
+          nativeComp.LinkBillboard(billboard);
         }
 
         _breadcrumbService.ShowMessageAsync(
@@ -593,15 +600,41 @@ public partial class Viewport3DViewModel
   {
     if (isPressed && action.Id == "viewport.delete")
     {
-      var selected = Billboards.FirstOrDefault(b => b.IsSelected);
-      if (selected != null)
+      // Try billboard-overlay delete first
+      var selectedBillboard = Billboards.FirstOrDefault(b => b.IsSelected);
+      if (selectedBillboard != null)
       {
-        // Remove the Rust ECS entity if this billboard is linked to one
-        if (selected.EntityId != 0)
+        if (selectedBillboard.EntityId != 0)
         {
-          RuntimeService.RemoveEntity(SceneId, selected.EntityId);
+          RuntimeService.RemoveEntity(SceneId, selectedBillboard.EntityId);
+          // Remove from scene state
+          var state = _sceneStateManager.GetOrCreateScene(SceneId);
+          if (state.EntityMap.TryGetValue(selectedBillboard.EntityId, out var entity))
+          {
+            // Remove from parent's children collection
+            foreach (var parent in state.EntityMap.Values)
+            {
+              parent.Children.Remove(entity);
+            }
+            state.EntityMap.Remove(selectedBillboard.EntityId);
+          }
         }
-        Billboards.Remove(selected);
+        Billboards.Remove(selectedBillboard);
+        return true;
+      }
+
+      // General deletable entity (no billboard overlay, e.g. future use)
+      var selectedEntity = SelectedEntity;
+      if (selectedEntity != null && selectedEntity.IsDeletable)
+      {
+        RuntimeService.RemoveEntity(SceneId, selectedEntity.Id);
+        var state = _sceneStateManager.GetOrCreateScene(SceneId);
+        foreach (var parent in state.EntityMap.Values)
+        {
+          parent.Children.Remove(selectedEntity);
+        }
+        state.EntityMap.Remove(selectedEntity.Id);
+        state.SelectedEntity = null;
         return true;
       }
     }

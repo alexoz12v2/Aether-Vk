@@ -1410,6 +1410,7 @@ impl Scene {
     self.register_component::<MarkersComponent>(&transform_type_id);
     self.register_component::<PhysicalMeshComponent>(&transform_type_id);
     self.register_component::<ImageBillboardComponent>(&transform_type_id);
+    self.register_component::<ScreenSpaceBillboardComponent>(&[]);
     self.register_component::<SunComponent>(&transform_type_id);
     self.register_component::<SkyComponent>(&[]);
     self.register_component::<BackgroundComponent>(&[]);

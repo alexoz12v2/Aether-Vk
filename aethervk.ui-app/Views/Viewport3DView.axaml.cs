@@ -100,9 +100,12 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
   {
     base.OnDataContextChanged(e);
 
+    // Unregister previous message listener
     if (_viewModel != null)
     {
       _viewModel.Renderer = null;
+      WeakReferenceMessenger.Default.Unregister<EntitySelectedMessage>(this);
+      WeakReferenceMessenger.Default.Unregister<AetherVk.Logic.Models.EntityVisibilityChangedMessage>(this);
     }
 
     _viewModel = DataContext as Viewport3DViewModel;
@@ -118,6 +121,36 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
       );
 
       RenderTargetImage.Source = _bitmap;
+
+      // Listen for entity selection from Outline panel to sync billboard IsSelected
+      WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(
+        this,
+        (recipient, msg) =>
+        {
+          if (_viewModel == null) return;
+          ulong selectedId = msg.SelectedEntity?.Id ?? 0;
+          foreach (var b in _viewModel.Billboards)
+          {
+            b.IsSelected = (b.EntityId != 0 && b.EntityId == selectedId);
+          }
+        }
+      );
+
+      // Listen for entity visibility toggle from Outline panel
+      WeakReferenceMessenger.Default.Register<AetherVk.Logic.Models.EntityVisibilityChangedMessage>(
+        this,
+        (recipient, msg) =>
+        {
+          if (_viewModel == null) return;
+          foreach (var b in _viewModel.Billboards)
+          {
+            if (b.EntityId != 0 && b.EntityId == msg.Entity.Id)
+            {
+              b.IsEntityVisible = msg.Entity.IsVisible;
+            }
+          }
+        }
+      );
     }
   }
 
@@ -242,36 +275,267 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
     }
   }
 
-  private void OnBillboardPointerPressed(object? sender, PointerPressedEventArgs e)
+  // ── Billboard drag-to-translate (only when already selected from Outline) ──
+  private bool _isDraggingBillboard;
+  private BillboardViewModel? _dragBillboard;
+  private Avalonia.Point _dragStartPos;
+  private double _dragStartBillboardX;
+  private double _dragStartBillboardY;
+
+  /// <summary>
+  /// Called when the billboard image is pressed. Only starts drag if the billboard is
+  /// already selected (selection is driven by the Outline panel, not by clicking here).
+  /// </summary>
+  private void OnBillboardDragPressed(object? sender, PointerPressedEventArgs e)
   {
-    if (sender is Image image && image.DataContext is BillboardViewModel bvm)
+    if (sender is Image image && image.DataContext is BillboardViewModel bvm && bvm.IsSelected)
     {
-      if (_viewModel != null)
-      {
-        foreach (var b in _viewModel.Billboards)
-        {
-          b.IsSelected = false;
-        }
-      }
-      bvm.IsSelected = true;
-
-      // Select the real ECS entity if the billboard is linked to one
-      if (bvm.EntityId != 0 && _viewModel != null)
-      {
-        var state = _viewModel.RuntimeService.SceneStateManager.GetOrCreateScene(
-          _viewModel.SceneId
-        );
-        if (state.EntityMap.TryGetValue(bvm.EntityId, out var entity))
-        {
-          state.SelectedEntity = entity;
-          CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
-            new AetherVk.Logic.ViewModels.EntitySelectedMessage(entity)
-          );
-        }
-      }
-
+      _isDraggingBillboard = true;
+      _dragBillboard = bvm;
+      _dragStartPos = e.GetPosition(this);
+      _dragStartBillboardX = bvm.X;
+      _dragStartBillboardY = bvm.Y;
+      e.Pointer.Capture((IInputElement)sender);
       e.Handled = true;
     }
+  }
+
+  private void OnBillboardPointerMoved(object? sender, PointerEventArgs e)
+  {
+    if (!_isDraggingBillboard || _dragBillboard == null || _viewModel == null)
+      return;
+
+    var pos = e.GetPosition(this);
+    var dx = pos.X - _dragStartPos.X;
+    var dy = pos.Y - _dragStartPos.Y;
+
+    _dragBillboard.X = _dragStartBillboardX + dx;
+    _dragBillboard.Y = _dragStartBillboardY + dy;
+  }
+
+  private void OnBillboardPointerReleased(object? sender, PointerReleasedEventArgs e)
+  {
+    if (_isDraggingBillboard && _dragBillboard != null && _viewModel != null)
+    {
+      SyncBillboardToRust(_dragBillboard);
+    }
+
+    _isDraggingBillboard = false;
+    _dragBillboard = null;
+    e.Pointer.Capture(null);
+  }
+
+  // ── Rotation handle state ────────────────────────────────────────────────
+  private bool _isRotatingBillboard;
+  private BillboardViewModel? _rotateBillboard;
+
+  private void OnRotateHandlePressed(object? sender, PointerPressedEventArgs e)
+  {
+    if (sender is Avalonia.Controls.Shapes.Ellipse ellipse &&
+        ellipse.DataContext is BillboardViewModel bvm)
+    {
+      _isRotatingBillboard = true;
+      _rotateBillboard = bvm;
+      e.Pointer.Capture((IInputElement)sender);
+      ShowGoniometer(bvm);
+      e.Handled = true;
+    }
+  }
+
+  private void OnRotateHandleMoved(object? sender, PointerEventArgs e)
+  {
+    if (!_isRotatingBillboard || _rotateBillboard == null)
+      return;
+
+    var pos = e.GetPosition(this);
+    double cx = _rotateBillboard.X + _rotateBillboard.ScaledWidth / 2.0;
+    double cy = _rotateBillboard.Y + _rotateBillboard.ScaledHeight / 2.0;
+    double angle = Math.Atan2(pos.X - cx, -(pos.Y - cy)) * (180.0 / Math.PI);
+
+    // Ctrl key snaps to 15° increments
+    if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+    {
+      angle = Math.Round(angle / 15.0) * 15.0;
+    }
+
+    _rotateBillboard.Rotation = angle;
+    UpdateGoniometer(_rotateBillboard, angle);
+    e.Handled = true;
+  }
+
+  private void OnRotateHandleReleased(object? sender, PointerReleasedEventArgs e)
+  {
+    if (_isRotatingBillboard && _rotateBillboard != null && _viewModel != null)
+    {
+      SyncBillboardToRust(_rotateBillboard);
+    }
+
+    _isRotatingBillboard = false;
+    _rotateBillboard = null;
+    e.Pointer.Capture(null);
+    HideGoniometer();
+  }
+
+  // ── Corner scale handles ─────────────────────────────────────────────────
+  private bool _isScalingBillboard;
+  private BillboardViewModel? _scaleBillboard;
+  private double _scaleStartDist;
+  private double _scaleStartValue;
+
+  private void OnScaleHandlePressed(object? sender, PointerPressedEventArgs e)
+  {
+    if (sender is Avalonia.Controls.Shapes.Ellipse ellipse &&
+        ellipse.DataContext is BillboardViewModel bvm)
+    {
+      _isScalingBillboard = true;
+      _scaleBillboard = bvm;
+      _scaleStartValue = bvm.Scale;
+
+      var pos = e.GetPosition(this);
+      double cx = bvm.X + bvm.ScaledWidth / 2.0;
+      double cy = bvm.Y + bvm.ScaledHeight / 2.0;
+      _scaleStartDist = Math.Max(10.0, Math.Sqrt((pos.X - cx) * (pos.X - cx) + (pos.Y - cy) * (pos.Y - cy)));
+
+      e.Pointer.Capture((IInputElement)sender);
+      e.Handled = true;
+    }
+  }
+
+  private void OnScaleHandleMoved(object? sender, PointerEventArgs e)
+  {
+    if (!_isScalingBillboard || _scaleBillboard == null)
+      return;
+
+    var pos = e.GetPosition(this);
+    double cx = _scaleBillboard.X + _scaleBillboard.ScaledWidth / 2.0;
+    double cy = _scaleBillboard.Y + _scaleBillboard.ScaledHeight / 2.0;
+    double dist = Math.Sqrt((pos.X - cx) * (pos.X - cx) + (pos.Y - cy) * (pos.Y - cy));
+
+    double newScale = _scaleStartValue * (dist / _scaleStartDist);
+    _scaleBillboard.Scale = Math.Max(0.1, newScale);
+    e.Handled = true;
+  }
+
+  private void OnScaleHandleReleased(object? sender, PointerReleasedEventArgs e)
+  {
+    if (_isScalingBillboard && _scaleBillboard != null && _viewModel != null)
+    {
+      SyncBillboardToRust(_scaleBillboard);
+    }
+
+    _isScalingBillboard = false;
+    _scaleBillboard = null;
+    e.Pointer.Capture(null);
+  }
+
+  // ── Goniometer overlay ───────────────────────────────────────────────────
+  private void ShowGoniometer(BillboardViewModel bvm)
+  {
+    GoniometerOverlay.Children.Clear();
+    GoniometerOverlay.IsVisible = true;
+    BuildGoniometerVisuals(bvm, bvm.Rotation);
+  }
+
+  private void UpdateGoniometer(BillboardViewModel bvm, double angleDeg)
+  {
+    GoniometerOverlay.Children.Clear();
+    BuildGoniometerVisuals(bvm, angleDeg);
+  }
+
+  private void HideGoniometer()
+  {
+    GoniometerOverlay.IsVisible = false;
+    GoniometerOverlay.Children.Clear();
+  }
+
+  private void BuildGoniometerVisuals(BillboardViewModel bvm, double angleDeg)
+  {
+    double cx = bvm.X + bvm.ScaledWidth / 2.0;
+    double cy = bvm.Y + bvm.ScaledHeight / 2.0;
+    double radius = Math.Max(bvm.ScaledWidth, bvm.ScaledHeight) * 0.7;
+    if (radius < 40) radius = 40;
+
+    var accentBrush = new SolidColorBrush(Color.FromArgb(180, 100, 180, 255));
+    var tickBrush   = new SolidColorBrush(Color.FromArgb(120, 160, 200, 255));
+
+    // Outer ring
+    var ring = new Avalonia.Controls.Shapes.Ellipse
+    {
+      Width = radius * 2,
+      Height = radius * 2,
+      Stroke = accentBrush,
+      StrokeThickness = 1.5,
+      StrokeDashArray = new Avalonia.Collections.AvaloniaList<double> { 4, 3 },
+      Fill = null,
+    };
+    Canvas.SetLeft(ring, cx - radius);
+    Canvas.SetTop(ring, cy - radius);
+    GoniometerOverlay.Children.Add(ring);
+
+    // 15° tick marks
+    for (int deg = 0; deg < 360; deg += 15)
+    {
+      double rad = deg * Math.PI / 180.0;
+      bool major = deg % 90 == 0;
+      double innerR = major ? radius * 0.8 : radius * 0.9;
+      double outerR = radius;
+
+      var line = new Avalonia.Controls.Shapes.Line
+      {
+        StartPoint = new Avalonia.Point(cx + innerR * Math.Sin(rad), cy - innerR * Math.Cos(rad)),
+        EndPoint   = new Avalonia.Point(cx + outerR * Math.Sin(rad), cy - outerR * Math.Cos(rad)),
+        Stroke = major ? accentBrush : tickBrush,
+        StrokeThickness = major ? 2.0 : 1.0,
+      };
+      GoniometerOverlay.Children.Add(line);
+    }
+
+    // Current angle indicator line (from center to rim)
+    double angleRad = angleDeg * Math.PI / 180.0;
+    var indicator = new Avalonia.Controls.Shapes.Line
+    {
+      StartPoint = new Avalonia.Point(cx, cy),
+      EndPoint   = new Avalonia.Point(cx + radius * Math.Sin(angleRad), cy - radius * Math.Cos(angleRad)),
+      Stroke = accentBrush,
+      StrokeThickness = 2.0,
+    };
+    GoniometerOverlay.Children.Add(indicator);
+
+    // Angle readout text
+    var text = new TextBlock
+    {
+      Text = $"{angleDeg:F1}°",
+      FontSize = 12,
+      FontWeight = Avalonia.Media.FontWeight.SemiBold,
+      Foreground = Brushes.White,
+      Background = new SolidColorBrush(Color.FromArgb(180, 30, 30, 40)),
+    };
+    Canvas.SetLeft(text, cx + radius + 8);
+    Canvas.SetTop(text, cy - 8);
+    GoniometerOverlay.Children.Add(text);
+  }
+
+  /// <summary>
+  /// Pushes the BillboardViewModel's current state to Rust via SetScreenSpaceBillboard.
+  /// </summary>
+  private void SyncBillboardToRust(BillboardViewModel bvm)
+  {
+    if (bvm.EntityId == 0 || _viewModel == null)
+      return;
+
+    float ndcX = _viewModel.Width > 0 ? (float)(bvm.X / _viewModel.Width) : 0f;
+    float ndcY = _viewModel.Height > 0 ? (float)(bvm.Y / _viewModel.Height) : 0f;
+
+    _viewModel.RuntimeService.SetScreenSpaceBillboard(
+      _viewModel.SceneId,
+      bvm.EntityId,
+      ndcX,
+      ndcY,
+      (float)bvm.Scale,
+      (float)bvm.Rotation,
+      (float)bvm.Opacity,
+      bvm.ZIndex
+    );
   }
 
   private void OnBillboardWheelChanged(object? sender, PointerWheelEventArgs e)
@@ -296,16 +560,7 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
       // Sync back to Rust if ECS-linked
       if (e.Handled && bvm.EntityId != 0 && _viewModel != null)
       {
-        _viewModel.RuntimeService.SetScreenSpaceBillboard(
-          _viewModel.SceneId,
-          bvm.EntityId,
-          (float)(bvm.X / _viewModel.Width),
-          (float)(bvm.Y / _viewModel.Height),
-          (float)bvm.Scale,
-          (float)bvm.Rotation,
-          (float)bvm.Opacity,
-          bvm.ZIndex
-        );
+        SyncBillboardToRust(bvm);
       }
     }
   }
