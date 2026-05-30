@@ -449,7 +449,7 @@ impl CameraComponent {
         aspect_ratio,
         near,
         far,
-      } => Mat4x4f32::perspective_vk(fov, aspect_ratio, near, far),
+      } => Mat4x4f32::perspective_vk_reverse_z(fov, aspect_ratio, near, far),
       CameraProjection::Orthographic {
         left,
         right,
@@ -457,7 +457,7 @@ impl CameraComponent {
         top,
         near,
         far,
-      } => Mat4x4f32::orthographic_vk(left, right, bottom, top, near, far),
+      } => Mat4x4f32::orthographic_vk_reverse_z(left, right, bottom, top, near, far),
     }
   }
 
@@ -736,7 +736,7 @@ pub struct ReferenceFrameComponent {
   pub frame_type: ReferenceFrameType,
   pub scale: f32,
   pub soi_radius: f32,
-  pub _padding: u32,
+  pub depth_layer: u32,
 }
 
 impl ReferenceFrameComponent {
@@ -1174,6 +1174,42 @@ impl Scene {
     hierarchy.children.values().map(|children| children.len()).max().unwrap_or(0)
   }
 
+  /// Helper to get the scale of the first micro-frame ancestor (or self).
+  /// Returns 1.0 if not in a micro-frame.
+  pub fn ancestor_frame_scale(&self, entity: EntityId) -> f32 {
+    let hierarchy = self.hierarchy.read();
+    let mut current = entity;
+    let mut accumulated = 1.0_f32;
+    loop {
+      if let Some(scale) = self.with_component(current, |c: &ReferenceFrameComponent| c.scale) {
+        accumulated *= scale;
+      }
+      if let Some(&parent) = hierarchy.parents.get(&current) {
+        current = parent;
+      } else {
+        break;
+      }
+    }
+    accumulated
+  }
+
+  pub fn ancestor_depth_layer(&self, entity: EntityId) -> u32 {
+    let hierarchy = self.hierarchy.read();
+    let mut current = entity;
+    loop {
+      if let Some(layer) = self.with_component(current, |c: &ReferenceFrameComponent| c.depth_layer)
+      {
+        return layer;
+      }
+      if let Some(&parent) = hierarchy.parents.get(&current) {
+        current = parent;
+      } else {
+        break;
+      }
+    }
+    0
+  }
+
   /// TODO: Document this item
   pub fn should_parallelize(&self) -> bool {
     let size = self.entity_count();
@@ -1291,7 +1327,10 @@ impl Scene {
         frame_type,
         scale,
         soi_radius,
-        _padding: 0,
+        depth_layer: match frame_type {
+          ReferenceFrameType::Macro => 0,
+          ReferenceFrameType::Micro => 1,
+        },
       },
     );
     entity
@@ -2583,6 +2622,44 @@ impl Scene {
     Some(accumulated_transform)
   }
 
+  /// Returns the transform relative to the containing Reference Frame,
+  /// along with the ID of that frame (if any).
+  pub fn frame_relative_transform(
+    &self,
+    entity_id: EntityId,
+  ) -> Option<(TransformComponent, Option<EntityId>)> {
+    let mut accumulated_transform = self.with_component(entity_id, |c: &TransformComponent| *c)?;
+    let mut current_entity = entity_id;
+
+    loop {
+      let parent_opt = {
+        let hierarchy = self.hierarchy.read();
+        hierarchy.parents.get(&current_entity).copied()
+      };
+
+      if let Some(parent_id) = parent_opt {
+        if self.with_component(parent_id, |_: &ReferenceFrameComponent| ()).is_some() {
+          return Some((accumulated_transform, Some(parent_id)));
+        }
+
+        if let Some(parent_transform) = self.with_component(parent_id, |c: &TransformComponent| *c)
+        {
+          accumulated_transform =
+            Self::combine_transforms(&parent_transform, &accumulated_transform);
+        }
+        current_entity = parent_id;
+      } else {
+        let frame =
+          if self.with_component(current_entity, |_: &ReferenceFrameComponent| ()).is_some() {
+            Some(current_entity)
+          } else {
+            None
+          };
+        return Some((accumulated_transform, frame));
+      }
+    }
+  }
+
   /// TODO: Document this item
   pub fn get_relative_transform(
     &self,
@@ -3659,8 +3736,8 @@ mod tests {
         ReferenceFrameComponent {
           frame_type: ReferenceFrameType::Macro,
           scale: 1.0,
-          soi_radius: core::f32::MAX,
-          _padding: 0,
+          soi_radius: f32::MAX,
+          depth_layer: 0,
         },
       )
       .unwrap();
@@ -3684,8 +3761,8 @@ mod tests {
         ReferenceFrameComponent {
           frame_type: ReferenceFrameType::Micro,
           scale: 1.0 / au_to_km, // 1 km in AU
-          soi_radius: 1000000.0,
-          _padding: 0,
+          soi_radius: 1000.0,
+          depth_layer: 1,
         },
       )
       .unwrap();

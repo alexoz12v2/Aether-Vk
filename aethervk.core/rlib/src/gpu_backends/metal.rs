@@ -530,6 +530,10 @@ impl RenderDevice for MetalRenderDevice {
   fn destroy_presentation_engine(&self, handle: PresentationEngineHandle) -> GpuResult<()> {
     todo!()
   }
+
+  fn clear_depth(&self, cmd_buffer: crate::gpu::CommandBufferHandle, handle: crate::gpu::PresentationEngineHandle) -> Result<(), crate::types::GpuError> {
+    todo!()
+  }
 }
 
 }

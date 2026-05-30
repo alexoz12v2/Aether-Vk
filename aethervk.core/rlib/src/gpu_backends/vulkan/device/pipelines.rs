@@ -838,7 +838,7 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
         let mut info = vk::PipelineDepthStencilStateCreateInfo::default()
           .depth_test_enable(!graphics_info.pipeline_flags.contains(PipelineFlags::NO_DEPTH_TEST))
           .depth_write_enable(!graphics_info.pipeline_flags.contains(PipelineFlags::NO_DEPTH_WRITE))
-          .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+          .depth_compare_op(vk::CompareOp::GREATER_OR_EQUAL)
           .depth_bounds_test_enable(false)
           .min_depth_bounds(0.0)
           .max_depth_bounds(1.0);
@@ -938,6 +938,9 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
 /// DashMap allows lock-free optimistic insertions directly from a shared reference (&self)
 pub(super) struct PipelinePool {
   graphics_pipelines: DashMap<PipelineKey, NonZeroHandle<vk::Pipeline>>,
+  /// Stores the GraphicsInfo for each graphics pipeline, enabling
+  /// compositing render pass variants to be created lazily.
+  graphics_infos: DashMap<PipelineKey, GraphicsInfo>,
   compute_pipelines: DashMap<PipelineKey, NonZeroHandle<vk::Pipeline>>,
   /// underlying vulkan cache object to speed up driver-level compilations
   vk_pipeline_cache: NonZeroHandle<vk::PipelineCache>,
@@ -955,6 +958,7 @@ impl PipelinePool {
       unsafe { NonZeroHandle::new_unchecked(device.create_pipeline_cache(&create_info, None)?) };
     Ok(Self {
       graphics_pipelines: DashMap::with_capacity(16),
+      graphics_infos: DashMap::with_capacity(16),
       compute_pipelines: DashMap::with_capacity(16),
       vk_pipeline_cache,
     })
@@ -972,6 +976,14 @@ impl PipelinePool {
     pipeline_key: PipelineKey,
   ) -> Option<NonZeroHandle<vk::Pipeline>> {
     self.graphics_pipelines.get(&pipeline_key).map(|p| *p)
+  }
+
+  /// Returns the GraphicsInfo used to create the pipeline with the given key.
+  pub fn get_graphics_info(
+    &self,
+    pipeline_key: PipelineKey,
+  ) -> Option<GraphicsInfo> {
+    self.graphics_infos.get(&pipeline_key).map(|p| p.clone())
   }
 
   /// TODO: Document this item
@@ -1076,6 +1088,39 @@ impl PipelinePool {
     }
   }
 
+  /// Creates a pipeline variant compatible with a compositing render pass.
+  ///
+  /// Takes the original `GraphicsInfo` (created for a single-subpass render
+  /// pass) and produces a new pipeline with the compositing render pass
+  /// handle and the specified subpass index. Returns the new `PipelineKey`.
+  ///
+  /// The new pipeline is cached so subsequent calls with the same parameters
+  /// return immediately.
+  #[function_name::named]
+  pub fn get_or_create_compositing_variant(
+    &self,
+    device: &crate::gpu_backends::vulkan::device::LogicalDevice,
+    info: &GraphicsInfo,
+    compositing_render_pass: ash::vk::RenderPass,
+    subpass: u32,
+    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
+  ) -> GpuResult<(PipelineKey, NonZeroHandle<ash::vk::Pipeline>)> {
+    let mut compositing_info = info.clone();
+    compositing_info.render_pass = compositing_render_pass;
+    compositing_info.subpass = subpass;
+
+    let key = compositing_info.pipeline_key();
+
+    // Fast path: already cached
+    if let Some(pipeline) = self.graphics_pipelines.get(&key) {
+      return Ok((key, *pipeline));
+    }
+
+    // Create and cache
+    let pipeline = self.get_or_create_graphics_pipeline(device, &compositing_info, rollback)?;
+    Ok((key, pipeline))
+  }
+
   /// TODO: Document this item
   #[function_name::named]
   pub fn get_or_create_graphics_pipeline(
@@ -1135,6 +1180,8 @@ impl PipelinePool {
       }
       Entry::Vacant(entry) => {
         entry.insert(pipeline_handle);
+        // Store GraphicsInfo for compositing variant creation
+        self.graphics_infos.insert(key, info.clone());
         Ok(pipeline_handle)
       }
     }

@@ -334,6 +334,37 @@ where
     Self::from_columns(c0, c1, c2, c3)
   }
 
+  /// Creates a Vulkan-ready orthographic projection matrix with reverse-Z mapping [1, 0]
+  /// +x = right, -y = forward, +z = up
+  fn orthographic_vk_reverse_z(
+    left: Self::Scalar,
+    right: Self::Scalar,
+    bottom: Self::Scalar,
+    top: Self::Scalar,
+    near: Self::Scalar,
+    far: Self::Scalar,
+  ) -> Self
+  where
+    Self::Scalar: FloatLike,
+  {
+    let _0 = <Self::Scalar as MulAddIdentity>::zero();
+    let _1 = <Self::Scalar as MulAddIdentity>::one();
+    let _2 = <Self::Scalar as FloatLike>::from_f32(2.0);
+
+    let c0 = Self::Vector::from_components(_2 / (right - left), _0, _0, _0);
+    let c1 = Self::Vector::from_components(_0, _0, _1 / (far - near), _0);
+    let c2 = Self::Vector::from_components(_0, -_2 / (top - bottom), _0, _0);
+
+    let c3 = Self::Vector::from_components(
+      -(right + left) / (right - left),
+      (top + bottom) / (top - bottom),
+      far / (far - near),
+      _1,
+    );
+
+    Self::from_columns(c0, c1, c2, c3)
+  }
+
   /// Column major perspective projection matrix for coordinate system:
   /// +x = right, -y = forward, +z = up
   fn perspective_vk(
@@ -365,6 +396,33 @@ where
 
     // Col 3: Depth Translation
     let c3 = Self::Vector::from_components(_0, _0, far * near / (near - far), _0);
+
+    Self::from_columns(c0, c1, c2, c3)
+  }
+
+  /// Column major perspective projection matrix for coordinate system:
+  /// +x = right, -y = forward, +z = up
+  /// Reverse-Z mapping: Depth is mapped to [1, 0] instead of [0, 1]
+  fn perspective_vk_reverse_z(
+    fov: Self::Scalar,
+    aspect: Self::Scalar,
+    near: Self::Scalar,
+    far: Self::Scalar,
+  ) -> Self
+  where
+    Self::Scalar: FloatLike,
+  {
+    let _0 = Self::Scalar::from_f32(0.0);
+    let _1 = Self::Scalar::from_f32(1.0);
+    let _2 = Self::Scalar::from_f32(2.0);
+
+    let half_fov = fov / _2;
+    let f = half_fov.tan().reciprocal();
+
+    let c0 = Self::Vector::from_components(f / aspect, _0, _0, _0);
+    let c1 = Self::Vector::from_components(_0, _0, near / (far - near), -_1);
+    let c2 = Self::Vector::from_components(_0, -f, _0, _0);
+    let c3 = Self::Vector::from_components(_0, _0, far * near / (far - near), _0);
 
     Self::from_columns(c0, c1, c2, c3)
   }

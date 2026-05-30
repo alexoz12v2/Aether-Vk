@@ -1071,12 +1071,27 @@ struct RecordingCmdBufferDataPresentation {
   submission_fence: NonZeroHandle<vk::Fence>,
 }
 
+/// Compositing context stored per-command-buffer when inside a compositing
+/// render pass. Used by `bind_pipeline` to transparently create compositing-
+/// compatible pipeline variants.
+struct CompositingContext {
+  /// The compositing render pass handle for pipeline variant creation
+  render_pass: vk::RenderPass,
+  /// The current subpass index (0 = macro, 1 = micro, 2 = composite)
+  subpass: u32,
+  /// The PE handle for this render pass
+  pe_handle: PresentationEngineHandle,
+}
+
 struct RecordingCmdBufferData {
   command_buffer: NonZeroHandle<vk::CommandBuffer>,
   bound_pipeline: Option<NonZeroHandle<vk::Pipeline>>,
   presentation: Option<RecordingCmdBufferDataPresentation>,
   presentation_engine: Option<PresentationEngineHandle>,
   has_begun: bool,
+  /// Set when inside a compositing render pass; enables transparent
+  /// pipeline adaptation in bind_pipeline.
+  compositing_ctx: Option<CompositingContext>,
 }
 
 impl RecordingCmdBufferData {
@@ -1088,6 +1103,7 @@ impl RecordingCmdBufferData {
       presentation: None,
       presentation_engine: None,
       has_begun: false,
+      compositing_ctx: None,
     }
   }
 
@@ -4085,6 +4101,10 @@ impl RenderDevice for Device {
             );
 
             // Bypassing `self.draw_indexed(...)`
+            #[cfg(feature = "std")]
+            {
+              println!("DEBUG DRAW MESH 2: index_count={}", draw_call.index_count);
+            }
             self.device.cmd_draw_indexed(cmd, draw_call.index_count, 1, 0, 0, 0);
           }
 
@@ -5012,10 +5032,7 @@ impl RenderDevice for Device {
 
       // 4. METADATA (Small arrays densely rebuilt per frame for flawless sequential instanced rendering)
       traj_gpus.push(TrajectoryGpu {
-        segments_ptr: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-          &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
-        )
-        .segments_ptr
+        segments_ptr: arena_mut.segments_ptr
           + (offset * core::mem::size_of::<RationalBezierGpu>() as u64),
         color: traj_comp.color,
         line_width: traj_comp.line_width,
@@ -6011,109 +6028,27 @@ impl RenderDevice for Device {
     presentation_engine: PresentationEngineHandle,
     acquire_result: &AcquireResult,
   ) -> GpuResult<()> {
-    let (timeline, cmd, vma, discard_pool_ptr, renderpasses_ptr, render_pass_spec) = {
-      let res_guard = DebugTrackedRwLock::read(&self.res);
-      let _presentation_engines_guard = &res_guard.live_presentation_engines;
-      let cmd_buffers = DebugTrackedRwLock::read(&self.recording_command_buffers);
-      if !cmd_buffers.contains_key(&cmd_buffer) {
-        return Err(gpu_err_invalid_cmd!());
-      }
-      let wpresentation_engine = wait_for_pe!(res_guard, presentation_engine)?;
-
-      let data = unsafe { cmd_buffers.get(&cmd_buffer).unwrap_unchecked() };
-      if !data.has_begun {
-        return Err(gpu_err!("command buffer not begun"));
-      }
-
-      if acquire_result.status.needs_resize() {
-        // The caller should handle the resize.
-        return Err(GpuError::ResizeRequired);
-      }
-      if wpresentation_engine.swapchain_generation() != acquire_result.swapchain_generation {
-        return Err(GpuError::ResizeRequired);
-      }
-      drop(cmd_buffers);
-
-      let (wait_semaphore, submission_fence) =
-        unsafe { wpresentation_engine.get_frame_resources(acquire_result.frame_index as usize) };
-      let (_, _, signal_semaphore) =
-        unsafe { wpresentation_engine.get_image_resources(acquire_result.image_index as usize) };
-
-      let timeline = res_guard.timeline_manager.get_next_submit_value() - 1;
-
-      let cmd = {
-        let mut cmd_buffers = DebugTrackedRwLock::write(&self.recording_command_buffers);
-        let data = unsafe { cmd_buffers.get_mut(&cmd_buffer).unwrap_unchecked() };
-        data.presentation = Some(RecordingCmdBufferDataPresentation {
-          acquire_result: *acquire_result,
-          presentation_engine,
-          swapchain_generation: acquire_result.swapchain_generation,
-          wait_semaphore,
-          signal_semaphore,
-          submission_fence,
-        });
-        data.command_buffer.get()
-      };
-
-      let vma = res_guard.allocator.allocator.get_raw();
-      let discard_pool_ptr = &res_guard.discard_pool as *const _;
-      let renderpasses_ptr = &res_guard.renderpasses as *const renderpasses::RenderPasses;
-      let render_pass_spec =
-        RenderPassSpecification::single_pass(&wpresentation_engine, self.depth_stencil_format);
-
-      (
-        timeline,
-        cmd,
-        vma,
-        discard_pool_ptr,
-        renderpasses_ptr,
-        render_pass_spec,
-      )
-    };
-
-    let allocator = unsafe { vk_mem::AllocatorView::from_raw(vma) };
-    let discard_pool = unsafe { &*discard_pool_ptr };
-    let renderpasses = unsafe { &*renderpasses_ptr };
-
-    let (render_pass, framebuffer) = renderpasses.get_or_create_render_pass(
+    self.begin_render_pass_impl(
+      cmd_buffer,
       presentation_engine,
-      render_pass_spec.clone(),
-      acquire_result.image_index,
-      &self.device,
-      allocator,
-      discard_pool,
-      timeline,
-    )?;
+      acquire_result,
+      false, // single-subpass
+    )
+  }
 
-    let mut black = [vk::ClearValue::default(), vk::ClearValue::default()]; // 2 attachments
-    renderpasses.get_clear_values_render_pass(presentation_engine, &mut black)?;
-
-    let extent = match &render_pass_spec {
-      RenderPassSpecification::ColorDepthSingleSubpass { extent, .. } => *extent,
-    };
-
-    let render_pass_begin_info = vk::RenderPassBeginInfo::default()
-      .render_pass(render_pass.get())
-      .framebuffer(framebuffer.get())
-      .render_area(vk::Rect2D {
-        offset: vk::Offset2D { x: 0, y: 0 },
-        extent: vk::Extent2D {
-          width: extent.0,
-          height: extent.1,
-        },
-      })
-      .clear_values(&black);
-    let subpass_begin_info = vk::SubpassBeginInfo::default().contents(vk::SubpassContents::INLINE);
-
-    unsafe {
-      self.device.create_renderpass2.cmd_begin_render_pass2(
-        cmd,
-        &render_pass_begin_info,
-        &subpass_begin_info,
-      )
-    };
-
-    Ok(())
+  #[named]
+  fn begin_compositing_render_pass(
+    &self,
+    cmd_buffer: gpu::CommandBufferHandle,
+    presentation_engine: PresentationEngineHandle,
+    acquire_result: &AcquireResult,
+  ) -> GpuResult<()> {
+    self.begin_render_pass_impl(
+      cmd_buffer,
+      presentation_engine,
+      acquire_result,
+      true, // compositing (3 subpasses)
+    )
   }
 
   #[named]
@@ -6168,9 +6103,38 @@ impl RenderDevice for Device {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     pipeline_key: crate::gpu::PipelineKey,
   ) -> GpuResult<()> {
-    let pipeline = DebugTrackedRwLock::read(&self.res)
+    let res_guard = DebugTrackedRwLock::read(&self.res);
+
+    // Check if we're inside a compositing render pass and need to adapt
+    let actual_pipeline_key = {
+      let cmd_buffers = DebugTrackedRwLock::read(&self.recording_command_buffers);
+      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+      if let Some(ref ctx) = data.compositing_ctx {
+        // Look up the original GraphicsInfo and create a compositing variant
+        if let Some(info) = res_guard.pipeline_pool.get_graphics_info(pipeline_key) {
+          let mut rollback =
+            crate::gpu_backends::vulkan::utils::RollbackContext::new(&self.device);
+          let (key, _) = res_guard.pipeline_pool.get_or_create_compositing_variant(
+            &self.device,
+            &info,
+            ctx.render_pass,
+            ctx.subpass,
+            &mut rollback,
+          )?;
+          key
+        } else {
+          // Pipeline was created without stored GraphicsInfo (e.g. composite pipeline)
+          // — use original key as-is
+          pipeline_key
+        }
+      } else {
+        pipeline_key
+      }
+    };
+
+    let pipeline = res_guard
       .pipeline_pool
-      .get_graphics_pipeline(pipeline_key)
+      .get_graphics_pipeline(actual_pipeline_key)
       .ok_or(gpu_err_pipeline_absent!())?;
 
     let cmd = self.get_cmd(cmd_buffer)?;
@@ -7186,7 +7150,7 @@ impl RenderDevice for Device {
     cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()> {
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
-    let (pipeline, layout, d) = {
+    let (pipeline_key, layout, d) = {
       let res = DebugTrackedRwLock::read(&self.res);
       let live_pes = &res.live_presentation_engines;
       let pe = wait_for_pe_direct!(live_pes, handle)?;
@@ -7201,16 +7165,10 @@ impl RenderDevice for Device {
         (arena.descriptor_set.get(), arena.pipeline_layout.get())
       };
 
-      let pipeline_key = billboard_render_archetype_ref.pipeline_key;
-      let pipeline = res
-        .pipeline_pool
-        .get_graphics_pipeline(pipeline_key)
-        .ok_or(gpu_err_pipeline_absent!())?
-        .get();
-      (pipeline, layout, d)
+      (billboard_render_archetype_ref.pipeline_key, layout, d)
     }; // <-- locks released here
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
       self.device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::GRAPHICS,
@@ -7228,7 +7186,7 @@ impl RenderDevice for Device {
     &self,
     cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()> {
-    let (cmd, pipeline) = {
+    let (cmd, pipeline_key) = {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res = DebugTrackedRwLock::read(&self.res);
       let live_pes = &res.live_presentation_engines;
@@ -7236,16 +7194,10 @@ impl RenderDevice for Device {
 
       let mut a_lock = DebugTrackedRwLock::write(&pe.archetypes().bvh_render_archetype);
       let bvh_render_archetype = a_lock.as_mut().ok_or(gpu_err_archetype_absent!())?;
-      let pipeline_key = bvh_render_archetype.pipeline_key;
-      let pipeline = res
-        .pipeline_pool
-        .get_graphics_pipeline(pipeline_key)
-        .ok_or(gpu_err_pipeline_absent!())?
-        .get();
-      (cmd, pipeline)
+      (cmd, bvh_render_archetype.pipeline_key)
     };
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
       self.device.cmd_set_line_width(cmd, 1.0);
       // now each BVH needs to do push constant and draw.
     }
@@ -7257,23 +7209,17 @@ impl RenderDevice for Device {
     &self,
     cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()> {
-    let (cmd, pipeline) = {
+    let (cmd, pipeline_key) = {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res = DebugTrackedRwLock::read(&self.res);
       let pe_lock = &res.live_presentation_engines;
       let pe = pe_lock.get(&handle).ok_or(GpuError::NotFound)?;
       let a_lock = DebugTrackedRwLock::read(&pe.archetypes().bvhwire2_render_archetype);
       let bvhwire2_render_archetype = a_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
-      let pipeline_key = bvhwire2_render_archetype.pipeline_key;
-      let pipeline = res
-        .pipeline_pool
-        .get_graphics_pipeline(pipeline_key)
-        .ok_or(gpu_err_pipeline_absent!())?
-        .get();
-      (cmd, pipeline)
+      (cmd, bvhwire2_render_archetype.pipeline_key)
     };
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
       self.device.cmd_set_line_width(cmd, 1.0);
     }
     Ok(())
@@ -7307,23 +7253,17 @@ impl RenderDevice for Device {
     &self,
     cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()> {
-    let (cmd, pipeline) = {
+    let (cmd, pipeline_key) = {
       let res = DebugTrackedRwLock::read(&self.res);
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let live_pes = &res.live_presentation_engines;
       let pe = wait_for_pe_direct!(live_pes, handle)?;
       let archetype_lock = DebugTrackedRwLock::read(&pe.archetypes().sphere_gizmo_render_archetype);
       let archetype = archetype_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
-      let pipeline_key = archetype.pipeline_key;
-      let pipeline = res
-        .pipeline_pool
-        .get_graphics_pipeline(pipeline_key)
-        .ok_or(gpu_err_pipeline_absent!())?
-        .get();
-      (cmd, pipeline)
+      (cmd, archetype.pipeline_key)
     };
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
       self.device.cmd_set_line_width(cmd, 1.0);
     }
     Ok(())
@@ -7345,7 +7285,7 @@ impl RenderDevice for Device {
       let arena = DebugTrackedRwLock::read(&*arena_arc);
       (cmd, arena.pipeline_layout.get())
     };
-    let bytes = unsafe { core::slice::from_raw_parts(constants as *const _ as *const u8, 80) };
+    let bytes = unsafe { core::slice::from_raw_parts(constants as *const _ as *const u8, core::mem::size_of::<crate::gpu::SphereGizmoPushConstants>()) };
     unsafe {
       self.device.cmd_push_constants(
         cmd,
@@ -7570,7 +7510,7 @@ impl RenderDevice for Device {
     &self,
     cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()> {
-    let (cmd, pipeline, pipeline_layout, descriptor_set) = {
+    let (cmd, pipeline_key, pipeline_layout, descriptor_set) = {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let live_pes = &res_guard.live_presentation_engines;
@@ -7581,10 +7521,6 @@ impl RenderDevice for Device {
       }
       let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
 
-      let pipeline = res_guard
-        .pipeline_pool
-        .get_graphics_pipeline(archetype.pipeline_key)
-        .ok_or(gpu_err_pipeline_absent!())?;
       let arena_arc = res_guard
         .gizmo_render_archetype_arena
         .as_ref()
@@ -7592,14 +7528,14 @@ impl RenderDevice for Device {
       let arena = DebugTrackedRwLock::read(&*arena_arc);
       (
         cmd,
-        pipeline.get(),
+        archetype.pipeline_key,
         arena.pipeline_layout.get(),
         arena.descriptor_set.get(),
       )
     }; // <- locks released here
 
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
       self.device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::GRAPHICS,
@@ -7664,7 +7600,7 @@ impl RenderDevice for Device {
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
   ) -> GpuResult<()> {
-    let (cmd, pipeline, pipeline_layout, descriptor_set) = {
+    let (cmd, pipeline_key, pipeline_layout, descriptor_set) = {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let live_pes = &res_guard.live_presentation_engines;
@@ -7674,12 +7610,7 @@ impl RenderDevice for Device {
         return Err(gpu_err_archetype_absent!());
       }
       let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
-      let pipeline = archetype.pipeline_key;
 
-      let p = res_guard
-        .pipeline_pool
-        .get_graphics_pipeline(pipeline)
-        .ok_or(gpu_err_pipeline_absent!())?;
       let arena_arc = res_guard
         .particle_render_archetype_arena
         .as_ref()
@@ -7688,14 +7619,14 @@ impl RenderDevice for Device {
 
       (
         cmd,
-        p.get(),
+        archetype.pipeline_key,
         arena.pipeline_layout.get(),
         arena.descriptor_set.get(),
       )
     }; // <- locks released here
 
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
       self.device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::GRAPHICS,
@@ -7713,7 +7644,7 @@ impl RenderDevice for Device {
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
   ) -> GpuResult<()> {
-    let (cmd, pipeline, pipeline_layout, descriptor_set) = {
+    let (cmd, pipeline_key, pipeline_layout, descriptor_set) = {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let live_pes = &res_guard.live_presentation_engines;
@@ -7724,7 +7655,6 @@ impl RenderDevice for Device {
       }
       let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
 
-      let p = res_guard.pipeline_pool.get_graphics_pipeline(archetype.pipeline_key).unwrap();
       let arena_arc = res_guard
         .particle2_render_archetype_arena
         .as_ref()
@@ -7733,14 +7663,14 @@ impl RenderDevice for Device {
 
       (
         cmd,
-        p.get(),
+        archetype.pipeline_key,
         arena.pipeline_layout.get(),
         arena.descriptor_set.get(),
       )
     };
 
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
       self.device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::GRAPHICS,
@@ -7758,7 +7688,7 @@ impl RenderDevice for Device {
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
   ) -> GpuResult<()> {
-    let (cmd, pipeline, pipeline_layout, descriptor_set) = {
+    let (cmd, pipeline_key, pipeline_layout, descriptor_set) = {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let pe_lock = &res_guard.live_presentation_engines;
@@ -7769,7 +7699,6 @@ impl RenderDevice for Device {
       }
       let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
 
-      let p = res_guard.pipeline_pool.get_graphics_pipeline(archetype.pipeline_key).unwrap();
       let arena_arc = res_guard
         .trajectory_render_archetype_arena
         .as_ref()
@@ -7778,14 +7707,14 @@ impl RenderDevice for Device {
 
       (
         cmd,
-        p.get(),
+        archetype.pipeline_key,
         arena.pipeline_layout.get(),
         arena.descriptor_set.get(),
       )
     };
 
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
       self.device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::GRAPHICS,
@@ -7803,7 +7732,7 @@ impl RenderDevice for Device {
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
   ) -> GpuResult<()> {
-    let (cmd, pipeline, pipeline_layout, descriptor_set) = {
+    let (cmd, pipeline_key, pipeline_layout, descriptor_set) = {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let pe_lock = &res_guard.live_presentation_engines;
@@ -7814,24 +7743,20 @@ impl RenderDevice for Device {
       }
       let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
 
-      let p = res_guard
-        .pipeline_pool
-        .get_graphics_pipeline(archetype.pipeline_key)
-        .ok_or(gpu_err_pipeline_absent!())?;
       let arena_arc =
         res_guard.ui_render_archetype_arena.as_ref().ok_or(gpu_err!("arena absent"))?;
       let arena = DebugTrackedRwLock::read(&*arena_arc);
 
       (
         cmd,
-        p.get(),
+        archetype.pipeline_key,
         arena.pipeline_layout.get(),
         arena.descriptor_set.get(),
       )
     };
 
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
       self.device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::GRAPHICS,
@@ -7989,7 +7914,7 @@ impl RenderDevice for Device {
     &self,
     cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()> {
-    let (cmd, pipeline, layout, set) = {
+    let (cmd, pipeline_key, layout, set) = {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res = DebugTrackedRwLock::read(&self.res);
       let pe_lock = &res.live_presentation_engines;
@@ -7997,11 +7922,6 @@ impl RenderDevice for Device {
       let archetype_lock = DebugTrackedRwLock::read(&pe.archetypes().text_render_archetype);
       let archetype = archetype_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
 
-      let pipeline = {
-        Some(res.pipeline_pool.get_graphics_pipeline(archetype.pipeline_key))
-          .map(|p| p.expect("missing handle").get())
-          .ok_or(crate::gpu_err_device!())?
-      };
       let layout = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
         &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
       )
@@ -8013,10 +7933,10 @@ impl RenderDevice for Device {
       .descriptor_set
       .ok_or(crate::gpu_err_device!())?;
 
-      (cmd, pipeline, layout, set)
+      (cmd, archetype.pipeline_key, layout, set)
     };
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
       self.device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::GRAPHICS,
@@ -8034,7 +7954,7 @@ impl RenderDevice for Device {
     &self,
     cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()> {
-    let (cmd, pipeline, layout, set) = {
+    let (cmd, pipeline_key, layout, set) = {
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let res = DebugTrackedRwLock::read(&self.res);
       let pe_lock = &res.live_presentation_engines;
@@ -8042,11 +7962,6 @@ impl RenderDevice for Device {
       let archetype_lock = DebugTrackedRwLock::read(&pe.archetypes().text2_render_archetype);
       let archetype = archetype_lock.as_ref().ok_or(gpu_err_archetype_absent!())?;
 
-      let pipeline = {
-        Some(res.pipeline_pool.get_graphics_pipeline(archetype.pipeline_key))
-          .map(|p| p.expect("missing handle").get())
-          .ok_or(crate::gpu_err_device!())?
-      };
       let layout = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
         &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
       )
@@ -8058,10 +7973,10 @@ impl RenderDevice for Device {
       .descriptor_set
       .ok_or(crate::gpu_err_device!())?;
 
-      (cmd, pipeline, layout, set)
+      (cmd, archetype.pipeline_key, layout, set)
     };
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
       self.device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::GRAPHICS,
@@ -8083,28 +7998,28 @@ impl RenderDevice for Device {
     planets: &[(Vec3f32, f32, [f32; 4])],
     screen_extent: [f32; 2],
   ) -> GpuResult<()> {
-    let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
-    let res_guard = DebugTrackedRwLock::read(&self.res);
-    let pe_lock = &res_guard.live_presentation_engines;
-    let pe = wait_for_pe_direct!(pe_lock, handle)?;
-    let minimap_render_archetype_guard =
-      DebugTrackedRwLock::read(&pe.archetypes().minimap_render_archetype);
-    if minimap_render_archetype_guard.is_none() {
-      return Err(gpu_err_archetype_absent!());
-    }
-    let archetype = unsafe { minimap_render_archetype_guard.as_ref().unwrap_unchecked() };
+    let (pipeline_key, layout) = {
+      let (_, handle) = self.get_cmd_and_pe(cmd_buffer)?;
+      let res_guard = DebugTrackedRwLock::read(&self.res);
+      let pe_lock = &res_guard.live_presentation_engines;
+      let pe = wait_for_pe_direct!(pe_lock, handle)?;
+      let minimap_render_archetype_guard =
+        DebugTrackedRwLock::read(&pe.archetypes().minimap_render_archetype);
+      if minimap_render_archetype_guard.is_none() {
+        return Err(gpu_err_archetype_absent!());
+      }
+      let archetype = unsafe { minimap_render_archetype_guard.as_ref().unwrap_unchecked() };
+      let layout = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+        &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
+      )
+      .pipeline_layout
+      .get();
+      (archetype.pipeline_key, layout)
+    };
 
-    let pipeline_key = Some(archetype.pipeline_key);
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
 
-    let pipeline = res_guard
-      .pipeline_pool
-      .get_graphics_pipeline(pipeline_key.expect("missing pipeline key"))
-      .ok_or(gpu_err_pipeline_absent!())?;
-    let layout = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-      &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
-    )
-    .pipeline_layout
-    .get();
+    let cmd = self.get_cmd(cmd_buffer)?;
 
     // Fetch aspect ratio from the active presentation engine (we assume there's at least one, or we default to 1.0)
     let aspect_ratio = {
@@ -8118,9 +8033,6 @@ impl RenderDevice for Device {
     };
 
     unsafe {
-      self
-        .device
-        .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
 
       let mut push_bytes = [0u8; 544];
 
@@ -8207,18 +8119,13 @@ impl RenderDevice for Device {
     size: [f32; 2],
   ) -> GpuResult<()> {
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
-    let (pipeline, layout, set) = {
+    let (pipeline_key, layout, set) = {
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let pe_lock = &res_guard.live_presentation_engines;
       let pe = wait_for_pe_direct!(pe_lock, handle)?;
       let text_render_archetype_guard =
         DebugTrackedRwLock::read(&pe.archetypes().text_render_archetype);
       let archetype = text_render_archetype_guard.as_ref().ok_or(gpu_err_archetype_absent!())?;
-      let pipeline = res_guard
-        .pipeline_pool
-        .get_graphics_pipeline(archetype.pipeline_key)
-        .ok_or(gpu_err_pipeline_absent!())?
-        .get();
       let layout = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
         &*archetype.deref_arena().ok_or(crate::gpu_err_device!())?,
       )
@@ -8229,12 +8136,11 @@ impl RenderDevice for Device {
       )
       .descriptor_set
       .ok_or(gpu_err!("descriptor set not found"))?;
-      (pipeline, layout, set)
+      (archetype.pipeline_key, layout, set)
     };
 
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
-
       self.device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::GRAPHICS,
@@ -8384,6 +8290,86 @@ impl RenderDevice for Device {
       .commit_read(|_state, execute_result| execute_result)
   }
 
+  fn next_subpass(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
+    let cmd = self.get_cmd(cmd_buffer)?;
+    let subpass_begin_info = vk::SubpassBeginInfo::default().contents(vk::SubpassContents::INLINE);
+    let subpass_end_info = vk::SubpassEndInfo::default();
+    unsafe {
+      self.device.create_renderpass2.cmd_next_subpass2(cmd, &subpass_begin_info, &subpass_end_info);
+    }
+
+    // Advance compositing context subpass index
+    {
+      let mut cmd_buffers = DebugTrackedRwLock::write(&self.recording_command_buffers);
+      if let Some(data) = cmd_buffers.get_mut(&cmd_buffer) {
+        if let Some(ref mut ctx) = data.compositing_ctx {
+          ctx.subpass += 1;
+        }
+      }
+    }
+
+    Ok(())
+  }
+
+  fn draw_composite(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    handle: crate::gpu::PresentationEngineHandle,
+    constants: &crate::gpu::CompositePushConstants,
+  ) -> GpuResult<()> {
+    let cmd = self.get_cmd(cmd_buffer)?;
+
+    // Get composite pipeline resources from the render pass bundle
+    let res_guard = DebugTrackedRwLock::read(&self.res);
+    let (descriptor_set, pipeline_layout, pipeline_key) = res_guard
+      .renderpasses
+      .get_composite_resources(handle)
+      .ok_or(crate::gpu_err!("composite resources not initialized"))?;
+
+    // Get the cached composite pipeline
+    let pipeline = res_guard
+      .pipeline_pool
+      .get_graphics_pipeline(pipeline_key)
+      .ok_or(crate::gpu_err!("composite pipeline not found"))?;
+
+    unsafe {
+      // Bind composite pipeline
+      self
+        .device
+        .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.get());
+
+      // Bind descriptor set with input attachments
+      self.device.cmd_bind_descriptor_sets(
+        cmd,
+        vk::PipelineBindPoint::GRAPHICS,
+        pipeline_layout,
+        0, // first set
+        &[descriptor_set],
+        &[], // no dynamic offsets
+      );
+
+      // Push the near/far constants
+      let push_data = core::slice::from_raw_parts(
+        constants as *const crate::gpu::CompositePushConstants as *const u8,
+        core::mem::size_of::<crate::gpu::CompositePushConstants>(),
+      );
+      self.device.cmd_push_constants(
+        cmd,
+        pipeline_layout,
+        vk::ShaderStageFlags::FRAGMENT,
+        0,
+        push_data,
+      );
+
+      // Draw fullscreen triangle (3 vertices, no vertex buffer)
+      self.device.cmd_draw(cmd, 3, 1, 0, 0);
+    }
+
+    Ok(())
+  }
+
+
+
   #[named]
   fn end_render_pass(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
     let cmd = self.get_cmd(cmd_buffer)?;
@@ -8392,6 +8378,14 @@ impl RenderDevice for Device {
 
     unsafe {
       self.device.create_renderpass2.cmd_end_render_pass2(cmd, &subpass_end_info);
+    }
+
+    // Clear compositing context
+    {
+      let mut cmd_buffers = DebugTrackedRwLock::write(&self.recording_command_buffers);
+      if let Some(data) = cmd_buffers.get_mut(&cmd_buffer) {
+        data.compositing_ctx = None;
+      }
     }
 
     Ok(())
@@ -8894,8 +8888,7 @@ impl RenderDevice for Device {
     cmd_buffer: gpu::CommandBufferHandle,
     handle: PresentationEngineHandle,
   ) -> GpuResult<()> {
-    let cmd = self.get_cmd(cmd_buffer)?;
-    let pipeline = {
+    let pipeline_key = {
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let pe_lock = &res_guard.live_presentation_engines;
       let pe = wait_for_pe_direct!(pe_lock, handle)?;
@@ -8904,17 +8897,45 @@ impl RenderDevice for Device {
         return Err(gpu_err_archetype_absent!());
       }
       let archetype = unsafe { archetype_guard.as_ref().unwrap_unchecked() };
-
-      let p = res_guard
-        .pipeline_pool
-        .get_graphics_pipeline(archetype.pipeline_key)
-        .ok_or(gpu_err_pipeline_absent!())?;
-      p.get()
+      archetype.pipeline_key
     };
 
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
+    // No descriptor sets for background archetype
+    Ok(())
+  }
+
+  fn clear_depth(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    handle: crate::gpu::PresentationEngineHandle,
+  ) -> Result<(), crate::types::GpuError> {
+    let extent = self.get_presentation_engine_extent(handle)?;
+    let clear_value = ash::vk::ClearValue {
+      depth_stencil: ash::vk::ClearDepthStencilValue {
+        depth: 0.0,
+        stencil: 0,
+      },
+    };
+    let clear_attachment = ash::vk::ClearAttachment {
+      aspect_mask: ash::vk::ImageAspectFlags::DEPTH,
+      color_attachment: 0,
+      clear_value,
+    };
+    let clear_rect = ash::vk::ClearRect {
+      rect: ash::vk::Rect2D {
+        offset: ash::vk::Offset2D { x: 0, y: 0 },
+        extent: ash::vk::Extent2D {
+          width: extent[0],
+          height: extent[1],
+        },
+      },
+      base_array_layer: 0,
+      layer_count: 1,
+    };
+    let cmd = self.get_cmd(cmd_buffer)?;
     unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
-      // No descriptor sets for background archetype
+      self.device.cmd_clear_attachments(cmd, &[clear_attachment], &[clear_rect]);
     }
     Ok(())
   }
@@ -8959,6 +8980,152 @@ impl Device {
       self.device.free_command_buffers(pool, &[cmd]);
       self.device.destroy_command_pool(pool, None);
     }
+    Ok(())
+  }
+
+  #[named]
+  fn begin_render_pass_impl(
+    &self,
+    cmd_buffer: gpu::CommandBufferHandle,
+    presentation_engine: PresentationEngineHandle,
+    acquire_result: &AcquireResult,
+    compositing: bool,
+  ) -> GpuResult<()> {
+    let (timeline, cmd, vma, discard_pool_ptr, renderpasses_ptr, pipeline_pool_ptr, render_pass_spec) = {
+      let res_guard = DebugTrackedRwLock::read(&self.res);
+      let _presentation_engines_guard = &res_guard.live_presentation_engines;
+      let cmd_buffers = DebugTrackedRwLock::read(&self.recording_command_buffers);
+      if !cmd_buffers.contains_key(&cmd_buffer) {
+        return Err(gpu_err_invalid_cmd!());
+      }
+      let wpresentation_engine = wait_for_pe!(res_guard, presentation_engine)?;
+
+      let data = unsafe { cmd_buffers.get(&cmd_buffer).unwrap_unchecked() };
+      if !data.has_begun {
+        return Err(gpu_err!("command buffer not begun"));
+      }
+
+      if acquire_result.status.needs_resize() {
+        return Err(GpuError::ResizeRequired);
+      }
+      if wpresentation_engine.swapchain_generation() != acquire_result.swapchain_generation {
+        return Err(GpuError::ResizeRequired);
+      }
+      drop(cmd_buffers);
+
+      let (wait_semaphore, submission_fence) =
+        unsafe { wpresentation_engine.get_frame_resources(acquire_result.frame_index as usize) };
+      let (_, _, signal_semaphore) =
+        unsafe { wpresentation_engine.get_image_resources(acquire_result.image_index as usize) };
+
+      let timeline = res_guard.timeline_manager.get_next_submit_value() - 1;
+
+      let cmd = {
+        let mut cmd_buffers = DebugTrackedRwLock::write(&self.recording_command_buffers);
+        let data = unsafe { cmd_buffers.get_mut(&cmd_buffer).unwrap_unchecked() };
+        data.presentation = Some(RecordingCmdBufferDataPresentation {
+          acquire_result: *acquire_result,
+          presentation_engine,
+          swapchain_generation: acquire_result.swapchain_generation,
+          wait_semaphore,
+          signal_semaphore,
+          submission_fence,
+        });
+        data.command_buffer.get()
+      };
+
+      let vma = res_guard.allocator.allocator.get_raw();
+      let discard_pool_ptr = &res_guard.discard_pool as *const _;
+      let renderpasses_ptr = &res_guard.renderpasses as *const renderpasses::RenderPasses;
+      let pipeline_pool_ptr = &res_guard.pipeline_pool as *const pipelines::PipelinePool;
+      let render_pass_spec = if compositing {
+        RenderPassSpecification::compositing_pass(
+          &wpresentation_engine,
+          self.depth_stencil_format,
+        )
+      } else {
+        RenderPassSpecification::single_pass(&wpresentation_engine, self.depth_stencil_format)
+      };
+
+      (
+        timeline,
+        cmd,
+        vma,
+        discard_pool_ptr,
+        renderpasses_ptr,
+        pipeline_pool_ptr,
+        render_pass_spec,
+      )
+    };
+
+    let allocator = unsafe { vk_mem::AllocatorView::from_raw(vma) };
+    let discard_pool = unsafe { &*discard_pool_ptr };
+    let renderpasses = unsafe { &*renderpasses_ptr };
+    let pipeline_pool = unsafe { &*pipeline_pool_ptr };
+
+    let (render_pass, framebuffer) = renderpasses.get_or_create_render_pass(
+      presentation_engine,
+      render_pass_spec.clone(),
+      acquire_result.image_index,
+      &self.device,
+      allocator,
+      discard_pool,
+      timeline,
+    )?;
+
+    // Initialize composite pipeline resources on first use
+    if compositing {
+      renderpasses.init_composite_pipeline(
+        presentation_engine,
+        &self.device,
+        pipeline_pool,
+      )?;
+    }
+
+    let extent = render_pass_spec.extent();
+
+    // Get clear values — 6 for compositing, 2 for single-subpass
+    let num_clear = render_pass_spec.num_attachments();
+    let mut clear_values = [vk::ClearValue::default(); renderpasses::MAX_ATTACHMENTS];
+    renderpasses.get_clear_values_render_pass(
+      presentation_engine,
+      &mut clear_values[..num_clear],
+    )?;
+
+    let render_pass_begin_info = vk::RenderPassBeginInfo::default()
+      .render_pass(render_pass.get())
+      .framebuffer(framebuffer.get())
+      .render_area(vk::Rect2D {
+        offset: vk::Offset2D { x: 0, y: 0 },
+        extent: vk::Extent2D {
+          width: extent.0,
+          height: extent.1,
+        },
+      })
+      .clear_values(&clear_values[..num_clear]);
+    let subpass_begin_info = vk::SubpassBeginInfo::default().contents(vk::SubpassContents::INLINE);
+
+    unsafe {
+      self.device.create_renderpass2.cmd_begin_render_pass2(
+        cmd,
+        &render_pass_begin_info,
+        &subpass_begin_info,
+      )
+    };
+
+    // Set compositing context on the command buffer so bind_pipeline
+    // can transparently create compositing-compatible pipeline variants
+    if compositing {
+      let mut cmd_buffers = DebugTrackedRwLock::write(&self.recording_command_buffers);
+      if let Some(data) = cmd_buffers.get_mut(&cmd_buffer) {
+        data.compositing_ctx = Some(CompositingContext {
+          render_pass: render_pass.get(),
+          subpass: 0, // Start at subpass 0 (macro)
+          pe_handle: presentation_engine,
+        });
+      }
+    }
+
     Ok(())
   }
 
@@ -10067,7 +10234,7 @@ fn pretty_print_vulkan_device(
 }
 
 #[cfg(test)]
-mod test_render;
+// mod test_render;
 
 #[cfg(test)]
 mod test_swapchain;

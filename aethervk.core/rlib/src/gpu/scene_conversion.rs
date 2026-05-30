@@ -7,8 +7,8 @@ use crate::{
   scene::{
     BackgroundComponent, BillboardType, BvhDebugComponent, CameraComponent, CursorComponent,
     EntityId, FollowingComponent, GridComponent, HiddenComponent, ImageBillboardComponent,
-    MarkersComponent, MeasurementComponent, PhysicalMeshComponent, SelectedComponent, SkyComponent,
-    SunComponent, TransformComponent,
+    MarkersComponent, MeasurementComponent, PhysicalMeshComponent, ReferenceFrameComponent,
+    SelectedComponent, SkyComponent, SunComponent, TransformComponent,
   },
   types::GpuResult,
 };
@@ -64,45 +64,50 @@ impl PhysicalMeshSceneData {
   }
 }
 
-/// Data extracted from ECS Scene struct. Middleman between [`crate::scene::Scene`]
-/// and [`crate::gpu::frame::RenderScene`]
-pub struct RenderSceneExtraction {
-  pub extracted_meshes: Vec<PhysicalMeshSceneData>,
-  pub extracted_markers: Vec<(TransformComponent, MarkersComponent)>,
-  pub extracted_billboards: Vec<(Mat4x4f32, u64, BillboardType)>,
-  pub extracted_measurements: Vec<(Vec3f32, Vec3f32, f32, u32)>,
-  pub extracted_bvhs: Vec<(
+pub struct DepthLayerData {
+  pub layer_index: u32,
+  pub near: f32,
+  pub far: f32,
+  pub meshes: Vec<PhysicalMeshSceneData>,
+  pub billboards: Vec<(Mat4x4f32, u64, BillboardType)>,
+  pub markers: Vec<(EntityId, TransformComponent, MarkersComponent)>,
+  pub measurements: Vec<(EntityId, Vec3f32, Vec3f32, f32, u32)>,
+  pub bvhs: Vec<(
     BvhDebugComponent,
     Vec<LinearBound<f32>>,
     Mat4x4f32,
     EntityId,
   )>,
-  pub extracted_particles: Vec<(
+  pub particles: Vec<(
     EntityId,
     alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
     crate::scene::particles::ParticleEmitterComponent,
   )>,
-  pub extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)>,
-  pub extracted_sphere_gizmos: Vec<(EntityId, Mat4x4f32, f32, f32)>, // entity, model, radius, subdivisions
-  pub extracted_trajectories: Vec<(
+  pub gizmos: Vec<(EntityId, Mat4x4f32, f32)>,
+  pub sphere_gizmos: Vec<(EntityId, Mat4x4f32, f32, f32)>,
+  pub trajectories: Vec<(
     EntityId,
     crate::scene::trajectory::TrajectoryComponent,
     Mat4x4f32,
   )>,
+}
+
+/// Data extracted from ECS Scene struct. Middleman between [`crate::scene::Scene`]
+/// and [`crate::gpu::frame::RenderScene`]
+pub struct RenderSceneExtraction {
+  pub depth_layers: Vec<DepthLayerData>,
   pub extracted_ui: Vec<crate::gpu::UiElementGpu>,
   pub extracted_texts: Vec<(
     crate::scene::ui::Transform2DComponent,
     crate::scene::ui::ScreenSpaceTextComponent,
   )>,
-  pub extracted_background: Option<([f32; 4], [f32; 4])>,
-
-  pub extracted_sky: Option<()>,
-  pub extracted_sun: Option<((Mat4x4f32, f32), EntityId)>,
-  pub extracted_grid: Option<(f32, f32, [f32; 3])>,
-  // ... more components here
-  pub camera_data: CameraRenderData,
+  pub extracted_background: Option<([f32; 4], [f32; 4], u32, f32)>,
+  pub extracted_sky: Option<(u32, f32)>,
+  pub extracted_sun: Option<((Mat4x4f32, f32), u32, f32)>,
+  pub extracted_grid: Option<(f32, f32, [f32; 3], u32, f32)>,
+  pub camera_data: gpu::frame::CameraRenderData,
   pub window_extent: [u32; 2],
-  pub cursor_transform: Option<TransformComponent>,
+  pub cursor_transform: Option<(TransformComponent, u32, f32)>,
 }
 
 impl RenderSceneExtraction {
@@ -120,287 +125,361 @@ impl RenderSceneExtraction {
     let mut render_scene = gpu::RenderScene {
       time_readings,
       window_extent,
-      draw_calls: Vec::with_capacity(self.extracted_meshes.len()),
-      cursor_call: None,
-      marker_calls: Vec::with_capacity(self.extracted_markers.len()),
-      measurement_calls: Vec::with_capacity(self.extracted_measurements.len()),
-      billboard_calls: Vec::with_capacity(self.extracted_billboards.len()),
-      bvh_draw_calls: Vec::with_capacity(self.extracted_bvhs.len()),
-      bvhwire2_data: Vec::with_capacity(self.extracted_bvhs.len()),
-      gizmo_calls: Vec::with_capacity(self.extracted_gizmos.len()),
-      particle_calls: Vec::with_capacity(self.extracted_particles.len()),
+      depth_layers: Vec::with_capacity(self.depth_layers.len()),
       text_calls: Vec::with_capacity(self.extracted_texts.len()),
       camera_data: self.camera_data,
-      sun_call: None,
-      sky_call: None,
-      grid_call: None,
-      particle2_calls: Vec::with_capacity(self.extracted_particles.len()),
-      trajectory_call: None,
-      bvhwire2_batch_call: None,
       ui_call: None,
       text2_call: None,
-      background_call: None,
-      sphere_gizmo_batch_call: None,
     };
 
-    // Populate Meshes
-    for mesh_data in &self.extracted_meshes {
-      let asset_hash = mesh_data.mesh.mesh.id;
-      let res = if mesh_data.use_new_path {
-        match device.get_physical_mesh2_resources(asset_hash, presentation_engine_handle) {
-          Ok(r) => r,
-          Err(_) => {
-            if debug_name.contains("MeshViewer") {
-              aethervk_oshal_rlib::log!(
-                "[MeshViewer Debug] Creating physical mesh2 resources for entity {:?}",
-                mesh_data.entity_id
-              );
-            }
-            device.create_physical_mesh2_resources(
-              cmd_buffer,
-              asset_hash,
-              &mesh_data.mesh,
-              presentation_engine_handle,
-              &mesh_data.mesh.asset_path,
-            )?
-          }
-        }
-      } else {
-        match device.get_physical_mesh_resources(asset_hash, presentation_engine_handle) {
-          Ok(r) => r,
-          Err(_) => {
-            if debug_name.contains("MeshViewer") {
-              aethervk_oshal_rlib::log!(
-                "[MeshViewer Debug] Creating physical mesh resources for entity {:?}",
-                mesh_data.entity_id
-              );
-            }
-            device.create_physical_mesh_resources(
-              cmd_buffer,
-              asset_hash,
-              &mesh_data.mesh,
-              presentation_engine_handle,
-              &mesh_data.mesh.asset_path,
-            )?
-          }
-        }
-      };
-      let dc = gpu::frame::DrawCall::from_handles_and_matrix(
-        res,
-        mesh_data.mesh.mesh.indices.len() as u32,
-        mesh_data.outline,
-        mesh_data.global_transform.to_mat4(),
-        mesh_data.mesh.emissive_intensity,
-        mesh_data.mesh.emissive_color,
-        mesh_data.use_new_path,
-        mesh_data.mesh.paint_display_mode,
-        mesh_data.mesh.sphere_center,
-        mesh_data.mesh.sphere_radius,
-        mesh_data.mesh.grid_color,
-        mesh_data.mesh.grid_density,
-      );
-      render_scene.draw_calls.push(dc);
-    }
+    for ext_layer in self.depth_layers {
+      let mut draw_calls = Vec::with_capacity(ext_layer.meshes.len());
+      let mut billboard_calls = Vec::with_capacity(ext_layer.billboards.len());
+      let mut marker_calls = Vec::with_capacity(ext_layer.markers.len());
+      let mut measurement_calls = Vec::with_capacity(ext_layer.measurements.len());
+      let mut bvh_draw_calls = Vec::with_capacity(ext_layer.bvhs.len());
+      let mut bvhwire2_data = Vec::with_capacity(ext_layer.bvhs.len());
+      let mut gizmo_calls = Vec::with_capacity(ext_layer.gizmos.len());
+      let mut particle_calls = Vec::with_capacity(ext_layer.particles.len());
+      let mut particle2_calls = Vec::with_capacity(ext_layer.particles.len());
 
-    // Populate Cursor
-    if let Some(t) = self.cursor_transform {
-      let res = match device.get_cursor_resources(presentation_engine_handle) {
-        Ok(r) => r,
-        Err(_) => device.create_cursor_resources(cmd_buffer, presentation_engine_handle)?,
-      };
-      render_scene.cursor_call = Some(gpu::frame::CursorDrawCall::from_result_and_matrix(
-        res,
-        4,
-        t.to_mat4(),
-        t.scale.x(),
-      ));
-    }
+      // Populate Meshes
+      for mesh_data in ext_layer.meshes {
+        let asset_hash = mesh_data.mesh.mesh.id;
+        let res = if mesh_data.use_new_path {
+          match device.get_physical_mesh2_resources(asset_hash, presentation_engine_handle) {
+            Ok(r) => r,
+            Err(_) => {
+              if debug_name.contains("MeshViewer") {
+                aethervk_oshal_rlib::log!(
+                  "[MeshViewer Debug] Creating physical mesh2 resources for entity {:?}",
+                  mesh_data.entity_id
+                );
+              }
+              device.create_physical_mesh2_resources(
+                cmd_buffer,
+                asset_hash,
+                &mesh_data.mesh,
+                presentation_engine_handle,
+                &mesh_data.mesh.asset_path,
+              )?
+            }
+          }
+        } else {
+          match device.get_physical_mesh_resources(asset_hash, presentation_engine_handle) {
+            Ok(r) => r,
+            Err(_) => {
+              if debug_name.contains("MeshViewer") {
+                aethervk_oshal_rlib::log!(
+                  "[MeshViewer Debug] Creating physical mesh resources for entity {:?}",
+                  mesh_data.entity_id
+                );
+              }
+              device.create_physical_mesh_resources(
+                cmd_buffer,
+                asset_hash,
+                &mesh_data.mesh,
+                presentation_engine_handle,
+                &mesh_data.mesh.asset_path,
+              )?
+            }
+          }
+        };
+        let dc = gpu::frame::DrawCall::from_handles_and_matrix(
+          res,
+          mesh_data.mesh.mesh.indices.len() as u32,
+          mesh_data.outline,
+          mesh_data.global_transform.to_mat4(),
+          mesh_data.mesh.emissive_intensity,
+          mesh_data.mesh.emissive_color,
+          mesh_data.use_new_path,
+          mesh_data.mesh.paint_display_mode,
+          mesh_data.mesh.sphere_center,
+          mesh_data.mesh.sphere_radius,
+          mesh_data.mesh.grid_color,
+          mesh_data.mesh.grid_density,
+        );
+        draw_calls.push(dc);
+      }
 
-    // Populate Markers
-    if !self.extracted_markers.is_empty() {
-      let res = match device.get_marker_resources(presentation_engine_handle) {
-        Ok(r) => r,
-        Err(_) => device.create_marker_resources(cmd_buffer, presentation_engine_handle)?,
-      };
-      for (t, markers_comp) in self.extracted_markers {
-        let model_matrix = t.to_mat4();
-        for marker in markers_comp.markers {
-          render_scene.marker_calls.push(gpu::frame::MarkerDrawCall::from_values(
-            res.pipeline,
-            model_matrix,
-            marker.local_pos,
-            marker.size,
-            marker.color,
+      // Populate Billboards
+      if !ext_layer.billboards.is_empty() {
+        let pipeline = match device.get_billboard_resources(presentation_engine_handle) {
+          Ok(r) => r.pipeline,
+          Err(_) => {
+            device
+              .create_billboard_resources(cmd_buffer, presentation_engine_handle)?
+              .pipeline
+          }
+        };
+        for (mat, texture_id, billboard_type) in ext_layer.billboards {
+          billboard_calls.push(gpu::frame::BillboardDrawCall::from_data(
+            pipeline,
+            mat,
+            texture_id,
+            billboard_type,
           ));
         }
       }
-    }
 
-    // Measurements
-    if !self.extracted_measurements.is_empty() {
-      let pipeline = match device.get_measurement_resources(presentation_engine_handle) {
-        Ok(r) => r.pipeline,
-        Err(_) => {
-          device
-            .create_measurement_resources(cmd_buffer, presentation_engine_handle)?
-            .pipeline
+      // Populate Markers
+      if !ext_layer.markers.is_empty() {
+        let res = match device.get_marker_resources(presentation_engine_handle) {
+          Ok(r) => r,
+          Err(_) => device.create_marker_resources(cmd_buffer, presentation_engine_handle)?,
+        };
+        for (_id, t, markers_comp) in ext_layer.markers {
+          let model_matrix = t.to_mat4();
+          for marker in markers_comp.markers {
+            marker_calls.push(gpu::frame::MarkerDrawCall::from_values(
+              res.pipeline,
+              model_matrix,
+              marker.local_pos,
+              marker.size,
+              marker.color,
+            ));
+          }
         }
-      };
-      for (p1, p2, points, significant_digits) in self.extracted_measurements {
-        render_scene.measurement_calls.push(
-          gpu::frame::MeasurementDrawCall::from_data_and_pipeline(
+      }
+
+      // Measurements
+      if !ext_layer.measurements.is_empty() {
+        let pipeline = match device.get_measurement_resources(presentation_engine_handle) {
+          Ok(r) => r.pipeline,
+          Err(_) => {
+            device
+              .create_measurement_resources(cmd_buffer, presentation_engine_handle)?
+              .pipeline
+          }
+        };
+        for (_id, p1, p2, points, significant_digits) in ext_layer.measurements {
+          measurement_calls.push(gpu::frame::MeasurementDrawCall::from_data_and_pipeline(
             p1,
             p2,
             points,
             significant_digits,
             pipeline,
-          ),
-        );
-      }
-    }
-
-    // Billboards
-    if !self.extracted_billboards.is_empty() {
-      let pipeline = match device.get_billboard_resources(presentation_engine_handle) {
-        Ok(r) => r.pipeline,
-        Err(_) => {
-          device
-            .create_billboard_resources(cmd_buffer, presentation_engine_handle)?
-            .pipeline
+          ));
         }
-      };
-      for (mat, texture_id, billboard_type) in self.extracted_billboards {
-        render_scene.billboard_calls.push(gpu::frame::BillboardDrawCall::from_data(
-          pipeline,
-          mat,
-          texture_id,
-          billboard_type,
-        ));
       }
+
+      // Gizmos
+      if !ext_layer.gizmos.is_empty() {
+        let gizmo_resources = match device.get_gizmo_resources(presentation_engine_handle) {
+          Ok(r) => r,
+          Err(_) => device.create_gizmo_resources(cmd_buffer, presentation_engine_handle)?,
+        };
+        for (entity_id, mat, scale) in ext_layer.gizmos {
+          let gizmo_idx =
+            device.update_gizmo_instance(entity_id, mat, presentation_engine_handle)?;
+          gizmo_calls.push(gpu::frame::GizmoDrawCall::from_values(
+            gizmo_resources.pipeline,
+            scale,
+            gizmo_idx,
+          ));
+        }
+      }
+
+      // Sphere Gizmos
+      let mut sphere_gizmo_batch_call = None;
+      if !ext_layer.sphere_gizmos.is_empty() {
+        let mut sphere_gizmo_data = Vec::with_capacity(ext_layer.sphere_gizmos.len());
+        for (entity_id, model, radius, subdivisions) in ext_layer.sphere_gizmos {
+          let idx = device.allocate_sphere_gizmo_instance(entity_id)?;
+          sphere_gizmo_data.push((
+            idx,
+            crate::gpu::SphereGizmoDataGpu {
+              model: model.into(),
+              radius,
+              subdivisions,
+              _pad: [0.0, 0.0],
+            },
+          ));
+        }
+        sphere_gizmo_batch_call =
+          device.upload_sphere_gizmos_batch(cmd_buffer, &sphere_gizmo_data)?;
+      }
+
+      // BVH
+      let mut bvhwire2_batch_call = None;
+      if !ext_layer.bvhs.is_empty() {
+        let bvh_pipeline = device.get_bvh_pipeline_kay(presentation_engine_handle)?;
+        for (dbg_comp, nodes, global_model, _entity_id) in &ext_layer.bvhs {
+          if dbg_comp.use_new_path {
+            for node in nodes {
+              let (center, extents, ax, ay, az, type_val) = match node {
+                crate::math::collision::linear_bvh::LinearBound::AABB(aabb) => {
+                  let c = aabb.center::<aethervk_oshal_rlib::math::vector::vec3::Vec3f32>();
+                  let e = aabb.half_extents::<aethervk_oshal_rlib::math::vector::vec3::Vec3f32>();
+                  (
+                    [c.x(), c.y(), c.z()],
+                    [e.x(), e.y(), e.z()],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    0.0_f32,
+                  )
+                }
+                crate::math::collision::linear_bvh::LinearBound::OBB(obb) => {
+                  let axes = obb.axes::<aethervk_oshal_rlib::math::vector::vec3::Vec3f32>();
+                  let c = obb.center::<aethervk_oshal_rlib::math::vector::vec3::Vec3f32>();
+                  let e = obb.half_extents::<aethervk_oshal_rlib::math::vector::vec3::Vec3f32>();
+                  (
+                    [c.x(), c.y(), c.z()],
+                    [e.x(), e.y(), e.z()],
+                    [axes[0].x(), axes[0].y(), axes[0].z()],
+                    [axes[1].x(), axes[1].y(), axes[1].z()],
+                    [axes[2].x(), axes[2].y(), axes[2].z()],
+                    1.0_f32,
+                  )
+                }
+              };
+              bvhwire2_data.push(crate::gpu::Bvhwire2DataGpu {
+                center_type: [center[0], center[1], center[2], type_val],
+                extents: [extents[0], extents[1], extents[2], 0.0],
+                axes_x: [ax[0], ax[1], ax[2], 0.0],
+                axes_y: [ay[0], ay[1], ay[2], 0.0],
+                axes_z: [az[0], az[1], az[2], 0.0],
+              });
+            }
+          } else {
+            for node in nodes {
+              match node {
+                crate::math::collision::linear_bvh::LinearBound::AABB(_)
+                | crate::math::collision::linear_bvh::LinearBound::OBB(_) => {
+                  bvh_draw_calls.push(gpu::frame::BvhDrawCall::new(
+                    node,
+                    bvh_pipeline,
+                    *global_model,
+                  ));
+                }
+              }
+            }
+          }
+        }
+        bvhwire2_batch_call = device.upload_bvhwire2_batch(cmd_buffer, &bvhwire2_data)?;
+      }
+
+      // Particles
+      let particle_pipeline = device.get_particle_pipeline_key(presentation_engine_handle)?;
+      let particle2_pipeline = device.get_particle2_pipeline_key(presentation_engine_handle)?;
+      for (_entity_id, particles, config) in ext_layer.particles {
+        if config.use_particle2 {
+          particle2_calls.push(gpu::frame::Particle2DrawCall {
+            pipeline: particle2_pipeline,
+            system_particle_offset: 0,
+            system_indirect_offset: 0,
+            config,
+            particles,
+          });
+        } else {
+          particle_calls.push(gpu::frame::ParticleDrawCall {
+            pipeline: particle_pipeline,
+            system_particle_offset: 0,
+            system_indirect_offset: 0,
+            config,
+            particles,
+          });
+        }
+      }
+
+      // Trajectories
+      let trajectory_call = device.upload_trajectories(cmd_buffer, &ext_layer.trajectories)?;
+
+      render_scene.depth_layers.push(gpu::frame::RenderLayer {
+        layer_index: ext_layer.layer_index,
+        near: ext_layer.near,
+        far: ext_layer.far,
+        draw_calls,
+        billboard_calls,
+        marker_calls,
+        measurement_calls,
+        bvh_draw_calls,
+        bvhwire2_data,
+        bvhwire2_batch_call,
+        gizmo_calls,
+        particle_calls,
+        particle2_calls,
+        sphere_gizmo_batch_call,
+        trajectory_call,
+        cursor_call: None,
+        sun_call: None,
+        sky_call: None,
+        background_call: None,
+        grid_call: None,
+      });
     }
 
-    // Gizmos
-    if !self.extracted_gizmos.is_empty() {
-      let gizmo_resources = match device.get_gizmo_resources(presentation_engine_handle) {
-        Ok(r) => r,
-        Err(_) => device.create_gizmo_resources(cmd_buffer, presentation_engine_handle)?,
-      };
-      for (entity_id, mat, scale) in self.extracted_gizmos {
-        let gizmo_idx = device.update_gizmo_instance(entity_id, mat, presentation_engine_handle)?;
-        render_scene.gizmo_calls.push(gpu::frame::GizmoDrawCall::from_values(
-          gizmo_resources.pipeline,
-          scale,
-          gizmo_idx,
+    // Cursor
+    if let Some((t, layer_idx, scale)) = self.cursor_transform {
+      if let Some(layer) = render_scene.depth_layers.iter_mut().find(|l| l.layer_index == layer_idx)
+      {
+        let res = match device.get_cursor_resources(presentation_engine_handle) {
+          Ok(r) => r,
+          Err(_) => device.create_cursor_resources(cmd_buffer, presentation_engine_handle)?,
+        };
+        layer.cursor_call = Some(gpu::frame::CursorDrawCall::from_result_and_matrix(
+          res,
+          4,
+          t.to_mat4(),
+          t.scale.x(),
         ));
-      }
-    }
-
-    // Sphere Gizmos
-    if !self.extracted_sphere_gizmos.is_empty() {
-      let mut sphere_gizmo_data = Vec::with_capacity(self.extracted_sphere_gizmos.len());
-      for (entity_id, model, radius, subdivisions) in self.extracted_sphere_gizmos {
-        let idx = device.allocate_sphere_gizmo_instance(entity_id)?;
-        sphere_gizmo_data.push((
-          idx,
-          crate::gpu::SphereGizmoDataGpu {
-            model: model.into(),
-            radius,
-            subdivisions,
-            _pad: [0.0, 0.0],
-          },
-        ));
-      }
-      render_scene.sphere_gizmo_batch_call =
-        device.upload_sphere_gizmos_batch(cmd_buffer, &sphere_gizmo_data)?;
-    }
-
-    // BVH
-    if !self.extracted_bvhs.is_empty() {
-      for (dbg_comp, nodes, global_model, entity_id) in &self.extracted_bvhs {
-        render_scene.add_renderable(
-          cmd_buffer,
-          device,
-          *entity_id,
-          *global_model,
-          crate::scene::RenderableDataRef::BvhWireframe(dbg_comp, nodes),
-          presentation_engine_handle,
-          "bvh_wireframe",
-          false,
-          [0.0; 4],
-        )?;
-      }
-
-      if !render_scene.bvhwire2_data.is_empty() {
-        render_scene.bvhwire2_batch_call =
-          device.upload_bvhwire2_batch(cmd_buffer, &render_scene.bvhwire2_data)?;
       }
     }
 
     // Sun
-    if let Some(((global_model, radius), entity_id)) = self.extracted_sun {
-      let pipeline = device.get_sun_pipeline_key(presentation_engine_handle)?;
-      render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
-        global_model,
-        &render_scene.camera_data,
-        pipeline,
-        entity_id,
-        radius,
-      )?);
+    if let Some(((global_model, radius), layer_idx, _frame_scale)) = self.extracted_sun {
+      if let Some(layer) = render_scene.depth_layers.iter_mut().find(|l| l.layer_index == layer_idx)
+      {
+        let pipeline = device.get_sun_pipeline_key(presentation_engine_handle)?;
+
+        let sun_camera = render_scene.camera_data.rebuild_for_layer(layer.near, layer.far);
+
+        layer.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
+          global_model,
+          &sun_camera,
+          pipeline,
+          crate::scene::EntityId::default(),
+          radius,
+        )?);
+      }
     }
 
     // Sky
-    if let Some(()) = self.extracted_sky {
-      let pipeline = device.get_sky_pipeline_key(presentation_engine_handle)?;
-      render_scene.sky_call = Some(gpu::frame::SkyDrawCall::from_camera(
-        &render_scene.camera_data,
-        pipeline,
-      )?);
+    if let Some((layer_idx, scale)) = self.extracted_sky {
+      if let Some(layer) = render_scene.depth_layers.iter_mut().find(|l| l.layer_index == layer_idx)
+      {
+        let pipeline = device.get_sky_pipeline_key(presentation_engine_handle)?;
+
+        let sky_camera = render_scene.camera_data.rebuild_for_layer(layer.near, layer.far);
+
+        layer.sky_call = Some(gpu::frame::SkyDrawCall::from_camera(&sky_camera, pipeline)?);
+      }
     }
 
     // Background
-    if let Some((color_top, color_bottom)) = self.extracted_background {
-      let pipeline = device.get_background_pipeline_key(presentation_engine_handle)?;
-      render_scene.background_call = Some(gpu::frame::BackgroundDrawCall {
-        color_top,
-        color_bottom,
-        pipeline,
-      });
-    }
-
-    // Grid
-    if let Some((density, grid_size, grid_color)) = self.extracted_grid {
-      let pipeline = device.get_grid_pipeline_kay(presentation_engine_handle)?;
-      render_scene.grid_call = Some(gpu::frame::GridDrawCall::new(
-        pipeline, density, grid_size, grid_color,
-      ));
-    }
-
-    // Particles
-    let particle_pipeline = device.get_particle_pipeline_key(presentation_engine_handle)?;
-    let particle2_pipeline = device.get_particle2_pipeline_key(presentation_engine_handle)?;
-    for (_entity_id, particles, config) in self.extracted_particles {
-      if config.use_particle2 {
-        render_scene.particle2_calls.push(gpu::frame::Particle2DrawCall {
-          pipeline: particle2_pipeline,
-          system_particle_offset: 0,
-          system_indirect_offset: 0,
-          config,
-          particles,
-        });
-      } else {
-        render_scene.particle_calls.push(gpu::frame::ParticleDrawCall {
-          pipeline: particle_pipeline,
-          system_particle_offset: 0,
-          system_indirect_offset: 0,
-          config,
-          particles,
+    if let Some((color_top, color_bottom, layer_idx, _frame_scale)) = self.extracted_background {
+      if let Some(layer) = render_scene.depth_layers.iter_mut().find(|l| l.layer_index == layer_idx)
+      {
+        let pipeline = device.get_background_pipeline_key(presentation_engine_handle)?;
+        layer.background_call = Some(gpu::frame::BackgroundDrawCall {
+          color_top,
+          color_bottom,
+          pipeline,
         });
       }
     }
 
-    // Trajectories
-    render_scene.trajectory_call =
-      device.upload_trajectories(cmd_buffer, &self.extracted_trajectories)?;
+    // Grid
+    if let Some((density, grid_size, grid_color, layer_idx, _frame_scale)) = self.extracted_grid {
+      if let Some(layer) = render_scene.depth_layers.iter_mut().find(|l| l.layer_index == layer_idx)
+      {
+        let pipeline = device.get_grid_pipeline_kay(presentation_engine_handle)?;
+        layer.grid_call = Some(gpu::frame::GridDrawCall::new(
+          pipeline, density, grid_size, grid_color,
+        ));
+      }
+    }
 
     // UI
     render_scene.ui_call = device.upload_ui(cmd_buffer, &self.extracted_ui)?;
@@ -480,11 +559,11 @@ impl SceneConversionExt for crate::scene::Scene {
 
     const START_VEC_CAPACITY: usize = 32;
     let mut extracted_meshes: Vec<PhysicalMeshSceneData> = Vec::with_capacity(START_VEC_CAPACITY);
-    let mut extracted_markers: Vec<(TransformComponent, MarkersComponent)> =
+    let mut extracted_markers: Vec<(EntityId, TransformComponent, MarkersComponent)> =
       Vec::with_capacity(START_VEC_CAPACITY);
-    let mut extracted_billboards: Vec<(Mat4x4f32, u64, BillboardType)> =
+    let mut extracted_billboards: Vec<(EntityId, Mat4x4f32, u64, BillboardType)> =
       Vec::with_capacity(START_VEC_CAPACITY);
-    let mut extracted_measurements: Vec<(Vec3f32, Vec3f32, f32, u32)> =
+    let mut extracted_measurements: Vec<(EntityId, Vec3f32, Vec3f32, f32, u32)> =
       Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_bvhs: Vec<(
       BvhDebugComponent,
@@ -512,21 +591,23 @@ impl SceneConversionExt for crate::scene::Scene {
       crate::scene::ui::ScreenSpaceTextComponent,
     )> = Vec::with_capacity(START_VEC_CAPACITY);
 
-    let extracted_sky: Option<()>;
-    let extracted_sun: Option<((Mat4x4f32, f32), EntityId)>;
-    let extracted_grid: Option<(f32, f32, [f32; 3])>;
-    let extracted_background: Option<([f32; 4], [f32; 4])>;
-    // ... more components here
+    let cursor_transform: Option<(TransformComponent, u32, f32)>;
+    let extracted_sky: Option<(u32, f32)>;
+    let extracted_sun: Option<((Mat4x4f32, f32), u32, f32)>;
+    let extracted_grid: Option<(f32, f32, [f32; 3], u32, f32)>;
+    let extracted_background: Option<([f32; 4], [f32; 4], u32, f32)>;
 
     let camera_data: CameraRenderData;
-    let cursor_transform: Option<TransformComponent>;
 
     // Camera
     let cam_transform = self.global_transform(camera_entity).unwrap_or_default();
     let cam_comp = self.with_component(camera_entity, |c: &CameraComponent| *c).ok_or(
       crate::gpu_invalid_arg!("[ Scene has no camera component in the specified entity"),
     )?;
-    camera_data = CameraRenderData::new(&cam_transform, &cam_comp);
+
+    // We get the base scale of the camera's frame
+    let frame_scale = self.ancestor_frame_scale(camera_entity);
+    camera_data = CameraRenderData::new(&cam_transform, &cam_comp, frame_scale);
 
     let hidden_roots = if let Some(p) = pool {
       self.query1_res_par::<HiddenComponent, _, _>(p, |id, _| Some(id))
@@ -553,7 +634,9 @@ impl SceneConversionExt for crate::scene::Scene {
         if hidden_set.contains(&id) {
           return None;
         }
-        self.get_relative_transform(id, camera_entity)
+        self
+          .get_relative_transform(id, camera_entity)
+          .map(|t| (t, self.ancestor_depth_layer(id), self.ancestor_frame_scale(id)))
       })
       .map(|(t, _id)| t);
 
@@ -666,7 +749,7 @@ impl SceneConversionExt for crate::scene::Scene {
           if hidden_set.contains(&id) {
             return None;
           }
-          self.get_relative_transform(id, camera_entity).map(|t| (t, m.clone()))
+          self.get_relative_transform(id, camera_entity).map(|t| (id, t, m.clone()))
         },
       );
       for (res, _) in results {
@@ -678,7 +761,7 @@ impl SceneConversionExt for crate::scene::Scene {
           return;
         }
         if let Some(t) = self.get_relative_transform(id, camera_entity) {
-          extracted_markers.push((t, m.clone()));
+          extracted_markers.push((id, t, m.clone()));
         }
       });
     }
@@ -695,7 +778,7 @@ impl SceneConversionExt for crate::scene::Scene {
             let mat: Mat4x4f32 = t.to_mat4();
             let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
             let p2 = Vec3f32(mat.mul_vector(m.pos2.to_point()));
-            (p1, p2, m.points, m.significant_digits)
+            (id, p1, p2, m.points, m.significant_digits)
           })
         },
       );
@@ -711,7 +794,7 @@ impl SceneConversionExt for crate::scene::Scene {
           let mat: Mat4x4f32 = t.to_mat4();
           let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
           let p2 = Vec3f32(mat.mul_vector(m.pos2.to_point()));
-          extracted_measurements.push((p1, p2, m.points, m.significant_digits));
+          extracted_measurements.push((id, p1, p2, m.points, m.significant_digits));
         }
       });
     }
@@ -726,7 +809,7 @@ impl SceneConversionExt for crate::scene::Scene {
           }
           self.get_relative_transform(id, camera_entity).map(|t| {
             let mat: Mat4x4f32 = t.to_mat4();
-            (mat, i.texture_id, i.billboard_type)
+            (id, mat, i.texture_id, i.billboard_type)
           })
         },
       );
@@ -740,30 +823,36 @@ impl SceneConversionExt for crate::scene::Scene {
         }
         if let Some(t) = self.get_relative_transform(id, camera_entity) {
           let mat: Mat4x4f32 = t.to_mat4();
-          extracted_billboards.push((mat, i.texture_id, i.billboard_type));
+          extracted_billboards.push((id, mat, i.texture_id, i.billboard_type));
         }
       });
     }
 
-    extracted_sun = self.query2_first_res_without::<_, _, HiddenComponent, _, _>(
-      |id, _t: &TransformComponent, s: &SunComponent| {
-        if hidden_set.contains(&id) {
-          return None;
-        }
-        self
-          .get_relative_transform(id, camera_entity)
-          .map(|t| (t.to_mat4::<Mat4x4f32>(), s.radius))
-      },
-    );
+    extracted_sun = self
+      .query2_first_res_without::<_, _, HiddenComponent, _, _>(
+        |id, _t: &TransformComponent, s: &SunComponent| {
+          if hidden_set.contains(&id) {
+            return None;
+          }
+          self.get_relative_transform(id, camera_entity).map(|t| {
+            (
+              (t.to_mat4::<Mat4x4f32>(), s.radius),
+              self.ancestor_depth_layer(id),
+              self.ancestor_frame_scale(id),
+            )
+          })
+        },
+      )
+      .map(|(r, _id)| r);
 
     extracted_sky = self
       .query1_first_res_without::<_, HiddenComponent, _, _>(|id, _s: &SkyComponent| {
         if hidden_set.contains(&id) {
           return None;
         }
-        Some(())
+        Some((self.ancestor_depth_layer(id), self.ancestor_frame_scale(id)))
       })
-      .map(|_| ());
+      .map(|(r, _id)| r);
 
     extracted_grid = self
       .query1_first_res_without::<_, HiddenComponent, _, _>(|id, _s: &GridComponent| {
@@ -774,9 +863,15 @@ impl SceneConversionExt for crate::scene::Scene {
         let density: f32 = 500.0;
         let grid_size: f32 = 1.0;
         let grid_color: [f32; 3] = [0.5, 0.5, 0.5];
-        Some((density, grid_size, grid_color))
+        Some((
+          density,
+          grid_size,
+          grid_color,
+          self.ancestor_depth_layer(id),
+          self.ancestor_frame_scale(id),
+        ))
       })
-      .map(|(d, _)| d);
+      .map(|(r, _id)| r);
 
     // Particles
     self.query2::<crate::scene::particles::ParticleSystemComponent, crate::scene::particles::ParticleEmitterComponent, _>(
@@ -929,22 +1024,149 @@ impl SceneConversionExt for crate::scene::Scene {
         if hidden_set.contains(&id) {
           return None;
         }
-        Some((b.color_top, b.color_bottom))
+        Some((b.color_top, b.color_bottom, self.ancestor_depth_layer(id), self.ancestor_frame_scale(id)))
       })
-      .map(|(b, _)| b);
+      .map(|(r, _id)| r);
 
     // ... More components here
 
+    // ── Pre-compute per-layer near/far bounds from ReferenceFrameComponents ──
+    // Macro layer (0) uses the camera's full depth range.
+    // Micro layers use tight bounds around their SOI sphere as seen from the camera.
+    let macro_near = cam_comp.near_plane() * frame_scale;
+    let macro_far = cam_comp.far_plane() * frame_scale;
+    let mut layer_bounds: hashbrown::HashMap<u32, (f32, f32)> = hashbrown::HashMap::new();
+    layer_bounds.insert(0, (macro_near, macro_far));
+
+    self.query1_without::<ReferenceFrameComponent, HiddenComponent, _>(
+      |id, frame: &ReferenceFrameComponent| {
+        if frame.depth_layer > 0 {
+          if let Some(frame_t) = self.get_relative_transform(id, camera_entity) {
+            use aethervk_oshal_rlib::math::vector::Vector;
+            let dist = frame_t.position.length();
+            // Tight near/far: camera distance to SOI sphere edges, clamped to sane range
+            let tight_near = (dist - frame.soi_radius).max(macro_near);
+            let tight_far = dist + frame.soi_radius;
+            // If multiple frames share a depth_layer, take the union of their bounds
+            layer_bounds
+              .entry(frame.depth_layer)
+              .and_modify(|(n, f)| {
+                *n = n.min(tight_near);
+                *f = f.max(tight_far);
+              })
+              .or_insert((tight_near, tight_far));
+          }
+        }
+      },
+    );
+
+    let mut layer_map: hashbrown::HashMap<u32, DepthLayerData> = hashbrown::HashMap::new();
+
+    macro_rules! get_or_create_layer {
+      ($map:expr, $layer:expr, $_scale:expr) => {
+        $map.entry($layer).or_insert_with(|| {
+          let (near, far) = layer_bounds
+            .get(&$layer)
+            .copied()
+            .unwrap_or((macro_near, macro_far));
+          DepthLayerData {
+            layer_index: $layer,
+            near,
+            far,
+            meshes: Vec::new(),
+            billboards: Vec::new(),
+            markers: Vec::new(),
+            measurements: Vec::new(),
+            bvhs: Vec::new(),
+            particles: Vec::new(),
+            gizmos: Vec::new(),
+            sphere_gizmos: Vec::new(),
+            trajectories: Vec::new(),
+          }
+        })
+      };
+    }
+
+    for mesh in extracted_meshes {
+      let layer = self.ancestor_depth_layer(mesh.entity_id);
+      let scale = self.ancestor_frame_scale(mesh.entity_id);
+      get_or_create_layer!(layer_map, layer, scale).meshes.push(mesh);
+    }
+
+    for billboard in extracted_billboards {
+      let layer = self.ancestor_depth_layer(billboard.0);
+      let scale = self.ancestor_frame_scale(billboard.0);
+      get_or_create_layer!(layer_map, layer, scale).billboards.push((
+        billboard.1,
+        billboard.2,
+        billboard.3,
+      ));
+    }
+
+    for marker in extracted_markers {
+      let layer = self.ancestor_depth_layer(marker.0);
+      let scale = self.ancestor_frame_scale(marker.0);
+      get_or_create_layer!(layer_map, layer, scale).markers.push(marker);
+    }
+
+    for meas in extracted_measurements {
+      let layer = self.ancestor_depth_layer(meas.0);
+      let scale = self.ancestor_frame_scale(meas.0);
+      get_or_create_layer!(layer_map, layer, scale).measurements.push(meas);
+    }
+
+    for bvh in extracted_bvhs {
+      let layer = self.ancestor_depth_layer(bvh.3);
+      let scale = self.ancestor_frame_scale(bvh.3);
+      get_or_create_layer!(layer_map, layer, scale).bvhs.push(bvh);
+    }
+
+    for part in extracted_particles {
+      let layer = self.ancestor_depth_layer(part.0);
+      let scale = self.ancestor_frame_scale(part.0);
+      get_or_create_layer!(layer_map, layer, scale).particles.push(part);
+    }
+
+    for gizmo in extracted_gizmos {
+      let layer = self.ancestor_depth_layer(gizmo.0);
+      let scale = self.ancestor_frame_scale(gizmo.0);
+      get_or_create_layer!(layer_map, layer, scale).gizmos.push(gizmo);
+    }
+
+    for sg in extracted_sphere_gizmos {
+      let layer = self.ancestor_depth_layer(sg.0);
+      let scale = self.ancestor_frame_scale(sg.0);
+      get_or_create_layer!(layer_map, layer, scale).sphere_gizmos.push(sg);
+    }
+
+    for traj in extracted_trajectories {
+      let layer = self.ancestor_depth_layer(traj.0);
+      let scale = self.ancestor_frame_scale(traj.0);
+      get_or_create_layer!(layer_map, layer, scale).trajectories.push(traj);
+    }
+
+    if let Some((_, layer_idx, scale)) = cursor_transform {
+      get_or_create_layer!(layer_map, layer_idx, scale);
+    }
+    if let Some((layer_idx, scale)) = extracted_sky {
+      get_or_create_layer!(layer_map, layer_idx, scale);
+    }
+    if let Some((_, layer_idx, scale)) = extracted_sun {
+      get_or_create_layer!(layer_map, layer_idx, scale);
+    }
+    if let Some((_, _, _, layer_idx, scale)) = extracted_grid {
+      get_or_create_layer!(layer_map, layer_idx, scale);
+    }
+    if let Some((_, _, layer_idx, scale)) = extracted_background {
+      get_or_create_layer!(layer_map, layer_idx, scale);
+    }
+
+    let mut depth_layers: Vec<DepthLayerData> = layer_map.into_values().collect();
+    // Sort layers farthest to nearest (layer 0 is farthest, macro)
+    depth_layers.sort_by_key(|l| l.layer_index);
+
     Ok(RenderSceneExtraction {
-      extracted_meshes,
-      extracted_markers,
-      extracted_billboards,
-      extracted_measurements,
-      extracted_bvhs,
-      extracted_particles,
-      extracted_gizmos,
-      extracted_sphere_gizmos,
-      extracted_trajectories,
+      depth_layers,
       extracted_ui,
       extracted_texts,
       extracted_background,
@@ -1056,5 +1278,451 @@ mod tests {
         assert_eq!(t.global_bounds, [240.0, 190.0, 50.0, 50.0]);
       })
       .unwrap();
+  }
+
+  // ── Multi-scale rendering tests ──────────────────────────────────────
+
+  use crate::scene::{
+    GridComponent, ReferenceFrameComponent, ReferenceFrameType, SkyComponent,
+    SphereGizmoComponent, SunComponent,
+  };
+  use aethervk_oshal_rlib::math::{
+    quaternion::Quaternion,
+    vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
+  };
+
+  /// Helper: create a scene with macro (sun+camera+sky+grid) and micro (comet) content
+  /// that mirrors the spawn_comet_debug test scenario.
+  fn create_multi_scale_scene() -> (Scene, crate::scene::EntityId /* camera */) {
+    let tex_cache = Arc::new(RwLock::new(TextureCache::new("test_multiscale")));
+    let scene = Scene::new(tex_cache);
+    scene.register_all_crate_components();
+
+    // Camera at (0.0115, 0.0115, 0.0115) AU looking at origin
+    let camera = scene.spawn_entity("Camera");
+    scene
+      .add_component(
+        camera,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0115, 0.0115, 0.0115),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(camera, CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 1e-5, 1000.0))
+      .unwrap();
+
+    // Sun at origin (macroframe, layer 0)
+    let sun = scene.spawn_entity("Sun");
+    scene
+      .add_component(
+        sun,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        sun,
+        SunComponent {
+          resolution: (64, 64, 1),
+          radius: 0.00465,
+        },
+      )
+      .unwrap();
+
+    // Sky (macroframe)
+    let sky = scene.spawn_entity("Sky");
+    scene
+      .add_component(
+        sky,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.add_component(sky, SkyComponent {}).unwrap();
+
+    // Grid (macroframe)
+    let grid = scene.spawn_entity("Grid");
+    scene
+      .add_component(
+        grid,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene.add_component(grid, GridComponent {}).unwrap();
+
+    // Reference frame at (0.01, 0, 0) AU — this is the micro frame boundary
+    let frame_ref = scene.spawn_entity("FrameRef");
+    scene
+      .add_component(
+        frame_ref,
+        TransformComponent {
+          position: Vec3f32::from_components(0.01, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        frame_ref,
+        ReferenceFrameComponent {
+          frame_type: ReferenceFrameType::Micro,
+          scale: 6.684587e-9, // AU per km
+          soi_radius: 0.005,  // 0.005 AU ≈ 0.75 million km
+          depth_layer: 1,
+        },
+      )
+      .unwrap();
+
+    // Comet as child of frame_ref (microframe content)
+    let comet = scene.spawn_entity("Comet");
+    scene.set_parent(comet, Some(frame_ref));
+    scene
+      .add_component(
+        comet,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    // A sphere gizmo makes this entity renderable, triggering micro layer creation
+    scene
+      .add_component(
+        comet,
+        SphereGizmoComponent {
+          radius: 1.0,
+          subdivisions: 8.0,
+          local_frame: aethervk_oshal_rlib::math::matrix::SquareMatrix::identity(),
+          is_visible: true,
+        },
+      )
+      .unwrap();
+
+    (scene, camera)
+  }
+
+  #[test]
+  fn test_multi_scale_layer_separation() {
+    // Verify that convert_scene separates macro and micro entities into different depth layers
+    let (scene, camera) = create_multi_scale_scene();
+    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+
+    // Should have 2 depth layers: macro (0) and micro (1)
+    assert!(
+      result.depth_layers.len() >= 2,
+      "Expected at least 2 depth layers, got {}",
+      result.depth_layers.len()
+    );
+
+    let macro_layer = result.depth_layers.iter().find(|l| l.layer_index == 0);
+    let micro_layer = result.depth_layers.iter().find(|l| l.layer_index == 1);
+
+    assert!(macro_layer.is_some(), "Missing macro layer (index 0)");
+    assert!(micro_layer.is_some(), "Missing micro layer (index 1)");
+  }
+
+  #[test]
+  fn test_multi_scale_near_far_invariant() {
+    // Verify that near < far for ALL layers (the bug we fixed)
+    let (scene, camera) = create_multi_scale_scene();
+    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+
+    for layer in &result.depth_layers {
+      assert!(
+        layer.near < layer.far,
+        "Layer {} violates near < far: near={}, far={}",
+        layer.layer_index,
+        layer.near,
+        layer.far,
+      );
+      assert!(
+        layer.near > 0.0,
+        "Layer {} has non-positive near: {}",
+        layer.layer_index,
+        layer.near,
+      );
+    }
+  }
+
+  #[test]
+  fn test_multi_scale_micro_tight_bounds() {
+    // Verify that the micro layer's near/far are tight SOI-based bounds,
+    // NOT the camera's full range (which would be 1e-5..1000).
+    let (scene, camera) = create_multi_scale_scene();
+    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+
+    let micro_layer = result.depth_layers.iter().find(|l| l.layer_index == 1).unwrap();
+
+    // Camera at (0.0115, 0.0115, 0.0115), frame at (0.01, 0, 0)
+    // Distance ≈ sqrt((0.0015)^2 + (0.0115)^2 + (0.0115)^2) ≈ 0.0164 AU
+    // SOI radius = 0.005 AU
+    // Expected: near ≈ 0.0114, far ≈ 0.0214
+    assert!(
+      micro_layer.far < 0.1,
+      "Micro layer far={} is too large — should be tight around SOI, not camera's full range",
+      micro_layer.far,
+    );
+    assert!(
+      micro_layer.near > 0.001,
+      "Micro layer near={} is unreasonably small for SOI bounds",
+      micro_layer.near,
+    );
+    // The depth range should be approximately 2 × SOI radius = 0.01
+    let range = micro_layer.far - micro_layer.near;
+    assert!(
+      range < 0.02 && range > 0.005,
+      "Micro layer depth range {} not in expected SOI range [0.005..0.02]",
+      range,
+    );
+  }
+
+  #[test]
+  fn test_multi_scale_macro_full_range() {
+    // Verify that the macro layer uses the camera's full depth range
+    let (scene, camera) = create_multi_scale_scene();
+    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+
+    let macro_layer = result.depth_layers.iter().find(|l| l.layer_index == 0).unwrap();
+
+    // Camera near=1e-5, far=1000, frame_scale=1.0
+    assert!(
+      (macro_layer.near - 1e-5).abs() < 1e-7,
+      "Macro near={} should be ~1e-5",
+      macro_layer.near,
+    );
+    assert!(
+      (macro_layer.far - 1000.0).abs() < 1.0,
+      "Macro far={} should be ~1000",
+      macro_layer.far,
+    );
+  }
+
+  #[test]
+  fn test_multi_scale_layers_sorted() {
+    // Verify that layers are sorted by layer_index (macro first, micro second)
+    let (scene, camera) = create_multi_scale_scene();
+    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+
+    for window in result.depth_layers.windows(2) {
+      assert!(
+        window[0].layer_index <= window[1].layer_index,
+        "Layers not sorted: {} > {}",
+        window[0].layer_index,
+        window[1].layer_index,
+      );
+    }
+  }
+
+  #[test]
+  fn test_single_layer_scene() {
+    // A scene with NO reference frame should produce exactly 1 layer
+    let tex_cache = Arc::new(RwLock::new(TextureCache::new("test_single")));
+    let scene = Scene::new(tex_cache);
+    scene.register_all_crate_components();
+
+    let camera = scene.spawn_entity("Camera");
+    scene
+      .add_component(
+        camera,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 10.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(camera, CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0))
+      .unwrap();
+
+    let sun = scene.spawn_entity("Sun");
+    scene
+      .add_component(
+        sun,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        sun,
+        SunComponent {
+          resolution: (64, 64, 1),
+          radius: 0.00465,
+        },
+      )
+      .unwrap();
+
+    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+
+    // Only macro layer (0) should exist
+    assert_eq!(result.depth_layers.len(), 1, "Single-layer scene should have exactly 1 layer");
+    assert_eq!(result.depth_layers[0].layer_index, 0);
+    assert!(result.depth_layers[0].near < result.depth_layers[0].far);
+  }
+
+  #[test]
+  fn test_multi_microframe_merged_bounds() {
+    // Two micro frames with the same depth_layer should merge their SOI bounds
+    let tex_cache = Arc::new(RwLock::new(TextureCache::new("test_merged")));
+    let scene = Scene::new(tex_cache);
+    scene.register_all_crate_components();
+
+    let camera = scene.spawn_entity("Camera");
+    scene
+      .add_component(
+        camera,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.05),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(camera, CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 1e-5, 1000.0))
+      .unwrap();
+
+    // Frame A at (0.01, 0, 0), SOI=0.003
+    let frame_a = scene.spawn_entity("FrameA");
+    scene
+      .add_component(
+        frame_a,
+        TransformComponent {
+          position: Vec3f32::from_components(0.01, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        frame_a,
+        ReferenceFrameComponent {
+          frame_type: ReferenceFrameType::Micro,
+          scale: 6.684587e-9,
+          soi_radius: 0.003,
+          depth_layer: 1,
+        },
+      )
+      .unwrap();
+
+    // Child entity in frame_a (makes micro layer renderable)
+    let child_a = scene.spawn_entity("ChildA");
+    scene.set_parent(child_a, Some(frame_a));
+    scene
+      .add_component(
+        child_a,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        child_a,
+        SphereGizmoComponent {
+          radius: 1.0,
+          subdivisions: 8.0,
+          local_frame: aethervk_oshal_rlib::math::matrix::SquareMatrix::identity(),
+          is_visible: true,
+        },
+      )
+      .unwrap();
+
+    // Frame B at (0.02, 0, 0), SOI=0.004 — SAME depth_layer as Frame A
+    let frame_b = scene.spawn_entity("FrameB");
+    scene
+      .add_component(
+        frame_b,
+        TransformComponent {
+          position: Vec3f32::from_components(0.02, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        frame_b,
+        ReferenceFrameComponent {
+          frame_type: ReferenceFrameType::Micro,
+          scale: 6.684587e-9,
+          soi_radius: 0.004,
+          depth_layer: 1,
+        },
+      )
+      .unwrap();
+
+    // Child entity in frame_b (makes micro layer renderable)
+    let child_b = scene.spawn_entity("ChildB");
+    scene.set_parent(child_b, Some(frame_b));
+    scene
+      .add_component(
+        child_b,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        child_b,
+        SphereGizmoComponent {
+          radius: 1.0,
+          subdivisions: 8.0,
+          local_frame: aethervk_oshal_rlib::math::matrix::SquareMatrix::identity(),
+          is_visible: true,
+        },
+      )
+      .unwrap();
+
+    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+
+    let micro_layer = result.depth_layers.iter().find(|l| l.layer_index == 1).unwrap();
+
+    // Frame A distance from camera ≈ sqrt(0.01^2 + 0.05^2) ≈ 0.051, SOI=0.003
+    //   → near_a = 0.048, far_a = 0.054
+    // Frame B distance from camera ≈ sqrt(0.02^2 + 0.05^2) ≈ 0.0539, SOI=0.004
+    //   → near_b = 0.0499, far_b = 0.0579
+    // Merged: near = min(0.048, 0.0499) = 0.048, far = max(0.054, 0.0579) = 0.0579
+
+    assert!(
+      micro_layer.near < micro_layer.far,
+      "Merged bounds violate near < far: near={}, far={}",
+      micro_layer.near,
+      micro_layer.far,
+    );
+
+    // The merged range should be wider than either SOI alone
+    let range = micro_layer.far - micro_layer.near;
+    assert!(
+      range > 0.008,
+      "Merged range {} should be wider than single SOI diameter",
+      range,
+    );
   }
 }

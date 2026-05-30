@@ -36,7 +36,7 @@
 
                     <!-- Transform Component -->
                     <DataTemplate DataType="models:TransformComponent">
-                        <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                        <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch" ToolTip.Tip="Transform units are expressed in physical units relative to their parent Reference Frame (Macro = AU, Micro = km).">
                             <StackPanel Spacing="4">
                                 <Expander HorizontalAlignment="Stretch">
                                     <Expander.Header>
@@ -130,8 +130,8 @@
                                         <TextBlock Grid.Row="5" Grid.Column="0" Text="Near (AU):" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                         <NumericUpDown Grid.Row="5" Grid.Column="1"
                                                        Value="{Binding NearPlane}"
-                                                       Minimum="0.01" Maximum="9999.999"
-                                                       Increment="0.001" FormatString="0.######"/>
+                                                       Minimum="0.00001" Maximum="9999.999"
+                                                       Increment="0.00001" FormatString="0.########"/>
 
                                         <TextBlock Grid.Row="6" Grid.Column="0" Text="Far (AU):" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                         <NumericUpDown Grid.Row="6" Grid.Column="1"

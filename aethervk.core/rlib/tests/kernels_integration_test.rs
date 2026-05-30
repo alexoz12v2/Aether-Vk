@@ -94,7 +94,7 @@ fn setup_test_scene() -> Scene {
       frame_type: aethervk_core_rlib::scene::ReferenceFrameType::Macro,
       scale: 1.0,
       soi_radius: f32::MAX,
-      _padding: 0,
+      depth_layer: 0,
     },
   );
 
@@ -136,7 +136,7 @@ fn test_imex_collision_with_lca() {
       frame_type: aethervk_core_rlib::scene::ReferenceFrameType::Micro,
       scale: 1.0,
       soi_radius: 50.0,
-      _padding: 0,
+      depth_layer: 1,
     },
   );
 

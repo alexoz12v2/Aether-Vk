@@ -231,11 +231,14 @@ namespace AetherVk.Logic.Tests
 
         // ProjXY = flat[X*4+Y] = column X, row Y  (column-major)
         //
-        // perspective_vk columns:
+        // perspective_vk_reverse_z columns:
+        // The engine uses a Reverse-Z mapping for perspective projections where
+        // Z maps near..far to 1..0 (instead of 0..1 in standard Vulkan).
+        //
         //   Col 0: [f/aspect, 0, 0, 0]
-        //   Col 1: [0, 0, far/(near-far), -1]
+        //   Col 1: [0, 0, near/(far-near), -1]
         //   Col 2: [0, -f, 0, 0]
-        //   Col 3: [0, 0, far*near/(near-far), 0]
+        //   Col 3: [0, 0, far*near/(far-near), 0]
 
         // Col 0  (Proj0Y)
         Assert.Equal(f / aspect, cam.Proj00, 2);
@@ -246,7 +249,7 @@ namespace AetherVk.Logic.Tests
         // Col 1  (Proj1Y)
         Assert.Equal(0f, cam.Proj10, 5);
         Assert.Equal(0f, cam.Proj11, 5);
-        Assert.Equal(far / (near - far), cam.Proj12, 2);
+        Assert.Equal(near / (far - near), cam.Proj12, 2); // Reverse-Z: near/(far-near)
         Assert.Equal(-1f, cam.Proj13, 5);
 
         // Col 2  (Proj2Y)
@@ -258,7 +261,7 @@ namespace AetherVk.Logic.Tests
         // Col 3  (Proj3Y)
         Assert.Equal(0f, cam.Proj30, 5);
         Assert.Equal(0f, cam.Proj31, 5);
-        Assert.Equal(far * near / (near - far), cam.Proj32, 2);
+        Assert.Equal(far * near / (far - near), cam.Proj32, 2); // Reverse-Z: far*near/(far-near)
         Assert.Equal(0f, cam.Proj33, 5);
       }
       catch (DllNotFoundException) { }
@@ -301,11 +304,14 @@ namespace AetherVk.Logic.Tests
 
         // ProjXY = column X, row Y  (column-major)
         //
-        // orthographic_vk columns:
+        // orthographic_vk_reverse_z columns:
+        // The engine uses a Reverse-Z mapping for orthographic projections where
+        // Z maps near..far to 1..0 (instead of 0..1 in standard Vulkan).
+        //
         //   Col 0: [2/(r-l),  0,            0,           0]
-        //   Col 1: [0,        0,           -1/(far-near), 0]
+        //   Col 1: [0,        0,            1/(far-near), 0]
         //   Col 2: [0,       -2/(t-b),      0,           0]
-        //   Col 3: [-(r+l)/(r-l), (t+b)/(t-b), -near/(far-near), 1]
+        //   Col 3: [-(r+l)/(r-l), (t+b)/(t-b), far/(far-near), 1]
 
         // Col 0  (Proj0Y)
         Assert.Equal(2f / (r - l), cam.Proj00, 3);
@@ -313,10 +319,10 @@ namespace AetherVk.Logic.Tests
         Assert.Equal(0f, cam.Proj02, 5);
         Assert.Equal(0f, cam.Proj03, 5);
 
-        // Col 1  (Proj1Y)
+        // Col 1  (Proj1Y) - Reverse Z scaling
         Assert.Equal(0f, cam.Proj10, 5);
         Assert.Equal(0f, cam.Proj11, 5);
-        Assert.Equal(-1f / (fa - n), cam.Proj12, 4);
+        Assert.Equal(1f / (fa - n), cam.Proj12, 4); // Reverse-Z: 1/(far-near) instead of -1/(far-near)
         Assert.Equal(0f, cam.Proj13, 5);
 
         // Col 2  (Proj2Y)
@@ -325,10 +331,10 @@ namespace AetherVk.Logic.Tests
         Assert.Equal(0f, cam.Proj22, 5);
         Assert.Equal(0f, cam.Proj23, 5);
 
-        // Col 3  (Proj3Y)
+        // Col 3  (Proj3Y) - Reverse Z translation
         Assert.Equal(-(r + l) / (r - l), cam.Proj30, 3);
         Assert.Equal((t + b) / (t - b), cam.Proj31, 3);
-        Assert.Equal(-n / (fa - n), cam.Proj32, 4);
+        Assert.Equal(fa / (fa - n), cam.Proj32, 4); // Reverse-Z: far/(far-near) instead of -near/(far-near)
         Assert.Equal(1f, cam.Proj33, 5);
       }
       catch (DllNotFoundException) { }

@@ -58,7 +58,7 @@ mod tests {
           frame_type: ReferenceFrameType::Macro,
           scale: 1.0,
           soi_radius: 1000.0,
-          _padding: 0,
+          depth_layer: 0,
         },
       )
       .unwrap();
@@ -81,7 +81,7 @@ mod tests {
           frame_type: ReferenceFrameType::Micro,
           scale: 1.0,
           soi_radius: 100.0,
-          _padding: 0,
+          depth_layer: 1,
         },
       )
       .unwrap();

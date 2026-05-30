@@ -26,8 +26,8 @@ float gridLine(float p, float dp, float lineWidth) {
 void main() {
   // unproject per pixel onto view space near and far to avoid interpolation singularities
   mat4 invViewProj = inverse(push.viewProj);
-  vec4 unprojNear = invViewProj * vec4(inNDC, 0.0, 1.0);
-  vec4 unprojFar = invViewProj * vec4(inNDC, 1.0, 1.0);
+  vec4 unprojNear = invViewProj * vec4(inNDC, 1.0, 1.0);
+  vec4 unprojFar = invViewProj * vec4(inNDC, 0.0, 1.0);
 
   vec3 nearPos = unprojNear.xyz / unprojNear.w;
   vec3 farPos  = unprojFar.xyz  / unprojFar.w;
@@ -100,5 +100,5 @@ void main() {
 
   // Write NDC depth with a small bias to avoid Z-fighting with objects on z=0.
   vec4 clipPos = push.viewProj * vec4(worldPos, 1.0);
-  gl_FragDepth = clamp(clipPos.z / clipPos.w - 0.00001, 0.0, 1.0);
+  gl_FragDepth = clamp(clipPos.z / clipPos.w + 0.00001, 0.0, 1.0);
 }

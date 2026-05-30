@@ -90,14 +90,11 @@ impl SimulationContext {
       entity,
       "component_api:get_transform_component"
     );
-    let transform =
-      scene
-        .read()
-        .scene
-        .global_transform(entity_id)
-        .ok_or(EngineError::InvalidOperation(
-          "component_api:get_transform_component couldn't compute global transform",
-        ))?;
+    let transform = scene.read().scene.frame_relative_transform(entity_id).map(|(t, _)| t).ok_or(
+      EngineError::InvalidOperation(
+        "component_api:get_transform_component couldn't compute local transform",
+      ),
+    )?;
     Ok(transform)
   }
 
@@ -123,14 +120,11 @@ impl SimulationContext {
       entity,
       "component_api:get_transform_component"
     );
-    let transform =
-      scene
-        .read()
-        .scene
-        .global_transform(entity_id)
-        .ok_or(EngineError::InvalidOperation(
-          "component_api:get_transform_component couldn't compute global transform",
-        ))?;
+    let transform = scene.read().scene.frame_relative_transform(entity_id).map(|(t, _)| t).ok_or(
+      EngineError::InvalidOperation(
+        "component_api:get_transform_component couldn't compute local transform",
+      ),
+    )?;
     unsafe {
       if !pos_x.is_null() {
         *pos_x = transform.position.x();

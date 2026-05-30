@@ -49,7 +49,14 @@ pub struct UpdateComponent {
   pub entities: [Option<EntityId>; 4],
   pub arbitrary_data: [f64; 4],
   pub user_data: Option<ForeignUserData>,
-  pub callback: fn(EntityId, &Scene, &mut [Option<EntityId>; 4], &mut [f64; 4], Option<&mut ForeignUserData>, f32),
+  pub callback: fn(
+    EntityId,
+    &Scene,
+    &mut [Option<EntityId>; 4],
+    &mut [f64; 4],
+    Option<&mut ForeignUserData>,
+    f32,
+  ),
 }
 
 impl core::fmt::Debug for UpdateComponent {

@@ -160,6 +160,14 @@ fn test_render_particles_windowless_impl(use_particle2: bool) {
         [width, height],
       );
 
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
       let particle_sys_e = scene.spawn_entity("particles");
       let config = crate::scene::particles::ParticleEmitterComponent {
         uv_distribution: crate::math::distribution::Distribution2D::new(
@@ -204,7 +212,7 @@ fn test_render_particles_windowless_impl(use_particle2: bool) {
       p.set_age(0);
       sys.particles.write().push(p);
 
-      render_scene.add_renderable(
+      render_scene.get_or_create_layer(0, 0.1, 1000.0).add_renderable(
         cmd_buffer_handle,
         device,
         particle_sys_e,
@@ -360,28 +368,33 @@ fn test_render_all_archetypes_windowless() {
         [width, height],
       );
 
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
       let sky_pipeline = device.get_sky_pipeline_key(presentation_engine)?;
-      render_scene.sky_call = Some(gpu::frame::SkyDrawCall::from_camera(
-        &render_scene.camera_data,
-        sky_pipeline,
-      )?);
+      render_scene.get_or_create_layer(0, 0.1, 1000.0).sky_call = Some(
+        gpu::frame::SkyDrawCall::from_camera(&render_scene.camera_data, sky_pipeline)?,
+      );
 
       let sun_pipeline = device.get_sun_pipeline_key(presentation_engine)?;
-      render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
-        Mat4x4f32::identity(),
-        &render_scene.camera_data,
-        sun_pipeline,
-        sun_e,
-        0.6,
-      )?);
+      render_scene.get_or_create_layer(0, 0.1, 1000.0).sun_call =
+        Some(gpu::frame::SunDrawCall::from_model_and_camera(
+          Mat4x4f32::identity(),
+          &render_scene.camera_data,
+          sun_pipeline,
+          sun_e,
+          0.6,
+        )?);
 
       let grid_pipeline = device.get_grid_pipeline_kay(presentation_engine)?;
-      render_scene.grid_call = Some(gpu::frame::GridDrawCall::new(
-        grid_pipeline,
-        0.1,
-        1.0,
-        [0.5, 0.5, 0.5],
-      ));
+      render_scene.get_or_create_layer(0, 0.1, 1000.0).grid_call = Some(
+        gpu::frame::GridDrawCall::new(grid_pipeline, 0.1, 1.0, [0.5, 0.5, 0.5]),
+      );
 
       let gizmo_resources = device.get_gizmo_resources(presentation_engine)?;
       let gizmo_idx =
@@ -404,14 +417,14 @@ fn test_render_all_archetypes_windowless() {
         },
       )];
 
-      render_scene.cursor_call = Some(CursorDrawCall {
+      render_scene.get_or_create_layer(0, 0.1, 1000.0).cursor_call = Some(CursorDrawCall {
         pipeline: cursor_res.pipeline,
         vertex_count: 36,
         model_matrix: Mat4x4f32::identity(),
         cursor_size: 0.05,
       });
 
-      render_scene.billboard_calls.push(BillboardDrawCall {
+      render_scene.depth_layers[0].billboard_calls.push(BillboardDrawCall {
         pipeline: billboard_res.pipeline,
         texture_id: 0,
         vertex_count: 4,
@@ -427,7 +440,7 @@ fn test_render_all_archetypes_windowless() {
         device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
         device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64), 0.6)?;
 
-        render_scene.sphere_gizmo_batch_call =
+        render_scene.get_or_create_layer(0, 0.1, 1000.0).sphere_gizmo_batch_call =
           device.upload_sphere_gizmos_batch(cmd_buffer_handle, &sphere_gizmo_data)?;
 
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
@@ -531,6 +544,14 @@ fn test_render_sphere_gizmo_windowless() {
         [width, height],
       );
 
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
       let sphere_gizmo_idx = device.allocate_sphere_gizmo_instance(gizmo_e)?;
       let sphere_gizmo_pipeline = device.get_sphere_gizmo_pipeline_key(presentation_engine)?;
       let mut model = Mat4x4f32::identity();
@@ -550,7 +571,7 @@ fn test_render_sphere_gizmo_windowless() {
         let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
         device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
-        render_scene.sphere_gizmo_batch_call =
+        render_scene.get_or_create_layer(0, 0.1, 1000.0).sphere_gizmo_batch_call =
           device.upload_sphere_gizmos_batch(cmd_buffer_handle, &sphere_gizmo_data)?;
 
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
@@ -687,7 +708,7 @@ fn test_render_empty_scene_graceful() {
       let cmd_buffer_handle = device.get_command_buffer()?;
       device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
-      let render_scene = RenderScene::new(
+      let mut render_scene = RenderScene::new(
         (
           TransformComponent {
             position: Vec3f32::from_array([0.0, 0.0, 0.0]),
@@ -700,6 +721,14 @@ fn test_render_empty_scene_graceful() {
         [16, 16],
       );
 
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
       {
         let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
         device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
@@ -1391,14 +1420,24 @@ pub fn test_render_particles_multithreaded_impl(use_particle2: bool) {
             aethervk_oshal_rlib::os::time::TimeReadings::default(),
             [width, height],
           );
+
+          // INJECTED DEFAULT LAYER
+          render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+            layer_index: 0,
+            near: 0.1,
+            far: 10000.0,
+            draw_calls: vec![],
+            billboard_calls: vec![],
+          });
           let sun_pipeline = device.get_sun_pipeline_key(presentation_engine)?;
-          render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
-            Mat4x4f32::identity(),
-            &render_scene.camera_data,
-            sun_pipeline,
-            sun_e,
-            0.6,
-          )?);
+          render_scene.get_or_create_layer(0, 0.1, 1000.0).sun_call =
+            Some(gpu::frame::SunDrawCall::from_model_and_camera(
+              Mat4x4f32::identity(),
+              &render_scene.camera_data,
+              sun_pipeline,
+              sun_e,
+              0.6,
+            )?);
 
           let asset_hash = mesh_arc.id;
           println!("REACHED CREATE_PHYSICAL_MESH_RESOURCES");
@@ -1431,20 +1470,22 @@ pub fn test_render_particles_multithreaded_impl(use_particle2: bool) {
           let mut rel_transform = mesh_transform.clone();
           rel_transform.position = mesh_transform.position - render_scene.camera_data.absolute_pos;
           let outline: Option<[f32; 4]> = None;
-          render_scene.draw_calls.push(gpu::frame::DrawCall::from_handles_and_matrix(
-            res,
-            mesh_arc.indices.len() as u32,
-            outline,
-            rel_transform.to_mat4(),
-            1.0,
-            [0.5, 0.5, 0.5],
-            false,
-            0,
-            [0.0, 0.0, 0.0],
-            1.0,
-            [0.0, 0.0, 0.0],
-            1.0,
-          ));
+          render_scene.depth_layers[0].draw_calls.push(
+            gpu::frame::DrawCall::from_handles_and_matrix(
+              res,
+              mesh_arc.indices.len() as u32,
+              outline,
+              rel_transform.to_mat4(),
+              1.0,
+              [0.5, 0.5, 0.5],
+              false,
+              0,
+              [0.0, 0.0, 0.0],
+              1.0,
+              [0.0, 0.0, 0.0],
+              1.0,
+            ),
+          );
 
           let config = scene_render
             .with_component(
@@ -1456,6 +1497,7 @@ pub fn test_render_particles_multithreaded_impl(use_particle2: bool) {
             particle_sys_e,
             |sys: &crate::scene::particles::ParticleSystemComponent| {
               render_scene
+                .get_or_create_layer(0, 0.1, 1000.0)
                 .add_renderable(
                   cmd_buffer_handle,
                   device,
@@ -1692,6 +1734,14 @@ fn test_depth_stencil_separation() {
         [width, height],
       );
 
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
       let model_matrix = test_data.transform.to_mat4();
 
       println!("Camera pos: {:?}", render_scene.camera_data.pos);
@@ -1708,6 +1758,7 @@ fn test_depth_stencil_separation() {
       device
         .set_command_buffer_presentation_engine(cmd_buffer_handle, test_data.presentation_engine)?;
       render_scene
+        .get_or_create_layer(0, 0.1, 1000.0)
         .add_renderable(
           cmd_buffer_handle,
           device,
@@ -1814,7 +1865,7 @@ fn test_depth_stencil_separation() {
         &depth[(128 * 256 + 126)..(128 * 256 + 131)]
       );
       for i in 0..(width * height) as usize {
-        if depth[i] < 1.0 {
+        if depth[i] > 0.0 {
           found_mesh = true;
           // check stencil
           assert_eq!(
@@ -1862,9 +1913,17 @@ fn test_depth_stencil_separation() {
         [width, height],
       );
 
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
       let model_matrix = test_data.transform.to_mat4();
 
-      render_scene.add_renderable(
+      render_scene.get_or_create_layer(0, 0.1, 1000.0).add_renderable(
         cmd_buffer_handle,
         device,
         test_data.entity_id,
@@ -1935,7 +1994,7 @@ fn test_depth_stencil_separation() {
         &depth[(128 * 256 + 126)..(128 * 256 + 131)]
       );
       for i in 0..(width * height) as usize {
-        if depth[i] < 1.0 {
+        if depth[i] > 0.0 {
           found_mesh = true;
           // check stencil
           assert_eq!(stencil[i], 255, "Stencil should be 255 where mesh is drawn");
@@ -2002,6 +2061,14 @@ fn test_depth_color_image() {
         [width, height],
       );
 
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
       let model_matrix = test_data.transform.to_mat4();
 
       println!("Camera pos: {:?}", render_scene.camera_data.pos);
@@ -2018,6 +2085,7 @@ fn test_depth_color_image() {
       device
         .set_command_buffer_presentation_engine(cmd_buffer_handle, test_data.presentation_engine)?;
       render_scene
+        .get_or_create_layer(0, 0.1, 1000.0)
         .add_renderable(
           cmd_buffer_handle,
           device,
@@ -2204,16 +2272,25 @@ fn test_sun_rendering() {
           [width, height],
         );
 
+        // INJECTED DEFAULT LAYER
+        render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+          layer_index: 0,
+          near: 0.1,
+          far: 10000.0,
+          draw_calls: vec![],
+          billboard_calls: vec![],
+        });
         let sun_pipeline = device.get_sun_pipeline_key(presentation_engine)?;
         let model_matrix = transform.to_mat4();
 
-        render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
-          model_matrix,
-          &render_scene.camera_data,
-          sun_pipeline,
-          sun_e,
-          0.8,
-        )?);
+        render_scene.get_or_create_layer(0, 0.1, 1000.0).sun_call =
+          Some(gpu::frame::SunDrawCall::from_model_and_camera(
+            model_matrix,
+            &render_scene.camera_data,
+            sun_pipeline,
+            sun_e,
+            0.8,
+          )?);
 
         let cmd_buf_guard =
           gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(render_task_id))?;
@@ -2231,7 +2308,7 @@ fn test_sun_rendering() {
         actual_device.record_test_sun_download(cmd_buffer_handle, sun_e, sun_task_id)?;
 
         // 3. Render physical mesh
-        render_scene.add_renderable(
+        render_scene.get_or_create_layer(0, 0.1, 1000.0).add_renderable(
           cmd_buffer_handle,
           device,
           sun_e,
@@ -2427,16 +2504,25 @@ fn test_sun_rendering_volume_only() {
         [width, height],
       );
 
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
       let sun_pipeline = device.get_sun_pipeline_key(presentation_engine)?;
       let model_matrix = transform.to_mat4();
 
-      render_scene.sun_call = Some(gpu::frame::SunDrawCall::from_model_and_camera(
-        model_matrix,
-        &render_scene.camera_data,
-        sun_pipeline,
-        sun_e,
-        0.8,
-      )?);
+      render_scene.get_or_create_layer(0, 0.1, 1000.0).sun_call =
+        Some(gpu::frame::SunDrawCall::from_model_and_camera(
+          model_matrix,
+          &render_scene.camera_data,
+          sun_pipeline,
+          sun_e,
+          0.8,
+        )?);
 
       let cmd_buf_guard =
         gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(render_task_id))?;
@@ -2601,6 +2687,14 @@ fn test_render_particles_stress_impl(use_particle2: bool) {
         [width, height],
       );
 
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
       let particle_sys_e = scene.spawn_entity("stress_particles");
       let config = crate::scene::particles::ParticleEmitterComponent {
         uv_distribution: crate::math::distribution::Distribution2D::new(
@@ -2660,7 +2754,7 @@ fn test_render_particles_stress_impl(use_particle2: bool) {
       }
       drop(particles);
 
-      render_scene.add_renderable(
+      render_scene.get_or_create_layer(0, 0.1, 1000.0).add_renderable(
         cmd_buffer_handle,
         device,
         particle_sys_e,
@@ -2826,11 +2920,19 @@ fn test_outline_rendering_windowless() {
         [width, height],
       );
 
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
       let mut relative_transform = transform.clone();
       relative_transform.position = transform.position - Vec3f32::from_array([5.0, 0.0, 0.0]);
       let model_matrix = relative_transform.to_mat4();
 
-      render_scene.add_renderable(
+      render_scene.get_or_create_layer(0, 0.1, 1000.0).add_renderable(
         cmd_buffer_handle,
         device,
         mesh_e,
@@ -2842,7 +2944,7 @@ fn test_outline_rendering_windowless() {
         [1.0, 0.0, 0.0, 1.0], // outline_color (RED)
       )?;
 
-      let draw_call = render_scene.draw_calls.last().unwrap();
+      let draw_call = render_scene.depth_layers[0].draw_calls.last().unwrap();
       println!(
         "outline_pipeline is some: {}",
         draw_call.outline_pipeline.is_some()
@@ -3005,11 +3107,19 @@ fn test_outline_toggled_after_upload() {
           [width, height],
         );
 
+        // INJECTED DEFAULT LAYER
+        render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+          layer_index: 0,
+          near: 0.1,
+          far: 10000.0,
+          draw_calls: vec![],
+          billboard_calls: vec![],
+        });
         let mut relative_transform = transform.clone();
         relative_transform.position = transform.position - Vec3f32::from_array([5.0, 0.0, 0.0]);
         let model_matrix = relative_transform.to_mat4();
 
-        render_scene.add_renderable(
+        render_scene.get_or_create_layer(0, 0.1, 1000.0).add_renderable(
           cmd_buffer_handle,
           device,
           mesh_e,
@@ -3087,12 +3197,20 @@ fn test_outline_toggled_after_upload() {
           [width, height],
         );
 
+        // INJECTED DEFAULT LAYER
+        render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+          layer_index: 0,
+          near: 0.1,
+          far: 10000.0,
+          draw_calls: vec![],
+          billboard_calls: vec![],
+        });
         let mut relative_transform = transform.clone();
         relative_transform.position = transform.position - Vec3f32::from_array([5.0, 0.0, 0.0]);
         let model_matrix = relative_transform.to_mat4();
 
         // This triggers `get_physical_mesh_resources` instead of `create_physical_mesh_resources`
-        render_scene.add_renderable(
+        render_scene.get_or_create_layer(0, 0.1, 1000.0).add_renderable(
           cmd_buffer_handle,
           device,
           mesh_e,
@@ -3269,18 +3387,25 @@ fn test_render_concurrent_resize() {
           extent,
         );
 
+        // INJECTED DEFAULT LAYER
+        render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+          layer_index: 0,
+          near: 0.1,
+          far: 10000.0,
+          draw_calls: vec![],
+          billboard_calls: vec![],
+        });
         let sky_pipeline = device.get_sky_pipeline_key(pe)?;
-        render_scene.sky_call = Some(gpu::frame::SkyDrawCall::from_camera(
-          &render_scene.camera_data,
-          sky_pipeline,
-        )?);
+        render_scene.get_or_create_layer(0, 0.1, 1000.0).sky_call = Some(
+          gpu::frame::SkyDrawCall::from_camera(&render_scene.camera_data, sky_pipeline)?,
+        );
 
         let model_matrix = transform.to_mat4();
 
         let cmd_scope = ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 
         println!("Thread: add_renderable...");
-        render_scene.add_renderable(
+        render_scene.get_or_create_layer(0, 0.1, 1000.0).add_renderable(
           cmd_buffer_handle,
           device,
           entity_id,
@@ -3458,6 +3583,14 @@ fn test_physical_mesh2_variants() {
         [width, height],
       );
 
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
       let asset_path = format!(
         "{}/Comet.glb",
         crate::gpu::ASSET_DIR.read().as_ref().unwrap()
@@ -3523,7 +3656,7 @@ fn test_physical_mesh2_variants() {
           [0.0, 0.0, 0.0],
           1.0,
         );
-        render_scene.draw_calls.push(dc);
+        render_scene.depth_layers[0].draw_calls.push(dc);
 
         Ok(())
       };
@@ -3706,6 +3839,14 @@ fn test_painting_mode_write_and_verify() {
     [width, height],
   );
 
+  // INJECTED DEFAULT LAYER
+  render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+    layer_index: 0,
+    near: 0.1,
+    far: 10000.0,
+    draw_calls: vec![],
+    billboard_calls: vec![],
+  });
   render_frontend
     .with_device(render_device_handle, |device| {
       let task_id = device.create_task();
@@ -3752,7 +3893,7 @@ fn test_painting_mode_write_and_verify() {
         [0.0, 0.0, 0.0],
         1.0,
       );
-      render_scene.draw_calls.push(dc);
+      render_scene.depth_layers[0].draw_calls.push(dc);
 
       // 1. Render BEFORE painting
       {
@@ -3974,7 +4115,7 @@ fn test_render_multiple_soi_windowless() {
         frame_type: crate::scene::ReferenceFrameType::Macro,
         scale: 1.0,
         soi_radius: f32::MAX,
-        _padding: 0,
+        depth_layer: 0,
       },
     )
     .unwrap();
@@ -3999,7 +4140,7 @@ fn test_render_multiple_soi_windowless() {
         frame_type: crate::scene::ReferenceFrameType::Micro,
         scale: 0.1, // 10x smaller scale inside
         soi_radius: 50.0,
-        _padding: 0,
+        depth_layer: 1,
       },
     )
     .unwrap();
@@ -4024,7 +4165,7 @@ fn test_render_multiple_soi_windowless() {
         frame_type: crate::scene::ReferenceFrameType::Micro,
         scale: 1.0, // 1:1 scale
         soi_radius: 50.0,
-        _padding: 0,
+        depth_layer: 1,
       },
     )
     .unwrap();
@@ -4049,7 +4190,7 @@ fn test_render_multiple_soi_windowless() {
         frame_type: crate::scene::ReferenceFrameType::Micro,
         scale: 0.01,
         soi_radius: 50.0,
-        _padding: 0,
+        depth_layer: 1,
       },
     )
     .unwrap();
@@ -4175,6 +4316,14 @@ fn test_render_multiple_soi_windowless() {
         [width, height],
       );
 
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
       // Now we populate draw calls manually simulating what RenderSceneExtraction does
       // We will resolve their world matrices.
 
@@ -4195,20 +4344,22 @@ fn test_render_multiple_soi_windowless() {
         presentation_engine,
         "obj_a",
       )?;
-      render_scene.draw_calls.push(gpu::frame::DrawCall::from_handles_and_matrix(
-        res_a,
-        mesh.indices.len() as u32,
-        None,
-        mat_a,
-        pm_a.emissive_intensity,
-        pm_a.emissive_color,
-        true,
-        0,
-        [0.0, 0.0, 0.0],
-        1.0,
-        [0.0, 0.0, 0.0],
-        1.0,
-      ));
+      render_scene.depth_layers[0]
+        .draw_calls
+        .push(gpu::frame::DrawCall::from_handles_and_matrix(
+          res_a,
+          mesh.indices.len() as u32,
+          None,
+          mat_a,
+          pm_a.emissive_intensity,
+          pm_a.emissive_color,
+          true,
+          0,
+          [0.0, 0.0, 0.0],
+          1.0,
+          [0.0, 0.0, 0.0],
+          1.0,
+        ));
 
       // Object B: parent is micro_frame_b (pos -2, scale 1.0)
       let mat_b = Mat4x4f32::translation(Vec3f32::from_components(-1.0, -10.0, 0.0));
@@ -4222,20 +4373,22 @@ fn test_render_multiple_soi_windowless() {
         presentation_engine,
         "obj_b",
       )?;
-      render_scene.draw_calls.push(gpu::frame::DrawCall::from_handles_and_matrix(
-        res_b,
-        mesh.indices.len() as u32,
-        None,
-        mat_b,
-        pm_b.emissive_intensity,
-        pm_b.emissive_color,
-        true,
-        0,
-        [0.0, 0.0, 0.0],
-        1.0,
-        [0.0, 0.0, 0.0],
-        1.0,
-      ));
+      render_scene.depth_layers[0]
+        .draw_calls
+        .push(gpu::frame::DrawCall::from_handles_and_matrix(
+          res_b,
+          mesh.indices.len() as u32,
+          None,
+          mat_b,
+          pm_b.emissive_intensity,
+          pm_b.emissive_color,
+          true,
+          0,
+          [0.0, 0.0, 0.0],
+          1.0,
+          [0.0, 0.0, 0.0],
+          1.0,
+        ));
 
       // Object C: parent is micro_frame_c (pos 0, -5, scale 0.01)
       let mat_c = Mat4x4f32::translation(Vec3f32::from_components(0.0, -5.0, 0.0))
@@ -4250,20 +4403,22 @@ fn test_render_multiple_soi_windowless() {
         presentation_engine,
         "obj_c",
       )?;
-      render_scene.draw_calls.push(gpu::frame::DrawCall::from_handles_and_matrix(
-        res_c,
-        mesh.indices.len() as u32,
-        None,
-        mat_c,
-        pm_c.emissive_intensity,
-        pm_c.emissive_color,
-        true,
-        0,
-        [0.0, 0.0, 0.0],
-        1.0,
-        [0.0, 0.0, 0.0],
-        1.0,
-      ));
+      render_scene.depth_layers[0]
+        .draw_calls
+        .push(gpu::frame::DrawCall::from_handles_and_matrix(
+          res_c,
+          mesh.indices.len() as u32,
+          None,
+          mat_c,
+          pm_c.emissive_intensity,
+          pm_c.emissive_color,
+          true,
+          0,
+          [0.0, 0.0, 0.0],
+          1.0,
+          [0.0, 0.0, 0.0],
+          1.0,
+        ));
 
       device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
       let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
@@ -4435,7 +4590,7 @@ fn test_render_weather_ui() {
         .add_component(
           bg_e,
           crate::scene::ui::Transform2DComponent {
-            size: [width as f32, height as f32],
+            size: [20.0, 20.0],
             local_position: [0.0, 0.0],
             global_depth: 0, // bottom-most
             local_z_index: -100,
@@ -4463,8 +4618,8 @@ fn test_render_weather_ui() {
         .add_component(
           panel_e,
           crate::scene::ui::Transform2DComponent {
-            size: [400.0, 300.0],
-            local_position: [100.0, 100.0],
+            size: [150.0, 300.0],
+            local_position: [250.0, 100.0],
             global_depth: 1,
             ..Default::default()
           },
@@ -5082,12 +5237,21 @@ fn test_render_uniform_background() {
           [width, height],
         );
 
-        let pipeline = device.get_background_pipeline_key(presentation_engine)?;
-        render_scene.background_call = Some(gpu::frame::BackgroundDrawCall {
-          pipeline,
-          color_top: bg_constants.color_top,
-          color_bottom: bg_constants.color_bottom,
+        // INJECTED DEFAULT LAYER
+        render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+          layer_index: 0,
+          near: 0.1,
+          far: 10000.0,
+          draw_calls: vec![],
+          billboard_calls: vec![],
         });
+        let pipeline = device.get_background_pipeline_key(presentation_engine)?;
+        render_scene.get_or_create_layer(0, 0.1, 1000.0).background_call =
+          Some(gpu::frame::BackgroundDrawCall {
+            pipeline,
+            color_top: bg_constants.color_top,
+            color_bottom: bg_constants.color_bottom,
+          });
 
         {
           let _scoped_cmd =
@@ -5266,6 +5430,10 @@ fn test_render_text2_basic() {
             right: [1.0, 0.0, 0.0],
             near: 0.1,
             far: 100.0,
+            projection_params: crate::gpu::frame::CameraProjectionParams::Perspective {
+              fov: 45.0_f32.to_radians(),
+              aspect_ratio: width as f32 / height as f32,
+            },
           };
 
           crate::gpu::frame::do_draw_text2_batch(
@@ -5436,6 +5604,10 @@ fn test_render_text2_styled() {
             right: [1.0, 0.0, 0.0],
             near: 0.1,
             far: 100.0,
+            projection_params: crate::gpu::frame::CameraProjectionParams::Perspective {
+              fov: 45.0_f32.to_radians(),
+              aspect_ratio: width as f32 / height as f32,
+            },
           };
 
           crate::gpu::frame::do_draw_text2_batch(
@@ -5731,6 +5903,10 @@ fn test_render_text2_street_art() {
             right: [1.0, 0.0, 0.0],
             near: 0.1,
             far: 100.0,
+            projection_params: crate::gpu::frame::CameraProjectionParams::Perspective {
+              fov: 45.0_f32.to_radians(),
+              aspect_ratio: width as f32 / height as f32,
+            },
           };
 
           crate::gpu::frame::do_draw_text2_batch(
@@ -5868,4 +6044,96 @@ fn test_cross_queue_sync_timeline_semaphore() {
       crate::types::GpuResult::Ok(())
     })
     .unwrap();
+}
+
+#[test]
+fn test_render_multiscale_depth_layers_graceful() {
+  setup_assets_dir();
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
+    setup_render_frontend_for_tests(true);
+  let presentation_engine = presentation_engine.unwrap();
+  let [width, height] = render_frontend
+    .with_device(render_device_handle, |device| {
+      device.get_presentation_engine_extent(presentation_engine)
+    })
+    .unwrap();
+
+  render_frontend
+    .with_device(render_device_handle, |device| {
+      let task_id = device.create_task();
+      device.start_frame()?;
+      let acquire_result = device.acquire_next_image(presentation_engine)?;
+      let cmd_buffer_handle = device.get_command_buffer()?;
+      device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
+
+      let mut render_scene = RenderScene::new(
+        (
+          TransformComponent {
+            position: Vec3f32::from_array([0.0, 0.0, 0.0]),
+            rotation: Quat::identity(),
+            scale: Vec3f32::from_array([1.0, 1.0, 1.0]),
+          },
+          CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
+        ),
+        aethervk_oshal_rlib::os::time::TimeReadings::default(),
+        [16, 16],
+      );
+
+      // INJECTED DEFAULT LAYER
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
+      // Add macro layer
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 0,
+        near: 0.1,
+        far: 10000.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
+
+      // Add micro layer
+      render_scene.depth_layers.push(crate::gpu::frame::RenderLayer {
+        layer_index: 1,
+        near: 0.0001,
+        far: 10.0,
+        draw_calls: vec![],
+        billboard_calls: vec![],
+      });
+
+      {
+        let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
+        device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
+        device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
+        let scoped_rp = gpu::ScopedRenderPass::new(device, cmd_buffer_handle);
+        device.set_viewport(cmd_buffer_handle, &gpu::Viewport::from_extent([16, 16]))?;
+        device.set_scissor(cmd_buffer_handle, &gpu::Rect2D::from_extent([16, 16]))?;
+        gpu::frame::render_frame(
+          device,
+          cmd_buffer_handle,
+          presentation_engine,
+          &render_scene,
+        )
+        .map_err(|e| {
+          println!("TR: render_frame failed {:?}", e);
+          e
+        })?;
+        scoped_rp.end()?;
+      }
+      device.present(
+        presentation_engine,
+        acquire_result.image_index as usize,
+        acquire_result.frame_index as usize,
+      )?;
+
+      std::thread::sleep(std::time::Duration::from_millis(50));
+      crate::types::GpuResult::Ok(())
+    })
+    .unwrap();
+
+  drop(render_frontend);
 }
