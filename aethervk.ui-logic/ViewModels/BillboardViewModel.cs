@@ -22,6 +22,10 @@ public partial class BillboardViewModel : ObservableObject
   [ObservableProperty]
   private bool _isSelected;
 
+  /// <summary>Mirrors the ECS entity's visibility (toggled from Outline). Controls overlay rendering.</summary>
+  [ObservableProperty]
+  private bool _isEntityVisible = true;
+
   [ObservableProperty]
   private double _x;
 
@@ -29,9 +33,13 @@ public partial class BillboardViewModel : ObservableObject
   private double _y;
 
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ScaledWidth))]
+  [NotifyPropertyChangedFor(nameof(ScaledHeight))]
   private double _width = 100;
 
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ScaledWidth))]
+  [NotifyPropertyChangedFor(nameof(ScaledHeight))]
   private double _height = 100;
 
   [ObservableProperty]
@@ -42,9 +50,17 @@ public partial class BillboardViewModel : ObservableObject
 
   /// <summary>Uniform scale factor (1.0 = original size).</summary>
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ScaledWidth))]
+  [NotifyPropertyChangedFor(nameof(ScaledHeight))]
   private double _scale = 1.0;
 
   /// <summary>Rotation in degrees around the center.</summary>
   [ObservableProperty]
   private double _rotation;
+
+  /// <summary>Width × Scale — used for layout-based sizing so gizmo UI stays constant thickness.</summary>
+  public double ScaledWidth => Width * Scale;
+
+  /// <summary>Height × Scale — used for layout-based sizing so gizmo UI stays constant thickness.</summary>
+  public double ScaledHeight => Height * Scale;
 }

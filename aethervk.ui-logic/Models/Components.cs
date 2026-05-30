@@ -817,6 +817,60 @@ public partial class ScreenSpaceBillboardComponent : NativeComponent
   [ObservableProperty]
   private ulong _viewportId;
 
+  /// <summary>
+  /// When non-null, property changes are synced bidirectionally with this BillboardViewModel
+  /// (the Avalonia overlay). A reentrant guard prevents infinite ping-pong.
+  /// </summary>
+  private AetherVk.Logic.ViewModels.BillboardViewModel? _linkedBillboard;
+  private bool _isSyncingToBillboard;
+
+  /// <summary>
+  /// Links this component model to its Avalonia overlay ViewModel for bidirectional sync.
+  /// Call this right after creating both objects (in InsertBillboard).
+  /// </summary>
+  public void LinkBillboard(AetherVk.Logic.ViewModels.BillboardViewModel billboard)
+  {
+    // Unsubscribe from previous
+    if (_linkedBillboard != null)
+      _linkedBillboard.PropertyChanged -= OnLinkedBillboardPropertyChanged;
+
+    _linkedBillboard = billboard;
+
+    if (_linkedBillboard != null)
+      _linkedBillboard.PropertyChanged += OnLinkedBillboardPropertyChanged;
+  }
+
+  /// <summary>
+  /// Handles property changes from the linked BillboardViewModel (e.g., from Ctrl+Wheel in viewport).
+  /// Syncs values back to this NativeComponent so they push to Rust.
+  /// </summary>
+  private void OnLinkedBillboardPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+  {
+    if (_isSyncingToBillboard || _linkedBillboard == null)
+      return;
+
+    _isSyncingToBillboard = true;
+    try
+    {
+      switch (e.PropertyName)
+      {
+        case nameof(AetherVk.Logic.ViewModels.BillboardViewModel.Opacity):
+          Opacity = (float)_linkedBillboard.Opacity;
+          break;
+        case nameof(AetherVk.Logic.ViewModels.BillboardViewModel.Scale):
+          Scale = (float)_linkedBillboard.Scale;
+          break;
+        case nameof(AetherVk.Logic.ViewModels.BillboardViewModel.Rotation):
+          RotationDeg = (float)_linkedBillboard.Rotation;
+          break;
+      }
+    }
+    finally
+    {
+      _isSyncingToBillboard = false;
+    }
+  }
+
   protected override bool ShouldPushToNative(string? propertyName)
   {
     // ImagePath and ViewportId are set at creation only, not pushed on change
@@ -838,6 +892,22 @@ public partial class ScreenSpaceBillboardComponent : NativeComponent
       Opacity,
       ZIndex
     );
+
+    // Sync to linked BillboardViewModel (the Avalonia overlay) so the visual updates
+    if (!_isSyncingToBillboard && _linkedBillboard != null)
+    {
+      _isSyncingToBillboard = true;
+      try
+      {
+        _linkedBillboard.Opacity = Opacity;
+        _linkedBillboard.Scale = Scale;
+        _linkedBillboard.Rotation = RotationDeg;
+      }
+      finally
+      {
+        _isSyncingToBillboard = false;
+      }
+    }
   }
 
   protected override void PullFromNativeImpl()

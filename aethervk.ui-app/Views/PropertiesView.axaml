@@ -157,17 +157,38 @@
                                     <TextBlock Text="Image:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
                                     <TextBlock Grid.Column="1" Text="{Binding ImagePath}" Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis" />
                                 </Grid>
-                                <Grid ColumnDefinitions="*,2*">
-                                    <TextBlock Text="Opacity:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-                                    <NumericUpDown Grid.Column="1" Value="{Binding Opacity}" Minimum="0" Maximum="1" Increment="0.05" FormatString="0.00" />
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" Margin="0,0,8,0">
+                                        <TextBlock Text="Opacity:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+                                        <Button Classes="icon" Padding="4,2" FontSize="11"
+                                                Background="Transparent" ToolTip.Tip="Quick alpha slider">
+                                            <Button.Content>
+                                                <TextBlock Text="α" FontWeight="Bold" />
+                                            </Button.Content>
+                                            <Button.Flyout>
+                                                <Flyout Placement="Right">
+                                                    <Border Background="{DynamicResource Bg.Surface}" CornerRadius="8" Padding="12" MinWidth="200">
+                                                        <StackPanel Spacing="6">
+                                                            <TextBlock Text="Opacity" FontWeight="SemiBold" />
+                                                            <Slider Value="{Binding Opacity}" Minimum="0" Maximum="1" TickFrequency="0.01" IsSnapToTickEnabled="False" />
+                                                            <TextBlock Text="{Binding Opacity, StringFormat='{}{0:P0}'}" HorizontalAlignment="Right" Foreground="{DynamicResource Text.Secondary}" />
+                                                        </StackPanel>
+                                                    </Border>
+                                                </Flyout>
+                                            </Button.Flyout>
+                                        </Button>
+                                    </StackPanel>
+                                    <Slider Grid.Column="1" Value="{Binding Opacity}" Minimum="0" Maximum="1" TickFrequency="0.01" IsSnapToTickEnabled="False" />
+                                    <TextBlock Grid.Column="2" Text="{Binding Opacity, StringFormat='{}{0:P0}'}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Foreground="{DynamicResource Text.Secondary}" Margin="6,0,0,0" />
                                 </Grid>
                                 <Grid ColumnDefinitions="*,2*">
                                     <TextBlock Text="Scale:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-                                    <NumericUpDown Grid.Column="1" Value="{Binding Scale}" Minimum="0.1" Maximum="10" Increment="0.1" FormatString="0.0" />
+                                    <controls:UnboundedSlider Grid.Column="1" Value="{Binding Scale}" />
                                 </Grid>
-                                <Grid ColumnDefinitions="*,2*">
-                                    <TextBlock Text="Rotation:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-                                    <NumericUpDown Grid.Column="1" Value="{Binding RotationDeg}" Minimum="-360" Maximum="360" Increment="5" FormatString="0.0°" />
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <TextBlock Text="Rotation:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,8,0" />
+                                    <Slider Grid.Column="1" Value="{Binding RotationDeg}" Minimum="-360" Maximum="360" TickFrequency="1" IsSnapToTickEnabled="False" />
+                                    <TextBlock Grid.Column="2" Text="{Binding RotationDeg, StringFormat='{}{0:F1}°'}" VerticalAlignment="Center" MinWidth="50" TextAlignment="Right" Foreground="{DynamicResource Text.Secondary}" Margin="6,0,0,0" />
                                 </Grid>
                             </StackPanel>
                         </Expander>

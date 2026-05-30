@@ -235,7 +235,8 @@ impl SimulationDelegate for ParticleTestDelegate {
         active_scene.scene.add_component(internal_updater, aethervk_core_rlib::scene::script_components::UpdateComponent {
             entities: [Some(internal_mesh), Some(internal_sys1), Some(internal_sys2), None],
             arbitrary_data: [0.0; 4],
-            callback: |_, scene, entities_arr, _data, dt| {
+            user_data: None,
+            callback: |_, scene, entities_arr, _data, _user_data, dt| {
                 // Decode ids
                 let mesh_id = entities_arr[0].unwrap();
                 let sys1_id = entities_arr[1].unwrap();

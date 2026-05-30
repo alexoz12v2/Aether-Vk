@@ -56,6 +56,12 @@ public partial class Entity : ObservableObject
   public bool IsRoot => Name == "root" || Id == 1;
   public bool IsMeasurement => Components.Any(c => c is MeasurementComponent);
 
+  /// <summary>
+  /// Whether this entity can be deleted by the user from the UI (e.g., via Delete key or ✕ button).
+  /// Default is false. Set to true for dynamically spawned entities like billboards.
+  /// </summary>
+  public bool IsDeletable { get; set; }
+
   public Entity(ulong sceneId, ulong id, string name)
   {
     SceneId = sceneId;

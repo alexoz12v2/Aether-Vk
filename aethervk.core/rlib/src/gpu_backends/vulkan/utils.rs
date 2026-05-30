@@ -114,17 +114,23 @@ impl PhysicalDeviceQueryInput {
 
     #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
     unsafe {
-      _supported = ash::khr::wayland_surface::Instance::new(_entry, &_instance)
+      let ptr_copy = self.wl_display.as_ptr();
+      _supported = ash::khr::wayland_surface::Instance::new(_entry, _instance)
         .get_physical_device_wayland_presentation_support(
           _physical_device,
           _queue_family_index,
-          self.wl_display,
+          ptr_copy.as_mut().unwrap(),
         );
     }
 
-    #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+    #[cfg(all(
+      target_os = "linux",
+      feature = "linux_xcb",
+      not(feature = "linux_wayland"),
+      not(feature = "linux_xlib")
+    ))]
     unsafe {
-      _supported = ash::khr::xcb_surface::Instance::new(_entry, &_instance)
+      _supported = ash::khr::xcb_surface::Instance::new(_entry, _instance)
         .get_physical_device_xcb_presentation_support(
           _physical_device,
           _queue_family_index,
@@ -133,9 +139,14 @@ impl PhysicalDeviceQueryInput {
         );
     }
 
-    #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+    #[cfg(all(
+      target_os = "linux",
+      feature = "linux_xlib",
+      not(feature = "linux_wayland"),
+      not(feature = "linux_xcb")
+    ))]
     unsafe {
-      _supported = ash::khr::xlib_surface::Instance::new(_entry, &_instance)
+      _supported = ash::khr::xlib_surface::Instance::new(_entry, _instance)
         .get_physical_device_xlib_presentation_support(
           _physical_device,
           _queue_family_index,
@@ -720,7 +731,18 @@ pub(super) fn required_instance_extensions() -> &'static Vec<&'static CStr> {
     }
     #[cfg(target_os = "linux")]
     {
-      todo!();
+      #[cfg(feature = "linux_wayland")]
+      {
+        the_vec.push(ash::khr::wayland_surface::NAME);
+      }
+      #[cfg(feature = "linux_xcb")]
+      {
+        the_vec.push(ash::khr::xcb_surface::NAME);
+      }
+      #[cfg(feature = "linux_xlib")]
+      {
+        the_vec.push(ash::khr::xlib_surface::NAME);
+      }
     }
     // colorspaces
     the_vec.push(ash::ext::swapchain_colorspace::NAME);
@@ -780,9 +802,7 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
       the_vec.push(ash::ext::metal_objects::NAME);
     }
     #[cfg(target_os = "linux")]
-    {
-      todo!();
-    }
+    {}
 
     // extensions for VMA (memory budget also important for out-of-core/streaming)
     the_vec.push(ash::ext::memory_budget::NAME);

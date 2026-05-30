@@ -1211,7 +1211,12 @@ impl WindowedPresentationState {
         .surface(native_handle.ptr1 as _);
       unsafe { wayland_instance.create_wayland_surface(&create_info, None) }
     }
-    #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+    #[cfg(all(
+      target_os = "linux",
+      feature = "linux_xcb",
+      not(feature = "linux_wayland"),
+      not(feature = "linux_xlib")
+    ))]
     {
       let xcb_instance = ash::khr::xcb_surface::Instance::new(entry, instance);
       let create_info = vk::XcbSurfaceCreateInfoKHR::default()
@@ -1219,7 +1224,12 @@ impl WindowedPresentationState {
         .window(native_handle.ptr1 as _);
       unsafe { xcb_instance.create_xcb_surface(&create_info, None) }
     }
-    #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+    #[cfg(all(
+      target_os = "linux",
+      feature = "linux_xlib",
+      not(feature = "linux_wayland"),
+      not(feature = "linux_xcb")
+    ))]
     {
       let xlib_instance = ash::khr::xlib_surface::Instance::new(entry, instance);
       let create_info = vk::XlibSurfaceCreateInfoKHR::default()

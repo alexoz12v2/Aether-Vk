@@ -23,20 +23,23 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="vm:BillboardViewModel">
-                    <Grid>
-                        <!-- The billboard content with scale/rotation transforms -->
-                        <StackPanel Orientation="Vertical" RenderTransformOrigin="50%,50%">
-                            <StackPanel.RenderTransform>
-                                <TransformGroup>
-                                    <ScaleTransform ScaleX="{Binding Scale}" ScaleY="{Binding Scale}" />
-                                    <RotateTransform Angle="{Binding Rotation}" />
-                                </TransformGroup>
-                            </StackPanel.RenderTransform>
+                    <!-- Outer Grid carries Rotation only — gizmo elements rotate with image
+                         but remain constant pixel size (no ScaleTransform here). -->
+                    <Grid RenderTransformOrigin="50%,50%">
+                        <Grid.RenderTransform>
+                            <RotateTransform Angle="{Binding Rotation}" />
+                        </Grid.RenderTransform>
 
+                        <!-- Billboard image — sized via ScaledWidth/Height so layout matches visual -->
+                        <StackPanel Orientation="Vertical">
                             <Image Source="{Binding ImageSource, Converter={x:Static conv:FilePathToBitmapConverter.Instance}}"
-                                   Width="{Binding Width}" Height="{Binding Height}" Opacity="{Binding Opacity}"
+                                   Width="{Binding ScaledWidth}" Height="{Binding ScaledHeight}" Opacity="{Binding Opacity}"
                                    IsVisible="{Binding ImageSource, Converter={x:Static ObjectConverters.IsNotNull}}"
-                                   PointerPressed="OnBillboardPointerPressed"
+                                   IsHitTestVisible="{Binding IsSelected}"
+                                   Cursor="SizeAll"
+                                   PointerPressed="OnBillboardDragPressed"
+                                   PointerMoved="OnBillboardPointerMoved"
+                                   PointerReleased="OnBillboardPointerReleased"
                                    PointerWheelChanged="OnBillboardWheelChanged" />
                             <Border Background="{DynamicResource Bg.Surface}" CornerRadius="4" Padding="4"
                                     IsVisible="{Binding Text, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
@@ -45,19 +48,61 @@
                             </Border>
                         </StackPanel>
 
-                        <!-- Selection adorner overlay -->
-                        <Border IsVisible="{Binding IsSelected}" IsHitTestVisible="True"
+                        <!-- Selection adorner: constant-thickness border -->
+                        <Border IsVisible="{Binding IsSelected}" IsHitTestVisible="False"
                                 BorderBrush="{DynamicResource Accent.Primary}" BorderThickness="2"
-                                CornerRadius="4" Margin="-4" Padding="0" Background="Transparent">
-                            <!-- Delete button at top-right -->
-                            <Button HorizontalAlignment="Right" VerticalAlignment="Top"
-                                    Width="20" Height="20" Padding="0"
-                                    Background="{DynamicResource Sem.Error}" Foreground="White"
-                                    CornerRadius="10" FontSize="10" Content="✕"
-                                    Command="{Binding $parent[ItemsControl].((vm:Viewport3DViewModel)DataContext).RemoveBillboardCommand}"
-                                    CommandParameter="{Binding}"
-                                    Margin="0,-8,-8,0" />
-                        </Border>
+                                CornerRadius="4" Margin="-4" Padding="0" Background="Transparent" />
+
+                        <!-- Delete button at top-right -->
+                        <Button IsVisible="{Binding IsSelected}"
+                                HorizontalAlignment="Right" VerticalAlignment="Top"
+                                Width="20" Height="20" Padding="0"
+                                Background="{DynamicResource Sem.Error}" Foreground="White"
+                                CornerRadius="10" FontSize="10" Content="✕"
+                                Command="{Binding $parent[ItemsControl].((vm:Viewport3DViewModel)DataContext).RemoveBillboardCommand}"
+                                CommandParameter="{Binding}"
+                                Margin="0,-12,-12,0" />
+
+                        <!-- Corner scale handles (Sem.Warning) -->
+                        <Ellipse IsVisible="{Binding IsSelected}" Width="10" Height="10"
+                                 Fill="{DynamicResource Sem.Warning}" Stroke="White" StrokeThickness="1"
+                                 HorizontalAlignment="Left" VerticalAlignment="Top"
+                                 Margin="-5,-5,0,0" Cursor="TopLeftCorner"
+                                 PointerPressed="OnScaleHandlePressed"
+                                 PointerMoved="OnScaleHandleMoved"
+                                 PointerReleased="OnScaleHandleReleased" />
+                        <Ellipse IsVisible="{Binding IsSelected}" Width="10" Height="10"
+                                 Fill="{DynamicResource Sem.Warning}" Stroke="White" StrokeThickness="1"
+                                 HorizontalAlignment="Right" VerticalAlignment="Top"
+                                 Margin="0,-5,-5,0" Cursor="TopRightCorner"
+                                 PointerPressed="OnScaleHandlePressed"
+                                 PointerMoved="OnScaleHandleMoved"
+                                 PointerReleased="OnScaleHandleReleased" />
+                        <Ellipse IsVisible="{Binding IsSelected}" Width="10" Height="10"
+                                 Fill="{DynamicResource Sem.Warning}" Stroke="White" StrokeThickness="1"
+                                 HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                 Margin="-5,0,0,-5" Cursor="BottomLeftCorner"
+                                 PointerPressed="OnScaleHandlePressed"
+                                 PointerMoved="OnScaleHandleMoved"
+                                 PointerReleased="OnScaleHandleReleased" />
+                        <Ellipse IsVisible="{Binding IsSelected}" Width="10" Height="10"
+                                 Fill="{DynamicResource Sem.Warning}" Stroke="White" StrokeThickness="1"
+                                 HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                 Margin="0,0,-5,-5" Cursor="BottomRightCorner"
+                                 PointerPressed="OnScaleHandlePressed"
+                                 PointerMoved="OnScaleHandleMoved"
+                                 PointerReleased="OnScaleHandleReleased" />
+
+                        <!-- Rotation handle: circle at top-center -->
+                        <Ellipse IsVisible="{Binding IsSelected}"
+                                 Width="14" Height="14" Fill="{DynamicResource Accent.Primary}"
+                                 Stroke="White" StrokeThickness="1.5"
+                                 HorizontalAlignment="Center" VerticalAlignment="Top"
+                                 Margin="0,-18,0,0" Cursor="Cross"
+                                 PointerPressed="OnRotateHandlePressed"
+                                 PointerMoved="OnRotateHandleMoved"
+                                 PointerReleased="OnRotateHandleReleased"
+                                 ToolTip.Tip="Drag to rotate (Ctrl = 15° snap)" />
                     </Grid>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
@@ -66,9 +111,13 @@
                     <Setter Property="Canvas.Left" Value="{Binding X}" />
                     <Setter Property="Canvas.Top" Value="{Binding Y}" />
                     <Setter Property="ZIndex" Value="{Binding ZIndex}" />
+                    <Setter Property="IsVisible" Value="{Binding IsEntityVisible}" />
                 </Style>
             </ItemsControl.Styles>
         </ItemsControl>
+
+        <!-- Goniometer overlay: shown during billboard rotation -->
+        <Canvas x:Name="GoniometerOverlay" IsHitTestVisible="False" IsVisible="False" />
 
         <!-- ── Radial Menu Overlay (Alt+S hold) ─────────────────────────────── -->
         <Canvas IsHitTestVisible="False" IsVisible="{Binding IsRadialMenuOpen}">

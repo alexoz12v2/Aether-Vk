@@ -575,36 +575,31 @@ pub unsafe extern "C" fn avkSimulationContext_spawnBillboard(
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  let image_path_str = unsafe { CStr::from_ptr(image_path).to_str().unwrap_or("") };
+  let _image_path_str = unsafe { CStr::from_ptr(image_path).to_str().unwrap_or("") };
 
-  // Create a basic billboard entity with a BillboardComponent
+  // Screen-space billboards are rendered by the C# Avalonia overlay, not the Vulkan
+  // pipeline. The entity only needs a ScreenSpaceBillboardComponent (added by the
+  // C# caller after this returns) — no TransformComponent or ImageBillboardComponent.
   if let Ok(entity_id) = ctx_ref.spawn_entity(scene_id, "Billboard") {
-    // We add a component to mark it as a billboard. The renderer should handle it.
-    // For now we just add a TransformComponent so it exists in space.
-    let _ = ctx_ref.add_transform_component(
-      scene_id,
-      entity_id,
-      Vec3f32::from_components(0.0, 0.0, 0.0),
-      Quat::from_components(1.0, 0.0, 0.0, 0.0),
-      Vec3f32::from_components(1.0, 1.0, 1.0),
-    );
-    let _ = ctx_ref.add_image_billboard_component(
-      scene_id, entity_id, true, // is_screen_space
-      1.0,  // width
-      1.0,  // height
-    );
-    let _ = ctx_ref.add_screen_space_billboard_component(
-      scene_id,
-      entity_id,
-      image_path_str,
-      0.0,
-      0.0,
-      1.0,
-      0.0,
-      1.0,
-      1,
-      0,
-    );
+    // Parent billboard entity to the scene root for proper hierarchy.
+    // The billboard ignores transforms (no TransformComponent) but should still
+    // appear as a child of root in the scene outline.
+    let scenes = ctx_ref.scenes.read();
+    if let Some(scene_ctx) = scenes.get(&scene_id) {
+      let scene_read = scene_ctx.read();
+      if let Some(root_id) = scene_read.scene.get_root() {
+        let root_ext_id = scene_read
+          .entity_map
+          .iter()
+          .find(|&(_, &v)| v == root_id)
+          .map(|(&k, _)| k);
+        if let Some(parent_ext) = root_ext_id {
+          drop(scene_read);
+          drop(scenes);
+          let _ = ctx_ref.set_parent(scene_id, entity_id, parent_ext);
+        }
+      }
+    }
     unsafe {
       *out_entity_id = entity_id;
     }
