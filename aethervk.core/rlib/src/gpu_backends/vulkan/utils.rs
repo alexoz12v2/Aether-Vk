@@ -452,6 +452,7 @@ impl EntryWrapper {
                     sdk_loader.as_bytes().len(),
                   ))
                 };
+                use aethervk_oshal_rlib::os::fs::FileSystemObject;
                 if sdk_loader_path.is_file() {
                   Some(sdk_loader)
                 } else {
