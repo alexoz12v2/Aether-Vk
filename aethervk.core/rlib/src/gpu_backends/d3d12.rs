@@ -354,6 +354,10 @@ impl RenderDevice for D3d12RenderDevice {
   fn submit_command_buffer(&self, _cmd_buffer: CommandBufferHandle) -> GpuResult<()> {
     unimplemented!()
   }
+
+  fn clear_depth(&self, cmd_buffer: crate::gpu::CommandBufferHandle, handle: crate::gpu::PresentationEngineHandle) -> Result<(), crate::types::GpuError> {
+    todo!()
+  }
 }
 
 /// TODO: Document this item

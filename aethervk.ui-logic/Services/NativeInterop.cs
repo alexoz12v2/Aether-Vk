@@ -306,6 +306,13 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSimulationContext_getEntityReferenceFrameType(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_getSceneHierarchy(
     IntPtr context,
     ulong sceneId,

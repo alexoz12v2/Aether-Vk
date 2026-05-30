@@ -277,8 +277,8 @@ impl LogicThreadContext {
         })
         .ok_or(EngineError::InvalidOperation("camera component missing"))?;
 
-      let ndc_near = Vec4f32::from_components(ndc_x, ndc_y, 0.0, 1.0);
-      let ndc_far = Vec4f32::from_components(ndc_x, ndc_y, 1.0, 1.0);
+      let ndc_near = Vec4f32::from_components(ndc_x, ndc_y, 1.0, 1.0);
+      let ndc_far = Vec4f32::from_components(ndc_x, ndc_y, 0.0, 1.0);
       let mut world_near = view_proj_inv.mul_vector(ndc_near);
       let mut world_far = view_proj_inv.mul_vector(ndc_far);
       if world_near.w() != 0.0 {

@@ -453,6 +453,7 @@ impl BvhDrawCall {
   }
 }
 
+#[derive(Debug, Clone)]
 /// TODO: Document this item
 pub struct CameraRenderData {
   pub pos: Vec3f32,
@@ -465,11 +466,21 @@ pub struct CameraRenderData {
   pub right: [f32; 3],
   pub near: f32,
   pub far: f32,
+  /// Stored projection parameters so we can rebuild the projection per depth layer.
+  pub projection_params: CameraProjectionParams,
+}
+
+/// Cached projection parameters from the CameraComponent, allowing per-layer
+/// projection rebuild without fragile column patching.
+#[derive(Debug, Clone, Copy)]
+pub enum CameraProjectionParams {
+  Perspective { fov: f32, aspect_ratio: f32 },
+  Orthographic { left: f32, right: f32, bottom: f32, top: f32 },
 }
 
 impl CameraRenderData {
   /// Note: camera component should have been updated with presentation engine data
-  pub fn new(transform: &TransformComponent, camera: &CameraComponent) -> Self {
+  pub fn new(transform: &TransformComponent, camera: &CameraComponent, frame_scale: f32) -> Self {
     // Extract camera's local axes in world space
     let right = transform.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
     let up = transform.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
@@ -477,7 +488,27 @@ impl CameraRenderData {
 
     // RTE View Matrix: Camera is at the center [0,0,0], only rotating.
     let view = Mat4x4f32::look_at_axes(right, forward, up, Vec3f32::from_components(0.0, 0.0, 0.0));
-    let proj = camera.get_projection_matrix();
+
+    let near = camera.near_plane() * frame_scale;
+    let far = camera.far_plane() * frame_scale;
+    let (proj, projection_params) = match camera.projection {
+      crate::scene::CameraProjection::Perspective {
+        fov, aspect_ratio, ..
+      } => (
+        Mat4x4f32::perspective_vk_reverse_z(fov, aspect_ratio, near, far),
+        CameraProjectionParams::Perspective { fov, aspect_ratio },
+      ),
+      crate::scene::CameraProjection::Orthographic {
+        left,
+        right,
+        bottom,
+        top,
+        ..
+      } => (
+        Mat4x4f32::orthographic_vk_reverse_z(left, right, bottom, top, near, far),
+        CameraProjectionParams::Orthographic { left, right, bottom, top },
+      ),
+    };
     let view_proj = proj * view;
 
     Self {
@@ -490,8 +521,36 @@ impl CameraRenderData {
       view_proj,
       up: [up.x(), up.y(), up.z()],
       right: [right.x(), right.y(), right.z()],
-      near: camera.near_plane(),
-      far: camera.far_plane(),
+      near,
+      far,
+      projection_params,
+    }
+  }
+
+  /// Rebuild this camera's projection and view_proj for a specific depth layer's
+  /// near/far planes. The view matrix (rotation-only in RTE) is shared across all layers.
+  pub fn rebuild_for_layer(&self, layer_near: f32, layer_far: f32) -> Self {
+    let proj = match self.projection_params {
+      CameraProjectionParams::Perspective { fov, aspect_ratio } => {
+        Mat4x4f32::perspective_vk_reverse_z(fov, aspect_ratio, layer_near, layer_far)
+      }
+      CameraProjectionParams::Orthographic { left, right, bottom, top } => {
+        Mat4x4f32::orthographic_vk_reverse_z(left, right, bottom, top, layer_near, layer_far)
+      }
+    };
+    let view_proj = proj * self.view;
+    Self {
+      pos: self.pos,
+      absolute_pos: self.absolute_pos,
+      rot: self.rot,
+      view: self.view,
+      proj,
+      view_proj,
+      up: self.up,
+      right: self.right,
+      near: layer_near,
+      far: layer_far,
+      projection_params: self.projection_params,
     }
   }
 }
@@ -550,71 +609,31 @@ pub struct TextDrawCall {
   pub color: [f32; 4],
 }
 
-/// TODO: Document this item
-pub struct RenderScene {
-  pub time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
-  pub camera_data: CameraRenderData,
-  pub window_extent: [u32; 2],
-
+pub struct RenderLayer {
+  pub layer_index: u32,
+  pub near: f32,
+  pub far: f32,
   pub draw_calls: Vec<DrawCall>,
+  pub billboard_calls: Vec<BillboardDrawCall>,
   pub marker_calls: Vec<MarkerDrawCall>,
   pub measurement_calls: Vec<MeasurementDrawCall>,
-  pub billboard_calls: Vec<BillboardDrawCall>,
   pub bvh_draw_calls: Vec<BvhDrawCall>,
   pub bvhwire2_data: Vec<crate::gpu::Bvhwire2DataGpu>,
+  pub bvhwire2_batch_call: Option<Bvhwire2BatchCall>,
   pub gizmo_calls: Vec<GizmoDrawCall>,
   pub particle_calls: Vec<ParticleDrawCall>,
   pub particle2_calls: Vec<Particle2DrawCall>,
-  pub text_calls: Vec<TextDrawCall>,
-
+  pub sphere_gizmo_batch_call: Option<SphereGizmoBatchCall>,
+  pub trajectory_call: Option<TrajectoryBatchCall>,
   pub cursor_call: Option<CursorDrawCall>,
   pub sun_call: Option<SunDrawCall>,
   pub sky_call: Option<SkyDrawCall>,
   pub grid_call: Option<GridDrawCall>,
-  pub trajectory_call: Option<TrajectoryBatchCall>,
-  pub bvhwire2_batch_call: Option<Bvhwire2BatchCall>,
-  pub sphere_gizmo_batch_call: Option<SphereGizmoBatchCall>,
-  pub ui_call: Option<UiBatchCall>,
-  pub text2_call: Option<crate::gpu::Text2BatchCall>,
   pub background_call: Option<BackgroundDrawCall>,
 }
 
-impl RenderScene {
-  const START_VEC_CAPACITY: usize = 32;
-  /// TODO: Document this item
-  pub fn new(
-    camera: (TransformComponent, CameraComponent),
-    time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
-    window_extent: [u32; 2],
-  ) -> Self {
-    Self {
-      window_extent,
-      time_readings,
-      draw_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
-      cursor_call: None,
-      marker_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
-      measurement_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
-      billboard_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
-      bvh_draw_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
-      bvhwire2_data: Vec::with_capacity(Self::START_VEC_CAPACITY),
-      gizmo_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
-      text_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
-      particle_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
-      particle2_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
-      camera_data: CameraRenderData::new(&camera.0, &camera.1),
-      sun_call: None,
-      sky_call: None,
-      background_call: None,
-      grid_call: None,
-      trajectory_call: None,
-      bvhwire2_batch_call: None,
-      sphere_gizmo_batch_call: None,
-      ui_call: None,
-      text2_call: None,
-    }
-  }
-
-  /// Registers a renderable entity to be drawn in this frame.
+impl RenderLayer {
+  /// Registers a renderable entity to be drawn in this layer.
   #[named]
   pub fn add_renderable(
     &mut self,
@@ -832,12 +851,82 @@ impl RenderScene {
         } else {
           let pipeline_key = device.get_bvh_pipeline_kay(presentation_engine_handle)?;
           for node in nodes {
-            self.bvh_draw_calls.push(BvhDrawCall::new(node, pipeline_key, model_matrix));
+            match node {
+              LinearBound::AABB(_) | LinearBound::OBB(_) => {
+                self.bvh_draw_calls.push(BvhDrawCall::new(node, pipeline_key, model_matrix));
+              }
+            }
           }
         }
       }
     }
     Ok(())
+  }
+}
+
+/// TODO: Document this item
+pub struct RenderScene {
+  pub time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
+  pub camera_data: CameraRenderData,
+  pub window_extent: [u32; 2],
+
+  pub depth_layers: Vec<RenderLayer>,
+  pub text_calls: Vec<TextDrawCall>,
+
+  pub ui_call: Option<UiBatchCall>,
+  pub text2_call: Option<crate::gpu::Text2BatchCall>,
+}
+
+impl RenderScene {
+  const START_VEC_CAPACITY: usize = 32;
+  /// TODO: Document this item
+  pub fn new(
+    camera: (TransformComponent, CameraComponent),
+    time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
+    window_extent: [u32; 2],
+  ) -> Self {
+    Self {
+      window_extent,
+      time_readings,
+      depth_layers: Vec::with_capacity(Self::START_VEC_CAPACITY),
+      text_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
+      camera_data: CameraRenderData::new(&camera.0, &camera.1, 1.0),
+      ui_call: None,
+      text2_call: None,
+    }
+  }
+
+  pub fn get_or_create_layer(&mut self, layer_index: u32, near: f32, far: f32) -> &mut RenderLayer {
+    let idx = self
+      .depth_layers
+      .iter()
+      .position(|l| l.layer_index == layer_index)
+      .unwrap_or_else(|| {
+        self.depth_layers.push(RenderLayer {
+          layer_index,
+          near,
+          far,
+          draw_calls: Vec::new(),
+          billboard_calls: Vec::new(),
+          marker_calls: Vec::new(),
+          measurement_calls: Vec::new(),
+          bvh_draw_calls: Vec::new(),
+          bvhwire2_data: Vec::new(),
+          bvhwire2_batch_call: None,
+          gizmo_calls: Vec::new(),
+          particle_calls: Vec::new(),
+          particle2_calls: Vec::new(),
+          sphere_gizmo_batch_call: None,
+          trajectory_call: None,
+          cursor_call: None,
+          sun_call: None,
+          sky_call: None,
+          grid_call: None,
+          background_call: None,
+        });
+        self.depth_layers.len() - 1
+      });
+    &mut self.depth_layers[idx]
   }
 }
 
@@ -1326,7 +1415,6 @@ pub fn do_draw_sphere_gizmo_batch(
   let push_constants = crate::gpu::SphereGizmoPushConstants {
     view_proj: camera.view_proj.into(),
     gizmo_ptr: draw_call.data_ptr,
-    _pad: 0,
   };
   device.push_sphere_gizmo_constants(cmd_buffer, &push_constants)?;
   device.draw_instanced(cmd_buffer, draw_call.total_vertices, draw_call.total_gizmos)?;
@@ -1421,112 +1509,50 @@ pub fn render_frame(
   handle: PresentationEngineHandle,
   render_scene: &gpu::RenderScene,
 ) -> GpuResult<()> {
-  // First sky and background and grid
-  if let Some(draw_call) = &render_scene.background_call {
-    do_draw_background(device, cmd_buffer, handle, draw_call)?;
-  }
-  if let Some(draw_call) = &render_scene.sky_call {
-    do_draw_sky(device, cmd_buffer, handle, draw_call)?;
-  }
-  if let Some(draw_call) = &render_scene.grid_call {
-    do_draw_grid(
-      device,
-      cmd_buffer,
-      handle,
-      &render_scene.camera_data,
-      draw_call,
-    )?;
-  }
+  let compositing = render_scene.depth_layers.len() > 1;
 
-  let sun_pos = if let Some(draw_call) = &render_scene.sun_call {
-    draw_call.sun_pos()
+  if compositing {
+    // ── Multi-layer compositing mode ──────────────────────────────────
+    // Subpass 0 (macro) and subpass 1 (micro) each get their own
+    // color+depth attachments. Subpass 2 composites via input attachments.
+    //
+    // Subpass 0: draw the macro layer (layer_index == 0)
+    if let Some(macro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 0) {
+      draw_layer_content(device, cmd_buffer, handle, render_scene, macro_layer)?;
+    }
+
+    // Transition to subpass 1 (micro)
+    device.next_subpass(cmd_buffer)?;
+
+    // Subpass 1: draw the micro layer (layer_index == 1)
+    if let Some(micro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 1) {
+      draw_layer_content(device, cmd_buffer, handle, render_scene, micro_layer)?;
+    }
+
+    // Transition to subpass 2 (composite + UI)
+    device.next_subpass(cmd_buffer)?;
+
+    // Draw fullscreen composite triangle to merge macro+micro
+    let macro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 0);
+    let micro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 1);
+    let constants = gpu::CompositePushConstants {
+      macro_near: macro_layer.map(|l| l.near).unwrap_or(0.1),
+      macro_far: macro_layer.map(|l| l.far).unwrap_or(1000.0),
+      micro_near: micro_layer.map(|l| l.near).unwrap_or(0.001),
+      micro_far: micro_layer.map(|l| l.far).unwrap_or(10.0),
+    };
+    device.draw_composite(cmd_buffer, handle, &constants)?;
   } else {
-    Vec3f32::from_components(100.0, 100.0, 100.0)
-  };
-  // TODO setup method (binds pipeline, descriptor set, ...)
-  for draw_call in &render_scene.draw_calls {
-    if draw_call.use_new_path {
-      do_draw_call2(
-        device,
-        &render_scene.camera_data,
-        sun_pos,
-        [1.0, 1.0, 1.0, 1.0], // TODO
-        cmd_buffer,
-        handle,
-        draw_call,
-        [
-          render_scene.window_extent[0] as f32,
-          render_scene.window_extent[1] as f32,
-        ],
-      )?;
-    } else {
-      do_draw_call(
-        device,
-        &render_scene.camera_data,
-        sun_pos,
-        [1.0, 1.0, 1.0, 1.0], // TODO
-        cmd_buffer,
-        handle,
-        draw_call,
-      )?;
+    // ── Single-layer mode (original path) ─────────────────────────────
+    for (i, layer) in render_scene.depth_layers.iter().enumerate() {
+      if i > 0 {
+        device.clear_depth(cmd_buffer, handle)?;
+      }
+      draw_layer_content(device, cmd_buffer, handle, render_scene, layer)?;
     }
   }
 
-  // End of opaque Stuff, beginning semitransparent/transparent stuff
-
-  // Draw Sun Volume after opaque meshes so it properly blends over them instead of being overwritten
-  if let Some(draw_call) = &render_scene.sun_call {
-    gpu::frame::do_draw_sun(
-      device,
-      &render_scene.camera_data,
-      cmd_buffer,
-      handle,
-      draw_call,
-    )?;
-  }
-
-  if !render_scene.particle_calls.is_empty() {
-    device.prepare_particle_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
-    for particle_call in &render_scene.particle_calls {
-      gpu::frame::do_draw_particle(
-        device,
-        &render_scene.camera_data,
-        cmd_buffer,
-        handle,
-        particle_call,
-      )?;
-    }
-  }
-
-  if !render_scene.particle2_calls.is_empty() {
-    device.prepare_particle2_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
-    let time = (render_scene.time_readings.time as f64 / 1_000_000.0) as f32;
-    for particle_call in &render_scene.particle2_calls {
-      do_draw_particle2(
-        device,
-        &render_scene.camera_data,
-        cmd_buffer,
-        handle,
-        particle_call,
-        time,
-      )?;
-    }
-  }
-
-  if let Some(draw_call) = &render_scene.trajectory_call {
-    do_draw_trajectory_batch(
-      device,
-      &render_scene.camera_data,
-      cmd_buffer,
-      handle,
-      draw_call,
-      [
-        render_scene.window_extent[0] as f32,
-        render_scene.window_extent[1] as f32,
-      ],
-    )?;
-  }
-
+  // ── UI / Text (always drawn last, in the final subpass) ────────────
   if let Some(draw_call) = &render_scene.ui_call {
     gpu::frame::do_draw_ui_batch(
       device,
@@ -1584,95 +1610,160 @@ pub fn render_frame(
 
   // end of scene, begin rendering UI elements
 
-  if let Some(cursor_call) = &render_scene.cursor_call {
-    do_draw_cursor(
-      device,
-      &render_scene.camera_data,
-      cmd_buffer,
-      handle,
-      cursor_call,
-      render_scene.window_extent,
-    )?;
+  Ok(())
+}
+
+/// Draws the content of a single depth layer (all draw calls, gizmos, particles, etc).
+/// Extracted to avoid duplicating layer drawing logic between single-subpass and compositing modes.
+fn draw_layer_content(
+  device: &dyn RenderDevice,
+  cmd_buffer: gpu::CommandBufferHandle,
+  handle: PresentationEngineHandle,
+  render_scene: &gpu::RenderScene,
+  layer: &RenderLayer,
+) -> GpuResult<()> {
+  let sun_pos = if let Some(draw_call) = &layer.sun_call {
+    draw_call.sun_pos()
+  } else {
+    Vec3f32::from_components(100.0, 100.0, 100.0)
+  };
+
+  // Rebuild projection matrix for this layer's near/far planes.
+  // The view matrix (rotation-only in RTE) is shared across all layers.
+  let layer_camera = render_scene.camera_data.rebuild_for_layer(layer.near, layer.far);
+
+  if let Some(draw_call) = &layer.background_call {
+    do_draw_background(device, cmd_buffer, handle, draw_call)?;
+  }
+  if let Some(draw_call) = &layer.sky_call {
+    do_draw_sky(device, cmd_buffer, handle, draw_call)?;
+  }
+  if let Some(draw_call) = &layer.grid_call {
+    do_draw_grid(device, cmd_buffer, handle, &layer_camera, draw_call)?;
   }
 
-  for marker_call in &render_scene.marker_calls {
-    do_draw_marker(
-      device,
-      &render_scene.camera_data,
-      cmd_buffer,
-      handle,
-      marker_call,
-    )?;
-  }
-
-  for measurement_call in &render_scene.measurement_calls {
-    do_draw_measurement(
-      device,
-      &render_scene.camera_data,
-      cmd_buffer,
-      handle,
-      measurement_call,
-    )?;
-  }
-
-  if !render_scene.gizmo_calls.is_empty() {
-    // bind the descriptor set
-    device.prepare_gizmo_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
-    for gizmo_call in &render_scene.gizmo_calls {
-      do_draw_gizmo(
+  for draw_call in &layer.draw_calls {
+    if draw_call.use_new_path {
+      do_draw_call2(
         device,
-        &render_scene.camera_data,
+        &layer_camera,
+        sun_pos,
+        [1.0, 1.0, 1.0, 1.0], // TODO
         cmd_buffer,
         handle,
-        gizmo_call,
+        draw_call,
+        [
+          render_scene.window_extent[0] as f32,
+          render_scene.window_extent[1] as f32,
+        ],
+      )?;
+    } else {
+      do_draw_call(
+        device,
+        &layer_camera,
+        sun_pos,
+        [1.0, 1.0, 1.0, 1.0], // TODO
+        cmd_buffer,
+        handle,
+        draw_call,
       )?;
     }
   }
 
-  if render_scene.billboard_calls.len() > 0 {
+  if !layer.billboard_calls.is_empty() {
     device.prepare_billboard_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
-  }
-  for billboard_call in &render_scene.billboard_calls {
-    do_draw_billboard(
-      device,
-      &render_scene.camera_data,
-      cmd_buffer,
-      handle,
-      billboard_call,
-    )?;
-    // TODO draw associated text
-  }
-
-  if !render_scene.bvh_draw_calls.is_empty() {
-    device.prepare_bvh_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
-    for bvh_call in &render_scene.bvh_draw_calls {
-      do_bvh_draw_call(
-        device,
-        cmd_buffer,
-        handle,
-        &render_scene.camera_data,
-        bvh_call,
-      )?
+    for billboard_call in &layer.billboard_calls {
+      do_draw_billboard(device, &layer_camera, cmd_buffer, handle, billboard_call)?;
     }
   }
 
-  if let Some(draw_call) = &render_scene.bvhwire2_batch_call {
-    do_draw_bvhwire2_batch(
+  if !layer.bvh_draw_calls.is_empty() {
+    device.prepare_bvh_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
+    for draw_call in &layer.bvh_draw_calls {
+      do_bvh_draw_call(device, cmd_buffer, handle, &layer_camera, draw_call)?;
+    }
+  }
+
+  if let Some(batch_call) = &layer.bvhwire2_batch_call {
+    gpu::frame::do_draw_bvhwire2_batch(device, &layer_camera, cmd_buffer, handle, batch_call)?;
+  }
+
+  if !layer.gizmo_calls.is_empty() {
+    device.prepare_gizmo_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
+    for draw_call in &layer.gizmo_calls {
+      gpu::frame::do_draw_gizmo(device, &layer_camera, cmd_buffer, handle, draw_call)?;
+    }
+  }
+
+  if let Some(batch_call) = &layer.sphere_gizmo_batch_call {
+    gpu::frame::do_draw_sphere_gizmo_batch(
       device,
-      &render_scene.camera_data,
+      &layer_camera,
       cmd_buffer,
       handle,
-      draw_call,
+      batch_call,
     )?;
   }
 
-  if let Some(draw_call) = &render_scene.sphere_gizmo_batch_call {
-    do_draw_sphere_gizmo_batch(
+  for measurement_call in &layer.measurement_calls {
+    gpu::frame::do_draw_measurement(device, &layer_camera, cmd_buffer, handle, measurement_call)?;
+  }
+
+  for marker_call in &layer.marker_calls {
+    gpu::frame::do_draw_marker(device, &layer_camera, cmd_buffer, handle, marker_call)?;
+  }
+
+  if !layer.particle_calls.is_empty() {
+    device.prepare_particle_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
+    for particle_call in &layer.particle_calls {
+      gpu::frame::do_draw_particle(device, &layer_camera, cmd_buffer, handle, particle_call)?;
+    }
+  }
+
+  if !layer.particle2_calls.is_empty() {
+    device.prepare_particle2_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
+    let time = (render_scene.time_readings.time as f64 / 1_000_000.0) as f32;
+    for particle_call in &layer.particle2_calls {
+      do_draw_particle2(
+        device,
+        &layer_camera,
+        cmd_buffer,
+        handle,
+        particle_call,
+        time,
+      )?;
+    }
+  }
+
+  if let Some(draw_call) = &layer.trajectory_call {
+    do_draw_trajectory_batch(
       device,
-      &render_scene.camera_data,
+      &layer_camera,
       cmd_buffer,
       handle,
       draw_call,
+      [
+        render_scene.window_extent[0] as f32,
+        render_scene.window_extent[1] as f32,
+      ],
+    )?;
+  }
+
+  // End of opaque Stuff, beginning semitransparent/transparent stuff
+
+  // Draw Sun Volume after opaque meshes so it properly blends over them instead of being overwritten
+  if let Some(draw_call) = &layer.sun_call {
+    gpu::frame::do_draw_sun(device, &layer_camera, cmd_buffer, handle, draw_call)?;
+  }
+
+  if let Some(cursor_call) = &layer.cursor_call {
+    do_draw_cursor(
+      device,
+      &layer_camera,
+      cmd_buffer,
+      handle,
+      cursor_call,
+      render_scene.window_extent,
     )?;
   }
 

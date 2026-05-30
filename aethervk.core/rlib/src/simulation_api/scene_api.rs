@@ -331,7 +331,7 @@ impl SimulationContext {
           projection: crate::scene::CameraProjection::Perspective {
             fov: 60.0_f32.to_radians(),
             aspect_ratio: 16.0 / 9.0,
-            near: 0.01,
+            near: 0.00001,
             far: 1000.0,
           },
           focus_distance: 1.0,
@@ -452,7 +452,7 @@ impl SimulationContext {
       )?;
       scene.add_component(
         camera_entity,
-        crate::scene::CameraComponent::new_persp(45.0, 1.0, 0.01, 1000.0),
+        crate::scene::CameraComponent::new_persp(45.0, 1.0, 0.00001, 1000.0),
       )?;
       scene.set_parent(camera_entity, Some(root_entity));
       oshal::log!("create_default_scene: camera OK");
@@ -538,13 +538,6 @@ impl SimulationContext {
     entity: u64,
     visible: bool,
   ) -> EngineResult<()> {
-    // Validate that the entity exists before enqueuing (provides early error feedback).
-    let _ = expect_scene_and_entity!(
-      self.get_scene(scene_id),
-      entity,
-      "scene_api:set_entity_visibility"
-    );
-
     self
       .threads
       .logic_thread
@@ -720,7 +713,7 @@ impl SimulationContext {
         frame_type: crate::scene::ReferenceFrameType::Micro,
         scale: 1.0 / KM_PER_AU,
         soi_radius: soi_radius_au,
-        _padding: 0,
+        depth_layer: 1,
       },
     )?;
 
@@ -1020,7 +1013,7 @@ impl SimulationContext {
         frame_type: crate::scene::ReferenceFrameType::Micro,
         scale: 1.0 / KM_PER_AU,
         soi_radius: soi_radius_au,
-        _padding: 0,
+        depth_layer: 1,
       },
     )?;
 
@@ -1124,7 +1117,7 @@ pub(crate) fn empty_scene_object(
         frame_type: crate::scene::ReferenceFrameType::Macro,
         scale: 1.0,
         soi_radius: 1000.0,
-        _padding: 0,
+        depth_layer: 0,
       },
     )
     .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;

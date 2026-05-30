@@ -588,11 +588,8 @@ pub unsafe extern "C" fn avkSimulationContext_spawnBillboard(
     if let Some(scene_ctx) = scenes.get(&scene_id) {
       let scene_read = scene_ctx.read();
       if let Some(root_id) = scene_read.scene.get_root() {
-        let root_ext_id = scene_read
-          .entity_map
-          .iter()
-          .find(|&(_, &v)| v == root_id)
-          .map(|(&k, _)| k);
+        let root_ext_id =
+          scene_read.entity_map.iter().find(|&(_, &v)| v == root_id).map(|(&k, _)| k);
         if let Some(parent_ext) = root_ext_id {
           drop(scene_read);
           drop(scenes);
@@ -1403,6 +1400,44 @@ pub unsafe extern "C" fn avkSimulationContext_getEntityParent(
   }
   let ctx_ref = unsafe { &*ctx };
   ctx_ref.get_entity_parent(scene_id, entity).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getEntityReferenceFrameType(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+) -> u32 {
+  if ctx.is_null() {
+    return 0; // 0 = Macro by default
+  }
+  let ctx_ref = unsafe { &*ctx };
+
+  let scenes = ctx_ref.scenes.read();
+  let scene_ctx = match scenes.get(&scene_id) {
+    Some(s) => s.read(),
+    None => return 0,
+  };
+
+  let internal_entity = match scene_ctx.get_entity(entity) {
+    Some(e) => e,
+    None => return 0,
+  };
+
+  let scene = &scene_ctx.scene;
+  if let Some((_, Some(frame_id))) = scene.frame_relative_transform(internal_entity) {
+    if let Some(frame_comp) = scene.with_component(
+      frame_id,
+      |c: &aethervk_core_rlib::scene::ReferenceFrameComponent| c.clone(),
+    ) {
+      match frame_comp.frame_type {
+        aethervk_core_rlib::scene::ReferenceFrameType::Macro => return 0,
+        aethervk_core_rlib::scene::ReferenceFrameType::Micro => return 1,
+      }
+    }
+  }
+  0
 }
 
 #[unsafe(no_mangle)]

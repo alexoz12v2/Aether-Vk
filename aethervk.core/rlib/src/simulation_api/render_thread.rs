@@ -214,38 +214,47 @@ fn process_command(
                   e
                 })?;
 
-              if let Some(sun_call) = &render_scene.sun_call {
-                render_device
-                  .update_sun(
-                    cmd_buffer,
-                    sun_call.entity,
-                    (128, 128, 128),
-                    sun_call.radius,
-                  )
-                  .map_err(|e| {
-                    aethervk_oshal_rlib::log!("[render tasklet] update_sun failed: {:?}", e);
-                    e
-                  })?;
+
+              if let Some(layer) = render_scene.depth_layers.first() {
+                if let Some(sun_call) = &layer.sun_call {
+                  render_device
+                    .update_sun(
+                      cmd_buffer,
+                      sun_call.entity,
+                      (128, 128, 128),
+                      sun_call.radius,
+                    )
+                    .map_err(|e| {
+                      aethervk_oshal_rlib::log!("[render tasklet] update_sun failed: {:?}", e);
+                      e
+                    })?;
+                }
               }
 
-              render_device
-                .upload_particle_systems(cmd_buffer, &mut render_scene.particle_calls)
-                .map_err(|e| {
-                  aethervk_oshal_rlib::log!(
-                    "[render tasklet] upload_particle_systems failed: {:?}",
-                    e
-                  );
-                  e
-                })?;
-              render_device
-                .upload_particle2_systems(cmd_buffer, &mut render_scene.particle2_calls)
-                .map_err(|e| {
-                  aethervk_oshal_rlib::log!(
-                    "[render tasklet] upload_particle2_systems failed: {:?}",
-                    e
-                  );
-                  e
-                })?;
+              for layer in &mut render_scene.depth_layers {
+                if !layer.particle_calls.is_empty() {
+                  render_device
+                    .upload_particle_systems(cmd_buffer, &mut layer.particle_calls)
+                    .map_err(|e| {
+                      aethervk_oshal_rlib::log!(
+                        "[render tasklet] upload_particle_systems failed: {:?}",
+                        e
+                      );
+                      e
+                    })?;
+                }
+                if !layer.particle2_calls.is_empty() {
+                  render_device
+                    .upload_particle2_systems(cmd_buffer, &mut layer.particle2_calls)
+                    .map_err(|e| {
+                      aethervk_oshal_rlib::log!(
+                        "[render tasklet] upload_particle2_systems failed: {:?}",
+                        e
+                      );
+                      e
+                    })?;
+                }
+              }
 
               if is_first_render && render_frame.custom_render_callback.is_some() {
                 let c = unsafe { render_frame.custom_render_callback.as_ref().unwrap_unchecked() };
@@ -262,16 +271,36 @@ fn process_command(
                 })?
               }
 
-              render_device
-                .begin_render_pass(
-                  cmd_buffer,
-                  render_frame.presentation_engine_handle,
-                  &acquire_result,
-                )
-                .map_err(|e| {
-                  aethervk_oshal_rlib::log!("[render tasklet] begin_render_pass failed: {:?}", e);
-                  e
-                })?;
+              // Select compositing render pass when multiple depth layers exist
+              if render_scene.depth_layers.len() > 1 {
+                render_device
+                  .begin_compositing_render_pass(
+                    cmd_buffer,
+                    render_frame.presentation_engine_handle,
+                    &acquire_result,
+                  )
+                  .map_err(|e| {
+                    aethervk_oshal_rlib::log!(
+                      "[render tasklet] begin_compositing_render_pass failed: {:?}",
+                      e
+                    );
+                    e
+                  })?;
+              } else {
+                render_device
+                  .begin_render_pass(
+                    cmd_buffer,
+                    render_frame.presentation_engine_handle,
+                    &acquire_result,
+                  )
+                  .map_err(|e| {
+                    aethervk_oshal_rlib::log!(
+                      "[render tasklet] begin_render_pass failed: {:?}",
+                      e
+                    );
+                    e
+                  })?;
+              }
               let render_pass_scope = gpu::ScopedRenderPass::new(render_device, cmd_buffer);
 
               render_device

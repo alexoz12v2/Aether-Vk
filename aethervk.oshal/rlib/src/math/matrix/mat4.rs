@@ -334,7 +334,7 @@ impl SquareMatrix for Mat4x4f32 {
     Self::Scalar: crate::math::FloatLike,
   {
     let (det, adjugate) = self.scalar_det_and_adjugate();
-    if det.abs() <= 1e-8 {
+    if det.abs() <= 1e-30 {
       return None;
     }
 

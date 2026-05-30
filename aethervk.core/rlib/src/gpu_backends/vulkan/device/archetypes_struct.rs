@@ -590,7 +590,7 @@ impl Archetypes {
     SkyRenderResourceArchetypeArena,
     |gi| {
       gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
-        .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE)
+        .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST)
     }
   );
 

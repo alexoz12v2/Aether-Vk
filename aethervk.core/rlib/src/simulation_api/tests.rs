@@ -768,3 +768,140 @@ fn test_spawn_comet_internal_bounds_and_hierarchy() {
     }
   }
 }
+
+#[test]
+fn test_spawn_comet_multi_scale_layer_separation() {
+  use crate::gpu::scene_conversion::SceneConversionExt;
+
+  set_asset_directory_for_tests();
+  if let Some(ctx_ptr) = get_test_context() {
+    unsafe {
+      let ctx = &mut *ctx_ptr;
+      let scene_id = ctx.create_empty_scene(true).unwrap();
+
+      // Register a dummy model
+      let model_id = 1000;
+      let path = "test_comet_layers.glb";
+      {
+        let mut scenes = ctx.scenes.write();
+        scenes.model_registry.insert(model_id, path.into());
+        let dummy_mesh = crate::simulation::comet::Comet {
+          id: 0,
+          vertices: alloc::vec![crate::simulation::comet::Vertex {
+            position: [0.0, 0.0, 2.5],
+            uv: [0.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+          }],
+          indices: alloc::vec![],
+          albedo_map: None,
+          normal_map: None,
+          roughness_map: None,
+          ao_map: None,
+          mass_properties: polyhedral_mass_properties::MassProperties::from_contrib_sum(
+            polyhedral_mass_properties::TriangleContrib::new(
+              [-1.0, 0.0, -1.0],
+              [1.0, 0.0, -1.0],
+              [0.5, 1.0, 0.0],
+            ),
+          )
+          .unwrap(),
+          bvh: None,
+          pa_basis_bf: None,
+          bf_to_pa: None,
+        };
+        scenes.mesh_cache.insert(path.into(), dummy_mesh);
+      }
+
+      // Spawn comet at 2 AU from origin
+      let pos = Vec3f32::from_components(2.0, 0.0, 0.0);
+      let rot = Quat::identity();
+      let radius_km = 2.5;
+      let mass_kg = 1e13;
+      let physics_type = 2;
+
+      let (lca_ext_id, _comet_ext_id) = ctx
+        .spawn_comet_internal(
+          scene_id,
+          model_id,
+          "TestComet",
+          pos,
+          rot,
+          radius_km,
+          mass_kg,
+          physics_type,
+        )
+        .expect("spawn_comet_internal should succeed");
+
+      // Add a camera looking at the comet position
+      let camera_name = alloc::ffi::CString::new("Camera").unwrap();
+      let camera_ext = ctx.spawn_entity(scene_id, camera_name.to_str().unwrap()).unwrap();
+      ctx
+        .add_transform_component(
+          scene_id,
+          camera_ext,
+          Vec3f32::from_components(1.9, 0.0, 0.01),
+          Quat::identity(),
+          Vec3f32::from_components(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+      let cam_params = CameraParams::Perspective(components_api::PerspectiveCameraParams {
+        fov: 45.0f32.to_radians(),
+        aspect_ratio: 1.0,
+        near_plane: 1e-5,
+        far_plane: 1000.0,
+      });
+      ctx.add_camera_component(scene_id, camera_ext, cam_params).unwrap();
+
+      // Convert scene and check layer separation
+      let scenes = ctx.scenes.read();
+      let scene_arc = scenes.get_scene(scene_id).unwrap();
+      let scene_ctx = scene_arc.read();
+
+      let camera_id = scene_ctx.entity_map.get(&camera_ext).unwrap().clone();
+      let result = scene_ctx
+        .scene
+        .convert_scene(camera_id, false, None, [800, 600])
+        .expect("convert_scene should succeed");
+
+      // Should have 2 depth layers
+      assert!(
+        result.depth_layers.len() >= 2,
+        "Expected at least 2 depth layers after spawn_comet, got {}",
+        result.depth_layers.len()
+      );
+
+      // Validate near < far for every layer
+      for layer in &result.depth_layers {
+        assert!(
+          layer.near < layer.far,
+          "Layer {} violates near < far: near={}, far={}",
+          layer.layer_index,
+          layer.near,
+          layer.far,
+        );
+        assert!(
+          layer.near > 0.0,
+          "Layer {} has non-positive near plane: {}",
+          layer.layer_index,
+          layer.near,
+        );
+      }
+
+      // Micro layer should have tight SOI bounds
+      if let Some(micro_layer) = result.depth_layers.iter().find(|l| l.layer_index == 1) {
+        assert!(
+          micro_layer.far < 10.0,
+          "Micro layer far={} should be much less than camera far (1000)",
+          micro_layer.far,
+        );
+      }
+
+      drop(scene_ctx);
+      drop(scene_arc);
+      drop(scenes);
+
+      let _ = alloc::boxed::Box::from_raw(ctx_ptr);
+    }
+  }
+}

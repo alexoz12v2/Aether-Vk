@@ -511,9 +511,23 @@ pub struct SphereGizmoDataGpu {
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct SphereGizmoPushConstants {
-  pub gizmo_ptr: u64,
-  pub _pad: u64,
-  pub view_proj: [f32; 16],
+  // Must match GLSL: layout(push_constant, std430) uniform PushConstants {
+  //     mat4 viewProj;             // offset 0,  64 bytes
+  //     SphereGizmoArray gizmoPtr; // offset 64,  8 bytes
+  // };
+  pub view_proj: [f32; 16], // 64 bytes at offset 0
+  pub gizmo_ptr: u64,       //  8 bytes at offset 64
+}
+
+/// Push constants for the depth-compositing fullscreen pass.
+/// Must match `composite.frag` layout: macroNear, macroFar, microNear, microFar.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct CompositePushConstants {
+  pub macro_near: f32,
+  pub macro_far: f32,
+  pub micro_near: f32,
+  pub micro_far: f32,
 }
 
 #[repr(C)]
@@ -1021,6 +1035,18 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     ui_elements: &[crate::gpu::UiElementGpu],
   ) -> GpuResult<Option<crate::gpu::UiBatchCall>>;
 
+  // fn submit_text2_batch(
+  //   &self,
+  //   cmd_buffer: CommandBufferHandle,
+  //   text_calls: &[crate::gpu::Text2DrawDataGpu],
+  // ) -> GpuResult<crate::gpu::Text2BatchCall>;
+
+  fn clear_depth(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<()>;
+
   fn upload_text2(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -1100,6 +1126,18 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
 
   /// responsible to acquire an image and store it in the associated command buffer structure
   fn begin_render_pass(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    presentation_engine: PresentationEngineHandle,
+    acquire_result: &AcquireResult,
+  ) -> GpuResult<()>;
+
+  /// Begin a 3-subpass compositing render pass for multi-scale rendering.
+  /// Subpass 0: macro layer (color=[2], depth=[3])
+  /// Subpass 1: micro layer (color=[4], depth=[5])
+  /// Subpass 2: composite (color=[0], depth=[1], input=[2,3,4,5])
+  /// The caller must call `next_subpass()` between each subpass.
+  fn begin_compositing_render_pass(
     &self,
     cmd_buffer: CommandBufferHandle,
     presentation_engine: PresentationEngineHandle,
@@ -1293,6 +1331,20 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     desired_points: f32,
     color: [f32; 4],
   ) -> GpuResult<()>;
+
+  /// Advance to the next subpass within the current render pass.
+  /// Uses VK_KHR_create_renderpass2's cmd_next_subpass2.
+  fn next_subpass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
+
+  /// Draw the fullscreen compositing triangle (3 vertices, no vertex buffer).
+  /// Binds the composite pipeline, pushes near/far constants, and draws.
+  fn draw_composite(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    handle: PresentationEngineHandle,
+    constants: &CompositePushConstants,
+  ) -> GpuResult<()>;
+
 
   fn end_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 

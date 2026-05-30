@@ -10,7 +10,15 @@ namespace AetherVk.Logic.Models;
 
 public partial class TransformComponent : NativeComponent
 {
-  public override string Name => "Transform";
+  [ObservableProperty]
+  private string _unitLabel = "AU";
+
+  public override string Name => $"Transform ({UnitLabel})";
+
+  partial void OnUnitLabelChanged(string value)
+  {
+      OnPropertyChanged(nameof(Name));
+  }
 
   public bool SuspendNotifications { get; set; } = false;
 
@@ -106,6 +114,9 @@ public partial class TransformComponent : NativeComponent
       ScaleX = data.Sx;
       ScaleY = data.Sy;
       ScaleZ = data.Sz;
+      
+      uint frameType = NativeInterop.avkSimulationContext_getEntityReferenceFrameType(SimulationContext, SceneId, EntityId);
+      UnitLabel = frameType == 1 ? "km" : "AU";
     }
   }
 
@@ -153,7 +164,7 @@ public partial class CameraComponent : NativeComponent
   private float _aspectRatio = 1.77f;
 
   [ObservableProperty]
-  private float _nearPlane = 0.01f;
+  private float _nearPlane = 0.00001f;
 
   [ObservableProperty]
   private float _farPlane = 10000.0f;
@@ -218,7 +229,7 @@ public partial class CameraComponent : NativeComponent
   // Near must be positive and strictly less than Far.
   partial void OnNearPlaneChanged(float value)
   {
-    const float minNear = 0.01f;
+    const float minNear = 0.00001f;
     float clamped = System.Math.Max(value, minNear);
     if (clamped >= FarPlane)
       clamped = System.Math.Max(FarPlane - 0.0001f, minNear);
@@ -242,7 +253,7 @@ public partial class CameraComponent : NativeComponent
     // Additional safety clamp: never send invalid values to native even if
     // the OnXxxChanged correction hasn't fired yet.
     float safeFov = System.Math.Min(System.Math.Max(Fov, 0.1f), 179.0f);
-    float safeNear = System.Math.Max(NearPlane, 0.01f);
+    float safeNear = System.Math.Max(NearPlane, 0.00001f);
     float safeFar = System.Math.Max(FarPlane, safeNear + 0.0001f);
 
     var data = new NativeInterop.FfiCamera
