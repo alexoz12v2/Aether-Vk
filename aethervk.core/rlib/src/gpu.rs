@@ -1124,6 +1124,9 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     mesh_id: crate::gpu::RenderableInstanceId,
   ) -> Option<*mut u8>;
 
+  /// Flushes the emissive paint image memory for a given physical mesh instance
+  fn flush_emissive_paint_image(&self, mesh_id: crate::gpu::RenderableInstanceId) -> GpuResult<()>;
+
   /// responsible to acquire an image and store it in the associated command buffer structure
   fn begin_render_pass(
     &self,
@@ -1344,7 +1347,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     handle: PresentationEngineHandle,
     constants: &CompositePushConstants,
   ) -> GpuResult<()>;
-
 
   fn end_render_pass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 

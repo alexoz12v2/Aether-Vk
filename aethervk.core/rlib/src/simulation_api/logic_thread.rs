@@ -49,6 +49,112 @@ impl PlayControl {
 }
 
 /// TODO: Document this item
+fn reparent_cameras_system(scene: &alloc::sync::Arc<crate::scene::Scene>) {
+  use crate::scene::{CameraComponent, ReferenceFrameComponent, ReferenceFrameType, TransformComponent};
+  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+  use aethervk_oshal_rlib::math::vector::Vector;
+  
+  let frames = scene.query1_res(|id, c: &ReferenceFrameComponent| {
+    if c.frame_type == ReferenceFrameType::Micro {
+      let global_t = scene.global_transform(id)?;
+      Some((c.clone(), global_t))
+    } else {
+      None
+    }
+  });
+
+  let cameras = scene.query1_res(|id, _c: &CameraComponent| {
+    let global_t = scene.global_transform(id)?;
+    let parent = scene.get_parent(id);
+    Some((global_t, parent))
+  });
+
+  struct ReparentAction {
+    camera_id: crate::scene::EntityId,
+    new_parent: Option<crate::scene::EntityId>,
+    new_transform: TransformComponent,
+    new_focus_distance: Option<f32>,
+  }
+
+  let mut actions = alloc::vec::Vec::new();
+
+  for ((cam_global_t, current_parent), cam_id) in cameras {
+    let mut best_frame = None;
+    let mut min_dist = f32::MAX;
+
+    for ((frame_comp, frame_global_t), frame_id) in &frames {
+      let dist = (cam_global_t.position - frame_global_t.position).length();
+      if dist <= frame_comp.soi_radius && dist < min_dist {
+        min_dist = dist;
+        best_frame = Some((frame_comp, frame_global_t, *frame_id));
+      }
+    }
+
+    if let Some((frame_comp, frame_global_t, frame_id)) = best_frame {
+      if current_parent != Some(frame_id) {
+        let (p_micro, _) = ReferenceFrameComponent::macro_to_micro(
+          cam_global_t.position,
+          Vec3f32::from_components(0.0, 0.0, 0.0),
+          frame_global_t.position,
+          Vec3f32::from_components(0.0, 0.0, 0.0),
+          frame_comp.scale,
+        );
+        let inv_rot = frame_global_t.rotation.inverse();
+        let new_rot = inv_rot * cam_global_t.rotation;
+        
+
+
+        let old_focus = scene.with_component(cam_id, |c: &CameraComponent| c.focus_distance).unwrap_or(10.0);
+
+        actions.push(ReparentAction {
+          camera_id: cam_id,
+          new_parent: Some(frame_id),
+          new_transform: TransformComponent {
+            position: p_micro,
+            rotation: new_rot,
+            scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+          },
+          new_focus_distance: Some(old_focus / frame_comp.scale),
+        });
+      }
+    } else {
+      if let Some(parent_id) = current_parent {
+        let is_micro_parent = frames.iter().any(|(_, id)| *id == parent_id);
+        if is_micro_parent {
+          let old_focus = scene.with_component(cam_id, |c: &CameraComponent| c.focus_distance).unwrap_or(10.0);
+          let frame_scale = frames.iter().find(|(_, id)| *id == parent_id).map(|((c, _), _)| c.scale).unwrap_or(1.0);
+
+          actions.push(ReparentAction {
+            camera_id: cam_id,
+            new_parent: None,
+            new_transform: TransformComponent {
+              position: cam_global_t.position,
+              rotation: cam_global_t.rotation,
+              scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+            },
+            new_focus_distance: Some(old_focus * frame_scale),
+          });
+        }
+      }
+    }
+  }
+
+  if !actions.is_empty() {
+    for action in actions {
+      scene.set_parent(action.camera_id, action.new_parent);
+      let _ = scene.with_component_mut(action.camera_id, |t: &mut TransformComponent| {
+        *t = action.new_transform;
+      });
+      if let Some(fd) = action.new_focus_distance {
+        let _ = scene.with_component_mut(action.camera_id, |c: &mut CameraComponent| {
+          c.focus_distance = fd;
+        });
+      }
+      aethervk_oshal_rlib::log!("Dynamic Camera Reparent: Camera {:?} reparented to {:?}", action.camera_id, action.new_parent);
+    }
+  }
+}
+
 pub fn start_logic_thread(
   logic_rx: mpsc::Receiver<LogicCommand>,
   context: alloc::sync::Arc<LogicThreadContext>,
@@ -190,7 +296,7 @@ pub fn start_logic_thread(
 
                       struct WindowlessCallbackWorkload {
                         ctx_ptr: crate::simulation_api::structs::SendPtrMut<core::ffi::c_void>,
-                        task_id_val: u64,
+                        task_id: alloc::sync::Arc<core::sync::atomic::AtomicU64>,
                         scene_id: u64,
                         pe_handle: u64,
                       }
@@ -203,12 +309,16 @@ pub fn start_logic_thread(
                             return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
                           }
 
-                          // For error frames, fire immediately with the sentinel value.
-                          if self.task_id_val == u64::MAX {
-                            let cb: extern "C" fn(u64, u64, u64) =
-                              unsafe { core::mem::transmute(fptr) };
-                            cb(self.scene_id, self.pe_handle, u64::MAX);
-                            return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
+                          let tid_val = self.task_id.load(core::sync::atomic::Ordering::Acquire);
+                          if tid_val == 0 {
+                            if alloc::sync::Arc::strong_count(&self.task_id) == 1 {
+                              // Render thread dropped it without assigning
+                              let cb: extern "C" fn(u64, u64, u64) =
+                                unsafe { core::mem::transmute(fptr) };
+                              cb(self.scene_id, self.pe_handle, u64::MAX);
+                              return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
+                            }
+                            return aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield;
                           }
 
                           let ctx = unsafe {
@@ -220,7 +330,7 @@ pub fn start_logic_thread(
                             .as_frontend()
                             .and_then(|f| {
                               f.with_device(ctx.render_proxy.1, |device| {
-                                Ok(device.is_task_completed(self.task_id_val).unwrap_or(true))
+                                Ok(device.is_task_completed(tid_val).unwrap_or(true))
                               })
                               .ok()
                             })
@@ -229,7 +339,7 @@ pub fn start_logic_thread(
                           if completed {
                             let cb: extern "C" fn(u64, u64, u64) =
                               unsafe { core::mem::transmute(fptr) };
-                            cb(self.scene_id, self.pe_handle, self.task_id_val);
+                            cb(self.scene_id, self.pe_handle, tid_val);
                             aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete
                           } else {
                             aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield
@@ -244,7 +354,7 @@ pub fn start_logic_thread(
                       let _ = context.thread_pool.scatter(alloc::vec![alloc::boxed::Box::new(
                         WindowlessCallbackWorkload {
                           ctx_ptr: context.ctx_ptr,
-                          task_id_val: captured_task_id_val,
+                          task_id: alloc::sync::Arc::clone(&task_id),
                           scene_id,
                           pe_handle,
                         }
@@ -631,7 +741,7 @@ fn process_command_internal(
             let dist = (pos - cam_pos).length();
             let _ =
               scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
-                c.focus_distance = dist.max(0.1);
+                c.focus_distance = dist.max(0.000001);
               });
           }
         }
@@ -1487,24 +1597,21 @@ fn execute_simulation_tick(
       if let Some((cursor_id, _)) =
         scene_ctx.scene.query1_first_res::<CursorComponent, _, _>(|id, _| Some(id))
       {
-        if let Some(cursor_pos) =
-          scene_ctx.scene.with_component(cursor_id, |t: &TransformComponent| t.position)
-        {
+        if let Some(cursor_global) = scene_ctx.scene.global_transform(cursor_id) {
           let mut cam_updates = alloc::vec::Vec::new();
           let _ = scene_ctx.scene.query1_res_mut(|id, _: &mut CameraComponent| {
             cam_updates.push(id);
             Some(())
           });
           for cam_id in cam_updates {
-            if let Some((cam_pos, cam_rot)) = scene_ctx
-              .scene
-              .with_component(cam_id, |t: &TransformComponent| (t.position, t.rotation))
-            {
-              let fwd = cam_rot.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
-              let dist = (cursor_pos - cam_pos).dot(fwd);
-              if dist > 0.1 {
+            if let Some(cam_global) = scene_ctx.scene.global_transform(cam_id) {
+              let fwd = cam_global.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+              let dist_global = (cursor_global.position - cam_global.position).dot(fwd);
+              let scale_z = if cam_global.scale.z().abs() > 1e-15 { cam_global.scale.z() } else { 1.0 };
+              let dist_local = dist_global / scale_z;
+              if dist_local > 0.1 {
                 let _ = scene_ctx.scene.with_component_mut(cam_id, |cam: &mut CameraComponent| {
-                  cam.focus_distance = dist;
+                  cam.focus_distance = dist_local;
                 });
               }
             }
@@ -1544,6 +1651,9 @@ fn execute_simulation_tick(
         let mut st = st_lock.write();
         *st = crate::physics::tlas_builder::build_selection_tlas(scene_ctx.scene.as_ref());
       }
+
+      // Dynamically reparent cameras to their closest Micro frame to preserve precision
+      reparent_cameras_system(&scene_ctx.scene);
     }
   }
 

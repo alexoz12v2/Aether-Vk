@@ -46,8 +46,13 @@ void main() {
 
     // Pick the fragment that is nearer to the camera.
     // When a layer has no content at a pixel, its depth is 0.0 (reverse-Z clear value).
-    // linearizeReverseZ(0.0, near, far) = far → maximum distance → other layer wins.
-    if (distMacro <= distMicro) {
+    if (dMicro == 0.0) {
+        // Micro layer is empty, fallback to Macro (which may have Skybox or be empty)
+        outColor = cMacro;
+    } else if (dMacro == 0.0) {
+        // Macro layer is empty, use Micro
+        outColor = cMicro;
+    } else if (distMacro <= distMicro) {
         outColor = cMacro;
     } else {
         outColor = cMicro;

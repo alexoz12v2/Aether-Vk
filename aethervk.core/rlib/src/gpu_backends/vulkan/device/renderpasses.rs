@@ -182,8 +182,9 @@ impl RenderPassSpecification {
   /// Returns the render area extent.
   pub fn extent(&self) -> (u32, u32) {
     match self {
-      Self::ColorDepthSingleSubpass { extent, .. }
-      | Self::ColorDepthCompositing { extent, .. } => *extent,
+      Self::ColorDepthSingleSubpass { extent, .. } | Self::ColorDepthCompositing { extent, .. } => {
+        *extent
+      }
     }
   }
 
@@ -479,9 +480,7 @@ impl RenderPasses {
     use crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock;
 
     let mut write_guard = DebugTrackedRwLock::write(&self.render_passes);
-    let bundle = write_guard
-      .get_mut(&pe_handle)
-      .ok_or(crate::gpu_err_device!())?;
+    let bundle = write_guard.get_mut(&pe_handle).ok_or(crate::gpu_err_device!())?;
 
     // Already initialized?
     if bundle.composite.is_some() {
@@ -490,7 +489,9 @@ impl RenderPasses {
 
     // Only compositing bundles should have this — verify we have 6 attachments
     if bundle.attachments.len() < 6 {
-      return Err(crate::gpu_err!("init_composite_pipeline called on non-compositing bundle"));
+      return Err(crate::gpu_err!(
+        "init_composite_pipeline called on non-compositing bundle"
+      ));
     }
 
     // Create descriptor set layout with 4 INPUT_ATTACHMENT bindings (set 0, bindings 0-3)
@@ -605,9 +606,11 @@ impl RenderPasses {
 
     // Create composite graphics pipeline
     let composite_pipeline_key = {
-      use crate::gpu::PipelineKeyable;
-      use crate::gpu_backends::vulkan::device::pipelines::{
-        FragmentShader, GraphicsInfo, PipelineFlags, PreRasterization, VertexIn,
+      use crate::{
+        gpu::PipelineKeyable,
+        gpu_backends::vulkan::device::pipelines::{
+          FragmentShader, GraphicsInfo, PipelineFlags, PreRasterization, VertexIn,
+        },
       };
 
       // Load composite shader modules
@@ -651,10 +654,8 @@ impl RenderPasses {
         }
       };
 
-      let vert_ci = vk::ShaderModuleCreateInfo::default()
-        .code(&vert_code);
-      let frag_ci = vk::ShaderModuleCreateInfo::default()
-        .code(&frag_code);
+      let vert_ci = vk::ShaderModuleCreateInfo::default().code(&vert_code);
+      let frag_ci = vk::ShaderModuleCreateInfo::default().code(&frag_code);
 
       let vert_module = unsafe { device.create_shader_module(&vert_ci, None)? };
       let frag_module = unsafe { device.create_shader_module(&frag_ci, None)? };
@@ -662,18 +663,19 @@ impl RenderPasses {
       // Build the pipeline info — no vertex input (fullscreen triangle), subpass 2
       let mut graphics_info = GraphicsInfo::default()
         .with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_LIST))
-        .with_pre_rasterization(
-          PreRasterization::default().with_vertex_module(vert_module)
-        )
-        .with_fragment_shader(
-          FragmentShader::default().with_fragment_module(frag_module)
-        )
-        .with_pipeline_flags(PipelineFlags::NO_DEPTH_TEST | PipelineFlags::NO_DEPTH_WRITE);
+        .with_pre_rasterization(PreRasterization::default().with_vertex_module(vert_module))
+        .with_fragment_shader(FragmentShader::default().with_fragment_module(frag_module))
+        .with_pipeline_flags(
+          PipelineFlags::NO_DEPTH_TEST | PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_BLEND,
+        );
 
       // Manually set fields that apply_presentation_defaults would set, but with subpass=2
       graphics_info.fragment_shader.viewports.push(vk::Viewport::default());
       graphics_info.fragment_shader.scissors.push(vk::Rect2D::default());
-      graphics_info.fragment_out.color_attachment_formats.push(vk::Format::B8G8R8A8_SRGB);
+      graphics_info
+        .fragment_out
+        .color_attachment_formats
+        .push(vk::Format::B8G8R8A8_SRGB);
       graphics_info.pipeline_layout = pipeline_layout.get();
       graphics_info.render_pass = bundle.render_pass.get();
       graphics_info.subpass = 2; // Composite subpass
@@ -709,12 +711,20 @@ impl RenderPasses {
   pub fn get_composite_resources(
     &self,
     pe_handle: PresentationEngineHandle,
-  ) -> Option<(vk::DescriptorSet, vk::PipelineLayout, crate::gpu::PipelineKey)> {
+  ) -> Option<(
+    vk::DescriptorSet,
+    vk::PipelineLayout,
+    crate::gpu::PipelineKey,
+  )> {
     let read_guard =
       crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes);
     let bundle = read_guard.get(&pe_handle)?;
     let comp = bundle.composite.as_ref()?;
-    Some((comp.descriptor_set, comp.pipeline_layout.get(), comp.pipeline_key))
+    Some((
+      comp.descriptor_set,
+      comp.pipeline_layout.get(),
+      comp.pipeline_key,
+    ))
   }
 
   /// Returns the VkRenderPass handle for the compositing bundle of the given PE.
@@ -810,8 +820,7 @@ impl RenderPasses {
     };
 
     let img_h = image.get();
-    rollback
-      .defer(move |_| unsafe { vk_mem::ffi::vmaDestroyImage(vma, img_h, alloc.get_raw()) });
+    rollback.defer(move |_| unsafe { vk_mem::ffi::vmaDestroyImage(vma, img_h, alloc.get_raw()) });
 
     let view_create_info = vk::ImageViewCreateInfo::default()
       .image(image.get())
@@ -823,9 +832,8 @@ impl RenderPasses {
           .level_count(1)
           .layer_count(1),
       );
-    let view = unsafe {
-      NonZeroHandle::new_unchecked(device.create_image_view(&view_create_info, None)?)
-    };
+    let view =
+      unsafe { NonZeroHandle::new_unchecked(device.create_image_view(&view_create_info, None)?) };
     let view_h = view.get();
     rollback.defer(move |dev| unsafe { dev.destroy_image_view(view_h, None) });
 
@@ -948,12 +956,12 @@ impl RenderPasses {
     {
       let img_h = sc_depth_image.get();
       let alloc_copy = sc_depth_alloc;
-      rollback.defer(move |_| unsafe {
-        vk_mem::ffi::vmaDestroyImage(vma, img_h, alloc_copy.get_raw())
-      });
+      rollback
+        .defer(move |_| unsafe { vk_mem::ffi::vmaDestroyImage(vma, img_h, alloc_copy.get_raw()) });
     }
 
-    let sc_depth_view = Self::create_depth_stencil_view(device, sc_depth_image, depth_stencil_format)?;
+    let sc_depth_view =
+      Self::create_depth_stencil_view(device, sc_depth_image, depth_stencil_format)?;
     {
       let vh = sc_depth_view.get();
       rollback.defer(move |dev| unsafe { dev.destroy_image_view(vh, None) });
@@ -1006,7 +1014,8 @@ impl RenderPasses {
       let ac = macro_color_alloc;
       rollback.defer(move |_| unsafe { vk_mem::ffi::vmaDestroyImage(vma, ih, ac.get_raw()) });
     }
-    let macro_color_view = Self::create_color_view(device, macro_color_img, vk::Format::R8G8B8A8_UNORM)?;
+    let macro_color_view =
+      Self::create_color_view(device, macro_color_img, vk::Format::R8G8B8A8_UNORM)?;
     {
       let vh = macro_color_view.get();
       rollback.defer(move |dev| unsafe { dev.destroy_image_view(vh, None) });
@@ -1089,7 +1098,8 @@ impl RenderPasses {
       let ac = micro_color_alloc;
       rollback.defer(move |_| unsafe { vk_mem::ffi::vmaDestroyImage(vma, ih, ac.get_raw()) });
     }
-    let micro_color_view = Self::create_color_view(device, micro_color_img, vk::Format::R8G8B8A8_UNORM)?;
+    let micro_color_view =
+      Self::create_color_view(device, micro_color_img, vk::Format::R8G8B8A8_UNORM)?;
     {
       let vh = micro_color_view.get();
       rollback.defer(move |dev| unsafe { dev.destroy_image_view(vh, None) });
@@ -1168,22 +1178,22 @@ impl RenderPasses {
     // --- Framebuffers ---
     // The swapchain color view varies per-framebuffer; the other 5 views are shared.
     let shared_views = [
-      sc_depth_view.get(),     // [1]
-      macro_color_view.get(),  // [2]
-      macro_depth_view.get(),  // [3]
-      micro_color_view.get(),  // [4]
-      micro_depth_view.get(),  // [5]
+      sc_depth_view.get(),    // [1]
+      macro_color_view.get(), // [2]
+      macro_depth_view.get(), // [3]
+      micro_color_view.get(), // [4]
+      micro_depth_view.get(), // [5]
     ];
 
     let mut framebuffer = heapless::Vec::new();
     for image_view in image_views {
       let fb_attachments = [
-        image_view.get(),  // [0] swapchain color (varies per frame)
-        shared_views[0],   // [1] swapchain depth
-        shared_views[1],   // [2] macroColor
-        shared_views[2],   // [3] macroDepth
-        shared_views[3],   // [4] microColor
-        shared_views[4],   // [5] microDepth
+        image_view.get(), // [0] swapchain color (varies per frame)
+        shared_views[0],  // [1] swapchain depth
+        shared_views[1],  // [2] macroColor
+        shared_views[2],  // [3] macroDepth
+        shared_views[3],  // [4] microColor
+        shared_views[4],  // [5] microDepth
       ];
       let framebuffer_create_info = vk::FramebufferCreateInfo::default()
         .render_pass(render_pass.get())
@@ -1221,12 +1231,12 @@ impl RenderPasses {
 
     let mut clear_value = heapless::Vec::new();
     unsafe {
-      clear_value.push_unchecked(black_opaque);  // [0] swapchainColor
-      clear_value.push_unchecked(depth_clear);    // [1] swapchainDepth
-      clear_value.push_unchecked(black_opaque);   // [2] macroColor
-      clear_value.push_unchecked(depth_clear);    // [3] macroDepth
+      clear_value.push_unchecked(black_opaque); // [0] swapchainColor
+      clear_value.push_unchecked(depth_clear); // [1] swapchainDepth
+      clear_value.push_unchecked(black_opaque); // [2] macroColor
+      clear_value.push_unchecked(depth_clear); // [3] macroDepth
       clear_value.push_unchecked(black_transparent); // [4] microColor (alpha=0)
-      clear_value.push_unchecked(depth_clear);    // [5] microDepth
+      clear_value.push_unchecked(depth_clear); // [5] microDepth
     }
 
     Ok(RenderPassBundle {
@@ -1261,7 +1271,11 @@ impl RenderPasses {
           .level_count(1)
           .layer_count(1),
       );
-    unsafe { Ok(NonZeroHandle::new_unchecked(device.create_image_view(&ci, None)?)) }
+    unsafe {
+      Ok(NonZeroHandle::new_unchecked(
+        device.create_image_view(&ci, None)?,
+      ))
+    }
   }
 
   fn create_depth_stencil_view(
@@ -1279,7 +1293,11 @@ impl RenderPasses {
           .level_count(1)
           .layer_count(1),
       );
-    unsafe { Ok(NonZeroHandle::new_unchecked(device.create_image_view(&ci, None)?)) }
+    unsafe {
+      Ok(NonZeroHandle::new_unchecked(
+        device.create_image_view(&ci, None)?,
+      ))
+    }
   }
 
   /// Create an image view with only DEPTH aspect for use in input attachment descriptors.
@@ -1300,7 +1318,11 @@ impl RenderPasses {
           .level_count(1)
           .layer_count(1),
       );
-    unsafe { Ok(NonZeroHandle::new_unchecked(device.create_image_view(&ci, None)?)) }
+    unsafe {
+      Ok(NonZeroHandle::new_unchecked(
+        device.create_image_view(&ci, None)?,
+      ))
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1630,8 +1652,7 @@ impl RenderPasses {
       )
       .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
       .src_access_mask(
-        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
-          | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
       )
       .dst_access_mask(vk::AccessFlags2::INPUT_ATTACHMENT_READ);
 
@@ -1644,8 +1665,7 @@ impl RenderPasses {
       )
       .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
       .src_access_mask(
-        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
-          | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
       )
       .dst_access_mask(vk::AccessFlags2::INPUT_ATTACHMENT_READ);
 
@@ -1678,24 +1698,70 @@ impl RenderPasses {
         .dependency_flags(vk::DependencyFlags::BY_REGION)
         .src_subpass(VK_SUBPASS_EXTERNAL)
         .dst_subpass(0)
+        .src_stage_mask(vk::PipelineStageFlags::BOTTOM_OF_PIPE)
+        .dst_stage_mask(
+          vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+            | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+        )
+        .src_access_mask(vk::AccessFlags::empty())
+        .dst_access_mask(
+          vk::AccessFlags::COLOR_ATTACHMENT_READ
+            | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        )
         .push_next(&mut dep_ext_0),
       // 0 → 2
       vk::SubpassDependency2::default()
         .dependency_flags(vk::DependencyFlags::BY_REGION)
         .src_subpass(0)
         .dst_subpass(2)
+        .src_stage_mask(
+          vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+            | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+        )
+        .dst_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
+        .src_access_mask(
+          vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        )
+        .dst_access_mask(vk::AccessFlags::INPUT_ATTACHMENT_READ)
         .push_next(&mut dep_0_2),
       // 1 → 2
       vk::SubpassDependency2::default()
         .dependency_flags(vk::DependencyFlags::BY_REGION)
         .src_subpass(1)
         .dst_subpass(2)
+        .src_stage_mask(
+          vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+            | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+        )
+        .dst_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
+        .src_access_mask(
+          vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        )
+        .dst_access_mask(vk::AccessFlags::INPUT_ATTACHMENT_READ)
         .push_next(&mut dep_1_2),
       // 2 → EXTERNAL
       vk::SubpassDependency2::default()
         .dependency_flags(vk::DependencyFlags::BY_REGION)
         .src_subpass(2)
         .dst_subpass(VK_SUBPASS_EXTERNAL)
+        .src_stage_mask(
+          vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+            | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+        )
+        .dst_stage_mask(vk::PipelineStageFlags::from_raw(dst_stage_mask.as_raw() as u32))
+        .src_access_mask(
+          vk::AccessFlags::COLOR_ATTACHMENT_READ
+            | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        )
+        .dst_access_mask(vk::AccessFlags::from_raw(dst_access_mask.as_raw() as u32))
         .push_next(&mut dep_2_ext),
     ];
 

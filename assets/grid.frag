@@ -56,35 +56,44 @@ void main() {
   // Recover absolute XY by adding the camera's absolute position back.
   vec2 absolutePosXY = worldPos.xy + push.cameraPos.xy;
 
-  // Scale coordinate so one grid cell = 1 world unit.
-  float gridDensity = push.density * 5.0;
+  // Base scale coordinate
+  float baseDensity = push.density * 5.0;
+  
+  // Continuous LOD based on distance (linearDepth)
+  // Determine the power of 10 for the current depth
+  float lod = log(max(linearDepth * baseDensity, 1e-6)) / log(10.0);
+  float lodLevel = floor(lod);
+  float lodFraction = fract(lod);
 
-  // Compute fwidth on RTE worldPos to avoid catastrophic precision loss from adding a large cameraPos
-  vec2 p = absolutePosXY * gridDensity;
-  vec2 dp = fwidth(worldPos.xy * gridDensity);
+  // Compute 3 scales of grids: minor, major, and macro (to handle the fade smoothly)
+  float scale0 = pow(10.0, -lodLevel + 1.0); // minor
+  float scale1 = scale0 * 0.1;               // major
+  float scale2 = scale1 * 0.1;               // macro
 
-  // 1. Calculate axis-independent lines
-  float ax = gridLine(p.x, dp.x, 0.01);
-  float ay = gridLine(p.y, dp.y, 0.01);
-  float alpha = max(ax, ay) * 0.3;
+  // 1. Minor lines (fade out as they get dense)
+  vec2 p0 = absolutePosXY * baseDensity * scale0;
+  vec2 dp0 = fwidth(worldPos.xy * baseDensity * scale0);
+  float alpha0 = max(gridLine(p0.x, dp0.x, 0.005), gridLine(p0.y, dp0.y, 0.005)) * 0.3;
+  alpha0 *= 1.0 - smoothstep(0.1, 0.8, length(dp0));
+  // Fade out minor lines as we zoom out / look further away
+  alpha0 *= (1.0 - lodFraction);
 
-  // 2. Apply a UNIFIED radial Moiré fade for minor lines
-  float radialFade = 1.0 - smoothstep(0.2, 0.8, length(dp));
-  alpha *= radialFade;
+  // 2. Major lines (fully visible, blend into macro)
+  vec2 p1 = absolutePosXY * baseDensity * scale1;
+  vec2 dp1 = fwidth(worldPos.xy * baseDensity * scale1);
+  float alpha1 = max(gridLine(p1.x, dp1.x, 0.008), gridLine(p1.y, dp1.y, 0.008)) * 0.5;
+  alpha1 *= 1.0 - smoothstep(0.1, 0.8, length(dp1));
 
-  // 3. Repeat for major lines
-  vec2 p10 = p * 0.1;
-  vec2 dp10 = dp * 0.1;
-  float bx = gridLine(p10.x, dp10.x, 0.005);
-  float by = gridLine(p10.y, dp10.y, 0.005);
-  float alpha10 = max(bx, by) * 0.7;
+  // 3. Macro lines (fade in from the distance)
+  vec2 p2 = absolutePosXY * baseDensity * scale2;
+  vec2 dp2 = fwidth(worldPos.xy * baseDensity * scale2);
+  float alpha2 = max(gridLine(p2.x, dp2.x, 0.012), gridLine(p2.y, dp2.y, 0.012)) * 0.8;
+  alpha2 *= 1.0 - smoothstep(0.1, 0.8, length(dp2));
+  // Fade in macro lines
+  alpha2 *= lodFraction;
 
-  // 4. Unified radial Moiré fade for major lines
-  float radialFade10 = 1.0 - smoothstep(0.2, 0.8, length(dp10));
-  alpha10 *= radialFade10;
-
-  // 5. Combine everything
-  alpha = max(alpha, alpha10);
+  // Combine
+  float alpha = max(max(alpha0, alpha1), alpha2);
 
   // Distance fade
   float fadeStart = push.nearPlane + (push.farPlane - push.nearPlane) * 0.01;

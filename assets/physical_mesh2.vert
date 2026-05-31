@@ -26,8 +26,8 @@ void main() {
     outUV = inUV;
 
     mat3 normalMatrix = mat3(model); // Assuming uniform scaling
-    outNormal = normalMatrix * inNormal;
-    outTangent = normalMatrix * inTangent.xyz;
+    outNormal = normalize(normalMatrix * inNormal);
+    outTangent = normalize(normalMatrix * inTangent.xyz);
     outBitangent = cross(outNormal, outTangent) * inTangent.w;
 
     vec4 clipPos = viewProj * worldPos;

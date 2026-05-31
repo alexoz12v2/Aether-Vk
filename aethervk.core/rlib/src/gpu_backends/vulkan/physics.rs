@@ -790,11 +790,7 @@ impl CommandBuffer for VulkanCommandBuffer {
 
       device
         .handle
-        .queue_submit(
-          self.queue.handle,
-          &[submit_info],
-          vk::Fence::null(), // TODO fence?
-        )
+        .queue_submit(self.queue.handle, &[submit_info], ash::vk::Fence::null())
         .map_err(|e| GpuError::from(e))?;
       drop(_guard);
 
@@ -3802,7 +3798,16 @@ impl Kernels for Device {
         crate::types::EngineError::Gpu(crate::types::GpuError::BackendSpecific(alloc::format!(
           "{:?}", e
         )))
-      })
+      })?;
+
+    // The integration tests do not advance the frame manager, so we must clean up the DiscardPool manually here to avoid exhausting memory/resources.
+    let items = self.kernels.discard_pool.pop_ready_items(sync.timeline_value);
+    crate::gpu_backends::vulkan::device::resources::DiscardPool::destroy_items_lock_free(
+      &self.device.handle,
+      items,
+    );
+
+    Ok(())
   }
 
   fn upload_motion_tlas(

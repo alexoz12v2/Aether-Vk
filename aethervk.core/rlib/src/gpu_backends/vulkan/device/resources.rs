@@ -113,6 +113,7 @@ pub(crate) enum DiscardItem {
   CommandPool(CmdBufDiscard),
   RenderPass(vk::RenderPass),
   Framebuffer(vk::Framebuffer),
+  Fence(vk::Fence),
   // TODO other types of resources as needed
   /// Placeholder to use any cleanable resource. Slower than having a specialized type
   GenericHandle(Box<dyn DeviceResource>),
@@ -133,6 +134,7 @@ impl DiscardItem {
       Self::CommandPool(c) => (7, c.command_buffer.as_raw()),
       Self::RenderPass(r) => (8, r.as_raw()),
       Self::Framebuffer(f) => (9, f.as_raw()),
+      Self::Fence(f) => (11, f.as_raw()),
       Self::GenericHandle(h) => {
         let ptr: *const dyn DeviceResource = &**h;
         (10, ptr as *const () as u64)
@@ -219,6 +221,11 @@ impl DiscardPool {
   /// TODO: Document this item
   pub fn discard_framebuffer(&self, framebuffer: vk::Framebuffer, timeline: u64) {
     self.push_item(timeline, DiscardItem::Framebuffer(framebuffer));
+  }
+
+  /// TODO: Document this item
+  pub fn discard_fence(&self, fence: vk::Fence, timeline: u64) {
+    self.push_item(timeline, DiscardItem::Fence(fence));
   }
 
   /// TODO: Document this item
@@ -388,6 +395,9 @@ impl DiscardPool {
         },
         DiscardItem::Framebuffer(framebuffer) => unsafe {
           device.destroy_framebuffer(framebuffer, None);
+        },
+        DiscardItem::Fence(fence) => unsafe {
+          device.destroy_fence(fence, None);
         },
         DiscardItem::GenericHandle(mut handle) => {
           handle.cleanup(device);

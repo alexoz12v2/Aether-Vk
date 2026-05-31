@@ -122,7 +122,10 @@ public class SpawnCometFlowE2ETests
       nativeRuntime.IsRunning = true;
       nativeRuntime.PlayScene(defaultSceneId);
 
-      // Wait for a render frame
+      // Give the simulation some time to spawn the Comet and render a few frames
+      await Task.Delay(250);
+
+      // Wait for the next render frame
       var tcsFrame = new TaskCompletionSource<ulong>();
       WeakReferenceMessenger.Default.Register<RenderFrameReadyMessage>(
         this,
@@ -133,30 +136,26 @@ public class SpawnCometFlowE2ETests
         }
       );
 
-      // To ensure we get a render frame, we might need to tick the timeline or the native runtime automatically ticks?
-      // The native runtime automatically dispatches render frames if there's a presentation engine.
       var renderTaskId = await Task.WhenAny(tcsFrame.Task, Task.Delay(5000));
-
       Assert.True(tcsFrame.Task.IsCompleted, "Render frame should be produced");
       ulong generation = await tcsFrame.Task;
 
-      // Download image
-      nuint bufferSize = (nuint)(512 * 512 * 4);
+      ulong bufferSize = 512 * 512 * 4;
       IntPtr unmanagedBuffer = Marshal.AllocHGlobal((int)bufferSize);
 
       bool downloaded = await nativeRuntime.DownloadImageAsync(
         generation,
         unmanagedBuffer,
-        bufferSize
+        (nuint)bufferSize
       );
       Assert.True(downloaded, "Image should be downloaded");
 
-      // Assert image is not completely empty (alpha = 0)
+      bool hasColorPixel = false;
+      bool hasNonZeroPixel = false;
+
       byte[] pixels = new byte[bufferSize];
       Marshal.Copy(unmanagedBuffer, pixels, 0, (int)bufferSize);
 
-      bool hasNonZeroPixel = false;
-      bool hasColorPixel = false;
       for (int i = 0; i < pixels.Length; i += 4)
       {
         if (pixels[i + 3] > 0)
@@ -169,55 +168,11 @@ public class SpawnCometFlowE2ETests
           }
         }
       }
+      
+      Marshal.FreeHGlobal(unmanagedBuffer);
+
       Assert.True(hasNonZeroPixel, "Image should not be completely empty (Alpha check)");
       Assert.True(hasColorPixel, "Image should have non-black colored pixels");
-
-      // Save image to disk so user can verify
-      try
-      {
-        int width = 512;
-        int height = 512;
-        byte[] bmp = new byte[54 + pixels.Length];
-        bmp[0] = 0x42;
-        bmp[1] = 0x4D; // BM
-        int size = bmp.Length;
-        bmp[2] = (byte)(size);
-        bmp[3] = (byte)(size >> 8);
-        bmp[4] = (byte)(size >> 16);
-        bmp[5] = (byte)(size >> 24);
-        bmp[10] = 54; // offset
-        bmp[14] = 40; // header size
-        bmp[18] = (byte)(width);
-        bmp[19] = (byte)(width >> 8);
-        int h = -height; // top-down
-        bmp[22] = (byte)(h);
-        bmp[23] = (byte)(h >> 8);
-        bmp[24] = (byte)(h >> 16);
-        bmp[25] = (byte)(h >> 24);
-        bmp[26] = 1; // planes
-        bmp[28] = 32; // bpp
-
-        for (int i = 0; i < pixels.Length; i += 4)
-        {
-          bmp[54 + i] = pixels[i + 2]; // B
-          bmp[54 + i + 1] = pixels[i + 1]; // G
-          bmp[54 + i + 2] = pixels[i]; // R
-          bmp[54 + i + 3] = pixels[i + 3]; // A
-        }
-
-        string outPath =
-          "/Volumes/ExtData/alessioext/.gemini/antigravity-cli/brain/ea0ff329-3e19-4520-8409-cec2fe2f95e3/test_output.bmp";
-        File.WriteAllBytes(outPath, bmp);
-      }
-      catch (Exception ex)
-      {
-        File.WriteAllText(
-          "/Volumes/ExtData/alessioext/.gemini/antigravity-cli/brain/ea0ff329-3e19-4520-8409-cec2fe2f95e3/test_output.log",
-          "Failed to save image: " + ex.ToString()
-        );
-      }
-
-      Marshal.FreeHGlobal(unmanagedBuffer);
     }
     catch (DllNotFoundException)
     {

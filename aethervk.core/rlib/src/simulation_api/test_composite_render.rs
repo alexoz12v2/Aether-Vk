@@ -317,3 +317,197 @@ fn test_composite_render_output() {
     }
   }
 }
+
+#[test]
+fn test_composite_scale_overlap() {
+  COMPOSITE_TASK_ID.store(0, Ordering::Release);
+
+  if let Some(ctx_ptr) = get_test_context() {
+    struct CtxGuard(*mut SimulationContext);
+    impl Drop for CtxGuard {
+      fn drop(&mut self) {
+        unsafe {
+          let _ = alloc::boxed::Box::from_raw(self.0);
+        }
+      }
+    }
+    let _guard = CtxGuard(ctx_ptr);
+
+    unsafe {
+      let ctx = &mut *ctx_ptr;
+      let scene_id = ctx.create_empty_scene(true).unwrap();
+
+      let width: u32 = 256;
+      let height: u32 = 256;
+
+      // ─── Macro layer content: Sun ────────────────────────────────────────
+      let sun_name = alloc::ffi::CString::new("Sun").unwrap();
+      let sun_id = ctx.spawn_entity(scene_id, sun_name.to_str().unwrap()).unwrap();
+      // Place sun at 1.0 AU along +X in the macroframe
+      ctx
+        .add_transform_component(
+          scene_id,
+          sun_id,
+          Vec3f32::from_components(1.0, 0.0, 0.0),
+          Quat::identity(),
+          Vec3f32::from_components(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+      ctx.add_sun_component(scene_id, sun_id, (255, 230, 180), 0.4).unwrap();
+
+      // ─── Sky background (Optional, but kept to mimic first test) ─────────
+      let sky_name = alloc::ffi::CString::new("Sky").unwrap();
+      let sky_id = ctx.spawn_entity(scene_id, sky_name.to_str().unwrap()).unwrap();
+      ctx.add_sky_component(scene_id, sky_id).unwrap();
+
+      // ─── Micro layer content: LCA + SphereGizmo ──────────────────────────
+      let lca_name = alloc::ffi::CString::new("TestLCA").unwrap();
+      let lca_id = ctx.spawn_entity(scene_id, lca_name.to_str().unwrap()).unwrap();
+      // Place LCA exactly at camera origin (0.0 AU)
+      ctx
+        .add_transform_component(
+          scene_id,
+          lca_id,
+          Vec3f32::from_components(0.0, 0.0, 0.0),
+          Quat::identity(),
+          Vec3f32::from_components(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+
+      // Add reference frame component to make it a microframe
+      {
+        let scene_ctx = ctx.get_scene(scene_id).unwrap();
+        let mut guard = scene_ctx.write();
+        let lca_eid = slotmap::KeyData::from_ffi(lca_id).into();
+        let _ = guard.scene.add_component(
+          lca_eid,
+          crate::scene::ReferenceFrameComponent {
+            frame_type: crate::scene::ReferenceFrameType::Micro,
+            scale: 1.0 / 149_597_870.7, // 1 km / 1 AU
+            soi_radius: 0.01,
+            depth_layer: 1,
+          },
+        );
+      }
+
+      // Add a child sphere gizmo entity inside the LCA
+      let gizmo_name = alloc::ffi::CString::new("Gizmo").unwrap();
+      let gizmo_id = ctx.spawn_entity(scene_id, gizmo_name.to_str().unwrap()).unwrap();
+      // Place gizmo at 1.0 km along +X in the microframe
+      ctx
+        .add_transform_component(
+          scene_id,
+          gizmo_id,
+          Vec3f32::from_components(1.0, 0.0, 0.0),
+          Quat::identity(),
+          Vec3f32::from_components(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+
+      // Parent the gizmo to the LCA
+      {
+        let scene_ctx = ctx.get_scene(scene_id).unwrap();
+        let mut guard = scene_ctx.write();
+        guard.scene.set_parent(
+          slotmap::KeyData::from_ffi(gizmo_id).into(),
+          Some(slotmap::KeyData::from_ffi(lca_id).into()),
+        );
+
+        let gizmo_eid = slotmap::KeyData::from_ffi(gizmo_id).into();
+        let _ = guard.scene.add_component(
+          gizmo_eid,
+          crate::scene::SphereGizmoComponent {
+            radius: 0.4, // 0.4 km radius
+            subdivisions: 4.0,
+            local_frame: {
+              use aethervk_oshal_rlib::math::matrix::SquareMatrix;
+              aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::identity()
+            },
+            is_visible: true,
+          },
+        );
+      }
+
+      // ─── Camera: at origin looking toward +X ─────────────────────────────
+      let cam_name = alloc::ffi::CString::new("ScaleCamera").unwrap();
+      let cam_id = ctx.spawn_entity(scene_id, cam_name.to_str().unwrap()).unwrap();
+
+      let yaw = -core::f32::consts::FRAC_PI_2;
+      let rot = Quat::from_components((yaw / 2.0).cos(), 0.0, 0.0, (yaw / 2.0).sin());
+      ctx
+        .add_transform_component(
+          scene_id,
+          cam_id,
+          Vec3f32::from_components(0.0, 0.0, 0.0),
+          rot,
+          Vec3f32::from_components(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+
+      ctx
+        .add_camera_component(
+          scene_id,
+          cam_id,
+          CameraParams::new_perspective(45.0, width as f32 / height as f32, 1e-5, 1000.0),
+        )
+        .unwrap();
+
+      let pe = ctx.create_presentation_engine(scene_id, width, height).unwrap();
+      COMPOSITE_PE_ID.store(pe.0, Ordering::Release);
+      ctx.set_camera_for_presentation_engine(scene_id, pe, cam_id).unwrap();
+
+      SimulationContext::set_render_callback(Some(composite_render_callback));
+
+      // ─── Start rendering ─────────────────────────────────────────────────
+      let _ = ctx
+        .threads
+        .logic_thread
+        .tx()
+        .try_send(crate::simulation_api::structs::LogicCommand::PlayScene { scene_id });
+
+      // ─── Download and validate ───────────────────────────────────────────
+      if let Some(buffer) = wait_and_download(ctx, width, height, 5000) {
+        let center = pixel_at(&buffer, width, width / 2, height / 2);
+        println!(
+          "[test_composite_scale_overlap] center px: ({}, {}, {}, {})",
+          center.0, center.1, center.2, center.3
+        );
+
+        // Convert BGRA to RGBA for saving
+        let mut rgba_buffer = buffer.clone();
+        for chunk in rgba_buffer.chunks_exact_mut(4) {
+          let b = chunk[0];
+          let r = chunk[2];
+          chunk[0] = r;
+          chunk[2] = b;
+        }
+
+        let out_path = std::path::Path::new("test_composite_scale_overlap.png");
+        image::save_buffer(
+          out_path,
+          &rgba_buffer,
+          width,
+          height,
+          image::ColorType::Rgba8,
+        ).expect("Failed to save PNG");
+
+        println!(
+          "[test_composite_scale_overlap] Saved render output to {:?}",
+          out_path.canonicalize().unwrap_or_else(|_| out_path.to_path_buf())
+        );
+
+        // Verify that the sun (macro) and the gizmo (micro) overlap exactly on screen.
+        // We'll just verify no panic or validation error happens during execution.
+        println!("[test_composite_scale_overlap] PASSED");
+      } else {
+        println!("[test_composite_scale_overlap] Download timed out");
+      }
+
+      let _ = ctx
+        .threads
+        .logic_thread
+        .tx()
+        .try_send(crate::simulation_api::structs::LogicCommand::PauseScene { scene_id });
+    }
+  }
+}

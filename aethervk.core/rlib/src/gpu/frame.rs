@@ -474,8 +474,16 @@ pub struct CameraRenderData {
 /// projection rebuild without fragile column patching.
 #[derive(Debug, Clone, Copy)]
 pub enum CameraProjectionParams {
-  Perspective { fov: f32, aspect_ratio: f32 },
-  Orthographic { left: f32, right: f32, bottom: f32, top: f32 },
+  Perspective {
+    fov: f32,
+    aspect_ratio: f32,
+  },
+  Orthographic {
+    left: f32,
+    right: f32,
+    bottom: f32,
+    top: f32,
+  },
 }
 
 impl CameraRenderData {
@@ -506,7 +514,12 @@ impl CameraRenderData {
         ..
       } => (
         Mat4x4f32::orthographic_vk_reverse_z(left, right, bottom, top, near, far),
-        CameraProjectionParams::Orthographic { left, right, bottom, top },
+        CameraProjectionParams::Orthographic {
+          left,
+          right,
+          bottom,
+          top,
+        },
       ),
     };
     let view_proj = proj * view;
@@ -534,9 +547,12 @@ impl CameraRenderData {
       CameraProjectionParams::Perspective { fov, aspect_ratio } => {
         Mat4x4f32::perspective_vk_reverse_z(fov, aspect_ratio, layer_near, layer_far)
       }
-      CameraProjectionParams::Orthographic { left, right, bottom, top } => {
-        Mat4x4f32::orthographic_vk_reverse_z(left, right, bottom, top, layer_near, layer_far)
-      }
+      CameraProjectionParams::Orthographic {
+        left,
+        right,
+        bottom,
+        top,
+      } => Mat4x4f32::orthographic_vk_reverse_z(left, right, bottom, top, layer_near, layer_far),
     };
     let view_proj = proj * self.view;
     Self {
@@ -1509,48 +1525,55 @@ pub fn render_frame(
   handle: PresentationEngineHandle,
   render_scene: &gpu::RenderScene,
 ) -> GpuResult<()> {
-  let compositing = render_scene.depth_layers.len() > 1;
+  // ── Extract global sun position (RTE) from whichever layer has a SunDrawCall ──
+  let global_sun_pos = render_scene
+    .depth_layers
+    .iter()
+    .find_map(|l| l.sun_call.as_ref().map(|s| s.sun_pos()));
 
-  if compositing {
-    // ── Multi-layer compositing mode ──────────────────────────────────
-    // Subpass 0 (macro) and subpass 1 (micro) each get their own
-    // color+depth attachments. Subpass 2 composites via input attachments.
-    //
-    // Subpass 0: draw the macro layer (layer_index == 0)
-    if let Some(macro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 0) {
-      draw_layer_content(device, cmd_buffer, handle, render_scene, macro_layer)?;
-    }
-
-    // Transition to subpass 1 (micro)
-    device.next_subpass(cmd_buffer)?;
-
-    // Subpass 1: draw the micro layer (layer_index == 1)
-    if let Some(micro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 1) {
-      draw_layer_content(device, cmd_buffer, handle, render_scene, micro_layer)?;
-    }
-
-    // Transition to subpass 2 (composite + UI)
-    device.next_subpass(cmd_buffer)?;
-
-    // Draw fullscreen composite triangle to merge macro+micro
-    let macro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 0);
-    let micro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 1);
-    let constants = gpu::CompositePushConstants {
-      macro_near: macro_layer.map(|l| l.near).unwrap_or(0.1),
-      macro_far: macro_layer.map(|l| l.far).unwrap_or(1000.0),
-      micro_near: micro_layer.map(|l| l.near).unwrap_or(0.001),
-      micro_far: micro_layer.map(|l| l.far).unwrap_or(10.0),
-    };
-    device.draw_composite(cmd_buffer, handle, &constants)?;
-  } else {
-    // ── Single-layer mode (original path) ─────────────────────────────
-    for (i, layer) in render_scene.depth_layers.iter().enumerate() {
-      if i > 0 {
-        device.clear_depth(cmd_buffer, handle)?;
-      }
-      draw_layer_content(device, cmd_buffer, handle, render_scene, layer)?;
-    }
+  // ── Multi-layer compositing mode (always 3 subpasses now) ─────────
+  // Subpass 0: draw the macro layer (layer_index == 0)
+  if let Some(macro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 0) {
+    draw_layer_content(device, cmd_buffer, handle, render_scene, macro_layer, global_sun_pos)?;
   }
+
+  // Transition to subpass 1 (micro)
+  device.next_subpass(cmd_buffer)?;
+  device.set_viewport(
+    cmd_buffer,
+    &gpu::Viewport::from_extent(render_scene.window_extent),
+  )?;
+  device.set_scissor(
+    cmd_buffer,
+    &gpu::Rect2D::from_extent(render_scene.window_extent),
+  )?;
+
+  // Subpass 1: draw the micro layer (layer_index == 1)
+  if let Some(micro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 1) {
+    draw_layer_content(device, cmd_buffer, handle, render_scene, micro_layer, global_sun_pos)?;
+  }
+
+  // Transition to subpass 2 (composite + UI)
+  device.next_subpass(cmd_buffer)?;
+  device.set_viewport(
+    cmd_buffer,
+    &gpu::Viewport::from_extent(render_scene.window_extent),
+  )?;
+  device.set_scissor(
+    cmd_buffer,
+    &gpu::Rect2D::from_extent(render_scene.window_extent),
+  )?;
+
+  // Draw fullscreen composite triangle to merge macro+micro
+  let macro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 0);
+  let micro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 1);
+  let constants = gpu::CompositePushConstants {
+    macro_near: macro_layer.map(|l| l.near).unwrap_or(0.1),
+    macro_far: macro_layer.map(|l| l.far).unwrap_or(1000.0),
+    micro_near: micro_layer.map(|l| l.near).unwrap_or(0.001),
+    micro_far: micro_layer.map(|l| l.far).unwrap_or(10.0),
+  };
+  device.draw_composite(cmd_buffer, handle, &constants)?;
 
   // ── UI / Text (always drawn last, in the final subpass) ────────────
   if let Some(draw_call) = &render_scene.ui_call {
@@ -1621,12 +1644,16 @@ fn draw_layer_content(
   handle: PresentationEngineHandle,
   render_scene: &gpu::RenderScene,
   layer: &RenderLayer,
+  global_sun_pos: Option<Vec3f32>,
 ) -> GpuResult<()> {
-  let sun_pos = if let Some(draw_call) = &layer.sun_call {
-    draw_call.sun_pos()
-  } else {
-    Vec3f32::from_components(100.0, 100.0, 100.0)
-  };
+  // Use the global sun position (shared across all layers) if available,
+  // otherwise fall back to this layer's own sun or a sensible default.
+  let sun_pos = layer
+    .sun_call
+    .as_ref()
+    .map(|s| s.sun_pos())
+    .or(global_sun_pos)
+    .unwrap_or_else(|| Vec3f32::from_components(100.0, 100.0, 100.0));
 
   // Rebuild projection matrix for this layer's near/far planes.
   // The view matrix (rotation-only in RTE) is shared across all layers.
@@ -1696,13 +1723,7 @@ fn draw_layer_content(
   }
 
   if let Some(batch_call) = &layer.sphere_gizmo_batch_call {
-    gpu::frame::do_draw_sphere_gizmo_batch(
-      device,
-      &layer_camera,
-      cmd_buffer,
-      handle,
-      batch_call,
-    )?;
+    gpu::frame::do_draw_sphere_gizmo_batch(device, &layer_camera, cmd_buffer, handle, batch_call)?;
   }
 
   for measurement_call in &layer.measurement_calls {

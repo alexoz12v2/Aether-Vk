@@ -168,5 +168,5 @@ pub fn emit_breadcrumb(status: u32, msg: &str) {
     }
   }
 }
-pub mod test_lca_render;
 pub mod test_composite_render;
+pub mod test_lca_render;

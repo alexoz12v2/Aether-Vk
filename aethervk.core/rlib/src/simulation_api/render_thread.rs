@@ -214,7 +214,6 @@ fn process_command(
                   e
                 })?;
 
-
               if let Some(layer) = render_scene.depth_layers.first() {
                 if let Some(sun_call) = &layer.sun_call {
                   render_device
@@ -271,36 +270,20 @@ fn process_command(
                 })?
               }
 
-              // Select compositing render pass when multiple depth layers exist
-              if render_scene.depth_layers.len() > 1 {
-                render_device
-                  .begin_compositing_render_pass(
-                    cmd_buffer,
-                    render_frame.presentation_engine_handle,
-                    &acquire_result,
-                  )
-                  .map_err(|e| {
-                    aethervk_oshal_rlib::log!(
-                      "[render tasklet] begin_compositing_render_pass failed: {:?}",
-                      e
-                    );
+              // Always select compositing render pass
+              render_device
+                .begin_compositing_render_pass(
+                  cmd_buffer,
+                  render_frame.presentation_engine_handle,
+                  &acquire_result,
+                )
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!(
+                    "[render tasklet] begin_compositing_render_pass failed: {:?}",
                     e
-                  })?;
-              } else {
-                render_device
-                  .begin_render_pass(
-                    cmd_buffer,
-                    render_frame.presentation_engine_handle,
-                    &acquire_result,
-                  )
-                  .map_err(|e| {
-                    aethervk_oshal_rlib::log!(
-                      "[render tasklet] begin_render_pass failed: {:?}",
-                      e
-                    );
-                    e
-                  })?;
-              }
+                  );
+                  e
+                })?;
               let render_pass_scope = gpu::ScopedRenderPass::new(render_device, cmd_buffer);
 
               render_device
