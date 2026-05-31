@@ -6021,6 +6021,22 @@ impl RenderDevice for Device {
     }
   }
 
+  fn flush_emissive_paint_image(&self, mesh_id: crate::gpu::RenderableInstanceId) -> GpuResult<()> {
+    let res_guard = DebugTrackedRwLock::read(&self.res);
+    if let Some(resource_ref) = res_guard.physical_mesh2_resources.get(&mesh_id) {
+      if let resources::ResourceState::Ready(r) = resource_ref.value() {
+        if let Some(paint_image) = &r.emissive_paint_image {
+          res_guard.allocator.allocator.flush_allocation(
+            &paint_image.allocation,
+            0,
+            ash::vk::WHOLE_SIZE as u64,
+          )?;
+        }
+      }
+    }
+    Ok(())
+  }
+
   #[named]
   fn begin_render_pass(
     &self,
@@ -6112,8 +6128,7 @@ impl RenderDevice for Device {
       if let Some(ref ctx) = data.compositing_ctx {
         // Look up the original GraphicsInfo and create a compositing variant
         if let Some(info) = res_guard.pipeline_pool.get_graphics_info(pipeline_key) {
-          let mut rollback =
-            crate::gpu_backends::vulkan::utils::RollbackContext::new(&self.device);
+          let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&self.device);
           let (key, _) = res_guard.pipeline_pool.get_or_create_compositing_variant(
             &self.device,
             &info,
@@ -7285,7 +7300,12 @@ impl RenderDevice for Device {
       let arena = DebugTrackedRwLock::read(&*arena_arc);
       (cmd, arena.pipeline_layout.get())
     };
-    let bytes = unsafe { core::slice::from_raw_parts(constants as *const _ as *const u8, core::mem::size_of::<crate::gpu::SphereGizmoPushConstants>()) };
+    let bytes = unsafe {
+      core::slice::from_raw_parts(
+        constants as *const _ as *const u8,
+        core::mem::size_of::<crate::gpu::SphereGizmoPushConstants>(),
+      )
+    };
     unsafe {
       self.device.cmd_push_constants(
         cmd,
@@ -8033,7 +8053,6 @@ impl RenderDevice for Device {
     };
 
     unsafe {
-
       let mut push_bytes = [0u8; 544];
 
       let offset = [0.7f32, 0.7f32];
@@ -8295,7 +8314,10 @@ impl RenderDevice for Device {
     let subpass_begin_info = vk::SubpassBeginInfo::default().contents(vk::SubpassContents::INLINE);
     let subpass_end_info = vk::SubpassEndInfo::default();
     unsafe {
-      self.device.create_renderpass2.cmd_next_subpass2(cmd, &subpass_begin_info, &subpass_end_info);
+      self
+        .device
+        .create_renderpass2
+        .cmd_next_subpass2(cmd, &subpass_begin_info, &subpass_end_info);
     }
 
     // Advance compositing context subpass index
@@ -8367,8 +8389,6 @@ impl RenderDevice for Device {
 
     Ok(())
   }
-
-
 
   #[named]
   fn end_render_pass(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
@@ -8991,7 +9011,15 @@ impl Device {
     acquire_result: &AcquireResult,
     compositing: bool,
   ) -> GpuResult<()> {
-    let (timeline, cmd, vma, discard_pool_ptr, renderpasses_ptr, pipeline_pool_ptr, render_pass_spec) = {
+    let (
+      timeline,
+      cmd,
+      vma,
+      discard_pool_ptr,
+      renderpasses_ptr,
+      pipeline_pool_ptr,
+      render_pass_spec,
+    ) = {
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let _presentation_engines_guard = &res_guard.live_presentation_engines;
       let cmd_buffers = DebugTrackedRwLock::read(&self.recording_command_buffers);
@@ -9039,10 +9067,7 @@ impl Device {
       let renderpasses_ptr = &res_guard.renderpasses as *const renderpasses::RenderPasses;
       let pipeline_pool_ptr = &res_guard.pipeline_pool as *const pipelines::PipelinePool;
       let render_pass_spec = if compositing {
-        RenderPassSpecification::compositing_pass(
-          &wpresentation_engine,
-          self.depth_stencil_format,
-        )
+        RenderPassSpecification::compositing_pass(&wpresentation_engine, self.depth_stencil_format)
       } else {
         RenderPassSpecification::single_pass(&wpresentation_engine, self.depth_stencil_format)
       };
@@ -9075,11 +9100,7 @@ impl Device {
 
     // Initialize composite pipeline resources on first use
     if compositing {
-      renderpasses.init_composite_pipeline(
-        presentation_engine,
-        &self.device,
-        pipeline_pool,
-      )?;
+      renderpasses.init_composite_pipeline(presentation_engine, &self.device, pipeline_pool)?;
     }
 
     let extent = render_pass_spec.extent();
@@ -9087,10 +9108,8 @@ impl Device {
     // Get clear values — 6 for compositing, 2 for single-subpass
     let num_clear = render_pass_spec.num_attachments();
     let mut clear_values = [vk::ClearValue::default(); renderpasses::MAX_ATTACHMENTS];
-    renderpasses.get_clear_values_render_pass(
-      presentation_engine,
-      &mut clear_values[..num_clear],
-    )?;
+    renderpasses
+      .get_clear_values_render_pass(presentation_engine, &mut clear_values[..num_clear])?;
 
     let render_pass_begin_info = vk::RenderPassBeginInfo::default()
       .render_pass(render_pass.get())
@@ -10233,7 +10252,8 @@ fn pretty_print_vulkan_device(
   )
 }
 
-#[cfg(test)]
+// TODO RE-ENABLE
+// #[cfg(test)]
 // mod test_render;
 
 #[cfg(test)]

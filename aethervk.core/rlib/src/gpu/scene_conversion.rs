@@ -499,7 +499,7 @@ impl RenderSceneExtraction {
           let style = crate::scene::text::TextStyle {
             size_pt: text_comp.points,
             color: text_comp.color,
-            style_flags: 0, // Normal by default
+            style_flags: text_comp.style_flags,
           };
 
           crate::scene::text::push_text_to_batch(
@@ -593,7 +593,7 @@ impl SceneConversionExt for crate::scene::Scene {
 
     let cursor_transform: Option<(TransformComponent, u32, f32)>;
     let extracted_sky: Option<(u32, f32)>;
-    let extracted_sun: Option<((Mat4x4f32, f32), u32, f32)>;
+    let mut extracted_sun: Option<((Mat4x4f32, f32), u32, f32)>;
     let extracted_grid: Option<(f32, f32, [f32; 3], u32, f32)>;
     let extracted_background: Option<([f32; 4], [f32; 4], u32, f32)>;
 
@@ -634,9 +634,13 @@ impl SceneConversionExt for crate::scene::Scene {
         if hidden_set.contains(&id) {
           return None;
         }
-        self
-          .get_relative_transform(id, camera_entity)
-          .map(|t| (t, self.ancestor_depth_layer(id), self.ancestor_frame_scale(id)))
+        self.get_relative_transform(id, camera_entity).map(|t| {
+          (
+            t,
+            self.ancestor_depth_layer(id),
+            self.ancestor_frame_scale(id),
+          )
+        })
       })
       .map(|(t, _id)| t);
 
@@ -828,6 +832,7 @@ impl SceneConversionExt for crate::scene::Scene {
       });
     }
 
+    let mut sun_entity_id: Option<EntityId> = None;
     extracted_sun = self
       .query2_first_res_without::<_, _, HiddenComponent, _, _>(
         |id, _t: &TransformComponent, s: &SunComponent| {
@@ -843,7 +848,31 @@ impl SceneConversionExt for crate::scene::Scene {
           })
         },
       )
-      .map(|(r, _id)| r);
+      .map(|(r, id)| { sun_entity_id = Some(id); r });
+
+    // Recompute sun model matrix if camera and sun are in different depth layers
+    if let (Some(sun_data), Some(s_id)) = (&mut extracted_sun, sun_entity_id) {
+      let sun_layer = sun_data.1;
+      let cam_layer = self.ancestor_depth_layer(camera_entity);
+      if sun_layer != cam_layer {
+        // Sun and camera in different frames — recompute using global coordinates
+        if let (Some(sun_global), Some(cam_g)) = (self.global_transform(s_id), self.global_transform(camera_entity)) {
+          use crate::scene::TransformComponent;
+          use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
+          let safe_div = |a: f32, b: f32| -> f32 { if b.abs() < 1e-15 { 0.0 } else { a / b } };
+          let corrected = TransformComponent {
+            position: sun_global.position - cam_g.position,
+            rotation: sun_global.rotation,
+            scale: Vec3f32::from_components(
+              safe_div(sun_global.scale.x(), cam_g.scale.x()),
+              safe_div(sun_global.scale.y(), cam_g.scale.y()),
+              safe_div(sun_global.scale.z(), cam_g.scale.z()),
+            ),
+          };
+          sun_data.0.0 = corrected.to_mat4::<Mat4x4f32>();
+        }
+      }
+    }
 
     extracted_sky = self
       .query1_first_res_without::<_, HiddenComponent, _, _>(|id, _s: &SkyComponent| {
@@ -1024,30 +1053,47 @@ impl SceneConversionExt for crate::scene::Scene {
         if hidden_set.contains(&id) {
           return None;
         }
-        Some((b.color_top, b.color_bottom, self.ancestor_depth_layer(id), self.ancestor_frame_scale(id)))
+        Some((
+          b.color_top,
+          b.color_bottom,
+          self.ancestor_depth_layer(id),
+          self.ancestor_frame_scale(id),
+        ))
       })
       .map(|(r, _id)| r);
 
     // ... More components here
 
     // ── Pre-compute per-layer near/far bounds from ReferenceFrameComponents ──
-    // Macro layer (0) uses the camera's full depth range.
-    // Micro layers use tight bounds around their SOI sphere as seen from the camera.
-    let macro_near = cam_comp.near_plane() * frame_scale;
-    let macro_far = cam_comp.far_plane() * frame_scale;
+    // With per-layer virtual camera, each layer's coordinates are in its own space:
+    // • Macro (layer 0): root space (AU). Near/far in AU.
+    // • Micro (layer N): frame-local space. Near/far in that frame's units (e.g. km).
+    //
+    // The macro layer always uses frame_scale=1.0 (root), not the camera's actual
+    // frame_scale, because mesh model matrices are computed in global AU.
+    let macro_near = cam_comp.near_plane(); // in AU (root space, scale=1.0)
+    let macro_far = cam_comp.far_plane();   // in AU
     let mut layer_bounds: hashbrown::HashMap<u32, (f32, f32)> = hashbrown::HashMap::new();
     layer_bounds.insert(0, (macro_near, macro_far));
 
     self.query1_without::<ReferenceFrameComponent, HiddenComponent, _>(
       |id, frame: &ReferenceFrameComponent| {
         if frame.depth_layer > 0 {
-          if let Some(frame_t) = self.get_relative_transform(id, camera_entity) {
+          // For micro layers, compute bounds in the frame's LOCAL coordinate space.
+          if let Some(cam_in_frame) = self.get_relative_transform(camera_entity, id) {
             use aethervk_oshal_rlib::math::vector::Vector;
-            let dist = frame_t.position.length();
-            // Tight near/far: camera distance to SOI sphere edges, clamped to sane range
-            let tight_near = (dist - frame.soi_radius).max(macro_near);
-            let tight_far = dist + frame.soi_radius;
-            // If multiple frames share a depth_layer, take the union of their bounds
+            // get_relative_transform(camera, frame) gives camera pos relative to frame
+            // in the frame's LOCAL coordinate space (because it divides by the frame's scale).
+            let dist_local = cam_in_frame.position.length(); // in km (frame-local)
+
+            // SOI radius is in AU (parent coordinate space). Convert to frame-local units:
+            //   soi_local = soi_au / frame.scale
+            let soi_local = frame.soi_radius / frame.scale;
+
+            let safe_micro_near = 0.01; // 10 meters in km
+            let tight_near = (dist_local - soi_local).max(safe_micro_near);
+            let tight_far = (dist_local + soi_local).max(tight_near + safe_micro_near);
+
             layer_bounds
               .entry(frame.depth_layer)
               .and_modify(|(n, f)| {
@@ -1065,10 +1111,7 @@ impl SceneConversionExt for crate::scene::Scene {
     macro_rules! get_or_create_layer {
       ($map:expr, $layer:expr, $_scale:expr) => {
         $map.entry($layer).or_insert_with(|| {
-          let (near, far) = layer_bounds
-            .get(&$layer)
-            .copied()
-            .unwrap_or((macro_near, macro_far));
+          let (near, far) = layer_bounds.get(&$layer).copied().unwrap_or((macro_near, macro_far));
           DepthLayerData {
             layer_index: $layer,
             near,
@@ -1091,6 +1134,95 @@ impl SceneConversionExt for crate::scene::Scene {
       let layer = self.ancestor_depth_layer(mesh.entity_id);
       let scale = self.ancestor_frame_scale(mesh.entity_id);
       get_or_create_layer!(layer_map, layer, scale).meshes.push(mesh);
+    }
+
+    // ── Per-layer virtual camera: recompute mesh transforms ──────────────────
+    // The initial get_relative_transform(mesh, camera) uses the camera's actual
+    // scene-graph parent. When camera is inside a micro-frame but we're rendering
+    // the macro layer, the cross-frame LCA math produces enormous numbers.
+    //
+    // Fix: for each layer, recompute every mesh's transform as if the camera were
+    // "virtually" in the same coordinate space as that layer.
+    //
+    // • Macro (layer 0): both mesh and camera expressed in root-space (AU).
+    //   RTE model = mesh_global_AU − camera_global_AU
+    //
+    // • Micro (layer N): both mesh and camera expressed in that frame's local space.
+    //   RTE model = mesh_frame_local − camera_frame_local
+    {
+      // Collect frame_entity for each depth_layer > 0
+      let mut layer_frame_entities: hashbrown::HashMap<u32, EntityId> = hashbrown::HashMap::new();
+      self.query1_without::<ReferenceFrameComponent, HiddenComponent, _>(
+        |id, frame: &ReferenceFrameComponent| {
+          if frame.depth_layer > 0 {
+            layer_frame_entities.entry(frame.depth_layer).or_insert(id);
+          }
+        },
+      );
+
+      let cam_global = self.global_transform(camera_entity).unwrap_or_default();
+      let camera_depth_layer = self.ancestor_depth_layer(camera_entity);
+
+      for (_layer_idx, layer_data) in layer_map.iter_mut() {
+        let layer_idx = *_layer_idx;
+
+        if layer_idx == camera_depth_layer {
+          // Camera is in this layer's frame — the original get_relative_transform
+          // was correct. No recomputation needed.
+          continue;
+        }
+
+        if layer_idx == 0 {
+          // Macro layer: recompute using global (root AU) coordinates.
+          for mesh in layer_data.meshes.iter_mut() {
+            if let Some(mesh_global) = self.global_transform(mesh.entity_id) {
+              use crate::scene::TransformComponent;
+              use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
+
+              let safe_div = |a: f32, b: f32| -> f32 {
+                if b.abs() < 1e-15 { 0.0 } else { a / b }
+              };
+
+              mesh.global_transform = TransformComponent {
+                position: mesh_global.position - cam_global.position,
+                rotation: mesh_global.rotation,
+                scale: Vec3f32::from_components(
+                  safe_div(mesh_global.scale.x(), cam_global.scale.x()),
+                  safe_div(mesh_global.scale.y(), cam_global.scale.y()),
+                  safe_div(mesh_global.scale.z(), cam_global.scale.z()),
+                ),
+              };
+            }
+          }
+        } else if let Some(&frame_entity) = layer_frame_entities.get(&layer_idx) {
+          // Micro layer: recompute using frame-relative coordinates.
+          // Both mesh and camera positions are expressed relative to the frame entity.
+          let cam_in_frame = self.get_relative_transform(camera_entity, frame_entity);
+          if let Some(cam_local) = cam_in_frame {
+            for mesh in layer_data.meshes.iter_mut() {
+              let mesh_in_frame = self.get_relative_transform(mesh.entity_id, frame_entity);
+              if let Some(mesh_local) = mesh_in_frame {
+                use crate::scene::TransformComponent;
+                use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
+
+                let safe_div = |a: f32, b: f32| -> f32 {
+                  if b.abs() < 1e-15 { 0.0 } else { a / b }
+                };
+
+                mesh.global_transform = TransformComponent {
+                  position: mesh_local.position - cam_local.position,
+                  rotation: mesh_local.rotation,
+                  scale: Vec3f32::from_components(
+                    safe_div(mesh_local.scale.x(), cam_global.scale.x()),
+                    safe_div(mesh_local.scale.y(), cam_global.scale.y()),
+                    safe_div(mesh_local.scale.z(), cam_global.scale.z()),
+                  ),
+                };
+              }
+            }
+          }
+        }
+      }
     }
 
     for billboard in extracted_billboards {
@@ -1164,6 +1296,62 @@ impl SceneConversionExt for crate::scene::Scene {
     let mut depth_layers: Vec<DepthLayerData> = layer_map.into_values().collect();
     // Sort layers farthest to nearest (layer 0 is farthest, macro)
     depth_layers.sort_by_key(|l| l.layer_index);
+
+    // ── Debug: dump layer info every 120 frames ──
+    {
+      use core::sync::atomic::{AtomicU64, Ordering};
+      static FRAME_COUNTER: AtomicU64 = AtomicU64::new(0);
+      let frame = FRAME_COUNTER.fetch_add(1, Ordering::Relaxed);
+      if frame % 120 == 0 {
+        aethervk_oshal_rlib::log!(
+          "\x1b[36m[MULTI-SCALE] Frame {} | camera pos=({:.6},{:.6},{:.6}) frame_scale={:.2e} | macro near/far=({:.2e},{:.2e})\x1b[0m",
+          frame,
+          camera_data.absolute_pos.x(), camera_data.absolute_pos.y(), camera_data.absolute_pos.z(),
+          frame_scale,
+          macro_near, macro_far
+        );
+        for (layer_idx, (near, far)) in &layer_bounds {
+          aethervk_oshal_rlib::log!(
+            "\x1b[36m  layer_bounds[{}]: near={:.2e} far={:.2e}\x1b[0m",
+            layer_idx, near, far
+          );
+        }
+        for layer in &depth_layers {
+          aethervk_oshal_rlib::log!(
+            "\x1b[36m  DepthLayer {} -> near={:.2e} far={:.2e} meshes={} billboards={} gizmos={} sphere_gizmos={} trajectories={}\x1b[0m",
+            layer.layer_index, layer.near, layer.far,
+            layer.meshes.len(), layer.billboards.len(), layer.gizmos.len(),
+            layer.sphere_gizmos.len(), layer.trajectories.len()
+          );
+          for mesh in &layer.meshes {
+            let p = mesh.global_transform.position;
+            let s = mesh.global_transform.scale;
+            aethervk_oshal_rlib::log!(
+              "\x1b[33m    mesh entity={:?} pos=({:.2e},{:.2e},{:.2e}) scale=({:.2e},{:.2e},{:.2e}) emissive={:.1} path={}\x1b[0m",
+              mesh.entity_id, p.x(), p.y(), p.z(), s.x(), s.y(), s.z(),
+              mesh.mesh.emissive_intensity, mesh.mesh.asset_path
+            );
+          }
+        }
+        aethervk_oshal_rlib::log!(
+          "\x1b[36m  sun={} sky={} grid={} cursor={} background={}\x1b[0m",
+          extracted_sun.is_some(), extracted_sky.is_some(), extracted_grid.is_some(),
+          cursor_transform.is_some(), extracted_background.is_some()
+        );
+        if let Some(((model, radius), layer_idx, _)) = &extracted_sun {
+          aethervk_oshal_rlib::log!(
+            "\x1b[36m  sun -> layer {} radius={:.6} pos=({:.6},{:.6},{:.6})\x1b[0m",
+            layer_idx, radius, model.w.x(), model.w.y(), model.w.z()
+          );
+        }
+        if let Some((layer_idx, _)) = &extracted_sky {
+          aethervk_oshal_rlib::log!("\x1b[36m  sky -> layer {}\x1b[0m", layer_idx);
+        }
+        if let Some((_, _, _, layer_idx, _)) = &extracted_grid {
+          aethervk_oshal_rlib::log!("\x1b[36m  grid -> layer {}\x1b[0m", layer_idx);
+        }
+      }
+    }
 
     Ok(RenderSceneExtraction {
       depth_layers,
@@ -1283,8 +1471,8 @@ mod tests {
   // ── Multi-scale rendering tests ──────────────────────────────────────
 
   use crate::scene::{
-    GridComponent, ReferenceFrameComponent, ReferenceFrameType, SkyComponent,
-    SphereGizmoComponent, SunComponent,
+    GridComponent, ReferenceFrameComponent, ReferenceFrameType, SkyComponent, SphereGizmoComponent,
+    SunComponent,
   };
   use aethervk_oshal_rlib::math::{
     quaternion::Quaternion,
@@ -1299,7 +1487,10 @@ mod tests {
     scene.register_all_crate_components();
 
     // Camera at (0.0115, 0.0115, 0.0115) AU looking at origin
+    let root = scene.spawn_entity("Root");
+    
     let camera = scene.spawn_entity("Camera");
+    scene.set_parent(camera, Some(root));
     scene
       .add_component(
         camera,
@@ -1311,11 +1502,16 @@ mod tests {
       )
       .unwrap();
     scene
-      .add_component(camera, CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 1e-5, 1000.0))
+      .add_component(
+        camera,
+        CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 1e-5, 1000.0),
+      )
       .unwrap();
 
     // Sun at origin (macroframe, layer 0)
+
     let sun = scene.spawn_entity("Sun");
+    scene.set_parent(sun, Some(root));
     scene
       .add_component(
         sun,
@@ -1338,6 +1534,7 @@ mod tests {
 
     // Sky (macroframe)
     let sky = scene.spawn_entity("Sky");
+    scene.set_parent(sky, Some(root));
     scene
       .add_component(
         sky,
@@ -1352,6 +1549,7 @@ mod tests {
 
     // Grid (macroframe)
     let grid = scene.spawn_entity("Grid");
+    scene.set_parent(grid, Some(root));
     scene
       .add_component(
         grid,
@@ -1366,6 +1564,7 @@ mod tests {
 
     // Reference frame at (0.01, 0, 0) AU — this is the micro frame boundary
     let frame_ref = scene.spawn_entity("FrameRef");
+    scene.set_parent(frame_ref, Some(root));
     scene
       .add_component(
         frame_ref,
@@ -1463,31 +1662,31 @@ mod tests {
   #[test]
   fn test_multi_scale_micro_tight_bounds() {
     // Verify that the micro layer's near/far are tight SOI-based bounds,
-    // NOT the camera's full range (which would be 1e-5..1000).
+    // expressed in the micro frame's LOCAL coordinate space (km).
     let (scene, camera) = create_multi_scale_scene();
     let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
 
     let micro_layer = result.depth_layers.iter().find(|l| l.layer_index == 1).unwrap();
 
-    // Camera at (0.0115, 0.0115, 0.0115), frame at (0.01, 0, 0)
-    // Distance ≈ sqrt((0.0015)^2 + (0.0115)^2 + (0.0115)^2) ≈ 0.0164 AU
-    // SOI radius = 0.005 AU
-    // Expected: near ≈ 0.0114, far ≈ 0.0214
+    // Camera at (0.0115, 0.0115, 0.0115) AU, frame at (0.01, 0, 0) AU
+    // Distance ≈ 0.0164 AU → in km = 0.0164 / 6.684587e-9 ≈ 2.45e6 km
+    // SOI = 0.005 AU → in km = 0.005 / 6.684587e-9 ≈ 7.48e5 km
+    // Expected: near ≈ 1.7e6 km, far ≈ 3.2e6 km
     assert!(
-      micro_layer.far < 0.1,
-      "Micro layer far={} is too large — should be tight around SOI, not camera's full range",
+      micro_layer.far > 1e5 && micro_layer.far < 1e8,
+      "Micro layer far={} should be in frame-local km range (1e5..1e8)",
       micro_layer.far,
     );
     assert!(
-      micro_layer.near > 0.001,
-      "Micro layer near={} is unreasonably small for SOI bounds",
+      micro_layer.near > 1e4,
+      "Micro layer near={} is unreasonably small for frame-local SOI bounds",
       micro_layer.near,
     );
-    // The depth range should be approximately 2 × SOI radius = 0.01
+    // The depth range should be approximately 2 × SOI in km ≈ 1.5e6 km
     let range = micro_layer.far - micro_layer.near;
     assert!(
-      range < 0.02 && range > 0.005,
-      "Micro layer depth range {} not in expected SOI range [0.005..0.02]",
+      range > 1e5 && range < 1e7,
+      "Micro layer depth range {} not in expected frame-local SOI range",
       range,
     );
   }
@@ -1548,7 +1747,10 @@ mod tests {
       )
       .unwrap();
     scene
-      .add_component(camera, CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0))
+      .add_component(
+        camera,
+        CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 0.1, 100.0),
+      )
       .unwrap();
 
     let sun = scene.spawn_entity("Sun");
@@ -1575,7 +1777,11 @@ mod tests {
     let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
 
     // Only macro layer (0) should exist
-    assert_eq!(result.depth_layers.len(), 1, "Single-layer scene should have exactly 1 layer");
+    assert_eq!(
+      result.depth_layers.len(),
+      1,
+      "Single-layer scene should have exactly 1 layer"
+    );
     assert_eq!(result.depth_layers[0].layer_index, 0);
     assert!(result.depth_layers[0].near < result.depth_layers[0].far);
   }
@@ -1599,7 +1805,10 @@ mod tests {
       )
       .unwrap();
     scene
-      .add_component(camera, CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 1e-5, 1000.0))
+      .add_component(
+        camera,
+        CameraComponent::new_persp(45.0f32.to_radians(), 1.0, 1e-5, 1000.0),
+      )
       .unwrap();
 
     // Frame A at (0.01, 0, 0), SOI=0.003

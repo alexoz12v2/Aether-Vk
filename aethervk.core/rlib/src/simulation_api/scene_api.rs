@@ -361,6 +361,13 @@ impl SimulationContext {
     scene_ctx_obj.register_entity(sun_entity);
 
     let scene_ctx = Arc::new(RwLock::new(scene_ctx_obj));
+
+    if spawn_fallback_camera {
+      if let Some(tx) = self.threads.render_thread.tx_opt() {
+        let _ = tx.try_send(crate::simulation_api::structs::RenderCommand::GenerateSky);
+      }
+    }
+
     Ok(self.scenes.write().insert_scene(scene_ctx))
   }
 

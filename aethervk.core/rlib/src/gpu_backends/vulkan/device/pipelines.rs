@@ -129,6 +129,7 @@ bitflags! {
     const STENCIL_ENABLE = 1 << 5;
     const NO_DEPTH_TEST = 1 << 6;
     const NO_LINE_DYNAMIC_STATE = 1 << 7;
+    const NO_BLEND = 1 << 8;
   }
 }
 
@@ -731,12 +732,13 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
         graphics_info.fragment_out.color_attachment_formats.len()
       },
     );
+    let blend_enable = !graphics_info.pipeline_flags.contains(PipelineFlags::NO_BLEND);
     for _ in 0..color_blend_attachments.capacity() {
       // over operator
       color_blend_attachments.push(
         vk::PipelineColorBlendAttachmentState::default()
           .color_write_mask(vk::ColorComponentFlags::RGBA)
-          .blend_enable(true)
+          .blend_enable(blend_enable)
           .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
           .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
           .color_blend_op(vk::BlendOp::ADD)
@@ -979,10 +981,7 @@ impl PipelinePool {
   }
 
   /// Returns the GraphicsInfo used to create the pipeline with the given key.
-  pub fn get_graphics_info(
-    &self,
-    pipeline_key: PipelineKey,
-  ) -> Option<GraphicsInfo> {
+  pub fn get_graphics_info(&self, pipeline_key: PipelineKey) -> Option<GraphicsInfo> {
     self.graphics_infos.get(&pipeline_key).map(|p| p.clone())
   }
 

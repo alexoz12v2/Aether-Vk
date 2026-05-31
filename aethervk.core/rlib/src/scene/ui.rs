@@ -93,6 +93,7 @@ pub struct ScreenSpaceTextComponent {
   pub color: [f32; 4],
   pub points: f32,
   pub use_new_path: bool,
+  pub style_flags: u32,
 }
 
 impl Component for ScreenSpaceTextComponent {}
@@ -150,6 +151,7 @@ impl<'a> UiBuilder<'a> {
       color,
       points,
       use_new_path: true, // Default to true for new UI builder
+      style_flags: 0,
     };
 
     let _ = self.scene.add_component(e, t2d);

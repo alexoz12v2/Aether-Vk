@@ -117,6 +117,15 @@ impl SimulationContext {
     mapped_ptr
   }
 
+  /// Flushes the emissive paint image memory for a given physical mesh instance
+  pub fn flush_emissive_paint_image(
+    &self,
+    mesh_id: crate::gpu::RenderableInstanceId,
+  ) -> EngineResult<()> {
+    self.with_device(|device| device.flush_emissive_paint_image(mesh_id))?;
+    Ok(())
+  }
+
   /// TODO: Document this item
   pub fn create_presentation_engine_windowed(
     &self,

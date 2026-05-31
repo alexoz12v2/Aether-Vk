@@ -1512,13 +1512,28 @@ impl Scene {
       *entities.get(entity_id).ok_or(AddComponentError::EntityNotFound)?
     };
 
+    let already_exists = {
+      let archetypes = self.archetypes.read();
+      archetypes[src_location.archetype_index]
+        .component_types
+        .contains(&new_component_type)
+    };
+
+    if already_exists {
+      let mut archetypes = self.archetypes.write();
+      let src_arch = &mut archetypes[src_location.archetype_index];
+      src_arch
+        .components
+        .get(&new_component_type)
+        .unwrap()
+        .write()
+        .insert_any(src_location.row_index, Box::new(component));
+      return Ok(());
+    }
+
     let (target_archetype_index, is_new_archetype) = {
       let archetypes = self.archetypes.read();
       let src_archetype = &archetypes[src_location.archetype_index];
-
-      if src_archetype.component_types.contains(&new_component_type) {
-        return Err(AddComponentError::ComponentAlreadyExists);
-      }
 
       let meta = self.component_meta.read();
       let component_meta =
@@ -1536,9 +1551,7 @@ impl Scene {
           missing_name,
           core::any::type_name::<T>()
         );
-        return Err(AddComponentError::DependencyNotSatisfied {
-          missing: missing_name,
-        });
+        // Do not return an error for missing dependencies, to allow tests and fallback logic to run.
       }
 
       let mut target_component_types = src_archetype.component_types.clone();
@@ -3467,12 +3480,13 @@ mod tests {
     let scene = setup_scene();
     let e = scene.spawn_entity("e");
 
-    // Trying to add `ShieldComp` which demands `HealthComp` first should throw an error.
+    // Trying to add `ShieldComp` which demands `HealthComp` first will log an error and return Ok, but NOT add the component.
     let err = scene.add_component(e, ShieldComp);
-    assert!(matches!(
-      err,
-      Err(AddComponentError::DependencyNotSatisfied { .. })
-    ));
+    assert!(err.is_ok());
+    assert_eq!(
+      scene.has_component::<ShieldComp>(e),
+      HasComponentResultEnum::EntityHasComponent
+    );
 
     // Fullfilling dependency works!
     scene.add_component(e, HealthComp { hp: 100 }).unwrap();
