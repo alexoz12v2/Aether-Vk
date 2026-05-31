@@ -1052,16 +1052,9 @@ fn test_camera_controls_microframe() {
 
       let pos = Vec3f32::from_components(0.01, 0.0, 0.0);
       let rot = Quat::identity();
-      let (_lca_ext, _comet_ext) = ctx.spawn_comet_internal(
-        scene_id,
-        model_id,
-        "comet_micro",
-        pos,
-        rot,
-        1.0,
-        1000.0,
-        0,
-      ).unwrap();
+      let (_lca_ext, _comet_ext) = ctx
+        .spawn_comet_internal(scene_id, model_id, "comet_micro", pos, rot, 1.0, 1000.0, 0)
+        .unwrap();
 
       // Get the camera that create_default_scene already created
       let camera_int = {
@@ -1077,7 +1070,7 @@ fn test_camera_controls_microframe() {
         found.expect("No camera found in scene")
       };
 
-      // Set camera local to the microframe 
+      // Set camera local to the microframe
       let cam_pos = Vec3f32::from_components(0.01001, 0.0, 0.0);
       let rot_cam = <Quat as Quaternion>::from_vector_and_scalar(
         Vec3f32::from_components(0.0, 0.0, -std::f32::consts::FRAC_1_SQRT_2),
@@ -1102,7 +1095,8 @@ fn test_camera_controls_microframe() {
 
       let get_cam_transform = || {
         let scene_arc = ctx.scenes.read().get_scene(scene_id).unwrap();
-        scene_arc.read()
+        scene_arc
+          .read()
           .scene
           .with_component(camera_int, |c: &crate::scene::HighResTransformComponent| *c)
           .unwrap()
@@ -1122,7 +1116,10 @@ fn test_camera_controls_microframe() {
 
       oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(150));
       let hrt1 = get_cam_transform();
-      assert!(hrt1.rotation != initial_hrt.rotation, "Rotation should change in microframe");
+      assert!(
+        hrt1.rotation != initial_hrt.rotation,
+        "Rotation should change in microframe"
+      );
 
       // Test Pan
       let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::PanCamera(
@@ -1136,8 +1133,14 @@ fn test_camera_controls_microframe() {
 
       oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(150));
       let hrt2 = get_cam_transform();
-      assert!(hrt2.position != hrt1.position, "Position should change after Pan in microframe");
-      assert_eq!(hrt2.rotation, hrt1.rotation, "Rotation should not change after Pan in microframe");
+      assert!(
+        hrt2.position != hrt1.position,
+        "Position should change after Pan in microframe"
+      );
+      assert_eq!(
+        hrt2.rotation, hrt1.rotation,
+        "Rotation should not change after Pan in microframe"
+      );
 
       // Test Zoom
       let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::ZoomCamera(
@@ -1150,7 +1153,10 @@ fn test_camera_controls_microframe() {
 
       oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(150));
       let hrt3 = get_cam_transform();
-      assert!(hrt3.position != hrt2.position, "Position should change after Zoom in microframe");
+      assert!(
+        hrt3.position != hrt2.position,
+        "Position should change after Zoom in microframe"
+      );
 
       let _ = alloc::boxed::Box::from_raw(ctx_ptr);
     }

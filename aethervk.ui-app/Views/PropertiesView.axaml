@@ -60,22 +60,13 @@
                                 <Expander HorizontalAlignment="Stretch">
                                     <Expander.Header>
                                         <Grid ColumnDefinitions="*, Auto">
-                                            <TextBlock Text="Rotation (Quat)" VerticalAlignment="Center"/>
-                                            <Button Grid.Column="1" Classes="icon" Command="{Binding CopyRotationCommand}" ToolTip.Tip="Copy to Clipboard" Background="Transparent" Padding="4" Margin="8,0,0,0">
+                                            <TextBlock Text="Rotation (Euler Degrees)" VerticalAlignment="Center"/>
+                                            <Button Grid.Column="1" Classes="icon" Command="{Binding CopyRotationCommand}" ToolTip.Tip="Copy Quaternion to Clipboard" Background="Transparent" Padding="4" Margin="8,0,0,0">
                                                 <PathIcon Data="M19,21H8V7H19M19,5H14.82C14.4,3.84 13.3,3 12,3C10.7,3 9.6,3.84 9.18,5H5V21A2,2 0 0,0 7,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M12,5A1,1 0 0,1 13,6A1,1 0 0,1 12,7A1,1 0 0,1 11,6A1,1 0 0,1 12,5Z" Width="14" Height="14" />
                                             </Button>
                                         </Grid>
                                     </Expander.Header>
-                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,*" IsEnabled="{Binding IsEditable}">
-                                        <TextBlock Grid.Column="0" Text="W:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding RotW}" Margin="0,0,8,0"/>
-                                        <TextBlock Grid.Column="2" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding RotX}" Margin="0,0,8,0"/>
-                                        <TextBlock Grid.Column="4" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                        <controls:UnboundedSlider Grid.Column="5" Value="{Binding RotY}" Margin="0,0,8,0"/>
-                                        <TextBlock Grid.Column="6" Text="Z:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                        <controls:UnboundedSlider Grid.Column="7" Value="{Binding RotZ}"/>
-                                    </Grid>
+                                    <controls:EulerRotationEditor Component="{Binding}" />
                                 </Expander>
 
                                 <Expander HorizontalAlignment="Stretch">
@@ -126,22 +117,13 @@
                                 <Expander HorizontalAlignment="Stretch">
                                     <Expander.Header>
                                         <Grid ColumnDefinitions="*, Auto">
-                                            <TextBlock Text="Rotation (Quat)" VerticalAlignment="Center"/>
-                                            <Button Grid.Column="1" Classes="icon" Command="{Binding CopyRotationCommand}" ToolTip.Tip="Copy to Clipboard" Background="Transparent" Padding="4" Margin="8,0,0,0">
+                                            <TextBlock Text="Rotation (Euler Degrees)" VerticalAlignment="Center"/>
+                                            <Button Grid.Column="1" Classes="icon" Command="{Binding CopyRotationCommand}" ToolTip.Tip="Copy Quaternion to Clipboard" Background="Transparent" Padding="4" Margin="8,0,0,0">
                                                 <PathIcon Data="M19,21H8V7H19M19,5H14.82C14.4,3.84 13.3,3 12,3C10.7,3 9.6,3.84 9.18,5H5V21A2,2 0 0,0 7,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M12,5A1,1 0 0,1 13,6A1,1 0 0,1 12,7A1,1 0 0,1 11,6A1,1 0 0,1 12,5Z" Width="14" Height="14" />
                                             </Button>
                                         </Grid>
                                     </Expander.Header>
-                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,*" IsEnabled="{Binding IsEditable}">
-                                        <TextBlock Grid.Column="0" Text="W:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding RotW}" Margin="0,0,8,0"/>
-                                        <TextBlock Grid.Column="2" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding RotX}" Margin="0,0,8,0"/>
-                                        <TextBlock Grid.Column="4" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                        <controls:UnboundedSlider Grid.Column="5" Value="{Binding RotY}" Margin="0,0,8,0"/>
-                                        <TextBlock Grid.Column="6" Text="Z:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                        <controls:UnboundedSlider Grid.Column="7" Value="{Binding RotZ}"/>
-                                    </Grid>
+                                    <controls:EulerRotationEditor Component="{Binding}" />
                                 </Expander>
 
                                 <Expander HorizontalAlignment="Stretch">
@@ -414,7 +396,8 @@
                         <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
                             <StackPanel Spacing="8">
                                 <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <TextBlock Text="Source:" FontWeight="Bold" VerticalAlignment="Center" />
+                                    <TextBlock Text="Procedural Mesh:" FontWeight="Bold" VerticalAlignment="Center" IsVisible="{Binding IsProcedural}" />
+                                    <TextBlock Text="Asset File:" FontWeight="Bold" VerticalAlignment="Center" IsVisible="{Binding !IsProcedural}" />
                                     <TextBlock Text="{Binding AssetPath}" VerticalAlignment="Center" TextWrapping="Wrap" />
                                 </StackPanel>
                                 <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Padding="8">
@@ -435,7 +418,13 @@
                     </DataTemplate>
 
                     <DataTemplate DataType="models:SphereGizmoComponent">
-                        <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                        <Expander IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                            <Expander.Header>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <PathIcon Data="M 12 2 C 6.48 2 2 6.48 2 12 C 2 17.52 6.48 22 12 22 C 17.52 22 22 17.52 22 12 C 22 6.48 17.52 2 12 2 Z M 12 20 C 7.58 20 4 16.42 4 12 C 4 7.58 7.58 4 12 4 C 16.42 4 20 7.58 20 12 C 20 16.42 16.42 20 12 20 Z" Width="14" Height="14" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Expander.Header>
                             <StackPanel Spacing="4">
                                 <CheckBox Content="Is Visible" IsChecked="{Binding IsVisible}" />
                             </StackPanel>

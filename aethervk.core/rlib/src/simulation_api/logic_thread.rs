@@ -621,20 +621,18 @@ fn process_command_internal(
         .scene
         .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
       {
-        if let Some(pos) =
-          scene_read.scene.with_component(cursor_id, |t: &HighResTransformComponent| {
-            t.position
-          })
+        if let Some(pos) = scene_read
+          .scene
+          .with_component(cursor_id, |t: &HighResTransformComponent| t.position)
         {
           cursor_pos = Some(pos);
 
           // Sync focus distance dynamically so zoom/pan speeds stay stable
           // based on the distance to the cursor object you are pivoting around.
           // Computed in f64 to preserve precision at extreme zoom.
-          if let Some(cam_pos) =
-            scene_read.scene.with_component(camera_entity, |t: &HighResTransformComponent| {
-              t.position
-            })
+          if let Some(cam_pos) = scene_read
+            .scene
+            .with_component(camera_entity, |t: &HighResTransformComponent| t.position)
           {
             let dist = (pos - cam_pos).length();
             let _ =
@@ -918,24 +916,43 @@ fn process_command_internal(
 
       // Dynamic offset calculation based on object bounds and camera FOV
       let mut r_local = 1.0_f64;
-      if let Some(mesh) = scene_read.scene.with_component(target_entity, |c: &crate::scene::PhysicalMeshComponent| c.clone()) {
+      if let Some(mesh) = scene_read
+        .scene
+        .with_component(target_entity, |c: &crate::scene::PhysicalMeshComponent| {
+          c.clone()
+        })
+      {
         r_local = mesh.sphere_radius as f64;
-      } else if let Some(col) = scene_read.scene.with_component(target_entity, |c: &crate::scene::ColliderComponent| c.clone()) {
+      } else if let Some(col) = scene_read
+        .scene
+        .with_component(target_entity, |c: &crate::scene::ColliderComponent| {
+          c.clone()
+        })
+      {
         r_local = match col.shape {
           crate::scene::ColliderShape::Sphere { radius } => radius as f64,
           crate::scene::ColliderShape::OBB { half_extents } => half_extents.length() as f64,
         };
       }
 
-      let target_scale = scene_read.scene.global_transform_f64(target_entity)
+      let target_scale = scene_read
+        .scene
+        .global_transform_f64(target_entity)
         .map(|t| t.scale.x().max(t.scale.y()).max(t.scale.z()) as f64)
         .unwrap_or(1.0);
       let target_radius = r_local * target_scale;
 
       let mut fov = core::f64::consts::FRAC_PI_4;
       let mut aspect = 16.0 / 9.0;
-      if let Some(cam) = scene_read.scene.with_component(snap_entity, |c: &CameraComponent| c.clone()) {
-        if let crate::scene::CameraProjection::Perspective { fov: cam_fov, aspect_ratio, .. } = cam.projection {
+      if let Some(cam) =
+        scene_read.scene.with_component(snap_entity, |c: &CameraComponent| c.clone())
+      {
+        if let crate::scene::CameraProjection::Perspective {
+          fov: cam_fov,
+          aspect_ratio,
+          ..
+        } = cam.projection
+        {
           fov = cam_fov as f64;
           aspect = aspect_ratio as f64;
         }

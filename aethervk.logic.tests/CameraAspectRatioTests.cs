@@ -58,7 +58,12 @@ namespace AetherVk.Logic.Tests
     /// Helper: get a camera component from native via the generic getComponent API.
     /// Returns true if the component was found; sets <paramref name="cam"/> accordingly.
     /// </summary>
-    private bool GetCameraComponent(IntPtr ctx, ulong sceneId, ulong entityId, out NativeInterop.FfiCamera cam)
+    private bool GetCameraComponent(
+      IntPtr ctx,
+      ulong sceneId,
+      ulong entityId,
+      out NativeInterop.FfiCamera cam
+    )
     {
       int size = Marshal.SizeOf<NativeInterop.FfiCamera>();
       IntPtr ptr = Marshal.AllocHGlobal(size);
@@ -81,7 +86,12 @@ namespace AetherVk.Logic.Tests
     /// <summary>
     /// Helper: set a camera component via the generic setComponent API.
     /// </summary>
-    private void SetCameraComponent(IntPtr ctx, ulong sceneId, ulong entityId, in NativeInterop.FfiCamera data)
+    private void SetCameraComponent(
+      IntPtr ctx,
+      ulong sceneId,
+      ulong entityId,
+      in NativeInterop.FfiCamera data
+    )
     {
       int size = Marshal.SizeOf<NativeInterop.FfiCamera>();
       IntPtr ptr = Marshal.AllocHGlobal(size);

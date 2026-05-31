@@ -995,7 +995,7 @@ pub fn do_draw_cursor(
   let inv_view_slice: [f32; 16] = inv_view.into();
   // Column-major layout: col0=[0..3]=right, col1=[4..7]=backward, col2=[8..11]=up
   let right = [inv_view_slice[0], inv_view_slice[1], inv_view_slice[2]];
-  let up    = [inv_view_slice[8], inv_view_slice[9], inv_view_slice[10]];
+  let up = [inv_view_slice[8], inv_view_slice[9], inv_view_slice[10]];
 
   let push_constants = crate::gpu::CursorPushConstants {
     view_proj: camera.view_proj.into(),

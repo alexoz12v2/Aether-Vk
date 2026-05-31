@@ -84,24 +84,37 @@ impl SceneCameraExt for Scene {
           h.position + fwd * (focus_distance as f64)
         };
 
-        // 2. Measure the ACTUAL distance from camera to pivot in f64.
-        // This is exact regardless of f32 truncation in focus_distance.
-        let actual_distance = (h.position - pivot).length();
-
-        // 3. Compute the new orientation
-        let (mut p, mut y) = h.rotation.to_pitch_yaw();
+        // 2. Compute old and new orientations
+        let q_old = h.rotation;
+        let (mut p, mut y) = q_old.to_pitch_yaw();
         p += delta_pitch;
         y += delta_yaw;
         p = p.clamp(-<f32 as FloatOps>::PI_OVER_2, <f32 as FloatOps>::PI_OVER_2);
         y = y.fmod(<f32 as FloatOps>::PI * 2.0);
-
         let q_new = Quat::from_pitch_and_yaw_radians(p, y);
 
-        // 4. Reconstruct position: camera sits at actual_distance behind the pivot.
-        // Uses only ONE f32 rotation (for backward direction) and exact f64 distance,
-        // avoiding the old 6-rotation roundtrip that caused micro-wobble.
-        let new_backward = q_new.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0)).to_f64();
-        h.position = pivot + new_backward * actual_distance;
+        // 3. Rotate offset by q_delta = q_new * q_old^-1.
+        // This rotates the camera's position around the pivot by the same amount
+        // as the orientation change, preserving the camera's arbitrary angle
+        // relative to the pivot. If the camera wasn't looking at the pivot,
+        // it won't snap to looking at it — the relative geometry is preserved.
+        let offset = h.position - pivot;
+        let offset_len = offset.length();
+
+        if offset_len > 1e-30 {
+          // Normalize to unit direction for f32 quaternion rotation,
+          // then rescale with exact f64 magnitude (prevents distance drift).
+          let dir_f32 = Vec3f32::from_components(
+            (offset.x() / offset_len) as f32,
+            (offset.y() / offset_len) as f32,
+            (offset.z() / offset_len) as f32,
+          );
+          let q_delta = q_new * q_old.conjugate();
+          let rotated_dir = q_delta.rotate_vector(dir_f32).to_f64();
+          let rotated_len = rotated_dir.length();
+          h.position = pivot + rotated_dir * (offset_len / rotated_len);
+        }
+
         h.rotation = q_new;
       })
       .ok_or(EngineError::InvalidOperation(

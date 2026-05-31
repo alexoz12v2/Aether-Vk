@@ -111,15 +111,15 @@
               <TextBlock Text="Rotation (Degrees)" FontWeight="Bold" Margin="0,4,0,0" />
               <Grid ColumnDefinitions="Auto, *">
                 <TextBlock Grid.Column="0" Text="Pitch (X):" VerticalAlignment="Center" Width="60" />
-                <controls:UnboundedSlider Grid.Column="1" Value="{Binding Pitch}" Margin="8,0" />
+                <controls:UnboundedSlider Grid.Column="1" Value="{Binding Pitch}" IsWrapped="True" Margin="8,0" />
               </Grid>
               <Grid ColumnDefinitions="Auto, *">
                 <TextBlock Grid.Column="0" Text="Yaw (Y):" VerticalAlignment="Center" Width="60" />
-                <controls:UnboundedSlider Grid.Column="1" Value="{Binding Yaw}" Margin="8,0" />
+                <controls:UnboundedSlider Grid.Column="1" Value="{Binding Yaw}" IsWrapped="True" Margin="8,0" />
               </Grid>
               <Grid ColumnDefinitions="Auto, *">
                 <TextBlock Grid.Column="0" Text="Roll (Z):" VerticalAlignment="Center" Width="60" />
-                <controls:UnboundedSlider Grid.Column="1" Value="{Binding Roll}" Margin="8,0" />
+                <controls:UnboundedSlider Grid.Column="1" Value="{Binding Roll}" IsWrapped="True" Margin="8,0" />
               </Grid>
             </StackPanel>
 

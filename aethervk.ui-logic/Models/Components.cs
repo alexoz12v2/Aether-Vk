@@ -104,9 +104,18 @@ public partial class TransformComponent : NativeComponent
     IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
     try
     {
-      if (NativeInterop.avkSimulationContext_getComponent(SimulationContext, SceneId, EntityId, 1, ptr))
+      if (
+        NativeInterop.avkSimulationContext_getComponent(
+          SimulationContext,
+          SceneId,
+          EntityId,
+          1,
+          ptr
+        )
+      )
       {
-        var data = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiTransform>(ptr);
+        var data =
+          System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiTransform>(ptr);
         PosX = data.Px;
         PosY = data.Py;
         PosZ = data.Pz;
@@ -255,9 +264,20 @@ public partial class HighResTransformComponent : NativeComponent
     IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
     try
     {
-      if (NativeInterop.avkSimulationContext_getComponent(SimulationContext, SceneId, EntityId, 3, ptr))
+      if (
+        NativeInterop.avkSimulationContext_getComponent(
+          SimulationContext,
+          SceneId,
+          EntityId,
+          3,
+          ptr
+        )
+      )
       {
-        var data = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiHighResTransform>(ptr);
+        var data =
+          System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiHighResTransform>(
+            ptr
+          );
         PosX = data.Px;
         PosY = data.Py;
         PosZ = data.Pz;
@@ -455,9 +475,19 @@ public partial class CameraComponent : NativeComponent
     IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
     try
     {
-      if (NativeInterop.avkSimulationContext_getComponent(SimulationContext, SceneId, EntityId, 2, ptr))
+      if (
+        NativeInterop.avkSimulationContext_getComponent(
+          SimulationContext,
+          SceneId,
+          EntityId,
+          2,
+          ptr
+        )
+      )
       {
-        var data = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiCamera>(ptr);
+        var data = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiCamera>(
+          ptr
+        );
         IsOrthographic = data.IsOrthographic;
         Fov = data.Fov;
         AspectRatio = data.Aspect;
@@ -947,21 +977,37 @@ public partial class SphereGizmoComponent : NativeComponent
       return;
 
     // Read-modify-write: read the full DTO, update IsVisible, write back
-    int size = System.Runtime.InteropServices.Marshal.SizeOf<AetherVk.Logic.Models.FfiSphereGizmo>();
+    int size =
+      System.Runtime.InteropServices.Marshal.SizeOf<AetherVk.Logic.Models.FfiSphereGizmo>();
     IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
     try
     {
       var data = new AetherVk.Logic.Models.FfiSphereGizmo();
       // Try to read existing state first to preserve Radius/Subdivisions/LocalFrame
-      if (AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getComponent(
-        SimulationContext, SceneId, EntityId, 4, ptr))
+      if (
+        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getComponent(
+          SimulationContext,
+          SceneId,
+          EntityId,
+          4,
+          ptr
+        )
+      )
       {
-        data = System.Runtime.InteropServices.Marshal.PtrToStructure<AetherVk.Logic.Models.FfiSphereGizmo>(ptr);
+        data =
+          System.Runtime.InteropServices.Marshal.PtrToStructure<AetherVk.Logic.Models.FfiSphereGizmo>(
+            ptr
+          );
       }
       data.IsVisible = IsVisible ? (byte)1 : (byte)0;
       System.Runtime.InteropServices.Marshal.StructureToPtr(data, ptr, false);
       AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setComponent(
-        SimulationContext, SceneId, EntityId, 4, ptr);
+        SimulationContext,
+        SceneId,
+        EntityId,
+        4,
+        ptr
+      );
     }
     finally
     {
@@ -974,14 +1020,25 @@ public partial class SphereGizmoComponent : NativeComponent
     if (SimulationContext == IntPtr.Zero)
       return;
 
-    int size = System.Runtime.InteropServices.Marshal.SizeOf<AetherVk.Logic.Models.FfiSphereGizmo>();
+    int size =
+      System.Runtime.InteropServices.Marshal.SizeOf<AetherVk.Logic.Models.FfiSphereGizmo>();
     IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
     try
     {
-      if (AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getComponent(
-        SimulationContext, SceneId, EntityId, 4, ptr))
+      if (
+        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getComponent(
+          SimulationContext,
+          SceneId,
+          EntityId,
+          4,
+          ptr
+        )
+      )
       {
-        var data = System.Runtime.InteropServices.Marshal.PtrToStructure<AetherVk.Logic.Models.FfiSphereGizmo>(ptr);
+        var data =
+          System.Runtime.InteropServices.Marshal.PtrToStructure<AetherVk.Logic.Models.FfiSphereGizmo>(
+            ptr
+          );
         IsVisible = data.IsVisible != 0;
       }
     }
@@ -1096,10 +1153,11 @@ public partial class ScreenSpaceBillboardComponent : NativeComponent
       RotationDeg = RotationDeg,
       Opacity = Opacity,
       ZIndex = ZIndex,
-      ViewportId = ViewportId
+      ViewportId = ViewportId,
     };
 
-    int size = System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiScreenSpaceBillboard>();
+    int size =
+      System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiScreenSpaceBillboard>();
     IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
     try
     {
@@ -1133,13 +1191,25 @@ public partial class ScreenSpaceBillboardComponent : NativeComponent
     if (SimulationContext == IntPtr.Zero)
       return;
 
-    int size = System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiScreenSpaceBillboard>();
+    int size =
+      System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiScreenSpaceBillboard>();
     IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
     try
     {
-      if (NativeInterop.avkSimulationContext_getComponent(SimulationContext, SceneId, EntityId, 5, ptr))
+      if (
+        NativeInterop.avkSimulationContext_getComponent(
+          SimulationContext,
+          SceneId,
+          EntityId,
+          5,
+          ptr
+        )
+      )
       {
-        var data = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiScreenSpaceBillboard>(ptr);
+        var data =
+          System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiScreenSpaceBillboard>(
+            ptr
+          );
         NdcX = data.NdcX;
         NdcY = data.NdcY;
         Scale = data.Scale;
@@ -1192,16 +1262,27 @@ public partial class PhysicalMeshComponent : NativeComponent
     if (SimulationContext == IntPtr.Zero)
       return;
 
-    int size = System.Runtime.InteropServices.Marshal.SizeOf<AetherVk.Logic.Models.FfiPhysicalMesh>();
+    int size =
+      System.Runtime.InteropServices.Marshal.SizeOf<AetherVk.Logic.Models.FfiPhysicalMesh>();
     IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
     try
     {
-      if (AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getComponent(
-        SimulationContext, SceneId, EntityId, ComponentId, ptr))
+      if (
+        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getComponent(
+          SimulationContext,
+          SceneId,
+          EntityId,
+          ComponentId,
+          ptr
+        )
+      )
       {
-        var dto = System.Runtime.InteropServices.Marshal.PtrToStructure<AetherVk.Logic.Models.FfiPhysicalMesh>(ptr);
+        var dto =
+          System.Runtime.InteropServices.Marshal.PtrToStructure<AetherVk.Logic.Models.FfiPhysicalMesh>(
+            ptr
+          );
         IsProcedural = dto.IsProcedural != 0;
-          
+
         if (!IsProcedural)
         {
           AssetPath = dto.AssetPath ?? string.Empty;
@@ -1221,10 +1302,22 @@ public partial class PhysicalMeshComponent : NativeComponent
     IntPtr tPtr = System.Runtime.InteropServices.Marshal.AllocHGlobal(tSize);
     try
     {
-      if (AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getComponent(SimulationContext, SceneId, EntityId, 1, tPtr))
+      if (
+        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getComponent(
+          SimulationContext,
+          SceneId,
+          EntityId,
+          1,
+          tPtr
+        )
+      )
       {
-        var tcomp = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiTransform>(tPtr);
-        double w = tcomp.Rw, x = tcomp.Rx, y = tcomp.Ry, z = tcomp.Rz;
+        var tcomp =
+          System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiTransform>(tPtr);
+        double w = tcomp.Rw,
+          x = tcomp.Rx,
+          y = tcomp.Ry,
+          z = tcomp.Rz;
         double sinr_cosp = 2 * (w * x + y * z);
         double cosr_cosp = 1 - 2 * (x * x + y * y);
         Roll = (float)(Math.Atan2(sinr_cosp, cosr_cosp) * 180.0 / Math.PI);

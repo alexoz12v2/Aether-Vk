@@ -443,11 +443,14 @@ impl SimulationContext {
       let pos_x = 0.010429309357456616;
       let pos_y = 0.010962580663326662;
       let pos_z = 0.007890014217773569;
-      
+
       let rot = aethervk_oshal_rlib::math::vector::vec4::Quat::from_components(
-          0.24757917, -0.098841526, -0.35735834, 0.8951145
+        0.24757917,
+        -0.098841526,
+        -0.35735834,
+        0.8951145,
       );
-      
+
       scene.add_component(
         camera_entity,
         crate::scene::HighResTransformComponent {

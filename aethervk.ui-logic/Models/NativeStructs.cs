@@ -24,6 +24,7 @@ public struct Float4
 public struct FfiPhysicalMesh
 {
   public byte IsProcedural;
+
   [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
   public string AssetPath;
 }
@@ -51,6 +52,7 @@ public struct FfiSphereGizmo
 {
   public float Radius;
   public float Subdivisions;
+
   [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
   public float[] LocalFrame;
   public byte IsVisible;

@@ -1059,8 +1059,14 @@ public static class NativeInterop
     IntPtr ctx,
     ulong sceneId,
     ulong cameraEntityId,
-    double px, double py, double pz,
-    float rx, float ry, float rz, float rw);
+    double px,
+    double py,
+    double pz,
+    float rx,
+    float ry,
+    float rz,
+    float rw
+  );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_followEntity(

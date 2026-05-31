@@ -665,12 +665,20 @@ impl SceneConversionExt for crate::scene::Scene {
           return None;
         }
 
-        let camera_global = self.global_transform_f64(camera_entity).unwrap_or_else(|| {
-            HighResTransformComponent { position: Default::default(), rotation: Default::default(), scale: Vec3f32::from_components(1.0, 1.0, 1.0) }
-        });
-        let cursor_global = self.global_transform_f64(id).unwrap_or_else(|| {
-            HighResTransformComponent { position: Default::default(), rotation: Default::default(), scale: Vec3f32::from_components(1.0, 1.0, 1.0) }
-        });
+        let camera_global =
+          self
+            .global_transform_f64(camera_entity)
+            .unwrap_or_else(|| HighResTransformComponent {
+              position: Default::default(),
+              rotation: Default::default(),
+              scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+            });
+        let cursor_global =
+          self.global_transform_f64(id).unwrap_or_else(|| HighResTransformComponent {
+            position: Default::default(),
+            rotation: Default::default(),
+            scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+          });
         let rel_pos = camera_global.position - cursor_global.position;
         let relative_cam_pos = [rel_pos.x() as f32, rel_pos.y() as f32, rel_pos.z() as f32];
 

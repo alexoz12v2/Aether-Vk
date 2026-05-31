@@ -1,10 +1,9 @@
 //! ffi module.
 
 use aethervk_core_rlib::{
-  scene::ForeignSerializable,
   gpu,
   math::collision::{linear_bvh, linear_bvh::LinearBVHNode},
-  scene::Marker,
+  scene::{ForeignSerializable, Marker},
   simulation_api::{
     comet_api::CometApi,
     components_api::{CameraParams, OrthographicCameraParams, PerspectiveCameraParams},
@@ -591,7 +590,9 @@ pub unsafe extern "C" fn avkSimulationContext_getComponent(
             }
             found = true;
           });
-          if found { return true; }
+          if found {
+            return true;
+          }
         }
         aethervk_core_rlib::scene::TransformComponent::COMPONENT_ID => {
           let mut found = false;
@@ -602,7 +603,9 @@ pub unsafe extern "C" fn avkSimulationContext_getComponent(
             }
             found = true;
           });
-          if found { return true; }
+          if found {
+            return true;
+          }
         }
         aethervk_core_rlib::scene::HighResTransformComponent::COMPONENT_ID => {
           let mut found = false;
@@ -613,7 +616,9 @@ pub unsafe extern "C" fn avkSimulationContext_getComponent(
             }
             found = true;
           });
-          if found { return true; }
+          if found {
+            return true;
+          }
         }
         aethervk_core_rlib::scene::CameraComponent::COMPONENT_ID => {
           let mut found = false;
@@ -624,7 +629,9 @@ pub unsafe extern "C" fn avkSimulationContext_getComponent(
             }
             found = true;
           });
-          if found { return true; }
+          if found {
+            return true;
+          }
         }
         aethervk_core_rlib::scene::SphereGizmoComponent::COMPONENT_ID => {
           let mut found = false;
@@ -635,7 +642,9 @@ pub unsafe extern "C" fn avkSimulationContext_getComponent(
             }
             found = true;
           });
-          if found { return true; }
+          if found {
+            return true;
+          }
         }
         aethervk_core_rlib::scene::ScreenSpaceBillboardComponent::COMPONENT_ID => {
           let mut found = false;
@@ -646,7 +655,9 @@ pub unsafe extern "C" fn avkSimulationContext_getComponent(
             }
             found = true;
           });
-          if found { return true; }
+          if found {
+            return true;
+          }
         }
         _ => {}
       }
@@ -677,37 +688,49 @@ pub unsafe extern "C" fn avkSimulationContext_setComponent(
           let res = scene_write.scene.with_component_mut(int_id, |comp: &mut aethervk_core_rlib::scene::PhysicalMeshComponent| {
             unsafe { <aethervk_core_rlib::scene::PhysicalMeshComponent as aethervk_core_rlib::scene::ForeignSerializable>::apply_foreign_ptr(comp, in_buffer); }
           });
-          if res.is_some() { return true; }
+          if res.is_some() {
+            return true;
+          }
         }
         aethervk_core_rlib::scene::TransformComponent::COMPONENT_ID => {
           let res = scene_write.scene.with_component_mut(int_id, |comp: &mut aethervk_core_rlib::scene::TransformComponent| {
             unsafe { <aethervk_core_rlib::scene::TransformComponent as aethervk_core_rlib::scene::ForeignSerializable>::apply_foreign_ptr(comp, in_buffer); }
           });
-          if res.is_some() { return true; }
+          if res.is_some() {
+            return true;
+          }
         }
         aethervk_core_rlib::scene::HighResTransformComponent::COMPONENT_ID => {
           let res = scene_write.scene.with_component_mut(int_id, |comp: &mut aethervk_core_rlib::scene::HighResTransformComponent| {
             unsafe { <aethervk_core_rlib::scene::HighResTransformComponent as aethervk_core_rlib::scene::ForeignSerializable>::apply_foreign_ptr(comp, in_buffer); }
           });
-          if res.is_some() { return true; }
+          if res.is_some() {
+            return true;
+          }
         }
         aethervk_core_rlib::scene::CameraComponent::COMPONENT_ID => {
           let res = scene_write.scene.with_component_mut(int_id, |comp: &mut aethervk_core_rlib::scene::CameraComponent| {
             unsafe { <aethervk_core_rlib::scene::CameraComponent as aethervk_core_rlib::scene::ForeignSerializable>::apply_foreign_ptr(comp, in_buffer); }
           });
-          if res.is_some() { return true; }
+          if res.is_some() {
+            return true;
+          }
         }
         aethervk_core_rlib::scene::SphereGizmoComponent::COMPONENT_ID => {
           let res = scene_write.scene.with_component_mut(int_id, |comp: &mut aethervk_core_rlib::scene::SphereGizmoComponent| {
             unsafe { <aethervk_core_rlib::scene::SphereGizmoComponent as aethervk_core_rlib::scene::ForeignSerializable>::apply_foreign_ptr(comp, in_buffer); }
           });
-          if res.is_some() { return true; }
+          if res.is_some() {
+            return true;
+          }
         }
         aethervk_core_rlib::scene::ScreenSpaceBillboardComponent::COMPONENT_ID => {
           let res = scene_write.scene.with_component_mut(int_id, |comp: &mut aethervk_core_rlib::scene::ScreenSpaceBillboardComponent| {
             unsafe { <aethervk_core_rlib::scene::ScreenSpaceBillboardComponent as aethervk_core_rlib::scene::ForeignSerializable>::apply_foreign_ptr(comp, in_buffer); }
           });
-          if res.is_some() { return true; }
+          if res.is_some() {
+            return true;
+          }
         }
         _ => {}
       }
@@ -1052,10 +1075,6 @@ pub unsafe extern "C" fn avkSimulationContext_addHighResTransformComponent(
     .is_ok()
 }
 
-
-
-
-
 #[repr(C)]
 pub struct FfiEmissionCircle {
   pub latitude_rad: f32,
@@ -1274,7 +1293,6 @@ pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent
   }
 }
 
-
 /// Patches the `naif_id` field of an `AlmanacPlanet` component on a Kinematic comet entity
 /// after spawn. At spawn time `naif_id` is set to 0 (placeholder); this function injects
 /// the real SPK/NAIF id so the logic thread can query the almanac correctly each tick.
@@ -1350,7 +1368,6 @@ pub unsafe extern "C" fn avkSimulationContext_setKinematicVelocity(
   }
   false
 }
-
 
 // --- Queries ---
 
@@ -2226,10 +2243,13 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraTransform(
   };
 
   let q = aethervk_oshal_rlib::math::vector::vec4::Quat::from_components(rx, ry, rz, rw);
-  let res = scene_read.scene.with_component_mut(internal_camera, |t: &mut aethervk_core_rlib::scene::HighResTransformComponent| {
-    t.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(px, py, pz);
-    t.rotation = q;
-  });
+  let res = scene_read.scene.with_component_mut(
+    internal_camera,
+    |t: &mut aethervk_core_rlib::scene::HighResTransformComponent| {
+      t.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(px, py, pz);
+      t.rotation = q;
+    },
+  );
 
   res.is_some()
 }
@@ -2746,8 +2766,6 @@ pub unsafe extern "C" fn avkSimulationContext_addCameraComponent(
   let _ = ctx_ref.add_camera_component(scene_id, entity, params);
 }
 
-
-
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_addMeasurementComponent(
@@ -2791,8 +2809,6 @@ pub unsafe extern "C" fn avkSimulationContext_addImageBillboardComponent(
   let _ = ctx_ref.add_image_billboard_component(scene_id, entity, is_screen_space, width, height);
 }
 
-
-
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct FfiScreenSpaceBillboardDTO {
@@ -2804,7 +2820,6 @@ pub struct FfiScreenSpaceBillboardDTO {
   pub z_index: i32,
   pub viewport_id: u64,
 }
-
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
