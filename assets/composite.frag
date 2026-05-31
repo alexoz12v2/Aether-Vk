@@ -15,6 +15,8 @@ layout(push_constant, std430) uniform CompositePush {
     float macroFar;
     float microNear;
     float microFar;
+    float macroScale;
+    float microScale;
 };
 
 layout(location = 0) in vec2 inUV;
@@ -41,14 +43,19 @@ void main() {
     float dMicro = subpassLoad(microDepth).r;
 
     // Linearize both depths to physical distance (AU)
-    float distMacro = linearizeReverseZ(dMacro, macroNear, macroFar);
-    float distMicro = linearizeReverseZ(dMicro, microNear, microFar);
+    float distMacro = linearizeReverseZ(dMacro, macroNear, macroFar) * macroScale;
+    float distMicro = linearizeReverseZ(dMicro, microNear, microFar) * microScale;
 
     // Pick the fragment that is nearer to the camera.
     // When a layer has no content at a pixel, its depth is 0.0 (reverse-Z clear value).
-    if (dMicro == 0.0) {
-        // Micro layer is empty, fallback to Macro (which may have Skybox or be empty)
+    // However, some pipelines (e.g. sphere gizmo wireframes) write color but NOT depth
+    // (NO_DEPTH_WRITE). For those pixels, depth stays at clear value but color is valid.
+    if (dMicro == 0.0 && cMicro.a == 0.0) {
+        // Micro layer is truly empty (no color, no depth), use Macro
         outColor = cMacro;
+    } else if (dMicro == 0.0 && cMicro.a > 0.0) {
+        // Micro layer has color but no depth (e.g. wireframe gizmo) — blend over macro
+        outColor = vec4(mix(cMacro.rgb, cMicro.rgb, cMicro.a), max(cMacro.a, cMicro.a));
     } else if (dMacro == 0.0) {
         // Macro layer is empty, use Micro
         outColor = cMicro;

@@ -869,7 +869,9 @@ impl Archetypes {
           .pipeline_layout
           .get(),
       )
-      .with_pipeline_flags(PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE)
+      .with_pipeline_flags(
+        PipelineFlags::CULL_BACK | PipelineFlags::STENCIL_ENABLE | PipelineFlags::INVERT_FRONT_FACE,
+      )
       .with_stencil_compare_op(StencilCompareOp::Always)
       .with_stencil_logic_op(StencilLogicOp::Replace)
       .with_stencil_reference(255)
@@ -1403,9 +1405,6 @@ impl Archetypes {
           .clone(),
       )
       .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
-      .with_pipeline_flags(
-        pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::NO_DEPTH_TEST,
-      )
       .with_render_pass(
         renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
       )
@@ -1614,7 +1613,8 @@ impl Archetypes {
       .with_pipeline_flags(
         PipelineFlags::STENCIL_ENABLE
           | PipelineFlags::NO_DEPTH_TEST
-          | PipelineFlags::NO_DEPTH_WRITE,
+          | PipelineFlags::NO_DEPTH_WRITE
+          | PipelineFlags::INVERT_FRONT_FACE,
       )
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
       .with_stencil_compare_op(StencilCompareOp::NotEqual)

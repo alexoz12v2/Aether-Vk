@@ -635,7 +635,7 @@ pub unsafe extern "C" fn avkSimulationContext_spawnComet(
     model_id,
     name_str,
     Vec3f32::from_components(pos_x, pos_y, pos_z),
-    Quat::from_components(rot_w, rot_x, rot_y, rot_z),
+    Quat::from_components(rot_x, rot_y, rot_z, rot_w),
     radius_km,
     mass_kg,
     physics_type,
@@ -894,11 +894,7 @@ pub unsafe extern "C" fn avkSimulationContext_addHighResTransformComponent(
   let ctx_ref = unsafe { &*ctx };
   ctx_ref
     .add_highres_transform_component(
-      scene_id,
-      entity,
-      pos_x, pos_y, pos_z,
-      rot_w, rot_x, rot_y, rot_z,
-      scale_x, scale_y, scale_z,
+      scene_id, entity, pos_x, pos_y, pos_z, rot_w, rot_x, rot_y, rot_z, scale_x, scale_y, scale_z,
     )
     .is_ok()
 }
@@ -1029,11 +1025,7 @@ pub unsafe extern "C" fn avkSimulationContext_setHighResTransformComponent(
   }
   ctx_ref
     .set_highres_transform_component(
-      scene_id,
-      entity,
-      t.px, t.py, t.pz,
-      t.rw, t.rx, t.ry, t.rz,
-      t.sx, t.sy, t.sz,
+      scene_id, entity, t.px, t.py, t.pz, t.rw, t.rx, t.ry, t.rz, t.sx, t.sy, t.sz,
     )
     .is_ok()
 }
@@ -2020,7 +2012,7 @@ pub unsafe extern "C" fn avkSimulationContext_spawnStaticMesh(
   let ctx_ref = unsafe { &*ctx };
   let name = unsafe { CStr::from_ptr(entity_name).to_str().unwrap_or("StaticMesh") };
   let pos = Vec3f32::from_components(pos_x, pos_y, pos_z);
-  let rot = Quat::from_components(rot_w, rot_x, rot_y, rot_z);
+  let rot = Quat::from_components(rot_x, rot_y, rot_z, rot_w);
   let scale = Vec3f32::from_components(radius_km, radius_km, radius_km);
 
   match ctx_ref.spawn_static_mesh_internal(scene_id, model_id, name, pos, rot, scale) {

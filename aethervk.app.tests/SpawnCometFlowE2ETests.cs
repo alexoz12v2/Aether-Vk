@@ -168,7 +168,7 @@ public class SpawnCometFlowE2ETests
           }
         }
       }
-      
+
       Marshal.FreeHGlobal(unmanagedBuffer);
 
       Assert.True(hasNonZeroPixel, "Image should not be completely empty (Alpha check)");

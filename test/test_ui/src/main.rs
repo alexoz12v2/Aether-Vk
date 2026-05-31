@@ -140,6 +140,7 @@ impl SimulationDelegate for TestUiDelegate {
       color: [0.1, 0.1, 0.1, 1.0],
       points: 24.0,
       use_new_path: true,
+      style_flags: 0,
     };
     scene.add_component(title_text, title_t2d).unwrap();
     scene.add_component(title_text, title_ui).unwrap();
@@ -152,6 +153,7 @@ impl SimulationDelegate for TestUiDelegate {
     temp_t2d.global_clip = [-9999.0, -9999.0, 9999.0, 9999.0];
     temp_t2d.global_depth = 2;
     let temp_ui = ScreenSpaceTextComponent {
+      style_flags: 0,
       text: "21°C".to_string(),
       font_atlas: font_arc.clone(),
       font_hash,

@@ -184,10 +184,33 @@ impl<D: SimulationDelegate> crate::app::App for GenericSimApp<D> {
 
     #[cfg(target_os = "macos")]
     {
-      self.window_info.metal_layer.setDrawableSize(objc2_core_foundation::CGSize {
+      use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+
+      // 1. Get the current monitor's scale factor (Retina displays are usually 2.0).
+      // Fallback to 1.0 if the window has somehow been destroyed.
+      let scale_factor = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
+
+      // 2. Set Physical Pixels (What Vulkan and Metal care about)
+      self.window_info.metal_layer.setDrawableSize(CGSize {
         width: width as f64,
         height: height as f64,
       });
+
+      // 3. Set Logical Points (What Core Animation and the GPU Debugger care about)
+      let logical_width = (width as f64) / scale_factor;
+      let logical_height = (height as f64) / scale_factor;
+
+      self.window_info.metal_layer.setFrame(CGRect {
+        origin: CGPoint { x: 0.0, y: 0.0 },
+        size: CGSize {
+          width: logical_width,
+          height: logical_height,
+        },
+      });
+
+      // 4. Ensure the layer knows how to map the pixels to the points
+      // equal to msg_send![&self.window_info.metal_layer, setContentsScale: scale_factor]
+      self.window_info.metal_layer.setContentsScale(scale_factor);
     }
 
     if !self.is_resizing {

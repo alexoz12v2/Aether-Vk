@@ -207,6 +207,7 @@ impl SimulationDelegate for ForceTestDelegate {
       .add_component(
         ui_text_entity,
         ScreenSpaceTextComponent {
+          style_flags: 0,
           text: "Particles: 0".to_string(),
           font_atlas: font_arc.clone(),
           font_hash,
@@ -355,12 +356,14 @@ mod tests {
       });
     }
 
+    let ps_int_entity = ctx.get_scene(scene_id).read().get_entity(ps_entity).unwrap();
+
     ctx
       .get_scene(scene_id)
       .unwrap()
       .write()
       .scene
-      .add_component(ps_entity, ps_comp)
+      .add_component(ps_int_entity, ps_comp)
       .unwrap();
 
     let thread_pool =

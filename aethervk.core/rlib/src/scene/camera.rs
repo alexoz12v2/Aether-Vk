@@ -8,7 +8,7 @@ use aethervk_oshal_rlib::math::{
   FloatLike,
   floating::FloatOps,
   quaternion::Quaternion,
-  vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
+  vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat},
 };
 
 // TODO add unit tests
@@ -76,23 +76,24 @@ impl SceneCameraExt for Scene {
 
     self
       .with_component_mut(camera_entity, |h: &mut HighResTransformComponent| {
-        let pos_f32 = h.position.to_f32();
-
-        // 1. Establish the explicit pivot point
-        let pivot = pivot_override.unwrap_or_else(|| {
+        // 1. Establish the explicit pivot point in f64
+        let pivot = if let Some(p_override) = pivot_override {
+          p_override.to_f64()
+        } else {
           let fwd = h.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
-          pos_f32 + fwd * focus_distance
-        });
+          h.position + (fwd * focus_distance).to_f64()
+        };
 
         // 2. Project current offset into the camera's local space
         let q_old = h.rotation;
-        let world_offset = pos_f32 - pivot;
+        let world_offset = h.position - pivot;
 
-        let old_right = q_old.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-        let old_y = q_old.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0));
-        let old_up = q_old.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+        let old_right = q_old.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0)).to_f64();
+        let old_y = q_old.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0)).to_f64();
+        let old_up = q_old.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0)).to_f64();
 
-        let local_offset = Vec3f32::from_components(
+        // local_offset is the displacement relative to the camera's old rotation axes
+        let local_offset = Vec3f64::from_components(
           world_offset.dot(old_right),
           world_offset.dot(old_y),
           world_offset.dot(old_up),
@@ -108,10 +109,16 @@ impl SceneCameraExt for Scene {
         let q_new = Quat::from_pitch_and_yaw_radians(p, y);
 
         // 4. Transform the local offset back into the NEW world space
-        let new_world_offset = q_new.rotate_vector(local_offset);
+        // We can do this by rotating the axes by q_new and multiplying by local_offset components
+        let new_right = q_new.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0)).to_f64();
+        let new_y = q_new.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0)).to_f64();
+        let new_up = q_new.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0)).to_f64();
+
+        let new_world_offset =
+          new_right * local_offset.x() + new_y * local_offset.y() + new_up * local_offset.z();
 
         // 5. Apply the rigid rotation
-        h.position = (pivot + new_world_offset).to_f64();
+        h.position = pivot + new_world_offset;
         h.rotation = q_new;
       })
       .ok_or(EngineError::InvalidOperation(
@@ -198,10 +205,10 @@ impl QuatToEulerAngles for Quat {
     let (sp, cp) = (half_pitch.sin(), half_pitch.cos());
 
     Quat::from_components(
-      cy * cp,  // w
-      cy * sp,  // x
-      sy * sp,  // y
-      sy * cp,  // z
+      cy * sp, // x
+      sy * sp, // y
+      sy * cp, // z
+      cy * cp, // w
     )
   }
 }

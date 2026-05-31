@@ -7,9 +7,8 @@ use crate::{
   scene::{
     BackgroundComponent, BillboardType, BvhDebugComponent, CameraComponent, CursorComponent,
     EntityId, FollowingComponent, GridComponent, HiddenComponent, HighResTransformComponent,
-    ImageBillboardComponent,
-    MarkersComponent, MeasurementComponent, PhysicalMeshComponent, ReferenceFrameComponent,
-    SelectedComponent, SkyComponent, SunComponent, TransformComponent,
+    ImageBillboardComponent, MarkersComponent, MeasurementComponent, PhysicalMeshComponent,
+    ReferenceFrameComponent, SelectedComponent, SkyComponent, SunComponent, TransformComponent,
   },
   types::GpuResult,
 };
@@ -419,16 +418,25 @@ impl RenderSceneExtraction {
     }
 
     // Cursor — drawn in composite subpass (always on top of all layers)
-    if let Some((t, _layer_idx, _scale)) = self.cursor_transform {
+    if let Some((t, layer_idx, _scale)) = self.cursor_transform {
       let res = match device.get_cursor_resources(presentation_engine_handle) {
         Ok(r) => r,
         Err(_) => device.create_cursor_resources(cmd_buffer, presentation_engine_handle)?,
       };
+      // Look up near/far for the cursor's depth layer so the viewProj matches its coordinate space
+      let (cursor_near, cursor_far) = render_scene
+        .depth_layers
+        .iter()
+        .find(|l| l.layer_index == layer_idx)
+        .map(|l| (l.near, l.far))
+        .unwrap_or((render_scene.camera_data.near, render_scene.camera_data.far));
       render_scene.cursor_call = Some(gpu::frame::CursorDrawCall::from_result_and_matrix(
         res,
         4,
         t.to_mat4(),
         t.scale.x(),
+        cursor_near,
+        cursor_far,
       ));
     }
 
@@ -617,7 +625,9 @@ impl SceneConversionExt for crate::scene::Scene {
 
     // Camera — read f64 HighResTransformComponent, downcast to f32 for GPU
     let cam_transform = self
-      .with_component(camera_entity, |h: &HighResTransformComponent| h.to_transform())
+      .with_component(camera_entity, |h: &HighResTransformComponent| {
+        h.to_transform()
+      })
       .or_else(|| self.global_transform(camera_entity))
       .unwrap_or_default();
     let cam_comp = self.with_component(camera_entity, |c: &CameraComponent| *c).ok_or(
@@ -647,15 +657,19 @@ impl SceneConversionExt for crate::scene::Scene {
       );
     }
 
-    // Cursor
+    // Cursor — use f64 relative transform to prevent precision loss at extreme zoom
     cursor_transform = self
       .query1_first_res_without::<_, HiddenComponent, _, _>(|id, _c: &CursorComponent| {
         if hidden_set.contains(&id) {
           return None;
         }
-        self.get_relative_transform(id, camera_entity).map(|t| {
+        self.get_relative_transform_f64(id, camera_entity).map(|hrt| {
           (
-            t,
+            TransformComponent {
+              position: hrt.position.to_f32(),
+              rotation: hrt.rotation,
+              scale: hrt.scale,
+            },
             self.ancestor_depth_layer(id),
             self.ancestor_frame_scale(id),
           )
@@ -867,7 +881,10 @@ impl SceneConversionExt for crate::scene::Scene {
           })
         },
       )
-      .map(|(r, id)| { sun_entity_id = Some(id); r });
+      .map(|(r, id)| {
+        sun_entity_id = Some(id);
+        r
+      });
 
     // Recompute sun model matrix if camera and sun are in different depth layers
     if let (Some(sun_data), Some(s_id)) = (&mut extracted_sun, sun_entity_id) {
@@ -875,7 +892,10 @@ impl SceneConversionExt for crate::scene::Scene {
       let cam_layer = self.ancestor_depth_layer(camera_entity);
       if sun_layer != cam_layer {
         // Sun and camera in different frames — recompute using global coordinates
-        if let (Some(sun_global), Some(cam_g)) = (self.global_transform(s_id), self.global_transform(camera_entity)) {
+        if let (Some(sun_global), Some(cam_g)) = (
+          self.global_transform(s_id),
+          self.global_transform(camera_entity),
+        ) {
           use crate::scene::TransformComponent;
           use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
           let safe_div = |a: f32, b: f32| -> f32 { if b.abs() < 1e-15 { 0.0 } else { a / b } };
@@ -935,33 +955,37 @@ impl SceneConversionExt for crate::scene::Scene {
       },
     );
 
-    // Gizmos
+    // Gizmos — use f64 relative transform to prevent wobble from f32 cancellation
     self.query1_without::<_, HiddenComponent, _>(|id, gizmo: &crate::scene::GizmoComponent| {
       if hidden_set.contains(&id) {
         return;
       }
       if gizmo.gizmo_visible {
-        if let Some(t) = self.get_relative_transform(id, camera_entity) {
-          let t_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::translation(t.position)
+        if let Some(hrt) = self.get_relative_transform_f64(id, camera_entity) {
+          let pos_f32 = hrt.position.to_f32();
+          let t_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::translation(pos_f32)
             * aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_quat_custom_frame(
-              t.rotation,
+              hrt.rotation,
             );
 
-          let gizmo_model = t_mat;
-
-          extracted_gizmos.push((id, gizmo_model, gizmo.gizmo_scale));
+          extracted_gizmos.push((id, t_mat, gizmo.gizmo_scale));
         }
       }
     });
 
-    // SphereGizmos
+    // SphereGizmos — use f64 relative transform to prevent wobble from f32 cancellation
     self.query1_without::<_, HiddenComponent, _>(
       |id, gizmo: &crate::scene::SphereGizmoComponent| {
         if hidden_set.contains(&id) {
           return;
         }
         if gizmo.is_visible {
-          if let Some(t) = self.get_relative_transform(id, camera_entity) {
+          if let Some(hrt) = self.get_relative_transform_f64(id, camera_entity) {
+            let t = TransformComponent {
+              position: hrt.position.to_f32(),
+              rotation: hrt.rotation,
+              scale: hrt.scale,
+            };
             let gizmo_model = t.to_mat4::<Mat4x4f32>() * gizmo.local_frame;
             extracted_sphere_gizmos.push((id, gizmo_model, gizmo.radius, gizmo.subdivisions));
           }
@@ -969,13 +993,18 @@ impl SceneConversionExt for crate::scene::Scene {
       },
     );
 
-    // Trajectories
+    // Trajectories — use f64 relative transform to prevent precision loss
     self.query1_without::<_, HiddenComponent, _>(
       |id, traj: &crate::scene::trajectory::TrajectoryComponent| {
         if hidden_set.contains(&id) {
           return;
         }
-        if let Some(t) = self.get_relative_transform(id, camera_entity) {
+        if let Some(hrt) = self.get_relative_transform_f64(id, camera_entity) {
+          let t = TransformComponent {
+            position: hrt.position.to_f32(),
+            rotation: hrt.rotation,
+            scale: hrt.scale,
+          };
           extracted_trajectories.push((id, traj.clone(), t.to_mat4()));
         }
       },
@@ -1091,7 +1120,7 @@ impl SceneConversionExt for crate::scene::Scene {
     // The macro layer always uses frame_scale=1.0 (root), not the camera's actual
     // frame_scale, because mesh model matrices are computed in global AU.
     let macro_near = cam_comp.near_plane(); // in AU (root space, scale=1.0)
-    let macro_far = cam_comp.far_plane();   // in AU
+    let macro_far = cam_comp.far_plane(); // in AU
     let mut layer_bounds: hashbrown::HashMap<u32, (f32, f32)> = hashbrown::HashMap::new();
     let mut layer_frame_scales: hashbrown::HashMap<u32, f32> = hashbrown::HashMap::new();
     layer_bounds.insert(0, (macro_near, macro_far));
@@ -1111,7 +1140,9 @@ impl SceneConversionExt for crate::scene::Scene {
             //   soi_local = soi_au / frame.scale
             let soi_local = frame.soi_radius / frame.scale;
 
-            let safe_micro_near = 0.01; // 10 meters in km
+            // safe_micro_near must scale with the camera distance, down to a tiny absolute minimum.
+            // Units are in km (frame-local). 0.001 km = 1 meter.
+            let safe_micro_near = (dist_local * 0.01).max(0.001); // 1% of distance, or 1 meter minimum
             let tight_near = (dist_local - soi_local).max(safe_micro_near);
             let tight_far = (dist_local + soi_local).max(tight_near + safe_micro_near);
 
@@ -1172,21 +1203,21 @@ impl SceneConversionExt for crate::scene::Scene {
     //
     // • Micro (layer N): both mesh and camera expressed in that frame's local space.
     //   RTE model = mesh_frame_local − camera_frame_local
-    {
-      // Collect frame_entity for each depth_layer > 0
-      let mut layer_frame_entities: hashbrown::HashMap<u32, EntityId> = hashbrown::HashMap::new();
-      self.query1_without::<ReferenceFrameComponent, HiddenComponent, _>(
-        |id, frame: &ReferenceFrameComponent| {
-          if frame.depth_layer > 0 {
-            layer_frame_entities.entry(frame.depth_layer).or_insert(id);
-          }
-        },
-      );
+    // Collect frame_entity for each depth_layer > 0
+    let mut layer_frame_entities: hashbrown::HashMap<u32, EntityId> = hashbrown::HashMap::new();
+    self.query1_without::<ReferenceFrameComponent, HiddenComponent, _>(
+      |id, frame: &ReferenceFrameComponent| {
+        if frame.depth_layer > 0 {
+          layer_frame_entities.entry(frame.depth_layer).or_insert(id);
+        }
+      },
+    );
+    let camera_depth_layer = self.ancestor_depth_layer(camera_entity);
 
+    {
       let cam_global = self.global_transform(camera_entity).unwrap_or_default();
       // f64 camera global position for precision in subtraction
       let cam_global_f64 = self.global_transform_f64(camera_entity);
-      let camera_depth_layer = self.ancestor_depth_layer(camera_entity);
 
       for (_layer_idx, layer_data) in layer_map.iter_mut() {
         let layer_idx = *_layer_idx;
@@ -1212,16 +1243,20 @@ impl SceneConversionExt for crate::scene::Scene {
         if layer_idx == 0 {
           // Macro layer: recompute using global (root AU) coordinates.
           for mesh in layer_data.meshes.iter_mut() {
-            if let Some(mesh_global) = self.global_transform(mesh.entity_id) {
+            if let Some(mesh_global) = self.global_transform_f64(mesh.entity_id) {
               use crate::scene::TransformComponent;
               use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
 
-              let safe_div = |a: f32, b: f32| -> f32 {
-                if b.abs() < 1e-15 { 0.0 } else { a / b }
-              };
+              let safe_div = |a: f32, b: f32| -> f32 { if b.abs() < 1e-15 { 0.0 } else { a / b } };
+
+              let cam_pos = cam_global_f64
+                .as_ref()
+                .map(|c| c.position)
+                .unwrap_or_else(|| cam_global.position.to_f64());
+              let diff = mesh_global.position - cam_pos;
 
               mesh.global_transform = TransformComponent {
-                position: mesh_global.position - cam_global.position,
+                position: diff.to_f32(),
                 rotation: mesh_global.rotation,
                 scale: Vec3f32::from_components(
                   safe_div(mesh_global.scale.x(), cam_global.scale.x()),
@@ -1240,19 +1275,20 @@ impl SceneConversionExt for crate::scene::Scene {
           // Micro layer: use f64 for camera-relative position to avoid cancellation
           let cam_in_frame_f64 = self.get_relative_transform_f64(camera_entity, frame_entity);
           let cam_in_frame = self.get_relative_transform(camera_entity, frame_entity);
-          if let Some(cam_local) = cam_in_frame {
+          if let (Some(cam_f64), Some(cam_local)) = (&cam_in_frame_f64, &cam_in_frame) {
             for mesh in layer_data.meshes.iter_mut() {
-              let mesh_in_frame = self.get_relative_transform(mesh.entity_id, frame_entity);
+              let mesh_in_frame = self.get_relative_transform_f64(mesh.entity_id, frame_entity);
               if let Some(mesh_local) = mesh_in_frame {
                 use crate::scene::TransformComponent;
                 use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
 
-                let safe_div = |a: f32, b: f32| -> f32 {
-                  if b.abs() < 1e-15 { 0.0 } else { a / b }
-                };
+                let safe_div =
+                  |a: f32, b: f32| -> f32 { if b.abs() < 1e-15 { 0.0 } else { a / b } };
+
+                let diff = mesh_local.position - cam_f64.position;
 
                 mesh.global_transform = TransformComponent {
-                  position: mesh_local.position - cam_local.position,
+                  position: diff.to_f32(),
                   rotation: mesh_local.rotation,
                   scale: Vec3f32::from_components(
                     safe_div(mesh_local.scale.x(), cam_global.scale.x()),
@@ -1341,6 +1377,92 @@ impl SceneConversionExt for crate::scene::Scene {
       get_or_create_layer!(layer_map, layer_idx, scale);
     }
 
+    // ── Per-layer recomputation for non-mesh entities ────────────────────────
+    // The initial extraction used get_relative_transform(entity, camera) which
+    // crosses frame boundaries and produces AU-scale values when the entity is
+    // in a micro-frame but the camera is not (or vice versa). Recompute using
+    // frame-local coordinates, matching the mesh recomputation above.
+    for (_layer_idx, layer_data) in layer_map.iter_mut() {
+      let layer_idx = *_layer_idx;
+      if layer_idx == camera_depth_layer {
+        continue; // Same frame — initial get_relative_transform was correct
+      }
+
+      if layer_idx > 0 {
+        if let Some(&frame_entity) = layer_frame_entities.get(&layer_idx) {
+          let cam_in_frame_f64 = self.get_relative_transform_f64(camera_entity, frame_entity);
+          let cam_in_frame = self.get_relative_transform(camera_entity, frame_entity);
+          if let (Some(cam_f64), Some(_cam_local)) = (cam_in_frame_f64, cam_in_frame) {
+            // Sphere gizmos: recompute model matrix in frame-local (km) coordinates using f64
+            for sg in layer_data.sphere_gizmos.iter_mut() {
+              let entity_id = sg.0;
+              if let Some(hrt) = self.get_relative_transform_f64(entity_id, frame_entity) {
+                use crate::scene::TransformComponent;
+                let rte_pos = (hrt.position - cam_f64.position).to_f32();
+                let rte_transform = TransformComponent {
+                  position: rte_pos,
+                  rotation: hrt.rotation,
+                  scale: hrt.scale,
+                };
+                // Re-read the local_frame from the component
+                let local_frame = {
+                  use aethervk_oshal_rlib::math::matrix::SquareMatrix;
+                  self
+                    .with_component(entity_id, |g: &crate::scene::SphereGizmoComponent| {
+                      g.local_frame
+                    })
+                    .unwrap_or(Mat4x4f32::identity())
+                };
+                sg.1 = rte_transform.to_mat4::<Mat4x4f32>() * local_frame;
+              }
+            }
+
+            // Gizmos: recompute model matrix using f64
+            for gizmo in layer_data.gizmos.iter_mut() {
+              let entity_id = gizmo.0;
+              if let Some(hrt) = self.get_relative_transform_f64(entity_id, frame_entity) {
+                let rte_pos = (hrt.position - cam_f64.position).to_f32();
+                let t_mat =
+                  Mat4x4f32::translation(rte_pos) * Mat4x4f32::from_quat_custom_frame(hrt.rotation);
+                gizmo.1 = t_mat;
+              }
+            }
+
+            // Billboards: don't carry EntityId in the layer tuple, so we can't
+            // recompute here. If billboard jitter is observed in micro layers,
+            // add EntityId to the billboard layer tuple.
+
+            // Markers: recompute transform using f64
+            for marker in layer_data.markers.iter_mut() {
+              let entity_id = marker.0;
+              if let Some(hrt) = self.get_relative_transform_f64(entity_id, frame_entity) {
+                use crate::scene::TransformComponent;
+                marker.1 = TransformComponent {
+                  position: (hrt.position - cam_f64.position).to_f32(),
+                  rotation: hrt.rotation,
+                  scale: hrt.scale,
+                };
+              }
+            }
+
+            // Trajectories: recompute model matrix using f64
+            for traj in layer_data.trajectories.iter_mut() {
+              let entity_id = traj.0;
+              if let Some(hrt) = self.get_relative_transform_f64(entity_id, frame_entity) {
+                use crate::scene::TransformComponent;
+                let rte_transform = TransformComponent {
+                  position: (hrt.position - cam_f64.position).to_f32(),
+                  rotation: hrt.rotation,
+                  scale: hrt.scale,
+                };
+                traj.2 = rte_transform.to_mat4::<Mat4x4f32>();
+              }
+            }
+          }
+        }
+      }
+    }
+
     let mut depth_layers: Vec<DepthLayerData> = layer_map.into_values().collect();
     // Sort layers farthest to nearest (layer 0 is farthest, macro)
     depth_layers.sort_by_key(|l| l.layer_index);
@@ -1354,42 +1476,66 @@ impl SceneConversionExt for crate::scene::Scene {
         aethervk_oshal_rlib::log!(
           "\x1b[36m[MULTI-SCALE] Frame {} | camera pos=({:.6},{:.6},{:.6}) frame_scale={:.2e} | macro near/far=({:.2e},{:.2e})\x1b[0m",
           frame,
-          camera_data.absolute_pos.x(), camera_data.absolute_pos.y(), camera_data.absolute_pos.z(),
+          camera_data.absolute_pos.x(),
+          camera_data.absolute_pos.y(),
+          camera_data.absolute_pos.z(),
           frame_scale,
-          macro_near, macro_far
+          macro_near,
+          macro_far
         );
         for (layer_idx, (near, far)) in &layer_bounds {
           aethervk_oshal_rlib::log!(
             "\x1b[36m  layer_bounds[{}]: near={:.2e} far={:.2e}\x1b[0m",
-            layer_idx, near, far
+            layer_idx,
+            near,
+            far
           );
         }
         for layer in &depth_layers {
           aethervk_oshal_rlib::log!(
             "\x1b[36m  DepthLayer {} -> near={:.2e} far={:.2e} meshes={} billboards={} gizmos={} sphere_gizmos={} trajectories={}\x1b[0m",
-            layer.layer_index, layer.near, layer.far,
-            layer.meshes.len(), layer.billboards.len(), layer.gizmos.len(),
-            layer.sphere_gizmos.len(), layer.trajectories.len()
+            layer.layer_index,
+            layer.near,
+            layer.far,
+            layer.meshes.len(),
+            layer.billboards.len(),
+            layer.gizmos.len(),
+            layer.sphere_gizmos.len(),
+            layer.trajectories.len()
           );
           for mesh in &layer.meshes {
             let p = mesh.global_transform.position;
             let s = mesh.global_transform.scale;
             aethervk_oshal_rlib::log!(
               "\x1b[33m    mesh entity={:?} pos=({:.2e},{:.2e},{:.2e}) scale=({:.2e},{:.2e},{:.2e}) emissive={:.1} path={}\x1b[0m",
-              mesh.entity_id, p.x(), p.y(), p.z(), s.x(), s.y(), s.z(),
-              mesh.mesh.emissive_intensity, mesh.mesh.asset_path
+              mesh.entity_id,
+              p.x(),
+              p.y(),
+              p.z(),
+              s.x(),
+              s.y(),
+              s.z(),
+              mesh.mesh.emissive_intensity,
+              mesh.mesh.asset_path
             );
           }
         }
         aethervk_oshal_rlib::log!(
           "\x1b[36m  sun={} sky={} grid={} cursor={} background={}\x1b[0m",
-          extracted_sun.is_some(), extracted_sky.is_some(), extracted_grid.is_some(),
-          cursor_transform.is_some(), extracted_background.is_some()
+          extracted_sun.is_some(),
+          extracted_sky.is_some(),
+          extracted_grid.is_some(),
+          cursor_transform.is_some(),
+          extracted_background.is_some()
         );
         if let Some(((model, radius), layer_idx, _)) = &extracted_sun {
           aethervk_oshal_rlib::log!(
             "\x1b[36m  sun -> layer {} radius={:.6} pos=({:.6},{:.6},{:.6})\x1b[0m",
-            layer_idx, radius, model.w.x(), model.w.y(), model.w.z()
+            layer_idx,
+            radius,
+            model.w.x(),
+            model.w.y(),
+            model.w.z()
           );
         }
         if let Some((layer_idx, _)) = &extracted_sky {
@@ -1537,7 +1683,7 @@ mod tests {
 
     // Camera at (0.0115, 0.0115, 0.0115) AU looking at origin
     let root = scene.spawn_entity("Root");
-    
+
     let camera = scene.spawn_entity("Camera");
     scene.set_parent(camera, Some(root));
     scene

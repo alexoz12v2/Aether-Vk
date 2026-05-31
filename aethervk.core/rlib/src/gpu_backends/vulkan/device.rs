@@ -1676,24 +1676,33 @@ impl Drop for Device {
       oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
     }
 
-    if let Err(e) = unsafe { self.device.device_wait_idle() } {
-      aethervk_oshal_rlib::log!("Device::drop device_wait_idle failed: {:?}", e);
-    }
-    aethervk_oshal_rlib::log!("Device::drop device_wait_idle complete. Starting cleanup...");
-    let allocator = DebugTrackedRwLock::read(&self.res).allocator.allocator.as_allocator_view();
-    self.kernels.cleanup(&self.device, allocator);
+    let mut cleanup = || {
+      if let Err(e) = unsafe { self.device.device_wait_idle() } {
+        aethervk_oshal_rlib::log!("Device::drop device_wait_idle failed: {:?}", e);
+      }
+      aethervk_oshal_rlib::log!("Device::drop device_wait_idle complete. Starting cleanup...");
 
-    let arena_opt = self.res.read().frame_staging_arena.write().take();
-    if let Some(mut arena) = arena_opt {
-      arena.destroy(self.res.read().allocator.allocator.as_allocator_view());
-    }
+      let allocator = DebugTrackedRwLock::read(&self.res).allocator.allocator.as_allocator_view();
+      self.kernels.cleanup(&self.device, allocator);
 
-    DebugTrackedRwLock::write(&self.res).cleanup(&self.device);
+      let arena_opt = self.res.read().frame_staging_arena.write().take();
+      if let Some(mut arena) = arena_opt {
+        arena.destroy(self.res.read().allocator.allocator.as_allocator_view());
+      }
 
-    aethervk_oshal_rlib::log!("Device::drop cleanup complete. Destroying device...");
-    // in the end, destroy the device
-    unsafe { self.device.destroy_device(None) };
-    aethervk_oshal_rlib::log!("Device::drop finished.");
+      DebugTrackedRwLock::write(&self.res).cleanup(&self.device);
+
+      aethervk_oshal_rlib::log!("Device::drop cleanup complete. Destroying device...");
+      // in the end, destroy the device
+      unsafe { self.device.destroy_device(None) };
+      aethervk_oshal_rlib::log!("Device::drop finished.");
+    };
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    objc2::rc::autoreleasepool(|_| cleanup());
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    cleanup();
   }
 }
 

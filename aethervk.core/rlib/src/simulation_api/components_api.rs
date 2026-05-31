@@ -219,14 +219,15 @@ impl SimulationContext {
       "component_api:set_highres_transform_component"
     );
     use aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64;
-    let opt = scene.write().scene.with_component_mut(
-      entity_id,
-      |c: &mut HighResTransformComponent| {
-        c.position = Vec3f64::from_components(pos_x, pos_y, pos_z);
-        c.rotation = Quat::from_components(rot_x, rot_y, rot_z, rot_w);
-        c.scale = Vec3f32::from_components(scale_x, scale_y, scale_z);
-      },
-    );
+    let opt =
+      scene
+        .write()
+        .scene
+        .with_component_mut(entity_id, |c: &mut HighResTransformComponent| {
+          c.position = Vec3f64::from_components(pos_x, pos_y, pos_z);
+          c.rotation = Quat::from_components(rot_x, rot_y, rot_z, rot_w);
+          c.scale = Vec3f32::from_components(scale_x, scale_y, scale_z);
+        });
     opt.ok_or(EngineError::InvalidOperation(
       "components_api:set_highres_transform_component couldn't find component",
     ))
@@ -254,22 +255,45 @@ impl SimulationContext {
       entity,
       "component_api:get_highres_transform_component"
     );
-    let hrt = scene.read().scene.with_component(entity_id, |c: &HighResTransformComponent| *c)
+    let hrt = scene
+      .read()
+      .scene
+      .with_component(entity_id, |c: &HighResTransformComponent| *c)
       .ok_or(EngineError::InvalidOperation(
         "component_api:get_highres_transform_component couldn't find component",
       ))?;
     unsafe {
-      if !pos_x.is_null() { *pos_x = hrt.position.x(); }
-      if !pos_y.is_null() { *pos_y = hrt.position.y(); }
-      if !pos_z.is_null() { *pos_z = hrt.position.z(); }
-      if !rot_w.is_null() { *rot_w = hrt.rotation.scalar_part(); }
+      if !pos_x.is_null() {
+        *pos_x = hrt.position.x();
+      }
+      if !pos_y.is_null() {
+        *pos_y = hrt.position.y();
+      }
+      if !pos_z.is_null() {
+        *pos_z = hrt.position.z();
+      }
+      if !rot_w.is_null() {
+        *rot_w = hrt.rotation.scalar_part();
+      }
       let v = hrt.rotation.vector_part();
-      if !rot_x.is_null() { *rot_x = v.x(); }
-      if !rot_y.is_null() { *rot_y = v.y(); }
-      if !rot_z.is_null() { *rot_z = v.z(); }
-      if !scale_x.is_null() { *scale_x = hrt.scale.x(); }
-      if !scale_y.is_null() { *scale_y = hrt.scale.y(); }
-      if !scale_z.is_null() { *scale_z = hrt.scale.z(); }
+      if !rot_x.is_null() {
+        *rot_x = v.x();
+      }
+      if !rot_y.is_null() {
+        *rot_y = v.y();
+      }
+      if !rot_z.is_null() {
+        *rot_z = v.z();
+      }
+      if !scale_x.is_null() {
+        *scale_x = hrt.scale.x();
+      }
+      if !scale_y.is_null() {
+        *scale_y = hrt.scale.y();
+      }
+      if !scale_z.is_null() {
+        *scale_z = hrt.scale.z();
+      }
     }
     Ok(())
   }
@@ -361,11 +385,17 @@ impl SimulationContext {
     // Initialize from existing TransformComponent if present, otherwise default.
     {
       let scene_read = scene.read();
-      let hrt = scene_read.scene.with_component(entity_id, |c: &TransformComponent| {
-        HighResTransformComponent::from_transform(c)
-      }).unwrap_or_default();
+      let hrt = scene_read
+        .scene
+        .with_component(entity_id, |c: &TransformComponent| {
+          HighResTransformComponent::from_transform(c)
+        })
+        .unwrap_or_default();
       drop(scene_read);
-      scene.write().scene.add_component(entity_id, hrt)
+      scene
+        .write()
+        .scene
+        .add_component(entity_id, hrt)
         .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;
     }
     scene

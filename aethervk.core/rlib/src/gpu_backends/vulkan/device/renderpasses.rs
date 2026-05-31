@@ -1754,7 +1754,9 @@ impl RenderPasses {
             | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
             | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
         )
-        .dst_stage_mask(vk::PipelineStageFlags::from_raw(dst_stage_mask.as_raw() as u32))
+        .dst_stage_mask(vk::PipelineStageFlags::from_raw(
+          dst_stage_mask.as_raw() as u32
+        ))
         .src_access_mask(
           vk::AccessFlags::COLOR_ATTACHMENT_READ
             | vk::AccessFlags::COLOR_ATTACHMENT_WRITE

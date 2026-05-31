@@ -6,7 +6,8 @@ use super::structs::{
 use crate::{
   gpu::WeakRenderFrontendExt,
   scene::{
-    CameraComponent, CursorComponent, EntityId, FollowingComponent, HighResTransformComponent, TransformComponent,
+    CameraComponent, CursorComponent, EntityId, FollowingComponent, HighResTransformComponent,
+    TransformComponent,
     camera::{QuatToEulerAngles, SceneCameraExt},
   },
   simulation_api::emit_breadcrumb,
@@ -47,7 +48,6 @@ impl PlayControl {
     }
   }
 }
-
 
 pub fn start_logic_thread(
   logic_rx: mpsc::Receiver<LogicCommand>,
@@ -622,15 +622,18 @@ fn process_command_internal(
         .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
       {
         if let Some(pos) =
-          scene_read.scene.with_component(cursor_id, |t: &HighResTransformComponent| t.position.to_f32())
+          scene_read.scene.with_component(cursor_id, |t: &HighResTransformComponent| {
+            t.position.to_f32()
+          })
         {
           cursor_pos = Some(pos);
 
           // Optional: Sync focus distance dynamically so your zoom/pan speeds stay stable
           // based on the distance to the cursor object you are pivoting around.
-          if let Some(cam_pos) = scene_read
-            .scene
-            .with_component(camera_entity, |t: &HighResTransformComponent| t.position.to_f32())
+          if let Some(cam_pos) =
+            scene_read.scene.with_component(camera_entity, |t: &HighResTransformComponent| {
+              t.position.to_f32()
+            })
           {
             let dist = (pos - cam_pos).length();
             let _ =
@@ -779,9 +782,12 @@ fn process_command_internal(
         .scene
         .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
       {
-        let _ = scene_read.scene.with_component_mut(cursor_id, |c: &mut HighResTransformComponent| {
-          c.position = cursor_pos.to_f64();
-        });
+        let _ =
+          scene_read
+            .scene
+            .with_component_mut(cursor_id, |c: &mut HighResTransformComponent| {
+              c.position = cursor_pos.to_f64();
+            });
       }
 
       const HOME_DISTANCE: f32 = 0.07;
@@ -893,9 +899,12 @@ fn process_command_internal(
         .scene
         .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
       {
-        let _ = scene_read.scene.with_component_mut(cursor_id, |c: &mut HighResTransformComponent| {
-          c.position = target_pos.to_f64();
-        });
+        let _ =
+          scene_read
+            .scene
+            .with_component_mut(cursor_id, |c: &mut HighResTransformComponent| {
+              c.position = target_pos.to_f64();
+            });
         // Mark cursor entity as changed.
         if let Some(ext_id) =
           scene_read.entity_map.iter().find(|&(_, v)| *v == cursor_id).map(|(k, _)| *k)
@@ -913,10 +922,13 @@ fn process_command_internal(
       let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
       let offset = q.rotate_vector(Vec3f32::from_components(0.0, SNAP_DISTANCE, 0.0));
 
-      let _ = scene_read.scene.with_component_mut(snap_entity, |t: &mut HighResTransformComponent| {
-        t.position = (target_pos + offset).to_f64();
-        t.rotation = q;
-      });
+      let _ =
+        scene_read
+          .scene
+          .with_component_mut(snap_entity, |t: &mut HighResTransformComponent| {
+            t.position = (target_pos + offset).to_f64();
+            t.rotation = q;
+          });
       let _ = scene_read.scene.with_component_mut(snap_entity, |c: &mut CameraComponent| {
         c.focus_distance = SNAP_DISTANCE;
       });
@@ -1337,6 +1349,11 @@ fn process_command_internal(
       ndc_x,
       ndc_y,
     } => {
+      aethervk_oshal_rlib::log!(
+        "DEBUG logic_thread: RaycastNdc received scene={} camera={}",
+        scene_id,
+        camera_id
+      );
       let res = ctx.raycast_ndc_internal(scene_id, camera_id, ndc_x, ndc_y)?;
       Ok(SimulationTaskResult::Raycast(res))
     }
@@ -1504,7 +1521,11 @@ fn execute_simulation_tick(
             if let Some(cam_global) = scene_ctx.scene.global_transform(cam_id) {
               let fwd = cam_global.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
               let dist_global = (cursor_global.position - cam_global.position).dot(fwd);
-              let scale_z = if cam_global.scale.z().abs() > 1e-15 { cam_global.scale.z() } else { 1.0 };
+              let scale_z = if cam_global.scale.z().abs() > 1e-15 {
+                cam_global.scale.z()
+              } else {
+                1.0
+              };
               let dist_local = dist_global / scale_z;
               if dist_local > 0.1 {
                 let _ = scene_ctx.scene.with_component_mut(cam_id, |cam: &mut CameraComponent| {
@@ -1885,14 +1906,16 @@ fn try_snap_entity(
   target_entity: EntityId,
   scene_read: &RwLockReadGuard<SceneContext>,
 ) -> EngineResult<()> {
-  let (target_pos, target_rot) = {
-    // Use f64 for position if available
-    let t = scene_read.scene.global_transform_f64(target_entity)
-      .ok_or(EngineError::InvalidOperation(
-        "logic_thread:SnapToEntity | snap target doesn't have TransformComponent",
-      ))?;
-    (t.position, t.rotation)
-  };
+  let (target_pos, target_rot) =
+    {
+      // Use f64 for position if available
+      let t = scene_read.scene.global_transform_f64(target_entity).ok_or(
+        EngineError::InvalidOperation(
+          "logic_thread:SnapToEntity | snap target doesn't have TransformComponent",
+        ),
+      )?;
+      (t.position, t.rotation)
+    };
 
   // Update f64 component (source of truth for camera/cursor)
   let _ = scene_read.scene.with_component_mut(
@@ -1904,9 +1927,10 @@ fn try_snap_entity(
   );
 
   // For entities with TransformComponent (non-camera), update via set_global_position_and_rotation
-  let _ = scene_read
-    .scene
-    .set_global_position_and_rotation(snap_entity, target_pos.to_f32(), target_rot);
+  let _ =
+    scene_read
+      .scene
+      .set_global_position_and_rotation(snap_entity, target_pos.to_f32(), target_rot);
   if let Some(ext_id) =
     scene_read.entity_map.iter().find(|&(_, v)| *v == snap_entity).map(|(k, _)| *k)
   {
