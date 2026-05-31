@@ -29,11 +29,11 @@ pub trait SceneCameraExt {
     camera_entity: EntityId,
     delta_yaw: f32,
     delta_pitch: f32,
-    pivot_override: Option<Vec3f32>,
+    pivot_override: Option<Vec3f64>,
   ) -> EngineResult<()>;
 
   /// Translates the camera in its local space (x = right, y = backward, z = up)
-  fn translate_camera_local(&self, camera_entity: EntityId, delta: Vec3f32) -> EngineResult<()>;
+  fn translate_camera_local(&self, camera_entity: EntityId, delta: Vec3f64) -> EngineResult<()>;
 
   /// Pans the camera along its local X (right) and Z (up) axes.
   fn pan_camera(&self, camera_entity: EntityId, delta_x: f32, delta_y: f32) -> EngineResult<()>;
@@ -64,7 +64,7 @@ impl SceneCameraExt for Scene {
     camera_entity: EntityId,
     delta_yaw: f32,
     delta_pitch: f32,
-    pivot_override: Option<Vec3f32>,
+    pivot_override: Option<Vec3f64>,
   ) -> EngineResult<()> {
     check_for_camera(&self, camera_entity)?;
 
@@ -76,31 +76,20 @@ impl SceneCameraExt for Scene {
 
     self
       .with_component_mut(camera_entity, |h: &mut HighResTransformComponent| {
-        // 1. Establish the explicit pivot point in f64
+        // 1. Establish the pivot point in f64
         let pivot = if let Some(p_override) = pivot_override {
-          p_override.to_f64()
+          p_override
         } else {
-          let fwd = h.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
-          h.position + (fwd * focus_distance).to_f64()
+          let fwd = h.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0)).to_f64();
+          h.position + fwd * (focus_distance as f64)
         };
 
-        // 2. Project current offset into the camera's local space
-        let q_old = h.rotation;
-        let world_offset = h.position - pivot;
-
-        let old_right = q_old.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0)).to_f64();
-        let old_y = q_old.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0)).to_f64();
-        let old_up = q_old.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0)).to_f64();
-
-        // local_offset is the displacement relative to the camera's old rotation axes
-        let local_offset = Vec3f64::from_components(
-          world_offset.dot(old_right),
-          world_offset.dot(old_y),
-          world_offset.dot(old_up),
-        );
+        // 2. Measure the ACTUAL distance from camera to pivot in f64.
+        // This is exact regardless of f32 truncation in focus_distance.
+        let actual_distance = (h.position - pivot).length();
 
         // 3. Compute the new orientation
-        let (mut p, mut y) = q_old.to_pitch_yaw();
+        let (mut p, mut y) = h.rotation.to_pitch_yaw();
         p += delta_pitch;
         y += delta_yaw;
         p = p.clamp(-<f32 as FloatOps>::PI_OVER_2, <f32 as FloatOps>::PI_OVER_2);
@@ -108,17 +97,11 @@ impl SceneCameraExt for Scene {
 
         let q_new = Quat::from_pitch_and_yaw_radians(p, y);
 
-        // 4. Transform the local offset back into the NEW world space
-        // We can do this by rotating the axes by q_new and multiplying by local_offset components
-        let new_right = q_new.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0)).to_f64();
-        let new_y = q_new.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0)).to_f64();
-        let new_up = q_new.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0)).to_f64();
-
-        let new_world_offset =
-          new_right * local_offset.x() + new_y * local_offset.y() + new_up * local_offset.z();
-
-        // 5. Apply the rigid rotation
-        h.position = pivot + new_world_offset;
+        // 4. Reconstruct position: camera sits at actual_distance behind the pivot.
+        // Uses only ONE f32 rotation (for backward direction) and exact f64 distance,
+        // avoiding the old 6-rotation roundtrip that caused micro-wobble.
+        let new_backward = q_new.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0)).to_f64();
+        h.position = pivot + new_backward * actual_distance;
         h.rotation = q_new;
       })
       .ok_or(EngineError::InvalidOperation(
@@ -127,13 +110,23 @@ impl SceneCameraExt for Scene {
     Ok(())
   }
 
-  fn translate_camera_local(&self, camera_entity: EntityId, delta: Vec3f32) -> EngineResult<()> {
+  fn translate_camera_local(&self, camera_entity: EntityId, delta: Vec3f64) -> EngineResult<()> {
     check_for_camera(&self, camera_entity)?;
 
     self
       .with_component_mut(camera_entity, |h: &mut HighResTransformComponent| {
-        let global_delta = h.rotation.rotate_vector(delta);
-        h.position = h.position + global_delta.to_f64();
+        // Separate direction (f32, fine for quaternion) from magnitude (f64, exact).
+        // Casting the entire delta to f32 would truncate micro-scale values to zero.
+        let mag = delta.length();
+        if mag > 0.0 {
+          let dir_f32 = Vec3f32::from_components(
+            (delta.x() / mag) as f32,
+            (delta.y() / mag) as f32,
+            (delta.z() / mag) as f32,
+          );
+          let global_dir = h.rotation.rotate_vector(dir_f32).to_f64();
+          h.position = h.position + global_dir * mag;
+        }
         // Clamp distance
         let dist = h.position.length();
         let max_dist = 1_000.0_f64;
@@ -156,11 +149,11 @@ impl SceneCameraExt for Scene {
 
     self
       .with_component_mut(camera_entity, |h: &mut HighResTransformComponent| {
-        let pan_speed = focus_distance * 0.002;
-        let right = h.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-        let up = h.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
-        let translation = right * (-delta_x * pan_speed) + up * (delta_y * pan_speed);
-        h.position = h.position + translation.to_f64();
+        let pan_speed = focus_distance as f64 * 0.001;
+        let right = h.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0)).to_f64();
+        let up = h.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0)).to_f64();
+        let translation = right * (-delta_x as f64 * pan_speed) + up * (delta_y as f64 * pan_speed);
+        h.position = h.position + translation;
       })
       .ok_or(EngineError::InvalidOperation(
         "[SceneCameraExt] pan_camera: camera entity not found",

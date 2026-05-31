@@ -48,6 +48,26 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_getComponent(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity,
+    ulong componentId,
+    IntPtr outBuffer
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_setComponent(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity,
+    ulong componentId,
+    IntPtr inBuffer
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_getEntityParent(
     IntPtr ctx,
     ulong sceneId,
@@ -1033,6 +1053,14 @@ public static class NativeInterop
     ulong snapEntity,
     ulong targetEntity
   );
+
+  [DllImport("aethervk_core_cdylib")]
+  public static extern bool avkSimulationContext_setCameraTransform(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong cameraEntityId,
+    double px, double py, double pz,
+    float rx, float ry, float rz, float rw);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_followEntity(

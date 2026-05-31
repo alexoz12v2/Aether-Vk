@@ -159,6 +159,11 @@ pub trait ForeignSerializable: Component {
 
   /// Update the component from a foreign DTO
   fn apply_foreign(&mut self, data: &Self::ForeignData);
+
+  /// Update the component from a raw void pointer to the DTO
+  unsafe fn apply_foreign_ptr(&mut self, ptr: *const core::ffi::c_void) {
+    self.apply_foreign(&*(ptr as *const Self::ForeignData));
+  }
 }
 
 // === Component Definitions ===
@@ -403,6 +408,7 @@ pub struct CameraDTO {
   pub ortho_bottom: f32,
   pub ortho_top: f32,
   pub focus_distance: f32,
+  pub proj: [f32; 16],
 }
 
 impl ForeignSerializable for CameraComponent {
@@ -410,6 +416,8 @@ impl ForeignSerializable for CameraComponent {
   const COMPONENT_ID: u64 = 2;
 
   fn to_foreign(&self) -> Self::ForeignData {
+    let proj_mat = self.get_projection_matrix();
+    let proj: [f32; 16] = proj_mat.into();
     match self.projection {
       CameraProjection::Perspective {
         fov,
@@ -427,6 +435,7 @@ impl ForeignSerializable for CameraComponent {
         ortho_bottom: 0.0,
         ortho_top: 0.0,
         focus_distance: self.focus_distance,
+        proj,
       },
       CameraProjection::Orthographic {
         left,
@@ -453,6 +462,7 @@ impl ForeignSerializable for CameraComponent {
         ortho_bottom: bottom,
         ortho_top: top,
         focus_distance: self.focus_distance,
+        proj,
       },
     }
   }
@@ -637,6 +647,38 @@ impl PartialEq for PhysicalMeshComponent {
   }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PhysicalMeshDTO {
+  pub is_procedural: bool,
+  pub asset_path: [u8; 256],
+}
+
+impl ForeignSerializable for PhysicalMeshComponent {
+  type ForeignData = PhysicalMeshDTO;
+  const COMPONENT_ID: u64 = 20;
+
+  fn to_foreign(&self) -> Self::ForeignData {
+    let mut path_bytes = [0u8; 256];
+    let bytes = self.asset_path.as_bytes();
+    let len = bytes.len().min(255);
+    path_bytes[..len].copy_from_slice(&bytes[..len]);
+
+    PhysicalMeshDTO {
+      is_procedural: false,
+      asset_path: path_bytes,
+    }
+  }
+
+  fn apply_foreign(&mut self, data: &Self::ForeignData) {
+    if let Some(null_pos) = data.asset_path.iter().position(|&b| b == 0) {
+      if let Ok(s) = core::str::from_utf8(&data.asset_path[..null_pos]) {
+        self.asset_path = alloc::string::String::from(s);
+      }
+    }
+  }
+}
+
 impl Component for PhysicalMeshComponent {}
 
 /// Represents a 2D texture billboard.
@@ -696,6 +738,33 @@ pub struct ScreenSpaceBillboardDTO {
   pub viewport_id: u64,
 }
 
+impl ForeignSerializable for ScreenSpaceBillboardComponent {
+  type ForeignData = ScreenSpaceBillboardDTO;
+  const COMPONENT_ID: u64 = 5;
+
+  fn to_foreign(&self) -> Self::ForeignData {
+    ScreenSpaceBillboardDTO {
+      ndc_x: self.ndc_x,
+      ndc_y: self.ndc_y,
+      scale: self.scale,
+      rotation_deg: self.rotation_deg,
+      opacity: self.opacity,
+      z_index: self.z_index,
+      viewport_id: self.viewport_id,
+    }
+  }
+
+  fn apply_foreign(&mut self, data: &Self::ForeignData) {
+    self.ndc_x = data.ndc_x;
+    self.ndc_y = data.ndc_y;
+    self.scale = data.scale;
+    self.rotation_deg = data.rotation_deg;
+    self.opacity = data.opacity;
+    self.z_index = data.z_index;
+    self.viewport_id = data.viewport_id;
+  }
+}
+
 /// Tags an entity as a Renderable Sun
 #[derive(Clone, Copy, Debug)]
 pub struct SunComponent {
@@ -728,6 +797,38 @@ pub struct SphereGizmoComponent {
   pub is_visible: bool,
 }
 impl Component for SphereGizmoComponent {}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SphereGizmoDTO {
+  pub radius: f32,
+  pub subdivisions: f32,
+  pub local_frame: [f32; 16],
+  pub is_visible: bool,
+}
+
+impl ForeignSerializable for SphereGizmoComponent {
+  type ForeignData = SphereGizmoDTO;
+  const COMPONENT_ID: u64 = 4;
+
+  fn to_foreign(&self) -> Self::ForeignData {
+    SphereGizmoDTO {
+      radius: self.radius,
+      subdivisions: self.subdivisions,
+      local_frame: self.local_frame.into(),
+      is_visible: self.is_visible,
+    }
+  }
+
+  fn apply_foreign(&mut self, data: &Self::ForeignData) {
+    self.radius = data.radius;
+    self.subdivisions = data.subdivisions;
+    // For now we don't apply local_frame back, or we'd need Mat4x4f32::from or similar.
+    // Given gizmos are usually updated from Rust, this is fine, or we can use:
+    // self.local_frame = Mat4x4f32::from(data.local_frame) if that exists.
+    self.is_visible = data.is_visible;
+  }
+}
 
 /// A spherical gizmo with a simpler toggle, distinct from SphereGizmoComponent
 #[derive(Clone, Debug, PartialEq)]

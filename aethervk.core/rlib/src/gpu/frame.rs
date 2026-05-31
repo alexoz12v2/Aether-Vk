@@ -109,6 +109,7 @@ pub struct CursorDrawCall {
   /// Near/far planes for the cursor's depth layer (km for micro, AU for macro)
   pub layer_near: f32,
   pub layer_far: f32,
+  pub relative_cam_pos: [f32; 3],
 }
 
 impl CursorDrawCall {
@@ -120,6 +121,7 @@ impl CursorDrawCall {
     cursor_size: f32,
     layer_near: f32,
     layer_far: f32,
+    relative_cam_pos: [f32; 3],
   ) -> Self {
     Self {
       pipeline: result.pipeline,
@@ -128,6 +130,7 @@ impl CursorDrawCall {
       cursor_size,
       layer_near,
       layer_far,
+      relative_cam_pos,
     }
   }
 }
@@ -752,6 +755,7 @@ impl RenderLayer {
           0.05,
           1e-5,   // default macro near
           1000.0, // default macro far
+          [0.0, 0.0, 0.0],
         ));
       }
       RenderableDataRef::Markers(component) => {
@@ -982,13 +986,27 @@ pub fn do_draw_cursor(
   // 2. Bind pipeline
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
 
+  let proj_slice: [f32; 16] = camera.proj.into();
+  // In AetherVk's perspective_vk_reverse_z, the vertical focal length (-f) is
+  // at column 2, row 1 (index 9) because View +Z maps to Clip -Y.
+  let proj_1_1 = proj_slice[9];
+
+  let inv_view = camera.view.inverse().unwrap_or(camera.view);
+  let inv_view_slice: [f32; 16] = inv_view.into();
+  // Column-major layout: col0=[0..3]=right, col1=[4..7]=backward, col2=[8..11]=up
+  let right = [inv_view_slice[0], inv_view_slice[1], inv_view_slice[2]];
+  let up    = [inv_view_slice[8], inv_view_slice[9], inv_view_slice[10]];
+
   let push_constants = crate::gpu::CursorPushConstants {
-    view: camera.view.into(),
     view_proj: camera.view_proj.into(),
-    model: draw_call.model_matrix.into(),
-    cursor_size: draw_call.cursor_size,
-    _padding: 0.0,
-    window_extent: [window_extent[0] as f32, window_extent[1] as f32],
+    right_proj11: [right[0], right[1], right[2], proj_1_1],
+    screen_y_win_x: [up[0], up[1], up[2], window_extent[0] as f32],
+    relative_cam_pos_win_y: [
+      draw_call.relative_cam_pos[0],
+      draw_call.relative_cam_pos[1],
+      draw_call.relative_cam_pos[2],
+      window_extent[1] as f32,
+    ],
   };
 
   device.push_cursor_constants(cmd_buffer, &push_constants)?;

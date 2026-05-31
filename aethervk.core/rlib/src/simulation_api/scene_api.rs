@@ -439,27 +439,20 @@ impl SimulationContext {
     let mut sky_id = None;
     if spawn_fallback_camera {
       let camera_entity = scene.spawn_entity("camera");
-      let pos = 0.02 / f32::sqrt(3.0);
-      // Look at origin from first octant
-      let look_dir = Vec3f32::from_components(-pos, -pos, -pos).normalize();
-      let up = Vec3f32::from_components(0.0, 0.0, 1.0);
-      let right = look_dir.cross(up).normalize();
-      let true_up = right.cross(look_dir).normalize();
-
-      // In our coordinate system: +x=right, -y=forward, +z=up.
-      let mat =
-        <oshal::math::matrix::mat4::Mat4x4f32 as oshal::math::matrix::Matrix4>::look_at_axes(
-          right,
-          look_dir,
-          true_up,
-          Vec3f32::from_components(pos, pos, pos),
-        );
-      let rot = <oshal::math::matrix::mat4::Mat4x4f32 as oshal::math::matrix::Matrix4>::to_quat_custom_frame(&mat);
+      // Use exact start position requested by the user
+      let pos_x = 0.010429309357456616;
+      let pos_y = 0.010962580663326662;
+      let pos_z = 0.007890014217773569;
+      
+      let rot = aethervk_oshal_rlib::math::vector::vec4::Quat::from_components(
+          0.24757917, -0.098841526, -0.35735834, 0.8951145
+      );
+      
       scene.add_component(
         camera_entity,
         crate::scene::HighResTransformComponent {
           position: aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
-            pos as f64, pos as f64, pos as f64,
+            pos_x, pos_y, pos_z,
           ),
           rotation: rot,
           scale: Vec3f32::from_components(1.0, 1.0, 1.0),

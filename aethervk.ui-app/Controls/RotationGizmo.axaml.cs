@@ -134,8 +134,8 @@ public partial class RotationGizmo : UserControl
     const double cosA = 0.35355339; // cos(45°) × 0.5
     const double sinA = 0.35355339; // sin(45°) × 0.5
 
-    double px = (wx + wy * cosA) * r;
-    double py = (-wz - wy * sinA) * r; // Z is "up" → negate for canvas
+    double px = (wx - wy * cosA) * r;
+    double py = (-wz + wy * sinA) * r; // Z is "up" → negate for canvas
     return (px, py);
   }
 

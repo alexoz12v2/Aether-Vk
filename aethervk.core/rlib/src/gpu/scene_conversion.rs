@@ -110,7 +110,7 @@ pub struct RenderSceneExtraction {
   pub extracted_grid: Option<(f32, f32, [f32; 3], u32, f32)>,
   pub camera_data: gpu::frame::CameraRenderData,
   pub window_extent: [u32; 2],
-  pub cursor_transform: Option<(TransformComponent, u32, f32)>,
+  pub cursor_transform: Option<(TransformComponent, u32, f32, [f32; 3])>,
   pub layer_frame_scales: hashbrown::HashMap<u32, f32>,
 }
 
@@ -418,7 +418,7 @@ impl RenderSceneExtraction {
     }
 
     // Cursor — drawn in composite subpass (always on top of all layers)
-    if let Some((t, layer_idx, _scale)) = self.cursor_transform {
+    if let Some((t, layer_idx, _scale, relative_cam_pos)) = self.cursor_transform {
       let res = match device.get_cursor_resources(presentation_engine_handle) {
         Ok(r) => r,
         Err(_) => device.create_cursor_resources(cmd_buffer, presentation_engine_handle)?,
@@ -437,6 +437,7 @@ impl RenderSceneExtraction {
         t.scale.x(),
         cursor_near,
         cursor_far,
+        relative_cam_pos,
       ));
     }
 
@@ -615,7 +616,7 @@ impl SceneConversionExt for crate::scene::Scene {
       crate::scene::ui::ScreenSpaceTextComponent,
     )> = Vec::with_capacity(START_VEC_CAPACITY);
 
-    let cursor_transform: Option<(TransformComponent, u32, f32)>;
+    let cursor_transform: Option<(TransformComponent, u32, f32, [f32; 3])>;
     let extracted_sky: Option<(u32, f32)>;
     let mut extracted_sun: Option<((Mat4x4f32, f32), u32, f32)>;
     let extracted_grid: Option<(f32, f32, [f32; 3], u32, f32)>;
@@ -663,6 +664,16 @@ impl SceneConversionExt for crate::scene::Scene {
         if hidden_set.contains(&id) {
           return None;
         }
+
+        let camera_global = self.global_transform_f64(camera_entity).unwrap_or_else(|| {
+            HighResTransformComponent { position: Default::default(), rotation: Default::default(), scale: Vec3f32::from_components(1.0, 1.0, 1.0) }
+        });
+        let cursor_global = self.global_transform_f64(id).unwrap_or_else(|| {
+            HighResTransformComponent { position: Default::default(), rotation: Default::default(), scale: Vec3f32::from_components(1.0, 1.0, 1.0) }
+        });
+        let rel_pos = camera_global.position - cursor_global.position;
+        let relative_cam_pos = [rel_pos.x() as f32, rel_pos.y() as f32, rel_pos.z() as f32];
+
         self.get_relative_transform_f64(id, camera_entity).map(|hrt| {
           (
             TransformComponent {
@@ -672,6 +683,7 @@ impl SceneConversionExt for crate::scene::Scene {
             },
             self.ancestor_depth_layer(id),
             self.ancestor_frame_scale(id),
+            relative_cam_pos,
           )
         })
       })
@@ -1361,7 +1373,7 @@ impl SceneConversionExt for crate::scene::Scene {
       get_or_create_layer!(layer_map, layer, scale).trajectories.push(traj);
     }
 
-    if let Some((_, layer_idx, scale)) = cursor_transform {
+    if let Some((_, layer_idx, scale, _)) = cursor_transform {
       get_or_create_layer!(layer_map, layer_idx, scale);
     }
     if let Some((layer_idx, scale)) = extracted_sky {

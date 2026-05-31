@@ -1,0 +1,5 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="AetherVk.Controls.DualRotationGizmo">
+  <Canvas Name="GizmoCanvas" Width="100" Height="100" Background="Transparent" ClipToBounds="False" />
+</UserControl>

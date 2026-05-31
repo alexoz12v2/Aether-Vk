@@ -392,12 +392,10 @@ pub struct SunPushConstants {
 #[derive(Debug, Clone, Copy)]
 /// TODO: Document this item
 pub struct CursorPushConstants {
-  pub view: [f32; 16],
   pub view_proj: [f32; 16],
-  pub model: [f32; 16],
-  pub cursor_size: f32,
-  pub _padding: f32,
-  pub window_extent: [f32; 2],
+  pub right_proj11: [f32; 4],
+  pub screen_y_win_x: [f32; 4],
+  pub relative_cam_pos_win_y: [f32; 4],
 }
 
 #[repr(C)]

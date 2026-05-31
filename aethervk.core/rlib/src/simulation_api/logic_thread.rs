@@ -17,7 +17,7 @@ use aethervk_oshal_rlib::{
   self as oshal,
   math::{
     quaternion::Quaternion,
-    vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
+    vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat},
   },
   os::{
     NativeError, ThreadingError,
@@ -623,22 +623,23 @@ fn process_command_internal(
       {
         if let Some(pos) =
           scene_read.scene.with_component(cursor_id, |t: &HighResTransformComponent| {
-            t.position.to_f32()
+            t.position
           })
         {
           cursor_pos = Some(pos);
 
-          // Optional: Sync focus distance dynamically so your zoom/pan speeds stay stable
+          // Sync focus distance dynamically so zoom/pan speeds stay stable
           // based on the distance to the cursor object you are pivoting around.
+          // Computed in f64 to preserve precision at extreme zoom.
           if let Some(cam_pos) =
             scene_read.scene.with_component(camera_entity, |t: &HighResTransformComponent| {
-              t.position.to_f32()
+              t.position
             })
           {
             let dist = (pos - cam_pos).length();
             let _ =
               scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
-                c.focus_distance = dist.max(0.000001);
+                c.focus_distance = (dist as f32).max(0.000001);
               });
           }
         }
@@ -724,14 +725,15 @@ fn process_command_internal(
         .unwrap_or(10.0);
 
       use crate::scene::camera::SceneCameraExt;
-      // Logarithmic zoom: each scroll moves 5% of current focus distance.
+      // Logarithmic zoom: each scroll moves 2% of current focus distance.
       // This naturally decelerates as you approach objects at any scale.
-      let zoom_speed = dist * 0.05;
-      let move_amount = -amount * zoom_speed;
+      // Computed in f64 to preserve precision at micro-scale (focus_distance ~1e-10).
+      let zoom_speed = dist as f64 * 0.02;
+      let move_amount = -(amount as f64) * zoom_speed;
 
       scene_read.scene.translate_camera_local(
         camera_entity,
-        Vec3f32::from_components(0.0, move_amount, 0.0),
+        Vec3f64::from_components(0.0, move_amount, 0.0),
       )?;
 
       // Update focus distance so the invisible View Center stays in the exact same world position!
@@ -739,7 +741,7 @@ fn process_command_internal(
       let _ = scene_read.scene.with_component_mut(
         camera_entity,
         |c: &mut crate::scene::CameraComponent| {
-          c.focus_distance = (c.focus_distance + move_amount).max(1e-10);
+          c.focus_distance = (c.focus_distance as f64 + move_amount).max(1e-10) as f32;
         },
       );
 
@@ -882,9 +884,7 @@ fn process_command_internal(
       scene,
     }) => {
       let scene_read = scene.read();
-      // 'F' behavior: move cursor to target entity position, then position the
-      // camera (snap_entity) at 0.7 AU toward the bisector of the first octant.
-      const SNAP_DISTANCE: f32 = 0.7;
+      // 'F' behavior: move cursor to target entity position, then position the camera dynamically
       let target_pos = {
         #[allow(deprecated)]
         scene_read.scene.global_transform(target_entity).map(|t| t.position).ok_or(
@@ -916,11 +916,44 @@ fn process_command_internal(
         }
       }
 
-      // Position camera at 0.7 AU offset along bisector of first octant from target pos.
-      let pitch = (-1.0_f32 / 3.0_f32.sqrt()).asin();
-      let yaw = -core::f32::consts::FRAC_PI_4;
-      let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
-      let offset = q.rotate_vector(Vec3f32::from_components(0.0, SNAP_DISTANCE, 0.0));
+      // Dynamic offset calculation based on object bounds and camera FOV
+      let mut r_local = 1.0_f64;
+      if let Some(mesh) = scene_read.scene.with_component(target_entity, |c: &crate::scene::PhysicalMeshComponent| c.clone()) {
+        r_local = mesh.sphere_radius as f64;
+      } else if let Some(col) = scene_read.scene.with_component(target_entity, |c: &crate::scene::ColliderComponent| c.clone()) {
+        r_local = match col.shape {
+          crate::scene::ColliderShape::Sphere { radius } => radius as f64,
+          crate::scene::ColliderShape::OBB { half_extents } => half_extents.length() as f64,
+        };
+      }
+
+      let target_scale = scene_read.scene.global_transform_f64(target_entity)
+        .map(|t| t.scale.x().max(t.scale.y()).max(t.scale.z()) as f64)
+        .unwrap_or(1.0);
+      let target_radius = r_local * target_scale;
+
+      let mut fov = core::f64::consts::FRAC_PI_4;
+      let mut aspect = 16.0 / 9.0;
+      if let Some(cam) = scene_read.scene.with_component(snap_entity, |c: &CameraComponent| c.clone()) {
+        if let crate::scene::CameraProjection::Perspective { fov: cam_fov, aspect_ratio, .. } = cam.projection {
+          fov = cam_fov as f64;
+          aspect = aspect_ratio as f64;
+        }
+      }
+
+      let half_min_fov = if aspect > 1.0 {
+        fov / 2.0
+      } else {
+        ((fov / 2.0).tan() * aspect).atan()
+      };
+
+      // target distance to fill 5/6 of smallest axis
+      let target_half_angle = (5.0 / 6.0) * half_min_fov;
+      let snap_distance = target_radius / target_half_angle.tan();
+
+      // Desired rotation from user request: recreating startup rotation
+      let q = Quat::from_components(0.24757917, -0.098841526, -0.35735834, 0.8951145);
+      let offset = q.rotate_vector(Vec3f32::from_components(0.0, snap_distance as f32, 0.0));
 
       let _ =
         scene_read
@@ -930,7 +963,7 @@ fn process_command_internal(
             t.rotation = q;
           });
       let _ = scene_read.scene.with_component_mut(snap_entity, |c: &mut CameraComponent| {
-        c.focus_distance = SNAP_DISTANCE;
+        c.focus_distance = snap_distance as f32;
       });
 
       if let Some(ext_id) =

@@ -718,11 +718,11 @@ impl SimulationDelegate for PaintDelegate {
           // Zoom: move camera local forward/backward (-Y is forward, so delta.1 > 0 means push forward, we apply negative delta.1 to Y? Wait, if they scroll up, delta.1 is usually positive, which means zoom IN -> forward -> -Y. So we use delta.1 * -0.05 on the Y axis)
           let _ = active_scene.scene.translate_camera_local(
             cam_e,
-            aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array([
+            aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
               0.0,
-              delta.1 as f32 * -0.05,
+              delta.1 as f64 * -0.05,
               0.0,
-            ]),
+            ),
           );
         } else {
           // Orbit

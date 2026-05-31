@@ -1006,3 +1006,153 @@ fn test_camera_controls() {
     }
   }
 }
+
+#[test]
+fn test_camera_controls_microframe() {
+  set_asset_directory_for_tests();
+  if let Some(ctx_ptr) = get_test_context() {
+    unsafe {
+      let ctx = &mut *ctx_ptr;
+      // Use create_default_scene to also spawn a camera
+      let scene_id = ctx.create_default_scene(true).unwrap();
+
+      // Register a dummy model
+      let model_id = 4567;
+      let path = "test_comet_cam2.glb";
+      {
+        let mut scenes = ctx.scenes.write();
+        scenes.model_registry.insert(model_id, path.into());
+        let dummy_mesh = crate::simulation::comet::Comet {
+          id: 0,
+          vertices: alloc::vec![crate::simulation::comet::Vertex {
+            position: [0.0, 0.0, 2.5],
+            uv: [0.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+          }],
+          indices: alloc::vec![],
+          albedo_map: None,
+          normal_map: None,
+          roughness_map: None,
+          ao_map: None,
+          mass_properties: polyhedral_mass_properties::MassProperties::from_contrib_sum(
+            polyhedral_mass_properties::TriangleContrib::new(
+              [-1.0, 0.0, -1.0],
+              [1.0, 0.0, -1.0],
+              [0.5, 1.0, 0.0],
+            ),
+          )
+          .unwrap(),
+          bvh: None,
+          pa_basis_bf: None,
+          bf_to_pa: None,
+        };
+        scenes.mesh_cache.insert(path.into(), dummy_mesh);
+      }
+
+      let pos = Vec3f32::from_components(0.01, 0.0, 0.0);
+      let rot = Quat::identity();
+      let (_lca_ext, _comet_ext) = ctx.spawn_comet_internal(
+        scene_id,
+        model_id,
+        "comet_micro",
+        pos,
+        rot,
+        1.0,
+        1000.0,
+        0,
+      ).unwrap();
+
+      // Get the camera that create_default_scene already created
+      let camera_int = {
+        let scene_arc = ctx.scenes.read().get_scene(scene_id).unwrap();
+        let scene_read = scene_arc.read();
+        let mut found = None;
+        for (_ext_id, &int_id) in scene_read.entity_map.iter() {
+          if scene_read.scene.has_component::<crate::scene::CameraComponent>(int_id).into() {
+            found = Some(int_id);
+            break;
+          }
+        }
+        found.expect("No camera found in scene")
+      };
+
+      // Set camera local to the microframe 
+      let cam_pos = Vec3f32::from_components(0.01001, 0.0, 0.0);
+      let rot_cam = <Quat as Quaternion>::from_vector_and_scalar(
+        Vec3f32::from_components(0.0, 0.0, -std::f32::consts::FRAC_1_SQRT_2),
+        std::f32::consts::FRAC_1_SQRT_2,
+      );
+
+      {
+        let scene_arc = ctx.scenes.read().get_scene(scene_id).unwrap();
+        let mut scene_read = scene_arc.write();
+        let _ = scene_read.scene.with_component_mut(
+          camera_int,
+          |t: &mut crate::scene::HighResTransformComponent| {
+            t.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+              cam_pos.x() as f64,
+              cam_pos.y() as f64,
+              cam_pos.z() as f64,
+            );
+            t.rotation = rot_cam;
+          },
+        );
+      }
+
+      let get_cam_transform = || {
+        let scene_arc = ctx.scenes.read().get_scene(scene_id).unwrap();
+        scene_arc.read()
+          .scene
+          .with_component(camera_int, |c: &crate::scene::HighResTransformComponent| *c)
+          .unwrap()
+      };
+
+      let initial_hrt = get_cam_transform();
+
+      // Test Rotate
+      let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::RotateCamera(
+        structs::RotateCamera {
+          camera_entity: camera_int,
+          delta_x: 0.1,
+          delta_y: 0.1,
+          scene: ctx.get_scene(scene_id).unwrap(),
+        },
+      ));
+
+      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(150));
+      let hrt1 = get_cam_transform();
+      assert!(hrt1.rotation != initial_hrt.rotation, "Rotation should change in microframe");
+
+      // Test Pan
+      let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::PanCamera(
+        structs::PanCamera {
+          camera_entity: camera_int,
+          delta_x: 1.0,
+          delta_y: 1.0,
+          scene: ctx.get_scene(scene_id).unwrap(),
+        },
+      ));
+
+      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(150));
+      let hrt2 = get_cam_transform();
+      assert!(hrt2.position != hrt1.position, "Position should change after Pan in microframe");
+      assert_eq!(hrt2.rotation, hrt1.rotation, "Rotation should not change after Pan in microframe");
+
+      // Test Zoom
+      let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::ZoomCamera(
+        structs::ZoomCamera {
+          camera_entity: camera_int,
+          amount: 1.0,
+          scene: ctx.get_scene(scene_id).unwrap(),
+        },
+      ));
+
+      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(150));
+      let hrt3 = get_cam_transform();
+      assert!(hrt3.position != hrt2.position, "Position should change after Zoom in microframe");
+
+      let _ = alloc::boxed::Box::from_raw(ctx_ptr);
+    }
+  }
+}

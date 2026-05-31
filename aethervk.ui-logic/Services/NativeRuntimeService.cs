@@ -823,12 +823,20 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       Sy = sy,
       Sz = sz,
     };
-    NativeInterop.avkSimulationContext_setTransformComponent(
-      _simulationContext,
-      sceneId,
-      entityId,
-      in transform
-    );
+    unsafe
+    {
+      int size = System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiTransform>();
+      IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+      try
+      {
+        System.Runtime.InteropServices.Marshal.StructureToPtr(transform, ptr, false);
+        NativeInterop.avkSimulationContext_setComponent(_simulationContext, sceneId, entityId, 1, ptr);
+      }
+      finally
+      {
+        System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+      }
+    }
   }
 
   public void SetHighResTransformComponent(
@@ -861,12 +869,20 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       Sy = sy,
       Sz = sz,
     };
-    NativeInterop.avkSimulationContext_setHighResTransformComponent(
-      _simulationContext,
-      sceneId,
-      entityId,
-      in transform
-    );
+    unsafe
+    {
+      int size = System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiHighResTransform>();
+      IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+      try
+      {
+        System.Runtime.InteropServices.Marshal.StructureToPtr(transform, ptr, false);
+        NativeInterop.avkSimulationContext_setComponent(_simulationContext, sceneId, entityId, 3, ptr);
+      }
+      finally
+      {
+        System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+      }
+    }
   }
 
   public bool GetHighResTransformComponent(
@@ -878,12 +894,24 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     transform = default;
     if (_simulationContext == IntPtr.Zero)
       return false;
-    return NativeInterop.avkSimulationContext_getHighResTransformComponent(
-      _simulationContext,
-      sceneId,
-      entityId,
-      out transform
-    );
+    unsafe
+    {
+      int size = System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiHighResTransform>();
+      IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+      try
+      {
+        if (NativeInterop.avkSimulationContext_getComponent(_simulationContext, sceneId, entityId, 3, ptr))
+        {
+          transform = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiHighResTransform>(ptr);
+          return true;
+        }
+      }
+      finally
+      {
+        System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+      }
+    }
+    return false;
   }
 
   public void AddTransformComponent(
@@ -2125,17 +2153,36 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     {
       if (_simulationContext != IntPtr.Zero)
       {
-        NativeInterop.avkSimulationContext_setScreenSpaceBillboard(
-          _simulationContext,
-          sceneId,
-          entityId,
-          ndcX,
-          ndcY,
-          scale,
-          rotationDeg,
-          opacity,
-          zIndex
-        );
+        var data = new NativeInterop.FfiScreenSpaceBillboard
+        {
+          NdcX = ndcX,
+          NdcY = ndcY,
+          Scale = scale,
+          RotationDeg = rotationDeg,
+          Opacity = opacity,
+          ZIndex = zIndex,
+          ViewportId = 0 // Or keep it what it is, we don't have viewport ID here, but this method isn't used anywhere else except maybe internally. We should try to get it first to keep ViewportId. Wait!
+        };
+        // Let's do a read-modify-write to keep ViewportId
+        unsafe
+        {
+          int size = System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiScreenSpaceBillboard>();
+          IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+          try
+          {
+            if (NativeInterop.avkSimulationContext_getComponent(_simulationContext, sceneId, entityId, 5, ptr))
+            {
+              var existing = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiScreenSpaceBillboard>(ptr);
+              data.ViewportId = existing.ViewportId;
+            }
+            System.Runtime.InteropServices.Marshal.StructureToPtr(data, ptr, false);
+            NativeInterop.avkSimulationContext_setComponent(_simulationContext, sceneId, entityId, 5, ptr);
+          }
+          finally
+          {
+            System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+          }
+        }
       }
     }
   }
@@ -2151,12 +2198,23 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     {
       if (_simulationContext != IntPtr.Zero)
       {
-        return NativeInterop.avkSimulationContext_getScreenSpaceBillboard(
-          _simulationContext,
-          sceneId,
-          entityId,
-          out data
-        );
+        unsafe
+        {
+          int size = System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiScreenSpaceBillboard>();
+          IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+          try
+          {
+            if (NativeInterop.avkSimulationContext_getComponent(_simulationContext, sceneId, entityId, 5, ptr))
+            {
+              data = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiScreenSpaceBillboard>(ptr);
+              return true;
+            }
+          }
+          finally
+          {
+            System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+          }
+        }
       }
       return false;
     }
@@ -2290,6 +2348,19 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         cameraEntityId,
         entityId
       );
+    }
+  }
+
+  public void SetCameraTransform(ulong sceneId, ulong cameraEntityId, double px, double py, double pz, float rx, float ry, float rz, float rw)
+  {
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_setCameraTransform(
+        _simulationContext,
+        sceneId,
+        cameraEntityId,
+        px, py, pz,
+        rx, ry, rz, rw);
     }
   }
 

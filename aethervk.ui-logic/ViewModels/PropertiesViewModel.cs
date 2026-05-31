@@ -141,6 +141,7 @@ public partial class PropertiesViewModel
           || name.EndsWith("SunComponent")
           || name.EndsWith("CursorComponent")
           || name.EndsWith("GridComponent")
+          || name.EndsWith("PhysicalMeshComponent")
         )
         {
           // For existing complex components, try to find them in the old heuristic list
@@ -181,6 +182,16 @@ public partial class PropertiesViewModel
           if (existing == null)
           {
             existing = new SphereGizmoComponent();
+            SelectedEntity.Components.Add(existing);
+          }
+          PropertiesExpanders.Add(existing);
+        }
+        else if (name.Contains("PhysicalMesh"))
+        {
+          var existing = SelectedEntity.Components.OfType<PhysicalMeshComponent>().FirstOrDefault();
+          if (existing == null)
+          {
+            existing = new PhysicalMeshComponent();
             SelectedEntity.Components.Add(existing);
           }
           PropertiesExpanders.Add(existing);
