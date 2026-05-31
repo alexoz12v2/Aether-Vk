@@ -528,6 +528,8 @@ pub struct CompositePushConstants {
   pub macro_far: f32,
   pub micro_near: f32,
   pub micro_far: f32,
+  pub macro_scale: f32,
+  pub micro_scale: f32,
 }
 
 #[repr(C)]

@@ -1283,18 +1283,20 @@ pub fn generate_uv_sphere(
       let first = lat * (lon_segments + 1) + lon;
       let second = first + lon_segments + 1;
 
-      // 3. FIXED: Strictly Enforcing Vulkan CCW Front-Face Winding.
-      // Additionally, if the geometry is evaluated at the South or North pole,
-      // the respective index evaluation drops the degenerate zero-area triangle.
+      // 3. FIXED: Enforcing standard CCW local winding to match glTF assets.
+      // Now that the Vulkan pipeline is VK_FRONT_FACE_CLOCKWISE (compensating for Y-flip),
+      // all local geometry must be generated as CCW.
       if lat != 0 {
+        // Reversed from (first, first + 1, second)
         indices.push(first);
-        indices.push(first + 1);
         indices.push(second);
+        indices.push(first + 1);
       }
       if lat != lat_segments - 1 {
+        // Reversed from (second, first + 1, second + 1)
         indices.push(second);
-        indices.push(first + 1);
         indices.push(second + 1);
+        indices.push(first + 1);
       }
     }
   }

@@ -2,8 +2,8 @@
 
 use core::ops;
 
-use crate::math::vector::{Vector, Vector3};
 use super::vec3::Vec3f32;
+use crate::math::vector::{Vector, Vector3};
 
 /// Helper to construct a `Vec3f64` from components.
 pub fn vec3f64(x: f64, y: f64, z: f64) -> Vec3f64 {
@@ -31,13 +31,19 @@ impl Vec3f64 {
 
   #[inline]
   pub fn from_array(data: [f64; 3]) -> Self {
-    Self { data: [data[0], data[1], data[2], 0.0] }
+    Self {
+      data: [data[0], data[1], data[2], 0.0],
+    }
   }
 
   /// Lossy downcast to `Vec3f32`.
   #[inline]
   pub fn to_f32(&self) -> Vec3f32 {
-    Vec3f32::from_components(self.data[0] as f32, self.data[1] as f32, self.data[2] as f32)
+    Vec3f32::from_components(
+      self.data[0] as f32,
+      self.data[1] as f32,
+      self.data[2] as f32,
+    )
   }
 
   /// Lossless upcast from `Vec3f32`.
@@ -56,9 +62,7 @@ impl From<[f64; 3]> for Vec3f64 {
 impl PartialEq for Vec3f64 {
   #[inline]
   fn eq(&self, other: &Self) -> bool {
-    self.data[0] == other.data[0]
-      && self.data[1] == other.data[1]
-      && self.data[2] == other.data[2]
+    self.data[0] == other.data[0] && self.data[1] == other.data[1] && self.data[2] == other.data[2]
   }
 }
 
@@ -265,7 +269,9 @@ impl Vector for Vec3f64 {
   }
   #[inline]
   fn splat(v: Self::Scalar) -> Self {
-    Self { data: [v, v, v, 0.0] }
+    Self {
+      data: [v, v, v, 0.0],
+    }
   }
   #[inline]
   fn component(&self, i: usize) -> Option<Self::Scalar> {
@@ -287,17 +293,27 @@ impl Vector for Vec3f64 {
   }
   #[inline]
   fn dot(self, rhs: Self) -> Self::Scalar {
-    self.data[0] * rhs.data[0]
-      + self.data[1] * rhs.data[1]
-      + self.data[2] * rhs.data[2]
+    self.data[0] * rhs.data[0] + self.data[1] * rhs.data[1] + self.data[2] * rhs.data[2]
   }
   #[inline]
   fn min(self, other: Self) -> Self {
     Self {
       data: [
-        if self.data[0] < other.data[0] { self.data[0] } else { other.data[0] },
-        if self.data[1] < other.data[1] { self.data[1] } else { other.data[1] },
-        if self.data[2] < other.data[2] { self.data[2] } else { other.data[2] },
+        if self.data[0] < other.data[0] {
+          self.data[0]
+        } else {
+          other.data[0]
+        },
+        if self.data[1] < other.data[1] {
+          self.data[1]
+        } else {
+          other.data[1]
+        },
+        if self.data[2] < other.data[2] {
+          self.data[2]
+        } else {
+          other.data[2]
+        },
         0.0,
       ],
     }
@@ -306,9 +322,21 @@ impl Vector for Vec3f64 {
   fn max(self, other: Self) -> Self {
     Self {
       data: [
-        if self.data[0] > other.data[0] { self.data[0] } else { other.data[0] },
-        if self.data[1] > other.data[1] { self.data[1] } else { other.data[1] },
-        if self.data[2] > other.data[2] { self.data[2] } else { other.data[2] },
+        if self.data[0] > other.data[0] {
+          self.data[0]
+        } else {
+          other.data[0]
+        },
+        if self.data[1] > other.data[1] {
+          self.data[1]
+        } else {
+          other.data[1]
+        },
+        if self.data[2] > other.data[2] {
+          self.data[2]
+        } else {
+          other.data[2]
+        },
         0.0,
       ],
     }
@@ -318,7 +346,9 @@ impl Vector for Vec3f64 {
 impl Vector3 for Vec3f64 {
   #[inline]
   fn from_components(x: Self::Scalar, y: Self::Scalar, z: Self::Scalar) -> Self {
-    Self { data: [x, y, z, 0.0] }
+    Self {
+      data: [x, y, z, 0.0],
+    }
   }
   #[inline]
   fn x(&self) -> Self::Scalar {
@@ -567,7 +597,10 @@ mod tests {
     let err32 = (sum32.x() as f64 - 0.3f64).abs();
 
     // f64 error should be smaller than f32 error
-    assert!(err64 < err32, "f64 error ({err64:e}) should be < f32 error ({err32:e})");
+    assert!(
+      err64 < err32,
+      "f64 error ({err64:e}) should be < f32 error ({err32:e})"
+    );
 
     // Verify two very close values are distinguishable in f64 but not in f32
     let close_a = 1.0000000000000002_f64;

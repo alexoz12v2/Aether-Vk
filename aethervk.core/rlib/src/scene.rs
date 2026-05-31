@@ -208,7 +208,7 @@ impl ForeignSerializable for TransformComponent {
 
   fn apply_foreign(&mut self, data: &Self::ForeignData) {
     self.position = Vec3f32::from_components(data.px, data.py, data.pz);
-    self.rotation = Quat::from_components(data.rw, data.rx, data.ry, data.rz);
+    self.rotation = Quat::from_components(data.rx, data.ry, data.rz, data.rw);
     self.scale = Vec3f32::from_components(data.sx, data.sy, data.sz);
   }
 }
@@ -330,7 +330,7 @@ impl ForeignSerializable for HighResTransformComponent {
 
   fn apply_foreign(&mut self, data: &Self::ForeignData) {
     self.position = Vec3f64::from_components(data.px, data.py, data.pz);
-    self.rotation = Quat::from_components(data.rw, data.rx, data.ry, data.rz);
+    self.rotation = Quat::from_components(data.rx, data.ry, data.rz, data.rw);
     self.scale = Vec3f32::from_components(data.sx, data.sy, data.sz);
   }
 }
@@ -1340,11 +1340,14 @@ impl Scene {
 
     let camera_entity = self.spawn_entity(&name);
     // f64 position source of truth — no TransformComponent on camera
-    self.add_component(camera_entity, HighResTransformComponent {
-      position: inital_pos.to_f64(),
-      rotation: Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    })?;
+    self.add_component(
+      camera_entity,
+      HighResTransformComponent {
+        position: inital_pos.to_f64(),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    )?;
     self.add_component(camera_entity, CameraComponent::default())?;
     self.set_parent(camera_entity, Some(parent));
     Ok(camera_entity)
@@ -2700,7 +2703,10 @@ impl Scene {
   /// TODO: Document this item
   #[deprecated = "should use a method to get the transform relative to the containing LCA Frame Component, which returns a Option<(Transform, Option<EntityId>)>"]
   pub fn global_transform(&self, entity_id: EntityId) -> Option<TransformComponent> {
-    let mut accumulated_transform = self.with_component(entity_id, |c: &TransformComponent| *c)?;
+    let mut accumulated_transform =
+      self.with_component(entity_id, |c: &TransformComponent| *c).or_else(|| {
+        self.with_component(entity_id, |c: &HighResTransformComponent| c.to_transform())
+      })?;
     let mut current_entity = entity_id;
 
     loop {
@@ -2711,7 +2717,9 @@ impl Scene {
 
       if let Some(parent_id) = parent_opt {
         if let Some(mut parent_transform) =
-          self.with_component(parent_id, |c: &TransformComponent| *c)
+          self.with_component(parent_id, |c: &TransformComponent| *c).or_else(|| {
+            self.with_component(parent_id, |c: &HighResTransformComponent| c.to_transform())
+          })
         {
           let mut frame_scale = 1.0;
           let _ = self.with_component(parent_id, |c: &ReferenceFrameComponent| {
@@ -2737,7 +2745,10 @@ impl Scene {
     &self,
     entity_id: EntityId,
   ) -> Option<(TransformComponent, Option<EntityId>)> {
-    let mut accumulated_transform = self.with_component(entity_id, |c: &TransformComponent| *c)?;
+    let mut accumulated_transform =
+      self.with_component(entity_id, |c: &TransformComponent| *c).or_else(|| {
+        self.with_component(entity_id, |c: &HighResTransformComponent| c.to_transform())
+      })?;
     let mut current_entity = entity_id;
 
     loop {
@@ -2751,7 +2762,10 @@ impl Scene {
           return Some((accumulated_transform, Some(parent_id)));
         }
 
-        if let Some(parent_transform) = self.with_component(parent_id, |c: &TransformComponent| *c)
+        if let Some(parent_transform) =
+          self.with_component(parent_id, |c: &TransformComponent| *c).or_else(|| {
+            self.with_component(parent_id, |c: &HighResTransformComponent| c.to_transform())
+          })
         {
           accumulated_transform =
             Self::combine_transforms(&parent_transform, &accumulated_transform);
@@ -2765,6 +2779,92 @@ impl Scene {
             None
           };
         return Some((accumulated_transform, frame));
+      }
+    }
+  }
+
+  /// Returns the f64 transform relative to the containing Reference Frame,
+  /// along with the ID of that frame (if any).
+  pub fn frame_relative_transform_f64(
+    &self,
+    entity_id: EntityId,
+  ) -> Option<(HighResTransformComponent, Option<EntityId>)> {
+    let initial =
+      self.with_component(entity_id, |c: &HighResTransformComponent| *c).or_else(|| {
+        self.with_component(entity_id, |c: &TransformComponent| {
+          HighResTransformComponent::from_transform(c)
+        })
+      })?;
+
+    let mut acc_pos = initial.position;
+    let mut acc_rot = initial.rotation;
+    let mut acc_scale = initial.scale;
+    let mut current_entity = entity_id;
+
+    loop {
+      let parent_opt = {
+        let hierarchy = self.hierarchy.read();
+        hierarchy.parents.get(&current_entity).copied()
+      };
+
+      if let Some(parent_id) = parent_opt {
+        if self.with_component(parent_id, |_: &ReferenceFrameComponent| ()).is_some() {
+          return Some((
+            HighResTransformComponent {
+              position: acc_pos,
+              rotation: acc_rot,
+              scale: acc_scale,
+            },
+            Some(parent_id),
+          ));
+        }
+
+        let parent_pos_f64 = self
+          .with_component(parent_id, |c: &HighResTransformComponent| c.position)
+          .or_else(|| self.with_component(parent_id, |c: &TransformComponent| c.position.to_f64()));
+
+        if let Some(p_pos) = parent_pos_f64 {
+          let p_rot = self
+            .with_component(parent_id, |c: &HighResTransformComponent| c.rotation)
+            .or_else(|| self.with_component(parent_id, |c: &TransformComponent| c.rotation))
+            .unwrap_or(Quat::identity());
+          let p_scale = self
+            .with_component(parent_id, |c: &HighResTransformComponent| c.scale)
+            .or_else(|| self.with_component(parent_id, |c: &TransformComponent| c.scale))
+            .unwrap_or(Vec3f32::one());
+
+          let mut frame_scale = 1.0_f32;
+          let _ = self.with_component(parent_id, |c: &ReferenceFrameComponent| {
+            frame_scale = c.scale;
+          });
+
+          let scaled_parent_scale = p_scale * frame_scale;
+
+          let rotated = p_rot.rotate_vector(Vec3f32::from_components(
+            (scaled_parent_scale.x() as f64 * acc_pos.x()) as f32,
+            (scaled_parent_scale.y() as f64 * acc_pos.y()) as f32,
+            (scaled_parent_scale.z() as f64 * acc_pos.z()) as f32,
+          ));
+          acc_pos = p_pos + rotated.to_f64();
+          acc_rot = p_rot * acc_rot;
+          acc_scale = scaled_parent_scale * acc_scale;
+        }
+        current_entity = parent_id;
+      } else {
+        let frame =
+          if self.with_component(current_entity, |_: &ReferenceFrameComponent| ()).is_some() {
+            Some(current_entity)
+          } else {
+            None
+          };
+        return Some((
+          HighResTransformComponent {
+            position: acc_pos,
+            rotation: acc_rot,
+            scale: acc_scale,
+          },
+          frame,
+        ));
       }
     }
   }
@@ -2848,7 +2948,10 @@ impl Scene {
     if t_idx >= 0 {
       for i in 0..=(t_idx as usize) {
         let node_id = target_path[i];
-        let node_transform = self.with_component(node_id, |c: &TransformComponent| *c)?;
+        let node_transform =
+          self.with_component(node_id, |c: &TransformComponent| *c).or_else(|| {
+            self.with_component(node_id, |c: &HighResTransformComponent| c.to_transform())
+          })?;
 
         let mut frame_scale = 1.0;
         let _ = self.with_component(node_id, |c: &ReferenceFrameComponent| {
@@ -2876,7 +2979,10 @@ impl Scene {
     if r_idx >= 0 {
       for i in 0..=(r_idx as usize) {
         let node_id = ref_path[i];
-        let node_transform = self.with_component(node_id, |c: &TransformComponent| *c)?;
+        let node_transform =
+          self.with_component(node_id, |c: &TransformComponent| *c).or_else(|| {
+            self.with_component(node_id, |c: &HighResTransformComponent| c.to_transform())
+          })?;
 
         let mut frame_scale = 1.0;
         let _ = self.with_component(node_id, |c: &ReferenceFrameComponent| {
@@ -2938,8 +3044,8 @@ impl Scene {
   /// `TransformComponent` (promoted to f64) otherwise.
   pub fn global_transform_f64(&self, entity_id: EntityId) -> Option<HighResTransformComponent> {
     // Start: read the entity's own transform as f64
-    let initial = self.with_component(entity_id, |c: &HighResTransformComponent| *c)
-      .or_else(|| {
+    let initial =
+      self.with_component(entity_id, |c: &HighResTransformComponent| *c).or_else(|| {
         self.with_component(entity_id, |c: &TransformComponent| {
           HighResTransformComponent::from_transform(c)
         })
@@ -2958,15 +3064,18 @@ impl Scene {
 
       if let Some(parent_id) = parent_opt {
         // Read parent position in f64 if available
-        let parent_pos_f64 = self.with_component(parent_id, |c: &HighResTransformComponent| c.position)
-          .or_else(|| {
-            self.with_component(parent_id, |c: &TransformComponent| c.position.to_f64())
-          });
+        let parent_pos_f64 = self
+          .with_component(parent_id, |c: &HighResTransformComponent| c.position)
+          .or_else(|| self.with_component(parent_id, |c: &TransformComponent| c.position.to_f64()));
 
         if let Some(p_pos) = parent_pos_f64 {
-          let p_rot = self.with_component(parent_id, |c: &TransformComponent| c.rotation)
+          let p_rot = self
+            .with_component(parent_id, |c: &HighResTransformComponent| c.rotation)
+            .or_else(|| self.with_component(parent_id, |c: &TransformComponent| c.rotation))
             .unwrap_or(Quat::identity());
-          let p_scale = self.with_component(parent_id, |c: &TransformComponent| c.scale)
+          let p_scale = self
+            .with_component(parent_id, |c: &HighResTransformComponent| c.scale)
+            .or_else(|| self.with_component(parent_id, |c: &TransformComponent| c.scale))
             .unwrap_or(Vec3f32::one());
 
           let mut frame_scale = 1.0_f32;
@@ -2979,13 +3088,11 @@ impl Scene {
 
           // combine: parent_pos + parent_rot * (parent_scale * child_pos)
           // All position math in f64:
-          let rotated = p_rot.rotate_vector(
-            Vec3f32::from_components(
-              (scaled_parent_scale.x() as f64 * acc_pos.x()) as f32,
-              (scaled_parent_scale.y() as f64 * acc_pos.y()) as f32,
-              (scaled_parent_scale.z() as f64 * acc_pos.z()) as f32,
-            )
-          );
+          let rotated = p_rot.rotate_vector(Vec3f32::from_components(
+            (scaled_parent_scale.x() as f64 * acc_pos.x()) as f32,
+            (scaled_parent_scale.y() as f64 * acc_pos.y()) as f32,
+            (scaled_parent_scale.z() as f64 * acc_pos.z()) as f32,
+          ));
           acc_pos = p_pos + rotated.to_f64();
           acc_rot = p_rot * acc_rot;
           acc_scale = scaled_parent_scale * acc_scale;
@@ -3053,12 +3160,8 @@ impl Scene {
       r_idx -= 1;
     }
 
-    let safe_div_f64 = |a: f64, b: f64| -> f64 {
-      if b.abs() < 1e-30 { 0.0 } else { a / b }
-    };
-    let safe_div_f32 = |a: f32, b: f32| -> f32 {
-      if b.abs() < 1e-15 { 0.0 } else { a / b }
-    };
+    let safe_div_f64 = |a: f64, b: f64| -> f64 { if b.abs() < 1e-30 { 0.0 } else { a / b } };
+    let safe_div_f32 = |a: f32, b: f32| -> f32 { if b.abs() < 1e-15 { 0.0 } else { a / b } };
 
     if lca.is_none() {
       // Fallback: use global transforms in f64
@@ -3084,9 +3187,12 @@ impl Scene {
     if t_idx >= 0 {
       for i in 0..=(t_idx as usize) {
         let node_id = target_path[i];
-        let node_t = self.with_component(node_id, |c: &TransformComponent| *c)?;
-        let node_pos_f64 = self.with_component(node_id, |c: &HighResTransformComponent| c.position)
-          .unwrap_or(node_t.position.to_f64());
+        let node_t = self.with_component(node_id, |c: &TransformComponent| *c).or_else(|| {
+          self.with_component(node_id, |c: &HighResTransformComponent| c.to_transform())
+        })?;
+        let node_pos_f64 = self
+          .with_component(node_id, |c: &HighResTransformComponent| c.position)
+          .or_else(|| self.with_component(node_id, |c: &TransformComponent| c.position.to_f64()))?;
 
         let mut frame_scale = 1.0_f32;
         let _ = self.with_component(node_id, |c: &ReferenceFrameComponent| {
@@ -3117,9 +3223,12 @@ impl Scene {
     if r_idx >= 0 {
       for i in 0..=(r_idx as usize) {
         let node_id = ref_path[i];
-        let node_t = self.with_component(node_id, |c: &TransformComponent| *c)?;
-        let node_pos_f64 = self.with_component(node_id, |c: &HighResTransformComponent| c.position)
-          .unwrap_or(node_t.position.to_f64());
+        let node_t = self.with_component(node_id, |c: &TransformComponent| *c).or_else(|| {
+          self.with_component(node_id, |c: &HighResTransformComponent| c.to_transform())
+        })?;
+        let node_pos_f64 = self
+          .with_component(node_id, |c: &HighResTransformComponent| c.position)
+          .or_else(|| self.with_component(node_id, |c: &TransformComponent| c.position.to_f64()))?;
 
         let mut frame_scale = 1.0_f32;
         let _ = self.with_component(node_id, |c: &ReferenceFrameComponent| {

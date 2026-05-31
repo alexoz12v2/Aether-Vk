@@ -17,7 +17,7 @@ public partial class TransformComponent : NativeComponent
 
   partial void OnUnitLabelChanged(string value)
   {
-      OnPropertyChanged(nameof(Name));
+    OnPropertyChanged(nameof(Name));
   }
 
   public bool SuspendNotifications { get; set; } = false;
@@ -114,8 +114,12 @@ public partial class TransformComponent : NativeComponent
       ScaleX = data.Sx;
       ScaleY = data.Sy;
       ScaleZ = data.Sz;
-      
-      uint frameType = NativeInterop.avkSimulationContext_getEntityReferenceFrameType(SimulationContext, SceneId, EntityId);
+
+      uint frameType = NativeInterop.avkSimulationContext_getEntityReferenceFrameType(
+        SimulationContext,
+        SceneId,
+        EntityId
+      );
       UnitLabel = frameType == 1 ? "km" : "AU";
     }
   }
@@ -160,7 +164,7 @@ public partial class HighResTransformComponent : NativeComponent
 
   partial void OnUnitLabelChanged(string value)
   {
-      OnPropertyChanged(nameof(Name));
+    OnPropertyChanged(nameof(Name));
   }
 
   public bool SuspendNotifications { get; set; } = false;
@@ -254,7 +258,11 @@ public partial class HighResTransformComponent : NativeComponent
       ScaleY = data.Sy;
       ScaleZ = data.Sz;
 
-      uint frameType = NativeInterop.avkSimulationContext_getEntityReferenceFrameType(SimulationContext, SceneId, EntityId);
+      uint frameType = NativeInterop.avkSimulationContext_getEntityReferenceFrameType(
+        SimulationContext,
+        SceneId,
+        EntityId
+      );
       UnitLabel = frameType == 1 ? "km" : "AU";
     }
   }
@@ -994,7 +1002,10 @@ public partial class ScreenSpaceBillboardComponent : NativeComponent
   /// Handles property changes from the linked BillboardViewModel (e.g., from Ctrl+Wheel in viewport).
   /// Syncs values back to this NativeComponent so they push to Rust.
   /// </summary>
-  private void OnLinkedBillboardPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+  private void OnLinkedBillboardPropertyChanged(
+    object? sender,
+    System.ComponentModel.PropertyChangedEventArgs e
+  )
   {
     if (_isSyncingToBillboard || _linkedBillboard == null)
       return;

@@ -5,8 +5,7 @@ use crate::{
   physics,
   scene::{
     CameraComponent, CursorComponent, GridComponent, HighResTransformComponent,
-    PhysicalMeshComponent, Scene, SkyComponent,
-    SunComponent, TransformComponent,
+    PhysicalMeshComponent, Scene, SkyComponent, SunComponent, TransformComponent,
   },
   simulation,
   simulation::texture_cache::TextureCache,

@@ -415,7 +415,7 @@ namespace AetherVk.Logic.Tests
         Assert.Equal(120f, camComp.Fov, 3);
 
         var transformComp = cameraEntity
-          .Components.OfType<AetherVk.Logic.Models.TransformComponent>()
+          .Components.OfType<AetherVk.Logic.Models.HighResTransformComponent>()
           .FirstOrDefault();
         Assert.NotNull(transformComp);
 
@@ -426,7 +426,7 @@ namespace AetherVk.Logic.Tests
 
         // Verify native was updated automatically
         var nativeHasTransform =
-          AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getTransformComponent(
+          AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getHighResTransformComponent(
             ctx,
             sceneId,
             camId,
@@ -434,13 +434,13 @@ namespace AetherVk.Logic.Tests
           );
 
         Assert.True(nativeHasTransform);
-        Assert.Equal(100f, ffiTransform.Px);
-        Assert.Equal(200f, ffiTransform.Py);
-        Assert.Equal(300f, ffiTransform.Pz);
+        Assert.Equal(100.0, ffiTransform.Px, 3);
+        Assert.Equal(200.0, ffiTransform.Py, 3);
+        Assert.Equal(300.0, ffiTransform.Pz, 3);
 
         // 2. Reset locally and Pull from native to verify it reads back correctly
         transformComp!.SuspendNotifications = true;
-        transformComp.PosX = 0f;
+        transformComp.PosX = 0;
         transformComp.SuspendNotifications = false;
 
         transformComp.PullFromNative();

@@ -29,28 +29,45 @@ void main() {
   vec3 right = normalize(invView[0].xyz);
   vec3 up    = normalize(invView[2].xyz);
 
-  float dist = max(length(camPos - cursorPos), 0.001);
+  float dist = max(length(camPos - cursorPos), 1e-10);
+
+  // Log-based scaling: cursor size adapts smoothly across AU to km range.
+  // At dist=10 AU → pct≈0.07 (7%), at dist=0.001 AU → pct≈0.03 (3%),
+  // at dist=1e-8 AU → pct≈0.01 (1%). Never disappears completely.
+  float logDist = log(dist * 1e6) / log(10.0); // shift so typical AU values → positive
+  float t = clamp(logDist / 12.0, 0.0, 1.0);   // 0..1 over ~12 decades
+  float pct = mix(0.07, 0.12, t);               // 7% to 12% of screen
   
-  float t = clamp((dist - 3.3) / (10.0 - 3.3), 0.0, 1.0);
-  float pct = mix(0.12, 0.07, t);
-  
-  float min_axis = min(push.window_extent.x, push.window_extent.y);
-  float desiredSizePixels = pct * min_axis;
-  
+  // Choose minimum size between width and height
+  float desiredSizePixels = min(push.window_extent.x, push.window_extent.y) * pct;
+
   vec4 centerClip = push.viewProj * vec4(cursorPos, 1.0);
-  float w = max(abs(centerClip.w), 0.0001);
+  
+  // Use a strictly positive safe_w for computing scale to avoid div by zero/explosions
+  float safe_w = max(abs(centerClip.w), 1e-6);
   
   vec4 upClip = push.viewProj * vec4(up, 0.0);
-  vec2 upNDC = upClip.xy / w;
+  vec2 upNDC = upClip.xy / safe_w;
   float upLenPixels = length(upNDC * (push.window_extent / 2.0));
   
+  // Avoid division by zero if upLenPixels is near 0
   float scale = (desiredSizePixels / 2.0) / max(upLenPixels, 0.0001);
 
   vec3 worldPos = cursorPos
                 + right * uv.x * scale * 1.8
                 + up    * uv.y * scale * 1.8;
 
-  gl_Position = push.viewProj * vec4(worldPos, 1.0);
+  vec4 clipPos = push.viewProj * vec4(worldPos, 1.0);
+  
+  // If the cursor is in front of the camera, force its w to match the safe_w 
+  // used during scale calculation so its screen size exactly matches desiredSizePixels.
+  // Also force z to 0.5 * w to prevent near/far plane clipping (NO_DEPTH_TEST is used).
+  if (clipPos.w > 0.0) {
+      clipPos.w = safe_w;
+      clipPos.z = 0.5 * clipPos.w;
+  }
+  
+  gl_Position = clipPos;
 
   outRo = camPos - cursorPos;
   outWorldPos = worldPos - cursorPos;

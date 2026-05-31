@@ -907,3 +907,102 @@ fn test_spawn_comet_multi_scale_layer_separation() {
     }
   }
 }
+
+#[test]
+fn test_camera_controls() {
+  if let Some(ctx_ptr) = get_test_context() {
+    unsafe {
+      let ctx = &mut *ctx_ptr;
+      let scene_id = ctx.create_empty_scene(true).unwrap();
+
+      let camera_name = alloc::ffi::CString::new("TestCamera").unwrap();
+      let camera_ext = ctx.spawn_entity(scene_id, camera_name.to_str().unwrap()).unwrap();
+
+      let initial_pos = Vec3f32::from_components(0.0, 0.0, 10.0);
+      let initial_rot = Quat::identity();
+      ctx
+        .add_transform_component(
+          scene_id,
+          camera_ext,
+          initial_pos,
+          initial_rot,
+          Vec3f32::one(),
+        )
+        .unwrap();
+
+      let cam_params = CameraParams::Perspective(components_api::PerspectiveCameraParams {
+        fov: 45.0f32.to_radians(),
+        aspect_ratio: 1.0,
+        near_plane: 0.1,
+        far_plane: 1000.0,
+      });
+      ctx.add_camera_component(scene_id, camera_ext, cam_params).unwrap();
+
+      let camera_id = {
+        let scenes = ctx.scenes.read();
+        let scene_arc = scenes.get_scene(scene_id).unwrap();
+        let scene_ctx = scene_arc.read();
+        scene_ctx.entity_map.get(&camera_ext).unwrap().clone()
+      };
+
+      let get_cam_transform = || {
+        let scenes = ctx.scenes.read();
+        let scene_arc = scenes.get_scene(scene_id).unwrap();
+        let scene_ctx = scene_arc.read();
+        scene_ctx
+          .scene
+          .with_component(camera_id, |c: &crate::scene::HighResTransformComponent| *c)
+          .unwrap()
+      };
+
+      let initial_hrt = get_cam_transform();
+
+      // Test Rotate
+      let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::RotateCamera(
+        structs::RotateCamera {
+          camera_entity: camera_id,
+          delta_x: 0.1,
+          delta_y: 0.1,
+          scene: ctx.get_scene(scene_id).unwrap(),
+        },
+      ));
+
+      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
+
+      let hrt1 = get_cam_transform();
+      assert!(hrt1.rotation != initial_hrt.rotation);
+
+      // Test Pan
+      let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::PanCamera(
+        structs::PanCamera {
+          camera_entity: camera_id,
+          delta_x: 1.0,
+          delta_y: 1.0,
+          scene: ctx.get_scene(scene_id).unwrap(),
+        },
+      ));
+
+      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
+
+      let hrt2 = get_cam_transform();
+      assert!(hrt2.position != hrt1.position);
+      assert_eq!(hrt2.rotation, hrt1.rotation);
+
+      // Test Zoom
+      let _ = ctx.threads.logic_thread.tx().try_send(structs::LogicCommand::ZoomCamera(
+        structs::ZoomCamera {
+          camera_entity: camera_id,
+          amount: 1.0,
+          scene: ctx.get_scene(scene_id).unwrap(),
+        },
+      ));
+
+      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
+
+      let hrt3 = get_cam_transform();
+      assert!(hrt3.position != hrt2.position);
+
+      let _ = alloc::boxed::Box::from_raw(ctx_ptr);
+    }
+  }
+}

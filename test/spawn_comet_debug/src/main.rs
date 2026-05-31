@@ -1,13 +1,11 @@
 use aethervk_core_rlib::{
-  gpu::PresentationEngineHandle,
-  scene::camera::QuatToEulerAngles,
-  simulation_api::SimulationContext,
-  types::EngineResult,
+  gpu::PresentationEngineHandle, scene::camera::QuatToEulerAngles,
+  simulation_api::SimulationContext, types::EngineResult,
 };
 use aethervk_oshal_rlib::math::{
   matrix::SquareMatrix,
   quaternion::Quaternion,
-  vector::{vec3::Vec3f32, vec4::Quat, Vector, Vector3, Vector4},
+  vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
 };
 use std::sync::Arc;
 use test_utils::{
@@ -100,27 +98,49 @@ impl SimulationDelegate for SpawnCometDelegate {
         Vec3f32::from_components(0.0, 0.0, -std::f32::consts::FRAC_1_SQRT_2),
         std::f32::consts::FRAC_1_SQRT_2,
       );
-      let _ = scene_read.scene.with_component_mut(camera_int, |t: &mut aethervk_core_rlib::scene::TransformComponent| {
-        t.position = cam_pos;
-        t.rotation = rot;
-      });
-      let _ = scene_read.scene.with_component_mut(camera_int, |c: &mut aethervk_core_rlib::scene::CameraComponent| {
-        c.focus_distance = 0.00001;
-        // Fix for invisible sun: Avalonia default near plane is 0.1 AU, but we spawn at 0.01 AU!
-        if let aethervk_core_rlib::scene::CameraProjection::Perspective { ref mut near, ref mut far, .. } = c.projection {
-          *near = 0.00001; // 0.00001 AU = 1500 km
-          *far = 10000.0;
-        }
-      });
-      
+      let _ = scene_read.scene.with_component_mut(
+        camera_int,
+        |t: &mut aethervk_core_rlib::scene::HighResTransformComponent| {
+          t.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+            cam_pos.x() as f64,
+            cam_pos.y() as f64,
+            cam_pos.z() as f64,
+          );
+          t.rotation = rot;
+        },
+      );
+      let _ = scene_read.scene.with_component_mut(
+        camera_int,
+        |c: &mut aethervk_core_rlib::scene::CameraComponent| {
+          c.focus_distance = 0.00001;
+          // Fix for invisible sun: Avalonia default near plane is 0.1 AU, but we spawn at 0.01 AU!
+          if let aethervk_core_rlib::scene::CameraProjection::Perspective {
+            ref mut near,
+            ref mut far,
+            ..
+          } = c.projection
+          {
+            *near = 0.00001; // 0.00001 AU = 1500 km
+            *far = 10000.0;
+          }
+        },
+      );
+
       let mut cursor_ent = None;
-      if let Some((id, _)) = scene_read.scene.query1_first_res::<aethervk_core_rlib::scene::CursorComponent, _, _>(|id, _| Some(id)) {
+      if let Some((id, _)) = scene_read
+        .scene
+        .query1_first_res::<aethervk_core_rlib::scene::CursorComponent, _, _>(|id, _| Some(id))
+      {
         cursor_ent = Some(id);
       }
       if let Some(id) = cursor_ent {
-        let _ = scene_read.scene.with_component_mut(id, |t: &mut aethervk_core_rlib::scene::TransformComponent| {
-          t.position = Vec3f32::from_components(0.01, 0.0, 0.0);
-        });
+        let _ = scene_read.scene.with_component_mut(
+          id,
+          |t: &mut aethervk_core_rlib::scene::HighResTransformComponent| {
+            t.position =
+              aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(0.01, 0.0, 0.0);
+          },
+        );
       }
     }
 
@@ -199,7 +219,10 @@ impl SimulationDelegate for SpawnCometDelegate {
 
     let (target_pos, offset) = match event.logical_key.as_ref() {
       winit::keyboard::Key::Character("f") | winit::keyboard::Key::Character("F") => {
-        (Some(Vec3f32::from_components(0.01, 0.0, 0.0)), Some(0.00005)) // 7,500 km away from comet
+        (
+          Some(Vec3f32::from_components(0.01, 0.0, 0.0)),
+          Some(0.00005),
+        ) // 7,500 km away from comet
       }
       winit::keyboard::Key::Character("0") => {
         (Some(Vec3f32::from_components(0.0, 0.0, 0.0)), Some(0.02)) // 0.02 AU away from sun
@@ -211,8 +234,8 @@ impl SimulationDelegate for SpawnCometDelegate {
           let mut curr = camera_ent;
           print!("[DEBUG] Camera {:?} parent hierarchy: ", camera_ent);
           while let Some(parent) = scene_read.scene.get_parent(curr) {
-             print!("{:?} -> ", parent);
-             curr = parent;
+            print!("{:?} -> ", parent);
+            curr = parent;
           }
           println!("(root)");
         }
@@ -224,17 +247,27 @@ impl SimulationDelegate for SpawnCometDelegate {
     if let Some(pos) = target_pos {
       let scene = ctx.get_scene(scene_id).unwrap();
       let scene_read = scene.read();
-      
+
       let mut cursor_ent = None;
-      if let Some((id, _)) = scene_read.scene.query1_first_res::<aethervk_core_rlib::scene::CursorComponent, _, _>(|id, _| Some(id)) {
+      if let Some((id, _)) = scene_read
+        .scene
+        .query1_first_res::<aethervk_core_rlib::scene::CursorComponent, _, _>(|id, _| Some(id))
+      {
         cursor_ent = Some(id);
       }
       if let Some(id) = cursor_ent {
-        let _ = scene_read.scene.with_component_mut(id, |t: &mut aethervk_core_rlib::scene::TransformComponent| {
-          t.position = pos;
-        });
+        let _ = scene_read.scene.with_component_mut(
+          id,
+          |t: &mut aethervk_core_rlib::scene::HighResTransformComponent| {
+            t.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+              pos.x() as f64,
+              pos.y() as f64,
+              pos.z() as f64,
+            );
+          },
+        );
       }
-      
+
       if let Some(camera_int) = scene_read.get_entity(self.camera_ext_entity) {
         // Reparent to root so that our local position is treated as macro scale (AU).
         // The logic thread will automatically reparent it back to the micro frame
@@ -243,8 +276,8 @@ impl SimulationDelegate for SpawnCometDelegate {
         scene_read.scene.set_parent(camera_int, Some(root_entity));
 
         if let Some(off) = offset {
-          let _ = scene_read.scene.with_component_mut(camera_int, |t: &mut aethervk_core_rlib::scene::TransformComponent| {
-            t.position = Vec3f32::from_components(pos.x() + off, pos.y(), pos.z());
+          let _ = scene_read.scene.with_component_mut(camera_int, |t: &mut aethervk_core_rlib::scene::HighResTransformComponent| {
+            t.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components((pos.x() + off) as f64, pos.y() as f64, pos.z() as f64);
             // Look towards -X, Up is +Z
             t.rotation = <aethervk_oshal_rlib::math::vector::vec4::Quat as aethervk_oshal_rlib::math::quaternion::Quaternion>::from_vector_and_scalar(
               Vec3f32::from_components(0.0, 0.0, -std::f32::consts::FRAC_1_SQRT_2),
@@ -252,24 +285,30 @@ impl SimulationDelegate for SpawnCometDelegate {
             );
           });
         }
-        let _ = scene_read.scene.with_component_mut(camera_int, |c: &mut aethervk_core_rlib::scene::CameraComponent| {
-          c.focus_distance = offset.unwrap_or(0.1);
-        });
+        let _ = scene_read.scene.with_component_mut(
+          camera_int,
+          |c: &mut aethervk_core_rlib::scene::CameraComponent| {
+            c.focus_distance = offset.unwrap_or(0.1);
+          },
+        );
       }
     }
   }
 
-  fn on_about_to_wait(
-    &mut self,
-    ctx: &mut SimulationContext,
-    scene_id: u64,
-    _delta_time: f32,
-  ) {
+  fn on_about_to_wait(&mut self, ctx: &mut SimulationContext, scene_id: u64, _delta_time: f32) {
     let scene = ctx.get_scene(scene_id).unwrap();
     let scene_read = scene.read();
     if let Some(camera_entity) = scene_read.get_entity(self.camera_ext_entity) {
-      if let Some(t) = scene_read.scene.with_component(camera_entity, |t: &aethervk_core_rlib::scene::TransformComponent| t.clone()) {
-        let dist = (t.position - Vec3f32::from_components(0.01, 0.0, 0.0)).length();
+      if let Some(t) = scene_read.scene.with_component(
+        camera_entity,
+        |t: &aethervk_core_rlib::scene::HighResTransformComponent| t.clone(),
+      ) {
+        let t_pos_f32 = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+          t.position.x() as f32,
+          t.position.y() as f32,
+          t.position.z() as f32,
+        );
+        let dist = (t_pos_f32 - Vec3f32::from_components(0.01, 0.0, 0.0)).length();
         let is_micro = dist < 0.005;
 
         if let Some(was_micro) = self.was_micro {
@@ -277,9 +316,15 @@ impl SimulationDelegate for SpawnCometDelegate {
             let color = "\x1b[1;31m"; // Bold Red
             let reset = "\x1b[0m";
             if is_micro {
-              println!("{}*** CAMERA ENTERED MICRO FRAME (dist to comet: {:.6} AU) ***{}", color, dist, reset);
+              println!(
+                "{}*** CAMERA ENTERED MICRO FRAME (dist to comet: {:.6} AU) ***{}",
+                color, dist, reset
+              );
             } else {
-              println!("{}*** CAMERA EXITED MICRO FRAME (dist to comet: {:.6} AU) ***{}", color, dist, reset);
+              println!(
+                "{}*** CAMERA EXITED MICRO FRAME (dist to comet: {:.6} AU) ***{}",
+                color, dist, reset
+              );
             }
           }
         }
@@ -290,11 +335,19 @@ impl SimulationDelegate for SpawnCometDelegate {
         let frame = FRAME_COUNTER.fetch_add(1, Ordering::Relaxed);
         if frame % 120 == 0 {
           let (pitch, yaw) = t.rotation.to_pitch_yaw();
-          println!("[CAMERA] Frame {} | Pos: ({:.6}, {:.6}, {:.6}) | Rot Quat: (w={:.4}, x={:.4}, y={:.4}, z={:.4}) | Euler: (pitch={:.2}°, yaw={:.2}°)",
-                   frame,
-                   t.position.x(), t.position.y(), t.position.z(),
-                   t.rotation.0.w(), t.rotation.0.x(), t.rotation.0.y(), t.rotation.0.z(),
-                   pitch.to_degrees(), yaw.to_degrees());
+          println!(
+            "[CAMERA] Frame {} | Pos: ({:.6}, {:.6}, {:.6}) | Rot Quat: (w={:.4}, x={:.4}, y={:.4}, z={:.4}) | Euler: (pitch={:.2}°, yaw={:.2}°)",
+            frame,
+            t.position.x(),
+            t.position.y(),
+            t.position.z(),
+            t.rotation.0.w(),
+            t.rotation.0.x(),
+            t.rotation.0.y(),
+            t.rotation.0.z(),
+            pitch.to_degrees(),
+            yaw.to_degrees()
+          );
         }
       }
     }

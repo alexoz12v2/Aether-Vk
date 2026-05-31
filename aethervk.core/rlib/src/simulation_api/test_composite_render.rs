@@ -489,7 +489,8 @@ fn test_composite_scale_overlap() {
           width,
           height,
           image::ColorType::Rgba8,
-        ).expect("Failed to save PNG");
+        )
+        .expect("Failed to save PNG");
 
         println!(
           "[test_composite_scale_overlap] Saved render output to {:?}",

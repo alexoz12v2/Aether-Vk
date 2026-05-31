@@ -257,24 +257,46 @@ impl LogicThreadContext {
         .ok_or(EngineError::InvalidOperation("no camera found"))?;
 
       let mut view = Mat4x4f32::identity();
+      let has_hrt = active
+        .scene
+        .with_component(
+          active_camera_entity,
+          |c: &crate::scene::HighResTransformComponent| true,
+        )
+        .unwrap_or(false);
+      let has_t = active
+        .scene
+        .with_component(
+          active_camera_entity,
+          |c: &crate::scene::TransformComponent| true,
+        )
+        .unwrap_or(false);
+      aethervk_oshal_rlib::log!("DEBUG raycast: has_hrt={} has_t={}", has_hrt, has_t);
+
       active
         .scene
-        .with_component(active_camera_entity, |c: &TransformComponent| {
-          let right = c.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-          let up = c.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
-          let forward = c.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
-          view = Mat4x4f32::look_at_axes(right, forward, up, c.position);
-        })
+        .with_component(
+          active_camera_entity,
+          |c: &crate::scene::HighResTransformComponent| {
+            let right = c.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
+            let up = c.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+            let forward = c.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+            view = Mat4x4f32::look_at_axes(right, forward, up, c.position.to_f32());
+          },
+        )
         .ok_or(EngineError::InvalidOperation("camera transform missing"))?;
 
       let mut view_proj_inv = Mat4x4f32::identity();
       active
         .scene
-        .with_component(active_camera_entity, |cam: &CameraComponent| {
-          let proj = cam.get_projection_matrix();
-          let view_proj = proj * view;
-          view_proj_inv = view_proj.inverse().unwrap_or(Mat4x4f32::identity());
-        })
+        .with_component(
+          active_camera_entity,
+          |cam: &crate::scene::CameraComponent| {
+            let proj = cam.get_projection_matrix();
+            let view_proj = proj * view;
+            view_proj_inv = view_proj.inverse().unwrap_or(Mat4x4f32::identity());
+          },
+        )
         .ok_or(EngineError::InvalidOperation("camera component missing"))?;
 
       let ndc_near = Vec4f32::from_components(ndc_x, ndc_y, 1.0, 1.0);

@@ -106,6 +106,9 @@ pub struct CursorDrawCall {
   pub vertex_count: u32,
   pub model_matrix: Mat4x4f32,
   pub cursor_size: f32,
+  /// Near/far planes for the cursor's depth layer (km for micro, AU for macro)
+  pub layer_near: f32,
+  pub layer_far: f32,
 }
 
 impl CursorDrawCall {
@@ -115,12 +118,16 @@ impl CursorDrawCall {
     vertex_count: u32,
     model_matrix: Mat4x4f32,
     cursor_size: f32,
+    layer_near: f32,
+    layer_far: f32,
   ) -> Self {
     Self {
       pipeline: result.pipeline,
       vertex_count,
       model_matrix,
       cursor_size,
+      layer_near,
+      layer_far,
     }
   }
 }
@@ -743,6 +750,8 @@ impl RenderLayer {
           4,
           model_matrix,
           0.05,
+          1e-5,   // default macro near
+          1000.0, // default macro far
         ));
       }
       RenderableDataRef::Markers(component) => {
@@ -919,7 +928,13 @@ impl RenderScene {
     }
   }
 
-  pub fn get_or_create_layer(&mut self, layer_index: u32, near: f32, far: f32, frame_scale: f32) -> &mut RenderLayer {
+  pub fn get_or_create_layer(
+    &mut self,
+    layer_index: u32,
+    near: f32,
+    far: f32,
+    frame_scale: f32,
+  ) -> &mut RenderLayer {
     let idx = self
       .depth_layers
       .iter()
@@ -1543,7 +1558,14 @@ pub fn render_frame(
   // ── Multi-layer compositing mode (always 3 subpasses now) ─────────
   // Subpass 0: draw the macro layer (layer_index == 0)
   if let Some(macro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 0) {
-    draw_layer_content(device, cmd_buffer, handle, render_scene, macro_layer, global_sun_pos)?;
+    draw_layer_content(
+      device,
+      cmd_buffer,
+      handle,
+      render_scene,
+      macro_layer,
+      global_sun_pos,
+    )?;
   }
 
   // Transition to subpass 1 (micro)
@@ -1559,7 +1581,14 @@ pub fn render_frame(
 
   // Subpass 1: draw the micro layer (layer_index == 1)
   if let Some(micro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 1) {
-    draw_layer_content(device, cmd_buffer, handle, render_scene, micro_layer, global_sun_pos)?;
+    draw_layer_content(
+      device,
+      cmd_buffer,
+      handle,
+      render_scene,
+      micro_layer,
+      global_sun_pos,
+    )?;
   }
 
   // Transition to subpass 2 (composite + UI)
@@ -1581,14 +1610,21 @@ pub fn render_frame(
     macro_far: macro_layer.map(|l| l.far).unwrap_or(1000.0),
     micro_near: micro_layer.map(|l| l.near).unwrap_or(0.001),
     micro_far: micro_layer.map(|l| l.far).unwrap_or(10.0),
+    macro_scale: macro_layer.map(|l| l.frame_scale).unwrap_or(1.0),
+    micro_scale: micro_layer.map(|l| l.frame_scale).unwrap_or(1.0),
   };
   device.draw_composite(cmd_buffer, handle, &constants)?;
 
   // Draw cursor after composite (always on top of both layers)
   if let Some(cursor_call) = &render_scene.cursor_call {
+    // Rebuild viewProj for the cursor's depth layer so the projection matrix
+    // matches the cursor's coordinate space (km for micro, AU for macro).
+    let cursor_camera = render_scene
+      .camera_data
+      .rebuild_for_layer(cursor_call.layer_near, cursor_call.layer_far);
     do_draw_cursor(
       device,
-      &render_scene.camera_data,
+      &cursor_camera,
       cmd_buffer,
       handle,
       cursor_call,
@@ -1820,8 +1856,6 @@ fn draw_layer_content(
   if let Some(draw_call) = &layer.sun_call {
     gpu::frame::do_draw_sun(device, &layer_camera, cmd_buffer, handle, draw_call)?;
   }
-
-
 
   Ok(())
 }

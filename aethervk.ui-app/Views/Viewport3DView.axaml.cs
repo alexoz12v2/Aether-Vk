@@ -105,7 +105,9 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
     {
       _viewModel.Renderer = null;
       WeakReferenceMessenger.Default.Unregister<EntitySelectedMessage>(this);
-      WeakReferenceMessenger.Default.Unregister<AetherVk.Logic.Models.EntityVisibilityChangedMessage>(this);
+      WeakReferenceMessenger.Default.Unregister<AetherVk.Logic.Models.EntityVisibilityChangedMessage>(
+        this
+      );
     }
 
     _viewModel = DataContext as Viewport3DViewModel;
@@ -127,7 +129,8 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
         this,
         (recipient, msg) =>
         {
-          if (_viewModel == null) return;
+          if (_viewModel == null)
+            return;
           ulong selectedId = msg.SelectedEntity?.Id ?? 0;
           foreach (var b in _viewModel.Billboards)
           {
@@ -141,7 +144,8 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
         this,
         (recipient, msg) =>
         {
-          if (_viewModel == null) return;
+          if (_viewModel == null)
+            return;
           foreach (var b in _viewModel.Billboards)
           {
             if (b.EntityId != 0 && b.EntityId == msg.Entity.Id)
@@ -331,8 +335,10 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
 
   private void OnRotateHandlePressed(object? sender, PointerPressedEventArgs e)
   {
-    if (sender is Avalonia.Controls.Shapes.Ellipse ellipse &&
-        ellipse.DataContext is BillboardViewModel bvm)
+    if (
+      sender is Avalonia.Controls.Shapes.Ellipse ellipse
+      && ellipse.DataContext is BillboardViewModel bvm
+    )
     {
       _isRotatingBillboard = true;
       _rotateBillboard = bvm;
@@ -384,8 +390,10 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
 
   private void OnScaleHandlePressed(object? sender, PointerPressedEventArgs e)
   {
-    if (sender is Avalonia.Controls.Shapes.Ellipse ellipse &&
-        ellipse.DataContext is BillboardViewModel bvm)
+    if (
+      sender is Avalonia.Controls.Shapes.Ellipse ellipse
+      && ellipse.DataContext is BillboardViewModel bvm
+    )
     {
       _isScalingBillboard = true;
       _scaleBillboard = bvm;
@@ -394,7 +402,10 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
       var pos = e.GetPosition(this);
       double cx = bvm.X + bvm.ScaledWidth / 2.0;
       double cy = bvm.Y + bvm.ScaledHeight / 2.0;
-      _scaleStartDist = Math.Max(10.0, Math.Sqrt((pos.X - cx) * (pos.X - cx) + (pos.Y - cy) * (pos.Y - cy)));
+      _scaleStartDist = Math.Max(
+        10.0,
+        Math.Sqrt((pos.X - cx) * (pos.X - cx) + (pos.Y - cy) * (pos.Y - cy))
+      );
 
       e.Pointer.Capture((IInputElement)sender);
       e.Handled = true;
@@ -453,10 +464,11 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
     double cx = bvm.X + bvm.ScaledWidth / 2.0;
     double cy = bvm.Y + bvm.ScaledHeight / 2.0;
     double radius = Math.Max(bvm.ScaledWidth, bvm.ScaledHeight) * 0.7;
-    if (radius < 40) radius = 40;
+    if (radius < 40)
+      radius = 40;
 
     var accentBrush = new SolidColorBrush(Color.FromArgb(180, 100, 180, 255));
-    var tickBrush   = new SolidColorBrush(Color.FromArgb(120, 160, 200, 255));
+    var tickBrush = new SolidColorBrush(Color.FromArgb(120, 160, 200, 255));
 
     // Outer ring
     var ring = new Avalonia.Controls.Shapes.Ellipse
@@ -483,7 +495,7 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
       var line = new Avalonia.Controls.Shapes.Line
       {
         StartPoint = new Avalonia.Point(cx + innerR * Math.Sin(rad), cy - innerR * Math.Cos(rad)),
-        EndPoint   = new Avalonia.Point(cx + outerR * Math.Sin(rad), cy - outerR * Math.Cos(rad)),
+        EndPoint = new Avalonia.Point(cx + outerR * Math.Sin(rad), cy - outerR * Math.Cos(rad)),
         Stroke = major ? accentBrush : tickBrush,
         StrokeThickness = major ? 2.0 : 1.0,
       };
@@ -495,7 +507,10 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
     var indicator = new Avalonia.Controls.Shapes.Line
     {
       StartPoint = new Avalonia.Point(cx, cy),
-      EndPoint   = new Avalonia.Point(cx + radius * Math.Sin(angleRad), cy - radius * Math.Cos(angleRad)),
+      EndPoint = new Avalonia.Point(
+        cx + radius * Math.Sin(angleRad),
+        cy - radius * Math.Cos(angleRad)
+      ),
       Stroke = accentBrush,
       StrokeThickness = 2.0,
     };

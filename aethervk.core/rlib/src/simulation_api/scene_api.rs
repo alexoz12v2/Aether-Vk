@@ -281,8 +281,10 @@ impl SimulationContext {
     let cursor_entity = scene.spawn_entity("cursor");
     scene.add_component(
       cursor_entity,
-      crate::scene::TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+      crate::scene::HighResTransformComponent {
+        position: aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+          0.0, 0.0, 0.0,
+        ),
         rotation: Quat::identity(),
         scale: Vec3f32::from_components(0.02, 0.02, 0.02),
       },
@@ -319,8 +321,12 @@ impl SimulationContext {
 
       scene.add_component(
         camera_entity,
-        crate::scene::TransformComponent {
-          position: home_position,
+        crate::scene::HighResTransformComponent {
+          position: aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+            home_position.x() as f64,
+            home_position.y() as f64,
+            home_position.z() as f64,
+          ),
           rotation: Quat::identity(),
           scale: Vec3f32::from_components(1.0, 1.0, 1.0),
         },
@@ -451,8 +457,10 @@ impl SimulationContext {
       let rot = <oshal::math::matrix::mat4::Mat4x4f32 as oshal::math::matrix::Matrix4>::to_quat_custom_frame(&mat);
       scene.add_component(
         camera_entity,
-        TransformComponent {
-          position: Vec3f32::from_components(pos, pos, pos),
+        crate::scene::HighResTransformComponent {
+          position: aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+            pos as f64, pos as f64, pos as f64,
+          ),
           rotation: rot,
           scale: Vec3f32::from_components(1.0, 1.0, 1.0),
         },
@@ -497,8 +505,10 @@ impl SimulationContext {
     let cursor_entity = scene.spawn_entity("cursor");
     scene.add_component(
       cursor_entity,
-      TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+      crate::scene::HighResTransformComponent {
+        position: aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+          0.0, 0.0, 0.0,
+        ),
         rotation: Quat::identity(),
         scale: Vec3f32::from_components(0.02, 0.02, 0.02),
       },
