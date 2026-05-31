@@ -6,7 +6,7 @@ use super::structs::{
 use crate::{
   gpu::WeakRenderFrontendExt,
   scene::{
-    CameraComponent, CursorComponent, EntityId, FollowingComponent, TransformComponent,
+    CameraComponent, CursorComponent, EntityId, FollowingComponent, HighResTransformComponent, TransformComponent,
     camera::{QuatToEulerAngles, SceneCameraExt},
   },
   simulation_api::emit_breadcrumb,
@@ -622,7 +622,7 @@ fn process_command_internal(
         .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
       {
         if let Some(pos) =
-          scene_read.scene.with_component(cursor_id, |t: &TransformComponent| t.position)
+          scene_read.scene.with_component(cursor_id, |t: &HighResTransformComponent| t.position.to_f32())
         {
           cursor_pos = Some(pos);
 
@@ -630,7 +630,7 @@ fn process_command_internal(
           // based on the distance to the cursor object you are pivoting around.
           if let Some(cam_pos) = scene_read
             .scene
-            .with_component(camera_entity, |t: &TransformComponent| t.position)
+            .with_component(camera_entity, |t: &HighResTransformComponent| t.position.to_f32())
           {
             let dist = (pos - cam_pos).length();
             let _ =
@@ -659,7 +659,7 @@ fn process_command_internal(
       {
         scene_read.mark_component_changed(
           ext_id,
-          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
         );
       }
       Ok(SimulationTaskResult::None)
@@ -748,7 +748,7 @@ fn process_command_internal(
       {
         scene_read.mark_component_changed(
           ext_id,
-          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
         );
         scene_read.mark_component_changed(
           ext_id,
@@ -779,8 +779,8 @@ fn process_command_internal(
         .scene
         .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
       {
-        let _ = scene_read.scene.with_component_mut(cursor_id, |c: &mut TransformComponent| {
-          c.position = cursor_pos;
+        let _ = scene_read.scene.with_component_mut(cursor_id, |c: &mut HighResTransformComponent| {
+          c.position = cursor_pos.to_f64();
         });
       }
 
@@ -792,12 +792,12 @@ fn process_command_internal(
 
       scene_read
         .scene
-        .with_component_mut(camera_entity, |t: &mut TransformComponent| {
-          t.position = cursor_pos + offset;
+        .with_component_mut(camera_entity, |t: &mut HighResTransformComponent| {
+          t.position = (cursor_pos + offset).to_f64();
           t.rotation = q;
         })
         .ok_or(EngineError::InvalidOperation(
-          "logic_thread:ResetCamera | camera entity doesn't have TransformComponent",
+          "logic_thread:ResetCamera | camera entity doesn't have HighResTransformComponent",
         ))?;
 
       let _ = scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
@@ -811,7 +811,7 @@ fn process_command_internal(
       {
         scene_read.mark_component_changed(
           ext_id,
-          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
         );
       }
       Ok(SimulationTaskResult::None)
@@ -833,7 +833,7 @@ fn process_command_internal(
       {
         scene_read.mark_component_changed(
           ext_id,
-          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
         );
       }
       Ok(SimulationTaskResult::None)
@@ -849,16 +849,16 @@ fn process_command_internal(
       let scene_read = scene.read();
       scene_read
         .scene
-        .query2_res_first_mut(|id, t: &mut TransformComponent, _c: &mut CursorComponent| {
+        .query2_res_first_mut(|id, t: &mut HighResTransformComponent, _c: &mut CursorComponent| {
           let translation = Vec3f32::from_components(delta_x, delta_y, delta_z) * speed;
-          t.position = t.position + translation;
+          t.position = t.position + translation.to_f64();
 
           if let Some(ext_id) =
             scene_read.entity_map.iter().find(|&(_, v)| *v == id).map(|(k, _)| *k)
           {
             scene_read.mark_component_changed(
               ext_id,
-              <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+              <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
             );
           }
 
@@ -893,8 +893,8 @@ fn process_command_internal(
         .scene
         .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
       {
-        let _ = scene_read.scene.with_component_mut(cursor_id, |c: &mut TransformComponent| {
-          c.position = target_pos;
+        let _ = scene_read.scene.with_component_mut(cursor_id, |c: &mut HighResTransformComponent| {
+          c.position = target_pos.to_f64();
         });
         // Mark cursor entity as changed.
         if let Some(ext_id) =
@@ -902,7 +902,7 @@ fn process_command_internal(
         {
           scene_read.mark_component_changed(
             ext_id,
-            <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+            <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
           );
         }
       }
@@ -913,8 +913,8 @@ fn process_command_internal(
       let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
       let offset = q.rotate_vector(Vec3f32::from_components(0.0, SNAP_DISTANCE, 0.0));
 
-      let _ = scene_read.scene.with_component_mut(snap_entity, |t: &mut TransformComponent| {
-        t.position = target_pos + offset;
+      let _ = scene_read.scene.with_component_mut(snap_entity, |t: &mut HighResTransformComponent| {
+        t.position = (target_pos + offset).to_f64();
         t.rotation = q;
       });
       let _ = scene_read.scene.with_component_mut(snap_entity, |c: &mut CameraComponent| {
@@ -926,7 +926,7 @@ fn process_command_internal(
       {
         scene_read.mark_component_changed(
           ext_id,
-          <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
         );
       }
       Ok(SimulationTaskResult::None)
@@ -1604,6 +1604,21 @@ fn execute_simulation_tick(
                   ));
                 }
               }
+              id if id == <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID => {
+                if let Some(dto) = scene_ctx.scene.with_component(
+                  *internal_entity,
+                  |c: &crate::scene::HighResTransformComponent| {
+                    use crate::scene::ForeignSerializable;
+                    c.to_foreign()
+                  },
+                ) {
+                  changes_to_stream.push((
+                    *ext_id,
+                    id,
+                    Some(alloc::boxed::Box::new(dto) as alloc::boxed::Box<dyn core::any::Any + Send>),
+                  ));
+                }
+              }
               // ── Non-serializable components: send pull-signal (null data) ─
               // IDs 100 (Comet), 101 (Planet), 102 (Sun), and any future IDs.
               // C# will call PullFromNative() on the matching component.
@@ -1871,29 +1886,41 @@ fn try_snap_entity(
   scene_read: &RwLockReadGuard<SceneContext>,
 ) -> EngineResult<()> {
   let (target_pos, target_rot) = {
-    let t = {
-      #[allow(deprecated)]
-      scene_read.scene.global_transform(target_entity)
-    }
-    .ok_or(EngineError::InvalidOperation(
-      "logic_thread:SnapToEntity | snap target doesn't have TransformComponent",
-    ))?;
+    // Use f64 for position if available
+    let t = scene_read.scene.global_transform_f64(target_entity)
+      .ok_or(EngineError::InvalidOperation(
+        "logic_thread:SnapToEntity | snap target doesn't have TransformComponent",
+      ))?;
     (t.position, t.rotation)
   };
-  let res = scene_read
+
+  // Update f64 component (source of truth for camera/cursor)
+  let _ = scene_read.scene.with_component_mut(
+    snap_entity,
+    |h: &mut crate::scene::HighResTransformComponent| {
+      h.position = target_pos;
+      h.rotation = target_rot;
+    },
+  );
+
+  // For entities with TransformComponent (non-camera), update via set_global_position_and_rotation
+  let _ = scene_read
     .scene
-    .set_global_position_and_rotation(snap_entity, target_pos, target_rot);
-  if res.is_ok() {
-    if let Some(ext_id) =
-      scene_read.entity_map.iter().find(|&(_, v)| *v == snap_entity).map(|(k, _)| *k)
-    {
-      scene_read.mark_component_changed(
-        ext_id,
-        <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-      );
-    }
+    .set_global_position_and_rotation(snap_entity, target_pos.to_f32(), target_rot);
+  if let Some(ext_id) =
+    scene_read.entity_map.iter().find(|&(_, v)| *v == snap_entity).map(|(k, _)| *k)
+  {
+    scene_read.mark_component_changed(
+      ext_id,
+      <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+    );
+    scene_read.mark_component_changed(
+      ext_id,
+      <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+    );
   }
-  res
+  // Return Ok even if set_global_position_and_rotation fails (camera has no Transform)
+  Ok(())
 }
 
 #[cfg(test)]

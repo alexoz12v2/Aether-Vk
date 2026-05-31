@@ -38,6 +38,42 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
+  /// Adds a HighResTransformComponent (f64 position) to an entity.
+  pub fn add_highres_transform_component(
+    &self,
+    scene_id: u64,
+    entity: u64,
+    pos_x: f64,
+    pos_y: f64,
+    pos_z: f64,
+    rot_w: f32,
+    rot_x: f32,
+    rot_y: f32,
+    rot_z: f32,
+    scale_x: f32,
+    scale_y: f32,
+    scale_z: f32,
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:add_highres_transform_component"
+    );
+    use aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64;
+    scene
+      .write()
+      .scene
+      .add_component(
+        entity_id,
+        HighResTransformComponent {
+          position: Vec3f64::from_components(pos_x, pos_y, pos_z),
+          rotation: Quat::from_components(rot_x, rot_y, rot_z, rot_w),
+          scale: Vec3f32::from_components(scale_x, scale_y, scale_z),
+        },
+      )
+      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
+  }
+
   /// TODO: Document this item
   pub fn set_transform_component(
     &self,
@@ -161,6 +197,83 @@ impl SimulationContext {
     Ok(())
   }
 
+  /// Sets the HighResTransformComponent (f64 position) on an entity.
+  pub fn set_highres_transform_component(
+    &self,
+    scene_id: u64,
+    entity: u64,
+    pos_x: f64,
+    pos_y: f64,
+    pos_z: f64,
+    rot_w: f32,
+    rot_x: f32,
+    rot_y: f32,
+    rot_z: f32,
+    scale_x: f32,
+    scale_y: f32,
+    scale_z: f32,
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:set_highres_transform_component"
+    );
+    use aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64;
+    let opt = scene.write().scene.with_component_mut(
+      entity_id,
+      |c: &mut HighResTransformComponent| {
+        c.position = Vec3f64::from_components(pos_x, pos_y, pos_z);
+        c.rotation = Quat::from_components(rot_x, rot_y, rot_z, rot_w);
+        c.scale = Vec3f32::from_components(scale_x, scale_y, scale_z);
+      },
+    );
+    opt.ok_or(EngineError::InvalidOperation(
+      "components_api:set_highres_transform_component couldn't find component",
+    ))
+  }
+
+  /// Gets the HighResTransformComponent (f64 position) from an entity.
+  #[allow(clippy::not_unsafe_ptr_arg_deref)]
+  pub fn get_highres_transform_component(
+    &self,
+    scene_id: u64,
+    entity: u64,
+    pos_x: *mut f64,
+    pos_y: *mut f64,
+    pos_z: *mut f64,
+    rot_w: *mut f32,
+    rot_x: *mut f32,
+    rot_y: *mut f32,
+    rot_z: *mut f32,
+    scale_x: *mut f32,
+    scale_y: *mut f32,
+    scale_z: *mut f32,
+  ) -> EngineResult<()> {
+    let (scene, entity_id) = expect_scene_and_entity!(
+      self.get_scene(scene_id),
+      entity,
+      "component_api:get_highres_transform_component"
+    );
+    let hrt = scene.read().scene.with_component(entity_id, |c: &HighResTransformComponent| *c)
+      .ok_or(EngineError::InvalidOperation(
+        "component_api:get_highres_transform_component couldn't find component",
+      ))?;
+    unsafe {
+      if !pos_x.is_null() { *pos_x = hrt.position.x(); }
+      if !pos_y.is_null() { *pos_y = hrt.position.y(); }
+      if !pos_z.is_null() { *pos_z = hrt.position.z(); }
+      if !rot_w.is_null() { *rot_w = hrt.rotation.scalar_part(); }
+      let v = hrt.rotation.vector_part();
+      if !rot_x.is_null() { *rot_x = v.x(); }
+      if !rot_y.is_null() { *rot_y = v.y(); }
+      if !rot_z.is_null() { *rot_z = v.z(); }
+      if !scale_x.is_null() { *scale_x = hrt.scale.x(); }
+      if !scale_y.is_null() { *scale_y = hrt.scale.y(); }
+      if !scale_z.is_null() { *scale_z = hrt.scale.z(); }
+    }
+    Ok(())
+  }
+
   /// TODO: Document this item
   pub fn set_bvh_node_visibility(
     &self,
@@ -244,6 +357,17 @@ impl SimulationContext {
       entity,
       "component_api:add_camera_component"
     );
+    // Add HighRes first (Camera depends on it).
+    // Initialize from existing TransformComponent if present, otherwise default.
+    {
+      let scene_read = scene.read();
+      let hrt = scene_read.scene.with_component(entity_id, |c: &TransformComponent| {
+        HighResTransformComponent::from_transform(c)
+      }).unwrap_or_default();
+      drop(scene_read);
+      scene.write().scene.add_component(entity_id, hrt)
+        .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;
+    }
     scene
       .write()
       .scene

@@ -873,6 +873,38 @@ pub unsafe extern "C" fn avkSimulationContext_addTransformComponent(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_addHighResTransformComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  pos_x: f64,
+  pos_y: f64,
+  pos_z: f64,
+  rot_w: f32,
+  rot_x: f32,
+  rot_y: f32,
+  rot_z: f32,
+  scale_x: f32,
+  scale_y: f32,
+  scale_z: f32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref
+    .add_highres_transform_component(
+      scene_id,
+      entity,
+      pos_x, pos_y, pos_z,
+      rot_w, rot_x, rot_y, rot_z,
+      scale_x, scale_y, scale_z,
+    )
+    .is_ok()
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_setTransformComponent(
   ctx: *mut SimulationContext,
   scene_id: u64,
@@ -951,6 +983,104 @@ pub unsafe extern "C" fn avkSimulationContext_getTransformComponent(
   {
     unsafe {
       *out_transform = FfiTransform {
+        px: pos_x,
+        py: pos_y,
+        pz: pos_z,
+        rw: rot_w,
+        rx: rot_x,
+        ry: rot_y,
+        rz: rot_z,
+        sx: scale_x,
+        sy: scale_y,
+        sz: scale_z,
+      };
+    }
+    true
+  } else {
+    false
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setHighResTransformComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  transform: *const FfiHighResTransform,
+) -> bool {
+  if ctx.is_null() || transform.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let t = unsafe { &*transform };
+  if !t.px.is_finite()
+    || !t.py.is_finite()
+    || !t.pz.is_finite()
+    || !t.rw.is_finite()
+    || !t.rx.is_finite()
+    || !t.ry.is_finite()
+    || !t.rz.is_finite()
+    || !t.sx.is_finite()
+    || !t.sy.is_finite()
+    || !t.sz.is_finite()
+  {
+    return false;
+  }
+  ctx_ref
+    .set_highres_transform_component(
+      scene_id,
+      entity,
+      t.px, t.py, t.pz,
+      t.rw, t.rx, t.ry, t.rz,
+      t.sx, t.sy, t.sz,
+    )
+    .is_ok()
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getHighResTransformComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  out_transform: *mut FfiHighResTransform,
+) -> bool {
+  if ctx.is_null() || out_transform.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+
+  let mut pos_x = 0.0_f64;
+  let mut pos_y = 0.0_f64;
+  let mut pos_z = 0.0_f64;
+  let mut rot_w = 0.0_f32;
+  let mut rot_x = 0.0_f32;
+  let mut rot_y = 0.0_f32;
+  let mut rot_z = 0.0_f32;
+  let mut scale_x = 0.0_f32;
+  let mut scale_y = 0.0_f32;
+  let mut scale_z = 0.0_f32;
+
+  if ctx_ref
+    .get_highres_transform_component(
+      scene_id,
+      entity,
+      &mut pos_x,
+      &mut pos_y,
+      &mut pos_z,
+      &mut rot_w,
+      &mut rot_x,
+      &mut rot_y,
+      &mut rot_z,
+      &mut scale_x,
+      &mut scale_y,
+      &mut scale_z,
+    )
+    .is_ok()
+  {
+    unsafe {
+      *out_transform = FfiHighResTransform {
         px: pos_x,
         py: pos_y,
         pz: pos_z,
@@ -3098,6 +3228,21 @@ pub struct FfiTransform {
   pub px: f32,
   pub py: f32,
   pub pz: f32,
+  pub rw: f32,
+  pub rx: f32,
+  pub ry: f32,
+  pub rz: f32,
+  pub sx: f32,
+  pub sy: f32,
+  pub sz: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FfiHighResTransform {
+  pub px: f64,
+  pub py: f64,
+  pub pz: f64,
   pub rw: f32,
   pub rx: f32,
   pub ry: f32,

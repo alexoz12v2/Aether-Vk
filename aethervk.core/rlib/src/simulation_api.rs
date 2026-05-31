@@ -4,7 +4,8 @@ use crate::{
   gpu::{RenderDevice, RenderDeviceHandle, WeakRenderFrontend, WeakRenderFrontendExt},
   physics,
   scene::{
-    CameraComponent, CursorComponent, GridComponent, PhysicalMeshComponent, Scene, SkyComponent,
+    CameraComponent, CursorComponent, GridComponent, HighResTransformComponent,
+    PhysicalMeshComponent, Scene, SkyComponent,
     SunComponent, TransformComponent,
   },
   simulation,

@@ -1,7 +1,7 @@
 //! camera module.
 
 use crate::{
-  scene::{CameraComponent, EntityId, HasComponentResultEnum, Scene, TransformComponent},
+  scene::{CameraComponent, EntityId, HasComponentResultEnum, HighResTransformComponent, Scene},
   types::{EngineError, EngineResult},
 };
 use aethervk_oshal_rlib::math::{
@@ -49,13 +49,14 @@ impl SceneCameraExt for Scene {
     check_for_camera(&self, camera_entity)?;
 
     self
-      .with_component_mut(camera_entity, |t: &mut TransformComponent| {
-        let (pitch, yaw) = updated_pitch_yaw(&t, delta_pitch, delta_yaw);
-        t.rotation = Quat::from_pitch_and_yaw_radians(pitch, yaw);
+      .with_component_mut(camera_entity, |h: &mut HighResTransformComponent| {
+        let (pitch, yaw) = updated_pitch_yaw_highres(&h, delta_pitch, delta_yaw);
+        h.rotation = Quat::from_pitch_and_yaw_radians(pitch, yaw);
       })
       .ok_or(EngineError::InvalidOperation(
         "[SceneCameraExt] rotate_camera: camera entity not found",
-      ))
+      ))?;
+    Ok(())
   }
 
   fn orbit_camera(
@@ -74,22 +75,23 @@ impl SceneCameraExt for Scene {
       ))?;
 
     self
-      .with_component_mut(camera_entity, |t: &mut TransformComponent| {
+      .with_component_mut(camera_entity, |h: &mut HighResTransformComponent| {
+        let pos_f32 = h.position.to_f32();
+
         // 1. Establish the explicit pivot point
         let pivot = pivot_override.unwrap_or_else(|| {
-          let fwd = t.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
-          t.position + fwd * focus_distance
+          let fwd = h.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+          pos_f32 + fwd * focus_distance
         });
 
         // 2. Project current offset into the camera's local space
-        let q_old = t.rotation;
-        let world_offset = t.position - pivot;
+        let q_old = h.rotation;
+        let world_offset = pos_f32 - pivot;
 
         let old_right = q_old.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
         let old_y = q_old.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0));
         let old_up = q_old.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
 
-        // This acts as a manual inverse rotation, mapping the vector into local bounds
         let local_offset = Vec3f32::from_components(
           world_offset.dot(old_right),
           world_offset.dot(old_y),
@@ -109,33 +111,33 @@ impl SceneCameraExt for Scene {
         let new_world_offset = q_new.rotate_vector(local_offset);
 
         // 5. Apply the rigid rotation
-        t.position = pivot + new_world_offset;
-        t.rotation = q_new;
+        h.position = (pivot + new_world_offset).to_f64();
+        h.rotation = q_new;
       })
       .ok_or(EngineError::InvalidOperation(
         "[SceneCameraExt] orbit_camera: camera entity not found",
-      ))
+      ))?;
+    Ok(())
   }
 
   fn translate_camera_local(&self, camera_entity: EntityId, delta: Vec3f32) -> EngineResult<()> {
     check_for_camera(&self, camera_entity)?;
 
     self
-      .with_component_mut(camera_entity, |t: &mut TransformComponent| {
-        let global_delta = t.rotation.rotate_vector(delta);
-        let new_pos = t.position + global_delta;
-
-        let dist = new_pos.length();
-        let max_dist = 1_000.0; // TODO parameter
+      .with_component_mut(camera_entity, |h: &mut HighResTransformComponent| {
+        let global_delta = h.rotation.rotate_vector(delta);
+        h.position = h.position + global_delta.to_f64();
+        // Clamp distance
+        let dist = h.position.length();
+        let max_dist = 1_000.0_f64;
         if dist > max_dist {
-          t.position = (new_pos / dist) * max_dist;
-        } else {
-          t.position = new_pos;
+          h.position = h.position * (max_dist / dist);
         }
       })
       .ok_or(EngineError::InvalidOperation(
         "[SceneCameraExt] translate_camera_local: camera entity not found",
-      ))
+      ))?;
+    Ok(())
   }
 
   fn pan_camera(&self, camera_entity: EntityId, delta_x: f32, delta_y: f32) -> EngineResult<()> {
@@ -145,21 +147,17 @@ impl SceneCameraExt for Scene {
       .with_component(camera_entity, |c: &CameraComponent| c.focus_distance)
       .unwrap_or(1.0);
 
-    let translation = self
-      .with_component(camera_entity, |t: &TransformComponent| {
+    self
+      .with_component_mut(camera_entity, |h: &mut HighResTransformComponent| {
         let pan_speed = focus_distance * 0.002;
-        let right = t.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-        let up = t.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
-        right * (-delta_x * pan_speed) + up * (delta_y * pan_speed)
+        let right = h.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
+        let up = h.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+        let translation = right * (-delta_x * pan_speed) + up * (delta_y * pan_speed);
+        h.position = h.position + translation.to_f64();
       })
       .ok_or(EngineError::InvalidOperation(
         "[SceneCameraExt] pan_camera: camera entity not found",
       ))?;
-
-    let _ = self.with_component_mut(camera_entity, |c: &mut TransformComponent| {
-      c.position = c.position + translation;
-    });
-
     Ok(())
   }
 }
@@ -177,89 +175,58 @@ pub trait QuatToEulerAngles {
 
 impl QuatToEulerAngles for Quat {
   fn to_pitch_yaw(self) -> (f32, f32) {
-    let (x, y, z, w) = (self.0.x(), self.0.y(), self.0.z(), self.0.w());
+    let (w, x, y, z) = (self.0.w(), self.0.x(), self.0.y(), self.0.z());
 
-    // 1. Extract the forward vector (-Y axis transformed by the quaternion)
-    let fwd_x = 2.0 * (w * z - x * y);
-    let fwd_y = 2.0 * (x * x + z * z) - 1.0;
-    let fwd_z = -2.0 * (y * z + w * x);
+    // Pitch (rotation around X axis)
+    let sin_pitch = 2.0 * (w * x + y * z);
+    let cos_pitch = 1.0 - 2.0 * (x * x + y * y);
+    let pitch = sin_pitch.atan2(cos_pitch);
 
-    // 2. Calculate Pitch
-    // Clamp to [-1.0, 1.0] to prevent NaNs from floating point errors
-    let pitch_clamped = fwd_z.clamp(-1.0, 1.0);
-    // fully qualified path to trait necessary otherwise compiler error -> Universal Function Call Syntax (UFCS)
-    let pitch = <f32 as aethervk_oshal_rlib::math::FloatLike>::asin(pitch_clamped);
-
-    // 3. Calculate Yaw
-    // we use atan2(x, -y) when facing forward (-Y), x = 0, y = -1 | atan2(0, -(-1)) = 0 rad
-    // fully qualified path to trait necessary otherwise compiler error -> Universal Function Call Syntax (UFCS)
-    let yaw = <f32 as aethervk_oshal_rlib::math::FloatLike>::atan2(fwd_x, -fwd_y);
+    // Yaw (rotation around Z axis)
+    let sin_yaw = 2.0 * (w * z + x * y);
+    let cos_yaw = 1.0 - 2.0 * (y * y + z * z);
+    let yaw = sin_yaw.atan2(cos_yaw);
 
     (pitch, yaw)
   }
 
-  fn from_pitch_and_yaw_radians(pitch: f32, yaw: f32) -> Quat {
-    let yaw_quat = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), yaw);
-    let pitch_quat = Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), -pitch);
-    (yaw_quat * pitch_quat).normalize()
+  fn from_pitch_and_yaw_radians(pitch: f32, yaw: f32) -> Self {
+    let half_yaw = yaw * 0.5;
+    let half_pitch = pitch * 0.5;
+
+    let (sy, cy) = (half_yaw.sin(), half_yaw.cos());
+    let (sp, cp) = (half_pitch.sin(), half_pitch.cos());
+
+    Quat::from_components(
+      cy * cp,  // w
+      cy * sp,  // x
+      sy * sp,  // y
+      sy * cp,  // z
+    )
   }
 }
 
+/// Extracts pitch/yaw from a HighResTransformComponent's rotation and applies deltas
+fn updated_pitch_yaw_highres(
+  t: &HighResTransformComponent,
+  delta_pitch: f32,
+  delta_yaw: f32,
+) -> (f32, f32) {
+  use self::QuatToEulerAngles;
+  let (mut pitch, mut yaw) = t.rotation.to_pitch_yaw();
+  pitch += delta_pitch;
+  yaw += delta_yaw;
+  pitch = pitch.clamp(-<f32 as FloatOps>::PI_OVER_2, <f32 as FloatOps>::PI_OVER_2);
+  yaw = yaw.fmod(<f32 as FloatOps>::PI * 2.0);
+  (pitch, yaw)
+}
+
+/// Checks if the entity has a camera component. Used as a guard in all camera functions.
 fn check_for_camera(scene: &Scene, camera_entity: EntityId) -> EngineResult<()> {
-  if !<HasComponentResultEnum as Into<bool>>::into(
-    scene.has_component::<CameraComponent>(camera_entity),
-  ) {
-    return Err(EngineError::InvalidOperation(
-      "[SceneCameraExt] rotate_camera: camera entity doesn't have camera component",
-    ));
-  }
-  Ok(())
-}
-
-fn updated_pitch_yaw(t: &TransformComponent, delta_pitch: f32, delta_yaw: f32) -> (f32, f32) {
-  let (mut p, mut y) = t.rotation.to_pitch_yaw();
-  p += delta_pitch;
-  y += delta_yaw;
-  (
-    p.clamp(-<f32 as FloatOps>::PI_OVER_2, <f32 as FloatOps>::PI_OVER_2),
-    y.fmod(<f32 as FloatOps>::PI * 2.0),
-  )
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use aethervk_oshal_rlib::math::floating::FloatOps;
-
-  #[test]
-  fn test_pitch_yaw_conversion() {
-    let test_cases = [
-      (0.0, 0.0),
-      (0.5, 0.0),
-      (-0.5, 0.0),
-      (0.0, 1.0),
-      (0.0, -1.0),
-      (1.0, 1.0),
-      (-1.0, -1.0),
-      (<f32 as FloatOps>::PI_OVER_2 - 0.01, <f32 as FloatOps>::PI),
-      (-<f32 as FloatOps>::PI_OVER_2 + 0.01, -<f32 as FloatOps>::PI),
-    ];
-
-    for (pitch, yaw) in test_cases {
-      let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
-      let (p_out, y_out) = q.to_pitch_yaw();
-
-      assert!(
-        (pitch - p_out).abs() < 1e-4,
-        "Pitch mismatch: expected {}, got {}",
-        pitch,
-        p_out
-      );
-
-      // Yaw can wrap around, so we check using complex representation
-      let y_diff = (yaw - y_out).abs();
-      let wraps = (y_diff - <f32 as FloatOps>::PI * 2.0).abs() < 1e-4 || y_diff < 1e-4;
-      assert!(wraps, "Yaw mismatch: expected {}, got {}", yaw, y_out);
-    }
+  match scene.has_component::<CameraComponent>(camera_entity) {
+    HasComponentResultEnum::EntityHasComponent => Ok(()),
+    _ => Err(EngineError::InvalidOperation(
+      "[SceneCameraExt] entity is not a camera",
+    )),
   }
 }

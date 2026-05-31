@@ -6,7 +6,8 @@ use crate::{
   math::collision::linear_bvh::LinearBound,
   scene::{
     BackgroundComponent, BillboardType, BvhDebugComponent, CameraComponent, CursorComponent,
-    EntityId, FollowingComponent, GridComponent, HiddenComponent, ImageBillboardComponent,
+    EntityId, FollowingComponent, GridComponent, HiddenComponent, HighResTransformComponent,
+    ImageBillboardComponent,
     MarkersComponent, MeasurementComponent, PhysicalMeshComponent, ReferenceFrameComponent,
     SelectedComponent, SkyComponent, SunComponent, TransformComponent,
   },
@@ -614,8 +615,11 @@ impl SceneConversionExt for crate::scene::Scene {
 
     let camera_data: CameraRenderData;
 
-    // Camera
-    let cam_transform = self.global_transform(camera_entity).unwrap_or_default();
+    // Camera — read f64 HighResTransformComponent, downcast to f32 for GPU
+    let cam_transform = self
+      .with_component(camera_entity, |h: &HighResTransformComponent| h.to_transform())
+      .or_else(|| self.global_transform(camera_entity))
+      .unwrap_or_default();
     let cam_comp = self.with_component(camera_entity, |c: &CameraComponent| *c).ok_or(
       crate::gpu_invalid_arg!("[ Scene has no camera component in the specified entity"),
     )?;
@@ -1180,6 +1184,8 @@ impl SceneConversionExt for crate::scene::Scene {
       );
 
       let cam_global = self.global_transform(camera_entity).unwrap_or_default();
+      // f64 camera global position for precision in subtraction
+      let cam_global_f64 = self.global_transform_f64(camera_entity);
       let camera_depth_layer = self.ancestor_depth_layer(camera_entity);
 
       for (_layer_idx, layer_data) in layer_map.iter_mut() {
@@ -1190,10 +1196,14 @@ impl SceneConversionExt for crate::scene::Scene {
           // was correct. No recomputation needed.
           // But still set the camera local pos for the grid.
           if layer_idx == 0 {
-            layer_data.camera_frame_local_pos = cam_global.position;
+            if let Some(ref g64) = cam_global_f64 {
+              layer_data.camera_frame_local_pos = g64.position.to_f32();
+            } else {
+              layer_data.camera_frame_local_pos = cam_global.position;
+            }
           } else if let Some(&frame_entity) = layer_frame_entities.get(&layer_idx) {
-            if let Some(cam_local) = self.get_relative_transform(camera_entity, frame_entity) {
-              layer_data.camera_frame_local_pos = cam_local.position;
+            if let Some(cam_local) = self.get_relative_transform_f64(camera_entity, frame_entity) {
+              layer_data.camera_frame_local_pos = cam_local.position.to_f32();
             }
           }
           continue;
@@ -1221,10 +1231,14 @@ impl SceneConversionExt for crate::scene::Scene {
               };
             }
           }
-          layer_data.camera_frame_local_pos = cam_global.position;
+          if let Some(ref g64) = cam_global_f64 {
+            layer_data.camera_frame_local_pos = g64.position.to_f32();
+          } else {
+            layer_data.camera_frame_local_pos = cam_global.position;
+          }
         } else if let Some(&frame_entity) = layer_frame_entities.get(&layer_idx) {
-          // Micro layer: recompute using frame-relative coordinates.
-          // Both mesh and camera positions are expressed relative to the frame entity.
+          // Micro layer: use f64 for camera-relative position to avoid cancellation
+          let cam_in_frame_f64 = self.get_relative_transform_f64(camera_entity, frame_entity);
           let cam_in_frame = self.get_relative_transform(camera_entity, frame_entity);
           if let Some(cam_local) = cam_in_frame {
             for mesh in layer_data.meshes.iter_mut() {
@@ -1248,7 +1262,12 @@ impl SceneConversionExt for crate::scene::Scene {
                 };
               }
             }
-            layer_data.camera_frame_local_pos = cam_local.position;
+            // Use f64 camera position for grid precision
+            if let Some(ref cam_f64) = cam_in_frame_f64 {
+              layer_data.camera_frame_local_pos = cam_f64.position.to_f32();
+            } else {
+              layer_data.camera_frame_local_pos = cam_local.position;
+            }
           }
         }
       }

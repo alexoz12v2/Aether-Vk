@@ -239,10 +239,43 @@ public static class NativeInterop
     float scaleZ
   );
 
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_addHighResTransformComponent(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity,
+    double posX,
+    double posY,
+    double posZ,
+    float rotW,
+    float rotX,
+    float rotY,
+    float rotZ,
+    float scaleX,
+    float scaleY,
+    float scaleZ
+  );
+
   [StructLayout(LayoutKind.Sequential)]
   public struct FfiTransform
   {
     public float Px,
+      Py,
+      Pz;
+    public float Rw,
+      Rx,
+      Ry,
+      Rz;
+    public float Sx,
+      Sy,
+      Sz;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct FfiHighResTransform
+  {
+    public double Px,
       Py,
       Pz;
     public float Rw,
@@ -303,6 +336,24 @@ public static class NativeInterop
     ulong sceneId,
     ulong entity,
     out FfiTransform transform
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_setHighResTransformComponent(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity,
+    in FfiHighResTransform transform
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_getHighResTransformComponent(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entity,
+    out FfiHighResTransform transform
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
