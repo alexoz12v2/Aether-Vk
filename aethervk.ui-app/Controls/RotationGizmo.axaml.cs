@@ -252,14 +252,15 @@ public partial class RotationGizmo : UserControl
     Roll -= (float)(dx * 1.2);
     Pitch -= (float)(dy * 1.2);
 
-    if (Roll > 180)
-      Roll -= 360;
-    if (Roll < -180)
-      Roll += 360;
-    if (Pitch > 180)
-      Pitch -= 360;
-    if (Pitch < -180)
-      Pitch += 360;
+    if (Roll >= 360f)
+      Roll %= 360f;
+    else if (Roll < 0f)
+      Roll = (Roll % 360f + 360f) % 360f;
+
+    if (Pitch >= 360f)
+      Pitch %= 360f;
+    else if (Pitch < 0f)
+      Pitch = (Pitch % 360f + 360f) % 360f;
 
     e.Handled = true;
   }

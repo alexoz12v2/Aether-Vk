@@ -446,16 +446,20 @@ namespace AetherVk.Logic.Tests
           IntPtr hrtPtr = Marshal.AllocHGlobal(hrtSize);
           try
           {
-            nativeHasTransform = AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getComponent(
-              ctx,
-              sceneId,
-              camId,
-              3,
-              hrtPtr
-            );
+            nativeHasTransform =
+              AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getComponent(
+                ctx,
+                sceneId,
+                camId,
+                3,
+                hrtPtr
+              );
             if (nativeHasTransform)
             {
-              ffiTransform = Marshal.PtrToStructure<AetherVk.Logic.Services.NativeInterop.FfiHighResTransform>(hrtPtr);
+              ffiTransform =
+                Marshal.PtrToStructure<AetherVk.Logic.Services.NativeInterop.FfiHighResTransform>(
+                  hrtPtr
+                );
             }
           }
           finally

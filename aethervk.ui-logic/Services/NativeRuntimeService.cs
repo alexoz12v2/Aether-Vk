@@ -830,7 +830,13 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       try
       {
         System.Runtime.InteropServices.Marshal.StructureToPtr(transform, ptr, false);
-        NativeInterop.avkSimulationContext_setComponent(_simulationContext, sceneId, entityId, 1, ptr);
+        NativeInterop.avkSimulationContext_setComponent(
+          _simulationContext,
+          sceneId,
+          entityId,
+          1,
+          ptr
+        );
       }
       finally
       {
@@ -876,7 +882,13 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       try
       {
         System.Runtime.InteropServices.Marshal.StructureToPtr(transform, ptr, false);
-        NativeInterop.avkSimulationContext_setComponent(_simulationContext, sceneId, entityId, 3, ptr);
+        NativeInterop.avkSimulationContext_setComponent(
+          _simulationContext,
+          sceneId,
+          entityId,
+          3,
+          ptr
+        );
       }
       finally
       {
@@ -900,9 +912,20 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
       try
       {
-        if (NativeInterop.avkSimulationContext_getComponent(_simulationContext, sceneId, entityId, 3, ptr))
+        if (
+          NativeInterop.avkSimulationContext_getComponent(
+            _simulationContext,
+            sceneId,
+            entityId,
+            3,
+            ptr
+          )
+        )
         {
-          transform = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiHighResTransform>(ptr);
+          transform =
+            System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiHighResTransform>(
+              ptr
+            );
           return true;
         }
       }
@@ -2161,22 +2184,40 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
           RotationDeg = rotationDeg,
           Opacity = opacity,
           ZIndex = zIndex,
-          ViewportId = 0 // Or keep it what it is, we don't have viewport ID here, but this method isn't used anywhere else except maybe internally. We should try to get it first to keep ViewportId. Wait!
+          ViewportId = 0, // Or keep it what it is, we don't have viewport ID here, but this method isn't used anywhere else except maybe internally. We should try to get it first to keep ViewportId. Wait!
         };
         // Let's do a read-modify-write to keep ViewportId
         unsafe
         {
-          int size = System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiScreenSpaceBillboard>();
+          int size =
+            System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiScreenSpaceBillboard>();
           IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
           try
           {
-            if (NativeInterop.avkSimulationContext_getComponent(_simulationContext, sceneId, entityId, 5, ptr))
+            if (
+              NativeInterop.avkSimulationContext_getComponent(
+                _simulationContext,
+                sceneId,
+                entityId,
+                5,
+                ptr
+              )
+            )
             {
-              var existing = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiScreenSpaceBillboard>(ptr);
+              var existing =
+                System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiScreenSpaceBillboard>(
+                  ptr
+                );
               data.ViewportId = existing.ViewportId;
             }
             System.Runtime.InteropServices.Marshal.StructureToPtr(data, ptr, false);
-            NativeInterop.avkSimulationContext_setComponent(_simulationContext, sceneId, entityId, 5, ptr);
+            NativeInterop.avkSimulationContext_setComponent(
+              _simulationContext,
+              sceneId,
+              entityId,
+              5,
+              ptr
+            );
           }
           finally
           {
@@ -2200,13 +2241,25 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       {
         unsafe
         {
-          int size = System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiScreenSpaceBillboard>();
+          int size =
+            System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiScreenSpaceBillboard>();
           IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
           try
           {
-            if (NativeInterop.avkSimulationContext_getComponent(_simulationContext, sceneId, entityId, 5, ptr))
+            if (
+              NativeInterop.avkSimulationContext_getComponent(
+                _simulationContext,
+                sceneId,
+                entityId,
+                5,
+                ptr
+              )
+            )
             {
-              data = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiScreenSpaceBillboard>(ptr);
+              data =
+                System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiScreenSpaceBillboard>(
+                  ptr
+                );
               return true;
             }
           }
@@ -2351,7 +2404,17 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
-  public void SetCameraTransform(ulong sceneId, ulong cameraEntityId, double px, double py, double pz, float rx, float ry, float rz, float rw)
+  public void SetCameraTransform(
+    ulong sceneId,
+    ulong cameraEntityId,
+    double px,
+    double py,
+    double pz,
+    float rx,
+    float ry,
+    float rz,
+    float rw
+  )
   {
     if (_simulationContext != IntPtr.Zero)
     {
@@ -2359,8 +2422,14 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         _simulationContext,
         sceneId,
         cameraEntityId,
-        px, py, pz,
-        rx, ry, rz, rw);
+        px,
+        py,
+        pz,
+        rx,
+        ry,
+        rz,
+        rw
+      );
     }
   }
 

@@ -136,8 +136,10 @@ public partial class SpawnCometViewModel : ObservableObject
 
   partial void OnPitchChanged(float value)
   {
-    if (value > 180f) Pitch = value - 360f;
-    else if (value < -180f) Pitch = value + 360f;
+    if (value >= 360f)
+      Pitch = value % 360f;
+    else if (value < 0f)
+      Pitch = (value % 360f + 360f) % 360f;
   }
 
   [ObservableProperty]
@@ -145,8 +147,10 @@ public partial class SpawnCometViewModel : ObservableObject
 
   partial void OnYawChanged(float value)
   {
-    if (value > 180f) Yaw = value - 360f;
-    else if (value < -180f) Yaw = value + 360f;
+    if (value >= 360f)
+      Yaw = value % 360f;
+    else if (value < 0f)
+      Yaw = (value % 360f + 360f) % 360f;
   }
 
   [ObservableProperty]
@@ -154,8 +158,10 @@ public partial class SpawnCometViewModel : ObservableObject
 
   partial void OnRollChanged(float value)
   {
-    if (value > 180f) Roll = value - 360f;
-    else if (value < -180f) Roll = value + 360f;
+    if (value >= 360f)
+      Roll = value % 360f;
+    else if (value < 0f)
+      Roll = (value % 360f + 360f) % 360f;
   }
 
   [ObservableProperty]

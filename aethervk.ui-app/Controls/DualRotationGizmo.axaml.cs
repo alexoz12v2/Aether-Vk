@@ -2,20 +2,41 @@ using System;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
-using Avalonia.Media;
 using Avalonia.Markup.Xaml;
+using Avalonia.Media;
 
 namespace AetherVk.Controls;
 
 public partial class DualRotationGizmo : UserControl
 {
-  public static readonly StyledProperty<float> PitchProperty = AvaloniaProperty.Register<DualRotationGizmo, float>(nameof(Pitch));
-  public static readonly StyledProperty<float> YawProperty = AvaloniaProperty.Register<DualRotationGizmo, float>(nameof(Yaw));
-  public static readonly StyledProperty<float> RollProperty = AvaloniaProperty.Register<DualRotationGizmo, float>(nameof(Roll));
+  public static readonly StyledProperty<float> PitchProperty = AvaloniaProperty.Register<
+    DualRotationGizmo,
+    float
+  >(nameof(Pitch));
+  public static readonly StyledProperty<float> YawProperty = AvaloniaProperty.Register<
+    DualRotationGizmo,
+    float
+  >(nameof(Yaw));
+  public static readonly StyledProperty<float> RollProperty = AvaloniaProperty.Register<
+    DualRotationGizmo,
+    float
+  >(nameof(Roll));
 
-  public float Pitch { get => GetValue(PitchProperty); set => SetValue(PitchProperty, value); }
-  public float Yaw { get => GetValue(YawProperty); set => SetValue(YawProperty, value); }
-  public float Roll { get => GetValue(RollProperty); set => SetValue(RollProperty, value); }
+  public float Pitch
+  {
+    get => GetValue(PitchProperty);
+    set => SetValue(PitchProperty, value);
+  }
+  public float Yaw
+  {
+    get => GetValue(YawProperty);
+    set => SetValue(YawProperty, value);
+  }
+  public float Roll
+  {
+    get => GetValue(RollProperty);
+    set => SetValue(RollProperty, value);
+  }
 
   private Canvas? _canvas;
 
@@ -28,14 +49,21 @@ public partial class DualRotationGizmo : UserControl
   {
     base.OnAttachedToVisualTree(e);
     _canvas = this.FindControl<Canvas>("GizmoCanvas");
-    ToolTip.SetTip(this, "Fixed axes (UVW in Cyan, Yellow, Magenta) represent the J2000 Mean Earth equator axes.\nThe colored axes (X, -Y, Z) represent the local frame.");
+    ToolTip.SetTip(
+      this,
+      "Fixed axes (UVW in Cyan, Yellow, Magenta) represent the J2000 Mean Earth equator axes.\nThe colored axes (X, -Y, Z) represent the local frame."
+    );
     RebuildLines();
   }
 
   protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
   {
     base.OnPropertyChanged(change);
-    if (change.Property == PitchProperty || change.Property == YawProperty || change.Property == RollProperty)
+    if (
+      change.Property == PitchProperty
+      || change.Property == YawProperty
+      || change.Property == RollProperty
+    )
     {
       RebuildLines();
     }
@@ -46,17 +74,32 @@ public partial class DualRotationGizmo : UserControl
     double p = pitchDeg * Math.PI / 180.0;
     double y = yawDeg * Math.PI / 180.0;
     double r = rollDeg * Math.PI / 180.0;
-    double cp = Math.Cos(p), sp = Math.Sin(p);
-    double cy = Math.Cos(y), sy = Math.Sin(y);
-    double cr = Math.Cos(r), sr = Math.Sin(r);
+    double cp = Math.Cos(p),
+      sp = Math.Sin(p);
+    double cy = Math.Cos(y),
+      sy = Math.Sin(y);
+    double cr = Math.Cos(r),
+      sr = Math.Sin(r);
     var m = new double[3, 3];
-    m[0, 0] = cy * cr; m[0, 1] = cy * sr; m[0, 2] = -sy;
-    m[1, 0] = sp * sy * cr - cp * sr; m[1, 1] = sp * sy * sr + cp * cr; m[1, 2] = sp * cy;
-    m[2, 0] = cp * sy * cr + sp * sr; m[2, 1] = cp * sy * sr - sp * cr; m[2, 2] = cp * cy;
+    m[0, 0] = cy * cr;
+    m[0, 1] = cy * sr;
+    m[0, 2] = -sy;
+    m[1, 0] = sp * sy * cr - cp * sr;
+    m[1, 1] = sp * sy * sr + cp * cr;
+    m[1, 2] = sp * cy;
+    m[2, 0] = cp * sy * cr + sp * sr;
+    m[2, 1] = cp * sy * sr - sp * cr;
+    m[2, 2] = cp * cy;
     return m;
   }
 
-  private static (double px, double py) Project(double[,] rot, double x, double y, double z, double r)
+  private static (double px, double py) Project(
+    double[,] rot,
+    double x,
+    double y,
+    double z,
+    double r
+  )
   {
     double wx = rot[0, 0] * x + rot[0, 1] * y + rot[0, 2] * z;
     double wy = rot[1, 0] * x + rot[1, 1] * y + rot[1, 2] * z;
@@ -68,7 +111,12 @@ public partial class DualRotationGizmo : UserControl
     return (px, py);
   }
 
-  private static (double wx, double wy, double wz) GetWorldVec(double[,] rot, double x, double y, double z)
+  private static (double wx, double wy, double wz) GetWorldVec(
+    double[,] rot,
+    double x,
+    double y,
+    double z
+  )
   {
     double wx = rot[0, 0] * x + rot[0, 1] * y + rot[0, 2] * z;
     double wy = rot[1, 0] * x + rot[1, 1] * y + rot[1, 2] * z;
@@ -78,14 +126,21 @@ public partial class DualRotationGizmo : UserControl
 
   private void RebuildLines()
   {
-    if (_canvas == null) return;
+    if (_canvas == null)
+      return;
     _canvas.Children.Clear();
 
-    const double cx = 50, cy = 50;
+    const double cx = 50,
+      cy = 50;
     const double arm = 38;
 
     var rot = BuildRotation(Pitch, Yaw, Roll);
-    var ident = new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+    var ident = new double[,]
+    {
+      { 1, 0, 0 },
+      { 0, 1, 0 },
+      { 0, 0, 1 },
+    };
 
     // Draw fixed UVW axes (Cyan, Yellow, Magenta)
     DrawAxis(ident, cx, cy, arm, 1, 0, 0, Colors.Cyan, "U");
@@ -102,13 +157,28 @@ public partial class DualRotationGizmo : UserControl
     DrawArc(ident, rot, cx, cy, arm, 0, -1, 0, Colors.White); // Y-V
     DrawArc(ident, rot, cx, cy, arm, 0, 0, 1, Colors.White); // Z-W
 
-    var dot = new Ellipse { Width = 5, Height = 5, Fill = new SolidColorBrush(Colors.White) };
+    var dot = new Ellipse
+    {
+      Width = 5,
+      Height = 5,
+      Fill = new SolidColorBrush(Colors.White),
+    };
     Canvas.SetLeft(dot, cx - 2.5);
     Canvas.SetTop(dot, cy - 2.5);
     _canvas.Children.Add(dot);
   }
 
-  private void DrawArc(double[,] ident, double[,] rot, double cx, double cy, double arm, double lx, double ly, double lz, Color color)
+  private void DrawArc(
+    double[,] ident,
+    double[,] rot,
+    double cx,
+    double cy,
+    double arm,
+    double lx,
+    double ly,
+    double lz,
+    Color color
+  )
   {
     var (w1x, w1y, w1z) = GetWorldVec(ident, lx, ly, lz);
     var (w2x, w2y, w2z) = GetWorldVec(rot, lx, ly, lz);
@@ -117,13 +187,14 @@ public partial class DualRotationGizmo : UserControl
     dot = Math.Max(-1.0, Math.Min(1.0, dot));
     double angleDeg = Math.Acos(dot) * 180.0 / Math.PI;
 
-    if (angleDeg < 2.0) return; // Too small
+    if (angleDeg < 2.0)
+      return; // Too small
 
     var line = new Polyline
     {
       Stroke = new SolidColorBrush(color) { Opacity = 0.5 },
       StrokeThickness = 1,
-      StrokeDashArray = new Avalonia.Collections.AvaloniaList<double>(2, 2)
+      StrokeDashArray = new Avalonia.Collections.AvaloniaList<double>(2, 2),
     };
 
     int segments = 6;
@@ -135,7 +206,9 @@ public partial class DualRotationGizmo : UserControl
       double iy = w1y * (1 - t) + w2y * t;
       double iz = w1z * (1 - t) + w2z * t;
       double len = Math.Sqrt(ix * ix + iy * iy + iz * iz);
-      ix /= len; iy /= len; iz /= len;
+      ix /= len;
+      iy /= len;
+      iz /= len;
 
       var (px, py) = Project(ident, ix, iy, iz, arm * 0.8); // Arc slightly inward
       line.Points.Add(new Point(cx + px, cy + py));
@@ -147,21 +220,33 @@ public partial class DualRotationGizmo : UserControl
     double my = w1y * 0.5 + w2y * 0.5;
     double mz = w1z * 0.5 + w2z * 0.5;
     double mlen = Math.Sqrt(mx * mx + my * my + mz * mz);
-    mx /= mlen; my /= mlen; mz /= mlen;
+    mx /= mlen;
+    my /= mlen;
+    mz /= mlen;
 
     var (mpx, mpy) = Project(ident, mx, my, mz, arm * 0.9);
     var tb = new TextBlock
     {
       Text = $"{angleDeg:F0}°",
       Foreground = new SolidColorBrush(color) { Opacity = 0.8 },
-      FontSize = 9
+      FontSize = 9,
     };
     Canvas.SetLeft(tb, cx + mpx - 10);
     Canvas.SetTop(tb, cy + mpy - 6);
     _canvas.Children.Add(tb);
   }
 
-  private void DrawAxis(double[,] rot, double cx, double cy, double arm, double lx, double ly, double lz, Color color, string label)
+  private void DrawAxis(
+    double[,] rot,
+    double cx,
+    double cy,
+    double arm,
+    double lx,
+    double ly,
+    double lz,
+    Color color,
+    string label
+  )
   {
     var (ex, ey) = Project(rot, lx, ly, lz, arm);
     var (wx, wy, wz) = GetWorldVec(rot, lx, ly, lz);
@@ -173,11 +258,16 @@ public partial class DualRotationGizmo : UserControl
       StartPoint = new Point(cx, cy),
       EndPoint = new Point(cx + ex, cy + ey),
       Stroke = brush,
-      StrokeThickness = 2.5
+      StrokeThickness = 2.5,
     };
     _canvas.Children.Add(line);
 
-    var tip = new Ellipse { Width = 6, Height = 6, Fill = brush };
+    var tip = new Ellipse
+    {
+      Width = 6,
+      Height = 6,
+      Fill = brush,
+    };
     Canvas.SetLeft(tip, cx + ex - 3);
     Canvas.SetTop(tip, cy + ey - 3);
     _canvas.Children.Add(tip);
@@ -187,11 +277,10 @@ public partial class DualRotationGizmo : UserControl
       Text = label,
       Foreground = brush,
       FontSize = 10,
-      FontWeight = Avalonia.Media.FontWeight.Bold
+      FontWeight = Avalonia.Media.FontWeight.Bold,
     };
     Canvas.SetLeft(tb, cx + ex + (ex >= 0 ? 3 : -13));
     Canvas.SetTop(tb, cy + ey - 6);
     _canvas.Children.Add(tb);
   }
 }
-

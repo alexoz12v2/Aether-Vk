@@ -29,6 +29,39 @@ public partial class UnboundedSlider : UserControl
     set => SetValue(StepProperty, value);
   }
 
+  public static readonly StyledProperty<bool> IsWrappedProperty = AvaloniaProperty.Register<
+    UnboundedSlider,
+    bool
+  >(nameof(IsWrapped), false);
+
+  public bool IsWrapped
+  {
+    get => GetValue(IsWrappedProperty);
+    set => SetValue(IsWrappedProperty, value);
+  }
+
+  public static readonly StyledProperty<double> WrapMinProperty = AvaloniaProperty.Register<
+    UnboundedSlider,
+    double
+  >(nameof(WrapMin), 0.0);
+
+  public double WrapMin
+  {
+    get => GetValue(WrapMinProperty);
+    set => SetValue(WrapMinProperty, value);
+  }
+
+  public static readonly StyledProperty<double> WrapMaxProperty = AvaloniaProperty.Register<
+    UnboundedSlider,
+    double
+  >(nameof(WrapMax), 360.0);
+
+  public double WrapMax
+  {
+    get => GetValue(WrapMaxProperty);
+    set => SetValue(WrapMaxProperty, value);
+  }
+
   private Point _lastPos;
   private bool _isDragging;
   private bool _hasMoved;
@@ -62,7 +95,18 @@ public partial class UnboundedSlider : UserControl
       if (_hasMoved)
       {
         var mult = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? 10.0 : 1.0;
-        Value += delta * Step * mult * 0.1;
+        double newValue = Value + delta * Step * mult * 0.1;
+
+        if (IsWrapped)
+        {
+          double range = WrapMax - WrapMin;
+          while (newValue > WrapMax)
+            newValue -= range;
+          while (newValue < WrapMin)
+            newValue += range;
+        }
+
+        Value = newValue;
         _lastPos = pos;
       }
       e.Handled = true;
@@ -93,6 +137,14 @@ public partial class UnboundedSlider : UserControl
     InputBox.IsHitTestVisible = false;
     if (double.TryParse(InputBox.Text, out double parsed))
     {
+      if (IsWrapped)
+      {
+        double range = WrapMax - WrapMin;
+        while (parsed > WrapMax)
+          parsed -= range;
+        while (parsed < WrapMin)
+          parsed += range;
+      }
       Value = parsed;
     }
   }
@@ -103,6 +155,14 @@ public partial class UnboundedSlider : UserControl
     {
       if (double.TryParse(InputBox.Text, out double parsed))
       {
+        if (IsWrapped)
+        {
+          double range = WrapMax - WrapMin;
+          while (parsed > WrapMax)
+            parsed -= range;
+          while (parsed < WrapMin)
+            parsed += range;
+        }
         Value = parsed;
       }
       TopLevel.GetTopLevel(this)?.FocusManager?.ClearFocus();
