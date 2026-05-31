@@ -90,6 +90,9 @@ pub struct DepthLayerData {
     crate::scene::trajectory::TrajectoryComponent,
     Mat4x4f32,
   )>,
+  /// Camera position relative to this layer's frame origin, in frame-local units.
+  /// For macro layer: camera global pos in AU. For micro: cam pos relative to frame in km.
+  pub camera_frame_local_pos: Vec3f32,
 }
 
 /// Data extracted from ECS Scene struct. Middleman between [`crate::scene::Scene`]
@@ -108,6 +111,7 @@ pub struct RenderSceneExtraction {
   pub camera_data: gpu::frame::CameraRenderData,
   pub window_extent: [u32; 2],
   pub cursor_transform: Option<(TransformComponent, u32, f32)>,
+  pub layer_frame_scales: hashbrown::HashMap<u32, f32>,
 }
 
 impl RenderSceneExtraction {
@@ -128,6 +132,7 @@ impl RenderSceneExtraction {
       depth_layers: Vec::with_capacity(self.depth_layers.len()),
       text_calls: Vec::with_capacity(self.extracted_texts.len()),
       camera_data: self.camera_data,
+      cursor_call: None,
       ui_call: None,
       text2_call: None,
     };
@@ -388,6 +393,8 @@ impl RenderSceneExtraction {
 
       render_scene.depth_layers.push(gpu::frame::RenderLayer {
         layer_index: ext_layer.layer_index,
+        frame_scale: self.layer_frame_scales.get(&ext_layer.layer_index).copied().unwrap_or(1.0),
+        camera_frame_local_pos: ext_layer.camera_frame_local_pos,
         near: ext_layer.near,
         far: ext_layer.far,
         draw_calls,
@@ -410,21 +417,18 @@ impl RenderSceneExtraction {
       });
     }
 
-    // Cursor
-    if let Some((t, layer_idx, scale)) = self.cursor_transform {
-      if let Some(layer) = render_scene.depth_layers.iter_mut().find(|l| l.layer_index == layer_idx)
-      {
-        let res = match device.get_cursor_resources(presentation_engine_handle) {
-          Ok(r) => r,
-          Err(_) => device.create_cursor_resources(cmd_buffer, presentation_engine_handle)?,
-        };
-        layer.cursor_call = Some(gpu::frame::CursorDrawCall::from_result_and_matrix(
-          res,
-          4,
-          t.to_mat4(),
-          t.scale.x(),
-        ));
-      }
+    // Cursor — drawn in composite subpass (always on top of all layers)
+    if let Some((t, _layer_idx, _scale)) = self.cursor_transform {
+      let res = match device.get_cursor_resources(presentation_engine_handle) {
+        Ok(r) => r,
+        Err(_) => device.create_cursor_resources(cmd_buffer, presentation_engine_handle)?,
+      };
+      render_scene.cursor_call = Some(gpu::frame::CursorDrawCall::from_result_and_matrix(
+        res,
+        4,
+        t.to_mat4(),
+        t.scale.x(),
+      ));
     }
 
     // Sun
@@ -470,14 +474,25 @@ impl RenderSceneExtraction {
       }
     }
 
-    // Grid
+    // Grid — create for macro layer, then clone into micro layers
     if let Some((density, grid_size, grid_color, layer_idx, _frame_scale)) = self.extracted_grid {
+      let pipeline = device.get_grid_pipeline_kay(presentation_engine_handle)?;
+      // Macro layer
       if let Some(layer) = render_scene.depth_layers.iter_mut().find(|l| l.layer_index == layer_idx)
       {
-        let pipeline = device.get_grid_pipeline_kay(presentation_engine_handle)?;
         layer.grid_call = Some(gpu::frame::GridDrawCall::new(
           pipeline, density, grid_size, grid_color,
         ));
+      }
+      // Clone grid into any micro layers that don't already have one.
+      // The grid shader's LOD system (log₁₀-based) adapts automatically to the
+      // micro layer's km-scale distances.
+      for layer in render_scene.depth_layers.iter_mut() {
+        if layer.layer_index > 0 && layer.grid_call.is_none() {
+          layer.grid_call = Some(gpu::frame::GridDrawCall::new(
+            pipeline, density, grid_size, grid_color,
+          ));
+        }
       }
     }
 
@@ -1074,7 +1089,9 @@ impl SceneConversionExt for crate::scene::Scene {
     let macro_near = cam_comp.near_plane(); // in AU (root space, scale=1.0)
     let macro_far = cam_comp.far_plane();   // in AU
     let mut layer_bounds: hashbrown::HashMap<u32, (f32, f32)> = hashbrown::HashMap::new();
+    let mut layer_frame_scales: hashbrown::HashMap<u32, f32> = hashbrown::HashMap::new();
     layer_bounds.insert(0, (macro_near, macro_far));
+    layer_frame_scales.insert(0, 1.0);
 
     self.query1_without::<ReferenceFrameComponent, HiddenComponent, _>(
       |id, frame: &ReferenceFrameComponent| {
@@ -1101,6 +1118,7 @@ impl SceneConversionExt for crate::scene::Scene {
                 *f = f.max(tight_far);
               })
               .or_insert((tight_near, tight_far));
+            layer_frame_scales.entry(frame.depth_layer).or_insert(frame.scale);
           }
         }
       },
@@ -1125,6 +1143,7 @@ impl SceneConversionExt for crate::scene::Scene {
             gizmos: Vec::new(),
             sphere_gizmos: Vec::new(),
             trajectories: Vec::new(),
+            camera_frame_local_pos: Vec3f32::from_components(0.0, 0.0, 0.0),
           }
         })
       };
@@ -1169,6 +1188,14 @@ impl SceneConversionExt for crate::scene::Scene {
         if layer_idx == camera_depth_layer {
           // Camera is in this layer's frame — the original get_relative_transform
           // was correct. No recomputation needed.
+          // But still set the camera local pos for the grid.
+          if layer_idx == 0 {
+            layer_data.camera_frame_local_pos = cam_global.position;
+          } else if let Some(&frame_entity) = layer_frame_entities.get(&layer_idx) {
+            if let Some(cam_local) = self.get_relative_transform(camera_entity, frame_entity) {
+              layer_data.camera_frame_local_pos = cam_local.position;
+            }
+          }
           continue;
         }
 
@@ -1194,6 +1221,7 @@ impl SceneConversionExt for crate::scene::Scene {
               };
             }
           }
+          layer_data.camera_frame_local_pos = cam_global.position;
         } else if let Some(&frame_entity) = layer_frame_entities.get(&layer_idx) {
           // Micro layer: recompute using frame-relative coordinates.
           // Both mesh and camera positions are expressed relative to the frame entity.
@@ -1220,6 +1248,7 @@ impl SceneConversionExt for crate::scene::Scene {
                 };
               }
             }
+            layer_data.camera_frame_local_pos = cam_local.position;
           }
         }
       }
@@ -1364,6 +1393,7 @@ impl SceneConversionExt for crate::scene::Scene {
       camera_data,
       window_extent,
       cursor_transform,
+      layer_frame_scales,
     })
   }
 }
