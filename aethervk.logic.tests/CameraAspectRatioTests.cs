@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Runtime.InteropServices;
 using AetherVk.Logic.Services;
 using Xunit;
 
@@ -54,6 +55,48 @@ namespace AetherVk.Logic.Tests
     }
 
     /// <summary>
+    /// Helper: get a camera component from native via the generic getComponent API.
+    /// Returns true if the component was found; sets <paramref name="cam"/> accordingly.
+    /// </summary>
+    private bool GetCameraComponent(IntPtr ctx, ulong sceneId, ulong entityId, out NativeInterop.FfiCamera cam)
+    {
+      int size = Marshal.SizeOf<NativeInterop.FfiCamera>();
+      IntPtr ptr = Marshal.AllocHGlobal(size);
+      try
+      {
+        if (NativeInterop.avkSimulationContext_getComponent(ctx, sceneId, entityId, 2, ptr))
+        {
+          cam = Marshal.PtrToStructure<NativeInterop.FfiCamera>(ptr);
+          return true;
+        }
+        cam = default;
+        return false;
+      }
+      finally
+      {
+        Marshal.FreeHGlobal(ptr);
+      }
+    }
+
+    /// <summary>
+    /// Helper: set a camera component via the generic setComponent API.
+    /// </summary>
+    private void SetCameraComponent(IntPtr ctx, ulong sceneId, ulong entityId, in NativeInterop.FfiCamera data)
+    {
+      int size = Marshal.SizeOf<NativeInterop.FfiCamera>();
+      IntPtr ptr = Marshal.AllocHGlobal(size);
+      try
+      {
+        Marshal.StructureToPtr(data, ptr, false);
+        NativeInterop.avkSimulationContext_setComponent(ctx, sceneId, entityId, 2, ptr);
+      }
+      finally
+      {
+        Marshal.FreeHGlobal(ptr);
+      }
+    }
+
+    /// <summary>
     /// When two presentation engines exist and one is resized, only its camera's
     /// aspect ratio should change — the other camera must remain untouched.
     /// </summary>
@@ -75,12 +118,8 @@ namespace AetherVk.Logic.Tests
         var ctx = GetNativeContext();
 
         // Read initial aspects
-        Assert.True(
-          NativeInterop.avkSimulationContext_getCameraComponent(ctx, sceneId, camA, out var ffiA)
-        );
-        Assert.True(
-          NativeInterop.avkSimulationContext_getCameraComponent(ctx, sceneId, camB, out var ffiB)
-        );
+        Assert.True(GetCameraComponent(ctx, sceneId, camA, out var ffiA));
+        Assert.True(GetCameraComponent(ctx, sceneId, camB, out var ffiB));
 
         float aspectA_initial = ffiA.Aspect;
         float aspectB_initial = ffiB.Aspect;
@@ -92,12 +131,8 @@ namespace AetherVk.Logic.Tests
         _service.ResizePresentationEngine(sceneId, peA, 1024, 768);
 
         // Re-read both cameras
-        Assert.True(
-          NativeInterop.avkSimulationContext_getCameraComponent(ctx, sceneId, camA, out var ffiA2)
-        );
-        Assert.True(
-          NativeInterop.avkSimulationContext_getCameraComponent(ctx, sceneId, camB, out var ffiB2)
-        );
+        Assert.True(GetCameraComponent(ctx, sceneId, camA, out var ffiA2));
+        Assert.True(GetCameraComponent(ctx, sceneId, camB, out var ffiB2));
 
         // Camera A should have updated aspect (1024/768 ≈ 1.333)
         Assert.Equal(1024f / 768f, ffiA2.Aspect, 2);
@@ -125,14 +160,7 @@ namespace AetherVk.Logic.Tests
         var ctx = GetNativeContext();
 
         // Read initial perspective state
-        Assert.True(
-          NativeInterop.avkSimulationContext_getCameraComponent(
-            ctx,
-            sceneId,
-            camId,
-            out var initial
-          )
-        );
+        Assert.True(GetCameraComponent(ctx, sceneId, camId, out var initial));
         Assert.False(initial.IsOrthographic);
         float originalAspect = initial.Aspect;
         Assert.True(
@@ -154,17 +182,10 @@ namespace AetherVk.Logic.Tests
           OrthoTop = 5.625f,
           FocusDistance = 1.0f,
         };
-        NativeInterop.avkSimulationContext_setCameraComponent(ctx, sceneId, camId, in orthoData);
+        SetCameraComponent(ctx, sceneId, camId, in orthoData);
 
         // Read back — ortho DTO should now have computed aspect from bounds
-        Assert.True(
-          NativeInterop.avkSimulationContext_getCameraComponent(
-            ctx,
-            sceneId,
-            camId,
-            out var orthoRead
-          )
-        );
+        Assert.True(GetCameraComponent(ctx, sceneId, camId, out var orthoRead));
         Assert.True(orthoRead.IsOrthographic);
         // With our fix, aspect should be (right-left)/(top-bottom) = 20/11.25 ≈ 1.778
         float orthoAspect = orthoRead.Aspect;
@@ -180,17 +201,10 @@ namespace AetherVk.Logic.Tests
           Far = 1000f,
           FocusDistance = 1.0f,
         };
-        NativeInterop.avkSimulationContext_setCameraComponent(ctx, sceneId, camId, in perspData);
+        SetCameraComponent(ctx, sceneId, camId, in perspData);
 
         // Read back and verify aspect is preserved
-        Assert.True(
-          NativeInterop.avkSimulationContext_getCameraComponent(
-            ctx,
-            sceneId,
-            camId,
-            out var perspRead
-          )
-        );
+        Assert.True(GetCameraComponent(ctx, sceneId, camId, out var perspRead));
         Assert.False(perspRead.IsOrthographic);
         Assert.True(
           perspRead.Aspect > 0.1f,
@@ -219,9 +233,7 @@ namespace AetherVk.Logic.Tests
         ulong camId = _service.AddPerspectiveCamera(sceneId, peId, "cam", 60f, 0.1f, 1000f);
 
         var ctx = GetNativeContext();
-        Assert.True(
-          NativeInterop.avkSimulationContext_getCameraComponent(ctx, sceneId, camId, out var cam)
-        );
+        Assert.True(GetCameraComponent(ctx, sceneId, camId, out var cam));
 
         float fovRad = 60f * MathF.PI / 180f;
         float f = 1f / MathF.Tan(fovRad / 2f);
@@ -290,9 +302,7 @@ namespace AetherVk.Logic.Tests
         );
 
         var ctx = GetNativeContext();
-        Assert.True(
-          NativeInterop.avkSimulationContext_getCameraComponent(ctx, sceneId, camId, out var cam)
-        );
+        Assert.True(GetCameraComponent(ctx, sceneId, camId, out var cam));
         Assert.True(cam.IsOrthographic);
 
         float l = cam.OrthoLeft;
@@ -397,39 +407,18 @@ namespace AetherVk.Logic.Tests
         var ctx = GetNativeContext();
 
         // Grab camera B's initial projection Proj00
-        Assert.True(
-          NativeInterop.avkSimulationContext_getCameraComponent(
-            ctx,
-            sceneId,
-            camB,
-            out var camBBefore
-          )
-        );
+        Assert.True(GetCameraComponent(ctx, sceneId, camB, out var camBBefore));
         float proj00_B_before = camBBefore.Proj00;
 
         // Resize PE A to something very different (ultra-wide)
         _service.ResizePresentationEngine(sceneId, peA, 3440, 1440);
 
         // Camera B's projection should be unchanged
-        Assert.True(
-          NativeInterop.avkSimulationContext_getCameraComponent(
-            ctx,
-            sceneId,
-            camB,
-            out var camBAfter
-          )
-        );
+        Assert.True(GetCameraComponent(ctx, sceneId, camB, out var camBAfter));
         Assert.Equal(proj00_B_before, camBAfter.Proj00, 4);
 
         // Camera A should reflect the new aspect
-        Assert.True(
-          NativeInterop.avkSimulationContext_getCameraComponent(
-            ctx,
-            sceneId,
-            camA,
-            out var camAAfter
-          )
-        );
+        Assert.True(GetCameraComponent(ctx, sceneId, camA, out var camAAfter));
         float fovRad = 45f * MathF.PI / 180f;
         float f = 1f / MathF.Tan(fovRad / 2f);
         float expectedProj00A = f / (3440f / 1440f);

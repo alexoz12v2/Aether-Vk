@@ -1,6 +1,7 @@
 //! ffi module.
 
 use aethervk_core_rlib::{
+  scene::ForeignSerializable,
   gpu,
   math::collision::{linear_bvh, linear_bvh::LinearBVHNode},
   scene::Marker,
@@ -565,6 +566,158 @@ pub unsafe extern "C" fn avkSimulationContext_getSceneHierarchy(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+  component_id: u64,
+  out_buffer: *mut core::ffi::c_void,
+) -> bool {
+  if ctx.is_null() || out_buffer.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  if let Some(scene_ctx_rw) = scenes.get(&scene_id) {
+    let scene_read = scene_ctx_rw.read();
+    if let Some(int_id) = scene_read.get_entity(entity_id) {
+      match component_id {
+        aethervk_core_rlib::scene::PhysicalMeshComponent::COMPONENT_ID => {
+          let mut found = false;
+          let _ = scene_read.scene.with_component(int_id, |comp: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+            let foreign = <aethervk_core_rlib::scene::PhysicalMeshComponent as aethervk_core_rlib::scene::ForeignSerializable>::to_foreign(comp);
+            unsafe {
+              core::ptr::copy_nonoverlapping(&foreign as *const _ as *const u8, out_buffer as *mut u8, core::mem::size_of_val(&foreign));
+            }
+            found = true;
+          });
+          if found { return true; }
+        }
+        aethervk_core_rlib::scene::TransformComponent::COMPONENT_ID => {
+          let mut found = false;
+          let _ = scene_read.scene.with_component(int_id, |comp: &aethervk_core_rlib::scene::TransformComponent| {
+            let foreign = <aethervk_core_rlib::scene::TransformComponent as aethervk_core_rlib::scene::ForeignSerializable>::to_foreign(comp);
+            unsafe {
+              core::ptr::copy_nonoverlapping(&foreign as *const _ as *const u8, out_buffer as *mut u8, core::mem::size_of_val(&foreign));
+            }
+            found = true;
+          });
+          if found { return true; }
+        }
+        aethervk_core_rlib::scene::HighResTransformComponent::COMPONENT_ID => {
+          let mut found = false;
+          let _ = scene_read.scene.with_component(int_id, |comp: &aethervk_core_rlib::scene::HighResTransformComponent| {
+            let foreign = <aethervk_core_rlib::scene::HighResTransformComponent as aethervk_core_rlib::scene::ForeignSerializable>::to_foreign(comp);
+            unsafe {
+              core::ptr::copy_nonoverlapping(&foreign as *const _ as *const u8, out_buffer as *mut u8, core::mem::size_of_val(&foreign));
+            }
+            found = true;
+          });
+          if found { return true; }
+        }
+        aethervk_core_rlib::scene::CameraComponent::COMPONENT_ID => {
+          let mut found = false;
+          let _ = scene_read.scene.with_component(int_id, |comp: &aethervk_core_rlib::scene::CameraComponent| {
+            let foreign = <aethervk_core_rlib::scene::CameraComponent as aethervk_core_rlib::scene::ForeignSerializable>::to_foreign(comp);
+            unsafe {
+              core::ptr::copy_nonoverlapping(&foreign as *const _ as *const u8, out_buffer as *mut u8, core::mem::size_of_val(&foreign));
+            }
+            found = true;
+          });
+          if found { return true; }
+        }
+        aethervk_core_rlib::scene::SphereGizmoComponent::COMPONENT_ID => {
+          let mut found = false;
+          let _ = scene_read.scene.with_component(int_id, |comp: &aethervk_core_rlib::scene::SphereGizmoComponent| {
+            let foreign = <aethervk_core_rlib::scene::SphereGizmoComponent as aethervk_core_rlib::scene::ForeignSerializable>::to_foreign(comp);
+            unsafe {
+              core::ptr::copy_nonoverlapping(&foreign as *const _ as *const u8, out_buffer as *mut u8, core::mem::size_of_val(&foreign));
+            }
+            found = true;
+          });
+          if found { return true; }
+        }
+        aethervk_core_rlib::scene::ScreenSpaceBillboardComponent::COMPONENT_ID => {
+          let mut found = false;
+          let _ = scene_read.scene.with_component(int_id, |comp: &aethervk_core_rlib::scene::ScreenSpaceBillboardComponent| {
+            let foreign = <aethervk_core_rlib::scene::ScreenSpaceBillboardComponent as aethervk_core_rlib::scene::ForeignSerializable>::to_foreign(comp);
+            unsafe {
+              core::ptr::copy_nonoverlapping(&foreign as *const _ as *const u8, out_buffer as *mut u8, core::mem::size_of_val(&foreign));
+            }
+            found = true;
+          });
+          if found { return true; }
+        }
+        _ => {}
+      }
+    }
+  }
+  false
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setComponent(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+  component_id: u64,
+  in_buffer: *const core::ffi::c_void,
+) -> bool {
+  if ctx.is_null() || in_buffer.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  if let Some(scene_ctx_rw) = scenes.get(&scene_id) {
+    let mut scene_write = scene_ctx_rw.write();
+    if let Some(int_id) = scene_write.get_entity(entity_id) {
+      match component_id {
+        aethervk_core_rlib::scene::PhysicalMeshComponent::COMPONENT_ID => {
+          let res = scene_write.scene.with_component_mut(int_id, |comp: &mut aethervk_core_rlib::scene::PhysicalMeshComponent| {
+            unsafe { <aethervk_core_rlib::scene::PhysicalMeshComponent as aethervk_core_rlib::scene::ForeignSerializable>::apply_foreign_ptr(comp, in_buffer); }
+          });
+          if res.is_some() { return true; }
+        }
+        aethervk_core_rlib::scene::TransformComponent::COMPONENT_ID => {
+          let res = scene_write.scene.with_component_mut(int_id, |comp: &mut aethervk_core_rlib::scene::TransformComponent| {
+            unsafe { <aethervk_core_rlib::scene::TransformComponent as aethervk_core_rlib::scene::ForeignSerializable>::apply_foreign_ptr(comp, in_buffer); }
+          });
+          if res.is_some() { return true; }
+        }
+        aethervk_core_rlib::scene::HighResTransformComponent::COMPONENT_ID => {
+          let res = scene_write.scene.with_component_mut(int_id, |comp: &mut aethervk_core_rlib::scene::HighResTransformComponent| {
+            unsafe { <aethervk_core_rlib::scene::HighResTransformComponent as aethervk_core_rlib::scene::ForeignSerializable>::apply_foreign_ptr(comp, in_buffer); }
+          });
+          if res.is_some() { return true; }
+        }
+        aethervk_core_rlib::scene::CameraComponent::COMPONENT_ID => {
+          let res = scene_write.scene.with_component_mut(int_id, |comp: &mut aethervk_core_rlib::scene::CameraComponent| {
+            unsafe { <aethervk_core_rlib::scene::CameraComponent as aethervk_core_rlib::scene::ForeignSerializable>::apply_foreign_ptr(comp, in_buffer); }
+          });
+          if res.is_some() { return true; }
+        }
+        aethervk_core_rlib::scene::SphereGizmoComponent::COMPONENT_ID => {
+          let res = scene_write.scene.with_component_mut(int_id, |comp: &mut aethervk_core_rlib::scene::SphereGizmoComponent| {
+            unsafe { <aethervk_core_rlib::scene::SphereGizmoComponent as aethervk_core_rlib::scene::ForeignSerializable>::apply_foreign_ptr(comp, in_buffer); }
+          });
+          if res.is_some() { return true; }
+        }
+        aethervk_core_rlib::scene::ScreenSpaceBillboardComponent::COMPONENT_ID => {
+          let res = scene_write.scene.with_component_mut(int_id, |comp: &mut aethervk_core_rlib::scene::ScreenSpaceBillboardComponent| {
+            unsafe { <aethervk_core_rlib::scene::ScreenSpaceBillboardComponent as aethervk_core_rlib::scene::ForeignSerializable>::apply_foreign_ptr(comp, in_buffer); }
+          });
+          if res.is_some() { return true; }
+        }
+        _ => {}
+      }
+    }
+  }
+  false
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_spawnBillboard(
   ctx: *mut SimulationContext,
   scene_id: u64,
@@ -899,197 +1052,9 @@ pub unsafe extern "C" fn avkSimulationContext_addHighResTransformComponent(
     .is_ok()
 }
 
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setTransformComponent(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  entity: u64,
-  transform: *const FfiTransform,
-) -> bool {
-  if ctx.is_null() || transform.is_null() {
-    return false;
-  }
-  let ctx_ref = unsafe { &*ctx };
-  let t = unsafe { &*transform };
-  if !t.px.is_finite()
-    || !t.py.is_finite()
-    || !t.pz.is_finite()
-    || !t.rw.is_finite()
-    || !t.rx.is_finite()
-    || !t.ry.is_finite()
-    || !t.rz.is_finite()
-    || !t.sx.is_finite()
-    || !t.sy.is_finite()
-    || !t.sz.is_finite()
-  {
-    return false;
-  }
-  ctx_ref
-    .set_transform_component(
-      scene_id,
-      entity,
-      Vec3f32::from_components(t.px, t.py, t.pz),
-      Quat::from_components(t.rx, t.ry, t.rz, t.rw),
-      Vec3f32::from_components(t.sx, t.sy, t.sz),
-    )
-    .is_ok()
-}
 
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_getTransformComponent(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  entity: u64,
-  out_transform: *mut FfiTransform,
-) -> bool {
-  if ctx.is_null() || out_transform.is_null() {
-    return false;
-  }
-  let ctx_ref = unsafe { &*ctx };
 
-  let mut pos_x = 0.0;
-  let mut pos_y = 0.0;
-  let mut pos_z = 0.0;
-  let mut rot_w = 0.0;
-  let mut rot_x = 0.0;
-  let mut rot_y = 0.0;
-  let mut rot_z = 0.0;
-  let mut scale_x = 0.0;
-  let mut scale_y = 0.0;
-  let mut scale_z = 0.0;
 
-  if ctx_ref
-    .get_transform_component(
-      scene_id,
-      entity,
-      &mut pos_x,
-      &mut pos_y,
-      &mut pos_z,
-      &mut rot_w,
-      &mut rot_x,
-      &mut rot_y,
-      &mut rot_z,
-      &mut scale_x,
-      &mut scale_y,
-      &mut scale_z,
-    )
-    .is_ok()
-  {
-    unsafe {
-      *out_transform = FfiTransform {
-        px: pos_x,
-        py: pos_y,
-        pz: pos_z,
-        rw: rot_w,
-        rx: rot_x,
-        ry: rot_y,
-        rz: rot_z,
-        sx: scale_x,
-        sy: scale_y,
-        sz: scale_z,
-      };
-    }
-    true
-  } else {
-    false
-  }
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setHighResTransformComponent(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  entity: u64,
-  transform: *const FfiHighResTransform,
-) -> bool {
-  if ctx.is_null() || transform.is_null() {
-    return false;
-  }
-  let ctx_ref = unsafe { &*ctx };
-  let t = unsafe { &*transform };
-  if !t.px.is_finite()
-    || !t.py.is_finite()
-    || !t.pz.is_finite()
-    || !t.rw.is_finite()
-    || !t.rx.is_finite()
-    || !t.ry.is_finite()
-    || !t.rz.is_finite()
-    || !t.sx.is_finite()
-    || !t.sy.is_finite()
-    || !t.sz.is_finite()
-  {
-    return false;
-  }
-  ctx_ref
-    .set_highres_transform_component(
-      scene_id, entity, t.px, t.py, t.pz, t.rw, t.rx, t.ry, t.rz, t.sx, t.sy, t.sz,
-    )
-    .is_ok()
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_getHighResTransformComponent(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  entity: u64,
-  out_transform: *mut FfiHighResTransform,
-) -> bool {
-  if ctx.is_null() || out_transform.is_null() {
-    return false;
-  }
-  let ctx_ref = unsafe { &*ctx };
-
-  let mut pos_x = 0.0_f64;
-  let mut pos_y = 0.0_f64;
-  let mut pos_z = 0.0_f64;
-  let mut rot_w = 0.0_f32;
-  let mut rot_x = 0.0_f32;
-  let mut rot_y = 0.0_f32;
-  let mut rot_z = 0.0_f32;
-  let mut scale_x = 0.0_f32;
-  let mut scale_y = 0.0_f32;
-  let mut scale_z = 0.0_f32;
-
-  if ctx_ref
-    .get_highres_transform_component(
-      scene_id,
-      entity,
-      &mut pos_x,
-      &mut pos_y,
-      &mut pos_z,
-      &mut rot_w,
-      &mut rot_x,
-      &mut rot_y,
-      &mut rot_z,
-      &mut scale_x,
-      &mut scale_y,
-      &mut scale_z,
-    )
-    .is_ok()
-  {
-    unsafe {
-      *out_transform = FfiHighResTransform {
-        px: pos_x,
-        py: pos_y,
-        pz: pos_z,
-        rw: rot_w,
-        rx: rot_x,
-        ry: rot_y,
-        rz: rot_z,
-        sx: scale_x,
-        sy: scale_y,
-        sz: scale_z,
-      };
-    }
-    true
-  } else {
-    false
-  }
-}
 
 #[repr(C)]
 pub struct FfiEmissionCircle {
@@ -1309,38 +1274,6 @@ pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent
   }
 }
 
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setSphereGizmoVisibility(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  entity: u64,
-  is_visible: bool,
-) -> bool {
-  if ctx.is_null() {
-    return false;
-  }
-  let ctx_ref = unsafe { &*ctx };
-  if let Some(mut scenes) = ctx_ref.scenes.try_write() {
-    if let Some(scene_ctx_lock) = scenes.scenes.get(&scene_id) {
-      let mut scene_ctx = scene_ctx_lock.write();
-      if let Some(entity) = scene_ctx.entity_map.get(&entity).copied() {
-        let mut found = false;
-        let _ = scene_ctx.scene.with_component_mut(
-          entity,
-          |gizmo: &mut aethervk_core_rlib::scene::SphereGizmoComponent| {
-            gizmo.is_visible = is_visible;
-            found = true;
-          },
-        );
-        if found {
-          return true;
-        }
-      }
-    }
-  }
-  false
-}
 
 /// Patches the `naif_id` field of an `AlmanacPlanet` component on a Kinematic comet entity
 /// after spawn. At spawn time `naif_id` is set to 0 (placeholder); this function injects
@@ -1418,40 +1351,6 @@ pub unsafe extern "C" fn avkSimulationContext_setKinematicVelocity(
   false
 }
 
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_getSphereGizmoVisibility(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  entity: u64,
-  out_is_visible: *mut bool,
-) -> bool {
-  if ctx.is_null() || out_is_visible.is_null() {
-    return false;
-  }
-  let ctx_ref = unsafe { &*ctx };
-  if let Some(scenes) = ctx_ref.scenes.try_read() {
-    if let Some(scene_ctx_lock) = scenes.scenes.get(&scene_id) {
-      let scene_ctx = scene_ctx_lock.read();
-      if let Some(entity) = scene_ctx.entity_map.get(&entity).copied() {
-        let mut found = false;
-        let _ = scene_ctx.scene.with_component(
-          entity,
-          |gizmo: &aethervk_core_rlib::scene::SphereGizmoComponent| {
-            unsafe {
-              *out_is_visible = gizmo.is_visible;
-            }
-            found = true;
-          },
-        );
-        if found {
-          return true;
-        }
-      }
-    }
-  }
-  false
-}
 
 // --- Queries ---
 
@@ -2300,6 +2199,43 @@ pub unsafe extern "C" fn avkSimulationContext_snapToEntity(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setCameraTransform(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  camera_entity: u64,
+  px: f64,
+  py: f64,
+  pz: f64,
+  rx: f32,
+  ry: f32,
+  rz: f32,
+  rw: f32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scene_ctx = match ctx_ref.get_scene(scene_id) {
+    Some(s) => s,
+    None => return false,
+  };
+  let scene_read = scene_ctx.read();
+  let internal_camera = match scene_read.get_entity(camera_entity) {
+    Some(e) => e,
+    None => return false,
+  };
+
+  let q = aethervk_oshal_rlib::math::vector::vec4::Quat::from_components(rx, ry, rz, rw);
+  let res = scene_read.scene.with_component_mut(internal_camera, |t: &mut aethervk_core_rlib::scene::HighResTransformComponent| {
+    t.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(px, py, pz);
+    t.rotation = q;
+  });
+
+  res.is_some()
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_followEntity(
   ctx: *mut SimulationContext,
   scene_id: u64,
@@ -2810,138 +2746,7 @@ pub unsafe extern "C" fn avkSimulationContext_addCameraComponent(
   let _ = ctx_ref.add_camera_component(scene_id, entity, params);
 }
 
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setCameraComponent(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  entity: u64,
-  camera: *const FfiCamera,
-) -> bool {
-  if ctx.is_null() || camera.is_null() {
-    return false;
-  }
-  let ctx_ref = unsafe { &*ctx };
-  let c = unsafe { &*camera };
-  let params = if c.is_orthographic {
-    CameraParams::Orthographic(OrthographicCameraParams {
-      left: c.ortho_left,
-      right: c.ortho_right,
-      bottom: c.ortho_bottom,
-      top: c.ortho_top,
-      near: c.near,
-      far: c.far,
-    })
-  } else {
-    CameraParams::Perspective(PerspectiveCameraParams {
-      fov: c.fov.to_radians(),
-      aspect_ratio: c.aspect,
-      near_plane: c.near,
-      far_plane: c.far,
-    })
-  };
-  let _ = ctx_ref.set_camera_component(scene_id, entity, params);
 
-  if let Some(s) = ctx_ref.get_scene(scene_id) {
-    let e_opt = s.read().get_entity(entity);
-    if let Some(e) = e_opt {
-      let mut scene_write = s.write();
-      let _ = scene_write.scene.with_component_mut(
-        e,
-        |comp: &mut aethervk_core_rlib::scene::CameraComponent| {
-          comp.focus_distance = c.focus_distance;
-          true
-        },
-      );
-    }
-  }
-
-  true
-}
-
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_getCameraComponent(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  entity: u64,
-  out_camera: *mut FfiCamera,
-) -> bool {
-  if ctx.is_null() || out_camera.is_null() {
-    return false;
-  }
-  let ctx_ref = unsafe { &*ctx };
-  if let Ok(params) = ctx_ref.get_camera_component(scene_id, entity) {
-    let mut arr = [0.0; 16];
-
-    let _ = ctx_ref.get_scene(scene_id).map(|s| {
-      let s_guard = s.read();
-      if let Some(e) = s_guard.get_entity(entity) {
-        let _ =
-          s_guard
-            .scene
-            .with_component(e, |c: &aethervk_core_rlib::scene::CameraComponent| {
-              arr = c.get_projection_matrix().into();
-            });
-      }
-    });
-
-    unsafe {
-      *out_camera = match params {
-        CameraParams::Perspective(p) => FfiCamera {
-          is_orthographic: false,
-          fov: p.fov.to_degrees(),
-          aspect: p.aspect_ratio,
-          near: p.near_plane,
-          far: p.far_plane,
-          ortho_left: 0.0,
-          ortho_right: 0.0,
-          ortho_bottom: 0.0,
-          ortho_top: 0.0,
-          focus_distance: 10.0,
-          proj: arr,
-        },
-        CameraParams::Orthographic(o) => FfiCamera {
-          is_orthographic: true,
-          fov: 0.0,
-          aspect: {
-            let h = o.top - o.bottom;
-            if h.abs() > 1e-6 {
-              (o.right - o.left) / h
-            } else {
-              1.0
-            }
-          },
-          near: o.near,
-          far: o.far,
-          ortho_left: o.left,
-          ortho_right: o.right,
-          ortho_bottom: o.bottom,
-          ortho_top: o.top,
-          focus_distance: 10.0,
-          proj: arr,
-        },
-      };
-
-      // Update focus distance dynamically
-      let _ = ctx_ref.get_scene(scene_id).map(|s| {
-        let s_guard = s.read();
-        if let Some(e) = s_guard.get_entity(entity) {
-          let _ =
-            s_guard
-              .scene
-              .with_component(e, |c: &aethervk_core_rlib::scene::CameraComponent| {
-                (*out_camera).focus_distance = c.focus_distance;
-              });
-        }
-      });
-
-      true
-    }
-  } else {
-    false
-  }
-}
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -2986,72 +2791,7 @@ pub unsafe extern "C" fn avkSimulationContext_addImageBillboardComponent(
   let _ = ctx_ref.add_image_billboard_component(scene_id, entity, is_screen_space, width, height);
 }
 
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_addScreenSpaceBillboard(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  entity: u64,
-  image_path: *const c_char,
-  ndc_x: f32,
-  ndc_y: f32,
-  scale: f32,
-  rotation_deg: f32,
-  opacity: f32,
-  z_index: i32,
-  viewport_id: u64,
-) -> bool {
-  if ctx.is_null() || image_path.is_null() {
-    return false;
-  }
-  let ctx_ref = unsafe { &*ctx };
-  let path_str = unsafe { CStr::from_ptr(image_path).to_str().unwrap_or("") };
-  ctx_ref
-    .add_screen_space_billboard_component(
-      scene_id,
-      entity,
-      path_str,
-      ndc_x,
-      ndc_y,
-      scale,
-      rotation_deg,
-      opacity,
-      z_index,
-      viewport_id,
-    )
-    .is_ok()
-}
 
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_setScreenSpaceBillboard(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  entity: u64,
-  ndc_x: f32,
-  ndc_y: f32,
-  scale: f32,
-  rotation_deg: f32,
-  opacity: f32,
-  z_index: i32,
-) -> bool {
-  if ctx.is_null() {
-    return false;
-  }
-  let ctx_ref = unsafe { &*ctx };
-  ctx_ref
-    .set_screen_space_billboard(
-      scene_id,
-      entity,
-      ndc_x,
-      ndc_y,
-      scale,
-      rotation_deg,
-      opacity,
-      z_index,
-    )
-    .is_ok()
-}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -3065,34 +2805,6 @@ pub struct FfiScreenSpaceBillboardDTO {
   pub viewport_id: u64,
 }
 
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_getScreenSpaceBillboard(
-  ctx: *mut SimulationContext,
-  scene_id: u64,
-  entity: u64,
-  out_data: *mut FfiScreenSpaceBillboardDTO,
-) -> bool {
-  if ctx.is_null() || out_data.is_null() {
-    return false;
-  }
-  let ctx_ref = unsafe { &*ctx };
-  if let Ok(dto) = ctx_ref.get_screen_space_billboard(scene_id, entity) {
-    unsafe {
-      *out_data = FfiScreenSpaceBillboardDTO {
-        ndc_x: dto.ndc_x,
-        ndc_y: dto.ndc_y,
-        scale: dto.scale,
-        rotation_deg: dto.rotation_deg,
-        opacity: dto.opacity,
-        z_index: dto.z_index,
-        viewport_id: dto.viewport_id,
-      };
-    }
-    return true;
-  }
-  false
-}
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]

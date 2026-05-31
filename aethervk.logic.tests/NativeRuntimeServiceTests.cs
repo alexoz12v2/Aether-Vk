@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using AetherVk.Logic.Services;
 using Xunit;
@@ -401,12 +402,25 @@ namespace AetherVk.Logic.Tests
           OrthoBottom = -10f,
           OrthoTop = 10f,
         };
-        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setCameraComponent(
-          ctx,
-          sceneId,
-          camId,
-          in camData
-        );
+        {
+          int camSize = Marshal.SizeOf<AetherVk.Logic.Services.NativeInterop.FfiCamera>();
+          IntPtr camPtr = Marshal.AllocHGlobal(camSize);
+          try
+          {
+            Marshal.StructureToPtr(camData, camPtr, false);
+            AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setComponent(
+              ctx,
+              sceneId,
+              camId,
+              2,
+              camPtr
+            );
+          }
+          finally
+          {
+            Marshal.FreeHGlobal(camPtr);
+          }
+        }
 
         // 2. Pull from native
         camComp!.PullFromNative();
@@ -425,13 +439,30 @@ namespace AetherVk.Logic.Tests
         transformComp.PosZ = 300f;
 
         // Verify native was updated automatically
-        var nativeHasTransform =
-          AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getHighResTransformComponent(
-            ctx,
-            sceneId,
-            camId,
-            out var ffiTransform
-          );
+        bool nativeHasTransform;
+        AetherVk.Logic.Services.NativeInterop.FfiHighResTransform ffiTransform = default;
+        {
+          int hrtSize = Marshal.SizeOf<AetherVk.Logic.Services.NativeInterop.FfiHighResTransform>();
+          IntPtr hrtPtr = Marshal.AllocHGlobal(hrtSize);
+          try
+          {
+            nativeHasTransform = AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getComponent(
+              ctx,
+              sceneId,
+              camId,
+              3,
+              hrtPtr
+            );
+            if (nativeHasTransform)
+            {
+              ffiTransform = Marshal.PtrToStructure<AetherVk.Logic.Services.NativeInterop.FfiHighResTransform>(hrtPtr);
+            }
+          }
+          finally
+          {
+            Marshal.FreeHGlobal(hrtPtr);
+          }
+        }
 
         Assert.True(nativeHasTransform);
         Assert.Equal(100.0, ffiTransform.Px, 3);

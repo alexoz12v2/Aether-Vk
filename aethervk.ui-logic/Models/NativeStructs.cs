@@ -20,6 +20,14 @@ public struct Float4
   }
 }
 
+[StructLayout(LayoutKind.Sequential, Pack = 1, CharSet = CharSet.Ansi)]
+public struct FfiPhysicalMesh
+{
+  public byte IsProcedural;
+  [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+  public string AssetPath;
+}
+
 [StructLayout(LayoutKind.Sequential, Pack = 16)]
 public struct RationalBezierGpu
 {
@@ -36,4 +44,14 @@ public struct TrajectoryGpu
   public Float4 Color;
   public float LineWidth;
   public uint TextureId;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct FfiSphereGizmo
+{
+  public float Radius;
+  public float Subdivisions;
+  [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+  public float[] LocalFrame;
+  public byte IsVisible;
 }
