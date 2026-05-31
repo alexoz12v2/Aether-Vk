@@ -177,12 +177,12 @@ fn test_render_all_archetypes_windowless() {
         billboard_calls: vec![],
       });
       let sky_pipeline = device.get_sky_pipeline_key(presentation_engine)?;
-      render_scene.get_or_create_layer(0, 0.1, 1000.0).sky_call = Some(
+      render_scene.get_or_create_layer(0, 0.1, 1000.0, 1.0).sky_call = Some(
         gpu::frame::SkyDrawCall::from_camera(&render_scene.camera_data, sky_pipeline)?,
       );
 
       let sun_pipeline = device.get_sun_pipeline_key(presentation_engine)?;
-      render_scene.get_or_create_layer(0, 0.1, 1000.0).sun_call =
+      render_scene.get_or_create_layer(0, 0.1, 1000.0, 1.0).sun_call =
         Some(gpu::frame::SunDrawCall::from_model_and_camera(
           Mat4x4f32::identity(),
           &render_scene.camera_data,
@@ -192,7 +192,7 @@ fn test_render_all_archetypes_windowless() {
         )?);
 
       let grid_pipeline = device.get_grid_pipeline_kay(presentation_engine)?;
-      render_scene.get_or_create_layer(0, 0.1, 1000.0).grid_call = Some(
+      render_scene.get_or_create_layer(0, 0.1, 1000.0, 1.0).grid_call = Some(
         gpu::frame::GridDrawCall::new(grid_pipeline, 0.1, 1.0, [0.5, 0.5, 0.5]),
       );
 
@@ -217,7 +217,7 @@ fn test_render_all_archetypes_windowless() {
         },
       )];
 
-      render_scene.get_or_create_layer(0, 0.1, 1000.0).cursor_call = Some(CursorDrawCall {
+      render_scene.get_or_create_layer(0, 0.1, 1000.0, 1.0).cursor_call = Some(CursorDrawCall {
         pipeline: cursor_res.pipeline,
         vertex_count: 36,
         model_matrix: Mat4x4f32::identity(),
@@ -240,7 +240,7 @@ fn test_render_all_archetypes_windowless() {
         device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
         device.update_sun(cmd_buffer_handle, sun_e, (64, 64, 64), 0.6)?;
 
-        render_scene.get_or_create_layer(0, 0.1, 1000.0).sphere_gizmo_batch_call =
+        render_scene.get_or_create_layer(0, 0.1, 1000.0, 1.0).sphere_gizmo_batch_call =
           device.upload_sphere_gizmos_batch(cmd_buffer_handle, &sphere_gizmo_data)?;
 
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
@@ -371,7 +371,7 @@ fn test_render_sphere_gizmo_windowless() {
         let _scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
         device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
-        render_scene.get_or_create_layer(0, 0.1, 1000.0).sphere_gizmo_batch_call =
+        render_scene.get_or_create_layer(0, 0.1, 1000.0, 1.0).sphere_gizmo_batch_call =
           device.upload_sphere_gizmos_batch(cmd_buffer_handle, &sphere_gizmo_data)?;
 
         device.begin_render_pass(cmd_buffer_handle, presentation_engine, &acquire_result)?;
@@ -2545,7 +2545,7 @@ fn test_render_uniform_background() {
           billboard_calls: vec![],
         });
         let pipeline = device.get_background_pipeline_key(presentation_engine)?;
-        render_scene.get_or_create_layer(0, 0.1, 1000.0).background_call =
+        render_scene.get_or_create_layer(0, 0.1, 1000.0, 1.0).background_call =
           Some(gpu::frame::BackgroundDrawCall {
             pipeline,
             color_top: bg_constants.color_top,

@@ -627,6 +627,11 @@ pub struct TextDrawCall {
 
 pub struct RenderLayer {
   pub layer_index: u32,
+  pub frame_scale: f32,
+  /// Camera position relative to this layer's reference frame origin,
+  /// in frame-local units (e.g. km for micro). Used by the grid shader
+  /// so that absolutePosXY is numerically precise instead of mixing AU + km.
+  pub camera_frame_local_pos: Vec3f32,
   pub near: f32,
   pub far: f32,
   pub draw_calls: Vec<DrawCall>,
@@ -889,6 +894,7 @@ pub struct RenderScene {
   pub depth_layers: Vec<RenderLayer>,
   pub text_calls: Vec<TextDrawCall>,
 
+  pub cursor_call: Option<CursorDrawCall>,
   pub ui_call: Option<UiBatchCall>,
   pub text2_call: Option<crate::gpu::Text2BatchCall>,
 }
@@ -907,12 +913,13 @@ impl RenderScene {
       depth_layers: Vec::with_capacity(Self::START_VEC_CAPACITY),
       text_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       camera_data: CameraRenderData::new(&camera.0, &camera.1, 1.0),
+      cursor_call: None,
       ui_call: None,
       text2_call: None,
     }
   }
 
-  pub fn get_or_create_layer(&mut self, layer_index: u32, near: f32, far: f32) -> &mut RenderLayer {
+  pub fn get_or_create_layer(&mut self, layer_index: u32, near: f32, far: f32, frame_scale: f32) -> &mut RenderLayer {
     let idx = self
       .depth_layers
       .iter()
@@ -920,6 +927,8 @@ impl RenderScene {
       .unwrap_or_else(|| {
         self.depth_layers.push(RenderLayer {
           layer_index,
+          frame_scale,
+          camera_frame_local_pos: self.camera_data.absolute_pos, // default: global pos (correct for macro)
           near,
           far,
           draw_calls: Vec::new(),
@@ -1575,6 +1584,18 @@ pub fn render_frame(
   };
   device.draw_composite(cmd_buffer, handle, &constants)?;
 
+  // Draw cursor after composite (always on top of both layers)
+  if let Some(cursor_call) = &render_scene.cursor_call {
+    do_draw_cursor(
+      device,
+      &render_scene.camera_data,
+      cmd_buffer,
+      handle,
+      cursor_call,
+      render_scene.window_extent,
+    )?;
+  }
+
   // ── UI / Text (always drawn last, in the final subpass) ────────────
   if let Some(draw_call) = &render_scene.ui_call {
     gpu::frame::do_draw_ui_batch(
@@ -1655,6 +1676,20 @@ fn draw_layer_content(
     .or(global_sun_pos)
     .unwrap_or_else(|| Vec3f32::from_components(100.0, 100.0, 100.0));
 
+  // For micro layers, transform sun position from AU to frame-local units.
+  // sun_pos is in RTE AU coordinates; micro layer meshes are in km.
+  // Dividing by frame_scale (AU/km) converts AU → km.
+  let sun_pos = if layer.layer_index > 0 && layer.frame_scale > 0.0 && layer.frame_scale < 1.0 {
+    use aethervk_oshal_rlib::math::vector::Vector3;
+    Vec3f32::from_components(
+      sun_pos.x() / layer.frame_scale,
+      sun_pos.y() / layer.frame_scale,
+      sun_pos.z() / layer.frame_scale,
+    )
+  } else {
+    sun_pos
+  };
+
   // Rebuild projection matrix for this layer's near/far planes.
   // The view matrix (rotation-only in RTE) is shared across all layers.
   let layer_camera = render_scene.camera_data.rebuild_for_layer(layer.near, layer.far);
@@ -1666,7 +1701,16 @@ fn draw_layer_content(
     do_draw_sky(device, cmd_buffer, handle, draw_call)?;
   }
   if let Some(draw_call) = &layer.grid_call {
-    do_draw_grid(device, cmd_buffer, handle, &layer_camera, draw_call)?;
+    // Use camera_frame_local_pos (computed precisely during scene conversion via
+    // get_relative_transform) instead of dividing absolute_pos by frame_scale.
+    // This preserves f32 precision for micro layers where global→km conversion
+    // would produce values too large for fract() in the grid shader.
+    let grid_camera = {
+      let mut c = layer_camera.clone();
+      c.absolute_pos = layer.camera_frame_local_pos;
+      c
+    };
+    do_draw_grid(device, cmd_buffer, handle, &grid_camera, draw_call)?;
   }
 
   for draw_call in &layer.draw_calls {
@@ -1777,16 +1821,7 @@ fn draw_layer_content(
     gpu::frame::do_draw_sun(device, &layer_camera, cmd_buffer, handle, draw_call)?;
   }
 
-  if let Some(cursor_call) = &layer.cursor_call {
-    do_draw_cursor(
-      device,
-      &layer_camera,
-      cmd_buffer,
-      handle,
-      cursor_call,
-      render_scene.window_extent,
-    )?;
-  }
+
 
   Ok(())
 }

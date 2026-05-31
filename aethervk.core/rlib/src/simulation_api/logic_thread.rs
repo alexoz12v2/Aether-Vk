@@ -48,112 +48,6 @@ impl PlayControl {
   }
 }
 
-/// TODO: Document this item
-fn reparent_cameras_system(scene: &alloc::sync::Arc<crate::scene::Scene>) {
-  use crate::scene::{CameraComponent, ReferenceFrameComponent, ReferenceFrameType, TransformComponent};
-  use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
-  use aethervk_oshal_rlib::math::vector::Vector;
-  
-  let frames = scene.query1_res(|id, c: &ReferenceFrameComponent| {
-    if c.frame_type == ReferenceFrameType::Micro {
-      let global_t = scene.global_transform(id)?;
-      Some((c.clone(), global_t))
-    } else {
-      None
-    }
-  });
-
-  let cameras = scene.query1_res(|id, _c: &CameraComponent| {
-    let global_t = scene.global_transform(id)?;
-    let parent = scene.get_parent(id);
-    Some((global_t, parent))
-  });
-
-  struct ReparentAction {
-    camera_id: crate::scene::EntityId,
-    new_parent: Option<crate::scene::EntityId>,
-    new_transform: TransformComponent,
-    new_focus_distance: Option<f32>,
-  }
-
-  let mut actions = alloc::vec::Vec::new();
-
-  for ((cam_global_t, current_parent), cam_id) in cameras {
-    let mut best_frame = None;
-    let mut min_dist = f32::MAX;
-
-    for ((frame_comp, frame_global_t), frame_id) in &frames {
-      let dist = (cam_global_t.position - frame_global_t.position).length();
-      if dist <= frame_comp.soi_radius && dist < min_dist {
-        min_dist = dist;
-        best_frame = Some((frame_comp, frame_global_t, *frame_id));
-      }
-    }
-
-    if let Some((frame_comp, frame_global_t, frame_id)) = best_frame {
-      if current_parent != Some(frame_id) {
-        let (p_micro, _) = ReferenceFrameComponent::macro_to_micro(
-          cam_global_t.position,
-          Vec3f32::from_components(0.0, 0.0, 0.0),
-          frame_global_t.position,
-          Vec3f32::from_components(0.0, 0.0, 0.0),
-          frame_comp.scale,
-        );
-        let inv_rot = frame_global_t.rotation.inverse();
-        let new_rot = inv_rot * cam_global_t.rotation;
-        
-
-
-        let old_focus = scene.with_component(cam_id, |c: &CameraComponent| c.focus_distance).unwrap_or(10.0);
-
-        actions.push(ReparentAction {
-          camera_id: cam_id,
-          new_parent: Some(frame_id),
-          new_transform: TransformComponent {
-            position: p_micro,
-            rotation: new_rot,
-            scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-          },
-          new_focus_distance: Some(old_focus / frame_comp.scale),
-        });
-      }
-    } else {
-      if let Some(parent_id) = current_parent {
-        let is_micro_parent = frames.iter().any(|(_, id)| *id == parent_id);
-        if is_micro_parent {
-          let old_focus = scene.with_component(cam_id, |c: &CameraComponent| c.focus_distance).unwrap_or(10.0);
-          let frame_scale = frames.iter().find(|(_, id)| *id == parent_id).map(|((c, _), _)| c.scale).unwrap_or(1.0);
-
-          actions.push(ReparentAction {
-            camera_id: cam_id,
-            new_parent: None,
-            new_transform: TransformComponent {
-              position: cam_global_t.position,
-              rotation: cam_global_t.rotation,
-              scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-            },
-            new_focus_distance: Some(old_focus * frame_scale),
-          });
-        }
-      }
-    }
-  }
-
-  if !actions.is_empty() {
-    for action in actions {
-      scene.set_parent(action.camera_id, action.new_parent);
-      let _ = scene.with_component_mut(action.camera_id, |t: &mut TransformComponent| {
-        *t = action.new_transform;
-      });
-      if let Some(fd) = action.new_focus_distance {
-        let _ = scene.with_component_mut(action.camera_id, |c: &mut CameraComponent| {
-          c.focus_distance = fd;
-        });
-      }
-      aethervk_oshal_rlib::log!("Dynamic Camera Reparent: Camera {:?} reparented to {:?}", action.camera_id, action.new_parent);
-    }
-  }
-}
 
 pub fn start_logic_thread(
   logic_rx: mpsc::Receiver<LogicCommand>,
@@ -827,7 +721,9 @@ fn process_command_internal(
         .unwrap_or(10.0);
 
       use crate::scene::camera::SceneCameraExt;
-      let zoom_speed = dist * 0.05; // proportional to distance
+      // Logarithmic zoom: each scroll moves 5% of current focus distance.
+      // This naturally decelerates as you approach objects at any scale.
+      let zoom_speed = dist * 0.05;
       let move_amount = -amount * zoom_speed;
 
       scene_read.scene.translate_camera_local(
@@ -836,10 +732,11 @@ fn process_command_internal(
       )?;
 
       // Update focus distance so the invisible View Center stays in the exact same world position!
+      // Low clamp (1e-10 AU ≈ 0.015 mm) allows zooming to micro-scale objects.
       let _ = scene_read.scene.with_component_mut(
         camera_entity,
         |c: &mut crate::scene::CameraComponent| {
-          c.focus_distance = (c.focus_distance + move_amount).max(0.1);
+          c.focus_distance = (c.focus_distance + move_amount).max(1e-10);
         },
       );
 
@@ -1651,9 +1548,6 @@ fn execute_simulation_tick(
         let mut st = st_lock.write();
         *st = crate::physics::tlas_builder::build_selection_tlas(scene_ctx.scene.as_ref());
       }
-
-      // Dynamically reparent cameras to their closest Micro frame to preserve precision
-      reparent_cameras_system(&scene_ctx.scene);
     }
   }
 
