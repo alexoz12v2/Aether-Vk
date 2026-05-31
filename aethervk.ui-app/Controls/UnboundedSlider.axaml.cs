@@ -7,23 +7,23 @@ namespace AetherVk.Controls;
 
 public partial class UnboundedSlider : UserControl
 {
-  public static readonly StyledProperty<float> ValueProperty = AvaloniaProperty.Register<
+  public static readonly StyledProperty<double> ValueProperty = AvaloniaProperty.Register<
     UnboundedSlider,
-    float
+    double
   >(nameof(Value), defaultBindingMode: Avalonia.Data.BindingMode.TwoWay);
 
-  public float Value
+  public double Value
   {
     get => GetValue(ValueProperty);
     set => SetValue(ValueProperty, value);
   }
 
-  public static readonly StyledProperty<float> StepProperty = AvaloniaProperty.Register<
+  public static readonly StyledProperty<double> StepProperty = AvaloniaProperty.Register<
     UnboundedSlider,
-    float
-  >(nameof(Step), 1.0f);
+    double
+  >(nameof(Step), 1.0);
 
-  public float Step
+  public double Step
   {
     get => GetValue(StepProperty);
     set => SetValue(StepProperty, value);
@@ -55,14 +55,14 @@ public partial class UnboundedSlider : UserControl
     if (_isDragging)
     {
       var pos = e.GetPosition(this);
-      var delta = (float)(pos.X - _lastPos.X);
-      if (System.Math.Abs(delta) > 1.0f)
+      var delta = pos.X - _lastPos.X;
+      if (System.Math.Abs(delta) > 1.0)
         _hasMoved = true;
 
       if (_hasMoved)
       {
-        var mult = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? 10.0f : 1.0f;
-        Value += delta * Step * mult * 0.1f;
+        var mult = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? 10.0 : 1.0;
+        Value += delta * Step * mult * 0.1;
         _lastPos = pos;
       }
       e.Handled = true;
@@ -91,7 +91,7 @@ public partial class UnboundedSlider : UserControl
   private void OnInputLostFocus(object? sender, RoutedEventArgs e)
   {
     InputBox.IsHitTestVisible = false;
-    if (float.TryParse(InputBox.Text, out float parsed))
+    if (double.TryParse(InputBox.Text, out double parsed))
     {
       Value = parsed;
     }
@@ -101,7 +101,7 @@ public partial class UnboundedSlider : UserControl
   {
     if (e.Key == Key.Enter)
     {
-      if (float.TryParse(InputBox.Text, out float parsed))
+      if (double.TryParse(InputBox.Text, out double parsed))
       {
         Value = parsed;
       }

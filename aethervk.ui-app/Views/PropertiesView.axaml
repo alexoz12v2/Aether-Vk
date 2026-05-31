@@ -100,6 +100,72 @@
                         </Expander>
                     </DataTemplate>
 
+                    <!-- HighRes Transform Component (f64 position) -->
+                    <DataTemplate DataType="models:HighResTransformComponent">
+                        <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch" ToolTip.Tip="High-precision transform with f64 position. Units are expressed in physical units relative to their parent Reference Frame (Macro = AU, Micro = km).">
+                            <StackPanel Spacing="4">
+                                <Expander HorizontalAlignment="Stretch">
+                                    <Expander.Header>
+                                        <Grid ColumnDefinitions="*, Auto">
+                                            <TextBlock Text="Position (f64)" VerticalAlignment="Center"/>
+                                            <Button Grid.Column="1" Classes="icon" Command="{Binding CopyPositionCommand}" ToolTip.Tip="Copy to Clipboard" Background="Transparent" Padding="4" Margin="8,0,0,0">
+                                                <PathIcon Data="M19,21H8V7H19M19,5H14.82C14.4,3.84 13.3,3 12,3C10.7,3 9.6,3.84 9.18,5H5V21A2,2 0 0,0 7,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M12,5A1,1 0 0,1 13,6A1,1 0 0,1 12,7A1,1 0 0,1 11,6A1,1 0 0,1 12,5Z" Width="14" Height="14" />
+                                            </Button>
+                                        </Grid>
+                                    </Expander.Header>
+                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" IsEnabled="{Binding IsEditable}">
+                                        <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding PosX}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="2" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding PosY}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="4" Text="Z:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="5" Value="{Binding PosZ}"/>
+                                    </Grid>
+                                </Expander>
+
+                                <Expander HorizontalAlignment="Stretch">
+                                    <Expander.Header>
+                                        <Grid ColumnDefinitions="*, Auto">
+                                            <TextBlock Text="Rotation (Quat)" VerticalAlignment="Center"/>
+                                            <Button Grid.Column="1" Classes="icon" Command="{Binding CopyRotationCommand}" ToolTip.Tip="Copy to Clipboard" Background="Transparent" Padding="4" Margin="8,0,0,0">
+                                                <PathIcon Data="M19,21H8V7H19M19,5H14.82C14.4,3.84 13.3,3 12,3C10.7,3 9.6,3.84 9.18,5H5V21A2,2 0 0,0 7,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M12,5A1,1 0 0,1 13,6A1,1 0 0,1 12,7A1,1 0 0,1 11,6A1,1 0 0,1 12,5Z" Width="14" Height="14" />
+                                            </Button>
+                                        </Grid>
+                                    </Expander.Header>
+                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*,Auto,*" IsEnabled="{Binding IsEditable}">
+                                        <TextBlock Grid.Column="0" Text="W:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding RotW}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="2" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding RotX}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="4" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="5" Value="{Binding RotY}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="6" Text="Z:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="7" Value="{Binding RotZ}"/>
+                                    </Grid>
+                                </Expander>
+
+                                <Expander HorizontalAlignment="Stretch">
+                                    <Expander.Header>
+                                        <Grid ColumnDefinitions="*, Auto">
+                                            <TextBlock Text="Scale" VerticalAlignment="Center"/>
+                                            <Button Grid.Column="1" Classes="icon" Command="{Binding CopyScaleCommand}" ToolTip.Tip="Copy to Clipboard" Background="Transparent" Padding="4" Margin="8,0,0,0">
+                                                <PathIcon Data="M19,21H8V7H19M19,5H14.82C14.4,3.84 13.3,3 12,3C10.7,3 9.6,3.84 9.18,5H5V21A2,2 0 0,0 7,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M12,5A1,1 0 0,1 13,6A1,1 0 0,1 12,7A1,1 0 0,1 11,6A1,1 0 0,1 12,5Z" Width="14" Height="14" />
+                                            </Button>
+                                        </Grid>
+                                    </Expander.Header>
+                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" IsEnabled="{Binding IsEditable}">
+                                        <TextBlock Grid.Column="0" Text="X:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding ScaleX}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="2" Text="Y:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding ScaleY}" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="4" Text="Z:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <controls:UnboundedSlider Grid.Column="5" Value="{Binding ScaleZ}"/>
+                                    </Grid>
+                                </Expander>
+                            </StackPanel>
+                        </Expander>
+                    </DataTemplate>
+
                     <!-- Camera Component -->
                     <DataTemplate DataType="models:CameraComponent">
                         <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,0,0,8" HorizontalAlignment="Stretch">

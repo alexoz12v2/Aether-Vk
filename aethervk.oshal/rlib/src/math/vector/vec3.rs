@@ -43,6 +43,12 @@ impl Vec3f32 {
   pub fn to_point(&self) -> Vec4f32 {
     Vec4f32::from_components(self.x(), self.y(), self.z(), 1.0)
   }
+
+  /// Lossless upcast to f64 precision.
+  #[inline]
+  pub fn to_f64(&self) -> super::vec3f64::Vec3f64 {
+    super::vec3f64::Vec3f64::from_f32(*self)
+  }
 }
 
 impl From<[f32; 3]> for Vec3f32 {

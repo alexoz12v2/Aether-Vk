@@ -109,7 +109,16 @@ public partial class PropertiesViewModel
 
       foreach (var name in componentNames)
       {
-        if (name.EndsWith("TransformComponent"))
+        if (name.EndsWith("HighResTransformComponent"))
+        {
+          var comp = SelectedEntity.Components.OfType<HighResTransformComponent>().FirstOrDefault();
+          if (comp != null)
+          {
+            comp.IsEditable = hasCamera;
+            PropertiesExpanders.Add(comp);
+          }
+        }
+        else if (name.EndsWith("TransformComponent"))
         {
           var comp = SelectedEntity.Components.OfType<TransformComponent>().FirstOrDefault();
           if (comp != null)

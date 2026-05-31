@@ -151,6 +151,145 @@ public partial class TransformComponent : NativeComponent
   }
 }
 
+public partial class HighResTransformComponent : NativeComponent
+{
+  [ObservableProperty]
+  private string _unitLabel = "AU";
+
+  public override string Name => $"HighRes Transform ({UnitLabel})";
+
+  partial void OnUnitLabelChanged(string value)
+  {
+      OnPropertyChanged(nameof(Name));
+  }
+
+  public bool SuspendNotifications { get; set; } = false;
+
+  [ObservableProperty]
+  private bool _isEditable = true;
+
+  [ObservableProperty]
+  private double _posX;
+
+  [ObservableProperty]
+  private double _posY;
+
+  [ObservableProperty]
+  private double _posZ;
+
+  [ObservableProperty]
+  private float _rotW = 1.0f;
+
+  [ObservableProperty]
+  private float _rotX;
+
+  [ObservableProperty]
+  private float _rotY;
+
+  [ObservableProperty]
+  private float _rotZ;
+
+  [ObservableProperty]
+  private float _scaleX = 1.0f;
+
+  [ObservableProperty]
+  private float _scaleY = 1.0f;
+
+  [ObservableProperty]
+  private float _scaleZ = 1.0f;
+
+  protected override bool ShouldPushToNative(string? propertyName)
+  {
+    return propertyName != nameof(IsEditable) && propertyName != nameof(SuspendNotifications);
+  }
+
+  protected override void PushToNativeImpl()
+  {
+    if (SuspendNotifications)
+      return;
+
+    if (SimulationContext == IntPtr.Zero)
+      return;
+
+    var data = new NativeInterop.FfiHighResTransform
+    {
+      Px = PosX,
+      Py = PosY,
+      Pz = PosZ,
+      Rw = RotW,
+      Rx = RotX,
+      Ry = RotY,
+      Rz = RotZ,
+      Sx = ScaleX,
+      Sy = ScaleY,
+      Sz = ScaleZ,
+    };
+    NativeInterop.avkSimulationContext_setHighResTransformComponent(
+      SimulationContext,
+      SceneId,
+      EntityId,
+      in data
+    );
+  }
+
+  protected override void PullFromNativeImpl()
+  {
+    if (
+      NativeInterop.avkSimulationContext_getHighResTransformComponent(
+        SimulationContext,
+        SceneId,
+        EntityId,
+        out var data
+      )
+    )
+    {
+      PosX = data.Px;
+      PosY = data.Py;
+      PosZ = data.Pz;
+      RotW = data.Rw;
+      RotX = data.Rx;
+      RotY = data.Ry;
+      RotZ = data.Rz;
+      ScaleX = data.Sx;
+      ScaleY = data.Sy;
+      ScaleZ = data.Sz;
+
+      uint frameType = NativeInterop.avkSimulationContext_getEntityReferenceFrameType(SimulationContext, SceneId, EntityId);
+      UnitLabel = frameType == 1 ? "km" : "AU";
+    }
+  }
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private void CopyPosition()
+  {
+    string json =
+      $"{{ \"x\": {PosX.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"y\": {PosY.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"z\": {PosZ.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}";
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+      new AetherVk.Logic.Messages.CopyToClipboardMessage(json)
+    );
+  }
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private void CopyRotation()
+  {
+    string json =
+      $"{{ \"x\": {RotX.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"y\": {RotY.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"z\": {RotZ.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"w\": {RotW.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}";
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+      new AetherVk.Logic.Messages.CopyToClipboardMessage(json)
+    );
+  }
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private void CopyScale()
+  {
+    string json =
+      $"{{ \"x\": {ScaleX.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"y\": {ScaleY.ToString(System.Globalization.CultureInfo.InvariantCulture)}, \"z\": {ScaleZ.ToString(System.Globalization.CultureInfo.InvariantCulture)} }}";
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+      new AetherVk.Logic.Messages.CopyToClipboardMessage(json)
+    );
+  }
+}
+
 public partial class CameraComponent : NativeComponent
 {
   public override string Name => "Camera";

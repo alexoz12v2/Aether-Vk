@@ -19,13 +19,20 @@ public class TransformEditableRule : IComponentRule
 {
   public void Apply(Entity entity)
   {
+    bool hasCameraOrCursor = entity.Components.Any(c =>
+      c is CameraComponent || c is CursorComponent
+    );
+
     var transform = entity.Components.OfType<TransformComponent>().FirstOrDefault();
     if (transform != null)
     {
-      bool hasCameraOrCursor = entity.Components.Any(c =>
-        c is CameraComponent || c is CursorComponent
-      );
       transform.IsEditable = hasCameraOrCursor;
+    }
+
+    var highRes = entity.Components.OfType<HighResTransformComponent>().FirstOrDefault();
+    if (highRes != null)
+    {
+      highRes.IsEditable = hasCameraOrCursor;
     }
   }
 }

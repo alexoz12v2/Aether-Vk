@@ -30,7 +30,7 @@ use aethervk_oshal_rlib::{
     matrix::{Matrix4, mat4::Mat4x4f32},
     quaternion::Quaternion,
     safe_div,
-    vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
+    vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat},
   },
   os::pool::{ThreadPool, chunked::ThreadPoolChunkedExt, tasklet::ThreadPoolExt},
 };
@@ -259,6 +259,101 @@ impl TransformComponent {
   }
 }
 
+/// High-precision transform for camera (and optionally cursor) entities.
+/// Position is stored as `Vec3f64` to avoid catastrophic cancellation when
+/// computing relative transforms between nearly-coincident AU positions.
+///
+/// Rotation stays f32 `Quat` (sufficient for orientation).
+/// Scale stays f32 (never needs sub-AU precision).
+///
+/// The camera entity should have BOTH `TransformComponent` (f32 GPU shadow) and
+/// `HighResTransformComponent` (f64 source of truth). Before each render frame,
+/// call `sync_highres_to_transform()` to update the f32 shadow.
+#[derive(Debug, Clone, Copy)]
+pub struct HighResTransformComponent {
+  pub position: Vec3f64,
+  pub rotation: Quat,
+  pub scale: Vec3f32,
+}
+
+impl Default for HighResTransformComponent {
+  fn default() -> Self {
+    Self {
+      position: Vec3f64::from_components(0.0, 0.0, 0.0),
+      rotation: Quat::identity(),
+      scale: Vec3f32::one(),
+    }
+  }
+}
+
+impl PartialEq for HighResTransformComponent {
+  fn eq(&self, other: &Self) -> bool {
+    self.position == other.position && self.rotation == other.rotation && self.scale == other.scale
+  }
+}
+
+impl Component for HighResTransformComponent {}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HighResTransformDTO {
+  pub px: f64,
+  pub py: f64,
+  pub pz: f64,
+  pub rw: f32,
+  pub rx: f32,
+  pub ry: f32,
+  pub rz: f32,
+  pub sx: f32,
+  pub sy: f32,
+  pub sz: f32,
+}
+
+impl ForeignSerializable for HighResTransformComponent {
+  type ForeignData = HighResTransformDTO;
+  const COMPONENT_ID: u64 = 3;
+
+  fn to_foreign(&self) -> Self::ForeignData {
+    HighResTransformDTO {
+      px: self.position.x(),
+      py: self.position.y(),
+      pz: self.position.z(),
+      rw: self.rotation.0.w(),
+      rx: self.rotation.0.x(),
+      ry: self.rotation.0.y(),
+      rz: self.rotation.0.z(),
+      sx: self.scale.x(),
+      sy: self.scale.y(),
+      sz: self.scale.z(),
+    }
+  }
+
+  fn apply_foreign(&mut self, data: &Self::ForeignData) {
+    self.position = Vec3f64::from_components(data.px, data.py, data.pz);
+    self.rotation = Quat::from_components(data.rw, data.rx, data.ry, data.rz);
+    self.scale = Vec3f32::from_components(data.sx, data.sy, data.sz);
+  }
+}
+
+impl HighResTransformComponent {
+  /// Create from an existing f32 TransformComponent (lossless upcast of position).
+  pub fn from_transform(t: &TransformComponent) -> Self {
+    Self {
+      position: t.position.to_f64(),
+      rotation: t.rotation,
+      scale: t.scale,
+    }
+  }
+
+  /// Downcast to f32 TransformComponent (lossy for position).
+  pub fn to_transform(&self) -> TransformComponent {
+    TransformComponent {
+      position: self.position.to_f32(),
+      rotation: self.rotation,
+      scale: self.scale,
+    }
+  }
+}
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CameraProjection {
   Perspective {
@@ -1244,14 +1339,12 @@ impl Scene {
     }
 
     let camera_entity = self.spawn_entity(&name);
-    self.add_component(
-      camera_entity,
-      TransformComponent {
-        position: inital_pos,
-        rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-      },
-    )?;
+    // f64 position source of truth — no TransformComponent on camera
+    self.add_component(camera_entity, HighResTransformComponent {
+      position: inital_pos.to_f64(),
+      rotation: Quat::identity(),
+      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+    })?;
     self.add_component(camera_entity, CameraComponent::default())?;
     self.set_parent(camera_entity, Some(parent));
     Ok(camera_entity)
@@ -1348,7 +1441,8 @@ impl Scene {
     if let Some(p) = parent {
       self.set_parent(entity, Some(p));
     }
-    let _ = self.add_component(entity, t);
+    // Camera requires HighResTransformComponent (not TransformComponent)
+    let _ = self.add_component(entity, HighResTransformComponent::from_transform(&t));
     let _ = self.add_component(entity, c);
     entity
   }
@@ -1444,8 +1538,10 @@ impl Scene {
 
     // this module
     self.register_component::<TransformComponent>(&[]);
-    self.register_component::<CameraComponent>(&transform_type_id);
-    self.register_component::<CursorComponent>(&transform_type_id);
+    self.register_component::<HighResTransformComponent>(&[]);
+    let highres_type_id = [TypeId::of::<HighResTransformComponent>()];
+    self.register_component::<CameraComponent>(&highres_type_id);
+    self.register_component::<CursorComponent>(&highres_type_id);
     self.register_component::<MarkersComponent>(&transform_type_id);
     self.register_component::<PhysicalMeshComponent>(&transform_type_id);
     self.register_component::<ImageBillboardComponent>(&transform_type_id);
@@ -2834,6 +2930,244 @@ impl Scene {
       scale: parent.scale * child.scale,
       rotation: parent.rotation * child.rotation,
       position: parent.position + (parent.rotation.rotate_vector(parent.scale * child.position)),
+    }
+  }
+
+  /// Like `global_transform`, but accumulates positions in f64 to preserve precision.
+  /// Uses `HighResTransformComponent` when available on an entity, falling back to
+  /// `TransformComponent` (promoted to f64) otherwise.
+  pub fn global_transform_f64(&self, entity_id: EntityId) -> Option<HighResTransformComponent> {
+    // Start: read the entity's own transform as f64
+    let initial = self.with_component(entity_id, |c: &HighResTransformComponent| *c)
+      .or_else(|| {
+        self.with_component(entity_id, |c: &TransformComponent| {
+          HighResTransformComponent::from_transform(c)
+        })
+      })?;
+
+    let mut acc_pos = initial.position;
+    let mut acc_rot = initial.rotation;
+    let mut acc_scale = initial.scale;
+    let mut current_entity = entity_id;
+
+    loop {
+      let parent_opt = {
+        let hierarchy = self.hierarchy.read();
+        hierarchy.parents.get(&current_entity).copied()
+      };
+
+      if let Some(parent_id) = parent_opt {
+        // Read parent position in f64 if available
+        let parent_pos_f64 = self.with_component(parent_id, |c: &HighResTransformComponent| c.position)
+          .or_else(|| {
+            self.with_component(parent_id, |c: &TransformComponent| c.position.to_f64())
+          });
+
+        if let Some(p_pos) = parent_pos_f64 {
+          let p_rot = self.with_component(parent_id, |c: &TransformComponent| c.rotation)
+            .unwrap_or(Quat::identity());
+          let p_scale = self.with_component(parent_id, |c: &TransformComponent| c.scale)
+            .unwrap_or(Vec3f32::one());
+
+          let mut frame_scale = 1.0_f32;
+          let _ = self.with_component(parent_id, |c: &ReferenceFrameComponent| {
+            frame_scale = c.scale;
+          });
+
+          // Apply frame scale to parent scale
+          let scaled_parent_scale = p_scale * frame_scale;
+
+          // combine: parent_pos + parent_rot * (parent_scale * child_pos)
+          // All position math in f64:
+          let rotated = p_rot.rotate_vector(
+            Vec3f32::from_components(
+              (scaled_parent_scale.x() as f64 * acc_pos.x()) as f32,
+              (scaled_parent_scale.y() as f64 * acc_pos.y()) as f32,
+              (scaled_parent_scale.z() as f64 * acc_pos.z()) as f32,
+            )
+          );
+          acc_pos = p_pos + rotated.to_f64();
+          acc_rot = p_rot * acc_rot;
+          acc_scale = scaled_parent_scale * acc_scale;
+        }
+        current_entity = parent_id;
+      } else {
+        break;
+      }
+    }
+
+    Some(HighResTransformComponent {
+      position: acc_pos,
+      rotation: acc_rot,
+      scale: acc_scale,
+    })
+  }
+
+  /// f64 version of `get_relative_transform`. Computes the transform of `target_entity`
+  /// relative to `reference_entity` with all position math in f64.
+  /// Returns an `HighResTransformComponent` with f64 position.
+  pub fn get_relative_transform_f64(
+    &self,
+    target_entity: EntityId,
+    reference_entity: EntityId,
+  ) -> Option<HighResTransformComponent> {
+    if target_entity == reference_entity {
+      return Some(HighResTransformComponent {
+        position: Vec3f64::from_components(0.0, 0.0, 0.0),
+        rotation: self
+          .global_transform(target_entity)
+          .map(|t| t.rotation)
+          .unwrap_or(Quat::identity()),
+        scale: self
+          .global_transform(target_entity)
+          .map(|t| t.scale)
+          .unwrap_or(Vec3f32::from_components(1.0, 1.0, 1.0)),
+      });
+    }
+
+    // Build paths to root
+    let mut target_path = Vec::new();
+    let mut curr = target_entity;
+    target_path.push(curr);
+    while let Some(parent) = self.get_parent(curr) {
+      curr = parent;
+      target_path.push(curr);
+    }
+
+    let mut ref_path = Vec::new();
+    let mut curr = reference_entity;
+    ref_path.push(curr);
+    while let Some(parent) = self.get_parent(curr) {
+      curr = parent;
+      ref_path.push(curr);
+    }
+
+    // Find LCA
+    let mut lca = None;
+    let mut t_idx = target_path.len() as isize - 1;
+    let mut r_idx = ref_path.len() as isize - 1;
+
+    while t_idx >= 0 && r_idx >= 0 && target_path[t_idx as usize] == ref_path[r_idx as usize] {
+      lca = Some(target_path[t_idx as usize]);
+      t_idx -= 1;
+      r_idx -= 1;
+    }
+
+    let safe_div_f64 = |a: f64, b: f64| -> f64 {
+      if b.abs() < 1e-30 { 0.0 } else { a / b }
+    };
+    let safe_div_f32 = |a: f32, b: f32| -> f32 {
+      if b.abs() < 1e-15 { 0.0 } else { a / b }
+    };
+
+    if lca.is_none() {
+      // Fallback: use global transforms in f64
+      let target_global = self.global_transform_f64(target_entity)?;
+      let ref_global = self.global_transform_f64(reference_entity)?;
+
+      return Some(HighResTransformComponent {
+        scale: Vec3f32::from_components(
+          safe_div_f32(target_global.scale.x(), ref_global.scale.x()),
+          safe_div_f32(target_global.scale.y(), ref_global.scale.y()),
+          safe_div_f32(target_global.scale.z(), ref_global.scale.z()),
+        ),
+        rotation: target_global.rotation,
+        position: target_global.position - ref_global.position,
+      });
+    }
+
+    // Accumulate target → LCA in f64
+    let mut t_pos = Vec3f64::from_components(0.0, 0.0, 0.0);
+    let mut t_rot = Quat::identity();
+    let mut t_scale = Vec3f32::from_components(1.0, 1.0, 1.0);
+
+    if t_idx >= 0 {
+      for i in 0..=(t_idx as usize) {
+        let node_id = target_path[i];
+        let node_t = self.with_component(node_id, |c: &TransformComponent| *c)?;
+        let node_pos_f64 = self.with_component(node_id, |c: &HighResTransformComponent| c.position)
+          .unwrap_or(node_t.position.to_f64());
+
+        let mut frame_scale = 1.0_f32;
+        let _ = self.with_component(node_id, |c: &ReferenceFrameComponent| {
+          frame_scale = c.scale;
+        });
+
+        let scaled_child_pos = t_pos * (frame_scale as f64);
+        let scaled_child_scale = t_scale * frame_scale;
+
+        // rotate the scaled child position by node rotation (f32 quat, f64 position)
+        let rotated = node_t.rotation.rotate_vector(Vec3f32::from_components(
+          (node_t.scale.x() as f64 * scaled_child_pos.x()) as f32,
+          (node_t.scale.y() as f64 * scaled_child_pos.y()) as f32,
+          (node_t.scale.z() as f64 * scaled_child_pos.z()) as f32,
+        ));
+
+        t_pos = node_pos_f64 + rotated.to_f64();
+        t_rot = node_t.rotation * t_rot;
+        t_scale = node_t.scale * scaled_child_scale;
+      }
+    }
+
+    // Accumulate ref → LCA in f64
+    let mut r_pos = Vec3f64::from_components(0.0, 0.0, 0.0);
+    let mut r_rot = Quat::identity();
+    let mut r_scale = Vec3f32::from_components(1.0, 1.0, 1.0);
+
+    if r_idx >= 0 {
+      for i in 0..=(r_idx as usize) {
+        let node_id = ref_path[i];
+        let node_t = self.with_component(node_id, |c: &TransformComponent| *c)?;
+        let node_pos_f64 = self.with_component(node_id, |c: &HighResTransformComponent| c.position)
+          .unwrap_or(node_t.position.to_f64());
+
+        let mut frame_scale = 1.0_f32;
+        let _ = self.with_component(node_id, |c: &ReferenceFrameComponent| {
+          frame_scale = c.scale;
+        });
+
+        let scaled_child_pos = r_pos * (frame_scale as f64);
+        let scaled_child_scale = r_scale * frame_scale;
+
+        let rotated = node_t.rotation.rotate_vector(Vec3f32::from_components(
+          (node_t.scale.x() as f64 * scaled_child_pos.x()) as f32,
+          (node_t.scale.y() as f64 * scaled_child_pos.y()) as f32,
+          (node_t.scale.z() as f64 * scaled_child_pos.z()) as f32,
+        ));
+
+        r_pos = node_pos_f64 + rotated.to_f64();
+        r_rot = node_t.rotation * r_rot;
+        r_scale = node_t.scale * scaled_child_scale;
+      }
+    }
+
+    // f64 subtraction — the whole point of this function
+    let diff_pos = t_pos - r_pos;
+
+    Some(HighResTransformComponent {
+      scale: Vec3f32::from_components(
+        safe_div_f32(t_scale.x(), r_scale.x()),
+        safe_div_f32(t_scale.y(), r_scale.y()),
+        safe_div_f32(t_scale.z(), r_scale.z()),
+      ),
+      rotation: t_rot,
+      position: Vec3f64::from_components(
+        safe_div_f64(diff_pos.x(), r_scale.x() as f64),
+        safe_div_f64(diff_pos.y(), r_scale.y() as f64),
+        safe_div_f64(diff_pos.z(), r_scale.z() as f64),
+      ),
+    })
+  }
+
+  /// Syncs the f64 `HighResTransformComponent` into the f32 `TransformComponent` shadow.
+  /// Must be called before each render frame for camera entities.
+  pub fn sync_highres_to_transform(&self, entity_id: EntityId) {
+    if let Some(hrt) = self.with_component(entity_id, |c: &HighResTransformComponent| *c) {
+      let _ = self.with_component_mut(entity_id, |t: &mut TransformComponent| {
+        t.position = hrt.position.to_f32();
+        t.rotation = hrt.rotation;
+        t.scale = hrt.scale;
+      });
     }
   }
 

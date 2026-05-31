@@ -354,6 +354,29 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
           }
         });
       }
+      else if (componentId == 3 && dataPtr != IntPtr.Zero) // HighResTransform (f64 position)
+      {
+        var dto = Marshal.PtrToStructure<NativeInterop.FfiHighResTransform>(dataPtr);
+        _uiThreadDispatcher?.Dispatch(() =>
+        {
+          var hrt = entity.Components.OfType<HighResTransformComponent>().FirstOrDefault();
+          if (hrt != null)
+          {
+            hrt.SuspendNotifications = true;
+            hrt.PosX = dto.Px;
+            hrt.PosY = dto.Py;
+            hrt.PosZ = dto.Pz;
+            hrt.RotW = dto.Rw;
+            hrt.RotX = dto.Rx;
+            hrt.RotY = dto.Ry;
+            hrt.RotZ = dto.Rz;
+            hrt.ScaleX = dto.Sx;
+            hrt.ScaleY = dto.Sy;
+            hrt.ScaleZ = dto.Sz;
+            hrt.SuspendNotifications = false;
+          }
+        });
+      }
       else
       {
         // ── Pull-signal: Rust marked this component as changed but sent
@@ -743,7 +766,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
       SyncSceneHierarchy(sceneId);
 
-      entity.Components.Add(new TransformComponent());
+      entity.Components.Add(new HighResTransformComponent());
       entity.Components.Add(new CameraComponent());
     }
 
@@ -805,6 +828,61 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       sceneId,
       entityId,
       in transform
+    );
+  }
+
+  public void SetHighResTransformComponent(
+    ulong sceneId,
+    ulong entityId,
+    double px,
+    double py,
+    double pz,
+    float rw,
+    float rx,
+    float ry,
+    float rz,
+    float sx,
+    float sy,
+    float sz
+  )
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return;
+    var transform = new NativeInterop.FfiHighResTransform
+    {
+      Px = px,
+      Py = py,
+      Pz = pz,
+      Rw = rw,
+      Rx = rx,
+      Ry = ry,
+      Rz = rz,
+      Sx = sx,
+      Sy = sy,
+      Sz = sz,
+    };
+    NativeInterop.avkSimulationContext_setHighResTransformComponent(
+      _simulationContext,
+      sceneId,
+      entityId,
+      in transform
+    );
+  }
+
+  public bool GetHighResTransformComponent(
+    ulong sceneId,
+    ulong entityId,
+    out NativeInterop.FfiHighResTransform transform
+  )
+  {
+    transform = default;
+    if (_simulationContext == IntPtr.Zero)
+      return false;
+    return NativeInterop.avkSimulationContext_getHighResTransformComponent(
+      _simulationContext,
+      sceneId,
+      entityId,
+      out transform
     );
   }
 
@@ -877,7 +955,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
 
       SyncSceneHierarchy(sceneId);
 
-      entity.Components.Add(new TransformComponent());
+      entity.Components.Add(new HighResTransformComponent());
       entity.Components.Add(new CameraComponent { IsOrthographic = true });
     }
 
@@ -2379,8 +2457,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
             );
           }
 
-          // Fetch basic transform logic
-          entity.Components.Add(new TransformComponent());
+          // Camera/cursor use HighResTransformComponent (f64 position), everything else uses Transform
+          if (entity.Name == "camera" || entity.Name == "cursor")
+            entity.Components.Add(new HighResTransformComponent());
+          else
+            entity.Components.Add(new TransformComponent());
 
           // Add UI mirrored components by FFI inspection heuristic
           // TODO: No. Do not use heuristic. Add a function which queries the list of components present, and we decide which to spawn
@@ -2709,17 +2790,17 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   public Entity CreateCursor(ulong sceneId, Entity parent)
   {
     var cursor = SpawnEntity(sceneId, "cursor", parent);
-    cursor.Components.Add(new TransformComponent());
+    cursor.Components.Add(new HighResTransformComponent());
     cursor.Components.Add(new CursorComponent());
     if (_simulationContext != IntPtr.Zero)
     {
-      NativeInterop.avkSimulationContext_addTransformComponent(
+      NativeInterop.avkSimulationContext_addHighResTransformComponent(
         _simulationContext,
         sceneId,
         cursor.Id,
-        0f,
-        0f,
-        0f,
+        0.0,
+        0.0,
+        0.0,
         1f,
         0f,
         0f,
