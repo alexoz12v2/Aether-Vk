@@ -40,6 +40,20 @@ public partial class PropertiesViewModel
 
   public TimelineService Timeline { get; }
 
+  public bool CanEditProperties
+  {
+    get
+    {
+      if (SelectedEntity == null)
+        return false;
+      if (!Timeline.IsPlaying)
+        return true;
+      // When playing, only allow editing non-mesh entities (like Camera, Cursor, Billboard)
+      return !SelectedEntity.Components.OfType<PhysicalMeshComponent>().Any()
+        && !SelectedEntity.Components.OfType<ParticleEmitterCirclesComponent>().Any();
+    }
+  }
+
   public PropertiesViewModel(
     ulong sceneId,
     SceneStateManager stateManager,
@@ -60,9 +74,16 @@ public partial class PropertiesViewModel
     // Register composable rules
     _componentRules.Add(new TransformEditableRule());
     _componentRules.Add(new CometBvhRefreshRule(_runtimeService));
-    _componentRules.Add(new EpaRefreshRule(_runtimeService));
+    _componentRules.Add(new EpaRefreshRule(_runtimeService, _breadcrumbService));
 
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
+    Timeline.PropertyChanged += (s, e) =>
+    {
+      if (e.PropertyName == nameof(TimelineService.IsPlaying))
+      {
+        OnPropertyChanged(nameof(CanEditProperties));
+      }
+    };
   }
 
   public bool ProcessAction(AppAction action, bool isPressed)
@@ -76,15 +97,8 @@ public partial class PropertiesViewModel
 
   public void Receive(EntitySelectedMessage message)
   {
-    System.Console.WriteLine(
-      $"[PropertiesViewModel] Received selection: {message.SelectedEntity?.Name ?? "null"}"
-    );
-
-    _breadcrumbService?.ShowMessageAsync(
-      "Properties",
-      $"Received selection: {message.SelectedEntity?.Name ?? "null"}"
-    );
     OnPropertyChanged(nameof(SelectedEntity));
+    OnPropertyChanged(nameof(CanEditProperties));
     IsFollowingEntity = false;
 
     PropertiesExpanders.Clear();
@@ -141,7 +155,6 @@ public partial class PropertiesViewModel
           || name.EndsWith("SunComponent")
           || name.EndsWith("CursorComponent")
           || name.EndsWith("GridComponent")
-          || name.EndsWith("PhysicalMeshComponent")
         )
         {
           // For existing complex components, try to find them in the old heuristic list

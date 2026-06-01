@@ -1,0 +1,42 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             x:Class="AetherVk.Views.AssetBrowserView"
+             x:DataType="vm:AssetBrowserViewModel">
+    <Grid RowDefinitions="Auto, *">
+        <!-- Header / Toolbar -->
+        <Border Grid.Row="0" Background="{DynamicResource Bg.Surface}" Padding="8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Bg.Outline}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Asset Browser" FontWeight="Bold" VerticalAlignment="Center" />
+                <Button Content="Import Mesh" Command="{Binding MainViewModel.ImportModelCommand}" Classes="accent" HorizontalAlignment="Right" />
+            </StackPanel>
+        </Border>
+
+        <!-- Main Content -->
+        <ListBox Grid.Row="1" ItemsSource="{Binding MainViewModel.ImportedModels}" Margin="8" Background="Transparent" BorderThickness="0">
+            <ListBox.ItemTemplate>
+                <DataTemplate DataType="vm:ImportedModelItem">
+                    <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,4">
+                        <Grid ColumnDefinitions="*, Auto">
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" />
+                                <TextBlock Text="{Binding FullPath}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <Button Content="View" Command="{Binding ViewMeshCommand}" Padding="8,4" FontSize="12" />
+                                <Button Content="Spawn" Command="{Binding SpawnCommand}" Padding="8,4" FontSize="12" Classes="accent" />
+                                <Button Content="Unload" Command="{Binding UnloadCommand}" Padding="8,4" FontSize="12" Background="{DynamicResource Sem.Error}" Foreground="White" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+            <ListBox.Styles>
+                <Style Selector="ListBoxItem">
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="Margin" Value="0" />
+                </Style>
+            </ListBox.Styles>
+        </ListBox>
+    </Grid>
+</UserControl>

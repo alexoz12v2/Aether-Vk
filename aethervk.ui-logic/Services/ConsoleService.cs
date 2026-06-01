@@ -32,7 +32,7 @@ public class ConsoleService : ObservableObject, IDisposable
   // Do not call any synchronous functions like `Console.WriteLine` here!
   public void Log(string message)
   {
-    var msg = $"[{DateTime.Now:HH:mm:ss}] {message}";
+    var msg = $"[{DateTime.Now:HH:mm:ss}] {message.TrimEnd('\n', '\r')}";
     Console.WriteLine(msg);
     _messageQueue.Enqueue(msg);
   }

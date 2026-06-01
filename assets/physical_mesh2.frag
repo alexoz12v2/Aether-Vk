@@ -139,11 +139,13 @@ void main() {
     bool useEmissive  = (mat.textureFlags & FLAG_EMISSIVE) != 0u;
 
     vec3 V = normalize(scene.cameraPos.xyz - inWorldPos);
-    vec3 unnormalizedLightVector = scene.sunPos.xyz - inWorldPos;
-    float distanceToSun = length(unnormalizedLightVector);
-    vec3 lightDir = unnormalizedLightVector / distanceToSun;
+    
+    bool isDirectional = scene.sunColor.w > 0.5;
+    vec3 unnormalizedLightVector = isDirectional ? scene.sunPos.xyz : (scene.sunPos.xyz - inWorldPos);
+    float distanceToSun = isDirectional ? 0.0 : length(unnormalizedLightVector);
+    vec3 lightDir = isDirectional ? normalize(unnormalizedLightVector) : (unnormalizedLightVector / distanceToSun);
 
-    float attenuation = 1.0 / (1.0 + 0.001 * distanceToSun);
+    float attenuation = isDirectional ? 1.0 : (1.0 / (1.0 + 0.001 * distanceToSun));
     vec3 lightColor = scene.sunColor.xyz * attenuation;
 
     vec3 albedo = mat.baseAlbedo.rgb;

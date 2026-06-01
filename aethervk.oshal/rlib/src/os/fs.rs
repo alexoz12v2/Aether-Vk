@@ -120,6 +120,34 @@ impl Path {
 
     the_pathbuf
   }
+
+  /// TODO: Document this item
+  pub fn extension(&self) -> Option<alloc::borrow::Cow<'_, str>> {
+    let slice = strip_nul(&self.inner);
+    if let Some(pos) = slice.iter().rposition(|&c| c == b'.' as os_char) {
+      #[cfg(windows)]
+      {
+        let s = unsafe {
+          core::slice::from_raw_parts(slice.as_ptr().add(pos + 1), slice.len() - pos - 1)
+        };
+        Some(alloc::borrow::Cow::Owned(
+          alloc::string::String::from_utf16_lossy(s),
+        ))
+      }
+      #[cfg(not(windows))]
+      {
+        let s = unsafe {
+          core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+            slice.as_ptr().add(pos + 1) as *const u8,
+            slice.len() - pos - 1,
+          ))
+        };
+        Some(alloc::borrow::Cow::Borrowed(s))
+      }
+    } else {
+      None
+    }
+  }
 }
 
 impl FileSystemObject for Path {
@@ -346,34 +374,6 @@ impl PathBuf {
       if c == SEP {
         return;
       }
-    }
-  }
-
-  /// TODO: Document this item
-  pub fn extension(&self) -> Option<alloc::borrow::Cow<'_, str>> {
-    let slice = self.as_slice();
-    if let Some(pos) = slice.iter().rposition(|&c| c == b'.' as os_char) {
-      #[cfg(windows)]
-      {
-        let s = unsafe {
-          core::slice::from_raw_parts(slice.as_ptr().add(pos + 1), slice.len() - pos - 1)
-        };
-        Some(alloc::borrow::Cow::Owned(
-          alloc::string::String::from_utf16_lossy(s),
-        ))
-      }
-      #[cfg(not(windows))]
-      {
-        let s = unsafe {
-          core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-            slice.as_ptr().add(pos + 1) as *const u8,
-            slice.len() - pos - 1,
-          ))
-        };
-        Some(alloc::borrow::Cow::Borrowed(s))
-      }
-    } else {
-      None
     }
   }
 

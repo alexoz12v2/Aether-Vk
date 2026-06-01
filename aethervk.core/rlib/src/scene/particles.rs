@@ -30,6 +30,7 @@ impl GaussianParams {
   }
 }
 
+#[deprecated]
 #[derive(Clone, Debug)]
 /// TODO: Document this item
 pub struct ParticleEmitterComponent {
@@ -127,7 +128,8 @@ impl ParticleSystemComponent {
     }
   }
 
-  /// TODO: Document this item
+  /// Deprecated. Use the compute shader for this.
+  #[deprecated]
   pub fn emit_particles(
     &mut self,
     config: &ParticleEmitterComponent,
@@ -281,6 +283,10 @@ pub struct EmissionCircle {
   pub ttl: u64,
   /// Mean initial velocity of the emitted particles (simulation units).
   pub mean_velocity: f32,
+  /// Standard deviation for the velocity direction (radians).
+  pub velocity_std_dev: f32,
+  /// Visual child entity representing the emission point.
+  pub child_entity: Option<crate::scene::EntityId>,
 }
 
 /// Attaches a set of discrete circular emission zones to a comet mesh entity.
@@ -290,7 +296,6 @@ pub struct EmissionCircle {
 #[derive(Clone, Debug, Default)]
 pub struct ParticleEmitterCirclesComponent {
   pub circles: alloc::vec::Vec<EmissionCircle>,
-  pub child_entities: alloc::vec::Vec<u64>,
 }
 
 impl Component for ParticleEmitterCirclesComponent {}
@@ -319,6 +324,8 @@ mod tests {
       particles_per_tick: 10,
       ttl: 1000,
       mean_velocity: 0.1,
+      velocity_std_dev: 0.05,
+      child_entity: None,
     });
     assert_eq!(comp.circles.len(), 1);
     assert_eq!(comp.circles[0].latitude_rad, 0.5);

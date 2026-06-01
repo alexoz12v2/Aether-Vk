@@ -15,6 +15,7 @@ namespace AetherVk.Services
     private readonly Func<ulong, TimelineViewModel> _createTimeline;
     private readonly Func<AlmanacExplorerViewModel> _createAlmanac;
     private readonly Func<Viewport3DViewModel> _createViewport;
+    private readonly Func<AssetBrowserViewModel> _createAssetBrowser;
     private readonly SceneStateManager _stateManager;
 
     public TabFactory(
@@ -27,6 +28,7 @@ namespace AetherVk.Services
       Func<ulong, TimelineViewModel> createTimeline,
       Func<AlmanacExplorerViewModel> createAlmanac,
       Func<Viewport3DViewModel> createViewport,
+      Func<AssetBrowserViewModel> createAssetBrowser,
       SceneStateManager stateManager
     )
     {
@@ -39,6 +41,7 @@ namespace AetherVk.Services
       _createTimeline = createTimeline;
       _createAlmanac = createAlmanac;
       _createViewport = createViewport;
+      _createAssetBrowser = createAssetBrowser;
       _stateManager = stateManager;
     }
 
@@ -51,14 +54,15 @@ namespace AetherVk.Services
       {
         "UITestPanel" => _createUITestPanel(),
         "Console" => _createConsole(),
-        "DebugUI" => _createDebugUi(),
-        "HorizonJpl" => _createHorizonJpl(),
+        "DebugUi" => _createDebugUi(),
+        "HorizonJPL" => _createHorizonJpl(),
+        "Almanac" => _createAlmanac(),
         "Outline" => _createOutline(targetSceneId),
         "Properties" => _createProperties(targetSceneId),
         "Timeline" => _createTimeline(targetSceneId),
-        "Almanac" => _createAlmanac(),
         "Viewport3D" => _createViewport(),
-        _ => throw new ArgumentException($"Cannot find or construct type {tabType}"),
+        "AssetBrowser" => _createAssetBrowser(),
+        _ => throw new ArgumentException($"Unknown tab type: {tabType}"),
       };
     }
   }

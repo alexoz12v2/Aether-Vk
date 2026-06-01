@@ -222,6 +222,10 @@ public partial class DockingManagerViewModel
     var outlineTab = _tabFactory.CreateTab("Outline") as TabItemViewModel;
     var outlineGroup = new TabGroupNodeViewModel(outlineTab!, _tabFactory);
 
+    var assetBrowserTab = _tabFactory.CreateTab("AssetBrowser") as TabItemViewModel;
+    if (assetBrowserTab != null)
+      outlineGroup.Tabs.Add(assetBrowserTab);
+
     var propertiesTab = _tabFactory.CreateTab("Properties") as TabItemViewModel;
     var propertiesGroup = new TabGroupNodeViewModel(propertiesTab!, _tabFactory);
 

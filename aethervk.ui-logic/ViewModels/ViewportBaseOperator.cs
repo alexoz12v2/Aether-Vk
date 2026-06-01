@@ -43,7 +43,7 @@ public class ViewportBaseOperator : IActionOperator
         }
         return false;
       case "viewport.toggle_measuring":
-        _vm.ToggleMeasuringModeCommand.Execute(null);
+        _vm.ToggleEarthObserverModeCommand.Execute(null);
         return true;
       case "viewport.reset_camera":
         _vm.RuntimeService.ResetCamera(_vm.SceneId, _vm.CameraId);
@@ -67,10 +67,12 @@ public class ViewportBaseOperator : IActionOperator
         _vm.RuntimeService.MoveCursor(_vm.SceneId, 0.0f, 0.0f, -0.5f);
         return true;
       case "viewport.start_orbit":
-        _vm.OperatorStack.Push(new OrbitOperator(_vm));
+        if (!_vm.IsEarthObserverMode)
+          _vm.OperatorStack.Push(new OrbitOperator(_vm));
         return true;
       case "viewport.start_pan":
-        _vm.OperatorStack.Push(new PanOperator(_vm));
+        if (!_vm.IsEarthObserverMode)
+          _vm.OperatorStack.Push(new PanOperator(_vm));
         return true;
       case "viewport.start_zoom_drag":
         _vm.OperatorStack.Push(new ZoomDragOperator(_vm));
@@ -93,6 +95,8 @@ public class ViewportBaseOperator : IActionOperator
 
   public bool ProcessPointerWheel(float deltaY)
   {
+    if (_vm.IsEarthObserverMode)
+      return true;
     _vm.RuntimeService.ZoomCamera(_vm.SceneId, _vm.CameraId, deltaY);
     return true;
   }

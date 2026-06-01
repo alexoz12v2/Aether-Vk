@@ -30,14 +30,37 @@ public partial class SplashViewModel : ViewModelBase
         _runtimeService.InitializeSimulationContext("Vulkan", null, true);
       });
 
-      // Load ephemeris at startup
-      await _runtimeService.LoadAlmanacFileAsync("assets/planets/de442.bsp");
+      // Load ephemeris at startup concurrently
+      await Task.WhenAll(
+        _runtimeService.LoadAlmanacFileAsync("assets/planets/de442.bsp"),
+        _runtimeService.LoadAlmanacFileAsync("assets/earth_latest_high_prec.bpc")
+      );
 
       // Set time to Earth's 2020-01-01 position
       if (_runtimeService.ParseEpochToTaiSec("2020-01-01 00:00:00 UTC", out var taiSec))
       {
         ulong defaultSceneId = 1; // Since InitializeSimulationContext creates scene ID 1
         _runtimeService.SetSimulationTime(defaultSceneId, taiSec);
+
+        var earthOrbitEntity = _runtimeService.SpawnEntity(defaultSceneId, "Earth Orbit");
+        if (earthOrbitEntity != null)
+        {
+          var root = _runtimeService.GetEntityByName(defaultSceneId, "root");
+          if (root != null)
+          {
+            _runtimeService.SetParent(defaultSceneId, earthOrbitEntity.Id, root.Id);
+          }
+
+          double yearInSeconds = 31557600.0;
+          await _runtimeService.UpdateTrajectoryForSpkAsync(
+            defaultSceneId,
+            earthOrbitEntity.Id,
+            399,
+            taiSec,
+            taiSec + yearInSeconds,
+            10.0
+          );
+        }
       }
 
       success = true;

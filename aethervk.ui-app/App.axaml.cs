@@ -66,6 +66,17 @@ public partial class App : Application
 
     if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
     {
+#if DEBUG
+      if (desktop.Args?.Contains("--force-fatal-error") == true)
+      {
+        desktop.MainWindow = new Views.FatalErrorWindow(
+          "This is a simulated fatal error for debugging the graphics of the fatal error window."
+        );
+        base.OnFrameworkInitializationCompleted();
+        return;
+      }
+#endif
+
       CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Register<
         App,
         AetherVk.Logic.Messages.CriticalErrorMessage
@@ -77,22 +88,7 @@ public partial class App : Application
           {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime dt)
             {
-              var errorWindow = new Avalonia.Controls.Window
-              {
-                Title = "Critical Failure",
-                Width = 600,
-                Height = 200,
-                WindowStartupLocation = Avalonia.Controls.WindowStartupLocation.CenterScreen,
-                Content = new Avalonia.Controls.TextBlock
-                {
-                  Text = m.Message,
-                  Foreground = Avalonia.Media.Brushes.Red,
-                  FontWeight = Avalonia.Media.FontWeight.Bold,
-                  FontSize = 16,
-                  Margin = new Avalonia.Thickness(20),
-                  TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-                },
-              };
+              var errorWindow = new Views.FatalErrorWindow(m.Message);
 
               var oldMain = dt.MainWindow;
               dt.MainWindow = errorWindow;
@@ -143,23 +139,9 @@ public partial class App : Application
 
       if (!System.IO.File.Exists(libPath) && !System.IO.File.Exists(libName))
       {
-        desktop.MainWindow = new Avalonia.Controls.Window
-        {
-          Title = "Critical Failure",
-          Width = 600,
-          Height = 200,
-          WindowStartupLocation = Avalonia.Controls.WindowStartupLocation.CenterScreen,
-          Content = new Avalonia.Controls.TextBlock
-          {
-            Text =
-              $"CRITICAL ERROR:\nThe required native library '{libName}' was not found in the executable directory.\n\nThe application cannot run without the core simulation engine.",
-            Foreground = Avalonia.Media.Brushes.Red,
-            FontWeight = Avalonia.Media.FontWeight.Bold,
-            FontSize = 16,
-            Margin = new Avalonia.Thickness(20),
-            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-          },
-        };
+        desktop.MainWindow = new Views.FatalErrorWindow(
+          $"The required native library '{libName}' was not found in the executable directory.\n\nThe application cannot run without the core simulation engine."
+        );
       }
       else
       {
@@ -373,23 +355,9 @@ public partial class App : Application
         {
           Avalonia.Threading.Dispatcher.UIThread.Post(() =>
           {
-            var errorWindow = new Avalonia.Controls.Window
-            {
-              Title = "Critical Failure",
-              Width = 600,
-              Height = 200,
-              WindowStartupLocation = Avalonia.Controls.WindowStartupLocation.CenterScreen,
-              Content = new Avalonia.Controls.TextBlock
-              {
-                Text =
-                  $"CRITICAL ERROR:\n{errorMessage}\n\nThe application cannot run without the core simulation engine.",
-                Foreground = Avalonia.Media.Brushes.Red,
-                FontWeight = Avalonia.Media.FontWeight.Bold,
-                FontSize = 16,
-                Margin = new Avalonia.Thickness(20),
-                TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-              },
-            };
+            var errorWindow = new Views.FatalErrorWindow(
+              $"{errorMessage}\n\nThe application cannot run without the core simulation engine."
+            );
             desktop.MainWindow = errorWindow;
             errorWindow.Show();
             splashWindow.Close();

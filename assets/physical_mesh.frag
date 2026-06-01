@@ -84,14 +84,16 @@ void main() {
 
   vec3 V = normalize(push.cameraPos - inWorldPos);
   
-  // Point light direction and distance
-  vec3 unnormalizedLightVector = push.sunPos - inWorldPos;
-  float distanceToSun = length(unnormalizedLightVector);
-  vec3 lightDir = unnormalizedLightVector / distanceToSun; // Normalized direction
+  bool isDirectional = push.sunColor.w > 0.5;
+  
+  // Light direction and distance
+  vec3 unnormalizedLightVector = isDirectional ? push.sunPos : (push.sunPos - inWorldPos);
+  float distanceToSun = isDirectional ? 0.0 : length(unnormalizedLightVector);
+  vec3 lightDir = isDirectional ? normalize(unnormalizedLightVector) : (unnormalizedLightVector / distanceToSun); // Normalized direction
   
   // Inverse square attenuation makes distant planets pitch black at engine scales.
   // We use a much softer falloff to maintain visibility.
-  float attenuation = 1.0 / (1.0 + 0.001 * distanceToSun);
+  float attenuation = isDirectional ? 1.0 : (1.0 / (1.0 + 0.001 * distanceToSun));
   
   // Final light color arriving at the fragment
   vec3 lightColor = push.sunColor.xyz * attenuation;

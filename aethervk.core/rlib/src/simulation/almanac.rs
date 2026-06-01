@@ -53,44 +53,51 @@ pub struct AlmanacPackedData {
   pub file_names: Vec<String>,
   /// the almanac itself
   pub almanac: anise::almanac::Almanac,
+  pub missing_rotation_logs: spin::Mutex<alloc::collections::BTreeSet<i32>>,
 }
 
 impl AlmanacPackedData {
   // TODO `celestial_name_from_id` to create planet/sun entities
   /// TODO: Document this item
   pub fn load_almanac<P: AsRef<os::fs::Path>>(&mut self, path: P) -> EngineResult<()> {
-    if let Ok(entries) = os::fs::read_dir(path.as_ref()) {
+    let path_ref = path.as_ref();
+    let is_valid_ext =
+      |ext: Option<&str>| ext == Some("bsp") || ext == Some("bpc") || ext == Some("tpc");
+
+    if path_ref.is_file() && is_valid_ext(path_ref.extension().as_deref()) {
+      self.load_single_spk(path_ref)?;
+    } else if let Ok(entries) = os::fs::read_dir(path_ref) {
       for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() && path.extension().as_deref() == Some("bsp") {
-          if let Some(path_cow) = path.to_str_unified() {
-            let path_str = path_cow.to_str().unwrap();
-            let path_ref: &os::fs::Path = path_str.into();
-
-            // 1. Map the file natively into the Virtual Address Space. 0 RAM Overhead!
-            let mmap = Mmap::open(path_ref).map_err(|e| EngineError::from(e))?;
-
-            // 2. Safely wrap into zero-copy `bytes::Bytes` utilizing your Mmap Drop handler constraint.
-            // `Bytes::from_owner` natively works since Mmap implements `AsRef<[u8]> + Send + 'static`
-            let bytes = bytes::Bytes::from_owner(mmap);
-
-            // 3. Mutates safely in place. If returns an error, `bytes` goes out of scope and is dropped,
-            // while `self.almanac` remains in its previous state
-            self
-              .almanac
-              .load_from_bytes_mut(bytes, path_str)
-              .map_err(|_| EngineError::InvalidOperation("[Almanac] Error loading SPK file"))?;
-            // TODO err if no counters (spk counter, bpc counter, ...) has increased
-            // TODO remove
-
-            self.file_names.push(alloc::string::String::from(path_str));
-          }
+        let entry_path = entry.path();
+        if entry_path.is_file() && is_valid_ext(entry_path.extension().as_deref()) {
+          self.load_single_spk(&entry_path)?;
         }
       }
     }
 
-    aethervk_oshal_rlib::log!("Loaded {} SPK files", self.almanac.num_loaded_spk());
+    aethervk_oshal_rlib::log!(
+      "Loaded {} SPK files, {} BPC files",
+      self.almanac.num_loaded_spk(),
+      self.almanac.num_loaded_bpc()
+    );
 
+    Ok(())
+  }
+
+  fn load_single_spk(&mut self, path: &os::fs::Path) -> EngineResult<()> {
+    if let Some(path_cow) = path.to_str_unified() {
+      let path_str = path_cow.to_str().unwrap();
+
+      let mmap = Mmap::open(path).map_err(|e| EngineError::from(e))?;
+      let bytes = bytes::Bytes::from_owner(mmap);
+
+      self
+        .almanac
+        .load_from_bytes_mut(bytes, path_str)
+        .map_err(|_| EngineError::InvalidOperation("[Almanac] Error loading SPK file"))?;
+
+      self.file_names.push(alloc::string::String::from(path_str));
+    }
     Ok(())
   }
 
@@ -135,31 +142,40 @@ impl AlmanacPackedData {
     // In SPICE, body-fixed IAU frame IDs conventionally match their base body ID (e.g. Earth = 399)
     let body_frame = anise::frames::Frame::new(spk_id, spk_id);
     // ask the almanac for the rotation matrix from body frame to inertial world space
-    let (rotation, angular_velocity) =
-      if let Ok(dcm) = self.almanac.rotate(body_frame, frame, epoch) {
-        // direction cosine matrix present, extract rotational information
-        let r = Mat3f32::from_nalgebra(dcm.rot_mat);
+    let (rotation, angular_velocity) = if let Ok(dcm) =
+      self.almanac.rotate(body_frame, frame, epoch)
+    {
+      // direction cosine matrix present, extract rotational information
+      let r = Mat3f32::from_nalgebra(dcm.rot_mat);
 
-        let angular_velocity_rad_s = if let Some(rot_mat_dt_anise) = dcm.rot_mat_dt {
-          // Note: This derivative is computed by Anise with respect to TDB (Barycentric Dynamical Time) seconds.
-          // For our macro-scale rigid-body/particle kinematics, 1 TDB second maps 1:1 to 1 standard SI simulation second.
-          // Map Anise's time derivative to your Mat3f32
-          let r_dt = Mat3f32::from_nalgebra(rot_mat_dt_anise);
+      let angular_velocity_rad_s = if let Some(rot_mat_dt_anise) = dcm.rot_mat_dt {
+        // Note: This derivative is computed by Anise with respect to TDB (Barycentric Dynamical Time) seconds.
+        // For our macro-scale rigid-body/particle kinematics, 1 TDB second maps 1:1 to 1 standard SI simulation second.
+        // Map Anise's time derivative to your Mat3f32
+        let r_dt = Mat3f32::from_nalgebra(rot_mat_dt_anise);
 
-          // 1. Get the Hat Matrix (assuming your Mat3f32 implements Mul and Transpose)
-          let omega_hat_world = r_dt * r.transpose();
+        // 1. Get the Hat Matrix (assuming your Mat3f32 implements Mul and Transpose)
+        let omega_hat_world = r_dt * r.transpose();
 
-          // 2. Extract the Vec3f32
-          Some(vee(omega_hat_world))
-        } else {
-          // Fallback: Some static or low-fidelity frames don't have angular velocity
-          None
-        };
-
-        (Some(Quat::from_rotation_matrix(&r)), angular_velocity_rad_s)
+        // 2. Extract the Vec3f32
+        Some(vee(omega_hat_world))
       } else {
-        (None, None)
+        // Fallback: Some static or low-fidelity frames don't have angular velocity
+        None
       };
+
+      (Some(Quat::from_rotation_matrix(&r)), angular_velocity_rad_s)
+    } else {
+      let mut missing_logs = self.missing_rotation_logs.lock();
+      if missing_logs.insert(spk_id) {
+        aethervk_oshal_rlib::log!(
+          "[Almanac] Could not fetch rotation for body {} to frame {:?} (Will not log again for this body)",
+          spk_id,
+          frame
+        );
+      }
+      (None, None)
+    };
 
     match (rotation, mandatory_rotation) {
       (None, true) => Err(EngineError::InvalidOperation(

@@ -413,13 +413,14 @@ pub struct ApplyEmittersPushConstants {
 #[derive(Clone, Copy)]
 pub struct EmitParticlesPushConstants {
   pub particles: u64,
-  pub emitters: u64,
-  pub bvh_nodes: u64,
-  pub _pad0: u64,
+  pub candidates: u64,
+  pub bvh: u64,
+  pub counter: u64,
+  pub root_index: u32,
+  pub num_candidates: u32,
+  pub _pad0: [u32; 2],
   pub sun_pos: [f32; 3],
-  pub dt: f32,
-  pub max_particles: u32,
-  pub num_emitters: u32,
+  pub _pad1: u32,
 }
 
 /// TODO: Document this item
@@ -1823,13 +1824,14 @@ impl VulkanComputeKernels {
 
     let pc = EmitParticlesPushConstants {
       particles: particles.address,
-      emitters: self.addresses.emitters,
-      bvh_nodes: self.addresses.bvh_nodes,
-      _pad0: 0,
+      candidates: self.addresses.emitters, // mapping to candidates for now
+      bvh: self.addresses.bvh_nodes,
+      counter: 0, // no atomic counter available right now in engine struct
+      root_index: 0,
+      num_candidates: max_particles,
+      _pad0: [0; 2],
       sun_pos: [sun_pos.x(), sun_pos.y(), sun_pos.z()],
-      dt: dt_sec,
-      max_particles,
-      num_emitters,
+      _pad1: 0,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(

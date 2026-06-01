@@ -7,6 +7,7 @@
              input:ActionContext.Id="Viewport"
              input:ActionContext.Handler="{Binding}"
              xmlns:conv="using:AetherVk.Converters">
+
     <Grid>
         <Image x:Name="RenderTargetImage" Stretch="Uniform" Focusable="True"
                PointerPressed="OnPointerPressed"
@@ -168,7 +169,10 @@
             <Border Classes="radial-item"
                     Classes.hovered="{Binding IsCometHovered}"
                     Canvas.Left="{Binding RadialCometLeft}"
-                    Canvas.Top="{Binding RadialCometTop}">
+                    Canvas.Top="{Binding RadialCometTop}"
+                    IsEnabled="{Binding !HasComet}"
+                    ToolTip.ShowOnDisabled="True"
+                    ToolTip.Tip="Only 1 comet is allowed in the scene">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
                     <TextBlock Classes="icon" Text="☄"/>
                     <TextBlock Classes="label" Text="Spawn&#x0a;Comet"/>
@@ -207,6 +211,18 @@
                     <TextBlock Classes="label" Text="Snap to&#x0a;Selected"/>
                 </StackPanel>
             </Border>
+
+            <!-- Radial item: Snap Observer — bottom -->
+            <Border Classes="radial-item"
+                    Classes.hovered="{Binding IsSnapObserverHovered}"
+                    Canvas.Left="{Binding RadialSnapObserverLeft}"
+                    Canvas.Top="{Binding RadialSnapObserverTop}"
+                    IsVisible="{Binding IsEarthObserverMode}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Classes="icon" Text="🌍"/>
+                    <TextBlock Classes="label" Text="Snap&#x0a;Observer"/>
+                </StackPanel>
+            </Border>
         </Canvas>
 
 
@@ -218,37 +234,13 @@
 
             <Border Padding="10,5" CornerRadius="4" Background="{DynamicResource Bg.Surface}" Opacity="0.8" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1">
                 <StackPanel>
-                    <TextBlock Text="{Binding IsMeasuringMode, Converter={x:Static ObjectConverters.IsNull}}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}" />
-                    <TextBlock Text="Measuring Mode" IsVisible="{Binding IsMeasuringMode}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource Sem.Warning}" />
-                    <TextBlock Text="Normal Mode" IsVisible="{Binding !IsMeasuringMode}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource Text.Secondary}" />
-                    <TextBlock IsVisible="{Binding HasFirstMeasurementPoint}" Text="{Binding FirstMeasurementPointX, StringFormat='{}Point 1: [{0:F2}, '}" Foreground="{DynamicResource Text.Primary}" FontSize="12"/>
-                    <TextBlock IsVisible="{Binding HasFirstMeasurementPoint}" Text="{Binding FirstMeasurementPointY, StringFormat='{}{0:F2}, '}" Foreground="{DynamicResource Text.Primary}" FontSize="12"/>
-                    <TextBlock IsVisible="{Binding HasFirstMeasurementPoint}" Text="{Binding FirstMeasurementPointZ, StringFormat='{}{0:F2}]'}" Foreground="{DynamicResource Text.Primary}" FontSize="12"/>
+                    <TextBlock Text="{Binding IsEarthObserverMode, Converter={x:Static ObjectConverters.IsNull}}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}" />
+                    <TextBlock Text="Earth Observer Mode" IsVisible="{Binding IsEarthObserverMode}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource Sem.Warning}" />
+                    <TextBlock Text="Normal Mode" IsVisible="{Binding !IsEarthObserverMode}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource Text.Secondary}" />
                 </StackPanel>
             </Border>
         </StackPanel>
 
-        <Border Background="{DynamicResource Bg.Surface}" Opacity="0.95" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="20" HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding ShowNoIntersectionFlyout}">
-            <StackPanel Spacing="15">
-                <TextBlock Text="No intersection found." FontWeight="Bold" FontSize="16" Foreground="{DynamicResource Sem.Warning}"/>
-
-                <TextBlock Text="Do you want to place a point at arbitrary coordinates?" Foreground="{DynamicResource Text.Primary}"/>
-                <StackPanel Orientation="Horizontal" Spacing="5">
-                    <TextBox Text="{Binding ManualMeasurementX}" Width="80" Watermark="X" />
-                    <TextBox Text="{Binding ManualMeasurementY}" Width="80" Watermark="Y" />
-                    <TextBox Text="{Binding ManualMeasurementZ}" Width="80" Watermark="Z" />
-                    <Button Content="Submit Coordinates" Command="{Binding SubmitManualMeasurementCommand}" Classes="accent" />
-                </StackPanel>
-
-                <TextBlock Text="Do you want to place it under cursor?" Foreground="{DynamicResource Text.Primary}" Margin="0,10,0,0"/>
-                <Button Content="Place Under Cursor" Command="{Binding SubmitCursorMeasurementCommand}" />
-
-                <TextBlock Text="Do you want to undo the raycast?" Foreground="{DynamicResource Text.Primary}" Margin="0,10,0,0"/>
-                <Button Content="Undo Raycast" Command="{Binding UndoMeasurementRaycastCommand}" />
-            </StackPanel>
-        </Border>
-
-        <!-- Measurement Scale Indicator -->
         <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="10" Padding="10,5"
                 Background="Transparent"
                 IsVisible="{Binding ShowMeasurementIndicator}">
@@ -262,6 +254,6 @@
             </StackPanel>
         </Border>
 
-        <!-- Removed Initialization Popup -->
+        <!-- Removed Initialization Popup and Measurement Flyouts -->
     </Grid>
 </UserControl>

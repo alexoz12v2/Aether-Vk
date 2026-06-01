@@ -611,6 +611,7 @@ mod tests {
           naif_id: 399, // Earth
           rot_period: 0.0,
           bf_to_pa: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          surface_offset_bf: Vec3f32::from_components(0.0, 0.0, 0.0),
         },
       )
       .unwrap();
@@ -731,6 +732,7 @@ mod tests {
           naif_id: 399, // Earth
           rot_period: 0.0,
           bf_to_pa: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          surface_offset_bf: Vec3f32::from_components(0.0, 0.0, 0.0),
         },
       )
       .unwrap();

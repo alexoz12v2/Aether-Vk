@@ -832,160 +832,30 @@ impl SimulationContext {
       "component_api:set_particle_emitter_circles_component"
     );
     let mut final_circles = circles.clone();
-    use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
-    {
-      let lock = scene.read();
-      let tlas_guard = lock.static_tlas.read();
-      if !tlas_guard.is_empty() {
-        for c in final_circles.iter_mut() {
-          let dir_z = c.latitude_rad.sin();
-          let dir_x = c.latitude_rad.cos() * c.longitude_rad.cos();
-          let dir_y = c.latitude_rad.cos() * c.longitude_rad.sin();
-          let ray_dir = Vec3f32::from_components(dir_x, dir_y, dir_z).normalize();
-
-          let ray_orig = if let Some(t) = {
-            #[allow(deprecated)]
-            lock.scene.global_transform(entity_id)
-          } {
-            Vec3f32::from_components(t.position[0], t.position[1], t.position[2])
-          } else {
-            Vec3f32::zero()
-          };
-
-          if let Some((hit_entity, _, hit_point, hit_normal)) =
-            crate::math::collision::linear_bvh::raycast_scene(&lock, &tlas_guard, ray_orig, ray_dir)
-          {
-            if hit_entity == entity_id {
-              c.cached_point = Some([hit_point.x(), hit_point.y(), hit_point.z()]);
-              c.cached_normal = Some([hit_normal.x(), hit_normal.y(), hit_normal.z()]);
-            } else {
-              c.cached_point = Some([hit_point.x(), hit_point.y(), hit_point.z()]);
-              c.cached_normal = Some([hit_normal.x(), hit_normal.y(), hit_normal.z()]);
-            }
-          } else {
-            c.cached_point = Some([
-              ray_orig.x() + ray_dir.x(),
-              ray_orig.y() + ray_dir.y(),
-              ray_orig.z() + ray_dir.z(),
-            ]);
-            c.cached_normal = Some([ray_dir.x(), ray_dir.y(), ray_dir.z()]);
-          }
-        }
-      } else {
-        // Fallback to local mesh raycast or simple sphere if TLAS isn't built yet
-        // For now, if TLAS is empty, we just fallback to the direction
-        for c in final_circles.iter_mut() {
-          let dir_z = c.latitude_rad.sin();
-          let dir_x = c.latitude_rad.cos() * c.longitude_rad.cos();
-          let dir_y = c.latitude_rad.cos() * c.longitude_rad.sin();
-          let ray_dir = Vec3f32::from_components(dir_x, dir_y, dir_z).normalize();
-
-          let ray_orig = if let Some(t) = {
-            #[allow(deprecated)]
-            lock.scene.global_transform(entity_id)
-          } {
-            Vec3f32::from_components(t.position[0], t.position[1], t.position[2])
-          } else {
-            Vec3f32::zero()
-          };
-          c.cached_point = Some([
-            ray_orig.x() + ray_dir.x(),
-            ray_orig.y() + ray_dir.y(),
-            ray_orig.z() + ray_dir.z(),
-          ]);
-          c.cached_normal = Some([ray_dir.x(), ray_dir.y(), ray_dir.z()]);
-        }
-      }
-    }
 
     let mut old_children = alloc::vec::Vec::new();
-    let _ = scene.read().scene.with_component(
-      entity_id,
-      |c: &crate::scene::ParticleEmitterCirclesComponent| {
-        old_children = c.child_entities.clone();
-      },
-    );
-    for child in old_children {
-      let _ = self.remove_entity(scene_id, child);
-    }
-
-    use crate::scene::{
-      TransformComponent,
-      particles::{GaussianParams, ParticleEmitterComponent, ParticleSystemComponent},
-    };
-    use aethervk_oshal_rlib::math::quaternion::Quaternion;
-
-    let mut new_children = alloc::vec::Vec::new();
-    for (i, c) in final_circles.iter().enumerate() {
-      let child_ext_id = self.spawn_entity(scene_id, &alloc::format!("jet_{}", i)).unwrap();
-
-      // We need the internal entity_id for ECS operations
-      let scene_data = self.scenes.read();
-      let (active, child_internal) = expect_scene_and_entity!(
-        scene_data.get_scene(scene_id),
-        child_ext_id,
-        "set_particle_emitter_circles_component"
-      );
-
-      active.write().scene.set_parent(child_internal, Some(entity_id));
-
-      let pos = c.cached_point.unwrap_or([0.0, 0.0, 0.0]);
-      // let norm = c.cached_normal.unwrap_or([1.0, 0.0, 0.0]);
-      let _ = active.write().scene.add_component(
-        child_internal,
-        TransformComponent {
-          position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_array(pos),
-          rotation: Quat::identity(),
-          scale: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, 1.0, 1.0),
-        },
-      );
-
-      let _ = active
-        .write()
-        .scene
-        .add_component(child_internal, ParticleSystemComponent::new(1000));
-
-      let _ = active.write().scene.add_component(
-        child_internal,
-        ParticleEmitterComponent {
-          uv_distribution: crate::math::distribution::Distribution2D::new(&[1.0], 1, 1),
-          delta: 0,
-          max_particles: 1000,
-          velocity_intensity: GaussianParams {
-            mean: c.mean_velocity,
-            std_dev: c.mean_velocity * 0.2,
-            min: c.mean_velocity * 0.1,
-            max: c.mean_velocity * 2.0,
-          },
-          emission_count: GaussianParams {
-            mean: c.particles_per_tick as f32,
-            std_dev: (c.particles_per_tick as f32) * 0.2,
-            min: 1.0,
-            max: (c.particles_per_tick as f32) * 5.0,
-          },
-          particle_radius: c.circle_radius_frac,
-          density: c.mass,
-          lifetime: c.ttl as i64,
-          color: c.color,
-          beta: 1.0,
-          use_particle2: true,
-        },
-      );
-
-      new_children.push(child_ext_id);
-    }
-
     let mut found = false;
     let _ = scene.write().scene.with_component_mut(
       entity_id,
       |c: &mut crate::scene::ParticleEmitterCirclesComponent| {
+        for circle in &c.circles {
+          if let Some(id) = circle.child_entity {
+            old_children.push(id);
+          }
+        }
         c.circles = final_circles.clone();
-        c.child_entities = new_children.clone();
         found = true;
       },
     );
 
-    if !found {
+    if found {
+      let mut scene_write = scene.write();
+      for old_id in old_children {
+        if !final_circles.iter().any(|c| c.child_entity == Some(old_id)) {
+          let _ = scene_write.scene.remove_entity(old_id);
+        }
+      }
+    } else {
       scene
         .write()
         .scene
@@ -993,7 +863,6 @@ impl SimulationContext {
           entity_id,
           crate::scene::ParticleEmitterCirclesComponent {
             circles: final_circles,
-            child_entities: new_children,
           },
         )
         .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?

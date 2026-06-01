@@ -194,7 +194,8 @@ namespace AetherVk.Services
     }
 
     public async Task<ulong> ShowSpawnCometDialogAsync(
-      System.Collections.Generic.IEnumerable<AetherVk.Logic.ViewModels.ImportedModelItem> models
+      System.Collections.Generic.IEnumerable<AetherVk.Logic.ViewModels.ImportedModelItem> models,
+      ulong? preselectedModelId = null
     )
     {
       var mainWindow = GetMainWindow();
@@ -218,7 +219,8 @@ namespace AetherVk.Services
           models,
           _horizonService,
           _timelineService,
-          _breadcrumbService
+          _breadcrumbService,
+          preselectedModelId
         ),
       };
       var result = await dialog.ShowDialog<SpawnCometResult?>(mainWindow);
@@ -424,6 +426,20 @@ namespace AetherVk.Services
         string imagePath = result[0];
         _runtimeService.SpawnBillboard(1, imagePath, 0.5f, 0.5f, 1.0f, 1.0f, 0); // Center, default scale/opacity, unscoped viewport
       }
+    }
+
+    public async Task<(double X, double Y, double Z)?> ShowSnapObserverDialogAsync()
+    {
+      var mainWindow = GetMainWindow();
+      if (mainWindow == null)
+        return null;
+
+      var dialog = new Views.SnapObserverWindow();
+      var vm = new AetherVk.Logic.ViewModels.SnapObserverViewModel();
+      dialog.DataContext = vm;
+
+      var result = await dialog.ShowDialog<(double, double, double)?>(mainWindow);
+      return result;
     }
   }
 }

@@ -72,7 +72,23 @@ public partial class Viewport3DViewModel
   private bool _isAddingJet;
 
   [ObservableProperty]
-  private bool _isMeasuringMode;
+  private bool _isEarthObserverMode;
+
+  partial void OnIsEarthObserverModeChanged(bool value)
+  {
+    WeakReferenceMessenger.Default.Send(new Messages.EarthObserverModeChangedMessage(value));
+  }
+
+  public enum EarthObserverState
+  {
+    None,
+    AnimatingToEarth,
+    Locked,
+    AnimatingBack,
+  }
+
+  private EarthObserverState _earthObserverState = EarthObserverState.None;
+  private NativeInterop.FfiHighResTransform _originalCameraPos;
 
   [ObservableProperty]
   private bool _hasFirstMeasurementPoint;
@@ -122,7 +138,9 @@ public partial class Viewport3DViewModel
     nameof(RadialResetCameraLeft),
     nameof(RadialResetCameraTop),
     nameof(RadialSnapLeft),
-    nameof(RadialSnapTop)
+    nameof(RadialSnapTop),
+    nameof(RadialSnapObserverLeft),
+    nameof(RadialSnapObserverTop)
   )]
   private bool _isRadialMenuOpen = false;
 
@@ -132,7 +150,8 @@ public partial class Viewport3DViewModel
     nameof(RadialCometLeft),
     nameof(RadialBillboardLeft),
     nameof(RadialResetCameraLeft),
-    nameof(RadialSnapLeft)
+    nameof(RadialSnapLeft),
+    nameof(RadialSnapObserverLeft)
   )]
   private double _radialMenuX = 0.0;
 
@@ -142,7 +161,8 @@ public partial class Viewport3DViewModel
     nameof(RadialCometTop),
     nameof(RadialBillboardTop),
     nameof(RadialResetCameraTop),
-    nameof(RadialSnapTop)
+    nameof(RadialSnapTop),
+    nameof(RadialSnapObserverTop)
   )]
   private double _radialMenuY = 0.0;
 
@@ -152,7 +172,8 @@ public partial class Viewport3DViewModel
     nameof(IsCometHovered),
     nameof(IsBillboardHovered),
     nameof(IsResetCameraHovered),
-    nameof(IsSnapHovered)
+    nameof(IsSnapHovered),
+    nameof(IsSnapObserverHovered)
   )]
   private string? _hoveredRadialItem;
 
@@ -160,6 +181,7 @@ public partial class Viewport3DViewModel
   public bool IsBillboardHovered => HoveredRadialItem == "billboard";
   public bool IsResetCameraHovered => HoveredRadialItem == "resetcamera";
   public bool IsSnapHovered => HoveredRadialItem == "snap";
+  public bool IsSnapObserverHovered => HoveredRadialItem == "snapobserver";
 
   private const double RadialRadius = 100.0;
   private const double ItemSize = 80.0;
@@ -187,7 +209,19 @@ public partial class Viewport3DViewModel
   public double RadialSnapLeft => RadialMenuX + RadialRadius * _cos45 - HalfItem;
   public double RadialSnapTop => RadialMenuY + RadialRadius * _cos45 - HalfItem;
 
-  /// <summary>Opens the radial menu anchored at the given viewport position.</summary>
+  // Bottom (90° down)
+  public double RadialSnapObserverLeft => RadialMenuX - HalfItem;
+  public double RadialSnapObserverTop => RadialMenuY + RadialRadius - HalfItem;
+
+  partial void OnIsRadialMenuOpenChanged(bool oldValue, bool newValue)
+  {
+    if (newValue)
+    {
+      OnPropertyChanged(nameof(HasComet));
+      CloseRadialMenuAndSpawnCometCommand.NotifyCanExecuteChanged();
+    }
+  }
+
   public void OpenRadialMenuAt(double x, double y)
   {
     RadialMenuX = x;
@@ -229,6 +263,9 @@ public partial class Viewport3DViewModel
         if (selected != null)
           RuntimeService.SnapToEntity(SceneId, CameraId, selected.Id);
         break;
+      case "snapobserver":
+        SnapObserverCommand.Execute(null);
+        break;
       // null or unrecognized: just close, no action
     }
   }
@@ -249,6 +286,11 @@ public partial class Viewport3DViewModel
       HoveredRadialItem = "resetcamera";
     else if (HitTestItem(pointerX, pointerY, RadialSnapLeft, RadialSnapTop))
       HoveredRadialItem = "snap";
+    else if (
+      IsEarthObserverMode
+      && HitTestItem(pointerX, pointerY, RadialSnapObserverLeft, RadialSnapObserverTop)
+    )
+      HoveredRadialItem = "snapobserver";
     else
       HoveredRadialItem = null;
   }
@@ -277,7 +319,9 @@ public partial class Viewport3DViewModel
       RuntimeService.SnapToEntity(SceneId, CameraId, selected.Id);
   }
 
-  [RelayCommand]
+  public bool HasComet => _sceneStateManager.GetOrCreateScene(SceneId).CometEntityId.HasValue;
+
+  [RelayCommand(CanExecute = nameof(CanSpawnComet))]
   private void CloseRadialMenuAndSpawnComet()
   {
     CloseRadialMenu();
@@ -286,6 +330,8 @@ public partial class Viewport3DViewModel
       new AetherVk.Logic.Messages.OpenSpawnCometDialogMessage()
     );
   }
+
+  private bool CanSpawnComet() => !HasComet;
 
   public ulong CameraId { get; private set; }
 
@@ -300,6 +346,7 @@ public partial class Viewport3DViewModel
   private readonly IUiThreadDispatcher _uiThreadDispatcher;
   private readonly BreadcrumbService _breadcrumbService;
   private readonly SceneStateManager _sceneStateManager;
+  private readonly AetherVk.Logic.Services.TimelineService _timelineService;
 
   /// <summary>
   /// Opens a native file dialog to permit selecting an image off the disk.
@@ -513,7 +560,8 @@ public partial class Viewport3DViewModel
     BreadcrumbService breadcrumbService,
     SceneStateManager sceneStateManager,
     IUiThreadDispatcher uiThreadDispatcher,
-    IFileDialogService fileDialogService
+    IFileDialogService fileDialogService,
+    AetherVk.Logic.Services.TimelineService timelineService
   )
     : base("Viewport 3D")
   {
@@ -522,6 +570,7 @@ public partial class Viewport3DViewModel
     _sceneStateManager = sceneStateManager;
     _uiThreadDispatcher = uiThreadDispatcher;
     _fileDialogService = fileDialogService;
+    _timelineService = timelineService;
 
     OperatorStack = new OperatorStack(new ViewportBaseOperator(this));
 
@@ -654,18 +703,8 @@ public partial class Viewport3DViewModel
 
     var breadcrumb = _breadcrumbService;
 
-    if (IsMeasuringMode)
-    {
-      if (res.hit)
-      {
-        HandleMeasurementPoint(res.px, res.py, res.pz);
-      }
-      else
-      {
-        ShowNoIntersectionFlyout = true;
-      }
+    if (IsEarthObserverMode)
       return;
-    }
 
     if (res.hit)
     {
@@ -791,7 +830,7 @@ public partial class Viewport3DViewModel
       );
 
       HasFirstMeasurementPoint = false;
-      IsMeasuringMode = false;
+      IsEarthObserverMode = false;
       ShowNoIntersectionFlyout = false;
     }
   }
@@ -837,11 +876,89 @@ public partial class Viewport3DViewModel
   }
 
   [CommunityToolkit.Mvvm.Input.RelayCommand]
-  private void ToggleMeasuringMode()
+  private void ToggleEarthObserverMode()
   {
-    IsMeasuringMode = !IsMeasuringMode;
-    HasFirstMeasurementPoint = false;
-    ShowNoIntersectionFlyout = false;
+    if (_timelineService.IsPlaying)
+    {
+      _ = _breadcrumbService.ShowMessageAsync(
+        "Viewport",
+        "Cannot switch to Earth Observer Mode while simulation is running.",
+        TimeSpan.FromSeconds(3),
+        3
+      );
+      return;
+    }
+
+    if (CameraId == 0)
+      return;
+
+    if (!IsEarthObserverMode)
+    {
+      // Entering mode
+      IsEarthObserverMode = true;
+      _runtimeService.GetHighResTransformComponent(SceneId, CameraId, out _originalCameraPos);
+
+      // Get Earth's position
+      var earthPos = _runtimeService.GetEphemerisPosition(
+        399,
+        _runtimeService.GetSimulationTime(SceneId)
+      );
+      if (earthPos.HasValue)
+      {
+        OperatorStack.IsCameraControlEnabled = false;
+        _runtimeService.AddCameraAnimation(
+          SceneId,
+          CameraId,
+          earthPos.Value.PosX,
+          earthPos.Value.PosY,
+          earthPos.Value.PosZ,
+          2.0f
+        );
+        _earthObserverState = EarthObserverState.AnimatingToEarth;
+      }
+      else
+      {
+        // Fallback if no SPK loaded
+        _runtimeService.AddAlmanacPlanet(SceneId, CameraId, 399);
+        _earthObserverState = EarthObserverState.Locked;
+      }
+    }
+    else
+    {
+      // Exiting mode
+      IsEarthObserverMode = false;
+      _runtimeService.RemoveAlmanacPlanet(SceneId, CameraId);
+      _runtimeService.AddCameraAnimation(
+        SceneId,
+        CameraId,
+        _originalCameraPos.Px,
+        _originalCameraPos.Py,
+        _originalCameraPos.Pz,
+        2.0f
+      );
+      _earthObserverState = EarthObserverState.AnimatingBack;
+    }
+  }
+
+  [CommunityToolkit.Mvvm.Input.RelayCommand]
+  private async Task SnapObserverAsync()
+  {
+    if (!IsEarthObserverMode)
+      return;
+
+    var result = await WeakReferenceMessenger.Default.Send(
+      new AetherVk.Logic.Messages.OpenSnapObserverDialogMessage()
+    );
+    if (result.HasValue)
+    {
+      _runtimeService.SetAlmanacPlanetOffset(
+        SceneId,
+        CameraId,
+        (float)result.Value.X,
+        (float)result.Value.Y,
+        (float)result.Value.Z
+      );
+    }
   }
 
   [CommunityToolkit.Mvvm.Input.RelayCommand]
@@ -880,6 +997,25 @@ public partial class Viewport3DViewModel
     if (_isProcessingFrame)
       return;
     _isProcessingFrame = true;
+
+    if (_earthObserverState == EarthObserverState.AnimatingToEarth)
+    {
+      if (_runtimeService.CheckCameraAnimationFinished(SceneId, CameraId))
+      {
+        _runtimeService.RemoveCameraAnimation(SceneId, CameraId);
+        _runtimeService.AddAlmanacPlanet(SceneId, CameraId, 399);
+        _earthObserverState = EarthObserverState.Locked;
+      }
+    }
+    else if (_earthObserverState == EarthObserverState.AnimatingBack)
+    {
+      if (_runtimeService.CheckCameraAnimationFinished(SceneId, CameraId))
+      {
+        _runtimeService.RemoveCameraAnimation(SceneId, CameraId);
+        _earthObserverState = EarthObserverState.None;
+        OperatorStack.IsCameraControlEnabled = true;
+      }
+    }
 
     UpdateMeasurementIndicator();
 
@@ -956,13 +1092,35 @@ public partial class Viewport3DViewModel
         else
         {
           // Perspective
-          double W_arcsec = camera.Fov * camera.AspectRatio * 3600.0;
+          double fovRad = camera.Fov * Math.PI / 180.0;
+          double hFovRad = 2.0 * Math.Atan(Math.Tan(fovRad / 2.0) * camera.AspectRatio);
+          double W_arcsec = hFovRad * 180.0 / Math.PI * 3600.0;
+
           if (W_arcsec > 0)
           {
             double min_arcsec = target_px_width * (W_arcsec / Width);
-            double nice_arcsec = GetNiceNumber(min_arcsec);
-            MeasurementIndicatorWidth = nice_arcsec * (Width / W_arcsec);
-            MeasurementIndicatorText = $"{FormatNiceNumber(nice_arcsec)} arcsec";
+
+            if (min_arcsec > 3600.0)
+            {
+              double min_deg = min_arcsec / 3600.0;
+              double nice_deg = GetNiceNumber(min_deg);
+              MeasurementIndicatorWidth = nice_deg * 3600.0 * (Width / W_arcsec);
+              MeasurementIndicatorText = $"{FormatNiceNumber(nice_deg)} deg";
+            }
+            else if (min_arcsec > 60.0)
+            {
+              double min_min = min_arcsec / 60.0;
+              double nice_min = GetNiceNumber(min_min);
+              MeasurementIndicatorWidth = nice_min * 60.0 * (Width / W_arcsec);
+              MeasurementIndicatorText = $"{FormatNiceNumber(nice_min)} arcmin";
+            }
+            else
+            {
+              double nice_arcsec = GetNiceNumber(min_arcsec);
+              MeasurementIndicatorWidth = nice_arcsec * (Width / W_arcsec);
+              MeasurementIndicatorText = $"{FormatNiceNumber(nice_arcsec)} arcsec";
+            }
+
             ShowMeasurementIndicator = true;
           }
           else

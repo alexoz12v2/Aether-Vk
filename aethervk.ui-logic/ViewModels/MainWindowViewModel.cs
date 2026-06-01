@@ -51,7 +51,9 @@ public partial class ImportedModelItem : ObservableObject
   [RelayCommand]
   private async Task SpawnAsync()
   {
-    var instanceId = await _windowService.ShowSpawnMeshDialogAsync(Id.ToString(), Name);
+    var msg = new AetherVk.Logic.Messages.OpenSpawnCometDialogMessage(Id);
+    WeakReferenceMessenger.Default.Send(msg);
+    var instanceId = await msg.Response;
     if (instanceId > 0)
     {
       SpawnedInstanceIds.Add(instanceId);
@@ -114,7 +116,8 @@ public partial class MainWindowViewModel
     IRecipient<ModelUnloadedMessage>,
     IRecipient<ImportModelRequestMessage>,
     IRecipient<SimulationInitializedMessage>,
-    IRecipient<AetherVk.Logic.Messages.OpenSpawnCometDialogMessage>
+    IRecipient<AetherVk.Logic.Messages.OpenSpawnCometDialogMessage>,
+    IRecipient<AetherVk.Logic.Messages.OpenSnapObserverDialogMessage>
 {
   private readonly NativeRuntimeService _runtimeService;
   private readonly BreadcrumbService _breadcrumbService;
@@ -328,9 +331,43 @@ public partial class MainWindowViewModel
 
   public void Receive(AetherVk.Logic.Messages.OpenSpawnCometDialogMessage message)
   {
+    var tcs = new TaskCompletionSource<ulong>();
     _dispatcher.DispatchAsync(async () =>
-      await _windowService.ShowSpawnCometDialogAsync(ImportedModels)
-    );
+    {
+      try
+      {
+        var result = await _windowService.ShowSpawnCometDialogAsync(
+          ImportedModels,
+          message.PreselectedModelId
+        );
+        tcs.SetResult(result);
+      }
+      catch (System.Exception ex)
+      {
+        tcs.SetException(ex);
+      }
+    });
+    message.Reply(tcs.Task);
+  }
+
+  public void Receive(AetherVk.Logic.Messages.OpenSnapObserverDialogMessage message)
+  {
+    var tcs = new TaskCompletionSource<(double, double, double)?>();
+
+    _dispatcher.DispatchAsync(async () =>
+    {
+      try
+      {
+        var result = await _windowService.ShowSnapObserverDialogAsync();
+        tcs.SetResult(result);
+      }
+      catch (System.Exception ex)
+      {
+        tcs.SetException(ex);
+      }
+    });
+
+    message.Reply(tcs.Task);
   }
 
   [RelayCommand]

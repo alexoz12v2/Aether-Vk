@@ -28,7 +28,7 @@ void main() {
     uint gid = gl_GlobalInvocationID.x; if (gid >= pc.num_candidates) return;
     uint stride = 10 * SUBGROUP_SIZE, base = (gid / SUBGROUP_SIZE) * stride + (gid % SUBGROUP_SIZE);
 
-    vec3 pos = vec3(pc.candidates.data[base], pc.candidates.data[base+SUBGROUP_SIZE], pc.candidates.data[base+2*SUBGROUP_SIZE]);
+    vec3 pos = vec3(P_READ(pc.candidates, base), P_READ(pc.candidates, base+SUBGROUP_SIZE), P_READ(pc.candidates, base+2*SUBGROUP_SIZE));
     vec3 dir = pc.sun_pos - pos; float dist = length(dir);
     if (dist < 1e-5) return;
     dir /= dist; vec3 invDir = 1.0 / dir;

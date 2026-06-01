@@ -172,12 +172,24 @@ public partial class TransformComponent : NativeComponent
   }
 }
 
-public partial class HighResTransformComponent : NativeComponent
+public partial class HighResTransformComponent
+  : NativeComponent,
+    CommunityToolkit.Mvvm.Messaging.IRecipient<AetherVk.Logic.Messages.EarthObserverModeChangedMessage>
 {
   [ObservableProperty]
   private string _unitLabel = "AU";
 
   public override string Name => $"HighRes Transform ({UnitLabel})";
+
+  public HighResTransformComponent()
+  {
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Register(this);
+  }
+
+  public void Receive(AetherVk.Logic.Messages.EarthObserverModeChangedMessage message)
+  {
+    IsEditable = !message.Value;
+  }
 
   partial void OnUnitLabelChanged(string value)
   {
@@ -756,8 +768,6 @@ public partial class CometComponent : ObservableObject, IComponent
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Particle Emitter Circles
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// <summary>
 /// C# UI model for a single circular emission zone on a comet surface.
@@ -765,6 +775,9 @@ public partial class CometComponent : ObservableObject, IComponent
 /// </summary>
 public partial class EmissionCircleItem : ObservableObject
 {
+  [ObservableProperty]
+  private ulong _visualEntityId;
+
   /// <summary>Latitude of the emission circle centre, in degrees (−90 south … +90 north).</summary>
   [ObservableProperty]
   private float _latitudeDeg;
@@ -816,6 +829,9 @@ public partial class EmissionCircleItem : ObservableObject
 
   [ObservableProperty]
   private float _meanVelocity = 10.0f;
+
+  [ObservableProperty]
+  private float _velocityDirStdDevDeg = 5.0f;
 
   public float MeanVelocityKms
   {
@@ -874,7 +890,21 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
   private void AddCircle() => Circles.Add(new EmissionCircleItem());
 
   [CommunityToolkit.Mvvm.Input.RelayCommand]
-  private void RemoveCircle(EmissionCircleItem item) => Circles.Remove(item);
+  private void RemoveCircle(EmissionCircleItem item)
+  {
+    if (item.VisualEntityId != 0 && item.VisualEntityId != ulong.MaxValue)
+    {
+      if (SimulationContext != IntPtr.Zero)
+      {
+        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_removeEntity(
+          SimulationContext,
+          SceneId,
+          item.VisualEntityId
+        );
+      }
+    }
+    Circles.Remove(item);
+  }
 
   protected override bool ShouldPushToNative(string? propertyName) => true;
 
@@ -900,6 +930,8 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
         ParticlesPerTick = Circles[i].ParticlesPerTick,
         TTL = Circles[i].TTL,
         MeanVelocity = Circles[i].MeanVelocity,
+        VelocityDirStdDevRad = Circles[i].VelocityDirStdDevDeg * (float)Math.PI / 180f,
+        ChildEntity = Circles[i].VisualEntityId == 0 ? ulong.MaxValue : Circles[i].VisualEntityId,
       };
     }
     AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setParticleEmitterCirclesComponent(
@@ -949,6 +981,8 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
           ParticlesPerTick = arr[i].ParticlesPerTick,
           TTL = arr[i].TTL,
           MeanVelocity = arr[i].MeanVelocity,
+          VelocityDirStdDevDeg = arr[i].VelocityDirStdDevRad * 180f / (float)Math.PI,
+          VisualEntityId = arr[i].ChildEntity == ulong.MaxValue ? 0 : arr[i].ChildEntity,
         };
         item.PropertyChanged += Item_PropertyChanged;
         Circles.Add(item);
@@ -1335,4 +1369,13 @@ public partial class PhysicalMeshComponent : NativeComponent
       System.Runtime.InteropServices.Marshal.FreeHGlobal(tPtr);
     }
   }
+}
+
+public partial class SkyComponent : NativeComponent
+{
+  public override string Name => "Sky";
+
+  protected override void PullFromNativeImpl() { }
+
+  protected override void PushToNativeImpl() { }
 }

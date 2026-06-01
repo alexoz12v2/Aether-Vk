@@ -1,0 +1,101 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:models="using:AetherVk.Logic.Models"
+             mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="600"
+             x:Class="AetherVk.Views.Components.ParticleEmitterCirclesView"
+             x:DataType="models:ParticleEmitterCirclesComponent">
+    <Design.DataContext>
+        <models:ParticleEmitterCirclesComponent />
+    </Design.DataContext>
+
+    <Expander Header="{Binding Name}" IsExpanded="True" HorizontalAlignment="Stretch" Margin="0,0,0,8">
+        <StackPanel Spacing="8" Margin="4">
+
+            <!-- List of emission circles -->
+            <ListBox ItemsSource="{Binding Circles}" x:Name="circlesList"
+                     Classes="list-tray" Background="Transparent" BorderThickness="0">
+                <ListBox.ItemTemplate>
+                    <DataTemplate DataType="models:EmissionCircleItem">
+                        <Border Classes="list-tray-item dense" Background="{DynamicResource Bg.Surface}"
+                                CornerRadius="8" Margin="0,0,0,8" Padding="16,12"
+                                BoxShadow="0 2 6 0 #1A000000">
+                            <StackPanel Spacing="12">
+                                <!-- Row 0: colour swatch + label + remove button -->
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <Border Grid.Column="0" Width="18" Height="18"
+                                            CornerRadius="9" Margin="0,0,12,0"
+                                            VerticalAlignment="Center">
+                                        <Border.Background>
+                                            <SolidColorBrush Color="#FFFF9944"/>
+                                        </Border.Background>
+                                    </Border>
+                                    <TextBlock Grid.Column="1" Text="Emission Jet"
+                                               FontWeight="SemiBold" FontSize="14"
+                                               VerticalAlignment="Center"/>
+                                    <Button Grid.Column="2" Content="✕"
+                                            Classes="icon" Padding="8,4" FontSize="12"
+                                            VerticalAlignment="Center" Background="Transparent"
+                                            Command="{Binding $parent[ListBox].((models:ParticleEmitterCirclesComponent)DataContext).RemoveCircleCommand}"
+                                            CommandParameter="{Binding}"
+                                            ToolTip.Tip="Remove this emission jet"/>
+                                </Grid>
+
+                                <!-- Properties wrapped for responsiveness -->
+                                <!-- Fluent 3 styling uses more breathing room and stacked labels for compact spaces -->
+                                <WrapPanel Margin="0,4,0,0">
+                                    
+                                    <!-- Position -->
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="Latitude (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <NumericUpDown Value="{Binding LatitudeDeg}" Minimum="-90" Maximum="90" FormatString="0.0" Width="100"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="Longitude (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <NumericUpDown Value="{Binding LongitudeDeg}" Minimum="0" Maximum="360" FormatString="0.0" Width="100"/>
+                                    </StackPanel>
+
+                                    <!-- Geometry & Mass -->
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="Mass (g)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <NumericUpDown Value="{Binding MassGrams}" Minimum="0" FormatString="0.000" Width="100"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="Radius (frac)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <NumericUpDown Value="{Binding CircleRadius}" Minimum="0.001" Maximum="1.0" FormatString="0.000" Width="100"/>
+                                    </StackPanel>
+
+                                    <!-- Emission Params -->
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="Rate (/tick)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <NumericUpDown Value="{Binding ParticlesPerTick}" Minimum="0" FormatString="0" Width="100"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="TTL (ticks)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <NumericUpDown Value="{Binding TTL}" Minimum="1" FormatString="0" Width="100"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="Velocity (km/s)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <NumericUpDown Value="{Binding MeanVelocityKms}" Minimum="0.0" FormatString="0.00" Width="100"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="Direction StdDev (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <NumericUpDown Value="{Binding VelocityDirStdDevDeg}" Minimum="0.0" Maximum="180.0" FormatString="0.0" Width="100"/>
+                                    </StackPanel>
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- Add circle button -->
+            <Button Content="＋ Add Emission Jet"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    Classes="accent" Margin="0,4,0,0"
+                    Command="{Binding AddCircleCommand}"/>
+        </StackPanel>
+    </Expander>
+</UserControl>
