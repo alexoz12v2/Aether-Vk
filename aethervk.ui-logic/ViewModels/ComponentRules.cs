@@ -65,10 +65,15 @@ public class CometBvhRefreshRule : IComponentRule
 public class EpaRefreshRule : IComponentRule
 {
   private readonly Services.NativeRuntimeService? _runtimeService;
+  private readonly Services.BreadcrumbService? _breadcrumbService;
 
-  public EpaRefreshRule(Services.NativeRuntimeService? runtimeService)
+  public EpaRefreshRule(
+    Services.NativeRuntimeService? runtimeService,
+    Services.BreadcrumbService? breadcrumbService = null
+  )
   {
     _runtimeService = runtimeService;
+    _breadcrumbService = breadcrumbService;
   }
 
   public void Apply(Entity entity)
@@ -80,6 +85,15 @@ public class EpaRefreshRule : IComponentRule
       emitter.PropertyChanged -= Emitter_PropertyChanged;
       emitter.PropertyChanged += Emitter_PropertyChanged;
 
+      // Handle CollectionChanged for additions and removals
+      if (
+        emitter.Circles is System.Collections.Specialized.INotifyCollectionChanged notifyCollection
+      )
+      {
+        notifyCollection.CollectionChanged -= Circles_CollectionChanged;
+        notifyCollection.CollectionChanged += Circles_CollectionChanged;
+      }
+
       // Unsubscribe from inner circles as well
       foreach (var circle in emitter.Circles)
       {
@@ -87,11 +101,47 @@ public class EpaRefreshRule : IComponentRule
         circle.PropertyChanged += Emitter_PropertyChanged;
       }
 
+      // Perform initial sync
+      _runtimeService.SyncEmissionCircleVisuals(entity.SceneId, entity.Id, emitter);
+
       void Emitter_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
       {
-        // Actually we only want to do this when paused.
-        // But NativeRuntimeService doesn't know if it's paused here easily, so we just trigger it.
         _runtimeService.RecalculateJetPoints(entity.SceneId, entity.Id);
+        _runtimeService.SyncEmissionCircleVisuals(entity.SceneId, entity.Id, emitter);
+      }
+
+      void Circles_CollectionChanged(
+        object? sender,
+        System.Collections.Specialized.NotifyCollectionChangedEventArgs e
+      )
+      {
+        if (e.OldItems != null)
+        {
+          foreach (EmissionCircleItem oldItem in e.OldItems)
+          {
+            oldItem.PropertyChanged -= Emitter_PropertyChanged;
+            if (oldItem.VisualEntityId != 0)
+            {
+              _runtimeService.RemoveEntity(entity.SceneId, oldItem.VisualEntityId);
+              oldItem.VisualEntityId = 0;
+            }
+          }
+        }
+        if (e.NewItems != null)
+        {
+          foreach (EmissionCircleItem newItem in e.NewItems)
+          {
+            newItem.PropertyChanged += Emitter_PropertyChanged;
+          }
+
+          if (emitter.Circles.Count == 1)
+          {
+            _breadcrumbService?.ShowMessageAsync("Ready", "Simulation can be started now");
+          }
+        }
+
+        _runtimeService.RecalculateJetPoints(entity.SceneId, entity.Id);
+        _runtimeService.SyncEmissionCircleVisuals(entity.SceneId, entity.Id, emitter);
       }
     }
   }

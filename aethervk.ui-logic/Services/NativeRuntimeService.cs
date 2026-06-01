@@ -897,6 +897,44 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
+  public bool GetTransformComponent(
+    ulong sceneId,
+    ulong entityId,
+    out NativeInterop.FfiTransform transform
+  )
+  {
+    transform = default;
+    if (_simulationContext == IntPtr.Zero)
+      return false;
+    unsafe
+    {
+      int size = System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiTransform>();
+      IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+      try
+      {
+        if (
+          NativeInterop.avkSimulationContext_getComponent(
+            _simulationContext,
+            sceneId,
+            entityId,
+            1,
+            ptr
+          )
+        )
+        {
+          transform =
+            System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiTransform>(ptr);
+          return true;
+        }
+      }
+      finally
+      {
+        System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+      }
+    }
+    return false;
+  }
+
   public bool GetHighResTransformComponent(
     ulong sceneId,
     ulong entityId,
@@ -1449,6 +1487,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       return 0;
     ulong taskId = NativeInterop.avkSimulationContext_spawnModelInstance(
       _simulationContext,
+      sceneId,
       modelId,
       name
     );
@@ -1713,6 +1752,116 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         $"[Runtime] SetAlmanacPlanetNaifId: entity {entityId} has no AlmanacPlanet component."
       );
     return ok;
+  }
+
+  public bool AddAlmanacPlanet(
+    ulong sceneId,
+    ulong entityId,
+    int naifId,
+    float offsetX = 0f,
+    float offsetY = 0f,
+    float offsetZ = 0f
+  )
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return false;
+
+    var ok = NativeInterop.avkSimulationContext_addAlmanacPlanet(
+      _simulationContext,
+      sceneId,
+      entityId,
+      naifId,
+      offsetX,
+      offsetY,
+      offsetZ
+    );
+
+    return ok;
+  }
+
+  public bool SetAlmanacPlanetOffset(
+    ulong sceneId,
+    ulong entityId,
+    float offsetX,
+    float offsetY,
+    float offsetZ
+  )
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return false;
+
+    var ok = NativeInterop.avkSimulationContext_setAlmanacPlanetOffset(
+      _simulationContext,
+      sceneId,
+      entityId,
+      offsetX,
+      offsetY,
+      offsetZ
+    );
+
+    // No logger here, just return ok
+    return ok;
+  }
+
+  public bool RemoveAlmanacPlanet(ulong sceneId, ulong entityId)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return false;
+
+    var ok = NativeInterop.avkSimulationContext_removeAlmanacPlanet(
+      _simulationContext,
+      sceneId,
+      entityId
+    );
+
+    return ok;
+  }
+
+  public void AddCameraAnimation(
+    ulong sceneId,
+    ulong entityId,
+    double targetX,
+    double targetY,
+    double targetZ,
+    float duration
+  )
+  {
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_addCameraAnimation(
+        _simulationContext,
+        sceneId,
+        entityId,
+        targetX,
+        targetY,
+        targetZ,
+        duration
+      );
+    }
+  }
+
+  public bool CheckCameraAnimationFinished(ulong sceneId, ulong entityId)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return false;
+
+    return NativeInterop.avkSimulationContext_checkCameraAnimationFinished(
+      _simulationContext,
+      sceneId,
+      entityId
+    );
+  }
+
+  public void RemoveCameraAnimation(ulong sceneId, ulong entityId)
+  {
+    if (_simulationContext != IntPtr.Zero)
+    {
+      NativeInterop.avkSimulationContext_removeCameraAnimation(
+        _simulationContext,
+        sceneId,
+        entityId
+      );
+    }
   }
 
   /// <summary>
@@ -2609,6 +2758,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
             entity.Components.Add(new CameraComponent());
           if (entity.Name == "cursor")
             entity.Components.Add(new CursorComponent());
+          if (entity.Name == "sky")
+            entity.Components.Add(new SkyComponent());
           if (entity.Name == "sun")
             entity.Components.Add(new SunComponent());
           // TODO: remove sun core. nucleus of sun is included in sun entity itself
@@ -2831,6 +2982,100 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       return;
 
     NativeInterop.avkSimulationContext_recalculateJetPoints(_simulationContext, sceneId, entityId);
+  }
+
+  public void SyncEmissionCircleVisuals(
+    ulong sceneId,
+    ulong entityId,
+    ParticleEmitterCirclesComponent emitter
+  )
+  {
+    lock (_nativeLock)
+    {
+      if (_simulationContext == IntPtr.Zero)
+        return;
+
+      float boundingRadius = NativeInterop.avkSimulationContext_getMeshBoundingSphereRadius(
+        _simulationContext,
+        sceneId,
+        entityId
+      );
+
+      foreach (var circle in emitter.Circles)
+      {
+        if (circle.VisualEntityId == 0)
+        {
+          circle.VisualEntityId = SpawnStaticSphere(sceneId, "EmissionSphere", 1.0f, 0.0f);
+          SetParent(sceneId, circle.VisualEntityId, entityId);
+        }
+
+        // Set transform based on spherical coordinates
+        float lat = circle.LatitudeDeg * (float)Math.PI / 180f;
+        float lon = circle.LongitudeDeg * (float)Math.PI / 180f;
+
+        float r = boundingRadius;
+        float x = r * (float)Math.Cos(lat) * (float)Math.Cos(lon);
+        float y = r * (float)Math.Cos(lat) * (float)Math.Sin(lon);
+        float z = r * (float)Math.Sin(lat);
+
+        float scale = boundingRadius * circle.CircleRadius;
+
+        NativeInterop.avkSimulationContext_addTransformComponent(
+          _simulationContext,
+          sceneId,
+          circle.VisualEntityId,
+          (float)x,
+          (float)y,
+          (float)z,
+          1f,
+          0f,
+          0f,
+          0f,
+          (float)scale,
+          (float)scale,
+          (float)scale
+        );
+
+        // Update emissive color
+        NativeInterop.avkSimulationContext_setPhysicalMeshEmissiveColor(
+          _simulationContext,
+          sceneId,
+          circle.VisualEntityId,
+          circle.ColorR,
+          circle.ColorG,
+          circle.ColorB
+        );
+      }
+    }
+  }
+
+  public ulong SpawnStaticSphere(ulong sceneId, string name, float radius, float mass)
+  {
+    lock (_nativeLock)
+    {
+      if (_simulationContext != IntPtr.Zero)
+      {
+        ulong id = NativeInterop.avkSimulationContext_spawnStaticSphere(
+          _simulationContext,
+          sceneId,
+          name,
+          radius,
+          mass
+        );
+        if (id > 0)
+        {
+          var entity = new Entity(sceneId, id, name);
+          var state = _sceneStateManager.GetOrCreateScene(sceneId);
+          state.EntityMap[id] = entity;
+          WireEntityComponents(sceneId, entity);
+          var root = GetEntityByName(sceneId, "root");
+
+          SyncSceneHierarchy(sceneId);
+          return id;
+        }
+      }
+    }
+    return 0;
   }
 
   public ulong SpawnProceduralSphere(ulong sceneId, string name, float radius, float mass)

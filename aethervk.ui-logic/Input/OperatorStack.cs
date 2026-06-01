@@ -11,8 +11,14 @@ public class OperatorStack : IActionHandler
     Push(baseOperator);
   }
 
+  public bool IsCameraControlEngaged => _stack.Count > 1;
+
+  public bool IsCameraControlEnabled { get; set; } = true;
+
   public void Push(IActionOperator op)
   {
+    if (!IsCameraControlEnabled && _stack.Count > 0)
+      return;
     op.OnEnter();
     _stack.Push(op);
   }
@@ -25,6 +31,13 @@ public class OperatorStack : IActionHandler
 
   public bool ProcessAction(AppAction action, bool isPressed)
   {
+    if (
+      !IsCameraControlEnabled
+      && _stack.Count > 0
+      && action.Id != "viewport.toggle_measuring"
+      && action.Id != "viewport.open_radial_menu"
+    )
+      return false;
     if (_stack.Count > 0)
     {
       return _stack.Peek().ProcessAction(action, isPressed);
@@ -34,6 +47,8 @@ public class OperatorStack : IActionHandler
 
   public bool ProcessPointerDelta(float dx, float dy)
   {
+    if (!IsCameraControlEnabled && _stack.Count > 0)
+      return false;
     if (_stack.Count > 0)
     {
       return _stack.Peek().ProcessPointerDelta(dx, dy);
@@ -43,6 +58,8 @@ public class OperatorStack : IActionHandler
 
   public bool ProcessPointerWheel(float deltaY)
   {
+    if (!IsCameraControlEnabled && _stack.Count > 0)
+      return false;
     if (_stack.Count > 0)
     {
       return _stack.Peek().ProcessPointerWheel(deltaY);

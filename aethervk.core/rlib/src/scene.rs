@@ -42,6 +42,7 @@ use spin::RwLock;
 use thiserror::Error;
 
 pub mod almanac_planet;
+pub mod animation;
 pub mod camera;
 pub mod interaction;
 pub mod particles;
@@ -51,6 +52,7 @@ pub mod trajectory;
 pub mod ui;
 
 pub use almanac_planet::AlmanacPlanet;
+pub use animation::*;
 pub use particles::{
   EmissionCircle, GaussianParams, ParticleData, ParticleEmitterCirclesComponent,
   ParticleEmitterComponent, ParticleSystemComponent,
@@ -136,6 +138,15 @@ impl<T> AssetCache<T> {
 new_key_type! {
   /// A unique identifier for an entity in the scene.
   pub struct EntityId;
+}
+
+impl EntityId {
+  pub fn as_ffi(&self) -> u64 {
+    slotmap::Key::data(self).as_ffi()
+  }
+  pub fn from_ffi(v: u64) -> Self {
+    slotmap::KeyData::from_ffi(v).into()
+  }
 }
 
 /// A marker trait for all components.
@@ -274,6 +285,8 @@ impl TransformComponent {
 /// The camera entity should have BOTH `TransformComponent` (f32 GPU shadow) and
 /// `HighResTransformComponent` (f64 source of truth). Before each render frame,
 /// call `sync_highres_to_transform()` to update the f32 shadow.
+///
+/// NOTE: HighResTransformComponent is primarily used by entities that exist "cross macro/micro frame" (e.g. camera and cursor).
 #[derive(Debug, Clone, Copy)]
 pub struct HighResTransformComponent {
   pub position: Vec3f64,
@@ -681,7 +694,15 @@ impl ForeignSerializable for PhysicalMeshComponent {
 
 impl Component for PhysicalMeshComponent {}
 
-/// Represents a 2D texture billboard.
+/// A display-only mesh that is not included in physical simulation.
+#[derive(Debug, Clone)]
+pub struct StaticMeshComponent {
+  pub asset_path: alloc::string::String,
+  pub mesh: alloc::sync::Arc<Comet>,
+  pub emissive_color: [f32; 4],
+}
+
+impl Component for StaticMeshComponent {}
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BillboardType {
   WorldSpace { width: f32, height: f32 },
@@ -1648,6 +1669,7 @@ impl Scene {
     self.register_component::<CursorComponent>(&highres_type_id);
     self.register_component::<MarkersComponent>(&transform_type_id);
     self.register_component::<PhysicalMeshComponent>(&transform_type_id);
+    self.register_component::<StaticMeshComponent>(&transform_type_id);
     self.register_component::<ImageBillboardComponent>(&transform_type_id);
     self.register_component::<ScreenSpaceBillboardComponent>(&[]);
     self.register_component::<SunComponent>(&transform_type_id);
@@ -1677,13 +1699,16 @@ impl Scene {
     >()]);
 
     // trajectory module
-    self.register_component::<trajectory::TrajectoryComponent>(&transform_type_id);
+    self.register_component::<trajectory::TrajectoryComponent>(&[]);
 
     // script components module
     self.register_component::<script_components::UpdateComponent>(&[]);
 
     // almanac planet module
-    self.register_component::<almanac_planet::AlmanacPlanet>(&transform_and_mesh);
+    self.register_component::<almanac_planet::AlmanacPlanet>(&[]);
+
+    // animation module
+    self.register_component::<TransformAnimationComponent>(&highres_type_id);
   }
 
   /// TODO: Document this item

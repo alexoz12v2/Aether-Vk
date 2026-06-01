@@ -35,7 +35,8 @@ public class Viewport3DViewModelTests
         b,
         sm,
         dispatcherMock.Object,
-        new Moq.Mock<IFileDialogService>().Object
+        new Moq.Mock<IFileDialogService>().Object,
+        new TimelineService()
       );
       Assert.Equal(800u, vm.Width);
       Assert.Equal(600u, vm.Height);
@@ -67,7 +68,8 @@ public class Viewport3DViewModelTests
       b,
       sm,
       dispatcherMock.Object,
-      new Moq.Mock<IFileDialogService>().Object
+      new Moq.Mock<IFileDialogService>().Object,
+      new TimelineService()
     );
     // Press middle button to start orbit
     bool handled = vm.ProcessAction(new AppAction("viewport.start_orbit", "Orbit"), true);

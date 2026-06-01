@@ -25,21 +25,39 @@ To build and run the project, you will need:
 - [.NET 10.0 SDK](https://dotnet.microsoft.com/)
 - [Vulkan SDK](https://vulkan.lunarg.com/) (>= 1.4)
 
-## Getting Started
+## Build & Run
 
-1. **Build the Rust Core (Library)**
-   ```bash
-   cd aethervk.core
-   cargo build --release
-   ```
+### 1. Compile Shaders
+The Vulkan pipelines require precompiled SPIR-V shaders (`.spv`). Use the provided scripts to compile them (ensure `VULKAN_SDK` is set in your environment):
+- **macOS / Linux**: `./compile_shaders.sh`
+- **Windows**: `.\compile_shaders.ps1`
 
-2. **Run the Avalonia UI**
-   ```bash
-   cd ../aethervk.ui-app
-   dotnet run
-   ```
+### 2. Build the Rust Core Engine
+The physics simulation and rendering backend are built into a C-compatible dynamic library.
+```bash
+cd aethervk.core
+cargo build --release
+cd ..
+```
 
+### 3. Run Tests
+The repository includes both Rust and C# tests, with an automated script to run them sequentially and generate coverage reports.
+- **macOS / Linux**: `./execute_tests.sh`
+- **Windows**: `.\execute_tests.ps1`
+
+### 4. Run the Avalonia Application
+Once the native library is built and the shaders are compiled, you can launch the UI:
+```bash
+cd aethervk.ui-app
+dotnet run
+```
 *(Ensure your environment is configured so the C# runtime can locate the compiled Rust `cdylib` native library).*
+
+#### Debugging Graphics
+If you need to debug the fatal error window styling without actually triggering a native panic, you can append a debug flag when running the application (works in debug builds only):
+```bash
+dotnet run -- --force-fatal-error
+```
 
 ### Note on Rust compilation for `aarch64-pc-windows-msvc`
 

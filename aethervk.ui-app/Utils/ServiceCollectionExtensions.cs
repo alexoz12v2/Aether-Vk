@@ -47,6 +47,7 @@ public static class ServiceCollectionExtensions
     collection.AddTransient<Viewport3DViewModel>();
     collection.AddTransient<OutlineViewModel>();
     collection.AddTransient<PropertiesViewModel>();
+    collection.AddTransient<AssetBrowserViewModel>();
 
     // Tab Factories
     collection.AddSingleton<Func<UITestPanelViewModel>>(sp =>
@@ -66,6 +67,9 @@ public static class ServiceCollectionExtensions
     );
     collection.AddSingleton<Func<Viewport3DViewModel>>(sp =>
       () => sp.GetRequiredService<Viewport3DViewModel>()
+    );
+    collection.AddSingleton<Func<AssetBrowserViewModel>>(sp =>
+      () => sp.GetRequiredService<AssetBrowserViewModel>()
     );
 
     collection.AddSingleton<Func<ulong, OutlineViewModel>>(sp =>

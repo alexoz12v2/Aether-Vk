@@ -264,7 +264,8 @@ public partial class SpawnCometViewModel : ObservableObject
     IEnumerable<ImportedModelItem> models,
     HorizonJplService horizonService,
     TimelineService timelineService,
-    BreadcrumbService breadcrumbService
+    BreadcrumbService breadcrumbService,
+    ulong? preselectedModelId = null
   )
   {
     _horizonService = horizonService;
@@ -277,7 +278,19 @@ public partial class SpawnCometViewModel : ObservableObject
     {
       ImportedModels.Add(model);
     }
-    SelectedModel = ImportedModels.FirstOrDefault();
+
+    if (preselectedModelId.HasValue)
+    {
+      SelectedModel = ImportedModels.FirstOrDefault(m => m.Id == preselectedModelId.Value);
+      if (SelectedModel != null)
+      {
+        CurrentStep = 2; // Skip to step 2
+      }
+    }
+    else
+    {
+      SelectedModel = ImportedModels.FirstOrDefault();
+    }
   }
 
   [RelayCommand]

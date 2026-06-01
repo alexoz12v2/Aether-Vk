@@ -1,0 +1,74 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:AetherVk.Logic.ViewModels"
+        xmlns:models="using:AetherVk.Logic.Models"
+        xmlns:controls="using:AetherVk.Controls"
+        x:DataType="vm:SnapObserverViewModel"
+        x:Class="AetherVk.Views.SnapObserverWindow"
+        Title="Snap Observer"
+        Width="500" Height="400"
+        WindowStartupLocation="CenterOwner"
+        SystemDecorations="BorderOnly"
+        ShowInTaskbar="False"
+        Background="{DynamicResource Bg.Canvas}">
+        
+  <Grid RowDefinitions="Auto, *, Auto">
+    
+    <!-- Header -->
+    <Border Grid.Row="0" Background="{DynamicResource Bg.Outline}" Padding="16">
+      <TextBlock Text="Snap to Earth Surface" FontWeight="Bold" FontSize="18" />
+    </Border>
+
+    <!-- Main Content Area -->
+    <ScrollViewer Grid.Row="1" Margin="16">
+      <TabControl>
+        <TabItem Header="Known Observer">
+          <StackPanel Spacing="16" Margin="0,16,0,0">
+            <TextBlock Text="Select a known observatory:" Foreground="{DynamicResource Text.Secondary}" />
+            <ComboBox ItemsSource="{Binding Observatories}" 
+                      SelectedItem="{Binding SelectedObservatory}"
+                      HorizontalAlignment="Stretch">
+              <ComboBox.ItemTemplate>
+                <DataTemplate>
+                  <StackPanel>
+                    <TextBlock Text="{Binding Name}" FontWeight="Bold" />
+                    <TextBlock Text="{Binding Region}" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
+                  </StackPanel>
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+            <Border Background="{DynamicResource Bg.Surface}" Padding="12" CornerRadius="4" IsVisible="{Binding SelectedObservatory, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <StackPanel Spacing="8">
+                <TextBlock Text="Coordinates" FontWeight="Bold" />
+                <TextBlock Text="{Binding Latitude, StringFormat='Latitude: {0:F4}'}" />
+                <TextBlock Text="{Binding Longitude, StringFormat='Longitude: {0:F4}'}" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </TabItem>
+        <TabItem Header="Manual">
+          <StackPanel Spacing="16" Margin="0,16,0,0">
+            <TextBlock Text="Enter precise coordinates manually:" Foreground="{DynamicResource Text.Secondary}" />
+            
+            <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,*" Margin="0,8">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Latitude:" VerticalAlignment="Center" Margin="0,0,16,8" />
+              <controls:UnboundedSlider Grid.Row="0" Grid.Column="1" Value="{Binding Latitude}" Margin="0,0,0,8" />
+              
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="Longitude:" VerticalAlignment="Center" Margin="0,0,16,0" />
+              <controls:UnboundedSlider Grid.Row="1" Grid.Column="1" Value="{Binding Longitude}" />
+            </Grid>
+          </StackPanel>
+        </TabItem>
+      </TabControl>
+    </ScrollViewer>
+
+    <!-- Footer -->
+    <Border Grid.Row="2" Background="{DynamicResource Bg.Outline}" Padding="16">
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+        <Button Content="Cancel" Click="OnCancelClick" />
+        <Button Content="Snap to Location" Classes="accent" Click="OnSnapClick" />
+      </StackPanel>
+    </Border>
+
+  </Grid>
+</Window>

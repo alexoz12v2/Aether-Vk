@@ -87,7 +87,8 @@ pub fn start_logic_thread(
           if can_tick {
             pc.last_frame_start = now;
 
-            let _ = execute_simulation_tick(scene_id, &context);
+            let dt_f32 = elapsed as f32 / 1_000_000.0;
+            let _ = execute_simulation_tick(scene_id, &context, dt_f32);
 
             let pe_handles: alloc::vec::Vec<(
               crate::gpu::PresentationEngineHandle,
@@ -1280,7 +1281,7 @@ fn process_command_internal(
 
       let frame = anise::frames::Frame::new(
         anise::constants::celestial_objects::SUN,
-        anise::constants::orientations::ECLIPJ2000,
+        anise::constants::orientations::J2000,
       );
 
       let mut samples = alloc::vec::Vec::new();
@@ -1383,12 +1384,34 @@ fn process_command_internal(
         }
       }
 
+      let mut handled_highres = false;
       let _ = scene_guard.scene.with_component_mut(
         entity,
-        |transform: &mut crate::scene::TransformComponent| {
-          transform.position = sun_pos;
+        |transform: &mut crate::scene::HighResTransformComponent| {
+          transform.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+            sun_pos.x() as f64,
+            sun_pos.y() as f64,
+            sun_pos.z() as f64,
+          );
+          handled_highres = true;
         },
       );
+
+      if !handled_highres {
+        let mut handled_transform = false;
+        let _ = scene_guard.scene.with_component_mut(
+          entity,
+          |transform: &mut crate::scene::TransformComponent| {
+            transform.position = sun_pos;
+            handled_transform = true;
+          },
+        );
+        if !handled_transform {
+          let mut new_transform = crate::scene::TransformComponent::default();
+          new_transform.position = sun_pos;
+          let _ = scene_guard.scene.add_component(entity, new_transform);
+        }
+      }
 
       Ok(SimulationTaskResult::None)
     }
@@ -1430,6 +1453,7 @@ fn process_command_internal(
 fn execute_simulation_tick(
   scene_id: u64,
   ctx: &alloc::sync::Arc<LogicThreadContext>,
+  dt: f32,
 ) -> EngineResult<()> {
   let (
     time_state_arc,
@@ -1622,6 +1646,63 @@ fn execute_simulation_tick(
     }
   }
 
+  // Update Transform Animations
+  {
+    let scenes = ctx.scenes.read();
+    if let Some(scene_ctx_guard) = scenes.get(&scene_id) {
+      let scene_ctx = scene_ctx_guard.read();
+      let mut to_update = alloc::vec::Vec::new();
+      let _ = scene_ctx.scene.query1_res_mut(
+        |id, anim: &mut crate::scene::animation::TransformAnimationComponent| {
+          if !anim.is_finished {
+            anim.elapsed += dt;
+            let mut t = anim.elapsed / anim.duration;
+            if t > 1.0 {
+              t = 1.0;
+            }
+            if t < 0.0 {
+              t = 0.0;
+            }
+            // Hermite smoothstep
+            let smooth_t = t * t * (3.0 - 2.0 * t);
+
+            let new_pos = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::lerp(
+              anim.start_pos,
+              anim.target_pos,
+              smooth_t as f64,
+            );
+            let new_rot = aethervk_oshal_rlib::math::vector::vec4::Quat::slerp(
+              anim.start_rot,
+              anim.target_rot,
+              smooth_t,
+            );
+
+            if anim.elapsed >= anim.duration {
+              anim.is_finished = true;
+            }
+            to_update.push((id, new_pos, new_rot));
+          }
+          Some(())
+        },
+      );
+
+      for (id, pos, rot) in to_update {
+        let _ = scene_ctx.scene.with_component_mut(id, |t: &mut HighResTransformComponent| {
+          t.position = pos;
+          t.rotation = rot;
+        });
+
+        if let Some(ext_id) = scene_ctx.entity_map.iter().find(|&(_, v)| *v == id).map(|(k, _)| *k)
+        {
+          scene_ctx.mark_component_changed(
+                ext_id,
+                <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+            );
+        }
+      }
+    }
+  }
+
   let sim_task_id = ctx.task_manager.write().create_task();
   ctx.task_manager.write().success_task(
     sim_task_id.get(),
@@ -1773,12 +1854,35 @@ fn dispatch_physics_step(
         );
       },
     );
+    scene_arc.query3_mut_par::<crate::scene::HighResTransformComponent, crate::scene::AlmanacPlanet, crate::scene::CameraComponent, _>(
+      &ctx.thread_pool,
+      |_, transform, planet, _| {
+        let _ = planet.step_high_res(
+          transform,
+          None,
+          current_epoch,
+          step_days,
+          &logic_state.almanac_data,
+        );
+      },
+    );
   } else {
     scene_arc.query3_mut::<TransformComponent, crate::scene::AlmanacPlanet, crate::scene::KinematicComponent, _>(
       |_, transform, planet, kinematic| {
         let _ = planet.step(
           transform,
           Some(kinematic),
+          current_epoch,
+          step_days,
+          &logic_state.almanac_data,
+        );
+      },
+    );
+    scene_arc.query3_mut::<crate::scene::HighResTransformComponent, crate::scene::AlmanacPlanet, crate::scene::CameraComponent, _>(
+      |_, transform, planet, _| {
+        let _ = planet.step_high_res(
+          transform,
+          None,
           current_epoch,
           step_days,
           &logic_state.almanac_data,

@@ -32,7 +32,7 @@ impl SimulationDelegate for SpawnCometDelegate {
     _window: &Window,
   ) -> EngineResult<()> {
     let assets_dir = cycle_get_asset_path_from_exe(true);
-    let comet_path = assets_dir.join("Comet.glb");
+    let comet_path = assets_dir.join("Comet2.glb");
     aethervk_core_rlib::gpu::ASSET_DIR
       .write()
       .replace(assets_dir.to_string_lossy().to_string());
@@ -59,6 +59,57 @@ impl SimulationDelegate for SpawnCometDelegate {
       1000.0, // mass_kg
       0,      // physics_type = static
     )?;
+
+    // Spawn Earth Orbit for debugging
+    let bsp_path = assets_dir.join("planets/de442.bsp");
+    let bpc_path = assets_dir.join("earth_latest_high_prec.bpc");
+    let _ = ctx.threads.logic_thread.tx().try_send(
+      aethervk_core_rlib::simulation_api::structs::LogicCommand::LoadAlmanac {
+        task_id: 0,
+        path: bsp_path.to_string_lossy().into_owned(),
+      },
+    );
+    let _ = ctx.threads.logic_thread.tx().try_send(
+      aethervk_core_rlib::simulation_api::structs::LogicCommand::LoadAlmanac {
+        task_id: 0,
+        path: bpc_path.to_string_lossy().into_owned(),
+      },
+    );
+
+    let earth_ext = ctx.spawn_entity(scene_id, "Earth Orbit").unwrap();
+
+    {
+      let scene_lock = ctx.get_scene(scene_id).unwrap();
+      let scene_read = scene_lock.read();
+      if let Some(earth_int) = scene_read.get_entity(earth_ext) {
+        scene_read.scene.set_parent(earth_int, Some(scene_read.root_entity));
+        if let Err(e) = scene_read.scene.add_component(
+          earth_int,
+          aethervk_core_rlib::scene::TransformComponent::default(),
+        ) {
+          println!("[DEBUG] Failed to add TransformComponent: {:?}", e);
+        }
+        if let Err(e) = scene_read.scene.add_component(
+          earth_int,
+          aethervk_core_rlib::scene::AlmanacPlanet::new(399, 0.0, 1.0),
+        ) {
+          println!("[DEBUG] Failed to add AlmanacPlanet: {:?}", e);
+        }
+      }
+    }
+
+    let year_in_sec = 31557600.0;
+    let _ = ctx.threads.logic_thread.tx().try_send(
+      aethervk_core_rlib::simulation_api::structs::LogicCommand::UpdateTrajectoryForSpk {
+        task_id: 0,
+        scene_id,
+        entity_id: earth_ext,
+        spk_id: 399,
+        start_epoch_tai_sec: 0.0,
+        end_epoch_tai_sec: year_in_sec,
+        sample_step_days: 10.0,
+      },
+    );
 
     let scene_lock = ctx.get_scene(scene_id).unwrap();
     {
@@ -217,15 +268,20 @@ impl SimulationDelegate for SpawnCometDelegate {
       return;
     }
 
-    let (target_pos, offset) = match event.logical_key.as_ref() {
+    let (target_pos, offset, target_parent) = match event.logical_key.as_ref() {
       winit::keyboard::Key::Character("f") | winit::keyboard::Key::Character("F") => {
         (
           Some(Vec3f32::from_components(0.01, 0.0, 0.0)),
           Some(0.00005),
+          None,
         ) // 7,500 km away from comet
       }
       winit::keyboard::Key::Character("0") => {
-        (Some(Vec3f32::from_components(0.0, 0.0, 0.0)), Some(0.02)) // 0.02 AU away from sun
+        (
+          Some(Vec3f32::from_components(0.0, 0.0, 0.0)),
+          Some(0.02),
+          None,
+        ) // 0.02 AU away from sun
       }
       winit::keyboard::Key::Character("m") | winit::keyboard::Key::Character("M") => {
         let scene = ctx.get_scene(scene_id).unwrap();
@@ -239,9 +295,25 @@ impl SimulationDelegate for SpawnCometDelegate {
           }
           println!("(root)");
         }
-        (None, None)
+        (None, None, None)
       }
-      _ => (None, None),
+      winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab) => {
+        let scene = ctx.get_scene(scene_id).unwrap();
+        let scene_read = scene.read();
+        if scene_read.time_state.read().is_playing {
+          println!("[DEBUG] Cannot switch observer mode while simulation is playing. Pause first.");
+          (None, None, None)
+        } else {
+          println!("[DEBUG] Switched to Earth Observer Mode.");
+          let earth_int = scene_read.scene.get_entity_by_name("Earth Orbit").unwrap();
+          (
+            Some(Vec3f32::from_components(0.01, 0.0, 0.0)),
+            None,
+            Some(earth_int),
+          )
+        }
+      }
+      _ => (None, None, None),
     };
 
     if let Some(pos) = target_pos {
@@ -272,8 +344,8 @@ impl SimulationDelegate for SpawnCometDelegate {
         // Reparent to root so that our local position is treated as macro scale (AU).
         // The logic thread will automatically reparent it back to the micro frame
         // if the new global position happens to fall inside its SOI.
-        let root_entity = scene_read.root_entity;
-        scene_read.scene.set_parent(camera_int, Some(root_entity));
+        let new_parent = target_parent.unwrap_or(scene_read.root_entity);
+        scene_read.scene.set_parent(camera_int, Some(new_parent));
 
         if let Some(off) = offset {
           let _ = scene_read.scene.with_component_mut(camera_int, |t: &mut aethervk_core_rlib::scene::HighResTransformComponent| {

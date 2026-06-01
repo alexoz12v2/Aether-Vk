@@ -798,6 +798,78 @@ impl SceneConversionExt for crate::scene::Scene {
       });
     }
 
+    // Static Meshes
+    if should_par {
+      let results = self
+        .query1_res_without_par::<crate::scene::StaticMeshComponent, HiddenComponent, _, _>(
+          pool.unwrap(),
+          |id, mesh| {
+            if hidden_set.contains(&id) {
+              return None;
+            }
+            if let Some(t) = self.get_relative_transform(id, camera_entity) {
+              let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
+              let is_following: bool = self.has_component::<FollowingComponent>(id).into();
+              let outline = get_mesh_outline(is_selected, is_following, render_outline);
+              let pseudo_mesh = PhysicalMeshComponent {
+                asset_path: mesh.asset_path.clone(),
+                mesh: mesh.mesh.clone(),
+                emissive_intensity: mesh.emissive_color[3],
+                emissive_color: [
+                  mesh.emissive_color[0],
+                  mesh.emissive_color[1],
+                  mesh.emissive_color[2],
+                ],
+                use_new_path: true,
+                paint_display_mode: 0,
+                sphere_center: [0.0, 0.0, 0.0],
+                sphere_radius: 1.0,
+                grid_color: [0.0, 0.0, 0.0],
+                grid_density: 0.0,
+              };
+              let m = PhysicalMeshSceneData::new(id, pseudo_mesh, t, outline, true, 0);
+              Some(m)
+            } else {
+              None
+            }
+          },
+        );
+      for (m, _) in results {
+        extracted_meshes.push(m);
+      }
+    } else {
+      self.query1_without::<_, HiddenComponent, _>(
+        |id, mesh: &crate::scene::StaticMeshComponent| {
+          if hidden_set.contains(&id) {
+            return;
+          }
+          if let Some(t) = self.get_relative_transform(id, camera_entity) {
+            let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
+            let is_following: bool = self.has_component::<FollowingComponent>(id).into();
+            let outline = get_mesh_outline(is_selected, is_following, render_outline);
+            let pseudo_mesh = PhysicalMeshComponent {
+              asset_path: mesh.asset_path.clone(),
+              mesh: mesh.mesh.clone(),
+              emissive_intensity: mesh.emissive_color[3],
+              emissive_color: [
+                mesh.emissive_color[0],
+                mesh.emissive_color[1],
+                mesh.emissive_color[2],
+              ],
+              use_new_path: true,
+              paint_display_mode: 0,
+              sphere_center: [0.0, 0.0, 0.0],
+              sphere_radius: 1.0,
+              grid_color: [0.0, 0.0, 0.0],
+              grid_density: 0.0,
+            };
+            let m = PhysicalMeshSceneData::new(id, pseudo_mesh, t, outline, true, 0);
+            extracted_meshes.push(m);
+          }
+        },
+      );
+    }
+
     // Markers
     if should_par {
       let results = self.query1_res_without_par::<MarkersComponent, HiddenComponent, _, _>(

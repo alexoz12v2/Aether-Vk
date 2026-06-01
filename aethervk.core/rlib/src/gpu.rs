@@ -280,14 +280,16 @@ pub struct RationalBezierGpu {
   pub cp3: [f32; 4],
 }
 
-#[repr(C, align(8))]
+#[repr(C, align(16))]
 #[derive(Copy, Clone)]
 /// TODO: Document this item
 pub struct TrajectoryGpu {
   pub segments_ptr: u64,
+  pub _pad0: u64,
   pub color: [f32; 4],
   pub line_width: f32,
   pub texture_id: u32,
+  pub _pad1: u64,
 }
 
 #[repr(C, align(4))]

@@ -234,7 +234,7 @@ macro_rules! wait_for_pe_direct {
       if let Some(entry) = $map.get(&$h) {
         break Ok(entry);
       }
-      if retry_count > 1_000_000 {
+      if retry_count > 7000 {
         break Err(gpu_err_invalid_pe!());
       }
       retry_count += 1;
@@ -259,7 +259,7 @@ macro_rules! wait_for_pe_mut_direct {
       if let Some(entry) = $map.get_mut(&$h) {
         break Ok(entry);
       }
-      if retry_count > 1_000_000 {
+      if retry_count > 7000 {
         break Err(gpu_err_invalid_pe!());
       }
       retry_count += 1;
@@ -283,7 +283,7 @@ macro_rules! wait_for_pe {
       if let Some(entry) = $state.live_presentation_engines.get(&$h) {
         break Ok(entry);
       }
-      if retry_count > 1_000_000 {
+      if retry_count > 7000 {
         break Err(gpu_err_invalid_pe!());
       }
 
@@ -4858,13 +4858,15 @@ impl RenderDevice for Device {
       cp2: [f32; 4],
       cp3: [f32; 4],
     }
-    #[repr(C, align(8))]
+    #[repr(C, align(16))]
     #[derive(Copy, Clone)]
     struct TrajectoryGpu {
       segments_ptr: u64,
+      _pad0: u64,
       color: [f32; 4],
       line_width: f32,
       texture_id: u32,
+      _pad1: u64,
     }
     #[repr(C, align(4))]
     #[derive(Copy, Clone)]
@@ -5043,9 +5045,11 @@ impl RenderDevice for Device {
       traj_gpus.push(TrajectoryGpu {
         segments_ptr: arena_mut.segments_ptr
           + (offset * core::mem::size_of::<RationalBezierGpu>() as u64),
+        _pad0: 0,
         color: traj_comp.color,
         line_width: traj_comp.line_width,
         texture_id: traj_comp.texture_id,
+        _pad1: 0,
       });
 
       for j in 0..local_segments_count {
@@ -5061,6 +5065,8 @@ impl RenderDevice for Device {
       }
       total_segments += local_segments_count as u32;
     }
+
+    drop(arena_mut);
 
     if total_segments == 0 {
       return Ok(None);

@@ -457,6 +457,91 @@ fn debug_print_scene_hierarchy(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_addAlmanacPlanet(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+  naif_id: i32,
+  offset_x: f32,
+  offset_y: f32,
+  offset_z: f32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  if let Some(scene_ctx) = scenes.get(&scene_id) {
+    let mut scene_write = scene_ctx.write();
+    let int_id = aethervk_core_rlib::scene::EntityId::from_ffi(entity_id);
+    let mut planet = aethervk_core_rlib::scene::AlmanacPlanet::new(naif_id, 0.0, 0.0);
+    planet.surface_offset_bf = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+      offset_x, offset_y, offset_z,
+    );
+    return scene_write.scene.add_component(int_id, planet).is_ok();
+  }
+  false
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setAlmanacPlanetOffset(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+  offset_x: f32,
+  offset_y: f32,
+  offset_z: f32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  if let Some(scene_ctx) = scenes.get(&scene_id) {
+    let mut scene_write = scene_ctx.write();
+    let int_id = aethervk_core_rlib::scene::EntityId::from_ffi(entity_id);
+    return scene_write
+      .scene
+      .with_component_mut(
+        int_id,
+        |comp: &mut aethervk_core_rlib::scene::AlmanacPlanet| {
+          comp.surface_offset_bf =
+            aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+              offset_x, offset_y, offset_z,
+            );
+        },
+      )
+      .is_some();
+  }
+  false
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_removeAlmanacPlanet(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  if let Some(scene_ctx) = scenes.get(&scene_id) {
+    let mut scene_write = scene_ctx.write();
+    let int_id = aethervk_core_rlib::scene::EntityId::from_ffi(entity_id);
+    return scene_write
+      .scene
+      .remove_component::<aethervk_core_rlib::scene::AlmanacPlanet>(int_id)
+      .is_ok();
+  }
+  false
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_spawnEntity(
   ctx: *mut SimulationContext,
   scene_id: u64,
@@ -741,6 +826,48 @@ pub unsafe extern "C" fn avkSimulationContext_setComponent(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setPhysicalMeshEmissiveColor(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+  r: f32,
+  g: f32,
+  b: f32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  if let Some(scene_ctx_rw) = scenes.get(&scene_id) {
+    let mut scene_write = scene_ctx_rw.write();
+    if let Some(int_id) = scene_write.get_entity(entity_id) {
+      let mut found = false;
+      let _ = scene_write.scene.with_component_mut(
+        int_id,
+        |comp: &mut aethervk_core_rlib::scene::PhysicalMeshComponent| {
+          comp.emissive_color = [r, g, b];
+          comp.emissive_intensity = 1.0;
+          found = true;
+        },
+      );
+      if !found {
+        let _ = scene_write.scene.with_component_mut(
+          int_id,
+          |comp: &mut aethervk_core_rlib::scene::StaticMeshComponent| {
+            comp.emissive_color = [r, g, b, 1.0];
+            found = true;
+          },
+        );
+      }
+      return found;
+    }
+  }
+  false
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_spawnBillboard(
   ctx: *mut SimulationContext,
   scene_id: u64,
@@ -996,9 +1123,11 @@ pub unsafe extern "C" fn avkSimulationContext_spawnTrajectoryFromElements(
 
   let traj = aethervk_core_rlib::gpu::TrajectoryGpu {
     segments_ptr: 0,
+    _pad0: 0,
     color: [col_r, col_g, col_b, col_a],
     line_width,
     texture_id: 0xFFFF_FFFF,
+    _pad1: 0,
   };
 
   match ctx_ref.spawn_trajectory_internal(scene_id, parent_entity, name_str, traj, &segs) {
@@ -1088,6 +1217,8 @@ pub struct FfiEmissionCircle {
   pub particles_per_tick: u32,
   pub ttl: u64,
   pub mean_velocity: f32,
+  pub velocity_std_dev: f32,
+  pub child_entity: u64,
 }
 
 #[unsafe(no_mangle)]
@@ -1124,6 +1255,14 @@ pub unsafe extern "C" fn avkSimulationContext_setParticleEmitterCirclesComponent
       particles_per_tick: c.particles_per_tick,
       ttl: c.ttl,
       mean_velocity: c.mean_velocity,
+      velocity_std_dev: c.velocity_std_dev,
+      child_entity: if c.child_entity == 0 || c.child_entity == u64::MAX {
+        None
+      } else {
+        Some(aethervk_core_rlib::scene::EntityId::from_ffi(
+          c.child_entity,
+        ))
+      },
     });
   }
 
@@ -1229,15 +1368,70 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
           }
         }
 
+        let pt;
+        let norm;
         if closest_t < f32::MAX {
           let hit_pt = origin + ray_dir * closest_t;
-          circle.cached_point = Some([hit_pt.x(), hit_pt.y(), hit_pt.z()]);
-          circle.cached_normal = Some([hit_normal.x(), hit_normal.y(), hit_normal.z()]);
+          pt = [hit_pt.x(), hit_pt.y(), hit_pt.z()];
+          norm = [hit_normal.x(), hit_normal.y(), hit_normal.z()];
         } else {
           // Fallback to bounding sphere
           let hit_pt = dir * r;
-          circle.cached_point = Some([hit_pt.x(), hit_pt.y(), hit_pt.z()]);
-          circle.cached_normal = Some([dir.x(), dir.y(), dir.z()]);
+          pt = [hit_pt.x(), hit_pt.y(), hit_pt.z()];
+          norm = [dir.x(), dir.y(), dir.z()];
+        }
+        circle.cached_point = Some(pt);
+        circle.cached_normal = Some(norm);
+
+        let pt_vec = Vec3f32::from_components(pt[0], pt[1], pt[2]);
+        let scale = r * circle.circle_radius_frac;
+        let scale_vec = Vec3f32::from_components(scale, scale, scale);
+        let t = aethervk_core_rlib::scene::TransformComponent {
+          position: pt_vec,
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: scale_vec,
+        };
+
+        let mut child = circle.child_entity;
+        if child.is_none() {
+          let new_id = scene_ctx.scene.spawn_entity("EmissionSphere");
+          scene_ctx.scene.set_parent(new_id, Some(internal_id));
+
+          let pseudo_mesh = aethervk_core_rlib::scene::StaticMeshComponent {
+            asset_path: "primitives/sphere.obj".into(),
+            mesh: alloc::sync::Arc::from(
+              aethervk_core_rlib::simulation::comet::generate_uv_sphere(1.0, 6, 6, 0.0),
+            ),
+            emissive_color: [
+              circle.color[0],
+              circle.color[1],
+              circle.color[2],
+              circle.color[3],
+            ],
+          };
+
+          let _ = scene_ctx.scene.add_component(new_id, pseudo_mesh);
+          let _ = scene_ctx.scene.add_component(new_id, t);
+
+          circle.child_entity = Some(new_id);
+        } else {
+          let _ = scene_ctx.scene.with_component_mut(
+            child.unwrap(),
+            |tc: &mut aethervk_core_rlib::scene::TransformComponent| {
+              *tc = t;
+            },
+          );
+          let _ = scene_ctx.scene.with_component_mut(
+            child.unwrap(),
+            |sm: &mut aethervk_core_rlib::scene::StaticMeshComponent| {
+              sm.emissive_color = [
+                circle.color[0],
+                circle.color[1],
+                circle.color[2],
+                circle.color[3],
+              ];
+            },
+          );
         }
       }
     },
@@ -1284,6 +1478,8 @@ pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent
           particles_per_tick: c.particles_per_tick,
           ttl: c.ttl,
           mean_velocity: c.mean_velocity,
+          velocity_std_dev: c.velocity_std_dev,
+          child_entity: c.child_entity.map_or(u64::MAX, |id| id.as_ffi()),
         };
       }
     }
@@ -1370,6 +1566,34 @@ pub unsafe extern "C" fn avkSimulationContext_setKinematicVelocity(
 }
 
 // --- Queries ---
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getMeshBoundingSphereRadius(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+) -> f32 {
+  if ctx.is_null() {
+    return 1.0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  if let Some(scene_ctx_rw) = scenes.get(&scene_id) {
+    let scene_read = scene_ctx_rw.read();
+    if let Some(int_id) = scene_read.get_entity(entity_id) {
+      let mut radius = 1.0;
+      let _ = scene_read.scene.with_component(
+        int_id,
+        |comp: &aethervk_core_rlib::scene::PhysicalMeshComponent| {
+          radius = comp.sphere_radius;
+        },
+      );
+      return radius;
+    }
+  }
+  1.0
+}
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -1989,6 +2213,25 @@ pub unsafe extern "C" fn avkSimulationContext_spawnProceduralSphere(
       oshal::log!("spawn_procedural_sphere failed: {}", e);
       0
     })
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_spawnStaticSphere(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  name: *const c_char,
+  radius: f32,
+  mass: f32,
+) -> u64 {
+  if ctx.is_null() || mass <= 0.0 || name.is_null() || radius <= 0.0 {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.spawn_static_sphere(scene_id, name, radius, mass).unwrap_or_else(|e| {
+    oshal::log!("spawn_static_sphere failed: {}", e);
+    0
+  })
 }
 
 // --- Camera & Cursor Commands ---
@@ -3450,4 +3693,117 @@ pub unsafe extern "C" fn avkSimulationContext_addJet(
       0
     }
   }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_addCameraAnimation(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+  target_x: f64,
+  target_y: f64,
+  target_z: f64,
+  duration: f32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  if let Some(scene_ctx_guard) = scenes.get(&scene_id) {
+    let scene_ctx = scene_ctx_guard.write();
+    let internal_id = match scene_ctx.get_entity(entity_id) {
+      Some(id) => id,
+      None => return false,
+    };
+
+    let (start_pos, start_rot) = if let Some(t) = scene_ctx.scene.with_component(
+      internal_id,
+      |t: &aethervk_core_rlib::scene::HighResTransformComponent| (t.position, t.rotation),
+    ) {
+      t
+    } else {
+      return false;
+    };
+
+    let anim = aethervk_core_rlib::scene::animation::TransformAnimationComponent {
+      start_pos,
+      start_rot,
+      target_pos: aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+        target_x, target_y, target_z,
+      ),
+      target_rot: start_rot,
+      duration,
+      elapsed: 0.0,
+      is_finished: false,
+    };
+
+    let _ = scene_ctx
+      .scene
+      .remove_component::<aethervk_core_rlib::scene::animation::TransformAnimationComponent>(
+        internal_id,
+      );
+    let _ = scene_ctx.scene.add_component(internal_id, anim);
+    return true;
+  }
+  false
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_checkCameraAnimationFinished(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+) -> bool {
+  if ctx.is_null() {
+    return true;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  if let Some(scene_ctx_guard) = scenes.get(&scene_id) {
+    let scene_ctx = scene_ctx_guard.read();
+    let internal_id = match scene_ctx.get_entity(entity_id) {
+      Some(id) => id,
+      None => return true,
+    };
+
+    if let Some(finished) = scene_ctx.scene.with_component(
+      internal_id,
+      |a: &aethervk_core_rlib::scene::animation::TransformAnimationComponent| a.is_finished,
+    ) {
+      return finished;
+    }
+  }
+  true
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_removeCameraAnimation(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  if let Some(scene_ctx_guard) = scenes.get(&scene_id) {
+    let scene_ctx = scene_ctx_guard.write();
+    let internal_id = match scene_ctx.get_entity(entity_id) {
+      Some(id) => id,
+      None => return false,
+    };
+
+    return scene_ctx
+      .scene
+      .remove_component::<aethervk_core_rlib::scene::animation::TransformAnimationComponent>(
+        internal_id,
+      )
+      .is_ok();
+  }
+  false
 }

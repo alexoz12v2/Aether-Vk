@@ -62,6 +62,50 @@ public partial class UnboundedSlider : UserControl
     set => SetValue(WrapMaxProperty, value);
   }
 
+  public static readonly StyledProperty<bool> IsLogarithmicProperty = AvaloniaProperty.Register<
+    UnboundedSlider,
+    bool
+  >(nameof(IsLogarithmic), false);
+
+  public bool IsLogarithmic
+  {
+    get => GetValue(IsLogarithmicProperty);
+    set => SetValue(IsLogarithmicProperty, value);
+  }
+
+  public static readonly StyledProperty<bool> HasBoundsProperty = AvaloniaProperty.Register<
+    UnboundedSlider,
+    bool
+  >(nameof(HasBounds), false);
+
+  public bool HasBounds
+  {
+    get => GetValue(HasBoundsProperty);
+    set => SetValue(HasBoundsProperty, value);
+  }
+
+  public static readonly StyledProperty<double> MinBoundProperty = AvaloniaProperty.Register<
+    UnboundedSlider,
+    double
+  >(nameof(MinBound), double.MinValue);
+
+  public double MinBound
+  {
+    get => GetValue(MinBoundProperty);
+    set => SetValue(MinBoundProperty, value);
+  }
+
+  public static readonly StyledProperty<double> MaxBoundProperty = AvaloniaProperty.Register<
+    UnboundedSlider,
+    double
+  >(nameof(MaxBound), double.MaxValue);
+
+  public double MaxBound
+  {
+    get => GetValue(MaxBoundProperty);
+    set => SetValue(MaxBoundProperty, value);
+  }
+
   private Point _lastPos;
   private bool _isDragging;
   private bool _hasMoved;
@@ -95,7 +139,22 @@ public partial class UnboundedSlider : UserControl
       if (_hasMoved)
       {
         var mult = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? 10.0 : 1.0;
-        double newValue = Value + delta * Step * mult * 0.1;
+        double newValue;
+
+        if (IsLogarithmic)
+        {
+          double minLog = HasBounds && MinBound > 0 ? System.Math.Log10(MinBound) : -10.0;
+          double currentLog = Value > 0 ? System.Math.Log10(Value) : minLog;
+
+          double deltaLog = delta * Step * mult * 0.005; // Base sensitivity for log
+          double newLog = currentLog + deltaLog;
+
+          newValue = System.Math.Pow(10, newLog);
+        }
+        else
+        {
+          newValue = Value + delta * Step * mult * 0.1;
+        }
 
         if (IsWrapped)
         {
@@ -104,6 +163,14 @@ public partial class UnboundedSlider : UserControl
             newValue -= range;
           while (newValue < WrapMin)
             newValue += range;
+        }
+
+        if (HasBounds)
+        {
+          if (newValue < MinBound)
+            newValue = MinBound;
+          if (newValue > MaxBound)
+            newValue = MaxBound;
         }
 
         Value = newValue;
@@ -145,6 +212,14 @@ public partial class UnboundedSlider : UserControl
         while (parsed < WrapMin)
           parsed += range;
       }
+
+      if (HasBounds)
+      {
+        if (parsed < MinBound)
+          parsed = MinBound;
+        if (parsed > MaxBound)
+          parsed = MaxBound;
+      }
       Value = parsed;
     }
   }
@@ -162,6 +237,14 @@ public partial class UnboundedSlider : UserControl
             parsed -= range;
           while (parsed < WrapMin)
             parsed += range;
+        }
+
+        if (HasBounds)
+        {
+          if (parsed < MinBound)
+            parsed = MinBound;
+          if (parsed > MaxBound)
+            parsed = MaxBound;
         }
         Value = parsed;
       }

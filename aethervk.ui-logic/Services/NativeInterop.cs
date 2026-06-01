@@ -128,6 +128,34 @@ public static class NativeInterop
   public static extern ulong avkSimulationContext_createEmptyScene(IntPtr ctx);
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_addAlmanacPlanet(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    int naifId,
+    float offsetX,
+    float offsetY,
+    float offsetZ
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_setAlmanacPlanetOffset(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    float offsetX,
+    float offsetY,
+    float offsetZ
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_removeAlmanacPlanet(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_setSceneDebugName(
     IntPtr ctx,
     ulong sceneId,
@@ -160,6 +188,15 @@ public static class NativeInterop
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_spawnProceduralSphere(
+    IntPtr ctx,
+    ulong sceneId,
+    string name,
+    float radius,
+    float mass
+  );
+
+  [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_spawnStaticSphere(
     IntPtr ctx,
     ulong sceneId,
     string name,
@@ -351,15 +388,6 @@ public static class NativeInterop
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.I1)]
-  public static extern bool avkSimulationContext_getTransformComponent(
-    IntPtr ctx,
-    ulong sceneId,
-    ulong entity,
-    out FfiTransform transform
-  );
-
-  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  [return: MarshalAs(UnmanagedType.I1)]
   public static extern bool avkSimulationContext_setHighResTransformComponent(
     IntPtr ctx,
     ulong sceneId,
@@ -440,6 +468,24 @@ public static class NativeInterop
     float emissiveR,
     float emissiveG,
     float emissiveB
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern float avkSimulationContext_getMeshBoundingSphereRadius(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_setPhysicalMeshEmissiveColor(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    float r,
+    float g,
+    float b
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -590,6 +636,7 @@ public static class NativeInterop
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_spawnModelInstance(
     IntPtr ctx,
+    ulong sceneId,
     ulong modelId,
     string name
   );
@@ -1209,6 +1256,8 @@ public static class NativeInterop
     public uint ParticlesPerTick;
     public ulong TTL;
     public float MeanVelocity;
+    public float VelocityDirStdDevRad;
+    public ulong ChildEntity;
   }
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -1256,5 +1305,31 @@ public static class NativeInterop
     ulong sceneId,
     ulong entity,
     [MarshalAs(UnmanagedType.I1)] out bool isVisible
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_addCameraAnimation(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    double targetX,
+    double targetY,
+    double targetZ,
+    float duration
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_checkCameraAnimationFinished(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_removeCameraAnimation(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId
   );
 }

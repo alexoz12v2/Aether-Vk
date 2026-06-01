@@ -139,4 +139,49 @@ impl SimulationContext {
 
     Ok(active_scene.register_entity(entity_id))
   }
+
+  pub fn spawn_static_sphere(
+    &self,
+    scene_id: u64,
+    name: *const c_char,
+    radius: f32,
+    mass: f32,
+  ) -> Result<u64, EngineError> {
+    let name_str = if name.is_null() {
+      "StaticSphere"
+    } else {
+      unsafe { CStr::from_ptr(name).to_str().unwrap_or("StaticSphere") }
+    };
+
+    // Very low res sphere as requested (e.g. 6,6)
+    let sphere = crate::simulation::comet::generate_uv_sphere(radius, 6, 6, mass);
+    let scenes = self.scenes.write();
+    let scene_ctx_lock =
+      scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
+    let mut active_scene = scene_ctx_lock.write();
+    let entity_id = active_scene.scene.spawn_entity(name_str);
+
+    let _ = active_scene.scene.add_component(
+      entity_id,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+    );
+
+    let _ = active_scene.scene.add_component(
+      entity_id,
+      crate::scene::StaticMeshComponent {
+        asset_path: alloc::string::String::new(),
+        mesh: Arc::from(sphere),
+        emissive_color: [0.0, 0.0, 0.0, 1.0],
+      },
+    );
+
+    let root_entity = active_scene.root_entity;
+    active_scene.scene.set_parent(entity_id, Some(root_entity));
+
+    Ok(active_scene.register_entity(entity_id))
+  }
 }

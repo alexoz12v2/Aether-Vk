@@ -4,7 +4,8 @@ use crate::scene::Component;
 use alloc::vec::Vec;
 
 #[derive(Clone, Debug)]
-/// TODO: Document this item
+/// TrajectoryComponent holds bezier control points to render a trajectory.
+/// Note: This component should host either a `TransformComponent` or a `HighResTransformComponent`.
 pub struct TrajectoryComponent {
   pub control_points: Vec<[f32; 4]>, // Homogeneous (x*w, y*w, z*w, w)
   pub color: [f32; 4],

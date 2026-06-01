@@ -1,4 +1,5 @@
 using System;
+using AetherVk.Interop;
 using AetherVk.Logic.Models;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
@@ -247,8 +248,16 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
   {
     var point = e.GetCurrentPoint(RenderTargetImage);
     var currentPos = point.Position;
+
     var deltaX = (float)(currentPos.X - _lastPointerPos.X);
     var deltaY = (float)(currentPos.Y - _lastPointerPos.Y);
+
+    var bounds = RenderTargetImage.Bounds;
+    // Filter out huge artificial jumps caused by wrapping
+    if (Math.Abs(deltaX) > bounds.Width / 2)
+      deltaX = 0;
+    if (Math.Abs(deltaY) > bounds.Height / 2)
+      deltaY = 0;
 
     _viewModel?.OperatorStack.ProcessPointerDelta(deltaX, deltaY);
 
@@ -264,6 +273,48 @@ public partial class Viewport3DView : UserControl, IViewportRenderer
         // Keep last pointer position so the radial menu opens at the right spot
         _viewModel.RadialMenuX = currentPos.X;
         _viewModel.RadialMenuY = currentPos.Y;
+      }
+
+      // Check if we need to wrap the cursor (like Blender)
+      if (!_viewModel.IsEarthObserverMode && _viewModel.OperatorStack.IsCameraControlEngaged)
+      {
+        bool wrapped = false;
+        double wrapX = currentPos.X;
+        double wrapY = currentPos.Y;
+
+        double margin = 2.0;
+
+        if (currentPos.X <= 0)
+        {
+          wrapX = bounds.Width - margin;
+          wrapped = true;
+        }
+        else if (currentPos.X >= bounds.Width - 1)
+        {
+          wrapX = margin;
+          wrapped = true;
+        }
+
+        if (currentPos.Y <= 0)
+        {
+          wrapY = bounds.Height - margin;
+          wrapped = true;
+        }
+        else if (currentPos.Y >= bounds.Height - 1)
+        {
+          wrapY = margin;
+          wrapped = true;
+        }
+
+        if (wrapped)
+        {
+          var topLevel = TopLevel.GetTopLevel(this);
+          if (topLevel != null)
+          {
+            var screenPt = RenderTargetImage.PointToScreen(new Avalonia.Point(wrapX, wrapY));
+            MouseUtils.SetCursorPosition(screenPt, topLevel.RenderScaling);
+          }
+        }
       }
     }
 

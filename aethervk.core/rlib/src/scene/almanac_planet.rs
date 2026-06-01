@@ -18,6 +18,8 @@ pub struct AlmanacPlanet {
   pub mu: f32,
   /// Rotation from Body-Fixed (BF) frame to Principal Axis (PA) frame.
   pub bf_to_pa: Quat,
+  /// Offset of the surface observer in Body-Fixed (BF) frame.
+  pub surface_offset_bf: Vec3f32,
 }
 
 impl Component for AlmanacPlanet {}
@@ -30,6 +32,7 @@ impl AlmanacPlanet {
       rot_period,
       mu,
       bf_to_pa: Quat::identity(),
+      surface_offset_bf: Vec3f32::zero(),
     }
   }
 
@@ -55,12 +58,63 @@ impl AlmanacPlanet {
       // PA -> BF -> World
       // bf_to_pa is BF -> PA, so PA -> BF is bf_to_pa.inverse()
       transform.rotation = (rot_bf_world * self.bf_to_pa.inverse()).normalize();
+
+      if self.surface_offset_bf != Vec3f32::zero() {
+        let offset_world = rot_bf_world.rotate_vector(self.surface_offset_bf);
+        transform.position += offset_world;
+      }
     }
 
     if let Some(k) = kinematic {
       k.velocity = kinematic_state.velocity;
       if let Some(ang_vel_bf) = kinematic_state.angular_velocity {
         // transform angular velocity from BF to PA (simulation space)
+        k.angular_velocity = self.bf_to_pa.rotate_vector(ang_vel_bf);
+      } else {
+        k.angular_velocity = Vec3f32::zero();
+      }
+    }
+
+    Ok(())
+  }
+
+  /// Steps a high-res transform component (e.g. Camera).
+  pub fn step_high_res(
+    &self,
+    transform: &mut crate::scene::HighResTransformComponent,
+    kinematic: Option<&mut crate::scene::KinematicComponent>,
+    epoch: anise::time::Epoch,
+    _step_days: f64,
+    almanac: &crate::simulation::almanac::AlmanacPackedData,
+  ) -> EngineResult<()> {
+    let kinematic_state = almanac.get_ephem_full(
+      self.naif_id,
+      anise::constants::frames::SUN_J2000,
+      epoch,
+      true,
+      false,
+    )?;
+    transform.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+      kinematic_state.position.x() as f64,
+      kinematic_state.position.y() as f64,
+      kinematic_state.position.z() as f64,
+    );
+    if let Some(rot_bf_world) = kinematic_state.rotation {
+      transform.rotation = (rot_bf_world * self.bf_to_pa.inverse()).normalize();
+
+      if self.surface_offset_bf != Vec3f32::zero() {
+        let offset_world = rot_bf_world.rotate_vector(self.surface_offset_bf);
+        transform.position += aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+          offset_world.x() as f64,
+          offset_world.y() as f64,
+          offset_world.z() as f64,
+        );
+      }
+    }
+
+    if let Some(k) = kinematic {
+      k.velocity = kinematic_state.velocity;
+      if let Some(ang_vel_bf) = kinematic_state.angular_velocity {
         k.angular_velocity = self.bf_to_pa.rotate_vector(ang_vel_bf);
       } else {
         k.angular_velocity = Vec3f32::zero();
@@ -89,6 +143,7 @@ mod tests {
       rot_period: 0.0,
       mu: 0.0,
       bf_to_pa,
+      surface_offset_bf: Vec3f32::zero(),
     };
 
     // Mock an Almanac rotation: identity (BF is aligned with World)

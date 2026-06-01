@@ -822,7 +822,6 @@ impl SimulationContext {
       comet_id,
       ParticleEmitterCirclesComponent {
         circles: alloc::vec::Vec::new(),
-        child_entities: alloc::vec::Vec::new(),
       },
     )?;
 
@@ -855,12 +854,7 @@ impl SimulationContext {
         // For Kinematic bodies, they are driven by the Almanac.
         scene_ctx.scene.add_component(
           comet_id,
-          crate::scene::almanac_planet::AlmanacPlanet {
-            naif_id: 0, // Placeholder
-            rot_period: 0.0,
-            mu: 0.0,
-            bf_to_pa: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-          },
+          crate::scene::almanac_planet::AlmanacPlanet::new(0, 0.0, 0.0),
         )?;
       }
       2 => {
@@ -1073,7 +1067,6 @@ impl SimulationContext {
       mesh_id,
       crate::scene::particles::ParticleEmitterCirclesComponent {
         circles: alloc::vec::Vec::new(),
-        child_entities: alloc::vec::Vec::new(),
       },
     )?;
 
