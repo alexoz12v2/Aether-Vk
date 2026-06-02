@@ -115,4 +115,7 @@ jobs:
       run: xvfb-run -a ./execute_tests.sh
       env:
         # Force Vulkan to use lavapipe for headless environments
-        VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        VULKAN_SDK: ${{ env.VULKAN_SDK }}
+        VK_LAYER_PATH: ${{ env.VULKAN_SDK }}/etc/vulkan/explicit_layer.d
+        LD_LIBRARY_PATH: ${{ env.VULKAN_SDK }}/lib:${{ env.LD_LIBRARY_PATH }}
