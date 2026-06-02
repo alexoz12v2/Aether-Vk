@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:models="using:AetherVk.Logic.Models"
+             xmlns:controls="using:AetherVk.Controls"
              mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="600"
              x:Class="AetherVk.Views.Components.ParticleEmitterCirclesView"
              x:DataType="models:ParticleEmitterCirclesComponent">
@@ -49,39 +50,57 @@
                                     <!-- Position -->
                                     <StackPanel Margin="0,0,16,12">
                                         <TextBlock Text="Latitude (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <NumericUpDown Value="{Binding LatitudeDeg}" Minimum="-90" Maximum="90" FormatString="0.0" Width="100"/>
+                                        <controls:UnboundedSlider Value="{Binding LatitudeDeg}" HasBounds="True" MinBound="-90" MaxBound="90" Step="1" Width="120"/>
                                     </StackPanel>
                                     <StackPanel Margin="0,0,16,12">
                                         <TextBlock Text="Longitude (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <NumericUpDown Value="{Binding LongitudeDeg}" Minimum="0" Maximum="360" FormatString="0.0" Width="100"/>
+                                        <controls:UnboundedSlider Value="{Binding LongitudeDeg}" IsWrapped="True" WrapMin="0" WrapMax="360" Step="1" Width="120"/>
                                     </StackPanel>
 
                                     <!-- Geometry & Mass -->
                                     <StackPanel Margin="0,0,16,12">
                                         <TextBlock Text="Mass (g)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <NumericUpDown Value="{Binding MassGrams}" Minimum="0" FormatString="0.000" Width="100"/>
+                                        <controls:UnboundedSlider Value="{Binding MassGrams}" HasBounds="True" MinBound="0" Step="0.1" Width="120"/>
                                     </StackPanel>
                                     <StackPanel Margin="0,0,16,12">
                                         <TextBlock Text="Radius (frac)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <NumericUpDown Value="{Binding CircleRadius}" Minimum="0.001" Maximum="1.0" FormatString="0.000" Width="100"/>
+                                        <controls:UnboundedSlider Value="{Binding CircleRadius}" HasBounds="True" MinBound="0.001" MaxBound="1.0" Step="0.01" Width="120"/>
                                     </StackPanel>
 
                                     <!-- Emission Params -->
                                     <StackPanel Margin="0,0,16,12">
                                         <TextBlock Text="Rate (/tick)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <NumericUpDown Value="{Binding ParticlesPerTick}" Minimum="0" FormatString="0" Width="100"/>
+                                        <controls:UnboundedSlider Value="{Binding ParticlesPerTickDouble}" HasBounds="True" MinBound="0" Step="10" Width="120"/>
                                     </StackPanel>
                                     <StackPanel Margin="0,0,16,12">
                                         <TextBlock Text="TTL (ticks)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <NumericUpDown Value="{Binding TTL}" Minimum="1" FormatString="0" Width="100"/>
+                                        <controls:UnboundedSlider Value="{Binding TTLDouble}" HasBounds="True" MinBound="1" Step="10" Width="120"/>
                                     </StackPanel>
                                     <StackPanel Margin="0,0,16,12">
                                         <TextBlock Text="Velocity (km/s)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <NumericUpDown Value="{Binding MeanVelocityKms}" Minimum="0.0" FormatString="0.00" Width="100"/>
+                                        <controls:UnboundedSlider Value="{Binding MeanVelocityKms}" HasBounds="True" MinBound="0.0" Step="0.1" Width="120"/>
                                     </StackPanel>
                                     <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="Direction StdDev (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <NumericUpDown Value="{Binding VelocityDirStdDevDeg}" Minimum="0.0" Maximum="180.0" FormatString="0.0" Width="100"/>
+                                        <TextBlock Text="Dir StdDev (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <controls:UnboundedSlider Value="{Binding VelocityDirStdDevDeg}" HasBounds="True" MinBound="0.0" MaxBound="180.0" Step="1" Width="120"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="β (rad.pres.)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <controls:UnboundedSlider Value="{Binding Beta}" HasBounds="True" MinBound="0.0" Step="0.1" Width="120"/>
+                                    </StackPanel>
+
+                                    <!-- Colour -->
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="R" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <controls:UnboundedSlider Value="{Binding ColorR}" HasBounds="True" MinBound="0" MaxBound="1" Step="0.01" Width="80"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="G" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <controls:UnboundedSlider Value="{Binding ColorG}" HasBounds="True" MinBound="0" MaxBound="1" Step="0.01" Width="80"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,0,12">
+                                        <TextBlock Text="B" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <controls:UnboundedSlider Value="{Binding ColorB}" HasBounds="True" MinBound="0" MaxBound="1" Step="0.01" Width="80"/>
                                     </StackPanel>
                                 </WrapPanel>
                             </StackPanel>

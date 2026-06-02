@@ -96,7 +96,9 @@ public class SpawnCometFlowE2ETests
         0f,
         2.5f,
         1e13f,
-        2
+        2,
+        0.0, 90.0, 0.0, 0.0, 0.0, 0.0,
+        0f, 0f, 0f
       );
 
       // Verify Hierarchy

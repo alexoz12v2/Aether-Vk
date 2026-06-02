@@ -1586,6 +1586,11 @@ fn execute_simulation_tick(
       aethervk_oshal_rlib::log!("dispatch_physics_step failed: {:?}", e);
     }
 
+    // Microframe refit: re-center kinematic comet microframes when comet
+    // approaches the SOI boundary. Must run after almanac step has updated
+    // the microframe/comet transforms but before render submission.
+    refit_kinematic_microframes(scene_id, ctx);
+
     if !is_manual {
       // Advance fixed clock step
       time_state_arc.read().time_info.read().ut_fixed_update();
@@ -1838,6 +1843,126 @@ fn execute_simulation_tick(
   Ok(())
 }
 
+/// Threshold: re-center the microframe when the comet's local position
+/// reaches this fraction of the SOI radius (in micro-frame km).
+const MICROFRAME_REFIT_THRESHOLD: f32 = 0.7;
+
+/// SUN_RADIUS_AU (same as in spawn_comet_internal).
+const SUN_RADIUS_AU_REFIT: f32 = 0.0046524726_f32;
+
+/// Re-centers kinematic comet microframes when the comet approaches the SOI
+/// boundary. Called after `dispatch_physics_step` (which updates the comet's
+/// world position via `AlmanacPlanet::step`) so the microframe tracks the comet.
+///
+/// Algorithm:
+/// 1. Find all micro-frame entities.
+/// 2. For each, find the comet child (has `KinematicComponent` with
+///    `use_model_rotation` indicating it's a kinematic comet, not a planet).
+/// 3. Compute the comet's displacement from the microframe center in km.
+/// 4. If displacement > threshold × SOI_km → translate the microframe center
+///    to the comet's world position, adjust the comet's local position by the
+///    inverse, and recompute the SOI.
+fn refit_kinematic_microframes(
+  scene_id: u64,
+  ctx: &alloc::sync::Arc<LogicThreadContext>,
+) {
+  use crate::scene::{
+    ColliderComponent, ColliderShape, KinematicComponent,
+    ReferenceFrameComponent, ReferenceFrameType, TransformComponent,
+  };
+  use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
+
+  let scenes = ctx.scenes.read();
+  let Some(scene_ctx_guard) = scenes.get(&scene_id) else {
+    return;
+  };
+  let scene_ctx = scene_ctx_guard.read();
+  let scene = &scene_ctx.scene;
+
+  // Collect micro-frame entities
+  let mut micro_frames: alloc::vec::Vec<(EntityId, TransformComponent, ReferenceFrameComponent)> =
+    alloc::vec::Vec::new();
+
+  scene.query2::<TransformComponent, ReferenceFrameComponent, _>(|eid, t, f| {
+    if f.frame_type == ReferenceFrameType::Micro {
+      micro_frames.push((eid, *t, f.clone()));
+    }
+  });
+
+  for (frame_eid, frame_transform, frame_ref) in &micro_frames {
+    // Find comet child: entity with KinematicComponent + PhysicalMeshComponent
+    let children = match scene.get_children(*frame_eid) {
+      Some(c) => c,
+      None => continue,
+    };
+
+    for &child_eid in &children {
+      // Check if this child is a kinematic comet (has KinematicComponent)
+      let is_kinematic = scene
+        .with_component(child_eid, |k: &KinematicComponent| k.use_model_rotation)
+        .unwrap_or(false);
+
+      if !is_kinematic {
+        continue;
+      }
+
+      // Get comet local position (in micro-frame km space)
+      let comet_local_pos = match scene
+        .with_component(child_eid, |t: &TransformComponent| t.position)
+      {
+        Some(pos) => pos,
+        None => continue,
+      };
+
+      // SOI radius in km: soi_radius_au / frame.scale (where scale = AU/km)
+      let soi_km = frame_ref.soi_radius / frame_ref.scale;
+      let displacement_km = comet_local_pos.length();
+
+      if displacement_km < MICROFRAME_REFIT_THRESHOLD * soi_km {
+        continue; // Comet is well within bounds
+      }
+
+      // Compute world-space delta: comet_local_km * scale → AU
+      let delta_au = comet_local_pos * frame_ref.scale;
+      let new_frame_pos = frame_transform.position + delta_au;
+
+      // Update microframe position (translate to comet's world position)
+      let _ = scene.with_component_mut(*frame_eid, |t: &mut TransformComponent| {
+        t.position = new_frame_pos;
+      });
+
+      // Inverse-translate the comet: its local position resets to origin
+      let _ = scene.with_component_mut(child_eid, |t: &mut TransformComponent| {
+        t.position = Vec3f32::zero();
+      });
+
+      // Recompute SOI radius based on new distance to sun
+      let new_dist_au = new_frame_pos.length();
+      let new_soi = (new_dist_au - SUN_RADIUS_AU_REFIT).max(SUN_RADIUS_AU_REFIT);
+
+      let _ = scene.with_component_mut(*frame_eid, |f: &mut ReferenceFrameComponent| {
+        f.soi_radius = new_soi;
+      });
+
+      // Update LCA collider half-extents to match new SOI
+      let _ = scene.with_component_mut(*frame_eid, |c: &mut ColliderComponent| {
+        c.shape = ColliderShape::OBB {
+          half_extents: Vec3f32::from_components(new_soi, new_soi, new_soi),
+        };
+      });
+
+      aethervk_oshal_rlib::log!(
+        "Microframe refit: displacement={:.1} km, threshold={:.1} km → new SOI={:.6} AU",
+        displacement_km,
+        MICROFRAME_REFIT_THRESHOLD * soi_km,
+        new_soi
+      );
+
+      break; // Only one comet per microframe
+    }
+  }
+}
+
 fn dispatch_physics_step(
   scene_id: u64,
   ctx: &alloc::sync::Arc<LogicThreadContext>,
@@ -1857,56 +1982,72 @@ fn dispatch_physics_step(
     *ps = crate::physics::physics_scene::PhysicsScene::build_from_scene(scene_arc.as_ref(), dt_s);
   }
 
-  let logic_state = ctx.logic_state.read();
-  if scene_arc.should_parallelize() {
-    scene_arc.query3_mut_par::<TransformComponent, crate::scene::AlmanacPlanet, crate::scene::KinematicComponent, _>(
-      &ctx.thread_pool,
-      |_, transform, planet, kinematic| {
-        let _ = planet.step(
-          transform,
-          Some(kinematic),
-          current_epoch,
-          step_days,
-          &logic_state.almanac_data,
-        );
-      },
-    );
-    scene_arc.query3_mut_par::<crate::scene::HighResTransformComponent, crate::scene::AlmanacPlanet, crate::scene::CameraComponent, _>(
-      &ctx.thread_pool,
-      |_, transform, planet, _| {
-        let _ = planet.step_high_res(
-          transform,
-          None,
-          current_epoch,
-          step_days,
-          &logic_state.almanac_data,
-        );
-      },
-    );
-  } else {
-    scene_arc.query3_mut::<TransformComponent, crate::scene::AlmanacPlanet, crate::scene::KinematicComponent, _>(
-      |_, transform, planet, kinematic| {
-        let _ = planet.step(
-          transform,
-          Some(kinematic),
-          current_epoch,
-          step_days,
-          &logic_state.almanac_data,
-        );
-      },
-    );
-    scene_arc.query3_mut::<crate::scene::HighResTransformComponent, crate::scene::AlmanacPlanet, crate::scene::CameraComponent, _>(
-      |_, transform, planet, _| {
-        let _ = planet.step_high_res(
-          transform,
-          None,
-          current_epoch,
-          step_days,
-          &logic_state.almanac_data,
-        );
-      },
-    );
-  }
+  // Scope the logic_state read guard tightly — holding it across the
+  // physics tasklet spawn would block LoadAlmanac's write() on the pool.
+  {
+    let logic_state = ctx.logic_state.read();
+    if scene_arc.should_parallelize() {
+      scene_arc.query3_mut_par::<TransformComponent, crate::scene::AlmanacPlanet, crate::scene::KinematicComponent, _>(
+        &ctx.thread_pool,
+        |entity_id, transform, planet, kinematic| {
+          // Look up rotational model from PhysicalMeshComponent (if present on this entity)
+          let rot_model = scene_arc.with_component::<crate::scene::PhysicalMeshComponent, _, _>(
+            entity_id,
+            |pmc| pmc.rotational_model,
+          ).flatten();
+          let _ = planet.step(
+            transform,
+            Some(kinematic),
+            current_epoch,
+            step_days,
+            &logic_state.almanac_data,
+            rot_model.as_ref(),
+          );
+        },
+      );
+      scene_arc.query3_mut_par::<crate::scene::HighResTransformComponent, crate::scene::AlmanacPlanet, crate::scene::CameraComponent, _>(
+        &ctx.thread_pool,
+        |_, transform, planet, _| {
+          let _ = planet.step_high_res(
+            transform,
+            None,
+            current_epoch,
+            step_days,
+            &logic_state.almanac_data,
+          );
+        },
+      );
+    } else {
+      scene_arc.query3_mut::<TransformComponent, crate::scene::AlmanacPlanet, crate::scene::KinematicComponent, _>(
+        |entity_id, transform, planet, kinematic| {
+          // Look up rotational model from PhysicalMeshComponent (if present on this entity)
+          let rot_model = scene_arc.with_component::<crate::scene::PhysicalMeshComponent, _, _>(
+            entity_id,
+            |pmc| pmc.rotational_model,
+          ).flatten();
+          let _ = planet.step(
+            transform,
+            Some(kinematic),
+            current_epoch,
+            step_days,
+            &logic_state.almanac_data,
+            rot_model.as_ref(),
+          );
+        },
+      );
+      scene_arc.query3_mut::<crate::scene::HighResTransformComponent, crate::scene::AlmanacPlanet, crate::scene::CameraComponent, _>(
+        |_, transform, planet, _| {
+          let _ = planet.step_high_res(
+            transform,
+            None,
+            current_epoch,
+            step_days,
+            &logic_state.almanac_data,
+          );
+        },
+      );
+    }
+  } // logic_state read guard dropped here
 
   if let Some(ps_lock) = &physics_scene_arc {
     let ps_arc = ps_lock.clone();

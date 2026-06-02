@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+export RUST_BACKTRACE=1
+
 # Check if running in a headless environment and Vulkan ICD is not already overridden
 if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ] && [ -z "$VK_ICD_FILENAMES" ]; then
     echo "No display server detected. Configuring Vulkan for headless environment (lavapipe)..."

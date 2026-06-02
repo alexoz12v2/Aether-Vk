@@ -119,3 +119,13 @@ A standard simulation tick involves:
 
 See the `LICENSE` file for details.
 
+## Creation of release through `scripts/create_release.sh`/`scripts\create_release.ps1`
+
+- Mode: `create` :                                                                                                                                                                                                                                                       
+  - Requires the `gh` CLI.                                                                                                                                                                                                                                            
+  - Checks if the current commit's GitHub Action CI run succeeded using `gh run list --commit <hash>` . If the CI failed, it aborts the release process.                                                                                                               
+  - If CI passes (or is pending/not found, in which case it emits a warning), it creates a `git tag`, pushes the tag, and automatically drafts the release using `gh release create .`
+- Mode: `upload` :                                                                                                                                                                                                                                                       
+  - Allows you to run the script locally to upload a compiled artifact to an existing release.                                                                                                                                                                        
+  - Example:  `./scripts/create_release.sh upload 1.0.0 ./bin/publish/AetherVk_win-x64.msix`
+

@@ -319,7 +319,7 @@
                                                     <Grid ColumnDefinitions="Auto, *, Auto">
                                                         <Border Grid.Column="0" Width="16" Height="16" CornerRadius="8" Margin="0,0,12,0">
                                                             <Border.Background>
-                                                                <SolidColorBrush Color="{Binding ColorR, Converter={StaticResource FloatToColorConverter}}"/> <!-- Assuming there's a converter, if not, wait. I will just use a generic background or leave it -->
+                                                                <SolidColorBrush Color="#FFFF9944"/>
                                                             </Border.Background>
                                                         </Border>
                                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
@@ -330,37 +330,37 @@
 
                                                     <Grid ColumnDefinitions="Auto,*,Auto,*" Margin="0,8,0,0">
                                                         <TextBlock Grid.Column="0" Text="Lat (°):" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="1" Value="{Binding LatitudeDeg}" Minimum="-90" Maximum="90" FormatString="0.0" Margin="0,0,10,0"/>
+                                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding LatitudeDeg}" HasBounds="True" MinBound="-90" MaxBound="90" Step="1" Margin="0,0,10,0"/>
                                                         <TextBlock Grid.Column="2" Text="Lon (°):" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="3" Value="{Binding LongitudeDeg}" Minimum="0" Maximum="360" FormatString="0.0"/>
+                                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding LongitudeDeg}" IsWrapped="True" WrapMin="0" WrapMax="360" Step="1"/>
                                                     </Grid>
 
                                                     <Grid ColumnDefinitions="Auto,*,Auto,*" Margin="0,4,0,0">
-                                                        <TextBlock Grid.Column="0" Text="Radius (m):" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="1" Value="{Binding CircleRadius}" Minimum="0" FormatString="0.0" Margin="0,0,10,0"/>
+                                                        <TextBlock Grid.Column="0" Text="Radius (frac):" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding CircleRadius}" HasBounds="True" MinBound="0.001" MaxBound="1.0" Step="0.01" Margin="0,0,10,0"/>
                                                         <TextBlock Grid.Column="2" Text="Mass (g):" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="3" Value="{Binding MassGrams}" Minimum="0" FormatString="0.000"/>
+                                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding MassGrams}" HasBounds="True" MinBound="0" Step="0.1"/>
                                                     </Grid>
 
                                                     <Grid ColumnDefinitions="Auto,*,Auto,*" Margin="0,4,0,0">
                                                         <TextBlock Grid.Column="0" Text="Rate:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="1" Value="{Binding ParticlesPerTick}" Minimum="0" FormatString="0" Margin="0,0,10,0"/>
+                                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding ParticlesPerTickDouble}" HasBounds="True" MinBound="0" Step="10" Margin="0,0,10,0"/>
                                                         <TextBlock Grid.Column="2" Text="TTL:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="3" Value="{Binding TTL}" Minimum="0" FormatString="0.0"/>
+                                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding TTLDouble}" HasBounds="True" MinBound="1" Step="10"/>
                                                     </Grid>
 
                                                     <Grid ColumnDefinitions="Auto,*" Margin="0,4,0,0">
-                                                        <TextBlock Grid.Column="0" Text="Vel (m/s):" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="1" Value="{Binding MeanVelocity}" Minimum="0" FormatString="0.0"/>
+                                                        <TextBlock Grid.Column="0" Text="Vel (km/s):" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding MeanVelocityKms}" HasBounds="True" MinBound="0" Step="0.1"/>
                                                     </Grid>
 
                                                     <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" Margin="0,4,0,0">
                                                         <TextBlock Grid.Column="0" Text="R:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="1" Value="{Binding ColorR}" Minimum="0" Maximum="1" FormatString="0.0" Margin="0,0,10,0"/>
+                                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding ColorR}" HasBounds="True" MinBound="0" MaxBound="1" Step="0.01" Margin="0,0,10,0"/>
                                                         <TextBlock Grid.Column="2" Text="G:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="3" Value="{Binding ColorG}" Minimum="0" Maximum="1" FormatString="0.0" Margin="0,0,10,0"/>
+                                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding ColorG}" HasBounds="True" MinBound="0" MaxBound="1" Step="0.01" Margin="0,0,10,0"/>
                                                         <TextBlock Grid.Column="4" Text="B:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="5" Value="{Binding ColorB}" Minimum="0" Maximum="1" FormatString="0.0"/>
+                                                        <controls:UnboundedSlider Grid.Column="5" Value="{Binding ColorB}" HasBounds="True" MinBound="0" MaxBound="1" Step="0.01"/>
                                                     </Grid>
                                                 </StackPanel>
                                             </Border>
@@ -385,6 +385,29 @@
                                     <TextBlock Text="Asset File:" FontWeight="Bold" VerticalAlignment="Center" IsVisible="{Binding !IsProcedural}" />
                                     <TextBlock Text="{Binding AssetPath}" VerticalAlignment="Center" TextWrapping="Wrap" />
                                 </StackPanel>
+
+                                <!-- Nucleus Physical Parameters -->
+                                <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Padding="8">
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="Nucleus Parameters" FontWeight="Bold" FontSize="13" />
+                                        <WrapPanel Orientation="Horizontal">
+                                            <StackPanel Margin="0,0,16,8">
+                                                <TextBlock Text="Mass (kg)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding MassKg}" HasBounds="True" MinBound="1.0" Step="1e10" Width="140"/>
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,16,8">
+                                                <TextBlock Text="Radius (km)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding RadiusKm}" HasBounds="True" MinBound="0.01" Step="0.1" Width="140"/>
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,16,8">
+                                                <TextBlock Text="Density (kg/m³)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <TextBlock Text="{Binding DensityKgM3, StringFormat='{}{0:F1}'}" FontSize="13" Opacity="0.8"/>
+                                            </StackPanel>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Orientation Gizmo -->
                                 <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Padding="8">
                                     <WrapPanel Orientation="Horizontal">
                                         <StackPanel Spacing="4" Margin="0,0,16,0">
@@ -397,6 +420,41 @@
                                                                     Roll="{Binding Roll, Mode=OneWay}" 
                                                                     HorizontalAlignment="Center" />
                                     </WrapPanel>
+                                </Border>
+
+                                <!-- IAU Rotational Model -->
+                                <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Padding="8">
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="IAU Rotational Model" FontWeight="Bold" FontSize="13" />
+                                        <WrapPanel Orientation="Horizontal">
+                                            <StackPanel Margin="0,0,16,8">
+                                                <TextBlock Text="Pole RA (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding PoleRaDeg}" Step="0.1" Width="120"/>
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,16,8">
+                                                <TextBlock Text="Pole Dec (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding PoleDecDeg}" Step="0.1" Width="120"/>
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,16,8">
+                                                <TextBlock Text="W₀ (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding PrimeMeridianDeg}" Step="0.1" Width="120"/>
+                                            </StackPanel>
+                                        </WrapPanel>
+                                        <WrapPanel Orientation="Horizontal">
+                                            <StackPanel Margin="0,0,16,8">
+                                                <TextBlock Text="RA rate (°/cy)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding PoleRaRateDeg}" Step="0.001" Width="120"/>
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,16,8">
+                                                <TextBlock Text="Dec rate (°/cy)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding PoleDecRateDeg}" Step="0.001" Width="120"/>
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,16,8">
+                                                <TextBlock Text="Spin (°/day)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding RotationRateDeg}" Step="0.01" Width="120"/>
+                                            </StackPanel>
+                                        </WrapPanel>
+                                    </StackPanel>
                                 </Border>
                             </StackPanel>
                         </Expander>

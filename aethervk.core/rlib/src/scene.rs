@@ -595,6 +595,70 @@ pub struct MarkersComponent {
 }
 impl Component for MarkersComponent {}
 
+/// IAU-style rotational model for a rigid body.
+/// Pole orientation = (RA₀ + RA_rate * T, Dec₀ + Dec_rate * T)
+/// Prime meridian = W₀ + W_rate * d  (where d = days since J2000)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyRotationalModel {
+  /// Right ascension of pole at epoch (degrees)
+  pub pole_ra: f64,
+  /// Declination of pole at epoch (degrees)
+  pub pole_dec: f64,
+  /// Prime meridian angle at epoch (degrees)
+  pub prime_meridian: f64,
+  /// Rate of change of RA per century (degrees/century)
+  pub pole_ra_rate: f64,
+  /// Rate of change of Dec per century (degrees/century)
+  pub pole_dec_rate: f64,
+  /// Rotation rate (degrees/day)
+  pub rotation_rate: f64,
+  /// Reference epoch as Julian date (default J2000.0 = 2451545.0)
+  pub reference_epoch_jd: f64,
+}
+
+impl Default for BodyRotationalModel {
+  fn default() -> Self {
+    Self {
+      pole_ra: 0.0,
+      pole_dec: 90.0,
+      prime_meridian: 0.0,
+      pole_ra_rate: 0.0,
+      pole_dec_rate: 0.0,
+      rotation_rate: 0.0,
+      reference_epoch_jd: 2451545.0, // J2000.0
+    }
+  }
+}
+
+impl BodyRotationalModel {
+  /// Compute pole orientation quaternion at a given Julian date.
+  /// Returns the quaternion representing body-fixed to inertial rotation.
+  pub fn orientation_at(&self, julian_date: f64) -> Quat {
+    let t_centuries = (julian_date - self.reference_epoch_jd) / 36525.0;
+    let d_days = julian_date - self.reference_epoch_jd;
+
+    let ra = (self.pole_ra + self.pole_ra_rate * t_centuries).to_radians();
+    let dec = (self.pole_dec + self.pole_dec_rate * t_centuries).to_radians();
+    let w = (self.prime_meridian + self.rotation_rate * d_days).to_radians();
+
+    // Construct rotation: R = Rz(ra) * Rx(π/2 - dec) * Rz(w)
+    let q_ra = Quat::from_axis_angle(
+      Vec3f32::from_components(0.0, 0.0, 1.0),
+      ra as f32,
+    );
+    let q_dec = Quat::from_axis_angle(
+      Vec3f32::from_components(1.0, 0.0, 0.0),
+      (core::f64::consts::FRAC_PI_2 - dec) as f32,
+    );
+    let q_w = Quat::from_axis_angle(
+      Vec3f32::from_components(0.0, 0.0, 1.0),
+      w as f32,
+    );
+
+    q_ra * q_dec * q_w
+  }
+}
+
 /// A physically-based mesh loaded from a glTF file.
 #[derive(Debug)]
 pub struct PhysicalMeshComponent {
@@ -609,6 +673,8 @@ pub struct PhysicalMeshComponent {
   pub sphere_radius: f32,
   pub grid_color: [f32; 3],
   pub grid_density: f32,
+  /// Optional IAU-style rotational model for pole orientation and spin.
+  pub rotational_model: Option<BodyRotationalModel>,
 }
 
 impl Clone for PhysicalMeshComponent {
@@ -624,6 +690,7 @@ impl Clone for PhysicalMeshComponent {
       sphere_radius: self.sphere_radius,
       grid_color: self.grid_color,
       grid_density: self.grid_density,
+      rotational_model: self.rotational_model,
     }
   }
 }
@@ -638,6 +705,7 @@ impl PartialEq for PhysicalMeshComponent {
       && self.sphere_radius == other.sphere_radius
       && self.grid_color == other.grid_color
       && self.grid_density == other.grid_density
+      && self.rotational_model == other.rotational_model
   }
 }
 
@@ -994,10 +1062,13 @@ impl Component for ColliderComponent {}
 
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
-/// TODO: Document this item
+/// Kinematic body: position driven by almanac, rotation optionally by BodyRotationalModel.
 pub struct KinematicComponent {
   pub velocity: Vec3f32,
   pub angular_velocity: Vec3f32,
+  /// When true, rotation is computed from `PhysicalMeshComponent::rotational_model`
+  /// instead of from almanac BPC data (which comets lack).
+  pub use_model_rotation: bool,
 }
 impl Component for KinematicComponent {}
 

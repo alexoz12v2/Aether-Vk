@@ -2,9 +2,11 @@ using System;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
+using AetherVk.Logic.Messages;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
 
@@ -14,7 +16,12 @@ public class TimeScaleOption
   public uint Value { get; init; }
 }
 
-public partial class TimelineViewModel : TabItemViewModel, IDisposable
+public partial class TimelineViewModel
+  : TabItemViewModel,
+    IDisposable,
+    IRecipient<CometDestroyedMessage>,
+    IRecipient<JetConfigChangedMessage>,
+    IRecipient<AlmanacUpdatedMessage>
 {
   private readonly NativeRuntimeService _runtimeService;
   private readonly IUiThreadDispatcher _uiThreadDispatcher;
@@ -40,6 +47,26 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   [ObservableProperty]
   private TimeScaleOption _selectedTimeScale;
 
+  // ── Epoch Range ─────────────────────────────────────────────────────────────
+
+  [ObservableProperty]
+  private string _startEpochText = "";
+
+  [ObservableProperty]
+  private string _endEpochText = "";
+
+  [ObservableProperty]
+  private bool _hasEpochError;
+
+  [ObservableProperty]
+  private string _epochErrorText = "";
+
+  /// <summary>Epochs can only be edited when simulation is NOT playing.</summary>
+  public bool CanEditEpochs => !Timeline.IsPlaying;
+
+  /// <summary>Tooltip for the play/pause toggle button.</summary>
+  public string PlayPauseTooltip => Timeline.IsPlaying ? "Pause" : "Play";
+
   public TimelineViewModel(
     ulong sceneId,
     NativeRuntimeService runtimeService,
@@ -60,6 +87,75 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
     CurrentSceneId = sceneId;
     Timeline.SelectedTimeScale = TimeScaleOptions.First();
     _timer = new Timer(UpdateFromRuntime, null, 33, 33);
+
+    // Initialize epoch text from service
+    StartEpochText = Timeline.StartDate.ToString("yyyy-MM-ddTHH:mm:ssZ");
+    EndEpochText = Timeline.StopDate.ToString("yyyy-MM-ddTHH:mm:ssZ");
+
+    // React to IsPlaying changes for CanEditEpochs
+    Timeline.PropertyChanged += (s, e) =>
+    {
+      if (e.PropertyName == nameof(Timeline.IsPlaying))
+      {
+        OnPropertyChanged(nameof(CanEditEpochs));
+        OnPropertyChanged(nameof(PlayPauseTooltip));
+      }
+    };
+
+    // Register for simulation-reset messages
+    WeakReferenceMessenger.Default.Register<CometDestroyedMessage>(this);
+    WeakReferenceMessenger.Default.Register<JetConfigChangedMessage>(this);
+    WeakReferenceMessenger.Default.Register<AlmanacUpdatedMessage>(this);
+  }
+
+  // ── Message Handlers ──────────────────────────────────────────────────────
+
+  public void Receive(CometDestroyedMessage message)
+  {
+    if (message.SceneId == CurrentSceneId)
+      ResetSimulationIfSnapshotted();
+  }
+
+  public void Receive(JetConfigChangedMessage message)
+  {
+    if (message.SceneId == CurrentSceneId)
+      ResetSimulationIfSnapshotted();
+  }
+
+  public void Receive(AlmanacUpdatedMessage message)
+  {
+    // Almanac is global (SceneId=0 means all scenes), so always regenerate
+    _ = UpdateTrajectoriesInternalAsync();
+  }
+
+  /// <summary>
+  /// If the simulation was played then paused (snapshot exists), restore the
+  /// snapshot, seek to the start epoch and clear the snapshot flag.
+  /// Called when configuration changes invalidate the current simulation state.
+  /// </summary>
+  private void ResetSimulationIfSnapshotted()
+  {
+    if (!_hasSnapshotted || Timeline.IsPlaying)
+      return;
+
+    // Auto-pause if playing (shouldn't happen due to guard, but safety)
+    if (Timeline.IsPlaying)
+    {
+      Timeline.IsPlaying = false;
+      _runtimeService.SetTimeScale(CurrentSceneId, 0);
+      _runtimeService.PauseScene(CurrentSceneId);
+    }
+
+    _runtimeService.RestoreSnapshot(CurrentSceneId);
+    _hasSnapshotted = false;
+    _runtimeService.SeekEpoch(CurrentSceneId, Timeline.MinTai);
+
+    _breadcrumbService.ShowMessageAsync(
+      "Simulation Reset",
+      "Configuration changed — simulation has been reset to start.",
+      default,
+      3
+    );
   }
 
   private void UpdateFromRuntime(object? state)
@@ -98,7 +194,7 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
     if (_runtimeService.IsInitialized)
     {
       _runtimeService.SeekEpoch(CurrentSceneId, Timeline.TimeTai);
-      _ = UpdateTrajectoriesAsync();
+      _ = UpdateTrajectoriesInternalAsync();
     }
   }
 
@@ -113,41 +209,59 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   private bool _hasSnapshotted;
 
   /// <summary>
-  /// Initiates scene playback.
-  /// Automatically captures a snapshot of the simulation state if it's the first time playing,
-  /// sets the simulation timescale, and pushes the PlayScene command down to the native logic thread.
-  /// Warns if a comet exists without jets, but does not block playback.
+  /// Toggle play/pause. On first play, captures a scene snapshot.
+  /// Blocks playback if no comet or no jets are configured.
   /// </summary>
   [RelayCommand]
-  private void Play()
+  private void PlayPause()
   {
-    if (_runtimeService.IsInitialized)
-    {
-      var state = _sceneStateManager.GetOrCreateScene(CurrentSceneId);
-      if (state.CometEntityId.HasValue)
-      {
-        bool hasJets = false;
-        var comet = _runtimeService.GetEntityById(CurrentSceneId, state.CometEntityId.Value);
-        if (comet != null)
-        {
-          var emitter = comet
-            .Components.OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>()
-            .FirstOrDefault();
-          if (emitter != null && emitter.Circles.Count > 0)
-          {
-            hasJets = true;
-          }
-        }
+    if (!_runtimeService.IsInitialized)
+      return;
 
-        if (!hasJets)
+    if (Timeline.IsPlaying)
+    {
+      // Pause
+      Timeline.IsPlaying = false;
+      _runtimeService.SetTimeScale(CurrentSceneId, 0);
+      _runtimeService.PauseScene(CurrentSceneId);
+    }
+    else
+    {
+      // Play — check prerequisites
+      var state = _sceneStateManager.GetOrCreateScene(CurrentSceneId);
+      if (!state.CometEntityId.HasValue)
+      {
+        _breadcrumbService.ShowMessageAsync(
+          "Cannot Play",
+          "Spawn a comet first before starting the simulation.",
+          default,
+          5
+        );
+        return;
+      }
+
+      bool hasJets = false;
+      var comet = _runtimeService.GetEntityById(CurrentSceneId, state.CometEntityId.Value);
+      if (comet != null)
+      {
+        var emitter = comet
+          .Components.OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>()
+          .FirstOrDefault();
+        if (emitter != null && emitter.Circles.Count > 0)
         {
-          _breadcrumbService.ShowMessageAsync(
-            "No Jets",
-            "Comet has no jets configured. Particle simulation will not run.",
-            default,
-            5
-          );
+          hasJets = true;
         }
+      }
+
+      if (!hasJets)
+      {
+        _breadcrumbService.ShowMessageAsync(
+          "Cannot Play",
+          "Configure at least one emission jet on the comet before starting the simulation.",
+          default,
+          5
+        );
+        return;
       }
 
       if (!_hasSnapshotted)
@@ -162,49 +276,72 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
   }
 
   /// <summary>
-  /// Pauses scene playback.
-  /// Zeroes out the timescale and dispatches a PauseScene command to the native logic thread.
+  /// Validates and applies the start/end epoch range.
+  /// Checks that start &lt;= end and that almanac coverage is sufficient.
   /// </summary>
   [RelayCommand]
-  private void Pause()
+  private async System.Threading.Tasks.Task ApplyEpochRange()
   {
-    if (_runtimeService.IsInitialized)
+    HasEpochError = false;
+    EpochErrorText = "";
+
+    if (!DateTimeOffset.TryParse(StartEpochText, out DateTimeOffset startDto))
     {
-      Timeline.IsPlaying = false;
-      _runtimeService.SetTimeScale(CurrentSceneId, 0);
-      _runtimeService.PauseScene(CurrentSceneId);
+      HasEpochError = true;
+      EpochErrorText = "Invalid start epoch format";
+      return;
     }
+
+    if (!DateTimeOffset.TryParse(EndEpochText, out DateTimeOffset endDto))
+    {
+      HasEpochError = true;
+      EpochErrorText = "Invalid end epoch format";
+      return;
+    }
+
+    if (startDto >= endDto)
+    {
+      HasEpochError = true;
+      EpochErrorText = "Start must be before end";
+      return;
+    }
+
+    if (!_runtimeService.IsInitialized)
+      return;
+
+    // Apply the new epoch range
+    _runtimeService.SetEpochRange(CurrentSceneId, startDto, endDto);
+
+    // Update timeline service
+    Timeline.StartDate = startDto;
+    Timeline.StopDate = endDto;
+
+    // Refresh epoch limits from runtime
+    if (_runtimeService.GetEpochLimits(CurrentSceneId, out double min, out double max))
+    {
+      Timeline.MinTai = min;
+      Timeline.MaxTai = max;
+    }
+
+    // If simulation was paused and had a snapshot, reset
+    if (_hasSnapshotted && !Timeline.IsPlaying)
+    {
+      _runtimeService.RestoreSnapshot(CurrentSceneId);
+      _hasSnapshotted = false;
+      _runtimeService.SeekEpoch(CurrentSceneId, Timeline.MinTai);
+    }
+
+    await UpdateTrajectoriesInternalAsync();
+
+    _breadcrumbService.ShowMessageAsync(
+      "Epoch Updated",
+      $"Simulation epoch range set to {startDto:yyyy-MM-dd} — {endDto:yyyy-MM-dd}",
+      default,
+      3
+    );
   }
 
-  /// <summary>
-  /// Stops playback entirely and rewinds the simulation.
-  /// Resets the time scale, pauses the logic engine, and gracefully restores
-  /// the simulation state from the initial snapshot if one exists.
-  /// If no snapshot exists, seeks to the initial epoch instead.
-  /// </summary>
-  [RelayCommand]
-  private void Stop()
-  {
-    if (_runtimeService.IsInitialized)
-    {
-      Timeline.IsPlaying = false;
-      _runtimeService.SetTimeScale(CurrentSceneId, 0);
-      _runtimeService.PauseScene(CurrentSceneId);
-      if (_hasSnapshotted)
-      {
-        _runtimeService.RestoreSnapshot(CurrentSceneId);
-        _hasSnapshotted = false;
-      }
-      else if (Timeline.InitialEpochTai > 0)
-      {
-        _runtimeService.SeekEpoch(CurrentSceneId, Timeline.InitialEpochTai);
-      }
-      _ = UpdateTrajectoriesAsync();
-    }
-  }
-
-  [RelayCommand]
-  private async System.Threading.Tasks.Task UpdateTrajectoriesAsync()
+  private async System.Threading.Tasks.Task UpdateTrajectoriesInternalAsync()
   {
     if (_runtimeService.IsInitialized)
     {
@@ -220,6 +357,7 @@ public partial class TimelineViewModel : TabItemViewModel, IDisposable
 
   public void Dispose()
   {
+    WeakReferenceMessenger.Default.UnregisterAll(this);
     _timer.Dispose();
   }
 }

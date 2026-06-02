@@ -9,8 +9,7 @@ namespace AetherVk.AppTests;
 
 public class SpawnCometWindowTests
 {
-  [AvaloniaFact]
-  public void SpawnCometWindow_Should_Render_And_Initialize()
+  private static SpawnCometViewModel CreateVm()
   {
     var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
     var console = new ConsoleService(dispatcherMock.Object);
@@ -18,12 +17,27 @@ public class SpawnCometWindowTests
     var storage = new Moq.Mock<ILocalStorageService>();
     var horizonService = new HorizonJplService(console, breadcrumb, storage.Object);
     var timelineService = new TimelineService();
-    var vm = new SpawnCometViewModel(
+    var stateManager = new SceneStateManager();
+    var runtimeService = new NativeRuntimeService(
+      stateManager,
+      console,
+      breadcrumb,
+      new NativeBufferPoolService(),
+      dispatcherMock.Object
+    );
+    return new SpawnCometViewModel(
       new List<ImportedModelItem>(),
       horizonService,
+      runtimeService,
       timelineService,
       breadcrumb
     );
+  }
+
+  [AvaloniaFact]
+  public void SpawnCometWindow_Should_Render_And_Initialize()
+  {
+    var vm = CreateVm();
     var window = new SpawnCometWindow { DataContext = vm };
 
     window.Show();
@@ -35,18 +49,7 @@ public class SpawnCometWindowTests
   [AvaloniaFact]
   public void CancelCommand_Should_Close_Window()
   {
-    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
-    var console = new ConsoleService(dispatcherMock.Object);
-    var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
-    var storage = new Moq.Mock<ILocalStorageService>();
-    var horizonService = new HorizonJplService(console, breadcrumb, storage.Object);
-    var timelineService = new TimelineService();
-    var vm = new SpawnCometViewModel(
-      new List<ImportedModelItem>(),
-      horizonService,
-      timelineService,
-      breadcrumb
-    );
+    var vm = CreateVm();
     var window = new SpawnCometWindow { DataContext = vm };
 
     window.Show();

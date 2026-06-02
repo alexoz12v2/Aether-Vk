@@ -3,8 +3,9 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_GOOGLE_include_directive : require
+#ifdef DEBUG_SHADERS
 #extension GL_EXT_debug_printf : enable
-#define DEBUG_SHADERS 1
+#endif
 
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"

@@ -5,7 +5,9 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_ballot : require
+#ifdef DEBUG_SHADERS
 #extension GL_EXT_debug_printf : enable
+#endif
 
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
@@ -80,9 +82,9 @@ void main() {
         // But if B is a SUB_TLAS, we MUST test it because SUB_TLAS never queries!
         // We still must avoid self-collision (A,A) even if A is a SUB_TLAS.
         bool hit_leaf = hit && is_leaf && ((my_ent_id < entity_id) || (is_sub_tlas && my_ent_id != entity_id)) && (entity_shape != BVH_SHAPE_AABB);
-        if (hit && is_leaf) {
+#ifdef DEBUG_SHADERS
             debugPrintfEXT("hit && is_leaf! my_ent=%d ent=%d shape=%d hit_leaf=%d", my_ent_id, entity_id, entity_shape, hit_leaf ? 1 : 0);
-        }
+#endif
         bool hit_node = hit && !is_leaf;
 
 

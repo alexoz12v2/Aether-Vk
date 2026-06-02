@@ -10,18 +10,42 @@ namespace AetherVk.Logic.Tests;
 [Collection("Sequential")]
 public class SpawnCometViewModelTests
 {
-  [Fact]
-  public void Constructor_InitializesDefaultValues()
+  private static (SpawnCometViewModel vm, NativeRuntimeService runtime) CreateVm(
+    List<ImportedModelItem>? models = null
+  )
   {
     var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
     var console = new ConsoleService(dispatcherMock.Object);
     var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
     var storage = new Moq.Mock<ILocalStorageService>();
     var horizonService = new HorizonJplService(console, breadcrumb, storage.Object);
-    var models = new List<ImportedModelItem>();
     var timelineService = new TimelineService();
+    var stateManager = new SceneStateManager();
+    var runtimeService = new NativeRuntimeService(
+      stateManager,
+      console,
+      breadcrumb,
+      new NativeBufferPoolService(),
+      dispatcherMock.Object
+    );
 
-    var vm = new SpawnCometViewModel(models, horizonService, timelineService, breadcrumb);
+    models ??= new List<ImportedModelItem>();
+
+    var vm = new SpawnCometViewModel(
+      models,
+      horizonService,
+      runtimeService,
+      timelineService,
+      breadcrumb
+    );
+
+    return (vm, runtimeService);
+  }
+
+  [Fact]
+  public void Constructor_InitializesDefaultValues()
+  {
+    var (vm, _) = CreateVm();
 
     Assert.Equal(1, vm.CurrentStep);
     Assert.True(vm.IsStep1);
@@ -37,13 +61,12 @@ public class SpawnCometViewModelTests
     var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
     var storage = new Moq.Mock<ILocalStorageService>();
     var horizonService = new HorizonJplService(console, breadcrumb, storage.Object);
-
     var stateManager = new SceneStateManager();
     var runtimeService = new NativeRuntimeService(
       stateManager,
       console,
       breadcrumb,
-      new AetherVk.Logic.Services.NativeBufferPoolService(),
+      new NativeBufferPoolService(),
       dispatcherMock.Object
     );
     var models = new List<ImportedModelItem>
@@ -58,7 +81,13 @@ public class SpawnCometViewModelTests
     };
     var timelineService = new TimelineService();
 
-    var vm = new SpawnCometViewModel(models, horizonService, timelineService, breadcrumb);
+    var vm = new SpawnCometViewModel(
+      models,
+      horizonService,
+      runtimeService,
+      timelineService,
+      breadcrumb
+    );
 
     // Step 1: model is selected → can proceed
     Assert.True(vm.CanGoNext);
@@ -67,15 +96,15 @@ public class SpawnCometViewModelTests
     Assert.Equal(2, vm.CurrentStep);
     Assert.True(vm.CanGoBack);
 
-    // Step 2: any valid physics type → can proceed
-    vm.PhysicsType = "Dynamic";
+    // Step 2: Static physics type → can proceed
+    vm.PhysicsType = "Static";
     Assert.True(vm.CanGoNext);
 
     vm.NextStepCommand.Execute(null);
     Assert.Equal(3, vm.CurrentStep);
-    Assert.False(vm.IsFinalStep); // step 4 is the final step now
+    Assert.False(vm.IsFinalStep); // step 4 is the final step
 
-    // Step 3 with Dynamic: requires both SelectedSpkRecord AND FetchedOrbitData
+    // Step 3: requires HasValidSpkRecord
     Assert.False(vm.CanGoNext);
     vm.SelectedSpkRecord = new SpkRecordItem
     {
@@ -83,52 +112,63 @@ public class SpawnCometViewModelTests
       EpochYear = "1986",
       Name = "Halley",
     };
-    Assert.False(vm.CanGoNext); // still false: FetchedOrbitData is null
-    vm.FetchedOrbitData = new PlanetOrbitData();
-    Assert.True(vm.CanGoNext);
+    Assert.True(vm.CanGoNext); // SPK record is sufficient now
 
     vm.NextStepCommand.Execute(null);
     Assert.Equal(4, vm.CurrentStep);
     Assert.True(vm.IsFinalStep); // step 4 is the final step
 
-    // Step 4: always can proceed (placement is optional)
-    Assert.True(vm.CanGoNext);
+    // Step 4: requires IsTimelineValidated
+    Assert.False(vm.CanGoNext); // Not validated yet
 
     vm.PreviousStepCommand.Execute(null);
     Assert.Equal(3, vm.CurrentStep);
-
-    // Step 3 with Static: can skip JPL data
-    vm.PhysicsType = "Static";
-    Assert.True(vm.CanGoNext);
   }
 
   [Fact]
   public void GetRotationQuaternion_CalculatesCorrectly()
   {
-    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
-    var console = new ConsoleService(dispatcherMock.Object);
-    var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
-    var storage = new Moq.Mock<ILocalStorageService>();
-    var horizonService = new HorizonJplService(console, breadcrumb, storage.Object);
-    var timelineService = new TimelineService();
-    var vm = new SpawnCometViewModel(
-      new List<ImportedModelItem>(),
-      horizonService,
-      timelineService,
-      breadcrumb
-    )
-    {
-      Pitch = 90,
-      Yaw = 0,
-      Roll = 0,
-    };
+    var (vm, _) = CreateVm();
+    vm.Pitch = 90;
+    vm.Yaw = 0;
+    vm.Roll = 0;
 
     var (w, x, y, z) = vm.GetRotationQuaternion();
 
-    // 90 deg pitch (rotation around X or Y depending on convention, ZYX means roll=X, yaw=Y, pitch=Z?)
-    // In ZYX convention: Roll(X), Yaw(Y), Pitch(Z) normally, but let's just check it doesn't crash
-    // and returns normalized quaternion
+    // Check it returns a normalized quaternion
     var lengthSq = w * w + x * x + y * y + z * z;
     Assert.True(System.Math.Abs(lengthSq - 1.0f) < 0.0001f);
+  }
+
+  [Fact]
+  public void EpochValidation_StartBeforeEnd()
+  {
+    var (vm, _) = CreateVm();
+
+    // Default: start before end (from TimelineService defaults)
+    Assert.True(vm.IsEpochRangeValid);
+
+    // Set start after end
+    vm.WizardStartEpoch = new System.DateTimeOffset(2030, 1, 1, 0, 0, 0, System.TimeSpan.Zero);
+    vm.WizardEndEpoch = new System.DateTimeOffset(2020, 1, 1, 0, 0, 0, System.TimeSpan.Zero);
+    Assert.False(vm.IsEpochRangeValid);
+
+    // Fix it
+    vm.WizardEndEpoch = new System.DateTimeOffset(2035, 1, 1, 0, 0, 0, System.TimeSpan.Zero);
+    Assert.True(vm.IsEpochRangeValid);
+  }
+
+  [Fact]
+  public void EpochChange_ResetsValidation()
+  {
+    var (vm, _) = CreateVm();
+
+    // Simulate validation
+    vm.IsTimelineValidated = true;
+    Assert.True(vm.IsTimelineValidated);
+
+    // Changing epoch should reset validation
+    vm.WizardStartEpoch = new System.DateTimeOffset(2025, 6, 1, 0, 0, 0, System.TimeSpan.Zero);
+    Assert.False(vm.IsTimelineValidated);
   }
 }

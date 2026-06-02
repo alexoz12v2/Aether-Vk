@@ -287,6 +287,9 @@ pub struct EmissionCircle {
   pub velocity_std_dev: f32,
   /// Visual child entity representing the emission point.
   pub child_entity: Option<crate::scene::EntityId>,
+  /// Radiation pressure coefficient (dimensionless). ~1.0 for a perfect absorber;
+  /// ~2.0 for a perfect reflector. Used by the Barnes-Hut radiation pressure kernel.
+  pub beta: f32,
 }
 
 /// Attaches a set of discrete circular emission zones to a comet mesh entity.
@@ -326,6 +329,7 @@ mod tests {
       mean_velocity: 0.1,
       velocity_std_dev: 0.05,
       child_entity: None,
+      beta: 1.0,
     });
     assert_eq!(comp.circles.len(), 1);
     assert_eq!(comp.circles[0].latitude_rad, 0.5);

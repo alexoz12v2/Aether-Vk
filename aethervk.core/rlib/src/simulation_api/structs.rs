@@ -487,6 +487,7 @@ impl SimulationSceneData {
         sphere_radius: 1.0,
         grid_color: [0.0, 0.0, 0.0],
         grid_density: 1.0,
+        rotational_model: None,
       },
     )?;
     let root = scene_ctx.root_entity;
@@ -868,12 +869,18 @@ impl TimeScale {
 /// TODO: Document this item
 pub struct LogicState {
   pub almanac_data: AlmanacPackedData,
+  /// Optional callback to request SPK data download from the host application.
+  /// Called when epoch range validation finds that almanac coverage is insufficient.
+  /// Parameters: (spk_id, start_epoch_str, end_epoch_str) → returns file path of downloaded SPK, or null.
+  pub almanac_invalidation_callback:
+    Option<extern "C" fn(i32, *const core::ffi::c_char, *const core::ffi::c_char) -> *const core::ffi::c_char>,
 }
 
 impl Default for LogicState {
   fn default() -> Self {
     Self {
       almanac_data: AlmanacPackedData::default(),
+      almanac_invalidation_callback: None,
     }
   }
 }

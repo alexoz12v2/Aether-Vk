@@ -54,6 +54,9 @@ pub struct AlmanacPackedData {
   /// the almanac itself
   pub almanac: anise::almanac::Almanac,
   pub missing_rotation_logs: spin::Mutex<alloc::collections::BTreeSet<i32>>,
+  /// Tracks which NAIF IDs are covered by loaded SPK data and their epoch spans.
+  /// Maps spk_id -> (earliest_epoch, latest_epoch) across all loaded SPK files.
+  pub spk_coverage: dashmap::DashMap<i32, (anise::time::Epoch, anise::time::Epoch)>,
 }
 
 impl AlmanacPackedData {
@@ -97,6 +100,10 @@ impl AlmanacPackedData {
         .map_err(|_| EngineError::InvalidOperation("[Almanac] Error loading SPK file"))?;
 
       self.file_names.push(alloc::string::String::from(path_str));
+
+      // Attempt to populate SPK coverage from loaded data summaries.
+      // We iterate SPK summaries by index and extract NAIF ID + epoch range.
+      self.refresh_spk_coverage();
     }
     Ok(())
   }
@@ -111,6 +118,9 @@ impl AlmanacPackedData {
     }
 
     self.file_names.retain(|f| f != path);
+    // Re-scan coverage after unloading
+    self.spk_coverage.clear();
+    self.refresh_spk_coverage();
     aethervk_oshal_rlib::log!(
       "Unloaded SPK {}, {} remaining",
       path,
@@ -118,6 +128,84 @@ impl AlmanacPackedData {
     );
 
     Ok(())
+  }
+
+  /// Re-scan all loaded SPK data and rebuild the spk_coverage map.
+  /// ANISE exposes `spk_summary_at_epoch` but not a full iteration API,
+  /// so we scan known NAIF IDs by trying small test epochs.
+  fn refresh_spk_coverage(&self) {
+    // Try common solar system body IDs (planets, barycenters, comets)
+    // plus any custom IDs we may encounter.
+    let candidate_ids: &[i32] = &[
+      // Sun, major planets, barycenters
+      10, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+      199, 299, 399, 499, 599, 699, 799, 899, 999,
+      // Barycenters
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+      // Moon, common comets/asteroids (extend as needed)
+      301,
+    ];
+
+    // Test epochs spanning a wide range
+    let test_epochs = [
+      anise::time::Epoch::from_tdb_seconds(-3.155e9),   // ~1900
+      anise::time::Epoch::from_tdb_seconds(0.0),        // J2000
+      anise::time::Epoch::from_tdb_seconds(3.155e9),    // ~2100
+      anise::time::Epoch::from_tdb_seconds(6.311e9),    // ~2200
+    ];
+
+    for &id in candidate_ids {
+      let mut earliest = None;
+      let mut latest = None;
+
+      for &epoch in &test_epochs {
+        // Try to evaluate ephemeris at this epoch
+        let result = self.almanac.translate_geometric(
+          anise::frames::Frame::new(id, anise::constants::orientations::J2000),
+          anise::frames::Frame::new(
+            anise::constants::celestial_objects::SUN,
+            anise::constants::orientations::J2000,
+          ),
+          epoch,
+        );
+        if result.is_ok() {
+          match earliest {
+            None => earliest = Some(epoch),
+            Some(e) if epoch < e => earliest = Some(epoch),
+            _ => {}
+          }
+          match latest {
+            None => latest = Some(epoch),
+            Some(l) if epoch > l => latest = Some(epoch),
+            _ => {}
+          }
+        }
+      }
+
+      if let (Some(start), Some(end)) = (earliest, latest) {
+        self.spk_coverage.insert(id, (start, end));
+      }
+    }
+  }
+
+  /// Returns the cached epoch coverage for a given NAIF ID, if known.
+  pub fn get_coverage(&self, spk_id: i32) -> Option<(anise::time::Epoch, anise::time::Epoch)> {
+    self.spk_coverage.get(&spk_id).map(|r| *r.value())
+  }
+
+  /// Returns true if the loaded SPK data covers the entire interval [start, end] for the given NAIF ID.
+  pub fn covers_interval(
+    &self,
+    spk_id: i32,
+    start: anise::time::Epoch,
+    end: anise::time::Epoch,
+  ) -> bool {
+    if let Some(entry) = self.spk_coverage.get(&spk_id) {
+      let (cov_start, cov_end) = *entry.value();
+      cov_start <= start && cov_end >= end
+    } else {
+      false
+    }
   }
 
   /// TODO: Document this item

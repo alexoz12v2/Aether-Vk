@@ -183,6 +183,9 @@ public partial class Viewport3DViewModel
   public bool IsSnapHovered => HoveredRadialItem == "snap";
   public bool IsSnapObserverHovered => HoveredRadialItem == "snapobserver";
 
+  /// <summary>Dynamic label for the comet radial menu item: "Spawn Comet" or "Destroy Comet".</summary>
+  public string CometRadialLabel => HasComet ? "Destroy Comet" : "Spawn Comet";
+
   private const double RadialRadius = 100.0;
   private const double ItemSize = 80.0;
   private const double HalfItem = ItemSize / 2.0;
@@ -248,9 +251,29 @@ public partial class Viewport3DViewModel
     switch (item)
     {
       case "comet":
-        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
-          new AetherVk.Logic.Messages.OpenSpawnCometDialogMessage()
-        );
+        if (HasComet)
+        {
+          // Destroy comet — disabled during playback
+          if (_timelineService != null && _timelineService.IsPlaying)
+          {
+            _breadcrumbService?.ShowMessageAsync(
+              "Cannot Destroy",
+              "Cannot destroy comet while simulation is playing. Pause first.",
+              default,
+              5
+            );
+          }
+          else
+          {
+            DestroyCometInternal();
+          }
+        }
+        else
+        {
+          CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+            new AetherVk.Logic.Messages.OpenSpawnCometDialogMessage()
+          );
+        }
         break;
       case "billboard":
         InsertBillboardCommand.Execute(null);
@@ -343,6 +366,35 @@ public partial class Viewport3DViewModel
   }
 
   private bool CanSpawnComet() => !HasComet;
+
+  /// <summary>
+  /// Destroys the currently spawned comet entity and its children.
+  /// Clears the CometEntityId from scene state.
+  /// </summary>
+  private void DestroyCometInternal()
+  {
+    var state = _sceneStateManager.GetOrCreateScene(SceneId);
+    if (!state.CometEntityId.HasValue) return;
+
+    var cometId = state.CometEntityId.Value;
+    RuntimeService.RemoveEntity(SceneId, cometId);
+    state.CometEntityId = null;
+
+    // Notify property changes for radial menu
+    OnPropertyChanged(nameof(HasComet));
+    OnPropertyChanged(nameof(CometRadialLabel));
+
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+      new AetherVk.Logic.Messages.CometDestroyedMessage { SceneId = SceneId }
+    );
+
+    _breadcrumbService.ShowMessageAsync(
+      "Comet Destroyed",
+      "The comet and all its jets have been removed from the scene.",
+      default,
+      3
+    );
+  }
 
   public ulong CameraId { get; private set; }
 
