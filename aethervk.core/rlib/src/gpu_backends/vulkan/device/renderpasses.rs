@@ -243,10 +243,16 @@ impl RenderPassBundle {
     if let Some(ref comp) = self.composite {
       discard_pool.discard_descriptor_set_layout(comp.descriptor_set_layout.get(), timeline);
       discard_pool.discard_pipeline_layout(comp.pipeline_layout.get(), timeline);
-      // Descriptor pool: use the ImageView discard path (it's just a Vulkan handle destroy)
-      // Actually, ImageView discard calls destroy_image_view. We need destroy_descriptor_pool.
-      // Store the pool handle to destroy in clean() instead (called synchronously).
-      // For now, we rely on clean() being called via the cleanup path.
+      struct CompositeDescriptorPoolDiscard(vk::DescriptorPool);
+      impl super::DeviceResource for CompositeDescriptorPoolDiscard {
+        fn cleanup(&mut self, device: &ash::Device) {
+          unsafe { device.destroy_descriptor_pool(self.0, None) };
+        }
+      }
+      discard_pool.discard_type_erased(
+        CompositeDescriptorPoolDiscard(comp.descriptor_pool.get()),
+        timeline,
+      );
     }
   }
 

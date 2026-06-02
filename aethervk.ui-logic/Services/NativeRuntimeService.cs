@@ -345,10 +345,6 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
             camera.AspectRatio = dto.Aspect;
             camera.NearPlane = dto.Near;
             camera.FarPlane = dto.Far;
-            camera.OrthoLeft = dto.OrthoLeft;
-            camera.OrthoRight = dto.OrthoRight;
-            camera.OrthoBottom = dto.OrthoBottom;
-            camera.OrthoTop = dto.OrthoTop;
             camera.FocusDistance = dto.FocusDistance;
             camera.SuspendNotifications = false;
           }
@@ -1013,10 +1009,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     ulong sceneId,
     ulong presentationEngineId,
     string name,
-    float left,
-    float right,
-    float bottom,
-    float top
+    float scaleFactor
   )
   {
     if (_simulationContext == IntPtr.Zero)
@@ -1027,10 +1020,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       sceneId,
       presentationEngineId,
       name,
-      left,
-      right,
-      bottom,
-      top
+      scaleFactor,
+      0.1f,
+      10000.0f
     );
 
     if (id > 0)
@@ -1826,25 +1818,23 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     float duration
   )
   {
-    if (_simulationContext != IntPtr.Zero)
-    {
-      NativeInterop.avkSimulationContext_addCameraAnimation(
-        _simulationContext,
-        sceneId,
-        entityId,
-        targetX,
-        targetY,
-        targetZ,
-        duration
-      );
-    }
+    if (_simulationContext == IntPtr.Zero)
+      return;
+    NativeInterop.avkSimulationContext_addCameraAnimation(
+      _simulationContext,
+      sceneId,
+      entityId,
+      targetX,
+      targetY,
+      targetZ,
+      duration
+    );
   }
 
   public bool CheckCameraAnimationFinished(ulong sceneId, ulong entityId)
   {
     if (_simulationContext == IntPtr.Zero)
-      return false;
-
+      return true;
     return NativeInterop.avkSimulationContext_checkCameraAnimationFinished(
       _simulationContext,
       sceneId,
@@ -2608,45 +2598,76 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
   }
 
-  public void SyncMarkers(ulong sceneId, ulong entityId, CometComponent comet)
+  private bool _isSyncingCircles = false;
+
+  public void SyncEmissionCircles(ulong sceneId, ulong entityId, CometComponent comet)
   {
-    if (_simulationContext == IntPtr.Zero)
+    if (_simulationContext == IntPtr.Zero || _isSyncingCircles)
       return;
 
-    int count = comet.Jets.Count;
-    float[] px = new float[count];
-    float[] py = new float[count];
-    float[] pz = new float[count];
-    float[] cr = new float[count];
-    float[] cg = new float[count];
-    float[] cb = new float[count];
-    float[] sizes = new float[count];
-
-    for (int i = 0; i < count; i++)
+    _isSyncingCircles = true;
+    try
     {
-      var jet = comet.Jets[i];
-      px[i] = jet.PosX;
-      py[i] = jet.PosY;
-      pz[i] = jet.PosZ;
-      cr[i] = jet.ColorR;
-      cg[i] = jet.ColorG;
-      cb[i] = jet.ColorB;
-      sizes[i] = jet.Size;
-    }
+      var arr = new NativeInterop.FfiEmissionCircle[comet.Jets.Count];
+      for (int i = 0; i < comet.Jets.Count; i++)
+      {
+        arr[i] = new NativeInterop.FfiEmissionCircle
+        {
+          LatitudeRad = comet.Jets[i].LatitudeDeg * (float)Math.PI / 180f,
+          LongitudeRad = comet.Jets[i].LongitudeDeg * (float)Math.PI / 180f,
+          CircleRadiusFrac = comet.Jets[i].CircleRadius / 1000f,
+          Mass = comet.Jets[i].Mass / 1000f,
+          ColorR = comet.Jets[i].ColorR,
+          ColorG = comet.Jets[i].ColorG,
+          ColorB = comet.Jets[i].ColorB,
+          ColorA = comet.Jets[i].ColorA,
+          ParticlesPerTick = comet.Jets[i].ParticlesPerTick,
+          TTL = comet.Jets[i].TTL,
+          MeanVelocity = comet.Jets[i].MeanVelocity,
+          VelocityDirStdDevRad = comet.Jets[i].VelocityDirStdDevDeg * (float)Math.PI / 180f,
+          ChildEntity =
+            comet.Jets[i].VisualEntityId == 0 ? ulong.MaxValue : comet.Jets[i].VisualEntityId,
+        };
+      }
 
-    NativeInterop.avkSimulationContext_setMarkers(
-      _simulationContext,
-      sceneId,
-      entityId,
-      (uint)count,
-      px,
-      py,
-      pz,
-      cr,
-      cg,
-      cb,
-      sizes
-    );
+      NativeInterop.avkSimulationContext_setParticleEmitterCirclesComponent(
+        _simulationContext,
+        sceneId,
+        entityId,
+        arr,
+        (uint)arr.Length
+      );
+
+      NativeInterop.avkSimulationContext_recalculateJetPoints(
+        _simulationContext,
+        sceneId,
+        entityId
+      );
+
+      uint maxCount = 64;
+      var outArr = new NativeInterop.FfiEmissionCircle[maxCount];
+      if (
+        NativeInterop.avkSimulationContext_getParticleEmitterCirclesComponent(
+          _simulationContext,
+          sceneId,
+          entityId,
+          outArr,
+          maxCount,
+          out uint actualCount
+        )
+      )
+      {
+        for (int i = 0; i < Math.Min(actualCount, comet.Jets.Count); i++)
+        {
+          comet.Jets[i].VisualEntityId =
+            outArr[i].ChildEntity == ulong.MaxValue ? 0 : outArr[i].ChildEntity;
+        }
+      }
+    }
+    finally
+    {
+      _isSyncingCircles = false;
+    }
   }
 
   public ulong CreateScene(bool populateDefault = true)
@@ -2858,32 +2879,14 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
           comet.Jets.CollectionChanged += (s, e) =>
           {
             if (_simulationContext != IntPtr.Zero)
-              SyncMarkers(sceneId, entity.Id, comet);
+              SyncEmissionCircles(sceneId, entity.Id, comet);
             if (e.NewItems != null)
             {
-              foreach (JetMarker jet in e.NewItems)
+              foreach (EmissionCircleItem jet in e.NewItems)
               {
-                if (_simulationContext != IntPtr.Zero)
-                {
-                  NativeInterop.avkSimulationContext_addJet(
-                    _simulationContext,
-                    sceneId,
-                    entity.Id,
-                    jet.RadiusKm,
-                    jet.Latitude,
-                    jet.Longitude,
-                    jet.ColorR,
-                    jet.ColorG,
-                    jet.ColorB,
-                    jet.Mass,
-                    jet.ParticlesPerTick,
-                    jet.TTL,
-                    jet.MeanVelocity
-                  );
-                }
                 jet.PropertyChanged += (js, je) =>
                 {
-                  SyncMarkers(sceneId, entity.Id, comet);
+                  SyncEmissionCircles(sceneId, entity.Id, comet);
                 };
               }
             }
@@ -3284,6 +3287,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     return entity;
   }
 
+  // TODO: Deprecated, remove it
   public Entity SpawnImageBillboard(
     ulong sceneId,
     string name,
@@ -3299,6 +3303,22 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     );
     if (_simulationContext != IntPtr.Zero)
     {
+      NativeInterop.avkSimulationContext_addTransformComponent(
+        _simulationContext,
+        sceneId,
+        entity.Id,
+        0f,
+        0f,
+        0f,
+        1f,
+        0f,
+        0f,
+        0f,
+        1f,
+        1f,
+        1f
+      );
+
       NativeInterop.avkSimulationContext_addImageBillboardComponent(
         _simulationContext,
         sceneId,
@@ -3340,13 +3360,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         camera.Id,
         false,
         45.0f,
-        1.77f,
+        1920.0f,
+        1080.0f,
         0.1f,
         10000.0f,
-        -10.0f,
-        10.0f,
-        -10.0f,
-        10.0f
+        0.01f
       );
     }
 

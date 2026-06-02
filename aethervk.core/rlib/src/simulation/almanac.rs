@@ -139,12 +139,43 @@ impl AlmanacPackedData {
     let pos = Vec3f32::from_nalgebra_scaled(cartesian_state.radius_km, DISTANCE_SCALE_FACTOR);
     let vel = Vec3f32::from_nalgebra_scaled(cartesian_state.velocity_km_s, DISTANCE_SCALE_FACTOR);
 
-    // In SPICE, body-fixed IAU frame IDs conventionally match their base body ID (e.g. Earth = 399)
+    // In SPICE/NAIF, body-fixed IAU frame IDs for simple planetary bodies conventionally match
+    // their base ephemeris body ID (e.g., body 499 maps to frame 499).
     let body_frame = anise::frames::Frame::new(spk_id, spk_id);
+
+    let mut dcm_result = self.almanac.rotate(body_frame, frame, epoch);
+
+    // Fallbacks for Earth: high precision Binary PCKs (BPC files like earth_latest_high_prec.bpc)
+    // do not store orientation data under the ephemeris ID 399. Instead, they store Earth's
+    // orientation under the International Terrestrial Reference Frame ITRF93 (ID: 13000),
+    // or the standard IAU_EARTH frame (ID: 10013). Because of this quirk in NAIF convention,
+    // we must explicitly try these standard Earth frames when retrieving its rotation matrix.
+    let mut resolved_frame = spk_id;
+    if dcm_result.is_err() && spk_id == 399 {
+      dcm_result = self.almanac.rotate(anise::constants::frames::EARTH_ITRF93, frame, epoch);
+      if dcm_result.is_err() {
+        dcm_result = self.almanac.rotate(anise::constants::frames::IAU_EARTH_FRAME, frame, epoch);
+        if dcm_result.is_ok() {
+          resolved_frame = anise::constants::frames::IAU_EARTH_FRAME.orientation_id;
+        }
+      } else {
+        resolved_frame = anise::constants::frames::EARTH_ITRF93.orientation_id;
+      }
+    }
+
     // ask the almanac for the rotation matrix from body frame to inertial world space
-    let (rotation, angular_velocity) = if let Ok(dcm) =
-      self.almanac.rotate(body_frame, frame, epoch)
-    {
+    let (rotation, angular_velocity) = if let Ok(dcm) = dcm_result {
+      if spk_id == 399 {
+        let mut missing_logs = self.missing_rotation_logs.lock();
+        if missing_logs.insert(10399) {
+          // Using 10399 just as a dummy key to ensure we only log once
+          aethervk_oshal_rlib::log!(
+            "[Almanac] Successfully fetched rotation for Earth using frame ID: {}",
+            resolved_frame
+          );
+        }
+      }
+
       // direction cosine matrix present, extract rotational information
       let r = Mat3f32::from_nalgebra(dcm.rot_mat);
 

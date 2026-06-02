@@ -91,8 +91,7 @@ public static class NativeInterop
     ulong sceneId,
     ulong presentationEngine,
     string name,
-    float left,
-    float bottom,
+    float scaleFactor,
     float near,
     float far
   );
@@ -353,10 +352,10 @@ public static class NativeInterop
     public float Aspect;
     public float Near;
     public float Far;
-    public float OrthoLeft;
-    public float OrthoRight;
-    public float OrthoBottom;
-    public float OrthoTop;
+    public float Left;
+    public float Right;
+    public float Bottom;
+    public float Top;
     public float FocusDistance;
 
     public float Proj00,
@@ -502,13 +501,11 @@ public static class NativeInterop
     ulong entity,
     [MarshalAs(UnmanagedType.I1)] bool isOrthographic,
     float fov,
-    float aspect,
+    float width,
+    float height,
     float near,
     float far,
-    float orthoLeft,
-    float orthoRight,
-    float orthoBottom,
-    float orthoTop
+    float orthoScaleFactor
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -860,21 +857,6 @@ public static class NativeInterop
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_setMarkers(
-    IntPtr ctx,
-    ulong sceneId,
-    ulong entity,
-    uint count,
-    float[] px,
-    float[] py,
-    float[] pz,
-    float[] cr,
-    float[] cg,
-    float[] cb,
-    float[] sizes
-  );
-
-  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_addGridComponent(
     IntPtr ctx,
     ulong sceneId,
@@ -892,23 +874,6 @@ public static class NativeInterop
     float p2X,
     float p2Y,
     float p2Z
-  );
-
-  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_addJet(
-    IntPtr ctx,
-    ulong sceneId,
-    ulong entityId,
-    float radius,
-    float latitude,
-    float longitude,
-    float colorR,
-    float colorG,
-    float colorB,
-    float mass,
-    int particlesPerTick,
-    float ttl,
-    float meanVelocity
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

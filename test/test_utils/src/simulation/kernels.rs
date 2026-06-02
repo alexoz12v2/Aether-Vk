@@ -234,6 +234,13 @@ impl Kernels for CpuKernels {
   ) -> EngineResult<Self::Buffer<ForceEmitter>> {
     todo!()
   }
+  fn build_emission_candidates(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _scene: &Scene,
+  ) -> EngineResult<Self::Buffer<f32>> {
+    todo!()
+  }
   fn emit_particles(
     &self,
     _cmd: &mut Self::Cmd,

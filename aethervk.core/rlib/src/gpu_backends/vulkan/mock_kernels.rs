@@ -122,6 +122,13 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
   ) -> EngineResult<Self::Buffer<ForceEmitter>> {
     self.base.build_emitters(cmd, scene)
   }
+  fn build_emission_candidates(
+    &self,
+    cmd: &mut Self::Cmd,
+    scene: &Scene,
+  ) -> EngineResult<Self::Buffer<f32>> {
+    self.base.build_emission_candidates(cmd, scene)
+  }
 
   // --- MOCKED DISPATCH METHODS ---
 
@@ -461,6 +468,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
     lca_entities: u64,
+    frame_bda: u64,
     space_type: u32,
     dt: f32,
     output_list: &Self::List<CollisionPair>,
@@ -472,6 +480,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         rigid_bodies,
         particles,
         lca_entities,
+        frame_bda,
         space_type,
         dt,
         output_list,
@@ -488,6 +497,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
     lca_entities: u64,
+    frame_bda: u64,
     space_type: u32,
     dt: f32,
     output_list: &Self::List<CollisionPair>,
@@ -498,6 +508,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
       rigid_bodies,
       particles,
       lca_entities,
+      frame_bda,
       space_type,
       dt,
       output_list,

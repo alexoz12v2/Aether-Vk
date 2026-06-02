@@ -967,7 +967,13 @@ fn test_camera_controls() {
         },
       ));
 
-      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
+      for _ in 0..100 {
+        let curr = get_cam_transform();
+        if curr.rotation != initial_hrt.rotation {
+          break;
+        }
+        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(10));
+      }
 
       let hrt1 = get_cam_transform();
       assert!(hrt1.rotation != initial_hrt.rotation);
@@ -982,7 +988,13 @@ fn test_camera_controls() {
         },
       ));
 
-      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
+      for _ in 0..100 {
+        let curr = get_cam_transform();
+        if curr.position != hrt1.position {
+          break;
+        }
+        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(10));
+      }
 
       let hrt2 = get_cam_transform();
       assert!(hrt2.position != hrt1.position);
@@ -997,7 +1009,13 @@ fn test_camera_controls() {
         },
       ));
 
-      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
+      for _ in 0..100 {
+        let curr = get_cam_transform();
+        if curr.position != hrt2.position {
+          break;
+        }
+        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(10));
+      }
 
       let hrt3 = get_cam_transform();
       assert!(hrt3.position != hrt2.position);
@@ -1114,7 +1132,13 @@ fn test_camera_controls_microframe() {
         },
       ));
 
-      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(150));
+      for _ in 0..100 {
+        let curr = get_cam_transform();
+        if curr.rotation != initial_hrt.rotation {
+          break;
+        }
+        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(10));
+      }
       let hrt1 = get_cam_transform();
       assert!(
         hrt1.rotation != initial_hrt.rotation,
@@ -1131,7 +1155,13 @@ fn test_camera_controls_microframe() {
         },
       ));
 
-      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(150));
+      for _ in 0..100 {
+        let curr = get_cam_transform();
+        if curr.position != hrt1.position {
+          break;
+        }
+        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(10));
+      }
       let hrt2 = get_cam_transform();
       assert!(
         hrt2.position != hrt1.position,
@@ -1151,7 +1181,13 @@ fn test_camera_controls_microframe() {
         },
       ));
 
-      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(150));
+      for _ in 0..100 {
+        let curr = get_cam_transform();
+        if curr.position != hrt2.position {
+          break;
+        }
+        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(10));
+      }
       let hrt3 = get_cam_transform();
       assert!(
         hrt3.position != hrt2.position,

@@ -131,6 +131,12 @@ public partial class MainWindowViewModel
   [ObservableProperty]
   private AppTheme _currentTheme;
 
+  [ObservableProperty]
+  private Viewport3DViewModel? _activeViewport;
+
+  [ObservableProperty]
+  private bool _isViewportFocused;
+
   public ObservableCollection<ImportedModelItem> ImportedModels { get; } = new();
 
   public ObservableCollection<BreadcrumbMessage>? Breadcrumbs => _breadcrumbService.Messages;
@@ -157,6 +163,9 @@ public partial class MainWindowViewModel
     WeakReferenceMessenger.Default.Register<ImportModelRequestMessage>(this);
     WeakReferenceMessenger.Default.Register<SimulationInitializedMessage>(this);
     WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.OpenSpawnCometDialogMessage>(
+      this
+    );
+    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.OpenSnapObserverDialogMessage>(
       this
     );
 

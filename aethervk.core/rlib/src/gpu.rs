@@ -32,6 +32,16 @@ pub use self::frame::RenderScene;
 /// TODO: Document this item
 pub type RwLock<T> = spin::rwlock::RwLock<T>;
 
+/// An opaque task that MUST be executed on the main UI thread.
+/// Used to defer window-system-tied destruction (swapchain, surface) from
+/// background threads on macOS where MoltenVK requires CAMetalLayer teardown
+/// on the main thread.
+pub type MainThreadCleanupTask = alloc::boxed::Box<dyn FnOnce() + Send>;
+
+/// Shared queue of tasks pending main-thread execution.
+/// Uses `spin::Mutex` for `no_std` compatibility.
+pub type MainThreadCleanupQueue = Arc<spin::Mutex<alloc::vec::Vec<MainThreadCleanupTask>>>;
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 /// TODO: Document this item
 pub struct RenderBackendId(pub u64);
@@ -861,6 +871,33 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
 
   /// Destroys a swapchain
   fn destroy_presentation_engine(&self, handle: PresentationEngineHandle) -> GpuResult<()>;
+
+  /// Drains and executes all pending cleanup tasks that require main-thread affinity.
+  ///
+  /// On macOS, MoltenVK translates Vulkan swapchain/surface destruction into
+  /// Core Animation `CAMetalLayer` modifications. Apple **strictly** requires these
+  /// to happen on the main UI thread. Performing them on a background thread causes:
+  ///
+  /// > `warning, deleted thread with uncommitted CATransaction; set
+  /// > CA_DEBUG_TRANSACTIONS=1 in environment to log backtraces, or set
+  /// > CA_ASSERT_MAIN_THREAD_TRANSACTIONS=1 to abort when an implicit transaction
+  /// > isn't created on a main thread.`
+  ///
+  /// **Call this periodically from the main UI thread** (e.g., in `winit`'s
+  /// `AboutToWait` event, or from Avalonia's UI-thread tick).
+  ///
+  /// For windowless presentation engines this is always a no-op.
+  fn process_main_thread_cleanup_queue(&self) -> GpuResult<()>;
+
+  /// Flushes **all** remaining window-tied resources from the device, executing
+  /// their destruction tasks immediately on the calling thread.
+  ///
+  /// **Must be called from the main thread after the render thread has exited
+  /// but before `Device` is dropped.** This ensures `destroy_swapchain` and
+  /// `destroy_surface` run before `destroy_device`.
+  ///
+  /// For windowless-only usage (tests, Avalonia headless), this is a no-op drain.
+  fn flush_main_thread_cleanup_queue(&self) -> GpuResult<()>;
 
   /// Allows caller to explicitly trigger a resize/recreation
   fn resize_presentation_engine(
@@ -2035,6 +2072,12 @@ pub trait Kernels: Send + Sync {
     scene: &Scene,
   ) -> EngineResult<Self::Buffer<ForceEmitter>>;
 
+  fn build_emission_candidates(
+    &self,
+    cmd: &mut Self::Cmd,
+    scene: &Scene,
+  ) -> EngineResult<Self::Buffer<f32>>;
+
   fn emit_particles(
     &self,
     cmd: &mut Self::Cmd,
@@ -2274,6 +2317,7 @@ pub trait Kernels: Send + Sync {
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
     lca_entities_addr: u64,
+    frame_bda: u64,
     space_type: u32,
     dt: f32,
     output_list: &Self::List<CollisionPair>,
@@ -2287,6 +2331,7 @@ pub trait Kernels: Send + Sync {
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     particles: &Self::Buffer<f32>,
     lca_entities_addr: u64,
+    frame_bda: u64,
     space_type: u32,
     dt: f32,
     output_list: &Self::List<CollisionPair>,

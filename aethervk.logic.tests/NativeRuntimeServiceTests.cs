@@ -310,15 +310,7 @@ namespace AetherVk.Logic.Tests
         ulong sceneId = _service.CreateScene(true);
         ulong peId = _service.CreatePresentationEngine(256, 256, sceneId);
 
-        ulong camId = _service.AddOrthographicCamera(
-          sceneId,
-          peId,
-          "orthoCam",
-          -10f,
-          -10f,
-          0.1f,
-          1000f
-        );
+        ulong camId = _service.AddOrthographicCamera(sceneId, peId, "orthoCam", 0.01f);
         Assert.NotEqual(0ul, camId);
 
         var entity = _service.GetEntityByName(sceneId, "orthoCam");
@@ -397,10 +389,10 @@ namespace AetherVk.Logic.Tests
           Aspect = 1.77f,
           Near = 0.1f,
           Far = 1000f,
-          OrthoLeft = -10f,
-          OrthoRight = 10f,
-          OrthoBottom = -10f,
-          OrthoTop = 10f,
+          Left = -10f,
+          Right = 10f,
+          Bottom = -10f,
+          Top = 10f,
         };
         {
           int camSize = Marshal.SizeOf<AetherVk.Logic.Services.NativeInterop.FfiCamera>();
@@ -492,12 +484,15 @@ namespace AetherVk.Logic.Tests
         _service.InitializeSimulationContext("Vulkan", _assetPath, false);
         ulong sceneId = _service.CreateScene(true);
         var state = _stateManager.GetOrCreateScene(sceneId);
+        Assert.NotNull(state);
 
         // Spawn a parent entity
         var parentEntity = _service.SpawnEntity(sceneId, "ParentNode");
+        Assert.NotNull(parentEntity);
 
         // Spawn a child entity
         var childEntity = _service.SpawnEntity(sceneId, "ChildNode", parentEntity);
+        Assert.NotNull(childEntity);
 
         // Manually mess up the C# hierarchy to ensure SyncSceneHierarchy fixes it
         parentEntity.Children.Clear();

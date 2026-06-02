@@ -2878,3 +2878,76 @@ fn test_cross_queue_sync_timeline_semaphore() {
     .unwrap();
 }
 
+
+#[test]
+fn test_render_resize_no_leaks() {
+  setup_assets_dir();
+
+  let (pool, frontend, device_handle, pe_handle_opt) =
+    setup_render_frontend_for_tests(true);
+  let pe_handle = pe_handle_opt.unwrap();
+
+  let mut scene = Scene::default();
+  
+  // Submit a frame to trigger renderpass bundle allocation
+  {
+    let mut frame = frontend.write().build_command_buffer(
+      device_handle,
+      pe_handle,
+      &mut scene,
+      None,
+      None,
+      &[],
+      false,
+    ).unwrap();
+    
+    // Add something that forces compositing renderpass bundle
+    frame.draw_cursor(CursorDrawCall {
+      position: Vec3f32::new(0.0, 0.0, 0.0),
+      color: [1.0, 1.0, 1.0, 1.0],
+      scale: 1.0,
+      opacity: 1.0,
+    });
+    
+    frontend.write().submit_command_buffer(device_handle, pe_handle, frame).unwrap();
+  }
+
+  // Wait for it to finish
+  frontend.write().wait_idle(device_handle).unwrap();
+
+  // Resize! This will discard the old RenderPassBundle and push the descriptor pool to the discard pool
+  frontend.write().resize_presentation_engine(device_handle, pe_handle, 512, 512).unwrap();
+
+  // Draw again to force new bundle creation
+  {
+    let mut frame = frontend.write().build_command_buffer(
+      device_handle,
+      pe_handle,
+      &mut scene,
+      None,
+      None,
+      &[],
+      false,
+    ).unwrap();
+    
+    frame.draw_cursor(CursorDrawCall {
+      position: Vec3f32::new(0.0, 0.0, 0.0),
+      color: [1.0, 1.0, 1.0, 1.0],
+      scale: 1.0,
+      opacity: 1.0,
+    });
+    
+    frontend.write().submit_command_buffer(device_handle, pe_handle, frame).unwrap();
+  }
+
+  frontend.write().wait_idle(device_handle).unwrap();
+
+  // Shut down
+  let mut frontend_lock = frontend.write();
+  frontend_lock.destroy_presentation_engine(device_handle, pe_handle).unwrap();
+  frontend_lock.destroy_device(device_handle).unwrap();
+  drop(frontend_lock);
+
+  // If there are leaks, the validation layer callback setup in the test
+  // environment will catch it and panic.
+}

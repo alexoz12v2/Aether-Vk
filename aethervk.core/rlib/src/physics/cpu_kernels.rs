@@ -277,6 +277,16 @@ impl Kernels for CpuScalarKernels {
     })
   }
 
+  fn build_emission_candidates(
+    &self,
+    cmd: &mut Self::Cmd,
+    scene: &Scene,
+  ) -> EngineResult<Self::Buffer<f32>> {
+    Ok(CpuBuffer {
+      data: alloc::vec::Vec::new(),
+    })
+  }
+
   fn emit_particles(
     &self,
     cmd: &mut Self::Cmd,
@@ -633,6 +643,7 @@ impl Kernels for CpuScalarKernels {
     _rigid_bodies: &Self::Buffer<RigidBodyImex>,
     _particles: &Self::Buffer<f32>,
     _lca_entities: u64,
+    _frame_bda: u64,
     _space_type: u32,
     _dt: f32,
     _output_list: &Self::List<CollisionPair>,
@@ -648,6 +659,7 @@ impl Kernels for CpuScalarKernels {
     _rigid_bodies: &Self::Buffer<RigidBodyImex>,
     _particles: &Self::Buffer<f32>,
     _lca_entities: u64,
+    _frame_bda: u64,
     _space_type: u32,
     dt: f32,
     _output_list: &Self::List<CollisionPair>,
@@ -867,6 +879,16 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     scene: &Scene,
   ) -> EngineResult<Self::Buffer<ForceEmitter>> {
+    Ok(CpuBuffer {
+      data: alloc::vec::Vec::new(),
+    })
+  }
+
+  fn build_emission_candidates(
+    &self,
+    cmd: &mut Self::Cmd,
+    scene: &Scene,
+  ) -> EngineResult<Self::Buffer<f32>> {
     Ok(CpuBuffer {
       data: alloc::vec::Vec::new(),
     })
@@ -1120,6 +1142,7 @@ impl Kernels for CpuSimdKernels {
     _rigid_bodies: &Self::Buffer<RigidBodyImex>,
     _particles: &Self::Buffer<f32>,
     _lca_entities: u64,
+    _frame_bda: u64,
     _space_type: u32,
     _dt: f32,
     _output_list: &Self::List<CollisionPair>,
@@ -1135,6 +1158,7 @@ impl Kernels for CpuSimdKernels {
     _rigid_bodies: &Self::Buffer<RigidBodyImex>,
     _particles: &Self::Buffer<f32>,
     _lca_entities: u64,
+    _frame_bda: u64,
     _space_type: u32,
     dt: f32,
     _output_list: &Self::List<CollisionPair>,

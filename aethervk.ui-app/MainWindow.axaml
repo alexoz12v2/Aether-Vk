@@ -42,6 +42,12 @@
                                 </NativeMenu>
                             </NativeMenuItem.Menu>
                         </NativeMenuItem>
+                        <NativeMenuItemSeparator IsVisible="{Binding IsViewportFocused}"/>
+                        <NativeMenuItem Header="Spawn Comet" Command="{Binding ActiveViewport.CloseRadialMenuAndSpawnCometCommand}" IsVisible="{Binding IsViewportFocused}" />
+                        <NativeMenuItem Header="Insert Billboard" Command="{Binding ActiveViewport.InsertBillboardCommand}" IsVisible="{Binding IsViewportFocused}" />
+                        <NativeMenuItem Header="Reset Camera" Command="{Binding ActiveViewport.ResetCameraFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
+                        <NativeMenuItem Header="Snap to Selected" Command="{Binding ActiveViewport.SnapToSelectedFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
+                        <NativeMenuItem Header="Snap Observer" Command="{Binding ActiveViewport.SnapObserverCommand}" IsVisible="{Binding ActiveViewport.IsEarthObserverMode, FallbackValue=False}" />
                         <NativeMenuItemSeparator/>
                         <NativeMenuItem Header="Settings..." Gesture="Cmd+OemComma" Command="{Binding OpenSettingsCommand}" />
                     </NativeMenu>
@@ -70,6 +76,12 @@
                     <MenuItem Header="Scene">
                         <MenuItem Header="Spawn Comet" Command="{Binding OpenSpawnCometDialogCommand}" />
                     </MenuItem>
+                    <Separator IsVisible="{Binding IsViewportFocused}"/>
+                    <MenuItem Header="Spawn Comet" Command="{Binding ActiveViewport.CloseRadialMenuAndSpawnCometCommand}" IsVisible="{Binding IsViewportFocused}" />
+                    <MenuItem Header="Insert Billboard" Command="{Binding ActiveViewport.InsertBillboardCommand}" IsVisible="{Binding IsViewportFocused}" />
+                    <MenuItem Header="Reset Camera" Command="{Binding ActiveViewport.ResetCameraFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
+                    <MenuItem Header="Snap to Selected" Command="{Binding ActiveViewport.SnapToSelectedFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
+                    <MenuItem Header="Snap Observer" Command="{Binding ActiveViewport.SnapObserverCommand}" IsVisible="{Binding ActiveViewport.IsEarthObserverMode, FallbackValue=False}" />
                     <Separator />
                     <MenuItem Header="Settings..." HotKey="Ctrl+OemComma" Command="{Binding OpenSettingsCommand}" />
                     <MenuItem Header="Imported Models" Command="{Binding OpenImportedModelsDialogCommand}" />

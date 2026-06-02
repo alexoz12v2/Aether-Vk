@@ -466,7 +466,12 @@ fn calculate_mass_properties(
 
   let unit_mass_properties = MassProperties::from_contrib_sum(contrib_sum).unwrap();
   let volume = unit_mass_properties.volume();
-  let density = total_mass as f64 / volume;
+  let safe_mass = if total_mass == 0.0 {
+    1e-12
+  } else {
+    total_mass as f64
+  };
+  let density = safe_mass / volume;
   unit_mass_properties.with_density(density)
 }
 

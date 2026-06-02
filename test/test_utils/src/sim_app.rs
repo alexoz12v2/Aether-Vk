@@ -225,6 +225,9 @@ impl<D: SimulationDelegate> crate::app::App for GenericSimApp<D> {
   }
 
   fn on_close_requested(&mut self) {
+    // Flush all remaining window-tied resources before the device is dropped.
+    // This MUST happen on the main thread before Device::Drop runs.
+    let _ = self.ctx.flush_main_thread_cleanup_queue();
     self.window = None;
   }
 
@@ -305,6 +308,9 @@ impl<D: SimulationDelegate> crate::app::App for GenericSimApp<D> {
         );
       }
     }
+
+    // Drain main-thread cleanup queue (swapchain/surface destruction from resize)
+    let _ = self.ctx.process_main_thread_cleanup_queue();
 
     self.delegate.on_about_to_wait(&mut self.ctx, self.scene_id, delta_time);
   }

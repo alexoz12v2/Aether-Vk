@@ -98,7 +98,19 @@ void main() {
     vec2 nScreen = (len > 1e-5) ? vec2(-tScreen.y, tScreen.x) / len : vec2(0.0, 1.0);
     float lateral = (side == 0) ? -1.0 : 1.0;
 
-    vec2 offsetNdc = nScreen * lateral * (lineWidth / pc.viewportSize);
+    // Minimum fixed screen-space width (e.g. 2 pixels) so it never becomes invisible
+    float minThickness = lineWidth;
+    
+    // Physical world-space width: 0.0001 AU (approx 15,000 km) per line width unit
+    float physicalWidthAu = lineWidth * 0.0001;
+    
+    // Project physical width to screen space. pc.viewportSize.y is used as reference scale
+    float projectedThickness = (physicalWidthAu / max(abs(vClip.w), 1e-6)) * pc.viewportSize.y;
+    
+    // Final thickness ensures the line never shrinks below the minimum width, but grows when close
+    float finalThickness = max(minThickness, projectedThickness);
+
+    vec2 offsetNdc = nScreen * lateral * (finalThickness / pc.viewportSize);
 
     gl_Position = vec4(vClip.xy + offsetNdc * abs(vClip.w), vClip.z, vClip.w);
 

@@ -38,13 +38,15 @@ public struct RationalBezierGpu
   public Float4 Cp3;
 }
 
-[StructLayout(LayoutKind.Sequential, Pack = 8)]
+[StructLayout(LayoutKind.Sequential, Pack = 16)]
 public struct TrajectoryGpu
 {
   public ulong SegmentsPtr;
+  public ulong Pad0;
   public Float4 Color;
   public float LineWidth;
   public uint TextureId;
+  public ulong Pad1;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]

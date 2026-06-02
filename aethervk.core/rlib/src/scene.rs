@@ -416,10 +416,10 @@ pub struct CameraDTO {
   pub aspect: f32,
   pub near: f32,
   pub far: f32,
-  pub ortho_left: f32,
-  pub ortho_right: f32,
-  pub ortho_bottom: f32,
-  pub ortho_top: f32,
+  pub left: f32,
+  pub right: f32,
+  pub bottom: f32,
+  pub top: f32,
   pub focus_distance: f32,
   pub proj: [f32; 16],
 }
@@ -443,10 +443,10 @@ impl ForeignSerializable for CameraComponent {
         aspect: aspect_ratio,
         near,
         far,
-        ortho_left: 0.0,
-        ortho_right: 0.0,
-        ortho_bottom: 0.0,
-        ortho_top: 0.0,
+        left: 0.0,
+        right: 0.0,
+        bottom: 0.0,
+        top: 0.0,
         focus_distance: self.focus_distance,
         proj,
       },
@@ -460,20 +460,13 @@ impl ForeignSerializable for CameraComponent {
       } => CameraDTO {
         is_orthographic: true,
         fov: 0.0,
-        aspect: {
-          let h = top - bottom;
-          if h.abs() > 1e-6 {
-            (right - left) / h
-          } else {
-            1.0
-          }
-        },
+        aspect: 1.0,
         near,
         far,
-        ortho_left: left,
-        ortho_right: right,
-        ortho_bottom: bottom,
-        ortho_top: top,
+        left,
+        right,
+        bottom,
+        top,
         focus_distance: self.focus_distance,
         proj,
       },
@@ -484,10 +477,10 @@ impl ForeignSerializable for CameraComponent {
     self.focus_distance = data.focus_distance;
     if data.is_orthographic {
       self.projection = CameraProjection::Orthographic {
-        left: data.ortho_left,
-        right: data.ortho_right,
-        bottom: data.ortho_bottom,
-        top: data.ortho_top,
+        left: data.left,
+        right: data.right,
+        bottom: data.bottom,
+        top: data.top,
         near: data.near,
         far: data.far,
       };
@@ -544,19 +537,7 @@ impl CameraComponent {
       } => {
         *aspect = aspect_ratio;
       }
-      CameraProjection::Orthographic {
-        left,
-        right,
-        bottom,
-        top,
-        ..
-      } => {
-        let current_height = *top - *bottom;
-        let half_w = (current_height * aspect_ratio) / 2.0;
-        let center_x = (*right + *left) / 2.0;
-        *left = center_x - half_w;
-        *right = center_x + half_w;
-      }
+      CameraProjection::Orthographic { .. } => {}
     }
   }
 

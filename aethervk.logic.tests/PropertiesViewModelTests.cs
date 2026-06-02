@@ -7,6 +7,7 @@ using Xunit;
 
 namespace AetherVk.Logic.Tests;
 
+[Collection("Sequential")]
 public class PropertiesViewModelTests
 {
   [Fact]

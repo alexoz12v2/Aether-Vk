@@ -531,6 +531,10 @@ impl RenderDevice for MetalRenderDevice {
     todo!()
   }
 
+  fn process_main_thread_cleanup_queue(&self) -> GpuResult<()> { Ok(()) }
+
+  fn flush_main_thread_cleanup_queue(&self) -> GpuResult<()> { Ok(()) }
+
   fn clear_depth(&self, cmd_buffer: crate::gpu::CommandBufferHandle, handle: crate::gpu::PresentationEngineHandle) -> Result<(), crate::types::GpuError> {
     todo!()
   }
@@ -552,6 +556,10 @@ self, texture_id: u64) -> GpuResult<()> {
   fn destroy_presentation_engine(&self, handle: PresentationEngineHandle) -> GpuResult<()> {
     todo!()
   }
+
+  fn process_main_thread_cleanup_queue(&self) -> GpuResult<()> { Ok(()) }
+
+  fn flush_main_thread_cleanup_queue(&self) -> GpuResult<()> { Ok(()) }
 }
 
 }

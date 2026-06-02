@@ -72,7 +72,7 @@ fn test_emit_particles_occlusion_logic() {
     particles: 0, // Mocked BDA
     candidates: 0,
     bvh: 0,
-    counter: 0,
+    counter: 0x1000,
     root_index: 0,
     num_candidates: 5,
     _pad0: [0; 2],
@@ -82,6 +82,10 @@ fn test_emit_particles_occlusion_logic() {
 
   // Size validation for push constants to ensure it matches GLSL expected packing
   assert_eq!(std::mem::size_of::<EmitParticlesPushConstants>(), 64);
+  assert_eq!(
+    candidates.len() * std::mem::size_of::<f32>(),
+    10 * SUBGROUP_SIZE * 4
+  );
   assert_eq!(bvh_node.valid_mask[0], 1); // ensure no unused assignment warning
   assert_eq!(candidates[4], 100.0);
 

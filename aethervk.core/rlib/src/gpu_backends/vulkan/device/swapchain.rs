@@ -97,6 +97,10 @@ pub(super) struct WindowedPresentationState {
   physical_device: NonZeroHandle<vk::PhysicalDevice>,
   pending_resize: Option<(u32, u32)>,
   pub archetypes: crate::gpu::vulkan::device::archetypes_struct::Archetypes,
+
+  /// Shared queue for deferring swapchain/surface destruction to the main thread.
+  /// On macOS, MoltenVK requires `CAMetalLayer` teardown on the main UI thread.
+  main_thread_cleanup_queue: crate::gpu::MainThreadCleanupQueue,
 }
 
 /// Stores the CPU state before a resize operation
@@ -274,23 +278,52 @@ impl DeviceResource for PresentationState {
 
 impl DeviceResource for WindowedPresentationState {
   fn cleanup(&mut self, device: &ash::Device) {
+    // Collect all swapchain handles that need main-thread destruction.
+    // On macOS, MoltenVK translates vkDestroySwapchainKHR / vkDestroySurfaceKHR into
+    // CAMetalLayer modifications which Apple requires on the main UI thread.
+    let mut deferred_swapchains: Vec<NonZeroHandle<vk::SwapchainKHR>> = Vec::new();
+
     for frame_discard in &mut self.frame_discards {
       frame_discard.skip_cycles = 0; // Force immediate absolute cleanup on window destruction
+      // Extract discarded swapchains BEFORE calling cleanup, so cleanup sees an
+      // empty vec and skips the destroy_swapchain calls.
+      deferred_swapchains.append(&mut frame_discard.discarded_swapchains);
+      // Remaining cleanup (fences, semaphores, image views) is safe on any thread.
       frame_discard.cleanup(&self.swapchain_device, device);
     }
+
     for frame in &mut self.frames {
       frame.cleanup(&self.swapchain_device, device);
     }
 
-    // Destroy swapchain before its images/semaphores
+    // Add the main swapchain to the deferred list
     #[cfg(test)]
-    std::println!("Destroying MAIN swapchain: {:?}", self.swapchain.get());
-    unsafe { self.swapchain_device.destroy_swapchain(self.swapchain.get(), None) };
+    std::println!(
+      "Deferring MAIN swapchain to main-thread queue: {:?}",
+      self.swapchain.get()
+    );
+    deferred_swapchains.push(self.swapchain);
 
+    // Image cleanup (fences, semaphores, image views) — safe on any thread
     for image in &mut self.images {
       image.cleanup(device);
     }
-    unsafe { self.surface_instance.destroy_surface(self.surface.get(), None) };
+
+    // Capture handles and loaders for the closure
+    let sc_device = self.swapchain_device.clone();
+    let surf_instance = self.surface_instance.clone();
+    let surface = self.surface;
+
+    // Push all window-tied destruction to the main thread queue
+    self
+      .main_thread_cleanup_queue
+      .lock()
+      .push(alloc::boxed::Box::new(move || unsafe {
+        for sc in deferred_swapchains {
+          sc_device.destroy_swapchain(sc.get(), None);
+        }
+        surf_instance.destroy_surface(surface.get(), None);
+      }));
   }
 }
 
@@ -483,6 +516,7 @@ impl PresentationState {
     swapchain_maintenance1_device: Option<ash::ext::swapchain_maintenance1::Device>,
     params: &PresentationEngineParams,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
+    main_thread_cleanup_queue: crate::gpu::MainThreadCleanupQueue,
   ) -> GpuResult<Self> {
     match params.ty {
       crate::gpu::PresentationEngineType::Window => {
@@ -494,6 +528,7 @@ impl PresentationState {
           swapchain_maintenance1_device,
           params,
           rollback,
+          main_thread_cleanup_queue,
         )?))
       }
       crate::gpu::PresentationEngineType::WindowLess => {
@@ -638,6 +673,7 @@ impl WindowedPresentationState {
     swapchain_maintenance1_device: Option<ash::ext::swapchain_maintenance1::Device>,
     params: &PresentationEngineParams,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
+    main_thread_cleanup_queue: crate::gpu::MainThreadCleanupQueue,
   ) -> GpuResult<Self> {
     let surface_instance = ash::khr::surface::Instance::new(entry, instance);
     let native_handle = params.window_info;
@@ -668,6 +704,7 @@ impl WindowedPresentationState {
       physical_device,
       pending_resize: None,
       archetypes: crate::gpu::vulkan::device::archetypes_struct::Archetypes::default(),
+      main_thread_cleanup_queue,
     };
 
     this.recreate_swapchain(device, false, physical_device, rollback)?;
@@ -709,7 +746,22 @@ impl WindowedPresentationState {
       let prev_frame = (self.current_frame + self.frames.len() - 1) % self.frames.len();
       let frame_discard = &mut self.frame_discards[prev_frame];
 
-      // Added: prevent memory bload
+      // Pre-drain discarded swapchains to the main-thread queue before flush.
+      // On macOS, MoltenVK requires swapchain destruction on the main UI thread.
+      if !frame_discard.discarded_swapchains.is_empty() {
+        let swapchains: Vec<_> = frame_discard.discarded_swapchains.drain(..).collect();
+        let sc_device = self.swapchain_device.clone();
+        self
+          .main_thread_cleanup_queue
+          .lock()
+          .push(alloc::boxed::Box::new(move || unsafe {
+            for sc in swapchains {
+              sc_device.destroy_swapchain(sc.get(), None);
+            }
+          }));
+      }
+
+      // Added: prevent memory bloat
       frame_discard.check_capacity_and_flush(&self.swapchain_device, device);
 
       // HYBRID FIX: Either we have deterministic tracking, or we need a legacy Grace cycle.
@@ -1294,6 +1346,23 @@ impl WindowedPresentationState {
       }
     }
 
+    // Pre-drain discarded swapchains to the main-thread queue before cleanup.
+    // On macOS, MoltenVK requires swapchain destruction on the main UI thread.
+    {
+      let fd = &mut self.frame_discards[self.current_frame];
+      if !fd.discarded_swapchains.is_empty() {
+        let swapchains: Vec<_> = fd.discarded_swapchains.drain(..).collect();
+        let sc_device = self.swapchain_device.clone();
+        self
+          .main_thread_cleanup_queue
+          .lock()
+          .push(alloc::boxed::Box::new(move || unsafe {
+            for sc in swapchains {
+              sc_device.destroy_swapchain(sc.get(), None);
+            }
+          }));
+      }
+    }
     self.frame_discards[self.current_frame].cleanup(&self.swapchain_device, device);
 
     // DELETED from here: unsafe { device.reset_fences(fences) }?;

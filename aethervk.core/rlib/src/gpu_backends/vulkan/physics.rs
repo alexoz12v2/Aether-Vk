@@ -37,6 +37,7 @@ pub struct NarrowCcdPushConstants {
   pub dt: f32,
   pub particle_radius: f32,
   pub lca_entities: u64,
+  pub frame_bda: u64,
   pub space_type: u32,
   pub _pad: u32,
 }
@@ -51,6 +52,7 @@ pub struct NarrowCcdCrossLcaPushConstants {
   pub dt: f32,
   pub particle_radius: f32,
   pub lca_entities: u64,
+  pub frame_bda: u64,
   pub space_type: u32,
   pub _pad: u32,
 }
@@ -1804,6 +1806,44 @@ impl VulkanComputeKernels {
     )
   }
 
+  fn build_emission_candidates(
+    &self,
+    device: &LogicalDevice,
+    allocator: vk_mem::AllocatorView,
+    rollback: &mut utils::RollbackContext<'_>,
+    _cmd: &mut VulkanCommandBuffer,
+    scene0: &Scene,
+  ) -> GpuResult<VulkanBuffer<f32>> {
+    let mut flat_candidates = Vec::new();
+    scene0
+      .query2::<crate::scene::TransformComponent, crate::scene::ParticleEmitterCirclesComponent, _>(
+        |_, _t, emitter| {
+          for circle in &emitter.circles {
+            let pos = circle.cached_point.unwrap_or([0.0, 0.0, 0.0]);
+            let vel = circle.cached_normal.unwrap_or([0.0, 0.0, 0.0]);
+            let mass = circle.mass;
+            for _ in 0..circle.particles_per_tick {
+              flat_candidates.push([
+                pos[0], pos[1], pos[2], vel[0], vel[1], vel[2], mass, 0.0, 0.0, 0.0,
+              ]);
+            }
+          }
+        },
+      );
+
+    let packed = gpu::pack_particles_aosoa(&flat_candidates, 32);
+
+    self.allocate_and_upload(
+      device,
+      allocator,
+      &packed,
+      vk::BufferUsageFlags::STORAGE_BUFFER
+        | vk::BufferUsageFlags::TRANSFER_SRC
+        | vk::BufferUsageFlags::TRANSFER_DST,
+      rollback,
+    )
+  }
+
   fn emit_particles(
     &self,
     device: &LogicalDevice,
@@ -1816,19 +1856,30 @@ impl VulkanComputeKernels {
     sun_pos: Vec3f32,
     dt: timeus_t,
   ) -> GpuResult<()> {
+    let candidates_buf =
+      self.build_emission_candidates(device, _allocator, _rollback, cmd, _scene)?;
+    let atomic_counter = self.allocate_and_upload::<u32>(
+      device,
+      _allocator,
+      &[0],
+      vk::BufferUsageFlags::STORAGE_BUFFER
+        | vk::BufferUsageFlags::TRANSFER_SRC
+        | vk::BufferUsageFlags::TRANSFER_DST,
+      _rollback,
+    )?;
+
     let max_particles = (particles.capacity() as u32 / 320) * 32;
     let wg_size = 128;
-    let num_emitters = 1; // TODO Passed dynamically in reality
     let dispatch_groups = (max_particles + wg_size - 1) / wg_size;
-    let dt_sec = dt as f32 / 1_000_000.0;
+    let num_candidates = (candidates_buf.capacity() / 10) as u32;
 
     let pc = EmitParticlesPushConstants {
       particles: particles.address,
-      candidates: self.addresses.emitters, // mapping to candidates for now
+      candidates: candidates_buf.address,
       bvh: self.addresses.bvh_nodes,
-      counter: 0, // no atomic counter available right now in engine struct
+      counter: atomic_counter.address,
       root_index: 0,
-      num_candidates: max_particles,
+      num_candidates,
       _pad0: [0; 2],
       sun_pos: [sun_pos.x(), sun_pos.y(), sun_pos.z()],
       _pad1: 0,
@@ -1856,6 +1907,20 @@ impl VulkanComputeKernels {
       if dispatch_groups > 0 {
         device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
       }
+
+      let timeline = self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
+      self.discard_pool.discard_buffer(
+        candidates_buf.allocator.get_raw(),
+        candidates_buf.buffer,
+        candidates_buf.allocation,
+        timeline,
+      );
+      self.discard_pool.discard_buffer(
+        atomic_counter.allocator.get_raw(),
+        atomic_counter.buffer,
+        atomic_counter.allocation,
+        timeline,
+      );
 
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -3650,6 +3715,7 @@ impl Kernels for Device {
     rigid_bodies: &Self::Buffer<crate::gpu::RigidBodyImex>,
     particles: &Self::Buffer<f32>,
     lca_entities: u64,
+    frame_bda: u64,
     space_type: u32,
     dt: f32,
     output_list: &Self::List<crate::gpu::CollisionPair>,
@@ -3660,6 +3726,7 @@ impl Kernels for Device {
       rigid_bodies,
       particles,
       lca_entities,
+      frame_bda,
       space_type,
       dt,
       output_list,
@@ -3674,6 +3741,7 @@ impl Kernels for Device {
     rigid_bodies: &Self::Buffer<crate::gpu::RigidBodyImex>,
     particles: &Self::Buffer<f32>,
     lca_entities: u64,
+    frame_bda: u64,
     space_type: u32,
     dt: f32,
     output_list: &Self::List<crate::gpu::CollisionPair>,
@@ -3684,6 +3752,7 @@ impl Kernels for Device {
       rigid_bodies,
       particles,
       lca_entities,
+      frame_bda,
       space_type,
       dt,
       output_list,
@@ -4025,6 +4094,24 @@ impl Kernels for Device {
       })?
       .execute(|allocator, rollback| {
         self.kernels.build_emitters(&self.device, allocator, rollback, cmd, scene)
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(|e| EngineError::from(e))
+  }
+
+  fn build_emission_candidates(
+    &self,
+    cmd: &mut Self::Cmd,
+    scene: &Scene,
+  ) -> EngineResult<Self::Buffer<f32>> {
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |res_guard, _| {
+        Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
+      })?
+      .execute(|allocator, rollback| {
+        self
+          .kernels
+          .build_emission_candidates(&self.device, allocator, rollback, cmd, scene)
       })
       .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
@@ -4794,6 +4881,7 @@ impl Device {
     rigid_bodies: &VulkanBuffer<crate::gpu::RigidBodyImex>,
     particles: &VulkanBuffer<f32>,
     lca_entities: u64,
+    frame_bda: u64,
     space_type: u32,
     dt: f32,
     output_list: &VulkanBuffer<crate::gpu::CollisionPair>,
@@ -4806,6 +4894,7 @@ impl Device {
       dt,
       particle_radius: 0.5,
       lca_entities,
+      frame_bda,
       space_type,
       _pad: 0,
     };
@@ -4844,6 +4933,7 @@ impl Device {
     rigid_bodies: &VulkanBuffer<crate::gpu::RigidBodyImex>,
     particles: &VulkanBuffer<f32>,
     lca_entities: u64,
+    frame_bda: u64,
     space_type: u32,
     dt: f32,
     output_list: &VulkanBuffer<crate::gpu::CollisionPair>,
@@ -4856,6 +4946,7 @@ impl Device {
       dt,
       particle_radius: 0.5,
       lca_entities,
+      frame_bda,
       space_type,
       _pad: 0,
     };

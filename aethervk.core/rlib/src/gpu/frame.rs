@@ -478,6 +478,7 @@ pub struct CameraRenderData {
   pub far: f32,
   /// Stored projection parameters so we can rebuild the projection per depth layer.
   pub projection_params: CameraProjectionParams,
+  pub window_extent: [u32; 2],
 }
 
 /// Cached projection parameters from the CameraComponent, allowing per-layer
@@ -498,7 +499,12 @@ pub enum CameraProjectionParams {
 
 impl CameraRenderData {
   /// Note: camera component should have been updated with presentation engine data
-  pub fn new(transform: &TransformComponent, camera: &CameraComponent, frame_scale: f32) -> Self {
+  pub fn new(
+    transform: &TransformComponent,
+    camera: &CameraComponent,
+    frame_scale: f32,
+    window_extent: [u32; 2],
+  ) -> Self {
     // Extract camera's local axes in world space
     let right = transform.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
     let up = transform.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
@@ -547,6 +553,7 @@ impl CameraRenderData {
       near,
       far,
       projection_params,
+      window_extent,
     }
   }
 
@@ -577,6 +584,7 @@ impl CameraRenderData {
       near: layer_near,
       far: layer_far,
       projection_params: self.projection_params,
+      window_extent: self.window_extent,
     }
   }
 }
@@ -925,7 +933,7 @@ impl RenderScene {
       time_readings,
       depth_layers: Vec::with_capacity(Self::START_VEC_CAPACITY),
       text_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
-      camera_data: CameraRenderData::new(&camera.0, &camera.1, 1.0),
+      camera_data: CameraRenderData::new(&camera.0, &camera.1, 1.0, window_extent),
       cursor_call: None,
       ui_call: None,
       text2_call: None,

@@ -200,16 +200,20 @@ impl Drop for SimulationThreads {
       let _ = handle.join();
     }
 
-    // Ensure all logic-launched tasklets are finished before shutting down the renderer
-    oshal::log!("SimulationThreads waiting for thread pool tasks to complete...");
-    self.pool.gather();
-
     // Same pattern for render thread.
+    // MUST drop render thread BEFORE gathering the pool!
+    // Dropping the render thread drops the `Device`, which sets `callback_stop_signal`
+    // to true. This stops `TimelinePollingWorkload` which is running on the pool.
     self.render_thread.tx.take();
     self.render_feedback_rx = None;
     if let Some(handle) = self.render_thread.handle.take() {
       let _ = handle.join();
     }
+
+    // Ensure all logic-launched tasklets are finished before shutting down the renderer
+    oshal::log!("SimulationThreads waiting for thread pool tasks to complete...");
+    self.pool.gather();
+
     oshal::log!("SimulationThreads drop finished");
   }
 }

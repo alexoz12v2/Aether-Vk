@@ -69,6 +69,10 @@ impl RenderDevice for D3d12RenderDevice {
     todo!()
   }
 
+  fn process_main_thread_cleanup_queue(&self) -> GpuResult<()> { Ok(()) }
+
+  fn flush_main_thread_cleanup_queue(&self) -> GpuResult<()> { Ok(()) }
+
   fn resize_presentation_engine(
     &self,
     _handle: PresentationEngineHandle,

@@ -22,4 +22,9 @@
   <ItemGroup>
     <ProjectReference Include="../aethervk.ui-app/aethervk.ui-app.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="xunit.runner.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

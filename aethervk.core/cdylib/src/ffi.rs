@@ -249,8 +249,7 @@ pub unsafe extern "C" fn avkSimulationContext_addOrthographicCamera(
   scene_id: u64,
   presentation_engine: u64,
   name: *const c_char,
-  left: f32,
-  bottom: f32,
+  scale_factor: f32,
   near: f32,
   far: f32,
 ) -> u64 {
@@ -267,8 +266,7 @@ pub unsafe extern "C" fn avkSimulationContext_addOrthographicCamera(
           scene_id,
           gpu::PresentationEngineHandle(presentation_engine),
           name_str,
-          left,
-          bottom,
+          scale_factor,
           near,
           far,
         )
@@ -310,6 +308,35 @@ pub unsafe extern "C" fn avkSimulationContext_destroyPresentationEngine(
   }
   let ctx_ref = unsafe { &*ctx };
   let _ = ctx_ref.destroy_presentation_engine(scene_id, gpu::PresentationEngineHandle(handle));
+}
+
+/// Process pending main-thread cleanup tasks.
+/// Avalonia MUST call this from its UI thread (e.g., in a DispatcherTimer tick).
+/// Currently a no-op when only windowless PEs are used.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_processMainThreadCleanupQueue(
+  ctx: *mut SimulationContext,
+) -> i32 {
+  let ctx_ref = unsafe { &*ctx };
+  match ctx_ref.process_main_thread_cleanup_queue() {
+    Ok(()) => 0,
+    Err(_) => -1,
+  }
+}
+
+/// Flush all window-tied resources before shutdown.
+/// Avalonia MUST call this from its UI thread before disposing the SimulationContext.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_flushMainThreadCleanupQueue(
+  ctx: *mut SimulationContext,
+) -> i32 {
+  let ctx_ref = unsafe { &*ctx };
+  match ctx_ref.flush_main_thread_cleanup_queue() {
+    Ok(()) => 0,
+    Err(_) => -1,
+  }
 }
 
 #[unsafe(no_mangle)]
@@ -986,8 +1013,24 @@ pub unsafe extern "C" fn avkSimulationContext_spawnTrajectory(
   let traj = unsafe { *trajectory };
   let segments_slice = unsafe { core::slice::from_raw_parts(segments, segment_count as usize) };
 
+  oshal::log!(
+    "avkSimulationContext_spawnTrajectory called! Name: {}",
+    name_str
+  );
+  oshal::log!(
+    "  -> Color: {:?}, LineWidth: {}",
+    traj.color,
+    traj.line_width
+  );
+  if segment_count > 0 {
+    oshal::log!("  -> First Segment CP0: {:?}", segments_slice[0].cp0);
+  }
+
   match ctx_ref.spawn_trajectory_internal(scene_id, parent_entity, name_str, traj, segments_slice) {
-    Ok(entity_id) => entity_id,
+    Ok(entity_id) => {
+      oshal::log!("  -> Successfully spawned Trajectory Entity: {}", entity_id);
+      entity_id
+    }
     Err(e) => {
       oshal::log!("avkSimulationContext_spawnTrajectory failed: {:?}", e);
       0
@@ -1031,6 +1074,27 @@ pub unsafe extern "C" fn avkSimulationContext_spawnTrajectoryFromElements(
   }
   let ctx_ref = unsafe { &*ctx };
   let name_str = unsafe { CStr::from_ptr(name).to_str().unwrap_or("orbit") };
+
+  oshal::log!(
+    "avkSimulationContext_spawnTrajectoryFromElements called! Name: {}",
+    name_str
+  );
+  oshal::log!(
+    "  -> Elements: a={}, e={}, i={}, omega={}, w={}",
+    a_au,
+    e,
+    i_deg,
+    omega_deg,
+    argperi_deg
+  );
+  oshal::log!(
+    "  -> Color: [{}, {}, {}, {}], LineWidth: {}",
+    col_r,
+    col_g,
+    col_b,
+    col_a,
+    line_width
+  );
 
   // ── Keplerian ellipse → 4-segment rational cubic Bézier ──────────────────
   // Standard NURBS-circle approximation adapted for an ellipse.
@@ -1131,7 +1195,13 @@ pub unsafe extern "C" fn avkSimulationContext_spawnTrajectoryFromElements(
   };
 
   match ctx_ref.spawn_trajectory_internal(scene_id, parent_entity, name_str, traj, &segs) {
-    Ok(entity_id) => entity_id,
+    Ok(entity_id) => {
+      oshal::log!(
+        "  -> Successfully spawned TrajectoryFromElements Entity: {}",
+        entity_id
+      );
+      entity_id
+    }
     Err(e) => {
       oshal::log!(
         "avkSimulationContext_spawnTrajectoryFromElements failed: {:?}",
@@ -1312,10 +1382,13 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
 
   let r = 10.0;
 
+  let mut to_spawn = alloc::vec::Vec::new();
+  let mut updates = alloc::vec::Vec::new();
+
   let _ = scene_ctx.scene.with_component_mut(
     internal_id,
     |circles_comp: &mut aethervk_core_rlib::scene::ParticleEmitterCirclesComponent| {
-      for circle in &mut circles_comp.circles {
+      for (i, circle) in circles_comp.circles.iter_mut().enumerate() {
         let lat = circle.latitude_rad;
         let lon = circle.longitude_rad;
 
@@ -1384,7 +1457,7 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
         circle.cached_normal = Some(norm);
 
         let pt_vec = Vec3f32::from_components(pt[0], pt[1], pt[2]);
-        let scale = r * circle.circle_radius_frac;
+        let scale = (r * circle.circle_radius_frac).max(1e-4);
         let scale_vec = Vec3f32::from_components(scale, scale, scale);
         let t = aethervk_core_rlib::scene::TransformComponent {
           position: pt_vec,
@@ -1392,50 +1465,52 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
           scale: scale_vec,
         };
 
-        let mut child = circle.child_entity;
-        if child.is_none() {
-          let new_id = scene_ctx.scene.spawn_entity("EmissionSphere");
-          scene_ctx.scene.set_parent(new_id, Some(internal_id));
-
-          let pseudo_mesh = aethervk_core_rlib::scene::StaticMeshComponent {
-            asset_path: "primitives/sphere.obj".into(),
-            mesh: alloc::sync::Arc::from(
-              aethervk_core_rlib::simulation::comet::generate_uv_sphere(1.0, 6, 6, 0.0),
-            ),
-            emissive_color: [
-              circle.color[0],
-              circle.color[1],
-              circle.color[2],
-              circle.color[3],
-            ],
-          };
-
-          let _ = scene_ctx.scene.add_component(new_id, pseudo_mesh);
-          let _ = scene_ctx.scene.add_component(new_id, t);
-
-          circle.child_entity = Some(new_id);
+        if circle.child_entity.is_none() {
+          to_spawn.push((i, t, circle.color));
         } else {
-          let _ = scene_ctx.scene.with_component_mut(
-            child.unwrap(),
-            |tc: &mut aethervk_core_rlib::scene::TransformComponent| {
-              *tc = t;
-            },
-          );
-          let _ = scene_ctx.scene.with_component_mut(
-            child.unwrap(),
-            |sm: &mut aethervk_core_rlib::scene::StaticMeshComponent| {
-              sm.emissive_color = [
-                circle.color[0],
-                circle.color[1],
-                circle.color[2],
-                circle.color[3],
-              ];
-            },
-          );
+          updates.push((circle.child_entity.unwrap(), t, circle.color));
         }
       }
     },
   );
+
+  for (i, t, color) in to_spawn {
+    let new_id = scene_ctx.scene.spawn_entity("EmissionSphere");
+    scene_ctx.scene.set_parent(new_id, Some(internal_id));
+
+    let pseudo_mesh = aethervk_core_rlib::scene::StaticMeshComponent {
+      asset_path: "primitives/sphere.obj".into(),
+      mesh: alloc::sync::Arc::from(aethervk_core_rlib::simulation::comet::generate_uv_sphere(
+        1.0, 6, 6, 0.0,
+      )),
+      emissive_color: [color[0], color[1], color[2], color[3]],
+    };
+
+    let _ = scene_ctx.scene.add_component(new_id, pseudo_mesh);
+    let _ = scene_ctx.scene.add_component(new_id, t);
+
+    let _ = scene_ctx.scene.with_component_mut(
+      internal_id,
+      |circles_comp: &mut aethervk_core_rlib::scene::ParticleEmitterCirclesComponent| {
+        circles_comp.circles[i].child_entity = Some(new_id);
+      },
+    );
+  }
+
+  for (child_id, t, color) in updates {
+    let _ = scene_ctx.scene.with_component_mut(
+      child_id,
+      |tc: &mut aethervk_core_rlib::scene::TransformComponent| {
+        *tc = t;
+      },
+    );
+    let _ = scene_ctx.scene.with_component_mut(
+      child_id,
+      |sm: &mut aethervk_core_rlib::scene::StaticMeshComponent| {
+        sm.emissive_color = [color[0], color[1], color[2], color[3]];
+      },
+    );
+  }
 
   true
 }
@@ -2977,24 +3052,25 @@ pub unsafe extern "C" fn avkSimulationContext_addCameraComponent(
   entity: u64,
   is_orthographic: bool,
   fov: f32,
-  aspect: f32,
+  width: f32,
+  height: f32,
   near: f32,
   far: f32,
-  ortho_left: f32,
-  ortho_right: f32,
-  ortho_bottom: f32,
-  ortho_top: f32,
+  ortho_scale_factor: f32,
 ) {
   if ctx.is_null() {
     return;
   }
   let ctx_ref = unsafe { &*ctx };
+  let aspect = if height > 0.0 { width / height } else { 1.0 };
   let params = if is_orthographic {
+    let w = width * ortho_scale_factor;
+    let h = height * ortho_scale_factor;
     CameraParams::Orthographic(OrthographicCameraParams {
-      left: ortho_left,
-      right: ortho_right,
-      bottom: ortho_bottom,
-      top: ortho_top,
+      left: -w / 2.0,
+      right: w / 2.0,
+      bottom: -h / 2.0,
+      top: h / 2.0,
       near,
       far,
     })
@@ -3222,10 +3298,7 @@ pub struct FfiCamera {
   pub aspect: f32,
   pub near: f32,
   pub far: f32,
-  pub ortho_left: f32,
-  pub ortho_right: f32,
-  pub ortho_bottom: f32,
-  pub ortho_top: f32,
+  pub ortho_scale_factor: f32,
   pub focus_distance: f32,
   pub proj: [f32; 16],
 }

@@ -169,7 +169,7 @@ pub fn start_logic_thread(
                     if alloc::sync::Arc::strong_count(&task_id) == 1 {
                       break u64::MAX;
                     }
-                    oshal::os::native::this_thread::yield_now();
+                    oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
                   };
 
                   // For a successful frame, track the task so can_tick can check its status.
@@ -882,11 +882,11 @@ fn process_command_internal(
       target_entity,
       scene,
     }) => {
-      let scene_read = scene.read();
+      let mut scene_write = scene.write();
       // 'F' behavior: move cursor to target entity position, then position the camera dynamically
       let target_pos = {
         #[allow(deprecated)]
-        scene_read.scene.global_transform(target_entity).map(|t| t.position).ok_or(
+        scene_write.scene.global_transform(target_entity).map(|t| t.position).ok_or(
           EngineError::InvalidOperation(
             "logic_thread:SnapToEntity | target entity doesn't have TransformComponent",
           ),
@@ -894,21 +894,21 @@ fn process_command_internal(
       };
 
       // Move cursor to target entity world position.
-      if let Some((cursor_id, _)) = scene_read
+      if let Some((cursor_id, _)) = scene_write
         .scene
         .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
       {
         let _ =
-          scene_read
+          scene_write
             .scene
             .with_component_mut(cursor_id, |c: &mut HighResTransformComponent| {
               c.position = target_pos.to_f64();
             });
         // Mark cursor entity as changed.
         if let Some(ext_id) =
-          scene_read.entity_map.iter().find(|&(_, v)| *v == cursor_id).map(|(k, _)| *k)
+          scene_write.entity_map.iter().find(|&(_, v)| *v == cursor_id).map(|(k, _)| *k)
         {
-          scene_read.mark_component_changed(
+          scene_write.mark_component_changed(
             ext_id,
             <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
           );
@@ -917,14 +917,14 @@ fn process_command_internal(
 
       // Dynamic offset calculation based on object bounds and camera FOV
       let mut r_local = 1.0_f64;
-      if let Some(mesh) = scene_read
+      if let Some(mesh) = scene_write
         .scene
         .with_component(target_entity, |c: &crate::scene::PhysicalMeshComponent| {
           c.clone()
         })
       {
         r_local = mesh.sphere_radius as f64;
-      } else if let Some(col) = scene_read
+      } else if let Some(col) = scene_write
         .scene
         .with_component(target_entity, |c: &crate::scene::ColliderComponent| {
           c.clone()
@@ -936,7 +936,7 @@ fn process_command_internal(
         };
       }
 
-      let target_scale = scene_read
+      let target_scale = scene_write
         .scene
         .global_transform_f64(target_entity)
         .map(|t| t.scale.x().max(t.scale.y()).max(t.scale.z()) as f64)
@@ -946,7 +946,7 @@ fn process_command_internal(
       let mut fov = core::f64::consts::FRAC_PI_4;
       let mut aspect = 16.0 / 9.0;
       if let Some(cam) =
-        scene_read.scene.with_component(snap_entity, |c: &CameraComponent| c.clone())
+        scene_write.scene.with_component(snap_entity, |c: &CameraComponent| c.clone())
       {
         if let crate::scene::CameraProjection::Perspective {
           fov: cam_fov,
@@ -973,21 +973,38 @@ fn process_command_internal(
       let q = Quat::from_components(0.24757917, -0.098841526, -0.35735834, 0.8951145);
       let offset = q.rotate_vector(Vec3f32::from_components(0.0, snap_distance as f32, 0.0));
 
-      let _ =
-        scene_read
-          .scene
-          .with_component_mut(snap_entity, |t: &mut HighResTransformComponent| {
-            t.position = (target_pos + offset).to_f64();
-            t.rotation = q;
-          });
-      let _ = scene_read.scene.with_component_mut(snap_entity, |c: &mut CameraComponent| {
+      let (start_pos, start_rot) = if let Some(t) = scene_write.scene.with_component(
+        snap_entity,
+        |t: &crate::scene::HighResTransformComponent| (t.position, t.rotation),
+      ) {
+        t
+      } else {
+        return Ok(SimulationTaskResult::None);
+      };
+
+      let anim = crate::scene::animation::TransformAnimationComponent {
+        start_pos,
+        start_rot,
+        target_pos: (target_pos + offset).to_f64(),
+        target_rot: q,
+        duration: 2.0,
+        elapsed: 0.0,
+        is_finished: false,
+      };
+
+      let _ = scene_write
+        .scene
+        .remove_component::<crate::scene::animation::TransformAnimationComponent>(snap_entity);
+      let _ = scene_write.scene.add_component(snap_entity, anim);
+
+      let _ = scene_write.scene.with_component_mut(snap_entity, |c: &mut CameraComponent| {
         c.focus_distance = snap_distance as f32;
       });
 
       if let Some(ext_id) =
-        scene_read.entity_map.iter().find(|&(_, v)| *v == snap_entity).map(|(k, _)| *k)
+        scene_write.entity_map.iter().find(|&(_, v)| *v == snap_entity).map(|(k, _)| *k)
       {
-        scene_read.mark_component_changed(
+        scene_write.mark_component_changed(
           ext_id,
           <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
         );
@@ -1794,7 +1811,7 @@ fn execute_simulation_tick(
         {
           break;
         }
-        oshal::os::native::this_thread::yield_now();
+        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
       }
 
       if !fptr.is_null() {
