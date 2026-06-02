@@ -6,6 +6,7 @@ using Xunit;
 
 namespace AetherVk.Logic.Tests;
 
+[Collection("Sequential")]
 public class OutlineViewModelTests
 {
   [Fact]

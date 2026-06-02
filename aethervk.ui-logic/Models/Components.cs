@@ -365,16 +365,7 @@ public partial class CameraComponent : NativeComponent
   private float _farPlane = 10000.0f;
 
   [ObservableProperty]
-  private float _orthoLeft = -10.0f;
-
-  [ObservableProperty]
-  private float _orthoRight = 10.0f;
-
-  [ObservableProperty]
-  private float _orthoBottom = -10.0f;
-
-  [ObservableProperty]
-  private float _orthoTop = 10.0f;
+  private float _orthoScaleFactor = 0.01f;
 
   [ObservableProperty]
   private bool _isOrthographic;
@@ -382,21 +373,19 @@ public partial class CameraComponent : NativeComponent
   [ObservableProperty]
   private float _focusDistance = 10.0f;
 
+  private float _nativeLeft;
+  private float _nativeRight;
+  private float _nativeBottom;
+  private float _nativeTop;
+
   partial void OnIsOrthographicChanged(bool value)
   {
     if (value && SuspendNotifications == false && !IsSyncingFromNative)
     {
-      double fovRad = Fov * System.Math.PI / 180.0;
-      double height = 2.0 * FocusDistance * System.Math.Tan(fovRad / 2.0);
-      double width = height * AspectRatio;
-
       SuspendNotifications = true;
       try
       {
-        OrthoTop = (float)(height / 2.0);
-        OrthoBottom = (float)(-height / 2.0);
-        OrthoRight = (float)(width / 2.0);
-        OrthoLeft = (float)(-width / 2.0);
+        // bounds logic was removed
       }
       finally
       {
@@ -458,10 +447,10 @@ public partial class CameraComponent : NativeComponent
       Aspect = AspectRatio,
       Near = safeNear,
       Far = safeFar,
-      OrthoLeft = OrthoLeft,
-      OrthoRight = OrthoRight,
-      OrthoBottom = OrthoBottom,
-      OrthoTop = OrthoTop,
+      Left = _nativeLeft,
+      Right = _nativeRight,
+      Bottom = _nativeBottom,
+      Top = _nativeTop,
       FocusDistance = FocusDistance,
       // proj array doesn't matter for pushing
     };
@@ -506,13 +495,14 @@ public partial class CameraComponent : NativeComponent
         NearPlane = data.Near;
         FarPlane = data.Far;
         FocusDistance = data.FocusDistance;
+        _nativeLeft = data.Left;
+        _nativeRight = data.Right;
+        _nativeBottom = data.Bottom;
+        _nativeTop = data.Top;
 
         if (data.IsOrthographic)
         {
-          OrthoLeft = data.OrthoLeft;
-          OrthoRight = data.OrthoRight;
-          OrthoBottom = data.OrthoBottom;
-          OrthoTop = data.OrthoTop;
+          // Preserve C# OrthoScaleFactor for UI zooming
         }
 
         ProjectionMatrixPreview =
@@ -652,76 +642,6 @@ public partial class BvhNode : ObservableObject
   }
 }
 
-public partial class JetMarker : ObservableObject
-{
-  [ObservableProperty]
-  private string _name = "New Jet";
-
-  [ObservableProperty]
-  private float _colorR = 1.0f;
-
-  [ObservableProperty]
-  private float _colorG = 0.0f;
-
-  [ObservableProperty]
-  private float _colorB = 0.0f;
-
-  [ObservableProperty]
-  private float _posX;
-
-  [ObservableProperty]
-  private float _posY;
-
-  [ObservableProperty]
-  private float _posZ;
-
-  [ObservableProperty]
-  private float _size = 5.0f;
-
-  [ObservableProperty]
-  private float _radius = 0.1f;
-
-  public float RadiusKm
-  {
-    get => Radius / 1000f;
-    set => Radius = value * 1000f;
-  }
-
-  partial void OnRadiusChanged(float value)
-  {
-    OnPropertyChanged(nameof(RadiusKm));
-  }
-
-  [ObservableProperty]
-  private float _latitude;
-
-  [ObservableProperty]
-  private float _longitude;
-
-  [ObservableProperty]
-  private float _mass = 1.0f;
-
-  public float MassGrams
-  {
-    get => Mass * 1000f;
-    set => Mass = value / 1000f;
-  }
-
-  partial void OnMassChanged(float value)
-  {
-    OnPropertyChanged(nameof(MassGrams));
-  }
-
-  [ObservableProperty]
-  private int _particlesPerTick = 100;
-
-  [ObservableProperty]
-  private float _tTL = 1000.0f;
-
-  [ObservableProperty]
-  private float _meanVelocity = 10.0f;
-}
-
 public partial class CometComponent : ObservableObject, IComponent
 {
   public string Name => "Comet";
@@ -758,7 +678,7 @@ public partial class CometComponent : ObservableObject, IComponent
 
   public ObservableCollection<BvhNode> BvhTree { get; } = new();
 
-  public ObservableCollection<JetMarker> Jets { get; } = new();
+  public ObservableCollection<EmissionCircleItem> Jets { get; } = new();
 
   public CometComponent() { }
 }

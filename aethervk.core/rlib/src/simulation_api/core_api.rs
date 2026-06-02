@@ -213,8 +213,7 @@ impl SimulationContext {
     scene_id: u64,
     presentation_engine: PresentationEngineHandle,
     name: &str,
-    left: f32,
-    bottom: f32,
+    scale_factor: f32,
     near: f32,
     far: f32,
   ) -> EngineResult<core::num::NonZeroU64> {
@@ -242,10 +241,10 @@ impl SimulationContext {
         Some(root_entity),
         TransformComponent::default(),
         CameraComponent::new_ortho(
-          left,
-          left + width as f32,
-          bottom,
-          bottom + height as f32,
+          0.0,
+          width as f32 * scale_factor,
+          0.0,
+          height as f32 * scale_factor,
           near,
           far,
         ),
@@ -390,5 +389,17 @@ impl SimulationContext {
       })
       .map_err(|_| EngineError::InvalidOperation("logic thread closed"))?;
     Ok(task_id)
+  }
+
+  /// Drains main-thread cleanup queue. Call from UI thread tick.
+  /// For windowless-only usage this is a no-op.
+  pub fn process_main_thread_cleanup_queue(&self) -> crate::types::EngineResult<()> {
+    self.with_device(|device| device.process_main_thread_cleanup_queue())
+  }
+
+  /// Flushes all windowed PE resources. Call from UI thread before shutdown.
+  /// For windowless-only usage this is a no-op.
+  pub fn flush_main_thread_cleanup_queue(&self) -> crate::types::EngineResult<()> {
+    self.with_device(|device| device.flush_main_thread_cleanup_queue())
   }
 }

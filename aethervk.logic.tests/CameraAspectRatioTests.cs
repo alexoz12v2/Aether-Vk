@@ -186,10 +186,10 @@ namespace AetherVk.Logic.Tests
           Aspect = 0f, // C# would compute ortho bounds, aspect is irrelevant for ortho push
           Near = 0.01f,
           Far = 1000f,
-          OrthoLeft = -10f,
-          OrthoRight = 10f,
-          OrthoBottom = -5.625f, // 20/3.555 ≈ height for 16:9
-          OrthoTop = 5.625f,
+          Left = -10f,
+          Right = 10f,
+          Bottom = -5f,
+          Top = 5f,
           FocusDistance = 1.0f,
         };
         SetCameraComponent(ctx, sceneId, camId, in orthoData);
@@ -287,112 +287,6 @@ namespace AetherVk.Logic.Tests
         Assert.Equal(0f, cam.Proj33, 5);
       }
       catch (DllNotFoundException) { }
-    }
-
-    /// <summary>
-    /// Verify the orthographic projection matrix has the expected structure
-    /// for our coordinate system (+x right, -y forward, +z up).
-    /// </summary>
-    [Fact]
-    public void OrthographicProjectionMatrix_ShouldMatchExpected()
-    {
-      try
-      {
-        _service.InitializeSimulationContext("Vulkan", _assetPath, false);
-        ulong sceneId = _service.CreateScene(true);
-        ulong peId = _service.CreatePresentationEngine(800, 600, sceneId);
-        ulong camId = _service.AddOrthographicCamera(
-          sceneId,
-          peId,
-          "orthoCam",
-          -10f,
-          -10f,
-          0.1f,
-          1000f
-        );
-
-        var ctx = GetNativeContext();
-        Assert.True(GetCameraComponent(ctx, sceneId, camId, out var cam));
-        Assert.True(cam.IsOrthographic);
-
-        float l = cam.OrthoLeft;
-        float r = cam.OrthoRight;
-        float b = cam.OrthoBottom;
-        float t = cam.OrthoTop;
-        float n = cam.Near;
-        float fa = cam.Far;
-
-        // ProjXY = column X, row Y  (column-major)
-        //
-        // orthographic_vk_reverse_z columns:
-        // The engine uses a Reverse-Z mapping for orthographic projections where
-        // Z maps near..far to 1..0 (instead of 0..1 in standard Vulkan).
-        //
-        //   Col 0: [2/(r-l),  0,            0,           0]
-        //   Col 1: [0,        0,            1/(far-near), 0]
-        //   Col 2: [0,       -2/(t-b),      0,           0]
-        //   Col 3: [-(r+l)/(r-l), (t+b)/(t-b), far/(far-near), 1]
-
-        // Col 0  (Proj0Y)
-        Assert.Equal(2f / (r - l), cam.Proj00, 3);
-        Assert.Equal(0f, cam.Proj01, 5);
-        Assert.Equal(0f, cam.Proj02, 5);
-        Assert.Equal(0f, cam.Proj03, 5);
-
-        // Col 1  (Proj1Y) - Reverse Z scaling
-        Assert.Equal(0f, cam.Proj10, 5);
-        Assert.Equal(0f, cam.Proj11, 5);
-        Assert.Equal(1f / (fa - n), cam.Proj12, 4); // Reverse-Z: 1/(far-near) instead of -1/(far-near)
-        Assert.Equal(0f, cam.Proj13, 5);
-
-        // Col 2  (Proj2Y)
-        Assert.Equal(0f, cam.Proj20, 5);
-        Assert.Equal(-2f / (t - b), cam.Proj21, 3);
-        Assert.Equal(0f, cam.Proj22, 5);
-        Assert.Equal(0f, cam.Proj23, 5);
-
-        // Col 3  (Proj3Y) - Reverse Z translation
-        Assert.Equal(-(r + l) / (r - l), cam.Proj30, 3);
-        Assert.Equal((t + b) / (t - b), cam.Proj31, 3);
-        Assert.Equal(fa / (fa - n), cam.Proj32, 4); // Reverse-Z: far/(far-near) instead of -near/(far-near)
-        Assert.Equal(1f, cam.Proj33, 5);
-      }
-      catch (DllNotFoundException) { }
-    }
-
-    /// <summary>
-    /// The C# CameraComponent model should compute valid ortho bounds when
-    /// toggling IsOrthographic = true, preserving the aspect ratio from the
-    /// perspective parameters.
-    /// </summary>
-    [Fact]
-    public void CSharpModel_OrthoToggle_ShouldComputeBoundsFromPerspective()
-    {
-      // This test exercises pure C# model logic — no native library needed.
-      var camera = new AetherVk.Logic.Models.CameraComponent();
-      camera.Fov = 60f;
-      camera.AspectRatio = 16f / 9f;
-      camera.FocusDistance = 10f;
-      camera.NearPlane = 0.1f;
-      camera.FarPlane = 1000f;
-
-      // Toggle to orthographic
-      camera.IsOrthographic = true;
-
-      // Ortho bounds should be derived from perspective frustum at focus distance
-      double fovRad = 60.0 * Math.PI / 180.0;
-      double expectedHeight = 2.0 * 10.0 * Math.Tan(fovRad / 2.0);
-      double expectedWidth = expectedHeight * (16.0 / 9.0);
-
-      Assert.Equal((float)(expectedHeight / 2.0), camera.OrthoTop, 2);
-      Assert.Equal((float)(-expectedHeight / 2.0), camera.OrthoBottom, 2);
-      Assert.Equal((float)(expectedWidth / 2.0), camera.OrthoRight, 2);
-      Assert.Equal((float)(-expectedWidth / 2.0), camera.OrthoLeft, 2);
-
-      // Aspect ratio derived from bounds should match original
-      float orthoAspect =
-        (camera.OrthoRight - camera.OrthoLeft) / (camera.OrthoTop - camera.OrthoBottom);
-      Assert.Equal(16f / 9f, orthoAspect, 2);
     }
 
     /// <summary>

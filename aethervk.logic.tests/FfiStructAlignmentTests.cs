@@ -37,9 +37,9 @@ public class FfiStructAlignmentTests
   public void FfiCamera_HasCorrectSize()
   {
     int size = Marshal.SizeOf<NativeInterop.FfiCamera>();
-    // bool(1) + 9 floats(36) + 16 floats(64) = 101 bytes minimum
-    // With Sequential layout the bool may have padding, so >= 101
-    Assert.True(size >= 101, $"FfiCamera size was {size}, expected >= 101");
+    // bool(1) + 6 floats(24) + 16 floats(64) = 89 bytes minimum
+    // With Sequential layout the bool may have padding, so >= 89
+    Assert.True(size >= 89, $"FfiCamera size was {size}, expected >= 89");
   }
 
   [Fact]

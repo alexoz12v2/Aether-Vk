@@ -1,6 +1,7 @@
 using System;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.VisualTree;
 
 namespace AetherVk;
 
@@ -10,6 +11,39 @@ public partial class MainWindow : Window
   {
     InitializeComponent();
     KeyDown += OnKeyDown;
+    AddHandler(
+      InputElement.GotFocusEvent,
+      OnElementGotFocus,
+      Avalonia.Interactivity.RoutingStrategies.Bubble
+    );
+  }
+
+  private void OnElementGotFocus(object? sender, GotFocusEventArgs e)
+  {
+    if (DataContext is Logic.ViewModels.MainWindowViewModel vm)
+    {
+      var el = e.Source as Avalonia.Visual;
+      Views.Viewport3DView? view = null;
+      while (el != null)
+      {
+        if (el is Views.Viewport3DView v)
+        {
+          view = v;
+          break;
+        }
+        el = el.GetVisualParent();
+      }
+
+      if (view != null && view.DataContext is Logic.ViewModels.Viewport3DViewModel vvm)
+      {
+        vm.ActiveViewport = vvm;
+        vm.IsViewportFocused = true;
+      }
+      else
+      {
+        vm.IsViewportFocused = false;
+      }
+    }
   }
 
   private void OnKeyDown(object? sender, KeyEventArgs e)

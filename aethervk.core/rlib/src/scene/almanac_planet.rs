@@ -54,14 +54,14 @@ impl AlmanacPlanet {
     )?;
     transform.position = kinematic_state.position;
     if let Some(rot_bf_world) = kinematic_state.rotation {
-      // transform.rotation is PA -> World
-      // PA -> BF -> World
-      // bf_to_pa is BF -> PA, so PA -> BF is bf_to_pa.inverse()
-      transform.rotation = (rot_bf_world * self.bf_to_pa.inverse()).normalize();
-
       if self.surface_offset_bf != Vec3f32::zero() {
         let offset_world = rot_bf_world.rotate_vector(self.surface_offset_bf);
         transform.position += offset_world;
+      } else {
+        // transform.rotation is PA -> World
+        // PA -> BF -> World
+        // bf_to_pa is BF -> PA, so PA -> BF is bf_to_pa.inverse()
+        transform.rotation = (rot_bf_world * self.bf_to_pa.inverse()).normalize();
       }
     }
 
@@ -100,8 +100,6 @@ impl AlmanacPlanet {
       kinematic_state.position.z() as f64,
     );
     if let Some(rot_bf_world) = kinematic_state.rotation {
-      transform.rotation = (rot_bf_world * self.bf_to_pa.inverse()).normalize();
-
       if self.surface_offset_bf != Vec3f32::zero() {
         let offset_world = rot_bf_world.rotate_vector(self.surface_offset_bf);
         transform.position += aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
@@ -109,6 +107,8 @@ impl AlmanacPlanet {
           offset_world.y() as f64,
           offset_world.z() as f64,
         );
+      } else {
+        transform.rotation = (rot_bf_world * self.bf_to_pa.inverse()).normalize();
       }
     }
 

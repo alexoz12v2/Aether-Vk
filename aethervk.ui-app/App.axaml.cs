@@ -232,11 +232,7 @@ public partial class App : Application
                 "Toggle Measuring Mode"
               )
             );
-            inputRegistry.Register(
-              "Viewport",
-              new AetherVk.Logic.Input.InputChord(Key: "R"),
-              new AetherVk.Logic.Input.AppAction("viewport.reset_camera", "Reset Camera")
-            );
+
             inputRegistry.Register(
               "Viewport",
               new AetherVk.Logic.Input.InputChord(Key: "D0"),

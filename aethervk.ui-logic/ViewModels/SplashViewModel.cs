@@ -49,6 +49,7 @@ public partial class SplashViewModel : ViewModelBase
           if (root != null)
           {
             _runtimeService.SetParent(defaultSceneId, earthOrbitEntity.Id, root.Id);
+            _runtimeService.CreateSky(defaultSceneId, root);
           }
 
           double yearInSeconds = 31557600.0;

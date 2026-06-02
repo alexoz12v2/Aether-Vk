@@ -93,10 +93,7 @@ public class ViewportTrajectoryIntegrationTests
       sceneId,
       peId,
       "TestOrthoCamera",
-      -10.0f, // left
-      10.0f, // right
-      -10.0f, // bottom
-      10.0f // top
+      0.01f // scaleFactor
     );
     Assert.True(orthoCameraId != 0, "Failed to add orthographic camera.");
 

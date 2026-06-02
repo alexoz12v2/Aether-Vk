@@ -303,11 +303,22 @@ public partial class Viewport3DViewModel
   [RelayCommand]
   private void CloseRadialMenuCmd() => CloseRadialMenu();
 
+  public void SnapCameraToSun()
+  {
+    var state = _sceneStateManager.GetOrCreateScene(SceneId);
+    var sun = System.Linq.Enumerable.FirstOrDefault(
+      state.EntityMap.Values,
+      e => System.Linq.Enumerable.Any(e.Components.OfType<AetherVk.Logic.Models.SunComponent>())
+    );
+    if (sun != null)
+      RuntimeService.SnapToEntity(SceneId, CameraId, sun.Id);
+  }
+
   [RelayCommand]
   private void ResetCameraFromRadial()
   {
     CloseRadialMenu();
-    RuntimeService.ResetCamera(SceneId, CameraId);
+    SnapCameraToSun();
   }
 
   [RelayCommand]
@@ -1075,7 +1086,7 @@ public partial class Viewport3DViewModel
 
         if (camera.IsOrthographic)
         {
-          double W_au = camera.OrthoRight - camera.OrthoLeft;
+          double W_au = Width * camera.OrthoScaleFactor;
           if (W_au > 0)
           {
             double min_au = target_px_width * (W_au / Width);

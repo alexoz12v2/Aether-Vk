@@ -79,7 +79,7 @@ namespace AetherVk.Logic.Tests
         var camera = _service.GetEntityByName(sceneId, "camera");
         Assert.NotNull(camera);
 
-        TaskCompletionSource<ulong> tcs = new();
+        TaskCompletionSource<ulong> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
           this,
           (r, m) =>
@@ -160,7 +160,7 @@ namespace AetherVk.Logic.Tests
           1000f
         );
 
-        TaskCompletionSource<ulong> tcs = new();
+        TaskCompletionSource<ulong> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         int msgCount = 0;
         WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
           this,
@@ -217,25 +217,23 @@ namespace AetherVk.Logic.Tests
 
         var comet = new CometComponent();
         comet.Jets.Add(
-          new JetMarker
+          new EmissionCircleItem
           {
-            PosX = 1f,
-            PosY = 1f,
-            PosZ = 1f,
+            LatitudeDeg = 1f,
+            LongitudeDeg = 1f,
             ColorR = 1f,
             ColorG = 0f,
             ColorB = 0f,
-            Size = 1f,
           }
         );
 
-        _service.SyncMarkers(sceneId, sphereId, comet);
+        _service.SyncEmissionCircles(sceneId, sphereId, comet);
         _service.RefreshBvhNodes(sceneId, sphereId, comet);
 
         _service.AddPerspectiveCamera(sceneId, peId, "camera", 45f, 0.1f, 1000f);
         var camera = _service.GetEntityByName(sceneId, "camera");
 
-        TaskCompletionSource<ulong> tcs = new();
+        TaskCompletionSource<ulong> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         int msgCount = 0;
         WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
           this,

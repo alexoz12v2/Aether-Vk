@@ -224,12 +224,12 @@ mod windows_pool {
             let local_len = state.local_queues[id].lock().len();
             let shared_len = state.shared_queue.lock().len();
             if local_len + shared_len <= 1 {
-              let _ = unsafe { SwitchToThread() };
+              crate::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
             }
           }
         }
       } else {
-        let _ = unsafe { SwitchToThread() };
+        crate::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
       }
     }
 
@@ -420,12 +420,12 @@ mod pthread_pool {
             let local_len = state.local_queues[id].lock().len();
             let shared_len = state.shared_queue.lock().len();
             if local_len + shared_len <= 1 {
-              unsafe { libc::sched_yield() };
+              crate::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
             }
           }
         }
       } else {
-        unsafe { libc::sched_yield() };
+        crate::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
       }
     }
 

@@ -7,6 +7,22 @@ mod tests {
   use alloc::{boxed::Box, vec::Vec};
   use ash::vk;
 
+  /// Creates a shared main-thread cleanup queue for test PEs.
+  fn new_test_cleanup_queue() -> crate::gpu::MainThreadCleanupQueue {
+    alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new()))
+  }
+
+  /// Drains the test cleanup queue, executing all deferred swapchain/surface
+  /// destruction tasks. MUST be called after PE cleanup and before destroy_device.
+  fn drain_test_cleanup_queue(queue: &crate::gpu::MainThreadCleanupQueue) {
+    let mut q = queue.lock();
+    let tasks: Vec<_> = q.drain(..).collect();
+    drop(q);
+    for task in tasks {
+      task();
+    }
+  }
+
   // Helper to get real Vulkan device objects for testing swapchain directly
   fn setup_test_render(
     enable_maintenance1: bool,
@@ -380,6 +396,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params,
       &mut rollback,
+      alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new())),
     )
     .unwrap();
 
@@ -436,6 +453,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params,
       &mut rollback,
+      alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new())),
     )
     .unwrap();
 
@@ -515,6 +533,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params,
       &mut rollback,
+      alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new())),
     )
     .unwrap();
 
@@ -611,6 +630,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params,
       &mut rollback,
+      alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new())),
     )
     .unwrap();
 
@@ -680,6 +700,7 @@ mod tests {
   fn test_windowed_presentation_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) =
       setup_test_render(enable_maintenance1);
+    let cleanup_queue = new_test_cleanup_queue();
 
     let params = crate::gpu::PresentationEngineParams {
       ty: crate::gpu::PresentationEngineType::Window,
@@ -703,6 +724,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params,
       &mut rollback,
+      cleanup_queue.clone(),
     )
     .unwrap();
 
@@ -769,6 +791,7 @@ mod tests {
     unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
     engine.cleanup(&device);
+    drain_test_cleanup_queue(&cleanup_queue);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
       device.destroy_device(None);
@@ -788,6 +811,7 @@ mod tests {
   fn test_multiple_viewports_and_mesh_viewer_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) =
       setup_test_render(enable_maintenance1);
+    let cleanup_queue = new_test_cleanup_queue();
 
     let params1 = crate::gpu::PresentationEngineParams {
       ty: crate::gpu::PresentationEngineType::Window,
@@ -809,6 +833,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params1,
       &mut rollback,
+      cleanup_queue.clone(),
     )
     .unwrap();
 
@@ -831,6 +856,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params2,
       &mut rollback,
+      cleanup_queue.clone(),
     )
     .unwrap();
 
@@ -853,6 +879,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params3,
       &mut rollback,
+      cleanup_queue.clone(),
     )
     .unwrap();
 
@@ -997,6 +1024,7 @@ mod tests {
     vp1.cleanup(&device);
     vp2.cleanup(&device);
     mv.cleanup(&device);
+    drain_test_cleanup_queue(&cleanup_queue);
 
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
@@ -1017,6 +1045,7 @@ mod tests {
   fn test_rapid_resize_stress_internal(enable_maintenance1: bool) {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) =
       setup_test_render(enable_maintenance1);
+    let cleanup_queue = new_test_cleanup_queue();
 
     let mut params = crate::gpu::PresentationEngineParams {
       ty: crate::gpu::PresentationEngineType::Window,
@@ -1040,6 +1069,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params,
       &mut rollback,
+      cleanup_queue.clone(),
     )
     .unwrap();
 
@@ -1087,6 +1117,7 @@ mod tests {
     unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
     engine.cleanup(&device);
+    drain_test_cleanup_queue(&cleanup_queue);
 
     unsafe {
       device.destroy_command_pool(cmd_pool, None);

@@ -46,8 +46,15 @@ public class ViewportBaseOperator : IActionOperator
         _vm.ToggleEarthObserverModeCommand.Execute(null);
         return true;
       case "viewport.reset_camera":
-        _vm.RuntimeService.ResetCamera(_vm.SceneId, _vm.CameraId);
+      case "viewport.snap_to_selected":
+      {
+        var selected = _vm.SelectedEntity;
+        if (selected != null)
+          _vm.RuntimeService.SnapToEntity(_vm.SceneId, _vm.CameraId, selected.Id);
+        else
+          _vm.SnapCameraToSun();
         return true;
+      }
       case "viewport.move_cursor_up":
         _vm.RuntimeService.MoveCursor(_vm.SceneId, 0.0f, -0.5f, 0.0f);
         return true;
@@ -77,13 +84,6 @@ public class ViewportBaseOperator : IActionOperator
       case "viewport.start_zoom_drag":
         _vm.OperatorStack.Push(new ZoomDragOperator(_vm));
         return true;
-      case "viewport.snap_to_selected":
-      {
-        var selected = _vm.SelectedEntity;
-        if (selected != null)
-          _vm.RuntimeService.SnapToEntity(_vm.SceneId, _vm.CameraId, selected.Id);
-        return true;
-      }
       case "viewport.open_radial_menu":
         if (!_vm.IsRadialMenuOpen)
           _vm.OpenRadialMenuAt(_vm.RadialMenuX, _vm.RadialMenuY);

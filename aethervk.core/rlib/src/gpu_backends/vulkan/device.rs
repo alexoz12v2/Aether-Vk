@@ -682,6 +682,12 @@ pub struct DeviceResources {
     Option<alloc::sync::Arc<DebugTrackedRwLock<resources::UiRenderResourceArchetypeArena>>>,
   background_render_archetype_arena:
     Option<alloc::sync::Arc<DebugTrackedRwLock<resources::BackgroundRenderResourceArchetypeArena>>>,
+
+  /// Queue of window-system cleanup tasks that must execute on the main thread.
+  /// On macOS, MoltenVK requires `CAMetalLayer` teardown on the main UI thread.
+  /// Populated by `WindowedPresentationState::cleanup()` and drained by
+  /// `process_main_thread_cleanup_queue()`.
+  pub(crate) main_thread_cleanup_queue: crate::gpu::MainThreadCleanupQueue,
 }
 
 // TODO: each member should derive it so that this can derive it too
@@ -1052,6 +1058,7 @@ impl DeviceResources {
       trajectory_render_archetype_arena: None,
       ui_render_archetype_arena: None,
       background_render_archetype_arena: None,
+      main_thread_cleanup_queue: alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new())),
     })
   }
 
@@ -1691,6 +1698,25 @@ impl Drop for Device {
       }
 
       DebugTrackedRwLock::write(&self.res).cleanup(&self.device);
+
+      // Drain the main-thread cleanup queue. DeviceResources::cleanup() above
+      // pushes swapchain/surface destruction tasks to the queue. We MUST execute
+      // them before destroy_device(), or VkImage/VkSwapchain objects will leak.
+      //
+      // In production, flush_main_thread_cleanup_queue() is called from the main
+      // thread (via GenericSimApp::on_close_requested or Avalonia's UI thread)
+      // BEFORE Device::Drop runs. But in unit tests there is no event loop, so
+      // we drain here as a safety net.
+      {
+        let res = DebugTrackedRwLock::read(&self.res);
+        let mut queue = res.main_thread_cleanup_queue.lock();
+        let tasks: alloc::vec::Vec<_> = queue.drain(..).collect();
+        drop(queue);
+        drop(res);
+        for task in tasks {
+          task();
+        }
+      }
 
       aethervk_oshal_rlib::log!("Device::drop cleanup complete. Destroying device...");
       // in the end, destroy the device
@@ -2457,6 +2483,11 @@ impl RenderDevice for Device {
         let physical_device_handle =
           unsafe { NonZeroHandle::new_unchecked(self.physical_device()) };
 
+        let main_thread_queue = {
+          let res = DebugTrackedRwLock::read(&self.res);
+          res.main_thread_cleanup_queue.clone()
+        };
+
         let pe = swapchain::PresentationState::new(
           &entry,
           &self.instance.instance,
@@ -2465,6 +2496,7 @@ impl RenderDevice for Device {
           self.device.swapchain_maintenance1.clone(),
           params,
           rollback,
+          main_thread_queue,
         )?;
 
         Ok((handle, pe))
@@ -2525,6 +2557,51 @@ impl RenderDevice for Device {
 
     // Discard using the next submit value to ensure all currently queued frames are completed
     res_write.discard_pool.discard_type_erased(presentation_engine, timeline);
+
+    Ok(())
+  }
+
+  fn process_main_thread_cleanup_queue(&self) -> GpuResult<()> {
+    let res = DebugTrackedRwLock::read(&self.res);
+    let mut queue = res.main_thread_cleanup_queue.lock();
+    let tasks: alloc::vec::Vec<_> = queue.drain(..).collect();
+    drop(queue); // release lock before executing tasks
+    drop(res);
+    for task in tasks {
+      task();
+    }
+    Ok(())
+  }
+
+  #[named]
+  fn flush_main_thread_cleanup_queue(&self) -> GpuResult<()> {
+    // 1. Drain any pending tasks from runtime (resize discards)
+    self.process_main_thread_cleanup_queue()?;
+
+    // 2. Extract and destroy all WINDOWED presentation engines directly.
+    //    We're on the main thread, so CAMetalLayer teardown is safe.
+    let res = DebugTrackedRwLock::read(&self.res);
+    let keys: alloc::vec::Vec<_> = res
+      .live_presentation_engines
+      .iter()
+      .filter(|kv| matches!(kv.value(), swapchain::PresentationState::Windowed(_)))
+      .map(|kv| *kv.key())
+      .collect();
+
+    for k in keys {
+      if let Some((_, mut pe)) = res.live_presentation_engines.remove(&k) {
+        aethervk_oshal_rlib::log!(
+          "flush_main_thread_cleanup_queue: cleaning up windowed PE {:?} on main thread",
+          k
+        );
+        // This calls WindowedPresentationState::cleanup() which pushes to the queue
+        pe.cleanup(&self.device);
+      }
+    }
+    drop(res);
+
+    // 3. Drain any tasks that were just pushed by step 2
+    self.process_main_thread_cleanup_queue()?;
 
     Ok(())
   }
@@ -3560,7 +3637,9 @@ impl RenderDevice for Device {
 
       match action {
         Action::Return => return self.get_physical_mesh2_resources(asset_hash, handle),
-        Action::Yield => aethervk_oshal_rlib::os::native::this_thread::yield_now(),
+        Action::Yield => aethervk_oshal_rlib::os::native::this_thread::sleep_for(
+          core::time::Duration::from_millis(1),
+        ),
         Action::BreakWinner => {
           is_winner = true;
           break;
@@ -6694,7 +6773,9 @@ impl RenderDevice for Device {
           is_winner = true;
           break;
         }
-        Action::Yield => aethervk_oshal_rlib::os::native::this_thread::yield_now(),
+        Action::Yield => aethervk_oshal_rlib::os::native::this_thread::sleep_for(
+          core::time::Duration::from_millis(1),
+        ),
       }
     }
 

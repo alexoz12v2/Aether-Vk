@@ -165,17 +165,11 @@
                                                                   Step="1.0"
                                                                   IsVisible="{Binding !IsOrthographic}"/>
 
-                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Left:" VerticalAlignment="Center" Margin="0,0,8,0" IsVisible="{Binding IsOrthographic}"/>
-                                        <controls:UnboundedSlider Grid.Row="1" Grid.Column="1" Value="{Binding OrthoLeft}" IsVisible="{Binding IsOrthographic}"/>
-
-                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Right:" VerticalAlignment="Center" Margin="0,0,8,0" IsVisible="{Binding IsOrthographic}"/>
-                                        <controls:UnboundedSlider Grid.Row="2" Grid.Column="1" Value="{Binding OrthoRight}" IsVisible="{Binding IsOrthographic}"/>
-
-                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Bottom:" VerticalAlignment="Center" Margin="0,0,8,0" IsVisible="{Binding IsOrthographic}"/>
-                                        <controls:UnboundedSlider Grid.Row="3" Grid.Column="1" Value="{Binding OrthoBottom}" IsVisible="{Binding IsOrthographic}"/>
-
-                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Top:" VerticalAlignment="Center" Margin="0,0,8,0" IsVisible="{Binding IsOrthographic}"/>
-                                        <controls:UnboundedSlider Grid.Row="4" Grid.Column="1" Value="{Binding OrthoTop}" IsVisible="{Binding IsOrthographic}"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Scale Factor:" VerticalAlignment="Center" Margin="0,0,8,0" IsVisible="{Binding IsOrthographic}"/>
+                                        <controls:UnboundedSlider Grid.Row="1" Grid.Column="1" Value="{Binding OrthoScaleFactor}"
+                                                                  HasBounds="True" MinBound="0.000001" MaxBound="100.0"
+                                                                  IsLogarithmic="True" Step="10"
+                                                                  IsVisible="{Binding IsOrthographic}"/>
                                     </Grid>
                                 </Expander>
 
@@ -319,7 +313,7 @@
 
                                 <ListBox ItemsSource="{Binding Jets}" Classes="list-tray" MaxHeight="400" Background="Transparent" BorderThickness="0">
                                     <ListBox.ItemTemplate>
-                                        <DataTemplate DataType="models:JetMarker">
+                                        <DataTemplate DataType="models:EmissionCircleItem">
                                             <Border Classes="list-tray-item dense" Background="{DynamicResource Bg.Surface}" CornerRadius="4" Margin="0,0,0,4" Padding="12,8">
                                                 <StackPanel>
                                                     <Grid ColumnDefinitions="Auto, *, Auto">
@@ -329,21 +323,21 @@
                                                             </Border.Background>
                                                         </Border>
                                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                                            <TextBlock Text="{Binding Name}" FontWeight="Bold" />
+                                                            <TextBlock Text="Emission Circle" FontWeight="Bold" />
                                                         </StackPanel>
                                                         <Button Grid.Column="2" Content="Edit Color" Classes="accent" Padding="4,2" FontSize="12" ToolTip.Tip="Change Color"/>
                                                     </Grid>
 
                                                     <Grid ColumnDefinitions="Auto,*,Auto,*" Margin="0,8,0,0">
                                                         <TextBlock Grid.Column="0" Text="Lat (°):" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="1" Value="{Binding Latitude}" Minimum="-90" Maximum="90" FormatString="0.0" Margin="0,0,10,0"/>
+                                                        <NumericUpDown Grid.Column="1" Value="{Binding LatitudeDeg}" Minimum="-90" Maximum="90" FormatString="0.0" Margin="0,0,10,0"/>
                                                         <TextBlock Grid.Column="2" Text="Lon (°):" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="3" Value="{Binding Longitude}" Minimum="0" Maximum="360" FormatString="0.0"/>
+                                                        <NumericUpDown Grid.Column="3" Value="{Binding LongitudeDeg}" Minimum="0" Maximum="360" FormatString="0.0"/>
                                                     </Grid>
 
                                                     <Grid ColumnDefinitions="Auto,*,Auto,*" Margin="0,4,0,0">
                                                         <TextBlock Grid.Column="0" Text="Radius (m):" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <NumericUpDown Grid.Column="1" Value="{Binding Radius}" Minimum="0" FormatString="0.0" Margin="0,0,10,0"/>
+                                                        <NumericUpDown Grid.Column="1" Value="{Binding CircleRadius}" Minimum="0" FormatString="0.0" Margin="0,0,10,0"/>
                                                         <TextBlock Grid.Column="2" Text="Mass (g):" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                                         <NumericUpDown Grid.Column="3" Value="{Binding MassGrams}" Minimum="0" FormatString="0.000"/>
                                                     </Grid>

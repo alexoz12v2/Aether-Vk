@@ -1,2 +1,9 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = "test(vulkan) | test(test_composite_render) | test(test_lca_render) | test(test_simulation_context_text_rendering) | test(test_large_physics_render_integration) | test(test_visual_physics_render_sync)"
+test-group = "vulkan"
+
+[test-groups]
+vulkan = { max-threads = 1 }

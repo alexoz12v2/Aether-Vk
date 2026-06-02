@@ -637,7 +637,7 @@ impl SceneConversionExt for crate::scene::Scene {
 
     // We get the base scale of the camera's frame
     let frame_scale = self.ancestor_frame_scale(camera_entity);
-    camera_data = CameraRenderData::new(&cam_transform, &cam_comp, frame_scale);
+    camera_data = CameraRenderData::new(&cam_transform, &cam_comp, frame_scale, window_extent);
 
     let hidden_roots = if let Some(p) = pool {
       self.query1_res_par::<HiddenComponent, _, _>(p, |id, _| Some(id))
