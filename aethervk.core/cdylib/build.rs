@@ -14,13 +14,20 @@ fn main() {
     println!("cargo:rustc-cfg=vk_debug")
   }
 
-  let sdk_path =
-    PathBuf::from(env::var("VULKAN_SDK").expect("VULKAN_SDK environment variable not defined"));
-  if !sdk_path.exists() {
-    panic!("VULKAN_SDK path doesn't exist: '{}'", sdk_path.display());
+  if let Ok(sdk_env) = env::var("VULKAN_SDK") {
+    let sdk_path = PathBuf::from(sdk_env);
+    if !sdk_path.exists() {
+      panic!("VULKAN_SDK path doesn't exist: '{}'", sdk_path.display());
+    }
+    process_vulkan_sdk(&sdk_path);
+  } else {
+    println!("cargo:warning=VULKAN_SDK environment variable not defined.");
+    if !cfg!(target_os = "linux") {
+      panic!("VULKAN_SDK environment variable is required on Windows and macOS!");
+    } else {
+      println!("cargo:warning=Proceeding without VULKAN_SDK on Linux (assuming native system packages like libvulkan-dev are used).");
+    }
   }
-
-  process_vulkan_sdk(&sdk_path);
 
   let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
   if let Ok(bindings) = cbindgen::Builder::new()
