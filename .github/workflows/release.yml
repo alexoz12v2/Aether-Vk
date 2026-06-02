@@ -80,6 +80,8 @@ jobs:
       if: runner.os == 'Windows'
       run: |
         pwsh ./scripts/package_windows.ps1 -Arch ${{ matrix.dotnet_arch }}
+        $msixArch = if ('${{ matrix.dotnet_arch }}' -eq 'win-x64') { 'x64' } else { 'arm64' }
+        pwsh ./scripts/package_windows_msix.ps1 -Arch $msixArch
 
     - name: Package macOS
       if: runner.os == 'macOS'
@@ -92,6 +94,7 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         bash ./scripts/package_linux.sh ${{ matrix.dotnet_arch }}
+        bash ./scripts/package_linux_deb.sh ${{ matrix.dotnet_arch }}
       env:
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
@@ -103,3 +106,5 @@ jobs:
         files: |
           bin/publish/AetherVk_${{ matrix.dotnet_arch }}.zip
           bin/publish/AetherVk_${{ matrix.dotnet_arch }}.tar.gz
+          bin/publish/*.msix
+          bin/publish/*.deb

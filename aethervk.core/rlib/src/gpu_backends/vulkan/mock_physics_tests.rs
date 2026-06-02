@@ -65,6 +65,7 @@ fn setup_test_scene() -> Arc<Scene> {
       sphere_radius: 1.0,
       grid_color: [0.0; 3],
       grid_density: 0.0,
+      rotational_model: None,
     },
   );
 

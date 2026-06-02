@@ -673,6 +673,17 @@ public static class NativeInterop
     float radiusKm,
     float massKg,
     uint physicsType,
+    // IAU rotational model
+    double poleRaDeg,
+    double poleDecDeg,
+    double primeMeridianDeg,
+    double poleRaRateDeg,
+    double poleDecRateDeg,
+    double rotationRateDeg,
+    // Angular velocity (rad/s)
+    float angularVelX,
+    float angularVelY,
+    float angularVelZ,
     out FfiSpawnCometResult outResult
   );
 
@@ -833,6 +844,38 @@ public static class NativeInterop
     ulong sceneId,
     out double startTai,
     out double endTai
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_setEpochRange(
+    IntPtr ctx,
+    ulong sceneId,
+    double startTai,
+    double endTai
+  );
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_checkAlmanacCoverage(
+    IntPtr ctx,
+    int cometSpkId,
+    double startTai,
+    double endTai
+  );
+
+  /// <summary>
+  /// Delegate for the almanac invalidation callback.
+  /// Called by the engine when SPK coverage is missing for a given NAIF ID and epoch range.
+  /// The callback should download the SPK file and return the file path, or IntPtr.Zero on failure.
+  /// </summary>
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+  public delegate IntPtr AlmanacInvalidationCallback(int spkId, IntPtr startEpochStr, IntPtr endEpochStr);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_setAlmanacInvalidationCallback(
+    IntPtr ctx,
+    AlmanacInvalidationCallback? callback
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -1223,6 +1266,7 @@ public static class NativeInterop
     public float MeanVelocity;
     public float VelocityDirStdDevRad;
     public ulong ChildEntity;
+    public float Beta;
   }
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

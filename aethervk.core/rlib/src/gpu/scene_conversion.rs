@@ -826,6 +826,7 @@ impl SceneConversionExt for crate::scene::Scene {
                 sphere_radius: 1.0,
                 grid_color: [0.0, 0.0, 0.0],
                 grid_density: 0.0,
+                rotational_model: None,
               };
               let m = PhysicalMeshSceneData::new(id, pseudo_mesh, t, outline, true, 0);
               Some(m)
@@ -862,6 +863,7 @@ impl SceneConversionExt for crate::scene::Scene {
               sphere_radius: 1.0,
               grid_color: [0.0, 0.0, 0.0],
               grid_density: 0.0,
+              rotational_model: None,
             };
             let m = PhysicalMeshSceneData::new(id, pseudo_mesh, t, outline, true, 0);
             extracted_meshes.push(m);

@@ -95,6 +95,7 @@ impl SimulationDelegate for ForceTestDelegate {
           sphere_radius: 1.0,
           grid_color: [0.0, 0.0, 0.0],
           grid_density: 1.0,
+          rotational_model: None,
         },
       )
       .unwrap();

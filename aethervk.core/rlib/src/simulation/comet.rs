@@ -475,6 +475,47 @@ fn calculate_mass_properties(
   unit_mass_properties.with_density(density)
 }
 
+/// Compute mass properties for a uniform sphere of given mass (kg) and radius (km).
+/// Returns MassProperties with I_xx = I_yy = I_zz = (2/5) * m * r².
+/// This is used when the mesh is a procedural sphere or when the user provides
+/// explicit mass and radius for the nucleus (instead of computing from the polyhedron).
+pub fn spherical_mass_properties(mass_kg: f64, radius_km: f64) -> MassProperties {
+  let i_diag = (2.0 / 5.0) * mass_kg * radius_km * radius_km;
+  // Build MassProperties using a dummy tetrahedron then override inertia
+  // (MassProperties requires a non-zero volume manifold to construct)
+  let dummy_r = radius_km;
+  // Tetrahedron with vertices at roughly the right radius
+  let s = dummy_r * (2.0_f64 / 3.0).sqrt();
+  let p0 = [s, s, s];
+  let p1 = [-s, -s, s];
+  let p2 = [-s, s, -s];
+  let p3 = [s, -s, -s];
+  let c: TriangleContrib = [
+    TriangleContrib::new(p0, p1, p2),
+    TriangleContrib::new(p0, p1, p3),
+    TriangleContrib::new(p0, p2, p3),
+    TriangleContrib::new(p1, p2, p3),
+  ]
+  .into_iter()
+  .sum();
+  let mut mp = MassProperties::from_contrib_sum(c).expect("Spherical tetrahedron must produce valid mass properties");
+  let volume = mp.volume();
+  let density = if volume.abs() > 1e-30 {
+    mass_kg / volume
+  } else {
+    mass_kg / ((4.0 / 3.0) * core::f64::consts::PI * radius_km.powi(3))
+  };
+  mp = mp.with_density(density);
+  // Override inertia to exact spherical values
+  mp.inertia.xx = i_diag;
+  mp.inertia.yy = i_diag;
+  mp.inertia.zz = i_diag;
+  mp.inertia.xy = 0.0;
+  mp.inertia.xz = 0.0;
+  mp.inertia.yz = 0.0;
+  mp
+}
+
 use crate::types::EngineError;
 use alloc::collections::BTreeMap;
 // Assuming Vec, PathBuf, etc. are already in scope

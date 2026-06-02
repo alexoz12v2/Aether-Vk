@@ -1526,7 +1526,16 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     float rotZ,
     float radiusKm,
     float massKg,
-    uint physicsType = 0
+    uint physicsType = 0,
+    double poleRaDeg = 0.0,
+    double poleDecDeg = 90.0,
+    double primeMeridianDeg = 0.0,
+    double poleRaRateDeg = 0.0,
+    double poleDecRateDeg = 0.0,
+    double rotationRateDeg = 0.0,
+    float angularVelX = 0f,
+    float angularVelY = 0f,
+    float angularVelZ = 0f
   )
   {
     var result = SpawnComet(
@@ -1542,7 +1551,16 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       rotZ,
       radiusKm,
       massKg,
-      physicsType
+      physicsType,
+      poleRaDeg,
+      poleDecDeg,
+      primeMeridianDeg,
+      poleRaRateDeg,
+      poleDecRateDeg,
+      rotationRateDeg,
+      angularVelX,
+      angularVelY,
+      angularVelZ
     );
     return result.CometEntityId;
   }
@@ -1560,7 +1578,16 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     float rotZ,
     float radiusKm,
     float massKg,
-    uint physicsType
+    uint physicsType,
+    double poleRaDeg,
+    double poleDecDeg,
+    double primeMeridianDeg,
+    double poleRaRateDeg,
+    double poleDecRateDeg,
+    double rotationRateDeg,
+    float angularVelX,
+    float angularVelY,
+    float angularVelZ
   )
   {
     if (_simulationContext == IntPtr.Zero)
@@ -1582,6 +1609,15 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         radiusKm,
         massKg,
         physicsType,
+        poleRaDeg,
+        poleDecDeg,
+        primeMeridianDeg,
+        poleRaRateDeg,
+        poleDecRateDeg,
+        rotationRateDeg,
+        angularVelX,
+        angularVelY,
+        angularVelZ,
         out var result
       )
     )
@@ -2483,6 +2519,57 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     }
 
     return false;
+  }
+
+  public void SetEpochRange(ulong sceneId, DateTimeOffset start, DateTimeOffset end)
+  {
+    if (_simulationContext != IntPtr.Zero)
+    {
+      // Convert DateTimeOffset to TAI seconds since J2000
+      // J2000 epoch = 2000-01-01T12:00:00Z = 946728000 Unix seconds
+      const double J2000UnixSeconds = 946728000.0;
+      const double TaiUtcOffset = 32.0; // TAI-UTC leap seconds circa 2024 (approximate)
+      double startTai = (start.ToUnixTimeMilliseconds() / 1000.0 - J2000UnixSeconds) + TaiUtcOffset;
+      double endTai = (end.ToUnixTimeMilliseconds() / 1000.0 - J2000UnixSeconds) + TaiUtcOffset;
+      NativeInterop.avkSimulationContext_setEpochRange(_simulationContext, sceneId, startTai, endTai);
+    }
+  }
+
+  /// <summary>
+  /// Checks if the loaded SPK ephemeris data covers the specified epoch interval
+  /// for both Earth (399) and the given comet NAIF ID.
+  /// </summary>
+  public bool CheckAlmanacCoverage(int cometSpkId, DateTimeOffset start, DateTimeOffset end)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return false;
+
+    const double J2000UnixSeconds = 946728000.0;
+    const double TaiUtcOffset = 32.0;
+    double startTai = (start.ToUnixTimeMilliseconds() / 1000.0 - J2000UnixSeconds) + TaiUtcOffset;
+    double endTai = (end.ToUnixTimeMilliseconds() / 1000.0 - J2000UnixSeconds) + TaiUtcOffset;
+
+    return NativeInterop.avkSimulationContext_checkAlmanacCoverage(
+      _simulationContext, cometSpkId, startTai, endTai
+    );
+  }
+
+  // Keep a reference to prevent garbage collection of the callback delegate.
+  private NativeInterop.AlmanacInvalidationCallback? _almanacInvalidationCallback;
+
+  /// <summary>
+  /// Registers a callback that the engine calls when SPK coverage is missing.
+  /// The callback receives (spkId, startEpoch, endEpoch) as C strings and should
+  /// return the file path of the downloaded SPK (or IntPtr.Zero on failure).
+  /// Pass null to unregister.
+  /// </summary>
+  public void SetAlmanacInvalidationCallback(NativeInterop.AlmanacInvalidationCallback? callback)
+  {
+    if (_simulationContext == IntPtr.Zero)
+      return;
+
+    _almanacInvalidationCallback = callback; // prevent GC
+    NativeInterop.avkSimulationContext_setAlmanacInvalidationCallback(_simulationContext, callback);
   }
 
   public async Task<(bool hit, ulong entityId, float px, float py, float pz)> RaycastNdcAsync(

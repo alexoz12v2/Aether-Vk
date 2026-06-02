@@ -11,10 +11,10 @@ use aethervk_oshal_rlib::math::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-/// TODO: Document this item
+/// Drives a kinematic body's position (and optionally rotation) from almanac data.
 pub struct AlmanacPlanet {
   pub naif_id: i32,
-  pub rot_period: f64, // TODO useful?
+  pub rot_period: f64,
   pub mu: f32,
   /// Rotation from Body-Fixed (BF) frame to Principal Axis (PA) frame.
   pub bf_to_pa: Quat,
@@ -25,7 +25,7 @@ pub struct AlmanacPlanet {
 impl Component for AlmanacPlanet {}
 
 impl AlmanacPlanet {
-  /// TODO: Document this item
+  /// Creates an AlmanacPlanet (standard almanac-driven rotation).
   pub fn new(naif_id: i32, rot_period: f64, mu: f32) -> Self {
     Self {
       naif_id,
@@ -36,7 +36,13 @@ impl AlmanacPlanet {
     }
   }
 
-  /// TODO: Document this item
+  /// Steps a kinematic body driven by SPK ephemeris.
+  ///
+  /// Position and velocity are always read from the almanac SPK data.
+  /// Rotation is sourced based on `kinematic.use_model_rotation`:
+  ///  - **false** (default): rotation comes from almanac BPC data (planets with BPC files).
+  ///  - **true**: rotation is computed from the `BodyRotationalModel` on the
+  ///    `PhysicalMeshComponent` (comets, whose SPK files lack rotation data).
   pub fn step(
     &self,
     transform: &mut TransformComponent,
@@ -44,34 +50,75 @@ impl AlmanacPlanet {
     epoch: anise::time::Epoch,
     _step_days: f64,
     almanac: &AlmanacPackedData,
+    rotational_model: Option<&crate::scene::BodyRotationalModel>,
   ) -> EngineResult<()> {
     let kinematic_state = almanac.get_ephem_full(
       self.naif_id,
-      anise::constants::frames::SUN_J2000, // crate::simulation::almanac::SUN_ECLIPJ2000, // TODO test if absent
+      anise::constants::frames::SUN_J2000,
       epoch,
       true,
       false,
     )?;
     transform.position = kinematic_state.position;
-    if let Some(rot_bf_world) = kinematic_state.rotation {
-      if self.surface_offset_bf != Vec3f32::zero() {
-        let offset_world = rot_bf_world.rotate_vector(self.surface_offset_bf);
-        transform.position += offset_world;
-      } else {
-        // transform.rotation is PA -> World
-        // PA -> BF -> World
-        // bf_to_pa is BF -> PA, so PA -> BF is bf_to_pa.inverse()
-        transform.rotation = (rot_bf_world * self.bf_to_pa.inverse()).normalize();
+
+    // Determine whether to use the BodyRotationalModel for rotation
+    let use_model = kinematic.as_ref().map_or(false, |k| k.use_model_rotation);
+
+    // Model-derived angular velocity (computed if use_model + model present)
+    let mut model_angular_velocity = None;
+
+    if use_model {
+      // Compute rotation from IAU-style BodyRotationalModel
+      if let Some(model) = rotational_model {
+        let jd = epoch.to_jde_utc_days();
+        let orientation_quat = model.orientation_at(jd);
+        // orientation_at returns body-fixed → inertial (world).
+        // Transform to PA → World: rot_bf_world * bf_to_pa.inverse()
+        transform.rotation = (orientation_quat * self.bf_to_pa.inverse()).normalize();
+
+        // Derive angular velocity from rotation rate along the pole axis
+        let t_centuries = (jd - model.reference_epoch_jd) / 36525.0;
+        let ra = (model.pole_ra + model.pole_ra_rate * t_centuries).to_radians();
+        let dec = (model.pole_dec + model.pole_dec_rate * t_centuries).to_radians();
+
+        // Pole unit vector in J2000 inertial frame
+        let pole_inertial = Vec3f32::from_components(
+          (dec.cos() * ra.cos()) as f32,
+          (dec.cos() * ra.sin()) as f32,
+          dec.sin() as f32,
+        );
+
+        // rotation_rate is in deg/day, convert to rad/s
+        let omega_rad_s = (model.rotation_rate.to_radians() / 86400.0) as f32;
+        let ang_vel_inertial = pole_inertial * omega_rad_s;
+
+        // Transform to PA frame for physics
+        model_angular_velocity = Some(self.bf_to_pa.rotate_vector(ang_vel_inertial));
+      }
+    } else {
+      // Standard path: rotation from almanac BPC data
+      if let Some(rot_bf_world) = kinematic_state.rotation {
+        if self.surface_offset_bf != Vec3f32::zero() {
+          let offset_world = rot_bf_world.rotate_vector(self.surface_offset_bf);
+          transform.position += offset_world;
+        } else {
+          transform.rotation = (rot_bf_world * self.bf_to_pa.inverse()).normalize();
+        }
       }
     }
 
     if let Some(k) = kinematic {
       k.velocity = kinematic_state.velocity;
-      if let Some(ang_vel_bf) = kinematic_state.angular_velocity {
-        // transform angular velocity from BF to PA (simulation space)
-        k.angular_velocity = self.bf_to_pa.rotate_vector(ang_vel_bf);
-      } else {
-        k.angular_velocity = Vec3f32::zero();
+      if let Some(model_ang_vel) = model_angular_velocity {
+        // Model-driven angular velocity
+        k.angular_velocity = model_ang_vel;
+      } else if !use_model {
+        // Almanac-driven angular velocity
+        if let Some(ang_vel_bf) = kinematic_state.angular_velocity {
+          k.angular_velocity = self.bf_to_pa.rotate_vector(ang_vel_bf);
+        } else {
+          k.angular_velocity = Vec3f32::zero();
+        }
       }
     }
 

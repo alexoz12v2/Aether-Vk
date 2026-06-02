@@ -7,79 +7,101 @@ public class SpawnCometResult
   public ImportedModelItem Model { get; }
   public string EntityName { get; }
   public string PhysicsType { get; }
-  public PlanetOrbitData? OrbitData { get; }
 
-  // ── Transform (Static only; zero for Kinematic/Dynamic)
+  // ── Transform (Static: user position; Kinematic: zeroed, driven by almanac)
   public float PosX { get; }
   public float PosY { get; }
   public float PosZ { get; }
 
-  public float ScaleX { get; }
-  public float ScaleY { get; }
-  public float ScaleZ { get; }
-
+  // Orientation quaternion (all modes — user sets initial body orientation)
   public float RotW { get; }
   public float RotX { get; }
   public float RotY { get; }
   public float RotZ { get; }
 
-  /// <summary>Nucleus radius in km, from the Horizon JPL physical properties block.</summary>
+  /// <summary>Nucleus radius in km.</summary>
   public float CometRadiusKm { get; }
 
-  // ── Mass (kg)
-  /// <summary>
-  /// Mass in kg to pass to SpawnComet.
-  /// For Static/Kinematic this is cosmetic; for Dynamic it drives the integrator.
-  /// Priority: JPL GM-derived → user slider → density estimate.
-  /// </summary>
+  /// <summary>Mass in kg.</summary>
   public float MassKg { get; }
 
+  // ── Angular velocity (rad/s) — initial spin vector
+  public float AngularVelX { get; }
+  public float AngularVelY { get; }
+  public float AngularVelZ { get; }
+
   // ── SPK / Kinematic linkage
-  /// <summary>SPK record ID string selected in Step 3 (e.g. "90000030").</summary>
+  /// <summary>SPK record ID string (e.g. "90000030").</summary>
   public string? SpkRecordId { get; }
 
   /// <summary>SPK record ID parsed to int (NAIF id). 0 when not applicable.</summary>
   public int SpkNaifId { get; }
 
-  /// <summary>Primary designation of the chosen comet (e.g. "1P"). Needed for SPK download.</summary>
+  /// <summary>Primary designation of the chosen comet (e.g. "1P").</summary>
   public string? CometDesignation { get; }
+
+  // ── IAU Rotational Model
+  public double PoleRaDeg { get; }
+  public double PoleDecDeg { get; }
+  public double PrimeMeridianDeg { get; }
+  public double PoleRaRateDeg { get; }
+  public double PoleDecRateDeg { get; }
+  public double RotationRateDeg { get; }
+
+  // ── Timeline (validated epoch interval to commit on spawn)
+  public System.DateTimeOffset WizardStartEpoch { get; }
+  public System.DateTimeOffset WizardEndEpoch { get; }
 
   public SpawnCometResult(
     ImportedModelItem model,
     string name,
     string physicsType,
-    PlanetOrbitData? orbitData,
     float px,
     float py,
     float pz,
-    float sx,
-    float sy,
-    float sz,
     float pitchDeg,
     float yawDeg,
     float rollDeg,
     float cometRadiusKm,
     float massKg,
+    float angularVelX,
+    float angularVelY,
+    float angularVelZ,
     string? spkRecordId,
-    string? cometDesignation
+    string? cometDesignation,
+    double poleRaDeg,
+    double poleDecDeg,
+    double primeMeridianDeg,
+    double poleRaRateDeg,
+    double poleDecRateDeg,
+    double rotationRateDeg,
+    System.DateTimeOffset wizardStartEpoch,
+    System.DateTimeOffset wizardEndEpoch
   )
   {
     Model = model;
     EntityName = name;
     PhysicsType = physicsType;
-    OrbitData = orbitData;
     PosX = px;
     PosY = py;
     PosZ = pz;
-    ScaleX = sx;
-    ScaleY = sy;
-    ScaleZ = sz;
     CometRadiusKm = cometRadiusKm;
     MassKg = massKg;
+    AngularVelX = angularVelX;
+    AngularVelY = angularVelY;
+    AngularVelZ = angularVelZ;
     SpkRecordId = spkRecordId;
     CometDesignation = cometDesignation;
+    PoleRaDeg = poleRaDeg;
+    PoleDecDeg = poleDecDeg;
+    PrimeMeridianDeg = primeMeridianDeg;
+    PoleRaRateDeg = poleRaRateDeg;
+    PoleDecRateDeg = poleDecRateDeg;
+    RotationRateDeg = rotationRateDeg;
+    WizardStartEpoch = wizardStartEpoch;
+    WizardEndEpoch = wizardEndEpoch;
 
-    // Parse NAIF int id from the record string (e.g. "90000030" → 90000030)
+    // Parse NAIF int id from the record string
     SpkNaifId = int.TryParse(spkRecordId, out int id) ? id : 0;
 
     // Convert Euler (degrees) → Quaternion (ZYX extrinsic)

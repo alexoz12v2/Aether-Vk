@@ -180,14 +180,26 @@ namespace AetherVk.Services
       var result = await dialog.ShowDialog<bool>(mainWindow);
       if (result && dialog.DataContext is SpawnMeshViewModel vm)
       {
-        return await _runtimeService.SpawnModelInstanceAsync(
+        // In kinematic mode, position is ignored (driven by almanac)
+        float px = vm.IsKinematic ? 0f : vm.PosX;
+        float py = vm.IsKinematic ? 0f : vm.PosY;
+        float pz = vm.IsKinematic ? 0f : vm.PosZ;
+
+        ulong entityId = await _runtimeService.SpawnModelInstanceAsync(
           1,
           ulong.Parse(modelId),
           vm.EntityName,
-          vm.PosX,
-          vm.PosY,
-          vm.PosZ
+          px,
+          py,
+          pz
         );
+
+        if (entityId != 0 && vm.IsKinematic)
+        {
+          _runtimeService.AddAlmanacPlanet(1, entityId, vm.SpkId);
+        }
+
+        return entityId;
       }
 
       return 0;
@@ -218,6 +230,7 @@ namespace AetherVk.Services
         DataContext = new SpawnCometViewModel(
           models,
           _horizonService,
+          _runtimeService,
           _timelineService,
           _breadcrumbService,
           preselectedModelId
@@ -234,49 +247,11 @@ namespace AetherVk.Services
         _ => 0, // Static
       };
 
-      // ── Determine spawn position ─────────────────────────────────────────────
+      // ── Spawn position ────────────────────────────────────────────────────────
+      // Static: user-specified transform. Kinematic: zeroed (driven by almanac).
       float spawnPx = result.PosX,
         spawnPy = result.PosY,
         spawnPz = result.PosZ;
-      float spawnVx = 0f,
-        spawnVy = 0f,
-        spawnVz = 0f;
-
-      if (result.PhysicsType == "Dynamic" && result.OrbitData != null)
-      {
-        // Derive initial Cartesian state from EPA osculating elements.
-        bool ok = NativeRuntimeService.KeplerToCartesian(
-          result.OrbitData.SemiMajorAxisAu,
-          result.OrbitData.Eccentricity,
-          result.OrbitData.Inclination,
-          result.OrbitData.AscendingNodeLongitude,
-          result.OrbitData.ArgumentOfPerifocus,
-          result.OrbitData.MeanAnomaly,
-          out double kPx,
-          out double kPy,
-          out double kPz,
-          out double kVx,
-          out double kVy,
-          out double kVz
-        );
-        if (ok)
-        {
-          spawnPx = (float)kPx;
-          spawnPy = (float)kPy;
-          spawnPz = (float)kPz;
-          spawnVx = (float)kVx;
-          spawnVy = (float)kVy;
-          spawnVz = (float)kVz;
-          _consoleService.Log(
-            $"[Spawn] Dynamic initial pos=({spawnPx:F4},{spawnPy:F4},{spawnPz:F4}) AU, "
-              + $"vel=({spawnVx:F4},{spawnVy:F4},{spawnVz:F4}) km/s"
-          );
-        }
-        else
-        {
-          _consoleService.Log("[Spawn] KeplerToCartesian failed (e>=1). Using zero position.");
-        }
-      }
 
       // ── SpawnComet ───────────────────────────────────────────────────────────
       var (_, id) = _runtimeService.SpawnComet(
@@ -292,7 +267,16 @@ namespace AetherVk.Services
         rotZ: result.RotZ,
         radiusKm: result.CometRadiusKm,
         massKg: result.MassKg,
-        physicsType: physicsTypeIdx
+        physicsType: physicsTypeIdx,
+        poleRaDeg: result.PoleRaDeg,
+        poleDecDeg: result.PoleDecDeg,
+        primeMeridianDeg: result.PrimeMeridianDeg,
+        poleRaRateDeg: result.PoleRaRateDeg,
+        poleDecRateDeg: result.PoleDecRateDeg,
+        rotationRateDeg: result.RotationRateDeg,
+        angularVelX: result.AngularVelX,
+        angularVelY: result.AngularVelY,
+        angularVelZ: result.AngularVelZ
       );
       ulong cometId = id;
 
@@ -311,98 +295,25 @@ namespace AetherVk.Services
         return 0;
       }
 
-      // ── Physics-mode post-spawn wiring ───────────────────────────────────────
+      // ── Post-spawn wiring ─────────────────────────────────────────────────────
+      // Commit the validated epoch range to the timeline service and native side
+      _timelineService.UpdateEpochLimits(
+        0, 0, // TAI will be recalculated by the runtime
+        result.WizardStartEpoch,
+        result.WizardEndEpoch
+      );
+      _runtimeService.SetEpochRange(1, result.WizardStartEpoch, result.WizardEndEpoch);
+
       if (result.PhysicsType == "Kinematic" && result.SpkNaifId != 0)
       {
-        // 1. Download and load the .bsp ephemeris file from JPL Horizons.
-        _consoleService.Log($"[Spawn] Kinematic: downloading SPK {result.SpkNaifId}…");
-        var spkLoadMsg = _breadcrumbService.ShowLoadingMessage(
-          "Kinematic Setup",
-          "Downloading SPK ephemeris…"
-        );
-        try
-        {
-          var savePath = _horizonService.GetSpkSavePath(result.SpkNaifId);
-          var startStr = DateTime.UtcNow.AddYears(-5).ToString("yyyy-MM-dd");
-          var stopStr = DateTime.UtcNow.AddYears(+5).ToString("yyyy-MM-dd");
+        // SPK was already downloaded and loaded during wizard validation (Step 4).
+        // Just attach AlmanacPlanet component and patch the NAIF id.
+        _runtimeService.AddAlmanacPlanet(1, cometId, result.SpkNaifId);
 
-          var spkPath = await _horizonService.DownloadSpkByIdAsync(
-            result.CometDesignation ?? result.SpkNaifId.ToString(),
-            result.SpkRecordId ?? result.SpkNaifId.ToString(),
-            savePath,
-            startStr,
-            stopStr
-          );
-
-          if (spkPath != null)
-          {
-            // 2. Load .bsp into Rust AlmanacPackedData.
-            NativeInterop.avkSimulationContext_loadAlmanacFile(
-              _runtimeService.SimulationContext,
-              spkPath
-            );
-            _consoleService.Log($"[Spawn] Kinematic: loaded almanac from {spkPath}.");
-
-            // Allow the async almanac-load task a moment to register before patching the id.
-            await Task.Delay(200);
-
-            // 3. Patch the comet entity's AlmanacPlanet.naif_id with the real NAIF id.
-            bool patched = _runtimeService.SetAlmanacPlanetNaifId(1, cometId, result.SpkNaifId);
-            _consoleService.Log(
-              $"[Spawn] Kinematic: SetAlmanacPlanetNaifId({result.SpkNaifId}) → {patched}"
-            );
-          }
-          else
-          {
-            await _breadcrumbService.ShowMessageAsync(
-              "SPK Download Failed",
-              $"Could not download SPK for record {result.SpkRecordId}. Kinematic comet will not move.",
-              default,
-              4
-            );
-          }
-        }
-        catch (Exception ex)
-        {
-          _consoleService.Log($"[Spawn] Kinematic SPK setup error: {ex.Message}");
-        }
-        finally
-        {
-          _breadcrumbService.RemoveMessage(spkLoadMsg);
-        }
-      }
-      else if (result.PhysicsType == "Dynamic")
-      {
-        // Inject initial orbital velocity.
-        bool velSet = _runtimeService.SetKinematicVelocity(1, cometId, spawnVx, spawnVy, spawnVz);
+        bool patched = _runtimeService.SetAlmanacPlanetNaifId(1, cometId, result.SpkNaifId);
         _consoleService.Log(
-          $"[Spawn] Dynamic: SetKinematicVelocity({spawnVx:F4},{spawnVy:F4},{spawnVz:F4} km/s) → {velSet}"
+          $"[Spawn] Kinematic: SetAlmanacPlanetNaifId({result.SpkNaifId}) → {patched}"
         );
-      }
-
-      // ── Orbit trajectory (hidden by default, named orbit_{name}, child of root) ──
-      if (result.OrbitData != null)
-      {
-        var orbitName = $"orbit_{result.EntityName}";
-        ulong orbitId = _runtimeService.SpawnTrajectoryFromElements(
-          1,
-          orbitName,
-          result.OrbitData.SemiMajorAxisAu,
-          result.OrbitData.Eccentricity,
-          result.OrbitData.Inclination,
-          result.OrbitData.AscendingNodeLongitude,
-          result.OrbitData.ArgumentOfPerifocus
-        );
-        if (orbitId > 0)
-        {
-          // Hide immediately via the synced wrapper so C# Entity.IsVisible and
-          // the Rust HiddenComponent are set atomically; the outline eye-icon will
-          // correctly reflect the hidden state and toggle on first click.
-          _runtimeService.SetEntityHidden(1, orbitId, visible: false);
-          _consoleService.Log(
-            $"[Spawn] Orbit trajectory '{orbitName}' spawned (hidden, id={orbitId})."
-          );
-        }
       }
 
       return cometId;

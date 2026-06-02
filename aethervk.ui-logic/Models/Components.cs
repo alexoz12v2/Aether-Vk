@@ -744,14 +744,45 @@ public partial class EmissionCircleItem : ObservableObject
   [ObservableProperty]
   private uint _particlesPerTick = 100;
 
+  /// <summary>Double proxy for UnboundedSlider binding.</summary>
+  public double ParticlesPerTickDouble
+  {
+    get => ParticlesPerTick;
+    set => ParticlesPerTick = (uint)Math.Max(0, Math.Round(value));
+  }
+
+  partial void OnParticlesPerTickChanged(uint value)
+  {
+    OnPropertyChanged(nameof(ParticlesPerTickDouble));
+  }
+
   [ObservableProperty]
   private ulong _tTL = 1000;
+
+  /// <summary>Double proxy for UnboundedSlider binding.</summary>
+  public double TTLDouble
+  {
+    get => TTL;
+    set => TTL = (ulong)Math.Max(1, Math.Round(value));
+  }
+
+  partial void OnTTLChanged(ulong value)
+  {
+    OnPropertyChanged(nameof(TTLDouble));
+  }
 
   [ObservableProperty]
   private float _meanVelocity = 10.0f;
 
   [ObservableProperty]
   private float _velocityDirStdDevDeg = 5.0f;
+
+  /// <summary>
+  /// Radiation pressure coefficient (dimensionless). ~1.0 for a perfect absorber;
+  /// ~2.0 for a perfect reflector. Used by the Barnes-Hut radiation pressure kernel.
+  /// </summary>
+  [ObservableProperty]
+  private float _beta = 1.0f;
 
   public float MeanVelocityKms
   {
@@ -807,7 +838,13 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
   }
 
   [CommunityToolkit.Mvvm.Input.RelayCommand]
-  private void AddCircle() => Circles.Add(new EmissionCircleItem());
+  private void AddCircle()
+  {
+    Circles.Add(new EmissionCircleItem());
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+      new AetherVk.Logic.Messages.JetConfigChangedMessage { SceneId = SceneId }
+    );
+  }
 
   [CommunityToolkit.Mvvm.Input.RelayCommand]
   private void RemoveCircle(EmissionCircleItem item)
@@ -824,6 +861,9 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
       }
     }
     Circles.Remove(item);
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+      new AetherVk.Logic.Messages.JetConfigChangedMessage { SceneId = SceneId }
+    );
   }
 
   protected override bool ShouldPushToNative(string? propertyName) => true;
@@ -852,6 +892,7 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
         MeanVelocity = Circles[i].MeanVelocity,
         VelocityDirStdDevRad = Circles[i].VelocityDirStdDevDeg * (float)Math.PI / 180f,
         ChildEntity = Circles[i].VisualEntityId == 0 ? ulong.MaxValue : Circles[i].VisualEntityId,
+        Beta = Circles[i].Beta,
       };
     }
     AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setParticleEmitterCirclesComponent(
@@ -860,6 +901,13 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
       EntityId,
       arr,
       (uint)arr.Length
+    );
+
+    // After updating circles, recalculate jet surface points so child entities are spawned
+    AetherVk.Logic.Services.NativeInterop.avkSimulationContext_recalculateJetPoints(
+      SimulationContext,
+      SceneId,
+      EntityId
     );
   }
 
@@ -903,6 +951,7 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
           MeanVelocity = arr[i].MeanVelocity,
           VelocityDirStdDevDeg = arr[i].VelocityDirStdDevRad * 180f / (float)Math.PI,
           VisualEntityId = arr[i].ChildEntity == ulong.MaxValue ? 0 : arr[i].ChildEntity,
+          Beta = arr[i].Beta,
         };
         item.PropertyChanged += Item_PropertyChanged;
         Circles.Add(item);
@@ -1206,6 +1255,57 @@ public partial class PhysicalMeshComponent : NativeComponent
 
   [ObservableProperty]
   private float _roll;
+
+  // ── Nucleus Physical Parameters ──────────────────────────────────────────
+
+  /// <summary>Mass of the nucleus (kg). Used for gravitational interaction and inertia.</summary>
+  [ObservableProperty]
+  private double _massKg = 1e13;
+
+  /// <summary>Effective radius of the nucleus (km). Used for spherical inertia approximation.</summary>
+  [ObservableProperty]
+  private double _radiusKm = 2.0;
+
+  /// <summary>Bulk density (kg/m³). Computed from mass and radius, read-only display.</summary>
+  public double DensityKgM3
+  {
+    get
+    {
+      double r_m = RadiusKm * 1000.0;
+      if (r_m <= 0) return 0;
+      double volume = (4.0 / 3.0) * Math.PI * r_m * r_m * r_m;
+      return MassKg / volume;
+    }
+  }
+
+  partial void OnMassKgChanged(double value) => OnPropertyChanged(nameof(DensityKgM3));
+  partial void OnRadiusKmChanged(double value) => OnPropertyChanged(nameof(DensityKgM3));
+
+  // ── IAU Rotational Model ─────────────────────────────────────────────────
+
+  /// <summary>Right ascension of pole at epoch (degrees).</summary>
+  [ObservableProperty]
+  private double _poleRaDeg;
+
+  /// <summary>Declination of pole at epoch (degrees).</summary>
+  [ObservableProperty]
+  private double _poleDecDeg = 90.0;
+
+  /// <summary>Prime meridian angle at epoch (degrees).</summary>
+  [ObservableProperty]
+  private double _primeMeridianDeg;
+
+  /// <summary>RA rate of change (degrees/century).</summary>
+  [ObservableProperty]
+  private double _poleRaRateDeg;
+
+  /// <summary>Dec rate of change (degrees/century).</summary>
+  [ObservableProperty]
+  private double _poleDecRateDeg;
+
+  /// <summary>Spin rate (degrees/day).</summary>
+  [ObservableProperty]
+  private double _rotationRateDeg;
 
   protected override bool ShouldPushToNative(string? propertyName) => false; // Read-only for now
 

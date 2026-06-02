@@ -431,6 +431,7 @@ impl SimulationContext {
         sphere_radius: 1.0,
         grid_color: [0.0, 0.0, 0.0],
         grid_density: 1.0,
+        rotational_model: None,
       },
     )?;
     oshal::log!("create_default_scene: sun PhysicalMeshComponent OK");
@@ -649,6 +650,8 @@ impl SimulationContext {
     radius_km: f32,
     mass_kg: f32,
     physics_type: u32,
+    rotational_model: Option<crate::scene::BodyRotationalModel>,
+    angular_velocity: Vec3f32,
   ) -> EngineResult<(u64, u64)> {
     use crate::scene::ReferenceFrameComponent;
     use aethervk_oshal_rlib::math::matrix::SquareMatrix;
@@ -801,6 +804,7 @@ impl SimulationContext {
         sphere_radius: radius_km,
         grid_color: [0.0, 0.0, 0.0],
         grid_density: 1.0,
+        rotational_model,
       },
     )?;
 
@@ -850,8 +854,12 @@ impl SimulationContext {
             friction: 0.6,
           },
         )?;
-        scene_ctx.scene.add_component(comet_id, KinematicComponent::default())?;
-        // For Kinematic bodies, they are driven by the Almanac.
+        scene_ctx.scene.add_component(comet_id, KinematicComponent {
+          velocity: Vec3f32::zero(),
+          angular_velocity,
+          use_model_rotation: rotational_model.is_some(),
+        })?;
+        // For Kinematic bodies, position is driven by the Almanac.
         scene_ctx.scene.add_component(
           comet_id,
           crate::scene::almanac_planet::AlmanacPlanet::new(0, 0.0, 0.0),
@@ -1055,6 +1063,7 @@ impl SimulationContext {
         sphere_radius: bounding_sphere * scale.x().max(scale.y()).max(scale.z()),
         grid_color: [0.0, 0.0, 0.0],
         grid_density: 1.0,
+        rotational_model: None,
       },
     )?;
 

@@ -26,48 +26,40 @@ public partial class SpawnCometWindow : Window
     Close(null);
   }
 
-  // TODO Command handling moved to view model
   public void SpawnCommand()
   {
-    // TODO breadcrumg
     if (DataContext is not SpawnCometViewModel vm || vm.SelectedModel == null)
       return;
 
-    // Orbit data is required for all modes (Step 3 gates CanGoNext already,
-    // but enforce defensively here too).
-    if (vm.FetchedOrbitData == null)
+    // Timeline must be validated
+    if (!vm.IsTimelineValidated)
       return;
-
-    // Resolve effective mass:
-    //   - JPL GM-derived mass takes priority.
-    //   - For Dynamic without JPL GM: use the user's slider value.
-    //   - For Static/Kinematic: mass is cosmetic — density estimate is fine.
-    float massKg;
-    if (vm.FetchedOrbitData.MassKg.HasValue)
-      massKg = (float)vm.FetchedOrbitData.MassKg.Value;
-    else if (vm.PhysicsType == "Dynamic")
-      massKg = (float)vm.DynamicMassKg;
-    else
-      massKg = (float)vm.FetchedOrbitData.EstimatedMassKg;
 
     var result = new SpawnCometResult(
       vm.SelectedModel,
       vm.EntityName,
       vm.PhysicsType,
-      vm.FetchedOrbitData,
-      vm.PosX,
-      vm.PosY,
-      vm.PosZ,
-      vm.ScaleX,
-      vm.ScaleY,
-      vm.ScaleZ,
+      vm.IsStaticMode ? vm.PosX : 0f,
+      vm.IsStaticMode ? vm.PosY : 0f,
+      vm.IsStaticMode ? vm.PosZ : 0f,
       vm.Pitch,
       vm.Yaw,
       vm.Roll,
       vm.CometRadiusKm,
-      massKg,
+      (float)vm.MassKg,
+      vm.AngularVelX,
+      vm.AngularVelY,
+      vm.AngularVelZ,
       vm.SelectedSpkRecord?.RecordId,
-      vm.SelectedComet?.PrimaryDesignation
+      vm.SelectedComet?.PrimaryDesignation,
+      vm.PoleRaDeg,
+      vm.PoleDecDeg,
+      vm.PrimeMeridianDeg,
+      vm.PoleRaRateDeg,
+      vm.PoleDecRateDeg,
+      vm.RotationRateDeg,
+      vm.WizardStartEpoch,
+      vm.WizardEndEpoch
     );
 
     Close(result);

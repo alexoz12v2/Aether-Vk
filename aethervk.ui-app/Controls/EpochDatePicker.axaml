@@ -1,0 +1,148 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:AetherVk.Controls"
+             x:Class="AetherVk.Controls.EpochDatePicker"
+             HorizontalAlignment="Stretch">
+
+    <StackPanel Spacing="4">
+        <!-- Label -->
+        <TextBlock x:Name="LabelBlock"
+                   Text="{Binding Label, RelativeSource={RelativeSource AncestorType=controls:EpochDatePicker}}"
+                   FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,2"/>
+
+        <!-- Epoch text + calendar button row -->
+        <DockPanel>
+            <Button x:Name="CalendarButton" DockPanel.Dock="Right"
+                    Width="32" Height="32" Padding="4"
+                    Background="{DynamicResource Bg.Subtle}"
+                    BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+                    CornerRadius="0,4,4,0"
+                    VerticalAlignment="Stretch"
+                    Click="OnCalendarButtonClick">
+                <PathIcon Width="16" Height="16"
+                          Foreground="{DynamicResource Text.Secondary}"
+                          Data="M6 1v2H2.5A1.5 1.5 0 0 0 1 4.5v11A1.5 1.5 0 0 0 2.5 17h11a1.5 1.5 0 0 0 1.5-1.5v-11A1.5 1.5 0 0 0 13.5 3H10V1H8v2H6V1H4zm9.5 6h-13v8.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5z"/>
+                <Button.Flyout>
+                    <Flyout Placement="Bottom">
+                        <Border Background="{DynamicResource Bg.Surface}"
+                                BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+                                CornerRadius="8" Padding="12" MinWidth="260">
+                            <StackPanel Spacing="8">
+                                <!-- Month/Year navigation header -->
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <Button Grid.Column="0" Content="◀" FontSize="12"
+                                            Padding="6,4" Background="Transparent"
+                                            Click="OnPrevMonthClick"/>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                HorizontalAlignment="Center" Spacing="4">
+                                        <TextBlock x:Name="MonthLabel" FontWeight="SemiBold"
+                                                   FontSize="14" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource Text.Primary}"
+                                                   PointerPressed="OnMonthLabelClick"
+                                                   Cursor="Hand"/>
+                                        <TextBox x:Name="MonthEditor" IsVisible="False"
+                                                 Width="90" FontSize="13"
+                                                 Background="{DynamicResource Bg.Subtle}"
+                                                 BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+                                                 KeyDown="OnMonthEditorKeyDown"
+                                                 LostFocus="OnMonthEditorLostFocus"/>
+                                        <TextBlock x:Name="YearLabel" FontWeight="SemiBold"
+                                                   FontSize="14" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource Text.Primary}"
+                                                   PointerPressed="OnYearLabelClick"
+                                                   Cursor="Hand"/>
+                                        <TextBox x:Name="YearEditor" IsVisible="False"
+                                                 Width="60" FontSize="13"
+                                                 Background="{DynamicResource Bg.Subtle}"
+                                                 BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+                                                 KeyDown="OnYearEditorKeyDown"
+                                                 LostFocus="OnYearEditorLostFocus"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="2" Content="▶" FontSize="12"
+                                            Padding="6,4" Background="Transparent"
+                                            Click="OnNextMonthClick"/>
+                                </Grid>
+
+                                <!-- Day-of-week headers -->
+                                <UniformGrid Columns="7">
+                                    <TextBlock Text="Mo" HorizontalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource Text.Tertiary}"/>
+                                    <TextBlock Text="Tu" HorizontalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource Text.Tertiary}"/>
+                                    <TextBlock Text="We" HorizontalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource Text.Tertiary}"/>
+                                    <TextBlock Text="Th" HorizontalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource Text.Tertiary}"/>
+                                    <TextBlock Text="Fr" HorizontalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource Text.Tertiary}"/>
+                                    <TextBlock Text="Sa" HorizontalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource Text.Tertiary}"/>
+                                    <TextBlock Text="Su" HorizontalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource Text.Tertiary}"/>
+                                </UniformGrid>
+
+                                <!-- Day buttons grid (6 rows x 7 cols = 42 cells) -->
+                                <UniformGrid x:Name="DaysGrid" Columns="7" Rows="6"/>
+
+                                <!-- Separator -->
+                                <Border Height="1" Background="{DynamicResource Bg.Outline}"/>
+
+                                <!-- Time input row: HH : MM : SS . mmm -->
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="2">
+                                    <TextBlock Text="Time:" FontSize="12" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource Text.Secondary}" Margin="0,0,6,0"/>
+                                    <TextBox x:Name="HourBox" Width="36" FontSize="13"
+                                             TextAlignment="Center" MaxLength="2"
+                                             Background="{DynamicResource Bg.Subtle}"
+                                             BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+                                             Padding="2" LostFocus="OnTimeFieldLostFocus"
+                                             KeyDown="OnTimeFieldKeyDown"/>
+                                    <TextBlock Text=":" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource Text.Primary}" FontWeight="Bold"/>
+                                    <TextBox x:Name="MinuteBox" Width="36" FontSize="13"
+                                             TextAlignment="Center" MaxLength="2"
+                                             Background="{DynamicResource Bg.Subtle}"
+                                             BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+                                             Padding="2" LostFocus="OnTimeFieldLostFocus"
+                                             KeyDown="OnTimeFieldKeyDown"/>
+                                    <TextBlock Text=":" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource Text.Primary}" FontWeight="Bold"/>
+                                    <TextBox x:Name="SecondBox" Width="36" FontSize="13"
+                                             TextAlignment="Center" MaxLength="2"
+                                             Background="{DynamicResource Bg.Subtle}"
+                                             BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+                                             Padding="2" LostFocus="OnTimeFieldLostFocus"
+                                             KeyDown="OnTimeFieldKeyDown"/>
+                                    <TextBlock Text="." VerticalAlignment="Center"
+                                               Foreground="{DynamicResource Text.Primary}" FontWeight="Bold"/>
+                                    <TextBox x:Name="MillisecondBox" Width="44" FontSize="13"
+                                             TextAlignment="Center" MaxLength="3"
+                                             Background="{DynamicResource Bg.Subtle}"
+                                             BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+                                             Padding="2" LostFocus="OnTimeFieldLostFocus"
+                                             KeyDown="OnTimeFieldKeyDown"/>
+                                    <TextBlock Text="UTC" FontSize="11" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource Text.Tertiary}" Margin="4,0,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </Flyout>
+                </Button.Flyout>
+            </Button>
+
+            <TextBox x:Name="EpochTextBox"
+                     Background="{DynamicResource Bg.Surface}"
+                     BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+                     CornerRadius="4,0,0,4" Padding="6,4"
+                     FontSize="13" VerticalContentAlignment="Center"
+                     Watermark="yyyy-MM-ddTHH:mm:ss.fff UTC"
+                     KeyDown="OnEpochTextKeyDown"
+                     LostFocus="OnEpochTextLostFocus"/>
+        </DockPanel>
+
+        <!-- Validation error message -->
+        <TextBlock x:Name="ValidationBlock"
+                   FontSize="11" Foreground="{DynamicResource Sem.Error}"
+                   IsVisible="False" Text="Invalid epoch format" Margin="0,2,0,0"/>
+    </StackPanel>
+</UserControl>

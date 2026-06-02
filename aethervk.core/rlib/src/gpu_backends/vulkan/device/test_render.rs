@@ -1030,6 +1030,7 @@ fn depth_test_setup_scene() -> DepthTestSetupScene {
     grid_color: [0.0, 0.0, 0.0],
     grid_density: 1.0,
     asset_path: "test".to_string(),
+    rotational_model: None,
   };
   let transform = TransformComponent {
     position: Vec3f32::from_array([0.0, -5.0, 0.0]), // place it in front of camera (-y is forward)
@@ -1167,6 +1168,7 @@ fn test_painting_mode_write_and_verify() {
         sphere_radius: 1.0,
         grid_color: [0.0, 0.0, 0.0],
         grid_density: 1.0, // Color mode
+        rotational_model: None,
       };
 
       let asset_hash = mesh_comp.mesh.id;
@@ -1525,6 +1527,7 @@ fn test_render_multiple_soi_windowless() {
         grid_color: [0.0, 0.0, 0.0],
         grid_density: 1.0,
         asset_path: "test".to_string(),
+        rotational_model: None,
       },
     )
     .unwrap();
@@ -1556,6 +1559,7 @@ fn test_render_multiple_soi_windowless() {
         grid_color: [0.0, 0.0, 0.0],
         grid_density: 1.0,
         asset_path: "test".to_string(),
+        rotational_model: None,
       },
     )
     .unwrap();
@@ -1587,6 +1591,7 @@ fn test_render_multiple_soi_windowless() {
         grid_color: [0.0, 0.0, 0.0],
         grid_density: 1.0,
         asset_path: "test".to_string(),
+        rotational_model: None,
       },
     )
     .unwrap();
@@ -2346,6 +2351,7 @@ fn test_render_bvhwire2_windowless() {
         sphere_radius: 1.0,
         grid_color: [0.0, 0.0, 0.0],
         grid_density: 1.0,
+        rotational_model: None,
       },
     )
     .unwrap();

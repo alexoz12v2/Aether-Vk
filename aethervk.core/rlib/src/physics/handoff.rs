@@ -169,6 +169,9 @@ impl SpheresOfInfluenceSystem {
               escaped_local.push(escaped_particle);
 
               p.active = 0;
+            } else if !has_parent && p_pos.length_squared() > soi_sq {
+              // SOI kill volume: no parent frame to migrate to → kill particle
+              p.active = 0;
             }
           }
         });

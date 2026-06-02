@@ -952,6 +952,17 @@ pub unsafe extern "C" fn avkSimulationContext_spawnComet(
   radius_km: f32,
   mass_kg: f32,
   physics_type: u32,
+  // IAU rotational model parameters
+  pole_ra_deg: f64,
+  pole_dec_deg: f64,
+  prime_meridian_deg: f64,
+  pole_ra_rate_deg: f64,
+  pole_dec_rate_deg: f64,
+  rotation_rate_deg: f64,
+  // Angular velocity (rad/s)
+  angular_vel_x: f32,
+  angular_vel_y: f32,
+  angular_vel_z: f32,
   out_result: *mut FfiSpawnCometResult,
 ) -> bool {
   if ctx.is_null() || name.is_null() || out_result.is_null() {
@@ -959,6 +970,28 @@ pub unsafe extern "C" fn avkSimulationContext_spawnComet(
   }
   let ctx_ref = unsafe { &*ctx };
   let name_str = unsafe { CStr::from_ptr(name).to_str().unwrap_or("Comet") };
+
+  // Build rotational model if any non-default values were provided
+  let has_rotational_data = pole_ra_deg.abs() > 1e-12
+    || (pole_dec_deg - 90.0).abs() > 1e-12
+    || prime_meridian_deg.abs() > 1e-12
+    || rotation_rate_deg.abs() > 1e-12
+    || pole_ra_rate_deg.abs() > 1e-12
+    || pole_dec_rate_deg.abs() > 1e-12;
+
+  let rotational_model = if has_rotational_data {
+    Some(aethervk_core_rlib::scene::BodyRotationalModel {
+      pole_ra: pole_ra_deg,
+      pole_dec: pole_dec_deg,
+      prime_meridian: prime_meridian_deg,
+      pole_ra_rate: pole_ra_rate_deg,
+      pole_dec_rate: pole_dec_rate_deg,
+      rotation_rate: rotation_rate_deg,
+      reference_epoch_jd: 2451545.0, // J2000.0
+    })
+  } else {
+    None
+  };
 
   match ctx_ref.spawn_comet_internal(
     scene_id,
@@ -969,6 +1002,8 @@ pub unsafe extern "C" fn avkSimulationContext_spawnComet(
     radius_km,
     mass_kg,
     physics_type,
+    rotational_model,
+    Vec3f32::from_components(angular_vel_x, angular_vel_y, angular_vel_z),
   ) {
     Ok((micro_id, comet_id)) => {
       unsafe {
@@ -1289,6 +1324,7 @@ pub struct FfiEmissionCircle {
   pub mean_velocity: f32,
   pub velocity_std_dev: f32,
   pub child_entity: u64,
+  pub beta: f32,
 }
 
 #[unsafe(no_mangle)]
@@ -1333,6 +1369,7 @@ pub unsafe extern "C" fn avkSimulationContext_setParticleEmitterCirclesComponent
           c.child_entity,
         ))
       },
+      beta: c.beta,
     });
   }
 
@@ -1380,7 +1417,16 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
     None => return false,
   };
 
-  let r = 10.0;
+  // Compute bounding sphere radius from mesh vertices (max distance from origin)
+  let r = mesh_arc
+    .vertices
+    .iter()
+    .map(|v| {
+      let p = v.position;
+      (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt()
+    })
+    .fold(0.0f32, f32::max)
+    .max(0.01);
 
   let mut to_spawn = alloc::vec::Vec::new();
   let mut updates = alloc::vec::Vec::new();
@@ -1555,6 +1601,7 @@ pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent
           mean_velocity: c.mean_velocity,
           velocity_std_dev: c.velocity_std_dev,
           child_entity: c.child_entity.map_or(u64::MAX, |id| id.as_ffi()),
+          beta: c.beta,
         };
       }
     }
@@ -3704,6 +3751,75 @@ pub unsafe extern "C" fn avkSimulationContext_getEpochLimits(
 ) -> bool {
   let ctx = unsafe { &*ctx };
   ctx.get_epoch_limits(scene_id, start_tai, end_tai)
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setEpochRange(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  start_tai: f64,
+  end_tai: f64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_epoch_range(scene_id, start_tai, end_tai)
+}
+
+/// Check whether the loaded almanac SPK data covers the given epoch interval
+/// for Earth (399) and a specified comet NAIF ID.
+///
+/// P/Invoke: `avkSimulationContext_checkAlmanacCoverage(IntPtr ctx, int cometSpkId, double startTai, double endTai)`
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_checkAlmanacCoverage(
+  ctx: *mut SimulationContext,
+  comet_spk_id: i32,
+  start_tai: f64,
+  end_tai: f64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let logic_state = ctx_ref.logic_state.read();
+  let almanac = &logic_state.almanac_data;
+
+  let start = anise::time::Epoch::from_tai_seconds(start_tai);
+  let end = anise::time::Epoch::from_tai_seconds(end_tai);
+
+  // Check Earth coverage (required for orbit reference frame)
+  let earth_ok = almanac.covers_interval(399, start, end);
+  // Check comet coverage
+  let comet_ok = almanac.covers_interval(comet_spk_id, start, end);
+
+  earth_ok && comet_ok
+}
+
+/// Sets a callback that the engine will invoke when it detects missing almanac SPK coverage.
+/// The callback signature is: `fn(spk_id: i32, start_epoch_str: *const c_char, end_epoch_str: *const c_char) -> *const c_char`
+/// The returned pointer is the file path of the downloaded SPK file (null on failure).
+/// P/Invoke: `avkSimulationContext_setAlmanacInvalidationCallback(IntPtr ctx, IntPtr callbackFnPtr)`
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setAlmanacInvalidationCallback(
+  ctx: *mut SimulationContext,
+  callback: Option<
+    extern "C" fn(
+      i32,
+      *const core::ffi::c_char,
+      *const core::ffi::c_char,
+    ) -> *const core::ffi::c_char,
+  >,
+) {
+  if ctx.is_null() {
+    return;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let mut logic_state = ctx_ref.logic_state.write();
+  logic_state.almanac_invalidation_callback = callback;
 }
 
 #[cfg(test)]
