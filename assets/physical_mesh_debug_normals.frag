@@ -1,4 +1,8 @@
 #version 450 core
+
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec2 inUV;
 layout(location = 2) in vec3 inNormal;
@@ -14,14 +18,19 @@ layout(binding = 2) uniform sampler2D roughnessMap;
 layout(binding = 3) uniform sampler2D aoMap;
 layout(binding = 4) uniform sampler2D skyMap;
 
-layout(push_constant) uniform Push { // std140
-  mat4 modelViewProj;
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer MeshExtra {
   mat4 model;
   vec3 sunPos;
   uint textureFlags;
   vec4 sunColor;
   vec3 cameraPos;
-  uint _unused;
+  float emissiveIntensity;
+  vec3 emissiveColor;
+};
+
+layout(push_constant, std430) uniform Push {
+  mat4 modelViewProj;
+  MeshExtra extra;
 } push;
 
 // --- Specialization Constants ---
@@ -62,7 +71,7 @@ vec3 orenNayar(vec3 viewDir, vec3 lightDir, vec3 normal, vec3 albedo, float roug
 }
 
 void main() {
-  bool useNormal    = (push.textureFlags & FLAG_NORMAL) != 0u;
+  bool useNormal    = (push.extra.textureFlags & FLAG_NORMAL) != 0u;
 
   vec3 N = normalize(inNormal);
 

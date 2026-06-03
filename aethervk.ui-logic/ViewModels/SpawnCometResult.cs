@@ -13,7 +13,7 @@ public class SpawnCometResult
   public float PosY { get; }
   public float PosZ { get; }
 
-  // Orientation quaternion (all modes — user sets initial body orientation)
+  // Orientation quaternion (computed from IAU pole RA/Dec/PM at J2000)
   public float RotW { get; }
   public float RotX { get; }
   public float RotY { get; }
@@ -25,7 +25,7 @@ public class SpawnCometResult
   /// <summary>Mass in kg.</summary>
   public float MassKg { get; }
 
-  // ── Angular velocity (rad/s) — initial spin vector
+  // ── Angular velocity (rad/s) — computed from rotation rate along pole axis
   public float AngularVelX { get; }
   public float AngularVelY { get; }
   public float AngularVelZ { get; }
@@ -68,6 +68,7 @@ public class SpawnCometResult
     float angularVelY,
     float angularVelZ,
     string? spkRecordId,
+    int spkNaifId,
     string? cometDesignation,
     double poleRaDeg,
     double poleDecDeg,
@@ -87,10 +88,8 @@ public class SpawnCometResult
     PosZ = pz;
     CometRadiusKm = cometRadiusKm;
     MassKg = massKg;
-    AngularVelX = angularVelX;
-    AngularVelY = angularVelY;
-    AngularVelZ = angularVelZ;
     SpkRecordId = spkRecordId;
+    SpkNaifId = spkNaifId;
     CometDesignation = cometDesignation;
     PoleRaDeg = poleRaDeg;
     PoleDecDeg = poleDecDeg;
@@ -101,24 +100,67 @@ public class SpawnCometResult
     WizardStartEpoch = wizardStartEpoch;
     WizardEndEpoch = wizardEndEpoch;
 
-    // Parse NAIF int id from the record string
-    SpkNaifId = int.TryParse(spkRecordId, out int id) ? id : 0;
+    // ── Compute orientation from IAU pole (RA, Dec, W) at J2000 ──
+    // IAU convention: body-fixed Z axis points along the pole (RA, Dec),
+    // and the prime meridian W defines the rotation about the pole at epoch.
+    double raRad = poleRaDeg * (System.Math.PI / 180.0);
+    double decRad = poleDecDeg * (System.Math.PI / 180.0);
+    double wRad = primeMeridianDeg * (System.Math.PI / 180.0);
 
-    // Convert Euler (degrees) → Quaternion (ZYX extrinsic)
-    var pitch = pitchDeg * (float)(System.Math.PI / 180.0);
-    var yaw = yawDeg * (float)(System.Math.PI / 180.0);
-    var roll = rollDeg * (float)(System.Math.PI / 180.0);
+    // Step 1: Rotation from J2000 inertial Z to pole direction
+    // Achieved by: Rz(ra + 90°) * Rx(90° - dec)
+    double rz1Angle = raRad + System.Math.PI / 2.0;
+    double rx1Angle = System.Math.PI / 2.0 - decRad;
 
-    float cr = (float)System.Math.Cos(roll * 0.5);
-    float sr = (float)System.Math.Sin(roll * 0.5);
-    float cp = (float)System.Math.Cos(pitch * 0.5);
-    float sp = (float)System.Math.Sin(pitch * 0.5);
-    float cy = (float)System.Math.Cos(yaw * 0.5);
-    float sy_yaw = (float)System.Math.Sin(yaw * 0.5);
+    // Rz(rz1Angle) quaternion: (0, 0, sin(a/2), cos(a/2))
+    double cz1 = System.Math.Cos(rz1Angle * 0.5);
+    double sz1 = System.Math.Sin(rz1Angle * 0.5);
+    double qz1_x = 0, qz1_y = 0, qz1_z = sz1, qz1_w = cz1;
 
-    RotW = cr * cp * cy + sr * sp * sy_yaw;
-    RotX = sr * cp * cy - cr * sp * sy_yaw;
-    RotY = cr * sp * cy + sr * cp * sy_yaw;
-    RotZ = cr * cp * sy_yaw - sr * sp * cy;
+    // Rx(rx1Angle) quaternion: (sin(a/2), 0, 0, cos(a/2))
+    double cx1 = System.Math.Cos(rx1Angle * 0.5);
+    double sx1 = System.Math.Sin(rx1Angle * 0.5);
+    double qx1_x = sx1, qx1_y = 0, qx1_z = 0, qx1_w = cx1;
+
+    // Q_pole = Rz * Rx (Hamilton product)
+    double qp_w = qz1_w * qx1_w - qz1_x * qx1_x - qz1_y * qx1_y - qz1_z * qx1_z;
+    double qp_x = qz1_w * qx1_x + qz1_x * qx1_w + qz1_y * qx1_z - qz1_z * qx1_y;
+    double qp_y = qz1_w * qx1_y - qz1_x * qx1_z + qz1_y * qx1_w + qz1_z * qx1_x;
+    double qp_z = qz1_w * qx1_z + qz1_x * qx1_y - qz1_y * qx1_x + qz1_z * qx1_w;
+
+    // Step 2: Rotation about pole by prime meridian angle W
+    double cw = System.Math.Cos(wRad * 0.5);
+    double sw = System.Math.Sin(wRad * 0.5);
+    double qw_x = 0, qw_y = 0, qw_z = sw, qw_w = cw;
+
+    // Q_total = Q_pole * Q_W
+    double qt_w = qp_w * qw_w - qp_x * qw_x - qp_y * qw_y - qp_z * qw_z;
+    double qt_x = qp_w * qw_x + qp_x * qw_w + qp_y * qw_z - qp_z * qw_y;
+    double qt_y = qp_w * qw_y - qp_x * qw_z + qp_y * qw_w + qp_z * qw_x;
+    double qt_z = qp_w * qw_z + qp_x * qw_y - qp_y * qw_x + qp_z * qw_w;
+
+    // Normalize
+    double qLen = System.Math.Sqrt(qt_w * qt_w + qt_x * qt_x + qt_y * qt_y + qt_z * qt_z);
+    if (qLen > 1e-12)
+    {
+      qt_w /= qLen; qt_x /= qLen; qt_y /= qLen; qt_z /= qLen;
+    }
+
+    RotW = (float)qt_w;
+    RotX = (float)qt_x;
+    RotY = (float)qt_y;
+    RotZ = (float)qt_z;
+
+    // ── Compute angular velocity from rotation rate along pole axis ──
+    double poleX = System.Math.Cos(decRad) * System.Math.Cos(raRad);
+    double poleY = System.Math.Cos(decRad) * System.Math.Sin(raRad);
+    double poleZ = System.Math.Sin(decRad);
+
+    // rotationRateDeg is degrees/day → rad/s
+    double omegaRadPerSec = rotationRateDeg * (System.Math.PI / 180.0) / 86400.0;
+
+    AngularVelX = (float)(poleX * omegaRadPerSec);
+    AngularVelY = (float)(poleY * omegaRadPerSec);
+    AngularVelZ = (float)(poleZ * omegaRadPerSec);
   }
 }

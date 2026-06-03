@@ -729,16 +729,50 @@ public partial class EmissionCircleItem : ObservableObject
 
   // ── Colour ──────────────────────────────────────────────────────────────────
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ColorByteR))]
+  [NotifyPropertyChangedFor(nameof(ColorArgbUint))]
   private float _colorR = 1.0f;
 
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ColorByteG))]
+  [NotifyPropertyChangedFor(nameof(ColorArgbUint))]
   private float _colorG = 0.6f;
 
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ColorByteB))]
+  [NotifyPropertyChangedFor(nameof(ColorArgbUint))]
   private float _colorB = 0.2f;
 
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ColorByteA))]
+  [NotifyPropertyChangedFor(nameof(ColorArgbUint))]
   private float _colorA = 1.0f;
+
+  /// <summary>Packed ARGB uint for easy Color conversion in the UI layer.</summary>
+  public uint ColorArgbUint
+  {
+    get
+    {
+      byte a = (byte)Math.Max(0, Math.Min(255, (int)(ColorA * 255f)));
+      byte r = (byte)Math.Max(0, Math.Min(255, (int)(ColorR * 255f)));
+      byte g = (byte)Math.Max(0, Math.Min(255, (int)(ColorG * 255f)));
+      byte b = (byte)Math.Max(0, Math.Min(255, (int)(ColorB * 255f)));
+      return ((uint)a << 24) | ((uint)r << 16) | ((uint)g << 8) | b;
+    }
+    set
+    {
+      ColorA = ((value >> 24) & 0xFF) / 255f;
+      ColorR = ((value >> 16) & 0xFF) / 255f;
+      ColorG = ((value >> 8) & 0xFF) / 255f;
+      ColorB = (value & 0xFF) / 255f;
+    }
+  }
+
+  /// <summary>Byte-range accessors for ColorPicker binding.</summary>
+  public byte ColorByteR { get => (byte)Math.Max(0, Math.Min(255, (int)(ColorR * 255f))); set => ColorR = value / 255f; }
+  public byte ColorByteG { get => (byte)Math.Max(0, Math.Min(255, (int)(ColorG * 255f))); set => ColorG = value / 255f; }
+  public byte ColorByteB { get => (byte)Math.Max(0, Math.Min(255, (int)(ColorB * 255f))); set => ColorB = value / 255f; }
+  public byte ColorByteA { get => (byte)Math.Max(0, Math.Min(255, (int)(ColorA * 255f))); set => ColorA = value / 255f; }
 
   // ── Emission Params ─────────────────────────────────────────────────────────
   [ObservableProperty]
@@ -1260,11 +1294,11 @@ public partial class PhysicalMeshComponent : NativeComponent
 
   /// <summary>Mass of the nucleus (kg). Used for gravitational interaction and inertia.</summary>
   [ObservableProperty]
-  private double _massKg = 1e13;
+  private double _massKg = 1.0;
 
   /// <summary>Effective radius of the nucleus (km). Used for spherical inertia approximation.</summary>
   [ObservableProperty]
-  private double _radiusKm = 2.0;
+  private double _radiusKm = 1.0;
 
   /// <summary>Bulk density (kg/m³). Computed from mass and radius, read-only display.</summary>
   public double DensityKgM3
@@ -1285,7 +1319,7 @@ public partial class PhysicalMeshComponent : NativeComponent
 
   /// <summary>Right ascension of pole at epoch (degrees).</summary>
   [ObservableProperty]
-  private double _poleRaDeg;
+  private double _poleRaDeg = 270.0;
 
   /// <summary>Declination of pole at epoch (degrees).</summary>
   [ObservableProperty]
@@ -1307,9 +1341,55 @@ public partial class PhysicalMeshComponent : NativeComponent
   [ObservableProperty]
   private double _rotationRateDeg;
 
-  protected override bool ShouldPushToNative(string? propertyName) => false; // Read-only for now
+  private static readonly HashSet<string> _iauFields = new()
+  {
+    nameof(PoleRaDeg), nameof(PoleDecDeg), nameof(PrimeMeridianDeg),
+    nameof(PoleRaRateDeg), nameof(PoleDecRateDeg), nameof(RotationRateDeg),
+  };
 
-  protected override void PushToNativeImpl() { }
+  protected override bool ShouldPushToNative(string? propertyName)
+    => propertyName != null && _iauFields.Contains(propertyName);
+
+  protected override void PushToNativeImpl()
+  {
+    if (SimulationContext == IntPtr.Zero)
+      return;
+
+    // Recompute quaternion from current IAU parameters
+    var (qw, qx, qy, qz) = AetherVk.Logic.ViewModels.IauRotationMath.IauToQuaternion(
+      PoleRaDeg, PoleDecDeg, PrimeMeridianDeg);
+
+    // Push the rotation to the native TransformComponent (component type 1)
+    // First pull the current transform so we preserve position and scale
+    int size = System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiTransform>();
+    IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+    try
+    {
+      if (NativeInterop.avkSimulationContext_getComponent(
+            SimulationContext, SceneId, EntityId, 1, ptr))
+      {
+        var data = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiTransform>(ptr);
+        // Update only the rotation
+        data.Rw = (float)qw;
+        data.Rx = (float)qx;
+        data.Ry = (float)qy;
+        data.Rz = (float)qz;
+        System.Runtime.InteropServices.Marshal.StructureToPtr(data, ptr, false);
+        NativeInterop.avkSimulationContext_setComponent(
+          SimulationContext, SceneId, EntityId, 1, ptr);
+      }
+    }
+    finally
+    {
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+    }
+
+    // Also update the Pitch/Yaw/Roll Euler angles for the DualRotationGizmo
+    var (pitch, yaw, roll) = AetherVk.Logic.ViewModels.IauRotationMath.QuaternionToGizmoEuler(qw, qx, qy, qz);
+    Pitch = (float)pitch;
+    Yaw = (float)yaw;
+    Roll = (float)roll;
+  }
 
   protected override void PullFromNativeImpl()
   {

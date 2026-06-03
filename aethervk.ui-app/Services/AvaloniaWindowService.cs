@@ -268,6 +268,7 @@ namespace AetherVk.Services
         radiusKm: result.CometRadiusKm,
         massKg: result.MassKg,
         physicsType: physicsTypeIdx,
+        naifId: result.SpkNaifId,
         poleRaDeg: result.PoleRaDeg,
         poleDecDeg: result.PoleDecDeg,
         primeMeridianDeg: result.PrimeMeridianDeg,
@@ -306,13 +307,8 @@ namespace AetherVk.Services
 
       if (result.PhysicsType == "Kinematic" && result.SpkNaifId != 0)
       {
-        // SPK was already downloaded and loaded during wizard validation (Step 4).
-        // Just attach AlmanacPlanet component and patch the NAIF id.
-        _runtimeService.AddAlmanacPlanet(1, cometId, result.SpkNaifId);
-
-        bool patched = _runtimeService.SetAlmanacPlanetNaifId(1, cometId, result.SpkNaifId);
         _consoleService.Log(
-          $"[Spawn] Kinematic: SetAlmanacPlanetNaifId({result.SpkNaifId}) → {patched}"
+          $"[Spawn] Kinematic: AlmanacPlanet created with NAIF ID {result.SpkNaifId}"
         );
       }
 

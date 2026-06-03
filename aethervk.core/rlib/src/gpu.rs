@@ -313,9 +313,22 @@ pub struct SegmentMapGpu {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
+/// Push constants for legacy physical mesh rendering.
+///
+/// Uses a BDA pointer (`extra_ptr`) to reference a [`MeshPushExtra`] buffer
+/// containing per-draw material/lighting data that previously exceeded the
+/// Vulkan-guaranteed 128-byte push constant minimum.
 pub struct PushConstants {
   pub model_view_proj: [[f32; 4]; 4],
+  pub extra_ptr: u64,
+  pub _pad: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+/// Per-draw material and lighting data for the legacy physical mesh pipeline.
+/// Stored in a staging buffer and accessed via BDA pointer from [`PushConstants`].
+pub struct MeshPushExtra {
   pub model: [[f32; 4]; 4],
   pub sun_pos: [f32; 3],
   pub texture_flags: TextureFlags,
@@ -323,7 +336,7 @@ pub struct PushConstants {
   pub camera_pos: [f32; 3],
   pub emissive_intensity: f32,
   pub emissive_color: [f32; 3],
-  pub _unused_pad: u32,
+  pub _pad: u32,
 }
 
 #[repr(C)]
@@ -428,10 +441,8 @@ pub struct MeasurementPushConstants {
   pub _pad1: f32,
   pub camera_up: [f32; 3],
   pub _pad2: f32,
-  pub camera_right: [f32; 3],
-  pub _pad3: f32,
   pub color: [f32; 3],
-  pub _pad4: f32,
+  pub _pad3: f32,
 }
 
 #[repr(C)]
@@ -481,14 +492,15 @@ pub struct GridPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
+/// Push constants for legacy BVH debug wireframe rendering.
+///
+/// Uses a BDA pointer (`bvh_data_ptr`) to reference a [`BvhBoxData`] buffer
+/// containing per-box geometry data that previously exceeded the
+/// Vulkan-guaranteed 128-byte push constant minimum.
 pub struct BvhPushConstants {
   pub mvp_arr: [f32; 16],
-  pub center_type: [f32; 4],
-  pub extents_arr: [f32; 4],
-  pub axes_x: [f32; 4],
-  pub axes_y: [f32; 4],
-  pub axes_z: [f32; 4],
+  pub bvh_data_ptr: u64,
+  pub _pad: u64,
 }
 
 #[repr(C)]
@@ -759,6 +771,41 @@ pub struct UiBatchCall {
 pub struct BackgroundPushConstants {
   pub color_top: [f32; 4],
   pub color_bottom: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+/// Per-box data for legacy BVH debug visualization, stored in a staging buffer
+/// and accessed via BDA pointer from [`BvhPushConstants`].
+pub struct BvhBoxData {
+  pub center_type: [f32; 4],
+  pub extents: [f32; 4],
+  pub axes_x: [f32; 4],
+  pub axes_y: [f32; 4],
+  pub axes_z: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+/// GPU-side representation of a single minimap planet.
+pub struct MinimapPlanetGpu {
+  pub pos: [f32; 2],
+  pub size: f32,
+  pub _pad: f32,
+  pub color: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+/// Push constants for the minimap overlay. Planet data is stored in a BDA buffer.
+pub struct MinimapPushConstants {
+  pub offset: [f32; 2],
+  pub size: [f32; 2],
+  pub player_pos: [f32; 2],
+  pub max_distance: f32,
+  pub num_planets: u32,
+  pub planets_ptr: u64,
+  pub _pad: u64,
 }
 
 pub struct Text2BatchCall {
@@ -1249,6 +1296,30 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     resolution: (u32, u32, u32),
     radius: f32,
   ) -> GpuResult<()>;
+
+  /// Upload per-draw mesh material/lighting data to a staging buffer and
+  /// return the BDA pointer for use in [`PushConstants::extra_ptr`].
+  fn upload_mesh_push_extra(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    data: &MeshPushExtra,
+  ) -> GpuResult<u64>;
+
+  /// Upload BVH box data to a staging buffer and return the BDA pointer
+  /// for use in [`BvhPushConstants::bvh_data_ptr`].
+  fn upload_bvh_box_data(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    data: &BvhBoxData,
+  ) -> GpuResult<u64>;
+
+  /// Upload minimap planet data to a staging buffer and return the BDA pointer
+  /// for use in the minimap push constants.
+  fn upload_minimap_planets(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    planets: &[MinimapPlanetGpu],
+  ) -> GpuResult<u64>;
 
   fn prepare_billboard_archetype_for_render_and_bind_pipeline(
     &self,

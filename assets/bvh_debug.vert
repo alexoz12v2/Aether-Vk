@@ -1,19 +1,26 @@
 #version 450 core
 
-layout(push_constant) uniform PushConstants {
-    mat4 viewProj;
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer BvhBoxRef {
     vec4 center_type;   // xyz = center, w = type (0=Sphere, 1=AABB/OOBB)
     vec4 extents;       // xyz = half extents or radius, w = unused
     vec4 axes_x;        // xyz = axis x
     vec4 axes_y;        // xyz = axis y
     vec4 axes_z;        // xyz = axis z
+};
+
+layout(push_constant, std430) uniform PushConstants {
+    mat4 viewProj;
+    BvhBoxRef bvhData;
 } push;
 
 layout(location = 0) out vec3 fragColor;
 
 void main() {
-    int type = int(push.center_type.w);
-    vec3 center = push.center_type.xyz;
+    int type = int(push.bvhData.center_type.w);
+    vec3 center = push.bvhData.center_type.xyz;
     vec3 localPos = vec3(0.0);
 
     if (type == 1) {
@@ -42,10 +49,10 @@ void main() {
                 (corner >= 4) ? 1.0 : -1.0
             );
             
-            vec3 halfExtents = push.extents.xyz;
+            vec3 halfExtents = push.bvhData.extents.xyz;
             localPos = signs * halfExtents;
             // Transform by axes (for AABB, axes are identity)
-            localPos = push.axes_x.xyz * localPos.x + push.axes_y.xyz * localPos.y + push.axes_z.xyz * localPos.z;
+            localPos = push.bvhData.axes_x.xyz * localPos.x + push.bvhData.axes_y.xyz * localPos.y + push.bvhData.axes_z.xyz * localPos.z;
         }
     } else {
         // Sphere
@@ -57,7 +64,7 @@ void main() {
             int pointInSegment = vertexInCircle % 2;
             float angle = float(segment + pointInSegment) * 6.28318530718 / 36.0;
             
-            float radius = push.extents.x;
+            float radius = push.bvhData.extents.x;
             if (circle == 0) {
                 localPos = vec3(cos(angle)*radius, sin(angle)*radius, 0.0);
             } else if (circle == 1) {

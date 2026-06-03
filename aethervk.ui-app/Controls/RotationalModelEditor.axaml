@@ -1,0 +1,78 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:AetherVk.Controls"
+             x:Class="AetherVk.Controls.RotationalModelEditor">
+
+  <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+          BorderThickness="1" CornerRadius="4" Padding="8">
+    <StackPanel Spacing="8">
+      <TextBlock Text="IAU Rotational Model" FontWeight="Bold" FontSize="13" />
+
+      <!-- Gizmo + IAU fields side by side -->
+      <Grid ColumnDefinitions="*, Auto">
+        <!-- IAU fields -->
+        <StackPanel Grid.Column="0" Spacing="4">
+          <WrapPanel Orientation="Horizontal">
+            <StackPanel Margin="0,0,16,8">
+              <TextBlock Text="Pole RA (°)" FontSize="12"
+                         Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+              <controls:UnboundedSlider Value="{Binding PoleRaDeg, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}}"
+                                        IsEnabled="{Binding IsEditable, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}}"
+                                        Step="0.1" Width="120"/>
+            </StackPanel>
+            <StackPanel Margin="0,0,16,8">
+              <TextBlock Text="Pole Dec (°)" FontSize="12"
+                         Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+              <controls:UnboundedSlider Value="{Binding PoleDecDeg, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}}"
+                                        IsEnabled="{Binding IsEditable, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}}"
+                                        Step="0.1" Width="120"/>
+            </StackPanel>
+            <StackPanel Margin="0,0,16,8">
+              <TextBlock Text="W₀ (°)" FontSize="12"
+                         Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+              <controls:UnboundedSlider Value="{Binding PrimeMeridianDeg, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}}"
+                                        IsEnabled="{Binding IsEditable, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}}"
+                                        Step="0.1" Width="120"/>
+            </StackPanel>
+          </WrapPanel>
+
+          <WrapPanel Orientation="Horizontal">
+            <StackPanel Margin="0,0,16,8">
+              <TextBlock Text="RA rate (°/cy)" FontSize="12"
+                         Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+              <controls:UnboundedSlider Value="{Binding PoleRaRateDeg, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}}"
+                                        IsEnabled="{Binding IsEditable, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}}"
+                                        Step="0.001" Width="120"/>
+            </StackPanel>
+            <StackPanel Margin="0,0,16,8">
+              <TextBlock Text="Dec rate (°/cy)" FontSize="12"
+                         Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+              <controls:UnboundedSlider Value="{Binding PoleDecRateDeg, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}}"
+                                        IsEnabled="{Binding IsEditable, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}}"
+                                        Step="0.001" Width="120"/>
+            </StackPanel>
+            <StackPanel Margin="0,0,16,8">
+              <TextBlock Text="Spin (°/day)" FontSize="12"
+                         Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+              <controls:UnboundedSlider Value="{Binding RotationRateDeg, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}}"
+                                        IsEnabled="{Binding IsEditable, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}}"
+                                        Step="0.01" Width="120"/>
+            </StackPanel>
+          </WrapPanel>
+        </StackPanel>
+
+        <!-- DualRotationGizmo preview -->
+        <StackPanel Grid.Column="1" Spacing="4" Margin="12,0,0,0" VerticalAlignment="Top">
+          <TextBlock Text="Pole vs J2000" FontWeight="Bold" FontSize="11" />
+          <TextBlock Text="Fixed: J2000 inertial (UVW)" FontSize="10" Opacity="0.7" />
+          <TextBlock Text="Colored: body frame (XYZ)" FontSize="10" Opacity="0.7" />
+          <controls:DualRotationGizmo Name="PreviewGizmo"
+                                      Pitch="{Binding GizmoPitch, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}, Mode=OneWay}"
+                                      Yaw="{Binding GizmoYaw, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}, Mode=OneWay}"
+                                      Roll="{Binding GizmoRoll, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}, Mode=OneWay}"
+                                      HorizontalAlignment="Center" />
+        </StackPanel>
+      </Grid>
+    </StackPanel>
+  </Border>
+</UserControl>

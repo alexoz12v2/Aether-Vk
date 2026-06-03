@@ -673,6 +673,7 @@ public static class NativeInterop
     float radiusKm,
     float massKg,
     uint physicsType,
+    int naifId,
     // IAU rotational model
     double poleRaDeg,
     double poleDecDeg,
@@ -862,6 +863,23 @@ public static class NativeInterop
     int cometSpkId,
     double startTai,
     double endTai
+  );
+
+  /// <summary>
+  /// Loads an SPK file into a temporary almanac and probes whether ephemeris data
+  /// can be queried at the given start and end epochs. Does NOT modify the main almanac.
+  /// </summary>
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl,
+    CharSet = CharSet.Ansi)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_probeSpkFile(
+    [MarshalAs(UnmanagedType.LPStr)] string path,
+    int spkId,
+    double startTai,
+    double endTai,
+    out double outDomainStartTai,
+    out double outDomainEndTai,
+    out int outDiscoveredNaifId
   );
 
   /// <summary>

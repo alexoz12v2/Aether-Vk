@@ -51,6 +51,7 @@ public partial class SpawnCometWindow : Window
       vm.AngularVelY,
       vm.AngularVelZ,
       vm.SelectedSpkRecord?.RecordId,
+      vm.SpkNaifId,
       vm.SelectedComet?.PrimaryDesignation,
       vm.PoleRaDeg,
       vm.PoleDecDeg,

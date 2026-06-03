@@ -650,6 +650,7 @@ impl SimulationContext {
     radius_km: f32,
     mass_kg: f32,
     physics_type: u32,
+    naif_id: i32,
     rotational_model: Option<crate::scene::BodyRotationalModel>,
     angular_velocity: Vec3f32,
   ) -> EngineResult<(u64, u64)> {
@@ -862,7 +863,7 @@ impl SimulationContext {
         // For Kinematic bodies, position is driven by the Almanac.
         scene_ctx.scene.add_component(
           comet_id,
-          crate::scene::almanac_planet::AlmanacPlanet::new(0, 0.0, 0.0),
+          crate::scene::almanac_planet::AlmanacPlanet::new(naif_id, 0.0, 0.0),
         )?;
       }
       2 => {

@@ -952,6 +952,7 @@ pub unsafe extern "C" fn avkSimulationContext_spawnComet(
   radius_km: f32,
   mass_kg: f32,
   physics_type: u32,
+  naif_id: i32,
   // IAU rotational model parameters
   pole_ra_deg: f64,
   pole_dec_deg: f64,
@@ -1002,6 +1003,7 @@ pub unsafe extern "C" fn avkSimulationContext_spawnComet(
     radius_km,
     mass_kg,
     physics_type,
+    naif_id,
     rotational_model,
     Vec3f32::from_components(angular_vel_x, angular_vel_y, angular_vel_z),
   ) {
@@ -1397,7 +1399,7 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
     Some(s) => s,
     None => return false,
   };
-  let scene_ctx = scene_ctx_lock.read();
+  let mut scene_ctx = scene_ctx_lock.write();
   let internal_id = match scene_ctx.entity_map.get(&entity_id).copied() {
     Some(id) => id,
     None => return false,
@@ -1512,7 +1514,7 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
         };
 
         if circle.child_entity.is_none() {
-          to_spawn.push((i, t, circle.color));
+          to_spawn.push((i, t, circle.color, circle.circle_radius_frac * r));
         } else {
           updates.push((circle.child_entity.unwrap(), t, circle.color));
         }
@@ -1520,20 +1522,35 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
     },
   );
 
-  for (i, t, color) in to_spawn {
+  for (i, t, color, gizmo_radius) in to_spawn {
     let new_id = scene_ctx.scene.spawn_entity("EmissionSphere");
     scene_ctx.scene.set_parent(new_id, Some(internal_id));
 
-    let pseudo_mesh = aethervk_core_rlib::scene::StaticMeshComponent {
+    let static_mesh = aethervk_core_rlib::scene::StaticMeshComponent {
       asset_path: "primitives/sphere.obj".into(),
       mesh: alloc::sync::Arc::from(aethervk_core_rlib::simulation::comet::generate_uv_sphere(
         1.0, 6, 6, 0.0,
       )),
       emissive_color: [color[0], color[1], color[2], color[3]],
+      is_visible: true,
     };
 
-    let _ = scene_ctx.scene.add_component(new_id, pseudo_mesh);
+    let gizmo = aethervk_core_rlib::scene::SphereGizmoComponent {
+      radius: gizmo_radius,
+      subdivisions: 3.0,
+      local_frame: {
+        use aethervk_oshal_rlib::math::matrix::SquareMatrix;
+        aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::identity()
+      },
+      is_visible: true,
+    };
+
+    let _ = scene_ctx.scene.add_component(new_id, static_mesh);
     let _ = scene_ctx.scene.add_component(new_id, t);
+    let _ = scene_ctx.scene.add_component(new_id, gizmo);
+
+    // Register the entity so it gets an external ID for C# to reference
+    let _ext_id = scene_ctx.register_entity(new_id);
 
     let _ = scene_ctx.scene.with_component_mut(
       internal_id,
@@ -1576,39 +1593,66 @@ pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent
   }
   let ctx_ref = unsafe { &*ctx };
 
-  if let Ok(circles) = ctx_ref.get_particle_emitter_circles_component(scene_id, entity) {
-    let actual_count = circles.len() as u32;
-    unsafe {
-      *out_actual_count = actual_count;
-    }
+  // Single lock scope to avoid re-entrant spin::RwLock deadlock
+  let scenes = ctx_ref.scenes.read();
+  let scene_ctx_lock = match scenes.get_scene(scene_id) {
+    Some(s) => s,
+    None => return false,
+  };
+  let scene_ctx = scene_ctx_lock.read();
+  let internal_id = match scene_ctx.entity_map.get(&entity).copied() {
+    Some(id) => id,
+    None => return false,
+  };
 
-    if !out_circles.is_null() && max_count > 0 {
-      let copy_count = core::cmp::min(max_count, actual_count) as usize;
-      let out_slice = unsafe { core::slice::from_raw_parts_mut(out_circles, copy_count) };
-      for i in 0..copy_count {
-        let c = &circles[i];
-        out_slice[i] = FfiEmissionCircle {
-          latitude_rad: c.latitude_rad,
-          longitude_rad: c.longitude_rad,
-          circle_radius_frac: c.circle_radius_frac,
-          mass: c.mass,
-          color_r: c.color[0],
-          color_g: c.color[1],
-          color_b: c.color[2],
-          color_a: c.color[3],
-          particles_per_tick: c.particles_per_tick,
-          ttl: c.ttl,
-          mean_velocity: c.mean_velocity,
-          velocity_std_dev: c.velocity_std_dev,
-          child_entity: c.child_entity.map_or(u64::MAX, |id| id.as_ffi()),
-          beta: c.beta,
-        };
-      }
-    }
-    true
-  } else {
-    false
+  let mut circles_opt = None;
+  let _ = scene_ctx.scene.with_component(
+    internal_id,
+    |c: &aethervk_core_rlib::scene::ParticleEmitterCirclesComponent| {
+      circles_opt = Some(c.circles.clone());
+    },
+  );
+  let circles = match circles_opt {
+    Some(c) => c,
+    None => return false,
+  };
+
+  let actual_count = circles.len() as u32;
+  unsafe {
+    *out_actual_count = actual_count;
   }
+
+  if !out_circles.is_null() && max_count > 0 {
+    let copy_count = core::cmp::min(max_count, actual_count) as usize;
+    let out_slice = unsafe { core::slice::from_raw_parts_mut(out_circles, copy_count) };
+    for i in 0..copy_count {
+      let c = &circles[i];
+      // Resolve internal EntityId to registered external ID for C#
+      let ext_child = c.child_entity.map_or(u64::MAX, |internal_id| {
+        scene_ctx.entity_map
+          .iter()
+          .find(|(_, v)| **v == internal_id)
+          .map_or(u64::MAX, |(&k, _)| k)
+      });
+      out_slice[i] = FfiEmissionCircle {
+        latitude_rad: c.latitude_rad,
+        longitude_rad: c.longitude_rad,
+        circle_radius_frac: c.circle_radius_frac,
+        mass: c.mass,
+        color_r: c.color[0],
+        color_g: c.color[1],
+        color_b: c.color[2],
+        color_a: c.color[3],
+        particles_per_tick: c.particles_per_tick,
+        ttl: c.ttl,
+        mean_velocity: c.mean_velocity,
+        velocity_std_dev: c.velocity_std_dev,
+        child_entity: ext_child,
+        beta: c.beta,
+      };
+    }
+  }
+  true
 }
 
 /// Patches the `naif_id` field of an `AlmanacPlanet` component on a Kinematic comet entity
@@ -2100,7 +2144,7 @@ pub unsafe extern "C" fn avkSimulationContext_parseEpochToTaiSec(
     .and_then(|epoch_str| anise::time::Epoch::from_str(epoch_str).ok());
 
   if let Some(epoch) = epoch_opt {
-    unsafe { *out_tai_sec = epoch.to_tai_seconds() };
+    unsafe { *out_tai_sec = epoch.to_unix_seconds() };
     true
   } else {
     false
@@ -2151,7 +2195,7 @@ pub unsafe extern "C" fn avkSimulationContext_getEphemerisPosition(
   }
   let ctx_ref = unsafe { &*ctx };
   let frame = anise::constants::frames::SUN_J2000;
-  let epoch = anise::time::Epoch::from_tai_seconds(epoch_tai_sec);
+  let epoch = anise::time::Epoch::from_unix_seconds(epoch_tai_sec);
 
   if let Ok(state) = ctx_ref
     .logic_state
@@ -3787,8 +3831,8 @@ pub unsafe extern "C" fn avkSimulationContext_checkAlmanacCoverage(
   let logic_state = ctx_ref.logic_state.read();
   let almanac = &logic_state.almanac_data;
 
-  let start = anise::time::Epoch::from_tai_seconds(start_tai);
-  let end = anise::time::Epoch::from_tai_seconds(end_tai);
+  let start = anise::time::Epoch::from_unix_seconds(start_tai);
+  let end = anise::time::Epoch::from_unix_seconds(end_tai);
 
   // Check Earth coverage (required for orbit reference frame)
   let earth_ok = almanac.covers_interval(399, start, end);
@@ -3796,6 +3840,61 @@ pub unsafe extern "C" fn avkSimulationContext_checkAlmanacCoverage(
   let comet_ok = almanac.covers_interval(comet_spk_id, start, end);
 
   earth_ok && comet_ok
+}
+
+/// Loads an SPK file into a temporary almanac and probes whether ephemeris data
+/// can be queried at the given start and end epochs for the specified NAIF ID.
+/// Returns true if the SPK covers the requested epoch range.
+/// On success or partial success, writes the actual SPK domain and discovered
+/// NAIF ID (which may differ from spk_id) to the out pointers.
+///
+/// P/Invoke: `avkSimulationContext_probeSpkFile(string path, int spkId, double startTai, double endTai, out double domainStart, out double domainEnd, out int discoveredNaifId)`
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_probeSpkFile(
+  path: *const c_char,
+  spk_id: i32,
+  start_tai_sec: f64,
+  end_tai_sec: f64,
+  out_domain_start_tai_sec: *mut f64,
+  out_domain_end_tai_sec: *mut f64,
+  out_discovered_naif_id: *mut i32,
+) -> bool {
+  // Zero out all outputs upfront
+  if !out_domain_start_tai_sec.is_null() {
+    unsafe { *out_domain_start_tai_sec = 0.0; }
+  }
+  if !out_domain_end_tai_sec.is_null() {
+    unsafe { *out_domain_end_tai_sec = 0.0; }
+  }
+  if !out_discovered_naif_id.is_null() {
+    unsafe { *out_discovered_naif_id = 0; }
+  }
+
+  if path.is_null() {
+    return false;
+  }
+  let path_str = unsafe { CStr::from_ptr(path).to_str().unwrap_or("") };
+  let start_epoch = anise::time::Epoch::from_unix_seconds(start_tai_sec);
+  let end_epoch = anise::time::Epoch::from_unix_seconds(end_tai_sec);
+  let (covers, domain, discovered_id) =
+    aethervk_core_rlib::simulation::almanac::AlmanacPackedData::probe_spk_file_with_domain(
+      path_str, spk_id, start_epoch, end_epoch,
+    );
+
+  if let Some((ds, de)) = domain {
+    if !out_domain_start_tai_sec.is_null() {
+      unsafe { *out_domain_start_tai_sec = ds.to_unix_seconds(); }
+    }
+    if !out_domain_end_tai_sec.is_null() {
+      unsafe { *out_domain_end_tai_sec = de.to_unix_seconds(); }
+    }
+  }
+  if !out_discovered_naif_id.is_null() {
+    unsafe { *out_discovered_naif_id = discovered_id; }
+  }
+
+  covers
 }
 
 /// Sets a callback that the engine will invoke when it detects missing almanac SPK coverage.

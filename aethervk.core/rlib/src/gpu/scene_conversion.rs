@@ -807,6 +807,9 @@ impl SceneConversionExt for crate::scene::Scene {
             if hidden_set.contains(&id) {
               return None;
             }
+            if !mesh.is_visible {
+              return None;
+            }
             if let Some(t) = self.get_relative_transform(id, camera_entity) {
               let is_selected: bool = self.has_component::<SelectedComponent>(id).into();
               let is_following: bool = self.has_component::<FollowingComponent>(id).into();
@@ -842,6 +845,9 @@ impl SceneConversionExt for crate::scene::Scene {
       self.query1_without::<_, HiddenComponent, _>(
         |id, mesh: &crate::scene::StaticMeshComponent| {
           if hidden_set.contains(&id) {
+            return;
+          }
+          if !mesh.is_visible {
             return;
           }
           if let Some(t) = self.get_relative_transform(id, camera_entity) {

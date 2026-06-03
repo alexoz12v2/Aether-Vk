@@ -8,9 +8,8 @@ layout(push_constant) uniform Push {
   float _pad1;
   vec3 cameraUp;
   float _pad2;
-  vec3 cameraRight;
-  float _pad3;
   vec3 color;
+  float _pad3;
 } push;
 
 layout(location = 0) out vec3 outColor;

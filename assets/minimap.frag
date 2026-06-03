@@ -1,5 +1,8 @@
 #version 450 core
 
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
 layout(location = 0) in vec2 inUV;
 
 struct Planet {
@@ -9,13 +12,17 @@ struct Planet {
     vec4 color;
 };
 
-layout(push_constant) uniform Push {
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer PlanetArray {
+    Planet planets[];
+};
+
+layout(push_constant, std430) uniform Push {
     vec2 offset;
     vec2 size;
     vec2 playerPos;
     float maxDistance;
     uint numPlanets;
-    Planet planets[16];
+    PlanetArray planetsPtr;
 } push;
 
 layout(location = 0) out vec4 outColor;
@@ -35,7 +42,7 @@ void main() {
         
         // 3. Render planets
         for (uint i = 0; i < push.numPlanets && i < 16; ++i) {
-            Planet p = push.planets[i];
+            Planet p = push.planetsPtr.planets[i];
             
             // Map planet world pos to UV [0, 1]
             vec2 planetUV = (p.pos / (2.0 * push.maxDistance)) + vec2(0.5);

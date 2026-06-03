@@ -168,6 +168,101 @@ public class HorizonJplService
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  //  1b. SMALL BODY DATA  (SBDB single-object API → SmallBodyDataComponent)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private const string SbdbSingleBase = "https://ssd-api.jpl.nasa.gov/sbdb.api";
+
+  /// <summary>
+  /// Fetches the canonical SBDB record for a comet/asteroid designation.
+  /// Returns a <see cref="SmallBodyDataComponent"/> with the NAIF SPKID, or null on failure.
+  /// The result is persistently cached per designation.
+  /// </summary>
+  public async Task<SmallBodyDataComponent?> FetchSmallBodyDataAsync(string designation)
+  {
+    var cacheKey = $"sbdb_{Sanitize(designation)}.json";
+    var cachePath = _storage.GetPersistentPath(cacheKey);
+
+    string json;
+    if (File.Exists(cachePath))
+    {
+      _console.Log($"[HorizonJpl] SBDB cache hit: {cacheKey}");
+      json = File.ReadAllText(cachePath);
+    }
+    else
+    {
+      var sstr = Uri.EscapeDataString(designation);
+      var url = $"{SbdbSingleBase}?sstr={sstr}";
+      _console.Log($"[HorizonJpl] SBDB GET: {url}");
+
+      using var resp = await _httpClient.GetAsync(url);
+      if (!resp.IsSuccessStatusCode)
+      {
+        _console.Log($"[HorizonJpl] SBDB HTTP {(int)resp.StatusCode}");
+        return null;
+      }
+      json = await resp.Content.ReadAsStringAsync();
+      _console.Log($"[HorizonJpl] SBDB response ({json.Length} bytes)");
+      await _storage.SavePersistentAsync(cacheKey, System.Text.Encoding.UTF8.GetBytes(json));
+    }
+
+    return ParseSmallBodyJson(json);
+  }
+
+  private SmallBodyDataComponent? ParseSmallBodyJson(string json)
+  {
+    try
+    {
+      using var doc = System.Text.Json.JsonDocument.Parse(json);
+      if (!doc.RootElement.TryGetProperty("object", out var obj))
+        return null;
+
+      var result = new SmallBodyDataComponent();
+
+      if (obj.TryGetProperty("spkid", out var spkidProp) &&
+          int.TryParse(spkidProp.GetString(), out int spkid))
+        result.SpkId = spkid;
+
+      if (obj.TryGetProperty("des", out var des))
+        result.Designation = des.GetString() ?? string.Empty;
+
+      if (obj.TryGetProperty("fullname", out var fn))
+        result.FullName = fn.GetString() ?? string.Empty;
+
+      if (obj.TryGetProperty("kind", out var kind))
+        result.Kind = kind.GetString() ?? string.Empty;
+
+      if (obj.TryGetProperty("prefix", out var prefix))
+        result.Prefix = prefix.GetString() ?? string.Empty;
+
+      if (obj.TryGetProperty("neo", out var neo))
+        result.IsNeo = neo.ValueKind == System.Text.Json.JsonValueKind.True;
+
+      if (obj.TryGetProperty("pha", out var pha))
+        result.IsPha = pha.ValueKind == System.Text.Json.JsonValueKind.True;
+
+      if (obj.TryGetProperty("orbit_id", out var oid))
+        result.OrbitId = oid.GetString() ?? string.Empty;
+
+      if (obj.TryGetProperty("orbit_class", out var oc))
+      {
+        if (oc.TryGetProperty("name", out var ocName))
+          result.OrbitClassName = ocName.GetString() ?? string.Empty;
+        if (oc.TryGetProperty("code", out var ocCode))
+          result.OrbitClassCode = ocCode.GetString() ?? string.Empty;
+      }
+
+      _console.Log($"[HorizonJpl] SBDB parsed: spkid={result.SpkId} des={result.Designation} name={result.FullName}");
+      return result;
+    }
+    catch (Exception ex)
+    {
+      _console.Log($"[HorizonJpl] SBDB parse error: {ex.Message}");
+      return null;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   //  2. SPK RECORD ENUMERATION  (Horizons text, EPHEM_TYPE=SPK)
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -230,13 +325,6 @@ public class HorizonJplService
   {
     SpkRecordsData.Clear();
 
-    int startYear = int.MinValue,
-      stopYear = int.MaxValue;
-    if (DateTime.TryParse(startTime, out var dtStart))
-      startYear = dtStart.Year;
-    if (DateTime.TryParse(stopTime, out var dtStop))
-      stopYear = dtStop.Year;
-
     var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
     bool inData = false;
 
@@ -269,21 +357,16 @@ public class HorizonJplService
         if (!int.TryParse(id, out int numId) || numId <= 0)
           continue;
 
-        bool include = true;
-        if (int.TryParse(epoch, out int ey))
-          include = ey >= startYear && ey <= stopYear;
-
-        if (include)
-          SpkRecordsData.Add(
-            new SpkRecordItem
-            {
-              RecordId = id,
-              EpochYear = epoch,
-              MatchDesig = match,
-              PrimaryDesig = prim,
-              Name = name,
-            }
-          );
+        SpkRecordsData.Add(
+          new SpkRecordItem
+          {
+            RecordId = id,
+            EpochYear = epoch,
+            MatchDesig = match,
+            PrimaryDesig = prim,
+            Name = name,
+          }
+        );
       }
     }
   }
