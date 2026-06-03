@@ -128,7 +128,6 @@ public partial class PropertiesViewModel
           var comp = SelectedEntity.Components.OfType<HighResTransformComponent>().FirstOrDefault();
           if (comp != null)
           {
-            comp.IsEditable = hasCamera;
             PropertiesExpanders.Add(comp);
           }
         }
@@ -137,7 +136,6 @@ public partial class PropertiesViewModel
           var comp = SelectedEntity.Components.OfType<TransformComponent>().FirstOrDefault();
           if (comp != null)
           {
-            comp.IsEditable = hasCamera;
             PropertiesExpanders.Add(comp);
           }
         }

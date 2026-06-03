@@ -1532,9 +1532,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     float massKg,
     uint physicsType = 0,
     int naifId = 0,
-    double poleRaDeg = 0.0,
-    double poleDecDeg = 90.0,
-    double primeMeridianDeg = 0.0,
+    double poleRaDeg = 90.0,
+    double poleDecDeg = 90.0 - AetherVk.Logic.ViewModels.IauRotationMath.ObliquityDeg,
+    double primeMeridianDeg = 180.0,
     double poleRaRateDeg = 0.0,
     double poleDecRateDeg = 0.0,
     double rotationRateDeg = 0.0,
@@ -1649,6 +1649,23 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       lcaEntity.Components.Add(new TransformComponent());
 
       cometEntity.Components.Add(new TransformComponent());
+
+      // Add PhysicalMeshComponent with the IAU rotational model data.
+      // This triggers PullFromNative (filling isProcedural/assetPath from native),
+      // and then the IAU fields are set, which triggers PushToNativeImpl
+      // to write the correct rotation quaternion to the native transform.
+      var physMesh = new PhysicalMeshComponent();
+      cometEntity.Components.Add(physMesh);
+      // Set physical params + IAU fields after BindToNative so PushToNativeImpl can write native transform
+      physMesh.MassKg = massKg;
+      physMesh.RadiusKm = radiusKm;
+      physMesh.PoleRaDeg = poleRaDeg;
+      physMesh.PoleDecDeg = poleDecDeg;
+      physMesh.PrimeMeridianDeg = primeMeridianDeg;
+      physMesh.PoleRaRateDeg = poleRaRateDeg;
+      physMesh.PoleDecRateDeg = poleDecRateDeg;
+      physMesh.RotationRateDeg = rotationRateDeg;
+
       cometEntity.Components.Add(new ParticleEmitterCirclesComponent());
       cometEntity.Components.Add(new SphereGizmoComponent());
       cometEntity.Components.Add(new CometComponent());
@@ -2744,6 +2761,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
           VelocityDirStdDevRad = comet.Jets[i].VelocityDirStdDevDeg * (float)Math.PI / 180f,
           ChildEntity =
             comet.Jets[i].VisualEntityId == 0 ? ulong.MaxValue : comet.Jets[i].VisualEntityId,
+          Beta = comet.Jets[i].Beta,
+          MaxParticles = comet.Jets[i].MaxParticles,
         };
       }
 
@@ -2778,6 +2797,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         {
           comet.Jets[i].VisualEntityId =
             outArr[i].ChildEntity == ulong.MaxValue ? 0 : outArr[i].ChildEntity;
+          comet.Jets[i].MaxParticles = outArr[i].MaxParticles;
         }
       }
     }
@@ -3595,6 +3615,36 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         }
         list.Add(node.EntityId);
       }
+    }
+
+    // Auto-create C# Entity objects for entities that exist natively
+    // but don't have a C# counterpart yet (e.g. particle system children
+    // created by the Rust logic thread during simulation).
+    IntPtr namePtr = System.Runtime.InteropServices.Marshal.AllocHGlobal(256);
+    try
+    {
+      foreach (var id in foundEntityIds)
+      {
+        if (!state.EntityMap.ContainsKey(id))
+        {
+          string entityName = $"Entity_{id}";
+          if (NativeInterop.avkSimulationContext_getEntityName(
+                _simulationContext, sceneId, id, namePtr, 256))
+          {
+            string? nativeName = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(namePtr);
+            if (!string.IsNullOrEmpty(nativeName))
+              entityName = nativeName;
+          }
+
+          var newEntity = new Entity(sceneId, id, entityName);
+          state.EntityMap[id] = newEntity;
+          WireEntityComponents(sceneId, newEntity);
+        }
+      }
+    }
+    finally
+    {
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(namePtr);
     }
 
     // Sync RootEntities

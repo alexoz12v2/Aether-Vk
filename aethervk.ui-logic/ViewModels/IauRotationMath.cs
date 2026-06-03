@@ -9,9 +9,18 @@ namespace AetherVk.Logic.ViewModels;
 public static class IauRotationMath
 {
   /// <summary>
+  /// Mean obliquity of the ecliptic at J2000 (IAU 2006), in degrees.
+  /// This is the angle between the equatorial and ecliptic planes.
+  /// </summary>
+  public const double ObliquityDeg = 23.4392911;
+
+  /// <summary>
   /// Computes the orientation quaternion from IAU pole (RA, Dec, W) at J2000.
-  /// Q = Rz(RA+90°) · Rx(90°-Dec) · Rz(W)
-  /// Returns (w, x, y, z) normalized.
+  /// 
+  /// Step 1: Build Q_body_to_ICRF = Rz(RA+90°) · Rx(90°-Dec) · Rz(W)
+  /// Step 2: Convert to ECLIPJ2000 frame: Q_final = Rx(ε) · Q_body_to_ICRF
+  /// 
+  /// Returns (w, x, y, z) normalized, in ECLIPJ2000 frame.
   /// </summary>
   public static (double w, double x, double y, double z) IauToQuaternion(
     double poleRaDeg, double poleDecDeg, double primeMeridianDeg)
@@ -37,17 +46,29 @@ public static class IauRotationMath
     // Rz(W)
     double cw = Math.Cos(wRad * 0.5), sw = Math.Sin(wRad * 0.5);
 
-    // Q_total = Q_pole * Rz(W)
+    // Q_body_to_ICRF = Q_pole * Rz(W)
     double tw = pw * cw - pz * sw;
     double tx = px * cw + py * sw;
     double ty = py * cw - px * sw;
     double tz = pz * cw + pw * sw;
 
-    // Normalize
-    double len = Math.Sqrt(tw * tw + tx * tx + ty * ty + tz * tz);
-    if (len > 1e-12) { tw /= len; tx /= len; ty /= len; tz /= len; }
+    // Step 2: Convert ICRF → ECLIPJ2000 by pre-multiplying with Rx(ε)
+    // Rx(ε) quaternion = (cos(ε/2), sin(ε/2), 0, 0)
+    double epsRad = ObliquityDeg * (Math.PI / 180.0);
+    double ce = Math.Cos(epsRad * 0.5);
+    double se = Math.Sin(epsRad * 0.5);
 
-    return (tw, tx, ty, tz);
+    // Q_final = Rx(ε) * Q_body_to_ICRF  (Hamilton product)
+    double fw = ce * tw - se * tx;
+    double fx = ce * tx + se * tw;
+    double fy = ce * ty - se * tz;
+    double fz = ce * tz + se * ty;
+
+    // Normalize
+    double len = Math.Sqrt(fw * fw + fx * fx + fy * fy + fz * fz);
+    if (len > 1e-12) { fw /= len; fx /= len; fy /= len; fz /= len; }
+
+    return (fw, fx, fy, fz);
   }
 
   /// <summary>

@@ -166,9 +166,20 @@ impl<T, F: FnMut(T)> core::ops::DerefMut for AutoDiscard<T, F> {
   }
 }
 
-/// Fixed Update Function in interval $t_0, t_1$
-/// Note that this function should be asynchronous with respect to the logic_thread,
-/// meaning this function should be dispatched inside the pool as a singleton tasklet.
+/// Fixed Update Function in interval $t_0, t_1$.
+///
+/// The total interval `[t0, t1]` may be large at high time-scales (e.g.
+/// `OneMonth` produces ~42 000 s per tick).  To keep the IMEX / Velocity-Verlet
+/// integrator numerically stable the interval is subdivided into sub-steps
+/// whose duration never exceeds `max_sub_dt_us` microseconds.
+///
+/// **Sub-step loop** (non-collision path):
+/// 1. Particle emission happens **once** at the beginning (for the full dt).
+/// 2. The IMEX integration is iterated `n_sub_steps` times with `sub_dt_us`.
+///
+/// This function is asynchronous with respect to the logic_thread – it should
+/// be dispatched inside the pool as a singleton tasklet.
+///
 /// - we expect the physical_scene to contain BVH of entities with state at $t_0$
 #[allow(deprecated)] // step_ode_* kept as fallback during migration
 pub fn simulation_step<K>(
@@ -178,13 +189,24 @@ pub fn simulation_step<K>(
   t0: timeus_t,
   t1: timeus_t,
   collisions_enabled: bool,
+  max_sub_dt_us: timeus_t,
 ) -> EngineResult<Option<crate::gpu::CommandBufferSyncInfo>>
 where
   K: Kernels + ?Sized,
 {
+  let total_dt = t1 - t0;
+  // Compute sub-step count.  Clamp max_sub_dt_us to at least 1 μs.
+  let capped = if max_sub_dt_us > 0 { max_sub_dt_us } else { total_dt.max(1) };
+  let n_sub_steps = if total_dt <= capped {
+    1usize
+  } else {
+    ((total_dt as f64 / capped as f64).ceil() as usize).max(1)
+  };
+
   aethervk_oshal_rlib::log!(
-    "simulation_step running! dt_us: {}, collisions_enabled: {}",
-    t1 - t0,
+    "simulation_step running! dt_us: {}, sub_steps: {}, collisions_enabled: {}",
+    total_dt,
+    n_sub_steps,
     collisions_enabled
   );
   let mut cmd = kernels.create_command_buffer()?;
@@ -205,7 +227,7 @@ where
   // with leaves: body BLAS, particle BLAS (sentinel-patched for GPU LBVH), or
   // micro-frame sub-TLAS roots.  Its BDA replaces the recycled particle-LBVH
   // address previously used as tlas_bvh_addr in bp_scene / bp_particle_self.
-  let dt_s = (t1 - t0) as f32 / 1_000_000.0;
+  let dt_s = total_dt as f32 / 1_000_000.0;
   use crate::physics::tlas_builder::build_scene_motion_tlas;
   let (tlas_bytes, tlas_root_idx) = match kernels.subgroup_size().map(|s| s as u32).unwrap_or(32) {
     64 => build_scene_motion_tlas::<64>(physical_scene),
@@ -262,57 +284,71 @@ where
     }
   }
 
-  // ── 3. Particle emission ──────────────────────────────────────────────────
-  let full_dt = t1 - t0;
-  kernels.emit_particles(
-    &mut cmd,
-    &mut particles,
-    physical_scene,
-    scene,
-    sun_pos,
-    full_dt,
-  )?;
+  // ── 3. Particle emission ───────────────────────────────────────────────────
+  // NOTE: Emission is now handled on the CPU side by `emit_particles_from_circles`
+  // in `dispatch_physics_step` (logic_thread.rs).  CPU-emitted particles are
+  // already in the ParticleSystemComponent and were picked up by `build_particles`
+  // above, so they have proper ParticleMetadata for write_back_to_scene.
+  //
+  // The GPU `emit_particles` kernel is intentionally SKIPPED here because:
+  //  1. It reads from ParticleEmitterCirclesComponent (parent entity) and emits
+  //     into the GPU mega-buffer — but those particles have no metadata and would
+  //     be lost after write_back_to_scene.
+  //  2. Running it would double the particle count for one tick (wasted compute).
+  //
+  // If GPU-side emission with occlusion testing is needed in the future, the
+  // kernel should write metadata alongside particles so write_back can route them.
 
-  // ── 4. IMEX integration + collision loop ─────────────────────────────────
+  // ── 4. IMEX integration — sub-stepped for numerical stability ─────────────
   #[cfg(not(any(test, feature = "collisions")))]
   let collisions_enabled = false;
 
   if !collisions_enabled {
-    let dt = end_time - current_time;
+    // ── Non-collision path: sub-step the IMEX integration ───────────────────
+    for sub_step_idx in 0..n_sub_steps {
+      // Compute this sub-step's dt.  The last sub-step absorbs rounding remainder.
+      let sub_dt = if sub_step_idx == n_sub_steps - 1 {
+        end_time - current_time
+      } else {
+        total_dt / n_sub_steps as timeus_t
+      };
 
-    // VV predictor: half-kick + full drift to x_{n+1}
-    kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, dt)?;
+      // VV predictor: half-kick + full drift to x_{n+1}
+      kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, sub_dt)?;
 
-    // RB: accumulate forces then IMR solve
-    kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches)?;
-    kernels.imex_integrate_bodies_p3(
-      &mut cmd,
-      &mut rigid_bodies,
-      &mut wrenches,
-      &emitters,
-      &frames,
-      dt,
-    )?;
+      // RB: accumulate forces then IMR solve
+      kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches)?;
+      kernels.imex_integrate_bodies_p3(
+        &mut cmd,
+        &mut rigid_bodies,
+        &mut wrenches,
+        &emitters,
+        &frames,
+        sub_dt,
+      )?;
 
-    // Build motion BVH for self-gravity
-    let bvh = AutoDiscard::new(
-      kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?,
-      |b| kernels.discard_bvh(b),
-    );
-    kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
+      // Build motion BVH for self-gravity (rebuilt each sub-step as positions change)
+      let bvh = AutoDiscard::new(
+        kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, sub_dt)?,
+        |b| kernels.discard_bvh(b),
+      );
+      kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
 
-    // Apply macro-frame gravity emitters to microframe particles (cross-frame transform)
-    kernels.apply_emitters_to_particles(
-      &mut cmd,
-      &mut particles,
-      &emitters,
-      &frames,
-      &particle_frame_ids,
-      emitters.capacity() as u32,
-    )?;
+      // Apply macro-frame gravity emitters to microframe particles (cross-frame transform)
+      kernels.apply_emitters_to_particles(
+        &mut cmd,
+        &mut particles,
+        &emitters,
+        &frames,
+        &particle_frame_ids,
+        emitters.capacity() as u32,
+      )?;
 
-    // VV corrector: v_{n+1/2} → v_{n+1} using F(x_{n+1})
-    kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, dt, current_time)?;
+      // VV corrector: v_{n+1/2} → v_{n+1} using F(x_{n+1})
+      kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, sub_dt, current_time)?;
+
+      current_time += sub_dt;
+    }
   } else {
     #[cfg(any(test, feature = "collisions"))]
     {

@@ -81,7 +81,8 @@ pub struct DepthLayerData {
   pub particles: Vec<(
     EntityId,
     alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
-    crate::scene::particles::ParticleEmitterComponent,
+    f32,       // particle_radius
+    [f32; 4],  // color
   )>,
   pub gizmos: Vec<(EntityId, Mat4x4f32, f32)>,
   pub sphere_gizmos: Vec<(EntityId, Mat4x4f32, f32, f32)>,
@@ -368,24 +369,16 @@ impl RenderSceneExtraction {
       // Particles
       let particle_pipeline = device.get_particle_pipeline_key(presentation_engine_handle)?;
       let particle2_pipeline = device.get_particle2_pipeline_key(presentation_engine_handle)?;
-      for (_entity_id, particles, config) in ext_layer.particles {
-        if config.use_particle2 {
-          particle2_calls.push(gpu::frame::Particle2DrawCall {
-            pipeline: particle2_pipeline,
-            system_particle_offset: 0,
-            system_indirect_offset: 0,
-            config,
-            particles,
-          });
-        } else {
-          particle_calls.push(gpu::frame::ParticleDrawCall {
-            pipeline: particle_pipeline,
-            system_particle_offset: 0,
-            system_indirect_offset: 0,
-            config,
-            particles,
-          });
-        }
+      for (_entity_id, particles, particle_radius, color) in ext_layer.particles {
+        // Use Particle2 pipeline (modern path) for circle-based particles
+        particle2_calls.push(gpu::frame::Particle2DrawCall {
+          pipeline: particle2_pipeline,
+          system_particle_offset: 0,
+          system_indirect_offset: 0,
+          particle_radius,
+          color,
+          particles,
+        });
       }
 
       // Trajectories
@@ -599,7 +592,8 @@ impl SceneConversionExt for crate::scene::Scene {
     let mut extracted_particles: Vec<(
       EntityId,
       alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
-      crate::scene::particles::ParticleEmitterComponent,
+      f32,       // particle_radius
+      [f32; 4],  // color
     )> = Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)> =
       Vec::with_capacity(START_VEC_CAPACITY);
@@ -1041,16 +1035,17 @@ impl SceneConversionExt for crate::scene::Scene {
       })
       .map(|(r, _id)| r);
 
-    // Particles
-    self.query2::<crate::scene::particles::ParticleSystemComponent, crate::scene::particles::ParticleEmitterComponent, _>(
-      |id, sys, config| {
+    // Particles — extract from any entity with ParticleSystemComponent
+    self.query1_without::<_, crate::scene::HiddenComponent, _>(
+      |id, sys: &crate::scene::particles::ParticleSystemComponent| {
         if hidden_set.contains(&id) {
           return;
         }
         extracted_particles.push((
           id,
           alloc::sync::Arc::downgrade(&sys.particles),
-          config.clone(),
+          sys.particle_radius,
+          sys.color,
         ));
       },
     );

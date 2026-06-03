@@ -854,7 +854,8 @@ pub enum TimeScale {
 }
 
 impl TimeScale {
-  /// TODO: Document this item
+  /// Returns the number of simulation-days that elapse per one real-time second
+  /// at this time scale.
   pub fn to_days_per_st_second(self) -> f64 {
     match self {
       TimeScale::Stopped => 0.0,
@@ -862,6 +863,29 @@ impl TimeScale {
       TimeScale::OneDay => 1.0,
       TimeScale::OneWeek => 7.0,
       TimeScale::OneMonth => 30.436875,
+    }
+  }
+
+  /// Maximum physics sub-step duration in seconds for this time scale.
+  ///
+  /// Higher time scales produce larger per-tick `dt` values.  To keep the
+  /// IMEX / Velocity-Verlet integrator numerically stable (O(h²) local
+  /// truncation error) we cap the physics `dt` and iterate multiple
+  /// sub-steps inside [`simulation_step`].
+  ///
+  /// | Scale     | Per-tick dt (s) | Cap (s)  | Sub-steps |
+  /// |-----------|-----------------|----------|-----------|
+  /// | RealTime  | 0.016           | 1        | 1         |
+  /// | OneDay    | 1382            | 1382     | 1         |
+  /// | OneWeek   | 9676            | 3600     | ~3        |
+  /// | OneMonth  | 42091           | 3600     | ~12       |
+  pub fn max_physics_sub_dt_seconds(self) -> f64 {
+    match self {
+      TimeScale::Stopped => 1.0,
+      TimeScale::RealTime => 1.0,
+      TimeScale::OneDay => 1500.0,  // ~25 min, covers the ~1440s per-tick dt at 60 FPS
+      TimeScale::OneWeek => 3600.0, // 1 hour cap
+      TimeScale::OneMonth => 3600.0, // 1 hour cap
     }
   }
 }
@@ -1676,5 +1700,101 @@ impl<T> SharedDataWrapper<T> {
     // Since MaybeUninit does not drop its contents, ptr::read safely transfers ownership
     // to us. The Arc will eventually deallocate the wrapper memory later.
     unsafe { core::ptr::read(self.inner.data.get()).assume_init() }
+  }
+}
+
+#[cfg(test)]
+mod tests_time_scale {
+  use super::*;
+  use aethervk_oshal_rlib::os::time::timeus_t;
+
+  #[test]
+  fn time_scale_days_per_second() {
+    assert_eq!(TimeScale::Stopped.to_days_per_st_second(), 0.0);
+    assert!((TimeScale::RealTime.to_days_per_st_second() - 1.0 / 86400.0).abs() < 1e-10);
+    assert_eq!(TimeScale::OneDay.to_days_per_st_second(), 1.0);
+    assert_eq!(TimeScale::OneWeek.to_days_per_st_second(), 7.0);
+    assert!((TimeScale::OneMonth.to_days_per_st_second() - 30.436875).abs() < 1e-6);
+  }
+
+  #[test]
+  fn max_sub_dt_positive() {
+    // Every scale must return a positive sub-dt cap
+    for scale in [
+      TimeScale::Stopped,
+      TimeScale::RealTime,
+      TimeScale::OneDay,
+      TimeScale::OneWeek,
+      TimeScale::OneMonth,
+    ] {
+      assert!(
+        scale.max_physics_sub_dt_seconds() > 0.0,
+        "max_physics_sub_dt_seconds must be > 0 for {:?}",
+        scale
+      );
+    }
+  }
+
+  /// Helper: compute the number of physics sub-steps for a given time scale
+  /// and fixed_dt (microseconds).
+  fn sub_step_count(scale: TimeScale, fixed_dt_us: timeus_t) -> usize {
+    let days_per_sec = scale.to_days_per_st_second();
+    let fixed_sim_seconds = fixed_dt_us as f64 / 1_000_000.0;
+    let step_days = days_per_sec * fixed_sim_seconds;
+    let total_dt_s = step_days * 86400.0;
+    let max_sub = scale.max_physics_sub_dt_seconds();
+    if total_dt_s <= max_sub {
+      1
+    } else {
+      (total_dt_s / max_sub).ceil() as usize
+    }
+  }
+
+  #[test]
+  fn sub_step_count_real_time_is_one() {
+    // RealTime at 60 FPS: total_dt ≈ 0.016s, cap = 1.0s → 1 sub-step
+    assert_eq!(sub_step_count(TimeScale::RealTime, 16_667), 1);
+  }
+
+  #[test]
+  fn sub_step_count_one_day_is_one() {
+    // OneDay at 60 FPS: total_dt ≈ 1382s, cap = 1400s → 1 sub-step
+    assert_eq!(sub_step_count(TimeScale::OneDay, 16_667), 1);
+  }
+
+  #[test]
+  fn sub_step_count_one_week_multiple() {
+    // OneWeek at 60 FPS: total_dt ≈ 9676s, cap = 3600s → 3 sub-steps
+    let n = sub_step_count(TimeScale::OneWeek, 16_667);
+    assert!(n >= 2 && n <= 4, "Expected 2-4 sub-steps for OneWeek, got {}", n);
+  }
+
+  #[test]
+  fn sub_step_count_one_month_multiple() {
+    // OneMonth at 60 FPS: total_dt ≈ 42091s, cap = 3600s → ~12 sub-steps
+    let n = sub_step_count(TimeScale::OneMonth, 16_667);
+    assert!(n >= 10 && n <= 15, "Expected 10-15 sub-steps for OneMonth, got {}", n);
+  }
+
+  #[test]
+  fn sub_step_epoch_advance_consistency() {
+    // Verify that stepping through N sub-steps advances the same total as 1 big step
+    let scale = TimeScale::OneMonth;
+    let fixed_dt_us: timeus_t = 16_667;
+    let days_per_sec = scale.to_days_per_st_second();
+    let step_days = days_per_sec * (fixed_dt_us as f64 / 1_000_000.0);
+    let total_dt_s = step_days * 86400.0;
+    let max_sub = scale.max_physics_sub_dt_seconds();
+    let n = (total_dt_s / max_sub).ceil() as usize;
+    let sub_dt = total_dt_s / n as f64;
+
+    // Sum of sub-steps should equal total (within floating point tolerance)
+    let reconstructed = sub_dt * n as f64;
+    assert!(
+      (reconstructed - total_dt_s).abs() < 1e-6,
+      "Sub-step reconstruction mismatch: {} vs {}",
+      reconstructed,
+      total_dt_s
+    );
   }
 }

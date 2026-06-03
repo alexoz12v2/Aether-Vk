@@ -3,7 +3,7 @@
              xmlns:controls="using:AetherVk.Controls"
              x:Class="AetherVk.Controls.EulerRotationEditor"
              x:CompileBindings="False">
-    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" IsEnabled="{Binding IsEditable}">
+    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" IsEnabled="{Binding IsRotationEditable}">
         <TextBlock Grid.Column="0" Text="Pitch (X):" VerticalAlignment="Center" Margin="0,0,4,0"/>
         <controls:UnboundedSlider Grid.Column="1" Value="{Binding RotXDeg, RelativeSource={RelativeSource AncestorType=controls:EulerRotationEditor}}" IsWrapped="True" WrapMin="0" WrapMax="360" Margin="0,0,8,0"/>
         

@@ -6,18 +6,26 @@ namespace AetherVk.Logic.Tests;
 
 /// <summary>
 /// Tests for <see cref="IauRotationMath"/>: validates that the IAU pole
-/// (RA, Dec, W) → quaternion → Euler pipeline correctly drives the
-/// DualRotationGizmo's BuildRotation(Pitch, Yaw, Roll) matrix so that
-/// body axes end up in the expected inertial directions.
+/// (RA, Dec, W) → quaternion pipeline correctly produces orientations
+/// in the ECLIPJ2000 frame (engine frame), including the obliquity
+/// correction from ICRF to ECLIPJ2000.
+///
+/// Coordinate frames:
+///   ICRF (equatorial J2000): X = vernal equinox, Z = celestial north pole
+///   ECLIPJ2000 (ecliptic J2000): X = vernal equinox (shared), Z = ecliptic north pole
+///   Rotation from ICRF → ECLIPJ2000: Rx(ε) where ε ≈ 23.44°
 /// </summary>
 public class IauRotationMathTests
 {
   private const double Tol = 1e-6;
+  private static readonly double EpsRad = IauRotationMath.ObliquityDeg * (Math.PI / 180.0);
+  private static readonly double CosEps = Math.Cos(EpsRad);
+  private static readonly double SinEps = Math.Sin(EpsRad);
 
   /// <summary>
   /// Helper: rotate body-axis (bx,by,bz) through the full pipeline:
   ///   IAU params → quaternion → Euler → BuildRotation → apply
-  /// Returns the world-space direction of the body axis.
+  /// Returns the ECLIPJ2000-space direction of the body axis.
   /// </summary>
   private static (double x, double y, double z) PipelineTransform(
     double ra, double dec, double pm, double bx, double by, double bz)
@@ -50,12 +58,13 @@ public class IauRotationMathTests
     );
   }
 
-  // ─── Quaternion from IAU tests ─────────────────────────────────────────────
+  // ─── Quaternion from IAU tests (ECLIPJ2000 output) ──────────────────────────
 
   [Fact]
-  public void RA0_Dec0_PM0_PoleAlongX()
+  public void RA0_Dec0_PM0_PoleAlongEclipticX()
   {
-    // IAU: RA=0, Dec=0 means the pole (body Z) points at the vernal equinox = J2000 X
+    // IAU: RA=0, Dec=0 means the pole (body Z) points at the vernal equinox.
+    // Vernal equinox = ICRF X = ECLIPJ2000 X (shared axis).
     var (w, x, y, z) = IauRotationMath.IauToQuaternion(0, 0, 0);
     var (wx, wy, wz) = QuaternionTransform(w, x, y, z, 0, 0, 1);
     Assert.Equal(1.0, wx, Tol);
@@ -64,22 +73,24 @@ public class IauRotationMathTests
   }
 
   [Fact]
-  public void RA0_Dec90_PM0_PoleAlongZ()
+  public void RA0_Dec90_PM0_PoleAlongCelestialNorth_InEcliptic()
   {
-    // Dec=90 means the pole points at the north celestial pole = J2000 Z
+    // Dec=90° means the pole points at the celestial north pole (ICRF Z).
+    // In ECLIPJ2000: ICRF Z = (0, -sin(ε), cos(ε))
     var (w, x, y, z) = IauRotationMath.IauToQuaternion(0, 90, 0);
     var (wx, wy, wz) = QuaternionTransform(w, x, y, z, 0, 0, 1);
     Assert.Equal(0.0, wx, Tol);
-    Assert.Equal(0.0, wy, Tol);
-    Assert.Equal(1.0, wz, Tol);
+    Assert.Equal(-SinEps, wy, Tol);
+    Assert.Equal(CosEps, wz, Tol);
   }
 
   [Fact]
-  public void RA270_Dec90_PM0_IsIdentity()
+  public void EclipticDefaults_IsIdentity()
   {
-    // RA=270° (or -90°), Dec=90°, PM=0° should give identity rotation
-    // Q = Rz(-90°+90°) * Rx(0°) = Rz(0°) = identity
-    var (w, x, y, z) = IauRotationMath.IauToQuaternion(270, 90, 0);
+    // RA=90°, Dec=90°-ε, W₀=180°: exact identity in ECLIPJ2000.
+    // Rz(180°)·Rx(ε)·Rz(180°) = Rx(-ε), then Rx(ε)·Rx(-ε) = I.
+    double eclipticDec = 90.0 - IauRotationMath.ObliquityDeg;
+    var (w, x, y, z) = IauRotationMath.IauToQuaternion(90, eclipticDec, 180);
     Assert.Equal(1.0, Math.Abs(w), Tol);
     Assert.Equal(0.0, x, Tol);
     Assert.Equal(0.0, y, Tol);
@@ -87,14 +98,15 @@ public class IauRotationMathTests
   }
 
   [Fact]
-  public void RA90_Dec0_PM0_PoleAlongY()
+  public void RA90_Dec0_PM0_PoleAlongIcrfY_InEcliptic()
   {
-    // RA=90 means pole at (cos(0)*cos(90°), cos(0)*sin(90°), sin(0)) = (0,1,0)
+    // RA=90° means pole at ICRF (0,1,0).
+    // In ECLIPJ2000: Rx(ε)·(0,1,0) = (0, cos(ε), sin(ε))
     var (w, x, y, z) = IauRotationMath.IauToQuaternion(90, 0, 0);
     var (wx, wy, wz) = QuaternionTransform(w, x, y, z, 0, 0, 1);
     Assert.Equal(0.0, wx, Tol);
-    Assert.Equal(1.0, wy, Tol);
-    Assert.Equal(0.0, wz, Tol);
+    Assert.Equal(CosEps, wy, Tol);
+    Assert.Equal(SinEps, wz, Tol);
   }
 
   // ─── Euler decomposition round-trip tests ──────────────────────────────────
@@ -103,7 +115,7 @@ public class IauRotationMathTests
   [InlineData(0, 0, 0)]
   [InlineData(0, 90, 0)]
   [InlineData(90, 0, 0)]
-  [InlineData(270, 90, 0)]
+  [InlineData(90, 66.56, 0)]
   [InlineData(45, 45, 0)]
   [InlineData(0, 0, 180)]
   [InlineData(120, 30, 45)]
@@ -124,7 +136,7 @@ public class IauRotationMathTests
   [InlineData(0, 0, 0)]
   [InlineData(0, 90, 0)]
   [InlineData(90, 0, 0)]
-  [InlineData(270, 90, 0)]
+  [InlineData(90, 66.56, 0)]
   [InlineData(45, 45, 0)]
   [InlineData(120, 30, 45)]
   public void Pipeline_BodyX_MatchesQuaternion(double ra, double dec, double pm)
@@ -141,7 +153,7 @@ public class IauRotationMathTests
   [InlineData(0, 0, 0)]
   [InlineData(0, 90, 0)]
   [InlineData(90, 0, 0)]
-  [InlineData(270, 90, 0)]
+  [InlineData(90, 66.56, 0)]
   [InlineData(45, 45, 0)]
   [InlineData(120, 30, 45)]
   public void Pipeline_BodyY_MatchesQuaternion(double ra, double dec, double pm)
@@ -159,7 +171,7 @@ public class IauRotationMathTests
   [Fact]
   public void RA0_Dec0_PM0_GizmoShowsBodyZ_AlongWorldX()
   {
-    // The gizmo should show body Z (blue axis) pointing along world X
+    // Pole at vernal equinox → body Z should point along ECLIPJ2000 X
     var (wx, wy, wz) = PipelineTransform(0, 0, 0, 0, 0, 1);
     Assert.Equal(1.0, wx, Tol);
     Assert.Equal(0.0, wy, Tol);
@@ -167,25 +179,19 @@ public class IauRotationMathTests
   }
 
   [Fact]
-  public void RA0_Dec90_PM0_GizmoShowsBodyZ_AlongWorldZ()
+  public void EclipticDefaults_GizmoShowsIdentity()
   {
-    var (wx, wy, wz) = PipelineTransform(0, 90, 0, 0, 0, 1);
-    Assert.Equal(0.0, wx, Tol);
-    Assert.Equal(0.0, wy, Tol);
-    Assert.Equal(1.0, wz, Tol);
-  }
+    // With default IAU params (RA=90°, Dec=66.56°, W₀=180°), all body axes
+    // should align with ECLIPJ2000 axes via the gizmo pipeline.
+    double eclipticDec = 90.0 - IauRotationMath.ObliquityDeg;
 
-  [Fact]
-  public void RA270_Dec90_PM0_GizmoShowsIdentity()
-  {
-    // All three body axes should align with world axes
-    var (xx, xy, xz) = PipelineTransform(270, 90, 0, 1, 0, 0);
+    var (xx, xy, xz) = PipelineTransform(90, eclipticDec, 180, 1, 0, 0);
     Assert.Equal(1.0, xx, Tol); Assert.Equal(0.0, xy, Tol); Assert.Equal(0.0, xz, Tol);
 
-    var (yx, yy, yz) = PipelineTransform(270, 90, 0, 0, 1, 0);
+    var (yx, yy, yz) = PipelineTransform(90, eclipticDec, 180, 0, 1, 0);
     Assert.Equal(0.0, yx, Tol); Assert.Equal(1.0, yy, Tol); Assert.Equal(0.0, yz, Tol);
 
-    var (zx, zy, zz) = PipelineTransform(270, 90, 0, 0, 0, 1);
+    var (zx, zy, zz) = PipelineTransform(90, eclipticDec, 180, 0, 0, 1);
     Assert.Equal(0.0, zx, Tol); Assert.Equal(0.0, zy, Tol); Assert.Equal(1.0, zz, Tol);
   }
 

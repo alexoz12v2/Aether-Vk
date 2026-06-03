@@ -190,13 +190,13 @@ public partial class SpawnCometViewModel : ObservableObject
 
   // IAU Rotational Model parameters (from PhysicalMeshComponent)
   [ObservableProperty]
-  private double _poleRaDeg = 270.0;
+  private double _poleRaDeg = 90.0;
 
   [ObservableProperty]
-  private double _poleDecDeg = 90.0;
+  private double _poleDecDeg = 90.0 - IauRotationMath.ObliquityDeg;
 
   [ObservableProperty]
-  private double _primeMeridianDeg = 0.0;
+  private double _primeMeridianDeg = 180.0;
 
   [ObservableProperty]
   private double _poleRaRateDeg = 0.0;

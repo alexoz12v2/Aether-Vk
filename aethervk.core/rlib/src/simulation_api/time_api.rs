@@ -88,13 +88,12 @@ impl SimulationContext {
     }
   }
 
-  /// TODO: Document this item
   pub fn set_epoch_range(&self, scene_id: u64, start_tai: f64, end_tai: f64) -> bool {
     if let Some(scene) = self.get_scene(scene_id) {
       let scene_read = scene.read();
       let mut time_write = scene_read.time_state.write();
-      time_write.epoch_start = anise::time::Epoch::from_tai_seconds(start_tai);
-      time_write.epoch_end = anise::time::Epoch::from_tai_seconds(end_tai);
+      time_write.epoch_start = anise::time::Epoch::from_unix_seconds(start_tai);
+      time_write.epoch_end = anise::time::Epoch::from_unix_seconds(end_tai);
       true
     } else {
       false

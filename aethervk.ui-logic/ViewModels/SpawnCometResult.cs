@@ -101,57 +101,19 @@ public class SpawnCometResult
     WizardEndEpoch = wizardEndEpoch;
 
     // ── Compute orientation from IAU pole (RA, Dec, W) at J2000 ──
-    // IAU convention: body-fixed Z axis points along the pole (RA, Dec),
-    // and the prime meridian W defines the rotation about the pole at epoch.
-    double raRad = poleRaDeg * (System.Math.PI / 180.0);
-    double decRad = poleDecDeg * (System.Math.PI / 180.0);
-    double wRad = primeMeridianDeg * (System.Math.PI / 180.0);
+    // Uses IauToQuaternion which includes the ICRF → ECLIPJ2000 obliquity correction.
+    var (qw, qx, qy, qz) = AetherVk.Logic.ViewModels.IauRotationMath.IauToQuaternion(
+      poleRaDeg, poleDecDeg, primeMeridianDeg);
 
-    // Step 1: Rotation from J2000 inertial Z to pole direction
-    // Achieved by: Rz(ra + 90°) * Rx(90° - dec)
-    double rz1Angle = raRad + System.Math.PI / 2.0;
-    double rx1Angle = System.Math.PI / 2.0 - decRad;
-
-    // Rz(rz1Angle) quaternion: (0, 0, sin(a/2), cos(a/2))
-    double cz1 = System.Math.Cos(rz1Angle * 0.5);
-    double sz1 = System.Math.Sin(rz1Angle * 0.5);
-    double qz1_x = 0, qz1_y = 0, qz1_z = sz1, qz1_w = cz1;
-
-    // Rx(rx1Angle) quaternion: (sin(a/2), 0, 0, cos(a/2))
-    double cx1 = System.Math.Cos(rx1Angle * 0.5);
-    double sx1 = System.Math.Sin(rx1Angle * 0.5);
-    double qx1_x = sx1, qx1_y = 0, qx1_z = 0, qx1_w = cx1;
-
-    // Q_pole = Rz * Rx (Hamilton product)
-    double qp_w = qz1_w * qx1_w - qz1_x * qx1_x - qz1_y * qx1_y - qz1_z * qx1_z;
-    double qp_x = qz1_w * qx1_x + qz1_x * qx1_w + qz1_y * qx1_z - qz1_z * qx1_y;
-    double qp_y = qz1_w * qx1_y - qz1_x * qx1_z + qz1_y * qx1_w + qz1_z * qx1_x;
-    double qp_z = qz1_w * qx1_z + qz1_x * qx1_y - qz1_y * qx1_x + qz1_z * qx1_w;
-
-    // Step 2: Rotation about pole by prime meridian angle W
-    double cw = System.Math.Cos(wRad * 0.5);
-    double sw = System.Math.Sin(wRad * 0.5);
-    double qw_x = 0, qw_y = 0, qw_z = sw, qw_w = cw;
-
-    // Q_total = Q_pole * Q_W
-    double qt_w = qp_w * qw_w - qp_x * qw_x - qp_y * qw_y - qp_z * qw_z;
-    double qt_x = qp_w * qw_x + qp_x * qw_w + qp_y * qw_z - qp_z * qw_y;
-    double qt_y = qp_w * qw_y - qp_x * qw_z + qp_y * qw_w + qp_z * qw_x;
-    double qt_z = qp_w * qw_z + qp_x * qw_y - qp_y * qw_x + qp_z * qw_w;
-
-    // Normalize
-    double qLen = System.Math.Sqrt(qt_w * qt_w + qt_x * qt_x + qt_y * qt_y + qt_z * qt_z);
-    if (qLen > 1e-12)
-    {
-      qt_w /= qLen; qt_x /= qLen; qt_y /= qLen; qt_z /= qLen;
-    }
-
-    RotW = (float)qt_w;
-    RotX = (float)qt_x;
-    RotY = (float)qt_y;
-    RotZ = (float)qt_z;
+    RotW = (float)qw;
+    RotX = (float)qx;
+    RotY = (float)qy;
+    RotZ = (float)qz;
 
     // ── Compute angular velocity from rotation rate along pole axis ──
+    // Pole direction in ICRF Cartesian from RA/Dec
+    double raRad = poleRaDeg * (System.Math.PI / 180.0);
+    double decRad = poleDecDeg * (System.Math.PI / 180.0);
     double poleX = System.Math.Cos(decRad) * System.Math.Cos(raRad);
     double poleY = System.Math.Cos(decRad) * System.Math.Sin(raRad);
     double poleZ = System.Math.Sin(decRad);

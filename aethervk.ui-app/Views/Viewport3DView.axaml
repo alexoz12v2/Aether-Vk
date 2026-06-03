@@ -234,7 +234,6 @@
 
             <Border Padding="10,5" CornerRadius="4" Background="{DynamicResource Bg.Surface}" Opacity="0.8" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1">
                 <StackPanel>
-                    <TextBlock Text="{Binding IsEarthObserverMode, Converter={x:Static ObjectConverters.IsNull}}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}" />
                     <TextBlock Text="Earth Observer Mode" IsVisible="{Binding IsEarthObserverMode}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource Sem.Warning}" />
                     <TextBlock Text="Normal Mode" IsVisible="{Binding !IsEarthObserverMode}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource Text.Secondary}" />
                 </StackPanel>

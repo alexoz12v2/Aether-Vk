@@ -1189,7 +1189,7 @@ fn process_command_internal(
       }
 
       // 2. Recompute body positions from ephemeris at the new epoch (acquires its own scene lock)
-      let _ = dispatch_physics_step(scene_id, ctx, 0.0, new_epoch, fixed_dt_us);
+      let _ = dispatch_physics_step(scene_id, ctx, 0.0, new_epoch, fixed_dt_us, fixed_dt_us);
       Ok(SimulationTaskResult::None)
     }
 
@@ -1296,10 +1296,7 @@ fn process_command_internal(
         ));
       }
 
-      let frame = anise::frames::Frame::new(
-        anise::constants::celestial_objects::SUN,
-        anise::constants::orientations::J2000,
-      );
+      let frame = crate::simulation::almanac::SUN_ECLIPJ2000;
 
       let mut samples = alloc::vec::Vec::new();
       let mut t = start_epoch_tai_sec;
@@ -1526,18 +1523,20 @@ fn execute_simulation_tick(
     }
     _step_count += 1;
 
-    let (is_manual, step_days, fixed_dt_us, current_epoch) = {
+    let (is_manual, step_days, fixed_dt_us, current_epoch, max_sub_dt_us) = {
       let mut ts_write = time_state_arc.write();
       let fixed_dt_us = ts_write
         .time_info
         .read()
         .fixed_delta_time
         .load(core::sync::atomic::Ordering::Relaxed);
+      let max_sub_dt_us =
+        (ts_write.current_scale.max_physics_sub_dt_seconds() * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
       if ts_write.manual_step_requests > 0.0 {
         let step = ts_write.manual_step_requests;
         ts_write.manual_step_requests = 0.0;
         ts_write.current_epoch = ts_write.current_epoch + anise::time::Unit::Day * step;
-        (true, step, fixed_dt_us, ts_write.current_epoch)
+        (true, step, fixed_dt_us, ts_write.current_epoch, max_sub_dt_us)
       } else {
         let needs_update = ts_write.time_info.read().needs_fixed_update();
         static mut DEBUG_PRINT_TICK: u32 = 0;
@@ -1569,7 +1568,7 @@ fn execute_simulation_tick(
               aethervk_oshal_rlib::log!("Auto-paused: reached epoch start");
             }
           }
-          (false, step, fixed_dt_us, ts_write.current_epoch)
+          (false, step, fixed_dt_us, ts_write.current_epoch, max_sub_dt_us)
         } else {
           break;
         }
@@ -1582,7 +1581,7 @@ fn execute_simulation_tick(
     }
 
     any_fixed_step = true;
-    if let Err(e) = dispatch_physics_step(scene_id, ctx, step_days, current_epoch, fixed_dt_us) {
+    if let Err(e) = dispatch_physics_step(scene_id, ctx, step_days, current_epoch, fixed_dt_us, max_sub_dt_us) {
       aethervk_oshal_rlib::log!("dispatch_physics_step failed: {:?}", e);
     }
 
@@ -1963,12 +1962,234 @@ fn refit_kinematic_microframes(
   }
 }
 
+/// Emit new particles on the CPU side from `ParticleEmitterCirclesComponent` into
+/// each circle's child entity `ParticleSystemComponent`.
+///
+/// This function also **ages** existing particles and **reaps** expired ones
+/// (marking them `active = 0`), freeing slots for new emission.
+///
+/// This runs **before** the physics tasklet so that `build_particles` picks up the
+/// newly emitted particles (giving them proper `ParticleMetadata` for GPU write-back).
+///
+/// Each circle emits `particles_per_tick` particles at the cached surface point,
+/// with velocity along the cached surface normal scaled by `mean_velocity` and
+/// jittered by `velocity_std_dev`.
+fn emit_particles_from_circles(
+  scene: &crate::scene::Scene,
+  tick_seed: u64,
+  dt_us: aethervk_oshal_rlib::os::time::timeus_t,
+) {
+  use aethervk_oshal_rlib::math::{quaternion::Quaternion, vector::Vector};
+  use crate::scene::{TransformComponent, particles::{ParticleEmitterCirclesComponent, ParticleSystemComponent, ParticleData}};
+
+  // Collect emission work so we don't hold the query borrow while writing child components.
+  let mut work: alloc::vec::Vec<(
+    crate::scene::EntityId,               // parent entity
+    alloc::vec::Vec<(
+      crate::scene::EntityId,             // child entity
+      [f32; 3],                           // world position
+      [f32; 3],                           // world velocity direction (unit)
+      f32,                                // mass
+      f32,                                // mean_velocity
+      f32,                                // velocity_std_dev
+      u32,                                // particles_per_tick
+      [f32; 4],                           // color
+      u64,                                // ttl (microseconds)
+    )>,
+  )> = alloc::vec::Vec::new();
+
+  scene.query2::<TransformComponent, ParticleEmitterCirclesComponent, _>(
+    |entity_id, transform, emitter| {
+      let parent_rot = transform.rotation;
+      let parent_pos = transform.position;
+      let parent_scale = transform.scale;
+      let mut circles_work = alloc::vec::Vec::new();
+
+      for circle in &emitter.circles {
+        let child_id = match circle.child_entity {
+          Some(id) => id,
+          None => continue,
+        };
+        let local_pos = match circle.cached_point {
+          Some(p) => p,
+          None => continue,
+        };
+        let local_normal = match circle.cached_normal {
+          Some(n) => n,
+          None => continue,
+        };
+        if circle.particles_per_tick == 0 {
+          continue;
+        }
+
+        // Transform emission point and normal from object space to world space
+        let scaled_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+          local_pos[0] * parent_scale.x(),
+          local_pos[1] * parent_scale.y(),
+          local_pos[2] * parent_scale.z(),
+        );
+        let world_pos = parent_pos + parent_rot.rotate_vector(scaled_pos);
+        let local_n = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+          local_normal[0], local_normal[1], local_normal[2],
+        );
+        let world_normal = parent_rot.rotate_vector(local_n);
+        let world_n_len = world_normal.length();
+        let world_n = if world_n_len > 1e-6 {
+          world_normal * (1.0 / world_n_len)
+        } else {
+          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 1.0)
+        };
+
+        // Push slightly outside the surface
+        let emit_pos = world_pos + world_n * 0.001; // 1 meter offset
+
+        // Convert TTL: EmissionCircle.ttl is in "ticks" in the UI.
+        // We store it as microseconds by multiplying by this tick's dt_us.
+        // If ttl is 0, particles never expire.
+        let ttl_us = if circle.ttl > 0 {
+          circle.ttl.saturating_mul(dt_us as u64)
+        } else {
+          0
+        };
+
+        circles_work.push((
+          child_id,
+          [emit_pos.x(), emit_pos.y(), emit_pos.z()],
+          [world_n.x(), world_n.y(), world_n.z()],
+          circle.mass,
+          circle.mean_velocity,
+          circle.velocity_std_dev,
+          circle.particles_per_tick,
+          circle.color,
+          ttl_us,
+        ));
+      }
+
+      if !circles_work.is_empty() {
+        work.push((entity_id, circles_work));
+      }
+    },
+  );
+
+  // Now age, reap, and emit into child entities' ParticleSystemComponents
+  let mut rng_state = tick_seed;
+  for (_parent_id, circles) in work {
+    for (child_id, pos, dir, mass, mean_vel, vel_std, count, color, ttl_us) in circles {
+      scene.with_component_mut(
+        child_id,
+        |psc: &mut ParticleSystemComponent| {
+          // Update render config and TTL from emission circle
+          psc.color = color;
+          if ttl_us > 0 {
+            psc.ttl_us = ttl_us as aethervk_oshal_rlib::os::time::timeus_t;
+          }
+
+          let mut particles = psc.particles.write();
+
+          // ── 1. Age existing particles and reap expired ones ─────────────
+          // Collect indices of dead slots for reuse during emission.
+          let mut free_slots: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+          let ttl = psc.ttl_us;
+          for (idx, p) in particles.iter_mut().enumerate() {
+            if p.active == 0 {
+              free_slots.push(idx);
+              continue;
+            }
+            // Increment age
+            let age = p.get_age() + dt_us;
+            p.set_age(age);
+            // Check expiry
+            if ttl > 0 && age >= ttl {
+              p.active = 0;
+              free_slots.push(idx);
+            }
+          }
+
+          // ── 2. Emit new particles, reusing dead slots first ─────────────
+          let max_cap = particles.capacity();
+          let mut free_idx = 0usize;
+
+          for _ in 0..count {
+            // Simple LCG random for velocity jitter
+            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u0 = ((rng_state >> 33) as f32) / (u32::MAX as f32);
+            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u1 = ((rng_state >> 33) as f32) / (u32::MAX as f32);
+            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u2 = ((rng_state >> 33) as f32) / (u32::MAX as f32);
+
+            // Velocity magnitude: Gaussian(mean_vel, vel_std) via Box-Muller
+            let r = (-2.0 * u0.max(1e-8).ln()).sqrt();
+            let theta = 2.0 * core::f32::consts::PI * u1;
+            let speed = (mean_vel + vel_std * r * theta.cos()).max(0.0);
+
+            // Cosine-hemisphere jitter around the emission normal
+            let phi = 2.0 * core::f32::consts::PI * u2;
+            let cos_theta_h = (1.0 - u0 * vel_std.min(1.0)).max(0.0).sqrt();
+            let sin_theta_h = (1.0 - cos_theta_h * cos_theta_h).sqrt();
+            let jitter_local = [
+              sin_theta_h * phi.cos(),
+              sin_theta_h * phi.sin(),
+              cos_theta_h,
+            ];
+
+            // Build tangent frame around emission normal
+            let n = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(dir[0], dir[1], dir[2]);
+            let mut tangent = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, 0.0, 0.0);
+            if n.dot(tangent).abs() > 0.99 {
+              tangent = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 1.0, 0.0);
+            }
+            let bitangent = n.cross(tangent);
+            let bl = bitangent.length();
+            let bitangent = if bl > 1e-6 { bitangent * (1.0 / bl) } else { tangent };
+            let tangent = bitangent.cross(n);
+            let tl = tangent.length();
+            let tangent = if tl > 1e-6 { tangent * (1.0 / tl) } else { bitangent };
+
+            let world_dir = tangent * jitter_local[0]
+              + bitangent * jitter_local[1]
+              + n * jitter_local[2];
+            let wdl = world_dir.length();
+            let world_dir = if wdl > 1e-6 { world_dir * (1.0 / wdl) } else { n };
+
+            let vel = world_dir * speed;
+
+            let mut p = ParticleData {
+              id_low: 0,
+              id_high: 0,
+              age_low: 0,
+              age_high: 0,
+              position: pos,
+              mass,
+              velocity: [vel.x(), vel.y(), vel.z()],
+              active: 1,
+            };
+            p.set_id(psc.next_id as u64);
+            p.set_age(0);
+            psc.next_id += 1;
+
+            // Prefer reusing a dead slot; otherwise push if under capacity
+            if free_idx < free_slots.len() {
+              particles[free_slots[free_idx]] = p;
+              free_idx += 1;
+            } else if particles.len() < max_cap {
+              particles.push(p);
+            }
+            // else: buffer full and no free slots — skip this particle
+          }
+        },
+      );
+    }
+  }
+}
+
 fn dispatch_physics_step(
   scene_id: u64,
   ctx: &alloc::sync::Arc<LogicThreadContext>,
   step_days: f64,
   current_epoch: anise::time::Epoch,
   fixed_dt_us: aethervk_oshal_rlib::os::time::timeus_t,
+  max_sub_dt_us: aethervk_oshal_rlib::os::time::timeus_t,
 ) -> EngineResult<()> {
   let scenes = ctx.scenes.read();
   let scene_ctx = scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
@@ -2049,6 +2270,15 @@ fn dispatch_physics_step(
     }
   } // logic_state read guard dropped here
 
+  // ── CPU-side particle emission + aging ──────────────────────────────────────
+  // Ages existing particles, reaps expired ones, and emits new particles into
+  // each jet child entity's ParticleSystemComponent BEFORE spawning the physics
+  // tasklet, so build_particles picks them up with proper metadata.
+  {
+    let tick_seed = (step_days * 1e9) as u64 ^ fixed_dt_us as u64;
+    emit_particles_from_circles(scene_arc.as_ref(), tick_seed, fixed_dt_us);
+  }
+
   if let Some(ps_lock) = &physics_scene_arc {
     let ps_arc = ps_lock.clone();
     let scene_clone = scene_arc.clone();
@@ -2081,6 +2311,7 @@ fn dispatch_physics_step(
               0,
               dt_us,
               collisions_enabled,
+              max_sub_dt_us,
             )
           }
           crate::simulation_api::structs::PhysicsEngineType::CpuScalar => {
@@ -2092,6 +2323,7 @@ fn dispatch_physics_step(
               0,
               dt_us,
               collisions_enabled,
+              max_sub_dt_us,
             )
           }
           crate::simulation_api::structs::PhysicsEngineType::VulkanCompute => {
@@ -2115,6 +2347,7 @@ fn dispatch_physics_step(
                       0,
                       dt_us,
                       collisions_enabled,
+                      max_sub_dt_us,
                     );
                   }
                   Ok(())
@@ -2151,6 +2384,7 @@ fn dispatch_physics_step(
                       0,
                       dt_us,
                       collisions_enabled,
+                      max_sub_dt_us,
                     );
                   }
                   Ok(())

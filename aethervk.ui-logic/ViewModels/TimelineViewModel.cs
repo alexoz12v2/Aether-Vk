@@ -240,24 +240,25 @@ public partial class TimelineViewModel
         return;
       }
 
-      bool hasJets = false;
+      bool hasFullyConfiguredJet = false;
       var comet = _runtimeService.GetEntityById(CurrentSceneId, state.CometEntityId.Value);
       if (comet != null)
       {
         var emitter = comet
           .Components.OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>()
           .FirstOrDefault();
-        if (emitter != null && emitter.Circles.Count > 0)
+        
+        if (emitter != null && emitter.Circles.Any(c => c.ParticlesPerTick > 0 && c.CircleRadius > 0 && c.Mass > 0 && c.TTL > 0))
         {
-          hasJets = true;
+          hasFullyConfiguredJet = true;
         }
       }
 
-      if (!hasJets)
+      if (!hasFullyConfiguredJet)
       {
         _breadcrumbService.ShowMessageAsync(
           "Cannot Play",
-          "Configure at least one emission jet on the comet before starting the simulation.",
+          "Configure at least one valid emission jet (with >0 particles, radius, mass, and TTL) on the comet before starting the simulation.",
           default,
           5
         );

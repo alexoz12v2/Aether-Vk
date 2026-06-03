@@ -32,9 +32,17 @@ void main() {
     float len = length(screenNormal);
     if (len > 0.0001) {
         vec2 screenNormalDir = screenNormal / len;
-        float outlineThickness = 0.03;
+
+        // Base thickness (0.015 = approx 8-10 pixels on 1080p).
+        float outlineThickness = 0.015;
+
+        // Cap the distance scaling. Beyond this distance, the outline will start
+        // shrinking proportionally with the object rather than staying constant screen-size.
+        float maxDistance = 10.0;
+        float distanceFactor = min(clipPos.w, maxDistance);
+
         // Adjust outline to handle aspect ratio automatically using windowExtent.
-        vec2 offset = screenNormalDir * outlineThickness * clipPos.w;
+        vec2 offset = screenNormalDir * outlineThickness * distanceFactor;
         offset.x /= aspect;
         clipPos.xy += offset;
     }

@@ -606,7 +606,8 @@ pub struct Particle2DrawCall {
   pub pipeline: PipelineKey,
   pub system_particle_offset: u32,
   pub system_indirect_offset: u32,
-  pub config: crate::scene::particles::ParticleEmitterComponent,
+  pub particle_radius: f32,
+  pub color: [f32; 4],
   pub particles: alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
 }
 
@@ -813,7 +814,8 @@ impl RenderLayer {
             pipeline: particle_pipeline,
             system_particle_offset: 0,
             system_indirect_offset: 0,
-            config: config.clone(),
+            particle_radius: config.particle_radius,
+            color: config.color,
             particles: alloc::sync::Arc::downgrade(&component.particles),
           });
         } else {
@@ -1402,8 +1404,8 @@ pub fn do_draw_particle2(
     time,
     camera_right: camera.right,
     seed: draw_call.system_particle_offset as f32,
-    color: draw_call.config.color,
-    radius: draw_call.config.particle_radius,
+    color: draw_call.color,
+    radius: draw_call.particle_radius,
     camera_pos: [
       camera.absolute_pos.x(),
       camera.absolute_pos.y(),
@@ -1779,19 +1781,6 @@ fn draw_layer_content(
   if let Some(draw_call) = &layer.sky_call {
     do_draw_sky(device, cmd_buffer, handle, draw_call)?;
   }
-  if let Some(draw_call) = &layer.grid_call {
-    // Use camera_frame_local_pos (computed precisely during scene conversion via
-    // get_relative_transform) instead of dividing absolute_pos by frame_scale.
-    // This preserves f32 precision for micro layers where global→km conversion
-    // would produce values too large for fract() in the grid shader.
-    let grid_camera = {
-      let mut c = layer_camera.clone();
-      c.absolute_pos = layer.camera_frame_local_pos;
-      c
-    };
-    do_draw_grid(device, cmd_buffer, handle, &grid_camera, draw_call)?;
-  }
-
   for draw_call in &layer.draw_calls {
     if draw_call.use_new_path {
       do_draw_call2(
@@ -1818,6 +1807,19 @@ fn draw_layer_content(
         draw_call,
       )?;
     }
+  }
+
+  if let Some(draw_call) = &layer.grid_call {
+    // Use camera_frame_local_pos (computed precisely during scene conversion via
+    // get_relative_transform) instead of dividing absolute_pos by frame_scale.
+    // This preserves f32 precision for micro layers where global→km conversion
+    // would produce values too large for fract() in the grid shader.
+    let grid_camera = {
+      let mut c = layer_camera.clone();
+      c.absolute_pos = layer.camera_frame_local_pos;
+      c
+    };
+    do_draw_grid(device, cmd_buffer, handle, &grid_camera, draw_call)?;
   }
 
   if !layer.billboard_calls.is_empty() {
