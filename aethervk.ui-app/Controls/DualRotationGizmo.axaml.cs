@@ -9,34 +9,15 @@ namespace AetherVk.Controls;
 
 public partial class DualRotationGizmo : UserControl
 {
-  public static readonly StyledProperty<float> PitchProperty = AvaloniaProperty.Register<
-    DualRotationGizmo,
-    float
-  >(nameof(Pitch));
-  public static readonly StyledProperty<float> YawProperty = AvaloniaProperty.Register<
-    DualRotationGizmo,
-    float
-  >(nameof(Yaw));
-  public static readonly StyledProperty<float> RollProperty = AvaloniaProperty.Register<
-    DualRotationGizmo,
-    float
-  >(nameof(Roll));
+  public static readonly StyledProperty<float> QuatWProperty = AvaloniaProperty.Register<DualRotationGizmo, float>(nameof(QuatW), 1.0f);
+  public static readonly StyledProperty<float> QuatXProperty = AvaloniaProperty.Register<DualRotationGizmo, float>(nameof(QuatX), 0.0f);
+  public static readonly StyledProperty<float> QuatYProperty = AvaloniaProperty.Register<DualRotationGizmo, float>(nameof(QuatY), 0.0f);
+  public static readonly StyledProperty<float> QuatZProperty = AvaloniaProperty.Register<DualRotationGizmo, float>(nameof(QuatZ), 0.0f);
 
-  public float Pitch
-  {
-    get => GetValue(PitchProperty);
-    set => SetValue(PitchProperty, value);
-  }
-  public float Yaw
-  {
-    get => GetValue(YawProperty);
-    set => SetValue(YawProperty, value);
-  }
-  public float Roll
-  {
-    get => GetValue(RollProperty);
-    set => SetValue(RollProperty, value);
-  }
+  public float QuatW { get => GetValue(QuatWProperty); set => SetValue(QuatWProperty, value); }
+  public float QuatX { get => GetValue(QuatXProperty); set => SetValue(QuatXProperty, value); }
+  public float QuatY { get => GetValue(QuatYProperty); set => SetValue(QuatYProperty, value); }
+  public float QuatZ { get => GetValue(QuatZProperty); set => SetValue(QuatZProperty, value); }
 
   private Canvas? _canvas;
 
@@ -51,7 +32,7 @@ public partial class DualRotationGizmo : UserControl
     _canvas = this.FindControl<Canvas>("GizmoCanvas");
     ToolTip.SetTip(
       this,
-      "Fixed axes (UVW in Cyan, Yellow, Magenta) represent the J2000 Mean Earth equator axes.\nThe colored axes (X, -Y, Z) represent the local frame."
+      "Fixed axes (UVW in Cyan, Yellow, Magenta) represent the Ecliptic J2000 axes.\nThe colored axes (X, -Y, Z) represent the local frame."
     );
     RebuildLines();
   }
@@ -59,37 +40,25 @@ public partial class DualRotationGizmo : UserControl
   protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
   {
     base.OnPropertyChanged(change);
-    if (
-      change.Property == PitchProperty
-      || change.Property == YawProperty
-      || change.Property == RollProperty
-    )
+    if (change.Property == QuatWProperty || change.Property == QuatXProperty ||
+        change.Property == QuatYProperty || change.Property == QuatZProperty)
     {
       RebuildLines();
     }
   }
 
-  private static double[,] BuildRotation(double pitchDeg, double yawDeg, double rollDeg)
+  private static double[,] BuildRotationFromQuat(double w, double x, double y, double z)
   {
-    double p = pitchDeg * Math.PI / 180.0;
-    double y = yawDeg * Math.PI / 180.0;
-    double r = rollDeg * Math.PI / 180.0;
-    double cp = Math.Cos(p),
-      sp = Math.Sin(p);
-    double cy = Math.Cos(y),
-      sy = Math.Sin(y);
-    double cr = Math.Cos(r),
-      sr = Math.Sin(r);
     var m = new double[3, 3];
-    m[0, 0] = cy * cr;
-    m[0, 1] = cy * sr;
-    m[0, 2] = -sy;
-    m[1, 0] = sp * sy * cr - cp * sr;
-    m[1, 1] = sp * sy * sr + cp * cr;
-    m[1, 2] = sp * cy;
-    m[2, 0] = cp * sy * cr + sp * sr;
-    m[2, 1] = cp * sy * sr - sp * cr;
-    m[2, 2] = cp * cy;
+    m[0, 0] = 1 - 2 * (y * y + z * z);
+    m[0, 1] = 2 * (x * y - w * z);
+    m[0, 2] = 2 * (x * z + w * y);
+    m[1, 0] = 2 * (x * y + w * z);
+    m[1, 1] = 1 - 2 * (x * x + z * z);
+    m[1, 2] = 2 * (y * z - w * x);
+    m[2, 0] = 2 * (x * z - w * y);
+    m[2, 1] = 2 * (y * z + w * x);
+    m[2, 2] = 1 - 2 * (x * x + y * y);
     return m;
   }
 
@@ -134,7 +103,7 @@ public partial class DualRotationGizmo : UserControl
       cy = 50;
     const double arm = 38;
 
-    var rot = BuildRotation(Pitch, Yaw, Roll);
+    var rot = BuildRotationFromQuat(QuatW, QuatX, QuatY, QuatZ);
     var ident = new double[,]
     {
       { 1, 0, 0 },

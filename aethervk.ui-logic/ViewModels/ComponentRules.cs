@@ -22,17 +22,54 @@ public class TransformEditableRule : IComponentRule
     bool hasCameraOrCursor = entity.Components.Any(c =>
       c is CameraComponent || c is CursorComponent
     );
+    bool hasPhysicalMesh = entity.Components.Any(c => c is PhysicalMeshComponent);
+    bool hasComet = entity.Components.Any(c => c is CometComponent);
+
+    // Default: only camera/cursor transforms are editable
+    bool isPosEditable = hasCameraOrCursor;
+    bool isRotEditable = hasCameraOrCursor;
+    bool isScaleEditable = hasCameraOrCursor;
+    string? posLockedReason = null;
+    string? rotLockedReason = null;
+    string? scaleLockedReason = null;
+
+    if (hasPhysicalMesh)
+    {
+      // Rotation is always locked — governed by IAU Rotational Model
+      isRotEditable = false;
+      rotLockedReason = "Rotation is governed by the IAU Rotational Model under Physical Mesh.";
+
+      if (hasComet)
+      {
+        // Comet position is kinematic (driven by SPK/ephemeris)
+        isPosEditable = false;
+        isScaleEditable = false;
+        posLockedReason = "Position is driven by the ephemeris (SPK) data.";
+        scaleLockedReason = "Scale is locked for comet entities.";
+      }
+      else
+      {
+        // Static mesh: position and scale are freely editable
+        isPosEditable = true;
+        isScaleEditable = true;
+      }
+    }
 
     var transform = entity.Components.OfType<TransformComponent>().FirstOrDefault();
     if (transform != null)
     {
-      transform.IsEditable = hasCameraOrCursor;
+      transform.IsPositionEditable = isPosEditable;
+      transform.IsRotationEditable = isRotEditable;
+      transform.IsScaleEditable = isScaleEditable;
+      transform.PositionLockedReason = posLockedReason;
+      transform.RotationLockedReason = rotLockedReason;
+      transform.ScaleLockedReason = scaleLockedReason;
     }
 
     var highRes = entity.Components.OfType<HighResTransformComponent>().FirstOrDefault();
     if (highRes != null)
     {
-      highRes.IsEditable = hasCameraOrCursor;
+      highRes.IsEditable = isPosEditable;
     }
   }
 }

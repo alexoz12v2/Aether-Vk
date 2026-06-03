@@ -8,8 +8,20 @@ using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.Models;
 
-public partial class TransformComponent : NativeComponent
+public partial class TransformComponent : NativeComponent, CommunityToolkit.Mvvm.Messaging.IRecipient<AetherVk.Logic.Messages.TransformUpdatedFromNativeMessage>
 {
+  public TransformComponent()
+  {
+    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Register(this);
+  }
+
+  public void Receive(AetherVk.Logic.Messages.TransformUpdatedFromNativeMessage message)
+  {
+    if (message.SceneId == SceneId && message.EntityId == EntityId)
+    {
+      PullFromNative();
+    }
+  }
   [ObservableProperty]
   private string _unitLabel = "AU";
 
@@ -23,7 +35,25 @@ public partial class TransformComponent : NativeComponent
   public bool SuspendNotifications { get; set; } = false;
 
   [ObservableProperty]
-  private bool _isEditable = true;
+  private bool _isPositionEditable = true;
+
+  [ObservableProperty]
+  private bool _isRotationEditable = true;
+
+  [ObservableProperty]
+  private bool _isScaleEditable = true;
+
+  /// <summary>Tooltip reason shown when position is locked. Null if editable.</summary>
+  [ObservableProperty]
+  private string? _positionLockedReason;
+
+  /// <summary>Tooltip reason shown when rotation is locked. Null if editable.</summary>
+  [ObservableProperty]
+  private string? _rotationLockedReason;
+
+  /// <summary>Tooltip reason shown when scale is locked. Null if editable.</summary>
+  [ObservableProperty]
+  private string? _scaleLockedReason;
 
   [ObservableProperty]
   private float _posX;
@@ -55,9 +85,16 @@ public partial class TransformComponent : NativeComponent
   [ObservableProperty]
   private float _scaleZ = 1.0f;
 
+  private static readonly HashSet<string> _uiOnlyFields = new()
+  {
+    nameof(IsPositionEditable), nameof(IsRotationEditable), nameof(IsScaleEditable),
+    nameof(PositionLockedReason), nameof(RotationLockedReason), nameof(ScaleLockedReason),
+    nameof(SuspendNotifications),
+  };
+
   protected override bool ShouldPushToNative(string? propertyName)
   {
-    return propertyName != nameof(IsEditable) && propertyName != nameof(SuspendNotifications);
+    return propertyName != null && !_uiOnlyFields.Contains(propertyName);
   }
 
   protected override void PushToNativeImpl()
@@ -818,6 +855,13 @@ public partial class EmissionCircleItem : ObservableObject
   [ObservableProperty]
   private float _beta = 1.0f;
 
+  /// <summary>
+  /// Maximum number of particles this jet can have alive simultaneously.
+  /// Higher values consume more GPU memory. Default: 4096.
+  /// </summary>
+  [ObservableProperty]
+  private uint _maxParticles = 4096;
+
   public float MeanVelocityKms
   {
     get => MeanVelocity / 1000f;
@@ -927,6 +971,7 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
         VelocityDirStdDevRad = Circles[i].VelocityDirStdDevDeg * (float)Math.PI / 180f,
         ChildEntity = Circles[i].VisualEntityId == 0 ? ulong.MaxValue : Circles[i].VisualEntityId,
         Beta = Circles[i].Beta,
+        MaxParticles = Circles[i].MaxParticles,
       };
     }
     AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setParticleEmitterCirclesComponent(
@@ -986,6 +1031,7 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
           VelocityDirStdDevDeg = arr[i].VelocityDirStdDevRad * 180f / (float)Math.PI,
           VisualEntityId = arr[i].ChildEntity == ulong.MaxValue ? 0 : arr[i].ChildEntity,
           Beta = arr[i].Beta,
+          MaxParticles = arr[i].MaxParticles,
         };
         item.PropertyChanged += Item_PropertyChanged;
         Circles.Add(item);
@@ -1279,17 +1325,6 @@ public partial class PhysicalMeshComponent : NativeComponent
   [ObservableProperty]
   private string _assetPath = string.Empty;
 
-  // We expose Pitch, Yaw, Roll so the DualRotationGizmo can bind to them.
-  // These will be pulled from the TransformComponent on the same entity.
-  [ObservableProperty]
-  private float _pitch;
-
-  [ObservableProperty]
-  private float _yaw;
-
-  [ObservableProperty]
-  private float _roll;
-
   // ── Nucleus Physical Parameters ──────────────────────────────────────────
 
   /// <summary>Mass of the nucleus (kg). Used for gravitational interaction and inertia.</summary>
@@ -1319,15 +1354,15 @@ public partial class PhysicalMeshComponent : NativeComponent
 
   /// <summary>Right ascension of pole at epoch (degrees).</summary>
   [ObservableProperty]
-  private double _poleRaDeg = 270.0;
+  private double _poleRaDeg = 90.0;
 
   /// <summary>Declination of pole at epoch (degrees).</summary>
   [ObservableProperty]
-  private double _poleDecDeg = 90.0;
+  private double _poleDecDeg = 90.0 - AetherVk.Logic.ViewModels.IauRotationMath.ObliquityDeg;
 
   /// <summary>Prime meridian angle at epoch (degrees).</summary>
   [ObservableProperty]
-  private double _primeMeridianDeg;
+  private double _primeMeridianDeg = 180.0;
 
   /// <summary>RA rate of change (degrees/century).</summary>
   [ObservableProperty]
@@ -1355,9 +1390,24 @@ public partial class PhysicalMeshComponent : NativeComponent
     if (SimulationContext == IntPtr.Zero)
       return;
 
-    // Recompute quaternion from current IAU parameters
+    // 1. Get correct simulation time in TAI seconds (since J1900)
+    double currentSimTimeTai = NativeInterop.avkSimulationContext_getSimulationTime(SimulationContext, SceneId);
+
+    // 2. Convert TAI seconds since J1900 → elapsed days since J2000
+    double daysSinceJ2000 = (currentSimTimeTai / 86400.0) - 36525.0;
+
+    // 3. Evaluate full IAU model at the current simulation time
+    //    α(t) = α₀ + α̇·T   where T is Julian centuries since J2000
+    //    δ(t) = δ₀ + δ̇·T
+    //    W(t) = W₀ + Ẇ·d   where d is days since J2000
+    double centuriesSinceJ2000 = daysSinceJ2000 / 36525.0;
+    double currentRA  = PoleRaDeg  + (PoleRaRateDeg  * centuriesSinceJ2000);
+    double currentDec = PoleDecDeg + (PoleDecRateDeg * centuriesSinceJ2000);
+    double currentW   = PrimeMeridianDeg + (RotationRateDeg * daysSinceJ2000);
+
+    // 4. Compute quaternion from time-evolved IAU parameters
     var (qw, qx, qy, qz) = AetherVk.Logic.ViewModels.IauRotationMath.IauToQuaternion(
-      PoleRaDeg, PoleDecDeg, PrimeMeridianDeg);
+      currentRA, currentDec, currentW);
 
     // Push the rotation to the native TransformComponent (component type 1)
     // First pull the current transform so we preserve position and scale
@@ -1377,18 +1427,16 @@ public partial class PhysicalMeshComponent : NativeComponent
         System.Runtime.InteropServices.Marshal.StructureToPtr(data, ptr, false);
         NativeInterop.avkSimulationContext_setComponent(
           SimulationContext, SceneId, EntityId, 1, ptr);
+
+        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+          new AetherVk.Logic.Messages.TransformUpdatedFromNativeMessage(SceneId, EntityId)
+        );
       }
     }
     finally
     {
       System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
     }
-
-    // Also update the Pitch/Yaw/Roll Euler angles for the DualRotationGizmo
-    var (pitch, yaw, roll) = AetherVk.Logic.ViewModels.IauRotationMath.QuaternionToGizmoEuler(qw, qx, qy, qz);
-    Pitch = (float)pitch;
-    Yaw = (float)yaw;
-    Roll = (float)roll;
   }
 
   protected override void PullFromNativeImpl()
@@ -1432,42 +1480,6 @@ public partial class PhysicalMeshComponent : NativeComponent
       System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
     }
 
-    int tSize = System.Runtime.InteropServices.Marshal.SizeOf<NativeInterop.FfiTransform>();
-    IntPtr tPtr = System.Runtime.InteropServices.Marshal.AllocHGlobal(tSize);
-    try
-    {
-      if (
-        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_getComponent(
-          SimulationContext,
-          SceneId,
-          EntityId,
-          1,
-          tPtr
-        )
-      )
-      {
-        var tcomp =
-          System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiTransform>(tPtr);
-        double w = tcomp.Rw,
-          x = tcomp.Rx,
-          y = tcomp.Ry,
-          z = tcomp.Rz;
-        double sinr_cosp = 2 * (w * x + y * z);
-        double cosr_cosp = 1 - 2 * (x * x + y * y);
-        Roll = (float)(Math.Atan2(sinr_cosp, cosr_cosp) * 180.0 / Math.PI);
-
-        double sinp = Math.Max(-1.0, Math.Min(1.0, 2 * (w * y - z * x)));
-        Pitch = (float)(Math.Asin(sinp) * 180.0 / Math.PI);
-
-        double siny_cosp = 2 * (w * z + x * y);
-        double cosy_cosp = 1 - 2 * (y * y + z * z);
-        Yaw = (float)(Math.Atan2(siny_cosp, cosy_cosp) * 180.0 / Math.PI);
-      }
-    }
-    finally
-    {
-      System.Runtime.InteropServices.Marshal.FreeHGlobal(tPtr);
-    }
   }
 }
 

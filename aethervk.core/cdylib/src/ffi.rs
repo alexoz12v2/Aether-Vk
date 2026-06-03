@@ -1327,6 +1327,7 @@ pub struct FfiEmissionCircle {
   pub velocity_std_dev: f32,
   pub child_entity: u64,
   pub beta: f32,
+  pub max_particles: u32,
 }
 
 #[unsafe(no_mangle)]
@@ -1372,6 +1373,7 @@ pub unsafe extern "C" fn avkSimulationContext_setParticleEmitterCirclesComponent
         ))
       },
       beta: c.beta,
+      max_particles: c.max_particles.max(64),
     });
   }
 
@@ -1514,7 +1516,7 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
         };
 
         if circle.child_entity.is_none() {
-          to_spawn.push((i, t, circle.color, circle.circle_radius_frac * r));
+          to_spawn.push((i, t, circle.color, circle.circle_radius_frac * r, circle.max_particles));
         } else {
           updates.push((circle.child_entity.unwrap(), t, circle.color));
         }
@@ -1522,7 +1524,7 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
     },
   );
 
-  for (i, t, color, gizmo_radius) in to_spawn {
+  for (idx, (i, t, color, gizmo_radius, max_p)) in to_spawn.into_iter().enumerate() {
     let new_id = scene_ctx.scene.spawn_entity("EmissionSphere");
     scene_ctx.scene.set_parent(new_id, Some(internal_id));
 
@@ -1548,6 +1550,12 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
     let _ = scene_ctx.scene.add_component(new_id, static_mesh);
     let _ = scene_ctx.scene.add_component(new_id, t);
     let _ = scene_ctx.scene.add_component(new_id, gizmo);
+    let _ = scene_ctx.scene.add_component(
+      new_id,
+      aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(
+        max_p as usize
+      ),
+    );
 
     // Register the entity so it gets an external ID for C# to reference
     let _ext_id = scene_ctx.register_entity(new_id);
@@ -1649,6 +1657,7 @@ pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent
         velocity_std_dev: c.velocity_std_dev,
         child_entity: ext_child,
         beta: c.beta,
+        max_particles: c.max_particles,
       };
     }
   }
@@ -2176,7 +2185,7 @@ pub unsafe extern "C" fn avkSimulationContext_loadCometSpk(
   let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::LoadCometSpk {
     task_id,
     spk_id,
-    frame: anise::constants::frames::SUN_J2000,
+    frame: aethervk_core_rlib::simulation::almanac::SUN_ECLIPJ2000,
     epoch,
   });
   task_id
@@ -2194,7 +2203,7 @@ pub unsafe extern "C" fn avkSimulationContext_getEphemerisPosition(
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  let frame = anise::constants::frames::SUN_J2000;
+  let frame = aethervk_core_rlib::simulation::almanac::SUN_ECLIPJ2000;
   let epoch = anise::time::Epoch::from_unix_seconds(epoch_tai_sec);
 
   if let Ok(state) = ctx_ref

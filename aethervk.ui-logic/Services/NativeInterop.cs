@@ -1285,6 +1285,7 @@ public static class NativeInterop
     public float VelocityDirStdDevRad;
     public ulong ChildEntity;
     public float Beta;
+    public uint MaxParticles;
   }
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

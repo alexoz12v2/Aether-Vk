@@ -125,6 +125,7 @@ mod tests {
         current_time,
         current_time + dt,
         collisions_enabled,
+        dt,
       )
       .unwrap();
       if let Some(s) = sync {

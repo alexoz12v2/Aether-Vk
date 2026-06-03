@@ -67,7 +67,7 @@ mod tests {
     let iterations = (duration_secs * 60.0) as usize;
 
     for _ in 0..iterations {
-      let _ = simulation_step(kernels, &mut ps, scene, 0, dt_us, collisions_enabled);
+      let _ = simulation_step(kernels, &mut ps, scene, 0, dt_us, collisions_enabled, dt_us);
     }
     return ps;
   }
@@ -647,6 +647,9 @@ mod tests {
       bvh: None,
       accumulator: 0,
       next_id: 1,
+      particle_radius: 0.01,
+      color: [1.0, 1.0, 1.0, 1.0],
+      ttl_us: 0,
     };
     sys.update_bvh(1.0);
     scene.add_component(particle_system, sys).unwrap();
@@ -768,6 +771,9 @@ mod tests {
       bvh: None,
       accumulator: 0,
       next_id: 1,
+      particle_radius: 0.01,
+      color: [1.0, 1.0, 1.0, 1.0],
+      ttl_us: 0,
     };
     sys.update_bvh(1.0);
     scene.add_component(particle_system, sys).unwrap();

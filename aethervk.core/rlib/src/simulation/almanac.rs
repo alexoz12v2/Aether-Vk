@@ -22,9 +22,9 @@ use alloc::{string::String, vec::Vec};
 /// basically 1 km / 1 AU
 pub const DISTANCE_SCALE_FACTOR: f64 = 1.0 / 6.6846e-9;
 
-/// Defined a frame whose origin is the sun, and whose orientation (equatorial plane) is the plane
-/// which contains the Sun's orbit (rotated ~23 degrees with respect to J2000, which is the plane
-/// containing Earth's orbit in year 2000)
+/// Defines a frame whose origin is the Sun, and whose orientation (equatorial plane) is the Ecliptic plane
+/// (the plane containing Earth's orbit). This is rotated ~23.4 degrees with respect to J2000 (which is the
+/// Earth Mean Equator).
 pub const SUN_ECLIPJ2000: anise::frames::Frame = anise::frames::Frame::new(
   anise::constants::celestial_objects::SUN,
   anise::constants::orientations::ECLIPJ2000,
@@ -519,5 +519,41 @@ impl VecTypeConversionScaled<anise::math::Vector3> for Vec3f32 {
       (value[1] / DISTANCE_SCALE_FACTOR) as f32,
       (value[2] / DISTANCE_SCALE_FACTOR) as f32,
     )
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use anise::time::Epoch;
+
+  #[test]
+  fn test_fetch_earth_position_eclipj2000() {
+    let mut data = AlmanacPackedData::default();
+    
+    // Load the SPK and BPC files requested by the user
+    // Note: Paths are relative to the crate root `aethervk.core/rlib` when running tests
+    data.load_almanac("../../assets/planets/de442.bsp").unwrap();
+    data.load_almanac("../../assets/earth_latest_high_prec.bpc").unwrap();
+
+    // J2000 epoch
+    let epoch = Epoch::from_tdb_seconds(0.0);
+
+    // Fetch Earth (399) position with SUN_ECLIPJ2000
+    let state = data.get_ephem_full(
+      399,
+      crate::simulation::almanac::SUN_ECLIPJ2000,
+      epoch,
+      true,
+      false
+    ).unwrap();
+
+    println!("Earth State (SUN_ECLIPJ2000) at J2000 epoch:");
+    println!("Position: {:?}", state.position);
+    println!("Velocity: {:?}", state.velocity);
+    println!("Rotation: {:?}", state.rotation);
+    println!("Angular Velocity: {:?}", state.angular_velocity);
+
+    assert_ne!(state.position.x(), 0.0);
   }
 }

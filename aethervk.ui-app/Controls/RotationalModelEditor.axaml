@@ -6,7 +6,8 @@
   <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
           BorderThickness="1" CornerRadius="4" Padding="8">
     <StackPanel Spacing="8">
-      <TextBlock Text="IAU Rotational Model" FontWeight="Bold" FontSize="13" />
+      <TextBlock Text="IAU Rotational Model" FontWeight="Bold" FontSize="13" 
+                 ToolTip.Tip="Parameters must strictly adhere to IAU standards and are defined relative to the J2000.0 epoch." />
 
       <!-- Gizmo + IAU fields side by side -->
       <Grid ColumnDefinitions="*, Auto">
@@ -67,9 +68,11 @@
           <TextBlock Text="Fixed: J2000 inertial (UVW)" FontSize="10" Opacity="0.7" />
           <TextBlock Text="Colored: body frame (XYZ)" FontSize="10" Opacity="0.7" />
           <controls:DualRotationGizmo Name="PreviewGizmo"
-                                      Pitch="{Binding GizmoPitch, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}, Mode=OneWay}"
-                                      Yaw="{Binding GizmoYaw, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}, Mode=OneWay}"
-                                      Roll="{Binding GizmoRoll, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}, Mode=OneWay}"
+                                      Width="100" Height="100"
+                                      QuatW="{Binding QuatW, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}, Mode=OneWay}"
+                                      QuatX="{Binding QuatX, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}, Mode=OneWay}"
+                                      QuatY="{Binding QuatY, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}, Mode=OneWay}"
+                                      QuatZ="{Binding QuatZ, RelativeSource={RelativeSource AncestorType=controls:RotationalModelEditor}, Mode=OneWay}"
                                       HorizontalAlignment="Center" />
         </StackPanel>
       </Grid>

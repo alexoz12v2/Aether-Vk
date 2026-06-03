@@ -14,13 +14,13 @@ public partial class RotationalModelEditor : UserControl
   // ── IAU model properties (two-way bindable) ────────────────────────────────
 
   public static readonly StyledProperty<double> PoleRaDegProperty =
-    AvaloniaProperty.Register<RotationalModelEditor, double>(nameof(PoleRaDeg), defaultValue: 270.0);
+    AvaloniaProperty.Register<RotationalModelEditor, double>(nameof(PoleRaDeg), defaultValue: 90.0);
 
   public static readonly StyledProperty<double> PoleDecDegProperty =
-    AvaloniaProperty.Register<RotationalModelEditor, double>(nameof(PoleDecDeg), defaultValue: 90.0);
+    AvaloniaProperty.Register<RotationalModelEditor, double>(nameof(PoleDecDeg), defaultValue: 90.0 - AetherVk.Logic.ViewModels.IauRotationMath.ObliquityDeg);
 
   public static readonly StyledProperty<double> PrimeMeridianDegProperty =
-    AvaloniaProperty.Register<RotationalModelEditor, double>(nameof(PrimeMeridianDeg));
+    AvaloniaProperty.Register<RotationalModelEditor, double>(nameof(PrimeMeridianDeg), defaultValue: 180.0);
 
   public static readonly StyledProperty<double> PoleRaRateDegProperty =
     AvaloniaProperty.Register<RotationalModelEditor, double>(nameof(PoleRaRateDeg));
@@ -36,19 +36,23 @@ public partial class RotationalModelEditor : UserControl
   public static readonly StyledProperty<bool> IsEditableProperty =
     AvaloniaProperty.Register<RotationalModelEditor, bool>(nameof(IsEditable), defaultValue: true);
 
-  // ── Computed Euler angles for the DualRotationGizmo ────────────────────────
+  // ── Computed Quaternion for the DualRotationGizmo ────────────────────────
 
-  public static readonly DirectProperty<RotationalModelEditor, float> GizmoPitchProperty =
+  public static readonly DirectProperty<RotationalModelEditor, float> QuatWProperty =
     AvaloniaProperty.RegisterDirect<RotationalModelEditor, float>(
-      nameof(GizmoPitch), o => o.GizmoPitch);
+      nameof(QuatW), o => o.QuatW);
 
-  public static readonly DirectProperty<RotationalModelEditor, float> GizmoYawProperty =
+  public static readonly DirectProperty<RotationalModelEditor, float> QuatXProperty =
     AvaloniaProperty.RegisterDirect<RotationalModelEditor, float>(
-      nameof(GizmoYaw), o => o.GizmoYaw);
+      nameof(QuatX), o => o.QuatX);
 
-  public static readonly DirectProperty<RotationalModelEditor, float> GizmoRollProperty =
+  public static readonly DirectProperty<RotationalModelEditor, float> QuatYProperty =
     AvaloniaProperty.RegisterDirect<RotationalModelEditor, float>(
-      nameof(GizmoRoll), o => o.GizmoRoll);
+      nameof(QuatY), o => o.QuatY);
+
+  public static readonly DirectProperty<RotationalModelEditor, float> QuatZProperty =
+    AvaloniaProperty.RegisterDirect<RotationalModelEditor, float>(
+      nameof(QuatZ), o => o.QuatZ);
 
   // ── CLR accessors ─────────────────────────────────────────────────────────
 
@@ -94,25 +98,32 @@ public partial class RotationalModelEditor : UserControl
     set => SetValue(IsEditableProperty, value);
   }
 
-  private float _gizmoPitch;
-  public float GizmoPitch
+  private float _quatW;
+  public float QuatW
   {
-    get => _gizmoPitch;
-    private set => SetAndRaise(GizmoPitchProperty, ref _gizmoPitch, value);
+    get => _quatW;
+    private set => SetAndRaise(QuatWProperty, ref _quatW, value);
   }
 
-  private float _gizmoYaw;
-  public float GizmoYaw
+  private float _quatX;
+  public float QuatX
   {
-    get => _gizmoYaw;
-    private set => SetAndRaise(GizmoYawProperty, ref _gizmoYaw, value);
+    get => _quatX;
+    private set => SetAndRaise(QuatXProperty, ref _quatX, value);
   }
 
-  private float _gizmoRoll;
-  public float GizmoRoll
+  private float _quatY;
+  public float QuatY
   {
-    get => _gizmoRoll;
-    private set => SetAndRaise(GizmoRollProperty, ref _gizmoRoll, value);
+    get => _quatY;
+    private set => SetAndRaise(QuatYProperty, ref _quatY, value);
+  }
+
+  private float _quatZ;
+  public float QuatZ
+  {
+    get => _quatZ;
+    private set => SetAndRaise(QuatZProperty, ref _quatZ, value);
   }
 
   public RotationalModelEditor()
@@ -133,19 +144,16 @@ public partial class RotationalModelEditor : UserControl
   }
 
   /// <summary>
-  /// Converts IAU pole (RA, Dec, W) → Euler (Pitch, Yaw, Roll) for the
-  /// DualRotationGizmo, using the shared <see cref="AetherVk.Logic.ViewModels.IauRotationMath"/>.
+  /// Converts IAU pole (RA, Dec, W) → Quaternion for the DualRotationGizmo
   /// </summary>
   private void RecomputeGizmoAngles()
   {
     var (w, x, y, z) = AetherVk.Logic.ViewModels.IauRotationMath.IauToQuaternion(
       PoleRaDeg, PoleDecDeg, PrimeMeridianDeg);
 
-    var (pitch, yaw, roll) = AetherVk.Logic.ViewModels.IauRotationMath.QuaternionToGizmoEuler(
-      w, x, y, z);
-
-    GizmoPitch = (float)pitch;
-    GizmoYaw = (float)yaw;
-    GizmoRoll = (float)roll;
+    QuatW = (float)w;
+    QuatX = (float)x;
+    QuatY = (float)y;
+    QuatZ = (float)z;
   }
 }

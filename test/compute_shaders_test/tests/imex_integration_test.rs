@@ -35,7 +35,7 @@ fn test_imex_integration_all_shaders() {
   let mut almanac_data = AlmanacPackedData::default();
   almanac_data.load_almanac("../../assets/planets").unwrap();
   let epoch = Epoch::from_tdb_seconds(0.0); // J2000
-  let frame = anise::constants::frames::SUN_J2000;
+  let frame = aethervk_core_rlib::simulation::almanac::SUN_ECLIPJ2000;
   let earth = almanac_data.get_ephem_full(399, frame, epoch, true, false).unwrap();
   let moon = almanac_data.get_ephem_full(301, frame, epoch, true, false).unwrap();
 

@@ -54,7 +54,7 @@ impl AlmanacPlanet {
   ) -> EngineResult<()> {
     let kinematic_state = almanac.get_ephem_full(
       self.naif_id,
-      anise::constants::frames::SUN_J2000,
+      crate::simulation::almanac::SUN_ECLIPJ2000,
       epoch,
       true,
       false,
@@ -71,7 +71,11 @@ impl AlmanacPlanet {
       // Compute rotation from IAU-style BodyRotationalModel
       if let Some(model) = rotational_model {
         let jd = epoch.to_jde_utc_days();
-        let orientation_quat = model.orientation_at(jd);
+        let q_j2000_to_eclip = Quat::from_axis_angle(
+          Vec3f32::from_components(1.0, 0.0, 0.0),
+          23.4392911_f32.to_radians(),
+        );
+        let orientation_quat = q_j2000_to_eclip * model.orientation_at(jd);
         // orientation_at returns body-fixed → inertial (world).
         // Transform to PA → World: rot_bf_world * bf_to_pa.inverse()
         transform.rotation = (orientation_quat * self.bf_to_pa.inverse()).normalize();
@@ -90,7 +94,7 @@ impl AlmanacPlanet {
 
         // rotation_rate is in deg/day, convert to rad/s
         let omega_rad_s = (model.rotation_rate.to_radians() / 86400.0) as f32;
-        let ang_vel_inertial = pole_inertial * omega_rad_s;
+        let ang_vel_inertial = q_j2000_to_eclip.rotate_vector(pole_inertial * omega_rad_s);
 
         // Transform to PA frame for physics
         model_angular_velocity = Some(self.bf_to_pa.rotate_vector(ang_vel_inertial));
@@ -136,7 +140,7 @@ impl AlmanacPlanet {
   ) -> EngineResult<()> {
     let kinematic_state = almanac.get_ephem_full(
       self.naif_id,
-      anise::constants::frames::SUN_J2000,
+      crate::simulation::almanac::SUN_ECLIPJ2000,
       epoch,
       true,
       false,

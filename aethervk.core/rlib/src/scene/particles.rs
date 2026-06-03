@@ -95,13 +95,24 @@ impl ParticleData {
   }
 }
 
-/// TODO: Document this item
+/// Per-entity particle system state.
+///
+/// Stores the CPU-side particle buffer and render configuration.  Each tick
+/// the buffer is uploaded to GPU by `build_particles`, integrated by the IMEX
+/// pipeline, and written back by `write_back_to_scene`.
 #[derive(Clone)]
 pub struct ParticleSystemComponent {
   pub particles: alloc::sync::Arc<spin::RwLock<alloc::vec::Vec<ParticleData>>>,
   pub bvh: Option<LinearBVH<f32>>,
   pub accumulator: timeus_t,
   pub next_id: usize,
+  /// Radius of each particle for billboard rendering (km).
+  pub particle_radius: f32,
+  /// RGBA color used by the particle shader.
+  pub color: [f32; 4],
+  /// Time-to-live in microseconds. Particles older than this are reaped.
+  /// A value of 0 means particles never expire.
+  pub ttl_us: timeus_t,
 }
 
 impl core::fmt::Debug for ParticleSystemComponent {
@@ -109,6 +120,8 @@ impl core::fmt::Debug for ParticleSystemComponent {
     f.debug_struct("ParticleSystemComponent")
       .field("particles_count", &self.particles.read().len())
       .field("bvh_is_some", &self.bvh.is_some())
+      .field("particle_radius", &self.particle_radius)
+      .field("ttl_us", &self.ttl_us)
       .finish()
   }
 }
@@ -116,7 +129,7 @@ impl core::fmt::Debug for ParticleSystemComponent {
 impl Component for ParticleSystemComponent {}
 
 impl ParticleSystemComponent {
-  /// TODO: Document this item
+  /// Create a new particle system with the given maximum capacity.
   pub fn new(max_particles: usize) -> Self {
     Self {
       particles: alloc::sync::Arc::new(spin::RwLock::new(alloc::vec::Vec::with_capacity(
@@ -125,6 +138,9 @@ impl ParticleSystemComponent {
       bvh: None,
       accumulator: 0,
       next_id: 0,
+      particle_radius: 0.01,         // 10 m default
+      color: [1.0, 1.0, 1.0, 1.0],   // white default
+      ttl_us: 0,                      // 0 = never expire (set from EmissionCircle.ttl)
     }
   }
 
@@ -290,6 +306,9 @@ pub struct EmissionCircle {
   /// Radiation pressure coefficient (dimensionless). ~1.0 for a perfect absorber;
   /// ~2.0 for a perfect reflector. Used by the Barnes-Hut radiation pressure kernel.
   pub beta: f32,
+  /// Maximum number of particles this jet can have alive simultaneously.
+  /// Controls the capacity of the child entity's `ParticleSystemComponent` buffer.
+  pub max_particles: u32,
 }
 
 /// Attaches a set of discrete circular emission zones to a comet mesh entity.
@@ -330,6 +349,7 @@ mod tests {
       velocity_std_dev: 0.05,
       child_entity: None,
       beta: 1.0,
+      max_particles: 4096,
     });
     assert_eq!(comp.circles.len(), 1);
     assert_eq!(comp.circles[0].latitude_rad, 0.5);

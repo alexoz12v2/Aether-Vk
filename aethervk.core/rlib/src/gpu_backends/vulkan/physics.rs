@@ -1824,7 +1824,8 @@ impl VulkanComputeKernels {
             let mass = circle.mass;
             for _ in 0..circle.particles_per_tick {
               flat_candidates.push([
-                pos[0], pos[1], pos[2], vel[0], vel[1], vel[2], mass, 0.0, 0.0, 0.0,
+                pos[0], pos[1], pos[2], vel[0], vel[1], vel[2], mass,
+                circle.mean_velocity, circle.velocity_std_dev, circle.ttl as f32,
               ]);
             }
           }

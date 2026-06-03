@@ -37,11 +37,13 @@ void main() {
 
     if (len > 0.0001) {
         vec2 screenNormalDir = clipNormal.xy / len;
-        float outlineThickness = 0.03;
+        float outlineThickness = 0.015;
 
         // Multiply back by clipPos.w to keep the outline thickness constant
         // in screen-space, regardless of distance from the camera.
-        vec2 offset = screenNormalDir * outlineThickness * clipPos.w;
+        float maxDistance = 10.0;
+        float distanceFactor = min(clipPos.w, maxDistance);
+        vec2 offset = screenNormalDir * outlineThickness * distanceFactor;
 
         // offset.x /= aspectRatio; // Apply aspect ratio correction here if needed
         clipPos.xy += offset;
