@@ -749,6 +749,7 @@ pub struct StaticMeshComponent {
   pub asset_path: alloc::string::String,
   pub mesh: alloc::sync::Arc<Comet>,
   pub emissive_color: [f32; 4],
+  pub is_visible: bool,
 }
 
 impl Component for StaticMeshComponent {}

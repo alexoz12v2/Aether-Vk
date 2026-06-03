@@ -690,6 +690,7 @@ fn test_spawn_comet_internal_bounds_and_hierarchy() {
           radius_km,
           mass_kg,
           physics_type,
+          0, // dynamic doesn't use comet id
           None,
           Vec3f32::zero(),
         )
@@ -832,6 +833,7 @@ fn test_spawn_comet_multi_scale_layer_separation() {
           radius_km,
           mass_kg,
           physics_type,
+          0, // dynamic doesn't use comet id
           None,
           Vec3f32::zero(),
         )
@@ -1074,8 +1076,9 @@ fn test_camera_controls_microframe() {
 
       let pos = Vec3f32::from_components(0.01, 0.0, 0.0);
       let rot = Quat::identity();
+      // static doesn't use comet id
       let (_lca_ext, _comet_ext) = ctx
-        .spawn_comet_internal(scene_id, model_id, "comet_micro", pos, rot, 1.0, 1000.0, 0, None, Vec3f32::zero())
+        .spawn_comet_internal(scene_id, model_id, "comet_micro", pos, rot, 1.0, 1000.0, 0, 0, None, Vec3f32::zero())
         .unwrap();
 
       // Get the camera that create_default_scene already created

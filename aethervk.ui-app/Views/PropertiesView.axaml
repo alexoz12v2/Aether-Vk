@@ -5,10 +5,14 @@
              xmlns:controls="using:AetherVk.Controls"
              xmlns:components="using:AetherVk.Views.Components"
              xmlns:input="using:AetherVk.Input"
+             xmlns:converters="using:AetherVk.Converters"
              x:DataType="vm:PropertiesViewModel"
              x:Class="AetherVk.Views.PropertiesView"
              input:ActionContext.Id="PropertiesPanel"
              input:ActionContext.Handler="{Binding}">
+    <UserControl.Resources>
+        <converters:UintToColorConverter x:Key="UintToColor" />
+    </UserControl.Resources>
     <Grid RowDefinitions="Auto, *">
         <FlyoutBase.AttachedFlyout>
             <Flyout IsOpen="{Binding IsFlyoutMenuOpen}" Placement="Right">
@@ -319,13 +323,12 @@
                                                     <Grid ColumnDefinitions="Auto, *, Auto">
                                                         <Border Grid.Column="0" Width="16" Height="16" CornerRadius="8" Margin="0,0,12,0">
                                                             <Border.Background>
-                                                                <SolidColorBrush Color="#FFFF9944"/>
+                                                                <SolidColorBrush Color="{Binding ColorArgbUint, Converter={StaticResource UintToColor}}"/>
                                                             </Border.Background>
                                                         </Border>
                                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                                             <TextBlock Text="Emission Circle" FontWeight="Bold" />
                                                         </StackPanel>
-                                                        <Button Grid.Column="2" Content="Edit Color" Classes="accent" Padding="4,2" FontSize="12" ToolTip.Tip="Change Color"/>
                                                     </Grid>
 
                                                     <Grid ColumnDefinitions="Auto,*,Auto,*" Margin="0,8,0,0">
@@ -354,14 +357,12 @@
                                                         <controls:UnboundedSlider Grid.Column="1" Value="{Binding MeanVelocityKms}" HasBounds="True" MinBound="0" Step="0.1"/>
                                                     </Grid>
 
-                                                    <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" Margin="0,4,0,0">
-                                                        <TextBlock Grid.Column="0" Text="R:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding ColorR}" HasBounds="True" MinBound="0" MaxBound="1" Step="0.01" Margin="0,0,10,0"/>
-                                                        <TextBlock Grid.Column="2" Text="G:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <controls:UnboundedSlider Grid.Column="3" Value="{Binding ColorG}" HasBounds="True" MinBound="0" MaxBound="1" Step="0.01" Margin="0,0,10,0"/>
-                                                        <TextBlock Grid.Column="4" Text="B:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <controls:UnboundedSlider Grid.Column="5" Value="{Binding ColorB}" HasBounds="True" MinBound="0" MaxBound="1" Step="0.01"/>
-                                                    </Grid>
+                                                    <!-- Colour picker -->
+                                                    <StackPanel Margin="0,4,0,0">
+                                                        <TextBlock Text="Colour" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                        <ColorPicker Color="{Binding ColorArgbUint, Converter={StaticResource UintToColor}}"
+                                                                     IsAlphaVisible="True" />
+                                                    </StackPanel>
                                                 </StackPanel>
                                             </Border>
                                         </DataTemplate>
@@ -407,55 +408,15 @@
                                     </StackPanel>
                                 </Border>
 
-                                <!-- Orientation Gizmo -->
-                                <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Padding="8">
-                                    <WrapPanel Orientation="Horizontal">
-                                        <StackPanel Spacing="4" Margin="0,0,16,0">
-                                            <TextBlock Text="Orientation Diff (vs UVW J2000)" FontWeight="Bold" />
-                                            <TextBlock Text="Cyan=U, Yellow=-V, Magenta=W" FontSize="11" Opacity="0.7" />
-                                            <TextBlock Text="X/Y/Z show mesh local frame" FontSize="11" Opacity="0.7" />
-                                        </StackPanel>
-                                        <controls:DualRotationGizmo Pitch="{Binding Pitch, Mode=OneWay}" 
-                                                                    Yaw="{Binding Yaw, Mode=OneWay}" 
-                                                                    Roll="{Binding Roll, Mode=OneWay}" 
-                                                                    HorizontalAlignment="Center" />
-                                    </WrapPanel>
-                                </Border>
-
-                                <!-- IAU Rotational Model -->
-                                <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Padding="8">
-                                    <StackPanel Spacing="6">
-                                        <TextBlock Text="IAU Rotational Model" FontWeight="Bold" FontSize="13" />
-                                        <WrapPanel Orientation="Horizontal">
-                                            <StackPanel Margin="0,0,16,8">
-                                                <TextBlock Text="Pole RA (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                                <controls:UnboundedSlider Value="{Binding PoleRaDeg}" Step="0.1" Width="120"/>
-                                            </StackPanel>
-                                            <StackPanel Margin="0,0,16,8">
-                                                <TextBlock Text="Pole Dec (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                                <controls:UnboundedSlider Value="{Binding PoleDecDeg}" Step="0.1" Width="120"/>
-                                            </StackPanel>
-                                            <StackPanel Margin="0,0,16,8">
-                                                <TextBlock Text="W₀ (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                                <controls:UnboundedSlider Value="{Binding PrimeMeridianDeg}" Step="0.1" Width="120"/>
-                                            </StackPanel>
-                                        </WrapPanel>
-                                        <WrapPanel Orientation="Horizontal">
-                                            <StackPanel Margin="0,0,16,8">
-                                                <TextBlock Text="RA rate (°/cy)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                                <controls:UnboundedSlider Value="{Binding PoleRaRateDeg}" Step="0.001" Width="120"/>
-                                            </StackPanel>
-                                            <StackPanel Margin="0,0,16,8">
-                                                <TextBlock Text="Dec rate (°/cy)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                                <controls:UnboundedSlider Value="{Binding PoleDecRateDeg}" Step="0.001" Width="120"/>
-                                            </StackPanel>
-                                            <StackPanel Margin="0,0,16,8">
-                                                <TextBlock Text="Spin (°/day)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                                <controls:UnboundedSlider Value="{Binding RotationRateDeg}" Step="0.01" Width="120"/>
-                                            </StackPanel>
-                                        </WrapPanel>
-                                    </StackPanel>
-                                </Border>
+                                <!-- Rotational Model + Orientation Gizmo -->
+                                <controls:RotationalModelEditor
+                                    PoleRaDeg="{Binding PoleRaDeg}"
+                                    PoleDecDeg="{Binding PoleDecDeg}"
+                                    PrimeMeridianDeg="{Binding PrimeMeridianDeg}"
+                                    PoleRaRateDeg="{Binding PoleRaRateDeg}"
+                                    PoleDecRateDeg="{Binding PoleDecRateDeg}"
+                                    RotationRateDeg="{Binding RotationRateDeg}"
+                                    IsEditable="True" />
                             </StackPanel>
                         </Expander>
                     </DataTemplate>

@@ -546,7 +546,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       if (status == -1)
         throw new Exception("Native Context Destroyed");
 
-      await Task.Delay(1);
+      // Poll interval must be long enough to avoid write-starvation on the
+      // native spin::RwLock<TaskManager>. The workload thread needs write()
+      // to mark a task as complete; if we poll with read() every 1ms the
+      // write can be starved indefinitely.
+      await Task.Delay(16);
     }
   }
 
@@ -1527,6 +1531,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     float radiusKm,
     float massKg,
     uint physicsType = 0,
+    int naifId = 0,
     double poleRaDeg = 0.0,
     double poleDecDeg = 90.0,
     double primeMeridianDeg = 0.0,
@@ -1552,6 +1557,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       radiusKm,
       massKg,
       physicsType,
+      naifId,
       poleRaDeg,
       poleDecDeg,
       primeMeridianDeg,
@@ -1579,6 +1585,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     float radiusKm,
     float massKg,
     uint physicsType,
+    int naifId,
     double poleRaDeg,
     double poleDecDeg,
     double primeMeridianDeg,
@@ -1609,6 +1616,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         radiusKm,
         massKg,
         physicsType,
+        naifId,
         poleRaDeg,
         poleDecDeg,
         primeMeridianDeg,
@@ -2525,13 +2533,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   {
     if (_simulationContext != IntPtr.Zero)
     {
-      // Convert DateTimeOffset to TAI seconds since J2000
-      // J2000 epoch = 2000-01-01T12:00:00Z = 946728000 Unix seconds
-      const double J2000UnixSeconds = 946728000.0;
-      const double TaiUtcOffset = 32.0; // TAI-UTC leap seconds circa 2024 (approximate)
-      double startTai = (start.ToUnixTimeMilliseconds() / 1000.0 - J2000UnixSeconds) + TaiUtcOffset;
-      double endTai = (end.ToUnixTimeMilliseconds() / 1000.0 - J2000UnixSeconds) + TaiUtcOffset;
-      NativeInterop.avkSimulationContext_setEpochRange(_simulationContext, sceneId, startTai, endTai);
+      double startUnix = start.ToUnixTimeMilliseconds() / 1000.0;
+      double endUnix = end.ToUnixTimeMilliseconds() / 1000.0;
+      NativeInterop.avkSimulationContext_setEpochRange(_simulationContext, sceneId, startUnix, endUnix);
     }
   }
 
@@ -2544,14 +2548,40 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
     if (_simulationContext == IntPtr.Zero)
       return false;
 
-    const double J2000UnixSeconds = 946728000.0;
-    const double TaiUtcOffset = 32.0;
-    double startTai = (start.ToUnixTimeMilliseconds() / 1000.0 - J2000UnixSeconds) + TaiUtcOffset;
-    double endTai = (end.ToUnixTimeMilliseconds() / 1000.0 - J2000UnixSeconds) + TaiUtcOffset;
+    double startUnix = start.ToUnixTimeMilliseconds() / 1000.0;
+    double endUnix = end.ToUnixTimeMilliseconds() / 1000.0;
 
     return NativeInterop.avkSimulationContext_checkAlmanacCoverage(
-      _simulationContext, cometSpkId, startTai, endTai
+      _simulationContext, cometSpkId, startUnix, endUnix
     );
+  }
+
+  /// <summary>
+  /// Loads an SPK file into a temporary almanac and probes whether the epoch range
+  /// is covered. Also returns the actual domain contained in the SPK file and the
+  /// discovered NAIF ID (which may differ from the requested spkId — e.g. Horizons
+  /// record number 90000702 vs actual NAIF ID 1000012 for 67P).
+  /// Does NOT modify the main simulation almanac.
+  /// </summary>
+  public (bool covers, DateTimeOffset? domainStart, DateTimeOffset? domainEnd, int discoveredNaifId)
+    ProbeSpkFile(string path, int spkId, DateTimeOffset start, DateTimeOffset end)
+  {
+    double startUnix = start.ToUnixTimeMilliseconds() / 1000.0;
+    double endUnix = end.ToUnixTimeMilliseconds() / 1000.0;
+
+    bool covers = NativeInterop.avkSimulationContext_probeSpkFile(
+      path, spkId, startUnix, endUnix,
+      out double domainStartUnix, out double domainEndUnix,
+      out int discoveredNaifId);
+
+    DateTimeOffset? ds = null, de = null;
+    if (domainStartUnix != 0.0 || domainEndUnix != 0.0)
+    {
+      ds = DateTimeOffset.FromUnixTimeMilliseconds((long)(domainStartUnix * 1000.0));
+      de = DateTimeOffset.FromUnixTimeMilliseconds((long)(domainEndUnix * 1000.0));
+    }
+
+    return (covers, ds, de, discoveredNaifId);
   }
 
   // Keep a reference to prevent garbage collection of the callback delegate.

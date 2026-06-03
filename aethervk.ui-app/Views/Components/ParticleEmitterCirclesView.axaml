@@ -4,9 +4,13 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:models="using:AetherVk.Logic.Models"
              xmlns:controls="using:AetherVk.Controls"
+             xmlns:converters="using:AetherVk.Converters"
              mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="600"
              x:Class="AetherVk.Views.Components.ParticleEmitterCirclesView"
              x:DataType="models:ParticleEmitterCirclesComponent">
+    <UserControl.Resources>
+        <converters:UintToColorConverter x:Key="UintToColor" />
+    </UserControl.Resources>
     <Design.DataContext>
         <models:ParticleEmitterCirclesComponent />
     </Design.DataContext>
@@ -29,7 +33,7 @@
                                             CornerRadius="9" Margin="0,0,12,0"
                                             VerticalAlignment="Center">
                                         <Border.Background>
-                                            <SolidColorBrush Color="#FFFF9944"/>
+                                            <SolidColorBrush Color="{Binding ColorArgbUint, Converter={StaticResource UintToColor}}"/>
                                         </Border.Background>
                                     </Border>
                                     <TextBlock Grid.Column="1" Text="Emission Jet"
@@ -44,7 +48,6 @@
                                 </Grid>
 
                                 <!-- Properties wrapped for responsiveness -->
-                                <!-- Fluent 3 styling uses more breathing room and stacked labels for compact spaces -->
                                 <WrapPanel Margin="0,4,0,0">
                                     
                                     <!-- Position -->
@@ -89,18 +92,12 @@
                                         <controls:UnboundedSlider Value="{Binding Beta}" HasBounds="True" MinBound="0.0" Step="0.1" Width="120"/>
                                     </StackPanel>
 
-                                    <!-- Colour -->
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="R" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding ColorR}" HasBounds="True" MinBound="0" MaxBound="1" Step="0.01" Width="80"/>
-                                    </StackPanel>
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="G" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding ColorG}" HasBounds="True" MinBound="0" MaxBound="1" Step="0.01" Width="80"/>
-                                    </StackPanel>
+                                    <!-- Colour picker -->
                                     <StackPanel Margin="0,0,0,12">
-                                        <TextBlock Text="B" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding ColorB}" HasBounds="True" MinBound="0" MaxBound="1" Step="0.01" Width="80"/>
+                                        <TextBlock Text="Colour" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <ColorPicker Color="{Binding ColorArgbUint, Converter={StaticResource UintToColor}}"
+                                                     IsAlphaVisible="True"
+                                                     Width="200" />
                                     </StackPanel>
                                 </WrapPanel>
                             </StackPanel>

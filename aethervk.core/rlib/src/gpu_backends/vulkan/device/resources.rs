@@ -2326,7 +2326,7 @@ impl ArchetypeArenaCreate for BvhRenderResourceArchetypeArena {
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
-      .size(144)]; // mat4 (64) + vec4 * 5 (80) = 144 bytes
+      .size(80)]; // mat4 (64) + BDA ptr (8) + pad (8) = 80 bytes
 
     let pipeline_layout_info =
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
@@ -2699,7 +2699,7 @@ impl ArchetypeArenaCreate for MinimapRenderResourceArchetypeArena {
     let push_constant_ranges = [vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
-      size: 544,
+      size: core::mem::size_of::<crate::gpu::MinimapPushConstants>() as u32,
     }];
     let pipeline_layout_info =
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);

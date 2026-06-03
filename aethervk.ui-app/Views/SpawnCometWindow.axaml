@@ -139,15 +139,19 @@
         <!-- SPK Record Selection -->
         <StackPanel Spacing="8" Margin="0,16,0,0"
                     IsVisible="{Binding SelectedComet, Converter={x:Static ObjectConverters.IsNotNull}}">
-          <StackPanel Spacing="8">
-            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-              <TextBlock Text="Reference Year:" VerticalAlignment="Center" />
-              <NumericUpDown Value="{Binding OrbitYear}" FormatString="0" Minimum="1900" Maximum="2100" Width="120" />
-            </StackPanel>
-            <Button Content="Fetch Historical Records"
-                    Command="{Binding FetchSpkRecordsCommand}"
-                    Classes="accent" HorizontalAlignment="Left" />
-          </StackPanel>
+
+          <!-- Timeline dates (used for SPK record query + validation) -->
+          <TextBlock Text="Simulation Timeline" FontWeight="SemiBold" FontSize="13" />
+          <controls:EpochDatePicker Label="Start Epoch" SelectedEpoch="{Binding WizardStartEpoch, Mode=TwoWay}" />
+          <controls:EpochDatePicker Label="End Epoch" SelectedEpoch="{Binding WizardEndEpoch, Mode=TwoWay}" />
+          <TextBlock Text="Start epoch must be before end epoch."
+                     IsVisible="{Binding !IsEpochRangeValid}"
+                     Foreground="Orange" FontSize="12" />
+
+          <Button Content="Fetch Historical Records"
+                  Command="{Binding FetchSpkRecordsCommand}"
+                  IsEnabled="{Binding IsEpochRangeValid}"
+                  Classes="accent" HorizontalAlignment="Left" />
 
           <ListBox ItemsSource="{Binding SpkRecordsData}"
                    SelectedItem="{Binding SelectedSpkRecord}"
@@ -173,19 +177,17 @@
             <TextBlock Text="Nucleus Parameters" FontWeight="Bold" FontSize="14" />
 
             <!-- Radius -->
-            <StackPanel Spacing="4">
-              <Grid ColumnDefinitions="Auto, Auto, Auto">
-                <TextBlock Grid.Column="0" Text="Radius (km):" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,12,0" />
-                <controls:UnboundedSlider Grid.Column="1" Value="{Binding CometRadiusKm}" Width="200" />
-                <Button Grid.Column="2" Content="↺ Reset" Command="{Binding ResetRadiusCommand}"
-                        IsVisible="{Binding IsRadiusOverridden}"
-                        Margin="8,0,0,0" Padding="8,4" FontSize="11" />
-              </Grid>
-            </StackPanel>
+            <Grid ColumnDefinitions="110, *, Auto" Margin="0,0,0,4">
+              <TextBlock Grid.Column="0" Text="Radius (km):" VerticalAlignment="Center" FontWeight="SemiBold" />
+              <controls:UnboundedSlider Grid.Column="1" Value="{Binding CometRadiusKm}" />
+              <Button Grid.Column="2" Content="↺ Reset" Command="{Binding ResetRadiusCommand}"
+                      IsVisible="{Binding IsRadiusOverridden}"
+                      Margin="8,0,0,0" Padding="8,4" FontSize="11" />
+            </Grid>
 
             <!-- Mass -->
-            <Grid ColumnDefinitions="Auto, *">
-              <TextBlock Grid.Column="0" Text="Mass (kg):" VerticalAlignment="Center" FontWeight="SemiBold" Width="90" />
+            <Grid ColumnDefinitions="110, *">
+              <TextBlock Grid.Column="0" Text="Mass (kg):" VerticalAlignment="Center" FontWeight="SemiBold" />
               <controls:UnboundedSlider Grid.Column="1" Value="{Binding MassKg}" />
             </Grid>
 
@@ -195,72 +197,17 @@
               <TextBox Text="{Binding EntityName}" Watermark="New Comet" />
             </StackPanel>
 
-            <!-- Initial Orientation -->
-            <TextBlock Text="Orientation" FontWeight="Bold" FontSize="14" Margin="0,8,0,0" />
-            <Grid ColumnDefinitions="*, Auto" Margin="0,4,0,0">
-              <StackPanel Grid.Column="0" Spacing="8">
-                <Grid ColumnDefinitions="Auto, *">
-                  <TextBlock Grid.Column="0" Text="Pitch (X):" VerticalAlignment="Center" Width="70" />
-                  <controls:UnboundedSlider Grid.Column="1" Value="{Binding Pitch}" IsWrapped="True" Margin="8,0" />
-                </Grid>
-                <Grid ColumnDefinitions="Auto, *">
-                  <TextBlock Grid.Column="0" Text="Yaw (Y):" VerticalAlignment="Center" Width="70" />
-                  <controls:UnboundedSlider Grid.Column="1" Value="{Binding Yaw}" IsWrapped="True" Margin="8,0" />
-                </Grid>
-                <Grid ColumnDefinitions="Auto, *">
-                  <TextBlock Grid.Column="0" Text="Roll (Z):" VerticalAlignment="Center" Width="70" />
-                  <controls:UnboundedSlider Grid.Column="1" Value="{Binding Roll}" IsWrapped="True" Margin="8,0" />
-                </Grid>
 
-                <!-- Local Frames -->
-                <StackPanel Spacing="4" Margin="0,8,0,0">
-                  <TextBlock Text="User Local Frame" FontWeight="SemiBold" />
-                  <TextBlock Text="{Binding UserLocalFrameString}" FontFamily="Consolas, Courier New, monospace" FontSize="11" />
-                  <TextBlock Text="Sim Local Frame" FontWeight="SemiBold" Margin="0,4,0,0" />
-                  <TextBlock Text="{Binding SimulationLocalFrameString}" FontFamily="Consolas, Courier New, monospace" FontSize="11" />
-                </StackPanel>
-              </StackPanel>
+            <!-- IAU Rotational Model + Orientation Gizmo -->
+            <controls:RotationalModelEditor
+                PoleRaDeg="{Binding PoleRaDeg}"
+                PoleDecDeg="{Binding PoleDecDeg}"
+                PrimeMeridianDeg="{Binding PrimeMeridianDeg}"
+                PoleRaRateDeg="{Binding PoleRaRateDeg}"
+                PoleDecRateDeg="{Binding PoleDecRateDeg}"
+                RotationRateDeg="{Binding RotationRateDeg}"
+                IsEditable="True" />
 
-              <!-- Gizmo -->
-              <Border Grid.Column="1" Width="120" Height="120" Background="{DynamicResource Bg.Outline}" CornerRadius="8" Padding="12" VerticalAlignment="Top" Margin="12,0,0,0">
-                <controls:RotationGizmo Pitch="{Binding Pitch, Mode=TwoWay}" Yaw="{Binding Yaw, Mode=TwoWay}" Roll="{Binding Roll, Mode=TwoWay}" />
-              </Border>
-            </Grid>
-
-            <!-- IAU Rotational Model -->
-            <Expander Header="IAU Rotational Model (optional)" Margin="0,8,0,0">
-              <StackPanel Spacing="8" Margin="0,8,0,0">
-                <Grid ColumnDefinitions="Auto, *" RowDefinitions="Auto, Auto, Auto">
-                  <TextBlock Grid.Row="0" Grid.Column="0" Text="Pole RA (°):" VerticalAlignment="Center" Width="120" />
-                  <controls:UnboundedSlider Grid.Row="0" Grid.Column="1" Value="{Binding PoleRaDeg}" />
-                  <TextBlock Grid.Row="1" Grid.Column="0" Text="Pole Dec (°):" VerticalAlignment="Center" Width="120" Margin="0,4,0,0" />
-                  <controls:UnboundedSlider Grid.Row="1" Grid.Column="1" Value="{Binding PoleDecDeg}" Margin="0,4,0,0" />
-                  <TextBlock Grid.Row="2" Grid.Column="0" Text="Prime Meridian (°):" VerticalAlignment="Center" Width="120" Margin="0,4,0,0" />
-                  <controls:UnboundedSlider Grid.Row="2" Grid.Column="1" Value="{Binding PrimeMeridianDeg}" Margin="0,4,0,0" />
-                </Grid>
-
-                <TextBlock Text="Rates" FontWeight="SemiBold" Margin="0,8,0,0" />
-                <Grid ColumnDefinitions="Auto, *" RowDefinitions="Auto, Auto, Auto">
-                  <TextBlock Grid.Row="0" Grid.Column="0" Text="Pole RA rate (°/cy):" VerticalAlignment="Center" Width="140" />
-                  <controls:UnboundedSlider Grid.Row="0" Grid.Column="1" Value="{Binding PoleRaRateDeg}" />
-                  <TextBlock Grid.Row="1" Grid.Column="0" Text="Pole Dec rate (°/cy):" VerticalAlignment="Center" Width="140" Margin="0,4,0,0" />
-                  <controls:UnboundedSlider Grid.Row="1" Grid.Column="1" Value="{Binding PoleDecRateDeg}" Margin="0,4,0,0" />
-                  <TextBlock Grid.Row="2" Grid.Column="0" Text="Spin rate (°/day):" VerticalAlignment="Center" Width="140" Margin="0,4,0,0" />
-                  <controls:UnboundedSlider Grid.Row="2" Grid.Column="1" Value="{Binding RotationRateDeg}" Margin="0,4,0,0" />
-                </Grid>
-              </StackPanel>
-            </Expander>
-
-            <!-- Angular Velocity -->
-            <TextBlock Text="Angular Velocity (rad/s)" FontWeight="Bold" FontSize="14" Margin="0,12,0,0" />
-            <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" Margin="0,4,0,0">
-              <TextBlock Grid.Column="0" Text="ωx:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-              <controls:UnboundedSlider Grid.Column="1" Value="{Binding AngularVelX}" Margin="0,0,8,0"/>
-              <TextBlock Grid.Column="2" Text="ωy:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-              <controls:UnboundedSlider Grid.Column="3" Value="{Binding AngularVelY}" Margin="0,0,8,0"/>
-              <TextBlock Grid.Column="4" Text="ωz:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-              <controls:UnboundedSlider Grid.Column="5" Value="{Binding AngularVelZ}"/>
-            </Grid>
           </StackPanel>
         </Border>
         
@@ -268,23 +215,14 @@
       </StackPanel>
 
       <!-- ══════════════════════════════════════════════════════════════════════ -->
-      <!-- Step 4: Timeline Confirmation                                         -->
+      <!-- Step 4: Validate Timeline                                            -->
       <!-- ══════════════════════════════════════════════════════════════════════ -->
       <StackPanel Classes="stepStack" IsVisible="{Binding IsStep4}">
-        <TextBlock Text="Step 4: Confirm Timeline" FontWeight="Bold" FontSize="16" />
+        <TextBlock Text="Step 4: Validate Timeline" FontWeight="Bold" FontSize="16" />
 
-        <TextBlock Text="Set the simulation epoch interval. SPK coverage will be verified (and downloaded if necessary) when you click Validate." TextWrapping="Wrap" Foreground="{DynamicResource Text.Secondary}" />
+        <TextBlock Text="SPK coverage will be verified (and downloaded if necessary) for the epoch interval you selected in Step 3." TextWrapping="Wrap" Foreground="{DynamicResource Text.Secondary}" />
 
-        <!-- Start Epoch -->
-        <controls:EpochDatePicker Label="Start Epoch" SelectedEpoch="{Binding WizardStartEpoch, Mode=TwoWay}" />
-
-        <!-- End Epoch -->
-        <controls:EpochDatePicker Label="End Epoch" SelectedEpoch="{Binding WizardEndEpoch, Mode=TwoWay}" />
-
-        <!-- Validation Message -->
-        <TextBlock Text="Start epoch must be before end epoch."
-                   IsVisible="{Binding !IsEpochRangeValid}"
-                   Foreground="Orange" FontSize="12" />
+        <TextBlock Text="{Binding EpochSummary}" FontSize="13" Margin="0,8,0,0" />
 
         <!-- Validate Timeline Button -->
         <Button Content="Validate Timeline"

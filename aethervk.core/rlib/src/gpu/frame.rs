@@ -439,11 +439,12 @@ impl BvhDrawCall {
     }
   }
 
-  /// TODO: Document this item
-  pub fn to_push_constants(
+  /// Returns the MVP matrix and per-box data for BVH debug rendering.
+  /// The box data should be uploaded via BDA; only the MVP stays in push constants.
+  pub fn to_push_data(
     &self,
     camera_data: &CameraRenderData,
-  ) -> Option<super::BvhPushConstants> {
+  ) -> Option<([f32; 16], super::BvhBoxData)> {
     let center_arr: [f32; 3] = self.center.into();
     let extents_arr: [f32; 3] = self.extents.into();
     let ax = self.axes[0];
@@ -452,14 +453,16 @@ impl BvhDrawCall {
     let model = &self.model_matrix;
     let view_proj = &camera_data.view_proj;
     let mvp_mat = *view_proj * *model;
-    Some(super::BvhPushConstants {
-      mvp_arr: mvp_mat.into(),
-      center_type: [center_arr[0], center_arr[1], center_arr[2], 1.0],
-      extents_arr: [extents_arr[0], extents_arr[1], extents_arr[2], 0.0],
-      axes_x: [ax[0], ax[1], ax[2], 0.0],
-      axes_y: [ay[0], ay[1], ay[2], 0.0],
-      axes_z: [az[0], az[1], az[2], 0.0],
-    })
+    Some((
+      mvp_mat.into(),
+      super::BvhBoxData {
+        center_type: [center_arr[0], center_arr[1], center_arr[2], 1.0],
+        extents: [extents_arr[0], extents_arr[1], extents_arr[2], 0.0],
+        axes_x: [ax[0], ax[1], ax[2], 0.0],
+        axes_y: [ay[0], ay[1], ay[2], 0.0],
+        axes_z: [az[0], az[1], az[2], 0.0],
+      },
+    ))
   }
 }
 
@@ -1078,10 +1081,8 @@ pub fn do_draw_measurement(
     _pad1: 0.0,
     camera_up: camera.up,
     _pad2: 0.0,
-    camera_right: camera.right,
-    _pad3: 0.0,
     color: [1.0, 1.0, 1.0], // White
-    _pad4: 0.0,
+    _pad3: 0.0,
   };
   device.push_measurement_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)?;
@@ -1250,8 +1251,7 @@ pub fn do_draw_call(
 
   let model = draw_call.model_matrix;
   let mvp = camera.view_proj * model;
-  let push_constants = PushConstants {
-    model_view_proj: mvp.into(),
+  let extra = super::MeshPushExtra {
     model: model.into(),
     sun_pos: sun_pos.into(),
     texture_flags: draw_call.texture_flags,
@@ -1259,7 +1259,13 @@ pub fn do_draw_call(
     camera_pos: camera.pos.into(),
     emissive_intensity: draw_call.emissive_intensity,
     emissive_color: draw_call.emissive_color,
-    _unused_pad: 0,
+    _pad: 0,
+  };
+  let extra_ptr = device.upload_mesh_push_extra(cmd_buffer, &extra)?;
+  let push_constants = PushConstants {
+    model_view_proj: mvp.into(),
+    extra_ptr,
+    _pad: 0,
   };
   device.push_constants_mesh(cmd_buffer, &push_constants)?;
   device.draw_indexed(cmd_buffer, draw_call.index_count)?;
@@ -1272,8 +1278,7 @@ pub fn do_draw_call(
       // Let's assume it works or we use the regular pipeline key for bind_buffers
       device.bind_buffers(cmd_buffer, outline_pipeline, draw_call.buffers)?;
 
-      let outline_push = PushConstants {
-        model_view_proj: mvp.into(),
+      let outline_extra = super::MeshPushExtra {
         model: model.into(),
         sun_pos: sun_pos.into(),
         texture_flags: draw_call.texture_flags,
@@ -1285,7 +1290,13 @@ pub fn do_draw_call(
           draw_call.outline_color[1],
           draw_call.outline_color[2],
         ], // Emissive color abused for outline color
-        _unused_pad: 0,
+        _pad: 0,
+      };
+      let outline_extra_ptr = device.upload_mesh_push_extra(cmd_buffer, &outline_extra)?;
+      let outline_push = PushConstants {
+        model_view_proj: mvp.into(),
+        extra_ptr: outline_extra_ptr,
+        _pad: 0,
       };
       device.push_constants_mesh(cmd_buffer, &outline_push)?;
       device.set_line_width(cmd_buffer, 1.0)?;
@@ -1445,9 +1456,15 @@ pub fn do_bvh_draw_call(
   camera: &CameraRenderData,
   draw_call: &BvhDrawCall,
 ) -> GpuResult<()> {
-  let push_constants = draw_call
-    .to_push_constants(camera)
-    .ok_or(crate::gpu_err!("Couldn't compute BVH push constants"))?;
+  let (mvp, box_data) = draw_call
+    .to_push_data(camera)
+    .ok_or(crate::gpu_err!("Couldn't compute BVH push data"))?;
+  let bvh_data_ptr = device.upload_bvh_box_data(cmd_buffer, &box_data)?;
+  let push_constants = crate::gpu::BvhPushConstants {
+    mvp_arr: mvp,
+    bvh_data_ptr,
+    _pad: 0,
+  };
   device.push_bvh_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)
 }

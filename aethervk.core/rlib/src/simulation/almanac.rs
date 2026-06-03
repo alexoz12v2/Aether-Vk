@@ -87,6 +87,104 @@ impl AlmanacPackedData {
     Ok(())
   }
 
+  /// Loads an SPK file into a temporary almanac instance and probes whether
+  /// the SPK data covers the given epoch range for the specified NAIF ID.
+  /// Returns true if the SPK segment summary spans [start_epoch, end_epoch].
+  ///
+  /// Uses `spk_domain()` which reads SPK segment summaries directly —
+  /// no ephemeris path resolution is performed, so this works with just
+  /// the comet's SPK file (no de440s.bsp required).
+  pub fn probe_spk_file<P: AsRef<os::fs::Path>>(
+    path: P,
+    spk_id: i32,
+    start_epoch: anise::time::Epoch,
+    end_epoch: anise::time::Epoch,
+  ) -> bool {
+    let (covers, _, _) = Self::probe_spk_file_with_domain(path, spk_id, start_epoch, end_epoch);
+    covers
+  }
+
+  /// Like `probe_spk_file`, but also returns the actual SPK domain (start, end)
+  /// and the **discovered NAIF ID** (which may differ from the requested `spk_id`).
+  /// Returns `(false, None, 0)` when the file or ID lookup fails entirely.
+  ///
+  /// Tries the requested `spk_id` first, then its negation, then falls back
+  /// to `spk_domains()` to find the target body in the file. This handles
+  /// JPL Horizons SPK files where the record number (e.g. 90000702) differs
+  /// from the NAIF target_id stored in the SPK segment (e.g. 1000012).
+  pub fn probe_spk_file_with_domain<P: AsRef<os::fs::Path>>(
+    path: P,
+    spk_id: i32,
+    start_epoch: anise::time::Epoch,
+    end_epoch: anise::time::Epoch,
+  ) -> (bool, Option<(anise::time::Epoch, anise::time::Epoch)>, i32) {
+    let path_ref = path.as_ref();
+
+    // Load the SPK directly into a bare Almanac — we intentionally bypass
+    // AlmanacPackedData::load_almanac because that triggers refresh_spk_coverage,
+    // which calls translate_geometric with the Sun as observer and panics when
+    // the planetary DE ephemeris (de440s.bsp) is not loaded.
+    let mmap = match Mmap::open(path_ref) {
+      Ok(m) => m,
+      Err(_) => return (false, None, 0),
+    };
+    let bytes = bytes::Bytes::from_owner(mmap);
+
+    let mut almanac = anise::almanac::Almanac::default();
+    let alias = path_ref
+      .to_str_unified()
+      .and_then(|c| c.to_str().map(alloc::string::String::from))
+      .unwrap_or_else(|| alloc::string::String::from("probe"));
+
+    if almanac.load_from_bytes_mut(bytes, &alias).is_err() {
+      return (false, None, 0);
+    }
+
+    // Horizons may round SPK boundaries by ±1 day. Allow a 2-day tolerance
+    // so we don't reject a valid file that's off by one day at the edges.
+    let tolerance = anise::time::Duration::from_days(2.0);
+
+    let ids_to_try = [spk_id, -spk_id];
+    for &try_id in &ids_to_try {
+      if let Ok((domain_start, domain_end)) = almanac.spk_domain(try_id) {
+        let covers = domain_start <= start_epoch + tolerance
+          && domain_end >= end_epoch - tolerance;
+        return (covers, Some((domain_start, domain_end)), try_id);
+      }
+    }
+
+    // Neither sign matched — fall back to spk_domains() to find the target body.
+    // Filter out ID 0 (Solar System Barycenter) which is always present as the
+    // center body in Horizons SPKs but is not the target we're looking for.
+    if let Ok(domains) = almanac.spk_domains() {
+      let target_bodies: alloc::vec::Vec<(i32, (anise::time::Epoch, anise::time::Epoch))> = domains
+        .into_iter()
+        .filter(|&(id, _)| id != 0) // exclude SSB center body
+        .collect();
+
+      if target_bodies.len() == 1 {
+        let (found_id, (ds, de)) = target_bodies[0];
+        let covers = ds <= start_epoch + tolerance
+          && de >= end_epoch - tolerance;
+        return (covers, Some((ds, de)), found_id);
+      }
+
+      // Multiple target bodies — return the union of all domains for diagnostic,
+      // but we can't pick a single ID, so return 0.
+      if !target_bodies.is_empty() {
+        let mut earliest = target_bodies[0].1.0;
+        let mut latest = target_bodies[0].1.1;
+        for &(_, (s, e)) in &target_bodies[1..] {
+          if s < earliest { earliest = s; }
+          if e > latest { latest = e; }
+        }
+        return (false, Some((earliest, latest)), 0);
+      }
+    }
+
+    (false, None, 0)
+  }
+
   fn load_single_spk(&mut self, path: &os::fs::Path) -> EngineResult<()> {
     if let Some(path_cow) = path.to_str_unified() {
       let path_str = path_cow.to_str().unwrap();
@@ -138,20 +236,18 @@ impl AlmanacPackedData {
     // plus any custom IDs we may encounter.
     let candidate_ids: &[i32] = &[
       // Sun, major planets, barycenters
-      10, 1, 2, 3, 4, 5, 6, 7, 8, 9,
-      199, 299, 399, 499, 599, 699, 799, 899, 999,
+      10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 199, 299, 399, 499, 599, 699, 799, 899, 999,
       // Barycenters
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
-      // Moon, common comets/asteroids (extend as needed)
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, // Moon, common comets/asteroids (extend as needed)
       301,
     ];
 
     // Test epochs spanning a wide range
     let test_epochs = [
-      anise::time::Epoch::from_tdb_seconds(-3.155e9),   // ~1900
-      anise::time::Epoch::from_tdb_seconds(0.0),        // J2000
-      anise::time::Epoch::from_tdb_seconds(3.155e9),    // ~2100
-      anise::time::Epoch::from_tdb_seconds(6.311e9),    // ~2200
+      anise::time::Epoch::from_tdb_seconds(-3.155e9), // ~1900
+      anise::time::Epoch::from_tdb_seconds(0.0),      // J2000
+      anise::time::Epoch::from_tdb_seconds(3.155e9),  // ~2100
+      anise::time::Epoch::from_tdb_seconds(6.311e9),  // ~2200
     ];
 
     for &id in candidate_ids {

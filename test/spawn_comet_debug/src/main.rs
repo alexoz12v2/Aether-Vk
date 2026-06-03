@@ -58,6 +58,7 @@ impl SimulationDelegate for SpawnCometDelegate {
       1.0,    // radius_km = 1 km
       1000.0, // mass_kg
       0,      // physics_type = static
+      0,      // comet id (ignored when static)
       None,   // rotational_model
       Vec3f32::zero(), // angular_velocity
     )?;

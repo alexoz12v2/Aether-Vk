@@ -7534,7 +7534,125 @@ impl RenderDevice for Device {
       data_ptr,
     }))
   }
+  #[named]
+  fn upload_bvh_box_data(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    data: &crate::gpu::BvhBoxData,
+  ) -> GpuResult<u64> {
+    let data_size = core::mem::size_of::<crate::gpu::BvhBoxData>();
+    let res = DebugTrackedRwLock::read(&self.res);
+    let _cmd = self.get_cmd(cmd_buffer)?;
 
+    let mut staging_arena_guard = DebugTrackedRwLock::write(&res.frame_staging_arena);
+    let arena = staging_arena_guard
+      .as_mut()
+      .ok_or(gpu_err!("BVH box data: staging arena missing"))?;
+
+    let (offset, ptr) = arena
+      .allocate(data_size, 4)
+      .ok_or(GpuError::OutOfMemory)?;
+
+    unsafe {
+      core::ptr::copy_nonoverlapping(
+        data as *const _ as *const u8,
+        ptr,
+        data_size,
+      );
+    }
+
+    let base_addr = unsafe {
+      self
+        .device
+        .buffer_device_address
+        .get_buffer_device_address(
+          &vk::BufferDeviceAddressInfo::default().buffer(arena.buffer),
+        )
+    };
+
+    Ok(base_addr + offset as u64)
+  }
+
+  #[named]
+  fn upload_mesh_push_extra(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    data: &crate::gpu::MeshPushExtra,
+  ) -> GpuResult<u64> {
+    let data_size = core::mem::size_of::<crate::gpu::MeshPushExtra>();
+    let res = DebugTrackedRwLock::read(&self.res);
+    let _cmd = self.get_cmd(cmd_buffer)?;
+
+    let mut staging_arena_guard = DebugTrackedRwLock::write(&res.frame_staging_arena);
+    let arena = staging_arena_guard
+      .as_mut()
+      .ok_or(gpu_err!("Mesh push extra: staging arena missing"))?;
+
+    let (offset, ptr) = arena
+      .allocate(data_size, 8)
+      .ok_or(GpuError::OutOfMemory)?;
+
+    unsafe {
+      core::ptr::copy_nonoverlapping(
+        data as *const _ as *const u8,
+        ptr,
+        data_size,
+      );
+    }
+
+    let base_addr = unsafe {
+      self
+        .device
+        .buffer_device_address
+        .get_buffer_device_address(
+          &vk::BufferDeviceAddressInfo::default().buffer(arena.buffer),
+        )
+    };
+
+    Ok(base_addr + offset as u64)
+  }
+
+  #[named]
+  fn upload_minimap_planets(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    planets: &[crate::gpu::MinimapPlanetGpu],
+  ) -> GpuResult<u64> {
+    if planets.is_empty() {
+      return Ok(0);
+    }
+    let data_size = planets.len() * core::mem::size_of::<crate::gpu::MinimapPlanetGpu>();
+    let res = DebugTrackedRwLock::read(&self.res);
+    let _cmd = self.get_cmd(cmd_buffer)?;
+
+    let mut staging_arena_guard = DebugTrackedRwLock::write(&res.frame_staging_arena);
+    let arena = staging_arena_guard
+      .as_mut()
+      .ok_or(gpu_err!("Minimap planets: staging arena missing"))?;
+
+    let (offset, ptr) = arena
+      .allocate(data_size, 4)
+      .ok_or(GpuError::OutOfMemory)?;
+
+    unsafe {
+      core::ptr::copy_nonoverlapping(
+        planets.as_ptr() as *const u8,
+        ptr,
+        data_size,
+      );
+    }
+
+    let base_addr = unsafe {
+      self
+        .device
+        .buffer_device_address
+        .get_buffer_device_address(
+          &vk::BufferDeviceAddressInfo::default().buffer(arena.buffer),
+        )
+    };
+
+    Ok(base_addr + offset as u64)
+  }
   #[named]
   fn upload_bvhwire2_batch(
     &self,
@@ -8148,76 +8266,40 @@ impl RenderDevice for Device {
       if res == 0.0 { 1.0 } else { res }
     };
 
+    // Upload planet data to staging buffer via BDA
+    let planet_count = planets.len().min(16);
+    let mut planet_gpu = [crate::gpu::MinimapPlanetGpu::default(); 16];
+    for (i, p) in planets.iter().enumerate().take(16) {
+      planet_gpu[i] = crate::gpu::MinimapPlanetGpu {
+        pos: [p.0.x(), p.0.y()],
+        size: p.1,
+        _pad: 0.0,
+        color: p.2,
+      };
+    }
+    let planets_ptr = self.upload_minimap_planets(cmd_buffer, &planet_gpu[..planet_count])?;
+
+    let push = crate::gpu::MinimapPushConstants {
+      offset: [0.7f32, 0.7f32],
+      size: [0.25f32, 0.25f32 * aspect_ratio],
+      player_pos: [player_pos.x(), player_pos.y()],
+      max_distance,
+      num_planets: planet_count as u32,
+      planets_ptr,
+      _pad: 0,
+    };
+
     unsafe {
-      let mut push_bytes = [0u8; 544];
-
-      let offset = [0.7f32, 0.7f32];
-      let size = [0.25f32, 0.25f32 * aspect_ratio];
-      let player_pos_arr = [player_pos.x(), player_pos.y()];
-      let max_distance_f = max_distance;
-      let num_planets = planets.len() as u32;
-
-      core::ptr::copy_nonoverlapping(
-        &offset as *const _ as *const u8,
-        push_bytes.as_mut_ptr().add(0),
-        8,
+      let push_bytes = core::slice::from_raw_parts(
+        &push as *const _ as *const u8,
+        core::mem::size_of::<crate::gpu::MinimapPushConstants>(),
       );
-      core::ptr::copy_nonoverlapping(
-        &size as *const _ as *const u8,
-        push_bytes.as_mut_ptr().add(8),
-        8,
-      );
-      core::ptr::copy_nonoverlapping(
-        &player_pos_arr as *const _ as *const u8,
-        push_bytes.as_mut_ptr().add(16),
-        8,
-      );
-      core::ptr::copy_nonoverlapping(
-        &max_distance_f as *const _ as *const u8,
-        push_bytes.as_mut_ptr().add(24),
-        4,
-      );
-      core::ptr::copy_nonoverlapping(
-        &num_planets as *const _ as *const u8,
-        push_bytes.as_mut_ptr().add(28),
-        4,
-      );
-
-      for (i, p) in planets.iter().enumerate().take(16) {
-        let base = 32 + i * 32;
-        let p_pos = [p.0.x(), p.0.y()];
-        let p_size = p.1;
-        let p_pad = 0.0f32;
-        let p_color = p.2;
-
-        core::ptr::copy_nonoverlapping(
-          &p_pos as *const _ as *const u8,
-          push_bytes.as_mut_ptr().add(base + 0),
-          8,
-        );
-        core::ptr::copy_nonoverlapping(
-          &p_size as *const _ as *const u8,
-          push_bytes.as_mut_ptr().add(base + 8),
-          4,
-        );
-        core::ptr::copy_nonoverlapping(
-          &p_pad as *const _ as *const u8,
-          push_bytes.as_mut_ptr().add(base + 12),
-          4,
-        );
-        core::ptr::copy_nonoverlapping(
-          &p_color as *const _ as *const u8,
-          push_bytes.as_mut_ptr().add(base + 16),
-          16,
-        );
-      }
-
       self.device.cmd_push_constants(
         cmd,
         layout,
         vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
         0,
-        &push_bytes,
+        push_bytes,
       );
 
       self.device.cmd_draw(cmd, 4, 1, 0, 0);

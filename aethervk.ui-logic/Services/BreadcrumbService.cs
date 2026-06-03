@@ -64,4 +64,12 @@ public class BreadcrumbService
 
     _dispatcher.Dispatch(() => Messages.Remove(msg));
   }
+
+  /// <summary>
+  /// Shows a transient error message that auto-dismisses after 6 seconds.
+  /// </summary>
+  public void ShowErrorMessage(string title, string content)
+  {
+    _ = ShowMessageAsync(title, content, TimeSpan.FromSeconds(6), status: 3);
+  }
 }

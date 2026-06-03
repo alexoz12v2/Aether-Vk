@@ -1,5 +1,8 @@
 #version 450 core
 
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
 // See Guide on Vulkan extensions for GLSL
 // https://github.com/KhronosGroup/GLSL/blob/main/extensions/khr/GL_KHR_vulkan_glsl.txt
 
@@ -18,8 +21,7 @@ layout(binding = 2) uniform sampler2D roughnessMap;
 layout(binding = 3) uniform sampler2D aoMap;
 layout(binding = 4) uniform sampler2D skyMap;
 
-layout(push_constant) uniform Push { 
-  mat4 modelViewProj;
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer MeshExtra {
   mat4 model;
   vec3 sunPos;
   uint textureFlags;
@@ -27,6 +29,12 @@ layout(push_constant) uniform Push {
   vec3 cameraPos;
   float emissiveIntensity;
   vec3 emissiveColor;
+};
+
+// Push Constants: 80 bytes (well under 128-byte Vulkan minimum)
+layout(push_constant, std430) uniform Push {
+  mat4 modelViewProj;
+  MeshExtra extra;
 } push;
 
 // --- Specialization Constants ---
@@ -72,22 +80,22 @@ vec2 octEncode(vec3 v) {
 }
 
 void main() {
-  if (push.emissiveIntensity < 0.0) {
-      outColor = vec4(push.emissiveColor, 1.0);
+  if (push.extra.emissiveIntensity < 0.0) {
+      outColor = vec4(push.extra.emissiveColor, 1.0);
       return;
   }
 
-  bool useAlbedo    = (push.textureFlags & FLAG_ALBEDO) != 0u;
-  bool useNormal    = (push.textureFlags & FLAG_NORMAL) != 0u;
-  bool useRoughness = (push.textureFlags & FLAG_ROUGHNESS) != 0u;
-  bool useAO        = (push.textureFlags & FLAG_AO) != 0u;
+  bool useAlbedo    = (push.extra.textureFlags & FLAG_ALBEDO) != 0u;
+  bool useNormal    = (push.extra.textureFlags & FLAG_NORMAL) != 0u;
+  bool useRoughness = (push.extra.textureFlags & FLAG_ROUGHNESS) != 0u;
+  bool useAO        = (push.extra.textureFlags & FLAG_AO) != 0u;
 
-  vec3 V = normalize(push.cameraPos - inWorldPos);
+  vec3 V = normalize(push.extra.cameraPos - inWorldPos);
   
-  bool isDirectional = push.sunColor.w > 0.5;
+  bool isDirectional = push.extra.sunColor.w > 0.5;
   
   // Light direction and distance
-  vec3 unnormalizedLightVector = isDirectional ? push.sunPos : (push.sunPos - inWorldPos);
+  vec3 unnormalizedLightVector = isDirectional ? push.extra.sunPos : (push.extra.sunPos - inWorldPos);
   float distanceToSun = isDirectional ? 0.0 : length(unnormalizedLightVector);
   vec3 lightDir = isDirectional ? normalize(unnormalizedLightVector) : (unnormalizedLightVector / distanceToSun); // Normalized direction
   
@@ -96,7 +104,7 @@ void main() {
   float attenuation = isDirectional ? 1.0 : (1.0 / (1.0 + 0.001 * distanceToSun));
   
   // Final light color arriving at the fragment
-  vec3 lightColor = push.sunColor.xyz * attenuation;
+  vec3 lightColor = push.extra.sunColor.xyz * attenuation;
 
   // Construct base values from specialization constants
   vec3 albedo = vec3(BASE_ALBEDO_R, BASE_ALBEDO_G, BASE_ALBEDO_B);
@@ -166,9 +174,9 @@ void main() {
   ambient += vec3(0.05) * albedo * ao;
 
   // Compute emission
-  vec3 emission = push.emissiveColor * push.emissiveIntensity;
+  vec3 emission = push.extra.emissiveColor * push.extra.emissiveIntensity;
 
-  if (push.emissiveIntensity > 0.0) {
+  if (push.extra.emissiveIntensity > 0.0) {
       outColor = vec4(emission, 1.0);
   } else {
       outColor = vec4(diffuse * lightColor * ao + ambient + emission, 1.0);

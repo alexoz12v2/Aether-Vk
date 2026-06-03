@@ -97,6 +97,7 @@ public class SpawnCometFlowE2ETests
         2.5f,
         1e13f,
         2,
+        0, // naifId — not used for Dynamic physics type
         0.0, 90.0, 0.0, 0.0, 0.0, 0.0,
         0f, 0f, 0f
       );

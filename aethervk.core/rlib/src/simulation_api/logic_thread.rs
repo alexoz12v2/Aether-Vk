@@ -2159,9 +2159,6 @@ fn dispatch_physics_step(
             }
             executed
           }
-          #[cfg(not(test))]
-          #[cfg(test)]
-          crate::simulation_api::structs::PhysicsEngineType::Mock(_) => Ok(None),
         };
 
         crate::physics::handoff::SpheresOfInfluenceSystem::process_handoffs_par(
