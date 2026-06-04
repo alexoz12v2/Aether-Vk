@@ -3,6 +3,8 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:AetherVk.Logic.ViewModels"
+             xmlns:i="clr-namespace:Avalonia.Xaml.Interactivity;assembly=Avalonia.Xaml.Interactivity"
+             xmlns:ia="clr-namespace:Avalonia.Xaml.Interactions.Core;assembly=Avalonia.Xaml.Interactions"
              mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
              x:DataType="vm:TabGroupNodeViewModel"
              x:Class="AetherVk.Views.TabGroupNodeView">
@@ -42,7 +44,19 @@
                       <StackPanel Orientation="Horizontal" Spacing="4">
 
                         <Border Background="Transparent" ToolTip.Tip="Drag to Split"
+                                Cursor="Hand"
                                 PointerPressed="OnTabIconPointerPressed">
+                          <i:Interaction.Behaviors>
+                            <ia:EventTriggerBehavior EventName="PointerPressed">
+                              <ia:ChangePropertyAction PropertyName="Cursor" Value="SizeAll" />
+                            </ia:EventTriggerBehavior>
+                            <ia:EventTriggerBehavior EventName="PointerReleased">
+                              <ia:ChangePropertyAction PropertyName="Cursor" Value="Hand" />
+                            </ia:EventTriggerBehavior>
+                            <ia:EventTriggerBehavior EventName="PointerCaptureLost">
+                              <ia:ChangePropertyAction PropertyName="Cursor" Value="Hand" />
+                            </ia:EventTriggerBehavior>
+                          </i:Interaction.Behaviors>
                           <PathIcon x:Name="TabDragHandle" Data="M2,2 L14,2 L14,14 L2,14 Z" Width="12" Height="12"
                                     Margin="8,0,0,0" VerticalAlignment="Center"
                                     Foreground="{DynamicResource Accent.Primary}" />

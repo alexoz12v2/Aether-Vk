@@ -112,10 +112,9 @@ pub fn start_logic_thread(
             let mut last_tasks = alloc::vec::Vec::new();
 
             for (pe, pe_data) in pe_handles {
-              if pe_data.camera_entity.is_none() {
+              let Some(camera_entity) = pe_data.camera_entity else {
                 continue;
-              }
-              let camera_entity = unsafe { pe_data.camera_entity.unwrap_unchecked() };
+              };
               let is_windowless = pe_data.is_windowless;
               let task_id = alloc::sync::Arc::new(core::sync::atomic::AtomicU64::new(0));
               let scene = {
@@ -1539,17 +1538,14 @@ fn execute_simulation_tick(
         (true, step, fixed_dt_us, ts_write.current_epoch, max_sub_dt_us)
       } else {
         let needs_update = ts_write.time_info.read().needs_fixed_update();
-        static mut DEBUG_PRINT_TICK: u32 = 0;
-        unsafe {
-          if DEBUG_PRINT_TICK % 600 == 0 {
-            aethervk_oshal_rlib::log!(
-              "DEBUG: execute_simulation_tick is_playing={} needs_update={} scale={:?}",
-              ts_write.is_playing,
-              needs_update,
-              ts_write.current_scale
-            );
-          }
-          DEBUG_PRINT_TICK += 1;
+        static DEBUG_PRINT_TICK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+        if DEBUG_PRINT_TICK.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % 600 == 0 {
+          aethervk_oshal_rlib::log!(
+            "DEBUG: execute_simulation_tick is_playing={} needs_update={} scale={:?}",
+            ts_write.is_playing,
+            needs_update,
+            ts_write.current_scale
+          );
         }
         if ts_write.is_playing && needs_update {
           let scale_days_per_sec = ts_write.current_scale.to_days_per_st_second();

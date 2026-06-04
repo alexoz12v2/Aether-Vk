@@ -451,11 +451,16 @@ impl super::structs::RenderFrame {
     pool: Option<&oshal::os::pool::ThreadPool>,
   ) -> GpuResult<RenderSceneExtraction> {
     let scene = self.scene.read();
+    let julian_date = {
+      let time_state = scene.time_state.read();
+      Some(time_state.current_epoch.to_jde_utc_days())
+    };
     scene.scene.convert_scene(
       self.camera_entity,
       self.render_physical_meshes_outline,
       pool,
       window_extent,
+      julian_date,
     )
   }
 }

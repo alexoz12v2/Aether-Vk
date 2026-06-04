@@ -23,5 +23,6 @@ pub mod scene;
 pub mod simulation;
 pub mod traits;
 pub mod types;
+pub mod audio;
 
 pub mod simulation_api;

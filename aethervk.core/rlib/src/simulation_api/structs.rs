@@ -182,6 +182,8 @@ pub struct SimulationThreads {
   /// Task pool handle (duplicated here so that it outlives threads). Should not be accessed
   /// by FFI caller threads
   pool: Arc<os::pool::ThreadPool>,
+  /// Audio device thread handle
+  pub audio_device: Option<alloc::boxed::Box<dyn oshal::os::audio::AudioDevice + Send + Sync>>,
 }
 
 impl Drop for SimulationThreads {
@@ -213,6 +215,11 @@ impl Drop for SimulationThreads {
     // Ensure all logic-launched tasklets are finished before shutting down the renderer
     oshal::log!("SimulationThreads waiting for thread pool tasks to complete...");
     self.pool.gather();
+
+    // Stop the audio device thread
+    if let Some(mut audio) = self.audio_device.take() {
+      audio.stop();
+    }
 
     oshal::log!("SimulationThreads drop finished");
   }
@@ -538,6 +545,7 @@ impl SimulationThreads {
       render_feedback_rx: None,
       logic_thread: ThreadTxContainer::empty(),
       logic_feedback_rx: None,
+      audio_device: None,
     })
   }
 

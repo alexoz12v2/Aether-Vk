@@ -35,23 +35,24 @@ public class TransformEditableRule : IComponentRule
 
     if (hasPhysicalMesh)
     {
-      // Rotation is always locked — governed by IAU Rotational Model
+      // Rotation is derived from IAU Rotational Model — edit pole/PM parameters instead
       isRotEditable = false;
-      rotLockedReason = "Rotation is governed by the IAU Rotational Model under Physical Mesh.";
+      rotLockedReason = "Rotation is computed from the IAU Rotational Model. Edit pole/PM parameters under Physical Mesh.";
+
+      // Scale is always locked — derived from Radius (km) in Physical Mesh
+      isScaleEditable = false;
+      scaleLockedReason = "Scale is derived from Radius (km) in Physical Mesh.";
 
       if (hasComet)
       {
         // Comet position is kinematic (driven by SPK/ephemeris)
         isPosEditable = false;
-        isScaleEditable = false;
         posLockedReason = "Position is driven by the ephemeris (SPK) data.";
-        scaleLockedReason = "Scale is locked for comet entities.";
       }
       else
       {
-        // Static mesh: position and scale are freely editable
+        // Static mesh: position is freely editable
         isPosEditable = true;
-        isScaleEditable = true;
       }
     }
 
@@ -180,6 +181,34 @@ public class EpaRefreshRule : IComponentRule
         _runtimeService.RecalculateJetPoints(entity.SceneId, entity.Id);
         _runtimeService.SyncEmissionCircleVisuals(entity.SceneId, entity.Id, emitter);
       }
+    }
+  }
+}
+
+/// <summary>
+/// A rule that force-pushes emitter state to native on entity selection,
+/// ensuring defaults are synced even when OnPropertyChanged would not fire.
+/// </summary>
+public class ParticleEmitterCirclesComponentRule : IComponentRule
+{
+  private readonly Services.NativeRuntimeService? _runtimeService;
+  private readonly Services.BreadcrumbService? _breadcrumbService;
+
+  public ParticleEmitterCirclesComponentRule(
+    Services.NativeRuntimeService? runtimeService,
+    Services.BreadcrumbService? breadcrumbService = null
+  )
+  {
+    _runtimeService = runtimeService;
+    _breadcrumbService = breadcrumbService;
+  }
+
+  public void Apply(Entity entity)
+  {
+    var emitter = entity.Components.OfType<ParticleEmitterCirclesComponent>().FirstOrDefault();
+    if (emitter != null)
+    {
+      emitter.ForceNativePush();
     }
   }
 }

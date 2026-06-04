@@ -141,15 +141,19 @@ public partial class MainWindowViewModel
 
   public ObservableCollection<BreadcrumbMessage>? Breadcrumbs => _breadcrumbService.Messages;
 
+  private readonly IAudio2DService _audioService;
+
   public MainWindowViewModel(
     NativeRuntimeService runtimeService,
     BreadcrumbService breadcrumbService,
     IFileDialogService fileDialogService,
     IWindowService windowService,
     DockingManagerViewModel dockingManager,
-    IUiThreadDispatcher dispatcher
+    IUiThreadDispatcher dispatcher,
+    IAudio2DService audioService
   )
   {
+    _audioService = audioService;
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
     _fileDialogService = fileDialogService;
@@ -255,6 +259,7 @@ public partial class MainWindowViewModel
   [RelayCommand]
   private async Task<ImportedModelItem?> ImportModelAsync()
   {
+    _audioService.PlayClickAsync();
     var filters = new[] { "gltf", "glb", "ply", "obj" };
     var result = await _fileDialogService.ShowOpenFileDialogAsync("Import 3D Model", filters);
 
@@ -334,6 +339,7 @@ public partial class MainWindowViewModel
   [RelayCommand]
   private async Task OpenSpawnCometDialogAsync()
   {
+    _audioService.PlayClickAsync();
     SyncModels();
     await _windowService.ShowSpawnCometDialogAsync(ImportedModels);
   }
@@ -382,18 +388,28 @@ public partial class MainWindowViewModel
   [RelayCommand]
   private async Task OpenSpawnBillboardDialogAsync()
   {
+    _audioService.PlayClickAsync();
     await _windowService.ShowSpawnBillboardDialogAsync();
+  }
+
+  [RelayCommand]
+  private async Task OpenConsoleAsync()
+  {
+    _audioService.PlayClickAsync();
+    await _windowService.ShowSettingsDialogAsync();
   }
 
   [RelayCommand]
   private async Task OpenSettingsAsync()
   {
+    _audioService.PlayClickAsync();
     await _windowService.ShowSettingsDialogAsync();
   }
 
   [RelayCommand]
   private void ToggleTheme()
   {
+    _audioService.PlayClickAsync();
     // Simple toggle: if Dark -> Light, otherwise -> Dark (covers Light and System)
     CurrentTheme = CurrentTheme == AppTheme.Dark ? AppTheme.Light : AppTheme.Dark;
   }

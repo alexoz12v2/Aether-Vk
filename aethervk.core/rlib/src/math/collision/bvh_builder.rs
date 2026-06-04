@@ -214,13 +214,15 @@ where
     let mut split_index = 0;
     let mut found_split = false;
 
-    // 1. Try SAH binning on axes starting from longest
-    for &axis in &axes {
-      // TODO: Split by using AABB if current level is AABB, otherwise use OBB
-      if let Some(idx) = self.try_sah_split(triangles, indices, axis, min_centroid, max_centroid) {
-        split_index = idx;
-        found_split = true;
-        break;
+    // 1. Try SAH binning on axes starting from longest (only if depth < 64 to avoid degenerate deep trees)
+    if depth < 64 {
+      for &axis in &axes {
+        // TODO: Split by using AABB if current level is AABB, otherwise use OBB
+        if let Some(idx) = self.try_sah_split(triangles, indices, axis, min_centroid, max_centroid) {
+          split_index = idx;
+          found_split = true;
+          break;
+        }
       }
     }
 

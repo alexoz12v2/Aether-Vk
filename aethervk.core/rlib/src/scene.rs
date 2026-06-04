@@ -631,8 +631,14 @@ impl Default for BodyRotationalModel {
 }
 
 impl BodyRotationalModel {
+  /// Mean obliquity of the ecliptic at J2000 (IAU 2006), in radians.
+  const OBLIQUITY_RAD: f32 = 0.40909280_f32; // 23.4392911°
+
   /// Compute pole orientation quaternion at a given Julian date.
-  /// Returns the quaternion representing body-fixed to inertial rotation.
+  /// Returns the quaternion in the ECLIPJ2000 frame (ecliptic coordinates).
+  ///
+  /// Step 1: Build Q_body_to_ICRF = Rz(RA+90°) · Rx(90°-Dec) · Rz(W)
+  /// Step 2: Convert to ECLIPJ2000: Q_final = Rx(ε) · Q_body_to_ICRF
   pub fn orientation_at(&self, julian_date: f64) -> Quat {
     let t_centuries = (julian_date - self.reference_epoch_jd) / 36525.0;
     let d_days = julian_date - self.reference_epoch_jd;
@@ -641,10 +647,10 @@ impl BodyRotationalModel {
     let dec = (self.pole_dec + self.pole_dec_rate * t_centuries).to_radians();
     let w = (self.prime_meridian + self.rotation_rate * d_days).to_radians();
 
-    // Construct rotation: R = Rz(ra) * Rx(π/2 - dec) * Rz(w)
+    // Step 1: Q_body_to_ICRF = Rz(RA+90°) · Rx(90°-Dec) · Rz(W)
     let q_ra = Quat::from_axis_angle(
       Vec3f32::from_components(0.0, 0.0, 1.0),
-      ra as f32,
+      (ra + core::f64::consts::FRAC_PI_2) as f32,
     );
     let q_dec = Quat::from_axis_angle(
       Vec3f32::from_components(1.0, 0.0, 0.0),
@@ -655,7 +661,15 @@ impl BodyRotationalModel {
       w as f32,
     );
 
-    q_ra * q_dec * q_w
+    let q_body_to_icrf = q_ra * q_dec * q_w;
+
+    // Step 2: Convert ICRF → ECLIPJ2000 by pre-multiplying with Rx(ε)
+    let q_obliquity = Quat::from_axis_angle(
+      Vec3f32::from_components(1.0, 0.0, 0.0),
+      Self::OBLIQUITY_RAD,
+    );
+
+    (q_obliquity * q_body_to_icrf).normalize()
   }
 }
 
@@ -714,6 +728,10 @@ impl PartialEq for PhysicalMeshComponent {
 pub struct PhysicalMeshDTO {
   pub is_procedural: bool,
   pub asset_path: [u8; 256],
+  /// Physical radius in km (same as PhysicalMeshComponent.sphere_radius).
+  pub sphere_radius: f32,
+  /// Mesh bounding sphere in vertex units (for scale = sphere_radius / bounding_sphere).
+  pub bounding_sphere: f32,
 }
 
 impl ForeignSerializable for PhysicalMeshComponent {
@@ -726,9 +744,26 @@ impl ForeignSerializable for PhysicalMeshComponent {
     let len = bytes.len().min(255);
     path_bytes[..len].copy_from_slice(&bytes[..len]);
 
+    // Compute bounding sphere from mesh BVH (same logic as spawn_comet_internal)
+    let bounding_sphere = if let Some(bvh) = &self.mesh.bvh {
+      use aethervk_oshal_rlib::math::vector::Vector;
+      match &bvh.nodes[0].bound {
+        crate::math::collision::linear_bvh::LinearBound::AABB(aabb) => {
+          aabb.half_extents_f32().length()
+        }
+        crate::math::collision::linear_bvh::LinearBound::OBB(obb) => {
+          obb.half_extents_f32().length()
+        }
+      }
+    } else {
+      crate::simulation_api::scene_api::compute_bounding_sphere_radius(&self.mesh.vertices)
+    };
+
     PhysicalMeshDTO {
       is_procedural: false,
       asset_path: path_bytes,
+      sphere_radius: self.sphere_radius,
+      bounding_sphere,
     }
   }
 
@@ -737,6 +772,10 @@ impl ForeignSerializable for PhysicalMeshComponent {
       if let Ok(s) = core::str::from_utf8(&data.asset_path[..null_pos]) {
         self.asset_path = alloc::string::String::from(s);
       }
+    }
+    // Apply sphere_radius if changed from C# side
+    if data.sphere_radius > 0.0 {
+      self.sphere_radius = data.sphere_radius;
     }
   }
 }
@@ -1356,14 +1395,22 @@ impl SceneHierarchy {
   }
 
   fn remove_entity(&mut self, entity: EntityId) {
+    // Iterative removal to prevent stack overflow with deep hierarchies.
+    let mut stack = alloc::vec![entity];
+    // Detach root from its parent first.
     if let Some(parent) = self.parents.remove(&entity) {
-      if let Some(children) = self.children.get_mut(&parent) {
-        children.retain(|c| *c != entity);
+      if let Some(siblings) = self.children.get_mut(&parent) {
+        siblings.retain(|c| *c != entity);
       }
     }
-    if let Some(children) = self.children.remove(&entity) {
-      for child in children {
-        self.remove_entity(child);
+    while let Some(current) = stack.pop() {
+      // Remove parent link (already done for root above, but needed for children)
+      self.parents.remove(&current);
+      // Collect children and push them onto the stack
+      if let Some(children) = self.children.remove(&current) {
+        for child in children {
+          stack.push(child);
+        }
       }
     }
   }
@@ -1450,7 +1497,10 @@ impl Scene {
     let hierarchy = self.hierarchy.read();
     let mut current = entity;
     let mut accumulated = 1.0_f32;
+    let mut depth = 0;
     loop {
+      if depth > 128 { break; }
+      depth += 1;
       if let Some(scale) = self.with_component(current, |c: &ReferenceFrameComponent| c.scale) {
         accumulated *= scale;
       }
@@ -1466,7 +1516,10 @@ impl Scene {
   pub fn ancestor_depth_layer(&self, entity: EntityId) -> u32 {
     let hierarchy = self.hierarchy.read();
     let mut current = entity;
+    let mut depth = 0;
     loop {
+      if depth > 128 { break; }
+      depth += 1;
       if let Some(layer) = self.with_component(current, |c: &ReferenceFrameComponent| c.depth_layer)
       {
         return layer;
@@ -1535,6 +1588,27 @@ impl Scene {
       || (parent.is_some() && !entities.contains_key(parent.unwrap()))
     {
       return;
+    }
+    // Cycle detection: walk from proposed parent to root; if we encounter
+    // child, setting this parent would create a cycle.
+    if let Some(proposed_parent) = parent {
+      let hierarchy = self.hierarchy.read();
+      let mut cursor = proposed_parent;
+      let mut depth = 0;
+      loop {
+        if cursor == child {
+          return; // Would create a cycle — reject silently
+        }
+        if depth > 128 {
+          break; // Safety: prevent infinite loop on pre-existing cycle
+        }
+        depth += 1;
+        match hierarchy.parents.get(&cursor) {
+          Some(&p) => cursor = p,
+          None => break,
+        }
+      }
+      drop(hierarchy); // Release read lock before acquiring write
     }
     self.hierarchy.write().set_parent(child, parent);
   }
@@ -2773,7 +2847,7 @@ impl Scene {
       return;
     }
     let mut visited = HashSet::new();
-    self.traverse_recursive(start_entity, accumulator, filter, callback, &mut visited);
+    self.traverse_recursive(start_entity, accumulator, filter, callback, &mut visited, 0);
   }
 
   fn traverse_recursive<A, F, C>(
@@ -2783,10 +2857,15 @@ impl Scene {
     filter: &F,
     callback: &mut C,
     visited: &mut HashSet<EntityId>,
+    depth: u32,
   ) where
     F: Fn(&Scene, EntityId) -> bool,
     C: FnMut(&Scene, EntityId, &mut A) -> bool,
   {
+    if depth > 128 {
+      aethervk_oshal_rlib::log!("Warning: max depth exceeded in traverse_recursive for entity {:?}", current_entity);
+      return;
+    }
     if !visited.insert(current_entity) {
       return;
     }
@@ -2802,7 +2881,7 @@ impl Scene {
       let children_clone = children.clone();
       drop(hierarchy);
       for &child in &children_clone {
-        self.traverse_recursive(child, accumulator, filter, callback, visited);
+        self.traverse_recursive(child, accumulator, filter, callback, visited, depth + 1);
       }
     }
   }
@@ -2829,6 +2908,7 @@ impl Scene {
       pre_visit,
       post_visit,
       &mut visited,
+      0,
     );
   }
 
@@ -2839,11 +2919,16 @@ impl Scene {
     pre_visit: &mut Pre,
     post_visit: &mut Post,
     visited: &mut HashSet<EntityId>,
+    depth: u32,
   ) where
     Pre: FnMut(&mut A, EntityId, Option<TransformComponent>, Option<&T>) -> bool,
     Post: FnMut(&mut A, EntityId),
     T: Component,
   {
+    if depth > 128 {
+      aethervk_oshal_rlib::log!("Warning: max depth exceeded in traverse_with_hooks_recursive for entity {:?}", current_entity);
+      return;
+    }
     if !visited.insert(current_entity) {
       return;
     }
@@ -2872,7 +2957,7 @@ impl Scene {
 
     if let Some(children) = children_clone {
       for &child in &children {
-        self.traverse_with_hooks_recursive(child, accumulator, pre_visit, post_visit, visited);
+        self.traverse_with_hooks_recursive(child, accumulator, pre_visit, post_visit, visited, depth + 1);
       }
     }
 
@@ -2887,8 +2972,11 @@ impl Scene {
         self.with_component(entity_id, |c: &HighResTransformComponent| c.to_transform())
       })?;
     let mut current_entity = entity_id;
+    let mut depth = 0;
 
     loop {
+      if depth > 128 { break; }
+      depth += 1;
       let parent_opt = {
         let hierarchy = self.hierarchy.read();
         hierarchy.parents.get(&current_entity).copied()
@@ -2929,8 +3017,11 @@ impl Scene {
         self.with_component(entity_id, |c: &HighResTransformComponent| c.to_transform())
       })?;
     let mut current_entity = entity_id;
+    let mut depth = 0;
 
     loop {
+      if depth > 128 { return Some((accumulated_transform, None)); }
+      depth += 1;
       let parent_opt = {
         let hierarchy = self.hierarchy.read();
         hierarchy.parents.get(&current_entity).copied()
@@ -2979,8 +3070,11 @@ impl Scene {
     let mut acc_rot = initial.rotation;
     let mut acc_scale = initial.scale;
     let mut current_entity = entity_id;
+    let mut depth = 0;
 
     loop {
+      if depth > 128 { return Some((HighResTransformComponent { position: acc_pos, rotation: acc_rot, scale: acc_scale }, None)); }
+      depth += 1;
       let parent_opt = {
         let hierarchy = self.hierarchy.read();
         hierarchy.parents.get(&current_entity).copied()
@@ -3234,8 +3328,11 @@ impl Scene {
     let mut acc_rot = initial.rotation;
     let mut acc_scale = initial.scale;
     let mut current_entity = entity_id;
+    let mut depth = 0;
 
     loop {
+      if depth > 128 { break; }
+      depth += 1;
       let parent_opt = {
         let hierarchy = self.hierarchy.read();
         hierarchy.parents.get(&current_entity).copied()

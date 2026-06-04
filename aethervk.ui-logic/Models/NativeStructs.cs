@@ -20,13 +20,19 @@ public struct Float4
   }
 }
 
-[StructLayout(LayoutKind.Sequential, Pack = 1, CharSet = CharSet.Ansi)]
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
 public struct FfiPhysicalMesh
 {
   public byte IsProcedural;
 
   [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
   public string AssetPath;
+
+  /// <summary>Physical radius in km (from PhysicalMeshComponent.sphere_radius).</summary>
+  public float SphereRadius;
+
+  /// <summary>Mesh bounding sphere in vertex units (for scale = SphereRadius / BoundingSphere).</summary>
+  public float BoundingSphere;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 16)]

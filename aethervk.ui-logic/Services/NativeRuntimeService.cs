@@ -10,7 +10,7 @@ using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.Services;
 
-public partial class NativeRuntimeService : ObservableObject, IDisposable
+public partial class NativeRuntimeService : ObservableObject, IDisposable, INativeRuntimeService
 {
   [ObservableProperty]
   private bool _isInitialized;
@@ -33,6 +33,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
   private readonly BreadcrumbService _breadcrumbService;
   private readonly INativeBufferPoolService _bufferPool;
   private readonly IUiThreadDispatcher _uiThreadDispatcher;
+
+  public void PlaySound(AvkSoundEvent soundEvent, AvkAudioParams audioParams)
+  {
+      if (_simulationContext == IntPtr.Zero) return;
+      NativeInterop.avkSimulationContext_playSoundEvent(_simulationContext, soundEvent, audioParams);
+  }
 
   // Keep a weak reference to the instance so we don't artificially keep it alive
   private static WeakReference<NativeRuntimeService>? s_currentInstance;
@@ -1665,6 +1671,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
       physMesh.PoleRaRateDeg = poleRaRateDeg;
       physMesh.PoleDecRateDeg = poleDecRateDeg;
       physMesh.RotationRateDeg = rotationRateDeg;
+      // Explicitly push even when values match defaults (ObservableProperty won't fire)
+      physMesh.ForceNativePush();
 
       cometEntity.Components.Add(new ParticleEmitterCirclesComponent());
       cometEntity.Components.Add(new SphereGizmoComponent());
@@ -2748,9 +2756,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         arr[i] = new NativeInterop.FfiEmissionCircle
         {
           LatitudeRad = comet.Jets[i].LatitudeDeg * (float)Math.PI / 180f,
-          LongitudeRad = comet.Jets[i].LongitudeDeg * (float)Math.PI / 180f,
-          CircleRadiusFrac = comet.Jets[i].CircleRadius / 1000f,
-          Mass = comet.Jets[i].Mass / 1000f,
+          LongitudeRad = (float)(comet.Jets[i].LongitudeDeg * Math.PI / 180.0),
+          CircleRadiusKm = comet.Jets[i].CircleRadiusKm,
+          Mass = comet.Jets[i].Mass,
           ColorR = comet.Jets[i].ColorR,
           ColorG = comet.Jets[i].ColorG,
           ColorB = comet.Jets[i].ColorB,
@@ -3016,7 +3024,11 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
           comet.Jets.CollectionChanged += (s, e) =>
           {
             if (_simulationContext != IntPtr.Zero)
+            {
               SyncEmissionCircles(sceneId, entity.Id, comet);
+              // Discover Rust-created child entities (e.g. EmissionSphere with ParticleSystemComponent)
+              SyncSceneHierarchy(sceneId);
+            }
             if (e.NewItems != null)
             {
               foreach (EmissionCircleItem jet in e.NewItems)
@@ -3158,8 +3170,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable
         float y = r * (float)Math.Cos(lat) * (float)Math.Sin(lon);
         float z = r * (float)Math.Sin(lat);
 
-        float scale = boundingRadius * circle.CircleRadius;
-
+        float scale = boundingRadius * circle.CircleRadiusKm;
+        float baseOpacity = 0.8f;
+        
         NativeInterop.avkSimulationContext_addTransformComponent(
           _simulationContext,
           sceneId,

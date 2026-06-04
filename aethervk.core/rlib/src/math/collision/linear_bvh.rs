@@ -103,47 +103,51 @@ where
   }
 
   pub fn find_path_to_primitive(&self, target_prim_idx: usize) -> Option<alloc::vec::Vec<u32>> {
-    let mut path = alloc::vec::Vec::new();
     if self.nodes.is_empty() {
       return None;
     }
-    if self.find_path_recursive(0, target_prim_idx, &mut path) {
-      Some(path)
-    } else {
-      None
-    }
-  }
 
-  fn find_path_recursive(
-    &self,
-    node_idx: u32,
-    target_prim_idx: usize,
-    path: &mut alloc::vec::Vec<u32>,
-  ) -> bool {
-    path.push(node_idx);
-    let node = &self.nodes[node_idx as usize];
+    let mut stack = alloc::vec::Vec::new();
+    stack.push((0u32, false)); // (node_idx, visited_children)
+    let mut path = alloc::vec::Vec::new();
 
-    if node.primitive_count > 0 {
-      let start = node.left_child_or_primitive_offset as usize;
-      let end = start + node.primitive_count as usize;
-      for i in start..end {
-        if self.primitives[i] == target_prim_idx {
-          return true;
+    while let Some(&(node_idx, visited_children)) = stack.last() {
+      if !visited_children {
+        path.push(node_idx);
+        let node = &self.nodes[node_idx as usize];
+
+        if node.primitive_count > 0 {
+          let start = node.left_child_or_primitive_offset as usize;
+          let end = start + node.primitive_count as usize;
+          let mut found = false;
+          for i in start..end {
+            if self.primitives[i] == target_prim_idx {
+              found = true;
+              break;
+            }
+          }
+          if found {
+            return Some(path);
+          }
+          path.pop();
+          stack.pop();
+        } else {
+          stack.last_mut().unwrap().1 = true;
+          let right = node.right_child_offset;
+          if right != u32::MAX {
+            stack.push((right, false));
+          }
+          let left = node.left_child_or_primitive_offset;
+          if left != u32::MAX {
+            stack.push((left, false));
+          }
         }
-      }
-    } else {
-      let left = node.left_child_or_primitive_offset;
-      if left != u32::MAX && self.find_path_recursive(left, target_prim_idx, path) {
-        return true;
-      }
-      let right = node.right_child_offset;
-      if right != u32::MAX && self.find_path_recursive(right, target_prim_idx, path) {
-        return true;
+      } else {
+        path.pop();
+        stack.pop();
       }
     }
-
-    path.pop();
-    false
+    None
   }
 
   fn flatten_node(

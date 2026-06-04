@@ -126,6 +126,12 @@ public partial class Viewport3DViewModel
   [ObservableProperty]
   private bool _showMeasurementIndicator = false;
 
+  [ObservableProperty]
+  private bool _isOrbiting;
+
+  [ObservableProperty]
+  private bool _isPanning;
+
   // ── Radial Menu ───────────────────────────────────────────────────────────
   [ObservableProperty]
   [NotifyPropertyChangedFor(
@@ -806,7 +812,7 @@ public partial class Viewport3DViewModel
             {
               LatitudeDeg = latitude,
               LongitudeDeg = longitude,
-              CircleRadius = 0.5f,
+              CircleRadiusKm = 0.5f,
               ParticlesPerTick = 10,
               ColorR = 1.0f,
               ColorG = 0.5f,

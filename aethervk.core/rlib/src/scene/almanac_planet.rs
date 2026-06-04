@@ -71,12 +71,9 @@ impl AlmanacPlanet {
       // Compute rotation from IAU-style BodyRotationalModel
       if let Some(model) = rotational_model {
         let jd = epoch.to_jde_utc_days();
-        let q_j2000_to_eclip = Quat::from_axis_angle(
-          Vec3f32::from_components(1.0, 0.0, 0.0),
-          23.4392911_f32.to_radians(),
-        );
-        let orientation_quat = q_j2000_to_eclip * model.orientation_at(jd);
-        // orientation_at returns body-fixed → inertial (world).
+        // orientation_at() already returns the quaternion in ECLIPJ2000 frame
+        // (includes the Rx(ε) obliquity correction internally)
+        let orientation_quat = model.orientation_at(jd);
         // Transform to PA → World: rot_bf_world * bf_to_pa.inverse()
         transform.rotation = (orientation_quat * self.bf_to_pa.inverse()).normalize();
 
@@ -94,6 +91,11 @@ impl AlmanacPlanet {
 
         // rotation_rate is in deg/day, convert to rad/s
         let omega_rad_s = (model.rotation_rate.to_radians() / 86400.0) as f32;
+        // Apply obliquity to transform pole from ICRF to ECLIPJ2000
+        let q_j2000_to_eclip = Quat::from_axis_angle(
+          Vec3f32::from_components(1.0, 0.0, 0.0),
+          23.4392911_f32.to_radians(),
+        );
         let ang_vel_inertial = q_j2000_to_eclip.rotate_vector(pole_inertial * omega_rad_s);
 
         // Transform to PA frame for physics

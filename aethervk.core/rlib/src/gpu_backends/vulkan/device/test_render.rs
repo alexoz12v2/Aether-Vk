@@ -2085,7 +2085,7 @@ fn test_render_weather_ui() {
         crate::scene::ui::update_ui_layouts(&scene, [width as f32, height as f32]);
 
         let render_scene = scene
-          .convert_scene(camera_e, false, None, [width, height])
+          .convert_scene(camera_e, false, None, [width, height], None)
           .unwrap()
           .build_render_scene(
             device,
@@ -2392,7 +2392,7 @@ fn test_render_bvhwire2_windowless() {
       let cmd_buffer_handle = device.get_command_buffer()?;
       device.set_command_buffer_presentation_engine(cmd_buffer_handle, presentation_engine)?;
 
-      let mut extracted = scene.convert_scene(camera_entity, false, None, [width, height])?;
+      let mut extracted = scene.convert_scene(camera_entity, false, None, [width, height], None)?;
 
       let scoped_cmd = gpu::ScopedCommandBuffer::new(device, cmd_buffer_handle, Some(task_id))?;
 

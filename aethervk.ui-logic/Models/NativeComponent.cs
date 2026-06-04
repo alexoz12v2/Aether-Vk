@@ -37,6 +37,16 @@ public abstract class NativeComponent : ObservableObject, IComponent
     }
   }
 
+  /// <summary>
+  /// Explicitly pushes current state to native, bypassing property-change detection.
+  /// Use when field values may match defaults (so OnPropertyChanged won't fire).
+  /// </summary>
+  public void ForceNativePush()
+  {
+    if (SimulationContext != IntPtr.Zero && SceneId != 0 && EntityId != 0)
+      PushToNativeImpl();
+  }
+
   protected abstract void PullFromNativeImpl();
   protected abstract void PushToNativeImpl();
 

@@ -23,7 +23,9 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<HorizonJplService>();
     collection.AddSingleton<INativeBufferPoolService, NativeBufferPoolService>();
     collection.AddSingleton<SceneStateManager>();
-    collection.AddSingleton<NativeRuntimeService>();
+    collection.AddSingleton<INativeRuntimeService, NativeRuntimeService>();
+    collection.AddSingleton<NativeRuntimeService>(sp => (NativeRuntimeService)sp.GetRequiredService<INativeRuntimeService>());
+    collection.AddSingleton<IAudio2DService, Audio2DService>();
     collection.AddSingleton<TrajectoryManagerService>();
     collection.AddSingleton<FileWatcherService>();
     collection.AddSingleton<InputRegistry>();

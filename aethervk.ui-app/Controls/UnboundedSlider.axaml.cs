@@ -106,8 +106,18 @@ public partial class UnboundedSlider : UserControl
     set => SetValue(MaxBoundProperty, value);
   }
 
+  public static readonly StyledProperty<bool> IsDraggingProperty = AvaloniaProperty.Register<
+    UnboundedSlider,
+    bool
+  >(nameof(IsDragging), false);
+
+  public bool IsDragging
+  {
+    get => GetValue(IsDraggingProperty);
+    private set => SetValue(IsDraggingProperty, value);
+  }
+
   private Point _lastPos;
-  private bool _isDragging;
   private bool _hasMoved;
 
   public UnboundedSlider()
@@ -119,7 +129,7 @@ public partial class UnboundedSlider : UserControl
   {
     if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && !InputBox.IsFocused)
     {
-      _isDragging = true;
+      IsDragging = true;
       _hasMoved = false;
       _lastPos = e.GetPosition(this);
       e.Pointer.Capture(sender as IInputElement);
@@ -129,7 +139,7 @@ public partial class UnboundedSlider : UserControl
 
   private void OnPointerMoved(object? sender, PointerEventArgs e)
   {
-    if (_isDragging)
+    if (IsDragging)
     {
       var pos = e.GetPosition(this);
       var delta = pos.X - _lastPos.X;
@@ -182,9 +192,9 @@ public partial class UnboundedSlider : UserControl
 
   private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
   {
-    if (_isDragging)
+    if (IsDragging)
     {
-      _isDragging = false;
+      IsDragging = false;
       e.Pointer.Capture(null);
       e.Handled = true;
     }
@@ -192,7 +202,7 @@ public partial class UnboundedSlider : UserControl
 
   private void OnTapped(object? sender, TappedEventArgs e)
   {
-    if (!_hasMoved && !_isDragging)
+    if (!_hasMoved && !IsDragging)
     {
       InputBox.IsHitTestVisible = true;
       InputBox.Focus();

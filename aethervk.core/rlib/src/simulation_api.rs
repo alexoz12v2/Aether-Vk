@@ -56,6 +56,7 @@ pub struct SimulationContext {
   pub logic_state: Arc<RwLock<structs::LogicState>>,
   pub kernels: Arc<RwLock<structs::KernelsEnum>>,
   texture_cache: Arc<RwLock<TextureCache>>,
+  pub audio_mixer: Arc<RwLock<crate::audio::AudioMixer>>,
 }
 
 impl Drop for SimulationContext {

@@ -580,10 +580,13 @@ pub mod fpe {
   /// This function is the one which calls sigaction
   #[cfg(all(unix, not(target_vendor = "apple")))]
   unsafe fn register_os_handler() {
-    let mut action: libc::sigaction = core::mem::zeroed();
-    libc::sigemptyset(&mut action.sa_mask);
+    unsafe {
+      let mut action: libc::sigaction = core::mem::zeroed();
+      action.sa_sigaction = sigfpe_handler as *const () as libc::sighandler_t;
+      libc::sigemptyset(&mut action.sa_mask);
 
-    libc::sigaction(libc::SIGFPE, &action, core::ptr::null_mut());
+      libc::sigaction(libc::SIGFPE, &action, core::ptr::null_mut());
+    }
   }
 
   /// if signal handler is marked as extern "C". In modern Rust, attempting to unwind the stack (which panic! does) out of a standard extern "C" function is guaranteed to trigger an immediate abort (SIGABRT). The compiler inserts a safety catch (core::panicking::panic_cannot_unwind) to prevent you from corrupting memory, which is why your test runner crashed instead of catching the panic for #[should_panic].
