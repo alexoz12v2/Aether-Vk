@@ -27,6 +27,11 @@ pub trait Workload: Send {
   fn tasklet_id(&self) -> Option<usize> {
     None
   }
+
+  /// Optional name for this workload for debugging and profiling
+  fn name(&self) -> Option<&'static str> {
+    None
+  }
 }
 
 #[cfg(target_os = "windows")]
@@ -95,7 +100,7 @@ mod windows_pool {
         let handle_res = unsafe {
           CreateThread(
             None,
-            0,
+            8 * 1024 * 1024,
             Some(thread_func),
             Some(raw_arg as *const c_void),
             THREAD_CREATION_FLAGS(0),
@@ -171,6 +176,9 @@ mod windows_pool {
     let id = thread_arg.id;
     drop(thread_arg);
 
+    #[cfg(debug_assertions)]
+    crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}", id));
+
     let mut tick: u8 = 0;
 
     while !state.shutdown.load(Ordering::Acquire) {
@@ -199,7 +207,20 @@ mod windows_pool {
       };
 
       if let Some(mut workload) = workload {
-        match workload.execute() {
+        #[cfg(all(debug_assertions, feature = "profile_thread_names"))]
+        let changed_name = if let Some(wn) = workload.name() {
+          crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}_{}", id, wn));
+          true
+        } else { false };
+
+        let status = workload.execute();
+
+        #[cfg(all(debug_assertions, feature = "profile_thread_names"))]
+        if changed_name {
+          crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}", id));
+        }
+
+        match status {
           WorkloadStatus::Complete => {
             state.pending_tasks.fetch_sub(1, Ordering::Release);
           }
@@ -287,6 +308,12 @@ mod pthread_pool {
 
       let mut threads = Vec::with_capacity(num_threads);
 
+      let mut attr: libc::pthread_attr_t = unsafe { core::mem::zeroed() };
+      unsafe {
+        libc::pthread_attr_init(&mut attr);
+        libc::pthread_attr_setstacksize(&mut attr, 8 * 1024 * 1024); // 8MB stack
+      }
+
       for i in 0..num_threads {
         let arg = Box::new(ThreadArg {
           state: Arc::clone(&state),
@@ -296,7 +323,7 @@ mod pthread_pool {
         let raw_arg = Box::into_raw(arg);
         let mut thread: pthread_t = unsafe { core::mem::zeroed() };
         let ret =
-          unsafe { pthread_create(&mut thread, ptr::null(), thread_func, raw_arg as *mut _) };
+          unsafe { pthread_create(&mut thread, &attr, thread_func, raw_arg as *mut _) };
 
         if ret == 0 {
           threads.push(thread);
@@ -308,11 +335,14 @@ mod pthread_pool {
               pthread_join(t, ptr::null_mut());
             }
           }
+          unsafe { libc::pthread_attr_destroy(&mut attr); }
           return Err(crate::os::NativeError::OsThreadingError(
             crate::os::ThreadingError::Unknown,
           ));
         }
       }
+
+      unsafe { libc::pthread_attr_destroy(&mut attr); }
 
       Ok(Self { threads, state })
     }
@@ -369,6 +399,9 @@ mod pthread_pool {
     let id = thread_arg.id;
     drop(thread_arg);
 
+    #[cfg(debug_assertions)]
+    crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}", id));
+
     let mut tick: u8 = 0;
 
     while !state.shutdown.load(Ordering::Acquire) {
@@ -394,7 +427,20 @@ mod pthread_pool {
       };
 
       if let Some(mut workload) = workload {
-        match workload.execute() {
+        #[cfg(all(debug_assertions, feature = "profile_thread_names"))]
+        let changed_name = if let Some(wn) = workload.name() {
+          crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}_{}", id, wn));
+          true
+        } else { false };
+
+        let status = workload.execute();
+
+        #[cfg(all(debug_assertions, feature = "profile_thread_names"))]
+        if changed_name {
+          crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}", id));
+        }
+
+        match status {
           WorkloadStatus::Complete => {
             state.pending_tasks.fetch_sub(1, Ordering::Release);
           }

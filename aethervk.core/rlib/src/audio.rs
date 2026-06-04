@@ -220,4 +220,47 @@ mod tests {
         // Ensure subsequent are 0
         assert_eq!(output[2], 0.0);
     }
+
+    #[test]
+    fn test_audio_mixer_stereo_direct_and_pitch() {
+        let mut mixer = AudioMixer::new(44100);
+        
+        // Dummy 1 second stereo buffer at 44100
+        let mut buf_left = vec![0.0; 44100];
+        let mut buf_right = vec![0.0; 44100];
+        buf_left[0] = 0.5;
+        buf_left[1] = 0.25;
+        buf_right[0] = 1.0;
+        buf_right[1] = 0.5;
+        
+        let buf = SoundBuffer {
+            samples_left: buf_left,
+            samples_right: buf_right,
+            sample_rate: 44100,
+        };
+        
+        let id = mixer.load_buffer(buf);
+        
+        // Play at 2.0x pitch (should skip every other sample), and half volume
+        mixer.play(id, AvkAudioParams {
+            volume: 0.5,
+            pitch: 2.0,
+            pan: 0.0,
+            mode: AvkAudioPlaybackMode::StereoDirect,
+        });
+        
+        let mut output = vec![0.0; 256];
+        mixer.mix(&mut output);
+        
+        // First frame (idx 0 of buffer)
+        // Left: 0.5 * 0.5 = 0.25
+        // Right: 1.0 * 0.5 = 0.5
+        assert_eq!(output[0], 0.25);
+        assert_eq!(output[1], 0.5);
+        
+        // Second frame: because pitch is 2.0, cursor moved by 2.0. So it reads idx 2 of buffer!
+        // But idx 2 is 0.0 for both channels.
+        assert_eq!(output[2], 0.0);
+        assert_eq!(output[3], 0.0);
+    }
 }

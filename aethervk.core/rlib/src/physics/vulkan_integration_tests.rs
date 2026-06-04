@@ -727,4 +727,98 @@ mod tests {
       })
       .unwrap();
   }
+
+  #[test]
+  #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
+  fn test_lbvh_complex_race_condition() {
+    let ctx = VulkanTestContext::new();
+
+    let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_all_crate_components();
+
+    // Set up macroframe
+    let macro_frame = scene.spawn_entity("macro_frame");
+    let _ = scene.add_component(
+      macro_frame,
+      TransformComponent::default(),
+    );
+    let _ = scene.add_component(
+      macro_frame,
+      crate::scene::ReferenceFrameComponent {
+        frame_type: ReferenceFrameType::Macro,
+        scale: 1.0,
+        soi_radius: f32::MAX,
+        depth_layer: 0,
+      },
+    );
+
+    // Set up microframe
+    let micro_frame = scene.spawn_entity("micro_frame");
+    let _ = scene.add_component(
+      micro_frame,
+      TransformComponent::default(),
+    );
+    let _ = scene.add_component(
+      micro_frame,
+      crate::scene::ReferenceFrameComponent {
+        frame_type: ReferenceFrameType::Micro,
+        scale: 1.0,
+        soi_radius: 50.0,
+        depth_layer: 1,
+      },
+    );
+
+    // Add spheres and particles
+    for i in 0..100 {
+      let s = scene.spawn_entity(&alloc::format!("sphere_{}", i));
+      let _ = scene.add_component(s, TransformComponent {
+        position: Vec3f32::from_array([(i % 10) as f32, (i / 10) as f32, 0.0]),
+        ..Default::default()
+      });
+      let _ = scene.add_component(s, ColliderComponent {
+        shape: ColliderShape::Sphere { radius: 1.0 },
+        restitution: 0.5,
+        friction: 0.5,
+        mass: 1.0,
+      });
+      // add kinematic
+      let _ = scene.add_component(s, KinematicComponent {
+        velocity: Vec3f32::from_array([1.0, 0.0, 0.0]),
+        ..Default::default()
+      });
+      let _ = scene.add_component(s, dummy_mesh());
+    }
+
+    // Set up particles
+    let p_sys = scene.spawn_entity("particles");
+    let _ = scene.add_component(p_sys, TransformComponent::default());
+    let p_comp = crate::scene::ParticleSystemComponent::new(1000);
+    {
+      let mut lock = p_comp.particles.write();
+      for i in 0..1000 {
+        lock.push(crate::scene::ParticleData {
+          id_low: i as u32,
+          id_high: 0,
+          age_low: 0,
+          age_high: 0,
+          position: [(i % 10) as f32, (i / 10) as f32, 10.0],
+          mass: 1.0,
+          velocity: [0.0, -1.0, 0.0],
+          active: 1,
+        });
+      }
+    }
+    let _ = scene.add_component(p_sys, p_comp);
+
+    // Run simulation step
+    // This will do the LBVH build with > 128 particles, crossing workgroup boundaries!
+    ctx.frontend.with_device(ctx.device_handle, |device| {
+      let vulkan_device = device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+      let _ps = run_simulation(vulkan_device, &mut scene, 0.016, true);
+      crate::types::GpuResult::Ok(())
+    }).unwrap();
+  }
 }
+

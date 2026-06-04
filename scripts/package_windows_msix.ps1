@@ -1,18 +1,35 @@
 param (
-    [string]$Arch = "x64" # Allowed: x64, x86, arm64
+    [string]$Arch = "x64", # Allowed: x64, x86, arm64
+    [string]$Configuration = "Release",
+    [switch]$SideBySide
 )
 
-$AppName = "AetherVk"
+$BaseAppName = "AetherVk"
 $AppVersion = "1.0.0.0"
 $Publisher = "CN=AetherVkTeam"
 $DotnetArch = if ($Arch -eq "x64") { "win-x64" } else { "win-$Arch" }
 
-$PublishDir = "aethervk.ui.app\bin\Release\net10.0\$DotnetArch\publish"
-$MsixDir = "bin\publish\MsixBuild_$Arch"
-$OutMsix = "bin\publish\${AppName}_${Arch}.msix"
+if ($SideBySide) {
+    $IdentityName = "$BaseAppName-SxS-$($AppVersion -replace '\.','-')-$Configuration"
+    $DisplayName = "$BaseAppName (SxS $AppVersion $Configuration)"
+    $OutMsixName = "${BaseAppName}_${Arch}_SxS_${Configuration}.msix"
+} else {
+    $IdentityName = $BaseAppName
+    $DisplayName = $BaseAppName
+    $OutMsixName = "${BaseAppName}_${Arch}.msix"
+}
+
+$PublishDir = "aethervk.ui.app\bin\$Configuration\net10.0\$DotnetArch\publish"
+$MsixDir = "bin\publish\MsixBuild_${Arch}_$Configuration"
+if ($SideBySide) { $MsixDir += "_SxS" }
+$OutMsix = "bin\publish\$OutMsixName"
 
 Write-Host "=========================================="
-Write-Host " Packaging Aether-Vk MSIX ($Arch)"
+if ($SideBySide) {
+    Write-Host " Packaging Aether-Vk MSIX ($Arch) - SideBySide ($Configuration)"
+} else {
+    Write-Host " Packaging Aether-Vk MSIX ($Arch) - Normal ($Configuration)"
+}
 Write-Host "=========================================="
 
 if (-not (Test-Path $PublishDir)) {
@@ -32,9 +49,9 @@ $Manifest = @"
          xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" 
          xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
          IgnorableNamespaces="uap rescap">
-  <Identity Name="AetherVk" Publisher="$Publisher" Version="$AppVersion" ProcessorArchitecture="$Arch" />
+  <Identity Name="$IdentityName" Publisher="$Publisher" Version="$AppVersion" ProcessorArchitecture="$Arch" />
   <Properties>
-    <DisplayName>$AppName</DisplayName>
+    <DisplayName>$DisplayName</DisplayName>
     <PublisherDisplayName>Aether-Vk Team</PublisherDisplayName>
     <Logo>StoreLogo.png</Logo>
   </Properties>
@@ -48,8 +65,8 @@ $Manifest = @"
     <rescap:Capability Name="runFullTrust" />
   </Capabilities>
   <Applications>
-    <Application Id="AetherVkApp" Executable="$AppName.exe" EntryPoint="Windows.FullTrustApplication">
-      <uap:VisualElements DisplayName="$AppName" Description="Aether-Vk Application" BackgroundColor="transparent" Square150x150Logo="Square150x150Logo.png" Square44x44Logo="Square44x44Logo.png">
+    <Application Id="AetherVkApp" Executable="$BaseAppName.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="$DisplayName" Description="Aether-Vk Application" BackgroundColor="transparent" Square150x150Logo="Square150x150Logo.png" Square44x44Logo="Square44x44Logo.png">
         <uap:DefaultTile Wide310x310Logo="Wide310x310Logo.png" />
         <uap:SplashScreen Image="SplashScreen.png" />
       </uap:VisualElements>

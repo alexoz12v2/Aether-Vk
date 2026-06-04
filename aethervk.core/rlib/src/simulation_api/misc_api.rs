@@ -16,7 +16,7 @@ use core::ffi::c_char;
 
 impl SimulationContext {
   /// TODO: Document this item
-  pub fn set_logger_callback(cb: Option<extern "C" fn(*const c_char)>) {
+  pub fn set_logger_callback(cb: Option<extern "C" fn(*const core::ffi::c_char)>) {
     let ptr = match cb {
       Some(f) => f as *mut (),
       None => core::ptr::null_mut(),
@@ -25,32 +25,20 @@ impl SimulationContext {
   }
 
   /// TODO: Document this item
-  pub fn set_breadcrumb_callback(cb: Option<extern "C" fn(u32, *const c_char)>) {
-    let ptr = match cb {
-      Some(f) => f as *mut (),
-      None => core::ptr::null_mut(),
-    };
-    BREADCRUMB_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
+  pub fn set_breadcrumb_callback(cb: Option<crate::simulation_api::BreadcrumbCallback>) {
+    *BREADCRUMB_CALLBACK.write() = cb;
   }
 
   /// TODO: Document this item
   pub fn set_simulation_callback(
-    cb: Option<extern "C" fn(u64, u64, u64, *const core::ffi::c_void)>,
+    cb: Option<crate::simulation_api::SimulationCallback>,
   ) {
-    let ptr = match cb {
-      Some(f) => f as *mut (),
-      None => core::ptr::null_mut(),
-    };
-    crate::simulation_api::SIMULATION_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
+    *crate::simulation_api::SIMULATION_CALLBACK.write() = cb;
   }
 
   /// TODO: Document this item
-  pub fn set_render_callback(cb: Option<extern "C" fn(u64, u64, u64)>) {
-    let ptr = match cb {
-      Some(f) => f as *mut (),
-      None => core::ptr::null_mut(),
-    };
-    crate::simulation_api::RENDER_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
+  pub fn set_render_callback(cb: Option<crate::simulation_api::RenderCallback>) {
+    *crate::simulation_api::RENDER_CALLBACK.write() = cb;
   }
 
   /// TODO: Document this item

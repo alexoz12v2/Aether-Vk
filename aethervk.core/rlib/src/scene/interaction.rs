@@ -112,7 +112,7 @@ mod tests {
   use super::*;
   use crate::scene::{HasComponentResultEnum, Scene, TransformComponent};
   use alloc::sync::Arc;
-  use spin::RwLock;
+  use parking_lot::RwLock;
 
   fn setup_scene() -> Scene {
     let texture_cache = Arc::new(RwLock::new(

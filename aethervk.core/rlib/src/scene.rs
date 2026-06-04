@@ -38,7 +38,7 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 use core::any::{Any, TypeId};
 use hashbrown::{HashMap, HashSet};
 use slotmap::{SlotMap, new_key_type};
-use spin::RwLock;
+use parking_lot::RwLock;
 use thiserror::Error;
 
 pub mod almanac_planet;
@@ -1359,7 +1359,7 @@ pub struct Scene {
   component_meta: RwLock<HashMap<TypeId, ComponentMeta>>,
   hierarchy: RwLock<SceneHierarchy>,
   names: RwLock<HashMap<EntityId, String>>,
-  pub texture_cache: alloc::sync::Arc<spin::RwLock<crate::simulation::texture_cache::TextureCache>>,
+  pub texture_cache: alloc::sync::Arc<parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>>,
 }
 
 impl Clone for Scene {
@@ -1440,7 +1440,7 @@ impl Into<bool> for HasComponentResultEnum {
 impl Scene {
   /// TODO: Document this item
   pub fn new(
-    texture_cache: alloc::sync::Arc<spin::RwLock<crate::simulation::texture_cache::TextureCache>>,
+    texture_cache: alloc::sync::Arc<parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>>,
   ) -> Self {
     let empty_archetype = Archetype {
       components: HashMap::new(),
@@ -4111,7 +4111,7 @@ mod tests {
 
   // Helper function to build a pre-registered testing scene
   fn setup_scene() -> Scene {
-    let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
     )));
     scene.register_component::<HealthComp>(&[]);
@@ -4446,7 +4446,7 @@ mod tests {
 
   #[test]
   fn test_relative_transform() {
-    let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
     )));
     scene.register_component::<TransformComponent>(&[]);
@@ -4549,7 +4549,7 @@ mod tests {
 
   #[test]
   fn test_hidden_component_subtree() {
-    let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+    let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
     )));
     scene.register_component::<TransformComponent>(&[]);

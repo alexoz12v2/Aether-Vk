@@ -352,7 +352,7 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
       // Add physical_mesh2 variants
       // -------------------------------------------------------------
       let sphere_variant =
-        aethervk_core_rlib::simulation::comet::generate_uv_sphere(0.5, 32, 32, 1.0);
+        aethervk_core_rlib::simulation::comet::generate_uv_sphere(0.5, 32, 32, 1.0, false);
       let sphere_variant_arc = Arc::from(sphere_variant);
 
       let mut add_variant = |name: &str,
@@ -511,7 +511,7 @@ impl SimulationDelegate for SimulationPlaygroundDelegate {
         let sphere = {
           // TODO insert true mass of planet (hard code or from constants kernel)
           let mut sphere =
-            aethervk_core_rlib::simulation::comet::generate_uv_sphere(planet_radius, 64, 64, 1.0);
+            aethervk_core_rlib::simulation::comet::generate_uv_sphere(planet_radius, 64, 64, 1.0, false);
           let tex = aethervk_core_rlib::simulation::comet::load_texture_from_file(
             assets_dir.join(tex_path).to_str().unwrap(),
           )

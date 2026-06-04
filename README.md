@@ -119,13 +119,47 @@ A standard simulation tick involves:
 
 See the `LICENSE` file for details.
 
-## Creation of release through `scripts/create_release.sh`/`scripts\create_release.ps1`
+## Packaging and Releases
 
-- Mode: `create` :                                                                                                                                                                                                                                                       
-  - Requires the `gh` CLI.                                                                                                                                                                                                                                            
-  - Checks if the current commit's GitHub Action CI run succeeded using `gh run list --commit <hash>` . If the CI failed, it aborts the release process.                                                                                                               
-  - If CI passes (or is pending/not found, in which case it emits a warning), it creates a `git tag`, pushes the tag, and automatically drafts the release using `gh release create .`
-- Mode: `upload` :                                                                                                                                                                                                                                                       
-  - Allows you to run the script locally to upload a compiled artifact to an existing release.                                                                                                                                                                        
-  - Example:  `./scripts/create_release.sh upload 1.0.0 ./bin/publish/AetherVk_win-x64.msix`
+We provide scripts to package the application into native installers for Windows, macOS, and Linux.
 
+### Available Scripts
+- **Windows (MSIX):** `scripts\package_windows_msix.ps1`
+- **macOS (App Bundle):** `scripts/package_macos.sh`
+- **Linux (DEB):** `scripts/package_linux_deb.sh`
+
+*(Note: There are also `package_windows.ps1` and `package_linux.sh` scripts that generate portable `.zip` and `.tar.gz` archives respectively).*
+
+### Side-by-Side (SxS) Developer Installations
+By default, the packaging scripts create installers with fixed application identifiers (e.g. `AetherVk` or `com.example.AetherVk`). Installing a new build will overwrite the existing one. 
+
+For development and debugging, you can create a **Side-by-Side (SxS)** installation. This appends the build configuration and version to the application identifier, allowing you to install multiple debug or release builds concurrently without conflicts.
+
+**Windows MSIX:**
+```powershell
+.\scripts\package_windows_msix.ps1 -Arch x64 -Configuration Debug -SideBySide
+```
+
+**macOS App Bundle:**
+```bash
+./scripts/package_macos.sh osx-arm64 Debug SideBySide
+```
+
+**Linux DEB:**
+```bash
+./scripts/package_linux_deb.sh linux-x64 Debug SideBySide
+```
+
+### GitHub Release Workflow
+
+To create a new release, use the `create_release.sh` or `create_release.ps1` scripts in the `scripts` directory.
+
+- **Mode: `create`**
+  - Requires the GitHub (`gh`) CLI.
+  - Automatically verifies that the current commit's GitHub Action CI run succeeded using `gh run list --commit <hash>`. If the CI failed, the release process is aborted.
+  - If CI passes, it creates a `git tag`, pushes the tag, and automatically drafts the release using `gh release create`.
+  - Example: `./scripts/create_release.sh create 1.0.1`
+
+- **Mode: `upload`**
+  - Allows you to run the script locally to upload a compiled artifact to an existing release.
+  - Example: `./scripts/create_release.sh upload 1.0.1 ./bin/publish/AetherVk_win-x64.msix`

@@ -71,9 +71,7 @@ pub struct RigidBodyImex {
 #[derive(Copy, Clone, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Wrench {
   pub force: [f32; 3],
-  pub _pad0: f32,
   pub torque: [f32; 3],
-  pub _pad1: f32,
 }
 
 #[repr(C)]

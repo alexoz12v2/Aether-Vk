@@ -8,7 +8,7 @@ use aethervk_oshal_rlib::os::{
 };
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use spin::RwLock;
+use parking_lot::RwLock;
 
 pub mod almanac;
 pub mod comet;

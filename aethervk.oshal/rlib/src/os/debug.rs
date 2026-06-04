@@ -659,6 +659,36 @@ pub mod fpe {
   }
 }
 
+/// Sets the name of the current thread for debuggers dynamically at runtime.
+/// Compiles away completely in release mode.
+#[inline]
+pub fn set_thread_name_dynamic(_name: &str) {
+  #[cfg(debug_assertions)]
+  {
+    #[cfg(unix)]
+    {
+      if let Ok(c_name) = alloc::ffi::CString::new(_name) {
+        #[cfg(target_os = "linux")]
+        unsafe {
+          ::libc::prctl(15, c_name.as_ptr(), 0, 0, 0);
+        }
+        #[cfg(target_os = "macos")]
+        unsafe {
+          ::libc::pthread_setname_np(c_name.as_ptr());
+        }
+      }
+    }
+    #[cfg(windows)]
+    {
+      unsafe {
+        let handle = ::windows::Win32::System::Threading::GetCurrentThread();
+        let h_name = ::windows::core::HSTRING::from(_name);
+        let _ = ::windows::Win32::System::Threading::SetThreadDescription(handle, &h_name);
+      }
+    }
+  }
+}
+
 /// Sets the name of the current thread for debuggers.
 /// Accepts a standard string literal and compiles away completely in release mode.
 #[macro_export]

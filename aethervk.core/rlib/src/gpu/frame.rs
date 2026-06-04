@@ -598,7 +598,7 @@ pub struct ParticleDrawCall {
   pub system_particle_offset: u32,
   pub system_indirect_offset: u32,
   pub config: crate::scene::particles::ParticleEmitterComponent,
-  pub particles: alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
+  pub particles: alloc::sync::Weak<parking_lot::RwLock<Vec<crate::scene::particles::ParticleData>>>,
 }
 
 /// TODO: Document this item
@@ -608,7 +608,7 @@ pub struct Particle2DrawCall {
   pub system_indirect_offset: u32,
   pub particle_radius: f32,
   pub color: [f32; 4],
-  pub particles: alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
+  pub particles: alloc::sync::Weak<parking_lot::RwLock<Vec<crate::scene::particles::ParticleData>>>,
 }
 
 #[derive(Clone)]

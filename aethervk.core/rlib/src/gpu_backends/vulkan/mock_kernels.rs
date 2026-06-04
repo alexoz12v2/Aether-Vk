@@ -149,27 +149,21 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn step_ode_p1_p2(
     &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
-    dt: timeus_t,
+    _cmd: &mut Self::Cmd,
+    _particles: &mut Self::Buffer<f32>,
+    _dt: timeus_t,
   ) -> EngineResult<()> {
-    if self.target == MockTargetShader::P1_2Imex {
-      self.base.step_ode_p1_p2(cmd, particles, dt)?;
-    }
     Ok(())
   }
 
   fn step_ode_p3_p4(
     &self,
-    cmd: &mut Self::Cmd,
-    kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &mut Self::Buffer<crate::gpu::RigidBodyGpu>,
-    emitters: &Self::Buffer<ForceEmitter>,
-    dt: timeus_t,
+    _cmd: &mut Self::Cmd,
+    _kinematics: &Self::Buffer<KinematicBody>,
+    _rigid_bodies: &mut Self::Buffer<crate::gpu::RigidBodyGpu>,
+    _emitters: &Self::Buffer<ForceEmitter>,
+    _dt: timeus_t,
   ) -> EngineResult<()> {
-    if self.target == MockTargetShader::P3_4Imex {
-      self.base.step_ode_p3_p4(cmd, kinematics, rigid_bodies, emitters, dt)?;
-    }
     Ok(())
   }
 
@@ -187,15 +181,12 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn step_ode_p5(
     &self,
-    cmd: &mut Self::Cmd,
-    kinematics: &Self::Buffer<KinematicBody>,
-    particles: &mut Self::Buffer<f32>,
-    emitters: &Self::Buffer<ForceEmitter>,
-    dt: timeus_t,
+    _cmd: &mut Self::Cmd,
+    _kinematics: &Self::Buffer<KinematicBody>,
+    _particles: &mut Self::Buffer<f32>,
+    _emitters: &Self::Buffer<ForceEmitter>,
+    _dt: timeus_t,
   ) -> EngineResult<()> {
-    if self.target == MockTargetShader::P5Imex {
-      self.base.step_ode_p5(cmd, kinematics, particles, emitters, dt)?;
-    }
     Ok(())
   }
 

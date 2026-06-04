@@ -1283,6 +1283,7 @@ pub fn generate_uv_sphere(
   lat_segments: u32,
   lon_segments: u32,
   total_mass: f32,
+  flip_winding: bool,
 ) -> Comet {
   let mut vertices = Vec::new();
   let mut indices = Vec::new();
@@ -1333,16 +1334,26 @@ pub fn generate_uv_sphere(
       // Now that the Vulkan pipeline is VK_FRONT_FACE_CLOCKWISE (compensating for Y-flip),
       // all local geometry must be generated as CCW.
       if lat != 0 {
-        // Reversed from (first, first + 1, second)
-        indices.push(first);
-        indices.push(second);
-        indices.push(first + 1);
+        if flip_winding {
+          indices.push(first);
+          indices.push(first + 1);
+          indices.push(second);
+        } else {
+          indices.push(first);
+          indices.push(second);
+          indices.push(first + 1);
+        }
       }
       if lat != lat_segments - 1 {
-        // Reversed from (second, first + 1, second + 1)
-        indices.push(second);
-        indices.push(second + 1);
-        indices.push(first + 1);
+        if flip_winding {
+          indices.push(second);
+          indices.push(first + 1);
+          indices.push(second + 1);
+        } else {
+          indices.push(second);
+          indices.push(second + 1);
+          indices.push(first + 1);
+        }
       }
     }
   }
@@ -1610,7 +1621,7 @@ mod tests {
 
   #[test]
   fn test_uv_sphere_generation() {
-    let sphere = generate_uv_sphere(2.0, 10, 10, 1.0);
+    let sphere = generate_uv_sphere(2.0, 10, 10, 1.0, false);
     let expected_indices = 6 * 10 * (10 - 1);
 
     // Check if the number of vertices and indices is correct

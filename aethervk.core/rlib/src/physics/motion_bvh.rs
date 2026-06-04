@@ -47,6 +47,7 @@ pub enum CpuBvhItem {
   SubTree(u32),
 }
 
+#[derive(Debug)]
 pub struct MotionBvhNode {
   pub bounds: Aabb,
   pub left_child: Option<u32>,
@@ -56,6 +57,7 @@ pub struct MotionBvhNode {
   pub center_of_mass: Vec3f32,
 }
 
+#[derive(Debug)]
 pub struct MotionBvhTree {
   pub nodes: Vec<MotionBvhNode>,
   pub root: Option<u32>,

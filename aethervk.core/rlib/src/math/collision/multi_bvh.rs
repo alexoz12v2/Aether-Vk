@@ -91,7 +91,7 @@ pub enum MeshMultiBvh {
 // --- BINARY BVH ABSTRACTION TRAIT ---
 
 /// A unified trait to inspect any binary BVH natively.
-pub trait BinaryBvh {
+pub trait BinaryBvh: core::fmt::Debug {
   type Bound: Clone;
   type Primitive: Clone;
 
@@ -238,6 +238,7 @@ where
   );
 
   let mut multi_nodes = Vec::new();
+
 
   if let Some(binary_root) = binary_bvh.root() {
     collapse_binary_to_multi_recursive::<N, T>(binary_root, binary_bvh, &mut multi_nodes, 0);
@@ -545,10 +546,12 @@ mod tests {
   use super::*;
   use alloc::vec;
 
+  #[derive(Debug)]
   struct MockBinaryBvh {
     nodes: Vec<MockNode>,
   }
 
+  #[derive(Debug)]
   struct MockNode {
     bound: f32,
     children: (Option<u32>, Option<u32>),

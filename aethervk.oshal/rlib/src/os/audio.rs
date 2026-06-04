@@ -335,13 +335,20 @@ pub mod linux_alsa {
     use super::AudioDevice;
     use core::ffi::{c_char, c_void, c_int, c_uint};
 
-    #[link(name = "asound")]
-    unsafe extern "C" {
-        fn snd_pcm_open(pcm: *mut *mut c_void, name: *const c_char, stream: c_int, mode: c_int) -> c_int;
-        fn snd_pcm_set_params(pcm: *mut c_void, format: c_int, access: c_int, channels: c_uint, rate: c_uint, soft_resample: c_int, latency: c_uint) -> c_int;
-        fn snd_pcm_writei(pcm: *mut c_void, buffer: *const c_void, size: usize) -> isize;
-        fn snd_pcm_recover(pcm: *mut c_void, err: c_int, silent: c_int) -> c_int;
-        fn snd_pcm_close(pcm: *mut c_void) -> c_int;
+    type FnSndPcmOpen = unsafe extern "C" fn(*mut *mut c_void, *const c_char, c_int, c_int) -> c_int;
+    type FnSndPcmSetParams = unsafe extern "C" fn(*mut c_void, c_int, c_int, c_uint, c_uint, c_int, c_uint) -> c_int;
+    type FnSndPcmWritei = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> isize;
+    type FnSndPcmRecover = unsafe extern "C" fn(*mut c_void, c_int, c_int) -> c_int;
+    type FnSndPcmClose = unsafe extern "C" fn(*mut c_void) -> c_int;
+
+    #[derive(Clone, Copy)]
+    struct AlsaApi {
+        lib_handle: *mut c_void,
+        snd_pcm_open: FnSndPcmOpen,
+        snd_pcm_set_params: FnSndPcmSetParams,
+        snd_pcm_writei: FnSndPcmWritei,
+        snd_pcm_recover: FnSndPcmRecover,
+        snd_pcm_close: FnSndPcmClose,
     }
 
     const SND_PCM_STREAM_PLAYBACK: c_int = 0;
@@ -370,6 +377,7 @@ pub mod linux_alsa {
     struct ThreadContext {
         is_running: *const core::sync::atomic::AtomicBool,
         callback: fn(&mut [f32]),
+        api: AlsaApi,
     }
 
     extern "C" fn alsa_thread_func(param: *mut c_void) -> *mut c_void {
@@ -379,13 +387,13 @@ pub mod linux_alsa {
         let default_name = b"default\0".as_ptr() as *const c_char;
         
         unsafe {
-            if snd_pcm_open(&mut pcm, default_name, SND_PCM_STREAM_PLAYBACK, 0) < 0 {
+            if (context.api.snd_pcm_open)(&mut pcm, default_name, SND_PCM_STREAM_PLAYBACK, 0) < 0 {
                 let _ = alloc::boxed::Box::from_raw(param as *mut ThreadContext);
                 return core::ptr::null_mut();
             }
             
-            if snd_pcm_set_params(pcm, SND_PCM_FORMAT_FLOAT_LE, SND_PCM_ACCESS_RW_INTERLEAVED, 2, 44100, 1, 50000) < 0 {
-                snd_pcm_close(pcm);
+            if (context.api.snd_pcm_set_params)(pcm, SND_PCM_FORMAT_FLOAT_LE, SND_PCM_ACCESS_RW_INTERLEAVED, 2, 44100, 1, 50000) < 0 {
+                (context.api.snd_pcm_close)(pcm);
                 let _ = alloc::boxed::Box::from_raw(param as *mut ThreadContext);
                 return core::ptr::null_mut();
             }
@@ -399,15 +407,16 @@ pub mod linux_alsa {
             (context.callback)(&mut buffer);
             
             unsafe {
-                let mut frames = snd_pcm_writei(pcm, buffer.as_ptr() as *const c_void, frames_per_buffer as usize);
+                let mut frames = (context.api.snd_pcm_writei)(pcm, buffer.as_ptr() as *const c_void, frames_per_buffer as usize);
                 if frames < 0 {
-                    frames = snd_pcm_recover(pcm, frames as c_int, 0) as isize;
+                    frames = (context.api.snd_pcm_recover)(pcm, frames as c_int, 0) as isize;
                 }
             }
         }
         
         unsafe {
-            snd_pcm_close(pcm);
+            (context.api.snd_pcm_close)(pcm);
+            libc::dlclose(context.api.lib_handle);
             let _ = alloc::boxed::Box::from_raw(param as *mut ThreadContext);
         }
         core::ptr::null_mut()
@@ -418,9 +427,37 @@ pub mod linux_alsa {
             self.callback = Some(render_callback);
             self.is_running.store(true, core::sync::atomic::Ordering::Relaxed);
             
+            let lib_handle = unsafe {
+                let lib_name = b"libasound.so.2\0".as_ptr() as *const c_char;
+                let handle = libc::dlopen(lib_name, libc::RTLD_NOW);
+                if handle.is_null() {
+                    let fallback_name = b"libasound.so\0".as_ptr() as *const c_char;
+                    libc::dlopen(fallback_name, libc::RTLD_NOW)
+                } else {
+                    handle
+                }
+            };
+
+            if lib_handle.is_null() {
+                // If we can't load ALSA, we just don't play sound.
+                return;
+            }
+
+            let api = unsafe {
+                AlsaApi {
+                    lib_handle,
+                    snd_pcm_open: core::mem::transmute(libc::dlsym(lib_handle, b"snd_pcm_open\0".as_ptr() as *const c_char)),
+                    snd_pcm_set_params: core::mem::transmute(libc::dlsym(lib_handle, b"snd_pcm_set_params\0".as_ptr() as *const c_char)),
+                    snd_pcm_writei: core::mem::transmute(libc::dlsym(lib_handle, b"snd_pcm_writei\0".as_ptr() as *const c_char)),
+                    snd_pcm_recover: core::mem::transmute(libc::dlsym(lib_handle, b"snd_pcm_recover\0".as_ptr() as *const c_char)),
+                    snd_pcm_close: core::mem::transmute(libc::dlsym(lib_handle, b"snd_pcm_close\0".as_ptr() as *const c_char)),
+                }
+            };
+
             let context = alloc::boxed::Box::new(ThreadContext {
                 is_running: &self.is_running as *const _,
                 callback: render_callback,
+                api,
             });
             
             let context_ptr = alloc::boxed::Box::into_raw(context) as *mut c_void;

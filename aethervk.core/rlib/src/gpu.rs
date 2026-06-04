@@ -30,7 +30,7 @@ pub mod scene_conversion;
 pub use self::frame::RenderScene;
 
 /// TODO: Document this item
-pub type RwLock<T> = spin::rwlock::RwLock<T>;
+pub type RwLock<T> = parking_lot::RwLock<T>;
 
 /// An opaque task that MUST be executed on the main UI thread.
 /// Used to defer window-system-tied destruction (swapchain, surface) from
@@ -663,7 +663,7 @@ impl From<RenderableInstanceId> for GpuResourceHandle {
 
 // Allow the host application to configure the core assets path uniformly
 /// TODO: Document this item
-pub static ASSET_DIR: spin::RwLock<Option<alloc::string::String>> = spin::RwLock::new(None);
+pub static ASSET_DIR: parking_lot::RwLock<Option<alloc::string::String>> = parking_lot::RwLock::new(None);
 
 /// Information about the synchronization payload after submitting a command buffer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1747,11 +1747,11 @@ pub trait RenderContext: Send + Sync {
 #[derive(Clone)]
 /// TODO: Document this item
 pub struct RenderFrontend {
-  backend: Arc<spin::RwLock<dyn RenderContext + 'static>>,
+  backend: Arc<parking_lot::RwLock<dyn RenderContext + 'static>>,
 }
 
 /// TODO: Document this item
-pub type WeakRenderFrontend = Weak<spin::RwLock<dyn RenderContext + 'static>>;
+pub type WeakRenderFrontend = Weak<parking_lot::RwLock<dyn RenderContext + 'static>>;
 /// TODO: Document this item
 pub trait WeakRenderFrontendExt {
   fn as_frontend(&self) -> Option<RenderFrontend>;
@@ -1764,7 +1764,7 @@ impl WeakRenderFrontendExt for WeakRenderFrontend {
 }
 
 impl core::ops::Deref for RenderFrontend {
-  type Target = Arc<spin::RwLock<dyn RenderContext + 'static>>;
+  type Target = Arc<parking_lot::RwLock<dyn RenderContext + 'static>>;
 
   fn deref(&self) -> &Self::Target {
     &self.backend
@@ -1862,7 +1862,7 @@ where
 {
   fn from(value: T) -> Self {
     RenderFrontend {
-      backend: Arc::new(spin::RwLock::new(value)),
+      backend: Arc::new(parking_lot::RwLock::new(value)),
     }
   }
 }
@@ -2079,6 +2079,15 @@ pub trait Kernels: Send + Sync {
   ) -> EngineResult<Self::MotionTlas>;
 
   fn create_command_buffer(&self) -> EngineResult<Self::Cmd>;
+
+  /// Debug-only: submit the current command buffer, wait for GPU completion,
+  /// and return a fresh command buffer.  Used by `shader_debug_sync` to
+  /// isolate which shader dispatch hangs the GPU.
+  ///
+  /// Default implementation: no-op pass-through (returns the same cmd).
+  fn debug_sync_barrier(&self, cmd: Self::Cmd) -> EngineResult<Self::Cmd> {
+    Ok(cmd)
+  }
 
   /// Allocates a fresh, zero-initialised device list of `capacity` elements.
   fn build_list<T: Copy + Send + Sync>(

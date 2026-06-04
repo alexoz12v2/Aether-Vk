@@ -1205,3 +1205,23 @@ fn test_camera_controls_microframe() {
     }
   }
 }
+#[test]
+fn test_callbacks_safety() {
+  static BREADCRUMB_HIT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+  
+  unsafe extern "C" fn mock_breadcrumb(_status: u32, _msg: *const core::ffi::c_char) {
+    BREADCRUMB_HIT.store(true, core::sync::atomic::Ordering::SeqCst);
+  }
+
+  // 1. Set the safe callback
+  SimulationContext::set_breadcrumb_callback(Some(mock_breadcrumb));
+
+  // 2. Fire the breadcrumb
+  crate::simulation_api::emit_breadcrumb(0, "Test Safe Breadcrumb");
+
+  // 3. Verify it was hit
+  assert!(BREADCRUMB_HIT.load(core::sync::atomic::Ordering::SeqCst));
+
+  // 4. Remove the callback safely
+  SimulationContext::set_breadcrumb_callback(None);
+}

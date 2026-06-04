@@ -61,6 +61,7 @@ pub fn pack_meta(is_leaf: bool, frame: u32, shape: u32, index: u32) -> u32 {
   m
 }
 
+#[derive(Debug)]
 pub struct RbNode {
   pub min: Vec3f32,
   pub max: Vec3f32,
@@ -70,6 +71,7 @@ pub struct RbNode {
   pub leaf_child_idx: u32,
 }
 
+#[derive(Debug)]
 pub struct RootBoundsBvh {
   pub nodes: Vec<RbNode>,
 }

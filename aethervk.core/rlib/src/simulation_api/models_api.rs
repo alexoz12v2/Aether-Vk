@@ -102,7 +102,7 @@ impl SimulationContext {
       unsafe { CStr::from_ptr(name).to_str().unwrap_or("ProceduralSphere") }
     };
 
-    let sphere = crate::simulation::comet::generate_uv_sphere(radius, 32, 32, mass);
+    let sphere = crate::simulation::comet::generate_uv_sphere(radius, 32, 32, mass, false);
     let scenes = self.scenes.write();
     let scene_ctx_lock =
       scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
@@ -155,7 +155,7 @@ impl SimulationContext {
     };
 
     // Very low res sphere as requested (e.g. 6,6)
-    let sphere = crate::simulation::comet::generate_uv_sphere(radius, 6, 6, mass);
+    let sphere = crate::simulation::comet::generate_uv_sphere(radius, 6, 6, mass, false);
     let scenes = self.scenes.write();
     let scene_ctx_lock =
       scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
