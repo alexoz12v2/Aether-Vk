@@ -561,6 +561,7 @@ pub trait SceneConversionExt {
     render_outline: bool,
     pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
     window_extent: [u32; 2],
+    julian_date: Option<f64>,
   ) -> GpuResult<RenderSceneExtraction>;
 }
 
@@ -572,6 +573,7 @@ impl SceneConversionExt for crate::scene::Scene {
     render_outline: bool,
     pool: Option<&aethervk_oshal_rlib::os::pool::ThreadPool>,
     window_extent: [u32; 2],
+    julian_date: Option<f64>,
   ) -> GpuResult<RenderSceneExtraction> {
     crate::scene::ui::update_ui_layouts(self, [window_extent[0] as f32, window_extent[1] as f32]);
 
@@ -1076,12 +1078,30 @@ impl SceneConversionExt for crate::scene::Scene {
         }
         if gizmo.is_visible {
           if let Some(hrt) = self.get_relative_transform_f64(id, camera_entity) {
-            let t = TransformComponent {
-              position: hrt.position.to_f32(),
-              rotation: hrt.rotation,
-              scale: hrt.scale,
+            // Check if this entity has a rotational model override for gizmo orientation
+            let iau_override: Option<crate::scene::BodyRotationalModel> = julian_date.and_then(|_jd| {
+              self.with_component(id, |m: &crate::scene::PhysicalMeshComponent| {
+                m.rotational_model
+              }).flatten()
+            });
+
+            let gizmo_model = if let (Some(rot_model), Some(jd)) = (iau_override, julian_date) {
+              // Use position from relative transform, but rotation from IAU model
+              let iau_quat = rot_model.orientation_at(jd);
+              let t_iau = TransformComponent {
+                position: hrt.position.to_f32(),
+                rotation: iau_quat,
+                scale: hrt.scale,
+              };
+              t_iau.to_mat4::<Mat4x4f32>()
+            } else {
+              let t = TransformComponent {
+                position: hrt.position.to_f32(),
+                rotation: hrt.rotation,
+                scale: hrt.scale,
+              };
+              t.to_mat4::<Mat4x4f32>() * gizmo.local_frame
             };
-            let gizmo_model = t.to_mat4::<Mat4x4f32>() * gizmo.local_frame;
             extracted_sphere_gizmos.push((id, gizmo_model, gizmo.radius, gizmo.subdivisions));
           }
         }
@@ -1494,21 +1514,40 @@ impl SceneConversionExt for crate::scene::Scene {
               if let Some(hrt) = self.get_relative_transform_f64(entity_id, frame_entity) {
                 use crate::scene::TransformComponent;
                 let rte_pos = (hrt.position - cam_f64.position).to_f32();
-                let rte_transform = TransformComponent {
-                  position: rte_pos,
-                  rotation: hrt.rotation,
-                  scale: hrt.scale,
-                };
-                // Re-read the local_frame from the component
-                let local_frame = {
-                  use aethervk_oshal_rlib::math::matrix::SquareMatrix;
-                  self
-                    .with_component(entity_id, |g: &crate::scene::SphereGizmoComponent| {
-                      g.local_frame
-                    })
-                    .unwrap_or(Mat4x4f32::identity())
-                };
-                sg.1 = rte_transform.to_mat4::<Mat4x4f32>() * local_frame;
+
+                // Check if this entity has a rotational model override for gizmo orientation
+                let iau_override: Option<crate::scene::BodyRotationalModel> = julian_date.and_then(|_jd| {
+                  self.with_component(entity_id, |m: &crate::scene::PhysicalMeshComponent| {
+                    m.rotational_model
+                  }).flatten()
+                });
+
+                if let (Some(rot_model), Some(jd)) = (iau_override, julian_date) {
+                  // Use position from relative transform, but rotation from IAU model
+                  let iau_quat = rot_model.orientation_at(jd);
+                  let rte_transform = TransformComponent {
+                    position: rte_pos,
+                    rotation: iau_quat,
+                    scale: hrt.scale,
+                  };
+                  sg.1 = rte_transform.to_mat4::<Mat4x4f32>();
+                } else {
+                  let rte_transform = TransformComponent {
+                    position: rte_pos,
+                    rotation: hrt.rotation,
+                    scale: hrt.scale,
+                  };
+                  // Re-read the local_frame from the component
+                  let local_frame = {
+                    use aethervk_oshal_rlib::math::matrix::SquareMatrix;
+                    self
+                      .with_component(entity_id, |g: &crate::scene::SphereGizmoComponent| {
+                        g.local_frame
+                      })
+                      .unwrap_or(Mat4x4f32::identity())
+                  };
+                  sg.1 = rte_transform.to_mat4::<Mat4x4f32>() * local_frame;
+                }
               }
             }
 
@@ -1910,7 +1949,7 @@ mod tests {
   fn test_multi_scale_layer_separation() {
     // Verify that convert_scene separates macro and micro entities into different depth layers
     let (scene, camera) = create_multi_scale_scene();
-    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+    let result = scene.convert_scene(camera, false, None, [800, 600], None).unwrap();
 
     // Should have 2 depth layers: macro (0) and micro (1)
     assert!(
@@ -1930,7 +1969,7 @@ mod tests {
   fn test_multi_scale_near_far_invariant() {
     // Verify that near < far for ALL layers (the bug we fixed)
     let (scene, camera) = create_multi_scale_scene();
-    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+    let result = scene.convert_scene(camera, false, None, [800, 600], None).unwrap();
 
     for layer in &result.depth_layers {
       assert!(
@@ -1954,7 +1993,7 @@ mod tests {
     // Verify that the micro layer's near/far are tight SOI-based bounds,
     // expressed in the micro frame's LOCAL coordinate space (km).
     let (scene, camera) = create_multi_scale_scene();
-    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+    let result = scene.convert_scene(camera, false, None, [800, 600], None).unwrap();
 
     let micro_layer = result.depth_layers.iter().find(|l| l.layer_index == 1).unwrap();
 
@@ -1985,7 +2024,7 @@ mod tests {
   fn test_multi_scale_macro_full_range() {
     // Verify that the macro layer uses the camera's full depth range
     let (scene, camera) = create_multi_scale_scene();
-    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+    let result = scene.convert_scene(camera, false, None, [800, 600], None).unwrap();
 
     let macro_layer = result.depth_layers.iter().find(|l| l.layer_index == 0).unwrap();
 
@@ -2006,7 +2045,7 @@ mod tests {
   fn test_multi_scale_layers_sorted() {
     // Verify that layers are sorted by layer_index (macro first, micro second)
     let (scene, camera) = create_multi_scale_scene();
-    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+    let result = scene.convert_scene(camera, false, None, [800, 600], None).unwrap();
 
     for window in result.depth_layers.windows(2) {
       assert!(
@@ -2064,7 +2103,7 @@ mod tests {
       )
       .unwrap();
 
-    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+    let result = scene.convert_scene(camera, false, None, [800, 600], None).unwrap();
 
     // Only macro layer (0) should exist
     assert_eq!(
@@ -2199,7 +2238,7 @@ mod tests {
       )
       .unwrap();
 
-    let result = scene.convert_scene(camera, false, None, [800, 600]).unwrap();
+    let result = scene.convert_scene(camera, false, None, [800, 600], None).unwrap();
 
     let micro_layer = result.depth_layers.iter().find(|l| l.layer_index == 1).unwrap();
 

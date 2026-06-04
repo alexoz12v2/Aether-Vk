@@ -1094,7 +1094,7 @@ impl SimulationContext {
 /// Returns the radius of the smallest sphere centred at the mesh origin that
 /// encloses all vertices. Result is in the same unit as vertex positions
 /// (object-space km for comet meshes).
-fn compute_bounding_sphere_radius(vertices: &[crate::simulation::comet::Vertex]) -> f32 {
+pub fn compute_bounding_sphere_radius(vertices: &[crate::simulation::comet::Vertex]) -> f32 {
   vertices
     .iter()
     .map(|v| {

@@ -547,7 +547,7 @@ pub fn scene_to_render_scene(
 ) -> GpuResult<RenderScene> {
   let extent = device.get_presentation_engine_extent(presentation_engine_handle)?;
   let render_scene_extraction =
-    scene.convert_scene(camera_entity, render_outlines, None, extent)?;
+    scene.convert_scene(camera_entity, render_outlines, None, extent, None)?;
 
   let time_readings = aethervk_oshal_rlib::os::time::TimeReadings {
     time: 0,

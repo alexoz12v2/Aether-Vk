@@ -2,6 +2,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:AetherVk.Logic.ViewModels"
              xmlns:input="using:AetherVk.Input"
+             xmlns:i="clr-namespace:Avalonia.Xaml.Interactivity;assembly=Avalonia.Xaml.Interactivity"
+             xmlns:ia="clr-namespace:Avalonia.Xaml.Interactions.Core;assembly=Avalonia.Xaml.Interactions"
              x:DataType="vm:Viewport3DViewModel"
              x:Class="AetherVk.Views.Viewport3DView"
              input:ActionContext.Id="Viewport"
@@ -14,6 +16,21 @@
                PointerReleased="OnPointerReleased"
                PointerMoved="OnPointerMoved"
                PointerWheelChanged="OnPointerWheelChanged">
+            <i:Interaction.Behaviors>
+                <ia:DataTriggerBehavior Binding="{Binding IsOrbiting}" ComparisonCondition="Equal" Value="False">
+                    <ia:ChangePropertyAction PropertyName="Cursor" Value="Arrow" />
+                </ia:DataTriggerBehavior>
+                <ia:DataTriggerBehavior Binding="{Binding IsPanning}" ComparisonCondition="Equal" Value="False">
+                    <ia:ChangePropertyAction PropertyName="Cursor" Value="Arrow" />
+                </ia:DataTriggerBehavior>
+
+                <ia:DataTriggerBehavior Binding="{Binding IsOrbiting}" ComparisonCondition="Equal" Value="True">
+                    <ia:ChangePropertyAction PropertyName="Cursor" Value="SizeAll" />
+                </ia:DataTriggerBehavior>
+                <ia:DataTriggerBehavior Binding="{Binding IsPanning}" ComparisonCondition="Equal" Value="True">
+                    <ia:ChangePropertyAction PropertyName="Cursor" Value="Hand" />
+                </ia:DataTriggerBehavior>
+            </i:Interaction.Behaviors>
         </Image>
 
         <ItemsControl ItemsSource="{Binding Billboards}">

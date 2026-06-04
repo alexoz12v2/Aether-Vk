@@ -190,24 +190,39 @@ impl MotionBvhTree {
 
   pub fn query_intersections(&self, query_aabb: &Aabb, out: &mut Vec<u32>) {
     if let Some(root) = self.root {
-      self.query_recursive(root, query_aabb, out);
+      self.query_iterative(root, query_aabb, out);
     }
   }
 
-  fn query_recursive(&self, node_idx: u32, query_aabb: &Aabb, out: &mut Vec<u32>) {
-    let node = &self.nodes[node_idx as usize];
-    if !node.bounds.intersects(query_aabb) {
-      return;
-    }
+  fn query_iterative(&self, start_node_idx: u32, query_aabb: &Aabb, out: &mut Vec<u32>) {
+    let mut stack = [0u32; 128];
+    let mut stack_ptr = 0;
+    stack[stack_ptr] = start_node_idx;
+    stack_ptr += 1;
 
-    if let Some(data_idx) = node.data_index {
-      out.push(data_idx);
-    } else {
-      if let Some(left) = node.left_child {
-        self.query_recursive(left, query_aabb, out);
+    while stack_ptr > 0 {
+      stack_ptr -= 1;
+      let node_idx = stack[stack_ptr];
+      let node = &self.nodes[node_idx as usize];
+      if !node.bounds.intersects(query_aabb) {
+        continue;
       }
-      if let Some(right) = node.right_child {
-        self.query_recursive(right, query_aabb, out);
+
+      if let Some(data_idx) = node.data_index {
+        out.push(data_idx);
+      } else {
+        if stack_ptr + 2 > 128 {
+          aethervk_oshal_rlib::log!("Warning: max depth exceeded in motion_bvh query_iterative");
+          continue;
+        }
+        if let Some(left) = node.left_child {
+          stack[stack_ptr] = left;
+          stack_ptr += 1;
+        }
+        if let Some(right) = node.right_child {
+          stack[stack_ptr] = right;
+          stack_ptr += 1;
+        }
       }
     }
   }

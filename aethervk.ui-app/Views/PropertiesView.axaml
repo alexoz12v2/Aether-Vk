@@ -342,8 +342,8 @@
                                                     </Grid>
 
                                                     <Grid ColumnDefinitions="Auto,*,Auto,*" Margin="0,4,0,0">
-                                                        <TextBlock Grid.Column="0" Text="Radius (frac):" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding CircleRadius}" HasBounds="True" MinBound="0.001" MaxBound="1.0" Step="0.01" Margin="0,0,10,0"/>
+                                                        <TextBlock Grid.Column="0" Text="Radius (km):" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding CircleRadiusKm}" HasBounds="True" MinBound="0.001" Step="0.01" Margin="0,0,10,0"/>
                                                         <TextBlock Grid.Column="2" Text="Mass (g):" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                                         <controls:UnboundedSlider Grid.Column="3" Value="{Binding MassGrams}" HasBounds="True" MinBound="0" Step="0.1"/>
                                                     </Grid>
@@ -405,7 +405,7 @@
                                             </StackPanel>
                                             <StackPanel Margin="0,0,16,8">
                                                 <TextBlock Text="Density (kg/m³)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                                <TextBlock Text="{Binding DensityKgM3, StringFormat='{}{0:F1}'}" FontSize="13" Opacity="0.8"/>
+                                                <TextBlock Text="{Binding DensityKgM3, StringFormat='{}{0:G4}'}" FontSize="13" Opacity="0.8"/>
                                             </StackPanel>
                                         </WrapPanel>
                                     </StackPanel>

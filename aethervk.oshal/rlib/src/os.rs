@@ -11,6 +11,7 @@ pub mod native;
 pub mod pool;
 pub mod thread;
 pub mod time;
+pub mod audio;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]

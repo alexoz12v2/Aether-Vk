@@ -282,9 +282,8 @@ pub struct EmissionCircle {
   pub latitude_rad: f32,
   /// Longitude in radians: 0 … 2π, measured in the LCA micro-frame.
   pub longitude_rad: f32,
-  /// Radius of the emission disc as a **fraction** of the mesh bounding-sphere radius.
-  /// E.g. `0.1` means the disc covers 10 % of the bounding sphere's radius.
-  pub circle_radius_frac: f32,
+  /// Radius of the emission disc in km.
+  pub circle_radius_km: f32,
   /// Mass of particles emitted from this circle (simulation units).
   pub mass: f32,
   /// RGBA colour of particles emitted from this circle (linear, 0–1).
@@ -338,7 +337,7 @@ mod tests {
     comp.circles.push(EmissionCircle {
       latitude_rad: 0.5,
       longitude_rad: 1.0,
-      circle_radius_frac: 0.1,
+      circle_radius_km: 0.1,
       mass: 1.0,
       color: [1.0, 1.0, 1.0, 1.0],
       cached_normal: Some([0.0, 1.0, 0.0]),

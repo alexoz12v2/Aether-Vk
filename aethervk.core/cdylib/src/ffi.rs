@@ -1026,6 +1026,132 @@ pub unsafe extern "C" fn avkSimulationContext_spawnComet(
   }
 }
 
+/// Updates the IAU rotational model on a comet's `PhysicalMeshComponent` and recomputes
+/// the `TransformComponent` rotation from the new model parameters.
+///
+/// Called from C# when the user edits the RotationalModelEditor in the properties panel.
+/// After updating the model, this function:
+/// 1. Stores the new `BodyRotationalModel` on the `PhysicalMeshComponent`.
+/// 2. Evaluates the orientation at the given Julian Date.
+/// 3. Applies the `bf_to_pa` correction and writes the quaternion to `TransformComponent`.
+/// 4. Triggers `recalculateJetPoints` to update child emitter positions on the rotated surface.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setRotationalModel(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+  pole_ra_deg: f64,
+  pole_dec_deg: f64,
+  prime_meridian_deg: f64,
+  pole_ra_rate_deg: f64,
+  pole_dec_rate_deg: f64,
+  rotation_rate_deg: f64,
+  reference_epoch_jd: f64,
+  current_jd: f64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  let scene_ctx_lock = match scenes.get_scene(scene_id) {
+    Some(s) => s,
+    None => return false,
+  };
+  let mut scene_ctx = scene_ctx_lock.write();
+  let internal_id = match scene_ctx.entity_map.get(&entity_id).copied() {
+    Some(id) => id,
+    None => return false,
+  };
+
+  let model = aethervk_core_rlib::scene::BodyRotationalModel {
+    pole_ra: pole_ra_deg,
+    pole_dec: pole_dec_deg,
+    prime_meridian: prime_meridian_deg,
+    pole_ra_rate: pole_ra_rate_deg,
+    pole_dec_rate: pole_dec_rate_deg,
+    rotation_rate: rotation_rate_deg,
+    reference_epoch_jd,
+  };
+
+  // 1. Update the rotational model on PhysicalMeshComponent
+  let mut bf_to_pa = aethervk_oshal_rlib::math::vector::vec4::Quat::identity();
+  let _ = scene_ctx.scene.with_component_mut(
+    internal_id,
+    |c: &mut aethervk_core_rlib::scene::PhysicalMeshComponent| {
+      if let Some(q) = c.mesh.bf_to_pa {
+        bf_to_pa = q;
+      }
+      c.rotational_model = Some(model);
+    },
+  );
+
+  // 2. Compute orientation from IAU model at the current simulation time
+  let iau_quat = model.orientation_at(current_jd);
+  // Convert from IAU body frame to object/PA frame
+  let sim_rotation = (iau_quat * bf_to_pa.inverse()).normalize();
+
+  // 3. Update TransformComponent rotation (preserving position and scale)
+  let _ = scene_ctx.scene.with_component_mut(
+    internal_id,
+    |tc: &mut aethervk_core_rlib::scene::TransformComponent| {
+      tc.rotation = sim_rotation;
+    },
+  );
+
+  // Note: recalculateJetPoints is called separately from C# after this returns
+  true
+}
+
+/// Synchronizes `ColliderComponent.shape.radius` and `SphereGizmoComponent.radius`
+/// with the given `new_radius_km`. Called from C# when `PhysicalMeshComponent.RadiusKm`
+/// changes, so the physics collider and visual gizmo stay in sync.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_syncColliderRadius(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+  new_radius_km: f32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  let scene_ctx_lock = match scenes.get_scene(scene_id) {
+    Some(s) => s,
+    None => return false,
+  };
+  let scene_ctx = scene_ctx_lock.read();
+  let internal_id = match scene_ctx.entity_map.get(&entity_id).copied() {
+    Some(id) => id,
+    None => return false,
+  };
+
+  // 1. Update ColliderComponent sphere radius (preserving mass, restitution, friction)
+  let _ = scene_ctx.scene.with_component_mut(
+    internal_id,
+    |collider: &mut aethervk_core_rlib::scene::ColliderComponent| {
+      collider.shape = aethervk_core_rlib::scene::ColliderShape::Sphere { radius: new_radius_km };
+    },
+  );
+
+  // 2. Update SphereGizmoComponent radius
+  let _ = scene_ctx.scene.with_component_mut(
+    internal_id,
+    |gizmo: &mut aethervk_core_rlib::scene::SphereGizmoComponent| {
+      gizmo.radius = new_radius_km;
+    },
+  );
+
+  // Mark the static TLAS as dirty so selection raycasts pick up the new bounds
+  scene_ctx.is_static_tlas_dirty.store(true, core::sync::atomic::Ordering::Relaxed);
+
+  true
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_spawnTrajectory(
@@ -1315,7 +1441,7 @@ pub unsafe extern "C" fn avkSimulationContext_addHighResTransformComponent(
 pub struct FfiEmissionCircle {
   pub latitude_rad: f32,
   pub longitude_rad: f32,
-  pub circle_radius_frac: f32,
+  pub circle_radius_km: f32,
   pub mass: f32,
   pub color_r: f32,
   pub color_g: f32,
@@ -1355,7 +1481,7 @@ pub unsafe extern "C" fn avkSimulationContext_setParticleEmitterCirclesComponent
     rust_circles.push(aethervk_core_rlib::scene::EmissionCircle {
       latitude_rad: c.latitude_rad,
       longitude_rad: c.longitude_rad,
-      circle_radius_frac: c.circle_radius_frac,
+      circle_radius_km: c.circle_radius_km,
       mass: c.mass,
       color: [c.color_r, c.color_g, c.color_b, c.color_a],
 
@@ -1389,7 +1515,6 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
   scene_id: u64,
   entity_id: u64,
 ) -> bool {
-  use aethervk_core_rlib::math::collision::intersection::intersect_ray_triangle;
   use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
 
   if ctx.is_null() {
@@ -1421,6 +1546,16 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
     None => return false,
   };
 
+  let mut comet_scale = 1.0;
+  let mut comet_rotation = aethervk_oshal_rlib::math::vector::vec4::Quat::identity();
+  let _ = scene_ctx.scene.with_component(
+    internal_id,
+    |c: &aethervk_core_rlib::scene::TransformComponent| {
+      comet_scale = c.scale.x();
+      comet_rotation = c.rotation;
+    },
+  );
+
   // Compute bounding sphere radius from mesh vertices (max distance from origin)
   let r = mesh_arc
     .vertices
@@ -1447,67 +1582,40 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
         let dir_z = lat.sin();
         let dir_x = lat.cos() * lon.cos();
         let dir_y = lat.cos() * lon.sin();
-        let dir = Vec3f32::from_components(dir_x, dir_y, dir_z);
+        let dir_user = Vec3f32::from_components(dir_x, dir_y, dir_z);
+        // Transform direction from user/IAU frame to object space for raycasting against mesh vertices
+        let dir = comet_rotation.inverse().rotate_vector(dir_user);
 
         // Cast a ray from far away towards the origin.
         let start_dist = r * 2.0;
         let origin = dir * start_dist;
         let ray_dir = dir * -1.0;
-        let ray = aethervk_core_rlib::math::collision::intersection::Ray {
-          origin,
-          direction: ray_dir,
-          length: start_dist * 2.0,
-        };
 
-        let mut closest_t = f32::MAX;
-        let mut hit_normal = dir;
 
-        // Brute force raycast against all triangles
-        for tri in mesh_arc.iter_triangles() {
-          if intersect_ray_triangle(&ray, &tri) {
-            // Compute precise intersection point to get distance
-            // Simplified: intersect_ray_triangle doesn't return t, so we just use the triangle center for approx, or we do a quick Möller–Trumbore here.
-            // For simplicity and since intersect_ray_triangle is already returning bool, we can compute MT:
-            let e1 = tri.vertices[1] - tri.vertices[0];
-            let e2 = tri.vertices[2] - tri.vertices[0];
-            let h = ray_dir.cross(e2);
-            let a = e1.dot(h);
-            if a.abs() > 1e-6 {
-              let f = 1.0 / a;
-              let s = origin - tri.vertices[0];
-              let u = f * s.dot(h);
-              if u >= 0.0 && u <= 1.0 {
-                let q = s.cross(e1);
-                let v = f * ray_dir.dot(q);
-                if v >= 0.0 && u + v <= 1.0 {
-                  let t = f * e2.dot(q);
-                  if t > 0.0 && t < closest_t {
-                    closest_t = t;
-                    hit_normal = e1.cross(e2).normalize();
-                  }
-                }
-              }
+        let (pt, norm) = if let Some(ref bvh) = mesh_arc.bvh {
+          match bvh.raycast(origin, ray_dir, &mesh_arc.vertices, &mesh_arc.indices) {
+            Some((_t, hit_pt, hit_normal)) => {
+              ([hit_pt.x(), hit_pt.y(), hit_pt.z()],
+               [hit_normal.x(), hit_normal.y(), hit_normal.z()])
+            }
+            None => {
+              // Fallback to bounding sphere
+              let hit_pt = dir * r;
+              ([hit_pt.x(), hit_pt.y(), hit_pt.z()],
+               [dir.x(), dir.y(), dir.z()])
             }
           }
-        }
-
-        let pt;
-        let norm;
-        if closest_t < f32::MAX {
-          let hit_pt = origin + ray_dir * closest_t;
-          pt = [hit_pt.x(), hit_pt.y(), hit_pt.z()];
-          norm = [hit_normal.x(), hit_normal.y(), hit_normal.z()];
         } else {
-          // Fallback to bounding sphere
+          // No BVH available — fallback to bounding sphere
           let hit_pt = dir * r;
-          pt = [hit_pt.x(), hit_pt.y(), hit_pt.z()];
-          norm = [dir.x(), dir.y(), dir.z()];
-        }
+          ([hit_pt.x(), hit_pt.y(), hit_pt.z()],
+           [dir.x(), dir.y(), dir.z()])
+        };
         circle.cached_point = Some(pt);
         circle.cached_normal = Some(norm);
 
         let pt_vec = Vec3f32::from_components(pt[0], pt[1], pt[2]);
-        let scale = (r * circle.circle_radius_frac).max(1e-4);
+        let scale = (circle.circle_radius_km / comet_scale).max(1e-4);
         let scale_vec = Vec3f32::from_components(scale, scale, scale);
         let t = aethervk_core_rlib::scene::TransformComponent {
           position: pt_vec,
@@ -1516,7 +1624,7 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
         };
 
         if circle.child_entity.is_none() {
-          to_spawn.push((i, t, circle.color, circle.circle_radius_frac * r, circle.max_particles));
+          to_spawn.push((i, t, circle.color, scale, circle.max_particles));
         } else {
           updates.push((circle.child_entity.unwrap(), t, circle.color));
         }
@@ -1645,7 +1753,7 @@ pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent
       out_slice[i] = FfiEmissionCircle {
         latitude_rad: c.latitude_rad,
         longitude_rad: c.longitude_rad,
-        circle_radius_frac: c.circle_radius_frac,
+        circle_radius_km: c.circle_radius_km,
         mass: c.mass,
         color_r: c.color[0],
         color_g: c.color[1],
@@ -2134,10 +2242,59 @@ pub unsafe extern "C" fn avkSimulationContext_unloadAlmanacFile(
     });
   task_id
 }
-
 // TODO C# side: builder/helper functions for strings suppoerted by `anise::time::Epoch::from_str("2024-03-24 12:00:00 TDB")`
 // alternative (nah): Epoch::from_gregorian_utc_at_midnight(2000, 1, 1). But string is more precise
-// TODO C# side: update
+// TODO C# side: use crate::types::*;
+
+#[repr(u32)]
+pub enum AvkSoundEvent {
+    UiClick = 0,
+    UiGrab = 1,
+    UiDrop = 2,
+    PhysicsCollisionSoft = 3,
+    PhysicsCollisionHard = 4,
+}
+
+#[repr(u32)]
+pub enum AvkAudioPlaybackMode {
+    MonoSpatial = 0,
+    StereoDirect = 1,
+}
+
+#[repr(C)]
+pub struct AvkAudioParams {
+    pub volume: f32,
+    pub pitch: f32,
+    pub pan: f32,
+    pub mode: AvkAudioPlaybackMode,
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn avkSimulationContext_playSoundEvent(
+    ctx: *mut SimulationContext,
+    sound_event: AvkSoundEvent,
+    params: AvkAudioParams,
+) {
+    if let Some(ctx_ref) = ctx.as_ref() {
+        let mut mixer = ctx_ref.audio_mixer.write();
+        
+        // For now, map the AvkSoundEvent integer to a generic buffer_id.
+        // Once the WAV files are embedded in the core, we will load them into the 
+        // mixer upon startup and map them accurately here.
+        let buffer_id = sound_event as usize;
+        
+        mixer.play(buffer_id, aethervk_core_rlib::audio::AvkAudioParams {
+            volume: params.volume,
+            pitch: params.pitch,
+            pan: params.pan,
+            mode: match params.mode {
+                AvkAudioPlaybackMode::MonoSpatial => aethervk_core_rlib::audio::AvkAudioPlaybackMode::MonoSpatial,
+                AvkAudioPlaybackMode::StereoDirect => aethervk_core_rlib::audio::AvkAudioPlaybackMode::StereoDirect,
+            },
+        });
+    }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_parseEpochToTaiSec(

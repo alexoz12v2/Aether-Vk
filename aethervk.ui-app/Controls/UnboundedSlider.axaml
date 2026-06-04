@@ -1,13 +1,23 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:controls="using:AetherVk.Controls"
+             xmlns:i="clr-namespace:Avalonia.Xaml.Interactivity;assembly=Avalonia.Xaml.Interactivity"
+             xmlns:ia="clr-namespace:Avalonia.Xaml.Interactions.Core;assembly=Avalonia.Xaml.Interactions"
              x:Class="AetherVk.Controls.UnboundedSlider"
              Height="24">
-    <Panel Cursor="SizeWestEast" Background="Transparent" 
+    <Panel Background="Transparent" 
            PointerPressed="OnPointerPressed"
            PointerMoved="OnPointerMoved"
            PointerReleased="OnPointerReleased"
            Tapped="OnTapped">
+        <i:Interaction.Behaviors>
+            <ia:DataTriggerBehavior Binding="{Binding IsDragging, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}}" ComparisonCondition="Equal" Value="False">
+                <ia:ChangePropertyAction PropertyName="Cursor" Value="SizeWestEast" />
+            </ia:DataTriggerBehavior>
+            <ia:DataTriggerBehavior Binding="{Binding IsDragging, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}}" ComparisonCondition="Equal" Value="True">
+                <ia:ChangePropertyAction PropertyName="Cursor" Value="None" />
+            </ia:DataTriggerBehavior>
+        </i:Interaction.Behaviors>
         <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="4" x:Name="RootBorder">
             <TextBox x:Name="InputBox" Text="{Binding Value, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}, StringFormat='0.###', Mode=OneWay}" 
                      Background="Transparent" BorderThickness="0"

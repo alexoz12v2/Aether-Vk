@@ -29,8 +29,8 @@ public class FfiStructAlignmentTests
   public void FfiPhysicalMesh_HasCorrectSize()
   {
     int size = Marshal.SizeOf<FfiPhysicalMesh>();
-    // byte(1) + fixed string 256 bytes => 257 bytes
-    Assert.Equal(257, size);
+    // bool(1) + string(256) + pad(3) + sphere_radius(4) + bounding_sphere(4) => 268 bytes
+    Assert.Equal(268, size);
   }
 
   [Fact]

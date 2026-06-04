@@ -110,9 +110,9 @@ public class OrbitOperator : IActionOperator
 
   public OrbitOperator(Viewport3DViewModel vm) => _vm = vm;
 
-  public void OnEnter() { }
+  public void OnEnter() { _vm.IsOrbiting = true; }
 
-  public void OnExit() { }
+  public void OnExit() { _vm.IsOrbiting = false; }
 
   public bool ProcessAction(AppAction action, bool isPressed)
   {
@@ -139,9 +139,9 @@ public class PanOperator : IActionOperator
 
   public PanOperator(Viewport3DViewModel vm) => _vm = vm;
 
-  public void OnEnter() { }
+  public void OnEnter() { _vm.IsPanning = true; }
 
-  public void OnExit() { }
+  public void OnExit() { _vm.IsPanning = false; }
 
   public bool ProcessAction(AppAction action, bool isPressed)
   {

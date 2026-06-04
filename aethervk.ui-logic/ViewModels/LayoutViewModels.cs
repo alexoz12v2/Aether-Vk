@@ -202,11 +202,13 @@ public partial class DockingManagerViewModel
   private LayoutNodeViewModelBase _rootNode;
 
   private readonly ITabFactory _tabFactory;
+  private readonly IAudio2DService _audioService;
 
-  public DockingManagerViewModel(ITabFactory tabFactory, LayoutNodeViewModelBase? rootNode = null)
+  public DockingManagerViewModel(ITabFactory tabFactory, IAudio2DService audioService, LayoutNodeViewModelBase? rootNode = null)
     : base()
   {
     _tabFactory = tabFactory;
+    _audioService = audioService;
     WeakReferenceMessenger.Default.Register<TabDroppedMessage>(this);
     WeakReferenceMessenger.Default.Register<TabDragTaskMessage>(this);
     WeakReferenceMessenger.Default.Register<CoalesceGroupMessage>(this);
@@ -255,6 +257,7 @@ public partial class DockingManagerViewModel
   // --- Track your Task safely from within the ViewModel ---
   public async void Receive(TabDragTaskMessage message)
   {
+    _audioService.PlayGrabAsync();
     string finalAction = await message.DragTask;
 
     if (finalAction == "None")
@@ -267,6 +270,7 @@ public partial class DockingManagerViewModel
   // --- Fix the TabDroppedMessage ---
   public void Receive(TabDroppedMessage message)
   {
+    _audioService.PlayDropAsync();
     var draggedTab = message.DraggedTab;
     var targetNode = message.TargetNode;
     var zone = message.Zone;

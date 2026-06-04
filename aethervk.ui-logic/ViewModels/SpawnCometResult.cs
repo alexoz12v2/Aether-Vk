@@ -100,10 +100,18 @@ public class SpawnCometResult
     WizardStartEpoch = wizardStartEpoch;
     WizardEndEpoch = wizardEndEpoch;
 
-    // ── Compute orientation from IAU pole (RA, Dec, W) at J2000 ──
+    // ── Compute orientation from IAU pole (RA, Dec, W) at WizardStartEpoch ──
+    var j2000 = new System.DateTimeOffset(2000, 1, 1, 12, 0, 0, System.TimeSpan.Zero);
+    double daysSinceJ2000 = (wizardStartEpoch - j2000).TotalDays;
+    double centuriesSinceJ2000 = daysSinceJ2000 / 36525.0;
+
+    double currentRA  = poleRaDeg  + (poleRaRateDeg  * centuriesSinceJ2000);
+    double currentDec = poleDecDeg + (poleDecRateDeg * centuriesSinceJ2000);
+    double currentW   = primeMeridianDeg + (rotationRateDeg * daysSinceJ2000);
+
     // Uses IauToQuaternion which includes the ICRF → ECLIPJ2000 obliquity correction.
     var (qw, qx, qy, qz) = AetherVk.Logic.ViewModels.IauRotationMath.IauToQuaternion(
-      poleRaDeg, poleDecDeg, primeMeridianDeg);
+      currentRA, currentDec, currentW);
 
     RotW = (float)qw;
     RotX = (float)qx;

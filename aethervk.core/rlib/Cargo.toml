@@ -72,6 +72,11 @@ thingbuf = "0.1.6"
 function_name = "0.3.0"
 lazy_static = "1.5.0"
 
+# Audio
+symphonia-core = { version = "0.5.3", default-features = false }
+symphonia-format-wav = { version = "0.5.3", default-features = false }
+symphonia-codec-pcm = { version = "0.5.3", default-features = false }
+
 [target.'cfg(all(not(target_arch = "wasm32"), any( target_os = "windows", target_os = "linux", target_os = "macos", target_os = "android", target_os = "ios")))'.dependencies]
 ash = { version = "0.38", default-features = false, features = ["debug"] }
 vk-mem = { version = "0.5", path = "../../external/vk-mem", default-features = false, features = [

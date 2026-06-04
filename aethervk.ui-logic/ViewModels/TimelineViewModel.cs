@@ -67,6 +67,8 @@ public partial class TimelineViewModel
   /// <summary>Tooltip for the play/pause toggle button.</summary>
   public string PlayPauseTooltip => Timeline.IsPlaying ? "Pause" : "Play";
 
+  private readonly IAudio2DService _audioService;
+
   public TimelineViewModel(
     ulong sceneId,
     NativeRuntimeService runtimeService,
@@ -74,7 +76,8 @@ public partial class TimelineViewModel
     TrajectoryManagerService trajectoryManager,
     TimelineService timelineService,
     SceneStateManager sceneStateManager,
-    BreadcrumbService breadcrumbService
+    BreadcrumbService breadcrumbService,
+    IAudio2DService audioService
   )
     : base("Timeline")
   {
@@ -84,6 +87,7 @@ public partial class TimelineViewModel
     Timeline = timelineService;
     _sceneStateManager = sceneStateManager;
     _breadcrumbService = breadcrumbService;
+    _audioService = audioService;
     CurrentSceneId = sceneId;
     Timeline.SelectedTimeScale = TimeScaleOptions.First();
     _timer = new Timer(UpdateFromRuntime, null, 33, 33);
@@ -215,6 +219,7 @@ public partial class TimelineViewModel
   [RelayCommand]
   private void PlayPause()
   {
+    _audioService.PlayClickAsync();
     if (!_runtimeService.IsInitialized)
       return;
 
@@ -248,7 +253,7 @@ public partial class TimelineViewModel
           .Components.OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>()
           .FirstOrDefault();
         
-        if (emitter != null && emitter.Circles.Any(c => c.ParticlesPerTick > 0 && c.CircleRadius > 0 && c.Mass > 0 && c.TTL > 0))
+        if (emitter != null && emitter.Circles.Any(c => c.ParticlesPerTick > 0 && c.CircleRadiusKm > 0 && c.Mass > 0 && c.TTL > 0))
         {
           hasFullyConfiguredJet = true;
         }

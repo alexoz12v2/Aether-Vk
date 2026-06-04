@@ -240,7 +240,7 @@ where
   let mut multi_nodes = Vec::new();
 
   if let Some(binary_root) = binary_bvh.root() {
-    collapse_binary_to_multi_recursive::<N, T>(binary_root, binary_bvh, &mut multi_nodes);
+    collapse_binary_to_multi_recursive::<N, T>(binary_root, binary_bvh, &mut multi_nodes, 0);
   }
 
   multi_nodes
@@ -250,6 +250,7 @@ fn collapse_binary_to_multi_recursive<const N: usize, T: BinaryBvh>(
   binary_idx: u32,
   binary_bvh: &T,
   multi_nodes: &mut Vec<TlasMultiNode<N>>,
+  depth: u32,
 ) -> u32
 where
   T::Bound: Into<[f32; 6]>,
@@ -356,9 +357,16 @@ where
       } else {
         node.metadata[i] = (1 << 31) | child_idx;
       }
+    } else if depth > 64 {
+      aethervk_oshal_rlib::log!("Warning: max depth exceeded in collapse_binary_to_multi_recursive");
+      if let Some(meta) = binary_bvh.leaf_meta(child_idx) {
+        node.metadata[i] = meta;
+      } else {
+        node.metadata[i] = (1 << 31) | child_idx;
+      }
     } else {
       let child_multi_idx =
-        collapse_binary_to_multi_recursive::<N, T>(child_idx, binary_bvh, multi_nodes);
+        collapse_binary_to_multi_recursive::<N, T>(child_idx, binary_bvh, multi_nodes, depth + 1);
       node.child_indices[i] = child_multi_idx;
       node.metadata[i] = 0;
     }
@@ -422,6 +430,7 @@ impl<B: Clone, P: Clone, const N: usize> MultiBvh<B, P, N> {
         binary_bvh,
         &mut nodes,
         &mut primitives,
+        0,
       ));
     }
 
@@ -437,6 +446,7 @@ impl<B: Clone, P: Clone, const N: usize> MultiBvh<B, P, N> {
     binary_bvh: &T,
     multi_nodes: &mut Vec<MultiBvhNode<B, N>>,
     multi_primitives: &mut Vec<P>,
+    depth: u32,
   ) -> u32 {
     let multi_idx = multi_nodes.len() as u32;
     let parent_bound = binary_bvh.bound(binary_idx);
@@ -499,11 +509,18 @@ impl<B: Clone, P: Clone, const N: usize> MultiBvh<B, P, N> {
         let count = binary_bvh.extract_primitives(child_idx, multi_primitives);
         child_or_primitive_offsets[i] = offset;
         primitive_counts[i] = count;
+      } else if depth > 64 {
+        aethervk_oshal_rlib::log!("Warning: max depth exceeded in collapse_recursive");
+        is_leaf[i] = true;
+        let offset = multi_primitives.len() as u32;
+        let count = binary_bvh.extract_primitives(child_idx, multi_primitives);
+        child_or_primitive_offsets[i] = offset;
+        primitive_counts[i] = count;
       } else {
         is_leaf[i] = false;
         primitive_counts[i] = 0;
         let child_multi_idx =
-          Self::collapse_recursive(child_idx, binary_bvh, multi_nodes, multi_primitives);
+          Self::collapse_recursive(child_idx, binary_bvh, multi_nodes, multi_primitives, depth + 1);
         child_or_primitive_offsets[i] = child_multi_idx;
       }
     }

@@ -66,8 +66,8 @@
                                         <controls:UnboundedSlider Value="{Binding MassGrams}" HasBounds="True" MinBound="0" Step="0.1" Width="120"/>
                                     </StackPanel>
                                     <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="Radius (frac)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding CircleRadius}" HasBounds="True" MinBound="0.001" MaxBound="1.0" Step="0.01" Width="120"/>
+                                        <TextBlock Text="Radius (km)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <controls:UnboundedSlider Value="{Binding CircleRadiusKm}" HasBounds="True" MinBound="0.001" Step="0.01" Width="120"/>
                                     </StackPanel>
 
                                     <!-- Emission Params -->

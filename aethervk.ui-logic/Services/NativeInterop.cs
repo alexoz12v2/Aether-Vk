@@ -10,6 +10,30 @@ public struct SceneHierarchyNodeDTO
   public ulong ParentId;
 }
 
+public enum AvkSoundEvent : uint
+{
+    UiClick = 0,
+    UiGrab = 1,
+    UiDrop = 2,
+    PhysicsCollisionSoft = 3,
+    PhysicsCollisionHard = 4
+}
+
+public enum AvkAudioPlaybackMode : uint
+{
+    MonoSpatial = 0,
+    StereoDirect = 1
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct AvkAudioParams
+{
+    public float Volume;
+    public float Pitch;
+    public float Pan;
+    public AvkAudioPlaybackMode Mode;
+}
+
 public static class NativeInterop
 {
   private const string DllName = "aethervk_core_cdylib";
@@ -22,6 +46,13 @@ public static class NativeInterop
 
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern IntPtr avkSimulationContext_startup(string backend);
+
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_playSoundEvent(
+      IntPtr ctx,
+      AvkSoundEvent soundEvent,
+      AvkAudioParams audioParams
+  );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern IntPtr avkGetAvailableRenderBackends(out uint count);
@@ -688,6 +719,39 @@ public static class NativeInterop
     out FfiSpawnCometResult outResult
   );
 
+  /// <summary>
+  /// Updates the IAU rotational model on a comet's PhysicalMeshComponent and
+  /// recomputes the TransformComponent rotation from the new model parameters.
+  /// </summary>
+  [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_setRotationalModel(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    double poleRaDeg,
+    double poleDecDeg,
+    double primeMeridianDeg,
+    double poleRaRateDeg,
+    double poleDecRateDeg,
+    double rotationRateDeg,
+    double referenceEpochJd,
+    double currentJd
+  );
+
+  /// <summary>
+  /// Synchronizes ColliderComponent sphere radius and SphereGizmoComponent radius
+  /// when the PhysicalMeshComponent radius changes.
+  /// </summary>
+  [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_syncColliderRadius(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    float newRadiusKm
+  );
+
   [DllImport(DllName, CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_spawnTrajectory(
     IntPtr ctx,
@@ -1273,7 +1337,7 @@ public static class NativeInterop
   {
     public float LatitudeRad;
     public float LongitudeRad;
-    public float CircleRadiusFrac;
+    public float CircleRadiusKm;
     public float Mass;
     public float ColorR;
     public float ColorG;

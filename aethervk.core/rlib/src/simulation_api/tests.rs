@@ -867,7 +867,7 @@ fn test_spawn_comet_multi_scale_layer_separation() {
       let camera_id = scene_ctx.entity_map.get(&camera_ext).unwrap().clone();
       let result = scene_ctx
         .scene
-        .convert_scene(camera_id, false, None, [800, 600])
+        .convert_scene(camera_id, false, None, [800, 600], None)
         .expect("convert_scene should succeed");
 
       // Should have 2 depth layers
