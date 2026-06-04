@@ -19,8 +19,8 @@ use aethervk_oshal_rlib::math::{
 };
 use alloc::{vec, vec::Vec};
 
-#[derive(Debug, Clone)]
 /// TODO: Document this item
+#[derive(Debug, Clone)]
 pub struct LinearBVHHeader {
   /// How many levels from the bottom of the tree use OBB instead of AABB.
   pub preciseness: u32,
@@ -62,7 +62,7 @@ where
 /// TODO: Document this item
 pub struct LinearBVH<S>
 where
-  S: FloatLike + FloatOps + FloatBits + From<f32>,
+  S: FloatLike + FloatOps + FloatBits + From<f32> + core::fmt::Debug,
 {
   pub header: LinearBVHHeader,
   pub nodes: Vec<LinearBVHNode<S>>,
@@ -71,7 +71,7 @@ where
 
 impl<S> LinearBVH<S>
 where
-  S: FloatLike + FloatOps + FloatBits + From<f32>,
+  S: FloatLike + FloatOps + FloatBits + From<f32> + core::fmt::Debug,
 {
   /// TODO: Document this item
   pub fn from_build_node(root: &BVHNode<S>, preciseness: u32) -> Self {
@@ -201,7 +201,7 @@ where
 
 impl<S> crate::math::collision::multi_bvh::BinaryBvh for LinearBVH<S>
 where
-  S: FloatLike + FloatOps + FloatBits + From<f32> + Clone,
+  S: FloatLike + FloatOps + FloatBits + From<f32> + Clone + core::fmt::Debug,
   LinearBound<S>: Clone,
 {
   type Bound = LinearBound<S>;

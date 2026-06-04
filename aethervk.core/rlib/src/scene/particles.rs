@@ -102,7 +102,7 @@ impl ParticleData {
 /// pipeline, and written back by `write_back_to_scene`.
 #[derive(Clone)]
 pub struct ParticleSystemComponent {
-  pub particles: alloc::sync::Arc<spin::RwLock<alloc::vec::Vec<ParticleData>>>,
+  pub particles: alloc::sync::Arc<parking_lot::RwLock<alloc::vec::Vec<ParticleData>>>,
   pub bvh: Option<LinearBVH<f32>>,
   pub accumulator: timeus_t,
   pub next_id: usize,
@@ -132,7 +132,7 @@ impl ParticleSystemComponent {
   /// Create a new particle system with the given maximum capacity.
   pub fn new(max_particles: usize) -> Self {
     Self {
-      particles: alloc::sync::Arc::new(spin::RwLock::new(alloc::vec::Vec::with_capacity(
+      particles: alloc::sync::Arc::new(parking_lot::RwLock::new(alloc::vec::Vec::with_capacity(
         max_particles,
       ))),
       bvh: None,

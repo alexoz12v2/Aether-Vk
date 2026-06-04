@@ -80,7 +80,7 @@ pub struct DepthLayerData {
   )>,
   pub particles: Vec<(
     EntityId,
-    alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
+    alloc::sync::Weak<parking_lot::RwLock<Vec<crate::scene::particles::ParticleData>>>,
     f32,       // particle_radius
     [f32; 4],  // color
   )>,
@@ -593,7 +593,7 @@ impl SceneConversionExt for crate::scene::Scene {
     )> = Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_particles: Vec<(
       EntityId,
-      alloc::sync::Weak<spin::RwLock<Vec<crate::scene::particles::ParticleData>>>,
+      alloc::sync::Weak<parking_lot::RwLock<Vec<crate::scene::particles::ParticleData>>>,
       f32,       // particle_radius
       [f32; 4],  // color
     )> = Vec::with_capacity(START_VEC_CAPACITY);
@@ -1731,7 +1731,7 @@ mod tests {
     simulation::texture_cache::TextureCache,
   };
   use alloc::sync::Arc;
-  use spin::RwLock;
+  use parking_lot::RwLock;
 
   #[test]
   fn test_ui_layout_relative_placement() {

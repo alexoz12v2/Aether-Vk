@@ -1,4 +1,4 @@
-// no_std, enhance their usage by making their methods take &Self explicitly, like Arc::clone, and make it so that its usage it's like spin::RwLock
+// no_std, enhance their usage by making their methods take &Self explicitly, like Arc::clone, and make it so that its usage it's like parking_lot::RwLock
 use aethervk_oshal_rlib::{hash::FnvHasher, os::native::this_thread};
 use core::{
   hash::{Hash, Hasher},
@@ -92,14 +92,14 @@ pub fn assert_no_locks_held() {
 /// pub(super) because this is meant to manage loks under  the vulkan::device module.
 #[derive(Debug)]
 pub struct DebugTrackedRwLock<T: ?Sized> {
-  inner: spin::RwLock<T>,
+  inner: parking_lot::RwLock<T>,
 }
 
 // Methods only available for Sized types
 impl<T> DebugTrackedRwLock<T> {
   pub const fn new(value: T) -> Self {
     Self {
-      inner: spin::RwLock::new(value),
+      inner: parking_lot::RwLock::new(value),
     }
   }
 
@@ -152,7 +152,7 @@ impl<T> From<T> for DebugTrackedRwLock<T> {
 }
 
 pub struct DebugTrackedRwLockReadGuard<'a, T: ?Sized + 'a> {
-  inner: spin::RwLockReadGuard<'a, T>,
+  inner: parking_lot::RwLockReadGuard<'a, T>,
 }
 impl<'a, T: ?Sized + 'a> core::ops::Deref for DebugTrackedRwLockReadGuard<'a, T> {
   type Target = T;
@@ -167,7 +167,7 @@ impl<'a, T: ?Sized + 'a> Drop for DebugTrackedRwLockReadGuard<'a, T> {
 }
 
 pub struct DebugTrackedRwLockWriteGuard<'a, T: ?Sized + 'a> {
-  inner: spin::RwLockWriteGuard<'a, T>,
+  inner: parking_lot::RwLockWriteGuard<'a, T>,
 }
 impl<'a, T: ?Sized + 'a> core::ops::Deref for DebugTrackedRwLockWriteGuard<'a, T> {
   type Target = T;

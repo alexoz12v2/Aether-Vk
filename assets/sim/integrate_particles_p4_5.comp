@@ -61,7 +61,7 @@ void main() {
     uint base  = block * (10u * SUBGROUP_SIZE) + lane;
 
     // ── Skip inactive / massless particles ────────────────────────────────
-    float mass = pc.particles.data[base + 6u * SUBGROUP_SIZE];
+    float mass = uintBitsToFloat(pc.particles.data[base + 6u * SUBGROUP_SIZE]);
     if (mass <= 0.0) return;
 
     float inv_m   = 1.0 / mass;
@@ -69,16 +69,16 @@ void main() {
 
     // ── Load v_{n+½} (written by p1_p2) ──────────────────────────────────
     vec3 v_half = vec3(
-        pc.particles.data[base + 3u * SUBGROUP_SIZE],
-        pc.particles.data[base + 4u * SUBGROUP_SIZE],
-        pc.particles.data[base + 5u * SUBGROUP_SIZE]
+        uintBitsToFloat(pc.particles.data[base + 3u * SUBGROUP_SIZE]),
+        uintBitsToFloat(pc.particles.data[base + 4u * SUBGROUP_SIZE]),
+        uintBitsToFloat(pc.particles.data[base + 5u * SUBGROUP_SIZE])
     );
 
     // ── Load F(x_{n+1}) (written by force generators after p3) ───────────
     vec3 f_next = vec3(
-        pc.particles.data[base + 7u * SUBGROUP_SIZE],
-        pc.particles.data[base + 8u * SUBGROUP_SIZE],
-        pc.particles.data[base + 9u * SUBGROUP_SIZE]
+        uintBitsToFloat(pc.particles.data[base + 7u * SUBGROUP_SIZE]),
+        uintBitsToFloat(pc.particles.data[base + 8u * SUBGROUP_SIZE]),
+        uintBitsToFloat(pc.particles.data[base + 9u * SUBGROUP_SIZE])
     );
 
     // ── VV Corrector ─────────────────────────────────────────────────────

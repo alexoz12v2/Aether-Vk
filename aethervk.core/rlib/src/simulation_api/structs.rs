@@ -37,7 +37,7 @@ use oshal::{
   os,
   os::thread::Thread,
 };
-use spin::rwlock::RwLock;
+use parking_lot::RwLock;
 use thingbuf::mpsc;
 // --------------------- Drop Wrapper Types ---------------------------
 
@@ -404,20 +404,27 @@ impl LogicThreadContext {
         }
       }
     }
-    let intersections: Vec<((f32, Vec3f32, [f32; 2]), EntityId)> = scene_ctx
+    let meshes: Vec<((crate::scene::PhysicalMeshComponent, TransformComponent), EntityId)> = scene_ctx
       .scene
-      .query2_res::<crate::scene::PhysicalMeshComponent, TransformComponent, _, (f32, Vec3f32, [f32; 2])>(
+      .query2_res::<crate::scene::PhysicalMeshComponent, TransformComponent, _, (crate::scene::PhysicalMeshComponent, TransformComponent)>(
       |entity, mesh, transform| {
         if !hit_instances.contains(&entity) || mesh.mesh.bvh.is_none() {
           return None;
         }
-        let global_transform = scene_ctx.scene.global_transform(entity).unwrap_or(*transform);
-        let model_matrix = Mat4x4f32::translation(global_transform.position)
-          * <Mat4x4f32 as oshal::math::matrix::Matrix4>::from_quat_custom_frame(global_transform.rotation)
-          * Mat4x4f32::from_scale(global_transform.scale);
-        ps.intersect_mesh_bvh_math(ro, rd, model_matrix, mesh, ray.length)
+        Some((mesh.clone(), *transform))
       },
     );
+
+    let mut intersections: Vec<((f32, Vec3f32, [f32; 2]), EntityId)> = Vec::new();
+    for ((mesh, transform), entity) in meshes {
+      let global_transform = scene_ctx.scene.global_transform(entity).unwrap_or(transform);
+      let model_matrix = Mat4x4f32::translation(global_transform.position)
+        * <Mat4x4f32 as oshal::math::matrix::Matrix4>::from_quat_custom_frame(global_transform.rotation)
+        * Mat4x4f32::from_scale(global_transform.scale);
+      if let Some(hit) = ps.intersect_mesh_bvh_math(ro, rd, model_matrix, &mesh, ray.length) {
+         intersections.push((hit, entity));
+      }
+    }
 
     if let Some((_, hit_point, hit_uv, hit_entity)) = closest_intersection(&intersections) {
       let external_id = scene_ctx
@@ -1074,7 +1081,7 @@ impl<T: ?Sized> SendPtrMut<T> {
 #[derive(Clone, Debug)]
 /// TODO: Document this item
 pub struct SceneTimeState {
-  pub time_info: alloc::sync::Arc<spin::RwLock<aethervk_oshal_rlib::os::time::TimeInfo>>,
+  pub time_info: alloc::sync::Arc<parking_lot::RwLock<aethervk_oshal_rlib::os::time::TimeInfo>>,
   pub current_scale: TimeScale,
   pub current_epoch: anise::time::Epoch,
   pub epoch_start: anise::time::Epoch,
@@ -1088,7 +1095,7 @@ pub struct SceneTimeState {
 impl Default for SceneTimeState {
   fn default() -> Self {
     Self {
-      time_info: alloc::sync::Arc::new(spin::RwLock::new(
+      time_info: alloc::sync::Arc::new(parking_lot::RwLock::new(
         aethervk_oshal_rlib::os::time::TimeInfo::new(
           aethervk_oshal_rlib::os::time::timeus_milliseconds(16),
           aethervk_oshal_rlib::os::time::timeus_milliseconds(100),
@@ -1116,8 +1123,6 @@ lazy_static::lazy_static! {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MockTargetShader {
   EmitParticles,
-  P1_2Imex,
-  P3_4Imex,
   LbvhPrepass,
   LbvhBuild,
   MotionBounds,
@@ -1129,7 +1134,6 @@ pub enum MockTargetShader {
   LcpSolver,
   ApplyImpulses,
   BarnesHut,
-  P5Imex,
   BroadPhase,
   IntegrateParticlesP1P2,
   IntegrateBodiesP3,

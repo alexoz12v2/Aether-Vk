@@ -62,12 +62,12 @@ pub(super) struct VulkanCore {
 unsafe impl Sync for VulkanCore {}
 unsafe impl Send for VulkanCore {}
 
-static S_VULKAN_CORE: spin::Mutex<sync::Weak<spin::RwLock<VulkanCore>>> =
+static S_VULKAN_CORE: spin::Mutex<sync::Weak<parking_lot::RwLock<VulkanCore>>> =
   spin::Mutex::new(sync::Weak::new());
 
 /// TODO: Document this item
 pub(super) struct VulkanRenderContext {
-  core: sync::Arc<spin::RwLock<VulkanCore>>,
+  core: sync::Arc<parking_lot::RwLock<VulkanCore>>,
   // graphics specific members
 }
 
@@ -135,7 +135,7 @@ impl InitWithRuntime<VulkanRenderContext> for VulkanRenderContext {
     // --- TEST FIX: Bypass the global cache so every test gets an isolated GPU Device ---
     #[cfg(test)]
     {
-      let core = sync::Arc::new(spin::RwLock::new(VulkanCore::from_path(
+      let core = sync::Arc::new(parking_lot::RwLock::new(VulkanCore::from_path(
         base_override_path.as_deref(),
         params.validation_error_callback,
       )?));
@@ -149,7 +149,7 @@ impl InitWithRuntime<VulkanRenderContext> for VulkanRenderContext {
       let core = if let Some(core) = s_core.upgrade() {
         core
       } else {
-        let new_core = sync::Arc::new(spin::RwLock::new(VulkanCore::from_path(
+        let new_core = sync::Arc::new(parking_lot::RwLock::new(VulkanCore::from_path(
           base_override_path.as_deref(),
           params.validation_error_callback,
         )?));

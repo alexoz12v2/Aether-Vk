@@ -643,7 +643,7 @@ mod tests {
       active: 1,
     };
     let mut sys = ParticleSystemComponent {
-      particles: std::sync::Arc::new(spin::RwLock::new(vec![p1])),
+      particles: std::sync::Arc::new(parking_lot::RwLock::new(vec![p1])),
       bvh: None,
       accumulator: 0,
       next_id: 1,
@@ -767,7 +767,7 @@ mod tests {
       active: 1,
     };
     let mut sys = ParticleSystemComponent {
-      particles: std::sync::Arc::new(spin::RwLock::new(vec![p1])),
+      particles: std::sync::Arc::new(parking_lot::RwLock::new(vec![p1])),
       bvh: None,
       accumulator: 0,
       next_id: 1,

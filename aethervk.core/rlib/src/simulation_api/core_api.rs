@@ -21,7 +21,7 @@ use oshal::{
   os,
   os::time::{timeus_milliseconds, timeus_t},
 };
-use spin::RwLock;
+use parking_lot::RwLock;
 // TODO add scene validate
 
 impl SimulationContext {

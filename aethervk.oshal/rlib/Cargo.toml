@@ -13,6 +13,7 @@ default = ["console_log"]
 std = []
 console_log = []
 debug_gpu = []
+profile_thread_names = []
 
 [dependencies]
 heapless = { version = "0.9" }

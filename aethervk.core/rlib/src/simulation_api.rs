@@ -24,7 +24,7 @@ use oshal::{
   os,
   os::pool::WorkloadStatus,
 };
-use spin::rwlock::RwLock;
+use parking_lot::RwLock;
 
 pub mod comet_api;
 pub mod components_api;
@@ -148,24 +148,20 @@ impl os::pool::Workload for PhysicsRebuildWorkload {
 }
 
 /// TODO: Document this item
-pub static BREADCRUMB_CALLBACK: core::sync::atomic::AtomicPtr<()> =
-  core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+pub type BreadcrumbCallback = unsafe extern "C" fn(u32, *const core::ffi::c_char);
+pub static BREADCRUMB_CALLBACK: parking_lot::RwLock<Option<BreadcrumbCallback>> = parking_lot::RwLock::new(None);
 
-/// TODO: Document this item
-pub static SIMULATION_CALLBACK: core::sync::atomic::AtomicPtr<()> =
-  core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+pub type SimulationCallback = unsafe extern "C" fn(u64, u64, u64, *const core::ffi::c_void);
+pub static SIMULATION_CALLBACK: parking_lot::RwLock<Option<SimulationCallback>> = parking_lot::RwLock::new(None);
 
-/// TODO: Document this item
-pub static RENDER_CALLBACK: core::sync::atomic::AtomicPtr<()> =
-  core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+pub type RenderCallback = unsafe extern "C" fn(u64, u64, u64);
+pub static RENDER_CALLBACK: parking_lot::RwLock<Option<RenderCallback>> = parking_lot::RwLock::new(None);
 
 /// TODO: Document this item
 pub fn emit_breadcrumb(status: u32, msg: &str) {
-  let fptr = BREADCRUMB_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
-  if !fptr.is_null() {
+  if let Some(cb) = *BREADCRUMB_CALLBACK.read() {
     if let Ok(c_msg) = alloc::ffi::CString::new(msg) {
-      let cb: extern "C" fn(u32, *const c_char) = unsafe { core::mem::transmute(fptr) };
-      cb(status, c_msg.as_ptr());
+      unsafe { cb(status, c_msg.as_ptr()) };
     }
   }
 }

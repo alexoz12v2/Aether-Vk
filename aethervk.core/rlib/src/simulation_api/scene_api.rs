@@ -23,7 +23,7 @@ use oshal::math::{
   quaternion::Quaternion,
   vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
 };
-use spin::RwLock;
+use parking_lot::RwLock;
 
 impl SimulationContext {
   /// TODO: Document this item
@@ -416,7 +416,7 @@ impl SimulationContext {
     oshal::log!("create_default_scene: sun SunComponent OK");
     scene.set_parent(sun_entity, Some(root_entity));
 
-    let sun_sphere = crate::simulation::comet::generate_uv_sphere(0.6, 64, 64, 1.989e30_f32);
+    let sun_sphere = crate::simulation::comet::generate_uv_sphere(0.6, 64, 64, 1.989e30_f32, false);
     oshal::log!("create_default_scene: sun_sphere generated, adding PhysicalMeshComponent");
     scene.add_component(
       sun_entity,
@@ -1109,7 +1109,7 @@ pub fn compute_bounding_sphere_radius(vertices: &[crate::simulation::comet::Vert
 // TODO probably to move in scene.rs in rlib
 /// TODO: Document this item
 pub(crate) fn empty_scene_object(
-  texture_cache: alloc::sync::Arc<spin::RwLock<crate::simulation::texture_cache::TextureCache>>,
+  texture_cache: alloc::sync::Arc<parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>>,
 ) -> EngineResult<(Scene, EntityId)> {
   let scene = Scene::new(texture_cache);
   scene.register_all_crate_components();

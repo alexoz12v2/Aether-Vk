@@ -137,7 +137,7 @@ fn test_render_all_archetypes_windowless() {
     })
     .unwrap();
 
-  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+  let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
     crate::simulation::texture_cache::TextureCache::new("AetherVk"),
   )));
   let sky_e = scene.spawn_entity("sky");
@@ -318,7 +318,7 @@ fn test_render_sphere_gizmo_windowless() {
     })
     .unwrap();
 
-  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+  let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
     crate::simulation::texture_cache::TextureCache::new("AetherVk"),
   )));
   let gizmo_e = scene.spawn_entity("gizmo");
@@ -456,7 +456,7 @@ fn test_sphere_gizmo_persistent_allocator() {
     setup_render_frontend_for_tests(true);
   let presentation_engine = presentation_engine.unwrap();
 
-  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+  let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
     crate::simulation::texture_cache::TextureCache::new("AetherVk"),
   )));
   let e1 = scene.spawn_entity("e1");
@@ -609,7 +609,7 @@ fn test_layout_transition_on_failed_update() {
     })
     .unwrap();
 
-  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+  let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
     crate::simulation::texture_cache::TextureCache::new("AetherVk"),
   )));
   let sun_e = scene.spawn_entity("sun");
@@ -1006,13 +1006,13 @@ fn depth_test_setup_scene() -> DepthTestSetupScene {
   let presentation_engine = presentation_engine.unwrap();
 
   // TODO: remove EntityId dependency on physical mesh resource creation
-  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+  let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
     crate::simulation::texture_cache::TextureCache::new("AetherVk"),
   )));
   scene.register_all_crate_components();
   let entity_id = scene.spawn_entity("mesh");
   let mesh = Arc::new(crate::simulation::comet::generate_uv_sphere(
-    2.0, 10, 10, 1.0,
+    2.0, 10, 10, 1.0, false,
   ));
   println!(
     "Mesh vertices: {}, indices: {}",
@@ -1113,7 +1113,7 @@ fn test_painting_mode_write_and_verify() {
       .unwrap()
   };
 
-  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+  let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
     crate::simulation::texture_cache::TextureCache::new("AetherVk"),
   )));
   let e_paint = scene.spawn_entity("paint_mesh");
@@ -1392,7 +1392,7 @@ fn test_render_multiple_soi_windowless() {
       .unwrap()
   };
 
-  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+  let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
     crate::simulation::texture_cache::TextureCache::new("AetherVk"),
   )));
   scene.register_all_crate_components();
@@ -1497,7 +1497,7 @@ fn test_render_multiple_soi_windowless() {
     .unwrap();
 
   let mesh = Arc::new(crate::simulation::comet::generate_uv_sphere(
-    2.0, 10, 10, 1.0,
+    2.0, 10, 10, 1.0, false,
   ));
 
   // Spawn an object in Micro Frame A
@@ -1849,7 +1849,7 @@ fn test_render_weather_ui() {
 
   render_frontend
     .with_device(render_device_handle, |device| {
-      let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+      let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
         crate::simulation::texture_cache::TextureCache::new("AetherVk"),
       )));
       scene.register_all_crate_components();
@@ -2291,7 +2291,7 @@ fn test_render_bvhwire2_windowless() {
     })
     .unwrap();
 
-  let scene = Scene::new(alloc::sync::Arc::new(spin::RwLock::new(
+  let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
     crate::simulation::texture_cache::TextureCache::new("AetherVk"),
   )));
   scene.register_all_crate_components();

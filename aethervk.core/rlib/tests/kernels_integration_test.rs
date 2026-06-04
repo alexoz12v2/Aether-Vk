@@ -4,9 +4,10 @@ use aethervk_core_rlib::{
   simulation::texture_cache::TextureCache,
 };
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
+use parking_lot::RwLock;
 
 fn setup_test_scene() -> Scene {
-  let texture_cache = std::sync::Arc::new(spin::RwLock::new(TextureCache::new("")));
+  let texture_cache = std::sync::Arc::new(RwLock::new(TextureCache::new("")));
   let scene = Scene::new(texture_cache);
 
   scene.register_component::<TransformComponent>(&[]);

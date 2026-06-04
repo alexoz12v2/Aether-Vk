@@ -1639,7 +1639,7 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
     let static_mesh = aethervk_core_rlib::scene::StaticMeshComponent {
       asset_path: "primitives/sphere.obj".into(),
       mesh: alloc::sync::Arc::from(aethervk_core_rlib::simulation::comet::generate_uv_sphere(
-        1.0, 6, 6, 0.0,
+        1.0, 6, 6, 0.0, true,
       )),
       emissive_color: [color[0], color[1], color[2], color[3]],
       is_visible: true,
@@ -2275,7 +2275,7 @@ pub unsafe extern "C" fn avkSimulationContext_playSoundEvent(
     sound_event: AvkSoundEvent,
     params: AvkAudioParams,
 ) {
-    if let Some(ctx_ref) = ctx.as_ref() {
+    if let Some(ctx_ref) = unsafe { ctx.as_ref() } {
         let mut mixer = ctx_ref.audio_mixer.write();
         
         // For now, map the AvkSoundEvent integer to a generic buffer_id.
@@ -3101,7 +3101,7 @@ pub unsafe extern "C" fn avkSimulationContext_setLoggerCallback(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_setBreadcrumbCallback(
-  cb: Option<extern "C" fn(u32, *const c_char)>,
+  cb: Option<unsafe extern "C" fn(u32, *const c_char)>,
 ) {
   SimulationContext::set_breadcrumb_callback(cb)
 }
@@ -3109,7 +3109,7 @@ pub unsafe extern "C" fn avkSimulationContext_setBreadcrumbCallback(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_setSimulationCallback(
-  cb: Option<extern "C" fn(u64, u64, u64, *const core::ffi::c_void)>,
+  cb: Option<unsafe extern "C" fn(u64, u64, u64, *const core::ffi::c_void)>,
 ) {
   SimulationContext::set_simulation_callback(cb)
 }
@@ -3117,7 +3117,7 @@ pub unsafe extern "C" fn avkSimulationContext_setSimulationCallback(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_setRenderCallback(
-  cb: Option<extern "C" fn(u64, u64, u64)>,
+  cb: Option<unsafe extern "C" fn(u64, u64, u64)>,
 ) {
   SimulationContext::set_render_callback(cb)
 }

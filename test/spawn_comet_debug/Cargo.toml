@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 test_utils = { path = "../test_utils" }
-aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = false, features = ["std"] }
+aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = false, features = ["std", "shader_debug_sync"] }
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = ["console_log"] }
 winit = { version = "0.29.15", features = ["rwh_06"] }
 
@@ -24,18 +24,18 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "NSResponder",
   "NSView",
-  "objc2-quartz-core", 
-  "NSWindow",          
+  "objc2-quartz-core",
+  "NSWindow",
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
   "CALayer",
   "CAMetalLayer",
   "objc2-metal",
-  "objc2-core-foundation", 
+  "objc2-core-foundation",
 ] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
-  "NSNotification", 
-  "NSString",       
+  "NSNotification",
+  "NSString",
 ] }
 objc2-metal = { version = "0.3.2", default-features = false, features = [
   "MTLDevice",
@@ -48,3 +48,4 @@ linux_xcb = ["aethervk-core-rlib/linux_xcb"]
 physical_mesh_debug_normals = ["aethervk-core-rlib/physical_mesh_debug_normals"]
 cursor_debug = ["aethervk-core-rlib/cursor_debug"]
 spotless_rendering = []
+shader_debug_sync = ["aethervk-core-rlib/shader_debug_sync"]

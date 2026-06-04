@@ -28,7 +28,7 @@ use aethervk_oshal_rlib::{
   },
 };
 use alloc::{boxed::Box, string::ToString};
-use spin::RwLockReadGuard;
+use parking_lot::RwLockReadGuard;
 use thingbuf::mpsc;
 
 struct PlayControl {
@@ -183,10 +183,9 @@ pub fn start_logic_thread(
                   // Always fire the callback for windowless PEs, even for error frames
                   // (task_id_val == u64::MAX). C# uses the sentinel to log errors (rate-limited).
                   if is_windowless {
-                    let fptr = crate::simulation_api::RENDER_CALLBACK
-                      .load(core::sync::atomic::Ordering::Relaxed);
-                    if !fptr.is_null() {
-                      let captured_task_id_val = task_id_val;
+                    let fptr = *crate::simulation_api::RENDER_CALLBACK.read();
+                    if fptr.is_some() {
+                      let _captured_task_id_val = task_id_val;
 
                       struct WindowlessCallbackWorkload {
                         ctx_ptr: crate::simulation_api::structs::SendPtrMut<core::ffi::c_void>,
@@ -197,9 +196,8 @@ pub fn start_logic_thread(
 
                       impl aethervk_oshal_rlib::os::pool::Workload for WindowlessCallbackWorkload {
                         fn execute(&mut self) -> aethervk_oshal_rlib::os::pool::WorkloadStatus {
-                          let fptr = crate::simulation_api::RENDER_CALLBACK
-                            .load(core::sync::atomic::Ordering::Relaxed);
-                          if fptr.is_null() {
+                          let fptr = *crate::simulation_api::RENDER_CALLBACK.read();
+                          if fptr.is_none() {
                             return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
                           }
 
@@ -207,9 +205,7 @@ pub fn start_logic_thread(
                           if tid_val == 0 {
                             if alloc::sync::Arc::strong_count(&self.task_id) == 1 {
                               // Render thread dropped it without assigning
-                              let cb: extern "C" fn(u64, u64, u64) =
-                                unsafe { core::mem::transmute(fptr) };
-                              cb(self.scene_id, self.pe_handle, u64::MAX);
+                              unsafe { fptr.unwrap()(self.scene_id, self.pe_handle, u64::MAX) };
                               return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
                             }
                             return aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield;
@@ -231,9 +227,7 @@ pub fn start_logic_thread(
                             .unwrap_or(true);
 
                           if completed {
-                            let cb: extern "C" fn(u64, u64, u64) =
-                              unsafe { core::mem::transmute(fptr) };
-                            cb(self.scene_id, self.pe_handle, tid_val);
+                            unsafe { fptr.unwrap()(self.scene_id, self.pe_handle, tid_val) };
                             aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete
                           } else {
                             aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield
@@ -1727,8 +1721,8 @@ fn execute_simulation_tick(
   );
 
   // Invoke SimulationCallback
-  let fptr = crate::simulation_api::SIMULATION_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
-  if !fptr.is_null() {
+  let fptr = *crate::simulation_api::SIMULATION_CALLBACK.read();
+  if fptr.is_some() {
     let tm = alloc::sync::Arc::clone(&ctx.task_manager);
 
     // Extract changed DTOs before entering the async tasklet
@@ -1802,8 +1796,7 @@ fn execute_simulation_tick(
 
     use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
     let _ = ctx.thread_pool.spawn_tasklet(None, move || {
-      let fptr =
-        crate::simulation_api::SIMULATION_CALLBACK.load(core::sync::atomic::Ordering::Relaxed);
+      let fptr = *crate::simulation_api::SIMULATION_CALLBACK.read();
       loop {
         let status = tm.read().get_status(sim_task_id.get());
         if status == crate::simulation_api::structs::TaskStatusCode::Completed
@@ -1814,15 +1807,13 @@ fn execute_simulation_tick(
         oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
       }
 
-      if !fptr.is_null() {
-        let cb: extern "C" fn(u64, u64, u64, *const core::ffi::c_void) =
-          unsafe { core::mem::transmute(fptr) };
+      if let Some(cb) = fptr {
         for (ext_id, comp_id, boxed_dto) in changes_to_stream {
           let data_ptr = match &boxed_dto {
             Some(dto) => &**dto as *const _ as *const core::ffi::c_void,
             None => core::ptr::null(), // Pull-signal: C# will call PullFromNative()
           };
-          cb(scene_id, ext_id, comp_id, data_ptr);
+          unsafe { cb(scene_id, ext_id, comp_id, data_ptr) };
         }
       }
     });
@@ -2193,6 +2184,15 @@ fn dispatch_physics_step(
   let physics_scene_arc = scene_read.physics_scene.clone();
   let scene_arc = scene_read.scene.clone();
 
+  // Wait for any in-flight physics tasklet before taking the write lock on
+  // physics_scene.  execute_simulation_tick calls us in a loop, so a previous
+  // iteration's tasklet may still be running with ps_arc.write() held.
+  if let Some(prev_task) = scene_read.active_physics_task.lock().take() {
+    if let Err(e) = prev_task.wait() {
+      aethervk_oshal_rlib::log!("Previous physics tasklet failed: {:?}", e);
+    }
+  }
+
   if let Some(ps_lock) = &physics_scene_arc {
     let mut ps = ps_lock.write();
     let dt_s = (step_days * 86400.0) as f32;
@@ -2280,14 +2280,10 @@ fn dispatch_physics_step(
     let scene_clone = scene_arc.clone();
     let pool_clone = ctx.thread_pool.clone();
     let kernels_arc = ctx.kernels.clone();
-    let (engine_type, collisions_enabled) = {
-      let scenes = ctx.scenes.read();
-      let scene_ctx = scenes.get(&scene_id).unwrap().read();
-      (
-        *scene_ctx.physics_engine_type.read(),
-        scene_ctx.collisions_enabled.load(core::sync::atomic::Ordering::Relaxed),
-      )
-    };
+    let (engine_type, collisions_enabled) = (
+      *scene_read.physics_engine_type.read(),
+      scene_read.collisions_enabled.load(core::sync::atomic::Ordering::Relaxed),
+    );
 
     let task = ctx
       .thread_pool

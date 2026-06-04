@@ -15,5 +15,9 @@ layout(push_constant, std430) uniform PushConstants {
 void main() {
     uint idx = gl_GlobalInvocationID.x; if (idx >= pc.num_internal_nodes) return;
     pc.counters.counts[idx] = 0;
-    if (idx == 0) pc.bvh.nodes[0].parent_idx = 0xFFFFFFFFu;
+    pc.bvh.nodes[idx].parent_idx = 0xFFFFFFFFu;
+    pc.bvh.nodes[pc.num_internal_nodes + idx].parent_idx = 0xFFFFFFFFu;
+    if (idx == pc.num_internal_nodes - 1) {
+        pc.bvh.nodes[pc.num_internal_nodes + idx + 1].parent_idx = 0xFFFFFFFFu;
+    }
 }

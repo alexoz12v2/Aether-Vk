@@ -23,7 +23,7 @@ use core::ffi;
 // (removed due to import errors)
 
 use alloc::sync::Arc;
-use spin::rwlock::RwLock;
+use parking_lot::RwLock;
 
 /// TODO: Document this item
 pub struct MetalRenderContext {}

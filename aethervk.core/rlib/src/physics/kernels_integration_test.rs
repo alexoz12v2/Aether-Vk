@@ -41,7 +41,7 @@ mod tests {
     };
     use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
     use alloc::sync::Arc;
-    use spin::RwLock;
+    use parking_lot::RwLock;
 
     let mut scene = Scene::new(Arc::new(RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("test"),

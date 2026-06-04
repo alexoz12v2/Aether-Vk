@@ -2,18 +2,34 @@
 set -e
 
 ARCH=${1:-linux-x64}
+CONFIG=${2:-Release}
+MODE=${3:-Normal}
+
 DEB_ARCH="amd64"
 if [ "$ARCH" == "linux-arm64" ]; then
     DEB_ARCH="arm64"
 fi
 
-APP_NAME="AetherVk"
+BASE_APP_NAME="AetherVk"
 APP_VERSION="1.0.0"
-PUBLISH_DIR="aethervk.ui.app/bin/Release/net10.0/$ARCH/publish"
-BUILD_DIR="bin/publish/${APP_NAME}_${APP_VERSION}_${DEB_ARCH}"
+PUBLISH_DIR="aethervk.ui.app/bin/$CONFIG/net10.0/$ARCH/publish"
+
+if [ "$MODE" = "SideBySide" ]; then
+    PACKAGE_NAME="aethervk-sxs-${APP_VERSION//./-}-${CONFIG,,}"
+    INSTALL_DIR="/opt/${BASE_APP_NAME}-SxS-$APP_VERSION-$CONFIG"
+    BIN_SYMLINK="/usr/bin/aethervk-sxs-${APP_VERSION//./-}-${CONFIG,,}"
+    DESKTOP_NAME="Aether-Vk (SxS $APP_VERSION $CONFIG)"
+else
+    PACKAGE_NAME="aethervk"
+    INSTALL_DIR="/opt/$BASE_APP_NAME"
+    BIN_SYMLINK="/usr/bin/aethervk"
+    DESKTOP_NAME="Aether-Vk"
+fi
+
+BUILD_DIR="bin/publish/${PACKAGE_NAME}_${APP_VERSION}_${DEB_ARCH}"
 
 echo "=========================================="
-echo " Packaging Aether-Vk DEB ($DEB_ARCH)"
+echo " Packaging Aether-Vk DEB ($DEB_ARCH) - $MODE ($CONFIG)"
 echo "=========================================="
 
 if [ ! -d "$PUBLISH_DIR" ]; then
@@ -22,34 +38,34 @@ if [ ! -d "$PUBLISH_DIR" ]; then
 fi
 
 mkdir -p "$BUILD_DIR/DEBIAN"
-mkdir -p "$BUILD_DIR/opt/$APP_NAME"
+mkdir -p "$BUILD_DIR$INSTALL_DIR"
 mkdir -p "$BUILD_DIR/usr/bin"
 mkdir -p "$BUILD_DIR/usr/share/applications"
 
 # Copy published files
-cp -R "$PUBLISH_DIR/"* "$BUILD_DIR/opt/$APP_NAME/"
+cp -R "$PUBLISH_DIR/"* "$BUILD_DIR$INSTALL_DIR/"
 
 # Create a symlink in /usr/bin for the executable
-ln -s "/opt/$APP_NAME/$APP_NAME" "$BUILD_DIR/usr/bin/aethervk"
+ln -s "$INSTALL_DIR/$BASE_APP_NAME" "$BUILD_DIR$BIN_SYMLINK"
 
 # Generate DEBIAN/control file
 cat > "$BUILD_DIR/DEBIAN/control" <<EOF
-Package: aethervk
+Package: $PACKAGE_NAME
 Version: $APP_VERSION
 Section: utils
 Priority: optional
 Architecture: $DEB_ARCH
 Maintainer: Aether-Vk Team
-Description: Aether-Vk application
+Description: Aether-Vk application ($MODE $CONFIG)
  A visually appealing, functional prototype containing native Rust binaries
  and rendering backends.
 EOF
 
 # Generate desktop entry
-cat > "$BUILD_DIR/usr/share/applications/aethervk.desktop" <<EOF
+cat > "$BUILD_DIR/usr/share/applications/$PACKAGE_NAME.desktop" <<EOF
 [Desktop Entry]
-Name=Aether-Vk
-Exec=/opt/$APP_NAME/$APP_NAME
+Name=$DESKTOP_NAME
+Exec=$INSTALL_DIR/$BASE_APP_NAME
 Type=Application
 Terminal=false
 Categories=Utility;Graphics;

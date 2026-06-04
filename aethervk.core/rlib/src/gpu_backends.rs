@@ -211,6 +211,31 @@ where
   );
   let mut cmd = kernels.create_command_buffer()?;
 
+  // ── shader_debug_sync: isolate each dispatch for GPU-hang debugging ────────
+  // When the feature is active, every sync!("name") submits the cmd, waits
+  // for GPU completion with a 5 s timeout, then allocates a fresh cmd.
+  // The last log line before silence identifies the hanging shader.
+  #[cfg(feature = "shader_debug_sync")]
+  macro_rules! sync {
+    ($name:expr) => {{
+      aethervk_oshal_rlib::log!("[SHADER-SYNC] {} — submitting...", $name);
+      // Safety: we read cmd out (leaving the slot logically uninit), pass it to
+      // debug_sync_barrier which consumes it, then write the fresh cmd back.
+      // If the barrier fails we panic — acceptable for a debug-only feature.
+      let old_cmd = unsafe { core::ptr::read(&raw const cmd) };
+      let new_cmd = match kernels.debug_sync_barrier(old_cmd) {
+        Ok(c) => c,
+        Err(e) => panic!("[SHADER-SYNC] debug_sync_barrier failed for {}: {:?}", $name, e),
+      };
+      unsafe { core::ptr::write(&raw mut cmd, new_cmd) };
+      aethervk_oshal_rlib::log!("[SHADER-SYNC] {} — completed ✓", $name);
+    }};
+  }
+  #[cfg(not(feature = "shader_debug_sync"))]
+  macro_rules! sync {
+    ($name:expr) => {{}};
+  }
+
   let mut current_time = t0;
   let end_time = t1;
   #[cfg(any(test, feature = "collisions"))]
@@ -273,6 +298,7 @@ where
   });
   aethervk_oshal_rlib::log!("PRINT_ADDR rigid_bodies: 0x{:x}", rigid_bodies.address());
   aethervk_oshal_rlib::log!("PRINT_ADDR frames: 0x{:x}", frames.address());
+  sync!("buffer_uploads (kinematics + rigid_bodies + particles + emitters + frames)");
 
   // ── 2. Sun position (for particle emission) ───────────────────────────────
   let mut sun_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
@@ -315,9 +341,12 @@ where
 
       // VV predictor: half-kick + full drift to x_{n+1}
       kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, sub_dt)?;
+      sync!("imex_integrate_particles_p1_p2");
 
       // RB: accumulate forces then IMR solve
       kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches)?;
+      sync!("imex_rb_force_assign");
+
       kernels.imex_integrate_bodies_p3(
         &mut cmd,
         &mut rigid_bodies,
@@ -326,13 +355,17 @@ where
         &frames,
         sub_dt,
       )?;
+      sync!("imex_integrate_bodies_p3");
 
       // Build motion BVH for self-gravity (rebuilt each sub-step as positions change)
       let bvh = AutoDiscard::new(
         kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, sub_dt)?,
         |b| kernels.discard_bvh(b),
       );
+      sync!("build_motion_bvh");
+
       kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
+      sync!("compute_self_gravity (barnes_hut)");
 
       // Apply macro-frame gravity emitters to microframe particles (cross-frame transform)
       kernels.apply_emitters_to_particles(
@@ -343,9 +376,11 @@ where
         &particle_frame_ids,
         emitters.capacity() as u32,
       )?;
+      sync!("apply_emitters_to_particles");
 
       // VV corrector: v_{n+1/2} → v_{n+1} using F(x_{n+1})
       kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, sub_dt, current_time)?;
+      sync!("imex_integrate_particles_p4_5");
 
       current_time += sub_dt;
     }
