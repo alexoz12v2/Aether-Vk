@@ -2,5 +2,5 @@
 test-threads = 8
 
 [[profile.default.overrides]]
-filter = 'test(vulkan_math_tests)'
+filter = 'test(vulkan_math_tests) | test(physics_tests)'
 threads-required = "num-test-threads"
