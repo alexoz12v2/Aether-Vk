@@ -849,6 +849,24 @@ impl SimulationContext {
       },
     );
 
+    // Sync beta from each EmissionCircle to its child ParticleSystemComponent.
+    // This must happen after the with_component_mut above has released its borrow.
+    {
+      let beta_pairs: alloc::vec::Vec<(crate::scene::EntityId, f32)> = final_circles
+        .iter()
+        .filter_map(|circle| circle.child_entity.map(|id| (id, circle.beta)))
+        .collect();
+      let mut scene_write = scene.write();
+      for (child_id, beta_val) in beta_pairs {
+        let _ = scene_write.scene.with_component_mut(
+          child_id,
+          |psc: &mut crate::scene::particles::ParticleSystemComponent| {
+            psc.beta = beta_val;
+          },
+        );
+      }
+    }
+
     if found {
       let mut scene_write = scene.write();
       for old_id in old_children {

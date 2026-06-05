@@ -4,6 +4,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
+#include "imex_math.glsl"
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 layout(constant_id = 1) const uint PRIMITIVE_TYPE = 0;
 
@@ -19,7 +20,7 @@ void main() {
     uint idx = gl_GlobalInvocationID.x; if (idx >= pc.num_primitives) return;
 
     if (PRIMITIVE_TYPE == 0) {
-        uint base = (idx / SUBGROUP_SIZE) * (10 * SUBGROUP_SIZE) + (idx % SUBGROUP_SIZE);
+        uint base = P_BASE(idx);
         vec3 pos = vec3(pc.primitive_data.data[base+0], pc.primitive_data.data[base+1*SUBGROUP_SIZE], pc.primitive_data.data[base+2*SUBGROUP_SIZE]);
         vec3 vel = vec3(pc.primitive_data.data[base+3*SUBGROUP_SIZE], pc.primitive_data.data[base+4*SUBGROUP_SIZE], pc.primitive_data.data[base+5*SUBGROUP_SIZE]);
 

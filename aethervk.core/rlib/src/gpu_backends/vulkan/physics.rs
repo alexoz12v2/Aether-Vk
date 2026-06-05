@@ -509,11 +509,13 @@ pub struct PhysicsPipelines {
   /// Used by `debug_assert!` in dispatch helpers to catch size mismatches
   /// before they become cryptic Metal validation errors.
   pub pc_sizes: hashbrown::HashMap<u64, u32>,
+  /// Hardware subgroup size (SIMD width), used for AOSOA packing.
+  pub subgroup_size: u32,
 }
 
 impl PhysicsPipelines {
   /// TODO: Document this item
-  pub fn new(device: &LogicalDevice, debug_shaders: bool) -> GpuResult<Self> {
+  pub fn new(device: &LogicalDevice, debug_shaders: bool, subgroup_size: u32) -> GpuResult<Self> {
     let push_constant_range = vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::COMPUTE)
       .offset(0)
@@ -568,7 +570,7 @@ impl PhysicsPipelines {
 
       let mut spec_map_entries = alloc::vec::Vec::new();
       let mut spec_data = alloc::vec::Vec::new();
-      let sg_size = 32u32;
+      let sg_size = subgroup_size;
       spec_map_entries.push(vk::SpecializationMapEntry {
         constant_id: 0,
         offset: 0,
@@ -690,6 +692,7 @@ impl PhysicsPipelines {
         #[cfg(any(test, feature = "collisions"))]
         bp_particle_self: mk!("bp_particle_self.comp.spv"),
         pc_sizes,
+        subgroup_size,
       })
     })();
     match res {
@@ -1043,6 +1046,17 @@ impl<T> Drop for VulkanBuffer<T> {
   }
 }
 
+#[cfg(test)]
+impl<T> VulkanBuffer<T> {
+  /// Assign a human-readable name to this buffer's VMA allocation.
+  /// In test builds, this name appears in VMA corruption diagnostics.
+  pub fn set_name(&mut self, name: &core::ffi::CStr) {
+    unsafe {
+      self.allocator.set_allocation_name(&mut self.allocation, name.as_ptr());
+    }
+  }
+}
+
 impl<T: Copy + Send + Sync> DeviceBuffer<T> for VulkanBuffer<T> {
   type Cmd = VulkanCommandBuffer;
   type ReadHandle<'a>
@@ -1196,8 +1210,9 @@ impl VulkanComputeKernels {
     _allocator: vk_mem::AllocatorView,
     queue_sharing_info: crate::gpu::QueueSharingInfo,
     debug_shaders: bool,
+    subgroup_size: u32,
   ) -> GpuResult<Self> {
-    let pipelines = PhysicsPipelines::new(device, debug_shaders)?;
+    let pipelines = PhysicsPipelines::new(device, debug_shaders, subgroup_size)?;
     let addresses = PhysicsDeviceAddresses::default();
 
     let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()
@@ -1318,7 +1333,7 @@ impl VulkanComputeKernels {
     let address =
       unsafe { device.buffer_device_address.get_buffer_device_address(&device_address_info) };
 
-    Ok(VulkanBuffer {
+    let mut buf = VulkanBuffer {
       buffer,
       address,
       capacity: data.len().max(1),
@@ -1328,7 +1343,18 @@ impl VulkanComputeKernels {
       usage: ash::vk::BufferUsageFlags::empty(),
       discarded: false,
       _marker: core::marker::PhantomData,
-    })
+    };
+    #[cfg(test)]
+    {
+      let name = alloc::format!(
+        "upload<{}> cap={} size={}\0",
+        core::any::type_name::<T>(),
+        data.len(),
+        size
+      );
+      buf.set_name(unsafe { core::ffi::CStr::from_ptr(name.as_ptr() as *const _) });
+    }
+    Ok(buf)
   }
   #[function_name::named]
   pub(crate) fn allocate_device_buffer<T: Copy + Send + Sync>(
@@ -1423,7 +1449,7 @@ impl VulkanComputeKernels {
     let address =
       unsafe { device.buffer_device_address.get_buffer_device_address(&device_address_info) };
 
-    Ok(VulkanBuffer {
+    let mut buf = VulkanBuffer {
       buffer,
       address,
       capacity: capacity.max(1),
@@ -1433,7 +1459,19 @@ impl VulkanComputeKernels {
       usage: ash::vk::BufferUsageFlags::empty(),
       discarded: false,
       _marker: core::marker::PhantomData,
-    })
+    };
+    #[cfg(test)]
+    {
+      let name = alloc::format!(
+        "device<{}> cap={} size={} list={}\0",
+        core::any::type_name::<T>(),
+        capacity,
+        size,
+        is_list
+      );
+      buf.set_name(unsafe { core::ffi::CStr::from_ptr(name.as_ptr() as *const _) });
+    }
+    Ok(buf)
   }
 
   // -- Methods From Kernel Trait implementation --
@@ -1781,11 +1819,12 @@ impl VulkanComputeKernels {
                 let parent_id = scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
                 let particles = sys.particles.read();
                 for (i, p) in particles.iter().enumerate().filter(|(_, p)| p.active != 0) {
-                    flat_particles.push([
+                    flat_particles.push(alloc::vec![
                         p.position[0], p.position[1], p.position[2],
                         p.velocity[0], p.velocity[1], p.velocity[2],
                         p.mass,
-                        0.0, 0.0, 0.0
+                        0.0, 0.0, 0.0, // force slots (cleared each frame)
+                        sys.beta,       // slot 10: radiation pressure β
                     ]);
                     metadata.push(gpu::ParticleMetadata {
                         entity_id: entity,
@@ -1796,7 +1835,8 @@ impl VulkanComputeKernels {
             }
         );
 
-    let packed = gpu::pack_particles_aosoa(&flat_particles, 32);
+    let sg = self.pipelines.subgroup_size as usize;
+    let packed = gpu::pack_particles_aosoa(&flat_particles, sg, gpu::PARTICLE_FIELDS);
 
     let buffer = self.allocate_and_upload(
       device,
@@ -1902,7 +1942,7 @@ impl VulkanComputeKernels {
             let vel = circle.cached_normal.unwrap_or([0.0, 0.0, 0.0]);
             let mass = circle.mass;
             for _ in 0..circle.particles_per_tick {
-              flat_candidates.push([
+              flat_candidates.push(alloc::vec![
                 pos[0],
                 pos[1],
                 pos[2],
@@ -1919,7 +1959,8 @@ impl VulkanComputeKernels {
         },
       );
 
-    let packed = gpu::pack_particles_aosoa(&flat_candidates, 32);
+    let sg = self.pipelines.subgroup_size as usize;
+    let packed = gpu::pack_particles_aosoa(&flat_candidates, sg, gpu::PARTICLE_FIELDS);
 
     self.allocate_and_upload(
       device,
@@ -1956,10 +1997,12 @@ impl VulkanComputeKernels {
       _rollback,
     )?;
 
-    let max_particles = (particles.capacity() as u32 / 320) * 32;
+    let sg = self.pipelines.subgroup_size;
+    let stride = gpu::PARTICLE_FIELDS as u32 * sg;
+    let max_particles = (particles.capacity() as u32 / stride) * sg;
     let wg_size = 128;
     let dispatch_groups = (max_particles + wg_size - 1) / wg_size;
-    let num_candidates = (candidates_buf.capacity() / 10) as u32;
+    let num_candidates = (candidates_buf.capacity() / gpu::PARTICLE_FIELDS) as u32;
 
     let pc = EmitParticlesPushConstants {
       particles: particles.address,
@@ -2727,7 +2770,7 @@ impl VulkanComputeKernels {
     stiffness: f32,
   ) {
     let _wg_size = 256u32;
-    let subgroups_per_wg = 256u32 / 32u32; // conservative; shader uses specialization const
+    let subgroups_per_wg = 256u32 / self.pipelines.subgroup_size;
     let groups = (total_particles + subgroups_per_wg - 1) / subgroups_per_wg;
 
     let pc = BpParticleSelfPushConstants {
@@ -2786,7 +2829,7 @@ impl VulkanComputeKernels {
     dt: timeus_t,
   ) -> GpuResult<()> {
     let wg_size = 128;
-    let total_particles = (particles.capacity() as u32 / 320) * 32;
+    let total_particles = { let sg = self.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg };
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
     let dt_sec = dt as f32 / 1_000_000.0;
 
@@ -2912,7 +2955,7 @@ impl VulkanComputeKernels {
     bvh: &VulkanBuffer<()>,
     particles: &mut VulkanBuffer<f32>,
   ) -> GpuResult<()> {
-    let total_particles = (particles.capacity() as u32 / 320) * 32;
+    let total_particles = { let sg = self.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg };
     let dispatch_groups = (total_particles + 127) / 128;
 
     let pc_bh = BarnesHutPushConstants {
@@ -2983,7 +3026,7 @@ impl VulkanComputeKernels {
     dt: timeus_t,
   ) -> GpuResult<()> {
     let wg_size = 128;
-    let total_particles = (particles.capacity() as u32 / 320) * 32;
+    let total_particles = { let sg = self.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg };
     let num_kinematics = kinematics.capacity() as u32;
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
     let dt_sec = dt as f32 / 1_000_000.0;
@@ -3050,7 +3093,7 @@ impl VulkanComputeKernels {
     particles: &VulkanBuffer<f32>,
     _dt: timeus_t,
   ) -> GpuResult<VulkanBuffer<()>> {
-    let total_particles = (particles.capacity() as u32 / 320) * 32;
+    let total_particles = { let sg = self.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg };
     let wg_size = 128;
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
 
@@ -3865,7 +3908,8 @@ impl VulkanComputeKernels {
     // DO NOT destroy the fence here. `cmd.submit()` passes it to the `DiscardPool`
     // which will destroy it safely once the timeline value is reached.
 
-    let unpacked_particles = gpu::unpack_particles_aosoa(&p_data, 32, particle_metadata.len());
+    let sg = self.pipelines.subgroup_size as usize;
+    let unpacked_particles = gpu::unpack_particles_aosoa(&p_data, sg, gpu::PARTICLE_FIELDS, particle_metadata.len());
 
     scene.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>( |entity, _transform, sys| {
       let mut sys_particles = sys.particles.write();
@@ -4156,6 +4200,16 @@ impl Kernels for Device {
             .push(info.device_memory.as_raw());
         }
         aethervk_oshal_rlib::log!("upload_motion_tlas alloc: {:?}", alloc.get_raw());
+        #[cfg(test)]
+        {
+          let name = alloc::format!("motion_tlas size={}\0", size);
+          unsafe {
+            allocator.set_allocation_name(
+              &mut alloc,
+              core::ffi::CStr::from_ptr(name.as_ptr() as *const _).as_ptr(),
+            );
+          }
+        }
         rollback.defer(move |_| unsafe { allocator.destroy_buffer(buffer, &mut alloc) });
 
         // ── Write TLAS node bytes into the mapped region.
@@ -4244,6 +4298,37 @@ impl Kernels for Device {
 
     // Allocate a fresh command buffer for subsequent dispatches
     self.create_command_buffer()
+  }
+
+  #[cfg(feature = "shader_debug_sync")]
+  fn check_corruption(&self, label: &str) -> EngineResult<()> {
+    let allocator = utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |res_guard, _| {
+        Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
+      })?
+      .execute(|allocator, _rollback| Ok(allocator))
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)?;
+
+    let result = unsafe {
+      allocator.check_corruption(
+        ash::vk::MemoryPropertyFlags::HOST_VISIBLE | ash::vk::MemoryPropertyFlags::HOST_COHERENT,
+      )
+    };
+    match result {
+      Ok(()) => Ok(()),
+      Err(e) => {
+        aethervk_oshal_rlib::log!(
+          "[CORRUPTION-CHECK] *** CORRUPTION DETECTED after '{}': {:?} ***",
+          label,
+          e
+        );
+        Err(EngineError::Gpu(crate::gpu_err!(
+          "VMA corruption detected after '{}'",
+          label
+        )))
+      }
+    }
   }
 
   fn build_kinematic_bodies(
@@ -4799,7 +4884,7 @@ impl Kernels for Device {
           &self.device,
           cmd,
           particles.address,
-          particles.capacity() as u32 / 10,
+          { let sg = self.kernels.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg },
           dt,
         );
         Ok(())
@@ -4879,7 +4964,7 @@ impl Kernels for Device {
           cmd,
           particles.address,
           0u64,
-          particles.capacity() as u32 / 10,
+          { let sg = self.kernels.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg },
           dt,
           current_time_us,
         );
@@ -4901,7 +4986,7 @@ impl Kernels for Device {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
       .execute(|(), _rollback| {
-        let total_particles = (particles.capacity() as u32 / 320) * 32;
+        let total_particles = { let sg = self.kernels.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg };
         self.kernels.apply_emitters_to_particles(
           &self.device,
           cmd,

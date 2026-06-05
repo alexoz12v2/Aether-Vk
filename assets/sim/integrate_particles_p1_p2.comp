@@ -21,6 +21,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
+#include "imex_math.glsl"
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
@@ -34,7 +35,7 @@ void main() {
     uint gid = gl_GlobalInvocationID.x;
     if (gid >= pc.total_particles) return;
 
-    uint base = (gid / SUBGROUP_SIZE) * (10u * SUBGROUP_SIZE) + (gid % SUBGROUP_SIZE);
+    uint base = P_BASE(gid);
 
     float mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
     if (mass <= 0.0) return;

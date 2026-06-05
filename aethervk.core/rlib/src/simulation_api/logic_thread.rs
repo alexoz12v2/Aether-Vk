@@ -2001,6 +2001,7 @@ fn emit_particles_from_circles(
       u32,                    // particles_per_tick
       [f32; 4],               // color
       u64,                    // ttl (microseconds)
+      f32,                    // beta (radiation pressure coeff)
     )>,
   )> = alloc::vec::Vec::new();
 
@@ -2070,6 +2071,7 @@ fn emit_particles_from_circles(
           circle.particles_per_tick,
           circle.color,
           ttl_us,
+          circle.beta,
         ));
       }
 
@@ -2082,10 +2084,11 @@ fn emit_particles_from_circles(
   // Now age, reap, and emit into child entities' ParticleSystemComponents
   let mut rng_state = tick_seed;
   for (_parent_id, circles) in work {
-    for (child_id, pos, dir, mass, mean_vel, vel_std, count, color, ttl_us) in circles {
+    for (child_id, pos, dir, mass, mean_vel, vel_std, count, color, ttl_us, beta) in circles {
       scene.with_component_mut(child_id, |psc: &mut ParticleSystemComponent| {
-        // Update render config and TTL from emission circle
+        // Update render config, TTL, and beta from emission circle
         psc.color = color;
+        psc.beta = beta;
         if ttl_us > 0 {
           psc.ttl_us = ttl_us as aethervk_oshal_rlib::os::time::timeus_t;
         }

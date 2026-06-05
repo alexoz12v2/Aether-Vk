@@ -4,6 +4,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
+#include "imex_math.glsl"
 #include "gjk_cta_utils.glsl"
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
@@ -21,7 +22,7 @@ layout(push_constant, std430) uniform PushConstants {
 void main() {
     uint idx = gl_GlobalInvocationID.x; if (idx >= pc.total_particles) return;
 
-    uint my_prim_id = idx, baseA = (my_prim_id / SUBGROUP_SIZE) * (10 * SUBGROUP_SIZE) + (my_prim_id % SUBGROUP_SIZE);
+    uint my_prim_id = idx, baseA = P_BASE(my_prim_id);
     vec3 my_center = vec3(uintBitsToFloat(pc.particles.data[baseA+0]), uintBitsToFloat(pc.particles.data[baseA+1*SUBGROUP_SIZE]), uintBitsToFloat(pc.particles.data[baseA+2*SUBGROUP_SIZE]));
     vec3 my_vel = vec3(uintBitsToFloat(pc.particles.data[baseA+3*SUBGROUP_SIZE]), uintBitsToFloat(pc.particles.data[baseA+4*SUBGROUP_SIZE]), uintBitsToFloat(pc.particles.data[baseA+5*SUBGROUP_SIZE]));
     vec3 p1 = my_center + my_vel * pc.dt;
@@ -49,7 +50,7 @@ void main() {
                 if (bvh_is_leaf(meta)) {
                     if (my_prim_id < offset) {
                         float toi = 0.0, depth = 0.0; vec3 normal = vec3(0.0), point = vec3(0.0);
-                        uint baseB = (offset / SUBGROUP_SIZE) * (10 * SUBGROUP_SIZE) + (offset % SUBGROUP_SIZE);
+                        uint baseB = P_BASE(offset);
                         vec3 other_vel = vec3(uintBitsToFloat(pc.particles.data[baseB+3*SUBGROUP_SIZE]), uintBitsToFloat(pc.particles.data[baseB+4*SUBGROUP_SIZE]), uintBitsToFloat(pc.particles.data[baseB+5*SUBGROUP_SIZE])) * pc.dt;
                         mat4 transA = mat4(1.0); transA[3].xyz = my_center;
                         mat4 transB = mat4(1.0); transB[3].xyz = vec3(pc.particle_bvh.nodes[node_idx].com_x[i], pc.particle_bvh.nodes[node_idx].com_y[i], pc.particle_bvh.nodes[node_idx].com_z[i]);

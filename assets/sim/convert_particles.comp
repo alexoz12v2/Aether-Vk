@@ -51,6 +51,7 @@ layout(push_constant, std430) uniform PushConstants {
 } pc;
 
 const uint SUBGROUP_SIZE = 32;
+const uint PARTICLE_FIELDS = 11u;
 
 void main() {
     uint total_particles = pc.atomic_counters.counts[0];
@@ -70,7 +71,7 @@ void main() {
 
     uint in_block = idx / SUBGROUP_SIZE;
     uint in_lane  = idx % SUBGROUP_SIZE;
-    uint in_base  = in_block * 10 * SUBGROUP_SIZE + in_lane;
+    uint in_base  = in_block * PARTICLE_FIELDS * SUBGROUP_SIZE + in_lane;
 
     vec3 pos;
     pos.x = pc.aosoa_particles.data[in_base + 0 * SUBGROUP_SIZE];

@@ -3,6 +3,13 @@
 
 #include "../bvh_utils.glsl"
 
+// Number of float fields per particle in the AOSOA buffer.
+// Slots: 0-2=pos, 3-5=vel, 6=mass, 7-9=force, 10=beta
+#define PARTICLE_FIELDS 11u
+
+// Compute the AOSOA base index for a given global particle index.
+#define P_BASE(gid) (((gid) / SUBGROUP_SIZE) * (PARTICLE_FIELDS * SUBGROUP_SIZE) + ((gid) % SUBGROUP_SIZE))
+
 uvec2 add64(uvec2 a, uvec2 b) { uvec2 res; res.x = a.x + b.x; uint carry = (res.x < a.x) ? 1u : 0u; res.y = a.y + b.y + carry; return res; }
 uvec2 sub64(uvec2 a, uvec2 b) { uvec2 res; res.x = a.x - b.x; uint borrow = (a.x < b.x) ? 1u : 0u; res.y = a.y - b.y - borrow; return res; }
 bool greaterThan64(uvec2 a, uvec2 b) { if (a.y != b.y) return a.y > b.y; return a.x > b.x; }

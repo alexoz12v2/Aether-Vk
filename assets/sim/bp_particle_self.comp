@@ -11,6 +11,7 @@
 
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
+#include "imex_math.glsl"
 
 layout(local_size_x = 256) in;
 const uint SUBGROUPS_PER_WG = 256 / SUBGROUP_SIZE;
@@ -67,7 +68,7 @@ void main() {
     if (lane_id == 0) {
         uint block_idx = my_p_idx / SUBGROUP_SIZE;
         uint local_idx = my_p_idx % SUBGROUP_SIZE;
-        uint base = block_idx * (10u * SUBGROUP_SIZE) + local_idx;
+        uint base = block_idx * (PARTICLE_FIELDS * SUBGROUP_SIZE) + local_idx;
 
         my_pos = vec3(
             uintBitsToFloat(pc.particles.data[base + 0u * SUBGROUP_SIZE]),
@@ -123,7 +124,7 @@ void main() {
                 uint other_idx = subgroupShuffle(leaf_payload, i * 32 + bit);
                 uint block_idx = other_idx / SUBGROUP_SIZE;
                 uint local_idx = other_idx % SUBGROUP_SIZE;
-                uint base = block_idx * (10u * SUBGROUP_SIZE) + local_idx;
+                uint base = block_idx * (PARTICLE_FIELDS * SUBGROUP_SIZE) + local_idx;
 
                 vec3 other_pos = vec3(
                     uintBitsToFloat(pc.particles.data[base + 0u * SUBGROUP_SIZE]),
@@ -166,7 +167,7 @@ void main() {
     if (lane_id == 0 && dot(local_repulsive_force, local_repulsive_force) > 0.0) {
         uint block_idx = my_p_idx / SUBGROUP_SIZE;
         uint local_idx = my_p_idx % SUBGROUP_SIZE;
-        uint base = block_idx * (10u * SUBGROUP_SIZE) + local_idx;
+        uint base = block_idx * (PARTICLE_FIELDS * SUBGROUP_SIZE) + local_idx;
 
         atomicAddParticle(pc.particles, base + 7u * SUBGROUP_SIZE, local_repulsive_force.x);
         atomicAddParticle(pc.particles, base + 8u * SUBGROUP_SIZE, local_repulsive_force.y);

@@ -50,11 +50,12 @@ void main() {
         my_p_idx   = pc.bvh.nodes[target_node_idx].child_indices[lane_id];
     }
 
-    vec3 my_pos = vec3(0.0); float my_mass = 0.0;
+    vec3 my_pos = vec3(0.0); float my_mass = 0.0; float my_beta = 0.0;
     if (i_am_valid) {
-        uint base = (my_p_idx / SUBGROUP_SIZE) * 10 * SUBGROUP_SIZE + (my_p_idx % SUBGROUP_SIZE);
+        uint base = P_BASE(my_p_idx);
         my_pos = vec3(P_READ(pc.particles, base), P_READ(pc.particles, base+1*SUBGROUP_SIZE), P_READ(pc.particles, base+2*SUBGROUP_SIZE));
         my_mass = P_READ(pc.particles, base+6*SUBGROUP_SIZE);
+        my_beta = P_READ(pc.particles, base+10*SUBGROUP_SIZE);
     }
 
     vec3 safe_pos = i_am_valid ? my_pos : vec3(0.0), min_pos = subgroupMin(i_am_valid ? my_pos : vec3(1e20)), max_pos = subgroupMax(i_am_valid ? my_pos : vec3(-1e20));
@@ -105,8 +106,8 @@ void main() {
     }
 
     if (i_am_valid) {
-        vec3 g_f = my_acc * my_mass;
-        uint base = (my_p_idx / SUBGROUP_SIZE) * 10 * SUBGROUP_SIZE + (my_p_idx % SUBGROUP_SIZE);
+        vec3 g_f = my_acc * my_mass * (1.0 - my_beta);
+        uint base = P_BASE(my_p_idx);
         if (g_f.x != 0.0 || g_f.y != 0.0 || g_f.z != 0.0) {
             pc.particles.data[base + 7u * SUBGROUP_SIZE] = floatBitsToUint(uintBitsToFloat(pc.particles.data[base + 7u * SUBGROUP_SIZE]) + g_f.x);
             pc.particles.data[base + 8u * SUBGROUP_SIZE] = floatBitsToUint(uintBitsToFloat(pc.particles.data[base + 8u * SUBGROUP_SIZE]) + g_f.y);

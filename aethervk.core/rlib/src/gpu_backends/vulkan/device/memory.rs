@@ -174,9 +174,9 @@ unsafe impl Sync for FrameStagingArena {}
 #[macro_export]
 macro_rules! apply_test_dedicated_alloc {
   ($alloc_info:ident) => {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test_dedicated_alloc"))]
     let mut $alloc_info = $alloc_info;
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test_dedicated_alloc"))]
     {
       $alloc_info.flags |= vk_mem::AllocationCreateFlags::DEDICATED_MEMORY;
     }

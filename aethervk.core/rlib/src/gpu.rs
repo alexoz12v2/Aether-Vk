@@ -141,26 +141,23 @@ pub struct ParticleMetadata {
   pub original_index: u32,
 }
 
-pub fn pack_particles_aosoa(particles: &[[f32; 10]], subgroup_size: usize) -> alloc::vec::Vec<f32> {
+/// Number of float fields per particle in the AOSOA buffer.
+/// Slots: 0-2=pos, 3-5=vel, 6=mass, 7-9=force, 10=beta
+pub const PARTICLE_FIELDS: usize = 11;
+
+pub fn pack_particles_aosoa(particles: &[alloc::vec::Vec<f32>], subgroup_size: usize, fields_per_particle: usize) -> alloc::vec::Vec<f32> {
   let num_particles = particles.len();
   let num_blocks = ((num_particles + subgroup_size - 1) / subgroup_size).max(1);
-  let mut buffer = alloc::vec::Vec::with_capacity(num_blocks * 10 * subgroup_size);
-  buffer.resize(num_blocks * 10 * subgroup_size, 0.0);
+  let mut buffer = alloc::vec::Vec::with_capacity(num_blocks * fields_per_particle * subgroup_size);
+  buffer.resize(num_blocks * fields_per_particle * subgroup_size, 0.0);
 
   for (i, p) in particles.iter().enumerate() {
     let block = i / subgroup_size;
     let lane = i % subgroup_size;
-    let base = block * (10 * subgroup_size) + lane;
-    buffer[base] = p[0];
-    buffer[base + 1 * subgroup_size] = p[1];
-    buffer[base + 2 * subgroup_size] = p[2];
-    buffer[base + 3 * subgroup_size] = p[3];
-    buffer[base + 4 * subgroup_size] = p[4];
-    buffer[base + 5 * subgroup_size] = p[5];
-    buffer[base + 6 * subgroup_size] = p[6];
-    buffer[base + 7 * subgroup_size] = p[7];
-    buffer[base + 8 * subgroup_size] = p[8];
-    buffer[base + 9 * subgroup_size] = p[9];
+    let base = block * (fields_per_particle * subgroup_size) + lane;
+    for f in 0..fields_per_particle.min(p.len()) {
+      buffer[base + f * subgroup_size] = p[f];
+    }
   }
   buffer
 }
@@ -168,25 +165,20 @@ pub fn pack_particles_aosoa(particles: &[[f32; 10]], subgroup_size: usize) -> al
 pub fn unpack_particles_aosoa(
   buffer: &[f32],
   subgroup_size: usize,
+  fields_per_particle: usize,
   count: usize,
-) -> alloc::vec::Vec<[f32; 10]> {
+) -> alloc::vec::Vec<alloc::vec::Vec<f32>> {
   let mut particles = alloc::vec::Vec::with_capacity(count);
   for i in 0..count {
     let block = i / subgroup_size;
     let lane = i % subgroup_size;
-    let base = block * (10 * subgroup_size) + lane;
-    particles.push([
-      buffer[base],
-      buffer[base + 1 * subgroup_size],
-      buffer[base + 2 * subgroup_size],
-      buffer[base + 3 * subgroup_size],
-      buffer[base + 4 * subgroup_size],
-      buffer[base + 5 * subgroup_size],
-      buffer[base + 6 * subgroup_size],
-      buffer[base + 7 * subgroup_size],
-      buffer[base + 8 * subgroup_size],
-      buffer[base + 9 * subgroup_size],
-    ]);
+    let base = block * (fields_per_particle * subgroup_size) + lane;
+    let mut p = alloc::vec::Vec::with_capacity(fields_per_particle);
+    for f in 0..fields_per_particle {
+      let idx = base + f * subgroup_size;
+      p.push(if idx < buffer.len() { buffer[idx] } else { 0.0 });
+    }
+    particles.push(p);
   }
   particles
 }
@@ -2087,6 +2079,16 @@ pub trait Kernels: Send + Sync {
   #[cfg(feature = "shader_debug_sync")]
   fn debug_sync_barrier(&self, cmd: Self::Cmd) -> EngineResult<Self::Cmd> {
     Ok(cmd)
+  }
+
+  /// Debug-only: validate VMA debug margins for all allocations.
+  /// When `VMA_DEBUG_MARGIN > 0` this walks every sub-allocation in every
+  /// memory block and asserts the sentinel bytes are intact.
+  /// Returns `Err` if any corruption is detected.
+  #[cfg(feature = "shader_debug_sync")]
+  fn check_corruption(&self, label: &str) -> EngineResult<()> {
+    let _ = label;
+    Ok(())
   }
 
   /// Allocates a fresh, zero-initialised device list of `capacity` elements.
