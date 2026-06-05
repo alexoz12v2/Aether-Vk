@@ -382,8 +382,11 @@ impl DiscardPool {
           let _x = manager.recycle(thread_id, id, command_buffer);
           #[cfg(debug_assertions)]
           {
-            if _x.is_err() {
-              panic!("aaa");
+            if let Err(ref e) = _x {
+              panic!(
+                "command pool recycle failed: tid={:?} id={:?} err={:?}",
+                thread_id, id, e
+              );
             }
           }
         }
