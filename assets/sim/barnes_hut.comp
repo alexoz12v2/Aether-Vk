@@ -28,7 +28,7 @@ layout(push_constant, std430) uniform PushConstants {
     uint cluster_threshold;
 } pc;
 
-shared uint shared_stacks[SUBGROUPS_PER_WG][64]; shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
+shared uint shared_stacks[SUBGROUPS_PER_WG][BVH_STACK_DEPTH_SHORT]; shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
 
 void main() {
     uint subgroup_id = gl_SubgroupID, lane_id = gl_SubgroupInvocationID, cluster_job_idx = gl_WorkGroupID.x * SUBGROUPS_PER_WG + subgroup_id;
@@ -101,8 +101,11 @@ void main() {
         }
 
         uvec4 trav_ballot = subgroupBallot(action_traverse);
-        if (action_traverse) shared_stacks[subgroup_id][stack_ptr + subgroupBallotExclusiveBitCount(trav_ballot)] = s_idx;
-        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr + subgroupBallotBitCount(trav_ballot);
+        // Guard against stack overflow — drop nodes that would exceed depth
+        uint new_top = min(stack_ptr + subgroupBallotBitCount(trav_ballot), BVH_STACK_DEPTH_SHORT);
+        if (action_traverse && (stack_ptr + subgroupBallotExclusiveBitCount(trav_ballot)) < BVH_STACK_DEPTH_SHORT)
+            shared_stacks[subgroup_id][stack_ptr + subgroupBallotExclusiveBitCount(trav_ballot)] = s_idx;
+        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = new_top;
     }
 
     if (i_am_valid) {

@@ -19,6 +19,17 @@
 
 layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
 
+// ---------------------------------------------------------------------------
+// BVH traversal stack depth (specialization constants, set by host).
+// The host computes: min(16384 / (256/SUBGROUP_SIZE * 4) - 1, MAX)
+// to guarantee total shared memory stays ≤ 16 KB.
+//
+// BVH_STACK_DEPTH:       broad-phase scene/cross-lca traversal (default 128)
+// BVH_STACK_DEPTH_SHORT: gravity/particle-self traversal (default 64)
+// ---------------------------------------------------------------------------
+layout(constant_id = 2) const uint BVH_STACK_DEPTH       = 128;
+layout(constant_id = 3) const uint BVH_STACK_DEPTH_SHORT = 64;
+
 // ------------------------------------------------------------------
 // 1. Unified Multi-BVH Node (Shared by TLAS, Body BLAS, Particle BLAS)
 // ------------------------------------------------------------------

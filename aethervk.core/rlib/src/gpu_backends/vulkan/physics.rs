@@ -586,6 +586,25 @@ impl PhysicsPipelines {
       });
       spec_data.extend_from_slice(&debug_shaders_val.to_le_bytes());
 
+      // BVH traversal stack depths — computed to keep shared memory ≤ 16 KB.
+      // With WG=256: subgroups_per_wg = 256/sg, budget_per_sg = 16384/(subgroups_per_wg*4) uints.
+      let subgroups_per_wg = 256u32 / sg_size;
+      let budget_per_sg = 16384u32 / (subgroups_per_wg * 4); // in uints
+      let bvh_stack_depth = budget_per_sg.saturating_sub(1).min(128);
+      let bvh_stack_depth_short = budget_per_sg.saturating_sub(1).min(64);
+      spec_map_entries.push(vk::SpecializationMapEntry {
+        constant_id: 2,
+        offset: 8,
+        size: 4,
+      });
+      spec_data.extend_from_slice(&bvh_stack_depth.to_le_bytes());
+      spec_map_entries.push(vk::SpecializationMapEntry {
+        constant_id: 3,
+        offset: 12,
+        size: 4,
+      });
+      spec_data.extend_from_slice(&bvh_stack_depth_short.to_le_bytes());
+
       let spec_info = vk::SpecializationInfo::default()
         .map_entries(&spec_map_entries)
         .data(&spec_data);
