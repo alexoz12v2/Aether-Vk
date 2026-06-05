@@ -650,6 +650,7 @@ mod tests {
       particle_radius: 0.01,
       color: [1.0, 1.0, 1.0, 1.0],
       ttl_us: 0,
+      beta: 1.0,
     };
     sys.update_bvh(1.0);
     scene.add_component(particle_system, sys).unwrap();
@@ -774,6 +775,7 @@ mod tests {
       particle_radius: 0.01,
       color: [1.0, 1.0, 1.0, 1.0],
       ttl_us: 0,
+      beta: 1.0,
     };
     sys.update_bvh(1.0);
     scene.add_component(particle_system, sys).unwrap();

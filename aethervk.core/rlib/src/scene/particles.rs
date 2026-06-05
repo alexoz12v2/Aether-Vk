@@ -113,6 +113,9 @@ pub struct ParticleSystemComponent {
   /// Time-to-live in microseconds. Particles older than this are reaped.
   /// A value of 0 means particles never expire.
   pub ttl_us: timeus_t,
+  /// Radiation pressure coefficient (dimensionless). ~1.0 for a perfect absorber;
+  /// ~2.0 for a perfect reflector. Propagated from the parent `EmissionCircle.beta`.
+  pub beta: f32,
 }
 
 impl core::fmt::Debug for ParticleSystemComponent {
@@ -122,6 +125,7 @@ impl core::fmt::Debug for ParticleSystemComponent {
       .field("bvh_is_some", &self.bvh.is_some())
       .field("particle_radius", &self.particle_radius)
       .field("ttl_us", &self.ttl_us)
+      .field("beta", &self.beta)
       .finish()
   }
 }
@@ -141,6 +145,7 @@ impl ParticleSystemComponent {
       particle_radius: 0.01,       // 10 m default
       color: [1.0, 1.0, 1.0, 1.0], // white default
       ttl_us: 0,                   // 0 = never expire (set from EmissionCircle.ttl)
+      beta: 0.0,                   // set from EmissionCircle.beta
     }
   }
 

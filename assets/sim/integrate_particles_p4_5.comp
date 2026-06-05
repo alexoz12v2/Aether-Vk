@@ -56,7 +56,7 @@ void main() {
 
     uint block = gid / SUBGROUP_SIZE;
     uint lane  = gid % SUBGROUP_SIZE;
-    uint base  = block * (10u * SUBGROUP_SIZE) + lane;
+    uint base  = block * (PARTICLE_FIELDS * SUBGROUP_SIZE) + lane;
 
     // ── Skip inactive / massless particles ────────────────────────────────
     float mass = uintBitsToFloat(pc.particles.data[base + 6u * SUBGROUP_SIZE]);
@@ -66,7 +66,19 @@ void main() {
     float half_dt = 0.5 * pc.dt;
 
     // Write v_{n+1} back — force buffer stays intact for next frame
-    pc.particles.data[base + 3u * SUBGROUP_SIZE] = floatBitsToUint(0.0);
-    pc.particles.data[base + 4u * SUBGROUP_SIZE] = floatBitsToUint(0.0);
-    pc.particles.data[base + 5u * SUBGROUP_SIZE] = floatBitsToUint(0.0);
+    float vx = uintBitsToFloat(pc.particles.data[base + 3u * SUBGROUP_SIZE]);
+    float vy = uintBitsToFloat(pc.particles.data[base + 4u * SUBGROUP_SIZE]);
+    float vz = uintBitsToFloat(pc.particles.data[base + 5u * SUBGROUP_SIZE]);
+
+    float fx = uintBitsToFloat(pc.particles.data[base + 7u * SUBGROUP_SIZE]);
+    float fy = uintBitsToFloat(pc.particles.data[base + 8u * SUBGROUP_SIZE]);
+    float fz = uintBitsToFloat(pc.particles.data[base + 9u * SUBGROUP_SIZE]);
+
+    vx += half_dt * inv_m * fx;
+    vy += half_dt * inv_m * fy;
+    vz += half_dt * inv_m * fz;
+
+    pc.particles.data[base + 3u * SUBGROUP_SIZE] = floatBitsToUint(vx);
+    pc.particles.data[base + 4u * SUBGROUP_SIZE] = floatBitsToUint(vy);
+    pc.particles.data[base + 5u * SUBGROUP_SIZE] = floatBitsToUint(vz);
 }

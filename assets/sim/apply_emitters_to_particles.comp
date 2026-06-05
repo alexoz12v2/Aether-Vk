@@ -17,7 +17,7 @@
 //
 // Emitter positions are in macro world-space (AU).
 // mu is in km³/s² (JPL Horizons default).
-// Particle AOSOA layout (10 floats × SUBGROUP_SIZE per block):
+// Particle AOSOA layout (11 floats (PARTICLE_FIELDS) × SUBGROUP_SIZE per block):
 //   slots 0-2: position (km, local frame)
 //   slots 3-5: velocity (km/s, local frame)
 //   slot  6  : mass (kg)
@@ -57,7 +57,7 @@ void main() {
     // Decode AOSOA base index for this invocation
     uint block = gid / SUBGROUP_SIZE;
     uint lane  = gid % SUBGROUP_SIZE;
-    uint base  = block * (10u * SUBGROUP_SIZE) + lane;
+    uint base  = block * (PARTICLE_FIELDS * SUBGROUP_SIZE) + lane;
 
     float mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
     if (mass <= 0.0) return;

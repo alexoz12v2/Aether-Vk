@@ -227,6 +227,10 @@ where
         Err(e) => panic!("[SHADER-SYNC] debug_sync_barrier failed for {}: {:?}", $name, e),
       };
       unsafe { core::ptr::write(&raw mut cmd, new_cmd) };
+      // Validate VMA debug margins — corruption check pinpoints the guilty shader.
+      if let Err(e) = kernels.check_corruption($name) {
+        panic!("[SHADER-SYNC] VMA CORRUPTION detected after '{}': {:?}", $name, e);
+      }
       aethervk_oshal_rlib::log!("[SHADER-SYNC] {} — completed ✓", $name);
     }};
   }

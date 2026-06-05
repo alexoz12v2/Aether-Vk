@@ -310,6 +310,13 @@ impl SimulationContext {
         radius: 0.0046524726,
       },
     )?;
+    scene.add_component(
+      sun_entity,
+      crate::scene::ForceEmitterComponent::Gravity {
+        mu: 1.3271244e11_f32,
+        beta: 0.0,
+      },
+    )?;
 
     // 3. Camera Entity & 4. Sky Entity
     let mut camera_id = None;
@@ -414,6 +421,14 @@ impl SimulationContext {
       },
     )?;
     oshal::log!("create_default_scene: sun SunComponent OK");
+    scene.add_component(
+      sun_entity,
+      crate::scene::ForceEmitterComponent::Gravity {
+        mu: 1.3271244e11_f32,
+        beta: 0.0,
+      },
+    )?;
+    oshal::log!("create_default_scene: sun ForceEmitterComponent OK");
     scene.set_parent(sun_entity, Some(root_entity));
 
     let sun_sphere = crate::simulation::comet::generate_uv_sphere(0.6, 64, 64, 1.989e30_f32, false);

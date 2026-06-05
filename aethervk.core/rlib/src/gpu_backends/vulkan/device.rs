@@ -1635,6 +1635,7 @@ impl Device {
       res.allocator.allocator.as_allocator_view(),
       queue_sharing_info,
       chosen_physical_device_query_result.debug_shaders,
+      chosen_physical_device_query_result.subgroup_size,
     ) {
       Ok(k) => k,
       Err(e) => {

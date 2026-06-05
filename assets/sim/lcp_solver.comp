@@ -74,7 +74,7 @@ void main() {
         idA = pair.a.primitive_index; idB = pair.b.primitive_index;
 
         if (is_partA) {
-            uint baseA = (idA / SUBGROUP_SIZE) * 10u * SUBGROUP_SIZE + (idA % SUBGROUP_SIZE);
+            uint baseA = P_BASE(idA);
             posA = vec3(P_READ(pc.particles, baseA), P_READ(pc.particles, baseA+SUBGROUP_SIZE), P_READ(pc.particles, baseA+2*SUBGROUP_SIZE));
             vA_init = vec3(P_READ(pc.particles, baseA+3*SUBGROUP_SIZE), P_READ(pc.particles, baseA+4*SUBGROUP_SIZE), P_READ(pc.particles, baseA+5*SUBGROUP_SIZE));
             float mass = P_READ(pc.particles, baseA + 6u * SUBGROUP_SIZE); invMA = (mass > 0.0) ? 1.0 / mass : 0.0;
@@ -84,7 +84,7 @@ void main() {
         }
 
         if (is_partB) {
-            uint baseB = (idB / SUBGROUP_SIZE) * 10u * SUBGROUP_SIZE + (idB % SUBGROUP_SIZE);
+            uint baseB = P_BASE(idB);
             posB = vec3(P_READ(pc.particles, baseB), P_READ(pc.particles, baseB+SUBGROUP_SIZE), P_READ(pc.particles, baseB+2*SUBGROUP_SIZE));
             vB_init = vec3(P_READ(pc.particles, baseB+3*SUBGROUP_SIZE), P_READ(pc.particles, baseB+4*SUBGROUP_SIZE), P_READ(pc.particles, baseB+5*SUBGROUP_SIZE));
             float mass = P_READ(pc.particles, baseB + 6u * SUBGROUP_SIZE); invMB = (mass > 0.0) ? 1.0 / mass : 0.0;

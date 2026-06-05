@@ -233,9 +233,17 @@ fn run_direct_shader_test(target: MockTargetShader) {
           .device
           .cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
 
-        let mut push_constants = [0u64; 16]; // 128 bytes total
-        // Fill all possible buffer pointers with our dummy valid mapped buffer to prevent page faults
-        for i in 0..16 {
+        let mut push_constants = [0u64; 16]; // 128 bytes total, zeroed
+        // Only fill the leading BDA pointer slots with a valid address.
+        // All push-constant structs place their BDA u64 pointers first and
+        // their scalar fields (counts, dt, etc.) afterwards.  By filling
+        // only 4 u64 slots (32 bytes) and leaving everything else zeroed,
+        // every shader's count-based early-return guard
+        //   `if (id >= total_xxx) return;`
+        // triggers immediately (total == 0), so no out-of-bounds writes
+        // occur.  BDA fields beyond offset 32 stay null but are never
+        // dereferenced because the thread count is 0.
+        for i in 0..4 {
           push_constants[i] = state.address;
         }
         let bytes = core::slice::from_raw_parts(push_constants.as_ptr() as *const u8, 128);
@@ -273,13 +281,14 @@ fn integrate_particles_p1_p2() {
     |device, _cmd| {
       println!(">>> Setup");
       let mut particles = alloc::vec::Vec::new();
-      particles.push([
+      particles.push(alloc::vec![
         0.0, 0.0, 0.0, // pos
         10.0, 0.0, 0.0, // vel
         1.0, // mass
         0.0, -9.8, 0.0, // force
+        0.0, // beta
       ]);
-      let packed = crate::gpu::pack_particles_aosoa(&particles, 32);
+      let packed = crate::gpu::pack_particles_aosoa(&particles, 32, crate::gpu::PARTICLE_FIELDS);
       upload_buffer(device, &packed).map_err(crate::types::EngineError::from)
     },
     |device, cmd, particles_buffer| {
@@ -294,9 +303,9 @@ fn integrate_particles_p1_p2() {
       use crate::gpu::Kernels;
       let data = read_buffer(device, &particles_buffer);
       println!(">>> Read back data");
-      let unpacked = crate::gpu::unpack_particles_aosoa(&data, 32, 1);
+      let unpacked = crate::gpu::unpack_particles_aosoa(&data, 32, crate::gpu::PARTICLE_FIELDS, 1);
 
-      let p = unpacked[0];
+      let p = &unpacked[0];
       let pos = [p[0], p[1], p[2]];
       let vel = [p[3], p[4], p[5]];
       let force = [p[7], p[8], p[9]];
@@ -449,13 +458,14 @@ fn integrate_particles_p4_p5() {
     |device, _cmd| {
       println!(">>> Setup");
       let mut particles = alloc::vec::Vec::new();
-      particles.push([
+      particles.push(alloc::vec![
         0.0, 0.0, 0.0, // pos (ignored in this pass)
         10.0, 5.0, 0.0, // vel (v_{n+1/2} from P1/P2)
         2.0, // mass = 2.0
         0.0, -10.0, 0.0, // force F(x_{n+1})
+        0.0, // beta
       ]);
-      let packed = crate::gpu::pack_particles_aosoa(&particles, 32);
+      let packed = crate::gpu::pack_particles_aosoa(&particles, 32, crate::gpu::PARTICLE_FIELDS);
       upload_buffer(device, &packed).map_err(crate::types::EngineError::from)
     },
     |device, cmd, particles_buffer| {
@@ -470,9 +480,9 @@ fn integrate_particles_p4_p5() {
       use crate::gpu::Kernels;
       let data = read_buffer(device, &particles_buffer);
       println!(">>> Read back data");
-      let unpacked = crate::gpu::unpack_particles_aosoa(&data, 32, 1);
+      let unpacked = crate::gpu::unpack_particles_aosoa(&data, 32, crate::gpu::PARTICLE_FIELDS, 1);
 
-      let p = unpacked[0];
+      let p = &unpacked[0];
       let vel = [p[3], p[4], p[5]];
       let force = [p[7], p[8], p[9]];
 

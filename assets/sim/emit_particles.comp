@@ -5,6 +5,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
+#include "imex_math.glsl"
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
@@ -26,7 +27,7 @@ bool intersectRayAABB(vec3 rO, vec3 rD, vec3 invD, vec3 mi, vec3 mx, float max_t
 
 void main() {
     uint gid = gl_GlobalInvocationID.x; if (gid >= pc.num_candidates) return;
-    uint stride = 10 * SUBGROUP_SIZE, base = (gid / SUBGROUP_SIZE) * stride + (gid % SUBGROUP_SIZE);
+    uint stride = PARTICLE_FIELDS * SUBGROUP_SIZE, base = (gid / SUBGROUP_SIZE) * stride + (gid % SUBGROUP_SIZE);
 
     vec3 pos = vec3(P_READ(pc.candidates, base), P_READ(pc.candidates, base+SUBGROUP_SIZE), P_READ(pc.candidates, base+2*SUBGROUP_SIZE));
     vec3 dir = pc.sun_pos - pos; float dist = length(dir);
@@ -52,6 +53,6 @@ void main() {
 
     if (!occluded) {
         uint out_idx = atomicAdd(pc.counter.counts[0], 1), out_base = (out_idx / SUBGROUP_SIZE) * stride + (out_idx % SUBGROUP_SIZE);
-        for (int i = 0; i < 10; ++i) pc.particles.data[out_base + i * SUBGROUP_SIZE] = pc.candidates.data[base + i * SUBGROUP_SIZE];
+        for (uint i = 0u; i < PARTICLE_FIELDS; ++i) pc.particles.data[out_base + i * SUBGROUP_SIZE] = pc.candidates.data[base + i * SUBGROUP_SIZE];
     }
 }

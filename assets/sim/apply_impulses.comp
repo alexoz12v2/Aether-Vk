@@ -53,7 +53,7 @@ void main() {
             ATOMIC_ADD_FLOAT(pc.rigid_bodies.data[base + 14], dwA.z);
         }
     } else {
-        uint base = (pA_id / SUBGROUP_SIZE) * (10u * SUBGROUP_SIZE) + (pA_id % SUBGROUP_SIZE);
+        uint base = P_BASE(pA_id);
         float mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
         float invMA = mass > 0.0 ? 1.0 / mass : 0.0;
         if (invMA > 0.0) {
@@ -98,7 +98,7 @@ void main() {
             ATOMIC_ADD_FLOAT(pc.rigid_bodies.data[base + 14], dwB.z);
         }
     } else {
-        uint base = (pB_id / SUBGROUP_SIZE) * (10u * SUBGROUP_SIZE) + (pB_id % SUBGROUP_SIZE);
+        uint base = P_BASE(pB_id);
         float mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
         float invMB = mass > 0.0 ? 1.0 / mass : 0.0;
         if (invMB > 0.0) {

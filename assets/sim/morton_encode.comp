@@ -4,7 +4,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
-#include "../debug_utils.glsl"
+#include "imex_math.glsl"
 
 layout(local_size_x_id = 0) in; // Binds to SUBGROUP_SIZE via Spec Constant
 
@@ -40,7 +40,7 @@ void main() {
     // AOSOA unpacking matching your particle structure
     uint block_idx = idx / SUBGROUP_SIZE;
     uint local_idx = idx % SUBGROUP_SIZE;
-    uint base = block_idx * (10 * SUBGROUP_SIZE) + local_idx;
+    uint base = block_idx * (PARTICLE_FIELDS * SUBGROUP_SIZE) + local_idx;
 
     vec3 pos = vec3(
         uintBitsToFloat(pc.particles.data[base + 0 * SUBGROUP_SIZE]),

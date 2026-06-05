@@ -1,2 +1,6 @@
 [profile.default]
 test-threads = 8
+
+[[profile.default.overrides]]
+filter = 'test(vulkan_math_tests)'
+threads-required = "num-test-threads"
