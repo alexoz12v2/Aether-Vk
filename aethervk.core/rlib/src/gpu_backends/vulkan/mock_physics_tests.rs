@@ -233,19 +233,9 @@ fn run_direct_shader_test(target: MockTargetShader) {
           .device
           .cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
 
-        let mut push_constants = [0u64; 16]; // 128 bytes total, zeroed
-        // Only fill the leading BDA pointer slots with a valid address.
-        // All push-constant structs place their BDA u64 pointers first and
-        // their scalar fields (counts, dt, etc.) afterwards.  By filling
-        // only 4 u64 slots (32 bytes) and leaving everything else zeroed,
-        // every shader's count-based early-return guard
-        //   `if (id >= total_xxx) return;`
-        // triggers immediately (total == 0), so no out-of-bounds writes
-        // occur.  BDA fields beyond offset 32 stay null but are never
-        // dereferenced because the thread count is 0.
-        for i in 0..4 {
-          push_constants[i] = state.address;
-        }
+        let push_constants = [0u64; 16]; // 128 bytes total, completely zeroed.
+        // Because counts (total_particles, num_clusters, etc.) will be 0, all
+        // shaders will immediately early-return and never dereference the null BDA pointers.
         let bytes = core::slice::from_raw_parts(push_constants.as_ptr() as *const u8, 128);
 
         device.device.cmd_push_constants(
