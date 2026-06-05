@@ -168,6 +168,8 @@ impl Kernels for CpuKernels {
     _: &mut Self::Buffer<Wrench>,
     _: &Self::Buffer<ForceEmitter>,
     _: &Self::Buffer<GpuReferenceFrame>,
+    _: u32,
+    _: u32,
     _: i64,
   ) -> Result<(), EngineError> {
     todo!()
@@ -177,6 +179,7 @@ impl Kernels for CpuKernels {
     _: &mut Self::Cmd,
     _: &Self::Buffer<RigidBodyImex>,
     _: &mut Self::Buffer<Wrench>,
+    _: u32,
   ) -> Result<(), EngineError> {
     todo!()
   }
@@ -217,7 +220,7 @@ impl Kernels for CpuKernels {
     _cmd: &mut Self::Cmd,
     _scene: &PhysicsScene,
     _scene0: &Scene,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>)> {
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>, u32)> {
     todo!()
   }
   fn build_particles(
@@ -231,7 +234,7 @@ impl Kernels for CpuKernels {
     &self,
     _cmd: &mut Self::Cmd,
     _scene: &Scene,
-  ) -> EngineResult<Self::Buffer<ForceEmitter>> {
+  ) -> EngineResult<(Self::Buffer<ForceEmitter>, u32)> {
     todo!()
   }
   fn build_emission_candidates(
