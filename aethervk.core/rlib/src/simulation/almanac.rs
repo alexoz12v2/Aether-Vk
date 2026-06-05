@@ -147,8 +147,7 @@ impl AlmanacPackedData {
     let ids_to_try = [spk_id, -spk_id];
     for &try_id in &ids_to_try {
       if let Ok((domain_start, domain_end)) = almanac.spk_domain(try_id) {
-        let covers = domain_start <= start_epoch + tolerance
-          && domain_end >= end_epoch - tolerance;
+        let covers = domain_start <= start_epoch + tolerance && domain_end >= end_epoch - tolerance;
         return (covers, Some((domain_start, domain_end)), try_id);
       }
     }
@@ -164,8 +163,7 @@ impl AlmanacPackedData {
 
       if target_bodies.len() == 1 {
         let (found_id, (ds, de)) = target_bodies[0];
-        let covers = ds <= start_epoch + tolerance
-          && de >= end_epoch - tolerance;
+        let covers = ds <= start_epoch + tolerance && de >= end_epoch - tolerance;
         return (covers, Some((ds, de)), found_id);
       }
 
@@ -175,8 +173,12 @@ impl AlmanacPackedData {
         let mut earliest = target_bodies[0].1.0;
         let mut latest = target_bodies[0].1.1;
         for &(_, (s, e)) in &target_bodies[1..] {
-          if s < earliest { earliest = s; }
-          if e > latest { latest = e; }
+          if s < earliest {
+            earliest = s;
+          }
+          if e > latest {
+            latest = e;
+          }
         }
         return (false, Some((earliest, latest)), 0);
       }
@@ -530,7 +532,7 @@ mod tests {
   #[test]
   fn test_fetch_earth_position_eclipj2000() {
     let mut data = AlmanacPackedData::default();
-    
+
     // Load the SPK and BPC files requested by the user
     // Note: Paths are relative to the crate root `aethervk.core/rlib` when running tests
     data.load_almanac("../../assets/planets/de442.bsp").unwrap();
@@ -540,13 +542,15 @@ mod tests {
     let epoch = Epoch::from_tdb_seconds(0.0);
 
     // Fetch Earth (399) position with SUN_ECLIPJ2000
-    let state = data.get_ephem_full(
-      399,
-      crate::simulation::almanac::SUN_ECLIPJ2000,
-      epoch,
-      true,
-      false
-    ).unwrap();
+    let state = data
+      .get_ephem_full(
+        399,
+        crate::simulation::almanac::SUN_ECLIPJ2000,
+        epoch,
+        true,
+        false,
+      )
+      .unwrap();
 
     println!("Earth State (SUN_ECLIPJ2000) at J2000 epoch:");
     println!("Position: {:?}", state.position);

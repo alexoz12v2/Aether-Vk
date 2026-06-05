@@ -15,6 +15,7 @@ layout(push_constant, std430) uniform PushConstants {
     PackedCollisions collisions;
     ImpulseOutput outputs;
     uint total_clusters;
+    uint num_rigid_bodies;
     RigidBodyArray rigid_bodies;
     float dt;
     float restitution;
@@ -46,159 +47,165 @@ void main() {
 
     accumulated_normal[local_id] = 0.0; accumulated_t1[local_id] = 0.0; accumulated_t2[local_id] = 0.0;
 
-    if (local_id < MAX_BODIES_PER_ISLAND) {
+    if (local_id < min(MAX_BODIES_PER_ISLAND, pc.num_rigid_bodies)) {
         RigidBody rb = pc.rigid_bodies.bodies[local_id];
         shared_v_x[local_id] = floatBitsToUint(rb.linear_vel_drag.x); shared_v_y[local_id] = floatBitsToUint(rb.linear_vel_drag.y); shared_v_z[local_id] = floatBitsToUint(rb.linear_vel_drag.z);
         shared_w_x[local_id] = floatBitsToUint(rb.angular_vel_drag.x); shared_w_y[local_id] = floatBitsToUint(rb.angular_vel_drag.y); shared_w_z[local_id] = floatBitsToUint(rb.angular_vel_drag.z);
+    } else if (local_id < MAX_BODIES_PER_ISLAND) {
+        shared_v_x[local_id] = 0; shared_v_y[local_id] = 0; shared_v_z[local_id] = 0;
+        shared_w_x[local_id] = 0; shared_w_y[local_id] = 0; shared_w_z[local_id] = 0;
     }
     barrier();
-    if (!valid) return;
 
-    PackedPair pair = pc.collisions.pairs[contact_idx];
-    bool is_partA = (pair.a.entity_id == 0xFFFFFFFFu), is_partB = (pair.b.entity_id == 0xFFFFFFFFu);
-    uint idA = pair.a.primitive_index, idB = pair.b.primitive_index;
-
+    PackedPair pair;
+    bool is_partA = false, is_partB = false;
+    uint idA = MAX_BODIES_PER_ISLAND + 1, idB = MAX_BODIES_PER_ISLAND + 1;
     float invMA = 0.0, invMB = 0.0; vec3 invIA = vec3(0.0), invIB = vec3(0.0); vec4 qA = vec4(0,0,0,1), qB = vec4(0,0,0,1);
     vec3 posA = vec3(0.0), posB = vec3(0.0), vA_init = vec3(0.0), wA_init = vec3(0.0), vB_init = vec3(0.0), wB_init = vec3(0.0);
-
-    if (is_partA) {
-        uint baseA = (idA / SUBGROUP_SIZE) * 10u * SUBGROUP_SIZE + (idA % SUBGROUP_SIZE);
-        posA = vec3(P_READ(pc.particles, baseA), P_READ(pc.particles, baseA+SUBGROUP_SIZE), P_READ(pc.particles, baseA+2*SUBGROUP_SIZE));
-        vA_init = vec3(P_READ(pc.particles, baseA+3*SUBGROUP_SIZE), P_READ(pc.particles, baseA+4*SUBGROUP_SIZE), P_READ(pc.particles, baseA+5*SUBGROUP_SIZE));
-        float mass = P_READ(pc.particles, baseA + 6u * SUBGROUP_SIZE); invMA = (mass > 0.0) ? 1.0 / mass : 0.0;
-    } else {
-        RigidBody rbA = pc.rigid_bodies.bodies[idA]; invMA = rbA.position_mass.w > 0.0 ? 1.0 / rbA.position_mass.w : 0.0;
-        invIA = rbA.inertia_tensor_inv.xyz; qA = rbA.orientation; posA = rbA.position_mass.xyz; vA_init = rbA.linear_vel_drag.xyz; wA_init = rbA.angular_vel_drag.xyz;
-    }
-
-    if (is_partB) {
-        uint baseB = (idB / SUBGROUP_SIZE) * 10u * SUBGROUP_SIZE + (idB % SUBGROUP_SIZE);
-        posB = vec3(P_READ(pc.particles, baseB), P_READ(pc.particles, baseB+SUBGROUP_SIZE), P_READ(pc.particles, baseB+2*SUBGROUP_SIZE));
-        vB_init = vec3(P_READ(pc.particles, baseB+3*SUBGROUP_SIZE), P_READ(pc.particles, baseB+4*SUBGROUP_SIZE), P_READ(pc.particles, baseB+5*SUBGROUP_SIZE));
-        float mass = P_READ(pc.particles, baseB + 6u * SUBGROUP_SIZE); invMB = (mass > 0.0) ? 1.0 / mass : 0.0;
-    } else {
-        RigidBody rbB = pc.rigid_bodies.bodies[idB]; invMB = rbB.position_mass.w > 0.0 ? 1.0 / rbB.position_mass.w : 0.0;
-        invIB = rbB.inertia_tensor_inv.xyz; qB = rbB.orientation; posB = rbB.position_mass.xyz; vB_init = rbB.linear_vel_drag.xyz; wB_init = rbB.angular_vel_drag.xyz;
-    }
-
-    vec3 n = vec3(pair.norm_x, pair.norm_y, pair.norm_z), t1, t2; generate_tangents(n, t1, t2);
-    vec3 pt = vec3(pair.pt_x, pair.pt_y, pair.pt_z);
-    vec3 rA = pt - posA, rB = pt - posB;
-    // lca_scale: 1.0 for same-frame pairs; the micro-frame scale for cross-LCA pairs.
-    // Used throughout the PGS loop to convert macro-frame impulses to micro-frame units
-    // before writing to body-B shared-memory velocity slots (which are micro-frame).
+    vec3 n = vec3(1.0, 0.0, 0.0), t1 = vec3(0.0, 1.0, 0.0), t2 = vec3(0.0, 0.0, 1.0);
+    vec3 rA = vec3(0.0), rB = vec3(0.0);
     float lca_scale = 1.0;
-    if (pair.is_lca == 1u) {
-        GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
-        // pt is in MACRO space. posB is in MICRO space.
-        // Convert pt to MICRO space for rB.
-        vec3 pt_micro = (pt - lca.center_pos) / lca.scale;
-        rB = pt_micro - posB;
-        lca_scale = lca.scale;
-    }
+    float eff_m_n = 0.0, eff_m_t1 = 0.0, eff_m_t2 = 0.0;
+    float target_v_n = 0.0;
 
-    float eff_m_n = compute_effective_mass(n, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
-    float eff_m_t1 = compute_effective_mass(t1, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
-    float eff_m_t2 = compute_effective_mass(t2, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
+    if (valid) {
+        pair = pc.collisions.pairs[contact_idx];
+        is_partA = (pair.a.entity_id == 0xFFFFFFFFu); is_partB = (pair.b.entity_id == 0xFFFFFFFFu);
+        idA = pair.a.primitive_index; idB = pair.b.primitive_index;
 
-    vec3 vA_pt = vA_init + cross(wA_init, rA);
-    vec3 vB_pt = vB_init + cross(wB_init, rB);
-    if (pair.is_lca == 1u) {
-        GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
-        vB_pt = vB_pt * lca.scale + lca.center_vel;
+        if (is_partA) {
+            uint baseA = (idA / SUBGROUP_SIZE) * 10u * SUBGROUP_SIZE + (idA % SUBGROUP_SIZE);
+            posA = vec3(P_READ(pc.particles, baseA), P_READ(pc.particles, baseA+SUBGROUP_SIZE), P_READ(pc.particles, baseA+2*SUBGROUP_SIZE));
+            vA_init = vec3(P_READ(pc.particles, baseA+3*SUBGROUP_SIZE), P_READ(pc.particles, baseA+4*SUBGROUP_SIZE), P_READ(pc.particles, baseA+5*SUBGROUP_SIZE));
+            float mass = P_READ(pc.particles, baseA + 6u * SUBGROUP_SIZE); invMA = (mass > 0.0) ? 1.0 / mass : 0.0;
+        } else {
+            RigidBody rbA = pc.rigid_bodies.bodies[idA]; invMA = rbA.position_mass.w > 0.0 ? 1.0 / rbA.position_mass.w : 0.0;
+            invIA = rbA.inertia_tensor_inv.xyz; qA = rbA.orientation; posA = rbA.position_mass.xyz; vA_init = rbA.linear_vel_drag.xyz; wA_init = rbA.angular_vel_drag.xyz;
+        }
+
+        if (is_partB) {
+            uint baseB = (idB / SUBGROUP_SIZE) * 10u * SUBGROUP_SIZE + (idB % SUBGROUP_SIZE);
+            posB = vec3(P_READ(pc.particles, baseB), P_READ(pc.particles, baseB+SUBGROUP_SIZE), P_READ(pc.particles, baseB+2*SUBGROUP_SIZE));
+            vB_init = vec3(P_READ(pc.particles, baseB+3*SUBGROUP_SIZE), P_READ(pc.particles, baseB+4*SUBGROUP_SIZE), P_READ(pc.particles, baseB+5*SUBGROUP_SIZE));
+            float mass = P_READ(pc.particles, baseB + 6u * SUBGROUP_SIZE); invMB = (mass > 0.0) ? 1.0 / mass : 0.0;
+        } else {
+            RigidBody rbB = pc.rigid_bodies.bodies[idB]; invMB = rbB.position_mass.w > 0.0 ? 1.0 / rbB.position_mass.w : 0.0;
+            invIB = rbB.inertia_tensor_inv.xyz; qB = rbB.orientation; posB = rbB.position_mass.xyz; vB_init = rbB.linear_vel_drag.xyz; wB_init = rbB.angular_vel_drag.xyz;
+        }
+
+        n = vec3(pair.norm_x, pair.norm_y, pair.norm_z); generate_tangents(n, t1, t2);
+        vec3 pt = vec3(pair.pt_x, pair.pt_y, pair.pt_z);
+        rA = pt - posA; rB = pt - posB;
+        if (pair.is_lca == 1u) {
+            GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
+            vec3 pt_micro = (pt - lca.center_pos) / lca.scale;
+            rB = pt_micro - posB;
+            lca_scale = lca.scale;
+        }
+
+        eff_m_n = compute_effective_mass(n, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
+        eff_m_t1 = compute_effective_mass(t1, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
+        eff_m_t2 = compute_effective_mass(t2, rA, rB, invMA, invMB, invIA, invIB, qA, qB);
+
+        vec3 vA_pt = vA_init + cross(wA_init, rA);
+        vec3 vB_pt = vB_init + cross(wB_init, rB);
+        if (pair.is_lca == 1u) {
+            GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
+            vB_pt = vB_pt * lca.scale + lca.center_vel;
+        }
+        vec3 v_rel_init = vB_pt - vA_pt;
+        float bounce = dot(v_rel_init, n) < -0.1 ? -pc.restitution * dot(v_rel_init, n) : 0.0;
+        target_v_n = bounce + ((0.2 / max(pc.dt, 1e-6)) * max(pair.penetration_depth - 0.01, 0.0));
     }
-    vec3 v_rel_init = vB_pt - vA_pt;
-    float bounce = dot(v_rel_init, n) < -0.1 ? -pc.restitution * dot(v_rel_init, n) : 0.0;
-    float target_v_n = bounce + ((0.2 / max(pc.dt, 1e-6)) * max(pair.penetration_depth - 0.01, 0.0));
 
     for (int iter = 0; iter < 20; ++iter) {
         barrier();
 
         vec3 vA = vA_init; vec3 wA = wA_init;
-        if (!is_partA && idA < MAX_BODIES_PER_ISLAND) {
-            vA = vec3(uintBitsToFloat(shared_v_x[idA]), uintBitsToFloat(shared_v_y[idA]), uintBitsToFloat(shared_v_z[idA]));
-            wA = vec3(uintBitsToFloat(shared_w_x[idA]), uintBitsToFloat(shared_w_y[idA]), uintBitsToFloat(shared_w_z[idA]));
-        }
-
         vec3 vB = vB_init; vec3 wB = wB_init;
-        if (!is_partB && idB < MAX_BODIES_PER_ISLAND) {
-            vB = vec3(uintBitsToFloat(shared_v_x[idB]), uintBitsToFloat(shared_v_y[idB]), uintBitsToFloat(shared_v_z[idB]));
-            wB = vec3(uintBitsToFloat(shared_w_x[idB]), uintBitsToFloat(shared_w_y[idB]), uintBitsToFloat(shared_w_z[idB]));
-        }
 
-        vec3 vA_pt = vA + cross(wA, rA);
-        vec3 vB_pt = vB + cross(wB, rB);
-        if (pair.is_lca == 1u) {
-            GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
-            vB_pt = vB_pt * lca.scale + lca.center_vel;
-        }
-        vec3 v_rel = vB_pt - vA_pt;
-        float jn_delta = eff_m_n * (-dot(v_rel, n) + target_v_n);
-        float old_jn = accumulated_normal[local_id]; float new_jn = max(old_jn + jn_delta, 0.0);
-        jn_delta = new_jn - old_jn; accumulated_normal[local_id] = new_jn;
-        vec3 P_n = jn_delta * n;
+        if (valid) {
+            if (!is_partA && idA < MAX_BODIES_PER_ISLAND) {
+                vA = vec3(uintBitsToFloat(shared_v_x[idA]), uintBitsToFloat(shared_v_y[idA]), uintBitsToFloat(shared_v_z[idA]));
+                wA = vec3(uintBitsToFloat(shared_w_x[idA]), uintBitsToFloat(shared_w_y[idA]), uintBitsToFloat(shared_w_z[idA]));
+            }
 
-        if (!is_partA && invMA > 0.0 && idA < MAX_BODIES_PER_ISLAND) {
-            ATOMIC_ADD_FLOAT(shared_v_x[idA], -P_n.x * invMA); ATOMIC_ADD_FLOAT(shared_v_y[idA], -P_n.y * invMA); ATOMIC_ADD_FLOAT(shared_v_z[idA], -P_n.z * invMA);
-            vec3 dwA = quat_rotate(qA, invIA * quat_rotate_inv(qA, cross(rA, -P_n)));
-            ATOMIC_ADD_FLOAT(shared_w_x[idA], dwA.x); ATOMIC_ADD_FLOAT(shared_w_y[idA], dwA.y); ATOMIC_ADD_FLOAT(shared_w_z[idA], dwA.z);
-        }
-        if (!is_partB && invMB > 0.0 && idB < MAX_BODIES_PER_ISLAND) {
-            // Bug 1 fix: P_n is in macro-frame; shared_v[idB] holds micro-frame velocity.
-            // Divide by lca_scale to convert the impulse to micro-frame units.
-            // For same-frame pairs lca_scale == 1.0, so this is a no-op.
-            vec3 P_n_micro = P_n / lca_scale;
-            ATOMIC_ADD_FLOAT(shared_v_x[idB], P_n_micro.x * invMB); ATOMIC_ADD_FLOAT(shared_v_y[idB], P_n_micro.y * invMB); ATOMIC_ADD_FLOAT(shared_v_z[idB], P_n_micro.z * invMB);
-            vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_n_micro)));
-            ATOMIC_ADD_FLOAT(shared_w_x[idB], dwB.x); ATOMIC_ADD_FLOAT(shared_w_y[idB], dwB.y); ATOMIC_ADD_FLOAT(shared_w_z[idB], dwB.z);
+            if (!is_partB && idB < MAX_BODIES_PER_ISLAND) {
+                vB = vec3(uintBitsToFloat(shared_v_x[idB]), uintBitsToFloat(shared_v_y[idB]), uintBitsToFloat(shared_v_z[idB]));
+                wB = vec3(uintBitsToFloat(shared_w_x[idB]), uintBitsToFloat(shared_w_y[idB]), uintBitsToFloat(shared_w_z[idB]));
+            }
+
+            vec3 vA_pt = vA + cross(wA, rA);
+            vec3 vB_pt = vB + cross(wB, rB);
+            if (pair.is_lca == 1u) {
+                GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
+                vB_pt = vB_pt * lca.scale + lca.center_vel;
+            }
+            vec3 v_rel = vB_pt - vA_pt;
+            float jn_delta = eff_m_n * (-dot(v_rel, n) + target_v_n);
+            float old_jn = accumulated_normal[local_id]; float new_jn = max(old_jn + jn_delta, 0.0);
+            jn_delta = new_jn - old_jn; accumulated_normal[local_id] = new_jn;
+            vec3 P_n = jn_delta * n;
+
+            if (!is_partA && invMA > 0.0 && idA < MAX_BODIES_PER_ISLAND) {
+                ATOMIC_ADD_FLOAT(shared_v_x[idA], -P_n.x * invMA); ATOMIC_ADD_FLOAT(shared_v_y[idA], -P_n.y * invMA); ATOMIC_ADD_FLOAT(shared_v_z[idA], -P_n.z * invMA);
+                vec3 dwA = quat_rotate(qA, invIA * quat_rotate_inv(qA, cross(rA, -P_n)));
+                ATOMIC_ADD_FLOAT(shared_w_x[idA], dwA.x); ATOMIC_ADD_FLOAT(shared_w_y[idA], dwA.y); ATOMIC_ADD_FLOAT(shared_w_z[idA], dwA.z);
+            }
+            if (!is_partB && invMB > 0.0 && idB < MAX_BODIES_PER_ISLAND) {
+                vec3 P_n_micro = P_n / lca_scale;
+                ATOMIC_ADD_FLOAT(shared_v_x[idB], P_n_micro.x * invMB); ATOMIC_ADD_FLOAT(shared_v_y[idB], P_n_micro.y * invMB); ATOMIC_ADD_FLOAT(shared_v_z[idB], P_n_micro.z * invMB);
+                vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_n_micro)));
+                ATOMIC_ADD_FLOAT(shared_w_x[idB], dwB.x); ATOMIC_ADD_FLOAT(shared_w_y[idB], dwB.y); ATOMIC_ADD_FLOAT(shared_w_z[idB], dwB.z);
+            }
         }
 
         barrier();
 
-        if (!is_partA && idA < MAX_BODIES_PER_ISLAND) {
-            vA = vec3(uintBitsToFloat(shared_v_x[idA]), uintBitsToFloat(shared_v_y[idA]), uintBitsToFloat(shared_v_z[idA]));
-            wA = vec3(uintBitsToFloat(shared_w_x[idA]), uintBitsToFloat(shared_w_y[idA]), uintBitsToFloat(shared_w_z[idA]));
-        }
-        if (!is_partB && idB < MAX_BODIES_PER_ISLAND) {
-            vB = vec3(uintBitsToFloat(shared_v_x[idB]), uintBitsToFloat(shared_v_y[idB]), uintBitsToFloat(shared_v_z[idB]));
-            wB = vec3(uintBitsToFloat(shared_w_x[idB]), uintBitsToFloat(shared_w_y[idB]), uintBitsToFloat(shared_w_z[idB]));
-        }
-        // Bug 2 fix: recompute friction v_rel in the same frame as the normal v_rel above.
-        // For cross-LCA pairs, vB and wB are in micro-frame; apply the same LCA transform
-        // used at line 128 so that v_rel is consistently expressed in macro-frame space.
-        vec3 vB_pt_fric = vB + cross(wB, rB);
-        if (pair.is_lca == 1u) {
-            GpuReferenceFrame lca_fric = pc.lca_entities.frames[pair.lca_id];
-            vB_pt_fric = vB_pt_fric * lca_fric.scale + lca_fric.center_vel;
-        }
-        v_rel = vB_pt_fric - (vA + cross(wA, rA));
+        if (valid) {
+            if (!is_partA && idA < MAX_BODIES_PER_ISLAND) {
+                vA = vec3(uintBitsToFloat(shared_v_x[idA]), uintBitsToFloat(shared_v_y[idA]), uintBitsToFloat(shared_v_z[idA]));
+                wA = vec3(uintBitsToFloat(shared_w_x[idA]), uintBitsToFloat(shared_w_y[idA]), uintBitsToFloat(shared_w_z[idA]));
+            }
+            if (!is_partB && idB < MAX_BODIES_PER_ISLAND) {
+                vB = vec3(uintBitsToFloat(shared_v_x[idB]), uintBitsToFloat(shared_v_y[idB]), uintBitsToFloat(shared_v_z[idB]));
+                wB = vec3(uintBitsToFloat(shared_w_x[idB]), uintBitsToFloat(shared_w_y[idB]), uintBitsToFloat(shared_w_z[idB]));
+            }
 
-        float max_fric = 0.5 * accumulated_normal[local_id];
-        float jt1_delta = eff_m_t1 * (-dot(v_rel, t1));
-        float old_jt1 = accumulated_t1[local_id]; float new_jt1 = clamp(old_jt1 + jt1_delta, -max_fric, max_fric);
-        jt1_delta = new_jt1 - old_jt1; accumulated_t1[local_id] = new_jt1;
+            vec3 vB_pt_fric = vB + cross(wB, rB);
+            if (pair.is_lca == 1u) {
+                GpuReferenceFrame lca_fric = pc.lca_entities.frames[pair.lca_id];
+                vB_pt_fric = vB_pt_fric * lca_fric.scale + lca_fric.center_vel;
+            }
+            vec3 v_rel = vB_pt_fric - (vA + cross(wA, rA));
 
-        float jt2_delta = eff_m_t2 * (-dot(v_rel, t2));
-        float old_jt2 = accumulated_t2[local_id]; float new_jt2 = clamp(old_jt2 + jt2_delta, -max_fric, max_fric);
-        jt2_delta = new_jt2 - old_jt2; accumulated_t2[local_id] = new_jt2;
+            float max_fric = 0.5 * accumulated_normal[local_id];
+            float jt1_delta = eff_m_t1 * (-dot(v_rel, t1));
+            float old_jt1 = accumulated_t1[local_id]; float new_jt1 = clamp(old_jt1 + jt1_delta, -max_fric, max_fric);
+            jt1_delta = new_jt1 - old_jt1; accumulated_t1[local_id] = new_jt1;
 
-        vec3 P_t = jt1_delta * t1 + jt2_delta * t2;
+            float jt2_delta = eff_m_t2 * (-dot(v_rel, t2));
+            float old_jt2 = accumulated_t2[local_id]; float new_jt2 = clamp(old_jt2 + jt2_delta, -max_fric, max_fric);
+            jt2_delta = new_jt2 - old_jt2; accumulated_t2[local_id] = new_jt2;
 
-        if (!is_partA && invMA > 0.0 && idA < MAX_BODIES_PER_ISLAND) {
-            ATOMIC_ADD_FLOAT(shared_v_x[idA], -P_t.x * invMA); ATOMIC_ADD_FLOAT(shared_v_y[idA], -P_t.y * invMA); ATOMIC_ADD_FLOAT(shared_v_z[idA], -P_t.z * invMA);
-            vec3 dwA = quat_rotate(qA, invIA * quat_rotate_inv(qA, cross(rA, -P_t)));
-            ATOMIC_ADD_FLOAT(shared_w_x[idA], dwA.x); ATOMIC_ADD_FLOAT(shared_w_y[idA], dwA.y); ATOMIC_ADD_FLOAT(shared_w_z[idA], dwA.z);
-        }
-        if (!is_partB && invMB > 0.0 && idB < MAX_BODIES_PER_ISLAND) {
-            // Bug 3 fix: same as Bug 1 — friction impulse P_t is in macro-frame;
-            // divide by lca_scale before writing to micro-frame shared-memory slot.
-            vec3 P_t_micro = P_t / lca_scale;
-            ATOMIC_ADD_FLOAT(shared_v_x[idB], P_t_micro.x * invMB); ATOMIC_ADD_FLOAT(shared_v_y[idB], P_t_micro.y * invMB); ATOMIC_ADD_FLOAT(shared_v_z[idB], P_t_micro.z * invMB);
-            vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_t_micro)));
-            ATOMIC_ADD_FLOAT(shared_w_x[idB], dwB.x); ATOMIC_ADD_FLOAT(shared_w_y[idB], dwB.y); ATOMIC_ADD_FLOAT(shared_w_z[idB], dwB.z);
+            vec3 P_t = jt1_delta * t1 + jt2_delta * t2;
+
+            if (!is_partA && invMA > 0.0 && idA < MAX_BODIES_PER_ISLAND) {
+                ATOMIC_ADD_FLOAT(shared_v_x[idA], -P_t.x * invMA); ATOMIC_ADD_FLOAT(shared_v_y[idA], -P_t.y * invMA); ATOMIC_ADD_FLOAT(shared_v_z[idA], -P_t.z * invMA);
+                vec3 dwA = quat_rotate(qA, invIA * quat_rotate_inv(qA, cross(rA, -P_t)));
+                ATOMIC_ADD_FLOAT(shared_w_x[idA], dwA.x); ATOMIC_ADD_FLOAT(shared_w_y[idA], dwA.y); ATOMIC_ADD_FLOAT(shared_w_z[idA], dwA.z);
+            }
+            if (!is_partB && invMB > 0.0 && idB < MAX_BODIES_PER_ISLAND) {
+                vec3 P_t_micro = P_t / lca_scale;
+                ATOMIC_ADD_FLOAT(shared_v_x[idB], P_t_micro.x * invMB); ATOMIC_ADD_FLOAT(shared_v_y[idB], P_t_micro.y * invMB); ATOMIC_ADD_FLOAT(shared_v_z[idB], P_t_micro.z * invMB);
+                vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_t_micro)));
+                ATOMIC_ADD_FLOAT(shared_w_x[idB], dwB.x); ATOMIC_ADD_FLOAT(shared_w_y[idB], dwB.y); ATOMIC_ADD_FLOAT(shared_w_z[idB], dwB.z);
+            }
         }
     }
 
     barrier();
-    pc.outputs.impulses[contact_idx] = accumulated_normal[local_id] * n + accumulated_t1[local_id] * t1 + accumulated_t2[local_id] * t2;
+    if (valid) {
+        pc.outputs.impulses[contact_idx] = accumulated_normal[local_id] * n + accumulated_t1[local_id] * t1 + accumulated_t2[local_id] * t2;
+    }
 }

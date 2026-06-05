@@ -54,7 +54,7 @@ mod tests {
   }
 
   fn panic_on_validation_error(msg: &str) {
-    aethervk_oshal_rlib::log!("VULKAN ERROR: {}", msg);
+    eprintln!("VULKAN ERROR: {}", msg);
   }
 
   struct VulkanTestContext {
@@ -105,7 +105,7 @@ mod tests {
     }
   }
 
-  fn run_simulation<K: crate::gpu::Kernels + ?Sized>(
+  pub fn run_simulation<K: crate::gpu::Kernels + ?Sized>(
     kernels: &K,
     scene: &mut Scene,
     duration_seconds: f32,
@@ -250,9 +250,9 @@ mod tests {
         assert!(v_obb.x() > 0.0, "OBB should have bounced back");
 
         // Verify collision events
-        println!("RECENT COLLISIONS LEN: {}", ps.recent_collisions.len());
+        eprintln!("RECENT COLLISIONS LEN: {}", ps.recent_collisions.len());
         for c in &ps.recent_collisions {
-          println!("Collision: {} vs {}", c.entity_a_name, c.entity_b_name);
+          eprintln!("Collision: {} vs {}", c.entity_a_name, c.entity_b_name);
         }
         assert!(
           !ps.recent_collisions.is_empty(),
@@ -562,9 +562,9 @@ mod tests {
         );
 
         // Verify collision events
-        println!("RECENT COLLISIONS LEN: {}", ps.recent_collisions.len());
+        eprintln!("RECENT COLLISIONS LEN: {}", ps.recent_collisions.len());
         for c in &ps.recent_collisions {
-          println!("Collision: {} vs {}", c.entity_a_name, c.entity_b_name);
+          eprintln!("Collision: {} vs {}", c.entity_a_name, c.entity_b_name);
         }
         assert!(
           !ps.recent_collisions.is_empty(),
@@ -740,10 +740,7 @@ mod tests {
 
     // Set up macroframe
     let macro_frame = scene.spawn_entity("macro_frame");
-    let _ = scene.add_component(
-      macro_frame,
-      TransformComponent::default(),
-    );
+    let _ = scene.add_component(macro_frame, TransformComponent::default());
     let _ = scene.add_component(
       macro_frame,
       crate::scene::ReferenceFrameComponent {
@@ -756,10 +753,7 @@ mod tests {
 
     // Set up microframe
     let micro_frame = scene.spawn_entity("micro_frame");
-    let _ = scene.add_component(
-      micro_frame,
-      TransformComponent::default(),
-    );
+    let _ = scene.add_component(micro_frame, TransformComponent::default());
     let _ = scene.add_component(
       micro_frame,
       crate::scene::ReferenceFrameComponent {
@@ -773,21 +767,30 @@ mod tests {
     // Add spheres and particles
     for i in 0..100 {
       let s = scene.spawn_entity(&alloc::format!("sphere_{}", i));
-      let _ = scene.add_component(s, TransformComponent {
-        position: Vec3f32::from_array([(i % 10) as f32, (i / 10) as f32, 0.0]),
-        ..Default::default()
-      });
-      let _ = scene.add_component(s, ColliderComponent {
-        shape: ColliderShape::Sphere { radius: 1.0 },
-        restitution: 0.5,
-        friction: 0.5,
-        mass: 1.0,
-      });
+      let _ = scene.add_component(
+        s,
+        TransformComponent {
+          position: Vec3f32::from_array([(i % 10) as f32, (i / 10) as f32, 0.0]),
+          ..Default::default()
+        },
+      );
+      let _ = scene.add_component(
+        s,
+        ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          restitution: 0.5,
+          friction: 0.5,
+          mass: 1.0,
+        },
+      );
       // add kinematic
-      let _ = scene.add_component(s, KinematicComponent {
-        velocity: Vec3f32::from_array([1.0, 0.0, 0.0]),
-        ..Default::default()
-      });
+      let _ = scene.add_component(
+        s,
+        KinematicComponent {
+          velocity: Vec3f32::from_array([1.0, 0.0, 0.0]),
+          ..Default::default()
+        },
+      );
       let _ = scene.add_component(s, dummy_mesh());
     }
 
@@ -814,11 +817,205 @@ mod tests {
 
     // Run simulation step
     // This will do the LBVH build with > 128 particles, crossing workgroup boundaries!
-    ctx.frontend.with_device(ctx.device_handle, |device| {
-      let vulkan_device = device.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-      let _ps = run_simulation(vulkan_device, &mut scene, 0.016, true);
-      crate::types::GpuResult::Ok(())
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |device| {
+        let vulkan_device = device
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+        let _ps = run_simulation(vulkan_device, &mut scene, 0.016, true);
+        crate::types::GpuResult::Ok(())
+      })
+      .unwrap();
+  }
+
+  #[test]
+  #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
+  fn test_barnes_hut_forces() {
+    let ctx = VulkanTestContext::new();
+
+    let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_all_crate_components();
+
+    // Spawn 10 particles at the origin
+    let p_sys = scene.spawn_entity("particles");
+    let _ = scene.add_component(p_sys, TransformComponent::default());
+    let p_comp = crate::scene::ParticleSystemComponent::new(11);
+    {
+      let mut lock = p_comp.particles.write();
+      for i in 0..10 {
+        lock.push(crate::scene::ParticleData {
+          id_low: i as u32,
+          id_high: 0,
+          age_low: 0,
+          age_high: 0,
+          // Guarantee unique positions to prevent t_c=0 loops if collisions are accidentally enabled
+          position: [
+            (i % 10) as f32 * 10.0,
+            ((i / 10) % 10) as f32 * 10.0,
+            (i / 100) as f32 * 10.0,
+          ],
+          mass: 1.0,
+          velocity: [0.0, 0.0, 0.0],
+          active: 1,
+        });
+      }
+
+      // Add one MASSIVE particle far away
+      lock.push(crate::scene::ParticleData {
+        id_low: 10,
+        id_high: 0,
+        age_low: 0,
+        age_high: 0,
+        position: [10000.0, 0.0, 0.0],
+        mass: 1e6, // 1 million kg
+        velocity: [0.0, 0.0, 0.0],
+        active: 1,
+      });
+    }
+    let _ = scene.add_component(p_sys, p_comp);
+
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+
+        // Run 1 simulation step
+        // The massive particle should pull the cluster of 1000 particles towards +X.
+        // Total mass of cluster = 1000.
+        // Distance r = ~10000.
+        // Acceleration a = G * M_massive / r^2 = G * 1e6 / (1e8) = G * 0.01.
+
+        // Assuming G = 6.674e-11 (or whatever it is in physics backend)
+        let ps = run_simulation(vulkan_device, &mut scene, 0.016, false);
+
+        // Check velocities!
+        let p_comp = scene
+          .with_component(p_sys, |c: &crate::scene::ParticleSystemComponent| c.clone())
+          .unwrap();
+        let lock = p_comp.particles.read();
+
+        let mut avg_vx = 0.0;
+        for i in 0..10 {
+          let p = &lock[i];
+          avg_vx += p.velocity[0];
+        }
+        avg_vx /= 10.0;
+
+        let mut output_str = alloc::format!("Average X velocity: {}\n", avg_vx);
+        for i in 0..11 {
+          output_str.push_str(&alloc::format!(
+            "Particle {} POS: {:?} VEL: {:?}\n",
+            i,
+            lock[i].position,
+            lock[i].velocity
+          ));
+        }
+        std::fs::write("test_vels.txt", output_str).unwrap();
+        assert!(
+          avg_vx > 0.0,
+          "Particles should have moved towards the massive body!"
+        );
+
+        crate::types::GpuResult::Ok(())
+      })
+      .unwrap();
+  }
+  #[test]
+  #[cfg(feature = "collisions")]
+  fn test_ccd_time_of_impact() {
+    use crate::gpu::Kernels;
+    let mut ctx = VulkanTestContext::new();
+    let mut scene = crate::scene::Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_all_crate_components();
+
+    let p_sys = scene.spawn_entity("particles");
+    scene.add_component(p_sys, crate::scene::TransformComponent::default()).unwrap();
+
+    let p_comp = crate::scene::ParticleSystemComponent::new(100);
+    {
+      let mut lock = p_comp.particles.write();
+
+      // Particle A: moving right at 100 m/s
+      lock.push(crate::scene::ParticleData {
+        id_low: 1,
+        id_high: 0,
+        age_low: 0,
+        age_high: 0,
+        position: [0.0, 0.0, 0.0],
+        mass: 1.0,
+        velocity: [100.0, 0.0, 0.0],
+        active: 1,
+      });
+      // Particle B: stationary at x = 4.0
+      lock.push(crate::scene::ParticleData {
+        id_low: 2,
+        id_high: 0,
+        age_low: 0,
+        age_high: 0,
+        position: [4.0, 0.0, 0.0],
+        mass: 1.0,
+        velocity: [0.0, 0.0, 0.0],
+        active: 1,
+      });
+    }
+    scene.add_component(p_sys, p_comp).unwrap();
+    scene.add_component(p_sys, crate::scene::TransformComponent::default()).unwrap();
+
+    // DUMMY RIGID BODY TO PREVENT N_BODIES = 0
+    let dummy_rb = scene.spawn_entity("dummy_rb");
+    scene.add_component(dummy_rb, crate::scene::TransformComponent {
+      position: Vec3f32::from_array([0.0, 1000.0, 0.0]),
+      ..Default::default()
     }).unwrap();
+    scene.add_component(dummy_rb, crate::scene::ColliderComponent {
+      shape: ColliderShape::Sphere { radius: 1.0 },
+      mass: 1.0,
+      ..Default::default()
+    }).unwrap();
+    scene.add_component(dummy_rb, crate::scene::KinematicComponent::default()).unwrap();
+    scene.add_component(dummy_rb, dummy_mesh()).unwrap();
+
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+
+        // Step with dt = 0.1s
+        let ps = run_simulation(vulkan_device, &mut scene, 0.1, true);
+
+        let p_comp = scene
+          .with_component(p_sys, |c: &crate::scene::ParticleSystemComponent| c.clone())
+          .unwrap();
+        let lock = p_comp.particles.read();
+
+        let va = lock[0].velocity[0];
+        let vb = lock[1].velocity[0];
+
+        eprintln!("After collision: vA = {}, vB = {}", va, vb);
+
+        // Ensure they collided and A's velocity decreased / B's increased
+        // Since it's inelastic (restitution = 0.5?), A will slow down and B will speed up.
+        assert!(
+          va < 10.0 || vb > 0.0,
+          "Particle A should have slowed down or bounced! va = {}",
+          va
+        );
+        assert!(vb > 0.0, "Particle B should have been pushed! vb = {}", vb);
+
+        crate::types::GpuResult::Ok(())
+      })
+      .unwrap();
   }
 }
-

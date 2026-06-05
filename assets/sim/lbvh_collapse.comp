@@ -45,6 +45,7 @@ void main() {
     pc.multi_bvh.nodes[multi_node_idx].max_z[lane] = pc.binary_bvh.nodes[f_parent].max_z[f_dir];
     pc.multi_bvh.nodes[multi_node_idx].child_indices[lane] = payload;
     pc.multi_bvh.nodes[multi_node_idx].metadata[lane] = bvh_pack_metadata(is_leaf, BVH_FRAME_MICRO, BVH_SHAPE_AABB, payload);
+    pc.multi_bvh.nodes[multi_node_idx].particle_count[lane] = 0xFFFFFFFFu;
     pc.multi_bvh.nodes[multi_node_idx].masses[lane] = pc.binary_bvh.nodes[f_parent].masses[f_dir];
     pc.multi_bvh.nodes[multi_node_idx].com_x[lane] = pc.binary_bvh.nodes[f_parent].com_x[f_dir];
     pc.multi_bvh.nodes[multi_node_idx].com_y[lane] = pc.binary_bvh.nodes[f_parent].com_y[f_dir];

@@ -1078,7 +1078,19 @@ fn test_camera_controls_microframe() {
       let rot = Quat::identity();
       // static doesn't use comet id
       let (_lca_ext, _comet_ext) = ctx
-        .spawn_comet_internal(scene_id, model_id, "comet_micro", pos, rot, 1.0, 1000.0, 0, 0, None, Vec3f32::zero())
+        .spawn_comet_internal(
+          scene_id,
+          model_id,
+          "comet_micro",
+          pos,
+          rot,
+          1.0,
+          1000.0,
+          0,
+          0,
+          None,
+          Vec3f32::zero(),
+        )
         .unwrap();
 
       // Get the camera that create_default_scene already created
@@ -1207,8 +1219,9 @@ fn test_camera_controls_microframe() {
 }
 #[test]
 fn test_callbacks_safety() {
-  static BREADCRUMB_HIT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-  
+  static BREADCRUMB_HIT: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
   unsafe extern "C" fn mock_breadcrumb(_status: u32, _msg: *const core::ffi::c_char) {
     BREADCRUMB_HIT.store(true, core::sync::atomic::Ordering::SeqCst);
   }

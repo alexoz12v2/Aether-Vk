@@ -2,6 +2,8 @@
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
@@ -33,6 +35,16 @@ shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
 
 // Performs a secure float accumulation via purely standard CAS looping
 void atomicAddWrench(WrenchArrayUint buf, uint index, float val) {
+    uint old_val = buf.data[index];
+    uint assumed_val;
+    do {
+        assumed_val = old_val;
+        float new_val = uintBitsToFloat(assumed_val) + val;
+        old_val = atomicCompSwap(buf.data[index], assumed_val, floatBitsToUint(new_val));
+    } while (assumed_val != old_val);
+}
+
+void atomicAddParticle(ParticleData buf, uint index, float val) {
     uint old_val = buf.data[index];
     uint assumed_val;
     do {
@@ -92,12 +104,13 @@ void main() {
         vec3 c_min = vec3(pc.bvh.nodes[node_idx].min_x[lane_id], pc.bvh.nodes[node_idx].min_y[lane_id], pc.bvh.nodes[node_idx].min_z[lane_id]);
         vec3 c_max = vec3(pc.bvh.nodes[node_idx].max_x[lane_id], pc.bvh.nodes[node_idx].max_y[lane_id], pc.bvh.nodes[node_idx].max_z[lane_id]);
         uint child_payload = pc.bvh.nodes[node_idx].child_indices[lane_id];
+        uint leaf_payload = meta & 0x07FFFFFFu;
 
         bool hit_aabb = valid && intersectAABB(my_min, my_max, c_min, c_max);
         bool is_leaf = bvh_is_leaf(meta);
 
         bool hit_node = hit_aabb && !is_leaf;
-        bool hit_leaf = hit_aabb && is_leaf && (my_p_idx != child_payload);
+        bool hit_leaf = hit_aabb && is_leaf && (my_p_idx != leaf_payload);
 
         uvec4 leaf_ballot = subgroupBallot(hit_leaf);
 
@@ -107,7 +120,7 @@ void main() {
                 uint bit = findLSB(mask);
                 mask &= ~(1u << bit);
 
-                uint other_idx = subgroupShuffle(child_payload, i * 32 + bit);
+                uint other_idx = subgroupShuffle(leaf_payload, i * 32 + bit);
                 uint block_idx = other_idx / SUBGROUP_SIZE;
                 uint local_idx = other_idx % SUBGROUP_SIZE;
                 uint base = block_idx * (10u * SUBGROUP_SIZE) + local_idx;
@@ -128,7 +141,8 @@ void main() {
                     vec3 normal = diff / dist;
 
                     float force_mag = pc.stiffness * penetration;
-                    local_repulsive_force += normal * force_mag;
+                    vec3 applied_force = normal * force_mag;
+                    local_repulsive_force += applied_force;
                 }
             }
         }
@@ -150,9 +164,12 @@ void main() {
 
     // Subgroup-Master invokes strictly uint-backed CAS mappings
     if (lane_id == 0 && dot(local_repulsive_force, local_repulsive_force) > 0.0) {
-        WrenchArrayUint w_uint = WrenchArrayUint(pc.wrench_buffer);
-        atomicAddWrench(w_uint, my_p_idx * 6 + 0, local_repulsive_force.x);
-        atomicAddWrench(w_uint, my_p_idx * 6 + 1, local_repulsive_force.y);
-        atomicAddWrench(w_uint, my_p_idx * 6 + 2, local_repulsive_force.z);
+        uint block_idx = my_p_idx / SUBGROUP_SIZE;
+        uint local_idx = my_p_idx % SUBGROUP_SIZE;
+        uint base = block_idx * (10u * SUBGROUP_SIZE) + local_idx;
+
+        atomicAddParticle(pc.particles, base + 7u * SUBGROUP_SIZE, local_repulsive_force.x);
+        atomicAddParticle(pc.particles, base + 8u * SUBGROUP_SIZE, local_repulsive_force.y);
+        atomicAddParticle(pc.particles, base + 9u * SUBGROUP_SIZE, local_repulsive_force.z);
     }
 }

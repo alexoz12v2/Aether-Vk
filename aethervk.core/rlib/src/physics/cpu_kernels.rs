@@ -223,7 +223,7 @@ impl Kernels for CpuScalarKernels {
     cmd: &mut Self::Cmd,
     scene: &PhysicsScene,
     scene0: &Scene,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>)> {
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>, u32)> {
     Ok((
       CpuBuffer {
         data: alloc::vec::Vec::new(),
@@ -231,6 +231,7 @@ impl Kernels for CpuScalarKernels {
       CpuBuffer {
         data: alloc::vec::Vec::new(),
       },
+      0,
     ))
   }
 
@@ -271,10 +272,13 @@ impl Kernels for CpuScalarKernels {
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<Self::Buffer<ForceEmitter>> {
-    Ok(CpuBuffer {
-      data: alloc::vec::Vec::new(),
-    })
+  ) -> EngineResult<(Self::Buffer<ForceEmitter>, u32)> {
+    Ok((
+      CpuBuffer {
+        data: alloc::vec::Vec::new(),
+      },
+      0,
+    ))
   }
 
   fn build_emission_candidates(
@@ -415,6 +419,8 @@ impl Kernels for CpuScalarKernels {
     wrenches: &mut Self::Buffer<Wrench>,
     emitters: &Self::Buffer<ForceEmitter>,
     _frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    _n_bodies: u32,
+    _n_emitters: u32,
     dt: timeus_t,
   ) -> EngineResult<()> {
     Ok(())
@@ -425,6 +431,7 @@ impl Kernels for CpuScalarKernels {
     cmd: &mut Self::Cmd,
     bodies: &Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
+    _n_bodies: u32,
   ) -> EngineResult<()> {
     Ok(())
   }
@@ -830,7 +837,7 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     scene: &PhysicsScene,
     scene0: &Scene,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>)> {
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>, u32)> {
     Ok((
       CpuBuffer {
         data: alloc::vec::Vec::new(),
@@ -838,6 +845,7 @@ impl Kernels for CpuSimdKernels {
       CpuBuffer {
         data: alloc::vec::Vec::new(),
       },
+      0,
     ))
   }
 
@@ -878,10 +886,13 @@ impl Kernels for CpuSimdKernels {
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<Self::Buffer<ForceEmitter>> {
-    Ok(CpuBuffer {
-      data: alloc::vec::Vec::new(),
-    })
+  ) -> EngineResult<(Self::Buffer<ForceEmitter>, u32)> {
+    Ok((
+      CpuBuffer {
+        data: alloc::vec::Vec::new(),
+      },
+      0,
+    ))
   }
 
   fn build_emission_candidates(
@@ -962,6 +973,8 @@ impl Kernels for CpuSimdKernels {
     wrenches: &mut Self::Buffer<Wrench>,
     emitters: &Self::Buffer<ForceEmitter>,
     _frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    _n_bodies: u32,
+    _n_emitters: u32,
     dt: timeus_t,
   ) -> EngineResult<()> {
     Ok(())
@@ -972,6 +985,7 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     bodies: &Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
+    _n_bodies: u32,
   ) -> EngineResult<()> {
     Ok(())
   }

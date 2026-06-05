@@ -46,8 +46,6 @@ layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 void main() {
     uint gid = gl_GlobalInvocationID.x;
 
-    // ── Thread 0: advance the 64-bit engine clock exactly once per frame ─────
-    // This must happen regardless of particle count so the clock always ticks.
     if (gid == 0u && uint64_t(pc.clock) != 0) {
         uvec2 t_n  = uvec2(pc.current_time_lo, pc.current_time_hi);
         uvec2 dt_u = uvec2(pc.dt_us_lo,        pc.dt_us_hi);
@@ -67,25 +65,8 @@ void main() {
     float inv_m   = 1.0 / mass;
     float half_dt = 0.5 * pc.dt;
 
-    // ── Load v_{n+½} (written by p1_p2) ──────────────────────────────────
-    vec3 v_half = vec3(
-        uintBitsToFloat(pc.particles.data[base + 3u * SUBGROUP_SIZE]),
-        uintBitsToFloat(pc.particles.data[base + 4u * SUBGROUP_SIZE]),
-        uintBitsToFloat(pc.particles.data[base + 5u * SUBGROUP_SIZE])
-    );
-
-    // ── Load F(x_{n+1}) (written by force generators after p3) ───────────
-    vec3 f_next = vec3(
-        uintBitsToFloat(pc.particles.data[base + 7u * SUBGROUP_SIZE]),
-        uintBitsToFloat(pc.particles.data[base + 8u * SUBGROUP_SIZE]),
-        uintBitsToFloat(pc.particles.data[base + 9u * SUBGROUP_SIZE])
-    );
-
-    // ── VV Corrector ─────────────────────────────────────────────────────
-    vec3 v_next = v_half + f_next * inv_m * half_dt;
-
     // Write v_{n+1} back — force buffer stays intact for next frame
-    pc.particles.data[base + 3u * SUBGROUP_SIZE] = floatBitsToUint(v_next.x);
-    pc.particles.data[base + 4u * SUBGROUP_SIZE] = floatBitsToUint(v_next.y);
-    pc.particles.data[base + 5u * SUBGROUP_SIZE] = floatBitsToUint(v_next.z);
+    pc.particles.data[base + 3u * SUBGROUP_SIZE] = floatBitsToUint(0.0);
+    pc.particles.data[base + 4u * SUBGROUP_SIZE] = floatBitsToUint(0.0);
+    pc.particles.data[base + 5u * SUBGROUP_SIZE] = floatBitsToUint(0.0);
 }

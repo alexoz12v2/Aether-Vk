@@ -143,7 +143,7 @@ pub struct ParticleMetadata {
 
 pub fn pack_particles_aosoa(particles: &[[f32; 10]], subgroup_size: usize) -> alloc::vec::Vec<f32> {
   let num_particles = particles.len();
-  let num_blocks = (num_particles + subgroup_size - 1) / subgroup_size;
+  let num_blocks = ((num_particles + subgroup_size - 1) / subgroup_size).max(1);
   let mut buffer = alloc::vec::Vec::with_capacity(num_blocks * 10 * subgroup_size);
   buffer.resize(num_blocks * 10 * subgroup_size, 0.0);
 
@@ -663,7 +663,8 @@ impl From<RenderableInstanceId> for GpuResourceHandle {
 
 // Allow the host application to configure the core assets path uniformly
 /// TODO: Document this item
-pub static ASSET_DIR: parking_lot::RwLock<Option<alloc::string::String>> = parking_lot::RwLock::new(None);
+pub static ASSET_DIR: parking_lot::RwLock<Option<alloc::string::String>> =
+  parking_lot::RwLock::new(None);
 
 /// Information about the synchronization payload after submitting a command buffer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2083,8 +2084,7 @@ pub trait Kernels: Send + Sync {
   /// Debug-only: submit the current command buffer, wait for GPU completion,
   /// and return a fresh command buffer.  Used by `shader_debug_sync` to
   /// isolate which shader dispatch hangs the GPU.
-  ///
-  /// Default implementation: no-op pass-through (returns the same cmd).
+  #[cfg(feature = "shader_debug_sync")]
   fn debug_sync_barrier(&self, cmd: Self::Cmd) -> EngineResult<Self::Cmd> {
     Ok(cmd)
   }
@@ -2118,7 +2118,7 @@ pub trait Kernels: Send + Sync {
     cmd: &mut Self::Cmd,
     scene: &PhysicsScene,
     scene0: &Scene,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>)>;
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>, u32)>;
 
   /// Upload `physical_scene.gpu_frames` as a GPU buffer for LCA broad-phase.
   fn build_frames(
@@ -2150,7 +2150,7 @@ pub trait Kernels: Send + Sync {
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<Self::Buffer<ForceEmitter>>;
+  ) -> EngineResult<(Self::Buffer<ForceEmitter>, u32)>;
 
   fn build_emission_candidates(
     &self,
@@ -2230,6 +2230,8 @@ pub trait Kernels: Send + Sync {
     wrenches: &mut Self::Buffer<Wrench>,
     emitters: &Self::Buffer<ForceEmitter>,
     frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    n_bodies: u32,
+    n_emitters: u32,
     dt: timeus_t,
   ) -> EngineResult<()>;
 
@@ -2241,6 +2243,7 @@ pub trait Kernels: Send + Sync {
     cmd: &mut Self::Cmd,
     bodies: &Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
+    n_bodies: u32,
   ) -> EngineResult<()>;
 
   /// VV corrector — advances v_{n+½} → v_{n+1} using F(x_{n+1}).

@@ -234,26 +234,41 @@ pub fn build_selection_tlas(
 
   let mut mesh_entities = alloc::vec::Vec::new();
 
-  scene.query2::<crate::scene::PhysicalMeshComponent, crate::scene::TransformComponent, _>(|entity, mesh, transform| {
-    if let Some(ref bvh) = mesh.mesh.bvh {
-      if let Some(bvh_root) = bvh.nodes.first() {
-        if let crate::math::collision::linear_bvh::LinearBound::AABB(aabb) = &bvh_root.bound {
-          let min = aabb.min::<aethervk_oshal_rlib::math::vector::vec3::Vec3f32>();
-          let max = aabb.max::<aethervk_oshal_rlib::math::vector::vec3::Vec3f32>();
-          mesh_entities.push((entity, *transform, min, max));
+  scene.query2::<crate::scene::PhysicalMeshComponent, crate::scene::TransformComponent, _>(
+    |entity, mesh, transform| {
+      if let Some(ref bvh) = mesh.mesh.bvh {
+        if let Some(bvh_root) = bvh.nodes.first() {
+          if let crate::math::collision::linear_bvh::LinearBound::AABB(aabb) = &bvh_root.bound {
+            let min = aabb.min::<aethervk_oshal_rlib::math::vector::vec3::Vec3f32>();
+            let max = aabb.max::<aethervk_oshal_rlib::math::vector::vec3::Vec3f32>();
+            mesh_entities.push((entity, *transform, min, max));
+          }
         }
       }
-    }
-  });
+    },
+  );
 
   for (entity, transform, min, max) in mesh_entities {
     let global_transform = scene.global_transform(entity).unwrap_or(transform);
-    let model_matrix = <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::translation(global_transform.position)
-        * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_quat_custom_frame(global_transform.rotation)
-        * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_scale(global_transform.scale);
+    let model_matrix =
+      <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::translation(
+        global_transform.position,
+      ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_quat_custom_frame(
+        global_transform.rotation,
+      ) * <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as Matrix4>::from_scale(
+        global_transform.scale,
+      );
 
-    let mut bmin = <aethervk_oshal_rlib::math::vector::vec3::Vec3f32 as Vector3>::from_components(f32::MAX, f32::MAX, f32::MAX);
-    let mut bmax = <aethervk_oshal_rlib::math::vector::vec3::Vec3f32 as Vector3>::from_components(f32::MIN, f32::MIN, f32::MIN);
+    let mut bmin = <aethervk_oshal_rlib::math::vector::vec3::Vec3f32 as Vector3>::from_components(
+      f32::MAX,
+      f32::MAX,
+      f32::MAX,
+    );
+    let mut bmax = <aethervk_oshal_rlib::math::vector::vec3::Vec3f32 as Vector3>::from_components(
+      f32::MIN,
+      f32::MIN,
+      f32::MIN,
+    );
 
     for i in 0..8 {
       let corner = <aethervk_oshal_rlib::math::vector::vec3::Vec3f32 as Vector3>::from_components(
@@ -261,10 +276,28 @@ pub fn build_selection_tlas(
         if i & 2 == 0 { min.y() } else { max.y() },
         if i & 4 == 0 { min.z() } else { max.z() },
       );
-      let corner_v4 = <aethervk_oshal_rlib::math::vector::vec4::Vec4f32 as Vector4>::from_components(corner.x(), corner.y(), corner.z(), 1.0);
-      let transformed = <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as MatrixVectorMul>::mul_vector(model_matrix, corner_v4);
-      bmin = <aethervk_oshal_rlib::math::vector::vec3::Vec3f32 as Vector3>::from_components(bmin.x().min(transformed.x()), bmin.y().min(transformed.y()), bmin.z().min(transformed.z()));
-      bmax = <aethervk_oshal_rlib::math::vector::vec3::Vec3f32 as Vector3>::from_components(bmax.x().max(transformed.x()), bmax.y().max(transformed.y()), bmax.z().max(transformed.z()));
+      let corner_v4 =
+        <aethervk_oshal_rlib::math::vector::vec4::Vec4f32 as Vector4>::from_components(
+          corner.x(),
+          corner.y(),
+          corner.z(),
+          1.0,
+        );
+      let transformed =
+        <aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32 as MatrixVectorMul>::mul_vector(
+          model_matrix,
+          corner_v4,
+        );
+      bmin = <aethervk_oshal_rlib::math::vector::vec3::Vec3f32 as Vector3>::from_components(
+        bmin.x().min(transformed.x()),
+        bmin.y().min(transformed.y()),
+        bmin.z().min(transformed.z()),
+      );
+      bmax = <aethervk_oshal_rlib::math::vector::vec3::Vec3f32 as Vector3>::from_components(
+        bmax.x().max(transformed.x()),
+        bmax.y().max(transformed.y()),
+        bmax.z().max(transformed.z()),
+      );
     }
 
     use slotmap::Key;

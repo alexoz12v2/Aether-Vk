@@ -1523,16 +1523,23 @@ fn execute_simulation_tick(
         .read()
         .fixed_delta_time
         .load(core::sync::atomic::Ordering::Relaxed);
-      let max_sub_dt_us =
-        (ts_write.current_scale.max_physics_sub_dt_seconds() * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
+      let max_sub_dt_us = (ts_write.current_scale.max_physics_sub_dt_seconds() * 1_000_000.0)
+        as aethervk_oshal_rlib::os::time::timeus_t;
       if ts_write.manual_step_requests > 0.0 {
         let step = ts_write.manual_step_requests;
         ts_write.manual_step_requests = 0.0;
         ts_write.current_epoch = ts_write.current_epoch + anise::time::Unit::Day * step;
-        (true, step, fixed_dt_us, ts_write.current_epoch, max_sub_dt_us)
+        (
+          true,
+          step,
+          fixed_dt_us,
+          ts_write.current_epoch,
+          max_sub_dt_us,
+        )
       } else {
         let needs_update = ts_write.time_info.read().needs_fixed_update();
-        static DEBUG_PRINT_TICK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+        static DEBUG_PRINT_TICK: core::sync::atomic::AtomicU32 =
+          core::sync::atomic::AtomicU32::new(0);
         if DEBUG_PRINT_TICK.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % 600 == 0 {
           aethervk_oshal_rlib::log!(
             "DEBUG: execute_simulation_tick is_playing={} needs_update={} scale={:?}",
@@ -1558,7 +1565,13 @@ fn execute_simulation_tick(
               aethervk_oshal_rlib::log!("Auto-paused: reached epoch start");
             }
           }
-          (false, step, fixed_dt_us, ts_write.current_epoch, max_sub_dt_us)
+          (
+            false,
+            step,
+            fixed_dt_us,
+            ts_write.current_epoch,
+            max_sub_dt_us,
+          )
         } else {
           break;
         }
@@ -1571,7 +1584,14 @@ fn execute_simulation_tick(
     }
 
     any_fixed_step = true;
-    if let Err(e) = dispatch_physics_step(scene_id, ctx, step_days, current_epoch, fixed_dt_us, max_sub_dt_us) {
+    if let Err(e) = dispatch_physics_step(
+      scene_id,
+      ctx,
+      step_days,
+      current_epoch,
+      fixed_dt_us,
+      max_sub_dt_us,
+    ) {
       aethervk_oshal_rlib::log!("dispatch_physics_step failed: {:?}", e);
     }
 
@@ -1848,13 +1868,10 @@ const SUN_RADIUS_AU_REFIT: f32 = 0.0046524726_f32;
 /// 4. If displacement > threshold × SOI_km → translate the microframe center
 ///    to the comet's world position, adjust the comet's local position by the
 ///    inverse, and recompute the SOI.
-fn refit_kinematic_microframes(
-  scene_id: u64,
-  ctx: &alloc::sync::Arc<LogicThreadContext>,
-) {
+fn refit_kinematic_microframes(scene_id: u64, ctx: &alloc::sync::Arc<LogicThreadContext>) {
   use crate::scene::{
-    ColliderComponent, ColliderShape, KinematicComponent,
-    ReferenceFrameComponent, ReferenceFrameType, TransformComponent,
+    ColliderComponent, ColliderShape, KinematicComponent, ReferenceFrameComponent,
+    ReferenceFrameType, TransformComponent,
   };
   use aethervk_oshal_rlib::math::vector::{Vector, Vector3};
 
@@ -1893,12 +1910,11 @@ fn refit_kinematic_microframes(
       }
 
       // Get comet local position (in micro-frame km space)
-      let comet_local_pos = match scene
-        .with_component(child_eid, |t: &TransformComponent| t.position)
-      {
-        Some(pos) => pos,
-        None => continue,
-      };
+      let comet_local_pos =
+        match scene.with_component(child_eid, |t: &TransformComponent| t.position) {
+          Some(pos) => pos,
+          None => continue,
+        };
 
       // SOI radius in km: soi_radius_au / frame.scale (where scale = AU/km)
       let soi_km = frame_ref.soi_radius / frame_ref.scale;
@@ -1966,22 +1982,25 @@ fn emit_particles_from_circles(
   tick_seed: u64,
   dt_us: aethervk_oshal_rlib::os::time::timeus_t,
 ) {
+  use crate::scene::{
+    TransformComponent,
+    particles::{ParticleData, ParticleEmitterCirclesComponent, ParticleSystemComponent},
+  };
   use aethervk_oshal_rlib::math::{quaternion::Quaternion, vector::Vector};
-  use crate::scene::{TransformComponent, particles::{ParticleEmitterCirclesComponent, ParticleSystemComponent, ParticleData}};
 
   // Collect emission work so we don't hold the query borrow while writing child components.
   let mut work: alloc::vec::Vec<(
-    crate::scene::EntityId,               // parent entity
+    crate::scene::EntityId, // parent entity
     alloc::vec::Vec<(
-      crate::scene::EntityId,             // child entity
-      [f32; 3],                           // world position
-      [f32; 3],                           // world velocity direction (unit)
-      f32,                                // mass
-      f32,                                // mean_velocity
-      f32,                                // velocity_std_dev
-      u32,                                // particles_per_tick
-      [f32; 4],                           // color
-      u64,                                // ttl (microseconds)
+      crate::scene::EntityId, // child entity
+      [f32; 3],               // world position
+      [f32; 3],               // world velocity direction (unit)
+      f32,                    // mass
+      f32,                    // mean_velocity
+      f32,                    // velocity_std_dev
+      u32,                    // particles_per_tick
+      [f32; 4],               // color
+      u64,                    // ttl (microseconds)
     )>,
   )> = alloc::vec::Vec::new();
 
@@ -2017,7 +2036,9 @@ fn emit_particles_from_circles(
         );
         let world_pos = parent_pos + parent_rot.rotate_vector(scaled_pos);
         let local_n = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
-          local_normal[0], local_normal[1], local_normal[2],
+          local_normal[0],
+          local_normal[1],
+          local_normal[2],
         );
         let world_normal = parent_rot.rotate_vector(local_n);
         let world_n_len = world_normal.length();
@@ -2062,110 +2083,122 @@ fn emit_particles_from_circles(
   let mut rng_state = tick_seed;
   for (_parent_id, circles) in work {
     for (child_id, pos, dir, mass, mean_vel, vel_std, count, color, ttl_us) in circles {
-      scene.with_component_mut(
-        child_id,
-        |psc: &mut ParticleSystemComponent| {
-          // Update render config and TTL from emission circle
-          psc.color = color;
-          if ttl_us > 0 {
-            psc.ttl_us = ttl_us as aethervk_oshal_rlib::os::time::timeus_t;
+      scene.with_component_mut(child_id, |psc: &mut ParticleSystemComponent| {
+        // Update render config and TTL from emission circle
+        psc.color = color;
+        if ttl_us > 0 {
+          psc.ttl_us = ttl_us as aethervk_oshal_rlib::os::time::timeus_t;
+        }
+
+        let mut particles = psc.particles.write();
+
+        // ── 1. Age existing particles and reap expired ones ─────────────
+        // Collect indices of dead slots for reuse during emission.
+        let mut free_slots: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+        let ttl = psc.ttl_us;
+        for (idx, p) in particles.iter_mut().enumerate() {
+          if p.active == 0 {
+            free_slots.push(idx);
+            continue;
           }
-
-          let mut particles = psc.particles.write();
-
-          // ── 1. Age existing particles and reap expired ones ─────────────
-          // Collect indices of dead slots for reuse during emission.
-          let mut free_slots: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
-          let ttl = psc.ttl_us;
-          for (idx, p) in particles.iter_mut().enumerate() {
-            if p.active == 0 {
-              free_slots.push(idx);
-              continue;
-            }
-            // Increment age
-            let age = p.get_age() + dt_us;
-            p.set_age(age);
-            // Check expiry
-            if ttl > 0 && age >= ttl {
-              p.active = 0;
-              free_slots.push(idx);
-            }
+          // Increment age
+          let age = p.get_age() + dt_us;
+          p.set_age(age);
+          // Check expiry
+          if ttl > 0 && age >= ttl {
+            p.active = 0;
+            free_slots.push(idx);
           }
+        }
 
-          // ── 2. Emit new particles, reusing dead slots first ─────────────
-          let max_cap = particles.capacity();
-          let mut free_idx = 0usize;
+        // ── 2. Emit new particles, reusing dead slots first ─────────────
+        let max_cap = particles.capacity();
+        let mut free_idx = 0usize;
 
-          for _ in 0..count {
-            // Simple LCG random for velocity jitter
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let u0 = ((rng_state >> 33) as f32) / (u32::MAX as f32);
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let u1 = ((rng_state >> 33) as f32) / (u32::MAX as f32);
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let u2 = ((rng_state >> 33) as f32) / (u32::MAX as f32);
+        for _ in 0..count {
+          // Simple LCG random for velocity jitter
+          rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+          let u0 = ((rng_state >> 33) as f32) / (u32::MAX as f32);
+          rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+          let u1 = ((rng_state >> 33) as f32) / (u32::MAX as f32);
+          rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+          let u2 = ((rng_state >> 33) as f32) / (u32::MAX as f32);
 
-            // Velocity magnitude: Gaussian(mean_vel, vel_std) via Box-Muller
-            let r = (-2.0 * u0.max(1e-8).ln()).sqrt();
-            let theta = 2.0 * core::f32::consts::PI * u1;
-            let speed = (mean_vel + vel_std * r * theta.cos()).max(0.0);
+          // Velocity magnitude: Gaussian(mean_vel, vel_std) via Box-Muller
+          let r = (-2.0 * u0.max(1e-8).ln()).sqrt();
+          let theta = 2.0 * core::f32::consts::PI * u1;
+          let speed = (mean_vel + vel_std * r * theta.cos()).max(0.0);
 
-            // Cosine-hemisphere jitter around the emission normal
-            let phi = 2.0 * core::f32::consts::PI * u2;
-            let cos_theta_h = (1.0 - u0 * vel_std.min(1.0)).max(0.0).sqrt();
-            let sin_theta_h = (1.0 - cos_theta_h * cos_theta_h).sqrt();
-            let jitter_local = [
-              sin_theta_h * phi.cos(),
-              sin_theta_h * phi.sin(),
-              cos_theta_h,
-            ];
+          // Cosine-hemisphere jitter around the emission normal
+          let phi = 2.0 * core::f32::consts::PI * u2;
+          let cos_theta_h = (1.0 - u0 * vel_std.min(1.0)).max(0.0).sqrt();
+          let sin_theta_h = (1.0 - cos_theta_h * cos_theta_h).sqrt();
+          let jitter_local = [
+            sin_theta_h * phi.cos(),
+            sin_theta_h * phi.sin(),
+            cos_theta_h,
+          ];
 
-            // Build tangent frame around emission normal
-            let n = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(dir[0], dir[1], dir[2]);
-            let mut tangent = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, 0.0, 0.0);
-            if n.dot(tangent).abs() > 0.99 {
-              tangent = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 1.0, 0.0);
-            }
-            let bitangent = n.cross(tangent);
-            let bl = bitangent.length();
-            let bitangent = if bl > 1e-6 { bitangent * (1.0 / bl) } else { tangent };
-            let tangent = bitangent.cross(n);
-            let tl = tangent.length();
-            let tangent = if tl > 1e-6 { tangent * (1.0 / tl) } else { bitangent };
-
-            let world_dir = tangent * jitter_local[0]
-              + bitangent * jitter_local[1]
-              + n * jitter_local[2];
-            let wdl = world_dir.length();
-            let world_dir = if wdl > 1e-6 { world_dir * (1.0 / wdl) } else { n };
-
-            let vel = world_dir * speed;
-
-            let mut p = ParticleData {
-              id_low: 0,
-              id_high: 0,
-              age_low: 0,
-              age_high: 0,
-              position: pos,
-              mass,
-              velocity: [vel.x(), vel.y(), vel.z()],
-              active: 1,
-            };
-            p.set_id(psc.next_id as u64);
-            p.set_age(0);
-            psc.next_id += 1;
-
-            // Prefer reusing a dead slot; otherwise push if under capacity
-            if free_idx < free_slots.len() {
-              particles[free_slots[free_idx]] = p;
-              free_idx += 1;
-            } else if particles.len() < max_cap {
-              particles.push(p);
-            }
-            // else: buffer full and no free slots — skip this particle
+          // Build tangent frame around emission normal
+          let n = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+            dir[0], dir[1], dir[2],
+          );
+          let mut tangent =
+            aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, 0.0, 0.0);
+          if n.dot(tangent).abs() > 0.99 {
+            tangent =
+              aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 1.0, 0.0);
           }
-        },
-      );
+          let bitangent = n.cross(tangent);
+          let bl = bitangent.length();
+          let bitangent = if bl > 1e-6 {
+            bitangent * (1.0 / bl)
+          } else {
+            tangent
+          };
+          let tangent = bitangent.cross(n);
+          let tl = tangent.length();
+          let tangent = if tl > 1e-6 {
+            tangent * (1.0 / tl)
+          } else {
+            bitangent
+          };
+
+          let world_dir =
+            tangent * jitter_local[0] + bitangent * jitter_local[1] + n * jitter_local[2];
+          let wdl = world_dir.length();
+          let world_dir = if wdl > 1e-6 {
+            world_dir * (1.0 / wdl)
+          } else {
+            n
+          };
+
+          let vel = world_dir * speed;
+
+          let mut p = ParticleData {
+            id_low: 0,
+            id_high: 0,
+            age_low: 0,
+            age_high: 0,
+            position: pos,
+            mass,
+            velocity: [vel.x(), vel.y(), vel.z()],
+            active: 1,
+          };
+          p.set_id(psc.next_id as u64);
+          p.set_age(0);
+          psc.next_id += 1;
+
+          // Prefer reusing a dead slot; otherwise push if under capacity
+          if free_idx < free_slots.len() {
+            particles[free_slots[free_idx]] = p;
+            free_idx += 1;
+          } else if particles.len() < max_cap {
+            particles.push(p);
+          }
+          // else: buffer full and no free slots — skip this particle
+        }
+      });
     }
   }
 }

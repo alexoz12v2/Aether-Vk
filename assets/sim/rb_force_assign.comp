@@ -28,7 +28,7 @@
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
 
-layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant, std430) uniform PushConstants {
     RigidBodyArray rigid_bodies;
@@ -37,42 +37,62 @@ layout(push_constant, std430) uniform PushConstants {
     uint _pad;
 } pc;
 
-const uint SUBGROUPS_PER_WG_RFA = 128u / SUBGROUP_SIZE;
-shared vec3 sh_f[SUBGROUPS_PER_WG_RFA];
-shared vec3 sh_t[SUBGROUPS_PER_WG_RFA];
+shared vec3 sh_f[32];
+shared vec3 sh_t[32];
 
 void main() {
     uint body_id = gl_WorkGroupID.x;
     if (body_id >= pc.n_bodies) return;
 
     uint local_id = gl_LocalInvocationID.x;
-    uint sg_id    = gl_SubgroupID;
     uint sg_lane  = gl_SubgroupInvocationID;
 
     RigidBody body = pc.rigid_bodies.bodies[body_id];
     uint leaf_start = body.leaf_start_idx, leaf_count = body.leaf_count, com_wrench = body.wrench_idx;
 
-    vec3 acc_f = vec3(0.0), acc_t = vec3(0.0);
-
-    for (uint i = local_id; i < leaf_count; i += 128u) {
-        Wrench lw = pc.wrenches.wrenches[leaf_start + i];
-        acc_f += vec3(uintBitsToFloat(lw.force_x), uintBitsToFloat(lw.force_y), uintBitsToFloat(lw.force_z));
-        acc_t += vec3(uintBitsToFloat(lw.torque_x), uintBitsToFloat(lw.torque_y), uintBitsToFloat(lw.torque_z));
+    vec3 acc_f = vec3(0.0);
+    vec3 acc_t = vec3(0.0);
+    for (uint i = local_id; i < leaf_count; i += gl_WorkGroupSize.x) {
+        uint leaf_idx = leaf_start + i;
+        Wrench w = pc.wrenches.wrenches[leaf_idx];
+        acc_f += vec3(uintBitsToFloat(w.force_x), uintBitsToFloat(w.force_y), uintBitsToFloat(w.force_z));
+        acc_t += vec3(uintBitsToFloat(w.torque_x), uintBitsToFloat(w.torque_y), uintBitsToFloat(w.torque_z));
+        // Clear the leaf wrench after reading — prevents force accumulation
+        // across frames (collision/gravity forces are re-written each frame).
+        pc.wrenches.wrenches[leaf_idx].force_x  = 0u;
+        pc.wrenches.wrenches[leaf_idx].force_y  = 0u;
+        pc.wrenches.wrenches[leaf_idx].force_z  = 0u;
+        pc.wrenches.wrenches[leaf_idx].torque_x = 0u;
+        pc.wrenches.wrenches[leaf_idx].torque_y = 0u;
+        pc.wrenches.wrenches[leaf_idx].torque_z = 0u;
     }
 
-    acc_f.x = subgroupAdd(acc_f.x); acc_f.y = subgroupAdd(acc_f.y); acc_f.z = subgroupAdd(acc_f.z);
-    acc_t.x = subgroupAdd(acc_t.x); acc_t.y = subgroupAdd(acc_t.y); acc_t.z = subgroupAdd(acc_t.z);
-
-    if (sg_lane == 0u) { sh_f[sg_id] = acc_f; sh_t[sg_id] = acc_t; }
-
+    acc_f = subgroupAdd(acc_f);
+    acc_t = subgroupAdd(acc_t);
+    if (gl_SubgroupInvocationID == 0) {
+        sh_f[gl_SubgroupID] = acc_f;
+        sh_t[gl_SubgroupID] = acc_t;
+    }
     barrier();
 
-    if (local_id == 0u) {
-        vec3 total_f = vec3(0.0), total_t = vec3(0.0);
-        for (uint s = 0u; s < SUBGROUPS_PER_WG_RFA; ++s) {
-            total_f += sh_f[s]; total_t += sh_t[s];
+    if (gl_LocalInvocationIndex == 0) {
+        acc_f = vec3(0.0);
+        acc_t = vec3(0.0);
+        for (uint i = 0; i < gl_NumSubgroups; ++i) {
+            acc_f += sh_f[i];
+            acc_t += sh_t[i];
         }
-        ADD_LINEAR_FORCE(pc.wrenches.wrenches[com_wrench], total_f);
-        ADD_TORQUE      (pc.wrenches.wrenches[com_wrench], total_t);
+
+        Wrench dest = pc.wrenches.wrenches[com_wrench];
+        
+        vec3 final_f = vec3(uintBitsToFloat(dest.force_x), uintBitsToFloat(dest.force_y), uintBitsToFloat(dest.force_z)) + acc_f;
+        vec3 final_t = vec3(uintBitsToFloat(dest.torque_x), uintBitsToFloat(dest.torque_y), uintBitsToFloat(dest.torque_z)) + acc_t;
+        
+        pc.wrenches.wrenches[com_wrench].force_x  = floatBitsToUint(final_f.x);
+        pc.wrenches.wrenches[com_wrench].force_y  = floatBitsToUint(final_f.y);
+        pc.wrenches.wrenches[com_wrench].force_z  = floatBitsToUint(final_f.z);
+        pc.wrenches.wrenches[com_wrench].torque_x = floatBitsToUint(final_t.x);
+        pc.wrenches.wrenches[com_wrench].torque_y = floatBitsToUint(final_t.y);
+        pc.wrenches.wrenches[com_wrench].torque_z = floatBitsToUint(final_t.z);
     }
 }

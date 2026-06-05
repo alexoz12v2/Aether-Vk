@@ -79,7 +79,7 @@ Face create_face_poly(MinkowskiPoint points[16], int a, int b, int c) {
 
 vec3 support_shape(uint shape_type, vec3 shape_data, mat4 transform, vec3 dir);
 
-void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, uint type2, vec3 data2, mat4 trans2, out float dist, out vec3 p_a, out vec3 p_b) {
+void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, uint type2, vec3 data2, mat4 trans2, out float dist, out vec3 p_a, out vec3 p_b, out vec3 epa_normal) {
     MinkowskiPoint polytope_points[16];
     int polytope_count = simplex.count;
     for(int i = 0; i < simplex.count; i++) {
@@ -144,6 +144,7 @@ void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, ui
             float u = 1.0 - v - w;
             
             dist = -min_dist;
+            epa_normal = closest_face.normal;
             p_a = a.point_a * u + b.point_a * v + c.point_a * w;
             p_b = a.point_b * u + b.point_b * v + c.point_b * w;
             return;
@@ -203,6 +204,7 @@ void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, ui
     MinkowskiPoint b = polytope_points[closest_face.b];
     MinkowskiPoint c = polytope_points[closest_face.c];
     dist = -closest_face.distance;
+    epa_normal = closest_face.normal;
     p_a = a.point_a * 0.333 + b.point_a * 0.333 + c.point_a * 0.334;
     p_b = a.point_b * 0.333 + b.point_b * 0.333 + c.point_b * 0.334;
 }
@@ -384,7 +386,7 @@ vec3 support_shape(uint shape_type, vec3 shape_data, mat4 transform, vec3 dir) {
     return (transform * vec4(result, 1.0)).xyz;
 }
 
-float gjk_distance_generic(uint type1, vec3 data1, mat4 trans1, uint type2, vec3 data2, mat4 trans2, out vec3 p_a, out vec3 p_b) {
+float gjk_distance_generic(uint type1, vec3 data1, mat4 trans1, uint type2, vec3 data2, mat4 trans2, out vec3 p_a, out vec3 p_b, out vec3 epa_normal) {
     vec3 dir = vec3(1.0, 0.0, 0.0);
     
     vec3 support_a = support_shape(type1, data1, trans1, -dir);
@@ -421,7 +423,7 @@ float gjk_distance_generic(uint type1, vec3 data1, mat4 trans1, uint type2, vec3
         if (do_simplex(simplex, dir)) {
             // Origin is enclosed, they intersect! Use EPA.
             float dist_out;
-            epa_distance(simplex, type1, data1, trans1, type2, data2, trans2, dist_out, p_a, p_b);
+            epa_distance(simplex, type1, data1, trans1, type2, data2, trans2, dist_out, p_a, p_b, epa_normal);
             return dist_out;
         }
         
@@ -437,6 +439,7 @@ float gjk_distance_generic(uint type1, vec3 data1, mat4 trans1, uint type2, vec3
     }
     
     compute_closest_points(simplex, p_a, p_b);
+    epa_normal = vec3(0.0); // No overlap, EPA normal not applicable
     return length(p_a - p_b);
 }
 
@@ -549,14 +552,16 @@ bool compute_toi_generic(
     float v_rel_max = length(v_rel);
     
     if (v_rel_max < 1e-6) {
-        vec3 p_a, p_b;
-        float dist = gjk_distance_generic(type1, data1, trans1_start, type2, data2, trans2_start, p_a, p_b);
+        vec3 p_a, p_b, epa_n;
+        float dist = gjk_distance_generic(type1, data1, trans1_start, type2, data2, trans2_start, p_a, p_b, epa_n);
         if (dist <= 0.0) {
             out_toi = 0.0;
             out_depth = dist < 0.0 ? -dist : 0.0;
-            vec3 n = p_b - p_a;
-            float n_len = length(n);
-            out_normal = n_len > 1e-6 ? n / n_len : vec3(1.0, 0.0, 0.0);
+            // EPA normal points outward from origin of Minkowski diff (A-B),
+            // i.e. from B towards A. Negate it so it points from A to B,
+            // matching the LCP solver convention (v_rel = v_B - v_A).
+            float epa_len = length(epa_n);
+            out_normal = epa_len > 1e-6 ? -epa_n / epa_len : vec3(1.0, 0.0, 0.0);
             out_contact_point = (p_a + p_b) * 0.5;
             return true;
         }
@@ -570,15 +575,22 @@ bool compute_toi_generic(
         mat4 cur_trans2 = trans2_start;
         cur_trans2[3].xyz += v2 * t;
         
-        vec3 p_a, p_b;
-        float dist = gjk_distance_generic(type1, data1, cur_trans1, type2, data2, cur_trans2, p_a, p_b);
+        vec3 p_a, p_b, epa_n;
+        float dist = gjk_distance_generic(type1, data1, cur_trans1, type2, data2, cur_trans2, p_a, p_b, epa_n);
         
         if (dist <= time_tolerance) {
             out_toi = t;
             out_depth = dist < 0.0 ? -dist : 0.0;
-            vec3 n = p_b - p_a;
-            float n_len = length(n);
-            out_normal = n_len > 1e-6 ? n / n_len : vec3(1.0, 0.0, 0.0);
+            // When GJK detected overlap (dist < 0), use the EPA face normal.
+            // EPA normal points from B towards A (outward from Minkowski
+            // origin); negate so it points from A to B for the LCP solver.
+            if (dist < 0.0 && length(epa_n) > 1e-6) {
+                out_normal = -normalize(epa_n);
+            } else {
+                vec3 n = p_b - p_a;
+                float n_len = length(n);
+                out_normal = n_len > 1e-6 ? n / n_len : vec3(1.0, 0.0, 0.0);
+            }
             out_contact_point = (p_a + p_b) * 0.5;
             return true;
         }

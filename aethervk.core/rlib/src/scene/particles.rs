@@ -138,9 +138,9 @@ impl ParticleSystemComponent {
       bvh: None,
       accumulator: 0,
       next_id: 0,
-      particle_radius: 0.01,         // 10 m default
-      color: [1.0, 1.0, 1.0, 1.0],   // white default
-      ttl_us: 0,                      // 0 = never expire (set from EmissionCircle.ttl)
+      particle_radius: 0.01,       // 10 m default
+      color: [1.0, 1.0, 1.0, 1.0], // white default
+      ttl_us: 0,                   // 0 = never expire (set from EmissionCircle.ttl)
     }
   }
 
