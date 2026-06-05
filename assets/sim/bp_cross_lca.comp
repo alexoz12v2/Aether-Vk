@@ -32,7 +32,7 @@ layout(push_constant, std430) uniform PushConstants {
     uint max_pairs;
 } pc;
 
-shared uint shared_stacks[SUBGROUPS_PER_WG][128];
+shared uint shared_stacks[SUBGROUPS_PER_WG][BVH_STACK_DEPTH];
 shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
 shared uvec2 shared_lca_bvh_addr[SUBGROUPS_PER_WG];
 
@@ -178,7 +178,10 @@ void main() {
         uint  node_count  = subgroupBallotBitCount(node_ballot);
         uint  push_offset = subgroupBallotExclusiveBitCount(node_ballot);
 
-        if (hit_node) shared_stacks[subgroup_id][stack_ptr + push_offset] = child_payload;
-        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr + node_count;
+        // Guard against stack overflow — drop nodes that would exceed depth
+        uint new_top = min(stack_ptr + node_count, BVH_STACK_DEPTH);
+        if (hit_node && (stack_ptr + push_offset) < BVH_STACK_DEPTH)
+            shared_stacks[subgroup_id][stack_ptr + push_offset] = child_payload;
+        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = new_top;
     }
 }
