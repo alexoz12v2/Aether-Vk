@@ -647,20 +647,43 @@ pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
     }
 
     let size = stat_buf.st_size as usize;
-    let mut buffer = Vec::with_capacity(size);
+    let initial_size = if size > 0 { size } else { 4096 };
+    let mut buffer: Vec<u8> = Vec::with_capacity(initial_size);
 
-    let bytes_read = unsafe { libc::read(fd, buffer.as_mut_ptr() as _, size) };
+    loop {
+      if buffer.len() == buffer.capacity() {
+        buffer.reserve(4096);
+      }
+      let capacity_left = buffer.capacity() - buffer.len();
+
+      let bytes_read = unsafe {
+        libc::read(
+          fd,
+          buffer.as_mut_ptr().add(buffer.len()) as _,
+          capacity_left,
+        )
+      };
+
+      if bytes_read < 0 {
+        unsafe { close(fd) };
+        return Err(FsError::CouldNotReadFile);
+      }
+
+      if bytes_read == 0 {
+        break;
+      }
+
+      unsafe {
+        let new_len = buffer.len() + bytes_read as usize;
+        buffer.set_len(new_len);
+      }
+    }
 
     unsafe {
-      buffer.set_len(bytes_read as usize);
       close(fd);
     }
 
-    if bytes_read < 0 {
-      Err(FsError::CouldNotReadFile)
-    } else {
-      Ok(buffer)
-    }
+    Ok(buffer)
   }
 }
 

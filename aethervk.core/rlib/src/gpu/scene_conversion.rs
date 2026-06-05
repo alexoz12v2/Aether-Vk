@@ -81,8 +81,8 @@ pub struct DepthLayerData {
   pub particles: Vec<(
     EntityId,
     alloc::sync::Weak<parking_lot::RwLock<Vec<crate::scene::particles::ParticleData>>>,
-    f32,       // particle_radius
-    [f32; 4],  // color
+    f32,      // particle_radius
+    [f32; 4], // color
   )>,
   pub gizmos: Vec<(EntityId, Mat4x4f32, f32)>,
   pub sphere_gizmos: Vec<(EntityId, Mat4x4f32, f32, f32)>,
@@ -594,8 +594,8 @@ impl SceneConversionExt for crate::scene::Scene {
     let mut extracted_particles: Vec<(
       EntityId,
       alloc::sync::Weak<parking_lot::RwLock<Vec<crate::scene::particles::ParticleData>>>,
-      f32,       // particle_radius
-      [f32; 4],  // color
+      f32,      // particle_radius
+      [f32; 4], // color
     )> = Vec::with_capacity(START_VEC_CAPACITY);
     let mut extracted_gizmos: Vec<(EntityId, Mat4x4f32, f32)> =
       Vec::with_capacity(START_VEC_CAPACITY);
@@ -1079,11 +1079,14 @@ impl SceneConversionExt for crate::scene::Scene {
         if gizmo.is_visible {
           if let Some(hrt) = self.get_relative_transform_f64(id, camera_entity) {
             // Check if this entity has a rotational model override for gizmo orientation
-            let iau_override: Option<crate::scene::BodyRotationalModel> = julian_date.and_then(|_jd| {
-              self.with_component(id, |m: &crate::scene::PhysicalMeshComponent| {
-                m.rotational_model
-              }).flatten()
-            });
+            let iau_override: Option<crate::scene::BodyRotationalModel> =
+              julian_date.and_then(|_jd| {
+                self
+                  .with_component(id, |m: &crate::scene::PhysicalMeshComponent| {
+                    m.rotational_model
+                  })
+                  .flatten()
+              });
 
             let gizmo_model = if let (Some(rot_model), Some(jd)) = (iau_override, julian_date) {
               // Use position from relative transform, but rotation from IAU model
@@ -1516,11 +1519,14 @@ impl SceneConversionExt for crate::scene::Scene {
                 let rte_pos = (hrt.position - cam_f64.position).to_f32();
 
                 // Check if this entity has a rotational model override for gizmo orientation
-                let iau_override: Option<crate::scene::BodyRotationalModel> = julian_date.and_then(|_jd| {
-                  self.with_component(entity_id, |m: &crate::scene::PhysicalMeshComponent| {
-                    m.rotational_model
-                  }).flatten()
-                });
+                let iau_override: Option<crate::scene::BodyRotationalModel> =
+                  julian_date.and_then(|_jd| {
+                    self
+                      .with_component(entity_id, |m: &crate::scene::PhysicalMeshComponent| {
+                        m.rotational_model
+                      })
+                      .flatten()
+                  });
 
                 if let (Some(rot_model), Some(jd)) = (iau_override, julian_date) {
                   // Use position from relative transform, but rotation from IAU model

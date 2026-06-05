@@ -181,7 +181,6 @@ impl<T, F: FnMut(T)> core::ops::DerefMut for AutoDiscard<T, F> {
 /// be dispatched inside the pool as a singleton tasklet.
 ///
 /// - we expect the physical_scene to contain BVH of entities with state at $t_0$
-#[allow(deprecated)] // step_ode_* kept as fallback during migration
 pub fn simulation_step<K>(
   kernels: &K,
   physical_scene: &mut PhysicsScene,
@@ -278,7 +277,7 @@ where
     kernels.build_kinematic_bodies(&mut cmd, physical_scene, scene)?,
     |b| kernels.discard_buffer(b),
   );
-  let (rb_buf, wr_buf) = kernels.build_rigid_bodies(&mut cmd, physical_scene, scene)?;
+  let (rb_buf, wr_buf, n_bodies) = kernels.build_rigid_bodies(&mut cmd, physical_scene, scene)?;
   let mut rigid_bodies = AutoDiscard::new(rb_buf, |b| kernels.discard_buffer(b));
   let mut wrenches = AutoDiscard::new(wr_buf, |b| kernels.discard_buffer(b));
   let (p_buf, particle_metadata) = kernels.build_particles(&mut cmd, scene)?;
@@ -289,7 +288,8 @@ where
     kernels.build_particle_frame_ids(&mut cmd, &particle_metadata)?,
     |b| kernels.discard_buffer(b),
   );
-  let emitters = AutoDiscard::new(kernels.build_emitters(&mut cmd, scene)?, |b| {
+  let (emitters_buf, n_emitters) = kernels.build_emitters(&mut cmd, scene)?;
+  let emitters = AutoDiscard::new(emitters_buf, |b| {
     kernels.discard_buffer(b)
   });
   // Reference frames for LCA broad-phase (macro frame is always index 0)
@@ -344,7 +344,7 @@ where
       sync!("imex_integrate_particles_p1_p2");
 
       // RB: accumulate forces then IMR solve
-      kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches)?;
+      kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches, n_bodies)?;
       sync!("imex_rb_force_assign");
 
       kernels.imex_integrate_bodies_p3(
@@ -353,6 +353,8 @@ where
         &mut wrenches,
         &emitters,
         &frames,
+        n_bodies,
+        n_emitters,
         sub_dt,
       )?;
       sync!("imex_integrate_bodies_p3");
@@ -374,7 +376,7 @@ where
         &emitters,
         &frames,
         &particle_frame_ids,
-        emitters.capacity() as u32,
+        n_emitters,
       )?;
       sync!("apply_emitters_to_particles");
 
@@ -403,7 +405,7 @@ where
         // ── IMEX integration to t_{n+1} ──
         kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, dt)?;
         aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_rb_force_assign");
-        kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches)?;
+        kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches, n_bodies)?;
         aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_integrate_bodies_p3");
         kernels.imex_integrate_bodies_p3(
           &mut cmd,
@@ -411,6 +413,8 @@ where
           &mut wrenches,
           &emitters,
           &frames,
+          n_bodies,
+          n_emitters,
           dt,
         )?;
 
@@ -426,7 +430,7 @@ where
           &emitters,
           &frames,
           &particle_frame_ids,
-          emitters.capacity() as u32,
+          n_emitters,
         )?;
         kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, dt, current_time)?;
 
@@ -758,13 +762,15 @@ where
 
           // Re-integrate to t_c
           kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, t_c)?;
-          kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches)?;
+          kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches, n_bodies)?;
           kernels.imex_integrate_bodies_p3(
             &mut cmd,
             &mut rigid_bodies,
             &mut wrenches,
             &emitters,
             &frames,
+            n_bodies,
+            n_emitters,
             t_c,
           )?;
 
@@ -779,7 +785,7 @@ where
             &emitters,
             &frames,
             &particle_frame_ids,
-            emitters.capacity() as u32,
+            n_emitters,
           )?;
           kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, t_c, current_time)?;
 
@@ -799,13 +805,15 @@ where
             let remaining_dt = dt - t_c;
             if remaining_dt > 0 {
               kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, remaining_dt)?;
-              kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches)?;
+              kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches, n_bodies)?;
               kernels.imex_integrate_bodies_p3(
                 &mut cmd,
                 &mut rigid_bodies,
                 &mut wrenches,
                 &emitters,
                 &frames,
+                n_bodies,
+                n_emitters,
                 remaining_dt,
               )?;
               let final_bvh = kernels.build_motion_bvh(
@@ -822,7 +830,7 @@ where
                 &emitters,
                 &frames,
                 &particle_frame_ids,
-                emitters.capacity() as u32,
+                n_emitters,
               )?;
               kernels.imex_integrate_particles_p4_5(
                 &mut cmd,

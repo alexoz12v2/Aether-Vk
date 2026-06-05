@@ -19,3 +19,6 @@ mod vulkan_integration_tests;
 
 #[cfg(test)]
 mod kernels_integration_test;
+
+#[cfg(test)]
+mod vulkan_math_tests;

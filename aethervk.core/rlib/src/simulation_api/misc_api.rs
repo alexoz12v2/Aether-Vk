@@ -30,9 +30,7 @@ impl SimulationContext {
   }
 
   /// TODO: Document this item
-  pub fn set_simulation_callback(
-    cb: Option<crate::simulation_api::SimulationCallback>,
-  ) {
+  pub fn set_simulation_callback(cb: Option<crate::simulation_api::SimulationCallback>) {
     *crate::simulation_api::SIMULATION_CALLBACK.write() = cb;
   }
 

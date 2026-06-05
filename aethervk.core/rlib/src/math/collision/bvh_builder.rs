@@ -218,7 +218,8 @@ where
     if depth < 64 {
       for &axis in &axes {
         // TODO: Split by using AABB if current level is AABB, otherwise use OBB
-        if let Some(idx) = self.try_sah_split(triangles, indices, axis, min_centroid, max_centroid) {
+        if let Some(idx) = self.try_sah_split(triangles, indices, axis, min_centroid, max_centroid)
+        {
           split_index = idx;
           found_split = true;
           break;

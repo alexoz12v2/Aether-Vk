@@ -152,6 +152,7 @@ impl RootBoundsBvh {
   }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct CollisionEvent {
   pub entity_a_id: u32,
@@ -176,6 +177,7 @@ pub struct PhysicsScene {
   pub mesh_entity_map: Vec<u32>,
   pub particle_entity_map: Vec<u32>,
   pub dt_s: f32,
+  #[cfg(test)]
   pub recent_collisions: Vec<CollisionEvent>,
 }
 
@@ -384,6 +386,7 @@ impl PhysicsScene {
       mesh_entity_map,
       particle_entity_map,
       dt_s,
+      #[cfg(test)]
       recent_collisions: alloc::vec::Vec::new(),
     }
   }

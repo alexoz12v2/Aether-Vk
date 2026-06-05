@@ -60,15 +60,21 @@ impl SimulationContext {
       addr_of_mut!((*ptr).texture_cache).write(Arc::clone(&texture_cache));
 
       let mut mixer = crate::audio::AudioMixer::new(44100);
-      
+
       // Pre-load UI sound assets into the lock-free mixer buffers
-      let click = crate::audio::SoundBuffer::from_wav_bytes(include_bytes!("../../../../assets/sounds/ui_click.wav"));
+      let click = crate::audio::SoundBuffer::from_wav_bytes(include_bytes!(
+        "../../../../assets/sounds/ui_click.wav"
+      ));
       mixer.load_buffer(click); // AvkSoundEvent::Click == 0
-      
-      let grab = crate::audio::SoundBuffer::from_wav_bytes(include_bytes!("../../../../assets/sounds/ui_grab.wav"));
+
+      let grab = crate::audio::SoundBuffer::from_wav_bytes(include_bytes!(
+        "../../../../assets/sounds/ui_grab.wav"
+      ));
       mixer.load_buffer(grab); // AvkSoundEvent::UiGrab == 1
-      
-      let drop = crate::audio::SoundBuffer::from_wav_bytes(include_bytes!("../../../../assets/sounds/ui_drop.wav"));
+
+      let drop = crate::audio::SoundBuffer::from_wav_bytes(include_bytes!(
+        "../../../../assets/sounds/ui_drop.wav"
+      ));
       mixer.load_buffer(drop); // AvkSoundEvent::UiDrop == 2
 
       let audio_mixer = Arc::new(RwLock::new(mixer));

@@ -855,11 +855,14 @@ impl SimulationContext {
             friction: 0.6,
           },
         )?;
-        scene_ctx.scene.add_component(comet_id, KinematicComponent {
-          velocity: Vec3f32::zero(),
-          angular_velocity,
-          use_model_rotation: rotational_model.is_some(),
-        })?;
+        scene_ctx.scene.add_component(
+          comet_id,
+          KinematicComponent {
+            velocity: Vec3f32::zero(),
+            angular_velocity,
+            use_model_rotation: rotational_model.is_some(),
+          },
+        )?;
         // For Kinematic bodies, position is driven by the Almanac.
         scene_ctx.scene.add_component(
           comet_id,
@@ -1109,7 +1112,9 @@ pub fn compute_bounding_sphere_radius(vertices: &[crate::simulation::comet::Vert
 // TODO probably to move in scene.rs in rlib
 /// TODO: Document this item
 pub(crate) fn empty_scene_object(
-  texture_cache: alloc::sync::Arc<parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>>,
+  texture_cache: alloc::sync::Arc<
+    parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>,
+  >,
 ) -> EngineResult<(Scene, EntityId)> {
   let scene = Scene::new(texture_cache);
   scene.register_all_crate_components();

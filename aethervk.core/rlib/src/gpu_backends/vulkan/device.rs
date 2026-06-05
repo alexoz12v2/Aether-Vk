@@ -7549,25 +7549,17 @@ impl RenderDevice for Device {
       .as_mut()
       .ok_or(gpu_err!("BVH box data: staging arena missing"))?;
 
-    let (offset, ptr) = arena
-      .allocate(data_size, 4)
-      .ok_or(GpuError::OutOfMemory)?;
+    let (offset, ptr) = arena.allocate(data_size, 4).ok_or(GpuError::OutOfMemory)?;
 
     unsafe {
-      core::ptr::copy_nonoverlapping(
-        data as *const _ as *const u8,
-        ptr,
-        data_size,
-      );
+      core::ptr::copy_nonoverlapping(data as *const _ as *const u8, ptr, data_size);
     }
 
     let base_addr = unsafe {
       self
         .device
         .buffer_device_address
-        .get_buffer_device_address(
-          &vk::BufferDeviceAddressInfo::default().buffer(arena.buffer),
-        )
+        .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(arena.buffer))
     };
 
     Ok(base_addr + offset as u64)
@@ -7588,25 +7580,17 @@ impl RenderDevice for Device {
       .as_mut()
       .ok_or(gpu_err!("Mesh push extra: staging arena missing"))?;
 
-    let (offset, ptr) = arena
-      .allocate(data_size, 8)
-      .ok_or(GpuError::OutOfMemory)?;
+    let (offset, ptr) = arena.allocate(data_size, 8).ok_or(GpuError::OutOfMemory)?;
 
     unsafe {
-      core::ptr::copy_nonoverlapping(
-        data as *const _ as *const u8,
-        ptr,
-        data_size,
-      );
+      core::ptr::copy_nonoverlapping(data as *const _ as *const u8, ptr, data_size);
     }
 
     let base_addr = unsafe {
       self
         .device
         .buffer_device_address
-        .get_buffer_device_address(
-          &vk::BufferDeviceAddressInfo::default().buffer(arena.buffer),
-        )
+        .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(arena.buffer))
     };
 
     Ok(base_addr + offset as u64)
@@ -7630,25 +7614,17 @@ impl RenderDevice for Device {
       .as_mut()
       .ok_or(gpu_err!("Minimap planets: staging arena missing"))?;
 
-    let (offset, ptr) = arena
-      .allocate(data_size, 4)
-      .ok_or(GpuError::OutOfMemory)?;
+    let (offset, ptr) = arena.allocate(data_size, 4).ok_or(GpuError::OutOfMemory)?;
 
     unsafe {
-      core::ptr::copy_nonoverlapping(
-        planets.as_ptr() as *const u8,
-        ptr,
-        data_size,
-      );
+      core::ptr::copy_nonoverlapping(planets.as_ptr() as *const u8, ptr, data_size);
     }
 
     let base_addr = unsafe {
       self
         .device
         .buffer_device_address
-        .get_buffer_device_address(
-          &vk::BufferDeviceAddressInfo::default().buffer(arena.buffer),
-        )
+        .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(arena.buffer))
     };
 
     Ok(base_addr + offset as u64)

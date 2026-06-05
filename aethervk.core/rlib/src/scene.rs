@@ -37,8 +37,8 @@ use aethervk_oshal_rlib::{
 use alloc::{boxed::Box, string::String, vec::Vec};
 use core::any::{Any, TypeId};
 use hashbrown::{HashMap, HashSet};
-use slotmap::{SlotMap, new_key_type};
 use parking_lot::RwLock;
+use slotmap::{SlotMap, new_key_type};
 use thiserror::Error;
 
 pub mod almanac_planet;
@@ -656,18 +656,13 @@ impl BodyRotationalModel {
       Vec3f32::from_components(1.0, 0.0, 0.0),
       (core::f64::consts::FRAC_PI_2 - dec) as f32,
     );
-    let q_w = Quat::from_axis_angle(
-      Vec3f32::from_components(0.0, 0.0, 1.0),
-      w as f32,
-    );
+    let q_w = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), w as f32);
 
     let q_body_to_icrf = q_ra * q_dec * q_w;
 
     // Step 2: Convert ICRF → ECLIPJ2000 by pre-multiplying with Rx(ε)
-    let q_obliquity = Quat::from_axis_angle(
-      Vec3f32::from_components(1.0, 0.0, 0.0),
-      Self::OBLIQUITY_RAD,
-    );
+    let q_obliquity =
+      Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), Self::OBLIQUITY_RAD);
 
     (q_obliquity * q_body_to_icrf).normalize()
   }
@@ -1359,7 +1354,8 @@ pub struct Scene {
   component_meta: RwLock<HashMap<TypeId, ComponentMeta>>,
   hierarchy: RwLock<SceneHierarchy>,
   names: RwLock<HashMap<EntityId, String>>,
-  pub texture_cache: alloc::sync::Arc<parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>>,
+  pub texture_cache:
+    alloc::sync::Arc<parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>>,
 }
 
 impl Clone for Scene {
@@ -1440,7 +1436,9 @@ impl Into<bool> for HasComponentResultEnum {
 impl Scene {
   /// TODO: Document this item
   pub fn new(
-    texture_cache: alloc::sync::Arc<parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>>,
+    texture_cache: alloc::sync::Arc<
+      parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>,
+    >,
   ) -> Self {
     let empty_archetype = Archetype {
       components: HashMap::new(),
@@ -1499,7 +1497,9 @@ impl Scene {
     let mut accumulated = 1.0_f32;
     let mut depth = 0;
     loop {
-      if depth > 128 { break; }
+      if depth > 128 {
+        break;
+      }
       depth += 1;
       if let Some(scale) = self.with_component(current, |c: &ReferenceFrameComponent| c.scale) {
         accumulated *= scale;
@@ -1518,7 +1518,9 @@ impl Scene {
     let mut current = entity;
     let mut depth = 0;
     loop {
-      if depth > 128 { break; }
+      if depth > 128 {
+        break;
+      }
       depth += 1;
       if let Some(layer) = self.with_component(current, |c: &ReferenceFrameComponent| c.depth_layer)
       {
@@ -2863,7 +2865,10 @@ impl Scene {
     C: FnMut(&Scene, EntityId, &mut A) -> bool,
   {
     if depth > 128 {
-      aethervk_oshal_rlib::log!("Warning: max depth exceeded in traverse_recursive for entity {:?}", current_entity);
+      aethervk_oshal_rlib::log!(
+        "Warning: max depth exceeded in traverse_recursive for entity {:?}",
+        current_entity
+      );
       return;
     }
     if !visited.insert(current_entity) {
@@ -2926,7 +2931,10 @@ impl Scene {
     T: Component,
   {
     if depth > 128 {
-      aethervk_oshal_rlib::log!("Warning: max depth exceeded in traverse_with_hooks_recursive for entity {:?}", current_entity);
+      aethervk_oshal_rlib::log!(
+        "Warning: max depth exceeded in traverse_with_hooks_recursive for entity {:?}",
+        current_entity
+      );
       return;
     }
     if !visited.insert(current_entity) {
@@ -2957,7 +2965,14 @@ impl Scene {
 
     if let Some(children) = children_clone {
       for &child in &children {
-        self.traverse_with_hooks_recursive(child, accumulator, pre_visit, post_visit, visited, depth + 1);
+        self.traverse_with_hooks_recursive(
+          child,
+          accumulator,
+          pre_visit,
+          post_visit,
+          visited,
+          depth + 1,
+        );
       }
     }
 
@@ -2975,7 +2990,9 @@ impl Scene {
     let mut depth = 0;
 
     loop {
-      if depth > 128 { break; }
+      if depth > 128 {
+        break;
+      }
       depth += 1;
       let parent_opt = {
         let hierarchy = self.hierarchy.read();
@@ -3020,7 +3037,9 @@ impl Scene {
     let mut depth = 0;
 
     loop {
-      if depth > 128 { return Some((accumulated_transform, None)); }
+      if depth > 128 {
+        return Some((accumulated_transform, None));
+      }
       depth += 1;
       let parent_opt = {
         let hierarchy = self.hierarchy.read();
@@ -3073,7 +3092,16 @@ impl Scene {
     let mut depth = 0;
 
     loop {
-      if depth > 128 { return Some((HighResTransformComponent { position: acc_pos, rotation: acc_rot, scale: acc_scale }, None)); }
+      if depth > 128 {
+        return Some((
+          HighResTransformComponent {
+            position: acc_pos,
+            rotation: acc_rot,
+            scale: acc_scale,
+          },
+          None,
+        ));
+      }
       depth += 1;
       let parent_opt = {
         let hierarchy = self.hierarchy.read();
@@ -3331,7 +3359,9 @@ impl Scene {
     let mut depth = 0;
 
     loop {
-      if depth > 128 { break; }
+      if depth > 128 {
+        break;
+      }
       depth += 1;
       let parent_opt = {
         let hierarchy = self.hierarchy.read();

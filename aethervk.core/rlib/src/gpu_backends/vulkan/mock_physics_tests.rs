@@ -19,10 +19,10 @@ use crate::{
   },
   types::EngineResult,
 };
-use vk_mem::AsAllocatorView;
 use aethervk_oshal_rlib::math::vector::vec3::Vec3f32;
 use alloc::sync::Arc;
 use parking_lot::RwLock;
+use vk_mem::AsAllocatorView;
 
 /// Helper function to create a reusable scene for testing.
 fn setup_test_scene() -> Arc<Scene> {
@@ -97,10 +97,8 @@ fn run_compute_shader_test<TState, TSetup, TDispatch, TVerify>(
     &mut crate::gpu_backends::vulkan::physics::VulkanCommandBuffer,
     &mut TState,
   ) -> crate::types::EngineResult<()>,
-  TVerify: FnOnce(
-    &crate::gpu_backends::vulkan::device::Device,
-    TState,
-  ) -> crate::types::EngineResult<()>,
+  TVerify:
+    FnOnce(&crate::gpu_backends::vulkan::device::Device, TState) -> crate::types::EngineResult<()>,
 {
   // 0. Initialize ASSET_DIR
   {
@@ -130,7 +128,7 @@ fn run_compute_shader_test<TState, TSetup, TDispatch, TVerify>(
   // 4. Extract concrete Device and run dispatch
   render_ctx.with_device_as_kernels(dev_handle, |device| {
     use crate::gpu::Kernels;
-    
+
     // A) Setup
     let mut setup_cmd = device.create_command_buffer().unwrap();
     let mut state = setup(device, &mut setup_cmd).unwrap();
@@ -164,7 +162,9 @@ fn upload_buffer<T: Copy + Send + Sync>(
         | ash::vk::BufferUsageFlags::TRANSFER_SRC
         | ash::vk::BufferUsageFlags::TRANSFER_DST
         | ash::vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
-      device.kernels.allocate_and_upload(&device.device, allocator, data, usage, rollback)
+      device
+        .kernels
+        .allocate_and_upload(&device.device, allocator, data, usage, rollback)
     })
     .commit_read(|_, res| res)
 }
@@ -180,11 +180,17 @@ fn read_buffer<T: Copy + Send + Sync>(
   handle.wait().unwrap()
 }
 
-
 fn run_direct_shader_test(target: MockTargetShader) {
   // If the shader is already fully tested individually with mathematical invariants, we skip generic direct testing
   // to avoid redundant setup, as the explicit tests in this file already execute them.
-  if matches!(target, MockTargetShader::IntegrateParticlesP1P2 | MockTargetShader::IntegrateBodiesP3 | MockTargetShader::IntegrateParticlesP4P5 | MockTargetShader::RbForceAssign | MockTargetShader::BpClear) {
+  if matches!(
+    target,
+    MockTargetShader::IntegrateParticlesP1P2
+      | MockTargetShader::IntegrateBodiesP3
+      | MockTargetShader::IntegrateParticlesP4P5
+      | MockTargetShader::RbForceAssign
+      | MockTargetShader::BpClear
+  ) {
     return;
   }
 
@@ -223,8 +229,10 @@ fn run_direct_shader_test(target: MockTargetShader) {
       };
 
       unsafe {
-        device.device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
-        
+        device
+          .device
+          .cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
+
         let mut push_constants = [0u64; 16]; // 128 bytes total
         // Fill all possible buffer pointers with our dummy valid mapped buffer to prevent page faults
         for i in 0..16 {
@@ -268,7 +276,7 @@ fn integrate_particles_p1_p2() {
       particles.push([
         0.0, 0.0, 0.0, // pos
         10.0, 0.0, 0.0, // vel
-        1.0,            // mass
+        1.0, // mass
         0.0, -9.8, 0.0, // force
       ]);
       let packed = crate::gpu::pack_particles_aosoa(&particles, 32);
@@ -287,7 +295,7 @@ fn integrate_particles_p1_p2() {
       let data = read_buffer(device, &particles_buffer);
       println!(">>> Read back data");
       let unpacked = crate::gpu::unpack_particles_aosoa(&data, 32, 1);
-      
+
       let p = unpacked[0];
       let pos = [p[0], p[1], p[2]];
       let vel = [p[3], p[4], p[5]];
@@ -315,7 +323,7 @@ fn integrate_particles_p1_p2() {
       assert!((pos[0] - expected_x[0]).abs() < 1e-4);
       assert!((pos[1] - expected_x[1]).abs() < 1e-4);
       assert!((pos[2] - expected_x[2]).abs() < 1e-4);
-      
+
       assert!((vel[0] - expected_v[0]).abs() < 1e-4);
       assert!((vel[1] - expected_v[1]).abs() < 1e-4);
       assert!((vel[2] - expected_v[2]).abs() < 1e-4);
@@ -344,7 +352,7 @@ fn integrate_bodies_p3() {
     |device, _cmd| {
       println!(">>> Setup");
       use crate::gpu::compute_push_constants::{RigidBodyImex, Wrench};
-      
+
       let body = RigidBodyImex {
         position_mass: [0.0, 0.0, 0.0, 1.0],
         orientation: [0.0, 0.0, 0.0, 1.0], // identity quat
@@ -376,8 +384,10 @@ fn integrate_bodies_p3() {
         cmd,
         &mut state.0, // bodies
         &mut state.1, // wrenches
-        &state.2, // emitters
-        &state.3, // frames
+        &state.2,     // emitters
+        &state.3,     // frames
+        1,            // n_bodies
+        0,            // n_emitters
         16000,
       )
     },
@@ -396,11 +406,7 @@ fn integrate_bodies_p3() {
 
       // IMR Picard for linear velocity: v_{n+1} = v_n + dt * f_n / m
       let dt = 0.016_f32;
-      let expected_v = [
-        5.0,
-        0.0 + dt * -10.0,
-        0.0,
-      ];
+      let expected_v = [5.0, 0.0 + dt * -10.0, 0.0];
       let expected_x = [
         0.0 + dt * 0.5 * (5.0 + expected_v[0]),
         0.0 + dt * 0.5 * (0.0 + expected_v[1]),
@@ -412,10 +418,13 @@ fn integrate_bodies_p3() {
       device.discard_list(state.2);
       device.discard_list(state.3);
 
-      println!("Actual v_y: {}, Expected: {}", body.linear_vel_drag[1], expected_v[1]);
+      println!(
+        "Actual v_y: {}, Expected: {}",
+        body.linear_vel_drag[1], expected_v[1]
+      );
       assert!((body.linear_vel_drag[0] - expected_v[0]).abs() < 1e-4);
       assert!((body.linear_vel_drag[1] - expected_v[1]).abs() < 1e-4);
-      
+
       assert!((body.position_mass[0] - expected_x[0]).abs() < 1e-4);
       assert!((body.position_mass[1] - expected_x[1]).abs() < 1e-4);
 
@@ -443,7 +452,7 @@ fn integrate_particles_p4_p5() {
       particles.push([
         0.0, 0.0, 0.0, // pos (ignored in this pass)
         10.0, 5.0, 0.0, // vel (v_{n+1/2} from P1/P2)
-        2.0,            // mass = 2.0
+        2.0, // mass = 2.0
         0.0, -10.0, 0.0, // force F(x_{n+1})
       ]);
       let packed = crate::gpu::pack_particles_aosoa(&particles, 32);
@@ -462,7 +471,7 @@ fn integrate_particles_p4_p5() {
       let data = read_buffer(device, &particles_buffer);
       println!(">>> Read back data");
       let unpacked = crate::gpu::unpack_particles_aosoa(&data, 32, 1);
-      
+
       let p = unpacked[0];
       let vel = [p[3], p[4], p[5]];
       let force = [p[7], p[8], p[9]];
@@ -512,11 +521,17 @@ fn bp_clear() {
     |device, cmd, state| {
       println!(">>> Dispatch");
       use crate::gpu::Kernels;
-      device.bp_clear(
-        cmd,
-        state.0.address, state.1.address, state.2.address,
-        state.3.address, state.4.address, state.5.address
-      ).unwrap();
+      device
+        .bp_clear(
+          cmd,
+          state.0.address,
+          state.1.address,
+          state.2.address,
+          state.3.address,
+          state.4.address,
+          state.5.address,
+        )
+        .unwrap();
       Ok(())
     },
     |device, state| {
@@ -536,7 +551,7 @@ fn bp_clear() {
       assert_eq!(d6[0], 0);
 
       assert_eq!(d1[1], 99); // the rest of the pair array should be untouched
-      assert_eq!(d6[2], 99); 
+      assert_eq!(d6[2], 99);
 
       device.discard_list(state.0);
       device.discard_list(state.1);
@@ -560,23 +575,23 @@ fn rb_force_assign() {
     |device, _cmd| {
       println!(">>> Setup");
       use crate::gpu::compute_push_constants::{RigidBodyImex, Wrench};
-      
+
       let body = RigidBodyImex {
         leaf_start_idx: 1, // leaf wrenches are at index 1 and 2
         leaf_count: 2,
-        wrench_idx: 0,     // CoM wrench is at index 0
+        wrench_idx: 0, // CoM wrench is at index 0
         ..Default::default()
       };
 
       // Wrench 0 is CoM wrench, 1 and 2 are leaf wrenches
       let mut wrenches = alloc::vec::Vec::new();
       wrenches.push(Wrench::default()); // CoM
-      
+
       let mut leaf1 = Wrench::default();
       leaf1.force = [10.0, 0.0, -5.0];
       leaf1.torque = [0.0, 5.0, 0.0];
       wrenches.push(leaf1);
-      
+
       let mut leaf2 = Wrench::default();
       leaf2.force = [0.0, 20.0, 5.0];
       leaf2.torque = [10.0, -5.0, 0.0];
@@ -590,7 +605,7 @@ fn rb_force_assign() {
     |device, cmd, state| {
       println!(">>> Dispatch");
       use crate::gpu::Kernels;
-      device.imex_rb_force_assign(cmd, &state.0, &mut state.1).unwrap();
+      device.imex_rb_force_assign(cmd, &state.0, &mut state.1, 1).unwrap();
       Ok(())
     },
     |device, state| {

@@ -69,17 +69,13 @@ impl PhysicalDeviceQueryInput {
       .get(&super::DEVICE_ADDIDITIONAL_PARAM_XCB_CONNECTION)
       .and_then(|intptr| core::ptr::NonNull::new((*intptr) as *mut _));
     #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
-    let xcb_visualid = _value
-      .get(&super::DEVICE_ADDIDITIONAL_PARAM_XCB_VISUALID)
-      .map(|v| *v as _);
+    let xcb_visualid = _value.get(&super::DEVICE_ADDIDITIONAL_PARAM_XCB_VISUALID).map(|v| *v as _);
     #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
     let dpy = _value
       .get(&super::DEVICE_ADDIDITIONAL_PARAM_DPY)
       .and_then(|intptr| core::ptr::NonNull::new((*intptr) as *mut _));
     #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
-    let visual_id = _value
-      .get(&super::DEVICE_ADDIDITIONAL_PARAM_VISUAL_ID)
-      .map(|v| *v as _);
+    let visual_id = _value.get(&super::DEVICE_ADDIDITIONAL_PARAM_VISUAL_ID).map(|v| *v as _);
 
     let debug_shaders = _value
       .get(&super::DEVICE_ADDIDITIONAL_PARAM_DEBUG_SHADERS)

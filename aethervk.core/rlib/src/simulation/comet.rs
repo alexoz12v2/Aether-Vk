@@ -498,7 +498,8 @@ pub fn spherical_mass_properties(mass_kg: f64, radius_km: f64) -> MassProperties
   ]
   .into_iter()
   .sum();
-  let mut mp = MassProperties::from_contrib_sum(c).expect("Spherical tetrahedron must produce valid mass properties");
+  let mut mp = MassProperties::from_contrib_sum(c)
+    .expect("Spherical tetrahedron must produce valid mass properties");
   let volume = mp.volume();
   let density = if volume.abs() > 1e-30 {
     mass_kg / volume

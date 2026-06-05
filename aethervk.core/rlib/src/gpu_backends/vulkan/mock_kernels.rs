@@ -91,7 +91,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     cmd: &mut Self::Cmd,
     scene: &PhysicsScene,
     scene0: &Scene,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>)> {
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>, u32)> {
     self.base.build_rigid_bodies(cmd, scene, scene0)
   }
   fn build_frames(
@@ -119,7 +119,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<Self::Buffer<ForceEmitter>> {
+  ) -> EngineResult<(Self::Buffer<ForceEmitter>, u32)> {
     self.base.build_emitters(cmd, scene)
   }
   fn build_emission_candidates(
@@ -169,12 +169,12 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn compute_self_gravity(
     &self,
-    cmd: &mut Self::Cmd,
-    bvh: &Self::MotionBvh,
-    particles: &mut Self::Buffer<f32>,
+    _cmd: &mut Self::Cmd,
+    _bvh: &Self::MotionBvh,
+    _particles: &mut Self::Buffer<f32>,
   ) -> EngineResult<()> {
     if self.target == MockTargetShader::BarnesHut {
-      self.base.compute_self_gravity(cmd, bvh, particles)?;
+      self.base.compute_self_gravity(_cmd, _bvh, _particles)?;
     }
     Ok(())
   }
@@ -208,13 +208,15 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     bodies: &mut Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
     emitters: &Self::Buffer<ForceEmitter>,
-    frames: &Self::Buffer<GpuReferenceFrame>,
+    frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    n_bodies: u32,
+    n_emitters: u32,
     dt: timeus_t,
   ) -> EngineResult<()> {
     if self.target == MockTargetShader::IntegrateBodiesP3 {
       self
         .base
-        .imex_integrate_bodies_p3(cmd, bodies, wrenches, emitters, frames, dt)?;
+        .imex_integrate_bodies_p3(cmd, bodies, wrenches, emitters, frames, n_bodies, n_emitters, dt)?;
     }
     Ok(())
   }
@@ -224,9 +226,10 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     cmd: &mut Self::Cmd,
     bodies: &Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
+    n_bodies: u32,
   ) -> EngineResult<()> {
     if self.target == MockTargetShader::RbForceAssign {
-      self.base.imex_rb_force_assign(cmd, bodies, wrenches)?;
+      self.base.imex_rb_force_assign(cmd, bodies, wrenches, n_bodies)?;
     }
     Ok(())
   }

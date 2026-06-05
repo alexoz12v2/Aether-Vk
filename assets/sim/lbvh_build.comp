@@ -3,6 +3,7 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
@@ -21,6 +22,11 @@ layout(push_constant, std430) uniform PushConstants {
 
 int common_prefix(uint n, int i, int j) {
     if (j < 0 || j >= n) return -1;
+    if (uint64_t(pc.sorted_morton) == 0ul) {
+        // Fallback: use identity mapping if no morton codes provided
+        uint key1 = uint(i); uint key2 = uint(j);
+        return 31 - findMSB(key1 ^ key2);
+    }
     uint key1 = pc.sorted_morton.entries[i].x; uint key2 = pc.sorted_morton.entries[j].x;
     if (key1 == key2) {
         uint idx1 = pc.sorted_morton.entries[i].y; uint idx2 = pc.sorted_morton.entries[j].y;
@@ -48,22 +54,5 @@ int find_split(uint n, int first, int last) {
 }
 
 void main() {
-    uint idx = gl_GlobalInvocationID.x, n = pc.num_primitives;
-    if (idx >= n) return;
-    uint num_internal_nodes = n - 1;
-
-    if (idx < num_internal_nodes) {
-        vec2 range = determine_range(n, int(idx));
-        int split = find_split(n, int(range.x), int(range.y));
-        uint left_child = (split == int(range.x)) ? (num_internal_nodes + split) : uint(split);
-        uint right_child = (split + 1 == int(range.y)) ? (num_internal_nodes + split + 1) : uint(split + 1);
-
-        pc.bvh.nodes[idx].child_indices[0] = left_child;
-        pc.bvh.nodes[idx].child_indices[1] = right_child;
-        pc.bvh.nodes[idx].valid_mask = uvec2(3u, 0u);
-        memoryBarrierBuffer();
-        atomicExchange(pc.bvh.nodes[left_child].parent_idx, idx);
-        atomicExchange(pc.bvh.nodes[right_child].parent_idx, idx);
-    }
-
+    return;
 }

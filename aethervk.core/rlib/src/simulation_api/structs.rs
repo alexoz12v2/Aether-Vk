@@ -419,10 +419,12 @@ impl LogicThreadContext {
     for ((mesh, transform), entity) in meshes {
       let global_transform = scene_ctx.scene.global_transform(entity).unwrap_or(transform);
       let model_matrix = Mat4x4f32::translation(global_transform.position)
-        * <Mat4x4f32 as oshal::math::matrix::Matrix4>::from_quat_custom_frame(global_transform.rotation)
+        * <Mat4x4f32 as oshal::math::matrix::Matrix4>::from_quat_custom_frame(
+          global_transform.rotation,
+        )
         * Mat4x4f32::from_scale(global_transform.scale);
       if let Some(hit) = ps.intersect_mesh_bvh_math(ro, rd, model_matrix, &mesh, ray.length) {
-         intersections.push((hit, entity));
+        intersections.push((hit, entity));
       }
     }
 
@@ -898,7 +900,7 @@ impl TimeScale {
     match self {
       TimeScale::Stopped => 1.0,
       TimeScale::RealTime => 1.0,
-      TimeScale::OneDay => 1500.0,  // ~25 min, covers the ~1440s per-tick dt at 60 FPS
+      TimeScale::OneDay => 1500.0, // ~25 min, covers the ~1440s per-tick dt at 60 FPS
       TimeScale::OneWeek => 3600.0, // 1 hour cap
       TimeScale::OneMonth => 3600.0, // 1 hour cap
     }
@@ -911,8 +913,13 @@ pub struct LogicState {
   /// Optional callback to request SPK data download from the host application.
   /// Called when epoch range validation finds that almanac coverage is insufficient.
   /// Parameters: (spk_id, start_epoch_str, end_epoch_str) → returns file path of downloaded SPK, or null.
-  pub almanac_invalidation_callback:
-    Option<extern "C" fn(i32, *const core::ffi::c_char, *const core::ffi::c_char) -> *const core::ffi::c_char>,
+  pub almanac_invalidation_callback: Option<
+    extern "C" fn(
+      i32,
+      *const core::ffi::c_char,
+      *const core::ffi::c_char,
+    ) -> *const core::ffi::c_char,
+  >,
 }
 
 impl Default for LogicState {
@@ -1778,14 +1785,22 @@ mod tests_time_scale {
   fn sub_step_count_one_week_multiple() {
     // OneWeek at 60 FPS: total_dt ≈ 9676s, cap = 3600s → 3 sub-steps
     let n = sub_step_count(TimeScale::OneWeek, 16_667);
-    assert!(n >= 2 && n <= 4, "Expected 2-4 sub-steps for OneWeek, got {}", n);
+    assert!(
+      n >= 2 && n <= 4,
+      "Expected 2-4 sub-steps for OneWeek, got {}",
+      n
+    );
   }
 
   #[test]
   fn sub_step_count_one_month_multiple() {
     // OneMonth at 60 FPS: total_dt ≈ 42091s, cap = 3600s → ~12 sub-steps
     let n = sub_step_count(TimeScale::OneMonth, 16_667);
-    assert!(n >= 10 && n <= 15, "Expected 10-15 sub-steps for OneMonth, got {}", n);
+    assert!(
+      n >= 10 && n <= 15,
+      "Expected 10-15 sub-steps for OneMonth, got {}",
+      n
+    );
   }
 
   #[test]

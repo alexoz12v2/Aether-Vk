@@ -43,9 +43,9 @@ void main() {
     uint base = block_idx * (10 * SUBGROUP_SIZE) + local_idx;
 
     vec3 pos = vec3(
-        pc.particles.data[base + 0 * SUBGROUP_SIZE],
-        pc.particles.data[base + 1 * SUBGROUP_SIZE],
-        pc.particles.data[base + 2 * SUBGROUP_SIZE]
+        uintBitsToFloat(pc.particles.data[base + 0 * SUBGROUP_SIZE]),
+        uintBitsToFloat(pc.particles.data[base + 1 * SUBGROUP_SIZE]),
+        uintBitsToFloat(pc.particles.data[base + 2 * SUBGROUP_SIZE])
     );
 
     // Normalize relative to scene bounds

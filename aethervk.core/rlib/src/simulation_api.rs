@@ -149,13 +149,16 @@ impl os::pool::Workload for PhysicsRebuildWorkload {
 
 /// TODO: Document this item
 pub type BreadcrumbCallback = unsafe extern "C" fn(u32, *const core::ffi::c_char);
-pub static BREADCRUMB_CALLBACK: parking_lot::RwLock<Option<BreadcrumbCallback>> = parking_lot::RwLock::new(None);
+pub static BREADCRUMB_CALLBACK: parking_lot::RwLock<Option<BreadcrumbCallback>> =
+  parking_lot::RwLock::new(None);
 
 pub type SimulationCallback = unsafe extern "C" fn(u64, u64, u64, *const core::ffi::c_void);
-pub static SIMULATION_CALLBACK: parking_lot::RwLock<Option<SimulationCallback>> = parking_lot::RwLock::new(None);
+pub static SIMULATION_CALLBACK: parking_lot::RwLock<Option<SimulationCallback>> =
+  parking_lot::RwLock::new(None);
 
 pub type RenderCallback = unsafe extern "C" fn(u64, u64, u64);
-pub static RENDER_CALLBACK: parking_lot::RwLock<Option<RenderCallback>> = parking_lot::RwLock::new(None);
+pub static RENDER_CALLBACK: parking_lot::RwLock<Option<RenderCallback>> =
+  parking_lot::RwLock::new(None);
 
 /// TODO: Document this item
 pub fn emit_breadcrumb(status: u32, msg: &str) {

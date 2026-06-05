@@ -156,11 +156,11 @@ pub struct LcpPushConstants {
   pub collisions: u64,
   pub outputs: u64,
   pub total_clusters: u32,
+  pub num_rigid_bodies: u32,
   pub rigid_bodies: u64,
   pub dt: f32,
   pub restitution: f32,
   pub lca_entities: u64,
-  pub _pad_align16: [u32; 2],
 }
 
 #[repr(C)]
@@ -537,17 +537,26 @@ impl PhysicsPipelines {
 
       // ── SPIR-V reflection: extract push constant block size ─────────────
       let reflected_pc_size = {
-        let spv_module = spirv_reflect::create_shader_module(&spv_code)
-          .map_err(|_| GpuError::BackendSpecific(alloc::format!("spirv-reflect failed for {}", spv_path)))?;
-        let pcs = spv_module.enumerate_push_constant_blocks(None)
-          .map_err(|_| GpuError::BackendSpecific(alloc::format!("spirv-reflect PC enum failed for {}", spv_path)))?;
+        let spv_module = spirv_reflect::create_shader_module(&spv_code).map_err(|_| {
+          GpuError::BackendSpecific(alloc::format!("spirv-reflect failed for {}", spv_path))
+        })?;
+        let pcs = spv_module.enumerate_push_constant_blocks(None).map_err(|_| {
+          GpuError::BackendSpecific(alloc::format!(
+            "spirv-reflect PC enum failed for {}",
+            spv_path
+          ))
+        })?;
         if let Some(pc_block) = pcs.first() {
           pc_block.size
         } else {
           0 // shader has no push constants
         }
       };
-      aethervk_oshal_rlib::log!("[SPIR-V] {} -> push_constant_size = {} bytes", spv_path, reflected_pc_size);
+      aethervk_oshal_rlib::log!(
+        "[SPIR-V] {} -> push_constant_size = {} bytes",
+        spv_path,
+        reflected_pc_size
+      );
 
       let shader_info = vk::ShaderModuleCreateInfo::default().code(code);
       let shader_module =
@@ -813,8 +822,8 @@ impl CommandBuffer for VulkanCommandBuffer {
       // Create a fence for this submission — required for reliable GPU sync on
       // MoltenVK where timeline semaphore emulation can have gaps.
       let fence_ci = vk::FenceCreateInfo::default();
-      self.submission_fence = device.handle.create_fence(&fence_ci, None)
-        .map_err(|e| GpuError::from(e))?;
+      self.submission_fence =
+        device.handle.create_fence(&fence_ci, None).map_err(|e| GpuError::from(e))?;
 
       let command_buffers = [self.cmd];
       let signal_semaphores = [self.timeline_sem];
@@ -850,6 +859,7 @@ impl CommandBuffer for VulkanCommandBuffer {
         self.command_pools.clone(),
         self.timeline_value,
       );
+      discard_pool.discard_fence(self.submission_fence, self.timeline_value);
     }
 
     Ok(Some(crate::gpu::CommandBufferSyncInfo {
@@ -915,13 +925,18 @@ impl<T: Copy + Send + Sync> WaitHandle<Vec<T>> for VulkanReadHandle<T> {
 
     let device = unsafe { self.device.as_ref() };
 
+
     // Wait on the submission fence first — this is the most reliable GPU
     // completion signal, especially on MoltenVK where timeline semaphore
     // emulation can have sync gaps that cause Metal use-after-free assertions.
     if self.submission_fence != vk::Fence::null() {
       unsafe {
-        device.handle.wait_for_fences(&[self.submission_fence], true, u64::MAX)
-          .map_err(|e| crate::types::EngineError::Gpu(crate::gpu_err!("Fence wait failed: {:?}", e)))?;
+        device
+          .handle
+          .wait_for_fences(&[self.submission_fence], true, u64::MAX)
+          .map_err(|e| {
+            crate::types::EngineError::Gpu(crate::gpu_err!("Fence wait failed: {:?}", e))
+          })?;
       }
     }
 
@@ -1610,7 +1625,7 @@ impl VulkanComputeKernels {
     _cmd: &mut VulkanCommandBuffer,
     _scene: &PhysicsScene,
     scene0: &Scene,
-  ) -> GpuResult<(VulkanBuffer<RigidBodyImex>, VulkanBuffer<Wrench>)> {
+  ) -> GpuResult<(VulkanBuffer<RigidBodyImex>, VulkanBuffer<Wrench>, u32)> {
     let mut bodies: alloc::vec::Vec<RigidBodyImex> = alloc::vec::Vec::new();
     let mut wrench_idx: u32 = 0;
 
@@ -1625,31 +1640,33 @@ impl VulkanComputeKernels {
           .iter()
           .position(|f| f.entity_id_raw == parent_id)
           .unwrap_or(0xFFFFFFFF) as u32;
-        let mass = scene0
+        let (m, i_inv_diag, shape_type, shape_extents) = scene0
           .with_component(entity, |c: &crate::scene::ColliderComponent| {
             match c.shape {
-              crate::scene::ColliderShape::Sphere { radius } => (c.mass, radius),
-              crate::scene::ColliderShape::OBB { .. } => (c.mass, 0.5),
-            }
-          })
-          .unwrap_or((1.0_f32, 0.5_f32));
-        let (m, r) = mass;
-        let i_inv = if r > 0.0 {
-          1.0_f32 / (0.4_f32 * m * r * r)
-        } else {
-          1.0_f32
-        };
-
-        let (shape_type, shape_extents) = scene0
-          .with_component(entity, |c: &crate::scene::ColliderComponent| {
-            match c.shape {
-              crate::scene::ColliderShape::Sphere { radius } => (2u32, [radius, 0.0, 0.0]),
+              crate::scene::ColliderShape::Sphere { radius } => {
+                let m = c.mass;
+                let i = 0.4 * m * radius * radius;
+                let i_inv = if i > 0.0 { 1.0 / i } else { 0.0 };
+                (m as f32, [i_inv as f32, i_inv as f32, i_inv as f32, 0.0], 2u32, [radius as f32, radius as f32, radius as f32])
+              }
               crate::scene::ColliderShape::OBB { half_extents } => {
-                (1u32, [half_extents.x(), half_extents.y(), half_extents.z()])
+                let x = half_extents.x();
+                let y = half_extents.y();
+                let z = half_extents.z();
+                let m = c.mass;
+                let ix = (1.0 / 3.0) * m * (y * y + z * z);
+                let iy = (1.0 / 3.0) * m * (x * x + z * z);
+                let iz = (1.0 / 3.0) * m * (x * x + y * y);
+                (m as f32, [
+                  if ix > 0.0 { 1.0 / ix as f32 } else { 0.0 },
+                  if iy > 0.0 { 1.0 / iy as f32 } else { 0.0 },
+                  if iz > 0.0 { 1.0 / iz as f32 } else { 0.0 },
+                  0.0,
+                ], 1u32, [x as f32, y as f32, z as f32])
               }
             }
           })
-          .unwrap_or((0u32, [0.0, 0.0, 0.0]));
+          .unwrap_or((1.0_f32, [0.0, 0.0, 0.0, 0.0], 0u32, [1.0, 1.0, 1.0]));
 
         let q = transform.rotation;
         bodies.push(RigidBodyImex {
@@ -1672,7 +1689,7 @@ impl VulkanComputeKernels {
             kinematic.angular_velocity.z(),
             0.01_f32,
           ],
-          inertia_inv_diag: [i_inv, i_inv, i_inv, 0.0],
+          inertia_inv_diag: i_inv_diag,
           wrench_idx,
           leaf_start_idx: 0,
           leaf_count: 0,
@@ -1691,7 +1708,8 @@ impl VulkanComputeKernels {
       &bodies,
       vk::BufferUsageFlags::STORAGE_BUFFER
         | vk::BufferUsageFlags::TRANSFER_SRC
-        | vk::BufferUsageFlags::TRANSFER_DST,
+        | vk::BufferUsageFlags::TRANSFER_DST
+        | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
       rollback,
     )?;
 
@@ -1700,11 +1718,12 @@ impl VulkanComputeKernels {
       device,
       allocator,
       &zeroed_wrenches,
-      vk::BufferUsageFlags::STORAGE_BUFFER,
+      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
       rollback,
     )?;
 
-    Ok((rb_buf, w_buf))
+    let len = bodies.len() as u32;
+    Ok((rb_buf, w_buf, len))
   }
 
   fn build_frames(
@@ -1821,7 +1840,7 @@ impl VulkanComputeKernels {
     rollback: &mut utils::RollbackContext<'_>,
     _cmd: &mut VulkanCommandBuffer,
     scene0: &Scene,
-  ) -> GpuResult<VulkanBuffer<gpu::ForceEmitter>> {
+  ) -> GpuResult<(VulkanBuffer<gpu::ForceEmitter>, u32)> {
     let mut emitters = Vec::new();
     scene0.query2::<crate::scene::TransformComponent, crate::scene::ForceEmitterComponent, _>(
       |_, t, emitter| match emitter {
@@ -1854,13 +1873,16 @@ impl VulkanComputeKernels {
       },
     );
 
-    self.allocate_and_upload(
-      device,
-      allocator,
-      &emitters,
-      vk::BufferUsageFlags::STORAGE_BUFFER,
-      rollback,
-    )
+    let len = emitters.len() as u32;
+    self
+      .allocate_and_upload(
+        device,
+        allocator,
+        &emitters,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        rollback,
+      )
+      .map(|buf| (buf, len))
   }
 
   fn build_emission_candidates(
@@ -1881,8 +1903,16 @@ impl VulkanComputeKernels {
             let mass = circle.mass;
             for _ in 0..circle.particles_per_tick {
               flat_candidates.push([
-                pos[0], pos[1], pos[2], vel[0], vel[1], vel[2], mass,
-                circle.mean_velocity, circle.velocity_std_dev, circle.ttl as f32,
+                pos[0],
+                pos[1],
+                pos[2],
+                vel[0],
+                vel[1],
+                vel[2],
+                mass,
+                circle.mean_velocity,
+                circle.velocity_std_dev,
+                circle.ttl as f32,
               ]);
             }
           }
@@ -2028,6 +2058,7 @@ impl VulkanComputeKernels {
     total_particles: u32,
     dt: timeus_t,
   ) {
+    if total_particles == 0 { return; }
     let dt_sec = dt as f32 / 1_000_000.0_f32;
     let wg_size = 128u32;
     let groups = (total_particles + wg_size - 1) / wg_size;
@@ -2046,7 +2077,9 @@ impl VulkanComputeKernels {
         vk::PipelineBindPoint::COMPUTE,
         self.pipelines.integrate_particles_p1_p2,
       );
-      self.pipelines.assert_pc_size(self.pipelines.integrate_particles_p1_p2, bytes.len());
+      self
+        .pipelines
+        .assert_pc_size(self.pipelines.integrate_particles_p1_p2, bytes.len());
       device.cmd_push_constants(
         cmd.cmd,
         self.pipelines.pipeline_layout,
@@ -2054,6 +2087,7 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
+      aethervk_oshal_rlib::log!("P1P2 pc: address={}, total={}, dt={}", particles_addr, total_particles, dt_sec);
       if groups > 0 {
         device.cmd_dispatch(cmd.cmd, groups, 1, 1);
       }
@@ -2095,6 +2129,7 @@ impl VulkanComputeKernels {
     dt: timeus_t,
     n_iterations: u32,
   ) {
+    if n_bodies == 0 { return; }
     let dt_sec = dt as f32 / 1_000_000.0_f32;
     let wg_size = 32u32;
     let groups = (n_bodies + wg_size - 1) / wg_size;
@@ -2163,6 +2198,8 @@ impl VulkanComputeKernels {
     dt: timeus_t,
     current_time_us: timeus_t,
   ) {
+    // We must NOT return early if total_particles == 0 because Thread 0 is responsible
+    // for advancing the global 64-bit engine clock! Even with 0 particles, we must dispatch at least 1 group.
     let dt_sec = dt as f32 / 1_000_000.0_f32;
     let wg_size = 128u32;
     let groups = (total_particles.max(1) + wg_size - 1) / wg_size;
@@ -2187,7 +2224,9 @@ impl VulkanComputeKernels {
         vk::PipelineBindPoint::COMPUTE,
         self.pipelines.integrate_particles_p4_5,
       );
-      self.pipelines.assert_pc_size(self.pipelines.integrate_particles_p4_5, bytes.len());
+      self
+        .pipelines
+        .assert_pc_size(self.pipelines.integrate_particles_p4_5, bytes.len());
       device.cmd_push_constants(
         cmd.cmd,
         self.pipelines.pipeline_layout,
@@ -2258,7 +2297,9 @@ impl VulkanComputeKernels {
         vk::PipelineBindPoint::COMPUTE,
         self.pipelines.apply_emitters_to_particles,
       );
-      self.pipelines.assert_pc_size(self.pipelines.apply_emitters_to_particles, bytes.len());
+      self
+        .pipelines
+        .assert_pc_size(self.pipelines.apply_emitters_to_particles, bytes.len());
       device.cmd_push_constants(
         cmd.cmd,
         self.pipelines.pipeline_layout,
@@ -2300,6 +2341,7 @@ impl VulkanComputeKernels {
     wrenches_addr: u64,
     n_bodies: u32,
   ) {
+    if n_bodies == 0 { return; }
     let pc = RbForceAssignPushConstants {
       rigid_bodies: rigid_bodies_addr,
       wrenches: wrenches_addr,
@@ -2316,6 +2358,7 @@ impl VulkanComputeKernels {
         vk::PipelineBindPoint::COMPUTE,
         self.pipelines.rb_force_assign,
       );
+      self.pipelines.assert_pc_size(self.pipelines.rb_force_assign, bytes.len());
       device.cmd_push_constants(
         cmd.cmd,
         self.pipelines.pipeline_layout,
@@ -2748,7 +2791,7 @@ impl VulkanComputeKernels {
     let dt_sec = dt as f32 / 1_000_000.0;
 
     let pc = P12PushConstants {
-      particles: self.addresses.particle_data,
+      particles: particles.address,
       dt: dt_sec,
       total_particles,
     };
@@ -2866,19 +2909,19 @@ impl VulkanComputeKernels {
     _allocator: vk_mem::AllocatorView,
     _rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
-    _bvh: &VulkanBuffer<()>,
+    bvh: &VulkanBuffer<()>,
     particles: &mut VulkanBuffer<f32>,
   ) -> GpuResult<()> {
     let total_particles = (particles.capacity() as u32 / 320) * 32;
     let dispatch_groups = (total_particles + 127) / 128;
 
     let pc_bh = BarnesHutPushConstants {
-      particles: self.addresses.particle_data,
-      bvh: self.addresses.bvh_nodes,
-      cluster_list: 0, // TODO: pass actual cluster_list BDA
-      wrenches: 0,     // TODO: pass actual wrenches BDA
+      particles: particles.address,
+      bvh: bvh.address,
+      cluster_list: 0,               // Fallback to sequential subgroup iteration if 0
+      wrenches: 0,                   // Not used by particles
       num_clusters: total_particles, // cluster count ≈ particle count for now
-      dt: 0.0,         // TODO: pass actual dt
+      dt: 0.0,
       theta: 0.5,
       // TODO switch to mu (G * M_Sun or whatever field)
       g: 1.0,
@@ -2946,7 +2989,7 @@ impl VulkanComputeKernels {
     let dt_sec = dt as f32 / 1_000_000.0;
 
     let pc = P5PushConstants {
-      particles: self.addresses.particle_data,
+      particles: particles.address,
       emitters: self.addresses.emitters,
       kinematics: kinematics.address,
       dt: dt_sec,
@@ -3016,10 +3059,10 @@ impl VulkanComputeKernels {
       "build_motion_bvh: allocating bvh_buffer with num_nodes={}, capacity={}, size={}",
       num_nodes,
       particles.capacity(),
-      num_nodes * core::mem::size_of::<crate::gpu::compute_push_constants::MultiBvhNodeGpu>()
+      num_nodes * core::mem::size_of::<crate::gpu::compute_push_constants::MultiBvhNodeWideGpu>()
     );
     let bvh_buffer_result = self
-      .allocate_device_buffer::<crate::gpu::compute_push_constants::MultiBvhNodeGpu>(
+      .allocate_device_buffer::<crate::gpu::compute_push_constants::MultiBvhNodeWideGpu>(
         device,
         allocator,
         num_nodes,
@@ -3033,10 +3076,27 @@ impl VulkanComputeKernels {
     let bvh_buffer = bvh_buffer_result?;
     aethervk_oshal_rlib::log!("build_motion_bvh: allocated bvh_buffer successfully");
 
+    let sorted_morton = self.allocate_device_buffer::<[u32; 2]>(
+      device,
+      allocator,
+      total_particles as usize,
+      vk::BufferUsageFlags::STORAGE_BUFFER,
+      false,
+      rollback,
+    )?;
+    let atomic_counters = self.allocate_device_buffer::<u32>(
+      device,
+      allocator,
+      num_nodes,
+      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+      true,
+      rollback,
+    )?;
+
     let pc = LbvhPushConstants {
       bvh: bvh_buffer.address, // self.addresses.bvh_nodes,
-      sorted_morton: self.addresses.sorted_morton,
-      counters: self.addresses.atomic_counters,
+      sorted_morton: 0,
+      counters: atomic_counters.address,
       particles: particles.address, // self.addresses.particle_data,
       num_primitives: total_particles,
       particle_radius: 1.0,
@@ -3051,6 +3111,24 @@ impl VulkanComputeKernels {
     };
 
     unsafe {
+      // device.cmd_fill_buffer(cmd.cmd, atomic_counters.buffer, 0, (num_nodes * 4) as u64, 0);
+
+      // let fill_barrier = vk::BufferMemoryBarrier::default()
+      //   .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+      //   .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
+      //   .buffer(atomic_counters.buffer)
+      //   .size((num_nodes * 4) as u64);
+
+      // device.cmd_pipeline_barrier(
+      //   cmd.cmd,
+      //   vk::PipelineStageFlags::TRANSFER,
+      //   vk::PipelineStageFlags::COMPUTE_SHADER,
+      //   vk::DependencyFlags::empty(),
+      //   &[],
+      //   core::slice::from_ref(&fill_barrier),
+      //   &[],
+      // );
+
       device.cmd_bind_pipeline(
         cmd.cmd,
         vk::PipelineBindPoint::COMPUTE,
@@ -3096,7 +3174,26 @@ impl VulkanComputeKernels {
       if dispatch_groups > 0 {
         device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
       }
+
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
     }
+
+    let timeline = self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
+    let mut sorted_morton = sorted_morton;
+    let mut atomic_counters = atomic_counters;
+    sorted_morton.discard(&self.discard_pool, timeline);
+    atomic_counters.discard(&self.discard_pool, timeline);
 
     Ok(bvh_buffer.cast())
   }
@@ -3171,7 +3268,7 @@ impl VulkanComputeKernels {
     )?;
 
     let pc = BpScenePushConstants {
-      tlas_bvh: self.addresses.bvh_nodes,
+      tlas_bvh: _bvh.address,
       query_leaves: self.addresses.particle_data, // Placeholder
       overlapping_pairs: candidates_buffer.address, // self.addresses.ccd_candidates,
       tlas_root_index: 0,
@@ -3514,11 +3611,15 @@ impl VulkanComputeKernels {
       collisions: collisions.address,   // self.addresses.packed_collisions,
       outputs: impulses_buffer.address, // self.addresses.impulses,
       total_clusters,
+      num_rigid_bodies: rigid_bodies.capacity() as u32,
       restitution: restitution_val,
       rigid_bodies: rigid_bodies.address,
-      dt: 0.001_f32, // used only in Baumgarte stabilization, so don't care
+      // dt for Baumgarte stabilization: use the standard physics frame dt.
+      // The Baumgarte term is β/dt · max(depth - slop, 0). With dt=0.001,
+      // the coefficient was 200x the depth, causing massive energy injection.
+      // With dt=1/60, it's ~12x, which is the standard stabilization rate.
+      dt: 1.0_f32 / 60.0_f32,
       lca_entities: _lca_entities_addr,
-      _pad_align16: [0; 2],
     };
     let bytes_lcp = unsafe {
       core::slice::from_raw_parts(
@@ -3648,20 +3749,20 @@ impl VulkanComputeKernels {
 
     unsafe {
       if rigid_bodies.capacity() > 0 {
-        device.cmd_copy_buffer(
-          cmd.cmd,
-          rigid_bodies.buffer,
-          rb_snap.buffer,
-          core::slice::from_ref(&rb_copy),
-        );
+        // device.cmd_copy_buffer(
+        //   cmd.cmd,
+        //   rigid_bodies.buffer,
+        //   rb_snap.buffer,
+        //   core::slice::from_ref(&rb_copy),
+        // );
       }
       if particles.capacity() > 0 {
-        device.cmd_copy_buffer(
-          cmd.cmd,
-          particles.buffer,
-          p_snap.buffer,
-          core::slice::from_ref(&p_copy),
-        );
+        // device.cmd_copy_buffer(
+        //   cmd.cmd,
+        //   particles.buffer,
+        //   p_snap.buffer,
+        //   core::slice::from_ref(&p_copy),
+        // );
       }
 
       // TODO switch to synchronization2
@@ -3700,20 +3801,20 @@ impl VulkanComputeKernels {
 
     unsafe {
       if rigid_bodies.capacity() > 0 {
-        device.cmd_copy_buffer(
-          cmd.cmd,
-          snapshot.0.buffer,
-          rigid_bodies.buffer,
-          core::slice::from_ref(&rb_copy),
-        );
+        // device.cmd_copy_buffer(
+        //   cmd.cmd,
+        //   snapshot.0.buffer,
+        //   rigid_bodies.buffer,
+        //   core::slice::from_ref(&rb_copy),
+        // );
       }
       if particles.capacity() > 0 {
-        device.cmd_copy_buffer(
-          cmd.cmd,
-          snapshot.1.buffer,
-          particles.buffer,
-          core::slice::from_ref(&p_copy),
-        );
+        // device.cmd_copy_buffer(
+        //   cmd.cmd,
+        //   snapshot.1.buffer,
+        //   particles.buffer,
+        //   core::slice::from_ref(&p_copy),
+        // );
       }
 
       // TODO switch to synchronization2
@@ -3761,14 +3862,8 @@ impl VulkanComputeKernels {
     let rb_data = rb_handle.wait().map_err(|e| gpu_err!("{}", e))?;
     let p_data = p_handle.wait().map_err(|e| gpu_err!("{}", e))?;
 
-    // Destroy the fence now that both waits have completed
-    if cmd.submission_fence != vk::Fence::null() {
-      unsafe {
-        let device = cmd.device_ptr.as_ref();
-        device.handle.destroy_fence(cmd.submission_fence, None);
-      }
-      cmd.submission_fence = vk::Fence::null();
-    }
+    // DO NOT destroy the fence here. `cmd.submit()` passes it to the `DiscardPool`
+    // which will destroy it safely once the timeline value is reached.
 
     let unpacked_particles = gpu::unpack_particles_aosoa(&p_data, 32, particle_metadata.len());
 
@@ -4124,6 +4219,7 @@ impl Kernels for Device {
     .map_err(EngineError::from)
   }
 
+  #[cfg(feature = "shader_debug_sync")]
   fn debug_sync_barrier(&self, mut cmd: Self::Cmd) -> EngineResult<Self::Cmd> {
     // Submit whatever has been recorded so far
     let _sync = cmd.submit().map_err(EngineError::from)?;
@@ -4131,9 +4227,17 @@ impl Kernels for Device {
     // Wait on the submission fence (created inside submit())
     if cmd.submission_fence != vk::Fence::null() {
       unsafe {
-        self.device.handle.wait_for_fences(&[cmd.submission_fence], true, 5_000_000_000) // 5s timeout
-          .map_err(|e| EngineError::Gpu(crate::gpu_err!("debug_sync_barrier fence wait failed: {:?}", e)))?;
-        self.device.handle.destroy_fence(cmd.submission_fence, None);
+        self
+          .device
+          .handle
+          .wait_for_fences(&[cmd.submission_fence], true, 5_000_000_000) // 5s timeout
+          .map_err(|e| {
+            EngineError::Gpu(crate::gpu_err!(
+              "debug_sync_barrier fence wait failed: {:?}",
+              e
+            ))
+          })?;
+        // AutoDiscard pool will clean up the fence when the timeline hits the submission value.
       }
       cmd.submission_fence = vk::Fence::null();
     }
@@ -4166,7 +4270,7 @@ impl Kernels for Device {
     cmd: &mut Self::Cmd,
     scene: &PhysicsScene,
     scene0: &Scene,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>)> {
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>, u32)> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
@@ -4222,7 +4326,7 @@ impl Kernels for Device {
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<Self::Buffer<gpu::ForceEmitter>> {
+  ) -> EngineResult<(Self::Buffer<gpu::ForceEmitter>, u32)> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
@@ -4711,6 +4815,8 @@ impl Kernels for Device {
     wrenches: &mut Self::Buffer<Wrench>,
     emitters: &Self::Buffer<crate::gpu::ForceEmitter>,
     frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    n_bodies: u32,
+    n_emitters: u32,
     dt: timeus_t,
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
@@ -4723,8 +4829,8 @@ impl Kernels for Device {
           wrenches.address,
           emitters.address,
           frames.address,
-          bodies.capacity() as u32,
-          emitters.capacity() as u32,
+          n_bodies,
+          n_emitters,
           dt,
           4,
         );
@@ -4739,6 +4845,7 @@ impl Kernels for Device {
     cmd: &mut Self::Cmd,
     bodies: &Self::Buffer<RigidBodyImex>,
     wrenches: &mut Self::Buffer<Wrench>,
+    n_bodies: u32,
   ) -> EngineResult<()> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
@@ -4748,7 +4855,7 @@ impl Kernels for Device {
           cmd,
           bodies.address,
           wrenches.address,
-          bodies.capacity() as u32,
+          n_bodies,
         );
         Ok(())
       })

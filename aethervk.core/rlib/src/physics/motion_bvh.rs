@@ -251,6 +251,15 @@ impl crate::math::collision::multi_bvh::BinaryBvh for MotionBvhTree {
     (n.left_child, n.right_child)
   }
 
+  fn mass(&self, node_idx: u32) -> f32 {
+    self.nodes[node_idx as usize].mass
+  }
+
+  fn center_of_mass(&self, node_idx: u32) -> [f32; 3] {
+    let com = self.nodes[node_idx as usize].center_of_mass;
+    [com.x(), com.y(), com.z()]
+  }
+
   fn extract_primitives(&self, node_idx: u32, out: &mut Vec<Self::Primitive>) -> u32 {
     if let Some(idx) = self.nodes[node_idx as usize].data_index {
       out.push(idx);

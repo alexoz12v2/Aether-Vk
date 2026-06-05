@@ -310,6 +310,29 @@ pub struct MultiBvhNodeGpu {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MultiBvhNodeWideGpu {
+  pub min_x: [f32; 32],
+  pub max_x: [f32; 32],
+  pub min_y: [f32; 32],
+  pub max_y: [f32; 32],
+  pub min_z: [f32; 32],
+  pub max_z: [f32; 32],
+  pub child_indices: [u32; 32],
+  pub metadata: [u32; 32],
+  pub masses: [f32; 32],
+  pub com_x: [f32; 32],
+  pub com_y: [f32; 32],
+  pub com_z: [f32; 32],
+  pub particle_start: [u32; 32],
+  pub particle_count: [u32; 32],
+  pub valid_mask: [u32; 2],
+  pub parent_idx: u32,
+  pub pad: u32,
+  pub permutations: [[u32; 32]; 8],
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LbvhPrepassPushConstants {
   pub bvh: u64,

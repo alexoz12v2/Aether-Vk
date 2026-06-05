@@ -6,6 +6,7 @@
 #extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
@@ -33,9 +34,21 @@ void main() {
     uint subgroup_id = gl_SubgroupID, lane_id = gl_SubgroupInvocationID, cluster_job_idx = gl_WorkGroupID.x * SUBGROUPS_PER_WG + subgroup_id;
     if (cluster_job_idx >= pc.num_clusters) return;
 
-    uint target_node_idx = pc.cluster_list.cluster_indices[cluster_job_idx];
-    bool i_am_valid = bvh_node_is_valid(pc.bvh.nodes[target_node_idx].valid_mask, lane_id);
-    uint my_p_idx   = pc.bvh.nodes[target_node_idx].child_indices[lane_id];
+    uint target_node_idx = 0;
+    bool i_am_valid = false;
+    uint my_p_idx = 0;
+    
+    // Check if cluster_list is null by converting BDA to uint64_t
+    // We assume if pc.num_clusters is passed, it actually means num_particles if cluster_list is null.
+    // Actually, in physics.rs num_clusters is set to total_particles.
+    if (uint64_t(pc.cluster_list) == 0ul) {
+        my_p_idx = cluster_job_idx * SUBGROUP_SIZE + lane_id;
+        i_am_valid = my_p_idx < pc.num_clusters; // num_clusters is total_particles in this case
+    } else {
+        target_node_idx = pc.cluster_list.cluster_indices[cluster_job_idx];
+        i_am_valid = bvh_node_is_valid(pc.bvh.nodes[target_node_idx].valid_mask, lane_id);
+        my_p_idx   = pc.bvh.nodes[target_node_idx].child_indices[lane_id];
+    }
 
     vec3 my_pos = vec3(0.0); float my_mass = 0.0;
     if (i_am_valid) {
@@ -93,6 +106,11 @@ void main() {
 
     if (i_am_valid) {
         vec3 g_f = my_acc * my_mass;
-        ADD_LINEAR_FORCE(pc.wrenches.wrenches[my_p_idx], g_f);
+        uint base = (my_p_idx / SUBGROUP_SIZE) * 10 * SUBGROUP_SIZE + (my_p_idx % SUBGROUP_SIZE);
+        if (g_f.x != 0.0 || g_f.y != 0.0 || g_f.z != 0.0) {
+            pc.particles.data[base + 7u * SUBGROUP_SIZE] = floatBitsToUint(uintBitsToFloat(pc.particles.data[base + 7u * SUBGROUP_SIZE]) + g_f.x);
+            pc.particles.data[base + 8u * SUBGROUP_SIZE] = floatBitsToUint(uintBitsToFloat(pc.particles.data[base + 8u * SUBGROUP_SIZE]) + g_f.y);
+            pc.particles.data[base + 9u * SUBGROUP_SIZE] = floatBitsToUint(uintBitsToFloat(pc.particles.data[base + 9u * SUBGROUP_SIZE]) + g_f.z);
+        }
     }
 }
