@@ -48,10 +48,28 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 
+#extension GL_EXT_control_flow_attributes : enable
+
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
 
-layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 32
+#endif
+
+// Maximum Picard iterations to unroll at compile time.
+// Override at compile time with -DN_ITERS=N to reduce code size on Lavapipe.
+#ifndef N_ITERS
+#define N_ITERS 8
+#endif
+
+// Maximum emitter count to unroll at compile time.
+#ifndef MAX_EMIT
+#define MAX_EMIT 8
+#endif
+
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
+
 
 layout(push_constant, std430) uniform PushConstants {
     RigidBodyArray         rigid_bodies;
@@ -85,46 +103,64 @@ void main() {
     uint fi = body.frame_idx;
     GpuReferenceFrame frame = pc.frames.frames[fi];
 
-    for (uint e = 0; e < pc.num_emitters; ++e) {
-        vec3  em_pos   = pc.emitters.emitters[e].position;   // AU (macro world-space)
-        float em_mu    = pc.emitters.emitters[e].mu;         // km³/s² (JPL default)
-        vec3  em_norm  = pc.emitters.emitters[e].normal;
-        uint  em_type  = pc.emitters.emitters[e].type_id;
-        float em_trunc = pc.emitters.emitters[e].trunc_distance;
-        float em_beta  = pc.emitters.emitters[e].beta;       // radiation-pressure β
-
-        if (em_type == 0u) {
-            // ── Gravity emitter ────────────────────────────────────────────
-            // Transform macro AU emitter position to body's local frame (km).
-            // frame.scale = AU/km  (small number, e.g. 6.685e-9 for 1 AU ≡ 1.496e8 km)
-            // frame.frame_type == 0 → body IS in macro frame; convert distance AU→km.
-            // frame.frame_type == 1 → body is in microframe; use frame center+scale.
-            vec3 r_local;
-            if (frame.frame_type == 0u) {
-                // Body position pos_n is in AU; convert distance to km before gravity.
-                r_local = (em_pos - pos_n) * AU_TO_KM;
-            } else {
-                // Microframe: r_local(km) = (em_pos(AU) − center(AU)) / scale(AU/km)
-                //                          − pos_n(km)
-                r_local = (em_pos - frame.center_pos) / frame.scale - pos_n;
-            }
-
-            float dist_sq = dot(r_local, r_local);
-            if (dist_sq > 1e-6) {
-                float dist      = sqrt(dist_sq);
-                float dist3     = dist_sq * dist;
-                float dist5     = dist3 * dist_sq;
-                float softening = 1.0 - exp(-dist5);        // quintic softening
-                float mu_eff    = em_mu * (1.0 - em_beta);  // β compensation
-                float force_mag = (mu_eff * mass * softening) / dist_sq;
-                f_n += (r_local / dist) * force_mag;
-            }
-        } else if (em_type == 1u) {
-            // ── Planar emitter (unchanged; local-frame only, no cross-frame) ──
-            float dist = dot(pos_n - em_pos, em_norm);
-            if (dist >= 0.0 && dist <= em_trunc) f_n += em_norm * em_mu;
-        }
+    // ── External force emitters (loop-free unroll to avoid Lavapipe JIT x30-aliasing) ──────
+    // Each EMITTER_STEP(e) is guarded by a runtime check so semantics are unchanged.
+#define EMITTER_STEP(E) \
+    if ((E) < pc.num_emitters) { \
+        vec3  _em_pos   = pc.emitters.emitters[(E)].position; \
+        float _em_mu    = pc.emitters.emitters[(E)].mu; \
+        vec3  _em_norm  = pc.emitters.emitters[(E)].normal; \
+        uint  _em_type  = pc.emitters.emitters[(E)].type_id; \
+        float _em_trunc = pc.emitters.emitters[(E)].trunc_distance; \
+        float _em_beta  = pc.emitters.emitters[(E)].beta; \
+        if (_em_type == 0u) { \
+            vec3 _r_local; \
+            if (frame.frame_type == 0u) { \
+                _r_local = (_em_pos - pos_n) * AU_TO_KM; \
+            } else { \
+                _r_local = (_em_pos - frame.center_pos) / frame.scale - pos_n; \
+            } \
+            float _dist_sq = dot(_r_local, _r_local); \
+            if (_dist_sq > 1e-6) { \
+                float _dist      = sqrt(_dist_sq); \
+                float _dist3     = _dist_sq * _dist; \
+                float _dist5     = _dist3 * _dist_sq; \
+                float _softening = 1.0 - exp(-_dist5); \
+                float _mu_eff    = _em_mu * (1.0 - _em_beta); \
+                float _force_mag = (_mu_eff * mass * _softening) / _dist_sq; \
+                f_n += (_r_local / _dist) * _force_mag; \
+            } \
+        } else if (_em_type == 1u) { \
+            float _dist = dot(pos_n - _em_pos, _em_norm); \
+            if (_dist >= 0.0 && _dist <= _em_trunc) f_n += _em_norm * _em_mu; \
+        } \
     }
+
+    EMITTER_STEP(0u)
+#if MAX_EMIT > 1
+    EMITTER_STEP(1u)
+#endif
+#if MAX_EMIT > 2
+    EMITTER_STEP(2u)
+#endif
+#if MAX_EMIT > 3
+    EMITTER_STEP(3u)
+#endif
+#if MAX_EMIT > 4
+    EMITTER_STEP(4u)
+#endif
+#if MAX_EMIT > 5
+    EMITTER_STEP(5u)
+#endif
+#if MAX_EMIT > 6
+    EMITTER_STEP(6u)
+#endif
+#if MAX_EMIT > 7
+    EMITTER_STEP(7u)
+#endif
+#undef EMITTER_STEP
+
+
 
     float half_dt = 0.5 * pc.dt; vec3 a_lin = f_n * inv_m;
     vec3 v_mid = v_n + half_dt * a_lin; vec3 pos_next = pos_n + pc.dt * v_mid; vec3 v_next = v_n + pc.dt * a_lin;
@@ -132,10 +168,40 @@ void main() {
     vec3 t_local = quat_rotate_inv(q_n, t_n); vec3 w_n_local = quat_rotate_inv(q_n, w_n);
     vec3 w_mid_local = w_n_local;
 
-    for (uint iter = 0u; iter < pc.n_iterations; ++iter) {
-        vec3 gyro = cross(w_mid_local, I_fwd * w_mid_local);
-        vec3 a_ang = I_inv * (t_local - gyro); w_mid_local = w_n_local + half_dt * a_ang;
+    // ── Picard gyroscopic iteration (loop-free unroll — see N_ITERS define) ───────────────
+    // Each PICARD_STEP is guarded by a runtime check on pc.n_iterations so
+    // the iteration count is still dynamic; only the MAXIMUM is compile-time.
+#define PICARD_STEP(I) \
+    if ((I) < pc.n_iterations) { \
+        vec3 _gyro = cross(w_mid_local, I_fwd * w_mid_local); \
+        vec3 _a_ang = I_inv * (t_local - _gyro); \
+        w_mid_local = w_n_local + half_dt * _a_ang; \
     }
+
+    PICARD_STEP(0u)
+#if N_ITERS > 1
+    PICARD_STEP(1u)
+#endif
+#if N_ITERS > 2
+    PICARD_STEP(2u)
+#endif
+#if N_ITERS > 3
+    PICARD_STEP(3u)
+#endif
+#if N_ITERS > 4
+    PICARD_STEP(4u)
+#endif
+#if N_ITERS > 5
+    PICARD_STEP(5u)
+#endif
+#if N_ITERS > 6
+    PICARD_STEP(6u)
+#endif
+#if N_ITERS > 7
+    PICARD_STEP(7u)
+#endif
+#undef PICARD_STEP
+
 
     vec3 w_next_local = 2.0 * w_mid_local - w_n_local; vec3 w_next = quat_rotate(q_n, w_next_local);
     vec3 w_mid_world = quat_rotate(q_n, w_mid_local); vec4 omega_pure = vec4(w_mid_world, 0.0);
@@ -146,5 +212,12 @@ void main() {
     pc.rigid_bodies.bodies[id].linear_vel_drag = vec4(v_next, body.linear_vel_drag.w);
     pc.rigid_bodies.bodies[id].angular_vel_drag = vec4(w_next, body.angular_vel_drag.w);
 
-    CLEAR_WRENCH(pc.wrenches.wrenches[w_idx]);
+    // Inline CLEAR_WRENCH to avoid the do-while(false) → OpLoopMerge → JIT x30-alias bug.
+    pc.wrenches.wrenches[w_idx].force_x  = 0u;
+    pc.wrenches.wrenches[w_idx].force_y  = 0u;
+    pc.wrenches.wrenches[w_idx].force_z  = 0u;
+    pc.wrenches.wrenches[w_idx].torque_x = 0u;
+    pc.wrenches.wrenches[w_idx].torque_y = 0u;
+    pc.wrenches.wrenches[w_idx].torque_z = 0u;
+
 }

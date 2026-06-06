@@ -50,9 +50,9 @@ jobs:
         sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
 
     - name: Setup Vulkan SDK
-      uses: jakoch/install-vulkan-sdk-action@v1.5.2
+      uses: jakoch/install-vulkan-sdk-action@v1.5.5
       with:
-        vulkan_version: '1.3.296.0'
+        vulkan_version: '1.4.321.0'
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4

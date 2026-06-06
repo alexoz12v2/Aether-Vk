@@ -12,8 +12,11 @@
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
 
-layout(local_size_x = 256) in;
-const uint SUBGROUPS_PER_WG = 256 / SUBGROUP_SIZE;
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 256
+#endif
+layout(local_size_x = LOCAL_SIZE_X) in;
+const uint SUBGROUPS_PER_WG = ((LOCAL_SIZE_X / SUBGROUP_SIZE) == 0 ? 1 : (LOCAL_SIZE_X / SUBGROUP_SIZE));
 
 layout(push_constant, std430) uniform PushConstants {
     MultiBvhBuffer tlas_bvh;
@@ -41,12 +44,12 @@ void main() {
         my_ent_id = pc.query_leaves.leaves[query_idx].entity_idx;
         uint my_meta = pc.query_leaves.leaves[query_idx].metadata;
 
-        if (bvh_get_shape(my_meta) == BVH_SHAPE_AABB) {
-            shared_stack_ptrs[subgroup_id] = 0;
-        } else {
-            shared_stacks[subgroup_id][0] = pc.tlas_root_index;
-            shared_stack_ptrs[subgroup_id] = 1;
-        }
+#ifdef DEBUG_SHADERS
+        debugPrintfEXT("bp_scene: query_idx=%d, ent_id=%d, min=(%f,%f,%f), max=(%f,%f,%f)\n", query_idx, my_ent_id, my_min.x, my_min.y, my_min.z, my_max.x, my_max.y, my_max.z);
+#endif
+
+        shared_stacks[subgroup_id][0] = pc.tlas_root_index;
+        shared_stack_ptrs[subgroup_id] = 1;
     }
 
     my_min = vec3(subgroupBroadcast(my_min.x, 0), subgroupBroadcast(my_min.y, 0), subgroupBroadcast(my_min.z, 0));
@@ -87,8 +90,12 @@ void main() {
         // filtering on that shape would eliminate all rb-rb pairs.
         bool hit_leaf = hit && is_leaf && ((my_ent_id < entity_id) || (is_sub_tlas && my_ent_id != entity_id));
 #ifdef DEBUG_SHADERS
-            debugPrintfEXT("hit && is_leaf! my_ent=%d ent=%d shape=%d hit_leaf=%d", my_ent_id, entity_id, entity_shape, hit_leaf ? 1 : 0);
+        if (my_ent_id == 0 && valid) {
+            debugPrintfEXT("bp_scene: ent 0 lane %d node %d: c_min=(%f,%f,%f), c_max=(%f,%f,%f), hit=%d, leaf=%d, ent=%d, SG_SIZE=%d, gl_SubgroupSize=%d, valid_mask.x=%x\n", lane_id, node_idx, c_min.x, c_min.y, c_min.z, c_max.x, c_max.y, c_max.z, hit ? 1 : 0, is_leaf ? 1 : 0, entity_id, SUBGROUP_SIZE, gl_SubgroupSize, pc.tlas_bvh.nodes[node_idx].valid_mask.x);
+        }
+        if (hit_leaf) debugPrintfEXT("bp_scene: Box hit leaf! meta=%x\n", meta);
 #endif
+
         bool hit_node = hit && !is_leaf;
 
 

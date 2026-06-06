@@ -11,7 +11,10 @@
 #include "imex_math.glsl"
 #include "physics_core.glsl"
 
-layout(local_size_x = 256) in;
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 256
+#endif
+layout(local_size_x = LOCAL_SIZE_X) in;
 
 layout(push_constant, std430) uniform PushConstants {
     RigidBodyArray scene_entities;    // 0-7
@@ -39,9 +42,7 @@ void main() {
         lca_id = pair.lca_id;
     } else {
         PairBuffer pairs = PairBuffer(pc.pair_buffer);
-#ifdef DEBUG_SHADERS
-        if (pair_idx == 0) debugPrintfEXT("narrow_ccd addr=%lx count=%d pair_idx=%d", pc.pair_buffer, pairs.count, pair_idx);
-#endif
+
         if (pair_idx >= pairs.count) return;
         uvec2 pair = pairs.pairs[pair_idx];
         idA = pair.x;
@@ -84,10 +85,14 @@ void main() {
     vec3 normal, contact;
     
 #ifdef DEBUG_SHADERS
-    debugPrintfEXT("Narrow Phase CCD [pair %d]: idA=%d, idB=%d\n", pair_idx, idA, idB);
+    debugPrintfEXT("Narrow Phase CCD [pair %d]: idA=%d, idB=%d, posA=(%f,%f,%f), posB=(%f,%f,%f), vA=(%f,%f,%f), vB=(%f,%f,%f)\n", 
+                   pair_idx, idA, idB, pos_A.x, pos_A.y, pos_A.z, pos_B.x, pos_B.y, pos_B.z, vel_A.x, vel_A.y, vel_A.z, vel_B.x, vel_B.y, vel_B.z);
 #endif
 
     if (compute_toi_generic(shape_A, extents_A, trans_A, vel_A * pc.dt, shape_B, extents_B, trans_B, vel_B * pc.dt, 1e-3, 10, toi, normal, contact, depth)) {
+#ifdef DEBUG_SHADERS
+        debugPrintfEXT("COLLISION DETECTED [pair %d]: toi=%f depth=%f normal=(%f, %f, %f) contact=(%f, %f, %f)\n", pair_idx, toi, depth, normal.x, normal.y, normal.z, contact.x, contact.y, contact.z);
+#endif
         SparseCollisions out_list = SparseCollisions(pc.output_list);
         uint count = atomicAdd(out_list.count, 1);
         if (count < out_list.capacity) {

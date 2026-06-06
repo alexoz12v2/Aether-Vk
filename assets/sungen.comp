@@ -22,8 +22,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 // Output 3D Volumetric Texture (rgba16f ideal for physically accurate HDR)
 layout(set = 0, binding = 0, rgba16f) uniform writeonly image3D sunVolume;
 
-// Physical Buffer 64 (Pointer accessed via push constants)
-layout(buffer_reference, std430, buffer_reference_align = 8) buffer SunParams {
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer SunParams {
   float time;              // Animation time
   float photosphereTemp;   // Surface Temp, typically ~5778K
   float coronaTemp;        // Atmosphere Temp, typically ~1,000,000K
@@ -32,8 +31,8 @@ layout(buffer_reference, std430, buffer_reference_align = 8) buffer SunParams {
   float noiseScale;        // Frequency of convection granulation
 };
 
-layout(push_constant) uniform Push {
-  SunParams params; // 64-bit address to the params buffer
+layout(push_constant, std430) uniform Push {
+  SunParams params;
 } push;
 
 // Noise Generation for Simulated Convection

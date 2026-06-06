@@ -158,8 +158,18 @@ impl Instance {
     } else {
       #[cfg(test)]
       {
-        printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
-        printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED_RESERVE_BINDING_SLOT);
+        #[cfg(all(test, not(target_vendor = "apple")))]
+        if crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.load(core::sync::atomic::Ordering::Relaxed) {
+            printf_features.push(vk::ValidationFeatureEnableEXT::DEBUG_PRINTF);
+        } else {
+            printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
+            printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED_RESERVE_BINDING_SLOT);
+        }
+        #[cfg(not(all(test, not(target_vendor = "apple"))))]
+        {
+            printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
+            printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED_RESERVE_BINDING_SLOT);
+        }
       }
       #[cfg(not(test))]
       {
@@ -271,10 +281,18 @@ impl Instance {
     // 2. filter those which are eligible and map to query result
     let mut eligible_devices =
       Vec::from_iter(physical_devices.iter().filter_map(|&physical_device| {
-        // a. properties (TODO: Subgroup information)
+        // a. properties (TODO: Subgroup Information)
         let mut subgroup_props = vk::PhysicalDeviceSubgroupProperties::default();
-        let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup_props);
-        unsafe { self.instance.get_physical_device_properties2(physical_device, &mut props) };
+        let (subgroup_size, is_cpu) = {
+          // `props` mutably borrows `subgroup_props` via push_next().  The block
+          // scope ends the borrow so we can read `subgroup_props.subgroup_size` next.
+          let mut props =
+            vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup_props);
+          unsafe { self.instance.get_physical_device_properties2(physical_device, &mut props) };
+          // Cache device type; block scope ends props borrow here.
+          let dev_type = props.properties.device_type;
+          (subgroup_props.subgroup_size, dev_type == vk::PhysicalDeviceType::CPU)
+        };
         // TODO log
 
         // b. supported queue families
@@ -374,11 +392,17 @@ impl Instance {
         }
 
         // e. device is valid, compute its score
-        let score: i32 = match props.properties.device_type {
-          vk::PhysicalDeviceType::DISCRETE_GPU => 100,
-          vk::PhysicalDeviceType::INTEGRATED_GPU => 50,
-          vk::PhysicalDeviceType::VIRTUAL_GPU => 20,
-          _ => 1,
+        let score: i32 = if is_cpu {
+          1  // CPU device (Lavapipe) — lowest preference
+        } else {
+          // Query properties again using the non-pNext variant (safe: props was dropped above)
+          let props2 = unsafe { self.instance.get_physical_device_properties(physical_device) };
+          match props2.device_type {
+            vk::PhysicalDeviceType::DISCRETE_GPU  => 100,
+            vk::PhysicalDeviceType::INTEGRATED_GPU => 50,
+            vk::PhysicalDeviceType::VIRTUAL_GPU   => 20,
+            _                                      => 1,
+          }
         };
 
         // f. TODO: optional extension and features bookkeeping and score increase/decrease
@@ -392,15 +416,19 @@ impl Instance {
           optional_extensions.insert(utils::OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1);
         }
 
+
         Some(utils::PhysicalDeviceQueryResult {
           physical_device,
-          physical_device_properties: props.properties,
+          physical_device_properties: unsafe {
+            self.instance.get_physical_device_properties(physical_device)
+          },
           family_count: queue_family_properties_len,
           optional_extensions,
           graphics_queue_family_index,
           compute_queue_family_index,
           transfer_queue_family_index,
-          subgroup_size: subgroup_props.subgroup_size,
+          subgroup_size,
+          is_cpu,
           score,
           debug_shaders: query_input.debug_shaders,
         })

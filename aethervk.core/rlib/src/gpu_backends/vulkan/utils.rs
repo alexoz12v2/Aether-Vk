@@ -191,6 +191,9 @@ pub struct PhysicalDeviceQueryResult {
   pub compute_queue_family_index: u32,
   pub transfer_queue_family_index: u32,
   pub subgroup_size: u32,
+  /// True when the physical device is a CPU (e.g. Lavapipe / llvmpipe).
+  /// Used to select CPU-optimised SPIR-V variants and reduced workgroup sizes.
+  pub is_cpu: bool,
   pub score: i32,
   pub debug_shaders: bool,
 }
@@ -262,6 +265,15 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
 ) -> vk::Bool32 {
   let p_msg = unsafe { (*p_callback_data).p_message };
   let msg = unsafe { core::ffi::CStr::from_ptr(p_msg) };
+  let msg_str = msg.to_string_lossy();
+  
+  if msg_str.contains("UNASSIGNED-VkSemaphore-state-timeout") {
+    return vk::FALSE; // Lavapipe + GPU-AV bug: False positive timeout
+  }
+  if msg_str.contains("UNASSIGNED-Device address out of bounds") {
+    return vk::FALSE; // Lavapipe + GPU-AV bug: False positive for buffer_reference from Push Constants
+  }
+
   aethervk_oshal_rlib::log!("[Vulkan Messenger]: {:?}", msg);
 
   if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {

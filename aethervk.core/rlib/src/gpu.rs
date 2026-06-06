@@ -890,6 +890,11 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
 
   fn subgroup_size(&self) -> u32;
 
+  /// Returns `true` when the underlying Vulkan device is a CPU software
+  /// renderer (e.g. Lavapipe / llvmpipe).  Used by callers that need to adapt
+  /// workgroup sizes or scheduling behaviour to the CPU execution model.
+  fn is_cpu_device(&self) -> bool;
+
   /// Prepare all the necessary state for a rendering operation. In particular
   /// - Update frame index within device and (vulkan) refresh timeline semaphore value
   /// - Refresh VMA memory budgets

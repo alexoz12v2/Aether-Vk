@@ -9,7 +9,10 @@
 #include "imex_math.glsl"
 #include "physics_core.glsl"
 
-layout(local_size_x = 256) in;
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 256
+#endif
+layout(local_size_x = LOCAL_SIZE_X) in;
 
 layout(push_constant, std430) uniform PushConstants {
     RigidBodyArray scene_entities;    // 0-7
@@ -27,11 +30,7 @@ void main() {
     uint pair_idx = gl_GlobalInvocationID.x;
     
     CrossPairBuffer cross_pairs = pc.cross_pair_buffer;
-    if (pair_idx == 0) {
-#ifdef DEBUG_SHADERS
-        debugPrintfEXT("narrow_ccd_cross_lca count %d", cross_pairs.count);
-#endif
-    }
+
     if (pair_idx >= cross_pairs.count) return;
     
     CrossPair pair = cross_pairs.pairs[pair_idx];

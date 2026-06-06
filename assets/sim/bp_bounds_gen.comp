@@ -8,7 +8,10 @@
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
 
-layout(local_size_x = 256) in;
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 256
+#endif
+layout(local_size_x = LOCAL_SIZE_X) in;
 
 layout(push_constant, std430) uniform PushConstants {
     RigidBodyArray scene_entities;

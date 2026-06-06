@@ -48,6 +48,7 @@ Face create_face(Simplex polytope, int a, int b, int c) {
     if (d < 0.0) {
         normal = -normal;
         d = -d;
+        int temp = b; b = c; c = temp;
     }
     
     Face f;
@@ -68,6 +69,7 @@ Face create_face_poly(MinkowskiPoint points[16], int a, int b, int c) {
     if (d < 0.0) {
         normal = -normal;
         d = -d;
+        int temp = b; b = c; c = temp;
     }
     
     Face f;
@@ -199,14 +201,45 @@ void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, ui
         }
     }
     
-    Face closest_face = faces[0];
-    MinkowskiPoint a = polytope_points[closest_face.a];
-    MinkowskiPoint b = polytope_points[closest_face.b];
-    MinkowskiPoint c = polytope_points[closest_face.c];
-    dist = -closest_face.distance;
-    epa_normal = closest_face.normal;
-    p_a = a.point_a * 0.333 + b.point_a * 0.333 + c.point_a * 0.334;
-    p_b = a.point_b * 0.333 + b.point_b * 0.333 + c.point_b * 0.334;
+    int best_face = 0;
+    float min_dist_final = faces[0].distance;
+    for (int i = 1; i < num_faces; ++i) {
+        if (faces[i].distance < min_dist_final) {
+            min_dist_final = faces[i].distance;
+            best_face = i;
+        }
+    }
+    
+    Face closest_face_final = faces[best_face];
+    MinkowskiPoint a = polytope_points[closest_face_final.a];
+    MinkowskiPoint b = polytope_points[closest_face_final.b];
+    MinkowskiPoint c = polytope_points[closest_face_final.c];
+    
+    vec3 n = closest_face_final.normal;
+    vec3 p = n * min_dist_final;
+    
+    vec3 v0 = b.point - a.point;
+    vec3 v1 = c.point - a.point;
+    vec3 v2 = p - a.point;
+    
+    float d00 = dot(v0, v0);
+    float d01 = dot(v0, v1);
+    float d11 = dot(v1, v1);
+    float d20 = dot(v2, v0);
+    float d21 = dot(v2, v1);
+    
+    float denom = d00 * d11 - d01 * d01;
+    float v = 0.333, w = 0.333;
+    if (abs(denom) >= 1e-6) {
+        v = (d11 * d20 - d01 * d21) / denom;
+        w = (d00 * d21 - d01 * d20) / denom;
+    }
+    float u = 1.0 - v - w;
+    
+    dist = -min_dist_final;
+    epa_normal = closest_face_final.normal;
+    p_a = a.point_a * u + b.point_a * v + c.point_a * w;
+    p_b = a.point_b * u + b.point_b * v + c.point_b * w;
 }
 
 
@@ -387,7 +420,7 @@ vec3 support_shape(uint shape_type, vec3 shape_data, mat4 transform, vec3 dir) {
 }
 
 float gjk_distance_generic(uint type1, vec3 data1, mat4 trans1, uint type2, vec3 data2, mat4 trans2, out vec3 p_a, out vec3 p_b, out vec3 epa_normal) {
-    vec3 dir = vec3(1.0, 0.0, 0.0);
+    vec3 dir = normalize(vec3(1.0, 0.1, 0.01));
     
     vec3 support_a = support_shape(type1, data1, trans1, -dir);
     vec3 support_b = support_shape(type2, data2, trans2, dir);
@@ -399,12 +432,18 @@ float gjk_distance_generic(uint type1, vec3 data1, mat4 trans1, uint type2, vec3
     simplex.count = 1;
     
     vec3 v = simplex.points[0].point;
+    vec3 last_valid_dir = dir;
     
     const int MAX_ITERATIONS = 64;
     for (int i = 0; i < MAX_ITERATIONS; ++i) {
-        if (dot(v, v) < 1e-6) break;
+        if (dot(v, v) < 1e-6) {
+            compute_closest_points(simplex, p_a, p_b);
+            epa_normal = -last_valid_dir;
+            return 0.0;
+        }
         
         dir = -v;
+        last_valid_dir = dir;
         vec3 p1 = support_shape(type1, data1, trans1, dir);
         vec3 p2 = support_shape(type2, data2, trans2, -dir);
         
@@ -415,7 +454,11 @@ float gjk_distance_generic(uint type1, vec3 data1, mat4 trans1, uint type2, vec3
         
         float v_dot_dir = dot(v, dir);
         float w_dot_dir = dot(w.point, dir);
-        if (w_dot_dir - v_dot_dir < 1e-4) break;
+        if (w_dot_dir - v_dot_dir < 1e-4) {
+            compute_closest_points(simplex, p_a, p_b);
+            epa_normal = -last_valid_dir;
+            return length(p_a - p_b);
+        }
         
         simplex.points[simplex.count] = w;
         simplex.count++;
@@ -439,7 +482,7 @@ float gjk_distance_generic(uint type1, vec3 data1, mat4 trans1, uint type2, vec3
     }
     
     compute_closest_points(simplex, p_a, p_b);
-    epa_normal = vec3(0.0); // No overlap, EPA normal not applicable
+    epa_normal = -last_valid_dir; // No overlap, fallback normal
     return length(p_a - p_b);
 }
 
@@ -548,25 +591,26 @@ bool compute_toi_generic(
 ) {
     float t = 0.0;
     
+    vec3 p_a_init, p_b_init, epa_n_init;
+    float dist = gjk_distance_generic(type1, data1, trans1_start, type2, data2, trans2_start, p_a_init, p_b_init, epa_n_init);
+    
     vec3 v_rel = v1 - v2;
     float v_rel_max = length(v_rel);
     
-    if (v_rel_max < 1e-6) {
-        vec3 p_a, p_b, epa_n;
-        float dist = gjk_distance_generic(type1, data1, trans1_start, type2, data2, trans2_start, p_a, p_b, epa_n);
+    if (v_rel_max <= 1e-6) {
         if (dist <= 0.0) {
             out_toi = 0.0;
             out_depth = dist < 0.0 ? -dist : 0.0;
-            // EPA normal points outward from origin of Minkowski diff (A-B),
-            // i.e. from B towards A. Negate it so it points from A to B,
-            // matching the LCP solver convention (v_rel = v_B - v_A).
-            float epa_len = length(epa_n);
-            out_normal = epa_len > 1e-6 ? -epa_n / epa_len : vec3(1.0, 0.0, 0.0);
-            out_contact_point = (p_a + p_b) * 0.5;
+            // EPA normal points from A to B.
+            float epa_len = length(epa_n_init);
+            out_normal = epa_len > 1e-6 ? epa_n_init / epa_len : vec3(1.0, 0.0, 0.0);
+            out_contact_point = (p_a_init + p_b_init) * 0.5;
             return true;
         }
         return false;
     }
+    
+    vec3 last_valid_normal = v_rel_max > 1e-6 ? normalize(v_rel) : vec3(0.0, -1.0, 0.0);
     
     for (int i = 0; i < max_iterations; ++i) {
         mat4 cur_trans1 = trans1_start;
@@ -581,25 +625,27 @@ bool compute_toi_generic(
         if (dist <= time_tolerance) {
             out_toi = t;
             out_depth = dist < 0.0 ? -dist : 0.0;
-            // When GJK detected overlap (dist < 0), use the EPA face normal.
-            // EPA normal points from B towards A (outward from Minkowski
-            // origin); negate so it points from A to B for the LCP solver.
             if (dist < 0.0 && length(epa_n) > 1e-6) {
-                out_normal = -normalize(epa_n);
+                out_normal = normalize(epa_n);
             } else {
                 vec3 n = p_b - p_a;
                 float n_len = length(n);
-                out_normal = n_len > 1e-6 ? n / n_len : vec3(1.0, 0.0, 0.0);
+                if (n_len > 1e-6) {
+                    out_normal = n / n_len;
+                } else {
+                    out_normal = last_valid_normal;
+                }
             }
             out_contact_point = (p_a + p_b) * 0.5;
             return true;
         }
 
-        vec3 n_dir = dist > 1e-6 ? normalize(p_a - p_b) : vec3(1.0, 0.0, 0.0);
+        vec3 n_dir = dist > 1e-6 ? normalize(p_b - p_a) : last_valid_normal;
+        last_valid_normal = n_dir;
+        
         float v_closing = -dot(v_rel, n_dir);
         
         if (v_closing <= 0.0) return false;
-        
         
         float delta_t = dist / v_closing;
         t += delta_t;

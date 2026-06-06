@@ -12,8 +12,11 @@
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
 
-layout(local_size_x = 256) in;
-const uint SUBGROUPS_PER_WG = 256 / SUBGROUP_SIZE;
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 256
+#endif
+layout(local_size_x = LOCAL_SIZE_X) in;
+const uint SUBGROUPS_PER_WG = ((LOCAL_SIZE_X / SUBGROUP_SIZE) == 0 ? 1 : (LOCAL_SIZE_X / SUBGROUP_SIZE));
 
 struct EntityHeader { uint type; uint pad[3]; };
 layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer EntityHeaderArray { EntityHeader entities[]; };
@@ -50,12 +53,12 @@ void transform_aabb_macro_to_micro(vec3 lca_center_pos, float lca_scale, vec3 ma
         vec3(center_km.x - extents_km.x, center_km.y + extents_km.y, center_km.z + extents_km.z),
         vec3(center_km.x + extents_km.x, center_km.y + extents_km.y, center_km.z + extents_km.z)
     );
+    // Macro-expanded 8-corner transform loop (avoids JIT x30-aliasing on Lavapipe ARM64).
     out_min = vec3(1e20); out_max = vec3(-1e20);
-    for (int i = 0; i < 8; i++) {
-        vec3 local_p = (corners[i] - lca_center_pos) / lca_scale;
-        out_min = min(out_min, local_p);
-        out_max = max(out_max, local_p);
-    }
+#define CORNER(I) { vec3 local_p = (corners[(I)] - lca_center_pos) / lca_scale; out_min = min(out_min, local_p); out_max = max(out_max, local_p); }
+    CORNER(0) CORNER(1) CORNER(2) CORNER(3)
+    CORNER(4) CORNER(5) CORNER(6) CORNER(7)
+#undef CORNER
 }
 
 void main() {
@@ -114,6 +117,9 @@ void main() {
         bool is_leaf = bvh_is_leaf(meta);
 
         bool hit_leaf = hit && is_leaf;
+#ifdef DEBUG_SHADERS
+        if (hit_leaf) debugPrintfEXT("bp_cross_lca: hit leaf! macro=%d micro=%d lca=%d\n", macro_ent_id, bvh_get_index(meta), lca_ent_id);
+#endif
         bool hit_node = hit && !is_leaf;
 #ifdef DEBUG_SHADERS
             debugPrintfEXT("Checking c_min=%f,%f c_max=%f,%f hit=%d valid=%d leaf=%d", c_min.x, c_min.y, c_max.x, c_max.y, hit?1:0, valid?1:0, is_leaf?1:0);
@@ -135,44 +141,39 @@ void main() {
             }
         }
 
-        // Loop over subgroup bits to extract overlaps, then sort exactly into the designated Narrow Phase Queues
-        for (uint i = 0; i < 4; i++) {
-            uint m = leaf_ballot[i];
-            while (m != 0) {
-                uint bit = findLSB(m);
-                m &= ~(1u << bit);
-
-                uint src_lane = i * 32 + bit;
-                uint micro_ent_id = bvh_get_index(subgroupShuffle(meta, src_lane));
-
-                if (lane_id == 0) {
-                    uint type_A = pc.entity_headers.entities[macro_ent_id].type;
-                    uint type_B = pc.entity_headers.entities[micro_ent_id].type;
-                    uint ent_A = macro_ent_id;
-                    uint ent_B = micro_ent_id;
-
-                    if (type_A > type_B) {
-                        uint temp = ent_A; ent_A = ent_B; ent_B = temp;
-                        temp = type_A; type_A = type_B; type_B = temp;
-                    }
-
-                    if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) {
-                        uint out_idx = atomicAdd(pc.out_cross_pairs.count, 1);
-                        if (out_idx < pc.max_pairs) {
-                            pc.out_cross_pairs.pairs[out_idx].macro_id = ent_A;
-                            pc.out_cross_pairs.pairs[out_idx].micro_id = ent_B;
-                            pc.out_cross_pairs.pairs[out_idx].lca_id = lca_ent_id;
-                        }
-                    } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_RIGID_BODY) {
-                        uint out_idx = atomicAdd(pc.out_rb_ps.count, 1);
-                        if (out_idx < pc.max_pairs) pc.out_rb_ps.pairs[out_idx] = uvec2(ent_B, ent_A);
-                    } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_PARTICLE_SYSTEM) {
-                        uint out_idx = atomicAdd(pc.out_ps_ps.count, 1);
-                        if (out_idx < pc.max_pairs) pc.out_ps_ps.pairs[out_idx] = uvec2(ent_A, ent_B);
-                    }
-                }
-            }
+        // Ballot word scan — macro-expanded to avoid JIT x30-aliasing on Lavapipe ARM64.
+        // BALLOT_WORD(I) extracts all set bits from leaf_ballot[I].
+#define BALLOT_WORD(I) { \
+            uint m = leaf_ballot[(I)]; \
+            while (m != 0) { \
+                uint bit = findLSB(m); \
+                m &= ~(1u << bit); \
+                uint src_lane = (I) * 32u + bit; \
+                uint micro_ent_id = bvh_get_index(subgroupShuffle(meta, src_lane)); \
+                if (lane_id == 0) { \
+                    uint type_A = pc.entity_headers.entities[macro_ent_id].type; \
+                    uint type_B = pc.entity_headers.entities[micro_ent_id].type; \
+                    uint ent_A = macro_ent_id; \
+                    uint ent_B = micro_ent_id; \
+                    if (type_A > type_B) { uint temp = ent_A; ent_A = ent_B; ent_B = temp; temp = type_A; type_A = type_B; type_B = temp; } \
+                    if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) { \
+                        uint out_idx = atomicAdd(pc.out_cross_pairs.count, 1); \
+                        if (out_idx < pc.max_pairs) { pc.out_cross_pairs.pairs[out_idx].macro_id = ent_A; pc.out_cross_pairs.pairs[out_idx].micro_id = ent_B; pc.out_cross_pairs.pairs[out_idx].lca_id = lca_ent_id; } \
+                    } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_RIGID_BODY) { \
+                        uint out_idx = atomicAdd(pc.out_rb_ps.count, 1); \
+                        if (out_idx < pc.max_pairs) pc.out_rb_ps.pairs[out_idx] = uvec2(ent_B, ent_A); \
+                    } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_PARTICLE_SYSTEM) { \
+                        uint out_idx = atomicAdd(pc.out_ps_ps.count, 1); \
+                        if (out_idx < pc.max_pairs) pc.out_ps_ps.pairs[out_idx] = uvec2(ent_A, ent_B); \
+                    } \
+                } \
+            } \
         }
+        BALLOT_WORD(0u)
+        BALLOT_WORD(1u)
+        BALLOT_WORD(2u)
+        BALLOT_WORD(3u)
+#undef BALLOT_WORD
 
         uvec4 node_ballot = subgroupBallot(hit_node);
         uint  node_count  = subgroupBallotBitCount(node_ballot);

@@ -41,7 +41,10 @@ layout(push_constant, std430) uniform PushConstants {
     uint         current_time_hi;
 } pc;
 
-layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
 
 void main() {
     uint gid = gl_GlobalInvocationID.x;
