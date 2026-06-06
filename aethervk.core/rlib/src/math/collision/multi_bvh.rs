@@ -82,6 +82,8 @@ pub struct MultiBvh<B, P, const N: usize> {
 /// Dynamic Subgroup-Size Multi-BVH representation.
 #[derive(Debug, Clone)]
 pub enum MeshMultiBvh {
+  Bvh4(MultiBvh<crate::math::collision::linear_bvh::LinearBound<f32>, usize, 4>),
+  Bvh8(MultiBvh<crate::math::collision::linear_bvh::LinearBound<f32>, usize, 8>),
   Bvh16(MultiBvh<crate::math::collision::linear_bvh::LinearBound<f32>, usize, 16>),
   Bvh32(MultiBvh<crate::math::collision::linear_bvh::LinearBound<f32>, usize, 32>),
   Bvh64(MultiBvh<crate::math::collision::linear_bvh::LinearBound<f32>, usize, 64>),
@@ -206,13 +208,19 @@ impl From<LinearBound<f32>> for [f32; 6] {
 // permutations field was changed from [[u8;N];8] to [[u32;N];8] to ensure no
 // unexpected padding or alignment issues.
 
-// SAFETY: TlasMultiNode<N> is #[repr(C)] with only Pod fields, for N ∈ {16,32,64}.
+// SAFETY: TlasMultiNode<N> is #[repr(C)] with only Pod fields, for N ∈ {4,8,16,32,64,128}.
+unsafe impl bytemuck::Zeroable for TlasMultiNode<4> {}
+unsafe impl bytemuck::Zeroable for TlasMultiNode<8> {}
 unsafe impl bytemuck::Zeroable for TlasMultiNode<16> {}
 unsafe impl bytemuck::Zeroable for TlasMultiNode<32> {}
 unsafe impl bytemuck::Zeroable for TlasMultiNode<64> {}
+unsafe impl bytemuck::Zeroable for TlasMultiNode<128> {}
+unsafe impl bytemuck::Pod for TlasMultiNode<4> {}
+unsafe impl bytemuck::Pod for TlasMultiNode<8> {}
 unsafe impl bytemuck::Pod for TlasMultiNode<16> {}
 unsafe impl bytemuck::Pod for TlasMultiNode<32> {}
 unsafe impl bytemuck::Pod for TlasMultiNode<64> {}
+unsafe impl bytemuck::Pod for TlasMultiNode<128> {}
 
 ///
 /// # Sign Heuristic & Permutation Ordering
@@ -233,8 +241,8 @@ where
   T::Bound: Into<[f32; 6]>, // Assuming Bound can be converted to [min_x, min_y, min_z, max_x, max_y, max_z]
 {
   assert!(
-    N > 1 && N.is_power_of_two() && N <= 64,
-    "N must be a power of two <= 64"
+    N > 1 && N.is_power_of_two() && N <= 128,
+    "N must be a power of two between 2 and 128"
   );
 
   let mut multi_nodes = Vec::new();

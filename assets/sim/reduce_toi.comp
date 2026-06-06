@@ -18,8 +18,8 @@ layout(push_constant, std430) uniform PushConstants {
     float dt;
 } pc;
 
-// We can use the specialization constant to precisely size the shared array
-shared uint shared_min_toi[128 / SUBGROUP_SIZE];
+// Size the array to the maximum possible number of subgroups (if subgroup size is 1)
+shared uint shared_min_toi[128];
 
 void main() {
     uint global_id = gl_GlobalInvocationID.x;
@@ -30,6 +30,9 @@ void main() {
 
     if (global_id < pc.collisions.count) {
         tc = pc.collisions.pairs[global_id].toi;
+        if (isnan(tc)) {
+            tc = pc.dt;
+        }
     }
 
     // Subgroup reduction
@@ -43,7 +46,12 @@ void main() {
 
     // Workgroup reduction
     if (local_id == 0) {
-        uint num_subgroups = gl_WorkGroupSize.x / SUBGROUP_SIZE;
+        uint num_subgroups = gl_WorkGroupSize.x / gl_SubgroupSize;
+        // In case gl_SubgroupSize doesn't divide gl_WorkGroupSize.x perfectly:
+        if ((gl_WorkGroupSize.x % gl_SubgroupSize) != 0) {
+            num_subgroups += 1;
+        }
+        
         uint wg_min_uint = shared_min_toi[0];
         for (uint i = 1; i < num_subgroups; i++) {
             wg_min_uint = min(wg_min_uint, shared_min_toi[i]);

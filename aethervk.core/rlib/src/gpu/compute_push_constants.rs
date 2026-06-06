@@ -310,27 +310,42 @@ pub struct MultiBvhNodeGpu {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct MultiBvhNodeWideGpu {
-  pub min_x: [f32; 32],
-  pub max_x: [f32; 32],
-  pub min_y: [f32; 32],
-  pub max_y: [f32; 32],
-  pub min_z: [f32; 32],
-  pub max_z: [f32; 32],
-  pub child_indices: [u32; 32],
-  pub metadata: [u32; 32],
-  pub masses: [f32; 32],
-  pub com_x: [f32; 32],
-  pub com_y: [f32; 32],
-  pub com_z: [f32; 32],
-  pub particle_start: [u32; 32],
-  pub particle_count: [u32; 32],
+#[derive(Clone, Copy)]
+pub struct MultiBvhNodeWideGpu<const N: usize> {
+  pub min_x: [f32; N],
+  pub max_x: [f32; N],
+  pub min_y: [f32; N],
+  pub max_y: [f32; N],
+  pub min_z: [f32; N],
+  pub max_z: [f32; N],
+  pub child_indices: [u32; N],
+  pub metadata: [u32; N],
+  pub masses: [f32; N],
+  pub com_x: [f32; N],
+  pub com_y: [f32; N],
+  pub com_z: [f32; N],
+  pub particle_start: [u32; N],
+  pub particle_count: [u32; N],
   pub valid_mask: [u32; 2],
   pub parent_idx: u32,
   pub pad: u32,
-  pub permutations: [[u32; 32]; 8],
+  pub permutations: [[u32; N]; 8],
 }
+
+// SAFETY: MultiBvhNodeWideGpu<N> is #[repr(C)] with only f32/u32 fields (all Pod),
+// for the concrete sizes we actually use (powers of two 4..=128).
+unsafe impl bytemuck::Zeroable for MultiBvhNodeWideGpu<4> {}
+unsafe impl bytemuck::Zeroable for MultiBvhNodeWideGpu<8> {}
+unsafe impl bytemuck::Zeroable for MultiBvhNodeWideGpu<16> {}
+unsafe impl bytemuck::Zeroable for MultiBvhNodeWideGpu<32> {}
+unsafe impl bytemuck::Zeroable for MultiBvhNodeWideGpu<64> {}
+unsafe impl bytemuck::Zeroable for MultiBvhNodeWideGpu<128> {}
+unsafe impl bytemuck::Pod for MultiBvhNodeWideGpu<4> {}
+unsafe impl bytemuck::Pod for MultiBvhNodeWideGpu<8> {}
+unsafe impl bytemuck::Pod for MultiBvhNodeWideGpu<16> {}
+unsafe impl bytemuck::Pod for MultiBvhNodeWideGpu<32> {}
+unsafe impl bytemuck::Pod for MultiBvhNodeWideGpu<64> {}
+unsafe impl bytemuck::Pod for MultiBvhNodeWideGpu<128> {}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]

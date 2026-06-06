@@ -9202,16 +9202,36 @@ impl Device {
       .command_buffer_count(1);
     let cmd = unsafe { self.device.allocate_command_buffers(&alloc_info) }?[0];
 
+    struct PoolGuard<'a> {
+      device: &'a ash::Device,
+      pool: vk::CommandPool,
+      cmd: vk::CommandBuffer,
+      disarmed: bool,
+    }
+    impl<'a> Drop for PoolGuard<'a> {
+      fn drop(&mut self) {
+        if !self.disarmed {
+          unsafe {
+            self.device.free_command_buffers(self.pool, &[self.cmd]);
+            self.device.destroy_command_pool(self.pool, None);
+          }
+        }
+      }
+    }
+
+    let mut guard = PoolGuard {
+      device: &self.device,
+      pool,
+      cmd,
+      disarmed: false,
+    };
+
     let begin_info =
       vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
     unsafe { self.device.begin_command_buffer(cmd, &begin_info) }?;
 
     if let Err(e) = f(cmd) {
       aethervk_oshal_rlib::log!("run_transient_commands error: {:?}", e);
-      unsafe {
-        self.device.free_command_buffers(pool, &[cmd]);
-        self.device.destroy_command_pool(pool, None);
-      }
       return Err(e);
     }
 
@@ -9243,6 +9263,7 @@ impl Device {
       self.device.destroy_semaphore(timeline_semaphore, None);
     }
 
+    guard.disarmed = true;
     Ok(TransientCmdPoolResource { pool, cmd })
   }
 

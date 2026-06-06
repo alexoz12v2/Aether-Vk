@@ -2021,12 +2021,15 @@ pub struct CollisionPair {
   pub penetration_depth: f32,
 }
 
-/// GPU hardware subgroup (warp) size, clamped to the valid range for dispatch.
+/// GPU hardware subgroup (warp/SIMD) size, clamped to the valid range for dispatch.
+/// Powers of two from 4 to 128. Lavapipe reports 8; Apple Silicon 32; AMD 64; Nvidia 32.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubgroupSize {
-  Size16 = 16,
-  Size32 = 32,
-  Size64 = 64,
+  Size4   = 4,
+  Size8   = 8,
+  Size16  = 16,
+  Size32  = 32,
+  Size64  = 64,
   Size128 = 128,
 }
 
