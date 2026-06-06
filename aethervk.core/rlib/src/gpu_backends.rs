@@ -596,32 +596,20 @@ where
           )?;
           sync!("bp_cross_lca");
         }
-        // Particle self-collision via Hookean spring forces
         let p_addr = particles.address();
-        // Compute total_particles correctly from the AOSOA layout:
-        //   stride = PARTICLE_FIELDS (11) × subgroup_size
-        // The old code used 320 (= 10 × 32) which was wrong in two ways:
-        //   1. PARTICLE_FIELDS is 11, not 10.
-        //   2. subgroup_size is device-specific (8 on Lavapipe ARM64, not 32).
-        // On Lavapipe (sg=8) the correct stride is 11×8=88, so p_cap was
-        // off by 320/88 ≈ 3.6×, dispatching 3-4× too many threads and reading
-        // garbage particle data — causing the energy-conservation test to fail.
-        let p_cap = {
-          let sg = kernels.subgroup_size().map(|s| s as u32).unwrap_or(32);
-          let stride = crate::gpu::PARTICLE_FIELDS as u32 * sg;
-          (particles.capacity() as u32 / stride) * sg
-        };
-        kernels.bp_particle_self(
-          &mut cmd,
-          tlas_bvh_addr,
-          &mut particles,
-          p_addr,
-          p_cap,
-          0,           // BVH root index
-          0.5_f32,     // particle radius (m)
-          1_000.0_f32, // spring stiffness k
-        )?;
-        sync!("bp_particle_self");
+        if actual_particles > 0 {
+          kernels.bp_particle_self(
+            &mut cmd,
+            tlas_bvh_addr,
+            &mut particles,
+            p_addr,
+            actual_particles,
+            0,           // BVH root index
+            0.5_f32,     // particle radius (m)
+            1_000.0_f32, // spring stiffness k
+          )?;
+          sync!("bp_particle_self");
+        }
 
         // ── Merge classified pairs → global collision list ────────────────────
         // 1) Standard CCD for rb_rb_pairs
@@ -663,162 +651,23 @@ where
           )?,
           |b| kernels.discard_buffer(b),
         );
-        let tc_future = (*tc_buffer).enqueue_read_to_cpu(&mut cmd)?;
-
+        // Submit GPU work and wait.  After wait_sync(), all device buffers are coherent
+        // and can be read directly from their persistently-mapped HOST_VISIBLE pointers —
+        // no staging-buffer allocation needed.  Staging buffer VMA allocations were
+        // corrupting Lavapipe's TLSF allocator after ~4-7 frames (SIGSEGV).
         let sync_info = cmd.submit()?;
         if let Some(sync) = sync_info {
           kernels.wait_sync(&sync)?;
         }
 
-        #[cfg(test)]
-        {
-          let mut read_cmd = kernels.create_command_buffer()?;
-          let cmp_fut = (*compacted).enqueue_read_to_cpu(&mut read_cmd)?;
-          let rb_fut = rigid_bodies.enqueue_read_to_cpu(&mut read_cmd)?;
-          let frames_fut = frames.enqueue_read_to_cpu(&mut read_cmd)?;
-          let cross_fut = (*internal_pairs).enqueue_read_to_cpu(&mut read_cmd)?;
-          let raw_pairs_fut = (*raw_pairs).enqueue_read_to_cpu(&mut read_cmd)?;
-          let lca_pairs_fut = (*rb_lca_pairs).enqueue_read_to_cpu(&mut read_cmd)?;
-          if let Some(read_sync) = read_cmd.submit()? {
-            kernels.wait_sync(&read_sync)?;
-            if let (Ok(cmp_host), Ok(rb_host), Ok(frames_host), Ok(cross_host), Ok(raw_host), Ok(lca_host)) = (
-              cmp_fut.wait(),
-              rb_fut.wait(),
-              frames_fut.wait(),
-              cross_fut.wait(),
-              raw_pairs_fut.wait(),
-              lca_pairs_fut.wait(),
-            ) {
-              let compacted_count = cmp_host.len();
-              let cross_count = cross_host.len();
-              let raw_count = raw_host.len();
-              let lca_count = lca_host.len();
-              aethervk_oshal_rlib::log!(
-                "READBACK: raw_count={}, lca_count={}, cross_count={}, compacted_count={}",
-                raw_count, lca_count, cross_count, compacted_count
-              );
-              let mut body_entity_map = alloc::vec::Vec::new();
-              scene.query2_without::<crate::scene::TransformComponent, crate::scene::ColliderComponent, crate::scene::particles::ParticleSystemComponent, _>(|entity, _, _| {
-                   body_entity_map.push(entity);
-               });
-
-              if compacted_count > 0 {
-                for i in 0..compacted_count {
-                  let pair = &cmp_host[i];
-                  let id_a = pair.a.entity_id;
-                  let prim_a = pair.a.primitive_index;
-                  let id_b = pair.b.entity_id;
-                  let prim_b = pair.b.primitive_index;
-
-                  aethervk_oshal_rlib::log!(
-                    "RAW PAIR: id_a={}, id_b={}, prim_a={}, prim_b={}, toi={}",
-                    id_a,
-                    id_b,
-                    prim_a,
-                    prim_b,
-                    pair.time_of_impact
-                  );
-
-                  let is_lca = pair.is_lca != 0;
-                  let lca_id = if is_lca { Some(pair.lca_id) } else { None };
-
-                  let mut name_a = alloc::string::String::new();
-                  // pair.a.entity_id is a dense GPU body index; map to slotmap FFI key
-                  if let Some(&entity_a) = body_entity_map.get(id_a as usize) {
-                    use slotmap::Key;
-                    let ffi_a = entity_a.data().as_ffi() as u64;
-                    if let Some(n) = scene.get_name(crate::scene::EntityId::from(
-                      slotmap::KeyData::from_ffi(ffi_a),
-                    )) {
-                      name_a = n;
-                    }
-                  }
-                  if name_a.is_empty() {
-                    name_a = alloc::format!("Entity_{}", id_a);
-                  }
-
-                  let mut name_b = alloc::string::String::new();
-                  if let Some(&entity_b) = body_entity_map.get(id_b as usize) {
-                    use slotmap::Key;
-                    let ffi_b = entity_b.data().as_ffi() as u64;
-                    if let Some(n) = scene.get_name(crate::scene::EntityId::from(
-                      slotmap::KeyData::from_ffi(ffi_b),
-                    )) {
-                      name_b = n;
-                    }
-                  }
-                  if name_b.is_empty() {
-                    name_b = alloc::format!("Entity_{}", id_b);
-                  }
-
-                  let mut particle_path_a = None;
-                  if let Some(&entity_a) = body_entity_map.get(id_a as usize) {
-                    if scene
-                      .with_component(
-                        entity_a,
-                        |_: &crate::scene::particles::ParticleSystemComponent| (),
-                      )
-                      .is_some()
-                    {
-                      use slotmap::Key;
-                      let ffi_a = entity_a.data().as_ffi() as u32;
-                      if let Some(p_idx) =
-                        physical_scene.particle_entity_map.iter().position(|&ffi| ffi == ffi_a)
-                      {
-                        if let Some(blas) = &physical_scene.particle_blases[p_idx] {
-                          particle_path_a = blas.find_path_to_primitive(prim_a as usize);
-                        }
-                      }
-                    }
-                  }
-
-                  let mut particle_path_b = None;
-                  if let Some(&entity_b) = body_entity_map.get(id_b as usize) {
-                    if scene
-                      .with_component(
-                        entity_b,
-                        |_: &crate::scene::particles::ParticleSystemComponent| (),
-                      )
-                      .is_some()
-                    {
-                      use slotmap::Key;
-                      let ffi_b = entity_b.data().as_ffi() as u32;
-                      if let Some(p_idx) =
-                        physical_scene.particle_entity_map.iter().position(|&ffi| ffi == ffi_b)
-                      {
-                        if let Some(blas) = &physical_scene.particle_blases[p_idx] {
-                          particle_path_b = blas.find_path_to_primitive(prim_b as usize);
-                        }
-                      }
-                    }
-                  }
-
-                  physical_scene.recent_collisions.push(
-                    crate::physics::physics_scene::CollisionEvent {
-                      entity_a_id: id_a,
-                      entity_a_name: name_a,
-                      entity_b_id: id_b,
-                      entity_b_name: name_b,
-                      contact_point: pair.contact_point,
-                      contact_normal: pair.contact_normal,
-                      penetration_depth: pair.penetration_depth,
-                      frame_id: lca_id.unwrap_or(0),
-                      is_lca,
-                      particle_path_a,
-                      particle_path_b,
-                    },
-                  );
-                }
-              }
-            }
-          }
-        }
+        let t_c_raw: u32 = kernels.read_buffer_u32_first(&*tc_buffer).unwrap_or(0xFFFFFFFF);
+        aethervk_oshal_rlib::log!("gpu_backends.rs: t_c_raw is {}", t_c_raw);
 
         let mut next_cmd = kernels.create_command_buffer()?;
         core::mem::swap(&mut cmd, &mut next_cmd);
         old_cmds.push(next_cmd);
-        let tc_host = tc_future.wait()?;
-        let t_c = tc_host.get(0).copied().unwrap_or(0);
+        let t_c = t_c_raw;
+
         aethervk_oshal_rlib::log!("gpu_backends.rs: t_c is {}", t_c);
 
         let t_c = if t_c == 0xFFFFFFFF {

@@ -371,19 +371,22 @@ pub struct BpClassifyPushConstants {
   pub rigid_bodies: u64,
 }
 
-/// `bp_cross_lca.comp` — 72 bytes
+/// `bp_cross_lca.comp` — 88 bytes
 ///
 /// ```glsl
-/// LcaEntityArray lca_entities;
-/// LeafBuffer macro_leaves;
-/// EntityHeaderArray entity_headers;
-/// PairBuffer lca_query_pairs;
-/// PairBuffer out_rb_rb;
-/// PairBuffer out_rb_ps;
-/// PairBuffer out_ps_ps;
-/// CrossPairBuffer out_cross_pairs;
-/// uint total_queries;
-/// uint max_pairs;
+/// MultiBvhBuffer      tlas_bvh;
+/// GpuReferenceFrameArray lca_entities;
+/// LeafBuffer          macro_leaves;
+/// RigidBodyArray      rigid_bodies;      // replaces old EntityHeaderArray
+/// PairBuffer          lca_query_pairs;
+/// PairBuffer          out_rb_rb;
+/// PairBuffer          out_rb_ps;
+/// PairBuffer          out_ps_ps;
+/// CrossPairBuffer     out_cross_pairs;
+/// uint                total_queries;
+/// uint                max_pairs;
+/// uint                num_rigid_bodies;  // threshold for entity type detection
+/// uint                _pad;
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -391,7 +394,9 @@ pub struct BpCrossLcaPushConstants {
   pub tlas_bvh_addr: u64,
   pub lca_entities: u64,
   pub macro_leaves: u64,
-  pub entity_headers: u64,
+  /// BDA of the rigid-body array — used by the shader to detect entity type
+  /// by index comparison (`id < num_rigid_bodies → TYPE_RIGID_BODY`).
+  pub rigid_bodies: u64,
   pub lca_query_pairs: u64,
   pub out_rb_rb: u64,
   pub out_rb_ps: u64,
@@ -399,6 +404,8 @@ pub struct BpCrossLcaPushConstants {
   pub out_cross_pairs: u64,
   pub total_queries: u32,
   pub max_pairs: u32,
+  pub num_rigid_bodies: u32,
+  pub _pad: u32,
 }
 
 /// `bp_particle_self.comp` — 40 bytes
@@ -953,10 +960,12 @@ impl CommandBuffer for VulkanCommandBuffer {
         .signal_semaphores(&signal_semaphores)
         .push_next(&mut timeline_info);
 
+      aethervk_oshal_rlib::log!("cmd.submit(): before queue_submit");
       device
         .handle
         .queue_submit(self.queue.handle, &[submit_info], vk::Fence::null())
         .map_err(|e| GpuError::from(e))?;
+      aethervk_oshal_rlib::log!("cmd.submit(): after queue_submit");
       drop(_guard);
 
       self
@@ -1122,7 +1131,40 @@ impl<T> VulkanBuffer<T> {
       timeline,
     );
   }
+
+  /// Read buffer contents as a slice via its persistently-mapped pointer.
+  ///
+  /// # Safety
+  ///
+  /// The GPU must have finished writing to this buffer (timeline semaphore waited) before
+  /// calling this. The buffer must have been allocated with `HOST_VISIBLE + HOST_COHERENT +
+  /// MAPPED` flags (all buffers created by `allocate_device_buffer` satisfy this on Lavapipe).
+  ///
+  /// The returned slice is only valid as long as `self` lives.
+  pub unsafe fn mapped_slice(&self) -> Option<&[T]>
+  where
+    T: Copy,
+  {
+    let info = self.allocator.get_allocation_info(&self.allocation);
+    if info.mapped_data.is_null() {
+      return None;
+    }
+    let count = if self.is_list {
+      // Lists have a 16-byte header. The element count is stored at the 4th `u32` (offset 12).
+      let count_ptr = info.mapped_data as *const u32;
+      (unsafe { *count_ptr.add(3) }) as usize
+    } else {
+      self.capacity
+    };
+    let data_ptr = if self.is_list {
+      (info.mapped_data as *const u8).add(16) as *const T
+    } else {
+      info.mapped_data as *const T
+    };
+    Some(core::slice::from_raw_parts(data_ptr, count.min(self.capacity)))
+  }
 }
+
 
 /// Safety-net `Drop` for `VulkanBuffer`:
 /// In debug builds, emit a warning when a buffer is dropped without an explicit `discard()` call.
@@ -1168,6 +1210,9 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for VulkanBuffer<T> {
   }
   fn address(&self) -> u64 {
     self.address
+  }
+  unsafe fn mapped_slice(&self) -> Option<&[T]> {
+    self.mapped_slice()
   }
   fn enqueue_read_to_cpu(&self, cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>> {
     let payload_size = (self.capacity.max(1) * core::mem::size_of::<T>()) as u64;
@@ -2860,6 +2905,7 @@ impl VulkanComputeKernels {
     out_cross_pairs_addr: u64,
     total_queries: u32,
     max_pairs: u32,
+    num_rigid_bodies: u32,
   ) {
     let _wg_size = self.effective_wg(256);
     let subgroups_per_wg = _wg_size / self.pipelines.subgroup_size.max(1);
@@ -2869,7 +2915,7 @@ impl VulkanComputeKernels {
       tlas_bvh_addr,
       lca_entities: lca_entities_addr,
       macro_leaves: macro_leaves_addr,
-      entity_headers: entity_headers_addr,
+      rigid_bodies: entity_headers_addr,
       lca_query_pairs: lca_query_pairs_addr,
       out_rb_rb: out_rb_rb_addr,
       out_rb_ps: out_rb_ps_addr,
@@ -2877,6 +2923,8 @@ impl VulkanComputeKernels {
       out_cross_pairs: out_cross_pairs_addr,
       total_queries,
       max_pairs,
+      num_rigid_bodies,
+      _pad: 0,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
@@ -4098,20 +4146,20 @@ impl VulkanComputeKernels {
     _physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> GpuResult<Option<crate::gpu::CommandBufferSyncInfo>> {
-    let mut rb_handle = rigid_bodies.enqueue_read_to_cpu(cmd).map_err(|e| gpu_err!("{}", e))?;
-    let mut p_handle = particles.enqueue_read_to_cpu(cmd).map_err(|e| gpu_err!("{}", e))?;
+    // All device buffers are allocated with HOST_VISIBLE + HOST_COHERENT + MAPPED.
+    // The GPU has already been waited on (timeline semaphore) by the caller before this
+    // function runs, so the mapped memory is safe to read directly. This avoids creating
+    // staging buffers (VMA allocations) per frame, which corrupt Lavapipe's TLSF allocator
+    // after many alloc/free cycles.
+    let rb_data: alloc::vec::Vec<RigidBodyImex> = unsafe {
+      rigid_bodies.mapped_slice().unwrap_or(&[]).to_vec()
+    };
+    let p_data: alloc::vec::Vec<f32> = unsafe {
+      particles.mapped_slice().unwrap_or(&[]).to_vec()
+    };
 
-    let sync_info = cmd.submit().map_err(|e| gpu_err!("{}", e))?;
-
-    // Copy the submission fence to both read handles so wait() can use it
-    rb_handle.throwaway_sem = cmd.throwaway_sem;
-    p_handle.throwaway_sem = cmd.throwaway_sem;
-
-    let rb_data = rb_handle.wait().map_err(|e| gpu_err!("{}", e))?;
-    let p_data = p_handle.wait().map_err(|e| gpu_err!("{}", e))?;
-
-    // DO NOT destroy the fence here. `cmd.submit()` passes it to the `DiscardPool`
-    // which will destroy it safely once the timeline value is reached.
+    // No GPU work needed; don't submit an empty command buffer.
+    let _ = cmd; // cmd is unused but kept as parameter for API compatibility
 
     let sg = self.pipelines.subgroup_size as usize;
     let unpacked_particles =
@@ -4164,8 +4212,9 @@ impl VulkanComputeKernels {
       },
     );
 
-    Ok(sync_info)
+    Ok(None) // No GPU submission; GPU was already waited by caller.
   }
+
 }
 
 impl Kernels for Device {
@@ -4494,15 +4543,17 @@ impl Kernels for Device {
 
     // Wait on the throwaway semaphore (created inside submit())
     if cmd.throwaway_sem != vk::Semaphore::null() {
+      aethervk_oshal_rlib::log!("debug_sync_barrier: before wait_for_semaphore_value");
       self
         .device
-        .wait_for_semaphore_value(cmd.throwaway_sem, 1, 5_000_000_000) // 5s timeout
+        .wait_for_semaphore_value(cmd.throwaway_sem, 1, 60_000_000_000) // 60s timeout
         .map_err(|e| {
           EngineError::Gpu(crate::gpu_err!(
             "debug_sync_barrier throwaway sem wait failed: {:?}",
             e
           ))
         })?;
+      aethervk_oshal_rlib::log!("debug_sync_barrier: after wait_for_semaphore_value");
       cmd.throwaway_sem = vk::Semaphore::null();
     }
 
@@ -4909,6 +4960,14 @@ impl Kernels for Device {
       })
       .commit_read(|_res_guard, result| result)
       .map_err(|e| EngineError::from(e))
+  }
+
+  #[cfg(any(test, feature = "collisions"))]
+  fn read_buffer_u32_first(&self, buf: &Self::Buffer<u32>) -> EngineResult<u32> {
+    // All device buffers are HOST_VISIBLE + HOST_COHERENT + MAPPED.
+    // After the GPU wait, reading from the mapped pointer is safe and avoids
+    // creating a staging buffer allocation (which corrupts Lavapipe's TLSF).
+    Ok(unsafe { buf.mapped_slice().and_then(|s| s.first().copied()).unwrap_or(0xFFFF_FFFF) })
   }
 
   #[cfg(any(test, feature = "collisions"))]
@@ -5388,6 +5447,7 @@ impl Kernels for Device {
           out_cross_pairs_addr,
           total_queries,
           max_pairs,
+          num_rigid_bodies,
         );
         Ok(())
       })

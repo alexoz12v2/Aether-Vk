@@ -273,8 +273,9 @@ mod tests {
         );
 
         // 2. Setup 4 Windowless Presentation Engines and Cameras
-        let width = 512;
-        let height = 512;
+        let is_cpu = ctx.with_device(|device| Ok(device.is_cpu_device())).unwrap_or(false);
+        let width = if is_cpu { 64 } else { 512 };
+        let height = if is_cpu { 64 } else { 512 };
 
         let pe_1 = ctx.create_presentation_engine(scene_id, width, height).unwrap();
         let pe_2 = ctx.create_presentation_engine(scene_id, width, height).unwrap();
@@ -375,7 +376,8 @@ mod tests {
         let wait_for_images = |tag: &str| {
           let mut attempts = 0;
           let mut ready = false;
-          while attempts < 200 {
+          let max_attempts = if is_cpu { 6000 } else { 200 };
+          while attempts < max_attempts {
             let id1 = LAST_PE_TASK_IDS[0].load(core::sync::atomic::Ordering::Acquire);
             let id2 = LAST_PE_TASK_IDS[1].load(core::sync::atomic::Ordering::Acquire);
             let id3 = LAST_PE_TASK_IDS[2].load(core::sync::atomic::Ordering::Acquire);
@@ -404,7 +406,7 @@ mod tests {
             while matches!(
               status,
               crate::simulation_api::structs::TaskStatusCode::Pending
-            ) && attempt < 100
+            ) && attempt < max_attempts
             {
               std::thread::sleep(core::time::Duration::from_millis(10));
               status = ctx.get_task_status(tid);
@@ -444,7 +446,7 @@ mod tests {
         wait_for_images("initial");
 
         // Wait and Output Final State
-        aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_secs(2));
+        aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_secs(if is_cpu { 1 } else { 2 }));
         let _ = ctx
           .threads
           .logic_thread

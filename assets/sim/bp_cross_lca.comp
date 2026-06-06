@@ -1,3 +1,4 @@
+// @assets/sim/bp_cross_lca.comp
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
@@ -18,14 +19,16 @@
 layout(local_size_x = LOCAL_SIZE_X) in;
 const uint SUBGROUPS_PER_WG = ((LOCAL_SIZE_X / SUBGROUP_SIZE) == 0 ? 1 : (LOCAL_SIZE_X / SUBGROUP_SIZE));
 
-struct EntityHeader { uint type; uint pad[3]; };
-layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer EntityHeaderArray { EntityHeader entities[]; };
-
 layout(push_constant, std430) uniform PushConstants {
     MultiBvhBuffer tlas_bvh;
     GpuReferenceFrameArray lca_entities;
     LeafBuffer macro_leaves;
-    EntityHeaderArray entity_headers;
+    // BDA of the rigid-body array.  Entity type is detected by index comparison:
+    //   id < num_rigid_bodies  =>  TYPE_RIGID_BODY
+    // This replaces the old EntityHeaderArray approach that read position
+    // floats as uint (always 0 when position.x==0), misidentifying every
+    // rigid body as TYPE_PARTICLE_SYSTEM.
+    RigidBodyArray rigid_bodies;
     PairBuffer lca_query_pairs;
     PairBuffer out_rb_rb;
     PairBuffer out_rb_ps;
@@ -33,11 +36,13 @@ layout(push_constant, std430) uniform PushConstants {
     CrossPairBuffer out_cross_pairs;
     uint total_queries;
     uint max_pairs;
+    uint num_rigid_bodies;
+    uint _pad;
 } pc;
 
+// Allocate stack per subgroup
 shared uint shared_stacks[SUBGROUPS_PER_WG][BVH_STACK_DEPTH];
 shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
-shared uvec2 shared_lca_bvh_addr[SUBGROUPS_PER_WG];
 
 void transform_aabb_macro_to_micro(vec3 lca_center_pos, float lca_scale, vec3 macro_center, vec3 macro_extents, out vec3 out_min, out vec3 out_max) {
     vec3 center_km = macro_center;
@@ -75,7 +80,6 @@ void main() {
 
     if (lane_id == 0) {
         GpuReferenceFrame l_ent = pc.lca_entities.frames[lca_ent_id];
-        shared_lca_bvh_addr[subgroup_id] = uvec2(pc.tlas_bvh);
 
         vec3 macro_min = pc.macro_leaves.leaves[macro_ent_id].min_bound;
         vec3 macro_max = pc.macro_leaves.leaves[macro_ent_id].max_bound;
@@ -94,8 +98,10 @@ void main() {
     query_min = vec3(subgroupBroadcast(query_min.x, 0), subgroupBroadcast(query_min.y, 0), subgroupBroadcast(query_min.z, 0));
     query_max = vec3(subgroupBroadcast(query_max.x, 0), subgroupBroadcast(query_max.y, 0), subgroupBroadcast(query_max.z, 0));
     macro_ent_id = subgroupBroadcast(macro_ent_id, 0);
+    // Broadcast lca_ent_id so all lanes can use it in the BALLOT_WORD macro
+    lca_ent_id = subgroupBroadcast(lca_ent_id, 0);
 
-    MultiBvhBuffer tlas = MultiBvhBuffer(shared_lca_bvh_addr[subgroup_id]);
+    MultiBvhBuffer tlas = pc.tlas_bvh;
 
     while (true) {
         subgroupMemoryBarrierShared();
@@ -119,20 +125,25 @@ void main() {
         bool hit_leaf = hit && is_leaf;
 #ifdef DEBUG_SHADERS
         if (hit_leaf) debugPrintfEXT("bp_cross_lca: hit leaf! macro=%d micro=%d lca=%d\n", macro_ent_id, bvh_get_index(meta), lca_ent_id);
+        if (valid && lane_id == 0) debugPrintfEXT("bp_cross_lca: checking node_idx=%u, lca_ent_id=%u, root_idx=%u\n", node_idx, lca_ent_id, pc.lca_entities.frames[lca_ent_id].bvh_root_index);
+        if (valid) debugPrintfEXT("Checking c_min=%f,%f c_max=%f,%f hit=%d valid=%d leaf=%d", c_min.x, c_min.y, c_max.x, c_max.y, hit?1:0, valid?1:0, is_leaf?1:0);
 #endif
         bool hit_node = hit && !is_leaf;
-#ifdef DEBUG_SHADERS
-            debugPrintfEXT("Checking c_min=%f,%f c_max=%f,%f hit=%d valid=%d leaf=%d", c_min.x, c_min.y, c_max.x, c_max.y, hit?1:0, valid?1:0, is_leaf?1:0);
-#endif
 
         uvec4 leaf_ballot = subgroupBallot(hit_leaf);
         uint  leaf_count  = subgroupBallotBitCount(leaf_ballot);
         uint  leaf_offset = subgroupBallotExclusiveBitCount(leaf_ballot);
 
         // Ballot word scan — macro-expanded to avoid JIT x30-aliasing on Lavapipe ARM64.
-        // BALLOT_WORD(I) extracts all set bits from leaf_ballot[I] and classifies
-        // each hit pair by entity type before routing to the appropriate output buffer.
-        // The src_lane guard prevents subgroupShuffle OOB on subgroups < 128.
+        // Entity type classification: use index threshold (< num_rigid_bodies = RB).
+        // This replaces the broken EntityHeader approach that read position.x as uint.
+        //
+        // Intra-LCA routing:
+        //   - Self-pairs (macro_ent_id == micro_ent_id): SKIP always.
+        //   - Both rigid bodies AND macro body is inside the LCA frame
+        //     (pc.rigid_bodies.bodies[macro_ent_id].frame_idx == lca_ent_id):
+        //     route to out_rb_rb for standard narrow_ccd (no coord transform).
+        //   - True cross-frame rigid body pairs: route to out_cross_pairs.
 #define BALLOT_WORD(I) { \
             uint m = leaf_ballot[(I)]; \
             while (m != 0) { \
@@ -142,20 +153,29 @@ void main() {
                 if (src_lane < gl_SubgroupSize) { \
                     uint micro_ent_id = bvh_get_index(subgroupShuffle(meta, src_lane)); \
                     if (lane_id == 0) { \
-                        uint type_A = pc.entity_headers.entities[macro_ent_id].type; \
-                        uint type_B = pc.entity_headers.entities[micro_ent_id].type; \
-                        uint ent_A = macro_ent_id; \
-                        uint ent_B = micro_ent_id; \
-                        if (type_A > type_B) { uint temp = ent_A; ent_A = ent_B; ent_B = temp; temp = type_A; type_A = type_B; type_B = temp; } \
-                        if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) { \
-                            uint out_idx = atomicAdd(pc.out_cross_pairs.count, 1); \
-                            if (out_idx < pc.max_pairs) { pc.out_cross_pairs.pairs[out_idx].macro_id = ent_A; pc.out_cross_pairs.pairs[out_idx].micro_id = ent_B; pc.out_cross_pairs.pairs[out_idx].lca_id = lca_ent_id; } \
-                        } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_RIGID_BODY) { \
-                            uint out_idx = atomicAdd(pc.out_rb_ps.count, 1); \
-                            if (out_idx < pc.max_pairs) pc.out_rb_ps.pairs[out_idx] = uvec2(ent_B, ent_A); \
-                        } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_PARTICLE_SYSTEM) { \
-                            uint out_idx = atomicAdd(pc.out_ps_ps.count, 1); \
-                            if (out_idx < pc.max_pairs) pc.out_ps_ps.pairs[out_idx] = uvec2(ent_A, ent_B); \
+                        if (macro_ent_id != micro_ent_id) { \
+                            uint type_A = (macro_ent_id < pc.num_rigid_bodies) ? TYPE_RIGID_BODY : TYPE_PARTICLE_SYSTEM; \
+                            uint type_B = (micro_ent_id < pc.num_rigid_bodies) ? TYPE_RIGID_BODY : TYPE_PARTICLE_SYSTEM; \
+                            uint ent_A = macro_ent_id; \
+                            uint ent_B = micro_ent_id; \
+                            if (type_A > type_B) { uint temp = ent_A; ent_A = ent_B; ent_B = temp; temp = type_A; type_A = type_B; type_B = temp; } \
+                            if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) { \
+                                uint macro_frame = pc.rigid_bodies.bodies[ent_A].frame_idx; \
+                                if (macro_frame == lca_ent_id) { \
+                                    uint lo = min(ent_A, ent_B); uint hi = max(ent_A, ent_B); \
+                                    uint out_idx = atomicAdd(pc.out_rb_rb.count, 1); \
+                                    if (out_idx < pc.max_pairs) pc.out_rb_rb.pairs[out_idx] = uvec2(lo, hi); \
+                                } else { \
+                                    uint out_idx = atomicAdd(pc.out_cross_pairs.count, 1); \
+                                    if (out_idx < pc.max_pairs) { pc.out_cross_pairs.pairs[out_idx].macro_id = ent_A; pc.out_cross_pairs.pairs[out_idx].micro_id = ent_B; pc.out_cross_pairs.pairs[out_idx].lca_id = lca_ent_id; } \
+                                } \
+                            } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_RIGID_BODY) { \
+                                uint out_idx = atomicAdd(pc.out_rb_ps.count, 1); \
+                                if (out_idx < pc.max_pairs) pc.out_rb_ps.pairs[out_idx] = uvec2(ent_B, ent_A); \
+                            } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_PARTICLE_SYSTEM) { \
+                                uint out_idx = atomicAdd(pc.out_ps_ps.count, 1); \
+                                if (out_idx < pc.max_pairs) pc.out_ps_ps.pairs[out_idx] = uvec2(ent_A, ent_B); \
+                            } \
                         } \
                     } \
                 } \
