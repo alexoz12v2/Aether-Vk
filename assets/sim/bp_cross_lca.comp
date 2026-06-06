@@ -129,42 +129,34 @@ void main() {
         uint  leaf_count  = subgroupBallotBitCount(leaf_ballot);
         uint  leaf_offset = subgroupBallotExclusiveBitCount(leaf_ballot);
 
-        if (leaf_count > 0) {
-            uint base_idx = 0;
-            if (lane_id == 0) base_idx = atomicAdd(pc.out_cross_pairs.count, leaf_count);
-            base_idx = subgroupBroadcast(base_idx, 0);
-
-            if (hit_leaf && (base_idx + leaf_offset) < pc.max_pairs) {
-                pc.out_cross_pairs.pairs[base_idx + leaf_offset].macro_id = macro_ent_id; // <-- Fixed: was undefined `foreign_ent_id`
-                pc.out_cross_pairs.pairs[base_idx + leaf_offset].micro_id = bvh_get_index(meta);
-                pc.out_cross_pairs.pairs[base_idx + leaf_offset].lca_id = lca_ent_id;
-            }
-        }
-
         // Ballot word scan — macro-expanded to avoid JIT x30-aliasing on Lavapipe ARM64.
-        // BALLOT_WORD(I) extracts all set bits from leaf_ballot[I].
+        // BALLOT_WORD(I) extracts all set bits from leaf_ballot[I] and classifies
+        // each hit pair by entity type before routing to the appropriate output buffer.
+        // The src_lane guard prevents subgroupShuffle OOB on subgroups < 128.
 #define BALLOT_WORD(I) { \
             uint m = leaf_ballot[(I)]; \
             while (m != 0) { \
                 uint bit = findLSB(m); \
                 m &= ~(1u << bit); \
                 uint src_lane = (I) * 32u + bit; \
-                uint micro_ent_id = bvh_get_index(subgroupShuffle(meta, src_lane)); \
-                if (lane_id == 0) { \
-                    uint type_A = pc.entity_headers.entities[macro_ent_id].type; \
-                    uint type_B = pc.entity_headers.entities[micro_ent_id].type; \
-                    uint ent_A = macro_ent_id; \
-                    uint ent_B = micro_ent_id; \
-                    if (type_A > type_B) { uint temp = ent_A; ent_A = ent_B; ent_B = temp; temp = type_A; type_A = type_B; type_B = temp; } \
-                    if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) { \
-                        uint out_idx = atomicAdd(pc.out_cross_pairs.count, 1); \
-                        if (out_idx < pc.max_pairs) { pc.out_cross_pairs.pairs[out_idx].macro_id = ent_A; pc.out_cross_pairs.pairs[out_idx].micro_id = ent_B; pc.out_cross_pairs.pairs[out_idx].lca_id = lca_ent_id; } \
-                    } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_RIGID_BODY) { \
-                        uint out_idx = atomicAdd(pc.out_rb_ps.count, 1); \
-                        if (out_idx < pc.max_pairs) pc.out_rb_ps.pairs[out_idx] = uvec2(ent_B, ent_A); \
-                    } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_PARTICLE_SYSTEM) { \
-                        uint out_idx = atomicAdd(pc.out_ps_ps.count, 1); \
-                        if (out_idx < pc.max_pairs) pc.out_ps_ps.pairs[out_idx] = uvec2(ent_A, ent_B); \
+                if (src_lane < gl_SubgroupSize) { \
+                    uint micro_ent_id = bvh_get_index(subgroupShuffle(meta, src_lane)); \
+                    if (lane_id == 0) { \
+                        uint type_A = pc.entity_headers.entities[macro_ent_id].type; \
+                        uint type_B = pc.entity_headers.entities[micro_ent_id].type; \
+                        uint ent_A = macro_ent_id; \
+                        uint ent_B = micro_ent_id; \
+                        if (type_A > type_B) { uint temp = ent_A; ent_A = ent_B; ent_B = temp; temp = type_A; type_A = type_B; type_B = temp; } \
+                        if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) { \
+                            uint out_idx = atomicAdd(pc.out_cross_pairs.count, 1); \
+                            if (out_idx < pc.max_pairs) { pc.out_cross_pairs.pairs[out_idx].macro_id = ent_A; pc.out_cross_pairs.pairs[out_idx].micro_id = ent_B; pc.out_cross_pairs.pairs[out_idx].lca_id = lca_ent_id; } \
+                        } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_RIGID_BODY) { \
+                            uint out_idx = atomicAdd(pc.out_rb_ps.count, 1); \
+                            if (out_idx < pc.max_pairs) pc.out_rb_ps.pairs[out_idx] = uvec2(ent_B, ent_A); \
+                        } else if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_PARTICLE_SYSTEM) { \
+                            uint out_idx = atomicAdd(pc.out_ps_ps.count, 1); \
+                            if (out_idx < pc.max_pairs) pc.out_ps_ps.pairs[out_idx] = uvec2(ent_A, ent_B); \
+                        } \
                     } \
                 } \
             } \

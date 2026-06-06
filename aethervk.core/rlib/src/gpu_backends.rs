@@ -598,7 +598,19 @@ where
         }
         // Particle self-collision via Hookean spring forces
         let p_addr = particles.address();
-        let p_cap = (particles.capacity() as u32 / 320) * 32;
+        // Compute total_particles correctly from the AOSOA layout:
+        //   stride = PARTICLE_FIELDS (11) × subgroup_size
+        // The old code used 320 (= 10 × 32) which was wrong in two ways:
+        //   1. PARTICLE_FIELDS is 11, not 10.
+        //   2. subgroup_size is device-specific (8 on Lavapipe ARM64, not 32).
+        // On Lavapipe (sg=8) the correct stride is 11×8=88, so p_cap was
+        // off by 320/88 ≈ 3.6×, dispatching 3-4× too many threads and reading
+        // garbage particle data — causing the energy-conservation test to fail.
+        let p_cap = {
+          let sg = kernels.subgroup_size().map(|s| s as u32).unwrap_or(32);
+          let stride = crate::gpu::PARTICLE_FIELDS as u32 * sg;
+          (particles.capacity() as u32 / stride) * sg
+        };
         kernels.bp_particle_self(
           &mut cmd,
           tlas_bvh_addr,
