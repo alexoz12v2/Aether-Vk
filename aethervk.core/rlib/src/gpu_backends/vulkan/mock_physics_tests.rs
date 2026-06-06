@@ -233,9 +233,34 @@ fn run_direct_shader_test(target: MockTargetShader) {
           .device
           .cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
 
-        let push_constants = [0u64; 16]; // 128 bytes total, completely zeroed.
-        // Because counts (total_particles, num_clusters, etc.) will be 0, all
-        // shaders will immediately early-return and never dereference the null BDA pointers.
+        let mut push_constants = [0u64; 16]; // 128 bytes total, completely zeroed.
+
+        let num_bda_pointers = match target {
+          MockTargetShader::EmitParticles => 1,
+          MockTargetShader::LbvhPrepass | MockTargetShader::LbvhBuild => 2,
+          MockTargetShader::MotionBounds | MockTargetShader::MotionRefit => 2,
+          MockTargetShader::Ccd | MockTargetShader::CcdRigidbody => 4,
+          MockTargetShader::StreamCompact | MockTargetShader::ReduceToi => 3,
+          MockTargetShader::LcpSolver => 3,
+          MockTargetShader::ApplyImpulses => 5,
+          MockTargetShader::BarnesHut => 4,
+          MockTargetShader::BpBoundsGen => 1,
+          MockTargetShader::BpScene | MockTargetShader::BroadPhase => 3,
+          MockTargetShader::BpClassify => 5,
+          MockTargetShader::BpCrossLca => 7,
+          MockTargetShader::BpParticleSelf => 3,
+          MockTargetShader::ApplyEmitters => 4,
+          MockTargetShader::IntegrateParticlesP1P2 => 1,
+          MockTargetShader::IntegrateParticlesP4P5 => 2,
+          MockTargetShader::IntegrateBodiesP3 => 4,
+          MockTargetShader::RbForceAssign => 2,
+          _ => 0,
+        };
+
+        for i in 0..num_bda_pointers {
+          push_constants[i] = state.address;
+        }
+
         let bytes = core::slice::from_raw_parts(push_constants.as_ptr() as *const u8, 128);
 
         device.device.cmd_push_constants(
@@ -278,7 +303,8 @@ fn integrate_particles_p1_p2() {
         0.0, -9.8, 0.0, // force
         0.0, // beta
       ]);
-      let packed = crate::gpu::pack_particles_aosoa(&particles, 32, crate::gpu::PARTICLE_FIELDS);
+      let sg = device.kernels.pipelines.subgroup_size as usize;
+      let packed = crate::gpu::pack_particles_aosoa(&particles, sg, crate::gpu::PARTICLE_FIELDS);
       upload_buffer(device, &packed).map_err(crate::types::EngineError::from)
     },
     |device, cmd, particles_buffer| {
@@ -293,7 +319,8 @@ fn integrate_particles_p1_p2() {
       use crate::gpu::Kernels;
       let data = read_buffer(device, &particles_buffer);
       println!(">>> Read back data");
-      let unpacked = crate::gpu::unpack_particles_aosoa(&data, 32, crate::gpu::PARTICLE_FIELDS, 1);
+      let sg = device.kernels.pipelines.subgroup_size as usize;
+      let unpacked = crate::gpu::unpack_particles_aosoa(&data, sg, crate::gpu::PARTICLE_FIELDS, 1);
 
       let p = &unpacked[0];
       let pos = [p[0], p[1], p[2]];
@@ -455,7 +482,8 @@ fn integrate_particles_p4_p5() {
         0.0, -10.0, 0.0, // force F(x_{n+1})
         0.0, // beta
       ]);
-      let packed = crate::gpu::pack_particles_aosoa(&particles, 32, crate::gpu::PARTICLE_FIELDS);
+      let sg = device.kernels.pipelines.subgroup_size as usize;
+      let packed = crate::gpu::pack_particles_aosoa(&particles, sg, crate::gpu::PARTICLE_FIELDS);
       upload_buffer(device, &packed).map_err(crate::types::EngineError::from)
     },
     |device, cmd, particles_buffer| {
@@ -470,7 +498,8 @@ fn integrate_particles_p4_p5() {
       use crate::gpu::Kernels;
       let data = read_buffer(device, &particles_buffer);
       println!(">>> Read back data");
-      let unpacked = crate::gpu::unpack_particles_aosoa(&data, 32, crate::gpu::PARTICLE_FIELDS, 1);
+      let sg = device.kernels.pipelines.subgroup_size as usize;
+      let unpacked = crate::gpu::unpack_particles_aosoa(&data, sg, crate::gpu::PARTICLE_FIELDS, 1);
 
       let p = &unpacked[0];
       let vel = [p[3], p[4], p[5]];

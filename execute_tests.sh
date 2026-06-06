@@ -23,10 +23,10 @@ echo "         Running Rust Tests             "
 echo "========================================"
 if [ $SINGLE_THREAD -eq 1 ]; then
     echo "Mode: Single-threaded, No Capture"
-    cargo llvm-cov nextest --features shader_debug_sync --no-capture --test-threads 1
+    cargo llvm-cov nextest --no-capture --test-threads 1
 else
     echo "Mode: Default"
-    cargo llvm-cov nextest --features shader_debug_sync
+    cargo llvm-cov nextest
 fi
 
 echo ""

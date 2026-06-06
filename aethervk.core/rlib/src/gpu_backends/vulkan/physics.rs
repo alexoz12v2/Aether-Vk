@@ -1692,11 +1692,12 @@ impl VulkanComputeKernels {
           .get_parent(entity)
           .map(|id| slotmap::Key::data(&id).as_ffi())
           .unwrap_or(0);
+        let macro_frame_idx = _scene.gpu_frames.iter().position(|f| f.frame_type == 0).unwrap_or(0);
         let frame_idx = _scene
           .gpu_frames
           .iter()
           .position(|f| f.entity_id_raw == parent_id)
-          .unwrap_or(0xFFFFFFFF) as u32;
+          .unwrap_or(macro_frame_idx) as u32;
         let (m, i_inv_diag, shape_type, shape_extents) = scene0
           .with_component(entity, |c: &crate::scene::ColliderComponent| {
             match c.shape {

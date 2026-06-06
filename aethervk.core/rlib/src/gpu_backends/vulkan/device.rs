@@ -4293,40 +4293,52 @@ impl RenderDevice for Device {
         let descriptor_pool = unsafe { self.device.create_descriptor_pool(&pool_info, None) }?;
 
         let command_pool_info = vk::CommandPoolCreateInfo::default()
-          .queue_family_index(compute_queue.family_index)
+          .queue_family_index(graphics_queue.family_index)
           .flags(vk::CommandPoolCreateFlags::TRANSIENT);
         let command_pool = unsafe { self.device.create_command_pool(&command_pool_info, None) }?;
         let fence = unsafe { self.device.create_fence(&vk::FenceCreateInfo::default(), None) }?;
 
         // RAII Cleanup Guard for transient resources.
         // Ensures they are always destroyed when the block ends (success or error).
-        struct TransientCleanup<'a> {
-          device: &'a ash::Device,
+        struct TransientCleanup {
+          device: ash::Device,
+          resources: Option<TransientCleanupResources>,
+        }
+        struct TransientCleanupResources {
           set_layout: vk::DescriptorSetLayout,
           pipeline_layout: vk::PipelineLayout,
           descriptor_pool: vk::DescriptorPool,
           command_pool: vk::CommandPool,
           fence: vk::Fence,
         }
-        impl<'a> Drop for TransientCleanup<'a> {
-          fn drop(&mut self) {
+        impl DeviceResource for TransientCleanupResources {
+          fn cleanup(&mut self, device: &ash::Device) {
             unsafe {
-              self.device.destroy_fence(self.fence, None);
-              self.device.destroy_command_pool(self.command_pool, None);
-              self.device.destroy_descriptor_pool(self.descriptor_pool, None);
-              self.device.destroy_pipeline_layout(self.pipeline_layout, None);
-              self.device.destroy_descriptor_set_layout(self.set_layout, None);
+              device.destroy_command_pool(self.command_pool, None);
+              device.destroy_descriptor_pool(self.descriptor_pool, None);
+              device.destroy_pipeline_layout(self.pipeline_layout, None);
+              device.destroy_descriptor_set_layout(self.set_layout, None);
+              // We do not destroy the fence here anymore as it's not a fence.
+            }
+          }
+        }
+        impl Drop for TransientCleanup {
+          fn drop(&mut self) {
+            if let Some(mut res) = self.resources.take() {
+              res.cleanup(&self.device);
             }
           }
         }
 
-        let _cleanup = TransientCleanup {
-          device: &self.device,
-          set_layout,
-          pipeline_layout,
-          descriptor_pool,
-          command_pool,
-          fence,
+        let mut _cleanup = TransientCleanup {
+          device: self.device.clone(),
+          resources: Some(TransientCleanupResources {
+            set_layout,
+            pipeline_layout,
+            descriptor_pool,
+            command_pool,
+            fence,
+          }),
         };
 
         // --- 3. Write Descriptors ---
@@ -4458,30 +4470,53 @@ impl RenderDevice for Device {
           self.device.synchronization2.cmd_pipeline_barrier2(command_buffer, &dep_info2);
 
           self.device.end_command_buffer(command_buffer)?;
-        }
+        }        let mut type_info = vk::SemaphoreTypeCreateInfo::default()
+          .semaphore_type(vk::SemaphoreType::TIMELINE)
+          .initial_value(0);
+        let semaphore_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
+        let timeline_semaphore = unsafe { self.device.create_semaphore(&semaphore_info, None) }?;
+        
+        let signal_semaphores = [timeline_semaphore];
+        let signal_values = [1];
+        let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
+          .signal_semaphore_values(&signal_values);
 
-        // --- 6. Execution ---
-        let submit_info =
-          vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&command_buffer));
-        oshal::log!("generate_sky: submitting to compute queue...");
+        let submit_info = vk::SubmitInfo::default()
+          .command_buffers(core::slice::from_ref(&command_buffer))
+          .signal_semaphores(&signal_semaphores)
+          .push_next(&mut timeline_info);
+          
+        oshal::log!("generate_sky: submitting to graphics queue...");
         self
           .device
-          .locked_queue_submit(compute_queue.handle, &[submit_info], fence)
+          .locked_queue_submit(graphics_queue.handle, &[submit_info], vk::Fence::null())
           .map_err(GpuError::from)?;
 
-        oshal::log!("generate_sky: waiting for fences...");
+        oshal::log!("generate_sky: waiting for timeline semaphore...");
+        self.device.wait_for_semaphore_value(timeline_semaphore, 1, u64::MAX)?;
+        
         unsafe {
-          self.device.wait_for_fences(&[fence], true, u64::MAX)?;
+          self.device.destroy_semaphore(timeline_semaphore, None);
         }
         oshal::log!("generate_sky: done waiting");
 
-        // _cleanup gets dropped here, immediately cleaning up transient pools, layouts, and fences
-        Ok(Some(sky_image))
+        unsafe {
+          self.device.destroy_fence(fence, None);
+        }
+
+        // VVL Bug Fix: The validation layer associates image layout transitions with the command pool they were allocated from.
+        // If the pool is destroyed *at any point* during the app's lifetime, VVL loses the layout state for the image and reverts to UNDEFINED.
+        // We defer the pool's destruction to device shutdown (u64::MAX) to prevent VVL false positives on future frames.
+        Ok(Some((sky_image, _cleanup.resources.take())))
       })
       .commit_read(|state, execute_result| {
-        let Some(sky_image) = execute_result? else {
+        let Some((sky_image, cleanup_res)) = execute_result? else {
           return Ok(()); // Skipped execution (already generated)
         };
+
+        if let Some(res) = cleanup_res {
+          state.discard_pool.discard_type_erased(res, u64::MAX);
+        }
 
         // Apply new sky image and safely clean up the previous one if it exists
         let mut wsky_image =
@@ -6805,11 +6840,13 @@ impl RenderDevice for Device {
         params_alloc: vk_mem::Allocation,
         is_generated: bool,
       },
+      None,
     }
 
     enum ExecuteResult {
       Created(resources::SunRenderResource),
-      Updated,
+      Updated(u64),
+      None,
     }
 
     let execution_result = (|| -> GpuResult<()> {
@@ -6822,6 +6859,9 @@ impl RenderDevice for Device {
           // 1. Check if the sun resource already exists
           if let Some(entry) = state.sun_resources.get(&entity_id) {
             if let resources::ResourceState::Ready(sun_res) = entry.value() {
+              if sun_res.last_timeline == timeline {
+                return Ok((timeline, SunOperation::None));
+              }
               let op = SunOperation::DispatchOnly {
                 vma,
                 image: sun_res.image.as_ref().unwrap().image.get(),
@@ -7176,6 +7216,7 @@ impl RenderDevice for Device {
                 compute_pipeline_layout: Some(pipeline_layout),
                 params_buffer: Some(params_buffer),
                 params_alloc: Some(params_alloc),
+                last_timeline: timeline,
               };
 
               Ok(ExecuteResult::Created(new_resource))
@@ -7216,7 +7257,10 @@ impl RenderDevice for Device {
                 is_generated,
               );
 
-              Ok::<_, GpuError>(ExecuteResult::Updated)
+              Ok::<_, GpuError>(ExecuteResult::Updated(timeline))
+            }
+            SunOperation::None => {
+              Ok(ExecuteResult::None)
             }
           }
         })
@@ -7230,13 +7274,14 @@ impl RenderDevice for Device {
                 .sun_resources
                 .insert(entity_id, resources::ResourceState::Ready(new_resource));
             }
-            ExecuteResult::Updated => {
+            ExecuteResult::Updated(timeline) => {
               if let Some(mut entry) = state.sun_resources.get_mut(&entity_id) {
                 if let resources::ResourceState::Ready(sun_res) = entry.value_mut() {
-                  sun_res.is_generated = true;
+                  sun_res.last_timeline = timeline;
                 }
               }
             }
+            ExecuteResult::None => {}
           }
 
           Ok(())
@@ -9142,19 +9187,51 @@ impl Device {
 
     unsafe { self.device.end_command_buffer(cmd) }?;
 
-    let submit_info = vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&cmd));
-    let fence = unsafe { self.device.create_fence(&vk::FenceCreateInfo::default(), None) }?;
+    let mut type_info = vk::SemaphoreTypeCreateInfo::default()
+      .semaphore_type(vk::SemaphoreType::TIMELINE)
+      .initial_value(0);
+    let semaphore_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
+    let timeline_semaphore = unsafe { self.device.create_semaphore(&semaphore_info, None) }?;
+    
+    let signal_semaphores = [timeline_semaphore];
+    let signal_values = [1];
+    let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
+      .signal_semaphore_values(&signal_values);
+
+    let submit_info = vk::SubmitInfo::default()
+      .command_buffers(core::slice::from_ref(&cmd))
+      .signal_semaphores(&signal_semaphores)
+      .push_next(&mut timeline_info);
 
     self
       .device
-      .locked_queue_submit(queue.handle, &[submit_info], fence)
+      .locked_queue_submit(queue.handle, &[submit_info], vk::Fence::null())
       .map_err(GpuError::from)?;
+      
+    self.device.wait_for_semaphore_value(timeline_semaphore, 1, u64::MAX)?;
     unsafe {
-      self.device.wait_for_fences(&[fence], true, u64::MAX)?;
-      self.device.destroy_fence(fence, None);
-      self.device.free_command_buffers(pool, &[cmd]);
-      self.device.destroy_command_pool(pool, None);
+      self.device.destroy_semaphore(timeline_semaphore, None);
     }
+
+    struct TransientCmdPoolResource {
+      pool: vk::CommandPool,
+      cmd: vk::CommandBuffer,
+    }
+    impl DeviceResource for TransientCmdPoolResource {
+      fn cleanup(&mut self, device: &ash::Device) {
+        unsafe {
+          device.free_command_buffers(self.pool, &[self.cmd]);
+          device.destroy_command_pool(self.pool, None);
+        }
+      }
+    }
+    
+    let res_guard = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.res);
+    // VVL Bug Fix: The validation layer associates image layout transitions with the command pool they were allocated from.
+    // If the pool is destroyed *at any point* during the app's lifetime, VVL loses the layout state for the image and reverts to UNDEFINED.
+    // We defer the pool's destruction to device shutdown (u64::MAX) to prevent VVL false positives on future frames.
+    res_guard.discard_pool.discard_type_erased(TransientCmdPoolResource { pool, cmd }, u64::MAX);
+    
     Ok(())
   }
 
