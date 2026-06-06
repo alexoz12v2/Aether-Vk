@@ -274,9 +274,15 @@ mod tests {
           coll.penetration_depth > 0.0,
           "Penetration depth should be positive"
         );
-        assert_eq!(
-          coll.frame_id, 0,
-          "Collision should happen in root macro frame if not LCA"
+        // Sphere and OBB are both children of the 'root' micro frame, so their
+        // collision is resolved via the cross-LCA path.  After the macro-frame
+        // prepend (gpu frame 0 = macro, gpu frame 1 = micro) the LCA frame
+        // index is 1.  Check is_lca rather than a hard-coded gpu frame index
+        // so the assertion stays valid regardless of frame ordering.
+        assert!(
+          coll.is_lca,
+          "Sphere–OBB collision should be detected via the cross-LCA path (both entities are children of the root micro frame), got is_lca={}, frame_id={}",
+          coll.is_lca, coll.frame_id
         );
 
         let tracked_allocs = vulkan_device.kernels.tracked_physical_allocations.lock().clone();

@@ -114,6 +114,7 @@ pub(crate) enum DiscardItem {
   RenderPass(vk::RenderPass),
   Framebuffer(vk::Framebuffer),
   Fence(vk::Fence),
+  Semaphore(vk::Semaphore),
   // TODO other types of resources as needed
   /// Placeholder to use any cleanable resource. Slower than having a specialized type
   GenericHandle(Box<dyn DeviceResource>),
@@ -135,6 +136,7 @@ impl DiscardItem {
       Self::RenderPass(r) => (8, r.as_raw()),
       Self::Framebuffer(f) => (9, f.as_raw()),
       Self::Fence(f) => (11, f.as_raw()),
+      Self::Semaphore(s) => (12, s.as_raw()),
       Self::GenericHandle(h) => {
         let ptr: *const dyn DeviceResource = &**h;
         (10, ptr as *const () as u64)
@@ -227,6 +229,11 @@ impl DiscardPool {
   /// TODO: Document this item
   pub fn discard_fence(&self, fence: vk::Fence, timeline: u64) {
     self.push_item(timeline, DiscardItem::Fence(fence));
+  }
+
+  /// TODO: Document this item
+  pub fn discard_semaphore(&self, semaphore: vk::Semaphore, timeline: u64) {
+    self.push_item(timeline, DiscardItem::Semaphore(semaphore));
   }
 
   /// TODO: Document this item
@@ -402,6 +409,9 @@ impl DiscardPool {
         },
         DiscardItem::Fence(fence) => unsafe {
           device.destroy_fence(fence, None);
+        },
+        DiscardItem::Semaphore(semaphore) => unsafe {
+          device.destroy_semaphore(semaphore, None);
         },
         DiscardItem::GenericHandle(mut handle) => {
           aethervk_oshal_rlib::log!("Destroying GenericHandle");

@@ -151,6 +151,7 @@ impl Instance {
       #[cfg(test)]
       {
         printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
+        printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED_RESERVE_BINDING_SLOT);
       }
       #[cfg(not(test))]
       {

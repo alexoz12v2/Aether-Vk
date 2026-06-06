@@ -821,9 +821,8 @@ pub struct VulkanCommandBuffer {
   pub next_submit_value_ptr: core::ptr::NonNull<core::sync::atomic::AtomicU64>,
   pub assigned_timeline_value: alloc::sync::Arc<core::sync::atomic::AtomicU64>,
   /// Fence signalled on submit — used by VulkanReadHandle::wait() to guarantee
-  /// the GPU has fully completed before staging buffers are destroyed.
   /// Required for MoltenVK where timeline semaphore emulation can have sync gaps.
-  pub submission_fence: vk::Fence,
+  pub throwaway_sem: vk::Semaphore,
 }
 
 unsafe impl Send for VulkanCommandBuffer {}
@@ -841,20 +840,22 @@ impl CommandBuffer for VulkanCommandBuffer {
 
       device.end_command_buffer(self.cmd).map_err(|e| GpuError::from(e))?;
 
-      // Create a fence for this submission — required for reliable GPU sync on
-      // MoltenVK where timeline semaphore emulation can have gaps.
-      let fence_ci = vk::FenceCreateInfo::default();
-      self.submission_fence =
-        device.handle.create_fence(&fence_ci, None).map_err(|e| GpuError::from(e))?;
+      // Create a throwaway timeline semaphore for this submission
+      let mut type_info = vk::SemaphoreTypeCreateInfo::default()
+        .semaphore_type(vk::SemaphoreType::TIMELINE)
+        .initial_value(0);
+      let sem_ci = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
+      self.throwaway_sem =
+        device.handle.create_semaphore(&sem_ci, None).map_err(|e| GpuError::from(e))?;
 
       let command_buffers = [self.cmd];
-      let signal_semaphores = [self.timeline_sem];
+      let signal_semaphores = [self.timeline_sem, self.throwaway_sem];
 
       // TAKE SUBMISSION LOCK BEFORE ALLOCATING TIMELINE!
       // This ensures that the order we get timeline values exactly matches the order we submit to the queue.
       let _guard = device.submission_lock.lock();
       self.timeline_value = next_submit_value.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
-      let signal_values = [self.timeline_value];
+      let signal_values = [self.timeline_value, 1];
 
       let mut timeline_info =
         vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&signal_values);
@@ -866,7 +867,7 @@ impl CommandBuffer for VulkanCommandBuffer {
 
       device
         .handle
-        .queue_submit(self.queue.handle, &[submit_info], self.submission_fence)
+        .queue_submit(self.queue.handle, &[submit_info], vk::Fence::null())
         .map_err(|e| GpuError::from(e))?;
       drop(_guard);
 
@@ -881,7 +882,7 @@ impl CommandBuffer for VulkanCommandBuffer {
         self.command_pools.clone(),
         self.timeline_value,
       );
-      discard_pool.discard_fence(self.submission_fence, self.timeline_value);
+      discard_pool.discard_semaphore(self.throwaway_sem, self.timeline_value);
     }
 
     Ok(Some(crate::gpu::CommandBufferSyncInfo {
@@ -911,9 +912,8 @@ pub struct VulkanReadHandle<T> {
   pub capacity: usize,
   pub timeline_sem: ash::vk::Semaphore,
   pub assigned_timeline_value: alloc::sync::Arc<core::sync::atomic::AtomicU64>,
-  /// Submission fence set after cmd.submit() — provides reliable GPU completion
   /// signal on MoltenVK where timeline semaphore emulation may have sync gaps.
-  pub submission_fence: vk::Fence,
+  pub throwaway_sem: vk::Semaphore,
   pub _marker: core::marker::PhantomData<T>,
 }
 
@@ -948,18 +948,13 @@ impl<T: Copy + Send + Sync> WaitHandle<Vec<T>> for VulkanReadHandle<T> {
     let device = unsafe { self.device.as_ref() };
 
 
-    // Wait on the submission fence first — this is the most reliable GPU
-    // completion signal, especially on MoltenVK where timeline semaphore
-    // emulation can have sync gaps that cause Metal use-after-free assertions.
-    if self.submission_fence != vk::Fence::null() {
-      unsafe {
-        device
-          .handle
-          .wait_for_fences(&[self.submission_fence], true, u64::MAX)
-          .map_err(|e| {
-            crate::types::EngineError::Gpu(crate::gpu_err!("Fence wait failed: {:?}", e))
-          })?;
-      }
+    // Wait on the throwaway timeline semaphore first
+    if self.throwaway_sem != vk::Semaphore::null() {
+      device
+        .wait_for_semaphore_value(self.throwaway_sem, 1, u64::MAX)
+        .map_err(|e| {
+          crate::types::EngineError::Gpu(crate::gpu_err!("Throwaway sem wait failed: {:?}", e))
+        })?;
     }
 
     // Also wait on timeline semaphore (belt-and-suspenders)
@@ -1166,7 +1161,7 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for VulkanBuffer<T> {
       capacity: self.capacity,
       timeline_sem: cmd.timeline_sem,
       assigned_timeline_value: cmd.assigned_timeline_value.clone(),
-      submission_fence: vk::Fence::null(), // set after cmd.submit()
+      throwaway_sem: vk::Semaphore::null(), // set after cmd.submit()
       _marker: core::marker::PhantomData,
     })
   }
@@ -1533,7 +1528,7 @@ impl VulkanComputeKernels {
       timeline_sem: self.timeline,
       next_submit_value_ptr: core::ptr::NonNull::from(&self.next_submit_value),
       assigned_timeline_value: alloc::sync::Arc::new(core::sync::atomic::AtomicU64::new(0)),
-      submission_fence: vk::Fence::null(), // Created in submit()
+      throwaway_sem: vk::Semaphore::null(), // Created in submit()
     })
   }
 
@@ -3937,8 +3932,8 @@ impl VulkanComputeKernels {
     let sync_info = cmd.submit().map_err(|e| gpu_err!("{}", e))?;
 
     // Copy the submission fence to both read handles so wait() can use it
-    rb_handle.submission_fence = cmd.submission_fence;
-    p_handle.submission_fence = cmd.submission_fence;
+    rb_handle.throwaway_sem = cmd.throwaway_sem;
+    p_handle.throwaway_sem = cmd.throwaway_sem;
 
     let rb_data = rb_handle.wait().map_err(|e| gpu_err!("{}", e))?;
     let p_data = p_handle.wait().map_err(|e| gpu_err!("{}", e))?;
@@ -4328,22 +4323,18 @@ impl Kernels for Device {
     // Submit whatever has been recorded so far
     let _sync = cmd.submit().map_err(EngineError::from)?;
 
-    // Wait on the submission fence (created inside submit())
-    if cmd.submission_fence != vk::Fence::null() {
-      unsafe {
-        self
-          .device
-          .handle
-          .wait_for_fences(&[cmd.submission_fence], true, 5_000_000_000) // 5s timeout
-          .map_err(|e| {
-            EngineError::Gpu(crate::gpu_err!(
-              "debug_sync_barrier fence wait failed: {:?}",
-              e
-            ))
-          })?;
-        // AutoDiscard pool will clean up the fence when the timeline hits the submission value.
-      }
-      cmd.submission_fence = vk::Fence::null();
+    // Wait on the throwaway semaphore (created inside submit())
+    if cmd.throwaway_sem != vk::Semaphore::null() {
+      self
+        .device
+        .wait_for_semaphore_value(cmd.throwaway_sem, 1, 5_000_000_000) // 5s timeout
+        .map_err(|e| {
+          EngineError::Gpu(crate::gpu_err!(
+            "debug_sync_barrier throwaway sem wait failed: {:?}",
+            e
+          ))
+        })?;
+      cmd.throwaway_sem = vk::Semaphore::null();
     }
 
     // Allocate a fresh command buffer for subsequent dispatches
@@ -4904,7 +4895,15 @@ impl Kernels for Device {
       .map_err(EngineError::from)?;
 
     unsafe {
+      // Zero the entire 16-byte list header (count=0, capacity=0, and first 8 payload bytes).
       self.device.cmd_fill_buffer(cmd.cmd, list.buffer, 0, 16, 0);
+      // Write the element capacity at offset 4.  Every GLSL list type used here has the layout
+      //   { uint count; uint capacity; T pairs[]; }
+      // so bytes 4-7 are the capacity field that narrow_ccd{,_cross_lca} use as an upper bound
+      // before atomically claiming a slot.  Without this write the field stays zero (from the
+      // cmd_fill_buffer above) and every bounds-check `count < capacity` fails, silently
+      // discarding all collision pairs.
+      self.device.cmd_fill_buffer(cmd.cmd, list.buffer, 4, 4, capacity as u32);
       let barrier = ash::vk::MemoryBarrier::default()
         .src_access_mask(ash::vk::AccessFlags::TRANSFER_WRITE)
         .dst_access_mask(ash::vk::AccessFlags::SHADER_READ | ash::vk::AccessFlags::SHADER_WRITE);
