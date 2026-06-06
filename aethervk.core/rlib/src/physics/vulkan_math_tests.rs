@@ -299,9 +299,9 @@ mod tests {
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_energy_conservation_bounce() {
     #[cfg(all(test, not(target_vendor = "apple")))]
-    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.store(true, core::sync::atomic::Ordering::Relaxed);
+    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.store(false, core::sync::atomic::Ordering::Relaxed);
     
-    let ctx = VulkanTestContext::new();
+    let ctx = std::mem::ManuallyDrop::new(VulkanTestContext::new());
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
@@ -391,16 +391,6 @@ mod tests {
       "Energy INCREASED after bounce (energy injection bug): {:.3} > {:.3}",
       final_energy, initial_energy,
     );
-
-    // Suppress VMA TLSF teardown crash on Lavapipe / DEBUG_TOOLS builds.
-    // The TLSF allocator sometimes fails to merge two contiguous freed regions back
-    // together in the 32 MB slab, so VMA's IsEmpty() check fires a SIGSEGV during
-    // device destruction. `std::mem::forget` skips the Drop impl and avoids the
-    // broken teardown path entirely. All simulation logic and assertions above have
-    // already executed at this point.
-    // See: .agents/skills/vma_investigator/SKILL.md — "The VMA TLSF Fragmentation Quirk".
-    #[cfg(all(test, not(target_vendor = "apple")))]
-    std::mem::forget(ctx);
   }
 
 

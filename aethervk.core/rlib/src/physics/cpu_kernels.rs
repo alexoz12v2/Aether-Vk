@@ -77,6 +77,10 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for CpuBuffer<T> {
       data: Some(self.data.clone()),
     })
   }
+  
+  unsafe fn mapped_slice(&self) -> Option<&[T]> {
+    Some(&self.data)
+  }
 }
 
 /// TODO: Document this item
@@ -104,6 +108,10 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for CpuList<T> {
     Ok(CpuWaitHandle {
       data: Some(self.data.clone()),
     })
+  }
+
+  unsafe fn mapped_slice(&self) -> Option<&[T]> {
+    Some(&self.data)
   }
 }
 
@@ -156,6 +164,10 @@ impl Kernels for CpuScalarKernels {
   fn discard_list<T: Copy + Send + Sync>(&self, _list: Self::List<T>) {}
   fn discard_bvh(&self, _bvh: Self::MotionBvh) {}
   fn discard_tlas(&self, _tlas: Self::MotionTlas) {}
+
+  fn read_buffer_u32_first(&self, buf: &Self::Buffer<u32>) -> EngineResult<u32> {
+    Ok(buf.data.first().copied().unwrap_or(0xFFFFFFFF))
+  }
 
   fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> {
     Some(crate::gpu::SubgroupSize::Size32)
@@ -768,6 +780,10 @@ impl Kernels for CpuSimdKernels {
   fn discard_list<T: Copy + Send + Sync>(&self, _list: Self::List<T>) {}
   fn discard_bvh(&self, _bvh: Self::MotionBvh) {}
   fn discard_tlas(&self, _tlas: Self::MotionTlas) {}
+
+  fn read_buffer_u32_first(&self, buf: &Self::Buffer<u32>) -> EngineResult<u32> {
+    Ok(buf.data.first().copied().unwrap_or(0xFFFFFFFF))
+  }
 
   fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> {
     Some(crate::gpu::SubgroupSize::Size32)

@@ -1969,7 +1969,17 @@ pub trait DeviceBuffer<T>: Send + Sync {
   /// borrow `cmd`, allowing you to submit the command buffer while the tasklet
   /// awaits the GPU synchronization primitive (fence)
   fn enqueue_read_to_cpu(&self, cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>>;
+
+  /// Read buffer contents as a slice via its persistently-mapped pointer.
+  /// Returns `None` if the backend does not support persistent mapping or the buffer
+  /// wasn't allocated with host visibility.
+  ///
+  /// # Safety
+  /// The caller must ensure that the GPU has finished executing any commands that write
+  /// to this buffer before calling this function (e.g., by waiting on a timeline semaphore).
+  unsafe fn mapped_slice(&self) -> Option<&[T]>;
 }
+
 
 /// A handle representing a pending GPU-to-CPU DMA transfer.
 /// WARN: Any WaitHandle implementation should implement Drop, so that if we early exit from a function we know wait has been done.
@@ -2446,6 +2456,13 @@ pub trait Kernels: Send + Sync {
     compacted: &Self::List<CollisionPair>,
     dt: f32,
   ) -> EngineResult<Self::Buffer<u32>>;
+
+  /// Read the first `u32` element from `buf` via the buffer's persistently-mapped
+  /// host-visible pointer.  The caller must have already waited for the GPU to finish
+  /// writing to `buf` (timeline semaphore wait) before invoking this method.
+  /// Returns `0xFFFF_FFFF` if the buffer is not host-mapped.
+  #[cfg(any(test, feature = "collisions"))]
+  fn read_buffer_u32_first(&self, buf: &Self::Buffer<u32>) -> EngineResult<u32>;
 
   #[cfg(any(test, feature = "collisions"))]
   fn apply_collision_responses(

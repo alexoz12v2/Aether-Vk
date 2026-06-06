@@ -155,10 +155,11 @@ void main() {
         uint  node_count  = subgroupBallotBitCount(node_ballot);
         uint  push_offset = subgroupBallotExclusiveBitCount(node_ballot);
 
-        if (hit_node) {
+        uint new_top = min(stack_ptr + node_count, 32u);
+        if (hit_node && (stack_ptr + push_offset) < 32u) {
             shared_stacks[subgroup_id][stack_ptr + push_offset] = child_payload;
         }
-        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr + node_count;
+        if (lane_id == 0) shared_stack_ptrs[subgroup_id] = new_top;
     }
 
     // Local summation safely inside the target subgroup

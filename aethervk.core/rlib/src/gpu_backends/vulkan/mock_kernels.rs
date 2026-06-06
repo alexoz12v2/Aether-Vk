@@ -39,6 +39,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
   fn discard_tlas(&self, tlas: Self::MotionTlas) {
     self.base.discard_tlas(tlas)
   }
+  fn read_buffer_u32_first(&self, buf: &Self::Buffer<u32>) -> EngineResult<u32> {
+    self.base.read_buffer_u32_first(buf)
+  }
   fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> {
     self.base.subgroup_size()
   }

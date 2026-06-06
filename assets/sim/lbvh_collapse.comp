@@ -22,13 +22,14 @@ void main() {
     bool is_leaf = false; uint payload = 0, f_parent = 0, f_dir = 0;
 
     int depth = findMSB(SUBGROUP_SIZE) - 1;
+    int break_d = -1;
     for (int d = depth; d >= 0; d--) {
         uint dir = (lane >> d) & 1u;
         uint meta = pc.binary_bvh.nodes[binary_idx].metadata[dir];
         is_leaf = bvh_is_leaf(meta); uint next_idx = bvh_get_index(meta);
 
         f_parent = binary_idx; f_dir = dir;
-        if (is_leaf) { payload = next_idx; break; }
+        if (is_leaf) { payload = next_idx; break_d = d; break; }
         binary_idx = next_idx;
     }
 
@@ -51,11 +52,13 @@ void main() {
     pc.multi_bvh.nodes[multi_node_idx].com_y[lane] = pc.binary_bvh.nodes[f_parent].com_y[f_dir];
     pc.multi_bvh.nodes[multi_node_idx].com_z[lane] = pc.binary_bvh.nodes[f_parent].com_z[f_dir];
 
+    bool is_valid_lane = (break_d <= 0) || ((lane & ((1u << break_d) - 1u)) == 0u);
+    uvec4 valid_ballot = subgroupBallot(is_valid_lane);
+
     if (lane == 0) {
-        uint mask_x = (SUBGROUP_SIZE >= 32) ? 0xFFFFFFFFu : ((1u << SUBGROUP_SIZE) - 1u);
-        uint mask_y = 0u; if (SUBGROUP_SIZE > 32) mask_y = (SUBGROUP_SIZE >= 64) ? 0xFFFFFFFFu : ((1u << (SUBGROUP_SIZE - 32)) - 1u);
-        pc.multi_bvh.nodes[multi_node_idx].valid_mask = uvec2(mask_x, mask_y);
+        pc.multi_bvh.nodes[multi_node_idx].valid_mask = valid_ballot.xy;
         for (uint i = 0; i < 8; ++i)
             for (uint j = 0; j < SUBGROUP_SIZE; ++j) pc.multi_bvh.nodes[multi_node_idx].permutations[i][j] = j;
     }
 }
+
