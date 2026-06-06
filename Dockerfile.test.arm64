@@ -1,0 +1,90 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AetherVk – arm64 test image for crash investigation with GDB.
+#
+# Runs natively on Apple Silicon (no QEMU) so PTRACE/GDB work correctly.
+# Use this to get a backtrace for the integrate_bodies_p3 SIGSEGV.
+#
+# One-time volume creation:
+#   docker volume create aethervk-arm64-target
+#
+# Build:
+#   docker build --platform linux/arm64 -f Dockerfile.test.arm64 -t aethervk-test-arm64 .
+#
+# Run (GDB backtrace):
+#   docker run --platform linux/arm64 --rm \
+#     -v "$(pwd):/workspace" \
+#     -v aethervk-arm64-target:/build-target \
+#     -w /workspace \
+#     --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+#     aethervk-test-arm64
+#
+# Interactive shell:
+#   docker run --platform linux/arm64 --rm -it \
+#     -v "$(pwd):/workspace" \
+#     -v aethervk-arm64-target:/build-target \
+#     -w /workspace \
+#     --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+#     aethervk-test-arm64 bash
+# ─────────────────────────────────────────────────────────────────────────────
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# ── System dependencies ───────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      build-essential \
+      curl \
+      tar \
+      unzip \
+      xz-utils \
+      pkg-config \
+      # Vulkan (lavapipe / Mesa software rasterizer + validation layers)
+      libvulkan-dev \
+      mesa-vulkan-drivers \
+      vulkan-validationlayers \
+      vulkan-tools \
+      # X11 / Wayland stubs needed by some Vulkan loaders
+      libfontconfig1 \
+      libx11-6 \
+      libx11-xcb1 \
+      libxcb-dri3-0 \
+      libwayland-client0 \
+      # Headless X server
+      xvfb \
+      x11-utils \
+      tini \
+      # Debug tools
+      gdb \
+      lldb \
+  && rm -rf /var/lib/apt/lists/*
+
+# ── Rust via rustup ───────────────────────────────────────────────────────────
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --default-toolchain stable \
+         --component rustfmt,llvm-tools-preview
+
+# ── cargo-nextest (compiled for current arch — works on aarch64 + x86_64) ─────
+RUN cargo install --locked cargo-nextest
+
+# ── Environment ───────────────────────────────────────────────────────────────
+ENV VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json
+ENV RUST_BACKTRACE=full
+ENV CARGO_TERM_COLOR=always
+ENV CARGO_TARGET_DIR=/build-target
+ENV ASSET_DIR=/workspace/assets
+
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# ── Embed the GDB run script ──────────────────────────────────────────────────
+COPY docker-gdb-run.sh /usr/local/bin/gdb-run.sh
+RUN chmod +x /usr/local/bin/gdb-run.sh
+
+# ── Default CMD: build + GDB backtrace ────────────────────────────────────────
+CMD ["/usr/local/bin/gdb-run.sh"]

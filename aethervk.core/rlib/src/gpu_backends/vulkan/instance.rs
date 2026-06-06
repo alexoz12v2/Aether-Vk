@@ -143,9 +143,17 @@ impl Instance {
     let mut printf_features = alloc::vec![];
 
     #[cfg(debug_assertions)]
-    if cfg!(target_vendor = "apple") {
+    let disable_gpu_av = {
+      #[cfg(any(test, feature = "std"))]
+      { std::env::var("AETHERVK_DISABLE_GPU_AV").is_ok() }
+      #[cfg(not(any(test, feature = "std")))]
+      { false }
+    };
+
+    #[cfg(debug_assertions)]
+    if cfg!(target_vendor = "apple") || disable_gpu_av {
       aethervk_oshal_rlib::log!(
-        "Disabling GPU-Assisted/Printf Validation on Apple platforms due to MoltenVK/SPIRV-Cross bugs."
+        "Disabling GPU-Assisted/Printf Validation."
       );
     } else {
       #[cfg(test)]

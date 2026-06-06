@@ -78,10 +78,14 @@ void main() {
         uint entity_shape = bvh_get_shape(meta);
         bool is_sub_tlas = (entity_shape == BVH_SHAPE_SUB_TLAS);
 
-        // Prevents (A,A) and duplicate (B,A) pairs!
-        // But if B is a SUB_TLAS, we MUST test it because SUB_TLAS never queries!
-        // We still must avoid self-collision (A,A) even if A is a SUB_TLAS.
-        bool hit_leaf = hit && is_leaf && ((my_ent_id < entity_id) || (is_sub_tlas && my_ent_id != entity_id)) && (entity_shape != BVH_SHAPE_AABB);
+        // Prevents (A,A) and duplicate (B,A) pairs.
+        // Rule: record pair only if my_ent_id < entity_id (canonical ordering).
+        // Exception: SUB_TLAS leaves never query themselves so we MUST record them
+        // even when entity_id < my_ent_id (but still skip self-collision A==A).
+        // Note: do NOT filter on entity_shape == BVH_SHAPE_AABB — rigid body
+        // leaves in the TLAS ARE typed BVH_SHAPE_AABB (see tlas_builder.rs:329);
+        // filtering on that shape would eliminate all rb-rb pairs.
+        bool hit_leaf = hit && is_leaf && ((my_ent_id < entity_id) || (is_sub_tlas && my_ent_id != entity_id));
 #ifdef DEBUG_SHADERS
             debugPrintfEXT("hit && is_leaf! my_ent=%d ent=%d shape=%d hit_leaf=%d", my_ent_id, entity_id, entity_shape, hit_leaf ? 1 : 0);
 #endif
