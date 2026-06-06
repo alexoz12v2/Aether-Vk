@@ -117,10 +117,12 @@ for file in assets/*.comp assets/sim/*.comp; do
         compile_one "$file" comp "-DDEBUG_SHADERS" "${file%.comp}.comp.d.spv"
         # Produce one SPIR-V per candidate workgroup size for mk_wg!() shaders.
         for wg in "${WG_SIZES[@]}"; do
+            sed -i.bak "s/SUBGROUP_SIZE = [0-9]*/SUBGROUP_SIZE = $wg/" assets/bvh_utils.glsl
             out="${file%.comp}.comp.wg${wg}.spv"
             compile_one "$file" comp "-DLOCAL_SIZE_X=$wg" "$out"
             out_d="${file%.comp}.comp.wg${wg}.d.spv"
             compile_one "$file" comp "-DLOCAL_SIZE_X=$wg -DDEBUG_SHADERS" "$out_d"
+            mv assets/bvh_utils.glsl.bak assets/bvh_utils.glsl
         done
     else
         # Single-variant (specialization-constant or always-single-thread)
