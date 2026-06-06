@@ -905,6 +905,7 @@ pub(super) struct SunRenderResource {
   pub compute_pipeline_layout: Option<vk::PipelineLayout>,
   pub params_buffer: Option<vk::Buffer>,
   pub params_alloc: Option<vk_mem::Allocation>,
+  pub last_timeline: u64,
 }
 
 impl SunRenderResource {
