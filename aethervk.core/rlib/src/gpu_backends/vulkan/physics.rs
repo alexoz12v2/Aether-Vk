@@ -3192,23 +3192,23 @@ impl VulkanComputeKernels {
     };
 
     unsafe {
-      // device.cmd_fill_buffer(cmd.cmd, atomic_counters.buffer, 0, (num_nodes * 4) as u64, 0);
+      device.cmd_fill_buffer(cmd.cmd, atomic_counters.buffer, 0, (num_nodes * 4) as u64, 0);
 
-      // let fill_barrier = vk::BufferMemoryBarrier::default()
-      //   .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-      //   .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
-      //   .buffer(atomic_counters.buffer)
-      //   .size((num_nodes * 4) as u64);
+      let fill_barrier = vk::BufferMemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
+        .buffer(atomic_counters.buffer)
+        .size((num_nodes * 4) as u64);
 
-      // device.cmd_pipeline_barrier(
-      //   cmd.cmd,
-      //   vk::PipelineStageFlags::TRANSFER,
-      //   vk::PipelineStageFlags::COMPUTE_SHADER,
-      //   vk::DependencyFlags::empty(),
-      //   &[],
-      //   core::slice::from_ref(&fill_barrier),
-      //   &[],
-      // );
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::TRANSFER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::DependencyFlags::empty(),
+        &[],
+        core::slice::from_ref(&fill_barrier),
+        &[],
+      );
 
       device.cmd_bind_pipeline(
         cmd.cmd,
@@ -4186,7 +4186,18 @@ impl Kernels for Device {
 
     if node_bytes.is_empty() {
       // No entities: upload a single zeroed node so BDA is valid but TLAS is empty.
-      let zero = alloc::vec![0u8; core::mem::size_of::<crate::math::collision::multi_bvh::TlasMultiNode<32>>()];
+      // Must use the same node size the GPU shader expects (SUBGROUP_SIZE-dependent).
+      use crate::math::collision::multi_bvh::TlasMultiNode;
+      let node_size = match self.kernels.pipelines.subgroup_size {
+        128 => core::mem::size_of::<TlasMultiNode<128>>(),
+         64 => core::mem::size_of::<TlasMultiNode<64>>(),
+         32 => core::mem::size_of::<TlasMultiNode<32>>(),
+         16 => core::mem::size_of::<TlasMultiNode<16>>(),
+          8 => core::mem::size_of::<TlasMultiNode<8>>(),
+          4 => core::mem::size_of::<TlasMultiNode<4>>(),
+          _ => core::mem::size_of::<TlasMultiNode<32>>(),
+      };
+      let zero = alloc::vec![0u8; node_size];
       return self.upload_motion_tlas(_cmd, &zero);
     }
 

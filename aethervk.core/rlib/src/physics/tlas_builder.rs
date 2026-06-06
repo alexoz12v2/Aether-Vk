@@ -184,8 +184,8 @@ fn mark_particle_sentinels<const N: usize>(
   }
 }
 
-pub fn trace_particle_bvh_path(
-  multi_nodes: &[crate::math::collision::multi_bvh::TlasMultiNode<32>],
+pub fn trace_particle_bvh_path<const N: usize>(
+  multi_nodes: &[crate::math::collision::multi_bvh::TlasMultiNode<N>],
   root_idx: u32,
   target_primitive_idx: u32,
 ) -> Option<alloc::vec::Vec<u32>> {
@@ -199,7 +199,7 @@ pub fn trace_particle_bvh_path(
     }
     let node = &multi_nodes[node_idx as usize];
 
-    for i in 0..32 {
+    for i in 0..N {
       let meta = node.metadata[i];
       if meta == 0 {
         continue;
@@ -223,9 +223,12 @@ pub fn trace_particle_bvh_path(
   None
 }
 
-pub fn build_selection_tlas(
+pub fn build_selection_tlas<const N: usize>(
   scene: &crate::scene::Scene,
-) -> alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>> {
+) -> alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<N>>
+where
+  crate::math::collision::multi_bvh::TlasMultiNode<N>: bytemuck::Pod,
+{
   use crate::{
     math::collision::multi_bvh::convert_binary_to_multi_bvh, physics::physics_scene::RootBoundsBvh,
   };
@@ -330,10 +333,10 @@ pub fn build_selection_tlas(
     .collect();
 
   let bvh = RootBoundsBvh::build(&binary_leaves);
-  let mut multi_nodes = convert_binary_to_multi_bvh::<32, RootBoundsBvh>(&bvh);
+  let mut multi_nodes = convert_binary_to_multi_bvh::<N, RootBoundsBvh>(&bvh);
 
   for node in multi_nodes.iter_mut() {
-    for i in 0..32 {
+    for i in 0..N {
       let meta = node.metadata[i];
       if meta != 0 && (meta & 0x8000_0000) != 0 {
         let binary_node_id = (meta & 0x7FFF_FFFF) as usize;

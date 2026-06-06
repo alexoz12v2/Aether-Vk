@@ -39,6 +39,10 @@ void main() {
     uint idB = pair.micro_id;
     uint lca_id = pair.lca_id;
 
+    // Self-collision: macro entity queries its own leaf in the sub-TLAS.
+    // Skip it — no impulse is meaningful between a body and itself.
+    if (idA == idB) return;
+
     RigidBody ent_A = pc.scene_entities.bodies[idA];
     RigidBody ent_B = pc.scene_entities.bodies[idB];
     

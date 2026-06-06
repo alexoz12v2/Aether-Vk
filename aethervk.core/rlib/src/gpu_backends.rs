@@ -444,7 +444,9 @@ where
 
         // ── New broad-phase suite ─────────────────────────────────────────────
         // Allocate pair-list buffers (is_list=true → 16-byte header: [x,y,z,count])
-        let n_entities = rigid_bodies.capacity() as u32 + (particles.capacity() as u32 / 32);
+        // Particle data uses AoSoA layout with stride = sg_size (1 SoA slice per subgroup lane).
+        let sg = kernels.subgroup_size().map(|s| s as u32).unwrap_or(32);
+        let n_entities = rigid_bodies.capacity() as u32 + (particles.capacity() as u32 / sg);
 
         // bp_clear: zero all four pair-list counters via raw BDAs
         // (The caller manages the pair-list buffers; for now we reuse bvh.address
@@ -474,6 +476,13 @@ where
 
         let internal_pairs = AutoDiscard::new(
           kernels.build_list::<crate::gpu::CrossPair>(&mut cmd, 2_000)?,
+          |b| kernels.discard_list(b),
+        );
+
+        // Dummy sink for ps-ps pairs emitted by bp_cross_lca.
+        // Must be a valid BDA — passing null caused GPU faults on all backends.
+        let ps_ps_pairs = AutoDiscard::new(
+          kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 64)?,
           |b| kernels.discard_list(b),
         );
 
@@ -529,7 +538,7 @@ where
             rb_lca_pairs.address(),
             rb_rb_pairs.address(),
             rb_ps_pairs.address(),
-            0, // out_ps_ps
+            ps_ps_pairs.address(), // out_ps_ps — valid sink (type routing fixed below)
             internal_pairs.address(),
             rb_lca_pairs.capacity() as u32,
             2_000,
