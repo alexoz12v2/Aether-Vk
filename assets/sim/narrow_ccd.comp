@@ -90,7 +90,7 @@ void main() {
     if (compute_toi_generic(shape_A, extents_A, trans_A, vel_A * pc.dt, shape_B, extents_B, trans_B, vel_B * pc.dt, 1e-3, 10, toi, normal, contact, depth)) {
         SparseCollisions out_list = SparseCollisions(pc.output_list);
         uint count = atomicAdd(out_list.count, 1);
-        if (count < 4000u) {
+        if (count < out_list.capacity) {
             out_list.pairs[count].valid = 1u;
             out_list.pairs[count].entity_a = idA;
             out_list.pairs[count].entity_b = idB;

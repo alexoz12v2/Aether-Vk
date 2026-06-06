@@ -98,7 +98,7 @@ void main() {
             if (lane_id == 0) base_idx = atomicAdd(pc.overlapping_pairs.count, leaf_count);
             base_idx = subgroupBroadcast(base_idx, 0);
 
-            if (hit_leaf && base_idx + leaf_offset < 10000u) {
+            if (hit_leaf && base_idx + leaf_offset < pc.overlapping_pairs.capacity) {
                 pc.overlapping_pairs.pairs[base_idx + leaf_offset] = uvec2(my_ent_id, meta);
             }
         }

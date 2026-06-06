@@ -80,7 +80,7 @@ void main() {
     if (collides) {
         SparseCollisions cross_out = pc.output_list;
         uint count = atomicAdd(cross_out.count, 1);
-        if (count < 4000u) {
+        if (count < cross_out.capacity) {
             cross_out.pairs[count].valid = 1u;
             cross_out.pairs[count].entity_a = idA;
             cross_out.pairs[count].prim_a = idA;

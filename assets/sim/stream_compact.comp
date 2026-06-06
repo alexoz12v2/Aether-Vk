@@ -22,7 +22,7 @@ void main() {
 #endif
 
     uint id = gl_GlobalInvocationID.x;
-    uint in_count = pc.sparse_in.count;
+    uint in_count = min(pc.sparse_in.count, pc.total_elements);
 
     if (id == 0) {
         pc.packed_out.count = in_count;

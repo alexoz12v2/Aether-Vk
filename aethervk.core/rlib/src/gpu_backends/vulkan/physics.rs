@@ -3118,21 +3118,39 @@ impl VulkanComputeKernels {
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
 
     let num_nodes = (total_particles * 2).max(1) as usize;
-    aethervk_oshal_rlib::log!(
-      "build_motion_bvh: allocating bvh_buffer with num_nodes={}, capacity={}, size={}",
-      num_nodes,
-      particles.capacity(),
-      num_nodes * core::mem::size_of::<crate::gpu::compute_push_constants::MultiBvhNodeWideGpu>()
-    );
-    let bvh_buffer_result = self
-      .allocate_device_buffer::<crate::gpu::compute_push_constants::MultiBvhNodeWideGpu>(
-        device,
-        allocator,
-        num_nodes,
-        vk::BufferUsageFlags::STORAGE_BUFFER,
-        false,
-        rollback,
-      );
+
+    // Dispatch to the concrete MultiBvhNodeWideGpu<N> based on hardware subgroup size.
+    macro_rules! alloc_bvh_buf {
+      ($sg:literal) => {{
+        type Node = crate::gpu::compute_push_constants::MultiBvhNodeWideGpu<$sg>;
+        aethervk_oshal_rlib::log!(
+          "build_motion_bvh: allocating bvh_buffer with num_nodes={}, capacity={}, size={}",
+          num_nodes,
+          particles.capacity(),
+          num_nodes * core::mem::size_of::<Node>()
+        );
+        self
+          .allocate_device_buffer::<Node>(
+            device,
+            allocator,
+            num_nodes,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            false,
+            rollback,
+          )
+          .map(|b| b.cast::<()>())
+      }};
+    }
+
+    let bvh_buffer_result = match self.pipelines.subgroup_size {
+      128 => alloc_bvh_buf!(128),
+       64 => alloc_bvh_buf!(64),
+       32 => alloc_bvh_buf!(32),
+       16 => alloc_bvh_buf!(16),
+        8 => alloc_bvh_buf!(8),
+        4 => alloc_bvh_buf!(4),
+        _ => alloc_bvh_buf!(32),
+    };
     if let Err(e) = &bvh_buffer_result {
       aethervk_oshal_rlib::log!("build_motion_bvh failed to allocate bvh_buffer: {:?}", e);
     }
@@ -3258,7 +3276,7 @@ impl VulkanComputeKernels {
     sorted_morton.discard(&self.discard_pool, timeline);
     atomic_counters.discard(&self.discard_pool, timeline);
 
-    Ok(bvh_buffer.cast())
+    Ok(bvh_buffer)
   }
 
   #[function_name::named]
@@ -4125,14 +4143,15 @@ impl Kernels for Device {
   }
 
   fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> {
-    let s = self.query_result.subgroup_size;
-    if s >= 64 {
-      Some(crate::gpu::SubgroupSize::Size64)
-    } else if s <= 16 {
-      Some(crate::gpu::SubgroupSize::Size16)
-    } else {
-      Some(crate::gpu::SubgroupSize::Size32)
-    }
+    use crate::gpu::SubgroupSize;
+    Some(match self.query_result.subgroup_size {
+      s if s >= 128 => SubgroupSize::Size128,
+      s if s >= 64  => SubgroupSize::Size64,
+      s if s >= 32  => SubgroupSize::Size32,
+      s if s >= 16  => SubgroupSize::Size16,
+      s if s >= 8   => SubgroupSize::Size8,
+      _             => SubgroupSize::Size4,
+    })
   }
 
   fn wait_sync(&self, sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> {

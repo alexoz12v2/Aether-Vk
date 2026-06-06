@@ -258,8 +258,12 @@ where
   let dt_s = total_dt as f32 / 1_000_000.0;
   use crate::physics::tlas_builder::build_scene_motion_tlas;
   let (tlas_bytes, tlas_root_idx) = match kernels.subgroup_size().map(|s| s as u32).unwrap_or(32) {
+    128 => build_scene_motion_tlas::<128>(physical_scene),
     64 => build_scene_motion_tlas::<64>(physical_scene),
+    32 => build_scene_motion_tlas::<32>(physical_scene),
     16 => build_scene_motion_tlas::<16>(physical_scene),
+    8 => build_scene_motion_tlas::<8>(physical_scene),
+    4 => build_scene_motion_tlas::<4>(physical_scene),
     _ => build_scene_motion_tlas::<32>(physical_scene),
   };
   aethervk_oshal_rlib::log!(
