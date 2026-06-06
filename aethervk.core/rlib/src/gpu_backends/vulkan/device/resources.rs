@@ -209,6 +209,7 @@ impl DiscardPool {
 
   /// TODO: Document this item
   pub fn discard_type_erased<T: DeviceResource + 'static>(&self, item: T, timeline: u64) {
+    aethervk_oshal_rlib::log!("Queuing type_erased discard at timeline {}", timeline);
     self.push_item(timeline, DiscardItem::GenericHandle(Box::new(item)));
   }
 
@@ -403,6 +404,7 @@ impl DiscardPool {
           device.destroy_fence(fence, None);
         },
         DiscardItem::GenericHandle(mut handle) => {
+          aethervk_oshal_rlib::log!("Destroying GenericHandle");
           handle.cleanup(device);
         }
       }
@@ -412,6 +414,7 @@ impl DiscardPool {
   /// Used by device cleanup routines
   pub fn destroy_discarded_resources_all(&self, device: &ash::Device) {
     let items = self.pop_ready_items(u64::MAX);
+    aethervk_oshal_rlib::log!("destroy_discarded_resources_all popping {} items", items.len());
     Self::destroy_items_lock_free(device, items);
   }
 }

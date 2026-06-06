@@ -3254,7 +3254,7 @@ impl RenderDevice for Device {
   ) -> GpuResult<ResourceUploadResult> {
     let physical_mesh_id = RenderableInstanceId::from_physical_mesh(asset_hash);
     let cmd = self.get_cmd(cmd_buffer)?;
-    let _timeline = DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
+    let timeline = DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
 
     let mut is_winner = false;
     loop {
@@ -3366,7 +3366,7 @@ impl RenderDevice for Device {
             let mut resource_opt = None;
             let mut texture_flags_out = TextureFlags::empty();
 
-            self.run_transient_commands(|transient_cmd| {
+            let transient_res = self.run_transient_commands(|transient_cmd| {
               let mut texture_flags: TextureFlags = TextureFlags::empty();
               let albedo_image = component.mesh.albedo_map.as_ref().and_then(|t| {
                 texture_flags |= TextureFlags::ALBEDO;
@@ -3514,6 +3514,8 @@ impl RenderDevice for Device {
               texture_flags_out = texture_flags;
               Ok(())
             })?;
+            let timeline = DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
+            discard_pool.discard_type_erased(transient_res, timeline + 2);
 
             Ok((
               pipeline_key,
@@ -3716,7 +3718,7 @@ impl RenderDevice for Device {
             let mut resource_opt = None;
             let mut texture_flags_out = TextureFlags::empty();
 
-            self.run_transient_commands(|transient_cmd| {
+            let transient_res = self.run_transient_commands(|transient_cmd| {
               let mut texture_flags: TextureFlags = TextureFlags::empty();
               let albedo_image = component.mesh.albedo_map.as_ref().and_then(|t| {
                 texture_flags |= TextureFlags::ALBEDO;
@@ -3945,6 +3947,8 @@ impl RenderDevice for Device {
               texture_flags_out = texture_flags;
               Ok(())
             })?;
+            let timeline = DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
+            discard_pool.discard_type_erased(transient_res, timeline + 2);
 
             Ok((
               pipeline_key,
@@ -4515,7 +4519,9 @@ impl RenderDevice for Device {
         };
 
         if let Some(res) = cleanup_res {
-          state.discard_pool.discard_type_erased(res, u64::MAX);
+          let timeline = state.get_timeline_semaphore_cached_value() + 2;
+          aethervk_oshal_rlib::log!("generate_sky queuing cleanup at timeline {}", timeline);
+          state.discard_pool.discard_type_erased(res, timeline);
         }
 
         // Apply new sky image and safely clean up the previous one if it exists
@@ -7188,7 +7194,7 @@ impl RenderDevice for Device {
               }
 
               // 6. Record Dispatch synchronously to ensure layout transitions happen before any other camera tries to draw
-              self.run_transient_commands(|transient_cmd| {
+              let transient_res = self.run_transient_commands(|transient_cmd| {
                 record_dispatch(
                   &self.device,
                   transient_cmd,
@@ -7201,6 +7207,8 @@ impl RenderDevice for Device {
                 );
                 Ok(())
               })?;
+              let timeline = DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
+              discard_pool.discard_type_erased(transient_res, timeline + 2);
 
               let new_resource = resources::SunRenderResource {
                 resolution,
@@ -9161,12 +9169,27 @@ impl RenderDevice for Device {
   }
 }
 
+pub(super) struct TransientCmdPoolResource {
+  pub(super) pool: ash::vk::CommandPool,
+  pub(super) cmd: ash::vk::CommandBuffer,
+}
+impl DeviceResource for TransientCmdPoolResource {
+  fn cleanup(&mut self, device: &ash::Device) {
+    aethervk_oshal_rlib::log!("Destroying TransientCmdPoolResource");
+    unsafe {
+      device.free_command_buffers(self.pool, &[self.cmd]);
+      device.destroy_command_pool(self.pool, None);
+    }
+  }
+}
+
 impl Device {
   #[named]
-  pub(super) fn run_transient_commands<F>(&self, f: F) -> GpuResult<()>
+  pub(super) fn run_transient_commands<F>(&self, f: F) -> GpuResult<TransientCmdPoolResource>
   where
     F: FnOnce(vk::CommandBuffer) -> GpuResult<()>,
   {
+    aethervk_oshal_rlib::log!("run_transient_commands called!");
     let queue = self.queues.get_graphics_queue();
     let pool_info = vk::CommandPoolCreateInfo::default()
       .queue_family_index(queue.family_index)
@@ -9183,7 +9206,14 @@ impl Device {
       vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
     unsafe { self.device.begin_command_buffer(cmd, &begin_info) }?;
 
-    f(cmd)?;
+    if let Err(e) = f(cmd) {
+      aethervk_oshal_rlib::log!("run_transient_commands error: {:?}", e);
+      unsafe {
+        self.device.free_command_buffers(pool, &[cmd]);
+        self.device.destroy_command_pool(pool, None);
+      }
+      return Err(e);
+    }
 
     unsafe { self.device.end_command_buffer(cmd) }?;
 
@@ -9213,26 +9243,7 @@ impl Device {
       self.device.destroy_semaphore(timeline_semaphore, None);
     }
 
-    struct TransientCmdPoolResource {
-      pool: vk::CommandPool,
-      cmd: vk::CommandBuffer,
-    }
-    impl DeviceResource for TransientCmdPoolResource {
-      fn cleanup(&mut self, device: &ash::Device) {
-        unsafe {
-          device.free_command_buffers(self.pool, &[self.cmd]);
-          device.destroy_command_pool(self.pool, None);
-        }
-      }
-    }
-    
-    let res_guard = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.res);
-    // VVL Bug Fix: The validation layer associates image layout transitions with the command pool they were allocated from.
-    // If the pool is destroyed *at any point* during the app's lifetime, VVL loses the layout state for the image and reverts to UNDEFINED.
-    // We defer the pool's destruction to device shutdown (u64::MAX) to prevent VVL false positives on future frames.
-    res_guard.discard_pool.discard_type_erased(TransientCmdPoolResource { pool, cmd }, u64::MAX);
-    
-    Ok(())
+    Ok(TransientCmdPoolResource { pool, cmd })
   }
 
   #[named]

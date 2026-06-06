@@ -5232,11 +5232,11 @@ impl Device {
     dt: f32,
     output_list: &VulkanBuffer<crate::gpu::CollisionPair>,
   ) -> crate::types::EngineResult<()> {
-    let pc = NarrowCcdPushConstants {
+    let pc = NarrowCcdCrossLcaPushConstants {
       scene_entities: rigid_bodies.address,
-      output_list: output_list.address,
+      cross_output_list: output_list.address,
       particles: particles.address,
-      pair_buffer: broadphase_pairs.address,
+      cross_pair_buffer: broadphase_pairs.address,
       dt,
       particle_radius: 0.5,
       lca_entities,
