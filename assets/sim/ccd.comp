@@ -7,7 +7,10 @@
 #include "imex_math.glsl"
 #include "gjk_cta_utils.glsl"
 
-layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant, std430) uniform PushConstants {
     MultiBvhBuffer particle_bvh;

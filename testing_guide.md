@@ -151,10 +151,91 @@ In headless Linux environments, you use `xvfb-run` to spin up a fake X11 display
 **Why?** `xvfb-run` waits for the background `Xvfb` process to send a `SIGUSR1` signal to indicate it's ready. The Linux kernel completely ignores default signals sent to PID 1. The signal gets swallowed, and `xvfb-run` waits forever, preventing `cargo` from even starting.
 **The Fix:** Always use `tini` as your Docker entrypoint, or pass `--init` to your `docker run` command. `tini` securely takes over PID 1, passing all signals down properly so `xvfb-run` can safely run as PID 2.
 
-#### 2. Disabling GPU-AV
+#### 2. `SIGSEGV` during teardown (The GPU-AV Lavapipe bug)
+If you are running the test suite on `lavapipe` (the CPU emulation driver used in CI) and see random `(test aborted with signal 11: SIGSEGV)` crashes during teardown/cleanup, this is a known bug inside Khronos's **GPU-Assisted Validation (GPU-AV)** layer interacting poorly with `llvmpipe`. 
 
-You can selectively disable `GPU-AV` in AetherVk during CI runs by setting the `AETHERVK_DISABLE_GPU_AV=1` environment variable:
-
+**The Fix:** You can selectively disable `GPU-AV` in AetherVk during CI runs by setting the `AETHERVK_DISABLE_GPU_AV=1` environment variable:
 ```bash
 docker run --init -e AETHERVK_DISABLE_GPU_AV=1 --platform linux/amd64 --rm -v "$(pwd):/workspace" -w /workspace aethervk-test
 ```
+
+### Register Pressure and Lavapipe
+
+If you encounter `SIGSEGV` segmentation faults directly inside shader execution (like in `integrate_bodies`) when testing on `lavapipe` in Docker, it may be due to an LLVM JIT Compiler bug regarding register allocation. While the exact registers vary by CPU architecture (like `x30` on ARM64 or equivalent general-purpose registers on x86_64), the root cause is the same.
+
+**Why it happens:**
+`spirv-val` will report that your shader is perfectly valid. However, the driver (`llvmpipe`) compiles that SPIR-V into native machine code assembly using LLVM. In highly complex shaders (like physics integration), the compiler runs out of physical CPU registers—a scenario known as **High Register Pressure**. 
+
+When `local_size_x` (e.g., 32) is heavily mismatched with the hardware's natural SIMD width (e.g., 4 or 8 depending on the CPU's vector instructions), the JIT compiler wraps the shader logic in a CPU loop to simulate the threads. In specific edge cases under high register pressure, the LLVM backend has a known bug where it accidentally re-uses critical registers for the inner SIMD loop counter, destroying the memory pointer it was holding for constant float data. When it tries to read the float data using the loop counter as a memory address, the program instantly segfaults.
+
+**How to fix it:**
+Since this is a compiler machine-code generation bug, we cannot fix it from Vulkan. We must alter the generated machine code by "jiggling the handle":
+1. **Match the Subgroup Size:** Reduce `local_size_x` to match the hardware execution width (e.g., `4`). This eliminates the internal loop entirely, completely bypassing the register aliasing bug. (Preferably using Vulkan Specialization Constants so as not to penalize native hardware).
+2. **Reduce Register Pressure:** Simplify the shader's internal variables and scope lifetimes, giving the compiler more registers to work with.
+
+### Strategy to debug a GPU hang or crash in Lavapipe
+
+If a test times out, hangs infinitely, or segfaults (such as `test_energy_conservation_bounce`), you can use GDB to inspect the Lavapipe worker threads.
+
+#### 1. Run the specific test under GDB inside the container
+
+We will append the GDB execution command to your Docker `run` command. We need to point GDB to the compiled test binary and filter for the specific test.
+
+```bash
+docker run -it --platform linux/arm64 --rm \
+    -v "$(pwd):/workspace" \
+    -v aethervk-arm64-target:/build-target \
+    -w /workspace \
+    --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+    aethervk-test-arm64 \
+    bash -c "cargo test --features 'collisions,shader_debug_sync' --package aethervk-core-rlib test_energy_conservation_bounce --no-run && \
+             xvfb-run -a rust-gdb --args \$(find /build-target/debug/deps -maxdepth 1 -name 'aethervk_core_rlib-*' -type f -executable -printf '%T@ %p\n' | sort -rn | head -n1 | cut -d' ' -f2) test_energy_conservation_bounce --exact --nocapture"
+```
+
+#### Alternative: Using `cargo nextest` (Recommended)
+
+You can completely bypass the manual `find` parsing by using `cargo nextest`'s built-in `--debugger` flag. This will automatically locate the binary, spawn the debugger interactively, and stream all output directly to your terminal.
+
+```bash
+docker run -it --platform linux/arm64 --rm \
+    -v "$(pwd):/workspace" \
+    -v aethervk-arm64-target:/build-target \
+    -w /workspace \
+    --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+    aethervk-test-arm64 \
+    xvfb-run -a cargo nextest run --features 'collisions,shader_debug_sync' -p aethervk-core-rlib -E 'test(test_energy_conservation_bounce)' --debugger 'rust-gdb --args'
+```
+
+#### 2. Trigger the hang and interrupt
+
+1. Once GDB starts, type `run` and hit Enter.
+2. Wait a few seconds for the test to reach the point where it normally hangs.
+3. Press `Ctrl+C` (SIGINT). This will pause the test execution and drop you back into the GDB prompt.
+
+#### 3. Inspect the threads (`thread apply all bt`)
+
+Run the following command in GDB to see what every thread is doing:
+
+```gdb
+thread apply all bt
+```
+
+What to look for:
+- **Host Thread**: You'll likely see the main Rust test thread stuck at `vkWaitForFences` or similar, waiting for the compute queue to finish.
+- **Lavapipe Threads**: You will see several worker threads (`lp_scene_...` or generic thread pools). If the shader has an infinite loop, you will see threads stuck inside a frame with no symbol name (or an LLVM JIT symbol), which represents the compiled SPIR-V code.
+
+#### 4. Analyze the Shader Disassembly
+
+If you find a lavapipe thread spinning in JIT code:
+1. Switch to that thread: `thread <ID>`
+2. View the disassembly around the instruction pointer to see the loops:
+   ```gdb
+   layout asm
+   # or
+   x/20i $pc - 10
+   ```
+3. Because LLVM translates the SPIR-V CFG (Control Flow Graph), you can look for backward branches (e.g., `b.ne`, `cbnz` on ARM64) to identify the tight loop. You can cross-reference the loop structure (e.g., an unbounded `while` loop fetching `frame_bda`) with your Rust/GLSL compute shader source.
+
+#### Automated Tracing
+
+Since you can't easily press `Ctrl+C` in an interactive automated CI prompt, you can run an automated version of this command that launches the test in GDB, waits 30 seconds for it to hang, automatically sends a `SIGINT`, and dumps all thread backtraces to a file for analysis.

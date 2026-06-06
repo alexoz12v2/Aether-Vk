@@ -13,8 +13,11 @@
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
 
-layout(local_size_x = 256) in;
-const uint SUBGROUPS_PER_WG = 256 / SUBGROUP_SIZE;
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 256
+#endif
+layout(local_size_x = LOCAL_SIZE_X) in;
+const uint SUBGROUPS_PER_WG = ((LOCAL_SIZE_X / SUBGROUP_SIZE) == 0 ? 1 : (LOCAL_SIZE_X / SUBGROUP_SIZE));
 
 // Alias memory block mapping the float-based Wrench to uints for CAS compatibility
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer WrenchArrayUint {

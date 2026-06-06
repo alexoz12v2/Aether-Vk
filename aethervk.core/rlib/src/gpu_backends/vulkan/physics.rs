@@ -27,6 +27,10 @@ use aethervk_oshal_rlib::{
 use alloc::{format, vec::Vec};
 use ash::vk;
 
+#[cfg(all(test, not(target_vendor = "apple")))]
+pub static USE_PRINTF_SHADERS: core::sync::atomic::AtomicBool =
+  core::sync::atomic::AtomicBool::new(false);
+
 /// `narrow_ccd.comp` push constants — **56 bytes** (matches SPIR-V layout exactly).
 ///
 /// GLSL offsets (std430):
@@ -524,11 +528,19 @@ pub struct PhysicsPipelines {
   pub pc_sizes: hashbrown::HashMap<u64, u32>,
   /// Hardware subgroup size (SIMD width), used for AOSOA packing.
   pub subgroup_size: u32,
+  /// True when running on a CPU Vulkan device (Lavapipe / llvmpipe).
+  /// Enables CPU-optimised SPIR-V variants and reduced workgroup sizes.
+  pub is_lavapipe: bool,
 }
 
 impl PhysicsPipelines {
   /// TODO: Document this item
-  pub fn new(device: &LogicalDevice, debug_shaders: bool, subgroup_size: u32) -> GpuResult<Self> {
+  pub fn new(
+    device: &LogicalDevice,
+    debug_shaders: bool,
+    subgroup_size: u32,
+    is_cpu: bool,
+  ) -> GpuResult<Self> {
     let push_constant_range = vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::COMPUTE)
       .offset(0)
@@ -664,13 +676,68 @@ impl PhysicsPipelines {
       alloc::format!("{}/sim", base_dir)
     };
 
+    #[cfg(all(test, not(target_vendor = "apple")))]
+    let use_debug = crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+      .load(core::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(all(test, not(target_vendor = "apple"))))]
+    let use_debug = false;
+
     // Helper to unwrap (Pipeline, pc_size) — stores pc_size, returns pipeline
     let mut pc_sizes = hashbrown::HashMap::<u64, u32>::new();
 
     // Create all pipelines using a helper that extracts and stores reflected PC sizes
     macro_rules! mk {
       ($path:expr) => {{
-        let (pipeline, pc_size) = create_pipeline(&alloc::format!("{}/{}", sim_dir, $path))?;
+        let mut final_path = alloc::format!("{}/{}", sim_dir, $path);
+        if use_debug {
+          final_path = final_path.replace(".spv", ".d.spv");
+        }
+        let (pipeline, pc_size) = create_pipeline(&final_path)?;
+        pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
+        pipeline
+      }};
+    }
+
+    // mk_wg! — Lavapipe-aware workgroup-size variant selector.
+    //
+    // Applies to shaders whose local_size_x was 32 (integrate_bodies_p3,
+    // rb_force_assign).  On Lavapipe (CPU device, subgroup_size ≤ 8) the
+    // Lavapipe ARM64 JIT miscompiles the inner SIMD loop when local_size_x > sg:
+    // it clobbers x30 (link register, reused as a data register in a leaf
+    // function) with the loop counter and then executes `ld1r {v11.4s}, [x30]`
+    // with x30 = 12 (loop counter value), causing SIGSEGV.
+    //
+    // Fix: on Lavapipe pick the wgN.spv variant where N = subgroup_size, so
+    // each workgroup is exactly ONE SIMD batch — no inner loop, no aliasing.
+    //
+    // On every other backend (NVIDIA warp=32, AMD wave=64, Apple sg=32, …) the
+    // wg32.spv variant is loaded, which is byte-for-byte the original shader.
+    //
+    // Path format: <stem>.comp.wgN.spv  (e.g. integrate_bodies_p3.comp.wg4.spv)
+    //
+    // CPU SIMD width → subgroup_size mapping (Lavapipe / llvmpipe):
+    //   NEON (ARM64) / SSE2  →  4
+    //   AVX / AVX2           →  8
+    //   AVX-512              → 16
+    //   (manual override via MESA_NO_AVX* env vars may give 1 or 2 — clamp to 4)
+    macro_rules! mk_wg {
+      ($stem:expr) => {{
+        let mut path;
+        if is_cpu {
+          let wg_suffix = match subgroup_size {
+            1..=4 => "wg4", // SSE2/NEON or manual throttle → smallest
+            5..=8 => "wg8",         // AVX / AVX2
+            9..=16 => "wg16",       // AVX-512
+            _ => "wg32",            // CPU with wide SIMD (shouldn't occur) → safe default
+          };
+          path = alloc::format!("{}/{}.{}.spv", sim_dir, $stem, wg_suffix);
+        } else {
+          path = alloc::format!("{}/{}.spv", sim_dir, $stem);
+        };
+        if use_debug {
+          path = path.replace(".spv", ".d.spv");
+        }
+        let (pipeline, pc_size) = create_pipeline(&path)?;
         pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
         pipeline
       }};
@@ -679,52 +746,60 @@ impl PhysicsPipelines {
     let res: GpuResult<Self> = (|| {
       Ok(Self {
         pipeline_layout,
-        emit_particles: mk!("emit_particles.comp.spv"),
-        lbvh_prepass: mk!("lbvh_prepass.comp.spv"),
-        lbvh_build: mk!("lbvh_build.comp.spv"),
-        lbvh_build_bottomup: mk!("lbvh_build_bottomup.comp.spv"),
-        motion_bounds: mk!("motion_bounds.comp.spv"),
-        motion_refit: mk!("motion_refit.comp.spv"),
+        // ── Particle integrators ──────────────────────────────────────────
+        emit_particles: mk_wg!("emit_particles.comp"),
+        integrate_particles_p1_p2: mk_wg!("integrate_particles_p1_p2.comp"),
+        integrate_bodies_p3: mk_wg!("integrate_bodies_p3.comp"),
+        integrate_particles_p4_5: mk_wg!("integrate_particles_p4_5.comp"),
+        apply_emitters_to_particles: mk_wg!("apply_emitters_to_particles.comp"),
+        rb_force_assign: mk_wg!("rb_force_assign.comp"),
+        convert_particles: mk_wg!("convert_particles.comp"),
+        // ── BVH builders ─────────────────────────────────────────────────
+        lbvh_prepass: mk_wg!("lbvh_prepass.comp"),
+        lbvh_build: mk_wg!("lbvh_build.comp"),
+        lbvh_build_bottomup: mk_wg!("lbvh_build_bottomup.comp"),
+        motion_bounds: mk_wg!("motion_bounds.comp"),
+        motion_refit: mk_wg!("motion_refit.comp"),
+        // ── Gravity / sorting ────────────────────────────────────────────
+        barnes_hut: mk_wg!("barnes_hut.comp"),
         #[cfg(any(test, feature = "collisions"))]
-        stream_compact: mk!("stream_compact.comp.spv"),
-        #[cfg(any(test, feature = "collisions"))]
-        reduce_toi: mk!("reduce_toi.comp.spv"),
-        #[cfg(any(test, feature = "collisions"))]
-        lcp_solver: mk!("lcp_solver.comp.spv"),
-        #[cfg(any(test, feature = "collisions"))]
-        apply_impulses: mk!("apply_impulses.comp.spv"),
-        barnes_hut: mk!("barnes_hut.comp.spv"),
-        #[cfg(any(test, feature = "collisions"))]
-        radix_sort: mk!("radix_sort.comp.spv"),
+        radix_sort: mk_wg!("radix_sort.comp"),
+        // ── Single-variant (specialisation constant or single-threaded) ──
         morton_encode: mk!("morton_encode.comp.spv"),
-        convert_particles: mk!("convert_particles.comp.spv"),
-        #[cfg(any(test, feature = "collisions"))]
-        graph_coloring: mk!("graph_coloring.comp.spv"),
         #[cfg(any(test, feature = "collisions"))]
         lbvh_collapse: mk!("lbvh_collapse.comp.spv"),
-        integrate_particles_p1_p2: mk!("integrate_particles_p1_p2.comp.spv"),
-        integrate_bodies_p3: mk!("integrate_bodies_p3.comp.spv"),
-        integrate_particles_p4_5: mk!("integrate_particles_p4_5.comp.spv"),
-        apply_emitters_to_particles: mk!("apply_emitters_to_particles.comp.spv"),
+        // ── Broad-phase ──────────────────────────────────────────────────
         #[cfg(any(test, feature = "collisions"))]
-        narrow_ccd: mk!("narrow_ccd.comp.spv"),
+        bp_bounds_gen: mk_wg!("bp_bounds_gen.comp"),
         #[cfg(any(test, feature = "collisions"))]
-        narrow_ccd_cross_lca: mk!("narrow_ccd_cross_lca.comp.spv"),
-        rb_force_assign: mk!("rb_force_assign.comp.spv"),
+        bp_scene: mk_wg!("bp_scene.comp"),
         #[cfg(any(test, feature = "collisions"))]
-        bp_clear: mk!("bp_clear.comp.spv"),
+        bp_classify: mk_wg!("bp_classify.comp"),
         #[cfg(any(test, feature = "collisions"))]
-        bp_bounds_gen: mk!("bp_bounds_gen.comp.spv"),
+        bp_cross_lca: mk_wg!("bp_cross_lca.comp"),
         #[cfg(any(test, feature = "collisions"))]
-        bp_scene: mk!("bp_scene.comp.spv"),
+        bp_particle_self: mk_wg!("bp_particle_self.comp"),
         #[cfg(any(test, feature = "collisions"))]
-        bp_classify: mk!("bp_classify.comp.spv"),
+        bp_clear: mk!("bp_clear.comp.spv"), // single-threaded, always local_size_x=1
+        // ── Narrow-phase / CCD ───────────────────────────────────────────
         #[cfg(any(test, feature = "collisions"))]
-        bp_cross_lca: mk!("bp_cross_lca.comp.spv"),
+        narrow_ccd: mk_wg!("narrow_ccd.comp"),
         #[cfg(any(test, feature = "collisions"))]
-        bp_particle_self: mk!("bp_particle_self.comp.spv"),
+        narrow_ccd_cross_lca: mk_wg!("narrow_ccd_cross_lca.comp"),
+        #[cfg(any(test, feature = "collisions"))]
+        reduce_toi: mk_wg!("reduce_toi.comp"),
+        #[cfg(any(test, feature = "collisions"))]
+        stream_compact: mk_wg!("stream_compact.comp"),
+        // ── Collision resolution ──────────────────────────────────────────
+        #[cfg(any(test, feature = "collisions"))]
+        graph_coloring: mk_wg!("graph_coloring.comp"),
+        #[cfg(any(test, feature = "collisions"))]
+        lcp_solver: mk_wg!("lcp_solver.comp"),
+        #[cfg(any(test, feature = "collisions"))]
+        apply_impulses: mk_wg!("apply_impulses.comp"),
         pc_sizes,
         subgroup_size,
+        is_lavapipe: is_cpu,
       })
     })();
     match res {
@@ -960,14 +1035,11 @@ impl<T: Copy + Send + Sync> WaitHandle<Vec<T>> for VulkanReadHandle<T> {
 
     let device = unsafe { self.device.as_ref() };
 
-
     // Wait on the throwaway timeline semaphore first
     if self.throwaway_sem != vk::Semaphore::null() {
-      device
-        .wait_for_semaphore_value(self.throwaway_sem, 1, u64::MAX)
-        .map_err(|e| {
-          crate::types::EngineError::Gpu(crate::gpu_err!("Throwaway sem wait failed: {:?}", e))
-        })?;
+      device.wait_for_semaphore_value(self.throwaway_sem, 1, u64::MAX).map_err(|e| {
+        crate::types::EngineError::Gpu(crate::gpu_err!("Throwaway sem wait failed: {:?}", e))
+      })?;
     }
 
     // Also wait on timeline semaphore (belt-and-suspenders)
@@ -1238,8 +1310,9 @@ impl VulkanComputeKernels {
     queue_sharing_info: crate::gpu::QueueSharingInfo,
     debug_shaders: bool,
     subgroup_size: u32,
+    is_cpu: bool,
   ) -> GpuResult<Self> {
-    let pipelines = PhysicsPipelines::new(device, debug_shaders, subgroup_size)?;
+    let pipelines = PhysicsPipelines::new(device, debug_shaders, subgroup_size, is_cpu)?;
     let addresses = PhysicsDeviceAddresses::default();
 
     let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()
@@ -1266,6 +1339,28 @@ impl VulkanComputeKernels {
   }
 
   // TODO: How do I know if there's a command in flight? Should It be externally synchronized?
+
+  /// Returns the effective workgroup size to use when calculating dispatch groups.
+  ///
+  /// On CPU/Lavapipe we loaded a `wgN.spv` variant whose `local_size_x = N` equals
+  /// the hardware subgroup size (4 for NEON/SSE, 8 for AVX, 16 for AVX-512).
+  /// Dispatching `ceil(count / N)` groups means every CPU thread processes exactly
+  /// one SIMD lane — no idle lanes, no wasted context switches.
+  ///
+  /// On GPU we keep the caller-supplied `gpu_target` (128 or 256) which is what
+  /// the wg32.spv shader's `local_size_x` was compiled for.  The SPIR-V local size
+  /// and the dispatch group count must always agree.
+  #[inline]
+  pub fn effective_wg(&self, gpu_target: u32) -> u32 {
+    if self.pipelines.is_lavapipe {
+      // Clamp to the next power of two supported variant (wg4/wg8/wg16/wg32).
+      // The mk_wg! macro guarantees we loaded the matching .spv.
+      self.pipelines.subgroup_size.clamp(4, 32).min(gpu_target)
+    } else {
+      gpu_target
+    }
+  }
+
   /// Returns the BDA of the GPU-built particle LBVH, updated each tick by `build_motion_bvh`.
   /// Returns 0 if no particles have been built yet (early frames or CPU path).
   pub fn get_particle_lbvh_address(&self) -> u64 {
@@ -1713,7 +1808,12 @@ impl VulkanComputeKernels {
                 let m = c.mass;
                 let i = 0.4 * m * radius * radius;
                 let i_inv = if i > 0.0 { 1.0 / i } else { 0.0 };
-                (m as f32, [i_inv as f32, i_inv as f32, i_inv as f32, 0.0], 2u32, [radius as f32, radius as f32, radius as f32])
+                (
+                  m as f32,
+                  [i_inv as f32, i_inv as f32, i_inv as f32, 0.0],
+                  2u32,
+                  [radius as f32, radius as f32, radius as f32],
+                )
               }
               crate::scene::ColliderShape::OBB { half_extents } => {
                 let x = half_extents.x();
@@ -1723,12 +1823,17 @@ impl VulkanComputeKernels {
                 let ix = (1.0 / 3.0) * m * (y * y + z * z);
                 let iy = (1.0 / 3.0) * m * (x * x + z * z);
                 let iz = (1.0 / 3.0) * m * (x * x + y * y);
-                (m as f32, [
-                  if ix > 0.0 { 1.0 / ix as f32 } else { 0.0 },
-                  if iy > 0.0 { 1.0 / iy as f32 } else { 0.0 },
-                  if iz > 0.0 { 1.0 / iz as f32 } else { 0.0 },
-                  0.0,
-                ], 1u32, [x as f32, y as f32, z as f32])
+                (
+                  m as f32,
+                  [
+                    if ix > 0.0 { 1.0 / ix as f32 } else { 0.0 },
+                    if iy > 0.0 { 1.0 / iy as f32 } else { 0.0 },
+                    if iz > 0.0 { 1.0 / iz as f32 } else { 0.0 },
+                    0.0,
+                  ],
+                  1u32,
+                  [x as f32, y as f32, z as f32],
+                )
               }
             }
           })
@@ -1767,17 +1872,17 @@ impl VulkanComputeKernels {
       },
     );
 
-    // Pad to the workgroup size of integrate_bodies_p3.comp (local_size_x = 32)
-    // so that Lavapipe's LLVM JIT never issues a speculative/vectorised load
-    // past the end of the buffer.
-    //
-    // With local_size_x=32 and n_bodies=2, the dispatch runs 1 workgroup of 32
-    // threads processed in 8 SIMD batches (SIMD width = subgroup_size = 4 on
-    // llvmpipe).  Even though threads 2-31 hit the 'id >= n_bodies' early return,
-    // LLVM may speculatively issue the 'bodies[id]' load for all 32 lanes before
-    // the branch condition is evaluated.  Padding to ceil(n/32)*32 ensures every
-    // speculative access hits valid (zeroed) memory.
-    let wg_size = 32usize; // local_size_x of integrate_bodies_p3.comp
+    // Pad bodies (and matching wrenches) to a multiple of the actual local_size_x
+    // of the SPIR-V variant loaded by mk_wg!:
+    //   • Lavapipe (subgroup_size ≤ 8): wgN.spv  → local_size_x = subgroup_size
+    //   • All other backends:           wg32.spv → local_size_x = 32
+    // Padding ensures every speculative lane access in the shader hits valid
+    // (zeroed) memory even when the invocation id ≥ n_bodies.
+    let wg_size = if self.pipelines.subgroup_size as usize <= 8 {
+      self.pipelines.subgroup_size as usize // Lavapipe: local_size_x == sg
+    } else {
+      32usize // all other backends
+    };
     let real_n = bodies.len().max(1);
     let padded = ((real_n + wg_size - 1) / wg_size) * wg_size;
     // Extend bodies/wrenches with zeroed dummy entries up to `padded`.
@@ -2045,7 +2150,7 @@ impl VulkanComputeKernels {
     let sg = self.pipelines.subgroup_size;
     let stride = gpu::PARTICLE_FIELDS as u32 * sg;
     let max_particles = (particles.capacity() as u32 / stride) * sg;
-    let wg_size = 128;
+    let wg_size = self.effective_wg(128);
     let dispatch_groups = (max_particles + wg_size - 1) / wg_size;
     let num_candidates = (candidates_buf.capacity() / gpu::PARTICLE_FIELDS) as u32;
 
@@ -2146,9 +2251,11 @@ impl VulkanComputeKernels {
     total_particles: u32,
     dt: timeus_t,
   ) {
-    if total_particles == 0 { return; }
+    if total_particles == 0 {
+      return;
+    }
     let dt_sec = dt as f32 / 1_000_000.0_f32;
-    let wg_size = 128u32;
+    let wg_size = self.effective_wg(128);
     let groups = (total_particles + wg_size - 1) / wg_size;
 
     let pc = ImexParticlesP12PushConstants {
@@ -2175,7 +2282,12 @@ impl VulkanComputeKernels {
         0,
         bytes,
       );
-      aethervk_oshal_rlib::log!("P1P2 pc: address={}, total={}, dt={}", particles_addr, total_particles, dt_sec);
+      aethervk_oshal_rlib::log!(
+        "P1P2 pc: address={}, total={}, dt={}",
+        particles_addr,
+        total_particles,
+        dt_sec
+      );
       if groups > 0 {
         device.cmd_dispatch(cmd.cmd, groups, 1, 1);
       }
@@ -2217,9 +2329,15 @@ impl VulkanComputeKernels {
     dt: timeus_t,
     n_iterations: u32,
   ) {
-    if n_bodies == 0 { return; }
+    if n_bodies == 0 {
+      return;
+    }
     let dt_sec = dt as f32 / 1_000_000.0_f32;
-    let wg_size = 32u32;
+    let wg_size = if self.pipelines.subgroup_size <= 8 {
+      self.pipelines.subgroup_size // Lavapipe: wg == sg, one SIMD batch per workgroup
+    } else {
+      32u32 // all other backends: natural local_size_x for this shader
+    };
     let groups = (n_bodies + wg_size - 1) / wg_size;
 
     let pc = ImexBodiesP3PushConstants {
@@ -2289,7 +2407,7 @@ impl VulkanComputeKernels {
     // We must NOT return early if total_particles == 0 because Thread 0 is responsible
     // for advancing the global 64-bit engine clock! Even with 0 particles, we must dispatch at least 1 group.
     let dt_sec = dt as f32 / 1_000_000.0_f32;
-    let wg_size = 128u32;
+    let wg_size = self.effective_wg(128);
     let groups = (total_particles.max(1) + wg_size - 1) / wg_size;
 
     let pc = ImexParticlesP45PushConstants {
@@ -2364,7 +2482,7 @@ impl VulkanComputeKernels {
     if num_emitters == 0 || total_particles == 0 {
       return;
     }
-    let wg_size = 128u32;
+    let wg_size = self.effective_wg(128);
     let groups = (total_particles + wg_size - 1) / wg_size;
 
     let pc = ApplyEmittersPushConstants {
@@ -2429,7 +2547,9 @@ impl VulkanComputeKernels {
     wrenches_addr: u64,
     n_bodies: u32,
   ) {
-    if n_bodies == 0 { return; }
+    if n_bodies == 0 {
+      return;
+    }
     let pc = RbForceAssignPushConstants {
       rigid_bodies: rigid_bodies_addr,
       wrenches: wrenches_addr,
@@ -2543,7 +2663,7 @@ impl VulkanComputeKernels {
     total_entities: u32,
     dt: timeus_t,
   ) {
-    let wg_size = 256u32;
+    let wg_size = self.effective_wg(256);
     let groups = (total_entities + wg_size - 1) / wg_size;
 
     let pc = BpBoundsGenPushConstants {
@@ -2609,9 +2729,9 @@ impl VulkanComputeKernels {
     total_queries: u32,
   ) {
     // One subgroup per query — dispatch groups = ceil(queries / SUBGROUPS_PER_WG)
-    // WG size = 256, assume SUBGROUP_SIZE = 32 → 8 subgroups/WG.  Conservatively 1 WG = 1 query.
-    let wg_size = 256u32;
-    let subgroups_per_wg = 256u32 / 32u32; // conservative for dispatch sizing
+    // WG size = 256 for GPU (8 subgroups × 32-wide); on CPU use effective_wg().
+    let wg_size = self.effective_wg(256);
+    let subgroups_per_wg = wg_size / self.pipelines.subgroup_size.max(1);
     let groups = (total_queries + subgroups_per_wg - 1) / subgroups_per_wg;
 
     let pc = BpScenePushConstants {
@@ -2672,7 +2792,7 @@ impl VulkanComputeKernels {
     total_raw_pairs: u32,
     num_rigid_bodies: u32,
   ) {
-    let wg_size = 256u32;
+    let wg_size = self.effective_wg(256);
     let groups = (total_raw_pairs + wg_size - 1) / wg_size;
 
     let pc = BpClassifyPushConstants {
@@ -2741,8 +2861,8 @@ impl VulkanComputeKernels {
     total_queries: u32,
     max_pairs: u32,
   ) {
-    let _wg_size = 256u32;
-    let subgroups_per_wg = 256u32 / 32u32;
+    let _wg_size = self.effective_wg(256);
+    let subgroups_per_wg = _wg_size / self.pipelines.subgroup_size.max(1);
     let groups = (total_queries + subgroups_per_wg - 1) / subgroups_per_wg;
 
     let pc = BpCrossLcaPushConstants {
@@ -2814,8 +2934,8 @@ impl VulkanComputeKernels {
     particle_radius: f32,
     stiffness: f32,
   ) {
-    let _wg_size = 256u32;
-    let subgroups_per_wg = 256u32 / self.pipelines.subgroup_size;
+    let _wg_size = self.effective_wg(256);
+    let subgroups_per_wg = _wg_size / self.pipelines.subgroup_size.max(1);
     let groups = (total_particles + subgroups_per_wg - 1) / subgroups_per_wg;
 
     let pc = BpParticleSelfPushConstants {
@@ -2873,8 +2993,12 @@ impl VulkanComputeKernels {
     particles: &mut VulkanBuffer<f32>,
     dt: timeus_t,
   ) -> GpuResult<()> {
-    let wg_size = 128;
-    let total_particles = { let sg = self.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg };
+    let wg_size = self.effective_wg(128);
+    let total_particles = {
+      let sg = self.pipelines.subgroup_size;
+      let stride = gpu::PARTICLE_FIELDS as u32 * sg;
+      (particles.capacity() as u32 / stride) * sg
+    };
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
     let dt_sec = dt as f32 / 1_000_000.0;
 
@@ -2936,7 +3060,7 @@ impl VulkanComputeKernels {
     _emitters: &VulkanBuffer<gpu::ForceEmitter>,
     dt: timeus_t,
   ) -> GpuResult<()> {
-    let wg_size = 128;
+    let wg_size = self.effective_wg(128);
     let total_rigid_bodies = rigid_bodies.capacity() as u32;
     let dispatch_groups = (total_rigid_bodies + wg_size - 1) / wg_size;
     let dt_sec = dt as f32 / 1_000_000.0;
@@ -3000,7 +3124,11 @@ impl VulkanComputeKernels {
     bvh: &VulkanBuffer<()>,
     particles: &mut VulkanBuffer<f32>,
   ) -> GpuResult<()> {
-    let total_particles = { let sg = self.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg };
+    let total_particles = {
+      let sg = self.pipelines.subgroup_size;
+      let stride = gpu::PARTICLE_FIELDS as u32 * sg;
+      (particles.capacity() as u32 / stride) * sg
+    };
     let dispatch_groups = (total_particles + 127) / 128;
 
     let pc_bh = BarnesHutPushConstants {
@@ -3070,8 +3198,12 @@ impl VulkanComputeKernels {
     _emitters: &VulkanBuffer<gpu::ForceEmitter>,
     dt: timeus_t,
   ) -> GpuResult<()> {
-    let wg_size = 128;
-    let total_particles = { let sg = self.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg };
+    let wg_size = self.effective_wg(128);
+    let total_particles = {
+      let sg = self.pipelines.subgroup_size;
+      let stride = gpu::PARTICLE_FIELDS as u32 * sg;
+      (particles.capacity() as u32 / stride) * sg
+    };
     let num_kinematics = kinematics.capacity() as u32;
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
     let dt_sec = dt as f32 / 1_000_000.0;
@@ -3138,8 +3270,12 @@ impl VulkanComputeKernels {
     particles: &VulkanBuffer<f32>,
     _dt: timeus_t,
   ) -> GpuResult<VulkanBuffer<()>> {
-    let total_particles = { let sg = self.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg };
-    let wg_size = 128;
+    let total_particles = {
+      let sg = self.pipelines.subgroup_size;
+      let stride = gpu::PARTICLE_FIELDS as u32 * sg;
+      (particles.capacity() as u32 / stride) * sg
+    };
+    let wg_size = self.effective_wg(128);
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
 
     let num_nodes = (total_particles * 2).max(1) as usize;
@@ -3169,12 +3305,12 @@ impl VulkanComputeKernels {
 
     let bvh_buffer_result = match self.pipelines.subgroup_size {
       128 => alloc_bvh_buf!(128),
-       64 => alloc_bvh_buf!(64),
-       32 => alloc_bvh_buf!(32),
-       16 => alloc_bvh_buf!(16),
-        8 => alloc_bvh_buf!(8),
-        4 => alloc_bvh_buf!(4),
-        _ => alloc_bvh_buf!(32),
+      64 => alloc_bvh_buf!(64),
+      32 => alloc_bvh_buf!(32),
+      16 => alloc_bvh_buf!(16),
+      8 => alloc_bvh_buf!(8),
+      4 => alloc_bvh_buf!(4),
+      _ => alloc_bvh_buf!(32),
     };
     if let Err(e) = &bvh_buffer_result {
       aethervk_oshal_rlib::log!("build_motion_bvh failed to allocate bvh_buffer: {:?}", e);
@@ -3217,7 +3353,13 @@ impl VulkanComputeKernels {
     };
 
     unsafe {
-      device.cmd_fill_buffer(cmd.cmd, atomic_counters.buffer, 0, (num_nodes * 4) as u64, 0);
+      device.cmd_fill_buffer(
+        cmd.cmd,
+        atomic_counters.buffer,
+        0,
+        (num_nodes * 4) as u64,
+        0,
+      );
 
       let fill_barrier = vk::BufferMemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
@@ -3339,7 +3481,7 @@ impl VulkanComputeKernels {
         vk::PipelineBindPoint::COMPUTE,
         self.pipelines.motion_refit,
       );
-      let wg_size = 256;
+      let wg_size = self.effective_wg(256);
       let dispatch_groups = (total_nodes + wg_size - 1) / wg_size;
       if dispatch_groups > 0 {
         device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
@@ -3360,7 +3502,7 @@ impl VulkanComputeKernels {
   ) -> GpuResult<VulkanBuffer<gpu::CollisionPair>> {
     // We'll pass total_entities via some state, hardcoded to some value here or assume we have it
     let total_entities = 1000; // Placeholder
-    let wg_size = 32; // TODO we are approximating a warp. rework the bp_scene shader for 128
+    let wg_size = 32; // TODO: one subgroup (=warp) per BVH traversal stack
     let dispatch_groups = (total_entities + wg_size - 1) / wg_size;
 
     let max_candidates = 10000; // Placeholder TODO parameter of kernels?
@@ -3502,7 +3644,7 @@ impl VulkanComputeKernels {
     _time_delta: timeus_t,
   ) -> GpuResult<VulkanBuffer<gpu::CollisionPair>> {
     let total_elements = globals.capacity() as u32;
-    let wg_size = 128;
+    let wg_size = self.effective_wg(128);
     let dispatch_groups = (total_elements + wg_size - 1) / wg_size;
 
     let max_packed = total_elements as usize; // Max possible is all valid
@@ -3972,7 +4114,8 @@ impl VulkanComputeKernels {
     // which will destroy it safely once the timeline value is reached.
 
     let sg = self.pipelines.subgroup_size as usize;
-    let unpacked_particles = gpu::unpack_particles_aosoa(&p_data, sg, gpu::PARTICLE_FIELDS, particle_metadata.len());
+    let unpacked_particles =
+      gpu::unpack_particles_aosoa(&p_data, sg, gpu::PARTICLE_FIELDS, particle_metadata.len());
 
     scene.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>( |entity, _transform, sys| {
       let mut sys_particles = sys.particles.write();
@@ -4167,11 +4310,11 @@ impl Kernels for Device {
     use crate::gpu::SubgroupSize;
     Some(match self.query_result.subgroup_size {
       s if s >= 128 => SubgroupSize::Size128,
-      s if s >= 64  => SubgroupSize::Size64,
-      s if s >= 32  => SubgroupSize::Size32,
-      s if s >= 16  => SubgroupSize::Size16,
-      s if s >= 8   => SubgroupSize::Size8,
-      _             => SubgroupSize::Size4,
+      s if s >= 64 => SubgroupSize::Size64,
+      s if s >= 32 => SubgroupSize::Size32,
+      s if s >= 16 => SubgroupSize::Size16,
+      s if s >= 8 => SubgroupSize::Size8,
+      _ => SubgroupSize::Size4,
     })
   }
 
@@ -4211,12 +4354,12 @@ impl Kernels for Device {
       use crate::math::collision::multi_bvh::TlasMultiNode;
       let node_size = match self.kernels.pipelines.subgroup_size {
         128 => core::mem::size_of::<TlasMultiNode<128>>(),
-         64 => core::mem::size_of::<TlasMultiNode<64>>(),
-         32 => core::mem::size_of::<TlasMultiNode<32>>(),
-         16 => core::mem::size_of::<TlasMultiNode<16>>(),
-          8 => core::mem::size_of::<TlasMultiNode<8>>(),
-          4 => core::mem::size_of::<TlasMultiNode<4>>(),
-          _ => core::mem::size_of::<TlasMultiNode<32>>(),
+        64 => core::mem::size_of::<TlasMultiNode<64>>(),
+        32 => core::mem::size_of::<TlasMultiNode<32>>(),
+        16 => core::mem::size_of::<TlasMultiNode<16>>(),
+        8 => core::mem::size_of::<TlasMultiNode<8>>(),
+        4 => core::mem::size_of::<TlasMultiNode<4>>(),
+        _ => core::mem::size_of::<TlasMultiNode<32>>(),
       };
       let zero = alloc::vec![0u8; node_size];
       return self.upload_motion_tlas(_cmd, &zero);
@@ -4959,7 +5102,11 @@ impl Kernels for Device {
           &self.device,
           cmd,
           particles.address,
-          { let sg = self.kernels.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg },
+          {
+            let sg = self.kernels.pipelines.subgroup_size;
+            let stride = gpu::PARTICLE_FIELDS as u32 * sg;
+            (particles.capacity() as u32 / stride) * sg
+          },
           dt,
         );
         Ok(())
@@ -5039,7 +5186,11 @@ impl Kernels for Device {
           cmd,
           particles.address,
           0u64,
-          { let sg = self.kernels.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg },
+          {
+            let sg = self.kernels.pipelines.subgroup_size;
+            let stride = gpu::PARTICLE_FIELDS as u32 * sg;
+            (particles.capacity() as u32 / stride) * sg
+          },
           dt,
           current_time_us,
         );
@@ -5061,7 +5212,11 @@ impl Kernels for Device {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
       .execute(|(), _rollback| {
-        let total_particles = { let sg = self.kernels.pipelines.subgroup_size; let stride = gpu::PARTICLE_FIELDS as u32 * sg; (particles.capacity() as u32 / stride) * sg };
+        let total_particles = {
+          let sg = self.kernels.pipelines.subgroup_size;
+          let stride = gpu::PARTICLE_FIELDS as u32 * sg;
+          (particles.capacity() as u32 / stride) * sg
+        };
         self.kernels.apply_emitters_to_particles(
           &self.device,
           cmd,
@@ -5301,7 +5456,8 @@ impl Device {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
 
-    let dispatch_groups = (broadphase_pairs.capacity as u32 + 255) / 256;
+    let dispatch_groups = (broadphase_pairs.capacity as u32 + self.kernels.effective_wg(256) - 1)
+      / self.kernels.effective_wg(256);
 
     unsafe {
       self.device.cmd_bind_pipeline(
@@ -5321,6 +5477,21 @@ impl Device {
       if dispatch_groups > 0 {
         self.device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
       }
+
+      // Barrier: ensure narrow_ccd_cross_lca writes to sparse_collisions are
+      // visible to the subsequent compact_collisions (stream_compact) dispatch.
+      let barrier = ash::vk::MemoryBarrier::default()
+        .src_access_mask(ash::vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(ash::vk::AccessFlags::SHADER_READ);
+      self.device.cmd_pipeline_barrier(
+        cmd.cmd,
+        ash::vk::PipelineStageFlags::COMPUTE_SHADER,
+        ash::vk::PipelineStageFlags::COMPUTE_SHADER,
+        ash::vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[],
+        &[],
+      );
     }
     Ok(())
   }
@@ -5351,7 +5522,8 @@ impl Device {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
 
-    let dispatch_groups = (broadphase_pairs.capacity as u32 + 255) / 256;
+    let dispatch_groups = (broadphase_pairs.capacity as u32 + self.kernels.effective_wg(256) - 1)
+      / self.kernels.effective_wg(256);
 
     unsafe {
       let pipeline = if space_type == 1 {

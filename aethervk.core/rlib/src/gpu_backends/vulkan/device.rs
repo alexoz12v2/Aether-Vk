@@ -1636,6 +1636,7 @@ impl Device {
       queue_sharing_info,
       chosen_physical_device_query_result.debug_shaders,
       chosen_physical_device_query_result.subgroup_size,
+      chosen_physical_device_query_result.is_cpu,
     ) {
       Ok(k) => k,
       Err(e) => {
@@ -2142,6 +2143,11 @@ impl RenderDevice for Device {
   #[named]
   fn subgroup_size(&self) -> u32 {
     self.query_result.subgroup_size
+  }
+
+  #[named]
+  fn is_cpu_device(&self) -> bool {
+    self.kernels.pipelines.is_lavapipe
   }
 
   #[named]
@@ -7128,44 +7134,15 @@ impl RenderDevice for Device {
                 rollback,
               )?;
 
-              // 4. Params Buffer
-              let params_size = core::mem::size_of::<[f32; 6]>() as u64;
-              let mut allocation_create_info = vk_mem::AllocationCreateInfo::default();
-              allocation_create_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
-              allocation_create_info.flags = vk_mem::AllocationCreateFlags::MAPPED
-                | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE;
-              crate::apply_test_dedicated_alloc!(allocation_create_info);
-
-              let buffer_info = vk::BufferCreateInfo::default()
-                .size(params_size)
-                .usage(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-              let (params_buffer, params_alloc) =
-                unsafe { allocator.create_buffer(&buffer_info, &allocation_create_info)? };
-              let mut params_alloc_mut = params_alloc;
-              let alloc_clone = allocator.get_raw();
-              rollback.defer(move |_| unsafe {
-                let alloc = vk_mem::AllocatorView::from_raw(alloc_clone);
-                alloc.destroy_buffer(params_buffer, &mut params_alloc_mut)
-              });
-
-              let alloc_info = allocator.get_allocation_info(&params_alloc);
-              unsafe {
-                let ptr = alloc_info.mapped_data as *mut [f32; 6];
-                *ptr = [
+              // 4. Params Data (Inline)
+              let params_data = [
                   timeline as f32 * 0.016,
                   5778.0,
                   1000000.0,
                   radius,
                   0.05,
                   15.0,
-                ];
-                allocator.flush_allocation(&params_alloc, 0, vk::WHOLE_SIZE as u64)?;
-              }
-
-              let bda_info = vk::BufferDeviceAddressInfo::default().buffer(params_buffer);
-              let buffer_address =
-                unsafe { self.device.buffer_device_address.get_buffer_device_address(&bda_info) };
+              ];
 
               // 5. Graphics Descriptor Set
               let (_, graphics_descriptor_set) = descriptor_pool_arc.allocate_and_get_active_pool(
@@ -7193,6 +7170,40 @@ impl RenderDevice for Device {
                   .update_descriptor_sets(core::slice::from_ref(&write_descriptor_set_gfx), &[]);
               }
 
+              let alloc_info_vma = vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                flags: vk_mem::AllocationCreateFlags::MAPPED
+                  | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                ..Default::default()
+              };
+              let buffer_info = vk::BufferCreateInfo::default()
+                .size(256) // Pad to 256 to avoid Lavapipe out-of-bounds false positives
+                .usage(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+              let (params_buffer, params_alloc) = unsafe {
+                allocator.create_buffer(&buffer_info, &alloc_info_vma).map_err(|e| {
+                  gpu_err!(format!("Failed to create params buffer for SunGen: {:?}", e))
+                })?
+              };
+
+              // Update params buffer
+              let alloc_info_vma = allocator.get_allocation_info(&params_alloc);
+              unsafe {
+                let ptr = alloc_info_vma.mapped_data as *mut f32;
+                *ptr = timeline as f32 * 0.016;
+                *(ptr.add(1)) = 5778.0;
+                *(ptr.add(2)) = 1000000.0;
+                *(ptr.add(3)) = radius;
+                *(ptr.add(4)) = 0.05;
+                *(ptr.add(5)) = 15.0;
+                allocator.flush_allocation(&params_alloc, 0, vk::WHOLE_SIZE as u64)?;
+              }
+
+              let bda_info = vk::BufferDeviceAddressInfo::default().buffer(params_buffer);
+              let buffer_address =
+                unsafe { self.device.buffer_device_address.get_buffer_device_address(&bda_info) };
+
               // 6. Record Dispatch synchronously to ensure layout transitions happen before any other camera tries to draw
               let transient_res = self.run_transient_commands(|transient_cmd| {
                 record_dispatch(
@@ -7216,14 +7227,14 @@ impl RenderDevice for Device {
                 descriptor_set: Some(unsafe {
                   NonZeroHandle::new_unchecked(graphics_descriptor_set)
                 }),
-                is_generated: false, // Will be set to true in the commit phase
+                is_generated: false,
+                params_buffer: Some(params_buffer),
+                params_alloc: Some(params_alloc),
                 compute_descriptor_pool: Some(descriptor_pool),
                 compute_descriptor_set_layout: Some(set_layout),
                 compute_descriptor_set: Some(descriptor_set),
                 compute_pipeline: Some(compute_pipeline),
                 compute_pipeline_layout: Some(pipeline_layout),
-                params_buffer: Some(params_buffer),
-                params_alloc: Some(params_alloc),
                 last_timeline: timeline,
               };
 
@@ -7242,9 +7253,9 @@ impl RenderDevice for Device {
               let allocator = unsafe { vk_mem::AllocatorView::from_raw(vma) };
 
               // 1. Update params buffer
-              let alloc_info = allocator.get_allocation_info(&params_alloc);
+              let alloc_info_vma = allocator.get_allocation_info(&params_alloc);
               unsafe {
-                let ptr = alloc_info.mapped_data as *mut f32;
+                let ptr = alloc_info_vma.mapped_data as *mut f32;
                 *ptr = timeline as f32 * 0.016;
                 allocator.flush_allocation(&params_alloc, 0, vk::WHOLE_SIZE as u64)?;
               }

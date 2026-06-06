@@ -911,44 +911,45 @@ pub(super) struct SunRenderResource {
   pub image: Option<Image>,
   pub descriptor_set: Option<NonZeroHandle<vk::DescriptorSet>>,
   pub is_generated: bool,
+  pub params_buffer: Option<vk::Buffer>,
+  pub params_alloc: Option<vk_mem::Allocation>,
   pub compute_descriptor_pool: Option<vk::DescriptorPool>,
   pub compute_descriptor_set_layout: Option<vk::DescriptorSetLayout>,
   pub compute_descriptor_set: Option<vk::DescriptorSet>,
   pub compute_pipeline: Option<crate::gpu_backends::vulkan::utils::NonZeroHandle<vk::Pipeline>>,
   pub compute_pipeline_layout: Option<vk::PipelineLayout>,
-  pub params_buffer: Option<vk::Buffer>,
-  pub params_alloc: Option<vk_mem::Allocation>,
   pub last_timeline: u64,
 }
 
 impl SunRenderResource {
-  /// Note: Compute pipeline is not a responsability of resource. Is it correct? Verify TODO
   pub fn discard(
     &mut self,
-    device: &LogicalDevice,
+    device: &ash::Device,
     allocator: vk_mem::AllocatorView,
     discard_pool: &DiscardPool,
-    timeline: u64,
+    frame_timeline: u64,
   ) {
     if let Some(mut img) = self.image.take() {
-      unsafe {
-        device.destroy_image_view(img.image_view.get(), None);
-        allocator.destroy_image(img.image.get(), &mut img.allocation);
-      }
-    }
-    if let Some(buffer) = self.params_buffer.take() {
-      let mut alloc = self.params_alloc.take().unwrap();
-      unsafe { allocator.destroy_buffer(buffer, &mut alloc) };
+      discard_pool.discard_image_view(img.image_view.get(), frame_timeline);
+      discard_pool.discard_image(allocator.get_raw(), img.image.get(), img.allocation, frame_timeline);
     }
     if let Some(layout) = self.compute_pipeline_layout.take() {
-      unsafe { device.destroy_pipeline_layout(layout, None) };
+      discard_pool.discard_pipeline_layout(layout, frame_timeline);
     }
     if let Some(pool) = self.compute_descriptor_pool.take() {
-      unsafe { device.destroy_descriptor_pool(pool, None) };
+      discard_pool.discard_type_erased(
+        crate::gpu_backends::vulkan::device::resources::FunctionalDeviceResource::new(pool, |pool, device| unsafe {
+          device.destroy_descriptor_pool(pool, None);
+        }),
+        frame_timeline,
+      );
     }
     if let Some(set_layout) = self.compute_descriptor_set_layout.take() {
-      unsafe {
-        device.destroy_descriptor_set_layout(set_layout, None);
+      discard_pool.discard_descriptor_set_layout(set_layout, frame_timeline);
+    }
+    if let Some(buf) = self.params_buffer.take() {
+      if let Some(alloc) = self.params_alloc.take() {
+        discard_pool.discard_buffer(allocator.get_raw(), buf, alloc, frame_timeline);
       }
     }
   }

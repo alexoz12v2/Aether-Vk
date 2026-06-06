@@ -116,6 +116,10 @@ mod tests {
       let old_collisions = core::mem::take(&mut physical_scene.recent_collisions);
       physical_scene = PhysicsScene::build_from_scene(scene, 0.016);
       physical_scene.recent_collisions = old_collisions;
+      if current_time % (16_667 * 10) < 20_000 {
+        // Debug
+      }
+
       current_time += dt;
     }
     physical_scene
@@ -124,6 +128,9 @@ mod tests {
   #[test]
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_conservation_of_energy_and_momentum() {
+    #[cfg(all(test, not(target_vendor = "apple")))]
+    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.store(true, core::sync::atomic::Ordering::Relaxed);
+    
     let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
@@ -288,6 +295,9 @@ mod tests {
   #[test]
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_energy_conservation_bounce() {
+    #[cfg(all(test, not(target_vendor = "apple")))]
+    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.store(true, core::sync::atomic::Ordering::Relaxed);
+    
     let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(

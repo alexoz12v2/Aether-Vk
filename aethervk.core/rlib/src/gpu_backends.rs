@@ -347,50 +347,56 @@ where
         total_dt / n_sub_steps as timeus_t
       };
 
-      // VV predictor: half-kick + full drift to x_{n+1}
-      kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, sub_dt)?;
-      sync!("imex_integrate_particles_p1_p2");
+      if !particle_metadata.is_empty() {
+        // VV predictor: half-kick + full drift to x_{n+1}
+        kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, sub_dt)?;
+        sync!("imex_integrate_particles_p1_p2");
+      }
 
-      // RB: accumulate forces then IMR solve
-      kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches, n_bodies)?;
-      sync!("imex_rb_force_assign");
+      if n_bodies > 0 {
+        // RB: accumulate forces then IMR solve
+        kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches, n_bodies)?;
+        sync!("imex_rb_force_assign");
 
-      kernels.imex_integrate_bodies_p3(
-        &mut cmd,
-        &mut rigid_bodies,
-        &mut wrenches,
-        &emitters,
-        &frames,
-        n_bodies,
-        n_emitters,
-        sub_dt,
-      )?;
-      sync!("imex_integrate_bodies_p3");
+        kernels.imex_integrate_bodies_p3(
+          &mut cmd,
+          &mut rigid_bodies,
+          &mut wrenches,
+          &emitters,
+          &frames,
+          n_bodies,
+          n_emitters,
+          sub_dt,
+        )?;
+        sync!("imex_integrate_bodies_p3");
+      }
 
-      // Build motion BVH for self-gravity (rebuilt each sub-step as positions change)
-      let bvh = AutoDiscard::new(
-        kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, sub_dt)?,
-        |b| kernels.discard_bvh(b),
-      );
-      sync!("build_motion_bvh");
+      if !particle_metadata.is_empty() {
+        // Build motion BVH for self-gravity (rebuilt each sub-step as positions change)
+        let bvh = AutoDiscard::new(
+          kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, sub_dt)?,
+          |b| kernels.discard_bvh(b),
+        );
+        sync!("build_motion_bvh");
 
-      kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
-      sync!("compute_self_gravity (barnes_hut)");
+        kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
+        sync!("compute_self_gravity (barnes_hut)");
 
-      // Apply macro-frame gravity emitters to microframe particles (cross-frame transform)
-      kernels.apply_emitters_to_particles(
-        &mut cmd,
-        &mut particles,
-        &emitters,
-        &frames,
-        &particle_frame_ids,
-        n_emitters,
-      )?;
-      sync!("apply_emitters_to_particles");
+        // Apply macro-frame gravity emitters to microframe particles (cross-frame transform)
+        kernels.apply_emitters_to_particles(
+          &mut cmd,
+          &mut particles,
+          &emitters,
+          &frames,
+          &particle_frame_ids,
+          n_emitters,
+        )?;
+        sync!("apply_emitters_to_particles");
 
-      // VV corrector: v_{n+1/2} → v_{n+1} using F(x_{n+1})
-      kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, sub_dt, current_time)?;
-      sync!("imex_integrate_particles_p4_5");
+        // VV corrector: v_{n+1/2} → v_{n+1} using F(x_{n+1})
+        kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, sub_dt, current_time)?;
+        sync!("imex_integrate_particles_p4_5");
+      }
 
       current_time += sub_dt;
     }
@@ -409,45 +415,52 @@ where
           },
         );
 
-        aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_integrate_particles_p1_p2");
-        // ── IMEX integration to t_{n+1} ──
-        kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, dt)?;
-        sync!("imex_integrate_particles_p1_p2 (collisions path)");
-        aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_rb_force_assign");
-        kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches, n_bodies)?;
-        sync!("imex_rb_force_assign (collisions path)");
-        aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_integrate_bodies_p3");
-        kernels.imex_integrate_bodies_p3(
-          &mut cmd,
-          &mut rigid_bodies,
-          &mut wrenches,
-          &emitters,
-          &frames,
-          n_bodies,
-          n_emitters,
-          dt,
-        )?;
-        sync!("imex_integrate_bodies_p3 (collisions path)");
+        if !particle_metadata.is_empty() {
+          aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_integrate_particles_p1_p2");
+          // ── IMEX integration to t_{n+1} ──
+          kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, dt)?;
+          sync!("imex_integrate_particles_p1_p2 (collisions path)");
+        }
 
-        let bvh = AutoDiscard::new(
-          kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?,
-          |b| kernels.discard_bvh(b),
-        );
-        sync!("build_motion_bvh (collisions path)");
-        kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
-        sync!("compute_self_gravity (collisions path)");
-        // Cross-frame gravity: macro emitters → micro particles
-        kernels.apply_emitters_to_particles(
-          &mut cmd,
-          &mut particles,
-          &emitters,
-          &frames,
-          &particle_frame_ids,
-          n_emitters,
-        )?;
-        sync!("apply_emitters_to_particles (collisions path)");
-        kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, dt, current_time)?;
-        sync!("imex_integrate_particles_p4_5 (collisions path)");
+        if n_bodies > 0 {
+          aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_rb_force_assign");
+          kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches, n_bodies)?;
+          sync!("imex_rb_force_assign (collisions path)");
+          aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_integrate_bodies_p3");
+          kernels.imex_integrate_bodies_p3(
+            &mut cmd,
+            &mut rigid_bodies,
+            &mut wrenches,
+            &emitters,
+            &frames,
+            n_bodies,
+            n_emitters,
+            dt,
+          )?;
+          sync!("imex_integrate_bodies_p3 (collisions path)");
+        }
+
+        if !particle_metadata.is_empty() {
+          let bvh = AutoDiscard::new(
+            kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?,
+            |b| kernels.discard_bvh(b),
+          );
+          sync!("build_motion_bvh (collisions path)");
+          kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
+          sync!("compute_self_gravity (collisions path)");
+          // Cross-frame gravity: macro emitters → micro particles
+          kernels.apply_emitters_to_particles(
+            &mut cmd,
+            &mut particles,
+            &emitters,
+            &frames,
+            &particle_frame_ids,
+            n_emitters,
+          )?;
+          sync!("apply_emitters_to_particles (collisions path)");
+          kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, dt, current_time)?;
+          sync!("imex_integrate_particles_p4_5 (collisions path)");
+        }
 
         // ── New broad-phase suite ─────────────────────────────────────────────
         // bp_bounds_gen only understands RigidBodyArray indices — it reads
@@ -474,6 +487,12 @@ where
         // particle BLAS broadphase will extend this once bp_bounds_gen is updated).
         let n_entities = n_rb_entities;
         let _ = n_ps_entities; // reserved for future particle-BLAS broadphase
+        aethervk_oshal_rlib::log!(
+          "BP_DIAG: n_entities={}, frames.capacity={}, tlas_root_idx={}",
+          n_entities,
+          frames.capacity(),
+          tlas_root_idx
+        );
 
         // bp_clear: zero all four pair-list counters via raw BDAs
         // (The caller manages the pair-list buffers; for now we reuse bvh.address
@@ -646,20 +665,25 @@ where
           let rb_fut = rigid_bodies.enqueue_read_to_cpu(&mut read_cmd)?;
           let frames_fut = frames.enqueue_read_to_cpu(&mut read_cmd)?;
           let cross_fut = (*internal_pairs).enqueue_read_to_cpu(&mut read_cmd)?;
+          let raw_pairs_fut = (*raw_pairs).enqueue_read_to_cpu(&mut read_cmd)?;
+          let lca_pairs_fut = (*rb_lca_pairs).enqueue_read_to_cpu(&mut read_cmd)?;
           if let Some(read_sync) = read_cmd.submit()? {
             kernels.wait_sync(&read_sync)?;
-            if let (Ok(cmp_host), Ok(rb_host), Ok(frames_host), Ok(cross_host)) = (
+            if let (Ok(cmp_host), Ok(rb_host), Ok(frames_host), Ok(cross_host), Ok(raw_host), Ok(lca_host)) = (
               cmp_fut.wait(),
               rb_fut.wait(),
               frames_fut.wait(),
               cross_fut.wait(),
+              raw_pairs_fut.wait(),
+              lca_pairs_fut.wait(),
             ) {
               let compacted_count = cmp_host.len();
               let cross_count = cross_host.len();
+              let raw_count = raw_host.len();
+              let lca_count = lca_host.len();
               aethervk_oshal_rlib::log!(
-                "READBACK: compacted_count={}, cross_count={}",
-                compacted_count,
-                cross_count
+                "READBACK: raw_count={}, lca_count={}, cross_count={}, compacted_count={}",
+                raw_count, lca_count, cross_count, compacted_count
               );
               let mut body_entity_map = alloc::vec::Vec::new();
               scene.query2_without::<crate::scene::TransformComponent, crate::scene::ColliderComponent, crate::scene::particles::ParticleSystemComponent, _>(|entity, _, _| {

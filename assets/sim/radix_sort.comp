@@ -6,7 +6,10 @@
 
 // Fixed to 256 for optimal chunk processing and L1 cache utilization
 #include "../debug_utils.glsl"
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 256
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
 
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer MortonArray {
     uvec2 entries[];

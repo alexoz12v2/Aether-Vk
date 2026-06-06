@@ -9,7 +9,10 @@
 
 #include "../bvh_utils.glsl"
 
-layout(local_size_x = 256) in;
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 256
+#endif
+layout(local_size_x = LOCAL_SIZE_X) in;
 
 layout(push_constant, std430) uniform PushConstants {
     PairBuffer raw_pairs;
@@ -28,9 +31,7 @@ layout(push_constant, std430) uniform PushConstants {
 #define BVH_SHAPE_SUB_TLAS 3u
 
 void main() {
-#ifdef DEBUG_SHADERS
-        debugPrintfEXT("bp_classify count=%d", pc.raw_pairs.count);
-#endif
+
     uint id = gl_GlobalInvocationID.x;
     if (id >= pc.raw_pairs.count) return;
 
@@ -69,8 +70,9 @@ void main() {
 
         if (b_is_lca) {
 #ifdef DEBUG_SHADERS
-            debugPrintfEXT("bp_classify lca! ent_A=%d ent_B=%d shape_B=%d", ent_A, ent_B, shape_B);
+            debugPrintfEXT("bp_classify: MACRO_LCA! ent_A=%d, ent_B=%d\n", ent_A, ent_B);
 #endif
+
             if (pc.out_macro_lca.x != 0 || pc.out_macro_lca.y != 0) {
                 PairBuffer buf = PairBuffer(pc.out_macro_lca);
                 uint out_idx = atomicAdd(buf.count, 1);
