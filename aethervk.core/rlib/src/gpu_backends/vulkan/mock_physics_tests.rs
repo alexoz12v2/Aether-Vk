@@ -392,13 +392,32 @@ fn integrate_bodies_p3() {
       let mut wrench = Wrench::default();
       wrench.force[1] = -10.0; // fy = -10.0
 
-      let dummy_emitter: crate::gpu::ForceEmitter = unsafe { core::mem::zeroed() };
-      let dummy_frame = crate::physics::physics_scene::GpuReferenceFrame::default();
+      // Pad all buffers to the workgroup size (local_size_x = 32) of
+      // integrate_bodies_p3.comp.  Lavapipe's LLVM JIT may speculatively load
+      // bodies[id] for ALL 32 threads in the workgroup before the 'id >= n_bodies'
+      // early-return branch is evaluated, causing OOB reads → SIGSEGV on Linux.
+      // Using subgroup_size (4) is insufficient because the JIT processes 8 batches
+      // of 4, each potentially speculating over the full workgroup range.
+      let wg_size = 32usize;
 
-      let bodies_buf = upload_buffer(device, &[body]).unwrap();
-      let wrenches_buf = upload_buffer(device, &[wrench]).unwrap();
-      let emitters_buf = upload_buffer(device, &[dummy_emitter]).unwrap();
-      let frames_buf = upload_buffer(device, &[dummy_frame]).unwrap();
+      let mut bodies_padded = alloc::vec![body];
+      bodies_padded.resize(wg_size, RigidBodyImex::default());
+
+      let mut wrenches_padded = alloc::vec![wrench];
+      wrenches_padded.resize(wg_size, Wrench::default());
+
+      let dummy_emitter: crate::gpu::ForceEmitter = unsafe { core::mem::zeroed() };
+      let mut emitters_padded = alloc::vec![dummy_emitter];
+      emitters_padded.resize(wg_size, unsafe { core::mem::zeroed() });
+
+      let dummy_frame = crate::physics::physics_scene::GpuReferenceFrame::default();
+      let mut frames_padded = alloc::vec![dummy_frame];
+      frames_padded.resize(wg_size, crate::physics::physics_scene::GpuReferenceFrame::default());
+
+      let bodies_buf = upload_buffer(device, &bodies_padded).unwrap();
+      let wrenches_buf = upload_buffer(device, &wrenches_padded).unwrap();
+      let emitters_buf = upload_buffer(device, &emitters_padded).unwrap();
+      let frames_buf = upload_buffer(device, &frames_padded).unwrap();
 
       Ok((bodies_buf, wrenches_buf, emitters_buf, frames_buf))
     },

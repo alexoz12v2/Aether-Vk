@@ -27,6 +27,20 @@ use aethervk_oshal_rlib::{
 use alloc::{format, vec::Vec};
 use ash::vk;
 
+/// `narrow_ccd.comp` push constants — **56 bytes** (matches SPIR-V layout exactly).
+///
+/// GLSL offsets (std430):
+/// ```text
+///  0  RigidBodyArray scene_entities   (u64 BDA)
+///  8  uint64_t       particles        (u64 BDA)
+/// 16  uint64_t       output_list      (u64 BDA)
+/// 24  uint64_t       pair_buffer      (u64 BDA)
+/// 32  float          dt
+/// 36  float          particle_radius
+/// 40  GpuReferenceFrameArray lca_entities  (u64 BDA)
+/// 48  uint           space_type  (0 = rb-rb PairBuffer, 1 = CrossPairBuffer)
+/// 52  uint           _pad
+/// ```
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct NarrowCcdPushConstants {
@@ -36,12 +50,12 @@ pub struct NarrowCcdPushConstants {
   pub pair_buffer: u64,
   pub dt: f32,
   pub particle_radius: f32,
-  pub lca_entities: u64,
-  pub frame_bda: u64,
+  pub lca_entities: u64, // frames / lca BDA
   pub space_type: u32,
   pub _pad: u32,
 }
 
+/// `narrow_ccd_cross_lca.comp` push constants — **56 bytes**.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct NarrowCcdCrossLcaPushConstants {
@@ -51,8 +65,7 @@ pub struct NarrowCcdCrossLcaPushConstants {
   pub cross_pair_buffer: u64,
   pub dt: f32,
   pub particle_radius: f32,
-  pub lca_entities: u64,
-  pub frame_bda: u64,
+  pub lca_entities: u64, // frames / lca BDA
   pub space_type: u32,
   pub _pad: u32,
 }
@@ -1754,7 +1767,22 @@ impl VulkanComputeKernels {
       },
     );
 
-    let n = bodies.len().max(1);
+    // Pad to the workgroup size of integrate_bodies_p3.comp (local_size_x = 32)
+    // so that Lavapipe's LLVM JIT never issues a speculative/vectorised load
+    // past the end of the buffer.
+    //
+    // With local_size_x=32 and n_bodies=2, the dispatch runs 1 workgroup of 32
+    // threads processed in 8 SIMD batches (SIMD width = subgroup_size = 4 on
+    // llvmpipe).  Even though threads 2-31 hit the 'id >= n_bodies' early return,
+    // LLVM may speculatively issue the 'bodies[id]' load for all 32 lanes before
+    // the branch condition is evaluated.  Padding to ceil(n/32)*32 ensures every
+    // speculative access hits valid (zeroed) memory.
+    let wg_size = 32usize; // local_size_x of integrate_bodies_p3.comp
+    let real_n = bodies.len().max(1);
+    let padded = ((real_n + wg_size - 1) / wg_size) * wg_size;
+    // Extend bodies/wrenches with zeroed dummy entries up to `padded`.
+    bodies.resize(padded, RigidBodyImex::default());
+
     let rb_buf = self.allocate_and_upload::<RigidBodyImex>(
       device,
       allocator,
@@ -1766,7 +1794,7 @@ impl VulkanComputeKernels {
       rollback,
     )?;
 
-    let zeroed_wrenches: alloc::vec::Vec<Wrench> = alloc::vec![Wrench::default(); n];
+    let zeroed_wrenches: alloc::vec::Vec<Wrench> = alloc::vec![Wrench::default(); padded];
     let w_buf = self.allocate_and_upload::<Wrench>(
       device,
       allocator,
@@ -1775,7 +1803,9 @@ impl VulkanComputeKernels {
       rollback,
     )?;
 
-    let len = bodies.len() as u32;
+    // Return the ACTUAL body count (not the padded size) so the shader only
+    // processes real bodies.  Dummy entries are unreachable (id >= n_bodies).
+    let len = real_n as u32;
     Ok((rb_buf, w_buf, len))
   }
 
@@ -4004,7 +4034,6 @@ impl Kernels for Device {
     rigid_bodies: &Self::Buffer<crate::gpu::RigidBodyImex>,
     particles: &Self::Buffer<f32>,
     lca_entities: u64,
-    frame_bda: u64,
     space_type: u32,
     dt: f32,
     output_list: &Self::List<crate::gpu::CollisionPair>,
@@ -4015,7 +4044,6 @@ impl Kernels for Device {
       rigid_bodies,
       particles,
       lca_entities,
-      frame_bda,
       space_type,
       dt,
       output_list,
@@ -4030,7 +4058,6 @@ impl Kernels for Device {
     rigid_bodies: &Self::Buffer<crate::gpu::RigidBodyImex>,
     particles: &Self::Buffer<f32>,
     lca_entities: u64,
-    frame_bda: u64,
     space_type: u32,
     dt: f32,
     output_list: &Self::List<crate::gpu::CollisionPair>,
@@ -4041,7 +4068,6 @@ impl Kernels for Device {
       rigid_bodies,
       particles,
       lca_entities,
-      frame_bda,
       space_type,
       dt,
       output_list,
@@ -5256,7 +5282,6 @@ impl Device {
     rigid_bodies: &VulkanBuffer<crate::gpu::RigidBodyImex>,
     particles: &VulkanBuffer<f32>,
     lca_entities: u64,
-    frame_bda: u64,
     space_type: u32,
     dt: f32,
     output_list: &VulkanBuffer<crate::gpu::CollisionPair>,
@@ -5269,7 +5294,6 @@ impl Device {
       dt,
       particle_radius: 0.5,
       lca_entities,
-      frame_bda,
       space_type,
       _pad: 0,
     };
@@ -5308,7 +5332,6 @@ impl Device {
     rigid_bodies: &VulkanBuffer<crate::gpu::RigidBodyImex>,
     particles: &VulkanBuffer<f32>,
     lca_entities: u64,
-    frame_bda: u64,
     space_type: u32,
     dt: f32,
     output_list: &VulkanBuffer<crate::gpu::CollisionPair>,
@@ -5321,7 +5344,6 @@ impl Device {
       dt,
       particle_radius: 0.5,
       lca_entities,
-      frame_bda,
       space_type,
       _pad: 0,
     };
@@ -5363,44 +5385,35 @@ impl Device {
         &[],
       );
 
-      let pc_part = NarrowCcdParticlesPushConstants {
-        scene_entities: rigid_bodies.address,
-        output_list: output_list.address,
-        particles: particles.address,
-        num_rigid_bodies: rigid_bodies.capacity as u32,
-        num_particles: particles.capacity as u32 / 32, // Particles have 32 floats
+      // TODO: Particle–particle narrow CCD.
+      //
+      // This dispatch is intentionally disabled until the push-constant layout is
+      // corrected.  Two bugs block it:
+      //
+      // 1. `NarrowCcdParticlesPushConstants` is 40 bytes but the `narrow_ccd.comp`
+      //    pipeline declares a 64-byte push-constant range (`NarrowCcdPushConstants`).
+      //    Pushing 40 bytes leaves `lca_entities` / `frame_bda` / `space_type` (the
+      //    upper 24 bytes) with **stale / garbage values** from the previous dispatch.
+      //    On MoltenVK/macOS those garbage BDAs happen to be harmless; on Lavapipe
+      //    with GPU-Assisted Validation enabled they cause an immediate SIGSEGV.
+      //
+      // 2. The `particles` buffer passed here is the IMEX rigid-body float buffer
+      //    (AoSoA stride = PARTICLE_FIELDS × subgroup_size = 11 × sg ≠ 32), so
+      //    `capacity / 32` yields a wrong particle count on every subgroup size.
+      //    A dedicated particle-system BDA should be passed instead.
+      //
+      // Once both issues are resolved, re-enable this block with the correct
+      // `NarrowCcdPushConstants` (or a new 64-byte particle-CCD struct) and the
+      // proper particle-system buffer.
+      let _ = NarrowCcdParticlesPushConstants {
+        scene_entities: 0,
+        output_list: 0,
+        particles: 0,
+        num_rigid_bodies: 0,
+        num_particles: 0,
         dt: 0.0,
-        particle_radius: 0.5,
-      };
-      let bytes_part = core::slice::from_raw_parts(
-        &pc_part as *const _ as *const u8,
-        core::mem::size_of_val(&pc_part),
-      );
-      let dispatch_groups_part = (pc_part.num_particles + 255) / 256;
-
-      self.device.cmd_bind_pipeline(
-        cmd.cmd,
-        ash::vk::PipelineBindPoint::COMPUTE,
-        self.kernels.pipelines.narrow_ccd,
-      );
-      self.device.cmd_push_constants(
-        cmd.cmd,
-        self.kernels.pipelines.pipeline_layout,
-        ash::vk::ShaderStageFlags::COMPUTE,
-        0,
-        bytes_part,
-      );
-      self.device.cmd_dispatch(cmd.cmd, dispatch_groups_part.max(1), 1, 1);
-
-      self.device.cmd_pipeline_barrier(
-        cmd.cmd,
-        ash::vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
-        ash::vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
-        ash::vk::DependencyFlags::empty(),
-        core::slice::from_ref(&barrier),
-        &[],
-        &[],
-      );
+        particle_radius: 0.0,
+      }; // keep the struct reachable to avoid dead-code warnings during transition
     }
 
     Ok(())

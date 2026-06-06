@@ -1,0 +1,116 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AetherVk – local test image (mirrors the GitHub Actions `test` job).
+#
+# IMPORTANT: Use a NAMED VOLUME for build artifacts so the Linux x86_64 ELF
+# binaries never conflict with Mac's target/ directory (which holds Mach-O
+# aarch64 binaries and shared cargo fingerprints that would fool cargo into
+# skipping recompilation).
+#
+# One-time volume creation:
+#   docker volume create aethervk-linux-target
+#
+# Build:
+#   docker build --platform linux/amd64 -f Dockerfile.test -t aethervk-test .
+#
+# Run (first run compiles ~20 min; subsequent runs are incremental ~2 min):
+#   docker run --platform linux/amd64 --rm \
+#     -v "$(pwd):/workspace" \
+#     -v aethervk-linux-target:/build-target \
+#     -w /workspace \
+#     aethervk-test
+#
+# Interactive shell:
+#   docker run --platform linux/amd64 --rm -it \
+#     -v "$(pwd):/workspace" \
+#     -v aethervk-linux-target:/build-target \
+#     -w /workspace \
+#     aethervk-test bash
+# ─────────────────────────────────────────────────────────────────────────────
+FROM ubuntu:24.04
+
+# Prevent apt from prompting for timezone / keyboard layout
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# ── System dependencies ───────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      # TLS / cert chain (must come first so curl works in subsequent steps)
+      ca-certificates \
+      # Build essentials
+      build-essential \
+      curl \
+      tar \
+      unzip \
+      xz-utils \
+      pkg-config \
+      # Vulkan (lavapipe / Mesa software rasterizer + validation layers)
+      libvulkan-dev \
+      mesa-vulkan-drivers \
+      vulkan-validationlayers \
+      vulkan-tools \
+      # X11 / Wayland stubs needed by some Vulkan loaders
+      libfontconfig1 \
+      libx11-6 \
+      libx11-xcb1 \
+      libxcb-dri3-0 \
+      libwayland-client0 \
+      # Headless X server (for xvfb-run)
+      xvfb \
+      x11-utils \
+      tini \
+      # Debug tools (useful for crash investigation)
+      gdb \
+      lldb \
+  && rm -rf /var/lib/apt/lists/*
+
+# ── Rust via rustup (installs to /usr/local so it's on PATH for all users) ────
+# Use --no-modify-path since we set CARGO_HOME / RUSTUP_HOME explicitly.
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --default-toolchain stable \
+         --component rustfmt,llvm-tools-preview
+
+# ── cargo-nextest (prebuilt binary — avoids compiling nextest itself) ─────────
+RUN curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C /usr/local/cargo/bin
+
+# ── Default environment (mirrors GitHub CI) ──────────────────────────────────
+# System Vulkan validation layers (installed via apt-get above).
+ENV VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json
+ENV RUST_BACKTRACE=1
+ENV CARGO_TERM_COLOR=always
+# Redirect build artifacts to /build-target so the Linux ELF binaries never
+# mix with Mac's Mach-O/aarch64 artifacts in the mounted /workspace/target/.
+# Mount this path as a named volume (aethervk-linux-target) for build caching.
+ENV CARGO_TARGET_DIR=/build-target
+# Tests discover SPIR-V shaders by walking up from the binary location.
+# With CARGO_TARGET_DIR=/build-target the binary is outside /workspace, so
+# we set ASSET_DIR as a fallback that VulkanTestContext::new checks.
+ENV ASSET_DIR=/workspace/assets
+
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+# tini prevents PID 1 signal blocking (xvfb-run's Xvfb wait loop needs it).
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# ── Default CMD:
+# Force recompile of aethervk-core-rlib on every run by wiping its cargo
+# fingerprint.  This is necessary because Docker's virtiofs/gRPC-FUSE mount
+# can have mtime propagation quirks that prevent cargo from detecting source
+# changes on the mounted /workspace volume.
+# We only wipe the aethervk fingerprints — not all deps — so recompilation
+# takes ~2-3 min on subsequent runs instead of ~20 min.
+CMD ["sh", "-c", "\
+  echo '=== Wiping aethervk-core-rlib artifacts ===' && \
+  rm -rfv /build-target/debug/.fingerprint/aethervk* \
+           /build-target/debug/deps/aethervk* \
+           /build-target/debug/aethervk* \
+           /build-target/debug/incremental/aethervk* \
+           /build-target/debug/.fingerprint/aethervk-core-rlib* 2>&1 | tail -5 && \
+  echo '=== Starting cargo nextest ===' && \
+  xvfb-run -a cargo nextest run \
+    --features collisions,shader_debug_sync \
+    -E 'package(aethervk-core-rlib) and test(physics::vulkan_math_tests::tests)' \
+    --no-fail-fast 2>&1"]
+
