@@ -268,8 +268,11 @@ impl DeviceResource for GlobalDeviceAllocator {
       if let Ok(stats) = self.allocator.build_stats_string(true) {
         aethervk_oshal_rlib::log!("VMA STATS BEFORE DROP:\n{}", stats);
       }
-      aethervk_oshal_rlib::os::memory::tracking::report_leaked_gpu_allocations();
     }
     unsafe { mem::ManuallyDrop::drop(&mut self.allocator) };
+    #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
+    {
+      aethervk_oshal_rlib::os::memory::tracking::report_leaked_gpu_allocations();
+    }
   }
 }

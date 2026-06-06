@@ -222,8 +222,11 @@ impl PhysicsScene {
       }
     }
 
-    if gpu_frames.is_empty() {
-      gpu_frames.push(GpuReferenceFrame {
+    // Always ensure a macro frame (frame_type=0) exists. Without it, micro-frame
+    // entities fall back to index 0 as if it were the macro frame, breaking the
+    // broad-phase cross-LCA pipeline (frames.capacity() ends up = 1).
+    if !gpu_frames.iter().any(|f| f.frame_type == 0) {
+      gpu_frames.insert(0, GpuReferenceFrame {
         center_pos: [0.0, 0.0, 0.0],
         scale: 1.0,
         center_vel: [0.0, 0.0, 0.0],
@@ -235,7 +238,19 @@ impl PhysicsScene {
         entity_id_raw: 0,
         frame_bda: 0,
       });
+      // Re-index both gpu_frames parent pointers and frame_map indices since we
+      // inserted a new frame at position 0, shifting everything else by 1.
+      for frame in gpu_frames.iter_mut().skip(1) {
+        if frame.parent_frame_idx != u32::MAX {
+          frame.parent_frame_idx += 1;
+        }
+      }
+      for idx in frame_map.values_mut() {
+        *idx += 1;
+      }
     }
+
+
 
     let macro_frame_idx = gpu_frames.iter().position(|f| f.frame_type == 0).unwrap_or(0) as u32;
 
