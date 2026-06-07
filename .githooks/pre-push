@@ -1,1 +1,11 @@
-./scripts/fetch_vulkan_sync2.sh
+#!/bin/bash
+set -e
+
+DIR="workflow-data/vulkan-synchronization2"
+if [ ! -f "$DIR/VkLayer_khronos_synchronization2.json" ] || [ ! -f "$DIR/libVkLayer_khronos_synchronization2.so" ]; then
+    echo "ERROR: Synchronization2 layer files are missing from $DIR!"
+    echo "Run 'git commit' to trigger the pre-commit hook that fetches them, or run './scripts/fetch_vulkan_sync2.sh' manually."
+    exit 1
+fi
+
+echo "Pre-push check passed: Synchronization2 layer files are present."
