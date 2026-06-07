@@ -59,6 +59,7 @@ pub fn start_logic_thread(
     let mut play_controls: hashbrown::HashMap<u64, PlayControl> = hashbrown::HashMap::new();
 
     loop {
+      let mut core_logic = || -> bool {
       let mut processed_any = false;
 
       let scene_ids: alloc::vec::Vec<u64> = {
@@ -77,7 +78,8 @@ pub fn start_logic_thread(
         if elapsed >= pc.target_frame_time {
           let mut can_tick = true;
           for &task in &pc.last_render_ticks {
-            let status = context.task_manager.read().get_status(task.get());
+            let ctx = unsafe { &*(context.ctx_ptr.get() as *mut crate::simulation_api::SimulationContext) };
+            let status = ctx.get_task_status(task.get());
             if status == crate::simulation_api::structs::TaskStatusCode::Pending {
               can_tick = false;
               break;
@@ -262,7 +264,7 @@ pub fn start_logic_thread(
         match logic_rx.try_recv() {
           Ok(cmd) => {
             if let LogicCommand::Shutdown = cmd {
-              return;
+              return true;
             }
 
             match cmd {
@@ -328,7 +330,7 @@ pub fn start_logic_thread(
             break;
           }
           Err(thingbuf::mpsc::errors::TryRecvError::Closed) => {
-            return;
+            return true;
           }
           Err(_) => {
             break;
@@ -338,6 +340,18 @@ pub fn start_logic_thread(
 
       if !processed_any {
         oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
+      }
+      false
+      };
+
+      #[cfg(target_os = "macos")]
+      let should_return = objc2::rc::autoreleasepool(|_| core_logic());
+
+      #[cfg(not(target_os = "macos"))]
+      let should_return = core_logic();
+
+      if should_return {
+        return;
       }
     }
   })

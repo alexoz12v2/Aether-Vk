@@ -2064,10 +2064,17 @@ pub trait Kernels: Send + Sync {
   fn discard_bvh(&self, bvh: Self::MotionBvh);
   fn discard_tlas(&self, tlas: Self::MotionTlas);
 
+
   /// Returns the hardware subgroup size.
   fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize>;
 
+  /// Returns true if the backend is running on a CPU emulator (like Lavapipe).
+  fn is_cpu_device(&self) -> bool;
+
   fn wait_sync(&self, sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()>;
+
+  /// Blocks the CPU until all GPU operations are completely idle.
+  fn wait_idle(&self) -> EngineResult<()>;
 
   fn refit_motion_blas(
     &self,
@@ -2457,12 +2464,9 @@ pub trait Kernels: Send + Sync {
     dt: f32,
   ) -> EngineResult<Self::Buffer<u32>>;
 
-  /// Read the first `u32` element from `buf` via the buffer's persistently-mapped
-  /// host-visible pointer.  The caller must have already waited for the GPU to finish
-  /// writing to `buf` (timeline semaphore wait) before invoking this method.
-  /// Returns `0xFFFF_FFFF` if the buffer is not host-mapped.
   #[cfg(any(test, feature = "collisions"))]
   fn read_buffer_u32_first(&self, buf: &Self::Buffer<u32>) -> EngineResult<u32>;
+
 
   #[cfg(any(test, feature = "collisions"))]
   fn apply_collision_responses(

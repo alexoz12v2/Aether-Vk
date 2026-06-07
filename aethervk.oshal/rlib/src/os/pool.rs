@@ -405,6 +405,7 @@ mod pthread_pool {
     let mut tick: u8 = 0;
 
     while !state.shutdown.load(Ordering::Acquire) {
+      let mut core_logic = || {
       tick = tick.wrapping_add(1);
       let try_shared_first = tick % 4 == 0;
 
@@ -446,7 +447,7 @@ mod pthread_pool {
           }
           WorkloadStatus::Yield => {
             if state.shutdown.load(Ordering::Acquire) {
-              continue;
+              return;
             }
 
             let mut target_q = None;
@@ -473,6 +474,13 @@ mod pthread_pool {
       } else {
         crate::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
       }
+      };
+
+      #[cfg(target_os = "macos")]
+      objc2::rc::autoreleasepool(|_| core_logic());
+
+      #[cfg(not(target_os = "macos"))]
+      core_logic();
     }
 
     ptr::null_mut()

@@ -360,20 +360,15 @@ mod tests {
             restitution: 0.5,
           },
         );
-        let _ = ctx
-          .scenes
-          .read()
-          .scenes
-          .get(&scene_id)
-          .unwrap()
-          .write()
-          .scene
-          .add_component(comet_eid, crate::scene::KinematicComponent::default());
+        let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(
+          comet_eid,
+          crate::scene::KinematicComponent::default(),
+        );
 
         // 4. Hook Callback
         SimulationContext::set_render_callback(Some(visual_render_callback_impl));
 
-        let wait_for_images = |tag: &str| {
+        let mut wait_for_images = |tag: &str, save_to_disk: bool| {
           let mut attempts = 0;
           let mut ready = false;
           let max_attempts = if is_cpu { 6000 } else { 200 };
@@ -387,6 +382,7 @@ mod tests {
               break;
             }
             std::thread::sleep(core::time::Duration::from_millis(10));
+            let _ = ctx.process_main_thread_cleanup_queue();
             attempts += 1;
           }
           if !ready {
@@ -409,19 +405,46 @@ mod tests {
             ) && attempt < max_attempts
             {
               std::thread::sleep(core::time::Duration::from_millis(10));
+              let _ = ctx.process_main_thread_cleanup_queue();
               status = ctx.get_task_status(tid);
               attempt += 1;
             }
 
+            #[cfg(target_os = "macos")]
+            {
+              let mut info: libc::mach_task_basic_info = unsafe { std::mem::zeroed() };
+              let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+              let res = unsafe {
+                  libc::task_info(
+                      libc::mach_task_self(),
+                      libc::MACH_TASK_BASIC_INFO,
+                      &mut info as *mut _ as libc::task_info_t,
+                      &mut count,
+                  )
+              };
+              if res == libc::KERN_SUCCESS {
+                  let virtual_mb = info.virtual_size / (1024 * 1024);
+                  let resident_mb = info.resident_size / (1024 * 1024);
+                  
+                  println!("Memory Status -> Resident: {} MB | Virtual: {} MB", resident_mb, virtual_mb);
+                  if virtual_mb > 4000 {
+                      panic!("Virtual memory crossed 4 GB! Resident: {} MB, Virtual: {} MB", resident_mb, virtual_mb);
+                  }
+              }
+            }
+
             let mut buffer = vec![0u8; (width * height * 4) as usize];
+            let _ = ctx.process_main_thread_cleanup_queue();
             if ctx.download_image(tid, buffer.as_mut_ptr(), buffer.len()) {
-              let _ = image::save_buffer(
-                alloc::format!("output_cam_{}_{}.png", i + 1, tag),
-                &buffer,
-                width,
-                height,
-                image::ColorType::Rgba8,
-              );
+              if save_to_disk {
+                let _ = image::save_buffer(
+                  alloc::format!("output_cam_{}_{}.png", i + 1, tag),
+                  &buffer,
+                  width,
+                  height,
+                  image::ColorType::Rgba8,
+                );
+              }
             }
           }
           // Reset for next pass
@@ -443,10 +466,15 @@ mod tests {
           .logic_thread
           .tx()
           .try_send(crate::simulation_api::structs::LogicCommand::PlayScene { scene_id });
-        wait_for_images("initial");
+        wait_for_images("initial", true);
 
         // Wait and Output Final State
-        aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_secs(if is_cpu { 1 } else { 2 }));
+        let start_time = std::time::Instant::now();
+        let duration = core::time::Duration::from_secs(if is_cpu { 1 } else { 2 });
+        while start_time.elapsed() < duration {
+            wait_for_images("flush", false);
+        }
+
         let _ = ctx
           .threads
           .logic_thread
@@ -470,7 +498,7 @@ mod tests {
           },
         );
 
-        wait_for_images("final");
+        wait_for_images("final", true);
 
         // _guard's Drop calls Box::from_raw(ctx_ptr) automatically.
       }

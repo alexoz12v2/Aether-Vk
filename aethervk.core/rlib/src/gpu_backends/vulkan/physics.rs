@@ -31,6 +31,10 @@ use ash::vk;
 pub static USE_PRINTF_SHADERS: core::sync::atomic::AtomicBool =
   core::sync::atomic::AtomicBool::new(false);
 
+#[cfg(test)]
+pub static READBACK_DIAGNOSTICS: core::sync::atomic::AtomicBool =
+  core::sync::atomic::AtomicBool::new(false);
+
 /// `narrow_ccd.comp` push constants — **56 bytes** (matches SPIR-V layout exactly).
 ///
 /// GLSL offsets (std430):
@@ -1400,6 +1404,7 @@ impl VulkanComputeKernels {
     if self.pipelines.is_lavapipe {
       // Clamp to the next power of two supported variant (wg4/wg8/wg16/wg32).
       // The mk_wg! macro guarantees we loaded the matching .spv.
+      // Forced rebuild comment to ensure Docker recompiles
       self.pipelines.subgroup_size.clamp(4, 32).min(gpu_target)
     } else {
       gpu_target
@@ -1559,7 +1564,14 @@ impl VulkanComputeKernels {
     }
     drop(pool);
 
-    let payload_size = (core::mem::size_of::<T>() * capacity.max(1)) as u64;
+    // Pad capacity to a multiple of 256 to prevent Lavapipe's LLVM JIT from 
+    // speculatively reading/writing out-of-bounds and corrupting VMA sentinels.
+    let mut padded_capacity = capacity.max(1);
+    if padded_capacity % 256 != 0 {
+      padded_capacity += 256 - (padded_capacity % 256);
+    }
+
+    let payload_size = (core::mem::size_of::<T>() * padded_capacity) as u64;
     let size = payload_size + if is_list { 16 } else { 0 };
     aethervk_oshal_rlib::log!(
       "VMA CREATE BUFFER T: {}, capacity: {}, is_list: {}, size: {}",
@@ -4367,6 +4379,17 @@ impl Kernels for Device {
     })
   }
 
+  fn wait_idle(&self) -> EngineResult<()> {
+    unsafe { self.device.device_wait_idle() }.map_err(|e| {
+      crate::types::EngineError::Gpu(crate::types::GpuError::BackendSpecific(alloc::format!("{:?}", e)))
+    })?;
+    Ok(())
+  }
+
+  fn is_cpu_device(&self) -> bool {
+    crate::gpu::RenderDevice::is_cpu_device(self)
+  }
+
   fn wait_sync(&self, sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> {
     use ash::vk::Handle;
     let sem = ash::vk::Semaphore::from_raw(sync.timeline_semaphore);
@@ -4378,6 +4401,11 @@ impl Kernels for Device {
           "{:?}", e
         )))
       })?;
+
+    // WORKAROUND: Lavapipe's timeline semaphores return early. Wait idle to ensure JIT threads finish.
+    if self.is_cpu_device() {
+      let _ = unsafe { self.device.device_wait_idle() };
+    }
 
     // The integration tests do not advance the frame manager, so we must clean up the DiscardPool manually here to avoid exhausting memory/resources.
     let items = self.kernels.discard_pool.pop_ready_items(sync.timeline_value);
@@ -4424,6 +4452,41 @@ impl Kernels for Device {
       })?
       .execute(|allocator, rollback| {
         let size = node_bytes.len().max(1) as u64;
+        let current_timeline = self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed).saturating_sub(1);
+        let mut pool = self.kernels.transient_pool.lock();
+        for i in 0..pool.entries.len() {
+          let entry = &pool.entries[i];
+          if entry.item_size == 0
+            && (entry.capacity as u64) * 4 >= size
+            && !entry.is_list
+            && entry.timeline_freed <= current_timeline
+          {
+            let entry = pool.entries.remove(i);
+            drop(pool);
+            
+            // Write the new bytes to the recycled buffer
+            let info = allocator.get_allocation_info(&entry.allocation);
+            let mapped = info.mapped_data as *mut u8;
+            assert!(!mapped.is_null(), "TLAS buffer not persistently mapped");
+            unsafe {
+              core::ptr::copy_nonoverlapping(node_bytes.as_ptr(), mapped, node_bytes.len());
+            }
+
+            return Ok(VulkanBuffer::<()> {
+              buffer: entry.buffer,
+              address: entry.address,
+              capacity: entry.capacity,
+              allocation: entry.allocation,
+              allocator,
+              is_list: false,
+              usage: entry.usage,
+              discarded: false,
+              _marker: core::marker::PhantomData,
+            });
+          }
+        }
+        drop(pool);
+
         let sharing_mode =
           if self.kernels.queue_sharing_info.mode == crate::gpu::SharingMode::Concurrent {
             ash::vk::SharingMode::CONCURRENT

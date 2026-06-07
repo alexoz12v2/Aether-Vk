@@ -165,15 +165,26 @@ impl Kernels for CpuScalarKernels {
   fn discard_bvh(&self, _bvh: Self::MotionBvh) {}
   fn discard_tlas(&self, _tlas: Self::MotionTlas) {}
 
+  #[cfg(any(test, feature = "collisions"))]
   fn read_buffer_u32_first(&self, buf: &Self::Buffer<u32>) -> EngineResult<u32> {
     Ok(buf.data.first().copied().unwrap_or(0xFFFFFFFF))
   }
+
+
 
   fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> {
     Some(crate::gpu::SubgroupSize::Size32)
   }
   fn wait_sync(&self, _sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> {
     Ok(())
+  }
+
+  fn wait_idle(&self) -> EngineResult<()> {
+    Ok(())
+  }
+
+  fn is_cpu_device(&self) -> bool {
+    true
   }
   fn refit_motion_blas(
     &self,
@@ -781,15 +792,26 @@ impl Kernels for CpuSimdKernels {
   fn discard_bvh(&self, _bvh: Self::MotionBvh) {}
   fn discard_tlas(&self, _tlas: Self::MotionTlas) {}
 
+  #[cfg(any(test, feature = "collisions"))]
   fn read_buffer_u32_first(&self, buf: &Self::Buffer<u32>) -> EngineResult<u32> {
     Ok(buf.data.first().copied().unwrap_or(0xFFFFFFFF))
   }
+
+
 
   fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> {
     Some(crate::gpu::SubgroupSize::Size32)
   }
   fn wait_sync(&self, _sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> {
     Ok(())
+  }
+
+  fn wait_idle(&self) -> EngineResult<()> {
+    Ok(())
+  }
+
+  fn is_cpu_device(&self) -> bool {
+    true
   }
   fn refit_motion_blas(
     &self,

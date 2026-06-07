@@ -48,6 +48,14 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
   fn wait_sync(&self, sync: &CommandBufferSyncInfo) -> EngineResult<()> {
     self.base.wait_sync(sync)
   }
+
+  fn wait_idle(&self) -> EngineResult<()> {
+    self.base.wait_idle()
+  }
+
+  fn is_cpu_device(&self) -> bool {
+    self.base.is_cpu_device()
+  }
   fn refit_motion_blas(
     &self,
     cmd: &mut Self::Cmd,

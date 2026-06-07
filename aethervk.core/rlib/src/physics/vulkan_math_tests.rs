@@ -290,9 +290,6 @@ mod tests {
     
     let diff_p = final_momentum - initial_momentum;
     assert!(diff_p > -1e-2 && diff_p < 1e-2, "Linear momentum not conserved in collision: {} vs {}", initial_momentum, final_momentum);
-    
-    #[cfg(all(test, not(target_vendor = "apple")))]
-    std::mem::forget(ctx);
   }
 
   #[test]
@@ -300,8 +297,10 @@ mod tests {
   fn test_energy_conservation_bounce() {
     #[cfg(all(test, not(target_vendor = "apple")))]
     crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.store(false, core::sync::atomic::Ordering::Relaxed);
+    #[cfg(test)]
+    crate::gpu_backends::vulkan::physics::READBACK_DIAGNOSTICS.store(true, core::sync::atomic::Ordering::Relaxed);
     
-    let ctx = std::mem::ManuallyDrop::new(VulkanTestContext::new());
+    let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
@@ -607,7 +606,7 @@ mod tests {
   #[test]
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_restitution_decay() {
-    let ctx = VulkanTestContext::new();
+    let ctx = std::mem::ManuallyDrop::new(VulkanTestContext::new());
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
