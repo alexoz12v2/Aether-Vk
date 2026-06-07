@@ -380,7 +380,8 @@ public partial class Viewport3DViewModel
   private void DestroyCometInternal()
   {
     var state = _sceneStateManager.GetOrCreateScene(SceneId);
-    if (!state.CometEntityId.HasValue) return;
+    if (!state.CometEntityId.HasValue)
+      return;
 
     var cometId = state.CometEntityId.Value;
     RuntimeService.RemoveEntity(SceneId, cometId);

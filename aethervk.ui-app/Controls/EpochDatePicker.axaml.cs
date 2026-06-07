@@ -12,10 +12,12 @@ namespace AetherVk.Controls;
 
 public partial class EpochDatePicker : UserControl
 {
-  public static readonly StyledProperty<DateTimeOffset> SelectedEpochProperty = AvaloniaProperty.Register<
-    EpochDatePicker,
-    DateTimeOffset
-  >(nameof(SelectedEpoch), DateTimeOffset.UtcNow, defaultBindingMode: Avalonia.Data.BindingMode.TwoWay);
+  public static readonly StyledProperty<DateTimeOffset> SelectedEpochProperty =
+    AvaloniaProperty.Register<EpochDatePicker, DateTimeOffset>(
+      nameof(SelectedEpoch),
+      DateTimeOffset.UtcNow,
+      defaultBindingMode: Avalonia.Data.BindingMode.TwoWay
+    );
 
   public DateTimeOffset SelectedEpoch
   {
@@ -69,15 +71,17 @@ public partial class EpochDatePicker : UserControl
 
   static EpochDatePicker()
   {
-    SelectedEpochProperty.Changed.AddClassHandler<EpochDatePicker>((picker, _) =>
-    {
-      if (!picker._suppressSync)
+    SelectedEpochProperty.Changed.AddClassHandler<EpochDatePicker>(
+      (picker, _) =>
       {
-        picker.SyncTextFromEpoch();
-        picker.SyncTimeFields();
-        picker.RegenerateDays();
+        if (!picker._suppressSync)
+        {
+          picker.SyncTextFromEpoch();
+          picker.SyncTimeFields();
+          picker.RegenerateDays();
+        }
       }
-    });
+    );
   }
 
   // ────────────────── Epoch text commit ──────────────────
@@ -92,8 +96,14 @@ public partial class EpochDatePicker : UserControl
       return;
     }
 
-    if (DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture,
-          DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dt))
+    if (
+      DateTimeOffset.TryParse(
+        text,
+        CultureInfo.InvariantCulture,
+        DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+        out var dt
+      )
+    )
     {
       _suppressSync = true;
       SelectedEpoch = dt;
@@ -134,7 +144,10 @@ public partial class EpochDatePicker : UserControl
 
   private void SyncTextFromEpoch()
   {
-    EpochTextBox.Text = SelectedEpoch.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture) + " UTC";
+    EpochTextBox.Text =
+      SelectedEpoch
+        .ToUniversalTime()
+        .ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture) + " UTC";
   }
 
   // ────────────────── Calendar button ──────────────────
@@ -176,8 +189,15 @@ public partial class EpochDatePicker : UserControl
 
   private void UpdateMonthYearLabels()
   {
-    MonthLabel.Text = new DateTimeOffset(_displayYear, _displayMonth, 1, 0, 0, 0, TimeSpan.Zero)
-      .ToString("MMMM", CultureInfo.InvariantCulture);
+    MonthLabel.Text = new DateTimeOffset(
+      _displayYear,
+      _displayMonth,
+      1,
+      0,
+      0,
+      0,
+      TimeSpan.Zero
+    ).ToString("MMMM", CultureInfo.InvariantCulture);
     YearLabel.Text = _displayYear.ToString();
   }
 
@@ -194,8 +214,15 @@ public partial class EpochDatePicker : UserControl
 
   private void CommitMonthEdit()
   {
-    if (DateTime.TryParseExact(MonthEditor.Text, "MMMM", CultureInfo.InvariantCulture,
-          DateTimeStyles.None, out var parsed))
+    if (
+      DateTime.TryParseExact(
+        MonthEditor.Text,
+        "MMMM",
+        CultureInfo.InvariantCulture,
+        DateTimeStyles.None,
+        out var parsed
+      )
+    )
     {
       _displayMonth = parsed.Month;
     }
@@ -277,21 +304,28 @@ public partial class EpochDatePicker : UserControl
     var firstDay = new DateTimeOffset(_displayYear, _displayMonth, 1, 0, 0, 0, TimeSpan.Zero);
     int startDow = ((int)firstDay.DayOfWeek + 6) % 7; // Monday=0
     int daysInMonth = DateTime.DaysInMonth(_displayYear, _displayMonth);
-    int selectedDay = SelectedEpoch.Month == _displayMonth && SelectedEpoch.Year == _displayYear
-      ? SelectedEpoch.Day
-      : -1;
+    int selectedDay =
+      SelectedEpoch.Month == _displayMonth && SelectedEpoch.Year == _displayYear
+        ? SelectedEpoch.Day
+        : -1;
 
     for (int cell = 0; cell < 42; cell++)
     {
       int dayNum = cell - startDow + 1;
       if (dayNum >= 1 && dayNum <= daysInMonth)
       {
-        var accentBg = this.TryFindResource("Accent.Primary", out var abr) && abr is IBrush ab
-          ? ab : Brushes.DodgerBlue;
-        var accentFg = this.TryFindResource("Text.On-Accent", out var oar) && oar is IBrush oa
-          ? oa : Brushes.White;
-        var normalFg = this.TryFindResource("Text.Primary", out var tpr) && tpr is IBrush tp
-          ? tp : Brushes.White;
+        var accentBg =
+          this.TryFindResource("Accent.Primary", out var abr) && abr is IBrush ab
+            ? ab
+            : Brushes.DodgerBlue;
+        var accentFg =
+          this.TryFindResource("Text.On-Accent", out var oar) && oar is IBrush oa
+            ? oa
+            : Brushes.White;
+        var normalFg =
+          this.TryFindResource("Text.Primary", out var tpr) && tpr is IBrush tp
+            ? tp
+            : Brushes.White;
 
         var btn = new Button
         {
@@ -323,9 +357,15 @@ public partial class EpochDatePicker : UserControl
       var current = SelectedEpoch;
       _suppressSync = true;
       SelectedEpoch = new DateTimeOffset(
-        _displayYear, _displayMonth, day,
-        current.Hour, current.Minute, current.Second, current.Millisecond,
-        TimeSpan.Zero);
+        _displayYear,
+        _displayMonth,
+        day,
+        current.Hour,
+        current.Minute,
+        current.Second,
+        current.Millisecond,
+        TimeSpan.Zero
+      );
       IsValid = true;
       ValidationBlock.IsVisible = false;
       SyncTextFromEpoch();
@@ -348,10 +388,14 @@ public partial class EpochDatePicker : UserControl
 
   private void CommitTimeFields()
   {
-    if (!int.TryParse(HourBox.Text, out int h)) h = 0;
-    if (!int.TryParse(MinuteBox.Text, out int m)) m = 0;
-    if (!int.TryParse(SecondBox.Text, out int s)) s = 0;
-    if (!int.TryParse(MillisecondBox.Text, out int ms)) ms = 0;
+    if (!int.TryParse(HourBox.Text, out int h))
+      h = 0;
+    if (!int.TryParse(MinuteBox.Text, out int m))
+      m = 0;
+    if (!int.TryParse(SecondBox.Text, out int s))
+      s = 0;
+    if (!int.TryParse(MillisecondBox.Text, out int ms))
+      ms = 0;
 
     h = Math.Clamp(h, 0, 23);
     m = Math.Clamp(m, 0, 59);
@@ -361,8 +405,15 @@ public partial class EpochDatePicker : UserControl
     var current = SelectedEpoch.ToUniversalTime();
     _suppressSync = true;
     SelectedEpoch = new DateTimeOffset(
-      current.Year, current.Month, current.Day,
-      h, m, s, ms, TimeSpan.Zero);
+      current.Year,
+      current.Month,
+      current.Day,
+      h,
+      m,
+      s,
+      ms,
+      TimeSpan.Zero
+    );
     SyncTextFromEpoch();
     SyncTimeFields();
     _suppressSync = false;

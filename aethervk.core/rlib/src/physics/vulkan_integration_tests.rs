@@ -65,7 +65,8 @@ mod tests {
 
   impl VulkanTestContext {
     pub fn new() -> Self {
-      crate::gpu_backends::vulkan::physics::READBACK_DIAGNOSTICS.store(true, core::sync::atomic::Ordering::Relaxed);
+      crate::gpu_backends::vulkan::physics::READBACK_DIAGNOSTICS
+        .store(true, core::sync::atomic::Ordering::Relaxed);
       crate::gpu::set_asset_dir_for_tests();
 
       let runtime_params = Box::new(RuntimeParams {
@@ -971,16 +972,28 @@ mod tests {
 
     // DUMMY RIGID BODY TO PREVENT N_BODIES = 0
     let dummy_rb = scene.spawn_entity("dummy_rb");
-    scene.add_component(dummy_rb, crate::scene::TransformComponent {
-      position: Vec3f32::from_array([0.0, 1000.0, 0.0]),
-      ..Default::default()
-    }).unwrap();
-    scene.add_component(dummy_rb, crate::scene::ColliderComponent {
-      shape: ColliderShape::Sphere { radius: 1.0 },
-      mass: 1.0,
-      ..Default::default()
-    }).unwrap();
-    scene.add_component(dummy_rb, crate::scene::KinematicComponent::default()).unwrap();
+    scene
+      .add_component(
+        dummy_rb,
+        crate::scene::TransformComponent {
+          position: Vec3f32::from_array([0.0, 1000.0, 0.0]),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        dummy_rb,
+        crate::scene::ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          mass: 1.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(dummy_rb, crate::scene::KinematicComponent::default())
+      .unwrap();
     scene.add_component(dummy_rb, dummy_mesh()).unwrap();
 
     ctx

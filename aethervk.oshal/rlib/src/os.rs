@@ -2,6 +2,7 @@
 
 use thiserror::Error;
 
+pub mod audio;
 pub mod debug;
 pub mod env;
 pub mod files;
@@ -11,7 +12,6 @@ pub mod native;
 pub mod pool;
 pub mod thread;
 pub mod time;
-pub mod audio;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]

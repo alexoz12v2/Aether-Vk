@@ -63,11 +63,11 @@ impl SimulationDelegate for SpawnCometDelegate {
       "comet",
       Vec3f32::from_components(0.01, 0.0, 0.0), // 0.01 AU along +x
       Quat::identity(),
-      1.0,    // radius_km = 1 km
-      1000.0, // mass_kg
-      0,      // physics_type = static
-      0,      // comet id (ignored when static)
-      None,   // rotational_model
+      1.0,             // radius_km = 1 km
+      1000.0,          // mass_kg
+      0,               // physics_type = static
+      0,               // comet id (ignored when static)
+      None,            // rotational_model
       Vec3f32::zero(), // angular_velocity
     )?;
     self.comet_ext = comet_ext;
@@ -83,22 +83,39 @@ impl SimulationDelegate for SpawnCometDelegate {
       let comet_int = scene_ctx.get_entity(comet_ext).expect("comet entity not found");
 
       // Get the mesh for raycasting
-      let mesh_arc = scene_ctx.scene.with_component(
-        comet_int,
-        |p: &aethervk_core_rlib::scene::PhysicalMeshComponent| p.mesh.clone(),
-      ).expect("comet missing PhysicalMeshComponent");
+      let mesh_arc = scene_ctx
+        .scene
+        .with_component(
+          comet_int,
+          |p: &aethervk_core_rlib::scene::PhysicalMeshComponent| p.mesh.clone(),
+        )
+        .expect("comet missing PhysicalMeshComponent");
 
-      let bounding_sphere = mesh_arc.vertices.iter()
-        .map(|v| (v.position[0]*v.position[0] + v.position[1]*v.position[1] + v.position[2]*v.position[2]).sqrt())
+      let bounding_sphere = mesh_arc
+        .vertices
+        .iter()
+        .map(|v| {
+          (v.position[0] * v.position[0]
+            + v.position[1] * v.position[1]
+            + v.position[2] * v.position[2])
+            .sqrt()
+        })
         .fold(0.0_f32, f32::max)
         .max(0.01);
-      println!("[JET] BVH available: {}, bounding_sphere: {:.4}", mesh_arc.bvh.is_some(), bounding_sphere);
+      println!(
+        "[JET] BVH available: {}, bounding_sphere: {:.4}",
+        mesh_arc.bvh.is_some(),
+        bounding_sphere
+      );
 
       // Comet transform scale
-      let comet_scale = scene_ctx.scene.with_component(
-        comet_int,
-        |t: &aethervk_core_rlib::scene::TransformComponent| t.scale.x(),
-      ).unwrap_or(1.0);
+      let comet_scale = scene_ctx
+        .scene
+        .with_component(
+          comet_int,
+          |t: &aethervk_core_rlib::scene::TransformComponent| t.scale.x(),
+        )
+        .unwrap_or(1.0);
 
       // Jet parameters
       let lat_deg: f32 = 60.0;
@@ -118,10 +135,7 @@ impl SimulationDelegate for SpawnCometDelegate {
 
       let (hit_pt, hit_normal) = if let Some(ref bvh) = mesh_arc.bvh {
         match bvh.raycast(ray_orig, ray_dir, &mesh_arc.vertices, &mesh_arc.indices) {
-          Some((_t, pt, n)) => (
-            [pt.x(), pt.y(), pt.z()],
-            [n.x(), n.y(), n.z()],
-          ),
+          Some((_t, pt, n)) => ([pt.x(), pt.y(), pt.z()], [n.x(), n.y(), n.z()]),
           None => {
             let pt = dir * bounding_sphere;
             ([pt.x(), pt.y(), pt.z()], [dir.x(), dir.y(), dir.z()])
@@ -160,7 +174,8 @@ impl SimulationDelegate for SpawnCometDelegate {
       );
 
       // StaticMeshComponent: emissive cyan sphere
-      let sphere_mesh = aethervk_core_rlib::simulation::comet::generate_uv_sphere(1.0, 8, 8, 1.0, true);
+      let sphere_mesh =
+        aethervk_core_rlib::simulation::comet::generate_uv_sphere(1.0, 8, 8, 1.0, true);
       let _ = scene_ctx.scene.add_component(
         child_id,
         aethervk_core_rlib::scene::StaticMeshComponent {
@@ -189,24 +204,22 @@ impl SimulationDelegate for SpawnCometDelegate {
 
       // Add ParticleEmitterCirclesComponent to the comet with one emission circle
       let emitter = aethervk_core_rlib::scene::particles::ParticleEmitterCirclesComponent {
-        circles: vec![
-          aethervk_core_rlib::scene::particles::EmissionCircle {
-            latitude_rad: lat_rad,
-            longitude_rad: lon_rad,
-            circle_radius_km: sphere_radius_km,
-            mass: 1e-12,             // dust-like
-            color: [0.2, 0.8, 1.0, 1.0],
-            cached_point: Some(hit_pt),
-            cached_normal: Some(hit_normal),
-            particles_per_tick: 0,   // starts OFF, spacebar toggles
-            ttl: 300,                // ~5 seconds at 60fps
-            mean_velocity: 0.001,    // 1 m/s in km/s
-            velocity_std_dev: 0.3,
-            child_entity: Some(child_id),
-            beta: 2.0,               // perfect reflector
-            max_particles: 4096,
-          },
-        ],
+        circles: vec![aethervk_core_rlib::scene::particles::EmissionCircle {
+          latitude_rad: lat_rad,
+          longitude_rad: lon_rad,
+          circle_radius_km: sphere_radius_km,
+          mass: 1e-12, // dust-like
+          color: [0.2, 0.8, 1.0, 1.0],
+          cached_point: Some(hit_pt),
+          cached_normal: Some(hit_normal),
+          particles_per_tick: 0, // starts OFF, spacebar toggles
+          ttl: 300,              // ~5 seconds at 60fps
+          mean_velocity: 0.001,  // 1 m/s in km/s
+          velocity_std_dev: 0.3,
+          child_entity: Some(child_id),
+          beta: 2.0, // perfect reflector
+          max_particles: 4096,
+        }],
       };
       let _ = scene_ctx.scene.add_component(comet_int, emitter);
 
@@ -440,7 +453,7 @@ impl SimulationDelegate for SpawnCometDelegate {
     let is_space = matches!(
       event.logical_key.as_ref(),
       winit::keyboard::Key::Named(winit::keyboard::NamedKey::Space)
-      | winit::keyboard::Key::Character(" ")
+        | winit::keyboard::Key::Character(" ")
     );
     if is_space {
       self.jet_emitting = !self.jet_emitting;
@@ -458,12 +471,18 @@ impl SimulationDelegate for SpawnCometDelegate {
         );
       }
       let state_str = if self.jet_emitting { "ON" } else { "OFF" };
-      println!("\x1b[1;36m[JET] Emission {} (particles_per_tick={})\x1b[0m", state_str, new_rate);
+      println!(
+        "\x1b[1;36m[JET] Emission {} (particles_per_tick={})\x1b[0m",
+        state_str, new_rate
+      );
       return;
     }
 
     // ── P key: toggle play/pause ──────────────────────────────────────────
-    if matches!(event.logical_key.as_ref(), winit::keyboard::Key::Character("p") | winit::keyboard::Key::Character("P")) {
+    if matches!(
+      event.logical_key.as_ref(),
+      winit::keyboard::Key::Character("p") | winit::keyboard::Key::Character("P")
+    ) {
       let scene = ctx.get_scene(scene_id).unwrap();
       let scene_read = scene.read();
       let was_playing = scene_read.time_state.read().is_playing;
@@ -476,7 +495,10 @@ impl SimulationDelegate for SpawnCometDelegate {
     // ── J key: move jet between sun-facing and dark-side positions ───────
     // Comet at (0.01,0,0) AU, Sun at origin → sun direction = (-1,0,0)
     // Sun-facing: lat=20°, lon=170°  |  Dark side: lat=20°, lon=350°
-    if matches!(event.logical_key.as_ref(), winit::keyboard::Key::Character("j") | winit::keyboard::Key::Character("J")) {
+    if matches!(
+      event.logical_key.as_ref(),
+      winit::keyboard::Key::Character("j") | winit::keyboard::Key::Character("J")
+    ) {
       self.jet_sunlit = !self.jet_sunlit;
       let (lat_deg, lon_deg): (f32, f32) = if self.jet_sunlit {
         (20.0, 170.0) // sun-facing
@@ -501,16 +523,30 @@ impl SimulationDelegate for SpawnCometDelegate {
         Some(m) => m,
         None => return,
       };
-      let comet_scale = scene_read.scene.with_component(
-        comet_int,
-        |t: &aethervk_core_rlib::scene::TransformComponent| t.scale.x(),
-      ).unwrap_or(1.0);
+      let comet_scale = scene_read
+        .scene
+        .with_component(
+          comet_int,
+          |t: &aethervk_core_rlib::scene::TransformComponent| t.scale.x(),
+        )
+        .unwrap_or(1.0);
 
-      let bounding_sphere = mesh_arc.vertices.iter()
-        .map(|v| (v.position[0]*v.position[0] + v.position[1]*v.position[1] + v.position[2]*v.position[2]).sqrt())
+      let bounding_sphere = mesh_arc
+        .vertices
+        .iter()
+        .map(|v| {
+          (v.position[0] * v.position[0]
+            + v.position[1] * v.position[1]
+            + v.position[2] * v.position[2])
+            .sqrt()
+        })
         .fold(0.0_f32, f32::max)
         .max(0.01);
-      println!("[JET-J] BVH available: {}, bounding_sphere: {:.4}", mesh_arc.bvh.is_some(), bounding_sphere);
+      println!(
+        "[JET-J] BVH available: {}, bounding_sphere: {:.4}",
+        mesh_arc.bvh.is_some(),
+        bounding_sphere
+      );
 
       let dir_z = lat_rad.sin();
       let dir_x = lat_rad.cos() * lon_rad.cos();
@@ -519,7 +555,15 @@ impl SimulationDelegate for SpawnCometDelegate {
 
       let ray_orig = dir * (bounding_sphere * 2.0);
       let ray_dir = Vec3f32::from_components(-dir.x(), -dir.y(), -dir.z());
-      println!("[JET-J] ray_orig=({:.4},{:.4},{:.4}) ray_dir=({:.4},{:.4},{:.4})", ray_orig.x(), ray_orig.y(), ray_orig.z(), ray_dir.x(), ray_dir.y(), ray_dir.z());
+      println!(
+        "[JET-J] ray_orig=({:.4},{:.4},{:.4}) ray_dir=({:.4},{:.4},{:.4})",
+        ray_orig.x(),
+        ray_orig.y(),
+        ray_orig.z(),
+        ray_dir.x(),
+        ray_dir.y(),
+        ray_dir.z()
+      );
 
       let (hit_pt, hit_normal, bvh_hit) = if let Some(ref bvh) = mesh_arc.bvh {
         match bvh.raycast(ray_orig, ray_dir, &mesh_arc.vertices, &mesh_arc.indices) {
@@ -533,7 +577,10 @@ impl SimulationDelegate for SpawnCometDelegate {
         let pt = dir * bounding_sphere;
         ([pt.x(), pt.y(), pt.z()], [dir.x(), dir.y(), dir.z()], false)
       };
-      println!("[JET-J] BVH hit: {}, hit_pt=({:.6},{:.6},{:.6}), hit_normal=({:.6},{:.6},{:.6})", bvh_hit, hit_pt[0], hit_pt[1], hit_pt[2], hit_normal[0], hit_normal[1], hit_normal[2]);
+      println!(
+        "[JET-J] BVH hit: {}, hit_pt=({:.6},{:.6},{:.6}), hit_normal=({:.6},{:.6},{:.6})",
+        bvh_hit, hit_pt[0], hit_pt[1], hit_pt[2], hit_normal[0], hit_normal[1], hit_normal[2]
+      );
 
       // Update EmissionCircle lat/lon and cached point
       let mut child_entity = None;
@@ -560,12 +607,21 @@ impl SimulationDelegate for SpawnCometDelegate {
             t.scale = Vec3f32::from_components(sphere_scale, sphere_scale, sphere_scale);
           },
         );
-        println!("[JET-J] child_id={:?} updated={:?} sphere_scale={:.6}", child_id, updated.is_some(), sphere_scale);
+        println!(
+          "[JET-J] child_id={:?} updated={:?} sphere_scale={:.6}",
+          child_id,
+          updated.is_some(),
+          sphere_scale
+        );
       } else {
         println!("[JET-J] WARNING: no child_entity found in EmissionCircle!");
       }
 
-      let side = if self.jet_sunlit { "SUN-FACING" } else { "DARK SIDE" };
+      let side = if self.jet_sunlit {
+        "SUN-FACING"
+      } else {
+        "DARK SIDE"
+      };
       println!(
         "\x1b[1;35m[JET] Moved to {} (lat={}°, lon={}°) hit=({:.3},{:.3},{:.3})\x1b[0m",
         side, lat_deg, lon_deg, hit_pt[0], hit_pt[1], hit_pt[2]
@@ -710,22 +766,22 @@ impl SimulationDelegate for SpawnCometDelegate {
         use core::sync::atomic::{AtomicU64, Ordering};
         static FRAME_COUNTER: AtomicU64 = AtomicU64::new(0);
         let frame = FRAME_COUNTER.fetch_add(1, Ordering::Relaxed);
-        if frame % 12000 == 0 {
-          let (pitch, yaw) = t.rotation.to_pitch_yaw();
-          println!(
-            "[CAMERA] Frame {} | Pos: ({:.6}, {:.6}, {:.6}) | Rot Quat: (w={:.4}, x={:.4}, y={:.4}, z={:.4}) | Euler: (pitch={:.2}°, yaw={:.2}°)",
-            frame,
-            t.position.x(),
-            t.position.y(),
-            t.position.z(),
-            t.rotation.0.w(),
-            t.rotation.0.x(),
-            t.rotation.0.y(),
-            t.rotation.0.z(),
-            pitch.to_degrees(),
-            yaw.to_degrees()
-          );
-        }
+        // if frame % 12000 == 0 {
+        //   let (pitch, yaw) = t.rotation.to_pitch_yaw();
+        //   println!(
+        //     "[CAMERA] Frame {} | Pos: ({:.6}, {:.6}, {:.6}) | Rot Quat: (w={:.4}, x={:.4}, y={:.4}, z={:.4}) | Euler: (pitch={:.2}°, yaw={:.2}°)",
+        //     frame,
+        //     t.position.x(),
+        //     t.position.y(),
+        //     t.position.z(),
+        //     t.rotation.0.w(),
+        //     t.rotation.0.x(),
+        //     t.rotation.0.y(),
+        //     t.rotation.0.z(),
+        //     pitch.to_degrees(),
+        //     yaw.to_degrees()
+        //   );
+        // }
       }
     }
   }

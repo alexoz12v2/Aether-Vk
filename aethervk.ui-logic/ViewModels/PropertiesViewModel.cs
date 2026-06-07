@@ -75,7 +75,9 @@ public partial class PropertiesViewModel
     _componentRules.Add(new TransformEditableRule());
     _componentRules.Add(new CometBvhRefreshRule(_runtimeService));
     _componentRules.Add(new EpaRefreshRule(_runtimeService, _breadcrumbService));
-    _componentRules.Add(new ParticleEmitterCirclesComponentRule(_runtimeService, _breadcrumbService));
+    _componentRules.Add(
+      new ParticleEmitterCirclesComponentRule(_runtimeService, _breadcrumbService)
+    );
 
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
     Timeline.PropertyChanged += (s, e) =>

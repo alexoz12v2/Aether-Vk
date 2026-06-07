@@ -36,8 +36,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
 
   public void PlaySound(AvkSoundEvent soundEvent, AvkAudioParams audioParams)
   {
-      if (_simulationContext == IntPtr.Zero) return;
-      NativeInterop.avkSimulationContext_playSoundEvent(_simulationContext, soundEvent, audioParams);
+    if (_simulationContext == IntPtr.Zero)
+      return;
+    NativeInterop.avkSimulationContext_playSoundEvent(_simulationContext, soundEvent, audioParams);
   }
 
   // Keep a weak reference to the instance so we don't artificially keep it alive
@@ -2560,7 +2561,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
     {
       double startUnix = start.ToUnixTimeMilliseconds() / 1000.0;
       double endUnix = end.ToUnixTimeMilliseconds() / 1000.0;
-      NativeInterop.avkSimulationContext_setEpochRange(_simulationContext, sceneId, startUnix, endUnix);
+      NativeInterop.avkSimulationContext_setEpochRange(
+        _simulationContext,
+        sceneId,
+        startUnix,
+        endUnix
+      );
     }
   }
 
@@ -2577,7 +2583,10 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
     double endUnix = end.ToUnixTimeMilliseconds() / 1000.0;
 
     return NativeInterop.avkSimulationContext_checkAlmanacCoverage(
-      _simulationContext, cometSpkId, startUnix, endUnix
+      _simulationContext,
+      cometSpkId,
+      startUnix,
+      endUnix
     );
   }
 
@@ -2588,18 +2597,28 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
   /// record number 90000702 vs actual NAIF ID 1000012 for 67P).
   /// Does NOT modify the main simulation almanac.
   /// </summary>
-  public (bool covers, DateTimeOffset? domainStart, DateTimeOffset? domainEnd, int discoveredNaifId)
-    ProbeSpkFile(string path, int spkId, DateTimeOffset start, DateTimeOffset end)
+  public (
+    bool covers,
+    DateTimeOffset? domainStart,
+    DateTimeOffset? domainEnd,
+    int discoveredNaifId
+  ) ProbeSpkFile(string path, int spkId, DateTimeOffset start, DateTimeOffset end)
   {
     double startUnix = start.ToUnixTimeMilliseconds() / 1000.0;
     double endUnix = end.ToUnixTimeMilliseconds() / 1000.0;
 
     bool covers = NativeInterop.avkSimulationContext_probeSpkFile(
-      path, spkId, startUnix, endUnix,
-      out double domainStartUnix, out double domainEndUnix,
-      out int discoveredNaifId);
+      path,
+      spkId,
+      startUnix,
+      endUnix,
+      out double domainStartUnix,
+      out double domainEndUnix,
+      out int discoveredNaifId
+    );
 
-    DateTimeOffset? ds = null, de = null;
+    DateTimeOffset? ds = null,
+      de = null;
     if (domainStartUnix != 0.0 || domainEndUnix != 0.0)
     {
       ds = DateTimeOffset.FromUnixTimeMilliseconds((long)(domainStartUnix * 1000.0));
@@ -3172,7 +3191,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
 
         float scale = boundingRadius * circle.CircleRadiusKm;
         float baseOpacity = 0.8f;
-        
+
         NativeInterop.avkSimulationContext_addTransformComponent(
           _simulationContext,
           sceneId,
@@ -3641,8 +3660,15 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
         if (!state.EntityMap.ContainsKey(id))
         {
           string entityName = $"Entity_{id}";
-          if (NativeInterop.avkSimulationContext_getEntityName(
-                _simulationContext, sceneId, id, namePtr, 256))
+          if (
+            NativeInterop.avkSimulationContext_getEntityName(
+              _simulationContext,
+              sceneId,
+              id,
+              namePtr,
+              256
+            )
+          )
           {
             string? nativeName = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(namePtr);
             if (!string.IsNullOrEmpty(nativeName))

@@ -28,7 +28,13 @@ public class IauRotationMathTests
   /// Returns the ECLIPJ2000-space direction of the body axis.
   /// </summary>
   private static (double x, double y, double z) PipelineTransform(
-    double ra, double dec, double pm, double bx, double by, double bz)
+    double ra,
+    double dec,
+    double pm,
+    double bx,
+    double by,
+    double bz
+  )
   {
     var (w, x, y, z) = IauRotationMath.IauToQuaternion(ra, dec, pm);
     var (p, yaw, r) = IauRotationMath.QuaternionToGizmoEuler(w, x, y, z);
@@ -40,7 +46,14 @@ public class IauRotationMathTests
   /// Helper: rotate body-axis directly using the quaternion rotation matrix.
   /// </summary>
   private static (double x, double y, double z) QuaternionTransform(
-    double w, double qx, double qy, double qz, double bx, double by, double bz)
+    double w,
+    double qx,
+    double qy,
+    double qz,
+    double bx,
+    double by,
+    double bz
+  )
   {
     double r00 = 1 - 2 * (qy * qy + qz * qz);
     double r01 = 2 * (qx * qy - w * qz);
@@ -186,13 +199,19 @@ public class IauRotationMathTests
     double eclipticDec = 90.0 - IauRotationMath.ObliquityDeg;
 
     var (xx, xy, xz) = PipelineTransform(90, eclipticDec, 180, 1, 0, 0);
-    Assert.Equal(1.0, xx, Tol); Assert.Equal(0.0, xy, Tol); Assert.Equal(0.0, xz, Tol);
+    Assert.Equal(1.0, xx, Tol);
+    Assert.Equal(0.0, xy, Tol);
+    Assert.Equal(0.0, xz, Tol);
 
     var (yx, yy, yz) = PipelineTransform(90, eclipticDec, 180, 0, 1, 0);
-    Assert.Equal(0.0, yx, Tol); Assert.Equal(1.0, yy, Tol); Assert.Equal(0.0, yz, Tol);
+    Assert.Equal(0.0, yx, Tol);
+    Assert.Equal(1.0, yy, Tol);
+    Assert.Equal(0.0, yz, Tol);
 
     var (zx, zy, zz) = PipelineTransform(90, eclipticDec, 180, 0, 0, 1);
-    Assert.Equal(0.0, zx, Tol); Assert.Equal(0.0, zy, Tol); Assert.Equal(1.0, zz, Tol);
+    Assert.Equal(0.0, zx, Tol);
+    Assert.Equal(0.0, zy, Tol);
+    Assert.Equal(1.0, zz, Tol);
   }
 
   // ─── Orthogonality check ───────────────────────────────────────────────────

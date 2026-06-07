@@ -39,6 +39,9 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for CpuDeviceBuffer<T> {
   fn address(&self) -> u64 {
     todo!()
   }
+  unsafe fn mapped_slice(&self) -> Option<&[T]> {
+    todo!()
+  }
 }
 
 pub struct CpuDeviceList<T> {
@@ -58,6 +61,9 @@ impl<T: Copy + Send + Sync> DeviceBuffer<T> for CpuDeviceList<T> {
     todo!()
   }
   fn address(&self) -> u64 {
+    todo!()
+  }
+  unsafe fn mapped_slice(&self) -> Option<&[T]> {
     todo!()
   }
 }
@@ -108,6 +114,12 @@ impl Kernels for CpuKernels {
   }
   fn wait_sync(&self, _: &CommandBufferSyncInfo) -> Result<(), EngineError> {
     todo!()
+  }
+  fn wait_idle(&self) -> Result<(), EngineError> {
+    todo!()
+  }
+  fn is_cpu_device(&self) -> bool {
+    true
   }
   fn refit_motion_blas(
     &self,

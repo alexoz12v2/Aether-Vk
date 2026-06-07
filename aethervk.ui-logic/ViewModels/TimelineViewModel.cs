@@ -252,8 +252,13 @@ public partial class TimelineViewModel
         var emitter = comet
           .Components.OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>()
           .FirstOrDefault();
-        
-        if (emitter != null && emitter.Circles.Any(c => c.ParticlesPerTick > 0 && c.CircleRadiusKm > 0 && c.Mass > 0 && c.TTL > 0))
+
+        if (
+          emitter != null
+          && emitter.Circles.Any(c =>
+            c.ParticlesPerTick > 0 && c.CircleRadiusKm > 0 && c.Mass > 0 && c.TTL > 0
+          )
+        )
         {
           hasFullyConfiguredJet = true;
         }

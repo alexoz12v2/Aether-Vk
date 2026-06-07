@@ -8,7 +8,9 @@ using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.Models;
 
-public partial class TransformComponent : NativeComponent, CommunityToolkit.Mvvm.Messaging.IRecipient<AetherVk.Logic.Messages.TransformUpdatedFromNativeMessage>
+public partial class TransformComponent
+  : NativeComponent,
+    CommunityToolkit.Mvvm.Messaging.IRecipient<AetherVk.Logic.Messages.TransformUpdatedFromNativeMessage>
 {
   public TransformComponent()
   {
@@ -22,6 +24,7 @@ public partial class TransformComponent : NativeComponent, CommunityToolkit.Mvvm
       PullFromNative();
     }
   }
+
   [ObservableProperty]
   private string _unitLabel = "AU";
 
@@ -87,8 +90,12 @@ public partial class TransformComponent : NativeComponent, CommunityToolkit.Mvvm
 
   private static readonly HashSet<string> _uiOnlyFields = new()
   {
-    nameof(IsPositionEditable), nameof(IsRotationEditable), nameof(IsScaleEditable),
-    nameof(PositionLockedReason), nameof(RotationLockedReason), nameof(ScaleLockedReason),
+    nameof(IsPositionEditable),
+    nameof(IsRotationEditable),
+    nameof(IsScaleEditable),
+    nameof(PositionLockedReason),
+    nameof(RotationLockedReason),
+    nameof(ScaleLockedReason),
     nameof(SuspendNotifications),
   };
 
@@ -454,7 +461,8 @@ public partial class CameraComponent : NativeComponent
   // Near must be positive and strictly less than Far.
   partial void OnNearPlaneChanged(float value)
   {
-    if (_isClamping) return;
+    if (_isClamping)
+      return;
     try
     {
       _isClamping = true;
@@ -474,7 +482,8 @@ public partial class CameraComponent : NativeComponent
   // Far must be strictly greater than Near and at most 10 000 AU.
   partial void OnFarPlaneChanged(float value)
   {
-    if (_isClamping) return;
+    if (_isClamping)
+      return;
     try
     {
       _isClamping = true;
@@ -828,10 +837,26 @@ public partial class EmissionCircleItem : ObservableObject
   }
 
   /// <summary>Byte-range accessors for ColorPicker binding.</summary>
-  public byte ColorByteR { get => (byte)Math.Max(0, Math.Min(255, (int)(ColorR * 255f))); set => ColorR = value / 255f; }
-  public byte ColorByteG { get => (byte)Math.Max(0, Math.Min(255, (int)(ColorG * 255f))); set => ColorG = value / 255f; }
-  public byte ColorByteB { get => (byte)Math.Max(0, Math.Min(255, (int)(ColorB * 255f))); set => ColorB = value / 255f; }
-  public byte ColorByteA { get => (byte)Math.Max(0, Math.Min(255, (int)(ColorA * 255f))); set => ColorA = value / 255f; }
+  public byte ColorByteR
+  {
+    get => (byte)Math.Max(0, Math.Min(255, (int)(ColorR * 255f)));
+    set => ColorR = value / 255f;
+  }
+  public byte ColorByteG
+  {
+    get => (byte)Math.Max(0, Math.Min(255, (int)(ColorG * 255f)));
+    set => ColorG = value / 255f;
+  }
+  public byte ColorByteB
+  {
+    get => (byte)Math.Max(0, Math.Min(255, (int)(ColorB * 255f)));
+    set => ColorB = value / 255f;
+  }
+  public byte ColorByteA
+  {
+    get => (byte)Math.Max(0, Math.Min(255, (int)(ColorA * 255f)));
+    set => ColorA = value / 255f;
+  }
 
   // ── Emission Params ─────────────────────────────────────────────────────────
   [ObservableProperty]
@@ -1365,13 +1390,15 @@ public partial class PhysicalMeshComponent : NativeComponent
     get
     {
       double r_m = RadiusKm * 1000.0;
-      if (r_m <= 0) return 0;
+      if (r_m <= 0)
+        return 0;
       double volume = (4.0 / 3.0) * Math.PI * r_m * r_m * r_m;
       return MassKg / volume;
     }
   }
 
   partial void OnMassKgChanged(double value) => OnPropertyChanged(nameof(DensityKgM3));
+
   partial void OnRadiusKmChanged(double value) => OnPropertyChanged(nameof(DensityKgM3));
 
   // ── IAU Rotational Model ─────────────────────────────────────────────────
@@ -1402,12 +1429,16 @@ public partial class PhysicalMeshComponent : NativeComponent
 
   private static readonly HashSet<string> _iauFields = new()
   {
-    nameof(PoleRaDeg), nameof(PoleDecDeg), nameof(PrimeMeridianDeg),
-    nameof(PoleRaRateDeg), nameof(PoleDecRateDeg), nameof(RotationRateDeg),
+    nameof(PoleRaDeg),
+    nameof(PoleDecDeg),
+    nameof(PrimeMeridianDeg),
+    nameof(PoleRaRateDeg),
+    nameof(PoleDecRateDeg),
+    nameof(RotationRateDeg),
   };
 
-  protected override bool ShouldPushToNative(string? propertyName)
-    => propertyName != null && (_iauFields.Contains(propertyName) || propertyName == nameof(RadiusKm));
+  protected override bool ShouldPushToNative(string? propertyName) =>
+    propertyName != null && (_iauFields.Contains(propertyName) || propertyName == nameof(RadiusKm));
 
   protected override void PushToNativeImpl()
   {
@@ -1415,7 +1446,10 @@ public partial class PhysicalMeshComponent : NativeComponent
       return;
 
     // 1. Get current simulation time as Julian Date for the rotational model evaluation
-    double currentSimTimeTai = NativeInterop.avkSimulationContext_getSimulationTime(SimulationContext, SceneId);
+    double currentSimTimeTai = NativeInterop.avkSimulationContext_getSimulationTime(
+      SimulationContext,
+      SceneId
+    );
     // Convert TAI seconds since J1900 to Julian Date
     // J1900 = JD 2415020.0, TAI seconds -> days
     double currentJd = 2415020.0 + (currentSimTimeTai / 86400.0);
@@ -1442,17 +1476,30 @@ public partial class PhysicalMeshComponent : NativeComponent
       IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
       try
       {
-        if (NativeInterop.avkSimulationContext_getComponent(
-              SimulationContext, SceneId, EntityId, 1, ptr))
+        if (
+          NativeInterop.avkSimulationContext_getComponent(
+            SimulationContext,
+            SceneId,
+            EntityId,
+            1,
+            ptr
+          )
+        )
         {
-          var data = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiTransform>(ptr);
+          var data =
+            System.Runtime.InteropServices.Marshal.PtrToStructure<NativeInterop.FfiTransform>(ptr);
           float meshScale = (float)(RadiusKm / _boundingSphere);
           data.Sx = meshScale;
           data.Sy = meshScale;
           data.Sz = meshScale;
           System.Runtime.InteropServices.Marshal.StructureToPtr(data, ptr, false);
           NativeInterop.avkSimulationContext_setComponent(
-            SimulationContext, SceneId, EntityId, 1, ptr);
+            SimulationContext,
+            SceneId,
+            EntityId,
+            1,
+            ptr
+          );
         }
       }
       finally
@@ -1463,7 +1510,11 @@ public partial class PhysicalMeshComponent : NativeComponent
 
     // 3b. Sync ColliderComponent and SphereGizmoComponent radius
     NativeInterop.avkSimulationContext_syncColliderRadius(
-      SimulationContext, SceneId, EntityId, (float)RadiusKm);
+      SimulationContext,
+      SceneId,
+      EntityId,
+      (float)RadiusKm
+    );
 
     // 4. Notify C# TransformComponent to re-pull values
     CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
@@ -1471,8 +1522,7 @@ public partial class PhysicalMeshComponent : NativeComponent
     );
 
     // 5. Trigger jet recomputation since the mesh orientation changed
-    NativeInterop.avkSimulationContext_recalculateJetPoints(
-      SimulationContext, SceneId, EntityId);
+    NativeInterop.avkSimulationContext_recalculateJetPoints(SimulationContext, SceneId, EntityId);
   }
 
   protected override void PullFromNativeImpl()
@@ -1520,7 +1570,6 @@ public partial class PhysicalMeshComponent : NativeComponent
     {
       System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
     }
-
   }
 }
 

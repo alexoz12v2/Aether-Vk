@@ -145,30 +145,34 @@ impl Instance {
     #[cfg(debug_assertions)]
     let disable_gpu_av = {
       #[cfg(any(test, feature = "std"))]
-      { std::env::var("AETHERVK_DISABLE_GPU_AV").is_ok() }
+      {
+        std::env::var("AETHERVK_DISABLE_GPU_AV").is_ok()
+      }
       #[cfg(not(any(test, feature = "std")))]
-      { false }
+      {
+        false
+      }
     };
 
     #[cfg(debug_assertions)]
     if cfg!(target_vendor = "apple") || disable_gpu_av {
-      aethervk_oshal_rlib::log!(
-        "Disabling GPU-Assisted/Printf Validation."
-      );
+      aethervk_oshal_rlib::log!("Disabling GPU-Assisted/Printf Validation.");
     } else {
       #[cfg(test)]
       {
         #[cfg(all(test, not(target_vendor = "apple")))]
-        if crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.load(core::sync::atomic::Ordering::Relaxed) {
-            printf_features.push(vk::ValidationFeatureEnableEXT::DEBUG_PRINTF);
+        if crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+          .load(core::sync::atomic::Ordering::Relaxed)
+        {
+          printf_features.push(vk::ValidationFeatureEnableEXT::DEBUG_PRINTF);
         } else {
-            printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
-            printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED_RESERVE_BINDING_SLOT);
+          printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
+          printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED_RESERVE_BINDING_SLOT);
         }
         #[cfg(not(all(test, not(target_vendor = "apple"))))]
         {
-            printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
-            printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED_RESERVE_BINDING_SLOT);
+          printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
+          printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED_RESERVE_BINDING_SLOT);
         }
       }
       #[cfg(not(test))]
@@ -286,12 +290,14 @@ impl Instance {
         let (subgroup_size, is_cpu) = {
           // `props` mutably borrows `subgroup_props` via push_next().  The block
           // scope ends the borrow so we can read `subgroup_props.subgroup_size` next.
-          let mut props =
-            vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup_props);
+          let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup_props);
           unsafe { self.instance.get_physical_device_properties2(physical_device, &mut props) };
           // Cache device type; block scope ends props borrow here.
           let dev_type = props.properties.device_type;
-          (subgroup_props.subgroup_size, dev_type == vk::PhysicalDeviceType::CPU)
+          (
+            subgroup_props.subgroup_size,
+            dev_type == vk::PhysicalDeviceType::CPU,
+          )
         };
         // TODO log
 
@@ -393,15 +399,15 @@ impl Instance {
 
         // e. device is valid, compute its score
         let score: i32 = if is_cpu {
-          1  // CPU device (Lavapipe) — lowest preference
+          1 // CPU device (Lavapipe) — lowest preference
         } else {
           // Query properties again using the non-pNext variant (safe: props was dropped above)
           let props2 = unsafe { self.instance.get_physical_device_properties(physical_device) };
           match props2.device_type {
-            vk::PhysicalDeviceType::DISCRETE_GPU  => 100,
+            vk::PhysicalDeviceType::DISCRETE_GPU => 100,
             vk::PhysicalDeviceType::INTEGRATED_GPU => 50,
-            vk::PhysicalDeviceType::VIRTUAL_GPU   => 20,
-            _                                      => 1,
+            vk::PhysicalDeviceType::VIRTUAL_GPU => 20,
+            _ => 1,
           }
         };
 
@@ -415,7 +421,6 @@ impl Instance {
         if supports_swapchain_maintenance1 && self.has_surface_maintenance1 {
           optional_extensions.insert(utils::OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1);
         }
-
 
         Some(utils::PhysicalDeviceQueryResult {
           physical_device,

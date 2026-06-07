@@ -1134,7 +1134,9 @@ pub unsafe extern "C" fn avkSimulationContext_syncColliderRadius(
   let _ = scene_ctx.scene.with_component_mut(
     internal_id,
     |collider: &mut aethervk_core_rlib::scene::ColliderComponent| {
-      collider.shape = aethervk_core_rlib::scene::ColliderShape::Sphere { radius: new_radius_km };
+      collider.shape = aethervk_core_rlib::scene::ColliderShape::Sphere {
+        radius: new_radius_km,
+      };
     },
   );
 
@@ -1147,7 +1149,9 @@ pub unsafe extern "C" fn avkSimulationContext_syncColliderRadius(
   );
 
   // Mark the static TLAS as dirty so selection raycasts pick up the new bounds
-  scene_ctx.is_static_tlas_dirty.store(true, core::sync::atomic::Ordering::Relaxed);
+  scene_ctx
+    .is_static_tlas_dirty
+    .store(true, core::sync::atomic::Ordering::Relaxed);
 
   true
 }
@@ -1591,25 +1595,28 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
         let origin = dir * start_dist;
         let ray_dir = dir * -1.0;
 
-
         let (pt, norm) = if let Some(ref bvh) = mesh_arc.bvh {
           match bvh.raycast(origin, ray_dir, &mesh_arc.vertices, &mesh_arc.indices) {
-            Some((_t, hit_pt, hit_normal)) => {
-              ([hit_pt.x(), hit_pt.y(), hit_pt.z()],
-               [hit_normal.x(), hit_normal.y(), hit_normal.z()])
-            }
+            Some((_t, hit_pt, hit_normal)) => (
+              [hit_pt.x(), hit_pt.y(), hit_pt.z()],
+              [hit_normal.x(), hit_normal.y(), hit_normal.z()],
+            ),
             None => {
               // Fallback to bounding sphere
               let hit_pt = dir * r;
-              ([hit_pt.x(), hit_pt.y(), hit_pt.z()],
-               [dir.x(), dir.y(), dir.z()])
+              (
+                [hit_pt.x(), hit_pt.y(), hit_pt.z()],
+                [dir.x(), dir.y(), dir.z()],
+              )
             }
           }
         } else {
           // No BVH available — fallback to bounding sphere
           let hit_pt = dir * r;
-          ([hit_pt.x(), hit_pt.y(), hit_pt.z()],
-           [dir.x(), dir.y(), dir.z()])
+          (
+            [hit_pt.x(), hit_pt.y(), hit_pt.z()],
+            [dir.x(), dir.y(), dir.z()],
+          )
         };
         circle.cached_point = Some(pt);
         circle.cached_normal = Some(norm);
@@ -1660,9 +1667,7 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
     let _ = scene_ctx.scene.add_component(new_id, gizmo);
     let _ = scene_ctx.scene.add_component(
       new_id,
-      aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(
-        max_p as usize
-      ),
+      aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(max_p as usize),
     );
 
     // Register the entity so it gets an external ID for C# to reference
@@ -1745,7 +1750,8 @@ pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent
       let c = &circles[i];
       // Resolve internal EntityId to registered external ID for C#
       let ext_child = c.child_entity.map_or(u64::MAX, |internal_id| {
-        scene_ctx.entity_map
+        scene_ctx
+          .entity_map
           .iter()
           .find(|(_, v)| **v == internal_id)
           .map_or(u64::MAX, |(&k, _)| k)
@@ -2248,51 +2254,58 @@ pub unsafe extern "C" fn avkSimulationContext_unloadAlmanacFile(
 
 #[repr(u32)]
 pub enum AvkSoundEvent {
-    UiClick = 0,
-    UiGrab = 1,
-    UiDrop = 2,
-    PhysicsCollisionSoft = 3,
-    PhysicsCollisionHard = 4,
+  UiClick = 0,
+  UiGrab = 1,
+  UiDrop = 2,
+  PhysicsCollisionSoft = 3,
+  PhysicsCollisionHard = 4,
 }
 
 #[repr(u32)]
 pub enum AvkAudioPlaybackMode {
-    MonoSpatial = 0,
-    StereoDirect = 1,
+  MonoSpatial = 0,
+  StereoDirect = 1,
 }
 
 #[repr(C)]
 pub struct AvkAudioParams {
-    pub volume: f32,
-    pub pitch: f32,
-    pub pan: f32,
-    pub mode: AvkAudioPlaybackMode,
+  pub volume: f32,
+  pub pitch: f32,
+  pub pan: f32,
+  pub mode: AvkAudioPlaybackMode,
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn avkSimulationContext_playSoundEvent(
-    ctx: *mut SimulationContext,
-    sound_event: AvkSoundEvent,
-    params: AvkAudioParams,
+  ctx: *mut SimulationContext,
+  sound_event: AvkSoundEvent,
+  params: AvkAudioParams,
 ) {
-    if let Some(ctx_ref) = unsafe { ctx.as_ref() } {
-        let mut mixer = ctx_ref.audio_mixer.write();
-        
-        // For now, map the AvkSoundEvent integer to a generic buffer_id.
-        // Once the WAV files are embedded in the core, we will load them into the 
-        // mixer upon startup and map them accurately here.
-        let buffer_id = sound_event as usize;
-        
-        mixer.play(buffer_id, aethervk_core_rlib::audio::AvkAudioParams {
-            volume: params.volume,
-            pitch: params.pitch,
-            pan: params.pan,
-            mode: match params.mode {
-                AvkAudioPlaybackMode::MonoSpatial => aethervk_core_rlib::audio::AvkAudioPlaybackMode::MonoSpatial,
-                AvkAudioPlaybackMode::StereoDirect => aethervk_core_rlib::audio::AvkAudioPlaybackMode::StereoDirect,
-            },
-        });
-    }
+  if let Some(ctx_ref) = unsafe { ctx.as_ref() } {
+    let mut mixer = ctx_ref.audio_mixer.write();
+
+    // For now, map the AvkSoundEvent integer to a generic buffer_id.
+    // Once the WAV files are embedded in the core, we will load them into the
+    // mixer upon startup and map them accurately here.
+    let buffer_id = sound_event as usize;
+
+    mixer.play(
+      buffer_id,
+      aethervk_core_rlib::audio::AvkAudioParams {
+        volume: params.volume,
+        pitch: params.pitch,
+        pan: params.pan,
+        mode: match params.mode {
+          AvkAudioPlaybackMode::MonoSpatial => {
+            aethervk_core_rlib::audio::AvkAudioPlaybackMode::MonoSpatial
+          }
+          AvkAudioPlaybackMode::StereoDirect => {
+            aethervk_core_rlib::audio::AvkAudioPlaybackMode::StereoDirect
+          }
+        },
+      },
+    );
+  }
 }
 
 #[unsafe(no_mangle)]
@@ -4028,13 +4041,19 @@ pub unsafe extern "C" fn avkSimulationContext_probeSpkFile(
 ) -> bool {
   // Zero out all outputs upfront
   if !out_domain_start_tai_sec.is_null() {
-    unsafe { *out_domain_start_tai_sec = 0.0; }
+    unsafe {
+      *out_domain_start_tai_sec = 0.0;
+    }
   }
   if !out_domain_end_tai_sec.is_null() {
-    unsafe { *out_domain_end_tai_sec = 0.0; }
+    unsafe {
+      *out_domain_end_tai_sec = 0.0;
+    }
   }
   if !out_discovered_naif_id.is_null() {
-    unsafe { *out_discovered_naif_id = 0; }
+    unsafe {
+      *out_discovered_naif_id = 0;
+    }
   }
 
   if path.is_null() {
@@ -4045,19 +4064,28 @@ pub unsafe extern "C" fn avkSimulationContext_probeSpkFile(
   let end_epoch = anise::time::Epoch::from_unix_seconds(end_tai_sec);
   let (covers, domain, discovered_id) =
     aethervk_core_rlib::simulation::almanac::AlmanacPackedData::probe_spk_file_with_domain(
-      path_str, spk_id, start_epoch, end_epoch,
+      path_str,
+      spk_id,
+      start_epoch,
+      end_epoch,
     );
 
   if let Some((ds, de)) = domain {
     if !out_domain_start_tai_sec.is_null() {
-      unsafe { *out_domain_start_tai_sec = ds.to_unix_seconds(); }
+      unsafe {
+        *out_domain_start_tai_sec = ds.to_unix_seconds();
+      }
     }
     if !out_domain_end_tai_sec.is_null() {
-      unsafe { *out_domain_end_tai_sec = de.to_unix_seconds(); }
+      unsafe {
+        *out_domain_end_tai_sec = de.to_unix_seconds();
+      }
     }
   }
   if !out_discovered_naif_id.is_null() {
-    unsafe { *out_discovered_naif_id = discovered_id; }
+    unsafe {
+      *out_discovered_naif_id = discovered_id;
+    }
   }
 
   covers

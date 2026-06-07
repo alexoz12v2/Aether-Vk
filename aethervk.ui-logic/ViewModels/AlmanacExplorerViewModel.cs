@@ -168,7 +168,12 @@ public partial class AlmanacExplorerViewModel : TabItemViewModel
       if (success)
       {
         _console.Log($"[AlmanacExplorer] Loaded {item.FileName} successfully.");
-        var msg = new AetherVk.Logic.Messages.AlmanacUpdatedMessage { SceneId = 0, FilePath = item.FilePath, WasLoaded = true };
+        var msg = new AetherVk.Logic.Messages.AlmanacUpdatedMessage
+        {
+          SceneId = 0,
+          FilePath = item.FilePath,
+          WasLoaded = true,
+        };
         WeakReferenceMessenger.Default.Send(msg);
       }
       else
@@ -197,7 +202,12 @@ public partial class AlmanacExplorerViewModel : TabItemViewModel
       if (success)
       {
         _console.Log($"[AlmanacExplorer] Unloaded {item.FileName} successfully.");
-        var msg = new AetherVk.Logic.Messages.AlmanacUpdatedMessage { SceneId = 0, FilePath = item.FilePath, WasLoaded = false };
+        var msg = new AetherVk.Logic.Messages.AlmanacUpdatedMessage
+        {
+          SceneId = 0,
+          FilePath = item.FilePath,
+          WasLoaded = false,
+        };
         WeakReferenceMessenger.Default.Send(msg);
       }
       else

@@ -225,9 +225,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     dt: timeus_t,
   ) -> EngineResult<()> {
     if self.target == MockTargetShader::IntegrateBodiesP3 {
-      self
-        .base
-        .imex_integrate_bodies_p3(cmd, bodies, wrenches, emitters, frames, n_bodies, n_emitters, dt)?;
+      self.base.imex_integrate_bodies_p3(
+        cmd, bodies, wrenches, emitters, frames, n_bodies, n_emitters, dt,
+      )?;
     }
     Ok(())
   }

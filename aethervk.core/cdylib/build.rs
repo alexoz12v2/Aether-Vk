@@ -25,7 +25,9 @@ fn main() {
     if !cfg!(target_os = "linux") {
       panic!("VULKAN_SDK environment variable is required on Windows and macOS!");
     } else {
-      println!("cargo:warning=Proceeding without VULKAN_SDK on Linux (assuming native system packages like libvulkan-dev are used).");
+      println!(
+        "cargo:warning=Proceeding without VULKAN_SDK on Linux (assuming native system packages like libvulkan-dev are used)."
+      );
     }
   }
 

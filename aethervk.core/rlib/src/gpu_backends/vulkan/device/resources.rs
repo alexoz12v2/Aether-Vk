@@ -424,7 +424,10 @@ impl DiscardPool {
   /// Used by device cleanup routines
   pub fn destroy_discarded_resources_all(&self, device: &ash::Device) {
     let items = self.pop_ready_items(u64::MAX);
-    aethervk_oshal_rlib::log!("destroy_discarded_resources_all popping {} items", items.len());
+    aethervk_oshal_rlib::log!(
+      "destroy_discarded_resources_all popping {} items",
+      items.len()
+    );
     Self::destroy_items_lock_free(device, items);
   }
 }
@@ -931,16 +934,24 @@ impl SunRenderResource {
   ) {
     if let Some(mut img) = self.image.take() {
       discard_pool.discard_image_view(img.image_view.get(), frame_timeline);
-      discard_pool.discard_image(allocator.get_raw(), img.image.get(), img.allocation, frame_timeline);
+      discard_pool.discard_image(
+        allocator.get_raw(),
+        img.image.get(),
+        img.allocation,
+        frame_timeline,
+      );
     }
     if let Some(layout) = self.compute_pipeline_layout.take() {
       discard_pool.discard_pipeline_layout(layout, frame_timeline);
     }
     if let Some(pool) = self.compute_descriptor_pool.take() {
       discard_pool.discard_type_erased(
-        crate::gpu_backends::vulkan::device::resources::FunctionalDeviceResource::new(pool, |pool, device| unsafe {
-          device.destroy_descriptor_pool(pool, None);
-        }),
+        crate::gpu_backends::vulkan::device::resources::FunctionalDeviceResource::new(
+          pool,
+          |pool, device| unsafe {
+            device.destroy_descriptor_pool(pool, None);
+          },
+        ),
         frame_timeline,
       );
     }

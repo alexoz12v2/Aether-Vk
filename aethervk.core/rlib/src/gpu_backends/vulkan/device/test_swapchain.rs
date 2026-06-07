@@ -393,7 +393,9 @@ mod tests {
     .unwrap();
 
     for _ in 0..20 {
-      let acq = engine.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+      let acq = engine
+        .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+        .unwrap();
       unsafe {
         let (image, _, present_sem) = engine.get_image_resources(acq.image_index as usize);
         let (acquire_sem, submit_fence) = engine.get_frame_resources(acq.frame_index as usize);
@@ -450,7 +452,9 @@ mod tests {
     .unwrap();
 
     println!("Acquiring acq1...");
-    let acq1 = engine.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+    let acq1 = engine
+      .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+      .unwrap();
 
     println!("Canceling image...");
     engine
@@ -463,7 +467,9 @@ mod tests {
       .unwrap();
 
     println!("Acquiring acq2...");
-    let acq2 = engine.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+    let acq2 = engine
+      .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+      .unwrap();
     assert_ne!(acq1.frame_index, acq2.frame_index);
 
     println!("Simulating frame...");
@@ -529,7 +535,9 @@ mod tests {
     )
     .unwrap();
 
-    let acq = engine.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+    let acq = engine
+      .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+      .unwrap();
     unsafe {
       let (image, _, present_sem) = engine.get_image_resources(acq.image_index as usize);
       let (acquire_sem, submit_fence) = engine.get_frame_resources(acq.frame_index as usize);
@@ -561,7 +569,9 @@ mod tests {
       )
       .unwrap();
 
-    let acq2 = engine.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+    let acq2 = engine
+      .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+      .unwrap();
     unsafe {
       let (image, _, present_sem) = engine.get_image_resources(acq2.image_index as usize);
       let (acquire_sem, submit_fence) = engine.get_frame_resources(acq2.frame_index as usize);
@@ -626,7 +636,9 @@ mod tests {
     )
     .unwrap();
 
-    let acq = engine.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+    let acq = engine
+      .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+      .unwrap();
     unsafe {
       let (image, _, _) = engine.get_image_resources(acq.image_index as usize);
       let (acquire_sem, submit_fence) = engine.get_frame_resources(acq.frame_index as usize);
@@ -721,7 +733,9 @@ mod tests {
     .unwrap();
 
     for _ in 0..20 {
-      let acq = engine.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+      let acq = engine
+        .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+        .unwrap();
       unsafe {
         let (image, _, present_sem) = engine.get_image_resources(acq.image_index as usize);
         let (acquire_sem, submit_fence) = engine.get_frame_resources(acq.frame_index as usize);
@@ -754,7 +768,9 @@ mod tests {
       )
       .unwrap();
 
-    let acq2 = engine.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+    let acq2 = engine
+      .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+      .unwrap();
     unsafe {
       let (image, _, present_sem) = engine.get_image_resources(acq2.image_index as usize);
       let (acquire_sem, submit_fence) = engine.get_frame_resources(acq2.frame_index as usize);
@@ -877,7 +893,9 @@ mod tests {
 
     for _ in 0..5 {
       // VP1
-      let acq1 = vp1.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+      let acq1 = vp1
+        .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+        .unwrap();
       unsafe {
         let (image, _, present_sem) = vp1.get_image_resources(acq1.image_index as usize);
         let (acquire_sem, submit_fence) = vp1.get_frame_resources(acq1.frame_index as usize);
@@ -903,7 +921,9 @@ mod tests {
       }
 
       // VP2
-      let acq2 = vp2.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+      let acq2 = vp2
+        .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+        .unwrap();
       unsafe {
         let (image, _, present_sem) = vp2.get_image_resources(acq2.image_index as usize);
         let (acquire_sem, submit_fence) = vp2.get_frame_resources(acq2.frame_index as usize);
@@ -929,7 +949,9 @@ mod tests {
       }
 
       // MV
-      let acq3 = mv.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+      let acq3 = mv
+        .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+        .unwrap();
       unsafe {
         let (image, _, present_sem) = mv.get_image_resources(acq3.image_index as usize);
         let (acquire_sem, submit_fence) = mv.get_frame_resources(acq3.frame_index as usize);
@@ -986,7 +1008,9 @@ mod tests {
     .unwrap();
 
     // Render after resize
-    let acq1 = vp1.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+    let acq1 = vp1
+      .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+      .unwrap();
     unsafe {
       let (image, _, present_sem) = vp1.get_image_resources(acq1.image_index as usize);
       let (acquire_sem, submit_fence) = vp1.get_frame_resources(acq1.frame_index as usize);
@@ -1084,7 +1108,9 @@ mod tests {
           .unwrap();
       }
 
-      let acq = engine.acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback).unwrap();
+      let acq = engine
+        .acquire_next_image(&log_device, vk::Semaphore::null(), &mut rollback)
+        .unwrap();
       unsafe {
         let (image, _, present_sem) = engine.get_image_resources(acq.image_index as usize);
         let (acquire_sem, submit_fence) = engine.get_frame_resources(acq.frame_index as usize);

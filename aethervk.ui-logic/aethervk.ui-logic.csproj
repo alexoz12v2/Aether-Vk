@@ -100,17 +100,20 @@
     >
 
     <!-- System fallbacks for Linux -->
-    <VkLinuxLib Condition="'$(VkLinuxLib)' == '' And Exists('/usr/lib/x86_64-linux-gnu/libvulkan.so')"
+    <VkLinuxLib
+      Condition="'$(VkLinuxLib)' == '' And Exists('/usr/lib/x86_64-linux-gnu/libvulkan.so')"
       >/usr/lib/x86_64-linux-gnu</VkLinuxLib
     >
-    <VkLinuxLib Condition="'$(VkLinuxLib)' == '' And Exists('/usr/lib/aarch64-linux-gnu/libvulkan.so')"
+    <VkLinuxLib
+      Condition="'$(VkLinuxLib)' == '' And Exists('/usr/lib/aarch64-linux-gnu/libvulkan.so')"
       >/usr/lib/aarch64-linux-gnu</VkLinuxLib
     >
     <VkLinuxLib Condition="'$(VkLinuxLib)' == '' And Exists('/usr/lib/libvulkan.so')"
       >/usr/lib</VkLinuxLib
     >
-      
-    <VkLinuxShare Condition="'$(VkLinuxShare)' == '' And Exists('/usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json')"
+
+    <VkLinuxShare
+      Condition="'$(VkLinuxShare)' == '' And Exists('/usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json')"
       >/usr/share/vulkan</VkLinuxShare
     >
 

@@ -226,18 +226,21 @@ impl PhysicsScene {
     // entities fall back to index 0 as if it were the macro frame, breaking the
     // broad-phase cross-LCA pipeline (frames.capacity() ends up = 1).
     if !gpu_frames.iter().any(|f| f.frame_type == 0) {
-      gpu_frames.insert(0, GpuReferenceFrame {
-        center_pos: [0.0, 0.0, 0.0],
-        scale: 1.0,
-        center_vel: [0.0, 0.0, 0.0],
-        soi_radius: f32::MAX,
-        frame_type: 0,
-        parent_frame_idx: u32::MAX,
-        bvh_root_index: u32::MAX,
-        _pad0: 0,
-        entity_id_raw: 0,
-        frame_bda: 0,
-      });
+      gpu_frames.insert(
+        0,
+        GpuReferenceFrame {
+          center_pos: [0.0, 0.0, 0.0],
+          scale: 1.0,
+          center_vel: [0.0, 0.0, 0.0],
+          soi_radius: f32::MAX,
+          frame_type: 0,
+          parent_frame_idx: u32::MAX,
+          bvh_root_index: u32::MAX,
+          _pad0: 0,
+          entity_id_raw: 0,
+          frame_bda: 0,
+        },
+      );
       // Re-index both gpu_frames parent pointers and frame_map indices since we
       // inserted a new frame at position 0, shifting everything else by 1.
       for frame in gpu_frames.iter_mut().skip(1) {
@@ -249,8 +252,6 @@ impl PhysicsScene {
         *idx += 1;
       }
     }
-
-
 
     let macro_frame_idx = gpu_frames.iter().position(|f| f.frame_type == 0).unwrap_or(0) as u32;
 
