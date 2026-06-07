@@ -18,7 +18,6 @@ layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Ele
 layout(push_constant, std430) uniform PushConstants {
     ElementArray elementsPtr;
     mat4 viewProj;
-    vec2 viewportSize;
 } pc;
 
 layout(location = 0) out vec2 vLocalPos;

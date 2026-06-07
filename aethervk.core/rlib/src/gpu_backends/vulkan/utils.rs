@@ -267,27 +267,14 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
 ) -> vk::Bool32 {
   let p_msg = unsafe { (*p_callback_data).p_message };
   let msg = unsafe { core::ffi::CStr::from_ptr(p_msg) };
-
-  aethervk_oshal_rlib::log!("[Vulkan Messenger]: {:?}", msg);
-
   if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
     #[cfg(test)]
     {
-      if let Ok(mut errors) = VULKAN_ERROR_MESSAGES.lock() {
-        errors.push(msg.to_string_lossy().into_owned());
-      }
+      extern crate std;
+      let s = msg.to_string_lossy();
+      let _ = std::fs::write("VULKAN_ERROR_DUMP.txt", s.as_ref());
     }
-
-    if !_p_user_data.is_null() {
-      let callback: fn(&str) = unsafe { core::mem::transmute(_p_user_data) };
-      let s = msg.to_str().unwrap_or("Invalid UTF-8");
-      callback(s);
-    }
-
-    debug::print_stacktrace();
   }
-
-  // don't abort Vulkan call
   vk::FALSE
 }
 

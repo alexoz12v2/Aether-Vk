@@ -31,10 +31,9 @@ layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer Mes
   vec3 emissiveColor;
 };
 
-// Push Constants: 80 bytes (well under 128-byte Vulkan minimum)
 layout(push_constant, std430) uniform Push {
-  mat4 modelViewProj;
-  MeshExtra extra;
+  mat4 modelViewProj; // 0 - 63
+  MeshExtra extra;    // 64 - 71
 } push;
 
 // --- Specialization Constants ---
@@ -91,18 +90,18 @@ void main() {
   bool useAO        = (push.extra.textureFlags & FLAG_AO) != 0u;
 
   vec3 V = normalize(push.extra.cameraPos - inWorldPos);
-  
+
   bool isDirectional = push.extra.sunColor.w > 0.5;
-  
+
   // Light direction and distance
   vec3 unnormalizedLightVector = isDirectional ? push.extra.sunPos : (push.extra.sunPos - inWorldPos);
   float distanceToSun = isDirectional ? 0.0 : length(unnormalizedLightVector);
   vec3 lightDir = isDirectional ? normalize(unnormalizedLightVector) : (unnormalizedLightVector / distanceToSun); // Normalized direction
-  
+
   // Inverse square attenuation makes distant planets pitch black at engine scales.
   // We use a much softer falloff to maintain visibility.
   float attenuation = isDirectional ? 1.0 : (1.0 / (1.0 + 0.001 * distanceToSun));
-  
+
   // Final light color arriving at the fragment
   vec3 lightColor = push.extra.sunColor.xyz * attenuation;
 
@@ -139,11 +138,11 @@ void main() {
 
   // Image Based Lighting (IBL)
   vec3 R = reflect(-V, N);
-  
+
   // Approximate Diffuse IBL (Irradiance) by sampling sky map at the normal direction
   vec3 irradiance = texture(skyMap, octEncode(N)).rgb * 0.02;
   vec3 diffuseIBL = irradiance * albedo;
-  
+
   // Approximate Specular IBL (Radiance) by sampling sky map at the reflection direction
   // Blurring it manually to soften it, and watering down intensity
   vec2 refUV = octEncode(R);
@@ -159,17 +158,17 @@ void main() {
     texture(skyMap, refUV + vec2(blurSpread, -blurSpread)).rgb +
     texture(skyMap, refUV + vec2(-blurSpread, -blurSpread)).rgb
   ) / 9.0 * 0.01;
-  
+
   // Fresnel
   vec3 F0 = vec3(0.04);
   vec3 F = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - max(dot(N, V), 0.0), 0.0, 1.0), 5.0);
   vec3 kS = F;
   vec3 kD = 1.0 - kS;
-  
+
   // Combine IBL
   vec3 specularIBL = radiance * F; // Rough approximation for specular
   vec3 ambient = (kD * diffuseIBL + specularIBL) * ao;
-  
+
   // Add a base background light to avoid pitch black meshes
   ambient += vec3(0.05) * albedo * ao;
 

@@ -58,6 +58,35 @@ pub(crate) struct ArenaCreationContext<'a> {
     Option<&'a crate::gpu_backends::vulkan::device::shader_manager::Shader>,
 }
 
+impl<'a> ArenaCreationContext<'a> {
+  #[inline]
+  #[track_caller]
+  pub fn validate_push_constant_size(&self, rust_size: u32) {
+    let mut spv_size = 0;
+
+    let mut check_shader = |shader: &crate::gpu_backends::vulkan::device::shader_manager::Shader| {
+      let pcs = shader.spv_module.enumerate_push_constant_blocks(None).unwrap_or_default();
+      if let Some(pc_block) = pcs.first() {
+        spv_size = spv_size.max(pc_block.size);
+      }
+    };
+
+    if let Some(s) = self.vertex_shader { check_shader(s); }
+    if let Some(s) = self.fragment_shader { check_shader(s); }
+    if let Some(s) = self.outline_vertex_shader { check_shader(s); }
+    if let Some(s) = self.outline_fragment_shader { check_shader(s); }
+
+    if spv_size > 0 {
+      debug_assert_eq!(
+        rust_size, spv_size,
+        "Push constant size mismatch! Rust struct = {} bytes, SPIR-V reflection = {} bytes",
+        rust_size, spv_size
+      );
+    }
+  }
+}
+
+
 pub trait ArchetypeArenaCreate {
   fn new_arena(ctx: &ArenaCreationContext) -> crate::types::GpuResult<Self>
   where
@@ -1917,10 +1946,11 @@ impl ArchetypeArenaCreate for TextRenderResourceArchetypeArena {
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
-      .size(128)];
+      .size(core::mem::size_of::<crate::gpu::TextPushConstants>() as u32)];
     let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
       .set_layouts(core::slice::from_ref(&set_layout))
       .push_constant_ranges(&push_constant_ranges);
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::TextPushConstants>() as u32);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
 
     Ok(Self {
@@ -2218,10 +2248,11 @@ impl ArchetypeArenaCreate for Text2RenderResourceArchetypeArena {
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
-      .size(128)];
+      .size(core::mem::size_of::<crate::gpu::Text2PushConstants>() as u32)];
     let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
       .set_layouts(core::slice::from_ref(&set_layout))
       .push_constant_ranges(&push_constant_ranges);
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::Text2PushConstants>() as u32);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
 
     let buffer_size = (100_000 * core::mem::size_of::<crate::gpu::TextGlyphGpu>()) as u64;
@@ -2369,10 +2400,11 @@ impl ArchetypeArenaCreate for BvhRenderResourceArchetypeArena {
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
-      .size(80)]; // mat4 (64) + BDA ptr (8) + pad (8) = 80 bytes
+      .size(core::mem::size_of::<crate::gpu::BvhPushConstants>() as u32)]; // mat4 (64) + BDA ptr (8) + pad (8) = 80 bytes
 
     let pipeline_layout_info =
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::BvhPushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .map_err(|e| {
@@ -2466,6 +2498,7 @@ impl ArchetypeArenaCreate for SphereGizmoRenderResourceArchetypeArena {
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
 
     unsafe {
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::SphereGizmoPushConstants>() as u32);
       let pipeline_layout =
         device.create_pipeline_layout(&pipeline_layout_info, None).map_err(|e| {
           aethervk_oshal_rlib::log!("create_pipeline_layout failed: {:?}", e);
@@ -2557,6 +2590,7 @@ impl ArchetypeArenaCreate for Bvhwire2RenderResourceArchetypeArena {
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
 
     unsafe {
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::Bvhwire2PushConstants>() as u32);
       let pipeline_layout =
         device.create_pipeline_layout(&pipeline_layout_info, None).map_err(|e| {
           aethervk_oshal_rlib::log!("create_pipeline_layout failed: {:?}", e);
@@ -2638,6 +2672,7 @@ impl ArchetypeArenaCreate for MeasurementRenderResourceArchetypeArena {
     };
 
     unsafe {
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::MeasurementPushConstants>() as u32);
       let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
         .with_name(
         device,
@@ -2698,6 +2733,7 @@ impl ArchetypeArenaCreate for MarkerRenderResourceArchetypeArena {
       push_constant_range_count: push_constant_ranges.len() as u32,
       ..Default::default()
     };
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::MarkerPushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_MarkerRenderResourceArchetype")?;
@@ -2746,6 +2782,7 @@ impl ArchetypeArenaCreate for MinimapRenderResourceArchetypeArena {
     }];
     let pipeline_layout_info =
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::MinimapPushConstants>() as u32);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .map_err(|e| {
         aethervk_oshal_rlib::log!("create_pipeline_layout failed: {:?}", e);
@@ -2981,6 +3018,7 @@ impl ArchetypeArenaCreate for UiRenderResourceArchetypeArena {
       push_constant_range_count: push_constant_ranges.len() as u32,
       ..Default::default()
     };
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::UiPushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_UiRenderResourceArchetype")?;
@@ -3149,6 +3187,7 @@ impl ArchetypeArenaCreate for TrajectoryRenderResourceArchetypeArena {
       push_constant_range_count: push_constant_ranges.len() as u32,
       ..Default::default()
     };
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::TrajectoryPushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_TrajectoryRenderResourceArchetype")?;
@@ -3364,6 +3403,7 @@ impl ArchetypeArenaCreate for BillboardRenderResourceArchetypeArena {
       push_constant_range_count: push_constant_ranges.len() as u32,
       ..Default::default()
     };
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::BillboardPushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_BillboardRenderResourceArchetype")?;
@@ -3561,6 +3601,7 @@ impl ArchetypeArenaCreate for GizmoRenderResourceArchetypeArena {
       push_constant_range_count: push_constant_ranges.len() as u32,
       ..Default::default()
     };
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::GizmoPushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_Gizmo")?;
@@ -3701,6 +3742,7 @@ impl ArchetypeArenaCreate for ParticleRenderResourceArchetypeArena {
       push_constant_range_count: push_constant_ranges.len() as u32,
       ..Default::default()
     };
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::ParticlePushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_ParticleRenderResourceArchetype")?;
@@ -3938,6 +3980,7 @@ impl ArchetypeArenaCreate for Particle2RenderResourceArchetypeArena {
       push_constant_range_count: push_constant_ranges.len() as u32,
       ..Default::default()
     };
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::Particle2PushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_Particle2RenderResourceArchetype")?;
@@ -4137,6 +4180,7 @@ impl ArchetypeArenaCreate for CursorRenderResourceArchetypeArena {
       push_constant_range_count: push_constant_ranges.len() as u32,
       ..Default::default()
     };
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::CursorPushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_CursorRenderResourceArchetype")?;
@@ -4184,11 +4228,12 @@ impl ArchetypeArenaCreate for SkyRenderResourceArchetypeArena {
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
-      .size(64)]; // mat4 invViewProj
+      .size(core::mem::size_of::<crate::gpu::SkyPushConstants>() as u32)]; // mat4 invViewProj
 
     let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
       .set_layouts(core::slice::from_ref(&set_layout))
       .push_constant_ranges(&push_constant_ranges);
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::SkyPushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
 
@@ -4233,9 +4278,10 @@ impl ArchetypeArenaCreate for BackgroundRenderResourceArchetypeArena {
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
-      .size(32)];
+      .size(core::mem::size_of::<crate::gpu::BackgroundPushConstants>() as u32)];
     let pipeline_layout_info =
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::BackgroundPushConstants>() as u32);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -4283,9 +4329,10 @@ impl ArchetypeArenaCreate for GridRenderResourceArchetypeArena {
     let push_constant_ranges = [vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
-      .size(128)];
+      .size(core::mem::size_of::<crate::gpu::GridPushConstants>() as u32)];
     let pipeline_layout_info =
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::GridPushConstants>() as u32);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_GridRenderResourceArchetypeArena")?;
     Ok(Self {
@@ -4342,6 +4389,7 @@ impl ArchetypeArenaCreate for SunRenderResourceArchetypeArena {
     let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
       .push_constant_ranges(&push_constant_ranges)
       .set_layouts(&set_layouts);
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::SunPushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_SunRenderResourceArchetype")?;
@@ -4595,13 +4643,14 @@ impl ArchetypeArenaCreate for ForwardMeshRenderResourceArchetypeArena {
         .map_err(|_| GpuError::InvalidShader)?;
 
       for block in blocks {
-        // Find a range with the same offset and size to merge stage flags.
+        // Find a range with the same offset to merge stage flags and max size.
         if let Some(range) = push_constant_ranges
           .iter_mut()
-          .find(|r| r.offset == block.offset && r.size == block.size)
+          .find(|r| r.offset == block.offset)
         {
           // Merge shader stages into the existing range.
           range.stage_flags |= shader.shader_stage;
+          range.size = range.size.max(block.size);
         } else {
           // Add a new range for this push constant block.
           push_constant_ranges.push(
@@ -4623,6 +4672,7 @@ impl ArchetypeArenaCreate for ForwardMeshRenderResourceArchetypeArena {
         )
       })
       .push_constant_ranges(&push_constant_ranges);
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::PushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_create_info, None) }
       .with_name(
@@ -5080,13 +5130,14 @@ impl ArchetypeArenaCreate for ForwardMesh2RenderResourceArchetypeArena {
         .map_err(|_| GpuError::InvalidShader)?;
 
       for block in blocks {
-        // Find a range with the same offset and size to merge stage flags.
+        // Find a range with the same offset to merge stage flags and max size.
         if let Some(range) = push_constant_ranges
           .iter_mut()
-          .find(|r| r.offset == block.offset && r.size == block.size)
+          .find(|r| r.offset == block.offset)
         {
           // Merge shader stages into the existing range.
           range.stage_flags |= shader.shader_stage;
+          range.size = range.size.max(block.size);
         } else {
           // Add a new range for this push constant block.
           push_constant_ranges.push(
@@ -5105,6 +5156,7 @@ impl ArchetypeArenaCreate for ForwardMesh2RenderResourceArchetypeArena {
     let layout_create_info = vk::PipelineLayoutCreateInfo::default()
       .set_layouts(&set_layouts_raw)
       .push_constant_ranges(&push_constant_ranges);
+    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::PhysicalMesh2PushConstants>() as u32);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_create_info, None) }
       .with_name(
