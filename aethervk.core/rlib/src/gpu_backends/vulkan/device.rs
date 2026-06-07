@@ -1075,7 +1075,7 @@ struct RecordingCmdBufferDataPresentation {
   swapchain_generation: u64,
   wait_semaphore: Option<NonZeroHandle<vk::Semaphore>>,
   signal_semaphore: Option<NonZeroHandle<vk::Semaphore>>,
-  submission_fence: NonZeroHandle<vk::Fence>,
+  submission_fence: Option<NonZeroHandle<vk::Fence>>,
 }
 
 /// Compositing context stored per-command-buffer when inside a compositing
@@ -3154,13 +3154,14 @@ impl RenderDevice for Device {
         let pe = extract_pe!(state, h)?;
 
         let backup = pe.backup_resize_state();
-        Ok((pe, backup))
+        let timeline_sem = state.timeline_manager.semaphore.get();
+        Ok((pe, backup, timeline_sem))
       })?
-      .execute(|(mut pe, backup), rollback| {
+      .execute(|(mut pe, backup, timeline_sem), rollback| {
         // EXECUTE lock-free!
         // `vkAcquireNextImageKHR` natively blocks the CPU waiting for VSync.
         // Because `pe` is extracted, streaming/audio threads can still lock `self.res`!
-        let result = pe.acquire_next_image(&self.device, rollback);
+        let result = pe.acquire_next_image(&self.device, timeline_sem, rollback);
 
         // We cannot fail `execute` directly via `?` because we would lose `pe`.
         Ok((pe, backup, result))
@@ -8769,10 +8770,40 @@ impl RenderDevice for Device {
       .commit_read(|state, execute_result| {
         let (staging_buffer, allocation, size) = execute_result?;
 
-        crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+        let mut pending_lock = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
           &state.pending_downloads,
-        )
-        .insert(
+        );
+
+        // Preemptively clean up older pending downloads for the same presentation engine
+        // if they are already completed by the GPU. This prevents OOM (producer-consumer imbalance).
+        let to_remove: alloc::vec::Vec<u64> = pending_lock
+          .iter()
+          .filter_map(|(&tid, dl)| {
+            if dl.presentation_engine == Some(handle) && tid < task_id {
+              if self.is_task_completed(tid).unwrap_or(false) {
+                Some(tid)
+              } else {
+                None
+              }
+            } else {
+              None
+            }
+          })
+          .collect();
+
+        for tid in to_remove {
+          if let Some(mut old_dl) = pending_lock.remove(&tid) {
+            unsafe {
+              state
+                .allocator
+                .allocator
+                .as_allocator_view()
+                .destroy_buffer(old_dl.staging_buffer, &mut old_dl.allocation);
+            }
+          }
+        }
+
+        pending_lock.insert(
           task_id,
           PendingDownload {
             staging_buffer,
@@ -9031,7 +9062,7 @@ impl RenderDevice for Device {
                 .queue_submit(
                   graphics_queue.handle,
                   &[submit_info],
-                  presentation.submission_fence.get(),
+                  presentation.submission_fence.map(|f| f.get()).unwrap_or(vk::Fence::null()),
                 )
                 .map_err(|e| {
                   aethervk_oshal_rlib::log!("Queue submit failed: {:?}", e);

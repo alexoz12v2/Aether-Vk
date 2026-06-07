@@ -26,8 +26,10 @@ struct SwapchainImage {
   pub image: NonZeroHandle<vk::Image>,
   pub image_view: NonZeroHandle<vk::ImageView>,
   pub submission_fence: Option<NonZeroHandle<vk::Fence>>,
+  pub submission_timeline_value: u64,
   pub acquire_semaphore: Option<NonZeroHandle<vk::Semaphore>>,
   pub present_semaphore: NonZeroHandle<vk::Semaphore>,
+  pub is_acquired: bool,
 
   /// Fence signaled by WSI when the OS display compositor is completely done reading
   /// the image. Populated on creation ONLY if VK_EXT_swapchain_maintenance1 is enabled.
@@ -60,8 +62,10 @@ struct FrameDiscard {
 #[derive(Clone)]
 struct SwapchainFrame {
   pub submission_fence: Option<NonZeroHandle<vk::Fence>>,
+  pub submission_timeline_value: u64,
   pub acquire_semaphore: Option<NonZeroHandle<vk::Semaphore>>,
   pub fence_submitted: bool,
+  pub is_stolen: bool,
 }
 
 /// TODO: Document this item
@@ -450,11 +454,12 @@ impl PresentationState {
   pub fn acquire_next_image(
     &mut self,
     device: &LogicalDevice,
+    timeline_sem: vk::Semaphore,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<AcquireResult> {
     match self {
-      Self::Windowed(state) => state.acquire_next_image(device, rollback),
-      Self::Windowless(state) => state.acquire_next_image(device, rollback),
+      PresentationState::Windowed(w) => w.acquire_next_image(device, timeline_sem, rollback),
+      PresentationState::Windowless(w) => w.acquire_next_image(device, timeline_sem, rollback),
     }
   }
 
@@ -464,7 +469,7 @@ impl PresentationState {
     index: usize,
   ) -> (
     Option<NonZeroHandle<vk::Semaphore>>,
-    NonZeroHandle<vk::Fence>,
+    Option<NonZeroHandle<vk::Fence>>,
   ) {
     match self {
       Self::Windowed(state) => unsafe { state.get_frame_resources(index) },
@@ -958,10 +963,12 @@ impl WindowedPresentationState {
           image: NonZeroHandle::new_unchecked(*images.get_unchecked(i as usize)),
           image_view,
           submission_fence: None,
+          submission_timeline_value: 0,
           acquire_semaphore: None,
           present_semaphore,
           present_fence,
           present_fence_in_use: false,
+          is_acquired: false,
         })
       }
     }
@@ -1301,6 +1308,7 @@ impl WindowedPresentationState {
   pub fn acquire_next_image(
     &mut self,
     device: &LogicalDevice,
+    _timeline_sem: vk::Semaphore,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<AcquireResult> {
     if let Some((w, h)) = self.pending_resize.take() {
@@ -1438,7 +1446,7 @@ impl WindowedPresentationState {
     index: usize,
   ) -> (
     Option<NonZeroHandle<vk::Semaphore>>,
-    NonZeroHandle<vk::Fence>,
+    Option<NonZeroHandle<vk::Fence>>,
   ) {
     debug_assert!(self.frames.len() > index);
     let frame = &self.frames[index];
@@ -1446,7 +1454,7 @@ impl WindowedPresentationState {
     unsafe {
       (
         Some(frame.acquire_semaphore.unwrap_unchecked()),
-        frame.submission_fence.unwrap_unchecked(),
+        Some(frame.submission_fence.unwrap_unchecked()),
       )
     }
   }
@@ -1624,8 +1632,10 @@ impl Default for SwapchainFrame {
   fn default() -> Self {
     Self {
       submission_fence: None,
+      submission_timeline_value: 0,
       acquire_semaphore: None,
       fence_submitted: false,
+      is_stolen: false,
     }
   }
 }
@@ -1648,26 +1658,32 @@ impl Default for FrameDiscard {
 
 impl SwapchainImage {
   fn eligible_for_acquisition(&self) -> bool {
-    self.submission_fence.is_some() && self.acquire_semaphore.is_some()
+    !self.is_acquired
   }
 
   unsafe fn reclaim_from_swapchain_frame(&mut self, frame: &mut SwapchainFrame) {
     debug_assert!(!self.eligible_for_acquisition() && !frame.eligible_for_steal());
     self.submission_fence = frame.submission_fence.take();
+    self.submission_timeline_value = frame.submission_timeline_value;
     self.acquire_semaphore = frame.acquire_semaphore.take();
+    self.is_acquired = false;
+    frame.is_stolen = false;
   }
 }
 
 impl SwapchainFrame {
   fn eligible_for_steal(&self) -> bool {
-    self.submission_fence.is_none() && self.acquire_semaphore.is_none()
+    !self.is_stolen
   }
 
   unsafe fn steal_from_swapchain_image(&mut self, swapchain_image: &mut SwapchainImage) {
     debug_assert!(swapchain_image.eligible_for_acquisition() && self.eligible_for_steal());
     self.acquire_semaphore = swapchain_image.acquire_semaphore.take();
     self.submission_fence = swapchain_image.submission_fence.take();
+    self.submission_timeline_value = swapchain_image.submission_timeline_value;
     self.fence_submitted = false;
+    self.is_stolen = true;
+    swapchain_image.is_acquired = true;
   }
 }
 
@@ -1782,15 +1798,8 @@ impl WindowlessPresentationState {
       return Ok(());
     }
 
-    let fence = frame.submission_fence.ok_or(crate::gpu_err_device!())?.get();
-    if !frame.fence_submitted {
-      let submit_info = vk::SubmitInfo::default();
-      unsafe {
-        device
-          .locked_queue_submit(graphics_queue, core::slice::from_ref(&submit_info), fence)
-          .map_err(GpuError::from)?;
-      }
-    }
+    // With timeline semaphores, if the frame wasn't submitted, its timeline value remains the old (already signaled) value.
+    // Thus we don't need to submit a dummy command buffer.
     unsafe { image.reclaim_from_swapchain_frame(frame) };
     frame.fence_submitted = false;
 
@@ -1846,6 +1855,7 @@ impl WindowlessPresentationState {
   pub fn acquire_next_image(
     &mut self,
     device: &LogicalDevice,
+    timeline_sem: vk::Semaphore,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<AcquireResult> {
     if let Some((w, h)) = self.pending_resize.take() {
@@ -1862,27 +1872,16 @@ impl WindowlessPresentationState {
     {
       return Err(crate::gpu_err!("windowless_acquire: not eligible"));
     }
-    let fences: &[vk::Fence] = unsafe {
-      core::slice::from_ref(&swapchain_image.submission_fence.as_ref().unwrap_unchecked())
-    };
-
-    let mut timeout = 167;
-    loop {
-      let result = unsafe { device.wait_for_fences(fences, false, timeout) };
-      if let Err(vk_result) = result {
-        if vk_result == vk::Result::TIMEOUT {
-          timeout = u64::MAX;
-        } else {
-          return Err(vk_result.into());
-        }
-      } else {
-        break;
-      }
+    let timeline_val = swapchain_image.submission_timeline_value;
+    if timeline_val > 0 {
+      let _ = device.wait_for_semaphore_value(
+        timeline_sem,
+        timeline_val,
+        u64::MAX,
+      );
     }
 
-    self.frame_discards[self.current_frame].cleanup_windowless(device);
-
-    unsafe { device.reset_fences(fences) }?;
+    // Fences reset removed
 
     unsafe { self.frames[self.current_frame].steal_from_swapchain_image(swapchain_image) };
     let frame_idx_for_submission = self.current_frame;
@@ -1904,7 +1903,7 @@ impl WindowlessPresentationState {
     index: usize,
   ) -> (
     Option<NonZeroHandle<vk::Semaphore>>,
-    NonZeroHandle<vk::Fence>,
+    Option<NonZeroHandle<vk::Fence>>,
   ) {
     debug_assert!(self.frames.len() > index);
     let frame = &self.frames[index];
@@ -1912,7 +1911,7 @@ impl WindowlessPresentationState {
     unsafe {
       (
         None, // Windowless does not use an acquire semaphore for submission wait
-        frame.submission_fence.unwrap_unchecked(),
+        None, // Windowless now uses timeline semaphores, no fence needed
       )
     }
   }
@@ -1945,6 +1944,11 @@ impl WindowlessPresentationState {
     if image.eligible_for_acquisition() || frame.eligible_for_steal() {
       return Err(crate::gpu_err!("window_submit: still eligible"));
     }
+    
+    let submitted_timeline_val = self.last_timeline_value.load(core::sync::atomic::Ordering::Acquire);
+    image.submission_timeline_value = submitted_timeline_val;
+    frame.submission_timeline_value = submitted_timeline_val;
+
     unsafe { image.reclaim_from_swapchain_frame(frame) };
     self.submitted_frames += 1;
     Ok(SwapchainStatus::Optimal)
@@ -2097,17 +2101,21 @@ impl WindowlessPresentationState {
           image,
           image_view,
           submission_fence: None,
+          submission_timeline_value: 0,
           acquire_semaphore: None,
           present_semaphore,
           present_fence: None, // strictly un-used in windowless pipelines
           present_fence_in_use: false,
+          is_acquired: false,
         });
         self.memories.push_unchecked(memory);
 
         self.frames.push_unchecked(SwapchainFrame {
           submission_fence: None,
+          submission_timeline_value: 0,
           acquire_semaphore: None,
           fence_submitted: false,
+          is_stolen: false,
         });
 
         while self.frame_discards.len() < image_count {
@@ -2116,14 +2124,7 @@ impl WindowlessPresentationState {
       }
     }
 
-    for i in 0..image_count {
-      let frame_fence =
-        unsafe { NonZeroHandle::new_unchecked(device.create_fence(&fence_create_info, None)?) };
-      let frame_sem =
-        unsafe { NonZeroHandle::new_unchecked(device.create_semaphore(&sem_create_info, None)?) };
-      self.images[i].acquire_semaphore = Some(frame_sem);
-      self.images[i].submission_fence = Some(frame_fence);
-    }
+    // In windowless mode, we don't need frame fences or acquire semaphores
 
     if !self.images.is_empty() {
       self.next_image %= self.images.len()
