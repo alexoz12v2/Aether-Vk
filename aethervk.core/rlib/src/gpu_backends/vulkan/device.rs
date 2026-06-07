@@ -8140,7 +8140,7 @@ impl RenderDevice for Device {
         ),
          rollback| {
           let descriptor_set = if do_alloc {
-            let discard_pool = unsafe { discard_pool_ptr.as_ref_unchecked() };
+            let discard_pool = unsafe { &*discard_pool_ptr };
             // Allocate using the new persistent pool structure + rollback context
             let set = dp_arc.allocate(
               &self.device,

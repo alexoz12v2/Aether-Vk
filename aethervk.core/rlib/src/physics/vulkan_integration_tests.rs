@@ -946,53 +946,29 @@ mod tests {
     )));
     scene.register_all_crate_components();
 
-    let p_sys = scene.spawn_entity("particles");
-    scene.add_component(p_sys, crate::scene::TransformComponent::default()).unwrap();
+    let root = scene.spawn_reference_frame(
+      "RootFrame",
+      None,
+      crate::scene::TransformComponent::default(),
+      crate::scene::ReferenceFrameType::Macro,
+      1.0,
+      10000.0,
+    );
 
-    let p_comp = crate::scene::ParticleSystemComponent::new(100);
-    {
-      let mut lock = p_comp.particles.write();
-
-      // Particle A: moving right at 100 m/s
-      lock.push(crate::scene::ParticleData {
-        id_low: 1,
-        id_high: 0,
-        age_low: 0,
-        age_high: 0,
-        position: [0.0, 0.0, 0.0],
-        mass: 1.0,
-        velocity: [100.0, 0.0, 0.0],
-        active: 1,
-      });
-      // Particle B: stationary at x = 4.0
-      lock.push(crate::scene::ParticleData {
-        id_low: 2,
-        id_high: 0,
-        age_low: 0,
-        age_high: 0,
-        position: [4.0, 0.0, 0.0],
-        mass: 1.0,
-        velocity: [0.0, 0.0, 0.0],
-        active: 1,
-      });
-    }
-    scene.add_component(p_sys, p_comp).unwrap();
-    scene.add_component(p_sys, crate::scene::TransformComponent::default()).unwrap();
-
-    // DUMMY RIGID BODY TO PREVENT N_BODIES = 0
-    let dummy_rb = scene.spawn_entity("dummy_rb");
+    let rb_a = scene.spawn_entity("rb_a");
+    scene.set_parent(rb_a, Some(root));
     scene
       .add_component(
-        dummy_rb,
+        rb_a,
         crate::scene::TransformComponent {
-          position: Vec3f32::from_array([0.0, 1000.0, 0.0]),
+          position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 0.0),
           ..Default::default()
         },
       )
       .unwrap();
     scene
       .add_component(
-        dummy_rb,
+        rb_a,
         crate::scene::ColliderComponent {
           shape: ColliderShape::Sphere { radius: 1.0 },
           mass: 1.0,
@@ -1001,9 +977,45 @@ mod tests {
       )
       .unwrap();
     scene
-      .add_component(dummy_rb, crate::scene::KinematicComponent::default())
+      .add_component(
+        rb_a,
+        crate::scene::KinematicComponent {
+          velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(100.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
       .unwrap();
-    scene.add_component(dummy_rb, dummy_mesh()).unwrap();
+
+    let rb_b = scene.spawn_entity("rb_b");
+    scene.set_parent(rb_b, Some(root));
+    scene
+      .add_component(
+        rb_b,
+        crate::scene::TransformComponent {
+          position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(4.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        rb_b,
+        crate::scene::ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          mass: 1.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        rb_b,
+        crate::scene::KinematicComponent {
+          velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
 
     ctx
       .frontend
@@ -1014,26 +1026,23 @@ mod tests {
           .unwrap();
 
         // Step with dt = 0.1s
-        let ps = run_simulation(vulkan_device, &mut scene, 0.1, true);
+        let _ps = run_simulation(vulkan_device, &mut scene, 0.1, true);
 
-        let p_comp = scene
-          .with_component(p_sys, |c: &crate::scene::ParticleSystemComponent| c.clone())
-          .unwrap();
-        let lock = p_comp.particles.read();
+        let vel_a = scene.with_component(rb_a, |k: &crate::scene::KinematicComponent| k.velocity).unwrap();
+        let vel_b = scene.with_component(rb_b, |k: &crate::scene::KinematicComponent| k.velocity).unwrap();
 
-        let va = lock[0].velocity[0];
-        let vb = lock[1].velocity[0];
+        let va = vel_a.x();
+        let vb = vel_b.x();
 
         eprintln!("After collision: vA = {}, vB = {}", va, vb);
 
         // Ensure they collided and A's velocity decreased / B's increased
-        // Since it's inelastic (restitution = 0.5?), A will slow down and B will speed up.
         assert!(
           va < 10.0 || vb > 0.0,
-          "Particle A should have slowed down or bounced! va = {}",
+          "RigidBody A should have slowed down or bounced! va = {}",
           va
         );
-        assert!(vb > 0.0, "Particle B should have been pushed! vb = {}", vb);
+        assert!(vb > 0.0, "RigidBody B should have been pushed! vb = {}", vb);
 
         crate::types::GpuResult::Ok(())
       })

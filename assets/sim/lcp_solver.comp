@@ -7,6 +7,9 @@
 
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
 
 #ifndef LOCAL_SIZE_X
 #define LOCAL_SIZE_X 128
@@ -81,7 +84,7 @@ void main() {
             posA = vec3(P_READ(pc.particles, baseA), P_READ(pc.particles, baseA+SUBGROUP_SIZE), P_READ(pc.particles, baseA+2*SUBGROUP_SIZE));
             vA_init = vec3(P_READ(pc.particles, baseA+3*SUBGROUP_SIZE), P_READ(pc.particles, baseA+4*SUBGROUP_SIZE), P_READ(pc.particles, baseA+5*SUBGROUP_SIZE));
             float mass = P_READ(pc.particles, baseA + 6u * SUBGROUP_SIZE); invMA = (mass > 0.0) ? 1.0 / mass : 0.0;
-        } else {
+        } else if (idA < pc.num_rigid_bodies) {
             RigidBody rbA = pc.rigid_bodies.bodies[idA]; invMA = rbA.position_mass.w > 0.0 ? 1.0 / rbA.position_mass.w : 0.0;
             invIA = rbA.inertia_tensor_inv.xyz; qA = rbA.orientation; posA = rbA.position_mass.xyz; vA_init = rbA.linear_vel_drag.xyz; wA_init = rbA.angular_vel_drag.xyz;
         }
@@ -91,7 +94,7 @@ void main() {
             posB = vec3(P_READ(pc.particles, baseB), P_READ(pc.particles, baseB+SUBGROUP_SIZE), P_READ(pc.particles, baseB+2*SUBGROUP_SIZE));
             vB_init = vec3(P_READ(pc.particles, baseB+3*SUBGROUP_SIZE), P_READ(pc.particles, baseB+4*SUBGROUP_SIZE), P_READ(pc.particles, baseB+5*SUBGROUP_SIZE));
             float mass = P_READ(pc.particles, baseB + 6u * SUBGROUP_SIZE); invMB = (mass > 0.0) ? 1.0 / mass : 0.0;
-        } else {
+        } else if (idB < pc.num_rigid_bodies) {
             RigidBody rbB = pc.rigid_bodies.bodies[idB]; invMB = rbB.position_mass.w > 0.0 ? 1.0 / rbB.position_mass.w : 0.0;
             invIB = rbB.inertia_tensor_inv.xyz; qB = rbB.orientation; posB = rbB.position_mass.xyz; vB_init = rbB.linear_vel_drag.xyz; wB_init = rbB.angular_vel_drag.xyz;
         }
@@ -154,12 +157,16 @@ void main() {
                 ATOMIC_ADD_FLOAT(shared_v_x[idA], -P_n.x * invMA); ATOMIC_ADD_FLOAT(shared_v_y[idA], -P_n.y * invMA); ATOMIC_ADD_FLOAT(shared_v_z[idA], -P_n.z * invMA);
                 vec3 dwA = quat_rotate(qA, invIA * quat_rotate_inv(qA, cross(rA, -P_n)));
                 ATOMIC_ADD_FLOAT(shared_w_x[idA], dwA.x); ATOMIC_ADD_FLOAT(shared_w_y[idA], dwA.y); ATOMIC_ADD_FLOAT(shared_w_z[idA], dwA.z);
+            } else if (is_partA && invMA > 0.0) {
+                vA_init += -P_n * invMA;
             }
             if (!is_partB && invMB > 0.0 && idB < MAX_BODIES_PER_ISLAND) {
                 vec3 P_n_micro = P_n / lca_scale;
                 ATOMIC_ADD_FLOAT(shared_v_x[idB], P_n_micro.x * invMB); ATOMIC_ADD_FLOAT(shared_v_y[idB], P_n_micro.y * invMB); ATOMIC_ADD_FLOAT(shared_v_z[idB], P_n_micro.z * invMB);
                 vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_n_micro)));
                 ATOMIC_ADD_FLOAT(shared_w_x[idB], dwB.x); ATOMIC_ADD_FLOAT(shared_w_y[idB], dwB.y); ATOMIC_ADD_FLOAT(shared_w_z[idB], dwB.z);
+            } else if (is_partB && invMB > 0.0) {
+                vB_init += (P_n / lca_scale) * invMB;
             }
         }
 
@@ -197,18 +204,26 @@ void main() {
                 ATOMIC_ADD_FLOAT(shared_v_x[idA], -P_t.x * invMA); ATOMIC_ADD_FLOAT(shared_v_y[idA], -P_t.y * invMA); ATOMIC_ADD_FLOAT(shared_v_z[idA], -P_t.z * invMA);
                 vec3 dwA = quat_rotate(qA, invIA * quat_rotate_inv(qA, cross(rA, -P_t)));
                 ATOMIC_ADD_FLOAT(shared_w_x[idA], dwA.x); ATOMIC_ADD_FLOAT(shared_w_y[idA], dwA.y); ATOMIC_ADD_FLOAT(shared_w_z[idA], dwA.z);
+            } else if (is_partA && invMA > 0.0) {
+                vA_init += -P_t * invMA;
             }
             if (!is_partB && invMB > 0.0 && idB < MAX_BODIES_PER_ISLAND) {
                 vec3 P_t_micro = P_t / lca_scale;
                 ATOMIC_ADD_FLOAT(shared_v_x[idB], P_t_micro.x * invMB); ATOMIC_ADD_FLOAT(shared_v_y[idB], P_t_micro.y * invMB); ATOMIC_ADD_FLOAT(shared_v_z[idB], P_t_micro.z * invMB);
                 vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_t_micro)));
                 ATOMIC_ADD_FLOAT(shared_w_x[idB], dwB.x); ATOMIC_ADD_FLOAT(shared_w_y[idB], dwB.y); ATOMIC_ADD_FLOAT(shared_w_z[idB], dwB.z);
+            } else if (is_partB && invMB > 0.0) {
+                vB_init += (P_t / lca_scale) * invMB;
             }
         }
     }
 
     barrier();
     if (valid) {
-        pc.outputs.impulses[contact_idx] = accumulated_normal[local_id] * n + accumulated_t1[local_id] * t1 + accumulated_t2[local_id] * t2;
+        vec3 final_impulse = accumulated_normal[local_id] * n + accumulated_t1[local_id] * t1 + accumulated_t2[local_id] * t2;
+        pc.outputs.impulses[contact_idx] = final_impulse;
+#ifdef DEBUG_SHADERS
+        debugPrintfEXT("LCP SOLVED idA=%d idB=%d vA=(%f,%f,%f) vB=(%f,%f,%f) n=(%f,%f,%f) jn=%f impulse=(%f,%f,%f)\n", idA, idB, vA_init.x, vA_init.y, vA_init.z, vB_init.x, vB_init.y, vB_init.z, n.x, n.y, n.z, accumulated_normal[local_id], final_impulse.x, final_impulse.y, final_impulse.z);
+#endif
     }
 }

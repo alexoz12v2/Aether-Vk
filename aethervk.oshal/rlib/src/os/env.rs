@@ -1,6 +1,6 @@
 //! env module.
 
-use alloc::{string::String, vec::Vec};
+use alloc::{string::String, vec, vec::Vec};
 
 use crate::os::NativeResult;
 

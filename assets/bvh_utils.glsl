@@ -17,7 +17,7 @@
 #extension GL_KHR_memory_scope_semantics : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 
-layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
+layout(constant_id = 0) const uint SUBGROUP_SIZE = 4;
 
 // ---------------------------------------------------------------------------
 // BVH traversal stack depth (specialization constants, set by host).
@@ -109,7 +109,7 @@ struct PackedPair {
     float pt_z;
     float penetration_depth;
 };
-struct SparseCollisionData { uint valid; uint entity_a; uint prim_a; uint entity_b; uint prim_b; float toi; uint is_lca; uint lca_id; vec3 contact_normal; vec3 contact_point; float penetration_depth; };
+struct SparseCollisionData { uint entity_a; uint prim_a; uint entity_b; uint prim_b; float toi; uint is_lca; uint lca_id; uint frame_bda_low; vec3 contact_normal; uint frame_bda_high; vec3 contact_point; float penetration_depth; };
 
 struct RigidBody {
     vec4 position_mass;       // xyz: world pos, w: mass

@@ -171,7 +171,7 @@ impl DescriptorPools {
           let inner_ptr = (&mut *inner) as *mut DescriptorPoolsInner;
           rollback.defer(move |dev| unsafe {
             dev.destroy_descriptor_pool(new_pool, None);
-            inner_ptr.as_mut_unchecked().active_pool = old_pool;
+            (*inner_ptr).active_pool = old_pool;
           });
 
           self.discard_active_pool(&mut inner, discard_pool, timeline_value);

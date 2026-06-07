@@ -121,8 +121,8 @@ gh release delete v1.0.0-sxs --cleanup-tag -y
 After `brew` installing `sshpass` to insert local VM user pass automatically
 
 ```bash
-sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no -p 2222 alessio@localhost "cd /d Z:\ && powershell -ExecutionPolicy Bypass -File .\scripts\package_windows.ps1 -Arch win-arm64 && powershell -ExecutionPolicy Bypass -File .\scripts\package_windows_msix.ps1 -
-Arch arm64"
+sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no -p 2222 alessio@localhost "cd /d Z:\ && powershell -ExecutionPolicy Bypass -File .\scripts\package_windows.ps1 -Arch win-arm64 && powershell -ExecutionPolicy Bypass -File
+.\scripts\package_windows_msix.ps1 -Arch arm64"
 ```
 
 Note: actually, in shared folders, at least in UTM, you might run into troubles unless you do the cargo build in an NTFS partition

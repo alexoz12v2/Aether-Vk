@@ -3962,6 +3962,8 @@ impl VulkanComputeKernels {
       impulses_addr: impulses_buffer.address,
       rigid_bodies_addr: rigid_bodies.address,
       lca_entities: _lca_entities_addr,
+      num_rigid_bodies: rigid_bodies.capacity() as u32,
+      _pad: 0,
     };
     let bytes_apply = unsafe {
       core::slice::from_raw_parts(

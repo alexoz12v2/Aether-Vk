@@ -1,4 +1,4 @@
-#version 450
+#version 450 core
 #ifdef DEBUG_SHADERS
 #extension GL_EXT_debug_printf : enable
 #endif
@@ -46,8 +46,8 @@ void main() {
     if (type_A > type_B) {
         uint temp = ent_A; ent_A = ent_B; ent_B = temp;
         temp = type_A; type_A = type_B; type_B = temp;
-        // NOTE: We don't swap meta_B, but since A is the query (always rigid body) and B is the leaf (which can be LCA), 
-        // type_A > type_B would only happen if A was a particle system and B was a rigid body. 
+        // NOTE: We don't swap meta_B, but since A is the query (always rigid body) and B is the leaf (which can be LCA),
+        // type_A > type_B would only happen if A was a particle system and B was a rigid body.
         // Currently, bp_scene only queries RigidBodies, so A is always TYPE_RIGID_BODY.
     }
 
@@ -65,7 +65,7 @@ void main() {
         }
     } else if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) {
         // Since bp_scene only tests RigidBodies, A is guaranteed to be a RigidBody, not an LCA frame.
-        bool a_is_lca = false; 
+        bool a_is_lca = false;
         bool b_is_lca = (shape_B == BVH_SHAPE_SUB_TLAS);
 
         if (b_is_lca) {
