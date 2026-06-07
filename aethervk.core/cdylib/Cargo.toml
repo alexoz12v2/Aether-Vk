@@ -20,6 +20,7 @@ cbindgen = "0.26.0"
 
 [dependencies]
 aethervk-core-rlib = { path = "../rlib", default-features = false, features = [
+    "linux_xlib"
 ] }
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = [
     "console_log",

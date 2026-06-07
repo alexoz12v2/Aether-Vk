@@ -6,6 +6,10 @@ set -e
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
 
+# Fetch Vulkan Sync2 layer
+echo "Fetching Vulkan Sync2 layer if missing..."
+./scripts/fetch_vulkan_sync2.sh
+
 # Format Rust code using nightly
 echo "Running cargo +nightly fmt..."
 cargo +nightly fmt --all
