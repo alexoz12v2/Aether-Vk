@@ -8774,34 +8774,7 @@ impl RenderDevice for Device {
           &state.pending_downloads,
         );
 
-        // Preemptively clean up older pending downloads for the same presentation engine
-        // if they are already completed by the GPU. This prevents OOM (producer-consumer imbalance).
-        let to_remove: alloc::vec::Vec<u64> = pending_lock
-          .iter()
-          .filter_map(|(&tid, dl)| {
-            if dl.presentation_engine == Some(handle) && tid < task_id {
-              if self.is_task_completed(tid).unwrap_or(false) {
-                Some(tid)
-              } else {
-                None
-              }
-            } else {
-              None
-            }
-          })
-          .collect();
-
-        for tid in to_remove {
-          if let Some(mut old_dl) = pending_lock.remove(&tid) {
-            unsafe {
-              state
-                .allocator
-                .allocator
-                .as_allocator_view()
-                .destroy_buffer(old_dl.staging_buffer, &mut old_dl.allocation);
-            }
-          }
-        }
+        // Preemptive cleanup was removed because it bypassed standard DiscardPool and caused VMA memory corruption when Lavapipe used the buffers asynchronously.
 
         pending_lock.insert(
           task_id,

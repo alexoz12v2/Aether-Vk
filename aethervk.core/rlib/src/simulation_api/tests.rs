@@ -545,13 +545,7 @@ fn test_misc_and_models_api_direct() {
 }
 
 fn set_asset_directory_for_tests() {
-  let mut home_dir = std::env::current_exe().unwrap();
-  let mut iter = 0;
-  while !home_dir.join("assets").is_dir() && iter < 32 {
-    home_dir.pop();
-    iter += 1;
-  }
-  *crate::gpu::ASSET_DIR.write() = Some(home_dir.join("assets").to_str().unwrap().to_string());
+  crate::gpu::set_asset_dir_for_tests();
 }
 
 #[test]

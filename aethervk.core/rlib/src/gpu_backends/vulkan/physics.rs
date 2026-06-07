@@ -1512,7 +1512,7 @@ impl VulkanComputeKernels {
       allocation: alloc,
       allocator,
       is_list,
-      usage: ash::vk::BufferUsageFlags::empty(),
+      usage,
       discarded: false,
       _marker: core::marker::PhantomData,
     };
@@ -1540,13 +1540,29 @@ impl VulkanComputeKernels {
   ) -> GpuResult<VulkanBuffer<T>> {
     let current_timeline = self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed) - 1;
     let mut pool = self.transient_pool.lock();
+    
+    // Garbage collection of old transient buffers
+    pool.entries.retain(|entry| {
+      if entry.timeline_freed + 10 < current_timeline {
+        self.discard_pool.discard_buffer(
+          allocator.get_raw(),
+          entry.buffer,
+          entry.allocation,
+          current_timeline,
+        );
+        false
+      } else {
+        true
+      }
+    });
+
     for i in 0..pool.entries.len() {
       let entry = &pool.entries[i];
       if entry.item_size == core::mem::size_of::<T>()
         && entry.capacity >= capacity
         && entry.is_list == is_list
         && (entry.usage & usage) == usage
-        && entry.timeline_freed <= current_timeline
+        && entry.timeline_freed <= current_timeline + 1
       {
         let entry = pool.entries.remove(i);
         return Ok(VulkanBuffer {
@@ -1635,7 +1651,7 @@ impl VulkanComputeKernels {
       allocation: alloc,
       allocator,
       is_list,
-      usage: ash::vk::BufferUsageFlags::empty(),
+      usage,
       discarded: false,
       _marker: core::marker::PhantomData,
     };
@@ -4559,7 +4575,7 @@ impl Kernels for Device {
           allocation: alloc,
           allocator,
           is_list: false,
-          usage: ash::vk::BufferUsageFlags::empty(),
+          usage: ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
           discarded: false,
           _marker: core::marker::PhantomData,
         })

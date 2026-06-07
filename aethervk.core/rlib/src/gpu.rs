@@ -658,6 +658,36 @@ impl From<RenderableInstanceId> for GpuResourceHandle {
 pub static ASSET_DIR: parking_lot::RwLock<Option<alloc::string::String>> =
   parking_lot::RwLock::new(None);
 
+#[cfg(test)]
+pub fn set_asset_dir_for_tests() {
+  if ASSET_DIR.read().is_some() { return; }
+  let mut home_dir = std::env::current_exe().unwrap_or_default();
+  let mut iter = 0;
+  while !home_dir.join("assets").is_dir() && iter < 32 {
+    home_dir.pop();
+    iter += 1;
+  }
+  if !home_dir.join("assets").is_dir() {
+    if std::path::Path::new("assets").is_dir() {
+      home_dir = std::env::current_dir().unwrap_or_default();
+    } else if let Ok(env_path) = std::env::var("ASSET_DIR") {
+      *ASSET_DIR.write() = Some(env_path);
+      return;
+    }
+  }
+  if home_dir.join("assets").is_dir() {
+    *ASSET_DIR.write() = Some(home_dir.join("assets").to_str().unwrap().to_string());
+  } else {
+    // Fallback using compile-time CARGO_MANIFEST_DIR just in case
+    let mut manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.pop();
+    manifest_dir.pop();
+    if manifest_dir.join("assets").is_dir() {
+      *ASSET_DIR.write() = Some(manifest_dir.join("assets").to_str().unwrap().to_string());
+    }
+  }
+}
+
 /// Information about the synchronization payload after submitting a command buffer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CommandBufferSyncInfo {
