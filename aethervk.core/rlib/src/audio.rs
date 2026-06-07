@@ -1,5 +1,4 @@
-use alloc::boxed::Box;
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use core::cmp::min;
 
 extern crate symphonia_codec_pcm;
@@ -7,11 +6,13 @@ extern crate symphonia_core;
 extern crate symphonia_format_wav;
 
 use symphonia_codec_pcm::PcmDecoder;
-use symphonia_core::audio::{AudioBufferRef, Signal};
-use symphonia_core::codecs::{CODEC_TYPE_PCM_S16LE, Decoder, DecoderOptions};
-use symphonia_core::formats::{FormatOptions, FormatReader};
-use symphonia_core::io::{MediaSourceStream, ReadOnlySource};
-use symphonia_core::probe::Hint;
+use symphonia_core::{
+  audio::{AudioBufferRef, Signal},
+  codecs::{CODEC_TYPE_PCM_S16LE, Decoder, DecoderOptions},
+  formats::{FormatOptions, FormatReader},
+  io::{MediaSourceStream, ReadOnlySource},
+  probe::Hint,
+};
 use symphonia_format_wav::WavReader;
 
 pub enum AvkSoundEvent {

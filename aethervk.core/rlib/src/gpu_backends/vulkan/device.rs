@@ -3521,7 +3521,8 @@ impl RenderDevice for Device {
               texture_flags_out = texture_flags;
               Ok(())
             })?;
-            let timeline = DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
+            let timeline =
+              DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
             discard_pool.discard_type_erased(transient_res, timeline + 2);
 
             Ok((
@@ -3954,7 +3955,8 @@ impl RenderDevice for Device {
               texture_flags_out = texture_flags;
               Ok(())
             })?;
-            let timeline = DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
+            let timeline =
+              DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
             discard_pool.discard_type_erased(transient_res, timeline + 2);
 
             Ok((
@@ -4481,22 +4483,23 @@ impl RenderDevice for Device {
           self.device.synchronization2.cmd_pipeline_barrier2(command_buffer, &dep_info2);
 
           self.device.end_command_buffer(command_buffer)?;
-        }        let mut type_info = vk::SemaphoreTypeCreateInfo::default()
+        }
+        let mut type_info = vk::SemaphoreTypeCreateInfo::default()
           .semaphore_type(vk::SemaphoreType::TIMELINE)
           .initial_value(0);
         let semaphore_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
         let timeline_semaphore = unsafe { self.device.create_semaphore(&semaphore_info, None) }?;
-        
+
         let signal_semaphores = [timeline_semaphore];
         let signal_values = [1];
-        let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-          .signal_semaphore_values(&signal_values);
+        let mut timeline_info =
+          vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&signal_values);
 
         let submit_info = vk::SubmitInfo::default()
           .command_buffers(core::slice::from_ref(&command_buffer))
           .signal_semaphores(&signal_semaphores)
           .push_next(&mut timeline_info);
-          
+
         oshal::log!("generate_sky: submitting to graphics queue...");
         self
           .device
@@ -4505,7 +4508,7 @@ impl RenderDevice for Device {
 
         oshal::log!("generate_sky: waiting for timeline semaphore...");
         self.device.wait_for_semaphore_value(timeline_semaphore, 1, u64::MAX)?;
-        
+
         unsafe {
           self.device.destroy_semaphore(timeline_semaphore, None);
         }
@@ -7137,12 +7140,12 @@ impl RenderDevice for Device {
 
               // 4. Params Data (Inline)
               let params_data = [
-                  timeline as f32 * 0.016,
-                  5778.0,
-                  1000000.0,
-                  radius,
-                  0.05,
-                  15.0,
+                timeline as f32 * 0.016,
+                5778.0,
+                1000000.0,
+                radius,
+                0.05,
+                15.0,
               ];
 
               // 5. Graphics Descriptor Set
@@ -7184,7 +7187,10 @@ impl RenderDevice for Device {
 
               let (params_buffer, params_alloc) = unsafe {
                 allocator.create_buffer(&buffer_info, &alloc_info_vma).map_err(|e| {
-                  gpu_err!(format!("Failed to create params buffer for SunGen: {:?}", e))
+                  gpu_err!(format!(
+                    "Failed to create params buffer for SunGen: {:?}",
+                    e
+                  ))
                 })?
               };
 
@@ -7219,7 +7225,8 @@ impl RenderDevice for Device {
                 );
                 Ok(())
               })?;
-              let timeline = DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
+              let timeline =
+                DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
               discard_pool.discard_type_erased(transient_res, timeline + 2);
 
               let new_resource = resources::SunRenderResource {
@@ -7279,9 +7286,7 @@ impl RenderDevice for Device {
 
               Ok::<_, GpuError>(ExecuteResult::Updated(timeline))
             }
-            SunOperation::None => {
-              Ok(ExecuteResult::None)
-            }
+            SunOperation::None => Ok(ExecuteResult::None),
           }
         })
         .commit_read(|state, execute_result| {
@@ -8772,9 +8777,10 @@ impl RenderDevice for Device {
       .commit_read(|state, execute_result| {
         let (staging_buffer, allocation, size) = execute_result?;
 
-        let mut pending_lock = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-          &state.pending_downloads,
-        );
+        let mut pending_lock =
+          crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+            &state.pending_downloads,
+          );
 
         // Preemptive cleanup was removed because it bypassed standard DiscardPool and caused VMA memory corruption when Lavapipe used the buffers asynchronously.
 
@@ -9259,11 +9265,11 @@ impl Device {
       .initial_value(0);
     let semaphore_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
     let timeline_semaphore = unsafe { self.device.create_semaphore(&semaphore_info, None) }?;
-    
+
     let signal_semaphores = [timeline_semaphore];
     let signal_values = [1];
-    let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-      .signal_semaphore_values(&signal_values);
+    let mut timeline_info =
+      vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&signal_values);
 
     let submit_info = vk::SubmitInfo::default()
       .command_buffers(core::slice::from_ref(&cmd))
@@ -9274,7 +9280,7 @@ impl Device {
       .device
       .locked_queue_submit(queue.handle, &[submit_info], vk::Fence::null())
       .map_err(GpuError::from)?;
-      
+
     self.device.wait_for_semaphore_value(timeline_semaphore, 1, u64::MAX)?;
     unsafe {
       self.device.destroy_semaphore(timeline_semaphore, None);

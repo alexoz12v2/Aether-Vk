@@ -5,7 +5,10 @@ edition = "2024"
 
 [dependencies]
 test_utils = { path = "../test_utils" }
-aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = false, features = ["std", "shader_debug_sync"] }
+aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = false, features = [
+  "std",
+  # "shader_debug_sync"
+] }
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = ["console_log"] }
 winit = { version = "0.29.15", features = ["rwh_06"] }
 

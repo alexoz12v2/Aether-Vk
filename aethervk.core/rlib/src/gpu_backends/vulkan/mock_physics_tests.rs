@@ -409,7 +409,10 @@ fn integrate_bodies_p3() {
 
       let dummy_frame = crate::physics::physics_scene::GpuReferenceFrame::default();
       let mut frames_padded = alloc::vec![dummy_frame];
-      frames_padded.resize(wg_size, crate::physics::physics_scene::GpuReferenceFrame::default());
+      frames_padded.resize(
+        wg_size,
+        crate::physics::physics_scene::GpuReferenceFrame::default(),
+      );
 
       let bodies_buf = upload_buffer(device, &bodies_padded).unwrap();
       let wrenches_buf = upload_buffer(device, &wrenches_padded).unwrap();

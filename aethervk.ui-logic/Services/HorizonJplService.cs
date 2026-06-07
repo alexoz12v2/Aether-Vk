@@ -219,8 +219,10 @@ public class HorizonJplService
 
       var result = new SmallBodyDataComponent();
 
-      if (obj.TryGetProperty("spkid", out var spkidProp) &&
-          int.TryParse(spkidProp.GetString(), out int spkid))
+      if (
+        obj.TryGetProperty("spkid", out var spkidProp)
+        && int.TryParse(spkidProp.GetString(), out int spkid)
+      )
         result.SpkId = spkid;
 
       if (obj.TryGetProperty("des", out var des))
@@ -252,7 +254,9 @@ public class HorizonJplService
           result.OrbitClassCode = ocCode.GetString() ?? string.Empty;
       }
 
-      _console.Log($"[HorizonJpl] SBDB parsed: spkid={result.SpkId} des={result.Designation} name={result.FullName}");
+      _console.Log(
+        $"[HorizonJpl] SBDB parsed: spkid={result.SpkId} des={result.Designation} name={result.FullName}"
+      );
       return result;
     }
     catch (Exception ex)

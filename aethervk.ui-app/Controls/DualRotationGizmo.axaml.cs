@@ -9,15 +9,43 @@ namespace AetherVk.Controls;
 
 public partial class DualRotationGizmo : UserControl
 {
-  public static readonly StyledProperty<float> QuatWProperty = AvaloniaProperty.Register<DualRotationGizmo, float>(nameof(QuatW), 1.0f);
-  public static readonly StyledProperty<float> QuatXProperty = AvaloniaProperty.Register<DualRotationGizmo, float>(nameof(QuatX), 0.0f);
-  public static readonly StyledProperty<float> QuatYProperty = AvaloniaProperty.Register<DualRotationGizmo, float>(nameof(QuatY), 0.0f);
-  public static readonly StyledProperty<float> QuatZProperty = AvaloniaProperty.Register<DualRotationGizmo, float>(nameof(QuatZ), 0.0f);
+  public static readonly StyledProperty<float> QuatWProperty = AvaloniaProperty.Register<
+    DualRotationGizmo,
+    float
+  >(nameof(QuatW), 1.0f);
+  public static readonly StyledProperty<float> QuatXProperty = AvaloniaProperty.Register<
+    DualRotationGizmo,
+    float
+  >(nameof(QuatX), 0.0f);
+  public static readonly StyledProperty<float> QuatYProperty = AvaloniaProperty.Register<
+    DualRotationGizmo,
+    float
+  >(nameof(QuatY), 0.0f);
+  public static readonly StyledProperty<float> QuatZProperty = AvaloniaProperty.Register<
+    DualRotationGizmo,
+    float
+  >(nameof(QuatZ), 0.0f);
 
-  public float QuatW { get => GetValue(QuatWProperty); set => SetValue(QuatWProperty, value); }
-  public float QuatX { get => GetValue(QuatXProperty); set => SetValue(QuatXProperty, value); }
-  public float QuatY { get => GetValue(QuatYProperty); set => SetValue(QuatYProperty, value); }
-  public float QuatZ { get => GetValue(QuatZProperty); set => SetValue(QuatZProperty, value); }
+  public float QuatW
+  {
+    get => GetValue(QuatWProperty);
+    set => SetValue(QuatWProperty, value);
+  }
+  public float QuatX
+  {
+    get => GetValue(QuatXProperty);
+    set => SetValue(QuatXProperty, value);
+  }
+  public float QuatY
+  {
+    get => GetValue(QuatYProperty);
+    set => SetValue(QuatYProperty, value);
+  }
+  public float QuatZ
+  {
+    get => GetValue(QuatZProperty);
+    set => SetValue(QuatZProperty, value);
+  }
 
   private Canvas? _canvas;
 
@@ -40,8 +68,12 @@ public partial class DualRotationGizmo : UserControl
   protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
   {
     base.OnPropertyChanged(change);
-    if (change.Property == QuatWProperty || change.Property == QuatXProperty ||
-        change.Property == QuatYProperty || change.Property == QuatZProperty)
+    if (
+      change.Property == QuatWProperty
+      || change.Property == QuatXProperty
+      || change.Property == QuatYProperty
+      || change.Property == QuatZProperty
+    )
     {
       RebuildLines();
     }

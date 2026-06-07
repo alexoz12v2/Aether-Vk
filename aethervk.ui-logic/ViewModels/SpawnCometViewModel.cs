@@ -239,10 +239,12 @@ public partial class SpawnCometViewModel : ObservableObject
   public bool IsEpochRangeValid => WizardStartEpoch < WizardEndEpoch;
 
   /// <summary>Can click Validate only when range is valid and not already validated.</summary>
-  public bool CanValidateTimeline => IsEpochRangeValid && !IsTimelineValidated && !IsValidatingTimeline;
+  public bool CanValidateTimeline =>
+    IsEpochRangeValid && !IsTimelineValidated && !IsValidatingTimeline;
 
   /// <summary>Human-readable epoch range for Step 4 display.</summary>
-  public string EpochSummary => $"Epoch: {WizardStartEpoch:yyyy-MM-dd} → {WizardEndEpoch:yyyy-MM-dd}";
+  public string EpochSummary =>
+    $"Epoch: {WizardStartEpoch:yyyy-MM-dd} → {WizardEndEpoch:yyyy-MM-dd}";
 
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(CanGoNext))]
@@ -406,7 +408,10 @@ public partial class SpawnCometViewModel : ObservableObject
 
     // 1. Check if existing almanac already covers this range
     bool existingCoverage = _runtimeService.CheckAlmanacCoverage(
-      naifId, WizardStartEpoch, WizardEndEpoch);
+      naifId,
+      WizardStartEpoch,
+      WizardEndEpoch
+    );
 
     string? downloadedSpkPath = null;
 
@@ -423,7 +428,9 @@ public partial class SpawnCometViewModel : ObservableObject
 
     // 2. Download SPK from JPL Horizons
     var downloadMsg = _breadcrumbService.ShowLoadingMessage(
-      "SPK Download", "Downloading comet ephemeris from JPL Horizons…");
+      "SPK Download",
+      "Downloading comet ephemeris from JPL Horizons…"
+    );
 
     try
     {
@@ -452,7 +459,10 @@ public partial class SpawnCometViewModel : ObservableObject
 
     if (string.IsNullOrEmpty(downloadedSpkPath))
     {
-      _breadcrumbService.ShowErrorMessage("SPK Error", "SPK download failed. Try adjusting the epoch range.");
+      _breadcrumbService.ShowErrorMessage(
+        "SPK Error",
+        "SPK download failed. Try adjusting the epoch range."
+      );
       TimelineValidationStatus = "SPK download failed. Try adjusting the epoch range.";
       IsValidatingTimeline = false;
       return;
@@ -460,10 +470,13 @@ public partial class SpawnCometViewModel : ObservableObject
 
     // 3. Probe SPK in temporary almanac (synchronous, no locks on simulation state)
     var probeMsg = _breadcrumbService.ShowLoadingMessage(
-      "SPK Probe", "Verifying ephemeris coverage at epoch boundaries…");
+      "SPK Probe",
+      "Verifying ephemeris coverage at epoch boundaries…"
+    );
 
     bool probeOk;
-    DateTimeOffset? domainStart = null, domainEnd = null;
+    DateTimeOffset? domainStart = null,
+      domainEnd = null;
     int discoveredNaifId = 0;
     try
     {
@@ -495,25 +508,35 @@ public partial class SpawnCometViewModel : ObservableObject
     if (!probeOk)
     {
       // 4. Probe failed — delete the downloaded SPK and show error with actual domain
-      try { System.IO.File.Delete(downloadedSpkPath); } catch { /* best effort */ }
+      try
+      {
+        System.IO.File.Delete(downloadedSpkPath);
+      }
+      catch
+      { /* best effort */
+      }
 
-      string domainInfo = (domainStart.HasValue && domainEnd.HasValue)
-        ? $"SPK contains data from {domainStart.Value:yyyy-MM-dd} to {domainEnd.Value:yyyy-MM-dd}."
-        : $"Could not find NAIF ID {naifId} in the downloaded SPK file.";
+      string domainInfo =
+        (domainStart.HasValue && domainEnd.HasValue)
+          ? $"SPK contains data from {domainStart.Value:yyyy-MM-dd} to {domainEnd.Value:yyyy-MM-dd}."
+          : $"Could not find NAIF ID {naifId} in the downloaded SPK file.";
 
       _breadcrumbService.ShowErrorMessage(
         "SPK Coverage Error",
-        $"The downloaded SPK does not cover {WizardStartEpoch:yyyy-MM-dd} to {WizardEndEpoch:yyyy-MM-dd}. " +
-        domainInfo + " Adjust dates and try again.");
-      TimelineValidationStatus =
-        $"Ephemeris probe failed — {domainInfo}";
+        $"The downloaded SPK does not cover {WizardStartEpoch:yyyy-MM-dd} to {WizardEndEpoch:yyyy-MM-dd}. "
+          + domainInfo
+          + " Adjust dates and try again."
+      );
+      TimelineValidationStatus = $"Ephemeris probe failed — {domainInfo}";
       IsValidatingTimeline = false;
       return;
     }
 
     // 5. Probe succeeded — load SPK into the real simulation almanac
     var loadMsg = _breadcrumbService.ShowLoadingMessage(
-      "Loading SPK", "Loading SPK into simulation almanac…");
+      "Loading SPK",
+      "Loading SPK into simulation almanac…"
+    );
 
     try
     {
@@ -532,7 +555,8 @@ public partial class SpawnCometViewModel : ObservableObject
 
     // 6. Success!
     IsTimelineValidated = true;
-    TimelineValidationStatus = "✓ SPK coverage verified — ephemeris confirmed at start and end epochs";
+    TimelineValidationStatus =
+      "✓ SPK coverage verified — ephemeris confirmed at start and end epochs";
 
     IsValidatingTimeline = false;
     OnPropertyChanged(nameof(CanGoNext));
@@ -542,7 +566,8 @@ public partial class SpawnCometViewModel : ObservableObject
   [RelayCommand]
   private async Task NextStepAsync()
   {
-    if (!CanGoNext) return;
+    if (!CanGoNext)
+      return;
 
     // Fetch SBDB data when transitioning from Step 3 → Step 4
     if (CurrentStep == 3 && SelectedComet != null)
@@ -551,14 +576,21 @@ public partial class SpawnCometViewModel : ObservableObject
       if (_sbdbData == null || _sbdbCachedDesignation != des)
       {
         var loadMsg = _breadcrumbService.ShowLoadingMessage(
-          "SBDB", "Resolving canonical NAIF SPKID…");
+          "SBDB",
+          "Resolving canonical NAIF SPKID…"
+        );
         try
         {
           _sbdbData = await _horizonService.FetchSmallBodyDataAsync(des);
           _sbdbCachedDesignation = des;
         }
-        catch { /* non-fatal — probe fallback will discover the ID */ }
-        finally { _breadcrumbService.RemoveMessage(loadMsg); }
+        catch
+        { /* non-fatal — probe fallback will discover the ID */
+        }
+        finally
+        {
+          _breadcrumbService.RemoveMessage(loadMsg);
+        }
       }
     }
 
@@ -580,7 +612,8 @@ public partial class SpawnCometViewModel : ObservableObject
   /// Canonical NAIF SPKID from SBDB, falling back to the Horizons record number.
   /// This is the ID actually stored in the SPK file (e.g. 1000012 for 67P).
   /// </summary>
-  public int SpkNaifId => _sbdbData?.SpkId ?? (int.TryParse(SelectedSpkRecord?.RecordId, out int id) ? id : 0);
+  public int SpkNaifId =>
+    _sbdbData?.SpkId ?? (int.TryParse(SelectedSpkRecord?.RecordId, out int id) ? id : 0);
 
   /// <summary>SBDB metadata for the selected comet (null if not fetched).</summary>
   public SmallBodyDataComponent? SmallBodyData => _sbdbData;

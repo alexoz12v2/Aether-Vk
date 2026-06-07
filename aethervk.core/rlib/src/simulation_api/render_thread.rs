@@ -254,7 +254,10 @@ fn process_command(
                     &debug_name,
                   )
                   .map_err(|e| {
-                    aethervk_oshal_rlib::log!("[render tasklet] build_render_scene failed: {:?}", e);
+                    aethervk_oshal_rlib::log!(
+                      "[render tasklet] build_render_scene failed: {:?}",
+                      e
+                    );
                     e
                   })?;
 
@@ -300,7 +303,8 @@ fn process_command(
                 }
 
                 if is_first_render && render_frame.custom_render_callback.is_some() {
-                  let c = unsafe { render_frame.custom_render_callback.as_ref().unwrap_unchecked() };
+                  let c =
+                    unsafe { render_frame.custom_render_callback.as_ref().unwrap_unchecked() };
                   (c.on_first_render_fn)(
                     render_device,
                     cmd_buffer,
@@ -309,7 +313,10 @@ fn process_command(
                     c.user_data.0,
                   )
                   .map_err(|e| {
-                    aethervk_oshal_rlib::log!("[render tasklet] on_first_render_fn failed: {:?}", e);
+                    aethervk_oshal_rlib::log!(
+                      "[render tasklet] on_first_render_fn failed: {:?}",
+                      e
+                    );
                     e
                   })?
                 }
@@ -355,7 +362,8 @@ fn process_command(
                 })?;
 
                 if render_frame.custom_render_callback.is_some() {
-                  let c = unsafe { render_frame.custom_render_callback.as_ref().unwrap_unchecked() };
+                  let c =
+                    unsafe { render_frame.custom_render_callback.as_ref().unwrap_unchecked() };
                   (c.after_render_frame_fn)(
                     render_device,
                     cmd_buffer,
@@ -373,7 +381,10 @@ fn process_command(
                 }
 
                 render_pass_scope.end().map_err(|e| {
-                  aethervk_oshal_rlib::log!("[render tasklet] render_pass_scope.end failed: {:?}", e);
+                  aethervk_oshal_rlib::log!(
+                    "[render tasklet] render_pass_scope.end failed: {:?}",
+                    e
+                  );
                   e
                 })?;
 

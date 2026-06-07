@@ -47,8 +47,10 @@ mod tests {
   fn panic_error_callback(msg: &str) {
     // Ignore false positive from Khronos Validation Layers GPU-Assisted Validation on Lavapipe ARM64
     // when using buffer_reference inside push constants.
-    if msg.contains("UNASSIGNED-Device address out of bounds") || msg.contains("UNASSIGNED-VkSemaphore-state-timeout") {
-        return;
+    if msg.contains("UNASSIGNED-Device address out of bounds")
+      || msg.contains("UNASSIGNED-VkSemaphore-state-timeout")
+    {
+      return;
     }
     panic!("Vulkan Error: {}", msg);
   }
@@ -360,10 +362,15 @@ mod tests {
             restitution: 0.5,
           },
         );
-        let _ = ctx.scenes.read().scenes.get(&scene_id).unwrap().write().scene.add_component(
-          comet_eid,
-          crate::scene::KinematicComponent::default(),
-        );
+        let _ = ctx
+          .scenes
+          .read()
+          .scenes
+          .get(&scene_id)
+          .unwrap()
+          .write()
+          .scene
+          .add_component(comet_eid, crate::scene::KinematicComponent::default());
 
         // 4. Hook Callback
         SimulationContext::set_render_callback(Some(visual_render_callback_impl));
@@ -415,18 +422,21 @@ mod tests {
               let mut info: libc::mach_task_basic_info = unsafe { std::mem::zeroed() };
               let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
               let res = unsafe {
-                  libc::task_info(
-                      libc::mach_task_self(),
-                      libc::MACH_TASK_BASIC_INFO,
-                      &mut info as *mut _ as libc::task_info_t,
-                      &mut count,
-                  )
+                libc::task_info(
+                  libc::mach_task_self(),
+                  libc::MACH_TASK_BASIC_INFO,
+                  &mut info as *mut _ as libc::task_info_t,
+                  &mut count,
+                )
               };
               if res == libc::KERN_SUCCESS {
-                  let virtual_mb = info.virtual_size / (1024 * 1024);
-                  let resident_mb = info.resident_size / (1024 * 1024);
-                  
-                  println!("Memory Status -> Resident: {} MB | Virtual: {} MB", resident_mb, virtual_mb);
+                let virtual_mb = info.virtual_size / (1024 * 1024);
+                let resident_mb = info.resident_size / (1024 * 1024);
+
+                println!(
+                  "Memory Status -> Resident: {} MB | Virtual: {} MB",
+                  resident_mb, virtual_mb
+                );
               }
             }
 
@@ -469,7 +479,7 @@ mod tests {
         let start_time = std::time::Instant::now();
         let duration = core::time::Duration::from_millis(if is_cpu { 1000 } else { 500 });
         while start_time.elapsed() < duration {
-            wait_for_images("flush", false);
+          wait_for_images("flush", false);
         }
 
         let _ = ctx

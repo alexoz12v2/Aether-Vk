@@ -1874,11 +1874,7 @@ impl WindowlessPresentationState {
     }
     let timeline_val = swapchain_image.submission_timeline_value;
     if timeline_val > 0 {
-      let _ = device.wait_for_semaphore_value(
-        timeline_sem,
-        timeline_val,
-        u64::MAX,
-      );
+      let _ = device.wait_for_semaphore_value(timeline_sem, timeline_val, u64::MAX);
     }
 
     // Fences reset removed
@@ -1944,8 +1940,9 @@ impl WindowlessPresentationState {
     if image.eligible_for_acquisition() || frame.eligible_for_steal() {
       return Err(crate::gpu_err!("window_submit: still eligible"));
     }
-    
-    let submitted_timeline_val = self.last_timeline_value.load(core::sync::atomic::Ordering::Acquire);
+
+    let submitted_timeline_val =
+      self.last_timeline_value.load(core::sync::atomic::Ordering::Acquire);
     image.submission_timeline_value = submitted_timeline_val;
     frame.submission_timeline_value = submitted_timeline_val;
 

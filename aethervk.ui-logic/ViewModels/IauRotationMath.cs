@@ -16,14 +16,17 @@ public static class IauRotationMath
 
   /// <summary>
   /// Computes the orientation quaternion from IAU pole (RA, Dec, W) at J2000.
-  /// 
+  ///
   /// Step 1: Build Q_body_to_ICRF = Rz(RA+90°) · Rx(90°-Dec) · Rz(W)
   /// Step 2: Convert to ECLIPJ2000 frame: Q_final = Rx(ε) · Q_body_to_ICRF
-  /// 
+  ///
   /// Returns (w, x, y, z) normalized, in ECLIPJ2000 frame.
   /// </summary>
   public static (double w, double x, double y, double z) IauToQuaternion(
-    double poleRaDeg, double poleDecDeg, double primeMeridianDeg)
+    double poleRaDeg,
+    double poleDecDeg,
+    double primeMeridianDeg
+  )
   {
     double raRad = poleRaDeg * (Math.PI / 180.0);
     double decRad = poleDecDeg * (Math.PI / 180.0);
@@ -31,11 +34,13 @@ public static class IauRotationMath
 
     // Rz(RA + 90°)
     double a1 = raRad + Math.PI / 2.0;
-    double cz1 = Math.Cos(a1 * 0.5), sz1 = Math.Sin(a1 * 0.5);
+    double cz1 = Math.Cos(a1 * 0.5),
+      sz1 = Math.Sin(a1 * 0.5);
 
     // Rx(90° - Dec)
     double a2 = Math.PI / 2.0 - decRad;
-    double cx1 = Math.Cos(a2 * 0.5), sx1 = Math.Sin(a2 * 0.5);
+    double cx1 = Math.Cos(a2 * 0.5),
+      sx1 = Math.Sin(a2 * 0.5);
 
     // Q_pole = Rz(a1) * Rx(a2)  (Hamilton product)
     double pw = cz1 * cx1;
@@ -44,7 +49,8 @@ public static class IauRotationMath
     double pz = sz1 * cx1;
 
     // Rz(W)
-    double cw = Math.Cos(wRad * 0.5), sw = Math.Sin(wRad * 0.5);
+    double cw = Math.Cos(wRad * 0.5),
+      sw = Math.Sin(wRad * 0.5);
 
     // Q_body_to_ICRF = Q_pole * Rz(W)
     double tw = pw * cw - pz * sw;
@@ -66,7 +72,13 @@ public static class IauRotationMath
 
     // Normalize
     double len = Math.Sqrt(fw * fw + fx * fx + fy * fy + fz * fz);
-    if (len > 1e-12) { fw /= len; fx /= len; fy /= len; fz /= len; }
+    if (len > 1e-12)
+    {
+      fw /= len;
+      fx /= len;
+      fy /= len;
+      fz /= len;
+    }
 
     return (fw, fx, fy, fz);
   }
@@ -78,7 +90,11 @@ public static class IauRotationMath
   /// Returns (pitchDeg, yawDeg, rollDeg).
   /// </summary>
   public static (double pitch, double yaw, double roll) QuaternionToGizmoEuler(
-    double w, double x, double y, double z)
+    double w,
+    double x,
+    double y,
+    double z
+  )
   {
     // Build quaternion rotation matrix R_q (body→world)
     double r00 = 1 - 2 * (y * y + z * z);
@@ -94,7 +110,8 @@ public static class IauRotationMath
     double sinYaw = Math.Max(-1.0, Math.Min(1.0, -r02));
     double yawRad = Math.Asin(sinYaw);
 
-    double pitchRad, rollRad;
+    double pitchRad,
+      rollRad;
     double cosYaw = Math.Cos(yawRad);
 
     if (Math.Abs(cosYaw) > 1e-6)
@@ -109,11 +126,7 @@ public static class IauRotationMath
       pitchRad = Math.Atan2(-r10, r11);
     }
 
-    return (
-      pitchRad * 180.0 / Math.PI,
-      yawRad * 180.0 / Math.PI,
-      rollRad * 180.0 / Math.PI
-    );
+    return (pitchRad * 180.0 / Math.PI, yawRad * 180.0 / Math.PI, rollRad * 180.0 / Math.PI);
   }
 
   /// <summary>
@@ -127,14 +140,23 @@ public static class IauRotationMath
     double p = pitchDeg * Math.PI / 180.0;
     double y = yawDeg * Math.PI / 180.0;
     double r = rollDeg * Math.PI / 180.0;
-    double cp = Math.Cos(p), sp = Math.Sin(p);
-    double cy = Math.Cos(y), sy = Math.Sin(y);
-    double cr = Math.Cos(r), sr = Math.Sin(r);
+    double cp = Math.Cos(p),
+      sp = Math.Sin(p);
+    double cy = Math.Cos(y),
+      sy = Math.Sin(y);
+    double cr = Math.Cos(r),
+      sr = Math.Sin(r);
     return new[]
     {
-      cy * cr,             cy * sr,             -sy,
-      sp * sy * cr - cp * sr, sp * sy * sr + cp * cr, sp * cy,
-      cp * sy * cr + sp * sr, cp * sy * sr - sp * cr, cp * cy,
+      cy * cr,
+      cy * sr,
+      -sy,
+      sp * sy * cr - cp * sr,
+      sp * sy * sr + cp * cr,
+      sp * cy,
+      cp * sy * cr + sp * sr,
+      cp * sy * sr - sp * cr,
+      cp * cy,
     };
   }
 

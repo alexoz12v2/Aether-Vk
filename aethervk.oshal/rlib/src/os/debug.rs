@@ -778,7 +778,8 @@ mod tests {
             &mut size,
             std::ptr::null_mut(),
             0,
-          ) == 0 && ret == 1
+          ) == 0
+            && ret == 1
         }
       }
       #[cfg(not(any(target_os = "linux", target_os = "macos")))]

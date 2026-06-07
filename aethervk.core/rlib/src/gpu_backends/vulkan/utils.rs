@@ -266,7 +266,7 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
   let p_msg = unsafe { (*p_callback_data).p_message };
   let msg = unsafe { core::ffi::CStr::from_ptr(p_msg) };
   let msg_str = msg.to_string_lossy();
-  
+
   if msg_str.contains("UNASSIGNED-VkSemaphore-state-timeout") {
     return vk::FALSE; // Lavapipe + GPU-AV bug: False positive timeout
   }

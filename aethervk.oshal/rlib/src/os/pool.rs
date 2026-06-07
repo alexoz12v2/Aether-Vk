@@ -211,7 +211,9 @@ mod windows_pool {
         let changed_name = if let Some(wn) = workload.name() {
           crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}_{}", id, wn));
           true
-        } else { false };
+        } else {
+          false
+        };
 
         let status = workload.execute();
 
@@ -322,8 +324,7 @@ mod pthread_pool {
 
         let raw_arg = Box::into_raw(arg);
         let mut thread: pthread_t = unsafe { core::mem::zeroed() };
-        let ret =
-          unsafe { pthread_create(&mut thread, &attr, thread_func, raw_arg as *mut _) };
+        let ret = unsafe { pthread_create(&mut thread, &attr, thread_func, raw_arg as *mut _) };
 
         if ret == 0 {
           threads.push(thread);
@@ -335,14 +336,18 @@ mod pthread_pool {
               pthread_join(t, ptr::null_mut());
             }
           }
-          unsafe { libc::pthread_attr_destroy(&mut attr); }
+          unsafe {
+            libc::pthread_attr_destroy(&mut attr);
+          }
           return Err(crate::os::NativeError::OsThreadingError(
             crate::os::ThreadingError::Unknown,
           ));
         }
       }
 
-      unsafe { libc::pthread_attr_destroy(&mut attr); }
+      unsafe {
+        libc::pthread_attr_destroy(&mut attr);
+      }
 
       Ok(Self { threads, state })
     }
@@ -406,74 +411,76 @@ mod pthread_pool {
 
     while !state.shutdown.load(Ordering::Acquire) {
       let mut core_logic = || {
-      tick = tick.wrapping_add(1);
-      let try_shared_first = tick % 4 == 0;
+        tick = tick.wrapping_add(1);
+        let try_shared_first = tick % 4 == 0;
 
-      let workload = if try_shared_first {
-        let mut shared = state.shared_queue.lock();
-        if let Some(w) = shared.pop_front() {
-          Some(w)
-        } else {
-          drop(shared);
-          state.local_queues[id].lock().pop_front()
-        }
-      } else {
-        let mut local = state.local_queues[id].lock();
-        if let Some(w) = local.pop_front() {
-          Some(w)
-        } else {
-          drop(local);
-          state.shared_queue.lock().pop_front()
-        }
-      };
-
-      if let Some(mut workload) = workload {
-        #[cfg(all(debug_assertions, feature = "profile_thread_names"))]
-        let changed_name = if let Some(wn) = workload.name() {
-          crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}_{}", id, wn));
-          true
-        } else { false };
-
-        let status = workload.execute();
-
-        #[cfg(all(debug_assertions, feature = "profile_thread_names"))]
-        if changed_name {
-          crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}", id));
-        }
-
-        match status {
-          WorkloadStatus::Complete => {
-            state.pending_tasks.fetch_sub(1, Ordering::Release);
+        let workload = if try_shared_first {
+          let mut shared = state.shared_queue.lock();
+          if let Some(w) = shared.pop_front() {
+            Some(w)
+          } else {
+            drop(shared);
+            state.local_queues[id].lock().pop_front()
           }
-          WorkloadStatus::Yield => {
-            if state.shutdown.load(Ordering::Acquire) {
-              return;
-            }
+        } else {
+          let mut local = state.local_queues[id].lock();
+          if let Some(w) = local.pop_front() {
+            Some(w)
+          } else {
+            drop(local);
+            state.shared_queue.lock().pop_front()
+          }
+        };
 
-            let mut target_q = None;
-            if let Some(tid) = workload.tasklet_id() {
-              let num_threads = state.local_queues.len();
-              if num_threads > 0 {
-                target_q = Some(tid % num_threads);
+        if let Some(mut workload) = workload {
+          #[cfg(all(debug_assertions, feature = "profile_thread_names"))]
+          let changed_name = if let Some(wn) = workload.name() {
+            crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}_{}", id, wn));
+            true
+          } else {
+            false
+          };
+
+          let status = workload.execute();
+
+          #[cfg(all(debug_assertions, feature = "profile_thread_names"))]
+          if changed_name {
+            crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}", id));
+          }
+
+          match status {
+            WorkloadStatus::Complete => {
+              state.pending_tasks.fetch_sub(1, Ordering::Release);
+            }
+            WorkloadStatus::Yield => {
+              if state.shutdown.load(Ordering::Acquire) {
+                return;
+              }
+
+              let mut target_q = None;
+              if let Some(tid) = workload.tasklet_id() {
+                let num_threads = state.local_queues.len();
+                if num_threads > 0 {
+                  target_q = Some(tid % num_threads);
+                }
+              }
+
+              if let Some(target) = target_q {
+                state.local_queues[target].lock().push_back(workload);
+              } else {
+                state.shared_queue.lock().push_back(workload);
+              }
+
+              let local_len = state.local_queues[id].lock().len();
+              let shared_len = state.shared_queue.lock().len();
+              if local_len + shared_len <= 1 {
+                crate::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
               }
             }
-
-            if let Some(target) = target_q {
-              state.local_queues[target].lock().push_back(workload);
-            } else {
-              state.shared_queue.lock().push_back(workload);
-            }
-
-            let local_len = state.local_queues[id].lock().len();
-            let shared_len = state.shared_queue.lock().len();
-            if local_len + shared_len <= 1 {
-              crate::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
-            }
           }
+        } else {
+          crate::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
         }
-      } else {
-        crate::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
-      }
       };
 
       #[cfg(target_os = "macos")]

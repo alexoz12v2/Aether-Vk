@@ -12,26 +12,26 @@ public struct SceneHierarchyNodeDTO
 
 public enum AvkSoundEvent : uint
 {
-    UiClick = 0,
-    UiGrab = 1,
-    UiDrop = 2,
-    PhysicsCollisionSoft = 3,
-    PhysicsCollisionHard = 4
+  UiClick = 0,
+  UiGrab = 1,
+  UiDrop = 2,
+  PhysicsCollisionSoft = 3,
+  PhysicsCollisionHard = 4,
 }
 
 public enum AvkAudioPlaybackMode : uint
 {
-    MonoSpatial = 0,
-    StereoDirect = 1
+  MonoSpatial = 0,
+  StereoDirect = 1,
 }
 
 [StructLayout(LayoutKind.Sequential)]
 public struct AvkAudioParams
 {
-    public float Volume;
-    public float Pitch;
-    public float Pan;
-    public AvkAudioPlaybackMode Mode;
+  public float Volume;
+  public float Pitch;
+  public float Pan;
+  public AvkAudioPlaybackMode Mode;
 }
 
 public static class NativeInterop
@@ -49,9 +49,9 @@ public static class NativeInterop
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_playSoundEvent(
-      IntPtr ctx,
-      AvkSoundEvent soundEvent,
-      AvkAudioParams audioParams
+    IntPtr ctx,
+    AvkSoundEvent soundEvent,
+    AvkAudioParams audioParams
   );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -933,8 +933,7 @@ public static class NativeInterop
   /// Loads an SPK file into a temporary almanac and probes whether ephemeris data
   /// can be queried at the given start and end epochs. Does NOT modify the main almanac.
   /// </summary>
-  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl,
-    CharSet = CharSet.Ansi)]
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
   [return: MarshalAs(UnmanagedType.I1)]
   public static extern bool avkSimulationContext_probeSpkFile(
     [MarshalAs(UnmanagedType.LPStr)] string path,
@@ -952,7 +951,11 @@ public static class NativeInterop
   /// The callback should download the SPK file and return the file path, or IntPtr.Zero on failure.
   /// </summary>
   [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-  public delegate IntPtr AlmanacInvalidationCallback(int spkId, IntPtr startEpochStr, IntPtr endEpochStr);
+  public delegate IntPtr AlmanacInvalidationCallback(
+    int spkId,
+    IntPtr startEpochStr,
+    IntPtr endEpochStr
+  );
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_setAlmanacInvalidationCallback(

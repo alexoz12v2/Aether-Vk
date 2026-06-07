@@ -145,7 +145,11 @@ pub struct ParticleMetadata {
 /// Slots: 0-2=pos, 3-5=vel, 6=mass, 7-9=force, 10=beta
 pub const PARTICLE_FIELDS: usize = 11;
 
-pub fn pack_particles_aosoa(particles: &[alloc::vec::Vec<f32>], subgroup_size: usize, fields_per_particle: usize) -> alloc::vec::Vec<f32> {
+pub fn pack_particles_aosoa(
+  particles: &[alloc::vec::Vec<f32>],
+  subgroup_size: usize,
+  fields_per_particle: usize,
+) -> alloc::vec::Vec<f32> {
   let num_particles = particles.len();
   let num_blocks = ((num_particles + subgroup_size - 1) / subgroup_size).max(1);
   let mut buffer = alloc::vec::Vec::with_capacity(num_blocks * fields_per_particle * subgroup_size);
@@ -660,7 +664,9 @@ pub static ASSET_DIR: parking_lot::RwLock<Option<alloc::string::String>> =
 
 #[cfg(test)]
 pub fn set_asset_dir_for_tests() {
-  if ASSET_DIR.read().is_some() { return; }
+  if ASSET_DIR.read().is_some() {
+    return;
+  }
   let mut home_dir = std::env::current_exe().unwrap_or_default();
   let mut iter = 0;
   while !home_dir.join("assets").is_dir() && iter < 32 {
@@ -2010,7 +2016,6 @@ pub trait DeviceBuffer<T>: Send + Sync {
   unsafe fn mapped_slice(&self) -> Option<&[T]>;
 }
 
-
 /// A handle representing a pending GPU-to-CPU DMA transfer.
 /// WARN: Any WaitHandle implementation should implement Drop, so that if we early exit from a function we know wait has been done.
 pub trait WaitHandle<T>: Send + Sync {
@@ -2070,11 +2075,11 @@ pub struct CollisionPair {
 /// Powers of two from 4 to 128. Lavapipe reports 8; Apple Silicon 32; AMD 64; Nvidia 32.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubgroupSize {
-  Size4   = 4,
-  Size8   = 8,
-  Size16  = 16,
-  Size32  = 32,
-  Size64  = 64,
+  Size4 = 4,
+  Size8 = 8,
+  Size16 = 16,
+  Size32 = 32,
+  Size64 = 64,
   Size128 = 128,
 }
 
@@ -2093,7 +2098,6 @@ pub trait Kernels: Send + Sync {
   fn discard_list<T: Copy + Send + Sync>(&self, list: Self::List<T>);
   fn discard_bvh(&self, bvh: Self::MotionBvh);
   fn discard_tlas(&self, tlas: Self::MotionTlas);
-
 
   /// Returns the hardware subgroup size.
   fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize>;
@@ -2496,7 +2500,6 @@ pub trait Kernels: Send + Sync {
 
   #[cfg(any(test, feature = "collisions"))]
   fn read_buffer_u32_first(&self, buf: &Self::Buffer<u32>) -> EngineResult<u32>;
-
 
   #[cfg(any(test, feature = "collisions"))]
   fn apply_collision_responses(

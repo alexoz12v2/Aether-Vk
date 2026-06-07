@@ -7,7 +7,8 @@ mod tests {
     },
     physics::physics_scene::PhysicsScene,
     scene::{
-      ColliderComponent, ColliderShape, KinematicComponent, ReferenceFrameType, Scene, TransformComponent,
+      ColliderComponent, ColliderShape, KinematicComponent, ReferenceFrameType, Scene,
+      TransformComponent,
     },
     types::RuntimeParams,
   };
@@ -109,8 +110,9 @@ mod tests {
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_conservation_of_energy_and_momentum() {
     #[cfg(all(test, not(target_vendor = "apple")))]
-    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.store(true, core::sync::atomic::Ordering::Relaxed);
-    
+    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+      .store(true, core::sync::atomic::Ordering::Relaxed);
+
     let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
@@ -167,11 +169,17 @@ mod tests {
     let initial_linear_momentum = 10.0 * 1.0;
     let initial_angular_momentum = 1.0 * 1.0;
 
-    ctx.frontend.with_device(ctx.device_handle, |dev| {
-      let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-      run_simulation(vulkan_device, &mut scene, duration_seconds, false);
-      Ok(())
-    }).unwrap();
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+        run_simulation(vulkan_device, &mut scene, duration_seconds, false);
+        Ok(())
+      })
+      .unwrap();
 
     let final_kin = scene.with_component(body, |k: &KinematicComponent| k.clone()).unwrap();
 
@@ -185,13 +193,24 @@ mod tests {
       + 0.5 * 1.0 * final_angular_velocity.dot(final_angular_velocity);
 
     let diff_energy = final_energy - initial_energy;
-    assert!(diff_energy > -1e-4 && diff_energy < 1e-4, "Energy not conserved: {} vs {}", initial_energy, final_energy);
-    
+    assert!(
+      diff_energy > -1e-4 && diff_energy < 1e-4,
+      "Energy not conserved: {} vs {}",
+      initial_energy,
+      final_energy
+    );
+
     let diff_px = final_linear_momentum_vec.x() - initial_linear_momentum;
-    assert!(diff_px > -1e-4 && diff_px < 1e-4, "Linear momentum X not conserved");
+    assert!(
+      diff_px > -1e-4 && diff_px < 1e-4,
+      "Linear momentum X not conserved"
+    );
 
     let diff_ly = final_angular_momentum_vec.y() - initial_angular_momentum;
-    assert!(diff_ly > -1e-4 && diff_ly < 1e-4, "Angular momentum Y not conserved");
+    assert!(
+      diff_ly > -1e-4 && diff_ly < 1e-4,
+      "Angular momentum Y not conserved"
+    );
   }
 
   #[test]
@@ -223,16 +242,26 @@ mod tests {
     };
     let body_a = scene.spawn_entity("BodyA");
     scene.set_parent(body_a, Some(root));
-    scene.add_component(body_a, TransformComponent {
-      position: Vec3f32::from_components(-2.0, 0.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(body_a, ColliderComponent {
-      shape: ColliderShape::Sphere { radius: 1.0 },
-      mass: 5.0,
-      ..Default::default()
-    }).unwrap();
+    scene
+      .add_component(
+        body_a,
+        TransformComponent {
+          position: Vec3f32::from_components(-2.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        body_a,
+        ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          mass: 5.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
     scene.add_component(body_a, kin_a).unwrap();
 
     let kin_b = KinematicComponent {
@@ -241,45 +270,68 @@ mod tests {
     };
     let body_b = scene.spawn_entity("BodyB");
     scene.set_parent(body_b, Some(root));
-    scene.add_component(body_b, TransformComponent {
-      position: Vec3f32::from_components(2.0, 0.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(body_b, ColliderComponent {
-      shape: ColliderShape::Sphere { radius: 1.0 },
-      mass: 10.0,
-      ..Default::default()
-    }).unwrap();
+    scene
+      .add_component(
+        body_b,
+        TransformComponent {
+          position: Vec3f32::from_components(2.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        body_b,
+        ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          mass: 10.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
     scene.add_component(body_b, kin_b).unwrap();
 
     let initial_momentum = 5.0 * 2.0 + 10.0 * (-1.0); // 0.0
 
     let duration_seconds = 2.0;
 
-    ctx.frontend.with_device(ctx.device_handle, |dev| {
-      let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-      run_simulation(vulkan_device, &mut scene, duration_seconds, true);
-      Ok(())
-    }).unwrap();
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+        run_simulation(vulkan_device, &mut scene, duration_seconds, true);
+        Ok(())
+      })
+      .unwrap();
 
     let final_kin_a = scene.with_component(body_a, |k: &KinematicComponent| k.clone()).unwrap();
     let final_kin_b = scene.with_component(body_b, |k: &KinematicComponent| k.clone()).unwrap();
 
     let final_momentum = final_kin_a.velocity.x() * 5.0 + final_kin_b.velocity.x() * 10.0;
-    
+
     let diff_p = final_momentum - initial_momentum;
-    assert!(diff_p > -1e-2 && diff_p < 1e-2, "Linear momentum not conserved in collision: {} vs {}", initial_momentum, final_momentum);
+    assert!(
+      diff_p > -1e-2 && diff_p < 1e-2,
+      "Linear momentum not conserved in collision: {} vs {}",
+      initial_momentum,
+      final_momentum
+    );
   }
 
   #[test]
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_energy_conservation_bounce() {
     #[cfg(all(test, not(target_vendor = "apple")))]
-    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.store(false, core::sync::atomic::Ordering::Relaxed);
+    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+      .store(false, core::sync::atomic::Ordering::Relaxed);
     #[cfg(test)]
-    crate::gpu_backends::vulkan::physics::READBACK_DIAGNOSTICS.store(true, core::sync::atomic::Ordering::Relaxed);
-    
+    crate::gpu_backends::vulkan::physics::READBACK_DIAGNOSTICS
+      .store(true, core::sync::atomic::Ordering::Relaxed);
+
     let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
@@ -303,18 +355,30 @@ mod tests {
     // Falling box (small cube, same mass/speed as before)
     let body_a = scene.spawn_entity("Box");
     scene.set_parent(body_a, Some(root));
-    scene.add_component(body_a, TransformComponent {
-      position: Vec3f32::from_components(0.0, 10.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(body_a, ColliderComponent {
-      shape: ColliderShape::OBB { half_extents: Vec3f32::from_components(0.5, 0.5, 0.5) },
-      mass: 1.0,
-      restitution: 1.0,
-      friction: 0.0,
-      ..Default::default()
-    }).unwrap();
+    scene
+      .add_component(
+        body_a,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 10.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        body_a,
+        ColliderComponent {
+          shape: ColliderShape::OBB {
+            half_extents: Vec3f32::from_components(0.5, 0.5, 0.5),
+          },
+          mass: 1.0,
+          restitution: 1.0,
+          friction: 0.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
     let mut kin_a = KinematicComponent::default();
     kin_a.velocity = Vec3f32::from_components(0.0, -10.0, 0.0);
     scene.add_component(body_a, kin_a).unwrap();
@@ -322,35 +386,53 @@ mod tests {
     // Static OBB floor (reasonable size, no extreme scale)
     let floor = scene.spawn_entity("Floor");
     scene.set_parent(floor, Some(root));
-    scene.add_component(floor, TransformComponent {
-      position: Vec3f32::from_components(0.0, -3.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(floor, ColliderComponent {
-      shape: ColliderShape::OBB { half_extents: Vec3f32::from_components(5.0, 1.0, 5.0) },
-      mass: 0.0, // static
-      restitution: 1.0,
-      friction: 0.0,
-      ..Default::default()
-    }).unwrap();
+    scene
+      .add_component(
+        floor,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, -3.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        floor,
+        ColliderComponent {
+          shape: ColliderShape::OBB {
+            half_extents: Vec3f32::from_components(5.0, 1.0, 5.0),
+          },
+          mass: 0.0, // static
+          restitution: 1.0,
+          friction: 0.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
     scene.add_component(floor, KinematicComponent::default()).unwrap();
 
     let initial_energy = 0.5 * 1.0 * 10.0 * 10.0; // 0.5 * m * v^2
 
     let duration_seconds = 1.5;
 
-    ctx.frontend.with_device(ctx.device_handle, |dev| {
-      let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-      run_simulation(vulkan_device, &mut scene, duration_seconds, true);
-      Ok(())
-    }).unwrap();
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+        run_simulation(vulkan_device, &mut scene, duration_seconds, true);
+        Ok(())
+      })
+      .unwrap();
 
     let final_kin_a = scene.with_component(body_a, |k: &KinematicComponent| k.clone()).unwrap();
 
     let v = final_kin_a.velocity.y();
     let final_energy = 0.5 * 1.0 * v * v;
-    
+
     // With global restitution = 0.5 in the LCP solver, energy should DECREASE
     // after the bounce. The ball should bounce with v_after = ±e*v_before = ±5.
     // Energy: 0.5 * 1 * 5² = 12.5 J (vs initial 50 J).
@@ -363,15 +445,17 @@ mod tests {
     assert!(
       speed < 10.0 - 0.1,
       "Collision did not occur or produced no energy loss: |v| = {:.3} (expected < 10 with e=0.5). final_energy={:.3} initial_energy={:.3}",
-      speed, final_energy, initial_energy,
+      speed,
+      final_energy,
+      initial_energy,
     );
     assert!(
       final_energy <= initial_energy + 1.0,
       "Energy INCREASED after bounce (energy injection bug): {:.3} > {:.3}",
-      final_energy, initial_energy,
+      final_energy,
+      initial_energy,
     );
   }
-
 
   #[test]
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
@@ -397,28 +481,49 @@ mod tests {
     );
     let body = scene.spawn_entity("Projectile");
     scene.set_parent(body, Some(root));
-    scene.add_component(body, TransformComponent {
-      position: Vec3f32::from_components(0.0, 0.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(body, ColliderComponent {
-      shape: ColliderShape::Sphere { radius: 1.0 },
-      mass: 1.0,
-      ..Default::default()
-    }).unwrap();
-    scene.add_component(body, KinematicComponent {
-      velocity: Vec3f32::from_components(10.0, 20.0, 0.0),
-      ..Default::default()
-    }).unwrap();
+    scene
+      .add_component(
+        body,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        body,
+        ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          mass: 1.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        body,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(10.0, 20.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
 
     let duration_seconds = 2.0;
 
-    ctx.frontend.with_device(ctx.device_handle, |dev| {
-      let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-      run_simulation(vulkan_device, &mut scene, duration_seconds, false); // No collisions needed
-      Ok(())
-    }).unwrap();
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+        run_simulation(vulkan_device, &mut scene, duration_seconds, false); // No collisions needed
+        Ok(())
+      })
+      .unwrap();
 
     let final_pos = scene.with_component(body, |t: &TransformComponent| t.clone()).unwrap();
     let final_kin = scene.with_component(body, |k: &KinematicComponent| k.clone()).unwrap();
@@ -428,13 +533,29 @@ mod tests {
 
     let diff_px = final_pos.position.x() - 20.0;
     let diff_py = final_pos.position.y() - 40.0;
-    assert!(diff_px.abs() < 1e-2, "X position incorrect: {}", final_pos.position.x());
-    assert!(diff_py.abs() < 1e-2, "Y position incorrect: {}", final_pos.position.y());
+    assert!(
+      diff_px.abs() < 1e-2,
+      "X position incorrect: {}",
+      final_pos.position.x()
+    );
+    assert!(
+      diff_py.abs() < 1e-2,
+      "Y position incorrect: {}",
+      final_pos.position.y()
+    );
 
     let diff_vx = final_kin.velocity.x() - 10.0;
     let diff_vy = final_kin.velocity.y() - 20.0;
-    assert!(diff_vx.abs() < 1e-2, "X velocity incorrect: {}", final_kin.velocity.x());
-    assert!(diff_vy.abs() < 1e-2, "Y velocity incorrect: {}", final_kin.velocity.y());
+    assert!(
+      diff_vx.abs() < 1e-2,
+      "X velocity incorrect: {}",
+      final_kin.velocity.x()
+    );
+    assert!(
+      diff_vy.abs() < 1e-2,
+      "Y velocity incorrect: {}",
+      final_kin.velocity.y()
+    );
   }
 
   #[test]
@@ -463,38 +584,64 @@ mod tests {
 
     let body = scene.spawn_entity("Box");
     scene.set_parent(body, Some(root));
-    scene.add_component(body, TransformComponent {
-      position: Vec3f32::from_components(0.0, 0.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(body, ColliderComponent {
-      shape: ColliderShape::OBB { half_extents: Vec3f32::from_components(2.0, 1.0, 0.5) }, // Asymmetric
-      mass: 1.0,
-      ..Default::default()
-    }).unwrap();
-    
+    scene
+      .add_component(
+        body,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        body,
+        ColliderComponent {
+          shape: ColliderShape::OBB {
+            half_extents: Vec3f32::from_components(2.0, 1.0, 0.5),
+          }, // Asymmetric
+          mass: 1.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
     // Spin around the largest principal axis (Z axis)
     // Stable rotation
-    scene.add_component(body, KinematicComponent {
-      angular_velocity: Vec3f32::from_components(0.0, 0.0, 5.0),
-      ..Default::default()
-    }).unwrap();
+    scene
+      .add_component(
+        body,
+        KinematicComponent {
+          angular_velocity: Vec3f32::from_components(0.0, 0.0, 5.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
 
     let duration_seconds = 5.0;
 
-    ctx.frontend.with_device(ctx.device_handle, |dev| {
-      let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-      run_simulation(vulkan_device, &mut scene, duration_seconds, false);
-      Ok(())
-    }).unwrap();
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+        run_simulation(vulkan_device, &mut scene, duration_seconds, false);
+        Ok(())
+      })
+      .unwrap();
 
     let final_kin = scene.with_component(body, |k: &KinematicComponent| k.clone()).unwrap();
 
     // The angular velocity should remain constant
     assert!(final_kin.angular_velocity.x().abs() < 1e-2, "X should be 0");
     assert!(final_kin.angular_velocity.y().abs() < 1e-2, "Y should be 0");
-    assert!((final_kin.angular_velocity.z() - 5.0).abs() < 1e-2, "Z should remain 5");
+    assert!(
+      (final_kin.angular_velocity.z() - 5.0).abs() < 1e-2,
+      "Z should remain 5"
+    );
   }
 
   #[test]
@@ -522,31 +669,54 @@ mod tests {
 
     let body = scene.spawn_entity("Box");
     scene.set_parent(body, Some(root));
-    scene.add_component(body, TransformComponent {
-      position: Vec3f32::from_components(0.0, 0.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(body, ColliderComponent {
-      shape: ColliderShape::OBB { half_extents: Vec3f32::from_components(2.0, 1.0, 0.5) }, // Asymmetric
-      mass: 1.0,
-      ..Default::default()
-    }).unwrap();
-    
+    scene
+      .add_component(
+        body,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        body,
+        ColliderComponent {
+          shape: ColliderShape::OBB {
+            half_extents: Vec3f32::from_components(2.0, 1.0, 0.5),
+          }, // Asymmetric
+          mass: 1.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
     // Spin mostly around intermediate axis (Y axis) with a perturbation
     // Larger perturbation seeds the instability faster for a practical test.
-    scene.add_component(body, KinematicComponent {
-      angular_velocity: Vec3f32::from_components(0.1, 5.0, 0.0),
-      ..Default::default()
-    }).unwrap();
+    scene
+      .add_component(
+        body,
+        KinematicComponent {
+          angular_velocity: Vec3f32::from_components(0.1, 5.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
 
     let duration_seconds = 10.0;
 
-    ctx.frontend.with_device(ctx.device_handle, |dev| {
-      let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-      run_simulation(vulkan_device, &mut scene, duration_seconds, false);
-      Ok(())
-    }).unwrap();
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+        run_simulation(vulkan_device, &mut scene, duration_seconds, false);
+        Ok(())
+      })
+      .unwrap();
 
     let final_transform = scene.with_component(body, |t: &TransformComponent| t.clone()).unwrap();
 
@@ -557,9 +727,10 @@ mod tests {
     // NOTE: We cannot check world-frame angular velocity ω.y because angular
     // momentum L is conserved for torque-free motion, so ω stays roughly constant
     // in world-frame direction. The *orientation* is what changes.
-    let body_y_world = final_transform.rotation.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0));
+    let body_y_world =
+      final_transform.rotation.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0));
     let dot_y = body_y_world.y(); // dot product with world Y = cos(angle from initial)
-    
+
     // If the body tumbled, its Y-axis should have deviated significantly from world Y.
     // dot_y = 1.0 means no tumble, dot_y ≈ -1.0 means full flip, anything < ~0.8 is
     // clear evidence of the instability.
@@ -609,48 +780,84 @@ mod tests {
     // Light ball approaching from the left
     let ball_a = scene.spawn_entity("LightBall");
     scene.set_parent(ball_a, Some(root));
-    scene.add_component(ball_a, TransformComponent {
-      position: Vec3f32::from_components(-3.0, 0.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(ball_a, ColliderComponent {
-      shape: ColliderShape::Sphere { radius: 1.0 },
-      mass: 1.0,
-      restitution: 0.5,
-      friction: 0.0,
-    }).unwrap();
-    scene.add_component(ball_a, KinematicComponent {
-      velocity: Vec3f32::from_components(3.0, 0.0, 0.0),
-      ..Default::default()
-    }).unwrap();
+    scene
+      .add_component(
+        ball_a,
+        TransformComponent {
+          position: Vec3f32::from_components(-3.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        ball_a,
+        ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          mass: 1.0,
+          restitution: 0.5,
+          friction: 0.0,
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        ball_a,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(3.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
 
     // Heavy ball approaching from the right (much heavier → acts like a wall)
     let ball_b = scene.spawn_entity("HeavyBall");
     scene.set_parent(ball_b, Some(root));
-    scene.add_component(ball_b, TransformComponent {
-      position: Vec3f32::from_components(3.0, 0.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(ball_b, ColliderComponent {
-      shape: ColliderShape::Sphere { radius: 1.0 },
-      mass: 100.0,
-      restitution: 0.5,
-      friction: 0.0,
-    }).unwrap();
-    scene.add_component(ball_b, KinematicComponent {
-      velocity: Vec3f32::from_components(-1.0, 0.0, 0.0),
-      ..Default::default()
-    }).unwrap();
+    scene
+      .add_component(
+        ball_b,
+        TransformComponent {
+          position: Vec3f32::from_components(3.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        ball_b,
+        ColliderComponent {
+          shape: ColliderShape::Sphere { radius: 1.0 },
+          mass: 100.0,
+          restitution: 0.5,
+          friction: 0.0,
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        ball_b,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(-1.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
 
     let duration_seconds = 2.0;
 
-    ctx.frontend.with_device(ctx.device_handle, |dev| {
-      let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-      run_simulation(vulkan_device, &mut scene, duration_seconds, true);
-      Ok(())
-    }).unwrap();
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+        run_simulation(vulkan_device, &mut scene, duration_seconds, true);
+        Ok(())
+      })
+      .unwrap();
 
     let final_kin_a = scene.with_component(ball_a, |k: &KinematicComponent| k.clone()).unwrap();
     let final_kin_b = scene.with_component(ball_b, |k: &KinematicComponent| k.clone()).unwrap();
@@ -715,48 +922,88 @@ mod tests {
     // Box A: approaching from the left
     let box_a = scene.spawn_entity("BoxA");
     scene.set_parent(box_a, Some(root));
-    scene.add_component(box_a, TransformComponent {
-      position: Vec3f32::from_components(-4.0, 0.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(box_a, ColliderComponent {
-      shape: ColliderShape::OBB { half_extents: Vec3f32::from_components(1.0, 1.0, 1.0) },
-      mass: 1.0,
-      restitution: 0.5,
-      friction: 0.0,
-    }).unwrap();
-    scene.add_component(box_a, KinematicComponent {
-      velocity: Vec3f32::from_components(3.0, 0.0, 0.0),
-      ..Default::default()
-    }).unwrap();
+    scene
+      .add_component(
+        box_a,
+        TransformComponent {
+          position: Vec3f32::from_components(-4.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        box_a,
+        ColliderComponent {
+          shape: ColliderShape::OBB {
+            half_extents: Vec3f32::from_components(1.0, 1.0, 1.0),
+          },
+          mass: 1.0,
+          restitution: 0.5,
+          friction: 0.0,
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        box_a,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(3.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
 
     // Box B: approaching from the right (much heavier)
     let box_b = scene.spawn_entity("BoxB");
     scene.set_parent(box_b, Some(root));
-    scene.add_component(box_b, TransformComponent {
-      position: Vec3f32::from_components(4.0, 0.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(box_b, ColliderComponent {
-      shape: ColliderShape::OBB { half_extents: Vec3f32::from_components(1.0, 1.0, 1.0) },
-      mass: 100.0,
-      restitution: 0.5,
-      friction: 0.0,
-    }).unwrap();
-    scene.add_component(box_b, KinematicComponent {
-      velocity: Vec3f32::from_components(-1.0, 0.0, 0.0),
-      ..Default::default()
-    }).unwrap();
+    scene
+      .add_component(
+        box_b,
+        TransformComponent {
+          position: Vec3f32::from_components(4.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        box_b,
+        ColliderComponent {
+          shape: ColliderShape::OBB {
+            half_extents: Vec3f32::from_components(1.0, 1.0, 1.0),
+          },
+          mass: 100.0,
+          restitution: 0.5,
+          friction: 0.0,
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        box_b,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(-1.0, 0.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
 
     let duration_seconds = 2.0;
 
-    ctx.frontend.with_device(ctx.device_handle, |dev| {
-      let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-      run_simulation(vulkan_device, &mut scene, duration_seconds, true);
-      Ok(())
-    }).unwrap();
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+        run_simulation(vulkan_device, &mut scene, duration_seconds, true);
+        Ok(())
+      })
+      .unwrap();
 
     let final_kin_a = scene.with_component(box_a, |k: &KinematicComponent| k.clone()).unwrap();
     let final_kin_b = scene.with_component(box_b, |k: &KinematicComponent| k.clone()).unwrap();
@@ -781,7 +1028,9 @@ mod tests {
     assert!(
       spurious_yz_a < 1.0,
       "OBB-OBB produced spurious Y/Z velocity on box_a: v = [{:.3}, {:.3}, {:.3}]",
-      final_kin_a.velocity.x(), final_kin_a.velocity.y(), final_kin_a.velocity.z(),
+      final_kin_a.velocity.x(),
+      final_kin_a.velocity.y(),
+      final_kin_a.velocity.z(),
     );
   }
 
@@ -818,45 +1067,80 @@ mod tests {
     // Falling box (small cube)
     let box_a = scene.spawn_entity("FallingBox");
     scene.set_parent(box_a, Some(root));
-    scene.add_component(box_a, TransformComponent {
-      position: Vec3f32::from_components(0.0, 5.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(box_a, ColliderComponent {
-      shape: ColliderShape::OBB { half_extents: Vec3f32::from_components(0.5, 0.5, 0.5) },
-      mass: 1.0,
-      restitution: 0.5,
-      friction: 0.0,
-    }).unwrap();
-    scene.add_component(box_a, KinematicComponent {
-      velocity: Vec3f32::from_components(0.0, -5.0, 0.0),
-      ..Default::default()
-    }).unwrap();
+    scene
+      .add_component(
+        box_a,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 5.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        box_a,
+        ColliderComponent {
+          shape: ColliderShape::OBB {
+            half_extents: Vec3f32::from_components(0.5, 0.5, 0.5),
+          },
+          mass: 1.0,
+          restitution: 0.5,
+          friction: 0.0,
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        box_a,
+        KinematicComponent {
+          velocity: Vec3f32::from_components(0.0, -5.0, 0.0),
+          ..Default::default()
+        },
+      )
+      .unwrap();
 
     // Static OBB floor (reasonably sized, not extremely thin)
     let floor = scene.spawn_entity("Floor");
     scene.set_parent(floor, Some(root));
-    scene.add_component(floor, TransformComponent {
-      position: Vec3f32::from_components(0.0, -2.0, 0.0),
-      rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    }).unwrap();
-    scene.add_component(floor, ColliderComponent {
-      shape: ColliderShape::OBB { half_extents: Vec3f32::from_components(5.0, 1.0, 5.0) },
-      mass: 0.0, // static
-      restitution: 0.5,
-      friction: 0.0,
-    }).unwrap();
+    scene
+      .add_component(
+        floor,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, -2.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        floor,
+        ColliderComponent {
+          shape: ColliderShape::OBB {
+            half_extents: Vec3f32::from_components(5.0, 1.0, 5.0),
+          },
+          mass: 0.0, // static
+          restitution: 0.5,
+          friction: 0.0,
+        },
+      )
+      .unwrap();
     scene.add_component(floor, KinematicComponent::default()).unwrap();
 
     let duration_seconds = 1.5;
 
-    ctx.frontend.with_device(ctx.device_handle, |dev| {
-      let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-      run_simulation(vulkan_device, &mut scene, duration_seconds, true);
-      Ok(())
-    }).unwrap();
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+        run_simulation(vulkan_device, &mut scene, duration_seconds, true);
+        Ok(())
+      })
+      .unwrap();
 
     let final_kin = scene.with_component(box_a, |k: &KinematicComponent| k.clone()).unwrap();
     let final_pos = scene.with_component(box_a, |t: &TransformComponent| t.clone()).unwrap();
@@ -866,11 +1150,18 @@ mod tests {
     // back, it continues in whichever direction the bounce sent it.
     //
     // We check that a collision occurred by verifying speed decreased.
-    let speed = (final_kin.velocity.x().powi(2) + final_kin.velocity.y().powi(2) + final_kin.velocity.z().powi(2)).sqrt();
+    let speed = (final_kin.velocity.x().powi(2)
+      + final_kin.velocity.y().powi(2)
+      + final_kin.velocity.z().powi(2))
+    .sqrt();
     assert!(
       speed < 5.0 - 0.1,
       "OBB-OBB collision did not occur or produced no energy loss: speed = {:.3} (expected < 5.0 with e=0.5), v = [{:.3}, {:.3}, {:.3}], pos_y = {:.3}",
-      speed, final_kin.velocity.x(), final_kin.velocity.y(), final_kin.velocity.z(), final_pos.position.y(),
+      speed,
+      final_kin.velocity.x(),
+      final_kin.velocity.y(),
+      final_kin.velocity.z(),
+      final_pos.position.y(),
     );
   }
 }

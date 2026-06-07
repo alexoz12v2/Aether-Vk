@@ -60,11 +60,11 @@ public class SpawnCometIntegrationTests
     vm.SelectedSpkRecord = new SpkRecordItem { RecordId = "90000033", Name = "2P/Encke" };
 
     // Assert
-    Assert.True(vm.CometRadiusKm > 0 || vm.CometRadiusKm == 1.0f, "ViewModel CometRadiusKm should have default or JPL value");
     Assert.True(
-      vm.MassKg > 0,
-      "ViewModel MassKg should be populated from JPL API or estimated"
+      vm.CometRadiusKm > 0 || vm.CometRadiusKm == 1.0f,
+      "ViewModel CometRadiusKm should have default or JPL value"
     );
+    Assert.True(vm.MassKg > 0, "ViewModel MassKg should be populated from JPL API or estimated");
     Assert.False(vm.IsFetchingHorizonData, "Loading flag should be reset after fetch completes");
   }
 }

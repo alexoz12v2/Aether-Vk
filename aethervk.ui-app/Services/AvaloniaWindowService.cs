@@ -299,7 +299,8 @@ namespace AetherVk.Services
       // ── Post-spawn wiring ─────────────────────────────────────────────────────
       // Commit the validated epoch range to the timeline service and native side
       _timelineService.UpdateEpochLimits(
-        0, 0, // TAI will be recalculated by the runtime
+        0,
+        0, // TAI will be recalculated by the runtime
         result.WizardStartEpoch,
         result.WizardEndEpoch
       );

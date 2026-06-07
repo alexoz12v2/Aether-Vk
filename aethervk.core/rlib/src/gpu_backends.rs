@@ -195,7 +195,11 @@ where
 {
   let total_dt = t1 - t0;
   // Compute sub-step count.  Clamp max_sub_dt_us to at least 1 μs.
-  let capped = if max_sub_dt_us > 0 { max_sub_dt_us } else { total_dt.max(1) };
+  let capped = if max_sub_dt_us > 0 {
+    max_sub_dt_us
+  } else {
+    total_dt.max(1)
+  };
   let n_sub_steps = if total_dt <= capped {
     1usize
   } else {
@@ -224,12 +228,18 @@ where
       let old_cmd = unsafe { core::ptr::read(&raw const cmd) };
       let new_cmd = match kernels.debug_sync_barrier(old_cmd) {
         Ok(c) => c,
-        Err(e) => panic!("[SHADER-SYNC] debug_sync_barrier failed for {}: {:?}", $name, e),
+        Err(e) => panic!(
+          "[SHADER-SYNC] debug_sync_barrier failed for {}: {:?}",
+          $name, e
+        ),
       };
       unsafe { core::ptr::write(&raw mut cmd, new_cmd) };
       // Validate VMA debug margins — corruption check pinpoints the guilty shader.
       if let Err(e) = kernels.check_corruption($name) {
-        panic!("[SHADER-SYNC] VMA CORRUPTION detected after '{}': {:?}", $name, e);
+        panic!(
+          "[SHADER-SYNC] VMA CORRUPTION detected after '{}': {:?}",
+          $name, e
+        );
       }
       aethervk_oshal_rlib::log!("[SHADER-SYNC] {} — completed ✓", $name);
     }};
@@ -297,9 +307,7 @@ where
     |b| kernels.discard_buffer(b),
   );
   let (emitters_buf, n_emitters) = kernels.build_emitters(&mut cmd, scene)?;
-  let emitters = AutoDiscard::new(emitters_buf, |b| {
-    kernels.discard_buffer(b)
-  });
+  let emitters = AutoDiscard::new(emitters_buf, |b| kernels.discard_buffer(b));
   // Reference frames for LCA broad-phase (macro frame is always index 0)
   let frames = AutoDiscard::new(kernels.build_frames(&mut cmd, physical_scene)?, |b| {
     kernels.discard_buffer(b)
@@ -571,9 +579,9 @@ where
           raw_pairs.address(),
           rb_rb_pairs.address(),
           rb_ps_pairs.address(),
-          ps_ps_pairs.address(),   // out_ps_ps — valid sink, null caused GPU faults
-          rb_lca_pairs.address(),  // out_macro_lca
-          0,                       // out_lca_lca (no lca-lca pairs in pure-RB scenes)
+          ps_ps_pairs.address(), // out_ps_ps — valid sink, null caused GPU faults
+          rb_lca_pairs.address(), // out_macro_lca
+          0,                     // out_lca_lca (no lca-lca pairs in pure-RB scenes)
           n_entities * n_entities, // conservative upper bound on raw pairs
         )?;
         sync!("bp_classify");
@@ -662,141 +670,146 @@ where
 
         #[cfg(test)]
         {
-          if crate::gpu_backends::vulkan::physics::READBACK_DIAGNOSTICS.load(core::sync::atomic::Ordering::Relaxed) {
+          if crate::gpu_backends::vulkan::physics::READBACK_DIAGNOSTICS
+            .load(core::sync::atomic::Ordering::Relaxed)
+          {
             if kernels.is_cpu_device() {
               kernels.wait_idle().unwrap();
             }
 
             // We can read directly from the mapped buffers since wait_sync(&sync) was called just above!
             let cmp_host = unsafe { (*compacted).mapped_slice().unwrap_or(&[]) };
-              let _rb_host = unsafe { rigid_bodies.mapped_slice().unwrap_or(&[]) };
-              let _frames_host = unsafe { frames.mapped_slice().unwrap_or(&[]) };
-              let cross_host = unsafe { (*internal_pairs).mapped_slice().unwrap_or(&[]) };
-              let raw_host = unsafe { (*raw_pairs).mapped_slice().unwrap_or(&[]) };
-              let lca_host = unsafe { (*rb_lca_pairs).mapped_slice().unwrap_or(&[]) };
+            let _rb_host = unsafe { rigid_bodies.mapped_slice().unwrap_or(&[]) };
+            let _frames_host = unsafe { frames.mapped_slice().unwrap_or(&[]) };
+            let cross_host = unsafe { (*internal_pairs).mapped_slice().unwrap_or(&[]) };
+            let raw_host = unsafe { (*raw_pairs).mapped_slice().unwrap_or(&[]) };
+            let lca_host = unsafe { (*rb_lca_pairs).mapped_slice().unwrap_or(&[]) };
 
-              let compacted_count = cmp_host.len();
-              let cross_count = cross_host.len();
-              let raw_count = raw_host.len();
-              let lca_count = lca_host.len();
-              aethervk_oshal_rlib::log!(
-                "READBACK: raw_count={}, lca_count={}, cross_count={}, compacted_count={}",
-                raw_count, lca_count, cross_count, compacted_count
-              );
-              
-              let mut body_entity_map = alloc::vec::Vec::new();
-              scene.query2_without::<crate::scene::TransformComponent, crate::scene::ColliderComponent, crate::scene::particles::ParticleSystemComponent, _>(|entity, _, _| {
+            let compacted_count = cmp_host.len();
+            let cross_count = cross_host.len();
+            let raw_count = raw_host.len();
+            let lca_count = lca_host.len();
+            aethervk_oshal_rlib::log!(
+              "READBACK: raw_count={}, lca_count={}, cross_count={}, compacted_count={}",
+              raw_count,
+              lca_count,
+              cross_count,
+              compacted_count
+            );
+
+            let mut body_entity_map = alloc::vec::Vec::new();
+            scene.query2_without::<crate::scene::TransformComponent, crate::scene::ColliderComponent, crate::scene::particles::ParticleSystemComponent, _>(|entity, _, _| {
                    body_entity_map.push(entity);
                });
 
-              if compacted_count > 0 {
-                for i in 0..compacted_count {
-                  let pair = &cmp_host[i];
-                  let id_a = pair.a.entity_id;
-                  let prim_a = pair.a.primitive_index;
-                  let id_b = pair.b.entity_id;
-                  let prim_b = pair.b.primitive_index;
+            if compacted_count > 0 {
+              for i in 0..compacted_count {
+                let pair = &cmp_host[i];
+                let id_a = pair.a.entity_id;
+                let prim_a = pair.a.primitive_index;
+                let id_b = pair.b.entity_id;
+                let prim_b = pair.b.primitive_index;
 
-                  aethervk_oshal_rlib::log!(
-                    "RAW PAIR: id_a={}, id_b={}, prim_a={}, prim_b={}, toi={}",
-                    id_a,
-                    id_b,
-                    prim_a,
-                    prim_b,
-                    pair.time_of_impact
-                  );
+                aethervk_oshal_rlib::log!(
+                  "RAW PAIR: id_a={}, id_b={}, prim_a={}, prim_b={}, toi={}",
+                  id_a,
+                  id_b,
+                  prim_a,
+                  prim_b,
+                  pair.time_of_impact
+                );
 
-                  let is_lca = pair.is_lca != 0;
-                  let lca_id = if is_lca { Some(pair.lca_id) } else { None };
+                let is_lca = pair.is_lca != 0;
+                let lca_id = if is_lca { Some(pair.lca_id) } else { None };
 
-                  let mut name_a = alloc::string::String::new();
-                  // pair.a.entity_id is a dense GPU body index; map to slotmap FFI key
-                  if let Some(&entity_a) = body_entity_map.get(id_a as usize) {
-                    use slotmap::Key;
-                    let ffi_a = entity_a.data().as_ffi() as u64;
-                    if let Some(n) = scene.get_name(crate::scene::EntityId::from(
-                      slotmap::KeyData::from_ffi(ffi_a),
-                    )) {
-                      name_a = n;
-                    }
+                let mut name_a = alloc::string::String::new();
+                // pair.a.entity_id is a dense GPU body index; map to slotmap FFI key
+                if let Some(&entity_a) = body_entity_map.get(id_a as usize) {
+                  use slotmap::Key;
+                  let ffi_a = entity_a.data().as_ffi() as u64;
+                  if let Some(n) = scene.get_name(crate::scene::EntityId::from(
+                    slotmap::KeyData::from_ffi(ffi_a),
+                  )) {
+                    name_a = n;
                   }
-                  if name_a.is_empty() {
-                    name_a = alloc::format!("Entity_{}", id_a);
-                  }
-
-                  let mut name_b = alloc::string::String::new();
-                  if let Some(&entity_b) = body_entity_map.get(id_b as usize) {
-                    use slotmap::Key;
-                    let ffi_b = entity_b.data().as_ffi() as u64;
-                    if let Some(n) = scene.get_name(crate::scene::EntityId::from(
-                      slotmap::KeyData::from_ffi(ffi_b),
-                    )) {
-                      name_b = n;
-                    }
-                  }
-                  if name_b.is_empty() {
-                    name_b = alloc::format!("Entity_{}", id_b);
-                  }
-
-                  let mut particle_path_a = None;
-                  if let Some(&entity_a) = body_entity_map.get(id_a as usize) {
-                    if scene
-                      .with_component(
-                        entity_a,
-                        |_: &crate::scene::particles::ParticleSystemComponent| (),
-                      )
-                      .is_some()
-                    {
-                      use slotmap::Key;
-                      let ffi_a = entity_a.data().as_ffi() as u32;
-                      if let Some(p_idx) =
-                        physical_scene.particle_entity_map.iter().position(|&ffi| ffi == ffi_a)
-                      {
-                        if let Some(blas) = &physical_scene.particle_blases[p_idx] {
-                          particle_path_a = blas.find_path_to_primitive(prim_a as usize);
-                        }
-                      }
-                    }
-                  }
-
-                  let mut particle_path_b = None;
-                  if let Some(&entity_b) = body_entity_map.get(id_b as usize) {
-                    if scene
-                      .with_component(
-                        entity_b,
-                        |_: &crate::scene::particles::ParticleSystemComponent| (),
-                      )
-                      .is_some()
-                    {
-                      use slotmap::Key;
-                      let ffi_b = entity_b.data().as_ffi() as u32;
-                      if let Some(p_idx) =
-                        physical_scene.particle_entity_map.iter().position(|&ffi| ffi == ffi_b)
-                      {
-                        if let Some(blas) = &physical_scene.particle_blases[p_idx] {
-                          particle_path_b = blas.find_path_to_primitive(prim_b as usize);
-                        }
-                      }
-                    }
-                  }
-
-                  physical_scene.recent_collisions.push(
-                    crate::physics::physics_scene::CollisionEvent {
-                      entity_a_id: id_a,
-                      entity_a_name: name_a,
-                      entity_b_id: id_b,
-                      entity_b_name: name_b,
-                      contact_point: pair.contact_point,
-                      contact_normal: pair.contact_normal,
-                      penetration_depth: pair.penetration_depth,
-                      frame_id: lca_id.unwrap_or(0),
-                      is_lca,
-                      particle_path_a,
-                      particle_path_b,
-                    },
-                  );
                 }
+                if name_a.is_empty() {
+                  name_a = alloc::format!("Entity_{}", id_a);
+                }
+
+                let mut name_b = alloc::string::String::new();
+                if let Some(&entity_b) = body_entity_map.get(id_b as usize) {
+                  use slotmap::Key;
+                  let ffi_b = entity_b.data().as_ffi() as u64;
+                  if let Some(n) = scene.get_name(crate::scene::EntityId::from(
+                    slotmap::KeyData::from_ffi(ffi_b),
+                  )) {
+                    name_b = n;
+                  }
+                }
+                if name_b.is_empty() {
+                  name_b = alloc::format!("Entity_{}", id_b);
+                }
+
+                let mut particle_path_a = None;
+                if let Some(&entity_a) = body_entity_map.get(id_a as usize) {
+                  if scene
+                    .with_component(
+                      entity_a,
+                      |_: &crate::scene::particles::ParticleSystemComponent| (),
+                    )
+                    .is_some()
+                  {
+                    use slotmap::Key;
+                    let ffi_a = entity_a.data().as_ffi() as u32;
+                    if let Some(p_idx) =
+                      physical_scene.particle_entity_map.iter().position(|&ffi| ffi == ffi_a)
+                    {
+                      if let Some(blas) = &physical_scene.particle_blases[p_idx] {
+                        particle_path_a = blas.find_path_to_primitive(prim_a as usize);
+                      }
+                    }
+                  }
+                }
+
+                let mut particle_path_b = None;
+                if let Some(&entity_b) = body_entity_map.get(id_b as usize) {
+                  if scene
+                    .with_component(
+                      entity_b,
+                      |_: &crate::scene::particles::ParticleSystemComponent| (),
+                    )
+                    .is_some()
+                  {
+                    use slotmap::Key;
+                    let ffi_b = entity_b.data().as_ffi() as u32;
+                    if let Some(p_idx) =
+                      physical_scene.particle_entity_map.iter().position(|&ffi| ffi == ffi_b)
+                    {
+                      if let Some(blas) = &physical_scene.particle_blases[p_idx] {
+                        particle_path_b = blas.find_path_to_primitive(prim_b as usize);
+                      }
+                    }
+                  }
+                }
+
+                physical_scene.recent_collisions.push(
+                  crate::physics::physics_scene::CollisionEvent {
+                    entity_a_id: id_a,
+                    entity_a_name: name_a,
+                    entity_b_id: id_b,
+                    entity_b_name: name_b,
+                    contact_point: pair.contact_point,
+                    contact_normal: pair.contact_normal,
+                    penetration_depth: pair.penetration_depth,
+                    frame_id: lca_id.unwrap_or(0),
+                    is_lca,
+                    particle_path_a,
+                    particle_path_b,
+                  },
+                );
               }
+            }
           }
         }
 

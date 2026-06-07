@@ -37,7 +37,8 @@ public class TransformEditableRule : IComponentRule
     {
       // Rotation is derived from IAU Rotational Model — edit pole/PM parameters instead
       isRotEditable = false;
-      rotLockedReason = "Rotation is computed from the IAU Rotational Model. Edit pole/PM parameters under Physical Mesh.";
+      rotLockedReason =
+        "Rotation is computed from the IAU Rotational Model. Edit pole/PM parameters under Physical Mesh.";
 
       // Scale is always locked — derived from Radius (km) in Physical Mesh
       isScaleEditable = false;

@@ -204,7 +204,11 @@ public partial class DockingManagerViewModel
   private readonly ITabFactory _tabFactory;
   private readonly IAudio2DService _audioService;
 
-  public DockingManagerViewModel(ITabFactory tabFactory, IAudio2DService audioService, LayoutNodeViewModelBase? rootNode = null)
+  public DockingManagerViewModel(
+    ITabFactory tabFactory,
+    IAudio2DService audioService,
+    LayoutNodeViewModelBase? rootNode = null
+  )
     : base()
   {
     _tabFactory = tabFactory;

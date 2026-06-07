@@ -736,10 +736,10 @@ impl PhysicsPipelines {
         let mut path;
         if is_cpu {
           let wg_suffix = match subgroup_size {
-            1..=4 => "wg4", // SSE2/NEON or manual throttle → smallest
-            5..=8 => "wg8",         // AVX / AVX2
-            9..=16 => "wg16",       // AVX-512
-            _ => "wg32",            // CPU with wide SIMD (shouldn't occur) → safe default
+            1..=4 => "wg4",   // SSE2/NEON or manual throttle → smallest
+            5..=8 => "wg8",   // AVX / AVX2
+            9..=16 => "wg16", // AVX-512
+            _ => "wg32",      // CPU with wide SIMD (shouldn't occur) → safe default
           };
           path = alloc::format!("{}/{}.{}.spv", sim_dir, $stem, wg_suffix);
         } else {
@@ -1165,10 +1165,12 @@ impl<T> VulkanBuffer<T> {
     } else {
       info.mapped_data as *const T
     };
-    Some(core::slice::from_raw_parts(data_ptr, count.min(self.capacity)))
+    Some(core::slice::from_raw_parts(
+      data_ptr,
+      count.min(self.capacity),
+    ))
   }
 }
-
 
 /// Safety-net `Drop` for `VulkanBuffer`:
 /// In debug builds, emit a warning when a buffer is dropped without an explicit `discard()` call.
@@ -1540,7 +1542,7 @@ impl VulkanComputeKernels {
   ) -> GpuResult<VulkanBuffer<T>> {
     let current_timeline = self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed) - 1;
     let mut pool = self.transient_pool.lock();
-    
+
     // Garbage collection of old transient buffers
     pool.entries.retain(|entry| {
       if entry.timeline_freed + 10 < current_timeline {
@@ -1580,7 +1582,7 @@ impl VulkanComputeKernels {
     }
     drop(pool);
 
-    // Pad capacity to a multiple of 256 to prevent Lavapipe's LLVM JIT from 
+    // Pad capacity to a multiple of 256 to prevent Lavapipe's LLVM JIT from
     // speculatively reading/writing out-of-bounds and corrupting VMA sentinels.
     let mut padded_capacity = capacity.max(1);
     if padded_capacity % 256 != 0 {
@@ -4179,12 +4181,9 @@ impl VulkanComputeKernels {
     // function runs, so the mapped memory is safe to read directly. This avoids creating
     // staging buffers (VMA allocations) per frame, which corrupt Lavapipe's TLSF allocator
     // after many alloc/free cycles.
-    let rb_data: alloc::vec::Vec<RigidBodyImex> = unsafe {
-      rigid_bodies.mapped_slice().unwrap_or(&[]).to_vec()
-    };
-    let p_data: alloc::vec::Vec<f32> = unsafe {
-      particles.mapped_slice().unwrap_or(&[]).to_vec()
-    };
+    let rb_data: alloc::vec::Vec<RigidBodyImex> =
+      unsafe { rigid_bodies.mapped_slice().unwrap_or(&[]).to_vec() };
+    let p_data: alloc::vec::Vec<f32> = unsafe { particles.mapped_slice().unwrap_or(&[]).to_vec() };
 
     // No GPU work needed; don't submit an empty command buffer.
     let _ = cmd; // cmd is unused but kept as parameter for API compatibility
@@ -4242,7 +4241,6 @@ impl VulkanComputeKernels {
 
     Ok(None) // No GPU submission; GPU was already waited by caller.
   }
-
 }
 
 impl Kernels for Device {
@@ -4397,7 +4395,9 @@ impl Kernels for Device {
 
   fn wait_idle(&self) -> EngineResult<()> {
     unsafe { self.device.device_wait_idle() }.map_err(|e| {
-      crate::types::EngineError::Gpu(crate::types::GpuError::BackendSpecific(alloc::format!("{:?}", e)))
+      crate::types::EngineError::Gpu(crate::types::GpuError::BackendSpecific(alloc::format!(
+        "{:?}", e
+      )))
     })?;
     Ok(())
   }
@@ -4468,7 +4468,11 @@ impl Kernels for Device {
       })?
       .execute(|allocator, rollback| {
         let size = node_bytes.len().max(1) as u64;
-        let current_timeline = self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed).saturating_sub(1);
+        let current_timeline = self
+          .kernels
+          .next_submit_value
+          .load(core::sync::atomic::Ordering::Relaxed)
+          .saturating_sub(1);
         let mut pool = self.kernels.transient_pool.lock();
         for i in 0..pool.entries.len() {
           let entry = &pool.entries[i];
@@ -4479,7 +4483,7 @@ impl Kernels for Device {
           {
             let entry = pool.entries.remove(i);
             drop(pool);
-            
+
             // Write the new bytes to the recycled buffer
             let info = allocator.get_allocation_info(&entry.allocation);
             let mapped = info.mapped_data as *mut u8;
@@ -4575,7 +4579,8 @@ impl Kernels for Device {
           allocation: alloc,
           allocator,
           is_list: false,
-          usage: ash::vk::BufferUsageFlags::STORAGE_BUFFER | ash::vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+          usage: ash::vk::BufferUsageFlags::STORAGE_BUFFER
+            | ash::vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
           discarded: false,
           _marker: core::marker::PhantomData,
         })
@@ -4656,7 +4661,7 @@ impl Kernels for Device {
       )
     };
     match result {
-      Ok(()) => Ok(()),
+      Ok(()) | Err(ash::vk::Result::ERROR_FEATURE_NOT_PRESENT) => Ok(()),
       Err(e) => {
         aethervk_oshal_rlib::log!(
           "[CORRUPTION-CHECK] *** CORRUPTION DETECTED after '{}': {:?} ***",
