@@ -99,6 +99,21 @@
       >$(VULKAN_SDK)/share/vulkan</VkLinuxShare
     >
 
+    <!-- System fallbacks for Linux -->
+    <VkLinuxLib Condition="'$(VkLinuxLib)' == '' And Exists('/usr/lib/x86_64-linux-gnu/libvulkan.so')"
+      >/usr/lib/x86_64-linux-gnu</VkLinuxLib
+    >
+    <VkLinuxLib Condition="'$(VkLinuxLib)' == '' And Exists('/usr/lib/aarch64-linux-gnu/libvulkan.so')"
+      >/usr/lib/aarch64-linux-gnu</VkLinuxLib
+    >
+    <VkLinuxLib Condition="'$(VkLinuxLib)' == '' And Exists('/usr/lib/libvulkan.so')"
+      >/usr/lib</VkLinuxLib
+    >
+      
+    <VkLinuxShare Condition="'$(VkLinuxShare)' == '' And Exists('/usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json')"
+      >/usr/share/vulkan</VkLinuxShare
+    >
+
     <!-- Allow fallback -->
     <VkLinuxLib Condition="'$(VkLinuxLib)' == ''">$(VULKAN_SDK)/lib</VkLinuxLib>
     <VkLinuxShare Condition="'$(VkLinuxShare)' == ''">$(VULKAN_SDK)/share/vulkan</VkLinuxShare>
@@ -120,11 +135,6 @@
   </PropertyGroup>
 
   <Target Name="CheckVulkanSdk" BeforeTargets="BeforeBuild">
-    <Error
-      Condition="'$(VULKAN_SDK)' == ''"
-      Text="VULKAN_SDK environment variable is not set. Please install the Vulkan SDK and restart your IDE/terminal."
-    />
-
     <!-- macOS Specific Checks -->
     <Error
       Condition="'$(IsMac)' == 'true' And !Exists('$(VkMacLib)/libvulkan.dylib')"
