@@ -73,28 +73,11 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers libfontconfig1 libx11-6 libx11-xcb1 libxcb-dri3-0 libwayland-client0 xvfb xz-utils cmake ninja-build python3 build-essential pkg-config git
-
-    - name: Cache Vulkan-ExtensionLayer
-      id: cache-vulkan-ext
-      uses: actions/cache@v4
-      with:
-        path: Vulkan-ExtensionLayer
-        key: vulkan-extlayer-1.4.321.0-${{ runner.os }}
-
-    - name: Compile Vulkan-ExtensionLayer
-      if: steps.cache-vulkan-ext.outputs.cache-hit != 'true'
-      run: |
-        git clone https://github.com/KhronosGroup/Vulkan-ExtensionLayer.git
-        cd Vulkan-ExtensionLayer
-        git checkout vulkan-sdk-1.4.321.0
-        python3 scripts/update_deps.py --config release --dir external
-        cmake -S . -B build -G Ninja -C external/helper.cmake -DCMAKE_BUILD_TYPE=Release
-        cmake --build build
-
     - name: Install Vulkan-ExtensionLayer
       run: |
-        cd Vulkan-ExtensionLayer
-        sudo cmake --install build --prefix /usr
+        sudo mkdir -p /usr/share/vulkan/explicit_layer.d
+        sudo cp workflow-data/vulkan-synchronization2/VkLayer_khronos_synchronization2.json /usr/share/vulkan/explicit_layer.d/
+        sudo cp workflow-data/vulkan-synchronization2/libVkLayer_khronos_synchronization2.so /usr/lib/
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
