@@ -1106,6 +1106,7 @@ pub fn do_draw_gizmo(
     view_proj: camera.view_proj.into(),
     scale: draw_call.scale,
     instance_id: draw_call.buffer_index,
+    _pad: [0; 2],
   };
   device.push_gizmo_constants(cmd_buffer, &push_constants)?;
   device.set_line_width(cmd_buffer, 1.0)?;
@@ -1500,6 +1501,7 @@ pub fn do_draw_sphere_gizmo_batch(
   let push_constants = crate::gpu::SphereGizmoPushConstants {
     view_proj: camera.view_proj.into(),
     gizmo_ptr: draw_call.data_ptr,
+    _pad: 0,
   };
   device.push_sphere_gizmo_constants(cmd_buffer, &push_constants)?;
   device.draw_instanced(cmd_buffer, draw_call.total_vertices, draw_call.total_gizmos)?;
@@ -1531,8 +1533,6 @@ pub fn do_draw_ui_batch(
     elements_ptr: draw_call.elements_ptr,
     _pad0: 0,
     view_proj: proj,
-    viewport_size: window_extent,
-    _pad: [0.0, 0.0],
   };
   device.push_ui_constants(cmd_buffer, &push_constants)?;
   device.draw_instanced(cmd_buffer, 6, draw_call.total_elements)?;

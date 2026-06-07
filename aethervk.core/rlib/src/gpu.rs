@@ -317,7 +317,7 @@ pub struct SegmentMapGpu {
 pub struct PushConstants {
   pub model_view_proj: [[f32; 4]; 4],
   pub extra_ptr: u64,
-  pub _pad: u64,
+  pub _pad: u32,
 }
 
 #[repr(C)]
@@ -375,6 +375,7 @@ pub struct PhysicalMesh2PushConstants {
   pub scene_addr: u64,
   pub material_addr: u64,
   pub object_addr: u64,
+  pub _pad: u64,
 }
 
 #[repr(C)]
@@ -532,9 +533,11 @@ pub struct SphereGizmoPushConstants {
   // Must match GLSL: layout(push_constant, std430) uniform PushConstants {
   //     mat4 viewProj;             // offset 0,  64 bytes
   //     SphereGizmoArray gizmoPtr; // offset 64,  8 bytes
+  //     uint64_t _pad;             // offset 72,  8 bytes
   // };
   pub view_proj: [f32; 16], // 64 bytes at offset 0
   pub gizmo_ptr: u64,       //  8 bytes at offset 64
+  pub _pad: u64,            //  8 bytes padding to align block to 16 bytes (80 total)
 }
 
 /// Push constants for the depth-compositing fullscreen pass.
@@ -585,6 +588,7 @@ pub struct GizmoPushConstants {
   pub view_proj: [f32; 16],
   pub scale: f32,
   pub instance_id: u32,
+  pub _pad: [u32; 2],
 }
 
 #[repr(C)]
@@ -786,8 +790,6 @@ pub struct UiPushConstants {
   pub elements_ptr: u64,
   pub _pad0: u64,
   pub view_proj: [[f32; 4]; 4],
-  pub viewport_size: [f32; 2],
-  pub _pad: [f32; 2],
 }
 
 pub struct UiBatchCall {

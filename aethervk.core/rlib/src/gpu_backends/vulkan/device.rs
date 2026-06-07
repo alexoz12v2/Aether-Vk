@@ -4178,6 +4178,7 @@ impl RenderDevice for Device {
             scene_addr: base_addr + scene_offset as u64,
             material_addr: base_addr + material_offset as u64,
             object_addr: base_addr + object_offset as u64,
+            _pad: 0,
           };
 
           // 5. Directly record Vulkan Commands (bypassing abstract generic bounds/locks)

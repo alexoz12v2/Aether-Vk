@@ -40,8 +40,12 @@ layout(push_constant, std430) uniform PushConstants {
     uint _pad;
 } pc;
 
-shared vec3 sh_f[256];
-shared vec3 sh_t[256];
+shared float sh_f_x[256];
+shared float sh_f_y[256];
+shared float sh_f_z[256];
+shared float sh_t_x[256];
+shared float sh_t_y[256];
+shared float sh_t_z[256];
 
 void main() {
     uint body_id = gl_WorkGroupID.x;
@@ -70,16 +74,20 @@ void main() {
         pc.wrenches.wrenches[leaf_idx].torque_z = 0u;
     }
 
-    sh_f[local_id] = acc_f;
-    sh_t[local_id] = acc_t;
+    sh_f_x[local_id] = acc_f.x;
+    sh_f_y[local_id] = acc_f.y;
+    sh_f_z[local_id] = acc_f.z;
+    sh_t_x[local_id] = acc_t.x;
+    sh_t_y[local_id] = acc_t.y;
+    sh_t_z[local_id] = acc_t.z;
     barrier();
 
     if (local_id == 0) {
         acc_f = vec3(0.0);
         acc_t = vec3(0.0);
         for (uint i = 0; i < gl_WorkGroupSize.x; ++i) {
-            acc_f += sh_f[i];
-            acc_t += sh_t[i];
+            acc_f += vec3(sh_f_x[i], sh_f_y[i], sh_f_z[i]);
+            acc_t += vec3(sh_t_x[i], sh_t_y[i], sh_t_z[i]);
         }
 
         Wrench dest = pc.wrenches.wrenches[com_wrench];

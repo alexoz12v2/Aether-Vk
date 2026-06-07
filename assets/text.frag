@@ -14,6 +14,8 @@ layout(push_constant) uniform Push {
     vec4 color;
     vec4 uv_bounds;
     uint texture_id;
+    uint _pad[3];
+    mat4 viewProj;
 } push;
 
 layout(location = 0) out vec4 outColor;
