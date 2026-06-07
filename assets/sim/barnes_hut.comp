@@ -58,7 +58,6 @@ void main() {
         uint base = P_BASE(my_p_idx);
         my_pos = vec3(P_READ(pc.particles, base), P_READ(pc.particles, base+1*SUBGROUP_SIZE), P_READ(pc.particles, base+2*SUBGROUP_SIZE));
         my_mass = P_READ(pc.particles, base+6*SUBGROUP_SIZE);
-        my_beta = P_READ(pc.particles, base+10*SUBGROUP_SIZE);
     }
 
     vec3 safe_pos = i_am_valid ? my_pos : vec3(0.0), min_pos = subgroupMin(i_am_valid ? my_pos : vec3(1e20)), max_pos = subgroupMax(i_am_valid ? my_pos : vec3(-1e20));
@@ -73,7 +72,8 @@ void main() {
         uint source_node_idx = shared_stacks[subgroup_id][--stack_ptr]; if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr;
 
         bool s_valid = bvh_node_is_valid(pc.bvh.nodes[source_node_idx].valid_mask, lane_id);
-        bool s_is_leaf = bvh_is_leaf(pc.bvh.nodes[source_node_idx].metadata[lane_id]);
+        uint s_meta = pc.bvh.nodes[source_node_idx].metadata[lane_id];
+        bool s_is_leaf = bvh_is_leaf(s_meta);
 
         vec3 s_com = vec3(pc.bvh.nodes[source_node_idx].com_x[lane_id], pc.bvh.nodes[source_node_idx].com_y[lane_id], pc.bvh.nodes[source_node_idx].com_z[lane_id]);
         float s_mass = pc.bvh.nodes[source_node_idx].masses[lane_id];
@@ -93,9 +93,12 @@ void main() {
                 uint bit = findLSB(mask); mask &= ~(1u << bit); uint src_lane = i * 32 + bit;
                 if (i_am_valid) {
                     vec3 k_com = vec3(subgroupShuffle(s_com.x, src_lane), subgroupShuffle(s_com.y, src_lane), subgroupShuffle(s_com.z, src_lane));
-                    float k_mass = subgroupShuffle(s_mass, src_lane); uint k_idx = subgroupShuffle(s_idx, src_lane); bool k_leaf = subgroupShuffle(s_is_leaf, src_lane);
+                    uint k_meta = subgroupShuffle(s_meta, src_lane);
+                    float k_mass = subgroupShuffle(s_mass, src_lane); bool k_leaf = subgroupShuffle(s_is_leaf, src_lane);
 
-                    if (!(k_leaf && my_p_idx == k_idx)) {
+                    uint k_p_idx = bvh_get_index(k_meta);
+
+                    if (!(k_leaf && my_p_idx == k_p_idx)) {
                         vec3 p_dir = k_com - my_pos; float p_dist_sq = dot(p_dir, p_dir);
                         my_acc += (p_dir / max(sqrt(p_dist_sq), 1e-6)) * ((pc.G * k_mass) / (p_dist_sq + pc.softening_sq));
                     }

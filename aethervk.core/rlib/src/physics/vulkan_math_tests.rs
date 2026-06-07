@@ -1412,4 +1412,115 @@ mod tests {
       }
     }
   }
+
+  #[test]
+  fn test_barnes_hut_3_clusters() {
+    let mut ctx = VulkanTestContext::new();
+    let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_all_crate_components();
+
+    let root = scene.spawn_reference_frame(
+      "MicroFrame",
+      None,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+      ReferenceFrameType::Micro,
+      1.0,
+      10000.0,
+    );
+
+    let mesh_entity = scene.spawn_entity("ClustersMesh");
+    scene.set_parent(mesh_entity, Some(root));
+    scene.add_component(mesh_entity, TransformComponent::default()).unwrap();
+
+    let mut particle_sys = crate::scene::particles::ParticleSystemComponent::new(400);
+    particle_sys.particle_radius = 0.01;
+    particle_sys.beta = 2.0;
+
+    let duration_seconds = 0.016;
+
+    {
+      let mut parts = particle_sys.particles.write();
+      
+      // Test particle at origin
+      parts.push(crate::scene::particles::ParticleData {
+        id_low: 1, id_high: 0, age_low: 0, age_high: 0,
+        position: [0.0, 0.0, 0.0],
+        velocity: [0.0, 0.0, 0.0],
+        mass: 1.0,
+        active: 1,
+      });
+
+      // Cluster 1
+      for _ in 0..100 {
+        parts.push(crate::scene::particles::ParticleData {
+          id_low: 2, id_high: 0, age_low: 0, age_high: 0,
+          position: [100.0, 0.0, 0.0],
+          velocity: [0.0, 0.0, 0.0],
+          mass: 1.0,
+          active: 1,
+        });
+      }
+      
+      // Cluster 2
+      for _ in 0..100 {
+        parts.push(crate::scene::particles::ParticleData {
+          id_low: 3, id_high: 0, age_low: 0, age_high: 0,
+          position: [0.0, 100.0, 0.0],
+          velocity: [0.0, 0.0, 0.0],
+          mass: 1.0,
+          active: 1,
+        });
+      }
+
+      // Cluster 3
+      for _ in 0..100 {
+        parts.push(crate::scene::particles::ParticleData {
+          id_low: 4, id_high: 0, age_low: 0, age_high: 0,
+          position: [0.0, 0.0, 100.0],
+          velocity: [0.0, 0.0, 0.0],
+          mass: 1.0,
+          active: 1,
+        });
+      }
+    }
+    scene.add_component(mesh_entity, particle_sys).unwrap();
+
+    ctx.frontend.with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+        run_simulation(vulkan_device, &mut scene, duration_seconds, false);
+        Ok(())
+    }).unwrap();
+
+    let final_sys = scene.with_component(mesh_entity, |p: &crate::scene::particles::ParticleSystemComponent| {
+      p.particles.read().clone()
+    }).unwrap();
+
+    let test_p = &final_sys[0];
+    
+    // Barnes-Hut config: G = 1.0, theta = 0.5.
+    // Distance to each cluster is 100. Cluster mass is 100.
+    // F_mag = G * M / r^2 = 1.0 * 100 / 100^2 = 0.01.
+    // beta = 2.0 -> force multiplier = (1 - 2.0) = -1.0.
+    // Thus, F = -0.01 on each axis (repulsive).
+    // Simulation dt is hardcoded in run_simulation to 16667 us (0.016667s).
+    // delta_v = F * dt = -0.01 * 0.016667 = -0.00016667
+    let expected_v = -0.00016667;
+    let tolerance = 0.000001;
+
+    let v_x = test_p.velocity[0];
+    let v_y = test_p.velocity[1];
+    let v_z = test_p.velocity[2];
+
+    println!("TEST_P: {:?}", test_p);
+
+    assert!((v_x - expected_v).abs() < tolerance, "Velocity X mismatch: expected {}, got {}", expected_v, v_x);
+    assert!((v_y - expected_v).abs() < tolerance, "Velocity Y mismatch: expected {}, got {}", expected_v, v_y);
+    assert!((v_z - expected_v).abs() < tolerance, "Velocity Z mismatch: expected {}, got {}", expected_v, v_z);
+  }
 }

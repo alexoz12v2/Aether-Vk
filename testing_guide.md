@@ -239,3 +239,13 @@ If you find a lavapipe thread spinning in JIT code:
 #### Automated Tracing
 
 Since you can't easily press `Ctrl+C` in an interactive automated CI prompt, you can run an automated version of this command that launches the test in GDB, waits 30 seconds for it to hang, automatically sends a `SIGINT`, and dumps all thread backtraces to a file for analysis.
+
+### Lavapipe Countermeasures
+
+Yes! Because llvmpipe is a JIT software renderer, it has known edge-case bugs handling deep register spilling and stack allocation when compiling complex compute shaders. Based on recent Mesa/LLVM issues, here are the main countermeasures against this:
+
+- **Gate the Prints:** Wrap `debugPrintfEXT` with `if (gl_LocalInvocationIndex == 0)` or similar subgroup limits. This massively reduces the instruction permutations the JIT has to compile for SIMT execution.
+- **Limit JIT Optimization:** Set `GALLIUM_DRIVER=llvmpipe` along with debug flags to force LLVM to skip certain aggressive unrolling/vectorization steps that trigger the stack frame miscalculation.
+- **Increase Thread Stack:** Since llvmpipe threads execute locally, running `ulimit -s unlimited` (or at least `8192`) before the Docker command can occasionally save the process if it's purely a stack-overflow crash rather than an x30 (arm only) link-register clobber.
+- **SSBO Fallback:** When debugging on software renderers, many developers completely abandon `debugPrintfEXT` and manually write debug floats into a pre-allocated Shader Storage Buffer Object (SSBO), reading it back on the CPU instead.
+

@@ -28,7 +28,7 @@ void main() {
     if (idx >= n) return;
     
     uint leaf_node = n - 1 + idx;
-    uint particle_idx = pc.sorted_morton.entries[idx].y;
+    uint particle_idx = uint64_t(pc.sorted_morton) == 0ul ? idx : pc.sorted_morton.entries[idx].y;
     
     uint base = P_BASE(particle_idx);
     vec3 p_pos = vec3(uintBitsToFloat(pc.particles.data[base]), 
