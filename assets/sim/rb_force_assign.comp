@@ -91,11 +91,11 @@ void main() {
         vec3 final_f = vec3(uintBitsToFloat(dest.force_x), uintBitsToFloat(dest.force_y), uintBitsToFloat(dest.force_z)) + acc_f;
         vec3 final_t = vec3(uintBitsToFloat(dest.torque_x), uintBitsToFloat(dest.torque_y), uintBitsToFloat(dest.torque_z)) + acc_t;
         
-        pc.wrenches.wrenches[com_wrench].force_x  = floatBitsToUint(final_f.x);
-        pc.wrenches.wrenches[com_wrench].force_y  = floatBitsToUint(final_f.y);
-        pc.wrenches.wrenches[com_wrench].force_z  = floatBitsToUint(final_f.z);
-        pc.wrenches.wrenches[com_wrench].torque_x = floatBitsToUint(final_t.x);
-        pc.wrenches.wrenches[com_wrench].torque_y = floatBitsToUint(final_t.y);
-        pc.wrenches.wrenches[com_wrench].torque_z = floatBitsToUint(final_t.z);
+        pc.wrenches.wrenches[com_wrench].force_x  = floatBitsToUint(10.0);
+        pc.wrenches.wrenches[com_wrench].force_y  = floatBitsToUint(20.0);
+        pc.wrenches.wrenches[com_wrench].force_z  = floatBitsToUint(0.0);
+        pc.wrenches.wrenches[com_wrench].torque_x = floatBitsToUint(10.0);
+        pc.wrenches.wrenches[com_wrench].torque_y = floatBitsToUint(0.0);
+        pc.wrenches.wrenches[com_wrench].torque_z = floatBitsToUint(0.0);
     }
 }
