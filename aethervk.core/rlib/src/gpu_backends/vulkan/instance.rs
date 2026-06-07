@@ -43,10 +43,14 @@ impl Instance {
     // 1. Resolve Layers First
     // =========================================================================
     #[cfg(debug_assertions)]
-    const LAYER_NAMES: [&CStr; 2] = [
-      c"VK_LAYER_KHRONOS_validation",
-      c"VK_LAYER_KHRONOS_synchronization2",
-    ];
+    let mut layer_names = alloc::vec![c"VK_LAYER_KHRONOS_validation"];
+    
+    #[cfg(debug_assertions)]
+    {
+      if aethervk_oshal_rlib::os::env::var("AETHERVK_DISABLE_SYNC_VAL").is_none() {
+        layer_names.push(c"VK_LAYER_KHRONOS_synchronization2");
+      }
+    }
 
     let mut desired_layer_names: Vec<&CStr> = if cfg!(debug_assertions) {
       Vec::with_capacity(4)
@@ -60,7 +64,7 @@ impl Instance {
     #[cfg(debug_assertions)]
     {
       let layer_properties = unsafe { vk_entry.enumerate_instance_layer_properties() }?;
-      for desired_layer_name in &LAYER_NAMES {
+      for desired_layer_name in &layer_names {
         if layer_properties
           .iter()
           .any(|p| p.layer_name_as_c_str().unwrap() == *desired_layer_name)
@@ -143,16 +147,7 @@ impl Instance {
     let mut printf_features = alloc::vec![];
 
     #[cfg(debug_assertions)]
-    let disable_gpu_av = {
-      #[cfg(any(test, feature = "std"))]
-      {
-        std::env::var("AETHERVK_DISABLE_GPU_AV").is_ok()
-      }
-      #[cfg(not(any(test, feature = "std")))]
-      {
-        false
-      }
-    };
+    let disable_gpu_av = aethervk_oshal_rlib::os::env::var("AETHERVK_DISABLE_GPU_AV").is_some();
 
     #[cfg(debug_assertions)]
     if cfg!(target_vendor = "apple") || disable_gpu_av {
@@ -287,16 +282,21 @@ impl Instance {
       Vec::from_iter(physical_devices.iter().filter_map(|&physical_device| {
         // a. properties (TODO: Subgroup Information)
         let mut subgroup_props = vk::PhysicalDeviceSubgroupProperties::default();
-        let (subgroup_size, is_cpu) = {
+        let mut descriptor_indexing_props = vk::PhysicalDeviceDescriptorIndexingProperties::default();
+        let (subgroup_size, is_cpu, max_per_stage_samplers, max_set_samplers) = {
           // `props` mutably borrows `subgroup_props` via push_next().  The block
           // scope ends the borrow so we can read `subgroup_props.subgroup_size` next.
-          let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup_props);
+          let mut props = vk::PhysicalDeviceProperties2::default()
+            .push_next(&mut subgroup_props)
+            .push_next(&mut descriptor_indexing_props);
           unsafe { self.instance.get_physical_device_properties2(physical_device, &mut props) };
           // Cache device type; block scope ends props borrow here.
           let dev_type = props.properties.device_type;
           (
             subgroup_props.subgroup_size,
             dev_type == vk::PhysicalDeviceType::CPU,
+            descriptor_indexing_props.max_per_stage_descriptor_update_after_bind_samplers,
+            descriptor_indexing_props.max_descriptor_set_update_after_bind_samplers,
           )
         };
         // TODO log
@@ -436,6 +436,8 @@ impl Instance {
           is_cpu,
           score,
           debug_shaders: query_input.debug_shaders,
+          max_per_stage_descriptor_update_after_bind_samplers: max_per_stage_samplers,
+          max_descriptor_set_update_after_bind_samplers: max_set_samplers,
         })
       }));
 

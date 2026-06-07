@@ -99,6 +99,15 @@ mod tests {
         pool: pool_arc,
       }
     }
+
+    pub fn is_lavapipe(&self) -> bool {
+      self.frontend.with_device(self.device_handle, |dev| {
+        let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+        let props = &vulkan_device.query_result.physical_device_properties;
+        let device_name = props.device_name_as_c_str().unwrap().to_string_lossy();
+        Ok(device_name.contains("llvmpipe"))
+      }).unwrap_or(false)
+    }
   }
 
   pub fn run_simulation<K: crate::gpu::Kernels + ?Sized>(

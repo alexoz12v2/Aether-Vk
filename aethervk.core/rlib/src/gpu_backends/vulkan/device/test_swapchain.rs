@@ -131,6 +131,9 @@ mod tests {
       metal_objects: ash::ext::metal_objects::Device::new(&instance.instance, &device),
       #[cfg(debug_assertions)]
       debug_utils: ash::ext::debug_utils::Device::new(&instance.instance, &device),
+      max_per_stage_descriptor_update_after_bind_samplers: phys_device.max_per_stage_descriptor_update_after_bind_samplers,
+      max_per_stage_descriptor_samplers: phys_device.physical_device_properties.limits.max_per_stage_descriptor_samplers,
+      max_descriptor_set_update_after_bind_samplers: phys_device.max_descriptor_set_update_after_bind_samplers,
     };
 
     let params = crate::gpu::PresentationEngineParams::windowless(256, 256);

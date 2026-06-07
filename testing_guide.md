@@ -11,7 +11,7 @@ The AOSOA block width is strictly tied to the Vulkan hardware's **Subgroup Size*
 - **Apple (Metal/MoltenVK):** 32
 - **Nvidia:** 32
 - **AMD:** 64
-- **Lavapipe (llvmpipe / CI):** 4
+- **Lavapipe (llvmpipe / CI):** 1/2 or 4/8/16 (depends on supported SIMD width and overrides)
 
 **WARNING: Never hardcode subgroup sizes in tests!**
 If you hardcode an assumed packing width (e.g., `32`) in your CPU test logic:
@@ -152,7 +152,7 @@ In headless Linux environments, you use `xvfb-run` to spin up a fake X11 display
 **The Fix:** Always use `tini` as your Docker entrypoint, or pass `--init` to your `docker run` command. `tini` securely takes over PID 1, passing all signals down properly so `xvfb-run` can safely run as PID 2.
 
 #### 2. `SIGSEGV` during teardown (The GPU-AV Lavapipe bug)
-If you are running the test suite on `lavapipe` (the CPU emulation driver used in CI) and see random `(test aborted with signal 11: SIGSEGV)` crashes during teardown/cleanup, this is a known bug inside Khronos's **GPU-Assisted Validation (GPU-AV)** layer interacting poorly with `llvmpipe`. 
+If you are running the test suite on `lavapipe` (the CPU emulation driver used in CI) and see random `(test aborted with signal 11: SIGSEGV)` crashes during teardown/cleanup, this is a known bug inside Khronos's **GPU-Assisted Validation (GPU-AV)** layer interacting poorly with `llvmpipe`.
 
 **The Fix:** You can selectively disable `GPU-AV` in AetherVk during CI runs by setting the `AETHERVK_DISABLE_GPU_AV=1` environment variable:
 ```bash
@@ -164,7 +164,7 @@ docker run --init -e AETHERVK_DISABLE_GPU_AV=1 --platform linux/amd64 --rm -v "$
 If you encounter `SIGSEGV` segmentation faults directly inside shader execution (like in `integrate_bodies`) when testing on `lavapipe` in Docker, it may be due to an LLVM JIT Compiler bug regarding register allocation. While the exact registers vary by CPU architecture (like `x30` on ARM64 or equivalent general-purpose registers on x86_64), the root cause is the same.
 
 **Why it happens:**
-`spirv-val` will report that your shader is perfectly valid. However, the driver (`llvmpipe`) compiles that SPIR-V into native machine code assembly using LLVM. In highly complex shaders (like physics integration), the compiler runs out of physical CPU registers—a scenario known as **High Register Pressure**. 
+`spirv-val` will report that your shader is perfectly valid. However, the driver (`llvmpipe`) compiles that SPIR-V into native machine code assembly using LLVM. In highly complex shaders (like physics integration), the compiler runs out of physical CPU registers—a scenario known as **High Register Pressure**.
 
 When `local_size_x` (e.g., 32) is heavily mismatched with the hardware's natural SIMD width (e.g., 4 or 8 depending on the CPU's vector instructions), the JIT compiler wraps the shader logic in a CPU loop to simulate the threads. In specific edge cases under high register pressure, the LLVM backend has a known bug where it accidentally re-uses critical registers for the inner SIMD loop counter, destroying the memory pointer it was holding for constant float data. When it tries to read the float data using the loop counter as a memory address, the program instantly segfaults.
 
@@ -249,3 +249,30 @@ Yes! Because llvmpipe is a JIT software renderer, it has known edge-case bugs ha
 - **Increase Thread Stack:** Since llvmpipe threads execute locally, running `ulimit -s unlimited` (or at least `8192`) before the Docker command can occasionally save the process if it's purely a stack-overflow crash rather than an x30 (arm only) link-register clobber.
 - **SSBO Fallback:** When debugging on software renderers, many developers completely abandon `debugPrintfEXT` and manually write debug floats into a pre-allocated Shader Storage Buffer Object (SSBO), reading it back on the CPU instead.
 
+## Remote macOS VM Testing
+
+When developing on a host that doesn't natively support certain Vulkan/Metal features, you can natively offload your test execution to a dedicated macOS VM using the provided VM runners.
+
+### Activating the VM Environment
+
+To quickly configure Cargo to offload binaries, source the provided helper script. It optionally takes your VM's username and hostname, otherwise defaulting to `alessio` and `aether-vm.local`:
+
+```bash
+source scripts/macos_vm_env.sh
+```
+
+This exports the `CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER="scripts/vm-runner.sh"` environment variable. When you subsequently run `cargo nextest run`, Cargo will compile the binaries natively on your host but seamlessly execute them over SSH on the VM.
+
+**Important:** The VM must have passwordless SSH configured, and `VULKAN_SDK` must be exported in the VM's `~/.zshenv` (e.g. `source ~/vulkan_sdk/setup-env.sh`), as the runner strictly verifies the environment exists before launching the test.
+
+### Remote Debugging
+
+Debugging a binary over a remote VM runner using `cargo nextest run --debugger 'rust-gdb --args'` will incorrectly attempt to attach the debugger to the local bash runner script instead of the remote binary.
+
+To interactively debug a remote test, you should manually SSH into the VM and run the debugger directly on the VirtioFS mounted binary:
+
+```bash
+ssh -t alessio@aether-vm.local "cd /Volumes/ExtData/alessioext/Dev/Aether-Vk && source ~/vulkan_sdk/setup-env.sh && rust-gdb --args ./target/debug/deps/aethervk_core_rlib-<hash> --exact my_failing_test --nocapture"
+```
+
+*(If you are on an Apple Silicon VM without `rust-gdb`, use `lldb -- ./target/debug/...`)*

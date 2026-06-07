@@ -196,6 +196,8 @@ pub struct PhysicalDeviceQueryResult {
   pub is_cpu: bool,
   pub score: i32,
   pub debug_shaders: bool,
+  pub max_per_stage_descriptor_update_after_bind_samplers: u32,
+  pub max_descriptor_set_update_after_bind_samplers: u32,
 }
 
 impl PhysicalDeviceQueryResult {
@@ -265,14 +267,6 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
 ) -> vk::Bool32 {
   let p_msg = unsafe { (*p_callback_data).p_message };
   let msg = unsafe { core::ffi::CStr::from_ptr(p_msg) };
-  let msg_str = msg.to_string_lossy();
-
-  if msg_str.contains("UNASSIGNED-VkSemaphore-state-timeout") {
-    return vk::FALSE; // Lavapipe + GPU-AV bug: False positive timeout
-  }
-  if msg_str.contains("UNASSIGNED-Device address out of bounds") {
-    return vk::FALSE; // Lavapipe + GPU-AV bug: False positive for buffer_reference from Push Constants
-  }
 
   aethervk_oshal_rlib::log!("[Vulkan Messenger]: {:?}", msg);
 
@@ -667,14 +661,35 @@ impl EntryWrapper {
             lib =
               unsafe { libc::dlopen(vk_loader_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
           }
+
+          if lib.is_null() {
+            let err_ptr = unsafe { libc::dlerror() };
+            if !err_ptr.is_null() {
+                let err_msg = unsafe { core::ffi::CStr::from_ptr(err_ptr) };
+                aethervk_oshal_rlib::log!("dlopen error: {:?}", err_msg);
+            }
+          }
+
           core::ptr::NonNull::new(lib)
         })
         .and_then(|module_ptr| unsafe {
           vulkan_loader_module = module_ptr;
-          core::ptr::NonNull::new(libc::dlsym(
+          let sym = libc::dlsym(
             module_ptr.as_ptr(),
             b"vkGetInstanceProcAddr\0".as_ptr().cast(),
-          ))
+          );
+          
+          if sym.is_null() {
+            let err_ptr = libc::dlerror();
+            if !err_ptr.is_null() {
+                let err_msg = core::ffi::CStr::from_ptr(err_ptr);
+                aethervk_oshal_rlib::log!("dlsym error: {:?}", err_msg);
+            } else {
+                aethervk_oshal_rlib::log!("dlsym error: unknown (null symbol but no dlerror)");
+            }
+          }
+          
+          core::ptr::NonNull::new(sym)
         })
         .map(|func_addr| unsafe { core::mem::transmute(func_addr) })
         .unwrap_or(unsafe { core::mem::transmute(ZERO) });

@@ -2,6 +2,7 @@
 #define GJK_CTA_UTILS_GLSL
 
 // GJK and CTA implementations in GLSL
+#extension GL_EXT_control_flow_attributes : require
 
 struct MinkowskiPoint {
     vec3 point;
@@ -58,7 +59,7 @@ Face create_face(Simplex polytope, int a, int b, int c) {
     return f;
 }
 
-Face create_face_poly(MinkowskiPoint points[16], int a, int b, int c) {
+Face create_face_poly(MinkowskiPoint points[12], int a, int b, int c) {
     vec3 ab = points[b].point - points[a].point;
     vec3 ac = points[c].point - points[a].point;
     vec3 n = cross(ab, ac);
@@ -82,13 +83,13 @@ Face create_face_poly(MinkowskiPoint points[16], int a, int b, int c) {
 vec3 support_shape(uint shape_type, vec3 shape_data, mat4 transform, vec3 dir);
 
 void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, uint type2, vec3 data2, mat4 trans2, out float dist, out vec3 p_a, out vec3 p_b, out vec3 epa_normal) {
-    MinkowskiPoint polytope_points[16];
+    MinkowskiPoint polytope_points[12];
     int polytope_count = simplex.count;
     for(int i = 0; i < simplex.count; i++) {
         polytope_points[i] = simplex.points[i];
     }
     
-    Face faces[32];
+    Face faces[16];
     int num_faces = 0;
     
     if (polytope_count == 4) {
@@ -101,7 +102,8 @@ void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, ui
         return;
     }
     
-    for (int iter = 0; iter < 32; ++iter) {
+    [[dont_unroll]]
+    for (int iter = 0; iter < 16; ++iter) {
         int closest_face_idx = 0;
         float min_dist = faces[0].distance;
         for (int i = 1; i < num_faces; ++i) {
@@ -152,7 +154,7 @@ void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, ui
             return;
         }
         
-        if (polytope_count >= 16) break; // Maximum vertices
+        if (polytope_count >= 12) break; // Maximum vertices
         
         MinkowskiPoint mp;
         mp.point = new_pt;
@@ -161,7 +163,7 @@ void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, ui
         int new_idx = polytope_count;
         polytope_points[polytope_count++] = mp;
         
-        ivec2 edges[64];
+        ivec2 edges[24];
         int num_edges = 0;
         
         int i = 0;
@@ -172,10 +174,12 @@ void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, ui
                 
                 // Add edges, removing pairs
                 int e[6] = {f.a, f.b, f.b, f.c, f.c, f.a};
+                [[dont_unroll]]
                 for (int j = 0; j < 3; ++j) {
                     int ea = e[j*2];
                     int eb = e[j*2+1];
                     bool found = false;
+                    [[dont_unroll]]
                     for (int k = 0; k < num_edges; ++k) {
                         if (edges[k].x == eb && edges[k].y == ea) {
                             edges[k] = edges[--num_edges];
@@ -183,7 +187,7 @@ void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, ui
                             break;
                         }
                     }
-                    if (!found && num_edges < 64) {
+                    if (!found && num_edges < 24) {
                         edges[num_edges++] = ivec2(ea, eb);
                     }
                 }
@@ -194,8 +198,9 @@ void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, ui
         
         if (num_edges == 0) break;
         
+        [[dont_unroll]]
         for (int k = 0; k < num_edges; ++k) {
-            if (num_faces < 32) {
+            if (num_faces < 16) {
                 faces[num_faces++] = create_face_poly(polytope_points, edges[k].x, edges[k].y, new_idx);
             }
         }
@@ -203,6 +208,7 @@ void epa_distance(inout Simplex simplex, uint type1, vec3 data1, mat4 trans1, ui
     
     int best_face = 0;
     float min_dist_final = faces[0].distance;
+    [[dont_unroll]]
     for (int i = 1; i < num_faces; ++i) {
         if (faces[i].distance < min_dist_final) {
             min_dist_final = faces[i].distance;
@@ -434,8 +440,8 @@ float gjk_distance_generic(uint type1, vec3 data1, mat4 trans1, uint type2, vec3
     vec3 v = simplex.points[0].point;
     vec3 last_valid_dir = dir;
     
-    const int MAX_ITERATIONS = 64;
-    for (int i = 0; i < MAX_ITERATIONS; ++i) {
+    [[dont_unroll]]
+    for (int i = 0; i < 64; ++i) {
         if (dot(v, v) < 1e-6) {
             compute_closest_points(simplex, p_a, p_b);
             epa_normal = -last_valid_dir;

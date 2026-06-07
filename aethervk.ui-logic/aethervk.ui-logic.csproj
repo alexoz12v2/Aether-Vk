@@ -152,8 +152,8 @@
       Text="MoltenVK_icd.json not found at $(VkMacShare)/icd.d/MoltenVK_icd.json."
     />
     <Error
-      Condition="'$(IsMac)' == 'true' And !Exists('$(VkMacShare)/explicit_layer.d/VkLayer_khronos_synchronization2.json')"
-      Text="Synchronization2 layer json not found at $(VkMacShare)/explicit_layer.d/VkLayer_khronos_synchronization2.json."
+      Condition="'$(IsMac)' == 'true' And !Exists('../workflow-data/vulkan-synchronization2/macos/VkLayer_khronos_synchronization2.json')"
+      Text="Synchronization2 layer json not found at ../workflow-data/vulkan-synchronization2/macos/VkLayer_khronos_synchronization2.json."
     />
     <Error
       Condition="'$(IsMac)' == 'true' And '$(Configuration)' != 'Release' And !Exists('$(VkMacShare)/explicit_layer.d/VkLayer_khronos_validation.json')"
@@ -162,7 +162,7 @@
 
     <!-- Linux Specific Checks -->
     <Error
-      Condition="'$(IsLinux)' == 'true' And !Exists('$(VkLinuxShare)/explicit_layer.d/VkLayer_khronos_synchronization2.json')"
+      Condition="'$(IsLinux)' == 'true' And !Exists('../workflow-data/vulkan-synchronization2/linux/VkLayer_khronos_synchronization2.json')"
       Text="Synchronization2 layer json not found."
     />
     <Error
@@ -173,8 +173,8 @@
 
     <!-- Windows Specific Checks -->
     <Error
-      Condition="'$(IsWindows)' == 'true' And !Exists('$(VkWinShare)/VkLayer_khronos_synchronization2.json')"
-      Text="Synchronization2 layer json not found in Bin directory."
+      Condition="'$(IsWindows)' == 'true' And !Exists('../workflow-data/vulkan-synchronization2/windows/VkLayer_khronos_synchronization2.json')"
+      Text="Synchronization2 layer json not found in workflow-data."
     />
     <Error
       Condition="'$(IsWindows)' == 'true' And '$(Configuration)' != 'Release' And !Exists('$(VkWinShare)/VkLayer_khronos_validation.json')"
@@ -213,12 +213,12 @@
     />
 
     <Content
-      Include="$(VkMacLib)/libVkLayer_khronos_synchronization2.dylib"
+      Include="../workflow-data/vulkan-synchronization2/macos/libVkLayer_khronos_synchronization2.dylib"
       Link="vulkan/lib/libVkLayer_khronos_synchronization2.dylib"
       CopyToOutputDirectory="PreserveNewest"
     />
     <Content
-      Include="$(VkMacShare)/explicit_layer.d/VkLayer_khronos_synchronization2.json"
+      Include="../workflow-data/vulkan-synchronization2/macos/VkLayer_khronos_synchronization2.json"
       Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_synchronization2.json"
       CopyToOutputDirectory="PreserveNewest"
     />
@@ -240,15 +240,15 @@
   <!-- Linux Bundling (Only Layers) -->
   <ItemGroup Condition="'$(IsLinux)' == 'true'">
     <Content
-      Include="$(VkLinuxShare)/explicit_layer.d/VkLayer_khronos_synchronization2.json"
+      Include="../workflow-data/vulkan-synchronization2/linux/VkLayer_khronos_synchronization2.json"
       Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_synchronization2.json"
       CopyToOutputDirectory="PreserveNewest"
     />
     <Content
-      Include="$(VkLinuxLib)/libVkLayer_khronos_synchronization2.so"
+      Include="../workflow-data/vulkan-synchronization2/linux/libVkLayer_khronos_synchronization2.so"
       Link="vulkan/lib/libVkLayer_khronos_synchronization2.so"
       CopyToOutputDirectory="PreserveNewest"
-      Condition="Exists('$(VkLinuxLib)/libVkLayer_khronos_synchronization2.so')"
+      Condition="Exists('../workflow-data/vulkan-synchronization2/linux/libVkLayer_khronos_synchronization2.so')"
     />
   </ItemGroup>
 
@@ -269,15 +269,15 @@
   <!-- Windows Bundling (Only Layers) -->
   <ItemGroup Condition="'$(IsWindows)' == 'true'">
     <Content
-      Include="$(VkWinShare)/VkLayer_khronos_synchronization2.json"
+      Include="../workflow-data/vulkan-synchronization2/windows/VkLayer_khronos_synchronization2.json"
       Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_synchronization2.json"
       CopyToOutputDirectory="PreserveNewest"
     />
     <Content
-      Include="$(VkWinLib)/VkLayer_khronos_synchronization2.dll"
+      Include="../workflow-data/vulkan-synchronization2/windows/VkLayer_khronos_synchronization2.dll"
       Link="vulkan/lib/VkLayer_khronos_synchronization2.dll"
       CopyToOutputDirectory="PreserveNewest"
-      Condition="Exists('$(VkWinLib)/VkLayer_khronos_synchronization2.dll')"
+      Condition="Exists('../workflow-data/vulkan-synchronization2/windows/VkLayer_khronos_synchronization2.dll')"
     />
   </ItemGroup>
 

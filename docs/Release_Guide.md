@@ -102,3 +102,34 @@ Once you have generated the artifacts locally, use the `upload` action to attach
 ```powershell
 .\scripts\create_release.ps1 -Action upload -Version 1.0.0 -File .\bin\publish\AetherVk_win-x64.zip
 ```
+
+## Deleting or Undoing a Release
+
+If you made a mistake (e.g., triggered a release on the wrong commit or with the wrong version), you can easily delete the release and its associated git tag so that you can recreate it properly.
+
+Run the following command using the GitHub CLI, replacing `v1.0.0-sxs` with the target version:
+
+```bash
+gh release delete v1.0.0-sxs --cleanup-tag -y
+```
+
+*   `--cleanup-tag`: Ensures the git tag is deleted from the remote repository as well, preventing tag collision when you attempt to redo the release.
+*   `-y`: Skips the confirmation prompt.
+
+## An example to test in local with a VM exposed with SSH
+
+After `brew` installing `sshpass` to insert local VM user pass automatically
+
+```bash
+sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no -p 2222 alessio@localhost "cd /d Z:\ && powershell -ExecutionPolicy Bypass -File .\scripts\package_windows.ps1 -Arch win-arm64 && powershell -ExecutionPolicy Bypass -File .\scripts\package_windows_msix.ps1 -
+Arch arm64"
+```
+
+Note: actually, in shared folders, at least in UTM, you might run into troubles unless you do the cargo build in an NTFS partition
+inside the internal drive of the VM, therefore you'd need to `robocopy` the rust workspace to build the cdylib first, and then
+complete the build in the shared folder
+
+```powershell
+# example: shared folder here is Z:\
+robocopy Z:\ C:\Aether-Vk /E /XD target .git .aider* .agents .antigravitycli .venv bin obj /XF *.tar.xz *.log *.txt /R:0 /W:0
+```
