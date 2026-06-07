@@ -10,6 +10,7 @@
 export AETHER_VM_USER="${1:-alessio}"
 export AETHER_VM_HOST="${2:-aether-vm.local}"
 export CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER="scripts/vm-runner.sh"
+export AETHERVK_DISABLE_SYNC_VAL=1
 
 echo "==== VM Offload Environment Configured ===="
 echo "VM User: $AETHER_VM_USER"

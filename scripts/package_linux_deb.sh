@@ -12,12 +12,12 @@ fi
 
 BASE_APP_NAME="AetherVk"
 APP_VERSION="1.0.0"
-PUBLISH_DIR="aethervk.ui.app/bin/$CONFIG/net10.0/$ARCH/publish"
+PUBLISH_DIR="aethervk.ui-app/bin/$CONFIG/net10.0/$ARCH/publish"
 
 if [ "$MODE" = "SideBySide" ]; then
-    PACKAGE_NAME="aethervk-sxs-${APP_VERSION//./-}-${CONFIG,,}"
+    PACKAGE_NAME="aethervk-sxs-${APP_VERSION//./-}-$(echo "$CONFIG" | tr '[:upper:]' '[:lower:]')"
     INSTALL_DIR="/opt/${BASE_APP_NAME}-SxS-$APP_VERSION-$CONFIG"
-    BIN_SYMLINK="/usr/bin/aethervk-sxs-${APP_VERSION//./-}-${CONFIG,,}"
+    BIN_SYMLINK="/usr/bin/aethervk-sxs-${APP_VERSION//./-}-$(echo "$CONFIG" | tr '[:upper:]' '[:lower:]')"
     DESKTOP_NAME="Aether-Vk (SxS $APP_VERSION $CONFIG)"
 else
     PACKAGE_NAME="aethervk"
