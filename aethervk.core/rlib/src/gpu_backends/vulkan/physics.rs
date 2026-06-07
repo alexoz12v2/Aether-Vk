@@ -27,6 +27,9 @@ use aethervk_oshal_rlib::{
 use alloc::{format, vec::Vec};
 use ash::vk;
 
+// Disabled by default: Enabling PRINTF shaders under Lavapipe (ARM64) dramatically increases
+// register pressure in the llvmpipe JIT compiler. This leads to register spilling bugs that
+// overwrite the stack-saved link register (x30), causing a SIGSEGV upon kernel return.
 #[cfg(all(test, not(target_vendor = "apple")))]
 pub static USE_PRINTF_SHADERS: core::sync::atomic::AtomicBool =
   core::sync::atomic::AtomicBool::new(false);
@@ -688,8 +691,7 @@ impl PhysicsPipelines {
     };
 
     #[cfg(all(test, not(target_vendor = "apple")))]
-    let use_debug = crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
-      .load(core::sync::atomic::Ordering::Relaxed);
+    let use_debug = USE_PRINTF_SHADERS.load(core::sync::atomic::Ordering::Relaxed) && is_cpu;
     #[cfg(not(all(test, not(target_vendor = "apple"))))]
     let use_debug = false;
 

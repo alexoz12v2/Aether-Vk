@@ -5,6 +5,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
+#include "imex_math.glsl"
 
 #ifndef LOCAL_SIZE_X
 #define LOCAL_SIZE_X 128
@@ -22,5 +23,84 @@ layout(push_constant, std430) uniform PushConstants {
 } pc;
 
 void main() {
-    return;
+    uint idx = gl_GlobalInvocationID.x;
+    uint n = pc.num_primitives;
+    if (idx >= n) return;
+    
+    uint leaf_node = n - 1 + idx;
+    uint particle_idx = pc.sorted_morton.entries[idx].y;
+    
+    uint base = P_BASE(particle_idx);
+    vec3 p_pos = vec3(uintBitsToFloat(pc.particles.data[base]), 
+                      uintBitsToFloat(pc.particles.data[base + 1*SUBGROUP_SIZE]), 
+                      uintBitsToFloat(pc.particles.data[base + 2*SUBGROUP_SIZE]));
+    float p_mass = uintBitsToFloat(pc.particles.data[base + 6*SUBGROUP_SIZE]);
+    float r = pc.particle_radius;
+    
+    vec3 min_b = p_pos - vec3(r);
+    vec3 max_b = p_pos + vec3(r);
+    
+    uint current = leaf_node;
+    uint child_particle_start = particle_idx;
+    uint child_particle_count = 1;
+    vec3 child_com = p_pos;
+    float child_mass = p_mass;
+    
+    while (current != 0) {
+        uint parent = pc.bvh.nodes[current].parent_idx;
+        uint dir = (pc.bvh.nodes[parent].child_indices[1] == current) ? 1 : 0;
+        
+        pc.bvh.nodes[parent].min_x[dir] = min_b.x;
+        pc.bvh.nodes[parent].min_y[dir] = min_b.y;
+        pc.bvh.nodes[parent].min_z[dir] = min_b.z;
+        pc.bvh.nodes[parent].max_x[dir] = max_b.x;
+        pc.bvh.nodes[parent].max_y[dir] = max_b.y;
+        pc.bvh.nodes[parent].max_z[dir] = max_b.z;
+        
+        pc.bvh.nodes[parent].masses[dir] = child_mass;
+        pc.bvh.nodes[parent].com_x[dir] = child_com.x;
+        pc.bvh.nodes[parent].com_y[dir] = child_com.y;
+        pc.bvh.nodes[parent].com_z[dir] = child_com.z;
+        
+        pc.bvh.nodes[parent].particle_start[dir] = child_particle_start;
+        pc.bvh.nodes[parent].particle_count[dir] = child_particle_count;
+        
+        memoryBarrierBuffer();
+        
+        uint old_val = atomicAdd(pc.counters.counts[parent], 1);
+        if (old_val == 0) break;
+        
+        memoryBarrierBuffer();
+        
+        vec3 c0_min = vec3(pc.bvh.nodes[parent].min_x[0], pc.bvh.nodes[parent].min_y[0], pc.bvh.nodes[parent].min_z[0]);
+        vec3 c1_min = vec3(pc.bvh.nodes[parent].min_x[1], pc.bvh.nodes[parent].min_y[1], pc.bvh.nodes[parent].min_z[1]);
+        vec3 c0_max = vec3(pc.bvh.nodes[parent].max_x[0], pc.bvh.nodes[parent].max_y[0], pc.bvh.nodes[parent].max_z[0]);
+        vec3 c1_max = vec3(pc.bvh.nodes[parent].max_x[1], pc.bvh.nodes[parent].max_y[1], pc.bvh.nodes[parent].max_z[1]);
+        
+        min_b = min(c0_min, c1_min);
+        max_b = max(c0_max, c1_max);
+        
+        float m0 = pc.bvh.nodes[parent].masses[0];
+        float m1 = pc.bvh.nodes[parent].masses[1];
+        child_mass = m0 + m1;
+        
+        vec3 com0 = vec3(pc.bvh.nodes[parent].com_x[0], pc.bvh.nodes[parent].com_y[0], pc.bvh.nodes[parent].com_z[0]);
+        vec3 com1 = vec3(pc.bvh.nodes[parent].com_x[1], pc.bvh.nodes[parent].com_y[1], pc.bvh.nodes[parent].com_z[1]);
+        
+        if (child_mass > 1e-6) {
+            child_com = (com0 * m0 + com1 * m1) / child_mass;
+        } else {
+            child_com = vec3(0.0);
+        }
+        
+        uint s0 = pc.bvh.nodes[parent].particle_start[0];
+        uint s1 = pc.bvh.nodes[parent].particle_start[1];
+        uint c0 = pc.bvh.nodes[parent].particle_count[0];
+        uint c1 = pc.bvh.nodes[parent].particle_count[1];
+        
+        child_particle_start = min(s0, s1);
+        child_particle_count = c0 + c1;
+        
+        current = parent;
+    }
 }
