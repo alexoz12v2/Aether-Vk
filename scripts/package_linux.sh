@@ -11,7 +11,7 @@ echo " Packaging Aether-Vk for Linux ($ARCH)"
 echo "=========================================="
 
 echo "[1/3] Publishing project..."
-dotnet publish aethervk.ui-app/AetherVk.csproj -c Release -r "$ARCH" --self-contained true
+dotnet publish aethervk.ui-app/aethervk.ui-app.csproj -c Release -r "$ARCH" --self-contained true
 
 echo "[2/3] Creating tarball directory..."
 mkdir -p bin/publish

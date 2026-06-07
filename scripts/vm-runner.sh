@@ -23,11 +23,27 @@ if [ -n "$AETHERVK_DISABLE_SYNC_VAL" ]; then
     VM_ENV+="export AETHERVK_DISABLE_SYNC_VAL=$AETHERVK_DISABLE_SYNC_VAL; "
 fi
 
-# We use -q (quiet) to suppress SSH banner logs from cluttering test output.
-# We remove BatchMode=yes so that if a password is required, it can prompt.
-# We wrap the binary path in quotes in case of spaces in the directory structure.
-# CRITICAL: We CD into the exact same directory as the host ($PWD) so relative paths work!
-ssh -q "$VM_USER@$VM_HOST" "cd '$PWD' && $VM_ENV '$BIN_PATH' $@"
+# We copy the binary to the VM's /tmp/ directory first because virtiofs is notoriously slow
+# with the random 4K reads performed by dyld. A sequential rsync/cp is much faster and
+# prevents nextest's concurrent test discovery from deadlocking the virtiofs bridge.
+BIN_NAME=$(basename "$BIN_PATH")
+TMP_BIN_PATH="/tmp/$BIN_NAME"
+LOCK_DIR="/tmp/${BIN_NAME}.lock"
+
+ssh -o BatchMode=yes -q "$VM_USER@$VM_HOST" "
+    while ! mkdir '$LOCK_DIR' 2>/dev/null; do
+        # If the binary is already newer than the source or same size/time, we don't need to wait for the lock forever
+        if [ '$TMP_BIN_PATH' -nt '$BIN_PATH' ]; then
+            break
+        fi
+        sleep 0.1
+    done
+    if [ '$BIN_PATH' -nt '$TMP_BIN_PATH' ] || [ ! -f '$TMP_BIN_PATH' ]; then
+        cp '$BIN_PATH' '$TMP_BIN_PATH'
+    fi
+    rmdir '$LOCK_DIR' 2>/dev/null || true
+    cd '$PWD' && $VM_ENV '$TMP_BIN_PATH' $@
+"
 
 # Capture the exit code of the SSH command (which reflects the binary's exit code)
 EXIT_CODE=$?
