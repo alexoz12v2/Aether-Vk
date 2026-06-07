@@ -1867,7 +1867,14 @@ impl ArchetypeArenaCreate for TextRenderResourceArchetypeArena {
     let device = ctx.device;
     let allocator = ctx.allocator;
 
-    let max_fonts = 256;
+    let device_limit = core::cmp::min(
+      core::cmp::min(
+        ctx.device.max_per_stage_descriptor_update_after_bind_samplers,
+        ctx.device.max_descriptor_set_update_after_bind_samplers
+      ),
+      ctx.device.max_per_stage_descriptor_samplers
+    );
+    let max_fonts = core::cmp::min(256, device_limit);
     let pool_sizes = [vk::DescriptorPoolSize::default()
       .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
       .descriptor_count(max_fonts)];
@@ -2161,7 +2168,14 @@ impl ArchetypeArenaCreate for Text2RenderResourceArchetypeArena {
     let device = ctx.device;
     let allocator = ctx.allocator;
 
-    let max_fonts = 256;
+    let device_limit = core::cmp::min(
+      core::cmp::min(
+        ctx.device.max_per_stage_descriptor_update_after_bind_samplers,
+        ctx.device.max_descriptor_set_update_after_bind_samplers
+      ),
+      ctx.device.max_per_stage_descriptor_samplers
+    );
+    let max_fonts = core::cmp::min(256, device_limit);
     let pool_sizes = [vk::DescriptorPoolSize::default()
       .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
       .descriptor_count(max_fonts)];
@@ -2914,7 +2928,14 @@ impl ArchetypeArenaCreate for UiRenderResourceArchetypeArena {
   fn new_arena(ctx: &ArenaCreationContext) -> GpuResult<Self> {
     let device = ctx.device;
     let allocator = ctx.allocator;
-    const MAX_IMAGE_COUNT: u32 = 256;
+    let device_limit = core::cmp::min(
+      core::cmp::min(
+        ctx.device.max_per_stage_descriptor_update_after_bind_samplers,
+        ctx.device.max_descriptor_set_update_after_bind_samplers
+      ),
+      ctx.device.max_per_stage_descriptor_samplers
+    );
+    let max_image_count = core::cmp::min(256, device_limit);
     let push_constant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
@@ -2925,7 +2946,7 @@ impl ArchetypeArenaCreate for UiRenderResourceArchetypeArena {
     let bindings = [vk::DescriptorSetLayoutBinding {
       binding: 0,
       descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-      descriptor_count: MAX_IMAGE_COUNT,
+      descriptor_count: max_image_count,
       stage_flags: vk::ShaderStageFlags::FRAGMENT,
       p_immutable_samplers: ptr::null(),
       ..Default::default()
@@ -2966,7 +2987,7 @@ impl ArchetypeArenaCreate for UiRenderResourceArchetypeArena {
 
     let pool_sizes = [vk::DescriptorPoolSize::default()
       .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-      .descriptor_count(MAX_IMAGE_COUNT)];
+      .descriptor_count(max_image_count)];
     let create_info = vk::DescriptorPoolCreateInfo::default()
       .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
       .max_sets(1)
@@ -3075,7 +3096,14 @@ impl ArchetypeArenaCreate for TrajectoryRenderResourceArchetypeArena {
   fn new_arena(ctx: &ArenaCreationContext) -> GpuResult<Self> {
     let device = ctx.device;
     let allocator = ctx.allocator;
-    const MAX_IMAGE_COUNT: u32 = 256;
+    let device_limit = core::cmp::min(
+      core::cmp::min(
+        ctx.device.max_per_stage_descriptor_update_after_bind_samplers,
+        ctx.device.max_descriptor_set_update_after_bind_samplers
+      ),
+      ctx.device.max_per_stage_descriptor_samplers
+    );
+    let max_image_count = core::cmp::min(256, device_limit);
     let push_constant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
@@ -3086,7 +3114,7 @@ impl ArchetypeArenaCreate for TrajectoryRenderResourceArchetypeArena {
     let bindings = [vk::DescriptorSetLayoutBinding {
       binding: 0,
       descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-      descriptor_count: MAX_IMAGE_COUNT,
+      descriptor_count: max_image_count,
       stage_flags: vk::ShaderStageFlags::FRAGMENT,
       p_immutable_samplers: ptr::null(),
       ..Default::default()
@@ -3127,7 +3155,7 @@ impl ArchetypeArenaCreate for TrajectoryRenderResourceArchetypeArena {
 
     let pool_sizes = [vk::DescriptorPoolSize::default()
       .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-      .descriptor_count(MAX_IMAGE_COUNT)];
+      .descriptor_count(max_image_count)];
     let create_info = vk::DescriptorPoolCreateInfo::default()
       .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
       .max_sets(1)
@@ -3274,7 +3302,14 @@ impl ArchetypeArenaCreate for BillboardRenderResourceArchetypeArena {
   fn new_arena(ctx: &ArenaCreationContext) -> GpuResult<Self> {
     let device = ctx.device;
     let allocator_raw = ctx.allocator.get_raw();
-    const MAX_IMAGE_COUNT: u32 = 256;
+    let device_limit = core::cmp::min(
+      core::cmp::min(
+        ctx.device.max_per_stage_descriptor_update_after_bind_samplers,
+        ctx.device.max_descriptor_set_update_after_bind_samplers
+      ),
+      ctx.device.max_per_stage_descriptor_samplers
+    );
+    let max_image_count = core::cmp::min(256, device_limit);
     let push_constant_ranges = alloc::vec![vk::PushConstantRange {
       stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
       offset: 0,
@@ -3291,7 +3326,7 @@ impl ArchetypeArenaCreate for BillboardRenderResourceArchetypeArena {
     let bindings = [vk::DescriptorSetLayoutBinding {
       binding: 0,
       descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-      descriptor_count: MAX_IMAGE_COUNT, // Bounded to exactly match the max capacity in your POOL_SIZES
+      descriptor_count: max_image_count, // Bounded to exactly match the max capacity in your POOL_SIZES
       stage_flags: vk::ShaderStageFlags::FRAGMENT,
       p_immutable_samplers: ptr::null(),
       ..Default::default()
@@ -3336,7 +3371,7 @@ impl ArchetypeArenaCreate for BillboardRenderResourceArchetypeArena {
     // Create descriptor pool and descriptor set
     let pool_sizes = [vk::DescriptorPoolSize::default()
       .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-      .descriptor_count(MAX_IMAGE_COUNT)];
+      .descriptor_count(max_image_count)];
     let create_info = vk::DescriptorPoolCreateInfo::default()
       // flag to allow allocations of bindless sets. from VK_EXT_descriptor_indexing
       .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
@@ -3371,7 +3406,7 @@ impl ArchetypeArenaCreate for BillboardRenderResourceArchetypeArena {
       uploaded_textures: hashbrown::HashMap::new(),
       free_descriptor_indices: Vec::new(),
       next_descriptor_index: 0,
-      max_textures: MAX_IMAGE_COUNT,
+      max_textures: max_image_count,
       allocator_raw: Some(allocator_raw),
     })
   }

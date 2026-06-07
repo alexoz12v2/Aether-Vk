@@ -4,6 +4,7 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_memory_scope_semantics : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_control_flow_attributes : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
@@ -41,15 +42,15 @@ int common_prefix(uint n, int i, int j) {
 vec2 determine_range(uint n, int i) {
     int d = sign(common_prefix(n, i, i + 1) - common_prefix(n, i, i - 1));
     int min_p = common_prefix(n, i, i - d), l_max = 2;
-    while (common_prefix(n, i, i + l_max * d) > min_p) l_max *= 2;
+    [[dont_unroll]] while (common_prefix(n, i, i + l_max * d) > min_p) l_max *= 2;
     int l = 0, t = l_max / 2;
-    while (t >= 1) { if (common_prefix(n, i, i + (l + t) * d) > min_p) l += t; t /= 2; }
+    [[dont_unroll]] while (t >= 1) { if (common_prefix(n, i, i + (l + t) * d) > min_p) l += t; t /= 2; }
     return vec2(min(i, i + l * d), max(i, i + l * d));
 }
 
 int find_split(uint n, int first, int last) {
     int common_node = common_prefix(n, first, last), split = first, step = last - first;
-    do {
+    [[dont_unroll]] do {
         step = (step + 1) >> 1; int new_split = split + step;
         if (new_split < last && common_prefix(n, first, new_split) > common_node) split = new_split;
     } while (step > 1);

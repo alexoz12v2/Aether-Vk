@@ -1157,6 +1157,10 @@ pub struct LogicalDevice {
 
   #[cfg(target_vendor = "apple")]
   pub metal_objects: ash::ext::metal_objects::Device,
+
+  pub max_per_stage_descriptor_update_after_bind_samplers: u32,
+  pub max_per_stage_descriptor_samplers: u32,
+  pub max_descriptor_set_update_after_bind_samplers: u32,
 }
 
 impl core::ops::Deref for LogicalDevice {
@@ -1602,6 +1606,9 @@ impl Device {
       metal_objects,
       #[cfg(debug_assertions)]
       debug_utils,
+      max_per_stage_descriptor_update_after_bind_samplers: chosen_physical_device_query_result.max_per_stage_descriptor_update_after_bind_samplers,
+      max_per_stage_descriptor_samplers: chosen_physical_device_query_result.physical_device_properties.limits.max_per_stage_descriptor_samplers,
+      max_descriptor_set_update_after_bind_samplers: chosen_physical_device_query_result.max_descriptor_set_update_after_bind_samplers,
     };
     let mut res = match DeviceResources::new(
       instance.as_ref(),

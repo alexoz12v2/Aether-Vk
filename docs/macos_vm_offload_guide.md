@@ -123,6 +123,23 @@ Once the runner is configured, your workflow remains completely unchanged:
 - The runner automatically SSHes into the VM, injects the `VULKAN_SDK` environment variables, and executes the binary in the VM's shared directory.
 - Standard output and error stream back to your host terminal exactly as if it ran locally. `cargo nextest` parallelization UI works flawlessly!
 
+### Speeding Up Tests via Concurrency Limits
+
+Because `vm-runner.sh` copies the binary via `virtiofs` and spawns concurrent SSH connections per test, `nextest`'s default behavior of aggressively spawning processes based on your CPU core count can easily overwhelm the VM's I/O and RAM (especially with the heavy Validation Layer active).
+
+To prevent the VM from thrashing and significantly speed up the overall test suite execution, limit the concurrent processes using the `-j` (or `--test-threads`) flag:
+
+```bash
+cargo nextest run -j 4
+```
+*(You can adjust `4` to find the sweet spot for your VM's core configuration, e.g., 2, 4, or 6).*
+
+If you prefer to make this permanent without typing it every time, you can set the environment variable locally on your host:
+
+```bash
+export NEXTEST_TEST_THREADS=4
+```
+
 ---
 
 ## 5. Remote Debugging (Terminal & Xcode)
@@ -189,3 +206,131 @@ Simply execute the provided runner script from your terminal:
 
 **Note on macOS GUI Apps via SSH:**
 When the script runs the .NET application via SSH, the Avalonia GUI window will actually **appear on the VM's desktop display**. You should have the UTM window open or use macOS Screen Sharing to interact with the UI.
+
+--
+
+## Running Windows on UTM
+
+To connect to your UTM Windows VM from your Mac host via SSH, the easiest and most reliable method is to use Port Forwarding. This keeps the VM isolated behind UTM's shared network but opens a specific tunnel just for SSH.
+Here is the step-by-step guide to setting this up.
+
+### Step 1: Configure Port Forwarding in UTM
+
+You must configure this while the virtual machine is powered off. [DEV Community](https://dev.to/smyekh/completing-your-local-oci-lab-a-guide-to-port-forwarding-in-utm-hgp#:~:text=Make%20sure%20the%20VM%20is,while%20the%20VM%20is%20running.)
+
+1. Open UTM and select your Windows 11 VM from the left sidebar.
+2. Click the Edit button (the sliders icon) in the top right corner to open the VM settings.
+3. In the settings menu, click on Network.
+4. Ensure the Network Mode is set to "Emulated VLAN"
+5. Look for the Port Forwarding section at the bottom and click New....
+6. Fill out the rule with the following details:
+7. Protocol: TCP
+8. Guest Address: (Leave blank)
+9. Guest Port: 22 (The standard SSH port inside Windows)
+10. Host Address: (Leave blank)
+11. Host Port: 2222 (A custom port on your Mac that will forward to the VM)
+12. Click Save to apply the settings.
+
+### Step 2: Enable SSH inside Windows 11
+
+By default, Windows 11 has the OpenSSH client installed, but the OpenSSH Server is turned off.
+
+1. Start your Windows 11 VM and log in.
+2. Open Settings (Win + I) and go to Apps > Optional features
+   (or Installed apps -> Optional features or System -> Optional features depending on your Windows build). [IONOS](https://www.ionos.com/digitalguide/server/configuration/windows-11-ssh/#:~:text=own%20OpenSSH%20server.-,Under%20Optional%20Features%20in%20Windows%2011%2C%20you,install%20your%20own%20OpenSSH%20server.)
+   - if can't find it, then powershell
+   ```powershell
+   # install it
+   Add-WindowsCapability -Online -Name OpenSSH.Server
+   # start it
+   Start-Service sshd
+   # to make it start automatically
+   Set-Service -Name sshd -StartupType 'Automatic'
+   ```
+4. Click View features next to "Add an optional feature".
+5. Search for OpenSSH Server, check the box, and click Next then Install.
+6. Once installed, open the Start Menu, search for Services, and run it as Administrator.
+7. Scroll down to find OpenSSH SSH Server.
+8. Right-click it, select Properties, change the Startup type to Automatic, and click the Start button. Click Apply and OK.
+
+⚠️ Note on Firewalls: Windows usually configures the firewall rule automatically when you install the optional feature.
+If you can't connect later, open
+Windows Defender Firewall with Advanced Security and ensure the inbound rule for "OpenSSH SSH Server (TCP-In)" is enabled.
+
+```powershell
+if (!(Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -ErrorAction SilentlyContinue | Select-Object Name, Enabled)) {
+    Write-Output "Firewall Rule 'OpenSSH-Server-In-TCP' does not exist, creating it..."
+    New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+} else {
+    Write-Output "Firewall rule already exists."
+}
+```
+
+Profile : Private
+The Problem: Public vs. Private Network Profiles
+Your firewall rule is perfectly configured, but it is restricted to work only when Windows considers the current network to be a "Private" network (like a trusted home Wi-Fi).
+Because UTM uses an "emulated VLAN" (Shared Network mode), Windows often doesn't recognize the virtual router providing the connection. By default, Windows plays it safe and classifies unidentified or new networks as Public.
+If your UTM network is currently set to Public, the Windows Firewall is silently dropping your SSH packets because the rule only allows traffic on Private networks.
+The Fix
+You have PowerShell open already, so the fastest way to fix this is to modify that existing firewall rule to allow SSH traffic across Any network profile.
+Run this exact command in your Administrator PowerShell window:
+PowerShell
+Set-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -Profile Any
+Alternative Fix (Change the Network Profile)
+If you'd rather keep the firewall rule strict, you can tell Windows to trust the UTM network instead:
+Open Windows Settings (Win + I).
+Go to Network & internet -> Ethernet.
+Under Network profile type, change it from Public to Private.
+Once you apply either of these fixes, try running ssh alessio@localhost -p 2222 from your Mac terminal again. It should immediately prompt you for your password or to accept the host key.
+
+### Step 3: Connect from your Mac Terminal
+
+configuring an SSH key first
+
+1. On your Mac:
+   Generate a new SSH key (if you don't already have one) by running:
+
+   ```bash
+   ssh-keygen -t ed25519
+   ```
+
+   (Press Enter to accept the default file location, and optionally add a passphrase).
+
+2. Display your new public key and copy the output to your clipboard: (substitute the name of your pub key, and `pbcopy` is mac-only, use `xclip` or `wl-copy` on linux)
+
+   ```bash
+   cat ~/.ssh/id_ed25519.pub | pbcopy
+   ```
+
+3. On your Windows machine:
+
+   ```powershell
+   mkdir C:\Users\your_username\.ssh
+   ```
+
+4. Open Notepad, paste the public key you copied from your Mac, and save the file exactly as authorized_keys (with no .txt extension) inside that .ssh folder.
+   Once that is saved, try logging in from your Mac again. It should log you right in without asking for your Windows password!
+
+Now that both sides are configured, you can connect from your Mac.
+Open your macOS Terminal and run the following command:
+
+```bash
+# after configuring the ssh-keygen and adding it to trusted keys in guest windows side
+ssh windows_username@localhost -p 2222
+
+# example
+ssh alessio@localhost -p 2222
+```
+
+Replace windows_username with your actual Windows account username (if you use a Microsoft Account, it is usually the first 5 letters of your email address, or check the name of your user folder in C:\Users\).
+Enter your Windows account password when prompted.
+
+- Alternative: Bridged Network
+
+  If you want the Windows VM to act like a completely separate machine on your physical local Network
+  (with its own unique IP address from your router), you can
+  change the Network Mode in UTM from Shared Network to Bridged (Advanced).
+  If you do this, you won't need port forwarding;
+  you will just SSH directly to the Windows IP address (ssh username@192.168.x.x).
+  However, note that bridging does not always work reliably over Mac Wi-Fi adapters,
+  which is why Port Forwarding is preferred.

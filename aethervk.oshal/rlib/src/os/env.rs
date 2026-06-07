@@ -120,6 +120,47 @@ pub fn args() -> NativeResult<Vec<String>> {
   }
 }
 
+/// Retrieves an environment variable.
+pub fn var(key: &str) -> Option<String> {
+  #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
+  {
+    use alloc::ffi::CString;
+    let c_key = CString::new(key).ok()?;
+    let val_ptr = unsafe { libc::getenv(c_key.as_ptr()) };
+    if val_ptr.is_null() {
+      return None;
+    }
+    let mut len = 0;
+    unsafe {
+      while *val_ptr.add(len) != 0 {
+        len += 1;
+      }
+      let utf8_slice = core::slice::from_raw_parts(val_ptr.cast::<u8>(), len);
+      Some(String::from_utf8_lossy(utf8_slice).into_owned())
+    }
+  }
+  #[cfg(windows)]
+  {
+    use alloc::vec::Vec;
+    use windows::Win32::System::Environment::GetEnvironmentVariableW;
+    let mut w_key: Vec<u16> = key.encode_utf16().collect();
+    w_key.push(0);
+    unsafe {
+      let len = GetEnvironmentVariableW(windows::core::PCWSTR(w_key.as_ptr()), None);
+      if len == 0 {
+        return None;
+      }
+      let mut buf = vec![0u16; len as usize];
+      let read_len = GetEnvironmentVariableW(windows::core::PCWSTR(w_key.as_ptr()), Some(&mut buf));
+      if read_len == 0 || read_len >= len {
+        return None;
+      }
+      buf.truncate(read_len as usize);
+      Some(String::from_utf16_lossy(&buf))
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
