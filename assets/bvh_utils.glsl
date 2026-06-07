@@ -17,7 +17,7 @@
 #extension GL_KHR_memory_scope_semantics : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 
-layout(constant_id = 0) const uint SUBGROUP_SIZE = 4;
+layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
 
 // ---------------------------------------------------------------------------
 // BVH traversal stack depth (specialization constants, set by host).
