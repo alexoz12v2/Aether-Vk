@@ -770,8 +770,6 @@ impl DeviceResources {
     }
     self.discard_pool.cleanup(device);
 
-    self.timeline_manager.cleanup(device);
-
     self.renderpasses.cleanup(device);
 
     DebugTrackedRwLock::write(&self.shader_manager).destroy(device);
@@ -802,6 +800,8 @@ impl DeviceResources {
         presentation_state.cleanup(device);
       }
     }
+
+    self.timeline_manager.cleanup(device);
 
     // - Linear Sampler
     unsafe { device.destroy_sampler(self.linear_sampler.get(), None) };

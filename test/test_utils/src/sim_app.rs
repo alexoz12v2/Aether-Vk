@@ -225,6 +225,8 @@ impl<D: SimulationDelegate> crate::app::App for GenericSimApp<D> {
   }
 
   fn on_close_requested(&mut self) {
+    let _ = self.ctx.threads.stop_logic_thread();
+    let _ = self.ctx.threads.stop_render_thread();
     // Flush all remaining window-tied resources before the device is dropped.
     // This MUST happen on the main thread before Device::Drop runs.
     let _ = self.ctx.flush_main_thread_cleanup_queue();

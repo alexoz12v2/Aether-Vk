@@ -24,8 +24,8 @@ void main() {
 
     if (PRIMITIVE_TYPE == 0) {
         uint base = P_BASE(idx);
-        vec3 pos = vec3(pc.primitive_data.data[base+0], pc.primitive_data.data[base+1*SUBGROUP_SIZE], pc.primitive_data.data[base+2*SUBGROUP_SIZE]);
-        vec3 vel = vec3(pc.primitive_data.data[base+3*SUBGROUP_SIZE], pc.primitive_data.data[base+4*SUBGROUP_SIZE], pc.primitive_data.data[base+5*SUBGROUP_SIZE]);
+        vec3 pos = vec3(uintBitsToFloat(pc.primitive_data.data[base+0]), uintBitsToFloat(pc.primitive_data.data[base+1*SUBGROUP_SIZE]), uintBitsToFloat(pc.primitive_data.data[base+2*SUBGROUP_SIZE]));
+        vec3 vel = vec3(uintBitsToFloat(pc.primitive_data.data[base+3*SUBGROUP_SIZE]), uintBitsToFloat(pc.primitive_data.data[base+4*SUBGROUP_SIZE]), uintBitsToFloat(pc.primitive_data.data[base+5*SUBGROUP_SIZE]));
 
         vec3 p1 = pos + vel * pc.dt;
         vec3 min_p = min(pos, p1) - vec3(pc.particle_radius), max_p = max(pos, p1) + vec3(pc.particle_radius);

@@ -54,6 +54,7 @@ struct FrameDiscard {
   // added for windowless
   discarded_images: Vec<NonZeroHandle<vk::Image>>,
   discarded_memories: Vec<NonZeroHandle<vk::DeviceMemory>>,
+  highest_submission_timeline_value: u64,
 
   /// Legacy Fallback: Delays destruction to give the OS display compositor a grace period
   skip_cycles: u32,
@@ -1571,11 +1572,24 @@ impl FrameDiscard {
   }
 
   /// Same as above, but for purely windowless pipelines.
-  pub fn check_capacity_and_flush_windowless(&mut self, device: &ash::Device) {
+  pub fn check_capacity_and_flush_windowless(
+    &mut self,
+    device: &ash::Device,
+    timeline_sem_device: &ash::khr::timeline_semaphore::Device,
+    timeline_sem: vk::Semaphore,
+  ) {
     if self.discarded_images.len() >= (MAX_DISCARDS * MAX_FRAMES) {
       aethervk_oshal_rlib::log!(
         "MAX_DISCARDS threshold reached! Forcing synchronous windowless cleanup."
       );
+      if self.highest_submission_timeline_value > 0 && timeline_sem != vk::Semaphore::null() {
+        unsafe {
+          let wait_info = vk::SemaphoreWaitInfo::default()
+            .semaphores(core::slice::from_ref(&timeline_sem))
+            .values(core::slice::from_ref(&self.highest_submission_timeline_value));
+          let _ = timeline_sem_device.wait_semaphores(&wait_info, u64::MAX);
+        }
+      }
       self.skip_cycles = 0;
       self.cleanup_windowless(device);
     }
@@ -1590,6 +1604,7 @@ impl FrameDiscard {
       unsafe {
         if is_windowless {
           let _ = self.discarded_images.push(swapchain_image.image);
+          self.highest_submission_timeline_value = self.highest_submission_timeline_value.max(swapchain_image.submission_timeline_value);
         }
         let _ = self.discarded_image_views.push(swapchain_image.image_view);
         let _ = self.discarded_semaphores.push(swapchain_image.present_semaphore);
@@ -1651,6 +1666,7 @@ impl Default for FrameDiscard {
       discarded_present_fences_to_destroy: Vec::new(),
       discarded_images: Vec::new(),
       discarded_memories: Vec::new(),
+      highest_submission_timeline_value: 0,
       skip_cycles: 0,
     }
   }
@@ -1707,14 +1723,41 @@ pub(super) struct WindowlessPresentationState {
   pending_resize: Option<(u32, u32)>,
   buffer_count: u32,
   archetypes: crate::gpu::vulkan::device::archetypes_struct::Archetypes,
+  timeline_sem: vk::Semaphore,
+  timeline_sem_device: ash::khr::timeline_semaphore::Device,
 }
 
 impl DeviceResource for WindowlessPresentationState {
   fn cleanup(&mut self, device: &ash::Device) {
     for discard in &mut self.frame_discards {
       discard.skip_cycles = 0; // force cleanup
+      if discard.highest_submission_timeline_value > 0 && self.timeline_sem != vk::Semaphore::null() {
+        unsafe {
+          let wait_info = vk::SemaphoreWaitInfo::default()
+            .semaphores(core::slice::from_ref(&self.timeline_sem))
+            .values(core::slice::from_ref(&discard.highest_submission_timeline_value));
+          let _ = self.timeline_sem_device.wait_semaphores(&wait_info, u64::MAX);
+        }
+      }
       discard.cleanup_windowless(device);
     }
+    
+    let mut max_timeline = 0;
+    for image in &self.images {
+      max_timeline = max_timeline.max(image.submission_timeline_value);
+    }
+    for frame in &self.frames {
+      max_timeline = max_timeline.max(frame.submission_timeline_value);
+    }
+    if max_timeline > 0 && self.timeline_sem != vk::Semaphore::null() {
+      unsafe {
+        let wait_info = vk::SemaphoreWaitInfo::default()
+          .semaphores(core::slice::from_ref(&self.timeline_sem))
+          .values(core::slice::from_ref(&max_timeline));
+        let _ = self.timeline_sem_device.wait_semaphores(&wait_info, u64::MAX);
+      }
+    }
+
     for frame in &mut self.frames {
       if let Some(fence) = frame.submission_fence.take() {
         unsafe { device.destroy_fence(fence.get(), None) };
@@ -1777,6 +1820,8 @@ impl WindowlessPresentationState {
       pending_resize: None,
       buffer_count,
       archetypes: crate::gpu::vulkan::device::archetypes_struct::Archetypes::default(),
+      timeline_sem: vk::Semaphore::null(),
+      timeline_sem_device: device.timeline_semaphore.clone(),
     };
     this.recreate(device, width, height, rollback)?;
     Ok(this)
@@ -1858,6 +1903,7 @@ impl WindowlessPresentationState {
     timeline_sem: vk::Semaphore,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<AcquireResult> {
+    self.timeline_sem = timeline_sem;
     if let Some((w, h)) = self.pending_resize.take() {
       self.width = w;
       self.height = h;
@@ -1985,7 +2031,7 @@ impl WindowlessPresentationState {
       let frame_discard = &mut self.frame_discards[prev_frame];
 
       // Added: Prevent memory bloat
-      frame_discard.check_capacity_and_flush_windowless(device);
+      frame_discard.check_capacity_and_flush_windowless(device, &self.timeline_sem_device, self.timeline_sem);
 
       // Windowless uses strictly native pipelines, WSI grace delays are not required
       frame_discard.skip_cycles = 0;

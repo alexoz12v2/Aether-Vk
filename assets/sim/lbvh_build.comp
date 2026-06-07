@@ -89,9 +89,10 @@ void main() {
     
     pc.bvh.nodes[idx].child_indices[0] = left_child;
     pc.bvh.nodes[idx].child_indices[1] = right_child;
+    pc.bvh.nodes[idx].valid_mask = uvec2(3, 0); // Both children valid
     
-    uint left_payload = left_is_leaf ? pc.sorted_morton.entries[split].y : left_child;
-    uint right_payload = right_is_leaf ? pc.sorted_morton.entries[split + 1].y : right_child;
+    uint left_payload = left_is_leaf ? (uint64_t(pc.sorted_morton) == 0ul ? split : pc.sorted_morton.entries[split].y) : left_child;
+    uint right_payload = right_is_leaf ? (uint64_t(pc.sorted_morton) == 0ul ? split + 1 : pc.sorted_morton.entries[split + 1].y) : right_child;
     
     pc.bvh.nodes[idx].metadata[0] = bvh_pack_metadata(left_is_leaf, BVH_FRAME_MICRO, BVH_SHAPE_AABB, left_payload);
     pc.bvh.nodes[idx].metadata[1] = bvh_pack_metadata(right_is_leaf, BVH_FRAME_MICRO, BVH_SHAPE_AABB, right_payload);
