@@ -36,6 +36,12 @@ if [ ! -x "$GLSLC" ]; then
     exit 1
 fi
 
+SPIRV_VAL="$VULKAN_SDK/bin/spirv-val"
+if [ ! -x "$SPIRV_VAL" ]; then
+    echo "ERROR: spirv-val not found or not executable at $SPIRV_VAL" >&2
+    exit 1
+fi
+
 COMMON_FLAGS="-x glsl --target-env=vulkan1.1 --target-spv=spv1.3 -std=450core -Os"
 WG_SIZES=(4 8 16 32 64 128 256)
 
@@ -92,6 +98,7 @@ compile_one() {
     echo "  glslc $extra_flags -> $(basename "$out")"
     # shellcheck disable=SC2086
     "$GLSLC" $COMMON_FLAGS -fshader-stage="$stage" $extra_flags -o "$out" "$file"
+    "$SPIRV_VAL" "$out"
 }
 
 # ── Vertex / fragment shaders (always single-variant) ────────────────────────

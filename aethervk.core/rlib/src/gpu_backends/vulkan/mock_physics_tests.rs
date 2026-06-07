@@ -653,6 +653,10 @@ fn rb_force_assign() {
       let bodies_buf = upload_buffer(device, &bodies_padded).unwrap();
       let wrenches_buf = upload_buffer(device, &wrenches).unwrap();
 
+      let verify_upload_cmd = device.create_command_buffer().unwrap();
+      let initial_wrenches = read_buffer(device, &wrenches_buf);
+      println!("INITIAL Wrenches: {:?}", &initial_wrenches[..3]);
+
       Ok((bodies_buf, wrenches_buf))
     },
     |device, cmd, state| {
@@ -664,7 +668,9 @@ fn rb_force_assign() {
     |device, state| {
       println!(">>> Verify");
       let wrenches_data = read_buffer(device, &state.1);
-      let com_wrench = wrenches_data[0];
+      println!("All Wrenches: {:?}", &wrenches_data[..3]);
+      
+      let com_wrench = &wrenches_data[0];
       println!("Com Wrench: {:?}", com_wrench);
 
       device.discard_list(state.0);

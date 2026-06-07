@@ -40,8 +40,8 @@ layout(push_constant, std430) uniform PushConstants {
     uint _pad;
 } pc;
 
-shared vec3 sh_f[32];
-shared vec3 sh_t[32];
+shared vec3 sh_f[256];
+shared vec3 sh_t[256];
 
 void main() {
     uint body_id = gl_WorkGroupID.x;
@@ -70,18 +70,14 @@ void main() {
         pc.wrenches.wrenches[leaf_idx].torque_z = 0u;
     }
 
-    acc_f = subgroupAdd(acc_f);
-    acc_t = subgroupAdd(acc_t);
-    if (gl_SubgroupInvocationID == 0) {
-        sh_f[gl_SubgroupID] = acc_f;
-        sh_t[gl_SubgroupID] = acc_t;
-    }
+    sh_f[local_id] = acc_f;
+    sh_t[local_id] = acc_t;
     barrier();
 
-    if (gl_LocalInvocationIndex == 0) {
+    if (local_id == 0) {
         acc_f = vec3(0.0);
         acc_t = vec3(0.0);
-        for (uint i = 0; i < gl_NumSubgroups; ++i) {
+        for (uint i = 0; i < gl_WorkGroupSize.x; ++i) {
             acc_f += sh_f[i];
             acc_t += sh_t[i];
         }
@@ -91,11 +87,11 @@ void main() {
         vec3 final_f = vec3(uintBitsToFloat(dest.force_x), uintBitsToFloat(dest.force_y), uintBitsToFloat(dest.force_z)) + acc_f;
         vec3 final_t = vec3(uintBitsToFloat(dest.torque_x), uintBitsToFloat(dest.torque_y), uintBitsToFloat(dest.torque_z)) + acc_t;
         
-        pc.wrenches.wrenches[com_wrench].force_x  = floatBitsToUint(10.0);
-        pc.wrenches.wrenches[com_wrench].force_y  = floatBitsToUint(20.0);
-        pc.wrenches.wrenches[com_wrench].force_z  = floatBitsToUint(0.0);
-        pc.wrenches.wrenches[com_wrench].torque_x = floatBitsToUint(10.0);
-        pc.wrenches.wrenches[com_wrench].torque_y = floatBitsToUint(0.0);
-        pc.wrenches.wrenches[com_wrench].torque_z = floatBitsToUint(0.0);
+        pc.wrenches.wrenches[com_wrench].force_x  = floatBitsToUint(final_f.x);
+        pc.wrenches.wrenches[com_wrench].force_y  = floatBitsToUint(final_f.y);
+        pc.wrenches.wrenches[com_wrench].force_z  = floatBitsToUint(final_f.z);
+        pc.wrenches.wrenches[com_wrench].torque_x = floatBitsToUint(final_t.x);
+        pc.wrenches.wrenches[com_wrench].torque_y = floatBitsToUint(final_t.y);
+        pc.wrenches.wrenches[com_wrench].torque_z = floatBitsToUint(final_t.z);
     }
 }
