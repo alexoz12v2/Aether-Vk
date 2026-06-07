@@ -95,16 +95,17 @@ void main() {
 #endif
         SparseCollisions out_list = SparseCollisions(pc.output_list);
         uint count = atomicAdd(out_list.count, 1);
-        if (count < out_list.capacity) {
-            out_list.pairs[count].valid = 1u;
+        if (count < (out_list.capacity * 7) / 8) {
             out_list.pairs[count].entity_a = idA;
-            out_list.pairs[count].entity_b = idB;
             out_list.pairs[count].prim_a = idA;
+            out_list.pairs[count].entity_b = idB;
             out_list.pairs[count].prim_b = idB;
             out_list.pairs[count].toi = toi;
             out_list.pairs[count].is_lca = 0u;
             out_list.pairs[count].lca_id = 0u;
+            out_list.pairs[count].frame_bda_low = 0u;
             out_list.pairs[count].contact_normal = normal;
+            out_list.pairs[count].frame_bda_high = 0u;
             out_list.pairs[count].contact_point = contact;
             out_list.pairs[count].penetration_depth = max(depth, 1e-4);
         }

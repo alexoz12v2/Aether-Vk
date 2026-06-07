@@ -2,6 +2,9 @@
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
 
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
@@ -9,7 +12,7 @@
 #ifndef LOCAL_SIZE_X
 #define LOCAL_SIZE_X 128
 #endif
-layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant, std430) uniform PushConstants {
     ParticleData particles;
@@ -17,6 +20,8 @@ layout(push_constant, std430) uniform PushConstants {
     ImpulseOutput impulses;
     RigidBodyUintArray rigid_bodies;
     GpuReferenceFrameArray lca_entities;
+    uint num_rigid_bodies;
+    uint _pad;
 } pc;
 
 void main() {
@@ -33,11 +38,11 @@ void main() {
     bool is_rb_a = (pair.a.entity_id != 0xFFFFFFFFu);
     bool is_rb_b = (pair.b.entity_id != 0xFFFFFFFFu);
 
-    if (is_rb_a) {
+    if (is_rb_a && pA_id < pc.num_rigid_bodies) {
         uint base = pA_id * 28; // RigidBody struct is 28 floats
         float mass = uintBitsToFloat(pc.rigid_bodies.data[base + 3]);
         float invMA = mass > 0.0 ? 1.0 / mass : 0.0;
-
+        
         vec3 invIA = vec3(uintBitsToFloat(pc.rigid_bodies.data[base+16]), uintBitsToFloat(pc.rigid_bodies.data[base+17]), uintBitsToFloat(pc.rigid_bodies.data[base+18]));
         vec4 qA = vec4(uintBitsToFloat(pc.rigid_bodies.data[base+4]), uintBitsToFloat(pc.rigid_bodies.data[base+5]), uintBitsToFloat(pc.rigid_bodies.data[base+6]), uintBitsToFloat(pc.rigid_bodies.data[base+7]));
         vec3 posA = vec3(uintBitsToFloat(pc.rigid_bodies.data[base+0]), uintBitsToFloat(pc.rigid_bodies.data[base+1]), uintBitsToFloat(pc.rigid_bodies.data[base+2]));
@@ -46,6 +51,9 @@ void main() {
 
         if (invMA > 0.0) {
             vec3 dvA = -impulse * invMA;
+#ifdef DEBUG_SHADERS
+            debugPrintfEXT("APPLY IMPULSE A: pA_id=%d impulse=(%f,%f,%f) invMA=%f dvA=(%f,%f,%f)\n", pA_id, impulse.x, impulse.y, impulse.z, invMA, dvA.x, dvA.y, dvA.z);
+#endif
             ATOMIC_ADD_FLOAT(pc.rigid_bodies.data[base + 8], dvA.x);
             ATOMIC_ADD_FLOAT(pc.rigid_bodies.data[base + 9], dvA.y);
             ATOMIC_ADD_FLOAT(pc.rigid_bodies.data[base + 10], dvA.z);
@@ -73,7 +81,7 @@ void main() {
         impulseB = impulse / lca.scale;
     }
 
-    if (is_rb_b) {
+    if (is_rb_b && pB_id < pc.num_rigid_bodies) {
         uint base = pB_id * 28;
         float mass = uintBitsToFloat(pc.rigid_bodies.data[base + 3]);
         float invMB = mass > 0.0 ? 1.0 / mass : 0.0;

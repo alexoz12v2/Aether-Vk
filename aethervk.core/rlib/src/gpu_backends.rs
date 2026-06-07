@@ -541,7 +541,7 @@ where
         );
 
         let sparse_collisions = AutoDiscard::new(
-          kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 10000)?,
+          kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 12000)?,
           |b| kernels.discard_list(b),
         );
 
@@ -631,6 +631,7 @@ where
           (dt as f32) / 1_000_000.0,
           &sparse_collisions,
         )?;
+        sync!("narrow_ccd");
 
         // 2) Cross-LCA CCD for internal_pairs
         if frames.capacity() > 1 {
@@ -644,12 +645,14 @@ where
             (dt as f32) / 1_000_000.0,
             &sparse_collisions,
           )?;
+          sync!("narrow_ccd_cross_lca");
         }
 
         let compacted = AutoDiscard::new(
           kernels.compact_collisions(&mut cmd, &sparse_collisions, time_collision_delta)?,
           |b| kernels.discard_list(b),
         );
+        sync!("compact_collisions");
 
         let tc_buffer = AutoDiscard::new(
           kernels.find_earliest_collision(

@@ -83,8 +83,7 @@ void main() {
     if (collides) {
         SparseCollisions cross_out = pc.output_list;
         uint count = atomicAdd(cross_out.count, 1);
-        if (count < cross_out.capacity) {
-            cross_out.pairs[count].valid = 1u;
+        if (count < (cross_out.capacity * 7) / 8) {
             cross_out.pairs[count].entity_a = idA;
             cross_out.pairs[count].prim_a = idA;
             cross_out.pairs[count].entity_b = idB;
@@ -92,11 +91,13 @@ void main() {
             cross_out.pairs[count].toi = toi;
             cross_out.pairs[count].is_lca = 1u;
             cross_out.pairs[count].lca_id = lca_id;
+            cross_out.pairs[count].frame_bda_low = lca.frame_bda_low;
             
             vec3 global_normal = normal;
             vec3 global_contact = contact * lca.scale + lca.center_pos;
 
             cross_out.pairs[count].contact_normal = global_normal;
+            cross_out.pairs[count].frame_bda_high = lca.frame_bda_high;
             cross_out.pairs[count].contact_point = global_contact;
             cross_out.pairs[count].penetration_depth = max(depth, 1e-4) * lca.scale;
         }

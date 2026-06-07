@@ -277,6 +277,8 @@ pub struct ApplyImpulsesPushConstants {
   pub impulses_addr: u64,
   pub rigid_bodies_addr: u64,
   pub lca_entities: u64,
+  pub num_rigid_bodies: u32,
+  pub _pad: u32,
 }
 
 #[repr(C)]

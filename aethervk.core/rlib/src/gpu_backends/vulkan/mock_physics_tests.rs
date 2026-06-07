@@ -645,7 +645,12 @@ fn rb_force_assign() {
       leaf2.torque = [10.0, -5.0, 0.0];
       wrenches.push(leaf2);
 
-      let bodies_buf = upload_buffer(device, &[body]).unwrap();
+      let wg_size = 32usize;
+      let mut bodies_padded = alloc::vec![body];
+      bodies_padded.resize(wg_size, RigidBodyImex::default());
+      wrenches.resize(wg_size, Wrench::default());
+
+      let bodies_buf = upload_buffer(device, &bodies_padded).unwrap();
       let wrenches_buf = upload_buffer(device, &wrenches).unwrap();
 
       Ok((bodies_buf, wrenches_buf))
@@ -662,6 +667,9 @@ fn rb_force_assign() {
       let com_wrench = wrenches_data[0];
       println!("Com Wrench: {:?}", com_wrench);
 
+      device.discard_list(state.0);
+      device.discard_list(state.1);
+
       // Sum of forces: (10, 0, -5) + (0, 20, 5) = (10, 20, 0)
       assert!((com_wrench.force[0] - 10.0).abs() < 1e-4);
       assert!((com_wrench.force[1] - 20.0).abs() < 1e-4);
@@ -672,8 +680,6 @@ fn rb_force_assign() {
       assert!((com_wrench.torque[1] - 0.0).abs() < 1e-4);
       assert!((com_wrench.torque[2] - 0.0).abs() < 1e-4);
 
-      device.discard_list(state.0);
-      device.discard_list(state.1);
       Ok(())
     },
   );

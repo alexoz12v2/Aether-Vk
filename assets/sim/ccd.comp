@@ -59,11 +59,13 @@ void main() {
                         mat4 transB = mat4(1.0); transB[3].xyz = vec3(pc.particle_bvh.nodes[node_idx].com_x[i], pc.particle_bvh.nodes[node_idx].com_y[i], pc.particle_bvh.nodes[node_idx].com_z[i]);
 
                         if (compute_toi_generic(0, vec3(pc.particle_radius,0,0), transA, my_vel * pc.dt, 0, vec3(pc.particle_radius,0,0), transB, other_vel, 1e-3, 10, toi, normal, point, depth)) {
-                            if (collisions_found < 16) {
-                                uint outIdx = idx * 16 + collisions_found++;
-                                pc.output_list.pairs[outIdx].valid = 1; pc.output_list.pairs[outIdx].prim_a = my_prim_id; pc.output_list.pairs[outIdx].prim_b = offset;
+                            uint outIdx = atomicAdd(pc.output_list.count, 1);
+                            if (outIdx < (pc.output_list.capacity * 7) / 8) {
+                                pc.output_list.pairs[outIdx].prim_a = my_prim_id; pc.output_list.pairs[outIdx].prim_b = offset;
                                 pc.output_list.pairs[outIdx].toi = toi; pc.output_list.pairs[outIdx].contact_normal = normal;
                                 pc.output_list.pairs[outIdx].contact_point = point; pc.output_list.pairs[outIdx].penetration_depth = depth;
+                                pc.output_list.pairs[outIdx].is_lca = 0; pc.output_list.pairs[outIdx].lca_id = 0;
+                                pc.output_list.pairs[outIdx].entity_a = 0xFFFFFFFFu; pc.output_list.pairs[outIdx].entity_b = 0xFFFFFFFFu;
                             }
                         }
                     }

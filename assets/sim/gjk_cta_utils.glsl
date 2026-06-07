@@ -607,7 +607,7 @@ bool compute_toi_generic(
         if (dist <= 0.0) {
             out_toi = 0.0;
             out_depth = dist < 0.0 ? -dist : 0.0;
-            // EPA normal points from A to B.
+            // EPA normal points from A to B. Keep it pointing from A to B.
             float epa_len = length(epa_n_init);
             out_normal = epa_len > 1e-6 ? epa_n_init / epa_len : vec3(1.0, 0.0, 0.0);
             out_contact_point = (p_a_init + p_b_init) * 0.5;
@@ -649,7 +649,7 @@ bool compute_toi_generic(
         vec3 n_dir = dist > 1e-6 ? normalize(p_b - p_a) : last_valid_normal;
         last_valid_normal = n_dir;
         
-        float v_closing = -dot(v_rel, n_dir);
+        float v_closing = dot(v_rel, n_dir);
         
         if (v_closing <= 0.0) return false;
         

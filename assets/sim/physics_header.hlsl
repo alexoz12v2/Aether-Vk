@@ -104,12 +104,7 @@ struct PackedPair {
 };
 
 struct SparseCollisionData {
-    uint valid; uint entity_a; uint prim_a; uint entity_b;
-    uint prim_b; uint pad1; uint2 bda_a;
-    uint2 bda_b; uint2 frame_bda;
-    float toi; float penetration_depth; uint pad2; uint pad3;
-    float norm_x; float norm_y; float norm_z; uint pad4;
-    float pt_x; float pt_y; float pt_z; uint pad5;
+    uint entity_a; uint prim_a; uint entity_b; uint prim_b; float toi; uint is_lca; uint lca_id; uint frame_bda_low; float3 contact_normal; uint frame_bda_high; float3 contact_point; float penetration_depth;
 };
 
 struct EntityHeader { uint type; uint pad[3]; };

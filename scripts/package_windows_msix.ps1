@@ -67,7 +67,6 @@ $Manifest = @"
   <Applications>
     <Application Id="AetherVkApp" Executable="$BaseAppName.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements DisplayName="$DisplayName" Description="Aether-Vk Application" BackgroundColor="transparent" Square150x150Logo="Square150x150Logo.png" Square44x44Logo="Square44x44Logo.png">
-        <uap:DefaultTile Wide310x310Logo="Wide310x310Logo.png" />
         <uap:SplashScreen Image="SplashScreen.png" />
       </uap:VisualElements>
     </Application>
