@@ -58,6 +58,7 @@ void main() {
         uint base = P_BASE(my_p_idx);
         my_pos = vec3(P_READ(pc.particles, base), P_READ(pc.particles, base+1*SUBGROUP_SIZE), P_READ(pc.particles, base+2*SUBGROUP_SIZE));
         my_mass = P_READ(pc.particles, base+6*SUBGROUP_SIZE);
+        my_beta = P_READ(pc.particles, base+10*SUBGROUP_SIZE);
     }
 
     vec3 safe_pos = i_am_valid ? my_pos : vec3(0.0), min_pos = subgroupMin(i_am_valid ? my_pos : vec3(1e20)), max_pos = subgroupMax(i_am_valid ? my_pos : vec3(-1e20));
