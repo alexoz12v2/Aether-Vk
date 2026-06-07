@@ -16,23 +16,7 @@ fn setup_assets_dir() {
     errors.clear();
   }
 
-  let mut home_dir = std::env::current_exe().unwrap();
-  let mut iter = 0;
-  while !home_dir.join("assets").is_dir() && iter < 32 {
-    home_dir.pop();
-    iter += 1;
-  }
-  
-  if !home_dir.join("assets").is_dir() {
-    if std::path::Path::new("assets").is_dir() {
-      home_dir = std::env::current_dir().unwrap();
-    } else if let Ok(env_path) = std::env::var("ASSET_DIR") {
-      *crate::gpu::ASSET_DIR.write() = Some(env_path);
-      return;
-    }
-  }
-  
-  *crate::gpu::ASSET_DIR.write() = Some(home_dir.join("assets").to_str().unwrap().to_string());
+  crate::gpu::set_asset_dir_for_tests();
 }
 
 fn setup_render_frontend_for_tests(

@@ -925,8 +925,14 @@ where
     }
   }
 
+  aethervk_oshal_rlib::log!("gpu_backends.rs: calling cmd.submit() before write_back_to_scene!");
+  let sync_info = cmd.submit()?;
+  if let Some(sync) = &sync_info {
+    let _ = kernels.wait_sync(sync);
+  }
+
   aethervk_oshal_rlib::log!("gpu_backends.rs: calling kernels.write_back_to_scene OUTSIDE LOOP!");
-  let sync_info = kernels.write_back_to_scene(
+  let _ = kernels.write_back_to_scene(
     &mut cmd,
     &rigid_bodies,
     &particles,

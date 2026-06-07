@@ -102,10 +102,7 @@ fn run_compute_shader_test<TState, TSetup, TDispatch, TVerify>(
 {
   // 0. Initialize ASSET_DIR
   {
-    let mut home_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    home_dir.pop();
-    home_dir.pop();
-    *crate::gpu::ASSET_DIR.write() = Some(home_dir.join("assets").to_str().unwrap().to_string());
+    crate::gpu::set_asset_dir_for_tests();
   }
 
   // 1. Setup minimal runtime params

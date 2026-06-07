@@ -39,27 +39,7 @@ mod tests {
       // reach /workspace.  Fall back to:
       //  1. CWD (cargo nextest sets this to the workspace root)
       //  2. ASSET_DIR env var (set in Dockerfile.test to /workspace/assets)
-      let mut home_dir = std::env::current_exe().unwrap();
-      let mut iter = 0;
-      while !home_dir.join("assets").is_dir() && iter < 32 {
-        home_dir.pop();
-        iter += 1;
-      }
-      if !home_dir.join("assets").is_dir() {
-        // Try CWD (nextest sets this to the workspace root)
-        if std::path::Path::new("assets").is_dir() {
-          home_dir = std::env::current_dir().unwrap();
-        } else if let Ok(env_path) = std::env::var("ASSET_DIR") {
-          // Explicit override — useful when binary is outside the workspace
-          // (e.g. CARGO_TARGET_DIR=/build-target inside Docker)
-          *crate::gpu::ASSET_DIR.write() = Some(env_path);
-          // Skip the join below
-          home_dir = std::path::PathBuf::new();
-        }
-      }
-      if home_dir != std::path::PathBuf::new() {
-        *crate::gpu::ASSET_DIR.write() = Some(home_dir.join("assets").to_str().unwrap().to_string());
-      }
+      crate::gpu::set_asset_dir_for_tests();
 
       let runtime_params = Box::new(RuntimeParams {
         render_backend_params: FnvIndexMap::new(),

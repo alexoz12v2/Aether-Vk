@@ -65,13 +65,8 @@ mod tests {
 
   impl VulkanTestContext {
     pub fn new() -> Self {
-      let mut home_dir = std::env::current_exe().unwrap();
-      let mut iter = 0;
-      while !home_dir.join("assets").is_dir() && iter < 32 {
-        home_dir.pop();
-        iter += 1;
-      }
-      *crate::gpu::ASSET_DIR.write() = Some(home_dir.join("assets").to_str().unwrap().to_string());
+      crate::gpu_backends::vulkan::physics::READBACK_DIAGNOSTICS.store(true, core::sync::atomic::Ordering::Relaxed);
+      crate::gpu::set_asset_dir_for_tests();
 
       let runtime_params = Box::new(RuntimeParams {
         render_backend_params: FnvIndexMap::new(),
@@ -274,14 +269,12 @@ mod tests {
           coll.penetration_depth > 0.0,
           "Penetration depth should be positive"
         );
-        // Sphere and OBB are both children of the 'root' micro frame, so their
-        // collision is resolved via the cross-LCA path.  After the macro-frame
-        // prepend (gpu frame 0 = macro, gpu frame 1 = micro) the LCA frame
-        // index is 1.  Check is_lca rather than a hard-coded gpu frame index
-        // so the assertion stays valid regardless of frame ordering.
+        // Sphere and OBB are both children of the 'root' micro frame.
+        // They are intra-LCA, so they are routed to standard CCD (out_rb_rb)
+        // without coord transforms. Thus, is_lca should be false.
         assert!(
-          coll.is_lca,
-          "Sphere–OBB collision should be detected via the cross-LCA path (both entities are children of the root micro frame), got is_lca={}, frame_id={}",
+          !coll.is_lca,
+          "Sphere–OBB collision is intra-LCA (both entities share the root micro frame), so it routes to standard CCD. Expected is_lca=false, got is_lca={}, frame_id={}",
           coll.is_lca, coll.frame_id
         );
 
