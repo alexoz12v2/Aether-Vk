@@ -11,7 +11,7 @@ BASE_APP_NAME="AetherVk"
 
 if [ "$MODE" = "SideBySide" ]; then
     APP_NAME="${BASE_APP_NAME}-${CONFIG}"
-    BUNDLE_ID="com.example.${BASE_APP_NAME}.sxs.${APP_VERSION//./-}.${CONFIG,,}"
+    BUNDLE_ID="com.example.${BASE_APP_NAME}.sxs.${APP_VERSION//./-}.$(echo "$CONFIG" | tr '[:upper:]' '[:lower:]')"
     DISPLAY_NAME="${BASE_APP_NAME} (SxS $APP_VERSION $CONFIG)"
 else
     APP_NAME="$BASE_APP_NAME"
@@ -20,14 +20,14 @@ else
 fi
 
 BUNDLE_DIR="bin/publish/$APP_NAME.app"
-PUBLISH_DIR="aethervk.ui.app/bin/$CONFIG/net10.0/$ARCH/publish"
+PUBLISH_DIR="aethervk.ui-app/bin/$CONFIG/net10.0/$ARCH/publish"
 
 echo "=========================================="
 echo " Packaging Aether-Vk for macOS ($ARCH) - $MODE ($CONFIG)"
 echo "=========================================="
 
 echo "[1/4] Publishing project..."
-dotnet publish aethervk.ui.app/AetherVk.csproj -c "$CONFIG" -r "$ARCH" --self-contained true
+dotnet publish aethervk.ui-app/AetherVk.csproj -c "$CONFIG" -r "$ARCH" --self-contained true
 
 echo "[2/4] Creating App Bundle structure..."
 mkdir -p "$BUNDLE_DIR/Contents/MacOS"

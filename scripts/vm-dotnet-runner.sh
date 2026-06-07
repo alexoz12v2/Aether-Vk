@@ -40,14 +40,10 @@ cargo build -p aethervk-core-cdylib $CARGO_PROFILE_FLAG || { echo "Cargo build f
 echo "==== [HOST] Building .NET App ($TARGET_DIR) ===="
 dotnet build aethervk.ui-app "${ORIG_ARGS[@]}" || { echo "Dotnet build failed"; exit 1; }
 
-# Check if VULKAN_SDK is set on the remote machine
-if ! ssh -o BatchMode=yes -q "$VM_USER@$VM_HOST" "test -n \"\$VULKAN_SDK\""; then
-    echo "[VM Runner Error] VULKAN_SDK environment variable is not set on the VM!"
-    echo "Please ensure you have added 'source ~/vulkan_sdk/setup-env.sh' to your VM's ~/.zshenv"
-    exit 1
-fi
-
 VM_ENV="export DYLD_LIBRARY_PATH=\$DYLD_LIBRARY_PATH:$PROJECT_DIR/target/$TARGET_DIR;"
+if [ -n "$AETHERVK_DISABLE_SYNC_VAL" ]; then
+    VM_ENV+="export AETHERVK_DISABLE_SYNC_VAL=$AETHERVK_DISABLE_SYNC_VAL; "
+fi
 
 # We use -q (quiet) to suppress SSH banner logs.
 # By running this as the logged-in user on the VM, the Avalonia UI window will appear on the VM's desktop!

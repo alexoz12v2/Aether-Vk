@@ -19,7 +19,7 @@ if ($SideBySide) {
     $OutMsixName = "${BaseAppName}_${Arch}.msix"
 }
 
-$PublishDir = "aethervk.ui.app\bin\$Configuration\net10.0\$DotnetArch\publish"
+$PublishDir = "aethervk.ui-app\bin\$Configuration\net10.0\$DotnetArch\publish"
 $MsixDir = "bin\publish\MsixBuild_${Arch}_$Configuration"
 if ($SideBySide) { $MsixDir += "_SxS" }
 $OutMsix = "bin\publish\$OutMsixName"
