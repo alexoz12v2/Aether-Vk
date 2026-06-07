@@ -7831,7 +7831,7 @@ impl RenderDevice for Device {
     entity: EntityId,
   ) -> GpuResult<()> {
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
-    let (layout, ds) = {
+    let (layout, pipeline_key, ds) = {
       let res = DebugTrackedRwLock::read(&self.res);
       let live_pes = &res.live_presentation_engines;
       let pe = wait_for_pe_direct!(live_pes, handle)?;
@@ -7856,8 +7856,10 @@ impl RenderDevice for Device {
           .ok_or(gpu_err!("couldn't find sun descriptor set"))?,
         _ => return Err(gpu_err!("sun resource not ready")),
       };
-      (layout, ds)
+      let pipeline_key = sun_archetype.as_ref().ok_or(gpu_err_archetype_absent!())?.pipeline_key;
+      (layout, pipeline_key, ds)
     };
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
       self.device.cmd_bind_descriptor_sets(
         cmd,

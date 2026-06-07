@@ -1641,20 +1641,8 @@ mod tests {
 
   #[test]
   fn test_comet_glb_loading_and_inertia_diagonalization() {
-    let assets_dir = {
-      let mut home_dir = std::env::current_exe().unwrap();
-      let mut iter: i32 = 0;
-      const MAX_ITER: i32 = 32;
-      while {
-        let d = home_dir.join("assets");
-        !d.is_dir() && iter < MAX_ITER
-      } {
-        home_dir.pop();
-        iter += 1;
-        assert!(home_dir.is_dir());
-      }
-      home_dir.join("assets")
-    };
+    crate::gpu::set_asset_dir_for_tests();
+    let assets_dir = std::path::PathBuf::from(crate::gpu::ASSET_DIR.read().as_ref().unwrap());
     let model_dir = assets_dir.join("Comet.glb");
     assert!(model_dir.is_file());
 
