@@ -76,25 +76,39 @@ jobs:
         fi
       shell: bash
 
+    - name: Determine Release Mode
+      id: mode
+      run: |
+        if [[ "${{ github.ref }}" == *"-sxs" ]]; then
+          echo "MODE=SideBySide" >> $GITHUB_ENV
+        else
+          echo "MODE=Normal" >> $GITHUB_ENV
+        fi
+      shell: bash
+
     - name: Package Windows
       if: runner.os == 'Windows'
       run: |
         pwsh ./scripts/package_windows.ps1 -Arch ${{ matrix.dotnet_arch }}
         $msixArch = if ('${{ matrix.dotnet_arch }}' -eq 'win-x64') { 'x64' } else { 'arm64' }
-        pwsh ./scripts/package_windows_msix.ps1 -Arch $msixArch
+        if ($env:MODE -eq "SideBySide") {
+            pwsh ./scripts/package_windows_msix.ps1 -Arch $msixArch -SideBySide
+        } else {
+            pwsh ./scripts/package_windows_msix.ps1 -Arch $msixArch
+        }
 
     - name: Package macOS
       if: runner.os == 'macOS'
       run: |
-        bash ./scripts/package_macos.sh ${{ matrix.dotnet_arch }}
+        bash ./scripts/package_macos.sh ${{ matrix.dotnet_arch }} Release $MODE
         cd bin/publish
-        zip -r AetherVk_${{ matrix.dotnet_arch }}.zip AetherVk.app
+        zip -r AetherVk_${{ matrix.dotnet_arch }}.zip AetherVk.app*
 
     - name: Package Linux
       if: runner.os == 'Linux'
       run: |
         bash ./scripts/package_linux.sh ${{ matrix.dotnet_arch }}
-        bash ./scripts/package_linux_deb.sh ${{ matrix.dotnet_arch }}
+        bash ./scripts/package_linux_deb.sh ${{ matrix.dotnet_arch }} Release $MODE
       env:
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
