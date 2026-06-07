@@ -1164,4 +1164,252 @@ mod tests {
       final_pos.position.y(),
     );
   }
+
+  #[test]
+  #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
+  fn test_barnes_hut_particles_circle_emitter() {
+    let ctx = VulkanTestContext::new();
+
+    let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_all_crate_components();
+
+    let root = scene.spawn_reference_frame(
+      "MicroFrame",
+      None,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+      ReferenceFrameType::Micro,
+      1.0,
+      10000.0,
+    );
+
+    let mesh_entity = scene.spawn_entity("QuadMesh");
+    scene.set_parent(mesh_entity, Some(root));
+    scene
+      .add_component(
+        mesh_entity,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+
+    let vertices = alloc::vec![
+      crate::simulation::comet::Vertex {
+        position: [-10.0, -10.0, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        uv: [0.0, 0.0],
+        tangent: [1.0, 0.0, 0.0, 1.0],
+      },
+      crate::simulation::comet::Vertex {
+        position: [10.0, -10.0, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        uv: [1.0, 0.0],
+        tangent: [1.0, 0.0, 0.0, 1.0],
+      },
+      crate::simulation::comet::Vertex {
+        position: [10.0, 10.0, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        uv: [1.0, 1.0],
+        tangent: [1.0, 0.0, 0.0, 1.0],
+      },
+      crate::simulation::comet::Vertex {
+        position: [-10.0, 10.0, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        uv: [0.0, 1.0],
+        tangent: [1.0, 0.0, 0.0, 1.0],
+      },
+    ];
+    let indices = alloc::vec![0, 1, 2, 2, 3, 0];
+    let tri_contrib = polyhedral_mass_properties::TriangleContrib::new(
+      [-10.0, -10.0, 1.0],
+      [10.0, -10.0, 0.0],
+      [10.0, 10.0, 0.0],
+    );
+    let mesh_comp = crate::scene::PhysicalMeshComponent {
+      asset_path: "".into(),
+      mesh: Arc::new(crate::simulation::comet::Comet {
+        id: 0,
+        vertices,
+        indices,
+        albedo_map: None,
+        normal_map: None,
+        roughness_map: None,
+        ao_map: None,
+        mass_properties: polyhedral_mass_properties::MassProperties::from_contrib_sum(tri_contrib)
+          .unwrap(),
+        bvh: None,
+        pa_basis_bf: None,
+        bf_to_pa: None,
+      }),
+      emissive_intensity: 0.0,
+      emissive_color: [0.0; 3],
+      use_new_path: false,
+      paint_display_mode: 0,
+      sphere_center: [0.0; 3],
+      sphere_radius: 10.0,
+      grid_color: [0.0; 3],
+      grid_density: 0.0,
+      rotational_model: None,
+    };
+    scene.add_component(mesh_entity, mesh_comp).unwrap();
+    scene
+      .add_component(
+        mesh_entity,
+        ColliderComponent {
+          shape: ColliderShape::OBB {
+            half_extents: Vec3f32::from_components(10.0, 10.0, 0.1),
+          },
+          mass: 0.0,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
+    let circles_comp = crate::scene::particles::ParticleEmitterCirclesComponent {
+      circles: alloc::vec![crate::scene::particles::EmissionCircle {
+        latitude_rad: std::f32::consts::PI / 2.0,
+        longitude_rad: 0.0,
+        circle_radius_km: 0.0,
+        mass: 1.0,
+        color: [1.0; 4],
+        cached_point: Some([0.0, 0.0, 0.0]),
+        cached_normal: Some([0.0, 0.0, 1.0]),
+        particles_per_tick: 1,
+        ttl: 100,
+        mean_velocity: 5.0,
+        velocity_std_dev: 0.0,
+        child_entity: None,
+        beta: 2.0,
+        max_particles: 10,
+      }],
+    };
+    scene.add_component(mesh_entity, circles_comp).unwrap();
+
+    let mut particle_sys = crate::scene::particles::ParticleSystemComponent::new(100);
+    particle_sys.particle_radius = 0.01;
+    particle_sys.beta = 2.0;
+
+    let x0 = [0.0, 0.0, 0.015];
+    let v0 = [0.0, 0.0, 5.0];
+
+    {
+      let mut parts = particle_sys.particles.write();
+      parts.push(crate::scene::particles::ParticleData {
+        id_low: 1,
+        id_high: 0,
+        age_low: 0,
+        age_high: 0,
+        position: x0,
+        velocity: v0,
+        mass: 1.0,
+        active: 1,
+      });
+    }
+    scene.add_component(mesh_entity, particle_sys).unwrap();
+
+    let gravity_entity = scene.spawn_entity("GravitySource");
+    scene.set_parent(gravity_entity, Some(root));
+    scene
+      .add_component(
+        gravity_entity,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 50.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        gravity_entity,
+        crate::scene::ForceEmitterComponent::Gravity {
+          mu: 1000.0,
+          beta: 0.0,
+        },
+      )
+      .unwrap();
+
+    let duration_seconds = 0.016;
+
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+        run_simulation(vulkan_device, &mut scene, duration_seconds, false);
+        Ok(())
+      })
+      .unwrap();
+
+    let final_sys = scene
+      .with_component(
+        mesh_entity,
+        |p: &crate::scene::particles::ParticleSystemComponent| p.particles.read().clone(),
+      )
+      .unwrap();
+
+    let mut found = false;
+    for p in final_sys.iter() {
+      if p.active == 0 {
+        continue;
+      }
+      found = true;
+      let x1 = Vec3f32::from_components(p.position[0], p.position[1], p.position[2]);
+      let diff = x1 - Vec3f32::from_components(x0[0], x0[1], x0[2]);
+      let dist = (diff.x().powi(2) + diff.y().powi(2) + diff.z().powi(2)).sqrt();
+      assert!(
+        dist <= 0.085,
+        "Particle moved too far! dist = {}, x1 = {:?}",
+        dist,
+        x1
+      );
+      assert!(
+        diff.z() >= 0.0,
+        "Particle moved backward! diff.z = {}",
+        diff.z()
+      );
+
+      let v1 = p.velocity[2];
+      assert!(
+        v1 >= 5.0,
+        "Velocity should be increased by attractive gravity! v1 = {}",
+        v1
+      );
+    }
+    assert!(found, "No particles found!");
+
+    #[cfg(target_os = "macos")]
+    {
+      let mut info: libc::mach_task_basic_info = unsafe { core::mem::zeroed() };
+      let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+      let res = unsafe {
+        libc::task_info(
+          libc::mach_task_self(),
+          libc::MACH_TASK_BASIC_INFO,
+          &mut info as *mut _ as libc::task_info_t,
+          &mut count,
+        )
+      };
+      if res == libc::KERN_SUCCESS {
+        let virtual_mb = info.virtual_size / (1024 * 1024);
+        let resident_mb = info.resident_size / (1024 * 1024);
+        aethervk_oshal_rlib::log!(
+          "Memory Status -> Resident: {} MB | Virtual: {} MB",
+          resident_mb,
+          virtual_mb
+        );
+        assert!(resident_mb < 2048, "Memory exceeded 2GB");
+      }
+    }
+  }
 }

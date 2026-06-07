@@ -193,8 +193,8 @@ pub fn build_particle_lbvh(particles: &[Particle], particle_radius: f32) -> Opti
     morton_entries.push((code, i));
   }
 
-  // 3. Sort by Morton Code
-  morton_entries.sort_unstable_by_key(|&(code, _)| code);
+  // 3. Sort by Morton Code AND Original Index
+  morton_entries.sort_unstable_by_key(|&(code, idx)| (code, idx));
 
   // 4. Allocate BVH Nodes.
   // A tree with N leaves has exactly N-1 internal nodes. Total = 2N - 1
@@ -333,7 +333,7 @@ pub fn build_motion_particle_lbvh(
     };
     morton_entries.push((morton_3d(normalized), i));
   }
-  morton_entries.sort_unstable_by_key(|&(code, _)| code);
+  morton_entries.sort_unstable_by_key(|&(code, idx)| (code, idx));
 
   // 3–5. Topology construction (same as build_particle_lbvh)
   let num_internal_nodes = n - 1;

@@ -37,7 +37,7 @@ bytemuck = { version = "1.15", default-features = false, features = ["derive"] }
 # core, alloc → `rustc` already has them
 # - global allocator
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = "0.5"
+tikv-jemallocator = { version = "0.5", features = ["disable_initial_exec_tls"] }
 
 [target.'cfg(target_env = "msvc")'.dependencies] # if necessary, "secure" in debug
 mimalloc = { version = "0.1", features = ["v3"] }

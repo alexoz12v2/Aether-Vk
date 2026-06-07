@@ -57,5 +57,47 @@ int find_split(uint n, int first, int last) {
 }
 
 void main() {
-    return;
+    uint idx = gl_GlobalInvocationID.x;
+    uint n = pc.num_primitives;
+    if (n <= 1 || idx >= n - 1) return;
+    
+    vec2 range = determine_range(n, int(idx));
+    int first = int(range.x);
+    int last = int(range.y);
+    
+    int split = find_split(n, first, last);
+    
+    uint left_child;
+    bool left_is_leaf;
+    if (split == first) {
+        left_child = n - 1 + uint(split);
+        left_is_leaf = true;
+    } else {
+        left_child = uint(split);
+        left_is_leaf = false;
+    }
+    
+    uint right_child;
+    bool right_is_leaf;
+    if (split + 1 == last) {
+        right_child = n - 1 + uint(split + 1);
+        right_is_leaf = true;
+    } else {
+        right_child = uint(split + 1);
+        right_is_leaf = false;
+    }
+    
+    pc.bvh.nodes[idx].child_indices[0] = left_child;
+    pc.bvh.nodes[idx].child_indices[1] = right_child;
+    
+    uint left_payload = left_is_leaf ? pc.sorted_morton.entries[split].y : left_child;
+    uint right_payload = right_is_leaf ? pc.sorted_morton.entries[split + 1].y : right_child;
+    
+    pc.bvh.nodes[idx].metadata[0] = bvh_pack_metadata(left_is_leaf, BVH_FRAME_MICRO, BVH_SHAPE_AABB, left_payload);
+    pc.bvh.nodes[idx].metadata[1] = bvh_pack_metadata(right_is_leaf, BVH_FRAME_MICRO, BVH_SHAPE_AABB, right_payload);
+    
+    pc.bvh.nodes[left_child].parent_idx = idx;
+    pc.bvh.nodes[right_child].parent_idx = idx;
+    
+    pc.bvh.nodes[idx].valid_mask = uvec2(3, 0); // Children 0 and 1 are valid
 }
