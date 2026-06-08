@@ -7,6 +7,7 @@ use hashbrown::HashMap;
 use slotmap::{SlotMap, new_key_type};
 
 use aethervk_oshal_rlib::os::fs::{self, Path, PathBuf};
+use alloc::string::ToString;
 
 use crate::{
   gpu_backends::vulkan::utils::NonZeroHandle,
