@@ -70,13 +70,10 @@ jobs:
     - name: Restore .NET local tools
       run: dotnet tool restore
 
-    - name: Setup Workspace Assets
+    - name: Download Core SPICE Kernels
       run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          pwsh ./setup_workspace.ps1
-        else
-          bash ./setup_workspace.sh
-        fi
+        mkdir -p assets/planets
+        curl -# -L -o assets/planets/de442.bsp https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de442.bsp
       shell: bash
 
     - name: Determine Release Mode
