@@ -256,7 +256,7 @@ pub fn disassemble_and_log_spirv(spv_code: &[u8]) {
     if !fp.is_null() {
       let mut buf = [0i8; 1024];
       let mut out = alloc::string::String::new();
-      while !libc::fgets(buf.as_mut_ptr(), buf.len() as i32, fp).is_null() {
+      while !libc::fgets(buf.as_mut_ptr().cast(), buf.len() as i32, fp).is_null() {
         out.push_str(&core::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy());
       }
       libc::pclose(fp);
