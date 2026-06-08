@@ -121,3 +121,7 @@ jobs:
         VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
         # TODO: We will remove this when we figure out why it acts out
         AETHERVK_DISABLE_GPU_AV: "1"
+
+        GALLIVM_PERF: no_opt
+        LP_DEBUG: no_opt
+        RUST_MIN_STACK: 33554432
