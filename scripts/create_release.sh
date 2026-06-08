@@ -88,9 +88,14 @@ if [ "$ACTION" == "create" ]; then
     STATUS=$(gh run list --commit "$COMMIT" --json conclusion -q '.[0].conclusion' || echo "")
     
     if [ "$STATUS" != "success" ] && [ -n "$STATUS" ] && [ "$STATUS" != "null" ]; then
-        echo "Error: CI pipeline for the target commit has not succeeded (status: $STATUS)."
-        echo "Please ensure the commit passes CI before creating a release."
-        exit 1
+        if [ "$IGNORE_CI" == "1" ] || [ "$IGNORE_CI" == "true" ]; then
+            echo "Warning: CI pipeline failed (status: $STATUS), but IGNORE_CI is set. Proceeding anyway..."
+        else
+            echo "Error: CI pipeline for the target commit has not succeeded (status: $STATUS)."
+            echo "Please ensure the commit passes CI before creating a release."
+            echo "To override this, run with IGNORE_CI=1 ./scripts/create_release.sh ..."
+            exit 1
+        fi
     elif [ -z "$STATUS" ] || [ "$STATUS" == "null" ]; then
         echo "Warning: Could not find CI runs for this commit. Proceeding anyway..."
     fi

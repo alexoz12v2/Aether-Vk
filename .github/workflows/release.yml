@@ -1,5 +1,8 @@
 name: Release
 
+permissions:
+  contents: write
+
 on:
   push:
     tags:
@@ -102,7 +105,7 @@ jobs:
       run: |
         bash ./scripts/package_macos.sh ${{ matrix.dotnet_arch }} Release $MODE
         cd bin/publish
-        zip -r AetherVk_${{ matrix.dotnet_arch }}.zip AetherVk.app*
+        zip -r AetherVk_1.0.0_${{ matrix.dotnet_arch }}.zip AetherVk*.app
 
     - name: Package Linux
       if: runner.os == 'Linux'
@@ -118,7 +121,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          bin/publish/AetherVk_${{ matrix.dotnet_arch }}.zip
-          bin/publish/AetherVk_${{ matrix.dotnet_arch }}.tar.gz
+          bin/publish/AetherVk_1.0.0_${{ matrix.dotnet_arch }}.zip
+          bin/publish/AetherVk_1.0.0_${{ matrix.dotnet_arch }}.tar.gz
           bin/publish/*.msix
           bin/publish/*.deb

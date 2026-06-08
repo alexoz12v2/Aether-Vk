@@ -17,7 +17,10 @@ param (
     [switch]$Hotfix,
 
     [Parameter(Mandatory=$false, HelpMessage="File to upload (required for 'upload' action)")]
-    [string]$File
+    [string]$File,
+
+    [Parameter(Mandatory=$false, HelpMessage="Bypass CI status check")]
+    [switch]$IgnoreCI
 )
 
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
@@ -72,9 +75,13 @@ if ($Action -eq "create") {
         if ($StatusList.Count -gt 0) {
             $Status = $StatusList[0].conclusion
             if ($Status -ne "success" -and $Status -ne $null) {
-                Write-Error "CI pipeline for the target commit has not succeeded (status: $Status)."
-                Write-Error "Please ensure the commit passes CI before creating a release."
-                exit 1
+                if ($IgnoreCI) {
+                    Write-Warning "CI pipeline failed (status: $Status), but -IgnoreCI is specified. Proceeding anyway..."
+                } else {
+                    Write-Error "CI pipeline for the target commit has not succeeded (status: $Status)."
+                    Write-Error "Please ensure the commit passes CI before creating a release. Use -IgnoreCI to bypass."
+                    exit 1
+                }
             }
         } else {
             Write-Warning "Could not find CI runs for this commit. Proceeding anyway..."

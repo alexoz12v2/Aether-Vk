@@ -12,11 +12,11 @@ $DotnetArch = if ($Arch -eq "x64") { "win-x64" } else { "win-$Arch" }
 if ($SideBySide) {
     $IdentityName = "$BaseAppName-SxS-$($AppVersion -replace '\.','-')-$Configuration"
     $DisplayName = "$BaseAppName (SxS $AppVersion $Configuration)"
-    $OutMsixName = "${BaseAppName}_${Arch}_SxS_${Configuration}.msix"
+    $OutMsixName = "${BaseAppName}_SxS_${AppVersion}_${Arch}_${Configuration}.msix"
 } else {
     $IdentityName = $BaseAppName
     $DisplayName = $BaseAppName
-    $OutMsixName = "${BaseAppName}_${Arch}.msix"
+    $OutMsixName = "${BaseAppName}_${AppVersion}_${Arch}.msix"
 }
 
 $PublishDir = "aethervk.ui-app\bin\$Configuration\net10.0\$DotnetArch\publish"
