@@ -20,18 +20,4 @@ $SatellitesUrl = "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satelli
 Write-Host "Downloading de442.bsp..."
 Invoke-WebRequest -Uri "$PlanetsUrl/de442.bsp" -OutFile (Join-Path -Path $TargetDir -ChildPath "de442.bsp")
 
-# Download satellite kernels
-$Satellites = @(
-    "jup365.bsp",
-    "mar099.bsp",
-    "nep105.bsp",
-    "plu060.bsp",
-    "sat457.bsp"
-)
-
-foreach ($file in $Satellites) {
-    Write-Host "Downloading $file..."
-    Invoke-WebRequest -Uri "$SatellitesUrl/$file" -OutFile (Join-Path -Path $TargetDir -ChildPath $file)
-}
-
 Write-Host "Download complete!" -ForegroundColor Green

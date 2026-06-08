@@ -76,7 +76,7 @@ $Manifest = @"
 Set-Content -Path "$MsixDir\AppxManifest.xml" -Value $Manifest -Encoding UTF8
 
 # Copy dummy images to satisfy manifest requirements
-$DummyImg = "app_broken.png"
+$DummyImg = "aethervk.ui-app\Assets\icon.png"
 if (Test-Path $DummyImg) {
     Copy-Item $DummyImg "$MsixDir\StoreLogo.png"
     Copy-Item $DummyImg "$MsixDir\Square150x150Logo.png"
