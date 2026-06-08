@@ -102,10 +102,59 @@ impl Shader {
           patched_code.len() * core::mem::size_of::<u32>(),
         )
       };
-      let _ = aethervk_oshal_rlib::os::fs::write(&PathBuf::from("/tmp/dump.spv"), spv_u8);
-      unsafe {
-        let cmd = alloc::ffi::CString::new("spirv-dis /tmp/dump.spv").unwrap();
-        libc::system(cmd.as_ptr());
+
+      #[cfg(not(windows))]
+      {
+        let _ = aethervk_oshal_rlib::os::fs::write(&PathBuf::from("/tmp/dump.spv"), spv_u8);
+        unsafe {
+          let cmd = alloc::ffi::CString::new("spirv-dis /tmp/dump.spv").unwrap();
+          libc::system(cmd.as_ptr());
+        }
+      }
+      #[cfg(windows)]
+      {
+        // Adjusted path for Windows
+        let _ = aethervk_oshal_rlib::os::fs::write(&PathBuf::from(r"C:\temp\dump.spv"), spv_u8);
+
+        unsafe {
+          use windows::Win32::Foundation::CloseHandle;
+          use windows::Win32::System::Threading::{
+            CreateProcessW, INFINITE, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTUPINFOW,
+            WaitForSingleObject,
+          };
+          use windows::core::{PCWSTR, PWSTR};
+
+          // CreateProcessW requires a mutable UTF-16 string for the command line.
+          // We use cmd.exe /c to mimic libc::system's shell execution.
+          let mut cmd: Vec<u16> =
+            "cmd.exe /c spirv-dis C:\\temp\\dump.spv\0".encode_utf16().collect();
+
+          let mut si = STARTUPINFOW::default();
+          si.cb = core::mem::size_of::<STARTUPINFOW>() as u32;
+          let mut pi = PROCESS_INFORMATION::default();
+
+          let result = CreateProcessW(
+            PCWSTR::null(),
+            Some(PWSTR(cmd.as_mut_ptr())), // PWSTR must point to mutable memory
+            None,
+            None,
+            false,
+            PROCESS_CREATION_FLAGS(0),
+            None,
+            PCWSTR::null(),
+            &mut si,
+            &mut pi,
+          );
+
+          if result.is_ok() {
+            // Block until spirv-dis finishes executing
+            WaitForSingleObject(pi.hProcess, INFINITE);
+
+            // Clean up the handles to prevent memory leaks
+            let _ = CloseHandle(pi.hProcess);
+            let _ = CloseHandle(pi.hThread);
+          }
+        }
       }
     }
 
