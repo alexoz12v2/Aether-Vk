@@ -17,18 +17,4 @@ SATELLITES_URL="https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellite
 echo "Downloading de442.bsp..."
 curl -# -L -o "$TARGET_DIR/de442.bsp" "$PLANETS_URL/de442.bsp"
 
-# Download satellite kernels
-SATELLITES=(
-    "jup365.bsp"
-    "mar099.bsp"
-    "nep105.bsp"
-    "plu060.bsp"
-    "sat457.bsp"
-)
-
-for file in "${SATELLITES[@]}"; do
-    echo "Downloading $file..."
-    curl -# -L -o "$TARGET_DIR/$file" "$SATELLITES_URL/$file"
-done
-
 echo "Download complete!"
