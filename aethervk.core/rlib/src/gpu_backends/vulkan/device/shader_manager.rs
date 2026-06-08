@@ -126,7 +126,7 @@ impl Shader {
 
           // CreateProcessW requires a mutable UTF-16 string for the command line.
           // We use cmd.exe /c to mimic libc::system's shell execution.
-          let mut cmd: Vec<u16> =
+          let mut cmd: alloc::vec::Vec<u16> =
             "cmd.exe /c spirv-dis C:\\temp\\dump.spv\0".encode_utf16().collect();
 
           let mut si = STARTUPINFOW::default();
