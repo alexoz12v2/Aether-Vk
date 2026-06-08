@@ -257,7 +257,7 @@ pub fn disassemble_and_log_spirv(spv_code: &[u8]) {
       let mut buf = [0i8; 1024];
       let mut out = alloc::string::String::new();
       while !libc::fgets(buf.as_mut_ptr().cast(), buf.len() as i32, fp).is_null() {
-        out.push_str(&core::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy());
+        out.push_str(&core::ffi::CStr::from_ptr(buf.as_ptr().cast()).to_string_lossy());
       }
       libc::pclose(fp);
       aethervk_oshal_rlib::log!("SPIR-V Disassembly:\n{}", out);
