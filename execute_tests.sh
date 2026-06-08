@@ -2,6 +2,12 @@
 set -e
 
 export RUST_BACKTRACE=1
+export RUST_MIN_STACK=33554432
+export GALLIVM_PERF=no_opt
+export LP_DEBUG=no_opt
+
+# TODO: We will remove this when we figure out why it acts out
+export AETHERVK_DISABLE_GPU_AV=1
 
 # Check if running in a headless environment and Vulkan ICD is not already overridden
 if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ] && [ -z "$VK_ICD_FILENAMES" ]; then

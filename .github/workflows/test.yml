@@ -119,5 +119,5 @@ jobs:
       env:
         # Force Vulkan to use lavapipe for headless environments
         VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
-        # Disable GPU-Assisted validation in CI as it causes known SIGSEGV crashes with Lavapipe during teardown
+        # TODO: We will remove this when we figure out why it acts out
         AETHERVK_DISABLE_GPU_AV: "1"
