@@ -3,8 +3,9 @@ param (
 )
 
 $AppName = "AetherVk"
+$AppVersion = "1.0.0"
 $PublishDir = "aethervk.ui-app\bin\Release\net10.0\$Arch\publish"
-$OutZip = "bin\publish\${AppName}_${Arch}.zip"
+$OutZip = "bin\publish\${AppName}_${AppVersion}_${Arch}.zip"
 
 Write-Host "=========================================="
 Write-Host " Packaging Aether-Vk for Windows ($Arch)"

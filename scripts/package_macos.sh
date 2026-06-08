@@ -10,11 +10,11 @@ APP_VERSION="1.0"
 BASE_APP_NAME="AetherVk"
 
 if [ "$MODE" = "SideBySide" ]; then
-    APP_NAME="${BASE_APP_NAME}-${CONFIG}"
+    APP_NAME="${BASE_APP_NAME}-SxS-${APP_VERSION}-${CONFIG}"
     BUNDLE_ID="com.example.${BASE_APP_NAME}.sxs.${APP_VERSION//./-}.$(echo "$CONFIG" | tr '[:upper:]' '[:lower:]')"
     DISPLAY_NAME="${BASE_APP_NAME} (SxS $APP_VERSION $CONFIG)"
 else
-    APP_NAME="$BASE_APP_NAME"
+    APP_NAME="${BASE_APP_NAME}-${APP_VERSION}"
     BUNDLE_ID="com.example.$BASE_APP_NAME"
     DISPLAY_NAME="$BASE_APP_NAME"
 fi
