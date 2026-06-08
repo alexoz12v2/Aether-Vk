@@ -92,11 +92,27 @@ impl Shader {
     entry_point: &str,
     execution_model: spirv::ExecutionModel,
   ) -> GpuResult<Self> {
-    let shader_create_info = vk::ShaderModuleCreateInfo::default().code(code);
+    let mut patched_code = code.to_vec();
+    if cfg!(debug_assertions) || cfg!(test) {
+      patch_spirv_prevent_inlining(&mut patched_code);
+      let spv_u8 = unsafe {
+          core::slice::from_raw_parts(
+              patched_code.as_ptr() as *const u8,
+              patched_code.len() * core::mem::size_of::<u32>(),
+          )
+      };
+      let _ = aethervk_oshal_rlib::os::fs::write(&PathBuf::from("/tmp/dump.spv"), spv_u8);
+      unsafe {
+          let cmd = alloc::ffi::CString::new("spirv-dis /tmp/dump.spv").unwrap();
+          libc::system(cmd.as_ptr());
+      }
+    }
+
+    let shader_create_info = vk::ShaderModuleCreateInfo::default().code(&patched_code);
     let spv_module = spirv_reflect::create_shader_module(unsafe {
       core::slice::from_raw_parts(
-        code.as_ptr() as *const u8,
-        code.len() * core::mem::size_of::<u32>(),
+        patched_code.as_ptr() as *const u8,
+        patched_code.len() * core::mem::size_of::<u32>(),
       )
     })
     .map_err(|_| GpuError::InvalidShader)?;
@@ -187,4 +203,61 @@ impl Default for ShaderManager {
   fn default() -> Self {
     Self::new()
   }
+}
+
+/// Patches a SPIR-V binary in-place to force all functions to NOT inline.
+/// This severely limits monolithic stack frames in CPU Vulkan implementations,
+/// avoiding AArch64 link register (x30) clobbering and SIGSEGVs.
+pub fn patch_spirv_prevent_inlining(spv: &mut [u32]) {
+    // Validate the SPIR-V magic number (native endian)
+    if spv.len() < 5 || spv[0] != 0x07230203 {
+        return; 
+    }
+    
+    let mut i = 5; // Skip the 5-word SPIR-V header
+    while i < spv.len() {
+        let inst = spv[i];
+        let opcode = inst & 0xFFFF;
+        let word_count = (inst >> 16) as usize;
+        
+        if word_count == 0 { break; } // Safety break on malformed SPIR-V
+        
+        // 54 == OpFunction
+        if opcode == 54 && i + 3 < spv.len() {
+            // Function Control bitmask is the 3rd operand (at index i + 3)
+            // Bit 0 = Inline (0x1), Bit 1 = DontInline (0x2)
+            
+            // Clear the 'Inline' bit (if any) and strictly set the 'DontInline' bit
+            spv[i + 3] = (spv[i + 3] & !0x1) | 0x2;
+        }
+        
+        i += word_count;
+    }
+}
+
+pub fn disassemble_and_log_spirv(spv_code: &[u8]) {
+    #[cfg(target_family = "unix")]
+    unsafe {
+        let _ = aethervk_oshal_rlib::os::fs::write("/tmp/dump.spv".into(), spv_code);
+        let env_var = alloc::ffi::CString::new("VULKAN_SDK").unwrap();
+        let sdk_ptr = libc::getenv(env_var.as_ptr());
+        let cmd_str = if sdk_ptr.is_null() {
+            alloc::format!("spirv-dis /tmp/dump.spv")
+        } else {
+            let sdk = alloc::ffi::CStr::from_ptr(sdk_ptr).to_string_lossy();
+            alloc::format!("{}/bin/spirv-dis /tmp/dump.spv", sdk)
+        };
+        let cmd = alloc::ffi::CString::new(cmd_str).unwrap();
+        let mode = alloc::ffi::CString::new("r").unwrap();
+        let fp = libc::popen(cmd.as_ptr(), mode.as_ptr());
+        if !fp.is_null() {
+            let mut buf = [0i8; 1024];
+            let mut out = alloc::string::String::new();
+            while !libc::fgets(buf.as_mut_ptr(), buf.len() as i32, fp).is_null() {
+                out.push_str(&alloc::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy());
+            }
+            libc::pclose(fp);
+            aethervk_oshal_rlib::log!("SPIR-V Disassembly:\n{}", out);
+        }
+    }
 }

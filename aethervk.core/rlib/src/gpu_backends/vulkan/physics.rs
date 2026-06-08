@@ -571,8 +571,15 @@ impl PhysicsPipelines {
     let mut created_pipelines = alloc::vec::Vec::new();
 
     let mut create_pipeline = |spv_path: &str| -> GpuResult<(vk::Pipeline, u32)> {
-      let spv_code = aethervk_oshal_rlib::os::fs::read(spv_path)
+      let mut spv_code = aethervk_oshal_rlib::os::fs::read(spv_path)
         .map_err(|_| GpuError::BackendSpecific(alloc::format!("Failed to read {}", spv_path)))?;
+
+      if cfg!(debug_assertions) || cfg!(test) {
+        let (_, code_mut, _) = unsafe { spv_code.align_to_mut::<u32>() };
+        crate::gpu_backends::vulkan::device::shader_manager::patch_spirv_prevent_inlining(code_mut);
+        crate::gpu_backends::vulkan::device::shader_manager::disassemble_and_log_spirv(spv_code.as_slice());
+      }
+
       let (prefix, code, suffix) = unsafe { spv_code.align_to::<u32>() };
       assert!(prefix.is_empty() && suffix.is_empty());
 
