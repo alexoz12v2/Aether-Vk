@@ -14,10 +14,10 @@
 #include "imex_math.glsl"
 
 #ifndef LOCAL_SIZE_X
-#define LOCAL_SIZE_X 256
+#define LOCAL_SIZE_X 128
 #endif
 layout(local_size_x = LOCAL_SIZE_X) in;
-const uint SUBGROUPS_PER_WG = ((LOCAL_SIZE_X / SUBGROUP_SIZE) == 0 ? 1 : (LOCAL_SIZE_X / SUBGROUP_SIZE));
+const uint SUBGROUPS_PER_WG = (LOCAL_SIZE_X + 3) / 4;
 
 // Alias memory block mapping the float-based Wrench to uints for CAS compatibility
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer WrenchArrayUint {
@@ -114,7 +114,7 @@ void main() {
         bool is_leaf = bvh_is_leaf(meta);
 
         bool hit_node = hit_aabb && !is_leaf;
-        bool hit_leaf = hit_aabb && is_leaf && (my_p_idx != leaf_payload);
+        bool hit_leaf = hit_aabb && is_leaf;
 
         uvec4 leaf_ballot = subgroupBallot(hit_leaf);
 
@@ -124,29 +124,37 @@ void main() {
                 uint bit = findLSB(mask);
                 mask &= ~(1u << bit);
 
-                uint other_idx = subgroupShuffle(leaf_payload, i * 32 + bit);
-                uint block_idx = other_idx / SUBGROUP_SIZE;
-                uint local_idx = other_idx % SUBGROUP_SIZE;
-                uint base = block_idx * (PARTICLE_FIELDS * SUBGROUP_SIZE) + local_idx;
+                uint src_lane = i * 32 + bit;
+                uint s_start = subgroupShuffle(pc.bvh.nodes[node_idx].particle_start[src_lane], src_lane);
+                uint s_count = subgroupShuffle(pc.bvh.nodes[node_idx].particle_count[src_lane], src_lane);
 
-                vec3 other_pos = vec3(
-                    uintBitsToFloat(pc.particles.data[base + 0u * SUBGROUP_SIZE]),
-                    uintBitsToFloat(pc.particles.data[base + 1u * SUBGROUP_SIZE]),
-                    uintBitsToFloat(pc.particles.data[base + 2u * SUBGROUP_SIZE])
-                );
+                for (uint p = 0; p < s_count; p++) {
+                    uint other_idx = s_start + p;
+                    if (other_idx == my_p_idx) continue;
 
-                vec3 diff = my_pos - other_pos;
-                float dist_sq = dot(diff, diff);
-                float min_dist = my_radius * 2.0;
+                    uint block_idx = other_idx / SUBGROUP_SIZE;
+                    uint local_idx = other_idx % SUBGROUP_SIZE;
+                    uint base = block_idx * (PARTICLE_FIELDS * SUBGROUP_SIZE) + local_idx;
 
-                if (dist_sq > 1e-12 && dist_sq < min_dist * min_dist) {
-                    float dist = sqrt(dist_sq);
-                    float penetration = min_dist - dist;
-                    vec3 normal = diff / dist;
+                    vec3 other_pos = vec3(
+                        uintBitsToFloat(pc.particles.data[base + 0u * SUBGROUP_SIZE]),
+                        uintBitsToFloat(pc.particles.data[base + 1u * SUBGROUP_SIZE]),
+                        uintBitsToFloat(pc.particles.data[base + 2u * SUBGROUP_SIZE])
+                    );
 
-                    float force_mag = pc.stiffness * penetration;
-                    vec3 applied_force = normal * force_mag;
-                    local_repulsive_force += applied_force;
+                    vec3 diff = my_pos - other_pos;
+                    float dist_sq = dot(diff, diff);
+                    float min_dist = my_radius * 2.0;
+
+                    if (dist_sq > 1e-12 && dist_sq < min_dist * min_dist) {
+                        float dist = sqrt(dist_sq);
+                        float penetration = min_dist - dist;
+                        vec3 normal = diff / dist;
+
+                        float force_mag = pc.stiffness * penetration;
+                        vec3 applied_force = normal * force_mag;
+                        local_repulsive_force += applied_force;
+                    }
                 }
             }
         }

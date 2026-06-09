@@ -124,7 +124,7 @@ pub fn start_logic_thread(
                 scenes.get(&scene_id).unwrap().clone()
               };
 
-              let (outlines, sun, sky, cursor, callback, active_physics_task) = {
+              let (outlines, sun, sky, cursor, callback, active_physics_task, cached_timeline_semaphore) = {
                 let r = scene.read();
                 (
                   r.outlines_enabled.load(core::sync::atomic::Ordering::Acquire),
@@ -133,6 +133,7 @@ pub fn start_logic_thread(
                   r.cursor_entity,
                   r.custom_render_callback,
                   r.active_physics_task.clone(),
+                  r.latest_physics_sync.read().map(|s| (s.timeline_semaphore, s.timeline_value)),
                 )
               };
 
@@ -148,6 +149,7 @@ pub fn start_logic_thread(
                 cursor_entity: cursor,
                 custom_render_callback: callback,
                 active_physics_task,
+                cached_timeline_semaphore,
               });
 
               last_tasks.push((task_id, is_windowless, pe.0));
@@ -2019,6 +2021,18 @@ fn emit_particles_from_circles(
     )>,
   )> = alloc::vec::Vec::new();
 
+  let mut sun_pos = None;
+  scene.query2::<crate::scene::TransformComponent, crate::scene::SunComponent, _>(|_, t, _| {
+    sun_pos = Some(t.position);
+  });
+
+  let mut occluders: alloc::vec::Vec<(crate::scene::TransformComponent, alloc::sync::Arc<crate::simulation::comet::Comet>)> = alloc::vec::Vec::new();
+  scene.query2::<crate::scene::TransformComponent, crate::scene::PhysicalMeshComponent, _>(|_, t, mesh| {
+    if mesh.mesh.bvh.is_some() {
+      occluders.push((*t, mesh.mesh.clone()));
+    }
+  });
+
   scene.query2::<TransformComponent, ParticleEmitterCirclesComponent, _>(
     |entity_id, transform, emitter| {
       let parent_rot = transform.rotation;
@@ -2066,6 +2080,37 @@ fn emit_particles_from_circles(
         // Push slightly outside the surface
         let emit_pos = world_pos + world_n * 0.001; // 1 meter offset
 
+        let mut occluded = false;
+        if let Some(sun_p) = sun_pos {
+          let to_sun = sun_p - emit_pos;
+          let dist_to_sun = to_sun.length();
+          if dist_to_sun > 1e-4 {
+            let ray_dir = to_sun * (1.0 / dist_to_sun);
+            for (occ_t, occ_comet) in &occluders {
+              if let Some(bvh) = &occ_comet.bvh {
+                let inv_rot = occ_t.rotation.inverse();
+                let local_origin = inv_rot.rotate_vector(emit_pos - occ_t.position) * (1.0 / occ_t.scale.x());
+                let local_dir = inv_rot.rotate_vector(ray_dir);
+
+                if let Some((hit_t, _, _)) = bvh.raycast(
+                  local_origin,
+                  local_dir,
+                  &occ_comet.vertices,
+                  &occ_comet.indices,
+                ) {
+                  if hit_t > 0.0 && hit_t * occ_t.scale.x() < dist_to_sun {
+                    occluded = true;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+        if occluded {
+          continue;
+        }
+
         // Convert TTL: EmissionCircle.ttl is in "ticks" in the UI.
         // We store it as microseconds by multiplying by this tick's dt_us.
         // If ttl is 0, particles never expire.
@@ -2108,31 +2153,45 @@ fn emit_particles_from_circles(
         }
 
         let mut particles = psc.particles.write();
+        let capacity = psc.capacity;
+        if capacity == 0 {
+          return;
+        }
 
         // ── 1. Age existing particles and reap expired ones ─────────────
-        // Collect indices of dead slots for reuse during emission.
-        let mut free_slots: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
         let ttl = psc.ttl_us;
-        for (idx, p) in particles.iter_mut().enumerate() {
-          if p.active == 0 {
-            free_slots.push(idx);
-            continue;
+        let mut idx = psc.head_index;
+        while idx < psc.tail_index {
+          let p_idx = idx % capacity;
+          let p = &mut particles[p_idx];
+          if p.active != 0 {
+            let age = p.get_age() + dt_us;
+            p.set_age(age);
+            if ttl > 0 && age >= ttl {
+              p.active = 0;
+            }
           }
-          // Increment age
-          let age = p.get_age() + dt_us;
-          p.set_age(age);
-          // Check expiry
-          if ttl > 0 && age >= ttl {
-            p.active = 0;
-            free_slots.push(idx);
+          idx += 1;
+        }
+
+        // Advance head if leading particles are inactive
+        while psc.head_index < psc.tail_index {
+          let p_idx = psc.head_index % capacity;
+          if particles[p_idx].active == 0 {
+            psc.head_index += 1;
+          } else {
+            break;
           }
         }
 
-        // ── 2. Emit new particles, reusing dead slots first ─────────────
-        let max_cap = particles.capacity();
-        let mut free_idx = 0usize;
-
+        // ── 2. Emit new particles, writing at tail ─────────────
         for _ in 0..count {
+          if psc.tail_index - psc.head_index >= capacity {
+            // Drop oldest particle if buffer full
+            let old_idx = psc.head_index % capacity;
+            particles[old_idx].active = 0;
+            psc.head_index += 1;
+          }
           // Simple LCG random for velocity jitter
           rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
           let u0 = ((rng_state >> 33) as f32) / (u32::MAX as f32);
@@ -2190,30 +2249,24 @@ fn emit_particles_from_circles(
             n
           };
 
-          let vel = world_dir * speed;
+          let vel_jittered = [
+            (world_dir * speed).x(),
+            (world_dir * speed).y(),
+            (world_dir * speed).z(),
+          ];
 
-          let mut p = ParticleData {
-            id_low: 0,
-            id_high: 0,
-            age_low: 0,
-            age_high: 0,
-            position: pos,
-            mass,
-            velocity: [vel.x(), vel.y(), vel.z()],
-            active: 1,
-          };
-          p.set_id(psc.next_id as u64);
-          p.set_age(0);
+          let p_idx = psc.tail_index % capacity;
+          let id = psc.next_id as u64;
           psc.next_id += 1;
+          psc.tail_index += 1;
 
-          // Prefer reusing a dead slot; otherwise push if under capacity
-          if free_idx < free_slots.len() {
-            particles[free_slots[free_idx]] = p;
-            free_idx += 1;
-          } else if particles.len() < max_cap {
-            particles.push(p);
-          }
-          // else: buffer full and no free slots — skip this particle
+          let p = &mut particles[p_idx];
+          p.set_id(id);
+          p.set_age(0);
+          p.position = pos;
+          p.velocity = vel_jittered;
+          p.mass = mass;
+          p.active = 1;
         }
       });
     }
@@ -2330,6 +2383,7 @@ fn dispatch_physics_step(
     let scene_clone = scene_arc.clone();
     let pool_clone = ctx.thread_pool.clone();
     let kernels_arc = ctx.kernels.clone();
+    let sync_info_clone = scene_read.latest_physics_sync.clone();
     let (engine_type, collisions_enabled) = (
       *scene_read.physics_engine_type.read(),
       scene_read.collisions_enabled.load(core::sync::atomic::Ordering::Relaxed),
@@ -2444,6 +2498,10 @@ fn dispatch_physics_step(
 
         if let Err(e) = &res {
           aethervk_oshal_rlib::log!("Physics tasklet failed internally: {:?}", e);
+        }
+
+        if let Ok(Some(sync)) = &res {
+          *sync_info_clone.write() = Some(*sync);
         }
 
         res

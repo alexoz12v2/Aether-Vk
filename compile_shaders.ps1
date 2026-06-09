@@ -14,7 +14,16 @@ if (-not (Test-Path $glslc)) {
     }
 }
 
-$CommonFlags = @("-x", "glsl", "--target-env=vulkan1.1", "--target-spv=spv1.4", "-std=450core")
+$spirvVal = Join-Path $env:VULKAN_SDK "bin\spirv-val.exe"
+if (-not (Test-Path $spirvVal)) {
+    $spirvVal = Join-Path $env:VULKAN_SDK "Bin\spirv-val.exe"
+    if (-not (Test-Path $spirvVal)) {
+        Write-Error "spirv-val not found in VULKAN_SDK\bin or VULKAN_SDK\Bin"
+        exit 1
+    }
+}
+
+$CommonFlags = @("-x", "glsl", "--target-env=vulkan1.1", "--target-spv=spv1.3", "-std=450core", "-Os")
 $WgSizes = @(4, 8, 16, 32, 64, 128, 256)
 
 $WgVariantShaders = @(
@@ -66,10 +75,16 @@ function Compile-One {
     }
     $ArgsList += "-o", $Out, $File
 
-    $process = Start-Process -FilePath $glslc -ArgumentList $ArgsList -Wait -NoNewWindow -PassThru
-    if ($process.ExitCode -ne 0) {
+    & $glslc $ArgsList
+    if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to compile $File -> $Out"
-        exit $process.ExitCode
+        exit $LASTEXITCODE
+    }
+
+    & $spirvVal $Out
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Validation failed for $Out"
+        exit $LASTEXITCODE
     }
 }
 
@@ -98,9 +113,9 @@ foreach ($file in $compFiles) {
         foreach ($wg in $WgSizes) {
             if (Test-Path $bvhUtilsPath) {
                 Copy-Item -Path $bvhUtilsPath -Destination $bvhUtilsBak -Force
-                $content = Get-Content $bvhUtilsPath -Raw
+                $content = [System.IO.File]::ReadAllText($bvhUtilsPath)
                 $newContent = $content -replace "SUBGROUP_SIZE\s*=\s*[0-9]+", "SUBGROUP_SIZE = $wg"
-                Set-Content -Path $bvhUtilsPath -Value $newContent -NoNewline
+                [System.IO.File]::WriteAllText($bvhUtilsPath, $newContent)
             }
             
             $outWg = "$outBase.comp.wg$wg.spv"

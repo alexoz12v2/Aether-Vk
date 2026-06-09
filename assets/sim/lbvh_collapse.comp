@@ -4,8 +4,16 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_KHR_shader_subgroup_ballot : require
 
+#ifdef DEBUG_SHADERS
+  #extension GL_EXT_debug_printf : enable
+#endif
+
 #include "../bvh_utils.glsl"
-layout(local_size_x_id = 0) in;
+
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X) in;
 
 layout(push_constant, std430) uniform PushConstants {
     MultiBvhBuffer binary_bvh;
@@ -18,26 +26,95 @@ void main() {
     uint multi_node_idx = gl_WorkGroupID.x;
     if (multi_node_idx >= pc.num_multi_nodes) return;
 
-    uint lane = gl_SubgroupInvocationID, binary_idx = pc.collapse_map.binary_roots[multi_node_idx];
-    bool is_leaf = false; uint payload = 0, f_parent = 0, f_dir = 0;
+    uint lane = gl_SubgroupInvocationID;
+
+#ifdef DEBUG_SHADERS
+    bool is_trace_thread = (multi_node_idx == 0 && lane == 0);
+    if (is_trace_thread) {
+        debugPrintfEXT("--- STARTING BVH COLLAPSE multi_node_idx=0 ---\n");
+    }
+#endif
+
+    // Trap 1: Checking the initial collapse map read
+    uint binary_idx = pc.collapse_map.binary_roots[multi_node_idx];
+
+#ifdef DEBUG_SHADERS
+    if (binary_idx > 100000000u) {
+        debugPrintfEXT("TRAP! Garbage binary_idx=%u from collapse_map at multi_node_idx=%u\n", binary_idx, multi_node_idx);
+    }
+    if (is_trace_thread) debugPrintfEXT("Initial binary_idx=%u\n", binary_idx);
+#endif
+
+    bool is_leaf = false;
+    uint payload = 0, f_parent = 0, f_dir = 0;
 
     int depth = findMSB(SUBGROUP_SIZE) - 1;
     int break_d = -1;
+
+#ifdef DEBUG_SHADERS
+    if (is_trace_thread) debugPrintfEXT("Subgroup size=%u, calculated depth limit=%d\n", SUBGROUP_SIZE, depth);
+#endif
+
     for (int d = depth; d >= 0; d--) {
         uint dir = (lane >> d) & 1u;
-        uint meta = pc.binary_bvh.nodes[binary_idx].metadata[dir];
-        is_leaf = bvh_is_leaf(meta); uint next_idx = bvh_get_index(meta);
 
-        f_parent = binary_idx; f_dir = dir;
-        if (is_leaf) { payload = next_idx; break_d = d; break; }
+#ifdef DEBUG_SHADERS
+        // Trap 2: Catch runaway indices during downward traversal
+        if (binary_idx > 100000000u) {
+            debugPrintfEXT("TRAP! About to read binary_bvh with massive binary_idx=%u at depth=%d, lane=%u\n", binary_idx, d, lane);
+        }
+#endif
+
+        uint meta = pc.binary_bvh.nodes[binary_idx].metadata[dir];
+        is_leaf = bvh_is_leaf(meta);
+        uint next_idx = bvh_get_index(meta);
+
+        f_parent = binary_idx;
+        f_dir = dir;
+
+#ifdef DEBUG_SHADERS
+        if (is_trace_thread) {
+            debugPrintfEXT("  Loop d=%d | dir=%u | is_leaf=%d | next_idx=%u\n", d, dir, int(is_leaf), next_idx);
+        }
+#endif
+
+        if (is_leaf) {
+            payload = next_idx;
+            break_d = d;
+            break;
+        }
         binary_idx = next_idx;
     }
 
     if (!is_leaf) {
-        payload = binary_idx; f_parent = pc.binary_bvh.nodes[binary_idx].parent_idx;
+        payload = binary_idx;
+
+#ifdef DEBUG_SHADERS
+        // Trap 3: Catch invalid final node state reads
+        if (binary_idx > 100000000u) {
+             debugPrintfEXT("TRAP! Reading parent_idx from massive binary_idx=%u (lane=%u)\n", binary_idx, lane);
+        }
+#endif
+
+        f_parent = pc.binary_bvh.nodes[binary_idx].parent_idx;
+
+#ifdef DEBUG_SHADERS
+        if (f_parent > 100000000u) {
+             debugPrintfEXT("TRAP! Resolving f_dir with massive f_parent=%u (binary_idx=%u)\n", f_parent, binary_idx);
+        }
+#endif
+
         f_dir = (pc.binary_bvh.nodes[f_parent].child_indices[1] == binary_idx) ? 1 : 0;
     }
 
+#ifdef DEBUG_SHADERS
+    // Trap 4: Ultimate memory bounds trap before the massive attribute read/write block
+    if (f_parent > 100000000u) {
+        debugPrintfEXT("TRAP! FATAL f_parent=%u before massive data read! multi_node=%u, lane=%u\n", f_parent, multi_node_idx, lane);
+    }
+#endif
+
+    // Massive block: if f_parent is garbage, this is where the GPU dies.
     pc.multi_bvh.nodes[multi_node_idx].min_x[lane] = pc.binary_bvh.nodes[f_parent].min_x[f_dir];
     pc.multi_bvh.nodes[multi_node_idx].max_x[lane] = pc.binary_bvh.nodes[f_parent].max_x[f_dir];
     pc.multi_bvh.nodes[multi_node_idx].min_y[lane] = pc.binary_bvh.nodes[f_parent].min_y[f_dir];
@@ -51,6 +128,9 @@ void main() {
     pc.multi_bvh.nodes[multi_node_idx].com_x[lane] = pc.binary_bvh.nodes[f_parent].com_x[f_dir];
     pc.multi_bvh.nodes[multi_node_idx].com_y[lane] = pc.binary_bvh.nodes[f_parent].com_y[f_dir];
     pc.multi_bvh.nodes[multi_node_idx].com_z[lane] = pc.binary_bvh.nodes[f_parent].com_z[f_dir];
+    pc.multi_bvh.nodes[multi_node_idx].force_x[lane] = 0.0;
+    pc.multi_bvh.nodes[multi_node_idx].force_y[lane] = 0.0;
+    pc.multi_bvh.nodes[multi_node_idx].force_z[lane] = 0.0;
 
     bool is_valid_lane = (break_d <= 0) || ((lane & ((1u << break_d) - 1u)) == 0u);
     uvec4 valid_ballot = subgroupBallot(is_valid_lane);
@@ -60,5 +140,8 @@ void main() {
         for (uint i = 0; i < 8; ++i)
             for (uint j = 0; j < SUBGROUP_SIZE; ++j) pc.multi_bvh.nodes[multi_node_idx].permutations[i][j] = j;
     }
-}
 
+#ifdef DEBUG_SHADERS
+    if (is_trace_thread) debugPrintfEXT("--- FINISHED BVH COLLAPSE multi_node_idx=0 ---\n");
+#endif
+}

@@ -644,6 +644,9 @@ mod tests {
     };
     let mut sys = ParticleSystemComponent {
       particles: std::sync::Arc::new(parking_lot::RwLock::new(vec![p1])),
+      capacity: 100_000,
+      head_index: 1,
+      tail_index: 1,
       bvh: None,
       accumulator: 0,
       next_id: 1,
@@ -769,6 +772,9 @@ mod tests {
     };
     let mut sys = ParticleSystemComponent {
       particles: std::sync::Arc::new(parking_lot::RwLock::new(vec![p1])),
+      capacity: 100_000,
+      head_index: 1,
+      tail_index: 1,
       bvh: None,
       accumulator: 0,
       next_id: 1,

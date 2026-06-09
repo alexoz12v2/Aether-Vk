@@ -18,8 +18,8 @@ unsafe impl Sync for MappedFile {}
 
 impl MappedFile {
   /// TODO: Document this item
-  pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, FsError> {
-    let mut path_buf = path.as_ref().to_pathbuf();
+  pub fn new<P: crate::os::fs::IntoPathBuf>(path: P) -> Result<Self, FsError> {
+    let mut path_buf = path.into_pathbuf();
 
     #[cfg(windows)]
     {
@@ -247,12 +247,12 @@ impl AsRef<[u8]> for Mmap {
 #[cfg(target_family = "unix")]
 impl Mmap {
   /// TODO: Document this item
-  pub fn open<P: AsRef<os::fs::Path>>(path: P) -> NativeResult<Self> {
+  pub fn open<P: crate::os::fs::IntoPathBuf>(path: P) -> NativeResult<Self> {
     use alloc::string::ToString;
     use core::{mem, ptr};
     use libc::{MAP_FAILED, MAP_PRIVATE, O_RDONLY, PROT_READ, close, fstat, mmap, open};
 
-    let path_str = path.as_ref().to_str_unified().ok_or(NativeError::InvalidArgument)?.to_string();
+    let path_str = path.into_pathbuf().to_str_unified().ok_or(NativeError::InvalidArgument)?.to_string();
     let c_path = alloc::ffi::CString::new(path_str).map_err(|_| NativeError::InvalidArgument)?;
     let fd = unsafe { open(c_path.as_ptr(), O_RDONLY) };
     if fd < 0 {
@@ -300,7 +300,7 @@ impl Drop for Mmap {
 #[cfg(windows)]
 impl Mmap {
   /// TODO: Document this item
-  pub fn open<P: AsRef<os::fs::Path>>(path: P) -> NativeResult<Self> {
+  pub fn open<P: crate::os::fs::IntoPathBuf>(path: P) -> NativeResult<Self> {
     use windows::Win32::{
       Foundation::{CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE},
       Storage::FileSystem::{
@@ -310,7 +310,7 @@ impl Mmap {
     };
     let path = {
       let mut p: alloc::vec::Vec<u16> = path
-        .as_ref()
+        .into_pathbuf()
         .to_str_unified()
         .map(|cow| cow.into_owned().encode_utf16().collect())
         .ok_or(NativeError::InvalidArgument)?;

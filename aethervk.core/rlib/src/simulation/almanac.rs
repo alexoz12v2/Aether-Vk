@@ -62,14 +62,14 @@ pub struct AlmanacPackedData {
 impl AlmanacPackedData {
   // TODO `celestial_name_from_id` to create planet/sun entities
   /// TODO: Document this item
-  pub fn load_almanac<P: AsRef<os::fs::Path>>(&mut self, path: P) -> EngineResult<()> {
-    let path_ref = path.as_ref();
+  pub fn load_almanac<P: os::fs::IntoPathBuf>(&mut self, path: P) -> EngineResult<()> {
+    let path_ref = path.into_pathbuf();
     let is_valid_ext =
       |ext: Option<&str>| ext == Some("bsp") || ext == Some("bpc") || ext == Some("tpc");
 
     if path_ref.is_file() && is_valid_ext(path_ref.extension().as_deref()) {
-      self.load_single_spk(path_ref)?;
-    } else if let Ok(entries) = os::fs::read_dir(path_ref) {
+      self.load_single_spk(&path_ref)?;
+    } else if let Ok(entries) = os::fs::read_dir(&path_ref) {
       for entry in entries.flatten() {
         let entry_path = entry.path();
         if entry_path.is_file() && is_valid_ext(entry_path.extension().as_deref()) {
@@ -94,7 +94,7 @@ impl AlmanacPackedData {
   /// Uses `spk_domain()` which reads SPK segment summaries directly —
   /// no ephemeris path resolution is performed, so this works with just
   /// the comet's SPK file (no de440s.bsp required).
-  pub fn probe_spk_file<P: AsRef<os::fs::Path>>(
+  pub fn probe_spk_file<P: os::fs::IntoPathBuf>(
     path: P,
     spk_id: i32,
     start_epoch: anise::time::Epoch,
@@ -112,19 +112,19 @@ impl AlmanacPackedData {
   /// to `spk_domains()` to find the target body in the file. This handles
   /// JPL Horizons SPK files where the record number (e.g. 90000702) differs
   /// from the NAIF target_id stored in the SPK segment (e.g. 1000012).
-  pub fn probe_spk_file_with_domain<P: AsRef<os::fs::Path>>(
+  pub fn probe_spk_file_with_domain<P: os::fs::IntoPathBuf>(
     path: P,
     spk_id: i32,
     start_epoch: anise::time::Epoch,
     end_epoch: anise::time::Epoch,
   ) -> (bool, Option<(anise::time::Epoch, anise::time::Epoch)>, i32) {
-    let path_ref = path.as_ref();
+    let path_ref = path.into_pathbuf();
 
     // Load the SPK directly into a bare Almanac — we intentionally bypass
     // AlmanacPackedData::load_almanac because that triggers refresh_spk_coverage,
     // which calls translate_geometric with the Sun as observer and panics when
     // the planetary DE ephemeris (de440s.bsp) is not loaded.
-    let mmap = match Mmap::open(path_ref) {
+    let mmap = match Mmap::open(&path_ref) {
       Ok(m) => m,
       Err(_) => return (false, None, 0),
     };

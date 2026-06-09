@@ -6,7 +6,7 @@
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
 #ifndef LOCAL_SIZE_X
-#define LOCAL_SIZE_X 256
+#define LOCAL_SIZE_X 128
 #endif
 layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
 layout(constant_id = 1) const uint PRIMITIVE_TYPE = 0;

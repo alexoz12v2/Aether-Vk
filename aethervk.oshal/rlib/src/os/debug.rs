@@ -20,6 +20,12 @@ pub static LOGGER_CALLBACK: core::sync::atomic::AtomicPtr<()> =
 mod windows_debug {
   use core::fmt;
   use windows::{Win32::System::Diagnostics::Debug::OutputDebugStringW, core::HSTRING};
+  use windows::Win32::System::Diagnostics::Debug::{
+    RtlCaptureStackBackTrace, SymFromAddr, SymInitialize, SymSetOptions, SYMBOL_INFO,
+  };
+  use windows::Win32::System::Threading::GetCurrentProcess;
+  use windows::core::PCSTR;
+  // Removed duplicate HANDLE import
 
   #[cfg(feature = "console_log")]
   use spin::Once;
@@ -91,8 +97,66 @@ mod windows_debug {
     }
   }
 
-  pub fn capture_aethervk_trace(_skip: usize) -> Option<[usize; 4]> {
-    None
+  fn init_sym(process: windows::Win32::Foundation::HANDLE) {
+    static SYM_INIT: ::spin::Once<()> = ::spin::Once::new();
+    SYM_INIT.call_once(|| unsafe {
+      SymSetOptions(0x00000002); // SYMOPT_UNDNAME
+      let _ = SymInitialize(process, PCSTR::null(), true);
+    });
+  }
+
+  pub fn capture_aethervk_trace(skip: usize) -> Option<[usize; 4]> {
+    unsafe {
+      let process = GetCurrentProcess();
+      init_sym(process);
+
+      let mut buffer: [*mut core::ffi::c_void; 64] = [core::ptr::null_mut(); 64];
+      let frames = RtlCaptureStackBackTrace(0, &mut buffer, None);
+
+      if frames == 0 {
+        return None;
+      }
+
+      const SYMBOL_BUFFER_SIZE: usize = core::mem::size_of::<SYMBOL_INFO>() + 256;
+      #[repr(C, align(8))]
+      struct SymbolBuffer([u8; SYMBOL_BUFFER_SIZE]);
+
+      let mut trace = [0usize; 4];
+      let mut count = 0;
+      let mut skipped = 0;
+
+      for i in 0..frames {
+        let addr = buffer[i as usize];
+        let mut sym_buf = core::mem::MaybeUninit::<SymbolBuffer>::zeroed();
+        let symbol_info = sym_buf.as_mut_ptr() as *mut SYMBOL_INFO;
+
+        (*symbol_info).SizeOfStruct = core::mem::size_of::<SYMBOL_INFO>() as u32;
+        (*symbol_info).MaxNameLen = 255;
+
+        let mut displacement: u64 = 0;
+        if SymFromAddr(process, addr as u64, Some(&mut displacement), symbol_info).is_ok() {
+          let name_len = core::cmp::min((*symbol_info).NameLen as usize, 254);
+          let name_ptr = (*symbol_info).Name.as_ptr() as *const u8;
+          let name_slice = core::slice::from_raw_parts(name_ptr, name_len);
+
+          if let Ok(name_str) = core::str::from_utf8(name_slice) {
+            if name_str.contains("aethervk") {
+              if skipped < skip {
+                skipped += 1;
+                continue;
+              }
+              trace[count] = addr as usize;
+              count += 1;
+              if count == 4 {
+                return Some(trace);
+              }
+            }
+          }
+        }
+      }
+
+      if count > 0 { Some(trace) } else { None }
+    }
   }
 
   /// TODO: Document this item
@@ -137,68 +201,12 @@ mod windows_debug {
 
   /// TODO: Document this item
   pub fn print_stacktrace() {
-    use core::mem::{MaybeUninit, size_of};
-
-    // We define standard Win32 structures to circumvent differing
-    // pointer/handle types mapped across versions of the windows-rs crate.
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-      fn RtlCaptureStackBackTrace(
-        FramesToSkip: u32,
-        FramesToCapture: u32,
-        BackTrace: *mut *mut core::ffi::c_void,
-        BackTraceHash: *mut u32,
-      ) -> u16;
-      fn GetCurrentProcess() -> *mut core::ffi::c_void;
-    }
-
-    #[link(name = "dbghelp")]
-    unsafe extern "system" {
-      fn SymInitialize(
-        hProcess: *mut core::ffi::c_void,
-        UserSearchPath: *const core::ffi::c_char,
-        fInvadeProcess: i32,
-      ) -> i32;
-      fn SymSetOptions(SymOptions: u32) -> u32;
-      fn SymFromAddr(
-        hProcess: *mut core::ffi::c_void,
-        Address: u64,
-        Displacement: *mut u64,
-        Symbol: *mut SYMBOL_INFO,
-      ) -> i32;
-    }
-
-    #[repr(C)]
-    struct SYMBOL_INFO {
-      SizeOfStruct: u32,
-      TypeIndex: u32,
-      Reserved: [u64; 2],
-      Index: u32,
-      Size: u32,
-      ModBase: u64,
-      Flags: u32,
-      Value: u64,
-      Address: u64,
-      Register: u32,
-      Scope: u32,
-      Tag: u32,
-      NameLen: u32,
-      MaxNameLen: u32,
-      Name: [core::ffi::c_char; 1],
-    }
-
     unsafe {
       let process = GetCurrentProcess();
-
-      // Ensures DbgHelp's initialization happens safely exactly once.
-      static SYM_INIT: ::spin::Once<()> = ::spin::Once::new();
-      SYM_INIT.call_once(|| {
-        SymSetOptions(0x00000002); // SYMOPT_UNDNAME (Demangles C++ names)
-        SymInitialize(process, core::ptr::null(), 1); // 1 = TRUE (fInvadeProcess)
-      });
+      init_sym(process);
 
       let mut buffer: [*mut core::ffi::c_void; 64] = [core::ptr::null_mut(); 64];
-      let frames = RtlCaptureStackBackTrace(0, 64, buffer.as_mut_ptr(), core::ptr::null_mut());
+      let frames = RtlCaptureStackBackTrace(0, &mut buffer, None);
 
       if frames == 0 {
         crate::log!("Stacktrace: (empty or failed to capture)");
@@ -207,25 +215,21 @@ mod windows_debug {
 
       crate::log!("Stacktrace:");
 
-      // Align memory to 8-byte bounds. SYMBOL_INFO requires contiguous trailing space
-      // for the dynamically sized name string since DbgHelp natively maps into it.
-      const SYMBOL_BUFFER_SIZE: usize = size_of::<SYMBOL_INFO>() + 256;
+      const SYMBOL_BUFFER_SIZE: usize = core::mem::size_of::<SYMBOL_INFO>() + 256;
       #[repr(C, align(8))]
       struct SymbolBuffer([u8; SYMBOL_BUFFER_SIZE]);
 
       for i in 0..frames {
         let addr = buffer[i as usize];
 
-        let mut sym_buf = MaybeUninit::<SymbolBuffer>::zeroed();
+        let mut sym_buf = core::mem::MaybeUninit::<SymbolBuffer>::zeroed();
         let symbol_info = sym_buf.as_mut_ptr() as *mut SYMBOL_INFO;
 
-        (*symbol_info).SizeOfStruct = size_of::<SYMBOL_INFO>() as u32;
+        (*symbol_info).SizeOfStruct = core::mem::size_of::<SYMBOL_INFO>() as u32;
         (*symbol_info).MaxNameLen = 255;
 
         let mut displacement: u64 = 0;
-        let success = SymFromAddr(process, addr as u64, &mut displacement, symbol_info);
-
-        if success != 0 {
+        if SymFromAddr(process, addr as u64, Some(&mut displacement), symbol_info).is_ok() {
           let name_len = core::cmp::min((*symbol_info).NameLen as usize, 254);
           let name_ptr = (*symbol_info).Name.as_ptr() as *const u8;
           let name_slice = core::slice::from_raw_parts(name_ptr, name_len);
@@ -242,21 +246,104 @@ mod windows_debug {
           }
         }
 
-        // Fallback if the symbol wasn't natively resolvable / valid utf-8
         crate::log!("  [{:2}] <unknown> ({:p})", i, addr);
       }
     }
   }
 
   pub fn resolve_and_print_trace(trace: &[usize]) {
-    crate::log!("  (Symbol resolution from trace not natively supported on Windows yet)");
-    for (i, &addr) in trace.iter().enumerate() {
-      crate::log!("  [{:2}] {:#X}", i, addr);
+    unsafe {
+      let process = GetCurrentProcess();
+      init_sym(process);
+
+      const SYMBOL_BUFFER_SIZE: usize = core::mem::size_of::<SYMBOL_INFO>() + 256;
+      #[repr(C, align(8))]
+      struct SymbolBuffer([u8; SYMBOL_BUFFER_SIZE]);
+
+      for (i, &addr) in trace.iter().enumerate() {
+        let mut sym_buf = core::mem::MaybeUninit::<SymbolBuffer>::zeroed();
+        let symbol_info = sym_buf.as_mut_ptr() as *mut SYMBOL_INFO;
+
+        (*symbol_info).SizeOfStruct = core::mem::size_of::<SYMBOL_INFO>() as u32;
+        (*symbol_info).MaxNameLen = 255;
+
+        let mut displacement: u64 = 0;
+        if SymFromAddr(process, addr as u64, Some(&mut displacement), symbol_info).is_ok() {
+          let name_len = core::cmp::min((*symbol_info).NameLen as usize, 254);
+          let name_ptr = (*symbol_info).Name.as_ptr() as *const u8;
+          let name_slice = core::slice::from_raw_parts(name_ptr, name_len);
+
+          if let Ok(name_str) = core::str::from_utf8(name_slice) {
+            crate::log!(
+              "  [{:2}] {} +0x{:x} ({:#X})",
+              i,
+              name_str,
+              displacement,
+              addr
+            );
+            continue;
+          }
+        }
+        crate::log!("  [{:2}] <unknown> ({:#X})", i, addr);
+      }
     }
   }
 
-  pub fn print_aethervk_stacktrace(_skip: usize, _max: usize) {
-    crate::log!("AetherVk Stacktrace: Not natively supported by libc in this target environment.");
+  pub fn print_aethervk_stacktrace(skip: usize, max: usize) {
+    unsafe {
+      let process = GetCurrentProcess();
+      init_sym(process);
+
+      let mut buffer: [*mut core::ffi::c_void; 64] = [core::ptr::null_mut(); 64];
+      let frames = RtlCaptureStackBackTrace(0, &mut buffer, None);
+
+      if frames == 0 {
+        crate::log!("AetherVk Stacktrace: (empty)");
+        return;
+      }
+
+      crate::log!("AetherVk Stacktrace:");
+      let mut count = 0;
+
+      const SYMBOL_BUFFER_SIZE: usize = core::mem::size_of::<SYMBOL_INFO>() + 256;
+      #[repr(C, align(8))]
+      struct SymbolBuffer([u8; SYMBOL_BUFFER_SIZE]);
+
+      for i in 0..frames {
+        let addr = buffer[i as usize];
+
+        let mut sym_buf = core::mem::MaybeUninit::<SymbolBuffer>::zeroed();
+        let symbol_info = sym_buf.as_mut_ptr() as *mut SYMBOL_INFO;
+
+        (*symbol_info).SizeOfStruct = core::mem::size_of::<SYMBOL_INFO>() as u32;
+        (*symbol_info).MaxNameLen = 255;
+
+        let mut displacement: u64 = 0;
+        if SymFromAddr(process, addr as u64, Some(&mut displacement), symbol_info).is_ok() {
+          let name_len = core::cmp::min((*symbol_info).NameLen as usize, 254);
+          let name_ptr = (*symbol_info).Name.as_ptr() as *const u8;
+          let name_slice = core::slice::from_raw_parts(name_ptr, name_len);
+
+          if let Ok(name_str) = core::str::from_utf8(name_slice) {
+            if name_str.contains("aethervk") {
+              if count >= skip {
+                crate::log!(
+                  "  [{:2}] {} +0x{:x} ({:p})",
+                  i,
+                  name_str,
+                  displacement,
+                  addr
+                );
+                if count - skip + 1 >= max {
+                  break;
+                }
+              }
+              count += 1;
+            }
+          }
+        }
+      }
+    }
   }
 }
 
@@ -542,7 +629,7 @@ pub mod fpe {
   ///    exceptions from Structured Exception Handling (SEH) (Source: Windows Via C/C++ 5th ed)
   /// This function is the exception handling routine
   #[cfg(windows)]
-  unsafe extern "system" fn veh_handler(
+  unsafe extern "system-unwind" fn veh_handler(
     exception_info: *mut windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
   ) -> i32 {
     let record = (*exception_info).ExceptionRecord;
@@ -559,9 +646,10 @@ pub mod fpe {
   /// This function registers the VEH
   #[cfg(windows)]
   unsafe fn register_os_handler() {
+    let handler: unsafe extern "system" fn(*mut windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS) -> i32 = core::mem::transmute(veh_handler as usize);
     windows::Win32::System::Diagnostics::Debug::AddVectoredExceptionHandler(
       1, // Call First
-      Some(veh_handler),
+      Some(handler),
     );
   }
 

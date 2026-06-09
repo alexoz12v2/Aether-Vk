@@ -1001,13 +1001,13 @@ impl DeviceResources {
     let discard_pool = unsafe { resources::DiscardPool::new(64) };
     // - Command Pools
     let mut command_pools = heapless::Vec::new();
-    // TODO add a test only log to check that this is full and sorted (eg 0 1 2)
+    for _ in 0..utils::MAX_QUEUE_FAMILY_COUNT {
+      unsafe { command_pools.push_unchecked(None) };
+    }
     for &queue_family_index in unique_family_indices_iter {
-      unsafe {
-        command_pools.push_unchecked(Some(Arc::new(commands::CommandPools::new(
-          queue_family_index,
-        ))))
-      };
+      command_pools[queue_family_index as usize] = Some(Arc::new(commands::CommandPools::new(
+        queue_family_index,
+      )));
     }
     // - Swapchain hashmap
     let live_presentation_engines = dashmap::DashMap::new();
@@ -6095,7 +6095,7 @@ impl RenderDevice for Device {
       let cmd_id = res_guard.next_cmd_id.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
       let cmd_pool_arc = unsafe {
         DebugTrackedRwLock::read(&res_guard.command_pools)
-          .get_unchecked(self.queues.get_graphics_queue().index as usize)
+          .get_unchecked(self.queues.get_graphics_queue().family_index as usize)
           .as_ref()
           .unwrap_unchecked()
           .clone()
@@ -8921,7 +8921,7 @@ impl RenderDevice for Device {
     &self,
     cmd_buffer: CommandBufferHandle,
     task_id: Option<u64>,
-    sync_info: Option<crate::gpu::CommandBufferSyncInfo>,
+    sync_infos: &[crate::gpu::CommandBufferSyncInfo],
   ) -> GpuResult<()> {
     // 1. Extract command buffer data and drop the lock immediately
     let data = {
@@ -8950,7 +8950,7 @@ impl RenderDevice for Device {
         let cmd_pools = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
           &state.command_pools,
         )
-        .get(graphics_queue.index as usize)
+        .get(graphics_queue.family_index as usize)
         .and_then(|opt| opt.as_ref())
         .cloned()
         .ok_or(gpu_err!("couldn't get command pools"))?;
@@ -8988,9 +8988,9 @@ impl RenderDevice for Device {
             }
           }
 
-          let mut wait_semaphores = heapless::Vec::<_, 4>::new();
-          let mut wait_semaphore_values = heapless::Vec::<_, 4>::new();
-          let mut wait_dst_stage_mask = heapless::Vec::<_, 4>::new();
+          let mut wait_semaphores = heapless::Vec::<_, 8>::new();
+          let mut wait_semaphore_values = heapless::Vec::<_, 8>::new();
+          let mut wait_dst_stage_mask = heapless::Vec::<_, 8>::new();
 
           if let Some(wait_semaphore) = presentation.wait_semaphore {
             unsafe {
@@ -9000,15 +9000,15 @@ impl RenderDevice for Device {
             }
           }
 
-          if let Some(sync) = sync_info {
+          for sync in sync_infos {
             use ash::vk::Handle;
             let vk_semaphore = vk::Semaphore::from_raw(sync.timeline_semaphore);
             unsafe {
               wait_semaphores.push_unchecked(vk_semaphore);
               wait_semaphore_values.push_unchecked(sync.timeline_value);
-              // Graphics reads compute buffers at Vertex Input / Compute shader stages
+              // Graphics reads compute buffers at Vertex Input / Compute shader / Indirect command stages
               wait_dst_stage_mask.push_unchecked(
-                vk::PipelineStageFlags::VERTEX_INPUT | vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::VERTEX_INPUT | vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
               );
             }
           }

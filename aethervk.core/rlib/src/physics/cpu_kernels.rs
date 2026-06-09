@@ -153,6 +153,7 @@ impl DeviceBvh for CpuTlasHandle {
 pub struct CpuScalarKernels {}
 
 impl Kernels for CpuScalarKernels {
+  fn toggle_particle_self_gravity(&self, _enable: bool) {}
   type Cmd = CpuCommandBuffer;
   type Buffer<T: Copy + Send + Sync> = CpuBuffer<T>;
   type List<T: Copy + Send + Sync> = CpuList<T>;
@@ -778,6 +779,7 @@ pub struct CpuSimdKernels {
 }
 
 impl Kernels for CpuSimdKernels {
+  fn toggle_particle_self_gravity(&self, _enable: bool) {}
   type Cmd = CpuCommandBuffer;
   type Buffer<T: Copy + Send + Sync> = CpuBuffer<T>;
   type List<T: Copy + Send + Sync> = CpuList<T>;

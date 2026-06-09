@@ -292,6 +292,7 @@ impl DiscardPool {
     manager: sync::Arc<commands::CommandPools>,
     timeline: u64,
   ) {
+    debug_assert!(sync::Arc::strong_count(&manager) > 1);
     self.push_item(
       timeline,
       DiscardItem::CommandPool(CmdBufDiscard {
@@ -338,6 +339,7 @@ impl DiscardPool {
     manager: sync::Arc<descriptors::DescriptorPools>,
     timeline: u64,
   ) {
+    debug_assert!(sync::Arc::strong_count(&manager) > 1);
     self.push_item(timeline, DiscardItem::DescriptorPool(pool, manager));
   }
 
@@ -4511,6 +4513,7 @@ impl ForwardMeshRenderResourceArchetypeArena {
       .get(index)
       .ok_or(crate::gpu_invalid_arg!("invalid argument"))?
       .get();
+    debug_assert!(sync::Arc::strong_count(descriptor_pools) > 1);
     descriptor_pools.allocate(
       device,
       layout,
@@ -4995,6 +4998,7 @@ impl ForwardMesh2RenderResourceArchetypeArena {
       .get(index)
       .ok_or(crate::gpu_invalid_arg!("invalid argument"))?
       .get();
+    debug_assert!(sync::Arc::strong_count(descriptor_pools) > 1);
     descriptor_pools.allocate(
       device,
       layout,

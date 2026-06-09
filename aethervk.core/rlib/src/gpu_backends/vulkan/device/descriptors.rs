@@ -232,7 +232,6 @@ impl DescriptorPools {
         sync::Arc::clone(self),
         timeline_value,
       );
-      inner.full_pools.push(inner.active_pool);
       inner.active_pool = vk::DescriptorPool::null();
     }
   }

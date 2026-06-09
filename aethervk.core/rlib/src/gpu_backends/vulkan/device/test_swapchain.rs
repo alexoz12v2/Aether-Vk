@@ -26,7 +26,7 @@ mod tests {
   // Helper to get real Vulkan device objects for testing swapchain directly
   fn setup_test_render(
     enable_maintenance1: bool,
-  ) -> (
+  ) -> Option<(
     alloc::sync::Arc<ash::Entry>,
     crate::gpu_backends::vulkan::instance::Instance,
     ash::Device,
@@ -35,7 +35,7 @@ mod tests {
     vk::Queue,
     vk::CommandPool,
     crate::gpu::PresentationEngineParams,
-  ) {
+  )> {
     use crate::gpu_backends::vulkan::instance::Instance;
     crate::gpu::set_asset_dir_for_tests();
 
@@ -50,6 +50,9 @@ mod tests {
       )
       .unwrap()
     };
+    if !instance.has_headless_surface {
+      return None;
+    }
     let entry = instance.entry_wrapper.weak_entry().upgrade().unwrap();
     let query_input = crate::gpu_backends::vulkan::utils::PhysicalDeviceQueryInput::from_params(
       &crate::gpu::DeviceAdditionalParams::new(),
@@ -138,7 +141,7 @@ mod tests {
 
     let params = crate::gpu::PresentationEngineParams::windowless(256, 256);
 
-    (
+    Some((
       entry,
       instance,
       device,
@@ -151,7 +154,7 @@ mod tests {
       queue,
       cmd_pool,
       params,
-    )
+    ))
   }
 
   unsafe fn simulate_gpu_frame(
@@ -380,8 +383,9 @@ mod tests {
   }
 
   fn test_lifecycle_wraparound_internal(enable_maintenance1: bool) {
-    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) =
-      setup_test_render(enable_maintenance1);
+    let setup_env = setup_test_render(enable_maintenance1);
+    if setup_env.is_none() { return; }
+    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) = setup_env.unwrap();
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
     let mut engine = PresentationState::new(
       &entry,
@@ -439,8 +443,9 @@ mod tests {
   }
 
   fn test_cancel_image_recovery_internal(enable_maintenance1: bool) {
-    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) =
-      setup_test_render(enable_maintenance1);
+    let setup_env = setup_test_render(enable_maintenance1);
+    if setup_env.is_none() { return; }
+    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) = setup_env.unwrap();
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
     let mut engine = PresentationState::new(
       &entry,
@@ -523,8 +528,9 @@ mod tests {
   }
 
   fn test_resize_in_flight_discard_bins_internal(enable_maintenance1: bool) {
-    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) =
-      setup_test_render(enable_maintenance1);
+    let setup_env = setup_test_render(enable_maintenance1);
+    if setup_env.is_none() { return; }
+    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) = setup_env.unwrap();
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
     let mut engine = PresentationState::new(
       &entry,
@@ -619,8 +625,9 @@ mod tests {
   }
 
   fn test_windowless_export_png_internal(enable_maintenance1: bool) {
-    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) =
-      setup_test_render(enable_maintenance1);
+    let setup_env = setup_test_render(enable_maintenance1);
+    if setup_env.is_none() { return; }
+    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) = setup_env.unwrap();
     params.ty = crate::gpu::PresentationEngineType::WindowLess;
     params.width = 128;
     params.height = 128;
@@ -705,8 +712,9 @@ mod tests {
   }
 
   fn test_windowed_presentation_internal(enable_maintenance1: bool) {
-    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) =
-      setup_test_render(enable_maintenance1);
+    let setup_env = setup_test_render(enable_maintenance1);
+    if setup_env.is_none() { return; }
+    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) = setup_env.unwrap();
     let cleanup_queue = new_test_cleanup_queue();
 
     let params = crate::gpu::PresentationEngineParams {
@@ -820,8 +828,9 @@ mod tests {
   }
 
   fn test_multiple_viewports_and_mesh_viewer_internal(enable_maintenance1: bool) {
-    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) =
-      setup_test_render(enable_maintenance1);
+    let setup_env = setup_test_render(enable_maintenance1);
+    if setup_env.is_none() { return; }
+    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) = setup_env.unwrap();
     let cleanup_queue = new_test_cleanup_queue();
 
     let params1 = crate::gpu::PresentationEngineParams {
@@ -1062,8 +1071,9 @@ mod tests {
   }
 
   fn test_rapid_resize_stress_internal(enable_maintenance1: bool) {
-    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) =
-      setup_test_render(enable_maintenance1);
+    let setup_env = setup_test_render(enable_maintenance1);
+    if setup_env.is_none() { return; }
+    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) = setup_env.unwrap();
     let cleanup_queue = new_test_cleanup_queue();
 
     let mut params = crate::gpu::PresentationEngineParams {

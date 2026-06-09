@@ -347,6 +347,7 @@ where
 
   if !collisions_enabled {
     // ── Non-collision path: sub-step the IMEX integration ───────────────────
+    // TODO: this should be a closure cause collision pipeline should do a substep.
     for sub_step_idx in 0..n_sub_steps {
       // Compute this sub-step's dt.  The last sub-step absorbs rounding remainder.
       let sub_dt = if sub_step_idx == n_sub_steps - 1 {

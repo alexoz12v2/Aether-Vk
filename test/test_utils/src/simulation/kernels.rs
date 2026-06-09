@@ -98,6 +98,7 @@ impl CpuKernels {
 }
 
 impl Kernels for CpuKernels {
+  fn toggle_particle_self_gravity(&mut self, _enable: bool) {}
   type Cmd = CpuCommandBuffer;
   type Buffer<T: Copy + Send + Sync> = CpuDeviceBuffer<T>;
   type List<T: Copy + Send + Sync> = CpuDeviceList<T>;
