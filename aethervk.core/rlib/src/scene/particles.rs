@@ -103,6 +103,9 @@ impl ParticleData {
 #[derive(Clone)]
 pub struct ParticleSystemComponent {
   pub particles: alloc::sync::Arc<parking_lot::RwLock<alloc::vec::Vec<ParticleData>>>,
+  pub head_index: usize,
+  pub tail_index: usize,
+  pub capacity: usize,
   pub bvh: Option<LinearBVH<f32>>,
   pub accumulator: timeus_t,
   pub next_id: usize,
@@ -136,9 +139,22 @@ impl ParticleSystemComponent {
   /// Create a new particle system with the given maximum capacity.
   pub fn new(max_particles: usize) -> Self {
     Self {
-      particles: alloc::sync::Arc::new(parking_lot::RwLock::new(alloc::vec::Vec::with_capacity(
-        max_particles,
-      ))),
+      particles: alloc::sync::Arc::new(parking_lot::RwLock::new(alloc::vec![
+        ParticleData {
+          id_low: 0,
+          id_high: 0,
+          age_low: 0,
+          age_high: 0,
+          position: [0.0; 3],
+          mass: 0.0,
+          velocity: [0.0; 3],
+          active: 0,
+        };
+        max_particles
+      ])),
+      head_index: 0,
+      tail_index: 0,
+      capacity: max_particles,
       bvh: None,
       accumulator: 0,
       next_id: 0,

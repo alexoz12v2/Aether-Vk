@@ -3,9 +3,13 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 
+#ifdef DEBUG_SHADERS
+  #extension GL_EXT_debug_printf : enable
+#endif
+
 #include "../bvh_utils.glsl"
 #ifndef LOCAL_SIZE_X
-#define LOCAL_SIZE_X 256
+#define LOCAL_SIZE_X 128
 #endif
 layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
 
@@ -16,11 +20,31 @@ layout(push_constant, std430) uniform PushConstants {
 } pc;
 
 void main() {
-    uint idx = gl_GlobalInvocationID.x; if (idx >= pc.num_internal_nodes) return;
+    uint idx = gl_GlobalInvocationID.x;
+
+#ifdef DEBUG_SHADERS
+    if (idx == 0) {
+        debugPrintfEXT("--- STARTING INIT PASS --- num_internal_nodes=%u, highest_write_idx=%u\n",
+                       pc.num_internal_nodes, pc.num_internal_nodes * 2);
+    }
+
+    // Trap garbage push constants (e.g. if num_internal_nodes is uninitialized memory)
+    if (pc.num_internal_nodes > 100000000u && idx == 0) {
+        debugPrintfEXT("TRAP! num_internal_nodes is massive: %u\n", pc.num_internal_nodes);
+    }
+#endif
+
+    if (idx >= pc.num_internal_nodes) return;
+
     pc.counters.counts[idx] = 0;
     pc.bvh.nodes[idx].parent_idx = 0xFFFFFFFFu;
+    pc.bvh.nodes[idx].valid_mask = uvec2(0, 0);
+
     pc.bvh.nodes[pc.num_internal_nodes + idx].parent_idx = 0xFFFFFFFFu;
+    pc.bvh.nodes[pc.num_internal_nodes + idx].valid_mask = uvec2(0, 0);
+
     if (idx == pc.num_internal_nodes - 1) {
         pc.bvh.nodes[pc.num_internal_nodes + idx + 1].parent_idx = 0xFFFFFFFFu;
+        pc.bvh.nodes[pc.num_internal_nodes + idx + 1].valid_mask = uvec2(0, 0);
     }
 }

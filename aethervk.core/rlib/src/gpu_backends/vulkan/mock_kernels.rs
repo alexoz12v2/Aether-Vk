@@ -27,6 +27,8 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
   type MotionBvh = VulkanBuffer<()>;
   type MotionTlas = VulkanBuffer<()>;
 
+  fn toggle_particle_self_gravity(&self, _enable: bool) {}
+
   fn discard_buffer<T: Copy + Send + Sync>(&self, buffer: Self::Buffer<T>) {
     self.base.discard_buffer(buffer)
   }

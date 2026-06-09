@@ -16,7 +16,7 @@ use ab_glyph::PxScale;
 use aethervk_oshal_rlib::os::time::timeus_t;
 use alloc::sync::{Arc, Weak};
 use bitflags::bitflags;
-pub use compute_push_constants::{RigidBodyImex, Wrench};
+pub use compute_push_constants::{ParticleGpu, RigidBodyGpu, RigidBodyImex, Wrench};
 use core::{
   ffi,
   hash::{Hash, Hasher},
@@ -94,44 +94,6 @@ pub struct KinematicBody {
   pub scale: f32,
   pub shape_type: u32,
   pub shape_data: [f32; 3],
-}
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-#[deprecated(
-  since = "0.0.0",
-  note = "Use `RigidBodyImex` for the new IMEX pipeline"
-)]
-/// Legacy rigid-body GPU layout (rotation-matrix based).
-/// New code should use [`RigidBodyImex`] (quaternion-based).
-pub struct RigidBodyGpu {
-  pub position: [f32; 3],
-  pub mass: f32,
-  pub rotation: [[f32; 3]; 3], // Column-major
-  pub linear_velocity: [f32; 3],
-  pub _pad0: f32,
-  pub angular_velocity: [f32; 3],
-  pub _pad1: f32,
-  pub inertia_tensor: [[f32; 3]; 3],
-  pub force: [f32; 3],
-  pub torque: [f32; 3],
-  pub entity_id: EntityId,
-  pub parent_frame_id: u32,
-  pub shape_type: u32,
-  pub shape_data: [f32; 3],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-/// Represents a particle for explicit integration (Velocity Verlet).
-/// Matches the AOSOA layout expected by compute shaders.
-pub struct ParticleGpu {
-  pub position: [f32; 3],
-  pub velocity: [f32; 3],
-  pub mass: f32,
-  pub force: [f32; 3],
-  // Metadata for CPU/Logic
-  pub entity_id: EntityId,
-  pub parent_frame_id: u32,
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -1512,7 +1474,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     &self,
     cmd_buffer: CommandBufferHandle,
     task_id: Option<u64>,
-    sync_info: Option<CommandBufferSyncInfo>,
+    sync_infos: &[CommandBufferSyncInfo],
   ) -> GpuResult<()>;
 
   fn wire_callbacks(&self, pool: Arc<aethervk_oshal_rlib::os::pool::ThreadPool>) -> GpuResult<()>;
@@ -1623,7 +1585,7 @@ pub struct ScopedCommandBuffer<'a> {
   device: &'a dyn RenderDevice,
   cmd_buffer: CommandBufferHandle,
   task_id: Option<u64>,
-  sync_info: Option<CommandBufferSyncInfo>,
+  sync_infos: heapless::Vec<CommandBufferSyncInfo, 4>,
   submitted: bool,
 }
 
@@ -1639,14 +1601,14 @@ impl<'a> ScopedCommandBuffer<'a> {
       device,
       cmd_buffer,
       task_id,
-      sync_info: None,
+      sync_infos: heapless::Vec::new(),
       submitted: false,
     })
   }
 
   /// Attaches synchronization info to this command buffer scope.
-  pub fn set_sync_info(&mut self, sync_info: CommandBufferSyncInfo) {
-    self.sync_info = Some(sync_info);
+  pub fn add_sync_info(&mut self, sync_info: CommandBufferSyncInfo) {
+    let _ = self.sync_infos.push(sync_info);
   }
 
   /// TODO: Document this item
@@ -1657,7 +1619,7 @@ impl<'a> ScopedCommandBuffer<'a> {
   /// Explicitly submits the command buffer.
   pub fn submit(mut self) -> GpuResult<()> {
     self.submitted = true;
-    let res = self.device.submit_command_buffer(self.cmd_buffer, self.task_id, self.sync_info);
+    let res = self.device.submit_command_buffer(self.cmd_buffer, self.task_id, &self.sync_infos);
     if let Err(e) = &res {
       if let Some(task_id) = self.task_id {
         self.device.fail_task(task_id, e.clone());
@@ -1671,7 +1633,7 @@ impl<'a> Drop for ScopedCommandBuffer<'a> {
   fn drop(&mut self) {
     if !self.submitted {
       // Force submission on early exit/panic. Result is ignored to prevent double panics.
-      let res = self.device.submit_command_buffer(self.cmd_buffer, self.task_id, self.sync_info);
+      let res = self.device.submit_command_buffer(self.cmd_buffer, self.task_id, &self.sync_infos);
       if let Err(e) = res {
         if let Some(task_id) = self.task_id {
           self.device.fail_task(task_id, e);
@@ -2111,6 +2073,9 @@ pub trait Kernels: Send + Sync {
 
   /// Blocks the CPU until all GPU operations are completely idle.
   fn wait_idle(&self) -> EngineResult<()>;
+
+  /// Toggles particle self-gravity on or off. Opt-in strictly.
+  fn toggle_particle_self_gravity(&self, enable: bool);
 
   fn refit_motion_blas(
     &self,

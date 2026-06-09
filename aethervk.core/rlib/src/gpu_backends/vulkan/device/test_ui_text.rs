@@ -21,12 +21,14 @@ fn setup_assets_dir() {
 
 fn setup_render_frontend_for_tests(
   with_windowless: bool,
-) -> (
+) -> Option<(
   Arc<aethervk_oshal_rlib::os::pool::ThreadPool>,
   RenderFrontend,
   RenderDeviceHandle,
   Option<PresentationEngineHandle>,
-) {
+)> {
+
+
   fn panic_on_validation_error(msg: &str) {
     panic!("Vulkan validation error occurred during testing: {}", msg);
   }
@@ -85,14 +87,15 @@ fn setup_render_frontend_for_tests(
     });
 
   let _ = th.unwrap().join();
-  rx.recv().expect("Failed to receive setup data")
+  Some(rx.recv().expect("Failed to receive setup data"))
 }
 
 #[test]
 fn test_render_ui_and_text() {
   setup_assets_dir();
-  let (pool_arc, render_frontend, render_device_handle, presentation_engine) =
-    setup_render_frontend_for_tests(true);
+  let setup_env = setup_render_frontend_for_tests(true);
+  if setup_env.is_none() { return; }
+  let (pool_arc, render_frontend, render_device_handle, presentation_engine) = setup_env.unwrap();
   let presentation_engine = presentation_engine.unwrap();
   let [width, height] = render_frontend
     .with_device(render_device_handle, |device| {

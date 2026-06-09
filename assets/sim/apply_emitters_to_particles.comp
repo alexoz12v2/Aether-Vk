@@ -49,13 +49,24 @@ layout(push_constant, std430) uniform PushConstants {
     EmitterArray           emitters;           // ForceEmitter[]
     GpuReferenceFrameArray frames;             // GpuReferenceFrame[]
     ParticleFrameIds       particle_frame_ids; // u32[] — frame per particle
+    MultiBvhBuffer         bvh;
+    MortonArray            sorted_morton;
     uint num_emitters;
     uint total_particles;
+    uint root_node_idx;
 } pc;
 
 void main() {
-    uint gid = gl_GlobalInvocationID.x;
-    if (gid >= pc.total_particles) return;
+    uint sorted_idx = gl_GlobalInvocationID.x;
+    if (sorted_idx >= pc.total_particles) return;
+
+    uint gid;
+    uvec2 sorted_morton_uvec2 = uvec2(pc.sorted_morton);
+    if (sorted_morton_uvec2.x != 0u && sorted_morton_uvec2.y != 0u) {
+        gid = pc.sorted_morton.entries[sorted_idx].y;
+    } else {
+        gid = sorted_idx;
+    }
 
     // Decode AOSOA base index for this invocation
     uint block = gid / SUBGROUP_SIZE;
@@ -89,7 +100,7 @@ void main() {
         // ── Transform emitter AU position → particle local frame (km) ────────
         vec3 r_local;
         if (frame.frame_type == 0u) {
-            // Particle is in the macro frame: pos is in AU, convert r to km
+            // Particle is in the macro frame: pos is in AU, convert r to km (Emitters use km always)
             r_local = (em_pos - pos) * AU_TO_KM;
         } else {
             // Microframe: r_local(km) = (em_pos(AU) − frame.center(AU)) / scale(AU/km) − pos(km)
@@ -105,6 +116,27 @@ void main() {
             float mu_eff    = em_mu * (1.0 - em_beta);
             float force_mag = (mu_eff * mass * softening) / dist_sq;
             f_acc += (r_local / dist) * force_mag;
+        }
+    }
+
+    // Accumulate BVH self-gravity (if BVH buffer is provided)
+    uvec2 bvh_uvec = uvec2(pc.bvh);
+    if (bvh_uvec.x != 0u || bvh_uvec.y != 0u) {
+        uint leaf_idx = sorted_idx / PARTICLES_IN_LEAF;
+        uint num_leaves = (pc.total_particles + PARTICLES_IN_LEAF - 1) / PARTICLES_IN_LEAF;
+        uint current = num_leaves - 1 + leaf_idx;
+
+        while (current != 0) {
+            uint parent = pc.bvh.nodes[current].parent_idx;
+            uint child_lane = (pc.bvh.nodes[parent].child_indices[1] == current) ? 1 : 0;
+
+            f_acc += vec3(
+                pc.bvh.nodes[parent].force_x[child_lane],
+                pc.bvh.nodes[parent].force_y[child_lane],
+                pc.bvh.nodes[parent].force_z[child_lane]
+            );
+
+            current = parent;
         }
     }
 

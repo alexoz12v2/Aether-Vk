@@ -410,8 +410,15 @@ fn process_command(
                       e
                     ))
                   })? {
-                    cmd_scope.set_sync_info(sync);
+                    cmd_scope.add_sync_info(sync);
                   }
+                }
+
+                if let Some((timeline_semaphore, timeline_value)) = render_frame.cached_timeline_semaphore {
+                  cmd_scope.add_sync_info(crate::gpu::CommandBufferSyncInfo {
+                    timeline_semaphore,
+                    timeline_value,
+                  });
                 }
 
                 cmd_scope.submit().map_err(|e| {

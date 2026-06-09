@@ -12,7 +12,7 @@
 #include "physics_core.glsl"
 
 #ifndef LOCAL_SIZE_X
-#define LOCAL_SIZE_X 256
+#define LOCAL_SIZE_X 128
 #endif
 layout(local_size_x = LOCAL_SIZE_X) in;
 

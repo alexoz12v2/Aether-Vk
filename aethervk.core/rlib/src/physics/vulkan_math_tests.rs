@@ -1521,6 +1521,9 @@ mod tests {
     let v_z = test_p.velocity[2];
 
     println!("TEST_P: {:?}", test_p);
+    for i in 0..5 {
+      println!("P[{}]: {:?}", i, final_sys[i]);
+    }
 
     assert!((v_x - expected_v).abs() < tolerance, "Velocity X mismatch: expected {}, got {}", expected_v, v_x);
     assert!((v_y - expected_v).abs() < tolerance, "Velocity Y mismatch: expected {}, got {}", expected_v, v_y);

@@ -42,7 +42,7 @@ if [ ! -x "$SPIRV_VAL" ]; then
     exit 1
 fi
 
-COMMON_FLAGS="-x glsl --target-env=vulkan1.1 --target-spv=spv1.3 -std=450core -Os"
+COMMON_FLAGS="-x glsl --target-env=vulkan1.1 --target-spv=spv1.4 -std=450core -Os"
 WG_SIZES=(4 8 16 32 64 128 256)
 
 # ── Shaders that receive wg-variant SPIR-V blobs ──────────────────────────────

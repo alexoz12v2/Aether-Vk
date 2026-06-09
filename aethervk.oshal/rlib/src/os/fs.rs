@@ -52,25 +52,28 @@ impl AsRef<Path> for Path {
   }
 }
 
-impl AsRef<Path> for str {
-  #[inline]
-  fn as_ref(&self) -> &Path {
-    self.into() // Calls your From<&str> implementation
-  }
+pub trait IntoPathBuf {
+  fn into_pathbuf(&self) -> PathBuf;
 }
 
-impl AsRef<Path> for alloc::string::String {
-  #[inline]
-  fn as_ref(&self) -> &Path {
-    self.as_str().into()
-  }
+impl IntoPathBuf for str {
+  fn into_pathbuf(&self) -> PathBuf { PathBuf::from(self) }
 }
 
-impl From<&str> for &Path {
-  fn from(s: &str) -> Self {
-    let the_ptr: *const os_char = s.as_ptr().cast();
-    Path::from_slice(unsafe { core::slice::from_raw_parts(the_ptr, s.len()) })
-  }
+impl IntoPathBuf for alloc::string::String {
+  fn into_pathbuf(&self) -> PathBuf { PathBuf::from(self) }
+}
+
+impl IntoPathBuf for Path {
+  fn into_pathbuf(&self) -> PathBuf { self.to_pathbuf() }
+}
+
+impl IntoPathBuf for PathBuf {
+  fn into_pathbuf(&self) -> PathBuf { self.clone() }
+}
+
+impl<T: IntoPathBuf + ?Sized> IntoPathBuf for &T {
+  fn into_pathbuf(&self) -> PathBuf { (**self).into_pathbuf() }
 }
 
 impl PartialEq for Path {
@@ -218,18 +221,18 @@ impl FileSystemObject for Path {
 
 impl<T> FileSystemObject for T
 where
-  T: AsRef<Path>,
+  T: IntoPathBuf,
 {
   fn is_valid(&self) -> bool {
-    self.as_ref().is_valid()
+    self.into_pathbuf().is_valid()
   }
 
   fn is_dir(&self) -> bool {
-    self.as_ref().is_dir()
+    self.into_pathbuf().is_dir()
   }
 
   fn is_file(&self) -> bool {
-    self.as_ref().is_file()
+    self.into_pathbuf().is_file()
   }
 }
 
@@ -570,7 +573,7 @@ pub fn current_exe() -> Result<PathBuf, FsError> {
 }
 
 /// TODO: Document this item
-pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
+pub fn read<T: IntoPathBuf>(path: T) -> Result<Vec<u8>, FsError> {
   #[cfg(windows)]
   {
     use windows::Win32::{
@@ -580,7 +583,7 @@ pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
       },
     };
 
-    let mut path_buf = path.as_ref().to_pathbuf();
+    let mut path_buf = path.into_pathbuf();
     let handle = unsafe {
       CreateFileW(
         windows::core::PCWSTR(path_buf.as_ptr_mut()),
@@ -634,7 +637,7 @@ pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
     use core::mem;
     use libc::{O_RDONLY, close, fstat, open};
 
-    let mut path_buf: PathBuf = path.as_ref().to_pathbuf();
+    let mut path_buf: PathBuf = path.into_pathbuf();
     let fd = unsafe { open(path_buf.as_ptr_mut(), O_RDONLY) };
     if fd < 0 {
       return Err(FsError::CouldNotOpenFile);
@@ -688,7 +691,7 @@ pub fn read<T: AsRef<Path>>(path: T) -> Result<Vec<u8>, FsError> {
 }
 
 /// TODO: Document this item
-pub fn write(path: &Path, content: &[u8]) -> Result<(), FsError> {
+pub fn write<T: IntoPathBuf>(path: T, content: &[u8]) -> Result<(), FsError> {
   #[cfg(windows)]
   {
     use windows::Win32::{
@@ -698,7 +701,7 @@ pub fn write(path: &Path, content: &[u8]) -> Result<(), FsError> {
       },
     };
 
-    let mut path_buf = path.as_ref().to_pathbuf();
+    let mut path_buf = path.into_pathbuf();
     let handle = unsafe {
       CreateFileW(
         windows::core::PCWSTR(path_buf.as_ptr_mut()),
@@ -738,7 +741,7 @@ pub fn write(path: &Path, content: &[u8]) -> Result<(), FsError> {
   {
     use libc::{O_CREAT, O_TRUNC, O_WRONLY, close, open};
 
-    let mut path_buf = path.as_ref().to_pathbuf();
+    let mut path_buf = path.into_pathbuf();
     // 0o666 = read and write for owner, group, and others
     let fd = unsafe { open(path_buf.as_ptr_mut(), O_WRONLY | O_CREAT | O_TRUNC, 0o666) };
     if fd < 0 {
@@ -903,7 +906,7 @@ impl Drop for ReadDir {
 // --- Implement read_dir ---
 
 /// TODO: Document this item
-pub fn read_dir(path: &Path) -> Result<ReadDir, FsError> {
+pub fn read_dir<T: IntoPathBuf>(path: T) -> Result<ReadDir, FsError> {
   #[cfg(windows)]
   {
     use windows::Win32::{
@@ -911,7 +914,7 @@ pub fn read_dir(path: &Path) -> Result<ReadDir, FsError> {
       Storage::FileSystem::{FindFirstFileW, WIN32_FIND_DATAW},
     };
 
-    let mut search_path = path.as_ref().to_pathbuf();
+    let mut search_path = path.into_pathbuf();
     search_path.push_slice(&[SEP, b'*' as os_char]);
     search_path.ensure_nul_terminated();
 
@@ -933,20 +936,20 @@ pub fn read_dir(path: &Path) -> Result<ReadDir, FsError> {
       handle,
       find_data,
       first: true,
-      parent: path.as_ref().to_pathbuf(),
+      parent: path.into_pathbuf(),
     })
   }
 
   #[cfg(not(windows))]
   {
-    let mut path_buf = path.as_ref().to_pathbuf();
+    let mut path_buf = path.into_pathbuf();
     let dirp = unsafe { libc::opendir(path_buf.as_ptr_mut()) };
     if dirp.is_null() {
       return Err(FsError::CouldNotReadFile);
     }
     Ok(ReadDir {
       dirp,
-      parent: path.as_ref().to_pathbuf(),
+      parent: path.into_pathbuf(),
     })
   }
 }

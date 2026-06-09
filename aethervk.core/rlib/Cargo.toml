@@ -95,6 +95,10 @@ windows = { version = ">=0.59, <=0.62.2", default-features = false, features = [
     "Win32_System_LibraryLoader",
     "Win32_Graphics_Direct3D12",
     "Win32_Graphics_Dxgi",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_System_Environment",
+    "Win32_Security",
 ] }
 
 [target.'cfg(target_family = "unix")'.dependencies]

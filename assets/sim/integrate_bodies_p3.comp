@@ -86,9 +86,16 @@ void main() {
     uint id = gl_GlobalInvocationID.x; if (id >= pc.n_bodies) return;
 
     RigidBody body = pc.rigid_bodies.bodies[id];
-    float mass = body.position_mass.w; float inv_m = (mass > 0.0) ? 1.0 / mass : 0.0;
+    float mass = body.position_mass.w; 
+    float inv_m = 0.0;
+    if (mass > 0.0) {
+        inv_m = 1.0 / mass;
+    }
     vec3 I_inv = body.inertia_tensor_inv.xyz;
-    vec3 I_fwd = vec3((I_inv.x > 1e-14) ? 1.0 / I_inv.x : 0.0, (I_inv.y > 1e-14) ? 1.0 / I_inv.y : 0.0, (I_inv.z > 1e-14) ? 1.0 / I_inv.z : 0.0);
+    vec3 I_fwd = vec3(0.0);
+    if (I_inv.x > 1e-14) I_fwd.x = 1.0 / I_inv.x;
+    if (I_inv.y > 1e-14) I_fwd.y = 1.0 / I_inv.y;
+    if (I_inv.z > 1e-14) I_fwd.z = 1.0 / I_inv.z;
 
     vec3 pos_n = body.position_mass.xyz; vec4 q_n = body.orientation;
     vec3 v_n = body.linear_vel_drag.xyz; vec3 w_n = body.angular_vel_drag.xyz;

@@ -112,47 +112,69 @@ impl Shader {
         }
       }
       #[cfg(windows)]
-      {
-        // Adjusted path for Windows
-        let _ = aethervk_oshal_rlib::os::fs::write(&PathBuf::from(r"C:\temp\dump.spv"), spv_u8);
+      unsafe {
+        use windows::Win32::System::Environment::GetEnvironmentVariableW;
+        use windows::Win32::System::Pipes::CreatePipe;
+        use windows::Win32::Foundation::{HANDLE, SetHandleInformation, HANDLE_FLAGS, HANDLE_FLAG_INHERIT, CloseHandle};
+        use windows::Win32::System::Threading::{
+          CreateProcessW, STARTUPINFOW, PROCESS_INFORMATION, STARTF_USESTDHANDLES, PROCESS_CREATION_FLAGS,
+          WaitForSingleObject, INFINITE
+        };
+        use windows::Win32::Storage::FileSystem::WriteFile;
+        use windows::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+        use windows::core::{PCWSTR, PWSTR};
 
-        unsafe {
-          use windows::Win32::Foundation::CloseHandle;
-          use windows::Win32::System::Threading::{
-            CreateProcessW, INFINITE, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTUPINFOW,
-            WaitForSingleObject,
-          };
-          use windows::core::{PCWSTR, PWSTR};
+        let mut sdk_buf = [0u16; 512];
+        let len = GetEnvironmentVariableW(windows::core::w!("VULKAN_SDK"), Some(&mut sdk_buf));
+        if len > 0 && len <= 512 {
+          let sdk_str = alloc::string::String::from_utf16_lossy(&sdk_buf[..len as usize]);
+          let spirv_dis_exe = alloc::format!("{}\\Bin\\spirv-dis.exe", sdk_str);
 
-          // CreateProcessW requires a mutable UTF-16 string for the command line.
-          // We use cmd.exe /c to mimic libc::system's shell execution.
-          let mut cmd: alloc::vec::Vec<u16> =
-            "cmd.exe /c spirv-dis C:\\temp\\dump.spv\0".encode_utf16().collect();
+          let mut h_stdin_read = HANDLE::default();
+          let mut h_stdin_write = HANDLE::default();
 
-          let mut si = STARTUPINFOW::default();
-          si.cb = core::mem::size_of::<STARTUPINFOW>() as u32;
-          let mut pi = PROCESS_INFORMATION::default();
+          let mut sa = windows::Win32::Security::SECURITY_ATTRIBUTES::default();
+          sa.nLength = core::mem::size_of::<windows::Win32::Security::SECURITY_ATTRIBUTES>() as u32;
+          sa.bInheritHandle = true.into();
 
-          let result = CreateProcessW(
-            PCWSTR::null(),
-            Some(PWSTR(cmd.as_mut_ptr())), // PWSTR must point to mutable memory
-            None,
-            None,
-            false,
-            PROCESS_CREATION_FLAGS(0),
-            None,
-            PCWSTR::null(),
-            &mut si,
-            &mut pi,
-          );
+          if CreatePipe(&mut h_stdin_read, &mut h_stdin_write, Some(&sa), 1024 * 1024 * 10).is_ok() {
+            let _ = SetHandleInformation(h_stdin_write, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
 
-          if result.is_ok() {
-            // Block until spirv-dis finishes executing
-            WaitForSingleObject(pi.hProcess, INFINITE);
+            let mut si = STARTUPINFOW::default();
+            si.cb = core::mem::size_of::<STARTUPINFOW>() as u32;
+            si.dwFlags = STARTF_USESTDHANDLES;
+            si.hStdInput = h_stdin_read;
+            si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE).unwrap_or(HANDLE::default());
+            si.hStdError = GetStdHandle(STD_ERROR_HANDLE).unwrap_or(HANDLE::default());
 
-            // Clean up the handles to prevent memory leaks
-            let _ = CloseHandle(pi.hProcess);
-            let _ = CloseHandle(pi.hThread);
+            let mut pi = PROCESS_INFORMATION::default();
+            let cmd_str = alloc::format!("\"{}\" -\0", spirv_dis_exe);
+            let mut cmd: alloc::vec::Vec<u16> = cmd_str.encode_utf16().collect();
+
+            if CreateProcessW(
+              PCWSTR::null(),
+              Some(PWSTR(cmd.as_mut_ptr())),
+              None,
+              None,
+              true,
+              PROCESS_CREATION_FLAGS(0),
+              None,
+              PCWSTR::null(),
+              &mut si,
+              &mut pi,
+            ).is_ok() {
+              let _ = CloseHandle(h_stdin_read);
+              let mut written = 0;
+              let _ = WriteFile(h_stdin_write, Some(spv_u8), Some(&mut written), None);
+              let _ = CloseHandle(h_stdin_write);
+              
+              let _ = WaitForSingleObject(pi.hProcess, INFINITE);
+              let _ = CloseHandle(pi.hProcess);
+              let _ = CloseHandle(pi.hThread);
+            } else {
+              let _ = CloseHandle(h_stdin_read);
+              let _ = CloseHandle(h_stdin_write);
+            }
           }
         }
       }
@@ -290,7 +312,7 @@ pub fn patch_spirv_prevent_inlining(spv: &mut [u32]) {
 pub fn disassemble_and_log_spirv(spv_code: &[u8]) {
   #[cfg(target_family = "unix")]
   unsafe {
-    let _ = aethervk_oshal_rlib::os::fs::write("/tmp/dump.spv".into(), spv_code);
+    let _ = aethervk_oshal_rlib::os::fs::write(&PathBuf::from("/tmp/dump.spv"), spv_code);
     let env_var = alloc::ffi::CString::new("VULKAN_SDK").unwrap();
     let sdk_ptr = libc::getenv(env_var.as_ptr());
     let cmd_str = if sdk_ptr.is_null() {
@@ -310,6 +332,98 @@ pub fn disassemble_and_log_spirv(spv_code: &[u8]) {
       }
       libc::pclose(fp);
       aethervk_oshal_rlib::log!("SPIR-V Disassembly:\n{}", out);
+    }
+  }
+
+  #[cfg(windows)]
+  unsafe {
+    use windows::Win32::System::Environment::GetEnvironmentVariableW;
+    use windows::Win32::System::Pipes::CreatePipe;
+    use windows::Win32::Foundation::{HANDLE, SetHandleInformation, HANDLE_FLAGS, HANDLE_FLAG_INHERIT, CloseHandle};
+    use windows::Win32::System::Threading::{
+      CreateProcessW, STARTUPINFOW, PROCESS_INFORMATION, STARTF_USESTDHANDLES, PROCESS_CREATION_FLAGS,
+      WaitForSingleObject, INFINITE
+    };
+    use windows::Win32::Storage::FileSystem::{WriteFile, ReadFile};
+    use windows::core::{PCWSTR, PWSTR};
+
+    let mut sdk_buf = [0u16; 512];
+    let len = GetEnvironmentVariableW(windows::core::w!("VULKAN_SDK"), Some(&mut sdk_buf));
+    if len > 0 && len <= 512 {
+      let sdk_str = alloc::string::String::from_utf16_lossy(&sdk_buf[..len as usize]);
+      let spirv_dis_exe = alloc::format!("{}\\Bin\\spirv-dis.exe", sdk_str);
+
+      let mut h_stdin_read = HANDLE::default();
+      let mut h_stdin_write = HANDLE::default();
+      let mut h_stdout_read = HANDLE::default();
+      let mut h_stdout_write = HANDLE::default();
+
+      let mut sa = windows::Win32::Security::SECURITY_ATTRIBUTES::default();
+      sa.nLength = core::mem::size_of::<windows::Win32::Security::SECURITY_ATTRIBUTES>() as u32;
+      sa.bInheritHandle = true.into();
+
+      if CreatePipe(&mut h_stdin_read, &mut h_stdin_write, Some(&sa), 1024 * 1024 * 10).is_ok() 
+         && CreatePipe(&mut h_stdout_read, &mut h_stdout_write, Some(&sa), 1024 * 1024 * 10).is_ok() 
+      {
+        let _ = SetHandleInformation(h_stdin_write, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
+        let _ = SetHandleInformation(h_stdout_read, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
+
+        let mut si = STARTUPINFOW::default();
+        si.cb = core::mem::size_of::<STARTUPINFOW>() as u32;
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = h_stdin_read;
+        si.hStdOutput = h_stdout_write;
+        si.hStdError = h_stdout_write;
+
+        let mut pi = PROCESS_INFORMATION::default();
+        let cmd_str = alloc::format!("\"{}\" -\0", spirv_dis_exe);
+        let mut cmd: alloc::vec::Vec<u16> = cmd_str.encode_utf16().collect();
+
+        if CreateProcessW(
+          PCWSTR::null(),
+          Some(PWSTR(cmd.as_mut_ptr())),
+          None,
+          None,
+          true,
+          PROCESS_CREATION_FLAGS(0),
+          None,
+          PCWSTR::null(),
+          &mut si,
+          &mut pi,
+        ).is_ok() {
+          let _ = CloseHandle(h_stdin_read);
+          let _ = CloseHandle(h_stdout_write);
+
+          let mut written = 0;
+          let _ = WriteFile(h_stdin_write, Some(spv_code), Some(&mut written), None);
+          let _ = CloseHandle(h_stdin_write);
+
+          let mut out_bytes = alloc::vec::Vec::new();
+          let mut buf = [0u8; 4096];
+          loop {
+            let mut bytes_read = 0;
+            let read_res = ReadFile(h_stdout_read, Some(&mut buf), Some(&mut bytes_read), None);
+            if read_res.is_err() || bytes_read == 0 {
+              break;
+            }
+            out_bytes.extend_from_slice(&buf[..bytes_read as usize]);
+          }
+          let _ = CloseHandle(h_stdout_read);
+
+          let _ = WaitForSingleObject(pi.hProcess, INFINITE);
+          let _ = CloseHandle(pi.hProcess);
+          let _ = CloseHandle(pi.hThread);
+
+          if let Ok(out_str) = core::str::from_utf8(&out_bytes) {
+            aethervk_oshal_rlib::log!("SPIR-V Disassembly:\n{}", out_str);
+          }
+        } else {
+          let _ = CloseHandle(h_stdin_read);
+          let _ = CloseHandle(h_stdin_write);
+          let _ = CloseHandle(h_stdout_read);
+          let _ = CloseHandle(h_stdout_write);
+        }
+      }
     }
   }
 }

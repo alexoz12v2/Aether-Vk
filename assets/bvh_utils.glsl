@@ -17,7 +17,8 @@
 #extension GL_KHR_memory_scope_semantics : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 
-layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
+layout(constant_id = 0) const uint SUBGROUP_SIZE = 64;
+layout(constant_id = 4) const uint PARTICLES_IN_LEAF = 64;
 
 // ---------------------------------------------------------------------------
 // BVH traversal stack depth (specialization constants, set by host).
@@ -41,6 +42,7 @@ struct MultiBvhNode {
     float masses[SUBGROUP_SIZE];
     float com_x[SUBGROUP_SIZE]; float com_y[SUBGROUP_SIZE]; float com_z[SUBGROUP_SIZE];
     uint  particle_start[SUBGROUP_SIZE]; uint particle_count[SUBGROUP_SIZE];
+    float force_x[SUBGROUP_SIZE]; float force_y[SUBGROUP_SIZE]; float force_z[SUBGROUP_SIZE];
 
     uvec2 valid_mask;
     uint  parent_idx; // Unifies Binary & N-Ary Trees without legacy types

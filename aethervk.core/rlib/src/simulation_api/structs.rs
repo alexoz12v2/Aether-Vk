@@ -1009,6 +1009,7 @@ pub struct RenderFrame {
       >,
     >,
   >,
+  pub cached_timeline_semaphore: Option<(u64, u64)>,
 }
 
 /// Invariant: width and height are valid, presentation engine is inside simulation context and render device
@@ -1200,6 +1201,7 @@ pub struct SceneContext {
       >,
     >,
   >,
+  pub latest_physics_sync: alloc::sync::Arc<parking_lot::RwLock<Option<crate::gpu::CommandBufferSyncInfo>>>,
   pub physics_engine_type: Arc<RwLock<PhysicsEngineType>>,
   pub time_state: Arc<RwLock<SceneTimeState>>,
   pub presentation_engines: Arc<RwLock<BTreeMap<PresentationEngineHandle, PresentationEngineData>>>,
@@ -1333,6 +1335,7 @@ impl SceneContext {
       physics_scene: None,
       selection_tlas: None,
       active_physics_task: alloc::sync::Arc::new(spin::Mutex::new(None)),
+      latest_physics_sync: alloc::sync::Arc::new(parking_lot::RwLock::new(None)),
       physics_engine_type: Arc::new(RwLock::new(PhysicsEngineType::VulkanCompute)),
       time_state: Arc::new(RwLock::new(SceneTimeState::default())),
       presentation_engines: Arc::new(RwLock::new(BTreeMap::new())),

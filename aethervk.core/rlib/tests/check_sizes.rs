@@ -1,6 +1,6 @@
 #[test]
 fn print_sizes() {
-  use aethervk_core_rlib::gpu_backends::vulkan::physics::*;
+  use aethervk_core_rlib::gpu::compute_push_constants::*;
   println!(
     "NarrowCcdPushConstants: {}",
     std::mem::size_of::<NarrowCcdPushConstants>()

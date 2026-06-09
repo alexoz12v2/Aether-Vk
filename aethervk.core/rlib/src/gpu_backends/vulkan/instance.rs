@@ -21,6 +21,7 @@ pub struct Instance {
 
   pub entry_wrapper: utils::EntryWrapper,
   pub has_surface_maintenance1: bool,
+  pub has_headless_surface: bool,
 }
 
 impl Instance {
@@ -129,6 +130,20 @@ impl Instance {
     {
       desired_instance_extensions.push(surface_maint_ext);
       has_surface_maintenance1 = true;
+    }
+
+    // --- Dynamically check for headless_surface ---
+    let mut has_headless_surface = false;
+    #[cfg(test)]
+    {
+      let headless_surface_ext = ash::ext::headless_surface::NAME;
+      if available_extensions
+        .iter()
+        .any(|e| unsafe { CStr::from_ptr(e.extension_name.as_ptr()) } == headless_surface_ext)
+      {
+        desired_instance_extensions.push(headless_surface_ext);
+        has_headless_surface = true;
+      }
     }
 
     // Now check support against the merged pool
@@ -248,6 +263,7 @@ impl Instance {
         debug_messenger,
         entry_wrapper,
         has_surface_maintenance1,
+        has_headless_surface,
       })
     }
     #[cfg(not(debug_assertions))]
@@ -255,6 +271,7 @@ impl Instance {
       instance,
       entry_wrapper,
       has_surface_maintenance1,
+      has_headless_surface,
     })
   }
 

@@ -4,14 +4,10 @@ mod tests {
     gpu::{
       DeviceAdditionalParams, RenderFrontend, VULKAN_RENDER_BACKEND, new_render_frontend,
       simulation_step, vulkan::device,
-    },
-    physics::physics_scene::PhysicsScene,
-    scene::{
+    }, gpu_backends, physics::physics_scene::PhysicsScene, scene::{
       ColliderComponent, ColliderShape, KinematicComponent, PhysicalMeshComponent,
       ReferenceFrameType, Scene, TransformComponent,
-    },
-    simulation::comet::Comet,
-    types::RuntimeParams,
+    }, simulation::comet::Comet, types::RuntimeParams
   };
   use aethervk_oshal_rlib::{
     math::{
@@ -101,12 +97,18 @@ mod tests {
     }
 
     pub fn is_lavapipe(&self) -> bool {
-      self.frontend.with_device(self.device_handle, |dev| {
-        let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
-        let props = &vulkan_device.query_result.physical_device_properties;
-        let device_name = props.device_name_as_c_str().unwrap().to_string_lossy();
-        Ok(device_name.contains("llvmpipe"))
-      }).unwrap_or(false)
+      self
+        .frontend
+        .with_device(self.device_handle, |dev| {
+          let vulkan_device = dev
+            .as_any()
+            .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+            .unwrap();
+          let props = &vulkan_device.query_result.physical_device_properties;
+          let device_name = props.device_name_as_c_str().unwrap().to_string_lossy();
+          Ok(device_name.contains("llvmpipe"))
+        })
+        .unwrap_or(false)
     }
   }
 
@@ -842,6 +844,7 @@ mod tests {
   #[test]
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_barnes_hut_forces() {
+    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.store(true, core::sync::atomic::Ordering::Relaxed);
     let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
@@ -872,7 +875,6 @@ mod tests {
           active: 1,
         });
       }
-
       // Add one MASSIVE particle far away
       lock.push(crate::scene::ParticleData {
         id_low: 10,
@@ -880,7 +882,7 @@ mod tests {
         age_low: 0,
         age_high: 0,
         position: [10000.0, 0.0, 0.0],
-        mass: 1e6, // 1 million kg
+        mass: 1e6,
         velocity: [0.0, 0.0, 0.0],
         active: 1,
       });
@@ -895,27 +897,50 @@ mod tests {
           .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
           .unwrap();
 
+        crate::gpu::Kernels::toggle_particle_self_gravity(vulkan_device, true);
+
+
         // Run 1 simulation step
         // The massive particle should pull the cluster of 1000 particles towards +X.
         // Total mass of cluster = 1000.
         // Distance r = ~10000.
-        // Acceleration a = G * M_massive / r^2 = G * 1e6 / (1e8) = G * 0.01.
+        // Acceleration a = G * M_massive / r^2 = G * 1e6 / (1e8) = G * 0.01.        // Assuming G = 6.674e-11 (or whatever it is in physics backend)
+        println!("Running 1 simulation step...");
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
 
-        // Assuming G = 6.674e-11 (or whatever it is in physics backend)
         let ps = run_simulation(vulkan_device, &mut scene, 0.016, false);
 
-        // Check velocities!
+        println!("Simulation step complete. Waiting for idle...");
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+
+        unsafe { vulkan_device.device.device_wait_idle() };
+
+        println!("Device idle.");
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+
         let p_comp = scene
           .with_component(p_sys, |c: &crate::scene::ParticleSystemComponent| c.clone())
           .unwrap();
-        let lock = p_comp.particles.read();
 
-        let mut avg_vx = 0.0;
-        for i in 0..10 {
-          let p = &lock[i];
-          avg_vx += p.velocity[0];
+        let p_comp_read = p_comp.particles.read();
+        let mut count = 0;
+        let mut vx_sum = 0.0;
+        for p in p_comp_read.iter() {
+          if p.id_low < 10 {
+            count += 1;
+            vx_sum += p.velocity[0];
+          }
         }
+        let avg_vx = (vx_sum / count as f32);
+
+        println!("avg_vx: {}", avg_vx);
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+
+        assert!(avg_vx > 0.0);
+
+        let mut avg_vx = avg_vx;
         avg_vx /= 10.0;
+        let lock = p_comp.particles.read();
 
         let mut output_str = alloc::format!("Average X velocity: {}\n", avg_vx);
         for i in 0..11 {
@@ -941,6 +966,8 @@ mod tests {
   fn test_ccd_time_of_impact() {
     use crate::gpu::Kernels;
     let mut ctx = VulkanTestContext::new();
+    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+      .store(true, std::sync::atomic::Ordering::Relaxed);
     let mut scene = crate::scene::Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
     )));
@@ -961,7 +988,9 @@ mod tests {
       .add_component(
         rb_a,
         crate::scene::TransformComponent {
-          position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 0.0),
+          position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+            0.0, 0.0, 0.0,
+          ),
           ..Default::default()
         },
       )
@@ -980,7 +1009,9 @@ mod tests {
       .add_component(
         rb_a,
         crate::scene::KinematicComponent {
-          velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(100.0, 0.0, 0.0),
+          velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+            100.0, 0.0, 0.0,
+          ),
           ..Default::default()
         },
       )
@@ -992,7 +1023,9 @@ mod tests {
       .add_component(
         rb_b,
         crate::scene::TransformComponent {
-          position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(4.0, 0.0, 0.0),
+          position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+            4.0, 0.0, 0.0,
+          ),
           ..Default::default()
         },
       )
@@ -1011,7 +1044,9 @@ mod tests {
       .add_component(
         rb_b,
         crate::scene::KinematicComponent {
-          velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 0.0),
+          velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+            0.0, 0.0, 0.0,
+          ),
           ..Default::default()
         },
       )
@@ -1028,8 +1063,12 @@ mod tests {
         // Step with dt = 0.1s
         let _ps = run_simulation(vulkan_device, &mut scene, 0.1, true);
 
-        let vel_a = scene.with_component(rb_a, |k: &crate::scene::KinematicComponent| k.velocity).unwrap();
-        let vel_b = scene.with_component(rb_b, |k: &crate::scene::KinematicComponent| k.velocity).unwrap();
+        let vel_a = scene
+          .with_component(rb_a, |k: &crate::scene::KinematicComponent| k.velocity)
+          .unwrap();
+        let vel_b = scene
+          .with_component(rb_b, |k: &crate::scene::KinematicComponent| k.velocity)
+          .unwrap();
 
         let va = vel_a.x();
         let vb = vel_b.x();

@@ -267,14 +267,41 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
 ) -> vk::Bool32 {
   let p_msg = unsafe { (*p_callback_data).p_message };
   let msg = unsafe { core::ffi::CStr::from_ptr(p_msg) };
+  let s = msg.to_string_lossy();
+
   if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
     #[cfg(test)]
     {
       extern crate std;
-      let s = msg.to_string_lossy();
       let _ = std::fs::write("VULKAN_ERROR_DUMP.txt", s.as_ref());
+      std::eprintln!("VULKAN ERROR: {}", s);
+    }
+    if !_p_user_data.is_null() {
+      let cb: fn(&str) = unsafe { core::mem::transmute(_p_user_data) };
+      cb(&s);
+    }
+  } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
+    #[cfg(test)]
+    {
+      extern crate std;
+      std::eprintln!("VULKAN WARNING: {}", s);
+    }
+    #[cfg(not(test))]
+    {
+      aethervk_oshal_rlib::log!("VULKAN WARNING: {}", s);
+    }
+  } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::INFO) {
+    #[cfg(test)]
+    {
+      extern crate std;
+      std::println!("VULKAN INFO: {}", s);
+    }
+    #[cfg(not(test))]
+    {
+      aethervk_oshal_rlib::log!("VULKAN INFO: {}", s);
     }
   }
+
   vk::FALSE
 }
 
@@ -652,8 +679,8 @@ impl EntryWrapper {
           if lib.is_null() {
             let err_ptr = unsafe { libc::dlerror() };
             if !err_ptr.is_null() {
-                let err_msg = unsafe { core::ffi::CStr::from_ptr(err_ptr) };
-                aethervk_oshal_rlib::log!("dlopen error: {:?}", err_msg);
+              let err_msg = unsafe { core::ffi::CStr::from_ptr(err_ptr) };
+              aethervk_oshal_rlib::log!("dlopen error: {:?}", err_msg);
             }
           }
 
@@ -665,17 +692,17 @@ impl EntryWrapper {
             module_ptr.as_ptr(),
             b"vkGetInstanceProcAddr\0".as_ptr().cast(),
           );
-          
+
           if sym.is_null() {
             let err_ptr = libc::dlerror();
             if !err_ptr.is_null() {
-                let err_msg = core::ffi::CStr::from_ptr(err_ptr);
-                aethervk_oshal_rlib::log!("dlsym error: {:?}", err_msg);
+              let err_msg = core::ffi::CStr::from_ptr(err_ptr);
+              aethervk_oshal_rlib::log!("dlsym error: {:?}", err_msg);
             } else {
-                aethervk_oshal_rlib::log!("dlsym error: unknown (null symbol but no dlerror)");
+              aethervk_oshal_rlib::log!("dlsym error: unknown (null symbol but no dlerror)");
             }
           }
-          
+
           core::ptr::NonNull::new(sym)
         })
         .map(|func_addr| unsafe { core::mem::transmute(func_addr) })
@@ -740,10 +767,7 @@ pub(super) fn required_instance_extensions() -> &'static Vec<&'static CStr> {
     the_vec.push(ash::khr::surface::NAME);
     the_vec.push(ash::khr::get_surface_capabilities2::NAME);
 
-    #[cfg(test)]
-    {
-      the_vec.push(ash::ext::headless_surface::NAME);
-    }
+    // ash::ext::headless_surface::NAME is now added dynamically in instance.rs for testing
 
     #[cfg(windows)]
     {

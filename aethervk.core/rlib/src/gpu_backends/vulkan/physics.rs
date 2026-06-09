@@ -6,7 +6,7 @@
 use crate::{
   gpu::{
     self, CommandBuffer, DeviceBuffer, DeviceBvh, DeviceList, Kernels, KinematicBody, WaitHandle,
-    compute_push_constants::{ApplyImpulsesPushConstants, RigidBodyImex, Wrench},
+    compute_push_constants::*,
     vulkan::{
       device::{self, Device, LogicalDevice, commands, resources},
       utils,
@@ -38,61 +38,6 @@ pub static USE_PRINTF_SHADERS: core::sync::atomic::AtomicBool =
 pub static READBACK_DIAGNOSTICS: core::sync::atomic::AtomicBool =
   core::sync::atomic::AtomicBool::new(false);
 
-/// `narrow_ccd.comp` push constants — **56 bytes** (matches SPIR-V layout exactly).
-///
-/// GLSL offsets (std430):
-/// ```text
-///  0  RigidBodyArray scene_entities   (u64 BDA)
-///  8  uint64_t       particles        (u64 BDA)
-/// 16  uint64_t       output_list      (u64 BDA)
-/// 24  uint64_t       pair_buffer      (u64 BDA)
-/// 32  float          dt
-/// 36  float          particle_radius
-/// 40  GpuReferenceFrameArray lca_entities  (u64 BDA)
-/// 48  uint           space_type  (0 = rb-rb PairBuffer, 1 = CrossPairBuffer)
-/// 52  uint           _pad
-/// ```
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct NarrowCcdPushConstants {
-  pub scene_entities: u64,
-  pub particles: u64,
-  pub output_list: u64,
-  pub pair_buffer: u64,
-  pub dt: f32,
-  pub particle_radius: f32,
-  pub lca_entities: u64, // frames / lca BDA
-  pub space_type: u32,
-  pub _pad: u32,
-}
-
-/// `narrow_ccd_cross_lca.comp` push constants — **56 bytes**.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct NarrowCcdCrossLcaPushConstants {
-  pub scene_entities: u64,
-  pub particles: u64,
-  pub cross_output_list: u64,
-  pub cross_pair_buffer: u64,
-  pub dt: f32,
-  pub particle_radius: f32,
-  pub lca_entities: u64, // frames / lca BDA
-  pub space_type: u32,
-  pub _pad: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct NarrowCcdParticlesPushConstants {
-  pub scene_entities: u64,
-  pub output_list: u64,
-  pub particles: u64,
-  pub num_rigid_bodies: u32,
-  pub num_particles: u32,
-  pub dt: f32,
-  pub particle_radius: f32,
-}
-
 use vk_mem::{Alloc, AllocatorView, AsAllocatorView};
 
 /// Configuration parameters for the physics pipeline
@@ -117,359 +62,7 @@ pub struct PhysicsDeviceAddresses {
   pub emitters: u64,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-/// TODO: Document this item
-pub struct P12PushConstants {
-  pub particles: u64,
-  pub dt: f32,
-  pub total_particles: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-/// TODO: Document this item
-pub struct LbvhPushConstants {
-  pub bvh: u64,
-  pub sorted_morton: u64,
-  pub counters: u64,
-  pub particles: u64,
-  pub num_primitives: u32,
-  pub particle_radius: f32,
-  pub dt: f32,
-  pub _pad: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-/// TODO: Document this item
-pub struct CcdPushConstants {
-  pub particle_bvh: u64,
-  pub output_list: u64,
-  pub root_index: u32,
-  pub total_particles: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-/// TODO: Document this item
-pub struct StreamCompactPushConstants {
-  pub sparse_in: u64,
-  pub packed_out: u64,
-  pub total_elements: u32,
-  pub _pad: u32,
-  pub _pad_align16: [u32; 2],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-/// TODO: Document this item
-pub struct ReduceToiPushConstants {
-  pub particles: u64,
-  pub collisions: u64,
-  pub out_toi: u64,
-  pub particle_radius: f32,
-  pub dt: f32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-/// TODO: Document this item
-pub struct LcpPushConstants {
-  pub particles: u64,
-  pub collisions: u64,
-  pub outputs: u64,
-  pub total_clusters: u32,
-  pub num_rigid_bodies: u32,
-  pub rigid_bodies: u64,
-  pub dt: f32,
-  pub restitution: f32,
-  pub lca_entities: u64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-/// TODO: Document this item
-pub struct BarnesHutPushConstants {
-  pub particles: u64,
-  pub bvh: u64,
-  pub cluster_list: u64,
-  pub wrenches: u64,
-  pub num_clusters: u32,
-  pub dt: f32,
-  pub theta: f32,
-  pub g: f32,
-  pub softening_sq: f32,
-  pub root_node_idx: u32,
-  pub cluster_threshold: u32,
-  pub _pad: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-/// TODO: Document this item
-pub struct P5PushConstants {
-  pub particles: u64,
-  pub emitters: u64,
-  pub kinematics: u64,
-  pub dt: f32,
-  pub total_particles: u32,
-  pub num_emitters: u32,
-  pub num_kinematics: u32,
-  pub _pad_align16: [u32; 2],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct P34PushConstants {
-  pub rigid_bodies: u64,
-  pub emitters: u64,
-  pub kinematics: u64,
-  pub dt: f32,
-  pub total_rigid_bodies: u32,
-  pub num_emitters: u32,
-  pub num_kinematics: u32,
-  pub _pad_align16: [u32; 2],
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// IMEX Pipeline Push-Constant Structs
-// All sizes verified against shader `layout(push_constant, scalar)` blocks.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// `integrate_particles_p1_p2.comp` — 16 bytes
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ImexParticlesP12PushConstants {
-  /// BDA to AOSOA particle data (float[])
-  pub particles: u64,
-  /// Physical dt in seconds
-  pub dt: f32,
-  pub total_particles: u32,
-}
-
-/// `integrate_bodies_p3.comp` — 40 bytes
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ImexBodiesP3PushConstants {
-  /// BDA to RigidBodyArray (imex_math.glsl layout: quaternion + wrench_idx)
-  pub rigid_bodies: u64,
-  /// BDA to WrenchArray (6-float Wrench per entry)
-  pub wrenches: u64,
-  pub emitters: u64,
-  /// BDA to GpuReferenceFrameArray — used for macro→micro position transform
-  pub frames: u64,
-  /// Physical dt in seconds
-  pub dt: f32,
-  pub n_bodies: u32,
-  /// Picard iteration count (4 is sufficient for most scenes; 8–10 for high-spin)
-  pub n_iterations: u32,
-  pub num_emitters: u32,
-}
-
-/// `integrate_particles_p4_5.comp` — 40 bytes
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ImexParticlesP45PushConstants {
-  /// BDA to AOSOA particle data
-  pub particles: u64,
-  /// BDA to ClockBuffer (uvec2 global_time_us)
-  pub clock: u64,
-  /// Physical dt in seconds
-  pub dt: f32,
-  pub total_particles: u32,
-  /// dt in microseconds — low 32 bits
-  pub dt_us_lo: u32,
-  /// dt in microseconds — high 32 bits
-  pub dt_us_hi: u32,
-  /// t_n (current frame start) in microseconds — low 32 bits
-  pub current_time_lo: u32,
-  /// t_n (current frame start) in microseconds — high 32 bits
-  pub current_time_hi: u32,
-  pub _pad_align16: [u32; 2],
-}
-
-/// `rb_force_assign.comp` — 24 bytes
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct RbForceAssignPushConstants {
-  /// BDA to RigidBodyArray (read-only; only leaf_start_idx / leaf_count / wrench_idx used)
-  pub rigid_bodies: u64,
-  /// BDA to WrenchArray (leaf wrenches AND CoM wrench; both in same buffer)
-  pub wrenches: u64,
-  pub n_bodies: u32,
-  pub _pad: u32,
-  pub _pad_align16: [u32; 2],
-}
-
-/// `bp_clear.comp` — 32 bytes  (4 × 8-byte BDAs)
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct BpClearPushConstants {
-  pub raw_scene_pairs: u64,
-  pub out_rb_rb: u64,
-  pub out_rb_ps: u64,
-  pub out_rb_lca: u64,
-  pub out_internal: u64,
-  pub out_sparse: u64,
-}
-
-/// `bp_bounds_gen.comp` — 28 bytes
-///
-/// Matches the existing `bp_bounds_gen.comp` push-constant block:
-/// ```glsl
-/// EntityArray scene_entities;  // BDA
-/// LeafBuffer  tlas_leaves;     // BDA
-/// uvec2       dt_us;
-/// uint        total_entities;
-/// ```
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct BpBoundsGenPushConstants {
-  pub scene_entities: u64,
-  pub tlas_leaves: u64,
-  pub lca_entities: u64,
-  pub dt_us_lo: u32,
-  pub dt_us_hi: u32,
-  pub total_entities: u32,
-  pub _pad_align16: [u32; 2],
-}
-
-/// `bp_scene.comp` — 40 bytes
-///
-/// Matches:
-/// ```glsl
-/// MultiBvhBuffer tlas_bvh;          // BDA (8 bytes — treated as u64 opaque)
-/// LeafBuffer     query_leaves;       // BDA
-/// PairBuffer     overlapping_pairs;  // BDA
-/// uint           tlas_root_index;
-/// uint           total_queries;
-/// ```
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct BpScenePushConstants {
-  pub tlas_bvh: u64,
-  pub query_leaves: u64,
-  pub overlapping_pairs: u64,
-  pub tlas_root_index: u32,
-  pub total_queries: u32,
-}
-
-/// `bp_classify.comp` — 40 bytes
-///
-/// ```glsl
-/// EntityArray scene_entities;  // BDA
-/// RawPairs    raw_pairs;       // BDA
-/// QueueBuf    out_rb_rb;       // BDA
-/// QueueBuf    out_rb_ps;       // BDA
-/// QueueBuf    out_rb_lca;      // BDA
-/// ```
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct BpClassifyPushConstants {
-  pub raw_pairs: u64,
-  pub out_rb_rb: u64,
-  pub out_rb_ps: u64,
-  pub out_ps_ps: u64,
-  pub out_macro_lca: u64,
-  pub out_lca_lca: u64,
-  pub max_pairs: u32,
-  pub num_rigid_bodies: u32,
-  pub rigid_bodies: u64,
-}
-
-/// `bp_cross_lca.comp` — 88 bytes
-///
-/// ```glsl
-/// MultiBvhBuffer      tlas_bvh;
-/// GpuReferenceFrameArray lca_entities;
-/// LeafBuffer          macro_leaves;
-/// RigidBodyArray      rigid_bodies;      // replaces old EntityHeaderArray
-/// PairBuffer          lca_query_pairs;
-/// PairBuffer          out_rb_rb;
-/// PairBuffer          out_rb_ps;
-/// PairBuffer          out_ps_ps;
-/// CrossPairBuffer     out_cross_pairs;
-/// uint                total_queries;
-/// uint                max_pairs;
-/// uint                num_rigid_bodies;  // threshold for entity type detection
-/// uint                _pad;
-/// ```
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct BpCrossLcaPushConstants {
-  pub tlas_bvh_addr: u64,
-  pub lca_entities: u64,
-  pub macro_leaves: u64,
-  /// BDA of the rigid-body array — used by the shader to detect entity type
-  /// by index comparison (`id < num_rigid_bodies → TYPE_RIGID_BODY`).
-  pub rigid_bodies: u64,
-  pub lca_query_pairs: u64,
-  pub out_rb_rb: u64,
-  pub out_rb_ps: u64,
-  pub out_ps_ps: u64,
-  pub out_cross_pairs: u64,
-  pub total_queries: u32,
-  pub max_pairs: u32,
-  pub num_rigid_bodies: u32,
-  pub _pad: u32,
-}
-
-/// `bp_particle_self.comp` — 40 bytes
-///
-/// ```glsl
-/// MultiBvhBuffer bvh;            // BDA
-/// ParticleData   particles;      // BDA
-/// WrenchArray    wrench_buffer;  // BDA (writes into AOSOA force slots via atomicAdd)
-/// uint           root_index;
-/// uint           total_particles;
-/// float          particle_radius;
-/// float          stiffness;
-/// ```
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct BpParticleSelfPushConstants {
-  pub bvh: u64,
-  pub particles: u64,
-  pub wrench_buffer: u64,
-  pub root_index: u32,
-  pub total_particles: u32,
-  pub particle_radius: f32,
-  pub stiffness: f32,
-  pub _pad_align16: [u32; 2],
-}
-
-/// `apply_emitters_to_particles.comp` — 40 bytes
-///
-/// Applies macro-frame gravity emitters to microframe particles, performing
-/// GPU-inline macro (AU) → micro (km) coordinate transform per particle frame.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ApplyEmittersPushConstants {
-  pub particles: u64,          // BDA to AOSOA particle float buffer
-  pub emitters: u64,           // BDA to EmitterArray
-  pub frames: u64,             // BDA to GpuReferenceFrameArray
-  pub particle_frame_ids: u64, // BDA to u32[] — one frame index per particle
-  pub num_emitters: u32,
-  pub total_particles: u32,
-  pub _pad_align16: [u32; 2],
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct EmitParticlesPushConstants {
-  pub particles: u64,
-  pub candidates: u64,
-  pub bvh: u64,
-  pub counter: u64,
-  pub root_index: u32,
-  pub num_candidates: u32,
-  pub _pad0: [u32; 2],
-  pub sun_pos: [f32; 3],
-  pub _pad1: u32,
-}
 
 /// TODO: Document this item
 pub struct PhysicsPipelines {
@@ -552,9 +145,14 @@ impl PhysicsPipelines {
   pub fn new(
     device: &LogicalDevice,
     debug_shaders: bool,
-    subgroup_size: u32,
+    mut subgroup_size: u32,
     is_cpu: bool,
   ) -> GpuResult<Self> {
+    if subgroup_size <= 16 && is_cpu {
+      // For Lavapipe, if subgroup_size <= 16, workgroup size will be reduced to subgroup_size.
+      // So subgroup_size remains the hardware subgroup_size.
+    }
+
     let push_constant_range = vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::COMPUTE)
       .offset(0)
@@ -577,7 +175,9 @@ impl PhysicsPipelines {
       if cfg!(debug_assertions) || cfg!(test) {
         let (_, code_mut, _) = unsafe { spv_code.align_to_mut::<u32>() };
         crate::gpu_backends::vulkan::device::shader_manager::patch_spirv_prevent_inlining(code_mut);
-        crate::gpu_backends::vulkan::device::shader_manager::disassemble_and_log_spirv(spv_code.as_slice());
+        crate::gpu_backends::vulkan::device::shader_manager::disassemble_and_log_spirv(
+          spv_code.as_slice(),
+        );
       }
 
       let (prefix, code, suffix) = unsafe { spv_code.align_to::<u32>() };
@@ -743,12 +343,11 @@ impl PhysicsPipelines {
     macro_rules! mk_wg {
       ($stem:expr) => {{
         let mut path;
-        if is_cpu {
+        if is_cpu && subgroup_size <= 16 {
           let wg_suffix = match subgroup_size {
-            1..=4 => "wg4",   // SSE2/NEON or manual throttle → smallest
-            5..=8 => "wg8",   // AVX / AVX2
-            9..=16 => "wg16", // AVX-512
-            _ => "wg32",      // CPU with wide SIMD (shouldn't occur) → safe default
+            1..=4 => "wg4", // SSE2/NEON or manual throttle → smallest
+            5..=8 => "wg8", // AVX / AVX2
+            _ => "wg16",    // AVX-512
           };
           path = alloc::format!("{}/{}.{}.spv", sim_dir, $stem, wg_suffix);
         } else {
@@ -1359,6 +958,7 @@ pub struct VulkanComputeKernels {
   pub discard_pool: crate::gpu_backends::vulkan::device::resources::DiscardPool,
   pub queue_sharing_info: crate::gpu::QueueSharingInfo,
   pub transient_pool: spin::Mutex<TransientBufferPool>,
+  pub particle_self_gravity_enabled: core::sync::atomic::AtomicBool,
   #[cfg(test)]
   pub tracked_physical_allocations: spin::Mutex<alloc::vec::Vec<u64>>,
 }
@@ -1393,6 +993,7 @@ impl VulkanComputeKernels {
       discard_pool,
       queue_sharing_info,
       transient_pool: spin::Mutex::new(TransientBufferPool::new()),
+      particle_self_gravity_enabled: core::sync::atomic::AtomicBool::new(false),
       #[cfg(test)]
       tracked_physical_allocations: spin::Mutex::new(alloc::vec::Vec::new()),
     })
@@ -1412,11 +1013,8 @@ impl VulkanComputeKernels {
   /// and the dispatch group count must always agree.
   #[inline]
   pub fn effective_wg(&self, gpu_target: u32) -> u32 {
-    if self.pipelines.is_lavapipe {
-      // Clamp to the next power of two supported variant (wg4/wg8/wg16/wg32).
-      // The mk_wg! macro guarantees we loaded the matching .spv.
-      // Forced rebuild comment to ensure Docker recompiles
-      self.pipelines.subgroup_size.clamp(4, 32).min(gpu_target)
+    if self.pipelines.is_lavapipe && self.pipelines.subgroup_size <= 16 {
+      self.pipelines.subgroup_size.max(4)
     } else {
       gpu_target
     }
@@ -1445,6 +1043,20 @@ impl VulkanComputeKernels {
 
     unsafe { device.destroy_semaphore(self.timeline, None) };
   }
+
+  pub(crate) fn recycle_transient_buffer<T: Copy + Send + Sync>(&self, mut buf: VulkanBuffer<T>, timeline: u64) {
+    buf.discarded = true; // Prevent Drop warning
+    self.transient_pool.lock().entries.push(TransientBufferEntry {
+      buffer: buf.buffer,
+      address: buf.address,
+      capacity: buf.capacity,
+      allocation: buf.allocation,
+      item_size: core::mem::size_of::<T>(),
+      is_list: buf.is_list,
+      timeline_freed: timeline,
+      usage: buf.usage,
+    });
+  }
 }
 
 impl VulkanComputeKernels {
@@ -1458,7 +1070,12 @@ impl VulkanComputeKernels {
     rollback: &mut utils::RollbackContext<'_>,
   ) -> GpuResult<VulkanBuffer<T>> {
     let is_list = false;
-    let size = (core::mem::size_of::<T>() * data.len().max(1)) as u64;
+    let mut size = (core::mem::size_of::<T>() * data.len().max(1)) as u64;
+    // Pad to 256 bytes to prevent Lavapipe LLVM JIT speculative out-of-bounds writes
+    // from corrupting VMA block sentinels.
+    if size % 256 != 0 {
+      size += 256 - (size % 256);
+    }
 
     let sharing_mode = if self.queue_sharing_info.mode == crate::gpu::SharingMode::Concurrent {
       vk::SharingMode::CONCURRENT
@@ -1507,7 +1124,7 @@ impl VulkanComputeKernels {
         core::ptr::copy_nonoverlapping(
           data.as_ptr() as *const u8,
           info.mapped_data as *mut u8,
-          size as usize,
+          core::mem::size_of::<T>() * data.len(),
         );
       }
     }
@@ -1810,10 +1427,10 @@ impl VulkanComputeKernels {
                     .unwrap_or(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero());
 
                 let mass = collider.mass;
-                let (shape_type, shape_data, inertia_tensor) = match collider.shape {
+                let (_, _, inertia_tensor) = match collider.shape {
                     crate::scene::ColliderShape::Sphere { radius } => {
                     let i = 0.4 * mass * radius * radius;
-                    (2, [radius, 0.0, 0.0], [[i, 0.0, 0.0], [0.0, i, 0.0], [0.0, 0.0, i]])
+                    (2, [radius, 0.0, 0.0], [i, 0.0, 0.0, 0.0, i, 0.0, 0.0, 0.0, i])
                     }
                     crate::scene::ColliderShape::OBB { half_extents } => {
                     let dx = half_extents.x() * 2.0;
@@ -1822,32 +1439,28 @@ impl VulkanComputeKernels {
                     let ix = (1.0 / 12.0) * mass * (dy * dy + dz * dz);
                     let iy = (1.0 / 12.0) * mass * (dx * dx + dz * dz);
                     let iz = (1.0 / 12.0) * mass * (dx * dx + dy * dy);
-                    (1, [half_extents.x(), half_extents.y(), half_extents.z()], [[ix, 0.0, 0.0], [0.0, iy, 0.0], [0.0, 0.0, iz]])
+                    (1, [half_extents.x(), half_extents.y(), half_extents.z()], [ix, 0.0, 0.0, 0.0, iy, 0.0, 0.0, 0.0, iz])
                     }
                 };
 
                 let rot_mat = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_quat_custom_frame(transform.rotation);
                 let rot_arr = [
-                    [rot_mat.component(0).unwrap(), rot_mat.component(1).unwrap(), rot_mat.component(2).unwrap()],
-                    [rot_mat.component(4).unwrap(), rot_mat.component(5).unwrap(), rot_mat.component(6).unwrap()],
-                    [rot_mat.component(8).unwrap(), rot_mat.component(9).unwrap(), rot_mat.component(10).unwrap()],
+                    rot_mat.component(0).unwrap(), rot_mat.component(1).unwrap(), rot_mat.component(2).unwrap(),
+                    rot_mat.component(4).unwrap(), rot_mat.component(5).unwrap(), rot_mat.component(6).unwrap(),
+                    rot_mat.component(8).unwrap(), rot_mat.component(9).unwrap(), rot_mat.component(10).unwrap(),
                 ];
 
                 bodies.push(gpu::RigidBodyGpu {
                     position: [transform.position.x(), transform.position.y(), transform.position.z()],
                     mass,
                     rotation: rot_arr,
+                    _pad_rot: [0.0; 3],
                     linear_velocity: [velocity.x(), velocity.y(), velocity.z()],
                     _pad0: 0.0,
                     angular_velocity: [angular_velocity.x(), angular_velocity.y(), angular_velocity.z()],
                     _pad1: 0.0,
                     inertia_tensor,
-                    force: [0.0, 0.0, 0.0],
-                    torque: [0.0, 0.0, 0.0],
-                    entity_id: entity,
-                    parent_frame_id: parent_id,
-                    shape_type,
-                    shape_data,
+                    _pad_inertia: [0.0; 3],
                 });
             }
         );
@@ -2052,13 +1665,14 @@ impl VulkanComputeKernels {
             |entity, _transform, sys| {
                 let parent_id = scene0.get_parent(entity).map(|id| slotmap::Key::data(&id).as_ffi() as u32).unwrap_or(0);
                 let particles = sys.particles.read();
+                // TODO faster, pure GPU backing
                 for (i, p) in particles.iter().enumerate().filter(|(_, p)| p.active != 0) {
                     flat_particles.push(alloc::vec![
                         p.position[0], p.position[1], p.position[2],
                         p.velocity[0], p.velocity[1], p.velocity[2],
                         p.mass,
                         0.0, 0.0, 0.0, // force slots (cleared each frame)
-                        sys.beta,       // slot 10: radiation pressure β
+                        sys.beta,      // slot 10: radiation pressure β
                     ]);
                     metadata.push(gpu::ParticleMetadata {
                         entity_id: entity,
@@ -2747,7 +2361,7 @@ impl VulkanComputeKernels {
     total_entities: u32,
     dt: timeus_t,
   ) {
-    let wg_size = self.effective_wg(256);
+    let wg_size = self.effective_wg(128);
     let groups = (total_entities + wg_size - 1) / wg_size;
 
     let pc = BpBoundsGenPushConstants {
@@ -2757,7 +2371,7 @@ impl VulkanComputeKernels {
       dt_us_lo: dt as u32,
       dt_us_hi: (dt >> 32) as u32,
       total_entities,
-      _pad_align16: [0; 2],
+      _pad: 0,
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
@@ -2814,7 +2428,7 @@ impl VulkanComputeKernels {
   ) {
     // One subgroup per query — dispatch groups = ceil(queries / SUBGROUPS_PER_WG)
     // WG size = 256 for GPU (8 subgroups × 32-wide); on CPU use effective_wg().
-    let wg_size = self.effective_wg(256);
+    let wg_size = self.effective_wg(128);
     let subgroups_per_wg = wg_size / self.pipelines.subgroup_size.max(1);
     let groups = (total_queries + subgroups_per_wg - 1) / subgroups_per_wg;
 
@@ -2876,7 +2490,7 @@ impl VulkanComputeKernels {
     total_raw_pairs: u32,
     num_rigid_bodies: u32,
   ) {
-    let wg_size = self.effective_wg(256);
+    let wg_size = self.effective_wg(128);
     let groups = (total_raw_pairs + wg_size - 1) / wg_size;
 
     let pc = BpClassifyPushConstants {
@@ -2946,7 +2560,7 @@ impl VulkanComputeKernels {
     max_pairs: u32,
     num_rigid_bodies: u32,
   ) {
-    let _wg_size = self.effective_wg(256);
+    let _wg_size = self.effective_wg(128);
     let subgroups_per_wg = _wg_size / self.pipelines.subgroup_size.max(1);
     let groups = (total_queries + subgroups_per_wg - 1) / subgroups_per_wg;
 
@@ -3021,7 +2635,7 @@ impl VulkanComputeKernels {
     particle_radius: f32,
     stiffness: f32,
   ) {
-    let _wg_size = self.effective_wg(256);
+    let _wg_size = self.effective_wg(128);
     let subgroups_per_wg = _wg_size / self.pipelines.subgroup_size.max(1);
     let groups = (total_particles + subgroups_per_wg - 1) / subgroups_per_wg;
 
@@ -3216,7 +2830,8 @@ impl VulkanComputeKernels {
       let stride = gpu::PARTICLE_FIELDS as u32 * sg;
       (particles.capacity() as u32 / stride) * sg
     };
-    let dispatch_groups = (total_particles + 127) / 128;
+    let wg_size = self.effective_wg(128);
+    let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
 
     let pc_bh = BarnesHutPushConstants {
       particles: particles.address,
@@ -3226,7 +2841,6 @@ impl VulkanComputeKernels {
       num_clusters: total_particles, // cluster count ≈ particle count for now
       dt: 0.0,
       theta: 0.5,
-      // TODO switch to mu (G * M_Sun or whatever field)
       g: 1.0,
       softening_sq: 1e-6,
       root_node_idx: 0,
@@ -3424,11 +3038,11 @@ impl VulkanComputeKernels {
 
     let pc = LbvhPushConstants {
       bvh: bvh_buffer.address, // self.addresses.bvh_nodes,
-      sorted_morton: 0,
+      sorted_morton: sorted_morton.address,
       counters: atomic_counters.address,
       particles: particles.address, // self.addresses.particle_data,
       num_primitives: total_particles,
-      particle_radius: 1.0,
+      particle_radius: 1.0, // TODO
       dt: _dt as f32 / 1_000_000.0,
       _pad: 0,
     };
@@ -3440,27 +3054,56 @@ impl VulkanComputeKernels {
     };
 
     unsafe {
-      device.cmd_fill_buffer(
-        cmd.cmd,
-        atomic_counters.buffer,
-        0,
-        (num_nodes * 4) as u64,
-        0,
+      let pc_prepass = crate::gpu::compute_push_constants::LbvhPrepassPushConstants {
+        bvh: bvh_buffer.address,
+        counters_addr: atomic_counters.address,
+        num_internal_nodes: (total_particles.saturating_sub(1)).max(1) as u32,
+        _pad: 0,
+        _pad2: 0,
+      };
+      let bytes_prepass = core::slice::from_raw_parts(
+        &pc_prepass as *const _ as *const u8,
+        core::mem::size_of::<crate::gpu::compute_push_constants::LbvhPrepassPushConstants>(),
       );
 
+      device.cmd_bind_pipeline(
+        cmd.cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.pipelines.lbvh_prepass,
+      );
+      self.pipelines.assert_pc_size(self.pipelines.lbvh_prepass, bytes_prepass.len());
+      device.cmd_push_constants(
+        cmd.cmd,
+        self.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytes_prepass,
+      );
+      let prepass_wg = self.effective_wg(128);
+      let prepass_groups = (total_particles + prepass_wg - 1) / prepass_wg;
+      if prepass_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, prepass_groups, 1, 1);
+      }
+
       let fill_barrier = vk::BufferMemoryBarrier::default()
-        .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
         .buffer(atomic_counters.buffer)
-        .size((num_nodes * 4) as u64);
+        .size(vk::WHOLE_SIZE);
+
+      let bvh_barrier = vk::BufferMemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
+        .buffer(bvh_buffer.buffer)
+        .size(vk::WHOLE_SIZE);
 
       device.cmd_pipeline_barrier(
         cmd.cmd,
-        vk::PipelineStageFlags::TRANSFER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
         vk::PipelineStageFlags::COMPUTE_SHADER,
         vk::DependencyFlags::empty(),
         &[],
-        core::slice::from_ref(&fill_barrier),
+        &[fill_barrier, bvh_barrier],
         &[],
       );
 
@@ -3469,6 +3112,7 @@ impl VulkanComputeKernels {
         vk::PipelineBindPoint::COMPUTE,
         self.pipelines.lbvh_build,
       );
+      self.pipelines.assert_pc_size(self.pipelines.lbvh_build, bytes.len());
       device.cmd_push_constants(
         cmd.cmd,
         self.pipelines.pipeline_layout,
@@ -3525,10 +3169,8 @@ impl VulkanComputeKernels {
     }
 
     let timeline = self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
-    let mut sorted_morton = sorted_morton;
-    let mut atomic_counters = atomic_counters;
-    sorted_morton.discard(&self.discard_pool, timeline);
-    atomic_counters.discard(&self.discard_pool, timeline);
+    self.recycle_transient_buffer(sorted_morton, timeline);
+    self.recycle_transient_buffer(atomic_counters, timeline);
 
     Ok(bvh_buffer)
   }
@@ -3568,7 +3210,7 @@ impl VulkanComputeKernels {
         vk::PipelineBindPoint::COMPUTE,
         self.pipelines.motion_refit,
       );
-      let wg_size = self.effective_wg(256);
+      let wg_size = self.effective_wg(128);
       let dispatch_groups = (total_nodes + wg_size - 1) / wg_size;
       if dispatch_groups > 0 {
         device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
@@ -3699,7 +3341,7 @@ impl VulkanComputeKernels {
       );
 
       // Dispatch indirect using the potentials buffer
-      device.cmd_dispatch_indirect(cmd.cmd, potentials.buffer, 0);
+      device.cmd_dispatch_indirect(cmd.cmd, potentials.buffer, 8);
 
       // TODO synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -3891,7 +3533,7 @@ impl VulkanComputeKernels {
         bytes,
       );
 
-      device.cmd_dispatch_indirect(cmd.cmd, compacted.buffer, 0);
+      device.cmd_dispatch_indirect(cmd.cmd, compacted.buffer, 8);
 
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::TRANSFER_WRITE)
@@ -3992,7 +3634,7 @@ impl VulkanComputeKernels {
         0,
         bytes_lcp,
       );
-      device.cmd_dispatch_indirect(cmd.cmd, collisions.buffer, 0);
+      device.cmd_dispatch_indirect(cmd.cmd, collisions.buffer, 8);
 
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -4022,7 +3664,7 @@ impl VulkanComputeKernels {
         0,
         bytes_apply,
       );
-      device.cmd_dispatch_indirect(cmd.cmd, collisions.buffer, 0);
+      device.cmd_dispatch_indirect(cmd.cmd, collisions.buffer, 8);
 
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -4040,10 +3682,7 @@ impl VulkanComputeKernels {
 
     // Deferred-free: GPU commands referencing `impulses_buffer` have been recorded,
     // so it is safe to release once the compute timeline reaches `next_submit_value`.
-    impulses_buffer.discard(
-      &self.discard_pool,
-      self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed),
-    );
+    self.recycle_transient_buffer(impulses_buffer, self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed));
 
     Ok(())
   }
@@ -4255,6 +3894,10 @@ impl VulkanComputeKernels {
 }
 
 impl Kernels for Device {
+  fn toggle_particle_self_gravity(&self, enable: bool) {
+    self.kernels.particle_self_gravity_enabled.store(enable, core::sync::atomic::Ordering::Relaxed);
+  }
+
   #[cfg(any(test, feature = "collisions"))]
   fn narrow_ccd(
     &self,
@@ -4633,11 +4276,49 @@ impl Kernels for Device {
 
   #[cfg(feature = "shader_debug_sync")]
   fn debug_sync_barrier(&self, mut cmd: Self::Cmd) -> EngineResult<Self::Cmd> {
-    // Submit whatever has been recorded so far
-    let _sync = cmd.submit().map_err(EngineError::from)?;
+    unsafe {
+      let device = cmd.device_ptr.as_ref();
+      let next_submit_value = cmd.next_submit_value_ptr.as_ref();
 
-    // Wait on the throwaway semaphore (created inside submit())
-    if cmd.throwaway_sem != vk::Semaphore::null() {
+      device
+        .end_command_buffer(cmd.cmd)
+        .map_err(|e| EngineError::from(GpuError::from(e)))?;
+
+      let mut type_info = vk::SemaphoreTypeCreateInfo::default()
+        .semaphore_type(vk::SemaphoreType::TIMELINE)
+        .initial_value(0);
+      let sem_ci = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
+      cmd.throwaway_sem = device
+        .handle
+        .create_semaphore(&sem_ci, None)
+        .map_err(|e| EngineError::from(GpuError::from(e)))?;
+
+      let command_buffers = [cmd.cmd];
+      let signal_semaphores = [cmd.timeline_sem, cmd.throwaway_sem];
+
+      let _guard = device.submission_lock.lock();
+      cmd.timeline_value = next_submit_value.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+      let signal_values = [cmd.timeline_value, 1];
+
+      let mut timeline_info =
+        vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&signal_values);
+
+      let submit_info = vk::SubmitInfo::default()
+        .command_buffers(&command_buffers)
+        .signal_semaphores(&signal_semaphores)
+        .push_next(&mut timeline_info);
+
+      aethervk_oshal_rlib::log!("debug_sync_barrier: before queue_submit");
+      device
+        .handle
+        .queue_submit(cmd.queue.handle, &[submit_info], vk::Fence::null())
+        .map_err(|e| EngineError::from(GpuError::from(e)))?;
+      drop(_guard);
+
+      cmd
+        .assigned_timeline_value
+        .store(cmd.timeline_value, core::sync::atomic::Ordering::Release);
+
       aethervk_oshal_rlib::log!("debug_sync_barrier: before wait_for_semaphore_value");
       self
         .device
@@ -4649,6 +4330,10 @@ impl Kernels for Device {
           ))
         })?;
       aethervk_oshal_rlib::log!("debug_sync_barrier: after wait_for_semaphore_value");
+
+      // Manually clean up since we waited synchronously!
+      device.handle.destroy_semaphore(cmd.throwaway_sem, None);
+      let _ = cmd.command_pools.recycle(cmd.tid, cmd.id, cmd.cmd);
       cmd.throwaway_sem = vk::Semaphore::null();
     }
 
@@ -4880,6 +4565,10 @@ impl Kernels for Device {
     bvh: &Self::MotionBvh,
     particles: &mut Self::Buffer<f32>,
   ) -> EngineResult<()> {
+    if !self.kernels.particle_self_gravity_enabled.load(core::sync::atomic::Ordering::Relaxed) {
+      return Ok(());
+    }
+
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
@@ -5366,11 +5055,7 @@ impl Kernels for Device {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
       .execute(|(), _rollback| {
-        let total_particles = {
-          let sg = self.kernels.pipelines.subgroup_size;
-          let stride = gpu::PARTICLE_FIELDS as u32 * sg;
-          (particles.capacity() as u32 / stride) * sg
-        };
+        let total_particles = particle_frame_ids.capacity() as u32;
         self.kernels.apply_emitters_to_particles(
           &self.device,
           cmd,
@@ -5562,6 +5247,10 @@ impl Kernels for Device {
     particle_radius: f32,
     stiffness: f32,
   ) -> EngineResult<()> {
+    if !self.kernels.particle_self_gravity_enabled.load(core::sync::atomic::Ordering::Relaxed) {
+      return Ok(());
+    }
+
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
       .execute(|(), _rollback| {
@@ -5611,8 +5300,8 @@ impl Device {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
 
-    let dispatch_groups = (broadphase_pairs.capacity as u32 + self.kernels.effective_wg(256) - 1)
-      / self.kernels.effective_wg(256);
+    let dispatch_groups = (broadphase_pairs.capacity as u32 + self.kernels.effective_wg(128) - 1)
+      / self.kernels.effective_wg(128);
 
     unsafe {
       self.device.cmd_bind_pipeline(
@@ -5677,8 +5366,8 @@ impl Device {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
     };
 
-    let dispatch_groups = (broadphase_pairs.capacity as u32 + self.kernels.effective_wg(256) - 1)
-      / self.kernels.effective_wg(256);
+    let dispatch_groups = (broadphase_pairs.capacity as u32 + self.kernels.effective_wg(128) - 1)
+      / self.kernels.effective_wg(128);
 
     unsafe {
       let pipeline = if space_type == 1 {
