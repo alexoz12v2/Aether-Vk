@@ -5,55 +5,23 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 
 #include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
+
 #ifndef LOCAL_SIZE_X
 #define LOCAL_SIZE_X 128
 #endif
 layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
 
-layout(buffer_reference, std430, buffer_reference_align = 16) buffer FloatArray {
-    float data[];
-};
-
-layout(buffer_reference, std430, buffer_reference_align = 4) buffer AtomicCounters {
-    uint counts[];
-};
-
-struct ParticleData {
-    uint id_low;
-    uint id_high;
-    uint age_low;
-    uint age_high;
-    vec3 position;
-    float mass;
-    vec3 velocity;
-    uint is_active;
-};
-
-layout(buffer_reference, std430, buffer_reference_align = 16) writeonly buffer ParticleDataArray {
-    ParticleData data[];
-};
-
-struct DrawIndirectCommand {
-    uint vertexCount;
-    uint instanceCount;
-    uint firstVertex;
-    uint firstInstance;
-};
-
-layout(buffer_reference, std430, buffer_reference_align = 16) writeonly buffer IndirectArray {
-    DrawIndirectCommand commands[];
-};
-
 layout(push_constant, std430) uniform PushConstants {
-    FloatArray aosoa_particles;
-    ParticleDataArray mega_particles;
+    ParticleData aosoa_particles;
+    RenderParticleDataArray mega_particles;
     IndirectArray mega_indirect;
     AtomicCounters atomic_counters;
     uint mega_indirect_index;
     uint mega_particle_offset;
 } pc;
 
-const uint SUBGROUP_SIZE = 32;
+
 const uint PARTICLE_FIELDS = 11u;
 
 void main() {
@@ -77,16 +45,16 @@ void main() {
     uint in_base  = in_block * PARTICLE_FIELDS * SUBGROUP_SIZE + in_lane;
 
     vec3 pos;
-    pos.x = pc.aosoa_particles.data[in_base + 0 * SUBGROUP_SIZE];
-    pos.y = pc.aosoa_particles.data[in_base + 1 * SUBGROUP_SIZE];
-    pos.z = pc.aosoa_particles.data[in_base + 2 * SUBGROUP_SIZE];
+    pos.x = uintBitsToFloat(pc.aosoa_particles.data[in_base + 0 * SUBGROUP_SIZE]);
+    pos.y = uintBitsToFloat(pc.aosoa_particles.data[in_base + 1 * SUBGROUP_SIZE]);
+    pos.z = uintBitsToFloat(pc.aosoa_particles.data[in_base + 2 * SUBGROUP_SIZE]);
 
     vec3 vel;
-    vel.x = pc.aosoa_particles.data[in_base + 3 * SUBGROUP_SIZE];
-    vel.y = pc.aosoa_particles.data[in_base + 4 * SUBGROUP_SIZE];
-    vel.z = pc.aosoa_particles.data[in_base + 5 * SUBGROUP_SIZE];
+    vel.x = uintBitsToFloat(pc.aosoa_particles.data[in_base + 3 * SUBGROUP_SIZE]);
+    vel.y = uintBitsToFloat(pc.aosoa_particles.data[in_base + 4 * SUBGROUP_SIZE]);
+    vel.z = uintBitsToFloat(pc.aosoa_particles.data[in_base + 5 * SUBGROUP_SIZE]);
 
-    float mass = pc.aosoa_particles.data[in_base + 6 * SUBGROUP_SIZE];
+    float mass = uintBitsToFloat(pc.aosoa_particles.data[in_base + 6 * SUBGROUP_SIZE]);
 
     uint out_idx = pc.mega_particle_offset + idx;
 

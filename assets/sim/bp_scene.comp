@@ -1,10 +1,10 @@
 // @assets/sim/bp_scene.comp
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
-
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_ballot : require
+
 #ifdef DEBUG_SHADERS
 #extension GL_EXT_debug_printf : enable
 #endif
@@ -15,8 +15,12 @@
 #ifndef LOCAL_SIZE_X
 #define LOCAL_SIZE_X 128
 #endif
+
+// FIX: This constant is ONLY for sizing shared memory safely at compile time.
+// Vulkan guarantees a minimum subgroup size of 4, so this ensures we never overflow shared memory.
+const uint MAX_SUBGROUPS_PER_WG = (LOCAL_SIZE_X + 3) / 4;
+
 layout(local_size_x = LOCAL_SIZE_X) in;
-const uint SUBGROUPS_PER_WG = (LOCAL_SIZE_X + 3) / 4;
 
 layout(push_constant, std430) uniform PushConstants {
     MultiBvhBuffer tlas_bvh;
@@ -26,14 +30,40 @@ layout(push_constant, std430) uniform PushConstants {
     uint     total_queries;
 } pc;
 
-shared uint shared_stacks[SUBGROUPS_PER_WG][BVH_STACK_DEPTH];
-shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
+// Arrays sized to maximum possible subgroups
+shared uint shared_stacks[MAX_SUBGROUPS_PER_WG][BVH_STACK_DEPTH];
+shared uint shared_stack_ptrs[MAX_SUBGROUPS_PER_WG];
 
 void main() {
     uint subgroup_id = gl_SubgroupID;
     uint lane_id     = gl_SubgroupInvocationID;
 
-    uint query_idx = gl_WorkGroupID.x * SUBGROUPS_PER_WG + subgroup_id;
+    // --- GLOBAL DIAGNOSTIC HEADER ---
+#ifdef DEBUG_SHADERS
+    if (gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("======================================\n");
+        debugPrintfEXT("bp_scene.comp : DIAGNOSTICS STARTED\n");
+        debugPrintfEXT("HW gl_SubgroupSize : %d\n", gl_SubgroupSize);
+        debugPrintfEXT("HW gl_NumSubgroups : %d per WorkGroup\n", gl_NumSubgroups);
+        debugPrintfEXT("Total Queries      : %d\n", pc.total_queries);
+        debugPrintfEXT("======================================\n");
+    }
+    // Ensure all threads wait for the header to print cleanly
+    memoryBarrierShared();
+    barrier();
+#endif
+
+    // FIX: Calculate query index using the hardware's ACTUAL subgroup count (gl_NumSubgroups),
+    // NOT the compile-time MAX_SUBGROUPS_PER_WG. This prevents dropping queries!
+    uint query_idx = gl_WorkGroupID.x * gl_NumSubgroups + subgroup_id;
+
+#ifdef DEBUG_SHADERS
+    // Diagnostic to verify dense query mapping (only prints first 8 queries to avoid spam)
+    if (lane_id == 0 && query_idx < 8) {
+        debugPrintfEXT("[MAPPING] WG %d, Subgroup %d -> Processing Query %d\n", gl_WorkGroupID.x, subgroup_id, query_idx);
+    }
+#endif
+
     if (query_idx >= pc.total_queries) return;
 
     vec3 my_min, my_max; uint my_ent_id;
@@ -45,7 +75,11 @@ void main() {
         uint my_meta = pc.query_leaves.leaves[query_idx].metadata;
 
 #ifdef DEBUG_SHADERS
-        debugPrintfEXT("bp_scene: query_idx=%d, ent_id=%d, min=(%f,%f,%f), max=(%f,%f,%f)\n", query_idx, my_ent_id, my_min.x, my_min.y, my_min.z, my_max.x, my_max.y, my_max.z);
+        // Only print query init for a specific query to avoid overwhelming the log buffer
+        if (query_idx == 0) {
+            debugPrintfEXT("[QUERY 0 INIT] ent_id=%d, min=(%1.2f,%1.2f,%1.2f), max=(%1.2f,%1.2f,%1.2f)\n",
+                my_ent_id, my_min.x, my_min.y, my_min.z, my_max.x, my_max.y, my_max.z);
+        }
 #endif
 
         shared_stacks[subgroup_id][0] = pc.tlas_root_index;
@@ -74,31 +108,29 @@ void main() {
 
         uint entity_id = bvh_get_index(meta);
 
-
-
         bool hit = valid && intersectAABB(my_min, my_max, c_min, c_max);
         bool is_leaf = bvh_is_leaf(meta);
+
+#ifdef DEBUG_SHADERS
+        if (query_idx == 0 && valid) {
+            debugPrintfEXT("[Q0 DEBUG] NodeIdx=%d, Lane=%d. c_min=(%1.2f,%1.2f,%1.2f), c_max=(%1.2f,%1.2f,%1.2f)\n",
+                node_idx, lane_id, c_min.x, c_min.y, c_min.z, c_max.x, c_max.y, c_max.z);
+        }
+#endif
         uint entity_shape = bvh_get_shape(meta);
         bool is_sub_tlas = (entity_shape == BVH_SHAPE_SUB_TLAS);
 
-        // Prevents (A,A) and duplicate (B,A) pairs.
-        // Rule: record pair only if my_ent_id < entity_id (canonical ordering).
-        // Exception: SUB_TLAS leaves never query themselves so we MUST record them
-        // even when entity_id < my_ent_id (but still skip self-collision A==A).
-        // Note: do NOT filter on entity_shape == BVH_SHAPE_AABB — rigid body
-        // leaves in the TLAS ARE typed BVH_SHAPE_AABB (see tlas_builder.rs:329);
-        // filtering on that shape would eliminate all rb-rb pairs.
         bool hit_leaf = hit && is_leaf && ((my_ent_id < entity_id) || (is_sub_tlas && my_ent_id != entity_id));
+
 #ifdef DEBUG_SHADERS
-        if (my_ent_id == 0 && valid) {
-            debugPrintfEXT("bp_scene: ent 0 lane %d node %d: c_min=(%f,%f,%f), c_max=(%f,%f,%f), hit=%d, leaf=%d, ent=%d, SG_SIZE=%d, gl_SubgroupSize=%d, valid_mask.x=%x\n", lane_id, node_idx, c_min.x, c_min.y, c_min.z, c_max.x, c_max.y, c_max.z, hit ? 1 : 0, is_leaf ? 1 : 0, entity_id, SUBGROUP_SIZE, gl_SubgroupSize, pc.tlas_bvh.nodes[node_idx].valid_mask.x);
+        // Diagnostic: Tracking Node Intersections for Query 0
+        if (query_idx == 0 && valid && hit) {
+            debugPrintfEXT("[Q0 TRAVERSAL] Hit! NodeIdx=%d, Lane=%d, is_leaf=%d, HitEntID=%d. AABB min=(%1.2f,%1.2f,%1.2f)\n",
+                node_idx, lane_id, is_leaf ? 1 : 0, entity_id, c_min.x, c_min.y, c_min.z);
         }
-        if (hit_leaf) debugPrintfEXT("bp_scene: Box hit leaf! meta=%x\n", meta);
 #endif
 
         bool hit_node = hit && !is_leaf;
-
-
 
         uvec4 leaf_ballot = subgroupBallot(hit_leaf);
         uint  leaf_count  = subgroupBallotBitCount(leaf_ballot);
@@ -111,17 +143,37 @@ void main() {
 
             if (hit_leaf && base_idx + leaf_offset < pc.overlapping_pairs.capacity) {
                 pc.overlapping_pairs.pairs[base_idx + leaf_offset] = uvec2(my_ent_id, meta);
+
+#ifdef DEBUG_SHADERS
+                debugPrintfEXT("[COLLISION PAIR LOGGED] QueryEntID=%d overlaps HitEntID=%d at array index %d\n",
+                    my_ent_id, entity_id, base_idx + leaf_offset);
+#endif
             }
+#ifdef DEBUG_SHADERS
+            else if (hit_leaf) {
+                debugPrintfEXT("[WARNING] Overlapping pairs capacity exceeded! Dropping pair (%d, %d)\n", my_ent_id, entity_id);
+            }
+#endif
         }
 
         uvec4 node_ballot = subgroupBallot(hit_node);
         uint  node_count  = subgroupBallotBitCount(node_ballot);
         uint  push_offset = subgroupBallotExclusiveBitCount(node_ballot);
 
-        // Guard against stack overflow — drop nodes that would exceed depth
+        // Guard against stack overflow
         uint new_top = min(stack_ptr + node_count, BVH_STACK_DEPTH);
-        if (hit_node && (stack_ptr + push_offset) < BVH_STACK_DEPTH)
-            shared_stacks[subgroup_id][stack_ptr + push_offset] = child_payload;
+
+        if (hit_node) {
+            if ((stack_ptr + push_offset) < BVH_STACK_DEPTH) {
+                shared_stacks[subgroup_id][stack_ptr + push_offset] = child_payload;
+            }
+#ifdef DEBUG_SHADERS
+            else {
+                debugPrintfEXT("[FATAL ERROR] BVH Stack Overflow in Query %d! (Stack ptr: %d >= %d)\n", query_idx, stack_ptr + push_offset, BVH_STACK_DEPTH);
+            }
+#endif
+        }
+
         if (lane_id == 0) shared_stack_ptrs[subgroup_id] = new_top;
     }
 }

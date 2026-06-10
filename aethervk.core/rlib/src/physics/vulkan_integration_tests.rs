@@ -965,9 +965,9 @@ mod tests {
   #[cfg(feature = "collisions")]
   fn test_ccd_time_of_impact() {
     use crate::gpu::Kernels;
-    let mut ctx = VulkanTestContext::new();
     crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
       .store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut ctx = VulkanTestContext::new();
     let mut scene = crate::scene::Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
     )));

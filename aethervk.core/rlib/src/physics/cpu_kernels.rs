@@ -624,7 +624,8 @@ impl Kernels for CpuScalarKernels {
     cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
+    particles: &mut Self::Buffer<f32>,
+    particle_frame_ids: &mut Self::Buffer<u32>,
     dt: timeus_t,
   ) -> EngineResult<Self::MotionBvh> {
     Ok(CpuMotionBvh {
@@ -1142,7 +1143,8 @@ impl Kernels for CpuSimdKernels {
     cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<KinematicBody>,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
+    particles: &mut Self::Buffer<f32>,
+    particle_frame_ids: &mut Self::Buffer<u32>,
     dt: timeus_t,
   ) -> EngineResult<Self::MotionBvh> {
     Ok(CpuMotionBvh {

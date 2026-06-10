@@ -42,7 +42,7 @@ if [ ! -x "$SPIRV_VAL" ]; then
     exit 1
 fi
 
-COMMON_FLAGS="-x glsl --target-env=vulkan1.1 --target-spv=spv1.4 -std=450core -Os"
+COMMON_FLAGS="-x glsl --target-env=vulkan1.1 --target-spv=spv1.4 -std=450core"
 WG_SIZES=(4 8 16 32 64 128 256)
 
 # ── Shaders that receive wg-variant SPIR-V blobs ──────────────────────────────
@@ -56,6 +56,7 @@ WG_VARIANT_SHADERS=(
     integrate_particles_p4_5.comp
     # Particle systems
     apply_emitters_to_particles.comp
+    permute_particles.comp
     apply_impulses.comp
     emit_particles.comp
     convert_particles.comp
@@ -71,6 +72,7 @@ WG_VARIANT_SHADERS=(
     bp_cross_lca.comp
     bp_particle_self.comp
     bp_scene.comp
+    bp_clear.comp
     # Narrow-phase / CCD
     ccd.comp
     narrow_ccd.comp
@@ -124,12 +126,10 @@ for file in assets/*.comp assets/sim/*.comp; do
         compile_one "$file" comp "-DDEBUG_SHADERS" "${file%.comp}.comp.d.spv"
         # Produce one SPIR-V per candidate workgroup size for mk_wg!() shaders.
         for wg in "${WG_SIZES[@]}"; do
-            sed -i.bak "s/SUBGROUP_SIZE = [0-9]*/SUBGROUP_SIZE = $wg/" assets/bvh_utils.glsl
             out="${file%.comp}.comp.wg${wg}.spv"
             compile_one "$file" comp "-DLOCAL_SIZE_X=$wg" "$out"
             out_d="${file%.comp}.comp.wg${wg}.d.spv"
             compile_one "$file" comp "-DLOCAL_SIZE_X=$wg -DDEBUG_SHADERS" "$out_d"
-            mv assets/bvh_utils.glsl.bak assets/bvh_utils.glsl
         done
     else
         # Single-variant (specialization-constant or always-single-thread)

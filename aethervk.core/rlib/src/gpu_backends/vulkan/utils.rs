@@ -824,7 +824,13 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
 
     // promoted to vk::API_VERSION_1_3
     // This extension allows the use of the SPV_KHR_non_semantic_info extension in SPIR-V shader modules. (eg printf)
-    the_vec.push(ash::khr::shader_non_semantic_info::NAME);
+    #[cfg(any(debug_assertions, test))]
+    {
+      #[cfg(not(target_vendor = "apple"))]
+      if crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.load(core::sync::atomic::Ordering::Relaxed) {
+        the_vec.push(ash::khr::shader_non_semantic_info::NAME);
+      }
+    }
 
     the_vec.push(ash::ext::scalar_block_layout::NAME);
 

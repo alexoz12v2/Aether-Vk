@@ -4,6 +4,10 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
 
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
+
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
@@ -21,28 +25,63 @@ layout(push_constant, std430) uniform PushConstants {
     uint     total_entities;
 } pc;
 
+
 void main() {
     uint id = gl_GlobalInvocationID.x;
+
+#ifdef DEBUG_SHADERS
+    // Global Header: Prints exactly once per dispatch
+    if (id == 0) {
+        debugPrintfEXT("======================================\n");
+        debugPrintfEXT("bp_bounds_gen.comp : DIAGNOSTICS STARTED\n");
+        debugPrintfEXT("Total Entities : %d\n", pc.total_entities);
+        debugPrintfEXT("Delta Time     : %1.6f sec\n", dt_to_seconds(pc.dt_us));
+        debugPrintfEXT("======================================\n");
+    }
+#endif
+
     if (id >= pc.total_entities) return;
 
     vec3 center = pc.scene_entities.bodies[id].position_mass.xyz;
-    vec3 extents = pc.scene_entities.bodies[id].shape_extents;
-    vec3 static_min = center - extents;
-    vec3 static_max = center + extents;
+    vec3 local_extents = pc.scene_entities.bodies[id].shape_extents;
+    vec4 orientation = pc.scene_entities.bodies[id].orientation;
 
-    // Swept Volume based on velocity
+    // Rotate the OBB to get an accurate World AABB
+    mat3 R = quat_to_mat3(orientation);
+
+    vec3 world_extents = vec3(
+        abs(R[0][0]) * local_extents.x + abs(R[1][0]) * local_extents.y + abs(R[2][0]) * local_extents.z,
+        abs(R[0][1]) * local_extents.x + abs(R[1][1]) * local_extents.y + abs(R[2][1]) * local_extents.z,
+        abs(R[0][2]) * local_extents.x + abs(R[1][2]) * local_extents.y + abs(R[2][2]) * local_extents.z
+    );
+
+    vec3 static_min = center - world_extents;
+    vec3 static_max = center + world_extents;
+
     float dt = dt_to_seconds(pc.dt_us);
-    vec3 vel = pc.scene_entities.bodies[id].linear_vel_drag.xyz;
-    vec3 sweep = vel * dt;
+    vec3 lin_vel = pc.scene_entities.bodies[id].linear_vel_drag.xyz;
+    vec3 ang_vel = pc.scene_entities.bodies[id].angular_vel_drag.xyz;
 
-    vec3 sweep_min = min(static_min, static_min + sweep);
-    vec3 sweep_max = max(static_max, static_max + sweep);
+    // Swept Volume based on BOTH linear and angular velocity
+    vec3 sweep = lin_vel * dt;
+    float ang_sweep_radius = length(ang_vel * dt) * length(local_extents);
+    vec3 ang_expansion = vec3(ang_sweep_radius);
 
+    vec3 sweep_min = min(static_min, static_min + sweep) - ang_expansion;
+    vec3 sweep_max = max(static_max, static_max + sweep) + ang_expansion;
+
+    // Apply Reference Frame / LCA Transformation
     uint frame_idx = pc.scene_entities.bodies[id].frame_idx;
     if (frame_idx != 0xFFFFFFFF) {
         GpuReferenceFrame frame = pc.lca_entities.frames[frame_idx];
         pc.tlas_leaves.leaves[id].min_bound = frame.center_pos + sweep_min * frame.scale;
         pc.tlas_leaves.leaves[id].max_bound = frame.center_pos + sweep_max * frame.scale;
+
+#ifdef DEBUG_SHADERS
+        if (id == 0 || id == 1) {
+            debugPrintfEXT("[Entity %d] Translated via LCA Frame %d. Scale: %1.2f\n", id, frame_idx, frame.scale);
+        }
+#endif
     } else {
         pc.tlas_leaves.leaves[id].min_bound = sweep_min;
         pc.tlas_leaves.leaves[id].max_bound = sweep_max;
@@ -50,4 +89,25 @@ void main() {
 
     pc.tlas_leaves.leaves[id].entity_idx = id;
     pc.tlas_leaves.leaves[id].metadata = bvh_pack_metadata(true, BVH_FRAME_MACRO, pc.scene_entities.bodies[id].shape_type, id);
+
+#ifdef DEBUG_SHADERS
+    // Detailed traces for the first two entities (usually player/ground)
+    if (id == 0 || id == 1) {
+        debugPrintfEXT("[Entity %d] LOCAL extents=(%1.2f,%1.2f,%1.2f) -> WORLD extents=(%1.2f,%1.2f,%1.2f)\n",
+            id, local_extents.x, local_extents.y, local_extents.z, world_extents.x, world_extents.y, world_extents.z);
+        debugPrintfEXT("[Entity %d] Vel=(%1.2f,%1.2f,%1.2f), AngVel=(%1.2f,%1.2f,%1.2f)\n",
+            id, lin_vel.x, lin_vel.y, lin_vel.z, ang_vel.x, ang_vel.y, ang_vel.z);
+        debugPrintfEXT("[Entity %d] Final Swept AABB: min=(%1.2f,%1.2f,%1.2f), max=(%1.2f,%1.2f,%1.2f)\n",
+            id, pc.tlas_leaves.leaves[id].min_bound.x, pc.tlas_leaves.leaves[id].min_bound.y, pc.tlas_leaves.leaves[id].min_bound.z,
+                pc.tlas_leaves.leaves[id].max_bound.x, pc.tlas_leaves.leaves[id].max_bound.y, pc.tlas_leaves.leaves[id].max_bound.z);
+    }
+
+    // EXPLOSION DETECTOR: Flag any AABB that is absurdly large.
+    // If you see this trigger, you have a NaN/Inf in your integration or LCP solver.
+    vec3 final_extents = pc.tlas_leaves.leaves[id].max_bound - pc.tlas_leaves.leaves[id].min_bound;
+    if (length(final_extents) > 10000.0) {
+        debugPrintfEXT("[FATAL WARNING] Entity %d has EXPLODED! AABB size is %1.2f. Velocity: (%1.2f,%1.2f,%1.2f)\n",
+            id, length(final_extents), lin_vel.x, lin_vel.y, lin_vel.z);
+    }
+#endif
 }

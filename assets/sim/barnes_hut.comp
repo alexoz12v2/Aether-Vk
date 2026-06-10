@@ -50,234 +50,234 @@ void main() {
     }
 #endif
 
-//     uint target_node_idx = 0;
-//     bool i_am_valid = false;
-//     uint my_p_idx = 0;
-//
-//     uvec2 cluster_list_uvec2 = uvec2(pc.cluster_list);
-//     if (cluster_list_uvec2.x == 0u && cluster_list_uvec2.y == 0u) {
-//         my_p_idx = cluster_job_idx * SUBGROUP_SIZE + lane_id;
-//         i_am_valid = my_p_idx < pc.num_clusters;
-//
-// #ifdef DEBUG_SHADERS
-//         if (is_trace_thread) debugPrintfEXT("List is null. Using my_p_idx=%u, valid=%d\n", my_p_idx, int(i_am_valid));
-// #endif
-//     } else {
-//         target_node_idx = pc.cluster_list.cluster_indices[cluster_job_idx];
-//
-// #ifdef DEBUG_SHADERS
-//         // Trap suspiciously large node indices
-//         if (target_node_idx > 100000000u) debugPrintfEXT("TRAP! Suspiciously large target_node_idx=%u at job=%u\n", target_node_idx, cluster_job_idx);
-//         if (is_trace_thread) debugPrintfEXT("Reading target_node_idx=%u\n", target_node_idx);
-// #endif
-//
-//         i_am_valid = bvh_node_is_valid(pc.bvh.nodes[target_node_idx].valid_mask, lane_id);
-//         my_p_idx   = pc.bvh.nodes[target_node_idx].child_indices[lane_id];
-//     }
-//
-//     uint my_start = 0, my_count = 0;
-//     vec3 my_pos = vec3(0.0); float my_mass = 0.0; float my_beta = 0.0;
-//
-//     if (i_am_valid) {
-//         if (cluster_list_uvec2.x == 0u && cluster_list_uvec2.y == 0u) {
-//             uint base = P_BASE(my_p_idx);
-//
-// #ifdef DEBUG_SHADERS
-//             if (is_trace_thread) debugPrintfEXT("Reading particle memory at base=%u for my_p_idx=%u\n", base, my_p_idx);
-// #endif
-//
-//             my_pos = vec3(P_READ(pc.particles, base), P_READ(pc.particles, base+1*SUBGROUP_SIZE), P_READ(pc.particles, base+2*SUBGROUP_SIZE));
-//             my_mass = P_READ(pc.particles, base+6*SUBGROUP_SIZE);
-//             my_beta = P_READ(pc.particles, base+10*SUBGROUP_SIZE);
-//             my_start = my_p_idx;
-//             my_count = 1;
-//         } else {
-//             my_pos = vec3(
-//                 pc.bvh.nodes[target_node_idx].com_x[lane_id],
-//                 pc.bvh.nodes[target_node_idx].com_y[lane_id],
-//                 pc.bvh.nodes[target_node_idx].com_z[lane_id]
-//             );
-//             my_mass = pc.bvh.nodes[target_node_idx].masses[lane_id];
-//             my_beta = 0.0;
-//             my_start = pc.bvh.nodes[target_node_idx].particle_start[lane_id];
-//             my_count = pc.bvh.nodes[target_node_idx].particle_count[lane_id];
-//         }
-//     }
-//
-//     vec3 safe_pos = vec3(0.0);
-//     vec3 pos_for_min = vec3(1e20);
-//     vec3 pos_for_max = vec3(-1e20);
-//     float mass_for_sum = 0.0;
-//
-//     if (i_am_valid) {
-//         safe_pos = my_pos;
-//         pos_for_min = my_pos;
-//         pos_for_max = my_pos;
-//         mass_for_sum = my_mass;
-//     }
-//
-//     vec3 min_pos = subgroupMin(pos_for_min);
-//     vec3 max_pos = subgroupMax(pos_for_max);
-//     vec3 cluster_extents = max_pos - min_pos;
-//     float target_size = max(cluster_extents.x, max(cluster_extents.y, cluster_extents.z));
-//     float sum_mass = subgroupAdd(mass_for_sum);
-//     vec3 target_com = subgroupAdd(safe_pos * my_mass) / max(sum_mass, 1e-6);
-//
-//     vec3 my_acc = vec3(0.0);
-//     uint bvh_n = (pc.num_clusters + 64 - 1) / 64; // PARTICLES_IN_LEAF = 64
-//
-//     if (bvh_n <= 1) {
-//         // Fallback to exact N-body because no BVH is built for n=1
-// #ifdef DEBUG_SHADERS
-//         if (is_trace_thread) debugPrintfEXT("BVH N <= 1. Falling back to direct N-body loop.\\n");
-// #endif
-//         if (i_am_valid) {
-//             for (uint p = 0; p < pc.num_clusters; p++) {
-//                 if (p >= my_start && p < my_start + my_count) continue;
-//                 uint base = P_BASE(p);
-//                 vec3 other_pos = vec3(P_READ(pc.particles, base), P_READ(pc.particles, base+1*SUBGROUP_SIZE), P_READ(pc.particles, base+2*SUBGROUP_SIZE));
-//                 float other_mass = P_READ(pc.particles, base+6*SUBGROUP_SIZE);
-//                 vec3 p_dir = other_pos - my_pos; float p_dist_sq = dot(p_dir, p_dir);
-//                 my_acc += (p_dir / max(sqrt(p_dist_sq), 1e-6)) * ((pc.G * other_mass) / (p_dist_sq + pc.softening_sq));
-//             }
-//         }
-//     } else {
-//         if (lane_id == 0) {
-//             shared_stacks[subgroup_id][0] = pc.root_node_idx;
-//             shared_stack_ptrs[subgroup_id] = 1;
-//         }
-//
-// #ifdef DEBUG_SHADERS
-//         if (is_trace_thread) debugPrintfEXT("Entering traversal loop. root_node_idx=%u\\n", pc.root_node_idx);
-// #endif
-//
-//         uint loop_safety_counter = 0; // Prevent infinite loops crashing the GPU
-//
-//         while (true) {
-// #ifdef DEBUG_SHADERS
-//             loop_safety_counter++;
-//             if (loop_safety_counter > 100000) {
-//                 if (lane_id == 0) debugPrintfEXT("TRAP! Infinite loop detected at cluster_job_idx=%u\\n", cluster_job_idx);
-//                 break;
-//             }
-// #endif
-//
-//             subgroupMemoryBarrierShared();
-//         uint stack_ptr = shared_stack_ptrs[subgroup_id];
-//         if (stack_ptr == 0) break;
-//
-// #ifdef DEBUG_SHADERS
-//         // Trap stack underflow
-//         if (stack_ptr > BVH_STACK_DEPTH_SHORT) {
-//             debugPrintfEXT("TRAP! Stack pointer corrupted/overflow stack_ptr=%u at cluster_job_idx=%u\n", stack_ptr, cluster_job_idx);
-//             break;
-//         }
-// #endif
-//
-//         uint source_node_idx = shared_stacks[subgroup_id][--stack_ptr];
-//         if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr;
-//
-// #ifdef DEBUG_SHADERS
-//         if (is_trace_thread && loop_safety_counter < 10) debugPrintfEXT("Popped source_node_idx=%u (stack_ptr now %u)\n", source_node_idx, stack_ptr);
-//         if (source_node_idx > 100000000u) debugPrintfEXT("TRAP! Popped massive source_node_idx=%u\n", source_node_idx);
-// #endif
-//
-//         bool s_valid = bvh_node_is_valid(pc.bvh.nodes[source_node_idx].valid_mask, lane_id);
-//         uint s_meta = pc.bvh.nodes[source_node_idx].metadata[lane_id];
-//         bool s_is_leaf = bvh_is_leaf(s_meta);
-//
-//         vec3 s_com = vec3(pc.bvh.nodes[source_node_idx].com_x[lane_id], pc.bvh.nodes[source_node_idx].com_y[lane_id], pc.bvh.nodes[source_node_idx].com_z[lane_id]);
-//         float s_mass = pc.bvh.nodes[source_node_idx].masses[lane_id];
-//         uint s_idx = pc.bvh.nodes[source_node_idx].child_indices[lane_id], s_start = pc.bvh.nodes[source_node_idx].particle_start[lane_id], s_count = pc.bvh.nodes[source_node_idx].particle_count[lane_id];
-//
-//         vec3 s_extents = vec3(pc.bvh.nodes[source_node_idx].max_x[lane_id]-pc.bvh.nodes[source_node_idx].min_x[lane_id], pc.bvh.nodes[source_node_idx].max_y[lane_id]-pc.bvh.nodes[source_node_idx].min_y[lane_id], pc.bvh.nodes[source_node_idx].max_z[lane_id]-pc.bvh.nodes[source_node_idx].min_z[lane_id]);
-//         float s_size = max(s_extents.x, max(s_extents.y, s_extents.z));
-//
-//         bool overlap = max(my_start, s_start) < min(my_start + my_count, s_start + s_count);
-//         bool pass_mac = ((s_size + target_size) / max(length(s_com - target_com), 1e-6)) < pc.theta;
-//         bool pass_lod_thresh = (s_count <= pc.cluster_threshold);
-//         bool action_accumulate = s_valid && !overlap && (pass_mac || pass_lod_thresh || s_is_leaf);
-//         bool action_traverse = s_valid && !action_accumulate && !s_is_leaf;
-//         bool action_leaf_exact = s_valid && overlap && s_is_leaf;
-//
-//         // ... Accumulation Block (Removed for brevity, unmodified) ...
-//         uvec4 acc_ballot = subgroupBallot(action_accumulate);
-//         for (uint i = 0; i < 4; i++) {
-//             uint mask = acc_ballot[i];
-//             while (mask != 0) {
-//                 uint bit = findLSB(mask); mask &= ~(1u << bit); uint src_lane = i * 32 + bit;
-//                 if (i_am_valid) {
-//                     vec3 k_com = vec3(subgroupShuffle(s_com.x, src_lane), subgroupShuffle(s_com.y, src_lane), subgroupShuffle(s_com.z, src_lane));
-//                     float k_mass = subgroupShuffle(s_mass, src_lane);
-//                     vec3 p_dir = k_com - my_pos; float p_dist_sq = dot(p_dir, p_dir);
-//                     my_acc += (p_dir / max(sqrt(p_dist_sq), 1e-6)) * ((pc.G * k_mass) / (p_dist_sq + pc.softening_sq));
-//                 }
-//             }
-//         }
-//
-//         uvec4 exact_ballot = subgroupBallot(action_leaf_exact);
-//         for (uint i = 0; i < 4; i++) {
-//             uint mask = exact_ballot[i];
-//             while (mask != 0) {
-//                 uint bit = findLSB(mask); mask &= ~(1u << bit); uint src_lane = i * 32 + bit;
-//                 if (i_am_valid) {
-//                     uint l_start = subgroupShuffle(s_start, src_lane);
-//                     uint l_count = subgroupShuffle(s_count, src_lane);
-//                     for (uint p = 0; p < l_count; p++) {
-//                         uint other_idx = l_start + p;
-//                         if (other_idx >= my_start && other_idx < my_start + my_count) continue;
-//
-//                         uint base = P_BASE(other_idx);
-//
-// #ifdef DEBUG_SHADERS
-//                         // Trap massive particle indices that will read out of bounds
-//                         if (other_idx > 100000000u) {
-//                             debugPrintfEXT("TRAP! Leaf eval hit massive other_idx=%u, l_start=%u\n", other_idx, l_start);
-//                         }
-// #endif
-//
-//                         vec3 other_pos = vec3(P_READ(pc.particles, base), P_READ(pc.particles, base+1*SUBGROUP_SIZE), P_READ(pc.particles, base+2*SUBGROUP_SIZE));
-//                         float other_mass = P_READ(pc.particles, base+6*SUBGROUP_SIZE);
-//                         vec3 p_dir = other_pos - my_pos; float p_dist_sq = dot(p_dir, p_dir);
-//                         my_acc += (p_dir / max(sqrt(p_dist_sq), 1e-6)) * ((pc.G * other_mass) / (p_dist_sq + pc.softening_sq));
-//                     }
-//                 }
-//             }
-//         }
-//
-//         uvec4 trav_ballot = subgroupBallot(action_traverse);
-//         uint push_count = subgroupBallotBitCount(trav_ballot);
-//
-// #ifdef DEBUG_SHADERS
-//         if (action_traverse && (stack_ptr + push_count) >= BVH_STACK_DEPTH_SHORT) {
-//             debugPrintfEXT("TRAP! Stack Overflow Imminent! stack_ptr=%u, pushing %u. Max=%u\n", stack_ptr, push_count, BVH_STACK_DEPTH_SHORT);
-//         }
-// #endif
-//
-//         uint new_top = min(stack_ptr + push_count, BVH_STACK_DEPTH_SHORT);
-//         if (action_traverse && (stack_ptr + subgroupBallotExclusiveBitCount(trav_ballot)) < BVH_STACK_DEPTH_SHORT)
-//             shared_stacks[subgroup_id][stack_ptr + subgroupBallotExclusiveBitCount(trav_ballot)] = s_idx;
-//
-//         if (lane_id == 0) shared_stack_ptrs[subgroup_id] = new_top;
-//     }
-//
-// #ifdef DEBUG_SHADERS
-//     if (is_trace_thread) debugPrintfEXT("Finished traversal. Writing results.\n");
-// #endif
-//     }
-//
-//     if (i_am_valid) {
-//         vec3 g_f = my_acc * my_mass * (1.0 - my_beta);
-//
-//         if (cluster_list_uvec2.x == 0u && cluster_list_uvec2.y == 0u) {
-//             uint base = P_BASE(my_p_idx);
-//             pc.particles.data[base + 7u * SUBGROUP_SIZE] = floatBitsToUint(g_f.x);
-//             pc.particles.data[base + 8u * SUBGROUP_SIZE] = floatBitsToUint(g_f.y);
-//             pc.particles.data[base + 9u * SUBGROUP_SIZE] = floatBitsToUint(g_f.z);
-//         } else {
-//             pc.bvh.nodes[target_node_idx].force_x[lane_id] = g_f.x;
-//             pc.bvh.nodes[target_node_idx].force_y[lane_id] = g_f.y;
-//             pc.bvh.nodes[target_node_idx].force_z[lane_id] = g_f.z;
-//         }
-//     }
+     uint target_node_idx = 0;
+     bool i_am_valid = false;
+     uint my_p_idx = 0;
+
+     uvec2 cluster_list_uvec2 = uvec2(pc.cluster_list);
+     if (cluster_list_uvec2.x == 0u && cluster_list_uvec2.y == 0u) {
+         my_p_idx = cluster_job_idx * SUBGROUP_SIZE + lane_id;
+         i_am_valid = my_p_idx < pc.num_clusters;
+
+ #ifdef DEBUG_SHADERS
+         if (is_trace_thread) debugPrintfEXT("List is null. Using my_p_idx=%u, valid=%d\n", my_p_idx, int(i_am_valid));
+ #endif
+     } else {
+         target_node_idx = pc.cluster_list.cluster_indices[cluster_job_idx];
+
+ #ifdef DEBUG_SHADERS
+         // Trap suspiciously large node indices
+         if (target_node_idx > 100000000u) debugPrintfEXT("TRAP! Suspiciously large target_node_idx=%u at job=%u\n", target_node_idx, cluster_job_idx);
+         if (is_trace_thread) debugPrintfEXT("Reading target_node_idx=%u\n", target_node_idx);
+ #endif
+
+         i_am_valid = bvh_node_is_valid(pc.bvh.nodes[target_node_idx].valid_mask, lane_id);
+         my_p_idx   = pc.bvh.nodes[target_node_idx].child_indices[lane_id];
+     }
+
+     uint my_start = 0, my_count = 0;
+     vec3 my_pos = vec3(0.0); float my_mass = 0.0; float my_beta = 0.0;
+
+     if (i_am_valid) {
+         if (cluster_list_uvec2.x == 0u && cluster_list_uvec2.y == 0u) {
+             uint base = P_BASE(my_p_idx);
+
+ #ifdef DEBUG_SHADERS
+             if (is_trace_thread) debugPrintfEXT("Reading particle memory at base=%u for my_p_idx=%u\n", base, my_p_idx);
+ #endif
+
+             my_pos = vec3(P_READ(pc.particles, base), P_READ(pc.particles, base+1*SUBGROUP_SIZE), P_READ(pc.particles, base+2*SUBGROUP_SIZE));
+             my_mass = P_READ(pc.particles, base+6*SUBGROUP_SIZE);
+             my_beta = P_READ(pc.particles, base+10*SUBGROUP_SIZE);
+             my_start = my_p_idx;
+             my_count = 1;
+         } else {
+             my_pos = vec3(
+                 pc.bvh.nodes[target_node_idx].com_x[lane_id],
+                 pc.bvh.nodes[target_node_idx].com_y[lane_id],
+                 pc.bvh.nodes[target_node_idx].com_z[lane_id]
+             );
+             my_mass = pc.bvh.nodes[target_node_idx].masses[lane_id];
+             my_beta = 0.0;
+             my_start = pc.bvh.nodes[target_node_idx].particle_start[lane_id];
+             my_count = pc.bvh.nodes[target_node_idx].particle_count[lane_id];
+         }
+     }
+
+     vec3 safe_pos = vec3(0.0);
+     vec3 pos_for_min = vec3(1e20);
+     vec3 pos_for_max = vec3(-1e20);
+     float mass_for_sum = 0.0;
+
+     if (i_am_valid) {
+         safe_pos = my_pos;
+         pos_for_min = my_pos;
+         pos_for_max = my_pos;
+         mass_for_sum = my_mass;
+     }
+
+     vec3 min_pos = subgroupMin(pos_for_min);
+     vec3 max_pos = subgroupMax(pos_for_max);
+     vec3 cluster_extents = max_pos - min_pos;
+     float target_size = max(cluster_extents.x, max(cluster_extents.y, cluster_extents.z));
+     float sum_mass = subgroupAdd(mass_for_sum);
+     vec3 target_com = subgroupAdd(safe_pos * my_mass) / max(sum_mass, 1e-6);
+
+     vec3 my_acc = vec3(0.0);
+     uint bvh_n = (pc.num_clusters + 64 - 1) / 64; // PARTICLES_IN_LEAF = 64
+
+     if (bvh_n <= 1) {
+         // Fallback to exact N-body because no BVH is built for n=1
+ #ifdef DEBUG_SHADERS
+         if (is_trace_thread) debugPrintfEXT("BVH N <= 1. Falling back to direct N-body loop.\\n");
+ #endif
+         if (i_am_valid) {
+             for (uint p = 0; p < pc.num_clusters; p++) {
+                 if (p >= my_start && p < my_start + my_count) continue;
+                 uint base = P_BASE(p);
+                 vec3 other_pos = vec3(P_READ(pc.particles, base), P_READ(pc.particles, base+1*SUBGROUP_SIZE), P_READ(pc.particles, base+2*SUBGROUP_SIZE));
+                 float other_mass = P_READ(pc.particles, base+6*SUBGROUP_SIZE);
+                 vec3 p_dir = other_pos - my_pos; float p_dist_sq = dot(p_dir, p_dir);
+                 my_acc += (p_dir / max(sqrt(p_dist_sq), 1e-6)) * ((pc.G * other_mass) / (p_dist_sq + pc.softening_sq));
+             }
+         }
+     } else {
+         if (lane_id == 0) {
+             shared_stacks[subgroup_id][0] = pc.root_node_idx;
+             shared_stack_ptrs[subgroup_id] = 1;
+         }
+
+ #ifdef DEBUG_SHADERS
+         if (is_trace_thread) debugPrintfEXT("Entering traversal loop. root_node_idx=%u\\n", pc.root_node_idx);
+ #endif
+
+         uint loop_safety_counter = 0; // Prevent infinite loops crashing the GPU
+
+         while (true) {
+ #ifdef DEBUG_SHADERS
+             loop_safety_counter++;
+             if (loop_safety_counter > 100000) {
+                 if (lane_id == 0) debugPrintfEXT("TRAP! Infinite loop detected at cluster_job_idx=%u\\n", cluster_job_idx);
+                 break;
+             }
+ #endif
+
+             subgroupMemoryBarrierShared();
+         uint stack_ptr = shared_stack_ptrs[subgroup_id];
+         if (stack_ptr == 0) break;
+
+ #ifdef DEBUG_SHADERS
+         // Trap stack underflow
+         if (stack_ptr > BVH_STACK_DEPTH_SHORT) {
+             debugPrintfEXT("TRAP! Stack pointer corrupted/overflow stack_ptr=%u at cluster_job_idx=%u\n", stack_ptr, cluster_job_idx);
+             break;
+         }
+ #endif
+
+         uint source_node_idx = shared_stacks[subgroup_id][--stack_ptr];
+         if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr;
+
+ #ifdef DEBUG_SHADERS
+         if (is_trace_thread && loop_safety_counter < 10) debugPrintfEXT("Popped source_node_idx=%u (stack_ptr now %u)\n", source_node_idx, stack_ptr);
+         if (source_node_idx > 100000000u) debugPrintfEXT("TRAP! Popped massive source_node_idx=%u\n", source_node_idx);
+ #endif
+
+         bool s_valid = bvh_node_is_valid(pc.bvh.nodes[source_node_idx].valid_mask, lane_id);
+         uint s_meta = pc.bvh.nodes[source_node_idx].metadata[lane_id];
+         bool s_is_leaf = bvh_is_leaf(s_meta);
+
+         vec3 s_com = vec3(pc.bvh.nodes[source_node_idx].com_x[lane_id], pc.bvh.nodes[source_node_idx].com_y[lane_id], pc.bvh.nodes[source_node_idx].com_z[lane_id]);
+         float s_mass = pc.bvh.nodes[source_node_idx].masses[lane_id];
+         uint s_idx = pc.bvh.nodes[source_node_idx].child_indices[lane_id], s_start = pc.bvh.nodes[source_node_idx].particle_start[lane_id], s_count = pc.bvh.nodes[source_node_idx].particle_count[lane_id];
+
+         vec3 s_extents = vec3(pc.bvh.nodes[source_node_idx].max_x[lane_id]-pc.bvh.nodes[source_node_idx].min_x[lane_id], pc.bvh.nodes[source_node_idx].max_y[lane_id]-pc.bvh.nodes[source_node_idx].min_y[lane_id], pc.bvh.nodes[source_node_idx].max_z[lane_id]-pc.bvh.nodes[source_node_idx].min_z[lane_id]);
+         float s_size = max(s_extents.x, max(s_extents.y, s_extents.z));
+
+         bool overlap = max(my_start, s_start) < min(my_start + my_count, s_start + s_count);
+         bool pass_mac = ((s_size + target_size) / max(length(s_com - target_com), 1e-6)) < pc.theta;
+         bool pass_lod_thresh = (s_count <= pc.cluster_threshold);
+         bool action_accumulate = s_valid && !overlap && (pass_mac || pass_lod_thresh || s_is_leaf);
+         bool action_traverse = s_valid && !action_accumulate && !s_is_leaf;
+         bool action_leaf_exact = s_valid && overlap && s_is_leaf;
+
+         // ... Accumulation Block (Removed for brevity, unmodified) ...
+         uvec4 acc_ballot = subgroupBallot(action_accumulate);
+         for (uint i = 0; i < 4; i++) {
+             uint mask = acc_ballot[i];
+             while (mask != 0) {
+                 uint bit = findLSB(mask); mask &= ~(1u << bit); uint src_lane = i * 32 + bit;
+                 if (i_am_valid) {
+                     vec3 k_com = vec3(subgroupShuffle(s_com.x, src_lane), subgroupShuffle(s_com.y, src_lane), subgroupShuffle(s_com.z, src_lane));
+                     float k_mass = subgroupShuffle(s_mass, src_lane);
+                     vec3 p_dir = k_com - my_pos; float p_dist_sq = dot(p_dir, p_dir);
+                     my_acc += (p_dir / max(sqrt(p_dist_sq), 1e-6)) * ((pc.G * k_mass) / (p_dist_sq + pc.softening_sq));
+                 }
+             }
+         }
+
+         uvec4 exact_ballot = subgroupBallot(action_leaf_exact);
+         for (uint i = 0; i < 4; i++) {
+             uint mask = exact_ballot[i];
+             while (mask != 0) {
+                 uint bit = findLSB(mask); mask &= ~(1u << bit); uint src_lane = i * 32 + bit;
+                 if (i_am_valid) {
+                     uint l_start = subgroupShuffle(s_start, src_lane);
+                     uint l_count = subgroupShuffle(s_count, src_lane);
+                     for (uint p = 0; p < l_count; p++) {
+                         uint other_idx = l_start + p;
+                         if (other_idx >= my_start && other_idx < my_start + my_count) continue;
+
+                         uint base = P_BASE(other_idx);
+
+ #ifdef DEBUG_SHADERS
+                         // Trap massive particle indices that will read out of bounds
+                         if (other_idx > 100000000u) {
+                             debugPrintfEXT("TRAP! Leaf eval hit massive other_idx=%u, l_start=%u\n", other_idx, l_start);
+                         }
+ #endif
+
+                         vec3 other_pos = vec3(P_READ(pc.particles, base), P_READ(pc.particles, base+1*SUBGROUP_SIZE), P_READ(pc.particles, base+2*SUBGROUP_SIZE));
+                         float other_mass = P_READ(pc.particles, base+6*SUBGROUP_SIZE);
+                         vec3 p_dir = other_pos - my_pos; float p_dist_sq = dot(p_dir, p_dir);
+                         my_acc += (p_dir / max(sqrt(p_dist_sq), 1e-6)) * ((pc.G * other_mass) / (p_dist_sq + pc.softening_sq));
+                     }
+                 }
+             }
+         }
+
+         uvec4 trav_ballot = subgroupBallot(action_traverse);
+         uint push_count = subgroupBallotBitCount(trav_ballot);
+
+ #ifdef DEBUG_SHADERS
+         if (action_traverse && (stack_ptr + push_count) >= BVH_STACK_DEPTH_SHORT) {
+             debugPrintfEXT("TRAP! Stack Overflow Imminent! stack_ptr=%u, pushing %u. Max=%u\n", stack_ptr, push_count, BVH_STACK_DEPTH_SHORT);
+         }
+ #endif
+
+         uint new_top = min(stack_ptr + push_count, BVH_STACK_DEPTH_SHORT);
+         if (action_traverse && (stack_ptr + subgroupBallotExclusiveBitCount(trav_ballot)) < BVH_STACK_DEPTH_SHORT)
+             shared_stacks[subgroup_id][stack_ptr + subgroupBallotExclusiveBitCount(trav_ballot)] = s_idx;
+
+         if (lane_id == 0) shared_stack_ptrs[subgroup_id] = new_top;
+     }
+
+ #ifdef DEBUG_SHADERS
+     if (is_trace_thread) debugPrintfEXT("Finished traversal. Writing results.\n");
+ #endif
+     }
+
+     if (i_am_valid) {
+         vec3 g_f = my_acc * my_mass * (1.0 - my_beta);
+
+         if (cluster_list_uvec2.x == 0u && cluster_list_uvec2.y == 0u) {
+             uint base = P_BASE(my_p_idx);
+             pc.particles.data[base + 7u * SUBGROUP_SIZE] = floatBitsToUint(g_f.x);
+             pc.particles.data[base + 8u * SUBGROUP_SIZE] = floatBitsToUint(g_f.y);
+             pc.particles.data[base + 9u * SUBGROUP_SIZE] = floatBitsToUint(g_f.z);
+         } else {
+             pc.bvh.nodes[target_node_idx].force_x[lane_id] = g_f.x;
+             pc.bvh.nodes[target_node_idx].force_y[lane_id] = g_f.y;
+             pc.bvh.nodes[target_node_idx].force_z[lane_id] = g_f.z;
+         }
+     }
 }

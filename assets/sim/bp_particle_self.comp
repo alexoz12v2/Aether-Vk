@@ -9,6 +9,10 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_shuffle : require
 
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
+
 #include "../debug_utils.glsl"
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
@@ -17,7 +21,9 @@
 #define LOCAL_SIZE_X 128
 #endif
 layout(local_size_x = LOCAL_SIZE_X) in;
-const uint SUBGROUPS_PER_WG = (LOCAL_SIZE_X + 3) / 4;
+
+// FIX: This constant is ONLY for sizing shared memory safely at compile time.
+const uint MAX_SUBGROUPS_PER_WG = (LOCAL_SIZE_X + 3) / 4;
 
 // Alias memory block mapping the float-based Wrench to uints for CAS compatibility
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer WrenchArrayUint {
@@ -34,27 +40,27 @@ layout(push_constant, std430) uniform PushConstants {
     float stiffness;
 } pc;
 
-shared uint shared_stacks[SUBGROUPS_PER_WG][32];
-shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
-
-// Performs a secure float accumulation via purely standard CAS looping
-void atomicAddWrench(WrenchArrayUint buf, uint index, float val) {
-    uint old_val = buf.data[index];
-    uint assumed_val;
-    do {
-        assumed_val = old_val;
-        float new_val = uintBitsToFloat(assumed_val) + val;
-        old_val = atomicCompSwap(buf.data[index], assumed_val, floatBitsToUint(new_val));
-    } while (assumed_val != old_val);
-}
+shared uint shared_stacks[MAX_SUBGROUPS_PER_WG][32];
+shared uint shared_stack_ptrs[MAX_SUBGROUPS_PER_WG];
 
 void atomicAddParticle(ParticleData buf, uint index, float val) {
     uint old_val = buf.data[index];
     uint assumed_val;
+    uint spin_count = 0;
+
     do {
         assumed_val = old_val;
         float new_val = uintBitsToFloat(assumed_val) + val;
         old_val = atomicCompSwap(buf.data[index], assumed_val, floatBitsToUint(new_val));
+        spin_count++;
+
+#ifdef DEBUG_SHADERS
+        // Diagnostic: Detect if the software CAS is bottlenecking
+        if (spin_count > 1000) {
+            debugPrintfEXT("[bp_particle_self WARNING] Severe CAS contention on float index %d!\n", index);
+            break; // Prevent infinite TDR hang
+        }
+#endif
     } while (assumed_val != old_val);
 }
 
@@ -62,21 +68,33 @@ void main() {
     uint subgroup_id = gl_SubgroupID;
     uint lane_id     = gl_SubgroupInvocationID;
 
-    uint my_p_idx = gl_WorkGroupID.x * SUBGROUPS_PER_WG + subgroup_id;
+#ifdef DEBUG_SHADERS
+    if (gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("======================================\n");
+        debugPrintfEXT("bp_particle_self.comp : STARTED\n");
+        debugPrintfEXT("Total Particles : %d\n", pc.total_particles);
+        debugPrintfEXT("Radius: %1.3f | Stiffness: %1.3f\n", pc.particle_radius, pc.stiffness);
+        debugPrintfEXT("======================================\n");
+    }
+#endif
+
+    // FIX: Dynamic dense query mapping
+    uint my_p_idx = gl_WorkGroupID.x * gl_NumSubgroups + subgroup_id;
     if (my_p_idx >= pc.total_particles) return;
 
     vec3 my_pos, my_min, my_max;
     float my_radius = pc.particle_radius;
 
     if (lane_id == 0) {
-        uint block_idx = my_p_idx / SUBGROUP_SIZE;
-        uint local_idx = my_p_idx % SUBGROUP_SIZE;
-        uint base = block_idx * (PARTICLE_FIELDS * SUBGROUP_SIZE) + local_idx;
+        // Explictly use gl_SubgroupSize for safe AoSoA extraction
+        uint block_idx = my_p_idx / gl_SubgroupSize;
+        uint local_idx = my_p_idx % gl_SubgroupSize;
+        uint base = block_idx * (PARTICLE_FIELDS * gl_SubgroupSize) + local_idx;
 
         my_pos = vec3(
-            uintBitsToFloat(pc.particles.data[base + 0u * SUBGROUP_SIZE]),
-            uintBitsToFloat(pc.particles.data[base + 1u * SUBGROUP_SIZE]),
-            uintBitsToFloat(pc.particles.data[base + 2u * SUBGROUP_SIZE])
+            uintBitsToFloat(pc.particles.data[base + 0u * gl_SubgroupSize]),
+            uintBitsToFloat(pc.particles.data[base + 1u * gl_SubgroupSize]),
+            uintBitsToFloat(pc.particles.data[base + 2u * gl_SubgroupSize])
         );
 
         my_min = my_pos - vec3(my_radius);
@@ -108,7 +126,10 @@ void main() {
         vec3 c_min = vec3(pc.bvh.nodes[node_idx].min_x[lane_id], pc.bvh.nodes[node_idx].min_y[lane_id], pc.bvh.nodes[node_idx].min_z[lane_id]);
         vec3 c_max = vec3(pc.bvh.nodes[node_idx].max_x[lane_id], pc.bvh.nodes[node_idx].max_y[lane_id], pc.bvh.nodes[node_idx].max_z[lane_id]);
         uint child_payload = pc.bvh.nodes[node_idx].child_indices[lane_id];
-        uint leaf_payload = meta & 0x07FFFFFFu;
+
+        // FIX: Coalesced memory load. Each lane caches its own child's data in registers.
+        uint node_p_start = pc.bvh.nodes[node_idx].particle_start[lane_id];
+        uint node_p_count = pc.bvh.nodes[node_idx].particle_count[lane_id];
 
         bool hit_aabb = valid && intersectAABB(my_min, my_max, c_min, c_max);
         bool is_leaf = bvh_is_leaf(meta);
@@ -125,21 +146,23 @@ void main() {
                 mask &= ~(1u << bit);
 
                 uint src_lane = i * 32 + bit;
-                uint s_start = subgroupShuffle(pc.bvh.nodes[node_idx].particle_start[src_lane], src_lane);
-                uint s_count = subgroupShuffle(pc.bvh.nodes[node_idx].particle_count[src_lane], src_lane);
+
+                // FIX: True register shuffle. We shuffle the cached registers, NOT memory.
+                uint s_start = subgroupShuffle(node_p_start, src_lane);
+                uint s_count = subgroupShuffle(node_p_count, src_lane);
 
                 for (uint p = 0; p < s_count; p++) {
                     uint other_idx = s_start + p;
                     if (other_idx == my_p_idx) continue;
 
-                    uint block_idx = other_idx / SUBGROUP_SIZE;
-                    uint local_idx = other_idx % SUBGROUP_SIZE;
-                    uint base = block_idx * (PARTICLE_FIELDS * SUBGROUP_SIZE) + local_idx;
+                    uint block_idx = other_idx / gl_SubgroupSize;
+                    uint local_idx = other_idx % gl_SubgroupSize;
+                    uint base = block_idx * (PARTICLE_FIELDS * gl_SubgroupSize) + local_idx;
 
                     vec3 other_pos = vec3(
-                        uintBitsToFloat(pc.particles.data[base + 0u * SUBGROUP_SIZE]),
-                        uintBitsToFloat(pc.particles.data[base + 1u * SUBGROUP_SIZE]),
-                        uintBitsToFloat(pc.particles.data[base + 2u * SUBGROUP_SIZE])
+                        uintBitsToFloat(pc.particles.data[base + 0u * gl_SubgroupSize]),
+                        uintBitsToFloat(pc.particles.data[base + 1u * gl_SubgroupSize]),
+                        uintBitsToFloat(pc.particles.data[base + 2u * gl_SubgroupSize])
                     );
 
                     vec3 diff = my_pos - other_pos;
@@ -164,25 +187,38 @@ void main() {
         uint  push_offset = subgroupBallotExclusiveBitCount(node_ballot);
 
         uint new_top = min(stack_ptr + node_count, 32u);
-        if (hit_node && (stack_ptr + push_offset) < 32u) {
-            shared_stacks[subgroup_id][stack_ptr + push_offset] = child_payload;
+        if (hit_node) {
+            if ((stack_ptr + push_offset) < 32u) {
+                shared_stacks[subgroup_id][stack_ptr + push_offset] = child_payload;
+            }
+#ifdef DEBUG_SHADERS
+            else {
+                debugPrintfEXT("[bp_particle_self FATAL] BVH Stack Overflow! P_ID: %d\n", my_p_idx);
+            }
+#endif
         }
         if (lane_id == 0) shared_stack_ptrs[subgroup_id] = new_top;
     }
 
-    // Local summation safely inside the target subgroup
     local_repulsive_force.x = subgroupAdd(local_repulsive_force.x);
     local_repulsive_force.y = subgroupAdd(local_repulsive_force.y);
     local_repulsive_force.z = subgroupAdd(local_repulsive_force.z);
 
-    // Subgroup-Master invokes strictly uint-backed CAS mappings
     if (lane_id == 0 && dot(local_repulsive_force, local_repulsive_force) > 0.0) {
-        uint block_idx = my_p_idx / SUBGROUP_SIZE;
-        uint local_idx = my_p_idx % SUBGROUP_SIZE;
-        uint base = block_idx * (PARTICLE_FIELDS * SUBGROUP_SIZE) + local_idx;
 
-        atomicAddParticle(pc.particles, base + 7u * SUBGROUP_SIZE, local_repulsive_force.x);
-        atomicAddParticle(pc.particles, base + 8u * SUBGROUP_SIZE, local_repulsive_force.y);
-        atomicAddParticle(pc.particles, base + 9u * SUBGROUP_SIZE, local_repulsive_force.z);
+#ifdef DEBUG_SHADERS
+        // EXPLOSION DETECTOR: Flag physics explosions from absurd repulsive forces
+        if (length(local_repulsive_force) > 10000.0) {
+             debugPrintfEXT("[bp_particle_self WARNING] Particle %d exploded! Force length: %1.2f\n", my_p_idx, length(local_repulsive_force));
+        }
+#endif
+
+        uint block_idx = my_p_idx / gl_SubgroupSize;
+        uint local_idx = my_p_idx % gl_SubgroupSize;
+        uint base = block_idx * (PARTICLE_FIELDS * gl_SubgroupSize) + local_idx;
+
+        atomicAddParticle(pc.particles, base + 7u * gl_SubgroupSize, local_repulsive_force.x);
+        atomicAddParticle(pc.particles, base + 8u * gl_SubgroupSize, local_repulsive_force.y);
+        atomicAddParticle(pc.particles, base + 9u * gl_SubgroupSize, local_repulsive_force.z);
     }
 }

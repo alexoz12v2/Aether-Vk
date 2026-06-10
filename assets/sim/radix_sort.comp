@@ -7,7 +7,7 @@
 // Fixed to 256 for optimal chunk processing and L1 cache utilization
 #include "../debug_utils.glsl"
 #ifndef LOCAL_SIZE_X
-#define LOCAL_SIZE_X 128
+#define LOCAL_SIZE_X 256
 #endif
 layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
 
@@ -52,34 +52,38 @@ void main() {
         // ---------------------------------------------------------
         // STAGE 0: LOCAL HISTOGRAM COUNT
         // ---------------------------------------------------------
-        if (lid < RADIX) s_counts[lid] = 0;
+        if (lid < RADIX) {
+            for (uint b = lid; b < RADIX; b += LOCAL_SIZE_X) {
+                s_counts[b] = 0;
+            }
+        }
         barrier();
 
         uint block_start = wid * ELEMENTS_PER_BLOCK;
         uint block_end = min(block_start + ELEMENTS_PER_BLOCK, pc.num_particles);
 
-        for (uint i = block_start + lid; i < block_end; i += 256) {
+        for (uint i = block_start + lid; i < block_end; i += LOCAL_SIZE_X) {
             uint key = (pc.input_keys.entries[i].x >> pc.shift) & 0xFu;
             atomicAdd(s_counts[key], 1);
         }
         barrier();
 
         // Write to global transposed histogram: index = bin * num_blocks + wid
-        if (lid < RADIX) {
-            pc.histograms.counts[lid * pc.num_blocks + wid] = s_counts[lid];
+        for (uint b = lid; b < RADIX; b += LOCAL_SIZE_X) {
+            pc.histograms.counts[b * pc.num_blocks + wid] = s_counts[b];
         }
     }
     else if (pc.stage == STAGE_SCAN) {
         // ---------------------------------------------------------
         // STAGE 1: GLOBAL SCAN (Dispatch EXACTLY 1 Block of 256 threads)
         // ---------------------------------------------------------
-        if (lid < RADIX) {
-            // 1. First 16 threads sum up the total count for their designated bin
+        for (uint b = lid; b < RADIX; b += LOCAL_SIZE_X) {
+            // 1. Threads sum up the total count for their designated bin
             uint bin_sum = 0;
             for (uint w = 0; w < pc.num_blocks; ++w) {
-                bin_sum += pc.histograms.counts[lid * pc.num_blocks + w];
+                bin_sum += pc.histograms.counts[b * pc.num_blocks + w];
             }
-            s_bin_sums[lid] = bin_sum;
+            s_bin_sums[b] = bin_sum;
         }
         barrier();
 
@@ -94,12 +98,12 @@ void main() {
         }
         barrier();
 
-        if (lid < RADIX) {
-            // 3. First 16 threads write the prefix-sums sequentially back into global memory
-            uint running_offset = s_bin_sums[lid];
+        for (uint b = lid; b < RADIX; b += LOCAL_SIZE_X) {
+            // 3. Threads write the prefix-sums sequentially back into global memory
+            uint running_offset = s_bin_sums[b];
             for (uint w = 0; w < pc.num_blocks; ++w) {
-                uint val = pc.histograms.counts[lid * pc.num_blocks + w];
-                pc.histograms.counts[lid * pc.num_blocks + w] = running_offset;
+                uint val = pc.histograms.counts[b * pc.num_blocks + w];
+                pc.histograms.counts[b * pc.num_blocks + w] = running_offset;
                 running_offset += val;
             }
         }
@@ -108,16 +112,16 @@ void main() {
         // ---------------------------------------------------------
         // STAGE 2: STABLE SCATTER TO PING-PONG BUFFER
         // ---------------------------------------------------------
-        if (lid < RADIX) {
-            s_offsets[lid] = pc.histograms.counts[lid * pc.num_blocks + wid];
+        for (uint b = lid; b < RADIX; b += LOCAL_SIZE_X) {
+            s_offsets[b] = pc.histograms.counts[b * pc.num_blocks + wid];
         }
         barrier();
 
         uint block_start = wid * ELEMENTS_PER_BLOCK;
         uint block_end = min(block_start + ELEMENTS_PER_BLOCK, pc.num_particles);
 
-        // Process data in 256 element chunks to maintain perfect stability
-        for (uint chunk_start = block_start; chunk_start < block_end; chunk_start += 256) {
+        // Process data in LOCAL_SIZE_X element chunks to maintain perfect stability
+        for (uint chunk_start = block_start; chunk_start < block_end; chunk_start += LOCAL_SIZE_X) {
             uint i = chunk_start + lid;
             bool valid = (i < block_end);
             uint my_key = valid ? ((pc.input_keys.entries[i].x >> pc.shift) & 0xFu) : 0xFFFFFFFFu;

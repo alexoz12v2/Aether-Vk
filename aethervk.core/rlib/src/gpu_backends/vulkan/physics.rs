@@ -30,7 +30,7 @@ use ash::vk;
 // Disabled by default: Enabling PRINTF shaders under Lavapipe (ARM64) dramatically increases
 // register pressure in the llvmpipe JIT compiler. This leads to register spilling bugs that
 // overwrite the stack-saved link register (x30), causing a SIGSEGV upon kernel return.
-#[cfg(all(test, not(target_vendor = "apple")))]
+#[cfg(all(any(debug_assertions, test), not(target_vendor = "apple")))]
 pub static USE_PRINTF_SHADERS: core::sync::atomic::AtomicBool =
   core::sync::atomic::AtomicBool::new(false);
 
@@ -84,9 +84,9 @@ pub struct PhysicsPipelines {
   #[cfg(any(test, feature = "collisions"))]
   pub apply_impulses: vk::Pipeline,
   pub barnes_hut: vk::Pipeline,
-  #[cfg(any(test, feature = "collisions"))]
   pub radix_sort: vk::Pipeline,
   pub morton_encode: vk::Pipeline,
+  pub permute_particles: vk::Pipeline,
   pub convert_particles: vk::Pipeline,
   #[cfg(any(test, feature = "collisions"))]
   pub graph_coloring: vk::Pipeline,
@@ -298,7 +298,7 @@ impl PhysicsPipelines {
     };
 
     #[cfg(all(test, not(target_vendor = "apple")))]
-    let use_debug = USE_PRINTF_SHADERS.load(core::sync::atomic::Ordering::Relaxed) && is_cpu;
+    let use_debug = USE_PRINTF_SHADERS.load(core::sync::atomic::Ordering::Relaxed);
     #[cfg(not(all(test, not(target_vendor = "apple"))))]
     let use_debug = false;
 
@@ -381,10 +381,10 @@ impl PhysicsPipelines {
         motion_refit: mk_wg!("motion_refit.comp"),
         // ── Gravity / sorting ────────────────────────────────────────────
         barnes_hut: mk_wg!("barnes_hut.comp"),
-        #[cfg(any(test, feature = "collisions"))]
         radix_sort: mk_wg!("radix_sort.comp"),
         // ── Single-variant (specialisation constant or single-threaded) ──
         morton_encode: mk!("morton_encode.comp.spv"),
+        permute_particles: mk_wg!("permute_particles.comp"),
         #[cfg(any(test, feature = "collisions"))]
         lbvh_collapse: mk!("lbvh_collapse.comp.spv"),
         // ── Broad-phase ──────────────────────────────────────────────────
@@ -399,7 +399,7 @@ impl PhysicsPipelines {
         #[cfg(any(test, feature = "collisions"))]
         bp_particle_self: mk_wg!("bp_particle_self.comp"),
         #[cfg(any(test, feature = "collisions"))]
-        bp_clear: mk!("bp_clear.comp.spv"), // single-threaded, always local_size_x=1
+        bp_clear: mk_wg!("bp_clear.comp"), // Must match subgroup size for MultiBvhNode layout
         // ── Narrow-phase / CCD ───────────────────────────────────────────
         #[cfg(any(test, feature = "collisions"))]
         narrow_ccd: mk_wg!("narrow_ccd.comp"),
@@ -465,9 +465,9 @@ impl PhysicsPipelines {
     #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.apply_impulses, timeline);
     discard_pool.discard_pipeline(self.barnes_hut, timeline);
-    #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.radix_sort, timeline);
     discard_pool.discard_pipeline(self.morton_encode, timeline);
+    discard_pool.discard_pipeline(self.permute_particles, timeline);
     discard_pool.discard_pipeline(self.convert_particles, timeline);
     #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.graph_coloring, timeline);
@@ -761,22 +761,24 @@ impl<T> VulkanBuffer<T> {
     if info.mapped_data.is_null() {
       return None;
     }
-    let count = if self.is_list {
-      // Lists have a 16-byte header. The element count is stored at the 4th `u32` (offset 12).
-      let count_ptr = info.mapped_data as *const u32;
-      (unsafe { *count_ptr.add(3) }) as usize
-    } else {
-      self.capacity
-    };
-    let data_ptr = if self.is_list {
-      (info.mapped_data as *const u8).add(16) as *const T
-    } else {
-      info.mapped_data as *const T
-    };
-    Some(core::slice::from_raw_parts(
-      data_ptr,
-      count.min(self.capacity),
-    ))
+    unsafe {
+      let count = if self.is_list {
+        // Lists have a 16-byte header. The element count is stored at the 4th `u32` (offset 12).
+        let count_ptr = info.mapped_data as *const u32;
+        (*count_ptr.add(3)) as usize
+      } else {
+        self.capacity
+      };
+      let data_ptr = if self.is_list {
+        (info.mapped_data as *const u8).add(16) as *const T
+      } else {
+        info.mapped_data as *const T
+      };
+      Some(core::slice::from_raw_parts(
+        data_ptr,
+        count.min(self.capacity),
+      ))
+    }
   }
 }
 
@@ -2188,9 +2190,11 @@ impl VulkanComputeKernels {
       emitters: emitters_addr,
       frames: frames_addr,
       particle_frame_ids: particle_frame_ids_addr,
+      bvh: 0,
       num_emitters,
       total_particles,
-      _pad_align16: [0; 2],
+      root_node_idx: 0,
+      _pad: [0; 3],
     };
     let bytes = unsafe {
       core::slice::from_raw_parts(&pc as *const _ as *const u8, core::mem::size_of_val(&pc))
@@ -2968,7 +2972,8 @@ impl VulkanComputeKernels {
     cmd: &mut VulkanCommandBuffer,
     _kinematics: &VulkanBuffer<gpu::KinematicBody>,
     _rigid_bodies: &VulkanBuffer<RigidBodyImex>,
-    particles: &VulkanBuffer<f32>,
+    particles: &mut VulkanBuffer<f32>,
+    particle_frame_ids: &mut VulkanBuffer<u32>,
     _dt: timeus_t,
   ) -> GpuResult<VulkanBuffer<()>> {
     let total_particles = {
@@ -3019,14 +3024,172 @@ impl VulkanComputeKernels {
     let bvh_buffer = bvh_buffer_result?;
     aethervk_oshal_rlib::log!("build_motion_bvh: allocated bvh_buffer successfully");
 
-    let sorted_morton = self.allocate_device_buffer::<[u32; 2]>(
+    let mut sorted_morton = self.allocate_device_buffer::<[u32; 2]>(
       device,
       allocator,
       total_particles as usize,
+      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
+      false,
+      rollback,
+    )?;
+
+    // 1. Morton Encode
+    let mut pc_encode = crate::gpu::compute_push_constants::MortonEncodePushConstants {
+      morton_out: sorted_morton.address,
+      particles: particles.address,
+      num_particles: total_particles,
+      _pad0: 0,
+      scene_min: [-1e9, -1e9, -1e9], // Arbitrary bounds for now
+      _pad1: 0,
+      scene_max: [1e9, 1e9, 1e9],
+      _pad2: 0,
+    };
+    let bytes_encode = unsafe {
+      core::slice::from_raw_parts(
+        &pc_encode as *const _ as *const u8,
+        core::mem::size_of::<crate::gpu::compute_push_constants::MortonEncodePushConstants>(),
+      )
+    };
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.morton_encode);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes_encode);
+      if dispatch_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
+      let barrier = vk::BufferMemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ)
+        .buffer(sorted_morton.buffer)
+        .size(vk::WHOLE_SIZE);
+      device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), &[], &[barrier], &[]);
+    }
+
+    // 2. Radix Sort
+    let mut sorted_morton_alt = self.allocate_device_buffer::<[u32; 2]>(
+      device,
+      allocator,
+      total_particles as usize,
+      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
+      false,
+      rollback,
+    )?;
+
+    let num_blocks = (total_particles + 4095) / 4096;
+    let histograms = self.allocate_device_buffer::<u32>(
+      device,
+      allocator,
+      (16 * num_blocks) as usize,
       vk::BufferUsageFlags::STORAGE_BUFFER,
       false,
       rollback,
     )?;
+
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.radix_sort);
+
+      let mut in_keys = sorted_morton.address;
+      let mut out_keys = sorted_morton_alt.address;
+
+      for shift in (0..30).step_by(4) {
+        // Stage 0: Count
+        let pc_count = crate::gpu::compute_push_constants::RadixSortPushConstants {
+          input_keys: in_keys,
+          output_keys: out_keys,
+          histograms: histograms.address,
+          num_particles: total_particles,
+          shift,
+          stage: 0,
+          num_blocks,
+        };
+        device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, core::slice::from_raw_parts(&pc_count as *const _ as *const u8, core::mem::size_of_val(&pc_count)));
+        if num_blocks > 0 {
+          device.cmd_dispatch(cmd.cmd, num_blocks, 1, 1);
+        }
+
+        let barrier = vk::BufferMemoryBarrier::default().src_access_mask(vk::AccessFlags::SHADER_WRITE).dst_access_mask(vk::AccessFlags::SHADER_READ).buffer(histograms.buffer).size(vk::WHOLE_SIZE);
+        device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), &[], &[barrier], &[]);
+
+        // Stage 1: Scan
+        let pc_scan = crate::gpu::compute_push_constants::RadixSortPushConstants {
+          stage: 1,
+          ..pc_count
+        };
+        device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, core::slice::from_raw_parts(&pc_scan as *const _ as *const u8, core::mem::size_of_val(&pc_scan)));
+        device.cmd_dispatch(cmd.cmd, 1, 1, 1);
+
+        device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), &[], &[barrier], &[]);
+
+        // Stage 2: Scatter
+        let pc_scatter = crate::gpu::compute_push_constants::RadixSortPushConstants {
+          stage: 2,
+          ..pc_count
+        };
+        device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, core::slice::from_raw_parts(&pc_scatter as *const _ as *const u8, core::mem::size_of_val(&pc_scatter)));
+        if num_blocks > 0 {
+          device.cmd_dispatch(cmd.cmd, num_blocks, 1, 1);
+        }
+
+        let barrier_keys = vk::MemoryBarrier::default().src_access_mask(vk::AccessFlags::SHADER_WRITE).dst_access_mask(vk::AccessFlags::SHADER_READ);
+        device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), core::slice::from_ref(&barrier_keys), &[], &[]);
+
+        core::mem::swap(&mut in_keys, &mut out_keys);
+      }
+
+      if in_keys != sorted_morton.address {
+        core::mem::swap(&mut sorted_morton.buffer, &mut sorted_morton_alt.buffer);
+        core::mem::swap(&mut sorted_morton.address, &mut sorted_morton_alt.address);
+        core::mem::swap(&mut sorted_morton.allocation, &mut sorted_morton_alt.allocation);
+      }
+    }
+
+    // 3. Permute Particles and Frame IDs
+    let mut particles_out = self.allocate_device_buffer::<f32>(
+      device,
+      allocator,
+      particles.capacity,
+      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
+      false,
+      rollback,
+    )?;
+    particles_out.is_list = particles.is_list;
+
+    let mut frame_ids_out = self.allocate_device_buffer::<u32>(
+      device,
+      allocator,
+      particle_frame_ids.capacity,
+      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
+      false,
+      rollback,
+    )?;
+    frame_ids_out.is_list = particle_frame_ids.is_list;
+
+    let pc_permute = crate::gpu::compute_push_constants::PermuteParticlesPushConstants {
+      particles_in: particles.address,
+      particles_out: particles_out.address,
+      frame_ids_in: particle_frame_ids.address,
+      frame_ids_out: frame_ids_out.address,
+      sorted_morton: sorted_morton.address,
+      num_particles: total_particles,
+      _pad: [0; 1],
+    };
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.permute_particles);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, core::slice::from_raw_parts(&pc_permute as *const _ as *const u8, core::mem::size_of_val(&pc_permute)));
+      if dispatch_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
+      let barrier = vk::MemoryBarrier::default().src_access_mask(vk::AccessFlags::SHADER_WRITE).dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(cmd.cmd, vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::COMPUTE_SHADER, vk::DependencyFlags::empty(), core::slice::from_ref(&barrier), &[], &[]);
+    }
+
+    core::mem::swap(&mut particles.buffer, &mut particles_out.buffer);
+    core::mem::swap(&mut particles.address, &mut particles_out.address);
+    core::mem::swap(&mut particles.allocation, &mut particles_out.allocation);
+
+    core::mem::swap(&mut particle_frame_ids.buffer, &mut frame_ids_out.buffer);
+    core::mem::swap(&mut particle_frame_ids.address, &mut frame_ids_out.address);
+    core::mem::swap(&mut particle_frame_ids.allocation, &mut frame_ids_out.allocation);
+
     let atomic_counters = self.allocate_device_buffer::<u32>(
       device,
       allocator,
@@ -3038,7 +3201,7 @@ impl VulkanComputeKernels {
 
     let pc = LbvhPushConstants {
       bvh: bvh_buffer.address, // self.addresses.bvh_nodes,
-      sorted_morton: sorted_morton.address,
+      sorted_morton: 0,
       counters: atomic_counters.address,
       particles: particles.address, // self.addresses.particle_data,
       num_primitives: total_particles,
@@ -3169,8 +3332,12 @@ impl VulkanComputeKernels {
     }
 
     let timeline = self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
-    self.recycle_transient_buffer(sorted_morton, timeline);
     self.recycle_transient_buffer(atomic_counters, timeline);
+    self.recycle_transient_buffer(particles_out, timeline);
+    self.recycle_transient_buffer(frame_ids_out, timeline);
+    self.recycle_transient_buffer(sorted_morton, timeline);
+    self.recycle_transient_buffer(sorted_morton_alt, timeline);
+    self.recycle_transient_buffer(histograms, timeline);
 
     Ok(bvh_buffer)
   }
@@ -3341,7 +3508,7 @@ impl VulkanComputeKernels {
       );
 
       // Dispatch indirect using the potentials buffer
-      device.cmd_dispatch_indirect(cmd.cmd, potentials.buffer, 8);
+      device.cmd_dispatch_indirect(cmd.cmd, potentials.buffer, 0);
 
       // TODO synchronization2
       let barrier = vk::MemoryBarrier::default()
@@ -3437,7 +3604,7 @@ impl VulkanComputeKernels {
       // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+        .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::INDIRECT_COMMAND_READ);
       device.cmd_pipeline_barrier(
         cmd.cmd,
         vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
@@ -3533,7 +3700,7 @@ impl VulkanComputeKernels {
         bytes,
       );
 
-      device.cmd_dispatch_indirect(cmd.cmd, compacted.buffer, 8);
+      device.cmd_dispatch_indirect(cmd.cmd, compacted.buffer, 0);
 
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::TRANSFER_WRITE)
@@ -3634,7 +3801,7 @@ impl VulkanComputeKernels {
         0,
         bytes_lcp,
       );
-      device.cmd_dispatch_indirect(cmd.cmd, collisions.buffer, 8);
+      device.cmd_dispatch_indirect(cmd.cmd, collisions.buffer, 0);
 
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -3664,7 +3831,7 @@ impl VulkanComputeKernels {
         0,
         bytes_apply,
       );
-      device.cmd_dispatch_indirect(cmd.cmd, collisions.buffer, 8);
+      device.cmd_dispatch_indirect(cmd.cmd, collisions.buffer, 0);
 
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -4615,7 +4782,8 @@ impl Kernels for Device {
     cmd: &mut Self::Cmd,
     kinematics: &Self::Buffer<gpu::KinematicBody>,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
+    particles: &mut Self::Buffer<f32>,
+    particle_frame_ids: &mut Self::Buffer<u32>,
     dt: timeus_t,
   ) -> EngineResult<Self::MotionBvh> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
@@ -4631,6 +4799,7 @@ impl Kernels for Device {
           kinematics,
           rigid_bodies,
           particles,
+          particle_frame_ids,
           dt,
         )
       })

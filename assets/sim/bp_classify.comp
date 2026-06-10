@@ -1,10 +1,11 @@
 #version 450 core
+
 #ifdef DEBUG_SHADERS
 #extension GL_EXT_debug_printf : enable
 #endif
+
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
-
 #extension GL_GOOGLE_include_directive : require
 
 #include "../bvh_utils.glsl"
@@ -23,20 +24,29 @@ layout(push_constant, std430) uniform PushConstants {
     uvec2 out_macro_lca;
     uvec2 out_lca_lca;
 
-    uint max_pairs;
+    uint max_pairs; // DEPRECATED: Dangerous global bound
     uint num_rigid_bodies;
-    RigidBodyArray rigid_bodies;
 } pc;
 
 #define BVH_SHAPE_SUB_TLAS 3u
 
 void main() {
-
     uint id = gl_GlobalInvocationID.x;
+
+#ifdef DEBUG_SHADERS
+    // Diagnostic header: Only Thread 0 prints to confirm total workload
+    if (id == 0) {
+        debugPrintfEXT("[bp_classify] STARTING. Active raw_pairs count: %d\n", pc.raw_pairs.count);
+    }
+#endif
+
+    // Safely exit unused threads
     if (id >= pc.raw_pairs.count) return;
 
     uvec2 pair = pc.raw_pairs.pairs[id];
-    uint ent_A = pair.x, meta_B = pair.y;
+    uint ent_A = pair.x;
+    uint meta_B = pair.y;
+
     uint ent_B = bvh_get_index(meta_B);
     uint shape_B = bvh_get_shape(meta_B);
 
@@ -46,43 +56,62 @@ void main() {
     if (type_A > type_B) {
         uint temp = ent_A; ent_A = ent_B; ent_B = temp;
         temp = type_A; type_A = type_B; type_B = temp;
-        // NOTE: We don't swap meta_B, but since A is the query (always rigid body) and B is the leaf (which can be LCA),
-        // type_A > type_B would only happen if A was a particle system and B was a rigid body.
-        // Currently, bp_scene only queries RigidBodies, so A is always TYPE_RIGID_BODY.
     }
+
+    // Mask out any upper shape bits before storing in narrow phase buffers
+    uvec2 clean_pair = uvec2(bvh_get_index(ent_A), bvh_get_index(ent_B));
 
     if (type_A == TYPE_PARTICLE_SYSTEM && type_B == TYPE_PARTICLE_SYSTEM) {
         if (pc.out_ps_ps.x != 0 || pc.out_ps_ps.y != 0) {
             PairBuffer buf = PairBuffer(pc.out_ps_ps);
             uint out_idx = atomicAdd(buf.count, 1);
-            if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(bvh_get_index(ent_A), bvh_get_index(ent_B));
+
+            // FIX: Check against specific buffer capacity, not global
+            if (out_idx < buf.capacity) {
+                buf.pairs[out_idx] = clean_pair;
+            }
+#ifdef DEBUG_SHADERS
+            else { debugPrintfEXT("[bp_classify FATAL] ps_ps_pairs overflowed! Capacity is %d\n", buf.capacity); }
+#endif
         }
     } else if (type_A == TYPE_RIGID_BODY && type_B == TYPE_PARTICLE_SYSTEM) {
         if (pc.out_rb_ps.x != 0 || pc.out_rb_ps.y != 0) {
             PairBuffer buf = PairBuffer(pc.out_rb_ps);
             uint out_idx = atomicAdd(buf.count, 1);
-            if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(bvh_get_index(ent_A), bvh_get_index(ent_B));
+
+            if (out_idx < buf.capacity) {
+                buf.pairs[out_idx] = clean_pair;
+            }
+#ifdef DEBUG_SHADERS
+            else { debugPrintfEXT("[bp_classify FATAL] rb_ps_pairs overflowed! Capacity is %d\n", buf.capacity); }
+#endif
         }
     } else if (type_A == TYPE_RIGID_BODY && type_B == TYPE_RIGID_BODY) {
-        // Since bp_scene only tests RigidBodies, A is guaranteed to be a RigidBody, not an LCA frame.
-        bool a_is_lca = false;
         bool b_is_lca = (shape_B == BVH_SHAPE_SUB_TLAS);
 
         if (b_is_lca) {
-#ifdef DEBUG_SHADERS
-            debugPrintfEXT("bp_classify: MACRO_LCA! ent_A=%d, ent_B=%d\n", ent_A, ent_B);
-#endif
-
             if (pc.out_macro_lca.x != 0 || pc.out_macro_lca.y != 0) {
                 PairBuffer buf = PairBuffer(pc.out_macro_lca);
                 uint out_idx = atomicAdd(buf.count, 1);
-                if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(bvh_get_index(ent_A), bvh_get_index(ent_B));
+
+                if (out_idx < buf.capacity) {
+                    buf.pairs[out_idx] = clean_pair;
+                }
+#ifdef DEBUG_SHADERS
+                else { debugPrintfEXT("[bp_classify FATAL] macro_lca overflowed! Capacity is %d\n", buf.capacity); }
+#endif
             }
         } else {
             if (pc.out_rb_rb.x != 0 || pc.out_rb_rb.y != 0) {
                 PairBuffer buf = PairBuffer(pc.out_rb_rb);
                 uint out_idx = atomicAdd(buf.count, 1);
-                if (out_idx < pc.max_pairs) buf.pairs[out_idx] = uvec2(bvh_get_index(ent_A), bvh_get_index(ent_B));
+
+                if (out_idx < buf.capacity) {
+                    buf.pairs[out_idx] = clean_pair;
+                }
+#ifdef DEBUG_SHADERS
+                else { debugPrintfEXT("[bp_classify FATAL] rb_rb_pairs overflowed! Capacity is %d\n", buf.capacity); }
+#endif
             }
         }
     }
