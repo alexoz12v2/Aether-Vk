@@ -158,30 +158,19 @@ void main() {
     if (right_child >= max_nodes) debugPrintfEXT("TRAP! right_child (%u) >= max_nodes (%u) at idx=%u\n", right_child, max_nodes, idx);
 #endif
 
-    pc.bvh.nodes[idx].child_indices[0] = left_child;
-    pc.bvh.nodes[idx].child_indices[1] = right_child;
+    tlas_write_child(pc.bvh, idx, 0u, left_child);
+    tlas_write_child(pc.bvh, idx, 1u, right_child);
 
-    uint left_payload;
-    if (left_is_leaf) {
-        left_payload = split;
-    } else {
-        left_payload = left_child;
-    }
+    uint left_payload  = left_is_leaf  ? split     : left_child;
+    uint right_payload = right_is_leaf ? split + 1u : right_child;
 
-    uint right_payload;
-    if (right_is_leaf) {
-        right_payload = split + 1;
-    } else {
-        right_payload = right_child;
-    }
+    tlas_write_metadata(pc.bvh, idx, 0u, bvh_pack_metadata(left_is_leaf,  BVH_FRAME_MICRO, BVH_SHAPE_AABB, left_payload));
+    tlas_write_metadata(pc.bvh, idx, 1u, bvh_pack_metadata(right_is_leaf, BVH_FRAME_MICRO, BVH_SHAPE_AABB, right_payload));
 
-    pc.bvh.nodes[idx].metadata[0] = bvh_pack_metadata(left_is_leaf, BVH_FRAME_MICRO, BVH_SHAPE_AABB, left_payload);
-    pc.bvh.nodes[idx].metadata[1] = bvh_pack_metadata(right_is_leaf, BVH_FRAME_MICRO, BVH_SHAPE_AABB, right_payload);
+    tlas_write_parent(pc.bvh, left_child,  idx);
+    tlas_write_parent(pc.bvh, right_child, idx);
 
-    pc.bvh.nodes[left_child].parent_idx = idx;
-    pc.bvh.nodes[right_child].parent_idx = idx;
-
-    pc.bvh.nodes[idx].valid_mask = uvec2(3, 0); // Children 0 and 1 are valid
+    tlas_write_valid_mask(pc.bvh, idx, uvec2(3u, 0u)); // Children 0 and 1 are valid
 
 #ifdef DEBUG_SHADERS
     if (is_trace_thread) debugPrintfEXT("--- FINISHED HIERARCHY BUILD idx=0 ---\n");

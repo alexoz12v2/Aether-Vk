@@ -77,14 +77,14 @@ void main() {
         uint node_idx = stack[--stackPtr];
 
         for (uint i = 0; i < gl_SubgroupSize; ++i) {
-            if (!bvh_node_is_valid(pc.particle_bvh.nodes[node_idx].valid_mask, i)) continue;
+            if (!bvh_node_is_valid(tlas_valid_mask(pc.particle_bvh, node_idx), i)) continue;
 
             AABB bound;
-            bound.minBounds = vec3(pc.particle_bvh.nodes[node_idx].min_x[i], pc.particle_bvh.nodes[node_idx].min_y[i], pc.particle_bvh.nodes[node_idx].min_z[i]);
-            bound.maxBounds = vec3(pc.particle_bvh.nodes[node_idx].max_x[i], pc.particle_bvh.nodes[node_idx].max_y[i], pc.particle_bvh.nodes[node_idx].max_z[i]);
+            bound.minBounds = vec3(tlas_min_x(pc.particle_bvh, node_idx, i), tlas_min_y(pc.particle_bvh, node_idx, i), tlas_min_z(pc.particle_bvh, node_idx, i));
+            bound.maxBounds = vec3(tlas_max_x(pc.particle_bvh, node_idx, i), tlas_max_y(pc.particle_bvh, node_idx, i), tlas_max_z(pc.particle_bvh, node_idx, i));
 
             if (intersectAABB(my_aabb, bound)) {
-                uint meta = pc.particle_bvh.nodes[node_idx].metadata[i];
+                uint meta   = tlas_metadata(pc.particle_bvh, node_idx, i);
                 uint offset = bvh_get_index(meta);
 
                 if (bvh_is_leaf(meta)) {
@@ -102,7 +102,7 @@ void main() {
                         ) * pc.dt;
 
                         mat4 transA = mat4(1.0); transA[3].xyz = my_center;
-                        mat4 transB = mat4(1.0); transB[3].xyz = vec3(pc.particle_bvh.nodes[node_idx].com_x[i], pc.particle_bvh.nodes[node_idx].com_y[i], pc.particle_bvh.nodes[node_idx].com_z[i]);
+                        mat4 transB = mat4(1.0); transB[3].xyz = vec3(tlas_com_x(pc.particle_bvh, node_idx, i), tlas_com_y(pc.particle_bvh, node_idx, i), tlas_com_z(pc.particle_bvh, node_idx, i));
 
                         gjk_calls++;
 

@@ -462,8 +462,8 @@ impl Instance {
       return Err(GpuError::UnsupportedFeatureNamed("Vulkan Capable Devices were found, but none of them have the featureset required by our application".to_string()));
     }
 
-    // 3. sort on score and return
-    eligible_devices.sort_by(|a, b| a.score.cmp(&b.score));
+    // 3. sort on score and return (descending, highest score first)
+    eligible_devices.sort_by(|a, b| b.score.cmp(&a.score));
     Ok(eligible_devices)
   }
 }

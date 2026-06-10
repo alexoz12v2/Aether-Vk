@@ -224,15 +224,18 @@ where
   T: IntoPathBuf,
 {
   fn is_valid(&self) -> bool {
-    self.into_pathbuf().is_valid()
+    let buf = self.into_pathbuf();
+    <Path as FileSystemObject>::is_valid(&*buf)
   }
 
   fn is_dir(&self) -> bool {
-    self.into_pathbuf().is_dir()
+    let buf = self.into_pathbuf();
+    <Path as FileSystemObject>::is_dir(&*buf)
   }
 
   fn is_file(&self) -> bool {
-    self.into_pathbuf().is_file()
+    let buf = self.into_pathbuf();
+    <Path as FileSystemObject>::is_file(&*buf)
   }
 }
 

@@ -120,16 +120,13 @@ void main() {
         uint node_idx = shared_stacks[subgroup_id][stack_ptr];
         if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr;
 
-        uint meta = pc.bvh.nodes[node_idx].metadata[lane_id];
-        bool valid = bvh_node_is_valid(pc.bvh.nodes[node_idx].valid_mask, lane_id);
-
-        vec3 c_min = vec3(pc.bvh.nodes[node_idx].min_x[lane_id], pc.bvh.nodes[node_idx].min_y[lane_id], pc.bvh.nodes[node_idx].min_z[lane_id]);
-        vec3 c_max = vec3(pc.bvh.nodes[node_idx].max_x[lane_id], pc.bvh.nodes[node_idx].max_y[lane_id], pc.bvh.nodes[node_idx].max_z[lane_id]);
-        uint child_payload = pc.bvh.nodes[node_idx].child_indices[lane_id];
-
-        // FIX: Coalesced memory load. Each lane caches its own child's data in registers.
-        uint node_p_start = pc.bvh.nodes[node_idx].particle_start[lane_id];
-        uint node_p_count = pc.bvh.nodes[node_idx].particle_count[lane_id];
+        uint meta        = tlas_metadata(pc.bvh, node_idx, lane_id);
+        bool valid       = bvh_node_is_valid(tlas_valid_mask(pc.bvh, node_idx), lane_id);
+        vec3 c_min       = vec3(tlas_min_x(pc.bvh, node_idx, lane_id), tlas_min_y(pc.bvh, node_idx, lane_id), tlas_min_z(pc.bvh, node_idx, lane_id));
+        vec3 c_max       = vec3(tlas_max_x(pc.bvh, node_idx, lane_id), tlas_max_y(pc.bvh, node_idx, lane_id), tlas_max_z(pc.bvh, node_idx, lane_id));
+        uint child_payload = tlas_child(pc.bvh, node_idx, lane_id);
+        uint node_p_start  = tlas_pstart(pc.bvh, node_idx, lane_id);
+        uint node_p_count  = tlas_pcount(pc.bvh, node_idx, lane_id);
 
         bool hit_aabb = valid && intersectAABB(my_min, my_max, c_min, c_max);
         bool is_leaf = bvh_is_leaf(meta);

@@ -75,26 +75,23 @@ void main() {
     uint child_particle_count = end_p - start_p;
     
     while (current != 0) {
-        uint parent = pc.bvh.nodes[current].parent_idx;
-        uint dir = 0;
-        if (pc.bvh.nodes[parent].child_indices[1] == current) {
-            dir = 1;
-        }
-        
-        pc.bvh.nodes[parent].min_x[dir] = min_b.x;
-        pc.bvh.nodes[parent].min_y[dir] = min_b.y;
-        pc.bvh.nodes[parent].min_z[dir] = min_b.z;
-        pc.bvh.nodes[parent].max_x[dir] = max_b.x;
-        pc.bvh.nodes[parent].max_y[dir] = max_b.y;
-        pc.bvh.nodes[parent].max_z[dir] = max_b.z;
-        
-        pc.bvh.nodes[parent].masses[dir] = child_mass;
-        pc.bvh.nodes[parent].com_x[dir] = child_com.x;
-        pc.bvh.nodes[parent].com_y[dir] = child_com.y;
-        pc.bvh.nodes[parent].com_z[dir] = child_com.z;
-        
-        pc.bvh.nodes[parent].particle_start[dir] = child_particle_start;
-        pc.bvh.nodes[parent].particle_count[dir] = child_particle_count;
+        uint parent = tlas_parent(pc.bvh, current);
+        uint dir    = (tlas_child(pc.bvh, parent, 1u) == current) ? 1u : 0u;
+
+        tlas_write_min_x(pc.bvh, parent, dir, min_b.x);
+        tlas_write_min_y(pc.bvh, parent, dir, min_b.y);
+        tlas_write_min_z(pc.bvh, parent, dir, min_b.z);
+        tlas_write_max_x(pc.bvh, parent, dir, max_b.x);
+        tlas_write_max_y(pc.bvh, parent, dir, max_b.y);
+        tlas_write_max_z(pc.bvh, parent, dir, max_b.z);
+
+        tlas_write_mass (pc.bvh, parent, dir, child_mass);
+        tlas_write_com_x(pc.bvh, parent, dir, child_com.x);
+        tlas_write_com_y(pc.bvh, parent, dir, child_com.y);
+        tlas_write_com_z(pc.bvh, parent, dir, child_com.z);
+
+        tlas_write_pstart(pc.bvh, parent, dir, child_particle_start);
+        tlas_write_pcount(pc.bvh, parent, dir, child_particle_count);
         
         memoryBarrierBuffer();
         
@@ -103,31 +100,31 @@ void main() {
         
         memoryBarrierBuffer();
         
-        vec3 c0_min = vec3(pc.bvh.nodes[parent].min_x[0], pc.bvh.nodes[parent].min_y[0], pc.bvh.nodes[parent].min_z[0]);
-        vec3 c1_min = vec3(pc.bvh.nodes[parent].min_x[1], pc.bvh.nodes[parent].min_y[1], pc.bvh.nodes[parent].min_z[1]);
-        vec3 c0_max = vec3(pc.bvh.nodes[parent].max_x[0], pc.bvh.nodes[parent].max_y[0], pc.bvh.nodes[parent].max_z[0]);
-        vec3 c1_max = vec3(pc.bvh.nodes[parent].max_x[1], pc.bvh.nodes[parent].max_y[1], pc.bvh.nodes[parent].max_z[1]);
-        
+        vec3 c0_min = vec3(tlas_min_x(pc.bvh, parent, 0u), tlas_min_y(pc.bvh, parent, 0u), tlas_min_z(pc.bvh, parent, 0u));
+        vec3 c1_min = vec3(tlas_min_x(pc.bvh, parent, 1u), tlas_min_y(pc.bvh, parent, 1u), tlas_min_z(pc.bvh, parent, 1u));
+        vec3 c0_max = vec3(tlas_max_x(pc.bvh, parent, 0u), tlas_max_y(pc.bvh, parent, 0u), tlas_max_z(pc.bvh, parent, 0u));
+        vec3 c1_max = vec3(tlas_max_x(pc.bvh, parent, 1u), tlas_max_y(pc.bvh, parent, 1u), tlas_max_z(pc.bvh, parent, 1u));
+
         min_b = min(c0_min, c1_min);
         max_b = max(c0_max, c1_max);
-        
-        float m0 = pc.bvh.nodes[parent].masses[0];
-        float m1 = pc.bvh.nodes[parent].masses[1];
+
+        float m0 = tlas_mass(pc.bvh, parent, 0u);
+        float m1 = tlas_mass(pc.bvh, parent, 1u);
         child_mass = m0 + m1;
-        
-        vec3 com0 = vec3(pc.bvh.nodes[parent].com_x[0], pc.bvh.nodes[parent].com_y[0], pc.bvh.nodes[parent].com_z[0]);
-        vec3 com1 = vec3(pc.bvh.nodes[parent].com_x[1], pc.bvh.nodes[parent].com_y[1], pc.bvh.nodes[parent].com_z[1]);
-        
+
+        vec3 com0 = vec3(tlas_com_x(pc.bvh, parent, 0u), tlas_com_y(pc.bvh, parent, 0u), tlas_com_z(pc.bvh, parent, 0u));
+        vec3 com1 = vec3(tlas_com_x(pc.bvh, parent, 1u), tlas_com_y(pc.bvh, parent, 1u), tlas_com_z(pc.bvh, parent, 1u));
+
         if (child_mass > 1e-6) {
             child_com = (com0 * m0 + com1 * m1) / child_mass;
         } else {
             child_com = vec3(0.0);
         }
-        
-        uint s0 = pc.bvh.nodes[parent].particle_start[0];
-        uint s1 = pc.bvh.nodes[parent].particle_start[1];
-        uint c0 = pc.bvh.nodes[parent].particle_count[0];
-        uint c1 = pc.bvh.nodes[parent].particle_count[1];
+
+        uint s0 = tlas_pstart(pc.bvh, parent, 0u);
+        uint s1 = tlas_pstart(pc.bvh, parent, 1u);
+        uint c0 = tlas_pcount(pc.bvh, parent, 0u);
+        uint c1 = tlas_pcount(pc.bvh, parent, 1u);
         
         child_particle_start = min(s0, s1);
         child_particle_count = c0 + c1;

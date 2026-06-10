@@ -37,14 +37,14 @@ void main() {
     if (idx >= pc.num_internal_nodes) return;
 
     pc.counters.counts[idx] = 0;
-    pc.bvh.nodes[idx].parent_idx = 0xFFFFFFFFu;
-    pc.bvh.nodes[idx].valid_mask = uvec2(0, 0);
+    tlas_write_parent    (pc.bvh, idx, 0xFFFFFFFFu);
+    tlas_write_valid_mask(pc.bvh, idx, uvec2(0u, 0u));
 
-    pc.bvh.nodes[pc.num_internal_nodes + idx].parent_idx = 0xFFFFFFFFu;
-    pc.bvh.nodes[pc.num_internal_nodes + idx].valid_mask = uvec2(0, 0);
+    tlas_write_parent    (pc.bvh, pc.num_internal_nodes + idx, 0xFFFFFFFFu);
+    tlas_write_valid_mask(pc.bvh, pc.num_internal_nodes + idx, uvec2(0u, 0u));
 
-    if (idx == pc.num_internal_nodes - 1) {
-        pc.bvh.nodes[pc.num_internal_nodes + idx + 1].parent_idx = 0xFFFFFFFFu;
-        pc.bvh.nodes[pc.num_internal_nodes + idx + 1].valid_mask = uvec2(0, 0);
+    if (idx == pc.num_internal_nodes - 1u) {
+        tlas_write_parent    (pc.bvh, pc.num_internal_nodes + idx + 1u, 0xFFFFFFFFu);
+        tlas_write_valid_mask(pc.bvh, pc.num_internal_nodes + idx + 1u, uvec2(0u, 0u));
     }
 }

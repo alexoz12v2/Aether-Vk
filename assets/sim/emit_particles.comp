@@ -43,13 +43,14 @@ void main() {
     while(stackPtr > 0 && !occluded) {
         uint node = stack[--stackPtr];
         for (uint i = 0; i < SUBGROUP_SIZE; ++i) {
-            if (!bvh_node_is_valid(pc.bvh.nodes[node].valid_mask, i)) continue;
-            vec3 mn = vec3(pc.bvh.nodes[node].min_x[i], pc.bvh.nodes[node].min_y[i], pc.bvh.nodes[node].min_z[i]);
-            vec3 mx = vec3(pc.bvh.nodes[node].max_x[i], pc.bvh.nodes[node].max_y[i], pc.bvh.nodes[node].max_z[i]);
+            if (!bvh_node_is_valid(tlas_valid_mask(pc.bvh, node), i)) continue;
+            vec3 mn = vec3(tlas_min_x(pc.bvh, node, i), tlas_min_y(pc.bvh, node, i), tlas_min_z(pc.bvh, node, i));
+            vec3 mx = vec3(tlas_max_x(pc.bvh, node, i), tlas_max_y(pc.bvh, node, i), tlas_max_z(pc.bvh, node, i));
 
             if (intersectRayAABB(pos + dir * 0.1, dir, invDir, mn, mx, dist)) {
-                if (bvh_is_leaf(pc.bvh.nodes[node].metadata[i])) { occluded = true; break; }
-                else if (bvh_get_index(pc.bvh.nodes[node].metadata[i]) != 0xFFFFFFFFu) stack[stackPtr++] = bvh_get_index(pc.bvh.nodes[node].metadata[i]);
+                uint m = tlas_metadata(pc.bvh, node, i);
+                if (bvh_is_leaf(m)) { occluded = true; break; }
+                else if (bvh_get_index(m) != 0xFFFFFFFFu) stack[stackPtr++] = bvh_get_index(m);
             }
         }
     }

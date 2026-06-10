@@ -20,6 +20,10 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_GOOGLE_include_directive : require
 
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
+
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
 
@@ -36,8 +40,20 @@ layout(push_constant, std430) uniform PushConstants {
 
 void main() {
     uint gid = gl_GlobalInvocationID.x;
+
+#ifdef DEBUG_SHADERS
+    if (gid == 0) {
+        debugPrintfEXT("======================================\n");
+        debugPrintfEXT("integrate_particles_p1_p2.comp : STARTED\n");
+        debugPrintfEXT("Total Particles: %d | dt: %1.6f\n", pc.total_particles, pc.dt);
+        debugPrintfEXT("======================================\n");
+    }
+#endif
+
     if (gid >= pc.total_particles) return;
 
+    // NOTE: Assuming P_BASE, P_READ, and P_WRITE correctly utilize the hardware
+    // gl_SubgroupSize internally to calculate AoSoA strides.
     uint base = P_BASE(gid);
 
     float mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
@@ -46,12 +62,41 @@ void main() {
     float inv_m = 1.0 / mass;
     float half_dt = 0.5 * pc.dt;
 
-    vec3 v_n = vec3(P_READ(pc.particles, base + 3u * SUBGROUP_SIZE), P_READ(pc.particles, base + 4u * SUBGROUP_SIZE), P_READ(pc.particles, base + 5u * SUBGROUP_SIZE));
-    vec3 f_n = vec3(P_READ(pc.particles, base + 7u * SUBGROUP_SIZE), P_READ(pc.particles, base + 8u * SUBGROUP_SIZE), P_READ(pc.particles, base + 9u * SUBGROUP_SIZE));
+    vec3 v_n = vec3(
+        P_READ(pc.particles, base + 3u * SUBGROUP_SIZE),
+        P_READ(pc.particles, base + 4u * SUBGROUP_SIZE),
+        P_READ(pc.particles, base + 5u * SUBGROUP_SIZE)
+    );
+
+    vec3 f_n = vec3(
+        P_READ(pc.particles, base + 7u * SUBGROUP_SIZE),
+        P_READ(pc.particles, base + 8u * SUBGROUP_SIZE),
+        P_READ(pc.particles, base + 9u * SUBGROUP_SIZE)
+    );
 
     vec3 v_half = v_n + f_n * inv_m * half_dt;
-    vec3 pos_n = vec3(P_READ(pc.particles, base + 0u * SUBGROUP_SIZE), P_READ(pc.particles, base + 1u * SUBGROUP_SIZE), P_READ(pc.particles, base + 2u * SUBGROUP_SIZE));
+
+    vec3 pos_n = vec3(
+        P_READ(pc.particles, base + 0u * SUBGROUP_SIZE),
+        P_READ(pc.particles, base + 1u * SUBGROUP_SIZE),
+        P_READ(pc.particles, base + 2u * SUBGROUP_SIZE)
+    );
+
     vec3 pos_next = pos_n + v_half * pc.dt;
+
+#ifdef DEBUG_SHADERS
+    // EXPLOSION DETECTOR: Catch corrupted forces from previous frame immediately
+    if (isnan(pos_next.x) || length(v_half) > 100000.0) {
+        debugPrintfEXT("[P1_P2 FATAL] Particle %d exploded! mass=%1.2f\n", gid, mass);
+        debugPrintfEXT("   -> Prev Pos: (%1.2f, %1.2f, %1.2f) | Prev Vel: (%1.2f, %1.2f, %1.2f)\n", pos_n.x, pos_n.y, pos_n.z, v_n.x, v_n.y, v_n.z);
+        debugPrintfEXT("   -> Incoming Force: (%1.2f, %1.2f, %1.2f)\n", f_n.x, f_n.y, f_n.z);
+        debugPrintfEXT("   -> New Vel Half: (%1.2f, %1.2f, %1.2f) | New Pos: (%1.2f, %1.2f, %1.2f)\n", v_half.x, v_half.y, v_half.z, pos_next.x, pos_next.y, pos_next.z);
+    } else if (gid == 0) {
+        // Routine trace for Particle 0 to verify integration math
+        debugPrintfEXT("[P1_P2 TRACE] P0: mass=%1.2f fn=(%1.2f,%1.2f,%1.2f) -> v_half=(%1.2f,%1.2f,%1.2f) -> pos_next=(%1.2f,%1.2f,%1.2f)\n",
+            mass, f_n.x, f_n.y, f_n.z, v_half.x, v_half.y, v_half.z, pos_next.x, pos_next.y, pos_next.z);
+    }
+#endif
 
     P_WRITE(pc.particles, base + 0u * SUBGROUP_SIZE, pos_next.x);
     P_WRITE(pc.particles, base + 1u * SUBGROUP_SIZE, pos_next.y);
@@ -61,6 +106,7 @@ void main() {
     P_WRITE(pc.particles, base + 4u * SUBGROUP_SIZE, v_half.y);
     P_WRITE(pc.particles, base + 5u * SUBGROUP_SIZE, v_half.z);
 
+    // Clear forces for the current frame's collision/gravity passes
     P_WRITE(pc.particles, base + 7u * SUBGROUP_SIZE, 0.0);
     P_WRITE(pc.particles, base + 8u * SUBGROUP_SIZE, 0.0);
     P_WRITE(pc.particles, base + 9u * SUBGROUP_SIZE, 0.0);
