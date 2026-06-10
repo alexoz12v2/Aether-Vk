@@ -688,6 +688,30 @@ impl WindowedPresentationState {
 
     let surface_capabilities = ash::khr::get_surface_capabilities2::Instance::new(entry, instance);
 
+    // To satisfy Vulkan Validation Layers (especially for headless surfaces), we must query
+    // surface support on the physical device's queue families before querying surface formats.
+    let mut is_supported = false;
+    unsafe {
+      let props = instance.get_physical_device_queue_family_properties(physical_device.get());
+      for i in 0..props.len() {
+        if surface_instance.get_physical_device_surface_support(
+          physical_device.get(),
+          i as u32,
+          surface,
+        ).unwrap_or(false) {
+          is_supported = true;
+        }
+      }
+    }
+
+    if !is_supported {
+      unsafe { surface_instance.destroy_surface(surface, None); }
+      return Err(crate::types::GpuError::BackendSpecific(
+        "The selected physical device does not support presenting to this surface (likely an Nvidia headless limitation).".to_string()
+      ));
+    }
+
+
     let mut this = Self {
       surface_instance,
       surface_capabilities,

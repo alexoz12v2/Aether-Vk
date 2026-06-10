@@ -926,6 +926,7 @@ where
                 &particle_frame_ids,
                 n_emitters,
               )?;
+              #[cfg(test)] println!("!!! EXEC: compute_self_gravity and imex_integrate_particles_p4_5");
               kernels.imex_integrate_particles_p4_5(
                 &mut cmd,
                 &mut particles,

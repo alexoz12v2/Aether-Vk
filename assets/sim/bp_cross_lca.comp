@@ -111,12 +111,11 @@ void main() {
         uint node_idx = shared_stacks[subgroup_id][stack_ptr];
         if (lane_id == 0) shared_stack_ptrs[subgroup_id] = stack_ptr;
 
-        uint meta = tlas.nodes[node_idx].metadata[lane_id];
-        bool valid = bvh_node_is_valid(tlas.nodes[node_idx].valid_mask, lane_id);
-
-        vec3 c_min = vec3(tlas.nodes[node_idx].min_x[lane_id], tlas.nodes[node_idx].min_y[lane_id], tlas.nodes[node_idx].min_z[lane_id]);
-        vec3 c_max = vec3(tlas.nodes[node_idx].max_x[lane_id], tlas.nodes[node_idx].max_y[lane_id], tlas.nodes[node_idx].max_z[lane_id]);
-        uint child_payload = tlas.nodes[node_idx].child_indices[lane_id];
+        uint meta        = tlas_metadata(tlas, node_idx, lane_id);
+        bool valid       = bvh_node_is_valid(tlas_valid_mask(tlas, node_idx), lane_id);
+        vec3 c_min       = vec3(tlas_min_x(tlas, node_idx, lane_id), tlas_min_y(tlas, node_idx, lane_id), tlas_min_z(tlas, node_idx, lane_id));
+        vec3 c_max       = vec3(tlas_max_x(tlas, node_idx, lane_id), tlas_max_y(tlas, node_idx, lane_id), tlas_max_z(tlas, node_idx, lane_id));
+        uint child_payload = tlas_child(tlas, node_idx, lane_id);
 
         bool hit = valid && intersectAABB(query_min, query_max, c_min, c_max);
         bool is_leaf = bvh_is_leaf(meta);

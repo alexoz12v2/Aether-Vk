@@ -19,19 +19,19 @@ void main() {
     uint global_id = gl_GlobalInvocationID.x; if (global_id >= pc.total_nodes_at_depth) return;
 
     uint node_idx = pc.depth_indices.indices[global_id + 4];
-    for (uint i = 0; i < 2; ++i) {
-        uint child = pc.bvh.nodes[node_idx].child_indices[i];
-        if (bvh_is_leaf(pc.bvh.nodes[node_idx].metadata[i])) {
-            pc.bvh.nodes[node_idx].min_x[i] = pc.bvh.nodes[child].min_x[0]; pc.bvh.nodes[node_idx].max_x[i] = pc.bvh.nodes[child].max_x[0];
-            pc.bvh.nodes[node_idx].min_y[i] = pc.bvh.nodes[child].min_y[0]; pc.bvh.nodes[node_idx].max_y[i] = pc.bvh.nodes[child].max_y[0];
-            pc.bvh.nodes[node_idx].min_z[i] = pc.bvh.nodes[child].min_z[0]; pc.bvh.nodes[node_idx].max_z[i] = pc.bvh.nodes[child].max_z[0];
+    for (uint i = 0; i < 2u; ++i) {
+        uint child = tlas_child(pc.bvh, node_idx, i);
+        if (bvh_is_leaf(tlas_metadata(pc.bvh, node_idx, i))) {
+            tlas_write_min_x(pc.bvh, node_idx, i, tlas_min_x(pc.bvh, child, 0u)); tlas_write_max_x(pc.bvh, node_idx, i, tlas_max_x(pc.bvh, child, 0u));
+            tlas_write_min_y(pc.bvh, node_idx, i, tlas_min_y(pc.bvh, child, 0u)); tlas_write_max_y(pc.bvh, node_idx, i, tlas_max_y(pc.bvh, child, 0u));
+            tlas_write_min_z(pc.bvh, node_idx, i, tlas_min_z(pc.bvh, child, 0u)); tlas_write_max_z(pc.bvh, node_idx, i, tlas_max_z(pc.bvh, child, 0u));
         } else {
-            pc.bvh.nodes[node_idx].min_x[i] = min(pc.bvh.nodes[child].min_x[0], pc.bvh.nodes[child].min_x[1]);
-            pc.bvh.nodes[node_idx].max_x[i] = max(pc.bvh.nodes[child].max_x[0], pc.bvh.nodes[child].max_x[1]);
-            pc.bvh.nodes[node_idx].min_y[i] = min(pc.bvh.nodes[child].min_y[0], pc.bvh.nodes[child].min_y[1]);
-            pc.bvh.nodes[node_idx].max_y[i] = max(pc.bvh.nodes[child].max_y[0], pc.bvh.nodes[child].max_y[1]);
-            pc.bvh.nodes[node_idx].min_z[i] = min(pc.bvh.nodes[child].min_z[0], pc.bvh.nodes[child].min_z[1]);
-            pc.bvh.nodes[node_idx].max_z[i] = max(pc.bvh.nodes[child].max_z[0], pc.bvh.nodes[child].max_z[1]);
+            tlas_write_min_x(pc.bvh, node_idx, i, min(tlas_min_x(pc.bvh, child, 0u), tlas_min_x(pc.bvh, child, 1u)));
+            tlas_write_max_x(pc.bvh, node_idx, i, max(tlas_max_x(pc.bvh, child, 0u), tlas_max_x(pc.bvh, child, 1u)));
+            tlas_write_min_y(pc.bvh, node_idx, i, min(tlas_min_y(pc.bvh, child, 0u), tlas_min_y(pc.bvh, child, 1u)));
+            tlas_write_max_y(pc.bvh, node_idx, i, max(tlas_max_y(pc.bvh, child, 0u), tlas_max_y(pc.bvh, child, 1u)));
+            tlas_write_min_z(pc.bvh, node_idx, i, min(tlas_min_z(pc.bvh, child, 0u), tlas_min_z(pc.bvh, child, 1u)));
+            tlas_write_max_z(pc.bvh, node_idx, i, max(tlas_max_z(pc.bvh, child, 0u), tlas_max_z(pc.bvh, child, 1u)));
         }
     }
 }

@@ -65,7 +65,7 @@ void main() {
         }
 #endif
 
-        uint meta = pc.binary_bvh.nodes[binary_idx].metadata[dir];
+        uint meta = tlas_metadata(pc.binary_bvh, binary_idx, dir);
         is_leaf = bvh_is_leaf(meta);
         uint next_idx = bvh_get_index(meta);
 
@@ -96,7 +96,7 @@ void main() {
         }
 #endif
 
-        f_parent = pc.binary_bvh.nodes[binary_idx].parent_idx;
+        f_parent = tlas_parent(pc.binary_bvh, binary_idx);
 
 #ifdef DEBUG_SHADERS
         if (f_parent > 100000000u) {
@@ -104,7 +104,7 @@ void main() {
         }
 #endif
 
-        f_dir = (pc.binary_bvh.nodes[f_parent].child_indices[1] == binary_idx) ? 1 : 0;
+        f_dir = (tlas_child(pc.binary_bvh, f_parent, 1u) == binary_idx) ? 1u : 0u;
     }
 
 #ifdef DEBUG_SHADERS
@@ -115,30 +115,30 @@ void main() {
 #endif
 
     // Massive block: if f_parent is garbage, this is where the GPU dies.
-    pc.multi_bvh.nodes[multi_node_idx].min_x[lane] = pc.binary_bvh.nodes[f_parent].min_x[f_dir];
-    pc.multi_bvh.nodes[multi_node_idx].max_x[lane] = pc.binary_bvh.nodes[f_parent].max_x[f_dir];
-    pc.multi_bvh.nodes[multi_node_idx].min_y[lane] = pc.binary_bvh.nodes[f_parent].min_y[f_dir];
-    pc.multi_bvh.nodes[multi_node_idx].max_y[lane] = pc.binary_bvh.nodes[f_parent].max_y[f_dir];
-    pc.multi_bvh.nodes[multi_node_idx].min_z[lane] = pc.binary_bvh.nodes[f_parent].min_z[f_dir];
-    pc.multi_bvh.nodes[multi_node_idx].max_z[lane] = pc.binary_bvh.nodes[f_parent].max_z[f_dir];
-    pc.multi_bvh.nodes[multi_node_idx].child_indices[lane] = payload;
-    pc.multi_bvh.nodes[multi_node_idx].metadata[lane] = bvh_pack_metadata(is_leaf, BVH_FRAME_MICRO, BVH_SHAPE_AABB, payload);
-    pc.multi_bvh.nodes[multi_node_idx].particle_count[lane] = 0xFFFFFFFFu;
-    pc.multi_bvh.nodes[multi_node_idx].masses[lane] = pc.binary_bvh.nodes[f_parent].masses[f_dir];
-    pc.multi_bvh.nodes[multi_node_idx].com_x[lane] = pc.binary_bvh.nodes[f_parent].com_x[f_dir];
-    pc.multi_bvh.nodes[multi_node_idx].com_y[lane] = pc.binary_bvh.nodes[f_parent].com_y[f_dir];
-    pc.multi_bvh.nodes[multi_node_idx].com_z[lane] = pc.binary_bvh.nodes[f_parent].com_z[f_dir];
-    pc.multi_bvh.nodes[multi_node_idx].force_x[lane] = 0.0;
-    pc.multi_bvh.nodes[multi_node_idx].force_y[lane] = 0.0;
-    pc.multi_bvh.nodes[multi_node_idx].force_z[lane] = 0.0;
+    tlas_write_min_x    (pc.multi_bvh, multi_node_idx, lane, tlas_min_x    (pc.binary_bvh, f_parent, f_dir));
+    tlas_write_max_x    (pc.multi_bvh, multi_node_idx, lane, tlas_max_x    (pc.binary_bvh, f_parent, f_dir));
+    tlas_write_min_y    (pc.multi_bvh, multi_node_idx, lane, tlas_min_y    (pc.binary_bvh, f_parent, f_dir));
+    tlas_write_max_y    (pc.multi_bvh, multi_node_idx, lane, tlas_max_y    (pc.binary_bvh, f_parent, f_dir));
+    tlas_write_min_z    (pc.multi_bvh, multi_node_idx, lane, tlas_min_z    (pc.binary_bvh, f_parent, f_dir));
+    tlas_write_max_z    (pc.multi_bvh, multi_node_idx, lane, tlas_max_z    (pc.binary_bvh, f_parent, f_dir));
+    tlas_write_child    (pc.multi_bvh, multi_node_idx, lane, payload);
+    tlas_write_metadata (pc.multi_bvh, multi_node_idx, lane, bvh_pack_metadata(is_leaf, BVH_FRAME_MICRO, BVH_SHAPE_AABB, payload));
+    tlas_write_pcount   (pc.multi_bvh, multi_node_idx, lane, 0xFFFFFFFFu);
+    tlas_write_mass     (pc.multi_bvh, multi_node_idx, lane, tlas_mass    (pc.binary_bvh, f_parent, f_dir));
+    tlas_write_com_x    (pc.multi_bvh, multi_node_idx, lane, tlas_com_x   (pc.binary_bvh, f_parent, f_dir));
+    tlas_write_com_y    (pc.multi_bvh, multi_node_idx, lane, tlas_com_y   (pc.binary_bvh, f_parent, f_dir));
+    tlas_write_com_z    (pc.multi_bvh, multi_node_idx, lane, tlas_com_z   (pc.binary_bvh, f_parent, f_dir));
+    tlas_write_force_x  (pc.multi_bvh, multi_node_idx, lane, 0.0);
+    tlas_write_force_y  (pc.multi_bvh, multi_node_idx, lane, 0.0);
+    tlas_write_force_z  (pc.multi_bvh, multi_node_idx, lane, 0.0);
 
     bool is_valid_lane = (break_d <= 0) || ((lane & ((1u << break_d) - 1u)) == 0u);
     uvec4 valid_ballot = subgroupBallot(is_valid_lane);
 
     if (lane == 0) {
-        pc.multi_bvh.nodes[multi_node_idx].valid_mask = valid_ballot.xy;
-        for (uint i = 0; i < 8; ++i)
-            for (uint j = 0; j < SUBGROUP_SIZE; ++j) pc.multi_bvh.nodes[multi_node_idx].permutations[i][j] = j;
+        tlas_write_valid_mask(pc.multi_bvh, multi_node_idx, valid_ballot.xy);
+        for (uint i = 0; i < 8u; ++i)
+            for (uint j = 0; j < SUBGROUP_SIZE; ++j) tlas_write_perm(pc.multi_bvh, multi_node_idx, i, j, j);
     }
 
 #ifdef DEBUG_SHADERS

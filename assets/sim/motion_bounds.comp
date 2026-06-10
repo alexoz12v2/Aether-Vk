@@ -30,12 +30,12 @@ void main() {
         vec3 p1 = pos + vel * pc.dt;
         vec3 min_p = min(pos, p1) - vec3(pc.particle_radius), max_p = max(pos, p1) + vec3(pc.particle_radius);
 
-        uint leaf_idx = (pc.num_primitives - 1) + idx;
-        uint parent = pc.bvh.nodes[leaf_idx].parent_idx;
-        uint is_right = (pc.bvh.nodes[parent].child_indices[1] == leaf_idx) ? 1 : 0;
+        uint leaf_idx  = (pc.num_primitives - 1u) + idx;
+        uint parent    = tlas_parent(pc.bvh, leaf_idx);
+        uint is_right  = (tlas_child(pc.bvh, parent, 1u) == leaf_idx) ? 1u : 0u;
 
-        pc.bvh.nodes[parent].min_x[is_right] = min_p.x; pc.bvh.nodes[parent].max_x[is_right] = max_p.x;
-        pc.bvh.nodes[parent].min_y[is_right] = min_p.y; pc.bvh.nodes[parent].max_y[is_right] = max_p.y;
-        pc.bvh.nodes[parent].min_z[is_right] = min_p.z; pc.bvh.nodes[parent].max_z[is_right] = max_p.z;
+        tlas_write_min_x(pc.bvh, parent, is_right, min_p.x); tlas_write_max_x(pc.bvh, parent, is_right, max_p.x);
+        tlas_write_min_y(pc.bvh, parent, is_right, min_p.y); tlas_write_max_y(pc.bvh, parent, is_right, max_p.y);
+        tlas_write_min_z(pc.bvh, parent, is_right, min_p.z); tlas_write_max_z(pc.bvh, parent, is_right, max_p.z);
     }
 }

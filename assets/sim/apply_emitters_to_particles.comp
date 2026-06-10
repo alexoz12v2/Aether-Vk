@@ -110,13 +110,14 @@ void main() {
             uint current = num_leaves - 1 + leaf_idx;
 
             while (current != 0) {
-                uint parent = pc.bvh.nodes[current].parent_idx;
-                uint child_lane = (pc.bvh.nodes[parent].child_indices[1] == current) ? 1 : 0;
+                uint parent     = tlas_parent(pc.bvh, current);
+                uint c1         = tlas_child(pc.bvh, parent, 1u);
+                uint child_lane = (c1 == current) ? 1u : 0u;
 
                 f_acc += vec3(
-                    pc.bvh.nodes[parent].force_x[child_lane],
-                    pc.bvh.nodes[parent].force_y[child_lane],
-                    pc.bvh.nodes[parent].force_z[child_lane]
+                    tlas_force_x(pc.bvh, parent, child_lane),
+                    tlas_force_y(pc.bvh, parent, child_lane),
+                    tlas_force_z(pc.bvh, parent, child_lane)
                 );
                 current = parent;
             }

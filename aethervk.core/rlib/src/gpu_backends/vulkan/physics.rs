@@ -1072,12 +1072,11 @@ impl VulkanComputeKernels {
     rollback: &mut utils::RollbackContext<'_>,
   ) -> GpuResult<VulkanBuffer<T>> {
     let is_list = false;
-    let mut size = (core::mem::size_of::<T>() * data.len().max(1)) as u64;
-    // Pad to 256 bytes to prevent Lavapipe LLVM JIT speculative out-of-bounds writes
-    // from corrupting VMA block sentinels.
-    if size % 256 != 0 {
-      size += 256 - (size % 256);
+    let mut padded_capacity = data.len().max(1);
+    if padded_capacity % 256 != 0 {
+      padded_capacity += 256 - (padded_capacity % 256);
     }
+    let size = (core::mem::size_of::<T>() * padded_capacity) as u64;
 
     let sharing_mode = if self.queue_sharing_info.mode == crate::gpu::SharingMode::Concurrent {
       vk::SharingMode::CONCURRENT
@@ -2834,6 +2833,8 @@ impl VulkanComputeKernels {
       let stride = gpu::PARTICLE_FIELDS as u32 * sg;
       (particles.capacity() as u32 / stride) * sg
     };
+    #[cfg(test)]
+    println!("compute_self_gravity: total_particles={}, capacity={}", total_particles, particles.capacity());
     let wg_size = self.effective_wg(128);
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
 
@@ -4015,6 +4016,10 @@ impl VulkanComputeKernels {
         let meta = &particle_metadata[i];
         if meta.entity_id == entity {
           if (meta.original_index as usize) < sys_particles.len() {
+            if meta.original_index < 5 {
+              #[cfg(test)]
+              println!("WRITE_BACK: i={}, orig={}, p_gpu_pos = [{}, {}, {}], p_gpu_vel = [{}, {}, {}]", i, meta.original_index, p_gpu[0], p_gpu[1], p_gpu[2], p_gpu[3], p_gpu[4], p_gpu[5]);
+            }
             sys_particles[meta.original_index as usize].position = [p_gpu[0], p_gpu[1], p_gpu[2]];
             sys_particles[meta.original_index as usize].velocity = [p_gpu[3], p_gpu[4], p_gpu[5]];
           }

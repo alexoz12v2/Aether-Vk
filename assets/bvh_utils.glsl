@@ -31,28 +31,136 @@ layout(constant_id = 2) const uint BVH_STACK_DEPTH       = 128;
 layout(constant_id = 3) const uint BVH_STACK_DEPTH_SHORT = 64;
 
 // ------------------------------------------------------------------
-// 1. Unified Multi-BVH Node (Shared by TLAS, Body BLAS, Particle BLAS)
+// 1. Unified Multi-BVH Node — raw buffer + arithmetic accessors
+//
+// The node layout mirrors TlasMultiNode<N> exactly (all fields are
+// packed arrays of N floats/uints, in declaration order):
+//
+//   Field index  Name             Byte offset from node base
+//   0            min_x            0
+//   1            max_x            N*4
+//   2            min_y            N*8
+//   3            max_y            N*12
+//   4            min_z            N*16
+//   5            max_z            N*20
+//   6            child_indices    N*24
+//   7            metadata         N*28
+//   8            masses           N*32
+//   9            com_x            N*36
+//   10           com_y            N*40
+//   11           com_z            N*44
+//   12           particle_start   N*48
+//   13           particle_count   N*52
+//   14           force_x          N*56
+//   15           force_y          N*60
+//   16           force_z          N*64
+//   17           valid_mask.x     N*68 + 0
+//   17           valid_mask.y     N*68 + 4
+//   18           parent_idx       N*68 + 8
+//   (pad)                         N*68 + 12
+//   20           permutations[s]  N*68 + 16 + s*N*4
+//
+// Since SUBGROUP_SIZE is a specialization constant (no default array
+// sizing), all offsets are pure arithmetic — no compile-time baking.
 // ------------------------------------------------------------------
-struct MultiBvhNode {
-    float min_x[SUBGROUP_SIZE]; float max_x[SUBGROUP_SIZE];
-    float min_y[SUBGROUP_SIZE]; float max_y[SUBGROUP_SIZE];
-    float min_z[SUBGROUP_SIZE]; float max_z[SUBGROUP_SIZE];
-    uint  child_indices[SUBGROUP_SIZE]; uint metadata[SUBGROUP_SIZE];
-    float masses[SUBGROUP_SIZE];
-    float com_x[SUBGROUP_SIZE]; float com_y[SUBGROUP_SIZE]; float com_z[SUBGROUP_SIZE];
-    uint  particle_start[SUBGROUP_SIZE]; uint particle_count[SUBGROUP_SIZE];
-    float force_x[SUBGROUP_SIZE]; float force_y[SUBGROUP_SIZE]; float force_z[SUBGROUP_SIZE];
 
-    uvec2 valid_mask;
-    uint  parent_idx; // Unifies Binary & N-Ary Trees without legacy types
-    uint  pad;        // 16-byte alignment
-    uint  permutations[8][SUBGROUP_SIZE];
+// One node is NODE_STRIDE uints = (N*68+16+8*N*4)/4 = N*17+4+8*N = N*25+4 uints.
+// We expose the raw flat buffer and let accessors index into it.
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer TlasNodeBuffer {
+    uint data[];
 };
 
-// use std430 not scalar to play nice with molten vk MSL cross compilation
-layout(buffer_reference, std430, buffer_reference_align = 16) buffer MultiBvhBuffer {
-    MultiBvhNode nodes[];
-};
+// Stride of one node in uints.  All arithmetic uses SUBGROUP_SIZE (spec const).
+// node_stride = (17 * N + 4 + 8 * N) uints = 25*N + 4
+uint tlas_node_stride()                { return 25u * SUBGROUP_SIZE + 4u; }
+uint tlas_node_base(uint node_idx)     { return node_idx * tlas_node_stride(); }
+
+// Field base (in uints) within a node, at lane `lane`
+uint tlas_min_x_u      (uint nb, uint lane) { return nb + 0u  * SUBGROUP_SIZE + lane; }
+uint tlas_max_x_u      (uint nb, uint lane) { return nb + 1u  * SUBGROUP_SIZE + lane; }
+uint tlas_min_y_u      (uint nb, uint lane) { return nb + 2u  * SUBGROUP_SIZE + lane; }
+uint tlas_max_y_u      (uint nb, uint lane) { return nb + 3u  * SUBGROUP_SIZE + lane; }
+uint tlas_min_z_u      (uint nb, uint lane) { return nb + 4u  * SUBGROUP_SIZE + lane; }
+uint tlas_max_z_u      (uint nb, uint lane) { return nb + 5u  * SUBGROUP_SIZE + lane; }
+uint tlas_child_u      (uint nb, uint lane) { return nb + 6u  * SUBGROUP_SIZE + lane; }
+uint tlas_metadata_u   (uint nb, uint lane) { return nb + 7u  * SUBGROUP_SIZE + lane; }
+uint tlas_mass_u       (uint nb, uint lane) { return nb + 8u  * SUBGROUP_SIZE + lane; }
+uint tlas_com_x_u      (uint nb, uint lane) { return nb + 9u  * SUBGROUP_SIZE + lane; }
+uint tlas_com_y_u      (uint nb, uint lane) { return nb + 10u * SUBGROUP_SIZE + lane; }
+uint tlas_com_z_u      (uint nb, uint lane) { return nb + 11u * SUBGROUP_SIZE + lane; }
+uint tlas_pstart_u     (uint nb, uint lane) { return nb + 12u * SUBGROUP_SIZE + lane; }
+uint tlas_pcount_u     (uint nb, uint lane) { return nb + 13u * SUBGROUP_SIZE + lane; }
+uint tlas_force_x_u    (uint nb, uint lane) { return nb + 14u * SUBGROUP_SIZE + lane; }
+uint tlas_force_y_u    (uint nb, uint lane) { return nb + 15u * SUBGROUP_SIZE + lane; }
+uint tlas_force_z_u    (uint nb, uint lane) { return nb + 16u * SUBGROUP_SIZE + lane; }
+// valid_mask: 2 uints right after the 17 per-lane arrays (at offset 17*N uints)
+uint tlas_valid_mask_x_u(uint nb)           { return nb + 17u * SUBGROUP_SIZE + 0u; }
+uint tlas_valid_mask_y_u(uint nb)           { return nb + 17u * SUBGROUP_SIZE + 1u; }
+// parent_idx is at 17*N + 2
+uint tlas_parent_u     (uint nb)            { return nb + 17u * SUBGROUP_SIZE + 2u; }
+// permutations[s][lane] at 17*N + 4 + s*N + lane
+uint tlas_perm_u(uint nb, uint s, uint lane){ return nb + 17u * SUBGROUP_SIZE + 4u + s * SUBGROUP_SIZE + lane; }
+
+// Typed read helpers (float accessors call uintBitsToFloat)
+float tlas_min_x    (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_min_x_u  (tlas_node_base(ni), lane)]); }
+float tlas_max_x    (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_max_x_u  (tlas_node_base(ni), lane)]); }
+float tlas_min_y    (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_min_y_u  (tlas_node_base(ni), lane)]); }
+float tlas_max_y    (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_max_y_u  (tlas_node_base(ni), lane)]); }
+float tlas_min_z    (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_min_z_u  (tlas_node_base(ni), lane)]); }
+float tlas_max_z    (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_max_z_u  (tlas_node_base(ni), lane)]); }
+uint  tlas_child    (TlasNodeBuffer b, uint ni, uint lane) { return               b.data[tlas_child_u    (tlas_node_base(ni), lane)];  }
+uint  tlas_metadata (TlasNodeBuffer b, uint ni, uint lane) { return               b.data[tlas_metadata_u (tlas_node_base(ni), lane)];  }
+float tlas_mass     (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_mass_u   (tlas_node_base(ni), lane)]); }
+float tlas_com_x    (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_com_x_u  (tlas_node_base(ni), lane)]); }
+float tlas_com_y    (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_com_y_u  (tlas_node_base(ni), lane)]); }
+float tlas_com_z    (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_com_z_u  (tlas_node_base(ni), lane)]); }
+uint  tlas_pstart   (TlasNodeBuffer b, uint ni, uint lane) { return               b.data[tlas_pstart_u   (tlas_node_base(ni), lane)];  }
+uint  tlas_pcount   (TlasNodeBuffer b, uint ni, uint lane) { return               b.data[tlas_pcount_u   (tlas_node_base(ni), lane)];  }
+float tlas_force_x  (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_force_x_u(tlas_node_base(ni), lane)]); }
+float tlas_force_y  (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_force_y_u(tlas_node_base(ni), lane)]); }
+float tlas_force_z  (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_force_z_u(tlas_node_base(ni), lane)]); }
+
+uvec2 tlas_valid_mask(TlasNodeBuffer b, uint ni) {
+    uint nb = tlas_node_base(ni);
+    return uvec2(b.data[tlas_valid_mask_x_u(nb)], b.data[tlas_valid_mask_y_u(nb)]);
+}
+uint tlas_parent(TlasNodeBuffer b, uint ni) {
+    return b.data[tlas_parent_u(tlas_node_base(ni))];
+}
+
+// Write helpers
+void tlas_write_min_x   (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_min_x_u   (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_max_x   (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_max_x_u   (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_min_y   (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_min_y_u   (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_max_y   (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_max_y_u   (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_min_z   (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_min_z_u   (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_max_z   (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_max_z_u   (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_child   (TlasNodeBuffer b, uint ni, uint lane, uint  v) { b.data[tlas_child_u   (tlas_node_base(ni), lane)] = v; }
+void tlas_write_metadata(TlasNodeBuffer b, uint ni, uint lane, uint  v) { b.data[tlas_metadata_u(tlas_node_base(ni), lane)] = v; }
+void tlas_write_mass    (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_mass_u    (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_com_x   (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_com_x_u   (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_com_y   (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_com_y_u   (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_com_z   (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_com_z_u   (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_pstart  (TlasNodeBuffer b, uint ni, uint lane, uint  v) { b.data[tlas_pstart_u  (tlas_node_base(ni), lane)] = v; }
+void tlas_write_pcount  (TlasNodeBuffer b, uint ni, uint lane, uint  v) { b.data[tlas_pcount_u  (tlas_node_base(ni), lane)] = v; }
+void tlas_write_force_x (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_force_x_u (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_force_y (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_force_y_u (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_force_z (TlasNodeBuffer b, uint ni, uint lane, float v) { b.data[tlas_force_z_u (tlas_node_base(ni), lane)] = floatBitsToUint(v); }
+void tlas_write_valid_mask(TlasNodeBuffer b, uint ni, uvec2 v) {
+    uint nb = tlas_node_base(ni);
+    b.data[tlas_valid_mask_x_u(nb)] = v.x;
+    b.data[tlas_valid_mask_y_u(nb)] = v.y;
+}
+void tlas_write_parent(TlasNodeBuffer b, uint ni, uint v) {
+    b.data[tlas_parent_u(tlas_node_base(ni))] = v;
+}
+void tlas_write_perm(TlasNodeBuffer b, uint ni, uint s, uint lane, uint v) {
+    b.data[tlas_perm_u(tlas_node_base(ni), s, lane)] = v;
+}
+
+// Keep MultiBvhBuffer as a type alias so old push-constant field names still compile.
+// All node accesses go through the tlas_* accessors above.
+#define MultiBvhBuffer TlasNodeBuffer
 
 // ------------------------------------------------------------------
 // 2. Metadata Bitfield Definitions & Helpers

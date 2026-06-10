@@ -71,8 +71,8 @@ void main() {
          if (is_trace_thread) debugPrintfEXT("Reading target_node_idx=%u\n", target_node_idx);
  #endif
 
-         i_am_valid = bvh_node_is_valid(pc.bvh.nodes[target_node_idx].valid_mask, lane_id);
-         my_p_idx   = pc.bvh.nodes[target_node_idx].child_indices[lane_id];
+         i_am_valid = bvh_node_is_valid(tlas_valid_mask(pc.bvh, target_node_idx), lane_id);
+         my_p_idx   = tlas_child(pc.bvh, target_node_idx, lane_id);
      }
 
      uint my_start = 0, my_count = 0;
@@ -92,15 +92,11 @@ void main() {
              my_start = my_p_idx;
              my_count = 1;
          } else {
-             my_pos = vec3(
-                 pc.bvh.nodes[target_node_idx].com_x[lane_id],
-                 pc.bvh.nodes[target_node_idx].com_y[lane_id],
-                 pc.bvh.nodes[target_node_idx].com_z[lane_id]
-             );
-             my_mass = pc.bvh.nodes[target_node_idx].masses[lane_id];
+             my_pos  = vec3(tlas_com_x(pc.bvh, target_node_idx, lane_id), tlas_com_y(pc.bvh, target_node_idx, lane_id), tlas_com_z(pc.bvh, target_node_idx, lane_id));
+             my_mass = tlas_mass  (pc.bvh, target_node_idx, lane_id);
              my_beta = 0.0;
-             my_start = pc.bvh.nodes[target_node_idx].particle_start[lane_id];
-             my_count = pc.bvh.nodes[target_node_idx].particle_count[lane_id];
+             my_start = tlas_pstart(pc.bvh, target_node_idx, lane_id);
+             my_count = tlas_pcount(pc.bvh, target_node_idx, lane_id);
          }
      }
 
@@ -182,15 +178,17 @@ void main() {
          if (source_node_idx > 100000000u) debugPrintfEXT("TRAP! Popped massive source_node_idx=%u\n", source_node_idx);
  #endif
 
-         bool s_valid = bvh_node_is_valid(pc.bvh.nodes[source_node_idx].valid_mask, lane_id);
-         uint s_meta = pc.bvh.nodes[source_node_idx].metadata[lane_id];
+         bool s_valid   = bvh_node_is_valid(tlas_valid_mask(pc.bvh, source_node_idx), lane_id);
+         uint s_meta    = tlas_metadata(pc.bvh, source_node_idx, lane_id);
          bool s_is_leaf = bvh_is_leaf(s_meta);
-
-         vec3 s_com = vec3(pc.bvh.nodes[source_node_idx].com_x[lane_id], pc.bvh.nodes[source_node_idx].com_y[lane_id], pc.bvh.nodes[source_node_idx].com_z[lane_id]);
-         float s_mass = pc.bvh.nodes[source_node_idx].masses[lane_id];
-         uint s_idx = pc.bvh.nodes[source_node_idx].child_indices[lane_id], s_start = pc.bvh.nodes[source_node_idx].particle_start[lane_id], s_count = pc.bvh.nodes[source_node_idx].particle_count[lane_id];
-
-         vec3 s_extents = vec3(pc.bvh.nodes[source_node_idx].max_x[lane_id]-pc.bvh.nodes[source_node_idx].min_x[lane_id], pc.bvh.nodes[source_node_idx].max_y[lane_id]-pc.bvh.nodes[source_node_idx].min_y[lane_id], pc.bvh.nodes[source_node_idx].max_z[lane_id]-pc.bvh.nodes[source_node_idx].min_z[lane_id]);
+         vec3 s_com     = vec3(tlas_com_x(pc.bvh, source_node_idx, lane_id), tlas_com_y(pc.bvh, source_node_idx, lane_id), tlas_com_z(pc.bvh, source_node_idx, lane_id));
+         float s_mass   = tlas_mass  (pc.bvh, source_node_idx, lane_id);
+         uint s_idx     = tlas_child (pc.bvh, source_node_idx, lane_id);
+         uint s_start   = tlas_pstart(pc.bvh, source_node_idx, lane_id);
+         uint s_count   = tlas_pcount(pc.bvh, source_node_idx, lane_id);
+         vec3 s_extents = vec3(tlas_max_x(pc.bvh, source_node_idx, lane_id) - tlas_min_x(pc.bvh, source_node_idx, lane_id),
+                               tlas_max_y(pc.bvh, source_node_idx, lane_id) - tlas_min_y(pc.bvh, source_node_idx, lane_id),
+                               tlas_max_z(pc.bvh, source_node_idx, lane_id) - tlas_min_z(pc.bvh, source_node_idx, lane_id));
          float s_size = max(s_extents.x, max(s_extents.y, s_extents.z));
 
          bool overlap = max(my_start, s_start) < min(my_start + my_count, s_start + s_count);
@@ -275,9 +273,14 @@ void main() {
              pc.particles.data[base + 8u * SUBGROUP_SIZE] = floatBitsToUint(g_f.y);
              pc.particles.data[base + 9u * SUBGROUP_SIZE] = floatBitsToUint(g_f.z);
          } else {
-             pc.bvh.nodes[target_node_idx].force_x[lane_id] = g_f.x;
-             pc.bvh.nodes[target_node_idx].force_y[lane_id] = g_f.y;
-             pc.bvh.nodes[target_node_idx].force_z[lane_id] = g_f.z;
+             tlas_write_force_x(pc.bvh, target_node_idx, lane_id, g_f.x);
+             tlas_write_force_y(pc.bvh, target_node_idx, lane_id, g_f.y);
+             tlas_write_force_z(pc.bvh, target_node_idx, lane_id, g_f.z);
          }
+#ifdef DEBUG_SHADERS
+         if (my_p_idx == 0) {
+             debugPrintfEXT("Particle 0: my_pos=(%f,%f,%f), my_mass=%f, bvh_n=%u, my_acc=(%f,%f,%f), g_f=(%f,%f,%f)\n", my_pos.x, my_pos.y, my_pos.z, my_mass, bvh_n, my_acc.x, my_acc.y, my_acc.z, g_f.x, g_f.y, g_f.z);
+         }
+#endif
      }
 }
