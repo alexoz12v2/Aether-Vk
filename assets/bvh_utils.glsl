@@ -58,22 +58,23 @@ layout(constant_id = 3) const uint BVH_STACK_DEPTH_SHORT = 64;
 //   17           valid_mask.y     N*68 + 4
 //   18           parent_idx       N*68 + 8
 //   (pad)                         N*68 + 12
-//   20           permutations[s]  N*68 + 16 + s*N*4
 //
 // Since SUBGROUP_SIZE is a specialization constant (no default array
 // sizing), all offsets are pure arithmetic — no compile-time baking.
 // ------------------------------------------------------------------
 
-// One node is NODE_STRIDE uints = (N*68+16+8*N*4)/4 = N*17+4+8*N = N*25+4 uints.
+// One node is NODE_STRIDE uints = (17*N + 4) uints.
+// (permutations field removed — never read by any shader)
 // We expose the raw flat buffer and let accessors index into it.
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer TlasNodeBuffer {
     uint data[];
 };
 
 // Stride of one node in uints.  All arithmetic uses SUBGROUP_SIZE (spec const).
-// node_stride = (17 * N + 4 + 8 * N) uints = 25*N + 4
-uint tlas_node_stride()                { return 25u * SUBGROUP_SIZE + 4u; }
+// node_stride = 17*N + 4  (17 per-lane fields + valid_mask.xy + parent + pad)
+uint tlas_node_stride()                { return 17u * SUBGROUP_SIZE + 4u; }
 uint tlas_node_base(uint node_idx)     { return node_idx * tlas_node_stride(); }
+
 
 // Field base (in uints) within a node, at lane `lane`
 uint tlas_min_x_u      (uint nb, uint lane) { return nb + 0u  * SUBGROUP_SIZE + lane; }
@@ -96,10 +97,9 @@ uint tlas_force_z_u    (uint nb, uint lane) { return nb + 16u * SUBGROUP_SIZE + 
 // valid_mask: 2 uints right after the 17 per-lane arrays (at offset 17*N uints)
 uint tlas_valid_mask_x_u(uint nb)           { return nb + 17u * SUBGROUP_SIZE + 0u; }
 uint tlas_valid_mask_y_u(uint nb)           { return nb + 17u * SUBGROUP_SIZE + 1u; }
-// parent_idx is at 17*N + 2
+// parent_idx is at 17*N + 2  (pad at 17*N + 3)
 uint tlas_parent_u     (uint nb)            { return nb + 17u * SUBGROUP_SIZE + 2u; }
-// permutations[s][lane] at 17*N + 4 + s*N + lane
-uint tlas_perm_u(uint nb, uint s, uint lane){ return nb + 17u * SUBGROUP_SIZE + 4u + s * SUBGROUP_SIZE + lane; }
+
 
 // Typed read helpers (float accessors call uintBitsToFloat)
 float tlas_min_x    (TlasNodeBuffer b, uint ni, uint lane) { return uintBitsToFloat(b.data[tlas_min_x_u  (tlas_node_base(ni), lane)]); }
@@ -153,9 +153,6 @@ void tlas_write_valid_mask(TlasNodeBuffer b, uint ni, uvec2 v) {
 }
 void tlas_write_parent(TlasNodeBuffer b, uint ni, uint v) {
     b.data[tlas_parent_u(tlas_node_base(ni))] = v;
-}
-void tlas_write_perm(TlasNodeBuffer b, uint ni, uint s, uint lane, uint v) {
-    b.data[tlas_perm_u(tlas_node_base(ni), s, lane)] = v;
 }
 
 // Keep MultiBvhBuffer as a type alias so old push-constant field names still compile.

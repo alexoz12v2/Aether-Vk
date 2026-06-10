@@ -64,6 +64,7 @@ WG_VARIANT_SHADERS=(
     lbvh_build.comp
     lbvh_build_bottomup.comp
     lbvh_prepass.comp
+    lbvh_collapse.comp
     motion_bounds.comp
     motion_refit.comp
     # Broad-phase

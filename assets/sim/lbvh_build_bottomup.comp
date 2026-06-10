@@ -4,6 +4,10 @@
 
 #extension GL_GOOGLE_include_directive : require
 
+#ifdef DEBUG_SHADERS
+  #extension GL_EXT_debug_printf : enable
+#endif
+
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
 
@@ -12,6 +16,13 @@
 #endif
 layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
 
+// ── Watchdog output buffer ────────────────────────────────────────────────────
+// Bit 2 (0x4) = lbvh_build_bottomup.comp
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer WatchdogBuffer {
+    uint flags;
+};
+#define WATCHDOG_BIT_BOTTOMUP 0x4u
+
 layout(push_constant, std430) uniform PushConstants {
     MultiBvhBuffer bvh;
     MortonArray sorted_morton;
@@ -19,7 +30,9 @@ layout(push_constant, std430) uniform PushConstants {
     ParticleData particles;
     uint num_primitives;
     float particle_radius;
+    WatchdogBuffer watchdog_out;
     float dt;
+    uint _pad;
 } pc;
 
 void main() {
@@ -73,10 +86,46 @@ void main() {
     uint current = leaf_node;
     uint child_particle_start = start_p;
     uint child_particle_count = end_p - start_p;
+
+    // Maximum traversal depth: a balanced binary tree over n leaves has height ceil(log2(n)).
+    // We allow 2*n as a safe upper bound that catches cycles in corrupted trees.
+    uint watchdog = 0;
+    uint max_steps = n * 2 + 2;
     
     while (current != 0) {
+        // ── Cycle / runaway detection ─────────────────────────────────────────
+        // NOTE: break MUST be outside #ifdef so it fires even without DEBUG_SHADERS.
+        if (++watchdog > max_steps) {
+#ifdef DEBUG_SHADERS
+            debugPrintfEXT("WATCHDOG! bottomup cycle detected. leaf=%u, current=%u, steps=%u\n",
+                           leaf_node, current, watchdog);
+#endif
+            uvec2 wd_uvec = uvec2(pc.watchdog_out);
+            if (wd_uvec.x != 0u || wd_uvec.y != 0u) {
+                atomicOr(pc.watchdog_out.flags, WATCHDOG_BIT_BOTTOMUP);
+            }
+            break;
+        }
+
         uint parent = tlas_parent(pc.bvh, current);
-        uint dir    = (tlas_child(pc.bvh, parent, 1u) == current) ? 1u : 0u;
+
+        // ── Corrupt parent pointer guard ──────────────────────────────────────
+        // If lbvh_build.comp skipped this node, its parent stays 0xFFFFFFFFu (prepass init).
+        // Accessing counters.counts[0xFFFFFFFF] is an instant out-of-bounds write → GPU death.
+        // NOTE: break MUST be outside #ifdef.
+        if (parent == 0xFFFFFFFFu || parent >= n) {
+#ifdef DEBUG_SHADERS
+            debugPrintfEXT("PAGE FAULT PREVENTED! corrupt parent at node %u (parent=0x%x, n=%u)\n",
+                           current, parent, n);
+#endif
+            uvec2 wd_uvec = uvec2(pc.watchdog_out);
+            if (wd_uvec.x != 0u || wd_uvec.y != 0u) {
+                atomicOr(pc.watchdog_out.flags, WATCHDOG_BIT_BOTTOMUP);
+            }
+            break;
+        }
+
+        uint dir = (tlas_child(pc.bvh, parent, 1u) == current) ? 1u : 0u;
 
         tlas_write_min_x(pc.bvh, parent, dir, min_b.x);
         tlas_write_min_y(pc.bvh, parent, dir, min_b.y);
