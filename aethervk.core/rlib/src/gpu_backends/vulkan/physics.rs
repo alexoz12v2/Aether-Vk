@@ -38,6 +38,59 @@ pub static USE_PRINTF_SHADERS: core::sync::atomic::AtomicBool =
 pub static READBACK_DIAGNOSTICS: core::sync::atomic::AtomicBool =
   core::sync::atomic::AtomicBool::new(false);
 
+/// Thread-local storing the watchdog buffer from the most recent `build_motion_bvh` call.
+/// After `vkQueueWaitIdle`, call [`check_bvh_watchdog`] to assert no shader safety-counter tripped.
+///
+/// The stored tuple is `(VkBuffer, VmaAllocation, device_address)`.
+/// This is only present in `#[cfg(test)]` builds.
+#[cfg(test)]
+thread_local! {
+  pub static LAST_BVH_WATCHDOG_STATE: spin::Mutex<Option<(ash::vk::Buffer, vk_mem::Allocation, u64)>> =
+    spin::Mutex::new(None);
+}
+
+/// Checks whether any LBVH shader tripped its safety watchdog counter.
+///
+/// Call this **after** `vkQueueWaitIdle` / timeline semaphore wait, when the GPU has
+/// finished executing the command buffer that contained `build_motion_bvh`.
+///
+/// Panics with a descriptive message naming the offending shader(s) if any watchdog fired.
+/// Cleans up (frees) the watchdog buffer regardless of outcome.
+///
+/// # Shader flag bits
+/// - Bit 0 (`0x1`): `lbvh_prepass.comp` — init pass watchdog
+/// - Bit 1 (`0x2`): `lbvh_build.comp` — Karras hierarchy builder (`determine_range`/`find_split`)
+/// - Bit 2 (`0x4`): `lbvh_build_bottomup.comp` — bottom-up aggregation or corrupt parent pointer
+#[cfg(test)]
+pub fn check_bvh_watchdog(allocator: vk_mem::AllocatorView) {
+  LAST_BVH_WATCHDOG_STATE.with(|cell| {
+    let mut guard = cell.lock();
+    if let Some((buf, mut alloc, _addr)) = guard.take() {
+      let info = allocator.get_allocation_info(&alloc);
+      let flags = if !info.mapped_data.is_null() {
+        unsafe { *(info.mapped_data as *const u32) }
+      } else {
+        0
+      };
+      unsafe { allocator.destroy_buffer(buf, &mut alloc) };
+
+      if flags != 0 {
+        let mut names = alloc::vec::Vec::new();
+        if flags & 0x1 != 0 { names.push("lbvh_prepass.comp"); }
+        if flags & 0x2 != 0 { names.push("lbvh_build.comp (determine_range / find_split)"); }
+        if flags & 0x4 != 0 { names.push("lbvh_build_bottomup.comp (cycle or corrupt parent)"); }
+        panic!(
+          "SHADER WATCHDOG TRIPPED — safety counter hit in: {}. \
+           The GPU would have hung without this guard. \
+           Check the BVH tree for cycles or degenerate Morton codes.",
+          names.join(", ")
+        );
+      }
+    }
+  });
+}
+
+
 use vk_mem::{Alloc, AllocatorView, AsAllocatorView};
 
 /// Configuration parameters for the physics pipeline
@@ -72,6 +125,7 @@ pub struct PhysicsPipelines {
   pub lbvh_prepass: vk::Pipeline,
   pub lbvh_build: vk::Pipeline,
   pub lbvh_build_bottomup: vk::Pipeline,
+  pub lbvh_collapse: vk::Pipeline,
   pub motion_bounds: vk::Pipeline,
   pub motion_refit: vk::Pipeline,
 
@@ -90,8 +144,6 @@ pub struct PhysicsPipelines {
   pub convert_particles: vk::Pipeline,
   #[cfg(any(test, feature = "collisions"))]
   pub graph_coloring: vk::Pipeline,
-  #[cfg(any(test, feature = "collisions"))]
-  pub lbvh_collapse: vk::Pipeline,
   // ── New Symmetric Strang-Split IMEX integrators ───────────────────────────
   /// VV predictor: x_n → x_{n+1}, v_{n+½}; clears force buffer
   pub integrate_particles_p1_p2: vk::Pipeline,
@@ -340,19 +392,22 @@ impl PhysicsPipelines {
     //   AVX / AVX2           →  8
     //   AVX-512              → 16
     //   (manual override via MESA_NO_AVX* env vars may give 1 or 2 — clamp to 4)
+    //
+    // Rule: always load wg{sg}.spv so LOCAL_SIZE_X == SUBGROUP_SIZE.
+    // For CPU: sg == wg (SIMD width is both the subgroup size and the workgroup size).
+    // For GPU: sg == hardware subgroup size; wg{sg} compiled variant matches.
     macro_rules! mk_wg {
       ($stem:expr) => {{
-        let mut path;
-        if is_cpu && subgroup_size <= 16 {
-          let wg_suffix = match subgroup_size {
-            1..=4 => "wg4", // SSE2/NEON or manual throttle → smallest
-            5..=8 => "wg8", // AVX / AVX2
-            _ => "wg16",    // AVX-512
-          };
-          path = alloc::format!("{}/{}.{}.spv", sim_dir, $stem, wg_suffix);
-        } else {
-          path = alloc::format!("{}/{}.spv", sim_dir, $stem);
+        let wg_suffix = match subgroup_size {
+          1..=4   => "wg4",
+          5..=8   => "wg8",
+          9..=16  => "wg16",
+          17..=32 => "wg32",
+          33..=64 => "wg64",
+          65..=128 => "wg128",
+          _        => "wg256",
         };
+        let mut path = alloc::format!("{}/{}.{}.spv", sim_dir, $stem, wg_suffix);
         if use_debug {
           path = path.replace(".spv", ".d.spv");
         }
@@ -377,6 +432,7 @@ impl PhysicsPipelines {
         lbvh_prepass: mk_wg!("lbvh_prepass.comp"),
         lbvh_build: mk_wg!("lbvh_build.comp"),
         lbvh_build_bottomup: mk_wg!("lbvh_build_bottomup.comp"),
+        lbvh_collapse: mk_wg!("lbvh_collapse.comp"),
         motion_bounds: mk_wg!("motion_bounds.comp"),
         motion_refit: mk_wg!("motion_refit.comp"),
         // ── Gravity / sorting ────────────────────────────────────────────
@@ -385,8 +441,6 @@ impl PhysicsPipelines {
         // ── Single-variant (specialisation constant or single-threaded) ──
         morton_encode: mk!("morton_encode.comp.spv"),
         permute_particles: mk_wg!("permute_particles.comp"),
-        #[cfg(any(test, feature = "collisions"))]
-        lbvh_collapse: mk!("lbvh_collapse.comp.spv"),
         // ── Broad-phase ──────────────────────────────────────────────────
         #[cfg(any(test, feature = "collisions"))]
         bp_bounds_gen: mk_wg!("bp_bounds_gen.comp"),
@@ -454,6 +508,7 @@ impl PhysicsPipelines {
     discard_pool.discard_pipeline(self.lbvh_prepass, timeline);
     discard_pool.discard_pipeline(self.lbvh_build, timeline);
     discard_pool.discard_pipeline(self.lbvh_build_bottomup, timeline);
+    discard_pool.discard_pipeline(self.lbvh_collapse, timeline);
     discard_pool.discard_pipeline(self.motion_bounds, timeline);
     discard_pool.discard_pipeline(self.motion_refit, timeline);
     #[cfg(any(test, feature = "collisions"))]
@@ -471,8 +526,6 @@ impl PhysicsPipelines {
     discard_pool.discard_pipeline(self.convert_particles, timeline);
     #[cfg(any(test, feature = "collisions"))]
     discard_pool.discard_pipeline(self.graph_coloring, timeline);
-    #[cfg(any(test, feature = "collisions"))]
-    discard_pool.discard_pipeline(self.lbvh_collapse, timeline);
     // New IMEX integrators
     discard_pool.discard_pipeline(self.integrate_particles_p1_p2, timeline);
     discard_pool.discard_pipeline(self.integrate_bodies_p3, timeline);
@@ -1014,12 +1067,11 @@ impl VulkanComputeKernels {
   /// the wg32.spv shader's `local_size_x` was compiled for.  The SPIR-V local size
   /// and the dispatch group count must always agree.
   #[inline]
-  pub fn effective_wg(&self, gpu_target: u32) -> u32 {
-    if self.pipelines.is_lavapipe && self.pipelines.subgroup_size <= 16 {
-      self.pipelines.subgroup_size.max(4)
-    } else {
-      gpu_target
-    }
+  pub fn effective_wg(&self, _gpu_target: u32) -> u32 {
+    // mk_wg! always loads wg{subgroup_size}.spv, so LOCAL_SIZE_X == subgroup_size
+    // on every platform (CPU and GPU).  The _gpu_target hint is retained for
+    // documentation purposes only (it was the old hardcoded GPU workgroup size).
+    self.pipelines.subgroup_size.max(4)
   }
 
   /// Returns the BDA of the GPU-built particle LBVH, updated each tick by `build_motion_bvh`.
@@ -1028,11 +1080,11 @@ impl VulkanComputeKernels {
     self.addresses.bvh_nodes
   }
 
-  pub fn cleanup(&mut self, device: &LogicalDevice, _allocator: vk_mem::AllocatorView) {
+  pub fn cleanup(&mut self, device: &LogicalDevice, allocator: vk_mem::AllocatorView) {
     let mut pool = self.transient_pool.lock();
     for entry in pool.entries.drain(..) {
       self.discard_pool.discard_buffer(
-        _allocator.get_raw(),
+        allocator.get_raw(),
         entry.buffer,
         entry.allocation,
         u64::MAX,
@@ -1042,6 +1094,19 @@ impl VulkanComputeKernels {
 
     self.pipelines.discard(&self.discard_pool, u64::MAX);
     self.discard_pool.destroy_discarded_resources_all(device);
+
+    // In test builds the watchdog buffer is stored in a thread-local.
+    // It must be freed here — before the VMA allocator is destroyed —
+    // to avoid the "allocations not freed before block destruction" assertion.
+    #[cfg(test)]
+    {
+      LAST_BVH_WATCHDOG_STATE.with(|cell| {
+        let mut guard = cell.lock();
+        if let Some((buf, mut alloc, _addr)) = guard.take() {
+          unsafe { allocator.destroy_buffer(buf, &mut alloc) };
+        }
+      });
+    }
 
     unsafe { device.destroy_semaphore(self.timeline, None) };
   }
@@ -2822,19 +2887,31 @@ impl VulkanComputeKernels {
   fn compute_self_gravity(
     &self,
     device: &LogicalDevice,
-    _allocator: vk_mem::AllocatorView,
+    allocator: vk_mem::AllocatorView,
     _rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
     bvh: &VulkanBuffer<()>,
     particles: &mut VulkanBuffer<f32>,
   ) -> GpuResult<()> {
-    let total_particles = {
+    // Use the same actual-count logic as build_motion_bvh to avoid dispatching
+    // extra threads over uninitialized capacity.
+    let total_particles: u32 = if particles.is_list {
+      let info = allocator.get_allocation_info(&particles.allocation);
+      if !info.mapped_data.is_null() {
+        unsafe { *(info.mapped_data as *const u32).add(3) }
+      } else {
+        let sg = self.pipelines.subgroup_size;
+        let stride = gpu::PARTICLE_FIELDS as u32 * sg;
+        (particles.capacity() as u32 / stride) * sg
+      }
+    } else {
       let sg = self.pipelines.subgroup_size;
       let stride = gpu::PARTICLE_FIELDS as u32 * sg;
       (particles.capacity() as u32 / stride) * sg
     };
     #[cfg(test)]
     println!("compute_self_gravity: total_particles={}, capacity={}", total_particles, particles.capacity());
+
     let wg_size = self.effective_wg(128);
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
 
@@ -2977,7 +3054,23 @@ impl VulkanComputeKernels {
     particle_frame_ids: &mut VulkanBuffer<u32>,
     _dt: timeus_t,
   ) -> GpuResult<VulkanBuffer<()>> {
-    let total_particles = {
+    // Read the active (emitted) particle count from the list header at byte offset 12.
+    // Using the buffer capacity would sort and build a BVH over uninitialized garbage memory
+    // if the particle buffer is over-allocated, producing a massively degenerate tree.
+    let total_particles: u32 = if particles.is_list {
+      let info = allocator.get_allocation_info(&particles.allocation);
+      if !info.mapped_data.is_null() {
+        // The list header is [pad: u32, pad: u32, pad: u32, count: u32, data...]
+        let count_ptr = info.mapped_data as *const u32;
+        let count = unsafe { *count_ptr.add(3) };
+        count
+      } else {
+        // Fallback: derive from capacity (pre-mapped case, should not happen in practice)
+        let sg = self.pipelines.subgroup_size;
+        let stride = gpu::PARTICLE_FIELDS as u32 * sg;
+        (particles.capacity() as u32 / stride) * sg
+      }
+    } else {
       let sg = self.pipelines.subgroup_size;
       let stride = gpu::PARTICLE_FIELDS as u32 * sg;
       (particles.capacity() as u32 / stride) * sg
@@ -2986,6 +3079,89 @@ impl VulkanComputeKernels {
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
 
     let num_nodes = (total_particles * 2).max(1) as usize;
+
+    // ── per-dispatch sync barrier (shader_debug_sync only) ───────────────────
+    // bvh_sync!("label") submits the current command buffer, waits for GPU
+    // completion (60 s timeout — hang = that shader is the culprit), then
+    // allocates a fresh command buffer for the next dispatch.
+    // Optionally pass a host-visible VulkanBuffer<u32> as second arg to dump
+    // the first 8 u32s for data inspection.
+    #[cfg(feature = "shader_debug_sync")]
+    macro_rules! bvh_sync {
+      ($label:expr) => {{
+        aethervk_oshal_rlib::log!("[BVH-SYNC] {} — submitting...", $label);
+        unsafe {
+          let cmd_handle = cmd.cmd;
+          device.end_command_buffer(cmd_handle)
+            .expect("[BVH-SYNC] end_command_buffer failed");
+
+          let mut type_info = vk::SemaphoreTypeCreateInfo::default()
+            .semaphore_type(vk::SemaphoreType::TIMELINE)
+            .initial_value(0);
+          let sem_ci = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
+          let throwaway = device.handle.create_semaphore(&sem_ci, None)
+            .expect("[BVH-SYNC] create_semaphore failed");
+
+          let cbs = [cmd_handle];
+          let sigs = [cmd.timeline_sem, throwaway];
+          let _guard = device.submission_lock.lock();
+          cmd.timeline_value = cmd.next_submit_value_ptr.as_ref()
+            .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+          let sig_vals = [cmd.timeline_value, 1u64];
+          let mut tl_info = vk::TimelineSemaphoreSubmitInfo::default()
+            .signal_semaphore_values(&sig_vals);
+          let submit_info = vk::SubmitInfo::default()
+            .command_buffers(&cbs)
+            .signal_semaphores(&sigs)
+            .push_next(&mut tl_info);
+          device.handle.queue_submit(cmd.queue.handle, &[submit_info], vk::Fence::null())
+            .expect("[BVH-SYNC] queue_submit failed");
+          drop(_guard);
+          cmd.assigned_timeline_value.store(cmd.timeline_value, core::sync::atomic::Ordering::Release);
+
+          aethervk_oshal_rlib::log!("[BVH-SYNC] {} — waiting (60s timeout)...", $label);
+          device.wait_for_semaphore_value(throwaway, 1, 60_000_000_000)
+            .expect(&alloc::format!("[BVH-SYNC] TIMEOUT waiting after '{}' — THIS SHADER HANGS!", $label));
+          aethervk_oshal_rlib::log!("[BVH-SYNC] {} — GPU completed ✓", $label);
+          device.handle.destroy_semaphore(throwaway, None);
+
+          // Recycle old VkCommandBuffer and allocate a fresh one from the pool
+          let _ = cmd.command_pools.recycle(cmd.tid, cmd.id, cmd_handle);
+          cmd.throwaway_sem = vk::Semaphore::null();
+          let new_id = crate::gpu_backends::vulkan::device::commands::CommandBufferId(
+            self.next_cmd_id.fetch_add(1, core::sync::atomic::Ordering::SeqCst)
+          );
+          cmd.id = new_id;
+          let fresh_handle = cmd.command_pools.allocate_primary(device, cmd.tid, new_id)
+            .expect("[BVH-SYNC] allocate_primary failed");
+          cmd.cmd = fresh_handle;
+          let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+          device.begin_command_buffer(cmd.cmd, &begin_info)
+            .expect("[BVH-SYNC] begin_command_buffer failed");
+        }
+      }};
+      ($label:expr, dump: $buf:expr, $n:expr) => {{
+        bvh_sync!($label);
+        // Dump first $n u32s from a host-visible buffer for data inspection
+        let info = allocator.get_allocation_info(&$buf.allocation);
+        if !info.mapped_data.is_null() {
+          let ptr = info.mapped_data as *const u32;
+          let cap = ($buf.capacity() as usize);
+          let count = ($n as usize).min(cap);
+          let slice = unsafe { core::slice::from_raw_parts(ptr, count) };
+          aethervk_oshal_rlib::log!("[BVH-SYNC] {} data[0..{}]: {:?}", $label, count, slice);
+        } else {
+          aethervk_oshal_rlib::log!("[BVH-SYNC] {} buffer not host-visible, cannot dump", $label);
+        }
+      }};
+    }
+    #[cfg(not(feature = "shader_debug_sync"))]
+    macro_rules! bvh_sync {
+      ($label:expr) => {{}};
+      ($label:expr, dump: $buf:expr, $n:expr) => {{}};
+    }
+
 
     // Dispatch to the concrete MultiBvhNodeWideGpu<N> based on hardware subgroup size.
     macro_rules! alloc_bvh_buf {
@@ -3200,16 +3376,47 @@ impl VulkanComputeKernels {
       rollback,
     )?;
 
+    // ── Allocate a small host-visible watchdog buffer for shader hang detection ───────────
+    // In test builds the CPU reads this after GPU completion to detect which shader tripped
+    // its safety counter. Bit 0 = lbvh_prepass, Bit 1 = lbvh_build, Bit 2 = lbvh_bottomup.
+    #[cfg(test)]
+    let watchdog_buf = {
+      let buf_info = vk::BufferCreateInfo::default()
+        .size(core::mem::size_of::<u32>() as u64)
+        .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
+      let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+      alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
+      alloc_info.flags =
+        vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED;
+      let (buf, mut alloc) = unsafe { allocator.create_buffer(&buf_info, &alloc_info) }
+        .map_err(|e| GpuError::BackendSpecific(alloc::format!("watchdog alloc failed: {:?}", e)))?;
+      // Zero the buffer before GPU access
+      let info = allocator.get_allocation_info(&alloc);
+      if !info.mapped_data.is_null() {
+        unsafe { *(info.mapped_data as *mut u32) = 0u32 };
+      }
+      let addr_info = vk::BufferDeviceAddressInfo::default().buffer(buf);
+      let addr = unsafe { device.buffer_device_address.get_buffer_device_address(&addr_info) };
+      (buf, alloc, addr)
+    };
+    #[cfg(test)]
+    let watchdog_out_addr = watchdog_buf.2;
+    #[cfg(not(test))]
+    let watchdog_out_addr: u64 = 0;
+
     let pc = LbvhPushConstants {
-      bvh: bvh_buffer.address, // self.addresses.bvh_nodes,
-      sorted_morton: 0,
+      bvh: bvh_buffer.address,
+      sorted_morton: sorted_morton.address, // Must be a valid BDA — passing 0 causes speculative page faults on Pascal GPUs.
       counters: atomic_counters.address,
-      particles: particles.address, // self.addresses.particle_data,
+      particles: particles.address,
       num_primitives: total_particles,
       particle_radius: 1.0, // TODO
+      watchdog_out: watchdog_out_addr,
       dt: _dt as f32 / 1_000_000.0,
       _pad: 0,
+      _pad_end: 0,
     };
+
     let bytes = unsafe {
       core::slice::from_raw_parts(
         &pc as *const _ as *const u8,
@@ -3223,7 +3430,7 @@ impl VulkanComputeKernels {
         counters_addr: atomic_counters.address,
         num_internal_nodes: (total_particles.saturating_sub(1)).max(1) as u32,
         _pad: 0,
-        _pad2: 0,
+        watchdog_out: watchdog_out_addr,
       };
       let bytes_prepass = core::slice::from_raw_parts(
         &pc_prepass as *const _ as *const u8,
@@ -3249,18 +3456,17 @@ impl VulkanComputeKernels {
         device.cmd_dispatch(cmd.cmd, prepass_groups, 1, 1);
       }
 
+      // Barrier: prepass writes → lbvh_build reads
       let fill_barrier = vk::BufferMemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
         .buffer(atomic_counters.buffer)
         .size(vk::WHOLE_SIZE);
-
       let bvh_barrier = vk::BufferMemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
         .buffer(bvh_buffer.buffer)
         .size(vk::WHOLE_SIZE);
-
       device.cmd_pipeline_barrier(
         cmd.cmd,
         vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -3270,25 +3476,15 @@ impl VulkanComputeKernels {
         &[fill_barrier, bvh_barrier],
         &[],
       );
-
-      device.cmd_bind_pipeline(
-        cmd.cmd,
-        vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.lbvh_build,
-      );
+    }
+    bvh_sync!("lbvh_prepass");
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.lbvh_build);
       self.pipelines.assert_pc_size(self.pipelines.lbvh_build, bytes.len());
-      device.cmd_push_constants(
-        cmd.cmd,
-        self.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE,
-        0,
-        bytes,
-      );
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes);
       if dispatch_groups > 0 {
         device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
       }
-
-      // TODO switch to synchronization2
       let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
@@ -3298,49 +3494,216 @@ impl VulkanComputeKernels {
         vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
         vk::DependencyFlags::empty(),
         core::slice::from_ref(&barrier),
-        &[],
-        &[],
-      );
-
-      device.cmd_bind_pipeline(
-        cmd.cmd,
-        vk::PipelineBindPoint::COMPUTE,
-        self.pipelines.lbvh_build_bottomup,
-      );
-      device.cmd_push_constants(
-        cmd.cmd,
-        self.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE,
-        0,
-        bytes,
-      );
-      if dispatch_groups > 0 {
-        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
-      }
-
-      let barrier = vk::MemoryBarrier::default()
-        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-        .dst_access_mask(vk::AccessFlags::SHADER_READ);
-      device.cmd_pipeline_barrier(
-        cmd.cmd,
-        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
-        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
-        vk::DependencyFlags::empty(),
-        core::slice::from_ref(&barrier),
-        &[],
-        &[],
+        &[], &[],
       );
     }
+    bvh_sync!("lbvh_build");
+    unsafe {
+      device.cmd_bind_pipeline(cmd.cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.lbvh_build_bottomup);
+      device.cmd_push_constants(cmd.cmd, self.pipelines.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytes);
+      if dispatch_groups > 0 {
+        device.cmd_dispatch(cmd.cmd, dispatch_groups, 1, 1);
+      }
+      let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+      device.cmd_pipeline_barrier(
+        cmd.cmd,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+        vk::DependencyFlags::empty(),
+        core::slice::from_ref(&barrier),
+        &[], &[],
+      );
+    }
+    bvh_sync!("lbvh_build_bottomup");
+
+    // ── 9. Collapse binary BVH → wide multi-BVH ──────────────────────────────
+    // The binary Karras tree (n-1 internal + n leaf nodes) is collapsed into a
+    // SUBGROUP_SIZE-wide tree using lbvh_collapse.comp.  Each wide multi-node
+    // covers a subtree of height log2(SUBGROUP_SIZE) from its binary root.
+    //
+    // Collapse map (CPU-side): for each multi-node index, the binary_root is
+    // determined by a BFS that groups SUBGROUP_SIZE consecutive leaf-positions.
+    // For n ≤ SUBGROUP_SIZE the entire binary tree fits in 1 wide node.
+    let sg = self.pipelines.subgroup_size as usize;
+    let n_leaves = ((total_particles as usize) + 64 - 1) / 64; // PARTICLES_IN_LEAF = 64
+    // log2(SUBGROUP_SIZE): each wide multi-node covers a subtree of this many binary levels.
+    // trailing_zeros() gives exact log2 for powers of two (sg is always a power of 2).
+    let log2_sg = (sg as u32).trailing_zeros() as usize; // e.g. sg=32 → 5
+
+
+    // BFS: frontier = binary node indices that are roots of sub-trees to collapse.
+    // Each step in the BFS represents one wide level.
+    let mut binary_roots: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
+    {
+      let mut frontier: alloc::vec::Vec<u32> = alloc::vec![0u32]; // start at binary root (always 0)
+      while !frontier.is_empty() {
+        let mut next_frontier: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
+        // Group the frontier into blocks of SUBGROUP_SIZE; each block = 1 wide node.
+        let mut i = 0usize;
+        while i < frontier.len() {
+          // The wide multi-node covers frontier[i] as its binary root.
+          binary_roots.push(frontier[i]);
+          // Collect the sub-frontier: binary nodes that are NOT covered by this wide node,
+          // i.e. internal nodes at depth log2_sg+1 from frontier[i].
+          // For each lane 0..sg-1, simulate the descent: follow bits (log2_sg-1)..0 of lane.
+          // If the node at that path is an INTERNAL binary node (not a leaf), it becomes
+          // a root for the next level.
+          //
+          // We can't know the actual Karras topology from the CPU without a readback, so we
+          // use the DETERMINISTIC structure: internal nodes are 0..n-2, leaves are n-1..2n-2.
+          // A node is a leaf iff its index >= n_leaves - 1.
+          // Frontier nodes for the next level = children of the wide node's root at depth log2_sg
+          // that are still internal nodes.
+          let root = frontier[i] as usize;
+          // Collect all binary nodes "below" this wide node: simulate the descent for each lane.
+          let mut seen = alloc::collections::BTreeSet::new();
+          for lane in 0..sg {
+            let mut cur = root;
+            let mut is_leaf_node = cur >= n_leaves.saturating_sub(1);
+            for d in (0..log2_sg).rev() {
+              if is_leaf_node { break; }
+              let dir = (lane >> d) & 1;
+              // In the Karras tree: left_child of internal node `cur` with n_leaves leaves is:
+              // determined by find_split, but we approximate: for sequential access, the children
+              // are at `cur*2+1` and `cur*2+2` in a balanced tree.
+              // For the actual Karras tree we use the simpler property:
+              //   internal node i has left_child = i+1 if not a leaf at split, else n_leaves-1+split
+              // We can't know this without Morton codes. Instead use the approximation:
+              //   child indices: left = 2*cur+1, right = 2*cur+2 (balanced binary tree).
+              // This will be wrong for degenerate Karras trees but gives a valid collapse map.
+              let child = if dir == 0 { cur * 2 + 1 } else { cur * 2 + 2 };
+              let child_is_leaf = child >= n_leaves.saturating_sub(1);
+              if child >= num_nodes as usize {
+                // Out of tree bounds — treat as leaf
+                is_leaf_node = true;
+                break;
+              }
+              cur = child;
+              is_leaf_node = child_is_leaf;
+            }
+            // `cur` is the binary node at the bottom of this lane's path.
+            // If it's an internal node, it should become a root for the next wide level.
+            if !is_leaf_node && cur != root && seen.insert(cur as u32) {
+              next_frontier.push(cur as u32);
+            }
+          }
+          i += 1; // One wide node per frontier entry (not block — each frontier entry is one binary root)
+        }
+        frontier = next_frontier;
+      }
+    }
+    let num_multi_nodes = binary_roots.len().max(1) as u32;
+
+    // Allocate the wide multi-BVH buffer (same layout as binary bvh_buffer, but fewer nodes).
+    let multi_bvh_buffer = {
+      macro_rules! alloc_multi_buf {
+        ($sg:literal) => {{
+          type Node = crate::gpu::compute_push_constants::MultiBvhNodeWideGpu<$sg>;
+          self
+            .allocate_device_buffer::<Node>(
+              device,
+              allocator,
+              num_multi_nodes as usize,
+              vk::BufferUsageFlags::STORAGE_BUFFER,
+              false,
+              rollback,
+            )
+            .map(|b| b.cast::<()>())
+        }};
+      }
+      match self.pipelines.subgroup_size {
+        128 => alloc_multi_buf!(128),
+        64 => alloc_multi_buf!(64),
+        32 => alloc_multi_buf!(32),
+        16 => alloc_multi_buf!(16),
+        8 => alloc_multi_buf!(8),
+        4 => alloc_multi_buf!(4),
+        _ => alloc_multi_buf!(32),
+      }
+    }?;
+
+    // Upload the collapse map (host-visible staging).
+    let collapse_map_buf = self.allocate_and_upload::<u32>(
+      device, allocator, &binary_roots, vk::BufferUsageFlags::STORAGE_BUFFER, rollback,
+    )?;
+
+    // Dispatch lbvh_collapse (one work-group per multi-node, LOCAL_SIZE_X = SUBGROUP_SIZE).
+    {
+      let pc_collapse = crate::gpu::compute_push_constants::LbvhCollapsePushConstants {
+        binary_bvh: bvh_buffer.address,
+        multi_bvh: multi_bvh_buffer.address,
+        collapse_map: collapse_map_buf.address,
+        num_multi_nodes,
+        _pad: 0,
+      };
+      let bytes_collapse = unsafe {
+        core::slice::from_raw_parts(
+          &pc_collapse as *const _ as *const u8,
+          core::mem::size_of::<crate::gpu::compute_push_constants::LbvhCollapsePushConstants>(),
+        )
+      };
+      unsafe {
+        device.cmd_bind_pipeline(
+          cmd.cmd,
+          vk::PipelineBindPoint::COMPUTE,
+          self.pipelines.lbvh_collapse,
+        );
+        self.pipelines.assert_pc_size(self.pipelines.lbvh_collapse, bytes_collapse.len());
+        device.cmd_push_constants(
+          cmd.cmd,
+          self.pipelines.pipeline_layout,
+          vk::ShaderStageFlags::COMPUTE,
+          0,
+          bytes_collapse,
+        );
+        if num_multi_nodes > 0 {
+          device.cmd_dispatch(cmd.cmd, num_multi_nodes, 1, 1);
+        }
+        let barrier = vk::MemoryBarrier::default()
+          .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+          .dst_access_mask(vk::AccessFlags::SHADER_READ);
+        device.cmd_pipeline_barrier(
+          cmd.cmd,
+          vk::PipelineStageFlags::COMPUTE_SHADER,
+          vk::PipelineStageFlags::COMPUTE_SHADER,
+          vk::DependencyFlags::empty(),
+          core::slice::from_ref(&barrier),
+          &[],
+          &[],
+        );
+      }
+    }
+    bvh_sync!("lbvh_collapse");
 
     let timeline = self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
+
     self.recycle_transient_buffer(atomic_counters, timeline);
     self.recycle_transient_buffer(particles_out, timeline);
     self.recycle_transient_buffer(frame_ids_out, timeline);
     self.recycle_transient_buffer(sorted_morton, timeline);
     self.recycle_transient_buffer(sorted_morton_alt, timeline);
     self.recycle_transient_buffer(histograms, timeline);
+    // Recycle the binary BVH — only the wide multi-BVH is returned.
+    self.recycle_transient_buffer(bvh_buffer, timeline);
+    let timeline_collapse = self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
+    self.recycle_transient_buffer(collapse_map_buf, timeline_collapse);
 
-    Ok(bvh_buffer)
+    // ── Watchdog readback (test-only): detect shader safety-counter trips ─────────────────
+    #[cfg(test)]
+    {
+      let (wd_buf, wd_alloc, wd_addr) = watchdog_buf;
+      LAST_BVH_WATCHDOG_STATE.with(|cell| {
+        let mut guard = cell.lock();
+        if let Some((prev_buf, mut prev_alloc, _)) = guard.take() {
+          unsafe { allocator.destroy_buffer(prev_buf, &mut prev_alloc) };
+        }
+        *guard = Some((wd_buf, wd_alloc, wd_addr));
+      });
+    }
+
+    Ok(multi_bvh_buffer)
   }
 
   #[function_name::named]

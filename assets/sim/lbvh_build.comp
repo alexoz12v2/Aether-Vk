@@ -17,6 +17,15 @@
 #endif
 layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
 
+// ── Watchdog output buffer ────────────────────────────────────────────────────
+// BDA of a 1-element u32 buffer. Each shader that trips a safety counter
+// atomicOr-s its own bit so the CPU can identify the culprit after GPU completion.
+// Bit 1 (0x2) = lbvh_build.comp
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer WatchdogBuffer {
+    uint flags;
+};
+#define WATCHDOG_BIT_LBVH_BUILD 0x2u
+
 layout(push_constant, std430) uniform PushConstants {
     MultiBvhBuffer bvh;
     MortonArray sorted_morton;
@@ -24,7 +33,9 @@ layout(push_constant, std430) uniform PushConstants {
     ParticleData particles;
     uint num_primitives;
     float particle_radius;
+    WatchdogBuffer watchdog_out;
     float dt;
+    uint _pad;
 } pc;
 
 int common_prefix(uint n, int i, int j) {
@@ -58,15 +69,28 @@ int common_prefix(uint n, int i, int j) {
 }
 
 vec2 determine_range(uint n, int i) {
-    int d = sign(common_prefix(n, i, i + 1) - common_prefix(n, i, i - 1));
+    int raw_d = common_prefix(n, i, i + 1) - common_prefix(n, i, i - 1);
+    // Guard: sign(0) = 0, which makes l_max*d == 0 forever (infinite loop) when all
+    // Morton codes are identical (e.g. particles clustered at same position).
+    // Clamp to +1 so the traversal proceeds rightward in that degenerate case.
+    int d = (raw_d == 0) ? 1 : sign(raw_d);
     int min_p = common_prefix(n, i, i - d), l_max = 2;
 
     int safety_counter = 0;
     [[dont_unroll]] while (common_prefix(n, i, i + l_max * d) > min_p) {
         l_max *= 2;
+        // NOTE: break MUST be outside #ifdef so the GPU exits even without DEBUG_SHADERS.
+        if (++safety_counter > 100000) {
 #ifdef DEBUG_SHADERS
-        if (++safety_counter > 100) { debugPrintfEXT("TRAP! determine_range loop 1 hung at idx=%d! l_max=%d\n", i, l_max); break; }
+            debugPrintfEXT("WATCHDOG! determine_range loop 1 hung at idx=%d! l_max=%d\n", i, l_max);
 #endif
+            // Signal the watchdog flag buffer so the CPU can detect the hang.
+            uvec2 wd_uvec = uvec2(pc.watchdog_out);
+            if (wd_uvec.x != 0u || wd_uvec.y != 0u) {
+                atomicOr(pc.watchdog_out.flags, WATCHDOG_BIT_LBVH_BUILD);
+            }
+            break;
+        }
     }
 
     int l = 0, t = l_max / 2;
@@ -75,9 +99,16 @@ vec2 determine_range(uint n, int i) {
     [[dont_unroll]] while (t >= 1) {
         if (common_prefix(n, i, i + (l + t) * d) > min_p) l += t;
         t /= 2;
+        if (++safety_counter > 100000) {
 #ifdef DEBUG_SHADERS
-        if (++safety_counter > 100) { debugPrintfEXT("TRAP! determine_range loop 2 hung at idx=%d! t=%d\n", i, t); break; }
+            debugPrintfEXT("WATCHDOG! determine_range loop 2 hung at idx=%d! t=%d\n", i, t);
 #endif
+            uvec2 wd_uvec = uvec2(pc.watchdog_out);
+            if (wd_uvec.x != 0u || wd_uvec.y != 0u) {
+                atomicOr(pc.watchdog_out.flags, WATCHDOG_BIT_LBVH_BUILD);
+            }
+            break;
+        }
     }
     return vec2(min(i, i + l * d), max(i, i + l * d));
 }
@@ -91,9 +122,16 @@ int find_split(uint n, int first, int last) {
         int new_split = split + step;
         if (new_split < last && common_prefix(n, first, new_split) > common_node) split = new_split;
 
+        if (++safety_counter > 100000) {
 #ifdef DEBUG_SHADERS
-        if (++safety_counter > 100) { debugPrintfEXT("TRAP! find_split hung at first=%d, last=%d! step=%d\n", first, last, step); break; }
+            debugPrintfEXT("WATCHDOG! find_split hung at first=%d, last=%d! step=%d\n", first, last, step);
 #endif
+            uvec2 wd_uvec = uvec2(pc.watchdog_out);
+            if (wd_uvec.x != 0u || wd_uvec.y != 0u) {
+                atomicOr(pc.watchdog_out.flags, WATCHDOG_BIT_LBVH_BUILD);
+            }
+            break;
+        }
     } while (step > 1);
 
     return split;

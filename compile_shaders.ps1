@@ -38,6 +38,7 @@ $WgVariantShaders = @(
     "lbvh_build.comp",
     "lbvh_build_bottomup.comp",
     "lbvh_prepass.comp",
+    "lbvh_collapse.comp",
     "motion_bounds.comp",
     "motion_refit.comp",
     "bp_bounds_gen.comp",
@@ -66,7 +67,7 @@ function Compile-One {
     $BaseOut = Split-Path $Out -Leaf
     $ExtraStr = if ($ExtraFlags) { $ExtraFlags -join ' ' } else { "" }
     Write-Host "  glslc $ExtraStr -> $BaseOut"
-    
+
     $ArgsList = @()
     $ArgsList += $CommonFlags
     $ArgsList += "-fshader-stage=$Stage"
@@ -100,16 +101,16 @@ $compFiles = Get-ChildItem -Path "assets", "assets/sim" -File | Where-Object { $
 foreach ($file in $compFiles) {
     $base = $file.Name
     Write-Host "Shader: $($file.FullName)"
-    
+
     $outBase = $file.FullName -replace '\.comp$', ''
 
     if ($WgVariantShaders -contains $base) {
         Compile-One -File $file.FullName -Stage "comp" -ExtraFlags @() -Out "$($file.FullName).spv"
         Compile-One -File $file.FullName -Stage "comp" -ExtraFlags @("-DDEBUG_SHADERS") -Out "$outBase.comp.d.spv"
-        
+
         $bvhUtilsPath = Join-Path $PWD "assets\bvh_utils.glsl"
         $bvhUtilsBak = Join-Path $PWD "assets\bvh_utils.glsl.bak"
-        
+
         foreach ($wg in $WgSizes) {
             if (Test-Path $bvhUtilsPath) {
                 Copy-Item -Path $bvhUtilsPath -Destination $bvhUtilsBak -Force
@@ -117,13 +118,13 @@ foreach ($file in $compFiles) {
                 $newContent = $content -replace "SUBGROUP_SIZE\s*=\s*[0-9]+", "SUBGROUP_SIZE = $wg"
                 [System.IO.File]::WriteAllText($bvhUtilsPath, $newContent)
             }
-            
+
             $outWg = "$outBase.comp.wg$wg.spv"
             Compile-One -File $file.FullName -Stage "comp" -ExtraFlags @("-DLOCAL_SIZE_X=$wg") -Out $outWg
-            
+
             $outWgD = "$outBase.comp.wg$wg.d.spv"
             Compile-One -File $file.FullName -Stage "comp" -ExtraFlags @("-DLOCAL_SIZE_X=$wg", "-DDEBUG_SHADERS") -Out $outWgD
-            
+
             if (Test-Path $bvhUtilsBak) {
                 Move-Item -Path $bvhUtilsBak -Destination $bvhUtilsPath -Force
             }

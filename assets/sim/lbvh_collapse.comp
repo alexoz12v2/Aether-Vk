@@ -137,8 +137,6 @@ void main() {
 
     if (lane == 0) {
         tlas_write_valid_mask(pc.multi_bvh, multi_node_idx, valid_ballot.xy);
-        for (uint i = 0; i < 8u; ++i)
-            for (uint j = 0; j < SUBGROUP_SIZE; ++j) tlas_write_perm(pc.multi_bvh, multi_node_idx, i, j, j);
     }
 
 #ifdef DEBUG_SHADERS

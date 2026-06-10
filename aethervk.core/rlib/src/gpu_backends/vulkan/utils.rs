@@ -836,10 +836,12 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
 
     // TODO: put this into an optional extension, as the `nullDescriptors` feature is not supported
     // by everybody (namely, Apple M4)
-    // This extension also adds support for “null descriptors”, where VK_NULL_HANDLE can be used
-    // instead of a valid handle. Accesses to null descriptors have well-defined behavior, and do not rely on robustness.
-    // promoted to vk::API_VERSION_1_3
-    // the_vec.push(ash::ext::robustness2::NAME);
+    #[cfg(test)]
+    {
+      if aethervk_oshal_rlib::os::env::var("AETHERVK_ROBUST_ACCESS").as_deref() == Some("1") {
+        the_vec.push(ash::ext::robustness2::NAME);
+      }
+    }
 
     #[cfg(windows)]
     {
@@ -918,8 +920,8 @@ pub(super) struct RequiredFeatures<'a> {
   pub shader_float16_int8: vk::PhysicalDeviceShaderFloat16Int8Features<'a>,
   /// Required for physics compute shaders that use StorageBuffer8BitAccess
   pub storage_8bit: vk::PhysicalDevice8BitStorageFeatures<'a>,
-  /// Required for barnes_hut.comp which uses OpAtomicFAddEXT
-  pub shader_atomic_float: vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT<'a>,
+  #[cfg(test)]
+  pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'a>,
 }
 
 impl RequiredFeatures<'_> {
@@ -944,13 +946,14 @@ impl RequiredFeatures<'_> {
       scalar_block_layout,
       shader_float16_int8,
       storage_8bit: vk::PhysicalDevice8BitStorageFeatures::default(),
-      shader_atomic_float: vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default(),
+      #[cfg(test)]
+      robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT::default(),
     }
   }
 
   /// TODO: Document this item
   pub fn as_features2(&mut self) -> vk::PhysicalDeviceFeatures2<'_> {
-    vk::PhysicalDeviceFeatures2::default()
+    let mut f = vk::PhysicalDeviceFeatures2::default()
       .features(self.features)
       .push_next(&mut self.buffer_device_address)
       .push_next(&mut self.vulkan_memory_model)
@@ -959,8 +962,16 @@ impl RequiredFeatures<'_> {
       .push_next(&mut self.descriptor_indexing)
       .push_next(&mut self.scalar_block_layout)
       .push_next(&mut self.shader_float16_int8)
-      .push_next(&mut self.storage_8bit)
-      .push_next(&mut self.shader_atomic_float)
+      .push_next(&mut self.storage_8bit);
+
+    #[cfg(test)]
+    {
+      if aethervk_oshal_rlib::os::env::var("AETHERVK_ROBUST_ACCESS").as_deref() == Some("1") {
+        f = f.push_next(&mut self.robustness2);
+      }
+    }
+    
+    f
   }
 
   /// TODO: Document this item
@@ -986,9 +997,19 @@ impl RequiredFeatures<'_> {
     self.shader_float16_int8.shader_int8 = vk::TRUE;
     // Required for SPIR-V shaders that use StorageBuffer8BitAccess capability
     self.storage_8bit.storage_buffer8_bit_access = vk::TRUE;
-    // Required for barnes_hut.comp (OpAtomicFAddEXT on storage buffer floats)
-    self.shader_atomic_float.shader_buffer_float32_atomic_add = vk::TRUE;
-    self.shader_atomic_float.shader_buffer_float32_atomics = vk::TRUE;
+
+    // [TEST ONLY] Enable robustBufferAccess when AETHERVK_ROBUST_ACCESS=1.
+    // When enabled, OOB GPU reads return 0 and OOB writes are discarded instead of
+    // killing the driver, allowing debugPrintfEXT output to survive shader bugs.
+    // This is gated behind an env var so we can test both with and without it.
+    #[cfg(test)]
+    {
+      if aethervk_oshal_rlib::os::env::var("AETHERVK_ROBUST_ACCESS").as_deref() == Some("1") {
+        aethervk_oshal_rlib::log!("[ROBUST] robustBufferAccess ENABLED (AETHERVK_ROBUST_ACCESS=1)");
+        self.features.robust_buffer_access = vk::TRUE;
+        self.robustness2.robust_buffer_access2 = vk::TRUE;
+      }
+    }
 
     self
   }
@@ -1039,9 +1060,7 @@ impl RequiredFeatures<'_> {
     if self.storage_8bit.storage_buffer8_bit_access != vk::TRUE {
       the_vec.push("storage_buffer_8_bit_access".to_string());
     }
-    if self.shader_atomic_float.shader_buffer_float32_atomic_add != vk::TRUE {
-      the_vec.push("shader_buffer_float32_atomic_add".to_string());
-    }
+
 
     if the_vec.is_empty() {
       None

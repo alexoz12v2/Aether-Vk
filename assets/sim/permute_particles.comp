@@ -1,0 +1,53 @@
+// @assets/sim/permute_particles.comp
+#version 450 core
+#extension GL_EXT_buffer_reference2         : require
+#extension GL_EXT_buffer_reference_uvec2    : require
+#extension GL_KHR_shader_subgroup_basic     : require
+#extension GL_GOOGLE_include_directive      : require
+
+#include "../bvh_utils.glsl"
+#include "imex_math.glsl"
+
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer ParticleFrameIds {
+    uint frame_ids[];
+};
+
+layout(push_constant, std430) uniform PushConstants {
+    ParticleData     particles_in;
+    ParticleData     particles_out;
+    ParticleFrameIds frame_ids_in;
+    ParticleFrameIds frame_ids_out;
+    MortonArray      sorted_morton;
+    uint             num_particles;
+} pc;
+
+void main() {
+    uint sorted_idx = gl_GlobalInvocationID.x;
+    if (sorted_idx >= pc.num_particles) return;
+
+    uvec2 morton_entry = pc.sorted_morton.entries[sorted_idx];
+    uint original_idx = morton_entry.y;
+
+    // Calculate AOSOA base indices
+    uint in_block = original_idx / SUBGROUP_SIZE;
+    uint in_lane  = original_idx % SUBGROUP_SIZE;
+    uint in_base  = in_block * (PARTICLE_FIELDS * SUBGROUP_SIZE) + in_lane;
+
+    uint out_block = sorted_idx / SUBGROUP_SIZE;
+    uint out_lane  = sorted_idx % SUBGROUP_SIZE;
+    uint out_base  = out_block * (PARTICLE_FIELDS * SUBGROUP_SIZE) + out_lane;
+
+    // Permute ParticleData (AOSOA)
+    for (uint i = 0; i < PARTICLE_FIELDS; ++i) {
+        pc.particles_out.data[out_base + i * SUBGROUP_SIZE] = 
+            pc.particles_in.data[in_base + i * SUBGROUP_SIZE];
+    }
+
+    // Permute Frame Ids
+    pc.frame_ids_out.frame_ids[sorted_idx] = pc.frame_ids_in.frame_ids[original_idx];
+}

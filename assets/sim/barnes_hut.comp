@@ -150,13 +150,13 @@ void main() {
          uint loop_safety_counter = 0; // Prevent infinite loops crashing the GPU
 
          while (true) {
- #ifdef DEBUG_SHADERS
              loop_safety_counter++;
              if (loop_safety_counter > 100000) {
+#ifdef DEBUG_SHADERS
                  if (lane_id == 0) debugPrintfEXT("TRAP! Infinite loop detected at cluster_job_idx=%u\\n", cluster_job_idx);
+#endif
                  break;
              }
- #endif
 
              subgroupMemoryBarrierShared();
          uint stack_ptr = shared_stack_ptrs[subgroup_id];
@@ -269,13 +269,13 @@ void main() {
 
          if (cluster_list_uvec2.x == 0u && cluster_list_uvec2.y == 0u) {
              uint base = P_BASE(my_p_idx);
-             pc.particles.data[base + 7u * SUBGROUP_SIZE] = floatBitsToUint(g_f.x);
-             pc.particles.data[base + 8u * SUBGROUP_SIZE] = floatBitsToUint(g_f.y);
-             pc.particles.data[base + 9u * SUBGROUP_SIZE] = floatBitsToUint(g_f.z);
+             pc.particles.data[base + 7u * SUBGROUP_SIZE] = floatBitsToUint(uintBitsToFloat(pc.particles.data[base + 7u * SUBGROUP_SIZE]) + g_f.x);
+             pc.particles.data[base + 8u * SUBGROUP_SIZE] = floatBitsToUint(uintBitsToFloat(pc.particles.data[base + 8u * SUBGROUP_SIZE]) + g_f.y);
+             pc.particles.data[base + 9u * SUBGROUP_SIZE] = floatBitsToUint(uintBitsToFloat(pc.particles.data[base + 9u * SUBGROUP_SIZE]) + g_f.z);
          } else {
-             tlas_write_force_x(pc.bvh, target_node_idx, lane_id, g_f.x);
-             tlas_write_force_y(pc.bvh, target_node_idx, lane_id, g_f.y);
-             tlas_write_force_z(pc.bvh, target_node_idx, lane_id, g_f.z);
+             tlas_write_force_x(pc.bvh, target_node_idx, lane_id, tlas_force_x(pc.bvh, target_node_idx, lane_id) + g_f.x);
+             tlas_write_force_y(pc.bvh, target_node_idx, lane_id, tlas_force_y(pc.bvh, target_node_idx, lane_id) + g_f.y);
+             tlas_write_force_z(pc.bvh, target_node_idx, lane_id, tlas_force_z(pc.bvh, target_node_idx, lane_id) + g_f.z);
          }
 #ifdef DEBUG_SHADERS
          if (my_p_idx == 0) {

@@ -256,8 +256,7 @@ pub struct MultiBvhNodeWideGpu<const N: usize> {
   pub force_z: [f32; N],
   pub valid_mask: [u32; 2],
   pub parent_idx: u32,
-  pub pad: u32,
-  pub permutations: [[u32; N]; 8],
+  pub _pad: u32,
 }
 
 // SAFETY: MultiBvhNodeWideGpu<N> is #[repr(C)] with only f32/u32 fields (all Pod),
@@ -282,7 +281,9 @@ pub struct LbvhPrepassPushConstants {
   pub counters_addr: u64,
   pub num_internal_nodes: u32,
   pub _pad: u32,
-  pub _pad2: u64,
+  /// BDA of a 1-element `u32` watchdog buffer. Shader writes a shader-ID bit via atomicOr.
+  /// 0 if watchdog reporting is disabled (non-test builds).
+  pub watchdog_out: u64,
 }
 
 #[repr(C)]
@@ -413,9 +414,29 @@ pub struct LbvhPushConstants {
   pub particles: u64,
   pub num_primitives: u32,
   pub particle_radius: f32,
+  /// BDA of a 1-element `u32` watchdog buffer. Shader writes a shader-ID bit via atomicOr.
+  /// 0 if watchdog reporting is disabled (non-test builds).
+  pub watchdog_out: u64,
   pub dt: f32,
   pub _pad: u32,
+  pub _pad_end: u64,
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+/// Push constants for `lbvh_collapse.comp`: collapses binary BVH → wide multi-BVH.
+pub struct LbvhCollapsePushConstants {
+  /// BDA of the source binary BVH (MultiBvhNodeWideGpu<N> layout, Karras tree).
+  pub binary_bvh: u64,
+  /// BDA of the destination wide multi-BVH buffer.
+  pub multi_bvh: u64,
+  /// BDA of the collapse map buffer: u32 array of binary_root indices per multi-node.
+  pub collapse_map: u64,
+  /// Number of wide multi-nodes to produce (= dispatch groups).
+  pub num_multi_nodes: u32,
+  pub _pad: u32,
+}
+
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -426,6 +447,7 @@ pub struct CcdPushConstants {
   pub root_index: u32,
   pub total_particles: u32,
 }
+
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]

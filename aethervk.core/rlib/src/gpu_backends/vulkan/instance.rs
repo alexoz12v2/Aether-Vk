@@ -409,8 +409,8 @@ impl Instance {
         let mut features2 = required_features.as_features2();
         unsafe { self.instance.get_physical_device_features2(physical_device, &mut features2) };
         required_features.features = features2.features;
-        if required_features.any_missing().is_some() {
-          // TODO Log
+        if let Some(missing) = required_features.any_missing() {
+          aethervk_oshal_rlib::log!("Device missing features: {:?}", missing);
           return None;
         }
 
