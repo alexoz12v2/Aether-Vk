@@ -147,10 +147,6 @@ pub struct TlasMultiNode<const N: usize> {
   pub valid_mask: [u32; 2],
   pub parent_idx: u32,
   pub _pad: u32,
-  /// Precomputed traversal orderings for the 8 ray-sign combinations.
-  /// `permutations[sign_mask][i]` = local child index to visit i-th.
-  /// Stored as `u32` (upper 24 bits unused) so the struct is `bytemuck::Pod`.
-  pub permutations: [[u32; N]; 8],
 }
 
 impl<const N: usize> Default for TlasMultiNode<N> {
@@ -176,7 +172,6 @@ impl<const N: usize> Default for TlasMultiNode<N> {
       valid_mask: [0; 2],
       parent_idx: u32::MAX,
       _pad: 0,
-      permutations: [[0; N]; 8],
     }
   }
 }
@@ -391,41 +386,6 @@ where
   }
   node.valid_mask = [valid_mask_0, valid_mask_1];
 
-  // Generate permutations
-  for sign_mask in 0..8 {
-    let mut perm = Vec::new();
-    fn traverse_perm(
-      idx: usize,
-      tree: &[Treelet],
-      sign_mask: u8,
-      frontier: &[u32],
-      perm: &mut Vec<u8>,
-    ) {
-      match tree[idx] {
-        Treelet::Leaf(b_idx) => {
-          if b_idx != u32::MAX {
-            if let Some(pos) = frontier.iter().position(|&x| x == b_idx) {
-              perm.push(pos as u8);
-            }
-          }
-        }
-        Treelet::Node { left, right, axis } => {
-          let is_negative = (sign_mask & (1 << axis)) != 0;
-          if is_negative {
-            traverse_perm(right, tree, sign_mask, frontier, perm);
-            traverse_perm(left, tree, sign_mask, frontier, perm);
-          } else {
-            traverse_perm(left, tree, sign_mask, frontier, perm);
-            traverse_perm(right, tree, sign_mask, frontier, perm);
-          }
-        }
-      }
-    }
-    traverse_perm(0, &treelet_nodes, sign_mask, &frontier, &mut perm);
-    for i in 0..perm.len() {
-      node.permutations[sign_mask as usize][i] = perm[i] as u32;
-    }
-  }
 
   multi_nodes[multi_idx as usize] = node;
   multi_idx
