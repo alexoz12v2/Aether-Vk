@@ -393,10 +393,33 @@ impl PhysicsPipelines {
     //   AVX-512              → 16
     //   (manual override via MESA_NO_AVX* env vars may give 1 or 2 — clamp to 4)
     //
-    // Rule: always load wg{sg}.spv so LOCAL_SIZE_X == SUBGROUP_SIZE.
-    // For CPU: sg == wg (SIMD width is both the subgroup size and the workgroup size).
-    // For GPU: sg == hardware subgroup size; wg{sg} compiled variant matches.
+    // mk_wg!  → throughput shaders: CPU picks wg{sg}, GPU uses the bare .spv (LOCAL_SIZE_X=128).
+    // mk_wg_sg! → one-subgroup-per-WG shaders (BVH builders, gravity): always picks wg{sg}
+    //             so LOCAL_SIZE_X == SUBGROUP_SIZE on every platform.
     macro_rules! mk_wg {
+      ($stem:expr) => {{
+        let mut path;
+        if is_cpu && subgroup_size <= 16 {
+          let wg_suffix = match subgroup_size {
+            1..=4 => "wg4",
+            5..=8 => "wg8",
+            _ => "wg16",
+          };
+          path = alloc::format!("{}/{}.{}.spv", sim_dir, $stem, wg_suffix);
+        } else {
+          path = alloc::format!("{}/{}.spv", sim_dir, $stem);
+        };
+        if use_debug {
+          path = path.replace(".spv", ".d.spv");
+        }
+        let (pipeline, pc_size) = create_pipeline(&path)?;
+        pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
+        pipeline
+      }};
+    }
+    // For shaders that need LOCAL_SIZE_X == SUBGROUP_SIZE (one subgroup per WG):
+    // BVH builders use gl_SubgroupID == 0 and subgroup ops over the full WG.
+    macro_rules! mk_wg_sg {
       ($stem:expr) => {{
         let wg_suffix = match subgroup_size {
           1..=4   => "wg4",
@@ -429,14 +452,14 @@ impl PhysicsPipelines {
         rb_force_assign: mk_wg!("rb_force_assign.comp"),
         convert_particles: mk_wg!("convert_particles.comp"),
         // ── BVH builders ─────────────────────────────────────────────────
-        lbvh_prepass: mk_wg!("lbvh_prepass.comp"),
-        lbvh_build: mk_wg!("lbvh_build.comp"),
-        lbvh_build_bottomup: mk_wg!("lbvh_build_bottomup.comp"),
-        lbvh_collapse: mk_wg!("lbvh_collapse.comp"),
+        lbvh_prepass: mk_wg_sg!("lbvh_prepass.comp"),
+        lbvh_build: mk_wg_sg!("lbvh_build.comp"),
+        lbvh_build_bottomup: mk_wg_sg!("lbvh_build_bottomup.comp"),
+        lbvh_collapse: mk_wg_sg!("lbvh_collapse.comp"),
         motion_bounds: mk_wg!("motion_bounds.comp"),
         motion_refit: mk_wg!("motion_refit.comp"),
         // ── Gravity / sorting ────────────────────────────────────────────
-        barnes_hut: mk_wg!("barnes_hut.comp"),
+        barnes_hut: mk_wg_sg!("barnes_hut.comp"),
         radix_sort: mk_wg!("radix_sort.comp"),
         // ── Single-variant (specialisation constant or single-threaded) ──
         morton_encode: mk!("morton_encode.comp.spv"),
@@ -1067,11 +1090,16 @@ impl VulkanComputeKernels {
   /// the wg32.spv shader's `local_size_x` was compiled for.  The SPIR-V local size
   /// and the dispatch group count must always agree.
   #[inline]
-  pub fn effective_wg(&self, _gpu_target: u32) -> u32 {
-    // mk_wg! always loads wg{subgroup_size}.spv, so LOCAL_SIZE_X == subgroup_size
-    // on every platform (CPU and GPU).  The _gpu_target hint is retained for
-    // documentation purposes only (it was the old hardcoded GPU workgroup size).
-    self.pipelines.subgroup_size.max(4)
+  pub fn effective_wg(&self, gpu_target: u32) -> u32 {
+    // CPU (Lavapipe): workgroup size == subgroup size (SIMD width).
+    // GPU: throughput shaders load wg128 (bare .spv), so dispatch with gpu_target.
+    // BVH shaders loaded with mk_wg_sg! use subgroup_size directly — they never
+    // call effective_wg(); they compute dispatch groups as ceil(N / subgroup_size).
+    if self.pipelines.is_lavapipe && self.pipelines.subgroup_size <= 16 {
+      self.pipelines.subgroup_size.max(4)
+    } else {
+      gpu_target
+    }
   }
 
   /// Returns the BDA of the GPU-built particle LBVH, updated each tick by `build_motion_bvh`.
@@ -3075,7 +3103,8 @@ impl VulkanComputeKernels {
       let stride = gpu::PARTICLE_FIELDS as u32 * sg;
       (particles.capacity() as u32 / stride) * sg
     };
-    let wg_size = self.effective_wg(128);
+    // BVH shaders use mk_wg_sg! → LOCAL_SIZE_X == subgroup_size.
+    let wg_size = self.pipelines.subgroup_size;
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
 
     let num_nodes = (total_particles * 2).max(1) as usize;
@@ -3450,7 +3479,7 @@ impl VulkanComputeKernels {
         0,
         bytes_prepass,
       );
-      let prepass_wg = self.effective_wg(128);
+      let prepass_wg = self.pipelines.subgroup_size; // lbvh_prepass uses mk_wg_sg!
       let prepass_groups = (total_particles + prepass_wg - 1) / prepass_wg;
       if prepass_groups > 0 {
         device.cmd_dispatch(cmd.cmd, prepass_groups, 1, 1);
