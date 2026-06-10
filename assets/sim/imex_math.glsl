@@ -58,9 +58,17 @@ vec3 quat_rotate(vec4 q, vec3 v) { vec3 t = 2.0 * cross(q.xyz, v); return v + q.
 vec3 quat_rotate_inv(vec4 q, vec3 v) { return quat_rotate(quat_conj(q), v); }
 
 // +x=right,-y=forward,+z=up
+// Helper: Converts a quaternion to a 3x3 rotation matrix
 mat3 quat_to_mat3(vec4 q) {
-    float xx = q.x*q.x, yy = q.y*q.y, zz = q.z*q.z, xy = q.x*q.y, xz = q.x*q.z, yz = q.y*q.z, wx = q.w*q.x, wy = q.w*q.y, wz = q.w*q.z;
-    return mat3(1.0-2.0*(yy+zz), 2.0*(xy+wz), 2.0*(xz-wy), 2.0*(xy-wz), 1.0-2.0*(xx+zz), 2.0*(yz+wx), 2.0*(xz+wy), 2.0*(yz-wx), 1.0-2.0*(xx+yy));
+    float qxx = q.x * q.x; float qyy = q.y * q.y; float qzz = q.z * q.z;
+    float qxz = q.x * q.z; float qxy = q.x * q.y; float qyz = q.y * q.z;
+    float qwx = q.w * q.x; float qwy = q.w * q.y; float qwz = q.w * q.z;
+
+    return mat3(
+        1.0 - 2.0 * (qyy + qzz),       2.0 * (qxy + qwz),       2.0 * (qxz - qwy),
+              2.0 * (qxy - qwz), 1.0 - 2.0 * (qxx + qzz),       2.0 * (qyz + qwx),
+              2.0 * (qxz + qwy),       2.0 * (qyz - qwx), 1.0 - 2.0 * (qxx + qyy)
+    );
 }
 
 #endif // IMEX_MATH_GLSL

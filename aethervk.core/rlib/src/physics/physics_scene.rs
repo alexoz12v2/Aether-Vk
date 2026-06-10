@@ -319,6 +319,7 @@ impl PhysicsScene {
         use crate::math::{particles_edu::build_motion_particle_lbvh, physics::Particle};
         let pars: Vec<Particle> = ps
           .iter()
+          .filter(|p| p.active > 0)
           .map(|p| Particle {
             position: Vec3f32::from_array(p.position),
             velocity: Vec3f32::from_array(p.velocity),
@@ -326,7 +327,7 @@ impl PhysicsScene {
             accumulated_force: Vec3f32::zero(),
           })
           .collect();
-        let vels: Vec<Vec3f32> = ps.iter().map(|p| Vec3f32::from_array(p.velocity)).collect();
+        let vels: Vec<Vec3f32> = ps.iter().filter(|p| p.active > 0).map(|p| Vec3f32::from_array(p.velocity)).collect();
 
         if let Some(lbvh) = build_motion_particle_lbvh(&pars, &vels, 1.0, dt_s) {
           let lca_idx = find_lca_frame_idx(entity, scene, &gpu_frames).unwrap_or(macro_frame_idx);

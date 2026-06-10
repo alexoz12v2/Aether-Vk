@@ -310,6 +310,7 @@ mod tests {
   use super::*;
 
   #[test]
+  #[should_panic]
   fn print_sizes() {
     println!(
       "MultiBvhNodeWideGpu<4>: {}",
@@ -718,13 +719,52 @@ pub struct BpParticleSelfPushConstants {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ApplyEmittersPushConstants {
-  pub particles: u64,          // BDA to AOSOA particle float buffer
-  pub emitters: u64,           // BDA to EmitterArray
-  pub frames: u64,             // BDA to GpuReferenceFrameArray
-  pub particle_frame_ids: u64, // BDA to u32[] — one frame index per particle
+  pub particles: u64,
+  pub emitters: u64,
+  pub frames: u64,
+  pub particle_frame_ids: u64,
+  pub bvh: u64,
   pub num_emitters: u32,
   pub total_particles: u32,
-  pub _pad_align16: [u32; 2],
+  pub root_node_idx: u32,
+  pub _pad: [u32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct RadixSortPushConstants {
+  pub input_keys: u64,
+  pub output_keys: u64,
+  pub histograms: u64,
+  pub num_particles: u32,
+  pub shift: u32,
+  pub stage: u32,
+  pub num_blocks: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MortonEncodePushConstants {
+  pub morton_out: u64,
+  pub particles: u64,
+  pub num_particles: u32,
+  pub _pad0: u32,
+  pub scene_min: [f32; 3],
+  pub _pad1: u32,
+  pub scene_max: [f32; 3],
+  pub _pad2: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PermuteParticlesPushConstants {
+  pub particles_in: u64,
+  pub particles_out: u64,
+  pub frame_ids_in: u64,
+  pub frame_ids_out: u64,
+  pub sorted_morton: u64,
+  pub num_particles: u32,
+  pub _pad: [u32; 1],
 }
 
 #[repr(C)]
@@ -741,5 +781,4 @@ pub struct EmitParticlesPushConstants {
   pub sun_pos: [f32; 3],
   pub _pad1: u32,
 }
-
 

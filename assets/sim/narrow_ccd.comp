@@ -1,8 +1,9 @@
+// @assets/sim/narrow_ccd.comp
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
-#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_GOOGLE_include_directive : require
+
 #ifdef DEBUG_SHADERS
 #extension GL_EXT_debug_printf : enable
 #endif
@@ -17,20 +18,20 @@
 layout(local_size_x = LOCAL_SIZE_X) in;
 
 layout(push_constant, std430) uniform PushConstants {
-    RigidBodyArray scene_entities;    // 0-7
-    uint64_t particles;               // 8-15
-    uint64_t output_list;             // 16-23
-    uint64_t pair_buffer;             // 24-31
-    float dt;                         // 32-35
-    float particle_radius;            // 36-39
-    GpuReferenceFrameArray lca_entities; // 40-47
-    uint space_type;                  // 48-51
-    uint _pad;                        // 52-55
+    RigidBodyArray scene_entities;
+    ParticleData particles;
+    SparseCollisions output_list;
+    uvec2 pair_buffer;
+    float dt;
+    float particle_radius;
+    GpuReferenceFrameArray lca_entities;
+    uint space_type;
+    uint _pad;
 } pc;
 
 void main() {
     uint pair_idx = gl_GlobalInvocationID.x;
-    
+
     uint idA, idB, lca_id;
 
     if (pc.space_type == 1) {
@@ -42,22 +43,31 @@ void main() {
         lca_id = pair.lca_id;
     } else {
         PairBuffer pairs = PairBuffer(pc.pair_buffer);
-
         if (pair_idx >= pairs.count) return;
         uvec2 pair = pairs.pairs[pair_idx];
         idA = pair.x;
         idB = pair.y;
     }
 
+#ifdef DEBUG_SHADERS
+    // DIAGNOSTIC: Confirm dispatch mapping and cross-LCA routing
+    if (pair_idx == 0) {
+        debugPrintfEXT("======================================\n");
+        debugPrintfEXT("narrow_ccd.comp : RIGID BODY SOLVER\n");
+        debugPrintfEXT("Space Type: %d (0 = Global, 1 = Cross-LCA)\n", pc.space_type);
+        debugPrintfEXT("======================================\n");
+    }
+#endif
+
     RigidBody ent_A = pc.scene_entities.bodies[idA];
     RigidBody ent_B = pc.scene_entities.bodies[idB];
-    
+
     uint shape_A = ent_A.shape_type;
     vec3 extents_A = ent_A.shape_extents;
     vec4 orient_A = ent_A.orientation;
     vec3 pos_A = ent_A.position_mass.xyz;
     vec3 vel_A = ent_A.linear_vel_drag.xyz;
-    
+
     uint shape_B = ent_B.shape_type;
     vec3 extents_B = ent_B.shape_extents;
     vec4 orient_B = ent_B.orientation;
@@ -66,7 +76,7 @@ void main() {
 
     mat4 trans_A = mat4(1.0);
     mat4 trans_B = mat4(1.0);
-    
+
     if (pc.space_type == 1) {
         GpuReferenceFrame lca = pc.lca_entities.frames[lca_id];
         vec3 macro_rel_vel = vel_A - lca.center_vel;
@@ -74,28 +84,37 @@ void main() {
         vel_A = macro_rel_vel / lca.scale;
         extents_A /= lca.scale;
     }
-    
+
     mat3 rotA = quat_to_mat3(orient_A);
     trans_A = mat4(vec4(rotA[0],0), vec4(rotA[1],0), vec4(rotA[2],0), vec4(pos_A,1.0));
-    
+
     mat3 rotB = quat_to_mat3(orient_B);
     trans_B = mat4(vec4(rotB[0],0), vec4(rotB[1],0), vec4(rotB[2],0), vec4(pos_B,1.0));
 
     float toi, depth;
     vec3 normal, contact;
-    
+
 #ifdef DEBUG_SHADERS
-    debugPrintfEXT("Narrow Phase CCD [pair %d]: idA=%d, idB=%d, posA=(%f,%f,%f), posB=(%f,%f,%f), vA=(%f,%f,%f), vB=(%f,%f,%f)\n", 
-                   pair_idx, idA, idB, pos_A.x, pos_A.y, pos_A.z, pos_B.x, pos_B.y, pos_B.z, vel_A.x, vel_A.y, vel_A.z, vel_B.x, vel_B.y, vel_B.z);
+    // Throttle printing to avoid log overflow
+    if (pair_idx < 4) {
+        debugPrintfEXT("Narrow Phase CCD [pair %d]: idA=%d, idB=%d. vA=(%1.2f,%1.2f,%1.2f), vB=(%1.2f,%1.2f,%1.2f)\n",
+                       pair_idx, idA, idB, vel_A.x, vel_A.y, vel_A.z, vel_B.x, vel_B.y, vel_B.z);
+    }
 #endif
 
     if (compute_toi_generic(shape_A, extents_A, trans_A, vel_A * pc.dt, shape_B, extents_B, trans_B, vel_B * pc.dt, 1e-3, 10, toi, normal, contact, depth)) {
-#ifdef DEBUG_SHADERS
-        debugPrintfEXT("COLLISION DETECTED [pair %d]: toi=%f depth=%f normal=(%f, %f, %f) contact=(%f, %f, %f)\n", pair_idx, toi, depth, normal.x, normal.y, normal.z, contact.x, contact.y, contact.z);
-#endif
-        SparseCollisions out_list = SparseCollisions(pc.output_list);
+
+        SparseCollisions out_list = pc.output_list;
         uint count = atomicAdd(out_list.count, 1);
-        if (count < (out_list.capacity * 7) / 8) {
+
+        // FIX: Strict bounds check utilizing exact capacity
+        if (count < out_list.capacity) {
+
+#ifdef DEBUG_SHADERS
+            debugPrintfEXT("COLLISION DETECTED [pair %d]: idA=%d, idB=%d. toi=%1.4f depth=%1.4f normal=(%1.2f, %1.2f, %1.2f)\n",
+                pair_idx, idA, idB, toi, depth, normal.x, normal.y, normal.z);
+#endif
+
             out_list.pairs[count].entity_a = idA;
             out_list.pairs[count].prim_a = idA;
             out_list.pairs[count].entity_b = idB;
@@ -109,5 +128,10 @@ void main() {
             out_list.pairs[count].contact_point = contact;
             out_list.pairs[count].penetration_depth = max(depth, 1e-4);
         }
+#ifdef DEBUG_SHADERS
+        else {
+            debugPrintfEXT("[narrow_ccd FATAL ERROR] Output list overflow! Capacity %d reached.\n", out_list.capacity);
+        }
+#endif
     }
 }

@@ -281,6 +281,11 @@ where
     tlas_bytes.len(),
     tlas_root_idx
   );
+  aethervk_oshal_rlib::log!(
+    "TLAS DEBUG: tlas_bytes len: {}, tlas_root_idx: {}",
+    tlas_bytes.len(),
+    tlas_root_idx
+  );
   let motion_tlas = AutoDiscard::new(kernels.upload_motion_tlas(&mut cmd, &tlas_bytes)?, |b| {
     kernels.discard_tlas(b)
   });
@@ -302,7 +307,7 @@ where
   let mut particles = AutoDiscard::new(p_buf, |b| kernels.discard_buffer(b));
   // Upload per-particle frame indices derived from ParticleMetadata.parent_frame_id.
   // Consumed by apply_emitters_to_particles.comp via BDA.
-  let particle_frame_ids = AutoDiscard::new(
+  let mut particle_frame_ids = AutoDiscard::new(
     kernels.build_particle_frame_ids(&mut cmd, &particle_metadata)?,
     |b| kernels.discard_buffer(b),
   );
@@ -383,7 +388,7 @@ where
       if !particle_metadata.is_empty() {
         // Build motion BVH for self-gravity (rebuilt each sub-step as positions change)
         let bvh = AutoDiscard::new(
-          kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, sub_dt)?,
+          kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, sub_dt)?,
           |b| kernels.discard_bvh(b),
         );
         sync!("build_motion_bvh");
@@ -451,7 +456,7 @@ where
 
         if !particle_metadata.is_empty() {
           let bvh = AutoDiscard::new(
-            kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, dt)?,
+            kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, dt)?,
             |b| kernels.discard_bvh(b),
           );
           sync!("build_motion_bvh (collisions path)");
@@ -863,7 +868,7 @@ where
           )?;
 
           let rewind_bvh = AutoDiscard::new(
-            kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &particles, t_c)?,
+            kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, t_c)?,
             |b| kernels.discard_bvh(b),
           );
           kernels.compute_self_gravity(&mut cmd, &rewind_bvh, &mut particles)?;
@@ -908,7 +913,8 @@ where
                 &mut cmd,
                 &kinematics,
                 &rigid_bodies,
-                &particles,
+                &mut particles,
+                &mut particle_frame_ids,
                 remaining_dt,
               )?;
               kernels.compute_self_gravity(&mut cmd, &final_bvh, &mut particles)?;

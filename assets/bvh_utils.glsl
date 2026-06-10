@@ -16,8 +16,7 @@
 #extension GL_KHR_shader_subgroup_vote : require
 #extension GL_KHR_memory_scope_semantics : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
-
-layout(constant_id = 0) const uint SUBGROUP_SIZE = 64;
+layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
 layout(constant_id = 4) const uint PARTICLES_IN_LEAF = 64;
 
 // ---------------------------------------------------------------------------
@@ -160,17 +159,8 @@ struct RenderParticleData { uint id_low; uint id_high; uint age_low; uint age_hi
 struct DrawIndirectCommand { uint vertexCount; uint instanceCount; uint firstVertex; uint firstInstance; };
 
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticleData {
-  // Note: semantically a float. Declared as a uint to allow for atomic operations
-  // 4 floats per particle as the following in aosoa format:
-  // After p1 p2
-  // 0-2 position at midpoint
-  // 3-5 velocity at midpoint (TODO check how it evolves)
-  // 6 mass (TODO now it's set to zero. correct that)
-  // 7-8 padding? (TODO Check better)
+  // See PARTICLE_FIELDS explaination in gpu.rs
   uint data[];
-  // equivalent:
-  //   float mass[SUBGROUP_SIZE];
-  //   float dvA[3 * SUBGROUP_SIZE];
 };
 
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer AtomicCounters { uint counts[]; };

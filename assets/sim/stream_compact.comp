@@ -1,7 +1,12 @@
+// @assets/sim/stream_compact.comp
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_GOOGLE_include_directive : require
+
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
 
 #include "../bvh_utils.glsl"
 #include "../debug_utils.glsl"
@@ -18,25 +23,34 @@ layout(push_constant, std430) uniform PushConstants {
 } pc;
 
 void main() {
-#ifdef DEBUG_SHADERS
-    if (gl_GlobalInvocationID.x == 0 && gl_GlobalInvocationID.y == 0 && gl_GlobalInvocationID.z == 0) {
-        debugPrintfEXT("Executing compute shader: stream_compact.comp");
-    }
-#endif
-
     uint id = gl_GlobalInvocationID.x;
     uint in_count = min(pc.sparse_in.count, pc.total_elements);
 
+    // Master thread configures the indirect dispatch for subsequent passes
     if (id == 0) {
         pc.packed_out.count = in_count;
-        uint blocks = max(1u, (in_count + 127) / 128);
+
+        // Use the defined macro rather than a hardcoded 128 to ensure sync with bindings
+        uint blocks = max(1u, (in_count + LOCAL_SIZE_X - 1) / LOCAL_SIZE_X);
+
         pc.packed_out.dispatch_x = blocks;
         pc.packed_out.dispatch_y = 1;
         pc.packed_out.dispatch_z = 1;
+
+#ifdef DEBUG_SHADERS
+        debugPrintfEXT("======================================\n");
+        debugPrintfEXT("stream_compact.comp : FORMAT TRANSLATOR\n");
+        debugPrintfEXT("Collisions to Process : %d\n", in_count);
+        debugPrintfEXT("Generated Indirect Dispatch: (%d, 1, 1)\n", blocks);
+
+        if (pc.sparse_in.count > pc.total_elements) {
+            debugPrintfEXT("[WARNING] SparseCollisions reached max capacity (%d)! %d collisions were dropped.\n", pc.total_elements, pc.sparse_in.count - pc.total_elements);
+        }
+        debugPrintfEXT("======================================\n");
+#endif
     }
 
     if (id < in_count) {
-        // Corrected: Accessing 'pairs' instead of 'data' to match bvh_utils.glsl
         SparseCollisionData in_data = pc.sparse_in.pairs[id];
 
         pc.packed_out.pairs[id].a.entity_id = in_data.entity_a;
@@ -46,11 +60,14 @@ void main() {
         pc.packed_out.pairs[id].toi = in_data.toi;
         pc.packed_out.pairs[id].is_lca = in_data.is_lca;
         pc.packed_out.pairs[id].lca_id = in_data.lca_id;
+
+        // BDA layout separation logic is perfectly intact
         pc.packed_out.pairs[id].frame_bda_low = 0u;
         pc.packed_out.pairs[id].norm_x = in_data.contact_normal.x;
         pc.packed_out.pairs[id].norm_y = in_data.contact_normal.y;
         pc.packed_out.pairs[id].norm_z = in_data.contact_normal.z;
         pc.packed_out.pairs[id].frame_bda_high = 0u;
+
         pc.packed_out.pairs[id].pt_x = in_data.contact_point.x;
         pc.packed_out.pairs[id].pt_y = in_data.contact_point.y;
         pc.packed_out.pairs[id].pt_z = in_data.contact_point.z;

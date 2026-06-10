@@ -1,3 +1,4 @@
+// @assets/sim/bp_lcp_solver.comp
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
@@ -7,6 +8,7 @@
 
 #include "../bvh_utils.glsl"
 #include "imex_math.glsl"
+
 #ifdef DEBUG_SHADERS
 #extension GL_EXT_debug_printf : enable
 #endif
@@ -30,10 +32,16 @@ layout(push_constant, std430) uniform PushConstants {
 
 #define MAX_BODIES_PER_ISLAND 32
 
-// Use uint for shared memory arrays to permit thread-safe CAS atomics directly on Local Working Memory
-shared uint shared_v_x[MAX_BODIES_PER_ISLAND]; shared uint shared_v_y[MAX_BODIES_PER_ISLAND]; shared uint shared_v_z[MAX_BODIES_PER_ISLAND];
-shared uint shared_w_x[MAX_BODIES_PER_ISLAND]; shared uint shared_w_y[MAX_BODIES_PER_ISLAND]; shared uint shared_w_z[MAX_BODIES_PER_ISLAND];
-shared float accumulated_normal[128]; shared float accumulated_t1[128]; shared float accumulated_t2[128];
+shared uint shared_v_x[MAX_BODIES_PER_ISLAND];
+shared uint shared_v_y[MAX_BODIES_PER_ISLAND];
+shared uint shared_v_z[MAX_BODIES_PER_ISLAND];
+shared uint shared_w_x[MAX_BODIES_PER_ISLAND];
+shared uint shared_w_y[MAX_BODIES_PER_ISLAND];
+shared uint shared_w_z[MAX_BODIES_PER_ISLAND];
+
+shared float accumulated_normal[128];
+shared float accumulated_t1[128];
+shared float accumulated_t2[128];
 
 void generate_tangents(vec3 normal, out vec3 t1, out vec3 t2) {
     if (abs(normal.x) >= 0.57735) t1 = normalize(vec3(normal.y, -normal.x, 0.0));
@@ -48,19 +56,38 @@ float compute_effective_mass(vec3 dir, vec3 rA, vec3 rB, float invMA, float invM
 }
 
 void main() {
-    uint local_id = gl_LocalInvocationID.x, contact_idx = gl_WorkGroupID.x * gl_WorkGroupSize.x + local_id;
+    uint local_id = gl_LocalInvocationID.x;
+    uint contact_idx = gl_WorkGroupID.x * gl_WorkGroupSize.x + local_id;
     bool valid = (contact_idx < pc.collisions.count);
 
-    accumulated_normal[local_id] = 0.0; accumulated_t1[local_id] = 0.0; accumulated_t2[local_id] = 0.0;
+#ifdef DEBUG_SHADERS
+    if (gl_GlobalInvocationID.x == 0) {
+        debugPrintfEXT("======================================\n");
+        debugPrintfEXT("bp_lcp_solver.comp : STARTED\n");
+        debugPrintfEXT("Active Contacts: %d\n", pc.collisions.count);
+        debugPrintfEXT("======================================\n");
+    }
+#endif
+
+    accumulated_normal[local_id] = 0.0;
+    accumulated_t1[local_id] = 0.0;
+    accumulated_t2[local_id] = 0.0;
 
     if (local_id < min(MAX_BODIES_PER_ISLAND, pc.num_rigid_bodies)) {
         RigidBody rb = pc.rigid_bodies.bodies[local_id];
-        shared_v_x[local_id] = floatBitsToUint(rb.linear_vel_drag.x); shared_v_y[local_id] = floatBitsToUint(rb.linear_vel_drag.y); shared_v_z[local_id] = floatBitsToUint(rb.linear_vel_drag.z);
-        shared_w_x[local_id] = floatBitsToUint(rb.angular_vel_drag.x); shared_w_y[local_id] = floatBitsToUint(rb.angular_vel_drag.y); shared_w_z[local_id] = floatBitsToUint(rb.angular_vel_drag.z);
+        shared_v_x[local_id] = floatBitsToUint(rb.linear_vel_drag.x);
+        shared_v_y[local_id] = floatBitsToUint(rb.linear_vel_drag.y);
+        shared_v_z[local_id] = floatBitsToUint(rb.linear_vel_drag.z);
+        shared_w_x[local_id] = floatBitsToUint(rb.angular_vel_drag.x);
+        shared_w_y[local_id] = floatBitsToUint(rb.angular_vel_drag.y);
+        shared_w_z[local_id] = floatBitsToUint(rb.angular_vel_drag.z);
     } else if (local_id < MAX_BODIES_PER_ISLAND) {
         shared_v_x[local_id] = 0; shared_v_y[local_id] = 0; shared_v_z[local_id] = 0;
         shared_w_x[local_id] = 0; shared_w_y[local_id] = 0; shared_w_z[local_id] = 0;
     }
+
+    // Ensure all shared memory writes are globally visible before continuing
+    memoryBarrierShared();
     barrier();
 
     PackedPair pair;
@@ -76,8 +103,18 @@ void main() {
 
     if (valid) {
         pair = pc.collisions.pairs[contact_idx];
-        is_partA = (pair.a.entity_id == 0xFFFFFFFFu); is_partB = (pair.b.entity_id == 0xFFFFFFFFu);
-        idA = pair.a.primitive_index; idB = pair.b.primitive_index;
+
+        // BUG WARNING: If narrow_ccd.comp wrote 0xFFFFFFFF, this evaluates true for EVERYTHING!
+        is_partA = (pair.a.entity_id == 0xFFFFFFFFu);
+        is_partB = (pair.b.entity_id == 0xFFFFFFFFu);
+        idA = pair.a.primitive_index;
+        idB = pair.b.primitive_index;
+
+#ifdef DEBUG_SHADERS
+        if (contact_idx == 0 && (is_partA || is_partB)) {
+             debugPrintfEXT("[LCP WARNING] Contact 0 flagged as Particle! (Type Erasure Check)\n");
+        }
+#endif
 
         if (is_partA) {
             uint baseA = P_BASE(idA);
@@ -102,6 +139,7 @@ void main() {
         n = vec3(pair.norm_x, pair.norm_y, pair.norm_z); generate_tangents(n, t1, t2);
         vec3 pt = vec3(pair.pt_x, pair.pt_y, pair.pt_z);
         rA = pt - posA; rB = pt - posB;
+
         if (pair.is_lca == 1u) {
             GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
             vec3 pt_micro = (pt - lca.center_pos) / lca.scale;
@@ -124,7 +162,11 @@ void main() {
         target_v_n = bounce + ((0.2 / max(pc.dt, 1e-6)) * max(pair.penetration_depth - 0.01, 0.0));
     }
 
+    // Projected Gauss-Seidel 20-Iteration Loop
     for (int iter = 0; iter < 20; ++iter) {
+
+        // Ensure all CAS atomics from previous iteration are flushed
+        memoryBarrierShared();
         barrier();
 
         vec3 vA = vA_init; vec3 wA = wA_init;
@@ -143,33 +185,48 @@ void main() {
 
             vec3 vA_pt = vA + cross(wA, rA);
             vec3 vB_pt = vB + cross(wB, rB);
+
             if (pair.is_lca == 1u) {
                 GpuReferenceFrame lca = pc.lca_entities.frames[pair.lca_id];
                 vB_pt = vB_pt * lca.scale + lca.center_vel;
             }
+
             vec3 v_rel = vB_pt - vA_pt;
             float jn_delta = eff_m_n * (-dot(v_rel, n) + target_v_n);
-            float old_jn = accumulated_normal[local_id]; float new_jn = max(old_jn + jn_delta, 0.0);
-            jn_delta = new_jn - old_jn; accumulated_normal[local_id] = new_jn;
+            float old_jn = accumulated_normal[local_id];
+            float new_jn = max(old_jn + jn_delta, 0.0);
+
+            jn_delta = new_jn - old_jn;
+            accumulated_normal[local_id] = new_jn;
             vec3 P_n = jn_delta * n;
 
             if (!is_partA && invMA > 0.0 && idA < MAX_BODIES_PER_ISLAND) {
-                ATOMIC_ADD_FLOAT(shared_v_x[idA], -P_n.x * invMA); ATOMIC_ADD_FLOAT(shared_v_y[idA], -P_n.y * invMA); ATOMIC_ADD_FLOAT(shared_v_z[idA], -P_n.z * invMA);
+                ATOMIC_ADD_FLOAT(shared_v_x[idA], -P_n.x * invMA);
+                ATOMIC_ADD_FLOAT(shared_v_y[idA], -P_n.y * invMA);
+                ATOMIC_ADD_FLOAT(shared_v_z[idA], -P_n.z * invMA);
                 vec3 dwA = quat_rotate(qA, invIA * quat_rotate_inv(qA, cross(rA, -P_n)));
-                ATOMIC_ADD_FLOAT(shared_w_x[idA], dwA.x); ATOMIC_ADD_FLOAT(shared_w_y[idA], dwA.y); ATOMIC_ADD_FLOAT(shared_w_z[idA], dwA.z);
+                ATOMIC_ADD_FLOAT(shared_w_x[idA], dwA.x);
+                ATOMIC_ADD_FLOAT(shared_w_y[idA], dwA.y);
+                ATOMIC_ADD_FLOAT(shared_w_z[idA], dwA.z);
             } else if (is_partA && invMA > 0.0) {
-                vA_init += -P_n * invMA;
+                vA_init += -P_n * invMA; // Warning: Isolated thread state update (Jacobi degradation)
             }
+
             if (!is_partB && invMB > 0.0 && idB < MAX_BODIES_PER_ISLAND) {
                 vec3 P_n_micro = P_n / lca_scale;
-                ATOMIC_ADD_FLOAT(shared_v_x[idB], P_n_micro.x * invMB); ATOMIC_ADD_FLOAT(shared_v_y[idB], P_n_micro.y * invMB); ATOMIC_ADD_FLOAT(shared_v_z[idB], P_n_micro.z * invMB);
+                ATOMIC_ADD_FLOAT(shared_v_x[idB], P_n_micro.x * invMB);
+                ATOMIC_ADD_FLOAT(shared_v_y[idB], P_n_micro.y * invMB);
+                ATOMIC_ADD_FLOAT(shared_v_z[idB], P_n_micro.z * invMB);
                 vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_n_micro)));
-                ATOMIC_ADD_FLOAT(shared_w_x[idB], dwB.x); ATOMIC_ADD_FLOAT(shared_w_y[idB], dwB.y); ATOMIC_ADD_FLOAT(shared_w_z[idB], dwB.z);
+                ATOMIC_ADD_FLOAT(shared_w_x[idB], dwB.x);
+                ATOMIC_ADD_FLOAT(shared_w_y[idB], dwB.y);
+                ATOMIC_ADD_FLOAT(shared_w_z[idB], dwB.z);
             } else if (is_partB && invMB > 0.0) {
-                vB_init += (P_n / lca_scale) * invMB;
+                vB_init += (P_n / lca_scale) * invMB; // Warning: Isolated thread state update
             }
         }
 
+        memoryBarrierShared();
         barrier();
 
         if (valid) {
@@ -191,39 +248,66 @@ void main() {
 
             float max_fric = 0.5 * accumulated_normal[local_id];
             float jt1_delta = eff_m_t1 * (-dot(v_rel, t1));
-            float old_jt1 = accumulated_t1[local_id]; float new_jt1 = clamp(old_jt1 + jt1_delta, -max_fric, max_fric);
-            jt1_delta = new_jt1 - old_jt1; accumulated_t1[local_id] = new_jt1;
+            float old_jt1 = accumulated_t1[local_id];
+            float new_jt1 = clamp(old_jt1 + jt1_delta, -max_fric, max_fric);
+            jt1_delta = new_jt1 - old_jt1;
+            accumulated_t1[local_id] = new_jt1;
 
             float jt2_delta = eff_m_t2 * (-dot(v_rel, t2));
-            float old_jt2 = accumulated_t2[local_id]; float new_jt2 = clamp(old_jt2 + jt2_delta, -max_fric, max_fric);
-            jt2_delta = new_jt2 - old_jt2; accumulated_t2[local_id] = new_jt2;
+            float old_jt2 = accumulated_t2[local_id];
+            float new_jt2 = clamp(old_jt2 + jt2_delta, -max_fric, max_fric);
+            jt2_delta = new_jt2 - old_jt2;
+            accumulated_t2[local_id] = new_jt2;
 
             vec3 P_t = jt1_delta * t1 + jt2_delta * t2;
 
             if (!is_partA && invMA > 0.0 && idA < MAX_BODIES_PER_ISLAND) {
-                ATOMIC_ADD_FLOAT(shared_v_x[idA], -P_t.x * invMA); ATOMIC_ADD_FLOAT(shared_v_y[idA], -P_t.y * invMA); ATOMIC_ADD_FLOAT(shared_v_z[idA], -P_t.z * invMA);
+                ATOMIC_ADD_FLOAT(shared_v_x[idA], -P_t.x * invMA);
+                ATOMIC_ADD_FLOAT(shared_v_y[idA], -P_t.y * invMA);
+                ATOMIC_ADD_FLOAT(shared_v_z[idA], -P_t.z * invMA);
                 vec3 dwA = quat_rotate(qA, invIA * quat_rotate_inv(qA, cross(rA, -P_t)));
-                ATOMIC_ADD_FLOAT(shared_w_x[idA], dwA.x); ATOMIC_ADD_FLOAT(shared_w_y[idA], dwA.y); ATOMIC_ADD_FLOAT(shared_w_z[idA], dwA.z);
+                ATOMIC_ADD_FLOAT(shared_w_x[idA], dwA.x);
+                ATOMIC_ADD_FLOAT(shared_w_y[idA], dwA.y);
+                ATOMIC_ADD_FLOAT(shared_w_z[idA], dwA.z);
             } else if (is_partA && invMA > 0.0) {
                 vA_init += -P_t * invMA;
             }
+
             if (!is_partB && invMB > 0.0 && idB < MAX_BODIES_PER_ISLAND) {
                 vec3 P_t_micro = P_t / lca_scale;
-                ATOMIC_ADD_FLOAT(shared_v_x[idB], P_t_micro.x * invMB); ATOMIC_ADD_FLOAT(shared_v_y[idB], P_t_micro.y * invMB); ATOMIC_ADD_FLOAT(shared_v_z[idB], P_t_micro.z * invMB);
+                ATOMIC_ADD_FLOAT(shared_v_x[idB], P_t_micro.x * invMB);
+                ATOMIC_ADD_FLOAT(shared_v_y[idB], P_t_micro.y * invMB);
+                ATOMIC_ADD_FLOAT(shared_v_z[idB], P_t_micro.z * invMB);
                 vec3 dwB = quat_rotate(qB, invIB * quat_rotate_inv(qB, cross(rB, P_t_micro)));
-                ATOMIC_ADD_FLOAT(shared_w_x[idB], dwB.x); ATOMIC_ADD_FLOAT(shared_w_y[idB], dwB.y); ATOMIC_ADD_FLOAT(shared_w_z[idB], dwB.z);
+                ATOMIC_ADD_FLOAT(shared_w_x[idB], dwB.x);
+                ATOMIC_ADD_FLOAT(shared_w_y[idB], dwB.y);
+                ATOMIC_ADD_FLOAT(shared_w_z[idB], dwB.z);
             } else if (is_partB && invMB > 0.0) {
                 vB_init += (P_t / lca_scale) * invMB;
             }
         }
-    }
+    } // End 20-iteration loop
 
+    // Final Sync to write out impulses
+    memoryBarrierShared();
     barrier();
+
     if (valid) {
         vec3 final_impulse = accumulated_normal[local_id] * n + accumulated_t1[local_id] * t1 + accumulated_t2[local_id] * t2;
         pc.outputs.impulses[contact_idx] = final_impulse;
+
 #ifdef DEBUG_SHADERS
-        debugPrintfEXT("LCP SOLVED idA=%d idB=%d vA=(%f,%f,%f) vB=(%f,%f,%f) n=(%f,%f,%f) jn=%f impulse=(%f,%f,%f)\n", idA, idB, vA_init.x, vA_init.y, vA_init.z, vB_init.x, vB_init.y, vB_init.z, n.x, n.y, n.z, accumulated_normal[local_id], final_impulse.x, final_impulse.y, final_impulse.z);
+        // EXPLOSION DETECTOR: LCP diverged and output infinite forces
+        if (isnan(final_impulse.x) || length(final_impulse) > 100000.0) {
+            debugPrintfEXT("[LCP FATAL] Impulses exploded! idA=%d idB=%d | Final Impulse=(%f,%f,%f)\n",
+                idA, idB, final_impulse.x, final_impulse.y, final_impulse.z);
+        }
+
+        // Only print first constraint to avoid overwhelming log buffer
+        if (contact_idx == 0) {
+            debugPrintfEXT("[LCP SUCCESS] idA=%d idB=%d | n=(%1.2f,%1.2f,%1.2f) | jn=%1.2f | impulse=(%1.2f,%1.2f,%1.2f)\n",
+                idA, idB, n.x, n.y, n.z, accumulated_normal[local_id], final_impulse.x, final_impulse.y, final_impulse.z);
+        }
 #endif
     }
 }
