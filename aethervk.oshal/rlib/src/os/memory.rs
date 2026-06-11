@@ -326,6 +326,95 @@ pub mod tracking {
 
   pub struct TrackingAllocator<A: GlobalAlloc>(pub A);
 
+  // ---------------------------------------------------------------------------
+  // Lock-free deferred VMA event queue
+  // ---------------------------------------------------------------------------
+  //
+  // VMA device-memory callbacks run while VMA holds its internal C++ mutex.
+  // Any call that allocates heap memory OR acquires a blocking lock
+  //   (backtrace, dladdr, spin::Mutex::lock, log!, /proc/self/maps)
+  // will EDEADLK against that mutex.
+  //
+  // Solution:
+  //   1. From the callback call `push_vma_event_{alloc,free}` — pure atomics, no alloc.
+  //   2. From safe code (after every cmd.submit, at frame start, etc.) call
+  //      `drain_vma_events()` which processes the queue with full capabilities:
+  //      backtrace capture, BTreeMap updates, logging.
+  //
+  // The ring holds 1024 slots. If it overflows between drains the excess events
+  // are silently dropped (debug-only tracking, acceptable).
+
+  const VMA_RING_CAP: usize = 1024; // must be a power of two
+  const VMA_OP_EMPTY: u8 = 0;
+  const VMA_OP_ALLOC: u8 = 1;
+  const VMA_OP_FREE:  u8 = 2;
+
+  use core::sync::atomic::{AtomicU8, AtomicU64};
+
+  // Parallel arrays: write op LAST (Release) so readers always see consistent addr+size.
+  static VMA_RING_OPS:   [AtomicU8;  VMA_RING_CAP] = { const Z: AtomicU8  = AtomicU8::new(0);  [Z; VMA_RING_CAP] };
+  static VMA_RING_ADDRS: [AtomicU64; VMA_RING_CAP] = { const Z: AtomicU64 = AtomicU64::new(0); [Z; VMA_RING_CAP] };
+  static VMA_RING_SIZES: [AtomicU64; VMA_RING_CAP] = { const Z: AtomicU64 = AtomicU64::new(0); [Z; VMA_RING_CAP] };
+  // Monotonically incrementing write cursor (used mod VMA_RING_CAP).
+  static VMA_RING_WRITE: AtomicUsize = AtomicUsize::new(0);
+
+  /// Enqueue a GPU alloc event from inside a VMA pfnAllocate callback.
+  /// SAFETY: uses ONLY lock-free atomics — safe to call while VMA holds its mutex.
+  #[inline(always)]
+  pub fn push_vma_event_alloc(addr: u64, size: u64) {
+    let idx = VMA_RING_WRITE.fetch_add(1, Ordering::Relaxed) & (VMA_RING_CAP - 1);
+    // Only write if the slot is free; otherwise silently drop (ring overflow).
+    if VMA_RING_OPS[idx].load(Ordering::Acquire) == VMA_OP_EMPTY {
+      VMA_RING_ADDRS[idx].store(addr, Ordering::Relaxed);
+      VMA_RING_SIZES[idx].store(size, Ordering::Relaxed);
+      VMA_RING_OPS[idx].store(VMA_OP_ALLOC, Ordering::Release);
+    }
+  }
+
+  /// Enqueue a GPU free event from inside a VMA pfnFree callback.
+  /// SAFETY: uses ONLY lock-free atomics — safe to call while VMA holds its mutex.
+  #[inline(always)]
+  pub fn push_vma_event_free(addr: u64, size: u64) {
+    let idx = VMA_RING_WRITE.fetch_add(1, Ordering::Relaxed) & (VMA_RING_CAP - 1);
+    if VMA_RING_OPS[idx].load(Ordering::Acquire) == VMA_OP_EMPTY {
+      VMA_RING_ADDRS[idx].store(addr, Ordering::Relaxed);
+      VMA_RING_SIZES[idx].store(size, Ordering::Relaxed);
+      VMA_RING_OPS[idx].store(VMA_OP_FREE, Ordering::Release);
+    }
+  }
+
+  /// Drain all pending VMA events and process them with full capabilities
+  /// (backtrace capture, BTreeMap updates).  Call this from **safe code** only
+  /// (never from inside a VMA callback).
+  pub fn drain_vma_events() {
+    for i in 0..VMA_RING_CAP {
+      // Acquire: pairs with the Release store in push_vma_event_*.
+      let op = VMA_RING_OPS[i].load(Ordering::Acquire);
+      if op == VMA_OP_EMPTY {
+        continue;
+      }
+      // Mark slot as empty so it can be reused before we do the expensive work.
+      VMA_RING_OPS[i].store(VMA_OP_EMPTY, Ordering::Release);
+      let addr = VMA_RING_ADDRS[i].load(Ordering::Relaxed);
+      let size = VMA_RING_SIZES[i].load(Ordering::Relaxed) as usize;
+      match op {
+        VMA_OP_ALLOC => track_gpu_allocation(addr, size),
+        VMA_OP_FREE  => untrack_gpu_allocation(addr),
+        _            => {}
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+
+  /// Track a GPU allocation — captures backtrace and inserts into `GPU_ALLOCATIONS`.
+  ///
+  /// # Safety contract
+  /// Do **not** call this from inside a VMA device-memory callback!  It acquires
+  /// `GPU_ALLOCATIONS` (spin::Mutex) and calls `capture_aethervk_trace`
+  /// (backtrace/dladdr).  Both of those can deadlock if VMA holds its internal
+  /// C++ mutex on the same thread.  Use `push_vma_event_alloc` instead and let
+  /// `drain_vma_events` do the bookkeeping from safe code.
   pub fn track_gpu_allocation(addr: u64, size: usize) {
     if let Some(mut lock) = GPU_ALLOCATIONS.try_lock() {
       if lock.is_none() {

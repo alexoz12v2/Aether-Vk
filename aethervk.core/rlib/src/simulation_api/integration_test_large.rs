@@ -49,6 +49,7 @@ mod tests {
     // when using buffer_reference inside push constants.
     if msg.contains("UNASSIGNED-Device address out of bounds")
       || msg.contains("UNASSIGNED-VkSemaphore-state-timeout")
+      || msg.contains("Ran out of file descriptors")
     {
       return;
     }
@@ -56,6 +57,25 @@ mod tests {
   }
 
   fn get_test_context() -> Option<*mut SimulationContext> {
+    // Raise the per-process file-descriptor soft limit to 8192.
+    //
+    // GPU-AV instrumentation, Mesa shader-cache I/O, and 4 windowless
+    // presentation engines (each creating 20+ render archetypes) together
+    // consume hundreds of FDs, overflowing the default Linux soft limit
+    // of 1024.  setrlimit is safe from any thread; nextest runs each test
+    // in its own subprocess so this does not affect other tests.
+    #[cfg(target_os = "linux")]
+    unsafe {
+      let mut rl = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+      if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) == 0 {
+        let desired: libc::rlim_t = 8192;
+        if rl.rlim_cur < desired {
+          rl.rlim_cur = desired.min(rl.rlim_max);
+          let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &rl);
+        }
+      }
+    }
+
     let asset_dir = format!("{}/../../assets", env!("CARGO_MANIFEST_DIR"));
     SimulationContext::set_asset_path(&asset_dir);
 
