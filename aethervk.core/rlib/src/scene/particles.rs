@@ -61,6 +61,10 @@ pub struct ParticleData {
   pub mass: f32,
   pub velocity: [f32; 3],
   pub active: u32,
+  /// End-of-frame force accumulator (km/s² units). Persisted across simulation ticks
+  /// so the Velocity-Verlet predictor step in `integrate_particles_p1_p2.comp`
+  /// can use F(x_n) from the previous frame rather than a zero vector.
+  pub force: [f32; 3],
 }
 
 impl ParticleData {
@@ -240,6 +244,7 @@ impl ParticleSystemComponent {
         mass: config.density * (4.0 / 3.0) * core::f32::consts::PI * config.particle_radius.powi(3),
         velocity: [velocity.x(), velocity.y(), velocity.z()],
         active: 1,
+        force: [0f32; 3],
       };
       p.set_id(self.next_id as u64);
       p.set_age(0);

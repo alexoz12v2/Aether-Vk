@@ -2078,7 +2078,7 @@ fn emit_particles_from_circles(
         };
 
         // Push slightly outside the surface
-        let emit_pos = world_pos + world_n * 0.001; // 1 meter offset
+        let emit_pos = world_pos + world_n * 1e-8; // ~1.5 km nudge in AU units to clear the mesh surface
 
         let mut occluded = false;
         if let Some(sun_p) = sun_pos {

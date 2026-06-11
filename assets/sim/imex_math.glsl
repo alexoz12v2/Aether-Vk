@@ -7,6 +7,28 @@
 // Slots: 0-2=pos, 3-5=vel, 6=mass, 7-9=force, 10=beta
 #define PARTICLE_FIELDS 11u
 
+// ── Particle coordinate-system contract ─────────────────────────────────────
+// ALL particle systems are children of a micro-frame entity (frame_type == 1).
+// Within a micro-frame:
+//   position  — km  (local to the micro frame, origin = frame center)
+//   velocity  — km/s
+//   force     — km/s²  (per unit mass acceleration; apply_emitters writes this)
+//   dt        — seconds  (converted from µs by the CPU before upload)
+//
+// Macro-frame (frame_type == 0) particle systems are NOT currently supported.
+// apply_emitters_to_particles.comp branches on frame.frame_type to convert the
+// macro-frame emitter position (AU) into km before computing r_local, so the
+// resulting force is always in km/s² regardless of the emitter's frame.
+//
+// VV integration consistency check:
+//   p1_p2:  pos_next  = pos_n  + v_half * dt_s     [km + km/s·s   = km  ✓]
+//           v_half    = v_n    + f_n * inv_m * dt/2 [km/s + km/s²·s = km/s ✓]
+//   p4_5:   v_next    = v_half + f_next * inv_m * dt/2 [km/s + km/s²·s = km/s ✓]
+//
+// If a macro-frame particle system is ever introduced, the position step must be
+// divided by AU_TO_KM (= 149597870.7) before writing back.
+#define KM_TO_AU (1.0 / 149597870.7)
+
 // Compute the AOSOA base index for a given global particle index.
 #define P_BASE(gid) (((gid) / SUBGROUP_SIZE) * (PARTICLE_FIELDS * SUBGROUP_SIZE) + ((gid) % SUBGROUP_SIZE))
 

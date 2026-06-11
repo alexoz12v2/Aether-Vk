@@ -287,8 +287,13 @@ impl DeviceResource for GlobalDeviceAllocator {
       }
     }
     unsafe { mem::ManuallyDrop::drop(&mut self.allocator) };
+    // vmaDestroyAllocator (above) fires pfnFree for every remaining VkDeviceMemory
+    // block. Those FREE events are now sitting in the lock-free ring buffer.
+    // Drain them NOW, before report_leaked_gpu_allocations() reads GPU_ALLOCATIONS,
+    // so the BTreeMap reflects all frees and the leak report is accurate.
     #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
     {
+      aethervk_oshal_rlib::os::memory::tracking::drain_vma_events();
       aethervk_oshal_rlib::os::memory::tracking::report_leaked_gpu_allocations();
     }
   }

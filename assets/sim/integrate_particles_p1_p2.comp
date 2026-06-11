@@ -2,13 +2,22 @@
 //
 // Particle Velocity-Verlet Predictor — Phase 1 & 2
 // ─────────────────────────────────────────────────
-// Frame-start invariant: AOSOA slots 7/8/9 hold F(x_n) from the previous frame.
+// Unit contract (see imex_math.glsl for full derivation):
+//   pos   [km]    — micro-frame local position
+//   vel   [km/s]  — velocity
+//   force [km/s²] — per-unit-mass acceleration (ALWAYS stored in km/s²,
+//                   regardless of whether the force source is a macro or micro
+//                   emitter; apply_emitters_to_particles.comp handles the AU→km
+//                   conversion internally before writing the force slots)
+//   dt    [s]     — sub-step duration, converted from µs by the CPU
 //
-//   v_{n+½} = v_n + (dt/2) · M⁻¹ · F(x_n)     [half-kick]
-//   x_{n+1} = x_n + dt · v_{n+½}               [full position leap]
+// Frame-start invariant: AOSOA slots 7/8/9 hold F(x_n) [km/s²] from the previous frame.
+//
+//   v_{n+½} = v_n  + (dt/2) · M⁻¹ · F(x_n)  [km/s  + s·km/s²  = km/s  ✓]
+//   x_{n+1} = x_n  + dt    · v_{n+½}          [km    + s·km/s   = km    ✓]
 //
 // After writing, CLEARS slots 7/8/9 to 0 so the unified force-generation pass
-// (barnes_hut, bp_particle_self, narrow-phase) can safely atomicAdd into them.
+// (apply_emitters, barnes_hut, narrow-phase) can safely atomicAdd into them.
 // The half-kick velocity v_{n+½} is stored temporarily in slots 3/4/5 for
 // integrate_particles_p4_5 to complete the VV corrector step.
 //
@@ -74,6 +83,7 @@ void main() {
         P_READ(pc.particles, base + 9u * SUBGROUP_SIZE)
     );
 
+    // half-kick: [km/s] + [km/s²] * [s/2] = [km/s]
     vec3 v_half = v_n + f_n * inv_m * half_dt;
 
     vec3 pos_n = vec3(
@@ -82,6 +92,7 @@ void main() {
         P_READ(pc.particles, base + 2u * SUBGROUP_SIZE)
     );
 
+    // full drift: [km] + [km/s] * [s] = [km]
     vec3 pos_next = pos_n + v_half * pc.dt;
 
 #ifdef DEBUG_SHADERS

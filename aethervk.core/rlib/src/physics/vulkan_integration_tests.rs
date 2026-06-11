@@ -4,10 +4,15 @@ mod tests {
     gpu::{
       DeviceAdditionalParams, RenderFrontend, VULKAN_RENDER_BACKEND, new_render_frontend,
       simulation_step, vulkan::device,
-    }, gpu_backends, physics::physics_scene::PhysicsScene, scene::{
+    },
+    gpu_backends,
+    physics::physics_scene::PhysicsScene,
+    scene::{
       ColliderComponent, ColliderShape, KinematicComponent, PhysicalMeshComponent,
       ReferenceFrameType, Scene, TransformComponent,
-    }, simulation::comet::Comet, types::RuntimeParams
+    },
+    simulation::comet::Comet,
+    types::RuntimeParams,
   };
   use aethervk_oshal_rlib::{
     math::{
@@ -821,6 +826,7 @@ mod tests {
           mass: 1.0,
           velocity: [0.0, -1.0, 0.0],
           active: 1,
+          force: [0f32; 3],
         });
       }
     }
@@ -844,7 +850,8 @@ mod tests {
   #[test]
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_barnes_hut_forces() {
-    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.store(true, core::sync::atomic::Ordering::Relaxed);
+    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+      .store(true, core::sync::atomic::Ordering::Relaxed);
     let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
@@ -873,6 +880,7 @@ mod tests {
           mass: 1.0,
           velocity: [0.0, 0.0, 0.0],
           active: 1,
+          force: [0f32; 3],
         });
       }
       // Add one MASSIVE particle far away
@@ -885,6 +893,7 @@ mod tests {
         mass: 1e6,
         velocity: [0.0, 0.0, 0.0],
         active: 1,
+        force: [0f32; 3],
       });
     }
     let _ = scene.add_component(p_sys, p_comp);
@@ -898,7 +907,6 @@ mod tests {
           .unwrap();
 
         crate::gpu::Kernels::toggle_particle_self_gravity(vulkan_device, true);
-
 
         // Run 1 simulation step
         // The massive particle should pull the cluster of 1000 particles towards +X.

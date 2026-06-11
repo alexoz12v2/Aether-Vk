@@ -19,6 +19,10 @@
 #define LOCAL_SIZE_X 128
 #endif
 layout(local_size_x = LOCAL_SIZE_X) in;
+// SUBGROUPS_PER_WG: upper bound used ONLY to size shared arrays.
+// Spec constants cannot size arrays in GLSL, so we use a conservative
+// preprocessor formula. The actual per-WG stride used at runtime is
+// LOCAL_SIZE_X / SUBGROUP_SIZE (computed below in main()).
 const uint SUBGROUPS_PER_WG = (LOCAL_SIZE_X + 3) / 4;
 
 layout(push_constant, std430) uniform PushConstants {
@@ -39,7 +43,12 @@ shared uint shared_stacks[SUBGROUPS_PER_WG][BVH_STACK_DEPTH_SHORT];
 shared uint shared_stack_ptrs[SUBGROUPS_PER_WG];
 
 void main() {
-    uint subgroup_id = gl_SubgroupID, lane_id = gl_SubgroupInvocationID, cluster_job_idx = gl_WorkGroupID.x * SUBGROUPS_PER_WG + subgroup_id;
+    uint subgroup_id = gl_SubgroupID, lane_id = gl_SubgroupInvocationID;
+    // Actual subgroups per WG = LOCAL_SIZE_X / SUBGROUP_SIZE.
+    // For mk_wg_sg variants LOCAL_SIZE_X == SUBGROUP_SIZE so this is 1.
+    // For the default wg128 variant this equals 128 / SUBGROUP_SIZE.
+    uint actual_subgroups_per_wg = LOCAL_SIZE_X / SUBGROUP_SIZE;
+    uint cluster_job_idx = gl_WorkGroupID.x * actual_subgroups_per_wg + subgroup_id;
 
     if (cluster_job_idx >= pc.num_clusters) return;
 
@@ -208,7 +217,11 @@ void main() {
                      vec3 k_com = vec3(subgroupShuffle(s_com.x, src_lane), subgroupShuffle(s_com.y, src_lane), subgroupShuffle(s_com.z, src_lane));
                      float k_mass = subgroupShuffle(s_mass, src_lane);
                      vec3 p_dir = k_com - my_pos; float p_dist_sq = dot(p_dir, p_dir);
-                     my_acc += (p_dir / max(sqrt(p_dist_sq), 1e-6)) * ((pc.G * k_mass) / (p_dist_sq + pc.softening_sq));
+                     vec3 dacc = (p_dir / max(sqrt(p_dist_sq), 1e-6)) * ((pc.G * k_mass) / (p_dist_sq + pc.softening_sq));
+                     my_acc += dacc;
+ #ifdef DEBUG_SHADERS
+                     if (my_p_idx == 0) debugPrintfEXT("BH src_lane=%u: k_com=(%f,%f,%f), k_mass=%f, dacc.x=%f\n", src_lane, k_com.x, k_com.y, k_com.z, k_mass, dacc.x);
+ #endif
                  }
              }
          }
@@ -221,9 +234,12 @@ void main() {
                  if (i_am_valid) {
                      uint l_start = subgroupShuffle(s_start, src_lane);
                      uint l_count = subgroupShuffle(s_count, src_lane);
-                     for (uint p = 0; p < l_count; p++) {
-                         uint other_idx = l_start + p;
-                         if (other_idx >= my_start && other_idx < my_start + my_count) continue;
+ #ifdef DEBUG_SHADERS
+                     if (my_p_idx == 0) debugPrintfEXT("ExactLoop: src_lane=%u, l_start=%u, l_count=%u\n", src_lane, l_start, l_count);
+ #endif
+                      for (uint p = 0; p < l_count; p++) {
+                          uint other_idx = l_start + p;
+                          if (other_idx >= my_start && other_idx < my_start + my_count) continue;
 
                          uint base = P_BASE(other_idx);
 
@@ -239,6 +255,9 @@ void main() {
                          vec3 p_dir = other_pos - my_pos; float p_dist_sq = dot(p_dir, p_dir);
                          my_acc += (p_dir / max(sqrt(p_dist_sq), 1e-6)) * ((pc.G * other_mass) / (p_dist_sq + pc.softening_sq));
                      }
+ #ifdef DEBUG_SHADERS
+                     if (my_p_idx == 0) debugPrintfEXT("After ExactLoop src_lane=%u: acc=(%f,%f,%f)\n", src_lane, my_acc.x, my_acc.y, my_acc.z);
+ #endif
                  }
              }
          }

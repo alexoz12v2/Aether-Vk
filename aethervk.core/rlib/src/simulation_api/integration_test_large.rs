@@ -66,7 +66,10 @@ mod tests {
     // in its own subprocess so this does not affect other tests.
     #[cfg(target_os = "linux")]
     unsafe {
-      let mut rl = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+      let mut rl = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+      };
       if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) == 0 {
         let desired: libc::rlim_t = 8192;
         if rl.rlim_cur < desired {
@@ -172,6 +175,7 @@ mod tests {
               velocity: [0.0, 0.0, 0.0],
               mass: 1.0,
               active: 1,
+              force: [0f32; 3],
             });
           }
         }

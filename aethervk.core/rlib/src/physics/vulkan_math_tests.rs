@@ -1311,6 +1311,7 @@ mod tests {
         velocity: v0,
         mass: 1.0,
         active: 1,
+        force: [0f32; 3],
       });
     }
     scene.add_component(mesh_entity, particle_sys).unwrap();
@@ -1415,7 +1416,8 @@ mod tests {
 
   #[test]
   fn test_barnes_hut_3_clusters() {
-    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.store(true, core::sync::atomic::Ordering::SeqCst);
+    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+      .store(true, core::sync::atomic::Ordering::SeqCst);
     let mut ctx = VulkanTestContext::new();
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
@@ -1447,68 +1449,113 @@ mod tests {
 
     {
       let mut parts = particle_sys.particles.write();
-      
+
       // Test particle at origin
       parts.push(crate::scene::particles::ParticleData {
-        id_low: 1, id_high: 0, age_low: 0, age_high: 0,
+        id_low: 1,
+        id_high: 0,
+        age_low: 0,
+        age_high: 0,
         position: [0.0, 0.0, 0.0],
         velocity: [0.0, 0.0, 0.0],
         mass: 1.0,
         active: 1,
+        force: [0f32; 3],
       });
 
       // Cluster 1
       for _ in 0..100 {
         parts.push(crate::scene::particles::ParticleData {
-          id_low: 2, id_high: 0, age_low: 0, age_high: 0,
+          id_low: 2,
+          id_high: 0,
+          age_low: 0,
+          age_high: 0,
           position: [100.0, 0.0, 0.0],
           velocity: [0.0, 0.0, 0.0],
           mass: 1.0,
           active: 1,
+          force: [0f32; 3],
         });
       }
-      
+
       // Cluster 2
       for _ in 0..100 {
         parts.push(crate::scene::particles::ParticleData {
-          id_low: 3, id_high: 0, age_low: 0, age_high: 0,
+          id_low: 3,
+          id_high: 0,
+          age_low: 0,
+          age_high: 0,
           position: [0.0, 100.0, 0.0],
           velocity: [0.0, 0.0, 0.0],
           mass: 1.0,
           active: 1,
+          force: [0f32; 3],
         });
       }
 
       // Cluster 3
       for _ in 0..100 {
         parts.push(crate::scene::particles::ParticleData {
-          id_low: 4, id_high: 0, age_low: 0, age_high: 0,
+          id_low: 4,
+          id_high: 0,
+          age_low: 0,
+          age_high: 0,
           position: [0.0, 0.0, 100.0],
           velocity: [0.0, 0.0, 0.0],
           mass: 1.0,
           active: 1,
+          force: [0f32; 3],
         });
       }
     }
     scene.add_component(mesh_entity, particle_sys.clone()).unwrap();
-    println!("AFTER PUSH: len={}, id_low={}", particle_sys.particles.read().len(), particle_sys.particles.read()[0].id_low);
+    println!(
+      "AFTER PUSH: len={}, id_low={}",
+      particle_sys.particles.read().len(),
+      particle_sys.particles.read()[0].id_low
+    );
 
-    ctx.frontend.with_device(ctx.device_handle, |dev| {
-        let vulkan_device = dev.as_any().downcast_ref::<crate::gpu_backends::vulkan::device::Device>().unwrap();
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
         use crate::gpu::Kernels;
         vulkan_device.toggle_particle_self_gravity(true);
-        println!("BEFORE run_simulation: id_low={}", scene.with_component(mesh_entity, |p: &crate::scene::particles::ParticleSystemComponent| p.particles.read()[0].id_low).unwrap());
+        println!(
+          "BEFORE run_simulation: id_low={}",
+          scene
+            .with_component(
+              mesh_entity,
+              |p: &crate::scene::particles::ParticleSystemComponent| p.particles.read()[0].id_low
+            )
+            .unwrap()
+        );
         run_simulation(vulkan_device, &mut scene, duration_seconds, false);
-        println!("AFTER run_simulation: id_low={}", scene.with_component(mesh_entity, |p: &crate::scene::particles::ParticleSystemComponent| p.particles.read()[0].id_low).unwrap());
+        println!(
+          "AFTER run_simulation: id_low={}",
+          scene
+            .with_component(
+              mesh_entity,
+              |p: &crate::scene::particles::ParticleSystemComponent| p.particles.read()[0].id_low
+            )
+            .unwrap()
+        );
         Ok(())
-    }).unwrap();
+      })
+      .unwrap();
 
-    let final_sys = scene.with_component(mesh_entity, |p: &crate::scene::particles::ParticleSystemComponent| {
-      p.particles.read().clone()
-    }).unwrap();
+    let final_sys = scene
+      .with_component(
+        mesh_entity,
+        |p: &crate::scene::particles::ParticleSystemComponent| p.particles.read().clone(),
+      )
+      .unwrap();
 
     let test_p = &final_sys[0];
-    
+
     // Barnes-Hut config: G = 1.0, theta = 0.5.
     // Distance to each cluster is 100. Cluster mass is 100.
     // F_mag = G * M / r^2 = 1.0 * 100 / 100^2 = 0.01.
@@ -1524,7 +1571,6 @@ mod tests {
     let expected_v = -0.0001366;
     let tolerance = 0.00003; // generous tolerance for subgroup/tree topology variations
 
-
     let v_x = test_p.velocity[0];
     let v_y = test_p.velocity[1];
     let v_z = test_p.velocity[2];
@@ -1535,8 +1581,23 @@ mod tests {
       println!("P[{}]: {:?}", i, final_sys[i]);
     }
 
-    assert!((v_x - expected_v).abs() < tolerance, "Velocity X mismatch: expected {}, got {}", expected_v, v_x);
-    assert!((v_y - expected_v).abs() < tolerance, "Velocity Y mismatch: expected {}, got {}", expected_v, v_y);
-    assert!((v_z - expected_v).abs() < tolerance, "Velocity Z mismatch: expected {}, got {}", expected_v, v_z);
+    assert!(
+      (v_x - expected_v).abs() < tolerance,
+      "Velocity X mismatch: expected {}, got {}",
+      expected_v,
+      v_x
+    );
+    assert!(
+      (v_y - expected_v).abs() < tolerance,
+      "Velocity Y mismatch: expected {}, got {}",
+      expected_v,
+      v_y
+    );
+    assert!(
+      (v_z - expected_v).abs() < tolerance,
+      "Velocity Z mismatch: expected {}, got {}",
+      expected_v,
+      v_z
+    );
   }
 }
