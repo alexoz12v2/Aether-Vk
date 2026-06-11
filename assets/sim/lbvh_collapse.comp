@@ -108,6 +108,18 @@ void main() {
     }
 
 #ifdef DEBUG_SHADERS
+    // Per-lane traversal result dump for multi_node 0
+    if (multi_node_idx == 0) {
+        bool is_valid_here = (break_d <= 0) || ((lane & ((1u << break_d) - 1u)) == 0u);
+        debugPrintfEXT("COLLAPSE lane=%u: break_d=%d, valid=%d, f_parent=%u, f_dir=%u, pstart=%u, pcount=%u, mass=%f, com=(%f,%f,%f)\n",
+            lane, break_d, int(is_valid_here), f_parent, f_dir,
+            tlas_pstart(pc.binary_bvh, f_parent, f_dir),
+            tlas_pcount(pc.binary_bvh, f_parent, f_dir),
+            tlas_mass(pc.binary_bvh, f_parent, f_dir),
+            tlas_com_x(pc.binary_bvh, f_parent, f_dir),
+            tlas_com_y(pc.binary_bvh, f_parent, f_dir),
+            tlas_com_z(pc.binary_bvh, f_parent, f_dir));
+    }
     // Trap 4: Ultimate memory bounds trap before the massive attribute read/write block
     if (f_parent > 100000000u) {
         debugPrintfEXT("TRAP! FATAL f_parent=%u before massive data read! multi_node=%u, lane=%u\n", f_parent, multi_node_idx, lane);
@@ -123,7 +135,8 @@ void main() {
     tlas_write_max_z    (pc.multi_bvh, multi_node_idx, lane, tlas_max_z    (pc.binary_bvh, f_parent, f_dir));
     tlas_write_child    (pc.multi_bvh, multi_node_idx, lane, payload);
     tlas_write_metadata (pc.multi_bvh, multi_node_idx, lane, bvh_pack_metadata(is_leaf, BVH_FRAME_MICRO, BVH_SHAPE_AABB, payload));
-    tlas_write_pcount   (pc.multi_bvh, multi_node_idx, lane, 0xFFFFFFFFu);
+    tlas_write_pstart   (pc.multi_bvh, multi_node_idx, lane, tlas_pstart  (pc.binary_bvh, f_parent, f_dir));
+    tlas_write_pcount   (pc.multi_bvh, multi_node_idx, lane, tlas_pcount  (pc.binary_bvh, f_parent, f_dir));
     tlas_write_mass     (pc.multi_bvh, multi_node_idx, lane, tlas_mass    (pc.binary_bvh, f_parent, f_dir));
     tlas_write_com_x    (pc.multi_bvh, multi_node_idx, lane, tlas_com_x   (pc.binary_bvh, f_parent, f_dir));
     tlas_write_com_y    (pc.multi_bvh, multi_node_idx, lane, tlas_com_y   (pc.binary_bvh, f_parent, f_dir));

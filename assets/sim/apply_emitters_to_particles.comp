@@ -1,4 +1,16 @@
 // @assets/sim/apply_emitters_to_particles.comp
+//
+// Force unit contract:
+//   Gravity emitter: position in AU (macro-frame world space).
+//   Particle:        position in km (micro-frame local) when frame_type == 1,
+//                    or AU (macro-frame) when frame_type == 0.
+//
+//   r_local is always computed in km by the frame_type branch below:
+//     macro particle: r_local = (emitter_AU - pos_AU) * AU_TO_KM   [km]
+//     micro particle: r_local = (emitter_AU - frame.center_AU) / scale - pos_km [km]
+//
+//   force_mag = mu_eff * mass / dist_km²  →  [km³/s² * kg / km²] = [km·kg/s²]
+//   f_acc / mass  → acceleration [km/s²]  (stored in AOSOA slots 7-9)
 #version 450 core
 #extension GL_EXT_buffer_reference2         : require
 #extension GL_EXT_buffer_reference_uvec2    : require
@@ -66,6 +78,12 @@ void main() {
         }
     }
     
+    // Read particle-intrinsic radiation pressure coefficient β from AOSOA slot 10.
+    float p_beta = 0.0;
+    if (is_active) {
+        p_beta = P_READ(pc.particles, base + 10u * SUBGROUP_SIZE);
+    }
+    
     vec3 f_acc = vec3(0.0);
 
     for (uint e = 0u; e < pc.num_emitters; ++e) {
@@ -93,7 +111,8 @@ void main() {
                 float dist3     = dist_sq * dist;
                 float dist5     = dist3 * dist_sq;
                 float softening = 1.0 - exp(-dist5);
-                float mu_eff    = s_em_mu * (1.0 - s_em_beta);
+                float mu_eff    = s_em_mu * (1.0 - p_beta);
+            // r_local [km]; force_mag [km/s²·kg]; f_acc accumulates [km/s²] per unit mass
                 float force_mag = (mu_eff * mass * softening) / dist_sq;
                 f_acc += (r_local / dist) * force_mag;
             }

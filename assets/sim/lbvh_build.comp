@@ -144,9 +144,9 @@ void main() {
     if (n <= 1 || idx >= n - 1) return;
 
 #ifdef DEBUG_SHADERS
-    bool is_trace_thread = (idx == 0);
+    bool is_trace_thread = true; // Print for ALL internal nodes
     if (is_trace_thread) {
-        debugPrintfEXT("--- STARTING HIERARCHY BUILD idx=0 --- n=%u, num_prims=%u\n", n, pc.num_primitives);
+        debugPrintfEXT("--- BUILD idx=%u --- n=%u, num_prims=%u\n", idx, n, pc.num_primitives);
     }
 #endif
 
@@ -155,13 +155,13 @@ void main() {
     int last = int(range.y);
 
 #ifdef DEBUG_SHADERS
-    if (is_trace_thread) debugPrintfEXT("Determined Range: first=%d, last=%d\n", first, last);
+    if (is_trace_thread) debugPrintfEXT("BUILD idx=%u Range: first=%d, last=%d\n", idx, first, last);
 #endif
 
     int split = find_split(n, first, last);
 
 #ifdef DEBUG_SHADERS
-    if (is_trace_thread) debugPrintfEXT("Found Split: split=%d\n", split);
+    if (is_trace_thread) debugPrintfEXT("BUILD idx=%u Split=%d\n", idx, split);
 #endif
 
     uint left_child;
@@ -185,12 +185,11 @@ void main() {
     }
 
 #ifdef DEBUG_SHADERS
-    uint max_nodes = n * 2; // Max nodes in a standard Karras radix tree (n leaves + n-1 internal)
+    uint max_nodes = n * 2;
     if (is_trace_thread) {
-        debugPrintfEXT("Children evaluated: left=%u (leaf=%d), right=%u (leaf=%d)\n", left_child, int(left_is_leaf), right_child, int(right_is_leaf));
+        debugPrintfEXT("BUILD idx=%u Children: left=%u (leaf=%d), right=%u (leaf=%d)\n", idx, left_child, int(left_is_leaf), right_child, int(right_is_leaf));
     }
 
-    // TRAP memory stomps before they happen
     if (idx >= max_nodes) debugPrintfEXT("TRAP! idx (%u) >= max_nodes (%u)\n", idx, max_nodes);
     if (left_child >= max_nodes) debugPrintfEXT("TRAP! left_child (%u) >= max_nodes (%u) at idx=%u\n", left_child, max_nodes, idx);
     if (right_child >= max_nodes) debugPrintfEXT("TRAP! right_child (%u) >= max_nodes (%u) at idx=%u\n", right_child, max_nodes, idx);
@@ -211,6 +210,6 @@ void main() {
     tlas_write_valid_mask(pc.bvh, idx, uvec2(3u, 0u)); // Children 0 and 1 are valid
 
 #ifdef DEBUG_SHADERS
-    if (is_trace_thread) debugPrintfEXT("--- FINISHED HIERARCHY BUILD idx=0 ---\n");
+    if (is_trace_thread) debugPrintfEXT("--- FINISHED BUILD idx=%u ---\n", idx);
 #endif
 }

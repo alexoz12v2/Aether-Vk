@@ -2,11 +2,12 @@
 //
 // Particle Velocity-Verlet Corrector — Phase 4 & 5
 // ─────────────────────────────────────────────────
-// Invariant entering this pass:
-//   • AOSOA slots 3/4/5 hold v_{n+½}  (stored by integrate_particles_p1_p2)
-//   • AOSOA slots 7/8/9 hold F(x_{n+1}) (written by force generators after p3)
+// Unit contract (see imex_math.glsl for full derivation):
+//   slots 3-5  v_{n+½} [km/s]  — half-kick velocity from p1_p2
+//   slots 7-9  F(x_{n+1}) [km/s²] — forces written by apply_emitters / barnes_hut
+//   dt    [s]  — same sub-step duration as p1_p2
 //
-//   v_{n+1} = v_{n+½} + (dt/2) · M⁻¹ · F(x_{n+1})    [VV corrector]
+//   v_{n+1} = v_{n+½} + (dt/2) · M⁻¹ · F(x_{n+1})   [km/s + s·km/s² = km/s ✓]
 //
 // The force buffer is intentionally NOT cleared — F(x_{n+1}) persists as
 // F(x_n) for the NEXT frame's integrate_particles_p1_p2 pass.
@@ -97,6 +98,7 @@ void main() {
     vec3 v_half = vec3(vx, vy, vz);
     vec3 f_next = vec3(fx, fy, fz);
 
+    // VV corrector: [km/s] + [km/s²] * [s/2] = [km/s]
     vx += half_dt * inv_m * fx;
     vy += half_dt * inv_m * fy;
     vz += half_dt * inv_m * fz;

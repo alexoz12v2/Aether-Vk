@@ -3412,6 +3412,107 @@ pub struct FfiScreenSpaceBillboardDTO {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_addScreenSpaceBillboard(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  image_path: *const c_char,
+  ndc_x: f32,
+  ndc_y: f32,
+  scale: f32,
+  rotation_deg: f32,
+  opacity: f32,
+  z_index: i32,
+  viewport_id: u64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let image_path_str = if image_path.is_null() {
+    ""
+  } else {
+    unsafe { CStr::from_ptr(image_path).to_str().unwrap_or("") }
+  };
+  ctx_ref
+    .add_screen_space_billboard_component(
+      scene_id,
+      entity,
+      image_path_str,
+      ndc_x,
+      ndc_y,
+      scale,
+      rotation_deg,
+      opacity,
+      z_index,
+      viewport_id,
+    )
+    .is_ok()
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setScreenSpaceBillboard(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  ndc_x: f32,
+  ndc_y: f32,
+  scale: f32,
+  rotation_deg: f32,
+  opacity: f32,
+  z_index: i32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref
+    .set_screen_space_billboard(
+      scene_id,
+      entity,
+      ndc_x,
+      ndc_y,
+      scale,
+      rotation_deg,
+      opacity,
+      z_index,
+    )
+    .is_ok()
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getScreenSpaceBillboard(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  out_data: *mut FfiScreenSpaceBillboardDTO,
+) -> bool {
+  if ctx.is_null() || out_data.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  if let Ok(dto) = ctx_ref.get_screen_space_billboard(scene_id, entity) {
+    unsafe {
+      *out_data = FfiScreenSpaceBillboardDTO {
+        ndc_x: dto.ndc_x,
+        ndc_y: dto.ndc_y,
+        scale: dto.scale,
+        rotation_deg: dto.rotation_deg,
+        opacity: dto.opacity,
+        z_index: dto.z_index,
+        viewport_id: dto.viewport_id,
+      };
+    }
+    true
+  } else {
+    false
+  }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_setMarkers(
   ctx: *mut SimulationContext,
   scene_id: u64,
