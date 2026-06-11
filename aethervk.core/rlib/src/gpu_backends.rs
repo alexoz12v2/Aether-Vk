@@ -867,21 +867,22 @@ where
             t_c,
           )?;
 
-          let rewind_bvh = AutoDiscard::new(
-            kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, t_c)?,
-            |b| kernels.discard_bvh(b),
-          );
-          kernels.compute_self_gravity(&mut cmd, &rewind_bvh, &mut particles)?;
-          kernels.apply_emitters_to_particles(
-            &mut cmd,
-            &mut particles,
-            &emitters,
-            &frames,
-            &particle_frame_ids,
-            n_emitters,
-          )?;
-          kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, t_c, current_time)?;
-
+          if !particle_metadata.is_empty() {
+            let rewind_bvh = AutoDiscard::new(
+              kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, t_c)?,
+              |b| kernels.discard_bvh(b),
+            );
+            kernels.compute_self_gravity(&mut cmd, &rewind_bvh, &mut particles)?;
+            kernels.apply_emitters_to_particles(
+              &mut cmd,
+              &mut particles,
+              &emitters,
+              &frames,
+              &particle_frame_ids,
+              n_emitters,
+            )?;
+            kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, t_c, current_time)?;
+          }
           // Apply either an elastic or inelastic response at the proper time t_c
           kernels.apply_collision_responses(
             &mut cmd,
@@ -909,31 +910,23 @@ where
                 n_emitters,
                 remaining_dt,
               )?;
-              let final_bvh = kernels.build_motion_bvh(
-                &mut cmd,
-                &kinematics,
-                &rigid_bodies,
-                &mut particles,
-                &mut particle_frame_ids,
-                remaining_dt,
-              )?;
-              kernels.compute_self_gravity(&mut cmd, &final_bvh, &mut particles)?;
-              kernels.apply_emitters_to_particles(
-                &mut cmd,
-                &mut particles,
-                &emitters,
-                &frames,
-                &particle_frame_ids,
-                n_emitters,
-              )?;
-              #[cfg(test)] println!("!!! EXEC: compute_self_gravity and imex_integrate_particles_p4_5");
-              kernels.imex_integrate_particles_p4_5(
-                &mut cmd,
-                &mut particles,
-                remaining_dt,
-                current_time + t_c,
-              )?;
-              kernels.discard_bvh(final_bvh);
+              if !particle_metadata.is_empty() {
+                let final_bvh = AutoDiscard::new(
+                  kernels.build_motion_bvh(
+                    &mut cmd, &kinematics, &rigid_bodies, &mut particles,
+                    &mut particle_frame_ids, remaining_dt,
+                  )?,
+                  |b| kernels.discard_bvh(b),
+                );
+                kernels.compute_self_gravity(&mut cmd, &final_bvh, &mut particles)?;
+                kernels.apply_emitters_to_particles(
+                  &mut cmd, &mut particles, &emitters, &frames, &particle_frame_ids, n_emitters,
+                )?;
+                #[cfg(test)] println!("!!! EXEC: compute_self_gravity and imex_integrate_particles_p4_5");
+                kernels.imex_integrate_particles_p4_5(
+                  &mut cmd, &mut particles, remaining_dt, current_time + t_c,
+                )?;
+              }
             }
             current_time = end_time; // CCD complete for this frame
           } else {

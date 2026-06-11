@@ -623,22 +623,20 @@ impl CommandBuffer for VulkanCommandBuffer {
 
       device.end_command_buffer(self.cmd).map_err(|e| GpuError::from(e))?;
 
-      // Create a throwaway timeline semaphore for this submission
-      let mut type_info = vk::SemaphoreTypeCreateInfo::default()
-        .semaphore_type(vk::SemaphoreType::TIMELINE)
-        .initial_value(0);
-      let sem_ci = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
-      self.throwaway_sem =
-        device.handle.create_semaphore(&sem_ci, None).map_err(|e| GpuError::from(e))?;
-
+      // Signal only the persistent timeline semaphore -- no throwaway needed.
+      // Previously a throwaway timeline semaphore was created per-submit and
+      // queued into the discard pool, accumulating one VkSemaphore/DRM-syncobj
+      // per submit. In long tests (test_visual_physics_render_sync) this
+      // exhausted the OS file-descriptor limit. Callers that need completion
+      // detection can wait on timeline_sem at the returned timeline_value.
       let command_buffers = [self.cmd];
-      let signal_semaphores = [self.timeline_sem, self.throwaway_sem];
+      let signal_semaphores = [self.timeline_sem];
 
       // TAKE SUBMISSION LOCK BEFORE ALLOCATING TIMELINE!
       // This ensures that the order we get timeline values exactly matches the order we submit to the queue.
       let _guard = device.submission_lock.lock();
       self.timeline_value = next_submit_value.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
-      let signal_values = [self.timeline_value, 1];
+      let signal_values = [self.timeline_value];
 
       let mut timeline_info =
         vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&signal_values);
@@ -667,7 +665,13 @@ impl CommandBuffer for VulkanCommandBuffer {
         self.command_pools.clone(),
         self.timeline_value,
       );
-      discard_pool.discard_semaphore(self.throwaway_sem, self.timeline_value);
+
+      // Drain the lock-free VMA event ring buffer now that we are in safe code
+      // (no VMA mutex held). This processes any alloc/free events that were
+      // enqueued by the VMA device-memory callbacks during command recording,
+      // capturing backtraces and updating GPU_ALLOCATIONS.
+      #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
+      aethervk_oshal_rlib::os::memory::tracking::drain_vma_events();
     }
 
     Ok(Some(crate::gpu::CommandBufferSyncInfo {
@@ -1122,6 +1126,13 @@ impl VulkanComputeKernels {
 
     self.pipelines.discard(&self.discard_pool, u64::MAX);
     self.discard_pool.destroy_discarded_resources_all(device);
+
+    // Drain the VMA event ring one last time so all alloc/free events that
+    // fired during cleanup are flushed into GPU_ALLOCATIONS before we destroy
+    // the allocator. This ensures report_leaked_gpu_allocations() sees the
+    // full picture. Must be called BEFORE destroying the VMA allocator.
+    #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
+    aethervk_oshal_rlib::os::memory::tracking::drain_vma_events();
 
     // In test builds the watchdog buffer is stored in a thread-local.
     // It must be freed here — before the VMA allocator is destroyed —
@@ -3124,19 +3135,18 @@ impl VulkanComputeKernels {
           device.end_command_buffer(cmd_handle)
             .expect("[BVH-SYNC] end_command_buffer failed");
 
-          let mut type_info = vk::SemaphoreTypeCreateInfo::default()
-            .semaphore_type(vk::SemaphoreType::TIMELINE)
-            .initial_value(0);
-          let sem_ci = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
-          let throwaway = device.handle.create_semaphore(&sem_ci, None)
-            .expect("[BVH-SYNC] create_semaphore failed");
-
+          // Signal only cmd.timeline_sem -- no throwaway semaphore needed.
+          // Waiting on cmd.timeline_sem at the submitted value gives the same
+          // GPU-completion guarantee with the same 60-second hang timeout, but
+          // without allocating an extra VkSemaphore / DRM syncobj per call.
+          // The extra semaphore was exhausting the OS FD limit in long-running
+          // tests (e.g. test_visual_physics_render_sync).
           let cbs = [cmd_handle];
-          let sigs = [cmd.timeline_sem, throwaway];
+          let sigs = [cmd.timeline_sem];
           let _guard = device.submission_lock.lock();
           cmd.timeline_value = cmd.next_submit_value_ptr.as_ref()
             .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
-          let sig_vals = [cmd.timeline_value, 1u64];
+          let sig_vals = [cmd.timeline_value];
           let mut tl_info = vk::TimelineSemaphoreSubmitInfo::default()
             .signal_semaphore_values(&sig_vals);
           let submit_info = vk::SubmitInfo::default()
@@ -3149,10 +3159,9 @@ impl VulkanComputeKernels {
           cmd.assigned_timeline_value.store(cmd.timeline_value, core::sync::atomic::Ordering::Release);
 
           aethervk_oshal_rlib::log!("[BVH-SYNC] {} — waiting (60s timeout)...", $label);
-          device.wait_for_semaphore_value(throwaway, 1, 60_000_000_000)
+          device.wait_for_semaphore_value(cmd.timeline_sem, cmd.timeline_value, 60_000_000_000)
             .expect(&alloc::format!("[BVH-SYNC] TIMEOUT waiting after '{}' — THIS SHADER HANGS!", $label));
           aethervk_oshal_rlib::log!("[BVH-SYNC] {} — GPU completed ✓", $label);
-          device.handle.destroy_semaphore(throwaway, None);
 
           // Recycle old VkCommandBuffer and allocate a fresh one from the pool
           let _ = cmd.command_pools.recycle(cmd.tid, cmd.id, cmd_handle);
@@ -4848,21 +4857,14 @@ impl Kernels for Device {
         .end_command_buffer(cmd.cmd)
         .map_err(|e| EngineError::from(GpuError::from(e)))?;
 
-      let mut type_info = vk::SemaphoreTypeCreateInfo::default()
-        .semaphore_type(vk::SemaphoreType::TIMELINE)
-        .initial_value(0);
-      let sem_ci = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
-      cmd.throwaway_sem = device
-        .handle
-        .create_semaphore(&sem_ci, None)
-        .map_err(|e| EngineError::from(GpuError::from(e)))?;
-
+      // No throwaway semaphore -- wait on the persistent cmd.timeline_sem instead.
+      // Same hang-detection timeout (60s), zero extra VkSemaphore/DRM-syncobj per call.
       let command_buffers = [cmd.cmd];
-      let signal_semaphores = [cmd.timeline_sem, cmd.throwaway_sem];
+      let signal_semaphores = [cmd.timeline_sem];
 
       let _guard = device.submission_lock.lock();
       cmd.timeline_value = next_submit_value.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
-      let signal_values = [cmd.timeline_value, 1];
+      let signal_values = [cmd.timeline_value];
 
       let mut timeline_info =
         vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&signal_values);
@@ -4886,17 +4888,15 @@ impl Kernels for Device {
       aethervk_oshal_rlib::log!("debug_sync_barrier: before wait_for_semaphore_value");
       self
         .device
-        .wait_for_semaphore_value(cmd.throwaway_sem, 1, 60_000_000_000) // 60s timeout
+        .wait_for_semaphore_value(cmd.timeline_sem, cmd.timeline_value, 60_000_000_000)
         .map_err(|e| {
           EngineError::Gpu(crate::gpu_err!(
-            "debug_sync_barrier throwaway sem wait failed: {:?}",
+            "debug_sync_barrier timeline sem wait failed: {:?}",
             e
           ))
         })?;
       aethervk_oshal_rlib::log!("debug_sync_barrier: after wait_for_semaphore_value");
 
-      // Manually clean up since we waited synchronously!
-      device.handle.destroy_semaphore(cmd.throwaway_sem, None);
       let _ = cmd.command_pools.recycle(cmd.tid, cmd.id, cmd.cmd);
       cmd.throwaway_sem = vk::Semaphore::null();
     }

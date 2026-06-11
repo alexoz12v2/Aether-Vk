@@ -37,60 +37,77 @@ macro_rules! track_gpu_free {
 #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
 #[allow(unused)]
 unsafe extern "C" fn on_device_alloc(
-  allocator: vk_mem::ffi::VmaAllocator,
-  memory_type: u32,
+  _allocator: vk_mem::ffi::VmaAllocator,
+  _memory_type: u32,
   memory: vk::DeviceMemory,
   size: vk::DeviceSize,
-  p_user_data: *mut core::ffi::c_void,
+  _p_user_data: *mut core::ffi::c_void,
 ) {
   use ash::vk::Handle;
+  // SAFETY: this callback runs while VMA holds its internal C++ std::mutex.
+  // ONLY lock-free atomic operations are safe here. Anything that touches the
+  // heap allocator (log!, format!, alloc::*), a blocking lock (spin::Mutex,
+  // backtrace, dladdr) or /proc/self/maps will deadlock (EDEADLK) against
+  // VMA's mutex or glibc's internal allocator mutex.
+  //
+  // The commented-out code below uses the full-fidelity tracking path; it is
+  // preserved for reference and can be restored once the EDEADLK hazard is
+  // removed (e.g. by rebuilding with a separate allocator domain or by moving
+  // the Vulkan device to a thread where none of those locks are re-entered).
+  //
+  // HOW TRACKING WORKS NOW:
+  //   push_vma_event_alloc writes {addr, size} into a 1024-slot lock-free ring
+  //   buffer (pure atomics, no alloc). Safe code calls drain_vma_events() — e.g.
+  //   after cmd.submit() or at frame start — to process the events with
+  //   full capabilities: backtrace capture, BTreeMap updates, logging.
+  //
+  // --- original code (DO NOT DELETE) ---
+  // let frame_index: u64 = if !p_user_data.is_null() {
+  //   unsafe { &*p_user_data.cast::<core::sync::atomic::AtomicU64>() }
+  //     .load(core::sync::atomic::Ordering::Relaxed)
+  // } else { 0 };
+  // track_gpu_alloc!(memory.as_raw(), size);   // <- full BTreeMap + backtrace
+  // aethervk_oshal_rlib::log!(
+  //   "{} - [VMA] Alloc: size: {} bytes, type: {}, mem: {:#X}",
+  //   frame_index, size, memory_type, memory.as_raw()
+  // );
+  // aethervk_oshal_rlib::os::debug::print_aethervk_stacktrace(7, 4);
+  // --- end original code ---
 
-  let frame_index: u64 = if !p_user_data.is_null() {
-    unsafe { &*p_user_data.cast::<core::sync::atomic::AtomicU64>() }
-      .load(core::sync::atomic::Ordering::Relaxed)
-  } else {
-    0
-  };
-
-  track_gpu_alloc!(memory.as_raw(), size);
-
-  aethervk_oshal_rlib::log!(
-    "{} - [VMA] Alloc: size: {} bytes, type: {}, mem: {:#X}",
-    frame_index,
-    size,
-    memory_type,
-    memory.as_raw()
+  // Enqueue into the lock-free ring; drain_vma_events() does the real tracking.
+  aethervk_oshal_rlib::os::memory::tracking::push_vma_event_alloc(
+    memory.as_raw(), size,
   );
-  aethervk_oshal_rlib::os::debug::print_aethervk_stacktrace(7, 4);
 }
+
 #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
 #[allow(unused)]
 unsafe extern "C" fn on_device_free(
-  allocator: vk_mem::ffi::VmaAllocator,
-  memory_type: u32,
+  _allocator: vk_mem::ffi::VmaAllocator,
+  _memory_type: u32,
   memory: vk::DeviceMemory,
   size: vk::DeviceSize,
-  p_user_data: *mut core::ffi::c_void,
+  _p_user_data: *mut core::ffi::c_void,
 ) {
   use ash::vk::Handle;
+  // Same SAFETY constraint as on_device_alloc — atomics only.
+  //
+  // --- original code (DO NOT DELETE) ---
+  // track_gpu_free!(memory.as_raw(), size);   // <- BTreeMap remove
+  // let frame_index: u64 = if !p_user_data.is_null() {
+  //   unsafe { &*p_user_data.cast::<core::sync::atomic::AtomicU64>() }
+  //     .load(core::sync::atomic::Ordering::Relaxed)
+  // } else { 0 };
+  // aethervk_oshal_rlib::log!(
+  //   "{} - [VMA] Free:  size: {} bytes, type: {}, mem: {:#X}",
+  //   frame_index, size, memory_type, memory.as_raw()
+  // );
+  // aethervk_oshal_rlib::os::debug::print_aethervk_stacktrace(7, 4);
+  // --- end original code ---
 
-  track_gpu_free!(memory.as_raw(), size);
-
-  let frame_index: u64 = if !p_user_data.is_null() {
-    unsafe { &*p_user_data.cast::<core::sync::atomic::AtomicU64>() }
-      .load(core::sync::atomic::Ordering::Relaxed)
-  } else {
-    0
-  };
-
-  aethervk_oshal_rlib::log!(
-    "{} - [VMA] Free:  size: {} bytes, type: {}, mem: {:#X}",
-    frame_index,
-    size,
-    memory_type,
-    memory.as_raw()
+  aethervk_oshal_rlib::os::memory::tracking::push_vma_event_free(
+    memory.as_raw(), size,
   );
-  aethervk_oshal_rlib::os::debug::print_aethervk_stacktrace(7, 4);
 }
 
 impl GlobalDeviceAllocator {

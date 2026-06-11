@@ -757,7 +757,7 @@ mod tests {
   #[test]
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_restitution_decay() {
-    let ctx = std::mem::ManuallyDrop::new(VulkanTestContext::new());
+    let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
       crate::simulation::texture_cache::TextureCache::new("AetherVk"),
