@@ -57,7 +57,7 @@ impl Instance {
     // =========================================================================
     #[cfg(debug_assertions)]
     let mut layer_names = alloc::vec![c"VK_LAYER_KHRONOS_validation"];
-    
+
     #[cfg(debug_assertions)]
     {
       if aethervk_oshal_rlib::os::env::var("AETHERVK_DISABLE_SYNC_VAL").is_none() {
@@ -165,21 +165,28 @@ impl Instance {
         .iter()
         .any(|avail| unsafe { CStr::from_ptr(avail.extension_name.as_ptr()) } == ext);
       if !is_supported {
-        aethervk_oshal_rlib::log!("Warning: Requested instance extension {:?} is not supported. Ignoring.", ext);
+        aethervk_oshal_rlib::log!(
+          "Warning: Requested instance extension {:?} is not supported. Ignoring.",
+          ext
+        );
       }
       is_supported
     });
 
     // Record which Linux surface extensions survived the filter
     #[cfg(target_os = "linux")]
-    let linux_surface_support = LinuxSurfaceSupport {
+    let mut linux_surface_support = LinuxSurfaceSupport {
       wayland: desired_instance_extensions.contains(&ash::khr::wayland_surface::NAME),
-      xcb:     desired_instance_extensions.contains(&ash::khr::xcb_surface::NAME),
-      xlib:    desired_instance_extensions.contains(&ash::khr::xlib_surface::NAME),
+      xcb: desired_instance_extensions.contains(&ash::khr::xcb_surface::NAME),
+      xlib: desired_instance_extensions.contains(&ash::khr::xlib_surface::NAME),
     };
     #[cfg(target_os = "linux")]
-    aethervk_oshal_rlib::log!("Linux surface support: wayland={} xcb={} xlib={}",
-      linux_surface_support.wayland, linux_surface_support.xcb, linux_surface_support.xlib);
+    aethervk_oshal_rlib::log!(
+      "Linux surface support: wayland={} xcb={} xlib={}",
+      linux_surface_support.wayland,
+      linux_surface_support.xcb,
+      linux_surface_support.xlib
+    );
 
     // =========================================================================
     // 3. Setup Validation Features & Debug Messenger
@@ -245,39 +252,162 @@ impl Instance {
     // =========================================================================
     // 4. Create Instance
     // =========================================================================
-    let instance_extensions =
-      Vec::from_iter(desired_instance_extensions.iter().map(|&c_str| c_str.as_ptr()));
-
-    let mut instance_create_info = vk::InstanceCreateInfo::default()
-      .application_info(&app_info)
-      .enabled_extension_names(&instance_extensions);
-
-    #[cfg(target_vendor = "apple")]
-    let mut export_metal_objects = vk::ExportMetalObjectCreateInfoEXT::default()
-      .export_object_type(vk::ExportMetalObjectTypeFlagsEXT::METAL_DEVICE);
-    #[cfg(target_vendor = "apple")]
-    {
-      instance_create_info = instance_create_info
-        .flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR)
-        .push_next(&mut export_metal_objects);
-    }
+    // We attach a SAFE creation-phase debug messenger via pNext (see
+    // `utils::creation_phase_debug_callback` for why it is separate from the real one).
+    // It logs extension-compat messages from tools like RenderDoc without panicking
+    // through FFI, and stores genuine validation errors so we can panic AFTER
+    // vkCreateInstance returns to Rust. The real panicking messenger is created
+    // separately below, after the instance exists.
 
     #[cfg(debug_assertions)]
     let enabled_layers = Vec::from_iter(desired_layer_names.iter().map(|&c_str| c_str.as_ptr()));
 
+    // State for the creation-phase callback — lives on the stack for the duration
+    // of all vkCreateInstance attempts.
     #[cfg(debug_assertions)]
-    {
-      instance_create_info = instance_create_info
-        .enabled_layer_names(&enabled_layers)
-        .push_next(&mut msg_create_info);
+    let mut creation_state = utils::InstanceCreationState {
+      user_error_callback: validation_error_callback,
+      had_validation_error: false,
+      validation_error_message: alloc::string::String::new(),
+    };
 
-      // Only attach the features struct if the extension is actually supported/visible
-      if has_validation_features {
-        instance_create_info = instance_create_info.push_next(&mut validation_features);
+    // -------------------------------------------------------------------------
+    // Retry loop: if vkCreateInstance fails with VK_ERROR_EXTENSION_NOT_PRESENT,
+    // strip Linux surface extensions one by one (Wayland → XCB → Xlib) and retry.
+    // This handles tools like RenderDoc that don't support Wayland surfaces but
+    // don't correctly filter the extension from vkEnumerateInstanceExtensionProperties.
+    // -------------------------------------------------------------------------
+    #[cfg(target_os = "linux")]
+    let linux_surface_retry_order: &[&CStr] = &[
+      ash::khr::wayland_surface::NAME,
+      ash::khr::xcb_surface::NAME,
+      ash::khr::xlib_surface::NAME,
+    ];
+
+    // =========================================================================
+    // RENDERDOC DEADLOCK WORKAROUND
+    // =========================================================================
+    // If RenderDoc fails an instance creation, it corrupts the loader's mutexes.
+    // We cannot rely on the retry loop. We must forcefully strip Wayland upfront.
+    let is_renderdoc = aethervk_oshal_rlib::os::env::var("VK_INSTANCE_LAYERS")
+      .map(|v| v.contains("RENDERDOC"))
+      .unwrap_or(false)
+      || desired_layer_names.iter().any(|&l| l == c"VK_LAYER_RENDERDOC_Capture");
+
+    if is_renderdoc {
+      aethervk_oshal_rlib::log!(
+        "RenderDoc detected! Proactively stripping Wayland to prevent loader deadlock."
+      );
+      desired_instance_extensions.retain(|&ext| ext != ash::khr::wayland_surface::NAME);
+      #[cfg(target_os = "linux")]
+      {
+        linux_surface_support.wayland = false;
       }
     }
 
-    let instance = unsafe { vk_entry.create_instance(&instance_create_info, None) }?;
+    let instance = 'create: {
+      loop {
+        // Reset per-attempt state for the creation-phase callback.
+        #[cfg(debug_assertions)]
+        {
+          creation_state.had_validation_error = false;
+          creation_state.validation_error_message = alloc::string::String::new();
+        }
+
+        let instance_extensions =
+          Vec::from_iter(desired_instance_extensions.iter().map(|&c_str| c_str.as_ptr()));
+
+        let mut instance_create_info = vk::InstanceCreateInfo::default()
+          .application_info(&app_info)
+          .enabled_extension_names(&instance_extensions);
+
+        #[cfg(target_vendor = "apple")]
+        let mut export_metal_objects = vk::ExportMetalObjectCreateInfoEXT::default()
+          .export_object_type(vk::ExportMetalObjectTypeFlagsEXT::METAL_DEVICE);
+        #[cfg(target_vendor = "apple")]
+        {
+          instance_create_info = instance_create_info
+            .flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR)
+            .push_next(&mut export_metal_objects);
+        }
+
+        // debug_assertions: attach the safe creation-phase messenger via pNext.
+        // The `creation_msg_info` must be declared here (inside the loop scope) so
+        // that ash's lifetime-tied pNext builder can borrow it for the create call.
+        // The borrow ends when `vk_entry.create_instance` returns.
+        #[cfg(debug_assertions)]
+        let result = {
+          let mut creation_msg_info = msg_create_info
+            .user_data(&mut creation_state as *mut _ as *mut core::ffi::c_void)
+            .pfn_user_callback(Some(utils::creation_phase_debug_callback));
+
+          let mut ci = instance_create_info
+            .enabled_layer_names(&enabled_layers)
+            .push_next(&mut creation_msg_info);
+          if has_validation_features {
+            ci = ci.push_next(&mut validation_features);
+          }
+
+          unsafe { vk_entry.create_instance(&ci, None) }
+        };
+
+        #[cfg(not(debug_assertions))]
+        let result = unsafe { vk_entry.create_instance(&instance_create_info, None) };
+
+        match result {
+          Ok(inst) => {
+            // If the creation-phase callback captured a real (non-extension-compat)
+            // validation error, call the user callback NOW — safely, in Rust, not through FFI.
+            #[cfg(debug_assertions)]
+            if creation_state.had_validation_error {
+              if let Some(cb) = creation_state.user_error_callback {
+                cb(&creation_state.validation_error_message);
+              }
+            }
+            break 'create inst;
+          }
+
+          #[cfg(target_os = "linux")]
+          Err(vk::Result::ERROR_EXTENSION_NOT_PRESENT) => {
+            // Strip the first Linux surface extension that's still in the list and retry.
+            let mut stripped = false;
+            for &candidate in linux_surface_retry_order {
+              if desired_instance_extensions.contains(&candidate) {
+                aethervk_oshal_rlib::log!(
+                  "vkCreateInstance: VK_ERROR_EXTENSION_NOT_PRESENT — retrying without {:?}",
+                  candidate
+                );
+                desired_instance_extensions.retain(|&e| e != candidate);
+                stripped = true;
+                break;
+              }
+            }
+            if !stripped {
+              return Err(GpuError::UnsupportedFeatureNamed(
+                "vkCreateInstance failed with VK_ERROR_EXTENSION_NOT_PRESENT after exhausting \
+                 all Linux surface extension fallbacks"
+                  .to_string(),
+              ));
+            }
+            // Update linux_surface_support to reflect what's still enabled.
+            linux_surface_support = LinuxSurfaceSupport {
+              wayland: desired_instance_extensions.contains(&ash::khr::wayland_surface::NAME),
+              xcb: desired_instance_extensions.contains(&ash::khr::xcb_surface::NAME),
+              xlib: desired_instance_extensions.contains(&ash::khr::xlib_surface::NAME),
+            };
+            aethervk_oshal_rlib::log!(
+              "Linux surface support after retry: wayland={} xcb={} xlib={}",
+              linux_surface_support.wayland,
+              linux_surface_support.xcb,
+              linux_surface_support.xlib
+            );
+            // continue loop with reduced extension list
+          }
+
+          Err(e) => return Err(e.into()),
+        }
+      }
+    };
 
     #[cfg(debug_assertions)]
     {
@@ -324,12 +454,20 @@ impl Instance {
         "No Vulkan Capable Devices Found".to_string(),
       ));
     }
+
+    let mut active_query = query_input.clone();
+    #[cfg(target_os = "linux")]
+    {
+      active_query.linux_surface_support = self.linux_surface_support;
+    }
+
     // 2. filter those which are eligible and map to query result
     let mut eligible_devices =
       Vec::from_iter(physical_devices.iter().filter_map(|&physical_device| {
         // a. properties (TODO: Subgroup Information)
         let mut subgroup_props = vk::PhysicalDeviceSubgroupProperties::default();
-        let mut descriptor_indexing_props = vk::PhysicalDeviceDescriptorIndexingProperties::default();
+        let mut descriptor_indexing_props =
+          vk::PhysicalDeviceDescriptorIndexingProperties::default();
         let (subgroup_size, is_cpu, max_per_stage_samplers, max_set_samplers) = {
           // `props` mutably borrows `subgroup_props` via push_next().  The block
           // scope ends the borrow so we can read `subgroup_props.subgroup_size` next.
@@ -353,7 +491,7 @@ impl Instance {
           self.instance.get_physical_device_queue_family_properties2_len(physical_device)
         };
         let mut queue_family_properties: Vec<_> =
-          core::iter::repeat_with(|| vk::QueueFamilyProperties2::default())
+          core::iter::repeat_with(vk::QueueFamilyProperties2::default)
             .take(queue_family_properties_len)
             .collect();
         unsafe {
@@ -370,7 +508,7 @@ impl Instance {
               .queue_family_properties
               .queue_flags
               .contains(vk::QueueFlags::GRAPHICS)
-              && query_input.supports_presentation(
+              && active_query.supports_presentation(
                 entry.as_ref(),
                 physical_device,
                 &self.instance,

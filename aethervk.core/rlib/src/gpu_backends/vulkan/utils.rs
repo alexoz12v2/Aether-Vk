@@ -44,20 +44,20 @@ bitflags! {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// TODO: Document this item
-pub(super) struct PhysicalDeviceQueryInput {
+pub struct PhysicalDeviceQueryInput {
   #[cfg(target_os = "linux")]
   /// Which Linux surface extensions were actually enabled on the instance.
-  pub(super) linux_surface_support: super::instance::LinuxSurfaceSupport,
+  pub linux_surface_support: super::instance::LinuxSurfaceSupport,
   #[cfg(target_os = "linux")]
-  wl_display: Option<core::ptr::NonNull<vk::wl_display>>,
+  pub wl_display: Option<core::ptr::NonNull<vk::wl_display>>,
   #[cfg(target_os = "linux")]
-  xcb_connection: Option<core::ptr::NonNull<vk::xcb_connection_t>>,
+  pub xcb_connection: Option<core::ptr::NonNull<vk::xcb_connection_t>>,
   #[cfg(target_os = "linux")]
-  xcb_visualid: Option<vk::xcb_visualid_t>,
+  pub xcb_visualid: Option<vk::xcb_visualid_t>,
   #[cfg(target_os = "linux")]
-  dpy: Option<core::ptr::NonNull<vk::Display>>,
+  pub dpy: Option<core::ptr::NonNull<vk::Display>>,
   #[cfg(target_os = "linux")]
-  visual_id: Option<vk::VisualID>,
+  pub visual_id: Option<vk::VisualID>,
   pub debug_shaders: bool,
 }
 impl PhysicalDeviceQueryInput {
@@ -303,6 +303,76 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
       aethervk_oshal_rlib::log!("VULKAN INFO: {}", s);
     }
   }
+
+  vk::FALSE
+}
+
+/// Safe debug callback for use **only** during `vkCreateInstance` (via `pNext`).
+///
+/// ## Why a separate callback?
+///
+/// The real [`debug_utils_messenger_user_callback`] transmutes `user_data` into a Rust
+/// `fn(&str)` and calls it. Panicking from inside a C `vkCreateInstance` call stack is
+/// **undefined behaviour** (even if it works by accident on Linux via libunwind).
+///
+/// This callback never panics through FFI. Instead:
+/// - **Extension-compatibility messages** (e.g. RenderDoc saying `VK_KHR_wayland_surface`
+///   is unsupported): logged only — the retry loop strips that extension and retries.
+/// - **Genuine validation errors**: stored in [`InstanceCreationState`] so the retry loop
+///   can call the user panic-callback *after* `vkCreateInstance` returns to Rust.
+
+/// State passed via `user_data` to [`creation_phase_debug_callback`].
+#[cfg(debug_assertions)]
+pub(super) struct InstanceCreationState {
+  /// User-supplied callback that may panic. Called safely AFTER `vkCreateInstance`
+  /// returns to Rust — never from within the C FFI call chain.
+  pub user_error_callback: Option<fn(&str)>,
+  /// Set when a genuine (non-extension-compat) validation error was captured.
+  pub had_validation_error: bool,
+  /// The first real validation error message received in this attempt.
+  pub validation_error_message: alloc::string::String,
+}
+
+#[cfg(debug_assertions)]
+pub(super) unsafe extern "system" fn creation_phase_debug_callback(
+  message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+  _message_types: vk::DebugUtilsMessageTypeFlagsEXT,
+  p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
+  p_user_data: *mut c_void,
+) -> vk::Bool32 {
+  let p_msg = unsafe { (*p_callback_data).p_message };
+  let msg = unsafe { core::ffi::CStr::from_ptr(p_msg) };
+  let s = msg.to_string_lossy();
+
+  if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
+    // Heuristic: extension-compatibility messages name a surface extension or use a
+    // known phrase. They are expected during our retry loop and must NOT panic.
+    let is_ext_compat = s.contains("does not support requested instance extension")
+      || s.contains("does not support Wayland")
+      || (s.contains("VK_KHR_") && s.contains("surface"));
+
+    if is_ext_compat {
+      aethervk_oshal_rlib::log!("[vkCreateInstance] Extension compat (will retry): {}", s);
+    } else {
+      // Real validation error — store it; caller panics after vkCreateInstance returns.
+      aethervk_oshal_rlib::log!("[vkCreateInstance] VULKAN ERROR: {}", s);
+      #[cfg(test)]
+      {
+        extern crate std;
+        std::eprintln!("[vkCreateInstance] VULKAN ERROR: {}", s);
+      }
+      if !p_user_data.is_null() {
+        let state = unsafe { &mut *(p_user_data as *mut InstanceCreationState) };
+        if !state.had_validation_error {
+          state.had_validation_error = true;
+          state.validation_error_message = s.into_owned();
+        }
+      }
+    }
+  } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
+    aethervk_oshal_rlib::log!("[vkCreateInstance] VULKAN WARNING: {}", s);
+  }
+  // INFO / VERBOSE suppressed during creation to reduce noise.
 
   vk::FALSE
 }
@@ -820,7 +890,9 @@ pub(super) fn required_device_extensions() -> &'static Vec<&'static CStr> {
     #[cfg(any(debug_assertions, test))]
     {
       #[cfg(not(target_vendor = "apple"))]
-      if crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.load(core::sync::atomic::Ordering::Relaxed) {
+      if crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+        .load(core::sync::atomic::Ordering::Relaxed)
+      {
         the_vec.push(ash::khr::shader_non_semantic_info::NAME);
       }
     }
@@ -963,7 +1035,7 @@ impl RequiredFeatures<'_> {
         f = f.push_next(&mut self.robustness2);
       }
     }
-    
+
     f
   }
 
@@ -1053,7 +1125,6 @@ impl RequiredFeatures<'_> {
     if self.storage_8bit.storage_buffer8_bit_access != vk::TRUE {
       the_vec.push("storage_buffer_8_bit_access".to_string());
     }
-
 
     if the_vec.is_empty() {
       None

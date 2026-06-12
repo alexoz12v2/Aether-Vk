@@ -80,15 +80,37 @@ pub fn run_simulation_app<D: SimulationDelegate + 'static>(title: &str, mut dele
     title
   );
 
-  let (window, event_loop) = crate::create_winit_window_and_event_loop(title);
-
   *ASSET_DIR.write() = Some(cycle_get_asset_path_from_exe(true).to_string_lossy().to_string());
 
+  // --- Create the Vulkan instance FIRST so we can query which surface
+  // extensions survived (e.g. RenderDoc strips VK_KHR_wayland_surface).
   let mut simulation_context = SimulationContext::startup(
     gpu::VULKAN_RENDER_BACKEND,
     Some(|msg: &str| panic!("Vulkan Error: {}", msg)),
   )
   .unwrap();
+
+  // --- On Linux, ensure the winit window backend matches what the Vulkan
+  // instance actually supports.  If Wayland didn't survive (e.g. RenderDoc),
+  // remove WAYLAND_DISPLAY so winit falls back to XCB rather than opening a
+  // Wayland window whose surface extension is missing.
+  #[cfg(target_os = "linux")]
+  {
+    if let Some(frontend) = simulation_context.render_frontend() {
+      let surface_support = frontend.linux_surface_support();
+      if !surface_support.wayland {
+        println!(
+          "Vulkan instance has no Wayland surface support; \
+           forcing winit to XCB (unsetting WAYLAND_DISPLAY)"
+        );
+        // SAFETY: we are on the main thread before winit has spawned any
+        // additional threads, so mutating the environment is safe here.
+        unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+      }
+    }
+  }
+
+  let (window, event_loop) = crate::create_winit_window_and_event_loop(title);
 
   let (native_handles, window_info) = {
     let render_frontend = simulation_context.render_frontend().unwrap();

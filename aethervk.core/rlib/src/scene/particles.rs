@@ -142,10 +142,19 @@ impl Component for ParticleSystemComponent {}
 impl ParticleSystemComponent {
   /// Create a new particle system with the given maximum capacity.
   pub fn new(max_particles: usize) -> Self {
+    let mut particles = alloc::vec::Vec::with_capacity(max_particles);
+
+    // FIX 1: Prevent crash at startup by properly advancing the vector's length to match capacity.
+    // We zero-initialize memory to avoid needing `Default` bounds on `ParticleData`.
+    if max_particles > 0 {
+      unsafe {
+        core::ptr::write_bytes(particles.as_mut_ptr(), 0, max_particles);
+        particles.set_len(max_particles);
+      }
+    }
+
     Self {
-      particles: alloc::sync::Arc::new(parking_lot::RwLock::new(alloc::vec::Vec::with_capacity(
-        max_particles,
-      ))),
+      particles: alloc::sync::Arc::new(parking_lot::RwLock::new(particles)),
       head_index: 0,
       tail_index: 0,
       capacity: max_particles,
@@ -159,115 +168,30 @@ impl ParticleSystemComponent {
     }
   }
 
-  /// Deprecated. Use the compute shader for this.
-  #[deprecated]
-  pub fn emit_particles(
-    &mut self,
-    config: &ParticleEmitterComponent,
-    comet: &Comet,
-    uv_grid: &UvGrid,
-    comet_pos: Vec3f32,
-    comet_rot: aethervk_oshal_rlib::math::vector::vec4::Quat,
-    comet_scale: Vec3f32,
-    u_emission: &[f32; 2],
-    u_particles: &[[f32; 4]],
-  ) {
-    let count = config.emission_count.sample(u_emission) as usize;
-
-    let mut particles = self.particles.write(); // TODO this might be slow
-    for i in 0..count {
-      if particles.len() >= config.max_particles {
-        break;
-      }
-
-      let u = &u_particles[i];
-      // TODO: why is pdf unused?
-      let (uv_x, uv_y, _pdf) = config.uv_distribution.sample_continuous(&[u[0], u[1]]);
-
-      let (local_pos, local_norm) =
-        match uv_grid.query([uv_x, uv_y], &comet.vertices, &comet.indices) {
-          Some(res) => res,
-          None => continue,
-        };
-
-      // Convert to world space
-      let local_pos_vec: Vec3f32 = local_pos.into();
-      let local_pos_vec = Vec3f32::from_components(
-        local_pos_vec.x() * comet_scale.x(),
-        local_pos_vec.y() * comet_scale.y(),
-        local_pos_vec.z() * comet_scale.z(),
-      );
-      let local_norm_vec: Vec3f32 = local_norm.into();
-      let local_norm_vec = if local_norm_vec.length_squared() > 0.0001 {
-        local_norm_vec.normalize()
-      } else {
-        Vec3f32::zero()
-      };
-
-      use aethervk_oshal_rlib::math::quaternion::Quaternion;
-
-      let world_norm = comet_rot.rotate_vector(local_norm_vec);
-      let world_pos = comet_pos
-        + comet_rot.rotate_vector(local_pos_vec)
-        + world_norm * config.particle_radius * 1.5; // Push slightly outside
-
-      // Intersection check removed for performance
-
-      // Velocity in cosine hemisphere
-      let phi = 2.0 * core::f32::consts::PI * u[2];
-      let cos_theta = u[3].sqrt();
-      let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
-      let local_dir =
-        Vec3f32::from_components(sin_theta * phi.cos(), sin_theta * phi.sin(), cos_theta);
-
-      let mut tangent = Vec3f32::from_components(1.0, 0.0, 0.0);
-      if world_norm.dot(tangent).abs() > 0.99 {
-        tangent = Vec3f32::from_components(0.0, 1.0, 0.0);
-      }
-      let bitangent = world_norm.cross(tangent).normalize();
-      tangent = bitangent.cross(world_norm).normalize();
-
-      let world_dir =
-        (tangent * local_dir.x() + bitangent * local_dir.y() + world_norm * local_dir.z())
-          .normalize();
-
-      // For the intensity, we reuse the first two random numbers to sample the Gaussian
-      let intensity = config.velocity_intensity.sample(&[u[0], u[1]]);
-      let velocity = world_dir * intensity;
-
-      let mut p = ParticleData {
-        id_low: 0,
-        id_high: 0,
-        age_low: 0,
-        age_high: 0,
-        position: [world_pos.x(), world_pos.y(), world_pos.z()],
-        mass: config.density * (4.0 / 3.0) * core::f32::consts::PI * config.particle_radius.powi(3),
-        velocity: [velocity.x(), velocity.y(), velocity.z()],
-        active: 1,
-        force: [0f32; 3],
-      };
-      p.set_id(self.next_id as u64);
-      p.set_age(0);
-      particles.push(p);
-      self.next_id += 1;
-    }
-  }
-
   /// TODO: Document this item
   pub fn update_bvh(&mut self, particle_radius: f32) {
+    aethervk_oshal_rlib::log!("WARNING: NEVER CALL THIS. USE COMPUTE SHADER");
     use crate::{
       math::collision::{bvh_builder::BVHBuilderParams, linear_bvh::LinearBVH},
       physics::particle::ParticleBVHBuilder,
     };
     use aethervk_oshal_rlib::math::matrix::mat3::Mat3f32;
 
-    let active_particles: alloc::vec::Vec<_> = self
-      .particles
-      .read()
-      .iter()
-      .filter(|p| p.active != 0)
-      .map(|p| p.as_particle(particle_radius))
-      .collect();
+    let particles = self.particles.read();
+    let capacity = self.capacity;
+
+    let mut active_particles = alloc::vec::Vec::new();
+
+    // FIX 2 (Optimization): Iterate only the active ring-buffer window rather than all capacity blocks
+    if capacity > 0 && self.tail_index > self.head_index {
+      active_particles.reserve(self.tail_index - self.head_index);
+      for idx in self.head_index..self.tail_index {
+        let p = &particles[idx % capacity];
+        if p.active != 0 {
+          active_particles.push(p.as_particle(particle_radius));
+        }
+      }
+    }
 
     if active_particles.is_empty() {
       self.bvh = None;

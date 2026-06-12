@@ -40,8 +40,6 @@ use objc2_foundation::{NSNotification, NSNotificationCenter, NSObject, ns_string
 use objc2_quartz_core::CAAutoresizingMask;
 #[cfg(target_os = "macos")]
 use raw_window_handle::RawWindowHandle;
-#[cfg(all(target_os = "linux", feature = "linux_xcb"))]
-use raw_window_handle::RawWindowHandle;
 #[cfg(windows)]
 use raw_window_handle::RawWindowHandle;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
