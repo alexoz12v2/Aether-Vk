@@ -1057,6 +1057,11 @@ pub struct VulkanComputeKernels {
   pub queue_sharing_info: crate::gpu::QueueSharingInfo,
   pub transient_pool: spin::Mutex<TransientBufferPool>,
   pub particle_self_gravity_enabled: core::sync::atomic::AtomicBool,
+  /// Sorted Morton buffers from the most recent `build_motion_bvh` call, keyed by
+  /// the `EntityId` of the particle-system entity they were built for.
+  /// Value: (buffer, submit_stamp) — buffer layout is flat `[morton_code: u32, original_dense_idx: u32]`.
+  /// TTL-evicted after `PERM_EVICTION_FRAMES` submits; capacity-capped at `MAX_PERM_ENTRIES`.
+  pub last_particle_permutations: spin::Mutex<hashbrown::HashMap<crate::scene::EntityId, (VulkanBuffer<[u32; 2]>, u64)>>,
   #[cfg(test)]
   pub tracked_physical_allocations: spin::Mutex<alloc::vec::Vec<u64>>,
 }
@@ -1092,6 +1097,7 @@ impl VulkanComputeKernels {
       queue_sharing_info,
       transient_pool: spin::Mutex::new(TransientBufferPool::new()),
       particle_self_gravity_enabled: core::sync::atomic::AtomicBool::new(false),
+      last_particle_permutations: spin::Mutex::new(hashbrown::HashMap::new()),
       #[cfg(test)]
       tracked_physical_allocations: spin::Mutex::new(alloc::vec::Vec::new()),
     })
@@ -1129,6 +1135,42 @@ impl VulkanComputeKernels {
   }
 
   pub fn cleanup(&mut self, device: &LogicalDevice, allocator: vk_mem::AllocatorView) {
+    // TTL + capacity eviction for stale permutation buffers.
+    // Entries are normally consumed in the same frame by write_back_to_scene, but
+    // destroyed entities or early-exit paths can leave entries that would otherwise
+    // leak GPU memory indefinitely.
+    const PERM_EVICTION_FRAMES: u64 = 4;
+    const MAX_PERM_ENTRIES: usize = 64;
+    {
+      let mut perm_map = self.last_particle_permutations.lock();
+      // TTL sweep: evict entries older than PERM_EVICTION_FRAMES submits.
+      perm_map.retain(|_, (buf, stamp)| {
+        if stamp.saturating_add(PERM_EVICTION_FRAMES)
+          < self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed)
+        {
+          buf.discarded = true;
+          self.discard_pool.discard_buffer(
+            allocator.get_raw(),
+            buf.buffer,
+            buf.allocation,
+            u64::MAX,
+          );
+          false
+        } else {
+          true
+        }
+      });
+      for (_entity, (mut buf, _stamp)) in perm_map.drain() {
+        buf.discarded = true;
+        self.discard_pool.discard_buffer(
+          allocator.get_raw(),
+          buf.buffer,
+          buf.allocation,
+          u64::MAX,
+        );
+      }
+    }
+
     let mut pool = self.transient_pool.lock();
     for entry in pool.entries.drain(..) {
       self.discard_pool.discard_buffer(
@@ -3165,6 +3207,7 @@ impl VulkanComputeKernels {
     particles: &mut VulkanBuffer<f32>,
     particle_frame_ids: &mut VulkanBuffer<u32>,
     _dt: timeus_t,
+    entity_id: crate::scene::EntityId,
   ) -> GpuResult<VulkanBuffer<()>> {
     // Prefer the explicit actual_count stamped by build_particles; this excludes
     // zero-mass SoA padding slots that pollute Morton sort and shift real particles
@@ -3813,9 +3856,11 @@ impl VulkanComputeKernels {
     // traversal for the specific Karras topology), but all reachable ones will be correct.
     let num_internal = if n_leaves > 1 { n_leaves - 1 } else { 0 };
     let binary_roots: alloc::vec::Vec<u32> = (0..num_internal).map(|j| j as u32).collect();
-    let num_multi_nodes = binary_roots.len().max(1) as u32;
+    let num_multi_nodes = binary_roots.len() as u32; // 0 when single leaf — no .max(1)!
 
     // Allocate the wide multi-BVH buffer (same layout as binary bvh_buffer, but fewer nodes).
+    // We always allocate at least 1 node so the buffer is valid (address != null).
+    let alloc_count = (num_multi_nodes as usize).max(1);
     let multi_bvh_buffer = {
       macro_rules! alloc_multi_buf {
         ($sg:literal) => {{
@@ -3824,7 +3869,7 @@ impl VulkanComputeKernels {
             .allocate_device_buffer::<Node>(
               device,
               allocator,
-              num_multi_nodes as usize,
+              alloc_count,
               vk::BufferUsageFlags::STORAGE_BUFFER,
               false,
               rollback,
@@ -3843,77 +3888,138 @@ impl VulkanComputeKernels {
       }
     }?;
 
-    // Upload the collapse map (host-visible staging).
-    let collapse_map_buf = self.allocate_and_upload::<u32>(
-      device,
-      allocator,
-      &binary_roots,
-      vk::BufferUsageFlags::STORAGE_BUFFER,
-      rollback,
-    )?;
+    // Use an Option so we can recycle collapse_map_buf after the if/else block
+    // regardless of which branch ran.
+    let mut collapse_map_opt: Option<VulkanBuffer<u32>> = None;
 
-    // Dispatch lbvh_collapse (one work-group per multi-node, LOCAL_SIZE_X = SUBGROUP_SIZE).
-    {
-      let pc_collapse = crate::gpu::compute_push_constants::LbvhCollapsePushConstants {
-        binary_bvh: bvh_buffer.address,
-        multi_bvh: multi_bvh_buffer.address,
-        collapse_map: collapse_map_buf.address,
-        num_multi_nodes,
-        _pad: 0,
-      };
-      let bytes_collapse = unsafe {
-        core::slice::from_raw_parts(
-          &pc_collapse as *const _ as *const u8,
-          core::mem::size_of::<crate::gpu::compute_push_constants::LbvhCollapsePushConstants>(),
-        )
-      };
-      unsafe {
-        device.cmd_bind_pipeline(
-          cmd.cmd,
-          vk::PipelineBindPoint::COMPUTE,
-          self.pipelines.lbvh_collapse,
-        );
-        self
-          .pipelines
-          .assert_pc_size(self.pipelines.lbvh_collapse, bytes_collapse.len());
-        device.cmd_push_constants(
-          cmd.cmd,
-          self.pipelines.pipeline_layout,
-          vk::ShaderStageFlags::COMPUTE,
-          0,
-          bytes_collapse,
-        );
-        if num_multi_nodes > 0 {
+    if num_internal == 0 {
+      // Single-leaf tree: nothing to collapse. The multi-BVH buffer is zero-initialized
+      // (device memory default). Barnes-Hut will see num_clusters == total_particles
+      // and root_node_idx == 0 pointing at the zeroed node, which has an empty AABB and
+      // zero mass — traversal produces zero force contributions (correct: self-gravity
+      // of a single leaf-group uses the direct N-body fallback inside barnes_hut.comp).
+      aethervk_oshal_rlib::log!(
+        "build_motion_bvh: n_leaves=1, skipping lbvh_collapse (no internal nodes)"
+      );
+    } else {
+      // Upload the collapse map (host-visible staging).
+      let collapse_map_buf = self.allocate_and_upload::<u32>(
+        device,
+        allocator,
+        &binary_roots,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        rollback,
+      )?;
+
+      // Dispatch lbvh_collapse (one work-group per multi-node, LOCAL_SIZE_X = SUBGROUP_SIZE).
+      {
+        let pc_collapse = crate::gpu::compute_push_constants::LbvhCollapsePushConstants {
+          binary_bvh: bvh_buffer.address,
+          multi_bvh: multi_bvh_buffer.address,
+          collapse_map: collapse_map_buf.address,
+          num_multi_nodes,
+          _pad: 0,
+        };
+        let bytes_collapse = unsafe {
+          core::slice::from_raw_parts(
+            &pc_collapse as *const _ as *const u8,
+            core::mem::size_of::<crate::gpu::compute_push_constants::LbvhCollapsePushConstants>(),
+          )
+        };
+        unsafe {
+          device.cmd_bind_pipeline(
+            cmd.cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            self.pipelines.lbvh_collapse,
+          );
+          self
+            .pipelines
+            .assert_pc_size(self.pipelines.lbvh_collapse, bytes_collapse.len());
+          device.cmd_push_constants(
+            cmd.cmd,
+            self.pipelines.pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            bytes_collapse,
+          );
           device.cmd_dispatch(cmd.cmd, num_multi_nodes, 1, 1);
+          let barrier = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+          device.cmd_pipeline_barrier(
+            cmd.cmd,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::DependencyFlags::empty(),
+            core::slice::from_ref(&barrier),
+            &[],
+            &[],
+          );
         }
-        let barrier = vk::MemoryBarrier::default()
-          .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-          .dst_access_mask(vk::AccessFlags::SHADER_READ);
-        device.cmd_pipeline_barrier(
-          cmd.cmd,
-          vk::PipelineStageFlags::COMPUTE_SHADER,
-          vk::PipelineStageFlags::COMPUTE_SHADER,
-          vk::DependencyFlags::empty(),
-          core::slice::from_ref(&barrier),
-          &[],
-          &[],
-        );
       }
+      bvh_sync!("lbvh_collapse");
+      collapse_map_opt = Some(collapse_map_buf);
     }
-    bvh_sync!("lbvh_collapse");
 
+    // All transient BVH build buffers are recycled once we know the final timeline value.
     let timeline = self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
-
+    if let Some(collapse_map_buf) = collapse_map_opt {
+      self.recycle_transient_buffer(collapse_map_buf, timeline);
+    }
     self.recycle_transient_buffer(atomic_counters, timeline);
     self.recycle_transient_buffer(particles_out, timeline);
     self.recycle_transient_buffer(frame_ids_out, timeline);
-    self.recycle_transient_buffer(sorted_morton, timeline);
+    // Store sorted_morton for write_back_to_scene to read after GPU submit+wait.
+    // Keyed by entity_id so multiple particle systems don't clobber each other.
+    // TTL sweep + capacity watermark before insert to bound GPU memory usage.
+    const PERM_EVICTION_FRAMES: u64 = 4;
+    const MAX_PERM_ENTRIES: usize = 64;
+    {
+      let mut perm_map = self.last_particle_permutations.lock();
+      let current_stamp = self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
+      // TTL sweep: recycle entries older than PERM_EVICTION_FRAMES submits.
+      perm_map.retain(|_, (buf, stamp)| {
+        if stamp.saturating_add(PERM_EVICTION_FRAMES) < current_stamp {
+          buf.discarded = true;
+          self.discard_pool.discard_buffer(
+            allocator.get_raw(),
+            buf.buffer,
+            buf.allocation,
+            current_stamp,
+          );
+          false
+        } else {
+          true
+        }
+      });
+      // Capacity watermark: evict the oldest entry if still at limit.
+      if perm_map.len() >= MAX_PERM_ENTRIES {
+        if let Some(oldest_key) = perm_map
+          .iter()
+          .min_by_key(|(_, (_, stamp))| *stamp)
+          .map(|(k, _)| *k)
+        {
+          if let Some((mut old_buf, _)) = perm_map.remove(&oldest_key) {
+            old_buf.discarded = true;
+            self.discard_pool.discard_buffer(
+              allocator.get_raw(),
+              old_buf.buffer,
+              old_buf.allocation,
+              current_stamp,
+            );
+          }
+        }
+      }
+      // Replace any previous entry for this entity (prior sub-step) at the same timeline.
+      if let Some((mut old_buf, _)) = perm_map.remove(&entity_id) {
+        self.recycle_transient_buffer(old_buf, current_stamp);
+      }
+      sorted_morton.discarded = true; // suppress Drop warning; lifetime managed via map
+      perm_map.insert(entity_id, (sorted_morton, current_stamp));
+    }
+
     self.recycle_transient_buffer(sorted_morton_alt, timeline);
     self.recycle_transient_buffer(histograms, timeline);
-    // Recycle the binary BVH — only the wide multi-BVH is returned.
-    self.recycle_transient_buffer(bvh_buffer, timeline);
-    let timeline_collapse = self.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
-    self.recycle_transient_buffer(collapse_map_buf, timeline_collapse);
 
     // ── Watchdog readback (test-only): detect shader safety-counter trips ─────────────────
     #[cfg(test)]
@@ -3928,7 +4034,17 @@ impl VulkanComputeKernels {
       });
     }
 
-    Ok(multi_bvh_buffer)
+    if num_internal == 0 {
+      // Skip path: recycle the unused wide multi-BVH and return the binary BVH directly.
+      // Barnes-Hut falls back to direct N-body when bvh_n<=1, so the binary buffer's
+      // MultiBvhNodeWideGpu layout is never traversed — returning it is safe.
+      self.recycle_transient_buffer(multi_bvh_buffer, timeline);
+      Ok(bvh_buffer)
+    } else {
+      // Normal path: recycle the binary BVH — only the wide multi-BVH is returned.
+      self.recycle_transient_buffer(bvh_buffer, timeline);
+      Ok(multi_bvh_buffer)
+    }
   }
 
   #[function_name::named]
@@ -4601,25 +4717,62 @@ impl VulkanComputeKernels {
     let unpacked_particles =
       gpu::unpack_particles_aosoa(&p_data, sg, gpu::PARTICLE_FIELDS, particle_metadata.len());
 
-    scene.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>( |entity, _transform, sys| {
+    // `build_motion_bvh` stamps entries for TTL eviction only; here we just consume.
+    // The TTL retain() in build_motion_bvh already evicts truly stale entries.
+    // If remove() finds an entry it's always the correct current-frame permutation.
+
+    scene.query2_mut::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>(|entity, _transform, sys| {
+      // Build per-entity permutation from the sorted_morton buffer stored by build_motion_bvh.
+      // The buffer is removed from the map here (consumed once per frame per entity).
+      // If missing or from a different frame stamp, fall back to identity (no BVH was built
+      // for this entity this frame — e.g. zero active particles or LOD skip).
+      let permutation: alloc::vec::Vec<u32> = {
+        let mut perm_map = self.last_particle_permutations.lock();
+        if let Some((buf, _stamp)) = perm_map.remove(&entity) {
+          let slice: &[[u32; 2]] = unsafe { buf.mapped_slice() }.unwrap_or(&[]);
+          let perm = slice.iter().map(|e| e[1]).collect();
+          // Recycle the buffer now that we've consumed it.
+          let mut owned = buf;
+          owned.discarded = true;
+          self.discard_pool.discard_buffer(
+            _allocator.get_raw(),
+            owned.buffer,
+            owned.allocation,
+            _timeline_value,
+          );
+          perm
+        } else {
+          // No BVH was built for this entity this frame — identity mapping.
+          (0..particle_metadata.len() as u32).collect()
+        }
+      };
+
       let mut sys_particles = sys.particles.write();
+      let mut sys_sort_order: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
+      let mut alive_count = 0u32;
       for (i, p_gpu) in unpacked_particles.iter().enumerate() {
-        let meta = &particle_metadata[i];
+        // Use permutation to find which original metadata slot this GPU slot came from.
+        let orig_dense_idx = permutation.get(i).copied().unwrap_or(i as u32) as usize;
+        let meta = match particle_metadata.get(orig_dense_idx) {
+          Some(m) => m,
+          None => continue,
+        };
         if meta.entity_id == entity {
           if (meta.original_index as usize) < sys_particles.len() {
-            if meta.original_index < 5 {
-              #[cfg(test)]
-              println!("WRITE_BACK: i={}, orig={}, p_gpu_pos = [{}, {}, {}], p_gpu_vel = [{}, {}, {}]", i, meta.original_index, p_gpu[0], p_gpu[1], p_gpu[2], p_gpu[3], p_gpu[4], p_gpu[5]);
-            }
             sys_particles[meta.original_index as usize].position = [p_gpu[0], p_gpu[1], p_gpu[2]];
             sys_particles[meta.original_index as usize].velocity = [p_gpu[3], p_gpu[4], p_gpu[5]];
             // Persist F(x_{n+1}) so the next tick's VV predictor (p1_p2) can use it as F(x_n).
             // Unpacked layout: 0-2=pos, 3-5=vel, 6=mass, 7-9=force (km/s²), 10=beta
-            sys_particles[meta.original_index as usize].force   = [p_gpu[7], p_gpu[8], p_gpu[9]];
+            sys_particles[meta.original_index as usize].force = [p_gpu[7], p_gpu[8], p_gpu[9]];
+            sys_sort_order.push(orig_dense_idx as u32);
+            alive_count += 1;
           }
         }
       }
+      sys.gpu_sort_order = sys_sort_order;
+      sys.gpu_alive_count = alive_count;
     });
+
 
     let mut rb_idx = 0usize;
     scene.query3_mut::<crate::scene::TransformComponent, crate::scene::ColliderComponent, crate::scene::KinematicComponent, _>(
@@ -5384,6 +5537,7 @@ impl Kernels for Device {
     particles: &mut Self::Buffer<f32>,
     particle_frame_ids: &mut Self::Buffer<u32>,
     dt: timeus_t,
+    entity_id: crate::scene::EntityId,
   ) -> EngineResult<Self::MotionBvh> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
@@ -5400,6 +5554,7 @@ impl Kernels for Device {
           particles,
           particle_frame_ids,
           dt,
+          entity_id,
         )
       })
       .commit_read(|_res_guard, result| result)

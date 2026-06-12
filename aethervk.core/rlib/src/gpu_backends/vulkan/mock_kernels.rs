@@ -444,8 +444,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     particles: &mut Self::Buffer<f32>,
     particle_frame_ids: &mut Self::Buffer<u32>,
     dt: timeus_t,
+    entity_id: crate::scene::EntityId,
   ) -> EngineResult<Self::MotionBvh> {
-    self.base.build_motion_bvh(cmd, kinematics, rigid_bodies, particles, particle_frame_ids, dt)
+    self.base.build_motion_bvh(cmd, kinematics, rigid_bodies, particles, particle_frame_ids, dt, entity_id)
   }
 
   fn self_intersect_scene(
