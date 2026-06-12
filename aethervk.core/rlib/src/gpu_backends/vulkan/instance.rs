@@ -13,6 +13,16 @@ use core::{
 
 // -------------------------------- Instance --------------------------------
 
+/// Which Linux Vulkan surface extensions were successfully enabled for this instance.
+/// Populated after filtering the desired extensions against what the driver/layers expose.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct LinuxSurfaceSupport {
+  pub wayland: bool,
+  pub xcb: bool,
+  pub xlib: bool,
+}
+
 /// TODO: Document this item
 pub struct Instance {
   pub instance: ash::Instance,
@@ -22,6 +32,8 @@ pub struct Instance {
   pub entry_wrapper: utils::EntryWrapper,
   pub has_surface_maintenance1: bool,
   pub has_headless_surface: bool,
+  #[cfg(target_os = "linux")]
+  pub linux_surface_support: LinuxSurfaceSupport,
 }
 
 impl Instance {
@@ -146,14 +158,28 @@ impl Instance {
       }
     }
 
-    // Now check support against the merged pool
-    if let Some(unsupported) =
-      utils::first_unsupported_extension(&desired_instance_extensions, &available_extensions)
-    {
-      return Err(GpuError::UnsupportedFeatureNamed(
-        unsupported.to_str().unwrap().to_string(),
-      ));
-    }
+    // Now check support against the merged pool and filter out unsupported extensions
+    // This allows fallback (e.g. Wayland missing under RenderDoc, but X11 available)
+    desired_instance_extensions.retain(|&ext| {
+      let is_supported = available_extensions
+        .iter()
+        .any(|avail| unsafe { CStr::from_ptr(avail.extension_name.as_ptr()) } == ext);
+      if !is_supported {
+        aethervk_oshal_rlib::log!("Warning: Requested instance extension {:?} is not supported. Ignoring.", ext);
+      }
+      is_supported
+    });
+
+    // Record which Linux surface extensions survived the filter
+    #[cfg(target_os = "linux")]
+    let linux_surface_support = LinuxSurfaceSupport {
+      wayland: desired_instance_extensions.contains(&ash::khr::wayland_surface::NAME),
+      xcb:     desired_instance_extensions.contains(&ash::khr::xcb_surface::NAME),
+      xlib:    desired_instance_extensions.contains(&ash::khr::xlib_surface::NAME),
+    };
+    #[cfg(target_os = "linux")]
+    aethervk_oshal_rlib::log!("Linux surface support: wayland={} xcb={} xlib={}",
+      linux_surface_support.wayland, linux_surface_support.xcb, linux_surface_support.xlib);
 
     // =========================================================================
     // 3. Setup Validation Features & Debug Messenger
@@ -264,6 +290,8 @@ impl Instance {
         entry_wrapper,
         has_surface_maintenance1,
         has_headless_surface,
+        #[cfg(target_os = "linux")]
+        linux_surface_support,
       })
     }
     #[cfg(not(debug_assertions))]
@@ -272,6 +300,8 @@ impl Instance {
       entry_wrapper,
       has_surface_maintenance1,
       has_headless_surface,
+      #[cfg(target_os = "linux")]
+      linux_surface_support,
     })
   }
 

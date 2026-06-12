@@ -1905,12 +1905,35 @@ pub struct AcquireResult {
   pub swapchain_generation: u64,
 }
 
+/// Discriminates the windowing system whose handles are stored in [`OpaqueNativeHandleInfo`].
+/// This is used at runtime so the Vulkan backend can choose the correct surface creation path
+/// without relying on compile-time Cargo features.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u32)]
+pub enum NativeHandleType {
+  /// No windowing system / headless / windowless.
+  Unknown = 0,
+  /// Win32 HWND + HINSTANCE.
+  Win32 = 1,
+  /// Wayland `wl_display` + `wl_surface`.
+  Wayland = 2,
+  /// Xlib `Display` + `Window`.
+  Xlib = 3,
+  /// XCB `xcb_connection_t` + `xcb_window_t`.
+  Xcb = 4,
+  /// macOS `CAMetalLayer`.
+  Metal = 5,
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
-/// TODO: Document this item
+/// Opaque, platform-agnostic window handle passed across the FFI boundary.
+/// - `ptr0` / `ptr1` carry the platform-specific pointers (see [`NativeHandleType`]).
+/// - `handle_type` tells the Vulkan backend which Vulkan surface extension to use.
 pub struct OpaqueNativeHandleInfo {
   pub ptr0: *mut ffi::c_void,
   pub ptr1: *mut ffi::c_void,
+  pub handle_type: NativeHandleType,
 }
 
 /// Parameters passed from Avalonia to create the surface/swapchain
@@ -1942,6 +1965,7 @@ impl PresentationEngineParams {
       window_info: OpaqueNativeHandleInfo {
         ptr0: core::ptr::null_mut(),
         ptr1: core::ptr::null_mut(),
+        handle_type: NativeHandleType::Unknown,
       },
       buffer_count: 3,
     }

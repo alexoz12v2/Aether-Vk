@@ -1285,44 +1285,43 @@ impl WindowedPresentationState {
       let create_info = vk::Win32SurfaceCreateInfoKHR::default()
         .hinstance(native_handle.ptr0 as _)
         .hwnd(native_handle.ptr1 as _);
-      unsafe { win32_instance.create_win32_surface(&create_info, None) }
+      return unsafe { win32_instance.create_win32_surface(&create_info, None) };
     }
-    #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
+
+    #[cfg(target_os = "linux")]
     {
-      let wayland_instance = ash::khr::wayland_surface::Instance::new(entry, instance);
-      let create_info = vk::WaylandSurfaceCreateInfoKHR::default()
-        .display(native_handle.ptr0 as _)
-        .surface(native_handle.ptr1 as _);
-      unsafe { wayland_instance.create_wayland_surface(&create_info, None) }
+      use crate::gpu::NativeHandleType;
+      match native_handle.handle_type {
+        NativeHandleType::Wayland => {
+          let wayland_instance = ash::khr::wayland_surface::Instance::new(entry, instance);
+          let create_info = vk::WaylandSurfaceCreateInfoKHR::default()
+            .display(native_handle.ptr0 as _)
+            .surface(native_handle.ptr1 as _);
+          return unsafe { wayland_instance.create_wayland_surface(&create_info, None) };
+        }
+        NativeHandleType::Xcb => {
+          let xcb_instance = ash::khr::xcb_surface::Instance::new(entry, instance);
+          let create_info = vk::XcbSurfaceCreateInfoKHR::default()
+            .connection(native_handle.ptr0 as _)
+            .window(native_handle.ptr1 as _);
+          return unsafe { xcb_instance.create_xcb_surface(&create_info, None) };
+        }
+        NativeHandleType::Xlib => {
+          let xlib_instance = ash::khr::xlib_surface::Instance::new(entry, instance);
+          let create_info = vk::XlibSurfaceCreateInfoKHR::default()
+            .dpy(native_handle.ptr0 as _)
+            .window(native_handle.ptr1 as _);
+          return unsafe { xlib_instance.create_xlib_surface(&create_info, None) };
+        }
+        other => {
+          panic!("create_surface: unsupported NativeHandleType {:?} on Linux", other);
+        }
+      }
     }
-    #[cfg(all(
-      target_os = "linux",
-      feature = "linux_xcb",
-      not(feature = "linux_wayland"),
-      not(feature = "linux_xlib")
-    ))]
-    {
-      let xcb_instance = ash::khr::xcb_surface::Instance::new(entry, instance);
-      let create_info = vk::XcbSurfaceCreateInfoKHR::default()
-        .connection(native_handle.ptr0 as _)
-        .window(native_handle.ptr1 as _);
-      unsafe { xcb_instance.create_xcb_surface(&create_info, None) }
-    }
-    #[cfg(all(
-      target_os = "linux",
-      feature = "linux_xlib",
-      not(feature = "linux_wayland"),
-      not(feature = "linux_xcb")
-    ))]
-    {
-      let xlib_instance = ash::khr::xlib_surface::Instance::new(entry, instance);
-      let create_info = vk::XlibSurfaceCreateInfoKHR::default()
-        .dpy(native_handle.ptr0 as _)
-        .window(native_handle.ptr1 as _);
-      unsafe { xlib_instance.create_xlib_surface(&create_info, None) }
-    }
+
     #[cfg(target_os = "macos")]
     {
+
       let metal_instance = ash::ext::metal_surface::Instance::new(entry, instance);
       let create_info = vk::MetalSurfaceCreateInfoEXT::default().layer(native_handle.ptr0 as _);
       unsafe { metal_instance.create_metal_surface(&create_info, None) }
