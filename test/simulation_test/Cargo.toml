@@ -51,10 +51,7 @@ objc2-metal = { version = "0.3.2", default-features = false, features = [
 ] }
 
 [features]
-default = ["debug_gpu", "aethervk-core-rlib/linux_wayland"]
-linux_wayland = ["aethervk-core-rlib/linux_wayland"]
-linux_xlib = ["aethervk-core-rlib/linux_xlib"]
-linux_xcb = ["aethervk-core-rlib/linux_xcb"]
+default = ["debug_gpu"]
 physical_mesh_debug_normals = ["aethervk-core-rlib/physical_mesh_debug_normals"]
 cursor_debug = ["aethervk-core-rlib/cursor_debug"]
 spotless_rendering = []

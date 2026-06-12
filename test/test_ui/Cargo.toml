@@ -12,9 +12,6 @@ aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = f
 winit = { version = "0.29.15", features = ["rwh_06"] }
 
 [features]
-default = ["debug_gpu", "aethervk-core-rlib/linux_wayland"]
-linux_wayland = ["aethervk-core-rlib/linux_wayland"]
-linux_xlib = ["aethervk-core-rlib/linux_xlib"]
-linux_xcb = ["aethervk-core-rlib/linux_xcb"]
+default = ["debug_gpu"]
 debug_gpu = ["aethervk-core-rlib/debug_gpu"]
 

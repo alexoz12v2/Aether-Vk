@@ -694,23 +694,23 @@ impl WindowedPresentationState {
     unsafe {
       let props = instance.get_physical_device_queue_family_properties(physical_device.get());
       for i in 0..props.len() {
-        if surface_instance.get_physical_device_surface_support(
-          physical_device.get(),
-          i as u32,
-          surface,
-        ).unwrap_or(false) {
+        if surface_instance
+          .get_physical_device_surface_support(physical_device.get(), i as u32, surface)
+          .unwrap_or(false)
+        {
           is_supported = true;
         }
       }
     }
 
     if !is_supported {
-      unsafe { surface_instance.destroy_surface(surface, None); }
+      unsafe {
+        surface_instance.destroy_surface(surface, None);
+      }
       return Err(crate::types::GpuError::BackendSpecific(
         "The selected physical device does not support presenting to this surface (likely an Nvidia headless limitation).".to_string()
       ));
     }
-
 
     let mut this = Self {
       surface_instance,
@@ -1294,6 +1294,10 @@ impl WindowedPresentationState {
       match native_handle.handle_type {
         NativeHandleType::Wayland => {
           let wayland_instance = ash::khr::wayland_surface::Instance::new(entry, instance);
+          if wayland_instance.fp().create_wayland_surface_khr as *const () == core::ptr::null() {
+            return Err(ash::vk::Result::ERROR_EXTENSION_NOT_PRESENT);
+          }
+
           let create_info = vk::WaylandSurfaceCreateInfoKHR::default()
             .display(native_handle.ptr0 as _)
             .surface(native_handle.ptr1 as _);
@@ -1301,6 +1305,10 @@ impl WindowedPresentationState {
         }
         NativeHandleType::Xcb => {
           let xcb_instance = ash::khr::xcb_surface::Instance::new(entry, instance);
+          if xcb_instance.fp().create_xcb_surface_khr as *const () == core::ptr::null() {
+            return Err(ash::vk::Result::ERROR_EXTENSION_NOT_PRESENT);
+          }
+
           let create_info = vk::XcbSurfaceCreateInfoKHR::default()
             .connection(native_handle.ptr0 as _)
             .window(native_handle.ptr1 as _);
@@ -1308,20 +1316,26 @@ impl WindowedPresentationState {
         }
         NativeHandleType::Xlib => {
           let xlib_instance = ash::khr::xlib_surface::Instance::new(entry, instance);
+          if xlib_instance.fp().create_xlib_surface_khr as *const () == core::ptr::null() {
+            return Err(ash::vk::Result::ERROR_EXTENSION_NOT_PRESENT);
+          }
+
           let create_info = vk::XlibSurfaceCreateInfoKHR::default()
             .dpy(native_handle.ptr0 as _)
             .window(native_handle.ptr1 as _);
           return unsafe { xlib_instance.create_xlib_surface(&create_info, None) };
         }
         other => {
-          panic!("create_surface: unsupported NativeHandleType {:?} on Linux", other);
+          panic!(
+            "create_surface: unsupported NativeHandleType {:?} on Linux",
+            other
+          );
         }
       }
     }
 
     #[cfg(target_os = "macos")]
     {
-
       let metal_instance = ash::ext::metal_surface::Instance::new(entry, instance);
       let create_info = vk::MetalSurfaceCreateInfoEXT::default().layer(native_handle.ptr0 as _);
       unsafe { metal_instance.create_metal_surface(&create_info, None) }
@@ -1609,7 +1623,9 @@ impl FrameDiscard {
         unsafe {
           let wait_info = vk::SemaphoreWaitInfo::default()
             .semaphores(core::slice::from_ref(&timeline_sem))
-            .values(core::slice::from_ref(&self.highest_submission_timeline_value));
+            .values(core::slice::from_ref(
+              &self.highest_submission_timeline_value,
+            ));
           let _ = timeline_sem_device.wait_semaphores(&wait_info, u64::MAX);
         }
       }
@@ -1627,7 +1643,9 @@ impl FrameDiscard {
       unsafe {
         if is_windowless {
           let _ = self.discarded_images.push(swapchain_image.image);
-          self.highest_submission_timeline_value = self.highest_submission_timeline_value.max(swapchain_image.submission_timeline_value);
+          self.highest_submission_timeline_value = self
+            .highest_submission_timeline_value
+            .max(swapchain_image.submission_timeline_value);
         }
         let _ = self.discarded_image_views.push(swapchain_image.image_view);
         let _ = self.discarded_semaphores.push(swapchain_image.present_semaphore);
@@ -1754,17 +1772,20 @@ impl DeviceResource for WindowlessPresentationState {
   fn cleanup(&mut self, device: &ash::Device) {
     for discard in &mut self.frame_discards {
       discard.skip_cycles = 0; // force cleanup
-      if discard.highest_submission_timeline_value > 0 && self.timeline_sem != vk::Semaphore::null() {
+      if discard.highest_submission_timeline_value > 0 && self.timeline_sem != vk::Semaphore::null()
+      {
         unsafe {
           let wait_info = vk::SemaphoreWaitInfo::default()
             .semaphores(core::slice::from_ref(&self.timeline_sem))
-            .values(core::slice::from_ref(&discard.highest_submission_timeline_value));
+            .values(core::slice::from_ref(
+              &discard.highest_submission_timeline_value,
+            ));
           let _ = self.timeline_sem_device.wait_semaphores(&wait_info, u64::MAX);
         }
       }
       discard.cleanup_windowless(device);
     }
-    
+
     let mut max_timeline = 0;
     for image in &self.images {
       max_timeline = max_timeline.max(image.submission_timeline_value);
@@ -2054,7 +2075,11 @@ impl WindowlessPresentationState {
       let frame_discard = &mut self.frame_discards[prev_frame];
 
       // Added: Prevent memory bloat
-      frame_discard.check_capacity_and_flush_windowless(device, &self.timeline_sem_device, self.timeline_sem);
+      frame_discard.check_capacity_and_flush_windowless(
+        device,
+        &self.timeline_sem_device,
+        self.timeline_sem,
+      );
 
       // Windowless uses strictly native pipelines, WSI grace delays are not required
       frame_discard.skip_cycles = 0;

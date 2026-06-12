@@ -261,4 +261,9 @@ impl RenderContext for VulkanRenderContext {
     let core = self.core.read();
     core.live_devices.get(&dev_handle).map(|device| f(device, p_user_data))
   }
+
+  #[cfg(target_os = "linux")]
+  fn linux_surface_support(&self) -> instance::LinuxSurfaceSupport {
+    self.core.read().instance.linux_surface_support
+  }
 }

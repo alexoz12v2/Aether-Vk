@@ -1738,6 +1738,23 @@ pub trait RenderContext: Send + Sync {
     p_user_data: *mut ffi::c_void,
     f: fn(dev: &dyn RenderDevice, p_user_data: *mut ffi::c_void) -> GpuResult<()>,
   ) -> Option<GpuResult<()>>;
+
+  /// Returns which Vulkan surface extensions were actually enabled on the
+  /// instance.  On Linux the RenderDoc capture layer may strip
+  /// `VK_KHR_wayland_surface`, making a Wayland window unusable.  Call this
+  /// *before* creating a winit window so the right backend can be forced.
+  ///
+  /// The default implementation returns all-supported so that backends that
+  /// don't track per-extension surface support (D3D12, Metal) don't need to
+  /// override this.
+  #[cfg(target_os = "linux")]
+  fn linux_surface_support(&self) -> crate::gpu_backends::vulkan::instance::LinuxSurfaceSupport {
+    crate::gpu_backends::vulkan::instance::LinuxSurfaceSupport {
+      wayland: true,
+      xcb:     true,
+      xlib:    true,
+    }
+  }
 }
 
 // NOTE: This is a box like type, so we don't need to box it when returning it to cdylib,
@@ -1850,6 +1867,17 @@ impl RenderFrontend {
       Some(mut guard) => Some(f(&mut *guard)),
       None => None,
     }
+  }
+
+  /// Returns which Linux Vulkan surface extensions were actually enabled on
+  /// the instance.  Must be called after `SimulationContext::startup` but
+  /// **before** creating a winit window, so the correct windowing backend
+  /// (Wayland vs XCB) can be selected.
+  #[cfg(target_os = "linux")]
+  pub fn linux_surface_support(
+    &self,
+  ) -> crate::gpu_backends::vulkan::instance::LinuxSurfaceSupport {
+    self.backend.read().linux_surface_support()
   }
 }
 

@@ -202,7 +202,7 @@ impl PhysicsPipelines {
   pub fn new(
     device: &LogicalDevice,
     debug_shaders: bool,
-    mut subgroup_size: u32,
+    subgroup_size: u32,
     is_cpu: bool,
   ) -> GpuResult<Self> {
     if subgroup_size <= 16 && is_cpu {
@@ -322,20 +322,27 @@ impl PhysicsPipelines {
         .stage(stage_info)
         .layout(pipeline_layout);
 
+      use crate::gpu_backends::vulkan::device::VulkanDebugNameExt;
       let pipeline = unsafe {
-        device.create_compute_pipelines(
+        let mut p = vk::Pipeline::null();
+        (device.handle.fp_v1_0().create_compute_pipelines)(
+          device.handle.handle(),
           vk::PipelineCache::null(),
-          core::slice::from_ref(&compute_info),
-          None,
+          1u32,
+          core::ptr::from_ref(&compute_info),
+          core::ptr::null(),
+          core::ptr::from_mut(&mut p),
         )
+        .result_with_success(p)
+        .with_name(device, last_segment(spv_path))
       }
-      .map_err(|(_pipelines, e)| {
+      .map_err(|e| {
         GpuError::BackendSpecific(alloc::format!(
           "Failed to create compute pipeline ({}): {:?}",
           spv_path,
           e
         ))
-      })?[0];
+      })?;
 
       unsafe {
         device.destroy_shader_module(shader_module, None);
@@ -3539,7 +3546,6 @@ impl VulkanComputeKernels {
     particles_out.is_list = particles.is_list;
     particles_out.actual_count = particles.actual_count;
 
-
     let mut frame_ids_out = self.allocate_device_buffer::<u32>(
       device,
       allocator,
@@ -6199,6 +6205,18 @@ impl Device {
     }
 
     Ok(())
+  }
+}
+
+fn last_segment(path: &str) -> &str {
+  // rfind looks from the end of the string backwards.
+  // An array of chars implements the Pattern trait, matching any char in the array.
+  if let Some(idx) = path.rfind(['/', '\\']) {
+    // Safe to add 1 because both '/' and '\' are exactly 1 byte long in UTF-8.
+    &path[idx + 1..]
+  } else {
+    // If no slashes are found, the whole string is the last segment.
+    path
   }
 }
 
