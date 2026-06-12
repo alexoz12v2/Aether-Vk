@@ -655,6 +655,8 @@ mod tests {
       color: [1.0, 1.0, 1.0, 1.0],
       ttl_us: 0,
       beta: 1.0,
+      gpu_sort_order: alloc::vec::Vec::new(),
+      gpu_alive_count: 0,
     };
     sys.update_bvh(1.0);
     scene.add_component(particle_system, sys).unwrap();
@@ -784,6 +786,8 @@ mod tests {
       color: [1.0, 1.0, 1.0, 1.0],
       ttl_us: 0,
       beta: 1.0,
+      gpu_sort_order: alloc::vec::Vec::new(),
+      gpu_alive_count: 0,
     };
     sys.update_bvh(1.0);
     scene.add_component(particle_system, sys).unwrap();

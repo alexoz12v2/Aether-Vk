@@ -2449,6 +2449,7 @@ pub trait Kernels: Send + Sync {
     particles: &mut Self::Buffer<f32>,
     particle_frame_ids: &mut Self::Buffer<u32>,
     dt: timeus_t,
+    entity_id: EntityId,
   ) -> EngineResult<Self::MotionBvh>;
 
   /// **Deprecated**: broad-phase now handled by `bp_clear` → `bp_bounds_gen` → `bp_scene`.

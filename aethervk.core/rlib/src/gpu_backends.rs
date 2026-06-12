@@ -388,7 +388,8 @@ where
       if !particle_metadata.is_empty() {
         // Build motion BVH for self-gravity (rebuilt each sub-step as positions change)
         let bvh = AutoDiscard::new(
-          kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, sub_dt)?,
+          kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, sub_dt,
+            particle_metadata.first().map(|m| m.entity_id).unwrap_or_default())?,
           |b| kernels.discard_bvh(b),
         );
         sync!("build_motion_bvh");
@@ -456,7 +457,8 @@ where
 
         if !particle_metadata.is_empty() {
           let bvh = AutoDiscard::new(
-            kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, dt)?,
+            kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, dt,
+              particle_metadata.first().map(|m| m.entity_id).unwrap_or_default())?,
             |b| kernels.discard_bvh(b),
           );
           sync!("build_motion_bvh (collisions path)");
@@ -869,7 +871,8 @@ where
 
           if !particle_metadata.is_empty() {
             let rewind_bvh = AutoDiscard::new(
-              kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, t_c)?,
+              kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, t_c,
+                particle_metadata.first().map(|m| m.entity_id).unwrap_or_default())?,
               |b| kernels.discard_bvh(b),
             );
             kernels.compute_self_gravity(&mut cmd, &rewind_bvh, &mut particles)?;
@@ -915,6 +918,7 @@ where
                   kernels.build_motion_bvh(
                     &mut cmd, &kinematics, &rigid_bodies, &mut particles,
                     &mut particle_frame_ids, remaining_dt,
+                    particle_metadata.first().map(|m| m.entity_id).unwrap_or_default(),
                   )?,
                   |b| kernels.discard_bvh(b),
                 );

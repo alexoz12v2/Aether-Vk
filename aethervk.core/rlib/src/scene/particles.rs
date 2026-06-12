@@ -123,6 +123,14 @@ pub struct ParticleSystemComponent {
   /// Radiation pressure coefficient (dimensionless). ~1.0 for a perfect absorber;
   /// ~2.0 for a perfect reflector. Propagated from the parent `EmissionCircle.beta`.
   pub beta: f32,
+  /// GPU-side sort permutation from last frame's BVH build.
+  /// `gpu_sort_order[gpu_slot] = original_dense_metadata_idx` for this system's particles.
+  /// Refreshed each frame by `write_back_to_scene`. Invalidated on particle birth/death
+  /// (safe: always rewritten before being consumed for write-back).
+  pub gpu_sort_order: alloc::vec::Vec<u32>,
+  /// Number of active particles for this system as of the last GPU upload.
+  /// Refreshed each frame by `write_back_to_scene`.
+  pub gpu_alive_count: u32,
 }
 
 impl core::fmt::Debug for ParticleSystemComponent {
@@ -165,6 +173,8 @@ impl ParticleSystemComponent {
       color: [1.0, 1.0, 1.0, 1.0], // white default
       ttl_us: 0,                   // 0 = never expire (set from EmissionCircle.ttl)
       beta: 0.0,                   // set from EmissionCircle.beta
+      gpu_sort_order: alloc::vec::Vec::new(),
+      gpu_alive_count: 0,
     }
   }
 

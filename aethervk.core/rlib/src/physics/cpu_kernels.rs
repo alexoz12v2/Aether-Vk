@@ -627,6 +627,7 @@ impl Kernels for CpuScalarKernels {
     particles: &mut Self::Buffer<f32>,
     particle_frame_ids: &mut Self::Buffer<u32>,
     dt: timeus_t,
+    _entity_id: crate::scene::EntityId,
   ) -> EngineResult<Self::MotionBvh> {
     Ok(CpuMotionBvh {
       kinematics_copy: alloc::vec::Vec::new(),
@@ -1146,6 +1147,7 @@ impl Kernels for CpuSimdKernels {
     particles: &mut Self::Buffer<f32>,
     particle_frame_ids: &mut Self::Buffer<u32>,
     dt: timeus_t,
+    _entity_id: crate::scene::EntityId,
   ) -> EngineResult<Self::MotionBvh> {
     Ok(CpuMotionBvh {
       kinematics_copy: alloc::vec::Vec::new(),
