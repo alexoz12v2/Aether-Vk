@@ -45,36 +45,39 @@ bitflags! {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// TODO: Document this item
 pub(super) struct PhysicalDeviceQueryInput {
-  #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
+  #[cfg(target_os = "linux")]
+  /// Which Linux surface extensions were actually enabled on the instance.
+  pub(super) linux_surface_support: super::instance::LinuxSurfaceSupport,
+  #[cfg(target_os = "linux")]
   wl_display: Option<core::ptr::NonNull<vk::wl_display>>,
-  #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+  #[cfg(target_os = "linux")]
   xcb_connection: Option<core::ptr::NonNull<vk::xcb_connection_t>>,
-  #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+  #[cfg(target_os = "linux")]
   xcb_visualid: Option<vk::xcb_visualid_t>,
-  #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+  #[cfg(target_os = "linux")]
   dpy: Option<core::ptr::NonNull<vk::Display>>,
-  #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+  #[cfg(target_os = "linux")]
   visual_id: Option<vk::VisualID>,
   pub debug_shaders: bool,
 }
 impl PhysicalDeviceQueryInput {
   /// TODO: Document this item
   pub(super) fn from_params(_value: &DeviceAdditionalParams) -> Option<Self> {
-    #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
+    #[cfg(target_os = "linux")]
     let wl_display = _value
       .get(&super::DEVICE_ADDIDITIONAL_PARAM_WL_DISPLAY)
       .and_then(|intptr| core::ptr::NonNull::new((*intptr) as *mut _));
-    #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+    #[cfg(target_os = "linux")]
     let xcb_connection = _value
       .get(&super::DEVICE_ADDIDITIONAL_PARAM_XCB_CONNECTION)
       .and_then(|intptr| core::ptr::NonNull::new((*intptr) as *mut _));
-    #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+    #[cfg(target_os = "linux")]
     let xcb_visualid = _value.get(&super::DEVICE_ADDIDITIONAL_PARAM_XCB_VISUALID).map(|v| *v as _);
-    #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+    #[cfg(target_os = "linux")]
     let dpy = _value
       .get(&super::DEVICE_ADDIDITIONAL_PARAM_DPY)
       .and_then(|intptr| core::ptr::NonNull::new((*intptr) as *mut _));
-    #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+    #[cfg(target_os = "linux")]
     let visual_id = _value.get(&super::DEVICE_ADDIDITIONAL_PARAM_VISUAL_ID).map(|v| *v as _);
 
     let debug_shaders = _value
@@ -82,15 +85,18 @@ impl PhysicalDeviceQueryInput {
       .map_or(false, |v| *v != 0);
 
     Some(Self {
-      #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
+      #[cfg(target_os = "linux")]
+      // Will be populated by the caller once the Instance knows what's available
+      linux_surface_support: Default::default(),
+      #[cfg(target_os = "linux")]
       wl_display,
-      #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+      #[cfg(target_os = "linux")]
       xcb_connection,
-      #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+      #[cfg(target_os = "linux")]
       xcb_visualid,
-      #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+      #[cfg(target_os = "linux")]
       dpy,
-      #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+      #[cfg(target_os = "linux")]
       visual_id,
       debug_shaders,
     })
@@ -111,57 +117,53 @@ impl PhysicalDeviceQueryInput {
       _supported = true;
     }
 
-    #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
-    unsafe {
-      if let Some(wl) = self.wl_display {
-        let ptr_copy = wl.as_ptr();
-        _supported = ash::khr::wayland_surface::Instance::new(_entry, _instance)
-          .get_physical_device_wayland_presentation_support(
-            _physical_device,
-            _queue_family_index,
-            ptr_copy.as_mut().unwrap(),
-          );
+    #[cfg(target_os = "linux")]
+    {
+      if self.linux_surface_support.wayland {
+        if let Some(wl) = self.wl_display {
+          unsafe {
+            let ptr_copy = wl.as_ptr();
+            _supported = ash::khr::wayland_surface::Instance::new(_entry, _instance)
+              .get_physical_device_wayland_presentation_support(
+                _physical_device,
+                _queue_family_index,
+                ptr_copy.as_mut().unwrap(),
+              );
+          }
+        } else {
+          _supported = true;
+        }
+      } else if self.linux_surface_support.xcb {
+        if let (Some(conn), Some(vis)) = (self.xcb_connection, self.xcb_visualid) {
+          unsafe {
+            _supported = ash::khr::xcb_surface::Instance::new(_entry, _instance)
+              .get_physical_device_xcb_presentation_support(
+                _physical_device,
+                _queue_family_index,
+                &mut *conn.as_ptr(),
+                vis,
+              );
+          }
+        } else {
+          _supported = true;
+        }
+      } else if self.linux_surface_support.xlib {
+        if let (Some(dpy), Some(vis)) = (self.dpy, self.visual_id) {
+          unsafe {
+            _supported = ash::khr::xlib_surface::Instance::new(_entry, _instance)
+              .get_physical_device_xlib_presentation_support(
+                _physical_device,
+                _queue_family_index,
+                dpy.as_ptr(),
+                vis,
+              );
+          }
+        } else {
+          _supported = true;
+        }
       } else {
-        _supported = true;
-      }
-    }
-
-    #[cfg(all(
-      target_os = "linux",
-      feature = "linux_xcb",
-      not(feature = "linux_wayland"),
-      not(feature = "linux_xlib")
-    ))]
-    unsafe {
-      if let (Some(conn), Some(vis)) = (self.xcb_connection, self.xcb_visualid) {
-        _supported = ash::khr::xcb_surface::Instance::new(_entry, _instance)
-          .get_physical_device_xcb_presentation_support(
-            _physical_device,
-            _queue_family_index,
-            conn.as_ptr() as *mut _,
-            vis,
-          );
-      } else {
-        _supported = true;
-      }
-    }
-
-    #[cfg(all(
-      target_os = "linux",
-      feature = "linux_xlib",
-      not(feature = "linux_wayland"),
-      not(feature = "linux_xcb")
-    ))]
-    unsafe {
-      if let (Some(dpy), Some(vis)) = (self.dpy, self.visual_id) {
-        _supported = ash::khr::xlib_surface::Instance::new(_entry, _instance)
-          .get_physical_device_xlib_presentation_support(
-            _physical_device,
-            _queue_family_index,
-            dpy.as_ptr(),
-            vis,
-          );
-      } else {
+        // No recognised surface extension: assume presentation is possible
+        // (headless / unknown environment)
         _supported = true;
       }
     }
@@ -780,18 +782,9 @@ pub(super) fn required_instance_extensions() -> &'static Vec<&'static CStr> {
     }
     #[cfg(target_os = "linux")]
     {
-      #[cfg(feature = "linux_wayland")]
-      {
-        the_vec.push(ash::khr::wayland_surface::NAME);
-      }
-      #[cfg(feature = "linux_xcb")]
-      {
-        the_vec.push(ash::khr::xcb_surface::NAME);
-      }
-      #[cfg(feature = "linux_xlib")]
-      {
-        the_vec.push(ash::khr::xlib_surface::NAME);
-      }
+      the_vec.push(ash::khr::wayland_surface::NAME);
+      the_vec.push(ash::khr::xcb_surface::NAME);
+      the_vec.push(ash::khr::xlib_surface::NAME);
     }
     // colorspaces
     the_vec.push(ash::ext::swapchain_colorspace::NAME);

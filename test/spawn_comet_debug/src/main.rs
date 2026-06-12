@@ -789,6 +789,18 @@ impl SimulationDelegate for SpawnCometDelegate {
 
 fn main() {
   let _assets_dir = cycle_get_asset_path_from_exe(true);
+
+  //#[cfg(debug_assertions)]
+  //{
+  //  // A flag to keep the thread spinning
+  //  let mut wait: bool = true;
+  //  // We use read_volatile so the compiler doesn't optimize the loop away
+  //  while unsafe { core::ptr::read_volatile(&wait) } {
+  //    // Just spin. (Note: this will pin one CPU core at 100% while waiting)
+  //    core::hint::spin_loop();
+  //  }
+  //}
+
   let delegate = SpawnCometDelegate {
     camera_ext_entity: 0,
     was_micro: None,

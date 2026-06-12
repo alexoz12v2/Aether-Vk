@@ -191,13 +191,20 @@ impl RenderContext for VulkanRenderContext {
     additional_params: &DeviceAdditionalParams,
   ) -> GpuResult<RenderDeviceHandle> {
     let handle = self.device_id_from_index(index);
-    let query_input = PhysicalDeviceQueryInput::from_params(additional_params)
+    let mut query_input = PhysicalDeviceQueryInput::from_params(additional_params)
       .ok_or(GpuError::InvalidArgument("vulkan.rs:128".to_string()))?;
 
     let mut core = self.core.write();
 
+    // Propagate which Linux surface extensions are actually enabled into query_input
+    #[cfg(target_os = "linux")]
+    {
+      query_input.linux_surface_support = core.instance.linux_surface_support;
+    }
+
     if !core.live_devices.contains_key(&handle) {
       let instance = alloc::sync::Arc::clone(&core.instance);
+
 
       // 1. We need to reserve space in the heapless map.
       // Since heapless doesn't have an 'entry' API for uninitialized memory,

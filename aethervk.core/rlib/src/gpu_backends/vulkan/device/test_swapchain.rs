@@ -722,6 +722,7 @@ mod tests {
       window_info: crate::gpu::OpaqueNativeHandleInfo {
         ptr0: core::ptr::null_mut(),
         ptr1: core::ptr::null_mut(),
+        handle_type: crate::gpu::NativeHandleType::Unknown,
       },
       width: 800,
       height: 600,
@@ -848,6 +849,7 @@ mod tests {
       window_info: crate::gpu::OpaqueNativeHandleInfo {
         ptr0: core::ptr::null_mut(),
         ptr1: core::ptr::null_mut(),
+        handle_type: crate::gpu::NativeHandleType::Unknown,
       },
       width: 800,
       height: 600,
@@ -882,6 +884,7 @@ mod tests {
       window_info: crate::gpu::OpaqueNativeHandleInfo {
         ptr0: core::ptr::null_mut(),
         ptr1: core::ptr::null_mut(),
+        handle_type: crate::gpu::NativeHandleType::Unknown,
       },
       width: 800,
       height: 600,
@@ -915,6 +918,7 @@ mod tests {
       window_info: crate::gpu::OpaqueNativeHandleInfo {
         ptr0: core::ptr::null_mut(),
         ptr1: core::ptr::null_mut(),
+        handle_type: crate::gpu::NativeHandleType::Unknown,
       },
       width: 400,
       height: 400,
@@ -1121,6 +1125,7 @@ mod tests {
       window_info: crate::gpu::OpaqueNativeHandleInfo {
         ptr0: core::ptr::null_mut(),
         ptr1: core::ptr::null_mut(),
+        handle_type: crate::gpu::NativeHandleType::Unknown,
       },
       width: 800,
       height: 600,

@@ -10,7 +10,7 @@ pub mod threading;
 use aethervk_core_rlib::{
   gpu,
   gpu::{
-    OpaqueNativeHandleInfo, PresentationEngineHandle, RenderDevice, RenderDeviceHandle,
+    OpaqueNativeHandleInfo, NativeHandleType, PresentationEngineHandle, RenderDevice, RenderDeviceHandle,
     RenderFrontend, RenderScene, scene_conversion::SceneConversionExt,
   },
   scene::{
@@ -160,33 +160,37 @@ pub fn extract_native_handles(
       OpaqueNativeHandleInfo {
         ptr0: w.hinstance.map(|h| h.get()).unwrap_or(0) as *mut ffi::c_void,
         ptr1: w.hwnd.get() as *mut ffi::c_void,
+        handle_type: NativeHandleType::Win32,
       },
       WindowPlatformData {},
     ),
 
-    #[cfg(all(target_os = "linux", feature = "linux_wayland"))]
+    #[cfg(target_os = "linux")]
     (RawWindowHandle::Wayland(w), RawDisplayHandle::Wayland(d)) => (
       OpaqueNativeHandleInfo {
         ptr0: d.display.as_ptr() as *mut ffi::c_void,
         ptr1: w.surface.as_ptr() as *mut ffi::c_void,
+        handle_type: NativeHandleType::Wayland,
       },
       WindowPlatformData {},
     ),
 
-    #[cfg(all(target_os = "linux", feature = "linux_xlib"))]
+    #[cfg(target_os = "linux")]
     (RawWindowHandle::Xlib(w), RawDisplayHandle::Xlib(d)) => (
       OpaqueNativeHandleInfo {
         ptr0: d.display.map(|d| d.as_ptr()).unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
         ptr1: w.window as usize as *mut ffi::c_void,
+        handle_type: NativeHandleType::Xlib,
       },
       WindowPlatformData {},
     ),
 
-    #[cfg(all(target_os = "linux", feature = "linux_xcb"))]
+    #[cfg(target_os = "linux")]
     (RawWindowHandle::Xcb(w), RawDisplayHandle::Xcb(d)) => (
       OpaqueNativeHandleInfo {
         ptr0: d.connection.map(|c| c.as_ptr()).unwrap_or(std::ptr::null_mut()) as *mut ffi::c_void,
         ptr1: w.window.get() as usize as *mut ffi::c_void,
+        handle_type: NativeHandleType::Xcb,
       },
       WindowPlatformData {},
     ),
@@ -199,6 +203,7 @@ pub fn extract_native_handles(
         ptr0: core::ptr::from_ref::<objc2_quartz_core::CALayer>(layer.as_ref())
           as *mut core::ffi::c_void,
         ptr1: std::ptr::null_mut(),
+        handle_type: NativeHandleType::Metal,
       };
 
       (info, WindowPlatformData::new_macos(layer))
