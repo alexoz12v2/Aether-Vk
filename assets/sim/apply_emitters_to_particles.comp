@@ -1,20 +1,42 @@
 // @assets/sim/apply_emitters_to_particles.comp
 //
-// Force unit contract:
-//   Gravity emitter: position in AU (macro-frame world space).
-//   Particle:        position in km (micro-frame local) when frame_type == 1,
-//                    or AU (macro-frame) when frame_type == 0.
+// External-Gravity to BVH Clusters  (Phase A of external-force pipeline)
+// ─────────────────────────────────────────────────────────────────────────
+// Dispatch pattern: one subgroup per BVH node (matching barnes_hut.comp).
+// Each invocation lane represents one child slot (lane = 0 or 1) in the node.
 //
-//   r_local is always computed in km by the frame_type branch below:
-//     macro particle: r_local = (emitter_AU - pos_AU) * AU_TO_KM   [km]
-//     micro particle: r_local = (emitter_AU - frame.center_AU) / scale - pos_km [km]
+// What this shader does
+// ─────────────────────
+//   For every BVH cluster node, compute the gravitational acceleration from
+//   each external ForceEmitter (type_id == 0) at the cluster's CoM position
+//   (km, micro-frame local) and atomically add the resulting force
+//   (F = acc * cluster_mass) into the cluster's BVH force slot.
+//   The self-gravity forces written by barnes_hut.comp are already there;
+//   this pass accumulates on top of them.
 //
-//   force_mag = mu_eff * mass / dist_km²  →  [km³/s² * kg / km²] = [km·kg/s²]
-//   f_acc / mass  → acceleration [km/s²]  (stored in AOSOA slots 7-9)
+//   When pc.bvh == 0 (null — pure RB or single-particle scene with no tree)
+//   the shader early-returns.  The null check uses uvec2 + subgroupAny so the
+//   LLVM vectorizer (Lavapipe) cannot speculate past the guard.
+//
+// Force-persistence contract
+// ──────────────────────────
+//   p1_p2                 : reads slots 7-9 as F(x_n), then zeroes them
+//   barnes_hut            : writes self-gravity into BVH force slots
+//   apply_emitters (this) : adds external gravity into BVH force slots
+//   accumulate_bvh_forces : per-particle leaf→root traversal → AOSOA slots 7-9
+//   p4_p5                 : reads slots 7-9 as F(x_{n+1}), does NOT zero them
+//   write_back_to_scene   : persists slots 7-9 as ParticleData.force
+//   next-tick build_packs  : repacks ParticleData.force → slots 7-9 as new F(x_n)
+//
+// Unit contract
+//   Cluster CoM : km  (micro-frame local, same as particle positions)
+//   Emitter pos : AU  world-space  (converted inside emitter_acc_on_cluster)
+//   Force output: km/s² × kg  (per-cluster force stored in BVH force slots)
 #version 450 core
 #extension GL_EXT_buffer_reference2         : require
 #extension GL_EXT_buffer_reference_uvec2    : require
 #extension GL_KHR_shader_subgroup_basic     : require
+#extension GL_KHR_shader_subgroup_vote      : require   // subgroupAny
 #extension GL_GOOGLE_include_directive      : require
 
 #include "../bvh_utils.glsl"
@@ -41,111 +63,114 @@ layout(push_constant, std430) uniform PushConstants {
     uint _pad[3];
 } pc;
 
-shared vec3 s_em_pos;
+// Workgroup-shared emitter cache so all lanes read the same emitter values.
+shared vec3  s_em_pos;
 shared float s_em_mu;
 shared float s_em_beta;
-shared uint s_em_type;
+shared uint  s_em_type;
+
+// Shared BVH null-guard: computed once by thread 0, read by all.
+// Using uvec2 (no shaderInt64) + subgroupAny (no LLVM speculation).
+shared bool s_has_bvh;
 
 void main() {
-    uint gid = gl_GlobalInvocationID.x;
-    
-    // We process particles directly. Since the buffer is already sorted,
-    // memory accesses will be naturally coalesced.
-    
-    // Setup base index for this invocation
-    uint block = gid / SUBGROUP_SIZE;
-    uint lane  = gid % SUBGROUP_SIZE;
-    uint base  = block * (PARTICLE_FIELDS * SUBGROUP_SIZE) + lane;
-    
-    bool is_active = (gid < pc.total_particles);
-    float mass = 0.0;
-    vec3 pos = vec3(0.0);
-    uint fi = 0;
-    GpuReferenceFrame frame;
-    
-    if (is_active) {
-        mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
-        if (mass > 0.0) {
-            pos = vec3(
-                P_READ(pc.particles, base + 0u * SUBGROUP_SIZE),
-                P_READ(pc.particles, base + 1u * SUBGROUP_SIZE),
-                P_READ(pc.particles, base + 2u * SUBGROUP_SIZE)
-            );
-            fi = pc.particle_frame_ids.frame_ids[gid];
-            frame = pc.frames.frames[fi];
-        } else {
-            is_active = false;
-        }
+    // ── Null-BVH guard ────────────────────────────────────────────────────
+    if (gl_LocalInvocationID.x == 0u) {
+        uvec2 bvh_uvec = uvec2(pc.bvh);
+        bool  local_ok = (bvh_uvec.x != 0u || bvh_uvec.y != 0u);
+        s_has_bvh = local_ok && subgroupAny(local_ok);
     }
-    
-    // Read particle-intrinsic radiation pressure coefficient β from AOSOA slot 10.
-    float p_beta = 0.0;
-    if (is_active) {
-        p_beta = P_READ(pc.particles, base + 10u * SUBGROUP_SIZE);
+    barrier();
+    if (!s_has_bvh || pc.num_emitters == 0u || pc.total_particles == 0u) return;
+
+    // ── Subgroup / node mapping (mirrors barnes_hut.comp) ─────────────────
+    uint actual_sg_per_wg = LOCAL_SIZE_X / SUBGROUP_SIZE;
+    uint node_job         = gl_WorkGroupID.x * actual_sg_per_wg + gl_SubgroupID;
+    uint lane             = gl_SubgroupInvocationID;
+
+    // Total BVH nodes in a complete binary tree over the leaves
+    uint n_leaves = (pc.total_particles + PARTICLES_IN_LEAF - 1u) / PARTICLES_IN_LEAF;
+    uint n_nodes  = (n_leaves > 0u) ? (2u * n_leaves - 1u) : 0u;
+    if (node_job >= n_nodes) return;
+
+    // ── Read cluster data ─────────────────────────────────────────────────
+    bool lane_valid = bvh_node_is_valid(tlas_valid_mask(pc.bvh, node_job), lane);
+
+    vec3  cluster_com  = vec3(0.0);
+    float cluster_mass = 0.0;
+    uint  fi           = 0u;
+
+    if (lane_valid) {
+        cluster_com  = vec3(
+            tlas_com_x(pc.bvh, node_job, lane),
+            tlas_com_y(pc.bvh, node_job, lane),
+            tlas_com_z(pc.bvh, node_job, lane)
+        );
+        cluster_mass = tlas_mass(pc.bvh, node_job, lane);
+
+        // Reference frame: look up via first particle in the cluster
+        uint p0 = tlas_pstart(pc.bvh, node_job, lane);
+        fi = pc.particle_frame_ids.frame_ids[p0];
     }
-    
-    vec3 f_acc = vec3(0.0);
+
+    // ── Accumulate external-gravity force from all emitters ───────────────
+    vec3 f_ext_acc = vec3(0.0); // km/s² (acceleration on cluster CoM)
 
     for (uint e = 0u; e < pc.num_emitters; ++e) {
-        if (gl_LocalInvocationID.x == 0) {
+        // Broadcast emitter data to all lanes through shared memory.
+        // Thread 0 of the whole workgroup is always in the same subgroup so
+        // gl_LocalInvocationID.x == 0 is safe here.
+        if (gl_LocalInvocationID.x == 0u) {
             s_em_type = pc.emitters.emitters[e].type_id;
             s_em_pos  = pc.emitters.emitters[e].position;
             s_em_mu   = pc.emitters.emitters[e].mu;
             s_em_beta = pc.emitters.emitters[e].beta;
         }
         barrier();
-        
+
+        // Only Gravity emitters (type_id == 0)
         if (s_em_type != 0u) { barrier(); continue; }
-        
-        if (is_active) {
+
+        if (lane_valid && cluster_mass > 0.0) {
+            GpuReferenceFrame frame = pc.frames.frames[fi];
+
+            // Convert emitter AU world-space position → km in particle frame
             vec3 r_local;
             if (frame.frame_type == 0u) {
-                r_local = (s_em_pos - pos) * AU_TO_KM;
+                // Macro frame: cluster_com is in AU; emitter is also in AU
+                r_local = (s_em_pos - cluster_com) * AU_TO_KM;
             } else {
-                r_local = (s_em_pos - frame.center_pos) / frame.scale - pos;
+                // Micro frame: cluster_com is in km local;
+                // emitter must be converted: (emitter_AU - frame_center_AU) / scale [km]
+                r_local = (s_em_pos - frame.center_pos) / frame.scale - cluster_com;
             }
 
             float dist_sq = dot(r_local, r_local);
             if (dist_sq > 1e-6) {
-                float dist      = sqrt(dist_sq);
-                float dist3     = dist_sq * dist;
-                float dist5     = dist3 * dist_sq;
-                float softening = 1.0 - exp(-dist5);
-                float mu_eff    = s_em_mu * (1.0 - p_beta);
-            // r_local [km]; force_mag [km/s²·kg]; f_acc accumulates [km/s²] per unit mass
-                float force_mag = (mu_eff * mass * softening) / dist_sq;
-                f_acc += (r_local / dist) * force_mag;
+                float dist   = sqrt(dist_sq);
+                float dist3  = dist_sq * dist;
+                float dist5  = dist3 * dist_sq;
+                float soft   = 1.0 - exp(-dist5);
+                float mu_eff = s_em_mu * (1.0 - s_em_beta);
+
+                // Gravitational acceleration at cluster CoM [km/s²]
+                f_ext_acc += (r_local / dist) * (mu_eff * soft) / dist_sq;
             }
         }
         barrier();
     }
-    
-    if (is_active) {
-        // Self-gravity BVH pass
-        uvec2 bvh_uvec = uvec2(pc.bvh);
-        if (bvh_uvec.x != 0u || bvh_uvec.y != 0u) {
-            uint leaf_idx = gid / PARTICLES_IN_LEAF;
-            uint num_leaves = (pc.total_particles + PARTICLES_IN_LEAF - 1) / PARTICLES_IN_LEAF;
-            uint current = num_leaves - 1 + leaf_idx;
 
-            while (current != 0) {
-                uint parent     = tlas_parent(pc.bvh, current);
-                uint c1         = tlas_child(pc.bvh, parent, 1u);
-                uint child_lane = (c1 == current) ? 1u : 0u;
+    // ── Write cluster external-gravity force into BVH force slot ──────────
+    // F = acc × mass  (same convention as barnes_hut.comp tlas_write_force_*)
+    if (lane_valid && cluster_mass > 0.0 &&
+        (f_ext_acc.x != 0.0 || f_ext_acc.y != 0.0 || f_ext_acc.z != 0.0)) {
 
-                f_acc += vec3(
-                    tlas_force_x(pc.bvh, parent, child_lane),
-                    tlas_force_y(pc.bvh, parent, child_lane),
-                    tlas_force_z(pc.bvh, parent, child_lane)
-                );
-                current = parent;
-            }
-        }
+        vec3 g_f = f_ext_acc * cluster_mass;
 
-        if (f_acc.x != 0.0 || f_acc.y != 0.0 || f_acc.z != 0.0) {
-            ATOMIC_ADD_FLOAT(pc.particles.data[base + 7u * SUBGROUP_SIZE], f_acc.x);
-            ATOMIC_ADD_FLOAT(pc.particles.data[base + 8u * SUBGROUP_SIZE], f_acc.y);
-            ATOMIC_ADD_FLOAT(pc.particles.data[base + 9u * SUBGROUP_SIZE], f_acc.z);
-        }
+        // Atomic add required: multiple workgroups may share parent nodes.
+        uint nb = tlas_node_base(node_job);
+        ATOMIC_ADD_FLOAT(pc.bvh.data[tlas_force_x_u(nb, lane)], g_f.x);
+        ATOMIC_ADD_FLOAT(pc.bvh.data[tlas_force_y_u(nb, lane)], g_f.y);
+        ATOMIC_ADD_FLOAT(pc.bvh.data[tlas_force_z_u(nb, lane)], g_f.z);
     }
 }

@@ -269,15 +269,10 @@ impl Kernels for CpuScalarKernels {
 
   fn build_particles(
     &self,
-    cmd: &mut Self::Cmd,
-    scene: &Scene,
-  ) -> EngineResult<(Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)> {
-    Ok((
-      CpuBuffer {
-        data: alloc::vec::Vec::new(),
-      },
-      alloc::vec::Vec::new(),
-    ))
+    _cmd: &mut Self::Cmd,
+    _scene: &Scene,
+  ) -> EngineResult<alloc::vec::Vec<(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)>> {
+    Ok(alloc::vec::Vec::new())
   }
 
   fn build_particle_frame_ids(
@@ -517,9 +512,19 @@ impl Kernels for CpuScalarKernels {
     _emitters: &Self::Buffer<ForceEmitter>,
     _frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
     _particle_frame_ids: &Self::Buffer<u32>,
+    _bvh: &Self::MotionBvh,
     _num_emitters: u32,
   ) -> EngineResult<()> {
     // TODO: implement CPU-path cross-frame particle emitter force accumulation
+    Ok(())
+  }
+
+  fn accumulate_bvh_forces_to_particles(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _particles: &mut Self::Buffer<f32>,
+    _bvh: &Self::MotionBvh,
+  ) -> EngineResult<()> {
     Ok(())
   }
 
@@ -628,6 +633,7 @@ impl Kernels for CpuScalarKernels {
     particle_frame_ids: &mut Self::Buffer<u32>,
     dt: timeus_t,
     _entity_id: crate::scene::EntityId,
+    _particle_aabb: Option<([f32; 3], [f32; 3])>,
   ) -> EngineResult<Self::MotionBvh> {
     Ok(CpuMotionBvh {
       kinematics_copy: alloc::vec::Vec::new(),
@@ -739,15 +745,13 @@ impl Kernels for CpuScalarKernels {
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>)> {
+    particles: Option<&Self::Buffer<f32>>,
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Option<Self::Buffer<f32>>)> {
     Ok((
       CpuBuffer {
         data: alloc::vec::Vec::new(),
       },
-      CpuBuffer {
-        data: alloc::vec::Vec::new(),
-      },
+      None,
     ))
   }
 
@@ -756,20 +760,19 @@ impl Kernels for CpuScalarKernels {
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
-    particles: &mut Self::Buffer<f32>,
-    snapshot: &(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>),
+    particles: Option<&mut Self::Buffer<f32>>,
+    snapshot: &(Self::Buffer<RigidBodyImex>, Option<Self::Buffer<f32>>),
   ) -> EngineResult<()> {
     Ok(())
   }
 
   fn write_back_to_scene(
     &self,
-    cmd: &mut Self::Cmd,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
-    particle_metadata: &[ParticleMetadata],
-    physical_scene: &mut PhysicsScene,
-    scene: &Scene,
+    _cmd: &mut Self::Cmd,
+    _rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    _particle_systems: &[(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)],
+    _physical_scene: &mut PhysicsScene,
+    _scene: &Scene,
   ) -> EngineResult<Option<crate::gpu::CommandBufferSyncInfo>> {
     Ok(None)
   }
@@ -897,15 +900,10 @@ impl Kernels for CpuSimdKernels {
 
   fn build_particles(
     &self,
-    cmd: &mut Self::Cmd,
-    scene: &Scene,
-  ) -> EngineResult<(Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)> {
-    Ok((
-      CpuBuffer {
-        data: alloc::vec::Vec::new(),
-      },
-      alloc::vec::Vec::new(),
-    ))
+    _cmd: &mut Self::Cmd,
+    _scene: &Scene,
+  ) -> EngineResult<alloc::vec::Vec<(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)>> {
+    Ok(alloc::vec::Vec::new())
   }
 
   fn build_particle_frame_ids(
@@ -1043,7 +1041,17 @@ impl Kernels for CpuSimdKernels {
     _emitters: &Self::Buffer<ForceEmitter>,
     _frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
     _particle_frame_ids: &Self::Buffer<u32>,
+    _bvh: &Self::MotionBvh,
     _num_emitters: u32,
+  ) -> EngineResult<()> {
+    Ok(())
+  }
+
+  fn accumulate_bvh_forces_to_particles(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _particles: &mut Self::Buffer<f32>,
+    _bvh: &Self::MotionBvh,
   ) -> EngineResult<()> {
     Ok(())
   }
@@ -1148,6 +1156,7 @@ impl Kernels for CpuSimdKernels {
     particle_frame_ids: &mut Self::Buffer<u32>,
     dt: timeus_t,
     _entity_id: crate::scene::EntityId,
+    _particle_aabb: Option<([f32; 3], [f32; 3])>,
   ) -> EngineResult<Self::MotionBvh> {
     Ok(CpuMotionBvh {
       kinematics_copy: alloc::vec::Vec::new(),
@@ -1259,15 +1268,13 @@ impl Kernels for CpuSimdKernels {
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>)> {
+    particles: Option<&Self::Buffer<f32>>,
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Option<Self::Buffer<f32>>)> {
     Ok((
       CpuBuffer {
         data: alloc::vec::Vec::new(),
       },
-      CpuBuffer {
-        data: alloc::vec::Vec::new(),
-      },
+      None,
     ))
   }
 
@@ -1276,20 +1283,19 @@ impl Kernels for CpuSimdKernels {
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
-    particles: &mut Self::Buffer<f32>,
-    snapshot: &(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>),
+    particles: Option<&mut Self::Buffer<f32>>,
+    snapshot: &(Self::Buffer<RigidBodyImex>, Option<Self::Buffer<f32>>),
   ) -> EngineResult<()> {
     Ok(())
   }
 
   fn write_back_to_scene(
     &self,
-    cmd: &mut Self::Cmd,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
-    particle_metadata: &[ParticleMetadata],
-    physical_scene: &mut PhysicsScene,
-    scene: &Scene,
+    _cmd: &mut Self::Cmd,
+    _rigid_bodies: &Self::Buffer<RigidBodyImex>,
+    _particle_systems: &[(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)],
+    _physical_scene: &mut PhysicsScene,
+    _scene: &Scene,
   ) -> EngineResult<Option<crate::gpu::CommandBufferSyncInfo>> {
     Ok(None)
   }

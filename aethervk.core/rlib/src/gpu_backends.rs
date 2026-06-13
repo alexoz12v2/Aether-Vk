@@ -303,23 +303,31 @@ where
   let (rb_buf, wr_buf, n_bodies) = kernels.build_rigid_bodies(&mut cmd, physical_scene, scene)?;
   let mut rigid_bodies = AutoDiscard::new(rb_buf, |b| kernels.discard_buffer(b));
   let mut wrenches = AutoDiscard::new(wr_buf, |b| kernels.discard_buffer(b));
-  let (p_buf, particle_metadata) = kernels.build_particles(&mut cmd, scene)?;
-  let mut particles = AutoDiscard::new(p_buf, |b| kernels.discard_buffer(b));
-  // Upload per-particle frame indices derived from ParticleMetadata.parent_frame_id.
-  // Consumed by apply_emitters_to_particles.comp via BDA.
-  let mut particle_frame_ids = AutoDiscard::new(
-    kernels.build_particle_frame_ids(&mut cmd, &particle_metadata)?,
-    |b| kernels.discard_buffer(b),
-  );
+  // build_particles returns one (entity_id, buffer, metadata) per ParticleSystemComponent.
+  // Each system gets its own AoSoA GPU buffer so BVH bounds and self-gravity are per-system.
+  let mut particle_systems = kernels.build_particles(&mut cmd, scene)?;
+  // Flat metadata list (all systems concatenated) used only by write_back_to_scene routing.
+  let particle_metadata: alloc::vec::Vec<crate::gpu::ParticleMetadata> =
+    particle_systems.iter().flat_map(|(_, _, meta)| meta.iter().copied()).collect();
   let (emitters_buf, n_emitters) = kernels.build_emitters(&mut cmd, scene)?;
   let emitters = AutoDiscard::new(emitters_buf, |b| kernels.discard_buffer(b));
   // Reference frames for LCA broad-phase (macro frame is always index 0)
   let frames = AutoDiscard::new(kernels.build_frames(&mut cmd, physical_scene)?, |b| {
     kernels.discard_buffer(b)
   });
+  // For collision paths that need a particles BDA (narrow_ccd, restore_dynamics) even in
+  // pure rigid-body scenes, we build a 0-element emission-candidates buffer here.
+  // It is allocated in the same command batch so the transient pool drains it after cmd.submit().
+  #[cfg(any(test, feature = "collisions"))]
+  let mut null_particles_buf = AutoDiscard::new(
+
+    kernels.build_emission_candidates(&mut cmd, scene)?,
+    |b| kernels.discard_buffer(b),
+  );
   aethervk_oshal_rlib::log!("PRINT_ADDR rigid_bodies: 0x{:x}", rigid_bodies.address());
   aethervk_oshal_rlib::log!("PRINT_ADDR frames: 0x{:x}", frames.address());
   sync!("buffer_uploads (kinematics + rigid_bodies + particles + emitters + frames)");
+
 
   // ── 2. Sun position (for particle emission) ───────────────────────────────
   let mut sun_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
@@ -361,11 +369,13 @@ where
         total_dt / n_sub_steps as timeus_t
       };
 
-      if !particle_metadata.is_empty() {
-        // VV predictor: half-kick + full drift to x_{n+1}
-        kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, sub_dt)?;
-        sync!("imex_integrate_particles_p1_p2");
+      // ── Per-system particle physics ─────────────────────────────────────────
+      // VV predictor runs per-system so each buffer is independent.
+      for (sys_entity, sys_particles, sys_meta) in &mut particle_systems {
+        if sys_meta.is_empty() { continue; }
+        kernels.imex_integrate_particles_p1_p2(&mut cmd, sys_particles, sub_dt)?;
       }
+      if !particle_metadata.is_empty() { sync!("imex_integrate_particles_p1_p2"); }
 
       if n_bodies > 0 {
         // RB: accumulate forces then IMR solve
@@ -385,31 +395,47 @@ where
         sync!("imex_integrate_bodies_p3");
       }
 
-      if !particle_metadata.is_empty() {
-        // Build motion BVH for self-gravity (rebuilt each sub-step as positions change)
+      // Per-system: BVH → self-gravity → external emitters → VV corrector
+      for (sys_entity, sys_particles, sys_meta) in &mut particle_systems {
+        if sys_meta.is_empty() { continue; }
+
+        // Build tight per-system AABB from CPU-side particle positions.
+        // This is the critical fix: each system has its own km coordinate space.
+        let mut sys_particle_frame_ids = AutoDiscard::new(
+          kernels.build_particle_frame_ids(&mut cmd, sys_meta)?,
+          |b| kernels.discard_buffer(b),
+        );
+
         let bvh = AutoDiscard::new(
-          kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, sub_dt,
-            particle_metadata.first().map(|m| m.entity_id).unwrap_or_default())?,
+          kernels.build_motion_bvh(
+            &mut cmd, &kinematics, &rigid_bodies,
+            sys_particles, &mut *sys_particle_frame_ids, sub_dt, *sys_entity,
+            None, // particle_aabb: computed per-system from the buffer (single system only)
+          )?,
           |b| kernels.discard_bvh(b),
         );
+
         sync!("build_motion_bvh");
 
-        kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
+        kernels.compute_self_gravity(&mut cmd, &bvh, sys_particles)?;
         sync!("compute_self_gravity (barnes_hut)");
 
-        // Apply macro-frame gravity emitters to microframe particles (cross-frame transform)
         kernels.apply_emitters_to_particles(
           &mut cmd,
-          &mut particles,
+          sys_particles,
           &emitters,
           &frames,
-          &particle_frame_ids,
+          &*sys_particle_frame_ids,
+          &*bvh,
           n_emitters,
         )?;
-        sync!("apply_emitters_to_particles");
+        sync!("apply_emitters_to_particles (Phase A)");
 
-        // VV corrector: v_{n+1/2} → v_{n+1} using F(x_{n+1})
-        kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, sub_dt, current_time)?;
+        // Phase B: splat all cluster forces (self-gravity + external) → particle AOSOA
+        kernels.accumulate_bvh_forces_to_particles(&mut cmd, sys_particles, &*bvh)?;
+        sync!("accumulate_bvh_forces_to_particles (Phase B)");
+
+        kernels.imex_integrate_particles_p4_5(&mut cmd, sys_particles, sub_dt, current_time)?;
         sync!("imex_integrate_particles_p4_5");
       }
 
@@ -418,24 +444,47 @@ where
   } else {
     #[cfg(any(test, feature = "collisions"))]
     {
+      // For collision kernels (snapshot/restore/bp_particle_self/narrow_ccd/
+      // apply_collision_responses) that take a single merged &Buffer<f32>, we route
+      // through the first particle system's buffer. These kernels deal with RB↔particle
+      // interactions; for multi-system scenes, only the first system participates in CCD
+      // (a future enhancement can merge all systems into one buffer).
+      // All per-system physics (BVH, self-gravity, emitters, VV) loop over all systems.
       while current_time < end_time {
         let dt = end_time - current_time;
 
         aethervk_oshal_rlib::log!("gpu_backends.rs: entering while loop");
+
+        // Snapshot: pass Some(first_sys_buf) when particles exist, or None for pure RB scenes.
+        // The new trait takes Option<&Buffer<f32>> so we don't need to build any placeholder buffer.
+        let has_particles = !particle_systems.is_empty();
         let snapshot = AutoDiscard::new(
-          kernels.snapshot_dynamics(&mut cmd, &rigid_bodies, &particles)?,
+          {
+            let p_opt: Option<&K::Buffer<f32>> = if has_particles {
+              Some(&particle_systems[0].1)
+            } else {
+              None
+            };
+            kernels.snapshot_dynamics(&mut cmd, &rigid_bodies, p_opt)?
+          },
           |s| {
             kernels.discard_buffer(s.0);
-            kernels.discard_buffer(s.1);
+            if let Some(p) = s.1 { kernels.discard_buffer(p); }
           },
         );
 
-        if !particle_metadata.is_empty() {
+
+
+
+
+
+        // ── VV predictor: per-system ──────────────────────────────────────────
+        for (_, sys_buf, sys_meta) in &mut particle_systems {
+          if sys_meta.is_empty() { continue; }
           aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_integrate_particles_p1_p2");
-          // ── IMEX integration to t_{n+1} ──
-          kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, dt)?;
-          sync!("imex_integrate_particles_p1_p2 (collisions path)");
+          kernels.imex_integrate_particles_p1_p2(&mut cmd, sys_buf, dt)?;
         }
+        if !particle_metadata.is_empty() { sync!("imex_integrate_particles_p1_p2 (collisions path)"); }
 
         if n_bodies > 0 {
           aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_rb_force_assign");
@@ -455,54 +504,44 @@ where
           sync!("imex_integrate_bodies_p3 (collisions path)");
         }
 
-        if !particle_metadata.is_empty() {
+        // ── Per-system: BVH → self-gravity → emitters → VV corrector ─────────
+        for (sys_entity, sys_buf, sys_meta) in &mut particle_systems {
+          if sys_meta.is_empty() { continue; }
+          let mut sys_fids = AutoDiscard::new(
+            kernels.build_particle_frame_ids(&mut cmd, sys_meta)?,
+            |b| kernels.discard_buffer(b),
+          );
           let bvh = AutoDiscard::new(
-            kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, dt,
-              particle_metadata.first().map(|m| m.entity_id).unwrap_or_default())?,
+            kernels.build_motion_bvh(
+              &mut cmd, &kinematics, &rigid_bodies,
+              sys_buf, &mut *sys_fids, dt, *sys_entity, None,
+            )?,
             |b| kernels.discard_bvh(b),
           );
           sync!("build_motion_bvh (collisions path)");
-          kernels.compute_self_gravity(&mut cmd, &bvh, &mut particles)?;
+          kernels.compute_self_gravity(&mut cmd, &bvh, sys_buf)?;
           sync!("compute_self_gravity (collisions path)");
-          // Cross-frame gravity: macro emitters → micro particles
           kernels.apply_emitters_to_particles(
-            &mut cmd,
-            &mut particles,
-            &emitters,
-            &frames,
-            &particle_frame_ids,
-            n_emitters,
+            &mut cmd, sys_buf, &emitters, &frames, &*sys_fids, &*bvh, n_emitters,
           )?;
-          sync!("apply_emitters_to_particles (collisions path)");
-          kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, dt, current_time)?;
+          sync!("apply_emitters_to_particles (collisions Phase A)");
+          kernels.accumulate_bvh_forces_to_particles(&mut cmd, sys_buf, &*bvh)?;
+          sync!("accumulate_bvh_forces_to_particles (collisions Phase B)");
+          kernels.imex_integrate_particles_p4_5(&mut cmd, sys_buf, dt, current_time)?;
           sync!("imex_integrate_particles_p4_5 (collisions path)");
         }
 
         // ── New broad-phase suite ─────────────────────────────────────────────
-        // bp_bounds_gen only understands RigidBodyArray indices — it reads
-        // scene_entities.bodies[id] for id in [0, total_entities).  Particle systems
-        // have their own bounds generated by bp_particle_self and must NOT be mixed
-        // into the rigid-body leaf array.  We therefore pass n_bodies to
-        // bp_bounds_gen, and separately compute the particle-system BLAS count for
-        // future integration.
         let sg = kernels.subgroup_size().map(|s| s as u32).unwrap_or(32);
-        // Actual body count (buffer was sized exactly to n_bodies).
         let n_rb_entities = n_bodies as u32;
-        // Actual physics-particle count from the particle metadata built above.
-        // particle_metadata.len() == 0 in pure rigid-body scenes; > 0 when
-        // ParticleSystemComponent entities exist.  We compute the number of full
-        // AoSoA groups ("particle BLASes"), each covering sg lanes.
         let actual_particles = particle_metadata.len() as u32;
         let n_ps_entities = if actual_particles > 0 {
-          // Round up to the nearest full subgroup group.
           (actual_particles + sg - 1) / sg
         } else {
           0
         };
-        // n_entities counts query leaves for bp_scene (rigid bodies only for now;
-        // particle BLAS broadphase will extend this once bp_bounds_gen is updated).
         let n_entities = n_rb_entities;
-        let _ = n_ps_entities; // reserved for future particle-BLAS broadphase
+        let _ = n_ps_entities;
         aethervk_oshal_rlib::log!(
           "BP_DIAG: n_entities={}, frames.capacity={}, tlas_root_idx={}",
           n_entities,
@@ -510,9 +549,6 @@ where
           tlas_root_idx
         );
 
-        // bp_clear: zero all four pair-list counters via raw BDAs
-        // (The caller manages the pair-list buffers; for now we reuse bvh.address
-        //  as a placeholder TLAS address until a proper TLAS builder is wired in.)
         let tlas_bvh_addr = tlas_addr;
         let mut raw_pairs = AutoDiscard::new(
           kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 10_000)?,
@@ -535,19 +571,14 @@ where
           AutoDiscard::new(kernels.build_leaves(&mut cmd, n_entities as usize)?, |b| {
             kernels.discard_buffer(b)
           });
-
         let internal_pairs = AutoDiscard::new(
           kernels.build_list::<crate::gpu::CrossPair>(&mut cmd, 2_000)?,
           |b| kernels.discard_list(b),
         );
-
-        // Dummy sink for ps-ps pairs emitted by bp_cross_lca.
-        // Must be a valid BDA — passing null caused GPU faults on all backends.
         let ps_ps_pairs = AutoDiscard::new(
           kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 64)?,
           |b| kernels.discard_list(b),
         );
-
         let sparse_collisions = AutoDiscard::new(
           kernels.build_list::<crate::gpu::CollisionPair>(&mut cmd, 12000)?,
           |b| kernels.discard_list(b),
@@ -568,7 +599,7 @@ where
           &rigid_bodies,
           query_leaves.address(),
           frames.address(),
-          n_rb_entities, // must match rigid_bodies.capacity() — shader reads bodies[id] for each id
+          n_rb_entities,
           dt,
         )?;
         sync!("bp_bounds_gen");
@@ -587,13 +618,12 @@ where
           raw_pairs.address(),
           rb_rb_pairs.address(),
           rb_ps_pairs.address(),
-          ps_ps_pairs.address(), // out_ps_ps — valid sink, null caused GPU faults
-          rb_lca_pairs.address(), // out_macro_lca
-          0,                     // out_lca_lca (no lca-lca pairs in pure-RB scenes)
-          n_entities * n_entities, // conservative upper bound on raw pairs
+          ps_ps_pairs.address(),
+          rb_lca_pairs.address(),
+          0,
+          n_entities * n_entities,
         )?;
         sync!("bp_classify");
-        // Cross-LCA: only if micro-frames exist (frames.capacity() > 1)
         if frames.capacity() > 1 {
           kernels.bp_cross_lca(
             &mut cmd,
@@ -604,7 +634,7 @@ where
             rb_lca_pairs.address(),
             rb_rb_pairs.address(),
             rb_ps_pairs.address(),
-            ps_ps_pairs.address(), // out_ps_ps — valid sink (type routing fixed below)
+            ps_ps_pairs.address(),
             internal_pairs.address(),
             rb_lca_pairs.capacity() as u32,
             2_000,
@@ -612,49 +642,61 @@ where
           )?;
           sync!("bp_cross_lca");
         }
-        let p_addr = particles.address();
+        // bp_particle_self uses first system's buffer (CCD only sees one merged set).
         if actual_particles > 0 {
-          kernels.bp_particle_self(
-            &mut cmd,
-            tlas_bvh_addr,
-            &mut particles,
-            p_addr,
-            actual_particles,
-            0,           // BVH root index
-            0.5_f32,     // particle radius (m)
-            1_000.0_f32, // spring stiffness k
-          )?;
-          sync!("bp_particle_self");
+          if let Some((_, sys_buf, _)) = particle_systems.first_mut() {
+            let p_addr = sys_buf.address();
+            kernels.bp_particle_self(
+              &mut cmd,
+              tlas_bvh_addr,
+              sys_buf,
+              p_addr,
+              actual_particles,
+              0,
+              0.5_f32,
+              1_000.0_f32,
+            )?;
+            sync!("bp_particle_self");
+          }
         }
 
-        // ── Merge classified pairs → global collision list ────────────────────
-        // 1) Standard CCD for rb_rb_pairs
+        // ── Narrow phase ─────────────────────────────────────────────────────
+        // Use first system's buffer for particle lookups, or null stub if no systems.
+        // null_particles_buf is a 0-element buffer allocated at simulate_step start;
+        // in pure RB scenes (no particle pairs) the shader never dereferences this address.
+        let narrow_p_buf: &K::Buffer<f32> = if has_particles {
+          &particle_systems[0].1
+        } else {
+          &null_particles_buf
+        };
         kernels.narrow_ccd(
           &mut cmd,
           &*rb_rb_pairs,
           &rigid_bodies,
-          &particles,
-          frames.address(), // lca_entities = frames BDA
-          0,                // space_type: 0 = standard rb-rb PairBuffer path
+          narrow_p_buf,
+          frames.address(),
+          0,
           (dt as f32) / 1_000_000.0,
+
           &sparse_collisions,
         )?;
         sync!("narrow_ccd");
 
-        // 2) Cross-LCA CCD for internal_pairs
         if frames.capacity() > 1 {
           kernels.narrow_ccd_cross_lca(
             &mut cmd,
             &*internal_pairs,
             &rigid_bodies,
-            &particles,
-            frames.address(), // lca_entities = frames BDA
-            1,                // space_type: 1 = CrossPairBuffer path
+            narrow_p_buf,
+            frames.address(),
+            1,
             (dt as f32) / 1_000_000.0,
             &sparse_collisions,
           )?;
           sync!("narrow_ccd_cross_lca");
         }
+
+
 
         let compacted = AutoDiscard::new(
           kernels.compact_collisions(&mut cmd, &sparse_collisions, time_collision_delta)?,
@@ -670,10 +712,6 @@ where
           )?,
           |b| kernels.discard_buffer(b),
         );
-        // Submit GPU work and wait.  After wait_sync(), all device buffers are coherent
-        // and can be read directly from their persistently-mapped HOST_VISIBLE pointers —
-        // no staging-buffer allocation needed.  Staging buffer VMA allocations were
-        // corrupting Lavapipe's TLSF allocator after ~4-7 frames (SIGSEGV).
         let sync_info = cmd.submit()?;
         if let Some(sync) = sync_info {
           kernels.wait_sync(&sync)?;
@@ -688,7 +726,6 @@ where
               kernels.wait_idle().unwrap();
             }
 
-            // We can read directly from the mapped buffers since wait_sync(&sync) was called just above!
             let cmp_host = unsafe { (*compacted).mapped_slice().unwrap_or(&[]) };
             let _rb_host = unsafe { rigid_bodies.mapped_slice().unwrap_or(&[]) };
             let _frames_host = unsafe { frames.mapped_slice().unwrap_or(&[]) };
@@ -723,18 +760,13 @@ where
 
                 aethervk_oshal_rlib::log!(
                   "RAW PAIR: id_a={}, id_b={}, prim_a={}, prim_b={}, toi={}",
-                  id_a,
-                  id_b,
-                  prim_a,
-                  prim_b,
-                  pair.time_of_impact
+                  id_a, id_b, prim_a, prim_b, pair.time_of_impact
                 );
 
                 let is_lca = pair.is_lca != 0;
                 let lca_id = if is_lca { Some(pair.lca_id) } else { None };
 
                 let mut name_a = alloc::string::String::new();
-                // pair.a.entity_id is a dense GPU body index; map to slotmap FFI key
                 if let Some(&entity_a) = body_entity_map.get(id_a as usize) {
                   use slotmap::Key;
                   let ffi_a = entity_a.data().as_ffi() as u64;
@@ -744,9 +776,7 @@ where
                     name_a = n;
                   }
                 }
-                if name_a.is_empty() {
-                  name_a = alloc::format!("Entity_{}", id_a);
-                }
+                if name_a.is_empty() { name_a = alloc::format!("Entity_{}", id_a); }
 
                 let mut name_b = alloc::string::String::new();
                 if let Some(&entity_b) = body_entity_map.get(id_b as usize) {
@@ -758,24 +788,14 @@ where
                     name_b = n;
                   }
                 }
-                if name_b.is_empty() {
-                  name_b = alloc::format!("Entity_{}", id_b);
-                }
+                if name_b.is_empty() { name_b = alloc::format!("Entity_{}", id_b); }
 
                 let mut particle_path_a = None;
                 if let Some(&entity_a) = body_entity_map.get(id_a as usize) {
-                  if scene
-                    .with_component(
-                      entity_a,
-                      |_: &crate::scene::particles::ParticleSystemComponent| (),
-                    )
-                    .is_some()
-                  {
+                  if scene.with_component(entity_a, |_: &crate::scene::particles::ParticleSystemComponent| ()).is_some() {
                     use slotmap::Key;
                     let ffi_a = entity_a.data().as_ffi() as u32;
-                    if let Some(p_idx) =
-                      physical_scene.particle_entity_map.iter().position(|&ffi| ffi == ffi_a)
-                    {
+                    if let Some(p_idx) = physical_scene.particle_entity_map.iter().position(|&ffi| ffi == ffi_a) {
                       if let Some(blas) = &physical_scene.particle_blases[p_idx] {
                         particle_path_a = blas.find_path_to_primitive(prim_a as usize);
                       }
@@ -785,18 +805,10 @@ where
 
                 let mut particle_path_b = None;
                 if let Some(&entity_b) = body_entity_map.get(id_b as usize) {
-                  if scene
-                    .with_component(
-                      entity_b,
-                      |_: &crate::scene::particles::ParticleSystemComponent| (),
-                    )
-                    .is_some()
-                  {
+                  if scene.with_component(entity_b, |_: &crate::scene::particles::ParticleSystemComponent| ()).is_some() {
                     use slotmap::Key;
                     let ffi_b = entity_b.data().as_ffi() as u32;
-                    if let Some(p_idx) =
-                      physical_scene.particle_entity_map.iter().position(|&ffi| ffi == ffi_b)
-                    {
+                    if let Some(p_idx) = physical_scene.particle_entity_map.iter().position(|&ffi| ffi == ffi_b) {
                       if let Some(blas) = &physical_scene.particle_blases[p_idx] {
                         particle_path_b = blas.find_path_to_primitive(prim_b as usize);
                       }
@@ -830,14 +842,13 @@ where
         let mut next_cmd = kernels.create_command_buffer()?;
         core::mem::swap(&mut cmd, &mut next_cmd);
         old_cmds.push(next_cmd);
-        let t_c = t_c_raw;
 
-        aethervk_oshal_rlib::log!("gpu_backends.rs: t_c is {}", t_c);
+        aethervk_oshal_rlib::log!("gpu_backends.rs: t_c is {}", t_c_raw);
 
-        let t_c = if t_c == 0xFFFFFFFF {
+        let t_c = if t_c_raw == 0xFFFFFFFF {
           timeus_t::MAX
         } else {
-          let t_c_f32 = f32::from_bits(t_c as u32);
+          let t_c_f32 = f32::from_bits(t_c_raw);
           if t_c_f32 < 0.0 {
             aethervk_oshal_rlib::log!(
               "gpu_backends.rs: warning: negative t_c float {}, assuming 0",
@@ -853,92 +864,106 @@ where
           collision_iters += 1;
           let inelastic = collision_iters >= MAX_BOUNCES;
 
-          kernels.restore_dynamics(&mut cmd, &mut rigid_bodies, &mut particles, &snapshot)?;
+          // Restore: always restore rigid bodies; restore particles only if present.
+          {
+            let p_opt: Option<&mut K::Buffer<f32>> = particle_systems.first_mut()
+              .map(|(_, buf, _)| buf);
+            kernels.restore_dynamics(&mut cmd, &mut rigid_bodies, p_opt, &snapshot)?;
+          }
 
-          // Re-integrate to t_c
-          kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, t_c)?;
+          // Re-integrate to t_c: per-system VV predictor
+          for (_, sys_buf, sys_meta) in &mut particle_systems {
+            if sys_meta.is_empty() { continue; }
+            kernels.imex_integrate_particles_p1_p2(&mut cmd, sys_buf, t_c)?;
+          }
           kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches, n_bodies)?;
           kernels.imex_integrate_bodies_p3(
-            &mut cmd,
-            &mut rigid_bodies,
-            &mut wrenches,
-            &emitters,
-            &frames,
-            n_bodies,
-            n_emitters,
-            t_c,
+            &mut cmd, &mut rigid_bodies, &mut wrenches, &emitters, &frames,
+            n_bodies, n_emitters, t_c,
           )?;
 
-          if !particle_metadata.is_empty() {
+          // Per-system: BVH/self-gravity/emitters/VV corrector at t_c
+          for (sys_entity, sys_buf, sys_meta) in &mut particle_systems {
+            if sys_meta.is_empty() { continue; }
+            let mut sys_fids = AutoDiscard::new(
+              kernels.build_particle_frame_ids(&mut cmd, sys_meta)?,
+              |b| kernels.discard_buffer(b),
+            );
             let rewind_bvh = AutoDiscard::new(
-              kernels.build_motion_bvh(&mut cmd, &kinematics, &rigid_bodies, &mut particles, &mut particle_frame_ids, t_c,
-                particle_metadata.first().map(|m| m.entity_id).unwrap_or_default())?,
+              kernels.build_motion_bvh(
+                &mut cmd, &kinematics, &rigid_bodies,
+                sys_buf, &mut *sys_fids, t_c, *sys_entity, None,
+              )?,
               |b| kernels.discard_bvh(b),
             );
-            kernels.compute_self_gravity(&mut cmd, &rewind_bvh, &mut particles)?;
+            kernels.compute_self_gravity(&mut cmd, &rewind_bvh, sys_buf)?;
             kernels.apply_emitters_to_particles(
-              &mut cmd,
-              &mut particles,
-              &emitters,
-              &frames,
-              &particle_frame_ids,
-              n_emitters,
+              &mut cmd, sys_buf, &emitters, &frames, &*sys_fids, &*rewind_bvh, n_emitters,
             )?;
-            kernels.imex_integrate_particles_p4_5(&mut cmd, &mut particles, t_c, current_time)?;
+            kernels.accumulate_bvh_forces_to_particles(&mut cmd, sys_buf, &*rewind_bvh)?;
+            kernels.imex_integrate_particles_p4_5(&mut cmd, sys_buf, t_c, current_time)?;
           }
-          // Apply either an elastic or inelastic response at the proper time t_c
-          kernels.apply_collision_responses(
-            &mut cmd,
-            &kinematics,
-            &mut rigid_bodies,
-            &mut particles,
-            &compacted,
-            frames.address(),
-            inelastic,
-          )?;
+
+          // Collision response: always call, using first system's buffer or null stub.
+          // In pure RB scenes (no particle systems), null_particles_buf is used and the
+          // shader only reads from it for particle pairs (which don't exist in this case).
+          {
+            let p_mut: &mut K::Buffer<f32> = if has_particles {
+              &mut particle_systems[0].1
+            } else {
+              // null_particles_buf is AutoDiscard; we need a &mut to its inner Buffer<f32>.
+              // Safe: we only borrow it mutably here, and it's only used as a BDA by the shader.
+              &mut *null_particles_buf
+            };
+            kernels.apply_collision_responses(
+              &mut cmd, &kinematics, &mut rigid_bodies, p_mut, &compacted, frames.address(), inelastic,
+            )?;
+          }
 
           if inelastic {
-            // If we resolved resting contact, integrate the remainder directly.
             let remaining_dt = dt - t_c;
             if remaining_dt > 0 {
-              kernels.imex_integrate_particles_p1_p2(&mut cmd, &mut particles, remaining_dt)?;
+              // Per-system VV predictor for remainder
+              for (_, sys_buf, sys_meta) in &mut particle_systems {
+                if sys_meta.is_empty() { continue; }
+                kernels.imex_integrate_particles_p1_p2(&mut cmd, sys_buf, remaining_dt)?;
+              }
               kernels.imex_rb_force_assign(&mut cmd, &rigid_bodies, &mut wrenches, n_bodies)?;
               kernels.imex_integrate_bodies_p3(
-                &mut cmd,
-                &mut rigid_bodies,
-                &mut wrenches,
-                &emitters,
-                &frames,
-                n_bodies,
-                n_emitters,
-                remaining_dt,
+                &mut cmd, &mut rigid_bodies, &mut wrenches, &emitters, &frames,
+                n_bodies, n_emitters, remaining_dt,
               )?;
-              if !particle_metadata.is_empty() {
+              // Per-system: BVH/self-gravity/emitters/VV corrector for remainder
+              for (sys_entity, sys_buf, sys_meta) in &mut particle_systems {
+                if sys_meta.is_empty() { continue; }
+                let mut sys_fids = AutoDiscard::new(
+                  kernels.build_particle_frame_ids(&mut cmd, sys_meta)?,
+                  |b| kernels.discard_buffer(b),
+                );
                 let final_bvh = AutoDiscard::new(
                   kernels.build_motion_bvh(
-                    &mut cmd, &kinematics, &rigid_bodies, &mut particles,
-                    &mut particle_frame_ids, remaining_dt,
-                    particle_metadata.first().map(|m| m.entity_id).unwrap_or_default(),
+                    &mut cmd, &kinematics, &rigid_bodies,
+                    sys_buf, &mut *sys_fids, remaining_dt, *sys_entity, None,
                   )?,
                   |b| kernels.discard_bvh(b),
                 );
-                kernels.compute_self_gravity(&mut cmd, &final_bvh, &mut particles)?;
+                kernels.compute_self_gravity(&mut cmd, &final_bvh, sys_buf)?;
                 kernels.apply_emitters_to_particles(
-                  &mut cmd, &mut particles, &emitters, &frames, &particle_frame_ids, n_emitters,
+                  &mut cmd, sys_buf, &emitters, &frames, &*sys_fids, &*final_bvh, n_emitters,
                 )?;
+                kernels.accumulate_bvh_forces_to_particles(&mut cmd, sys_buf, &*final_bvh)?;
                 #[cfg(test)] println!("!!! EXEC: compute_self_gravity and imex_integrate_particles_p4_5");
                 kernels.imex_integrate_particles_p4_5(
-                  &mut cmd, &mut particles, remaining_dt, current_time + t_c,
+                  &mut cmd, sys_buf, remaining_dt, current_time + t_c,
                 )?;
               }
             }
-            current_time = end_time; // CCD complete for this frame
+            current_time = end_time;
           } else {
             let advance = if t_c == 0 { 1 } else { t_c };
             current_time += advance;
           }
         } else {
-          // No collision before dt — accept the step.
           aethervk_oshal_rlib::log!("gpu_backends.rs: calling kernels.write_back_to_scene!");
           current_time = end_time;
         }
@@ -956,11 +981,17 @@ where
   let _ = kernels.write_back_to_scene(
     &mut cmd,
     &rigid_bodies,
-    &particles,
-    &particle_metadata,
+    &particle_systems,
     physical_scene,
     scene,
   )?;
+
+  // Explicitly free the per-system particle GPU buffers.
+  // VulkanBuffer::drop only logs a warning; the actual VMA allocation must be
+  // freed via kernels.discard_buffer (which queues it for timeline-safe deallocation).
+  for (_, sys_buf, _) in particle_systems {
+    kernels.discard_buffer(sys_buf);
+  }
 
   Ok(sync_info)
 }

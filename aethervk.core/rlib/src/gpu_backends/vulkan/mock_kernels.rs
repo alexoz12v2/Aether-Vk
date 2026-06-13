@@ -118,7 +118,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<(Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)> {
+  ) -> EngineResult<alloc::vec::Vec<(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)>> {
     self.base.build_particles(cmd, scene)
   }
   fn build_particle_frame_ids(
@@ -267,6 +267,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     emitters: &Self::Buffer<ForceEmitter>,
     frames: &Self::Buffer<GpuReferenceFrame>,
     particle_frame_ids: &Self::Buffer<u32>,
+    bvh: &Self::MotionBvh,
     num_emitters: u32,
   ) -> EngineResult<()> {
     if self.target == MockTargetShader::ApplyEmitters {
@@ -276,10 +277,20 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
         emitters,
         frames,
         particle_frame_ids,
+        bvh,
         num_emitters,
       )?;
     }
     Ok(())
+  }
+
+  fn accumulate_bvh_forces_to_particles(
+    &self,
+    cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<f32>,
+    bvh: &Self::MotionBvh,
+  ) -> EngineResult<()> {
+    self.base.accumulate_bvh_forces_to_particles(cmd, particles, bvh)
   }
 
   fn bp_clear(
@@ -445,8 +456,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     particle_frame_ids: &mut Self::Buffer<u32>,
     dt: timeus_t,
     entity_id: crate::scene::EntityId,
+    particle_aabb: Option<([f32; 3], [f32; 3])>,
   ) -> EngineResult<Self::MotionBvh> {
-    self.base.build_motion_bvh(cmd, kinematics, rigid_bodies, particles, particle_frame_ids, dt, entity_id)
+    self.base.build_motion_bvh(cmd, kinematics, rigid_bodies, particles, particle_frame_ids, dt, entity_id, particle_aabb)
   }
 
   fn self_intersect_scene(
@@ -575,8 +587,8 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>)> {
+    particles: Option<&Self::Buffer<f32>>,
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Option<Self::Buffer<f32>>)> {
     self.base.snapshot_dynamics(cmd, rigid_bodies, particles)
   }
 
@@ -584,8 +596,8 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
-    particles: &mut Self::Buffer<f32>,
-    snapshot: &(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>),
+    particles: Option<&mut Self::Buffer<f32>>,
+    snapshot: &(Self::Buffer<RigidBodyImex>, Option<Self::Buffer<f32>>),
   ) -> EngineResult<()> {
     self.base.restore_dynamics(cmd, rigid_bodies, particles, snapshot)
   }
@@ -594,35 +606,14 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
-    particle_metadata: &[ParticleMetadata],
+    particle_systems: &[(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> EngineResult<Option<CommandBufferSyncInfo>> {
-    // Here we read back for the test
-    let mut results = SHADER_MOCK_RESULTS.lock().unwrap();
-    // Depending on target shader, we might want to read particles or rigid bodies or both.
-    // For simplicity, let's just trigger a readback of everything, or we can customize it later in the test.
-    // Wait, the user asked to immediately transfer the results in a CPU backed buffer for assertions.
-    // We can just rely on `write_back_to_scene` or add a specific readback logic here.
-    // Let's implement the standard write_back_to_scene but ALSO readback to SHADER_MOCK_RESULTS.
-
-    // This is a test harness, so we can enqueue a read to CPU right here!
-    // We'll read rigid bodies.
-    if let Ok(rb_handle) = rigid_bodies.enqueue_read_to_cpu(cmd) {
-      // Note: we can't wait here because cmd hasn't been submitted.
-      // But we can store a flag or we can just let the test itself do the readback from the ECS scene!
-      // Wait, if write_back_to_scene executes, the data gets written into the `scene` ECS!
-      // So the test can just assert the `Scene` components!
-      // BUT for internal buffers like wrenches, they aren't written to the scene.
-      // In that case, we need to read them back.
-    }
-
     self.base.write_back_to_scene(
       cmd,
       rigid_bodies,
-      particles,
-      particle_metadata,
+      particle_systems,
       physical_scene,
       scene,
     )
