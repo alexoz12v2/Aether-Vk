@@ -2216,7 +2216,7 @@ pub trait Kernels: Send + Sync {
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<alloc::vec::Vec<(EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)>>;
+  ) -> EngineResult<alloc::vec::Vec<(EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>, bool)>>;
 
   /// Uploads the `parent_frame_id` field from each `ParticleMetadata` entry as a
   /// tightly-packed `u32[]` GPU buffer in AOSOA invocation order (same order as the
@@ -2355,6 +2355,24 @@ pub trait Kernels: Send + Sync {
     particle_frame_ids: &Self::Buffer<u32>,
     // Per-system BVH (Phase A): emitter force computed per cluster → BVH force slots.
     bvh: &Self::MotionBvh,
+    num_emitters: u32,
+  ) -> EngineResult<()>;
+
+  /// Direct (BVH-free) external emitter force pass for test-particle systems.
+  ///
+  /// Equivalent to running Phase A + Phase B of `apply_emitters_to_particles` +
+  /// `accumulate_bvh_forces_to_particles`, but without any BVH: one thread per
+  /// particle computes the external gravitational force and atomically adds it
+  /// directly into the AOSOA force slots 7-9.  Self-gravity is not computed.
+  ///
+  /// Use only when `ParticleSystemComponent::disable_self_gravity = true`.
+  fn apply_emitters_direct(
+    &self,
+    cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<f32>,
+    emitters: &Self::Buffer<ForceEmitter>,
+    frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    particle_frame_ids: &Self::Buffer<u32>,
     num_emitters: u32,
   ) -> EngineResult<()>;
 
@@ -2582,8 +2600,8 @@ pub trait Kernels: Send + Sync {
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    // Per-system particle buffers: (entity_id, buffer, metadata).
-    particle_systems: &[(EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)],
+    // Per-system particle buffers: (entity_id, buffer, metadata, disable_self_gravity).
+    particle_systems: &[(EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>, bool)],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> EngineResult<Option<CommandBufferSyncInfo>>;

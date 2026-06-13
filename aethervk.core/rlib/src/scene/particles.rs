@@ -132,6 +132,16 @@ pub struct ParticleSystemComponent {
   /// Number of active particles for this system as of the last GPU upload.
   /// Refreshed each frame by `write_back_to_scene`.
   pub gpu_alive_count: u32,
+  /// When `true`, the GPU physics pipeline skips BVH construction and Barnes-Hut
+  /// self-gravity for this system.  Use for test-particle systems (comet dust tails,
+  /// tracers) where inter-particle gravity is physically negligible and the BVH
+  /// build/traversal cost would otherwise dominate frame time at high particle counts.
+  pub disable_self_gravity: bool,
+  /// Fractional particle carry-over from the dt-based emission rate calculation.
+  /// Each tick: `exact = particles_per_second * dt_s + emit_remainder`;
+  /// `emit_count = floor(exact)`; `emit_remainder = exact - emit_count`.
+  /// This ensures the long-run emission rate matches `particles_per_second` exactly.
+  pub emit_remainder: f32,
 }
 
 impl core::fmt::Debug for ParticleSystemComponent {
@@ -176,6 +186,8 @@ impl ParticleSystemComponent {
       beta: 0.0,                   // set from EmissionCircle.beta
       gpu_sort_order: alloc::vec::Vec::new(),
       gpu_alive_count: 0,
+      disable_self_gravity: false,
+      emit_remainder: 0.0,
     }
   }
 
@@ -243,8 +255,11 @@ pub struct EmissionCircle {
   pub cached_point: Option<[f32; 3]>,
   /// Cached object-space normal
   pub cached_normal: Option<[f32; 3]>,
-  /// Number of particles to emit per physics tick.
-  pub particles_per_tick: u32,
+  /// Emission rate in particles per second (dt-independent).
+  /// The emit loop accumulates a fractional count each tick and flushes
+  /// whole particles, so the actual rate is `particles_per_second * dt_s`
+  /// rounded to the nearest integer over time.
+  pub particles_per_second: f32,
   /// Time to live for emitted particles (in simulation ticks or microseconds depending on context).
   pub ttl: u64,
   /// Mean initial velocity of the emitted particles (simulation units).
@@ -259,6 +274,11 @@ pub struct EmissionCircle {
   /// Maximum number of particles this jet can have alive simultaneously.
   /// Controls the capacity of the child entity's `ParticleSystemComponent` buffer.
   pub max_particles: u32,
+  /// Radius of the spawn disc in the surface tangent plane (km).
+  /// Each particle's initial position is offset by a uniformly-sampled
+  /// random vector within this radius, breaking up the point-source pattern.
+  /// Set to 0 for a pure point source.
+  pub spawn_radius_km: f32,
 }
 
 /// Attaches a set of discrete circular emission zones to a comet mesh entity.
@@ -293,13 +313,14 @@ mod tests {
       color: [1.0, 1.0, 1.0, 1.0],
       cached_normal: Some([0.0, 1.0, 0.0]),
       cached_point: Some([0.0, 0.0, 0.0]),
-      particles_per_tick: 10,
+      particles_per_second: 10.0,
       ttl: 1000,
       mean_velocity: 0.1,
       velocity_std_dev: 0.05,
       child_entity: None,
       beta: 1.0,
       max_particles: 4096,
+      spawn_radius_km: 0.0,
     });
     assert_eq!(comp.circles.len(), 1);
     assert_eq!(comp.circles[0].latitude_rad, 0.5);

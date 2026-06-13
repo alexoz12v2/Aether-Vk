@@ -25,6 +25,8 @@ struct SpawnCometDelegate {
   jet_emitting: bool,
   /// Whether the jet is on the sun-facing side (true) or dark side (false).
   jet_sunlit: bool,
+  /// EMA of frame duration in milliseconds for a stable FPS display.
+  ema_frame_ms: f32,
 }
 
 impl SimulationDelegate for SpawnCometDelegate {
@@ -190,6 +192,10 @@ impl SimulationDelegate for SpawnCometDelegate {
       let mut psc = aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(1000000);
       psc.color = [0.2, 0.8, 1.0, 1.0]; // cyan
       psc.particle_radius = 0.2; // 200m radius (much bigger particles)
+      // Comet dust is a test-particle system: particles don't attract each other.
+      // Skipping BVH construction + Barnes-Hut self-gravity saves ~95% GPU time at
+      // high particle counts and avoids the GPU TDR watchdog hang.
+      psc.disable_self_gravity = true;
       let _ = scene_ctx.scene.add_component(child_id, psc);
 
       // SphereGizmoComponent for visual debugging
@@ -203,7 +209,6 @@ impl SimulationDelegate for SpawnCometDelegate {
         },
       );
 
-      // Add ParticleEmitterCirclesComponent to the comet with one emission circle
       let emitter = aethervk_core_rlib::scene::particles::ParticleEmitterCirclesComponent {
         circles: vec![aethervk_core_rlib::scene::particles::EmissionCircle {
           latitude_rad: lat_rad,
@@ -213,13 +218,16 @@ impl SimulationDelegate for SpawnCometDelegate {
           color: [0.2, 0.8, 1.0, 1.0],
           cached_point: Some(hit_pt),
           cached_normal: Some(hit_normal),
-          particles_per_tick: 0, // starts OFF, spacebar toggles
-          ttl: 4000,              // much longer TTL to see the bend
-          mean_velocity: 0.000072, 
-          velocity_std_dev: 0.00001, 
+          particles_per_second: 0.0, // starts OFF, spacebar toggles
+          ttl: 4000,                 // in ticks — enough to see bending
+          mean_velocity: 0.000072,
+          velocity_std_dev: 0.000050, // σ/μ≈70% → ~135° effective cone spread
           child_entity: Some(child_id),
-          beta: 1.5, // stronger repulsion so it bends noticeably
+          beta: 1.5,
           max_particles: 1000000,
+          // Scatter spawn positions over a disc 2× the comet radius so the
+          // tail origin looks like a diffuse surface patch, not a point.
+          spawn_radius_km: sphere_radius_km * 2.0,
         }],
       };
       let _ = scene_ctx.scene.add_component(comet_int, emitter);
@@ -458,7 +466,8 @@ impl SimulationDelegate for SpawnCometDelegate {
     );
     if is_space {
       self.jet_emitting = !self.jet_emitting;
-      let new_rate: u32 = if self.jet_emitting { 100 } else { 0 };
+      // 5000 particles/second when ON — dt-independent rate
+      let new_rate: f32 = if self.jet_emitting { 5000.0 } else { 0.0 };
       let scene = ctx.get_scene(scene_id).unwrap();
       let scene_read = scene.read();
       if let Some(comet_int) = scene_read.get_entity(self.comet_ext) {
@@ -466,14 +475,14 @@ impl SimulationDelegate for SpawnCometDelegate {
           comet_int,
           |emitter: &mut aethervk_core_rlib::scene::particles::ParticleEmitterCirclesComponent| {
             if let Some(circle) = emitter.circles.first_mut() {
-              circle.particles_per_tick = new_rate;
+              circle.particles_per_second = new_rate;
             }
           },
         );
       }
       let state_str = if self.jet_emitting { "ON" } else { "OFF" };
       println!(
-        "\x1b[1;36m[JET] Emission {} (particles_per_tick={})\x1b[0m",
+        "\x1b[1;36m[JET] Emission {} (particles_per_second={})\x1b[0m",
         state_str, new_rate
       );
       return;
@@ -729,7 +738,42 @@ impl SimulationDelegate for SpawnCometDelegate {
     }
   }
 
-  fn on_about_to_wait(&mut self, ctx: &mut SimulationContext, scene_id: u64, _delta_time: f32) {
+  fn on_about_to_wait(&mut self, ctx: &mut SimulationContext, scene_id: u64, delta_time: f32) {
+    // ── Performance HUD ───────────────────────────────────────────────────────
+    // Smooth the raw per-call delta_time with a slow EMA (α=0.05 ≈ 20-frame
+    // window) so the display is readable even when on_about_to_wait fires at
+    // very high rate now that physics no longer blocks the winit event loop.
+    {
+      let dt_ms = delta_time * 1000.0;
+      if self.ema_frame_ms <= 0.0 {
+        self.ema_frame_ms = dt_ms; // first frame bootstrap
+      } else {
+        self.ema_frame_ms = 0.05 * dt_ms + 0.95 * self.ema_frame_ms;
+      }
+      let fps = if self.ema_frame_ms > 0.0 { (1000.0 / self.ema_frame_ms).min(9999.0) } else { 0.0 };
+
+      let scene = ctx.get_scene(scene_id).unwrap();
+      let scene_read = scene.read();
+
+      let sim_speed = scene_read.time_state.read().effective_sim_speed;
+
+      // Count total alive particles across all ParticleSystemComponents
+      let mut total_particles: u64 = 0;
+      scene_read.scene.query1::<
+        aethervk_core_rlib::scene::particles::ParticleSystemComponent, _
+      >(|_, psc| {
+        total_particles += psc.gpu_alive_count as u64;
+      });
+
+      use std::io::Write;
+      print!(
+        "\r\x1b[2K[PERF] FPS: {:5.1} | Sim: {:5.2}\u{00d7} | Particles: {:>9}",
+        fps, sim_speed, total_particles
+      );
+      let _ = std::io::stdout().flush();
+    }
+    // ── End HUD ───────────────────────────────────────────────────────────────
+
     let scene = ctx.get_scene(scene_id).unwrap();
     let scene_read = scene.read();
     if let Some(camera_entity) = scene_read.get_entity(self.camera_ext_entity) {
@@ -809,6 +853,7 @@ fn main() {
     scene_id: 0,
     jet_emitting: false,
     jet_sunlit: false,
+    ema_frame_ms: 0.0,
   };
   run_simulation_app("AetherVk Comet Spawn Test", delegate);
 }

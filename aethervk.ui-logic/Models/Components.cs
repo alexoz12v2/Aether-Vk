@@ -859,19 +859,22 @@ public partial class EmissionCircleItem : ObservableObject
   }
 
   // ── Emission Params ─────────────────────────────────────────────────────────
+  /// <summary>Emission rate in particles per second (dt-independent).
+  /// Default 6000/s ≈ 100 particles per tick at 60 Hz.
+  /// </summary>
   [ObservableProperty]
-  private uint _particlesPerTick = 100;
+  private float _particlesPerSecond = 6000f;
 
-  /// <summary>Double proxy for UnboundedSlider binding.</summary>
-  public double ParticlesPerTickDouble
+  /// <summary>Double proxy for slider binding.</summary>
+  public double ParticlesPerSecondDouble
   {
-    get => ParticlesPerTick;
-    set => ParticlesPerTick = (uint)Math.Max(0, Math.Round(value));
+    get => ParticlesPerSecond;
+    set => ParticlesPerSecond = (float)Math.Max(0, value);
   }
 
-  partial void OnParticlesPerTickChanged(uint value)
+  partial void OnParticlesPerSecondChanged(float value)
   {
-    OnPropertyChanged(nameof(ParticlesPerTickDouble));
+    OnPropertyChanged(nameof(ParticlesPerSecondDouble));
   }
 
   [ObservableProperty]
@@ -919,6 +922,14 @@ public partial class EmissionCircleItem : ObservableObject
   {
     OnPropertyChanged(nameof(MeanVelocityKms));
   }
+
+  /// <summary>
+  /// Radius of the spawn disc in the surface tangent plane (km).
+  /// Each particle's initial position is scattered uniformly within this disc.
+  /// 0 = point source.
+  /// </summary>
+  [ObservableProperty]
+  private float _spawnRadiusKm = 0f;
 }
 
 /// <summary>
@@ -1011,13 +1022,14 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
         ColorG = Circles[i].ColorG,
         ColorB = Circles[i].ColorB,
         ColorA = Circles[i].ColorA,
-        ParticlesPerTick = Circles[i].ParticlesPerTick,
+        ParticlesPerSecond = Circles[i].ParticlesPerSecond,
         TTL = Circles[i].TTL,
         MeanVelocity = Circles[i].MeanVelocity,
         VelocityDirStdDevRad = Circles[i].VelocityDirStdDevDeg * (float)Math.PI / 180f,
         ChildEntity = Circles[i].VisualEntityId == 0 ? ulong.MaxValue : Circles[i].VisualEntityId,
         Beta = Circles[i].Beta,
         MaxParticles = Circles[i].MaxParticles,
+        SpawnRadiusKm = Circles[i].SpawnRadiusKm,
       };
     }
     AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setParticleEmitterCirclesComponent(
@@ -1071,13 +1083,14 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
           ColorG = arr[i].ColorG,
           ColorB = arr[i].ColorB,
           ColorA = arr[i].ColorA,
-          ParticlesPerTick = arr[i].ParticlesPerTick,
+          ParticlesPerSecond = arr[i].ParticlesPerSecond,
           TTL = arr[i].TTL,
           MeanVelocity = arr[i].MeanVelocity,
           VelocityDirStdDevDeg = arr[i].VelocityDirStdDevRad * 180f / (float)Math.PI,
           VisualEntityId = arr[i].ChildEntity == ulong.MaxValue ? 0 : arr[i].ChildEntity,
           Beta = arr[i].Beta,
           MaxParticles = arr[i].MaxParticles,
+          SpawnRadiusKm = arr[i].SpawnRadiusKm,
         };
         item.PropertyChanged += Item_PropertyChanged;
         Circles.Add(item);

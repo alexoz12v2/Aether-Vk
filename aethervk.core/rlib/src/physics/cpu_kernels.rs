@@ -271,7 +271,7 @@ impl Kernels for CpuScalarKernels {
     &self,
     _cmd: &mut Self::Cmd,
     _scene: &Scene,
-  ) -> EngineResult<alloc::vec::Vec<(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)>> {
+  ) -> EngineResult<alloc::vec::Vec<(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>, bool)>> {
     Ok(alloc::vec::Vec::new())
   }
 
@@ -340,11 +340,23 @@ impl Kernels for CpuScalarKernels {
     Ok(())
   }
 
+  fn apply_emitters_direct(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _particles: &mut Self::Buffer<f32>,
+    _emitters: &Self::Buffer<ForceEmitter>,
+    _frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    _particle_frame_ids: &Self::Buffer<u32>,
+    _num_emitters: u32,
+  ) -> EngineResult<()> {
+    Ok(())
+  }
+
   fn compute_self_gravity(
     &self,
-    cmd: &mut Self::Cmd,
-    bvh: &Self::MotionBvh,
-    particles: &mut Self::Buffer<f32>,
+    _cmd: &mut Self::Cmd,
+    _bvh: &Self::MotionBvh,
+    _particles: &mut Self::Buffer<f32>,
   ) -> EngineResult<()> {
     Ok(())
   }
@@ -770,7 +782,7 @@ impl Kernels for CpuScalarKernels {
     &self,
     _cmd: &mut Self::Cmd,
     _rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    _particle_systems: &[(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)],
+    _particle_systems: &[(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>, bool)],
     _physical_scene: &mut PhysicsScene,
     _scene: &Scene,
   ) -> EngineResult<Option<crate::gpu::CommandBufferSyncInfo>> {
@@ -902,7 +914,7 @@ impl Kernels for CpuSimdKernels {
     &self,
     _cmd: &mut Self::Cmd,
     _scene: &Scene,
-  ) -> EngineResult<alloc::vec::Vec<(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)>> {
+  ) -> EngineResult<alloc::vec::Vec<(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>, bool)>> {
     Ok(alloc::vec::Vec::new())
   }
 
@@ -967,6 +979,18 @@ impl Kernels for CpuSimdKernels {
     rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
     emitters: &Self::Buffer<ForceEmitter>,
     dt: timeus_t,
+  ) -> EngineResult<()> {
+    Ok(())
+  }
+
+  fn apply_emitters_direct(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _particles: &mut Self::Buffer<f32>,
+    _emitters: &Self::Buffer<ForceEmitter>,
+    _frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    _particle_frame_ids: &Self::Buffer<u32>,
+    _num_emitters: u32,
   ) -> EngineResult<()> {
     Ok(())
   }
@@ -1293,7 +1317,7 @@ impl Kernels for CpuSimdKernels {
     &self,
     _cmd: &mut Self::Cmd,
     _rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    _particle_systems: &[(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)],
+    _particle_systems: &[(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>, bool)],
     _physical_scene: &mut PhysicsScene,
     _scene: &Scene,
   ) -> EngineResult<Option<crate::gpu::CommandBufferSyncInfo>> {

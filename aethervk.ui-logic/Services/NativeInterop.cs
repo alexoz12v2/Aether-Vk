@@ -876,6 +876,27 @@ public static class NativeInterop
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_pauseScene(IntPtr ctx, ulong sceneId);
 
+  /// <summary>
+  /// Returns the EMA-smoothed effective simulation speed (sim_dt / wall_dt).
+  /// 1.0 = full speed, &lt;1.0 = GPU pressure is slowing the simulation.
+  /// </summary>
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern float avkSimulationContext_getEffectiveSimSpeed(IntPtr ctx, ulong sceneId);
+
+  /// <summary>
+  /// Enables or disables self-gravity (BVH + Barnes-Hut) for a particle system entity.
+  /// Set <c>disable = true</c> for test-particle systems (comet tails) to use the
+  /// fast O(N) direct emitter path and avoid the BVH build cost.
+  /// </summary>
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_setParticleSystemDisableSelfGravity(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId,
+    [MarshalAs(UnmanagedType.I1)] bool disable
+  );
+
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern double avkSimulationContext_getSimulationTime(IntPtr ctx, ulong sceneId);
 
@@ -1346,13 +1367,16 @@ public static class NativeInterop
     public float ColorG;
     public float ColorB;
     public float ColorA;
-    public uint ParticlesPerTick;
+    /// <summary>Emission rate in particles per second (dt-independent).</summary>
+    public float ParticlesPerSecond;
     public ulong TTL;
     public float MeanVelocity;
     public float VelocityDirStdDevRad;
     public ulong ChildEntity;
     public float Beta;
     public uint MaxParticles;
+    /// <summary>Spawn-disc radius (km) in the surface tangent plane. 0 = point source.</summary>
+    public float SpawnRadiusKm;
   }
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

@@ -308,7 +308,7 @@ where
   let mut particle_systems = kernels.build_particles(&mut cmd, scene)?;
   // Flat metadata list (all systems concatenated) used only by write_back_to_scene routing.
   let particle_metadata: alloc::vec::Vec<crate::gpu::ParticleMetadata> =
-    particle_systems.iter().flat_map(|(_, _, meta)| meta.iter().copied()).collect();
+    particle_systems.iter().flat_map(|(_, _, meta, _)| meta.iter().copied()).collect();
   let (emitters_buf, n_emitters) = kernels.build_emitters(&mut cmd, scene)?;
   let emitters = AutoDiscard::new(emitters_buf, |b| kernels.discard_buffer(b));
   // Reference frames for LCA broad-phase (macro frame is always index 0)
@@ -371,7 +371,7 @@ where
 
       // ── Per-system particle physics ─────────────────────────────────────────
       // VV predictor runs per-system so each buffer is independent.
-      for (sys_entity, sys_particles, sys_meta) in &mut particle_systems {
+      for (sys_entity, sys_particles, sys_meta, _skip_self_gravity) in &mut particle_systems {
         if sys_meta.is_empty() { continue; }
         kernels.imex_integrate_particles_p1_p2(&mut cmd, sys_particles, sub_dt)?;
       }
@@ -396,44 +396,56 @@ where
       }
 
       // Per-system: BVH → self-gravity → external emitters → VV corrector
-      for (sys_entity, sys_particles, sys_meta) in &mut particle_systems {
+      for (sys_entity, sys_particles, sys_meta, skip_self_gravity) in &mut particle_systems {
         if sys_meta.is_empty() { continue; }
 
-        // Build tight per-system AABB from CPU-side particle positions.
-        // This is the critical fix: each system has its own km coordinate space.
         let mut sys_particle_frame_ids = AutoDiscard::new(
           kernels.build_particle_frame_ids(&mut cmd, sys_meta)?,
           |b| kernels.discard_buffer(b),
         );
 
-        let bvh = AutoDiscard::new(
-          kernels.build_motion_bvh(
-            &mut cmd, &kinematics, &rigid_bodies,
-            sys_particles, &mut *sys_particle_frame_ids, sub_dt, *sys_entity,
-            None, // particle_aabb: computed per-system from the buffer (single system only)
-          )?,
-          |b| kernels.discard_bvh(b),
-        );
+        if *skip_self_gravity {
+          // ── Fast path: test particles (comet dust, tracers) ─────────────────
+          // Skip Morton sort, radix sort, LBVH build, and Barnes-Hut self-gravity.
+          // Apply external emitter forces directly into AOSOA slots 7-9, then integrate.
+          kernels.apply_emitters_direct(
+            &mut cmd,
+            sys_particles,
+            &emitters,
+            &frames,
+            &*sys_particle_frame_ids,
+            n_emitters,
+          )?;
+          sync!("apply_emitters_direct (test-particle fast path)");
+        } else {
+          // ── Full path: self-gravitating particle cloud ────────────────────
+          let bvh = AutoDiscard::new(
+            kernels.build_motion_bvh(
+              &mut cmd, &kinematics, &rigid_bodies,
+              sys_particles, &mut *sys_particle_frame_ids, sub_dt, *sys_entity,
+              None,
+            )?,
+            |b| kernels.discard_bvh(b),
+          );
+          sync!("build_motion_bvh");
 
-        sync!("build_motion_bvh");
+          kernels.compute_self_gravity(&mut cmd, &bvh, sys_particles)?;
+          sync!("compute_self_gravity (barnes_hut)");
 
-        kernels.compute_self_gravity(&mut cmd, &bvh, sys_particles)?;
-        sync!("compute_self_gravity (barnes_hut)");
+          kernels.apply_emitters_to_particles(
+            &mut cmd,
+            sys_particles,
+            &emitters,
+            &frames,
+            &*sys_particle_frame_ids,
+            &*bvh,
+            n_emitters,
+          )?;
+          sync!("apply_emitters_to_particles (Phase A)");
 
-        kernels.apply_emitters_to_particles(
-          &mut cmd,
-          sys_particles,
-          &emitters,
-          &frames,
-          &*sys_particle_frame_ids,
-          &*bvh,
-          n_emitters,
-        )?;
-        sync!("apply_emitters_to_particles (Phase A)");
-
-        // Phase B: splat all cluster forces (self-gravity + external) → particle AOSOA
-        kernels.accumulate_bvh_forces_to_particles(&mut cmd, sys_particles, &*bvh)?;
-        sync!("accumulate_bvh_forces_to_particles (Phase B)");
+          kernels.accumulate_bvh_forces_to_particles(&mut cmd, sys_particles, &*bvh)?;
+          sync!("accumulate_bvh_forces_to_particles (Phase B)");
+        }
 
         kernels.imex_integrate_particles_p4_5(&mut cmd, sys_particles, sub_dt, current_time)?;
         sync!("imex_integrate_particles_p4_5");
@@ -479,7 +491,7 @@ where
 
 
         // ── VV predictor: per-system ──────────────────────────────────────────
-        for (_, sys_buf, sys_meta) in &mut particle_systems {
+        for (_, sys_buf, sys_meta, _) in &mut particle_systems {
           if sys_meta.is_empty() { continue; }
           aethervk_oshal_rlib::log!("gpu_backends.rs: calling imex_integrate_particles_p1_p2");
           kernels.imex_integrate_particles_p1_p2(&mut cmd, sys_buf, dt)?;
@@ -505,28 +517,34 @@ where
         }
 
         // ── Per-system: BVH → self-gravity → emitters → VV corrector ─────────
-        for (sys_entity, sys_buf, sys_meta) in &mut particle_systems {
+        for (sys_entity, sys_buf, sys_meta, skip_self_gravity) in &mut particle_systems {
           if sys_meta.is_empty() { continue; }
           let mut sys_fids = AutoDiscard::new(
             kernels.build_particle_frame_ids(&mut cmd, sys_meta)?,
             |b| kernels.discard_buffer(b),
           );
-          let bvh = AutoDiscard::new(
-            kernels.build_motion_bvh(
-              &mut cmd, &kinematics, &rigid_bodies,
-              sys_buf, &mut *sys_fids, dt, *sys_entity, None,
-            )?,
-            |b| kernels.discard_bvh(b),
-          );
-          sync!("build_motion_bvh (collisions path)");
-          kernels.compute_self_gravity(&mut cmd, &bvh, sys_buf)?;
-          sync!("compute_self_gravity (collisions path)");
-          kernels.apply_emitters_to_particles(
-            &mut cmd, sys_buf, &emitters, &frames, &*sys_fids, &*bvh, n_emitters,
-          )?;
-          sync!("apply_emitters_to_particles (collisions Phase A)");
-          kernels.accumulate_bvh_forces_to_particles(&mut cmd, sys_buf, &*bvh)?;
-          sync!("accumulate_bvh_forces_to_particles (collisions Phase B)");
+          if *skip_self_gravity {
+            kernels.apply_emitters_direct(
+              &mut cmd, sys_buf, &emitters, &frames, &*sys_fids, n_emitters,
+            )?;
+          } else {
+            let bvh = AutoDiscard::new(
+              kernels.build_motion_bvh(
+                &mut cmd, &kinematics, &rigid_bodies,
+                sys_buf, &mut *sys_fids, dt, *sys_entity, None,
+              )?,
+              |b| kernels.discard_bvh(b),
+            );
+            sync!("build_motion_bvh (collisions path)");
+            kernels.compute_self_gravity(&mut cmd, &bvh, sys_buf)?;
+            sync!("compute_self_gravity (collisions path)");
+            kernels.apply_emitters_to_particles(
+              &mut cmd, sys_buf, &emitters, &frames, &*sys_fids, &*bvh, n_emitters,
+            )?;
+            sync!("apply_emitters_to_particles (collisions Phase A)");
+            kernels.accumulate_bvh_forces_to_particles(&mut cmd, sys_buf, &*bvh)?;
+            sync!("accumulate_bvh_forces_to_particles (collisions Phase B)");
+          }
           kernels.imex_integrate_particles_p4_5(&mut cmd, sys_buf, dt, current_time)?;
           sync!("imex_integrate_particles_p4_5 (collisions path)");
         }
@@ -644,7 +662,7 @@ where
         }
         // bp_particle_self uses first system's buffer (CCD only sees one merged set).
         if actual_particles > 0 {
-          if let Some((_, sys_buf, _)) = particle_systems.first_mut() {
+          if let Some((_, sys_buf, _, _)) = particle_systems.first_mut() {
             let p_addr = sys_buf.address();
             kernels.bp_particle_self(
               &mut cmd,
@@ -867,12 +885,12 @@ where
           // Restore: always restore rigid bodies; restore particles only if present.
           {
             let p_opt: Option<&mut K::Buffer<f32>> = particle_systems.first_mut()
-              .map(|(_, buf, _)| buf);
+              .map(|(_, buf, _, _)| buf);
             kernels.restore_dynamics(&mut cmd, &mut rigid_bodies, p_opt, &snapshot)?;
           }
 
           // Re-integrate to t_c: per-system VV predictor
-          for (_, sys_buf, sys_meta) in &mut particle_systems {
+          for (_, sys_buf, sys_meta, _) in &mut particle_systems {
             if sys_meta.is_empty() { continue; }
             kernels.imex_integrate_particles_p1_p2(&mut cmd, sys_buf, t_c)?;
           }
@@ -883,24 +901,30 @@ where
           )?;
 
           // Per-system: BVH/self-gravity/emitters/VV corrector at t_c
-          for (sys_entity, sys_buf, sys_meta) in &mut particle_systems {
+          for (sys_entity, sys_buf, sys_meta, skip_self_gravity) in &mut particle_systems {
             if sys_meta.is_empty() { continue; }
             let mut sys_fids = AutoDiscard::new(
               kernels.build_particle_frame_ids(&mut cmd, sys_meta)?,
               |b| kernels.discard_buffer(b),
             );
-            let rewind_bvh = AutoDiscard::new(
-              kernels.build_motion_bvh(
-                &mut cmd, &kinematics, &rigid_bodies,
-                sys_buf, &mut *sys_fids, t_c, *sys_entity, None,
-              )?,
-              |b| kernels.discard_bvh(b),
-            );
-            kernels.compute_self_gravity(&mut cmd, &rewind_bvh, sys_buf)?;
-            kernels.apply_emitters_to_particles(
-              &mut cmd, sys_buf, &emitters, &frames, &*sys_fids, &*rewind_bvh, n_emitters,
-            )?;
-            kernels.accumulate_bvh_forces_to_particles(&mut cmd, sys_buf, &*rewind_bvh)?;
+            if *skip_self_gravity {
+              kernels.apply_emitters_direct(
+                &mut cmd, sys_buf, &emitters, &frames, &*sys_fids, n_emitters,
+              )?;
+            } else {
+              let rewind_bvh = AutoDiscard::new(
+                kernels.build_motion_bvh(
+                  &mut cmd, &kinematics, &rigid_bodies,
+                  sys_buf, &mut *sys_fids, t_c, *sys_entity, None,
+                )?,
+                |b| kernels.discard_bvh(b),
+              );
+              kernels.compute_self_gravity(&mut cmd, &rewind_bvh, sys_buf)?;
+              kernels.apply_emitters_to_particles(
+                &mut cmd, sys_buf, &emitters, &frames, &*sys_fids, &*rewind_bvh, n_emitters,
+              )?;
+              kernels.accumulate_bvh_forces_to_particles(&mut cmd, sys_buf, &*rewind_bvh)?;
+            }
             kernels.imex_integrate_particles_p4_5(&mut cmd, sys_buf, t_c, current_time)?;
           }
 
@@ -924,7 +948,7 @@ where
             let remaining_dt = dt - t_c;
             if remaining_dt > 0 {
               // Per-system VV predictor for remainder
-              for (_, sys_buf, sys_meta) in &mut particle_systems {
+              for (_, sys_buf, sys_meta, _) in &mut particle_systems {
                 if sys_meta.is_empty() { continue; }
                 kernels.imex_integrate_particles_p1_p2(&mut cmd, sys_buf, remaining_dt)?;
               }
@@ -934,24 +958,30 @@ where
                 n_bodies, n_emitters, remaining_dt,
               )?;
               // Per-system: BVH/self-gravity/emitters/VV corrector for remainder
-              for (sys_entity, sys_buf, sys_meta) in &mut particle_systems {
+              for (sys_entity, sys_buf, sys_meta, skip_self_gravity) in &mut particle_systems {
                 if sys_meta.is_empty() { continue; }
                 let mut sys_fids = AutoDiscard::new(
                   kernels.build_particle_frame_ids(&mut cmd, sys_meta)?,
                   |b| kernels.discard_buffer(b),
                 );
-                let final_bvh = AutoDiscard::new(
-                  kernels.build_motion_bvh(
-                    &mut cmd, &kinematics, &rigid_bodies,
-                    sys_buf, &mut *sys_fids, remaining_dt, *sys_entity, None,
-                  )?,
-                  |b| kernels.discard_bvh(b),
-                );
-                kernels.compute_self_gravity(&mut cmd, &final_bvh, sys_buf)?;
-                kernels.apply_emitters_to_particles(
-                  &mut cmd, sys_buf, &emitters, &frames, &*sys_fids, &*final_bvh, n_emitters,
-                )?;
-                kernels.accumulate_bvh_forces_to_particles(&mut cmd, sys_buf, &*final_bvh)?;
+                if *skip_self_gravity {
+                  kernels.apply_emitters_direct(
+                    &mut cmd, sys_buf, &emitters, &frames, &*sys_fids, n_emitters,
+                  )?;
+                } else {
+                  let final_bvh = AutoDiscard::new(
+                    kernels.build_motion_bvh(
+                      &mut cmd, &kinematics, &rigid_bodies,
+                      sys_buf, &mut *sys_fids, remaining_dt, *sys_entity, None,
+                    )?,
+                    |b| kernels.discard_bvh(b),
+                  );
+                  kernels.compute_self_gravity(&mut cmd, &final_bvh, sys_buf)?;
+                  kernels.apply_emitters_to_particles(
+                    &mut cmd, sys_buf, &emitters, &frames, &*sys_fids, &*final_bvh, n_emitters,
+                  )?;
+                  kernels.accumulate_bvh_forces_to_particles(&mut cmd, sys_buf, &*final_bvh)?;
+                }
                 #[cfg(test)] println!("!!! EXEC: compute_self_gravity and imex_integrate_particles_p4_5");
                 kernels.imex_integrate_particles_p4_5(
                   &mut cmd, sys_buf, remaining_dt, current_time + t_c,
@@ -989,7 +1019,7 @@ where
   // Explicitly free the per-system particle GPU buffers.
   // VulkanBuffer::drop only logs a warning; the actual VMA allocation must be
   // freed via kernels.discard_buffer (which queues it for timeline-safe deallocation).
-  for (_, sys_buf, _) in particle_systems {
+  for (_, sys_buf, _, _) in particle_systems {
     kernels.discard_buffer(sys_buf);
   }
 

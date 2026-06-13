@@ -658,6 +658,8 @@ mod tests {
       beta: 1.0,
       gpu_sort_order: alloc::vec::Vec::new(),
       gpu_alive_count: 0,
+      disable_self_gravity: false,
+      emit_remainder: 0 as _,
     };
     sys.update_bvh(1.0);
     scene.add_component(particle_system, sys).unwrap();
@@ -790,6 +792,8 @@ mod tests {
       beta: 1.0,
       gpu_sort_order: alloc::vec::Vec::new(),
       gpu_alive_count: 0,
+      disable_self_gravity: false,
+      emit_remainder: 0 as _,
     };
     sys.update_bvh(1.0);
     scene.add_component(particle_system, sys).unwrap();

@@ -118,7 +118,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<alloc::vec::Vec<(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)>> {
+  ) -> EngineResult<alloc::vec::Vec<(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>, bool)>> {
     self.base.build_particles(cmd, scene)
   }
   fn build_particle_frame_ids(
@@ -291,6 +291,18 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     bvh: &Self::MotionBvh,
   ) -> EngineResult<()> {
     self.base.accumulate_bvh_forces_to_particles(cmd, particles, bvh)
+  }
+
+  fn apply_emitters_direct(
+    &self,
+    _cmd: &mut Self::Cmd,
+    _particles: &mut Self::Buffer<f32>,
+    _emitters: &Self::Buffer<ForceEmitter>,
+    _frames: &Self::Buffer<GpuReferenceFrame>,
+    _particle_frame_ids: &Self::Buffer<u32>,
+    _num_emitters: u32,
+  ) -> EngineResult<()> {
+    Ok(()) // no-op in mock
   }
 
   fn bp_clear(
@@ -606,7 +618,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particle_systems: &[(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)],
+    particle_systems: &[(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>, bool)],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> EngineResult<Option<CommandBufferSyncInfo>> {

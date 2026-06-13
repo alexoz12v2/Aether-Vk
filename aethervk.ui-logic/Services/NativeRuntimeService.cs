@@ -2782,7 +2782,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
           ColorG = comet.Jets[i].ColorG,
           ColorB = comet.Jets[i].ColorB,
           ColorA = comet.Jets[i].ColorA,
-          ParticlesPerTick = comet.Jets[i].ParticlesPerTick,
+          ParticlesPerSecond = comet.Jets[i].ParticlesPerSecond,
           TTL = comet.Jets[i].TTL,
           MeanVelocity = comet.Jets[i].MeanVelocity,
           VelocityDirStdDevRad = comet.Jets[i].VelocityDirStdDevDeg * (float)Math.PI / 180f,
@@ -2790,6 +2790,7 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
             comet.Jets[i].VisualEntityId == 0 ? ulong.MaxValue : comet.Jets[i].VisualEntityId,
           Beta = comet.Jets[i].Beta,
           MaxParticles = comet.Jets[i].MaxParticles,
+          SpawnRadiusKm = comet.Jets[i].SpawnRadiusKm,
         };
       }
 

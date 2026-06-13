@@ -67,6 +67,20 @@ public partial class TimelineViewModel
   /// <summary>Tooltip for the play/pause toggle button.</summary>
   public string PlayPauseTooltip => Timeline.IsPlaying ? "Pause" : "Play";
 
+  /// <summary>
+  /// EMA-smoothed ratio of sim-time-advanced / wall-time-spent.
+  /// 1.0 = full speed; &lt;1.0 = GPU budget pressure.
+  /// </summary>
+  [ObservableProperty]
+  private float _effectiveSimSpeed = 1.0f;
+
+  /// <summary>Human-readable playback speed string, e.g. "0.43×".</summary>
+  public string PlaybackSpeedText =>
+      EffectiveSimSpeed >= 0.99f ? "1.00×" : $"{EffectiveSimSpeed:F2}×";
+
+  partial void OnEffectiveSimSpeedChanged(float value) =>
+      OnPropertyChanged(nameof(PlaybackSpeedText));
+
   private readonly IAudio2DService _audioService;
 
   public TimelineViewModel(
@@ -184,6 +198,11 @@ public partial class TimelineViewModel
       }
 
       Timeline.UtcTime = _runtimeService.GetSimulationTimeUtc(CurrentSceneId);
+
+      EffectiveSimSpeed = _runtimeService.IsInitialized
+        ? NativeInterop.avkSimulationContext_getEffectiveSimSpeed(
+            _runtimeService.SimulationContext, CurrentSceneId)
+        : 1.0f;
     });
   }
 
@@ -256,7 +275,7 @@ public partial class TimelineViewModel
         if (
           emitter != null
           && emitter.Circles.Any(c =>
-            c.ParticlesPerTick > 0 && c.CircleRadiusKm > 0 && c.Mass > 0 && c.TTL > 0
+            c.ParticlesPerSecond > 0 && c.CircleRadiusKm > 0 && c.Mass > 0 && c.TTL > 0
           )
         )
         {

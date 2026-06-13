@@ -1451,13 +1451,18 @@ pub struct FfiEmissionCircle {
   pub color_g: f32,
   pub color_b: f32,
   pub color_a: f32,
-  pub particles_per_tick: u32,
+  /// Emission rate in particles per second (continuous, dt-independent).
+  pub particles_per_second: f32,
   pub ttl: u64,
   pub mean_velocity: f32,
   pub velocity_std_dev: f32,
   pub child_entity: u64,
   pub beta: f32,
   pub max_particles: u32,
+  /// Spawn-disc radius (km) in the surface tangent plane.
+  /// Particles are uniformly scattered within this disc around the emission point.
+  /// 0.0 = point source.
+  pub spawn_radius_km: f32,
 }
 
 #[unsafe(no_mangle)]
@@ -1491,7 +1496,8 @@ pub unsafe extern "C" fn avkSimulationContext_setParticleEmitterCirclesComponent
 
       cached_point: None,
       cached_normal: None,
-      particles_per_tick: c.particles_per_tick,
+      // FFI exposes particles_per_second directly — pass through.
+      particles_per_second: c.particles_per_second,
       ttl: c.ttl,
       mean_velocity: c.mean_velocity,
       velocity_std_dev: c.velocity_std_dev,
@@ -1504,6 +1510,7 @@ pub unsafe extern "C" fn avkSimulationContext_setParticleEmitterCirclesComponent
       },
       beta: c.beta,
       max_particles: c.max_particles.max(64),
+      spawn_radius_km: c.spawn_radius_km,
     });
   }
 
@@ -1765,13 +1772,15 @@ pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent
         color_g: c.color[1],
         color_b: c.color[2],
         color_a: c.color[3],
-        particles_per_tick: c.particles_per_tick,
+        // Round-trip: particles_per_second is the canonical unit in both Rust and C#.
+        particles_per_second: c.particles_per_second,
         ttl: c.ttl,
         mean_velocity: c.mean_velocity,
         velocity_std_dev: c.velocity_std_dev,
         child_entity: ext_child,
         beta: c.beta,
         max_particles: c.max_particles,
+        spawn_radius_km: c.spawn_radius_km,
       };
     }
   }
@@ -3232,6 +3241,63 @@ pub unsafe extern "C" fn avkSimulationContext_setTimeScale(
       scene_id,
       scale: time_scale,
     });
+}
+
+/// Returns the EMA-smoothed effective simulation speed for `scene_id`.
+///
+/// * `1.0` = GPU physics keeps up with wall-clock (full configured speed).
+/// * `< 1.0` = GPU pipeline is slower than real-time; simulation is slowed.
+/// * `0.0` = scene not found or not yet playing.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getEffectiveSimSpeed(
+  ctx: *const SimulationContext,
+  scene_id: u64,
+) -> f32 {
+  if ctx.is_null() {
+    return 0.0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  if let Some(scene_ctx_lock) = scenes.scenes.get(&scene_id) {
+    let scene_ctx = scene_ctx_lock.read();
+    return scene_ctx.time_state.read().effective_sim_speed;
+  }
+  0.0
+}
+
+/// Enables or disables Barnes-Hut self-gravity for a particle system entity.
+///
+/// Set `disable = true` for comet dust tails and other test-particle systems
+/// to route physics through the O(N) `apply_emitters_direct` shader, avoiding
+/// the expensive BVH build + traversal at high particle counts.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setParticleSystemDisableSelfGravity(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+  disable: bool,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  if let Some(scenes) = ctx_ref.scenes.try_write() {
+    if let Some(scene_ctx_lock) = scenes.scenes.get(&scene_id) {
+      let scene_ctx = scene_ctx_lock.read();
+      if let Some(internal_id) = scene_ctx.entity_map.get(&entity_id).copied() {
+        let found = scene_ctx.scene.with_component_mut(
+          internal_id,
+          |psc: &mut aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
+            psc.disable_self_gravity = disable;
+          },
+        );
+        return found.is_some();
+      }
+    }
+  }
+  false
 }
 
 /// the C# caller should be responsible for polling getTaskStatus and only calling download_image once the status is completed.

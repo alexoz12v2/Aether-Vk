@@ -752,6 +752,29 @@ pub struct ApplyEmittersPushConstants {
   pub _pad: [u32; 3],
 }
 
+/// `apply_emitters_direct.comp` — 48 bytes
+///
+/// Direct per-particle external-gravity pass for test-particle systems
+/// (comet dust, tracers) where inter-particle self-gravity is disabled.
+/// No BVH is needed: each thread reads its own AOSOA position, computes
+/// the gravitational acceleration from all emitters, and atomically adds
+/// the force into AOSOA slots 7-9.
+///
+/// glslc rounds push-constant blocks up to a multiple of 16 bytes,
+/// so 40 bytes of data → 48-byte block (3 × 16).  The trailing `_pad`
+/// keeps the Rust struct in sync with the SPIR-V reflection.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ApplyEmittersDirectPushConstants {
+  pub particles: u64,
+  pub emitters: u64,
+  pub frames: u64,
+  pub particle_frame_ids: u64,
+  pub num_emitters: u32,
+  pub total_particles: u32,
+  pub _pad: [u32; 2], // align block to 48 bytes (3 × 16)
+}
+
 /// Push constants for `accumulate_bvh_forces_to_particles.comp` (Phase B).
 /// Splats per-cluster BVH forces (self-gravity + external) back to per-particle
 /// AOSOA slots 7-9 via a leaf→root traversal.
