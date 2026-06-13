@@ -752,6 +752,18 @@ pub struct ApplyEmittersPushConstants {
   pub _pad: [u32; 3],
 }
 
+/// Push constants for `accumulate_bvh_forces_to_particles.comp` (Phase B).
+/// Splats per-cluster BVH forces (self-gravity + external) back to per-particle
+/// AOSOA slots 7-9 via a leaf→root traversal.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct AccumBvhForcesPushConstants {
+  pub particles: u64,      // ParticleData BDA
+  pub bvh: u64,            // MultiBvhBuffer BDA
+  pub total_particles: u32,
+  pub _pad: [u32; 3],
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct RadixSortPushConstants {
@@ -767,15 +779,18 @@ pub struct RadixSortPushConstants {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MortonEncodePushConstants {
-  pub morton_out: u64,
-  pub particles: u64,
-  pub num_particles: u32,
-  pub _pad0: u32,
-  pub scene_min: [f32; 3],
-  pub _pad1: u32,
-  pub scene_max: [f32; 3],
-  pub _pad2: u32,
+  pub morton_out: u64,       // offset 0,  8 bytes
+  pub particles: u64,        // offset 8,  8 bytes
+  pub num_particles: u32,    // offset 16, 4 bytes
+  pub _pad0: [u32; 3],       // offset 20, 12 bytes → scene_min at offset 32
+  pub scene_min: [f32; 3],   // offset 32, 12 bytes
+  pub _pad1: u32,            // offset 44, 4 bytes  → scene_max at offset 48
+  pub scene_max: [f32; 3],   // offset 48, 12 bytes
+  pub _pad2: u32,            // offset 60, 4 bytes  → total = 64 bytes
 }
+
+const _ASSERT_MORTON_PC_SIZE: () =
+  assert!(core::mem::size_of::<MortonEncodePushConstants>() == 64);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]

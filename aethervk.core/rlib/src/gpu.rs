@@ -2206,11 +2206,17 @@ pub trait Kernels: Send + Sync {
     cmd: &mut Self::Cmd,
     scene: &PhysicsScene,
   ) -> EngineResult<Self::Buffer<GpuReferenceFrame>>;
+  /// Build one GPU buffer per `ParticleSystemComponent` entity.
+  ///
+  /// Returns a `Vec` of `(entity_id, particle_float_buffer, metadata_for_this_system)`.
+  /// Each system gets its own AoSoA buffer whose AABB is independent, enabling a
+  /// separate Morton-encode → LBVH → self-gravity → integration pipeline per system.
+  /// Systems with zero active particles are omitted from the returned vec.
   fn build_particles(
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<(Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)>;
+  ) -> EngineResult<alloc::vec::Vec<(EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)>>;
 
   /// Uploads the `parent_frame_id` field from each `ParticleMetadata` entry as a
   /// tightly-packed `u32[]` GPU buffer in AOSOA invocation order (same order as the
@@ -2347,7 +2353,21 @@ pub trait Kernels: Send + Sync {
     emitters: &Self::Buffer<ForceEmitter>,
     frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
     particle_frame_ids: &Self::Buffer<u32>,
+    // Per-system BVH (Phase A): emitter force computed per cluster → BVH force slots.
+    bvh: &Self::MotionBvh,
     num_emitters: u32,
+  ) -> EngineResult<()>;
+
+  /// Phase B: splats all accumulated BVH cluster forces (self-gravity from
+  /// `compute_self_gravity` + external gravity from `apply_emitters_to_particles`)
+  /// back to per-particle AOSOA force slots 7-9 via a leaf→root traversal.
+  ///
+  /// Must be called after a pipeline barrier following Phase A.
+  fn accumulate_bvh_forces_to_particles(
+    &self,
+    cmd: &mut Self::Cmd,
+    particles: &mut Self::Buffer<f32>,
+    bvh: &Self::MotionBvh,
   ) -> EngineResult<()>;
 
   // ── New Broad-Phase Suite ──────────────────────────────────────────────────
@@ -2450,6 +2470,8 @@ pub trait Kernels: Send + Sync {
     particle_frame_ids: &mut Self::Buffer<u32>,
     dt: timeus_t,
     entity_id: EntityId,
+    // Tight AABB in micro-frame km. None → default ±1e6 km range.
+    particle_aabb: Option<([f32; 3], [f32; 3])>,
   ) -> EngineResult<Self::MotionBvh>;
 
   /// **Deprecated**: broad-phase now handled by `bp_clear` → `bp_bounds_gen` → `bp_scene`.
@@ -2535,21 +2557,24 @@ pub trait Kernels: Send + Sync {
   ) -> EngineResult<()>;
 
   // ── CCD Rewind Subsystem ───────────────────────────────────────────────────
+  /// Snapshot rigid bodies and, optionally, a particle buffer for CCD rewind.
+  /// Pass `None` for `particles` in pure rigid-body scenes to avoid a spurious
+  /// GPU allocation that would leak if no subsequent submit drains the transient pool.
   #[cfg(any(test, feature = "collisions"))]
   fn snapshot_dynamics(
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>)>;
+    particles: Option<&Self::Buffer<f32>>,
+  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Option<Self::Buffer<f32>>)>;
 
   #[cfg(any(test, feature = "collisions"))]
   fn restore_dynamics(
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
-    particles: &mut Self::Buffer<f32>,
-    snapshot: &(Self::Buffer<RigidBodyImex>, Self::Buffer<f32>),
+    particles: Option<&mut Self::Buffer<f32>>,
+    snapshot: &(Self::Buffer<RigidBodyImex>, Option<Self::Buffer<f32>>),
   ) -> EngineResult<()>;
 
   // ── Write back dynamic state ───────────────────────────────────────────────
@@ -2557,11 +2582,12 @@ pub trait Kernels: Send + Sync {
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
-    particle_metadata: &[ParticleMetadata],
+    // Per-system particle buffers: (entity_id, buffer, metadata).
+    particle_systems: &[(EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>)],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> EngineResult<Option<CommandBufferSyncInfo>>;
+
 }
 
 /// Bridges synchronization between Compute (Kernels) and Graphics (RenderDevice).

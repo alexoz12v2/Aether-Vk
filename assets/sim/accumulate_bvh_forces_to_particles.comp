@@ -1,0 +1,97 @@
+// @assets/sim/accumulate_bvh_forces_to_particles.comp
+//
+// BVH Force Splat  (Phase B of external-force pipeline)
+// ────────────────────────────────────────────────────────
+// Dispatched AFTER a pipeline barrier following:
+//   1. barnes_hut.comp          — self-gravity → BVH force slots
+//   2. apply_emitters.comp      — external gravity → BVH force slots
+//
+// Each active particle traverses the BVH from its leaf up to the root,
+// accumulating the combined cluster force (self-gravity + external gravity)
+// stored in the parent node's force slot.  The result is atomically added
+// into the particle's AOSOA force slots 7-9, which p1_p2 already cleared
+// to zero at tick start.
+//
+// Force units
+//   BVH force slots   : km/s² × kg  (cluster force = acc × cluster_mass)
+//   Particle AOSOA 7-9: km/s²        (per-unit-mass acceleration)
+//   Conversion        : f_particle = f_cluster / particle_mass
+//
+// This shader is intentionally tiny: no emitter loops, no BVH build — just
+// the leaf→root accumulation that splats per-cluster forces back to particles.
+#version 450 core
+#extension GL_EXT_buffer_reference2         : require
+#extension GL_EXT_buffer_reference_uvec2    : require
+#extension GL_KHR_shader_subgroup_basic     : require
+#extension GL_KHR_shader_subgroup_vote      : require   // subgroupAny
+#extension GL_GOOGLE_include_directive      : require
+
+#include "../bvh_utils.glsl"
+#include "imex_math.glsl"
+
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    ParticleData  particles;
+    MultiBvhBuffer bvh;
+    uint total_particles;
+    uint _pad[3];
+} pc;
+
+// Shared BVH null-guard: uvec2 + subgroupAny, no shaderInt64.
+shared bool s_has_bvh;
+
+void main() {
+    // ── Null-BVH guard ───────────────────────────────────────────────────
+    if (gl_LocalInvocationID.x == 0u) {
+        uvec2 bvh_uvec = uvec2(pc.bvh);
+        bool  local_ok = (bvh_uvec.x != 0u || bvh_uvec.y != 0u);
+        s_has_bvh = local_ok && subgroupAny(local_ok);
+    }
+    barrier();
+    if (!s_has_bvh || pc.total_particles == 0u) return;
+
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.total_particles) return;
+
+    // ── Read particle mass ────────────────────────────────────────────────
+    uint block = gid / SUBGROUP_SIZE;
+    uint lane  = gid % SUBGROUP_SIZE;
+    uint base  = block * (PARTICLE_FIELDS * SUBGROUP_SIZE) + lane;
+
+    float mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
+    if (mass <= 0.0) return;
+
+    float inv_m = 1.0 / mass;
+
+    // ── Leaf → root traversal ─────────────────────────────────────────────
+    uint n_leaves = (pc.total_particles + PARTICLES_IN_LEAF - 1u) / PARTICLES_IN_LEAF;
+    uint leaf_idx = gid / PARTICLES_IN_LEAF;
+    uint current  = n_leaves - 1u + leaf_idx;   // first internal-node index
+
+    vec3 f_acc = vec3(0.0);
+    while (current != 0u) {
+        uint parent     = tlas_parent(pc.bvh, current);
+        uint c1         = tlas_child(pc.bvh, parent, 1u);
+        uint child_lane = (c1 == current) ? 1u : 0u;
+
+        // BVH stores F = acc × cluster_mass; convert to per-unit-mass acc.
+        f_acc += vec3(
+            tlas_force_x(pc.bvh, parent, child_lane),
+            tlas_force_y(pc.bvh, parent, child_lane),
+            tlas_force_z(pc.bvh, parent, child_lane)
+        ) * inv_m;
+
+        current = parent;
+    }
+
+    // ── Write accumulated force into particle AOSOA slots 7-9 ─────────────
+    if (f_acc.x != 0.0 || f_acc.y != 0.0 || f_acc.z != 0.0) {
+        ATOMIC_ADD_FLOAT(pc.particles.data[base + 7u * SUBGROUP_SIZE], f_acc.x);
+        ATOMIC_ADD_FLOAT(pc.particles.data[base + 8u * SUBGROUP_SIZE], f_acc.y);
+        ATOMIC_ADD_FLOAT(pc.particles.data[base + 9u * SUBGROUP_SIZE], f_acc.z);
+    }
+}
