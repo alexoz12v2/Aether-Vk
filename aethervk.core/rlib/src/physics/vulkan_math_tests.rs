@@ -1168,6 +1168,12 @@ mod tests {
   #[test]
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_barnes_hut_particles_circle_emitter() {
+    // Enable debug-printf shader variants so debugPrintfEXT output from
+    // lbvh_build_bottomup (WATCHDOG / PAGE_FAULT_PREVENTED) is visible
+    // when running under shader_debug_sync.  Safe here because this test
+    // has at most 1 particle in flight — no flood risk.
+    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+      .store(true, core::sync::atomic::Ordering::SeqCst);
     let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
@@ -1312,6 +1318,7 @@ mod tests {
         mass: 1.0,
         active: 1,
         force: [0f32; 3],
+        padding: 0,
       });
     }
     scene.add_component(mesh_entity, particle_sys).unwrap();
@@ -1381,9 +1388,17 @@ mod tests {
       );
 
       let v1 = p.velocity[2];
+      // beta_particle=2.0 > 1 → radiation dominates gravity → net repulsion (mu_eff < 0)
+      // The emitter is at +z, so the net force is in −z → particle decelerates.
+      // v1 < v0 = 5.0, but still positive since repulsion over one step is small.
       assert!(
-        v1 >= 5.0,
-        "Velocity should be increased by attractive gravity! v1 = {}",
+        v1 < 5.0,
+        "Particle should decelerate (beta>1 = radiation-dominated)! v1 = {}",
+        v1
+      );
+      assert!(
+        v1 > 0.0,
+        "Particle should still be moving forward after one step! v1 = {}",
         v1
       );
     }
@@ -1461,6 +1476,7 @@ mod tests {
         mass: 1.0,
         active: 1,
         force: [0f32; 3],
+        padding: 0,
       });
 
       // Cluster 1
@@ -1475,6 +1491,7 @@ mod tests {
           mass: 1.0,
           active: 1,
           force: [0f32; 3],
+          padding: 0,
         });
       }
 
@@ -1490,6 +1507,7 @@ mod tests {
           mass: 1.0,
           active: 1,
           force: [0f32; 3],
+          padding: 0,
         });
       }
 
@@ -1505,6 +1523,7 @@ mod tests {
           mass: 1.0,
           active: 1,
           force: [0f32; 3],
+          padding: 0,
         });
       }
     }
@@ -1635,8 +1654,8 @@ mod tests {
   ///    accept both NVIDIA (host) and Lavapipe (docker) floating-point results.
   #[test]
   fn test_two_particle_systems_with_sun() {
-    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
-      .store(true, core::sync::atomic::Ordering::SeqCst);
+    // NOTE: DO NOT enable USE_PRINTF_SHADERS here — see test_barnes_hut_forces comment.
+    // The debug-printf variant floods the Vulkan callback queue and hangs on NVIDIA.
 
     // ── Constants ────────────────────────────────────────────────────────────
     const N_PARTICLES: usize = 10; // particles per cloud (same position → same BVH leaf)
@@ -1727,6 +1746,7 @@ mod tests {
           mass: 1.0,
           active: 1,
           force: [0.0; 3], // no prior force stored yet
+          padding: 0,
         });
       }
     }
@@ -1756,6 +1776,7 @@ mod tests {
           mass: 1.0,
           active: 1,
           force: [0.0; 3],
+          padding: 0,
         });
       }
     }

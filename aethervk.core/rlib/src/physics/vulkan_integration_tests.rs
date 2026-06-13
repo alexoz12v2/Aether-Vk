@@ -827,6 +827,7 @@ mod tests {
           velocity: [0.0, -1.0, 0.0],
           active: 1,
           force: [0f32; 3],
+          padding: 0,
         });
       }
     }
@@ -850,8 +851,9 @@ mod tests {
   #[test]
   #[cfg_attr(not(feature = "collisions"), ignore = "Requires collisions feature")]
   fn test_barnes_hut_forces() {
-    crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
-      .store(true, core::sync::atomic::Ordering::Relaxed);
+    // NOTE: DO NOT enable USE_PRINTF_SHADERS here — the debug-printf variant
+    // floods the Vulkan message queue with O(N²) messages for 11 particles and
+    // hangs indefinitely on NVIDIA due to the validation-layer callback backlog.
     let ctx = VulkanTestContext::new();
 
     let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
@@ -881,6 +883,7 @@ mod tests {
           velocity: [0.0, 0.0, 0.0],
           active: 1,
           force: [0f32; 3],
+          padding: 0,
         });
       }
       // Add one MASSIVE particle far away
@@ -894,6 +897,7 @@ mod tests {
         velocity: [0.0, 0.0, 0.0],
         active: 1,
         force: [0f32; 3],
+        padding: 0,
       });
     }
     let _ = scene.add_component(p_sys, p_comp);

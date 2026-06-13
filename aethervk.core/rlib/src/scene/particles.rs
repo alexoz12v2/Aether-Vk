@@ -65,6 +65,7 @@ pub struct ParticleData {
   /// so the Velocity-Verlet predictor step in `integrate_particles_p1_p2.comp`
   /// can use F(x_n) from the previous frame rather than a zero vector.
   pub force: [f32; 3],
+  pub padding: u32,
 }
 
 impl ParticleData {

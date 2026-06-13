@@ -92,6 +92,29 @@ void main() {
     uint watchdog = 0;
     uint max_steps = n * 2 + 2;
     
+    // ── Single-leaf special case (n == 1) ────────────────────────────────────
+    // When there is exactly one leaf, leaf_node==0 IS the root.  The while
+    // loop below starts with current==0 and exits immediately, so the computed
+    // cluster data is never written anywhere.  Phase A would then see
+    // valid_mask==0 for node 0 and skip it, producing zero external force.
+    // Fix: bootstrap by writing the cluster into node 0 slot 0 directly.
+    if (leaf_node == 0u) {
+        tlas_write_mass      (pc.bvh, 0u, 0u, child_mass);
+        tlas_write_com_x     (pc.bvh, 0u, 0u, child_com.x);
+        tlas_write_com_y     (pc.bvh, 0u, 0u, child_com.y);
+        tlas_write_com_z     (pc.bvh, 0u, 0u, child_com.z);
+        tlas_write_pstart    (pc.bvh, 0u, 0u, child_particle_start);
+        tlas_write_pcount    (pc.bvh, 0u, 0u, child_particle_count);
+        tlas_write_min_x     (pc.bvh, 0u, 0u, min_b.x);
+        tlas_write_min_y     (pc.bvh, 0u, 0u, min_b.y);
+        tlas_write_min_z     (pc.bvh, 0u, 0u, min_b.z);
+        tlas_write_max_x     (pc.bvh, 0u, 0u, max_b.x);
+        tlas_write_max_y     (pc.bvh, 0u, 0u, max_b.y);
+        tlas_write_max_z     (pc.bvh, 0u, 0u, max_b.z);
+        tlas_write_valid_mask(pc.bvh, 0u, uvec2(1u, 0u));  // lane 0 is the only valid cluster
+        // The while loop immediately exits (current==0), so we are done.
+    }
+
     while (current != 0) {
         // ── Cycle / runaway detection ─────────────────────────────────────────
         // NOTE: break MUST be outside #ifdef so it fires even without DEBUG_SHADERS.

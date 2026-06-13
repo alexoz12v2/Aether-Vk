@@ -642,6 +642,7 @@ mod tests {
       velocity: [0.0, 0.0, 0.0],
       active: 1,
       force: [0f32; 3],
+      padding: 0,
     };
     let mut sys = ParticleSystemComponent {
       particles: std::sync::Arc::new(parking_lot::RwLock::new(vec![p1])),
@@ -773,6 +774,7 @@ mod tests {
       velocity: [0.0, 0.0, 0.0],
       active: 1,
       force: [0f32; 3],
+      padding: 0,
     };
     let mut sys = ParticleSystemComponent {
       particles: std::sync::Arc::new(parking_lot::RwLock::new(vec![p1])),

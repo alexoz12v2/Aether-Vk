@@ -10,13 +10,10 @@
 //   For every BVH cluster node, compute the gravitational acceleration from
 //   each external ForceEmitter (type_id == 0) at the cluster's CoM position
 //   (km, micro-frame local) and atomically add the resulting force
-//   (F = acc * cluster_mass) into the cluster's BVH force slot.
+//   (F = acc * cluster_mass * (1-beta_emitter) * (1-beta_particle))
+//   into the cluster's BVH force slot.
 //   The self-gravity forces written by barnes_hut.comp are already there;
 //   this pass accumulates on top of them.
-//
-//   When pc.bvh == 0 (null — pure RB or single-particle scene with no tree)
-//   the shader early-returns.  The null check uses uvec2 + subgroupAny so the
-//   LLVM vectorizer (Lavapipe) cannot speculate past the guard.
 //
 // Force-persistence contract
 // ──────────────────────────
@@ -30,7 +27,7 @@
 //
 // Unit contract
 //   Cluster CoM : km  (micro-frame local, same as particle positions)
-//   Emitter pos : AU  world-space  (converted inside emitter_acc_on_cluster)
+//   Emitter pos : AU  world-space  (converted inside per emitter loop)
 //   Force output: km/s² × kg  (per-cluster force stored in BVH force slots)
 #version 450 core
 #extension GL_EXT_buffer_reference2         : require
@@ -69,19 +66,8 @@ shared float s_em_mu;
 shared float s_em_beta;
 shared uint  s_em_type;
 
-// Shared BVH null-guard: computed once by thread 0, read by all.
-// Using uvec2 (no shaderInt64) + subgroupAny (no LLVM speculation).
-shared bool s_has_bvh;
-
 void main() {
-    // ── Null-BVH guard ────────────────────────────────────────────────────
-    if (gl_LocalInvocationID.x == 0u) {
-        uvec2 bvh_uvec = uvec2(pc.bvh);
-        bool  local_ok = (bvh_uvec.x != 0u || bvh_uvec.y != 0u);
-        s_has_bvh = local_ok && subgroupAny(local_ok);
-    }
-    barrier();
-    if (!s_has_bvh || pc.num_emitters == 0u || pc.total_particles == 0u) return;
+    if (pc.num_emitters == 0u || pc.total_particles == 0u) return;
 
     // ── Subgroup / node mapping (mirrors barnes_hut.comp) ─────────────────
     uint actual_sg_per_wg = LOCAL_SIZE_X / SUBGROUP_SIZE;
@@ -98,6 +84,7 @@ void main() {
 
     vec3  cluster_com  = vec3(0.0);
     float cluster_mass = 0.0;
+    float cluster_beta = 0.0;
     uint  fi           = 0u;
 
     if (lane_valid) {
@@ -111,19 +98,20 @@ void main() {
         // Reference frame: look up via first particle in the cluster
         uint p0 = tlas_pstart(pc.bvh, node_job, lane);
         fi = pc.particle_frame_ids.frame_ids[p0];
+
+        // Cluster-average beta: read from AOSOA slot 10 of the first particle
+        uint base = P_BASE(p0);
+        cluster_beta = P_READ(pc.particles, base + 10u * SUBGROUP_SIZE);
     }
 
     // ── Accumulate external-gravity force from all emitters ───────────────
     vec3 f_ext_acc = vec3(0.0); // km/s² (acceleration on cluster CoM)
 
     for (uint e = 0u; e < pc.num_emitters; ++e) {
-        // Broadcast emitter data to all lanes through shared memory.
-        // Thread 0 of the whole workgroup is always in the same subgroup so
-        // gl_LocalInvocationID.x == 0 is safe here.
         if (gl_LocalInvocationID.x == 0u) {
             s_em_type = pc.emitters.emitters[e].type_id;
-            s_em_pos  = pc.emitters.emitters[e].position;
-            s_em_mu   = pc.emitters.emitters[e].mu;
+            s_em_pos  = pc.emitters.emitters[e].position;   // AU world-space
+            s_em_mu   = pc.emitters.emitters[e].mu;         // km³/s²
             s_em_beta = pc.emitters.emitters[e].beta;
         }
         barrier();
@@ -141,17 +129,18 @@ void main() {
                 r_local = (s_em_pos - cluster_com) * AU_TO_KM;
             } else {
                 // Micro frame: cluster_com is in km local;
-                // emitter must be converted: (emitter_AU - frame_center_AU) / scale [km]
+                // emitter_local_km = (emitter_AU - frame_center_AU) / scale
                 r_local = (s_em_pos - frame.center_pos) / frame.scale - cluster_com;
             }
 
             float dist_sq = dot(r_local, r_local);
             if (dist_sq > 1e-6) {
-                float dist   = sqrt(dist_sq);
-                float dist3  = dist_sq * dist;
-                float dist5  = dist3 * dist_sq;
-                float soft   = 1.0 - exp(-dist5);
-                float mu_eff = s_em_mu * (1.0 - s_em_beta);
+                float dist  = sqrt(dist_sq);
+                float dist3 = dist_sq * dist;
+                float dist5 = dist3 * dist_sq;
+                float soft  = 1.0 - exp(-dist5);
+                // beta_particle > 1 → radiation dominates → net repulsion
+                float mu_eff = s_em_mu * (1.0 - s_em_beta) * (1.0 - cluster_beta);
 
                 // Gravitational acceleration at cluster CoM [km/s²]
                 f_ext_acc += (r_local / dist) * (mu_eff * soft) / dist_sq;

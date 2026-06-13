@@ -9,6 +9,7 @@ struct Particle {
     float mass;
     vec3 velocity;
     uint active_flag;
+    vec3 force;
 };
 
 // Bind this EXACTLY ONCE globally. No nonuniformEXT array needed!
