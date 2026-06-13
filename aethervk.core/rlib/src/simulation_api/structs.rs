@@ -1098,6 +1098,10 @@ pub struct SceneTimeState {
   pub is_playing: bool,
   pub manual_step_requests: f64,
   pub is_ticking: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
+  /// EMA of `sim_dt / wall_dt` over the last physics steps.
+  /// 1.0 = running at full configured speed; <1.0 = slowed by GPU budget pressure.
+  /// Smoothed with α=0.1 per step; initialized to 1.0.
+  pub effective_sim_speed: f32,
 }
 
 impl Default for SceneTimeState {
@@ -1118,6 +1122,7 @@ impl Default for SceneTimeState {
       is_playing: false,
       manual_step_requests: 0.0,
       is_ticking: alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false)),
+      effective_sim_speed: 1.0,
     }
   }
 }

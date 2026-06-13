@@ -32,6 +32,7 @@ $WgVariantShaders = @(
     "integrate_particles_p1_p2.comp",
     "integrate_particles_p4_5.comp",
     "apply_emitters_to_particles.comp",
+    "apply_emitters_direct.comp",
     "accumulate_bvh_forces_to_particles.comp",
     "apply_impulses.comp",
     "emit_particles.comp",

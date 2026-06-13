@@ -1288,13 +1288,14 @@ mod tests {
         color: [1.0; 4],
         cached_point: Some([0.0, 0.0, 0.0]),
         cached_normal: Some([0.0, 0.0, 1.0]),
-        particles_per_tick: 1,
+        particles_per_second: 60.0, // 1/tick at 60 Hz
         ttl: 100,
         mean_velocity: 5.0,
         velocity_std_dev: 0.0,
         child_entity: None,
         beta: 2.0,
         max_particles: 10,
+        spawn_radius_km: 0.0,
       }],
     };
     scene.add_component(mesh_entity, circles_comp).unwrap();
@@ -2009,6 +2010,280 @@ mod tests {
       "Velocity symmetry broken: |v_A|={} |v_B|={} differ by more than 5 %",
       vel_a,
       vel_b
+    );
+  }
+
+  /// Mirrors `test_two_particle_systems_with_sun` exactly, but sets
+  /// `disable_self_gravity = true` on both systems so the simulation
+  /// uses `apply_emitters_direct` (O(N×E), BVH-free) instead of the
+  /// BVH+Barnes-Hut pipeline.
+  ///
+  /// Both paths must produce the same gravitational force and velocity
+  /// for the same initial conditions.  This test cross-validates the
+  /// fast path against the physics expectations already established by
+  /// `test_two_particle_systems_with_sun`.
+  #[test]
+  fn test_apply_emitters_direct_two_systems() {
+    const N_PARTICLES: usize = 10;
+    const DIST_KM: f32 = 100.0;
+    const SUN_MU: f32 = 1000.0;
+    const DT_S: f32 = 0.016667;
+
+    let expected_force_mag: f32 = SUN_MU / (DIST_KM * DIST_KM);
+    let expected_dv_total_2frames: f32 =
+      expected_force_mag * 0.5 * DT_S + expected_force_mag * DT_S;
+
+    // Same tolerances as the BVH-path twin.
+    let force_tol: f32 = expected_force_mag * 0.30;
+    let vel_tol: f32 = expected_dv_total_2frames * 0.35;
+
+    // ── Scene setup ─────────────────────────────────────────────────────────
+    let mut ctx = VulkanTestContext::new();
+    let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_all_crate_components();
+
+    let root = scene.spawn_reference_frame(
+      "MicroFrame",
+      None,
+      TransformComponent {
+        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+      },
+      ReferenceFrameType::Micro,
+      1.0,
+      10000.0,
+    );
+
+    // ── Sun entity ───────────────────────────────────────────────────────────
+    let sun = scene.spawn_entity("Sun");
+    scene.set_parent(sun, Some(root));
+    scene
+      .add_component(
+        sun,
+        TransformComponent {
+          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        sun,
+        crate::scene::ForceEmitterComponent::Gravity {
+          mu: SUN_MU,
+          beta: 0.0,
+        },
+      )
+      .unwrap();
+
+    // ── System A: East cloud (+X) — disable_self_gravity = true ─────────────
+    let entity_a = scene.spawn_entity("EastCloud");
+    scene.set_parent(entity_a, Some(root));
+    scene
+      .add_component(entity_a, TransformComponent::default())
+      .unwrap();
+
+    let mut sys_a =
+      crate::scene::particles::ParticleSystemComponent::new(N_PARTICLES + 8);
+    sys_a.particle_radius = 0.01;
+    sys_a.beta = 0.0;
+    sys_a.disable_self_gravity = true; // ← exercises apply_emitters_direct
+    {
+      let mut parts = sys_a.particles.write();
+      for _ in 0..N_PARTICLES {
+        parts.push(crate::scene::particles::ParticleData {
+          id_low: 1,
+          id_high: 0,
+          age_low: 0,
+          age_high: 0,
+          position: [DIST_KM, 0.0, 0.0],
+          velocity: [0.0, 0.0, 0.0],
+          mass: 1.0,
+          active: 1,
+          force: [0.0; 3],
+          padding: 0,
+        });
+      }
+    }
+    scene.add_component(entity_a, sys_a).unwrap();
+
+    // ── System B: West cloud (−X) — disable_self_gravity = true ─────────────
+    let entity_b = scene.spawn_entity("WestCloud");
+    scene.set_parent(entity_b, Some(root));
+    scene
+      .add_component(entity_b, TransformComponent::default())
+      .unwrap();
+
+    let mut sys_b =
+      crate::scene::particles::ParticleSystemComponent::new(N_PARTICLES + 8);
+    sys_b.particle_radius = 0.01;
+    sys_b.beta = 0.0;
+    sys_b.disable_self_gravity = true; // ← exercises apply_emitters_direct
+    {
+      let mut parts = sys_b.particles.write();
+      for _ in 0..N_PARTICLES {
+        parts.push(crate::scene::particles::ParticleData {
+          id_low: 2,
+          id_high: 0,
+          age_low: 0,
+          age_high: 0,
+          position: [-DIST_KM, 0.0, 0.0],
+          velocity: [0.0, 0.0, 0.0],
+          mass: 1.0,
+          active: 1,
+          force: [0.0; 3],
+          padding: 0,
+        });
+      }
+    }
+    scene.add_component(entity_b, sys_b).unwrap();
+
+    // ── Run 2 frames, no collisions ──────────────────────────────────────────
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+        run_simulation(vulkan_device, &mut scene, DT_S * 2.0, false);
+        Ok(())
+      })
+      .unwrap();
+
+    // ── Read back ────────────────────────────────────────────────────────────
+    let (parts_a, alive_a) = scene
+      .with_component(entity_a, |p: &crate::scene::particles::ParticleSystemComponent| {
+        (p.particles.read().clone(), p.gpu_alive_count)
+      })
+      .unwrap();
+    let (parts_b, alive_b) = scene
+      .with_component(entity_b, |p: &crate::scene::particles::ParticleSystemComponent| {
+        (p.particles.read().clone(), p.gpu_alive_count)
+      })
+      .unwrap();
+
+    let base_a = N_PARTICLES + 8;
+    let base_b = N_PARTICLES + 8;
+
+    println!("=== test_apply_emitters_direct_two_systems ===");
+    println!("System A alive: {}  B alive: {}", alive_a, alive_b);
+    println!("System A[{}] force: {:?}", base_a, parts_a[base_a].force);
+    println!("System B[{}] force: {:?}", base_b, parts_b[base_b].force);
+    println!("expected_force_mag: {}  expected_dv: {}", expected_force_mag, expected_dv_total_2frames);
+
+    // 1. alive counts
+    assert_eq!(alive_a, N_PARTICLES as u32, "System A alive count wrong");
+    assert_eq!(alive_b, N_PARTICLES as u32, "System B alive count wrong");
+
+    // 2. System isolation — positions stayed on correct side
+    for i in base_a..base_a + N_PARTICLES {
+      let p = &parts_a[i];
+      assert!(p.active != 0, "System A particle {} should be active", i);
+      assert!(
+        p.position[0] > 0.0,
+        "System A particle {} contaminated: position[0]={}",
+        i, p.position[0]
+      );
+    }
+    for i in base_b..base_b + N_PARTICLES {
+      let p = &parts_b[i];
+      assert!(p.active != 0, "System B particle {} should be active", i);
+      assert!(
+        p.position[0] < 0.0,
+        "System B particle {} contaminated: position[0]={}",
+        i, p.position[0]
+      );
+    }
+
+    let pa0 = &parts_a[base_a];
+    let pb0 = &parts_b[base_b];
+
+    // 3. Force direction
+    assert!(
+      pa0.force[0] < 0.0,
+      "System A (direct): force[0] should be negative (toward sun); got {}",
+      pa0.force[0]
+    );
+    assert!(
+      pb0.force[0] > 0.0,
+      "System B (direct): force[0] should be positive (toward sun); got {}",
+      pb0.force[0]
+    );
+
+    // 4. Force magnitude
+    let force_a_mag = pa0.force[0].abs();
+    let force_b_mag = pb0.force[0].abs();
+    assert!(
+      (force_a_mag - expected_force_mag).abs() < force_tol,
+      "System A (direct) force magnitude off: expected ≈ {} ± {}, got {}",
+      expected_force_mag, force_tol, force_a_mag
+    );
+    assert!(
+      (force_b_mag - expected_force_mag).abs() < force_tol,
+      "System B (direct) force magnitude off: expected ≈ {} ± {}, got {}",
+      expected_force_mag, force_tol, force_b_mag
+    );
+
+    // 5. Per-particle consistency — all N particles in each system
+    //    received the same force (same position → same computation).
+    for i in base_a + 1..base_a + N_PARTICLES {
+      let pi = &parts_a[i];
+      assert!(
+        (pi.force[0] - pa0.force[0]).abs() < 1e-4,
+        "System A (direct): per-particle force mismatch at {}: {} vs {}",
+        i, pi.force[0], pa0.force[0]
+      );
+    }
+    for i in base_b + 1..base_b + N_PARTICLES {
+      let pi = &parts_b[i];
+      assert!(
+        (pi.force[0] - pb0.force[0]).abs() < 1e-4,
+        "System B (direct): per-particle force mismatch at {}: {} vs {}",
+        i, pi.force[0], pb0.force[0]
+      );
+    }
+
+    // 6. Velocity direction
+    assert!(
+      pa0.velocity[0] < 0.0,
+      "System A (direct): velocity[0] should be negative; got {}",
+      pa0.velocity[0]
+    );
+    assert!(
+      pb0.velocity[0] > 0.0,
+      "System B (direct): velocity[0] should be positive; got {}",
+      pb0.velocity[0]
+    );
+
+    // 7. Velocity magnitude
+    let vel_a = pa0.velocity[0].abs();
+    let vel_b = pb0.velocity[0].abs();
+    assert!(
+      (vel_a - expected_dv_total_2frames).abs() < vel_tol,
+      "System A (direct) velocity off: expected ≈ {} ± {}, got {}",
+      expected_dv_total_2frames, vel_tol, vel_a
+    );
+    assert!(
+      (vel_b - expected_dv_total_2frames).abs() < vel_tol,
+      "System B (direct) velocity off: expected ≈ {} ± {}, got {}",
+      expected_dv_total_2frames, vel_tol, vel_b
+    );
+
+    // 8. Symmetry between the two systems
+    assert!(
+      (force_a_mag - force_b_mag).abs() < expected_force_mag * 0.05,
+      "Direct path: force symmetry broken: |F_A|={} |F_B|={}",
+      force_a_mag, force_b_mag
+    );
+    assert!(
+      (vel_a - vel_b).abs() < expected_dv_total_2frames * 0.05,
+      "Direct path: velocity symmetry broken: |v_A|={} |v_B|={}",
+      vel_a, vel_b
     );
   }
 }

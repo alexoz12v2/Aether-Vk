@@ -21,7 +21,7 @@ pub struct TaskletHandle<R> {
 }
 
 impl<R> TaskletHandle<R> {
-  /// TODO: Document this item
+  /// Spin-wait until the tasklet completes and return its result.
   pub fn wait(self) -> R {
     while !self.state.done.load(Ordering::Acquire) {
       #[cfg(any(unix, target_os = "macos"))]
@@ -38,6 +38,40 @@ impl<R> TaskletHandle<R> {
       .lock()
       .take()
       .expect("Result missing (tasklet panicked or was dropped)")
+  }
+
+  /// Returns `true` if the tasklet has finished executing (non-blocking).
+  #[inline]
+  pub fn is_done(&self) -> bool {
+    self.state.done.load(Ordering::Acquire)
+  }
+
+  /// Spin-wait up to `deadline_us` microseconds for the tasklet to finish.
+  ///
+  /// Returns `Some(result)` if the tasklet completed within the deadline, or
+  /// `None` if it was still running when the deadline expired.
+  /// Consuming `self` on `Some` ensures the result is not double-taken.
+  pub fn try_wait(self, deadline_us: u64) -> Result<R, Self> {
+    let start = super::super::time::get_monotonic_time() as u64;
+    loop {
+      if self.state.done.load(Ordering::Acquire) {
+        let result = self
+          .state
+          .result
+          .lock()
+          .take()
+          .expect("Result missing (tasklet panicked or was dropped)");
+        return Ok(result);
+      }
+      let elapsed = (super::super::time::get_monotonic_time() as u64).saturating_sub(start);
+      if elapsed >= deadline_us {
+        return Err(self); // deadline expired — caller retains ownership
+      }
+      #[cfg(any(unix, target_os = "macos"))]
+      unsafe { libc::sched_yield() };
+      #[cfg(not(any(unix, target_os = "macos")))]
+      core::hint::spin_loop();
+    }
   }
 }
 

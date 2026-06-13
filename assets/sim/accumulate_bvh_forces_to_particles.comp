@@ -67,7 +67,6 @@ void main() {
     float mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
     if (mass <= 0.0) return;
 
-    float inv_m = 1.0 / mass;
 
     // ── Leaf → root traversal ─────────────────────────────────────────────
     uint n_leaves = (pc.total_particles + PARTICLES_IN_LEAF - 1u) / PARTICLES_IN_LEAF;
@@ -81,11 +80,12 @@ void main() {
         // `current == 0` and the while loop below never runs.  Phase A writes
         // the external-gravity force into bvh[0].force[0] (the only valid
         // cluster slot); read it directly here.
+        float c_mass = max(tlas_mass(pc.bvh, 0u, 0u), 1e-6);
         f_acc = vec3(
             tlas_force_x(pc.bvh, 0u, 0u),
             tlas_force_y(pc.bvh, 0u, 0u),
             tlas_force_z(pc.bvh, 0u, 0u)
-        ) * inv_m;
+        ) / c_mass;
     } else {
         while (current != 0u) {
             uint parent     = tlas_parent(pc.bvh, current);
@@ -93,11 +93,12 @@ void main() {
             uint child_lane = (c1 == current) ? 1u : 0u;
 
             // BVH stores F = acc × cluster_mass; convert to per-unit-mass acc.
+            float c_mass = max(tlas_mass(pc.bvh, parent, child_lane), 1e-6);
             f_acc += vec3(
                 tlas_force_x(pc.bvh, parent, child_lane),
                 tlas_force_y(pc.bvh, parent, child_lane),
                 tlas_force_z(pc.bvh, parent, child_lane)
-            ) * inv_m;
+            ) / c_mass;
 
             current = parent;
         }

@@ -57,6 +57,7 @@ WG_VARIANT_SHADERS=(
     # Particle systems
     accumulate_bvh_forces_to_particles.comp
     apply_emitters_to_particles.comp
+    apply_emitters_direct.comp
     permute_particles.comp
     apply_impulses.comp
     emit_particles.comp

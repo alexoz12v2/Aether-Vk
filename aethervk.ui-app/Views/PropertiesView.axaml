@@ -350,7 +350,7 @@
 
                                                     <Grid ColumnDefinitions="Auto,*,Auto,*" Margin="0,4,0,0">
                                                         <TextBlock Grid.Column="0" Text="Rate:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding ParticlesPerTickDouble}" HasBounds="True" MinBound="0" Step="10" Margin="0,0,10,0"/>
+                                                        <controls:UnboundedSlider Grid.Column="1" Value="{Binding ParticlesPerSecondDouble}" HasBounds="True" MinBound="0" Step="100" Margin="0,0,10,0"/>
                                                         <TextBlock Grid.Column="2" Text="TTL:" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                                         <controls:UnboundedSlider Grid.Column="3" Value="{Binding TTLDouble}" HasBounds="True" MinBound="1" Step="10"/>
                                                     </Grid>

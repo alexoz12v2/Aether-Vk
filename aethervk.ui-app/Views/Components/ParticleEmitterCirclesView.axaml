@@ -72,8 +72,8 @@
 
                                     <!-- Emission Params -->
                                     <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="Rate (/tick)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding ParticlesPerTickDouble}" HasBounds="True" MinBound="0" Step="10" Width="120"/>
+                                        <TextBlock Text="Rate (/s)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <controls:UnboundedSlider Value="{Binding ParticlesPerSecondDouble}" HasBounds="True" MinBound="0" Step="100" Width="120"/>
                                     </StackPanel>
                                     <StackPanel Margin="0,0,16,12">
                                         <TextBlock Text="TTL (ticks)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
@@ -90,6 +90,11 @@
                                     <StackPanel Margin="0,0,16,12">
                                         <TextBlock Text="β (rad.pres.)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
                                         <controls:UnboundedSlider Value="{Binding Beta}" HasBounds="True" MinBound="0.0" Step="0.1" Width="120"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="Spawn radius (km)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <controls:UnboundedSlider Value="{Binding SpawnRadiusKm}" HasBounds="True" MinBound="0.0" Step="0.1" Width="120"
+                                                                  ToolTip.Tip="Scatter spawn positions over a disc of this radius. 0 = point source."/>
                                     </StackPanel>
 
                                     <!-- Colour picker -->

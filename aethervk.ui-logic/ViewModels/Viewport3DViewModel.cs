@@ -814,7 +814,7 @@ public partial class Viewport3DViewModel
               LatitudeDeg = latitude,
               LongitudeDeg = longitude,
               CircleRadiusKm = 0.5f,
-              ParticlesPerTick = 10,
+              ParticlesPerSecond = 600f,  // 600/s ≈ 10/tick at 60 Hz
               ColorR = 1.0f,
               ColorG = 0.5f,
               ColorB = 0.0f,

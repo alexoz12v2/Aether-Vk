@@ -31,6 +31,80 @@ use alloc::{boxed::Box, string::ToString};
 use parking_lot::RwLockReadGuard;
 use thingbuf::mpsc;
 
+/// Drains all immediately-available [`LogicCommand`]s from `rx` and executes
+/// the fast-path synchronous ones on the calling thread.
+///
+/// Returns `true` if a `Shutdown` command was received (caller must exit).
+/// Heavy I/O tasks (model import, almanac load, etc.) are scattered to the
+/// thread pool as usual.
+///
+/// Called both from the outer tick loop **and** from inside
+/// `execute_simulation_tick` after `dispatch_physics_step` returns, so that
+/// keybinding / time-scale commands are processed within one physics-step
+/// wall-time rather than being delayed until the next outer-loop iteration.
+fn drain_logic_commands(
+  rx: &mpsc::Receiver<LogicCommand>,
+  ctx: &alloc::sync::Arc<LogicThreadContext>,
+) -> bool {
+  loop {
+    match rx.try_recv() {
+      Ok(cmd) => {
+        if let LogicCommand::Shutdown = cmd {
+          return true;
+        }
+        match cmd {
+          LogicCommand::ImportModel { .. }
+          | LogicCommand::LoadAlmanac { .. }
+          | LogicCommand::UnloadAlmanac { .. }
+          | LogicCommand::LoadCometSpk { .. }
+          | LogicCommand::SpawnModelInstance { .. }
+          | LogicCommand::RaycastNdc { .. }
+          | LogicCommand::UpdateTrajectoryForSpk { .. }
+          | LogicCommand::Raycast { .. } => {
+            let workload = Box::new(LogicWorkload { cmd, ctx: ctx.clone() });
+            let _ = ctx.thread_pool.scatter(alloc::vec![workload]);
+          }
+          _ => {
+            let task_id = match &cmd {
+              LogicCommand::Custom { task_id, .. } => Some(*task_id),
+              _ => None,
+            };
+            let cmd_desc = match &cmd {
+              LogicCommand::RaycastNdc { .. } => "Raycast NDC",
+              LogicCommand::Raycast { .. } => "Raycast",
+              LogicCommand::RotateCamera { .. } => "Rotate Camera",
+              LogicCommand::ZoomCamera { .. } => "Zoom Camera",
+              LogicCommand::PlayScene { .. } => "Play Scene",
+              LogicCommand::PauseScene { .. } => "Pause Scene",
+              LogicCommand::StepScene { .. } => "Step Scene",
+              LogicCommand::SetSceneTimeScale { .. } => "Set Time Scale",
+              LogicCommand::SeekEpoch { .. } => "Seek Epoch",
+              _ => "Logic Task",
+            };
+            let res = process_command_internal(cmd, ctx);
+            if let Some(tid) = task_id {
+              if tid != 0 {
+                let mut manager = ctx.task_manager.write();
+                match res {
+                  Ok(result) => { manager.success_task(tid, result); }
+                  Err(e) => {
+                    manager.fail_task(tid, e.to_string());
+                    crate::simulation_api::emit_breadcrumb(
+                      3, &alloc::format!("Failed: {} - {}", cmd_desc, e));
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      Err(thingbuf::mpsc::errors::TryRecvError::Closed) => return true,
+      Err(_) => break,
+    }
+  }
+  false
+}
+
 struct PlayControl {
   scene_id: u64,
   target_frame_time: timeus_t,
@@ -76,268 +150,212 @@ pub fn start_logic_thread(
         let elapsed = now.saturating_sub(last);
 
         if elapsed >= pc.target_frame_time {
-          let mut can_tick = true;
-          for &task in &pc.last_render_ticks {
-            let ctx = unsafe { &*(context.ctx_ptr.get() as *mut crate::simulation_api::SimulationContext) };
-            let status = ctx.get_task_status(task.get());
-            if status == crate::simulation_api::structs::TaskStatusCode::Pending {
-              can_tick = false;
-              break;
+          // Always reset the frame timer and submit a render frame at display
+          // rate.  The physics TICK is gated separately — we only advance
+          // simulation when the previous GPU compute step is done.
+          pc.last_frame_start = now;
+
+          // ── Physics tick (only when previous step is complete) ────────────
+          let physics_done = {
+            let scenes = context.scenes.read();
+            if let Some(scene_ctx) = scenes.get(&scene_id) {
+              let scene_read = scene_ctx.read();
+              scene_read
+                .active_physics_task
+                .lock()
+                .as_ref()
+                .map(|t| t.is_done())
+                .unwrap_or(true)
+            } else {
+              true
             }
+          };
+
+          if physics_done {
+            let dt_f32 = elapsed as f32 / 1_000_000.0;
+            let _ = execute_simulation_tick(scene_id, &context, dt_f32, &logic_rx);
           }
 
-          if can_tick {
-            pc.last_frame_start = now;
+          // ── Render frame (always, at display rate) ────────────────────────
+          // Uses active_physics_task + cached_timeline_semaphore.  If physics
+          // is still running the render thread's try_wait(8ms) will fall back
+          // to the cached semaphore value, keeping render independent.
+          let pe_handles: alloc::vec::Vec<(
+            crate::gpu::PresentationEngineHandle,
+            crate::simulation_api::structs::PresentationEngineData,
+          )> = {
+            let scenes = context.scenes.read();
+            if let Some(scene_ctx) = scenes.get(&scene_id) {
+              scene_ctx
+                .read()
+                .presentation_engines
+                .read()
+                .iter()
+                .map(|(&k, v)| (k, v.clone()))
+                .collect()
+            } else {
+              alloc::vec::Vec::new()
+            }
+          };
 
-            let dt_f32 = elapsed as f32 / 1_000_000.0;
-            let _ = execute_simulation_tick(scene_id, &context, dt_f32);
+          let mut render_frames = alloc::vec::Vec::new();
+          let mut last_tasks = alloc::vec::Vec::new();
 
-            let pe_handles: alloc::vec::Vec<(
-              crate::gpu::PresentationEngineHandle,
-              crate::simulation_api::structs::PresentationEngineData,
-            )> = {
+          for (pe, pe_data) in pe_handles {
+            let Some(camera_entity) = pe_data.camera_entity else {
+              continue;
+            };
+            let is_windowless = pe_data.is_windowless;
+            let task_id = alloc::sync::Arc::new(core::sync::atomic::AtomicU64::new(0));
+            let scene = {
               let scenes = context.scenes.read();
-              if let Some(scene_ctx) = scenes.get(&scene_id) {
-                scene_ctx
-                  .read()
-                  .presentation_engines
-                  .read()
-                  .iter()
-                  .map(|(&k, v)| (k, v.clone()))
-                  .collect()
-              } else {
-                alloc::vec::Vec::new()
-              }
+              scenes.get(&scene_id).unwrap().clone()
             };
 
-            let mut render_frames = alloc::vec::Vec::new();
-            let mut last_tasks = alloc::vec::Vec::new();
+            let (outlines, sun, sky, cursor, callback, active_physics_task, cached_timeline_semaphore) = {
+              let r = scene.read();
+              (
+                r.outlines_enabled.load(core::sync::atomic::Ordering::Acquire),
+                r.sun_entity,
+                r.sky_entity,
+                r.cursor_entity,
+                r.custom_render_callback,
+                r.active_physics_task.clone(),
+                r.latest_physics_sync.read().map(|s| (s.timeline_semaphore, s.timeline_value)),
+              )
+            };
 
-            for (pe, pe_data) in pe_handles {
-              let Some(camera_entity) = pe_data.camera_entity else {
-                continue;
-              };
-              let is_windowless = pe_data.is_windowless;
-              let task_id = alloc::sync::Arc::new(core::sync::atomic::AtomicU64::new(0));
-              let scene = {
-                let scenes = context.scenes.read();
-                scenes.get(&scene_id).unwrap().clone()
-              };
+            render_frames.push(crate::simulation_api::structs::RenderFrame {
+              presentation_engine_handle: pe,
+              task_id: alloc::sync::Arc::clone(&task_id),
+              scene,
+              render_physical_meshes_outline: outlines,
+              camera_entity,
+              clear_color: [0.0, 0.0, 0.0, 1.0],
+              sun_entity: sun,
+              sky_entity: sky,
+              cursor_entity: cursor,
+              custom_render_callback: callback,
+              active_physics_task,
+              cached_timeline_semaphore,
+            });
 
-              let (outlines, sun, sky, cursor, callback, active_physics_task, cached_timeline_semaphore) = {
-                let r = scene.read();
-                (
-                  r.outlines_enabled.load(core::sync::atomic::Ordering::Acquire),
-                  r.sun_entity,
-                  r.sky_entity,
-                  r.cursor_entity,
-                  r.custom_render_callback,
-                  r.active_physics_task.clone(),
-                  r.latest_physics_sync.read().map(|s| (s.timeline_semaphore, s.timeline_value)),
-                )
-              };
+            last_tasks.push((task_id, is_windowless, pe.0));
+          }
 
-              render_frames.push(crate::simulation_api::structs::RenderFrame {
-                presentation_engine_handle: pe,
-                task_id: alloc::sync::Arc::clone(&task_id),
-                scene,
-                render_physical_meshes_outline: outlines,
-                camera_entity,
-                clear_color: [0.0, 0.0, 0.0, 1.0],
-                sun_entity: sun,
-                sky_entity: sky,
-                cursor_entity: cursor,
-                custom_render_callback: callback,
-                active_physics_task,
-                cached_timeline_semaphore,
-              });
+          let mut new_tasks = alloc::vec::Vec::new();
+          if !render_frames.is_empty() {
+            let send_res = context.render_tx.try_send(
+              crate::simulation_api::structs::RenderCommand::RenderFrames(render_frames),
+            );
 
-              last_tasks.push((task_id, is_windowless, pe.0));
-            }
-
-            let mut new_tasks = alloc::vec::Vec::new();
-            if !render_frames.is_empty() {
-              let send_res = context.render_tx.try_send(
-                crate::simulation_api::structs::RenderCommand::RenderFrames(render_frames),
-              );
-
-              if send_res.is_ok() {
-                for (task_id, is_windowless, pe_handle) in last_tasks {
-                  let task_id_val = loop {
-                    let value = task_id.load(core::sync::atomic::Ordering::Relaxed);
-                    if value != 0 {
-                      let _ = task_id.load(core::sync::atomic::Ordering::Acquire);
-                      break value;
-                    }
-                    if alloc::sync::Arc::strong_count(&task_id) == 1 {
-                      break u64::MAX;
-                    }
-                    oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
-                  };
-
-                  // For a successful frame, track the task so can_tick can check its status.
-                  // For an error frame (u64::MAX), skip tracking \u2014 it would always show Invalid
-                  // and would not block future ticks anyway.
-                  if task_id_val != u64::MAX {
-                    if let Some(nz) = core::num::NonZero::new(task_id_val) {
-                      new_tasks.push(nz);
-                    }
+            if send_res.is_ok() {
+              for (task_id, is_windowless, pe_handle) in last_tasks {
+                let task_id_val = loop {
+                  let value = task_id.load(core::sync::atomic::Ordering::Relaxed);
+                  if value != 0 {
+                    let _ = task_id.load(core::sync::atomic::Ordering::Acquire);
+                    break value;
                   }
+                  if alloc::sync::Arc::strong_count(&task_id) == 1 {
+                    break u64::MAX;
+                  }
+                  oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
+                };
 
-                  // Always fire the callback for windowless PEs, even for error frames
-                  // (task_id_val == u64::MAX). C# uses the sentinel to log errors (rate-limited).
-                  if is_windowless {
-                    let fptr = *crate::simulation_api::RENDER_CALLBACK.read();
-                    if fptr.is_some() {
-                      let _captured_task_id_val = task_id_val;
+                // For a successful frame, track the task so can_tick can check its status.
+                // For an error frame (u64::MAX), skip tracking — it would always show Invalid
+                // and would not block future ticks anyway.
+                if task_id_val != u64::MAX {
+                  if let Some(nz) = core::num::NonZero::new(task_id_val) {
+                    new_tasks.push(nz);
+                  }
+                }
 
-                      struct WindowlessCallbackWorkload {
-                        ctx_ptr: crate::simulation_api::structs::SendPtrMut<core::ffi::c_void>,
-                        task_id: alloc::sync::Arc<core::sync::atomic::AtomicU64>,
-                        scene_id: u64,
-                        pe_handle: u64,
-                      }
+                // Always fire the callback for windowless PEs, even for error frames
+                // (task_id_val == u64::MAX). C# uses the sentinel to log errors (rate-limited).
+                if is_windowless {
+                  let fptr = *crate::simulation_api::RENDER_CALLBACK.read();
+                  if fptr.is_some() {
+                    let _captured_task_id_val = task_id_val;
 
-                      impl aethervk_oshal_rlib::os::pool::Workload for WindowlessCallbackWorkload {
-                        fn execute(&mut self) -> aethervk_oshal_rlib::os::pool::WorkloadStatus {
-                          let fptr = *crate::simulation_api::RENDER_CALLBACK.read();
-                          if fptr.is_none() {
+                    struct WindowlessCallbackWorkload {
+                      ctx_ptr: crate::simulation_api::structs::SendPtrMut<core::ffi::c_void>,
+                      task_id: alloc::sync::Arc<core::sync::atomic::AtomicU64>,
+                      scene_id: u64,
+                      pe_handle: u64,
+                    }
+
+                    impl aethervk_oshal_rlib::os::pool::Workload for WindowlessCallbackWorkload {
+                      fn execute(&mut self) -> aethervk_oshal_rlib::os::pool::WorkloadStatus {
+                        let fptr = *crate::simulation_api::RENDER_CALLBACK.read();
+                        if fptr.is_none() {
+                          return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
+                        }
+
+                        let tid_val = self.task_id.load(core::sync::atomic::Ordering::Acquire);
+                        if tid_val == 0 {
+                          if alloc::sync::Arc::strong_count(&self.task_id) == 1 {
+                            // Render thread dropped it without assigning
+                            unsafe { fptr.unwrap()(self.scene_id, self.pe_handle, u64::MAX) };
                             return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
                           }
-
-                          let tid_val = self.task_id.load(core::sync::atomic::Ordering::Acquire);
-                          if tid_val == 0 {
-                            if alloc::sync::Arc::strong_count(&self.task_id) == 1 {
-                              // Render thread dropped it without assigning
-                              unsafe { fptr.unwrap()(self.scene_id, self.pe_handle, u64::MAX) };
-                              return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
-                            }
-                            return aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield;
-                          }
-
-                          let ctx = unsafe {
-                            &*(self.ctx_ptr.get() as *mut crate::simulation_api::SimulationContext)
-                          };
-                          let completed = ctx
-                            .render_proxy
-                            .0
-                            .as_frontend()
-                            .and_then(|f| {
-                              f.with_device(ctx.render_proxy.1, |device| {
-                                Ok(device.is_task_completed(tid_val).unwrap_or(true))
-                              })
-                              .ok()
-                            })
-                            .unwrap_or(true);
-
-                          if completed {
-                            unsafe { fptr.unwrap()(self.scene_id, self.pe_handle, tid_val) };
-                            aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete
-                          } else {
-                            aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield
-                          }
+                          return aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield;
                         }
 
-                        fn tasklet_id(&self) -> Option<usize> {
-                          None
+                        let ctx = unsafe {
+                          &*(self.ctx_ptr.get() as *mut crate::simulation_api::SimulationContext)
+                        };
+                        let completed = ctx
+                          .render_proxy
+                          .0
+                          .as_frontend()
+                          .and_then(|f| {
+                            f.with_device(ctx.render_proxy.1, |device| {
+                              Ok(device.is_task_completed(tid_val).unwrap_or(true))
+                            })
+                            .ok()
+                          })
+                          .unwrap_or(true);
+
+                        if completed {
+                          unsafe { fptr.unwrap()(self.scene_id, self.pe_handle, tid_val) };
+                          aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete
+                        } else {
+                          aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield
                         }
                       }
 
-                      let _ = context.thread_pool.scatter(alloc::vec![alloc::boxed::Box::new(
-                        WindowlessCallbackWorkload {
-                          ctx_ptr: context.ctx_ptr,
-                          task_id: alloc::sync::Arc::clone(&task_id),
-                          scene_id,
-                          pe_handle,
-                        }
-                      )]);
+                      fn tasklet_id(&self) -> Option<usize> {
+                        None
+                      }
                     }
+
+                    let _ = context.thread_pool.scatter(alloc::vec![alloc::boxed::Box::new(
+                      WindowlessCallbackWorkload {
+                        ctx_ptr: context.ctx_ptr,
+                        task_id: alloc::sync::Arc::clone(&task_id),
+                        scene_id,
+                        pe_handle,
+                      }
+                    )]);
                   }
                 }
               }
             }
-            pc.last_render_ticks = new_tasks;
-            processed_any = true;
           }
+          // last_render_ticks is retained for future use but no longer gates
+          // can_tick; physics task completion is the gate now.
+          pc.last_render_ticks = new_tasks;
+          processed_any = true;
         }
       }
 
-      loop {
-        match logic_rx.try_recv() {
-          Ok(cmd) => {
-            if let LogicCommand::Shutdown = cmd {
-              return true;
-            }
 
-            match cmd {
-              LogicCommand::ImportModel { .. }
-              | LogicCommand::LoadAlmanac { .. }
-              | LogicCommand::UnloadAlmanac { .. }
-              | LogicCommand::LoadCometSpk { .. }
-              | LogicCommand::SpawnModelInstance { .. }
-              | LogicCommand::RaycastNdc { .. }
-              | LogicCommand::UpdateTrajectoryForSpk { .. }
-              | LogicCommand::Raycast { .. } => {
-                // Heavy I/O or generation tasks are scattered to the thread pool
-                let workload = Box::new(LogicWorkload {
-                  cmd,
-                  ctx: context.clone(),
-                });
-                let _ = context.thread_pool.scatter(alloc::vec![workload]);
-              }
-              _ => {
-                // Synchronous orchestrator commands executed on the logic thread natively!
-                let task_id = match &cmd {
-                  LogicCommand::Custom { task_id, .. } => Some(*task_id),
-                  _ => None,
-                };
-
-                let cmd_desc = match &cmd {
-                  LogicCommand::RaycastNdc { .. } => "Raycast NDC".to_string(),
-                  LogicCommand::Raycast { .. } => "Raycast".to_string(),
-                  LogicCommand::RotateCamera { .. } => "Rotate Camera".to_string(),
-                  LogicCommand::ZoomCamera { .. } => "Zoom Camera".to_string(),
-                  LogicCommand::PlayScene { .. } => "Play Scene".to_string(),
-                  LogicCommand::PauseScene { .. } => "Pause Scene".to_string(),
-                  LogicCommand::StepScene { .. } => "Step Scene".to_string(),
-                  LogicCommand::SetSceneTimeScale { .. } => "Set Time Scale".to_string(),
-                  LogicCommand::SeekEpoch { .. } => "Seek Epoch".to_string(),
-                  _ => "Logic Task".to_string(),
-                };
-
-                let res = process_command_internal(cmd, &context);
-
-                if let Some(tid) = task_id {
-                  if tid != 0 {
-                    let mut manager = context.task_manager.write();
-                    match res {
-                      Ok(result) => {
-                        manager.success_task(tid, result);
-                      }
-                      Err(e) => {
-                        manager.fail_task(tid, e.to_string());
-                        crate::simulation_api::emit_breadcrumb(
-                          3,
-                          &alloc::format!("Failed: {} - {}", cmd_desc, e),
-                        );
-                      }
-                    }
-                  }
-                }
-              }
-            }
-            processed_any = true;
-          }
-          Err(thingbuf::mpsc::errors::TryRecvError::Empty) => {
-            break;
-          }
-          Err(thingbuf::mpsc::errors::TryRecvError::Closed) => {
-            return true;
-          }
-          Err(_) => {
-            break;
-          }
-        }
+      // Drain all queued LogicCommands now, before sleeping.
+      // drain_logic_commands also handles heavy tasks (scattered to pool).
+      if drain_logic_commands(&logic_rx, &context) {
+        return true; // Shutdown received
       }
 
       if !processed_any {
@@ -1477,6 +1495,7 @@ fn execute_simulation_tick(
   scene_id: u64,
   ctx: &alloc::sync::Arc<LogicThreadContext>,
   dt: f32,
+  cmd_rx: &mpsc::Receiver<LogicCommand>,
 ) -> EngineResult<()> {
   let (
     time_state_arc,
@@ -1522,104 +1541,135 @@ fn execute_simulation_tick(
   }
 
   let mut any_fixed_step = false;
-  let mut _step_count = 0;
-  loop {
-    if _step_count > 5 {
-      // Spiral of death protection!
-      // We're taking too long to simulate. Slow down simulation instead of freezing.
-      time_state_arc.read().time_info.write().ut_discard_accumulator();
-      break;
-    }
-    _step_count += 1;
 
-    let (is_manual, step_days, fixed_dt_us, current_epoch, max_sub_dt_us) = {
-      let mut ts_write = time_state_arc.write();
-      let fixed_dt_us = ts_write
-        .time_info
-        .read()
-        .fixed_delta_time
-        .load(core::sync::atomic::Ordering::Relaxed);
-      let max_sub_dt_us = (ts_write.current_scale.max_physics_sub_dt_seconds() * 1_000_000.0)
-        as aethervk_oshal_rlib::os::time::timeus_t;
-      if ts_write.manual_step_requests > 0.0 {
-        let step = ts_write.manual_step_requests;
-        ts_write.manual_step_requests = 0.0;
-        ts_write.current_epoch = ts_write.current_epoch + anise::time::Unit::Day * step;
-        (
-          true,
-          step,
-          fixed_dt_us,
-          ts_write.current_epoch,
-          max_sub_dt_us,
-        )
-      } else {
-        let needs_update = ts_write.time_info.read().needs_fixed_update();
-        static DEBUG_PRINT_TICK: core::sync::atomic::AtomicU32 =
-          core::sync::atomic::AtomicU32::new(0);
-        if DEBUG_PRINT_TICK.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % 600 == 0 {
-          aethervk_oshal_rlib::log!(
-            "DEBUG: execute_simulation_tick is_playing={} needs_update={} scale={:?}",
-            ts_write.is_playing,
-            needs_update,
-            ts_write.current_scale
-          );
-        }
-        if ts_write.is_playing && needs_update {
-          let scale_days_per_sec = ts_write.current_scale.to_days_per_st_second();
-          let fixed_sim_seconds = fixed_dt_us as f64 / 1_000_000.0;
-          let step = scale_days_per_sec * fixed_sim_seconds;
-          if step > 0.0 {
-            ts_write.current_epoch = ts_write.current_epoch + anise::time::Unit::Day * step;
-            // Auto-pause at epoch boundaries to prevent almanac lookup failures
-            if ts_write.current_epoch >= ts_write.epoch_end {
-              ts_write.current_epoch = ts_write.epoch_end;
-              ts_write.is_playing = false;
-              aethervk_oshal_rlib::log!("Auto-paused: reached epoch end");
-            } else if ts_write.current_epoch <= ts_write.epoch_start {
-              ts_write.current_epoch = ts_write.epoch_start;
-              ts_write.is_playing = false;
-              aethervk_oshal_rlib::log!("Auto-paused: reached epoch start");
-            }
-          }
-          (
-            false,
-            step,
-            fixed_dt_us,
-            ts_write.current_epoch,
-            max_sub_dt_us,
-          )
-        } else {
-          break;
-        }
+  // ── Adaptive batched dispatch ────────────────────────────────────────────
+  // Instead of looping and dispatching one GPU step per iteration (each of
+  // which previously blocked on its own fence), we now read the full
+  // accumulated lag, batch up to MAX_BATCH_STEPS worth of simulation into a
+  // single dispatch, and let the GPU shader sub-step internally.
+  //
+  // Thresholds:
+  //   MAX_BATCH_STEPS  – max sub-steps batched into one GPU dispatch.
+  //   YIELD_THRESHOLD  – if pending > this, sleep 1 ms before dispatching
+  //                      (leaky-bucket back-pressure: lets GPU drain).
+  //   DISCARD_THRESHOLD – hard cap; discard excess to prevent spiral of death.
+  const MAX_BATCH_STEPS: u32    = 8;
+  const YIELD_THRESHOLD: u32    = 4;
+  const DISCARD_THRESHOLD: u32  = 16;
+
+  let (is_playing, pending_steps, fixed_dt_us, base_step_days, current_epoch, max_sub_dt_us) = {
+    let ts = time_state_arc.read();
+    let ti = ts.time_info.read();
+    let pending = ti.pending_fixed_steps();
+    let fixed_dt_us = ti.fixed_delta_time.load(core::sync::atomic::Ordering::Relaxed);
+    let max_sub_dt_us = (ts.current_scale.max_physics_sub_dt_seconds() * 1_000_000.0)
+      as aethervk_oshal_rlib::os::time::timeus_t;
+    let scale_days_per_sec = ts.current_scale.to_days_per_st_second();
+    let fixed_sim_seconds  = fixed_dt_us as f64 / 1_000_000.0;
+    let base_step_days     = scale_days_per_sec * fixed_sim_seconds;
+    (ts.is_playing, pending, fixed_dt_us, base_step_days, ts.current_epoch, max_sub_dt_us)
+  };
+
+  // Handle manual step requests (seek / scrub) — always one-shot, no batching.
+  let manual_step = {
+    let mut ts = time_state_arc.write();
+    if ts.manual_step_requests > 0.0 {
+      let step = ts.manual_step_requests;
+      ts.manual_step_requests = 0.0;
+      ts.current_epoch = ts.current_epoch + anise::time::Unit::Day * step;
+      Some((step, ts.current_epoch))
+    } else {
+      None
+    }
+  };
+
+  if let Some((step_days, epoch)) = manual_step {
+    any_fixed_step = true;
+    let step_wall_start = aethervk_oshal_rlib::os::time::get_monotonic_time();
+    if let Err(e) = dispatch_physics_step(scene_id, ctx, step_days, epoch, fixed_dt_us, max_sub_dt_us) {
+      aethervk_oshal_rlib::log!("dispatch_physics_step (manual) failed: {:?}", e);
+    }
+    let step_wall_us = aethervk_oshal_rlib::os::time::get_monotonic_time()
+      .saturating_sub(step_wall_start).max(1);
+    {
+      let mut ts = time_state_arc.write();
+      let sim_us  = fixed_dt_us.max(1) as f32;
+      let sample  = (sim_us / step_wall_us as f32).min(2.0);
+      ts.effective_sim_speed = 0.1 * sample + 0.9 * ts.effective_sim_speed;
+    }
+    if drain_logic_commands(cmd_rx, ctx) {
+      return Err(EngineError::InvalidOperation("shutdown"));
+    }
+    refit_kinematic_microframes(scene_id, ctx);
+  } else if is_playing && pending_steps > 0 {
+    // Compute how many steps we'll batch in this dispatch.
+    let n_steps = pending_steps.min(MAX_BATCH_STEPS);
+
+    // Back-pressure: if significantly behind, yield briefly so the GPU
+    // can drain its command queue before we enqueue more work.
+    if pending_steps > YIELD_THRESHOLD {
+      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
+    }
+
+    // Discard runaway lag beyond the hard cap (spiral-of-death protection).
+    if pending_steps > DISCARD_THRESHOLD {
+      time_state_arc.read().time_info.write().ut_discard_accumulator();
+      aethervk_oshal_rlib::log!(
+        "Spiral-of-death protection: discarding {} pending steps",
+        pending_steps - MAX_BATCH_STEPS
+      );
+    }
+
+    // Advance epoch and accumulator by n_steps at once.
+    let batched_step_days = base_step_days * n_steps as f64;
+    let batched_dt_us     = fixed_dt_us * n_steps as i64;
+    let new_epoch = {
+      let mut ts = time_state_arc.write();
+      let mut epoch = ts.current_epoch + anise::time::Unit::Day * batched_step_days;
+      // Clamp to epoch boundaries, auto-pause if reached.
+      if epoch >= ts.epoch_end {
+        epoch = ts.epoch_end;
+        ts.is_playing = false;
+        aethervk_oshal_rlib::log!("Auto-paused: reached epoch end");
+      } else if epoch <= ts.epoch_start && batched_step_days < 0.0 {
+        epoch = ts.epoch_start;
+        ts.is_playing = false;
+        aethervk_oshal_rlib::log!("Auto-paused: reached epoch start");
       }
+      ts.current_epoch = epoch;
+      epoch
     };
 
-    if step_days <= 0.0 && !is_manual {
-      time_state_arc.read().time_info.write().ut_fixed_update();
-      continue;
-    }
-
     any_fixed_step = true;
-    if let Err(e) = dispatch_physics_step(
-      scene_id,
-      ctx,
-      step_days,
-      current_epoch,
-      fixed_dt_us,
-      max_sub_dt_us,
-    ) {
+    let step_wall_start = aethervk_oshal_rlib::os::time::get_monotonic_time();
+    if let Err(e) = dispatch_physics_step(scene_id, ctx, batched_step_days, new_epoch, batched_dt_us, max_sub_dt_us) {
       aethervk_oshal_rlib::log!("dispatch_physics_step failed: {:?}", e);
     }
+    let step_wall_us = aethervk_oshal_rlib::os::time::get_monotonic_time()
+      .saturating_sub(step_wall_start).max(1);
 
-    // Microframe refit: re-center kinematic comet microframes when comet
-    // approaches the SOI boundary. Must run after almanac step has updated
-    // the microframe/comet transforms but before render submission.
-    refit_kinematic_microframes(scene_id, ctx);
-
-    if !is_manual {
-      // Advance fixed clock step
-      time_state_arc.read().time_info.read().ut_fixed_update();
+    // Update EMA: compare per-step sim-time vs wall-time.
+    {
+      let mut ts = time_state_arc.write();
+      let sim_us  = fixed_dt_us.max(1) as f32;
+      let wall_us = (step_wall_us / n_steps as i64).max(1) as f32;
+      let sample  = (sim_us / wall_us).min(2.0);
+      ts.effective_sim_speed = 0.1 * sample + 0.9 * ts.effective_sim_speed;
     }
+
+    // Advance the fixed-time accumulator n_steps times.
+    {
+      let ts = time_state_arc.read();
+      let ti = ts.time_info.read();
+      for _ in 0..n_steps {
+        ti.ut_fixed_update();
+      }
+    }
+
+    if drain_logic_commands(cmd_rx, ctx) {
+      return Err(EngineError::InvalidOperation("shutdown"));
+    }
+    refit_kinematic_microframes(scene_id, ctx);
   }
 
   // Snap following entities (re-acquires brief scene graph lock since we need try_snap_entity)
@@ -1990,9 +2040,9 @@ fn refit_kinematic_microframes(scene_id: u64, ctx: &alloc::sync::Arc<LogicThread
 /// This runs **before** the physics tasklet so that `build_particles` picks up the
 /// newly emitted particles (giving them proper `ParticleMetadata` for GPU write-back).
 ///
-/// Each circle emits `particles_per_tick` particles at the cached surface point,
-/// with velocity along the cached surface normal scaled by `mean_velocity` and
-/// jittered by `velocity_std_dev`.
+/// Each circle emits `particles_per_second * dt_s` particles (fractional with carry-over)
+/// at the cached surface point, with velocity along the cached surface normal scaled
+/// by `mean_velocity` and jittered by `velocity_std_dev`.
 fn emit_particles_from_circles(
   scene: &crate::scene::Scene,
   tick_seed: u64,
@@ -2013,10 +2063,14 @@ fn emit_particles_from_circles(
     mass: f32,
     mean_velocity: f32,
     velocity_std_dev: f32,
-    particles_per_tick: u32,
+    /// Emission rate in particles/s; converted to an integer count per tick
+    /// via `floor(particles_per_second * dt_s + remainder)` with carry-over.
+    particles_per_second: f32,
     color: [f32; 4],
     ttl_us: u64,
-    beta: f32, // (radiation pressure coeff)
+    beta: f32,
+    /// Spawn-disc radius in km (tangent plane around the surface point).
+    spawn_radius_km: f32,
   }
 
   let mut work: alloc::vec::Vec<(crate::scene::EntityId, alloc::vec::Vec<Work>)> =
@@ -2088,7 +2142,7 @@ fn emit_particles_from_circles(
           Some(n) => n,
           None => continue,
         };
-        if circle.particles_per_tick == 0 {
+        if circle.particles_per_second <= 0.0 {
           continue;
         }
 
@@ -2158,10 +2212,11 @@ fn emit_particles_from_circles(
           mass: circle.mass,
           mean_velocity: circle.mean_velocity, // km/s
           velocity_std_dev: circle.velocity_std_dev,
-          particles_per_tick: circle.particles_per_tick,
+          particles_per_second: circle.particles_per_second,
           color: circle.color,
           ttl_us,
           beta: circle.beta,
+          spawn_radius_km: circle.spawn_radius_km,
         });
       }
 
@@ -2182,10 +2237,11 @@ fn emit_particles_from_circles(
       mass,
       mean_velocity,
       velocity_std_dev,
-      particles_per_tick,
+      particles_per_second,
       color,
       ttl_us,
       beta,
+      spawn_radius_km,
     } in circles
     {
       scene.with_component_mut(child_entity, |psc: &mut ParticleSystemComponent| {
@@ -2235,15 +2291,32 @@ fn emit_particles_from_circles(
         }
 
         // ── 2. Emit new particles, writing at tail ─────────────
-        // FIX 5: Hardcap emission batches to the capacity so we don't instantly overwrite slots
-        let emit_count = particles_per_tick.min(capacity as u32);
+        // Compute how many whole particles to emit this tick from the
+        // continuous rate, carrying the fractional remainder forward.
         let dt_s = dt_us as f32 / 1_000_000.0;
+        let exact_count = particles_per_second * dt_s + psc.emit_remainder;
+        let emit_count = (exact_count.floor() as u32).min(capacity as u32);
+        psc.emit_remainder = exact_count - emit_count as f32;
 
         for i in 0..emit_count {
           if psc.tail_index - psc.head_index >= capacity {
             // Drop oldest particle if buffer full. We only advance the head index.
             psc.head_index += 1;
           }
+
+          // Re-seed per-particle by mixing the global particle id into the tick
+          // seed.  Without this, every tick starts from the same rng_state and
+          // emits the same random positions/velocities (the "disk" pattern).
+          // splitmix64-style avalanche gives good diffusion before the LCG runs.
+          let per_particle_seed = tick_seed
+            .wrapping_add(psc.next_id as u64)
+            .wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15));
+          rng_state = per_particle_seed;
+          rng_state ^= rng_state >> 30;
+          rng_state = rng_state.wrapping_mul(0xbf58476d1ce4e5b9);
+          rng_state ^= rng_state >> 27;
+          rng_state = rng_state.wrapping_mul(0x94d049bb133111eb);
+          rng_state ^= rng_state >> 31;
 
           // FIX 4: Shift by 32 and divide by u32::MAX properly scales distribution evenly over [0.0, 1.0].
           rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -2262,12 +2335,17 @@ fn emit_particles_from_circles(
           let theta = 2.0 * core::f32::consts::PI * u1;
           let speed = (mean_velocity + velocity_std_dev * r * theta.cos()).max(0.0);
 
-          // Cosine-hemisphere jitter around the emission normal
+          // Cosine-hemisphere jitter around the emission normal.
+          // The cone half-angle is derived from the velocity spread ratio
+          // (σ/μ): 0 → collimated beam, 1 → full hemisphere.
+          // This removes the hardcoded 30° cap and makes spread data-driven.
           let phi = 2.0 * core::f32::consts::PI * u2;
-          // Decouple cone spread from speed jitter. 
-          // Let's allow a 30-degree cone (cos(30 deg) = 0.866)
-          // so u3 scales between 1.0 and 0.866
-          let max_spread_cos = 0.866_f32; 
+          let spread_ratio = if mean_velocity > 0.0 {
+            (velocity_std_dev / mean_velocity).min(1.0)
+          } else {
+            1.0
+          };
+          let max_spread_cos = (1.0 - spread_ratio).max(0.0);
           let cos_theta_h = (1.0 - u3 * (1.0 - max_spread_cos)).max(0.0).sqrt();
           let sin_theta_h = (1.0 - cos_theta_h * cos_theta_h).max(0.0).sqrt();
           let jitter_local = [
@@ -2329,11 +2407,34 @@ fn emit_particles_from_circles(
             world_position[2] - parent_velocity[2] * dt_s * fraction,
           ];
 
+          // ── Spawn-disc position scatter ─────────────────────────────────
+          // Offset in the tangent plane by a uniformly-sampled disc of
+          // radius `spawn_radius_km`. Using sqrt(r_frac) gives uniform
+          // area density (avoids clustering at the centre).
+          let spawn_pos = if spawn_radius_km > 0.0 {
+            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let disc_r_frac = ((rng_state >> 32) as u32 as f32) / (core::u32::MAX as f32);
+            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let disc_phi = ((rng_state >> 32) as u32 as f32) / (core::u32::MAX as f32)
+              * 2.0 * core::f32::consts::PI;
+            // sqrt maps uniform [0,1] → uniform area in disc
+            let disc_r = disc_r_frac.sqrt() * spawn_radius_km;
+            let offset = tangent * (disc_r * disc_phi.cos())
+              + bitangent * (disc_r * disc_phi.sin());
+            [
+              interp_pos[0] + offset.x(),
+              interp_pos[1] + offset.y(),
+              interp_pos[2] + offset.z(),
+            ]
+          } else {
+            interp_pos
+          };
+
           // NO MORE CRASH. The length of the Vec natively matches its capacity and is securely memory backed.
           let p = &mut particles[p_idx];
           p.set_id(id);
           p.set_age(0);
-          p.position = interp_pos;
+          p.position = spawn_pos;
           p.velocity = vel_jittered;
           p.mass = mass;
           p.active = 1;

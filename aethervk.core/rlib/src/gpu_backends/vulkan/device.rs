@@ -4210,11 +4210,6 @@ impl RenderDevice for Device {
               push_bytes,
             );
 
-            // Bypassing `self.draw_indexed(...)`
-            #[cfg(feature = "std")]
-            {
-              println!("DEBUG DRAW MESH 2: index_count={}", draw_call.index_count);
-            }
             self.device.cmd_draw_indexed(cmd, draw_call.index_count, 1, 0, 0, 0);
           }
 

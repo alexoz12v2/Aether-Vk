@@ -182,6 +182,17 @@ impl TimeInfo {
     self.m_last_fixed_update.fetch_add(added, Ordering::Relaxed);
   }
 
+  /// Returns the number of whole fixed-dt steps currently sitting in the
+  /// accumulator (i.e. how many `ut_fixed_update` calls would be needed to
+  /// drain it). Zero means the accumulator is not yet full.
+  pub fn pending_fixed_steps(&self) -> u32 {
+    let sim_time   = self.m_last_update.load(Ordering::Relaxed);
+    let fixed_time = self.m_last_fixed_update.load(Ordering::Relaxed);
+    let lag        = sim_time.saturating_sub(fixed_time).max(0);
+    let fixed_dt   = self.fixed_delta_time.load(Ordering::Relaxed).max(1);
+    (lag / fixed_dt) as u32
+  }
+
   /// TODO: Document this item
   pub fn needs_fixed_update(&self) -> bool {
     let fixed_delta = self.fixed_delta_time.load(Ordering::Relaxed);

@@ -403,15 +403,40 @@ fn process_command(
                   })?;
                 }
 
-                if let Some(task) = render_frame.active_physics_task.lock().take() {
-                  if let Some(sync) = task.wait().map_err(|e| {
-                    crate::types::GpuError::InvalidState(alloc::format!(
-                      "Physics engine error: {:?}",
-                      e
-                    ))
-                  })? {
-                    cmd_scope.add_sync_info(sync);
+                // Try to collect the physics result within 8 ms. If physics is
+                // still running the GPU timeline semaphore (cached_timeline_semaphore)
+                // already guarantees ordering at the last *completed* value, so we
+                // can submit the render pass safely with last-frame particle data.
+                // The task is put back into active_physics_task when not done so
+                // dispatch_physics_step can wait on it at the start of the next tick.
+                let physics_sync = {
+                  let mut guard = render_frame.active_physics_task.lock();
+                  if let Some(task) = guard.take() {
+                    // 8 ms budget — enough for one 60 Hz sub-step worth of GPU time
+                    match task.try_wait(8_000) {
+                      Ok(result) => {
+                        // Physics finished: use its fresh sync info
+                        result.map_err(|e| {
+                          crate::types::GpuError::InvalidState(alloc::format!(
+                            "Physics engine error: {:?}", e
+                          ))
+                        })?
+                      }
+                      Err(still_running) => {
+                        // Deadline expired — put the task back, render with
+                        // last-frame data. The physics task will be awaited at
+                        // the next dispatch_physics_step entry.
+                        *guard = Some(still_running);
+                        None // fall through to cached_timeline_semaphore below
+                      }
+                    }
+                  } else {
+                    None
                   }
+                };
+
+                if let Some(sync) = physics_sync {
+                  cmd_scope.add_sync_info(sync);
                 }
 
                 if let Some((timeline_semaphore, timeline_value)) = render_frame.cached_timeline_semaphore {
