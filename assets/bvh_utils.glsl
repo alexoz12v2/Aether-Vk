@@ -260,7 +260,7 @@ struct GpuReferenceFrame {
 
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer GpuReferenceFrameArray { GpuReferenceFrame frames[]; };
 struct TLASLeaf { vec3 min_bound; uint entity_idx; vec3 max_bound; uint metadata; };
-struct RenderParticleData { uint id_low; uint id_high; uint age_low; uint age_high; vec3 position; float mass; vec3 velocity; uint is_active; };
+struct RenderParticleData { uint id_low; uint id_high; uint age_low; uint age_high; vec3 position; float mass; vec3 velocity; uint is_active; vec3 force; };
 struct DrawIndirectCommand { uint vertexCount; uint instanceCount; uint firstVertex; uint firstInstance; };
 
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticleData {

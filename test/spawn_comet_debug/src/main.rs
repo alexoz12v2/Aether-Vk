@@ -189,6 +189,7 @@ impl SimulationDelegate for SpawnCometDelegate {
       // ParticleSystemComponent for this jet
       let mut psc = aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(4096);
       psc.color = [0.2, 0.8, 1.0, 1.0]; // cyan
+      psc.particle_radius = 0.05; // 50m radius (bigger particles)
       let _ = scene_ctx.scene.add_component(child_id, psc);
 
       // SphereGizmoComponent for visual debugging
@@ -213,11 +214,11 @@ impl SimulationDelegate for SpawnCometDelegate {
           cached_point: Some(hit_pt),
           cached_normal: Some(hit_normal),
           particles_per_tick: 0, // starts OFF, spacebar toggles
-          ttl: 300,              // ~5 seconds at 60fps
-          mean_velocity: 0.001,  // 1 m/s in km/s
-          velocity_std_dev: 0.3,
+          ttl: 600,              // double the TTL
+          mean_velocity: 0.000072, 
+          velocity_std_dev: 0.00001, 
           child_entity: Some(child_id),
-          beta: 2.0, // perfect reflector
+          beta: 1.1, // diminished beta so it arcs gently rather than rocketing away
           max_particles: 4096,
         }],
       };

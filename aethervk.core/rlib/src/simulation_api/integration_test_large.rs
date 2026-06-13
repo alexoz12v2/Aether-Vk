@@ -176,6 +176,7 @@ mod tests {
               mass: 1.0,
               active: 1,
               force: [0f32; 3],
+              padding: 0,
             });
           }
         }

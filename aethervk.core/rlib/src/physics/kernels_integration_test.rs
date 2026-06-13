@@ -192,6 +192,7 @@ mod tests {
         mass: 1.0,
         active: 1,
         force: [0f32; 3],
+        padding: 0,
       });
       ps.push(ParticleData {
         id_low: 1,
@@ -203,6 +204,7 @@ mod tests {
         mass: 1.0,
         active: 1,
         force: [0f32; 3],
+        padding: 0,
       });
     }
     scene.add_component(micro_particles, sys).unwrap();

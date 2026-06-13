@@ -30,9 +30,19 @@ use ash::vk;
 // Disabled by default: Enabling PRINTF shaders under Lavapipe (ARM64) dramatically increases
 // register pressure in the llvmpipe JIT compiler. This leads to register spilling bugs that
 // overwrite the stack-saved link register (x30), causing a SIGSEGV upon kernel return.
+//
+// However, on x86_64 Lavapipe (Docker CI) the NON-debug shader JIT exhibits a distinct bug
+// where buffer_reference descriptors resolve to null (r8=0), causing a SIGSEGV in
+// lbvh_build_bottomup. The debug variant (GL_EXT_debug_printf declared) takes a different,
+// stable JIT code path. Therefore we default to true on x86_64 + shader_debug_sync (CI)
+// so that all physics tests use the stable debug variant automatically without each test
+// needing to set this flag manually.
 #[cfg(all(any(debug_assertions, test), not(target_vendor = "apple")))]
 pub static USE_PRINTF_SHADERS: core::sync::atomic::AtomicBool =
-  core::sync::atomic::AtomicBool::new(false);
+  core::sync::atomic::AtomicBool::new(cfg!(all(
+    feature = "shader_debug_sync",
+    target_arch = "x86_64"
+  )));
 
 #[cfg(test)]
 pub static READBACK_DIAGNOSTICS: core::sync::atomic::AtomicBool =
@@ -1946,39 +1956,87 @@ impl VulkanComputeKernels {
     _cmd: &mut VulkanCommandBuffer,
     scene0: &Scene,
   ) -> GpuResult<(VulkanBuffer<gpu::ForceEmitter>, u32)> {
+    use aethervk_oshal_rlib::math::vector::Vector;
     let mut emitters = Vec::new();
+
     scene0.query2::<crate::scene::TransformComponent, crate::scene::ForceEmitterComponent, _>(
-      |_, t, emitter| match emitter {
-        crate::scene::ForceEmitterComponent::Gravity { mu, beta } => {
-          emitters.push(gpu::ForceEmitter {
-            position: [t.position.x(), t.position.y(), t.position.z()],
-            mu: *mu,
-            normal: [0.0, 0.0, 0.0],
-            type_id: 0,
-            trunc_distance: 0.0,
-            beta: *beta,
-            _pad: [0, 0],
-          });
-        }
-        crate::scene::ForceEmitterComponent::Planar {
-          normal,
-          base_force,
-          trunc_distance,
-        } => {
-          emitters.push(gpu::ForceEmitter {
-            position: [t.position.x(), t.position.y(), t.position.z()],
-            mu: *base_force,
-            normal: [normal.x(), normal.y(), normal.z()],
-            type_id: 1,
-            trunc_distance: *trunc_distance,
-            beta: 0.0,
-            _pad: [0, 0],
-          });
+      |entity, t, emitter| {
+        // ForceEmitter.position MUST be in macro-frame world-space AU.
+        // Walk up the ancestor chain: if the entity sits inside a micro-frame,
+        // convert its local-km position to world-AU using micro_to_macro.
+        let world_pos_au = {
+          use crate::scene::ReferenceFrameComponent;
+          let mut pos = t.position; // local km if inside a frame, or AU if at root
+          let mut cur = scene0.get_parent(entity);
+          while let Some(anc) = cur {
+            if let Some((frame_center_au, frame_scale)) = scene0.with_component(
+              anc,
+              |rf: &ReferenceFrameComponent| {
+                let c = scene0
+                  .with_component(anc, |ft: &crate::scene::TransformComponent| ft.position)
+                  .unwrap_or(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero());
+                (c, rf.scale)
+              },
+            ) {
+              // micro_to_macro: p_macro = c_macro + p_micro * scale
+              pos = frame_center_au + pos * frame_scale;
+              // Continue up — nested frames not common but handle anyway
+            }
+            cur = scene0.get_parent(anc);
+          }
+          pos
+        };
+
+        match emitter {
+          crate::scene::ForceEmitterComponent::Gravity { mu, beta } => {
+            emitters.push(gpu::ForceEmitter {
+              position: [world_pos_au.x(), world_pos_au.y(), world_pos_au.z()],
+              mu: *mu,
+              normal: [0.0, 0.0, 0.0],
+              type_id: 0,
+              trunc_distance: 0.0,
+              beta: *beta,
+              _pad: [0, 0],
+            });
+          }
+          crate::scene::ForceEmitterComponent::Planar {
+            normal,
+            base_force,
+            trunc_distance,
+          } => {
+            emitters.push(gpu::ForceEmitter {
+              position: [world_pos_au.x(), world_pos_au.y(), world_pos_au.z()],
+              mu: *base_force,
+              normal: [normal.x(), normal.y(), normal.z()],
+              type_id: 1,
+              trunc_distance: *trunc_distance,
+              beta: 0.0,
+              _pad: [0, 0],
+            });
+          }
         }
       },
     );
 
     let len = emitters.len() as u32;
+
+    // Lavapipe's AVX2 vectorizer speculatively prefetches emitters[1] even when
+    // num_emitters==1 (it processes two concurrent workgroups in one YMM pass).
+    // Without a valid second entry the buffer_reference descriptor is null → SIGSEGV.
+    // Fix: always pad to at least 2 entries.  The shader guards on `e < num_emitters`
+    // so the dummy entry is never reached by live logic.
+    if emitters.len() < 2 {
+      emitters.push(gpu::ForceEmitter {
+        position: [0.0, 0.0, 0.0],
+        mu: 0.0,
+        normal: [0.0, 0.0, 0.0],
+        type_id: 0xFF, // invalid — shader type_id guard will skip this
+        trunc_distance: 0.0,
+        beta: 0.0,
+        _pad: [0, 0],
+      });
+    }
+
     self
       .allocate_and_upload(
         device,
@@ -2395,20 +2453,26 @@ impl VulkanComputeKernels {
     num_emitters: u32,
     total_particles: u32,
   ) {
-    if num_emitters == 0 || total_particles == 0 {
+    if num_emitters == 0 || total_particles == 0 || bvh_addr == 0 {
       return;
     }
+    // Phase A: one subgroup per BVH node (same as barnes_hut.comp).
+    // Writes external-gravity forces into BVH cluster force slots.
+    // Phase B (accumulate_bvh_forces_to_particles) then splats them to AOSOA.
+    const PARTICLES_IN_LEAF: u32 = 64;
+    let n_leaves = (total_particles + PARTICLES_IN_LEAF - 1) / PARTICLES_IN_LEAF;
+    let n_nodes = if n_leaves > 0 { 2 * n_leaves - 1 } else { 0 };
+
+    let sg = self.pipelines.subgroup_size as u32;
     let wg_size = self.effective_wg(128);
-    let groups = (total_particles + wg_size - 1) / wg_size;
+    let sgs_per_wg = wg_size / sg;
+    let groups = (n_nodes + sgs_per_wg - 1) / sgs_per_wg;
 
     let pc = ApplyEmittersPushConstants {
       particles: particles_addr,
       emitters: emitters_addr,
       frames: frames_addr,
       particle_frame_ids: particle_frame_ids_addr,
-      // Pass the real BVH address so the shader traverses cluster forces
-      // (Barnes-Hut style) from the per-system BVH built by build_motion_bvh.
-      // When bvh_addr == 0 the shader's null-check guard skips the BVH block.
       bvh: bvh_addr,
       num_emitters,
       total_particles,
@@ -3445,16 +3509,28 @@ impl VulkanComputeKernels {
     let bvh_buffer = bvh_buffer_result?;
     aethervk_oshal_rlib::log!("build_motion_bvh: allocated bvh_buffer successfully");
 
+    // Lavapipe's AVX2 vectorizer processes all LOCAL_SIZE_X invocations of a workgroup
+    // together. Phantom invocations (idx ≥ n_leaves) compute start_p = idx*PARTICLES_IN_LEAF.
+    // For wg_size=4 and PARTICLES_IN_LEAF=64, the highest phantom start_p is (wg_size-1)*64=192.
+    // Accessing sorted_morton.entries[192] on a 1-entry buffer → null Lavapipe descriptor → SIGSEGV.
+    // Fix: pad to wg_size * PARTICLES_IN_LEAF so all speculative accesses are in-bounds.
+    const MORTON_PARTICLES_IN_LEAF: usize = 64; // mirrors PARTICLES_IN_LEAF spec-const default
+    let morton_min_cap = wg_size as usize * MORTON_PARTICLES_IN_LEAF;
     let mut sorted_morton = self.allocate_device_buffer::<[u32; 2]>(
       device,
       allocator,
-      total_particles as usize,
+      (total_particles as usize).max(morton_min_cap),
       vk::BufferUsageFlags::STORAGE_BUFFER
         | vk::BufferUsageFlags::TRANSFER_DST
         | vk::BufferUsageFlags::TRANSFER_SRC,
       false,
       rollback,
     )?;
+
+    aethervk_oshal_rlib::log!(
+      "build_motion_bvh: sorted_morton.address = 0x{:x}",
+      sorted_morton.address
+    );
 
     // 1. Morton Encode
     let (scene_min, scene_max) = particle_aabb.unwrap_or((
@@ -3513,7 +3589,7 @@ impl VulkanComputeKernels {
     let mut sorted_morton_alt = self.allocate_device_buffer::<[u32; 2]>(
       device,
       allocator,
-      total_particles as usize,
+      (total_particles as usize).max(wg_size as usize * 64), // same Lavapipe padding as sorted_morton
       vk::BufferUsageFlags::STORAGE_BUFFER
         | vk::BufferUsageFlags::TRANSFER_DST
         | vk::BufferUsageFlags::TRANSFER_SRC,
@@ -6058,7 +6134,16 @@ impl Kernels for Device {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |_res_guard, _| Ok::<_, GpuError>(()))?
       .execute(|(), _rollback| {
-        let total_particles = particles.capacity() as u32;
+        // actual_count is stamped by build_particles (number of *particles*, not f32s).
+        // Falling back to the AOSOA-decode formula avoids the OOB that happens when
+        // raw capacity (= num_blocks × FIELDS × SG) is mistaken for a particle count.
+        let sg = self.kernels.pipelines.subgroup_size as u32;
+        let total_particles: u32 = if particles.actual_count > 0 {
+          particles.actual_count
+        } else {
+          let stride = crate::gpu::PARTICLE_FIELDS as u32 * sg;
+          if stride > 0 { particles.capacity() as u32 / stride * sg } else { 0 }
+        };
         self.kernels.accumulate_bvh_forces_to_particles(
           &self.device,
           cmd,

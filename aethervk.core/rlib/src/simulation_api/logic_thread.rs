@@ -2044,10 +2044,35 @@ fn emit_particles_from_circles(
 
   scene.query2::<TransformComponent, ParticleEmitterCirclesComponent, _>(
     |entity_id, transform, emitter| {
-      let parent_rot = transform.rotation;
-      let parent_pos = transform.position;
-      let parent_scale = transform.scale;
+      // The emitter entity (comet) lives inside a micro-frame (LCA).
+      // Its TransformComponent.position is in micro-frame LOCAL KM — not AU.
+      // scale is km per mesh-unit.
+      let parent_rot   = transform.rotation;
+      let parent_pos_km = transform.position; // local km relative to micro-frame
+      let parent_scale  = transform.scale;    // km per mesh-unit
       let mut circles_work = alloc::vec::Vec::new();
+
+      // ── Walk up to find frame center (AU) and scale (AU/km) for occlusion ──
+      // Needed only for the occlusion ray-cast which works in macro-frame AU.
+      let mut frame_center_au = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
+      let mut frame_scale_au_per_km = 1.0_f32 / 149_597_870.7_f32; // default: 1 AU/km
+      {
+        let mut cur = scene.get_parent(entity_id);
+        while let Some(anc) = cur {
+          if let Some(frame_data) = scene.with_component(anc, |rf: &crate::scene::ReferenceFrameComponent| {
+            (
+              scene.with_component(anc, |t: &TransformComponent| t.position)
+                .unwrap_or(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero()),
+              rf.scale,
+            )
+          }) {
+            frame_center_au = frame_data.0;
+            frame_scale_au_per_km = frame_data.1;
+            break;
+          }
+          cur = scene.get_parent(anc);
+        }
+      }
 
       for circle in &emitter.circles {
         let child_id = match circle.child_entity {
@@ -2066,32 +2091,33 @@ fn emit_particles_from_circles(
           continue;
         }
 
-        // Transform emission point and normal from object space to world space
-        let scaled_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+        // Surface point in mesh units → km relative to comet CoM
+        let surface_km = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
           local_pos[0] * parent_scale.x(),
           local_pos[1] * parent_scale.y(),
           local_pos[2] * parent_scale.z(),
         );
-        let world_pos = parent_pos + parent_rot.rotate_vector(scaled_pos);
+        let rotated_surface_km = parent_rot.rotate_vector(surface_km);
+
         let local_n = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
-          local_normal[0],
-          local_normal[1],
-          local_normal[2],
+          local_normal[0], local_normal[1], local_normal[2],
         );
-        let world_normal = parent_rot.rotate_vector(local_n);
-        let world_n_len = world_normal.length();
-        let world_n = if world_n_len > 1e-6 {
-          world_normal * (1.0 / world_n_len)
-        } else {
-          aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 1.0)
+        let world_n_km = {
+          let n = parent_rot.rotate_vector(local_n);
+          let l = n.length();
+          if l > 1e-6 { n * (1.0 / l) } else {
+            aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 1.0)
+          }
         };
 
-        // Push slightly outside the surface
-        let emit_pos = world_pos + world_n * 1e-8; // ~1.5 km nudge in AU units to clear the mesh surface
+        // Micro-frame local km: comet center (km) + surface offset (km) + 1 m nudge
+        let emit_km = parent_pos_km + rotated_surface_km + world_n_km * 1e-3;
 
+        // Occlusion check in macro-frame AU
+        let emit_au = frame_center_au + emit_km * frame_scale_au_per_km;
         let mut occluded = false;
         if let Some(sun_p) = sun_pos {
-          let to_sun = sun_p - emit_pos;
+          let to_sun = sun_p - emit_au;
           let dist_to_sun = to_sun.length();
           if dist_to_sun > 1e-4 {
             let ray_dir = to_sun * (1.0 / dist_to_sun);
@@ -2099,17 +2125,11 @@ fn emit_particles_from_circles(
               if let Some(bvh) = &occ_comet.bvh {
                 let inv_rot = occ_t.rotation.inverse();
                 let local_origin =
-                  inv_rot.rotate_vector(emit_pos - occ_t.position) * (1.0 / occ_t.scale.x());
+                  inv_rot.rotate_vector(emit_au - occ_t.position) * (1.0 / occ_t.scale.x());
                 let local_dir = inv_rot.rotate_vector(ray_dir);
-
                 if let Some((hit_t, _, _)) = bvh.raycast(
-                  local_origin,
-                  local_dir,
-                  &occ_comet.vertices,
-                  &occ_comet.indices,
-                ) && hit_t > 0.0
-                  && hit_t * occ_t.scale.x() < dist_to_sun
-                {
+                  local_origin, local_dir, &occ_comet.vertices, &occ_comet.indices,
+                ) && hit_t > 0.0 && hit_t * occ_t.scale.x() < dist_to_sun {
                   occluded = true;
                   break;
                 }
@@ -2117,23 +2137,19 @@ fn emit_particles_from_circles(
             }
           }
         }
-        if occluded {
-          continue;
-        }
+        if occluded { continue; }
 
-        // Convert TTL: EmissionCircle.ttl is in "ticks" in the UI.
         let ttl_us = if circle.ttl > 0 {
           circle.ttl.saturating_mul(dt_us as u64)
-        } else {
-          0
-        };
+        } else { 0 };
 
         circles_work.push(Work {
           child_entity: child_id,
-          world_position: [emit_pos.x(), emit_pos.y(), emit_pos.z()],
-          world_velocity_direction: [world_n.x(), world_n.y(), world_n.z()],
+          // MICRO-FRAME LOCAL KM — what build_particles uploads and GPU shaders expect
+          world_position: [emit_km.x(), emit_km.y(), emit_km.z()],
+          world_velocity_direction: [world_n_km.x(), world_n_km.y(), world_n_km.z()],
           mass: circle.mass,
-          mean_velocity: circle.mean_velocity,
+          mean_velocity: circle.mean_velocity, // km/s
           velocity_std_dev: circle.velocity_std_dev,
           particles_per_tick: circle.particles_per_tick,
           color: circle.color,
@@ -2239,7 +2255,11 @@ fn emit_particles_from_circles(
 
           // Cosine-hemisphere jitter around the emission normal
           let phi = 2.0 * core::f32::consts::PI * u2;
-          let cos_theta_h = (1.0 - u3 * velocity_std_dev.min(1.0)).max(0.0).sqrt();
+          // Decouple cone spread from speed jitter. 
+          // Let's allow a 30-degree cone (cos(30 deg) = 0.866)
+          // so u3 scales between 1.0 and 0.866
+          let max_spread_cos = 0.866_f32; 
+          let cos_theta_h = (1.0 - u3 * (1.0 - max_spread_cos)).max(0.0).sqrt();
           let sin_theta_h = (1.0 - cos_theta_h * cos_theta_h).max(0.0).sqrt();
           let jitter_local = [
             sin_theta_h * phi.cos(),

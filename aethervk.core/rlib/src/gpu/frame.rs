@@ -1861,18 +1861,28 @@ fn draw_layer_content(
 
   if !layer.particle_calls.is_empty() {
     device.prepare_particle_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
+    let particle_camera = {
+      let mut c = layer_camera.clone();
+      c.absolute_pos = layer.camera_frame_local_pos;
+      c
+    };
     for particle_call in &layer.particle_calls {
-      gpu::frame::do_draw_particle(device, &layer_camera, cmd_buffer, handle, particle_call)?;
+      gpu::frame::do_draw_particle(device, &particle_camera, cmd_buffer, handle, particle_call)?;
     }
   }
 
   if !layer.particle2_calls.is_empty() {
     device.prepare_particle2_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
     let time = (render_scene.time_readings.time as f64 / 1_000_000.0) as f32;
+    let particle_camera = {
+      let mut c = layer_camera.clone();
+      c.absolute_pos = layer.camera_frame_local_pos;
+      c
+    };
     for particle_call in &layer.particle2_calls {
       do_draw_particle2(
         device,
-        &layer_camera,
+        &particle_camera,
         cmd_buffer,
         handle,
         particle_call,
