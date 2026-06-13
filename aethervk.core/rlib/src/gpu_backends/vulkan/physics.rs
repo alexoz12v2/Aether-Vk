@@ -30,19 +30,9 @@ use ash::vk;
 // Disabled by default: Enabling PRINTF shaders under Lavapipe (ARM64) dramatically increases
 // register pressure in the llvmpipe JIT compiler. This leads to register spilling bugs that
 // overwrite the stack-saved link register (x30), causing a SIGSEGV upon kernel return.
-//
-// However, on x86_64 Lavapipe (Docker CI) the NON-debug shader JIT exhibits a distinct bug
-// where buffer_reference descriptors resolve to null (r8=0), causing a SIGSEGV in
-// lbvh_build_bottomup. The debug variant (GL_EXT_debug_printf declared) takes a different,
-// stable JIT code path. Therefore we default to true on x86_64 + shader_debug_sync (CI)
-// so that all physics tests use the stable debug variant automatically without each test
-// needing to set this flag manually.
 #[cfg(all(any(debug_assertions, test), not(target_vendor = "apple")))]
 pub static USE_PRINTF_SHADERS: core::sync::atomic::AtomicBool =
-  core::sync::atomic::AtomicBool::new(cfg!(all(
-    feature = "shader_debug_sync",
-    target_arch = "x86_64"
-  )));
+  core::sync::atomic::AtomicBool::new(false);
 
 #[cfg(test)]
 pub static READBACK_DIAGNOSTICS: core::sync::atomic::AtomicBool =
@@ -3375,7 +3365,21 @@ impl VulkanComputeKernels {
     let wg_size = self.pipelines.subgroup_size;
     let dispatch_groups = (total_particles + wg_size - 1) / wg_size;
 
-    let num_nodes = (total_particles * 2).max(1) as usize;
+    // Lavapipe AVX2 ghost-node padding:
+    //   lbvh_build_bottomup processes one SIMD batch of wg_size lanes even when
+    //   only a few are active.  Inactive lanes speculate with leaf_node indices
+    //   n_leaves-1+1 … n_leaves-1+(wg_size-1).  If those nodes are beyond the
+    //   allocation or have parent_idx==0, the while-loop sentinel is bypassed and
+    //   the ghost lane writes garbage into the BVH / atomics.
+    //
+    //   Fix: bump the prepass num_internal_nodes up to wg_size so the prepass
+    //   initialises at least wg_size ghost leaf slots to parent_idx=0xFFFFFFFFu,
+    //   and size the BVH buffer to hold those extra nodes.
+    //
+    //   The prepass writes up to index  2*num_internal_nodes + 1, so
+    //   num_nodes must be at least  2*padded_internal + 2.
+    let padded_internal = (total_particles.saturating_sub(1)).max(wg_size as u32) as usize;
+    let num_nodes = (2 * padded_internal + 2).max((total_particles * 2).max(1) as usize);
 
     // ── per-dispatch sync barrier (shader_debug_sync only) ───────────────────
     // bvh_sync!("label") submits the current command buffer, waits for GPU
@@ -3869,7 +3873,12 @@ impl VulkanComputeKernels {
       let pc_prepass = crate::gpu::compute_push_constants::LbvhPrepassPushConstants {
         bvh: bvh_buffer.address,
         counters_addr: atomic_counters.address,
-        num_internal_nodes: (total_particles.saturating_sub(1)).max(1) as u32,
+        // Clamp num_internal_nodes up to wg_size so the prepass initialises
+        // at least wg_size ghost leaf slots beyond the real tree with
+        // parent_idx = 0xFFFFFFFFu.  Without this, Lavapipe's AVX2 JIT
+        // speculatively reads parent_idx=0 for inactive lanes (n_leaves=1),
+        // bypasses the while-loop sentinel guard, and corrupts the BVH.
+        num_internal_nodes: padded_internal as u32,
         _pad: 0,
         watchdog_out: watchdog_out_addr,
       };

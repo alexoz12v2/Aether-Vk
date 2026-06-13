@@ -1,6 +1,11 @@
 #version 450 core
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
+// GL_EXT_control_flow_attributes: enables [[unroll]] / [[dont_unroll]] decorators.
+// Used below to force the particle-accumulation loop to unroll, eliminating the
+// AVX2-vectorized loop path in Lavapipe's JIT that leaves the buffer descriptor
+// register (r8) uninitialised in its scalar fallback (observed: r8=0, hang).
+#extension GL_EXT_control_flow_attributes : require
 
 #extension GL_GOOGLE_include_directive : require
 
@@ -53,14 +58,16 @@ void main() {
     vec3 child_com = vec3(0.0);
     float r = pc.particle_radius;
     
-    for (uint i = start_p; i < end_p; ++i) {
-        uint particle_idx;
-        uvec2 morton_uvec = uvec2(pc.sorted_morton);
-        if (morton_uvec.x == 0u && morton_uvec.y == 0u) {
-            particle_idx = i;
-        } else {
-            particle_idx = pc.sorted_morton.entries[i].y;
-        }
+    // [[unroll]]: force glslc to fully unroll this loop (with per-iteration
+    // guards).  Lavapipe's JIT otherwise generates a scalar fallback alongside
+    // an AVX2 vectorized path; the scalar fallback expects the buffer descriptor
+    // register (r8) to be pre-loaded by the AVX2 path, but with only 1 active
+    // SIMD lane (n_leaves=1) the AVX2 path never runs → r8=0 → null-deref →
+    // fence never signalled → 60 s hang.  Unrolling eliminates the loop
+    // structure entirely, so each access gets its own inline descriptor load.
+    [[unroll]] for (uint i = start_p; i < end_p; ++i) {
+        // sorted_morton is always a valid non-null BDA (guaranteed by caller).
+        uint particle_idx = pc.sorted_morton.entries[i].y;
         
         uint base = P_BASE(particle_idx);
         float p_mass = uintBitsToFloat(pc.particles.data[base + 6*SUBGROUP_SIZE]);

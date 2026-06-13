@@ -2009,6 +2009,7 @@ fn emit_particles_from_circles(
     child_entity: crate::scene::EntityId,
     world_position: [f32; 3],
     world_velocity_direction: [f32; 3],
+    parent_velocity: [f32; 3],
     mass: f32,
     mean_velocity: f32,
     velocity_std_dev: f32,
@@ -2143,11 +2144,17 @@ fn emit_particles_from_circles(
           circle.ttl.saturating_mul(dt_us as u64)
         } else { 0 };
 
+        let mut parent_vel = [0.0, 0.0, 0.0];
+        if let Some(k) = scene.with_component(entity_id, |k: &crate::scene::KinematicComponent| k.velocity) {
+          parent_vel = [k.x(), k.y(), k.z()];
+        }
+
         circles_work.push(Work {
           child_entity: child_id,
           // MICRO-FRAME LOCAL KM — what build_particles uploads and GPU shaders expect
           world_position: [emit_km.x(), emit_km.y(), emit_km.z()],
           world_velocity_direction: [world_n_km.x(), world_n_km.y(), world_n_km.z()],
+          parent_velocity: parent_vel,
           mass: circle.mass,
           mean_velocity: circle.mean_velocity, // km/s
           velocity_std_dev: circle.velocity_std_dev,
@@ -2171,6 +2178,7 @@ fn emit_particles_from_circles(
       child_entity,
       world_position,
       world_velocity_direction,
+      parent_velocity,
       mass,
       mean_velocity,
       velocity_std_dev,
@@ -2229,8 +2237,9 @@ fn emit_particles_from_circles(
         // ── 2. Emit new particles, writing at tail ─────────────
         // FIX 5: Hardcap emission batches to the capacity so we don't instantly overwrite slots
         let emit_count = particles_per_tick.min(capacity as u32);
+        let dt_s = dt_us as f32 / 1_000_000.0;
 
-        for _ in 0..emit_count {
+        for i in 0..emit_count {
           if psc.tail_index - psc.head_index >= capacity {
             // Drop oldest particle if buffer full. We only advance the head index.
             psc.head_index += 1;
@@ -2312,11 +2321,19 @@ fn emit_particles_from_circles(
           psc.next_id = psc.next_id.wrapping_add(1);
           psc.tail_index += 1;
 
+          // Interpolate the starting position along the comet's path during this tick
+          let fraction = if emit_count > 1 { i as f32 / ((emit_count - 1) as f32) } else { 0.0 };
+          let interp_pos = [
+            world_position[0] - parent_velocity[0] * dt_s * fraction,
+            world_position[1] - parent_velocity[1] * dt_s * fraction,
+            world_position[2] - parent_velocity[2] * dt_s * fraction,
+          ];
+
           // NO MORE CRASH. The length of the Vec natively matches its capacity and is securely memory backed.
           let p = &mut particles[p_idx];
           p.set_id(id);
           p.set_age(0);
-          p.position = world_position;
+          p.position = interp_pos;
           p.velocity = vel_jittered;
           p.mass = mass;
           p.active = 1;
@@ -2427,7 +2444,7 @@ fn dispatch_physics_step(
   // each jet child entity's ParticleSystemComponent BEFORE spawning the physics
   // tasklet, so build_particles picks them up with proper metadata.
   {
-    let tick_seed = (step_days * 1e9) as u64 ^ fixed_dt_us as u64;
+    let tick_seed = current_epoch.to_tai_seconds().to_bits() ^ (fixed_dt_us as u64);
     emit_particles_from_circles(scene_arc.as_ref(), tick_seed, fixed_dt_us);
   }
 
