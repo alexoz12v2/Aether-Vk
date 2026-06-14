@@ -184,7 +184,7 @@ impl ParticleSystemComponent {
       accumulator: 0,
       next_id: 0,
       particle_radius: 0.01,       // 10 m default
-      render_radius_km: 1.0,       // 1 km default — large enough to see on screen
+      render_radius_km: 0.01,       // 10 m default — visible but not huge
       color: [1.0, 1.0, 1.0, 1.0], // white default
       ttl_us: 0,                   // 0 = never expire (set from EmissionCircle.ttl)
       beta: 0.0,                   // set from EmissionCircle.beta
@@ -283,6 +283,9 @@ pub struct EmissionCircle {
   /// random vector within this radius, breaking up the point-source pattern.
   /// Set to 0 for a pure point source.
   pub spawn_radius_km: f32,
+  /// Visual billboard radius for rendering (km). Controls particle size on screen.
+  /// Physics uses `particle_radius` separately. Default 0.01 km = 10 m.
+  pub render_radius_km: f32,
 }
 
 /// Attaches a set of discrete circular emission zones to a comet mesh entity.
@@ -325,6 +328,7 @@ mod tests {
       beta: 1.0,
       max_particles: 4096,
       spawn_radius_km: 0.0,
+      render_radius_km: 0.01,
     });
     assert_eq!(comp.circles.len(), 1);
     assert_eq!(comp.circles[0].latitude_rad, 0.5);

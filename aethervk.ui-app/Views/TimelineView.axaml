@@ -68,13 +68,22 @@
                          IsVisible="{Binding Timeline.IsPlaying}" />
             </Panel>
           </Button>
+
+          <!-- Reset Button: restores snapshot to start epoch (enabled when paused with snapshot) -->
+          <Button Command="{Binding ResetSimulationCommand}"
+                  ToolTip.Tip="Reset simulation to start (restores snapshot)"
+                  Width="32" Height="32" CornerRadius="16"
+                  Padding="0"
+                  HorizontalContentAlignment="Center"
+                  VerticalContentAlignment="Center">
+            <PathIcon Data="M 8 1 A 7 7 0 1 0 15 8 L 13 8 A 5 5 0 1 1 8 3 L 8 1 L 5 4 L 8 1 L 11 4 Z" Width="12" Height="12" />
+          </Button>
           
-          <!-- Time Scale -->
+          <!-- Time Scale: always enabled so user can pre-select before pressing Play -->
           <ComboBox ItemsSource="{Binding TimeScaleOptions}"
                     SelectedItem="{Binding SelectedTimeScale}"
                     DisplayMemberBinding="{Binding DisplayName}"
                     VerticalAlignment="Center" Width="130"
-                    IsEnabled="{Binding Timeline.IsPlaying}"
                     FontSize="12" />
         </StackPanel>
 

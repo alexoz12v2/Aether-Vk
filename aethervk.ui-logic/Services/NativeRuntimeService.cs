@@ -2492,6 +2492,21 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
     return 0.0;
   }
 
+  /// <summary>
+  /// Returns the GPU-alive particle count for a <c>ParticleSystemComponent</c> entity,
+  /// as of the last completed simulation step. Returns 0 if the context is not initialized
+  /// or the entity has no PSC.
+  /// </summary>
+  public uint GetParticleSystemAliveCount(ulong sceneId, ulong entityId)
+  {
+    if (_simulationContext != IntPtr.Zero && entityId != 0 && entityId != ulong.MaxValue)
+    {
+      return NativeInterop.avkSimulationContext_getParticleSystemAliveCount(
+        _simulationContext, sceneId, entityId);
+    }
+    return 0;
+  }
+
   public string GetSimulationTimeUtc(ulong sceneId)
   {
     if (_simulationContext != IntPtr.Zero)
@@ -3004,6 +3019,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
         {
           // Sync entities so UI updates immediately
           SyncEntities(sceneId);
+          // Also rebuild the full hierarchy so EmissionSphere gizmos and newly-restored
+          // child entities are properly reflected in the C# entity model after restore.
+          SyncSceneHierarchy(sceneId);
           if (_uiThreadDispatcher != null)
           {
             _uiThreadDispatcher.Dispatch(() =>

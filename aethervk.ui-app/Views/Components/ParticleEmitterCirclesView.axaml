@@ -36,9 +36,18 @@
                                             <SolidColorBrush Color="{Binding ColorArgbUint, Converter={StaticResource UintToColor}}"/>
                                         </Border.Background>
                                     </Border>
-                                    <TextBlock Grid.Column="1" Text="Emission Jet"
-                                               FontWeight="SemiBold" FontSize="14"
-                                               VerticalAlignment="Center"/>
+                                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                                         <TextBlock Text="Emission Jet"
+                                                    FontWeight="SemiBold" FontSize="14"/>
+                                         <StackPanel Orientation="Horizontal" Spacing="4">
+                                             <TextBlock Text="●" FontSize="9"
+                                                        Foreground="{DynamicResource Text.Secondary}"
+                                                        VerticalAlignment="Center"/>
+                                             <TextBlock Text="{Binding AliveCountText}" FontSize="11"
+                                                        Foreground="{DynamicResource Text.Secondary}"
+                                                        ToolTip.Tip="Live GPU particle count"/>
+                                         </StackPanel>
+                                     </StackPanel>
                                     <Button Grid.Column="2" Content="✕"
                                             Classes="icon" Padding="8,4" FontSize="12"
                                             VerticalAlignment="Center" Background="Transparent"
@@ -77,7 +86,12 @@
                                     </StackPanel>
                                     <StackPanel Margin="0,0,16,12">
                                         <TextBlock Text="TTL (ticks)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding TTLDouble}" HasBounds="True" MinBound="1" Step="10" Width="120"/>
+                                        <controls:UnboundedSlider Value="{Binding TTLDouble}" HasBounds="True" MinBound="1" Step="10" Width="120"
+                                                                  ToolTip.Tip="{Binding TtlHintText}"/>
+                                        <TextBlock Text="{Binding TtlHintText}" FontSize="10"
+                                                   Foreground="{DynamicResource Text.Secondary}"
+                                                   Opacity="0.7" Margin="0,2,0,0" Width="120"
+                                                   TextWrapping="Wrap"/>
                                     </StackPanel>
                                     <StackPanel Margin="0,0,16,12">
                                         <TextBlock Text="Velocity (km/s)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
@@ -95,6 +109,11 @@
                                         <TextBlock Text="Spawn radius (km)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
                                         <controls:UnboundedSlider Value="{Binding SpawnRadiusKm}" HasBounds="True" MinBound="0.0" Step="0.1" Width="120"
                                                                   ToolTip.Tip="Scatter spawn positions over a disc of this radius. 0 = point source."/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,12">
+                                        <TextBlock Text="Particle size (km)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                        <controls:UnboundedSlider Value="{Binding RenderRadiusKmDouble}" HasBounds="True" MinBound="0.001" Step="0.005" Width="120"
+                                                                  ToolTip.Tip="Visual billboard half-size per particle. 0.01 km = 10 m."/>
                                     </StackPanel>
 
                                     <!-- Colour picker -->
