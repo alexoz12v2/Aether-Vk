@@ -12,6 +12,9 @@ public partial class SceneState : ObservableObject
 
   public ulong? CometEntityId { get; set; }
 
+  /// <summary>The LCA microframe entity that is the ECS parent of the comet. Must be removed together with CometEntityId.</summary>
+  public ulong? CometLcaFrameEntityId { get; set; }
+
   [ObservableProperty]
   private Entity? _selectedEntity;
 

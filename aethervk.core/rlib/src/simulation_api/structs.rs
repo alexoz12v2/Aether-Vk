@@ -890,19 +890,23 @@ impl TimeScale {
   /// truncation error) we cap the physics `dt` and iterate multiple
   /// sub-steps inside [`simulation_step`].
   ///
-  /// | Scale     | Per-tick dt (s) | Cap (s)  | Sub-steps |
-  /// |-----------|-----------------|----------|-----------|
-  /// | RealTime  | 0.016           | 1        | 1         |
-  /// | OneDay    | 1382            | 1382     | 1         |
-  /// | OneWeek   | 9676            | 3600     | ~3        |
-  /// | OneMonth  | 42091           | 3600     | ~12       |
+  /// | Scale     | Batched dt (s) | Cap (s) | Sub-steps |
+  /// |-----------|----------------|---------|---------- |
+  /// | RealTime  | 0.016          | 1       | 1         |
+  /// | OneDay    | ~8294          | 50      | ~166      |
+  /// | OneWeek   | ~50400         | 600     | ~84       |
+  /// | OneMonth  | ~218400        | 600     | ~364      |
   pub fn max_physics_sub_dt_seconds(self) -> f64 {
     match self {
-      TimeScale::Stopped => 1.0,
+      TimeScale::Stopped  => 1.0,
       TimeScale::RealTime => 1.0,
-      TimeScale::OneDay => 1500.0, // ~25 min, covers the ~1440s per-tick dt at 60 FPS
-      TimeScale::OneWeek => 3600.0, // 1 hour cap
-      TimeScale::OneMonth => 3600.0, // 1 hour cap
+      // 50 s cap: ~166 GPU sub-steps per batched dispatch at OneDay.
+      // Paired with per-sub-step velocity compensation in emit_particles_from_circles,
+      // this spreads particles from 0 km to ~204 km (for β=2) within a single
+      // dispatch, giving a gapless continuous tail stream.
+      TimeScale::OneDay   => 50.0,
+      TimeScale::OneWeek  => 600.0,  // 10-min cap → ~84 sub-steps
+      TimeScale::OneMonth => 600.0,  // 10-min cap → ~364 sub-steps
     }
   }
 }
@@ -1102,6 +1106,12 @@ pub struct SceneTimeState {
   /// 1.0 = running at full configured speed; <1.0 = slowed by GPU budget pressure.
   /// Smoothed with α=0.1 per step; initialized to 1.0.
   pub effective_sim_speed: f32,
+  /// Optional override for `TimeScale::max_physics_sub_dt_seconds()`.
+  /// When `Some(s)`, each GPU physics sub-step is at most `s` seconds regardless
+  /// of the active `TimeScale`.  `None` uses the `TimeScale` default.
+  /// Exposed so host applications (e.g. spawn_comet_debug) can ring-toggle
+  /// sub-step granularity at runtime without changing the time scale.
+  pub max_sub_dt_override: Option<f64>,
 }
 
 impl Default for SceneTimeState {
@@ -1123,6 +1133,7 @@ impl Default for SceneTimeState {
       manual_step_requests: 0.0,
       is_ticking: alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false)),
       effective_sim_speed: 1.0,
+      max_sub_dt_override: None,
     }
   }
 }
@@ -1784,9 +1795,14 @@ mod tests_time_scale {
   }
 
   #[test]
-  fn sub_step_count_one_day_is_one() {
-    // OneDay at 60 FPS: total_dt ≈ 1382s, cap = 1400s → 1 sub-step
-    assert_eq!(sub_step_count(TimeScale::OneDay, 16_667), 1);
+  fn sub_step_count_one_day_is_fourteen() {
+    // OneDay at 60 FPS: total_dt ≈ 1382s, cap = 100s → ~14 sub-steps
+    let n = sub_step_count(TimeScale::OneDay, 16_667);
+    assert!(
+      n >= 12 && n <= 16,
+      "Expected ~14 sub-steps for OneDay at 60 FPS, got {}",
+      n
+    );
   }
 
   #[test]

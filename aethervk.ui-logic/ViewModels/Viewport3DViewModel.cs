@@ -190,7 +190,10 @@ public partial class Viewport3DViewModel
   public bool IsSnapObserverHovered => HoveredRadialItem == "snapobserver";
 
   /// <summary>Dynamic label for the comet radial menu item: "Spawn Comet" or "Destroy Comet".</summary>
-  public string CometRadialLabel => HasComet ? "Destroy Comet" : "Spawn Comet";
+  public string CometRadialLabel => HasComet ? "Destroy\nComet" : "Spawn\nComet";
+
+  /// <summary>Context-sensitive tooltip for the comet radial menu item.</summary>
+  public string CometRadialTooltip => HasComet ? "Remove comet from scene" : "Spawn a comet in the scene";
 
   private const double RadialRadius = 100.0;
   private const double ItemSize = 80.0;
@@ -227,6 +230,8 @@ public partial class Viewport3DViewModel
     if (newValue)
     {
       OnPropertyChanged(nameof(HasComet));
+      OnPropertyChanged(nameof(CometRadialLabel));
+      OnPropertyChanged(nameof(CometRadialTooltip));
       CloseRadialMenuAndSpawnCometCommand.NotifyCanExecuteChanged();
     }
   }
@@ -374,8 +379,8 @@ public partial class Viewport3DViewModel
   private bool CanSpawnComet() => !HasComet;
 
   /// <summary>
-  /// Destroys the currently spawned comet entity and its children.
-  /// Clears the CometEntityId from scene state.
+  /// Destroys the currently spawned comet entity and its LCA microframe parent.
+  /// Clears both CometEntityId and CometLcaFrameEntityId from scene state.
   /// </summary>
   private void DestroyCometInternal()
   {
@@ -385,11 +390,18 @@ public partial class Viewport3DViewModel
 
     var cometId = state.CometEntityId.Value;
     RuntimeService.RemoveEntity(SceneId, cometId);
-    state.CometEntityId = null;
+
+    // Remove the LCA microframe parent that was spawned alongside the comet.
+    // Without this the LCA entity is permanently orphaned in the Rust ECS.
+    if (state.CometLcaFrameEntityId.HasValue)
+      RuntimeService.RemoveEntity(SceneId, state.CometLcaFrameEntityId.Value);
+
+    _sceneStateManager.ClearComet(SceneId);
 
     // Notify property changes for radial menu
     OnPropertyChanged(nameof(HasComet));
     OnPropertyChanged(nameof(CometRadialLabel));
+    OnPropertyChanged(nameof(CometRadialTooltip));
 
     CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
       new AetherVk.Logic.Messages.CometDestroyedMessage { SceneId = SceneId }

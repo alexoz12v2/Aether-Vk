@@ -1,0 +1,130 @@
+// @assets/sim/apply_emitters_direct.comp
+//
+// Direct External-Gravity Pass  (BVH-free, for test-particle systems)
+// ─────────────────────────────────────────────────────────────────────────
+// Dispatch pattern: one thread per particle.
+// Use this shader in place of the (apply_emitters_to_particles Phase A +
+// accumulate_bvh_forces_to_particles Phase B) pair when:
+//   - The system has disable_self_gravity = true
+//   - No inter-particle forces are needed (comet dust, tracers, etc.)
+//
+// What this shader does
+// ─────────────────────
+//   For every active particle, read its position from AOSOA slots 0-2,
+//   compute the gravitational acceleration from each ForceEmitter (type_id == 0),
+//   and atomically add the result directly into AOSOA force slots 7-9.
+//   No BVH is built or traversed.
+//
+// Force-persistence contract
+// ──────────────────────────
+//   p1_p2                 : reads slots 7-9 as F(x_n), then zeroes them
+//   apply_emitters_direct : adds external gravity into AOSOA slots 7-9
+//   p4_p5                 : reads slots 7-9 as F(x_{n+1}), does NOT zero them
+//   write_back_to_scene   : persists slots 7-9 as ParticleData.force
+//   next-tick build_packs  : repacks ParticleData.force → slots 7-9 as new F(x_n)
+//
+// Unit contract
+//   Particle pos : km  (micro-frame local)
+//   Emitter pos  : AU  world-space  (converted inside per emitter loop)
+//   Force output : km/s²  (per-particle acceleration × mass → force in slots 7-9)
+#version 450 core
+#extension GL_EXT_buffer_reference2         : require
+#extension GL_EXT_buffer_reference_uvec2    : require
+#extension GL_KHR_shader_subgroup_basic     : require
+#extension GL_GOOGLE_include_directive      : require
+
+#include "imex_math.glsl"
+
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer ParticleFrameIds {
+    uint frame_ids[];
+};
+
+layout(push_constant, std430) uniform PushConstants {
+    ParticleData           particles;
+    EmitterArray           emitters;
+    GpuReferenceFrameArray frames;
+    ParticleFrameIds       particle_frame_ids;
+    uint num_emitters;
+    uint total_particles;
+} pc;
+
+// Workgroup-shared emitter cache so all threads in the WG read the same emitter values.
+shared vec3  s_em_pos;
+shared float s_em_mu;
+shared float s_em_beta;
+shared uint  s_em_type;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.total_particles || pc.num_emitters == 0u) return;
+
+    // ── Read particle data from AOSOA ─────────────────────────────────────
+    uint base = P_BASE(gid);
+    float mass = P_READ(pc.particles, base + 6u * SUBGROUP_SIZE);
+    if (mass == 0.0) return; // padding / inactive particle
+
+    vec3 pos = vec3(
+        P_READ(pc.particles, base + 0u * SUBGROUP_SIZE),
+        P_READ(pc.particles, base + 1u * SUBGROUP_SIZE),
+        P_READ(pc.particles, base + 2u * SUBGROUP_SIZE)
+    );
+    float particle_beta = P_READ(pc.particles, base + 10u * SUBGROUP_SIZE);
+
+    // Reference frame for this particle
+    uint fi = pc.particle_frame_ids.frame_ids[gid];
+    GpuReferenceFrame frame = pc.frames.frames[fi];
+
+    // ── Accumulate external-gravity force from all emitters ───────────────
+    vec3 f_acc = vec3(0.0); // km/s²
+
+    for (uint e = 0u; e < pc.num_emitters; ++e) {
+        // Broadcast emitter data through shared memory
+        if (gl_LocalInvocationID.x == 0u) {
+            s_em_type = pc.emitters.emitters[e].type_id;
+            s_em_pos  = pc.emitters.emitters[e].position;   // AU world-space
+            s_em_mu   = pc.emitters.emitters[e].mu;         // km³/s²
+            s_em_beta = pc.emitters.emitters[e].beta;
+        }
+        barrier();
+
+        if (s_em_type != 0u) { barrier(); continue; } // Only gravity emitters
+
+        vec3 r_local;
+        if (frame.frame_type == 0u) {
+            // Macro frame: pos is in AU; emitter is also in AU
+            r_local = (s_em_pos - pos) * AU_TO_KM;
+        } else {
+            // Micro frame: pos is in km local;
+            // emitter_local_km = (emitter_AU - frame_center_AU) / scale
+            r_local = (s_em_pos - frame.center_pos) / frame.scale - pos;
+        }
+
+        float dist_sq = dot(r_local, r_local);
+        if (dist_sq > 1e-6) {
+            float dist  = sqrt(dist_sq);
+            float dist3 = dist_sq * dist;
+            float dist5 = dist3 * dist_sq;
+            float soft  = 1.0 - exp(-dist5);
+            // beta_particle > 1 → radiation dominates → net repulsion
+            float mu_eff = s_em_mu * (1.0 - s_em_beta) * (1.0 - particle_beta);
+
+            // Gravitational acceleration at particle position [km/s²]
+            f_acc += (r_local / dist) * (mu_eff * soft) / dist_sq;
+        }
+        barrier();
+    }
+
+    // ── Atomic-add force directly into AOSOA slots 7-9 ───────────────────
+    // F = acc × mass, matching the convention of accumulate_bvh_forces_to_particles.
+    if (f_acc.x != 0.0 || f_acc.y != 0.0 || f_acc.z != 0.0) {
+        vec3 force = f_acc * mass;
+        ATOMIC_ADD_FLOAT(pc.particles.data[base + 7u * SUBGROUP_SIZE], force.x);
+        ATOMIC_ADD_FLOAT(pc.particles.data[base + 8u * SUBGROUP_SIZE], force.y);
+        ATOMIC_ADD_FLOAT(pc.particles.data[base + 9u * SUBGROUP_SIZE], force.z);
+    }
+}

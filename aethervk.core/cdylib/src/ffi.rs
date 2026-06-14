@@ -1602,23 +1602,40 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
         let origin = dir * start_dist;
         let ray_dir = dir * -1.0;
 
-        let (pt, norm) = if let Some(ref bvh) = mesh_arc.bvh {
-          match bvh.raycast(origin, ray_dir, &mesh_arc.vertices, &mesh_arc.indices) {
-            Some((_t, hit_pt, hit_normal)) => (
-              [hit_pt.x(), hit_pt.y(), hit_pt.z()],
-              [hit_normal.x(), hit_normal.y(), hit_normal.z()],
-            ),
-            None => {
-              // Fallback to bounding sphere
-              let hit_pt = dir * r;
-              (
+        // ── Jet surface placement ───────────────────────────────────────────
+        // USE_BVH_RAYCAST = false  → place on bounding sphere (fast, deterministic)
+        // USE_BVH_RAYCAST = true   → exact BVH mesh raycast
+        const USE_BVH_RAYCAST: bool = false;
+
+        let (pt, norm) = if USE_BVH_RAYCAST {
+          // ── BVH raycast path ────────────────────────────────────────────────
+          if let Some(ref bvh) = mesh_arc.bvh {
+            match bvh.raycast(origin, ray_dir, &mesh_arc.vertices, &mesh_arc.indices) {
+              Some((_t, hit_pt, hit_normal)) => (
                 [hit_pt.x(), hit_pt.y(), hit_pt.z()],
-                [dir.x(), dir.y(), dir.z()],
-              )
+                [hit_normal.x(), hit_normal.y(), hit_normal.z()],
+              ),
+              None => {
+                // Fallback to bounding sphere on BVH miss
+                let hit_pt = dir * r;
+                (
+                  [hit_pt.x(), hit_pt.y(), hit_pt.z()],
+                  [dir.x(), dir.y(), dir.z()],
+                )
+              }
             }
+          } else {
+            // No BVH — fallback to bounding sphere
+            let hit_pt = dir * r;
+            (
+              [hit_pt.x(), hit_pt.y(), hit_pt.z()],
+              [dir.x(), dir.y(), dir.z()],
+            )
           }
         } else {
-          // No BVH available — fallback to bounding sphere
+          // ── Bounding-sphere surface path (default) ──────────────────────────
+          // `dir` is already in object space (rotated by comet_rotation.inverse()).
+          // Point on sphere = dir × r; outward normal = dir (unit vector).
           let hit_pt = dir * r;
           (
             [hit_pt.x(), hit_pt.y(), hit_pt.z()],
@@ -1675,6 +1692,29 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
     let _ = scene_ctx.scene.add_component(
       new_id,
       aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(max_p as usize),
+    );
+
+    // Sync circle properties (beta, color, ttl) to the newly-created
+    // ParticleSystemComponent so radiation pressure works from tick 1.
+    // Without this, PSC::new() defaults beta=0 and particles feel full gravity.
+    let circle_beta = {
+      let mut b = 0.0f32;
+      let _ = scene_ctx.scene.with_component(
+        internal_id,
+        |ec: &aethervk_core_rlib::scene::ParticleEmitterCirclesComponent| {
+          if let Some(c) = ec.circles.get(i) {
+            b = c.beta;
+          }
+        },
+      );
+      b
+    };
+    let _ = scene_ctx.scene.with_component_mut(
+      new_id,
+      |psc: &mut aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
+        psc.beta = circle_beta;
+        psc.color = color;
+      },
     );
 
     // Register the entity so it gets an external ID for C# to reference

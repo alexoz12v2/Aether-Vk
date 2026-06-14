@@ -254,7 +254,7 @@ namespace AetherVk.Services
         spawnPz = result.PosZ;
 
       // ── SpawnComet ───────────────────────────────────────────────────────────
-      var (_, id) = _runtimeService.SpawnComet(
+      var (lcaId, id) = _runtimeService.SpawnComet(
         sceneId: 1,
         modelId: result.Model.Id,
         name: result.EntityName,
@@ -283,7 +283,7 @@ namespace AetherVk.Services
 
       if (cometId > 0)
       {
-        _sceneStateManager.SetComet(1, cometId);
+        _sceneStateManager.SetComet(1, cometId, lcaId);
       }
       else
       {

@@ -30,7 +30,7 @@ use ash::vk;
 // Disabled by default: Enabling PRINTF shaders under Lavapipe (ARM64) dramatically increases
 // register pressure in the llvmpipe JIT compiler. This leads to register spilling bugs that
 // overwrite the stack-saved link register (x30), causing a SIGSEGV upon kernel return.
-#[cfg(all(any(debug_assertions, test), not(target_vendor = "apple")))]
+#[cfg(all(any(debug_assertions, test, feature = "shader_debug_sync"), not(target_vendor = "apple")))]
 pub static USE_PRINTF_SHADERS: core::sync::atomic::AtomicBool =
   core::sync::atomic::AtomicBool::new(false);
 
@@ -1284,6 +1284,7 @@ impl VulkanComputeKernels {
 
     let (buffer, mut alloc, info) =
       unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }?;
+    #[cfg(debug_assertions)]
     aethervk_oshal_rlib::log!("physics alloc: {:?}", alloc.get_raw());
     #[cfg(test)]
     {
@@ -1429,6 +1430,7 @@ impl VulkanComputeKernels {
 
     let (buffer, mut alloc, info) =
       unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }?;
+    #[cfg(debug_assertions)]
     aethervk_oshal_rlib::log!("physics alloc: {:?}", alloc.get_raw());
     #[cfg(test)]
     {
@@ -1869,10 +1871,23 @@ impl VulkanComputeKernels {
     let mut systems: alloc::vec::Vec<(EntityId, u32, alloc::vec::Vec<alloc::vec::Vec<f32>>, alloc::vec::Vec<gpu::ParticleMetadata>, bool)> = alloc::vec::Vec::new();
     scene0.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>(
       |entity, _transform, sys| {
-        let dense_frame_idx = scene0
-          .get_parent(entity)
-          .and_then(|pid| frame_map.get(&pid).copied())
-          .unwrap_or(0u32);
+        // Walk the full ancestor chain to find the nearest entity that has a
+        // ReferenceFrameComponent. Stopping at only the immediate parent misses
+        // hierarchies like: PSC entity → comet_int (no frame) → lca_id (micro frame).
+        // When the PSC entity falls back to dense_frame_idx=0 (macro origin at [0,0,0]),
+        // r_local in apply_emitters_direct becomes ≈ −pos_km ≈ 0 → zero radiation force.
+        let dense_frame_idx = {
+          let mut found = None;
+          let mut cur = scene0.get_parent(entity);
+          while let Some(anc) = cur {
+            if let Some(&idx) = frame_map.get(&anc) {
+              found = Some(idx);
+              break;
+            }
+            cur = scene0.get_parent(anc);
+          }
+          found.unwrap_or(0u32)
+        };
 
         let particles_guard = sys.particles.read();
         let mut flat: alloc::vec::Vec<alloc::vec::Vec<f32>> = alloc::vec::Vec::new();
@@ -5321,6 +5336,7 @@ impl Kernels for Device {
         crate::apply_test_dedicated_alloc!(alloc_info);
         let (buffer, mut alloc, info) =
           unsafe { allocator.create_buffer_get_info(&buf_info, &alloc_info) }?;
+        #[cfg(debug_assertions)]
         aethervk_oshal_rlib::log!("physics alloc: {:?}", alloc.get_raw());
         #[cfg(test)]
         {

@@ -182,17 +182,15 @@
                      Canvas.Left="{Binding RadialHubLeft}"
                      Canvas.Top="{Binding RadialHubTop}"/>
 
-            <!-- Radial item: Spawn Comet — top -->
+            <!-- Radial item: Spawn / Destroy Comet — top -->
             <Border Classes="radial-item"
                     Classes.hovered="{Binding IsCometHovered}"
                     Canvas.Left="{Binding RadialCometLeft}"
                     Canvas.Top="{Binding RadialCometTop}"
-                    IsEnabled="{Binding !HasComet}"
-                    ToolTip.ShowOnDisabled="True"
-                    ToolTip.Tip="Only 1 comet is allowed in the scene">
+                    ToolTip.Tip="{Binding CometRadialTooltip}">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
                     <TextBlock Classes="icon" Text="☄"/>
-                    <TextBlock Classes="label" Text="Spawn&#x0a;Comet"/>
+                    <TextBlock Classes="label" Text="{Binding CometRadialLabel}"/>
                 </StackPanel>
             </Border>
 
