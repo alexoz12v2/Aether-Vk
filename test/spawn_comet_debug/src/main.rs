@@ -80,7 +80,7 @@ impl SimulationDelegate for SpawnCometDelegate {
       "comet",
       Vec3f32::from_components(1.0, 0.0, 0.0), // 1.0 AU along +x (realistic heliocentric distance)
       Quat::identity(),
-      20.0,            // radius_km = 20 km (user-visible comet body)
+      2000.0,            // radius_km = 20 km (user-visible comet body)
       1000.0,          // mass_kg
       0,               // physics_type = static
       0,               // comet id (ignored when static)
@@ -241,17 +241,6 @@ impl SimulationDelegate for SpawnCometDelegate {
       // high particle counts and avoids the GPU TDR watchdog hang.
       psc.disable_self_gravity = true;
       let _ = scene_ctx.scene.add_component(child_id, psc);
-
-      // SphereGizmoComponent for visual debugging
-      let _ = scene_ctx.scene.add_component(
-        child_id,
-        aethervk_core_rlib::scene::SphereGizmoComponent {
-          radius: sphere_radius_km,
-          subdivisions: 3.0,
-          local_frame: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::identity(),
-          is_visible: true,
-        },
-      );
 
       let emitter = aethervk_core_rlib::scene::particles::ParticleEmitterCirclesComponent {
         circles: vec![aethervk_core_rlib::scene::particles::EmissionCircle {
@@ -535,9 +524,12 @@ impl SimulationDelegate for SpawnCometDelegate {
       // sub-step. 166 sub-steps per dispatch × 25 = 4150 particles, spread 0–204 km
       // by the per-sub-step velocity compensation. render_radius=10 km means all
       // 25-particle bundles overlap → uniform density stream with no visible gaps.
-      // force_debug: slow emission (10 p/s) so individual particle paths are visible.
-      // Normal mode: 5000 p/s fills the tail quickly.
-      let on_rate: f32 = if cfg!(feature = "force_debug") { 10.0 } else { 5000.0 };
+      // 2.0 p/s gives ~200k alive particles (10× original 0.5 p/s):
+      // 8 emit sub-steps × 2.0 × 1440 sim-s/step = 23k per dispatch;
+      // TTL=1000 GPU sub-steps ≈ 8.3 dispatches lifetime → ~192k alive.
+      // CPU aging: 8 × 192k × 5ns ≈ 8ms per dispatch → smooth 60fps.
+      // force_debug: 10 p/s for denser debug view (TTL=∞ so no steady-state).
+      let on_rate: f32 = if cfg!(feature = "force_debug") { 10.0 } else { 2.0 };
       let new_rate: f32 = if self.jet_emitting { on_rate } else { 0.0 };
       let scene = ctx.get_scene(scene_id).unwrap();
       let scene_read = scene.read();

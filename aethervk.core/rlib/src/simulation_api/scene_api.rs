@@ -825,7 +825,11 @@ impl SimulationContext {
     scene_ctx.scene.add_component(
       comet_id,
       SphereGizmoComponent {
-        radius: radius_km,
+        // radius is in LOCAL (native mesh vertex) units.  The entity's
+        // TransformComponent.scale = mesh_scale = radius_km / bounding_sphere
+        // is baked into the model matrix by the gizmo renderer, so the rendered
+        // sphere radius = bounding_sphere × mesh_scale = radius_km. ✓
+        radius: bounding_sphere,
         subdivisions: 4.0,
         local_frame: Mat4x4f32::identity(),
         is_visible: true,
