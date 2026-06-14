@@ -2777,8 +2777,15 @@ fn dispatch_physics_step(
       (step_days * 86400.0 * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
     // Number of GPU sub-steps the physics tasklet will run (same divisor it uses).
     let gpu_sub_steps = ((total_sim_dt_us + max_sub_dt_us - 1) / max_sub_dt_us).max(1) as u32;
-    // Simulation µs per emission sub-step ≈ max_sub_dt_us (last step may be shorter).
-    let sub_sim_dt_us = (total_sim_dt_us / gpu_sub_steps as i64).max(1);
+    // Cap emission sub-steps to bound CPU aging cost.
+    // The GPU still runs `gpu_sub_steps` for physics accuracy.
+    // We spread emission over `n_emit_steps` evenly-spaced positions instead,
+    // which is enough for a visually smooth tail while keeping O(n_emit × alive) aging.
+    // With MAX_EMIT_STEPS=8 and ~200k alive particles: 8×200k×5ns ≈ 8ms per dispatch.
+    const MAX_EMIT_STEPS: u32 = 8;
+    let n_emit_steps = gpu_sub_steps.min(MAX_EMIT_STEPS);
+    // Emission sub-step covers the full dispatch time divided by the capped step count.
+    let emit_sub_dt_us = (total_sim_dt_us / n_emit_steps as i64).max(1);
     // One-shot diagnostic: prints emission parameters on the very first dispatch.
     {
       use core::sync::atomic::{AtomicBool, Ordering};
@@ -2786,23 +2793,24 @@ fn dispatch_physics_step(
       if !EMIT_DIAG_DONE.swap(true, Ordering::Relaxed) {
         aethervk_oshal_rlib::log!(
           "[EMIT-DIAG] step_days={:.6}  total_sim_dt_s={:.2}  max_sub_dt_s={:.2}  \
-           gpu_sub_steps={}  sub_sim_dt_s={:.2}  \
-           expected_particles_per_substep(rate=0.5)={:.1}  total_per_dispatch={:.0}",
+           gpu_sub_steps={}  n_emit_steps={}  emit_sub_dt_s={:.2}  \
+           expected_particles_per_emit_sub(rate=2.0)={:.1}  total_per_dispatch={:.0}",
           step_days,
           total_sim_dt_us as f64 / 1_000_000.0,
           max_sub_dt_us as f64 / 1_000_000.0,
           gpu_sub_steps,
-          sub_sim_dt_us as f64 / 1_000_000.0,
-          0.5_f64 * (sub_sim_dt_us as f64 / 1_000_000.0),
-          0.5_f64 * (sub_sim_dt_us as f64 / 1_000_000.0) * gpu_sub_steps as f64,
+          n_emit_steps,
+          emit_sub_dt_us as f64 / 1_000_000.0,
+          2.0_f64 * (emit_sub_dt_us as f64 / 1_000_000.0),
+          2.0_f64 * (emit_sub_dt_us as f64 / 1_000_000.0) * n_emit_steps as f64,
         );
       }
     }
-    for sub in 0..gpu_sub_steps {
+    for sub in 0..n_emit_steps {
       let sub_tick_seed = current_epoch.to_tai_seconds().to_bits()
         ^ (fixed_dt_us as u64)
         ^ (sub as u64).wrapping_mul(0x9e3779b97f4a7c15);
-      emit_particles_from_circles(scene_arc.as_ref(), sub_tick_seed, sub_sim_dt_us, sub, gpu_sub_steps);
+      emit_particles_from_circles(scene_arc.as_ref(), sub_tick_seed, emit_sub_dt_us, sub, n_emit_steps);
     }
   }
 
