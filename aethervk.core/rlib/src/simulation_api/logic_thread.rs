@@ -251,17 +251,19 @@ pub fn start_logic_thread(
 
             if send_res.is_ok() {
               for (task_id, is_windowless, pe_handle) in last_tasks {
-                let task_id_val = loop {
-                  let value = task_id.load(core::sync::atomic::Ordering::Relaxed);
-                  if value != 0 {
-                    let _ = task_id.load(core::sync::atomic::Ordering::Acquire);
-                    break value;
-                  }
-                  if alloc::sync::Arc::strong_count(&task_id) == 1 {
-                    break u64::MAX;
-                  }
-                  oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
-                };
+                // Fire-and-forget: do NOT spin-wait for the render tasklet to call
+                // create_task() and write back the task_id.  The old spin (with 1ms
+                // sleeps) blocked the logic thread for the full render frame duration
+                // (~50 ms at 20 FPS), which was the primary throughput cap.
+                //
+                // • Windowed PEs: new_tasks is no longer used to gate can_tick (see
+                //   comment below), so task_id_val is never needed here.
+                // • Windowless PEs: the WindowlessCallbackWorkload already polls
+                //   task_id asynchronously on the thread pool — no sync wait needed.
+                //
+                // Use u64::MAX as a sentinel for "task_id not yet known"; the
+                // windowless callback workload handles the 0→real transition itself.
+                let task_id_val = u64::MAX;
 
                 // For a successful frame, track the task so can_tick can check its status.
                 // For an error frame (u64::MAX), skip tracking — it would always show Invalid
@@ -371,6 +373,26 @@ pub fn start_logic_thread(
       let should_return = core_logic();
 
       if should_return {
+        // ── Shutdown: drain all in-flight GPU physics tasks before exiting ──────────
+        // The logic thread is about to exit.  After handle.join() returns, the
+        // SimulationThreads Drop impl drops the render thread, which destroys the
+        // Vulkan Device.  If a GPU physics tasklet is still in flight it calls
+        // write_back_to_scene on the now-dead device → SIGSEGV (exit code 139).
+        //
+        // Fix: wait here for every scene's active_physics_task to complete.
+        // The Device is still alive at this point (render thread hasn't been touched
+        // yet), so the Vulkan wait_sync inside the tasklet completes normally.
+        {
+          let scenes_guard = context.scenes.read();
+          for (_, scene_ctx_lock) in scenes_guard.iter() {
+            let task = scene_ctx_lock.read().active_physics_task.lock().take();
+            if let Some(task) = task {
+              aethervk_oshal_rlib::log!("[shutdown] waiting for in-flight GPU physics task...");
+              let _ = task.wait();
+              aethervk_oshal_rlib::log!("[shutdown] GPU physics task drained.");
+            }
+          }
+        }
         return;
       }
     }
@@ -1215,7 +1237,32 @@ fn process_command_internal(
         }
       }
 
-      // 2. Recompute body positions from ephemeris at the new epoch (acquires its own scene lock)
+      // 2. Clear all particle systems so no ghost particles survive the timeline scrub.
+      //    We zero every particle's `active` flag and reset the ring-buffer cursors and
+      //    the fractional emit carry-over so fresh emission starts cleanly from the new epoch.
+      {
+        use crate::scene::particles::ParticleSystemComponent;
+        let scenes = ctx.scenes.read();
+        if let Some(scene_ctx) = scenes.get(&scene_id) {
+          let scene_read = scene_ctx.read();
+          scene_read.scene.query1_res_mut(|_id, psc: &mut ParticleSystemComponent| {
+            let mut particles = psc.particles.write();
+            for p in particles.iter_mut() {
+              p.active = 0;
+              p.force = [0.0, 0.0, 0.0];
+            }
+            drop(particles);
+            psc.head_index = 0;
+            psc.tail_index = 0;
+            psc.emit_remainder = 0.0;
+            psc.gpu_alive_count = 0;
+            psc.bvh = None;
+            Some(())
+          });
+        }
+      }
+
+      // 3. Recompute body positions from ephemeris at the new epoch (acquires its own scene lock)
       let _ = dispatch_physics_step(scene_id, ctx, 0.0, new_epoch, fixed_dt_us, fixed_dt_us);
       Ok(SimulationTaskResult::None)
     }
@@ -1524,10 +1571,30 @@ fn execute_simulation_tick(
     *static_tlas.write() = new_tlas;
   }
 
-  // Wait for previous physics task to complete before mutating anything!
+  // Collect the previous physics task result without blocking.
+  // The outer scheduling loop (start_logic_thread) gates entry into
+  // execute_simulation_tick on `is_done()` returning true, so the task is
+  // guaranteed to be finished before we arrive here.  We use try_wait(0) to
+  // retrieve the result non-blockingly; if for any reason it is not done yet
+  // (should be impossible) we log a warning and drop the task rather than
+  // stalling the render thread.
   if let Some(task) = active_physics_task.lock().take() {
-    if let Err(e) = task.wait() {
-      aethervk_oshal_rlib::log!("Physics tasklet failed: {:?}", e);
+    match task.try_wait(0) {
+      Ok(result) => {
+        if let Err(e) = result {
+          aethervk_oshal_rlib::log!("Physics tasklet failed: {:?}", e);
+        }
+      }
+      Err(_still_running) => {
+        // Should never happen: the outer loop already confirmed is_done().
+        aethervk_oshal_rlib::log!(
+          "[execute_simulation_tick] physics task not done when expected — dropping to avoid blocking"
+        );
+        // _still_running is dropped here, which does NOT cancel the GPU work;
+        // the Arc<TaskletState> kept alive inside the thread pool workload will
+        // complete naturally.  The sync info is written directly into
+        // latest_physics_sync by the tasklet closure, so no data is lost.
+      }
     }
   }
 
@@ -1562,7 +1629,10 @@ fn execute_simulation_tick(
     let ti = ts.time_info.read();
     let pending = ti.pending_fixed_steps();
     let fixed_dt_us = ti.fixed_delta_time.load(core::sync::atomic::Ordering::Relaxed);
-    let max_sub_dt_us = (ts.current_scale.max_physics_sub_dt_seconds() * 1_000_000.0)
+    let effective_max_sub_dt_s = ts
+      .max_sub_dt_override
+      .unwrap_or_else(|| ts.current_scale.max_physics_sub_dt_seconds());
+    let max_sub_dt_us = (effective_max_sub_dt_s * 1_000_000.0)
       as aethervk_oshal_rlib::os::time::timeus_t;
     let scale_days_per_sec = ts.current_scale.to_days_per_st_second();
     let fixed_sim_seconds  = fixed_dt_us as f64 / 1_000_000.0;
@@ -2047,6 +2117,13 @@ fn emit_particles_from_circles(
   scene: &crate::scene::Scene,
   tick_seed: u64,
   dt_us: aethervk_oshal_rlib::os::time::timeus_t,
+  // Which GPU sub-step index this emission call is for (0 = first).
+  // Used to compute a velocity compensation so particles end up at the
+  // radiation-pressure position matching their emission order.
+  sub_step_idx: u32,
+  // Total GPU sub-steps per dispatch. Paired with sub_step_idx to compute
+  // the spread from 0 km (sub-step N-1) to x_max km (sub-step 0).
+  n_sub_steps: u32,
 ) {
   use crate::scene::{
     TransformComponent,
@@ -2059,6 +2136,10 @@ fn emit_particles_from_circles(
     child_entity: crate::scene::EntityId,
     world_position: [f32; 3],
     world_velocity_direction: [f32; 3],
+    /// Unit vector pointing AWAY from the sun at the emission point (anti-sunward).
+    /// Used as the direction for radiation-pressure velocity compensation so that
+    /// the compensation opposes the actual GPU force direction, not the surface normal.
+    anti_sunward_dir: [f32; 3],
     parent_velocity: [f32; 3],
     mass: f32,
     mean_velocity: f32,
@@ -2168,27 +2249,80 @@ fn emit_particles_from_circles(
         // Micro-frame local km: comet center (km) + surface offset (km) + 1 m nudge
         let emit_km = parent_pos_km + rotated_surface_km + world_n_km * 1e-3;
 
-        // Occlusion check in macro-frame AU
+        // Occlusion check — all vectors in MICRO-FRAME LOCAL KM.
+        //
+        // Bug (pre-fix): used `emit_au - occ_t.position` which mixes AU and km,
+        // placing the BVH ray origin ~0.05 mesh-units inside the sphere for BOTH
+        // sunlit and dark faces, making every circle look occluded (or none if
+        // BVH is absent).
+        //
+        // Fix: derive sun position in local km, then compute:
+        //   local_origin = inv_rot × (emit_km - comet_center_km) / scale_km
+        //   local_dir    = inv_rot × to_sun_km.normalize()
+        // hit_t is in mesh-units; convert to km for the dist_to_sun comparison.
         let emit_au = frame_center_au + emit_km * frame_scale_au_per_km;
         let mut occluded = false;
-        if let Some(sun_p) = sun_pos {
-          let to_sun = sun_p - emit_au;
-          let dist_to_sun = to_sun.length();
-          if dist_to_sun > 1e-4 {
-            let ray_dir = to_sun * (1.0 / dist_to_sun);
+        if let Some(sun_p_au) = sun_pos {
+          // Sun in local km (same frame as emit_km and occ_t.position)
+          let sun_km = if frame_scale_au_per_km > 1e-30 {
+            (sun_p_au - frame_center_au) * (1.0 / frame_scale_au_per_km)
+          } else {
+            // Fallback: treat sun as 1 AU = 149597870.7 km in -x direction
+            aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+              -149_597_870.7_f32, 0.0, 0.0,
+            )
+          };
+          let to_sun_km = sun_km - emit_km;
+          let dist_to_sun_km = to_sun_km.length();
+
+          // Dot product of emission normal with sun direction:
+          //   < 0 → surface faces sun (sunlit side, should NOT be occluded)
+          //   > 0 → surface faces away from sun (dark side, should be occluded)
+          let sun_dir_km = if dist_to_sun_km > 1e-4 { to_sun_km * (1.0 / dist_to_sun_km) } else { to_sun_km };
+          let nz_dot_sun = world_n_km.dot(sun_dir_km);
+
+          if dist_to_sun_km > 1e-4 {
             for (occ_t, occ_comet) in &occluders {
               if let Some(bvh) = &occ_comet.bvh {
                 let inv_rot = occ_t.rotation.inverse();
+                // Both emit_km and occ_t.position are in local km — correct frame.
                 let local_origin =
-                  inv_rot.rotate_vector(emit_au - occ_t.position) * (1.0 / occ_t.scale.x());
-                let local_dir = inv_rot.rotate_vector(ray_dir);
+                  inv_rot.rotate_vector(emit_km - occ_t.position) * (1.0 / occ_t.scale.x());
+                let local_dir = inv_rot.rotate_vector(sun_dir_km);
                 if let Some((hit_t, _, _)) = bvh.raycast(
                   local_origin, local_dir, &occ_comet.vertices, &occ_comet.indices,
-                ) && hit_t > 0.0 && hit_t * occ_t.scale.x() < dist_to_sun {
+                ) && hit_t > 1e-4   // ignore self-hit at emission surface
+                  && hit_t * occ_t.scale.x() < dist_to_sun_km
+                {
                   occluded = true;
                   break;
                 }
               }
+            }
+          }
+
+          // ── Emission-side diagnostic (very low-frequency, avoids stutter) ───
+          {
+            static EMIT_SIDE_COUNTER: core::sync::atomic::AtomicU64
+              = core::sync::atomic::AtomicU64::new(0);
+            let count = EMIT_SIDE_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            // 1701 calls/s × 50_000 = prints once every ~29 s — diagnostic but no stutter.
+            if count % 50_000 == 0 {
+              let bvh_present = !occluders.is_empty() && occluders.iter().any(|(_, m)| m.bvh.is_some());
+              // Use the oshal log macro (available in no_std; eprintln! is not)
+              aethervk_oshal_rlib::log!(
+                "[EMIT-SIDE] circle child={:?} \
+                 surface_n=({:+.3},{:+.3},{:+.3}) \
+                 anti_sun=({:+.3},{:+.3},{:+.3}) \
+                 occluded={} bvh_present={} \
+                 emit_km=({:+.1},{:+.1},{:+.1})",
+                child_id,
+                world_n_km.x(), world_n_km.y(), world_n_km.z(),
+                -sun_dir_km.x(), -sun_dir_km.y(), -sun_dir_km.z(),
+                occluded,
+                bvh_present,
+                emit_km.x(), emit_km.y(), emit_km.z(),
+              );
             }
           }
         }
@@ -2208,6 +2342,31 @@ fn emit_particles_from_circles(
           // MICRO-FRAME LOCAL KM — what build_particles uploads and GPU shaders expect
           world_position: [emit_km.x(), emit_km.y(), emit_km.z()],
           world_velocity_direction: [world_n_km.x(), world_n_km.y(), world_n_km.z()],
+          // Anti-sunward direction: opposite of the emit→sun unit vector.
+          // This is the direction the radiation-pressure force acts, and the direction
+          // the velocity compensation must oppose to correctly spread particles.
+          anti_sunward_dir: {
+            if let Some(sun_p_au) = sun_pos {
+              let sun_km = if frame_scale_au_per_km > 1e-30 {
+                (sun_p_au - frame_center_au) * (1.0 / frame_scale_au_per_km)
+              } else {
+                aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+                  -149_597_870.7_f32, 0.0, 0.0,
+                )
+              };
+              let to_sun_km = sun_km - emit_km;
+              let d = to_sun_km.length();
+              if d > 1e-4 {
+                // anti-sunward = negative of to_sun direction
+                let anti = to_sun_km * (-1.0 / d);
+                [anti.x(), anti.y(), anti.z()]
+              } else {
+                [1.0, 0.0, 0.0] // fallback: +x
+              }
+            } else {
+              [1.0, 0.0, 0.0] // no sun found: default to +x
+            }
+          },
           parent_velocity: parent_vel,
           mass: circle.mass,
           mean_velocity: circle.mean_velocity, // km/s
@@ -2233,6 +2392,7 @@ fn emit_particles_from_circles(
       child_entity,
       world_position,
       world_velocity_direction,
+      anti_sunward_dir,
       parent_velocity,
       mass,
       mean_velocity,
@@ -2435,7 +2595,43 @@ fn emit_particles_from_circles(
           p.set_id(id);
           p.set_age(0);
           p.position = spawn_pos;
-          p.velocity = vel_jittered;
+
+          // ── Per-sub-step velocity compensation ───────────────────────────────
+          // All emitted particles are initialised by the GPU in sub-step 0 and
+          // therefore receive the full N GPU sub-steps of integration.  To make
+          // particle `sub_step_idx` land at the position it would have reached
+          // with only (N - i) sub-steps, we pre-add a compensating sunward
+          // velocity:
+          //   v_comp = -0.5 × a × dt_s × i × (2N - i) / N   (< 0 = toward sun)
+          // The brief sunward trajectory occurs inside the GPU dispatch (not
+          // rendered); the user only sees the correct final positions.
+          // a_net = (beta - 1) × GM_sun / r²  (≈ 5.93e-6 km/s² for β=2, r=1 AU)
+          //
+          // DIRECTION: compensation must oppose the ANTI-SUNWARD direction (the
+          // actual radiation-pressure force axis), NOT the surface normal.
+          // `anti_sunward_dir` is the unit vector comet→anti-sun, computed when
+          // building the Work item while `sun_pos` is in scope.
+          let v_comp_scalar = if n_sub_steps > 1 && beta > 1.001 {
+            const GM_SUN: f32 = 1.327_124e11_f32;  // km³/s²
+            const R_1AU_KM: f32 = 149_597_870.7_f32; // km
+            let net_a = (beta - 1.0).max(0.0) * GM_SUN / (R_1AU_KM * R_1AU_KM);
+            let dt_s = dt_us as f32 / 1_000_000.0;
+            let i = sub_step_idx as f32;
+            let n = n_sub_steps as f32;
+            // Sunward (negative anti-sunward) compensation
+            -0.5 * net_a * dt_s * i * (2.0 * n - i) / n
+          } else {
+            0.0_f32
+          };
+          // Apply compensation along the ANTI-SUNWARD axis, not the surface normal.
+          let ad = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+            anti_sunward_dir[0], anti_sunward_dir[1], anti_sunward_dir[2],
+          );
+          p.velocity = [
+            vel_jittered[0] + v_comp_scalar * ad[0],
+            vel_jittered[1] + v_comp_scalar * ad[1],
+            vel_jittered[2] + v_comp_scalar * ad[2],
+          ];
           p.mass = mass;
           p.active = 1;
         }
@@ -2458,12 +2654,33 @@ fn dispatch_physics_step(
   let physics_scene_arc = scene_read.physics_scene.clone();
   let scene_arc = scene_read.scene.clone();
 
-  // Wait for any in-flight physics tasklet before taking the write lock on
-  // physics_scene.  execute_simulation_tick calls us in a loop, so a previous
-  // iteration's tasklet may still be running with ps_arc.write() held.
+  // Non-blocking guard: ensure no in-flight tasklet holds a write-lock on
+  // physics_scene before we rebuild it.  In practice this branch is never
+  // taken: execute_simulation_tick drains the Mutex at Site 1 (above) before
+  // calling us, and dispatch_physics_step is not called concurrently.
+  // The defensive check is kept so that callers added in the future do not
+  // accidentally introduce a race.
   if let Some(prev_task) = scene_read.active_physics_task.lock().take() {
-    if let Err(e) = prev_task.wait() {
-      aethervk_oshal_rlib::log!("Previous physics tasklet failed: {:?}", e);
+    match prev_task.try_wait(0) {
+      Ok(result) => {
+        if let Err(e) = result {
+          aethervk_oshal_rlib::log!("Previous physics tasklet failed: {:?}", e);
+        }
+      }
+      Err(_still_running) => {
+        // Task not finished yet.  This should be impossible given the
+        // is_done() gate in the outer loop, but if it ever happens we must
+        // NOT block here.  Skip the physics scene rebuild for this tick;
+        // the GPU task will complete before the next call (outer gate
+        // ensures this) and the scene will be rebuilt then.
+        aethervk_oshal_rlib::log!(
+          "[dispatch_physics_step] in-flight task still running — skipping scene rebuild to avoid blocking"
+        );
+        // _still_running put back so the outer loop's is_done() check can
+        // gate the next tick correctly.
+        *scene_read.active_physics_task.lock() = Some(_still_running);
+        return Ok(());
+      }
     }
   }
 
@@ -2541,12 +2758,52 @@ fn dispatch_physics_step(
   } // logic_state read guard dropped here
 
   // ── CPU-side particle emission + aging ──────────────────────────────────────
-  // Ages existing particles, reaps expired ones, and emits new particles into
-  // each jet child entity's ParticleSystemComponent BEFORE spawning the physics
-  // tasklet, so build_particles picks them up with proper metadata.
+  // Emission must use SIMULATION microseconds, not wall-clock microseconds.
+  //
+  // Bug (before this fix):
+  //   gpu_sub_steps = ceil(fixed_dt_us_wallclock / max_sub_dt_us_simtime)
+  //                 = ceil(16_666 / 100_000_000) = 1   ← always 1, wrong
+  //   sub_dt_us (wall-clock) → dt_s = 0.016 s
+  //   emit_count = 0.5 p/s × 0.016 s = 0.008 particles/sub-step  ← 86400× too few
+  //
+  // Fix:
+  //   total_sim_dt_us = step_days × 86400 × 1_000_000  (same formula as GPU tasklet)
+  //   gpu_sub_steps   = ceil(total_sim_dt_us / max_sub_dt_us)   ← correct ~15 for OneDay
+  //   sub_sim_dt_us   = total_sim_dt_us / gpu_sub_steps         ← ~96 s per sub-step
+  //   emit_count      = 0.5 p/sim-s × 96 s = 48  ← correct
   {
-    let tick_seed = current_epoch.to_tai_seconds().to_bits() ^ (fixed_dt_us as u64);
-    emit_particles_from_circles(scene_arc.as_ref(), tick_seed, fixed_dt_us);
+    // Total simulation time for this dispatch in microseconds.
+    let total_sim_dt_us =
+      (step_days * 86400.0 * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
+    // Number of GPU sub-steps the physics tasklet will run (same divisor it uses).
+    let gpu_sub_steps = ((total_sim_dt_us + max_sub_dt_us - 1) / max_sub_dt_us).max(1) as u32;
+    // Simulation µs per emission sub-step ≈ max_sub_dt_us (last step may be shorter).
+    let sub_sim_dt_us = (total_sim_dt_us / gpu_sub_steps as i64).max(1);
+    // One-shot diagnostic: prints emission parameters on the very first dispatch.
+    {
+      use core::sync::atomic::{AtomicBool, Ordering};
+      static EMIT_DIAG_DONE: AtomicBool = AtomicBool::new(false);
+      if !EMIT_DIAG_DONE.swap(true, Ordering::Relaxed) {
+        aethervk_oshal_rlib::log!(
+          "[EMIT-DIAG] step_days={:.6}  total_sim_dt_s={:.2}  max_sub_dt_s={:.2}  \
+           gpu_sub_steps={}  sub_sim_dt_s={:.2}  \
+           expected_particles_per_substep(rate=0.5)={:.1}  total_per_dispatch={:.0}",
+          step_days,
+          total_sim_dt_us as f64 / 1_000_000.0,
+          max_sub_dt_us as f64 / 1_000_000.0,
+          gpu_sub_steps,
+          sub_sim_dt_us as f64 / 1_000_000.0,
+          0.5_f64 * (sub_sim_dt_us as f64 / 1_000_000.0),
+          0.5_f64 * (sub_sim_dt_us as f64 / 1_000_000.0) * gpu_sub_steps as f64,
+        );
+      }
+    }
+    for sub in 0..gpu_sub_steps {
+      let sub_tick_seed = current_epoch.to_tai_seconds().to_bits()
+        ^ (fixed_dt_us as u64)
+        ^ (sub as u64).wrapping_mul(0x9e3779b97f4a7c15);
+      emit_particles_from_circles(scene_arc.as_ref(), sub_tick_seed, sub_sim_dt_us, sub, gpu_sub_steps);
+    }
   }
 
   if let Some(ps_lock) = &physics_scene_arc {

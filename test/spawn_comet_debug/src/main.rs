@@ -14,6 +14,9 @@ use test_utils::{
 };
 use winit::window::Window;
 
+// To enable force_debug (GPU shader printf + low emission rate + infinite TTL):
+//   cargo run -p spawn_comet_debug --release --features force_debug
+
 struct SpawnCometDelegate {
   camera_ext_entity: u64,
   was_micro: Option<bool>,
@@ -27,7 +30,19 @@ struct SpawnCometDelegate {
   jet_sunlit: bool,
   /// EMA of frame duration in milliseconds for a stable FPS display.
   ema_frame_ms: f32,
+  /// Ring index into SUB_DT_RING — M key cycles through physics sub-step presets.
+  sub_dt_idx: usize,
 }
+
+/// Physics sub-step presets cycled by the M key (seconds).
+/// None = use TimeScale default (currently 100 s for OneDay).
+const SUB_DT_RING: &[Option<f64>] = &[
+  None,          // auto  (100 s for OneDay)
+  Some(1440.0),  // 1 sub-step / day  — original blob behaviour
+  Some(100.0),   // ~14 sub-steps / day
+  Some(10.0),    // ~144 sub-steps / day
+  Some(1.0),     // ~1440 sub-steps / day — finest grain
+];
 
 impl SimulationDelegate for SpawnCometDelegate {
   fn create_scene(&mut self, ctx: &mut SimulationContext) -> EngineResult<u64> {
@@ -49,7 +64,7 @@ impl SimulationDelegate for SpawnCometDelegate {
 
     let loaded_mesh = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(
       comet_path.to_str().unwrap(),
-      false,
+      false,  // build BVH — required for sun-side occlusion check in emit_particles_from_circles
       None,
     )
     .expect("Failed to load comet mesh");
@@ -63,9 +78,9 @@ impl SimulationDelegate for SpawnCometDelegate {
       scene_id,
       model_id,
       "comet",
-      Vec3f32::from_components(0.01, 0.0, 0.0), // 0.01 AU along +x
+      Vec3f32::from_components(1.0, 0.0, 0.0), // 1.0 AU along +x (realistic heliocentric distance)
       Quat::identity(),
-      1.0,             // radius_km = 1 km
+      20.0,            // radius_km = 20 km (user-visible comet body)
       1000.0,          // mass_kg
       0,               // physics_type = static
       0,               // comet id (ignored when static)
@@ -120,8 +135,13 @@ impl SimulationDelegate for SpawnCometDelegate {
         .unwrap_or(1.0);
 
       // Jet parameters
-      let lat_deg: f32 = 60.0;
-      let lon_deg: f32 = 30.0;
+      // lat=0°, lon=90° → emission direction = +y (equatorial, perpendicular to sun-comet +x axis).
+      // Radiation pressure (+x) bends the trajectory from +y toward +x, giving a
+      // clearly visible CURVED tail — the classic comet-tail geometry.
+      // At lat=60°/lon=30° the emission was nearly parallel to radiation (+x), so
+      // everything appeared straight.
+      let lat_deg: f32 = 0.0;
+      let lon_deg: f32 = 90.0;
       let lat_rad = lat_deg.to_radians();
       let lon_rad = lon_deg.to_radians();
 
@@ -131,35 +151,50 @@ impl SimulationDelegate for SpawnCometDelegate {
       let dir_y = lat_rad.cos() * lon_rad.sin();
       let dir = Vec3f32::from_components(dir_x, dir_y, dir_z).normalize();
 
-      // Raycast from outside inward to find surface point
-      let ray_orig = dir * (bounding_sphere * 2.0);
-      let ray_dir = Vec3f32::from_components(-dir.x(), -dir.y(), -dir.z());
+      // ── Jet surface placement ─────────────────────────────────────────────
+      // USE_BVH_RAYCAST = false  → always place on the bounding sphere (fast,
+      //                           deterministic, no miss case).
+      // USE_BVH_RAYCAST = true   → raycast into the mesh BVH for exact surface
+      //                           hit (useful for irregular shapes in Avalonia).
+      const USE_BVH_RAYCAST: bool = false;
 
-      let (hit_pt, hit_normal) = if let Some(ref bvh) = mesh_arc.bvh {
-        match bvh.raycast(ray_orig, ray_dir, &mesh_arc.vertices, &mesh_arc.indices) {
-          Some((_t, pt, n)) => ([pt.x(), pt.y(), pt.z()], [n.x(), n.y(), n.z()]),
-          None => {
-            let pt = dir * bounding_sphere;
-            ([pt.x(), pt.y(), pt.z()], [dir.x(), dir.y(), dir.z()])
+      let (hit_pt, hit_normal) = if USE_BVH_RAYCAST {
+        // ── BVH raycast path ─────────────────────────────────────────────────
+        let ray_orig = dir * (bounding_sphere * 2.0);
+        let ray_dir = Vec3f32::from_components(-dir.x(), -dir.y(), -dir.z());
+        if let Some(ref bvh) = mesh_arc.bvh {
+          match bvh.raycast(ray_orig, ray_dir, &mesh_arc.vertices, &mesh_arc.indices) {
+            Some((_t, pt, n)) => ([pt.x(), pt.y(), pt.z()], [n.x(), n.y(), n.z()]),
+            None => {
+              let pt = dir * bounding_sphere;
+              ([pt.x(), pt.y(), pt.z()], [dir.x(), dir.y(), dir.z()])
+            }
           }
+        } else {
+          let pt = dir * bounding_sphere;
+          ([pt.x(), pt.y(), pt.z()], [dir.x(), dir.y(), dir.z()])
         }
       } else {
+        // ── Bounding-sphere surface path (default) ───────────────────────────
+        // Place the jet at the point on the bounding sphere in direction `dir`.
+        // Normal is the outward radial direction (same as dir).
         let pt = dir * bounding_sphere;
         ([pt.x(), pt.y(), pt.z()], [dir.x(), dir.y(), dir.z()])
       };
 
       println!(
-        "[JET] Surface hit at ({:.4}, {:.4}, {:.4}), normal ({:.4}, {:.4}, {:.4})",
-        hit_pt[0], hit_pt[1], hit_pt[2], hit_normal[0], hit_normal[1], hit_normal[2]
+        "[JET] use_bvh={} surface=({:.4},{:.4},{:.4}) normal=({:.4},{:.4},{:.4})",
+        USE_BVH_RAYCAST,
+        hit_pt[0], hit_pt[1], hit_pt[2], hit_normal[0], hit_normal[1], hit_normal[2],
       );
 
       // Spawn child entity for the emission sphere
       let child_id = scene_ctx.scene.spawn_entity("JetEmissionSphere");
       scene_ctx.scene.set_parent(child_id, Some(comet_int));
 
-      // 100m sphere = 0.1 km. Scale relative to comet's mesh scale so the
-      // child entity renders at 0.1 km in micro-frame coordinates.
-      let sphere_radius_km = 0.1;
+      // 5 km sphere sits on the surface of the 20 km comet body:
+      // sphere_scale = desired_radius_km / comet_scale (mesh units → km).
+      let sphere_radius_km = 5.0;
       let sphere_scale = (sphere_radius_km / comet_scale).max(1e-4);
       println!(
         "[JET] comet_scale={:.6}, bounding_sphere={:.4}, sphere_scale={:.6}",
@@ -191,7 +226,16 @@ impl SimulationDelegate for SpawnCometDelegate {
       // ParticleSystemComponent for this jet
       let mut psc = aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(1000000);
       psc.color = [0.2, 0.8, 1.0, 1.0]; // cyan
-      psc.particle_radius = 0.2; // 200m radius (much bigger particles)
+      psc.particle_radius = 0.2;          // 200m physics collision radius
+      // Camera is 100 km from comet (sunward side, looking +x into the tail).
+      // 10 km billboard → arctan(10/100)≈5.7° (≈7 px): clearly visible near comet.
+      // With 166 sub-step compensation particles spanning 0–204 km at ~1.2 km
+      // spacing, all 10 km-radius discs overlap → smooth, unbroken stream.
+      psc.render_radius_km = 10.0;
+      // beta=2.0 → net outward = (2-1)×GM/r² = 5.93e-6 km/s².
+      // Per dispatch (166×49.96s = 8294 sim-s): particles spread from
+      // 0 km (sub-step 165) to 204 km (sub-step 0) → strongly visible tail.
+      psc.beta = 2.0;
       // Comet dust is a test-particle system: particles don't attract each other.
       // Skipping BVH construction + Barnes-Hut self-gravity saves ~95% GPU time at
       // high particle counts and avoids the GPU TDR watchdog hang.
@@ -219,11 +263,22 @@ impl SimulationDelegate for SpawnCometDelegate {
           cached_point: Some(hit_pt),
           cached_normal: Some(hit_normal),
           particles_per_second: 0.0, // starts OFF, spacebar toggles
-          ttl: 4000,                 // in ticks — enough to see bending
-          mean_velocity: 0.000072,
-          velocity_std_dev: 0.000050, // σ/μ≈70% → ~135° effective cone spread
+          // 1000 sub-steps × 49.96s/sub-step = 49960 sim-s ≈ 13.9 sim-hours lifetime.
+          // Particle position at death: 0.5×5.93e-6×49960² ≈ 7400 km from comet.
+          // Pool fills at 25 p/sub-step × 166 sub-steps/dispatch × 90fps = ~373k/real-s,
+          // hitting 1M capacity in ~2.7 real-s then cycling at steady state.
+          ttl: {
+            #[cfg(feature = "force_debug")] { 0 }        // never expire: observe full trajectory
+            #[cfg(not(feature = "force_debug"))] { 1000 } // normal: 1000 sub-step lifetime
+          },
+          // 0.1 km/s initial velocity perpendicular to radiation pressure (+x):
+          // radiation pressure bends the trajectory from +y toward +x over time.
+          // 0.05 km/s std-dev gives a wide fan that fills gaps between sub-step groups.
+          mean_velocity: 0.1,
+          velocity_std_dev: 0.05,
           child_entity: Some(child_id),
-          beta: 1.5,
+          // Must match psc.beta so the physics shader and CPU compensation agree.
+          beta: 2.0,
           max_particles: 1000000,
           // Scatter spawn positions over a disc 2× the comet radius so the
           // tail origin looks like a diffuse surface patch, not a point.
@@ -331,9 +386,18 @@ impl SimulationDelegate for SpawnCometDelegate {
         .unwrap()
         .camera_entity = Some(camera_int);
 
-      let cam_pos = Vec3f32::from_components(0.01001, 0.0, 0.0);
+      // Camera 100 km from the comet on the SUNWARD side, looking anti-sunward (+x).
+      // Comet nucleus is +100 km ahead. Dust tail extends from +100 km to +15,000+ km
+      // ahead — fully in the field of view.
+      // (Previous bug: camera was on the anti-sunward side looking -x → tail was behind.)
+      const KM_PER_AU: f64 = 149_597_870.7;
+      let cam_offset_au = 100.0_f64 / KM_PER_AU; // ≈ 6.685e-7 AU
+      // Sunward side: subtract the offset from the comet's x=1.0 AU position.
+      let cam_pos = Vec3f32::from_components((1.0 - cam_offset_au) as f32, 0.0, 0.0);
+      // Rotation: −90° around +y rotates camera default -z forward to +x.
+      // Quaternion: (w=1/√2, x=0, y=−1/√2, z=0)
       let rot = <Quat as aethervk_oshal_rlib::math::quaternion::Quaternion>::from_vector_and_scalar(
-        Vec3f32::from_components(0.0, 0.0, -std::f32::consts::FRAC_1_SQRT_2),
+        Vec3f32::from_components(0.0, -std::f32::consts::FRAC_1_SQRT_2, 0.0),
         std::f32::consts::FRAC_1_SQRT_2,
       );
       let _ = scene_read.scene.with_component_mut(
@@ -350,15 +414,16 @@ impl SimulationDelegate for SpawnCometDelegate {
       let _ = scene_read.scene.with_component_mut(
         camera_int,
         |c: &mut aethervk_core_rlib::scene::CameraComponent| {
-          c.focus_distance = 0.00001;
-          // Fix for invisible sun: Avalonia default near plane is 0.1 AU, but we spawn at 0.01 AU!
+          // Focus at 100 km (where the comet nucleus is).
+          c.focus_distance = cam_offset_au as f32;
           if let aethervk_core_rlib::scene::CameraProjection::Perspective {
             ref mut near,
             ref mut far,
             ..
           } = c.projection
           {
-            *near = 0.00001; // 0.00001 AU = 1500 km
+            // Near: 0.5 km = 3.34e-9 AU — safely inside the 100 km camera offset.
+            *near = (0.5 / KM_PER_AU) as f32;
             *far = 10000.0;
           }
         },
@@ -376,7 +441,7 @@ impl SimulationDelegate for SpawnCometDelegate {
           id,
           |t: &mut aethervk_core_rlib::scene::HighResTransformComponent| {
             t.position =
-              aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(0.01, 0.0, 0.0);
+              aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(1.0, 0.0, 0.0);
           },
         );
       }
@@ -466,8 +531,14 @@ impl SimulationDelegate for SpawnCometDelegate {
     );
     if is_space {
       self.jet_emitting = !self.jet_emitting;
-      // 5000 particles/second when ON — dt-independent rate
-      let new_rate: f32 = if self.jet_emitting { 5000.0 } else { 0.0 };
+      // 0.5 p/sim-s: at OneDay/50s sub-steps → 0.5×49.96 ≈ 25 particles per GPU
+      // sub-step. 166 sub-steps per dispatch × 25 = 4150 particles, spread 0–204 km
+      // by the per-sub-step velocity compensation. render_radius=10 km means all
+      // 25-particle bundles overlap → uniform density stream with no visible gaps.
+      // force_debug: slow emission (10 p/s) so individual particle paths are visible.
+      // Normal mode: 5000 p/s fills the tail quickly.
+      let on_rate: f32 = if cfg!(feature = "force_debug") { 10.0 } else { 5000.0 };
+      let new_rate: f32 = if self.jet_emitting { on_rate } else { 0.0 };
       let scene = ctx.get_scene(scene_id).unwrap();
       let scene_read = scene.read();
       if let Some(comet_int) = scene_read.get_entity(self.comet_ext) {
@@ -502,9 +573,36 @@ impl SimulationDelegate for SpawnCometDelegate {
       return;
     }
 
+    // ── M key: ring-toggle physics sub-step size ──────────────────────────
+    // Cycles through SUB_DT_RING presets so you can verify whether clustering
+    // and force magnitude are step-size artifacts.
+    if matches!(
+      event.logical_key.as_ref(),
+      winit::keyboard::Key::Character("m") | winit::keyboard::Key::Character("M")
+    ) {
+      self.sub_dt_idx = (self.sub_dt_idx + 1) % SUB_DT_RING.len();
+      let preset = SUB_DT_RING[self.sub_dt_idx];
+      let scene = ctx.get_scene(scene_id).unwrap();
+      let scene_read = scene.read();
+      scene_read.time_state.write().max_sub_dt_override = preset;
+      let label = match preset {
+        None    => "auto (100 s)".to_string(),
+        Some(s) => format!("{} s", s),
+      };
+      let n_steps = preset.map_or(
+        (1440.0_f64 / 100.0).ceil() as u32,
+        |s| (1440.0_f64 / s).ceil() as u32,
+      );
+      println!("\x1b[1;35m[SUB-DT] max_sub_dt = {}  ({} sub-steps/day)\x1b[0m",
+        label, n_steps);
+      return;
+    }
+
     // ── J key: move jet between sun-facing and dark-side positions ───────
-    // Comet at (0.01,0,0) AU, Sun at origin → sun direction = (-1,0,0)
+    // Comet at (1.0,0,0) AU, Sun at origin → sun direction = (-1,0,0)
     // Sun-facing: lat=20°, lon=170°  |  Dark side: lat=20°, lon=350°
+    // Pressing J also clears all existing particles so the old position
+    // doesn't linger (long TTL would otherwise show both positions emitting).
     if matches!(
       event.logical_key.as_ref(),
       winit::keyboard::Key::Character("j") | winit::keyboard::Key::Character("J")
@@ -563,36 +661,44 @@ impl SimulationDelegate for SpawnCometDelegate {
       let dir_y = lat_rad.cos() * lon_rad.sin();
       let dir = Vec3f32::from_components(dir_x, dir_y, dir_z).normalize();
 
-      let ray_orig = dir * (bounding_sphere * 2.0);
-      let ray_dir = Vec3f32::from_components(-dir.x(), -dir.y(), -dir.z());
-      println!(
-        "[JET-J] ray_orig=({:.4},{:.4},{:.4}) ray_dir=({:.4},{:.4},{:.4})",
-        ray_orig.x(),
-        ray_orig.y(),
-        ray_orig.z(),
-        ray_dir.x(),
-        ray_dir.y(),
-        ray_dir.z()
-      );
+      // ── Jet surface placement (same switch as initial placement) ─────────
+      const USE_BVH_RAYCAST_J: bool = false;
 
-      let (hit_pt, hit_normal, bvh_hit) = if let Some(ref bvh) = mesh_arc.bvh {
-        match bvh.raycast(ray_orig, ray_dir, &mesh_arc.vertices, &mesh_arc.indices) {
-          Some((_t, pt, n)) => ([pt.x(), pt.y(), pt.z()], [n.x(), n.y(), n.z()], true),
-          None => {
-            let pt = dir * bounding_sphere;
-            ([pt.x(), pt.y(), pt.z()], [dir.x(), dir.y(), dir.z()], false)
+      let (hit_pt, hit_normal, bvh_hit) = if USE_BVH_RAYCAST_J {
+        // ── BVH raycast path ─────────────────────────────────────────────────
+        let ray_orig = dir * (bounding_sphere * 2.0);
+        let ray_dir = Vec3f32::from_components(-dir.x(), -dir.y(), -dir.z());
+        println!(
+          "[JET-J] ray_orig=({:.4},{:.4},{:.4}) ray_dir=({:.4},{:.4},{:.4})",
+          ray_orig.x(), ray_orig.y(), ray_orig.z(),
+          ray_dir.x(), ray_dir.y(), ray_dir.z()
+        );
+        if let Some(ref bvh) = mesh_arc.bvh {
+          match bvh.raycast(ray_orig, ray_dir, &mesh_arc.vertices, &mesh_arc.indices) {
+            Some((_t, pt, n)) => ([pt.x(), pt.y(), pt.z()], [n.x(), n.y(), n.z()], true),
+            None => {
+              let pt = dir * bounding_sphere;
+              ([pt.x(), pt.y(), pt.z()], [dir.x(), dir.y(), dir.z()], false)
+            }
           }
+        } else {
+          let pt = dir * bounding_sphere;
+          ([pt.x(), pt.y(), pt.z()], [dir.x(), dir.y(), dir.z()], false)
         }
       } else {
+        // ── Bounding-sphere surface path (default) ───────────────────────────
         let pt = dir * bounding_sphere;
         ([pt.x(), pt.y(), pt.z()], [dir.x(), dir.y(), dir.z()], false)
       };
       println!(
-        "[JET-J] BVH hit: {}, hit_pt=({:.6},{:.6},{:.6}), hit_normal=({:.6},{:.6},{:.6})",
-        bvh_hit, hit_pt[0], hit_pt[1], hit_pt[2], hit_normal[0], hit_normal[1], hit_normal[2]
+        "[JET-J] use_bvh={} bvh_hit={} hit_pt=({:.6},{:.6},{:.6}) hit_normal=({:.6},{:.6},{:.6})",
+        USE_BVH_RAYCAST_J, bvh_hit,
+        hit_pt[0], hit_pt[1], hit_pt[2], hit_normal[0], hit_normal[1], hit_normal[2]
       );
 
-      // Update EmissionCircle lat/lon and cached point
+      // Clear all existing particles so the old emission position doesn't persist.
+      // (Long TTL means particles from lat=60°/lon=30° would otherwise linger
+      //  alongside new particles, giving the "both positions emit" illusion.)
       let mut child_entity = None;
       let _ = scene_read.scene.with_component_mut(
         comet_int,
@@ -606,6 +712,18 @@ impl SimulationDelegate for SpawnCometDelegate {
           }
         },
       );
+      if let Some(child_id) = child_entity {
+        let _ = scene_read.scene.with_component_mut(
+          child_id,
+          |psc: &mut aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
+            // Kill all alive particles immediately.
+            let mut pool = psc.particles.write();
+            for p in pool.iter_mut() { p.active = 0; }
+            psc.gpu_alive_count = 0;
+          },
+        );
+        println!("[JET-J] Cleared all particles from old emission position.");
+      }
 
       // Update child entity position
       if let Some(child_id) = child_entity {
@@ -641,11 +759,13 @@ impl SimulationDelegate for SpawnCometDelegate {
 
     let (target_pos, offset, target_parent) = match event.logical_key.as_ref() {
       winit::keyboard::Key::Character("f") | winit::keyboard::Key::Character("F") => {
+        // 50 km from comet nucleus, sunward side — same geometry as startup.
+        let close_offset = 50.0_f32 / 149_597_870.7_f32;
         (
-          Some(Vec3f32::from_components(0.01, 0.0, 0.0)),
-          Some(0.00005),
+          Some(Vec3f32::from_components((1.0 - close_offset) as f32, 0.0, 0.0)),
+          Some(close_offset as f64),  // will be overridden below; just moves position
           None,
-        ) // 7,500 km away from comet
+        )
       }
       winit::keyboard::Key::Character("0") => {
         (
@@ -678,7 +798,7 @@ impl SimulationDelegate for SpawnCometDelegate {
           println!("[DEBUG] Switched to Earth Observer Mode.");
           let earth_int = scene_read.scene.get_entity_by_name("Earth Orbit").unwrap();
           (
-            Some(Vec3f32::from_components(0.01, 0.0, 0.0)),
+            Some(Vec3f32::from_components(1.0, 0.0, 0.0)),
             None,
             Some(earth_int),
           )
@@ -720,7 +840,7 @@ impl SimulationDelegate for SpawnCometDelegate {
 
         if let Some(off) = offset {
           let _ = scene_read.scene.with_component_mut(camera_int, |t: &mut aethervk_core_rlib::scene::HighResTransformComponent| {
-            t.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components((pos.x() + off) as f64, pos.y() as f64, pos.z() as f64);
+            t.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(pos.x() as f64 + off, pos.y() as f64, pos.z() as f64);
             // Look towards -X, Up is +Z
             t.rotation = <aethervk_oshal_rlib::math::vector::vec4::Quat as aethervk_oshal_rlib::math::quaternion::Quaternion>::from_vector_and_scalar(
               Vec3f32::from_components(0.0, 0.0, -std::f32::consts::FRAC_1_SQRT_2),
@@ -731,7 +851,7 @@ impl SimulationDelegate for SpawnCometDelegate {
         let _ = scene_read.scene.with_component_mut(
           camera_int,
           |c: &mut aethervk_core_rlib::scene::CameraComponent| {
-            c.focus_distance = offset.unwrap_or(0.1);
+            c.focus_distance = offset.unwrap_or(0.1) as f32;
           },
         );
       }
@@ -757,20 +877,179 @@ impl SimulationDelegate for SpawnCometDelegate {
 
       let sim_speed = scene_read.time_state.read().effective_sim_speed;
 
-      // Count total alive particles across all ParticleSystemComponents
+      // Count total alive particles + gather radiation-pressure diagnostic stats.
+      // Comet is at [0.01, 0, 0] AU → sun-to-comet direction is +x in micro-frame km.
+      // If radiation pressure (beta=1.5) is working, mean vel_x should grow > mean_velocity
+      // and mean pos_x (centroid drift from comet) should grow outward each tick.
       let mut total_particles: u64 = 0;
+      let mut sum_vel_x: f64 = 0.0;
+      let mut sum_pos_x: f64 = 0.0;
+      let mut max_speed: f64 = 0.0;
+      let mut n_sampled: u64 = 0;
       scene_read.scene.query1::<
         aethervk_core_rlib::scene::particles::ParticleSystemComponent, _
       >(|_, psc| {
         total_particles += psc.gpu_alive_count as u64;
+        let guard = psc.particles.read();
+        for p in guard.iter().filter(|p| p.active != 0) {
+          let vx = p.velocity[0] as f64;
+          let vy = p.velocity[1] as f64;
+          let vz = p.velocity[2] as f64;
+          sum_vel_x += vx;
+          sum_pos_x += p.position[0] as f64;
+          let speed = (vx * vx + vy * vy + vz * vz).sqrt();
+          if speed > max_speed { max_speed = speed; }
+          n_sampled += 1;
+        }
       });
 
+      let mean_vel_x  = if n_sampled > 0 { sum_vel_x / n_sampled as f64 } else { 0.0 };
+      let mean_pos_x  = if n_sampled > 0 { sum_pos_x / n_sampled as f64 } else { 0.0 };
+
       use std::io::Write;
+      let sub_dt_label = {
+        let scene = ctx.get_scene(scene_id).unwrap();
+        let scene_read = scene.read();
+        match scene_read.time_state.read().max_sub_dt_override {
+          None    => "dt=auto".to_string(),
+          Some(s) => format!("dt={:.0}s", s),
+        }
+      };
       print!(
-        "\r\x1b[2K[PERF] FPS: {:5.1} | Sim: {:5.2}\u{00d7} | Particles: {:>9}",
-        fps, sim_speed, total_particles
+        "\r\x1b[2K[PERF] FPS: {:5.1} | Sim: {:5.2}\u{00d7} | Particles: {:>9} | {} | \
+         v\u{2093}={:+.3e} km/s | x\u{0304}={:+.3e} km | v_max={:.3e} km/s",
+        fps, sim_speed, total_particles, sub_dt_label, mean_vel_x, mean_pos_x, max_speed
       );
       let _ = std::io::stdout().flush();
+
+      // Every 240 frames print a full radiation-pressure proof line.
+      // mean_vel_x should be growing positively (anti-sunward +x) if beta>1 is working.
+      use core::sync::atomic::{AtomicU64, Ordering};
+      static RAD_DIAG_COUNTER: AtomicU64 = AtomicU64::new(0);
+      let diag_frame = RAD_DIAG_COUNTER.fetch_add(1, Ordering::Relaxed);
+      if diag_frame % 240 == 0 && n_sampled > 0 {
+        // ── Analytical expected values under pure radiation pressure at 1 AU ────
+        // Net acceleration: a = (beta-1) × GM_sun / r²
+        //   beta = 2.0, GM_sun = 1.327124e11 km³/s², r = 1 AU = 149597870.7 km
+        //   a = 5.930e-6 km/s²  (anti-sunward, +x for comet at +1 AU)
+        //
+        // Within one dispatch (N sub-steps, T = N×dt ≈ 8294 s):
+        //   x(i) = 0.5 × a × ((N-i)×dt)²   for sub-step i = 0 … N-1
+        //   mean_x = a × T² / 6               (average over uniform i)
+        //   mean_vx = a × T / 2               (mean particle velocity after 1 dispatch)
+        // For a longer steady-state tail (multiple dispatches), values grow.
+        const BETA: f64 = 2.0;
+        const GM_SUN: f64 = 1.327_124e11;   // km³/s²
+        const R_1AU: f64  = 149_597_870.7;  // km
+        let a_net: f64 = (BETA - 1.0) * GM_SUN / (R_1AU * R_1AU); // ≈ 5.93e-6 km/s²
+        // At OneDay scale, batched dispatch ≈ 6 frames × (1/60 s × 86400 s/day) = 8640 sim-s.
+        // With max_sub_dt=50s: N≈66×2=166, T≈8294s (hardcoded approx, see [EMIT-DIAG]).
+        let t_dispatch: f64 = 8_294.0; // sim-s per dispatch
+        let exp_mean_x  = a_net * t_dispatch * t_dispatch / 6.0;  // km
+        let exp_mean_vx = a_net * t_dispatch / 2.0;               // km/s
+        println!(
+          "\n[RAD-PROOF] frame={} alive={}",
+          diag_frame, n_sampled,
+        );
+        println!(
+          "  actual:   mean_vx={:+.4e} km/s  mean_x={:+.4e} km  v_max={:.4e} km/s",
+          mean_vel_x, mean_pos_x, max_speed,
+        );
+        println!(
+          "  expected: mean_vx≈{:+.4e} km/s  mean_x≈{:+.4e} km  (1 dispatch, beta=2, r=1AU)",
+          exp_mean_vx, exp_mean_x,
+        );
+        println!(
+          "  ratio:    vx_ratio={:.3}  x_ratio={:.3}  (expected ≈1.0 once tail fills)",
+          if exp_mean_vx.abs() > 1e-12 { mean_vel_x / exp_mean_vx } else { 0.0 },
+          if exp_mean_x.abs() > 1e-12 { mean_pos_x / exp_mean_x } else { 0.0 },
+        );
+      }
+
+      // Every 120 frames: verbose particle state dump for the first 5 alive particles.
+      // Prints position, velocity, and cluster spread (σ_x) to diagnose:
+      //  - Are all particles at the same location? (spread ≈ 0 → still a blob)
+      //  - Is velocity growing anti-sunward? (+vx with beta>1 = radiation push working)
+      //  - Are particles clearly separated? (|pos_k - pos_0| > render_radius_km = 1 km)
+      static VERBOSE_COUNTER: AtomicU64 = AtomicU64::new(0);
+      let verbose_frame = VERBOSE_COUNTER.fetch_add(1, Ordering::Relaxed);
+      if verbose_frame % 120 == 0 && n_sampled > 0 {
+        // Collect first 5 alive particles from the PSC
+        let scene_diag = ctx.get_scene(scene_id).unwrap();
+        let scene_diag_read = scene_diag.read();
+        let comet_int_diag = scene_diag_read.get_entity(self.comet_ext);
+        if let Some(comet_int_d) = comet_int_diag {
+          let child_entity = scene_diag_read
+            .scene
+            .with_component(
+              comet_int_d,
+              |em: &aethervk_core_rlib::scene::particles::ParticleEmitterCirclesComponent| {
+                em.circles.first().and_then(|c| c.child_entity)
+              },
+            )
+            .flatten();
+          if let Some(child_id) = child_entity {
+            scene_diag_read.scene.with_component(
+              child_id,
+              |psc: &aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
+                let pool = psc.particles.read();
+                let alive: Vec<_> = pool
+                  .iter()
+                  .filter(|p| p.active != 0)
+                  .take(5)
+                  .collect();
+                if alive.is_empty() {
+                  println!("[PARTICLES] No alive particles yet.");
+                  return;
+                }
+                // Compute position spread (σ_x) across sampled alive particles
+                let all_alive_n = pool.iter().filter(|p| p.active != 0).count();
+                let (sx, sy, sz) = pool.iter()
+                  .filter(|p| p.active != 0)
+                  .fold((0.0_f64, 0.0_f64, 0.0_f64), |(ax, ay, az), p| {
+                    (ax + p.position[0] as f64, ay + p.position[1] as f64, az + p.position[2] as f64)
+                  });
+                let (mx, my, mz) = (sx / all_alive_n as f64, sy / all_alive_n as f64, sz / all_alive_n as f64);
+                let var_x = pool.iter()
+                  .filter(|p| p.active != 0)
+                  .map(|p| (p.position[0] as f64 - mx).powi(2))
+                  .sum::<f64>() / all_alive_n as f64;
+                let sigma_x = var_x.sqrt();
+                // Read render_radius_km from the PSC — was previously hardcoded as 1.0 (bug).
+                let r_km = psc.render_radius_km;
+                println!(
+                  "\n[PARTICLE-DIAG] frame={} alive={} pos_mean=({:.2},{:.2},{:.2}) km  σ_x={:.3} km  render_r={:.1} km",
+                  verbose_frame, all_alive_n, mx, my, mz, sigma_x, r_km
+                );
+                println!("  [PARTICLE-DIAG] First {} alive particles:", alive.len());
+                // Overlap threshold = 2 × render_radius_km (discs touch when dist < 2r)
+                let overlap_threshold_km = 2.0 * r_km as f64;
+                for (i, p) in alive.iter().enumerate() {
+                  println!(
+                    "    p[{}]: pos=({:+.4e},{:+.4e},{:+.4e}) km  vel=({:+.4e},{:+.4e},{:+.4e}) km/s  active={}",
+                    i, p.position[0], p.position[1], p.position[2],
+                    p.velocity[0], p.velocity[1], p.velocity[2], p.active
+                  );
+                }
+                // Separation between p[0] and p[1]
+                if alive.len() >= 2 {
+                  let dx = (alive[0].position[0] - alive[1].position[0]) as f64;
+                  let dy = (alive[0].position[1] - alive[1].position[1]) as f64;
+                  let dz = (alive[0].position[2] - alive[1].position[2]) as f64;
+                  let sep = (dx*dx + dy*dy + dz*dz).sqrt();
+                  let overlap = if sep < overlap_threshold_km {
+                    format!("OVERLAP (sep={:.1} km < 2×{:.0} km)", sep, r_km)
+                  } else {
+                    format!("SEPARATED (gap={:.1} km)", sep - overlap_threshold_km)
+                  };
+                  println!("    [PARTICLE-DIAG] p[0]-p[1] separation: {:.4e} km  => {}", sep, overlap);
+                }
+              },
+            );
+          }
+        }
+      }
+
     }
     // ── End HUD ───────────────────────────────────────────────────────────────
 
@@ -786,8 +1065,8 @@ impl SimulationDelegate for SpawnCometDelegate {
           t.position.y() as f32,
           t.position.z() as f32,
         );
-        let dist = (t_pos_f32 - Vec3f32::from_components(0.01, 0.0, 0.0)).length();
-        let is_micro = dist < 0.005;
+        let dist = (t_pos_f32 - Vec3f32::from_components(1.0, 0.0, 0.0)).length();
+        let is_micro = dist < 0.5; // comet is at 1.0 AU; micro-frame SOI ≈ 0.5 AU radius
 
         if let Some(was_micro) = self.was_micro {
           if was_micro != is_micro {
@@ -833,6 +1112,14 @@ impl SimulationDelegate for SpawnCometDelegate {
 }
 
 fn main() {
+  // force_debug: enable GPU printf shaders before Vulkan instance creation
+  #[cfg(feature = "force_debug")]
+  {
+    aethervk_core_rlib::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+      .store(true, core::sync::atomic::Ordering::SeqCst);
+    println!("[FORCE_DEBUG] USE_PRINTF_SHADERS enabled — shader printf active");
+  }
+
   let _assets_dir = cycle_get_asset_path_from_exe(true);
 
   //#[cfg(debug_assertions)]
@@ -854,6 +1141,7 @@ fn main() {
     jet_emitting: false,
     jet_sunlit: false,
     ema_frame_ms: 0.0,
+    sub_dt_idx: 0,   // starts at SUB_DT_RING[0] = None (auto 100 s)
   };
   run_simulation_app("AetherVk Comet Spawn Test", delegate);
 }

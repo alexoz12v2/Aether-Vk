@@ -30,9 +30,18 @@ public partial class SceneStateManager : ObservableObject
     return GetOrCreateScene(sceneId).CometEntityId.HasValue;
   }
 
-  public void SetComet(ulong sceneId, ulong cometId)
+  public void SetComet(ulong sceneId, ulong cometId, ulong lcaFrameId)
   {
-    GetOrCreateScene(sceneId).CometEntityId = cometId;
+    var state = GetOrCreateScene(sceneId);
+    state.CometEntityId = cometId;
+    state.CometLcaFrameEntityId = lcaFrameId;
+  }
+
+  public void ClearComet(ulong sceneId)
+  {
+    var state = GetOrCreateScene(sceneId);
+    state.CometEntityId = null;
+    state.CometLcaFrameEntityId = null;
   }
 
   public void Clear()

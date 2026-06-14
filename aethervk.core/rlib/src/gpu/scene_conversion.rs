@@ -1046,7 +1046,7 @@ impl SceneConversionExt for crate::scene::Scene {
         extracted_particles.push((
           id,
           alloc::sync::Arc::downgrade(&sys.particles),
-          sys.particle_radius,
+          sys.render_radius_km, // decoupled from physics collision radius
           sys.color,
         ));
       },

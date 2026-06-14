@@ -1143,14 +1143,14 @@ impl WindowedPresentationState {
   ) -> GpuResult<vk::CompositeAlphaFlagsKHR> {
     let supported = surf_caps.surface_capabilities.supported_composite_alpha;
 
-    if supported.contains(vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED) {
+    if supported.contains(vk::CompositeAlphaFlagsKHR::OPAQUE) {
+      Ok(vk::CompositeAlphaFlagsKHR::OPAQUE)
+    } else if supported.contains(vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED) {
       Ok(vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED)
     } else if supported.contains(vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED) {
       Ok(vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED)
     } else if supported.contains(vk::CompositeAlphaFlagsKHR::INHERIT) {
       Ok(vk::CompositeAlphaFlagsKHR::INHERIT)
-    } else if supported.contains(vk::CompositeAlphaFlagsKHR::OPAQUE) {
-      Ok(vk::CompositeAlphaFlagsKHR::OPAQUE)
     } else {
       Err(GpuError::UnsupportedFeature)
     }

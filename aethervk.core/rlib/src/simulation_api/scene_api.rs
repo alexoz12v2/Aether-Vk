@@ -765,19 +765,13 @@ impl SimulationContext {
     //
     // The rendering pipeline's `get_relative_transform` will then multiply
     // by `frame.scale` (AU/km) to produce the correct macro-frame size.
-    let bounding_sphere = if let Some(bvh) = &mesh_arc.bvh {
-      use aethervk_oshal_rlib::math::vector::Vector;
-      match &bvh.nodes[0].bound {
-        crate::math::collision::linear_bvh::LinearBound::AABB(aabb) => {
-          aabb.half_extents_f32().length()
-        }
-        crate::math::collision::linear_bvh::LinearBound::OBB(obb) => {
-          obb.half_extents_f32().length()
-        }
-      }
-    } else {
-      compute_bounding_sphere_radius(&mesh_arc.vertices)
-    };
+    // Always use vertex-based bounding sphere for mesh scale so that the rendered
+    // size is exactly `radius_km` regardless of whether a BVH is present.
+    //
+    // DO NOT use bvh.nodes[0].bound.half_extents.length(): the BVH root AABB is
+    // axis-aligned and overestimates the sphere by a factor of sqrt(3) for
+    // axis-aligned shapes, causing the mesh to appear ~57% smaller than intended.
+    let bounding_sphere = compute_bounding_sphere_radius(&mesh_arc.vertices);
 
     let mesh_scale = if bounding_sphere > 0.0 {
       radius_km / bounding_sphere

@@ -779,7 +779,7 @@ impl RenderPasses {
 
     let black_value = vk::ClearValue {
       color: vk::ClearColorValue {
-        float32: [0.0, 0.0, 0.0, 1.0],
+        float32: [0.0, 0.0, 0.0, 0.0],
       },
     };
     let depth_clear = vk::ClearValue {

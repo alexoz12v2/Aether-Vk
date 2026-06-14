@@ -116,6 +116,9 @@ pub struct ParticleSystemComponent {
   pub next_id: usize,
   /// Radius of each particle for billboard rendering (km).
   pub particle_radius: f32,
+  /// Radius used for billboard rendering only (km). Defaults to particle_radius.
+  /// Decoupled so very small physics particles can still be visible on screen.
+  pub render_radius_km: f32,
   /// RGBA color used by the particle shader.
   pub color: [f32; 4],
   /// Time-to-live in microseconds. Particles older than this are reaped.
@@ -181,6 +184,7 @@ impl ParticleSystemComponent {
       accumulator: 0,
       next_id: 0,
       particle_radius: 0.01,       // 10 m default
+      render_radius_km: 1.0,       // 1 km default — large enough to see on screen
       color: [1.0, 1.0, 1.0, 1.0], // white default
       ttl_us: 0,                   // 0 = never expire (set from EmissionCircle.ttl)
       beta: 0.0,                   // set from EmissionCircle.beta
