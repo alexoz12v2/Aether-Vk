@@ -103,7 +103,8 @@ public partial class TimelineViewModel
     _breadcrumbService = breadcrumbService;
     _audioService = audioService;
     CurrentSceneId = sceneId;
-    Timeline.SelectedTimeScale = TimeScaleOptions.First();
+    // Initialize via ViewModel property so ComboBox shows the selection immediately.
+    SelectedTimeScale = TimeScaleOptions.First();
     _timer = new Timer(UpdateFromRuntime, null, 33, 33);
 
     // Initialize epoch text from service
@@ -117,6 +118,7 @@ public partial class TimelineViewModel
       {
         OnPropertyChanged(nameof(CanEditEpochs));
         OnPropertyChanged(nameof(PlayPauseTooltip));
+        ResetSimulationCommand.NotifyCanExecuteChanged();
       }
     };
 
@@ -166,6 +168,7 @@ public partial class TimelineViewModel
 
     _runtimeService.RestoreSnapshot(CurrentSceneId);
     _hasSnapshotted = false;
+    ResetSimulationCommand.NotifyCanExecuteChanged();
     _runtimeService.SeekEpoch(CurrentSceneId, Timeline.MinTai);
 
     _breadcrumbService.ShowMessageAsync(
@@ -223,6 +226,9 @@ public partial class TimelineViewModel
 
   partial void OnSelectedTimeScaleChanged(TimeScaleOption value)
   {
+    // Always keep Timeline service in sync so PlayPause can read it without going stale.
+    if (value != null)
+      Timeline.SelectedTimeScale = value;
     if (Timeline.IsPlaying && _runtimeService.IsInitialized && value != null)
     {
       _runtimeService.SetTimeScale(CurrentSceneId, value.Value);
@@ -230,6 +236,12 @@ public partial class TimelineViewModel
   }
 
   private bool _hasSnapshotted;
+
+  /// <summary>Expose Reset as a command so the AXAML Reset button can bind to it.</summary>
+  [RelayCommand(CanExecute = nameof(CanReset))]
+  private void ResetSimulation() => ResetSimulationIfSnapshotted();
+
+  private bool CanReset() => _hasSnapshotted && !Timeline.IsPlaying;
 
   /// <summary>
   /// Toggle play/pause. On first play, captures a scene snapshot.
@@ -298,6 +310,7 @@ public partial class TimelineViewModel
       {
         _runtimeService.SnapshotScene(CurrentSceneId);
         _hasSnapshotted = true;
+        ResetSimulationCommand.NotifyCanExecuteChanged();
       }
       Timeline.IsPlaying = true;
       _runtimeService.SetTimeScale(CurrentSceneId, Timeline.SelectedTimeScale?.Value ?? 1);

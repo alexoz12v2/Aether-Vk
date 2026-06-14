@@ -1463,6 +1463,8 @@ pub struct FfiEmissionCircle {
   /// Particles are uniformly scattered within this disc around the emission point.
   /// 0.0 = point source.
   pub spawn_radius_km: f32,
+  /// Visual billboard radius (km) for the particle renderer. Synced to PSC.render_radius_km.
+  pub render_radius_km: f32,
 }
 
 #[unsafe(no_mangle)]
@@ -1511,6 +1513,7 @@ pub unsafe extern "C" fn avkSimulationContext_setParticleEmitterCirclesComponent
       beta: c.beta,
       max_particles: c.max_particles.max(64),
       spawn_radius_km: c.spawn_radius_km,
+      render_radius_km: c.render_radius_km,
     });
   }
 
@@ -1655,15 +1658,16 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
         };
 
         if circle.child_entity.is_none() {
-          to_spawn.push((i, t, circle.color, scale, circle.max_particles));
+          to_spawn.push((i, t, circle.color, scale, circle.max_particles, circle.render_radius_km));
         } else {
-          updates.push((circle.child_entity.unwrap(), t, circle.color));
+          // Carry beta so the update path can re-sync PSC.beta when the user edits it.
+          updates.push((circle.child_entity.unwrap(), t, circle.color, circle.beta, circle.render_radius_km));
         }
       }
     },
   );
 
-  for (idx, (i, t, color, gizmo_radius, max_p)) in to_spawn.into_iter().enumerate() {
+  for (idx, (i, t, color, gizmo_radius, max_p, spawn_render_radius)) in to_spawn.into_iter().enumerate() {
     let new_id = scene_ctx.scene.spawn_entity("EmissionSphere");
     scene_ctx.scene.set_parent(new_id, Some(internal_id));
 
@@ -1714,6 +1718,10 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
       |psc: &mut aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
         psc.beta = circle_beta;
         psc.color = color;
+        psc.render_radius_km = spawn_render_radius;
+        // Comet dust does not self-gravitate; disable the BVH self-gravity pass
+        // to save ~95% of GPU time per particle system.
+        psc.disable_self_gravity = true;
       },
     );
 
@@ -1728,7 +1736,7 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
     );
   }
 
-  for (child_id, t, color) in updates {
+  for (child_id, t, color, beta, render_radius_km) in updates {
     let _ = scene_ctx.scene.with_component_mut(
       child_id,
       |tc: &mut aethervk_core_rlib::scene::TransformComponent| {
@@ -1739,6 +1747,17 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
       child_id,
       |sm: &mut aethervk_core_rlib::scene::StaticMeshComponent| {
         sm.emissive_color = [color[0], color[1], color[2], color[3]];
+      },
+    );
+    // Re-sync PSC physics properties whenever the user edits the circle.
+    // Without this, changes to beta after first spawn are silently ignored.
+    let _ = scene_ctx.scene.with_component_mut(
+      child_id,
+      |psc: &mut aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
+        psc.beta = beta;
+        psc.color = color;
+        psc.render_radius_km = render_radius_km;
+        psc.disable_self_gravity = true;
       },
     );
   }
@@ -1821,10 +1840,46 @@ pub unsafe extern "C" fn avkSimulationContext_getParticleEmitterCirclesComponent
         beta: c.beta,
         max_particles: c.max_particles,
         spawn_radius_km: c.spawn_radius_km,
+        render_radius_km: c.render_radius_km,
       };
     }
   }
   true
+}
+
+/// Returns the number of GPU-alive particles for a `ParticleSystemComponent` entity.
+/// The count is refreshed by `write_back_to_scene` after every physics tick, so it reflects
+/// the state as of the last completed simulation step.
+/// Returns 0 if the entity does not exist, the scene is not found, or the entity has no PSC.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getParticleSystemAliveCount(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_id: u64,
+) -> u32 {
+  if ctx.is_null() {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let scenes = ctx_ref.scenes.read();
+  let scene_ctx_lock = match scenes.get(&scene_id) {
+    Some(s) => s,
+    None => return 0,
+  };
+  let scene_ctx = scene_ctx_lock.read();
+  let internal_id = match scene_ctx.entity_map.get(&entity_id).copied() {
+    Some(id) => id,
+    None => return 0,
+  };
+  let mut count = 0u32;
+  let _ = scene_ctx.scene.with_component(
+    internal_id,
+    |psc: &aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
+      count = psc.gpu_alive_count;
+    },
+  );
+  count
 }
 
 /// Patches the `naif_id` field of an `AlmanacPlanet` component on a Kinematic comet entity

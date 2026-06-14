@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Linq;
 using AetherVk.Logic.Input;
+using AetherVk.Logic.Messages;
 using AetherVk.Logic.Models;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -12,6 +13,7 @@ namespace AetherVk.Logic.ViewModels;
 public partial class PropertiesViewModel
   : TabItemViewModel,
     IRecipient<EntitySelectedMessage>,
+    IRecipient<SimulationStateUpdatedMessage>,
     IActionHandler
 {
   private readonly SceneStateManager _stateManager;
@@ -80,6 +82,7 @@ public partial class PropertiesViewModel
     );
 
     WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
+    WeakReferenceMessenger.Default.Register<SimulationStateUpdatedMessage>(this);
     Timeline.PropertyChanged += (s, e) =>
     {
       if (e.PropertyName == nameof(TimelineService.IsPlaying))
@@ -274,6 +277,35 @@ public partial class PropertiesViewModel
 
       // Deselect
       WeakReferenceMessenger.Default.Send(new EntitySelectedMessage(null));
+    }
+  }
+
+  /// <summary>
+  /// Polls <c>gpu_alive_count</c> for every jet circle on the currently selected entity
+  /// after each completed physics tick. Updates <see cref="AetherVk.Logic.Models.EmissionCircleItem.AliveCount"/>
+  /// which drives the live-count badge in the Properties panel.
+  /// </summary>
+  public void Receive(SimulationStateUpdatedMessage message)
+  {
+    if (message.SceneId != CurrentSceneId || _runtimeService == null)
+      return;
+
+    var entity = SelectedEntity;
+    if (entity == null)
+      return;
+
+    var emitter = entity.Components
+      .OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>()
+      .FirstOrDefault();
+    if (emitter == null)
+      return;
+
+    foreach (var circle in emitter.Circles)
+    {
+      if (circle.VisualEntityId == 0 || circle.VisualEntityId == ulong.MaxValue)
+        continue;
+      circle.AliveCount = _runtimeService.GetParticleSystemAliveCount(
+        CurrentSceneId, circle.VisualEntityId);
     }
   }
 }

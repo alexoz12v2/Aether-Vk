@@ -890,6 +890,7 @@ public partial class EmissionCircleItem : ObservableObject
   partial void OnTTLChanged(ulong value)
   {
     OnPropertyChanged(nameof(TTLDouble));
+    OnPropertyChanged(nameof(TtlHintText));
   }
 
   [ObservableProperty]
@@ -930,6 +931,58 @@ public partial class EmissionCircleItem : ObservableObject
   /// </summary>
   [ObservableProperty]
   private float _spawnRadiusKm = 0f;
+
+  /// <summary>
+  /// Visual billboard radius (km) for particle rendering. 0.01 km = 10 m default.
+  /// Smaller = finer dust, larger = coarser visible clumps.
+  /// </summary>
+  [ObservableProperty]
+  private float _renderRadiusKm = 0.01f;
+
+  public double RenderRadiusKmDouble
+  {
+    get => RenderRadiusKm;
+    set => RenderRadiusKm = (float)Math.Max(0.001, value);
+  }
+
+  partial void OnRenderRadiusKmChanged(float value)
+  {
+    OnPropertyChanged(nameof(RenderRadiusKmDouble));
+  }
+
+  // ── Live GPU feedback ─────────────────────────────────────────────────────
+
+  /// <summary>
+  /// GPU-alive particle count for this jet, refreshed after every simulation tick
+  /// by <see cref="PropertiesViewModel"/>. Read-only — written by the polling loop.
+  /// </summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(AliveCountText))]
+  private uint _aliveCount;
+
+  /// <summary>Human-readable alive-count badge (e.g. "1,234 alive" or "— alive" when 0).</summary>
+  public string AliveCountText => AliveCount == 0 ? "—" : $"{AliveCount:N0}";
+
+  /// <summary>
+  /// Approximate simulated lifetime at each standard time scale, assuming a 16 ms wall-clock tick.
+  /// Shown below the TTL slider so the user can reason in physical (sim) time.
+  /// </summary>
+  public string TtlHintText
+  {
+    get
+    {
+      const double secsPerTick = 0.016; // 16 ms fixed dt
+      double t1d = TTL * secsPerTick;               // sim-seconds @ 1 Day/s  (1 s_real = 1 sim-day → 86400 s_sim)
+      double t1w = TTL * secsPerTick * 7.0;
+      double t1m = TTL * secsPerTick * 30.437;
+      // t is in sim-days; format nicely
+      string Fmt(double simDays) =>
+        simDays < 1 ? $"{simDays * 24:F0} h" :
+        simDays < 365 ? $"{simDays:F0} d" :
+        $"{simDays / 365.25:F1} yr";
+      return $"{Fmt(t1d)} · {Fmt(t1w)} · {Fmt(t1m)}  (@ 1D/1W/1M per sec)";
+    }
+  }
 }
 
 /// <summary>
@@ -1030,6 +1083,7 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
         Beta = Circles[i].Beta,
         MaxParticles = Circles[i].MaxParticles,
         SpawnRadiusKm = Circles[i].SpawnRadiusKm,
+        RenderRadiusKm = Circles[i].RenderRadiusKm,
       };
     }
     AetherVk.Logic.Services.NativeInterop.avkSimulationContext_setParticleEmitterCirclesComponent(
@@ -1091,6 +1145,7 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
           Beta = arr[i].Beta,
           MaxParticles = arr[i].MaxParticles,
           SpawnRadiusKm = arr[i].SpawnRadiusKm,
+          RenderRadiusKm = arr[i].RenderRadiusKm,
         };
         item.PropertyChanged += Item_PropertyChanged;
         Circles.Add(item);

@@ -1296,6 +1296,7 @@ mod tests {
         beta: 2.0,
         max_particles: 10,
         spawn_radius_km: 0.0,
+        render_radius_km: 0.01,
       }],
     };
     scene.add_component(mesh_entity, circles_comp).unwrap();

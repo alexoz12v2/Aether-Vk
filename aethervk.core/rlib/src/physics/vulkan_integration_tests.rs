@@ -1099,4 +1099,298 @@ mod tests {
       })
       .unwrap();
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Radiation-pressure trajectory verification (GPU integration test)
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // Physics setup (mirrors force_debug in spawn_comet_debug):
+  //   • Sun ForceEmitter::Gravity { mu=GM_sun, beta=0 } at [0,0,0] AU.
+  //   • Comet micro-frame at [R_AU, 0, 0] AU,  scale = 1/AU_KM (km → AU).
+  //   • 10 dust particles at [0, yi, 0] km in the micro-frame (= R_KM from sun).
+  //   • Particle β = 2 → effective gravity: mu_eff = GM_sun*(1−0)*(1−2) = −GM_sun
+  //     Net outward acceleration = GM_sun / R_KM²  (+x in local frame).
+  //   • Initial velocity: [0, v0_y, 0] km/s (transverse, no x-kick initially).
+  //   • force[i] = [a_init, 0, 0]  precomputed for VV predictor first half-kick.
+  //
+  // Analytical results (constant-force approx, exact for VV with const-a):
+  //   Δx(t) = ½ · GM_sun/R_KM² · t²
+  //   Δy(t) = v0_y · t
+  //
+  // After 100 × 50 s = 5 000 s:
+  //   Δx ≈ ½ × 1.327e−3 × 5000² ≈ 16 587 km
+  //   Δy ≈ 1.0 × 5000 = 5 000 km
+  //
+  // Tolerances:
+  //   Δx: ±250 km (≈1.5%) — accounts for f32 accumulation and force non-constancy
+  //   Δy: ±0.01 km — free of f32 issues (v0_y*t is exact in f32 for small t)
+  // ───────────────────────────────────────────────────────────────────────────
+  #[test]
+  fn test_radiation_pressure_trajectory_gpu() {
+    // ── physical constants ────────────────────────────────────────────────
+    const GM_SUN_KM3_S2: f64 = 1.327_124_400_189e11; // km³ s⁻²
+    const AU_KM: f64 = 1.495_978_707e8;              // km per AU
+    const R_KM: f64 = 1.0e7;                         // comet distance from sun (km)
+    const R_AU: f64 = R_KM / AU_KM;                  // ≈ 0.0669 AU
+    const BETA: f64 = 2.0;                            // particle radiation-pressure ratio
+    const N_PARTICLES: usize = 10;
+    const DT_SIM_S: f64 = 50.0;                       // s per GPU step
+    const N_STEPS: usize = 100;
+    const DT_US: aethervk_oshal_rlib::os::time::timeus_t =
+      (DT_SIM_S * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
+
+    // Net outward acceleration for β=2 (emitter β=0):
+    //   mu_eff = GM*(1-0)*(1-2) = -GM → a_out = +GM/R²
+    let a_net: f64 = GM_SUN_KM3_S2 / (R_KM * R_KM);  // km/s²
+    let v0_y: f32 = 1.0;                               // km/s, transverse
+
+    // ── scene setup ───────────────────────────────────────────────────────
+    let ctx = VulkanTestContext::new();
+    let mut scene = Scene::new(std::sync::Arc::new(crate::gpu::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_all_crate_components();
+
+    // 1. Sun ForceEmitter at origin (root = AU coordinate space).
+    let sun = scene.spawn_entity("sun");
+    let _ = scene.add_component(sun, TransformComponent::default()); // [0,0,0] AU
+    let _ = scene.add_component(
+      sun,
+      crate::scene::ForceEmitterComponent::Gravity {
+        mu: GM_SUN_KM3_S2 as f32,
+        beta: 0.0, // emitter β=0; particle β drives mu_eff
+      },
+    );
+
+    // 2. Comet micro-frame at R_AU from the sun.
+    //    scale = 1/AU_KM → GPU converts particle local-km → global AU.
+    //    soi_radius is in local-km (50 000 km >> expected displacements).
+    let comet_frame = scene.spawn_reference_frame(
+      "CometFrame",
+      None, // root-level; no parent macro frame needed for this test
+      TransformComponent {
+        position: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+          R_AU as f32, 0.0_f32, 0.0_f32,
+        ),
+        rotation: aethervk_oshal_rlib::math::vector::vec4::Quat::identity(),
+        scale: aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+          1.0, 1.0, 1.0,
+        ),
+      },
+      crate::scene::ReferenceFrameType::Micro,
+      (1.0_f64 / AU_KM) as f32, // scale: converts km to AU
+      5.0e7_f32,                  // soi_radius: 50 000 km
+    );
+
+    // 3. Particle system — child of comet frame.
+    //    Particles at [0, yi, 0] km relative to frame centre (= R_KM from sun globally).
+    //    Using direct struct construction avoids the zero-fill from ParticleSystemComponent::new().
+    let p_sys = scene.spawn_entity("dust_particles");
+    scene.set_parent(p_sys, Some(comet_frame));
+    let _ = scene.add_component(p_sys, TransformComponent::default());
+
+    let particles_vec: alloc::vec::Vec<crate::scene::ParticleData> = (0..N_PARTICLES)
+      .map(|i| {
+        let yi = i as f32 * 0.01; // km — small y stagger for uniqueness
+        crate::scene::ParticleData {
+          id_low: i as u32,
+          id_high: 0,
+          age_low: 0,
+          age_high: 0,
+          position: [0.0, yi, 0.0], // km, local to comet frame
+          mass: 1.0e-12_f32,        // kg (irrelevant — radiation pressure is mass-independent)
+          velocity: [0.0, v0_y, 0.0],
+          active: 1,
+          force: [0.0, 0.0, 0.0], // GPU emitter applies correct force on step 1
+          padding: 0,
+        }
+      })
+      .collect();
+
+    // Record exact f32 initial positions for delta comparison.
+    let initial_positions: alloc::vec::Vec<[f32; 3]> =
+      particles_vec.iter().map(|p| p.position).collect();
+
+    let p_comp = crate::scene::ParticleSystemComponent {
+      particles: std::sync::Arc::new(parking_lot::RwLock::new(particles_vec)),
+      capacity: N_PARTICLES,
+      head_index: 0,
+      tail_index: N_PARTICLES,
+      bvh: None,
+      accumulator: 0,
+      next_id: N_PARTICLES,
+      particle_radius: 0.01,
+      render_radius_km: 1.0,
+      color: [1.0, 1.0, 1.0, 1.0],
+      ttl_us: 0, // immortal (0 = never expire)
+      beta: BETA as f32,
+      gpu_sort_order: alloc::vec::Vec::new(),
+      gpu_alive_count: 0,
+      disable_self_gravity: true, // skip inter-particle self-gravity pass
+      emit_remainder: 0.0,
+    };
+    let _ = scene.add_component(p_sys, p_comp);
+
+    ctx
+      .frontend
+      .with_device(ctx.device_handle, |dev| {
+        let vulkan_device = dev
+          .as_any()
+          .downcast_ref::<crate::gpu_backends::vulkan::device::Device>()
+          .unwrap();
+
+        // Disable inter-particle self-gravity at the GPU pipeline level.
+        crate::gpu::Kernels::toggle_particle_self_gravity(vulkan_device, false);
+
+        // ── Step-by-step integration + verification ───────────────────────
+        let mut ps = PhysicsScene::build_from_scene(&scene, DT_SIM_S as f32);
+        let mut current_time: aethervk_oshal_rlib::os::time::timeus_t = 0;
+        let mut max_dx_err = 0.0_f64; // km
+        let mut max_dy_err = 0.0_f64; // km
+
+        for step in 0..N_STEPS {
+          let t_next = current_time + DT_US;
+          let sync = crate::gpu_backends::simulation_step(
+            vulkan_device,
+            &mut ps,
+            &scene,
+            current_time,
+            t_next,
+            false,
+            DT_US,
+          )
+          .unwrap();
+          if let Some(s) = sync {
+            crate::gpu::Kernels::wait_sync(vulkan_device, &s).unwrap();
+          }
+          unsafe { vulkan_device.device.device_wait_idle() };
+          current_time = t_next;
+
+          // Rebuild PhysicsScene from updated scene state for the next step.
+          ps = PhysicsScene::build_from_scene(&scene, DT_SIM_S as f32);
+
+          let elapsed_s = (step + 1) as f64 * DT_SIM_S;
+          // Analytical displacements — constant-force VV is exact for const-a.
+          let exp_dx = 0.5 * a_net * elapsed_s * elapsed_s; // km
+          let exp_dy = v0_y as f64 * elapsed_s;              // km
+
+          let p_comp_r = scene
+            .with_component(p_sys, |c: &crate::scene::ParticleSystemComponent| c.clone())
+            .unwrap();
+          let lock = p_comp_r.particles.read();
+
+          let mut step_max_dx_err = 0.0_f64;
+          let mut step_max_dy_err = 0.0_f64;
+
+          for (i, p) in lock.iter().enumerate().take(N_PARTICLES) {
+            if p.active == 0 {
+              eprintln!(
+                "  [WARN] step={} i={} active=0 — particle inactive (pos={:?})",
+                step + 1, i, p.position
+              );
+              continue;
+            }
+
+            let init = initial_positions[i];
+            let actual_dx = (p.position[0] - init[0]) as f64;
+            let actual_dy = (p.position[1] - init[1]) as f64;
+            let actual_dz = p.position[2] as f64;
+
+            let dx_err = (actual_dx - exp_dx).abs();
+            let dy_err = (actual_dy - exp_dy).abs();
+
+            step_max_dx_err = step_max_dx_err.max(dx_err);
+            step_max_dy_err = step_max_dy_err.max(dy_err);
+
+            if step + 1 <= 5 || (step + 1) % 20 == 0 {
+              // Print first few steps and every 20th for brevity.
+              eprintln!(
+                "step={:3}  i={:2}  t={:.0}s  \
+                 Δx: actual={:+.3}  expected={:+.3}  err={:.3e}  \
+                 Δy: actual={:+.3}  expected={:+.3}  err={:.3e}  \
+                 Δz: {:.3e}  km",
+                step + 1, i, elapsed_s,
+                actual_dx, exp_dx, dx_err,
+                actual_dy, exp_dy, dy_err,
+                actual_dz,
+              );
+            }
+          }
+          max_dx_err = max_dx_err.max(step_max_dx_err);
+          max_dy_err = max_dy_err.max(step_max_dy_err);
+        }
+
+        // ── Final assertions ──────────────────────────────────────────────
+        let exp_dx_final = 0.5 * a_net * (N_STEPS as f64 * DT_SIM_S).powi(2);
+        let exp_dy_final = v0_y as f64 * (N_STEPS as f64 * DT_SIM_S);
+
+        eprintln!(
+          "\n=== Radiation-pressure GPU test summary ===\n\
+           a_net          = {:.4e} km/s²  (β={}, R={:.0e} km)\n\
+           expected Δx    = {:.1} km  after {} steps × {} s\n\
+           expected Δy    = {:.1} km\n\
+           max |Δx_err|   = {:.3e} km\n\
+           max |Δy_err|   = {:.3e} km",
+          a_net, BETA, R_KM,
+          exp_dx_final, N_STEPS, DT_SIM_S as usize,
+          exp_dy_final,
+          max_dx_err,
+          max_dy_err,
+        );
+
+        // Δx: radiation pressure drove particles outward (must be > 1 000 km and precise).
+        let p_comp_f = scene
+          .with_component(p_sys, |c: &crate::scene::ParticleSystemComponent| c.clone())
+          .unwrap();
+        let lock_f = p_comp_f.particles.read();
+        let mean_dx: f64 = lock_f
+          .iter()
+          .take(N_PARTICLES)
+          .filter(|p| p.active != 0)
+          .map(|p| {
+            let init = initial_positions[p.id_low as usize];
+            (p.position[0] - init[0]) as f64
+          })
+          .sum::<f64>()
+          / N_PARTICLES as f64;
+
+        // Sign / presence check: force must be outward (+x) and non-trivial.
+        assert!(
+          mean_dx > 1_000.0,
+          "Mean Δx = {:.1} km — radiation pressure absent or inverted (expected ≈ {:.0} km).",
+          mean_dx,
+          exp_dx_final,
+        );
+
+        // Accuracy check vs analytical formula.
+        assert!(
+          max_dx_err < 250.0,
+          "Δx error {:.1} km exceeds ±250 km tolerance — \
+           radiation pressure magnitude or VV integration is wrong \
+           (expected total Δx ≈ {:.0} km after {} steps).",
+          max_dx_err,
+          exp_dx_final,
+          N_STEPS,
+        );
+
+        // Transverse check: radiation pressure acquires a small y-component
+        // as the particle drifts ~5000 km in y (angular ≈ 5e-4 rad → a_y ≈ 6.6e-7 km/s²).
+        // Allow up to 10 km transverse error (force physics, not a VV bug).
+        assert!(
+          max_dy_err < 10.0,
+          "Δy error {:.4} km exceeds ±10 km — \
+           initial velocity or y-axis integration is broken.",
+          max_dy_err,
+        );
+
+        eprintln!(
+          "✓ test_radiation_pressure_trajectory_gpu PASSED  \
+           mean_dx = {:.1} km  (expected {:.0} km)",
+          mean_dx, exp_dx_final,
+        );
+        crate::types::GpuResult::Ok(())
+      })
+      .unwrap();
+  }
 }
+

@@ -900,6 +900,17 @@ public static class NativeInterop
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   public static extern double avkSimulationContext_getSimulationTime(IntPtr ctx, ulong sceneId);
 
+  /// <summary>
+  /// Returns the GPU-alive particle count for a <c>ParticleSystemComponent</c> entity.
+  /// Updated by <c>write_back_to_scene</c> after every physics tick.
+  /// </summary>
+  [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSimulationContext_getParticleSystemAliveCount(
+    IntPtr ctx,
+    ulong sceneId,
+    ulong entityId
+  );
+
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.I1)]
   public static extern bool avkSimulationContext_getSimulationTimeUtc(
@@ -1377,6 +1388,11 @@ public static class NativeInterop
     public uint MaxParticles;
     /// <summary>Spawn-disc radius (km) in the surface tangent plane. 0 = point source.</summary>
     public float SpawnRadiusKm;
+    /// <summary>
+    /// Visual billboard half-size (km) for the particle renderer.
+    /// Controls how large each particle appears on screen. Default 0.01 km = 10 m.
+    /// </summary>
+    public float RenderRadiusKm;
   }
 
   [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
