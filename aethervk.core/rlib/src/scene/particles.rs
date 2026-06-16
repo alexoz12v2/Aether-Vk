@@ -184,7 +184,7 @@ impl ParticleSystemComponent {
       accumulator: 0,
       next_id: 0,
       particle_radius: 0.01,       // 10 m default
-      render_radius_km: 0.01,       // 10 m default — visible but not huge
+      render_radius_km: 1.0,        // 1 km default — visible at typical comet-approach distances
       color: [1.0, 1.0, 1.0, 1.0], // white default
       ttl_us: 0,                   // 0 = never expire (set from EmissionCircle.ttl)
       beta: 0.0,                   // set from EmissionCircle.beta
@@ -326,7 +326,7 @@ mod tests {
       velocity_std_dev: 0.05,
       child_entity: None,
       beta: 1.0,
-      max_particles: 4096,
+      max_particles: 8192,
       spawn_radius_km: 0.0,
       render_radius_km: 0.01,
     });

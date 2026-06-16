@@ -1632,8 +1632,17 @@ impl SceneConversionExt for crate::scene::Scene {
           );
         }
         for layer in &depth_layers {
+          // Count total active particles across all PSCs in this layer for the log
+          let total_psc_capacity: usize = layer.particles.iter()
+            .filter_map(|(_, weak, _, _)| weak.upgrade())
+            .map(|arc| arc.read().len())
+            .sum();
+          let active_particle_count: usize = layer.particles.iter()
+            .filter_map(|(_, weak, _, _)| weak.upgrade())
+            .map(|arc| arc.read().iter().filter(|p| p.active != 0).count())
+            .sum();
           aethervk_oshal_rlib::log!(
-            "\x1b[36m  DepthLayer {} -> near={:.2e} far={:.2e} meshes={} billboards={} gizmos={} sphere_gizmos={} trajectories={}\x1b[0m",
+            "\x1b[36m  DepthLayer {} -> near={:.2e} far={:.2e} meshes={} billboards={} gizmos={} sphere_gizmos={} trajectories={} psc_systems={} psc_active={}/{}\x1b[0m",
             layer.layer_index,
             layer.near,
             layer.far,
@@ -1641,7 +1650,10 @@ impl SceneConversionExt for crate::scene::Scene {
             layer.billboards.len(),
             layer.gizmos.len(),
             layer.sphere_gizmos.len(),
-            layer.trajectories.len()
+            layer.trajectories.len(),
+            layer.particles.len(),
+            active_particle_count,
+            total_psc_capacity,
           );
           for mesh in &layer.meshes {
             let p = mesh.global_transform.position;

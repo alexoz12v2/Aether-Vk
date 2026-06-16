@@ -56,74 +56,131 @@
                                             ToolTip.Tip="Remove this emission jet"/>
                                 </Grid>
 
-                                <!-- Properties wrapped for responsiveness -->
-                                <WrapPanel Margin="0,4,0,0">
-                                    
-                                    <!-- Position -->
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="Latitude (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding LatitudeDeg}" HasBounds="True" MinBound="-90" MaxBound="90" Step="1" Width="120"/>
-                                    </StackPanel>
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="Longitude (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding LongitudeDeg}" IsWrapped="True" WrapMin="0" WrapMax="360" Step="1" Width="120"/>
-                                    </StackPanel>
+                                <!-- ═══ PHYSICAL PARAMETERS ════════════════════════════════════════════ -->
 
-                                    <!-- Geometry & Mass -->
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="Mass (g)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding MassGrams}" HasBounds="True" MinBound="0" Step="0.1" Width="120"/>
+                                <!-- Changes here affect physics and will invalidate the simulation.     -->
+                                <Border Margin="0,4,0,0" Padding="0,0,0,8">
+                                    <StackPanel Spacing="8">
+                                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+                                            <TextBlock Text="⚛" FontSize="11" Opacity="0.6"
+                                                       VerticalAlignment="Center"/>
+                                            <TextBlock Text="PHYSICAL PARAMETERS" FontSize="10"
+                                                       FontWeight="SemiBold" Opacity="0.6"
+                                                       LetterSpacing="2" VerticalAlignment="Center"/>
+                                            <TextBlock Text="· changes restart simulation"
+                                                       FontSize="10" Opacity="0.4"
+                                                       VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                        <WrapPanel>
+                                            <!-- Surface position -->
+                                            <StackPanel Margin="0,0,16,12">
+                                                <TextBlock Text="Latitude (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding LatitudeDeg}" HasBounds="True" MinBound="-90" MaxBound="90" Step="1" Width="120"/>
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,16,12">
+                                                <TextBlock Text="Longitude (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding LongitudeDeg}" IsWrapped="True" WrapMin="0" WrapMax="360" Step="1" Width="120"/>
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,16,12">
+                                                <TextBlock Text="Jet radius (km)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding CircleRadiusKm}" HasBounds="True" MinBound="0.001" Step="0.01" Width="120"/>
+                                            </StackPanel>
+                                            <!-- Dust grain mass -->
+                                            <StackPanel Margin="0,0,16,12">
+                                                <TextBlock Text="Grain mass (g)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding MassGrams}" HasBounds="True" MinBound="0" Step="0.01" Width="120"/>
+                                                <TextBlock Text="{Binding MassGrams, StringFormat='{}{0:G4} g'}"
+                                                           FontSize="10" Opacity="0.55" Margin="0,2,0,0"
+                                                           FontFamily="Consolas,Monospace"/>
+                                            </StackPanel>
+                                            <!-- Emission rate + lifetime -->
+                                            <StackPanel Margin="0,0,16,12">
+                                                <TextBlock Text="Rate (/s)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding ParticlesPerSecondDouble}" HasBounds="True" MinBound="0" Step="100" Width="120"/>
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,16,12">
+                                                <TextBlock Text="Lifetime (ticks)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding TTLDouble}" HasBounds="True" MinBound="1" Step="10" Width="120"
+                                                                           ToolTip.Tip="{Binding TtlHintText}"/>
+                                                <TextBlock Text="{Binding TtlHintText}" FontSize="10"
+                                                           Foreground="{DynamicResource Text.Secondary}"
+                                                           Opacity="0.7" Margin="0,2,0,0" Width="120"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,16,12">
+                                                <TextBlock Text="Max particles" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding MaxParticlesDouble}" HasBounds="True" MinBound="64" Step="256" Width="120"
+                                                                           ToolTip.Tip="GPU ring-buffer capacity. Changes rebuild the particle system. Default: 16384."/>
+                                                <TextBlock Text="{Binding MaxParticles, StringFormat='{}{0:N0}'}"
+                                                           FontSize="10" Opacity="0.55" Margin="0,2,0,0"
+                                                           FontFamily="Consolas,Monospace"/>
+                                            </StackPanel>
+                                            <!-- Velocity -->
+                                            <StackPanel Margin="0,0,16,12">
+                                                <TextBlock Text="Velocity (km/s)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <controls:UnboundedSlider Value="{Binding MeanVelocityKms}" HasBounds="True" MinBound="0.0" Step="0.001" Width="120"/>
+                                                <TextBlock Text="{Binding MeanVelocityKms, StringFormat='{}{0:G4} km/s'}"
+                                                           FontSize="10" Opacity="0.55" Margin="0,2,0,0"
+                                                           FontFamily="Consolas,Monospace"/>
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,16,12">
+                                                <TextBlock Text="Dir. spread (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"
+                                                           ToolTip.Tip="Cone half-angle for emission direction randomness. 0 = collimated jet."/>
+                                                <controls:UnboundedSlider Value="{Binding VelocityDirStdDevDeg}" HasBounds="True" MinBound="0.0" MaxBound="180.0" Step="1" Width="120"/>
+                                                <TextBlock Text="{Binding VelocityDirStdDevDeg, StringFormat='{}{0:G4}°'}"
+                                                           FontSize="10" Opacity="0.55" Margin="0,2,0,0"
+                                                           FontFamily="Consolas,Monospace"/>
+                                            </StackPanel>
+                                            <!-- Radiation pressure -->
+                                            <StackPanel Margin="0,0,16,12">
+                                                <TextBlock Text="β (rad. pressure)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"
+                                                           ToolTip.Tip="Ratio of radiation pressure to gravity. β=1 means full gravity cancellation (dust floats). β=0 means no radiation pressure."/>
+                                                <controls:UnboundedSlider Value="{Binding Beta}" HasBounds="True" MinBound="0.0" Step="0.05" Width="120"/>
+                                            </StackPanel>
+                                            <!-- Spawn scatter -->
+                                            <StackPanel Margin="0,0,16,12">
+                                                <TextBlock Text="Spawn scatter (km)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"
+                                                           ToolTip.Tip="Randomly offset spawn positions within this disc radius. 0 = point source."/>
+                                                <controls:UnboundedSlider Value="{Binding SpawnRadiusKm}" HasBounds="True" MinBound="0.0" Step="0.01" Width="120"/>
+                                            </StackPanel>
+                                        </WrapPanel>
                                     </StackPanel>
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="Radius (km)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding CircleRadiusKm}" HasBounds="True" MinBound="0.001" Step="0.01" Width="120"/>
-                                    </StackPanel>
+                                </Border>
 
-                                    <!-- Emission Params -->
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="Rate (/s)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding ParticlesPerSecondDouble}" HasBounds="True" MinBound="0" Step="100" Width="120"/>
+                                <!-- ═══ VISUAL / DISPLAY PARAMETERS ══════════════════════════════════ -->
+                                <!-- Changes here are cosmetic only and do not affect physics.         -->
+                                <Border Padding="0,4,0,0">
+                                    <StackPanel Spacing="8">
+                                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+                                            <TextBlock Text="🎨" FontSize="11" Opacity="0.6"
+                                                       VerticalAlignment="Center"/>
+                                            <TextBlock Text="VISUAL PARAMETERS" FontSize="10"
+                                                       FontWeight="SemiBold" Opacity="0.6"
+                                                       LetterSpacing="2" VerticalAlignment="Center"/>
+                                            <TextBlock Text="· no simulation restart"
+                                                       FontSize="10" Opacity="0.4"
+                                                       VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                        <WrapPanel>
+                                            <!-- Particle billboard size -->
+                                            <StackPanel Margin="0,0,16,12">
+                                                <TextBlock Text="Particle size (km)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"
+                                                           ToolTip.Tip="Visual billboard radius per particle. Changes are live — no restart needed."/>
+                                                <controls:UnboundedSlider Value="{Binding RenderRadiusKmDouble}" HasBounds="True" MinBound="0.001" Step="0.005" Width="120"/>
+                                                <TextBlock Text="{Binding RenderRadiusKmDouble, StringFormat='{}{0:G4} km'}"
+                                                           FontSize="10" Opacity="0.55" Margin="0,2,0,0"
+                                                           FontFamily="Consolas,Monospace"/>
+                                            </StackPanel>
+                                            <!-- Colour -->
+                                            <StackPanel Margin="0,0,0,12">
+                                                <TextBlock Text="Colour" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
+                                                <ColorPicker Color="{Binding ColorArgbUint, Converter={StaticResource UintToColor}, Mode=TwoWay}"
+                                                             IsAlphaVisible="True"
+                                                             Width="200" />
+                                            </StackPanel>
+                                        </WrapPanel>
                                     </StackPanel>
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="TTL (ticks)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding TTLDouble}" HasBounds="True" MinBound="1" Step="10" Width="120"
-                                                                  ToolTip.Tip="{Binding TtlHintText}"/>
-                                        <TextBlock Text="{Binding TtlHintText}" FontSize="10"
-                                                   Foreground="{DynamicResource Text.Secondary}"
-                                                   Opacity="0.7" Margin="0,2,0,0" Width="120"
-                                                   TextWrapping="Wrap"/>
-                                    </StackPanel>
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="Velocity (km/s)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding MeanVelocityKms}" HasBounds="True" MinBound="0.0" Step="0.1" Width="120"/>
-                                    </StackPanel>
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="Dir StdDev (°)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding VelocityDirStdDevDeg}" HasBounds="True" MinBound="0.0" MaxBound="180.0" Step="1" Width="120"/>
-                                    </StackPanel>
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="β (rad.pres.)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding Beta}" HasBounds="True" MinBound="0.0" Step="0.1" Width="120"/>
-                                    </StackPanel>
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="Spawn radius (km)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding SpawnRadiusKm}" HasBounds="True" MinBound="0.0" Step="0.1" Width="120"
-                                                                  ToolTip.Tip="Scatter spawn positions over a disc of this radius. 0 = point source."/>
-                                    </StackPanel>
-                                    <StackPanel Margin="0,0,16,12">
-                                        <TextBlock Text="Particle size (km)" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <controls:UnboundedSlider Value="{Binding RenderRadiusKmDouble}" HasBounds="True" MinBound="0.001" Step="0.005" Width="120"
-                                                                  ToolTip.Tip="Visual billboard half-size per particle. 0.01 km = 10 m."/>
-                                    </StackPanel>
-
-                                    <!-- Colour picker -->
-                                    <StackPanel Margin="0,0,0,12">
-                                        <TextBlock Text="Colour" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,4"/>
-                                        <ColorPicker Color="{Binding ColorArgbUint, Converter={StaticResource UintToColor}}"
-                                                     IsAlphaVisible="True"
-                                                     Width="200" />
-                                    </StackPanel>
-                                </WrapPanel>
+                                </Border>
                             </StackPanel>
                         </Border>
                     </DataTemplate>
@@ -139,3 +196,4 @@
         </StackPanel>
     </Expander>
 </UserControl>
+

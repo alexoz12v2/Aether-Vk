@@ -1,6 +1,8 @@
 use aethervk_core_rlib::{
-  gpu::PresentationEngineHandle, scene::camera::QuatToEulerAngles,
-  simulation_api::SimulationContext, types::EngineResult,
+  gpu::PresentationEngineHandle,
+  scene::{HiddenComponent, camera::QuatToEulerAngles},
+  simulation_api::SimulationContext,
+  types::EngineResult,
 };
 use aethervk_oshal_rlib::math::{
   matrix::SquareMatrix,
@@ -37,11 +39,11 @@ struct SpawnCometDelegate {
 /// Physics sub-step presets cycled by the M key (seconds).
 /// None = use TimeScale default (currently 100 s for OneDay).
 const SUB_DT_RING: &[Option<f64>] = &[
-  None,          // auto  (100 s for OneDay)
-  Some(1440.0),  // 1 sub-step / day  — original blob behaviour
-  Some(100.0),   // ~14 sub-steps / day
-  Some(10.0),    // ~144 sub-steps / day
-  Some(1.0),     // ~1440 sub-steps / day — finest grain
+  None,         // auto  (100 s for OneDay)
+  Some(1440.0), // 1 sub-step / day  — original blob behaviour
+  Some(100.0),  // ~14 sub-steps / day
+  Some(10.0),   // ~144 sub-steps / day
+  Some(1.0),    // ~1440 sub-steps / day — finest grain
 ];
 
 impl SimulationDelegate for SpawnCometDelegate {
@@ -56,6 +58,12 @@ impl SimulationDelegate for SpawnCometDelegate {
     pe_handle: PresentationEngineHandle,
     _window: &Window,
   ) -> EngineResult<()> {
+    {
+      let scene = ctx.get_scene(scene_id).unwrap();
+      let scene_read = scene.read();
+      let grid_entity = scene_read.grid_entity.unwrap();
+      scene_read.scene.add_component(grid_entity, HiddenComponent {}).unwrap();
+    }
     let assets_dir = cycle_get_asset_path_from_exe(true);
     let comet_path = assets_dir.join("Comet2.glb");
     aethervk_core_rlib::gpu::ASSET_DIR
@@ -64,7 +72,7 @@ impl SimulationDelegate for SpawnCometDelegate {
 
     let loaded_mesh = aethervk_core_rlib::simulation::comet::load_comet_from_gltf(
       comet_path.to_str().unwrap(),
-      false,  // build BVH — required for sun-side occlusion check in emit_particles_from_circles
+      false, // build BVH — required for sun-side occlusion check in emit_particles_from_circles
       None,
     )
     .expect("Failed to load comet mesh");
@@ -80,7 +88,7 @@ impl SimulationDelegate for SpawnCometDelegate {
       "comet",
       Vec3f32::from_components(1.0, 0.0, 0.0), // 1.0 AU along +x (realistic heliocentric distance)
       Quat::identity(),
-      2000.0,            // radius_km = 20 km (user-visible comet body)
+      2000.0,          // radius_km = 20 km (user-visible comet body)
       1000.0,          // mass_kg
       0,               // physics_type = static
       0,               // comet id (ignored when static)
@@ -185,7 +193,12 @@ impl SimulationDelegate for SpawnCometDelegate {
       println!(
         "[JET] use_bvh={} surface=({:.4},{:.4},{:.4}) normal=({:.4},{:.4},{:.4})",
         USE_BVH_RAYCAST,
-        hit_pt[0], hit_pt[1], hit_pt[2], hit_normal[0], hit_normal[1], hit_normal[2],
+        hit_pt[0],
+        hit_pt[1],
+        hit_pt[2],
+        hit_normal[0],
+        hit_normal[1],
+        hit_normal[2],
       );
 
       // Spawn child entity for the emission sphere
@@ -226,7 +239,7 @@ impl SimulationDelegate for SpawnCometDelegate {
       // ParticleSystemComponent for this jet
       let mut psc = aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(1000000);
       psc.color = [0.2, 0.8, 1.0, 1.0]; // cyan
-      psc.particle_radius = 0.2;          // 200m physics collision radius
+      psc.particle_radius = 0.2; // 200m physics collision radius
       // Camera is 100 km from comet (sunward side, looking +x into the tail).
       // 10 km billboard → arctan(10/100)≈5.7° (≈7 px): clearly visible near comet.
       // With 166 sub-step compensation particles spanning 0–204 km at ~1.2 km
@@ -257,8 +270,14 @@ impl SimulationDelegate for SpawnCometDelegate {
           // Pool fills at 25 p/sub-step × 166 sub-steps/dispatch × 90fps = ~373k/real-s,
           // hitting 1M capacity in ~2.7 real-s then cycling at steady state.
           ttl: {
-            #[cfg(feature = "force_debug")] { 0 }        // never expire: observe full trajectory
-            #[cfg(not(feature = "force_debug"))] { 1000 } // normal: 1000 sub-step lifetime
+            #[cfg(feature = "force_debug")]
+            {
+              0
+            } // never expire: observe full trajectory
+            #[cfg(not(feature = "force_debug"))]
+            {
+              1000
+            } // normal: 1000 sub-step lifetime
           },
           // 0.1 km/s initial velocity perpendicular to radiation pressure (+x):
           // radiation pressure bends the trajectory from +y toward +x over time.
@@ -272,6 +291,7 @@ impl SimulationDelegate for SpawnCometDelegate {
           // Scatter spawn positions over a disc 2× the comet radius so the
           // tail origin looks like a diffuse surface patch, not a point.
           spawn_radius_km: sphere_radius_km * 2.0,
+          render_radius_km: 10.0,
         }],
       };
       let _ = scene_ctx.scene.add_component(comet_int, emitter);
@@ -529,7 +549,11 @@ impl SimulationDelegate for SpawnCometDelegate {
       // TTL=1000 GPU sub-steps ≈ 8.3 dispatches lifetime → ~192k alive.
       // CPU aging: 8 × 192k × 5ns ≈ 8ms per dispatch → smooth 60fps.
       // force_debug: 10 p/s for denser debug view (TTL=∞ so no steady-state).
-      let on_rate: f32 = if cfg!(feature = "force_debug") { 10.0 } else { 2.0 };
+      let on_rate: f32 = if cfg!(feature = "force_debug") {
+        10.0
+      } else {
+        2.0
+      };
       let new_rate: f32 = if self.jet_emitting { on_rate } else { 0.0 };
       let scene = ctx.get_scene(scene_id).unwrap();
       let scene_read = scene.read();
@@ -578,15 +602,16 @@ impl SimulationDelegate for SpawnCometDelegate {
       let scene_read = scene.read();
       scene_read.time_state.write().max_sub_dt_override = preset;
       let label = match preset {
-        None    => "auto (100 s)".to_string(),
+        None => "auto (100 s)".to_string(),
         Some(s) => format!("{} s", s),
       };
-      let n_steps = preset.map_or(
-        (1440.0_f64 / 100.0).ceil() as u32,
-        |s| (1440.0_f64 / s).ceil() as u32,
+      let n_steps = preset.map_or((1440.0_f64 / 100.0).ceil() as u32, |s| {
+        (1440.0_f64 / s).ceil() as u32
+      });
+      println!(
+        "\x1b[1;35m[SUB-DT] max_sub_dt = {}  ({} sub-steps/day)\x1b[0m",
+        label, n_steps
       );
-      println!("\x1b[1;35m[SUB-DT] max_sub_dt = {}  ({} sub-steps/day)\x1b[0m",
-        label, n_steps);
       return;
     }
 
@@ -662,8 +687,12 @@ impl SimulationDelegate for SpawnCometDelegate {
         let ray_dir = Vec3f32::from_components(-dir.x(), -dir.y(), -dir.z());
         println!(
           "[JET-J] ray_orig=({:.4},{:.4},{:.4}) ray_dir=({:.4},{:.4},{:.4})",
-          ray_orig.x(), ray_orig.y(), ray_orig.z(),
-          ray_dir.x(), ray_dir.y(), ray_dir.z()
+          ray_orig.x(),
+          ray_orig.y(),
+          ray_orig.z(),
+          ray_dir.x(),
+          ray_dir.y(),
+          ray_dir.z()
         );
         if let Some(ref bvh) = mesh_arc.bvh {
           match bvh.raycast(ray_orig, ray_dir, &mesh_arc.vertices, &mesh_arc.indices) {
@@ -684,8 +713,14 @@ impl SimulationDelegate for SpawnCometDelegate {
       };
       println!(
         "[JET-J] use_bvh={} bvh_hit={} hit_pt=({:.6},{:.6},{:.6}) hit_normal=({:.6},{:.6},{:.6})",
-        USE_BVH_RAYCAST_J, bvh_hit,
-        hit_pt[0], hit_pt[1], hit_pt[2], hit_normal[0], hit_normal[1], hit_normal[2]
+        USE_BVH_RAYCAST_J,
+        bvh_hit,
+        hit_pt[0],
+        hit_pt[1],
+        hit_pt[2],
+        hit_normal[0],
+        hit_normal[1],
+        hit_normal[2]
       );
 
       // Clear all existing particles so the old emission position doesn't persist.
@@ -710,7 +745,9 @@ impl SimulationDelegate for SpawnCometDelegate {
           |psc: &mut aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
             // Kill all alive particles immediately.
             let mut pool = psc.particles.write();
-            for p in pool.iter_mut() { p.active = 0; }
+            for p in pool.iter_mut() {
+              p.active = 0;
+            }
             psc.gpu_alive_count = 0;
           },
         );
@@ -754,8 +791,12 @@ impl SimulationDelegate for SpawnCometDelegate {
         // 50 km from comet nucleus, sunward side — same geometry as startup.
         let close_offset = 50.0_f32 / 149_597_870.7_f32;
         (
-          Some(Vec3f32::from_components((1.0 - close_offset) as f32, 0.0, 0.0)),
-          Some(close_offset as f64),  // will be overridden below; just moves position
+          Some(Vec3f32::from_components(
+            (1.0 - close_offset) as f32,
+            0.0,
+            0.0,
+          )),
+          Some(close_offset as f64), // will be overridden below; just moves position
           None,
         )
       }
@@ -862,7 +903,11 @@ impl SimulationDelegate for SpawnCometDelegate {
       } else {
         self.ema_frame_ms = 0.05 * dt_ms + 0.95 * self.ema_frame_ms;
       }
-      let fps = if self.ema_frame_ms > 0.0 { (1000.0 / self.ema_frame_ms).min(9999.0) } else { 0.0 };
+      let fps = if self.ema_frame_ms > 0.0 {
+        (1000.0 / self.ema_frame_ms).min(9999.0)
+      } else {
+        0.0
+      };
 
       let scene = ctx.get_scene(scene_id).unwrap();
       let scene_read = scene.read();
@@ -878,32 +923,42 @@ impl SimulationDelegate for SpawnCometDelegate {
       let mut sum_pos_x: f64 = 0.0;
       let mut max_speed: f64 = 0.0;
       let mut n_sampled: u64 = 0;
-      scene_read.scene.query1::<
-        aethervk_core_rlib::scene::particles::ParticleSystemComponent, _
-      >(|_, psc| {
-        total_particles += psc.gpu_alive_count as u64;
-        let guard = psc.particles.read();
-        for p in guard.iter().filter(|p| p.active != 0) {
-          let vx = p.velocity[0] as f64;
-          let vy = p.velocity[1] as f64;
-          let vz = p.velocity[2] as f64;
-          sum_vel_x += vx;
-          sum_pos_x += p.position[0] as f64;
-          let speed = (vx * vx + vy * vy + vz * vz).sqrt();
-          if speed > max_speed { max_speed = speed; }
-          n_sampled += 1;
-        }
-      });
+      scene_read
+        .scene
+        .query1::<aethervk_core_rlib::scene::particles::ParticleSystemComponent, _>(|_, psc| {
+          total_particles += psc.gpu_alive_count as u64;
+          let guard = psc.particles.read();
+          for p in guard.iter().filter(|p| p.active != 0) {
+            let vx = p.velocity[0] as f64;
+            let vy = p.velocity[1] as f64;
+            let vz = p.velocity[2] as f64;
+            sum_vel_x += vx;
+            sum_pos_x += p.position[0] as f64;
+            let speed = (vx * vx + vy * vy + vz * vz).sqrt();
+            if speed > max_speed {
+              max_speed = speed;
+            }
+            n_sampled += 1;
+          }
+        });
 
-      let mean_vel_x  = if n_sampled > 0 { sum_vel_x / n_sampled as f64 } else { 0.0 };
-      let mean_pos_x  = if n_sampled > 0 { sum_pos_x / n_sampled as f64 } else { 0.0 };
+      let mean_vel_x = if n_sampled > 0 {
+        sum_vel_x / n_sampled as f64
+      } else {
+        0.0
+      };
+      let mean_pos_x = if n_sampled > 0 {
+        sum_pos_x / n_sampled as f64
+      } else {
+        0.0
+      };
 
       use std::io::Write;
       let sub_dt_label = {
         let scene = ctx.get_scene(scene_id).unwrap();
         let scene_read = scene.read();
         match scene_read.time_state.read().max_sub_dt_override {
-          None    => "dt=auto".to_string(),
+          None => "dt=auto".to_string(),
           Some(s) => format!("dt={:.0}s", s),
         }
       };
@@ -931,18 +986,15 @@ impl SimulationDelegate for SpawnCometDelegate {
         //   mean_vx = a × T / 2               (mean particle velocity after 1 dispatch)
         // For a longer steady-state tail (multiple dispatches), values grow.
         const BETA: f64 = 2.0;
-        const GM_SUN: f64 = 1.327_124e11;   // km³/s²
-        const R_1AU: f64  = 149_597_870.7;  // km
+        const GM_SUN: f64 = 1.327_124e11; // km³/s²
+        const R_1AU: f64 = 149_597_870.7; // km
         let a_net: f64 = (BETA - 1.0) * GM_SUN / (R_1AU * R_1AU); // ≈ 5.93e-6 km/s²
         // At OneDay scale, batched dispatch ≈ 6 frames × (1/60 s × 86400 s/day) = 8640 sim-s.
         // With max_sub_dt=50s: N≈66×2=166, T≈8294s (hardcoded approx, see [EMIT-DIAG]).
         let t_dispatch: f64 = 8_294.0; // sim-s per dispatch
-        let exp_mean_x  = a_net * t_dispatch * t_dispatch / 6.0;  // km
-        let exp_mean_vx = a_net * t_dispatch / 2.0;               // km/s
-        println!(
-          "\n[RAD-PROOF] frame={} alive={}",
-          diag_frame, n_sampled,
-        );
+        let exp_mean_x = a_net * t_dispatch * t_dispatch / 6.0; // km
+        let exp_mean_vx = a_net * t_dispatch / 2.0; // km/s
+        println!("\n[RAD-PROOF] frame={} alive={}", diag_frame, n_sampled,);
         println!(
           "  actual:   mean_vx={:+.4e} km/s  mean_x={:+.4e} km  v_max={:.4e} km/s",
           mean_vel_x, mean_pos_x, max_speed,
@@ -953,8 +1005,16 @@ impl SimulationDelegate for SpawnCometDelegate {
         );
         println!(
           "  ratio:    vx_ratio={:.3}  x_ratio={:.3}  (expected ≈1.0 once tail fills)",
-          if exp_mean_vx.abs() > 1e-12 { mean_vel_x / exp_mean_vx } else { 0.0 },
-          if exp_mean_x.abs() > 1e-12 { mean_pos_x / exp_mean_x } else { 0.0 },
+          if exp_mean_vx.abs() > 1e-12 {
+            mean_vel_x / exp_mean_vx
+          } else {
+            0.0
+          },
+          if exp_mean_x.abs() > 1e-12 {
+            mean_pos_x / exp_mean_x
+          } else {
+            0.0
+          },
         );
       }
 
@@ -1041,7 +1101,6 @@ impl SimulationDelegate for SpawnCometDelegate {
           }
         }
       }
-
     }
     // ── End HUD ───────────────────────────────────────────────────────────────
 
@@ -1133,7 +1192,7 @@ fn main() {
     jet_emitting: false,
     jet_sunlit: false,
     ema_frame_ms: 0.0,
-    sub_dt_idx: 0,   // starts at SUB_DT_RING[0] = None (auto 100 s)
+    sub_dt_idx: 0, // starts at SUB_DT_RING[0] = None (auto 100 s)
   };
   run_simulation_app("AetherVk Comet Spawn Test", delegate);
 }
