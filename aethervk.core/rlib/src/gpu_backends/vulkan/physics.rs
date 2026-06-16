@@ -756,17 +756,29 @@ impl<T: Copy + Send + Sync> WaitHandle<Vec<T>> for VulkanReadHandle<T> {
 
     let device = unsafe { self.device.as_ref() };
 
+    // Vulkan semaphore wait timeout: 10 seconds in nanoseconds.
+    // Previously u64::MAX (infinite) — a GPU shader that diverges (e.g. from a
+    // large physics dt causing BVH degeneration) would block this thread and
+    // therefore the physics tasklet FOREVER, freezing the simulation.
+    // With a finite timeout the tasklet returns Err, done=true is set, and the
+    // logic thread can dispatch the next physics step on the next tick.
+    // Timeline semaphore ordering ensures the GPU still serializes dispatches
+    // correctly even if the CPU side timed out.
+    const GPU_FENCE_TIMEOUT_NS: u64 = 10_000_000_000; // 10 s
+
     // Wait on the throwaway timeline semaphore first
     if self.throwaway_sem != vk::Semaphore::null() {
-      device.wait_for_semaphore_value(self.throwaway_sem, 1, u64::MAX).map_err(|e| {
-        crate::types::EngineError::Gpu(crate::gpu_err!("Throwaway sem wait failed: {:?}", e))
-      })?;
+      device
+        .wait_for_semaphore_value(self.throwaway_sem, 1, GPU_FENCE_TIMEOUT_NS)
+        .map_err(|e| {
+          crate::types::EngineError::Gpu(crate::gpu_err!("Throwaway sem wait failed (timeout or error): {:?}", e))
+        })?;
     }
 
     // Also wait on timeline semaphore (belt-and-suspenders)
     device
-      .wait_for_semaphore_value(self.timeline_sem, target_value, u64::MAX)
-      .map_err(|e| crate::types::EngineError::Gpu(crate::gpu_err!("Wait failed: {:?}", e)))?;
+      .wait_for_semaphore_value(self.timeline_sem, target_value, GPU_FENCE_TIMEOUT_NS)
+      .map_err(|e| crate::types::EngineError::Gpu(crate::gpu_err!("Physics timeline sem wait failed (timeout or error): {:?}", e)))?;
 
     let mut alloc_mut = self.staging_allocation.take().unwrap();
     let info = self.allocator.get_allocation_info(&alloc_mut);
@@ -5209,12 +5221,15 @@ impl Kernels for Device {
   fn wait_sync(&self, sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()> {
     use ash::vk::Handle;
     let sem = ash::vk::Semaphore::from_raw(sync.timeline_semaphore);
+    // 10-second timeout instead of u64::MAX to prevent indefinite freeze
+    // when GPU is overloaded or BVH traversal degenerates.
+    const GPU_SYNC_TIMEOUT_NS: u64 = 10_000_000_000;
     self
       .device
-      .wait_for_semaphore_value(sem, sync.timeline_value, u64::MAX)
+      .wait_for_semaphore_value(sem, sync.timeline_value, GPU_SYNC_TIMEOUT_NS)
       .map_err(|e| {
         crate::types::EngineError::Gpu(crate::types::GpuError::BackendSpecific(alloc::format!(
-          "{:?}", e
+          "wait_sync timeout or error: {:?}", e
         )))
       })?;
 

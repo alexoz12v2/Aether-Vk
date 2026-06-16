@@ -311,6 +311,66 @@ namespace AetherVk.Services
         _consoleService.Log(
           $"[Spawn] Kinematic: AlmanacPlanet created with NAIF ID {result.SpkNaifId}"
         );
+
+        // ── Almanac initial position ─────────────────────────────────────────
+        // The kinematic refit loop will place the comet correctly on the first
+        // physics tick, but there can be a visible frame at the origin (0,0,0)
+        // before that happens. To prevent this, query the ephemeris immediately
+        // and set the entity's HighResTransformComponent.
+        double startUnixSec = result.WizardStartEpoch.ToUnixTimeMilliseconds() / 1000.0;
+        var ephPos = _runtimeService.GetEphemerisPosition(result.SpkNaifId, startUnixSec);
+        if (ephPos.HasValue)
+        {
+          _runtimeService.SetHighResTransformComponent(
+            sceneId: 1,
+            entityId: cometId,
+            px: ephPos.Value.PosX,
+            py: ephPos.Value.PosY,
+            pz: ephPos.Value.PosZ,
+            rw: 1f,
+            rx: 0f,
+            ry: 0f,
+            rz: 0f,
+            sx: 1f,
+            sy: 1f,
+            sz: 1f
+          );
+          _consoleService.Log(
+            $"[Spawn] Kinematic: initial position from almanac at " +
+            $"{result.WizardStartEpoch:yyyy-MM-dd}: " +
+            $"({ephPos.Value.PosX:G5}, {ephPos.Value.PosY:G5}, {ephPos.Value.PosZ:G5}) km"
+          );
+        }
+        else
+        {
+          _consoleService.Log(
+            $"[Spawn] Kinematic: could not query almanac at start epoch " +
+            $"(NAIF {result.SpkNaifId}) — comet will appear at origin until first tick."
+          );
+        }
+      }
+
+      // ── Trajectory ─────────────────────────────────────────────────────────
+      // Spawn/update the comet's orbital trajectory so the path is visible in
+      // the scene immediately after spawn. Without this, SpawnComet only creates
+      // the body entity but leaves the trajectory absent.
+      if (result.SpkNaifId != 0)
+      {
+        double startUnixSec = result.WizardStartEpoch.ToUnixTimeMilliseconds() / 1000.0;
+        double endUnixSec   = result.WizardEndEpoch.ToUnixTimeMilliseconds()   / 1000.0;
+        // Fire-and-forget — trajectory sampling is async and can complete in the background.
+        _ = _runtimeService.UpdateTrajectoryForSpkAsync(
+          sceneId:         1,
+          entityId:        cometId,
+          spkId:           result.SpkNaifId,
+          startEpochTaiSec: startUnixSec,
+          endEpochTaiSec:   endUnixSec,
+          sampleStepDays:   1.0
+        );
+        _consoleService.Log(
+          $"[Spawn] Trajectory update queued for NAIF {result.SpkNaifId} " +
+          $"({result.WizardStartEpoch:yyyy-MM-dd} → {result.WizardEndEpoch:yyyy-MM-dd})"
+        );
       }
 
       return cometId;

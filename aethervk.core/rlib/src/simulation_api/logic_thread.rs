@@ -361,7 +361,32 @@ pub fn start_logic_thread(
       }
 
       if !processed_any {
-        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
+        // Sleep precisely until the next frame deadline rather than always 1 ms.
+        //
+        // With a fixed 1 ms sleep, the logic thread wakes ~15 times between
+        // frames (16 ms target), each time finding nothing to do.  The repeated
+        // scheduler wakeups add jitter to the render pipeline and waste CPU that
+        // the GPU/render thread could use instead — especially harmful for
+        // windowless mode where there is no display VSync as a natural gate.
+        let sleep_us: i64 = if play_controls.is_empty() {
+          1_000 // 1 ms fallback when no scenes exist
+        } else {
+          let now_us = oshal::os::time::get_monotonic_time();
+          play_controls
+            .values()
+            .map(|pc| {
+              pc.target_frame_time
+                .saturating_sub(now_us.saturating_sub(pc.last_frame_start))
+            })
+            .min()
+            .unwrap_or(1_000)
+        };
+        // Clamp: always sleep at least 100 µs (avoid tight spin) and at most
+        // half a target frame (so we don't overshoot the deadline by much).
+        let sleep_us = sleep_us.max(100).min(8_000);
+        oshal::os::native::this_thread::sleep_for(
+          core::time::Duration::from_micros(sleep_us as u64)
+        );
       }
       false
       };
@@ -388,8 +413,24 @@ pub fn start_logic_thread(
             let task = scene_ctx_lock.read().active_physics_task.lock().take();
             if let Some(task) = task {
               aethervk_oshal_rlib::log!("[shutdown] waiting for in-flight GPU physics task...");
-              let _ = task.wait();
-              aethervk_oshal_rlib::log!("[shutdown] GPU physics task drained.");
+              // Use a 5-second timeout instead of blocking indefinitely.
+              // A hung GPU dispatch (e.g. from a large dt step before our safety cap)
+              // would otherwise freeze the process forever on shutdown.
+              const SHUTDOWN_GPU_TIMEOUT_US: u64 = 5_000_000;
+              match task.try_wait(SHUTDOWN_GPU_TIMEOUT_US) {
+                Ok(_) => {
+                  aethervk_oshal_rlib::log!("[shutdown] GPU physics task drained.");
+                }
+                Err(_timed_out) => {
+                  aethervk_oshal_rlib::log!(
+                    "[shutdown] GPU physics task did not finish within 5 s — forcing shutdown. \
+                     The process will exit; OS will clean up GPU resources."
+                  );
+                  // _timed_out is dropped here. The ClosureWorkload::Drop impl sets
+                  // done=true so the TaskletState doesn't leak. Any in-flight GPU work
+                  // will be cleaned up by the OS on process exit.
+                }
+              }
             }
           }
         }
@@ -1620,9 +1661,9 @@ fn execute_simulation_tick(
   //   YIELD_THRESHOLD  – if pending > this, sleep 1 ms before dispatching
   //                      (leaky-bucket back-pressure: lets GPU drain).
   //   DISCARD_THRESHOLD – hard cap; discard excess to prevent spiral of death.
-  const MAX_BATCH_STEPS: u32    = 8;
-  const YIELD_THRESHOLD: u32    = 4;
-  const DISCARD_THRESHOLD: u32  = 16;
+  const MAX_BATCH_STEPS: u32    = 4;
+  const YIELD_THRESHOLD: u32    = 2;
+  const DISCARD_THRESHOLD: u32  = 8;
 
   let (is_playing, pending_steps, fixed_dt_us, base_step_days, current_epoch, max_sub_dt_us) = {
     let ts = time_state_arc.read();
@@ -1658,6 +1699,13 @@ fn execute_simulation_tick(
     let step_wall_start = aethervk_oshal_rlib::os::time::get_monotonic_time();
     if let Err(e) = dispatch_physics_step(scene_id, ctx, step_days, epoch, fixed_dt_us, max_sub_dt_us) {
       aethervk_oshal_rlib::log!("dispatch_physics_step (manual) failed: {:?}", e);
+      // ── Cooldown: prevent tight error-retry loop ───────────────────────────
+      // A GPU device-lost causes every Vulkan call to fail in < 1 μs.
+      // Without a sleep the logic thread retries thousands of times/second,
+      // pinning physics workers at ~600% CPU and starving the UI + GPU driver.
+      aethervk_oshal_rlib::os::native::this_thread::sleep_for(
+        core::time::Duration::from_millis(500)
+      );
     }
     let step_wall_us = aethervk_oshal_rlib::os::time::get_monotonic_time()
       .saturating_sub(step_wall_start).max(1);
@@ -1693,6 +1741,21 @@ fn execute_simulation_tick(
     // Advance epoch and accumulator by n_steps at once.
     let batched_step_days = base_step_days * n_steps as f64;
     let batched_dt_us     = fixed_dt_us * n_steps as i64;
+
+    // ── GPU step-size safety cap ─────────────────────────────────────────────
+    // At very high timescales the batched step can be 50+ days.  The particle
+    // physics shader uses velocity-Verlet with a fixed dt; large dt causes
+    // orbital divergence, particles scatter to extreme positions, and the BVH
+    // traversal degenerates — observed as GPU hangs of 20+ seconds.
+    //
+    // We cap the dt passed to the GPU while still advancing the epoch and the
+    // fixed-time accumulator by the FULL batched amount.  At high timescale the
+    // particle physics is approximate (positions drifted relative to the real
+    // orbit) but the simulation stays responsive.  Kinematic body positions are
+    // unaffected (they are driven by the almanac every tick, not by the GPU).
+    const MAX_SAFE_GPU_STEP_DAYS: f64 = 1.0;
+    let gpu_step_days = batched_step_days.min(MAX_SAFE_GPU_STEP_DAYS);
+
     let new_epoch = {
       let mut ts = time_state_arc.write();
       let mut epoch = ts.current_epoch + anise::time::Unit::Day * batched_step_days;
@@ -1712,11 +1775,33 @@ fn execute_simulation_tick(
 
     any_fixed_step = true;
     let step_wall_start = aethervk_oshal_rlib::os::time::get_monotonic_time();
-    if let Err(e) = dispatch_physics_step(scene_id, ctx, batched_step_days, new_epoch, batched_dt_us, max_sub_dt_us) {
+    if let Err(e) = dispatch_physics_step(scene_id, ctx, gpu_step_days, new_epoch, batched_dt_us, max_sub_dt_us) {
       aethervk_oshal_rlib::log!("dispatch_physics_step failed: {:?}", e);
+      // ── Cooldown: prevent tight error-retry loop ───────────────────────────
+      // Without a sleep, a device-lost error burns 600% CPU across worker threads.
+      // The batched dispatch is a single call (not a loop), so we just sleep here;
+      // the logic thread will naturally skip the watchdog/EMA update and wait for
+      // the next tick before trying again.
+      aethervk_oshal_rlib::os::native::this_thread::sleep_for(
+        core::time::Duration::from_millis(500)
+      );
     }
     let step_wall_us = aethervk_oshal_rlib::os::time::get_monotonic_time()
       .saturating_sub(step_wall_start).max(1);
+
+    // ── Wall-time watchdog ───────────────────────────────────────────────────
+    // If the GPU dispatch blocked the logic thread for more than 2 seconds the
+    // GPU was overloaded (e.g. too many particles + large dt).  Discard the
+    // pending accumulator so we don't pile on more heavy dispatches, and reset
+    // the EMA speed estimate so the UI shows a meaningful value.
+    const GPU_OVERLOAD_THRESHOLD_US: i64 = 2_000_000; // 2 s
+    if step_wall_us > GPU_OVERLOAD_THRESHOLD_US {
+      aethervk_oshal_rlib::log!(
+        "[physics] GPU dispatch took {:.2}s — overload detected, discarding pending accumulator",
+        step_wall_us as f64 / 1_000_000.0
+      );
+      time_state_arc.read().time_info.write().ut_discard_accumulator();
+    }
 
     // Update EMA: compare per-step sim-time vs wall-time.
     {
@@ -2458,9 +2543,34 @@ fn emit_particles_from_circles(
         let emit_count = (exact_count.floor() as u32).min(capacity as u32);
         psc.emit_remainder = exact_count - emit_count as f32;
 
+        // Throttled emit diagnostic — prints once per ~120 calls per circle (≈ every 2 s at 60 Hz).
+        // Shows rate, actual count, and buffer state so you can tell if particles ARE being generated.
+        {
+          use core::sync::atomic::{AtomicU64, Ordering};
+          static EMIT_DIAG_N: AtomicU64 = AtomicU64::new(0);
+          let n = EMIT_DIAG_N.fetch_add(1, Ordering::Relaxed);
+          if n % 120 == 0 {
+            let alive_in_ring = psc.tail_index.saturating_sub(psc.head_index);
+            aethervk_oshal_rlib::log!(
+              "[EMIT] child={:?} rate={:.1}/s dt_s={:.3} emit={} alive={}/{} gpu_alive={} render_r={:.3} km",
+              child_entity,
+              particles_per_second,
+              dt_s,
+              emit_count,
+              alive_in_ring,
+              capacity,
+              psc.gpu_alive_count,
+              psc.render_radius_km,
+            );
+          }
+        }
+
+
         for i in 0..emit_count {
           if psc.tail_index - psc.head_index >= capacity {
-            // Drop oldest particle if buffer full. We only advance the head index.
+            // Buffer is full — evict the oldest particle (FIFO) to make room.
+            // This keeps the tail continuously emitting new particles and creates
+            // a rolling trail effect rather than silently dropping new particles.
             psc.head_index += 1;
           }
 

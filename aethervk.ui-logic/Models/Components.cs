@@ -911,7 +911,19 @@ public partial class EmissionCircleItem : ObservableObject
   /// Higher values consume more GPU memory. Default: 4096.
   /// </summary>
   [ObservableProperty]
-  private uint _maxParticles = 4096;
+  private uint _maxParticles = 8192;
+
+  /// <summary>Double proxy for UnboundedSlider binding (min 64, snaps to integer).</summary>
+  public double MaxParticlesDouble
+  {
+    get => MaxParticles;
+    set => MaxParticles = (uint)Math.Max(64, Math.Round(value));
+  }
+
+  partial void OnMaxParticlesChanged(uint value)
+  {
+    OnPropertyChanged(nameof(MaxParticlesDouble));
+  }
 
   public float MeanVelocityKms
   {
@@ -933,11 +945,11 @@ public partial class EmissionCircleItem : ObservableObject
   private float _spawnRadiusKm = 0f;
 
   /// <summary>
-  /// Visual billboard radius (km) for particle rendering. 0.01 km = 10 m default.
-  /// Smaller = finer dust, larger = coarser visible clumps.
+  /// Visual billboard radius (km) for particle rendering. 1 km default is visible at typical
+  /// comet approach distances. Smaller = finer dust, larger = coarser visible clumps.
   /// </summary>
   [ObservableProperty]
-  private float _renderRadiusKm = 0.01f;
+  private float _renderRadiusKm = 1.0f;
 
   public double RenderRadiusKmDouble
   {
@@ -1023,8 +1035,58 @@ public partial class ParticleEmitterCirclesComponent : NativeComponent
   {
     if (_isSyncing)
       return;
+
+    var propName = e.PropertyName;
+
+    // When MaxParticles changes, the existing GPU ring buffer cannot be resized
+    // in-place. Remove the old EmissionSphere entity so recalculateJetPoints
+    // can recreate it with the new capacity.
+    if (propName == nameof(EmissionCircleItem.MaxParticles) &&
+        sender is EmissionCircleItem resizeCircle &&
+        resizeCircle.VisualEntityId != 0 &&
+        resizeCircle.VisualEntityId != ulong.MaxValue &&
+        SimulationContext != IntPtr.Zero)
+    {
+      AetherVk.Logic.Services.NativeInterop.avkSimulationContext_removeEntity(
+        SimulationContext, SceneId, resizeCircle.VisualEntityId);
+      resizeCircle.VisualEntityId = 0;
+    }
+
+    // Always push all properties to native (visual and physical alike).
     PushToNativeImpl();
+
+    // Physical parameters affect simulation outcome — notify TimelineViewModel
+    // so it can invalidate the snapshot and prompt the user to restart.
+    if (propName != null && IsPhysicalProperty(propName))
+    {
+      CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+        new AetherVk.Logic.Messages.PhysicalParameterChangedMessage { SceneId = SceneId }
+      );
+    }
   }
+
+  /// <summary>
+  /// Returns true when <paramref name="propName"/> names a property that
+  /// influences the physics simulation (not merely a visual decoration).
+  /// Visual-only properties (colour channels, RenderRadiusKm) are excluded.
+  /// </summary>
+  private static bool IsPhysicalProperty(string propName) =>
+    propName is
+      nameof(EmissionCircleItem.LatitudeDeg) or
+      nameof(EmissionCircleItem.LongitudeDeg) or
+      nameof(EmissionCircleItem.Mass) or
+      nameof(EmissionCircleItem.MassGrams) or
+      nameof(EmissionCircleItem.CircleRadiusKm) or
+      nameof(EmissionCircleItem.ParticlesPerSecond) or
+      nameof(EmissionCircleItem.ParticlesPerSecondDouble) or
+      nameof(EmissionCircleItem.TTL) or
+      nameof(EmissionCircleItem.TTLDouble) or
+      nameof(EmissionCircleItem.MeanVelocity) or
+      nameof(EmissionCircleItem.MeanVelocityKms) or
+      nameof(EmissionCircleItem.VelocityDirStdDevDeg) or
+      nameof(EmissionCircleItem.Beta) or
+      nameof(EmissionCircleItem.MaxParticles) or
+      nameof(EmissionCircleItem.SpawnRadiusKm);
 
   [CommunityToolkit.Mvvm.Input.RelayCommand]
   private void AddCircle()

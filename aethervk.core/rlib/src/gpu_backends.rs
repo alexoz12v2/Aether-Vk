@@ -206,6 +206,18 @@ where
     ((total_dt as f64 / capped as f64).ceil() as usize).max(1)
   };
 
+  // ── GPU sub-step budget cap ─────────────────────────────────────────
+  // At high timescales batched_dt is large (133 ms for 4 ticks × 33 ms),
+  // producing n_sub_steps = ceil(133 000 / 16 000) ≈ 9 sub-loops.
+  // Each sub-loop runs 5+ GPU passes over every particle; at 16 384 particles
+  // this saturates the GPU and triggers TDR (device lost) on the driver.
+  //
+  // The Velocity-Verlet integrator remains stable for comet dust at up to a
+  // 1-day physics step, so 2 sub-steps is more than sufficient accuracy.
+  // Absolute safety cap — the adaptive formula below may reduce this further.
+  const MAX_GPU_SUB_STEPS: usize = 4;
+  let n_sub_steps = n_sub_steps.min(MAX_GPU_SUB_STEPS);
+
   aethervk_oshal_rlib::log!(
     "simulation_step running! dt_us: {}, sub_steps: {}, collisions_enabled: {}",
     total_dt,
@@ -309,6 +321,34 @@ where
   // Flat metadata list (all systems concatenated) used only by write_back_to_scene routing.
   let particle_metadata: alloc::vec::Vec<crate::gpu::ParticleMetadata> =
     particle_systems.iter().flat_map(|(_, _, meta, _)| meta.iter().copied()).collect();
+
+  // ── Adaptive GPU sub-step cap based on alive particle count ────────────
+  // GPU work per dispatch ≈ alive_particles × n_sub_steps × ~5 passes.
+  // Holding the product at or below SAFE_PARTICLE_STEPS keeps every
+  // individual GPU dispatch well within the driver's TDR timeout threshold
+  // regardless of how high the user sets max_particles via the UI.
+  //
+  // Scaling table (SAFE_PARTICLE_STEPS = 8192):
+  //   1 024 particles → adaptive_max = 8,  clamped by MAX_GPU_SUB_STEPS = 4
+  //   4 096 particles → adaptive_max = 2  → 2 sub-steps
+  //   8 192 particles → adaptive_max = 1  → 1 sub-step (safe, fast)
+  //  16 384 particles → adaptive_max = 0, max(1) = 1 → 1 sub-step
+  //  32 768 particles → 1 sub-step
+  const SAFE_PARTICLE_STEPS: usize = 8192;
+  let total_alive_particles = particle_metadata.len();
+  let n_sub_steps = if total_alive_particles > 0 {
+    let adaptive_max = (SAFE_PARTICLE_STEPS / total_alive_particles).max(1);
+    n_sub_steps.min(adaptive_max)
+  } else {
+    n_sub_steps
+  };
+  if total_alive_particles > SAFE_PARTICLE_STEPS {
+    aethervk_oshal_rlib::log!(
+      "[physics] large particle system: {} alive particles — sub-steps adaptively reduced to {}",
+      total_alive_particles, n_sub_steps
+    );
+  }
+
   let (emitters_buf, n_emitters) = kernels.build_emitters(&mut cmd, scene)?;
   let emitters = AutoDiscard::new(emitters_buf, |b| kernels.discard_buffer(b));
   // Reference frames for LCA broad-phase (macro frame is always index 0)

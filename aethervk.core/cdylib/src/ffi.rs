@@ -1658,7 +1658,7 @@ pub unsafe extern "C" fn avkSimulationContext_recalculateJetPoints(
         };
 
         if circle.child_entity.is_none() {
-          to_spawn.push((i, t, circle.color, scale, circle.max_particles, circle.render_radius_km));
+          to_spawn.push((i, t, circle.color, circle.circle_radius_km, circle.max_particles, circle.render_radius_km));
         } else {
           // Carry beta so the update path can re-sync PSC.beta when the user edits it.
           updates.push((circle.child_entity.unwrap(), t, circle.color, circle.beta, circle.render_radius_km));

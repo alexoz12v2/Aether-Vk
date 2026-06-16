@@ -160,7 +160,7 @@ impl DeviceResource for SwapchainImage {
     if self.present_fence_in_use {
       if let Some(fence) = self.present_fence {
         unsafe {
-          let _ = device.wait_for_fences(&[fence.get()], true, u64::MAX);
+          let _ = device.wait_for_fences(&[fence.get()], true, 5_000_000_000);
         }
       }
     }
@@ -192,7 +192,7 @@ impl SwapchainCleanable for FrameDiscard {
           self.discarded_fences.as_ptr() as *const vk::Fence,
           self.discarded_fences.len(),
         );
-        let _ = device.wait_for_fences(&fences, true, u64::MAX);
+        let _ = device.wait_for_fences(&fences, true, 5_000_000_000);
       }
     }
 
@@ -234,7 +234,7 @@ impl SwapchainCleanable for FrameDiscard {
           self.discarded_present_fences_to_wait.as_ptr() as *const vk::Fence,
           self.discarded_present_fences_to_wait.len(),
         );
-        let _ = device.wait_for_fences(&fences, true, u64::MAX);
+        let _ = device.wait_for_fences(&fences, true, 5_000_000_000);
       }
     }
     self.discarded_present_fences_to_wait.clear();
@@ -578,7 +578,7 @@ impl WindowedPresentationState {
       if image.present_fence_in_use {
         let pfence = unsafe { image.present_fence.unwrap_unchecked().get() };
         unsafe {
-          let _ = device.wait_for_fences(core::slice::from_ref(&pfence), false, u64::MAX);
+          let _ = device.wait_for_fences(core::slice::from_ref(&pfence), false, 5_000_000_000);
           let _ = device.reset_fences(core::slice::from_ref(&pfence));
         }
         image.present_fence_in_use = false;
@@ -1378,12 +1378,33 @@ impl WindowedPresentationState {
       core::slice::from_ref(&swapchain_image.submission_fence.as_ref().unwrap_unchecked())
     };
 
+    // ── Frame-fence wait with hard timeout ─────────────────────────────
+    // Previously this loop escalated to u64::MAX (infinite) on the first
+    // 167-ns timeout miss. If the GPU was in a bad state after a physics
+    // device-lost, the fence never signalled, and the render thread blocked
+    // forever inside xcb_wait_for_special_event (confirmed by GDB trace on
+    // Thread 28 — libGLX_nvidia.so.0 / xcb_wait_for_special_event).
+    // Now we cap at SWAPCHAIN_HARD_TIMEOUT_NS (5 s). A second timeout means
+    // the GPU is genuinely hung; we return an error so the render thread
+    // skips the frame and retries next tick instead of hanging forever.
+    const SWAPCHAIN_HARD_TIMEOUT_NS: u64 = 5_000_000_000; // 5 s
     let mut timeout = FIRST_ATTEMPT_TIMEOUT_NS;
     loop {
       let result = unsafe { device.wait_for_fences(fences, false, timeout) };
       if let Err(vk_result) = result {
         if vk_result == vk::Result::TIMEOUT {
-          timeout = u64::MAX;
+          if timeout == FIRST_ATTEMPT_TIMEOUT_NS {
+            // Short probe missed — give the GPU a proper 5-second window.
+            timeout = SWAPCHAIN_HARD_TIMEOUT_NS;
+          } else {
+            // Still not signalled after 5 s — GPU is hung or device-lost.
+            aethervk_oshal_rlib::log!(
+              "[swapchain] frame-fence timed out after 5 s — GPU hung, skipping frame"
+            );
+            return Err(crate::types::GpuError::BackendSpecific(
+              alloc::format!("swapchain frame-fence timed out (GPU hung)")
+            ));
+          }
         } else {
           return Err(vk_result.into());
         }
@@ -1415,10 +1436,16 @@ impl WindowedPresentationState {
 
     let (image_index, vk_result) = unsafe {
       let mut index = 0u32;
+      // SWAPCHAIN_HARD_TIMEOUT_NS (5 s) instead of u64::MAX.
+      // u64::MAX caused xcb_wait_for_special_event inside the Nvidia driver
+      // to block FOREVER when the GPU was in a bad state after a physics
+      // device-lost. With a finite timeout the driver returns VK_TIMEOUT,
+      // which we map to NeedsRecreation so the render thread skips the frame
+      // and retries next tick. Physics continues unaffected.
       let vk_result = (self.swapchain_device.fp().acquire_next_image_khr)(
         self.swapchain_device.device(),
         self.swapchain.get(),
-        u64::MAX,
+        SWAPCHAIN_HARD_TIMEOUT_NS,
         swapchain_image.acquire_semaphore.unwrap_unchecked().get(),
         vk::Fence::null(),
         ptr::from_mut(&mut index),
@@ -1444,7 +1471,8 @@ impl WindowedPresentationState {
 
           if let Some(fence) = self.images[self.next_image].submission_fence {
             unsafe {
-              let _ = device.wait_for_fences(&[fence.get()], false, u64::MAX);
+              // Cap at 5 s — same reasoning as the frame-fence wait above.
+              let _ = device.wait_for_fences(&[fence.get()], false, SWAPCHAIN_HARD_TIMEOUT_NS);
             }
           }
         }
@@ -1462,8 +1490,26 @@ impl WindowedPresentationState {
           swapchain_generation: self.swapchain_generation,
         })
       }
-      vk::Result::ERROR_OUT_OF_DATE_KHR => {
+      vk::Result::ERROR_OUT_OF_DATE_KHR =>
+      {
         // ADDED here: Ensure we recreate the swapchain upon the next attempt
+        self.pending_resize = Some((self.width, self.height));
+        Ok(AcquireResult {
+          image_index: u32::MAX,
+          status: SwapchainStatus::NeedsRecreation,
+          frame_index: self.current_frame as u64,
+          swapchain_generation: self.swapchain_generation,
+        })
+      }
+      vk::Result::TIMEOUT =>
+      {
+        // GPU unavailable (device-lost aftermath or heavy physics dispatch).
+        // Return NeedsRecreation so the render thread skips this frame and
+        // retries on the next tick. No swapchain state is mutated here so
+        // the next attempt is safe.
+        aethervk_oshal_rlib::log!(
+          "[swapchain] vkAcquireNextImageKHR timed out (5 s) — GPU unavailable, skipping frame"
+        );
         self.pending_resize = Some((self.width, self.height));
         Ok(AcquireResult {
           image_index: u32::MAX,
@@ -1531,7 +1577,7 @@ impl WindowedPresentationState {
       if image.present_fence_in_use {
         let pfence = unsafe { image.present_fence.unwrap_unchecked().get() };
         unsafe {
-          let _ = device.wait_for_fences(core::slice::from_ref(&pfence), false, u64::MAX);
+          let _ = device.wait_for_fences(core::slice::from_ref(&pfence), false, 5_000_000_000);
           let _ = device.reset_fences(core::slice::from_ref(&pfence));
         }
         image.present_fence_in_use = false;
@@ -1626,7 +1672,7 @@ impl FrameDiscard {
             .values(core::slice::from_ref(
               &self.highest_submission_timeline_value,
             ));
-          let _ = timeline_sem_device.wait_semaphores(&wait_info, u64::MAX);
+          let _ = timeline_sem_device.wait_semaphores(&wait_info, 5_000_000_000);
         }
       }
       self.skip_cycles = 0;
@@ -1780,7 +1826,7 @@ impl DeviceResource for WindowlessPresentationState {
             .values(core::slice::from_ref(
               &discard.highest_submission_timeline_value,
             ));
-          let _ = self.timeline_sem_device.wait_semaphores(&wait_info, u64::MAX);
+          let _ = self.timeline_sem_device.wait_semaphores(&wait_info, 5_000_000_000);
         }
       }
       discard.cleanup_windowless(device);
@@ -1798,7 +1844,7 @@ impl DeviceResource for WindowlessPresentationState {
         let wait_info = vk::SemaphoreWaitInfo::default()
           .semaphores(core::slice::from_ref(&self.timeline_sem))
           .values(core::slice::from_ref(&max_timeline));
-        let _ = self.timeline_sem_device.wait_semaphores(&wait_info, u64::MAX);
+        let _ = self.timeline_sem_device.wait_semaphores(&wait_info, 5_000_000_000);
       }
     }
 
@@ -1964,7 +2010,11 @@ impl WindowlessPresentationState {
     }
     let timeline_val = swapchain_image.submission_timeline_value;
     if timeline_val > 0 {
-      let _ = device.wait_for_semaphore_value(timeline_sem, timeline_val, u64::MAX);
+      // 5-second timeout (was u64::MAX = infinite).
+      // If the GPU is hung after a physics device-lost, this wait would
+      // block the render thread forever. With a finite cap we break out and
+      // proceed; the next frame will detect the bad GPU state and recover.
+      let _ = device.wait_for_semaphore_value(timeline_sem, timeline_val, 5_000_000_000);
     }
 
     // Fences reset removed

@@ -2806,6 +2806,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
           Beta = comet.Jets[i].Beta,
           MaxParticles = comet.Jets[i].MaxParticles,
           SpawnRadiusKm = comet.Jets[i].SpawnRadiusKm,
+          // BUG FIX: was never sent → Rust received 0.0 → billboard radius 0 → degenerate quads → invisible
+          RenderRadiusKm = comet.Jets[i].RenderRadiusKm,
         };
       }
 
@@ -3078,6 +3080,17 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
               }
             }
           };
+
+          // Sync any jets that were already in the collection BEFORE this hook
+          // was installed (e.g. from SpawnCometWindow where jets are configured
+          // before the component is added to the entity).
+          // CollectionChanged only fires for future adds, so pre-existing jets
+          // would never trigger recalculate_jet_points without this explicit call.
+          if (comet.Jets.Count > 0 && _simulationContext != IntPtr.Zero)
+          {
+            SyncEmissionCircles(sceneId, entity.Id, comet);
+            SyncSceneHierarchy(sceneId);
+          }
         }
       }
     };
@@ -3172,6 +3185,13 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
       return;
 
     NativeInterop.avkSimulationContext_recalculateJetPoints(_simulationContext, sceneId, entityId);
+
+    // Sync the scene hierarchy so that the PSC child entity created by
+    // recalculate_jet_points ("EmissionSphere" with ParticleSystemComponent)
+    // is discovered by C# and appears in the outliner.
+    // Without this call the entity exists in the Rust ECS but is invisible
+    // to C# (not in EntityMap, not shown in the outliner tree).
+    SyncSceneHierarchy(sceneId);
   }
 
   public void SyncEmissionCircleVisuals(
@@ -3185,14 +3205,34 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
       if (_simulationContext == IntPtr.Zero)
         return;
 
+      // Pre-populate circle.VisualEntityId from the Rust-side PSC child entities that
+      // recalculate_jet_points already created.  Without this, every call would spawn a
+      // SECOND static sphere (no ParticleSystemComponent) next to the real emitter entity,
+      // producing an "excessive EmissionCircle entity not child of comet" artefact.
+      uint maxCount = 64;
+      var existing = new NativeInterop.FfiEmissionCircle[maxCount];
+      bool hasExisting = NativeInterop.avkSimulationContext_getParticleEmitterCirclesComponent(
+        _simulationContext, sceneId, entityId, existing, maxCount, out uint existingCount
+      );
+
       float boundingRadius = NativeInterop.avkSimulationContext_getMeshBoundingSphereRadius(
         _simulationContext,
         sceneId,
         entityId
       );
 
+      int circleIdx = 0;
       foreach (var circle in emitter.Circles)
       {
+        // Reuse the Rust-side PSC entity if present; only fall back to a new static sphere
+        // when no child entity exists yet (first call before recalculate_jet_points ran).
+        if (circle.VisualEntityId == 0 && hasExisting && circleIdx < (int)existingCount)
+        {
+          ulong rustId = existing[circleIdx].ChildEntity;
+          if (rustId != 0 && rustId != ulong.MaxValue)
+            circle.VisualEntityId = rustId;
+        }
+
         if (circle.VisualEntityId == 0)
         {
           circle.VisualEntityId = SpawnStaticSphere(sceneId, "EmissionSphere", 1.0f, 0.0f);
@@ -3209,7 +3249,6 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
         float z = r * (float)Math.Sin(lat);
 
         float scale = boundingRadius * circle.CircleRadiusKm;
-        float baseOpacity = 0.8f;
 
         NativeInterop.avkSimulationContext_addTransformComponent(
           _simulationContext,
@@ -3236,6 +3275,8 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
           circle.ColorG,
           circle.ColorB
         );
+
+        circleIdx++;
       }
     }
   }

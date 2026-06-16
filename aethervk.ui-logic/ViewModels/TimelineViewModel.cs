@@ -21,6 +21,7 @@ public partial class TimelineViewModel
     IDisposable,
     IRecipient<CometDestroyedMessage>,
     IRecipient<JetConfigChangedMessage>,
+    IRecipient<PhysicalParameterChangedMessage>,
     IRecipient<AlmanacUpdatedMessage>
 {
   private readonly NativeRuntimeService _runtimeService;
@@ -61,8 +62,33 @@ public partial class TimelineViewModel
   [ObservableProperty]
   private string _epochErrorText = "";
 
-  /// <summary>Epochs can only be edited when simulation is NOT playing.</summary>
+  /// <summary>Epoch can only be edited when simulation is NOT playing.</summary>
   public bool CanEditEpochs => !Timeline.IsPlaying;
+
+  /// <summary>
+  /// Progress fraction [0, 1] of the current epoch within [MinTai, MaxTai].
+  /// Used by the timeline progress bar. Returns 0 when range is zero or undefined.
+  /// </summary>
+  public double TimelineProgress
+  {
+    get
+    {
+      var range = Timeline.MaxTai - Timeline.MinTai;
+      if (range <= 0) return 0;
+      return System.Math.Max(0.0, System.Math.Min(1.0, (Timeline.TimeTai - Timeline.MinTai) / range));
+    }
+  }
+
+  /// <summary>Elapsed time display string shown in the progress bar area.</summary>
+  public string ElapsedTimeText
+  {
+    get
+    {
+      if (Timeline.MaxTai <= Timeline.MinTai) return "—";
+      var pct = TimelineProgress * 100.0;
+      return $"{pct:F1}%";
+    }
+  }
 
   /// <summary>Tooltip for the play/pause toggle button.</summary>
   public string PlayPauseTooltip => Timeline.IsPlaying ? "Pause" : "Play";
@@ -125,6 +151,7 @@ public partial class TimelineViewModel
     // Register for simulation-reset messages
     WeakReferenceMessenger.Default.Register<CometDestroyedMessage>(this);
     WeakReferenceMessenger.Default.Register<JetConfigChangedMessage>(this);
+    WeakReferenceMessenger.Default.Register<PhysicalParameterChangedMessage>(this);
     WeakReferenceMessenger.Default.Register<AlmanacUpdatedMessage>(this);
   }
 
@@ -140,6 +167,26 @@ public partial class TimelineViewModel
   {
     if (message.SceneId == CurrentSceneId)
       ResetSimulationIfSnapshotted();
+  }
+
+  /// <summary>
+  /// Fired when a physics-affecting jet parameter changes.
+  /// Invalidates the current snapshot so the next Play press starts fresh.
+  /// </summary>
+  public void Receive(PhysicalParameterChangedMessage message)
+  {
+    if (message.SceneId != CurrentSceneId) return;
+    if (!_hasSnapshotted) return;          // nothing to invalidate
+
+    _hasSnapshotted = false;
+    ResetSimulationCommand.NotifyCanExecuteChanged();
+
+    _breadcrumbService.ShowMessageAsync(
+      "Physical parameter changed",
+      "Simulation snapshot invalidated. Press ▶ Play to restart with the new parameters.",
+      default,
+      4
+    );
   }
 
   public void Receive(AlmanacUpdatedMessage message)
@@ -170,6 +217,10 @@ public partial class TimelineViewModel
     _hasSnapshotted = false;
     ResetSimulationCommand.NotifyCanExecuteChanged();
     _runtimeService.SeekEpoch(CurrentSceneId, Timeline.MinTai);
+    // Immediately reflect the restored epoch in the UI (next timer tick would be late).
+    Timeline.TimeTai = Timeline.MinTai;
+    OnPropertyChanged(nameof(TimelineProgress));
+    OnPropertyChanged(nameof(ElapsedTimeText));
 
     _breadcrumbService.ShowMessageAsync(
       "Simulation Reset",
@@ -199,6 +250,8 @@ public partial class TimelineViewModel
       {
         Timeline.TimeTai = _runtimeService.GetSimulationTime(CurrentSceneId);
       }
+      OnPropertyChanged(nameof(TimelineProgress));
+      OnPropertyChanged(nameof(ElapsedTimeText));
 
       Timeline.UtcTime = _runtimeService.GetSimulationTimeUtc(CurrentSceneId);
 
