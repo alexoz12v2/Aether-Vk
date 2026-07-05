@@ -1796,33 +1796,33 @@ mod tests_time_scale {
 
   #[test]
   fn sub_step_count_one_day_is_fourteen() {
-    // OneDay at 60 FPS: total_dt ≈ 1382s, cap = 100s → ~14 sub-steps
+    // OneDay at 60 FPS: total_dt ≈ 1440s
     let n = sub_step_count(TimeScale::OneDay, 16_667);
     assert!(
-      n >= 12 && n <= 16,
-      "Expected ~14 sub-steps for OneDay at 60 FPS, got {}",
+      n >= 25 && n <= 35,
+      "Expected ~29 sub-steps for OneDay at 60 FPS, got {}",
       n
     );
   }
 
   #[test]
   fn sub_step_count_one_week_multiple() {
-    // OneWeek at 60 FPS: total_dt ≈ 9676s, cap = 3600s → 3 sub-steps
+    // OneWeek at 60 FPS: total_dt ≈ 10080s
     let n = sub_step_count(TimeScale::OneWeek, 16_667);
     assert!(
-      n >= 2 && n <= 4,
-      "Expected 2-4 sub-steps for OneWeek, got {}",
+      n >= 15 && n <= 20,
+      "Expected ~17 sub-steps for OneWeek, got {}",
       n
     );
   }
 
   #[test]
   fn sub_step_count_one_month_multiple() {
-    // OneMonth at 60 FPS: total_dt ≈ 42091s, cap = 3600s → ~12 sub-steps
+    // OneMonth at 60 FPS: total_dt ≈ 43200s
     let n = sub_step_count(TimeScale::OneMonth, 16_667);
     assert!(
-      n >= 10 && n <= 15,
-      "Expected 10-15 sub-steps for OneMonth, got {}",
+      n >= 70 && n <= 80,
+      "Expected ~74 sub-steps for OneMonth, got {}",
       n
     );
   }

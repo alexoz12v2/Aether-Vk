@@ -1,0 +1,293 @@
+// @assets/sim/new_particles_emit.comp
+//
+// Particle emission shader
+// ─────────────────────────────────────────────────
+// Unit contract
+// given push constant which specifies
+// - sun direction
+// - sphere center and radius
+//
+// pop a new chunk from the free list and generate the number of
+// specified particles with the following set of parameters
+// - mass mean and std (in grams [g])
+// - initial velocity direction mean and std
+// - initial velocity intensity [m/s] mean and std
+// - latitude, longitude and half-angle of cone aperture for point generation
+// - radius, direction (if can't fit into push constant of 128 octahedral encoding for directions)
+// - number of particles to generate uniformly across the hemisphere with these parameters
+// - rng seed (might be 4 bytes, or 16 bytes, depends on how much we have left in push constant)
+// - beta ratio radiation pressure / sun gravitation (constant, only requirement is that it should be no-loss convertible to f16)
+//
+// This shader should be executed every * microseconds of unscaled simulation time
+// we don't need sphere center cause we assume sphere center (particle system origin) is at zero
+// therefore we expect hemisphere direction to be oriented according to particle system coordinate system's rotation
+//
+// Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
+
+#version 450 core
+#extension GL_EXT_buffer_reference2      : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_KHR_shader_subgroup_basic  : require
+#extension GL_GOOGLE_include_directive   : require
+
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
+
+#include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
+
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
+
+// set of random number generators from https://www.shadertoy.com/view/XlGcRh by Mark Jarzynski.
+
+uint pcg(uint v) {
+    uint state = v * uint(747796405) + uint(2891336453);
+    uint word = ((state >> ((state >> uint(28)) + uint(4))) ^ state) * uint(277803737);
+    return (word >> uint(22)) ^ word;
+}
+
+float prng(float p) {
+    return float(pcg(uint(p))) / float(uint(0xffffffff));
+}
+
+float prng(vec2 p) {
+    return float(pcg(pcg(uint(p.x)) + uint(p.y))) / float(uint(0xffffffff));
+}
+
+uvec3 pcg(uvec3 v) {
+    v = v * uint(1664525) + uint(1013904223);
+
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+
+    v ^= v >> uint(16);
+
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+
+    return v;
+}
+
+vec3 prng(vec3 p) {
+    return vec3(pcg(uvec3(p))) / float(uint(0xffffffff));
+}
+
+uvec4 pcg(uvec4 v) {
+    v = v * uint(1664525) + uint(1013904223);
+
+    v.x += v.y * v.w;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v.w += v.y * v.z;
+
+    v.x += v.y * v.w;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v.w += v.y * v.z;
+
+    v = v ^ (v >> uint(16));
+
+    return v;
+}
+
+vec4 prng(vec4 p) {
+    return vec4(pcg(uvec4(p))) / float(uint(0xffffffff));
+}
+
+#define PI 3.14159265359
+
+// randVal: Uniform random numbers [0.0, 1.0)
+// dir: The normalized direction of the cone's center
+// aperture: The half-angle of the cone in radians
+vec3 sampleCone(vec2 randVal, vec3 dir, float aperture) {
+    // 1. Generate local direction on a Z-up spherical cap
+    float cosAperture = cos(aperture);
+
+    // Uniformly sample the Z axis between the tip of the sphere (1.0) and the cone base (cosAperture)
+    float z = mix(1.0, cosAperture, randVal.y);
+
+    // Calculate X and Y on the circle for this Z
+    float sinTheta = sqrt(max(0.0, 1.0 - z * z));
+    float phi = 2.0 * PI * randVal.x;
+
+    // Local vector pointing around the +Z axis
+    vec3 localDir = vec3(sinTheta * cos(phi), sinTheta * sin(phi), z);
+
+    // 2. Build an Orthonormal Basis (ONB) to rotate the local Z axis to 'dir'
+    // Choose an 'up' vector that is not collinear with 'dir' to avoid cross product failure
+    vec3 up = abs(dir.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+
+    vec3 tangent = normalize(cross(up, dir));
+    vec3 bitangent = cross(dir, tangent); // Already normalized since dir and tangent are orthogonal
+
+    // 3. Transform the local vector into world space
+    return tangent * localDir.x + bitangent * localDir.y + dir * localDir.z;
+}
+
+// generate two standard normally distributed numbers (mean = 0, std = 1) with
+// Box-Muller
+vec2 boxMuller(vec2 u) {
+    float r = sqrt(-2.0 * log(max(u.x, 1e-7)));
+    float theta = 2.0 * PI * u.y;
+    return vec2(r * cos(theta), r * sin(theta));
+}
+
+// 76 bytes
+layout(push_constant, std430) uniform PushConstants {
+    ParticleChunkBuffer    globalParticleBuffer;
+    ParticlePageTable      particlePageTable;
+    ParticleFreeChunkStack freeList;
+
+    vec4 coneDirAperture;  // xyz: Normalized Cone Direction, w: aperture (radians)
+    vec4 massVelMeanStd;   // x: massMean, y: massStd, z: velMean, w: velStd
+
+    uint  emitCount;        // Total number of particles to emit
+    uint  currentTime;      // unscaled simulation time (1/300s)
+    uint  seed;             // RNG seed
+    float radius;           // sphere radius (m)
+
+    float beta;
+} pc;
+
+shared uint wg_physChunkIndex;
+shared bool wg_allocationFailed;
+
+// associate a workgroup to a chunk. Number of chunks: emitCount / PCHUNK_SIZE
+// right now the
+void main() {
+    uint neededChunks = (pc.emitCount + PCHUNK_SIZE - 1) / PCHUNK_SIZE;
+
+    // grid-stride loop to decouple workgroup from logical chunk processing
+    for (uint logicalChunkID = gl_WorkGroupID.x; logicalChunkID < neededChunks; logicalChunkID += gl_NumWorkGroups.x) {
+        // chunk allocation by workgroup leader
+        if (gl_LocalInvocationIndex == 0) {
+            wg_allocationFailed = false;
+
+            // Pop from free list (0xFFFFFFFF safely simulates -1)
+            uint countBefore = atomicAdd(pc.freeList.count, 0xFFFFFFFF);
+
+            if (countBefore == 0) {
+                // Out of memory! Roll back the counter
+                atomicAdd(pc.freeList.count, 1);
+                wg_allocationFailed = true;
+            } else {
+                uint popIndex = countBefore - 1;
+                uint physIdx = pc.freeList.indices[popIndex];
+                wg_physChunkIndex = physIdx;
+
+                // Map physical chunk to active page table
+                // (No CAS needed, the loop bounds guarantee this is only called neededChunks times)
+                uint newPageIdx = atomicAdd(pc.particlePageTable.activeChunkCount, 1);
+                pc.particlePageTable.chunks[newPageIdx] = physIdx;
+            }
+        }
+        barrier(); // All threads in wg see allocation result
+
+        // if out of memory or out of chunks to allocate, die
+        if (wg_allocationFailed) break;
+
+        uint physIdx = wg_physChunkIndex;
+        uint chunkEmittedCount = 0;
+
+        // chunk filling stage
+        // workgroup-stride loop: decouple wg thread count from vec4 processing
+        for (uint localVec4Index = gl_LocalInvocationIndex; localVec4Index < PCHUNK_VEC4_SIZE; localVec4Index += gl_WorkGroupSize.x) {
+            // global index relative to total emission request
+            uint globalBaseParticleIndex = (logicalChunkID * PCHUNK_SIZE) + (localVec4Index * 4);
+            bvec4 isValid = bvec4(
+                (globalBaseParticleIndex + 0) < pc.emitCount,
+                (globalBaseParticleIndex + 1) < pc.emitCount,
+                (globalBaseParticleIndex + 2) < pc.emitCount,
+                (globalBaseParticleIndex + 3) < pc.emitCount
+            );
+            // accumulate valid particles generated by this thread
+            chunkEmittedCount += uint(isValid.x) + uint(isValid.y) + uint(isValid.z) + uint(isValid.w);
+            // seed RNG based on chunk and vec4 indices (determinism)
+            uvec4 rState = uvec4(
+                pc.seed,
+                logicalChunkID,
+                localVec4Index,
+                pc.currentTime
+            );
+            rState = pcg(rState);
+
+            vec4 uCone1 = prng(vec4(rState = pcg(rState)));
+            vec4 uCone2 = prng(vec4(rState = pcg(rState)));
+            vec4 uNorm1 = prng(vec4(rState = pcg(rState)));
+            vec4 uNorm2 = prng(vec4(rState = pcg(rState)));
+
+            vec4 pX, pY, pZ;
+            f16vec4 vX, vY, vZ, invMass;
+            uvec4 sTime;
+
+            [[dont_unroll]]
+            for (int i = 0; i < 4; i++) {
+                if (isValid[i]) {
+                    // Geometry
+                    vec2 cRand = vec2(uCone1[i], uCone2[i]);
+                    vec3 dir = sampleCone(cRand, pc.coneDirAperture.xyz, pc.coneDirAperture.w);
+
+                    vec3 pos = dir * pc.radius;
+                    pX[i] = pos.x;
+                    pY[i] = pos.y;
+                    pZ[i] = pos.z;
+
+                    // Mass & Velocity
+                    vec2 nDist = boxMuller(vec2(uNorm1[i], uNorm2[i]));
+
+                    float mass = pc.massVelMeanStd.x + (nDist.x * pc.massVelMeanStd.y);
+                    mass = max(mass, PARTICLE_MINIMUM_MASS); // Note, this is a threshold in grams. Cluster stuff
+                    invMass[i] = float16_t(1.0 / mass);
+
+                    float speed = pc.massVelMeanStd.z + (nDist.y * pc.massVelMeanStd.w);
+                    speed = max(speed, 0.0);
+                    vec3 vel = dir * speed;
+                    vX[i] = float16_t(vel.x);
+                    vY[i] = float16_t(vel.y);
+                    vZ[i] = float16_t(vel.z);
+
+                    sTime[i] = pc.currentTime;
+                } else {
+                    // fill unused lanes with dead markers for compaction
+                    sTime[i] = 0xFFFFFFFF;
+                    pX[i] = pY[i] = pZ[i] = 0.0;
+                    vX[i] = vY[i] = vZ[i] = 0.0hf;
+                    invMass[i] = 0.0hf;
+                }
+            }
+
+            // write back to global memory
+            pc.globalParticleBuffer.chunks[physIdx].positionX[localVec4Index] = pX;
+            pc.globalParticleBuffer.chunks[physIdx].positionY[localVec4Index] = pY;
+            pc.globalParticleBuffer.chunks[physIdx].positionZ[localVec4Index] = pZ;
+
+            pc.globalParticleBuffer.chunks[physIdx].velocityX[localVec4Index] = vX;
+            pc.globalParticleBuffer.chunks[physIdx].velocityY[localVec4Index] = vY;
+            pc.globalParticleBuffer.chunks[physIdx].velocityZ[localVec4Index] = vZ;
+
+            pc.globalParticleBuffer.chunks[physIdx].invMass[localVec4Index]   = invMass;
+            pc.globalParticleBuffer.chunks[physIdx].spawnTime[localVec4Index] = sTime;
+
+            pc.globalParticleBuffer.chunks[physIdx].forceX[localVec4Index] = f16vec4(0.0hf);
+            pc.globalParticleBuffer.chunks[physIdx].forceY[localVec4Index] = f16vec4(0.0hf);
+            pc.globalParticleBuffer.chunks[physIdx].forceZ[localVec4Index] = f16vec4(0.0hf);
+
+            pc.globalParticleBuffer.chunks[physIdx].beta[localVec4Index] = f16vec4(float16_t(pc.beta));
+        }
+
+        // 4. Safely update Global Particle Count
+        uint subgroupEmitted = subgroupAdd(chunkEmittedCount);
+        if (subgroupElect() && subgroupEmitted > 0) {
+            atomicAdd(pc.particlePageTable.particleCount, subgroupEmitted);
+        }
+
+        // Wait for all threads to finish writing this chunk before potentially looping to the next
+        barrier();
+    }
+}

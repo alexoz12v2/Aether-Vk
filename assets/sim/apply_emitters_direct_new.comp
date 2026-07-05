@@ -1,0 +1,149 @@
+// @assets/sim/apply_emitters_direct.comp
+//
+// Direct External-Gravity Pass  (BVH-free, for test-particle systems)
+// ─────────────────────────────────────────────────────────────────────────
+// Dispatch pattern: one thread per particle.
+// Use this shader in place of the (apply_emitters_to_particles Phase A +
+// accumulate_bvh_forces_to_particles Phase B) pair when:
+//   - The system has disable_self_gravity = true
+//   - No inter-particle forces are needed (comet dust, tracers, etc.)
+//
+// What this shader does
+// ─────────────────────
+//   For every active particle, read its position from AOSOA slots 0-2,
+//   compute the gravitational acceleration from each ForceEmitter (type_id == 0),
+//   and atomically add the result directly into AOSOA force slots 7-9.
+//   No BVH is built or traversed.
+//
+// Force-persistence contract
+// ──────────────────────────
+//   p1_p2                 : reads slots 7-9 as F(x_n), then zeroes them
+//   apply_emitters_direct : adds external gravity into AOSOA slots 7-9
+//   p4_p5                 : reads slots 7-9 as F(x_{n+1}), does NOT zero them
+//   write_back_to_scene   : persists slots 7-9 as ParticleData.force
+//   next-tick build_packs  : repacks ParticleData.force → slots 7-9 as new F(x_n)
+//
+// Unit contract
+//   Particle pos : m (micro-frame local, meaning relative to particle system)
+//   Emitter pos  : m relative to particle system. Conversion of positions is handled host side before launching the kernel. all emitters whose position exceeds metre distance conversion is discarded, as it's far away anyways, unless it has the special value and it's not a distance-based emitter
+//   Force output : m/s² (per-particle acceleration × mass → force in slots 7-9)
+#version 450 core
+#extension GL_EXT_buffer_reference2         : require
+#extension GL_EXT_buffer_reference_uvec2    : require
+#extension GL_KHR_shader_subgroup_basic     : require
+#extension GL_GOOGLE_include_directive      : require
+
+#include "../debug_utils.glsl"
+#include "imex_math.glsl"
+
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    ParticleChunkData globalParticleBufferAddress;
+    ParticlePageTable particlePageTable;
+    ParticleEmitterArray emitterArray;
+    uint emitterCount;
+} pc;
+
+// Workgroup-shared emitter cache so all threads in the WG read the same emitter values.
+shared vec4 s_em_posMu;
+shared uint s_em_typeId;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.particlePageTable.particleCount || pc.emitterCount == 0u) return;
+
+    uint chunkCount = (pc.particlePageTable.particleCount + PCHUNK_SIZE - 1) / PCHUNK_SIZE;
+    // if PCHUNK_SIZE == gl_WorkGroupSize.x then we can use gl_LocationInvocationID.x instead of this
+    uint chunkTableIndex = gid / PCHUNK_SIZE;
+    uint chunkOffset = gid & (PCHUNK_SIZE - 1); // power of 2
+
+    // all elements in workgroup should access same element -> broadcast. First to do it in subgroup gives it to all other lanes
+    uint chunkIndex = subgroupBroadcastFirst(pc.particlePageTable.chunks[chunkTableIndex]);
+#ifdef DEBUG_SHADERS
+    if (chunkIndex >= chunkCount) {
+        debugPrintfEXT("ERROR Out chunk: %d | %d\n", chunkIndex, chunkCount);
+        return;
+    }
+#endif
+
+    // Fetch lifecycle states for all 4 particles
+    uvec4 st = pc.globalParticleBufferAddress[chunkIndex].spawnTime[chunkOffset];
+
+    // evaluate active mask. if all particles are FREE (0) or DEAD (0xFFFF'FFFF) do nothing
+    bvec4 isAlive = bvec4(
+        st.x != 0u && st.x != 0xFFFFFFFFu,
+        st.y != 0u && st.y != 0xFFFFFFFFu,
+        st.z != 0u && st.z != 0xFFFFFFFFu,
+        st.w != 0u && st.w != 0xFFFFFFFFu
+    );
+    if (!any(isAlive)) {
+      return; // continue in grid stride
+    }
+
+    // ── Read particle data from AOSOA ─────────────────────────────────────
+    f16vec4 invM = pc.globalParticleBufferAddress[chunkIndex].invMass[chunkOffset];
+    vec4 beta = vec4(pc.globalParticleBufferAddress[chunkIndex].beta[chunkOffset]);
+
+    vec4 px_n = pc.globalParticleBufferAddress[chunkIndex].positionX[chunkOffset];
+    vec4 py_n = pc.globalParticleBufferAddress[chunkIndex].positionY[chunkOffset];
+    vec4 pz_n = pc.globalParticleBufferAddress[chunkIndex].positionZ[chunkOffset];
+
+    // ── Accumulate external-gravity force from all emitters ───────────────
+    f16vec4 fx_acc = f16vec4(0.0hf); // m/s²
+    f16vec4 fy_acc = f16vec4(0.0hf);
+    f16vec4 fz_acc = f16vec4(0.0hf);
+
+    for (uint e = 0u; e < pc.emitterCount; ++e) {
+        // Broadcast emitter data through shared memory
+        if (gl_LocalInvocationID.x == 0u) {
+            s_em_typeId = pc.emitterArray.emitters[e].typeId;
+            s_em_posMu  = pc.emitterArray.emitters[e].positionMu;
+        }
+        barrier();
+
+        if (s_em_typeId != 0u) { barrier(); continue; } // Only gravity emitters
+
+        vec4 rx = s_em_posMu.xxxx - px_n;
+        vec4 ry = s_em_posMu.yyyy - py_n;
+        vec4 rz = s_em_posMu.zzzz - pz_n;
+
+        vec4 dist_sq = (rx * rx) + (ry * ry) + (rz * rz);
+
+        // create a mask: 1.0 if dist_sq >= 1e-6, else 0.0
+        vec4 mask = step(1e-6, dist_sq);
+        // prevent NaN/Div-by-Zero in masked-out lanes by enforcing a minimum distance
+        vec4 safe_dist_sq = max(dist_sq, 1e-10);
+        // compute powers
+        vec4 dist  = sqrt(safe_dist_sq);
+        vec4 dist3 = safe_dist_sq * dist;
+        vec4 dist5 = dist3 * safe_dist_sq;
+        vec4 soft  = 1.0 - exp(-dist5);
+
+        vec4 muEff = s_em_posMu[3] * (1.0 - beta);
+        vec4 accelMag = (muEff * soft) / dist3;
+        accelMag *= mask;
+        accelMag /= vec4(invM);
+
+        fx_acc += f16vec4(rx * accelMag);
+        fy_acc += f16vec4(ry * accelMag);
+        fz_acc += f16vec4(rz * accelMag);
+
+        barrier();
+    }
+
+    // ── Atomic-add force directly into AOSOA slots 7-9 ───────────────────
+    // F = acc × mass, matching the convention of accumulate_bvh_forces_to_particles.
+    // we don't care about dead/free particles, so write zero
+    f16vec4 zeroForce = f16vec4(0.0hf);
+    fx_acc = mix(zeroForce, fx_acc, isAlive);
+    fx_acc = mix(zeroForce, fx_acc, isAlive);
+    fx_acc = mix(zeroForce, fx_acc, isAlive);
+
+    pc.globalParticleBufferAddress[chunkIndex].forceX[chunkOffset] = fx_acc;
+    pc.globalParticleBufferAddress[chunkIndex].forceY[chunkOffset] = fx_acc;
+    pc.globalParticleBufferAddress[chunkIndex].forceZ[chunkOffset] = fx_acc;
+}

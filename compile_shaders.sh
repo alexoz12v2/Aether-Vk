@@ -88,6 +88,14 @@ WG_VARIANT_SHADERS=(
     # Gravity / sorting
     barnes_hut.comp
     radix_sort.comp
+    # new particle system
+    apply_emitters_direct_new.comp
+    integrate_particles_p1_p2_new.comp
+    integrate_particles_p4_5_new.comp
+
+    new_particles_compact_reset.comp
+    new_particles_emit.comp
+    new_particles_compact.comp
 )
 
 is_wg_variant() {

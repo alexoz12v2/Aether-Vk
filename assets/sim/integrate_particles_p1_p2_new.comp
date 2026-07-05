@@ -1,0 +1,186 @@
+// @assets/sim/integrate_particles_p1_p2_new.comp
+//
+// Particle Velocity-Verlet Predictor — Phase 1 & 2
+// ─────────────────────────────────────────────────
+// Unit contract (see imex_math.glsl for full derivation):
+//   pos   [m]    — micro-frame local position
+//   vel   [m/s]  — velocity
+//   force [m/s²] — per-unit-mass acceleration (ALWAYS stored in km/s²,
+//                   regardless of whether the force source is a macro or micro
+//                   emitter; apply_emitters_to_particles.comp handles the AU→km
+//                   conversion internally before writing the force slots)
+//   dt    [s]    — sub-step duration, converted from µs by the CPU
+//
+// Frame-start invariant: AOSOA slots 7/8/9 hold F(x_n) [m/s²] from the previous frame.
+//
+//   v_{n+½} = v_n  + (dt/2) · M⁻¹ · F(x_n)  [m/s  + s·m/s²  = m/s  ✓]
+//   x_{n+1} = x_n  + dt    · v_{n+½}        [m    + s·m/s   = m    ✓]
+//
+// After writing, CLEARS slots 7/8/9 to 0 so the unified force-generation pass
+// (apply_emitters, barnes_hut, narrow-phase) can safely atomicAdd into them.
+// The half-kick velocity v_{n+½} is stored temporarily in slots 3/4/5 for
+// integrate_particles_p4_5 to complete the VV corrector step.
+//
+// Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
+
+#version 450 core
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_GOOGLE_include_directive : require
+
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
+
+#include "../bvh_utils.glsl"
+#include "imex_math.glsl"
+
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    ParticleChunkData globalParticleBufferAddress;
+    ParticlePageTable particlePageTable;
+    float deltaTime;
+} pc;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+
+#ifdef DEBUG_SHADERS
+    if (gid == 0) {
+        debugPrintfEXT("======================================\n");
+        debugPrintfEXT("integrate_particles_p1_p2_new.comp : STARTED\n");
+        debugPrintfEXT("Total Particles: %d | dt: %1.6f\n", pc.particlePageTable.particleCount, pc.deltaTime);
+        debugPrintfEXT("======================================\n");
+    }
+#endif
+
+    if (gid >= pc.particlePageTable.particleCount) return;
+
+    uint chunkCount = (pc.particlePageTable.particleCount + PCHUNK_SIZE - 1) / PCHUNK_SIZE;
+    // if PCHUNK_SIZE == gl_WorkGroupSize.x then we can use gl_LocationInvocationID.x instead of this
+    uint chunkTableIndex = gid / PCHUNK_SIZE;
+    uint chunkOffset = gid & (PCHUNK_SIZE - 1); // power of 2
+
+    // all elements in workgroup should access same element -> broadcast. First to do it in subgroup gives it to all other lanes
+    uint chunkIndex = subgroupBroadcastFirst(pc.particlePageTable.chunks[chunkTableIndex]);
+#ifdef DEBUG_SHADERS
+    if (chunkIndex >= chunkCount) {
+        debugPrintfEXT("ERROR Out chunk: %d | %d\n", chunkIndex, chunkCount);
+        return;
+    }
+#endif
+
+    // 1. Fetch lifecycle states for all 4 particles
+    uvec4 st = pc.globalParticleBufferAddress[chunkIndex].spawnTime[chunkOffset];
+    float16_t dt_half = float16_t(pc.deltaTime / 2);
+    float dt_f32 = pc.deltaTime;
+#ifdef DEBUG_SHADERS
+    if (isnan(dt_f32) || dt_f32 == 0) {
+        debugPrintfEXT("Help half dt died\n");
+        return;
+    }
+#endif
+
+    // 2. evaluate active mask. if all particles are FREE (0) or DEAD (0xFFFF'FFFF) do nothing
+    bvec4 isAlive = bvec4(
+        st.x != 0u && st.x != 0xFFFFFFFFu,
+        st.y != 0u && st.y != 0xFFFFFFFFu,
+        st.z != 0u && st.z != 0xFFFFFFFFu,
+        st.w != 0u && st.w != 0xFFFFFFFFu
+    );
+    if (!any(isAlive)) {
+      return; // continue in grid stride
+    }
+
+    // 3. fetch physics data
+    f16vec4 fx_n = pc.globalParticleBufferAddress[chunkIndex].forceX[chunkOffset];
+    f16vec4 fy_n = pc.globalParticleBufferAddress[chunkIndex].forceY[chunkOffset];
+    f16vec4 fz_n = pc.globalParticleBufferAddress[chunkIndex].forceZ[chunkOffset];
+
+    f16vec4 vx_n = pc.globalParticleBufferAddress[chunkIndex].velocityX[chunkOffset];
+    f16vec4 vy_n = pc.globalParticleBufferAddress[chunkIndex].velocityY[chunkOffset];
+    f16vec4 vz_n = pc.globalParticleBufferAddress[chunkIndex].velocityZ[chunkOffset];
+
+    f16vec4 invM = pc.globalParticleBufferAddress[chunkIndex].invMass[chunkOffset];
+
+    // 4. compute new velocities
+    // Note: if a particle is dead or free, invM might be garbage, hence NaN. discarded in CSEL (next step)
+    f16vec4 vx_half = vx_n + (fx_n * invM) * dt_half;
+    f16vec4 vy_half = vy_n + (fy_n * invM) * dt_half;
+    f16vec4 vz_half = vy_n + (fz_n * invM) * dt_half;
+
+#ifdef DEBUG_SHADERS
+    f16vec4 vx_n_old = vx_n;
+    f16vec4 vy_n_old = vy_n;
+    f16vec4 vz_n_old = vz_n;
+#endif
+
+    // 5. masked update for half-kick: [m/s] + [m/s²] * [s/2] = [m/s]
+    // mix(old, new, boolean_mask)
+    vx_n = mix(vx_n, vx_half, isAlive);
+    vy_n = mix(vy_n, vy_half, isAlive);
+    vz_n = mix(vz_n, vz_half, isAlive);
+
+    // 6. compute and masked update for position full-drift: [m] + [m/s] * [s] = [m]
+    vec4 px_n = pc.globalParticleBufferAddress[chunkIndex].positionX[chunkOffset];
+    vec4 py_n = pc.globalParticleBufferAddress[chunkIndex].positionY[chunkOffset];
+    vec4 pz_n = pc.globalParticleBufferAddress[chunkIndex].positionZ[chunkOffset];
+
+    vec4 px_next = px_n + vec4(vx_n) * dt_f32;
+    vec4 py_next = py_n + vec4(vy_n) * dt_f32;
+    vec4 pz_next = pz_n + vec4(vz_n) * dt_f32;
+
+#ifdef DEBUG_SHADERS
+    // EXPLOSION DETECTOR: Catch corrupted forces from previous frame immediately
+    [[dont_unroll]]
+    for (uint i = 0; i < 4; ++i) {
+        if (isAlive[i]) {
+            vec3 v_n = vec3(f16vec3(vx_n_old[i], vy_n_old[i], vz_n_old[i]));
+            vec3 pos_n = vec3(px_n[i], py_n[i], pz_n[i]);
+            vec3 v_half = vec3(f16vec3(vx_n[i], vy_n[i], vz_n[i]));
+            vec3 pos_next = vec3(px_next[i], py_next[i], pz_next[i]);
+            vec3 f_n = vec3(f16vec3(fx_n[i], fy_n[i], fz_n[i]));
+            if (isnan(pos_n.x) || length(v_half) > 100000.0) {
+                debugPrintfEXT("[P1_P2 FATAL] Particle %d exploded!\n", gid);
+                debugPrintfEXT("   -> Prev Pos: (%1.2f, %1.2f, %1.2f) | Prev Vel: (%1.2f, %1.2f, %1.2f)\n", pos_n.x, pos_n.y, pos_n.z, v_n.x, v_n.y, v_n.z);
+                debugPrintfEXT("   -> Incoming Force: (%1.2f, %1.2f, %1.2f)\n", f_n.x, f_n.y, f_n.z);
+                debugPrintfEXT("   -> New Vel Half: (%1.2f, %1.2f, %1.2f) | New Pos: (%1.2f, %1.2f, %1.2f)\n", v_half.x, v_half.y, v_half.z, pos_next.x, pos_next.y, pos_next.z);
+            } else if (gid == 0) {
+                // Routine trace for Particle 0 to verify integration math
+                debugPrintfEXT("[P1_P2 TRACE] P0: fn=(%1.2f,%1.2f,%1.2f) -> v_half=(%1.2f,%1.2f,%1.2f) -> pos_next=(%1.2f,%1.2f,%1.2f)\n",
+                    f_n.x, f_n.y, f_n.z, v_half.x, v_half.y, v_half.z, pos_next.x, pos_next.y, pos_next.z);
+            }
+        }
+    }
+#endif
+
+    px_n = mix(px_n, px_next, isAlive);
+    py_n = mix(py_n, py_next, isAlive);
+    pz_n = mix(pz_n, pz_next, isAlive);
+
+    // 7. store back to VRAM
+    pc.globalParticleBufferAddress[chunkIndex].positionX[chunkOffset] = px_n;
+    pc.globalParticleBufferAddress[chunkIndex].positionY[chunkOffset] = py_n;
+    pc.globalParticleBufferAddress[chunkIndex].positionZ[chunkOffset] = pz_n;
+
+    pc.globalParticleBufferAddress[chunkIndex].velocityX[chunkOffset] = vx_n;
+    pc.globalParticleBufferAddress[chunkIndex].velocityY[chunkOffset] = vy_n;
+    pc.globalParticleBufferAddress[chunkIndex].velocityZ[chunkOffset] = vz_n;
+
+    // 8. Clear forces for the current frame's collision/gravity passes
+    // Note: this is slower than a `vkCmdFillBuffer` with a memory barrier. if still a problem do it
+    f16vec4 zeroForce = f16vec4(0.0hf);
+
+    fx_n = mix(fx_n, zeroForce, isAlive);
+    fy_n = mix(fy_n, zeroForce, isAlive);
+    fz_n = mix(fz_n, zeroForce, isAlive);
+
+    pc.globalParticleBufferAddress[chunkIndex].forceX[chunkOffset] = fx_n;
+    pc.globalParticleBufferAddress[chunkIndex].forceY[chunkOffset] = fy_n;
+    pc.globalParticleBufferAddress[chunkIndex].forceZ[chunkOffset] = fz_n;
+}

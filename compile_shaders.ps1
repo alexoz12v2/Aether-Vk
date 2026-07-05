@@ -56,7 +56,14 @@ $WgVariantShaders = @(
     "graph_coloring.comp",
     "lcp_solver.comp",
     "barnes_hut.comp",
-    "radix_sort.comp"
+    "radix_sort.comp",
+    # new stuff
+    "apply_emitters_direct_new.comp",
+    "integrate_particles_p1_p2_new.comp",
+    "integrate_particles_p4_5_new.comp",
+    "new_particles_compact_reset.comp",
+    "new_particles_emit.comp",
+    "new_particles_compact.comp"
 )
 
 function Compile-One {

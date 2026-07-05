@@ -1,0 +1,56 @@
+// @assets/sim/new_particles_compact_reset.comp
+//
+// Particle compact cleaner shader
+// ─────────────────────────────────────────────────
+// Unit contract
+//
+// Executed after a compaction to
+// - move compacted page table list from second half to first half of the buffer
+// - reset writeIndex
+//
+// Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
+
+#version 450 core
+#extension GL_EXT_buffer_reference2      : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_KHR_shader_subgroup_basic  : require
+#extension GL_GOOGLE_include_directive   : require
+
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
+
+#include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
+
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    ParticlePageTable particlePageTable;
+    uint maxChunks;
+} pc;
+
+shared uint wg_survivingCount;
+
+void main() {
+    uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+
+    if (gl_LocalInvocationIndex == 0) {
+        wg_survivingCount = pc.particlePageTable.chunks[pc.maxChunks];
+        if (gl_GlobalInvocationID.x == 0) {
+            pc.particlePageTable.activeChunkCount = wg_survivingCount;
+        }
+    }
+    barrier();
+
+    for (uint i = gl_GlobalInvocationID.x; i < pc.maxChunks; i += stride) {
+        if (i < wg_survivingCount) {
+            pc.particlePageTable.chunks[i] = pc.particlePageTable.chunks[i + pc.maxChunks + 1];
+        } else {
+            pc.particlePageTable.chunks[i] = 0xFFFFFFFF;
+        }
+    }
+}

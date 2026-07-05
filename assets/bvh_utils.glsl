@@ -15,7 +15,14 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_vote : require
 #extension GL_KHR_memory_scope_semantics : require
+// TODO remove int8, which isn't universally supported (should be available on majority though)
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+// 16 bit. meaning shaderFloat16 feature
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+// ability to use [[dont_unroll]]
+#extension GL_EXT_control_flow_attributes : require
+
 layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
 layout(constant_id = 4) const uint PARTICLES_IN_LEAF = 64;
 
@@ -326,5 +333,73 @@ layout(buffer_reference, std430, buffer_reference_align = 4) buffer CrossPairBuf
 
 struct CrossCollisionData { uint valid; uint macro_id; uint micro_id; uint lca_id; float toi; vec3 contact_normal; vec3 contact_point; float penetration_depth; };
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer CrossSparseCollisions { uint count; uint capacity; CrossCollisionData pairs[]; };
+
+// ------------------------------------------------------------
+// New Particle system stuff
+//------------------------------------------------------------
+
+const int PCHUNK_SIZE = 256;
+const int PCHUNK_VEC4_SIZE = 64;
+
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticleChunkData {
+    vec4 positionX[PCHUNK_VEC4_SIZE]; // p1p2: pos_N | emit: pos_N+1
+    vec4 positionY[PCHUNK_VEC4_SIZE]; // in metres (m)
+    vec4 positionZ[PCHUNK_VEC4_SIZE];
+
+    f16vec4 velocityX[PCHUNK_VEC4_SIZE]; // p1p2: vel_N | emit: vel_N+1/2 | p4p5: vel_N+1
+    f16vec4 velocityY[PCHUNK_VEC4_SIZE]; // in metres per second (m/s)
+    f16vec4 velocityZ[PCHUNK_VEC4_SIZE];
+
+    f16vec4 invMass[PCHUNK_VEC4_SIZE]; // 1 / grams (1/g)
+
+    f16vec4 forceX[PCHUNK_VEC4_SIZE];
+    f16vec4 forceY[PCHUNK_VEC4_SIZE];
+    f16vec4 forceZ[PCHUNK_VEC4_SIZE]; // in g * m / s^2
+
+    f16vec4 beta[PCHUNK_VEC4_SIZE];
+
+    uvec4 spawnTime[PCHUNK_VEC4_SIZE]; // in 1/300 seconds of unscaled simulation time, which can then be scaled and compared to user provided TTL
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticleChunkBuffer {
+    ParticleChunkData chunks[];
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticlePageTable {
+    uint particleCount;
+    uint activeChunkCount; // tracks how many chunks are mapped
+    // if we compare this different than zero, then we can cast to ParticleChunk
+    // There are indices to support 2^17 particles (131072). The number of allocated indices
+    // is actually double the amount of supported particles such that we can have space to
+    // host
+    // first index of the second half is actually the write index into the second half, cause
+    // if we are compacting, it means we are not full capacity
+    uint chunks[];
+};
+
+uvec2 offsetAddress(uvec2 baseAddr, uint off) {
+    uint carry;
+    uint low = uaddCarry(baseAddr.x, off, carry);
+    uint high = baseAddr.y + carry;
+    return uvec2(low, high);
+}
+
+struct ParticleForceEmitter {
+    // Gravity (type_id=0): position is particle-system local in metres (m). mu is G*M in m³/s² (JPL default is km³/s²).
+    // Planar  (type_id=1): position is plane origin; mu is base force magnitude.
+    vec4 positionMu;
+    uint typeId;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticleEmitterArray {
+    ParticleForceEmitter[] emitters;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticleFreeChunkStack {
+    uint count;      // How many chunks are actually free
+    uint indices[];  // physical indices of free chunks
+};
+
+#define PARTICLE_MINIMUM_MASS 0.001
 
 #endif // BVH_UTILS_GLSL
