@@ -103,8 +103,34 @@ pub struct ParticleMetadata {
   pub original_index: u32,
 }
 
+pub mod new_particles {
+  use super::*;
+
+  // maximum supported subgroup size is 128, and this is a multiple of it
+  pub const PCHUNK_SIZE: usize = 256;
+  pub const MAX_PARTICLES: usize = 1_000_000;
+  pub const MAX_CHUNKS: usize = MAX_PARTICLES.div_ceil(PCHUNK_SIZE);
+
+  #[repr(C)]
+  #[derive(Debug, Copy, Clone, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct ParticleChunk {
+    pub position_x: [f32; PCHUNK_SIZE],
+    pub position_y: [f32; PCHUNK_SIZE],
+    pub position_z: [f32; PCHUNK_SIZE],
+    pub velocity_x: [f32; PCHUNK_SIZE],
+    pub velocity_y: [f32; PCHUNK_SIZE],
+    pub velocity_z: [f32; PCHUNK_SIZE],
+    pub mass: [f32; PCHUNK_SIZE],
+    pub force_x: [f32; PCHUNK_SIZE],
+    pub force_y: [f32; PCHUNK_SIZE],
+    pub force_z: [f32; PCHUNK_SIZE],
+    pub beta: [f32; PCHUNK_SIZE],
+    pub spawn_time: [u32; PCHUNK_SIZE],
+  }
+}
+
 /// Number of float fields per particle in the AOSOA buffer.
-/// Slots: 0-2=pos, 3-5=vel, 6=mass, 7-9=force, 10=beta
+/// Slots: 0-2=pos, 3-5=vel, 6=mass, 7-9=force, 10=beta, 11=spawnTime in 1/300 seconds
 pub const PARTICLE_FIELDS: usize = 11;
 
 pub fn pack_particles_aosoa(

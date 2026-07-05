@@ -1,0 +1,102 @@
+// @assets/sim/new_particles_compact.comp
+//
+// Particle Compaction shader
+// ─────────────────────────────────────────────────
+// Unit contract
+// 1 workgroup = 1 chunk (256) Ideally, but we want to support all workgroup sizes
+// and make usage of subgroups.
+//
+// each workgroup works on a chunk. sweep for dead particles in each chunk
+// for now, a full blown stream compaction of chunks is not happening, as it would require additional
+// buffers for scan and rewrite
+//
+// compaction of the page table indices though is needed to support the linear addressing scheme
+// used by other shaders
+
+#version 450 core
+#extension GL_EXT_buffer_reference2      : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_KHR_shader_subgroup_basic  : require
+#extension GL_GOOGLE_include_directive   : require
+
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
+
+#include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
+
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    ParticleChunkBuffer globalParticleBufferAddress;
+    ParticlePageTable particlePageTable;
+    ParticleFreeChunkStack freeList;
+    uint doomsday;
+    uint maxChunks; // The capacity of the first half (e.g., 512). Marks the start of scratch space.
+} pc;
+
+shared uint wg_deadParticleCount;
+
+void main() {
+    // init dead particle workgroup count
+    if (gl_LocalInvocationIndex == 0) {
+        wg_deadParticleCount = 0;
+    }
+    barrier();
+
+    // map a chunk to a given workgroup (256)
+    uint chunkStart = gl_WorkGroupID.x;
+    uint chunkIndex = pc.particlePageTable.chunks[chunkStart];
+    uint localCount = 0;
+    if (chunkIndex == 0xFFFFFFFF) return;
+
+    for (uint i = gl_LocalInvocationIndex; i < PCHUNK_VEC4_SIZE; i += gl_WorkGroupSize.x) {
+        uvec4 st = pc.globalParticleBufferAddress.chunks[chunkIndex].spawnTime[i];
+        bvec4 isDead = bvec4(
+            st.x == 0xFFFFFFFF || st.x >= pc.doomsday,
+            st.y == 0xFFFFFFFF || st.y >= pc.doomsday,
+            st.z == 0xFFFFFFFF || st.z >= pc.doomsday,
+            st.w == 0xFFFFFFFF || st.w >= pc.doomsday
+        );
+        // write back dead particles spawn time
+        if (any(isDead)) {
+            if (isDead.x) { st.x = 0xFFFFFFFF; localCount++; }
+            if (isDead.y) { st.y = 0xFFFFFFFF; localCount++; }
+            if (isDead.z) { st.z = 0xFFFFFFFF; localCount++; }
+            if (isDead.w) { st.w = 0xFFFFFFFF; localCount++; }
+            pc.globalParticleBufferAddress.chunks[chunkIndex].spawnTime[i] = st;
+        }
+    }
+
+    uint subgroupCount = subgroupAdd(localCount);
+    if (subgroupElect()) {
+        atomicAdd(wg_deadParticleCount, subgroupCount);
+    }
+    barrier();
+
+    if (gl_LocalInvocationIndex == 0) {
+        // update particle count
+        if (wg_deadParticleCount > 0) {
+            atomicAdd(pc.particlePageTable.particleCount, uint(-int(wg_deadParticleCount)));
+        }
+
+        if (wg_deadParticleCount == PCHUNK_SIZE) {
+            // the entire chunk is dead -> push to free list
+            uint stackPushIndex = atomicAdd(pc.freeList.count, 1);
+            pc.freeList.indices[stackPushIndex] = chunkIndex;
+
+            // unmap it from the original page table slot
+            pc.particlePageTable.chunks[chunkStart] = 0xFFFFFFFF;
+        } else {
+            // chunk survived -> write it onto second half of page table
+            // we use the first index of the second half as an atomic counter
+            uint writeIdx = atomicAdd(pc.particlePageTable.chunks[pc.maxChunks], 1);
+            // append surviving chunks
+            pc.particlePageTable.chunks[pc.maxChunks + 1 + writeIdx] = chunkIndex;
+        }
+    }
+}

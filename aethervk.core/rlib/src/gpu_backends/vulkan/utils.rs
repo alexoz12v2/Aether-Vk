@@ -985,6 +985,7 @@ pub(super) struct RequiredFeatures<'a> {
   pub shader_float16_int8: vk::PhysicalDeviceShaderFloat16Int8Features<'a>,
   /// Required for physics compute shaders that use StorageBuffer8BitAccess
   pub storage_8bit: vk::PhysicalDevice8BitStorageFeatures<'a>,
+  pub storage_16bit: vk::PhysicalDevice16BitStorageFeature<'a>,
   #[cfg(test)]
   pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'a>,
 }
@@ -1000,6 +1001,7 @@ impl RequiredFeatures<'_> {
     let descriptor_indexing = vk::PhysicalDeviceDescriptorIndexingFeatures::default();
     let scalar_block_layout = vk::PhysicalDeviceScalarBlockLayoutFeatures::default();
     let shader_float16_int8 = vk::PhysicalDeviceShaderFloat16Int8Features::default();
+    pub storage_16bit = vk::PhysicalDevice16BitStorageFeatures::default();
 
     Self {
       features,
@@ -1010,6 +1012,7 @@ impl RequiredFeatures<'_> {
       descriptor_indexing,
       scalar_block_layout,
       shader_float16_int8,
+      storage_16bit,
       storage_8bit: vk::PhysicalDevice8BitStorageFeatures::default(),
       #[cfg(test)]
       robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT::default(),
@@ -1027,6 +1030,7 @@ impl RequiredFeatures<'_> {
       .push_next(&mut self.descriptor_indexing)
       .push_next(&mut self.scalar_block_layout)
       .push_next(&mut self.shader_float16_int8)
+      .push_next(&mut self.storage_16bit)
       .push_next(&mut self.storage_8bit);
 
     #[cfg(test)]
@@ -1060,6 +1064,8 @@ impl RequiredFeatures<'_> {
     self.descriptor_indexing.descriptor_binding_sampled_image_update_after_bind = vk::TRUE;
     self.descriptor_indexing.descriptor_binding_storage_buffer_update_after_bind = vk::TRUE;
     self.shader_float16_int8.shader_int8 = vk::TRUE;
+    self.storage_16bit.storage_buffer16_bit_access = vk::TRUE;
+    self.shader_float16_int8.shader_float16 = vk::TRUE;
     // Required for SPIR-V shaders that use StorageBuffer8BitAccess capability
     self.storage_8bit.storage_buffer8_bit_access = vk::TRUE;
 
@@ -1121,6 +1127,12 @@ impl RequiredFeatures<'_> {
     }
     if self.shader_float16_int8.shader_int8 != vk::TRUE {
       the_vec.push("shader_float16_int8".to_string());
+    }
+    if self.storage_16bit.storage_buffer16_bit_access != vk::TRUE {
+      the_vec.push("storage_buffer16_bit_access".to_string());
+    }
+    if self.shader_float16_int8.shader_float16 != vk::TRUE {
+      the_vec.push("shader_float16_float16".to_string());
     }
     if self.storage_8bit.storage_buffer8_bit_access != vk::TRUE {
       the_vec.push("storage_buffer_8_bit_access".to_string());
