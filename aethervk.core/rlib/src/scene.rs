@@ -173,7 +173,7 @@ pub trait ForeignSerializable: Component {
 
   /// Update the component from a raw void pointer to the DTO
   unsafe fn apply_foreign_ptr(&mut self, ptr: *const core::ffi::c_void) {
-    self.apply_foreign(&*(ptr as *const Self::ForeignData));
+    unsafe { self.apply_foreign(&*(ptr as *const Self::ForeignData)) };
   }
 }
 

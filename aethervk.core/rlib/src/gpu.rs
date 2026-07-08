@@ -109,6 +109,7 @@ pub mod new_particles {
   // maximum supported subgroup size is 128, and this is a multiple of it
   pub const PCHUNK_SIZE: usize = 256;
   pub const MAX_PARTICLES: usize = 1_000_000;
+  pub const MAX_PARTICLES_PER_SYSTEM: usize = 100_000;
   pub const MAX_CHUNKS: usize = MAX_PARTICLES.div_ceil(PCHUNK_SIZE);
 
   #[repr(C)]
@@ -120,7 +121,7 @@ pub mod new_particles {
     pub velocity_x: [f32; PCHUNK_SIZE],
     pub velocity_y: [f32; PCHUNK_SIZE],
     pub velocity_z: [f32; PCHUNK_SIZE],
-    pub mass: [f32; PCHUNK_SIZE],
+    pub inv_mass: [f32; PCHUNK_SIZE],
     pub force_x: [f32; PCHUNK_SIZE],
     pub force_y: [f32; PCHUNK_SIZE],
     pub force_z: [f32; PCHUNK_SIZE],
@@ -1645,7 +1646,9 @@ impl<'a> ScopedCommandBuffer<'a> {
   /// Explicitly submits the command buffer.
   pub fn submit(mut self) -> GpuResult<()> {
     self.submitted = true;
-    let res = self.device.submit_command_buffer(self.cmd_buffer, self.task_id, &self.sync_infos);
+    let res = self
+      .device
+      .submit_command_buffer(self.cmd_buffer, self.task_id, &self.sync_infos);
     if let Err(e) = &res {
       if let Some(task_id) = self.task_id {
         self.device.fail_task(task_id, e.clone());
@@ -1659,7 +1662,9 @@ impl<'a> Drop for ScopedCommandBuffer<'a> {
   fn drop(&mut self) {
     if !self.submitted {
       // Force submission on early exit/panic. Result is ignored to prevent double panics.
-      let res = self.device.submit_command_buffer(self.cmd_buffer, self.task_id, &self.sync_infos);
+      let res = self
+        .device
+        .submit_command_buffer(self.cmd_buffer, self.task_id, &self.sync_infos);
       if let Err(e) = res {
         if let Some(task_id) = self.task_id {
           self.device.fail_task(task_id, e);
@@ -1777,8 +1782,8 @@ pub trait RenderContext: Send + Sync {
   fn linux_surface_support(&self) -> crate::gpu_backends::vulkan::instance::LinuxSurfaceSupport {
     crate::gpu_backends::vulkan::instance::LinuxSurfaceSupport {
       wayland: true,
-      xcb:     true,
-      xlib:    true,
+      xcb: true,
+      xlib: true,
     }
   }
 }
@@ -2242,7 +2247,14 @@ pub trait Kernels: Send + Sync {
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<alloc::vec::Vec<(EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>, bool)>>;
+  ) -> EngineResult<
+    alloc::vec::Vec<(
+      EntityId,
+      Self::Buffer<f32>,
+      alloc::vec::Vec<ParticleMetadata>,
+      bool,
+    )>,
+  >;
 
   /// Uploads the `parent_frame_id` field from each `ParticleMetadata` entry as a
   /// tightly-packed `u32[]` GPU buffer in AOSOA invocation order (same order as the
@@ -2627,11 +2639,15 @@ pub trait Kernels: Send + Sync {
     cmd: &mut Self::Cmd,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
     // Per-system particle buffers: (entity_id, buffer, metadata, disable_self_gravity).
-    particle_systems: &[(EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>, bool)],
+    particle_systems: &[(
+      EntityId,
+      Self::Buffer<f32>,
+      alloc::vec::Vec<ParticleMetadata>,
+      bool,
+    )],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> EngineResult<Option<CommandBufferSyncInfo>>;
-
 }
 
 /// Bridges synchronization between Compute (Kernels) and Graphics (RenderDevice).

@@ -184,7 +184,7 @@ impl ParticleSystemComponent {
       accumulator: 0,
       next_id: 0,
       particle_radius: 0.01,       // 10 m default
-      render_radius_km: 1.0,        // 1 km default — visible at typical comet-approach distances
+      render_radius_km: 1.0,       // 1 km default — visible at typical comet-approach distances
       color: [1.0, 1.0, 1.0, 1.0], // white default
       ttl_us: 0,                   // 0 = never expire (set from EmissionCircle.ttl)
       beta: 0.0,                   // set from EmissionCircle.beta
@@ -349,3 +349,91 @@ pub struct JetComponent {
 }
 
 impl Component for JetComponent {}
+
+/// Note: tight coupling with vulkan here
+pub mod v2 {
+  use super::*;
+  use crate::gpu_backends::vulkan;
+  use crate::scene::EntityId;
+  use crate::types::{EngineError, EngineResult};
+  use core::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+
+  pub struct ParticleSystemComponent {
+    /// Strong reference to vulkan device resources
+    pub device_data: (crate::gpu::RenderFrontend, crate::gpu::RenderDeviceHandle),
+    /// Buffer device address of the particle system page table. Each page follows the struct in [`crate::gpu::new_particles::ParticleChunk`]
+    pub particle_page_table_bda: u64,
+    /// value of the compute timeline which represents when the last particle system update
+    /// will be completed
+    pub timeline_value: AtomicU64,
+    /// used to measure whether particle system should emit or not in next simulation step.
+    /// initialized at zero so that first simulation step always emits (timeus_t)
+    pub last_emission: AtomicI64,
+    /// used to measure whether we should perform compaction or not in the next step
+    /// gets initialized to zero in construcor, but if last_emission is zero, then in the first
+    /// emission this is assigned to the last_emission value, such that we skip a useless
+    /// compaction at start
+    pub last_compaction: AtomicI64,
+    /// necessary evil for Drop
+    pub id: u64,
+    // TODO add emission parameters here
+  }
+
+  impl Component for ParticleSystemComponent {}
+
+  impl core::fmt::Debug for ParticleSystemComponent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+      f.debug_struct("ParticleSystemComponent")
+        .field("device_data", &self.device_data.1)
+        .field("particle_page_table_bda", &self.particle_page_table_bda)
+        .field("timeline_value", &self.timeline_value)
+        .finish()
+    }
+  }
+
+  impl Clone for ParticleSystemComponent {
+    fn clone(&self) -> Self {
+      todo!()
+    }
+  }
+
+  impl ParticleSystemComponent {
+    pub fn new(
+      render_frontend: crate::gpu::RenderFrontend,
+      render_device_handle: crate::gpu::RenderDeviceHandle,
+      entity_id: EntityId,
+    ) -> EngineResult<Self> {
+      let entity_u64 = entity_id.as_ffi();
+      render_frontend
+        .with_device(render_device_handle, |dyn_device: &_| {
+          // unwrap cause the only particle system we support here is with vulkan
+          let vulkan_device = dyn_device.as_any().downcast_ref::<vulkan::device::Device>().unwrap();
+          vulkan_device.create_particle_system(entity_u64)
+        })
+        .map_err(EngineError::from)
+        .map(|(bda, timeline)| Self {
+          device_data: (render_frontend, render_device_handle),
+          particle_page_table_bda: bda,
+          timeline_value: AtomicU64::new(timeline),
+          last_emission: AtomicI64::new(0),
+          last_compaction: AtomicI64::new(0),
+          id: entity_u64,
+        })
+    }
+
+    /// To be called after we submit a gpu workload to our particle system
+    pub fn tick(&self) {
+      self.timeline_value.fetch_add(1, Ordering::Relaxed);
+    }
+  }
+
+  impl Drop for ParticleSystemComponent {
+    fn drop(&mut self) {
+      let _ = self.device_data.0.with_device(self.device_data.1, |dyn_device: &_| {
+        // unwrap cause the only particle system we support here is with vulkan
+        let vulkan_device = dyn_device.as_any().downcast_ref::<vulkan::device::Device>().unwrap();
+        vulkan_device.discard_particle_system(self.id, self.timeline_value.load(Ordering::Relaxed))
+      });
+    }
+  }
+}

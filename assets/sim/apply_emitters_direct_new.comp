@@ -1,4 +1,4 @@
-// @assets/sim/apply_emitters_direct.comp
+// @assets/sim/apply_emitters_direct_new.comp
 //
 // Direct External-Gravity Pass  (BVH-free, for test-particle systems)
 // ─────────────────────────────────────────────────────────────────────────

@@ -205,7 +205,6 @@ impl RenderContext for VulkanRenderContext {
     if !core.live_devices.contains_key(&handle) {
       let instance = alloc::sync::Arc::clone(&core.instance);
 
-
       // 1. We need to reserve space in the heapless map.
       // Since heapless doesn't have an 'entry' API for uninitialized memory,
       // we insert a "dummy" (zeroed) value first.
@@ -266,4 +265,31 @@ impl RenderContext for VulkanRenderContext {
   fn linux_surface_support(&self) -> instance::LinuxSurfaceSupport {
     self.core.read().instance.linux_surface_support
   }
+}
+
+#[derive(Clone, Copy)]
+pub struct SimpleSimulationStepParams<'a> {
+  pub device: &'a device::Device,
+  pub scene: &'a crate::scene::Scene,
+  // assumes that on a given loop multiple particle systems emit on the same compute timeline value
+  pub particles_emit_sync: Option<crate::gpu::CommandBufferSyncInfo>,
+  pub t_start: aethervk_oshal_rlib::os::time::timeus_t,
+  pub t_end: aethervk_oshal_rlib::os::time::timeus_t,
+}
+
+#[derive(Clone, Copy)]
+pub struct SimpleParticleEmissionStepParams<'a> {
+  pub device: &'a device::Device,
+  pub scene: &'a crate::scene::Scene,
+  pub t_prev: aethervk_oshal_rlib::os::time::timeus_t,
+  pub t_current: aethervk_oshal_rlib::os::time::timeus_t,
+}
+
+/// new particle logic, implemented here only for vulkan. Function
+pub fn simple_simulation_step(params: SimpleSimulationStepParams<'_>) -> EngineResult<crate::gpu::CommandBufferSyncInfo> {
+  todo!()
+}
+
+pub fn simple_particle_emission_step() -> EngineResult<crate::gpu::CommandBufferSyncInfo> {
+  todo!()
 }
