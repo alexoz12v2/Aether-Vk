@@ -985,7 +985,7 @@ pub(super) struct RequiredFeatures<'a> {
   pub shader_float16_int8: vk::PhysicalDeviceShaderFloat16Int8Features<'a>,
   /// Required for physics compute shaders that use StorageBuffer8BitAccess
   pub storage_8bit: vk::PhysicalDevice8BitStorageFeatures<'a>,
-  pub storage_16bit: vk::PhysicalDevice16BitStorageFeature<'a>,
+  pub storage_16bit: vk::PhysicalDevice16BitStorageFeatures<'a>,
   #[cfg(test)]
   pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'a>,
 }
@@ -1001,7 +1001,7 @@ impl RequiredFeatures<'_> {
     let descriptor_indexing = vk::PhysicalDeviceDescriptorIndexingFeatures::default();
     let scalar_block_layout = vk::PhysicalDeviceScalarBlockLayoutFeatures::default();
     let shader_float16_int8 = vk::PhysicalDeviceShaderFloat16Int8Features::default();
-    pub storage_16bit = vk::PhysicalDevice16BitStorageFeatures::default();
+    let storage_16bit = vk::PhysicalDevice16BitStorageFeatures::default();
 
     Self {
       features,

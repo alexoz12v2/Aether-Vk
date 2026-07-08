@@ -1,4 +1,4 @@
-// @assets/sim/integrate_particles_p4_5.comp
+// @assets/sim/integrate_particles_p4_5_new.comp
 //
 // Particle Velocity-Verlet Corrector — Phase 4 & 5
 // ─────────────────────────────────────────────────

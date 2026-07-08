@@ -8,7 +8,9 @@ use crate::{
     TextureFlags,
     frame::ResourceUploadResult,
     vulkan::{
-      device::{locks::DebugTrackedRwLock, swapchain::PresentationState},
+      device::{
+        locks::DebugTrackedRwLock, particles::ParticleSystemManager, swapchain::PresentationState,
+      },
       physics::VulkanComputeKernels,
     },
   },
@@ -42,7 +44,7 @@ use alloc::{
   vec,
   vec::Vec,
 };
-use ash::vk;
+use ash::vk::{self, Handle};
 use core::{
   any::Any,
   fmt,
@@ -683,6 +685,9 @@ pub struct DeviceResources {
   background_render_archetype_arena:
     Option<alloc::sync::Arc<DebugTrackedRwLock<resources::BackgroundRenderResourceArchetypeArena>>>,
 
+  /// Particle system management 2.0
+  pub particle_system_manager: Option<ParticleSystemManager>,
+
   /// Queue of window-system cleanup tasks that must execute on the main thread.
   /// On macOS, MoltenVK requires `CAMetalLayer` teardown on the main UI thread.
   /// Populated by `WindowedPresentationState::cleanup()` and drained by
@@ -710,6 +715,8 @@ impl DeviceResources {
           .destroy_buffer(download.staging_buffer, &mut download.allocation);
       }
     }
+
+    let _ = self.particle_system_manager.take();
 
     // BUG FIX (2025-05): The original code called pe_state.value_mut().cleanup(device) HERE
     // in addition to the removal loop at the bottom of this function.  That caused every
@@ -1005,9 +1012,8 @@ impl DeviceResources {
       unsafe { command_pools.push_unchecked(None) };
     }
     for &queue_family_index in unique_family_indices_iter {
-      command_pools[queue_family_index as usize] = Some(Arc::new(commands::CommandPools::new(
-        queue_family_index,
-      )));
+      command_pools[queue_family_index as usize] =
+        Some(Arc::new(commands::CommandPools::new(queue_family_index)));
     }
     // - Swapchain hashmap
     let live_presentation_engines = dashmap::DashMap::new();
@@ -1017,6 +1023,12 @@ impl DeviceResources {
 
     let frame_staging_arena =
       memory::FrameStagingArena::new(&allocator.allocator, 128 * 1024 * 1024)?;
+
+    let particle_system_manager = ParticleSystemManager::new(
+      device,
+      allocator.allocator.as_allocator_view(),
+      crate::gpu::new_particles::MAX_PARTICLES,
+    )?;
 
     Ok(Self {
       allocator,
@@ -1058,6 +1070,7 @@ impl DeviceResources {
       trajectory_render_archetype_arena: None,
       ui_render_archetype_arena: None,
       background_render_archetype_arena: None,
+      particle_system_manager: Some(particle_system_manager), // turn off with None
       main_thread_cleanup_queue: alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new())),
     })
   }
@@ -1409,6 +1422,192 @@ impl Queues {
 }
 
 impl Device {
+  /// returns, when ok 1) BDA particle page table 2) currently cached compute timeline value
+  #[named]
+  pub fn create_particle_system(&self, id: u64) -> GpuResult<(u64, u64)> {
+    if self.res.read().particle_system_manager.is_none() {
+      return Err(gpu_err!("particle_system_manager absent"));
+    }
+    let compute_timeline_value =
+      self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed);
+    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |state, _| {
+        let allocator = state.allocator.allocator.as_allocator_view();
+        let discard_pool_ptr = &self.kernels.discard_pool as *const _;
+        Ok((allocator, discard_pool_ptr))
+      })?
+      .execute(|(allocator, discard_pool_ptr), rollback| {
+        let device = &self.device;
+        let discard_pool = unsafe { &*discard_pool_ptr };
+        let compute_queue = self.get_compute_queue();
+
+        let command_pool_info = vk::CommandPoolCreateInfo::default()
+          .queue_family_index(compute_queue.family_index)
+          .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+        let command_pool = unsafe { device.create_command_pool(&command_pool_info, None) }
+          .with_name(device, "CommandPool_ParticleSystemTransient")?;
+        let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
+          .with_name(device, "Fence_ParticleSystemAllocationTransient")?;
+        let mut _cleanup = TransientCleanup::command_only(device, command_pool, fence);
+
+        // allocate GPU-only page table resource
+        const PAGE_TABLE_BYTES: u64 =
+          (4 * crate::gpu::new_particles::MAX_PARTICLES_PER_SYSTEM
+            .div_ceil(crate::gpu::new_particles::PCHUNK_SIZE)) as _;
+        let buffer_info = vk::BufferCreateInfo::default().size(PAGE_TABLE_BYTES).usage(
+          vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+        );
+        let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+        alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+        crate::apply_test_dedicated_alloc!(alloc_info);
+        alloc_info.priority = 1.0f32;
+
+        let (buffer, alloc) = allocator.create_buffer(buffer_info, create_info).with_name(
+          device,
+          &alloc::format!("ParticleSystem_t{}", compute_timeline_value),
+        )?;
+
+        rollback.defer(|dev| {
+          discard_pool.discard_buffer(allocator, buffer, alloc, compute_timeline_value);
+        });
+
+        // fill it with 0xFFFF'FFFF
+        let command_buffer_info = vk::CommandBufferAllocateInfo::default()
+          .level(vk::CommandBufferLevel::PRIMARY)
+          .command_buffer_count(1);
+        let command_buffer = unsafe {
+          let mut c = vk::CommandBuffer::null();
+          (device.fp_v1_0().allocate_command_buffers)(
+            device.handle(),
+            core::ptr::from_ref(&command_buffer_info),
+            core::ptr::from_mut(&mut c),
+          )
+          .result_with_success(c)
+        }
+        .with_name(device, "CommandBuffer_Transient_particleSystem")?;
+
+        unsafe {
+          // record phase
+          let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+          self.device.begin_command_buffer(command_buffer, &begin_info)?;
+          self.device.cmd_fill_buffer(command_buffer, buffer, 0, vk::WHOLE_SIZE, u32::MAX);
+          self.device.end_command_buffer(command_buffer)?;
+
+          // submit and wait phase
+          let submit_info =
+            vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&command_buffer));
+          device
+            .locked_queue_submit(
+              compute_queue.handle,
+              core::slice::from_ref(&submit_info),
+              fence,
+            )
+            .map_err(GpuError::from)?;
+        }
+
+        let bda_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
+        let bda = unsafe { device.buffer_device_address.get_buffer_device_address(&bda_info) };
+
+        Ok((bda, buffer, alloc))
+      })
+      .commit_read(|state, res| {
+        if let Ok((bda, buffer, alloc)) = res {
+          // safety checked at the beginning of the function
+          let psm = unsafe { state.particle_system_manager.as_ref().unwrap_unchecked() };
+          // probably we should check whether it exists already?
+          let _ = psm.page_tables.insert(id, particles::BufferAlloc::new(buffer, alloc));
+          Ok((bda, compute_timeline_value))
+        } else {
+          Err(unsafe { res.unwrap_err_unchecked() })
+        }
+      })
+  }
+
+  /// discard in kernel's discard pool a specified particle system, discarding it's underlying
+  /// buffer and deleting it's association inside the `[ParticleSystemManager]`, therefore should
+  /// never be used after this
+  #[named]
+  pub fn discard_particle_system(&self, id: u64, timeline: u64) -> GpuResult<()> {
+    let (allocator, buffer, alloc) = {
+      let res = self.res.read();
+      let allocator = res.allocator.allocator.as_allocator_view();
+      let psm = res
+        .particle_system_manager
+        .as_ref()
+        .ok_or(gpu_err!("particle_system_manager absent"))?;
+      let (_, buffer_alloc) = psm
+        .page_tables
+        .remove(&id)
+        .ok_or(gpu_err!("particle system with id {} not found", id))?;
+      (allocator, buffer_alloc.buffer, buffer_alloc.alloc)
+    };
+
+    self
+      .kernels
+      .discard_pool
+      .discard_buffer(allocator.internal, buffer, alloc, timeline);
+    Ok(())
+  }
+
+  #[named]
+  pub fn cmd_particle_system_emission(
+    &self,
+    cmd: vk::CommandBuffer,
+    id: u64,
+    last_emission: i64,
+  ) -> GpuResult<i64> {
+    // - check emission perform emission
+    todo!()
+  }
+
+  /// 1
+  #[named]
+  pub fn cmd_particle_system_velocity_vertlet_kick(
+    &self,
+    cmd: vk::CommandBuffer,
+    id: u64,
+    last_emission: i64,
+    last_compaction: i64,
+  ) -> GpuResult<()> {
+    todo!()
+  }
+
+  /// 2
+  #[named]
+  pub fn cmd_particle_system_next_forces(
+    &self,
+    cmd: vk::CommandBuffer,
+    id: u64,
+    last_emission: i64,
+    last_compaction: i64,
+  ) -> GpuResult<()> {
+    todo!()
+  }
+
+  /// 3
+  #[named]
+  pub fn cmd_particle_system_velocity_vertlet_correction(
+    &self,
+    cmd: vk::CommandBuffer,
+    id: u64,
+    last_emission: i64,
+    last_compaction: i64,
+  ) -> GpuResult<()> {
+    todo!()
+  }
+
+  #[named]
+  pub fn cmd_particle_system_compaction(
+    &self,
+    cmd: vk::CommandBuffer,
+    id: u64,
+    last_compaction: i64,
+  ) -> GpuResult<i64> {
+    // - check perform compaction
+    todo!()
+  }
+
   pub fn get_compute_queue(&self) -> Queue {
     self.queues.get_compute_queue()
   }
@@ -1606,9 +1805,14 @@ impl Device {
       metal_objects,
       #[cfg(debug_assertions)]
       debug_utils,
-      max_per_stage_descriptor_update_after_bind_samplers: chosen_physical_device_query_result.max_per_stage_descriptor_update_after_bind_samplers,
-      max_per_stage_descriptor_samplers: chosen_physical_device_query_result.physical_device_properties.limits.max_per_stage_descriptor_samplers,
-      max_descriptor_set_update_after_bind_samplers: chosen_physical_device_query_result.max_descriptor_set_update_after_bind_samplers,
+      max_per_stage_descriptor_update_after_bind_samplers: chosen_physical_device_query_result
+        .max_per_stage_descriptor_update_after_bind_samplers,
+      max_per_stage_descriptor_samplers: chosen_physical_device_query_result
+        .physical_device_properties
+        .limits
+        .max_per_stage_descriptor_samplers,
+      max_descriptor_set_update_after_bind_samplers: chosen_physical_device_query_result
+        .max_descriptor_set_update_after_bind_samplers,
     };
     let mut res = match DeviceResources::new(
       instance.as_ref(),
@@ -4314,40 +4518,8 @@ impl RenderDevice for Device {
         let command_pool = unsafe { self.device.create_command_pool(&command_pool_info, None) }?;
         let fence = unsafe { self.device.create_fence(&vk::FenceCreateInfo::default(), None) }?;
 
-        // RAII Cleanup Guard for transient resources.
-        // Ensures they are always destroyed when the block ends (success or error).
-        struct TransientCleanup {
-          device: ash::Device,
-          resources: Option<TransientCleanupResources>,
-        }
-        struct TransientCleanupResources {
-          set_layout: vk::DescriptorSetLayout,
-          pipeline_layout: vk::PipelineLayout,
-          descriptor_pool: vk::DescriptorPool,
-          command_pool: vk::CommandPool,
-          fence: vk::Fence,
-        }
-        impl DeviceResource for TransientCleanupResources {
-          fn cleanup(&mut self, device: &ash::Device) {
-            unsafe {
-              device.destroy_command_pool(self.command_pool, None);
-              device.destroy_descriptor_pool(self.descriptor_pool, None);
-              device.destroy_pipeline_layout(self.pipeline_layout, None);
-              device.destroy_descriptor_set_layout(self.set_layout, None);
-              // We do not destroy the fence here anymore as it's not a fence.
-            }
-          }
-        }
-        impl Drop for TransientCleanup {
-          fn drop(&mut self) {
-            if let Some(mut res) = self.resources.take() {
-              res.cleanup(&self.device);
-            }
-          }
-        }
-
         let mut _cleanup = TransientCleanup {
-          device: self.device.clone(),
+          device: &self.device,
           resources: Some(TransientCleanupResources {
             set_layout,
             pipeline_layout,
@@ -9003,7 +9175,9 @@ impl RenderDevice for Device {
               wait_semaphore_values.push_unchecked(sync.timeline_value);
               // Graphics reads compute buffers at Vertex Input / Compute shader / Indirect command stages
               wait_dst_stage_mask.push_unchecked(
-                vk::PipelineStageFlags::VERTEX_INPUT | vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+                vk::PipelineStageFlags::VERTEX_INPUT
+                  | vk::PipelineStageFlags::COMPUTE_SHADER
+                  | vk::PipelineStageFlags::DRAW_INDIRECT,
               );
             }
           }
@@ -10540,6 +10714,152 @@ fn pretty_print_vulkan_device(
     props.driver_version,
     family_count,
   )
+}
+
+/// module for the new, GPU-only, particle system management
+mod particles {
+  use aethervk_oshal_rlib::os::time::timeus_t;
+
+  use super::*;
+
+  #[derive(Clone, Copy, Debug)]
+  pub struct BufferAlloc {
+    pub buffer: vk::Buffer,
+    pub alloc: vk_mem::Allocation,
+  }
+
+  impl BufferAlloc {
+    pub fn new(buffer: vk::Buffer, alloc: vk_mem::Allocation) -> Self {
+      Self { buffer, alloc }
+    }
+  }
+
+  struct Settings {
+    emission_us: core::sync::atomic::AtomicI64,
+    compaction_us: core::sync::atomic::AtomicI64,
+  }
+
+  pub struct ParticleSystemManager {
+    /// global buffer holding data for all particles.
+    pub buffer: BufferAlloc,
+    /// store ECS entity id - particle system page table association. BDA in component
+    /// [`crate::scene::particles::v2::ParticleSystemComponent`]
+    pub page_tables: dashmap::DashMap<u64, BufferAlloc>,
+    /// necessary handle duplicate for drop trait
+    pub allocator_view: vk_mem::AllocatorView,
+    pub settings: Settings,
+  }
+
+  impl ParticleSystemManager {
+    pub fn emission_us(&self) -> timeus_t {
+      self.settings.emission_us.load(core::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn compaction_us(&self) -> timeus_t {
+      self.settings.compaction_us.load(core::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn new(
+      device: &LogicalDevice,
+      allocator: vk_mem::AllocatorView,
+      max_particles: usize,
+    ) -> GpuResult<Self> {
+      use crate::gpu::new_particles::*;
+
+      const PAGE_TABLES_MAP_START_CAP: usize = 64;
+      const DEFAULT_EMISSION_US: i64 = oshal::os::time::timeus_milliseconds(166);
+      const DEFAULT_COMPACTION_US: i64 = oshal::os::time::timeus_milliseconds(5000);
+
+      let num_chunks = max_particles.div_ceil(PCHUNK_SIZE);
+      let buffer_size = core::mem::size_of::<ParticleChunk>() * num_chunks;
+      let buffer_info = vk::BufferCreateInfo::default()
+        .size(buffer_size as _)
+        .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
+      let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+      alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+      // it's supposed to be large, so dedicated always
+      // `crate::apply_test_dedicated_alloc!(alloc_info);` not needed
+      alloc_info.flags = vk_mem::AllocationCreateFlags::DEDICATED_MEMORY;
+      alloc_info.priority = 1.0f32;
+
+      let (buffer, alloc) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }
+        .with_name(device, "GlobalParticleBuffer")?;
+
+      Ok(Self {
+        buffer: BufferAlloc { buffer, alloc },
+        page_tables: dashmap::DashMap::with_capacity(PAGE_TABLES_MAP_START_CAP),
+        allocator_view: allocator,
+        settings: Settings {
+          emission_us: core::sync::atomic::AtomicI64::new(DEFAULT_EMISSION_US),
+          compaction_us: core::sync::atomic::AtomicI64::new(DEFAULT_COMPACTION_US),
+        },
+      })
+    }
+  }
+
+  impl Drop for ParticleSystemManager {
+    fn drop(&mut self) {
+      todo!()
+    }
+  }
+}
+
+// RAII Cleanup Guard for transient resources.
+// Ensures they are always destroyed when the block ends (success or error).
+struct TransientCleanup<'a> {
+  device: &'a LogicalDevice,
+  resources: Option<TransientCleanupResources>,
+}
+impl<'a> TransientCleanup<'a> {
+  fn command_only(
+    device: &'a LogicalDevice,
+    command_pool: vk::CommandPool,
+    fence: vk::Fence,
+  ) -> Self<'a> {
+    Self {
+      device,
+      resources: Some(TransientCleanupResources {
+        set_layout: vk::DescriptorSetLayout::null(),
+        pipeline_layout: vk::PipelineLayout::null(),
+        descriptor_pool: vk::DescriptorPool::null(),
+        command_pool,
+        fence,
+      }),
+    }
+  }
+}
+struct TransientCleanupResources {
+  set_layout: vk::DescriptorSetLayout,
+  pipeline_layout: vk::PipelineLayout,
+  descriptor_pool: vk::DescriptorPool,
+  command_pool: vk::CommandPool,
+  fence: vk::Fence,
+}
+impl DeviceResource for TransientCleanupResources {
+  fn cleanup(&mut self, device: &ash::Device) {
+    unsafe {
+      if !self.command_pool.is_null() {
+        device.destroy_command_pool(self.command_pool, None);
+      }
+      if !self.descriptor_pool.is_null() {
+        device.destroy_descriptor_pool(self.descriptor_pool, None);
+      }
+      if !self.pipeline_layout.is_null() {
+        device.destroy_pipeline_layout(self.pipeline_layout, None);
+      }
+      if !self.pipeline_layout.is_null() {
+        device.destroy_descriptor_set_layout(self.set_layout, None);
+      }
+      // We do not destroy the fence here anymore as it's not a fence.
+    }
+  }
+}
+impl Drop for TransientCleanup {
+  fn drop(&mut self) {
+    if let Some(mut res) = self.resources.take() {
+      res.cleanup(&self.device);
+    }
+  }
 }
 
 // TODO RE-ENABLE

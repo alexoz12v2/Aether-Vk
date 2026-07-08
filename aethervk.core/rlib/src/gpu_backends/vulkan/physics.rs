@@ -30,7 +30,10 @@ use ash::vk;
 // Disabled by default: Enabling PRINTF shaders under Lavapipe (ARM64) dramatically increases
 // register pressure in the llvmpipe JIT compiler. This leads to register spilling bugs that
 // overwrite the stack-saved link register (x30), causing a SIGSEGV upon kernel return.
-#[cfg(all(any(debug_assertions, test, feature = "shader_debug_sync"), not(target_vendor = "apple")))]
+#[cfg(all(
+  any(debug_assertions, test, feature = "shader_debug_sync"),
+  not(target_vendor = "apple")
+))]
 pub static USE_PRINTF_SHADERS: core::sync::atomic::AtomicBool =
   core::sync::atomic::AtomicBool::new(false);
 
@@ -48,6 +51,13 @@ thread_local! {
   pub static LAST_BVH_WATCHDOG_STATE: spin::Mutex<Option<(ash::vk::Buffer, vk_mem::Allocation, u64)>> =
     spin::Mutex::new(None);
 }
+
+/// Particle System v2: boolean to switch from v1 to v2. All
+/// ['crate::gpu_backends::vulkan::physics::VulkanComputeKernels'] instantiated when this is true
+/// will use the new particle system simulation path, when combined with the new simulation
+/// function
+pub static USE_PARTICLE_SYSTEM_V2: core::sync::atomic::AtomicBool =
+  core::sync::atomic::AtomicBool::new(false);
 
 /// Checks whether any LBVH shader tripped its safety watchdog counter.
 ///
@@ -189,6 +199,14 @@ pub struct PhysicsPipelines {
 
   #[cfg(any(test, feature = "collisions"))]
   pub bp_particle_self: vk::Pipeline,
+
+  // ── New Particle System ───────────────────────────────────────────────────
+  pub new_particles_compact_reset: vk::Pipeline,
+  pub new_particles_emit: vk::Pipeline,
+  pub new_particles_compact: vk::Pipeline,
+  pub apply_emitters_direct_new: vk::Pipeline,
+  pub integrate_particles_p1_p2_new: vk::Pipeline,
+  pub integrate_particles_p4_5_new: vk::Pipeline,
 
   /// SPIR-V-reflected push constant block size per pipeline.
   /// Used by `debug_assert!` in dispatch helpers to catch size mismatches
@@ -511,6 +529,13 @@ impl PhysicsPipelines {
         lcp_solver: mk_wg!("lcp_solver.comp"),
         #[cfg(any(test, feature = "collisions"))]
         apply_impulses: mk_wg!("apply_impulses.comp"),
+        // ── New Particle System ───────────────────────────────────────────────────
+        new_particles_compact_reset: mk_wg!("new_particles_compact_reset.comp"),
+        new_particles_emit: mk_wg!("new_particles_emit.comp"),
+        new_particles_compact: mk_wg!("new_particles_compact.comp"),
+        apply_emitters_direct_new: mk_wg!("apply_emitters_direct_new.comp"),
+        integrate_particles_p1_p2_new: mk_wg!("integrate_particles_p1_p2_new.comp"),
+        integrate_particles_p4_5_new: mk_wg!("integrate_particles_p4_5_new.comp"),
         pc_sizes,
         subgroup_size,
         is_lavapipe: is_cpu,
@@ -771,14 +796,22 @@ impl<T: Copy + Send + Sync> WaitHandle<Vec<T>> for VulkanReadHandle<T> {
       device
         .wait_for_semaphore_value(self.throwaway_sem, 1, GPU_FENCE_TIMEOUT_NS)
         .map_err(|e| {
-          crate::types::EngineError::Gpu(crate::gpu_err!("Throwaway sem wait failed (timeout or error): {:?}", e))
+          crate::types::EngineError::Gpu(crate::gpu_err!(
+            "Throwaway sem wait failed (timeout or error): {:?}",
+            e
+          ))
         })?;
     }
 
     // Also wait on timeline semaphore (belt-and-suspenders)
     device
       .wait_for_semaphore_value(self.timeline_sem, target_value, GPU_FENCE_TIMEOUT_NS)
-      .map_err(|e| crate::types::EngineError::Gpu(crate::gpu_err!("Physics timeline sem wait failed (timeout or error): {:?}", e)))?;
+      .map_err(|e| {
+        crate::types::EngineError::Gpu(crate::gpu_err!(
+          "Physics timeline sem wait failed (timeout or error): {:?}",
+          e
+        ))
+      })?;
 
     let mut alloc_mut = self.staging_allocation.take().unwrap();
     let info = self.allocator.get_allocation_info(&alloc_mut);
@@ -1081,7 +1114,8 @@ pub struct VulkanComputeKernels {
   /// the `EntityId` of the particle-system entity they were built for.
   /// Value: (buffer, submit_stamp) — buffer layout is flat `[morton_code: u32, original_dense_idx: u32]`.
   /// TTL-evicted after `PERM_EVICTION_FRAMES` submits; capacity-capped at `MAX_PERM_ENTRIES`.
-  pub last_particle_permutations: spin::Mutex<hashbrown::HashMap<crate::scene::EntityId, (VulkanBuffer<[u32; 2]>, u64)>>,
+  pub last_particle_permutations:
+    spin::Mutex<hashbrown::HashMap<crate::scene::EntityId, (VulkanBuffer<[u32; 2]>, u64)>>,
   #[cfg(test)]
   pub tracked_physical_allocations: spin::Mutex<alloc::vec::Vec<u64>>,
 }
@@ -1182,12 +1216,9 @@ impl VulkanComputeKernels {
       });
       for (_entity, (mut buf, _stamp)) in perm_map.drain() {
         buf.discarded = true;
-        self.discard_pool.discard_buffer(
-          allocator.get_raw(),
-          buf.buffer,
-          buf.allocation,
-          u64::MAX,
-        );
+        self
+          .discard_pool
+          .discard_buffer(allocator.get_raw(), buf.buffer, buf.allocation, u64::MAX);
       }
     }
 
@@ -1855,7 +1886,14 @@ impl VulkanComputeKernels {
     rollback: &mut utils::RollbackContext<'_>,
     _cmd: &mut VulkanCommandBuffer,
     scene0: &Scene,
-  ) -> GpuResult<alloc::vec::Vec<(crate::scene::EntityId, VulkanBuffer<f32>, alloc::vec::Vec<gpu::ParticleMetadata>, bool)>> {
+  ) -> GpuResult<
+    alloc::vec::Vec<(
+      crate::scene::EntityId,
+      VulkanBuffer<f32>,
+      alloc::vec::Vec<gpu::ParticleMetadata>,
+      bool,
+    )>,
+  > {
     // Build frame entity → dense-index map (mirrors PhysicsScene::build_from_scene).
     let mut frame_entity_order: alloc::vec::Vec<EntityId> = alloc::vec::Vec::new();
     let mut has_macro_frame = false;
@@ -1880,7 +1918,13 @@ impl VulkanComputeKernels {
     // One pass per ParticleSystemComponent entity — each becomes its own GPU buffer.
     // query2_mut is not needed since we only read; use query2 with interior mutability
     // of sys.particles (already RwLock-wrapped).
-    let mut systems: alloc::vec::Vec<(EntityId, u32, alloc::vec::Vec<alloc::vec::Vec<f32>>, alloc::vec::Vec<gpu::ParticleMetadata>, bool)> = alloc::vec::Vec::new();
+    let mut systems: alloc::vec::Vec<(
+      EntityId,
+      u32,
+      alloc::vec::Vec<alloc::vec::Vec<f32>>,
+      alloc::vec::Vec<gpu::ParticleMetadata>,
+      bool,
+    )> = alloc::vec::Vec::new();
     scene0.query2::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>(
       |entity, _transform, sys| {
         // Walk the full ancestor chain to find the nearest entity that has a
@@ -1945,7 +1989,6 @@ impl VulkanComputeKernels {
     Ok(result)
   }
 
-
   fn build_particle_frame_ids(
     &self,
     device: &LogicalDevice,
@@ -1990,15 +2033,14 @@ impl VulkanComputeKernels {
           let mut pos = t.position; // local km if inside a frame, or AU if at root
           let mut cur = scene0.get_parent(entity);
           while let Some(anc) = cur {
-            if let Some((frame_center_au, frame_scale)) = scene0.with_component(
-              anc,
-              |rf: &ReferenceFrameComponent| {
+            if let Some((frame_center_au, frame_scale)) =
+              scene0.with_component(anc, |rf: &ReferenceFrameComponent| {
                 let c = scene0
                   .with_component(anc, |ft: &crate::scene::TransformComponent| ft.position)
                   .unwrap_or(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero());
                 (c, rf.scale)
-              },
-            ) {
+              })
+            {
               // micro_to_macro: p_macro = c_macro + p_micro * scale
               pos = frame_center_au + pos * frame_scale;
               // Continue up — nested frames not common but handle anyway
@@ -3636,10 +3678,8 @@ impl VulkanComputeKernels {
     );
 
     // 1. Morton Encode
-    let (scene_min, scene_max) = particle_aabb.unwrap_or((
-      [-1e6_f32, -1e6_f32, -1e6_f32],
-      [1e6_f32, 1e6_f32, 1e6_f32],
-    ));
+    let (scene_min, scene_max) =
+      particle_aabb.unwrap_or(([-1e6_f32, -1e6_f32, -1e6_f32], [1e6_f32, 1e6_f32, 1e6_f32]));
     let mut pc_encode = crate::gpu::compute_push_constants::MortonEncodePushConstants {
       morton_out: sorted_morton.address,
       particles: particles.address,
@@ -4256,10 +4296,8 @@ impl VulkanComputeKernels {
       });
       // Capacity watermark: evict the oldest entry if still at limit.
       if perm_map.len() >= MAX_PERM_ENTRIES {
-        if let Some(oldest_key) = perm_map
-          .iter()
-          .min_by_key(|(_, (_, stamp))| *stamp)
-          .map(|(k, _)| *k)
+        if let Some(oldest_key) =
+          perm_map.iter().min_by_key(|(_, (_, stamp))| *stamp).map(|(k, _)| *k)
         {
           if let Some((mut old_buf, _)) = perm_map.remove(&oldest_key) {
             old_buf.discarded = true;
@@ -4908,7 +4946,6 @@ impl VulkanComputeKernels {
   }
 
   fn write_back_to_scene(
-
     &self,
     _device: &LogicalDevice,
     _discard_pool: &crate::gpu_backends::vulkan::device::resources::DiscardPool,
@@ -4917,11 +4954,16 @@ impl VulkanComputeKernels {
     _rollback: &mut utils::RollbackContext<'_>,
     cmd: &mut VulkanCommandBuffer,
     rigid_bodies: &VulkanBuffer<RigidBodyImex>,
-    particle_systems: &[(crate::scene::EntityId, VulkanBuffer<f32>, alloc::vec::Vec<gpu::ParticleMetadata>, bool)],
+    particle_systems: &[(
+      crate::scene::EntityId,
+      VulkanBuffer<f32>,
+      alloc::vec::Vec<gpu::ParticleMetadata>,
+      bool,
+    )],
     _physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> GpuResult<Option<crate::gpu::CommandBufferSyncInfo>> {
-   // All device buffers are allocated with HOST_VISIBLE + HOST_COHERENT + MAPPED.
+    // All device buffers are allocated with HOST_VISIBLE + HOST_COHERENT + MAPPED.
     // The GPU has already been waited on (timeline semaphore) by the caller before this
     // function runs, so the mapped memory is safe to read directly. This avoids creating
     // staging buffers (VMA allocations) per frame, which corrupt Lavapipe's TLSF allocator
@@ -4941,10 +4983,13 @@ impl VulkanComputeKernels {
     //
     // Build a lookup: entity_id → (entity, &metadata_slice)  from particle_systems.
     // Then for each ECS ParticleSystemComponent, process its system's buffer.
-    let sys_map: hashbrown::HashMap<crate::scene::EntityId, (&VulkanBuffer<f32>, &[gpu::ParticleMetadata])> =
-      particle_systems.iter().map(|(eid, buf, meta, _)| {
-        (*eid, (buf, meta.as_slice()))
-      }).collect();
+    let sys_map: hashbrown::HashMap<
+      crate::scene::EntityId,
+      (&VulkanBuffer<f32>, &[gpu::ParticleMetadata]),
+    > = particle_systems
+      .iter()
+      .map(|(eid, buf, meta, _)| (*eid, (buf, meta.as_slice())))
+      .collect();
 
     scene.query2_mut::<crate::scene::TransformComponent, crate::scene::particles::ParticleSystemComponent, _>(|entity, _transform, sys| {
       let (gpu_buf, sys_meta) = match sys_map.get(&entity) {
@@ -5006,9 +5051,6 @@ impl VulkanComputeKernels {
       sys.gpu_sort_order = sys_sort_order;
       sys.gpu_alive_count = alive_count;
     });
-
-
-
 
     let mut rb_idx = 0usize;
     scene.query3_mut::<crate::scene::TransformComponent, crate::scene::ColliderComponent, crate::scene::KinematicComponent, _>(
@@ -5229,7 +5271,8 @@ impl Kernels for Device {
       .wait_for_semaphore_value(sem, sync.timeline_value, GPU_SYNC_TIMEOUT_NS)
       .map_err(|e| {
         crate::types::EngineError::Gpu(crate::types::GpuError::BackendSpecific(alloc::format!(
-          "wait_sync timeout or error: {:?}", e
+          "wait_sync timeout or error: {:?}",
+          e
         )))
       })?;
 
@@ -5569,7 +5612,14 @@ impl Kernels for Device {
     &self,
     cmd: &mut Self::Cmd,
     scene: &Scene,
-  ) -> EngineResult<alloc::vec::Vec<(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<gpu::ParticleMetadata>, bool)>> {
+  ) -> EngineResult<
+    alloc::vec::Vec<(
+      crate::scene::EntityId,
+      Self::Buffer<f32>,
+      alloc::vec::Vec<gpu::ParticleMetadata>,
+      bool,
+    )>,
+  > {
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |res_guard, _| {
         Ok::<_, GpuError>(res_guard.allocator.allocator.as_allocator_view())
@@ -6038,7 +6088,12 @@ impl Kernels for Device {
     &self,
     cmd: &mut Self::Cmd,
     rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particle_systems: &[(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<gpu::ParticleMetadata>, bool)],
+    particle_systems: &[(
+      crate::scene::EntityId,
+      Self::Buffer<f32>,
+      alloc::vec::Vec<gpu::ParticleMetadata>,
+      bool,
+    )],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> EngineResult<Option<crate::gpu::CommandBufferSyncInfo>> {
@@ -6284,7 +6339,11 @@ impl Kernels for Device {
           particles.actual_count
         } else {
           let stride = crate::gpu::PARTICLE_FIELDS as u32 * sg;
-          if stride > 0 { particles.capacity() as u32 / stride * sg } else { 0 }
+          if stride > 0 {
+            particles.capacity() as u32 / stride * sg
+          } else {
+            0
+          }
         };
         self.kernels.accumulate_bvh_forces_to_particles(
           &self.device,
