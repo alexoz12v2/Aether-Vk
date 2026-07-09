@@ -45,6 +45,7 @@ use alloc::{
   vec::Vec,
 };
 use ash::vk::{self, Handle};
+use bytemuck::Zeroable;
 use core::{
   any::Any,
   fmt,
@@ -937,6 +938,7 @@ impl DeviceResources {
     physical_device: vk::PhysicalDevice,
     device: &LogicalDevice,
     unique_family_indices_iter: impl Iterator<Item = &'a u32>,
+    compute_queue: Queue,
   ) -> GpuResult<Self> {
     // - linear sampler
     let sampler_info = vk::SamplerCreateInfo::default()
@@ -1027,6 +1029,7 @@ impl DeviceResources {
     let particle_system_manager = ParticleSystemManager::new(
       device,
       allocator.allocator.as_allocator_view(),
+      compute_queue,
       crate::gpu::new_particles::MAX_PARTICLES,
     )?;
 
@@ -1504,6 +1507,7 @@ impl Device {
               fence,
             )
             .map_err(GpuError::from)?;
+          let _ = device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX);
         }
 
         let bda_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
@@ -1516,7 +1520,7 @@ impl Device {
           // safety checked at the beginning of the function
           let psm = unsafe { state.particle_system_manager.as_ref().unwrap_unchecked() };
           // probably we should check whether it exists already?
-          let _ = psm.page_tables.insert(id, particles::BufferAlloc::new(buffer, alloc));
+          let _ = psm.page_tables.insert(id, particles::BufferAlloc::new(buffer, alloc, bda));
           Ok((bda, compute_timeline_value))
         } else {
           Err(unsafe { res.unwrap_err_unchecked() })
@@ -1556,8 +1560,42 @@ impl Device {
     cmd: vk::CommandBuffer,
     id: u64,
     last_emission: i64,
+    now: i64,
+    skip_bind: bool,
   ) -> GpuResult<i64> {
-    // - check emission perform emission
+    debug_assert!(
+      super::physics::USE_PARTICLE_SYSTEM_V2.load(core::sync::atomic::Ordering::Relaxed)
+    );
+    let (global_buffer_address, page_table_buffer_address, free_list_address) = {
+      let res = self.res.read();
+      if self.res.read().particle_system_manager.is_none() {
+        return Err(gpu_err!("particle_system_manager absent"));
+      }
+      let psm = unsafe { res.particle_system_manager.as_ref().unwrap_unchecked() };
+
+      // check emission interval
+      if now - last_emission <= psm.emission_us() {
+        return Ok(last_emission);
+      }
+
+      // grab particle system page table and global
+      let opt_particles = psm.page_tables.get(&id);
+      if opt_particles.is_none() {
+        return Err(gpu_err!("particle system with id {} not found", id));
+      }
+      unsafe {
+        opt_particles
+          .map(|the_ref| (psm.buffer.address, the_ref.address, psm.free_list.address))
+          .unwrap_unchecked()
+      }
+    };
+
+    if !skip_bind {
+      let pipeline: vk::Pipeline = self.kernels.pipelines.new_particles_emit;
+      unsafe { self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
+    }
+    let mut push_constants = gpu::compute_push_constants::NewParticlesEmitPushConstants::zeroed();
+
     todo!()
   }
 
@@ -1819,6 +1857,7 @@ impl Device {
       physical_device,
       &device,
       chosen_physical_device_query_result.unique_family_indices_set().iter(),
+      queues.get_compute_queue(),
     ) {
       Ok(r) => r,
       Err(e) => {
@@ -10726,11 +10765,16 @@ mod particles {
   pub struct BufferAlloc {
     pub buffer: vk::Buffer,
     pub alloc: vk_mem::Allocation,
+    pub address: u64,
   }
 
   impl BufferAlloc {
-    pub fn new(buffer: vk::Buffer, alloc: vk_mem::Allocation) -> Self {
-      Self { buffer, alloc }
+    pub fn new(buffer: vk::Buffer, alloc: vk_mem::Allocation, address: u64) -> Self {
+      Self {
+        buffer,
+        alloc,
+        address,
+      }
     }
   }
 
@@ -10742,6 +10786,7 @@ mod particles {
   pub struct ParticleSystemManager {
     /// global buffer holding data for all particles.
     pub buffer: BufferAlloc,
+    pub free_list: BufferAlloc,
     /// store ECS entity id - particle system page table association. BDA in component
     /// [`crate::scene::particles::v2::ParticleSystemComponent`]
     pub page_tables: dashmap::DashMap<u64, BufferAlloc>,
@@ -10762,6 +10807,7 @@ mod particles {
     pub fn new(
       device: &LogicalDevice,
       allocator: vk_mem::AllocatorView,
+      transfer_queue: Queue,
       max_particles: usize,
     ) -> GpuResult<Self> {
       use crate::gpu::new_particles::*;
@@ -10784,9 +10830,20 @@ mod particles {
 
       let (buffer, alloc) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }
         .with_name(device, "GlobalParticleBuffer")?;
+      let address = unsafe {
+        let info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
+        device.buffer_device_address.get_buffer_device_address(&info)
+      };
+
+      let free_list = Self::allocate_free_list(device, allocator, transfer_queue, num_chunks)?;
 
       Ok(Self {
-        buffer: BufferAlloc { buffer, alloc },
+        free_list,
+        buffer: BufferAlloc {
+          buffer,
+          alloc,
+          address,
+        },
         page_tables: dashmap::DashMap::with_capacity(PAGE_TABLES_MAP_START_CAP),
         allocator_view: allocator,
         settings: Settings {
@@ -10794,6 +10851,135 @@ mod particles {
           compaction_us: core::sync::atomic::AtomicI64::new(DEFAULT_COMPACTION_US),
         },
       })
+    }
+
+    fn allocate_free_list(
+      device: &LogicalDevice,
+      allocator: vk_mem::AllocatorView,
+      transfer_queue: Queue,
+      num_chunks: usize,
+    ) -> GpuResult<BufferAlloc> {
+      struct AllocJanitor {
+        buffer: vk::Buffer,
+        alloc: vk_mem::Allocation,
+        allocator: vk_mem::AllocatorView,
+      }
+      impl Drop for AllocJanitor {
+        fn drop(&mut self) {
+          unsafe { self.allocator.destroy_buffer(self.buffer, self.alloc) };
+        }
+      }
+
+      // - allocate a gpu-only buffer
+      let buffer_size = (num_chunks * 4) + 4;
+      let gpu_b = {
+        let buffer_info = vk::BufferCreateInfo::default().size(buffer_size as _).usage(
+          vk::BufferUsageFlags::TRANSFER_DST
+            | vk::BufferUsageFlags::STORAGE_BUFFER
+            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+        );
+        let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+        crate::apply_test_dedicated_alloc!(alloc_info);
+        alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+        alloc_info.priority = 1.0f32;
+
+        let (b, a) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }?;
+        AllocJanitor {
+          buffer: b,
+          alloc: a,
+          allocator,
+        }
+      };
+
+      // - allocate a staging buffer, memory mapped
+      let (staging_b, staging_alloc_info) = {
+        let buffer_info = vk::BufferCreateInfo::default()
+          .size(buffer_size as _)
+          .usage(vk::BufferUsageFlags::TRANSFER_SRC);
+        let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+        crate::apply_test_dedicated_alloc!(alloc_info);
+        alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
+        alloc_info.flags = vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+          | vk_mem::AllocationCreateFlags::MAPPED;
+        let (buffer, alloc, info) =
+          unsafe { allocator.create_buffer_get_info(&buffer_info, &alloc_info) }?;
+        (
+          AllocJanitor {
+            buffer,
+            alloc,
+            allocator,
+          },
+          info,
+        )
+      };
+
+      // - write free list content: count = num_chunks as u32,
+      // while indices write from `num_chunks - 1` to 0. Place barrier host to copy
+      let p_mem = staging_alloc_info.mapped_data.cast::<u32>();
+      unsafe {
+        p_mem.write(num_chunks as u32);
+        for i in 0..num_chunks as u32 {
+          p_mem.add(i as usize).write(num_chunks as u32 - 1 - i);
+        }
+      }
+      allocator.flush_allocation(&staging_b.alloc, 0, vk::WHOLE_SIZE);
+
+      // - copy buffer operation
+      let command_pool_info = vk::CommandPoolCreateInfo::default()
+        .queue_family_index(transfer_queue.family_index)
+        .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+      let command_pool = unsafe { device.create_command_pool(&command_pool_info, None) }
+        .with_name(device, "CommandPool_ParticleSystemTransient")?;
+      let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
+        .with_name(device, "Fence_ParticleSystemAllocationTransient")?;
+      let mut _cleanup = TransientCleanup::command_only(device, command_pool, fence);
+      let command_buffer_info = vk::CommandBufferAllocateInfo::default()
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_buffer_count(1);
+      let command_buffer = unsafe {
+        let mut c = vk::CommandBuffer::null();
+        (device.fp_v1_0().allocate_command_buffers)(
+          device.handle(),
+          core::ptr::from_ref(&command_buffer_info),
+          core::ptr::from_mut(&mut c),
+        )
+        .result_with_success(c)
+      }
+      .with_name(device, "CommandBuffer_Transient_PSM_FreeList")?;
+
+      unsafe {
+        // record phase
+        let begin_info =
+          vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        device.begin_command_buffer(command_buffer, &begin_info)?;
+        let copy_region =
+          vk::BufferCopy::default().src_offset(0).dst_offset(0).size(buffer_size as _);
+        device.cmd_copy_buffer(
+          command_buffer,
+          staging_b.buffer,
+          gpu_b.buffer,
+          core::slice::from_ref(&copy_region),
+        );
+        device.end_command_buffer(command_buffer)?;
+        // submit and nuke fence
+        let submit_info =
+          vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&command_buffer));
+        device.locked_queue_submit(
+          transfer_queue.handle,
+          core::slice::from_ref(&submit_info),
+          fence,
+        )?;
+        device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX)?;
+      }
+      core::mem::drop_in_place(staging_b);
+
+      let free_list_bda = unsafe {
+        let info = vk::BufferDeviceAddressInfo::default().buffer(gpu_b.buffer);
+        device.buffer_device_address.get_buffer_device_address(&info)
+      };
+      core::mem::forget(gpu_b);
+
+      Ok(BufferAlloc::new(gpu_b.buffer, gpu_b.alloc, free_list_bda))
     }
   }
 
