@@ -44,7 +44,7 @@ layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
 layout(push_constant, std430) uniform PushConstants {
     ParticleChunkData globalParticleBufferAddress;
     ParticlePageTable particlePageTable;
-    float deltaTime;
+    float deltaTime; // scaled time in seconds from the last substep
 } pc;
 
 void main() {

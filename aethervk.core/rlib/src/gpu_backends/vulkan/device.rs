@@ -9,7 +9,9 @@ use crate::{
     frame::ResourceUploadResult,
     vulkan::{
       device::{
-        locks::DebugTrackedRwLock, particles::ParticleSystemManager, swapchain::PresentationState,
+        locks::DebugTrackedRwLock,
+        particles::{ParticleSystemManager, PushConstantMutUnion},
+        swapchain::PresentationState,
       },
       physics::VulkanComputeKernels,
     },
@@ -1436,7 +1438,7 @@ impl Device {
     crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |state, _| {
         let allocator = state.allocator.allocator.as_allocator_view();
-        let discard_pool_ptr = &self.kernels.discard_pool as *const _;
+        let discard_pool_ptr = &self.kernels.discard_pool as *const resources::DiscardPool;
         Ok((allocator, discard_pool_ptr))
       })?
       .execute(|(allocator, discard_pool_ptr), rollback| {
@@ -1465,13 +1467,16 @@ impl Device {
         crate::apply_test_dedicated_alloc!(alloc_info);
         alloc_info.priority = 1.0f32;
 
-        let (buffer, alloc) = allocator.create_buffer(buffer_info, create_info).with_name(
-          device,
-          &alloc::format!("ParticleSystem_t{}", compute_timeline_value),
-        )?;
+        let (buffer, alloc) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }
+          .with_name(
+            device,
+            &alloc::format!("ParticleSystem_t{}", compute_timeline_value),
+          )?;
 
-        rollback.defer(|dev| {
-          discard_pool.discard_buffer(allocator, buffer, alloc, compute_timeline_value);
+        let roll_alloc = alloc.clone();
+        let raw_allocator = allocator.internal;
+        rollback.defer(move |_| {
+          discard_pool.discard_buffer(raw_allocator, buffer, roll_alloc, compute_timeline_value);
         });
 
         // fill it with 0xFFFF'FFFF
@@ -1554,19 +1559,105 @@ impl Device {
     Ok(())
   }
 
+  pub fn cmd_dispatch_global_memory_barrier(&self, cmd: vk::CommandBuffer) -> GpuResult<()> {
+    // Define a global memory barrier for compute-to-compute synchronization
+    let memory_barrier = vk::MemoryBarrier2::default()
+      // wait for previous compute shaders to finish executing ...
+      .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+      // .. and ensure all their writes to memory are fully flushed
+      .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+      // block the next compute shaders from executing ...
+      .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+      //... until they can safely read and write their own data
+      .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE);
+    let dependency_info =
+      vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&memory_barrier));
+    unsafe {
+      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dependency_info);
+    }
+    Ok(())
+  }
+
+  /// Sync: needs a read lock on `[Device::res]`
+  /// returns respectively
+  /// - global_buffer_address
+  /// - page_table_buffer_address
+  /// - free_list_address
+  #[named]
+  fn grab_particle_system_data(&self, id: u64) -> GpuResult<(u64, u64, u64)> {
+    let res = self.res.read();
+    if self.res.read().particle_system_manager.is_none() {
+      return Err(gpu_err!("particle_system_manager absent"));
+    }
+    let psm = unsafe { res.particle_system_manager.as_ref().unwrap_unchecked() };
+
+    // grab particle system page table and global
+    let opt_particles = psm.page_tables.get(&id);
+    if opt_particles.is_none() {
+      return Err(gpu_err!("particle system with id {} not found", id));
+    }
+    unsafe {
+      opt_particles
+        .map(|the_ref| Ok((psm.buffer.address, the_ref.address, psm.free_list.address)))
+        .unwrap_unchecked()
+    }
+  }
+
+  pub fn complete_particle_push_constant<'a>(
+    &self,
+    push_constants: PushConstantMutUnion<'a>,
+    particle_system_id: u64,
+  ) -> GpuResult<()> {
+    let (global_particle_buffer_address, page_table_buffer_address, free_list_buffer_address) =
+      self.grab_particle_system_data(particle_system_id)?;
+    match push_constants {
+      PushConstantMutUnion::ApplyEmittersDirectNewPushConstants(value) => {
+        value.global_particle_buffer_address = global_particle_buffer_address;
+        value.particle_page_table = page_table_buffer_address;
+        // TODO emitters elsewhere
+      }
+      PushConstantMutUnion::IntegrateParticlesP1P2NewPushConstants(value) => {
+        value.global_particle_buffer_address = global_particle_buffer_address;
+        value.particle_page_table = page_table_buffer_address;
+      }
+      PushConstantMutUnion::IntegrateParticlesP45NewPushConstants(value) => {
+        value.global_particle_buffer_address = global_particle_buffer_address;
+        value.particle_page_table = page_table_buffer_address;
+      }
+      PushConstantMutUnion::NewParticlesCompactResetPushConstants(value) => {
+        value.particle_page_table = page_table_buffer_address;
+      }
+      PushConstantMutUnion::NewParticlesEmitPushConstants(value) => {
+        value.global_particle_buffer = global_particle_buffer_address;
+        value.particle_page_table = page_table_buffer_address;
+        value.free_list = free_list_buffer_address;
+      }
+      PushConstantMutUnion::NewParticlesCompactPushConstants(value) => {
+        value.global_particle_buffer_address = global_particle_buffer_address;
+        value.particle_page_table = page_table_buffer_address;
+        value.free_list = free_list_buffer_address;
+      }
+    }
+
+    Ok(())
+  }
+
+  /// Notes:
+  /// - externallly synchronized with global memory barriers with [`Device::cmd_dispatch_global_memory_barrier`]
   #[named]
   pub fn cmd_particle_system_emission(
     &self,
     cmd: vk::CommandBuffer,
-    id: u64,
-    last_emission: i64,
-    now: i64,
+    last_emission_unscaled_us: i64,
+    now_unscaled_us: i64,
+    push_constants: &gpu::compute_push_constants::NewParticlesEmitPushConstants,
     skip_bind: bool,
   ) -> GpuResult<i64> {
     debug_assert!(
       super::physics::USE_PARTICLE_SYSTEM_V2.load(core::sync::atomic::Ordering::Relaxed)
     );
-    let (global_buffer_address, page_table_buffer_address, free_list_address) = {
+
+    {
       let res = self.res.read();
       if self.res.read().particle_system_manager.is_none() {
         return Err(gpu_err!("particle_system_manager absent"));
@@ -1574,29 +1665,48 @@ impl Device {
       let psm = unsafe { res.particle_system_manager.as_ref().unwrap_unchecked() };
 
       // check emission interval
-      if now - last_emission <= psm.emission_us() {
-        return Ok(last_emission);
+      if now_unscaled_us - last_emission_unscaled_us <= psm.emission_us() {
+        return Ok(last_emission_unscaled_us);
       }
-
-      // grab particle system page table and global
-      let opt_particles = psm.page_tables.get(&id);
-      if opt_particles.is_none() {
-        return Err(gpu_err!("particle system with id {} not found", id));
-      }
-      unsafe {
-        opt_particles
-          .map(|the_ref| (psm.buffer.address, the_ref.address, psm.free_list.address))
-          .unwrap_unchecked()
-      }
-    };
+    }
 
     if !skip_bind {
       let pipeline: vk::Pipeline = self.kernels.pipelines.new_particles_emit;
       unsafe { self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
     }
-    let mut push_constants = gpu::compute_push_constants::NewParticlesEmitPushConstants::zeroed();
 
-    todo!()
+    let push_constants_bytes: &[u8] = bytemuck::bytes_of(push_constants);
+    let pipeline_layout: vk::PipelineLayout = self.kernels.pipelines.pipeline_layout;
+    unsafe {
+      self.device.cmd_push_constants(
+        cmd,
+        pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        push_constants_bytes,
+      );
+      let needed_chunks = push_constants.emit_count.div_ceil(gpu::new_particles::PCHUNK_SIZE as _);
+      self.device.cmd_dispatch(cmd, needed_chunks, 1, 1);
+    }
+
+    Ok(now_unscaled_us)
+  }
+
+  /// compute the number of workgroups for particle system shaders
+  /// - velocity kick
+  /// - apply emitters
+  /// - velocity correction
+  fn particle_system_shaders_num_workgroups() -> u32 {
+    const PAGE_TABLE_ENTRY_COUNT: u32 = crate::gpu::new_particles::MAX_PARTICLES_PER_SYSTEM
+      .div_ceil(crate::gpu::new_particles::PCHUNK_SIZE)
+      as _;
+    // TODO: at emission and compaction we should update a global particle count for all
+    // managers. for now, dispatch the necessary to cover a full page table
+    debug_assert_eq!(
+      PAGE_TABLE_ENTRY_COUNT % crate::gpu::new_particles::PCHUNK_SIZE as u32,
+      0
+    );
+    PAGE_TABLE_ENTRY_COUNT / crate::gpu::new_particles::PCHUNK_SIZE as u32
   }
 
   /// 1
@@ -1604,23 +1714,66 @@ impl Device {
   pub fn cmd_particle_system_velocity_vertlet_kick(
     &self,
     cmd: vk::CommandBuffer,
-    id: u64,
-    last_emission: i64,
-    last_compaction: i64,
+    push_constants: &gpu::compute_push_constants::IntegrateParticlesP1P2NewPushConstants,
+    skip_bind: bool,
   ) -> GpuResult<()> {
-    todo!()
+    debug_assert!(
+      super::physics::USE_PARTICLE_SYSTEM_V2.load(core::sync::atomic::Ordering::Relaxed)
+    );
+    if !skip_bind {
+      let pipeline: vk::Pipeline = self.kernels.pipelines.integrate_particles_p1_p2_new;
+      unsafe { self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
+    }
+
+    let push_constants_bytes: &[u8] = bytemuck::bytes_of(push_constants);
+    let pipeline_layout: vk::PipelineLayout = self.kernels.pipelines.pipeline_layout;
+    unsafe {
+      self.device.cmd_push_constants(
+        cmd,
+        pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        push_constants_bytes,
+      );
+      let num_workgroups_x: u32 = Self::particle_system_shaders_num_workgroups();
+      self.device.cmd_dispatch(cmd, num_workgroups_x, 1, 1);
+    }
+
+    Ok(())
   }
 
   /// 2
+  /// Note: force should have been already converted in SI, relative to particle system frame
   #[named]
   pub fn cmd_particle_system_next_forces(
     &self,
     cmd: vk::CommandBuffer,
-    id: u64,
-    last_emission: i64,
-    last_compaction: i64,
+    push_constants: &gpu::compute_push_constants::ApplyEmittersDirectNewPushConstants,
+    skip_bind: bool,
   ) -> GpuResult<()> {
-    todo!()
+    debug_assert!(
+      super::physics::USE_PARTICLE_SYSTEM_V2.load(core::sync::atomic::Ordering::Relaxed)
+    );
+    if !skip_bind {
+      let pipeline: vk::Pipeline = self.kernels.pipelines.apply_emitters_direct_new;
+      unsafe { self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
+    }
+
+    let push_constants_bytes: &[u8] = bytemuck::bytes_of(push_constants);
+    let pipeline_layout: vk::PipelineLayout = self.kernels.pipelines.pipeline_layout;
+    unsafe {
+      self.device.cmd_push_constants(
+        cmd,
+        pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        push_constants_bytes,
+      );
+      let num_workgroups_x: u32 = Self::particle_system_shaders_num_workgroups();
+      self.device.cmd_dispatch(cmd, num_workgroups_x, 1, 1);
+    }
+
+    Ok(())
   }
 
   /// 3
@@ -1629,10 +1782,32 @@ impl Device {
     &self,
     cmd: vk::CommandBuffer,
     id: u64,
-    last_emission: i64,
-    last_compaction: i64,
+    push_constants: &gpu::compute_push_constants::IntegrateParticlesP45NewPushConstants,
+    skip_bind: bool,
   ) -> GpuResult<()> {
-    todo!()
+    debug_assert!(
+      super::physics::USE_PARTICLE_SYSTEM_V2.load(core::sync::atomic::Ordering::Relaxed)
+    );
+    if !skip_bind {
+      let pipeline: vk::Pipeline = self.kernels.pipelines.integrate_particles_p4_5_new;
+      unsafe { self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
+    }
+
+    let push_constants_bytes: &[u8] = bytemuck::bytes_of(push_constants);
+    let pipeline_layout: vk::PipelineLayout = self.kernels.pipelines.pipeline_layout;
+    unsafe {
+      self.device.cmd_push_constants(
+        cmd,
+        pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        push_constants_bytes,
+      );
+      let num_workgroups_x = Self::particle_system_shaders_num_workgroups();
+      self.device.cmd_dispatch(cmd, num_workgroups_x, 1, 1);
+    }
+
+    Ok(())
   }
 
   #[named]
@@ -1640,9 +1815,31 @@ impl Device {
     &self,
     cmd: vk::CommandBuffer,
     id: u64,
-    last_compaction: i64,
+    last_compaction_unscaled_us: i64,
+    now_unscaled_us: i64,
+    push_constants: &gpu::compute_push_constants::NewParticlesCompactPushConstants,
   ) -> GpuResult<i64> {
-    // - check perform compaction
+    debug_assert!(
+      super::physics::USE_PARTICLE_SYSTEM_V2.load(core::sync::atomic::Ordering::Relaxed)
+    );
+
+    {
+      let res = self.res.read();
+      if self.res.read().particle_system_manager.is_none() {
+        return Err(gpu_err!("particle_system_manager absent"));
+      }
+      let psm = unsafe { res.particle_system_manager.as_ref().unwrap_unchecked() };
+
+      // check emission interval
+      if last_compaction_unscaled_us - now_unscaled_us <= psm.compaction_us() {
+        return Ok(last_compaction_unscaled_us);
+      }
+    }
+
+    let compact_pipeline = self.kernels.pipelines.new_particles_compact;
+    let reset_pipeline = self.kernels.pipelines.new_particles_compact_reset;
+    let pipeline_layout = self.kernels.pipelines.pipeline_layout;
+
     todo!()
   }
 
@@ -10778,9 +10975,9 @@ mod particles {
     }
   }
 
-  struct Settings {
-    emission_us: core::sync::atomic::AtomicI64,
-    compaction_us: core::sync::atomic::AtomicI64,
+  pub struct Settings {
+    pub emission_us: core::sync::atomic::AtomicI64,
+    pub compaction_us: core::sync::atomic::AtomicI64,
   }
 
   pub struct ParticleSystemManager {
@@ -10813,7 +11010,9 @@ mod particles {
       use crate::gpu::new_particles::*;
 
       const PAGE_TABLES_MAP_START_CAP: usize = 64;
+      // Note: measured in unscaled time
       const DEFAULT_EMISSION_US: i64 = oshal::os::time::timeus_milliseconds(166);
+      // Note: measured in unscaled time
       const DEFAULT_COMPACTION_US: i64 = oshal::os::time::timeus_milliseconds(5000);
 
       let num_chunks = max_particles.div_ceil(PCHUNK_SIZE);
@@ -10866,7 +11065,7 @@ mod particles {
       }
       impl Drop for AllocJanitor {
         fn drop(&mut self) {
-          unsafe { self.allocator.destroy_buffer(self.buffer, self.alloc) };
+          unsafe { self.allocator.destroy_buffer(self.buffer, &mut self.alloc) };
         }
       }
 
@@ -10971,15 +11170,16 @@ mod particles {
         )?;
         device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX)?;
       }
-      core::mem::drop_in_place(staging_b);
+      core::mem::drop(staging_b);
 
       let free_list_bda = unsafe {
         let info = vk::BufferDeviceAddressInfo::default().buffer(gpu_b.buffer);
         device.buffer_device_address.get_buffer_device_address(&info)
       };
+      let (gpu_buffer, gpu_alloc) = (gpu_b.buffer, gpu_b.alloc);
       core::mem::forget(gpu_b);
 
-      Ok(BufferAlloc::new(gpu_b.buffer, gpu_b.alloc, free_list_bda))
+      Ok(BufferAlloc::new(gpu_buffer, gpu_alloc, free_list_bda))
     }
   }
 
@@ -10987,6 +11187,27 @@ mod particles {
     fn drop(&mut self) {
       todo!()
     }
+  }
+
+  pub enum PushConstantMutUnion<'a> {
+    ApplyEmittersDirectNewPushConstants(
+      &'a mut gpu::compute_push_constants::ApplyEmittersDirectNewPushConstants,
+    ),
+    IntegrateParticlesP1P2NewPushConstants(
+      &'a mut gpu::compute_push_constants::IntegrateParticlesP1P2NewPushConstants,
+    ),
+    IntegrateParticlesP45NewPushConstants(
+      &'a mut gpu::compute_push_constants::IntegrateParticlesP45NewPushConstants,
+    ),
+    NewParticlesCompactResetPushConstants(
+      &'a mut gpu::compute_push_constants::NewParticlesCompactResetPushConstants,
+    ),
+    NewParticlesEmitPushConstants(
+      &'a mut gpu::compute_push_constants::NewParticlesEmitPushConstants,
+    ),
+    NewParticlesCompactPushConstants(
+      &'a mut gpu::compute_push_constants::NewParticlesCompactPushConstants,
+    ),
   }
 }
 
@@ -11001,7 +11222,7 @@ impl<'a> TransientCleanup<'a> {
     device: &'a LogicalDevice,
     command_pool: vk::CommandPool,
     fence: vk::Fence,
-  ) -> Self<'a> {
+  ) -> Self {
     Self {
       device,
       resources: Some(TransientCleanupResources {
@@ -11040,13 +11261,17 @@ impl DeviceResource for TransientCleanupResources {
     }
   }
 }
-impl Drop for TransientCleanup {
+impl<'a> Drop for TransientCleanup<'a> {
   fn drop(&mut self) {
     if let Some(mut res) = self.resources.take() {
       res.cleanup(&self.device);
     }
   }
 }
+
+/// value used to constrain the maximum amount of dispatched workgroups for compute shaders using
+/// the grid stride loop strategy
+pub const GRID_STRIDE_WORKGROUP_SIZE_SATURATION_VALUE: u32 = 4096;
 
 // TODO RE-ENABLE
 // #[cfg(test)]
