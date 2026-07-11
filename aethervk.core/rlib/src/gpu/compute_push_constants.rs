@@ -895,7 +895,7 @@ pub struct NewParticlesEmitPushConstants {
   pub mass_vel_mean_std: [f32; 4],
 
   pub emit_count: u32,
-  pub current_time: u32, // 1/300 s
+  pub current_time: u32, // 1/300 s, scaled time
   pub seed: u32,
   pub radius: f32, // m
 
@@ -909,6 +909,7 @@ pub struct NewParticlesEmitPushConstants {
 pub struct NewParticlesCompactPushConstants {
   pub global_particle_buffer_address: u64,
   pub particle_page_table: u64,
+  pub free_list: u64,
   pub doomsday: u32, // 1/300 s. Scaled or Unscaled? same as current_time in emission
   pub max_chunks: u32,
 }

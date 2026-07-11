@@ -20,8 +20,6 @@
 //   p1_p2                 : reads slots 7-9 as F(x_n), then zeroes them
 //   apply_emitters_direct : adds external gravity into AOSOA slots 7-9
 //   p4_p5                 : reads slots 7-9 as F(x_{n+1}), does NOT zero them
-//   write_back_to_scene   : persists slots 7-9 as ParticleData.force
-//   next-tick build_packs  : repacks ParticleData.force → slots 7-9 as new F(x_n)
 //
 // Unit contract
 //   Particle pos : m (micro-frame local, meaning relative to particle system)

@@ -212,6 +212,7 @@ pub struct PhysicsPipelines {
   /// Used by `debug_assert!` in dispatch helpers to catch size mismatches
   /// before they become cryptic Metal validation errors.
   pub pc_sizes: hashbrown::HashMap<u64, u32>,
+  pub wg_sizes: hashbrown::HashMap<u64, [u32; 3]>,
   /// Hardware subgroup size (SIMD width), used for AOSOA packing.
   pub subgroup_size: u32,
   /// True when running on a CPU Vulkan device (Lavapipe / llvmpipe).
@@ -247,7 +248,7 @@ impl PhysicsPipelines {
 
     let mut created_pipelines = alloc::vec::Vec::new();
 
-    let mut create_pipeline = |spv_path: &str| -> GpuResult<(vk::Pipeline, u32)> {
+    let mut create_pipeline = |spv_path: &str| -> GpuResult<(vk::Pipeline, u32, [u32; 3])> {
       let mut spv_code = aethervk_oshal_rlib::os::fs::read(spv_path)
         .map_err(|_| GpuError::BackendSpecific(alloc::format!("Failed to read {}", spv_path)))?;
 
@@ -262,8 +263,8 @@ impl PhysicsPipelines {
       let (prefix, code, suffix) = unsafe { spv_code.align_to::<u32>() };
       assert!(prefix.is_empty() && suffix.is_empty());
 
-      // ── SPIR-V reflection: extract push constant block size ─────────────
-      let reflected_pc_size = {
+      // ── SPIR-V reflection: extract push constant block size and wg size ─────────────
+      let (reflected_pc_size, workgroup_size) = {
         let spv_module = spirv_reflect::create_shader_module(&spv_code).map_err(|_| {
           GpuError::BackendSpecific(alloc::format!("spirv-reflect failed for {}", spv_path))
         })?;
@@ -273,11 +274,22 @@ impl PhysicsPipelines {
             spv_path
           ))
         })?;
-        if let Some(pc_block) = pcs.first() {
+
+        let pc_size = if let Some(pc_block) = pcs.first() {
           pc_block.size
         } else {
           0 // shader has no push constants
-        }
+        };
+
+        let local_size = spv_module
+          .enumerate_entry_points()
+          .unwrap()
+          .iter()
+          .find(|ep| ep.name == "main")
+          .map(|ep| [ep.local_size.x, ep.local_size.y, ep.local_size.z])
+          .unwrap();
+
+        (pc_size, local_size)
       };
       aethervk_oshal_rlib::log!(
         "[SPIR-V] {} -> push_constant_size = {} bytes",
@@ -371,7 +383,7 @@ impl PhysicsPipelines {
       }
       created_pipelines.push(pipeline);
 
-      Ok((pipeline, reflected_pc_size))
+      Ok((pipeline, reflected_pc_size, workgroup_size))
     };
 
     // Need to adjust path depending on where the test runs from.
@@ -390,6 +402,8 @@ impl PhysicsPipelines {
 
     // Helper to unwrap (Pipeline, pc_size) — stores pc_size, returns pipeline
     let mut pc_sizes = hashbrown::HashMap::<u64, u32>::new();
+    // Helper to unwrap (Pipeline, workgroup_size) — stores pc_size, returns pipeline
+    let mut wg_sizes = hashbrown::HashMap::<u64, [u32; 3]>::new();
 
     // Create all pipelines using a helper that extracts and stores reflected PC sizes
     macro_rules! mk {
@@ -398,8 +412,9 @@ impl PhysicsPipelines {
         if use_debug {
           final_path = final_path.replace(".spv", ".d.spv");
         }
-        let (pipeline, pc_size) = create_pipeline(&final_path)?;
+        let (pipeline, pc_size, wg_size) = create_pipeline(&final_path)?;
         pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
+        wg_sizes.insert(ash::vk::Handle::as_raw(pipeline), wg_size);
         pipeline
       }};
     }
@@ -446,8 +461,9 @@ impl PhysicsPipelines {
         if use_debug {
           path = path.replace(".spv", ".d.spv");
         }
-        let (pipeline, pc_size) = create_pipeline(&path)?;
+        let (pipeline, pc_size, wg_size) = create_pipeline(&path)?;
         pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
+        wg_sizes.insert(ash::vk::Handle::as_raw(pipeline), wg_size);
         pipeline
       }};
     }
@@ -468,8 +484,9 @@ impl PhysicsPipelines {
         if use_debug {
           path = path.replace(".spv", ".d.spv");
         }
-        let (pipeline, pc_size) = create_pipeline(&path)?;
+        let (pipeline, pc_size, wg_size) = create_pipeline(&path)?;
         pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
+        wg_sizes.insert(ash::vk::Handle::as_raw(pipeline), wg_size);
         pipeline
       }};
     }
@@ -537,6 +554,7 @@ impl PhysicsPipelines {
         integrate_particles_p1_p2_new: mk_wg!("integrate_particles_p1_p2_new.comp"),
         integrate_particles_p4_5_new: mk_wg!("integrate_particles_p4_5_new.comp"),
         pc_sizes,
+        wg_sizes,
         subgroup_size,
         is_lavapipe: is_cpu,
       })
