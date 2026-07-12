@@ -91,9 +91,10 @@ void main() {
     vec4 pz_n = pc.globalParticleBufferAddress[chunkIndex].positionZ[chunkOffset];
 
     // ── Accumulate external-gravity force from all emitters ───────────────
-    f16vec4 fx_acc = f16vec4(0.0hf); // m/s²
-    f16vec4 fy_acc = f16vec4(0.0hf);
-    f16vec4 fz_acc = f16vec4(0.0hf);
+    // Note: accumulation in f32 vectors (more register pressure, but less precision loss)
+    vec4 fx_acc = vec4(0.0); // m/s²
+    vec4 fy_acc = vec4(0.0);
+    vec4 fz_acc = vec4(0.0);
 
     for (uint e = 0u; e < pc.emitterCount; ++e) {
         // Broadcast emitter data through shared memory
@@ -103,32 +104,45 @@ void main() {
         }
         barrier();
 
-        if (s_em_typeId != 0u) { barrier(); continue; } // Only gravity emitters
+        if (s_em_typeId == 0u) {
+            // -- TYPE 0: Point Gravity --
+            vec4 rx = s_em_posMu.xxxx - px_n;
+            vec4 ry = s_em_posMu.yyyy - py_n;
+            vec4 rz = s_em_posMu.zzzz - pz_n;
 
-        vec4 rx = s_em_posMu.xxxx - px_n;
-        vec4 ry = s_em_posMu.yyyy - py_n;
-        vec4 rz = s_em_posMu.zzzz - pz_n;
+            vec4 dist_sq = (rx * rx) + (ry * ry) + (rz * rz);
 
-        vec4 dist_sq = (rx * rx) + (ry * ry) + (rz * rz);
+            // create a mask: 1.0 if dist_sq >= 1e-6, else 0.0
+            vec4 mask = step(1e-6, dist_sq);
+            // prevent NaN/Div-by-Zero in masked-out lanes by enforcing a minimum distance
+            vec4 safe_dist_sq = max(dist_sq, 1e-10);
+            // compute powers
+            vec4 dist  = sqrt(safe_dist_sq);
+            vec4 dist3 = safe_dist_sq * dist;
+            vec4 dist5 = dist3 * safe_dist_sq; // WARN overflow to infinity if > ~50.000 km
+            vec4 soft  = 1.0 - exp(-dist5);
 
-        // create a mask: 1.0 if dist_sq >= 1e-6, else 0.0
-        vec4 mask = step(1e-6, dist_sq);
-        // prevent NaN/Div-by-Zero in masked-out lanes by enforcing a minimum distance
-        vec4 safe_dist_sq = max(dist_sq, 1e-10);
-        // compute powers
-        vec4 dist  = sqrt(safe_dist_sq);
-        vec4 dist3 = safe_dist_sq * dist;
-        vec4 dist5 = dist3 * safe_dist_sq;
-        vec4 soft  = 1.0 - exp(-dist5);
+            vec4 muEff = s_em_posMu.wwww * (1.0 - beta);
+            vec4 accelMag = (muEff * soft) / dist3;
+            accelMag *= mask;
+            accelMag /= vec4(invM);
 
-        vec4 muEff = s_em_posMu[3] * (1.0 - beta);
-        vec4 accelMag = (muEff * soft) / dist3;
-        accelMag *= mask;
-        accelMag /= vec4(invM);
+            fx_acc += rx * accelMag;
+            fy_acc += ry * accelMag;
+            fz_acc += rz * accelMag;
+        } else if (s_em_typeId == 1u) {
+            // -- TYPE 1: Planar / Directional Gravity --
+            // s_em_posMu.xyz is the normalized direction vector to the source.
+            // s_em_posMu.w is the base acceleration magnitude (GM/r^2)
+            vec4 muEff = s_em_posMu.wwww * (1.0 - beta);
 
-        fx_acc += f16vec4(rx * accelMag);
-        fy_acc += f16vec4(ry * accelMag);
-        fz_acc += f16vec4(rz * accelMag);
+            // Force = Mass * Accel
+            vec4 forceMag = muEff / vec4(invM);
+
+            fx_acc += s_em_posMu.xxxx * forceMag;
+            fy_acc += s_em_posMu.yyyy * forceMag;
+            fz_acc += s_em_posMu.zzzz * forceMag;
+        }
 
         barrier();
     }
@@ -137,11 +151,20 @@ void main() {
     // F = acc × mass, matching the convention of accumulate_bvh_forces_to_particles.
     // we don't care about dead/free particles, so write zero
     f16vec4 zeroForce = f16vec4(0.0hf);
-    fx_acc = mix(zeroForce, fx_acc, isAlive);
-    fx_acc = mix(zeroForce, fx_acc, isAlive);
-    fx_acc = mix(zeroForce, fx_acc, isAlive);
+    f16vec4 fx_final = mix(zeroForce, f16vec4(fx_acc), isAlive);
+    f16vec4 fy_final = mix(zeroForce, f16vec4(fy_acc), isAlive);
+    f16vec4 fz_final = mix(zeroForce, f16vec4(fz_acc), isAlive);
 
-    pc.globalParticleBufferAddress[chunkIndex].forceX[chunkOffset] = fx_acc;
-    pc.globalParticleBufferAddress[chunkIndex].forceY[chunkOffset] = fx_acc;
-    pc.globalParticleBufferAddress[chunkIndex].forceZ[chunkOffset] = fx_acc;
+#ifdef DEBUG_SHADERS
+    if (all(equal(fx_final, zeroForce)) &&
+        all(equal(fy_final, zeroForce)) &&
+        all(equal(fz_final, zeroForce))) {
+
+        debugPrintfEXT("WARNING [%u]: All forces (fx, fy, fz) are exactly zero.\n", gl_GlobalInvocationID.x);
+    }
+#endif
+
+    pc.globalParticleBufferAddress[chunkIndex].forceX[chunkOffset] = fx_final;
+    pc.globalParticleBufferAddress[chunkIndex].forceY[chunkOffset] = fy_final;
+    pc.globalParticleBufferAddress[chunkIndex].forceZ[chunkOffset] = fz_final;
 }

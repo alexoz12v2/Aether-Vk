@@ -627,12 +627,17 @@ pub mod v2 {
     pub timeline_value: AtomicU64,
     /// used to measure whether particle system should emit or not in next simulation step.
     /// initialized at zero so that first simulation step always emits (timeus_t)
+    /// Unscaled time in μs
     pub last_emission: AtomicI64,
     /// used to measure whether we should perform compaction or not in the next step
     /// gets initialized to zero in construcor, but if last_emission is zero, then in the first
     /// emission this is assigned to the last_emission value, such that we skip a useless
-    /// compaction at start
+    /// compaction at start. Unscaled time in μs
     pub last_compaction: AtomicI64,
+    /// time to live for each particle. used to compute `doomsday` in compaction shader.
+    /// Unscaled
+    /// to scale when passing it to compaction shader
+    pub ttl_us: timeus_t,
     /// necessary evil for Drop
     pub id: u64,
     // emission parameters
@@ -662,6 +667,7 @@ pub mod v2 {
       render_device_handle: crate::gpu::RenderDeviceHandle,
       entity_id: EntityId,
       emission_params: ParticleSystemEmitParams,
+      ttl_us: timeus_t,
     ) -> EngineResult<Self> {
       let entity_u64 = entity_id.as_ffi();
       render_frontend
@@ -677,6 +683,7 @@ pub mod v2 {
           last_emission: AtomicI64::new(0),
           last_compaction: AtomicI64::new(0),
           id: entity_u64,
+          ttl_us,
           emission_params,
         })
     }

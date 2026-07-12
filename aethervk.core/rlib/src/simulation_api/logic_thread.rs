@@ -61,7 +61,10 @@ fn drain_logic_commands(
           | LogicCommand::RaycastNdc { .. }
           | LogicCommand::UpdateTrajectoryForSpk { .. }
           | LogicCommand::Raycast { .. } => {
-            let workload = Box::new(LogicWorkload { cmd, ctx: ctx.clone() });
+            let workload = Box::new(LogicWorkload {
+              cmd,
+              ctx: ctx.clone(),
+            });
             let _ = ctx.thread_pool.scatter(alloc::vec![workload]);
           }
           _ => {
@@ -82,16 +85,20 @@ fn drain_logic_commands(
               _ => "Logic Task",
             };
             let res = process_command_internal(cmd, ctx);
-            if let Some(tid) = task_id {
-              if tid != 0 {
-                let mut manager = ctx.task_manager.write();
-                match res {
-                  Ok(result) => { manager.success_task(tid, result); }
-                  Err(e) => {
-                    manager.fail_task(tid, e.to_string());
-                    crate::simulation_api::emit_breadcrumb(
-                      3, &alloc::format!("Failed: {} - {}", cmd_desc, e));
-                  }
+            if let Some(tid) = task_id
+              && tid != 0
+            {
+              let mut manager = ctx.task_manager.write();
+              match res {
+                Ok(result) => {
+                  manager.success_task(tid, result);
+                }
+                Err(e) => {
+                  manager.fail_task(tid, e.to_string());
+                  crate::simulation_api::emit_breadcrumb(
+                    3,
+                    &alloc::format!("Failed: {} - {}", cmd_desc, e),
+                  );
                 }
               }
             }
@@ -134,261 +141,267 @@ pub fn start_logic_thread(
 
     loop {
       let mut core_logic = || -> bool {
-      let mut processed_any = false;
+        let mut processed_any = false;
 
-      let scene_ids: alloc::vec::Vec<u64> = {
-        let scenes = context.scenes.read();
-        scenes.keys().copied().collect()
-      };
+        let scene_ids: alloc::vec::Vec<u64> = {
+          let scenes = context.scenes.read();
+          scenes.keys().copied().collect()
+        };
 
-      for scene_id in scene_ids {
-        let pc = play_controls
-          .entry(scene_id)
-          .or_insert_with(|| PlayControl::new(scene_id, target_frame_time));
-        let now = oshal::os::time::get_monotonic_time();
-        let last = pc.last_frame_start;
-        let elapsed = now.saturating_sub(last);
+        for scene_id in scene_ids {
+          let pc = play_controls
+            .entry(scene_id)
+            .or_insert_with(|| PlayControl::new(scene_id, target_frame_time));
+          let now = oshal::os::time::get_monotonic_time();
+          let last = pc.last_frame_start;
+          let elapsed = now.saturating_sub(last);
 
-        if elapsed >= pc.target_frame_time {
-          // Always reset the frame timer and submit a render frame at display
-          // rate.  The physics TICK is gated separately — we only advance
-          // simulation when the previous GPU compute step is done.
-          pc.last_frame_start = now;
+          if elapsed >= pc.target_frame_time {
+            // Always reset the frame timer and submit a render frame at display
+            // rate.  The physics TICK is gated separately — we only advance
+            // simulation when the previous GPU compute step is done.
+            pc.last_frame_start = now;
 
-          // ── Physics tick (only when previous step is complete) ────────────
-          let physics_done = {
-            let scenes = context.scenes.read();
-            if let Some(scene_ctx) = scenes.get(&scene_id) {
-              let scene_read = scene_ctx.read();
-              scene_read
-                .active_physics_task
-                .lock()
-                .as_ref()
-                .map(|t| t.is_done())
-                .unwrap_or(true)
-            } else {
-              true
-            }
-          };
-
-          if physics_done {
-            let dt_f32 = elapsed as f32 / 1_000_000.0;
-            let _ = execute_simulation_tick(scene_id, &context, dt_f32, &logic_rx);
-          }
-
-          // ── Render frame (always, at display rate) ────────────────────────
-          // Uses active_physics_task + cached_timeline_semaphore.  If physics
-          // is still running the render thread's try_wait(8ms) will fall back
-          // to the cached semaphore value, keeping render independent.
-          let pe_handles: alloc::vec::Vec<(
-            crate::gpu::PresentationEngineHandle,
-            crate::simulation_api::structs::PresentationEngineData,
-          )> = {
-            let scenes = context.scenes.read();
-            if let Some(scene_ctx) = scenes.get(&scene_id) {
-              scene_ctx
-                .read()
-                .presentation_engines
-                .read()
-                .iter()
-                .map(|(&k, v)| (k, v.clone()))
-                .collect()
-            } else {
-              alloc::vec::Vec::new()
-            }
-          };
-
-          let mut render_frames = alloc::vec::Vec::new();
-          let mut last_tasks = alloc::vec::Vec::new();
-
-          for (pe, pe_data) in pe_handles {
-            let Some(camera_entity) = pe_data.camera_entity else {
-              continue;
-            };
-            let is_windowless = pe_data.is_windowless;
-            let task_id = alloc::sync::Arc::new(core::sync::atomic::AtomicU64::new(0));
-            let scene = {
+            // ── Physics tick (only when previous step is complete) ────────────
+            let physics_done = {
               let scenes = context.scenes.read();
-              scenes.get(&scene_id).unwrap().clone()
+              if let Some(scene_ctx) = scenes.get(&scene_id) {
+                let scene_read = scene_ctx.read();
+                scene_read
+                  .active_physics_task
+                  .lock()
+                  .as_ref()
+                  .map(|t| t.is_done())
+                  .unwrap_or(true)
+              } else {
+                true
+              }
             };
 
-            let (outlines, sun, sky, cursor, callback, active_physics_task, cached_timeline_semaphore) = {
-              let r = scene.read();
-              (
-                r.outlines_enabled.load(core::sync::atomic::Ordering::Acquire),
-                r.sun_entity,
-                r.sky_entity,
-                r.cursor_entity,
-                r.custom_render_callback,
-                r.active_physics_task.clone(),
-                r.latest_physics_sync.read().map(|s| (s.timeline_semaphore, s.timeline_value)),
-              )
+            if physics_done {
+              let dt_f32 = elapsed as f32 / 1_000_000.0;
+              let _ = execute_simulation_tick(scene_id, &context, dt_f32, &logic_rx);
+            }
+
+            // ── Render frame (always, at display rate) ────────────────────────
+            // Uses active_physics_task + cached_timeline_semaphore.  If physics
+            // is still running the render thread's try_wait(8ms) will fall back
+            // to the cached semaphore value, keeping render independent.
+            let pe_handles: alloc::vec::Vec<(
+              crate::gpu::PresentationEngineHandle,
+              crate::simulation_api::structs::PresentationEngineData,
+            )> = {
+              let scenes = context.scenes.read();
+              if let Some(scene_ctx) = scenes.get(&scene_id) {
+                scene_ctx
+                  .read()
+                  .presentation_engines
+                  .read()
+                  .iter()
+                  .map(|(&k, v)| (k, v.clone()))
+                  .collect()
+              } else {
+                alloc::vec::Vec::new()
+              }
             };
 
-            render_frames.push(crate::simulation_api::structs::RenderFrame {
-              presentation_engine_handle: pe,
-              task_id: alloc::sync::Arc::clone(&task_id),
-              scene,
-              render_physical_meshes_outline: outlines,
-              camera_entity,
-              clear_color: [0.0, 0.0, 0.0, 1.0],
-              sun_entity: sun,
-              sky_entity: sky,
-              cursor_entity: cursor,
-              custom_render_callback: callback,
-              active_physics_task,
-              cached_timeline_semaphore,
-            });
+            let mut render_frames = alloc::vec::Vec::new();
+            let mut last_tasks = alloc::vec::Vec::new();
 
-            last_tasks.push((task_id, is_windowless, pe.0));
-          }
+            for (pe, pe_data) in pe_handles {
+              let Some(camera_entity) = pe_data.camera_entity else {
+                continue;
+              };
+              let is_windowless = pe_data.is_windowless;
+              let task_id = alloc::sync::Arc::new(core::sync::atomic::AtomicU64::new(0));
+              let scene = {
+                let scenes = context.scenes.read();
+                scenes.get(&scene_id).unwrap().clone()
+              };
 
-          let mut new_tasks = alloc::vec::Vec::new();
-          if !render_frames.is_empty() {
-            let send_res = context.render_tx.try_send(
-              crate::simulation_api::structs::RenderCommand::RenderFrames(render_frames),
-            );
+              let (
+                outlines,
+                sun,
+                sky,
+                cursor,
+                callback,
+                active_physics_task,
+                cached_timeline_semaphore,
+              ) = {
+                let r = scene.read();
+                (
+                  r.outlines_enabled.load(core::sync::atomic::Ordering::Acquire),
+                  r.sun_entity,
+                  r.sky_entity,
+                  r.cursor_entity,
+                  r.custom_render_callback,
+                  r.active_physics_task.clone(),
+                  r.latest_physics_sync.read().map(|s| (s.timeline_semaphore, s.timeline_value)),
+                )
+              };
 
-            if send_res.is_ok() {
-              for (task_id, is_windowless, pe_handle) in last_tasks {
-                // Fire-and-forget: do NOT spin-wait for the render tasklet to call
-                // create_task() and write back the task_id.  The old spin (with 1ms
-                // sleeps) blocked the logic thread for the full render frame duration
-                // (~50 ms at 20 FPS), which was the primary throughput cap.
-                //
-                // • Windowed PEs: new_tasks is no longer used to gate can_tick (see
-                //   comment below), so task_id_val is never needed here.
-                // • Windowless PEs: the WindowlessCallbackWorkload already polls
-                //   task_id asynchronously on the thread pool — no sync wait needed.
-                //
-                // Use u64::MAX as a sentinel for "task_id not yet known"; the
-                // windowless callback workload handles the 0→real transition itself.
-                let task_id_val = u64::MAX;
+              render_frames.push(crate::simulation_api::structs::RenderFrame {
+                presentation_engine_handle: pe,
+                task_id: alloc::sync::Arc::clone(&task_id),
+                scene,
+                render_physical_meshes_outline: outlines,
+                camera_entity,
+                clear_color: [0.0, 0.0, 0.0, 1.0],
+                sun_entity: sun,
+                sky_entity: sky,
+                cursor_entity: cursor,
+                custom_render_callback: callback,
+                active_physics_task,
+                cached_timeline_semaphore,
+              });
 
-                // For a successful frame, track the task so can_tick can check its status.
-                // For an error frame (u64::MAX), skip tracking — it would always show Invalid
-                // and would not block future ticks anyway.
-                if task_id_val != u64::MAX {
-                  if let Some(nz) = core::num::NonZero::new(task_id_val) {
-                    new_tasks.push(nz);
-                  }
-                }
+              last_tasks.push((task_id, is_windowless, pe.0));
+            }
 
-                // Always fire the callback for windowless PEs, even for error frames
-                // (task_id_val == u64::MAX). C# uses the sentinel to log errors (rate-limited).
-                if is_windowless {
-                  let fptr = *crate::simulation_api::RENDER_CALLBACK.read();
-                  if fptr.is_some() {
-                    let _captured_task_id_val = task_id_val;
+            let mut new_tasks = alloc::vec::Vec::new();
+            if !render_frames.is_empty() {
+              let send_res = context.render_tx.try_send(
+                crate::simulation_api::structs::RenderCommand::RenderFrames(render_frames),
+              );
 
-                    struct WindowlessCallbackWorkload {
-                      ctx_ptr: crate::simulation_api::structs::SendPtrMut<core::ffi::c_void>,
-                      task_id: alloc::sync::Arc<core::sync::atomic::AtomicU64>,
-                      scene_id: u64,
-                      pe_handle: u64,
+              if send_res.is_ok() {
+                for (task_id, is_windowless, pe_handle) in last_tasks {
+                  // Fire-and-forget: do NOT spin-wait for the render tasklet to call
+                  // create_task() and write back the task_id.  The old spin (with 1ms
+                  // sleeps) blocked the logic thread for the full render frame duration
+                  // (~50 ms at 20 FPS), which was the primary throughput cap.
+                  //
+                  // • Windowed PEs: new_tasks is no longer used to gate can_tick (see
+                  //   comment below), so task_id_val is never needed here.
+                  // • Windowless PEs: the WindowlessCallbackWorkload already polls
+                  //   task_id asynchronously on the thread pool — no sync wait needed.
+                  //
+                  // Use u64::MAX as a sentinel for "task_id not yet known"; the
+                  // windowless callback workload handles the 0→real transition itself.
+                  let task_id_val = u64::MAX;
+
+                  // For a successful frame, track the task so can_tick can check its status.
+                  // For an error frame (u64::MAX), skip tracking — it would always show Invalid
+                  // and would not block future ticks anyway.
+                  if task_id_val != u64::MAX {
+                    if let Some(nz) = core::num::NonZero::new(task_id_val) {
+                      new_tasks.push(nz);
                     }
+                  }
 
-                    impl aethervk_oshal_rlib::os::pool::Workload for WindowlessCallbackWorkload {
-                      fn execute(&mut self) -> aethervk_oshal_rlib::os::pool::WorkloadStatus {
-                        let fptr = *crate::simulation_api::RENDER_CALLBACK.read();
-                        if fptr.is_none() {
-                          return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
-                        }
+                  // Always fire the callback for windowless PEs, even for error frames
+                  // (task_id_val == u64::MAX). C# uses the sentinel to log errors (rate-limited).
+                  if is_windowless {
+                    let fptr = *crate::simulation_api::RENDER_CALLBACK.read();
+                    if fptr.is_some() {
+                      let _captured_task_id_val = task_id_val;
 
-                        let tid_val = self.task_id.load(core::sync::atomic::Ordering::Acquire);
-                        if tid_val == 0 {
-                          if alloc::sync::Arc::strong_count(&self.task_id) == 1 {
-                            // Render thread dropped it without assigning
-                            unsafe { fptr.unwrap()(self.scene_id, self.pe_handle, u64::MAX) };
+                      struct WindowlessCallbackWorkload {
+                        ctx_ptr: crate::simulation_api::structs::SendPtrMut<core::ffi::c_void>,
+                        task_id: alloc::sync::Arc<core::sync::atomic::AtomicU64>,
+                        scene_id: u64,
+                        pe_handle: u64,
+                      }
+
+                      impl aethervk_oshal_rlib::os::pool::Workload for WindowlessCallbackWorkload {
+                        fn execute(&mut self) -> aethervk_oshal_rlib::os::pool::WorkloadStatus {
+                          let fptr = *crate::simulation_api::RENDER_CALLBACK.read();
+                          if fptr.is_none() {
                             return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
                           }
-                          return aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield;
-                        }
 
-                        let ctx = unsafe {
-                          &*(self.ctx_ptr.get() as *mut crate::simulation_api::SimulationContext)
-                        };
-                        let completed = ctx
-                          .render_proxy
-                          .0
-                          .as_frontend()
-                          .and_then(|f| {
-                            f.with_device(ctx.render_proxy.1, |device| {
-                              Ok(device.is_task_completed(tid_val).unwrap_or(true))
+                          let tid_val = self.task_id.load(core::sync::atomic::Ordering::Acquire);
+                          if tid_val == 0 {
+                            if alloc::sync::Arc::strong_count(&self.task_id) == 1 {
+                              // Render thread dropped it without assigning
+                              unsafe { fptr.unwrap()(self.scene_id, self.pe_handle, u64::MAX) };
+                              return aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete;
+                            }
+                            return aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield;
+                          }
+
+                          let ctx = unsafe {
+                            &*(self.ctx_ptr.get() as *mut crate::simulation_api::SimulationContext)
+                          };
+                          let completed = ctx
+                            .render_proxy
+                            .0
+                            .as_frontend()
+                            .and_then(|f| {
+                              f.with_device(ctx.render_proxy.1, |device| {
+                                Ok(device.is_task_completed(tid_val).unwrap_or(true))
+                              })
+                              .ok()
                             })
-                            .ok()
-                          })
-                          .unwrap_or(true);
+                            .unwrap_or(true);
 
-                        if completed {
-                          unsafe { fptr.unwrap()(self.scene_id, self.pe_handle, tid_val) };
-                          aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete
-                        } else {
-                          aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield
+                          if completed {
+                            unsafe { fptr.unwrap()(self.scene_id, self.pe_handle, tid_val) };
+                            aethervk_oshal_rlib::os::pool::WorkloadStatus::Complete
+                          } else {
+                            aethervk_oshal_rlib::os::pool::WorkloadStatus::Yield
+                          }
+                        }
+
+                        fn tasklet_id(&self) -> Option<usize> {
+                          None
                         }
                       }
 
-                      fn tasklet_id(&self) -> Option<usize> {
-                        None
-                      }
+                      let _ = context.thread_pool.scatter(alloc::vec![alloc::boxed::Box::new(
+                        WindowlessCallbackWorkload {
+                          ctx_ptr: context.ctx_ptr,
+                          task_id: alloc::sync::Arc::clone(&task_id),
+                          scene_id,
+                          pe_handle,
+                        }
+                      )]);
                     }
-
-                    let _ = context.thread_pool.scatter(alloc::vec![alloc::boxed::Box::new(
-                      WindowlessCallbackWorkload {
-                        ctx_ptr: context.ctx_ptr,
-                        task_id: alloc::sync::Arc::clone(&task_id),
-                        scene_id,
-                        pe_handle,
-                      }
-                    )]);
                   }
                 }
               }
             }
+            // last_render_ticks is retained for future use but no longer gates
+            // can_tick; physics task completion is the gate now.
+            pc.last_render_ticks = new_tasks;
+            processed_any = true;
           }
-          // last_render_ticks is retained for future use but no longer gates
-          // can_tick; physics task completion is the gate now.
-          pc.last_render_ticks = new_tasks;
-          processed_any = true;
         }
-      }
 
+        // Drain all queued LogicCommands now, before sleeping.
+        // drain_logic_commands also handles heavy tasks (scattered to pool).
+        if drain_logic_commands(&logic_rx, &context) {
+          return true; // Shutdown received
+        }
 
-      // Drain all queued LogicCommands now, before sleeping.
-      // drain_logic_commands also handles heavy tasks (scattered to pool).
-      if drain_logic_commands(&logic_rx, &context) {
-        return true; // Shutdown received
-      }
-
-      if !processed_any {
-        // Sleep precisely until the next frame deadline rather than always 1 ms.
-        //
-        // With a fixed 1 ms sleep, the logic thread wakes ~15 times between
-        // frames (16 ms target), each time finding nothing to do.  The repeated
-        // scheduler wakeups add jitter to the render pipeline and waste CPU that
-        // the GPU/render thread could use instead — especially harmful for
-        // windowless mode where there is no display VSync as a natural gate.
-        let sleep_us: i64 = if play_controls.is_empty() {
-          1_000 // 1 ms fallback when no scenes exist
-        } else {
-          let now_us = oshal::os::time::get_monotonic_time();
-          play_controls
-            .values()
-            .map(|pc| {
-              pc.target_frame_time
-                .saturating_sub(now_us.saturating_sub(pc.last_frame_start))
-            })
-            .min()
-            .unwrap_or(1_000)
-        };
-        // Clamp: always sleep at least 100 µs (avoid tight spin) and at most
-        // half a target frame (so we don't overshoot the deadline by much).
-        let sleep_us = sleep_us.max(100).min(8_000);
-        oshal::os::native::this_thread::sleep_for(
-          core::time::Duration::from_micros(sleep_us as u64)
-        );
-      }
-      false
+        if !processed_any {
+          // Sleep precisely until the next frame deadline rather than always 1 ms.
+          //
+          // With a fixed 1 ms sleep, the logic thread wakes ~15 times between
+          // frames (16 ms target), each time finding nothing to do.  The repeated
+          // scheduler wakeups add jitter to the render pipeline and waste CPU that
+          // the GPU/render thread could use instead — especially harmful for
+          // windowless mode where there is no display VSync as a natural gate.
+          let sleep_us: i64 = if play_controls.is_empty() {
+            1_000 // 1 ms fallback when no scenes exist
+          } else {
+            let now_us = oshal::os::time::get_monotonic_time();
+            play_controls
+              .values()
+              .map(|pc| {
+                pc.target_frame_time.saturating_sub(now_us.saturating_sub(pc.last_frame_start))
+              })
+              .min()
+              .unwrap_or(1_000)
+          };
+          // Clamp: always sleep at least 100 µs (avoid tight spin) and at most
+          // half a target frame (so we don't overshoot the deadline by much).
+          let sleep_us = sleep_us.max(100).min(8_000);
+          oshal::os::native::this_thread::sleep_for(core::time::Duration::from_micros(
+            sleep_us as u64,
+          ));
+        }
+        false
       };
 
       #[cfg(target_os = "macos")]
@@ -1661,9 +1674,9 @@ fn execute_simulation_tick(
   //   YIELD_THRESHOLD  – if pending > this, sleep 1 ms before dispatching
   //                      (leaky-bucket back-pressure: lets GPU drain).
   //   DISCARD_THRESHOLD – hard cap; discard excess to prevent spiral of death.
-  const MAX_BATCH_STEPS: u32    = 4;
-  const YIELD_THRESHOLD: u32    = 2;
-  const DISCARD_THRESHOLD: u32  = 8;
+  const MAX_BATCH_STEPS: u32 = 4;
+  const YIELD_THRESHOLD: u32 = 2;
+  const DISCARD_THRESHOLD: u32 = 8;
 
   let (is_playing, pending_steps, fixed_dt_us, base_step_days, current_epoch, max_sub_dt_us) = {
     let ts = time_state_arc.read();
@@ -1673,12 +1686,19 @@ fn execute_simulation_tick(
     let effective_max_sub_dt_s = ts
       .max_sub_dt_override
       .unwrap_or_else(|| ts.current_scale.max_physics_sub_dt_seconds());
-    let max_sub_dt_us = (effective_max_sub_dt_s * 1_000_000.0)
-      as aethervk_oshal_rlib::os::time::timeus_t;
+    let max_sub_dt_us =
+      (effective_max_sub_dt_s * 1_000_000.0) as aethervk_oshal_rlib::os::time::timeus_t;
     let scale_days_per_sec = ts.current_scale.to_days_per_st_second();
-    let fixed_sim_seconds  = fixed_dt_us as f64 / 1_000_000.0;
-    let base_step_days     = scale_days_per_sec * fixed_sim_seconds;
-    (ts.is_playing, pending, fixed_dt_us, base_step_days, ts.current_epoch, max_sub_dt_us)
+    let fixed_sim_seconds = fixed_dt_us as f64 / 1_000_000.0;
+    let base_step_days = scale_days_per_sec * fixed_sim_seconds;
+    (
+      ts.is_playing,
+      pending,
+      fixed_dt_us,
+      base_step_days,
+      ts.current_epoch,
+      max_sub_dt_us,
+    )
   };
 
   // Handle manual step requests (seek / scrub) — always one-shot, no batching.
@@ -1697,22 +1717,25 @@ fn execute_simulation_tick(
   if let Some((step_days, epoch)) = manual_step {
     any_fixed_step = true;
     let step_wall_start = aethervk_oshal_rlib::os::time::get_monotonic_time();
-    if let Err(e) = dispatch_physics_step(scene_id, ctx, step_days, epoch, fixed_dt_us, max_sub_dt_us) {
+    if let Err(e) =
+      dispatch_physics_step(scene_id, ctx, step_days, epoch, fixed_dt_us, max_sub_dt_us)
+    {
       aethervk_oshal_rlib::log!("dispatch_physics_step (manual) failed: {:?}", e);
       // ── Cooldown: prevent tight error-retry loop ───────────────────────────
       // A GPU device-lost causes every Vulkan call to fail in < 1 μs.
       // Without a sleep the logic thread retries thousands of times/second,
       // pinning physics workers at ~600% CPU and starving the UI + GPU driver.
-      aethervk_oshal_rlib::os::native::this_thread::sleep_for(
-        core::time::Duration::from_millis(500)
-      );
+      aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
+        500,
+      ));
     }
     let step_wall_us = aethervk_oshal_rlib::os::time::get_monotonic_time()
-      .saturating_sub(step_wall_start).max(1);
+      .saturating_sub(step_wall_start)
+      .max(1);
     {
       let mut ts = time_state_arc.write();
-      let sim_us  = fixed_dt_us.max(1) as f32;
-      let sample  = (sim_us / step_wall_us as f32).min(2.0);
+      let sim_us = fixed_dt_us.max(1) as f32;
+      let sample = (sim_us / step_wall_us as f32).min(2.0);
       ts.effective_sim_speed = 0.1 * sample + 0.9 * ts.effective_sim_speed;
     }
     if drain_logic_commands(cmd_rx, ctx) {
@@ -1740,7 +1763,7 @@ fn execute_simulation_tick(
 
     // Advance epoch and accumulator by n_steps at once.
     let batched_step_days = base_step_days * n_steps as f64;
-    let batched_dt_us     = fixed_dt_us * n_steps as i64;
+    let batched_dt_us = fixed_dt_us * n_steps as i64;
 
     // ── GPU step-size safety cap ─────────────────────────────────────────────
     // At very high timescales the batched step can be 50+ days.  The particle
@@ -1775,19 +1798,27 @@ fn execute_simulation_tick(
 
     any_fixed_step = true;
     let step_wall_start = aethervk_oshal_rlib::os::time::get_monotonic_time();
-    if let Err(e) = dispatch_physics_step(scene_id, ctx, gpu_step_days, new_epoch, batched_dt_us, max_sub_dt_us) {
+    if let Err(e) = dispatch_physics_step(
+      scene_id,
+      ctx,
+      gpu_step_days,
+      new_epoch,
+      batched_dt_us,
+      max_sub_dt_us,
+    ) {
       aethervk_oshal_rlib::log!("dispatch_physics_step failed: {:?}", e);
       // ── Cooldown: prevent tight error-retry loop ───────────────────────────
       // Without a sleep, a device-lost error burns 600% CPU across worker threads.
       // The batched dispatch is a single call (not a loop), so we just sleep here;
       // the logic thread will naturally skip the watchdog/EMA update and wait for
       // the next tick before trying again.
-      aethervk_oshal_rlib::os::native::this_thread::sleep_for(
-        core::time::Duration::from_millis(500)
-      );
+      aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
+        500,
+      ));
     }
     let step_wall_us = aethervk_oshal_rlib::os::time::get_monotonic_time()
-      .saturating_sub(step_wall_start).max(1);
+      .saturating_sub(step_wall_start)
+      .max(1);
 
     // ── Wall-time watchdog ───────────────────────────────────────────────────
     // If the GPU dispatch blocked the logic thread for more than 2 seconds the
@@ -1806,9 +1837,9 @@ fn execute_simulation_tick(
     // Update EMA: compare per-step sim-time vs wall-time.
     {
       let mut ts = time_state_arc.write();
-      let sim_us  = fixed_dt_us.max(1) as f32;
+      let sim_us = fixed_dt_us.max(1) as f32;
       let wall_us = (step_wall_us / n_steps as i64).max(1) as f32;
-      let sample  = (sim_us / wall_us).min(2.0);
+      let sample = (sim_us / wall_us).min(2.0);
       ts.effective_sim_speed = 0.1 * sample + 0.9 * ts.effective_sim_speed;
     }
 
@@ -2268,9 +2299,9 @@ fn emit_particles_from_circles(
       // The emitter entity (comet) lives inside a micro-frame (LCA).
       // Its TransformComponent.position is in micro-frame LOCAL KM — not AU.
       // scale is km per mesh-unit.
-      let parent_rot   = transform.rotation;
+      let parent_rot = transform.rotation;
       let parent_pos_km = transform.position; // local km relative to micro-frame
-      let parent_scale  = transform.scale;    // km per mesh-unit
+      let parent_scale = transform.scale; // km per mesh-unit
       let mut circles_work = alloc::vec::Vec::new();
 
       // ── Walk up to find frame center (AU) and scale (AU/km) for occlusion ──
@@ -2280,13 +2311,16 @@ fn emit_particles_from_circles(
       {
         let mut cur = scene.get_parent(entity_id);
         while let Some(anc) = cur {
-          if let Some(frame_data) = scene.with_component(anc, |rf: &crate::scene::ReferenceFrameComponent| {
-            (
-              scene.with_component(anc, |t: &TransformComponent| t.position)
-                .unwrap_or(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero()),
-              rf.scale,
-            )
-          }) {
+          if let Some(frame_data) =
+            scene.with_component(anc, |rf: &crate::scene::ReferenceFrameComponent| {
+              (
+                scene
+                  .with_component(anc, |t: &TransformComponent| t.position)
+                  .unwrap_or(aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero()),
+                rf.scale,
+              )
+            })
+          {
             frame_center_au = frame_data.0;
             frame_scale_au_per_km = frame_data.1;
             break;
@@ -2321,12 +2355,16 @@ fn emit_particles_from_circles(
         let rotated_surface_km = parent_rot.rotate_vector(surface_km);
 
         let local_n = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
-          local_normal[0], local_normal[1], local_normal[2],
+          local_normal[0],
+          local_normal[1],
+          local_normal[2],
         );
         let world_n_km = {
           let n = parent_rot.rotate_vector(local_n);
           let l = n.length();
-          if l > 1e-6 { n * (1.0 / l) } else {
+          if l > 1e-6 {
+            n * (1.0 / l)
+          } else {
             aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(0.0, 0.0, 1.0)
           }
         };
@@ -2354,7 +2392,9 @@ fn emit_particles_from_circles(
           } else {
             // Fallback: treat sun as 1 AU = 149597870.7 km in -x direction
             aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
-              -149_597_870.7_f32, 0.0, 0.0,
+              -149_597_870.7_f32,
+              0.0,
+              0.0,
             )
           };
           let to_sun_km = sun_km - emit_km;
@@ -2363,7 +2403,11 @@ fn emit_particles_from_circles(
           // Dot product of emission normal with sun direction:
           //   < 0 → surface faces sun (sunlit side, should NOT be occluded)
           //   > 0 → surface faces away from sun (dark side, should be occluded)
-          let sun_dir_km = if dist_to_sun_km > 1e-4 { to_sun_km * (1.0 / dist_to_sun_km) } else { to_sun_km };
+          let sun_dir_km = if dist_to_sun_km > 1e-4 {
+            to_sun_km * (1.0 / dist_to_sun_km)
+          } else {
+            to_sun_km
+          };
           let nz_dot_sun = world_n_km.dot(sun_dir_km);
 
           if dist_to_sun_km > 1e-4 {
@@ -2388,12 +2432,13 @@ fn emit_particles_from_circles(
 
           // ── Emission-side diagnostic (very low-frequency, avoids stutter) ───
           {
-            static EMIT_SIDE_COUNTER: core::sync::atomic::AtomicU64
-              = core::sync::atomic::AtomicU64::new(0);
+            static EMIT_SIDE_COUNTER: core::sync::atomic::AtomicU64 =
+              core::sync::atomic::AtomicU64::new(0);
             let count = EMIT_SIDE_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             // 1701 calls/s × 50_000 = prints once every ~29 s — diagnostic but no stutter.
             if count % 50_000 == 0 {
-              let bvh_present = !occluders.is_empty() && occluders.iter().any(|(_, m)| m.bvh.is_some());
+              let bvh_present =
+                !occluders.is_empty() && occluders.iter().any(|(_, m)| m.bvh.is_some());
               // Use the oshal log macro (available in no_std; eprintln! is not)
               aethervk_oshal_rlib::log!(
                 "[EMIT-SIDE] circle child={:?} \
@@ -2402,23 +2447,35 @@ fn emit_particles_from_circles(
                  occluded={} bvh_present={} \
                  emit_km=({:+.1},{:+.1},{:+.1})",
                 child_id,
-                world_n_km.x(), world_n_km.y(), world_n_km.z(),
-                -sun_dir_km.x(), -sun_dir_km.y(), -sun_dir_km.z(),
+                world_n_km.x(),
+                world_n_km.y(),
+                world_n_km.z(),
+                -sun_dir_km.x(),
+                -sun_dir_km.y(),
+                -sun_dir_km.z(),
                 occluded,
                 bvh_present,
-                emit_km.x(), emit_km.y(), emit_km.z(),
+                emit_km.x(),
+                emit_km.y(),
+                emit_km.z(),
               );
             }
           }
         }
-        if occluded { continue; }
+        if occluded {
+          continue;
+        }
 
         let ttl_us = if circle.ttl > 0 {
           circle.ttl.saturating_mul(dt_us as u64)
-        } else { 0 };
+        } else {
+          0
+        };
 
         let mut parent_vel = [0.0, 0.0, 0.0];
-        if let Some(k) = scene.with_component(entity_id, |k: &crate::scene::KinematicComponent| k.velocity) {
+        if let Some(k) =
+          scene.with_component(entity_id, |k: &crate::scene::KinematicComponent| k.velocity)
+        {
           parent_vel = [k.x(), k.y(), k.z()];
         }
 
@@ -2436,7 +2493,9 @@ fn emit_particles_from_circles(
                 (sun_p_au - frame_center_au) * (1.0 / frame_scale_au_per_km)
               } else {
                 aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
-                  -149_597_870.7_f32, 0.0, 0.0,
+                  -149_597_870.7_f32,
+                  0.0,
+                  0.0,
                 )
               };
               let to_sun_km = sun_km - emit_km;
@@ -2920,7 +2979,13 @@ fn dispatch_physics_step(
       let sub_tick_seed = current_epoch.to_tai_seconds().to_bits()
         ^ (fixed_dt_us as u64)
         ^ (sub as u64).wrapping_mul(0x9e3779b97f4a7c15);
-      emit_particles_from_circles(scene_arc.as_ref(), sub_tick_seed, emit_sub_dt_us, sub, n_emit_steps);
+      emit_particles_from_circles(
+        scene_arc.as_ref(),
+        sub_tick_seed,
+        emit_sub_dt_us,
+        sub,
+        n_emit_steps,
+      );
     }
   }
 

@@ -95,7 +95,7 @@ impl FontAtlas {
   pub fn from_path<P: os::fs::IntoPathBuf>(path: P, scale_pt: f32) -> IoResult<Self> {
     let font_data = os::fs::read(path).map_err(|e| IoError::from(e))?;
     Self::from_slice(&font_data, scale_pt)
-      .ok_or_else(|| IoError::Specific("Failed to parse font data or create atlas"))
+      .ok_or_else(|| IoError::Specific("Failed to parse font data or create atlas".to_string()))
   }
 
   /// TODO: Document this item

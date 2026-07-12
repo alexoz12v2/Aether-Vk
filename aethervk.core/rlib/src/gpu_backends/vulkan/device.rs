@@ -34,7 +34,10 @@ use crate::{
 };
 use aethervk_oshal_rlib::{
   self as oshal,
-  math::vector::{Vector3, vec3::Vec3f32},
+  math::{
+    quaternion::Quaternion,
+    vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
+  },
   os::{fs::FileSystemObject, pool::WorkloadStatus},
 };
 use alloc::{
@@ -1611,28 +1614,28 @@ impl Device {
     let (global_particle_buffer_address, page_table_buffer_address, free_list_buffer_address) =
       self.grab_particle_system_data(particle_system_id)?;
     match push_constants {
-      PushConstantMutUnion::ApplyEmittersDirectNewPushConstants(value) => {
+      PushConstantMutUnion::ApplyEmittersDirectNew(value) => {
         value.global_particle_buffer_address = global_particle_buffer_address;
         value.particle_page_table = page_table_buffer_address;
         // TODO emitters elsewhere
       }
-      PushConstantMutUnion::IntegrateParticlesP1P2NewPushConstants(value) => {
+      PushConstantMutUnion::IntegrateParticlesP1P2New(value) => {
         value.global_particle_buffer_address = global_particle_buffer_address;
         value.particle_page_table = page_table_buffer_address;
       }
-      PushConstantMutUnion::IntegrateParticlesP45NewPushConstants(value) => {
+      PushConstantMutUnion::IntegrateParticlesP45New(value) => {
         value.global_particle_buffer_address = global_particle_buffer_address;
         value.particle_page_table = page_table_buffer_address;
       }
-      PushConstantMutUnion::NewParticlesCompactResetPushConstants(value) => {
+      PushConstantMutUnion::NewParticlesCompactReset(value) => {
         value.particle_page_table = page_table_buffer_address;
       }
-      PushConstantMutUnion::NewParticlesEmitPushConstants(value) => {
+      PushConstantMutUnion::NewParticlesEmit(value) => {
         value.global_particle_buffer = global_particle_buffer_address;
         value.particle_page_table = page_table_buffer_address;
         value.free_list = free_list_buffer_address;
       }
-      PushConstantMutUnion::NewParticlesCompactPushConstants(value) => {
+      PushConstantMutUnion::NewParticlesCompact(value) => {
         value.global_particle_buffer_address = global_particle_buffer_address;
         value.particle_page_table = page_table_buffer_address;
         value.free_list = free_list_buffer_address;
@@ -1740,6 +1743,252 @@ impl Device {
     }
 
     Ok(())
+  }
+
+  // TODO: periodically discard compute discard_pool
+
+  /// When using Point Gravity (Type 0), you calculate distance with rx = s_em_posMu.x - px_n;. Because 32-bit floats lose fractional precision as numbers get larger, space eventually quantizes into a "grid."
+  ///
+  /// We can calculate the exact size of this grid using the Unit in the Last Place (ULP) of IEEE 754 floats:
+  /// - At 1,000 km (106 m): f32 space resolves to a 6.25 cm grid.
+  /// - At 8,388 km (8.38×106 m): The exponent shifts, and f32 precision drops to exactly 1.0 metre.
+  /// - At 1 AU / The Sun (1.5×1011 m): f32 precision drops to 16 kilometres.
+  ///
+  /// Furthermore, our shader computes for point gravity distanc^5, meaning
+  /// (5.08×10^7)^5=3.4×10^38 (max float32) -> Anything further than ~50,000 km will cause dist5 to overflow to +Infinity
+  pub fn cmd_allocate_transient_emitter_for_particle_system(
+    &self,
+    cmd: vk::CommandBuffer,
+    discard_timeline: u64,
+    frame_position_au: (Vec3f32, Quat),
+    particle_system_pos_framerel_km: (Vec3f32, Quat),
+  ) -> GpuResult<(vk::Buffer, vk_mem::Allocation, u64)> {
+    use aethervk_oshal_rlib::math::{vector::vec3f64::DVec3, vector::vec4f64::DQuat};
+    // constants
+    const AU_TO_KM: f64 = 149_597_870.7;
+    const KM_TO_M: f64 = 1000.0;
+    const SUN_MU_KM3_S2: f64 = 1.32712440018e11;
+    const SUN_MU_M3_S2: f64 = SUN_MU_KM3_S2 * (KM_TO_M * KM_TO_M * KM_TO_M);
+
+    // - sun is at the origin of the root frame
+    let sun_root_au = DVec3::zero();
+
+    // - convert to frame's local space (units: AU)
+    let frame_pos_au = DVec3::from(Into::<[f32; 3]>::into(frame_position_au.0));
+    let frame_rot = DQuat::from_quat(frame_position_au.1);
+    // go from parent -> child, we subtract child's position, then apply the inverse rotation
+    // this is the sun position in the frame's coordinate system
+    let sun_frame_au: DVec3 = frame_rot.conjugate().rotate_vector(sun_root_au - frame_pos_au);
+
+    // - scale units to kilometres
+    let sun_frame_km: DVec3 = sun_frame_au * AU_TO_KM;
+
+    // - convert to particle system's local space (units: Km)
+    let ps_pos_km = DVec3::from(Into::<[f32; 3]>::into(particle_system_pos_framerel_km.0));
+    let ps_rot = DQuat::from_quat(particle_system_pos_framerel_km.1);
+    // this is the sun position in the particle system coordinate system
+    let sun_ps_km = ps_rot.conjugate().rotate_vector(sun_frame_km - ps_pos_km);
+
+    // final scale to metres
+    let sun_ps_m = sun_ps_km * KM_TO_M;
+    let distance_m: f64 = sun_ps_m.length();
+
+    const POINT_GRAVITY_THRESHOLD_M: f64 = 10_000_000.0; // 10,000 km
+    let (emitter_pos, emitter_mu, type_id) = if distance_m > POINT_GRAVITY_THRESHOLD_M {
+      // FALLBACK: Directional (Planar) Gravity
+      // Force magnitude: `GM / r^2` for all particles
+      let force_magnitude: f64 = SUN_MU_M3_S2 / (distance_m * distance_m);
+      // direction vector to the sun (normalized)
+      let direction: Vec3f32 = (sun_ps_m / distance_m).to_f32();
+      // `position` for planar force is direction
+      (
+        Into::<[f32; 3]>::into(direction),
+        force_magnitude as f32,
+        1u32,
+      )
+    } else {
+      // STANDARD: Point Gravity
+      // only used if particle system is close enough to sun
+      (
+        Into::<[f32; 3]>::into(sun_ps_m.to_f32()),
+        SUN_MU_M3_S2 as f32,
+        0u32,
+      )
+    };
+
+    #[repr(C, align(16))]
+    #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+    pub struct ParticleForceEmitter {
+      // x, y, z from pos, w from mu
+      pub position_mu: [f32; 4],
+      pub type_id: u32,
+      // Note: Rust will automatically insert 12 bytes of padding here
+      // to satisfy the 16-byte alignment requirement of the struct.
+      pub _pad: [u32; 3],
+    }
+
+    let emitter = {
+      let mut x = ParticleForceEmitter::zeroed();
+      x.position_mu = [emitter_pos[0], emitter_pos[1], emitter_pos[2], emitter_mu];
+      x.type_id = type_id;
+      x
+    };
+
+    // Strategy: we are going to call VMA allocation every single frame, hoping that it's
+    // suballocation strategy is strong enough. Furthermore, we are going to use
+    // `VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT` so that VMA can choose a
+    // memory `DEVICE_LOCAL` and `HOST_VISIBLE` if possible, fallback to `DEVICE_LOCAL`, which is
+    // the suggested strategy for frequent uploads, by VMA guide
+    let buf_create_info = vk::BufferCreateInfo::default()
+      .size(core::mem::size_of_val(&emitter) as _)
+      .usage(
+        vk::BufferUsageFlags::TRANSFER_DST
+          | vk::BufferUsageFlags::STORAGE_BUFFER
+          | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+      );
+    let mut alloc_create_info = vk_mem::AllocationCreateInfo::default();
+    crate::apply_test_dedicated_alloc!(alloc_create_info);
+    alloc_create_info.usage = vk_mem::MemoryUsage::Auto;
+    alloc_create_info.flags = vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+      | vk_mem::AllocationCreateFlags::HOST_ACCESS_ALLOW_TRANSFER_INSTEAD
+      | vk_mem::AllocationCreateFlags::MAPPED;
+
+    // SAFETY: we assume you are not going to delete the resource while simulating
+    let allocator = self.res.read().allocator.allocator.as_allocator_view();
+    let (gpu_buffer, gpu_alloc, gpu_alloc_info) =
+      unsafe { allocator.create_buffer_get_info(&buf_create_info, &alloc_create_info) }?;
+    let gpu_janitor = AllocJanitor {
+      buffer: gpu_buffer,
+      alloc: gpu_alloc,
+      allocator,
+    };
+
+    let gpu_buffer_address = unsafe {
+      let buffer_bda_info = vk::BufferDeviceAddressInfo::default().buffer(gpu_buffer);
+      self.device.buffer_device_address.get_buffer_device_address(&buffer_bda_info)
+    };
+
+    let mem_props = unsafe { allocator.get_allocation_memory_properties(&gpu_alloc) };
+    if (mem_props & vk::MemoryPropertyFlags::HOST_VISIBLE) != vk::MemoryPropertyFlags::empty() {
+      // allocation ended up in a mappable memory, so we can memcpy directly and issue a
+      // host->compute barrier, so that we flush to system memory before gpu dispatch
+      unsafe { allocator.copy_memory_to_allocation(&gpu_alloc, bytemuck::bytes_of(&emitter), 0) }?;
+      let mem_barrier = vk::BufferMemoryBarrier2::default()
+        // the host side ..
+        .src_stage_mask(vk::PipelineStageFlags2::HOST)
+        // ... should have finished its memory transactions from cache -> system RAM
+        .src_access_mask(vk::AccessFlags2::HOST_WRITE)
+        // before gpu compute shader ...
+        .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+        // ... performs any read ...
+        .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_READ)
+        // ... towards this buffer
+        .buffer(gpu_buffer)
+        .offset(0)
+        .size(vk::WHOLE_SIZE)
+        // ... without any queue ownership transfer
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED);
+      let dep_info =
+        vk::DependencyInfo::default().buffer_memory_barriers(core::slice::from_ref(&mem_barrier));
+      unsafe { self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info) };
+    } else {
+      // allocation is not host visible. Staging buffer and transfer needed
+      let staging_buf_create_info = vk::BufferCreateInfo::default()
+        .size(core::mem::size_of_val(&emitter) as _)
+        .usage(vk::BufferUsageFlags::TRANSFER_SRC);
+      let mut staging_alloc_create_info = vk_mem::AllocationCreateInfo::default();
+      crate::apply_test_dedicated_alloc!(staging_alloc_create_info);
+      staging_alloc_create_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
+      staging_alloc_create_info.flags = vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+        | vk_mem::AllocationCreateFlags::MAPPED;
+      let (staging_buf, staging_alloc, staging_alloc_info) = unsafe {
+        allocator.create_buffer_get_info(&staging_buf_create_info, &staging_alloc_create_info)
+      }?;
+      let staging_janitor = AllocJanitor {
+        buffer: staging_buf,
+        alloc: staging_alloc,
+        allocator,
+      };
+
+      // copy everything to staging and issue a host->transfer barrier
+      unsafe {
+        allocator.copy_memory_to_allocation(&staging_alloc, bytemuck::bytes_of(&emitter), 0)
+      }?;
+      let transfer_barrier = vk::BufferMemoryBarrier2::default()
+        // the host side ...
+        .src_stage_mask(vk::PipelineStageFlags2::HOST)
+        // ... should have finished its memory write transactions from cache -> system RAM
+        .src_access_mask(vk::AccessFlags2::HOST_WRITE)
+        // before gpu transfer operations ...
+        .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+        // ... reads ...
+        .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+        // ... from this very buffer
+        .buffer(staging_buf)
+        .offset(0)
+        .size(vk::WHOLE_SIZE)
+        // without queue ownership transfer
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED);
+      let dep_info = vk::DependencyInfo::default()
+        .buffer_memory_barriers(core::slice::from_ref(&transfer_barrier));
+      unsafe { self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info) };
+
+      // now issue the copy operation
+      let copy_region = vk::BufferCopy::default().size(core::mem::size_of_val(&emitter) as _);
+      unsafe {
+        self.device.cmd_copy_buffer(
+          cmd,
+          staging_buf,
+          gpu_buffer,
+          core::slice::from_ref(&copy_region),
+        );
+      };
+
+      // issue transfer->compute barrier
+      let compute_barrier = vk::BufferMemoryBarrier2::default()
+        // transfer operation ...
+        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+        // ... should have finished writing
+        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        // before gpu compute shader ...
+        .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+        // ... accesses by read ...
+        .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_READ)
+        // ... this buffer
+        .buffer(gpu_buffer)
+        .offset(0)
+        .size(vk::WHOLE_SIZE)
+        // .. without queue ownership transfer
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED);
+      let dep_info = vk::DependencyInfo::default()
+        .buffer_memory_barriers(core::slice::from_ref(&compute_barrier));
+      unsafe { self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info) };
+
+      // defuse cleaner for staging alloc and discard it for next timeline
+      core::mem::forget(staging_janitor);
+      self.kernels.discard_pool.discard_buffer(
+        allocator.internal,
+        staging_buf,
+        staging_alloc,
+        discard_timeline,
+      );
+    }
+
+    // defuse the cleaner for our allocation
+    core::mem::forget(gpu_janitor);
+
+    // discard gpu emitter allocator for next timeline
+    self.kernels.discard_pool.discard_buffer(
+      allocator.internal,
+      gpu_buffer,
+      gpu_alloc,
+      discard_timeline,
+    );
+
+    Ok((gpu_buffer, gpu_alloc, gpu_buffer_address))
   }
 
   /// 2
@@ -11058,17 +11307,6 @@ mod particles {
       transfer_queue: Queue,
       num_chunks: usize,
     ) -> GpuResult<BufferAlloc> {
-      struct AllocJanitor {
-        buffer: vk::Buffer,
-        alloc: vk_mem::Allocation,
-        allocator: vk_mem::AllocatorView,
-      }
-      impl Drop for AllocJanitor {
-        fn drop(&mut self) {
-          unsafe { self.allocator.destroy_buffer(self.buffer, &mut self.alloc) };
-        }
-      }
-
       // - allocate a gpu-only buffer
       let buffer_size = (num_chunks * 4) + 4;
       let gpu_b = {
@@ -11190,24 +11428,20 @@ mod particles {
   }
 
   pub enum PushConstantMutUnion<'a> {
-    ApplyEmittersDirectNewPushConstants(
+    ApplyEmittersDirectNew(
       &'a mut gpu::compute_push_constants::ApplyEmittersDirectNewPushConstants,
     ),
-    IntegrateParticlesP1P2NewPushConstants(
+    IntegrateParticlesP1P2New(
       &'a mut gpu::compute_push_constants::IntegrateParticlesP1P2NewPushConstants,
     ),
-    IntegrateParticlesP45NewPushConstants(
+    IntegrateParticlesP45New(
       &'a mut gpu::compute_push_constants::IntegrateParticlesP45NewPushConstants,
     ),
-    NewParticlesCompactResetPushConstants(
+    NewParticlesCompactReset(
       &'a mut gpu::compute_push_constants::NewParticlesCompactResetPushConstants,
     ),
-    NewParticlesEmitPushConstants(
-      &'a mut gpu::compute_push_constants::NewParticlesEmitPushConstants,
-    ),
-    NewParticlesCompactPushConstants(
-      &'a mut gpu::compute_push_constants::NewParticlesCompactPushConstants,
-    ),
+    NewParticlesEmit(&'a mut gpu::compute_push_constants::NewParticlesEmitPushConstants),
+    NewParticlesCompact(&'a mut gpu::compute_push_constants::NewParticlesCompactPushConstants),
   }
 }
 
@@ -11266,6 +11500,18 @@ impl<'a> Drop for TransientCleanup<'a> {
     if let Some(mut res) = self.resources.take() {
       res.cleanup(&self.device);
     }
+  }
+}
+
+struct AllocJanitor {
+  buffer: vk::Buffer,
+  alloc: vk_mem::Allocation,
+  allocator: vk_mem::AllocatorView,
+}
+
+impl Drop for AllocJanitor {
+  fn drop(&mut self) {
+    unsafe { self.allocator.destroy_buffer(self.buffer, &mut self.alloc) };
   }
 }
 

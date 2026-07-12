@@ -24,6 +24,7 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<INativeBufferPoolService, NativeBufferPoolService>();
     collection.AddSingleton<SceneStateManager>();
     collection.AddSingleton<INativeRuntimeService, NativeRuntimeService>();
+    // TODO see if we can remove this
     collection.AddSingleton<NativeRuntimeService>(sp =>
       (NativeRuntimeService)sp.GetRequiredService<INativeRuntimeService>()
     );

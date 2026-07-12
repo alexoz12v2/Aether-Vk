@@ -36,6 +36,7 @@ layout(push_constant, std430) uniform PushConstants {
     ParticlePageTable particlePageTable;
     ParticleFreeChunkStack freeList;
     uint doomsday;
+    uint now;
     uint maxChunks; // The capacity of the first half (e.g., 512). Marks the start of scratch space.
 } pc;
 
@@ -56,11 +57,12 @@ void main() {
 
     for (uint i = gl_LocalInvocationIndex; i < PCHUNK_VEC4_SIZE; i += gl_WorkGroupSize.x) {
         uvec4 st = pc.globalParticleBufferAddress.chunks[chunkIndex].spawnTime[i];
+        uvec4 livedFor = uvec4(pc.now) - st;
         bvec4 isDead = bvec4(
-            st.x == 0xFFFFFFFF || st.x >= pc.doomsday,
-            st.y == 0xFFFFFFFF || st.y >= pc.doomsday,
-            st.z == 0xFFFFFFFF || st.z >= pc.doomsday,
-            st.w == 0xFFFFFFFF || st.w >= pc.doomsday
+            st.x == 0xFFFFFFFF || livedFor.x >= pc.doomsday,
+            st.y == 0xFFFFFFFF || livedFor.y >= pc.doomsday,
+            st.z == 0xFFFFFFFF || livedFor.z >= pc.doomsday,
+            st.w == 0xFFFFFFFF || livedFor.w >= pc.doomsday
         );
         // write back dead particles spawn time
         if (any(isDead)) {

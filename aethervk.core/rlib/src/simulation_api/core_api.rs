@@ -1,8 +1,8 @@
 //! core_api module.
 
 use crate::{
-  expect_scene, gpu,
-  gpu::{PresentationEngineHandle, WeakRenderFrontendExt},
+  expect_scene,
+  gpu::{self, ASSET_DIR, PresentationEngineHandle, WeakRenderFrontendExt},
   scene::{CameraComponent, TransformComponent},
   simulation::texture_cache::TextureCache,
   simulation_api::{
@@ -14,24 +14,14 @@ use crate::{
   },
   types::{EngineError, EngineResult, GpuError},
 };
-use aethervk_oshal_rlib as oshal;
+use aethervk_oshal_rlib::{self as oshal, os, os::files::MappedFile};
 use alloc::{boxed::Box, string::ToString, sync::Arc};
 use core::ptr::addr_of_mut;
-use oshal::{
-  os,
-  os::time::{timeus_milliseconds, timeus_t},
-};
 use parking_lot::RwLock;
-// TODO add scene validate
 
 impl SimulationContext {
-  // TODO adjust
   const NUM_WORKERS: usize = 8;
-  const INITIAL_MAXIMUM_DELTA_TIME: timeus_t = timeus_milliseconds(16);
-  const INITIAL_FIXED_DELTA_TIME: timeus_t = timeus_milliseconds(16);
-  const INITIAL_TIME_SCALE: f32 = 1.0;
 
-  /// TODO: Document this item
   pub fn startup(
     backend: gpu::RenderBackendId,
     error_debug_callback: Option<fn(&str)>,
@@ -50,7 +40,7 @@ impl SimulationContext {
 
       // 3. initialize threads
       let render_thread_thread_pool =
-        Arc::new(os::pool::ThreadPool::new(Self::NUM_WORKERS).map_err(|e| EngineError::from(e))?);
+        Arc::new(os::pool::ThreadPool::new(Self::NUM_WORKERS).map_err(EngineError::from)?);
       let logic_thread_thread_pool = Arc::clone(&render_thread_thread_pool);
 
       let logic_state = Arc::new(RwLock::new(LogicState::default()));
@@ -62,19 +52,23 @@ impl SimulationContext {
       let mut mixer = crate::audio::AudioMixer::new(44100);
 
       // Pre-load UI sound assets into the lock-free mixer buffers
-      let click = crate::audio::SoundBuffer::from_wav_bytes(include_bytes!(
-        "../../../../assets/sounds/ui_click.wav"
-      ));
+      let asset_dir: alloc::string::String = ASSET_DIR.read().clone().unwrap();
+      let click = crate::audio::SoundBuffer::from_wav_mapped(
+        &MappedFile::new(asset_dir.clone() + "/sounds/ui_click.wav")
+          .map_err(|e| EngineError::Io(crate::types::IoError::FileIO(e)))?,
+      );
       mixer.load_buffer(click); // AvkSoundEvent::Click == 0
 
-      let grab = crate::audio::SoundBuffer::from_wav_bytes(include_bytes!(
-        "../../../../assets/sounds/ui_grab.wav"
-      ));
+      let grab = crate::audio::SoundBuffer::from_wav_mapped(
+        &MappedFile::new(asset_dir.clone() + "/sounds/ui_grab.wav")
+          .map_err(|e| EngineError::Io(crate::types::IoError::FileIO(e)))?,
+      );
       mixer.load_buffer(grab); // AvkSoundEvent::UiGrab == 1
 
-      let drop = crate::audio::SoundBuffer::from_wav_bytes(include_bytes!(
-        "../../../../assets/sounds/ui_drop.wav"
-      ));
+      let drop = crate::audio::SoundBuffer::from_wav_mapped(
+        &MappedFile::new(asset_dir + "/sounds/ui_drop.wav")
+          .map_err(|e| EngineError::Io(crate::types::IoError::FileIO(e)))?,
+      );
       mixer.load_buffer(drop); // AvkSoundEvent::UiDrop == 2
 
       let audio_mixer = Arc::new(RwLock::new(mixer));

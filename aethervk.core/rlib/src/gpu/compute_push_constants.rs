@@ -111,8 +111,6 @@ pub struct P3_4PushConstants {
   pub _pad: u32,
 }
 
-
-
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct EntityGpu {
@@ -149,13 +147,6 @@ pub struct BoundingBox {
   pub max_bound: [f32; 3],
 }
 
-
-
-
-
-
-
-
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct NarrowPhaseParticlesPushConstants {
@@ -180,8 +171,6 @@ pub struct NarrowPhaseRigidBodyPushConstants {
   pub particle_radius: f32,
 }
 
-
-
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LbvhBuildBottomUpPushConstants {
@@ -195,12 +184,6 @@ pub struct LbvhBuildBottomUpPushConstants {
   pub _pad: u32,
 }
 
-
-
-
-
-
-
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ApplyImpulsesPushConstants {
@@ -212,8 +195,6 @@ pub struct ApplyImpulsesPushConstants {
   pub num_rigid_bodies: u32,
   pub _pad: u32,
 }
-
-
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -339,7 +320,8 @@ mod tests {
     );
     panic!("Show me the sizes");
   }
-}/// `narrow_ccd.comp` push constants — **56 bytes** (matches SPIR-V layout exactly).
+}
+/// `narrow_ccd.comp` push constants — **56 bytes** (matches SPIR-V layout exactly).
 ///
 /// GLSL offsets (std430):
 /// ```text
@@ -437,7 +419,6 @@ pub struct LbvhCollapsePushConstants {
   pub _pad: u32,
 }
 
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 /// Push constants for `ccd.comp`
@@ -447,7 +428,6 @@ pub struct CcdPushConstants {
   pub root_index: u32,
   pub total_particles: u32,
 }
-
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -781,8 +761,8 @@ pub struct ApplyEmittersDirectPushConstants {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct AccumBvhForcesPushConstants {
-  pub particles: u64,      // ParticleData BDA
-  pub bvh: u64,            // MultiBvhBuffer BDA
+  pub particles: u64, // ParticleData BDA
+  pub bvh: u64,       // MultiBvhBuffer BDA
   pub total_particles: u32,
   pub _pad: [u32; 3],
 }
@@ -802,18 +782,17 @@ pub struct RadixSortPushConstants {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MortonEncodePushConstants {
-  pub morton_out: u64,       // offset 0,  8 bytes
-  pub particles: u64,        // offset 8,  8 bytes
-  pub num_particles: u32,    // offset 16, 4 bytes
-  pub _pad0: [u32; 3],       // offset 20, 12 bytes → scene_min at offset 32
-  pub scene_min: [f32; 3],   // offset 32, 12 bytes
-  pub _pad1: u32,            // offset 44, 4 bytes  → scene_max at offset 48
-  pub scene_max: [f32; 3],   // offset 48, 12 bytes
-  pub _pad2: u32,            // offset 60, 4 bytes  → total = 64 bytes
+  pub morton_out: u64,     // offset 0,  8 bytes
+  pub particles: u64,      // offset 8,  8 bytes
+  pub num_particles: u32,  // offset 16, 4 bytes
+  pub _pad0: [u32; 3],     // offset 20, 12 bytes → scene_min at offset 32
+  pub scene_min: [f32; 3], // offset 32, 12 bytes
+  pub _pad1: u32,          // offset 44, 4 bytes  → scene_max at offset 48
+  pub scene_max: [f32; 3], // offset 48, 12 bytes
+  pub _pad2: u32,          // offset 60, 4 bytes  → total = 64 bytes
 }
 
-const _ASSERT_MORTON_PC_SIZE: () =
-  assert!(core::mem::size_of::<MortonEncodePushConstants>() == 64);
+const _ASSERT_MORTON_PC_SIZE: () = assert!(core::mem::size_of::<MortonEncodePushConstants>() == 64);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -841,7 +820,6 @@ pub struct EmitParticlesPushConstants {
   pub sun_pos: [f32; 3],
   pub _pad1: u32,
 }
-
 
 /// Push constants for shader `apply_emitters_direct_new.comp`
 #[repr(C)]
@@ -910,6 +888,8 @@ pub struct NewParticlesCompactPushConstants {
   pub global_particle_buffer_address: u64,
   pub particle_page_table: u64,
   pub free_list: u64,
-  pub doomsday: u32, // 1/300 s. Scaled or Unscaled? same as current_time in emission
+  pub doomsday: u32, // 1/300 s. Scaled
+  pub now: u32,      // 1/300 s. Scaled
   pub max_chunks: u32,
+  pub _pad: u32,
 }
