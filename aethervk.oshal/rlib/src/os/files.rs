@@ -390,5 +390,3 @@ impl Drop for Mmap {
     }
   }
 }
-
-// TODO add tests for Mmap

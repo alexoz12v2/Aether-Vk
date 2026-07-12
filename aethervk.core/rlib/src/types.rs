@@ -105,7 +105,7 @@ pub enum IoError {
   #[error("IO Error {0:?}")]
   FileIO(FsError),
   #[error("IO Error (Specific): {0}")]
-  Specific(&'static str),
+  Specific(alloc::string::String),
 }
 
 impl From<FsError> for IoError {

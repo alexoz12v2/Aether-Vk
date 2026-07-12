@@ -606,3 +606,4 @@ where
 pub mod ext;
 pub mod mat3;
 pub mod mat4;
+pub mod mat4f64;

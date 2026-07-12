@@ -18,6 +18,8 @@ pub struct Vec3f64 {
   data: [f64; 4],
 }
 
+pub type DVec3 = Vec3f64;
+
 impl Default for Vec3f64 {
   fn default() -> Self {
     Self::zero()
@@ -56,6 +58,13 @@ impl Vec3f64 {
 impl From<[f64; 3]> for Vec3f64 {
   fn from(value: [f64; 3]) -> Self {
     Self::from_array(value)
+  }
+}
+
+impl From<[f32; 3]> for Vec3f64 {
+  fn from(value: [f32; 3]) -> Self {
+    let val_f64 = [value[0] as f64, value[1] as f64, value[2] as f64];
+    Self::from_array(val_f64)
   }
 }
 

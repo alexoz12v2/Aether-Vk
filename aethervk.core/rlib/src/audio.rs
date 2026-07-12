@@ -1,19 +1,6 @@
+use aethervk_oshal_rlib::os::files::MappedFile;
 use alloc::{boxed::Box, vec::Vec};
-use core::cmp::min;
-
-extern crate symphonia_codec_pcm;
-extern crate symphonia_core;
-extern crate symphonia_format_wav;
-
-use symphonia_codec_pcm::PcmDecoder;
-use symphonia_core::{
-  audio::{AudioBufferRef, Signal},
-  codecs::{CODEC_TYPE_PCM_S16LE, Decoder, DecoderOptions},
-  formats::{FormatOptions, FormatReader},
-  io::{MediaSourceStream, ReadOnlySource},
-  probe::Hint,
-};
-use symphonia_format_wav::WavReader;
+use pure_wav::{Parser, ProcessDataOutput};
 
 pub enum AvkSoundEvent {
   UiClick = 0,
@@ -44,53 +31,100 @@ pub struct SoundBuffer {
 
 impl SoundBuffer {
   /// Decode a WAV file from memory using Symphonia in `no_std`
-  pub fn from_wav_bytes(bytes: &'static [u8]) -> Self {
-    let source = Box::new(ReadOnlySource::new(bytes));
-    let mss = MediaSourceStream::new(source, Default::default());
-    let mut reader = WavReader::try_new(mss, &FormatOptions::default()).unwrap();
-    let track = reader.default_track().unwrap().clone();
+  pub fn from_wav_mapped(mmap: &MappedFile) -> Self {
+    let bytes = mmap.as_slice();
+    let mut parser = Parser::default();
 
-    let mut decoder = PcmDecoder::try_new(&track.codec_params, &DecoderOptions::default()).unwrap();
+    // 1. Run the state machine to parse the RIFF and find the data chunk
+    let meta = loop {
+      let instruction = parser.read_instruction();
+      let pos = instruction.position as usize;
+      let len = instruction.len as usize;
+
+      // Validate bounds to prevent slicing panics on malformed files
+      if pos + len > bytes.len() {
+        panic!("WAV file is truncated or invalid");
+      }
+
+      let chunk = &bytes[pos..pos + len];
+
+      match parser.process_data(chunk).expect("Failed to parse WAV chunk") {
+        ProcessDataOutput::Done(meta_data) => break meta_data,
+        ProcessDataOutput::InProgress(next_parser) => parser = next_parser,
+      }
+    };
+
+    // 2. Extract values (using .get() to convert zerocopy wrappers to native primitives)
+    let format_tag = meta.fmt.format_tag.get();
+    let channels = meta.fmt.n_channels.get() as usize;
+    let sample_rate = meta.fmt.n_samples_per_sec.get();
+    let bits_per_sample = meta.fmt.w_bits_per_sample.get();
+
+    let data_pos = meta.data_position as usize;
+    let data_len = meta.data_len as usize;
+
+    if data_pos + data_len > bytes.len() {
+      panic!("WAV data chunk exceeds file length");
+    }
+
+    // 3. Extract the exact byte slice containing just the PCM audio data
+    let pcm_bytes = &bytes[data_pos..data_pos + data_len];
 
     let mut samples_left = Vec::new();
     let mut samples_right = Vec::new();
 
-    while let Ok(packet) = reader.next_packet() {
-      if let Ok(decoded) = decoder.decode(&packet) {
-        match decoded {
-          AudioBufferRef::S16(buf) => {
-            let chan_l = buf.chan(0);
-            let chan_r = if buf.spec().channels.count() > 1 {
-              buf.chan(1)
-            } else {
-              chan_l
-            };
+    let bytes_per_sample = meta.fmt.w_bits_per_sample.get() as usize / 8;
+    let frame_size = bytes_per_sample * meta.fmt.n_channels.get() as usize;
 
-            for (&l, &r) in chan_l.iter().zip(chan_r.iter()) {
-              samples_left.push(l as f32 / 32768.0);
-              samples_right.push(r as f32 / 32768.0);
-            }
-          }
-          AudioBufferRef::F32(buf) => {
-            let chan_l = buf.chan(0);
-            let chan_r = if buf.spec().channels.count() > 1 {
-              buf.chan(1)
-            } else {
-              chan_l
-            };
+    // Note: Check the exact field name in the crate you end up using.
+    // It is typically called `audio_format`, `format_tag`, or `audio_format_code`.
+    match (meta.fmt.format_tag.get(), meta.fmt.w_bits_per_sample.get()) {
+      (1, 16) => {
+        // Format 1: Integer PCM (16-bit)
+        for frame in pcm_bytes.chunks_exact(frame_size) {
+          let left_val = i16::from_le_bytes([frame[0], frame[1]]);
+          samples_left.push(left_val as f32 / 32768.0);
 
-            samples_left.extend_from_slice(chan_l);
-            samples_right.extend_from_slice(chan_r);
+          if meta.fmt.n_channels > 1 {
+            let right_val = i16::from_le_bytes([frame[2], frame[3]]);
+            samples_right.push(right_val as f32 / 32768.0);
+          } else {
+            samples_right.push(left_val as f32 / 32768.0);
           }
-          _ => {} // Other formats not supported for this simple UI audio
         }
+      }
+      (3, 32) => {
+        // Format 3: IEEE Float (32-bit)
+        for frame in pcm_bytes.chunks_exact(frame_size) {
+          let left_val = f32::from_le_bytes([frame[0], frame[1], frame[2], frame[3]]);
+          samples_left.push(left_val); // Already scaled -1.0 to 1.0
+
+          if meta.fmt.n_channels > 1 {
+            let right_val = f32::from_le_bytes([frame[4], frame[5], frame[6], frame[7]]);
+            samples_right.push(right_val);
+          } else {
+            samples_right.push(left_val);
+          }
+        }
+      }
+      (1, 32) => {
+        panic!(
+          "Found 32-bit Integer PCM (Format 1). This is currently unsupported. Only 32-bit Float (Format 3) is supported."
+        );
+      }
+      (format_code, bits) => {
+        panic!(
+          "Unsupported WAV format: format code {} with {} bits per sample. \
+                     Only 16-bit PCM (code 1) and 32-bit Float (code 3) are supported.",
+          format_code, bits
+        );
       }
     }
 
     Self {
       samples_left,
       samples_right,
-      sample_rate: track.codec_params.sample_rate.unwrap_or(44100),
+      sample_rate: meta.fmt.n_samples_per_sec.get() as _,
     }
   }
 }

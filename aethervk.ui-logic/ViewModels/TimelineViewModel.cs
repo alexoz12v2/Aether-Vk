@@ -37,6 +37,12 @@ public partial class TimelineViewModel
   [ObservableProperty]
   private ulong _currentSceneId;
 
+  // TODO: new values
+  // - 1 h/s
+  // - 3 h/s
+  // - 6 h/s
+  // - 12 h/s
+  // - 1 day/s
   public ObservableCollection<TimeScaleOption> TimeScaleOptions { get; } =
     new()
     {
@@ -329,6 +335,7 @@ public partial class TimelineViewModel
         return;
       }
 
+      // TODO rewrite with new particle system (Impl switch?)
       bool hasFullyConfiguredJet = false;
       var comet = _runtimeService.GetEntityById(CurrentSceneId, state.CometEntityId.Value);
       if (comet != null)
@@ -366,6 +373,7 @@ public partial class TimelineViewModel
         ResetSimulationCommand.NotifyCanExecuteChanged();
       }
       Timeline.IsPlaying = true;
+      // TODO redesign with new time system
       _runtimeService.SetTimeScale(CurrentSceneId, Timeline.SelectedTimeScale?.Value ?? 1);
       _runtimeService.PlayScene(CurrentSceneId);
     }

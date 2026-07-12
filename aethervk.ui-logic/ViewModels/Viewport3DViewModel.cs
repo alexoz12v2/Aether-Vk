@@ -300,7 +300,7 @@ public partial class Viewport3DViewModel
       case "snapobserver":
         SnapObserverCommand.Execute(null);
         break;
-      // null or unrecognized: just close, no action
+        // null or unrecognized: just close, no action
     }
   }
 
@@ -637,6 +637,7 @@ public partial class Viewport3DViewModel
     );
   }
 
+  // TODO cleanup.
   public Viewport3DViewModel(
     NativeRuntimeService runtimeService,
     BreadcrumbService breadcrumbService,
@@ -1043,6 +1044,7 @@ public partial class Viewport3DViewModel
     }
   }
 
+  // TODO remove never run
   [CommunityToolkit.Mvvm.Input.RelayCommand]
   private async Task InitializeSceneAsync()
   {
