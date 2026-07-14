@@ -10,14 +10,17 @@ use crate::{
   scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent},
   types::{GpuError, GpuResult},
 };
-use aethervk_oshal_rlib::math::{
-  matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
-  quaternion::Quaternion,
-  vector::{
-    Vector3, Vector4,
-    vec3::Vec3f32,
-    vec4::{Quat, Vec4f32},
+use aethervk_oshal_rlib::{
+  math::{
+    matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
+    quaternion::Quaternion,
+    vector::{
+      Vector3, Vector4,
+      vec3::Vec3f32,
+      vec4::{Quat, Vec4f32},
+    },
   },
+  os::time::timeus_t,
 };
 use alloc::vec::Vec;
 use function_name::named;
@@ -913,7 +916,8 @@ impl RenderLayer {
 
 /// TODO: Document this item
 pub struct RenderScene {
-  pub time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
+  pub unscaled_time_us: timeus_t,
+  pub unscaled_time_delta_us: timeus_t,
   pub camera_data: CameraRenderData,
   pub window_extent: [u32; 2],
 
@@ -930,12 +934,14 @@ impl RenderScene {
   /// TODO: Document this item
   pub fn new(
     camera: (TransformComponent, CameraComponent),
-    time_readings: aethervk_oshal_rlib::os::time::TimeReadings,
+    unscaled_time_us: timeus_t,
+    unscaled_time_delta_us: timeus_t,
     window_extent: [u32; 2],
   ) -> Self {
     Self {
       window_extent,
-      time_readings,
+      unscaled_time_us,
+      unscaled_time_delta_us,
       depth_layers: Vec::with_capacity(Self::START_VEC_CAPACITY),
       text_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       camera_data: CameraRenderData::new(&camera.0, &camera.1, 1.0, window_extent),
@@ -1873,7 +1879,15 @@ fn draw_layer_content(
 
   if !layer.particle2_calls.is_empty() {
     device.prepare_particle2_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
-    let time = (render_scene.time_readings.time as f64 / 1_000_000.0) as f32;
+    let time = {
+      let engine_uptime_secs_f64 = render_scene.unscaled_time_us as f64 / 1_000_000.0;
+
+      // Wrap the time every 1 hour (3600 seconds) to prevent float precision loss in the shader
+      let wrapped_time_f64 = engine_uptime_secs_f64 % 3600.0;
+
+      // Now it is safe to cast to f32, because it will never exceed 3600.0
+      wrapped_time_f64 as f32
+    };
     let particle_camera = {
       let mut c = layer_camera.clone();
       c.absolute_pos = layer.camera_frame_local_pos;

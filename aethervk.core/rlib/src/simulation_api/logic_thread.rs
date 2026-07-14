@@ -31,6 +31,89 @@ use alloc::{boxed::Box, string::ToString};
 use parking_lot::RwLockReadGuard;
 use thingbuf::mpsc;
 
+pub fn is_logic_command_async(cmd: &LogicCommand) -> bool {
+  match cmd {
+    LogicCommand::ImportModel { .. }
+    | LogicCommand::LoadAlmanac { .. }
+    | LogicCommand::UnloadAlmanac { .. }
+    | LogicCommand::LoadCometSpk { .. }
+    | LogicCommand::SpawnModelInstance { .. }
+    | LogicCommand::RaycastNdc { .. }
+    | LogicCommand::UpdateTrajectoryForSpk { .. }
+    | LogicCommand::Raycast { .. } => true,
+    _ => false,
+  }
+}
+
+/// SAFETY: should be called from an async arm with a non zero task id. Debug will crash it
+unsafe fn logic_command_async_get_task_id(cmd: &LogicCommand) -> u64 {
+  debug_assert!(is_logic_command_async(cmd));
+  match cmd {
+    LogicCommand::ImportModel { task_id, .. }
+    | LogicCommand::LoadAlmanac { task_id, .. }
+    | LogicCommand::UnloadAlmanac { task_id, .. }
+    | LogicCommand::LoadCometSpk { task_id, .. }
+    | LogicCommand::SpawnModelInstance { task_id, .. }
+    | LogicCommand::RaycastNdc { task_id, .. }
+    | LogicCommand::UpdateTrajectoryForSpk { task_id, .. }
+    | LogicCommand::Raycast { task_id, .. } => {
+      debug_assert_ne!(*task_id, 0);
+      *task_id
+    }
+    _ => panic!("unreachable"),
+  }
+}
+
+fn logic_command_desc(cmd: &LogicCommand) -> alloc::string::String {
+  match cmd {
+    LogicCommand::Shutdown => "Shutdown".to_string(),
+
+    // Camera Commands
+    LogicCommand::RotateCamera { .. } => "Rotate Camera".to_string(),
+    LogicCommand::ZoomCamera { .. } => "Zoom Camera".to_string(),
+    LogicCommand::ResetCamera { .. } => "Reset Camera".to_string(),
+    LogicCommand::PanCamera { .. } => "Pan Camera".to_string(),
+
+    // Cursor Commands
+    LogicCommand::MoveCursor { .. } => "Move Cursor".to_string(),
+
+    // Entity Commands
+    LogicCommand::SnapToEntity { .. } => "Snap to Entity".to_string(),
+    LogicCommand::FollowEntity { .. } => "Follow Entity".to_string(),
+    LogicCommand::UnfollowEntity { .. } => "Unfollow Entity".to_string(),
+    LogicCommand::SetEntityVisibility {
+      entity, visible, ..
+    } => {
+      alloc::format!("Set visibility for entity {} to {}", entity, visible)
+    }
+
+    // Scene Playback Commands
+    LogicCommand::PlaySceneToEnd { .. } => "Play Scene to End".to_string(),
+    LogicCommand::PauseScene { .. } => "Pause Scene".to_string(),
+    LogicCommand::PlayScene { .. } => "Play Scene".to_string(),
+    LogicCommand::SnapshotScene { .. } => "Snapshot Scene".to_string(),
+    LogicCommand::RestoreSnapshot { .. } => "Restore Snapshot".to_string(),
+
+    // Data/Asset Commands
+    LogicCommand::ImportModel { path, .. } => alloc::format!("Import model {}", path),
+    LogicCommand::LoadAlmanac { path, .. } => alloc::format!("Load almanac {}", path),
+    LogicCommand::UnloadAlmanac { path, .. } => alloc::format!("Unload almanac {}", path),
+    LogicCommand::LoadCometSpk { spk_id, epoch, .. } => alloc::format!(
+      "Load Ephemeris data for SPK ID: {} at epoch {}",
+      spk_id,
+      epoch
+    ),
+    LogicCommand::SpawnModelInstance { name, .. } => alloc::format!("Spawn instance {}", name),
+
+    // Raycasting & Trajectory
+    LogicCommand::RaycastNdc { .. } => "Raycast NDC".to_string(),
+    LogicCommand::Raycast { .. } => "Raycast".to_string(),
+    LogicCommand::UpdateTrajectoryForSpk { spk_id, .. } => {
+      alloc::format!("Update trajectory for SPK {}", spk_id)
+    }
+  }
+}
+
 /// Drains all immediately-available [`LogicCommand`]s from `rx` and executes
 /// the fast-path synchronous ones on the calling thread.
 ///
@@ -52,56 +135,19 @@ fn drain_logic_commands(
         if let LogicCommand::Shutdown = cmd {
           return true;
         }
-        match cmd {
-          LogicCommand::ImportModel { .. }
-          | LogicCommand::LoadAlmanac { .. }
-          | LogicCommand::UnloadAlmanac { .. }
-          | LogicCommand::LoadCometSpk { .. }
-          | LogicCommand::SpawnModelInstance { .. }
-          | LogicCommand::RaycastNdc { .. }
-          | LogicCommand::UpdateTrajectoryForSpk { .. }
-          | LogicCommand::Raycast { .. } => {
-            let workload = Box::new(LogicWorkload {
-              cmd,
-              ctx: ctx.clone(),
-            });
-            let _ = ctx.thread_pool.scatter(alloc::vec![workload]);
-          }
-          _ => {
-            let task_id = match &cmd {
-              LogicCommand::Custom { task_id, .. } => Some(*task_id),
-              _ => None,
-            };
-            let cmd_desc = match &cmd {
-              LogicCommand::RaycastNdc { .. } => "Raycast NDC",
-              LogicCommand::Raycast { .. } => "Raycast",
-              LogicCommand::RotateCamera { .. } => "Rotate Camera",
-              LogicCommand::ZoomCamera { .. } => "Zoom Camera",
-              LogicCommand::PlayScene { .. } => "Play Scene",
-              LogicCommand::PauseScene { .. } => "Pause Scene",
-              LogicCommand::StepScene { .. } => "Step Scene",
-              LogicCommand::SetSceneTimeScale { .. } => "Set Time Scale",
-              LogicCommand::SeekEpoch { .. } => "Seek Epoch",
-              _ => "Logic Task",
-            };
-            let res = process_command_internal(cmd, ctx);
-            if let Some(tid) = task_id
-              && tid != 0
-            {
-              let mut manager = ctx.task_manager.write();
-              match res {
-                Ok(result) => {
-                  manager.success_task(tid, result);
-                }
-                Err(e) => {
-                  manager.fail_task(tid, e.to_string());
-                  crate::simulation_api::emit_breadcrumb(
-                    3,
-                    &alloc::format!("Failed: {} - {}", cmd_desc, e),
-                  );
-                }
-              }
-            }
+        if is_logic_command_async(&cmd) {
+          let workload = Box::new(LogicWorkload {
+            cmd,
+            ctx: ctx.clone(),
+          });
+          let _ = ctx.thread_pool.scatter(alloc::vec![workload]);
+        } else {
+          let cmd_desc = logic_command_desc(&cmd);
+          if let Err(e) = process_command_internal(cmd, ctx) {
+            crate::simulation_api::emit_breadcrumb(
+              3,
+              &alloc::format!("Failed: {} - {}", cmd_desc, e),
+            );
           }
         }
       }
@@ -135,7 +181,10 @@ pub fn start_logic_thread(
   context: alloc::sync::Arc<LogicThreadContext>,
 ) -> EngineResult<Thread> {
   thread::spawn(move || {
-    oshal::os::debug::fpe::unmask_fpu_for_current_thread();
+    #[cfg(debug_assertions)]
+    {
+      oshal::os::debug::fpe::unmask_fpu_for_current_thread();
+    }
     let target_frame_time = oshal::os::time::timeus_milliseconds(16); // ~60 FPS
     let mut play_controls: hashbrown::HashMap<u64, PlayControl> = hashbrown::HashMap::new();
 
@@ -451,115 +500,27 @@ pub fn start_logic_thread(
       }
     }
   })
-  .map_err(|err| <ThreadingError as Into<NativeError>>::into(err))
-  .map_err(|err| <NativeError as Into<EngineError>>::into(err))
+  .map_err(<ThreadingError as Into<NativeError>>::into)
+  .map_err(<NativeError as Into<EngineError>>::into)
 }
 
 impl oshal::os::pool::Workload for LogicWorkload {
   fn execute(&mut self) -> WorkloadStatus {
-    let task_id = match &self.cmd {
-      LogicCommand::ImportModel { task_id, .. } => {
-        if *task_id == 0 {
-          None
-        } else {
-          Some(*task_id)
-        }
-      }
-      LogicCommand::LoadAlmanac { task_id, .. } => {
-        if *task_id == 0 {
-          None
-        } else {
-          Some(*task_id)
-        }
-      }
-      LogicCommand::UnloadAlmanac { task_id, .. } => {
-        if *task_id == 0 {
-          None
-        } else {
-          Some(*task_id)
-        }
-      }
-      LogicCommand::LoadCometSpk { task_id, .. } => {
-        if *task_id == 0 {
-          None
-        } else {
-          Some(*task_id)
-        }
-      }
-      LogicCommand::SpawnModelInstance { task_id, .. } => {
-        if *task_id == 0 {
-          None
-        } else {
-          Some(*task_id)
-        }
-      }
-      LogicCommand::RaycastNdc { task_id, .. } => {
-        if *task_id == 0 {
-          None
-        } else {
-          Some(*task_id)
-        }
-      }
-      LogicCommand::Raycast { task_id, .. } => {
-        if *task_id == 0 {
-          None
-        } else {
-          Some(*task_id)
-        }
-      }
-      LogicCommand::UpdateTrajectoryForSpk { task_id, .. } => {
-        if *task_id == 0 {
-          None
-        } else {
-          Some(*task_id)
-        }
-      }
-
-      LogicCommand::Custom { task_id, .. } => {
-        if *task_id == 0 {
-          None
-        } else {
-          Some(*task_id)
-        }
-      }
-      _ => None,
-    };
+    // safety: checked by logic thread before scattering
+    let task_id = unsafe { logic_command_async_get_task_id(&self.cmd) };
 
     let res = process_command_internal(self.cmd.clone(), &self.ctx);
 
-    let cmd_desc = match &self.cmd {
-      LogicCommand::ImportModel { path, .. } => alloc::format!("Import model {}", path),
-      LogicCommand::LoadAlmanac { path, .. } => alloc::format!("Load almanac {}", path),
-      LogicCommand::UnloadAlmanac { path, .. } => alloc::format!("Unload almanac {}", path),
-      LogicCommand::LoadCometSpk { spk_id, epoch, .. } => alloc::format!(
-        "Load Ephemeris data for SPK ID: {} at epoch {}",
-        spk_id,
-        epoch
-      ),
-      LogicCommand::SpawnModelInstance { name, .. } => alloc::format!("Spawn instance {}", name),
-      LogicCommand::RaycastNdc { .. } => "Raycast NDC".to_string(),
-      LogicCommand::Raycast { .. } => "Raycast".to_string(),
-      LogicCommand::UpdateTrajectoryForSpk { spk_id, .. } => {
-        alloc::format!("Update trajectory for SPK {}", spk_id)
-      }
-      _ => "Logic Task".to_string(),
-    };
+    let cmd_desc = logic_command_desc(&self.cmd);
 
-    if let Some(tid) = task_id {
-      let mut manager = self.ctx.task_manager.write();
-      match res {
-        Ok(result) => {
-          manager.success_task(tid, result);
-          // Too frequent
-          // crate::simulation_api::emit_breadcrumb(1, &alloc::format!("Success: {}", cmd_desc));
-        }
-        Err(e) => {
-          manager.fail_task(tid, e.to_string());
-          crate::simulation_api::emit_breadcrumb(
-            3,
-            &alloc::format!("Failed: {} - {}", cmd_desc, e),
-          );
-        }
+    let mut manager = self.ctx.task_manager.write();
+    match res {
+      Ok(result) => {
+        manager.success_task(task_id, result);
+      }
+      Err(e) => {
+        manager.fail_task(task_id, e.to_string());
+        crate::simulation_api::emit_breadcrumb(3, &alloc::format!("Failed: {} - {}", cmd_desc, e));
       }
     }
 
@@ -567,18 +528,6 @@ impl oshal::os::pool::Workload for LogicWorkload {
   }
 }
 
-// TODO: All logic processing should be async. therefore, each command which is not Shutdown should modify the logic thread context (new members) to keep track of ongoing commands, so that when their state
-// TODO  is polled, we can answer. This means that,
-// TODO - when a scene is registered in the logic thread (new command), a *timed task* is dispatched every *requested from command* milliseconds (eg 16ms)
-// TODO - this task is basically an iteration of a game loop, with N fixed updates (depends on elapsed simulation time, see time module on oshal (Unity inspired)) and then update function
-// TODO - all camera commands should be registered under the logic scene structure, so that the update function can update the camera, cursor and everything else
-// TODO - after this task is done, its task status should be set accordingly as failure if some error was encountered in the update or ok and the task is marked as finished, such that when queried everything is fine
-// TODO - after the task is done, the C# FFI caller thread (eg view model) can start its round of queries
-// TODO    - query the number and ids of non hidden components in the scene (including camera, cursor, ...)
-// TODO    - should query only the component properties needed by the current properties editor, therefore must have support
-// TODO    - query transform, query visibility (and toggle visibility), query BVH nodes
-// TODO    - these "light" edits can be synchronous, ie processed directly in the logic thread and in the end a feedback is sent to FFI caller
-// TODO - I/O Heavy tasks should be dispatched to thread pool and feedback immediately to return task id. Then, task should be polled
 fn process_command_internal(
   command: LogicCommand,
   ctx: &alloc::sync::Arc<LogicThreadContext>,
@@ -604,6 +553,13 @@ fn process_command_internal(
       }
       Ok(SimulationTaskResult::None)
     }
+    // TODO playtoend command!
+    LogicCommand::PlaySceneToEnd { scene_id, speed } => {
+      todo!()
+    }
+
+    // TODO now this command will be fused with StopScene, therefore
+    //commenting out pieces as I see fit is perfectly fine
     LogicCommand::RestoreSnapshot { scene_id } => {
       let scenes = ctx.scenes.read();
       if let Some(scene_ctx_guard) = scenes.get(&scene_id) {
@@ -639,10 +595,10 @@ fn process_command_internal(
         }
 
         // 2. Clear accumulated integration errors and reset time
-        let mut time_state = scene_ctx.time_state.write();
-        time_state.current_epoch = time_state.epoch_start;
-        time_state.st_seconds_elapsed = 0.0;
-        time_state.time_info.write().ut_discard_accumulator();
+        // let mut time_state = scene_ctx.time_state.write();
+        // time_state.current_epoch = time_state.epoch_start;
+        // time_state.st_seconds_elapsed = 0.0;
+        // time_state.time_info.write().ut_discard_accumulator();
 
         // 3. Mark the Top-Level Acceleration Structure as dirty so it reconstructs bounding volumes
         scene_ctx
@@ -651,6 +607,7 @@ fn process_command_internal(
 
         // 4. Force rendering pipeline updates for the restored entity transforms
         let ext_ids: alloc::vec::Vec<u64> = scene_ctx.entity_map.keys().copied().collect();
+        use crate::scene::ForeignSerializable; // COMPONENT_ID
         for ext_id in ext_ids {
           scene_ctx.mark_component_changed(
             ext_id,
@@ -660,6 +617,7 @@ fn process_command_internal(
             ext_id,
             <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
           );
+          // TODO: what are those number? check C# side and implement trait here
           scene_ctx.mark_component_changed(ext_id, 100);
           scene_ctx.mark_component_changed(ext_id, 101);
           scene_ctx.mark_component_changed(ext_id, 102);
@@ -712,12 +670,12 @@ fn process_command_internal(
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::Shutdown => Ok(SimulationTaskResult::None),
-    LogicCommand::RotateCamera(crate::simulation_api::structs::RotateCamera {
+    LogicCommand::RotateCamera {
       camera_entity,
       scene,
       delta_x,
       delta_y,
-    }) => {
+    } => {
       let scene_read = scene.read();
 
       let mut cursor_pos = None;
@@ -771,11 +729,11 @@ fn process_command_internal(
       Ok(SimulationTaskResult::None)
     }
 
-    LogicCommand::ZoomCamera(crate::simulation_api::structs::ZoomCamera {
+    LogicCommand::ZoomCamera {
       camera_entity,
       scene,
       amount,
-    }) => {
+    } => {
       let scene_read = scene.read();
       let mut is_ortho = false;
       let mut focus_dist = 10.0;
@@ -864,10 +822,10 @@ fn process_command_internal(
       }
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::ResetCamera(crate::simulation_api::structs::ResetCamera {
+    LogicCommand::ResetCamera {
       camera_entity,
       scene,
-    }) => {
+    } => {
       let scene_read = scene.read();
 
       let mut cursor_pos = Vec3f32::zero();
@@ -926,12 +884,12 @@ fn process_command_internal(
       }
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::PanCamera(crate::simulation_api::structs::PanCamera {
+    LogicCommand::PanCamera {
       camera_entity,
       scene,
       delta_x,
       delta_y,
-    }) => {
+    } => {
       let scene_read = scene.read();
       use crate::scene::camera::SceneCameraExt;
       scene_read.scene.pan_camera(camera_entity, delta_x, delta_y)?;
@@ -948,13 +906,12 @@ fn process_command_internal(
       }
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::PanCursor(_) => Ok(SimulationTaskResult::None),
-    LogicCommand::MoveCursor(crate::simulation_api::structs::MoveCursor {
+    LogicCommand::MoveCursor {
       scene,
       delta_x,
       delta_y,
       delta_z,
-    }) => {
+    } => {
       let speed = 0.001;
       let scene_read = scene.read();
       scene_read
@@ -980,11 +937,12 @@ fn process_command_internal(
         ))?;
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::SnapToEntity(crate::simulation_api::structs::SnapToEntity {
+    // TODO analyse flow with pressing "F" and "0" and see if you can remove
+    LogicCommand::SnapToEntity {
       snap_entity,
       target_entity,
       scene,
-    }) => {
+    } => {
       let mut scene_write = scene.write();
       // 'F' behavior: move cursor to target entity position, then position the camera dynamically
       let target_pos = {
@@ -1114,22 +1072,19 @@ fn process_command_internal(
       }
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::FollowEntity(crate::simulation_api::structs::FollowEntity {
+    LogicCommand::FollowEntity {
       snap_entity,
       entity_id,
       scene,
       unfollow_other: _,
-    }) => {
+    } => {
       let scene_read = scene.read();
       use crate::scene::interaction::SceneInteractionExt;
       scene_read.scene.follow_entity(entity_id, None)?;
       try_snap_entity(snap_entity, entity_id, &scene_read)?;
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::UnfollowEntity(crate::simulation_api::structs::UnfollowEntity {
-      entity_id,
-      scene,
-    }) => {
+    LogicCommand::UnfollowEntity { entity_id, scene } => {
       let scene_read = scene.read();
       scene_read
         .scene
@@ -1137,187 +1092,35 @@ fn process_command_internal(
         .map_err(|e| EngineError::InvalidOperation(e))?;
       Ok(SimulationTaskResult::None)
     }
-    LogicCommand::TogglePaintMode(crate::simulation_api::structs::TogglePaintMode {
-      scene_id,
-      entity_id,
-    }) => {
-      let scenes = ctx.scenes.read();
-      if let Some(scene_ctx) = scenes.get(&scene_id) {
-        let read_ctx = scene_ctx.read();
-        let mut changed = false;
-        let _ = read_ctx.scene.with_component_mut(
-          entity_id,
-          |mesh: &mut crate::scene::PhysicalMeshComponent| {
-            mesh.paint_display_mode = (mesh.paint_display_mode + 1) % 3;
-            changed = true;
-          },
-        );
-        if changed {
-          // Tell the system the transform or something changed so it re-renders/updates
-          // But actually we just need to re-record the command buffer. Since we don't have a direct "re-record"
-          // signal, marking Transform as changed will trigger it.
-          let ext_id = read_ctx
-            .entity_map
-            .iter()
-            .find(|&(_, &v)| v == entity_id)
-            .map(|(&k, _)| k)
-            .unwrap_or(0);
-          read_ctx.mark_component_changed(
-            ext_id,
-            <crate::scene::TransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-          );
-        }
+    LogicCommand::PlayScene { scene_id, speed } => {
+      use oshal::os::time::v2::SimSpeed;
+      if speed == SimSpeed::Paused {
+        return Err(EngineError::InvalidOperation(
+          "can't PlayScene with SimSpeed::Paused",
+        ));
       }
-      Ok(SimulationTaskResult::None)
-    }
-    LogicCommand::FeedbackGetSceneTimeScale { scene_id } => {
-      let scenes = ctx.scenes.read();
-      let scene_ctx =
-        scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
-      let scale = scene_ctx.read().time_state.read().current_scale;
-      Ok(SimulationTaskResult::U64(match scale {
-        crate::simulation_api::structs::TimeScale::Stopped => 0,
-        crate::simulation_api::structs::TimeScale::OneDay => 1,
-        crate::simulation_api::structs::TimeScale::OneWeek => 2,
-        crate::simulation_api::structs::TimeScale::OneMonth => 3,
-        crate::simulation_api::structs::TimeScale::RealTime => 4,
-      }))
-    }
-    LogicCommand::FeedbackGetSceneDateTimeUTC { scene_id } => {
-      let scenes = ctx.scenes.read();
-      let scene_ctx =
-        scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
-      let _utc_str = scene_ctx.read().time_state.read().current_epoch.to_string();
-      // Return success with None, as this is currently handled by get_simulation_time_utc
-      // TODO: decide if we want to return strings as results
-      Ok(SimulationTaskResult::None)
-    }
-    LogicCommand::FeedbackGetSceneDateTimeLimitsUTC { scene_id: _ } => {
-      Ok(SimulationTaskResult::None)
-    }
 
-    LogicCommand::SetSceneTimeScale { scene_id, scale } => {
-      let scenes = ctx.scenes.read();
-      if let Some(scene_ctx) = scenes.get(&scene_id) {
-        let scene_guard = scene_ctx.read();
-        let mut time_state = scene_guard.time_state.write();
-        time_state.current_scale = scale;
-        if scale == crate::simulation_api::structs::TimeScale::Stopped {
-          time_state.is_playing = false;
-        }
-      }
-      Ok(SimulationTaskResult::None)
-    }
-    LogicCommand::SetSceneEpoch {
-      scene_id,
-      epoch_tai_seconds,
-    } => {
-      let scenes = ctx.scenes.read();
-      if let Some(scene_ctx) = scenes.get(&scene_id) {
-        scene_ctx.read().time_state.write().current_epoch =
-          anise::time::Epoch::from_tai_seconds(epoch_tai_seconds);
-      }
-      Ok(SimulationTaskResult::None)
-    }
-    LogicCommand::SetPhysicsEngineType {
-      scene_id,
-      engine_type,
-    } => {
-      let scenes = ctx.scenes.read();
-      if let Some(scene_ctx) = scenes.get(&scene_id) {
-        *scene_ctx.read().physics_engine_type.write() = engine_type;
-      }
-      Ok(SimulationTaskResult::None)
-    }
-    LogicCommand::PlayScene { scene_id } => {
+      // Note: For now assuming state checking for playing the scene is done C# side. In particular,
+      // the following conditions should hold
+      // - at least 1 particle system component fully configured
+      // - associated to a fully configured comet entity either static or with a
+      //   `SpiceKinematicComopnent
       let scenes = ctx.scenes.read();
       if let Some(scene_ctx) = scenes.get(&scene_id) {
         let scene_guard = scene_ctx.read();
         let mut ts = scene_guard.time_state.write();
-        if ts.current_scale != crate::simulation_api::structs::TimeScale::Stopped {
-          ts.is_playing = true;
-        }
+        ts.speed = speed;
+        return Ok(SimulationTaskResult::None);
       }
-      Ok(SimulationTaskResult::None)
+      Err(EngineError::InvalidOperation("can't find scene"))
     }
     LogicCommand::PauseScene { scene_id } => {
+      use oshal::os::time::v2::SimSpeed;
+
       let scenes = ctx.scenes.read();
       if let Some(scene_ctx) = scenes.get(&scene_id) {
-        scene_ctx.read().time_state.write().is_playing = false;
+        scene_ctx.read().time_state.write().speed = SimSpeed::Paused;
       }
-      Ok(SimulationTaskResult::None)
-    }
-    LogicCommand::StepScene {
-      scene_id,
-      step_days,
-    } => {
-      let scenes = ctx.scenes.read();
-      if let Some(scene_ctx) = scenes.get(&scene_id) {
-        let read_ctx = scene_ctx.read();
-        let mut time_state = read_ctx.time_state.write();
-        time_state.manual_step_requests += step_days;
-      }
-      Ok(SimulationTaskResult::None)
-    }
-    LogicCommand::SeekEpoch {
-      scene_id,
-      epoch_tai_seconds,
-    } => {
-      let new_epoch = anise::time::Epoch::from_tai_seconds(epoch_tai_seconds);
-      let fixed_dt_us;
-
-      // 1. Update epoch, reset elapsed, get fixed_dt_us, mark TLAS dirty — then release all locks
-      {
-        let scenes = ctx.scenes.read();
-        if let Some(scene_ctx) = scenes.get(&scene_id) {
-          let scene_read = scene_ctx.read();
-          {
-            let mut ts = scene_read.time_state.write();
-            ts.current_epoch = new_epoch;
-            ts.st_seconds_elapsed = 0.0;
-          }
-          fixed_dt_us = scene_read
-            .time_state
-            .read()
-            .time_info
-            .read()
-            .fixed_delta_time
-            .load(core::sync::atomic::Ordering::Relaxed);
-          scene_read
-            .is_static_tlas_dirty
-            .store(true, core::sync::atomic::Ordering::Relaxed);
-        } else {
-          return Ok(SimulationTaskResult::None);
-        }
-      }
-
-      // 2. Clear all particle systems so no ghost particles survive the timeline scrub.
-      //    We zero every particle's `active` flag and reset the ring-buffer cursors and
-      //    the fractional emit carry-over so fresh emission starts cleanly from the new epoch.
-      {
-        use crate::scene::particles::ParticleSystemComponent;
-        let scenes = ctx.scenes.read();
-        if let Some(scene_ctx) = scenes.get(&scene_id) {
-          let scene_read = scene_ctx.read();
-          scene_read.scene.query1_res_mut(|_id, psc: &mut ParticleSystemComponent| {
-            let mut particles = psc.particles.write();
-            for p in particles.iter_mut() {
-              p.active = 0;
-              p.force = [0.0, 0.0, 0.0];
-            }
-            drop(particles);
-            psc.head_index = 0;
-            psc.tail_index = 0;
-            psc.emit_remainder = 0.0;
-            psc.gpu_alive_count = 0;
-            psc.bvh = None;
-            Some(())
-          });
-        }
-      }
-
-      // 3. Recompute body positions from ephemeris at the new epoch (acquires its own scene lock)
-      let _ = dispatch_physics_step(scene_id, ctx, 0.0, new_epoch, fixed_dt_us, fixed_dt_us);
       Ok(SimulationTaskResult::None)
     }
 
@@ -1344,16 +1147,10 @@ fn process_command_internal(
       Ok(SimulationTaskResult::None)
     }
     LogicCommand::UnloadAlmanac { task_id: _, path } => {
-      // Pause all scenes to prevent physics errors during unload
-      {
-        let scenes = ctx.scenes.read();
-        for scene_ctx in scenes.values() {
-          scene_ctx.read().time_state.write().is_playing = false;
-        }
-      }
       ctx.unload_almanac_file_internal(&path)?;
       Ok(SimulationTaskResult::None)
     }
+
     // TODO: async tasklet. this should return the task_id, not take it, while a new command QueryLoadCometSpkFinished should poll the task id and return EngineResult<bool> true in case it finished
     LogicCommand::LoadCometSpk {
       task_id: _,
@@ -1365,6 +1162,7 @@ fn process_command_internal(
       let state = logic_state.almanac_data.get_ephem_full(spk_id, frame, epoch, false, false)?;
       Ok(SimulationTaskResult::KinematicState(state))
     }
+
     LogicCommand::SpawnModelInstance {
       task_id: _,
       scene_id,
@@ -1404,6 +1202,7 @@ fn process_command_internal(
         Err(EngineError::InvalidOperation("model not found"))
       }
     }
+
     LogicCommand::UpdateTrajectoryForSpk {
       task_id: _,
       scene_id,
@@ -1557,6 +1356,8 @@ fn process_command_internal(
 
       Ok(SimulationTaskResult::None)
     }
+
+    // TODO one of these two should be removed
     LogicCommand::RaycastNdc {
       task_id: _,
       scene_id,
@@ -1580,14 +1381,6 @@ fn process_command_internal(
     } => {
       let res = ctx.raycast_internal(scene_id, ro, rd)?;
       Ok(SimulationTaskResult::Raycast(res))
-    }
-    LogicCommand::Custom {
-      task_id: _,
-      custom_fn,
-      user_data,
-    } => {
-      let ptr = user_data.map(|p| p.0).unwrap_or(core::ptr::null_mut());
-      custom_fn(ctx, ptr)
     }
   }
 }
@@ -1620,6 +1413,8 @@ fn execute_simulation_tick(
     )
   };
 
+  // TODO: either keep this and refactor it into a method which executed every time not here but in
+  // logic loop for each scene, or, if raycasting is not needed, throw this away
   if is_tlas_dirty.swap(false, core::sync::atomic::Ordering::Relaxed) {
     let new_tlas = crate::physics::tlas_builder::build_selection_tlas(&_scene_arc);
     *static_tlas.write() = new_tlas;
@@ -1654,10 +1449,9 @@ fn execute_simulation_tick(
 
   // 1. Update time natively using the Arc (no scene read lock held)
   {
-    let ts_read = time_state_arc.read();
-    let mut time_info = ts_read.time_info.write();
-    if ts_read.is_playing {
-      time_info.ut_update();
+    let scenes = ctx.scenes.read();
+    if let Some(time_manager) = scenes.time_managers.get_mut(&scene_id) {
+      time_manager.tick();
     }
   }
 
@@ -1678,9 +1472,9 @@ fn execute_simulation_tick(
   const YIELD_THRESHOLD: u32 = 2;
   const DISCARD_THRESHOLD: u32 = 8;
 
+  use oshal::os::time::v2::SimSpeed;
   let (is_playing, pending_steps, fixed_dt_us, base_step_days, current_epoch, max_sub_dt_us) = {
     let ts = time_state_arc.read();
-    let ti = ts.time_info.read();
     let pending = ti.pending_fixed_steps();
     let fixed_dt_us = ti.fixed_delta_time.load(core::sync::atomic::Ordering::Relaxed);
     let effective_max_sub_dt_s = ts
@@ -1692,57 +1486,16 @@ fn execute_simulation_tick(
     let fixed_sim_seconds = fixed_dt_us as f64 / 1_000_000.0;
     let base_step_days = scale_days_per_sec * fixed_sim_seconds;
     (
-      ts.is_playing,
+      ts.speed == SimSpeed::Paused,
       pending,
       fixed_dt_us,
       base_step_days,
-      ts.current_epoch,
+      ts.current_epoch(),
       max_sub_dt_us,
     )
   };
 
-  // Handle manual step requests (seek / scrub) — always one-shot, no batching.
-  let manual_step = {
-    let mut ts = time_state_arc.write();
-    if ts.manual_step_requests > 0.0 {
-      let step = ts.manual_step_requests;
-      ts.manual_step_requests = 0.0;
-      ts.current_epoch = ts.current_epoch + anise::time::Unit::Day * step;
-      Some((step, ts.current_epoch))
-    } else {
-      None
-    }
-  };
-
-  if let Some((step_days, epoch)) = manual_step {
-    any_fixed_step = true;
-    let step_wall_start = aethervk_oshal_rlib::os::time::get_monotonic_time();
-    if let Err(e) =
-      dispatch_physics_step(scene_id, ctx, step_days, epoch, fixed_dt_us, max_sub_dt_us)
-    {
-      aethervk_oshal_rlib::log!("dispatch_physics_step (manual) failed: {:?}", e);
-      // ── Cooldown: prevent tight error-retry loop ───────────────────────────
-      // A GPU device-lost causes every Vulkan call to fail in < 1 μs.
-      // Without a sleep the logic thread retries thousands of times/second,
-      // pinning physics workers at ~600% CPU and starving the UI + GPU driver.
-      aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(
-        500,
-      ));
-    }
-    let step_wall_us = aethervk_oshal_rlib::os::time::get_monotonic_time()
-      .saturating_sub(step_wall_start)
-      .max(1);
-    {
-      let mut ts = time_state_arc.write();
-      let sim_us = fixed_dt_us.max(1) as f32;
-      let sample = (sim_us / step_wall_us as f32).min(2.0);
-      ts.effective_sim_speed = 0.1 * sample + 0.9 * ts.effective_sim_speed;
-    }
-    if drain_logic_commands(cmd_rx, ctx) {
-      return Err(EngineError::InvalidOperation("shutdown"));
-    }
-    refit_kinematic_microframes(scene_id, ctx);
-  } else if is_playing && pending_steps > 0 {
+  if is_playing && pending_steps > 0 {
     // Compute how many steps we'll batch in this dispatch.
     let n_steps = pending_steps.min(MAX_BATCH_STEPS);
 

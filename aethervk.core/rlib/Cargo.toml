@@ -65,6 +65,8 @@ spirv = "0.4.0+sdk-1.4.341.0"
 spirv-reflect = { path = "../../external/spirv-reflect", default-features = false }
 # anise library for almanac about SPK files and planet motion data
 anise = { path = "../../external/anise/anise", default-features = false }
+hifitime = { version = "4.2.6", default-features = false }
+
 bytes = { version = "1", default-features = false }
 thingbuf = "0.1.6"
 function_name = "0.3.0"
