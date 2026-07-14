@@ -125,8 +125,8 @@ pub fn start_render_thread(
       }
     }
   })
-  .map_err(|err| <ThreadingError as Into<NativeError>>::into(err))
-  .map_err(|err| <NativeError as Into<EngineError>>::into(err))
+  .map_err(<ThreadingError as Into<NativeError>>::into)
+  .map_err(<NativeError as Into<EngineError>>::into)
 }
 
 fn process_command(
@@ -240,8 +240,14 @@ fn process_command(
                     },
                   )?;
 
-                let time_readings =
-                  render_frame.scene.read().time_state.read().time_info.read().current();
+                let (unscaled_time_us, unscaled_time_delta_us) = {
+                  let scene_context_read = render_frame.scene.read();
+                  let time_state_read = scene_context_read.time_state.read();
+                  (
+                    time_state_read.unscaled_time,
+                    time_state_read.unscaled_delta,
+                  )
+                };
                 let debug_name = render_frame.scene.read().debug_name.clone();
 
                 let mut render_scene = extracted_scene
@@ -249,8 +255,9 @@ fn process_command(
                     render_device,
                     render_frame.presentation_engine_handle,
                     cmd_buffer,
-                    time_readings,
-                    extent.into(),
+                    unscaled_time_us,
+                    unscaled_time_delta_us,
+                    extent,
                     &debug_name,
                   )
                   .map_err(|e| {
@@ -261,20 +268,20 @@ fn process_command(
                     e
                   })?;
 
-                if let Some(layer) = render_scene.depth_layers.first() {
-                  if let Some(sun_call) = &layer.sun_call {
-                    render_device
-                      .update_sun(
-                        cmd_buffer,
-                        sun_call.entity,
-                        (128, 128, 128),
-                        sun_call.radius,
-                      )
-                      .map_err(|e| {
-                        aethervk_oshal_rlib::log!("[render tasklet] update_sun failed: {:?}", e);
-                        e
-                      })?;
-                  }
+                if let Some(layer) = render_scene.depth_layers.first()
+                  && let Some(sun_call) = &layer.sun_call
+                {
+                  render_device
+                    .update_sun(
+                      cmd_buffer,
+                      sun_call.entity,
+                      (128, 128, 128),
+                      sun_call.radius,
+                    )
+                    .map_err(|e| {
+                      aethervk_oshal_rlib::log!("[render tasklet] update_sun failed: {:?}", e);
+                      e
+                    })?;
                 }
 
                 for layer in &mut render_scene.depth_layers {
@@ -418,7 +425,8 @@ fn process_command(
                         // Physics finished: use its fresh sync info
                         result.map_err(|e| {
                           crate::types::GpuError::InvalidState(alloc::format!(
-                            "Physics engine error: {:?}", e
+                            "Physics engine error: {:?}",
+                            e
                           ))
                         })?
                       }
@@ -439,7 +447,9 @@ fn process_command(
                   cmd_scope.add_sync_info(sync);
                 }
 
-                if let Some((timeline_semaphore, timeline_value)) = render_frame.cached_timeline_semaphore {
+                if let Some((timeline_semaphore, timeline_value)) =
+                  render_frame.cached_timeline_semaphore
+                {
                   cmd_scope.add_sync_info(crate::gpu::CommandBufferSyncInfo {
                     timeline_semaphore,
                     timeline_value,
@@ -546,16 +556,11 @@ impl super::structs::RenderFrame {
     pool: Option<&oshal::os::pool::ThreadPool>,
   ) -> GpuResult<RenderSceneExtraction> {
     let scene = self.scene.read();
-    let julian_date = {
-      let time_state = scene.time_state.read();
-      Some(time_state.current_epoch.to_jde_utc_days())
-    };
     scene.scene.convert_scene(
       self.camera_entity,
       self.render_physical_meshes_outline,
       pool,
       window_extent,
-      julian_date,
     )
   }
 }

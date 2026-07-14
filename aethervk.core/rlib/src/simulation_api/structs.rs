@@ -6,7 +6,7 @@ use crate::{
   gpu::{DeviceAdditionalParams, PresentationEngineHandle},
   physics,
   physics::physics_scene::math::PhysicsSceneMathExt,
-  scene::{CameraComponent, EntityId, Scene, TransformComponent},
+  scene::{EntityId, Scene, TransformComponent},
   simulation,
   simulation::almanac::{AlmanacPackedData, KinematicState},
   simulation_api::{logic_thread::start_logic_thread, render_thread::start_render_thread},
@@ -57,20 +57,10 @@ impl<T> ThreadTxContainer<T> {
     }
   }
 
-  /// given thread should own the receiver.
-  unsafe fn new(tx: mpsc::Sender<T>, thread: Thread) -> Self {
-    Self {
-      tx: Some(tx),
-      handle: Some(thread),
-    }
-  }
-
-  /// TODO: Document this item
   pub fn tx(&self) -> &mpsc::Sender<T> {
     self.tx.as_ref().unwrap()
   }
 
-  /// TODO: Document this item
   pub fn tx_opt(&self) -> Option<&mpsc::Sender<T>> {
     self.tx.as_ref()
   }
@@ -97,10 +87,13 @@ impl<T> Drop for ThreadTxContainer<T> {
 
 // --------------------- Members of SimulationContext ---------------------------
 
-/// TODO: Document this item
+/// owned by logic thread context
 pub struct SimulationSceneData {
   /// Scene state: Scene map
   pub scenes: BTreeMap<u64, Arc<RwLock<SceneContext>>>,
+  /// Centralized time system. One for each scene which needs it (so inserted if absent at
+  /// first simulation play, and removed when simulation stops)
+  pub time_managers: dashmap::DashMap<u64, oshal::os::time::v2::TimeManager>,
   /// Scene state: next available id. Steadily incremented
   next_scene_id: u64,
   /// mesh cache shared among all scenes
@@ -119,14 +112,17 @@ impl Default for SimulationSceneData {
 }
 
 impl SimulationSceneData {
-  /// TODO: Document this item
   pub fn new_inplace(ptr: *mut Self) {
     unsafe { ptr.write(Self::new()) }
   }
 
-  /// TODO: Document this item
+  pub fn next_scene_id(&self) -> u64 {
+    self.next_scene_id
+  }
+
   pub fn new() -> Self {
     Self {
+      time_managers: dashmap::DashMap::with_capacity(16),
       scenes: BTreeMap::new(),
       next_scene_id: 1,
       mesh_cache: Arc::new(crate::scene::AssetCache::new()),
@@ -135,14 +131,12 @@ impl SimulationSceneData {
     }
   }
 
-  /// TODO: Document this item
   pub fn get_scene(&self, scene_id: u64) -> Option<Arc<RwLock<SceneContext>>> {
     self.scenes.get(&scene_id).cloned()
   }
 
   /// Insert a new scene in `scenes` and properly increment next free id counter.
   /// return current id
-  /// TODO: like Arc, do &mut Self if there will be a conflict, since we implement Deref
   pub fn insert_scene(&mut self, scene_ctx: Arc<RwLock<SceneContext>>) -> u64 {
     debug_assert!(Arc::strong_count(&scene_ctx) == 1 && Arc::weak_count(&scene_ctx) == 0);
     let new_id = self.next_scene_id;
@@ -199,7 +193,7 @@ impl Drop for SimulationThreads {
     self.logic_thread.tx.take();
     self.logic_feedback_rx = None;
     if let Some(handle) = self.logic_thread.handle.take() {
-      let _ = handle.join();
+      handle.join();
     }
 
     // Same pattern for render thread.
@@ -209,7 +203,7 @@ impl Drop for SimulationThreads {
     self.render_thread.tx.take();
     self.render_feedback_rx = None;
     if let Some(handle) = self.render_thread.handle.take() {
-      let _ = handle.join();
+      handle.join();
     }
 
     // Ensure all logic-launched tasklets are finished before shutting down the renderer
@@ -225,14 +219,12 @@ impl Drop for SimulationThreads {
   }
 }
 
-/// TODO: Document this item
 pub struct LogicWorkload {
   pub cmd: LogicCommand,
   pub ctx: alloc::sync::Arc<LogicThreadContext>,
 }
 
 impl LogicThreadContext {
-  /// TODO: Document this item
   pub fn load_almanac_file_internal(&self, path: &str) -> EngineResult<()> {
     let mut logic = self.logic_state.write();
     if logic.almanac_data.file_names.iter().any(|f| f == path) {
@@ -243,13 +235,11 @@ impl LogicThreadContext {
     logic.almanac_data.load_almanac(&path_buf)
   }
 
-  /// TODO: Document this item
   pub fn unload_almanac_file_internal(&self, path: &str) -> EngineResult<()> {
     let mut logic = self.logic_state.write();
     logic.almanac_data.unload_almanac_spk(path)
   }
 
-  /// TODO: Document this item
   pub fn raycast_ndc_internal(
     &self,
     scene_id: u64,
@@ -339,7 +329,6 @@ impl LogicThreadContext {
     self.raycast_internal(scene_id, ro, rd)
   }
 
-  /// TODO: Document this item
   pub fn raycast_internal(
     &self,
     scene_id: u64,
@@ -372,8 +361,7 @@ impl LogicThreadContext {
 
     let mut hit_instances = alloc::vec::Vec::new();
     if !st.is_empty() {
-      use aethervk_oshal_rlib::math::vector::{Vector, Vector3, vec3::Vec3f32};
-      use slotmap::Key;
+      use aethervk_oshal_rlib::math::vector::{Vector3, vec3::Vec3f32};
       let mut stack = alloc::vec![0];
       while let Some(node_idx) = stack.pop() {
         if node_idx as usize >= st.len() {
@@ -447,7 +435,6 @@ impl LogicThreadContext {
 }
 
 impl SimulationSceneData {
-  /// TODO: Document this item
   pub fn import_model_from_mesh(
     &mut self,
     path: String,
@@ -460,7 +447,6 @@ impl SimulationSceneData {
     model_id
   }
 
-  /// TODO: Document this item
   pub fn spawn_model_instance_internal(
     &mut self,
     scene_id: u64,
@@ -513,7 +499,7 @@ impl SimulationSceneData {
 }
 
 impl SimulationThreads {
-  /// TODO: Document this item
+  /// whether the render thread is currently spawned and its channel is active
   pub fn render_thread_running(&self) -> bool {
     let result = self.render_thread.handle.is_some();
     debug_assert!(
@@ -640,137 +626,77 @@ impl SimulationThreads {
 }
 
 // --------------------- Internal Types: Logic Thread ---------------------------
+
+// TODO remove if not useful after time rework
 #[derive(Clone, Default)]
-/// TODO: Document this item
 pub enum LogicFeedback {
   #[default]
   Empty,
-  TimeScale(TimeScale),
-  TimeReadings(os::time::TimeReadings),
 }
 
-/// Assumes there's one cursor in scene
-#[derive(Clone, Debug)]
-pub struct RotateCamera {
-  pub camera_entity: EntityId,
-  pub scene: Arc<RwLock<SceneContext>>,
-  pub delta_x: f32,
-  pub delta_y: f32,
-}
-/// Assumes there's one cursor in scene
-#[derive(Clone, Debug)]
-pub struct ZoomCamera {
-  pub camera_entity: EntityId,
-  pub scene: Arc<RwLock<SceneContext>>,
-  pub amount: f32,
-}
-/// Assumes there's one cursor in scene
-#[derive(Clone, Debug)]
-pub struct ResetCamera {
-  pub camera_entity: EntityId,
-  pub scene: Arc<RwLock<SceneContext>>,
-}
-/// Assumes there's one cursor in scene
-#[derive(Clone, Debug)]
-pub struct PanCamera {
-  pub camera_entity: EntityId,
-  pub scene: Arc<RwLock<SceneContext>>,
-  pub delta_x: f32,
-  pub delta_y: f32,
-}
-
-/// Assumes there's one cursor in scene
-#[derive(Clone, Debug)]
-pub struct PanCursor {
-  pub scene: Arc<RwLock<SceneContext>>,
-  pub delta_x: f32,
-  pub delta_y: f32,
-}
-/// Assumes there's one cursor in scene
-#[derive(Clone, Debug)]
-pub struct MoveCursor {
-  pub scene: Arc<RwLock<SceneContext>>,
-  pub delta_x: f32,
-  pub delta_y: f32,
-  pub delta_z: f32,
-}
-
-/// Invariant: the entity does exist in the scene.
-#[derive(Clone, Debug)]
-pub struct SnapToEntity {
-  pub snap_entity: EntityId,
-  pub target_entity: EntityId,
-  pub scene: Arc<RwLock<SceneContext>>,
-}
-/// Invariant: the entity does exist in the scene. Includes a snap
-#[derive(Clone, Debug)]
-pub struct FollowEntity {
-  pub snap_entity: EntityId,
-  pub entity_id: EntityId,
-  pub scene: Arc<RwLock<SceneContext>>,
-  pub unfollow_other: bool,
-}
-/// Invariant: the entity does exist in the scene.
-#[derive(Clone, Debug)]
-pub struct UnfollowEntity {
-  pub entity_id: EntityId,
-  pub scene: Arc<RwLock<SceneContext>>,
-}
-
-#[derive(Clone, Debug)]
-/// TODO: Document this item
-pub struct TogglePaintMode {
-  pub scene_id: u64,
-  pub entity_id: EntityId,
-}
-
-#[derive(Clone, Debug)]
-/// TODO: Document this item
+#[derive(Default, Clone, Debug)]
 pub enum LogicCommand {
+  #[default]
   Shutdown,
 
-  RotateCamera(RotateCamera),
-  ZoomCamera(ZoomCamera),
-  ResetCamera(ResetCamera),
-  PanCamera(PanCamera),
-
-  PanCursor(PanCursor),
-  MoveCursor(MoveCursor),
-
-  SnapToEntity(SnapToEntity),
-  FollowEntity(FollowEntity),
-  UnfollowEntity(UnfollowEntity),
-
-  TogglePaintMode(TogglePaintMode),
-
-  FeedbackGetSceneTimeScale {
-    scene_id: u64,
+  RotateCamera {
+    camera_entity: EntityId,
+    scene: Arc<RwLock<SceneContext>>,
+    delta_x: f32,
+    delta_y: f32,
   },
-  FeedbackGetSceneDateTimeUTC {
-    scene_id: u64,
+  ZoomCamera {
+    camera_entity: EntityId,
+    scene: Arc<RwLock<SceneContext>>,
+    amount: f32,
   },
-  FeedbackGetSceneDateTimeLimitsUTC {
-    scene_id: u64,
+  ResetCamera {
+    camera_entity: EntityId,
+    scene: Arc<RwLock<SceneContext>>,
+  },
+  PanCamera {
+    camera_entity: EntityId,
+    scene: Arc<RwLock<SceneContext>>,
+    delta_x: f32,
+    delta_y: f32,
   },
 
-  SetSceneTimeScale {
-    scene_id: u64,
-    scale: TimeScale,
+  MoveCursor {
+    scene: Arc<RwLock<SceneContext>>,
+    delta_x: f32,
+    delta_y: f32,
+    delta_z: f32,
   },
-  SetSceneEpoch {
-    scene_id: u64,
-    epoch_tai_seconds: f64,
+
+  SnapToEntity {
+    snap_entity: EntityId,
+    target_entity: EntityId,
+    scene: Arc<RwLock<SceneContext>>,
   },
-  SetPhysicsEngineType {
+  FollowEntity {
+    snap_entity: EntityId,
+    entity_id: EntityId,
+    scene: Arc<RwLock<SceneContext>>,
+    unfollow_other: bool,
+  },
+  UnfollowEntity {
+    entity_id: EntityId,
+    scene: Arc<RwLock<SceneContext>>,
+  },
+
+  PlaySceneToEnd {
     scene_id: u64,
-    engine_type: PhysicsEngineType,
+    speed: oshal::os::time::v2::SimSpeed,
   },
   PauseScene {
     scene_id: u64,
   },
-  StepScene {
+  PlayScene {
     scene_id: u64,
-    step_days: f64,
+    speed: oshal::os::time::v2::SimSpeed,
+  },
+  SnapshotScene {
+    scene_id: u64,
   },
 
   ImportModel {
@@ -819,18 +745,6 @@ pub enum LogicCommand {
     end_epoch_tai_sec: f64,
     sample_step_days: f64,
   },
-  Custom {
-    task_id: u64,
-    custom_fn:
-      fn(&LogicThreadContext, *mut core::ffi::c_void) -> EngineResult<SimulationTaskResult>,
-    user_data: Option<SendPtrMut<core::ffi::c_void>>,
-  },
-  PlayScene {
-    scene_id: u64,
-  },
-  SnapshotScene {
-    scene_id: u64,
-  },
   RestoreSnapshot {
     scene_id: u64,
   },
@@ -841,77 +755,12 @@ pub enum LogicCommand {
     entity: u64,
     visible: bool,
   },
-  /// Seek to a specific epoch, recomputing ephemeris positions and rebuilding TLAS.
-  /// Dispatched from the FFI scrubbing API so the logic thread performs the full update.
-  SeekEpoch {
-    scene_id: u64,
-    epoch_tai_seconds: f64,
-  },
-}
-
-impl Default for LogicCommand {
-  fn default() -> Self {
-    Self::Shutdown
-  }
 }
 
 impl LogicCommand {
   const PARSING_ERROR: &str = "LogicCommand::new | parsing error";
 }
 
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
-/// TODO: Document this item
-pub enum TimeScale {
-  Stopped,
-  RealTime,
-  #[default]
-  OneDay,
-  OneWeek,
-  OneMonth,
-}
-
-impl TimeScale {
-  /// Returns the number of simulation-days that elapse per one real-time second
-  /// at this time scale.
-  pub fn to_days_per_st_second(self) -> f64 {
-    match self {
-      TimeScale::Stopped => 0.0,
-      TimeScale::RealTime => 1.0 / 86400.0,
-      TimeScale::OneDay => 1.0,
-      TimeScale::OneWeek => 7.0,
-      TimeScale::OneMonth => 30.436875,
-    }
-  }
-
-  /// Maximum physics sub-step duration in seconds for this time scale.
-  ///
-  /// Higher time scales produce larger per-tick `dt` values.  To keep the
-  /// IMEX / Velocity-Verlet integrator numerically stable (O(h²) local
-  /// truncation error) we cap the physics `dt` and iterate multiple
-  /// sub-steps inside [`simulation_step`].
-  ///
-  /// | Scale     | Batched dt (s) | Cap (s) | Sub-steps |
-  /// |-----------|----------------|---------|---------- |
-  /// | RealTime  | 0.016          | 1       | 1         |
-  /// | OneDay    | ~8294          | 50      | ~166      |
-  /// | OneWeek   | ~50400         | 600     | ~84       |
-  /// | OneMonth  | ~218400        | 600     | ~364      |
-  pub fn max_physics_sub_dt_seconds(self) -> f64 {
-    match self {
-      TimeScale::Stopped  => 1.0,
-      TimeScale::RealTime => 1.0,
-      // 50 s cap: ~166 GPU sub-steps per batched dispatch at OneDay.
-      // Paired with per-sub-step velocity compensation in emit_particles_from_circles,
-      // this spreads particles from 0 km to ~204 km (for β=2) within a single
-      // dispatch, giving a gapless continuous tail stream.
-      TimeScale::OneDay   => 50.0,
-      TimeScale::OneWeek  => 600.0,  // 10-min cap → ~84 sub-steps
-      TimeScale::OneMonth => 600.0,  // 10-min cap → ~364 sub-steps
-    }
-  }
-}
-
-/// TODO: Document this item
 pub struct LogicState {
   pub almanac_data: AlmanacPackedData,
   /// Optional callback to request SPK data download from the host application.
@@ -938,7 +787,6 @@ impl Default for LogicState {
 // --------------------- Internal Types: Render Thread ---------------------------
 
 #[derive(Clone, Default)]
-/// TODO: Document this item
 pub enum RenderTaskStatus {
   #[default]
   Completed,
@@ -953,7 +801,6 @@ impl AsRef<RenderTaskStatus> for RenderTaskStatus {
 }
 
 #[derive(Clone, Default)]
-/// TODO: Document this item
 pub enum RenderFeedback {
   #[default]
   Empty,
@@ -962,17 +809,7 @@ pub enum RenderFeedback {
   TaskQueryStatus(RenderTaskStatus),
 }
 
-pub enum KernelsEnum {
-  VulkanCompute(
-    crate::gpu::WeakRenderFrontend,
-    crate::gpu::RenderDeviceHandle,
-  ),
-  CpuSingleThreaded(crate::physics::cpu_kernels::CpuScalarKernels),
-  CpuMultiThreaded(crate::physics::cpu_kernels::CpuSimdKernels),
-}
-
 #[derive(Clone, Copy, Debug)]
-/// TODO: Document this item
 pub struct CustomRenderCallback {
   pub after_render_frame_fn: fn(
     &dyn crate::gpu::RenderDevice,
@@ -1090,54 +927,6 @@ impl<T: ?Sized> SendPtrMut<T> {
   }
 }
 
-#[derive(Clone, Debug)]
-/// TODO: Document this item
-pub struct SceneTimeState {
-  pub time_info: alloc::sync::Arc<parking_lot::RwLock<aethervk_oshal_rlib::os::time::TimeInfo>>,
-  pub current_scale: TimeScale,
-  pub current_epoch: anise::time::Epoch,
-  pub epoch_start: anise::time::Epoch,
-  pub epoch_end: anise::time::Epoch,
-  pub st_seconds_elapsed: f64,
-  pub is_playing: bool,
-  pub manual_step_requests: f64,
-  pub is_ticking: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
-  /// EMA of `sim_dt / wall_dt` over the last physics steps.
-  /// 1.0 = running at full configured speed; <1.0 = slowed by GPU budget pressure.
-  /// Smoothed with α=0.1 per step; initialized to 1.0.
-  pub effective_sim_speed: f32,
-  /// Optional override for `TimeScale::max_physics_sub_dt_seconds()`.
-  /// When `Some(s)`, each GPU physics sub-step is at most `s` seconds regardless
-  /// of the active `TimeScale`.  `None` uses the `TimeScale` default.
-  /// Exposed so host applications (e.g. spawn_comet_debug) can ring-toggle
-  /// sub-step granularity at runtime without changing the time scale.
-  pub max_sub_dt_override: Option<f64>,
-}
-
-impl Default for SceneTimeState {
-  fn default() -> Self {
-    Self {
-      time_info: alloc::sync::Arc::new(parking_lot::RwLock::new(
-        aethervk_oshal_rlib::os::time::TimeInfo::new(
-          aethervk_oshal_rlib::os::time::timeus_milliseconds(16),
-          aethervk_oshal_rlib::os::time::timeus_milliseconds(100),
-          1.0,
-        ),
-      )),
-      current_scale: TimeScale::Stopped,
-      current_epoch: anise::time::Epoch::from_gregorian_utc_at_midnight(2000, 1, 1),
-      epoch_start: anise::time::Epoch::from_gregorian_utc_at_midnight(2000, 1, 1),
-      epoch_end: anise::time::Epoch::from_gregorian_utc_at_midnight(2100, 1, 1),
-      st_seconds_elapsed: 0.0,
-      is_playing: false,
-      manual_step_requests: 0.0,
-      is_ticking: alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false)),
-      effective_sim_speed: 1.0,
-      max_sub_dt_override: None,
-    }
-  }
-}
-
 #[cfg(test)]
 lazy_static::lazy_static! {
   pub static ref SHADER_MOCK_RESULTS: std::sync::Mutex<std::collections::HashMap<u64, alloc::vec::Vec<u8>>> = std::sync::Mutex::new(std::collections::HashMap::new());
@@ -1172,19 +961,12 @@ pub enum MockTargetShader {
   ApplyEmitters,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PhysicsEngineType {
-  CpuScalar,
-  CpuSimd,
+  #[default]
   VulkanCompute,
   #[cfg(test)]
   Mock(MockTargetShader),
-}
-
-impl Default for PhysicsEngineType {
-  fn default() -> Self {
-    Self::CpuSimd
-  }
 }
 
 #[derive(Clone, Debug)]
@@ -1198,16 +980,23 @@ pub struct SceneContext {
   pub scene: Arc<Scene>,
   pub entity_map: BTreeMap<u64, EntityId>,
   next_entity_id: u64,
+
+  // TODO evaluate whether screen selection is necessary, if not remove it
   pub root_entity: EntityId,
+  // TODO evaluate whether screen selection is necessary, if not remove it
   pub cursor_entity: Option<EntityId>,
+  // TODO evaluate whether screen selection is necessary, if not remove it
   pub sun_entity: Option<EntityId>,
+  // TODO evaluate whether screen selection is necessary, if not remove it
   pub grid_entity: Option<EntityId>,
+  // TODO evaluate whether screen selection is necessary, if not remove it
   pub sky_entity: Option<EntityId>,
+  // TODO evaluate whether screen selection is necessary, if not remove it
   pub outlines_enabled: Arc<AtomicBool>,
+  // TODO evaluate whether screen selection is necessary, if not remove it
   pub collisions_enabled: Arc<AtomicBool>, // Changed to false for debugging
+  // TODO evaluate whether screen selection is necessary, if not remove it
   pub physics_scene: Option<Arc<RwLock<physics::physics_scene::PhysicsScene>>>,
-  pub selection_tlas:
-    Option<Arc<RwLock<alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>>>>>,
   pub active_physics_task: alloc::sync::Arc<
     spin::Mutex<
       Option<
@@ -1217,17 +1006,37 @@ pub struct SceneContext {
       >,
     >,
   >,
-  pub latest_physics_sync: alloc::sync::Arc<parking_lot::RwLock<Option<crate::gpu::CommandBufferSyncInfo>>>,
+  pub latest_physics_sync:
+    alloc::sync::Arc<parking_lot::RwLock<Option<crate::gpu::CommandBufferSyncInfo>>>,
   pub physics_engine_type: Arc<RwLock<PhysicsEngineType>>,
-  pub time_state: Arc<RwLock<SceneTimeState>>,
+
+  /// Time state tracking the simulation unscaled and scaled time. Tracks start_epoch but not its
+  /// end, therefore stored separately
+  pub time_state: alloc::sync::Arc<spin::RwLock<oshal::os::time::v2::TimeState>>,
+  /// end epoch, which limits and stops the simulation
+  pub end_epoch: hifitime::Epoch,
+
   pub presentation_engines: Arc<RwLock<BTreeMap<PresentationEngineHandle, PresentationEngineData>>>,
+
+  /// Necessary for the C# side bulk update (TODO check correctness)
   pub changed_entities: Arc<RwLock<BTreeMap<u64, BTreeSet<u64>>>>,
-  pub delta_buffer: Arc<RwLock<alloc::boxed::Box<[u64]>>>,
+
   pub custom_render_callback: Option<CustomRenderCallback>,
   pub debug_name: alloc::string::String,
   pub scene_snapshot: Option<alloc::boxed::Box<crate::scene::Scene>>,
+
+  /// Acceleration structure holding references to BVH nodes for each entity in the scene capable of
+  /// having a bound. Used for physics? Cause for raycasting there's the `selection_tlas`
   pub static_tlas:
     Arc<RwLock<alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>>>>,
+  /// Top level acceleration structure holding BVH nodes only for these entities which have bounds
+  /// and are deemed selectable by the application's logic.
+  // TODO: if necessary, mark with a component?
+  pub selection_tlas:
+    Option<Arc<RwLock<alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>>>>>,
+  ///used to keep track whether or not some entity moved, and therefore if we need to rebuild the
+  ///TLAS
+  // TODO remove pub if kept
   pub is_static_tlas_dirty: Arc<AtomicBool>,
 }
 
@@ -1324,8 +1133,8 @@ impl SceneContext {
     self.with_new_entity_inserted(sky_entity)
   }
 
-  /// TODO: Document this item
   pub fn with_physics_scene(mut self) -> Self {
+    // TODO remove physics_scene. It's dead.
     self.physics_scene = Some(Arc::new(RwLock::new(
       physics::physics_scene::PhysicsScene::build_from_scene(self.scene.as_ref(), 0.016),
     )));
@@ -1333,8 +1142,12 @@ impl SceneContext {
     self
   }
 
-  /// TODO: Document this item
-  pub fn new_empty(scene: Arc<Scene>, root_entity: EntityId) -> Self {
+  pub fn new_empty(
+    scene: Arc<Scene>,
+    root_entity: EntityId,
+    time_state: Arc<spin::RwLock<oshal::os::time::v2::TimeState>>,
+    end_epoch: hifitime::Epoch,
+  ) -> Self {
     let mut entity_map = BTreeMap::new();
     entity_map.insert(1, root_entity);
     Self {
@@ -1350,10 +1163,10 @@ impl SceneContext {
       collisions_enabled: Arc::new(AtomicBool::new(false)),
       physics_scene: None,
       selection_tlas: None,
-      active_physics_task: alloc::sync::Arc::new(spin::Mutex::new(None)),
-      latest_physics_sync: alloc::sync::Arc::new(parking_lot::RwLock::new(None)),
+      active_physics_task: Arc::new(spin::Mutex::new(None)),
+      latest_physics_sync: Arc::new(parking_lot::RwLock::new(None)),
       physics_engine_type: Arc::new(RwLock::new(PhysicsEngineType::VulkanCompute)),
-      time_state: Arc::new(RwLock::new(SceneTimeState::default())),
+      time_state,
       presentation_engines: Arc::new(RwLock::new(BTreeMap::new())),
       scene_snapshot: None,
       static_tlas: Arc::new(RwLock::new(alloc::vec::Vec::new())),
@@ -1361,13 +1174,10 @@ impl SceneContext {
       changed_entities: Arc::new(RwLock::new(BTreeMap::new())),
       custom_render_callback: None,
       debug_name: alloc::string::String::new(),
-      delta_buffer: Arc::new(RwLock::new(
-        alloc::vec![0u64; 131072 /* 1 MiB */].into_boxed_slice(),
-      )),
+      end_epoch,
     }
   }
 
-  /// TODO: Document this item
   pub fn register_entity(&mut self, id: EntityId) -> u64 {
     let external_id = self.next_entity_id;
     self.next_entity_id += 1;
@@ -1375,12 +1185,11 @@ impl SceneContext {
     external_id
   }
 
-  /// TODO: Document this item
   pub fn get_entity(&self, external_id: u64) -> Option<EntityId> {
     self.entity_map.get(&external_id).copied()
   }
 
-  /// TODO: Document this item
+  // TODO: change this to be generic on a ForeignSerializable.
   pub fn mark_component_changed(&self, entity_id: u64, component_id: u64) {
     let mut changed = self.changed_entities.write();
     changed.entry(entity_id).or_insert_with(BTreeSet::new).insert(component_id);
@@ -1480,7 +1289,7 @@ pub struct LogicThreadParams {
   pub logic_state: Arc<RwLock<LogicState>>,
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub ctx_ptr: SendPtrMut<core::ffi::c_void>,
-  pub kernels: Arc<RwLock<KernelsEnum>>,
+  pub kernels: (gpu::RenderFrontend, gpu::RenderDeviceHandle),
 }
 
 impl LogicThreadParams {
@@ -1493,7 +1302,7 @@ impl LogicThreadParams {
     logic_state: Arc<RwLock<LogicState>>,
     scenes: Arc<RwLock<SimulationSceneData>>,
     ctx_ptr: SendPtrMut<core::ffi::c_void>,
-    kernels: Arc<RwLock<KernelsEnum>>,
+    kernels: (gpu::RenderFrontend, gpu::RenderDeviceHandle),
   ) -> Self {
     Self {
       channel_capacity: Self::DEFAULT_CHANNEL_CAPACITY,
@@ -1537,7 +1346,7 @@ pub struct LogicThreadContext {
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub ctx_ptr: SendPtrMut<core::ffi::c_void>,
   pub render_tx: mpsc::Sender<RenderCommand>,
-  pub kernels: Arc<RwLock<KernelsEnum>>,
+  pub kernels: (gpu::RenderFrontend, gpu::RenderDeviceHandle),
 }
 
 #[derive(Clone, Copy, Debug)]

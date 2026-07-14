@@ -10,8 +10,8 @@ pub mod threading;
 use aethervk_core_rlib::{
   gpu,
   gpu::{
-    OpaqueNativeHandleInfo, NativeHandleType, PresentationEngineHandle, RenderDevice, RenderDeviceHandle,
-    RenderFrontend, RenderScene, scene_conversion::SceneConversionExt,
+    NativeHandleType, OpaqueNativeHandleInfo, PresentationEngineHandle, RenderDevice,
+    RenderDeviceHandle, RenderFrontend, RenderScene, scene_conversion::SceneConversionExt,
   },
   scene::{
     AddComponentError, BvhDebugComponent, CameraComponent, CursorComponent, EntityId,
@@ -565,7 +565,8 @@ pub fn scene_to_render_scene(
     device,
     presentation_engine_handle,
     cmd_buffer,
-    time_readings,
+    time_readings.unscaled_time,
+    time_readings.unscaled_delta_time,
     extent,
     "scene",
   )

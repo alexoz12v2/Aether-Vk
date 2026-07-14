@@ -382,30 +382,6 @@ impl SimulationContext {
     })
   }
 
-  /// TODO: Document this item
-  pub fn dispatch_logic_command_custom(
-    &self,
-    custom_fn: fn(
-      &crate::simulation_api::structs::LogicThreadContext,
-      *mut core::ffi::c_void,
-    ) -> EngineResult<crate::simulation_api::structs::SimulationTaskResult>,
-    user_data: Option<crate::simulation_api::structs::SendPtrMut<core::ffi::c_void>>,
-  ) -> EngineResult<core::num::NonZero<u64>> {
-    let mut task_manager = self.task_manager.write();
-    let task_id = task_manager.create_task();
-    self
-      .threads
-      .logic_thread
-      .tx()
-      .try_send(crate::simulation_api::structs::LogicCommand::Custom {
-        task_id: task_id.get(),
-        custom_fn,
-        user_data,
-      })
-      .map_err(|_| EngineError::InvalidOperation("logic thread closed"))?;
-    Ok(task_id)
-  }
-
   /// Drains main-thread cleanup queue. Call from UI thread tick.
   /// For windowless-only usage this is a no-op.
   pub fn process_main_thread_cleanup_queue(&self) -> crate::types::EngineResult<()> {

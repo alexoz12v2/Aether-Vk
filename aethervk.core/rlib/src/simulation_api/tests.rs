@@ -428,26 +428,25 @@ fn test_core_api() {
       let pe_handle = ctx.create_presentation_engine(scene_id, 800, 600).unwrap();
       assert!(ctx.destroy_presentation_engine(scene_id, pe_handle).is_ok());
 
-      fn dummy_logic(
-        _: &crate::simulation_api::structs::LogicThreadContext,
-        _: *mut core::ffi::c_void,
-      ) -> EngineResult<crate::simulation_api::structs::SimulationTaskResult> {
-        Ok(crate::simulation_api::structs::SimulationTaskResult::Bool(
-          true,
-        ))
-      }
-
-      let task_id = ctx.dispatch_logic_command_custom(dummy_logic, None).unwrap();
-      let mut attempts = 0;
-      while matches!(
-        ctx.get_task_status(task_id.get()),
-        structs::TaskStatusCode::Pending
-      ) && attempts < 20
-      {
-        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
-        attempts += 1;
-      }
-      assert!(ctx.get_task_result_bool(task_id.get()));
+      // fn dummy_logic(
+      //   _: &crate::simulation_api::structs::LogicThreadContext,
+      //   _: *mut core::ffi::c_void,
+      // ) -> EngineResult<crate::simulation_api::structs::SimulationTaskResult> {
+      //   Ok(crate::simulation_api::structs::SimulationTaskResult::Bool(
+      //     true,
+      //   ))
+      // }
+      // let task_id = ctx.dispatch_logic_command_custom(dummy_logic, None).unwrap();
+      // let mut attempts = 0;
+      // while matches!(
+      //   ctx.get_task_status(task_id.get()),
+      //   structs::TaskStatusCode::Pending
+      // ) && attempts < 20
+      // {
+      //   oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(50));
+      //   attempts += 1;
+      // }
+      // assert!(ctx.get_task_result_bool(task_id.get()));
 
       let _ = alloc::boxed::Box::from_raw(ctx_ptr);
     }

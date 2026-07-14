@@ -25,6 +25,7 @@ float16 = { version = "0.1.5", default-features = false }
 # bumpalo = { version = "3.20.0", features = ["boxed"] }
 # dependency of bumpalo 3.20.2
 # allocator-api2 = { version = "0.2.8", default-features = false }
+hifitime = { version = "4.2.6", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = ">=0.59, <= 0.62", default-features = false, features = [

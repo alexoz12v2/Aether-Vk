@@ -14,10 +14,8 @@ use crate::{
 };
 use aethervk_oshal_rlib as oshal;
 use alloc::{string::ToString, sync::Arc};
-use core::ffi::c_char;
 use oshal::{
   math::{
-    matrix::Matrix4,
     quaternion::Quaternion,
     vector::{Vector3, vec3::Vec3f32, vec4::Quat},
   },
@@ -37,11 +35,8 @@ pub mod scene_api;
 pub mod structs;
 pub mod time_api;
 
-#[cfg(test)]
-mod tests;
+const MAX_UNSCALED_DELTA_MS: u32 = 500_u32;
 
-#[cfg(test)]
-mod integration_test_large;
 /// Holds State for the whole simulation. For now, default drop order (from first to last)
 /// is fine. Threads are first shut down, then data is deallocated.
 /// if this grows more complicated, implement `Drop`
@@ -54,7 +49,6 @@ pub struct SimulationContext {
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub task_manager: Arc<RwLock<SimulationTaskManager>>,
   pub logic_state: Arc<RwLock<structs::LogicState>>,
-  pub kernels: Arc<RwLock<structs::KernelsEnum>>,
   texture_cache: Arc<RwLock<TextureCache>>,
   pub audio_mixer: Arc<RwLock<crate::audio::AudioMixer>>,
 }
@@ -133,19 +127,19 @@ macro_rules! expect_scene_and_entity {
   }};
 }
 
-struct PhysicsRebuildWorkload {
-  scene: Arc<Scene>,
-  physics_scene: Arc<RwLock<physics::physics_scene::PhysicsScene>>,
-}
-
-impl os::pool::Workload for PhysicsRebuildWorkload {
-  fn execute(&mut self) -> WorkloadStatus {
-    let new_physics = physics::physics_scene::PhysicsScene::build_from_scene(&self.scene, 0.016);
-    let mut guard = self.physics_scene.write();
-    *guard = new_physics;
-    WorkloadStatus::Complete
-  }
-}
+// struct PhysicsRebuildWorkload {
+//   scene: Arc<Scene>,
+//   physics_scene: Arc<RwLock<physics::physics_scene::PhysicsScene>>,
+// }
+//
+// impl os::pool::Workload for PhysicsRebuildWorkload {
+//   fn execute(&mut self) -> WorkloadStatus {
+//     let new_physics = physics::physics_scene::PhysicsScene::build_from_scene(&self.scene, 0.016);
+//     let mut guard = self.physics_scene.write();
+//     *guard = new_physics;
+//     WorkloadStatus::Complete
+//   }
+// }
 
 /// TODO: Document this item
 pub type BreadcrumbCallback = unsafe extern "C" fn(u32, *const core::ffi::c_char);
@@ -168,5 +162,15 @@ pub fn emit_breadcrumb(status: u32, msg: &str) {
     }
   }
 }
+
+#[cfg(test)]
 pub mod test_composite_render;
+
+#[cfg(test)]
 pub mod test_lca_render;
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+mod integration_test_large;

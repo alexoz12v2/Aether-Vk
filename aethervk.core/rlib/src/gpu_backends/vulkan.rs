@@ -56,7 +56,8 @@ pub mod constants {
 /// - Massive, supposed to be heap allocated and constructed on the heap in-place
 pub(super) struct VulkanCore {
   instance: alloc::sync::Arc<instance::Instance>,
-  live_devices: FnvIndexMap<RenderDeviceHandle, device::Device, MAX_DEVICES>,
+  live_devices:
+    FnvIndexMap<RenderDeviceHandle, core::mem::MaybeUninit<device::Device>, MAX_DEVICES>,
 }
 
 unsafe impl Sync for VulkanCore {}
@@ -91,8 +92,12 @@ impl VulkanCore {
 impl Drop for VulkanCore {
   fn drop(&mut self) {
     while let Some(k) = self.live_devices.keys().next().copied() {
-      if let Some(dev) = self.live_devices.remove(&k) {
-        drop(dev);
+      if let Some(mut dev_uninit) = self.live_devices.remove(&k) {
+        // SAFETY: items remaining in `live_devices` were initialized in `init_device` therefore
+        // they are well defined
+        unsafe {
+          core::ptr::drop_in_place(dev_uninit.as_mut_ptr());
+        }
       }
     }
   }
@@ -116,7 +121,10 @@ impl VulkanRenderContext {
     F: FnOnce(&device::Device) -> R,
   {
     let core = self.core.read();
-    core.live_devices.get(&dev_handle).map(|device| f(device))
+    core
+      .live_devices
+      .get(&dev_handle)
+      .map(|device| unsafe { f(device.assume_init_ref()) })
   }
 }
 
@@ -210,20 +218,23 @@ impl RenderContext for VulkanRenderContext {
       // we insert a "dummy" (zeroed) value first.
       // To avoid 1.5KB of zeros on the stack, we use unsafe to bit-copy an uninit value.
       unsafe {
-        #[allow(invalid_value)]
-        let uninit_val = core::mem::MaybeUninit::<device::Device>::uninit().assume_init();
+        let uninit_val = core::mem::MaybeUninit::<device::Device>::uninit();
         core.live_devices.insert(handle, uninit_val).unwrap_unchecked();
       }
 
       struct UninitGuard<'a> {
-        map: &'a mut FnvIndexMap<RenderDeviceHandle, device::Device, MAX_DEVICES>,
+        map: &'a mut FnvIndexMap<
+          RenderDeviceHandle,
+          core::mem::MaybeUninit<device::Device>,
+          MAX_DEVICES,
+        >,
         handle: RenderDeviceHandle,
         defused: bool,
       }
       impl<'a> Drop for UninitGuard<'a> {
         fn drop(&mut self) {
           if !self.defused {
-            core::mem::forget(self.map.remove(&self.handle));
+            self.map.remove(&self.handle);
           }
         }
       }
@@ -235,14 +246,11 @@ impl RenderContext for VulkanRenderContext {
       };
 
       // 2. Get a mutable pointer to the slot we just created in the heap-resident map.
-      let dst_ptr = guard.map.get_mut(&handle).unwrap() as *mut device::Device;
+      let dst_ptr = unsafe { guard.map.get_mut(&handle).unwrap_unchecked().as_mut_ptr() };
 
       // 3. Construct the device directly into that heap location.
       unsafe {
-        let init_result = device::Device::init_at_ptr(dst_ptr, instance, index, &query_input);
-        if let Err(e) = init_result {
-          return Err(e);
-        }
+        device::Device::init_at_ptr(dst_ptr, instance, index, &query_input)?;
       }
 
       guard.defused = true;
@@ -258,7 +266,11 @@ impl RenderContext for VulkanRenderContext {
     f: fn(dev: &dyn RenderDevice, p_user_data: *mut ffi::c_void) -> GpuResult<()>,
   ) -> Option<GpuResult<()>> {
     let core = self.core.read();
-    core.live_devices.get(&dev_handle).map(|device| f(device, p_user_data))
+    // SAFETY: if it exists in the map, it was inserted with `init_device`
+    core
+      .live_devices
+      .get(&dev_handle)
+      .map(|device| unsafe { f(device.assume_init_ref(), p_user_data) })
   }
 
   #[cfg(target_os = "linux")]
@@ -286,7 +298,9 @@ pub struct SimpleParticleEmissionStepParams<'a> {
 }
 
 /// new particle logic, implemented here only for vulkan. Function
-pub fn simple_simulation_step(params: SimpleSimulationStepParams<'_>) -> EngineResult<crate::gpu::CommandBufferSyncInfo> {
+pub fn simple_simulation_step(
+  params: SimpleSimulationStepParams<'_>,
+) -> EngineResult<crate::gpu::CommandBufferSyncInfo> {
   todo!()
 }
 

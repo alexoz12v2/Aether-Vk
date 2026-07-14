@@ -15,7 +15,7 @@ use crate::{
   },
   types::{EngineError, EngineResult},
 };
-use aethervk_oshal_rlib as oshal;
+use aethervk_oshal_rlib::{self as oshal, math::vector::vec3f64::DVec3};
 use alloc::{string::String, sync::Arc, vec::Vec};
 use core::ffi::c_char;
 use oshal::math::{
@@ -273,8 +273,19 @@ impl SimulationContext {
     }
   }
 
-  /// TODO: Document this item
-  pub fn create_empty_scene(&self, spawn_fallback_camera: bool) -> EngineResult<u64> {
+  pub fn create_empty_scene(
+    &self,
+    spawn_fallback_camera: bool,
+    start_epoch: hifitime::Epoch,
+    end_epoch: hifitime::Epoch,
+  ) -> EngineResult<u64> {
+    // if start_epoch comes after end or if time interval is less than a day, then refuse
+    if start_epoch >= end_epoch || end_epoch - start_epoch < hifitime::Duration::from_days(1 as _) {
+      return Err(EngineError::InvalidOperation(
+        "end_epoch and start_epoch should be at least 1 day apart",
+      ));
+    }
+
     let (scene, root_entity) = empty_scene_object(Arc::clone(&self.texture_cache))?;
 
     // 1. Cursor Entity
@@ -282,9 +293,7 @@ impl SimulationContext {
     scene.add_component(
       cursor_entity,
       crate::scene::HighResTransformComponent {
-        position: aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
-          0.0, 0.0, 0.0,
-        ),
+        position: DVec3::zero(),
         rotation: Quat::identity(),
         scale: Vec3f32::from_components(0.02, 0.02, 0.02),
       },
@@ -359,8 +368,23 @@ impl SimulationContext {
       sky_id = Some(sky_entity);
     }
 
+    let time_state = {
+      use aethervk_oshal_rlib::os::time::v2::SimSpeed;
+      let scene_data = self.scenes.read();
+      let scene_id = scene_data.next_scene_id();
+      let time_manager = oshal::os::time::v2::TimeManager::new(
+        start_epoch,
+        SimSpeed::Paused,
+        super::MAX_UNSCALED_DELTA_MS,
+      );
+      let time_state = time_manager.state.clone();
+      scene_data.time_managers.insert(scene_id, time_manager);
+      time_state
+    };
+
     let mut scene_ctx_obj =
-      SceneContext::new_empty(Arc::new(scene), root_entity).with_physics_scene();
+      SceneContext::new_empty(Arc::new(scene), root_entity, time_state, end_epoch)
+        .with_physics_scene();
     scene_ctx_obj.cursor_entity = Some(cursor_entity);
     scene_ctx_obj.sun_entity = Some(sun_entity);
     if let Some(c) = camera_id {
@@ -389,8 +413,7 @@ impl SimulationContext {
     Vec3f32::from_components(0.0, -7.07, 7.07)
   }
 
-  // TODO remove
-  /// TODO: Document this item
+  #[cfg(test)]
   pub fn create_default_scene(&self, spawn_fallback_camera: bool) -> EngineResult<u64> {
     oshal::log!("create_default_scene: START");
     let (scene, root_entity) = empty_scene_object(Arc::clone(&self.texture_cache))?;
@@ -398,6 +421,10 @@ impl SimulationContext {
       "create_default_scene: empty_scene_object OK, root={:?}",
       root_entity
     );
+    // since this is a testing function I can make up some values
+    let start_epoch =
+      hifitime::Epoch::from_gregorian_at_midnight(2020, 12, 25, hifitime::TimeScale::UTC);
+    let end_epoch = start_epoch + hifitime::Duration::from_days(2 as _);
 
     let sun_radius = 0.004652472; // Solar radius in AU
     let sun_scale = sun_radius / 0.6; // UV sphere is radius 0.6, so scale matches extent
@@ -489,7 +516,7 @@ impl SimulationContext {
       scene.add_component(
         sky_entity,
         TransformComponent {
-          position: Vec3f32::from_components(0.0, 0.0, 0.0),
+          position: Vec3f32::zero(),
           rotation: Quat::identity(),
           scale: Vec3f32::from_components(1.0, 1.0, 1.0),
         },
@@ -505,7 +532,7 @@ impl SimulationContext {
     scene.add_component(
       grid_entity,
       TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 0.0),
+        position: Vec3f32::zero(),
         rotation: Quat::identity(),
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
@@ -518,9 +545,7 @@ impl SimulationContext {
     scene.add_component(
       cursor_entity,
       crate::scene::HighResTransformComponent {
-        position: aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
-          0.0, 0.0, 0.0,
-        ),
+        position: DVec3::zero(),
         rotation: Quat::identity(),
         scale: Vec3f32::from_components(0.02, 0.02, 0.02),
       },
@@ -529,8 +554,20 @@ impl SimulationContext {
     scene.set_parent(cursor_entity, Some(root_entity));
     oshal::log!("create_default_scene: cursor OK");
 
+    let time_scale = {
+      use oshal::os::time::v2::{SimSpeed, TimeManager};
+      let scene_data = self.scenes.read();
+      let time_manager =
+        TimeManager::new(start_epoch, SimSpeed::Paused, super::MAX_UNSCALED_DELTA_MS);
+      let scene_id = scene_data.next_scene_id();
+      let time_scale = time_manager.state.clone();
+      scene_data.time_managers.insert(scene_id, time_manager);
+      time_scale
+    };
+
     let mut scene_ctx_obj =
-      SceneContext::new_empty(Arc::new(scene), root_entity).with_physics_scene();
+      SceneContext::new_empty(Arc::new(scene), root_entity, time_scale, end_epoch)
+        .with_physics_scene();
     oshal::log!("create_default_scene: with_physics_scene OK, calling with_cursor_entity");
     let mut scene_ctx_obj = scene_ctx_obj.with_cursor_entity(cursor_entity)?;
     oshal::log!("create_default_scene: with_cursor_entity OK");
