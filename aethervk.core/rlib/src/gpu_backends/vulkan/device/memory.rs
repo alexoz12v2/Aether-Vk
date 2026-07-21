@@ -279,7 +279,7 @@ impl FrameStagingArena {
 }
 
 impl DeviceResource for GlobalDeviceAllocator {
-  fn cleanup(&mut self, _device: &ash::Device) {
+  fn cleanup(&mut self, _device: &super::LogicalDevice) {
     #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
     {
       if let Ok(stats) = self.allocator.build_stats_string(true) {

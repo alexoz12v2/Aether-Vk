@@ -245,7 +245,7 @@ impl RenderPassBundle {
       discard_pool.discard_pipeline_layout(comp.pipeline_layout.get(), timeline);
       struct CompositeDescriptorPoolDiscard(vk::DescriptorPool);
       impl super::DeviceResource for CompositeDescriptorPoolDiscard {
-        fn cleanup(&mut self, device: &ash::Device) {
+        fn cleanup(&mut self, device: &super::LogicalDevice) {
           unsafe { device.destroy_descriptor_pool(self.0, None) };
         }
       }
@@ -292,7 +292,7 @@ impl RenderPassBundle {
 }
 
 impl DeviceResource for RenderPasses {
-  fn cleanup(&mut self, device: &ash::Device) {
+  fn cleanup(&mut self, device: &super::LogicalDevice) {
     for (_, mut bundle) in
       crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.render_passes)
         .drain()

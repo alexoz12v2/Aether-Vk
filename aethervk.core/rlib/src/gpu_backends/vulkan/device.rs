@@ -234,7 +234,6 @@ macro_rules! extract_pe {
 }
 
 #[macro_export]
-#[macro_export]
 macro_rules! wait_for_pe_direct {
   ($map:expr, $h:expr) => {{
     let mut retry_count = 0;
@@ -395,11 +394,7 @@ pub(super) mod shader_manager;
 pub(super) mod swapchain;
 pub(super) mod timeline_manager;
 
-// TODO No vulkan calls while holding locks
-// TODO remove all unwrap and unwrap_unchecked (unless absolutely necessary or sure)
-
 #[derive(Debug)]
-/// TODO: Document this item
 pub(super) struct TaskEntry {
   pub(super) target_value: AtomicU64,
   pub(super) status: AtomicU32, // 0: Pending, 1: Success, 2: Failed
@@ -468,7 +463,7 @@ trait DeviceResource {
   /// without having to propagate through `Arc` or other means a reference
   /// to device handle and its function pointers
   /// Note: This function is not responsible to setup the proper state for cleanup (eg synchronization)
-  fn cleanup(&mut self, device: &ash::Device);
+  fn cleanup(&mut self, device: &LogicalDevice);
 }
 
 struct FunctionalDeviceResource<H: vk::Handle + Copy, F: FnOnce(H, &ash::Device)> {
@@ -490,7 +485,7 @@ impl<H: vk::Handle + Copy, F: FnOnce(H, &ash::Device)> DeviceResource
   for FunctionalDeviceResource<H, F>
 {
   #[named]
-  fn cleanup(&mut self, device: &ash::Device) {
+  fn cleanup(&mut self, device: &LogicalDevice) {
     let h = self.handle;
     if let Some(cleanup) = self.cleanup.take() {
       cleanup(h, device);
@@ -499,7 +494,7 @@ impl<H: vk::Handle + Copy, F: FnOnce(H, &ash::Device)> DeviceResource
 }
 
 struct DeviceResourceJanitor<'a, const N: usize> {
-  device: &'a ash::Device,
+  device: &'a LogicalDevice,
   resources: heapless::Vec<NonNull<dyn DeviceResource + 'a>, N>,
   heap_resources: Vec<Box<dyn DeviceResource + 'a>>,
   allocator: StackAllocator,
@@ -508,7 +503,7 @@ struct DeviceResourceJanitor<'a, const N: usize> {
 
 impl<'a, const N: usize> DeviceResourceJanitor<'a, N> {
   #[named]
-  fn new(device: &'a ash::Device) -> Self {
+  fn new(device: &'a LogicalDevice) -> Self {
     Self {
       device,
       allocator: StackAllocator::new(),
@@ -613,15 +608,13 @@ pub struct DeviceResources {
   /// Not pub on purpose cause Kernels has its own discard pool driven by compute timeline
   discard_pool: resources::DiscardPool,
   live_presentation_engines: dashmap::DashMap<PresentationEngineHandle, PresentationState>,
-  pub command_pools: DebugTrackedRwLock<
-    heapless::Vec<Option<Arc<commands::CommandPools>>, { utils::MAX_QUEUE_FAMILY_COUNT }>,
-  >,
+  pub command_pools: Option<Arc<commands::CommandPools>>,
   pub descriptor_pool: DebugTrackedRwLock<Option<Arc<descriptors::DescriptorPools>>>,
   pub pipeline_pool: pipelines::PipelinePool,
   renderpasses: renderpasses::RenderPasses,
   pub shader_manager: DebugTrackedRwLock<shader_manager::ShaderManager>,
 
-  timeline_manager: timeline_manager::TimelineManager,
+  pub(crate) timeline_manager: timeline_manager::TimelineManager,
   next_cmd_id: Arc<AtomicU64>,
 
   linear_sampler: NonZeroHandle<vk::Sampler>,
@@ -797,13 +790,8 @@ impl DeviceResources {
 
     self.pipeline_pool.cleanup(device);
 
-    let mut cp_lock = DebugTrackedRwLock::write(&self.command_pools);
-    for command_pool in cp_lock.iter_mut() {
-      if let Some(pool) = command_pool.take() {
-        assert_eq!(Arc::strong_count(&pool), 1);
-        let mut command_pool = Arc::try_unwrap(pool).unwrap();
-        command_pool.cleanup(device);
-      }
+    if let Some(mut command_pools) = self.command_pools.take() {
+      alloc::sync::Arc::get_mut(&mut command_pools).unwrap().cleanup(device);
     }
 
     let keys: alloc::vec::Vec<_> =
@@ -1014,14 +1002,7 @@ impl DeviceResources {
     // - Discard Pool
     let discard_pool = unsafe { resources::DiscardPool::new(64) };
     // - Command Pools
-    let mut command_pools = heapless::Vec::new();
-    for _ in 0..utils::MAX_QUEUE_FAMILY_COUNT {
-      unsafe { command_pools.push_unchecked(None) };
-    }
-    for &queue_family_index in unique_family_indices_iter {
-      command_pools[queue_family_index as usize] =
-        Some(Arc::new(commands::CommandPools::new(queue_family_index)));
-    }
+    let command_pools = Some(Arc::new(commands::CommandPools::new()));
     // - Swapchain hashmap
     let live_presentation_engines = dashmap::DashMap::new();
 
@@ -1040,7 +1021,7 @@ impl DeviceResources {
 
     Ok(Self {
       allocator,
-      command_pools: DebugTrackedRwLock::new(command_pools),
+      command_pools,
       discard_pool,
       live_presentation_engines,
       descriptor_pool: DebugTrackedRwLock::new(Some(descriptor_pool)),
@@ -1135,13 +1116,16 @@ impl RecordingCmdBufferData {
     }
   }
 
-  /// command buffer is automatically recycled by [`commands::CommandPools`]
+  /// command buffer is automatically recycled by [`crate::gpu_backends::vulkan::device::commands::CommandPools`]
+  /// Since this is expoded
   #[named]
   fn discard(
     &mut self,
+    device: &LogicalDevice,
     cmd_buf_id: CommandBufferId,
     discard_pool: &resources::DiscardPool,
     cmd_pools: Arc<commands::CommandPools>,
+    family_index: u32,
     timeline: u64,
   ) {
     let tid = this_thread::id();
@@ -1150,12 +1134,13 @@ impl RecordingCmdBufferData {
         tid,
         cmd_buf_id,
         self.command_buffer.get(),
+        family_index,
         cmd_pools,
         timeline,
       );
     } else {
       // Not recorded, so just recycle it immediately.
-      let _ = cmd_pools.recycle(tid, cmd_buf_id, self.command_buffer.get());
+      let _ = cmd_pools.recycle(device, tid, family_index, self.command_buffer.get());
     }
   }
 }
@@ -1164,6 +1149,7 @@ impl RecordingCmdBufferData {
 pub struct LogicalDevice {
   pub handle: ash::Device,
   pub submission_lock: spin::Mutex<()>,
+  pub submission_lock_compute: spin::Mutex<()>,
   /// Note: Remove if API_VERSION_1_2
   pub create_renderpass2: ash::khr::create_renderpass2::Device,
   pub buffer_device_address: ash::khr::buffer_device_address::Device,
@@ -1224,7 +1210,6 @@ impl LogicalDevice {
     // This is a no-op in release builds, and should be optimized away.
   }
 
-  /// TODO: Document this item
   #[named]
   pub fn locked_queue_submit(
     &self,
@@ -1233,6 +1218,17 @@ impl LogicalDevice {
     fence: vk::Fence,
   ) -> ash::prelude::VkResult<()> {
     let _guard = self.submission_lock.lock();
+    unsafe { self.handle.queue_submit(queue, submits, fence) }
+  }
+
+  #[named]
+  pub fn locked_queue_submit_compute(
+    &self,
+    queue: vk::Queue,
+    submits: &[vk::SubmitInfo],
+    fence: vk::Fence,
+  ) -> ash::prelude::VkResult<()> {
+    let _guard = self.submission_lock_compute.lock();
     unsafe { self.handle.queue_submit(queue, submits, fence) }
   }
 
@@ -1326,7 +1322,7 @@ pub struct Device {
   depth_stencil_format: vk::Format,
   /// Recording command buffers
   recording_command_buffers:
-    DebugTrackedRwLock<hashbrown::HashMap<CommandBufferHandle, RecordingCmdBufferData>>,
+    dashmap::DashMap<(CommandBufferHandle, QueueRole), RecordingCmdBufferData>,
 }
 
 const MAX_QUEUE_COUNT: usize = 4;
@@ -1429,10 +1425,380 @@ impl Queues {
   }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum QueueRole {
+  Graphics,
+  Compute,
+}
+
 impl Device {
-  /// returns, when ok 1) BDA particle page table 2) currently cached compute timeline value
+  /// Submit a given command buffer either for compute or for graphics
+  /// Returns timeline semaphore (graphics queue or compute) and the timeline value which will be
+  /// reached once execution reaches BOTTOM_OF_PIPE
+  ///
+  /// Note: To maintain old behaviour, we register tasks only for graphics queue submissions
   #[named]
-  pub fn create_particle_system(&self, id: u64) -> GpuResult<(u64, u64)> {
+  pub fn submit_command_buffer_generic(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    task_id: Option<u64>,
+    wait_infos: &[crate::gpu::CommandBufferSyncInfo],
+    signal_infos: &[crate::gpu::CommandBufferSyncInfo],
+    role: QueueRole,
+  ) -> GpuResult<(vk::Semaphore, u64)> {
+    use super::utils::RwLockable;
+    const MAX_WAIT_SYNC_INFOS: usize = 8;
+    const MAX_SIGNAL_SYNC_INFOS: usize = 8;
+    if wait_infos.len() > MAX_WAIT_SYNC_INFOS || signal_infos.len() > MAX_SIGNAL_SYNC_INFOS {
+      return Err(gpu_err!(
+        "wait_info or signal_infos crossed the maximum allowed threshold"
+      ));
+    }
+
+    let cmd_key = (cmd_buffer, role);
+    // 1. Extract command buffer data and drop the lock immediately
+    let mut data = {
+      let cmd_buffers = &self.recording_command_buffers;
+      cmd_buffers.remove(&cmd_key).ok_or(gpu_err_invalid_cmd!())?
+    }
+    .1;
+
+    unsafe {
+      self.device.end_command_buffer(data.command_buffer.get())?;
+    }
+
+    let is_graphics = role == QueueRole::Graphics;
+    let queue = if is_graphics {
+      self.get_graphics_queue()
+    } else {
+      self.get_compute_queue()
+    };
+    let presentation: Option<_> = if is_graphics {
+      // TODO: test whether there's a problem if we remove this check
+      // Some(data.presentation.take().ok_or(gpu_err_cmd_no_pe!())?)
+      data.presentation.take()
+    } else {
+      None
+    };
+
+    let timeline_sem = if is_graphics {
+      self.res.read().timeline_manager.semaphore.get()
+    } else {
+      self.kernels.timeline
+    };
+
+    // 2. Start Vulkan Transaction for the submission process
+    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read(
+        presentation.map(|p| p.presentation_engine),
+        |state, pe_handle_opt| {
+          let pe_opt: Option<
+            dashmap::mapref::one::Ref<
+              '_,
+              gpu::PresentationEngineHandle,
+              swapchain::PresentationState,
+            >,
+          > = if let Some(pe_handle) = &pe_handle_opt {
+            Some(wait_for_pe!(state, pe_handle)?)
+          } else {
+            None
+          };
+
+          let is_resize_required = pe_opt
+            .map(|pe| {
+              pe.swapchain_generation()
+                != unsafe { presentation.unwrap_unchecked() }.swapchain_generation
+            })
+            .unwrap_or(false);
+          let cmd_pools = state
+            .command_pools
+            .as_ref()
+            .cloned()
+            .ok_or(gpu_err!("couldn't get command pools"))?;
+
+          let task_registry = state.timeline_manager.task_registry.clone();
+          let timeline_manager_ptr = if is_graphics {
+            // this is ensured to be non null. can't use NonNull cause it's *const
+            Some(&state.timeline_manager as *const timeline_manager::TimelineManager)
+          } else {
+            None
+          };
+
+          Ok((
+            pe_handle_opt,
+            is_resize_required,
+            timeline_sem,
+            cmd_pools,
+            task_registry,
+            timeline_manager_ptr,
+          ))
+        },
+      )?
+      .execute(
+        |(
+          pe_handle_opt,
+          is_resize_required,
+          timeline_sem,
+          cmd_pools,
+          task_registry,
+          timeline_manager_ptr,
+        ),
+         _rollback| {
+          // +1 to account for possible presentation engine signal semaphore
+          let mut signal_semaphore_infos =
+            heapless::Vec::<vk::SemaphoreSubmitInfo, { MAX_SIGNAL_SYNC_INFOS + 1 }>::new();
+          let mut wait_semaphore_infos =
+            heapless::Vec::<vk::SemaphoreSubmitInfo, { MAX_WAIT_SYNC_INFOS + 1 }>::new();
+
+          if pe_handle_opt.is_some() {
+            let pres = unsafe { presentation.unwrap_unchecked() };
+            if let Some(sem) = pres.signal_semaphore {
+              unsafe {
+                // This is not a timeline semaphore, so value is don't care
+                signal_semaphore_infos.push_unchecked(
+                  vk::SemaphoreSubmitInfo::default()
+                    .semaphore(sem.get())
+                    .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT),
+                );
+              }
+            }
+
+            if let Some(wait_semaphore) = pres.wait_semaphore {
+              unsafe {
+                wait_semaphore_infos.push_unchecked(
+                  vk::SemaphoreSubmitInfo::default()
+                    .semaphore(wait_semaphore.get())
+                    .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT),
+                );
+              }
+            }
+          }
+
+          for sync in wait_infos {
+            use ash::vk::Handle;
+            let vk_semaphore = vk::Semaphore::from_raw(sync.timeline_semaphore);
+            unsafe {
+              wait_semaphore_infos.push_unchecked(
+                vk::SemaphoreSubmitInfo::default()
+                  .semaphore(vk_semaphore)
+                  .value(sync.timeline_value)
+                  .stage_mask(gpu_sync_info_to_flags(sync.wait_stage_mask, false)),
+              );
+            }
+          }
+
+          for sync in signal_infos {
+            use ash::vk::Handle;
+            let vk_semaphore = vk::Semaphore::from_raw(sync.timeline_semaphore);
+            unsafe {
+              signal_semaphore_infos.push_unchecked(
+                vk::SemaphoreSubmitInfo::default()
+                  .semaphore(vk_semaphore)
+                  .value(sync.timeline_value)
+                  .stage_mask(gpu_sync_info_to_flags(sync.wait_stage_mask, false)),
+              );
+            }
+          }
+
+          let next_timeline_value = if let Some(timeline_manager_ptr_) = timeline_manager_ptr {
+            debug_assert!(is_graphics);
+            let timeline_manager = unsafe { &*timeline_manager_ptr_ };
+            timeline_manager.allocate_submit_value()
+          } else {
+            self
+              .kernels
+              .next_submit_value
+              .fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+          };
+
+          unsafe {
+            signal_semaphore_infos.push_unchecked(
+              vk::SemaphoreSubmitInfo::default()
+                .semaphore(timeline_sem)
+                .value(next_timeline_value)
+                .stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE),
+            );
+          }
+
+          // TAKE SUBMISSION LOCK BEFORE ALLOCATING TIMELINE!
+          // This ensures that the order we get timeline values exactly matches the order we submit to the queue.
+          let _guard = if is_graphics {
+            self.device.submission_lock.lock()
+          } else {
+            self.device.submission_lock_compute.lock()
+          };
+
+          let command_buffer_info =
+            vk::CommandBufferSubmitInfo::default().command_buffer(data.command_buffer.get());
+
+          let submit_info = vk::SubmitInfo2::default()
+            .wait_semaphore_infos(&wait_semaphore_infos)
+            .signal_semaphore_infos(&signal_semaphore_infos)
+            .command_buffer_infos(core::slice::from_ref(&command_buffer_info));
+
+          unsafe {
+            self
+              .device
+              .synchronization2
+              .queue_submit2(
+                queue.handle,
+                core::slice::from_ref(&submit_info),
+                presentation
+                  .and_then(|p| p.submission_fence)
+                  .map(|f| f.get())
+                  .unwrap_or(vk::Fence::null()),
+              )
+              .map_err(|e| {
+                aethervk_oshal_rlib::log!("Queue submit failed: {:?}", e);
+                GpuError::from(e)
+              })?;
+          }
+          drop(_guard); // unlock here
+
+          // Inform the task registry of the timeline value to wait for
+          if is_graphics {
+            if let Some(tid) = task_id {
+              let registry = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+                &task_registry,
+              );
+              if let Some(entry) = registry.get(&tid) {
+                entry
+                  .target_value
+                  .store(next_timeline_value, core::sync::atomic::Ordering::Release);
+              }
+            }
+          }
+
+          // Pass 'data' through to be discarded in the commit phase
+          Ok((
+            data,
+            pe_handle_opt,
+            is_resize_required,
+            next_timeline_value,
+            cmd_pools,
+          ))
+        },
+      )
+      .commit_read(|state, execute_result| {
+        let (mut data, pe_handle_opt, is_resize_required, next_timeline_value, cmd_pools) =
+          execute_result?;
+
+        if is_graphics && pe_handle_opt.is_some() {
+          // SAFETY: graphics queue submissions through this function are always rendering commands,
+          // which therefore have a presentation engine
+          let pe_handle = unsafe { pe_handle_opt.unwrap_unchecked() };
+          if let Some(mut pe) = state.live_presentation_engines.get_mut(&pe_handle) {
+            pe.mark_fence_submitted(data.presentation.unwrap().acquire_result.frame_index as u32);
+            if let swapchain::PresentationState::Windowless(windowless) = pe.value() {
+              windowless
+                .last_timeline_value
+                .store(next_timeline_value, core::sync::atomic::Ordering::Release);
+            }
+          }
+        }
+
+        // Discard resources now that submission is safely recorded
+        data.discard(
+          &self.device,
+          cmd_buffer.into(),
+          &state.discard_pool,
+          cmd_pools,
+          queue.family_index,
+          next_timeline_value,
+        );
+
+        if is_resize_required {
+          Err(GpuError::ResizeRequired)
+        } else {
+          Ok((timeline_sem, next_timeline_value))
+        }
+      })
+  }
+
+  /// Get the target graphics queue timeline value for which a given task id will be completed
+  pub fn get_task_target_value(&self, task_id: u64) -> GpuResult<u64> {
+    let res = self.res.read();
+    res.timeline_manager.get_task_target_value(task_id)
+  }
+
+  /// version of the [`crate::gpu::RenderDevice`] method `get_command_buffer` which also returns
+  /// the native `VkCommandBuffer`
+  pub fn get_command_buffer_and_native(
+    &self,
+  ) -> GpuResult<(gpu::CommandBufferHandle, vk::CommandBuffer)> {
+    self.get_command_buffer_and_native_all(QueueRole::Graphics)
+  }
+
+  #[named]
+  pub fn get_compute_command_buffer_and_native(
+    &self,
+  ) -> GpuResult<(gpu::CommandBufferHandle, vk::CommandBuffer)> {
+    self.get_command_buffer_and_native_all(QueueRole::Compute)
+  }
+
+  /// version of the [`crate::gpu::RenderDevice`] method `get_command_buffer` which also returns
+  /// the native `VkCommandBuffer`. generalized to support compute too
+  #[named]
+  pub fn get_command_buffer_and_native_all(
+    &self,
+    role: QueueRole,
+  ) -> GpuResult<(gpu::CommandBufferHandle, vk::CommandBuffer)> {
+    use super::utils::RwLockable;
+    let is_compute = match role {
+      QueueRole::Graphics => false,
+      _ => true,
+    };
+    let (cmd_id, cmd_pool_arc, current_timeline, discard_pool_ptr) = {
+      let res_guard = self.res.read();
+      let cmd_id = if is_compute {
+        self.kernels.next_cmd_id.fetch_add(1, core::sync::atomic::Ordering::SeqCst)
+      } else {
+        res_guard.next_cmd_id.fetch_add(1, core::sync::atomic::Ordering::SeqCst)
+      };
+      let cmd_pool_arc = unsafe { res_guard.command_pools.as_ref().unwrap_unchecked().clone() };
+      let discard_pool_ptr = core::ptr::from_ref(if is_compute {
+        &self.kernels.discard_pool
+      } else {
+        &res_guard.discard_pool
+      });
+      let current_timeline = if is_compute {
+        self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed)
+      } else {
+        res_guard.get_timeline_semaphore_cached_value()
+      };
+      (cmd_id, cmd_pool_arc, current_timeline, discard_pool_ptr)
+    };
+
+    let family_index = if is_compute {
+      self.get_compute_queue().family_index
+    } else {
+      self.get_graphics_queue().family_index
+    };
+
+    let cmd = {
+      super::allocate_primary_vk_command_buffer(
+        &self.device,
+        &cmd_pool_arc,
+        // SAFETY: cannot destroy without dropping `self`
+        unsafe { discard_pool_ptr.as_ref_unchecked() },
+        family_index,
+        CommandBufferId(cmd_id),
+        current_timeline,
+      )
+    }?;
+
+    // should be `None`, but we don't care
+    let _ = self.recording_command_buffers.insert(
+      (CommandBufferHandle(cmd_id), role),
+      RecordingCmdBufferData::new(unsafe { NonZeroHandle::new_unchecked(cmd) }),
+    );
+
+    Ok((CommandBufferHandle(cmd_id), cmd))
+  }
+
+  /// returns, when ok currently cached compute timeline value
+  #[named]
+  pub fn create_particle_system(&self, id: u64) -> GpuResult<u64> {
     if self.res.read().particle_system_manager.is_none() {
       return Err(gpu_err!("particle_system_manager absent"));
     }
@@ -1459,30 +1825,52 @@ impl Device {
         let mut _cleanup = TransientCleanup::command_only(device, command_pool, fence);
 
         // allocate GPU-only page table resource
-        const PAGE_TABLE_BYTES: u64 =
-          (4 * crate::gpu::new_particles::MAX_PARTICLES_PER_SYSTEM
-            .div_ceil(crate::gpu::new_particles::PCHUNK_SIZE)) as _;
+        const PAGE_TABLE_BYTES: u64 = (crate::gpu::new_particles::PARTICLE_PAGE_TABLE_HEADER_SIZE
+          + 4
+            * crate::gpu::new_particles::MAX_PARTICLES_PER_SYSTEM
+              .div_ceil(crate::gpu::new_particles::PCHUNK_SIZE))
+          as _;
         let buffer_info = vk::BufferCreateInfo::default().size(PAGE_TABLE_BYTES).usage(
-          vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+          vk::BufferUsageFlags::STORAGE_BUFFER
+            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+            | vk::BufferUsageFlags::TRANSFER_SRC // for copy synchronization
+            | vk::BufferUsageFlags::TRANSFER_DST, // for copy synchronization
         );
         let mut alloc_info = vk_mem::AllocationCreateInfo::default();
         alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
         crate::apply_test_dedicated_alloc!(alloc_info);
         alloc_info.priority = 1.0f32;
 
-        let (buffer, alloc) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }
+        let (buffer_0, alloc_0) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }
           .with_name(
             device,
-            &alloc::format!("ParticleSystem_t{}", compute_timeline_value),
+            &alloc::format!("ParticleSystem_0_t{}", compute_timeline_value),
+          )?;
+        let (buffer_1, alloc_1) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }
+          .with_name(
+            device,
+            &alloc::format!("ParticleSystem_1_t{}", compute_timeline_value),
           )?;
 
-        let roll_alloc = alloc.clone();
+        let roll_alloc_0 = alloc_0.clone();
+        let roll_alloc_1 = alloc_1.clone();
         let raw_allocator = allocator.internal;
         rollback.defer(move |_| {
-          discard_pool.discard_buffer(raw_allocator, buffer, roll_alloc, compute_timeline_value);
+          discard_pool.discard_buffer(
+            raw_allocator,
+            buffer_0,
+            roll_alloc_0,
+            compute_timeline_value,
+          );
+          discard_pool.discard_buffer(
+            raw_allocator,
+            buffer_1,
+            roll_alloc_1,
+            compute_timeline_value,
+          );
         });
 
-        // fill it with 0xFFFF'FFFF
+        // fill both buffers with 0xFFFF'FFFF
         let command_buffer_info = vk::CommandBufferAllocateInfo::default()
           .level(vk::CommandBufferLevel::PRIMARY)
           .command_buffer_count(1);
@@ -1502,14 +1890,44 @@ impl Device {
           let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
           self.device.begin_command_buffer(command_buffer, &begin_info)?;
-          self.device.cmd_fill_buffer(command_buffer, buffer, 0, vk::WHOLE_SIZE, u32::MAX);
+
+          // 1. Define the 32-byte header data inline (8 u32s)
+          // Layout: [particleCount, instanceCount, firstVertex, firstInstance, activeChunkCount, pad0, pad1, pad2]
+          let header_data: [u32; 8] = [0, 1, 0, 0, 0, 0, 0, 0];
+
+          // Cast to a byte slice in a `no_std` compatible way
+          let header_bytes = unsafe {
+            core::slice::from_raw_parts(
+              header_data.as_ptr() as *const u8,
+              core::mem::size_of_val(&header_data),
+            )
+          };
+
+          // --- Configure buffer_0 ---
+
+          // Write the 32-byte header to the start of the buffer (offset 0)
+          self.device.cmd_update_buffer(command_buffer, buffer_0, 0, header_bytes);
+          // Fill the rest of the buffer with u32::MAX (offset 32 to the end)
+          self
+            .device
+            .cmd_fill_buffer(command_buffer, buffer_0, 32, vk::WHOLE_SIZE, u32::MAX);
+
+          // --- Configure buffer_1 ---
+
+          // Write the 32-byte header to the start of the buffer (offset 0)
+          self.device.cmd_update_buffer(command_buffer, buffer_1, 0, header_bytes);
+          // Fill the rest of the buffer with u32::MAX (offset 32 to the end)
+          self
+            .device
+            .cmd_fill_buffer(command_buffer, buffer_1, 32, vk::WHOLE_SIZE, u32::MAX);
+
           self.device.end_command_buffer(command_buffer)?;
 
           // submit and wait phase
           let submit_info =
             vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&command_buffer));
           device
-            .locked_queue_submit(
+            .locked_queue_submit_compute(
               compute_queue.handle,
               core::slice::from_ref(&submit_info),
               fence,
@@ -1518,18 +1936,25 @@ impl Device {
           let _ = device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX);
         }
 
-        let bda_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
-        let bda = unsafe { device.buffer_device_address.get_buffer_device_address(&bda_info) };
+        let bda_info_0 = vk::BufferDeviceAddressInfo::default().buffer(buffer_0);
+        let bda_0 = unsafe { device.buffer_device_address.get_buffer_device_address(&bda_info_0) };
+        let bda_info_1 = vk::BufferDeviceAddressInfo::default().buffer(buffer_1);
+        let bda_1 = unsafe { device.buffer_device_address.get_buffer_device_address(&bda_info_1) };
 
-        Ok((bda, buffer, alloc))
+        Ok(((bda_0, buffer_0, alloc_1), (bda_1, buffer_1, alloc_1)))
       })
       .commit_read(|state, res| {
-        if let Ok((bda, buffer, alloc)) = res {
+        if let Ok(((bda_0, buffer_0, alloc_0), (bda_1, buffer_1, alloc_1))) = res {
           // safety checked at the beginning of the function
           let psm = unsafe { state.particle_system_manager.as_ref().unwrap_unchecked() };
-          // probably we should check whether it exists already?
-          let _ = psm.page_tables.insert(id, particles::BufferAlloc::new(buffer, alloc, bda));
-          Ok((bda, compute_timeline_value))
+
+          psm.add_page_tables(
+            id,
+            particles::BufferAlloc::new(buffer_0, alloc_0, bda_0),
+            particles::BufferAlloc::new(buffer_1, alloc_1, bda_1),
+          );
+
+          Ok(compute_timeline_value)
         } else {
           Err(unsafe { res.unwrap_err_unchecked() })
         }
@@ -1541,24 +1966,27 @@ impl Device {
   /// never be used after this
   #[named]
   pub fn discard_particle_system(&self, id: u64, timeline: u64) -> GpuResult<()> {
-    let (allocator, buffer, alloc) = {
+    let (allocator, buf_0, alloc_0, buf_1, alloc_1) = {
       let res = self.res.read();
       let allocator = res.allocator.allocator.as_allocator_view();
       let psm = res
         .particle_system_manager
         .as_ref()
         .ok_or(gpu_err!("particle_system_manager absent"))?;
-      let (_, buffer_alloc) = psm
-        .page_tables
-        .remove(&id)
+      let (pt_0, pt_1) = psm
+        .remove_pages_tables(id)
         .ok_or(gpu_err!("particle system with id {} not found", id))?;
-      (allocator, buffer_alloc.buffer, buffer_alloc.alloc)
+      (allocator, pt_0.buffer, pt_0.alloc, pt_1.buffer, pt_1.alloc)
     };
 
     self
       .kernels
       .discard_pool
-      .discard_buffer(allocator.internal, buffer, alloc, timeline);
+      .discard_buffer(allocator.internal, buf_0, alloc_0, timeline);
+    self
+      .kernels
+      .discard_pool
+      .discard_buffer(allocator.internal, buf_1, alloc_1, timeline);
     Ok(())
   }
 
@@ -1587,37 +2015,32 @@ impl Device {
   /// - page_table_buffer_address
   /// - free_list_address
   #[named]
-  fn grab_particle_system_data(&self, id: u64) -> GpuResult<(u64, u64, u64)> {
+  fn grab_particle_system_data(&self, id: u64, role: QueueRole) -> GpuResult<(u64, u64, u64)> {
     let res = self.res.read();
-    if self.res.read().particle_system_manager.is_none() {
+    if res.particle_system_manager.is_none() {
       return Err(gpu_err!("particle_system_manager absent"));
     }
     let psm = unsafe { res.particle_system_manager.as_ref().unwrap_unchecked() };
 
-    // grab particle system page table and global
-    let opt_particles = psm.page_tables.get(&id);
-    if opt_particles.is_none() {
-      return Err(gpu_err!("particle system with id {} not found", id));
-    }
-    unsafe {
-      opt_particles
-        .map(|the_ref| Ok((psm.buffer.address, the_ref.address, psm.free_list.address)))
-        .unwrap_unchecked()
-    }
+    psm
+      .get_addresses(id, role)
+      .ok_or(gpu_err!("particle system with id {} not found", id))
   }
 
+  /// Note: for ApplyEmittersDirectNew emitters are not populated
+  /// Caller is supposed to be physics tasklet thread
   pub fn complete_particle_push_constant<'a>(
     &self,
     push_constants: PushConstantMutUnion<'a>,
     particle_system_id: u64,
   ) -> GpuResult<()> {
     let (global_particle_buffer_address, page_table_buffer_address, free_list_buffer_address) =
-      self.grab_particle_system_data(particle_system_id)?;
+      self.grab_particle_system_data(particle_system_id, QueueRole::Compute)?;
     match push_constants {
       PushConstantMutUnion::ApplyEmittersDirectNew(value) => {
         value.global_particle_buffer_address = global_particle_buffer_address;
         value.particle_page_table = page_table_buffer_address;
-        // TODO emitters elsewhere
+        // emitters elsewhere
       }
       PushConstantMutUnion::IntegrateParticlesP1P2New(value) => {
         value.global_particle_buffer_address = global_particle_buffer_address;
@@ -1688,6 +2111,7 @@ impl Device {
         0,
         push_constants_bytes,
       );
+      // we are independent from the workgroup size.
       let needed_chunks = push_constants.emit_count.div_ceil(gpu::new_particles::PCHUNK_SIZE as _);
       self.device.cmd_dispatch(cmd, needed_chunks, 1, 1);
     }
@@ -1699,17 +2123,11 @@ impl Device {
   /// - velocity kick
   /// - apply emitters
   /// - velocity correction
-  fn particle_system_shaders_num_workgroups() -> u32 {
-    const PAGE_TABLE_ENTRY_COUNT: u32 = crate::gpu::new_particles::MAX_PARTICLES_PER_SYSTEM
-      .div_ceil(crate::gpu::new_particles::PCHUNK_SIZE)
-      as _;
-    // TODO: at emission and compaction we should update a global particle count for all
-    // managers. for now, dispatch the necessary to cover a full page table
-    debug_assert_eq!(
-      PAGE_TABLE_ENTRY_COUNT % crate::gpu::new_particles::PCHUNK_SIZE as u32,
-      0
-    );
-    PAGE_TABLE_ENTRY_COUNT / crate::gpu::new_particles::PCHUNK_SIZE as u32
+  fn particle_system_shaders_num_workgroups(local_size_x: u32, particles_count: u32) -> u32 {
+    const PARTICLES_PER_THREAD: u32 = 4;
+    let particles_per_workgroup = local_size_x * PARTICLES_PER_THREAD;
+
+    (particles_count + particles_per_workgroup - 1) / particles_per_workgroup
   }
 
   /// 1
@@ -1723,13 +2141,17 @@ impl Device {
     debug_assert!(
       super::physics::USE_PARTICLE_SYSTEM_V2.load(core::sync::atomic::Ordering::Relaxed)
     );
+    let pipeline: vk::Pipeline = self.kernels.pipelines.integrate_particles_p1_p2_new;
     if !skip_bind {
-      let pipeline: vk::Pipeline = self.kernels.pipelines.integrate_particles_p1_p2_new;
       unsafe { self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
     }
 
     let push_constants_bytes: &[u8] = bytemuck::bytes_of(push_constants);
     let pipeline_layout: vk::PipelineLayout = self.kernels.pipelines.pipeline_layout;
+    // SAFETY: property constructed Pipelines has local sizes for all shaders
+    let local_size_x =
+      unsafe { self.kernels.pipelines.wg_sizes.get(&pipeline.as_raw()).unwrap_unchecked() }[0];
+    let particle_count = gpu::new_particles::MAX_PARTICLES_PER_SYSTEM as u32;
     unsafe {
       self.device.cmd_push_constants(
         cmd,
@@ -1738,14 +2160,13 @@ impl Device {
         0,
         push_constants_bytes,
       );
-      let num_workgroups_x: u32 = Self::particle_system_shaders_num_workgroups();
+      let num_workgroups_x: u32 =
+        Self::particle_system_shaders_num_workgroups(local_size_x, particle_count);
       self.device.cmd_dispatch(cmd, num_workgroups_x, 1, 1);
     }
 
     Ok(())
   }
-
-  // TODO: periodically discard compute discard_pool
 
   /// When using Point Gravity (Type 0), you calculate distance with rx = s_em_posMu.x - px_n;. Because 32-bit floats lose fractional precision as numbers get larger, space eventually quantizes into a "grid."
   ///
@@ -2003,13 +2424,19 @@ impl Device {
     debug_assert!(
       super::physics::USE_PARTICLE_SYSTEM_V2.load(core::sync::atomic::Ordering::Relaxed)
     );
+    let pipeline: vk::Pipeline = self.kernels.pipelines.apply_emitters_direct_new;
     if !skip_bind {
-      let pipeline: vk::Pipeline = self.kernels.pipelines.apply_emitters_direct_new;
       unsafe { self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
     }
 
     let push_constants_bytes: &[u8] = bytemuck::bytes_of(push_constants);
     let pipeline_layout: vk::PipelineLayout = self.kernels.pipelines.pipeline_layout;
+
+    // SAFETY: property constructed Pipelines has local sizes for all shaders
+    let local_size_x =
+      unsafe { self.kernels.pipelines.wg_sizes.get(&pipeline.as_raw()).unwrap_unchecked() }[0];
+    let particle_count = gpu::new_particles::MAX_PARTICLES_PER_SYSTEM as u32;
+
     unsafe {
       self.device.cmd_push_constants(
         cmd,
@@ -2018,7 +2445,8 @@ impl Device {
         0,
         push_constants_bytes,
       );
-      let num_workgroups_x: u32 = Self::particle_system_shaders_num_workgroups();
+      let num_workgroups_x: u32 =
+        Self::particle_system_shaders_num_workgroups(local_size_x, particle_count);
       self.device.cmd_dispatch(cmd, num_workgroups_x, 1, 1);
     }
 
@@ -2030,20 +2458,23 @@ impl Device {
   pub fn cmd_particle_system_velocity_vertlet_correction(
     &self,
     cmd: vk::CommandBuffer,
-    id: u64,
     push_constants: &gpu::compute_push_constants::IntegrateParticlesP45NewPushConstants,
     skip_bind: bool,
   ) -> GpuResult<()> {
     debug_assert!(
       super::physics::USE_PARTICLE_SYSTEM_V2.load(core::sync::atomic::Ordering::Relaxed)
     );
+    let pipeline: vk::Pipeline = self.kernels.pipelines.integrate_particles_p4_5_new;
     if !skip_bind {
-      let pipeline: vk::Pipeline = self.kernels.pipelines.integrate_particles_p4_5_new;
       unsafe { self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
     }
 
     let push_constants_bytes: &[u8] = bytemuck::bytes_of(push_constants);
     let pipeline_layout: vk::PipelineLayout = self.kernels.pipelines.pipeline_layout;
+    // SAFETY: property constructed Pipelines has local sizes for all shaders
+    let local_size_x =
+      unsafe { self.kernels.pipelines.wg_sizes.get(&pipeline.as_raw()).unwrap_unchecked() }[0];
+    let particle_count = gpu::new_particles::MAX_PARTICLES_PER_SYSTEM as u32;
     unsafe {
       self.device.cmd_push_constants(
         cmd,
@@ -2052,21 +2483,34 @@ impl Device {
         0,
         push_constants_bytes,
       );
-      let num_workgroups_x = Self::particle_system_shaders_num_workgroups();
+      let num_workgroups_x =
+        Self::particle_system_shaders_num_workgroups(local_size_x, particle_count);
       self.device.cmd_dispatch(cmd, num_workgroups_x, 1, 1);
     }
 
     Ok(())
   }
 
+  // Because the activeChunkCount is modified dynamically on the GPU
+  // (by the emitter and the compactor), the CPU doesn't strictly know how many chunks are
+  // mapped at any given frame. To avoid stalling the pipeline to read that value back to
+  // the CPU, use vkCmdDispatchIndirect.
+  //
+  // TODO maintain a tiny Vulkan buffer containing a VkDispatchIndirectCommand struct.
+  // Before this pass, a tiny compute shader writes the activeChunkCount into the
+  // x dimension of that buffer (setting y and z to 1).
+  // <pre>
+  //   // Instructs the GPU to read the X workgroup count directly from the buffer
+  //   device.cmd_dispatch_indirect(command_buffer, indirect_buffer, 0);
+  // </pre>
   #[named]
   pub fn cmd_particle_system_compaction(
     &self,
     cmd: vk::CommandBuffer,
-    id: u64,
     last_compaction_unscaled_us: i64,
     now_unscaled_us: i64,
     push_constants: &gpu::compute_push_constants::NewParticlesCompactPushConstants,
+    skip_bind: bool,
   ) -> GpuResult<i64> {
     debug_assert!(
       super::physics::USE_PARTICLE_SYSTEM_V2.load(core::sync::atomic::Ordering::Relaxed)
@@ -2074,7 +2518,7 @@ impl Device {
 
     {
       let res = self.res.read();
-      if self.res.read().particle_system_manager.is_none() {
+      if res.particle_system_manager.is_none() {
         return Err(gpu_err!("particle_system_manager absent"));
       }
       let psm = unsafe { res.particle_system_manager.as_ref().unwrap_unchecked() };
@@ -2085,15 +2529,71 @@ impl Device {
       }
     }
 
-    let compact_pipeline = self.kernels.pipelines.new_particles_compact;
-    let reset_pipeline = self.kernels.pipelines.new_particles_compact_reset;
-    let pipeline_layout = self.kernels.pipelines.pipeline_layout;
+    let pipeline = self.kernels.pipelines.new_particles_compact;
+    if !skip_bind {
+      unsafe { self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
+    }
 
-    todo!()
+    let push_constants_bytes: &[u8] = bytemuck::bytes_of(push_constants);
+    let pipeline_layout = self.kernels.pipelines.pipeline_layout;
+    // for now we are not using indirect dispatch but over-dispatch
+    let num_workgroups_x = gpu::new_particles::MAX_CHUNKS as u32;
+
+    unsafe {
+      self.device.cmd_push_constants(
+        cmd,
+        pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        push_constants_bytes,
+      );
+      self.device.cmd_dispatch(cmd, num_workgroups_x, 1, 1);
+    }
+
+    Ok(now_unscaled_us)
+  }
+
+  /// Caller is responsible to check whether it is appropriate to call this by first calling
+  /// compaction (if bulk calling for skip bind, build a map of particle system id -> compact yes or
+  /// no)
+  #[named]
+  pub fn cmd_particle_system_compaction_reset(
+    &self,
+    cmd: vk::CommandBuffer,
+    push_constants: &gpu::compute_push_constants::NewParticlesCompactResetPushConstants,
+    skip_bind: bool,
+  ) -> GpuResult<()> {
+    debug_assert!(
+      super::physics::USE_PARTICLE_SYSTEM_V2.load(core::sync::atomic::Ordering::Relaxed)
+    );
+
+    let pipeline = self.kernels.pipelines.new_particles_compact_reset;
+    if !skip_bind {
+      unsafe { self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
+    }
+
+    let push_constants_bytes: &[u8] = bytemuck::bytes_of(push_constants);
+    let pipeline_layout = self.kernels.pipelines.pipeline_layout;
+    unsafe {
+      self.device.cmd_push_constants(
+        cmd,
+        pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        push_constants_bytes,
+      );
+      self.device.cmd_dispatch(cmd, 1, 1, 1);
+    }
+
+    Ok(())
   }
 
   pub fn get_compute_queue(&self) -> Queue {
     self.queues.get_compute_queue()
+  }
+
+  pub fn get_graphics_queue(&self) -> Queue {
+    self.queues.get_graphics_queue()
   }
 
   pub fn submit_paint_image_transition(
@@ -2103,8 +2603,10 @@ impl Device {
     old_layout: ash::vk::ImageLayout,
     new_layout: ash::vk::ImageLayout,
   ) -> GpuResult<()> {
-    let cmd_buffers = DebugTrackedRwLock::read(&self.recording_command_buffers);
-    let data = cmd_buffers.get(&cmd_handle).ok_or(gpu_err_invalid_cmd!())?;
+    let cmd_buffers = &self.recording_command_buffers;
+    let data = cmd_buffers
+      .get(&(cmd_handle, QueueRole::Graphics))
+      .ok_or(gpu_err_invalid_cmd!())?;
     let cmd = data.command_buffer.get();
 
     let res_guard = DebugTrackedRwLock::read(&self.res);
@@ -2155,7 +2657,7 @@ impl Device {
     Ok(())
   }
 
-  /// TODO: Document this item
+  /// Constructor
   #[named]
   pub(super) fn new(
     instance: Arc<instance::Instance>,
@@ -2281,6 +2783,7 @@ impl Device {
       timeline_semaphore,
       handle: device,
       submission_lock: spin::Mutex::new(()),
+      submission_lock_compute: spin::Mutex::new(()),
       create_renderpass2,
       synchronization2,
       buffer_device_address,
@@ -2356,7 +2859,7 @@ impl Device {
       kernels,
       instance,
       depth_stencil_format,
-      recording_command_buffers: DebugTrackedRwLock::new(hashbrown::HashMap::new()),
+      recording_command_buffers: dashmap::DashMap::with_capacity(32),
     })
   }
 
@@ -6543,7 +7046,6 @@ impl RenderDevice for Device {
       })
   }
 
-  // TODO rewrite with transaction behaviour
   #[named]
   fn download_windowless_image(
     &self,
@@ -6551,37 +7053,33 @@ impl RenderDevice for Device {
     buffer: &mut [u8],
     task_id: Option<u64>,
   ) -> GpuResult<()> {
+    // We fetch the wait value upfront without holding the `self.res` lock!
+    let wait_value = match task_id {
+      Some(id) => self.get_task_target_value(id)?,
+      None => {
+        let res_guard = self.res.read();
+        let pe = wait_for_pe!(res_guard, handle)?;
+        if let swapchain::PresentationState::Windowless(windowless) = &*pe {
+          windowless.get_last_submitted_timeline_value()
+        } else {
+          return Err(gpu_invalid_arg!("presentation engine is not windowless"));
+        }
+      }
+    };
+
     // SCOPE 1: Lock briefly to extract required state, then drop the lock!
-    let (image, width, height, mut wait_value, timeline_sem, task_entry) = {
+    let (image, width, height, timeline_sem) = {
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let pe = wait_for_pe!(res_guard, handle)?;
 
       if let swapchain::PresentationState::Windowless(windowless) = &*pe {
         let image = windowless.get_last_submitted_image()?;
         let (width, height) = windowless.extent();
-
-        let (wait_val, entry) = match task_id {
-          Some(id) => {
-            let registry = DebugTrackedRwLock::read(&res_guard.timeline_manager.task_registry);
-            if let Some(entry) = registry.get(&id) {
-              (
-                entry.target_value.load(Ordering::Acquire),
-                Some(entry.clone()),
-              )
-            } else {
-              return Err(gpu_invalid_arg!("no task id"));
-            }
-          }
-          None => (windowless.get_last_submitted_timeline_value(), None),
-        };
-
         (
           image,
           width,
           height,
-          wait_val,
           res_guard.timeline_manager.semaphore.get(),
-          entry,
         )
       } else {
         return Err(gpu_invalid_arg!(
@@ -6597,15 +7095,6 @@ impl RenderDevice for Device {
         buffer.len(),
         buffer_size
       ));
-    }
-
-    // FIX HANG: If wait_value is u64::MAX, the RenderThread hasn't called
-    // `submit_command_buffer` yet. We must briefly spin loop until it has been assigned.
-    if let Some(entry) = task_entry {
-      while wait_value == u64::MAX {
-        core::hint::spin_loop();
-        wait_value = entry.target_value.load(Ordering::Acquire);
-      }
     }
 
     // BLOCKING WAIT 1 (Safe, because `self.res` is no longer locked!)
@@ -6742,34 +7231,7 @@ impl RenderDevice for Device {
 
   #[named]
   fn get_command_buffer(&self) -> GpuResult<gpu::CommandBufferHandle> {
-    let (cmd_id, cmd_pool_arc) = {
-      let res_guard = DebugTrackedRwLock::read(&self.res);
-      let cmd_id = res_guard.next_cmd_id.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
-      let cmd_pool_arc = unsafe {
-        DebugTrackedRwLock::read(&res_guard.command_pools)
-          .get_unchecked(self.queues.get_graphics_queue().family_index as usize)
-          .as_ref()
-          .unwrap_unchecked()
-          .clone()
-      };
-      (cmd_id, cmd_pool_arc)
-    };
-
-    // even increasing, so it shouldn't be there
-    debug_assert!(
-      !DebugTrackedRwLock::read(&self.recording_command_buffers)
-        .contains_key(&CommandBufferHandle(cmd_id))
-    );
-
-    let cmd =
-      cmd_pool_arc.allocate_primary(&self.device, this_thread::id(), CommandBufferId(cmd_id))?;
-
-    DebugTrackedRwLock::write(&self.recording_command_buffers).insert(
-      CommandBufferHandle(cmd_id),
-      RecordingCmdBufferData::new(unsafe { NonZeroHandle::new_unchecked(cmd) }),
-    );
-
-    Ok(CommandBufferHandle(cmd_id))
+    self.get_command_buffer_and_native().map(|(cmd_id, _)| cmd_id)
   }
 
   #[named]
@@ -6778,17 +7240,20 @@ impl RenderDevice for Device {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     handle: PresentationEngineHandle,
   ) -> GpuResult<()> {
-    let mut cmd_buffers = DebugTrackedRwLock::write(&self.recording_command_buffers);
-    let data = cmd_buffers.get_mut(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let cmd_buffers = &self.recording_command_buffers;
+    let mut data = cmd_buffers
+      .get_mut(&(cmd_buffer, QueueRole::Graphics))
+      .ok_or(gpu_err_invalid_cmd!())?;
     data.presentation_engine = Some(handle);
     Ok(())
   }
 
-  // TODO group all &'static str error message
   #[named]
   fn begin_command_buffer(&self, cmd_buffer: gpu::CommandBufferHandle) -> GpuResult<()> {
-    let mut cmd_buffers = DebugTrackedRwLock::write(&self.recording_command_buffers);
-    let data = cmd_buffers.get_mut(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let cmd_buffers = &self.recording_command_buffers;
+    let mut data = cmd_buffers
+      .get_mut(&(cmd_buffer, QueueRole::Graphics))
+      .ok_or(gpu_err_invalid_cmd!())?;
 
     if data.has_begun {
       return Ok(());
@@ -6925,12 +7390,15 @@ impl RenderDevice for Device {
     cmd_buffer: crate::gpu::CommandBufferHandle,
     pipeline_key: crate::gpu::PipelineKey,
   ) -> GpuResult<()> {
-    let res_guard = DebugTrackedRwLock::read(&self.res);
+    use super::utils::RwLockable;
+    let res_guard = self.res.read();
 
     // Check if we're inside a compositing render pass and need to adapt
     let actual_pipeline_key = {
-      let cmd_buffers = DebugTrackedRwLock::read(&self.recording_command_buffers);
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+      let cmd_buffers = &self.recording_command_buffers;
+      let data = cmd_buffers
+        .get(&(cmd_buffer, QueueRole::Graphics))
+        .ok_or(gpu_err_invalid_cmd!())?;
       if let Some(ref ctx) = data.compositing_ctx {
         // Look up the original GraphicsInfo and create a compositing variant
         if let Some(info) = res_guard.pipeline_pool.get_graphics_info(pipeline_key) {
@@ -6967,8 +7435,9 @@ impl RenderDevice for Device {
     }
 
     {
-      let mut cmd_buffers = DebugTrackedRwLock::write(&self.recording_command_buffers);
-      let data = unsafe { cmd_buffers.get_mut(&cmd_buffer).unwrap_unchecked() };
+      let cmd_buffers = &self.recording_command_buffers;
+      let mut data =
+        unsafe { cmd_buffers.get_mut(&(cmd_buffer, QueueRole::Graphics)).unwrap_unchecked() };
       // ready to discard it if necessary (on resize)
       data.bound_pipeline = Some(pipeline);
     }
@@ -9209,8 +9678,8 @@ impl RenderDevice for Device {
 
     // Advance compositing context subpass index
     {
-      let mut cmd_buffers = DebugTrackedRwLock::write(&self.recording_command_buffers);
-      if let Some(data) = cmd_buffers.get_mut(&cmd_buffer) {
+      let cmd_buffers = &self.recording_command_buffers;
+      if let Some(mut data) = cmd_buffers.get_mut(&(cmd_buffer, QueueRole::Graphics)) {
         if let Some(ref mut ctx) = data.compositing_ctx {
           ctx.subpass += 1;
         }
@@ -9289,8 +9758,8 @@ impl RenderDevice for Device {
 
     // Clear compositing context
     {
-      let mut cmd_buffers = DebugTrackedRwLock::write(&self.recording_command_buffers);
-      if let Some(data) = cmd_buffers.get_mut(&cmd_buffer) {
+      let cmd_buffers = &self.recording_command_buffers;
+      if let Some(mut data) = cmd_buffers.get_mut(&(cmd_buffer, QueueRole::Graphics)) {
         data.compositing_ctx = None;
       }
     }
@@ -9306,10 +9775,10 @@ impl RenderDevice for Device {
   ) -> GpuResult<()> {
     let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
     let acquire_result = {
-      let cmd_buffers = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-        &self.recording_command_buffers,
-      );
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+      let cmd_buffers = &self.recording_command_buffers;
+      let data = cmd_buffers
+        .get(&(cmd_buffer, QueueRole::Graphics))
+        .ok_or(gpu_err_invalid_cmd!())?;
       data.presentation.ok_or(gpu_err_cmd_no_pe!())?.acquire_result
     };
 
@@ -9568,202 +10037,20 @@ impl RenderDevice for Device {
       .commit_read(|_state, execute_result| execute_result)
   }
 
-  #[named]
   fn submit_command_buffer(
     &self,
     cmd_buffer: CommandBufferHandle,
     task_id: Option<u64>,
     sync_infos: &[crate::gpu::CommandBufferSyncInfo],
   ) -> GpuResult<()> {
-    // 1. Extract command buffer data and drop the lock immediately
-    let data = {
-      let mut cmd_buffers = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
-        &self.recording_command_buffers,
-      );
-      cmd_buffers.remove(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?
-    };
-
-    unsafe {
-      self.device.end_command_buffer(data.command_buffer.get())?;
-    }
-
-    let presentation = data.presentation.ok_or(gpu_err_cmd_no_pe!())?;
-    let graphics_queue = self.queues.get_graphics_queue();
-
-    // 2. Start Vulkan Transaction for the submission process
-    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
-      .prepare_read(presentation.presentation_engine, |state, pe_handle| {
-        let pe = wait_for_pe!(state, pe_handle)?;
-
-        let is_resize_required = pe.swapchain_generation() != presentation.swapchain_generation;
-
-        let timeline_sem = state.timeline_manager.semaphore.get();
-
-        let cmd_pools = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-          &state.command_pools,
-        )
-        .get(graphics_queue.family_index as usize)
-        .and_then(|opt| opt.as_ref())
-        .cloned()
-        .ok_or(gpu_err!("couldn't get command pools"))?;
-
-        let task_registry = state.timeline_manager.task_registry.clone();
-        let timeline_manager_ptr =
-          &state.timeline_manager as *const timeline_manager::TimelineManager;
-
-        Ok((
-          pe_handle,
-          is_resize_required,
-          timeline_sem,
-          cmd_pools,
-          task_registry,
-          timeline_manager_ptr,
-        ))
-      })?
-      .execute(
-        |(
-          pe_handle,
-          is_resize_required,
-          timeline_sem,
-          cmd_pools,
-          task_registry,
-          timeline_manager_ptr,
-        ),
-         _rollback| {
-          let timeline_manager = unsafe { &*timeline_manager_ptr };
-
-          let mut signal_semaphores = heapless::Vec::<_, 4>::new();
-
-          if let Some(sem) = presentation.signal_semaphore {
-            unsafe {
-              signal_semaphores.push_unchecked(sem.get());
-            }
-          }
-
-          let mut wait_semaphores = heapless::Vec::<_, 8>::new();
-          let mut wait_semaphore_values = heapless::Vec::<_, 8>::new();
-          let mut wait_dst_stage_mask = heapless::Vec::<_, 8>::new();
-
-          if let Some(wait_semaphore) = presentation.wait_semaphore {
-            unsafe {
-              wait_semaphores.push_unchecked(wait_semaphore.get());
-              wait_semaphore_values.push_unchecked(0);
-              wait_dst_stage_mask.push_unchecked(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
-            }
-          }
-
-          for sync in sync_infos {
-            use ash::vk::Handle;
-            let vk_semaphore = vk::Semaphore::from_raw(sync.timeline_semaphore);
-            unsafe {
-              wait_semaphores.push_unchecked(vk_semaphore);
-              wait_semaphore_values.push_unchecked(sync.timeline_value);
-              // Graphics reads compute buffers at Vertex Input / Compute shader / Indirect command stages
-              wait_dst_stage_mask.push_unchecked(
-                vk::PipelineStageFlags::VERTEX_INPUT
-                  | vk::PipelineStageFlags::COMPUTE_SHADER
-                  | vk::PipelineStageFlags::DRAW_INDIRECT,
-              );
-            }
-          }
-
-          let command_buffers = [data.command_buffer.get()];
-
-          // TAKE SUBMISSION LOCK BEFORE ALLOCATING TIMELINE!
-          // This ensures that the order we get timeline values exactly matches the order we submit to the queue.
-          let next_timeline_value = {
-            let _guard = self.device.submission_lock.lock();
-
-            let next_timeline_value = timeline_manager.allocate_submit_value();
-
-            let mut timeline_values = heapless::Vec::<_, 4>::new();
-            if presentation.signal_semaphore.is_some() {
-              unsafe {
-                timeline_values.push_unchecked(0);
-              }
-            }
-            unsafe {
-              signal_semaphores.push_unchecked(timeline_sem);
-              timeline_values.push_unchecked(next_timeline_value);
-            }
-
-            let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-              .wait_semaphore_values(&wait_semaphore_values)
-              .signal_semaphore_values(&timeline_values);
-
-            let submit_info = vk::SubmitInfo::default()
-              .wait_semaphores(&wait_semaphores)
-              .wait_dst_stage_mask(&wait_dst_stage_mask)
-              .command_buffers(&command_buffers)
-              .signal_semaphores(&signal_semaphores)
-              .push_next(&mut timeline_info);
-
-            unsafe {
-              self
-                .device
-                .handle
-                .queue_submit(
-                  graphics_queue.handle,
-                  &[submit_info],
-                  presentation.submission_fence.map(|f| f.get()).unwrap_or(vk::Fence::null()),
-                )
-                .map_err(|e| {
-                  aethervk_oshal_rlib::log!("Queue submit failed: {:?}", e);
-                  GpuError::from(e)
-                })?;
-            }
-
-            next_timeline_value
-          };
-
-          // Inform the task registry of the timeline value to wait for
-          if let Some(tid) = task_id {
-            let registry =
-              crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&task_registry);
-            if let Some(entry) = registry.get(&tid) {
-              entry
-                .target_value
-                .store(next_timeline_value, core::sync::atomic::Ordering::Release);
-            }
-          }
-
-          // Pass 'data' through to be discarded in the commit phase
-          Ok((
-            data,
-            pe_handle,
-            is_resize_required,
-            next_timeline_value,
-            cmd_pools,
-          ))
-        },
-      )
-      .commit_read(|state, execute_result| {
-        let (mut data, pe_handle, is_resize_required, next_timeline_value, cmd_pools) =
-          execute_result?;
-
-        if let Some(mut pe) = state.live_presentation_engines.get_mut(&pe_handle) {
-          pe.mark_fence_submitted(data.presentation.unwrap().acquire_result.frame_index as u32);
-          if let swapchain::PresentationState::Windowless(windowless) = pe.value() {
-            windowless
-              .last_timeline_value
-              .store(next_timeline_value, core::sync::atomic::Ordering::Release);
-          }
-        }
-
-        // Discard resources now that submission is safely recorded
-        data.discard(
-          cmd_buffer.into(),
-          &state.discard_pool,
-          cmd_pools,
-          next_timeline_value,
-        );
-
-        if is_resize_required {
-          Err(GpuError::ResizeRequired)
-        } else {
-          Ok(())
-        }
-      })
+    self.submit_command_buffer_generic(
+      cmd_buffer,
+      task_id,
+      sync_infos,
+      &[],
+      QueueRole::Graphics,
+    )?;
+    Ok(())
   }
 
   #[named]
@@ -9859,7 +10146,7 @@ pub(super) struct TransientCmdPoolResource {
   pub(super) cmd: ash::vk::CommandBuffer,
 }
 impl DeviceResource for TransientCmdPoolResource {
-  fn cleanup(&mut self, device: &ash::Device) {
+  fn cleanup(&mut self, device: &LogicalDevice) {
     aethervk_oshal_rlib::log!("Destroying TransientCmdPoolResource");
     unsafe {
       device.free_command_buffers(self.pool, &[self.cmd]);
@@ -9969,15 +10256,16 @@ impl Device {
       pipeline_pool_ptr,
       render_pass_spec,
     ) = {
-      let res_guard = DebugTrackedRwLock::read(&self.res);
+      use super::utils::RwLockable;
+      let res_guard = self.res.read();
       let _presentation_engines_guard = &res_guard.live_presentation_engines;
-      let cmd_buffers = DebugTrackedRwLock::read(&self.recording_command_buffers);
-      if !cmd_buffers.contains_key(&cmd_buffer) {
+      let cmd_buffers = &self.recording_command_buffers;
+      if !cmd_buffers.contains_key(&(cmd_buffer, QueueRole::Graphics)) {
         return Err(gpu_err_invalid_cmd!());
       }
       let wpresentation_engine = wait_for_pe!(res_guard, presentation_engine)?;
 
-      let data = unsafe { cmd_buffers.get(&cmd_buffer).unwrap_unchecked() };
+      let data = unsafe { cmd_buffers.get(&(cmd_buffer, QueueRole::Graphics)).unwrap_unchecked() };
       if !data.has_begun {
         return Err(gpu_err!("command buffer not begun"));
       }
@@ -9998,8 +10286,9 @@ impl Device {
       let timeline = res_guard.timeline_manager.get_next_submit_value() - 1;
 
       let cmd = {
-        let mut cmd_buffers = DebugTrackedRwLock::write(&self.recording_command_buffers);
-        let data = unsafe { cmd_buffers.get_mut(&cmd_buffer).unwrap_unchecked() };
+        let cmd_buffers = &self.recording_command_buffers;
+        let mut data =
+          unsafe { cmd_buffers.get_mut(&(cmd_buffer, QueueRole::Graphics)).unwrap_unchecked() };
         data.presentation = Some(RecordingCmdBufferDataPresentation {
           acquire_result: *acquire_result,
           presentation_engine,
@@ -10084,8 +10373,8 @@ impl Device {
     // Set compositing context on the command buffer so bind_pipeline
     // can transparently create compositing-compatible pipeline variants
     if compositing {
-      let mut cmd_buffers = DebugTrackedRwLock::write(&self.recording_command_buffers);
-      if let Some(data) = cmd_buffers.get_mut(&cmd_buffer) {
+      let cmd_buffers = &self.recording_command_buffers;
+      if let Some(mut data) = cmd_buffers.get_mut(&(cmd_buffer, QueueRole::Graphics)) {
         data.compositing_ctx = Some(CompositingContext {
           render_pass: render_pass.get(),
           subpass: 0, // Start at subpass 0 (macro)
@@ -10097,15 +10386,16 @@ impl Device {
     Ok(())
   }
 
+  // TODO remove?
   #[named]
   fn get_cmd(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
   ) -> GpuResult<ash::vk::CommandBuffer> {
-    let cmd_buffers = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-      &self.recording_command_buffers,
-    );
-    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let cmd_buffers = &self.recording_command_buffers;
+    let data = cmd_buffers
+      .get(&(cmd_buffer, QueueRole::Graphics))
+      .ok_or(gpu_err_invalid_cmd!())?;
     Ok(data.command_buffer.get())
   }
 
@@ -10114,15 +10404,14 @@ impl Device {
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
   ) -> GpuResult<(ash::vk::CommandBuffer, crate::gpu::PresentationEngineHandle)> {
-    let cmd_buffers = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-      &self.recording_command_buffers,
-    );
-    let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+    let cmd_buffers = &self.recording_command_buffers;
+    let data = cmd_buffers
+      .get(&(cmd_buffer, QueueRole::Graphics))
+      .ok_or(gpu_err_invalid_cmd!())?;
     let handle = data.presentation_engine.ok_or(gpu_err_cmd_no_pe!())?;
     Ok((data.command_buffer.get(), handle))
   }
 
-  /// TODO: Document this item
   pub fn get_vma_budget_usage(&self) -> (u64, u64) {
     let mut res = DebugTrackedRwLock::write(&self.res);
     res.allocator.refresh_vma_budgets();
@@ -10147,10 +10436,10 @@ impl Device {
   ) -> GpuResult<()> {
     // 1. Extract command buffer and acquire result
     let (cmd, _) = {
-      let cmd_buffers = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-        &self.recording_command_buffers,
-      );
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+      let cmd_buffers = &self.recording_command_buffers;
+      let data = cmd_buffers
+        .get(&(cmd_buffer, QueueRole::Graphics))
+        .ok_or(gpu_err_invalid_cmd!())?;
       let presentation = data.presentation.ok_or(gpu_err_cmd_no_pe!())?;
       (data.command_buffer.get(), presentation.acquire_result)
     };
@@ -10338,10 +10627,10 @@ impl Device {
   ) -> GpuResult<()> {
     // 1. Extract command buffer
     let cmd = {
-      let cmd_buffers = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
-        &self.recording_command_buffers,
-      );
-      let data = cmd_buffers.get(&cmd_buffer).ok_or(gpu_err_invalid_cmd!())?;
+      let cmd_buffers = &self.recording_command_buffers;
+      let data = cmd_buffers
+        .get(&(cmd_buffer, QueueRole::Graphics))
+        .ok_or(gpu_err_invalid_cmd!())?;
       data.command_buffer.get()
     };
 
@@ -11229,16 +11518,39 @@ mod particles {
     pub compaction_us: core::sync::atomic::AtomicI64,
   }
 
+  // TODO move rustdoc about cross sync elsewhere
+  /// When Buffer is created with `VK_SHARING_MODE_EXCLUSIVE`, moving it across 2 queue families
+  /// requires a "Queue Family Ownership Transfer", which is composed of a "Two-Way Handshake"
+  /// procedure.
+  /// - Record a "Release Barrier" on a command buffer submitted to the source queue family
+  /// - Record a "Acquire Barrier" on a command buffer submitted to the destination queue family
+  /// We therefore need 2 command buffers, from compute and graphics, if different
+  /// We assume flow is:
+  /// <pre>
+  ///  compute -> |               | Acquire Front -> Copy back to front -> Release Back
+  ///             | timeline sync |
+  ///  render  -> |               | Release Front ->                    -> Acquire Back
+  /// </pre>
+  struct ParticleSystemState {
+    /// global buffer holding data for all particles
+    buffer: BufferAlloc,
+    free_list: BufferAlloc,
+    /// Store ECS entity_id - particle system page table association
+    page_tables: dashmap::DashMap<u64, BufferAlloc>,
+  }
+
   pub struct ParticleSystemManager {
-    /// global buffer holding data for all particles.
-    pub buffer: BufferAlloc,
-    pub free_list: BufferAlloc,
-    /// store ECS entity id - particle system page table association. BDA in component
-    /// [`crate::scene::particles::v2::ParticleSystemComponent`]
-    pub page_tables: dashmap::DashMap<u64, BufferAlloc>,
-    /// necessary handle duplicate for drop trait
-    pub allocator_view: vk_mem::AllocatorView,
-    pub settings: Settings,
+    /// Double buffered state: one for render (front), one for compute (back)
+    states: [ParticleSystemState; 2],
+    front_index: usize,
+
+    /// Size cached to easily issue buffer synchronization copies
+    buffer_size: vk::DeviceSize,
+    free_list_size: vk::DeviceSize,
+
+    /// necessary hnadle duplicated for drop trait
+    allocator_view: vk_mem::AllocatorView,
+    settings: Settings,
   }
 
   impl ParticleSystemManager {
@@ -11248,6 +11560,242 @@ mod particles {
 
     pub fn compaction_us(&self) -> timeus_t {
       self.settings.compaction_us.load(core::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Get the "front" buffers meant for reading in the render thread/graphics queue
+    #[inline]
+    fn front(&self) -> &ParticleSystemState {
+      &self.states[self.front_index]
+    }
+
+    /// Get the "back" buffers meant for reading/writing in the compute thread/queue
+    #[inline]
+    fn back(&self) -> &ParticleSystemState {
+      &self.states[1 - self.front_index]
+    }
+
+    /// Get mutable access to the "front" buffers
+    #[inline]
+    fn front_mut(&mut self) -> &mut ParticleSystemState {
+      &mut self.states[self.front_index]
+    }
+
+    /// Get mutable access to the "back" buffers
+    #[inline]
+    fn back_mut(&mut self) -> &mut ParticleSystemState {
+      &mut self.states[1 - self.front_index]
+    }
+
+    /// `Cross Sync` Step 1: Recorded on GRAPHICS queue during the `sync window`
+    /// Releases the current `front` buffer so Compute queue family can take ownership
+    pub fn cmd_sync_graphics_release_front(
+      &self,
+      device: &LogicalDevice,
+      cmd: vk::CommandBuffer,
+      graphics_family: u32,
+      compute_family: u32,
+    ) {
+      // If same queue family, ownership transfers are illegal.
+      // Sync is handled entirely by standard execution barriers in Step 2
+      if graphics_family == compute_family {
+        return;
+      }
+
+      let front = self.front();
+      let barriers = self.create_state_barriers(
+        front,
+        vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT
+          | vk::PipelineStageFlags2::VERTEX_SHADER
+          | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+        vk::AccessFlags2::VERTEX_ATTRIBUTE_READ | vk::AccessFlags2::SHADER_READ,
+        vk::PipelineStageFlags2::NONE, // Vulkan Spec: Release Dst must be NONE
+        vk::AccessFlags2::NONE,
+        graphics_family,
+        compute_family,
+      );
+
+      let dep_info = vk::DependencyInfo::default().buffer_memory_barriers(&barriers);
+      unsafe {
+        device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
+      }
+    }
+
+    /// `Cross Sync` Step 2: Recorded on the COMPUTE queue during the Sync Window
+    /// Acquires `Front`, performs `Back -> Front` copy, prepares buffers for their post swap role
+    pub fn cmd_sync_compute_copy_and_release(
+      &self,
+      device: &LogicalDevice,
+      cmd: vk::CommandBuffer,
+      page_table_size: vk::DeviceSize,
+      graphics_family: u32,
+      compute_family: u32,
+    ) {
+      let is_cross_family = graphics_family != compute_family;
+      let front = self.front();
+      let back = self.back();
+      let mut pre_barriers = alloc::vec::Vec::with_capacity(32);
+
+      // A. Pre-Copy Barrier for `front` (Destination)
+      if is_cross_family {
+        self.create_state_barriers_inline(
+          &mut pre_barriers,
+          front,
+          vk::PipelineStageFlags2::NONE,
+          vk::AccessFlags2::NONE, // Vulkan Spec: Acquire Src must be NONE
+          vk::PipelineStageFlags2::TRANSFER, // transfer ownership before copy op
+          vk::AccessFlags2::TRANSFER_WRITE,
+          graphics_family,
+          compute_family,
+        );
+      } else {
+        // Wait for graphics to finish reading before transfer can write
+        self.create_state_barriers_inline(
+          &mut pre_barriers,
+          front,
+          vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT // src
+            | vk::PipelineStageFlags2::VERTEX_SHADER
+            | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+          vk::AccessFlags2::VERTEX_ATTRIBUTE_READ | vk::AccessFlags2::SHADER_READ,
+          vk::PipelineStageFlags2::TRANSFER, // dst
+          vk::AccessFlags2::TRANSFER_WRITE,
+          vk::QUEUE_FAMILY_IGNORED,
+          vk::QUEUE_FAMILY_IGNORED,
+        );
+      }
+
+      // B. Pre-Copy Barrier for `back` (Source) - Wait for compute shader to finish writing
+      // Note: This means that logic layer shouldn't request manual emission
+      self.create_state_barriers_inline(
+        &mut pre_barriers,
+        back,
+        vk::PipelineStageFlags2::COMPUTE_SHADER, // src
+        vk::AccessFlags2::SHADER_WRITE,
+        vk::PipelineStageFlags2::TRANSFER, // dst
+        vk::AccessFlags2::TRANSFER_READ,
+        vk::QUEUE_FAMILY_IGNORED,
+        vk::QUEUE_FAMILY_IGNORED,
+      );
+
+      let pre_dep_info = vk::DependencyInfo::default().buffer_memory_barriers(&pre_barriers);
+      unsafe { device.synchronization2.cmd_pipeline_barrier2(cmd, &pre_dep_info) };
+
+      // C. Execute Copies Back -> Front
+      unsafe {
+        let b_copy = vk::BufferCopy::default().src_offset(0).dst_offset(0).size(self.buffer_size);
+        device.cmd_copy_buffer(
+          cmd,
+          back.buffer.buffer,
+          front.buffer.buffer,
+          core::slice::from_ref(&b_copy),
+        );
+
+        let fl_copy =
+          vk::BufferCopy::default().src_offset(0).dst_offset(0).size(self.free_list_size);
+        device.cmd_copy_buffer(
+          cmd,
+          back.free_list.buffer,
+          front.free_list.buffer,
+          core::slice::from_ref(&fl_copy),
+        );
+
+        for back_entry in back.page_tables.iter() {
+          if let Some(front_pt) = front.page_tables.get(back_entry.key()) {
+            let pt_copy =
+              vk::BufferCopy::default().src_offset(0).dst_offset(0).size(page_table_size);
+            device.cmd_copy_buffer(
+              cmd,
+              back_entry.value().buffer,
+              front_pt.buffer,
+              core::slice::from_ref(&pt_copy),
+            );
+          }
+        }
+      }
+
+      // D. Post-Copy Barriers (Prep for CPY Swap)
+      pre_barriers.clear();
+      let mut post_barriers = pre_barriers;
+
+      if is_cross_family {
+        // `back` will become the new `front`. Release it to graphics
+        self.create_state_barriers_inline(
+          &mut post_barriers,
+          back,
+          vk::PipelineStageFlags2::TRANSFER,
+          vk::AccessFlags2::TRANSFER_READ,
+          vk::PipelineStageFlags2::NONE, // Vulkan Spec: Release Dst must be NONE
+          vk::AccessFlags2::NONE,
+          compute_family,
+          graphics_family,
+        );
+      }
+
+      // `front` will become the new `back`. Sync for next compute
+      // Note: this means that we don't need to externally synchronize
+      self.create_state_barriers_inline(
+        &mut post_barriers,
+        front,
+        vk::PipelineStageFlags2::TRANSFER, // src transfer must be finished...
+        vk::AccessFlags2::TRANSFER_WRITE,
+        vk::PipelineStageFlags2::COMPUTE_SHADER, // before dst shader read write
+        vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE,
+        vk::QUEUE_FAMILY_IGNORED,
+        vk::QUEUE_FAMILY_IGNORED,
+      );
+
+      let post_dep_info = vk::DependencyInfo::default().buffer_memory_barriers(&post_barriers);
+      unsafe { device.synchronization2.cmd_pipeline_barrier2(cmd, &post_dep_info) };
+    }
+
+    /// `Cross Sync` Step 3: Recorded on GRAPHICS Queue AFTER `swap_buffers()` has been called.
+    /// Acquires the new `Front` buffer for rendering
+    pub fn cmd_sync_graphics_acquire_new_front(
+      &self,
+      device: &LogicalDevice,
+      cmd: vk::CommandBuffer,
+      graphics_family: u32,
+      compute_family: u32,
+    ) {
+      // Because swap_buffers() was called, self.front() is now the newly copied buffer
+      let new_front = self.front();
+      let is_cross_family = graphics_family != compute_family;
+
+      let barriers = if is_cross_family {
+        self.create_state_barriers(
+          new_front,
+          vk::PipelineStageFlags2::NONE, // Vulkan Spec: Acquire src is NONE
+          vk::AccessFlags2::NONE,
+          vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT
+            | vk::PipelineStageFlags2::VERTEX_SHADER
+            | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+          vk::AccessFlags2::VERTEX_ATTRIBUTE_READ | vk::AccessFlags2::SHADER_READ,
+          compute_family,
+          graphics_family,
+        )
+      } else {
+        // Wait for Transfer Read to finish before we start reading in Vertex
+        self.create_state_barriers(
+          new_front,
+          vk::PipelineStageFlags2::TRANSFER,
+          vk::AccessFlags2::TRANSFER_READ, // we have copied to new_back
+          vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT
+            | vk::PipelineStageFlags2::VERTEX_SHADER
+            | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+          vk::AccessFlags2::VERTEX_ATTRIBUTE_READ | vk::AccessFlags2::SHADER_READ,
+          vk::QUEUE_FAMILY_IGNORED,
+          vk::QUEUE_FAMILY_IGNORED,
+        )
+      };
+
+      let dep_info = vk::DependencyInfo::default().buffer_memory_barriers(&barriers);
+      unsafe { device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info) };
+    }
+
+    /// Swaps the roles of the front and back buffers.
+    /// SAFETY: GPU side needs to be externally synchronized
+    #[inline]
+    pub unsafe fn swap_buffers(&mut self) {
+      self.front_index = 1 - self.front_index;
     }
 
     pub fn new(
@@ -11265,34 +11813,56 @@ mod particles {
       const DEFAULT_COMPACTION_US: i64 = oshal::os::time::timeus_milliseconds(5000);
 
       let num_chunks = max_particles.div_ceil(PCHUNK_SIZE);
-      let buffer_size = core::mem::size_of::<ParticleChunk>() * num_chunks;
-      let buffer_info = vk::BufferCreateInfo::default()
-        .size(buffer_size as _)
-        .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
-      let mut alloc_info = vk_mem::AllocationCreateInfo::default();
-      alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
-      // it's supposed to be large, so dedicated always
-      // `crate::apply_test_dedicated_alloc!(alloc_info);` not needed
-      alloc_info.flags = vk_mem::AllocationCreateFlags::DEDICATED_MEMORY;
-      alloc_info.priority = 1.0f32;
+      let buffer_size = (core::mem::size_of::<ParticleChunk>() * num_chunks) as vk::DeviceSize;
+      // TODO: check consistency with allocate_free_list
+      let free_list_size = ((num_chunks * 4) + 4) as vk::DeviceSize;
 
-      let (buffer, alloc) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }
-        .with_name(device, "GlobalParticleBuffer")?;
-      let address = unsafe {
-        let info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
-        device.buffer_device_address.get_buffer_device_address(&info)
+      // isolate creation closure since we need to create an identical pair
+      let mut create_state = |name_suffix: &str| -> GpuResult<ParticleSystemState> {
+        let buffer_info = vk::BufferCreateInfo::default().size(buffer_size as _).usage(
+          vk::BufferUsageFlags::STORAGE_BUFFER
+            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+            | vk::BufferUsageFlags::TRANSFER_SRC  // back->front syncing
+            | vk::BufferUsageFlags::TRANSFER_DST, // back->front syncing
+        );
+        let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+        alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
+        // it's supposed to be large, so dedicated always
+        // `crate::apply_test_dedicated_alloc!(alloc_info);` not needed
+        alloc_info.flags = vk_mem::AllocationCreateFlags::DEDICATED_MEMORY;
+        alloc_info.priority = 1.0f32;
+
+        let (buffer, alloc) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }
+          .with_name(
+            device,
+            &alloc::format!("GlobalParticleBuffer_{name_suffix}"),
+          )?;
+        let address = unsafe {
+          let info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
+          device.buffer_device_address.get_buffer_device_address(&info)
+        };
+
+        let free_list = Self::allocate_free_list(device, allocator, transfer_queue, num_chunks)?;
+
+        Ok(ParticleSystemState {
+          free_list,
+          buffer: BufferAlloc {
+            buffer,
+            alloc,
+            address,
+          },
+          page_tables: dashmap::DashMap::with_capacity(PAGE_TABLES_MAP_START_CAP),
+        })
       };
 
-      let free_list = Self::allocate_free_list(device, allocator, transfer_queue, num_chunks)?;
+      let state_front = create_state("Front")?;
+      let state_back = create_state("Back")?;
 
       Ok(Self {
-        free_list,
-        buffer: BufferAlloc {
-          buffer,
-          alloc,
-          address,
-        },
-        page_tables: dashmap::DashMap::with_capacity(PAGE_TABLES_MAP_START_CAP),
+        states: [state_front, state_back],
+        front_index: 0,
+        buffer_size,
+        free_list_size,
         allocator_view: allocator,
         settings: Settings {
           emission_us: core::sync::atomic::AtomicI64::new(DEFAULT_EMISSION_US),
@@ -11312,8 +11882,9 @@ mod particles {
       let gpu_b = {
         let buffer_info = vk::BufferCreateInfo::default().size(buffer_size as _).usage(
           vk::BufferUsageFlags::TRANSFER_DST
-            | vk::BufferUsageFlags::STORAGE_BUFFER
-            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+          | vk::BufferUsageFlags::TRANSFER_SRC // support copying free list
+          | vk::BufferUsageFlags::STORAGE_BUFFER
+          | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
         );
         let mut alloc_info = vk_mem::AllocationCreateInfo::default();
         crate::apply_test_dedicated_alloc!(alloc_info);
@@ -11356,7 +11927,8 @@ mod particles {
       unsafe {
         p_mem.write(num_chunks as u32);
         for i in 0..num_chunks as u32 {
-          p_mem.add(i as usize).write(num_chunks as u32 - 1 - i);
+          // advance + 1 for the size block
+          p_mem.add(i as usize + 1).write(num_chunks as u32 - 1 - i);
         }
       }
       allocator.flush_allocation(&staging_b.alloc, 0, vk::WHOLE_SIZE);
@@ -11419,11 +11991,119 @@ mod particles {
 
       Ok(BufferAlloc::new(gpu_buffer, gpu_alloc, free_list_bda))
     }
+
+    /// Helper to generate memory barriers for all buffers inside a [`ParticleSystemManager`]
+    fn create_state_barriers(
+      &self,
+      state: &ParticleSystemState,
+      src_stage: vk::PipelineStageFlags2,
+      src_access: vk::AccessFlags2,
+      dst_stage: vk::PipelineStageFlags2,
+      dst_access: vk::AccessFlags2,
+      src_family: u32,
+      dst_family: u32,
+    ) -> alloc::vec::Vec<vk::BufferMemoryBarrier2> {
+      let mut barriers = alloc::vec::Vec::with_capacity(2 + state.page_tables.len());
+      let mut push = |buffer: vk::Buffer, size: vk::DeviceSize| {
+        barriers.push(
+          vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(src_stage)
+            .src_access_mask(src_access)
+            .dst_stage_mask(dst_stage)
+            .dst_access_mask(dst_access)
+            .src_queue_family_index(src_family)
+            .dst_queue_family_index(dst_family)
+            .buffer(buffer)
+            .offset(0)
+            .size(size),
+        );
+      };
+
+      push(state.buffer.buffer, self.buffer_size);
+      push(state.free_list.buffer, self.free_list_size);
+      for pt_entry in state.page_tables.iter() {
+        push(pt_entry.value().buffer, vk::WHOLE_SIZE)
+      }
+
+      barriers
+    }
+
+    /// Helper to generate memory barriers for all buffers inside a [`ParticleSystemManager`]
+    fn create_state_barriers_inline(
+      &self,
+      the_vec: &mut alloc::vec::Vec<vk::BufferMemoryBarrier2>,
+      state: &ParticleSystemState,
+      src_stage: vk::PipelineStageFlags2,
+      src_access: vk::AccessFlags2,
+      dst_stage: vk::PipelineStageFlags2,
+      dst_access: vk::AccessFlags2,
+      src_family: u32,
+      dst_family: u32,
+    ) {
+      let mut push = |buffer: vk::Buffer, size: vk::DeviceSize| {
+        the_vec.push(
+          vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(src_stage)
+            .src_access_mask(src_access)
+            .dst_stage_mask(dst_stage)
+            .dst_access_mask(dst_access)
+            .src_queue_family_index(src_family)
+            .dst_queue_family_index(dst_family)
+            .buffer(buffer)
+            .offset(0)
+            .size(size),
+        );
+      };
+
+      push(state.buffer.buffer, self.buffer_size);
+      push(state.free_list.buffer, self.free_list_size);
+      for pt_entry in state.page_tables.iter() {
+        push(pt_entry.value().buffer, vk::WHOLE_SIZE)
+      }
+    }
+
+    /// Inserts the allocated page tables into both the front and back states
+    pub fn add_page_tables(&self, id: u64, pt_0: BufferAlloc, pt_1: BufferAlloc) {
+      self.states[0].page_tables.insert(id, pt_0);
+      self.states[1].page_tables.insert(id, pt_1);
+    }
+
+    /// Removes the page tables from both states
+    pub fn remove_pages_tables(&self, id: u64) -> Option<(BufferAlloc, BufferAlloc)> {
+      let (_, pt_0) = self.states[0].page_tables.remove(&id)?;
+      let (_, pt_1) = self.states[1].page_tables.remove(&id).unwrap();
+      Some((pt_0, pt_1))
+    }
+
+    /// Retrieves the BDA pointers (Global, PageTable, FreeList) for a specific queue role
+    pub fn get_addresses(&self, id: u64, role: QueueRole) -> Option<(u64, u64, u64)> {
+      let state_index = match role {
+        QueueRole::Graphics => self.front_index,
+        QueueRole::Compute => 1 - self.front_index,
+      };
+      let state = &self.states[state_index];
+      let pt = state.page_tables.get(&id)?;
+      Some((state.buffer.address, pt.address, state.free_list.address))
+    }
   }
 
   impl Drop for ParticleSystemManager {
     fn drop(&mut self) {
-      todo!()
+      unsafe {
+        // free all double-buffered state maps safely
+        for state in self.states.iter_mut() {
+          self.allocator_view.destroy_buffer(state.buffer.buffer, &mut state.buffer.alloc);
+          self
+            .allocator_view
+            .destroy_buffer(state.free_list.buffer, &mut state.free_list.alloc);
+
+          for mut pt_entry in state.page_tables.iter_mut() {
+            let b_alloc = pt_entry.value_mut();
+            self.allocator_view.destroy_buffer(b_alloc.buffer, &mut b_alloc.alloc);
+          }
+          state.page_tables.clear();
+        }
+      }
     }
   }
 
@@ -11477,7 +12157,7 @@ struct TransientCleanupResources {
   fence: vk::Fence,
 }
 impl DeviceResource for TransientCleanupResources {
-  fn cleanup(&mut self, device: &ash::Device) {
+  fn cleanup(&mut self, device: &LogicalDevice) {
     unsafe {
       if !self.command_pool.is_null() {
         device.destroy_command_pool(self.command_pool, None);
@@ -11512,6 +12192,26 @@ struct AllocJanitor {
 impl Drop for AllocJanitor {
   fn drop(&mut self) {
     unsafe { self.allocator.destroy_buffer(self.buffer, &mut self.alloc) };
+  }
+}
+
+fn gpu_sync_info_to_flags(
+  info: gpu::CommandBufferSyncInfoStageMask,
+  is_signal: bool,
+) -> vk::PipelineStageFlags2 {
+  use gpu::CommandBufferSyncInfoStageMask;
+  match info {
+    CommandBufferSyncInfoStageMask::TopBottom => {
+      if is_signal {
+        vk::PipelineStageFlags2::BOTTOM_OF_PIPE
+      } else {
+        vk::PipelineStageFlags2::TOP_OF_PIPE
+      }
+    }
+    CommandBufferSyncInfoStageMask::Transfer => vk::PipelineStageFlags2::TRANSFER,
+    CommandBufferSyncInfoStageMask::VertexAttributeInput => {
+      vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT
+    }
   }
 }
 

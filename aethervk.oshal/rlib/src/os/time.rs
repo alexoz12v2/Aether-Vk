@@ -269,9 +269,6 @@ pub mod v2 {
   #[cfg(windows)]
   use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
-  // TODO move to core simulation layer
-  // TODO FFI type in which positive integer maps to a state in order, while negative gets flipped
-  // and mapped to custom
   /// Preset simulation speed
   #[derive(Debug, Clone, Copy, PartialEq)]
   pub enum SimSpeed {
@@ -284,7 +281,6 @@ pub mod v2 {
   }
 
   impl SimSpeed {
-    // TODO probably turn it into a integer
     /// returns the scale multiplier (eg 1 hour per second = 3600.0)
     pub fn scale_factor(&self) -> f64 {
       match self {
@@ -294,6 +290,62 @@ pub mod v2 {
         SimSpeed::ThreeHoursPerSec => 10800.0,
         SimSpeed::OneDayPerSec => 86400.0,
         SimSpeed::Custom(s) => *s,
+      }
+    }
+
+    pub fn scaled_from_unscaled(&self, unscaled: timeus_t) -> timeus_t {
+      if *self == SimSpeed::Paused {
+        return 0;
+      }
+      let scale = self.scale_factor();
+      const MAX_EXACT_VALUE_US: i64 = 9_007_199_254_740_992;
+      debug_assert!(
+        unscaled <= MAX_EXACT_VALUE_US,
+        "Time value exceeds f64 exact precision"
+      );
+      if matches!(*self, SimSpeed::Custom(_)) {
+        (unscaled as f64 * scale) as timeus_t
+      } else {
+        unscaled * (scale as timeus_t)
+      }
+    }
+  }
+
+  impl From<i32> for SimSpeed {
+    /// Maps positive integers to the preset states in order.
+    /// Negative integers get flipped (absolute value) and mapped to `Custom`.
+    fn from(value: i32) -> Self {
+      match value {
+        0 => SimSpeed::Paused,
+        1 => SimSpeed::Realtime,
+        2 => SimSpeed::OneHourPerSec,
+        3 => SimSpeed::ThreeHoursPerSec,
+        4 => SimSpeed::OneDayPerSec,
+        v if v < 0 => SimSpeed::Custom(-v as f64),
+        _ => {
+          // Fallback for unexpected positive integers outside the known range
+          // Alternatively, you could return an Error or default to Realtime
+          SimSpeed::Realtime
+        }
+      }
+    }
+  }
+
+  impl From<SimSpeed> for i32 {
+    /// Converts the enum back into an FFI-safe integer representation.
+    fn from(speed: SimSpeed) -> Self {
+      match speed {
+        SimSpeed::Paused => 0,
+        SimSpeed::Realtime => 1,
+        SimSpeed::OneHourPerSec => 2,
+        SimSpeed::ThreeHoursPerSec => 3,
+        SimSpeed::OneDayPerSec => 4,
+        SimSpeed::Custom(val) => {
+          // Cast the custom float to an i32 and force it to be negative
+          // so it maps back correctly across the FFI boundary.
+          let v = val.round() as i32;
+          if v > 0 { -v } else { v }
+        }
       }
     }
   }

@@ -279,7 +279,7 @@ impl DescriptorPoolsInner {
 }
 
 impl DeviceResource for DescriptorPools {
-  fn cleanup(&mut self, device: &ash::Device) {
+  fn cleanup(&mut self, device: &super::LogicalDevice) {
     let mut inner =
       crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(&self.inner);
     if !inner.active_pool.is_null() {

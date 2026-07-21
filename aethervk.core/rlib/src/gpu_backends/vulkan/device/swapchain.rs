@@ -133,7 +133,7 @@ impl<'a, T> DeviceResource for SwapchainWrapper<'a, T>
 where
   T: SwapchainCleanable,
 {
-  fn cleanup(&mut self, device: &ash::Device) {
+  fn cleanup(&mut self, device: &super::LogicalDevice) {
     self.wrapped.cleanup(self.swapchain_device, device);
   }
 }
@@ -155,7 +155,7 @@ impl WindowedPresentationState {
 }
 
 impl DeviceResource for SwapchainImage {
-  fn cleanup(&mut self, device: &ash::Device) {
+  fn cleanup(&mut self, device: &super::LogicalDevice) {
     // Only wait if it was successfully pushed to WSI without errors
     if self.present_fence_in_use {
       if let Some(fence) = self.present_fence {
@@ -273,7 +273,7 @@ impl SwapchainCleanable for SwapchainFrame {
 }
 
 impl DeviceResource for PresentationState {
-  fn cleanup(&mut self, device: &ash::Device) {
+  fn cleanup(&mut self, device: &super::LogicalDevice) {
     match self {
       Self::Windowed(state) => state.cleanup(device),
       Self::Windowless(state) => state.cleanup(device),
@@ -282,7 +282,7 @@ impl DeviceResource for PresentationState {
 }
 
 impl DeviceResource for WindowedPresentationState {
-  fn cleanup(&mut self, device: &ash::Device) {
+  fn cleanup(&mut self, device: &super::LogicalDevice) {
     // Collect all swapchain handles that need main-thread destruction.
     // On macOS, MoltenVK translates vkDestroySwapchainKHR / vkDestroySurfaceKHR into
     // CAMetalLayer modifications which Apple requires on the main UI thread.
@@ -1815,7 +1815,7 @@ pub(super) struct WindowlessPresentationState {
 }
 
 impl DeviceResource for WindowlessPresentationState {
-  fn cleanup(&mut self, device: &ash::Device) {
+  fn cleanup(&mut self, device: &super::LogicalDevice) {
     for discard in &mut self.frame_discards {
       discard.skip_cycles = 0; // force cleanup
       if discard.highest_submission_timeline_value > 0 && self.timeline_sem != vk::Semaphore::null()

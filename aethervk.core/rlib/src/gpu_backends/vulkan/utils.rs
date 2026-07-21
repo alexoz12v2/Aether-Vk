@@ -1199,7 +1199,7 @@ where
 
   #[inline(always)]
   /// TODO: Document this item
-  pub(super) fn get(&self) -> T {
+  pub(crate) fn get(&self) -> T {
     self.handle
   }
 }

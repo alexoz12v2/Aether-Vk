@@ -32,7 +32,7 @@ pub(super) struct TimelineManager {
 }
 
 impl TimelineManager {
-  /// TODO: Document this item
+  /// Constructor
   #[named]
   pub fn new(instance: &ash::Instance, device: &ash::Device) -> GpuResult<Self> {
     let mut sem_type_info = vk::SemaphoreTypeCreateInfo::default()
@@ -60,7 +60,48 @@ impl TimelineManager {
     })
   }
 
-  /// TODO: Document this item
+  /// Retrieves the explicit timeline value the GPU will reach upon completing the Graphics queue
+  /// submission associated to this task.
+  /// This will safely spin-loop if the task has been created but not yet submitted.
+  #[named]
+  pub fn get_task_target_value(&self, task_id: u64) -> GpuResult<u64> {
+    use super::utils::RwLockable;
+    use aethervk_oshal_rlib::os::native::this_thread;
+    use core::sync::atomic::Ordering;
+    // 1. Lock briefly just to clone the Arc<TaskEntry> if it exists
+    let entry_opt = {
+      let registry = self.task_registry.read();
+      registry.get(&task_id).cloned() // clone the Arc
+    };
+
+    if let Some(entry) = entry_opt {
+      // 2. We've dropped the registry lock, therefore we can spin loop
+      // Note: `create_task` assigns `u64::MAX` to `target_value`
+      let mut val = entry.target_value.load(Ordering::Acquire);
+
+      while val == u64::MAX {
+        // Abort the spin loop if the task failed before reaching submission
+        if entry.status.load(Ordering::Acquire) == TASK_STATUS_FAILED {
+          let err = entry.error.read().clone().unwrap_or(crate::gpu_err_device!());
+          return Err(err);
+        }
+
+        core::hint::spin_loop();
+        this_thread::yield_now();
+        val = entry.target_value.load(Ordering::Acquire);
+      }
+
+      Ok(val)
+    } else if task_id > 0 && task_id < self.next_task_id.load(Ordering::SeqCst) {
+      // 3. The task is already finished and the worker thread purged it.
+      // Returning the currently completed cached value is safe cause we are sure that we already
+      // reached it with queue submission execution
+      Ok(self.get_cached_value())
+    } else {
+      Err(crate::gpu_invalid_arg!("invalid task id"))
+    }
+  }
+
   pub fn cleanup(&mut self, device: &ash::Device) {
     unsafe { device.destroy_semaphore(self.semaphore.get(), None) };
   }
@@ -80,7 +121,6 @@ impl TimelineManager {
     Ok(gpu_value)
   }
 
-  /// TODO: Document this item
   pub fn get_next_submit_value(&self) -> u64 {
     self.next_submit_value.load(Ordering::SeqCst)
   }
