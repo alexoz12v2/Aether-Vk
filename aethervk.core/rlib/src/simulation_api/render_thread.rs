@@ -1,16 +1,16 @@
 //! render_thread module.
 
 use crate::{
-  gpu,
   gpu::{
-    FrameCancelGuard, PresentationEngineHandle, RenderDevice, SwapchainStatus,
+    self, FrameCancelGuard, PresentationEngineHandle, RenderDevice, SwapchainStatus,
     scene_conversion::{RenderSceneExtraction, SceneConversionExt},
   },
   simulation_api::structs::{CustomRenderCallback, RenderCommand, RenderThreadContext},
-  types::{EngineError, EngineResult, GpuResult},
+  types::{EngineError, EngineResult, GpuError, GpuResult},
 };
 use aethervk_oshal_rlib as oshal;
 use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
+use ash::vk::Handle;
 use itertools::Itertools;
 use oshal::{
   os,
@@ -141,6 +141,72 @@ fn process_command(
   match cmd {
     // this is processed in render_thread function
     RenderCommand::Shutdown => Ok(()),
+    RenderCommand::SyncParticleRelease {
+      feedback,
+      feedback_ptr,
+    } => {
+      use crate::gpu_backends::vulkan::utils::RwLockable;
+      let task_id = render_device.create_task();
+      let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+        render_device.as_any().downcast_ref().unwrap();
+      let store_failure = |e: &GpuError| {
+        render_device.fail_task(task_id, e.clone());
+        feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
+      };
+
+      let (cmd_buffer, cmd) = vulkan_device
+        .get_command_buffer_and_native()
+        .inspect_err(|e| store_failure(e))?;
+      let cmd_scope = gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id))
+        .inspect_err(|e| store_failure(e))?;
+      // TODO: add compute timeline signaling on transfer
+
+      let res = vulkan_device.res.read();
+      let psm = res.particle_system_manager.as_ref().unwrap();
+      psm.cmd_sync_graphics_release_front(
+        &vulkan_device.device,
+        cmd,
+        vulkan_device.get_graphics_queue().family_index,
+        vulkan_device.get_compute_queue().family_index,
+      );
+      drop(res);
+
+      // if we are not beyond deadline, then we can submit and get value
+      loop {
+        use core::sync::atomic::Ordering;
+        match feedback.compare_exchange_weak(0, 1, Ordering::AcqRel, Ordering::Acquire) {
+          Ok(_) => {
+            // ready
+            // sumbitting signals the timeline semaphore upon completion. we can query the task_id
+            cmd_scope.submit().inspect_err(|e| store_failure(e))?;
+            let timeline_value =
+              vulkan_device.get_task_target_value(task_id).inspect_err(|e| store_failure(e))?;
+            // SAFETY: this was populated from a Boxed type. Shouldn't be null unless we are out of
+            // memory, in which case we crash anyways
+            let feedback_mut = unsafe { feedback_ptr.get().as_mut_unchecked() };
+            feedback_mut.timeline_semaphore =
+              vulkan_device.res.read().timeline_manager.semaphore.get();
+            feedback_mut.timeline_release_value = timeline_value;
+            drop(feedback_mut);
+
+            feedback.store(task_id, core::sync::atomic::Ordering::Release);
+            break Ok(());
+          }
+          Err(old) => {
+            if old == u64::MAX {
+              // deadline expired, rollback command buffer and store failure, free pointer
+              core::mem::forget(cmd_scope);
+              store_failure(&GpuError::InvalidState("Deadline".to_string()));
+
+              // SAFETY: if deadline, logic_thread has renounced ownership of this pointer
+              let _ = unsafe { alloc::boxed::Box::from_raw(feedback_ptr.get()) };
+
+              break Ok(());
+            }
+          }
+        }
+      }
+    }
     RenderCommand::RenderFrames(render_frames) => {
       render_device.start_frame()?;
 
@@ -201,6 +267,8 @@ fn process_command(
           move || -> GpuResult<(gpu::CommandBufferHandle, bool, bool)> {
             let core_logic = || -> GpuResult<(gpu::CommandBufferHandle, bool, bool)> {
               let result = frontend.with_device(handle, |render_device| {
+                let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+                  render_device.as_any().downcast_ref().unwrap();
                 let task_id = render_device.create_task();
 
                 let present_guard = gpu::FrameCancelGuard::new(
@@ -215,10 +283,14 @@ fn process_command(
                     e
                   })?;
 
-                let cmd_buffer = render_device.get_command_buffer().map_err(|e| {
-                  aethervk_oshal_rlib::log!("[render tasklet] get_command_buffer failed: {:?}", e);
-                  e
-                })?;
+                let (cmd_buffer, cmd) =
+                  vulkan_device.get_command_buffer_and_native().map_err(|e| {
+                    aethervk_oshal_rlib::log!(
+                      "[render tasklet] get_command_buffer failed: {:?}",
+                      e
+                    );
+                    e
+                  })?;
 
                 render_device
                   .set_command_buffer_presentation_engine(
@@ -239,6 +311,32 @@ fn process_command(
                       e
                     },
                   )?;
+
+                // Before extracting or rendering scenes, first record necessary commands to ensure
+                // that Cross Sync step 4 (graphics queue new front buffers acquisition) end
+                // perfectly
+                if let Some(wait_timeline_val) = render_frame.particle_acquire_sync {
+                  use crate::gpu_backends::vulkan::utils::RwLockable;
+                  let res = vulkan_device.res.read();
+                  if let Some(psm) = res.particle_system_manager.as_ref() {
+                    let gfx_fam = vulkan_device.get_graphics_queue().family_index;
+                    let comp_fam = vulkan_device.get_compute_queue().family_index;
+                    psm.cmd_sync_graphics_acquire_new_front(
+                      &vulkan_device.device,
+                      cmd,
+                      gfx_fam,
+                      comp_fam,
+                    );
+                  }
+
+                  // add wait timeline val and compute timeline semaphore to wait
+                  let compute_timeline_sem = vulkan_device.kernels.timeline;
+                  cmd_scope.add_sync_info(gpu::CommandBufferSyncInfo {
+                    timeline_semaphore: compute_timeline_sem.as_raw(),
+                    timeline_value: wait_timeline_val,
+                    wait_stage_mask: gpu::CommandBufferSyncInfoStageMask::VertexAttributeInput,
+                  });
+                }
 
                 let (unscaled_time_us, unscaled_time_delta_us) = {
                   let scene_context_read = render_frame.scene.read();
@@ -408,52 +506,6 @@ fn process_command(
                     );
                     e
                   })?;
-                }
-
-                // Try to collect the physics result within 8 ms. If physics is
-                // still running the GPU timeline semaphore (cached_timeline_semaphore)
-                // already guarantees ordering at the last *completed* value, so we
-                // can submit the render pass safely with last-frame particle data.
-                // The task is put back into active_physics_task when not done so
-                // dispatch_physics_step can wait on it at the start of the next tick.
-                let physics_sync = {
-                  let mut guard = render_frame.active_physics_task.lock();
-                  if let Some(task) = guard.take() {
-                    // 8 ms budget — enough for one 60 Hz sub-step worth of GPU time
-                    match task.try_wait(8_000) {
-                      Ok(result) => {
-                        // Physics finished: use its fresh sync info
-                        result.map_err(|e| {
-                          crate::types::GpuError::InvalidState(alloc::format!(
-                            "Physics engine error: {:?}",
-                            e
-                          ))
-                        })?
-                      }
-                      Err(still_running) => {
-                        // Deadline expired — put the task back, render with
-                        // last-frame data. The physics task will be awaited at
-                        // the next dispatch_physics_step entry.
-                        *guard = Some(still_running);
-                        None // fall through to cached_timeline_semaphore below
-                      }
-                    }
-                  } else {
-                    None
-                  }
-                };
-
-                if let Some(sync) = physics_sync {
-                  cmd_scope.add_sync_info(sync);
-                }
-
-                if let Some((timeline_semaphore, timeline_value)) =
-                  render_frame.cached_timeline_semaphore
-                {
-                  cmd_scope.add_sync_info(crate::gpu::CommandBufferSyncInfo {
-                    timeline_semaphore,
-                    timeline_value,
-                  });
                 }
 
                 cmd_scope.submit().map_err(|e| {

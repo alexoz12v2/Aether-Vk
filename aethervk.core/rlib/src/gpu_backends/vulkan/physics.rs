@@ -202,6 +202,10 @@ pub struct PhysicsPipelines {
 
   // ── New Particle System ───────────────────────────────────────────────────
   pub new_particles_compact_reset: vk::Pipeline,
+  /// Constrained to a workgroup size of 64, because Since `PCHUNK_VEC4_SIZE` is 64, every thread
+  /// processes one `vec4`. It's a perfect 1 to 1 mapping. It still works on smaller or bigger
+  /// sizes, but with smaller, the workgroup does a stride loop, while on bigger excess threads
+  /// sleep on the `barrier()`
   pub new_particles_emit: vk::Pipeline,
   pub new_particles_compact: vk::Pipeline,
   pub apply_emitters_direct_new: vk::Pipeline,
@@ -466,6 +470,26 @@ impl PhysicsPipelines {
         wg_sizes.insert(ash::vk::Handle::as_raw(pipeline), wg_size);
         pipeline
       }};
+      ($stem:expr, $wg:expr) => {{
+        let mut path;
+        if is_cpu && subgroup_size <= 16 {
+          let wg_suffix = match subgroup_size {
+            1..=4 => "wg4",
+            5..=8 => "wg8",
+            _ => "wg16",
+          };
+          path = alloc::format!("{}/{}.{}.spv", sim_dir, $stem, wg_suffix);
+        } else {
+          path = alloc::format!("{}/{}.{}.spv", sim_dir, $stem, $wg);
+        };
+        if use_debug {
+          path = path.replace(".spv", ".d.spv");
+        }
+        let (pipeline, pc_size, wg_size) = create_pipeline(&path)?;
+        pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
+        wg_sizes.insert(ash::vk::Handle::as_raw(pipeline), wg_size);
+        pipeline
+      }};
     }
     // For shaders that need LOCAL_SIZE_X == SUBGROUP_SIZE (one subgroup per WG):
     // BVH builders use gl_SubgroupID == 0 and subgroup ops over the full WG.
@@ -548,8 +572,8 @@ impl PhysicsPipelines {
         apply_impulses: mk_wg!("apply_impulses.comp"),
         // ── New Particle System ───────────────────────────────────────────────────
         new_particles_compact_reset: mk_wg!("new_particles_compact_reset.comp"),
-        new_particles_emit: mk_wg!("new_particles_emit.comp"),
-        new_particles_compact: mk_wg!("new_particles_compact.comp"),
+        new_particles_emit: mk_wg!("new_particles_emit.comp", "wg64"),
+        new_particles_compact: mk_wg!("new_particles_compact.comp", "wg64"),
         apply_emitters_direct_new: mk_wg!("apply_emitters_direct_new.comp"),
         integrate_particles_p1_p2_new: mk_wg!("integrate_particles_p1_p2_new.comp"),
         integrate_particles_p4_5_new: mk_wg!("integrate_particles_p4_5_new.comp"),
@@ -725,6 +749,7 @@ impl CommandBuffer for VulkanCommandBuffer {
         self.tid,
         self.id,
         self.cmd,
+        self.queue.family_index,
         self.command_pools.clone(),
         self.timeline_value,
       );
@@ -740,6 +765,7 @@ impl CommandBuffer for VulkanCommandBuffer {
     Ok(Some(crate::gpu::CommandBufferSyncInfo {
       timeline_semaphore: ash::vk::Handle::as_raw(self.timeline_sem),
       timeline_value: self.timeline_value,
+      wait_stage_mask: gpu::CommandBufferSyncInfoStageMask::TopBottom,
     }))
   }
 }
@@ -1559,12 +1585,12 @@ impl VulkanComputeKernels {
       self.next_cmd_id.fetch_add(1, core::sync::atomic::Ordering::SeqCst),
     );
 
-    let cmd = command_pools.allocate_primary(device, tid, id)?;
+    let cmd = command_pools.allocate_primary(device, tid, compute_queue.family_index, id)?;
 
     // We defer recycling the command buffer to the compute timeline
     let cp_clone = command_pools.clone();
-    rollback.defer(move |_dev| {
-      let _ = cp_clone.recycle(tid, id, cmd);
+    rollback.defer(move |dev| {
+      let _ = cp_clone.recycle(dev, tid, compute_queue.family_index, cmd);
     });
 
     let begin_info =
@@ -5302,7 +5328,7 @@ impl Kernels for Device {
     // The integration tests do not advance the frame manager, so we must clean up the DiscardPool manually here to avoid exhausting memory/resources.
     let items = self.kernels.discard_pool.pop_ready_items(sync.timeline_value);
     crate::gpu_backends::vulkan::device::resources::DiscardPool::destroy_items_lock_free(
-      &self.device.handle,
+      &self.device,
       items,
     );
 
@@ -5314,9 +5340,6 @@ impl Kernels for Device {
     _cmd: &mut Self::Cmd,
     node_bytes: &[u8],
   ) -> EngineResult<Self::MotionTlas> {
-    use crate::physics::tlas_builder::PARTICLE_BLAS_SENTINEL;
-    use core::sync::atomic::Ordering;
-
     if node_bytes.is_empty() {
       // No entities: upload a single zeroed node so BDA is valid but TLAS is empty.
       // Must use the same node size the GPU shader expects (SUBGROUP_SIZE-dependent).
@@ -5469,34 +5492,26 @@ impl Kernels for Device {
   }
 
   fn create_command_buffer(&self) -> EngineResult<Self::Cmd> {
-    utils::NestedVulkanTransaction::new(
-      &*self.res,
-      &self.device,
-      |res: &device::DeviceResources| &res.command_pools,
-    )
-    .prepare_read(
-      self.get_compute_queue(),
-      |res_guard, command_pools, compute_queue| {
-        let opt_opt = command_pools.get(compute_queue.family_index as usize);
-        let opt_pos: Option<&alloc::sync::Arc<commands::CommandPools>> = opt_opt.unwrap().as_ref();
-        let command_pool_arc = alloc::sync::Arc::clone(opt_pos.ok_or(GpuError::NotFound)?);
+    utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read(self.get_compute_queue(), |res_guard, _compute_queue| {
+        let command_pool_arc =
+          unsafe { res_guard.command_pools.as_ref().unwrap_unchecked() }.clone();
         Ok::<_, GpuError>((
           command_pool_arc,
           res_guard.allocator.allocator.as_allocator_view(),
         ))
-      },
-    )?
-    .execute(|(command_pool_arc, allocator), rollback| {
-      self.kernels.create_command_buffer(
-        &self.device,
-        allocator,
-        command_pool_arc,
-        rollback,
-        self.get_compute_queue(),
-      )
-    })
-    .commit_read(|_res_guard, _command_pools, result| result)
-    .map_err(EngineError::from)
+      })?
+      .execute(|(command_pool_arc, allocator), rollback| {
+        self.kernels.create_command_buffer(
+          &self.device,
+          allocator,
+          command_pool_arc,
+          rollback,
+          self.get_compute_queue(),
+        )
+      })
+      .commit_read(|_res_guard, result| result)
+      .map_err(EngineError::from)
   }
 
   #[cfg(feature = "shader_debug_sync")]

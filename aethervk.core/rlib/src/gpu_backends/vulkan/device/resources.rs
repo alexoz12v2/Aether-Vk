@@ -64,17 +64,26 @@ impl<'a> ArenaCreationContext<'a> {
   pub fn validate_push_constant_size(&self, rust_size: u32) {
     let mut spv_size = 0;
 
-    let mut check_shader = |shader: &crate::gpu_backends::vulkan::device::shader_manager::Shader| {
-      let pcs = shader.spv_module.enumerate_push_constant_blocks(None).unwrap_or_default();
-      if let Some(pc_block) = pcs.first() {
-        spv_size = spv_size.max(pc_block.size);
-      }
-    };
+    let mut check_shader =
+      |shader: &crate::gpu_backends::vulkan::device::shader_manager::Shader| {
+        let pcs = shader.spv_module.enumerate_push_constant_blocks(None).unwrap_or_default();
+        if let Some(pc_block) = pcs.first() {
+          spv_size = spv_size.max(pc_block.size);
+        }
+      };
 
-    if let Some(s) = self.vertex_shader { check_shader(s); }
-    if let Some(s) = self.fragment_shader { check_shader(s); }
-    if let Some(s) = self.outline_vertex_shader { check_shader(s); }
-    if let Some(s) = self.outline_fragment_shader { check_shader(s); }
+    if let Some(s) = self.vertex_shader {
+      check_shader(s);
+    }
+    if let Some(s) = self.fragment_shader {
+      check_shader(s);
+    }
+    if let Some(s) = self.outline_vertex_shader {
+      check_shader(s);
+    }
+    if let Some(s) = self.outline_fragment_shader {
+      check_shader(s);
+    }
 
     if spv_size > 0 {
       debug_assert_eq!(
@@ -85,7 +94,6 @@ impl<'a> ArenaCreationContext<'a> {
     }
   }
 }
-
 
 pub trait ArchetypeArenaCreate {
   fn new_arena(ctx: &ArenaCreationContext) -> crate::types::GpuResult<Self>
@@ -189,6 +197,7 @@ pub(crate) struct CmdBufDiscard {
   command_buffer: vk::CommandBuffer,
   manager: sync::Arc<commands::CommandPools>,
   id: CommandBufferId,
+  queue_family_index: u32,
 }
 
 /// TODO: Document this item
@@ -289,6 +298,7 @@ impl DiscardPool {
     thread_id: ThreadId,
     command_buffer_id: CommandBufferId,
     command_buffer: vk::CommandBuffer,
+    queue_family_index: u32,
     manager: sync::Arc<commands::CommandPools>,
     timeline: u64,
   ) {
@@ -300,6 +310,7 @@ impl DiscardPool {
         command_buffer,
         manager,
         id: command_buffer_id,
+        queue_family_index,
       }),
     );
   }
@@ -374,7 +385,7 @@ impl DiscardPool {
 
   /// Executes Vulkan API destruction completely lock-free
   pub fn destroy_items_lock_free(
-    device: &ash::Device,
+    device: &super::LogicalDevice,
     items: impl IntoIterator<Item = DiscardItem>,
   ) {
     for item in items {
@@ -417,8 +428,9 @@ impl DiscardPool {
           command_buffer,
           manager,
           id,
+          queue_family_index,
         }) => {
-          let _x = manager.recycle(thread_id, id, command_buffer);
+          let _x = manager.recycle(device, thread_id, queue_family_index, command_buffer);
           #[cfg(debug_assertions)]
           {
             if let Err(ref e) = _x {
@@ -453,7 +465,7 @@ impl DiscardPool {
   }
 
   /// Used by device cleanup routines
-  pub fn destroy_discarded_resources_all(&self, device: &ash::Device) {
+  pub fn destroy_discarded_resources_all(&self, device: &super::LogicalDevice) {
     let items = self.pop_ready_items(u64::MAX);
     aethervk_oshal_rlib::log!(
       "destroy_discarded_resources_all popping {} items",
@@ -464,7 +476,7 @@ impl DiscardPool {
 }
 
 impl super::DeviceResource for DiscardPool {
-  fn cleanup(&mut self, device: &ash::Device) {
+  fn cleanup(&mut self, device: &super::LogicalDevice) {
     self.destroy_discarded_resources_all(device);
   }
 }
@@ -1859,7 +1871,7 @@ impl TextRenderResourceArchetypeArena {
     if let Some(sampler) = self.font_sampler {
       struct SamplerDiscard(vk::Sampler);
       impl DeviceResource for SamplerDiscard {
-        fn cleanup(&mut self, device: &ash::Device) {
+        fn cleanup(&mut self, device: &super::LogicalDevice) {
           unsafe {
             device.destroy_sampler(self.0, None);
           }
@@ -1870,7 +1882,7 @@ impl TextRenderResourceArchetypeArena {
     if let Some(pool) = self.descriptor_pool {
       struct PoolDiscard(vk::DescriptorPool);
       impl DeviceResource for PoolDiscard {
-        fn cleanup(&mut self, device: &ash::Device) {
+        fn cleanup(&mut self, device: &super::LogicalDevice) {
           unsafe {
             device.destroy_descriptor_pool(self.0, None);
           }
@@ -1901,9 +1913,9 @@ impl ArchetypeArenaCreate for TextRenderResourceArchetypeArena {
     let device_limit = core::cmp::min(
       core::cmp::min(
         ctx.device.max_per_stage_descriptor_update_after_bind_samplers,
-        ctx.device.max_descriptor_set_update_after_bind_samplers
+        ctx.device.max_descriptor_set_update_after_bind_samplers,
       ),
-      ctx.device.max_per_stage_descriptor_samplers
+      ctx.device.max_per_stage_descriptor_samplers,
     );
     let max_fonts = core::cmp::min(256, device_limit);
     let pool_sizes = [vk::DescriptorPoolSize::default()
@@ -2155,7 +2167,7 @@ impl Text2RenderResourceArchetypeArena {
     if let Some(sampler) = self.font_sampler {
       struct SamplerDiscard(vk::Sampler);
       impl DeviceResource for SamplerDiscard {
-        fn cleanup(&mut self, device: &ash::Device) {
+        fn cleanup(&mut self, device: &super::LogicalDevice) {
           unsafe {
             device.destroy_sampler(self.0, None);
           }
@@ -2166,7 +2178,7 @@ impl Text2RenderResourceArchetypeArena {
     if let Some(pool) = self.descriptor_pool {
       struct PoolDiscard(vk::DescriptorPool);
       impl DeviceResource for PoolDiscard {
-        fn cleanup(&mut self, device: &ash::Device) {
+        fn cleanup(&mut self, device: &super::LogicalDevice) {
           unsafe {
             device.destroy_descriptor_pool(self.0, None);
           }
@@ -2203,9 +2215,9 @@ impl ArchetypeArenaCreate for Text2RenderResourceArchetypeArena {
     let device_limit = core::cmp::min(
       core::cmp::min(
         ctx.device.max_per_stage_descriptor_update_after_bind_samplers,
-        ctx.device.max_descriptor_set_update_after_bind_samplers
+        ctx.device.max_descriptor_set_update_after_bind_samplers,
       ),
-      ctx.device.max_per_stage_descriptor_samplers
+      ctx.device.max_per_stage_descriptor_samplers,
     );
     let max_fonts = core::cmp::min(256, device_limit);
     let pool_sizes = [vk::DescriptorPoolSize::default()
@@ -2500,7 +2512,9 @@ impl ArchetypeArenaCreate for SphereGizmoRenderResourceArchetypeArena {
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
 
     unsafe {
-    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::SphereGizmoPushConstants>() as u32);
+      ctx.validate_push_constant_size(
+        core::mem::size_of::<crate::gpu::SphereGizmoPushConstants>() as u32
+      );
       let pipeline_layout =
         device.create_pipeline_layout(&pipeline_layout_info, None).map_err(|e| {
           aethervk_oshal_rlib::log!("create_pipeline_layout failed: {:?}", e);
@@ -2592,7 +2606,9 @@ impl ArchetypeArenaCreate for Bvhwire2RenderResourceArchetypeArena {
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
 
     unsafe {
-    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::Bvhwire2PushConstants>() as u32);
+      ctx.validate_push_constant_size(
+        core::mem::size_of::<crate::gpu::Bvhwire2PushConstants>() as u32
+      );
       let pipeline_layout =
         device.create_pipeline_layout(&pipeline_layout_info, None).map_err(|e| {
           aethervk_oshal_rlib::log!("create_pipeline_layout failed: {:?}", e);
@@ -2673,8 +2689,10 @@ impl ArchetypeArenaCreate for MeasurementRenderResourceArchetypeArena {
       ..Default::default()
     };
 
-    unsafe {
-    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::MeasurementPushConstants>() as u32);
+    {
+      ctx.validate_push_constant_size(
+        core::mem::size_of::<crate::gpu::MeasurementPushConstants>() as u32
+      );
       let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
         .with_name(
         device,
@@ -2784,7 +2802,8 @@ impl ArchetypeArenaCreate for MinimapRenderResourceArchetypeArena {
     }];
     let pipeline_layout_info =
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
-    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::MinimapPushConstants>() as u32);
+    ctx
+      .validate_push_constant_size(core::mem::size_of::<crate::gpu::MinimapPushConstants>() as u32);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .map_err(|e| {
         aethervk_oshal_rlib::log!("create_pipeline_layout failed: {:?}", e);
@@ -2946,7 +2965,7 @@ impl UiRenderResourceArchetypeArena {
     discard_pool.discard_descriptor_set_layout(self.set_0_layout.get(), timeline);
     struct PoolDiscard(vk::DescriptorPool);
     impl DeviceResource for PoolDiscard {
-      fn cleanup(&mut self, device: &ash::Device) {
+      fn cleanup(&mut self, device: &super::LogicalDevice) {
         unsafe {
           device.destroy_descriptor_pool(self.0, None);
         }
@@ -2970,9 +2989,9 @@ impl ArchetypeArenaCreate for UiRenderResourceArchetypeArena {
     let device_limit = core::cmp::min(
       core::cmp::min(
         ctx.device.max_per_stage_descriptor_update_after_bind_samplers,
-        ctx.device.max_descriptor_set_update_after_bind_samplers
+        ctx.device.max_descriptor_set_update_after_bind_samplers,
       ),
-      ctx.device.max_per_stage_descriptor_samplers
+      ctx.device.max_per_stage_descriptor_samplers,
     );
     let max_image_count = core::cmp::min(256, device_limit);
     let push_constant_ranges = alloc::vec![vk::PushConstantRange {
@@ -3139,9 +3158,9 @@ impl ArchetypeArenaCreate for TrajectoryRenderResourceArchetypeArena {
     let device_limit = core::cmp::min(
       core::cmp::min(
         ctx.device.max_per_stage_descriptor_update_after_bind_samplers,
-        ctx.device.max_descriptor_set_update_after_bind_samplers
+        ctx.device.max_descriptor_set_update_after_bind_samplers,
       ),
-      ctx.device.max_per_stage_descriptor_samplers
+      ctx.device.max_per_stage_descriptor_samplers,
     );
     let max_image_count = core::cmp::min(256, device_limit);
     let push_constant_ranges = alloc::vec![vk::PushConstantRange {
@@ -3189,7 +3208,9 @@ impl ArchetypeArenaCreate for TrajectoryRenderResourceArchetypeArena {
       push_constant_range_count: push_constant_ranges.len() as u32,
       ..Default::default()
     };
-    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::TrajectoryPushConstants>() as u32);
+    ctx.validate_push_constant_size(
+      core::mem::size_of::<crate::gpu::TrajectoryPushConstants>() as u32
+    );
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_TrajectoryRenderResourceArchetype")?;
@@ -3346,9 +3367,9 @@ impl ArchetypeArenaCreate for BillboardRenderResourceArchetypeArena {
     let device_limit = core::cmp::min(
       core::cmp::min(
         ctx.device.max_per_stage_descriptor_update_after_bind_samplers,
-        ctx.device.max_descriptor_set_update_after_bind_samplers
+        ctx.device.max_descriptor_set_update_after_bind_samplers,
       ),
-      ctx.device.max_per_stage_descriptor_samplers
+      ctx.device.max_per_stage_descriptor_samplers,
     );
     let max_image_count = core::cmp::min(256, device_limit);
     let push_constant_ranges = alloc::vec![vk::PushConstantRange {
@@ -3405,7 +3426,9 @@ impl ArchetypeArenaCreate for BillboardRenderResourceArchetypeArena {
       push_constant_range_count: push_constant_ranges.len() as u32,
       ..Default::default()
     };
-    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::BillboardPushConstants>() as u32);
+    ctx.validate_push_constant_size(
+      core::mem::size_of::<crate::gpu::BillboardPushConstants>() as u32
+    );
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_BillboardRenderResourceArchetype")?;
@@ -3982,7 +4005,9 @@ impl ArchetypeArenaCreate for Particle2RenderResourceArchetypeArena {
       push_constant_range_count: push_constant_ranges.len() as u32,
       ..Default::default()
     };
-    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::Particle2PushConstants>() as u32);
+    ctx.validate_push_constant_size(
+      core::mem::size_of::<crate::gpu::Particle2PushConstants>() as u32
+    );
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
       .with_name(device, "VkPipelineLayout_Particle2RenderResourceArchetype")?;
@@ -4283,7 +4308,9 @@ impl ArchetypeArenaCreate for BackgroundRenderResourceArchetypeArena {
       .size(core::mem::size_of::<crate::gpu::BackgroundPushConstants>() as u32)];
     let pipeline_layout_info =
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
-    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::BackgroundPushConstants>() as u32);
+    ctx.validate_push_constant_size(
+      core::mem::size_of::<crate::gpu::BackgroundPushConstants>() as u32
+    );
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -4647,10 +4674,7 @@ impl ArchetypeArenaCreate for ForwardMeshRenderResourceArchetypeArena {
 
       for block in blocks {
         // Find a range with the same offset to merge stage flags and max size.
-        if let Some(range) = push_constant_ranges
-          .iter_mut()
-          .find(|r| r.offset == block.offset)
-        {
+        if let Some(range) = push_constant_ranges.iter_mut().find(|r| r.offset == block.offset) {
           // Merge shader stages into the existing range.
           range.stage_flags |= shader.shader_stage;
           range.size = range.size.max(block.size);
@@ -4971,8 +4995,6 @@ pub(super) fn create_buffer_with_staging<T: Copy>(
   })
 }
 
-/// Helper type for getting pipeline information from presentation engine (color attachment format)
-
 /// Helper to map descriptor types from spirv-reflect to ash and handle unsupported cases.
 unsafe impl Sync for ForwardMesh2RenderResourceArchetypeArena {}
 unsafe impl Sync for ForwardMesh2RenderResourceArchetype {}
@@ -5135,10 +5157,7 @@ impl ArchetypeArenaCreate for ForwardMesh2RenderResourceArchetypeArena {
 
       for block in blocks {
         // Find a range with the same offset to merge stage flags and max size.
-        if let Some(range) = push_constant_ranges
-          .iter_mut()
-          .find(|r| r.offset == block.offset)
-        {
+        if let Some(range) = push_constant_ranges.iter_mut().find(|r| r.offset == block.offset) {
           // Merge shader stages into the existing range.
           range.stage_flags |= shader.shader_stage;
           range.size = range.size.max(block.size);
@@ -5160,7 +5179,9 @@ impl ArchetypeArenaCreate for ForwardMesh2RenderResourceArchetypeArena {
     let layout_create_info = vk::PipelineLayoutCreateInfo::default()
       .set_layouts(&set_layouts_raw)
       .push_constant_ranges(&push_constant_ranges);
-    ctx.validate_push_constant_size(core::mem::size_of::<crate::gpu::PhysicalMesh2PushConstants>() as u32);
+    ctx.validate_push_constant_size(
+      core::mem::size_of::<crate::gpu::PhysicalMesh2PushConstants>() as u32,
+    );
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_create_info, None) }
       .with_name(

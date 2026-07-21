@@ -366,8 +366,23 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticleChu
 };
 
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticlePageTable {
-    uint particleCount;
-    uint activeChunkCount; // tracks how many chunks are mapped
+    // 32 bytes header
+    // --- Start VkDrawIndirectCommand (16 bytes) ---
+    uint particleCount;   // Maps to vertexCount
+    uint instanceCount;   // Maps to instanceCount (Initialize to 1)
+    uint firstVertex;     // Maps to firstVertex   (Initialize to 0)
+    uint firstInstance;   // Maps to firstInstance (Initialize to 0)
+    // --- End VkDrawIndirectCommand ---
+
+    // --- Rest of your header ---
+    uint activeChunkCount;
+
+    // Optional: 12 bytes of padding to keep `chunks` aligned to 16 bytes
+    // (Helps with coalesced memory reads depending on how you use chunks)
+    uint pad0;
+    uint pad1;
+    uint pad2;
+
     // if we compare this different than zero, then we can cast to ParticleChunk
     // There are indices to support 2^17 particles (131072). The number of allocated indices
     // is actually double the amount of supported particles such that we can have space to

@@ -86,6 +86,12 @@ impl<T> Drop for ThreadTxContainer<T> {
 }
 
 // --------------------- Members of SimulationContext ---------------------------
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, bytemuck::Zeroable, bytemuck::Pod, Hash)]
+pub struct SceneEntityId {
+  pub scene_id: u64,
+  pub entity_id: u64,
+}
 
 /// owned by logic thread context
 pub struct SimulationSceneData {
@@ -103,6 +109,9 @@ pub struct SimulationSceneData {
   pub model_registry: BTreeMap<u64, String>,
   /// model_registry next available id. Steadily incremented
   next_model_id: u64,
+  /// Cache used by the simulation to store computed next positions in `fixed_update` phase
+  /// before the next cross sync window
+  pub cartesian_state_cache: dashmap::DashMap<SceneEntityId, TransformComponent>,
 }
 
 impl Default for SimulationSceneData {
@@ -128,6 +137,7 @@ impl SimulationSceneData {
       mesh_cache: Arc::new(crate::scene::AssetCache::new()),
       model_registry: Default::default(),
       next_model_id: 1,
+      cartesian_state_cache: dashmap::DashMap::with_capacity(16),
     }
   }
 
@@ -841,16 +851,18 @@ pub struct RenderFrame {
   pub sky_entity: Option<EntityId>,
   pub cursor_entity: Option<EntityId>,
   pub custom_render_callback: Option<CustomRenderCallback>,
-  pub active_physics_task: alloc::sync::Arc<
-    spin::Mutex<
-      Option<
-        aethervk_oshal_rlib::os::pool::tasklet::TaskletHandle<
-          crate::types::EngineResult<Option<crate::gpu::CommandBufferSyncInfo>>,
-        >,
-      >,
-    >,
-  >,
-  pub cached_timeline_semaphore: Option<(u64, u64)>,
+  /// Step 4 of the cross sync procedure: if the compute workload which is invoking this command
+  /// generated a cross sync procedure, we need to wait on a particular compute timeline value to
+  /// finish, and then insert graphics queue acquire commands. Whether to insert commands or not is
+  /// signaled by cross queue AND presence of this sync value
+  /// This is the compute timeline value to wait for
+  ///
+  /// Note: We are packing only the release value and not the `vk::Semaphore` itself cause we know
+  /// we are implicitly referring to the compute queue global timeline semaphore
+  /// `vulkan_device.kernels.timeline`. It can implicitly be taken by
+  /// `vulkan_device.kernels.next_submit_value`, but that would create a race condition between the
+  /// render thread and the physics tasklet threads
+  pub particle_acquire_sync: Option<u64>,
 }
 
 /// Invariant: width and height are valid, presentation engine is inside simulation context and render device
@@ -861,18 +873,33 @@ pub struct Resize {
   pub height: u32,
 }
 
+/// Struct pointed to in the [`RenderCommand::SyncParticleRelease`], whose writes are protected by
+/// a memory barrier issued through an atomic load/store on `feedback`
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncParticleReleaseFeedback {
+  pub timeline_semaphore: ash::vk::Semaphore,
+  pub timeline_release_value: u64,
+}
+
+unsafe impl bytemuck::Zeroable for SyncParticleReleaseFeedback {}
+unsafe impl bytemuck::Pod for SyncParticleReleaseFeedback {}
+
 #[derive(Clone, Default)]
-/// TODO: Document this item
 pub enum RenderCommand {
   #[default]
   Shutdown,
-
   RenderFrames(alloc::vec::Vec<RenderFrame>),
-
   Resize(Resize),
-
-  /// TODO move to compute
   GenerateSky,
+  /// Step 1 of Cross Sync 4 steps procedure to hand over compute owned updates to the render
+  /// thread. The render thread will write its generated task_id into `feedback`
+  SyncParticleRelease {
+    // Note: it could also be a raw pointer instead of a shared one, cause we know that the caller
+    // will outlive this command as it will poll the content of this atomic
+    feedback: alloc::sync::Arc<core::sync::atomic::AtomicU64>,
+    feedback_ptr: SendPtrMut<SyncParticleReleaseFeedback>,
+  },
 }
 
 unsafe impl Send for RenderCommand {}
@@ -975,11 +1002,68 @@ pub struct PresentationEngineData {
   pub camera_entity: Option<EntityId>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PhysicsDeviceSelfSync {
+  /// compute timeline semaphore
+  pub timeline_handle: ash::vk::Semaphore,
+  /// target compute timeline value
+  pub timeline_value: u64,
+  /// latest query time of the timeline semaphore (zero init)
+  pub latest_query_us: oshal::os::time::timeus_t,
+  /// recomputed backoff interval for each query (doubled each failed query)
+  pub query_exp_backoff_us: oshal::os::time::timeus_t,
+}
+
+impl PhysicsDeviceSelfSync {
+  pub fn new(timeline_handle: ash::vk::Semaphore, timeline_value: u64) -> Self {
+    use oshal::os::time::timeus_t;
+    const SIMULATION_DISPATCH_CHECK_INTERVAL_US: timeus_t = 8;
+    Self {
+      timeline_handle,
+      timeline_value,
+      latest_query_us: 0,
+      query_exp_backoff_us: SIMULATION_DISPATCH_CHECK_INTERVAL_US,
+    }
+  }
+
+  // return `true` if GPU side completed, `false` if time not elapsed or GPU side not completed
+  pub fn try_wait(
+    &mut self,
+    vulkan_device: &crate::gpu_backends::vulkan::device::LogicalDevice,
+    now_unscaled_us: oshal::os::time::timeus_t,
+    delta_unscaled_us: oshal::os::time::timeus_t,
+  ) -> bool {
+    if delta_unscaled_us < self.query_exp_backoff_us {
+      return false;
+    }
+
+    if let Ok(value) = unsafe {
+      vulkan_device
+        .timeline_semaphore
+        .get_semaphore_counter_value(self.timeline_handle)
+    } {
+      self.latest_query_us = now_unscaled_us;
+      debug_assert!(self.timeline_value <= value);
+      if self.timeline_value == value {
+        true
+      } else {
+        self.query_exp_backoff_us <<= 1;
+        false
+      }
+    } else {
+      false
+    }
+  }
+}
+
 #[derive(Debug)]
 pub struct SceneContext {
   pub scene: Arc<Scene>,
   pub entity_map: BTreeMap<u64, EntityId>,
   next_entity_id: u64,
+
+  /// Contains the last render task id for the given scene
+  pub last_render_task: core::sync::atomic::AtomicU64,
 
   // TODO evaluate whether screen selection is necessary, if not remove it
   pub root_entity: EntityId,
@@ -996,18 +1080,20 @@ pub struct SceneContext {
   // TODO evaluate whether screen selection is necessary, if not remove it
   pub collisions_enabled: Arc<AtomicBool>, // Changed to false for debugging
   // TODO evaluate whether screen selection is necessary, if not remove it
-  pub physics_scene: Option<Arc<RwLock<physics::physics_scene::PhysicsScene>>>,
-  pub active_physics_task: alloc::sync::Arc<
-    spin::Mutex<
-      Option<
-        aethervk_oshal_rlib::os::pool::tasklet::TaskletHandle<
-          crate::types::EngineResult<Option<crate::gpu::CommandBufferSyncInfo>>,
-        >,
-      >,
-    >,
-  >,
-  pub latest_physics_sync:
-    alloc::sync::Arc<parking_lot::RwLock<Option<crate::gpu::CommandBufferSyncInfo>>>,
+  pub physics_scene: Option<PhysicsDeviceSelfSync>,
+
+  /// atomic boolean signaling whether we are or not executing a simulation step *CPU Side*. This
+  /// means that when this is `false`, it means that either we compute queue is idle or is still in
+  /// flight on previous dispatch, therefore `latest_physics_sync` should also be checked
+  pub active_physics_task: core::sync::atomic::AtomicBool,
+  /// necessary synchronization primitives for "Self Synchronization" (compute N -> compute N + 1).
+  /// This means that it packs timeline handle and value (Note: we are assuming vulkan only for now)
+  /// We are also packing last semaphore query time and accumulated backoff time.
+  /// No need for synchronization cause it is used by
+  /// - (read) logic thread if `active_physics_task` is `false`
+  /// - (write) physics tasklet when `active_physics_task` is `true`
+  pub latest_physics_sync: Option<PhysicsDeviceSelfSync>,
+
   pub physics_engine_type: Arc<RwLock<PhysicsEngineType>>,
 
   /// Time state tracking the simulation unscaled and scaled time. Tracks start_epoch but not its
@@ -1163,8 +1249,8 @@ impl SceneContext {
       collisions_enabled: Arc::new(AtomicBool::new(false)),
       physics_scene: None,
       selection_tlas: None,
-      active_physics_task: Arc::new(spin::Mutex::new(None)),
-      latest_physics_sync: Arc::new(parking_lot::RwLock::new(None)),
+      active_physics_task: core::sync::atomic::AtomicBool::new(false),
+      latest_physics_sync: None,
       physics_engine_type: Arc::new(RwLock::new(PhysicsEngineType::VulkanCompute)),
       time_state,
       presentation_engines: Arc::new(RwLock::new(BTreeMap::new())),
@@ -1175,6 +1261,7 @@ impl SceneContext {
       custom_render_callback: None,
       debug_name: alloc::string::String::new(),
       end_epoch,
+      last_render_task: core::sync::atomic::AtomicU64::new(0),
     }
   }
 

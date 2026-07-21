@@ -307,3 +307,40 @@ pub fn simple_simulation_step(
 pub fn simple_particle_emission_step() -> EngineResult<crate::gpu::CommandBufferSyncInfo> {
   todo!()
 }
+
+/// Vulkan Utility to allocate a vulkan command buffer from a given
+/// [`crate::gpu_backends::vulkan::device::commands::CommandPools`], with the possibility to retry
+/// when Pool fails because out of host memory (fixed capacities in use there). Therefore, on
+/// failure, a discard pool recycling phase is called and another attempt is made. This is done
+/// every 0.1ms interval with a deadline of 1ms
+/// Note: `current_timeline` is the value which will be signaled from the previous graphics queue
+/// command, not the next signal value.
+fn allocate_primary_vk_command_buffer(
+  device: &device::LogicalDevice,
+  command_pools: &device::commands::CommandPools,
+  discard_pool: &device::resources::DiscardPool,
+  queue_family_index: u32,
+  cmd_id: device::commands::CommandBufferId,
+  current_timeline: u64,
+) -> GpuResult<ash::vk::CommandBuffer> {
+  use aethervk_oshal_rlib::os::native::this_thread;
+  use aethervk_oshal_rlib::os::time::get_monotonic_time;
+
+  let tid = this_thread::id();
+  let start = get_monotonic_time();
+  while (get_monotonic_time() - start) < 1_000_i64 {
+    if let Ok(cmd) = command_pools.allocate_primary(device, tid, queue_family_index, cmd_id) {
+      return Ok(cmd);
+    }
+
+    let items = discard_pool.pop_ready_items(current_timeline);
+    device::resources::DiscardPool::destroy_items_lock_free(device, items);
+
+    this_thread::sleep_for(core::time::Duration::from_micros(100));
+  }
+
+  // Deadline reached. Die.
+  Err(GpuError::BackendSpecific(
+    "Couldn't allocate command buffer within deadline. OOM".to_string(),
+  ))
+}

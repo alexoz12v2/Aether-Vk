@@ -1188,7 +1188,7 @@ impl PipelinePool {
 }
 
 impl DeviceResource for PipelinePool {
-  fn cleanup(&mut self, device: &ash::Device) {
+  fn cleanup(&mut self, device: &super::LogicalDevice) {
     unsafe {
       for entry in self.graphics_pipelines.iter() {
         device.destroy_pipeline(entry.value().get(), None);

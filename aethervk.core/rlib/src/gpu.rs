@@ -111,6 +111,7 @@ pub mod new_particles {
   pub const MAX_PARTICLES: usize = 1_000_000;
   pub const MAX_PARTICLES_PER_SYSTEM: usize = 100_000;
   pub const MAX_CHUNKS: usize = MAX_PARTICLES.div_ceil(PCHUNK_SIZE);
+  pub const PARTICLE_PAGE_TABLE_HEADER_SIZE: usize = 32;
 
   #[repr(C)]
   #[derive(Debug, Copy, Clone, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
@@ -687,11 +688,20 @@ pub fn set_asset_dir_for_tests() {
   }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum CommandBufferSyncInfoStageMask {
+  #[default]
+  TopBottom, // signal at bottom, wait on top
+  Transfer,
+  VertexAttributeInput,
+}
+
 /// Information about the synchronization payload after submitting a command buffer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CommandBufferSyncInfo {
   pub timeline_semaphore: u64, // Opaque handle for the backend
   pub timeline_value: u64,
+  pub wait_stage_mask: CommandBufferSyncInfoStageMask,
 }
 
 /// TODO: Document this item

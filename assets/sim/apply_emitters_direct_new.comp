@@ -52,12 +52,14 @@ shared uint s_em_typeId;
 
 void main() {
     uint gid = gl_GlobalInvocationID.x;
-    if (gid >= pc.particlePageTable.particleCount || pc.emitterCount == 0u) return;
+
+    // 1 thread = 4 particles. Total required threads is ceil(particleCount / 4)
+    uint totalThreads = (pc.particlePageTable.particleCount + 3) / 4;
+    if (gid >= totalThreads || pc.emitterCount == 0u) return;
 
     uint chunkCount = (pc.particlePageTable.particleCount + PCHUNK_SIZE - 1) / PCHUNK_SIZE;
-    // if PCHUNK_SIZE == gl_WorkGroupSize.x then we can use gl_LocationInvocationID.x instead of this
-    uint chunkTableIndex = gid / PCHUNK_SIZE;
-    uint chunkOffset = gid & (PCHUNK_SIZE - 1); // power of 2
+    uint chunkTableIndex = gid / PCHUNK_VEC4_SIZE;
+    uint chunkOffset = gid & (PCHUNK_VEC4_SIZE - 1); // power of 2
 
     // all elements in workgroup should access same element -> broadcast. First to do it in subgroup gives it to all other lanes
     uint chunkIndex = subgroupBroadcastFirst(pc.particlePageTable.chunks[chunkTableIndex]);

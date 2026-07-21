@@ -59,12 +59,13 @@ void main() {
     }
 #endif
 
-    if (gid >= pc.particlePageTable.particleCount) return;
+    // 1 thread = 4 particles. Total required threads is ceil(particleCount / 4)
+    uint totalThreads = (pc.particlePageTable.particleCount + 3) / 4;
+    if (gid >= totalThreads) { return; }
 
     uint chunkCount = (pc.particlePageTable.particleCount + PCHUNK_SIZE - 1) / PCHUNK_SIZE;
-    // if PCHUNK_SIZE == gl_WorkGroupSize.x then we can use gl_LocationInvocationID.x instead of this
-    uint chunkTableIndex = gid / PCHUNK_SIZE;
-    uint chunkOffset = gid & (PCHUNK_SIZE - 1); // power of 2
+    uint chunkTableIndex = gid / PCHUNK_VEC4_SIZE;
+    uint chunkOffset = gid & (PCHUNK_VEC4_SIZE - 1); // power of 2
 
     // all elements in workgroup should access same element -> broadcast. First to do it in subgroup gives it to all other lanes
     uint chunkIndex = subgroupBroadcastFirst(pc.particlePageTable.chunks[chunkTableIndex]);
@@ -80,7 +81,7 @@ void main() {
     float16_t dt_half = float16_t(pc.deltaTime / 2);
     float dt_f32 = pc.deltaTime;
 #ifdef DEBUG_SHADERS
-    if (isnan(dt_f32) || dt_f32 == 0) {
+    if (isnan(dt_half) || dt_half == 0hf) {
         debugPrintfEXT("Help half dt died\n");
         return;
     }
