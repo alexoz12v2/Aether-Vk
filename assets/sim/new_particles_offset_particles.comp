@@ -1,0 +1,121 @@
+// @assets/sim/new_particles_offset_particles
+//
+// Particle Origin shift & Inertial compensation shader
+// ─────────────────────────────────────────────────
+// Unit contract
+// Given push constant which identifies a particle system and deltas in rotation and position with
+// respect to the previous ps local coordinate system, compensate
+// - current position
+// - current velocity
+// - next step force vectors
+//
+// Shifts particle local coordinates seamlessly when the parent coordinate system translates or
+// rotates, preserving absolute world inertia.
+
+#version 450 core
+#extension GL_EXT_buffer_reference2      : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_KHR_shader_subgroup_basic  : require
+#extension GL_GOOGLE_include_directive   : require
+
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
+
+#include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
+
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    ParticleChunkData globalParticleBuffer;
+    ParticlePageTable particlePageTable;
+    vec4 deltaRot; // xyzw quaternion
+    vec4 deltaPos; // xyz translation, km, w padding
+} pc;
+
+vec3 qtransform(vec4 q, vec3 v) {
+    vec3 q_vec = q.xyz;
+    float q_scalar = q.w;
+    vec3 t = 2.0 * cross(q_vec, v);
+    return v + q_scalar * t + cross(q_vec, t);
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    // each thread loads 4 particles
+    uint totalThreads = (pc.particlePageTable.particleCount + 3) / 4;
+
+    if (gid >= totalThreads) { return; }
+
+    uint chunkCount = (pc.particlePageTable.particleCount + PCHUNK_SIZE - 1) / PCHUNK_SIZE;
+    uint chunkTableOffset = gid / PCHUNK_VEC4_SIZE;
+    uint chunkOffset = gid & (PCHUNK_VEC4_SIZE - 1);
+
+    uint chunkIndex = pc.particlePageTable.chunks[chunkTableOffset];
+
+    uvec4 st = pc.globalParticleBuffer[chunkIndex].spawnTime[chunkOffset];
+    bvec4 isAlive = bvec4(
+        st.x != 0u && st.x != 0xFFFFFFFFu,
+        st.y != 0u && st.y != 0xFFFFFFFFu,
+        st.z != 0u && st.z != 0xFFFFFFFFu,
+        st.w != 0u && st.w != 0xFFFFFFFFu
+    );
+
+    if (!any(isAlive)) { return; }
+
+    // fetch memory
+    vec4 px = pc.globalParticleBuffer[chunkIndex].positionX[chunkOffset];
+    vec4 py = pc.globalParticleBuffer[chunkIndex].positionY[chunkOffset];
+    vec4 pz = pc.globalParticleBuffer[chunkIndex].positionZ[chunkOffset];
+
+    f16vec4 vx = pc.globalParticleBuffer[chunkIndex].velocityX[chunkOffset];
+    f16vec4 vy = pc.globalParticleBuffer[chunkIndex].velocityY[chunkOffset];
+    f16vec4 vz = pc.globalParticleBuffer[chunkIndex].velocityZ[chunkOffset];
+
+    f16vec4 fx = pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset];
+    f16vec4 fy = pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset];
+    f16vec4 fz = pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset];
+
+    vec4 q = pc.deltaRot;
+    vec3 dPos = pc.deltaPos.xyz;
+
+    // not willing to use unroll here for register pressure. registers for loop tracking are
+    // less than quadruplicating body
+    [[dont_unroll]]
+    for (uint i = 0; i < 4; ++i) {
+        if (isAlive[i]) {
+            vec3 pos = vec3(px[i], py[i], pz[i]);
+            // Promote F16 directional vectors to F32 to apply precise quantization after transform
+            vec3 vel = vec3(float(vx[i]), float(vy[i]), float(vz[i]));
+            vec3 frc = vec3(float(fx[i]), float(fy[i]), float(fz[i]));
+
+            // Apply inertia-preserving transforms
+            pos = qtransform(q, pos) + dPos;  // positions are translated and rotated (affine points)
+            vel = qtransform(q, vel);         // velocities are only rotated (vectors)
+            frc = qtransform(q, frc);         // forces are only rotated (vectors)
+
+            px[i] = pos.x; py[i] = pos.y; pz[i] = pos.z;
+
+            // demote to float16_t safely
+            vx[i] = float16_t(vel.x); vy[i] = float16_t(vel.y); vz[i] = float16_t(vel.z);
+            fx[i] = float16_t(frc.x); fy[i] = float16_t(frc.y); fz[i] = float16_t(frc.z);
+        }
+    }
+
+    // write back updated coordinates
+    pc.globalParticleBuffer[chunkIndex].positionX[chunkOffset] = px;
+    pc.globalParticleBuffer[chunkIndex].positionY[chunkOffset] = py;
+    pc.globalParticleBuffer[chunkIndex].positionZ[chunkOffset] = pz;
+
+    pc.globalParticleBuffer[chunkIndex].velocityX[chunkOffset] = vx;
+    pc.globalParticleBuffer[chunkIndex].velocityY[chunkOffset] = vy;
+    pc.globalParticleBuffer[chunkIndex].velocityZ[chunkOffset] = vz;
+
+    pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset] = fx;
+    pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset] = fy;
+    pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset] = fz;
+}

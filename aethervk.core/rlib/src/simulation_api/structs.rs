@@ -2,13 +2,13 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use crate::{
-  gpu,
-  gpu::{DeviceAdditionalParams, PresentationEngineHandle},
-  physics,
-  physics::physics_scene::math::PhysicsSceneMathExt,
-  scene::{EntityId, Scene, TransformComponent},
-  simulation,
-  simulation::almanac::{AlmanacPackedData, KinematicState},
+  gpu::{self, DeviceAdditionalParams, PresentationEngineHandle},
+  physics::{self, physics_scene::math::PhysicsSceneMathExt},
+  scene::{AlmanacPlanet, BodyRotationalModel, EntityId, Scene, TransformComponent},
+  simulation::{
+    self,
+    almanac::{AlmanacPackedData, KinematicState},
+  },
   simulation_api::{logic_thread::start_logic_thread, render_thread::start_render_thread},
   types::{EngineError, EngineResult, GpuError, GpuResult, RuntimeParams},
 };
@@ -93,6 +93,72 @@ pub struct SceneEntityId {
   pub entity_id: u64,
 }
 
+impl SceneEntityId {
+  pub fn new(scene_id: u64, entity_id: EntityId) -> Self {
+    Self {
+      scene_id,
+      entity_id: entity_id.as_ffi(),
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct CartesianStateComet {
+  pub transform: TransformComponent,
+  pub almanac_planet: AlmanacPlanet,
+  pub body_rotational_model: Option<BodyRotationalModel>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CartesianState {
+  pub comet_state: Option<CartesianStateComet>,
+
+  pub parent_frame: EntityId,
+  pub parent_frame_transform: TransformComponent,
+}
+
+impl CartesianState {
+
+  pub fn new_comet(
+    transform: TransformComponent,
+    almanac_planet: AlmanacPlanet,
+    body_rotational_model: Option<BodyRotationalModel>,
+    parent_frame: EntityId,
+    parent_frame_transform: TransformComponent,
+  ) -> Self {
+    Self {
+      comet_state: Some(CartesianStateComet {
+        transform,
+        almanac_planet,
+        body_rotational_model,
+      }),
+      parent_frame,
+      parent_frame_transform,
+    }
+  }
+
+  pub fn new_frame(parent_frame: EntityId, parent_frame_transform: TransformComponent) -> Self {
+    Self {
+      comet_state: None,
+      parent_frame,
+      parent_frame_transform,
+    }
+  }
+
+  pub fn frame_data(
+    cartesian_state_cache: &dashmap::DashMap<SceneEntityId, CartesianState>,
+    scene_id: u64,
+    entity_id: EntityId,
+  ) -> Option<TransformComponent> {
+    cartesian_state_cache
+      .get(&SceneEntityId {
+        scene_id,
+        entity_id: entity_id.as_ffi(),
+      })
+      .map(|state| state.parent_frame_transform)
+  }
+}
+
 /// owned by logic thread context
 pub struct SimulationSceneData {
   /// Scene state: Scene map
@@ -111,7 +177,7 @@ pub struct SimulationSceneData {
   next_model_id: u64,
   /// Cache used by the simulation to store computed next positions in `fixed_update` phase
   /// before the next cross sync window
-  pub cartesian_state_cache: dashmap::DashMap<SceneEntityId, TransformComponent>,
+  pub cartesian_state_cache: dashmap::DashMap<SceneEntityId, CartesianState>,
 }
 
 impl Default for SimulationSceneData {

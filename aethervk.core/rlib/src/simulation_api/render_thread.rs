@@ -2,23 +2,22 @@
 
 use crate::{
   gpu::{
-    self, FrameCancelGuard, PresentationEngineHandle, RenderDevice, SwapchainStatus,
+    self, PresentationEngineHandle, RenderDevice,
     scene_conversion::{RenderSceneExtraction, SceneConversionExt},
   },
-  simulation_api::structs::{CustomRenderCallback, RenderCommand, RenderThreadContext},
+  simulation_api::structs::{RenderCommand, RenderThreadContext},
   types::{EngineError, EngineResult, GpuError, GpuResult},
 };
 use aethervk_oshal_rlib as oshal;
 use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
 use ash::vk::Handle;
-use itertools::Itertools;
 use oshal::{
   os,
   os::{NativeError, ThreadingError, thread, thread::Thread},
 };
 use thingbuf::mpsc;
 
-/// TODO: Document this item
+/// Render Thread Entry Point
 pub fn start_render_thread(
   render_rx: mpsc::Receiver<RenderCommand>,
   render_params: RenderThreadContext,
@@ -50,78 +49,49 @@ pub fn start_render_thread(
       }
     };
     loop {
-      #[cfg(target_os = "macos")]
-      {
-        let should_break = objc2::rc::autoreleasepool(|_| {
-          match render_rx.try_recv() {
-            Ok(cmd) => {
-              if let RenderCommand::Shutdown = cmd {
-                // while during normal operation we might have multiple due to creation/manipulation
-                // of presentation engines, when we shutdown, there should be only one
-                // debug_assert_eq!(alloc::sync::Arc::strong_count(&render_frontend), 1);
-                return true;
-              }
-
-              debug_assert!(alloc::sync::Arc::strong_count(&render_frontend) < 16);
-              if let Err(e) = render_frontend.with_device(render_device_handle, |render_device| {
-                process_command(
-                  cmd,
-                  render_device,
-                  &render_params,
-                  &mut first_render_map,
-                  render_frontend.clone(),
-                  render_device_handle,
-                )
-              }) {
-                oshal::log!("render_thread | process_command failed: {:?}", e);
-              }
-              false
+      let mut core_logic = || -> bool {
+        match render_rx.try_recv() {
+          Ok(cmd) => {
+            if let RenderCommand::Shutdown = cmd {
+              // while during normal operation we might have multiple due to creation/manipulation
+              // of presentation engines, when we shutdown, there should be only one
+              // debug_assert_eq!(alloc::sync::Arc::strong_count(&render_frontend), 1);
+              return true;
             }
-            Err(e) => {
-              if let thingbuf::mpsc::errors::TryRecvError::Closed = e {
-                return true;
-              }
-              oshal::os::native::this_thread::yield_now();
-              false
-            }
-          }
-        });
-        if should_break {
-          break;
-        }
-      }
 
-      #[cfg(not(target_os = "macos"))]
-      match render_rx.try_recv() {
-        Ok(cmd) => {
-          if let RenderCommand::Shutdown = cmd {
-            // while during normal operation we might have multiple due to creation/manipulation
-            // of presentation engines, when we shutdown, there should be only one
-            // debug_assert_eq!(alloc::sync::Arc::strong_count(&render_frontend), 1);
-            break;
+            debug_assert!(alloc::sync::Arc::strong_count(&render_frontend) < 16);
+            if let Err(e) = render_frontend.with_device(render_device_handle, |render_device| {
+              process_command(
+                cmd,
+                render_device,
+                &render_params,
+                &mut first_render_map,
+                render_frontend.clone(),
+                render_device_handle,
+              )
+            }) {
+              oshal::log!("render_thread | process_command failed: {:?}", e);
+            }
+            false
           }
-          // maximum presentation engine operation manipulation: 16
-          debug_assert!(alloc::sync::Arc::strong_count(&render_frontend) < 16);
-          if let Err(e) = render_frontend.with_device(render_device_handle, |render_device| {
-            process_command(
-              cmd,
-              render_device,
-              &render_params,
-              &mut first_render_map,
-              render_frontend.clone(),
-              render_device_handle,
-            )
-          }) {
-            oshal::log!("render_thread | process_command failed: {:?}", e);
+          Err(e) => {
+            if let thingbuf::mpsc::errors::TryRecvError::Closed = e {
+              return true;
+            }
+            oshal::os::native::this_thread::yield_now();
+            false
           }
         }
-        Err(e) => {
-          if let thingbuf::mpsc::errors::TryRecvError::Closed = e {
-            break;
-          }
-          // Avoid pegging CPU if no commands
-          oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
-        }
+      };
+
+      #[cfg(target_vendor = "apple")]
+      let should_break = objc2::rc::autoreleasepool(|_| core_logic());
+
+      #[cfg(not(target_vendor = "apple"))]
+      let should_break = core_logic();
+
+      if should_break {
+        break;
       }
     }
   })
@@ -159,7 +129,6 @@ fn process_command(
         .inspect_err(|e| store_failure(e))?;
       let cmd_scope = gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id))
         .inspect_err(|e| store_failure(e))?;
-      // TODO: add compute timeline signaling on transfer
 
       let res = vulkan_device.res.read();
       let psm = res.particle_system_manager.as_ref().unwrap();

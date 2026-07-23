@@ -453,6 +453,12 @@ pub mod v2 {
       }
     }
 
+    /// Checks if there is at least one more full fixed step in the accumulator
+    pub fn has_ready_step(&self, scaled_fixed_dt: timeus_t) -> bool {
+      let state = self.state.read();
+      state.scaled_accumulator >= scaled_fixed_dt
+    }
+
     /// Calculates the exact [`hifitime::Epoch`] for the current simulation frame.
     /// This combines the startnig epoch with the current scaled elapsed time
     pub fn current_epoch(&self) -> Epoch {

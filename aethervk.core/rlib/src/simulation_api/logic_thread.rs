@@ -5,26 +5,35 @@ use super::structs::{
   SyncParticleReleaseFeedback,
 };
 use crate::{
-  gpu::{RenderDevice, WeakRenderFrontendExt},
+  gpu::{RenderDevice, WeakRenderFrontendExt, vulkan},
   scene::{
-    CameraComponent, CursorComponent, EntityId, FollowingComponent, HighResTransformComponent,
-    TransformComponent,
+    AlmanacPlanet, BodyRotationalModel, CameraComponent, CometMarkerComponent, CursorComponent,
+    EntityId, FollowingComponent, HighResTransformComponent, PlanetMarkerComponent,
+    ReferenceFrameComponent, StaticMeshComponent, TransformComponent,
     camera::{QuatToEulerAngles, SceneCameraExt},
   },
-  simulation_api::emit_breadcrumb,
-  types::{EngineError, EngineResult},
+  simulation::almanac::AlmanacPackedData,
+  simulation_api::{
+    emit_breadcrumb,
+    structs::{CartesianState, PhysicsDeviceSelfSync},
+  },
+  types::{EngineError, EngineResult, GpuResult},
 };
 use aethervk_oshal_rlib::{
   self as oshal,
   math::{
     quaternion::Quaternion,
-    vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat},
+    vector::{
+      Vector, Vector3, Vector4,
+      vec3::Vec3f32,
+      vec3f64::{DVec3, Vec3f64},
+      vec4::{Quat, Vec4f32},
+    },
   },
   os::{
     NativeError, ThreadingError,
     pool::{WorkloadStatus, tasklet::ThreadPoolExt},
-    thread,
-    thread::Thread,
+    thread::{self, Thread},
     time::timeus_t,
   },
 };
@@ -315,7 +324,7 @@ pub fn start_logic_thread(
               let scene_lock = scene_arc.upgradable_read();
               // TODO: scale according to performance or not?
               const UNSCALED_FIXED_DELTA_US: timeus_t = oshal::os::time::timeus_milliseconds(16);
-              // TODO return handle
+              // TODO return handle. Note: if err, do update too
               execute_simulation_tick(
                 scene_lock,
                 time_mgr.deref_mut(),
@@ -1503,6 +1512,68 @@ struct SimulationTickOutput {
   /// timeline semaphores inside the render thread when rendering the first frame of a given scene
   /// after a cross sync
   pending_particle_acquire: Option<u64>,
+  latest_physics_sync: Option<PhysicsDeviceSelfSync>,
+}
+
+/// Equivalent of [`crate::gpu::ScopedCommandBuffer`] for compute submission
+struct ScopedComputeCommand<'a> {
+  vulkan_device: &'a crate::gpu_backends::vulkan::device::Device,
+  cmd_handle: crate::gpu::CommandBufferHandle,
+  cmd: ash::vk::CommandBuffer,
+  gfx_release_sync_info: Option<crate::gpu::CommandBufferSyncInfo>,
+  submitted: bool,
+}
+
+impl<'a> ScopedComputeCommand<'a> {
+  fn new(
+    vulkan_device: &crate::gpu_backends::vulkan::device::Device,
+    cmd_handle: crate::gpu::CommandBufferHandle,
+    cmd: ash::vk::CommandBuffer,
+  ) -> GpuResult<Self> {
+    use crate::gpu_backends::vulkan::device::QueueRole;
+    vulkan_device.begin_command_buffer_all(cmd_handle, QueueRole::Compute)?;
+    Ok(Self {
+      vulkan_device,
+      cmd_handle,
+      cmd,
+      gfx_release_sync_info: None,
+      submitted: false,
+    })
+  }
+
+  fn set_gfx_sync(&mut self, gfx_timeline_sem: ash::vk::Semaphore, gfx_release_value: u64) {
+    use ash::vk::Handle;
+    self.gfx_release_sync_info = Some(crate::gpu::CommandBufferSyncInfo {
+      timeline_semaphore: gfx_timeline_sem.as_raw(),
+      timeline_value: gfx_release_value,
+      wait_stage_mask: crate::gpu::CommandBufferSyncInfoStageMask::Transfer,
+    });
+  }
+
+  fn submit(mut self) -> GpuResult<(ash::vk::Semaphore, u64)> {
+    use crate::gpu_backends::vulkan::device::QueueRole;
+    let (compute_sem, signal_value) = self.vulkan_device.submit_command_buffer_generic(
+      self.cmd_handle,
+      None,
+      self
+        .gfx_release_sync_info
+        .as_ref()
+        .map(|x| core::slice::from_ref(x))
+        .unwrap_or(&[]),
+      &[],
+      QueueRole::Compute,
+    )?;
+    self.submitted = true;
+    Ok((compute_sem, signal_value))
+  }
+}
+
+impl<'a> Drop for ScopedComputeCommand<'a> {
+  fn drop(&mut self) {
+    if !self.submitted {
+      let _ = self.submit();
+    }
+  }
 }
 
 /// ticks `time_mgr always`, updates `scene` after a simulation step executed successfully
@@ -1510,6 +1581,8 @@ struct SimulationTickOutput {
 /// - next timeline semaphore value so that we can update our `latest_physics_sync`
 /// - whether or not we reached end epoch, and therefore simulation is finished
 fn execute_simulation_tick(
+  vulkan_device: &crate::gpu_backends::vulkan::device::Device,
+  scene_id: u64,
   scene: parking_lot::lock_api::RwLockUpgradableReadGuard<parking_lot::RawRwLock, SceneContext>,
   time_mgr: &mut oshal::os::time::v2::TimeManager,
   unscaled_fixed_delta_us: oshal::os::time::timeus_t,
@@ -1517,26 +1590,38 @@ fn execute_simulation_tick(
     alloc::sync::Arc<core::sync::atomic::AtomicU64>,
     *mut SyncParticleReleaseFeedback,
   )>,
+  cartesian_state_cache: &dashmap::DashMap<
+    crate::simulation_api::structs::SceneEntityId,
+    CartesianState,
+  >,
+  almanac: &AlmanacPackedData,
 ) -> EngineResult<SimulationTickOutput> {
-  use ash::vk;
-  use oshal::os::time::{timeus_milliseconds, timeus_t, us_to_300ths_rounded, v2::SimSpeed};
+  use crate::gpu_backends::vulkan::device::QueueRole;
+  use crate::simulation_api::structs::SceneEntityId;
+  use oshal::os::time::{timeus_t, us_to_300ths_rounded, v2::SimSpeed};
   let scaled_fixed_dt_us =
     time_mgr.state.read().speed.scaled_from_unscaled(unscaled_fixed_delta_us);
   let scaled_fixed_dt_300ths = us_to_300ths_rounded(scaled_fixed_dt_us);
 
   time_mgr.tick();
 
+  // ------------------------------------------------------------------------------------
   // -- Fixed Update Phase (Step 1: Command buffer creation and CPU side resolution) --
   // consume accumulated time for physics: SPICE spk_ezr Kernel with current epoch and velocity
   // verlet with `scaled_fixed_dt`
   // compute whether or not we reached end_epoch. and report it. if end epoch reached, skip fixed
   // update phase and go to update
-  let cmd: vk::CommandBuffer = vk::CommandBuffer::null(); // TODO
+  // ------------------------------------------------------------------------------------
+  let (cmd_handle, cmd) = vulkan_device.get_command_buffer_and_native_all(QueueRole::Compute)?;
+  let mut cmd_scope = ScopedComputeCommand::new(vulkan_device, cmd_handle, cmd)?;
 
+  // ------------------------------------------------------------------------------------
   // -- Cross Sync Resolution --
+  // ------------------------------------------------------------------------------------
 
   // Spin wait for the render thread to finish the polling with a 2ms deadline, 0.2ms
   // interval. If we can't finish on time, abort the update procedure
+  let mut do_cross_sync = false;
   if let Some((feedback_arc, feedback_ptr)) = cross_sync_data {
     use oshal::os::native::this_thread;
     use oshal::os::time::get_monotonic_time;
@@ -1551,8 +1636,10 @@ fn execute_simulation_tick(
       }
     }
 
-    let do_cross_sync = release_task_id <= 1 && release_task_id != u64::MAX;
+    do_cross_sync = release_task_id <= 1 && release_task_id != u64::MAX;
     if do_cross_sync {
+      use crate::gpu::new_particles::PAGE_TABLE_BYTES;
+      use crate::gpu_backends::vulkan::utils::RwLockable;
       debug_assert_eq!(alloc::sync::Arc::strong_count(&feedback_arc), 1);
       // retrieve release timeline value and semaphore handle so that we can record submit wait
       // conditions
@@ -1570,7 +1657,24 @@ fn execute_simulation_tick(
       // get compute queue timeline value for next compute submission (move outside)
       // record and submit with
       // - timeline sem from graphics as wait at stage TRANSFER
-      // - timeline sem from compute as signal
+      // - timeline sem from compute as signal (default in submit)
+      cmd_scope.set_gfx_sync(gfx_timeline_sem, gfx_release_value);
+      {
+        let res = vulkan_device.res.read();
+        let psm = res.particle_system_manager.as_ref().unwrap();
+        psm.cmd_sync_compute_copy_and_release(
+          &vulkan_device.device,
+          cmd,
+          PAGE_TABLE_BYTES as _,
+          vulkan_device.get_graphics_queue().family_index,
+          vulkan_device.get_compute_queue().family_index,
+        );
+      }
+      {
+        let mut res = vulkan_device.res.write();
+        let psm = res.particle_system_manager.as_mut().unwrap();
+        unsafe { psm.swap_buffers() };
+      }
     } else if release_task_id != u64::MAX {
       // handle failure: free `feedback_ptr` and do nothing
       // SAFETY: allocated by caller, untouched by render thread cause we received some feedback
@@ -1582,8 +1686,439 @@ fn execute_simulation_tick(
   }
 
   // -- Fixed Update Phase (Step 2: Command buffer record and GPU compute queue submit) --
+  let compute_signal_value = vulkan_device
+    .kernels
+    .next_submit_value
+    .load(core::sync::atomic::Ordering::Relaxed);
+  let (sim_speed, now_unscaled_us, now_scaled_us) = {
+    let time_state = time_mgr.state.read();
+    (
+      time_state.speed,
+      time_state.unscaled_time,
+      time_state.scaled_time,
+    )
+  };
+  let now_scaled_300ths = us_to_300ths_rounded(now_scaled_us);
+  let latest_physics_sync: Option<PhysicsDeviceSelfSync> = if sim_speed != SimSpeed::Paused {
+    // used for SPICE EZR Data Kernel and simulation
+    let current_epoch = time_mgr.current_epoch();
 
+    // ------------------------------------------------------------------------------------
+    // Particle Systems: prepare extraction for all particle systems in the scene
+    // ------------------------------------------------------------------------------------
+    // prepare extraction for all particle systems in the scene
+    use crate::scene::particles::v2::{ParticleSystemComponent, ParticleSystemComponentExtraction};
+    let ps_extraction = scene.scene.query2_res(
+      |_e_id, ps: &ParticleSystemComponent, t: &TransformComponent| {
+        Some(ParticleSystemComponentExtraction::from_component(ps, t))
+      },
+    );
+    let mut force_emitters = alloc::vec::Vec::with_capacity(ps_extraction.len());
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+    struct ParticlesExecution {
+      last_emission_unscaled_us: timeus_t,
+      last_compaction_unscaled_us: timeus_t,
+      global_pos_f64: [f64; 3],
+      global_rot: [f32; 4],
+      did_compact: u32, // bool32
+      dead: u32,        // bool32, means in error
+      r_helio_au: f32,
+      _pad: u32,
+    }
+    use bytemuck::Zeroable;
+    let mut particle_executions = alloc::vec![ParticlesExecution::zeroed(); ps_extraction.len()];
+
+    let from_start_epoch_scaled_us = {
+      let start_epoch = time_mgr.start_epoch;
+      // If you know your durations will never exceed 292,000 years, you can cast directly from 16
+      // bytes to 8 bytes after division.
+      ((current_epoch - start_epoch).total_nanoseconds() / 1000) as i64
+    };
+
+    for (idx, (ps, id)) in ps_extraction.iter().enumerate() {
+      let (t_scene, id) = scene.scene.get_micro_frame_entity(*id).unwrap();
+      let t = CartesianState::frame_data(&cartesian_state_cache, scene_id, id).unwrap_or(t_scene);
+      let r_helio_au = t.position.length();
+      force_emitters.push(
+        vulkan_device.cmd_allocate_transient_emitter_for_particle_system(
+          cmd,
+          compute_signal_value,
+          (t.position, t.rotation),
+          (ps.framerel_pos_km, ps.framerel_rot),
+        )?,
+      );
+      particle_executions[idx].r_helio_au = r_helio_au;
+      let gt = scene.scene.global_transform_f64(id).unwrap();
+      particle_executions[idx].global_pos_f64 = gt.position.into();
+      particle_executions[idx].global_rot = gt.rotation.0.into();
+    }
+
+    // ------------------------------------------------------------------------------------
+    // SPICE EZR Kernel: Extract all cartesian states which are not in the cache and insert them
+    // there. If present, then use cached value.
+    // ------------------------------------------------------------------------------------
+    let insert_into_cache = |e_id: EntityId,
+                             t: TransformComponent,
+                             iau_rot: Option<BodyRotationalModel>,
+                             ap: AlmanacPlanet| {
+      let key = SceneEntityId::new(scene_id, e_id);
+      if !cartesian_state_cache.contains_key(&key) {
+        let frame_id = scene.scene.get_parent(e_id).unwrap();
+        let frame_transform =
+          scene.scene.with_component(frame_id, |t: &TransformComponent| *t).unwrap();
+        debug_assert_eq!(frame_transform.rotation, Quat::identity());
+        debug_assert_eq!(frame_transform.scale, Vec3f32::one());
+        let frame_key = SceneEntityId::new(scene_id, frame_id);
+        assert!(
+          scene.scene.with_component(frame_id, |_: &ReferenceFrameComponent| ()).is_some(),
+          "Scene integrity violation: Comet entity should have as direct parent a reference frame component"
+        );
+        assert!(
+          scene.scene.get_parent(frame_id) == Some(scene.root_entity),
+          "Scene integrity violation: Frame entity of type micro should be child of root"
+        );
+        cartesian_state_cache.insert(
+          key,
+          CartesianState::new_comet(t, ap, iau_rot, frame_id, frame_transform),
+        );
+        cartesian_state_cache.insert(
+          frame_key,
+          CartesianState::new_frame(frame_id, frame_transform),
+        );
+      }
+    };
+
+    // insert into cache if absent all active comets
+    scene.scene.query4(
+      |e_id,
+       t: &TransformComponent,
+       _m: &CometMarkerComponent,
+       ap: &AlmanacPlanet,
+       iau_rot: &BodyRotationalModel| insert_into_cache(e_id, *t, Some(*iau_rot), *ap),
+    );
+
+    // insert into cache if absent all active planets (earth)
+    scene.scene.query3(
+      |e_id, t: &TransformComponent, _m: &PlanetMarkerComponent, ap: &AlmanacPlanet| {
+        insert_into_cache(e_id, *t, None, *ap)
+      },
+    );
+
+    // ------------------------------------------------------------------------------------
+    // Fixed Update Loop
+    // ------------------------------------------------------------------------------------
+    while time_mgr.consume_fixed_step(scaled_fixed_dt_us) {
+      let fixed_dt_scaled_s = utils::time_micro_to_seconds(scaled_fixed_dt_us);
+      use aethervk_oshal_rlib::os::time::us_to_300ths_rounded;
+
+      // ------------------------------------------------------------------------------------
+      // Particle Systems Vulkan Shader Recording (Submission inserted after the fixed accumulator
+      // loop)
+      // ------------------------------------------------------------------------------------
+      // -- all emissions --
+      let mut skip_bind = false;
+      for (idx, (ps, id)) in ps_extraction.iter().enumerate() {
+        if particle_executions[idx].dead == 0 {
+          // some emission constants which may be moved if exposed as parameters
+          let mean_intra_grains_distance_mm = 1_f32;
+          let min_cumulated_mass_g = 0.001_f32; // from bvh_utils.glsl
+
+          let push_constants = utils::new_particles_emit(
+            vulkan_device,
+            id.as_ffi(),
+            &ps.emission_params,
+            mean_intra_grains_distance_mm,
+            min_cumulated_mass_g,
+            particle_executions[idx].r_helio_au,
+            sim_speed.scaled_from_unscaled(ps.last_emission),
+            from_start_epoch_scaled_us,
+          );
+
+          if let Ok(last_emission_unscaled_us) = vulkan_device.cmd_particle_system_emission(
+            cmd,
+            ps.last_emission,
+            now_unscaled_us,
+            &push_constants,
+            skip_bind,
+          ) {
+            particle_executions[idx].last_emission_unscaled_us = last_emission_unscaled_us;
+            skip_bind = true;
+          } else {
+            particle_executions[idx].dead = 1;
+          }
+        }
+      }
+      skip_bind = false;
+      // -- barrier --
+      vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
+      // -- all integrate p1_p2 --
+      for (idx, (_, id)) in ps_extraction.iter().enumerate() {
+        if particle_executions[idx].dead == 0 {
+          let push_constants =
+            utils::integrate_particles_p1_p2_new(vulkan_device, id.as_ffi(), fixed_dt_scaled_s);
+          if let Ok(()) =
+            vulkan_device.cmd_particle_system_velocity_vertlet_kick(cmd, &push_constants, skip_bind)
+          {
+            skip_bind = true;
+          } else {
+            particle_executions[idx].dead = 1;
+          }
+        }
+      }
+      skip_bind = false;
+      // -- barrier --
+      vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
+      // -- all apply emitters --
+      for (idx, (_, id)) in ps_extraction.iter().enumerate() {
+        if particle_executions[idx].dead == 0 {
+          let emitter_bda = force_emitters[idx].2;
+          let push_constants =
+            utils::apply_emitters_direct_new(vulkan_device, id.as_ffi(), emitter_bda, 1);
+          if let Ok(()) =
+            vulkan_device.cmd_particle_system_next_forces(cmd, &push_constants, skip_bind)
+          {
+            skip_bind = true;
+          } else {
+            particle_executions[idx].dead = 1;
+          }
+        }
+      }
+      skip_bind = false;
+      // -- barrier --
+      vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
+      // -- all integrate p4 p5 --
+      for (idx, (_, id)) in ps_extraction.iter().enumerate() {
+        if particle_executions[idx].dead == 0 {
+          let push_constants =
+            utils::integrate_particles_p4_5_new(vulkan_device, id.as_ffi(), fixed_dt_scaled_s);
+          if let Ok(()) = vulkan_device.cmd_particle_system_velocity_vertlet_correction(
+            cmd,
+            &push_constants,
+            skip_bind,
+          ) {
+            skip_bind = true;
+          } else {
+            particle_executions[idx].dead = 1;
+          }
+        }
+      }
+      skip_bind = false;
+      // -- barrier --
+      vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
+      // -- all compact --
+      let mut has_compacted = false;
+      for (idx, (ps, id)) in ps_extraction.iter().enumerate() {
+        if particle_executions[idx].dead == 0 {
+          let ttl_300ths = us_to_300ths_rounded(ps.ttl_us);
+          let push_constants =
+            utils::new_particles_compact(vulkan_device, id.as_ffi(), now_scaled_300ths, ttl_300ths);
+          if let Ok(last_compaction) = vulkan_device.cmd_particle_system_compaction(
+            cmd,
+            ps.last_compaction,
+            now_unscaled_us,
+            &push_constants,
+            skip_bind,
+          ) {
+            has_compacted = true;
+            skip_bind = true;
+            particle_executions[idx].last_compaction_unscaled_us = last_compaction;
+            particle_executions[idx].did_compact = if last_compaction != ps.last_compaction {
+              1
+            } else {
+              0
+            };
+          } else {
+            particle_executions[idx].dead = 1;
+          }
+        }
+      }
+      if has_compacted {
+        skip_bind = false;
+        // -- barrier --
+        vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
+        // -- all compact reset (only if compact) --
+        for (idx, (_, id)) in ps_extraction.iter().enumerate() {
+          if particle_executions[idx].dead == 0 && particle_executions[idx].did_compact == 1 {
+            let push_constants = utils::new_particles_compact_reset(vulkan_device, id.as_ffi());
+            if let Ok(()) =
+              vulkan_device.cmd_particle_system_compaction_reset(cmd, &push_constants, skip_bind)
+            {
+              skip_bind = true;
+            } else {
+              particle_executions[idx].dead = 1;
+            }
+          }
+        }
+      }
+      // -- barrier for next iteration --
+      if time_mgr.has_ready_step(scaled_fixed_dt_us) {
+        vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
+      }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // SPICE EZR Kernel for Comet Cartesian state update.
+    // Note: Outside of the fixed update accumulator, still inside physics update.
+    // ------------------------------------------------------------------------------------
+    // accumulate frame updates into a vec separately from the dashmap cause iter_mut locks shards
+    // Note: rotation and scale stay fixed at identity, therefore we track only positions relative
+    // to root
+    let mut frame_updates = alloc::vec::Vec::<(EntityId, Vec3f32)>::with_capacity(32);
+    cartesian_state_cache.iter_mut().for_each(
+      |mut state: dashmap::mapref::multiple::RefMutMulti<'_, SceneEntityId, CartesianState>| {
+        // skip frame updates
+        const AU_TO_KM: f64 = 149_597_870.7_f64;
+        let micro_frame_pos_km = state.parent_frame_transform.position.to_f64() * AU_TO_KM;
+        let parent_id = state.parent_frame;
+        if let Some(ref mut body_state) = state.comet_state {
+          if let Ok((global_dpos, global_rot)) = body_state.almanac_planet.step(
+            current_epoch,
+            almanac,
+            body_state.body_rotational_model.as_ref(),
+          ) {
+            // - take microframe position and comet new position. we are assuming micro is child of
+            //   root here, ensured in assert in cache insertion, compute distance body to frame in
+            //   world space
+            const KM_TO_AU: f64 = 6.6845871226706e-9_f64;
+            const THRESHOLD_KM: f64 = 0.1 * AU_TO_KM;
+            let diff_km = global_dpos - micro_frame_pos_km;
+            let distance_km = diff_km.length();
+
+            if distance_km > THRESHOLD_KM {
+              // --- FRAME SHIFT ---
+              // The comet drifted too far. Move the Micro Frame to the Comet's exact AU location
+              // works because, due to assertion, we know that micro frame is child of root
+              // Note: position of the micro frame is in AU
+              frame_updates.push((parent_id, (global_dpos * KM_TO_AU).to_f32()));
+              // now update the comet so that its rotation relative to its parent, which in this
+              // case is equal to relative to root, is updated. Position relative to frame is reset
+              // to zero
+              body_state.transform.position = Vec3f32::zero();
+            } else {
+              // --- NORMAL DRIFT ---
+              // The frame stays still, just update the Comet's local offset
+              body_state.transform.position = diff_km.to_f32();
+            }
+
+            body_state.transform.rotation = global_rot;
+            debug_assert_eq!(body_state.transform.scale, Vec3f32::one());
+          } else {
+            // TODO log error and don't update
+          }
+        }
+      },
+    );
+    // drain all frame updates into the cache
+    for (frame_id, position) in &frame_updates {
+      if let Some(mut state) =
+        cartesian_state_cache.get_mut(&SceneEntityId::new(scene_id, *frame_id))
+      {
+        state.parent_frame_transform.position = *position;
+      }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Particle Systems Vulkan Shader: Change frame of reference after comet motion
+    // ------------------------------------------------------------------------------------
+    let mut skip_bind = false;
+    for (idx, (_, id)) in ps_extraction.iter().enumerate() {
+      if particle_executions[idx].dead == 0 {
+        let gt = scene.scene.global_transform_f64(*id).unwrap();
+        let transform_changed = particle_executions[idx].global_pos_f64
+          != Into::<[f64; 3]>::into(gt.position)
+          || particle_executions[idx].global_rot == Into::<[f32; 4]>::into(gt.rotation.0);
+        if transform_changed {
+          if !skip_bind {
+            vulkan_device.cmd_dispatch_global_memory_barrier(cmd);
+          }
+
+          // -- calculate compensation data
+          let delta_pos_m = {
+            // compute delta km in f64, divide by 1000 then cast to f32
+            let old_pos_dvec = Into::<DVec3>::into(particle_executions[idx].global_pos_f64);
+            let diff_dvec_km: DVec3 = old_pos_dvec - gt.position;
+            (diff_dvec_km * 1000.0).to_f32()
+          };
+          let delta_rot = {
+            // R_new^-1
+            let q_new_inv = gt.rotation.conjugate();
+            let q_old = Quat(Vec4f32::from_components(
+              particle_executions[idx].global_rot[0],
+              particle_executions[idx].global_rot[1],
+              particle_executions[idx].global_rot[2],
+              particle_executions[idx].global_rot[3],
+            ));
+            // ΔR = R_new^-1 * R_old
+            q_new_inv * q_old
+          };
+
+          let push_constants = utils::new_particles_offset_particles_push_constants(
+            vulkan_device,
+            id.as_ffi(),
+            delta_pos_m,
+            delta_rot,
+          );
+          if let Ok(_) =
+            vulkan_device.cmd_particle_system_offset_particles(cmd, &push_constants, skip_bind)
+          {
+            skip_bind = true;
+          } else {
+            particle_executions[idx].dead = 1;
+          }
+        }
+      }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Particle System Vulkan Command Buffer Submission
+    // ------------------------------------------------------------------------------------
+    let (compute_semaphore, compute_signal_value) = cmd_scope.submit()?;
+
+    // ------------------------------------------------------------------------------------
+    // SPICE EZR Kernel: Commit Comet Cartesian state update to scene
+    // ------------------------------------------------------------------------------------
+    if do_cross_sync {
+      // TODO upgrade Scene context lock to write so that stop rendering for a bit.
+      for kv_ref in cartesian_state_cache.iter() {
+        let key = kv_ref.key();
+        let state = kv_ref.value();
+        let entity_id = EntityId::from_ffi(key.entity_id);
+        if let Some(ref body_state) = state.comet_state {
+          // comet/planet, update its trasform
+          scene
+            .scene
+            .with_component_mut(entity_id, |t: &mut TransformComponent| {
+              *t = body_state.transform;
+            })
+            .unwrap();
+        } else {
+          // reference frame, update its transform
+          scene
+            .scene
+            .with_component_mut(entity_id, |t: &mut TransformComponent| {
+              *t = state.parent_frame_transform;
+            })
+            .unwrap();
+        }
+      }
+
+      // TODO: if more then THRESHOLD μs have elapsed, then empty the cache
+      // - either keep it as &DashMap and remove entries one by one (maybe on a tasklet)
+      // - or swap for &mut DashMap and use mem::replace
+    }
+
+    Some(PhysicsDeviceSelfSync::new(
+      compute_semaphore,
+      compute_signal_value,
+    ))
+  } else {
+    None
+  };
+
+  // ------------------------------------------------------------------------------------
   // -- Update Phase --
+  // ------------------------------------------------------------------------------------
 
   todo!()
 }
@@ -3170,6 +3705,174 @@ fn try_snap_entity(
   }
   // Return Ok even if set_global_position_and_rotation fails (camera has no Transform)
   Ok(())
+}
+
+/// Utilities for logic thread module
+mod utils {
+  use super::*;
+  use crate::gpu::{compute_push_constants::*, new_particles::MAX_CHUNKS};
+  use crate::gpu_backends::vulkan::device::{Device, particles::PushConstantMutUnion};
+  use crate::scene::particles::v2::{ParticleSystemEmitParams, emit_push_constants_from_params};
+  use bytemuck::Zeroable;
+
+  /// Factory function for [`NewParticlesEmitPushConstants`]
+  /// Assumes that the particle system id is correct and exists, otherwise panic
+  pub fn new_particles_emit(
+    vulkan_device: &Device,
+    ps_id: u64,
+    psep: &ParticleSystemEmitParams,
+    mean_intra_grains_distance_mm: f32,
+    min_cumulated_mass_g: f32,
+    r_helio_au: f32,
+    scaled_time_since_last_emission_us: timeus_t,
+    scaled_time_since_start_epoch_us: timeus_t,
+  ) -> NewParticlesEmitPushConstants {
+    let mut res = emit_push_constants_from_params(
+      &psep,
+      mean_intra_grains_distance_mm,
+      min_cumulated_mass_g,
+      r_helio_au,
+      scaled_time_since_last_emission_us,
+      scaled_time_since_start_epoch_us,
+    );
+    vulkan_device
+      .complete_particle_push_constant(PushConstantMutUnion::NewParticlesEmit(&mut res), ps_id)
+      .unwrap();
+
+    res
+  }
+
+  /// Factory function for [`IntegrateParticlesP1P2NewPushConstants`]
+  /// Assumes that the particle system id is correct and exists, otherwise panic
+  pub fn integrate_particles_p1_p2_new(
+    vulkan_device: &Device,
+    ps_id: u64,
+    dt_s: f32,
+  ) -> IntegrateParticlesP1P2NewPushConstants {
+    let mut res = IntegrateParticlesP1P2NewPushConstants::zeroed();
+    res.delta_time = dt_s;
+    vulkan_device
+      .complete_particle_push_constant(
+        PushConstantMutUnion::IntegrateParticlesP1P2New(&mut res),
+        ps_id,
+      )
+      .unwrap();
+
+    res
+  }
+
+  /// Factory function for [`ApplyEmittersDirectNewPushConstants`]
+  /// - Assumes that the particle system id is correct and exists, otherwise panic.
+  /// - Assumes that the given emitter data is valid for the current compute timeline
+  pub fn apply_emitters_direct_new(
+    vulkan_device: &Device,
+    ps_id: u64,
+    emitter_bda: u64,
+    emitter_count: u32,
+  ) -> ApplyEmittersDirectNewPushConstants {
+    let mut res = ApplyEmittersDirectNewPushConstants::zeroed();
+    res.emitter_array = emitter_bda;
+    res.emitter_count = emitter_count;
+    vulkan_device
+      .complete_particle_push_constant(
+        PushConstantMutUnion::ApplyEmittersDirectNew(&mut res),
+        ps_id,
+      )
+      .unwrap();
+
+    res
+  }
+
+  /// Factory function for [`IntegrateParticlesP45NewPushConstants`]
+  /// Assumes that the particle system id is correct and exists, otherwise panic
+  pub fn integrate_particles_p4_5_new(
+    vulkan_device: &Device,
+    ps_id: u64,
+    dt_s: f32,
+  ) -> IntegrateParticlesP45NewPushConstants {
+    let mut res = IntegrateParticlesP45NewPushConstants::zeroed();
+    res.delta_time = dt_s;
+    vulkan_device
+      .complete_particle_push_constant(
+        PushConstantMutUnion::IntegrateParticlesP45New(&mut res),
+        ps_id,
+      )
+      .unwrap();
+
+    res
+  }
+
+  /// Factory function for [`NewParticlesCompactPushConstants`]
+  /// Assumes that the particle system id is correct and exists, otherwise panic
+  /// uses as `max_chunks` the value [`MAX_CHUNKS`]
+  pub fn new_particles_compact(
+    vulkan_device: &Device,
+    ps_id: u64,
+    now_300ths: u32,
+    ttl_300ths: u32,
+  ) -> NewParticlesCompactPushConstants {
+    let mut res = NewParticlesCompactPushConstants::zeroed();
+    res.doomsday = ttl_300ths;
+    res.now = now_300ths;
+    res.max_chunks = MAX_CHUNKS as _;
+    vulkan_device
+      .complete_particle_push_constant(PushConstantMutUnion::NewParticlesCompact(&mut res), ps_id)
+      .unwrap();
+
+    res
+  }
+
+  /// Factory function for [`NewParticlesCompactResetPushConstants`]
+  /// Assumes that the particle system id is correct and exists, otherwise panic
+  /// uses as `max_chunks` the value [`MAX_CHUNKS`]
+  pub fn new_particles_compact_reset(
+    vulkan_device: &Device,
+    ps_id: u64,
+  ) -> NewParticlesCompactResetPushConstants {
+    let mut res = NewParticlesCompactResetPushConstants::zeroed();
+    res.max_chunks = MAX_CHUNKS as _;
+    vulkan_device
+      .complete_particle_push_constant(
+        PushConstantMutUnion::NewParticlesCompactReset(&mut res),
+        ps_id,
+      )
+      .unwrap();
+
+    res
+  }
+
+  /// Factor function for [`NewParticlesOffsetParticlesPushConstants`]
+  /// Assumes that the particle system id is correct and exists, otherwise panic.
+  /// - requires delta position in metres, delta rotation in radians
+  pub fn new_particles_offset_particles_push_constants(
+    vulkan_device: &Device,
+    ps_id: u64,
+    delta_pos_m: Vec3f32,
+    delta_rot: Quat,
+  ) -> NewParticlesOffsetParticlesPushConstants {
+    let mut res = NewParticlesOffsetParticlesPushConstants::zeroed();
+    res.delta_rot = delta_rot.0.into();
+    res.delta_pos = [delta_pos_m.x(), delta_pos_m.y(), delta_pos_m.z(), 0];
+    vulkan_device
+      .complete_particle_push_constant(
+        PushConstantMutUnion::NewParticlesOffsetParticlesPush(&mut res),
+        ps_id,
+      )
+      .unwrap();
+
+    res
+  }
+
+  /// Time Boundary,Step Size (Precision Loss),What it means for your data
+  /// ----------------------------------------------------------------------------------------------
+  /// < 16 seconds,<1μs,Perfect. You can represent every single microsecond accurately.
+  /// > 16 seconds,≈1.9μs,Microsecond loss. The gap between floats becomes larger than 1μs. Consecutive microseconds round to the same f32 value.
+  /// "> 8,192 sec (2.2 hours)",≈1 ms,Millisecond loss. You can no longer distinguish sub-millisecond differences.
+  /// "> 131,072 sec (36.4 hours)",≈15.6 ms,"UI/Physics jitter. At 60fps (16.6ms per frame), your time steps are now larger than a video frame. Physics engines using f32 will glitch."
+  /// "> 8,388,608 sec (97 days)",1 second,Total fractional loss. The f32 can no longer hold fractions. 97 days+0.5 seconds will simply round to 97 days.
+  pub fn time_micro_to_seconds(time_us: timeus_t) -> f32 {
+    (time_us as f64 / 1_000_000.0) as f32
+  }
 }
 
 #[cfg(test)]

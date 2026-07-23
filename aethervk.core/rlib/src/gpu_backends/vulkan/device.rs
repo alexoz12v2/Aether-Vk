@@ -1204,7 +1204,6 @@ impl LogicalDevice {
 
   #[cfg(not(debug_assertions))]
   #[inline]
-  /// TODO: Document this item
   #[named]
   pub fn set_debug_name<T: vk::Handle>(&self, _object: T, _name: &str) {
     // This is a no-op in release builds, and should be optimized away.
@@ -1306,7 +1305,6 @@ where
   }
 }
 
-/// TODO: Document this item
 pub struct Device {
   pub query_result: utils::PhysicalDeviceQueryResult,
   queues: Queues,
@@ -1437,6 +1435,7 @@ impl Device {
   /// reached once execution reaches BOTTOM_OF_PIPE
   ///
   /// Note: To maintain old behaviour, we register tasks only for graphics queue submissions
+  ///   this means that `task_id` is used only by graphics role.
   #[named]
   pub fn submit_command_buffer_generic(
     &self,
@@ -1715,6 +1714,29 @@ impl Device {
       })
   }
 
+  #[named]
+  pub fn begin_command_buffer_all(
+    &self,
+    cmd_buffer: gpu::CommandBufferHandle,
+    role: QueueRole,
+  ) -> GpuResult<()> {
+    let cmd_buffers = &self.recording_command_buffers;
+    let mut data = cmd_buffers.get_mut(&(cmd_buffer, role)).ok_or(gpu_err_invalid_cmd!())?;
+
+    if data.has_begun {
+      return Ok(());
+    }
+
+    let begin_info =
+      vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    unsafe {
+      self.device.begin_command_buffer(data.command_buffer.get(), &begin_info)?;
+    }
+    data.has_begun = true;
+
+    Ok(())
+  }
+
   /// Get the target graphics queue timeline value for which a given task id will be completed
   pub fn get_task_target_value(&self, task_id: u64) -> GpuResult<u64> {
     let res = self.res.read();
@@ -1896,12 +1918,10 @@ impl Device {
           let header_data: [u32; 8] = [0, 1, 0, 0, 0, 0, 0, 0];
 
           // Cast to a byte slice in a `no_std` compatible way
-          let header_bytes = unsafe {
-            core::slice::from_raw_parts(
-              header_data.as_ptr() as *const u8,
-              core::mem::size_of_val(&header_data),
-            )
-          };
+          let header_bytes = core::slice::from_raw_parts(
+            header_data.as_ptr() as *const u8,
+            core::mem::size_of_val(&header_data),
+          );
 
           // --- Configure buffer_0 ---
 
@@ -1965,28 +1985,43 @@ impl Device {
   /// buffer and deleting it's association inside the `[ParticleSystemManager]`, therefore should
   /// never be used after this
   #[named]
-  pub fn discard_particle_system(&self, id: u64, timeline: u64) -> GpuResult<()> {
-    let (allocator, buf_0, alloc_0, buf_1, alloc_1) = {
+  pub fn discard_particle_system(
+    &self,
+    id: u64,
+    gfx_timeline: u64,
+    comp_timeline: u64,
+  ) -> GpuResult<()> {
+    let (allocator, buf_gfx, alloc_gfx, buf_comp, alloc_comp) = {
       let res = self.res.read();
       let allocator = res.allocator.allocator.as_allocator_view();
       let psm = res
         .particle_system_manager
         .as_ref()
         .ok_or(gpu_err!("particle_system_manager absent"))?;
-      let (pt_0, pt_1) = psm
+      let (pt_arr, gfx_index) = psm
         .remove_pages_tables(id)
         .ok_or(gpu_err!("particle system with id {} not found", id))?;
-      (allocator, pt_0.buffer, pt_0.alloc, pt_1.buffer, pt_1.alloc)
+      (
+        allocator,
+        pt_arr[gfx_index].buffer,
+        pt_arr[gfx_index].alloc,
+        pt_arr[1 - gfx_index].buffer,
+        pt_arr[1 - gfx_index].alloc,
+      )
     };
 
-    self
-      .kernels
-      .discard_pool
-      .discard_buffer(allocator.internal, buf_0, alloc_0, timeline);
-    self
-      .kernels
-      .discard_pool
-      .discard_buffer(allocator.internal, buf_1, alloc_1, timeline);
+    self.kernels.discard_pool.discard_buffer(
+      allocator.internal,
+      buf_comp,
+      alloc_comp,
+      comp_timeline,
+    );
+    self.res.read().discard_pool.discard_buffer(
+      allocator.internal,
+      buf_gfx,
+      alloc_gfx,
+      gfx_timeline,
+    );
     Ok(())
   }
 
@@ -2062,6 +2097,10 @@ impl Device {
         value.global_particle_buffer_address = global_particle_buffer_address;
         value.particle_page_table = page_table_buffer_address;
         value.free_list = free_list_buffer_address;
+      }
+      PushConstantMutUnion::NewParticlesOffsetParticlesPush(value) => {
+        value.global_particle_buffer = global_particle_buffer_address;
+        value.particle_page_table = page_table_buffer_address;
       }
     }
 
@@ -2471,7 +2510,8 @@ impl Device {
 
     let push_constants_bytes: &[u8] = bytemuck::bytes_of(push_constants);
     let pipeline_layout: vk::PipelineLayout = self.kernels.pipelines.pipeline_layout;
-    // SAFETY: property constructed Pipelines has local sizes for all shaders
+    // SAFETY: properly constructed [`super::physics::PhysicsPipelines`] have sizes for all
+    // pipelines
     let local_size_x =
       unsafe { self.kernels.pipelines.wg_sizes.get(&pipeline.as_raw()).unwrap_unchecked() }[0];
     let particle_count = gpu::new_particles::MAX_PARTICLES_PER_SYSTEM as u32;
@@ -2583,6 +2623,44 @@ impl Device {
         push_constants_bytes,
       );
       self.device.cmd_dispatch(cmd, 1, 1, 1);
+    }
+
+    Ok(())
+  }
+
+  #[named]
+  pub fn cmd_particle_system_offset_particles(
+    &self,
+    cmd: vk::CommandBuffer,
+    push_constants: &gpu::compute_push_constants::NewParticlesOffsetParticlesPushConstants,
+    skip_bind: bool,
+  ) -> GpuResult<()> {
+    debug_assert!(
+      super::physics::USE_PARTICLE_SYSTEM_V2.load(core::sync::atomic::Ordering::Relaxed)
+    );
+    let pipeline = self.kernels.pipelines.new_particles_offset_particles;
+    if !skip_bind {
+      unsafe { self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
+    }
+
+    let push_constants_bytes: &[u8] = bytemuck::bytes_of(push_constants);
+    let pipeline_layout = self.kernels.pipelines.pipeline_layout;
+    // SAFETY: properly constructed [`super::physics::PhysicsPipelines`] have sizes for all
+    // pipelines
+    let local_size_x =
+      unsafe { self.kernels.pipelines.wg_sizes.get(&pipeline.as_raw()).unwrap_unchecked() }[0];
+    let particles_count = gpu::new_particles::MAX_PARTICLES_PER_SYSTEM as u32;
+    let num_workgroups_x =
+      Self::particle_system_shaders_num_workgroups(local_size_x, particles_count);
+    unsafe {
+      self.device.cmd_push_constants(
+        cmd,
+        pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        push_constants_bytes,
+      );
+      self.device.cmd_dispatch(cmd, num_workgroups_x, 1, 1);
     }
 
     Ok(())
@@ -7248,25 +7326,9 @@ impl RenderDevice for Device {
     Ok(())
   }
 
-  #[named]
+  /// Since it comes from the RenderDevice trait, doesn't work for now on Compute role.
   fn begin_command_buffer(&self, cmd_buffer: gpu::CommandBufferHandle) -> GpuResult<()> {
-    let cmd_buffers = &self.recording_command_buffers;
-    let mut data = cmd_buffers
-      .get_mut(&(cmd_buffer, QueueRole::Graphics))
-      .ok_or(gpu_err_invalid_cmd!())?;
-
-    if data.has_begun {
-      return Ok(());
-    }
-
-    let begin_info =
-      vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-    unsafe {
-      self.device.begin_command_buffer(data.command_buffer.get(), &begin_info)?;
-    }
-    data.has_begun = true;
-
-    Ok(())
+    self.begin_command_buffer_all(cmd_buffer, QueueRole::Graphics)
   }
 
   #[named]
@@ -11491,7 +11553,7 @@ fn pretty_print_vulkan_device(
 }
 
 /// module for the new, GPU-only, particle system management
-mod particles {
+pub mod particles {
   use aethervk_oshal_rlib::os::time::timeus_t;
 
   use super::*;
@@ -12069,10 +12131,11 @@ mod particles {
     }
 
     /// Removes the page tables from both states
-    pub fn remove_pages_tables(&self, id: u64) -> Option<(BufferAlloc, BufferAlloc)> {
+    /// returns the index of the front (owned by GRAPHICS queue)
+    pub fn remove_pages_tables(&self, id: u64) -> Option<([BufferAlloc; 2], usize)> {
       let (_, pt_0) = self.states[0].page_tables.remove(&id)?;
       let (_, pt_1) = self.states[1].page_tables.remove(&id).unwrap();
-      Some((pt_0, pt_1))
+      Some(([pt_0, pt_1], self.front_index))
     }
 
     /// Retrieves the BDA pointers (Global, PageTable, FreeList) for a specific queue role
@@ -12122,6 +12185,9 @@ mod particles {
     ),
     NewParticlesEmit(&'a mut gpu::compute_push_constants::NewParticlesEmitPushConstants),
     NewParticlesCompact(&'a mut gpu::compute_push_constants::NewParticlesCompactPushConstants),
+    NewParticlesOffsetParticlesPush(
+      &'a mut gpu::compute_push_constants::NewParticlesOffsetParticlesPushConstants,
+    ),
   }
 }
 

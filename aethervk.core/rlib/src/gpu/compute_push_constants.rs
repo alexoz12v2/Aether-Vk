@@ -893,3 +893,13 @@ pub struct NewParticlesCompactPushConstants {
   pub max_chunks: u32,
   pub _pad: u32,
 }
+
+/// Push constants for shader `new_particles_offset_particles.comp`
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct NewParticlesOffsetParticlesPushConstants {
+  pub global_particle_buffer: u64,
+  pub particle_page_table: u64,
+  pub delta_rot: [f32; 4],
+  pub delta_pos: [f32; 4],
+}

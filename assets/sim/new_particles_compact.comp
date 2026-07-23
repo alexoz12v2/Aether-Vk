@@ -52,41 +52,49 @@ void main() {
     // map a chunk to a given workgroup (256)
     uint chunkStart = gl_WorkGroupID.x;
     uint chunkIndex = pc.particlePageTable.chunks[chunkStart];
-    uint localCount = 0;
     if (chunkIndex == 0xFFFFFFFF) return;
 
+    uint localNewlyDead = 0;
+    uint localTotalDead = 0;
     for (uint i = gl_LocalInvocationIndex; i < PCHUNK_VEC4_SIZE; i += gl_WorkGroupSize.x) {
         uvec4 st = pc.globalParticleBufferAddress.chunks[chunkIndex].spawnTime[i];
         uvec4 livedFor = uvec4(pc.now) - st;
-        bvec4 isDead = bvec4(
-            st.x == 0xFFFFFFFF || livedFor.x >= pc.doomsday,
-            st.y == 0xFFFFFFFF || livedFor.y >= pc.doomsday,
-            st.z == 0xFFFFFFFF || livedFor.z >= pc.doomsday,
-            st.w == 0xFFFFFFFF || livedFor.w >= pc.doomsday
+
+        // Identify particles that were ALREADY dead before this simulation frame
+        bvec4 wasDead = equal(st, uvec4(0xFFFFFFFF));
+        // Identify particles that are dead based on time
+        bvec4 isNowDead = greaterThanEqual(livedFor, uvec4(pc.doomsday));
+        // identify particles that just died this frame
+        bvec4 newlyDead = bvec4(
+            !wasDead.x && isNowDead.x,
+            !wasDead.y && isNowDead.y,
+            !wasDead.z && isNowDead.z,
+            !wasDead.w && isNowDead.w
         );
         // write back dead particles spawn time
-        if (any(isDead)) {
-            if (isDead.x) { st.x = 0xFFFFFFFF; localCount++; }
-            if (isDead.y) { st.y = 0xFFFFFFFF; localCount++; }
-            if (isDead.z) { st.z = 0xFFFFFFFF; localCount++; }
-            if (isDead.w) { st.w = 0xFFFFFFFF; localCount++; }
+        if (any(newlyDead)) {
+            if (newlyDead.x) { st.x = 0xFFFFFFFF; localNewlyDead++; }
+            if (newlyDead.y) { st.y = 0xFFFFFFFF; localNewlyDead++; }
+            if (newlyDead.z) { st.z = 0xFFFFFFFF; localNewlyDead++; }
+            if (newlyDead.w) { st.w = 0xFFFFFFFF; localNewlyDead++; }
             pc.globalParticleBufferAddress.chunks[chunkIndex].spawnTime[i] = st;
         }
+
+        localTotalDead += uint(wasDead.x || isNowDead.x) + uint(wasDead.y || isNowDead.y) +
+                          uint(wasDead.z || isNowDead.z) + uint(wasDead.w || isNowDead.w);
     }
 
-    uint subgroupCount = subgroupAdd(localCount);
+    uint subgroupCount = subgroupAdd(localTotalDead);
     if (subgroupElect()) {
         atomicAdd(wg_deadParticleCount, subgroupCount);
     }
     barrier();
 
     if (gl_LocalInvocationIndex == 0) {
-        // update particle count
-        if (wg_deadParticleCount > 0) {
-            atomicAdd(pc.particlePageTable.particleCount, uint(-int(wg_deadParticleCount)));
-        }
-
+        // update particle count only if the whole chunk died. We need to account for holes in the particle page table
         if (wg_deadParticleCount == PCHUNK_SIZE) {
+            atomicAdd(pc.particlePageTable.particleCount, uint(-int(PCHUNK_SIZE)));
+
             // the entire chunk is dead -> push to free list
             uint stackPushIndex = atomicAdd(pc.freeList.count, 1);
             pc.freeList.indices[stackPushIndex] = chunkIndex;
