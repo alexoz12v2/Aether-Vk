@@ -316,12 +316,13 @@ impl Component for JetComponent {}
 
 /// Note: tight coupling with vulkan here
 pub mod v2 {
+  use aethervk_oshal_rlib::math::vector::vec4::Quat;
   use aethervk_oshal_rlib::os::time::us_to_300ths_rounded;
 
   use super::*;
   use crate::gpu::compute_push_constants::NewParticlesEmitPushConstants;
   use crate::gpu_backends::vulkan;
-  use crate::scene::EntityId;
+  use crate::scene::{EntityId, TransformComponent};
   use crate::types::{EngineError, EngineResult};
   use core::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
@@ -622,9 +623,6 @@ pub mod v2 {
   pub struct ParticleSystemComponent {
     /// Strong reference to vulkan device resources
     pub device_data: (crate::gpu::RenderFrontend, crate::gpu::RenderDeviceHandle),
-    /// value of the compute timeline which represents when the last particle system update
-    /// will be completed
-    pub timeline_value: AtomicU64,
     /// used to measure whether particle system should emit or not in next simulation step.
     /// initialized at zero so that first simulation step always emits (timeus_t)
     /// Unscaled time in μs
@@ -644,13 +642,36 @@ pub mod v2 {
     pub emission_params: ParticleSystemEmitParams,
   }
 
+  /// Not taking id cause it's the entity id
+  pub struct ParticleSystemComponentExtraction {
+    pub emission_params: ParticleSystemEmitParams,
+    pub last_compaction: timeus_t,
+    pub last_emission: timeus_t,
+    pub framerel_pos_km: Vec3f32,
+    pub framerel_rot: Quat,
+    pub ttl_us: timeus_t,
+  }
+
+  impl ParticleSystemComponentExtraction {
+    pub fn from_component(comp: &ParticleSystemComponent, t: &TransformComponent) -> Self {
+      use core::sync::atomic::Ordering;
+      Self {
+        emission_params: comp.emission_params,
+        last_compaction: comp.last_compaction.load(Ordering::Relaxed),
+        last_emission: comp.last_emission.load(Ordering::Relaxed),
+        framerel_pos_km: t.position,
+        framerel_rot: t.rotation,
+        ttl_us: comp.ttl_us,
+      }
+    }
+  }
+
   impl Component for ParticleSystemComponent {}
 
   impl core::fmt::Debug for ParticleSystemComponent {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
       f.debug_struct("ParticleSystemComponent")
         .field("device_data", &self.device_data.1)
-        .field("timeline_value", &self.timeline_value)
         .finish()
     }
   }
@@ -677,9 +698,8 @@ pub mod v2 {
           vulkan_device.create_particle_system(entity_u64)
         })
         .map_err(EngineError::from)
-        .map(|(_bda, timeline)| Self {
+        .map(|_timeline| Self {
           device_data: (render_frontend, render_device_handle),
-          timeline_value: AtomicU64::new(timeline),
           last_emission: AtomicI64::new(0),
           last_compaction: AtomicI64::new(0),
           id: entity_u64,
@@ -687,19 +707,21 @@ pub mod v2 {
           emission_params,
         })
     }
-
-    /// To be called after we submit a gpu workload to our particle system
-    pub fn tick(&self) {
-      self.timeline_value.fetch_add(1, Ordering::Relaxed);
-    }
   }
 
   impl Drop for ParticleSystemComponent {
     fn drop(&mut self) {
       let _ = self.device_data.0.with_device(self.device_data.1, |dyn_device: &_| {
+        use crate::gpu_backends::vulkan::utils::RwLockable;
         // unwrap cause the only particle system we support here is with vulkan
         let vulkan_device = dyn_device.as_any().downcast_ref::<vulkan::device::Device>().unwrap();
-        vulkan_device.discard_particle_system(self.id, self.timeline_value.load(Ordering::Relaxed))
+        // euristic: use the next release timeline value as discard value
+        let gfx_release = vulkan_device.res.read().get_timeline_semaphore_cached_value() + 1;
+        let comp_release = vulkan_device
+          .kernels
+          .next_submit_value
+          .load(core::sync::atomic::Ordering::Relaxed);
+        vulkan_device.discard_particle_system(self.id, comp_release, gfx_release)
       });
     }
   }

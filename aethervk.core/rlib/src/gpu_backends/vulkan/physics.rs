@@ -211,6 +211,7 @@ pub struct PhysicsPipelines {
   pub apply_emitters_direct_new: vk::Pipeline,
   pub integrate_particles_p1_p2_new: vk::Pipeline,
   pub integrate_particles_p4_5_new: vk::Pipeline,
+  pub new_particles_offset_particles: vk::Pipeline,
 
   /// SPIR-V-reflected push constant block size per pipeline.
   /// Used by `debug_assert!` in dispatch helpers to catch size mismatches
@@ -577,6 +578,7 @@ impl PhysicsPipelines {
         apply_emitters_direct_new: mk_wg!("apply_emitters_direct_new.comp"),
         integrate_particles_p1_p2_new: mk_wg!("integrate_particles_p1_p2_new.comp"),
         integrate_particles_p4_5_new: mk_wg!("integrate_particles_p4_5_new.comp"),
+        new_particles_offset_particles: mk_wg!("new_particles_offset_particles.comp"),
         pc_sizes,
         wg_sizes,
         subgroup_size,
@@ -611,6 +613,15 @@ impl PhysicsPipelines {
   }
 
   pub fn discard(&mut self, discard_pool: &resources::DiscardPool, timeline: u64) {
+    // ── New Particle System ───────────────────────────────────────────────────
+    discard_pool.discard_pipeline(self.new_particles_compact_reset, timeline);
+    discard_pool.discard_pipeline(self.new_particles_emit, timeline);
+    discard_pool.discard_pipeline(self.new_particles_compact, timeline);
+    discard_pool.discard_pipeline(self.apply_emitters_direct_new, timeline);
+    discard_pool.discard_pipeline(self.integrate_particles_p1_p2_new, timeline);
+    discard_pool.discard_pipeline(self.integrate_particles_p4_5_new, timeline);
+    discard_pool.discard_pipeline(self.new_particles_offset_particles, timeline);
+
     // Layout must be last — it backs all pipelines
     discard_pool.discard_pipeline(self.emit_particles, timeline);
     discard_pool.discard_pipeline(self.lbvh_prepass, timeline);
@@ -638,10 +649,6 @@ impl PhysicsPipelines {
     discard_pool.discard_pipeline(self.integrate_particles_p1_p2, timeline);
     discard_pool.discard_pipeline(self.integrate_bodies_p3, timeline);
     discard_pool.discard_pipeline(self.integrate_particles_p4_5, timeline);
-    // BUG FIX (2025-05): apply_emitters_to_particles was created in PhysicsPipelines::new()
-    // but was accidentally omitted from this discard list.  At vkDestroyDevice the
-    // validation layer reported "VkPipeline 0x... has not been destroyed"
-    // (VUID-vkDestroyDevice-device-05137).  Added here to close the leak.
     discard_pool.discard_pipeline(self.apply_emitters_to_particles, timeline);
     discard_pool.discard_pipeline(self.apply_emitters_direct, timeline);
     discard_pool.discard_pipeline(self.accumulate_bvh_forces_to_particles, timeline);

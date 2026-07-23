@@ -8,10 +8,10 @@ use aethervk_oshal_rlib::{
   math::{
     matrix::{Matrix, Matrix3, mat3::Mat3f32},
     quaternion::Quaternion,
-    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
+    vector::{Vector3, vec3::Vec3f32, vec3f64::DVec3, vec4::Quat},
   },
-  os,
   os::{
+    self,
     files::Mmap,
     fs::{ExtensionToStr, FileSystemObject},
   },
@@ -34,7 +34,7 @@ pub const SUN_ECLIPJ2000: anise::frames::Frame = anise::frames::Frame::new(
 /// to get to *simulation units*
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct KinematicState {
-  pub position: Vec3f32,
+  pub position: DVec3,
   pub velocity: Vec3f32,
   pub rotation: Option<Quat>,
   pub angular_velocity: Option<Vec3f32>,
@@ -60,8 +60,6 @@ pub struct AlmanacPackedData {
 }
 
 impl AlmanacPackedData {
-  // TODO `celestial_name_from_id` to create planet/sun entities
-  /// TODO: Document this item
   pub fn load_almanac<P: os::fs::IntoPathBuf>(&mut self, path: P) -> EngineResult<()> {
     let path_ref = path.into_pathbuf();
     let is_valid_ext =
@@ -448,7 +446,7 @@ impl AlmanacPackedData {
     Ok(pos)
   }
 
-  fn get_cartesian_state(
+  pub fn get_cartesian_state(
     &self,
     spk_id: i32,
     orientation: i32,
@@ -484,11 +482,11 @@ impl AlmanacPackedData {
 }
 
 // utils
-trait VecTypeConversion<T> {
+pub trait VecTypeConversion<T> {
   fn from_nalgebra(v: T) -> Self;
 }
 
-trait VecTypeConversionScaled<T> {
+pub trait VecTypeConversionScaled<T> {
   fn from_nalgebra_scaled(v: T, factor: f64) -> Self;
 }
 

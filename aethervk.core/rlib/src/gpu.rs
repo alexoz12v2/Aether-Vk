@@ -112,6 +112,8 @@ pub mod new_particles {
   pub const MAX_PARTICLES_PER_SYSTEM: usize = 100_000;
   pub const MAX_CHUNKS: usize = MAX_PARTICLES.div_ceil(PCHUNK_SIZE);
   pub const PARTICLE_PAGE_TABLE_HEADER_SIZE: usize = 32;
+  pub const PAGE_TABLE_BYTES: u64 =
+    (PARTICLE_PAGE_TABLE_HEADER_SIZE + 4 * MAX_PARTICLES_PER_SYSTEM.div_ceil(PCHUNK_SIZE)) as _;
 
   #[repr(C)]
   #[derive(Debug, Copy, Clone, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]

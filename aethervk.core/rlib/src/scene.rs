@@ -87,16 +87,6 @@ impl From<AddComponentError> for types::EngineError {
 
 // === Core ECS Types ===
 
-// TODO PhysicalMeshComponent should store Option<Arc> as a mesh, because
-// TODO AssetCache, when inserting, should evict something if the assets content crosses a given in-memory GB threshold
-// TODO and therefore, when asked about its data for rendering or for simulation, it should see whether the Comet is full, and
-// TODO if not ask the AssetCache for it. If there's a miss, load from file or generate uv sphere (or any other procedural method we'll do)
-// TODO so the asset cache should store an enum for the source (file or a procedural gen method call)
-// TODO this means that the `bvh` and other computed properties should be brought out from the `Comet` struct and inside the
-// TODO `PhysicalMeshComponent`. Cause these should always stay in memory if the component is alive.
-// TODO memory threshold should be given to the `new` function of `AssetCache`, so that during tests we can give a low threshold. If threshold is too low and we are empty, allow to at least hold 1 mesh fully
-// TODO then, add unit tests about this.
-
 /// A thread-safe, basic Asset Cache
 pub struct AssetCache<T> {
   // A map of file path to the loaded asset, wrapped in Arc to allow sharing
@@ -187,6 +177,28 @@ pub struct TransformComponent {
   pub rotation: Quat,
   pub scale: Vec3f32,
 }
+
+/// Empty component marking the fact that this entity represents a comet, which comes with the
+/// following invariants to respect
+/// - Must have a parent with a [`ReferenceFrameComponent`] of type `Micro`
+/// - Must have a child with a [`StaticMeshComponent`] for visualization
+/// - Must have a [`TransformComponent`]
+/// - Must have a [`BodyRotationalModel`] component
+/// - Must have a [`AlmanacPlanet`] component, with NAIF ID > 9000
+#[derive(Debug, Clone, Copy)]
+pub struct CometMarkerComponent {}
+
+impl Component for CometMarkerComponent {}
+
+/// Empty component marking the fact that the containing entity represents a planet, driven by an
+/// SPK data kernel. therefore with invariants
+/// - Must have a parent with a [`ReferenceFrameComponent`] of type `Micro`
+/// - Must have a [`TransformComponent`]
+/// - Must have a [`AlmanacPlanet`] component, with NAIF ID < 9000
+#[derive(Debug, Clone, Copy)]
+pub struct PlanetMarkerComponent {}
+
+impl Component for PlanetMarkerComponent {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -598,6 +610,8 @@ impl Component for MarkersComponent {}
 /// IAU-style rotational model for a rigid body.
 /// Pole orientation = (RA₀ + RA_rate * T, Dec₀ + Dec_rate * T)
 /// Prime meridian = W₀ + W_rate * d  (where d = days since J2000)
+///
+/// Reference epoch: Fixed at J2000
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BodyRotationalModel {
   /// Right ascension of pole at epoch (degrees)
@@ -612,8 +626,6 @@ pub struct BodyRotationalModel {
   pub pole_dec_rate: f64,
   /// Rotation rate (degrees/day)
   pub rotation_rate: f64,
-  /// Reference epoch as Julian date (default J2000.0 = 2451545.0)
-  pub reference_epoch_jd: f64,
 }
 
 impl Default for BodyRotationalModel {
@@ -625,47 +637,52 @@ impl Default for BodyRotationalModel {
       pole_ra_rate: 0.0,
       pole_dec_rate: 0.0,
       rotation_rate: 0.0,
-      reference_epoch_jd: 2451545.0, // J2000.0
     }
+  }
+}
+
+impl Component for BodyRotationalModel {}
+
+/// FFI representation of [`BodyRotationalModel`]. See its rustdoc for each member
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct BodyRotationalModelDTO {
+  pub pole_ra: f64,
+  pub pole_dec: f64,
+  pub prime_meridian: f64,
+  pub pole_ra_rate: f64,
+  pub pole_dec_rate: f64,
+  pub rotation_rate: f64,
+}
+
+impl ForeignSerializable for BodyRotationalModel {
+  type ForeignData = BodyRotationalModelDTO;
+  const COMPONENT_ID: u64 = 21;
+
+  fn to_foreign(&self) -> Self::ForeignData {
+    BodyRotationalModelDTO {
+      pole_ra: self.pole_ra,
+      pole_dec: self.pole_dec,
+      prime_meridian: self.prime_meridian,
+      pole_ra_rate: self.pole_ra_rate,
+      pole_dec_rate: self.pole_dec_rate,
+      rotation_rate: self.rotation_rate,
+    }
+  }
+
+  fn apply_foreign(&mut self, data: &Self::ForeignData) {
+    self.pole_ra = data.pole_ra;
+    self.pole_dec = data.pole_dec;
+    self.prime_meridian = data.prime_meridian;
+    self.pole_ra_rate = data.pole_ra_rate;
+    self.pole_dec_rate = data.pole_dec_rate;
+    self.rotation_rate = data.rotation_rate;
   }
 }
 
 impl BodyRotationalModel {
   /// Mean obliquity of the ecliptic at J2000 (IAU 2006), in radians.
   const OBLIQUITY_RAD: f32 = 0.40909280_f32; // 23.4392911°
-
-  /// Compute pole orientation quaternion at a given Julian date.
-  /// Returns the quaternion in the ECLIPJ2000 frame (ecliptic coordinates).
-  ///
-  /// Step 1: Build Q_body_to_ICRF = Rz(RA+90°) · Rx(90°-Dec) · Rz(W)
-  /// Step 2: Convert to ECLIPJ2000: Q_final = Rx(ε) · Q_body_to_ICRF
-  pub fn orientation_at(&self, julian_date: f64) -> Quat {
-    let t_centuries = (julian_date - self.reference_epoch_jd) / 36525.0;
-    let d_days = julian_date - self.reference_epoch_jd;
-
-    let ra = (self.pole_ra + self.pole_ra_rate * t_centuries).to_radians();
-    let dec = (self.pole_dec + self.pole_dec_rate * t_centuries).to_radians();
-    let w = (self.prime_meridian + self.rotation_rate * d_days).to_radians();
-
-    // Step 1: Q_body_to_ICRF = Rz(RA+90°) · Rx(90°-Dec) · Rz(W)
-    let q_ra = Quat::from_axis_angle(
-      Vec3f32::from_components(0.0, 0.0, 1.0),
-      (ra + core::f64::consts::FRAC_PI_2) as f32,
-    );
-    let q_dec = Quat::from_axis_angle(
-      Vec3f32::from_components(1.0, 0.0, 0.0),
-      (core::f64::consts::FRAC_PI_2 - dec) as f32,
-    );
-    let q_w = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), w as f32);
-
-    let q_body_to_icrf = q_ra * q_dec * q_w;
-
-    // Step 2: Convert ICRF → ECLIPJ2000 by pre-multiplying with Rx(ε)
-    let q_obliquity =
-      Quat::from_axis_angle(Vec3f32::from_components(1.0, 0.0, 0.0), Self::OBLIQUITY_RAD);
-
-    (q_obliquity * q_body_to_icrf).normalize()
-  }
 }
 
 /// A physically-based mesh loaded from a glTF file.
@@ -1820,6 +1837,10 @@ impl Scene {
     self.register_component::<ColliderComponent>(&transform_type_id);
     self.register_component::<ParticleEmitterCirclesComponent>(&transform_and_mesh);
 
+    self.register_component::<CometMarkerComponent>(&transform_type_id);
+    self.register_component::<PlanetMarkerComponent>(&transform_type_id);
+    self.register_component::<BodyRotationalModel>(&transform_type_id);
+
     // ui module
     self.register_component::<ui::Transform2DComponent>(&[]);
     self.register_component::<ui::UiComponent>(&[]);
@@ -2368,6 +2389,42 @@ impl Scene {
             &mut components1[i],
             &mut components2[i],
             &mut components3[i],
+          ) {
+            f(*entity_id, c1, c2, c3);
+          }
+        }
+      }
+    }
+  }
+
+  pub fn query3<T1: Component, T2: Component, T3: Component, F>(&self, mut f: F)
+  where
+    F: FnMut(EntityId, &T1, &T2, &T3),
+  {
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+    let type_t3 = TypeId::of::<T3>();
+    let archetypes = self.archetypes.read();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t1)
+        && archetype.components.contains_key(&type_t2)
+        && archetype.components.contains_key(&type_t3)
+      {
+        let comp_storage1_lock = archetype.components.get(&type_t1).unwrap().read();
+        let comp_storage2_lock = archetype.components.get(&type_t2).unwrap().read();
+        let comp_storage3_lock = archetype.components.get(&type_t3).unwrap().read();
+
+        let components1 = comp_storage1_lock.as_any().downcast_ref::<Vec<Option<T1>>>().unwrap();
+        let components2 = comp_storage2_lock.as_any().downcast_ref::<Vec<Option<T2>>>().unwrap();
+        let components3 = comp_storage3_lock.as_any().downcast_ref::<Vec<Option<T3>>>().unwrap();
+
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity_id), Some(c1), Some(c2), Some(c3)) = (
+            opt_entity,
+            &components1[i],
+            &components2[i],
+            &components3[i],
           ) {
             f(*entity_id, c1, c2, c3);
           }
@@ -4068,6 +4125,468 @@ impl Scene {
       f(i, archetype);
     }
   }
+
+  /// Retrieves the `Micro` reference frame by walking up the ancestor path from the given `Entity`.
+  ///
+  /// The provided entity itself does not count as its own ancestor and shouldn't possess a
+  /// `ReferenceFrameComponent`
+  ///
+  /// In Debug Builds, it strictly verifies that:
+  /// - The target `entity` itself does not have a `ReferenceFrameComponent`
+  /// - There is 1 `Micro` frame (which matches the returned one, if present)
+  /// - There is optionally 1 `Macro` frame, which must be root entity and distinct from the `Micro`
+  ///   frame
+  /// - The `Micro` frame is a descendant of the `Macro` frame
+  ///
+  /// Note: if [`HighResTransformComponent`] is found instead on the [`ReferenceFrameComponent`], it
+  /// will be downgraded to single precision
+  pub fn get_micro_frame_entity(&self, entity: EntityId) -> Option<(TransformComponent, EntityId)> {
+    #[cfg(any(debug_assertions, test))]
+    {
+      // 1. Target entity cannot be a reference frame itself
+      assert!(
+        self.with_component(entity, |_: &ReferenceFrameComponent| ()).is_none(),
+        "Scene integrity violation: Target entity itself cannot possess a ReferenceFrameComponent"
+      );
+
+      // 2. Global invariant evaluation
+      let mut micro_ent = alloc::vec::Vec::with_capacity(16);
+      let mut macro_ent = None;
+
+      self.query1(|e, comp: &ReferenceFrameComponent| match comp.frame_type {
+        ReferenceFrameType::Micro => {
+          micro_ent.push(e);
+        }
+        ReferenceFrameType::Macro => {
+          assert!(
+            macro_ent.is_none(),
+            "Scene integrity violation: Found multiple Macro reference frames."
+          );
+          macro_ent = Some(e);
+        }
+      });
+
+      if let Some(mac) = macro_ent {
+        assert!(
+          self.get_parent(mac).is_none(),
+          "Scene integrity violation: Macro reference frame must be root entity"
+        );
+        for mic in micro_ent {
+          assert!(
+            mac != mic,
+            "Scene integrity violation: Micro and Macro frames cannot be on the same entity"
+          );
+
+          // 3. Ensure Micro is a descendent of macro
+          let mut is_descendant = false;
+          let mut curr = self.get_parent(mic);
+          let mut depth = 0;
+          while let Some(p) = curr {
+            if depth > 128 {
+              break;
+            }
+            if p == mac {
+              is_descendant = true;
+              break;
+            }
+            curr = self.get_parent(p);
+            depth += 1;
+          }
+
+          assert!(
+            is_descendant,
+            "Scene integrity violation: Micro reference frame must be a descendant of the Macro reference frame"
+          );
+        }
+      }
+    } // end of debug_assertions
+
+    // Fast-Path: Traverse upwards iteratively looking for the Micro Reference Frame
+    let mut current_parent = self.get_parent(entity);
+    let mut depth = 0;
+    while let Some(parent_id) = current_parent {
+      if depth > 128 {
+        break;
+      } // safety guard against cycles
+      if let Some(frame_type) =
+        self.with_component(parent_id, |c: &ReferenceFrameComponent| c.frame_type)
+      {
+        if frame_type == ReferenceFrameType::Micro {
+          // Attempt to fetch standard transform, gracefully fallback to highResTransform and
+          // downgrade it, or yield identity
+          let transform = self
+            .with_component(parent_id, |t: &TransformComponent| *t)
+            .or_else(|| {
+              self.with_component(parent_id, |hr: &HighResTransformComponent| {
+                hr.to_transform()
+              })
+            })
+            .unwrap_or_default();
+
+          return Some((transform, parent_id));
+        }
+      }
+
+      current_parent = self.get_parent(parent_id);
+      depth += 1;
+    }
+
+    None
+  }
+
+  /// Private helper method that gracefully handles archetype filtering, lock acquisition,
+  /// and downcasting. It yields the 4 component arrays to the provided closure.
+  #[inline(always)]
+  fn with_query4_components<T1: Component, T2: Component, T3: Component, T4: Component, F>(
+    archetype: &Archetype,
+    mut f: F,
+  ) where
+    F: FnMut(&[Option<T1>], &[Option<T2>], &[Option<T3>], &[Option<T4>]),
+  {
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+    let type_t3 = TypeId::of::<T3>();
+    let type_t4 = TypeId::of::<T4>();
+
+    if archetype.components.contains_key(&type_t1)
+      && archetype.components.contains_key(&type_t2)
+      && archetype.components.contains_key(&type_t3)
+      && archetype.components.contains_key(&type_t4)
+    {
+      let comp_storage1_lock = archetype.components.get(&type_t1).unwrap().read();
+      let comp_storage2_lock = archetype.components.get(&type_t2).unwrap().read();
+      let comp_storage3_lock = archetype.components.get(&type_t3).unwrap().read();
+      let comp_storage4_lock = archetype.components.get(&type_t4).unwrap().read();
+
+      let components1 = comp_storage1_lock.as_any().downcast_ref::<Vec<Option<T1>>>().unwrap();
+      let components2 = comp_storage2_lock.as_any().downcast_ref::<Vec<Option<T2>>>().unwrap();
+      let components3 = comp_storage3_lock.as_any().downcast_ref::<Vec<Option<T3>>>().unwrap();
+      let components4 = comp_storage4_lock.as_any().downcast_ref::<Vec<Option<T4>>>().unwrap();
+
+      // The locks remain strictly alive during the closure execution
+      f(components1, components2, components3, components4);
+    }
+  }
+
+  /// Queries immutable references to the 4 component types for all entities that possess them.
+  pub fn query4<T1: Component, T2: Component, T3: Component, T4: Component, F>(&self, mut f: F)
+  where
+    F: FnMut(EntityId, &T1, &T2, &T3, &T4),
+  {
+    let archetypes = self.archetypes.read();
+
+    for archetype in archetypes.iter() {
+      Self::with_query4_components::<T1, T2, T3, T4, _>(archetype, |c1, c2, c3, c4| {
+        for (i, opt_entity) in archetype.entities.iter().enumerate() {
+          if let (Some(entity_id), Some(comp1), Some(comp2), Some(comp3), Some(comp4)) =
+            (opt_entity, &c1[i], &c2[i], &c3[i], &c4[i])
+          {
+            f(*entity_id, comp1, comp2, comp3, comp4);
+          }
+        }
+      });
+    }
+  }
+
+  /// Reparents `child` to `new_parent`, updating existing spatial components in-place dynamically
+  pub fn reparent_entity(
+    &self,
+    child: EntityId,
+    new_parent: Option<EntityId>,
+    behavior: ReparentBehavior,
+  ) -> EngineResult<()> {
+    // -- Basic Existance validation --
+    let entities = self.entities.read();
+    if !entities.contains_key(child) {
+      return Err(EngineError::InvalidOperation("Child entity does not exist"));
+    }
+    if let Some(e) = new_parent {
+      if !entities.contains_key(e) {
+        return Err(EngineError::InvalidOperation("New Parent does not exist"));
+      }
+    }
+    drop(entities); // drop early read lock to prevent deadlocks
+
+    if Some(child) == new_parent {
+      return Err(EngineError::InvalidOperation(
+        "Cannot parent an entity with itself",
+      ));
+    }
+
+    if self.get_parent(child) == new_parent {
+      return Err(EngineError::InvalidOperation(
+        "Entity is already a child of the specified new parent",
+      ));
+    }
+
+    // -- Cycle Detection --
+    if let Some(mut curr) = new_parent {
+      let mut depth = 0;
+      // start from child and go up to root. If you find new_parent, then explode.
+      loop {
+        if curr == child {
+          return Err(EngineError::InvalidOperation(
+            "Cycle detected: cannot parent to a descendant",
+          ));
+        }
+        if depth > 128 {
+          break; // Hard cutoff
+        }
+        depth += 1;
+        if let Some(p) = self.get_parent(curr) {
+          curr = p;
+        } else {
+          break;
+        }
+      }
+    }
+
+    // -- Lowest Common Ancestore (LCA) path reconstruction --
+    let (lca, t_idx, r_idx, target_path, ref_path) = {
+      // path from child to root
+      let mut target_path = alloc::vec::Vec::with_capacity(16);
+      let mut curr = child;
+      target_path.push(curr);
+      while let Some(p) = self.get_parent(curr) {
+        curr = p;
+        target_path.push(curr);
+      }
+
+      // path from new_parent to root
+      let mut ref_path = alloc::vec::Vec::with_capacity(16);
+      if let Some(p) = new_parent {
+        let mut curr = p;
+        ref_path.push(curr);
+        while let Some(p) = self.get_parent(p) {
+          curr = p;
+          ref_path.push(curr);
+        }
+      }
+
+      // compare paths from end (root) until you find first diverging element
+      let mut lca = None;
+      let mut t_idx = target_path.len() as isize - 1;
+      let mut r_idx = ref_path.len() as isize - 1;
+      // isolate divergent branches
+      while t_idx >= 0 && r_idx >= 0 && target_path[t_idx as usize] == ref_path[r_idx as usize] {
+        lca = Some(target_path[t_idx as usize]);
+        t_idx -= 1;
+        r_idx -= 1;
+      }
+
+      (lca, t_idx, r_idx, target_path, ref_path)
+    };
+
+    // -- Prohibit Crossing Reference Frames --
+    // strictly check the isolated divergent paths below the LCA. if a Frame exists on this path, an
+    // entity is entering/exiting a frame.
+    // `is_root` evaluates if `child` itself is the frame being legally moved globally
+    let is_root = self.with_component(child, |_: &ReferenceFrameComponent| ()).is_some();
+    if !is_root {
+      for i in 1..=(t_idx as usize) {
+        if self.with_component(target_path[i], |_: &ReferenceFrameComponent| ()).is_some() {
+          return Err(EngineError::InvalidOperation(
+            "Reparenting crossing ReferenceFrameComponent invalid (child)",
+          ));
+        }
+      }
+      if new_parent.is_some() {
+        // note: from 0 cause for the parent we evaluate the parent itself too
+        for i in 0..=(r_idx as usize) {
+          if self.with_component(ref_path[i], |_: &ReferenceFrameComponent| ()).is_some() {
+            return Err(EngineError::InvalidOperation(
+              "Reparenting crossing ReferenceFrameComponent invalid (parent)",
+            ));
+          }
+        }
+      }
+    }
+
+    // -- Component State Dependencies --
+    let has_tf: bool = self.has_component::<TransformComponent>(child).into();
+    let has_hires: bool = self.has_component::<HighResTransformComponent>(child).into();
+    if let ReparentBehavior::SnapAtOffsetHiRes(_) = behavior {
+      if !has_hires {
+        return Err(EngineError::InvalidOperation(
+          "SnapAtOffsetHiRes requested but entity lacks a HighResTransformComponent",
+        ));
+      }
+    }
+
+    // -- Transform Behavior Resolution --
+    // dynamically builds the new coordinates before making structural topology changes
+    let (new_tf, new_hires) = match behavior {
+      ReparentBehavior::SnapAtOrigin => {
+        let hr = HighResTransformComponent::default();
+        (hr.to_transform(), hr)
+      }
+      ReparentBehavior::SnapAtOffset(t) => (t, HighResTransformComponent::from_transform(&t)),
+      ReparentBehavior::SnapAtOffsetHiRes(hr) => (hr.to_transform(), hr),
+      ReparentBehavior::Keep => {
+        // High-precision accumulator logic. Native fallback converts missing entities seamlessly to Identities
+        let get_t = |ent: EntityId| -> HighResTransformComponent {
+          self
+            .with_component(ent, |c: &HighResTransformComponent| *c)
+            .or_else(|| {
+              self.with_component(ent, |c: &TransformComponent| {
+                HighResTransformComponent::from_transform(c)
+              })
+            })
+            .unwrap_or_else(|| HighResTransformComponent {
+              position: Vec3f64::zero(),
+              rotation: Quat::identity(),
+              scale: Vec3f32::splat(1.0),
+            })
+        };
+
+        // Helper to rotate a Vec3f64 using an f32 Quat without losing f64 precision.
+        // It elegantly maps the f32 Quat parts to f64 and leverages your `Vector3::cross` trait method!
+        let rotate_f64 = |q: Quat, v: Vec3f64| -> Vec3f64 {
+          let qv = q.vector_part();
+          let q_vec = Vec3f64::from_components(qv.x() as f64, qv.y() as f64, qv.z() as f64);
+          let q_scalar = q.scalar_part() as f64;
+
+          let t = q_vec.cross(v);
+          let t2 = t + t; // native Vector ops::Add
+          v + (t2 * q_scalar) + q_vec.cross(t2) // native Vector ops::Mul for scalar scaling
+        };
+
+        let initial_t = get_t(child);
+        let mut t_pos = initial_t.position;
+        let mut t_rot = initial_t.rotation;
+        let mut t_scale = initial_t.scale;
+
+        // Traverse Child Branch natively in f64
+        if t_idx >= 1 {
+          for i in 1..=(t_idx as usize) {
+            let parent_id = target_path[i];
+            let p_t = get_t(parent_id);
+
+            let mut frame_scale = 1.0_f32;
+            let _ = self.with_component(parent_id, |c: &ReferenceFrameComponent| {
+              frame_scale = c.scale
+            });
+
+            let scaled_parent_scale = p_t.scale * frame_scale;
+            let scaled_parent_scale_f64 = Vec3f64::from_components(
+              scaled_parent_scale.x() as f64,
+              scaled_parent_scale.y() as f64,
+              scaled_parent_scale.z() as f64,
+            );
+
+            // Natively leverages Vector `Mul` trait overloading for element-wise scale multiplication
+            let scaled_pos = t_pos * scaled_parent_scale_f64;
+            let rotated = rotate_f64(p_t.rotation, scaled_pos);
+
+            t_pos = p_t.position + rotated;
+            t_rot = p_t.rotation * t_rot; // safely relies on your Quaternion ops::Mul overload
+            t_scale = scaled_parent_scale * t_scale;
+          }
+        }
+
+        let mut r_pos = Vec3f64::zero();
+        let mut r_rot = Quat::identity();
+        let mut r_scale = Vec3f32::splat(1.0);
+
+        // Traverse New Parent Branch natively in f64
+        if let Some(np) = new_parent {
+          let initial_r = get_t(np);
+          r_pos = initial_r.position;
+          r_rot = initial_r.rotation;
+          r_scale = initial_r.scale;
+
+          if r_idx >= 1 {
+            for i in 1..=(r_idx as usize) {
+              let parent_id = ref_path[i];
+              let p_t = get_t(parent_id);
+
+              let mut frame_scale = 1.0_f32;
+              let _ = self.with_component(parent_id, |c: &ReferenceFrameComponent| {
+                frame_scale = c.scale
+              });
+
+              let scaled_parent_scale = p_t.scale * frame_scale;
+              let scaled_parent_scale_f64 = Vec3f64::from_components(
+                scaled_parent_scale.x() as f64,
+                scaled_parent_scale.y() as f64,
+                scaled_parent_scale.z() as f64,
+              );
+
+              let scaled_pos = r_pos * scaled_parent_scale_f64;
+              let rotated = rotate_f64(p_t.rotation, scaled_pos);
+
+              r_pos = p_t.position + rotated;
+              r_rot = p_t.rotation * r_rot;
+              r_scale = scaled_parent_scale * r_scale;
+            }
+          }
+        }
+
+        let mut parent_frame_scale = 1.0_f32;
+        if let Some(np) = new_parent {
+          let _ = self.with_component(np, |c: &ReferenceFrameComponent| {
+            parent_frame_scale = c.scale
+          });
+        }
+        let effective_parent_scale = r_scale * parent_frame_scale;
+
+        let diff_pos = t_pos - r_pos;
+        let inv_r_rot = r_rot.inverse();
+        let new_rot = inv_r_rot * t_rot;
+
+        // Execute precise differential un-rotation cleanly using the f64 rotation helper
+        let unrotated_diff = rotate_f64(inv_r_rot, diff_pos);
+
+        let safe_div_f64 = |a: f64, b: f64| -> f64 { if b.abs() < 1e-30 { 0.0 } else { a / b } };
+        let safe_div_f32 = |a: f32, b: f32| -> f32 { if b.abs() < 1e-15 { 0.0 } else { a / b } };
+
+        let hr = HighResTransformComponent {
+          position: Vec3f64::from_components(
+            safe_div_f64(unrotated_diff.x(), effective_parent_scale.x() as f64),
+            safe_div_f64(unrotated_diff.y(), effective_parent_scale.y() as f64),
+            safe_div_f64(unrotated_diff.z(), effective_parent_scale.z() as f64),
+          ),
+          rotation: new_rot,
+          scale: Vec3f32::from_components(
+            safe_div_f32(t_scale.x(), effective_parent_scale.x()),
+            safe_div_f32(t_scale.y(), effective_parent_scale.y()),
+            safe_div_f32(t_scale.z(), effective_parent_scale.z()),
+          ),
+        };
+
+        (hr.to_transform(), hr)
+      }
+    };
+
+    // -- Structural Application --
+    if has_hires {
+      self.with_component_mut(child, |c: &mut HighResTransformComponent| *c = new_hires);
+    } else {
+      debug_assert!(has_tf);
+      self.with_component_mut(child, |c: &mut TransformComponent| *c = new_tf);
+    }
+
+    self.set_parent(child, new_parent);
+
+    Ok(())
+  }
+}
+
+/// Controls how relative spatial offsets are evaluated when restructuring the scene hierarchy
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ReparentBehavior {
+  /// Both entities maintain their absolute world position.
+  /// High-resolution f64 accumulation is used to mathematically compute the new location offset
+  Keep,
+  /// The child's local transform becomes the Identity, effectively snapping it exactly to the
+  /// parent's origin
+  SnapAtOrigin,
+  /// Forcibly sets the child's local offset to the provided [`TransformComponent`].
+  /// Returns an error if the entity does not actively posses a [`TransformComponent`]
+  SnapAtOffset(TransformComponent),
+  /// Forcibly sets the child's local offset to the provided [`HighResTransformComponent`].
+  /// Returns an error if the entity does not actively posses a [`HighResTransformComponent`]
+  SnapAtOffsetHiRes(HighResTransformComponent),
 }
 
 /// Type-erased safe wrappers to transfer pointer provenance across thread boundaries.
@@ -4080,31 +4599,26 @@ unsafe impl Sync for ErasedPtr {}
 
 impl ErasedPtr {
   #[inline(always)]
-  /// TODO: Document this item
   pub fn new<T>(ptr: *const T) -> Self {
     Self(ptr as *const ())
   }
   #[inline(always)]
-  /// TODO: Document this item
   pub fn get<T>(self) -> *const T {
     self.0 as *const T
   }
 }
 
 #[derive(Clone, Copy)]
-/// TODO: Document this item
 pub struct ErasedMutPtr(*mut ());
 unsafe impl Send for ErasedMutPtr {}
 unsafe impl Sync for ErasedMutPtr {}
 
 impl ErasedMutPtr {
   #[inline(always)]
-  /// TODO: Document this item
   pub fn new<T>(ptr: *mut T) -> Self {
     Self(ptr as *mut ())
   }
   #[inline(always)]
-  /// TODO: Document this item
   pub fn get<T>(self) -> *mut T {
     self.0 as *mut T
   }

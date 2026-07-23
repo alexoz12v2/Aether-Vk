@@ -2,24 +2,22 @@
 
 use crate::{
   scene::{Component, TransformComponent},
-  simulation::almanac::AlmanacPackedData,
+  simulation::almanac::{AlmanacPackedData, VecTypeConversion},
   types::EngineResult,
 };
 use aethervk_oshal_rlib::math::{
+  matrix::mat3::Mat3f32,
   quaternion::Quaternion,
-  vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
+  vector::{Vector, Vector3, vec3::Vec3f32, vec3f64::DVec3, vec4::Quat},
 };
+use itertools::Itertools;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
 /// Drives a kinematic body's position (and optionally rotation) from almanac data.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AlmanacPlanet {
   pub naif_id: i32,
   pub rot_period: f64,
   pub mu: f32,
-  /// Rotation from Body-Fixed (BF) frame to Principal Axis (PA) frame.
-  pub bf_to_pa: Quat,
-  /// Offset of the surface observer in Body-Fixed (BF) frame.
-  pub surface_offset_bf: Vec3f32,
 }
 
 impl Component for AlmanacPlanet {}
@@ -31,151 +29,159 @@ impl AlmanacPlanet {
       naif_id,
       rot_period,
       mu,
-      bf_to_pa: Quat::identity(),
-      surface_offset_bf: Vec3f32::zero(),
     }
   }
 
   /// Steps a kinematic body driven by SPK ephemeris.
-  ///
-  /// Position and velocity are always read from the almanac SPK data.
-  /// Rotation is sourced based on `kinematic.use_model_rotation`:
-  ///  - **false** (default): rotation comes from almanac BPC data (planets with BPC files).
-  ///  - **true**: rotation is computed from the `BodyRotationalModel` on the
-  ///    `PhysicalMeshComponent` (comets, whose SPK files lack rotation data).
   pub fn step(
     &self,
-    transform: &mut TransformComponent,
-    kinematic: Option<&mut crate::scene::KinematicComponent>,
     epoch: anise::time::Epoch,
-    _step_days: f64,
     almanac: &AlmanacPackedData,
     rotational_model: Option<&crate::scene::BodyRotationalModel>,
-  ) -> EngineResult<()> {
-    let kinematic_state = almanac.get_ephem_full(
+  ) -> EngineResult<(DVec3, Quat)> {
+    let target_frame = crate::simulation::almanac::SUN_ECLIPJ2000;
+
+    // fetch state. if rotational model is missing, then we demand it from IAU rotational model
+    let state = almanac.get_cartesian_state(
       self.naif_id,
-      crate::simulation::almanac::SUN_ECLIPJ2000,
+      target_frame.orientation_id,
+      target_frame.ephemeris_id,
       epoch,
-      true,
-      false,
+      true, // allow_barycentre_fallback
     )?;
-    transform.position = kinematic_state.position;
 
-    // Determine whether to use the BodyRotationalModel for rotation
-    let use_model = kinematic.as_ref().map_or(false, |k| k.use_model_rotation);
+    // - Resolve *Active* Rotation: Body-Fixed (BF) -> World (target frame)
+    let q_world_from_bf = if let Some(model) = rotational_model {
+      // calculate elapsed continuous TDB days since J2000 epoch
+      let j2000_epoch = anise::time::J2000_REF_EPOCH;
+      let d_j2000 = (epoch - j2000_epoch).to_seconds() / 86400.0;
+      let t_centuries = d_j2000 / 36525.0;
 
-    // Model-derived angular velocity (computed if use_model + model present)
-    let mut model_angular_velocity = None;
+      let ra_deg = model.pole_ra + model.pole_ra_rate * t_centuries;
+      let dec_deg = model.pole_dec + model.pole_dec_rate * t_centuries;
+      let w_deg = model.prime_meridian + model.rotation_rate * d_j2000;
 
-    if use_model {
-      // Compute rotation from IAU-style BodyRotationalModel
-      if let Some(model) = rotational_model {
-        let jd = epoch.to_jde_utc_days();
-        // orientation_at() already returns the quaternion in ECLIPJ2000 frame
-        // (includes the Rx(ε) obliquity correction internally)
-        let orientation_quat = model.orientation_at(jd);
-        // Transform to PA → World: rot_bf_world * bf_to_pa.inverse()
-        transform.rotation = (orientation_quat * self.bf_to_pa.inverse()).normalize();
+      // Safely fold angles into [0,360) using a pure core implementation to avoid `libm::fmod`
+      // (`rem_euclid`) which can panic no_std linkers
+      let wrap_angle = |mut angle: f64| -> f32 {
+        let cycles = (angle / 360.0) as i64 as f64;
+        angle -= cycles * 360.0;
+        if angle < 0.0 {
+          angle += 360.0;
+        }
+        angle as f32
+      };
 
-        // Derive angular velocity from rotation rate along the pole axis
-        let t_centuries = (jd - model.reference_epoch_jd) / 36525.0;
-        let ra = (model.pole_ra + model.pole_ra_rate * t_centuries).to_radians();
-        let dec = (model.pole_dec + model.pole_dec_rate * t_centuries).to_radians();
+      let deg_to_rad = core::f32::consts::PI / 180.0;
+      let ra_rad = wrap_angle(ra_deg) * deg_to_rad;
+      let dec_rad = wrap_angle(dec_deg) * deg_to_rad;
+      let w_rad = wrap_angle(w_deg) * deg_to_rad;
 
-        // Pole unit vector in J2000 inertial frame
-        let pole_inertial = Vec3f32::from_components(
-          (dec.cos() * ra.cos()) as f32,
-          (dec.cos() * ra.sin()) as f32,
-          dec.sin() as f32,
-        );
+      let z_axis = Vec3f32::from_components(0.0, 0.0, 1.0);
+      let x_axis = Vec3f32::from_components(1.0, 0.0, 0.0);
 
-        // rotation_rate is in deg/day, convert to rad/s
-        let omega_rad_s = (model.rotation_rate.to_radians() / 86400.0) as f32;
-        // Apply obliquity to transform pole from ICRF to ECLIPJ2000
-        let q_j2000_to_eclip = Quat::from_axis_angle(
-          Vec3f32::from_components(1.0, 0.0, 0.0),
-          23.4392911_f32.to_radians(),
-        );
-        let ang_vel_inertial = q_j2000_to_eclip.rotate_vector(pole_inertial * omega_rad_s);
+      // Construct active rotation mapping applied right-to-left: Z(W) -> X(90 - dec) -> Z(RA + 90)
+      let q_w = Quat::from_axis_angle(z_axis, w_rad);
+      let q_dec = Quat::from_axis_angle(x_axis, core::f32::consts::FRAC_PI_2 - dec_rad);
+      let q_ra = Quat::from_axis_angle(z_axis, ra_rad + core::f32::consts::FRAC_PI_2);
 
-        // Transform to PA frame for physics
-        model_angular_velocity = Some(self.bf_to_pa.rotate_vector(ang_vel_inertial));
-      }
+      let q_j2000_from_bf = q_ra * q_dec * q_w;
+
+      // Evaluate Orientation from standardized J2000 equator to the specified simulation target
+      // plane (which is SUN_ECLIPJ2000)
+      let j2000_frame = anise::frames::Frame::new(
+        target_frame.ephemeris_id, // origin matches target observer (SUN)
+        anise::constants::orientations::J2000, // earth mean equator at J2000
+      );
+
+      let q_world_from_j2000 = if target_frame.orientation_id == j2000_frame.orientation_id {
+        Quat::identity()
+      } else if let Ok(dcm) = almanac.almanac.rotate(j2000_frame, target_frame, epoch) {
+        let r_mat = Mat3f32::from_nalgebra(dcm.rot_mat);
+        Quat::from_rotation_matrix(&r_mat)
+      } else {
+        Quat::identity()
+      };
+
+      // Cascade the orientation to offsets completely
+      q_world_from_j2000 * q_j2000_from_bf
+    } else if self.naif_id == anise::constants::celestial_objects::EARTH {
+      // We loaded `earth_latest_high_prec.bpc`
+      assert!(
+        almanac.almanac.bpc_data.contains_key("earth_latest_high_prec.bpc"),
+        "Earth rotation requires `earth_latest_high_prec.bpc` to be loaded. Instead we have [ {} ]",
+        almanac.almanac.bpc_data.keys().join(", ")
+      );
+      // Fallbacks for Earth: high precision Binary PCKs (BPC files like earth_latest_high_prec.bpc)
+      // do not store orientation data under the ephemeris ID 399. Instead, they store Earth's
+      // orientation under the International Terrestrial Reference Frame ITRF93 (ID: 13000),
+      // or the standard IAU_EARTH frame (ID: 10013). Because of this quirk in NAIF convention,
+      // we must explicitly try these standard Earth frames when retrieving its rotation matrix.
+      use anise::constants::frames::{EARTH_ITRF93, IAU_EARTH_FRAME};
+      let earth_rotation_dcm = almanac
+        .almanac
+        .rotate(EARTH_ITRF93, target_frame, epoch)
+        .or_else(|_| almanac.almanac.rotate(IAU_EARTH_FRAME, target_frame, epoch))
+        .unwrap(); // can't fail if we have BPC.
+
+      let r_mat = Mat3f32::from_nalgebra(earth_rotation_dcm.rot_mat);
+      Quat::from_rotation_matrix(&r_mat)
     } else {
-      // Standard path: rotation from almanac BPC data
-      if let Some(rot_bf_world) = kinematic_state.rotation {
-        if self.surface_offset_bf != Vec3f32::zero() {
-          let offset_world = rot_bf_world.rotate_vector(self.surface_offset_bf);
-          transform.position += offset_world;
-        } else {
-          transform.rotation = (rot_bf_world * self.bf_to_pa.inverse()).normalize();
-        }
-      }
-    }
+      Quat::identity()
+    };
 
-    if let Some(k) = kinematic {
-      k.velocity = kinematic_state.velocity;
-      if let Some(model_ang_vel) = model_angular_velocity {
-        // Model-driven angular velocity
-        k.angular_velocity = model_ang_vel;
-      } else if !use_model {
-        // Almanac-driven angular velocity
-        if let Some(ang_vel_bf) = kinematic_state.angular_velocity {
-          k.angular_velocity = self.bf_to_pa.rotate_vector(ang_vel_bf);
-        } else {
-          k.angular_velocity = Vec3f32::zero();
-        }
-      }
-    }
-
-    Ok(())
+    Ok((
+      DVec3::from_components(state.radius_km[0], state.radius_km[1], state.radius_km[2]),
+      q_world_from_bf,
+    ))
   }
 
-  /// Steps a high-res transform component (e.g. Camera).
-  pub fn step_high_res(
-    &self,
-    transform: &mut crate::scene::HighResTransformComponent,
-    kinematic: Option<&mut crate::scene::KinematicComponent>,
-    epoch: anise::time::Epoch,
-    _step_days: f64,
-    almanac: &crate::simulation::almanac::AlmanacPackedData,
-  ) -> EngineResult<()> {
-    let kinematic_state = almanac.get_ephem_full(
-      self.naif_id,
-      crate::simulation::almanac::SUN_ECLIPJ2000,
-      epoch,
-      true,
-      false,
-    )?;
-    transform.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
-      kinematic_state.position.x() as f64,
-      kinematic_state.position.y() as f64,
-      kinematic_state.position.z() as f64,
-    );
-    if let Some(rot_bf_world) = kinematic_state.rotation {
-      if self.surface_offset_bf != Vec3f32::zero() {
-        let offset_world = rot_bf_world.rotate_vector(self.surface_offset_bf);
-        transform.position += aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
-          offset_world.x() as f64,
-          offset_world.y() as f64,
-          offset_world.z() as f64,
-        );
-      } else {
-        transform.rotation = (rot_bf_world * self.bf_to_pa.inverse()).normalize();
-      }
-    }
+  // TODO: marked for deletion cause if we want the camera to follow the comet or the earth, do a
+  // reparenting operation instead!
+  //
+  // Steps a high-res transform component (e.g. Camera).
+  // pub fn step_high_res(
+  //   &self,
+  //   transform: &mut crate::scene::HighResTransformComponent,
+  //   epoch: anise::time::Epoch,
+  //   almanac: &crate::simulation::almanac::AlmanacPackedData,
+  // ) -> EngineResult<()> {
+  //   let kinematic_state = almanac.get_ephem_full(
+  //     self.naif_id,
+  //     crate::simulation::almanac::SUN_ECLIPJ2000,
+  //     epoch,
+  //     true,
+  //     false,
+  //   )?;
+  //   transform.position = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+  //     kinematic_state.position.x() as f64,
+  //     kinematic_state.position.y() as f64,
+  //     kinematic_state.position.z() as f64,
+  //   );
+  //   if let Some(rot_bf_world) = kinematic_state.rotation {
+  //     if self.surface_offset_bf != Vec3f32::zero() {
+  //       let offset_world = rot_bf_world.rotate_vector(self.surface_offset_bf);
+  //       transform.position += aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+  //         offset_world.x() as f64,
+  //         offset_world.y() as f64,
+  //         offset_world.z() as f64,
+  //       );
+  //     } else {
+  //       transform.rotation = (rot_bf_world * self.bf_to_pa.inverse()).normalize();
+  //     }
+  //   }
 
-    if let Some(k) = kinematic {
-      k.velocity = kinematic_state.velocity;
-      if let Some(ang_vel_bf) = kinematic_state.angular_velocity {
-        k.angular_velocity = self.bf_to_pa.rotate_vector(ang_vel_bf);
-      } else {
-        k.angular_velocity = Vec3f32::zero();
-      }
-    }
+  //   if let Some(k) = kinematic {
+  //     k.velocity = kinematic_state.velocity;
+  //     if let Some(ang_vel_bf) = kinematic_state.angular_velocity {
+  //       k.angular_velocity = self.bf_to_pa.rotate_vector(ang_vel_bf);
+  //     } else {
+  //       k.angular_velocity = Vec3f32::zero();
+  //     }
+  //   }
 
-    Ok(())
-  }
+  //   Ok(())
+  // }
 }
 
 #[cfg(test)]
