@@ -8,8 +8,7 @@ use crate::{
   simulation_api::{
     SimulationContext,
     structs::{
-      LogicState, LogicThreadParams, RenderThreadParams, SimulationSceneData,
-      SimulationTaskManager, SimulationThreads,
+      LogicState, LogicThreadParams, RenderThreadParams, SimulationSceneData, SimulationThreads,
     },
   },
   types::{EngineError, EngineResult, GpuError},
@@ -33,10 +32,6 @@ impl SimulationContext {
       // 1. Initialize scene data
       let scenes = Arc::new(RwLock::new(SimulationSceneData::new()));
       addr_of_mut!((*ptr).scenes).write(Arc::clone(&scenes));
-
-      // 1.5 Initialize task manager
-      let task_manager = Arc::new(RwLock::new(SimulationTaskManager::new()));
-      addr_of_mut!((*ptr).task_manager).write(Arc::clone(&task_manager));
 
       // 3. initialize threads
       let render_thread_thread_pool =
@@ -77,23 +72,16 @@ impl SimulationContext {
       // TODO test: if this fails, render frontend should drop.
       let render_thread_params =
         RenderThreadParams::new(backend, error_debug_callback, render_thread_thread_pool)?;
-      let kernels = Arc::new(RwLock::new(
-        crate::simulation_api::structs::KernelsEnum::VulkanCompute(
-          render_thread_params.render_frontend.weak_self(),
-          render_thread_params.render_device_handle,
-        ),
-      ));
-      let logic_thread_params = LogicThreadParams::new(
-        logic_thread_thread_pool,
-        Arc::clone(&task_manager),
-        logic_state,
-        Arc::clone(&scenes),
-        crate::simulation_api::structs::SendPtrMut(ptr as *mut core::ffi::c_void),
-        Arc::clone(&kernels),
-      );
       let render_proxy = (
         render_thread_params.render_frontend.weak_self(),
         render_thread_params.render_device_handle,
+      );
+      let logic_thread_params = LogicThreadParams::new(
+        logic_thread_thread_pool,
+        logic_state,
+        Arc::clone(&scenes),
+        crate::simulation_api::structs::SendPtrMut(ptr as *mut core::ffi::c_void),
+        (render_thread_params.render_frontend.clone(), render_proxy.1),
       );
       addr_of_mut!((*ptr).threads).write(SimulationThreads::new_running(
         render_thread_params,
@@ -103,45 +91,18 @@ impl SimulationContext {
       // 4. Render Proxy
       addr_of_mut!((*ptr).render_proxy).write(render_proxy);
 
-      addr_of_mut!((*ptr).kernels).write(Arc::clone(&kernels));
-
       Ok(boxed_uninit.assume_init())
     }
   }
 
-  /// TODO: Document this item
   pub fn render_frontend(&self) -> Option<gpu::RenderFrontend> {
     self.render_proxy.0.as_frontend()
   }
 
-  /// TODO: Document this item
   pub fn render_device_handle(&self) -> gpu::RenderDeviceHandle {
     self.render_proxy.1
   }
 
-  /// Returns the mapped memory pointer of the emissive paint image for a given physical mesh instance
-  pub fn get_emissive_paint_image_mapped_ptr(
-    &self,
-    mesh_id: crate::gpu::RenderableInstanceId,
-  ) -> Option<*mut u8> {
-    let mut mapped_ptr = None;
-    let _ = self.with_device(|device| {
-      mapped_ptr = device.get_emissive_paint_image_mapped_ptr(mesh_id);
-      Ok(())
-    });
-    mapped_ptr
-  }
-
-  /// Flushes the emissive paint image memory for a given physical mesh instance
-  pub fn flush_emissive_paint_image(
-    &self,
-    mesh_id: crate::gpu::RenderableInstanceId,
-  ) -> EngineResult<()> {
-    self.with_device(|device| device.flush_emissive_paint_image(mesh_id))?;
-    Ok(())
-  }
-
-  /// TODO: Document this item
   pub fn create_presentation_engine_windowed(
     &self,
     scene_id: u64,

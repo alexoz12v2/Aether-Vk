@@ -1,15 +1,16 @@
 //! render_thread module.
 
 use crate::{
-  gpu::{
-    self, PresentationEngineHandle, RenderDevice,
-    scene_conversion::{RenderSceneExtraction, SceneConversionExt},
+  gpu::{self, PresentationEngineHandle, RenderDevice, scene_conversion::SceneConversionExt2},
+  gpu_backends::vulkan::{self, utils::RwLockable},
+  simulation_api::{
+    invoke_main_thread_flush_cleanup, invoke_main_thread_process_cleanup,
+    structs::{RenderCommand, RenderThreadContext},
   },
-  simulation_api::structs::{RenderCommand, RenderThreadContext},
   types::{EngineError, EngineResult, GpuError, GpuResult},
 };
-use aethervk_oshal_rlib as oshal;
-use aethervk_oshal_rlib::os::pool::tasklet::ThreadPoolExt;
+use aethervk_oshal_rlib::os::{pool::tasklet::ThreadPoolExt, time::get_monotonic_time};
+use aethervk_oshal_rlib::{self as oshal, os::time::timeus_t};
 use ash::vk::Handle;
 use oshal::{
   os,
@@ -23,7 +24,10 @@ pub fn start_render_thread(
   render_params: RenderThreadContext,
 ) -> EngineResult<Thread> {
   thread::spawn(move || {
-    oshal::os::debug::fpe::unmask_fpu_for_current_thread();
+    #[cfg(debug_assertions)]
+    {
+      oshal::os::debug::fpe::unmask_fpu_for_current_thread();
+    }
     let mut first_render_map: hashbrown::HashMap<PresentationEngineHandle, bool> =
       hashbrown::HashMap::new();
     let render_device_handle = render_params.render_device_handle;
@@ -48,14 +52,80 @@ pub fn start_render_thread(
         return;
       }
     };
+
+    // periodic render discard and process main thread cleanup queue (shifted among each other)
+    let mut last_discard_unscaled_us: timeus_t = 0;
+    let mut last_main_thread_cleanup_unscaled_us: timeus_t = 5000;
+    const CLEANUP_DELTA_UNSCALED_US: timeus_t = oshal::os::time::timeus_milliseconds(500);
+
+    // atomic boolean used as a signaling mechanism to ensure that main thread callbacks are
+    // executed in proper order, and that we wait for it during Shutdown
+    let main_thread_cb_signal_done = core::sync::atomic::AtomicBool::new(false);
+
     loop {
       let mut core_logic = || -> bool {
+        let now = get_monotonic_time();
+        let do_discard = now - last_discard_unscaled_us > CLEANUP_DELTA_UNSCALED_US;
+        let do_main_queue_cleanup =
+          now - last_main_thread_cleanup_unscaled_us > CLEANUP_DELTA_UNSCALED_US;
+        if do_discard {
+          last_discard_unscaled_us = now;
+        }
+        if do_main_queue_cleanup {
+          last_main_thread_cleanup_unscaled_us = now;
+        }
+        if do_discard || do_main_queue_cleanup {
+          let _ = render_frontend.with_device(render_device_handle, |dyn_device| {
+            let vulkan_device: &vulkan::device::Device =
+              dyn_device.as_any().downcast_ref().unwrap();
+            if do_discard {
+              let items = {
+                let res = vulkan_device.res.read();
+                // not sure about this `- 1`, but it's conservative, so it's fine
+                let timeline = res.get_timeline_semaphore_cached_value() - 1;
+                res.discard_pool.pop_ready_items(timeline)
+              };
+              vulkan::device::DiscardPool::destroy_items_lock_free(&vulkan_device.device, items);
+            }
+            if do_main_queue_cleanup {
+              use core::sync::atomic::Ordering;
+              while !main_thread_cb_signal_done.load(Ordering::Acquire) {
+                core::hint::spin_loop();
+              }
+              main_thread_cb_signal_done.store(false, Ordering::Release);
+              unsafe {
+                invoke_main_thread_process_cleanup(vulkan_device, &main_thread_cb_signal_done)
+              };
+            }
+            Ok(())
+          });
+        }
+
         match render_rx.try_recv() {
           Ok(cmd) => {
             if let RenderCommand::Shutdown = cmd {
-              // while during normal operation we might have multiple due to creation/manipulation
-              // of presentation engines, when we shutdown, there should be only one
-              // debug_assert_eq!(alloc::sync::Arc::strong_count(&render_frontend), 1);
+              render_frontend
+                .with_device(render_device_handle, |dyn_device| {
+                  use core::sync::atomic::Ordering;
+                  let vulkan_device: &vulkan::device::Device =
+                    dyn_device.as_any().downcast_ref().unwrap();
+                  while !main_thread_cb_signal_done.load(Ordering::Acquire) {
+                    core::hint::spin_loop();
+                  }
+                  main_thread_cb_signal_done.store(false, Ordering::Release);
+                  unsafe {
+                    invoke_main_thread_flush_cleanup(vulkan_device, &main_thread_cb_signal_done);
+                  }
+
+                  // since this is shutdown, wait for it to be done
+                  while !main_thread_cb_signal_done.load(Ordering::Acquire) {
+                    core::hint::spin_loop();
+                  }
+                  main_thread_cb_signal_done.store(false, Ordering::Release);
+
+                  Ok(())
+                })
+                .unwrap();
               return true;
             }
 
@@ -152,7 +222,7 @@ fn process_command(
               vulkan_device.get_task_target_value(task_id).inspect_err(|e| store_failure(e))?;
             // SAFETY: this was populated from a Boxed type. Shouldn't be null unless we are out of
             // memory, in which case we crash anyways
-            let feedback_mut = unsafe { feedback_ptr.get().as_mut_unchecked() };
+            let feedback_mut = unsafe { feedback_ptr.get().as_mut().unwrap() };
             feedback_mut.timeline_semaphore =
               vulkan_device.res.read().timeline_manager.semaphore.get();
             feedback_mut.timeline_release_value = timeline_value;
@@ -162,6 +232,7 @@ fn process_command(
             break Ok(());
           }
           Err(old) => {
+            use alloc::string::ToString;
             if old == u64::MAX {
               // deadline expired, rollback command buffer and store failure, free pointer
               core::mem::forget(cmd_scope);
@@ -179,7 +250,7 @@ fn process_command(
     RenderCommand::RenderFrames(render_frames) => {
       render_device.start_frame()?;
 
-      let mut handles = alloc::vec::Vec::new();
+      let mut handles = alloc::vec::Vec::with_capacity(8);
 
       for render_frame in render_frames {
         let task_id_feedback = alloc::sync::Arc::clone(&render_frame.task_id);
@@ -231,11 +302,10 @@ fn process_command(
         let task_id_feedback_err = alloc::sync::Arc::clone(&render_frame.task_id);
         let task_id_feedback_err_clone = alloc::sync::Arc::clone(&task_id_feedback_err);
 
-        let tasklet = ctx.thread_pool.spawn_tasklet(
-          None,
-          move || -> GpuResult<(gpu::CommandBufferHandle, bool, bool)> {
-            let core_logic = || -> GpuResult<(gpu::CommandBufferHandle, bool, bool)> {
-              let result = frontend.with_device(handle, |render_device| {
+        let res: GpuResult<(gpu::CommandBufferHandle, bool, bool)> = {
+          let core_logic = || -> GpuResult<(gpu::CommandBufferHandle, bool, bool)> {
+            let result =
+              frontend.with_device(handle, |render_device| {
                 let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
                   render_device.as_any().downcast_ref().unwrap();
                 let task_id = render_device.create_task();
@@ -245,12 +315,6 @@ fn process_command(
                   render_frame.presentation_engine_handle,
                   acquire_result,
                 );
-
-                let extracted_scene =
-                  render_frame.extract_scene(extent, Some(&thread_pool)).map_err(|e| {
-                    aethervk_oshal_rlib::log!("[render tasklet] extract_scene failed: {:?}", e);
-                    e
-                  })?;
 
                 let (cmd_buffer, cmd) =
                   vulkan_device.get_command_buffer_and_native().map_err(|e| {
@@ -307,24 +371,41 @@ fn process_command(
                   });
                 }
 
-                let (unscaled_time_us, unscaled_time_delta_us) = {
-                  let scene_context_read = render_frame.scene.read();
+                // read lock for scene context
+                let scene_context_read = render_frame.scene.read();
+
+                let (
+                  unscaled_time_us,
+                  unscaled_time_delta_us,
+                  scaled_time_us,
+                  scaled_time_delta_us,
+                ) = {
                   let time_state_read = scene_context_read.time_state.read();
                   (
                     time_state_read.unscaled_time,
                     time_state_read.unscaled_delta,
+                    time_state_read.scaled_time,
+                    time_state_read.scaled_delta,
                   )
                 };
-                let debug_name = render_frame.scene.read().debug_name.clone();
+                let debug_name = scene_context_read.debug_name.clone();
 
-                let mut render_scene = extracted_scene
+                let render_scene = scene_context_read
+                  .scene
                   .build_render_scene(
-                    render_device,
-                    render_frame.presentation_engine_handle,
+                    &vulkan_device,
+                    pe_handle,
                     cmd_buffer,
+                    render_frame.camera_entity,
+                    render_frame.render_physical_meshes_outline,
+                    Some(&ctx.thread_pool),
+                    extent,
                     unscaled_time_us,
                     unscaled_time_delta_us,
-                    extent,
+                    scaled_time_us,
+                    scaled_time_delta_us,
+                    render_frame.mean_intra_grains_distance_mm,
+                    render_frame.min_cumulated_mass_g,
                     &debug_name,
                   )
                   .map_err(|e| {
@@ -349,31 +430,6 @@ fn process_command(
                       aethervk_oshal_rlib::log!("[render tasklet] update_sun failed: {:?}", e);
                       e
                     })?;
-                }
-
-                for layer in &mut render_scene.depth_layers {
-                  if !layer.particle_calls.is_empty() {
-                    render_device
-                      .upload_particle_systems(cmd_buffer, &mut layer.particle_calls)
-                      .map_err(|e| {
-                        aethervk_oshal_rlib::log!(
-                          "[render tasklet] upload_particle_systems failed: {:?}",
-                          e
-                        );
-                        e
-                      })?;
-                  }
-                  if !layer.particle2_calls.is_empty() {
-                    render_device
-                      .upload_particle2_systems(cmd_buffer, &mut layer.particle2_calls)
-                      .map_err(|e| {
-                        aethervk_oshal_rlib::log!(
-                          "[render tasklet] upload_particle2_systems failed: {:?}",
-                          e
-                        );
-                        e
-                      })?;
-                  }
                 }
 
                 if is_first_render && render_frame.custom_render_callback.is_some() {
@@ -489,71 +545,70 @@ fn process_command(
                 Ok((cmd_buffer, is_windowless, is_first_render))
               });
 
-              if let Err(ref e) = result {
-                aethervk_oshal_rlib::log!(
-                  "[render tasklet] tasklet failed, signalling u64::MAX: {:?}",
-                  e
-                );
-                task_id_feedback_err_clone.store(u64::MAX, core::sync::atomic::Ordering::Release);
-              }
-              result
-            };
+            if let Err(ref e) = result {
+              aethervk_oshal_rlib::log!(
+                "[render tasklet] tasklet failed, signalling u64::MAX: {:?}",
+                e
+              );
+              task_id_feedback_err_clone.store(u64::MAX, core::sync::atomic::Ordering::Release);
+            }
+            result
+          };
 
-            #[cfg(target_os = "macos")]
-            return objc2::rc::autoreleasepool(|_| core_logic());
+          #[cfg(target_os = "macos")]
+          {
+            objc2::rc::autoreleasepool(|_| core_logic())
+          }
 
-            #[cfg(not(target_os = "macos"))]
-            return core_logic();
-          },
-        );
+          #[cfg(not(target_os = "macos"))]
+          {
+            core_logic()
+          }
+        };
 
-        if let Ok(handle) = tasklet {
-          handles.push((handle, pe_handle, acquire_result));
+        if let Ok((cmd_buffer, is_windowless, is_first_render)) = res {
+          handles.push((
+            cmd_buffer,
+            is_windowless,
+            is_first_render,
+            pe_handle,
+            acquire_result,
+          ));
         } else {
           aethervk_oshal_rlib::log!(
-            "[render thread] spawn_tasklet failed for PE {:?}",
-            pe_handle
+            "[render thread] Queue submission failed for PE '{:?}' with error {}",
+            pe_handle,
+            unsafe { res.unwrap_err_unchecked() }
           );
           task_id_feedback_err.store(u64::MAX, core::sync::atomic::Ordering::Release);
         }
       }
 
       // Step 2: Synchronize and submit sequentially
-      for (handle, pe_handle, acquire_result) in handles {
-        match handle.wait() {
-          Ok((_cmd_buffer, _is_windowless, is_first_render)) => {
-            if is_first_render {
-              *unsafe { first_render_map.get_mut(&pe_handle).unwrap_unchecked() } = false;
-            }
-            match render_device.present(
-              pe_handle,
-              acquire_result.image_index as usize,
-              acquire_result.frame_index as usize,
-            ) {
-              Ok(crate::gpu::SwapchainStatus::Optimal) => {}
-              Ok(status) => {
-                oshal::log!(
-                  "[Render Thread] Warning: present status={:?} for PE {:?} — may need resize",
-                  status,
-                  pe_handle
-                );
-              }
-              Err(e) => {
-                oshal::log!(
-                  "[Render Thread] present() error for PE {:?}: {:?}",
-                  pe_handle,
-                  e
-                );
-                return Err(e);
-              }
-            }
+      for (_cmd_buffer, _is_windowless, is_first_render, pe_handle, acquire_result) in handles {
+        if is_first_render {
+          *unsafe { first_render_map.get_mut(&pe_handle).unwrap_unchecked() } = false;
+        }
+        match render_device.present(
+          pe_handle,
+          acquire_result.image_index as usize,
+          acquire_result.frame_index as usize,
+        ) {
+          Ok(crate::gpu::SwapchainStatus::Optimal) => {}
+          Ok(status) => {
+            oshal::log!(
+              "[Render Thread] Warning: present status={:?} for PE {:?} — may need resize",
+              status,
+              pe_handle
+            );
           }
           Err(e) => {
             oshal::log!(
-              "[Render Thread] tasklet wait() failed for PE {:?}: {:?}",
+              "[Render Thread] present() error for PE {:?}: {:?}",
               pe_handle,
               e
             );
+            return Err(e);
           }
         }
       }
@@ -565,24 +620,6 @@ fn process_command(
       resize_cmd.height,
     ),
     RenderCommand::GenerateSky => render_device.generate_sky(),
-  }
-}
-
-// TODO possibly, group by pipeline if necessary
-impl super::structs::RenderFrame {
-  /// TODO: Document this item
-  pub fn extract_scene(
-    &self,
-    window_extent: [u32; 2],
-    pool: Option<&oshal::os::pool::ThreadPool>,
-  ) -> GpuResult<RenderSceneExtraction> {
-    let scene = self.scene.read();
-    scene.scene.convert_scene(
-      self.camera_entity,
-      self.render_physical_meshes_outline,
-      pool,
-      window_extent,
-    )
   }
 }
 

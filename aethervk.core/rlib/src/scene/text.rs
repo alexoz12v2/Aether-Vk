@@ -7,7 +7,6 @@ use alloc::vec::Vec;
 use core::hash::Hasher;
 use hashbrown::HashMap;
 
-/// TODO: Document this item
 #[derive(Debug)]
 pub struct FontAtlas {
   pub image_data: Vec<u8>,
@@ -24,7 +23,6 @@ pub struct FontAtlas {
 }
 
 #[derive(Clone, Copy, Debug)]
-/// TODO: Document this item
 pub struct GlyphInfo {
   pub uv_min: [f32; 2],
   pub uv_max: [f32; 2],
@@ -34,13 +32,11 @@ pub struct GlyphInfo {
 }
 
 impl GlyphInfo {
-  /// TODO: Document this item
   pub fn scaled_advance(&self, desired_points: f32, atlas_scale: PxScale) -> f32 {
     let scale_factor = desired_points / atlas_scale.x;
     self.advance * scale_factor
   }
 
-  /// TODO: Document this item
   pub fn uv_bounds(&self) -> [f32; 4] {
     [
       self.uv_min[0],
@@ -74,13 +70,11 @@ impl GlyphInfo {
 }
 
 impl FontAtlas {
-  /// TODO: Document this item
   pub fn scaled_height(&self, desired_points: f32) -> f32 {
     let scale_factor = desired_points / self.scale.y;
     scale_factor * self.line_height
   }
 
-  /// TODO: Document this item
   pub fn hash_metadata(&self) -> u64 {
     let mut hasher = FnvHasher::new();
     hasher.write(self.width.to_be_bytes().as_slice());
@@ -91,14 +85,13 @@ impl FontAtlas {
     hasher.finish()
   }
 
-  /// TODO: Document this item
   pub fn from_path<P: os::fs::IntoPathBuf>(path: P, scale_pt: f32) -> IoResult<Self> {
+    use alloc::string::ToString;
     let font_data = os::fs::read(path).map_err(|e| IoError::from(e))?;
     Self::from_slice(&font_data, scale_pt)
       .ok_or_else(|| IoError::Specific("Failed to parse font data or create atlas".to_string()))
   }
 
-  /// TODO: Document this item
   pub fn from_slice(font_data: &[u8], scale_pt: f32) -> Option<Self> {
     let font = FontRef::try_from_slice(font_data).ok()?;
     let scale = PxScale::from(scale_pt);

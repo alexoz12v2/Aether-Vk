@@ -1,3 +1,8 @@
+// @assets/dust.vert
+//
+// Note: We are setting `gl_PointSize` to values bigger than 1.0. As such, we need
+// the `largePoints` device feature
+
 #version 450 core
 
 #extension GL_EXT_buffer_reference2      : require
@@ -13,14 +18,14 @@ uint pcg(uint v) {
     return (word >> 22u) ^ word;
 }
 
-// 124 bytes, below 128 threshold
+// 128 bytes
 layout(push_constant, std430) uniform PushConstants {
     ParticleChunkBuffer globalParticleBuffer;
     ParticlePageTable   particlePageTable;
 
     mat4  viewProj;
     vec4  streamColor;
-    uint  chunkOffset;  // TODO see if useful
+    uint  chunkOffset;
     uint  currentTime;  // In 1/300 seconds
     float maxTtl;       // limit for age fading (in 1/300 s)
     float macroScale;   // base point sprite pixel size multiplier

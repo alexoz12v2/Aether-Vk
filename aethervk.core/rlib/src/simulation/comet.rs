@@ -1,22 +1,26 @@
 //! comet module.
-use aethervk_oshal_rlib::math::quaternion::Quaternion;
-
+use crate::types::EngineError;
 use aethervk_oshal_rlib::{
   self as oshal,
+  math::matrix::{Matrix, Matrix3, mat3::Mat3f32},
+  math::quaternion::Quaternion,
+  math::vector::vec4::Quat,
   math::vector::{Vector, Vector3, vec3::Vec3f32},
   os::FsError,
+  os::fs::{self, FileSystemObject, PathBuf},
 };
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use ktx2;
-use oshal::os::fs::{self, FileSystemObject, PathBuf};
-use polyhedral_mass_properties::{MassProperties, TriangleContrib};
 use zune_core::bytestream::ZCursor;
 use zune_jpeg;
 
+// TODO delete uv_grid. not needed
 pub mod uv_grid;
 
+// TODO rename this file into mesh.rs
+
 #[derive(Debug, Clone, Copy, PartialEq)]
-/// TODO: Document this item
 pub struct Vertex {
   pub position: [f32; 3],
   pub normal: [f32; 3],
@@ -24,15 +28,10 @@ pub struct Vertex {
   pub tangent: [f32; 4],
 }
 
-/// TODO: Document this item
 pub const POSITION_COMPONENTS: u32 = 3;
-/// TODO: Document this item
 pub const NORMAL_COMPONENTS: u32 = 3;
-/// TODO: Document this item
 pub const UV_COMPONENTS: u32 = 2;
-/// TODO: Document this item
 pub const TANGENT_COMPONENTS: u32 = 4;
-/// TODO: Document this item
 pub const ATTRIBUTES_COMPONENTS: u32 = 9;
 
 impl core::hash::Hash for Vertex {
@@ -46,7 +45,6 @@ impl core::hash::Hash for Vertex {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[allow(non_camel_case_types)]
-/// TODO: Document this item
 pub enum TexelFormat {
   // Basic formats
   R8_UNORM,
@@ -64,7 +62,6 @@ pub enum TexelFormat {
 }
 
 impl TexelFormat {
-  /// TODO: Document this item
   pub fn to_vk_format(self) -> ash::vk::Format {
     use ash::vk;
     match self {
@@ -98,7 +95,6 @@ impl TexelFormat {
 }
 
 #[derive(Clone, Default)]
-/// TODO: Document this item
 pub struct Texture {
   pub data: bytes::Bytes,
   pub format: TexelFormat,
@@ -107,19 +103,11 @@ pub struct Texture {
   pub has_mipmaps: bool,
 }
 
-use crate::math::collision::{
-  bvh_builder::{BVHBuilder, BVHBuilderParams},
-  linear_bvh::LinearBVH,
-};
-use aethervk_oshal_rlib::math::{
-  matrix::{Matrix, Matrix3, mat3::Mat3f32},
-  vector::vec4::Quat,
-};
-
 static NEXT_COMET_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
 
+// TODO change name of this class to `Mesh`
+/// Warning: `PartialEq` implemented only with `id` field
 #[derive(Clone)]
-/// TODO: Document this item
 pub struct Comet {
   pub id: u64,
   pub vertices: Vec<Vertex>,
@@ -128,166 +116,18 @@ pub struct Comet {
   pub normal_map: Option<Texture>,
   pub roughness_map: Option<Texture>,
   pub ao_map: Option<Texture>,
-  /// mass, inertia_tensor, center_of_mass stored here as f64 (TODO Accessors)
-  /// from this field, all other accessors are computed, plus conversion
-  /// to any other scalar numeric format declared in oshal library, to support mixed precision simulation
-  pub mass_properties: MassProperties,
-  pub bvh: Option<LinearBVH<f32>>,
-  /// The principal axes basis vectors (eigenvectors of the inertia tensor) expressed in the Body-Fixed (BF) frame.
-  pub pa_basis_bf: Option<Mat3f32>,
-  /// Rotation from Body-Fixed (BF) frame to Principal Axis (PA) frame.
-  pub bf_to_pa: Option<Quat>,
-}
-
-fn compute_comet_extras(
-  vertices: &[Vertex],
-  indices: &[u32],
-  mass_properties: &mut MassProperties,
-  provided_inertia: Option<Mat3f32>,
-) -> (
-  Option<LinearBVH<f32>>,
-  Option<Mat3f32>,
-  Option<Quat>,
-  Vec<Vertex>,
-) {
-  use crate::math::compute_com_and_tensor;
-  let raw_verts: Vec<Vec3f32> = vertices
-    .iter()
-    .map(|v| Vec3f32::from_components(v.position[0], v.position[1], v.position[2]))
-    .collect();
-
-  // Use provided inertia if available, otherwise compute from mesh
-  let mat = if let Some(ext_mat) = provided_inertia {
-    ext_mat
-  } else {
-    let (_, mat) = compute_com_and_tensor(&raw_verts, 1.0); // Assume unit mass per vertex for geometry proxy
-    mat
-  };
-
-  let (principal_moments, principal_axes) = crate::math::jacobi_diagonalization(mat, 1e-6, 100);
-
-  // Update mass properties to match the new diagonalized tensor
-  mass_properties.inertia.xx = principal_moments.x() as f64;
-  mass_properties.inertia.yy = principal_moments.y() as f64;
-  mass_properties.inertia.zz = principal_moments.z() as f64;
-  mass_properties.inertia.xy = 0.0;
-  mass_properties.inertia.xz = 0.0;
-  mass_properties.inertia.yz = 0.0;
-
-  // Center of mass becomes (0,0,0) in the local frame since vertices are translated
-  mass_properties.center_of_mass = [0.0, 0.0, 0.0];
-
-  // Calculate new principal axes correctly oriented.
-  // Transform vertices into the new local coordinate system aligned with the principal axes.
-  let mut local_vertices = vertices.to_vec();
-  for v in local_vertices.iter_mut() {
-    let v_world = Vec3f32::from_components(v.position[0], v.position[1], v.position[2]);
-    let vx = principal_axes.x.dot(v_world);
-    let vy = principal_axes.y.dot(v_world);
-    let vz = principal_axes.z.dot(v_world);
-    v.position = [vx, vy, vz];
-
-    let n_world = Vec3f32::from_components(v.normal[0], v.normal[1], v.normal[2]);
-    let nx = principal_axes.x.dot(n_world);
-    let ny = principal_axes.y.dot(n_world);
-    let nz = principal_axes.z.dot(n_world);
-    v.normal = [nx, ny, nz];
-  }
-
-  // bf_to_pa is the rotation that takes a vector in BF and moves it to PA.
-  // Since local_v = principal_axes^T * world_v, bf_to_pa = Quat(principal_axes^T)
-  let bf_to_pa = Quat::from_rotation_matrix(&principal_axes.transpose());
-
-  // Log the axes properly formatted
-  use aethervk_oshal_rlib::math::vector::Vector;
-
-  let linear_bvh =
-    crate::math::collision::linear_bvh::LinearBVH::build_mesh_lbvh(&local_vertices, indices);
-
-  (
-    linear_bvh,
-    Some(principal_axes),
-    Some(bf_to_pa),
-    local_vertices,
-  )
-}
-
-#[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
-pub struct Triangle {
-  pub vertices: [Vec3f32; 3],
-}
-
-impl Triangle {
-  #[inline]
-  /// TODO: Document this item
-  pub fn v0(&self) -> &Vec3f32 {
-    &self.vertices[0]
-  }
-  #[inline]
-  /// TODO: Document this item
-  pub fn v1(&self) -> &Vec3f32 {
-    &self.vertices[1]
-  }
-  #[inline]
-  /// TODO: Document this item
-  pub fn v2(&self) -> &Vec3f32 {
-    &self.vertices[2]
-  }
-  #[inline]
-  /// TODO: Document this item
-  pub fn mean_vector(&self) -> Vec3f32 {
-    (*self.v0() + *self.v1() + *self.v2()) / 3.0
-  }
-  /// Warning: unnormalized
-  /// Warning: Formula correct if "outwards" is counter clockwise
-  #[inline]
-  pub fn normal_ccw_unnormalized(&self) -> Vec3f32 {
-    let v0 = self.vertices[0];
-    let v1 = self.vertices[1];
-    let v2 = self.vertices[2];
-
-    (v1 - v0).cross(v2 - v1)
-  }
-
-  #[inline]
-  /// TODO: Document this item
-  pub fn area(&self) -> f32 {
-    0.5 * (*self.v1() - *self.v0()).cross(*self.v2() - *self.v1()).length()
-  }
-}
-
-impl Comet {
-  /// Returns a zero-allocation, cloneable iterator over the mesh's triangles.
-  pub fn iter_triangles(&self) -> impl Iterator<Item = Triangle> + Clone + '_ {
-    // Iterate over indices in groups of 3
-    self.indices.chunks_exact(3).map(move |chunk| {
-      let i0 = chunk[0] as usize;
-      let i1 = chunk[1] as usize;
-      let i2 = chunk[2] as usize;
-
-      // Construct the Triangle on the fly
-      Triangle {
-        // Assuming your Vec3f32 has a from/into implementation for [f32; 3]
-        vertices: [
-          Vec3f32::from(self.vertices[i0].position),
-          Vec3f32::from(self.vertices[i1].position),
-          Vec3f32::from(self.vertices[i2].position),
-        ],
-      }
-    })
-  }
 }
 
 impl PartialEq for Comet {
   fn eq(&self, other: &Self) -> bool {
-    self.vertices == other.vertices && self.indices == other.indices
+    self.id == other.id
   }
 }
 
 impl core::fmt::Debug for Comet {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("Comet")
+      .field("id", &self.id)
       .field("vertices", &self.vertices.len())
       .field("indices", &self.indices.len())
       .finish()
@@ -295,7 +135,6 @@ impl core::fmt::Debug for Comet {
 }
 
 #[derive(Debug)]
-/// TODO: Document this item
 pub enum CometLoadError {
   PathNotFound,
   TextureNotFound,
@@ -427,8 +266,6 @@ fn get_texture_data(
     return Err(CometLoadError::UnsupportedImageFormat);
   };
 
-  // TODO: watertight check, triangulated check, normal check, ...
-
   Ok(Some(Texture {
     data: decoded_data.into(),
     format,
@@ -437,89 +274,6 @@ fn get_texture_data(
     has_mipmaps,
   }))
 }
-
-fn calculate_mass_properties(
-  vertices: &[Vertex],
-  indices: &[u32],
-  total_mass: f32,
-) -> MassProperties {
-  let points: Vec<[f64; 3]> = vertices
-    .iter()
-    .map(|v| {
-      [
-        v.position[0] as f64,
-        v.position[1] as f64,
-        v.position[2] as f64,
-      ]
-    })
-    .collect();
-  let tris = indices.chunks_exact(3);
-
-  let contrib_sum = tris
-    .map(|tri| {
-      let p0 = points[tri[0] as usize];
-      let p1 = points[tri[1] as usize];
-      let p2 = points[tri[2] as usize];
-      TriangleContrib::new(p0, p1, p2)
-    })
-    .sum();
-
-  let unit_mass_properties = MassProperties::from_contrib_sum(contrib_sum).unwrap();
-  let volume = unit_mass_properties.volume();
-  let safe_mass = if total_mass == 0.0 {
-    1e-12
-  } else {
-    total_mass as f64
-  };
-  let density = safe_mass / volume;
-  unit_mass_properties.with_density(density)
-}
-
-/// Compute mass properties for a uniform sphere of given mass (kg) and radius (km).
-/// Returns MassProperties with I_xx = I_yy = I_zz = (2/5) * m * r².
-/// This is used when the mesh is a procedural sphere or when the user provides
-/// explicit mass and radius for the nucleus (instead of computing from the polyhedron).
-pub fn spherical_mass_properties(mass_kg: f64, radius_km: f64) -> MassProperties {
-  let i_diag = (2.0 / 5.0) * mass_kg * radius_km * radius_km;
-  // Build MassProperties using a dummy tetrahedron then override inertia
-  // (MassProperties requires a non-zero volume manifold to construct)
-  let dummy_r = radius_km;
-  // Tetrahedron with vertices at roughly the right radius
-  let s = dummy_r * (2.0_f64 / 3.0).sqrt();
-  let p0 = [s, s, s];
-  let p1 = [-s, -s, s];
-  let p2 = [-s, s, -s];
-  let p3 = [s, -s, -s];
-  let c: TriangleContrib = [
-    TriangleContrib::new(p0, p1, p2),
-    TriangleContrib::new(p0, p1, p3),
-    TriangleContrib::new(p0, p2, p3),
-    TriangleContrib::new(p1, p2, p3),
-  ]
-  .into_iter()
-  .sum();
-  let mut mp = MassProperties::from_contrib_sum(c)
-    .expect("Spherical tetrahedron must produce valid mass properties");
-  let volume = mp.volume();
-  let density = if volume.abs() > 1e-30 {
-    mass_kg / volume
-  } else {
-    mass_kg / ((4.0 / 3.0) * core::f64::consts::PI * radius_km.powi(3))
-  };
-  mp = mp.with_density(density);
-  // Override inertia to exact spherical values
-  mp.inertia.xx = i_diag;
-  mp.inertia.yy = i_diag;
-  mp.inertia.zz = i_diag;
-  mp.inertia.xy = 0.0;
-  mp.inertia.xz = 0.0;
-  mp.inertia.yz = 0.0;
-  mp
-}
-
-use crate::types::EngineError;
-use alloc::collections::BTreeMap;
-// Assuming Vec, PathBuf, etc. are already in scope
 
 /// Function to load a GLTF/GLB file
 /// 1. Watertightness Check: A closed, physical (manifold) mesh must have every undirected edge shared by exactly two triangles. If an edge has only one triangle, there's a hole. If it has three or more, there's self-intersecting/non-manifold geometry.
@@ -754,22 +508,14 @@ fn finalize_comet(
     );
   }
 
-  let mut mass_properties = calculate_mass_properties(&vertices, &indices, 1.0);
-  let (bvh, pa_basis_bf, bf_to_pa, local_vertices) =
-    compute_comet_extras(&vertices, &indices, &mut mass_properties, provided_inertia);
-
   Ok(Comet {
     id: NEXT_COMET_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
-    vertices: local_vertices,
+    vertices,
     indices,
     albedo_map,
     normal_map,
     roughness_map,
     ao_map,
-    mass_properties,
-    bvh,
-    pa_basis_bf,
-    bf_to_pa,
   })
 }
 
@@ -1198,71 +944,6 @@ pub fn generate_quad(normal: Vec3f32, size: f32) -> Comet {
   indices.push(2);
   indices.push(3);
 
-  // Mass properties for a thin unit plate
-  // We use a dummy tetrahedron to safely construct the MassProperties object, as it requires a non-zero volume manifold to avoid panicking inside polyhedral_mass_properties.
-  let mut mass_properties = {
-    let dummy_vertices = [
-      Vertex {
-        position: [0.0, 0.0, 0.0],
-        normal: [0.0, 0.0, 0.0],
-        uv: [0.0, 0.0],
-        tangent: [0.0, 0.0, 0.0, 0.0],
-      },
-      Vertex {
-        position: [1.0, 0.0, 0.0],
-        normal: [0.0, 0.0, 0.0],
-        uv: [0.0, 0.0],
-        tangent: [0.0, 0.0, 0.0, 0.0],
-      },
-      Vertex {
-        position: [0.0, 1.0, 0.0],
-        normal: [0.0, 0.0, 0.0],
-        uv: [0.0, 0.0],
-        tangent: [0.0, 0.0, 0.0, 0.0],
-      },
-      Vertex {
-        position: [0.0, 0.0, 1.0],
-        normal: [0.0, 0.0, 0.0],
-        uv: [0.0, 0.0],
-        tangent: [0.0, 0.0, 0.0, 0.0],
-      },
-    ];
-    let dummy_indices = [0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3];
-    calculate_mass_properties(&dummy_vertices, &dummy_indices, 1.0)
-  };
-  mass_properties.mass = 1.0;
-  mass_properties.center_of_mass = [0.0, 0.0, 0.0];
-  // Simple AABB inertia approximation
-  mass_properties.inertia.xx = 1.0 / 12.0;
-  mass_properties.inertia.yy = 1.0 / 12.0;
-  mass_properties.inertia.zz = 1.0 / 12.0;
-  mass_properties.inertia.xy = 0.0;
-  mass_properties.inertia.yz = 0.0;
-  mass_properties.inertia.xz = 0.0;
-
-  let pa_basis_bf = Mat3f32 {
-    x: Vec3f32::from_components(1.0, 0.0, 0.0),
-    y: Vec3f32::from_components(0.0, 1.0, 0.0),
-    z: Vec3f32::from_components(0.0, 0.0, 1.0),
-  };
-
-  let mut tris = Vec::with_capacity(indices.len() / 3);
-  for chunk in indices.chunks_exact(3) {
-    let v0 = vertices[chunk[0] as usize].position;
-    let v1 = vertices[chunk[1] as usize].position;
-    let v2 = vertices[chunk[2] as usize].position;
-    tris.push(Triangle {
-      vertices: [
-        Vec3f32::from_components(v0[0], v0[1], v0[2]),
-        Vec3f32::from_components(v1[0], v1[1], v1[2]),
-        Vec3f32::from_components(v2[0], v2[1], v2[2]),
-      ],
-    });
-  }
-
-  let builder = BVHBuilder::<f32, Vec3f32, Mat3f32>::new(BVHBuilderParams::default());
-  let bvh = builder.build(&tris).map(|root| LinearBVH::from_build_node(&root, 0));
-
   Comet {
     id: NEXT_COMET_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
     vertices,
@@ -1271,10 +952,6 @@ pub fn generate_quad(normal: Vec3f32, size: f32) -> Comet {
     normal_map: None,
     roughness_map: None,
     ao_map: None,
-    mass_properties,
-    bvh,
-    pa_basis_bf: Some(pa_basis_bf),
-    bf_to_pa: Some(Quat::identity()),
   }
 }
 
@@ -1359,45 +1036,6 @@ pub fn generate_uv_sphere(
     }
   }
 
-  let mut mass_properties = calculate_mass_properties(&vertices, &indices, total_mass);
-
-  // 2. FIXED: Apply the exact closed-form diagonal solid-sphere inertia properties.
-  // Bypass numeric precision drift stemming from iterative integration.
-  let i_diag = (2.0 / 5.0) * (total_mass as f64) * (radius as f64).powi(2);
-  mass_properties.center_of_mass = [0.0, 0.0, 0.0];
-  mass_properties.inertia.xx = i_diag;
-  mass_properties.inertia.yy = i_diag;
-  mass_properties.inertia.zz = i_diag;
-  mass_properties.inertia.xy = 0.0;
-  mass_properties.inertia.xz = 0.0;
-  mass_properties.inertia.yz = 0.0;
-
-  // Symmetrical Solid Spheres naturally assert the Identity Matrix for local principal axes
-  let pa_basis_bf = Mat3f32 {
-    x: Vec3f32::from_components(1.0, 0.0, 0.0),
-    y: Vec3f32::from_components(0.0, 1.0, 0.0),
-    z: Vec3f32::from_components(0.0, 0.0, 1.0),
-  };
-
-  // We completely bypass `compute_comet_extras` here because the sphere is already diagonalized
-  // and perfectly centered physically around the internal [0,0,0] origin point.
-  let mut tris = Vec::with_capacity(indices.len() / 3);
-  for chunk in indices.chunks_exact(3) {
-    let v0 = vertices[chunk[0] as usize].position;
-    let v1 = vertices[chunk[1] as usize].position;
-    let v2 = vertices[chunk[2] as usize].position;
-    tris.push(Triangle {
-      vertices: [
-        Vec3f32::from_components(v0[0], v0[1], v0[2]),
-        Vec3f32::from_components(v1[0], v1[1], v1[2]),
-        Vec3f32::from_components(v2[0], v2[1], v2[2]),
-      ],
-    });
-  }
-
-  let builder = BVHBuilder::<f32, Vec3f32, Mat3f32>::new(BVHBuilderParams::default());
-  let bvh = builder.build(&tris).map(|root| LinearBVH::from_build_node(&root, 0));
-
   Comet {
     id: NEXT_COMET_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
     vertices,
@@ -1406,14 +1044,9 @@ pub fn generate_uv_sphere(
     normal_map: None,
     roughness_map: None,
     ao_map: None,
-    mass_properties,
-    bvh,
-    pa_basis_bf: Some(pa_basis_bf),
-    bf_to_pa: Some(Quat::identity()),
   }
 }
 
-/// TODO: Document this item
 pub fn load_texture_from_file(path: &str) -> Result<Texture, CometLoadError> {
   let path_buf = PathBuf::from(path);
   if !path_buf.is_file() {
@@ -1557,39 +1190,6 @@ fn closest_point_barycentric_3d(p: Vec3f32, a: Vec3f32, b: Vec3f32, c: Vec3f32) 
     (p - closest).length_squared(),
     Vec3f32::from_components(u, v, w),
   )
-}
-
-use crate::math::collision::multi_bvh::TlasMultiNode;
-
-/// Expands static object-space Multi-BVH bounds based on linear velocity.
-pub fn compute_motion_bounds<const N: usize>(
-  static_bvh: &[TlasMultiNode<N>],
-  local_linear_vel: Vec3f32,
-  dt: f32,
-) -> Vec<TlasMultiNode<N>> {
-  let mut motion_bvh = static_bvh.to_vec();
-
-  // Total sweep displacement in object space
-  let sweep = local_linear_vel * dt;
-  let sweep_min = sweep.min(Vec3f32::zero());
-  let sweep_max = sweep.max(Vec3f32::zero());
-
-  for node in motion_bvh.iter_mut() {
-    for i in 0..N {
-      // Only expand valid slots
-      if (node.valid_mask[i / 32] & (1u32 << (i % 32))) != 0 {
-        node.min_x[i] += sweep_min.x();
-        node.min_y[i] += sweep_min.y();
-        node.min_z[i] += sweep_min.z();
-
-        node.max_x[i] += sweep_max.x();
-        node.max_y[i] += sweep_max.y();
-        node.max_z[i] += sweep_max.z();
-      }
-    }
-  }
-
-  motion_bvh
 }
 
 #[cfg(test)]

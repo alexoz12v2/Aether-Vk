@@ -1,21 +1,18 @@
 //! misc_api module.
-#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use crate::{
   expect_scene,
   gpu::{PresentationEngineHandle, WeakRenderFrontendExt},
-  scene::{CameraComponent, EntityId},
+  scene::CameraComponent,
   simulation_api::{
     BREADCRUMB_CALLBACK, SimulationContext,
-    structs::{RaycastResult, RenderCommand, Resize, SimulationTaskResult, TaskStatusCode},
+    structs::{RenderCommand, Resize, TaskStatusCode},
   },
   types::{EngineError, EngineResult},
 };
 use aethervk_oshal_rlib::{self as oshal};
-use core::ffi::c_char;
 
 impl SimulationContext {
-  /// TODO: Document this item
   pub fn set_logger_callback(cb: Option<extern "C" fn(*const core::ffi::c_char)>) {
     let ptr = match cb {
       Some(f) => f as *mut (),
@@ -24,111 +21,45 @@ impl SimulationContext {
     oshal::os::debug::LOGGER_CALLBACK.store(ptr, core::sync::atomic::Ordering::Relaxed);
   }
 
-  /// TODO: Document this item
   pub fn set_breadcrumb_callback(cb: Option<crate::simulation_api::BreadcrumbCallback>) {
     *BREADCRUMB_CALLBACK.write() = cb;
   }
 
-  /// TODO: Document this item
   pub fn set_simulation_callback(cb: Option<crate::simulation_api::SimulationCallback>) {
     *crate::simulation_api::SIMULATION_CALLBACK.write() = cb;
   }
 
-  /// TODO: Document this item
   pub fn set_render_callback(cb: Option<crate::simulation_api::RenderCallback>) {
     *crate::simulation_api::RENDER_CALLBACK.write() = cb;
   }
 
-  /// TODO: Document this item
+  // TODO remove when using the composition api
   pub fn get_task_status(&self, task_id: u64) -> TaskStatusCode {
     if task_id == 0 || task_id == u64::MAX {
       return TaskStatusCode::Invalid;
     }
 
-    if (task_id & (1u64 << 63)) != 0 {
-      // TODO check correctness for task id construction in logic thread. If so, create RenderTaskId(u64) and LogicTaskId(u64) with new function with debug_assert!
-      // Logic task
-      self.task_manager.read().get_status(task_id)
-    } else {
-      // Render task
-      let completed = self
-        .render_proxy
-        .0
-        .as_frontend()
-        .and_then(|f| {
-          f.with_device(self.render_proxy.1, |device| {
-            Ok(device.is_task_completed(task_id).unwrap_or(true))
-          })
-          .ok()
+    // Render task
+    let completed = self
+      .render_proxy
+      .0
+      .as_frontend()
+      .and_then(|f| {
+        f.with_device(self.render_proxy.1, |device| {
+          Ok(device.is_task_completed(task_id).unwrap_or(true))
         })
-        .unwrap_or(true);
+        .ok()
+      })
+      .unwrap_or(true);
 
-      if completed {
-        TaskStatusCode::Completed
-      } else {
-        TaskStatusCode::Pending
-      }
-    }
-  }
-
-  /// TODO: Document this item
-  pub fn get_task_result_u64(&self, task_id: u64) -> u64 {
-    if let Some(SimulationTaskResult::U64(val)) = self.task_manager.write().take_result(task_id) {
-      val
+    if completed {
+      TaskStatusCode::Completed
     } else {
-      0
+      TaskStatusCode::Pending
     }
   }
 
-  /// TODO: Document this item
-  pub fn get_task_result_bool(&self, task_id: u64) -> bool {
-    if let Some(SimulationTaskResult::Bool(val)) = self.task_manager.write().take_result(task_id) {
-      val
-    } else {
-      false
-    }
-  }
-
-  /// Generic so that FFI type can be in cdylib crate
-  pub fn get_task_result_raycast<T: From<RaycastResult>>(
-    &self,
-    task_id: u64,
-    out_hit: *mut T,
-  ) -> bool {
-    if let Some(SimulationTaskResult::Raycast(res)) = self.task_manager.write().take_result(task_id)
-    {
-      if !out_hit.is_null() {
-        unsafe {
-          *out_hit = res.into();
-        }
-      }
-      true
-    } else {
-      false
-    }
-  }
-
-  /// Generic so that FFI type can be in cdylib crate
-  pub fn get_task_result_kinematic_state<T: From<crate::simulation::almanac::KinematicState>>(
-    &self,
-    task_id: u64,
-    out_state: *mut T,
-  ) -> bool {
-    if let Some(SimulationTaskResult::KinematicState(state)) =
-      self.task_manager.write().take_result(task_id)
-    {
-      if !out_state.is_null() {
-        unsafe {
-          *out_state = state.into();
-        }
-      }
-      true
-    } else {
-      false
-    }
-  }
-
-  /// TODO: Document this item
+  // TODO: Rewrite so that it executes on the render thread under an autorelease pool
   pub fn resize(
     &mut self,
     scene_id: u64,
@@ -152,7 +83,6 @@ impl SimulationContext {
       }
     }
 
-    // TODO retry if full up to a threshold
     self
       .threads
       .render_thread
@@ -169,8 +99,14 @@ impl SimulationContext {
       })
   }
 
-  /// TODO: Document this item
-  pub fn download_image(&self, task_id: u64, buffer_ptr: *mut u8, buffer_size: usize) -> bool {
+  /// # Safety
+  /// - `buffer_ptr` should represent a valid piece of memory of `buffer_size` bytes
+  pub unsafe fn download_image(
+    &self,
+    task_id: u64,
+    buffer_ptr: *mut u8,
+    buffer_size: usize,
+  ) -> bool {
     let result = self
       .render_proxy
       .0
@@ -183,7 +119,7 @@ impl SimulationContext {
               core::slice::from_raw_parts_mut(buffer_ptr, buffer_size)
             })
           })
-          .map_err(|e| EngineError::from(e))
+          .map_err(EngineError::from)
       });
 
     match result {
@@ -198,7 +134,6 @@ impl SimulationContext {
     }
   }
 
-  /// TODO: Document this item
   pub fn set_asset_path(path: &str) {
     let mut guard = crate::gpu::ASSET_DIR.write();
     *guard = Some(alloc::string::String::from(path));

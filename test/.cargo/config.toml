@@ -1,7 +1,0 @@
-[env]
-MACOSX_DEPLOYMENT_TARGET = "15.5"
-
-[target.aarch64-apple-darwin]
-rustflags = [
-  "-C", "link-arg=-mmacosx-version-min=15.5"
-]

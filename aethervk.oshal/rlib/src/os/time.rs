@@ -248,6 +248,8 @@ pub mod v1 {
 }
 
 pub mod v2 {
+  use crate::math::FloatLike;
+
   use super::*;
 
   use core::cmp::min;
@@ -343,7 +345,7 @@ pub mod v2 {
         SimSpeed::Custom(val) => {
           // Cast the custom float to an i32 and force it to be negative
           // so it maps back correctly across the FFI boundary.
-          let v = val.round() as i32;
+          let v = libm::round(val) as i32;
           if v > 0 { -v } else { v }
         }
       }
@@ -378,6 +380,7 @@ pub mod v2 {
 
     /// the base epoch mapping `scaled_time = 0` to a real-world celestial date
     pub start_epoch: Epoch,
+    pub end_epoch: Epoch,
 
     /// Monotonic clock tracking
     start_monotonic: timeus_t,
@@ -389,7 +392,12 @@ pub mod v2 {
   }
 
   impl TimeManager {
-    pub fn new(start_epoch: Epoch, initial_speed: SimSpeed, max_unscaled_delta_ms: u32) -> Self {
+    pub fn new(
+      start_epoch: Epoch,
+      end_epoch: Epoch,
+      initial_speed: SimSpeed,
+      max_unscaled_delta_ms: u32,
+    ) -> Self {
       let now_us = get_monotonic_time();
       let state = TimeState {
         speed: initial_speed,
@@ -403,6 +411,7 @@ pub mod v2 {
       Self {
         state: alloc::sync::Arc::new(spin::RwLock::new(state)),
         start_epoch,
+        end_epoch,
         start_monotonic: now_us,
         last_monotonic: now_us,
         max_unscaled_delta: (max_unscaled_delta_ms as timeus_t) * 1_000,

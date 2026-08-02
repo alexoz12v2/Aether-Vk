@@ -17,18 +17,18 @@
 //!    "Initial State" for free reuse
 
 use crate::{
-  gpu::{CommandBufferHandle, vulkan::device::locks::DebugTrackedRwLock},
-  gpu_backends::vulkan::device::{DeviceResource, LogicalDevice, VulkanDebugNameExt},
-  types::{GpuError, GpuResult, SpscQueue},
+  gpu::CommandBufferHandle,
+  gpu_backends::vulkan::device::{DeviceResource, VulkanDebugNameExt, locks::DebugTrackedRwLock},
+  types::{GpuError, GpuResult},
 };
 use aethervk_oshal_rlib::os::native::ThreadId;
-use alloc::{boxed::Box, collections::btree_map::BTreeMap};
+use alloc::string::ToString;
 use ash::vk;
 use core::ptr;
 use function_name::named;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct CommandBufferId(pub u64);
+pub struct CommandBufferId(pub u64);
 
 impl From<CommandBufferHandle> for CommandBufferId {
   fn from(value: CommandBufferHandle) -> Self {
@@ -216,6 +216,7 @@ impl QueueFamilyPoolsInner {
 
     // we must have room in the pending to store the current active pool (caller checked)
     if self.pending.len() >= self.pending.capacity() {
+      use alloc::string::ToString;
       return Err(GpuError::BackendSpecific(
         "Pending queue is full".to_string(),
       ));
@@ -350,7 +351,7 @@ impl QueueFamilyPools {
 }
 
 #[derive(Debug)]
-pub(crate) struct CommandPools {
+pub struct CommandPools {
   /// composite key tracks pool by thread AND queue family index
   registry: dashmap::DashMap<(ThreadId, u32), QueueFamilyPools>,
 }
@@ -389,6 +390,7 @@ impl CommandPools {
 
     // - Chunk Rotation: Seal and rotate the active pool if full
     if inner.active.next_free_index >= MAX_BUFFERS_PER_POOL {
+      use alloc::string::ToString;
       if inner.can_rotate() {
         inner
           .rotate_active_pool()

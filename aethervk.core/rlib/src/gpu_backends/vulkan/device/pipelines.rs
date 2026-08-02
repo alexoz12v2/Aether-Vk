@@ -194,13 +194,11 @@ pub(super) struct VertexIn {
 }
 
 impl VertexIn {
-  /// TODO: Document this item
   pub fn with_topology(mut self, topology: vk::PrimitiveTopology) -> Self {
     self.topology = topology;
     self
   }
 
-  /// TODO: Document this item
   pub fn add_attribute(
     mut self,
     binding: u32,
@@ -310,7 +308,6 @@ impl PreRasterization {
 }
 
 #[derive(Clone)]
-/// TODO: Document this item
 pub(super) struct FragmentShader {
   pub fragment_module: vk::ShaderModule,
   pub viewports: Vec<vk::Viewport>,
@@ -318,17 +315,14 @@ pub(super) struct FragmentShader {
 }
 
 impl FragmentShader {
-  /// TODO: Document this item
   pub fn with_fragment_module(mut self, fragment_module: vk::ShaderModule) -> Self {
     self.fragment_module = fragment_module;
     self
   }
-  /// TODO: Document this item
   pub fn add_viewport(mut self, viewport: vk::Viewport) -> Self {
     self.viewports.push(viewport);
     self
   }
-  /// TODO: Document this item
   pub fn add_scissors(mut self, scissors: vk::Rect2D) -> Self {
     self.scissors.push(scissors);
     self

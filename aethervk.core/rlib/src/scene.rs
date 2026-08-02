@@ -53,10 +53,7 @@ pub mod ui;
 
 pub use almanac_planet::AlmanacPlanet;
 pub use animation::*;
-pub use particles::{
-  EmissionCircle, GaussianParams, ParticleData, ParticleEmitterCirclesComponent,
-  ParticleEmitterComponent, ParticleSystemComponent,
-};
+pub use particles::ParticleSystemComponent;
 pub use ui::{Transform2DComponent, UiComponent};
 
 /// An error that can occur when adding a component.
@@ -164,6 +161,33 @@ pub trait ForeignSerializable: Component {
   /// Update the component from a raw void pointer to the DTO
   unsafe fn apply_foreign_ptr(&mut self, ptr: *const core::ffi::c_void) {
     unsafe { self.apply_foreign(&*(ptr as *const Self::ForeignData)) };
+  }
+}
+
+/// An object-safe bridge for `ForeignSerializable` to allow dynamic FFI streaming.
+pub trait ErasedForeignSerializable {
+  fn component_id(&self) -> u64;
+  fn foreign_data_size(&self) -> usize;
+  /// SAFETY: `dst` should be a non-null pointer to a buffer of at least `foreign_data_size`
+  unsafe fn write_foreign_bytes(&self, dst: *mut core::ffi::c_void);
+  /// SAFETY: `src` should be a non-null pointer to a buffer of at least `foreign_data_size`
+  /// which represents the required object layout as specified by [`ForeignSerializable::ForeignData`]
+  unsafe fn apply_foreign_bytes(&mut self, src: *const core::ffi::c_void);
+}
+
+impl<T: ForeignSerializable> ErasedForeignSerializable for T {
+  fn component_id(&self) -> u64 {
+    T::COMPONENT_ID
+  }
+  fn foreign_data_size(&self) -> usize {
+    core::mem::size_of::<T::ForeignData>()
+  }
+  unsafe fn write_foreign_bytes(&self, dst: *mut core::ffi::c_void) {
+    let data = self.to_foreign();
+    unsafe { core::ptr::write_unaligned(dst as *mut T::ForeignData, data) };
+  }
+  unsafe fn apply_foreign_bytes(&mut self, src: *const core::ffi::c_void) {
+    unsafe { self.apply_foreign_ptr(src) };
   }
 }
 
@@ -643,157 +667,6 @@ impl Default for BodyRotationalModel {
 
 impl Component for BodyRotationalModel {}
 
-/// FFI representation of [`BodyRotationalModel`]. See its rustdoc for each member
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct BodyRotationalModelDTO {
-  pub pole_ra: f64,
-  pub pole_dec: f64,
-  pub prime_meridian: f64,
-  pub pole_ra_rate: f64,
-  pub pole_dec_rate: f64,
-  pub rotation_rate: f64,
-}
-
-impl ForeignSerializable for BodyRotationalModel {
-  type ForeignData = BodyRotationalModelDTO;
-  const COMPONENT_ID: u64 = 21;
-
-  fn to_foreign(&self) -> Self::ForeignData {
-    BodyRotationalModelDTO {
-      pole_ra: self.pole_ra,
-      pole_dec: self.pole_dec,
-      prime_meridian: self.prime_meridian,
-      pole_ra_rate: self.pole_ra_rate,
-      pole_dec_rate: self.pole_dec_rate,
-      rotation_rate: self.rotation_rate,
-    }
-  }
-
-  fn apply_foreign(&mut self, data: &Self::ForeignData) {
-    self.pole_ra = data.pole_ra;
-    self.pole_dec = data.pole_dec;
-    self.prime_meridian = data.prime_meridian;
-    self.pole_ra_rate = data.pole_ra_rate;
-    self.pole_dec_rate = data.pole_dec_rate;
-    self.rotation_rate = data.rotation_rate;
-  }
-}
-
-impl BodyRotationalModel {
-  /// Mean obliquity of the ecliptic at J2000 (IAU 2006), in radians.
-  const OBLIQUITY_RAD: f32 = 0.40909280_f32; // 23.4392911°
-}
-
-/// A physically-based mesh loaded from a glTF file.
-#[derive(Debug)]
-pub struct PhysicalMeshComponent {
-  pub asset_path: alloc::string::String,
-  pub mesh: alloc::sync::Arc<Comet>,
-  pub emissive_intensity: f32,
-  pub emissive_color: [f32; 3],
-  pub use_new_path: bool,
-  /// 0 = off, 1 = RGB color, 2 = alpha distribution, 3 = spherical grid (see physical_mesh2.frag)
-  pub paint_display_mode: u32,
-  pub sphere_center: [f32; 3],
-  pub sphere_radius: f32,
-  pub grid_color: [f32; 3],
-  pub grid_density: f32,
-  /// Optional IAU-style rotational model for pole orientation and spin.
-  pub rotational_model: Option<BodyRotationalModel>,
-}
-
-impl Clone for PhysicalMeshComponent {
-  fn clone(&self) -> Self {
-    Self {
-      asset_path: self.asset_path.clone(),
-      mesh: self.mesh.clone(),
-      emissive_intensity: self.emissive_intensity,
-      emissive_color: self.emissive_color,
-      use_new_path: self.use_new_path,
-      paint_display_mode: self.paint_display_mode,
-      sphere_center: self.sphere_center,
-      sphere_radius: self.sphere_radius,
-      grid_color: self.grid_color,
-      grid_density: self.grid_density,
-      rotational_model: self.rotational_model,
-    }
-  }
-}
-
-impl PartialEq for PhysicalMeshComponent {
-  fn eq(&self, other: &Self) -> bool {
-    self.asset_path == other.asset_path
-      && self.emissive_intensity == other.emissive_intensity
-      && self.emissive_color == other.emissive_color
-      && self.paint_display_mode == other.paint_display_mode
-      && self.sphere_center == other.sphere_center
-      && self.sphere_radius == other.sphere_radius
-      && self.grid_color == other.grid_color
-      && self.grid_density == other.grid_density
-      && self.rotational_model == other.rotational_model
-  }
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PhysicalMeshDTO {
-  pub is_procedural: bool,
-  pub asset_path: [u8; 256],
-  /// Physical radius in km (same as PhysicalMeshComponent.sphere_radius).
-  pub sphere_radius: f32,
-  /// Mesh bounding sphere in vertex units (for scale = sphere_radius / bounding_sphere).
-  pub bounding_sphere: f32,
-}
-
-impl ForeignSerializable for PhysicalMeshComponent {
-  type ForeignData = PhysicalMeshDTO;
-  const COMPONENT_ID: u64 = 20;
-
-  fn to_foreign(&self) -> Self::ForeignData {
-    let mut path_bytes = [0u8; 256];
-    let bytes = self.asset_path.as_bytes();
-    let len = bytes.len().min(255);
-    path_bytes[..len].copy_from_slice(&bytes[..len]);
-
-    // Compute bounding sphere from mesh BVH (same logic as spawn_comet_internal)
-    let bounding_sphere = if let Some(bvh) = &self.mesh.bvh {
-      use aethervk_oshal_rlib::math::vector::Vector;
-      match &bvh.nodes[0].bound {
-        crate::math::collision::linear_bvh::LinearBound::AABB(aabb) => {
-          aabb.half_extents_f32().length()
-        }
-        crate::math::collision::linear_bvh::LinearBound::OBB(obb) => {
-          obb.half_extents_f32().length()
-        }
-      }
-    } else {
-      crate::simulation_api::scene_api::compute_bounding_sphere_radius(&self.mesh.vertices)
-    };
-
-    PhysicalMeshDTO {
-      is_procedural: false,
-      asset_path: path_bytes,
-      sphere_radius: self.sphere_radius,
-      bounding_sphere,
-    }
-  }
-
-  fn apply_foreign(&mut self, data: &Self::ForeignData) {
-    if let Some(null_pos) = data.asset_path.iter().position(|&b| b == 0) {
-      if let Ok(s) = core::str::from_utf8(&data.asset_path[..null_pos]) {
-        self.asset_path = alloc::string::String::from(s);
-      }
-    }
-    // Apply sphere_radius if changed from C# side
-    if data.sphere_radius > 0.0 {
-      self.sphere_radius = data.sphere_radius;
-    }
-  }
-}
-
-impl Component for PhysicalMeshComponent {}
-
 /// A display-only mesh that is not included in physical simulation.
 #[derive(Debug, Clone)]
 pub struct StaticMeshComponent {
@@ -804,6 +677,7 @@ pub struct StaticMeshComponent {
 }
 
 impl Component for StaticMeshComponent {}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BillboardType {
   WorldSpace { width: f32, height: f32 },
@@ -964,41 +838,10 @@ impl Component for SphericalGizmoComponent {}
 pub struct GridComponent {}
 impl Component for GridComponent {}
 
-/// A marker component for the selected entity.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct SelectedComponent {}
-impl Component for SelectedComponent {}
-
-/// A marker component for the entity being followed by the camera.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct FollowingComponent {}
-impl Component for FollowingComponent {}
-
 /// A marker component indicating an entity should be hidden from rendering.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct HiddenComponent {}
 impl Component for HiddenComponent {}
-
-/// TODO: Deduplicate (in math::physics there's this exact thing)
-/// A custom force emitter applying physics on rigid bodies and particles
-#[derive(Clone, Copy, Debug)]
-pub enum ForceEmitterComponent {
-  Gravity {
-    /// Standard gravitational parameter G*M in **km³/s²** (JPL Horizons default).
-    /// Examples: Sun ≈ 1.32712440018e11, Earth ≈ 3.986004418e5.
-    mu: f32,
-    /// Radiation-pressure ratio β = F_rad / F_grav.
-    /// Net effective parameter: mu_eff = (1 − β) · mu.
-    /// 0.0 = pure gravity; 1.0 = radiation-blown (force-free); typical comet dust: 0.1–1.0.
-    beta: f32,
-  },
-  Planar {
-    normal: Vec3f32,
-    base_force: f32,
-    trunc_distance: f32,
-  },
-}
-impl Component for ForceEmitterComponent {}
 
 /// A component that stores debug render states for BVH nodes
 #[derive(Clone, Debug)]
@@ -1041,7 +884,6 @@ impl Component for BackgroundComponent {}
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-/// TODO: Document this item
 pub enum ReferenceFrameType {
   Macro = 0,
   Micro = 1,
@@ -1049,7 +891,6 @@ pub enum ReferenceFrameType {
 
 #[repr(C, align(16))]
 #[derive(Clone, Debug, PartialEq)]
-/// TODO: Document this item
 pub struct ReferenceFrameComponent {
   pub frame_type: ReferenceFrameType,
   pub scale: f32,
@@ -1059,7 +900,6 @@ pub struct ReferenceFrameComponent {
 
 impl ReferenceFrameComponent {
   #[inline(always)]
-  /// TODO: Document this item
   pub fn micro_to_macro(
     p_micro: Vec3f32,
     v_micro: Vec3f32,
@@ -1073,7 +913,6 @@ impl ReferenceFrameComponent {
   }
 
   #[inline(always)]
-  /// TODO: Document this item
   pub fn macro_to_micro(
     p_macro: Vec3f32,
     v_macro: Vec3f32,
@@ -1089,74 +928,40 @@ impl ReferenceFrameComponent {
 
 impl Component for ReferenceFrameComponent {}
 
-#[repr(C, align(16))]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ColliderShape {
-  Sphere { radius: f32 },
-  OBB { half_extents: Vec3f32 },
-}
-
-impl Default for ColliderShape {
-  fn default() -> Self {
-    Self::Sphere { radius: 1.0 }
-  }
-}
-
-#[repr(C, align(16))]
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub struct ColliderComponent {
-  pub shape: ColliderShape,
-  pub mass: f32,
-  pub restitution: f32,
-  pub friction: f32,
-}
-impl Component for ColliderComponent {}
-
-#[repr(C, align(16))]
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
-/// Kinematic body: position driven by almanac, rotation optionally by BodyRotationalModel.
-pub struct KinematicComponent {
-  pub velocity: Vec3f32,
-  pub angular_velocity: Vec3f32,
-  /// When true, rotation is computed from `PhysicalMeshComponent::rotational_model`
-  /// instead of from almanac BPC data (which comets lack).
-  pub use_model_rotation: bool,
-}
-impl Component for KinematicComponent {}
-
-/// Necessary boilerplate for rendering system
-pub enum RenderableDataRef<'a> {
-  ImageBillboard(&'a ImageBillboardComponent),
-  PhysicalMesh(&'a PhysicalMeshComponent),
-  Cursor(&'a CursorComponent),
-  Markers(&'a MarkersComponent),
-  Measurement(&'a MeasurementComponent),
-  Gizmo(&'a GizmoComponent),
-  BvhWireframe(
-    &'a BvhDebugComponent,
-    &'a [crate::math::collision::linear_bvh::LinearBound<f32>],
-  ),
-  ParticleSystem(
-    &'a particles::ParticleSystemComponent,
-    &'a particles::ParticleEmitterComponent,
-  ),
-}
-
-impl<'a> RenderableDataRef<'a> {
-  /// TODO: Document this item
-  pub fn index_count(&self) -> u32 {
-    match self {
-      RenderableDataRef::ImageBillboard(_) => 4,
-      RenderableDataRef::PhysicalMesh(mesh) => mesh.mesh.indices.len() as u32,
-      RenderableDataRef::Cursor(_) => 4, // 4 vertices for the quad cursor
-      RenderableDataRef::Markers(m) => (m.markers.len() * 4) as u32,
-      RenderableDataRef::Measurement(_) => 6, // 6 vertices for line list
-      RenderableDataRef::Gizmo(_) => 6,
-      RenderableDataRef::BvhWireframe(_, nodes) => (nodes.len() * 24) as u32, // Approximation
-      RenderableDataRef::ParticleSystem(p, _) => (p.particles.read().len() * 4) as u32,
-    }
-  }
-}
+// TODO remove this
+// /// Necessary boilerplate for rendering system
+// pub enum RenderableDataRef<'a> {
+//   ImageBillboard(&'a ImageBillboardComponent),
+//   PhysicalMesh(&'a PhysicalMeshComponent),
+//   Cursor(&'a CursorComponent),
+//   Markers(&'a MarkersComponent),
+//   Measurement(&'a MeasurementComponent),
+//   Gizmo(&'a GizmoComponent),
+//   BvhWireframe(
+//     &'a BvhDebugComponent,
+//     &'a [crate::math::collision::linear_bvh::LinearBound<f32>],
+//   ),
+//   ParticleSystem(
+//     &'a particles::ParticleSystemComponent,
+//     &'a particles::ParticleEmitterComponent,
+//   ),
+// }
+//
+// impl<'a> RenderableDataRef<'a> {
+//   /// TODO: Document this item
+//   pub fn index_count(&self) -> u32 {
+//     match self {
+//       RenderableDataRef::ImageBillboard(_) => 4,
+//       RenderableDataRef::PhysicalMesh(mesh) => mesh.mesh.indices.len() as u32,
+//       RenderableDataRef::Cursor(_) => 4, // 4 vertices for the quad cursor
+//       RenderableDataRef::Markers(m) => (m.markers.len() * 4) as u32,
+//       RenderableDataRef::Measurement(_) => 6, // 6 vertices for line list
+//       RenderableDataRef::Gizmo(_) => 6,
+//       RenderableDataRef::BvhWireframe(_, nodes) => (nodes.len() * 24) as u32, // Approximation
+//       RenderableDataRef::ParticleSystem(p, _) => (p.particles.read().len() * 4) as u32,
+//     }
+//   }
+// }
 
 /// Information about a component for a specific entity.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1363,6 +1168,15 @@ struct EntityLocation {
   row_index: usize,
 }
 
+/// VTable storing the map of component id to type id and their DTO information
+#[derive(Debug, Clone, Copy)]
+pub struct ForeignVTable {
+  pub type_id: core::any::TypeId,
+  // Function pointesr that safely downcast `&dyn Any` into a object-safe trait
+  pub get_ref: fn(&dyn core::any::Any, usize) -> Option<&dyn ErasedForeignSerializable>,
+  pub get_mut: fn(&mut dyn core::any::Any, usize) -> Option<&mut dyn ErasedForeignSerializable>,
+}
+
 /// The main scene struct, containing all entities and their components.
 #[derive(Debug)]
 pub struct Scene {
@@ -1373,6 +1187,7 @@ pub struct Scene {
   names: RwLock<HashMap<EntityId, String>>,
   pub texture_cache:
     alloc::sync::Arc<parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>>,
+  pub foreign_registry: parking_lot::RwLock<hashbrown::HashMap<u64, ForeignVTable>>,
 }
 
 impl Clone for Scene {
@@ -1384,6 +1199,7 @@ impl Clone for Scene {
       hierarchy: RwLock::new(self.hierarchy.read().clone()),
       names: RwLock::new(self.names.read().clone()),
       texture_cache: alloc::sync::Arc::clone(&self.texture_cache),
+      foreign_registry: parking_lot::RwLock::new(self.foreign_registry.read().clone()),
     }
   }
 }
@@ -1451,7 +1267,6 @@ impl Into<bool> for HasComponentResultEnum {
 }
 
 impl Scene {
-  /// TODO: Document this item
   pub fn new(
     texture_cache: alloc::sync::Arc<
       parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>,
@@ -1471,6 +1286,7 @@ impl Scene {
       hierarchy: RwLock::new(SceneHierarchy::default()),
       names: RwLock::new(HashMap::new()),
       texture_cache,
+      foreign_registry: parking_lot::RwLock::new(hashbrown::HashMap::with_capacity(64)),
     }
   }
 
@@ -1479,12 +1295,10 @@ impl Scene {
     hierarchy.get_first_root()
   }
 
-  /// TODO: Document this item
   pub fn entity_count(&self) -> usize {
     self.entities.read().len()
   }
 
-  /// TODO: Document this item
   pub fn hierarchy_depth(&self) -> usize {
     let hierarchy = self.hierarchy.read();
     let mut max_depth = 0;
@@ -1500,7 +1314,6 @@ impl Scene {
     max_depth
   }
 
-  /// TODO: Document this item
   pub fn hierarchy_breadth(&self) -> usize {
     let hierarchy = self.hierarchy.read();
     hierarchy.children.values().map(|children| children.len()).max().unwrap_or(0)
@@ -1552,7 +1365,6 @@ impl Scene {
     0
   }
 
-  /// TODO: Document this item
   pub fn should_parallelize(&self) -> bool {
     let size = self.entity_count();
     let _depth = self.hierarchy_depth();
@@ -1563,7 +1375,6 @@ impl Scene {
     size > 1000 || breadth > 100
   }
 
-  /// TODO: Document this item
   pub fn add_default_camera<S>(
     &self,
     name: S,
@@ -1632,7 +1443,6 @@ impl Scene {
     self.hierarchy.write().set_parent(child, parent);
   }
 
-  /// TODO: Document this item
   pub fn get_parent(&self, entity: EntityId) -> Option<EntityId> {
     let entities = self.entities.read();
     if !entities.contains_key(entity) {
@@ -1641,7 +1451,6 @@ impl Scene {
     self.hierarchy.read().parents.get(&entity).cloned()
   }
 
-  /// TODO: Document this item
   pub fn get_children(&self, entity: EntityId) -> Option<alloc::vec::Vec<EntityId>> {
     let entities = self.entities.read();
     if !entities.contains_key(entity) {
@@ -1650,7 +1459,6 @@ impl Scene {
     self.hierarchy.read().children.get(&entity).cloned()
   }
 
-  /// TODO: Document this item
   pub fn get_entity_component_names(&self, entity: EntityId) -> Vec<&'static str> {
     let archetypes = self.archetypes.read();
     let entities = self.entities.read();
@@ -1670,7 +1478,6 @@ impl Scene {
     names
   }
 
-  /// TODO: Document this item
   pub fn spawn_reference_frame(
     &self,
     name: &str,
@@ -1802,40 +1609,47 @@ impl Scene {
 
   pub fn register_all_crate_components(&self) {
     let transform_type_id = [TypeId::of::<TransformComponent>()];
-    let transform_and_mesh = [
-      TypeId::of::<TransformComponent>(),
-      TypeId::of::<PhysicalMeshComponent>(),
-    ];
+    let highres_type_id = [TypeId::of::<HighResTransformComponent>()];
+
+    // - the only compoonents which need a two-way binding C# <-> Rust are: transform, camera
+    // - all the other ones which have a 1 way binding C# -> Rust (eg. particle system component),
+    //   which can be updated only if the simulation is paused, will be updated with ad-hoc methods
+    //   exposed on the FFI layer
+    self.register_foreign_component::<TransformComponent>();
+    self.register_foreign_component::<HighResTransformComponent>();
+    self.register_foreign_component::<CameraComponent>();
 
     // this module
     self.register_component::<TransformComponent>(&[]);
     self.register_component::<HighResTransformComponent>(&[]);
-    let highres_type_id = [TypeId::of::<HighResTransformComponent>()];
+
     self.register_component::<CameraComponent>(&highres_type_id);
     self.register_component::<CursorComponent>(&highres_type_id);
     self.register_component::<MarkersComponent>(&transform_type_id);
-    self.register_component::<PhysicalMeshComponent>(&transform_type_id);
+
     self.register_component::<StaticMeshComponent>(&transform_type_id);
+
     self.register_component::<ImageBillboardComponent>(&transform_type_id);
     self.register_component::<ScreenSpaceBillboardComponent>(&[]);
+    self.register_foreign_component::<ScreenSpaceBillboardComponent>();
     self.register_component::<SunComponent>(&transform_type_id);
     self.register_component::<SkyComponent>(&[]);
     self.register_component::<BackgroundComponent>(&[]);
+
     self.register_component::<GizmoComponent>(&transform_type_id);
+
     self.register_component::<SphereGizmoComponent>(&transform_type_id);
     self.register_component::<GridComponent>(&transform_type_id);
-    self.register_component::<SelectedComponent>(&transform_type_id);
-    self.register_component::<FollowingComponent>(&transform_type_id);
     self.register_component::<HiddenComponent>(&[]);
-    self.register_component::<ForceEmitterComponent>(&transform_type_id);
+
+    // TODO remove
     self.register_component::<BvhDebugComponent>(&transform_type_id);
+
+    // TODO remove or rework
     self.register_component::<MeasurementComponent>(&[]);
-    self.register_component::<ParticleEmitterComponent>(&transform_and_mesh);
-    self.register_component::<particles::ParticleSystemComponent>(&transform_type_id);
+
+    self.register_component::<particles::v2::ParticleSystemComponent>(&transform_type_id);
     self.register_component::<ReferenceFrameComponent>(&[]);
-    self.register_component::<KinematicComponent>(&transform_type_id);
-    self.register_component::<ColliderComponent>(&transform_type_id);
-    self.register_component::<ParticleEmitterCirclesComponent>(&transform_and_mesh);
 
     self.register_component::<CometMarkerComponent>(&transform_type_id);
     self.register_component::<PlanetMarkerComponent>(&transform_type_id);
@@ -1861,7 +1675,6 @@ impl Scene {
     self.register_component::<TransformAnimationComponent>(&highres_type_id);
   }
 
-  /// TODO: Document this item
   pub fn register_component<T: Component>(&self, dependencies: &[TypeId]) {
     let mut meta = self.component_meta.write();
     meta.insert(
@@ -1872,6 +1685,24 @@ impl Scene {
         type_name: core::any::type_name::<T>(),
       },
     );
+  }
+
+  pub fn register_foreign_component<T: ForeignSerializable>(&self) {
+    // Build the type-erasing table
+    let vtable = ForeignVTable {
+      type_id: core::any::TypeId::of::<T>(),
+      get_ref: |any_storage, row| {
+        let storage = any_storage.downcast_ref::<Vec<Option<T>>>()?;
+        let comp = storage.get(row)?.as_ref()?;
+        Some(comp as &dyn ErasedForeignSerializable)
+      },
+      get_mut: |any_storage, row| {
+        let storage = any_storage.downcast_mut::<Vec<Option<T>>>()?;
+        let comp = storage.get_mut(row)?.as_mut()?;
+        Some(comp as &mut dyn ErasedForeignSerializable)
+      },
+    };
+    self.foreign_registry.write().insert(T::COMPONENT_ID, vtable);
   }
 
   /// TODO: Document this item
@@ -2767,7 +2598,6 @@ impl Scene {
     None
   }
 
-  /// TODO: Document this item
   pub fn query1_without<T: Component, U: Component, F>(&self, mut f: F)
   where
     F: FnMut(EntityId, &T),
@@ -2782,6 +2612,30 @@ impl Scene {
         if let Some(components) = comp_storage_lock.as_any().downcast_ref::<Vec<Option<T>>>() {
           for (i, opt_entity) in archetype.entities.iter().enumerate() {
             if let (Some(entity_id), Some(comp)) = (opt_entity, &components[i]) {
+              f(*entity_id, comp);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  pub fn query1_mut_without<T: Component, U: Component, F>(&self, mut f: F)
+  where
+    F: FnMut(EntityId, &mut T),
+  {
+    let type_t = TypeId::of::<T>();
+    let type_u = TypeId::of::<U>();
+    let archetypes = self.archetypes.read();
+
+    for archetype in archetypes.iter() {
+      if archetype.components.contains_key(&type_t) && !archetype.components.contains_key(&type_u) {
+        let mut comp_storage_lock = archetype.components.get(&type_t).unwrap().write();
+        if let Some(components) = comp_storage_lock.as_mut_any().downcast_mut::<Vec<Option<T>>>() {
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity_id), Some(comp)) = (opt_entity, unsafe {
+              components.get_mut(i).unwrap_unchecked()
+            }) {
               f(*entity_id, comp);
             }
           }
@@ -2891,7 +2745,22 @@ impl Scene {
 
   // === Advanced Scene Traversal Logic ===
 
-  /// TODO: Document this item
+  /// Performs an iterative, pre-order Depth-First Search (DFS) traversal of the Scene Hierarchy.
+  ///
+  /// Starting from `start_entity`, this method explores the tree downwards.
+  /// It uses a heap-allocated stack instead of recursion to prevent stack overflows on
+  /// exceptionally deep hierarchies. It also includes cycle detection and a maximum depth limit of
+  /// `128` to prevent infinite loops.
+  ///
+  /// # Arguments
+  ///
+  /// * `start_entity` - The  [`EntityId`] of the root node where traversal begins
+  /// * `accumulator` - A mutable state object passed through the traversal, allowing for data
+  ///   collection of transformation (e.g., calculating global trasnforms)
+  /// * `filter` - A closure evaluated before visiting a node. If it returns `false`, the entity and
+  ///   its entire subtree are skipped.
+  /// * `callback` - A mutable closure executed for each visited entity. If it returns `false`, the
+  ///   traversal skips the entity's children (pruning the branch)
   pub fn traverse_dfs_pre_order<A, F, C>(
     &self,
     start_entity: EntityId,
@@ -2902,11 +2771,56 @@ impl Scene {
     F: Fn(&Scene, EntityId) -> bool,
     C: FnMut(&Scene, EntityId, &mut A) -> bool,
   {
+    // Ensure the starting entity actually exists before traversing
     if !self.entities.read().contains_key(start_entity) {
       return;
     }
-    let mut visited = HashSet::new();
-    self.traverse_recursive(start_entity, accumulator, filter, callback, &mut visited, 0);
+
+    let mut visited = hashbrown::HashSet::with_capacity(64);
+
+    // stack stores tuples of: (EntityId, Depth)
+    let mut stack = alloc::vec::Vec::with_capacity(64);
+    stack.push((start_entity, 0));
+
+    while let Some((current_entity, depth)) = stack.pop() {
+      // enforce the depth limit failsafe
+      if depth > 128 {
+        aethervk_oshal_rlib::log!(
+          "Warning: max depth exceeded in traverse_dfs_pre_order for entity {:?}",
+          current_entity
+        );
+        continue;
+      }
+
+      // Prevent infinite loops from cyclic graphs
+      if !visited.insert(current_entity) {
+        continue;
+      }
+
+      // Apply the filter. If False, skip the entity and its children
+      if !filter(self, current_entity) {
+        continue;
+      }
+
+      // Execute the callback. If false, we skip its children
+      if !callback(self, current_entity, accumulator) {
+        continue;
+      }
+
+      // Fetch childrend and push them to the stack
+      let hierarchy = self.hierarchy.read();
+      if let Some(children) = hierarchy.children.get(&current_entity) {
+        // Collect the children into a Vec so we can reverse them.
+        // Because a stack is Last-In-First-Out (LIFO), pushing them in reverse ensures the first
+        // child is popped and evaluated first. This perfectly preserves the exact left-to-right
+        // semantics
+        for child in children.iter().rev() {
+          stack.push((*child, depth + 1));
+        }
+      }
+      // The `hierarchy` read lock is safely dropped here at the end of the scope. This avoids
+      // holding the lock while invoking the user's closure on the next iteration
+    }
   }
 
   fn traverse_recursive<A, F, C>(
@@ -4569,6 +4483,203 @@ impl Scene {
     self.set_parent(child, new_parent);
 
     Ok(())
+  }
+
+  /// Mutably queries entities that possess `T1`, `T2`, or both.
+  /// - Runs `f1` if the entity has `T1`.
+  /// - Runs `f2` if the entity has `T2`.
+  /// - If the entity has both, `f1` runs first, followed immediately by `f2`.
+  pub fn query1_mut_or<T1: Component, T2: Component, F1, F2>(&self, mut f1: F1, mut f2: F2)
+  where
+    F1: FnMut(EntityId, &mut T1),
+    F2: FnMut(EntityId, &mut T2),
+  {
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+
+    assert_ne!(
+      type_t1, type_t2,
+      "Cannot call query1_mut_or with the same component type for both arguments (would cause a lock deadlock)."
+    );
+
+    let archetypes = self.archetypes.read();
+
+    for archetype in archetypes.iter() {
+      let has_t1 = archetype.components.contains_key(&type_t1);
+      let has_t2 = archetype.components.contains_key(&type_t2);
+
+      match (has_t1, has_t2) {
+        // Archetype contains both components
+        (true, true) => {
+          let mut comp_storage1_lock = archetype.components.get(&type_t1).unwrap().write();
+          let mut comp_storage2_lock = archetype.components.get(&type_t2).unwrap().write();
+
+          let components1 =
+            comp_storage1_lock.as_mut_any().downcast_mut::<Vec<Option<T1>>>().unwrap();
+          let components2 =
+            comp_storage2_lock.as_mut_any().downcast_mut::<Vec<Option<T2>>>().unwrap();
+
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let Some(entity_id) = opt_entity {
+              if let Some(c1) = &mut components1[i] {
+                f1(*entity_id, c1);
+              }
+              if let Some(c2) = &mut components2[i] {
+                f2(*entity_id, c2);
+              }
+            }
+          }
+        }
+        // Archetype contains ONLY T1
+        (true, false) => {
+          let mut comp_storage1_lock = archetype.components.get(&type_t1).unwrap().write();
+          let components1 =
+            comp_storage1_lock.as_mut_any().downcast_mut::<Vec<Option<T1>>>().unwrap();
+
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity_id), Some(c1)) = (opt_entity, &mut components1[i]) {
+              f1(*entity_id, c1);
+            }
+          }
+        }
+        // Archetype contains ONLY T2
+        (false, true) => {
+          let mut comp_storage2_lock = archetype.components.get(&type_t2).unwrap().write();
+          let components2 =
+            comp_storage2_lock.as_mut_any().downcast_mut::<Vec<Option<T2>>>().unwrap();
+
+          for (i, opt_entity) in archetype.entities.iter().enumerate() {
+            if let (Some(entity_id), Some(c2)) = (opt_entity, &mut components2[i]) {
+              f2(*entity_id, c2);
+            }
+          }
+        }
+        // Archetype contains neither, trivially skip
+        (false, false) => {}
+      }
+    }
+  }
+
+  /// Mutably accesses `T1`, `T2`, or both for a specific entity.
+  /// - Runs `f1` and returns its result in the first tuple slot if the entity has `T1`.
+  /// - Runs `f2` and returns its result in the second tuple slot if the entity has `T2`.
+  /// - If the entity has both, both closures run (f1 then f2) and both results are returned.
+  pub fn with_component_mut_or<T1: Component, T2: Component, F1, F2, R1, R2>(
+    &self,
+    entity_id: EntityId,
+    f1: F1,
+    f2: F2,
+  ) -> (Option<R1>, Option<R2>)
+  where
+    F1: FnOnce(&mut T1) -> R1,
+    F2: FnOnce(&mut T2) -> R2,
+  {
+    let type_t1 = TypeId::of::<T1>();
+    let type_t2 = TypeId::of::<T2>();
+
+    assert_ne!(
+      type_t1, type_t2,
+      "Cannot call with_component_mut_or with the same component type for both arguments."
+    );
+
+    let archetypes = self.archetypes.read();
+    let entities = self.entities.read();
+
+    let location = match entities.get(entity_id) {
+      Some(loc) => *loc,
+      None => return (None, None),
+    };
+
+    let archetype = &archetypes[location.archetype_index];
+    let has_t1 = archetype.components.contains_key(&type_t1);
+    let has_t2 = archetype.components.contains_key(&type_t2);
+
+    match (has_t1, has_t2) {
+      (true, true) => {
+        let mut comp_storage1_lock = archetype.components.get(&type_t1).unwrap().write();
+        let mut comp_storage2_lock = archetype.components.get(&type_t2).unwrap().write();
+
+        let components1 =
+          comp_storage1_lock.as_mut_any().downcast_mut::<Vec<Option<T1>>>().unwrap();
+        let components2 =
+          comp_storage2_lock.as_mut_any().downcast_mut::<Vec<Option<T2>>>().unwrap();
+
+        let r1 = components1[location.row_index].as_mut().map(f1);
+        let r2 = components2[location.row_index].as_mut().map(f2);
+
+        (r1, r2)
+      }
+      (true, false) => {
+        let mut comp_storage1_lock = archetype.components.get(&type_t1).unwrap().write();
+        let components1 =
+          comp_storage1_lock.as_mut_any().downcast_mut::<Vec<Option<T1>>>().unwrap();
+
+        let r1 = components1[location.row_index].as_mut().map(f1);
+        (r1, None)
+      }
+      (false, true) => {
+        let mut comp_storage2_lock = archetype.components.get(&type_t2).unwrap().write();
+        let components2 =
+          comp_storage2_lock.as_mut_any().downcast_mut::<Vec<Option<T2>>>().unwrap();
+
+        let r2 = components2[location.row_index].as_mut().map(f2);
+        (None, r2)
+      }
+      (false, false) => (None, None),
+    }
+  }
+
+  /// Dynamically accesses a component by its foreign C# ID, yielding an object-safe trait
+  /// allowing for raw memory streaming without massive match blocks.
+  pub fn with_component_by_id<F, R>(
+    &self,
+    entity_id: EntityId,
+    component_id: u64,
+    f: F,
+  ) -> Option<R>
+  where
+    F: FnOnce(&dyn ErasedForeignSerializable) -> R,
+  {
+    let registry = self.foreign_registry.read();
+    let vtable = registry.get(&component_id)?;
+
+    let archetypes = self.archetypes.read();
+    let entities = self.entities.read();
+    let location = entities.get(entity_id)?;
+    let archetype = &archetypes[location.archetype_index];
+
+    let comp_storage_lock = archetype.components.get(&vtable.type_id)?.read();
+    let any_storage = comp_storage_lock.as_any();
+
+    let erased_ref = (vtable.get_ref)(any_storage, location.row_index)?;
+
+    Some(f(erased_ref))
+  }
+
+  /// Mutably dynamically accesses a component by its foreign C# ID.
+  pub fn with_component_mut_by_id<F, R>(
+    &self,
+    entity_id: EntityId,
+    component_id: u64,
+    f: F,
+  ) -> Option<R>
+  where
+    F: FnOnce(&mut dyn ErasedForeignSerializable) -> R,
+  {
+    let registry = self.foreign_registry.read();
+    let vtable = registry.get(&component_id)?;
+
+    let archetypes = self.archetypes.read();
+    let entities = self.entities.read();
+    let location = entities.get(entity_id)?;
+    let archetype = &archetypes[location.archetype_index];
+
+    let mut comp_storage_lock = archetype.components.get(&vtable.type_id)?.write();
+    let any_storage = comp_storage_lock.as_mut_any();
+
+    let erased_mut = (vtable.get_mut)(any_storage, location.row_index)?;
+
+    Some(f(erased_mut))
   }
 }
 

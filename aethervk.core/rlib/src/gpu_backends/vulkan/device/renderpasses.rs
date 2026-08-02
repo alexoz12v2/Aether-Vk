@@ -3,8 +3,9 @@
 #[cfg(test)]
 use crate::gpu_backends::vulkan::utils::create_test_attachment;
 use crate::{
-  gpu::{PresentationEngineHandle, vulkan::device::swapchain},
+  gpu::PresentationEngineHandle,
   gpu_backends::vulkan::{
+    device::swapchain,
     device::{DeviceResource, resources::DiscardPool, swapchain::PresentationState},
     utils::{NonZeroHandle, create_transient_attachment},
   },
@@ -65,7 +66,6 @@ struct CompositeResources {
   pipeline_key: crate::gpu::PipelineKey,
 }
 
-/// TODO: Document this item
 #[derive(Clone)]
 pub(super) enum RenderPassSpecification {
   ColorDepthSingleSubpass {
@@ -93,7 +93,6 @@ pub(super) enum RenderPassSpecification {
 }
 
 impl RenderPassSpecification {
-  /// TODO: Document this item
   pub fn single_pass(presentation_engine: &PresentationState, d: vk::Format) -> Self {
     let final_layout = match presentation_engine {
       PresentationState::Windowed(_) => vk::ImageLayout::PRESENT_SRC_KHR,
@@ -197,7 +196,6 @@ impl RenderPassSpecification {
   }
 }
 
-/// TODO: Document this item
 pub(super) struct RenderPasses {
   render_passes: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
     hashbrown::HashMap<PresentationEngineHandle, RenderPassBundle>,
@@ -206,15 +204,14 @@ pub(super) struct RenderPasses {
     hashbrown::HashMap<(vk::Format, vk::Format), NonZeroHandle<vk::RenderPass>>,
   >,
   render_pass_device: ash::khr::create_renderpass2::Device,
-  // this is bad but I've got no other clue
-  allocator: vk_mem::ffi::VmaAllocator,
+  allocator: vk_mem::AllocatorView,
 }
 
 impl RenderPassBundle {
   fn discard(
     &mut self,
     discard_pool: &DiscardPool,
-    allocator: vk_mem::ffi::VmaAllocator,
+    allocator: vk_mem::AllocatorView,
     timeline: u64,
   ) {
     for attachment in self.attachments.iter() {
@@ -256,7 +253,7 @@ impl RenderPassBundle {
     }
   }
 
-  fn clean(&mut self, device: &ash::Device, allocator: vk_mem::ffi::VmaAllocator) {
+  fn clean(&mut self, device: &super::LogicalDevice, allocator: vk_mem::AllocatorView) {
     unsafe { device.destroy_render_pass(self.render_pass.get(), None) };
 
     for framebuffer in self.framebuffer.iter() {
@@ -264,12 +261,12 @@ impl RenderPassBundle {
     }
     self.framebuffer.clear();
 
-    for attachment in self.attachments.iter() {
+    for attachment in self.attachments.iter_mut() {
       match attachment {
         RenderPassAttachment::DepthStencilAttachment(image, allocation, view)
         | RenderPassAttachment::ColorAttachment(image, allocation, view) => {
           unsafe { device.destroy_image_view(view.get(), None) };
-          unsafe { vk_mem::ffi::vmaDestroyImage(allocator, image.get(), allocation.get_raw()) };
+          unsafe { allocator.destroy_image(image.get(), allocation) };
         }
         RenderPassAttachment::SwapchainColorImage => {}
       }
@@ -315,10 +312,9 @@ unsafe impl Send for RenderPasses {}
 /// Thin abstraction over render pass creation and management.
 /// Note: It Implicitly requires to not outlive the VmaAllocator
 impl RenderPasses {
-  /// TODO: Document this item
   pub fn new(
     instance: &ash::Instance,
-    device: &ash::Device,
+    device: &super::LogicalDevice,
     allocator: vk_mem::AllocatorView,
   ) -> Self {
     Self {
@@ -329,7 +325,7 @@ impl RenderPasses {
         hashbrown::HashMap::with_capacity(8),
       ),
       render_pass_device: ash::khr::create_renderpass2::Device::new(instance, device),
-      allocator: allocator.get_raw(),
+      allocator,
     }
   }
 
@@ -386,7 +382,6 @@ impl RenderPasses {
     Ok(count)
   }
 
-  /// TODO: Document this item
   #[named]
   pub fn get_or_create_render_pass(
     &self,
@@ -438,7 +433,6 @@ impl RenderPasses {
             &self.render_pass_device,
             device,
             allocator,
-            self.allocator,
             rollback,
             color_format,
             depth_stencil_format,
@@ -452,7 +446,6 @@ impl RenderPasses {
             &self.render_pass_device,
             device,
             allocator,
-            self.allocator,
             rollback,
             color_format,
             depth_stencil_format,
@@ -757,7 +750,6 @@ impl RenderPasses {
     render_pass_device: &ash::khr::create_renderpass2::Device,
     device: &crate::gpu_backends::vulkan::device::LogicalDevice,
     allocator: vk_mem::AllocatorView,
-    vma: vk_mem::ffi::VmaAllocator,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
     color_format: vk::Format,
     depth_stencil_format: vk::Format,
@@ -802,7 +794,7 @@ impl RenderPasses {
       vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
     };
 
-    let (image, alloc) = {
+    let (image, mut alloc) = {
       #[cfg(test)]
       {
         create_test_attachment(
@@ -826,7 +818,7 @@ impl RenderPasses {
     };
 
     let img_h = image.get();
-    rollback.defer(move |_| unsafe { vk_mem::ffi::vmaDestroyImage(vma, img_h, alloc.get_raw()) });
+    rollback.defer(move |_| unsafe { allocator.destroy_image(img_h, &mut alloc) });
 
     let view_create_info = vk::ImageViewCreateInfo::default()
       .image(image.get())
@@ -898,7 +890,6 @@ impl RenderPasses {
     render_pass_device: &ash::khr::create_renderpass2::Device,
     device: &crate::gpu_backends::vulkan::device::LogicalDevice,
     allocator: vk_mem::AllocatorView,
-    vma: vk_mem::ffi::VmaAllocator,
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
     color_format: vk::Format,
     depth_stencil_format: vk::Format,
@@ -961,9 +952,8 @@ impl RenderPasses {
 
     {
       let img_h = sc_depth_image.get();
-      let alloc_copy = sc_depth_alloc;
-      rollback
-        .defer(move |_| unsafe { vk_mem::ffi::vmaDestroyImage(vma, img_h, alloc_copy.get_raw()) });
+      let mut alloc_copy = sc_depth_alloc;
+      rollback.defer(move |_| unsafe { allocator.destroy_image(img_h, &mut alloc_copy) });
     }
 
     let sc_depth_view =
@@ -1017,8 +1007,8 @@ impl RenderPasses {
     };
     {
       let ih = macro_color_img.get();
-      let ac = macro_color_alloc;
-      rollback.defer(move |_| unsafe { vk_mem::ffi::vmaDestroyImage(vma, ih, ac.get_raw()) });
+      let mut ac = macro_color_alloc;
+      rollback.defer(move |_| unsafe { allocator.destroy_image(ih, &mut ac) });
     }
     let macro_color_view =
       Self::create_color_view(device, macro_color_img, vk::Format::R8G8B8A8_UNORM)?;
@@ -1059,8 +1049,8 @@ impl RenderPasses {
     };
     {
       let ih = macro_depth_img.get();
-      let ac = macro_depth_alloc;
-      rollback.defer(move |_| unsafe { vk_mem::ffi::vmaDestroyImage(vma, ih, ac.get_raw()) });
+      let mut ac = macro_depth_alloc;
+      rollback.defer(move |_| unsafe { allocator.destroy_image(ih, &mut ac) });
     }
     let macro_depth_view =
       Self::create_depth_stencil_view(device, macro_depth_img, depth_stencil_format)?;
@@ -1101,8 +1091,8 @@ impl RenderPasses {
     };
     {
       let ih = micro_color_img.get();
-      let ac = micro_color_alloc;
-      rollback.defer(move |_| unsafe { vk_mem::ffi::vmaDestroyImage(vma, ih, ac.get_raw()) });
+      let mut ac = micro_color_alloc;
+      rollback.defer(move |_| unsafe { allocator.destroy_image(ih, &mut ac) });
     }
     let micro_color_view =
       Self::create_color_view(device, micro_color_img, vk::Format::R8G8B8A8_UNORM)?;
@@ -1143,8 +1133,8 @@ impl RenderPasses {
     };
     {
       let ih = micro_depth_img.get();
-      let ac = micro_depth_alloc;
-      rollback.defer(move |_| unsafe { vk_mem::ffi::vmaDestroyImage(vma, ih, ac.get_raw()) });
+      let mut ac = micro_depth_alloc;
+      rollback.defer(move |_| unsafe { allocator.destroy_image(ih, &mut ac) });
     }
     let micro_depth_view =
       Self::create_depth_stencil_view(device, micro_depth_img, depth_stencil_format)?;
@@ -1788,7 +1778,6 @@ impl RenderPasses {
   }
 
   #[cfg(test)]
-  /// TODO: Document this item
   pub(crate) fn get_test_depth_stencil_image(
     &self,
     pe_handle: PresentationEngineHandle,
