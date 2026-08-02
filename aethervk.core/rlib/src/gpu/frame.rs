@@ -3,12 +3,11 @@
 use crate::{
   gpu,
   gpu::{
-    GpuResourceHandle, GridPushConstants, PipelineKey, PresentationEngineHandle, PushConstants,
-    RenderDevice, RenderDeviceExt, SkyPushConstants, SunPushConstants, TextureFlags, UiBatchCall,
+    GpuResourceHandle, GridPushConstants, PipelineKey, PresentationEngineHandle, RenderDevice,
+    RenderDeviceExt, SkyPushConstants, SunPushConstants, TextureFlags, UiBatchCall,
   },
-  math::collision::linear_bvh::LinearBound,
-  scene::{CameraComponent, EntityId, RenderableDataRef, TransformComponent},
-  types::{GpuError, GpuResult},
+  scene::{CameraComponent, EntityId, TransformComponent},
+  types::GpuResult,
 };
 use aethervk_oshal_rlib::{
   math::{
@@ -24,10 +23,8 @@ use aethervk_oshal_rlib::{
 };
 use alloc::vec::Vec;
 use function_name::named;
-// TODO move render_frame here
 
 #[derive(Clone, Copy, PartialEq)]
-/// TODO: Document this item
 pub struct ResourceUploadResult {
   /// The pipeline to use for this draw call.
   pub pipeline: PipelineKey,
@@ -60,14 +57,9 @@ pub struct DrawCall {
   pub outline_color: [f32; 4],
   pub use_new_path: bool,
   pub paint_display_mode: u32,
-  pub sphere_center: [f32; 3],
-  pub sphere_radius: f32,
-  pub grid_color: [f32; 3],
-  pub grid_density: f32,
 }
 
 impl DrawCall {
-  /// TODO: Document this item
   pub fn from_handles_and_matrix(
     result: ResourceUploadResult,
     index_count: u32,
@@ -77,10 +69,6 @@ impl DrawCall {
     emissive_color: [f32; 3],
     use_new_path: bool,
     paint_display_mode: u32,
-    sphere_center: [f32; 3],
-    sphere_radius: f32,
-    grid_color: [f32; 3],
-    grid_density: f32,
   ) -> Self {
     Self {
       pipeline: result.pipeline,
@@ -95,10 +83,6 @@ impl DrawCall {
       outline_color: outline.unwrap_or([0.0; 4]),
       use_new_path,
       paint_display_mode,
-      sphere_center,
-      sphere_radius,
-      grid_color,
-      grid_density,
     }
   }
 }
@@ -116,7 +100,6 @@ pub struct CursorDrawCall {
 }
 
 impl CursorDrawCall {
-  /// TODO: Document this item
   pub fn from_result_and_matrix(
     result: ResourceUploadResult,
     vertex_count: u32,
@@ -156,7 +139,7 @@ pub struct MarkerDrawCall {
 
 impl MarkerDrawCall {
   const VERTEX_COUNT_VK: u32 = 3; // single full-screen triangle u2014 no diagonal seam
-  /// TODO: Document this item
+
   pub fn from_values(
     pipeline: PipelineKey,
     model_matrix: Mat4x4f32,
@@ -175,7 +158,6 @@ impl MarkerDrawCall {
   }
 }
 
-/// TODO: Document this item
 pub struct MeasurementDrawCall {
   pub pipeline: PipelineKey,
   pub vertex_count: u32,
@@ -188,7 +170,6 @@ pub struct MeasurementDrawCall {
 impl MeasurementDrawCall {
   const VERTEX_COUNT_VK: u32 = 6;
 
-  /// TODO: Document this item
   pub fn from_data_and_pipeline(
     p1: Vec3f32,
     p2: Vec3f32,
@@ -207,7 +188,6 @@ impl MeasurementDrawCall {
   }
 }
 
-/// TODO: Document this item
 pub struct GizmoDrawCall {
   pub pipeline: PipelineKey,
   pub vertex_count: u32,
@@ -217,7 +197,7 @@ pub struct GizmoDrawCall {
 
 impl GizmoDrawCall {
   const VERTEX_COUNT_VK: u32 = 6;
-  /// TODO: Document this item
+
   pub fn from_values(pipeline: PipelineKey, scale: f32, buffer_index: u32) -> Self {
     Self {
       pipeline,
@@ -228,7 +208,6 @@ impl GizmoDrawCall {
   }
 }
 
-/// TODO: Document this item
 pub struct BillboardDrawCall {
   pub pipeline: PipelineKey,
   pub vertex_count: u32,
@@ -239,7 +218,7 @@ pub struct BillboardDrawCall {
 
 impl BillboardDrawCall {
   const VERTEX_COUNT_VK: u32 = 4; // four vertices for triangle strip
-  /// TODO: Document this item
+
   pub fn from_data(
     pipeline: PipelineKey,
     model_matrix: Mat4x4f32,
@@ -256,9 +235,7 @@ impl BillboardDrawCall {
   }
 }
 
-/// TODO: Document this item
 pub struct SunDrawCall {
-  // TODO: remove. This is needed because the RenderDevice maps entity id to pipeline layout and descriptor set.
   pub entity: EntityId,
   pub pipeline: PipelineKey,
   pub model_matrix: Mat4x4f32,
@@ -272,14 +249,13 @@ impl SunDrawCall {
   const VERTEX_COUNT_TRIANGLE_STRIP_VK: u32 = 14;
 
   /// Result is meant to be logged and converted to a None. Shouldn't stop rendering
-  /// TODO: remove entity
   pub fn from_model_and_camera(
     model: Mat4x4f32,
     c: &CameraRenderData,
     pipeline_key: PipelineKey,
     entity: EntityId,
     radius: f32,
-  ) -> GpuResult<Self> {
+  ) -> Self {
     let model_inv = model.inverse().unwrap_or_else(|| {
       use aethervk_oshal_rlib::math::vector::vec4::Vec4f32;
       let scale_sq =
@@ -319,23 +295,21 @@ impl SunDrawCall {
     });
 
     let local_camera_pos = Vec3f32(model_inv.mul_vector(c.pos.to_point()));
-    Ok(Self {
+    Self {
       entity,
       pipeline: pipeline_key,
       model_matrix: model,
       local_camera_pos,
       vertex_count: Self::VERTEX_COUNT_TRIANGLE_STRIP_VK,
       radius,
-    })
+    }
   }
 
-  /// TODO: Document this item
   pub fn sun_pos(&self) -> Vec3f32 {
     Vec3f32(self.model_matrix.w)
   }
 }
 
-/// TODO: Document this item
 pub struct SkyDrawCall {
   pub sky_view_proj: Mat4x4f32,
   pub pipeline: PipelineKey,
@@ -346,7 +320,6 @@ pub struct SkyDrawCall {
 impl SkyDrawCall {
   const VERTEX_COUNT_VK: u32 = 3;
 
-  /// TODO: Document this item
   #[named]
   pub fn from_camera(camera_data: &CameraRenderData, pipeline_key: PipelineKey) -> GpuResult<Self> {
     let sky_view_proj = {
@@ -366,11 +339,10 @@ impl SkyDrawCall {
   }
 }
 
-/// TODO: Document this item
 pub struct GridDrawCall {
   pub pipeline: PipelineKey,
   pub density: f32,
-  pub grid_size: f32, // TODO main lines size
+  pub grid_size: f32,
   pub grid_color: [f32; 3],
   pub vertex_count: u32,
 }
@@ -389,88 +361,7 @@ impl GridDrawCall {
   }
 }
 
-/// Model is not stored here cause it's shared with its physical mesh
-pub struct BvhDrawCall {
-  pub model_matrix: Mat4x4f32,
-  pub pipeline: PipelineKey,
-  pub vertex_count: u32, // 24
-  /// object space axes
-  pub axes: [[f32; 3]; 3],
-  /// object space center
-  pub center: Vec3f32,
-  /// half lengths along each axis
-  pub extents: Vec3f32,
-}
-
-impl BvhDrawCall {
-  const VERTEX_COUNT_VK: u32 = 24;
-
-  /// TODO: Document this item
-  pub fn new(bound: &LinearBound<f32>, pipeline_key: PipelineKey, model_matrix: Mat4x4f32) -> Self {
-    let (center, extents, ax, ay, az) = match bound {
-      LinearBound::AABB(aabb) => {
-        let center = aabb.center();
-        let he = aabb.half_extents();
-        (
-          center,
-          he,
-          [1.0, 0.0, 0.0],
-          [0.0, 1.0, 0.0],
-          [0.0, 0.0, 1.0],
-        )
-      }
-      LinearBound::OBB(obb) => {
-        let center: Vec3f32 = obb.center();
-        let he: Vec3f32 = obb.half_extents();
-        let axes: [Vec3f32; 3] = obb.axes();
-        (
-          center,
-          he,
-          [axes[0].x(), axes[0].y(), axes[0].z()],
-          [axes[1].x(), axes[1].y(), axes[1].z()],
-          [axes[2].x(), axes[2].y(), axes[2].z()],
-        )
-      }
-    };
-    Self {
-      model_matrix,
-      pipeline: pipeline_key,
-      vertex_count: Self::VERTEX_COUNT_VK,
-      axes: [ax, ay, az],
-      center,
-      extents,
-    }
-  }
-
-  /// Returns the MVP matrix and per-box data for BVH debug rendering.
-  /// The box data should be uploaded via BDA; only the MVP stays in push constants.
-  pub fn to_push_data(
-    &self,
-    camera_data: &CameraRenderData,
-  ) -> Option<([f32; 16], super::BvhBoxData)> {
-    let center_arr: [f32; 3] = self.center.into();
-    let extents_arr: [f32; 3] = self.extents.into();
-    let ax = self.axes[0];
-    let ay = self.axes[1];
-    let az = self.axes[2];
-    let model = &self.model_matrix;
-    let view_proj = &camera_data.view_proj;
-    let mvp_mat = *view_proj * *model;
-    Some((
-      mvp_mat.into(),
-      super::BvhBoxData {
-        center_type: [center_arr[0], center_arr[1], center_arr[2], 1.0],
-        extents: [extents_arr[0], extents_arr[1], extents_arr[2], 0.0],
-        axes_x: [ax[0], ax[1], ax[2], 0.0],
-        axes_y: [ay[0], ay[1], ay[2], 0.0],
-        axes_z: [az[0], az[1], az[2], 0.0],
-      },
-    ))
-  }
-}
-
 #[derive(Debug, Clone)]
-/// TODO: Document this item
 pub struct CameraRenderData {
   pub pos: Vec3f32,
   pub absolute_pos: Vec3f32,
@@ -595,27 +486,7 @@ impl CameraRenderData {
   }
 }
 
-/// TODO: Document this item
-pub struct ParticleDrawCall {
-  pub pipeline: PipelineKey,
-  pub system_particle_offset: u32,
-  pub system_indirect_offset: u32,
-  pub config: crate::scene::particles::ParticleEmitterComponent,
-  pub particles: alloc::sync::Weak<parking_lot::RwLock<Vec<crate::scene::particles::ParticleData>>>,
-}
-
-/// TODO: Document this item
-pub struct Particle2DrawCall {
-  pub pipeline: PipelineKey,
-  pub system_particle_offset: u32,
-  pub system_indirect_offset: u32,
-  pub particle_radius: f32,
-  pub color: [f32; 4],
-  pub particles: alloc::sync::Weak<parking_lot::RwLock<Vec<crate::scene::particles::ParticleData>>>,
-}
-
 #[derive(Clone)]
-/// TODO: Document this item
 pub struct TrajectoryBatchCall {
   pub pipeline: PipelineKey,
   pub total_vertices: u32, // (MAX_STEPS + 1) * 2
@@ -625,15 +496,6 @@ pub struct TrajectoryBatchCall {
 }
 
 #[derive(Clone)]
-/// TODO: Document this item
-pub struct Bvhwire2BatchCall {
-  pub pipeline: PipelineKey,
-  pub total_boxes: u32,
-  pub data_ptr: u64,
-}
-
-#[derive(Clone)]
-/// TODO: Document this item
 pub struct SphereGizmoBatchCall {
   pub pipeline: PipelineKey,
   pub total_gizmos: u32,
@@ -641,13 +503,18 @@ pub struct SphereGizmoBatchCall {
   pub data_ptr: u64,
 }
 
-pub struct TextDrawCall {
-  pub text: alloc::string::String,
-  pub font_atlas: alloc::sync::Arc<crate::scene::text::FontAtlas>,
-  pub font_id: (u64, u32),
-  pub start_cursor_position: [f32; 2],
-  pub desired_points: f32,
-  pub color: [f32; 4],
+#[derive(Clone)]
+pub struct DustDrawCall {
+  pub entity_id: EntityId,
+  pub rte_mat: Mat4x4f32,
+  pub stream_color: [f32; 4],
+  pub chunk_offset: u32,
+  pub current_time: u32,
+  pub max_ttl: f32, // still 300ths, but float so vertex shader doesn't need to perform conversion
+  pub macro_scale: f32,
+  pub micro_radius: f32,
+  pub num_spots: u32,
+  pub dispersion_rate: f32,
 }
 
 pub struct RenderLayer {
@@ -663,12 +530,7 @@ pub struct RenderLayer {
   pub billboard_calls: Vec<BillboardDrawCall>,
   pub marker_calls: Vec<MarkerDrawCall>,
   pub measurement_calls: Vec<MeasurementDrawCall>,
-  pub bvh_draw_calls: Vec<BvhDrawCall>,
-  pub bvhwire2_data: Vec<crate::gpu::Bvhwire2DataGpu>,
-  pub bvhwire2_batch_call: Option<Bvhwire2BatchCall>,
   pub gizmo_calls: Vec<GizmoDrawCall>,
-  pub particle_calls: Vec<ParticleDrawCall>,
-  pub particle2_calls: Vec<Particle2DrawCall>,
   pub sphere_gizmo_batch_call: Option<SphereGizmoBatchCall>,
   pub trajectory_call: Option<TrajectoryBatchCall>,
   pub cursor_call: Option<CursorDrawCall>,
@@ -676,245 +538,9 @@ pub struct RenderLayer {
   pub sky_call: Option<SkyDrawCall>,
   pub grid_call: Option<GridDrawCall>,
   pub background_call: Option<BackgroundDrawCall>,
+  pub dust_calls: Vec<DustDrawCall>,
 }
 
-impl RenderLayer {
-  /// Registers a renderable entity to be drawn in this layer.
-  #[named]
-  pub fn add_renderable(
-    &mut self,
-    cmd_buffer: gpu::CommandBufferHandle,
-    device: &dyn RenderDevice,
-    _entity_id: EntityId,
-    model_matrix: Mat4x4f32,
-    renderable: RenderableDataRef,
-    presentation_engine_handle: PresentationEngineHandle,
-    debug_name: &str,
-    draw_outline: bool,
-    outline_color: [f32; 4],
-  ) -> GpuResult<()> {
-    match renderable {
-      RenderableDataRef::ImageBillboard(component) => {
-        let res: ResourceUploadResult =
-          match device.get_billboard_resources(presentation_engine_handle) {
-            Ok(r) => r,
-            Err(_) => device.create_billboard_resources(cmd_buffer, presentation_engine_handle)?,
-          };
-        self.billboard_calls.push(BillboardDrawCall {
-          pipeline: res.pipeline,
-          vertex_count: 4,
-          model_matrix,
-          texture_id: component.texture_id,
-          billboard_type: component.billboard_type,
-        });
-      }
-      RenderableDataRef::PhysicalMesh(component) => {
-        let asset_hash = component.mesh.id;
-        let res: ResourceUploadResult = if component.use_new_path {
-          match device.get_physical_mesh2_resources(asset_hash, presentation_engine_handle) {
-            Ok(r) => r,
-            Err(_) => device.create_physical_mesh2_resources(
-              cmd_buffer,
-              asset_hash,
-              &component,
-              presentation_engine_handle,
-              debug_name,
-            )?,
-          }
-        } else {
-          match device.get_physical_mesh_resources(asset_hash, presentation_engine_handle) {
-            Ok(r) => r,
-            Err(_) => device.create_physical_mesh_resources(
-              cmd_buffer,
-              asset_hash,
-              &component,
-              presentation_engine_handle,
-              debug_name,
-            )?,
-          }
-        };
-        let index_count = component.mesh.indices.len() as u32;
-        let dc = DrawCall::from_handles_and_matrix(
-          res,
-          index_count,
-          if draw_outline {
-            Some(outline_color)
-          } else {
-            None
-          },
-          model_matrix,
-          component.emissive_intensity,
-          component.emissive_color,
-          component.use_new_path,
-          component.paint_display_mode,
-          component.sphere_center,
-          component.sphere_radius,
-          component.grid_color,
-          component.grid_density,
-        );
-        self.draw_calls.push(dc);
-      }
-      RenderableDataRef::Cursor(_) => {
-        if self.cursor_call.is_some() {
-          return Err(crate::gpu_err!("cursor call already present"));
-        }
-        let res: ResourceUploadResult =
-          match device.get_cursor_resources(presentation_engine_handle) {
-            Ok(r) => r,
-            Err(_) => device.create_cursor_resources(cmd_buffer, presentation_engine_handle)?,
-          };
-        self.cursor_call = Some(CursorDrawCall::from_result_and_matrix(
-          res,
-          4,
-          model_matrix,
-          0.05,
-          1e-5,   // default macro near
-          1000.0, // default macro far
-          [0.0, 0.0, 0.0],
-        ));
-      }
-      RenderableDataRef::Markers(component) => {
-        let res: ResourceUploadResult =
-          match device.get_marker_resources(presentation_engine_handle) {
-            Ok(r) => r,
-            Err(_) => device.create_marker_resources(cmd_buffer, presentation_engine_handle)?,
-          };
-        for marker in &component.markers {
-          self.marker_calls.push(MarkerDrawCall {
-            pipeline: res.pipeline,
-            vertex_count: 4,
-            model_matrix,
-            local_pos: marker.local_pos,
-            size: marker.size,
-            color: marker.color,
-          });
-        }
-      }
-      RenderableDataRef::Measurement(component) => {
-        let res: ResourceUploadResult = match device
-          .get_measurement_resources(presentation_engine_handle)
-        {
-          Ok(r) => r,
-          Err(_) => device.create_measurement_resources(cmd_buffer, presentation_engine_handle)?,
-        };
-        self.measurement_calls.push(MeasurementDrawCall {
-          pipeline: res.pipeline,
-          vertex_count: 6,
-          p1: [component.pos1.x(), component.pos1.y(), component.pos1.z()],
-          p2: [component.pos2.x(), component.pos2.y(), component.pos2.z()],
-          points: 12.0,
-          significant_digits: 2, // fallback
-        });
-      }
-      RenderableDataRef::ParticleSystem(component, config) => {
-        let count = component.particles.read().len() as u32;
-        if count == 0 {
-          return Ok(());
-        }
-        if config.use_particle2 {
-          let particle_pipeline = device.get_particle2_pipeline_key(presentation_engine_handle)?;
-          self.particle2_calls.push(Particle2DrawCall {
-            pipeline: particle_pipeline,
-            system_particle_offset: 0,
-            system_indirect_offset: 0,
-            particle_radius: config.particle_radius,
-            color: config.color,
-            particles: alloc::sync::Arc::downgrade(&component.particles),
-          });
-        } else {
-          let particle_pipeline = device.get_particle_pipeline_key(presentation_engine_handle)?;
-          self.particle_calls.push(ParticleDrawCall {
-            pipeline: particle_pipeline,
-            system_particle_offset: 0,
-            system_indirect_offset: 0,
-            config: config.clone(),
-            particles: alloc::sync::Arc::downgrade(&component.particles),
-          });
-        }
-      }
-      RenderableDataRef::Gizmo(_) => {} // Handled elsewhere
-      RenderableDataRef::BvhWireframe(dbg_comp, nodes) => {
-        if dbg_comp.use_new_path {
-          let global_model = model_matrix;
-          for node in nodes {
-            let (center, extents, ax, ay, az, type_val) = match node {
-              LinearBound::AABB(aabb) => {
-                let local_center: Vec3f32 = aabb.center();
-                let global_center = global_model.mul_vector(Vec4f32::from_components(
-                  local_center.x(),
-                  local_center.y(),
-                  local_center.z(),
-                  1.0,
-                ));
-                let he: Vec3f32 = aabb.half_extents();
-
-                let cx = global_center.x();
-                let cy = global_center.y();
-                let cz = global_center.z();
-
-                let world_ax = global_model.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-                let world_ay = global_model.rotate_vector(Vec3f32::from_components(0.0, 1.0, 0.0));
-                let world_az = global_model.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
-
-                (
-                  [cx, cy, cz],
-                  [he.x(), he.y(), he.z()],
-                  [world_ax.x(), world_ax.y(), world_ax.z()],
-                  [world_ay.x(), world_ay.y(), world_ay.z()],
-                  [world_az.x(), world_az.y(), world_az.z()],
-                  1.0,
-                )
-              }
-              LinearBound::OBB(obb) => {
-                let local_center: Vec3f32 = obb.center();
-                let global_center = global_model.mul_vector(Vec4f32::from_components(
-                  local_center.x(),
-                  local_center.y(),
-                  local_center.z(),
-                  1.0,
-                ));
-                let he: Vec3f32 = obb.half_extents();
-                let axes: [Vec3f32; 3] = obb.axes();
-
-                let world_ax = global_model.rotate_vector(axes[0]);
-                let world_ay = global_model.rotate_vector(axes[1]);
-                let world_az = global_model.rotate_vector(axes[2]);
-
-                (
-                  [global_center.x(), global_center.y(), global_center.z()],
-                  [he.x(), he.y(), he.z()],
-                  [world_ax.x(), world_ax.y(), world_ax.z()],
-                  [world_ay.x(), world_ay.y(), world_ay.z()],
-                  [world_az.x(), world_az.y(), world_az.z()],
-                  1.0,
-                )
-              }
-            };
-            self.bvhwire2_data.push(crate::gpu::Bvhwire2DataGpu {
-              center_type: [center[0], center[1], center[2], type_val],
-              extents: [extents[0], extents[1], extents[2], 0.0],
-              axes_x: [ax[0], ax[1], ax[2], 0.0],
-              axes_y: [ay[0], ay[1], ay[2], 0.0],
-              axes_z: [az[0], az[1], az[2], 0.0],
-            });
-          }
-        } else {
-          let pipeline_key = device.get_bvh_pipeline_kay(presentation_engine_handle)?;
-          for node in nodes {
-            match node {
-              LinearBound::AABB(_) | LinearBound::OBB(_) => {
-                self.bvh_draw_calls.push(BvhDrawCall::new(node, pipeline_key, model_matrix));
-              }
-            }
-          }
-        }
-      }
-    }
-    Ok(())
-  }
-}
-
-/// TODO: Document this item
 pub struct RenderScene {
   pub unscaled_time_us: timeus_t,
   pub unscaled_time_delta_us: timeus_t,
@@ -922,7 +548,6 @@ pub struct RenderScene {
   pub window_extent: [u32; 2],
 
   pub depth_layers: Vec<RenderLayer>,
-  pub text_calls: Vec<TextDrawCall>,
 
   pub cursor_call: Option<CursorDrawCall>,
   pub ui_call: Option<UiBatchCall>,
@@ -931,7 +556,7 @@ pub struct RenderScene {
 
 impl RenderScene {
   const START_VEC_CAPACITY: usize = 32;
-  /// TODO: Document this item
+
   pub fn new(
     camera: (TransformComponent, CameraComponent),
     unscaled_time_us: timeus_t,
@@ -943,57 +568,14 @@ impl RenderScene {
       unscaled_time_us,
       unscaled_time_delta_us,
       depth_layers: Vec::with_capacity(Self::START_VEC_CAPACITY),
-      text_calls: Vec::with_capacity(Self::START_VEC_CAPACITY),
       camera_data: CameraRenderData::new(&camera.0, &camera.1, 1.0, window_extent),
       cursor_call: None,
       ui_call: None,
       text2_call: None,
     }
   }
-
-  pub fn get_or_create_layer(
-    &mut self,
-    layer_index: u32,
-    near: f32,
-    far: f32,
-    frame_scale: f32,
-  ) -> &mut RenderLayer {
-    let idx = self
-      .depth_layers
-      .iter()
-      .position(|l| l.layer_index == layer_index)
-      .unwrap_or_else(|| {
-        self.depth_layers.push(RenderLayer {
-          layer_index,
-          frame_scale,
-          camera_frame_local_pos: self.camera_data.absolute_pos, // default: global pos (correct for macro)
-          near,
-          far,
-          draw_calls: Vec::new(),
-          billboard_calls: Vec::new(),
-          marker_calls: Vec::new(),
-          measurement_calls: Vec::new(),
-          bvh_draw_calls: Vec::new(),
-          bvhwire2_data: Vec::new(),
-          bvhwire2_batch_call: None,
-          gizmo_calls: Vec::new(),
-          particle_calls: Vec::new(),
-          particle2_calls: Vec::new(),
-          sphere_gizmo_batch_call: None,
-          trajectory_call: None,
-          cursor_call: None,
-          sun_call: None,
-          sky_call: None,
-          grid_call: None,
-          background_call: None,
-        });
-        self.depth_layers.len() - 1
-      });
-    &mut self.depth_layers[idx]
-  }
 }
 
-/// TODO: Document this item
 pub fn do_draw_cursor(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -1034,7 +616,6 @@ pub fn do_draw_cursor(
   Ok(())
 }
 
-/// TODO: Document this item
 pub fn do_draw_marker(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -1192,7 +773,6 @@ pub fn do_draw_billboard(
   Ok(())
 }
 
-/// TODO: Document this item
 pub fn do_draw_call2(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -1245,79 +825,7 @@ pub fn do_draw_call2(
   Ok(())
 }
 
-/// TODO: Document this item
-pub fn do_draw_call(
-  device: &dyn RenderDevice,
-  camera: &CameraRenderData,
-  sun_pos: Vec3f32,
-  sun_color: [f32; 4],
-  cmd_buffer: super::CommandBufferHandle,
-  _handle: PresentationEngineHandle,
-  draw_call: &DrawCall,
-) -> GpuResult<()> {
-  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
-  device.bind_buffers(cmd_buffer, draw_call.pipeline, draw_call.buffers)?;
-
-  let model = draw_call.model_matrix;
-  let mvp = camera.view_proj * model;
-  let extra = super::MeshPushExtra {
-    model: model.into(),
-    sun_pos: sun_pos.into(),
-    texture_flags: draw_call.texture_flags,
-    sun_color,
-    camera_pos: camera.pos.into(),
-    emissive_intensity: draw_call.emissive_intensity,
-    emissive_color: draw_call.emissive_color,
-    _pad: 0,
-  };
-  let extra_ptr = device.upload_mesh_push_extra(cmd_buffer, &extra)?;
-  let push_constants = PushConstants {
-    model_view_proj: mvp.into(),
-    extra_ptr,
-    _pad: 0,
-  };
-  device.push_constants_mesh(cmd_buffer, &push_constants)?;
-  device.draw_indexed(cmd_buffer, draw_call.index_count)?;
-
-  if draw_call.draw_outline {
-    if let Some(outline_pipeline) = draw_call.outline_pipeline {
-      device.bind_pipeline(cmd_buffer, outline_pipeline)?;
-      // Note: same buffers because geometry is identical, only pipeline changes
-      // but wait, bind_buffers also requires pipeline_key to identify layout in some engines
-      // Let's assume it works or we use the regular pipeline key for bind_buffers
-      device.bind_buffers(cmd_buffer, outline_pipeline, draw_call.buffers)?;
-
-      let outline_extra = super::MeshPushExtra {
-        model: model.into(),
-        sun_pos: sun_pos.into(),
-        texture_flags: draw_call.texture_flags,
-        sun_color,
-        camera_pos: camera.pos.into(),
-        emissive_intensity: draw_call.outline_color[3], // using intensity for alpha? Or just packing color
-        emissive_color: [
-          draw_call.outline_color[0],
-          draw_call.outline_color[1],
-          draw_call.outline_color[2],
-        ], // Emissive color abused for outline color
-        _pad: 0,
-      };
-      let outline_extra_ptr = device.upload_mesh_push_extra(cmd_buffer, &outline_extra)?;
-      let outline_push = PushConstants {
-        model_view_proj: mvp.into(),
-        extra_ptr: outline_extra_ptr,
-        _pad: 0,
-      };
-      device.push_constants_mesh(cmd_buffer, &outline_push)?;
-      device.set_line_width(cmd_buffer, 1.0)?;
-      device.draw_indexed(cmd_buffer, draw_call.index_count)?;
-    }
-  }
-
-  Ok(())
-}
-
 /// This is called after render device has already bound descriptor sets (cause we didn't abstract them yet)
-/// TODO: Add to the push constant abstraction an abstraction for descriptor sets
 pub fn do_draw_sun(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
@@ -1354,86 +862,6 @@ pub fn do_draw_sky(
   device.draw(cmd_buffer, draw_call.vertex_count)
 }
 
-/// TODO: Document this item
-pub fn do_draw_particle(
-  device: &dyn RenderDevice,
-  camera: &CameraRenderData,
-  cmd_buffer: super::CommandBufferHandle,
-  _handle: PresentationEngineHandle,
-  draw_call: &ParticleDrawCall,
-) -> GpuResult<()> {
-  // Bind pipeline (the descriptor set should have been bound once per frame)
-  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
-
-  let push_constants = crate::gpu::ParticlePushConstants {
-    view_proj: camera.view_proj.into(),
-    camera_up: camera.up,
-    time: 0.0,
-    camera_right: camera.right,
-    seed: 0.0,
-    color: draw_call.config.color,
-    radius: draw_call.config.particle_radius,
-    camera_pos: [
-      camera.absolute_pos.x(),
-      camera.absolute_pos.y(),
-      camera.absolute_pos.z(),
-    ],
-  };
-
-  device.push_constants(
-    cmd_buffer,
-    crate::gpu::ArchetypeId::Particle,
-    &push_constants,
-  )?;
-
-  // Notice we don't pass the indirect_buffer as a GpuResourceHandle anymore,
-  // we use a specific method that draws from the global mega buffer
-  device.draw_particle_indirect(cmd_buffer, draw_call.system_indirect_offset)?;
-
-  Ok(())
-}
-
-/// TODO: Document this item
-pub fn do_draw_particle2(
-  device: &dyn RenderDevice,
-  camera: &CameraRenderData,
-  cmd_buffer: super::CommandBufferHandle,
-  _handle: PresentationEngineHandle,
-  draw_call: &Particle2DrawCall,
-  time: f32,
-) -> GpuResult<()> {
-  // Bind pipeline (the descriptor set should have been bound once per frame)
-  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
-
-  let push_constants = crate::gpu::Particle2PushConstants {
-    view_proj: camera.view_proj.into(),
-    camera_up: camera.up,
-    time,
-    camera_right: camera.right,
-    seed: draw_call.system_particle_offset as f32,
-    color: draw_call.color,
-    radius: draw_call.particle_radius,
-    camera_pos: [
-      camera.absolute_pos.x(),
-      camera.absolute_pos.y(),
-      camera.absolute_pos.z(),
-    ],
-  };
-
-  device.push_constants(
-    cmd_buffer,
-    crate::gpu::ArchetypeId::Particle2,
-    &push_constants,
-  )?;
-
-  // Notice we don't pass the indirect_buffer as a GpuResourceHandle anymore,
-  // we use a specific method that draws from the global mega buffer
-  device.draw_particle2_indirect(cmd_buffer, draw_call.system_indirect_offset)?;
-
-  Ok(())
-}
-
-/// TODO: Document this item
 pub fn do_draw_grid(
   device: &dyn RenderDevice,
   cmd_buffer: super::CommandBufferHandle,
@@ -1454,46 +882,6 @@ pub fn do_draw_grid(
   device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
   device.push_grid_constants(cmd_buffer, &push_constants)?;
   device.draw(cmd_buffer, draw_call.vertex_count)
-}
-
-/// prepare_bvh_archetype_for_render_and_bind_pipeline should have been already called
-#[named]
-pub fn do_bvh_draw_call(
-  device: &dyn RenderDevice,
-  cmd_buffer: super::CommandBufferHandle,
-  _handle: PresentationEngineHandle,
-  camera: &CameraRenderData,
-  draw_call: &BvhDrawCall,
-) -> GpuResult<()> {
-  let (mvp, box_data) = draw_call
-    .to_push_data(camera)
-    .ok_or(crate::gpu_err!("Couldn't compute BVH push data"))?;
-  let bvh_data_ptr = device.upload_bvh_box_data(cmd_buffer, &box_data)?;
-  let push_constants = crate::gpu::BvhPushConstants {
-    mvp_arr: mvp,
-    bvh_data_ptr,
-    _pad: 0,
-  };
-  device.push_bvh_constants(cmd_buffer, &push_constants)?;
-  device.draw(cmd_buffer, draw_call.vertex_count)
-}
-
-pub fn do_draw_bvhwire2_batch(
-  device: &dyn RenderDevice,
-  camera: &CameraRenderData,
-  cmd_buffer: super::CommandBufferHandle,
-  _handle: PresentationEngineHandle,
-  draw_call: &Bvhwire2BatchCall,
-) -> GpuResult<()> {
-  device.prepare_bvhwire2_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
-  let push_constants = crate::gpu::Bvhwire2PushConstants {
-    bvh_ptr: draw_call.data_ptr,
-    _pad: 0,
-    view_proj: camera.view_proj.into(),
-  };
-  device.push_bvhwire2_constants(cmd_buffer, &push_constants)?;
-  device.draw_instanced(cmd_buffer, 216, draw_call.total_boxes)?;
-  Ok(())
 }
 
 pub fn do_draw_sphere_gizmo_batch(
@@ -1591,6 +979,66 @@ pub fn do_draw_background(
   device.draw(cmd_buffer, 3)
 }
 
+pub fn do_draw_dust_batch(
+  device: &crate::gpu_backends::vulkan::device::Device,
+  cmd_buffer: gpu::CommandBufferHandle,
+  handle: PresentationEngineHandle,
+  camera: &CameraRenderData,
+  draw_calls: &[DustDrawCall],
+) -> GpuResult<()> {
+  if draw_calls.is_empty() {
+    return Ok(());
+  }
+
+  // 1. Fetch the pipeline key dynamically we only want to bind the pipeline once
+  let pipeline_key = device.get_pipeline_key(handle, gpu::ArchetypeId::Particles)?;
+  device.bind_pipeline(cmd_buffer, pipeline_key)?;
+
+  let cmd = device.get_cmd(cmd_buffer)?;
+
+  for call in draw_calls {
+    // Large World Coordinates (LWC) Camera Relative Transformation
+    // Proj * ViewRot * RelativeModel
+    let view_rot_only = {
+      let mut v = camera.view.clone();
+      v.w = Vec4f32::from_components(0.0, 0.0, 0.0, 1.0);
+      v
+    };
+    let mvp = camera.proj * view_rot_only * call.rte_mat;
+    let mut pc = gpu::new_particles::DustPushConstants {
+      global_particle_buffer: 0, // populated by Device
+      particle_page_table: 0,    // populated by Device
+      view_proj: mvp.into(),
+      stream_color: call.stream_color,
+      chunk_offset: call.chunk_offset,
+      current_time: call.current_time,
+      max_ttl: call.max_ttl,
+      macro_scale: call.macro_scale,
+      micro_radius: call.micro_radius,
+      num_spots: call.num_spots,
+      dispersion_rate: call.dispersion_rate,
+      _pad: 0,
+    };
+
+    // 2. Feed the GPU-managed buffers intto the push constant
+    // The device uses EntityId as the particle system ID
+    match device.complete_graphics_particle_push_constant(call.entity_id.as_ffi(), &mut pc) {
+      Ok(indirect_buffer) => {
+        // 3. Issue the dispatch
+        device.cmd_draw_particle_system(cmd, indirect_buffer, &pc)?;
+      }
+      Err(e) => {
+        aethervk_oshal_rlib::log!(
+          "Skipping dust draw call for {:?} due to error: '{}'",
+          call.entity_id,
+          e
+        );
+      }
+    }
+  }
+  Ok(())
+}
+
 // TODO: all of the do_draw_* functions should have a rollback mechanism
 // TODO trait type for internal command buffer so that you get it once
 /// TODO: Document this item
@@ -1685,7 +1133,7 @@ pub fn render_frame(
 
   // ── UI / Text (always drawn last, in the final subpass) ────────────
   if let Some(draw_call) = &render_scene.ui_call {
-    gpu::frame::do_draw_ui_batch(
+    do_draw_ui_batch(
       device,
       &render_scene.camera_data,
       cmd_buffer,
@@ -1699,7 +1147,7 @@ pub fn render_frame(
   }
 
   if let Some(draw_call) = &render_scene.text2_call {
-    gpu::frame::do_draw_text2_batch(
+    do_draw_text2_batch(
       device,
       &render_scene.camera_data,
       cmd_buffer,
@@ -1711,35 +1159,6 @@ pub fn render_frame(
       ],
     )?;
   }
-
-  if !render_scene.text_calls.is_empty() {
-    device.prepare_text_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
-
-    let w = render_scene.window_extent[0] as f32;
-    let h = render_scene.window_extent[1] as f32;
-    #[rustfmt::skip]
-    let view_proj = [
-      2.0 / w, 0.0, 0.0, 0.0,
-      0.0, 2.0 / h, 0.0, 0.0,
-      0.0, 0.0, 1.0, 0.0,
-      -1.0, -1.0, 0.0, 1.0,
-    ];
-
-    for text_call in &render_scene.text_calls {
-      // NOTE: Here we assume that `font_hash` has been appropriately tracked by the user to represent a valid texture_id (e.g. u32) on the render device.
-      device.render_text(
-        cmd_buffer,
-        &text_call.text,
-        text_call.start_cursor_position,
-        view_proj,
-        text_call.font_id,
-        text_call.desired_points,
-        text_call.color,
-      )?;
-    }
-  }
-
-  // end of scene, begin rendering UI elements
 
   Ok(())
 }
@@ -1788,31 +1207,19 @@ fn draw_layer_content(
     do_draw_sky(device, cmd_buffer, handle, draw_call)?;
   }
   for draw_call in &layer.draw_calls {
-    if draw_call.use_new_path {
-      do_draw_call2(
-        device,
-        &layer_camera,
-        sun_pos,
-        [1.0, 1.0, 1.0, 1.0], // TODO
-        cmd_buffer,
-        handle,
-        draw_call,
-        [
-          render_scene.window_extent[0] as f32,
-          render_scene.window_extent[1] as f32,
-        ],
-      )?;
-    } else {
-      do_draw_call(
-        device,
-        &layer_camera,
-        sun_pos,
-        [1.0, 1.0, 1.0, 1.0], // TODO
-        cmd_buffer,
-        handle,
-        draw_call,
-      )?;
-    }
+    do_draw_call2(
+      device,
+      &layer_camera,
+      sun_pos,
+      [1.0, 1.0, 1.0, 1.0], // TODO
+      cmd_buffer,
+      handle,
+      draw_call,
+      [
+        render_scene.window_extent[0] as f32,
+        render_scene.window_extent[1] as f32,
+      ],
+    )?;
   }
 
   if let Some(draw_call) = &layer.grid_call {
@@ -1835,74 +1242,23 @@ fn draw_layer_content(
     }
   }
 
-  if !layer.bvh_draw_calls.is_empty() {
-    device.prepare_bvh_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
-    for draw_call in &layer.bvh_draw_calls {
-      do_bvh_draw_call(device, cmd_buffer, handle, &layer_camera, draw_call)?;
-    }
-  }
-
-  if let Some(batch_call) = &layer.bvhwire2_batch_call {
-    gpu::frame::do_draw_bvhwire2_batch(device, &layer_camera, cmd_buffer, handle, batch_call)?;
-  }
-
   if !layer.gizmo_calls.is_empty() {
     device.prepare_gizmo_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
     for draw_call in &layer.gizmo_calls {
-      gpu::frame::do_draw_gizmo(device, &layer_camera, cmd_buffer, handle, draw_call)?;
+      do_draw_gizmo(device, &layer_camera, cmd_buffer, handle, draw_call)?;
     }
   }
 
   if let Some(batch_call) = &layer.sphere_gizmo_batch_call {
-    gpu::frame::do_draw_sphere_gizmo_batch(device, &layer_camera, cmd_buffer, handle, batch_call)?;
+    do_draw_sphere_gizmo_batch(device, &layer_camera, cmd_buffer, handle, batch_call)?;
   }
 
   for measurement_call in &layer.measurement_calls {
-    gpu::frame::do_draw_measurement(device, &layer_camera, cmd_buffer, handle, measurement_call)?;
+    do_draw_measurement(device, &layer_camera, cmd_buffer, handle, measurement_call)?;
   }
 
   for marker_call in &layer.marker_calls {
-    gpu::frame::do_draw_marker(device, &layer_camera, cmd_buffer, handle, marker_call)?;
-  }
-
-  if !layer.particle_calls.is_empty() {
-    device.prepare_particle_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
-    let particle_camera = {
-      let mut c = layer_camera.clone();
-      c.absolute_pos = layer.camera_frame_local_pos;
-      c
-    };
-    for particle_call in &layer.particle_calls {
-      gpu::frame::do_draw_particle(device, &particle_camera, cmd_buffer, handle, particle_call)?;
-    }
-  }
-
-  if !layer.particle2_calls.is_empty() {
-    device.prepare_particle2_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
-    let time = {
-      let engine_uptime_secs_f64 = render_scene.unscaled_time_us as f64 / 1_000_000.0;
-
-      // Wrap the time every 1 hour (3600 seconds) to prevent float precision loss in the shader
-      let wrapped_time_f64 = engine_uptime_secs_f64 % 3600.0;
-
-      // Now it is safe to cast to f32, because it will never exceed 3600.0
-      wrapped_time_f64 as f32
-    };
-    let particle_camera = {
-      let mut c = layer_camera.clone();
-      c.absolute_pos = layer.camera_frame_local_pos;
-      c
-    };
-    for particle_call in &layer.particle2_calls {
-      do_draw_particle2(
-        device,
-        &particle_camera,
-        cmd_buffer,
-        handle,
-        particle_call,
-        time,
-      )?;
-    }
+    do_draw_marker(device, &layer_camera, cmd_buffer, handle, marker_call)?;
   }
 
   if let Some(draw_call) = &layer.trajectory_call {
@@ -1921,9 +1277,20 @@ fn draw_layer_content(
 
   // End of opaque Stuff, beginning semitransparent/transparent stuff
 
+  // particles here (transparency)
+  if !layer.dust_calls.is_empty() {
+    do_draw_dust_batch(
+      device.as_any().downcast_ref().unwrap(),
+      cmd_buffer,
+      handle,
+      &layer_camera,
+      &layer.dust_calls,
+    )?;
+  }
+
   // Draw Sun Volume after opaque meshes so it properly blends over them instead of being overwritten
   if let Some(draw_call) = &layer.sun_call {
-    gpu::frame::do_draw_sun(device, &layer_camera, cmd_buffer, handle, draw_call)?;
+    do_draw_sun(device, &layer_camera, cmd_buffer, handle, draw_call)?;
   }
 
   Ok(())

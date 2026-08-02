@@ -1,45 +1,47 @@
 //! structs module.
-#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use crate::{
   gpu::{self, DeviceAdditionalParams, PresentationEngineHandle},
-  physics::{self, physics_scene::math::PhysicsSceneMathExt},
-  scene::{AlmanacPlanet, BodyRotationalModel, EntityId, Scene, TransformComponent},
-  simulation::{
-    self,
-    almanac::{AlmanacPackedData, KinematicState},
+  gpu_backends::new_render_frontend,
+  scene::{
+    AlmanacPlanet, BodyRotationalModel, EntityId, Scene, StaticMeshComponent, TransformComponent,
   },
+  simulation::{self, almanac::AlmanacPackedData},
   simulation_api::{logic_thread::start_logic_thread, render_thread::start_render_thread},
   types::{EngineError, EngineResult, GpuError, GpuResult, RuntimeParams},
 };
-use aethervk_oshal_rlib as oshal;
+use aethervk_oshal_rlib::{
+  self as oshal,
+  math::{
+    quaternion::Quaternion,
+    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
+  },
+  os::{
+    self,
+    pool::tasklet::TaskletHandle,
+    thread::Thread,
+    time::{timeus_milliseconds, timeus_t},
+  },
+};
 use alloc::{
   collections::{BTreeMap, BTreeSet},
-  string::String,
+  string::{String, ToString},
   sync::Arc,
-  vec::Vec,
 };
 use core::{
-  cell::{RefCell, UnsafeCell},
-  mem::MaybeUninit,
+  cell::RefCell,
   sync::atomic::{AtomicBool, AtomicU64},
-};
-use oshal::{
-  math::{
-    matrix::{Matrix4, MatrixVectorMul, SquareMatrix, mat4::Mat4x4f32},
-    quaternion::Quaternion,
-    vector::{
-      Vector, Vector3, Vector4,
-      vec3::Vec3f32,
-      vec4::{Quat, Vec4f32},
-    },
-  },
-  os,
-  os::thread::Thread,
 };
 use parking_lot::RwLock;
 use thingbuf::mpsc;
-// --------------------- Drop Wrapper Types ---------------------------
+
+/// target rate for physical simulation, in unscaled(read) monotonic time
+pub const UNSCALED_FIXED_DELTA_US: timeus_t = timeus_milliseconds(16);
+
+pub mod particle_constants {
+  pub const MEAN_INTRA_GRAINS_DISTANCE_MM: f32 = 1_f32;
+  pub const MIN_CUMULATED_MASS_G: f32 = 0.001_f32; // from bvh_utils.glsl
+}
 
 /// Drop wrapper for a thread whose function uses a receiver, and the struct wraps
 /// its transmitter. Invariant: Once this class is constructed through new, and its
@@ -118,7 +120,6 @@ pub struct CartesianState {
 }
 
 impl CartesianState {
-
   pub fn new_comet(
     transform: TransformComponent,
     almanac_planet: AlmanacPlanet,
@@ -187,7 +188,9 @@ impl Default for SimulationSceneData {
 }
 
 impl SimulationSceneData {
-  pub fn new_inplace(ptr: *mut Self) {
+  /// # Safety
+  /// - `ptr` should be a pointer to a piece of memory with size and alignment compatible for [`SimulationSceneData`]
+  pub unsafe fn new_inplace(ptr: *mut Self) {
     unsafe { ptr.write(Self::new()) }
   }
 
@@ -315,262 +318,19 @@ impl LogicThreadContext {
     let mut logic = self.logic_state.write();
     logic.almanac_data.unload_almanac_spk(path)
   }
-
-  pub fn raycast_ndc_internal(
-    &self,
-    scene_id: u64,
-    camera_id: u64,
-    ndc_x: f32,
-    ndc_y: f32,
-  ) -> EngineResult<RaycastResult> {
-    let (ro, rd) = {
-      let scenes = self.scenes.read();
-      let active = scenes
-        .get(&scene_id)
-        .ok_or(EngineError::InvalidOperation("scene not found"))?
-        .read();
-      let active_camera_entity = active
-        .get_entity(camera_id)
-        .ok_or(EngineError::InvalidOperation("no camera found"))?;
-
-      let mut view = Mat4x4f32::identity();
-      let has_hrt = active
-        .scene
-        .with_component(
-          active_camera_entity,
-          |c: &crate::scene::HighResTransformComponent| true,
-        )
-        .unwrap_or(false);
-      let has_t = active
-        .scene
-        .with_component(
-          active_camera_entity,
-          |c: &crate::scene::TransformComponent| true,
-        )
-        .unwrap_or(false);
-      aethervk_oshal_rlib::log!("DEBUG raycast: has_hrt={} has_t={}", has_hrt, has_t);
-
-      active
-        .scene
-        .with_component(
-          active_camera_entity,
-          |c: &crate::scene::HighResTransformComponent| {
-            let right = c.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-            let up = c.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
-            let forward = c.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
-            view = Mat4x4f32::look_at_axes(right, forward, up, c.position.to_f32());
-          },
-        )
-        .ok_or(EngineError::InvalidOperation("camera transform missing"))?;
-
-      let mut view_proj_inv = Mat4x4f32::identity();
-      active
-        .scene
-        .with_component(
-          active_camera_entity,
-          |cam: &crate::scene::CameraComponent| {
-            let proj = cam.get_projection_matrix();
-            let view_proj = proj * view;
-            view_proj_inv = view_proj.inverse().unwrap_or(Mat4x4f32::identity());
-          },
-        )
-        .ok_or(EngineError::InvalidOperation("camera component missing"))?;
-
-      let ndc_near = Vec4f32::from_components(ndc_x, ndc_y, 1.0, 1.0);
-      let ndc_far = Vec4f32::from_components(ndc_x, ndc_y, 0.0, 1.0);
-      let mut world_near = view_proj_inv.mul_vector(ndc_near);
-      let mut world_far = view_proj_inv.mul_vector(ndc_far);
-      if world_near.w() != 0.0 {
-        world_near = world_near / world_near.w();
-      }
-      if world_far.w() != 0.0 {
-        world_far = world_far / world_far.w();
-      }
-      let ro = Vec3f32::from_components(world_near.x(), world_near.y(), world_near.z());
-      let target = Vec3f32::from_components(world_far.x(), world_far.y(), world_far.z());
-      let delta = target - ro;
-      (ro, delta.normalize())
-    };
-
-    aethervk_oshal_rlib::log!(
-      "DEBUG: raycast_ndc_internal ro=[{},{},{}] rd=[{},{},{}]",
-      ro.x(),
-      ro.y(),
-      ro.z(),
-      rd.x(),
-      rd.y(),
-      rd.z()
-    );
-
-    self.raycast_internal(scene_id, ro, rd)
-  }
-
-  pub fn raycast_internal(
-    &self,
-    scene_id: u64,
-    ro: Vec3f32,
-    rd: Vec3f32,
-  ) -> EngineResult<RaycastResult> {
-    use crate::physics::physics_scene::math::closest_intersection;
-    let scenes = self.scenes.read();
-    let scene_ctx = scenes
-      .get(&scene_id)
-      .ok_or(EngineError::InvalidOperation("scene not found"))?
-      .read();
-    let ps_lock = scene_ctx
-      .physics_scene
-      .as_ref()
-      .ok_or(EngineError::InvalidOperation("physics scene missing"))?;
-    let ps = ps_lock.read();
-
-    let st_lock = scene_ctx
-      .selection_tlas
-      .as_ref()
-      .ok_or(EngineError::InvalidOperation("selection tlas missing"))?;
-    let st = st_lock.read();
-
-    let ray = crate::math::collision::intersection::Ray {
-      origin: ro,
-      direction: rd,
-      length: f32::MAX,
-    };
-
-    let mut hit_instances = alloc::vec::Vec::new();
-    if !st.is_empty() {
-      use aethervk_oshal_rlib::math::vector::{Vector3, vec3::Vec3f32};
-      let mut stack = alloc::vec![0];
-      while let Some(node_idx) = stack.pop() {
-        if node_idx as usize >= st.len() {
-          continue;
-        }
-        let node = &st[node_idx as usize];
-
-        for i in 0..32 {
-          let meta = node.metadata[i];
-          if meta == 0 {
-            continue;
-          }
-
-          let bmin = Vec3f32::from_components(node.min_x[i], node.min_y[i], node.min_z[i]);
-          let bmax = Vec3f32::from_components(node.max_x[i], node.max_y[i], node.max_z[i]);
-          let aabb = crate::math::collision::bounds::AABB::new(bmin, bmax);
-
-          if crate::math::collision::intersection::intersect_ray_aabb(&ray, &aabb) {
-            if (meta & 0x8000_0000) != 0 {
-              let entity_ffi =
-                (((meta & 0x7FFF_FFFF) as u64) << 32) | (node.child_indices[i] as u64);
-              let entity = crate::scene::EntityId::from(slotmap::KeyData::from_ffi(entity_ffi));
-              hit_instances.push(entity);
-            } else {
-              stack.push(node.child_indices[i]);
-            }
-          }
-        }
-      }
-    }
-    let meshes: Vec<((crate::scene::PhysicalMeshComponent, TransformComponent), EntityId)> = scene_ctx
-      .scene
-      .query2_res::<crate::scene::PhysicalMeshComponent, TransformComponent, _, (crate::scene::PhysicalMeshComponent, TransformComponent)>(
-      |entity, mesh, transform| {
-        if !hit_instances.contains(&entity) || mesh.mesh.bvh.is_none() {
-          return None;
-        }
-        Some((mesh.clone(), *transform))
-      },
-    );
-
-    let mut intersections: Vec<((f32, Vec3f32, [f32; 2]), EntityId)> = Vec::new();
-    for ((mesh, transform), entity) in meshes {
-      let global_transform = scene_ctx.scene.global_transform(entity).unwrap_or(transform);
-      let model_matrix = Mat4x4f32::translation(global_transform.position)
-        * <Mat4x4f32 as oshal::math::matrix::Matrix4>::from_quat_custom_frame(
-          global_transform.rotation,
-        )
-        * Mat4x4f32::from_scale(global_transform.scale);
-      if let Some(hit) = ps.intersect_mesh_bvh_math(ro, rd, model_matrix, &mesh, ray.length) {
-        intersections.push((hit, entity));
-      }
-    }
-
-    if let Some((_, hit_point, hit_uv, hit_entity)) = closest_intersection(&intersections) {
-      let external_id = scene_ctx
-        .entity_map
-        .iter()
-        .find(|&(_, v)| *v == hit_entity)
-        .map(|(ext, _)| *ext)
-        .unwrap_or(0);
-      return Ok(Some(RayCastHit {
-        entity_ext_id: external_id,
-        p: hit_point,
-        uv: hit_uv,
-      }));
-    }
-
-    Ok(None)
-  }
 }
 
 impl SimulationSceneData {
   pub fn import_model_from_mesh(
     &mut self,
-    path: String,
+    path: &str,
     mesh: crate::simulation::comet::Comet,
   ) -> u64 {
     let model_id = self.next_model_id;
     self.next_model_id += 1;
-    self.mesh_cache.insert(path.clone(), mesh);
-    self.model_registry.insert(model_id, path);
+    self.mesh_cache.insert(path.to_string(), mesh);
+    self.model_registry.insert(model_id, path.to_string());
     model_id
-  }
-
-  pub fn spawn_model_instance_internal(
-    &mut self,
-    scene_id: u64,
-    model_id: u64,
-    name: &str,
-  ) -> EngineResult<u64> {
-    let path_str = self
-      .model_registry
-      .get(&model_id)
-      .ok_or(EngineError::InvalidOperation("model not found"))?
-      .clone();
-    let mesh_arc = if let Some(cached) = self.mesh_cache.get(&path_str) {
-      cached
-    } else {
-      return Err(EngineError::InvalidOperation("mesh not found in cache"));
-    };
-
-    let scene_ctx_lock =
-      self.scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("no scene"))?;
-    let mut scene_ctx = scene_ctx_lock.write();
-    let entity_id = scene_ctx.scene.spawn_entity(name);
-    scene_ctx.scene.add_component(
-      entity_id,
-      TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 0.0),
-        rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-      },
-    )?;
-    scene_ctx.scene.add_component(
-      entity_id,
-      crate::scene::PhysicalMeshComponent {
-        asset_path: path_str,
-        mesh: mesh_arc,
-        emissive_intensity: 0.0,
-        emissive_color: [0.0, 0.0, 0.0],
-        use_new_path: true,
-        paint_display_mode: 0,
-        sphere_center: [0.0, 0.0, 0.0],
-        sphere_radius: 1.0,
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
-        rotational_model: None,
-      },
-    )?;
-    let root = scene_ctx.root_entity;
-    scene_ctx.scene.set_parent(entity_id, Some(root));
-    Ok(scene_ctx.register_entity(entity_id))
   }
 }
 
@@ -749,17 +509,18 @@ pub enum LogicCommand {
     target_entity: EntityId,
     scene: Arc<RwLock<SceneContext>>,
   },
-  FollowEntity {
-    snap_entity: EntityId,
-    entity_id: EntityId,
-    scene: Arc<RwLock<SceneContext>>,
-    unfollow_other: bool,
-  },
-  UnfollowEntity {
-    entity_id: EntityId,
-    scene: Arc<RwLock<SceneContext>>,
-  },
-
+  // TODO for now commented out. If needed, implement the Scene Observer concept
+  // FollowEntity {
+  //   snap_entity: EntityId,
+  //   entity_id: EntityId,
+  //   scene: Arc<RwLock<SceneContext>>,
+  //   unfollow_other: bool,
+  // },
+  // TODO for now commented out. If needed, implement the Scene Observer concept
+  // UnfollowEntity {
+  //   entity_id: EntityId,
+  //   scene: Arc<RwLock<SceneContext>>,
+  // },
   PlaySceneToEnd {
     scene_id: u64,
     speed: oshal::os::time::v2::SimSpeed,
@@ -787,39 +548,14 @@ pub enum LogicCommand {
     task_id: u64,
     path: String,
   },
-  LoadCometSpk {
-    task_id: u64,
-    spk_id: i32,
-    frame: anise::frames::Frame,
-    epoch: anise::time::Epoch,
-  },
-  SpawnModelInstance {
-    task_id: u64,
-    scene_id: u64,
-    model_id: u64,
-    name: String,
-  },
-  RaycastNdc {
-    task_id: u64,
-    scene_id: u64,
-    camera_id: u64,
-    ndc_x: f32,
-    ndc_y: f32,
-  },
-  Raycast {
-    task_id: u64,
-    scene_id: u64,
-    ro: Vec3f32,
-    rd: Vec3f32,
-  },
   UpdateTrajectoryForSpk {
     task_id: u64,
     scene_id: u64,
     entity_id: u64,
-    spk_id: i32,
     start_epoch_tai_sec: f64,
     end_epoch_tai_sec: f64,
     sample_step_days: f64,
+    spk_id: i32,
   },
   RestoreSnapshot {
     scene_id: u64,
@@ -830,6 +566,12 @@ pub enum LogicCommand {
     scene_id: u64,
     entity: u64,
     visible: bool,
+  },
+
+  SetEpochRange {
+    scene_id: u64,
+    start: hifitime::Epoch,
+    end: hifitime::Epoch,
   },
 }
 
@@ -917,6 +659,7 @@ pub struct RenderFrame {
   pub sky_entity: Option<EntityId>,
   pub cursor_entity: Option<EntityId>,
   pub custom_render_callback: Option<CustomRenderCallback>,
+
   /// Step 4 of the cross sync procedure: if the compute workload which is invoking this command
   /// generated a cross sync procedure, we need to wait on a particular compute timeline value to
   /// finish, and then insert graphics queue acquire commands. Whether to insert commands or not is
@@ -929,6 +672,11 @@ pub struct RenderFrame {
   /// `vulkan_device.kernels.next_submit_value`, but that would create a race condition between the
   /// render thread and the physics tasklet threads
   pub particle_acquire_sync: Option<u64>,
+
+  /// particles constants to reproduce cluster params coherent with what the logic thread computes
+  pub mean_intra_grains_distance_mm: f32,
+  /// particles constants to reproduce cluster params coherent with what the logic thread computes
+  pub min_cumulated_mass_g: f32,
 }
 
 /// Invariant: width and height are valid, presentation engine is inside simulation context and render device
@@ -1131,22 +879,12 @@ pub struct SceneContext {
   /// Contains the last render task id for the given scene
   pub last_render_task: core::sync::atomic::AtomicU64,
 
-  // TODO evaluate whether screen selection is necessary, if not remove it
   pub root_entity: EntityId,
-  // TODO evaluate whether screen selection is necessary, if not remove it
   pub cursor_entity: Option<EntityId>,
-  // TODO evaluate whether screen selection is necessary, if not remove it
   pub sun_entity: Option<EntityId>,
-  // TODO evaluate whether screen selection is necessary, if not remove it
   pub grid_entity: Option<EntityId>,
-  // TODO evaluate whether screen selection is necessary, if not remove it
   pub sky_entity: Option<EntityId>,
-  // TODO evaluate whether screen selection is necessary, if not remove it
   pub outlines_enabled: Arc<AtomicBool>,
-  // TODO evaluate whether screen selection is necessary, if not remove it
-  pub collisions_enabled: Arc<AtomicBool>, // Changed to false for debugging
-  // TODO evaluate whether screen selection is necessary, if not remove it
-  pub physics_scene: Option<PhysicsDeviceSelfSync>,
 
   /// atomic boolean signaling whether we are or not executing a simulation step *CPU Side*. This
   /// means that when this is `false`, it means that either we compute queue is idle or is still in
@@ -1165,31 +903,21 @@ pub struct SceneContext {
   /// Time state tracking the simulation unscaled and scaled time. Tracks start_epoch but not its
   /// end, therefore stored separately
   pub time_state: alloc::sync::Arc<spin::RwLock<oshal::os::time::v2::TimeState>>,
-  /// end epoch, which limits and stops the simulation
-  pub end_epoch: hifitime::Epoch,
 
   pub presentation_engines: Arc<RwLock<BTreeMap<PresentationEngineHandle, PresentationEngineData>>>,
 
   /// Necessary for the C# side bulk update (TODO check correctness)
   pub changed_entities: Arc<RwLock<BTreeMap<u64, BTreeSet<u64>>>>,
 
+  /// Tasklet synchronization handle to ensure that we don't have multiple C# bulk update tasklets
+  /// running at once
+  pub entities_update_tasklet: Option<TaskletHandle<()>>,
+
   pub custom_render_callback: Option<CustomRenderCallback>,
   pub debug_name: alloc::string::String,
-  pub scene_snapshot: Option<alloc::boxed::Box<crate::scene::Scene>>,
 
-  /// Acceleration structure holding references to BVH nodes for each entity in the scene capable of
-  /// having a bound. Used for physics? Cause for raycasting there's the `selection_tlas`
-  pub static_tlas:
-    Arc<RwLock<alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>>>>,
-  /// Top level acceleration structure holding BVH nodes only for these entities which have bounds
-  /// and are deemed selectable by the application's logic.
-  // TODO: if necessary, mark with a component?
-  pub selection_tlas:
-    Option<Arc<RwLock<alloc::vec::Vec<crate::math::collision::multi_bvh::TlasMultiNode<32>>>>>,
-  ///used to keep track whether or not some entity moved, and therefore if we need to rebuild the
-  ///TLAS
-  // TODO remove pub if kept
-  pub is_static_tlas_dirty: Arc<AtomicBool>,
+  pub scene_snapshot: Option<alloc::boxed::Box<crate::scene::Scene>>,
+  pub particle_snapshot: Option<ParticleSystemSnapshot>,
 }
 
 impl Drop for SceneContext {
@@ -1241,7 +969,6 @@ impl SceneContext {
     Ok(self)
   }
 
-  /// TODO: Document this item
   pub fn with_cursor_entity(mut self, cursor_entity: EntityId) -> EngineResult<Self> {
     if self.cursor_entity.is_some() {
       return Err(EngineError::InvalidOperation(
@@ -1252,7 +979,6 @@ impl SceneContext {
     self.with_new_entity_inserted(cursor_entity)
   }
 
-  /// TODO: Document this item
   pub fn with_sun_entity(mut self, sun_entity: EntityId) -> EngineResult<Self> {
     if self.sun_entity.is_some() {
       return Err(EngineError::InvalidOperation(
@@ -1263,7 +989,6 @@ impl SceneContext {
     self.with_new_entity_inserted(sun_entity)
   }
 
-  /// TODO: Document this item
   pub fn with_grid_entity(mut self, grid_entity: EntityId) -> EngineResult<Self> {
     if self.grid_entity.is_some() {
       return Err(EngineError::InvalidOperation(
@@ -1274,7 +999,6 @@ impl SceneContext {
     self.with_new_entity_inserted(grid_entity)
   }
 
-  /// TODO: Document this item
   pub fn with_sky_entity(mut self, sky_entity: EntityId) -> EngineResult<Self> {
     if self.sky_entity.is_some() {
       return Err(EngineError::InvalidOperation(
@@ -1285,20 +1009,10 @@ impl SceneContext {
     self.with_new_entity_inserted(sky_entity)
   }
 
-  pub fn with_physics_scene(mut self) -> Self {
-    // TODO remove physics_scene. It's dead.
-    self.physics_scene = Some(Arc::new(RwLock::new(
-      physics::physics_scene::PhysicsScene::build_from_scene(self.scene.as_ref(), 0.016),
-    )));
-    self.selection_tlas = Some(Arc::new(RwLock::new(alloc::vec::Vec::new())));
-    self
-  }
-
   pub fn new_empty(
     scene: Arc<Scene>,
     root_entity: EntityId,
     time_state: Arc<spin::RwLock<oshal::os::time::v2::TimeState>>,
-    end_epoch: hifitime::Epoch,
   ) -> Self {
     let mut entity_map = BTreeMap::new();
     entity_map.insert(1, root_entity);
@@ -1312,22 +1026,18 @@ impl SceneContext {
       grid_entity: None,
       sky_entity: None,
       outlines_enabled: Arc::new(AtomicBool::new(false)),
-      collisions_enabled: Arc::new(AtomicBool::new(false)),
-      physics_scene: None,
-      selection_tlas: None,
       active_physics_task: core::sync::atomic::AtomicBool::new(false),
       latest_physics_sync: None,
       physics_engine_type: Arc::new(RwLock::new(PhysicsEngineType::VulkanCompute)),
       time_state,
       presentation_engines: Arc::new(RwLock::new(BTreeMap::new())),
       scene_snapshot: None,
-      static_tlas: Arc::new(RwLock::new(alloc::vec::Vec::new())),
-      is_static_tlas_dirty: Arc::new(AtomicBool::new(true)),
       changed_entities: Arc::new(RwLock::new(BTreeMap::new())),
       custom_render_callback: None,
       debug_name: alloc::string::String::new(),
-      end_epoch,
       last_render_task: core::sync::atomic::AtomicU64::new(0),
+      entities_update_tasklet: None,
+      particle_snapshot: None,
     }
   }
 
@@ -1370,7 +1080,7 @@ impl RenderThreadParams {
   ) -> EngineResult<Self> {
     let render_frontend = {
       let params = RuntimeParams::new_with_callback(error_debug_callback);
-      gpu::new_render_frontend(backend, &params)?
+      new_render_frontend(backend, &params)?
     };
     let render_device_handle = {
       let params = DeviceAdditionalParams::new();
@@ -1415,7 +1125,6 @@ pub struct RenderThreadContext {
 }
 
 impl RenderThreadContext {
-  /// TODO: Document this item
   pub(crate) fn is_render_single_ownership(&self) -> bool {
     let render_frontend = self.render_frontend.borrow();
     if render_frontend.is_none() {
@@ -1433,12 +1142,10 @@ impl RenderThreadContext {
   }
 }
 
-/// TODO: Document this item
 pub struct LogicThreadParams {
   channel_capacity: usize,
   /// Thread pool for task submission shared between render thread and logic thread
   pub thread_pool: Arc<os::pool::ThreadPool>,
-  pub task_manager: Arc<RwLock<SimulationTaskManager>>,
   pub logic_state: Arc<RwLock<LogicState>>,
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub ctx_ptr: SendPtrMut<core::ffi::c_void>,
@@ -1448,10 +1155,8 @@ pub struct LogicThreadParams {
 impl LogicThreadParams {
   const DEFAULT_CHANNEL_CAPACITY: usize = 128;
 
-  /// TODO: Document this item
   pub fn new(
     thread_pool: Arc<os::pool::ThreadPool>,
-    task_manager: Arc<RwLock<SimulationTaskManager>>,
     logic_state: Arc<RwLock<LogicState>>,
     scenes: Arc<RwLock<SimulationSceneData>>,
     ctx_ptr: SendPtrMut<core::ffi::c_void>,
@@ -1460,7 +1165,6 @@ impl LogicThreadParams {
     Self {
       channel_capacity: Self::DEFAULT_CHANNEL_CAPACITY,
       thread_pool,
-      task_manager,
       logic_state,
       scenes,
       ctx_ptr,
@@ -1468,7 +1172,6 @@ impl LogicThreadParams {
     }
   }
 
-  /// TODO: Document this item
   pub fn to_context(
     self,
     logic_feedback_tx: mpsc::Sender<LogicFeedback>,
@@ -1478,7 +1181,6 @@ impl LogicThreadParams {
       logic_state: self.logic_state,
       thread_pool: self.thread_pool,
       logic_feedback_tx,
-      task_manager: self.task_manager,
       scenes: self.scenes,
       ctx_ptr: self.ctx_ptr,
       render_tx,
@@ -1495,109 +1197,14 @@ pub struct LogicThreadContext {
   pub thread_pool: Arc<os::pool::ThreadPool>,
   /// Transmission channel to send back data to FFI caller threads
   pub logic_feedback_tx: mpsc::Sender<LogicFeedback>,
-  pub task_manager: Arc<RwLock<SimulationTaskManager>>,
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub ctx_ptr: SendPtrMut<core::ffi::c_void>,
   pub render_tx: mpsc::Sender<RenderCommand>,
   pub kernels: (gpu::RenderFrontend, gpu::RenderDeviceHandle),
 }
 
-#[derive(Clone, Copy, Debug)]
-/// TODO: Document this item
-pub struct RayCastHit {
-  pub entity_ext_id: u64,
-  pub p: Vec3f32,
-  pub uv: [f32; 2],
-}
-
-/// TODO: Document this item
-pub type RaycastResult = Option<RayCastHit>;
-
-/// TODO: Document this item
-pub enum SimulationTaskResult {
-  None,
-  U64(u64),
-  Bool(bool),
-  Raycast(RaycastResult),
-  Vec3(Vec3f32), // TODO more vector types in oshal (design first by me)
-  KinematicState(KinematicState),
-  String(String),
-}
-
-/// TODO: Document this item
-pub enum SimulationTaskStatus {
-  Pending,
-  Completed(SimulationTaskResult),
-  Error(String),
-}
-
-impl AsRef<SimulationTaskStatus> for SimulationTaskStatus {
-  fn as_ref(&self) -> &SimulationTaskStatus {
-    self
-  }
-}
-
-/// TODO: Document this item
-pub struct SimulationTaskManager {
-  next_task_id: u64,
-  tasks: BTreeMap<u64, SimulationTaskStatus>,
-}
-
-impl Drop for SimulationTaskManager {
-  fn drop(&mut self) {
-    oshal::log!("SimulationTaskManager drop started");
-  }
-}
-
-impl SimulationTaskManager {
-  /// TODO: Document this item
-  pub fn new() -> Self {
-    Self {
-      next_task_id: 1,
-      tasks: BTreeMap::new(),
-    }
-  }
-
-  /// TODO: Document this item
-  pub fn create_task(&mut self) -> core::num::NonZero<u64> {
-    let id = self.next_task_id | (1u64 << 63);
-    self.next_task_id += 1;
-    self.tasks.insert(id, SimulationTaskStatus::Pending);
-    unsafe { core::num::NonZero::new_unchecked(id) }
-  }
-
-  /// TODO: Document this item
-  pub fn success_task(&mut self, id: u64, result: SimulationTaskResult) {
-    self.tasks.insert(id, SimulationTaskStatus::Completed(result));
-  }
-
-  /// TODO: Document this item
-  pub fn fail_task(&mut self, id: u64, error: String) {
-    self.tasks.insert(id, SimulationTaskStatus::Error(error));
-  }
-
-  /// TODO: Document this item
-  pub fn get_status(&self, id: u64) -> TaskStatusCode {
-    self
-      .tasks
-      .get(&id)
-      .map(|t| TaskStatusCode::from_sim(t))
-      .unwrap_or(TaskStatusCode::Invalid)
-  }
-
-  /// TODO: Document this item
-  pub fn take_result(&mut self, id: u64) -> Option<SimulationTaskResult> {
-    if let Some(SimulationTaskStatus::Completed(res)) = self.tasks.remove(&id) {
-      Some(res)
-    } else {
-      None
-    }
-  }
-}
-
 #[repr(i32)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
-/// TODO: Document this item
 pub enum TaskStatusCode {
   #[default]
   Pending = 0,
@@ -1607,15 +1214,6 @@ pub enum TaskStatusCode {
 }
 
 impl TaskStatusCode {
-  /// TODO: Document this item
-  pub fn from_sim(value: &SimulationTaskStatus) -> Self {
-    match value.as_ref() {
-      SimulationTaskStatus::Pending => TaskStatusCode::Pending,
-      SimulationTaskStatus::Completed(_) => TaskStatusCode::Completed,
-      SimulationTaskStatus::Error(_) => TaskStatusCode::Error,
-    }
-  }
-  /// TODO: Document this item
   pub fn from_render(value: &RenderTaskStatus) -> Self {
     match value.as_ref() {
       RenderTaskStatus::Completed => TaskStatusCode::Completed,
@@ -1625,189 +1223,17 @@ impl TaskStatusCode {
   }
 }
 
-// 1. Group the shared data and the atomic signal into a single struct
-/// TODO: Document this item
-pub struct SharedState<T> {
-  pub done_signal: AtomicBool,
-  pub data: UnsafeCell<MaybeUninit<T>>,
+/// Struct to hold the binary dump of the GPU buffers for particle system. Can't differentiate
+/// between scenes
+#[derive(Clone, Default)]
+pub struct ParticleSystemSnapshot {
+  pub global_buffer: alloc::vec::Vec<u8>,
+  pub free_list: alloc::vec::Vec<u8>,
+  pub page_tables: alloc::collections::BTreeMap<u64, alloc::vec::Vec<u8>>,
 }
 
-// We promise the compiler we are handling thread safety manually via the AtomicBool
-unsafe impl<T: Send> Sync for SharedState<T> {}
-unsafe impl<T: Send> Send for SharedState<T> {}
-
-// 2. The wrapper is now just a single Arc
-/// TODO: Document this item
-pub struct SharedDataWrapper<T> {
-  inner: Arc<SharedState<T>>,
-}
-
-// 3. Implement Default
-impl<T> Default for SharedDataWrapper<T> {
-  fn default() -> Self {
-    Self::new()
-  }
-}
-
-// 4. Implement Clone (This now safely shares BOTH the data and the signal)
-impl<T> Clone for SharedDataWrapper<T> {
-  fn clone(&self) -> Self {
-    Self {
-      inner: Arc::clone(&self.inner),
-    }
-  }
-}
-
-impl<T> SharedDataWrapper<T> {
-  /// TODO: Document this item
-  pub fn new() -> Self {
-    Self {
-      inner: Arc::new(SharedState {
-        done_signal: AtomicBool::new(false),
-        data: UnsafeCell::new(MaybeUninit::uninit()),
-      }),
-    }
-  }
-
-  /// TODO: Document this item
-  pub unsafe fn write_value(&self, v: T) {
-    debug_assert_eq!(
-      self.inner.done_signal.load(core::sync::atomic::Ordering::Relaxed),
-      false
-    );
-
-    // Write the data first
-    unsafe { (*self.inner.data.get()).write(v) };
-
-    // Release ordering ensures the memory write is visible to other threads
-    // before the flag is set to true.
-    self.inner.done_signal.store(true, core::sync::atomic::Ordering::Release);
-  }
-
-  // TODO error timeout after 10 ms
-  /// TODO: Document this item
-  pub unsafe fn read_value(self) -> T {
-    loop {
-      // Acquire ordering pairs with Release to ensure cache coherency.
-      // We can just load with Acquire directly in the loop.
-      if self.inner.done_signal.load(core::sync::atomic::Ordering::Acquire) {
-        break;
-      }
-      core::hint::spin_loop();
-    }
-
-    // Safely extract the value without waiting for the writer thread to drop its Arc.
-    // Since MaybeUninit does not drop its contents, ptr::read safely transfers ownership
-    // to us. The Arc will eventually deallocate the wrapper memory later.
-    unsafe { core::ptr::read(self.inner.data.get()).assume_init() }
-  }
-}
-
-#[cfg(test)]
-mod tests_time_scale {
-  use super::*;
-  use aethervk_oshal_rlib::os::time::timeus_t;
-
-  #[test]
-  fn time_scale_days_per_second() {
-    assert_eq!(TimeScale::Stopped.to_days_per_st_second(), 0.0);
-    assert!((TimeScale::RealTime.to_days_per_st_second() - 1.0 / 86400.0).abs() < 1e-10);
-    assert_eq!(TimeScale::OneDay.to_days_per_st_second(), 1.0);
-    assert_eq!(TimeScale::OneWeek.to_days_per_st_second(), 7.0);
-    assert!((TimeScale::OneMonth.to_days_per_st_second() - 30.436875).abs() < 1e-6);
-  }
-
-  #[test]
-  fn max_sub_dt_positive() {
-    // Every scale must return a positive sub-dt cap
-    for scale in [
-      TimeScale::Stopped,
-      TimeScale::RealTime,
-      TimeScale::OneDay,
-      TimeScale::OneWeek,
-      TimeScale::OneMonth,
-    ] {
-      assert!(
-        scale.max_physics_sub_dt_seconds() > 0.0,
-        "max_physics_sub_dt_seconds must be > 0 for {:?}",
-        scale
-      );
-    }
-  }
-
-  /// Helper: compute the number of physics sub-steps for a given time scale
-  /// and fixed_dt (microseconds).
-  fn sub_step_count(scale: TimeScale, fixed_dt_us: timeus_t) -> usize {
-    let days_per_sec = scale.to_days_per_st_second();
-    let fixed_sim_seconds = fixed_dt_us as f64 / 1_000_000.0;
-    let step_days = days_per_sec * fixed_sim_seconds;
-    let total_dt_s = step_days * 86400.0;
-    let max_sub = scale.max_physics_sub_dt_seconds();
-    if total_dt_s <= max_sub {
-      1
-    } else {
-      (total_dt_s / max_sub).ceil() as usize
-    }
-  }
-
-  #[test]
-  fn sub_step_count_real_time_is_one() {
-    // RealTime at 60 FPS: total_dt ≈ 0.016s, cap = 1.0s → 1 sub-step
-    assert_eq!(sub_step_count(TimeScale::RealTime, 16_667), 1);
-  }
-
-  #[test]
-  fn sub_step_count_one_day_is_fourteen() {
-    // OneDay at 60 FPS: total_dt ≈ 1440s
-    let n = sub_step_count(TimeScale::OneDay, 16_667);
-    assert!(
-      n >= 25 && n <= 35,
-      "Expected ~29 sub-steps for OneDay at 60 FPS, got {}",
-      n
-    );
-  }
-
-  #[test]
-  fn sub_step_count_one_week_multiple() {
-    // OneWeek at 60 FPS: total_dt ≈ 10080s
-    let n = sub_step_count(TimeScale::OneWeek, 16_667);
-    assert!(
-      n >= 15 && n <= 20,
-      "Expected ~17 sub-steps for OneWeek, got {}",
-      n
-    );
-  }
-
-  #[test]
-  fn sub_step_count_one_month_multiple() {
-    // OneMonth at 60 FPS: total_dt ≈ 43200s
-    let n = sub_step_count(TimeScale::OneMonth, 16_667);
-    assert!(
-      n >= 70 && n <= 80,
-      "Expected ~74 sub-steps for OneMonth, got {}",
-      n
-    );
-  }
-
-  #[test]
-  fn sub_step_epoch_advance_consistency() {
-    // Verify that stepping through N sub-steps advances the same total as 1 big step
-    let scale = TimeScale::OneMonth;
-    let fixed_dt_us: timeus_t = 16_667;
-    let days_per_sec = scale.to_days_per_st_second();
-    let step_days = days_per_sec * (fixed_dt_us as f64 / 1_000_000.0);
-    let total_dt_s = step_days * 86400.0;
-    let max_sub = scale.max_physics_sub_dt_seconds();
-    let n = (total_dt_s / max_sub).ceil() as usize;
-    let sub_dt = total_dt_s / n as f64;
-
-    // Sum of sub-steps should equal total (within floating point tolerance)
-    let reconstructed = sub_dt * n as f64;
-    assert!(
-      (reconstructed - total_dt_s).abs() < 1e-6,
-      "Sub-step reconstruction mismatch: {} vs {}",
-      reconstructed,
-      total_dt_s
-    );
+impl core::fmt::Debug for ParticleSystemSnapshot {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    core::fmt::write(f, format_args!("ParticleSystemSnapshot {{ ... }}"))
   }
 }

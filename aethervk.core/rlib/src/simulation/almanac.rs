@@ -1,13 +1,9 @@
 //! almanac module.
 
-use crate::{
-  math::vee,
-  types::{EngineError, EngineResult},
-};
+use crate::types::{EngineError, EngineResult};
 use aethervk_oshal_rlib::{
   math::{
-    matrix::{Matrix, Matrix3, mat3::Mat3f32},
-    quaternion::Quaternion,
+    matrix::{Matrix3, mat3::Mat3f32},
     vector::{Vector3, vec3::Vec3f32, vec3f64::DVec3, vec4::Quat},
   },
   os::{
@@ -302,148 +298,6 @@ impl AlmanacPackedData {
     } else {
       false
     }
-  }
-
-  /// TODO: Document this item
-  pub fn get_ephem_full(
-    &self,
-    spk_id: i32,
-    frame: anise::frames::Frame,
-    epoch: anise::time::Epoch,
-    allow_barycentre_fallback: bool,
-    mandatory_rotation: bool,
-  ) -> EngineResult<KinematicState> {
-    let cartesian_state = self.get_cartesian_state(
-      spk_id,
-      frame.orientation_id,
-      frame.ephemeris_id,
-      epoch,
-      allow_barycentre_fallback,
-    )?;
-    let pos = Vec3f32::from_nalgebra_scaled(cartesian_state.radius_km, DISTANCE_SCALE_FACTOR);
-    let vel = Vec3f32::from_nalgebra_scaled(cartesian_state.velocity_km_s, DISTANCE_SCALE_FACTOR);
-
-    // In SPICE/NAIF, body-fixed IAU frame IDs for simple planetary bodies conventionally match
-    // their base ephemeris body ID (e.g., body 499 maps to frame 499).
-    let body_frame = anise::frames::Frame::new(spk_id, spk_id);
-
-    let mut dcm_result = self.almanac.rotate(body_frame, frame, epoch);
-
-    // Fallbacks for Earth: high precision Binary PCKs (BPC files like earth_latest_high_prec.bpc)
-    // do not store orientation data under the ephemeris ID 399. Instead, they store Earth's
-    // orientation under the International Terrestrial Reference Frame ITRF93 (ID: 13000),
-    // or the standard IAU_EARTH frame (ID: 10013). Because of this quirk in NAIF convention,
-    // we must explicitly try these standard Earth frames when retrieving its rotation matrix.
-    let mut resolved_frame = spk_id;
-    if dcm_result.is_err() && spk_id == 399 {
-      dcm_result = self.almanac.rotate(anise::constants::frames::EARTH_ITRF93, frame, epoch);
-      if dcm_result.is_err() {
-        dcm_result = self.almanac.rotate(anise::constants::frames::IAU_EARTH_FRAME, frame, epoch);
-        if dcm_result.is_ok() {
-          resolved_frame = anise::constants::frames::IAU_EARTH_FRAME.orientation_id;
-        }
-      } else {
-        resolved_frame = anise::constants::frames::EARTH_ITRF93.orientation_id;
-      }
-    }
-
-    // ask the almanac for the rotation matrix from body frame to inertial world space
-    let (rotation, angular_velocity) = if let Ok(dcm) = dcm_result {
-      if spk_id == 399 {
-        let mut missing_logs = self.missing_rotation_logs.lock();
-        if missing_logs.insert(10399) {
-          // Using 10399 just as a dummy key to ensure we only log once
-          aethervk_oshal_rlib::log!(
-            "[Almanac] Successfully fetched rotation for Earth using frame ID: {}",
-            resolved_frame
-          );
-        }
-      }
-
-      // direction cosine matrix present, extract rotational information
-      let r = Mat3f32::from_nalgebra(dcm.rot_mat);
-
-      let angular_velocity_rad_s = if let Some(rot_mat_dt_anise) = dcm.rot_mat_dt {
-        // Note: This derivative is computed by Anise with respect to TDB (Barycentric Dynamical Time) seconds.
-        // For our macro-scale rigid-body/particle kinematics, 1 TDB second maps 1:1 to 1 standard SI simulation second.
-        // Map Anise's time derivative to your Mat3f32
-        let r_dt = Mat3f32::from_nalgebra(rot_mat_dt_anise);
-
-        // 1. Get the Hat Matrix (assuming your Mat3f32 implements Mul and Transpose)
-        let omega_hat_world = r_dt * r.transpose();
-
-        // 2. Extract the Vec3f32
-        Some(vee(omega_hat_world))
-      } else {
-        // Fallback: Some static or low-fidelity frames don't have angular velocity
-        None
-      };
-
-      (Some(Quat::from_rotation_matrix(&r)), angular_velocity_rad_s)
-    } else {
-      let mut missing_logs = self.missing_rotation_logs.lock();
-      if missing_logs.insert(spk_id) {
-        aethervk_oshal_rlib::log!(
-          "[Almanac] Could not fetch rotation for body {} to frame {:?} (Will not log again for this body)",
-          spk_id,
-          frame
-        );
-      }
-      (None, None)
-    };
-
-    match (rotation, mandatory_rotation) {
-      (None, true) => Err(EngineError::InvalidOperation(
-        "[Almanac] get_ephem_full: Rotation was mandatory but not found",
-      )),
-      (maybe_rot, _) => Ok(KinematicState {
-        position: pos,
-        velocity: vel,
-        rotation: maybe_rot,
-        angular_velocity,
-      }),
-    }
-  }
-
-  /// TODO: Document this item
-  pub fn get_ephem_frame(
-    &self,
-    spk_id: i32,
-    frame: anise::frames::Frame,
-    epoch: anise::time::Epoch,
-    allow_barycentre_fallback: bool,
-  ) -> EngineResult<Vec3f32> {
-    self.get_ephem(
-      spk_id,
-      frame.orientation_id,
-      frame.ephemeris_id,
-      epoch,
-      allow_barycentre_fallback,
-    )
-  }
-
-  /// `spk_id` should be a valid celestial body identifier, eg, if planet, use [`anise::constants::celestial_objects`] constants
-  /// `orientation` should be a axes orientation identifier from [`anise::constants::orientations`]
-  /// `observer` should be a valid barycenter identifier from [`anise::constants::celestial_objects`]
-  pub fn get_ephem(
-    &self,
-    spk_id: i32,
-    orientation: i32,
-    observer: i32,
-    epoch: anise::time::Epoch,
-    allow_barycentre_fallback: bool,
-  ) -> EngineResult<Vec3f32> {
-    let cartesian_state = self.get_cartesian_state(
-      spk_id,
-      orientation,
-      observer,
-      epoch,
-      allow_barycentre_fallback,
-    )?;
-
-    let pos = Vec3f32::from_nalgebra_scaled(cartesian_state.radius_km, DISTANCE_SCALE_FACTOR);
-
-    Ok(pos)
   }
 
   pub fn get_cartesian_state(

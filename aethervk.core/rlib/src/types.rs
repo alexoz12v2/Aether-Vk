@@ -8,21 +8,16 @@ use aethervk_oshal_rlib::os::{FsError, NativeError};
 use heapless::index_map::FnvIndexMap;
 use thiserror::Error;
 
-/// TODO: Document this item
 pub const RUNTIME_PARAMS_MAX_COUNT: usize = 16;
-/// TODO: Document this item
 pub(super) type RuntimeParamsIndex = u32;
 
-/// TODO: Document this item
 pub struct RuntimeParams {
-  // TODO add logging stuff
   // backend specific additional parameters (each backend root file defined `RUNTIME_PARAM_<NAME>_*`)
   pub render_backend_params: FnvIndexMap<RuntimeParamsIndex, String, RUNTIME_PARAMS_MAX_COUNT>,
   pub validation_error_callback: Option<fn(&str)>,
 }
 
 impl RuntimeParams {
-  /// TODO: Document this item
   pub fn new_with_callback(validation_error_callback: Option<fn(&str)>) -> Self {
     Self {
       render_backend_params: FnvIndexMap::new(),
@@ -34,7 +29,6 @@ impl RuntimeParams {
 // ---------------------------- Error Types -----------------------------------
 
 #[derive(Error, Debug)]
-/// TODO: Document this item
 pub enum EngineError {
   #[error("GPU Error: {0}")]
   Gpu(#[from] GpuError),
@@ -55,13 +49,9 @@ pub enum EngineError {
   Native(#[from] NativeError),
 }
 
-/// TODO: Document this item
 pub type EngineResult<T> = core::result::Result<T, EngineError>;
 
-// TODO: These will evolve as development progresses
-
 #[derive(Debug, Error, Clone)]
-/// TODO: Document this item
 pub enum GpuError {
   #[error("Invalid Input Argument: {0}")]
   InvalidArgument(String),
@@ -94,11 +84,9 @@ pub enum GpuError {
   NotFound,
 }
 
-/// TODO: Document this item
 pub type GpuResult<T> = core::result::Result<T, GpuError>;
 
 #[derive(Debug, Error)]
-/// TODO: Document this item
 pub enum IoError {
   #[error("IO Error")]
   Failed,
@@ -114,19 +102,15 @@ impl From<FsError> for IoError {
   }
 }
 
-/// TODO: Document this item
 pub type IoResult<T> = core::result::Result<T, IoError>;
 
 #[derive(Debug, Error)]
-/// TODO: Document this item
 pub enum MathError {}
 
-/// TODO: Document this item
 pub type MathResult<T> = core::result::Result<T, MathError>;
 
 // ---------------------------- Generic Data Structures -----------------------
 #[derive(Debug)]
-/// TODO: Document this item
 pub struct SpscQueue<T> {
   buffer: Box<[Option<T>]>,
   mask: usize,
@@ -135,7 +119,6 @@ pub struct SpscQueue<T> {
 }
 
 impl<T: Copy> SpscQueue<T> {
-  /// TODO: Document this item
   pub fn new(cap_pow2: usize) -> Self {
     debug_assert!(cap_pow2 >= 2 && (cap_pow2 & (cap_pow2 - 1)) == 0);
     let mut storage = Vec::with_capacity(cap_pow2);
@@ -151,7 +134,6 @@ impl<T: Copy> SpscQueue<T> {
     }
   }
 
-  /// TODO: Document this item
   pub fn try_push(&self, item: T) -> bool {
     let tail = self.tail.load(Ordering::Relaxed);
     let head = self.head.load(Ordering::Acquire); // see latest head memory
@@ -172,7 +154,6 @@ impl<T: Copy> SpscQueue<T> {
     true
   }
 
-  /// TODO: Document this item
   pub fn try_pop(&self) -> Option<T> {
     let head = self.head.load(Ordering::Relaxed);
     let tail = self.tail.load(Ordering::Acquire); // see latest head memory

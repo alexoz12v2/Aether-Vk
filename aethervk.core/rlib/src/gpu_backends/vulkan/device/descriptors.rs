@@ -1,10 +1,9 @@
 //! descriptors module.
 
 use crate::{
-  gpu::vulkan::device::DebugTrackedRwLock,
   gpu_backends::vulkan::{
     self,
-    device::{DeviceResource, resources},
+    device::{DebugTrackedRwLock, DeviceResource, resources},
     utils::NonZeroHandle,
   },
   types::GpuResult,
@@ -58,16 +57,14 @@ struct DescriptorPoolsInner {
 }
 
 #[derive(Debug)]
-/// TODO: Document this item
 pub(super) struct DescriptorPools {
-  pub inner: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<DescriptorPoolsInner>,
+  pub inner: DebugTrackedRwLock<DescriptorPoolsInner>,
 }
 
 unsafe impl Sync for DescriptorPools {}
 unsafe impl Send for DescriptorPools {}
 
 impl DescriptorPools {
-  /// TODO: Document this item
   #[named]
   pub(super) fn new(
     device: &ash::Device,

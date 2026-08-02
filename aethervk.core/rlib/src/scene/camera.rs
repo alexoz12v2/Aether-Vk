@@ -175,8 +175,7 @@ impl SceneCameraExt for Scene {
   }
 }
 
-// TODO probably move somewhere
-/// TODO: Document this item
+// TODO remove after seeing who uses these
 pub trait QuatToEulerAngles {
   /// Converts the quaternion to pitch and yaw angles (in radians)
   /// Pitch: Rotation around the X axis (elevation). Positive is looking up (+X)

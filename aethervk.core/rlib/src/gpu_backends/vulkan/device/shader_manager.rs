@@ -16,7 +16,6 @@ use crate::{
 
 new_key_type! { pub struct ShaderKey; }
 
-/// TODO: Document this item
 pub fn execution_model_to_shader_flags(
   execution_model: spirv::ExecutionModel,
 ) -> vk::ShaderStageFlags {
@@ -41,7 +40,6 @@ pub fn execution_model_to_shader_flags(
   }
 }
 
-/// TODO: Document this item
 pub fn shader_flags_to_execution_model(
   stage_flags: vk::ShaderStageFlags,
 ) -> Option<spirv::ExecutionModel> {
@@ -68,7 +66,6 @@ pub fn shader_flags_to_execution_model(
 }
 
 // This struct holds the Vulkan shader module and other relevant data.
-/// TODO: Document this item
 pub struct Shader {
   pub module: NonZeroHandle<vk::ShaderModule>,
   pub entry_point: CString,
@@ -78,14 +75,12 @@ pub struct Shader {
 
 impl Shader {
   // Destroys the shader module.
-  /// TODO: Document this item
   pub fn destroy(&self, device: &ash::Device) {
     unsafe {
       device.destroy_shader_module(self.module.get(), None);
     }
   }
 
-  /// TODO: Document this item
   #[named]
   pub fn new(
     device: &ash::Device,
@@ -167,7 +162,7 @@ impl Shader {
               let mut written = 0;
               let _ = WriteFile(h_stdin_write, Some(spv_u8), Some(&mut written), None);
               let _ = CloseHandle(h_stdin_write);
-              
+
               let _ = WaitForSingleObject(pi.hProcess, INFINITE);
               let _ = CloseHandle(pi.hProcess);
               let _ = CloseHandle(pi.hThread);
@@ -211,7 +206,6 @@ impl Shader {
 }
 
 // Manages loading and storing shaders to avoid duplicates.
-/// TODO: Document this item
 pub struct ShaderManager {
   shaders: SlotMap<ShaderKey, alloc::sync::Arc<Shader>>,
   shader_paths: HashMap<PathBuf, ShaderKey>,
@@ -221,7 +215,6 @@ unsafe impl Sync for ShaderManager {}
 unsafe impl Send for ShaderManager {}
 
 impl ShaderManager {
-  /// TODO: Document this item
   pub fn new() -> Self {
     Self {
       shaders: SlotMap::with_key(),
@@ -362,8 +355,8 @@ pub fn disassemble_and_log_spirv(spv_code: &[u8]) {
       sa.nLength = core::mem::size_of::<windows::Win32::Security::SECURITY_ATTRIBUTES>() as u32;
       sa.bInheritHandle = true.into();
 
-      if CreatePipe(&mut h_stdin_read, &mut h_stdin_write, Some(&sa), 1024 * 1024 * 10).is_ok() 
-         && CreatePipe(&mut h_stdout_read, &mut h_stdout_write, Some(&sa), 1024 * 1024 * 10).is_ok() 
+      if CreatePipe(&mut h_stdin_read, &mut h_stdin_write, Some(&sa), 1024 * 1024 * 10).is_ok()
+         && CreatePipe(&mut h_stdout_read, &mut h_stdout_write, Some(&sa), 1024 * 1024 * 10).is_ok()
       {
         let _ = SetHandleInformation(h_stdin_write, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
         let _ = SetHandleInformation(h_stdout_read, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));

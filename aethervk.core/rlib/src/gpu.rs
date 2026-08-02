@@ -1,26 +1,14 @@
 //! gpu module.
 
-pub use super::gpu_backends::*;
 use crate::{
-  gpu,
-  gpu::frame::ResourceUploadResult,
-  physics::physics_scene::{GpuReferenceFrame, PhysicsScene},
-  scene::{
-    EntityId, PhysicalMeshComponent, Scene, TransformComponent,
-    text::{FontAtlas, GlyphInfo},
-  },
+  gpu::{self, frame::ResourceUploadResult},
+  scene::{EntityId, StaticMeshComponent, text::FontAtlas},
   simulation::comet::Texture,
   types::{EngineResult, GpuError, GpuResult},
 };
-use ab_glyph::PxScale;
-use aethervk_oshal_rlib::os::time::timeus_t;
 use alloc::sync::{Arc, Weak};
 use bitflags::bitflags;
-pub use compute_push_constants::{ParticleGpu, RigidBodyGpu, RigidBodyImex, Wrench};
-use core::{
-  ffi,
-  hash::{Hash, Hasher},
-};
+use core::{ffi, hash::Hash};
 use heapless::index_map::FnvIndexMap;
 
 pub mod compute_push_constants;
@@ -28,9 +16,6 @@ pub mod frame;
 pub mod scene_conversion;
 
 pub use self::frame::RenderScene;
-
-/// TODO: Document this item
-pub type RwLock<T> = parking_lot::RwLock<T>;
 
 /// An opaque task that MUST be executed on the main UI thread.
 /// Used to defer window-system-tied destruction (swapchain, surface) from
@@ -43,69 +28,21 @@ pub type MainThreadCleanupTask = alloc::boxed::Box<dyn FnOnce() + Send>;
 pub type MainThreadCleanupQueue = Arc<spin::Mutex<alloc::vec::Vec<MainThreadCleanupTask>>>;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-/// TODO: Document this item
 pub struct RenderBackendId(pub u64);
-/// TODO: Document this item
 pub const NULL_RENDER_BACKEND: RenderBackendId = RenderBackendId(0);
-/// TODO: Document this item
 pub const VULKAN_RENDER_BACKEND: RenderBackendId = RenderBackendId(1);
-/// TODO: Document this item
-pub const METAL_RENDER_BACKEND: RenderBackendId = RenderBackendId(2);
-/// TODO: Document this item
-pub const D3D12_RENDER_BACKEND: RenderBackendId = RenderBackendId(3);
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-/// TODO: Document this item
 pub struct GpuResourceHandle(pub u64);
-/// TODO: Document this item
 pub const NULL_GPU_RESOURCE: GpuResourceHandle = GpuResourceHandle(0);
 
 impl GpuResourceHandle {
-  /// TODO: Document this item
   pub fn from_raw(raw: u64) -> Self {
     Self(raw)
   }
 }
 
-/// Abstract representation of Vulkan sharing mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SharingMode {
-  Exclusive = 0,
-  Concurrent = 1,
-}
-
-/// Represents queue sharing configuration for GPU resources.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct QueueSharingInfo {
-  pub mode: SharingMode,
-  pub queue_family_indices: alloc::vec::Vec<u32>,
-}
-
-/// TODO: Document this item
-#[derive(Clone, Copy)]
-pub struct KinematicBody {
-  pub entity_id: EntityId,
-  pub transform: TransformComponent,
-  pub velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
-  pub parent_frame_id: u32,
-  pub mu: f32,
-  pub own_frame_id: u32,
-  pub frame_type: u32,
-  pub scale: f32,
-  pub shape_type: u32,
-  pub shape_data: [f32; 3],
-}
-
-#[derive(Clone, Copy, Default, Debug)]
-pub struct ParticleMetadata {
-  pub entity_id: EntityId,
-  pub parent_frame_id: u32,
-  pub original_index: u32,
-}
-
 pub mod new_particles {
-  use super::*;
-
   // maximum supported subgroup size is 128, and this is a multiple of it
   pub const PCHUNK_SIZE: usize = 256;
   pub const MAX_PARTICLES: usize = 1_000_000;
@@ -131,97 +68,32 @@ pub mod new_particles {
     pub beta: [f32; PCHUNK_SIZE],
     pub spawn_time: [u32; PCHUNK_SIZE],
   }
-}
 
-/// Number of float fields per particle in the AOSOA buffer.
-/// Slots: 0-2=pos, 3-5=vel, 6=mass, 7-9=force, 10=beta, 11=spawnTime in 1/300 seconds
-pub const PARTICLE_FIELDS: usize = 11;
-
-pub fn pack_particles_aosoa(
-  particles: &[alloc::vec::Vec<f32>],
-  subgroup_size: usize,
-  fields_per_particle: usize,
-) -> alloc::vec::Vec<f32> {
-  let num_particles = particles.len();
-  let num_blocks = ((num_particles + subgroup_size - 1) / subgroup_size).max(1);
-  let mut buffer = alloc::vec::Vec::with_capacity(num_blocks * fields_per_particle * subgroup_size);
-  buffer.resize(num_blocks * fields_per_particle * subgroup_size, 0.0);
-
-  for (i, p) in particles.iter().enumerate() {
-    let block = i / subgroup_size;
-    let lane = i % subgroup_size;
-    let base = block * (fields_per_particle * subgroup_size) + lane;
-    for f in 0..fields_per_particle.min(p.len()) {
-      buffer[base + f * subgroup_size] = p[f];
-    }
+  /// Push Constant layout for `dust.vert/frag` shaders
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct DustPushConstants {
+    pub global_particle_buffer: u64,
+    pub particle_page_table: u64,
+    pub view_proj: [f32; 16],
+    pub stream_color: [f32; 4],
+    pub chunk_offset: u32,
+    pub current_time: u32,
+    pub max_ttl: f32,
+    pub macro_scale: f32,
+    pub micro_radius: f32,
+    pub num_spots: u32,
+    pub dispersion_rate: f32,
+    pub _pad: u32,
   }
-  buffer
-}
-
-pub fn unpack_particles_aosoa(
-  buffer: &[f32],
-  subgroup_size: usize,
-  fields_per_particle: usize,
-  count: usize,
-) -> alloc::vec::Vec<alloc::vec::Vec<f32>> {
-  let mut particles = alloc::vec::Vec::with_capacity(count);
-  for i in 0..count {
-    let block = i / subgroup_size;
-    let lane = i % subgroup_size;
-    let base = block * (fields_per_particle * subgroup_size) + lane;
-    let mut p = alloc::vec::Vec::with_capacity(fields_per_particle);
-    for f in 0..fields_per_particle {
-      let idx = base + f * subgroup_size;
-      p.push(if idx < buffer.len() { buffer[idx] } else { 0.0 });
-    }
-    particles.push(p);
-  }
-  particles
-}
-
-#[derive(Clone, Copy)]
-#[deprecated(note = "Use RigidBodyGpu or ParticleGpu instead")]
-/// TODO: Document this item
-pub struct DynamicBody {
-  pub entity_id: EntityId,
-  pub transform: TransformComponent,
-  pub velocity: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
-  pub mass: f32,
-  pub parent_frame_id: u32,
-  pub force: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
-  pub shape_type: u32,
-  pub shape_data: [f32; 3],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-/// GPU-side representation of a force emitter.
-///
-/// For `type_id == 0` (Gravity): `mu` is the standard gravitational parameter G*M
-/// in **km³/s²** (JPL Horizons default). `position` is the emitter's world-space
-/// position in **AU** (macro frame). The shader transforms it into the target
-/// body's local frame using a `GpuReferenceFrameArray` BDA.
-///
-/// For `type_id == 1` (Planar): `mu` holds the base force magnitude, `beta` is unused.
-pub struct ForceEmitter {
-  pub position: [f32; 3],
-  pub mu: f32, // G*M in km³/s² for Gravity; base_force for Planar
-  pub normal: [f32; 3],
-  pub type_id: u32, // 0 = Gravity, 1 = Planar
-  pub trunc_distance: f32,
-  pub beta: f32, // radiation-pressure β; mu_eff = (1−β)·mu. 0 = pure gravity.
-  pub _pad: [u32; 2],
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-/// TODO: Document this item
 pub struct CommandBufferHandle(pub u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-/// TODO: Document this item
 pub struct RenderableInstanceId(pub u64);
 
-/// TODO: Document this item
 pub trait GpuCometExt {
   fn texture_flags(&self) -> TextureFlags;
 }
@@ -248,7 +120,6 @@ impl GpuCometExt for crate::simulation::comet::Comet {
 bitflags! {
   #[repr(C)]
   #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-  /// TODO: Document this item
   pub struct TextureFlags: u32 {
     const ALBEDO    = 1 << 0;
     const NORMAL    = 1 << 1;
@@ -259,7 +130,6 @@ bitflags! {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct TrajectoryPushConstants {
   pub map_ptr: u64,
   pub traj_ptr: u64,
@@ -270,7 +140,6 @@ pub struct TrajectoryPushConstants {
 
 #[repr(C, align(16))]
 #[derive(Copy, Clone)]
-/// TODO: Document this item
 pub struct RationalBezierGpu {
   pub cp0: [f32; 4],
   pub cp1: [f32; 4],
@@ -280,7 +149,6 @@ pub struct RationalBezierGpu {
 
 #[repr(C, align(16))]
 #[derive(Copy, Clone)]
-/// TODO: Document this item
 pub struct TrajectoryGpu {
   pub segments_ptr: u64,
   pub _pad0: u64,
@@ -292,44 +160,15 @@ pub struct TrajectoryGpu {
 
 #[repr(C, align(4))]
 #[derive(Copy, Clone)]
-/// TODO: Document this item
 pub struct SegmentMapGpu {
   pub trajectory_id: u32,
   pub local_segment_id: u32,
   pub subdivisions: u32,
 }
 
+/// `common.glsl` buffer_reference struct definition
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// Push constants for legacy physical mesh rendering.
-///
-/// Uses a BDA pointer (`extra_ptr`) to reference a [`MeshPushExtra`] buffer
-/// containing per-draw material/lighting data that previously exceeded the
-/// Vulkan-guaranteed 128-byte push constant minimum.
-pub struct PushConstants {
-  pub model_view_proj: [[f32; 4]; 4],
-  pub extra_ptr: u64,
-  pub _pad: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// Per-draw material and lighting data for the legacy physical mesh pipeline.
-/// Stored in a staging buffer and accessed via BDA pointer from [`PushConstants`].
-pub struct MeshPushExtra {
-  pub model: [[f32; 4]; 4],
-  pub sun_pos: [f32; 3],
-  pub texture_flags: TextureFlags,
-  pub sun_color: [f32; 4],
-  pub camera_pos: [f32; 3],
-  pub emissive_intensity: f32,
-  pub emissive_color: [f32; 3],
-  pub _pad: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct SceneData {
   pub view_proj: [f32; 16],
   pub camera_pos: [f32; 4], // w is padding
@@ -339,9 +178,9 @@ pub struct SceneData {
   pub _pad: [f32; 2],
 }
 
+/// `common.glsl` buffer_reference struct definition
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct MaterialData {
   pub base_albedo: [f32; 4],    // w is base_roughness
   pub emissive_color: [f32; 4], // w is emissive_intensity
@@ -349,30 +188,35 @@ pub struct MaterialData {
   pub paint_display_mode: u32,
   pub texture_flags: u32,
   pub _pad0: f32,
+  /// useful only for spherical grid mode (not used now)
   pub sphere_center_radius: [f32; 4],
+  /// useful only for spherical grid mode (not used now)
   pub grid_color_density: [f32; 4],
 }
 
+/// `common.glsl` model matrix pointer. This allows us to store all model matrices in a single
+/// buffer if needed
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct ObjectData {
   pub model: [f32; 16],
 }
 
+/// push constants layout for `physical_mesh2.vert/frag`
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct PhysicalMesh2PushConstants {
+  // BDA to [`SceneData`]
   pub scene_addr: u64,
+  // BDA to [`MaterialData`]
   pub material_addr: u64,
+  // BDA to [`ObjectData`]
   pub object_addr: u64,
   pub _pad: u64,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct CometSpecializationConstants {
   pub base_albedo_r: f32,
   pub base_albedo_g: f32,
@@ -395,7 +239,6 @@ impl Default for CometSpecializationConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct SunPushConstants {
   pub model_view_proj: [f32; 16],
   pub local_camera_pos: [f32; 3],
@@ -404,7 +247,6 @@ pub struct SunPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct CursorPushConstants {
   pub view_proj: [f32; 16],
   pub right_proj11: [f32; 4],
@@ -414,14 +256,12 @@ pub struct CursorPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct SkyPushConstants {
   pub inv_view_proj: [f32; 16],
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct MeasurementPushConstants {
   pub view_proj: [f32; 16],
   pub p1: [f32; 3],
@@ -436,7 +276,6 @@ pub struct MeasurementPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct BillboardPushConstants {
   pub view_proj: [f32; 16],
   pub center_pos: [f32; 3],
@@ -452,7 +291,6 @@ pub struct BillboardPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct MarkerPushConstants {
   pub view_proj: [f32; 16],
   pub center_pos: [f32; 3],
@@ -467,7 +305,6 @@ pub struct MarkerPushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct GridPushConstants {
   pub view_proj: [f32; 16],
   pub camera_pos: [f32; 3],
@@ -480,37 +317,6 @@ pub struct GridPushConstants {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// Push constants for legacy BVH debug wireframe rendering.
-///
-/// Uses a BDA pointer (`bvh_data_ptr`) to reference a [`BvhBoxData`] buffer
-/// containing per-box geometry data that previously exceeded the
-/// Vulkan-guaranteed 128-byte push constant minimum.
-pub struct BvhPushConstants {
-  pub mvp_arr: [f32; 16],
-  pub bvh_data_ptr: u64,
-  pub _pad: u64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, Debug)]
-pub struct Bvhwire2DataGpu {
-  pub center_type: [f32; 4],
-  pub extents: [f32; 4],
-  pub axes_x: [f32; 4],
-  pub axes_y: [f32; 4],
-  pub axes_z: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct Bvhwire2PushConstants {
-  pub bvh_ptr: u64,
-  pub _pad: u64,
-  pub view_proj: [f32; 16],
-}
-
-#[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct SphereGizmoDataGpu {
   pub model: [f32; 16],
@@ -519,8 +325,9 @@ pub struct SphereGizmoDataGpu {
   pub _pad: [f32; 2],
 }
 
+/// push constant layout for `sphere_gizmo.frag/vert`
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct SphereGizmoPushConstants {
   // Must match GLSL: layout(push_constant, std430) uniform PushConstants {
   //     mat4 viewProj;             // offset 0,  64 bytes
@@ -547,35 +354,6 @@ pub struct CompositePushConstants {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
-pub struct ParticlePushConstants {
-  pub view_proj: [f32; 16],
-  pub camera_up: [f32; 3],
-  pub time: f32,
-  pub camera_right: [f32; 3],
-  pub seed: f32,
-  pub color: [f32; 4],
-  pub radius: f32,
-  pub camera_pos: [f32; 3],
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
-pub struct Particle2PushConstants {
-  pub view_proj: [f32; 16],
-  pub camera_up: [f32; 3],
-  pub time: f32,
-  pub camera_right: [f32; 3],
-  pub seed: f32,
-  pub color: [f32; 4],
-  pub radius: f32,
-  pub camera_pos: [f32; 3],
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct GizmoPushConstants {
   pub view_proj: [f32; 16],
   pub scale: f32,
@@ -603,45 +381,7 @@ pub struct Text2PushConstants {
   pub view_proj: [[f32; 4]; 4],
 }
 
-// TODO remove on text rendering v2
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
-pub struct TextPushConstants {
-  pub pos: [f32; 2],
-  pub scale: [f32; 2],
-  pub color: [f32; 4],
-  pub uv_bounds: [f32; 4],
-  pub texture_id: u32,
-  pub _padding: [u32; 3],
-  pub view_proj: [f32; 16],
-}
-
-impl TextPushConstants {
-  /// TODO: Document this item
-  pub(crate) fn from_glyph(
-    glyph: &GlyphInfo,
-    cursor_position: [f32; 2],
-    view_proj: [f32; 16],
-    desired_points: f32,
-    atlas_scale: PxScale,
-    texture_id: u32,
-    color: [f32; 4],
-  ) -> Self {
-    Self {
-      pos: glyph.screen_position(cursor_position, desired_points, atlas_scale),
-      scale: glyph.screen_size(desired_points, atlas_scale),
-      color,
-      uv_bounds: glyph.uv_bounds(),
-      texture_id,
-      _padding: [0; 3],
-      view_proj,
-    }
-  }
-}
-
 impl RenderableInstanceId {
-  /// TODO: Document this item
   pub fn from_physical_mesh(asset_hash: u64) -> Self {
     Self(asset_hash)
   }
@@ -654,7 +394,6 @@ impl From<RenderableInstanceId> for GpuResourceHandle {
 }
 
 // Allow the host application to configure the core assets path uniformly
-/// TODO: Document this item
 pub static ASSET_DIR: parking_lot::RwLock<Option<alloc::string::String>> =
   parking_lot::RwLock::new(None);
 
@@ -706,30 +445,24 @@ pub struct CommandBufferSyncInfo {
   pub wait_stage_mask: CommandBufferSyncInfoStageMask,
 }
 
-/// TODO: Document this item
 pub trait CommandBuffer: Send + Sync {
-  /// TODO: Document this item
   fn submit(&mut self) -> EngineResult<Option<CommandBufferSyncInfo>>;
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct PipelineKey(pub u64);
 
-/// TODO: Document this item
 pub trait PipelineKeyable {
   fn pipeline_key(&self) -> PipelineKey;
 }
 
 #[derive(Default, Clone, Copy)]
-/// TODO: Document this item
 pub struct Rect2D {
   pub offset: [i32; 2],
   pub extent: [u32; 2],
 }
 
 impl Rect2D {
-  /// TODO: Document this item
   pub fn from_extent(extent: [u32; 2]) -> Self {
     Self {
       offset: [0, 0],
@@ -739,7 +472,6 @@ impl Rect2D {
 }
 
 #[derive(Clone, Copy)]
-/// TODO: Document this item
 pub struct Viewport {
   pub x: f32,
   pub y: f32,
@@ -750,7 +482,6 @@ pub struct Viewport {
 }
 
 impl Viewport {
-  /// TODO: Document this item
   pub fn from_extent(extent: [u32; 2]) -> Self {
     Self {
       x: 0.0,
@@ -805,41 +536,6 @@ pub struct BackgroundPushConstants {
   pub color_bottom: [f32; 4],
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-/// Per-box data for legacy BVH debug visualization, stored in a staging buffer
-/// and accessed via BDA pointer from [`BvhPushConstants`].
-pub struct BvhBoxData {
-  pub center_type: [f32; 4],
-  pub extents: [f32; 4],
-  pub axes_x: [f32; 4],
-  pub axes_y: [f32; 4],
-  pub axes_z: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-/// GPU-side representation of a single minimap planet.
-pub struct MinimapPlanetGpu {
-  pub pos: [f32; 2],
-  pub size: f32,
-  pub _pad: f32,
-  pub color: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// Push constants for the minimap overlay. Planet data is stored in a BDA buffer.
-pub struct MinimapPushConstants {
-  pub offset: [f32; 2],
-  pub size: [f32; 2],
-  pub player_pos: [f32; 2],
-  pub max_distance: f32,
-  pub num_planets: u32,
-  pub planets_ptr: u64,
-  pub _pad: u64,
-}
-
 pub struct Text2BatchCall {
   pub glyphs_ptr: u64,
   pub total_glyphs: u32,
@@ -847,75 +543,29 @@ pub struct Text2BatchCall {
 
 #[repr(u32)]
 #[derive(Copy, Clone, Eq, PartialEq)]
-/// TODO: Document this item
 pub enum NativeGpuProperty {
   VulkanMetalDeviceId = 0,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-/// TODO: Document this item
 pub enum ArchetypeId {
   Sun,
-  PhysicalMesh,
-  PhysicalMesh2,
+  Mesh,
   Billboard,
   Cursor,
   Marker,
   Measurement,
   Sky,
   Grid,
-  Minimap,
   Text,
-  Text2,
-  Bvh,
-  Bvhwire2,
-  Particle,
   Gizmo,
-  Particle2,
+  SphereGizmo,
   Trajectory,
   Ui,
   Background,
+  Particles,
 }
 
-/// `RenderCompute` bridges the gap between purely physical workloads (`Kernels`) and
-/// presentation workloads (`RenderDevice`). It handles compute shaders that are
-/// strictly associated with visual aspects (e.g. `skygen.comp`, `sungen.comp`, screen-space reflections,
-/// bloom, volumetric fog calculations) rather than physics or logic.
-///
-/// **Implementation Guidelines & Architecture:**
-/// 1.  **Queue Ownership:** Since `Kernels` often runs on a dedicated async-compute queue to prevent
-///     stalling the graphics pipeline, any shared resources (like a 3D texture generated by `RenderCompute`)
-///     would require explicit `VkImageMemoryBarrier` queue family ownership transfers if they were
-///     generated on the compute queue but consumed on the graphics queue.
-/// 2.  **Execution Location:** To avoid complex queue transfers, `RenderCompute` should be implemented
-///     by `RenderDevice` directly, executing on the Graphics Queue. This ensures that assets like the
-///     sun volume or sky map are natively available for fragment shaders in the same queue family.
-/// 3.  **Synchronization:** Methods in this trait should accept a `CommandBufferHandle` and internally
-///     issue pipeline barriers (`vkCmdPipelineBarrier`) to transition image layouts from
-///     `VK_IMAGE_LAYOUT_GENERAL` (for compute writing) to `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`
-///     (for fragment reading) before the graphics passes begin.
-/// 4.  **Resource Allocation:** Any allocations (like `sunVolume`) should be handled internally or via
-///     the `RenderDevice` resource allocator to ensure they are bound to the correct descriptor sets
-///     used by the graphics pipeline.
-pub trait RenderCompute: Send + Sync {
-  /// Generates the volumetric data for the sun and transitions the output image for fragment shader consumption.
-  fn dispatch_sun_volume_generation(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    resolution: (u32, u32, u32),
-  ) -> GpuResult<()>;
-
-  /// Generates the procedural skybox (e.g. using octahedral mapping) and transitions the output image.
-  fn dispatch_sky_generation(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    resolution: (u32, u32),
-  ) -> GpuResult<()>;
-
-  // Future visual compute passes can be added here (e.g. post-processing, light culling)
-}
-
-/// TODO: Document this item
 pub trait RenderDevice: Send + Sync + core::any::Any {
   fn as_any(&self) -> &dyn core::any::Any;
 
@@ -1007,22 +657,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     frame_index: u32,
   ) -> GpuResult<()>;
 
-  // TODO: see how to refactor get_or_create functions
-  /// Returns (pipeline, vertex_buffer, index_buffer)
-  fn get_physical_mesh_resources(
-    &self,
-    asset_hash: u64,
-    handle: PresentationEngineHandle,
-  ) -> GpuResult<ResourceUploadResult>;
-  fn create_physical_mesh_resources(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    asset_hash: u64,
-    component: &PhysicalMeshComponent,
-    handle: PresentationEngineHandle,
-    debug_name: &str,
-  ) -> GpuResult<ResourceUploadResult>;
-
   fn get_physical_mesh2_resources(
     &self,
     asset_hash: u64,
@@ -1032,12 +666,10 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     &self,
     cmd_buffer: CommandBufferHandle,
     asset_hash: u64,
-    component: &PhysicalMeshComponent,
+    component: &StaticMeshComponent,
     handle: PresentationEngineHandle,
     debug_name: &str,
   ) -> GpuResult<ResourceUploadResult>;
-
-  #[allow(clippy::too_many_arguments)]
   fn draw_physical_mesh2(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -1093,7 +725,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     &self,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult>;
-
   fn create_marker_resources(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -1109,7 +740,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     cmd_buffer: CommandBufferHandle,
     handle: PresentationEngineHandle,
   ) -> GpuResult<ResourceUploadResult>;
-
   fn update_gizmo_instance(
     &self,
     entity: EntityId,
@@ -1128,20 +758,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   ) -> GpuResult<Option<crate::gpu::frame::SphereGizmoBatchCall>>;
 
   // --- Removed get_or_create_particle_resources ---
-
-  /// Uploads particle systems into the mega-buffers. Should be called before rendering.
-  fn upload_particle_systems(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    particle_calls: &mut [crate::gpu::frame::ParticleDrawCall],
-  ) -> GpuResult<()>;
-
-  fn upload_particle2_systems(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    particle_calls: &mut [crate::gpu::frame::Particle2DrawCall],
-  ) -> GpuResult<()>;
-
   fn upload_trajectories(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -1158,12 +774,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     ui_elements: &[crate::gpu::UiElementGpu],
   ) -> GpuResult<Option<crate::gpu::UiBatchCall>>;
 
-  // fn submit_text2_batch(
-  //   &self,
-  //   cmd_buffer: CommandBufferHandle,
-  //   text_calls: &[crate::gpu::Text2DrawDataGpu],
-  // ) -> GpuResult<crate::gpu::Text2BatchCall>;
-
   fn clear_depth(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -1176,21 +786,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     glyphs: &[crate::gpu::TextGlyphGpu],
   ) -> GpuResult<Option<crate::gpu::Text2BatchCall>>;
 
-  /// Draws a particle system using the mega-buffer
-  fn draw_particle_indirect(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    indirect_offset: u32,
-  ) -> GpuResult<()>;
-
-  fn draw_particle2_indirect(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    indirect_offset: u32,
-  ) -> GpuResult<()>;
-
-  fn get_particle_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
-  fn get_particle2_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
   fn get_trajectory_pipeline_key(&self, handle: PresentationEngineHandle)
   -> GpuResult<PipelineKey>;
   fn get_sun_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
@@ -1198,8 +793,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   fn get_background_pipeline_key(&self, handle: PresentationEngineHandle)
   -> GpuResult<PipelineKey>;
   fn get_grid_pipeline_kay(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
-  fn get_bvh_pipeline_kay(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
-  fn get_bvhwire2_pipeline_key(&self, handle: PresentationEngineHandle) -> GpuResult<PipelineKey>;
 
   /// Given FontAtlas (moved), try to allocate a rasterized representation of it
   /// for the render device. Returns internal id used by RenderDevice (as descriptor index)
@@ -1221,9 +814,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     frame_index: usize,
   ) -> GpuResult<SwapchainStatus>;
 
-  /// Start for an interface to draw something on the screen. Gets a handle to store rendering
-  /// state setting commands
-
   fn download_windowless_image(
     &self,
     handle: PresentationEngineHandle,
@@ -1240,15 +830,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   ) -> GpuResult<()>;
 
   fn begin_command_buffer(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
-
-  /// Returns the mapped memory pointer of the emissive paint image for a given physical mesh instance
-  fn get_emissive_paint_image_mapped_ptr(
-    &self,
-    mesh_id: crate::gpu::RenderableInstanceId,
-  ) -> Option<*mut u8>;
-
-  /// Flushes the emissive paint image memory for a given physical mesh instance
-  fn flush_emissive_paint_image(&self, mesh_id: crate::gpu::RenderableInstanceId) -> GpuResult<()>;
 
   /// responsible to acquire an image and store it in the associated command buffer structure
   fn begin_render_pass(
@@ -1289,15 +870,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     current_frame: u64,
   ) -> GpuResult<u32>;
 
-  /// alter internal state for current command buffer to use a specific set of buffers, coherent with pipeline
-  /// TODO rework to 1) not take pipeline key 2) support multiple archetypes which use buffers
-  fn bind_buffers(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    pipeline: PipelineKey,
-    buffers: GpuResourceHandle,
-  ) -> GpuResult<()>;
-
   fn push_constants_raw(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -1325,7 +897,6 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     stride: u32,
   ) -> GpuResult<()>;
 
-  // TODO move to kernels trait
   fn update_sun(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -1334,41 +905,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     radius: f32,
   ) -> GpuResult<()>;
 
-  /// Upload per-draw mesh material/lighting data to a staging buffer and
-  /// return the BDA pointer for use in [`PushConstants::extra_ptr`].
-  fn upload_mesh_push_extra(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    data: &MeshPushExtra,
-  ) -> GpuResult<u64>;
-
-  /// Upload BVH box data to a staging buffer and return the BDA pointer
-  /// for use in [`BvhPushConstants::bvh_data_ptr`].
-  fn upload_bvh_box_data(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    data: &BvhBoxData,
-  ) -> GpuResult<u64>;
-
-  /// Upload minimap planet data to a staging buffer and return the BDA pointer
-  /// for use in the minimap push constants.
-  fn upload_minimap_planets(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    planets: &[MinimapPlanetGpu],
-  ) -> GpuResult<u64>;
-
   fn prepare_billboard_archetype_for_render_and_bind_pipeline(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-  ) -> GpuResult<()>;
-
-  fn prepare_bvh_archetype_for_render_and_bind_pipeline(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-  ) -> GpuResult<()>;
-
-  fn prepare_bvhwire2_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()>;
@@ -1389,36 +926,16 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     handle: PresentationEngineHandle,
   ) -> GpuResult<PipelineKey>;
 
-  fn upload_bvhwire2_batch(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    bvh_data: &[crate::gpu::Bvhwire2DataGpu],
-  ) -> GpuResult<Option<crate::gpu::frame::Bvhwire2BatchCall>>;
-
   fn prepare_gizmo_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()>;
 
   /// Allocates Descriptor (not image, that is done in `generate_sky`) and updates if not done yet
-  /// TODO probably move into bridge between Kernels and RenderDevice when Kernels has generates_sky
-  /// TODO remove entity. Support for only one sun
   fn prepare_sun_for_render(
     &self,
     cmd_buffer: CommandBufferHandle,
     entity: EntityId,
-  ) -> GpuResult<()>;
-
-  /// Allocates Descriptor (not image, that is done in `generate_sky`) and updates if not done yet
-  /// TODO probably move into bridge between Kernels and RenderDevice when Kernels has generates_sky
-  fn prepare_particle_archetype_for_render_and_bind_pipeline(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-  ) -> GpuResult<()>;
-
-  fn prepare_particle2_archetype_for_render_and_bind_pipeline(
-    &self,
-    cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()>;
 
   fn prepare_trajectory_archetype_for_render_and_bind_pipeline(
@@ -1433,53 +950,9 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
 
   fn prepare_sky_for_render(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
-  /// Screen extent should be the chosen presentation engine extent to correctly display screen size and position
-  /// `atlas_id` is composed of the `hash` and internal id for the font atlas
-  fn prepare_text_archetype_for_render_and_bind_pipeline(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-  ) -> GpuResult<()>;
-
   fn prepare_text2_archetype_for_render_and_bind_pipeline(
     &self,
     cmd_buffer: CommandBufferHandle,
-  ) -> GpuResult<()>;
-
-  // TODO move in frame as a ui rendering
-  #[deprecated]
-  fn render_minimap(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    player_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
-    max_distance: f32,
-    planets: &[(
-      aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
-      f32,
-      [f32; 4],
-    )],
-    screen_extent: [f32; 2],
-  ) -> GpuResult<()>;
-
-  fn render_ui_rect(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    color: [f32; 4],
-    position: [f32; 2],
-    size: [f32; 2],
-  ) -> GpuResult<()>;
-
-  // TODO instead of rendering a character at a time, we should pass letters as vertices and use 4 instances to create a quad. vertex data should have the necessary glyph position/size and texture id. This means that we need a "streaming buffer" (See VMA guidelines) instead of push constants
-  /// `prepare_text_archetype_for_render_and_bind_pipeline` should have already been called
-  /// therefore assumes text pipeline, descriptor sets, are already in place.
-  fn render_text(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-    text: &str,
-    start_cursor_position: [f32; 2],
-    view_proj: [f32; 16],
-    atlas_id: (u64, u32),
-    desired_points: f32,
-    color: [f32; 4],
   ) -> GpuResult<()>;
 
   /// Advance to the next subpass within the current render pass.
@@ -1595,8 +1068,7 @@ macro_rules! implement_render_device_ext {
 // Call the macro with your specific methods, archetype enum variants, and structs
 implement_render_device_ext! {
   fn push_sun_constants(Sun, SunPushConstants);
-  fn push_constants_mesh(PhysicalMesh, PushConstants);
-  fn push_constants_mesh2(PhysicalMesh2, PhysicalMesh2PushConstants);
+  fn push_constants_mesh2(Mesh, PhysicalMesh2PushConstants);
   fn push_billboard_constants(Billboard, BillboardPushConstants);
   fn push_cursor_constants(Cursor, CursorPushConstants);
   fn push_marker_constants(Marker, MarkerPushConstants);
@@ -1604,14 +1076,7 @@ implement_render_device_ext! {
   fn push_sky_constants(Sky, SkyPushConstants);
   fn push_grid_constants(Grid, GridPushConstants);
   fn push_gizmo_constants(Gizmo, GizmoPushConstants);
-  // Text,
-  fn push_text_constants(Text, TextPushConstants);
-  fn push_text2_constants(Text2, Text2PushConstants);
-  // Bvh,
-  fn push_bvh_constants(Bvh, BvhPushConstants);
-  fn push_bvhwire2_constants(Bvhwire2, Bvhwire2PushConstants);
-  fn push_particle_constants(Particle, ParticlePushConstants);
-  fn push_particle2_constants(Particle2, Particle2PushConstants);
+  fn push_text2_constants(Text, Text2PushConstants);
   fn push_trajectory_constants(Trajectory, TrajectoryPushConstants);
   fn push_ui_constants(Ui, UiPushConstants);
   fn push_background_constants(Background, BackgroundPushConstants);
@@ -1629,7 +1094,6 @@ pub struct ScopedCommandBuffer<'a> {
 }
 
 impl<'a> ScopedCommandBuffer<'a> {
-  /// TODO: Document this item
   pub fn new(
     device: &'a dyn RenderDevice,
     cmd_buffer: CommandBufferHandle,
@@ -1650,7 +1114,6 @@ impl<'a> ScopedCommandBuffer<'a> {
     let _ = self.sync_infos.push(sync_info);
   }
 
-  /// TODO: Document this item
   pub fn cmd(&self) -> CommandBufferHandle {
     self.cmd_buffer
   }
@@ -1694,7 +1157,6 @@ pub struct ScopedRenderPass<'a> {
 }
 
 impl<'a> ScopedRenderPass<'a> {
-  /// TODO: Document this item
   pub fn new(device: &'a dyn RenderDevice, cmd_buffer: CommandBufferHandle) -> Self {
     Self {
       device,
@@ -1719,7 +1181,6 @@ impl<'a> Drop for ScopedRenderPass<'a> {
   }
 }
 
-/// TODO: Document this item
 pub struct FrameCancelGuard<'a> {
   device: &'a dyn RenderDevice,
   engine: PresentationEngineHandle,
@@ -1727,7 +1188,6 @@ pub struct FrameCancelGuard<'a> {
 }
 
 impl<'a> FrameCancelGuard<'a> {
-  /// TODO: Document this item
   pub fn new(
     device: &'a dyn RenderDevice,
     engine: PresentationEngineHandle,
@@ -1740,7 +1200,6 @@ impl<'a> FrameCancelGuard<'a> {
     }
   }
 
-  /// TODO: Document this item
   pub fn defuse(mut self) {
     self.acquire_result = None;
   }
@@ -1759,13 +1218,11 @@ impl<'a> Drop for FrameCancelGuard<'a> {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-/// TODO: Document this item
 pub struct RenderDeviceHandle(pub u64);
 
 /// backend specific additional device init parameters
 pub type DeviceAdditionalParams = FnvIndexMap<u64, usize, 8>;
 
-/// TODO: Document this item
 pub trait RenderContext: Send + Sync {
   fn backend_id(&self) -> RenderBackendId;
 
@@ -1803,14 +1260,11 @@ pub trait RenderContext: Send + Sync {
 // NOTE: This is a box like type, so we don't need to box it when returning it to cdylib,
 // we can instead use the ManualDrop mechanism
 #[derive(Clone)]
-/// TODO: Document this item
 pub struct RenderFrontend {
   backend: Arc<parking_lot::RwLock<dyn RenderContext + 'static>>,
 }
 
-/// TODO: Document this item
 pub type WeakRenderFrontend = Weak<parking_lot::RwLock<dyn RenderContext + 'static>>;
-/// TODO: Document this item
 pub trait WeakRenderFrontendExt {
   fn as_frontend(&self) -> Option<RenderFrontend>;
 }
@@ -1833,7 +1287,6 @@ unsafe impl Sync for RenderFrontend {}
 unsafe impl Send for RenderFrontend {}
 
 impl RenderFrontend {
-  /// TODO: Document this item
   pub fn weak_self(&self) -> WeakRenderFrontend {
     Arc::downgrade(&self.backend)
   }
@@ -1890,7 +1343,6 @@ impl RenderFrontend {
       None => Err(GpuError::DeviceLost),
     }
   }
-  /// TODO: Document this item
   pub fn take_and<T>(
     &self,
     f: impl FnOnce(&dyn RenderContext) -> EngineResult<T>,
@@ -1901,7 +1353,6 @@ impl RenderFrontend {
     }
   }
 
-  /// TODO: Document this item
   pub fn take_mut_and<T>(
     &self,
     f: impl FnOnce(&mut dyn RenderContext) -> EngineResult<T>,
@@ -1937,11 +1388,9 @@ where
 }
 
 #[derive(Default, Debug, Copy, Clone, Eq, Ord, PartialOrd, PartialEq, Hash)]
-/// TODO: Document this item
 pub struct PresentationEngineHandle(pub u64);
 
 impl PresentationEngineHandle {
-  /// TODO: Document this item
   pub fn is_valid(self) -> bool {
     self.0 != 0
   }
@@ -1959,7 +1408,6 @@ pub enum SwapchainStatus {
 }
 
 impl SwapchainStatus {
-  /// TODO: Document this item
   pub fn needs_resize(self) -> bool {
     self != Self::Optimal
   }
@@ -1967,7 +1415,6 @@ impl SwapchainStatus {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
-/// TODO: Document this item
 pub struct AcquireResult {
   pub image_index: u32,
   pub status: SwapchainStatus,
@@ -2015,7 +1462,6 @@ pub enum PresentationEngineType {
   WindowLess,
 }
 
-/// TODO: Document this item
 pub struct PresentationEngineParams {
   pub width: u32,
   pub height: u32,
@@ -2026,7 +1472,6 @@ pub struct PresentationEngineParams {
 }
 
 impl PresentationEngineParams {
-  /// TODO: Document this item
   pub fn windowless(width: u32, height: u32) -> Self {
     Self {
       width,
@@ -2043,93 +1488,6 @@ impl PresentationEngineParams {
   }
 }
 
-// -- Compute Engine traits --
-/// Continuous array residing entirely in backend memory
-pub trait DeviceBuffer<T>: Send + Sync {
-  type Cmd: CommandBuffer;
-  /// Handle type representing pending GPU-to-CPU DMA transfer.
-  /// Lifetime constraint: This handle should die before device buffer
-  type ReadHandle<'a>: WaitHandle<alloc::vec::Vec<T>>
-  where
-    Self: 'a,
-    T: 'a;
-
-  fn capacity(&self) -> usize;
-
-  /// Returns the buffer device address (BDA) as a `u64`, suitable for use as
-  /// a `layout(buffer_reference)` pointer in compute push constants.
-  fn address(&self) -> u64;
-
-  /// Enqueues a DMA copy-back command to the CPU. the returned Future does NOT
-  /// borrow `cmd`, allowing you to submit the command buffer while the tasklet
-  /// awaits the GPU synchronization primitive (fence)
-  fn enqueue_read_to_cpu(&self, cmd: &mut Self::Cmd) -> EngineResult<Self::ReadHandle<'_>>;
-
-  /// Read buffer contents as a slice via its persistently-mapped pointer.
-  /// Returns `None` if the backend does not support persistent mapping or the buffer
-  /// wasn't allocated with host visibility.
-  ///
-  /// # Safety
-  /// The caller must ensure that the GPU has finished executing any commands that write
-  /// to this buffer before calling this function (e.g., by waiting on a timeline semaphore).
-  unsafe fn mapped_slice(&self) -> Option<&[T]>;
-}
-
-/// A handle representing a pending GPU-to-CPU DMA transfer.
-/// WARN: Any WaitHandle implementation should implement Drop, so that if we early exit from a function we know wait has been done.
-pub trait WaitHandle<T>: Send + Sync {
-  /// Blocks the current thread (or yields the tasklet back to your custom
-  /// engine scheduler) until the hardware signals completion. Consumes the handle.
-  fn wait(self) -> EngineResult<T>;
-}
-
-/// Specialized `DeviceBuffer` with a dynamic length managed by an atomic counter on the GPU
-/// This is heavily used for Stream compaction
-pub trait DeviceList<T>: DeviceBuffer<T> {
-  fn clear(&mut self, cmd: &mut Self::Cmd) -> EngineResult<()>;
-}
-
-/// Opaque trait for backend-specific Bounding Volume Hierarchy
-pub trait DeviceBvh: Send + Sync {
-  type Cmd: CommandBuffer;
-  /// Returns the BDA of the root BVH buffer (used as TLAS addr in push constants).
-  fn address(&self) -> u64;
-}
-
-#[repr(C, align(16))]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct CrossPair {
-  pub macro_id: u32,
-  pub micro_id: u32,
-  pub lca_id: u32,
-  pub _pad: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-/// TODO: Document this item
-pub struct ColliderId {
-  pub entity_id: u32,
-  /// Set to `u32::MAX` if it's a monolithic body. Otherwise, it is the particle instance index.
-  pub primitive_index: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-/// TODO: Document this item
-pub struct CollisionPair {
-  pub a: ColliderId,
-  pub b: ColliderId,
-  pub time_of_impact: f32,
-  pub is_lca: u32,
-  pub lca_id: u32,
-  pub frame_bda_low: u32,
-  pub contact_normal: [f32; 3],
-  pub frame_bda_high: u32,
-  pub contact_point: [f32; 3],
-  pub penetration_depth: f32,
-}
-
 /// GPU hardware subgroup (warp/SIMD) size, clamped to the valid range for dispatch.
 /// Powers of two from 4 to 128. Lavapipe reports 8; Apple Silicon 32; AMD 64; Nvidia 32.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2140,533 +1498,4 @@ pub enum SubgroupSize {
   Size32 = 32,
   Size64 = 64,
   Size128 = 128,
-}
-
-/// Computes execution for physics, particle systems, and interval arithmetic.
-pub trait Kernels: Send + Sync {
-  type Cmd: CommandBuffer;
-
-  // --- Associated Types mapping to the underlying Backend ---
-  type Buffer<T: Copy + Send + Sync>: DeviceBuffer<T, Cmd = Self::Cmd>;
-  type List<T: Copy + Send + Sync>: DeviceList<T, Cmd = Self::Cmd>;
-  type MotionBvh: DeviceBvh<Cmd = Self::Cmd>;
-  /// Opaque GPU buffer holding the per-tick flat `TlasMultiNode<N>[]` array.
-  type MotionTlas: DeviceBvh<Cmd = Self::Cmd>;
-
-  fn discard_buffer<T: Copy + Send + Sync>(&self, buffer: Self::Buffer<T>);
-  fn discard_list<T: Copy + Send + Sync>(&self, list: Self::List<T>);
-  fn discard_bvh(&self, bvh: Self::MotionBvh);
-  fn discard_tlas(&self, tlas: Self::MotionTlas);
-
-  /// Returns the hardware subgroup size.
-  fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize>;
-
-  /// Returns true if the backend is running on a CPU emulator (like Lavapipe).
-  fn is_cpu_device(&self) -> bool;
-
-  fn wait_sync(&self, sync: &crate::gpu::CommandBufferSyncInfo) -> EngineResult<()>;
-
-  /// Blocks the CPU until all GPU operations are completely idle.
-  fn wait_idle(&self) -> EngineResult<()>;
-
-  /// Toggles particle self-gravity on or off. Opt-in strictly.
-  fn toggle_particle_self_gravity(&self, enable: bool);
-
-  fn refit_motion_blas(
-    &self,
-    cmd: &mut Self::Cmd,
-    bvh: &Self::MotionBvh,
-    depth_indices: &Self::Buffer<u32>,
-    total_nodes: u32,
-  ) -> EngineResult<()>;
-
-  /// Upload a CPU-built flat `TlasMultiNode<N>` node array (as raw bytes)
-  /// to a device-visible STORAGE_BUFFER | SHADER_DEVICE_ADDRESS buffer.
-  /// `node_bytes` = `bytemuck::cast_slice(&nodes_vec)`.
-  /// Particle-BLAS leaf slots that were written with the sentinel `u32::MAX`
-  /// in `child_indices[i]` are patched by the implementation to point to the
-  /// GPU-built particle LBVH address before returning (Vulkan path only).
-  fn upload_motion_tlas(
-    &self,
-    cmd: &mut Self::Cmd,
-    node_bytes: &[u8],
-  ) -> EngineResult<Self::MotionTlas>;
-
-  fn create_command_buffer(&self) -> EngineResult<Self::Cmd>;
-
-  /// Debug-only: submit the current command buffer, wait for GPU completion,
-  /// and return a fresh command buffer.  Used by `shader_debug_sync` to
-  /// isolate which shader dispatch hangs the GPU.
-  #[cfg(feature = "shader_debug_sync")]
-  fn debug_sync_barrier(&self, cmd: Self::Cmd) -> EngineResult<Self::Cmd> {
-    Ok(cmd)
-  }
-
-  /// Debug-only: validate VMA debug margins for all allocations.
-  /// When `VMA_DEBUG_MARGIN > 0` this walks every sub-allocation in every
-  /// memory block and asserts the sentinel bytes are intact.
-  /// Returns `Err` if any corruption is detected.
-  #[cfg(feature = "shader_debug_sync")]
-  fn check_corruption(&self, label: &str) -> EngineResult<()> {
-    let _ = label;
-    Ok(())
-  }
-
-  /// Allocates a fresh, zero-initialised device list of `capacity` elements.
-  fn build_list<T: Copy + Send + Sync>(
-    &self,
-    cmd: &mut Self::Cmd,
-    capacity: usize,
-  ) -> EngineResult<Self::List<T>>;
-
-  fn build_leaves(
-    &self,
-    cmd: &mut Self::Cmd,
-    capacity: usize,
-  ) -> EngineResult<Self::Buffer<[u32; 8]>>;
-
-  // 1. & 2. Build Collections
-  fn build_kinematic_bodies(
-    &self,
-    cmd: &mut Self::Cmd,
-    scene: &PhysicsScene,
-    scene0: &Scene,
-  ) -> EngineResult<Self::Buffer<KinematicBody>>;
-
-  /// Build IMEX rigid-body buffer + zero-initialised wrench buffer from ECS.
-  /// Returns `(Buffer<RigidBodyImex>, Buffer<Wrench>)` — both per-frame,
-  /// discarded at end of `simulation_step` via the timeline-safe discard pool.
-  fn build_rigid_bodies(
-    &self,
-    cmd: &mut Self::Cmd,
-    scene: &PhysicsScene,
-    scene0: &Scene,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>, u32)>;
-
-  /// Upload `physical_scene.gpu_frames` as a GPU buffer for LCA broad-phase.
-  fn build_frames(
-    &self,
-    cmd: &mut Self::Cmd,
-    scene: &PhysicsScene,
-  ) -> EngineResult<Self::Buffer<GpuReferenceFrame>>;
-  /// Build one GPU buffer per `ParticleSystemComponent` entity.
-  ///
-  /// Returns a `Vec` of `(entity_id, particle_float_buffer, metadata_for_this_system)`.
-  /// Each system gets its own AoSoA buffer whose AABB is independent, enabling a
-  /// separate Morton-encode → LBVH → self-gravity → integration pipeline per system.
-  /// Systems with zero active particles are omitted from the returned vec.
-  fn build_particles(
-    &self,
-    cmd: &mut Self::Cmd,
-    scene: &Scene,
-  ) -> EngineResult<
-    alloc::vec::Vec<(
-      EntityId,
-      Self::Buffer<f32>,
-      alloc::vec::Vec<ParticleMetadata>,
-      bool,
-    )>,
-  >;
-
-  /// Uploads the `parent_frame_id` field from each `ParticleMetadata` entry as a
-  /// tightly-packed `u32[]` GPU buffer in AOSOA invocation order (same order as the
-  /// particle float buffer produced by [`build_particles`]).
-  ///
-  /// This is the BDA the `apply_emitters_to_particles.comp` shader reads via
-  /// `particle_frame_ids.frame_ids[gid]`.
-  ///
-  /// Cheap: just one host→device upload per frame, zero extra scene queries.
-  fn build_particle_frame_ids(
-    &self,
-    cmd: &mut Self::Cmd,
-    particle_metadata: &[ParticleMetadata],
-  ) -> EngineResult<Self::Buffer<u32>>;
-
-  fn build_emitters(
-    &self,
-    cmd: &mut Self::Cmd,
-    scene: &Scene,
-  ) -> EngineResult<(Self::Buffer<ForceEmitter>, u32)>;
-
-  fn build_emission_candidates(
-    &self,
-    cmd: &mut Self::Cmd,
-    scene: &Scene,
-  ) -> EngineResult<Self::Buffer<f32>>;
-
-  fn emit_particles(
-    &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
-    physical_scene: &PhysicsScene,
-    scene: &Scene,
-    sun_pos: aethervk_oshal_rlib::math::vector::vec3::Vec3f32,
-    dt: timeus_t,
-  ) -> EngineResult<()>;
-
-  // ── Legacy ODE phases (deprecated — new code uses imex_integrate_* below) ──
-
-  /// VV predictor for particles. **Deprecated**: use [`imex_integrate_particles_p1_p2`].
-  #[deprecated(since = "0.0.0", note = "use imex_integrate_particles_p1_p2")]
-  fn step_ode_p1_p2(
-    &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
-    dt: timeus_t,
-  ) -> EngineResult<()>;
-
-  /// RB IMR solve. **Deprecated**: use [`imex_integrate_bodies_p3`].
-  #[deprecated(since = "0.0.0", note = "use imex_integrate_bodies_p3")]
-  fn step_ode_p3_p4(
-    &self,
-    cmd: &mut Self::Cmd,
-    kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &mut Self::Buffer<RigidBodyGpu>,
-    emitters: &Self::Buffer<ForceEmitter>,
-    dt: timeus_t,
-  ) -> EngineResult<()>;
-
-  // 4.5 Compute self gravity (Barnes-Hut or fallback)
-  fn compute_self_gravity(
-    &self,
-    cmd: &mut Self::Cmd,
-    bvh: &Self::MotionBvh,
-    particles: &mut Self::Buffer<f32>,
-  ) -> EngineResult<()>;
-
-  /// VV corrector for particles. **Deprecated**: use [`imex_integrate_particles_p4_5`].
-  #[deprecated(since = "0.0.0", note = "use imex_integrate_particles_p4_5")]
-  fn step_ode_p5(
-    &self,
-    cmd: &mut Self::Cmd,
-    kinematics: &Self::Buffer<KinematicBody>,
-    particles: &mut Self::Buffer<f32>,
-    emitters: &Self::Buffer<ForceEmitter>,
-    dt: timeus_t,
-  ) -> EngineResult<()>;
-
-  // ── New Symmetric Strang-Split IMEX Integrators ────────────────────────────
-
-  /// VV predictor — half-kick + full position drift to x_{n+1}.
-  /// Clears particle force accumulator slots so force generators start from zero.
-  fn imex_integrate_particles_p1_p2(
-    &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
-    dt: timeus_t,
-  ) -> EngineResult<()>;
-
-  /// RB Implicit Midpoint Rule with Picard gyroscopic stabilisation.
-  /// Integrates RBs from (x_n, v_n) to (x_{n+1}, v_{n+1}).
-  /// Clears the wrench buffer on entry.
-  fn imex_integrate_bodies_p3(
-    &self,
-    cmd: &mut Self::Cmd,
-    bodies: &mut Self::Buffer<RigidBodyImex>,
-    wrenches: &mut Self::Buffer<Wrench>,
-    emitters: &Self::Buffer<ForceEmitter>,
-    frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
-    n_bodies: u32,
-    n_emitters: u32,
-    dt: timeus_t,
-  ) -> EngineResult<()>;
-
-  /// Reduces per-leaf wrenches into each rigid body's CoM wrench slot.
-  /// Must be called after all force generators have written to the wrench buffer
-  /// and before `imex_integrate_bodies_p3`.
-  fn imex_rb_force_assign(
-    &self,
-    cmd: &mut Self::Cmd,
-    bodies: &Self::Buffer<RigidBodyImex>,
-    wrenches: &mut Self::Buffer<Wrench>,
-    n_bodies: u32,
-  ) -> EngineResult<()>;
-
-  /// VV corrector — advances v_{n+½} → v_{n+1} using F(x_{n+1}).
-  /// Thread 0 simultaneously advances the 64-bit engine clock.
-  fn imex_integrate_particles_p4_5(
-    &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
-    dt: timeus_t,
-    current_time_us: timeus_t,
-  ) -> EngineResult<()>;
-
-  /// Applies macro-frame gravity emitters to microframe particles (GPU-inline frame transform).
-  ///
-  /// Must run between Barnes-Hut self-gravity and the P4_5 VV corrector.
-  /// `particle_frame_ids` — one `u32` frame index per particle in AOSOA invocation order.
-  fn apply_emitters_to_particles(
-    &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
-    emitters: &Self::Buffer<ForceEmitter>,
-    frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
-    particle_frame_ids: &Self::Buffer<u32>,
-    // Per-system BVH (Phase A): emitter force computed per cluster → BVH force slots.
-    bvh: &Self::MotionBvh,
-    num_emitters: u32,
-  ) -> EngineResult<()>;
-
-  /// Direct (BVH-free) external emitter force pass for test-particle systems.
-  ///
-  /// Equivalent to running Phase A + Phase B of `apply_emitters_to_particles` +
-  /// `accumulate_bvh_forces_to_particles`, but without any BVH: one thread per
-  /// particle computes the external gravitational force and atomically adds it
-  /// directly into the AOSOA force slots 7-9.  Self-gravity is not computed.
-  ///
-  /// Use only when `ParticleSystemComponent::disable_self_gravity = true`.
-  fn apply_emitters_direct(
-    &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
-    emitters: &Self::Buffer<ForceEmitter>,
-    frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
-    particle_frame_ids: &Self::Buffer<u32>,
-    num_emitters: u32,
-  ) -> EngineResult<()>;
-
-  /// Phase B: splats all accumulated BVH cluster forces (self-gravity from
-  /// `compute_self_gravity` + external gravity from `apply_emitters_to_particles`)
-  /// back to per-particle AOSOA force slots 7-9 via a leaf→root traversal.
-  ///
-  /// Must be called after a pipeline barrier following Phase A.
-  fn accumulate_bvh_forces_to_particles(
-    &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
-    bvh: &Self::MotionBvh,
-  ) -> EngineResult<()>;
-
-  // ── New Broad-Phase Suite ──────────────────────────────────────────────────
-
-  /// Zeroes all four pair-list count fields (rb_rb, rb_ps, lca, raw).
-  /// Must be the first broad-phase shader each frame.
-  #[cfg(any(test, feature = "collisions"))]
-  fn bp_clear(
-    &self,
-    cmd: &mut Self::Cmd,
-    raw_pairs_addr: u64,
-    out_rb_rb_addr: u64,
-    out_rb_ps_addr: u64,
-    out_rb_lca_addr: u64,
-    internal_pairs_addr: u64,
-    out_sparse_addr: u64,
-  ) -> EngineResult<()>;
-
-  /// Generates one swept AABB (TLASLeaf) per entity.
-  #[cfg(any(test, feature = "collisions"))]
-  fn bp_bounds_gen(
-    &self,
-    cmd: &mut Self::Cmd,
-    bodies: &Self::Buffer<RigidBodyImex>,
-    leaves_addr: u64,
-    lca_entities_addr: u64,
-    total_entities: u32,
-    dt: timeus_t,
-  ) -> EngineResult<()>;
-
-  /// Subgroup-cooperative TLAS traversal — writes raw overlapping entity pairs.
-  #[cfg(any(test, feature = "collisions"))]
-  fn bp_scene(
-    &self,
-    cmd: &mut Self::Cmd,
-    tlas_bvh_addr: u64,
-    query_leaves_addr: u64,
-    overlapping_pairs_addr: u64,
-    tlas_root_index: u32,
-    total_queries: u32,
-  ) -> EngineResult<()>;
-
-  /// Classifies raw pairs into RB-RB, RB-PS, and cross-LCA typed queues.
-  #[cfg(any(test, feature = "collisions"))]
-  fn bp_classify(
-    &self,
-    cmd: &mut Self::Cmd,
-    bodies: &Self::Buffer<RigidBodyImex>,
-    raw_pairs_addr: u64,
-    out_rb_rb_addr: u64,
-    out_rb_ps_addr: u64,
-    out_ps_ps_addr: u64,
-    out_macro_lca_addr: u64,
-    out_lca_lca_addr: u64,
-    total_raw_pairs: u32,
-  ) -> EngineResult<()>;
-
-  /// Transforms macro-frame RB AABBs into micro-frame space and traverses
-  /// the micro-frame BVH to produce refined narrow-phase candidate pairs.
-  #[cfg(any(test, feature = "collisions"))]
-  fn bp_cross_lca(
-    &self,
-    cmd: &mut Self::Cmd,
-    tlas_bvh_addr: u64,
-    lca_entities_addr: u64,
-    macro_leaves_addr: u64,
-    entity_headers_addr: u64,
-    lca_query_pairs_addr: u64,
-    out_rb_rb_addr: u64,
-    out_rb_ps_addr: u64,
-    out_ps_ps_addr: u64,
-    out_cross_pairs_addr: u64,
-    total_queries: u32,
-    max_pairs: u32,
-    num_rigid_bodies: u32,
-  ) -> EngineResult<()>;
-
-  /// Subgroup-cooperative LBVH traversal for particle–particle self-collision.
-  /// Computes Hookean repulsion and atomicAdds forces directly into AOSOA slots.
-  #[cfg(any(test, feature = "collisions"))]
-  fn bp_particle_self(
-    &self,
-    cmd: &mut Self::Cmd,
-    bvh_addr: u64,
-    particles: &mut Self::Buffer<f32>,
-    wrench_buffer_addr: u64,
-    total_particles: u32,
-    root_index: u32,
-    particle_radius: f32,
-    stiffness: f32,
-  ) -> EngineResult<()>;
-
-  // ── Collision Pipeline ────────────────────────────────────────────────────
-  fn build_motion_bvh(
-    &self,
-    cmd: &mut Self::Cmd,
-    kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &mut Self::Buffer<f32>,
-    particle_frame_ids: &mut Self::Buffer<u32>,
-    dt: timeus_t,
-    entity_id: EntityId,
-    // Tight AABB in micro-frame km. None → default ±1e6 km range.
-    particle_aabb: Option<([f32; 3], [f32; 3])>,
-  ) -> EngineResult<Self::MotionBvh>;
-
-  /// **Deprecated**: broad-phase now handled by `bp_clear` → `bp_bounds_gen` → `bp_scene`.
-  #[deprecated(since = "0.0.0", note = "use the bp_* broad-phase suite")]
-  #[cfg(any(test, feature = "collisions"))]
-  fn self_intersect_scene(
-    &self,
-    cmd: &mut Self::Cmd,
-    bvh: &Self::MotionBvh,
-  ) -> EngineResult<Self::List<CollisionPair>>;
-
-  /// **Deprecated**: use `bp_cross_lca` for LCA pairs and narrow CCD for rb-rb/rb-ps.
-  #[deprecated(since = "0.0.0", note = "use bp_cross_lca + narrow CCD")]
-  #[cfg(any(test, feature = "collisions"))]
-  fn intersect_instances(
-    &self,
-    cmd: &mut Self::Cmd,
-    potentials: &Self::List<CollisionPair>,
-    kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
-  ) -> EngineResult<Self::List<CollisionPair>>;
-
-  /// Evaluates narrow phase CCD for a list of broad-phase entity pairs.
-  #[cfg(any(test, feature = "collisions"))]
-  fn narrow_ccd(
-    &self,
-    cmd: &mut Self::Cmd,
-    broadphase_pairs: &Self::List<CollisionPair>,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
-    lca_entities_addr: u64,
-    space_type: u32,
-    dt: f32,
-    output_list: &Self::List<CollisionPair>,
-  ) -> EngineResult<()>;
-
-  #[cfg(any(test, feature = "collisions"))]
-  fn narrow_ccd_cross_lca(
-    &self,
-    cmd: &mut Self::Cmd,
-    broadphase_pairs: &Self::List<CrossPair>,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
-    lca_entities_addr: u64,
-    space_type: u32,
-    dt: f32,
-    output_list: &Self::List<CollisionPair>,
-  ) -> EngineResult<()>;
-
-  /// Stream compaction shrink logic evaluated entirely on the GPU.
-  #[cfg(any(test, feature = "collisions"))]
-  fn compact_collisions(
-    &self,
-    cmd: &mut Self::Cmd,
-    globals: &Self::List<CollisionPair>,
-    time_delta: timeus_t,
-  ) -> EngineResult<Self::List<CollisionPair>>;
-
-  /// Parallel reduction to find the lowest `time_of_impact`.
-  /// Returns a tiny buffer of length 1 containing $t_c$.
-  #[cfg(any(test, feature = "collisions"))]
-  fn find_earliest_collision(
-    &self,
-    cmd: &mut Self::Cmd,
-    compacted: &Self::List<CollisionPair>,
-    dt: f32,
-  ) -> EngineResult<Self::Buffer<u32>>;
-
-  #[cfg(any(test, feature = "collisions"))]
-  fn read_buffer_u32_first(&self, buf: &Self::Buffer<u32>) -> EngineResult<u32>;
-
-  #[cfg(any(test, feature = "collisions"))]
-  fn apply_collision_responses(
-    &self,
-    cmd: &mut Self::Cmd,
-    kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
-    particles: &mut Self::Buffer<f32>,
-    collisions: &Self::List<CollisionPair>,
-    lca_entities_addr: u64,
-    force_inelastic: bool,
-  ) -> EngineResult<()>;
-
-  // ── CCD Rewind Subsystem ───────────────────────────────────────────────────
-  /// Snapshot rigid bodies and, optionally, a particle buffer for CCD rewind.
-  /// Pass `None` for `particles` in pure rigid-body scenes to avoid a spurious
-  /// GPU allocation that would leak if no subsequent submit drains the transient pool.
-  #[cfg(any(test, feature = "collisions"))]
-  fn snapshot_dynamics(
-    &self,
-    cmd: &mut Self::Cmd,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: Option<&Self::Buffer<f32>>,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Option<Self::Buffer<f32>>)>;
-
-  #[cfg(any(test, feature = "collisions"))]
-  fn restore_dynamics(
-    &self,
-    cmd: &mut Self::Cmd,
-    rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
-    particles: Option<&mut Self::Buffer<f32>>,
-    snapshot: &(Self::Buffer<RigidBodyImex>, Option<Self::Buffer<f32>>),
-  ) -> EngineResult<()>;
-
-  // ── Write back dynamic state ───────────────────────────────────────────────
-  fn write_back_to_scene(
-    &self,
-    cmd: &mut Self::Cmd,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    // Per-system particle buffers: (entity_id, buffer, metadata, disable_self_gravity).
-    particle_systems: &[(
-      EntityId,
-      Self::Buffer<f32>,
-      alloc::vec::Vec<ParticleMetadata>,
-      bool,
-    )],
-    physical_scene: &mut PhysicsScene,
-    scene: &Scene,
-  ) -> EngineResult<Option<CommandBufferSyncInfo>>;
-}
-
-/// Bridges synchronization between Compute (Kernels) and Graphics (RenderDevice).
-pub trait KernelRenderBridge: Send + Sync {
-  /// Inserts pipeline barriers or queue ownership transfers from Compute to Graphics.
-  fn sync_compute_to_graphics(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
-
-  /// Inserts pipeline barriers or queue ownership transfers from Graphics to Compute.
-  fn sync_graphics_to_compute(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 }

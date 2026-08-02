@@ -2,15 +2,17 @@
 
 use super::*;
 use crate::{
-  expect_scene, expect_scene_and_entity,
+  expect_scene_and_entity,
   scene::{self, AddComponentError, CameraProjection, Marker},
   simulation_api::SimulationContext,
 };
+use aethervk_oshal_rlib::math::vector::vec3f64::DVec3;
 use alloc::{sync::Arc, vec::Vec};
 use oshal::os::fs;
 
+// TODO remove as much as possible from this file
+
 impl SimulationContext {
-  /// TODO: Document this item
   pub fn add_transform_component(
     &self,
     scene_id: u64,
@@ -43,38 +45,29 @@ impl SimulationContext {
     &self,
     scene_id: u64,
     entity: u64,
-    pos_x: f64,
-    pos_y: f64,
-    pos_z: f64,
-    rot_w: f32,
-    rot_x: f32,
-    rot_y: f32,
-    rot_z: f32,
-    scale_x: f32,
-    scale_y: f32,
-    scale_z: f32,
+    pos: DVec3,
+    rot: Quat,
+    scale: Vec3f32,
   ) -> EngineResult<()> {
     let (scene, entity_id) = expect_scene_and_entity!(
       self.get_scene(scene_id),
       entity,
       "component_api:add_highres_transform_component"
     );
-    use aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64;
     scene
       .write()
       .scene
       .add_component(
         entity_id,
         HighResTransformComponent {
-          position: Vec3f64::from_components(pos_x, pos_y, pos_z),
-          rotation: Quat::from_components(rot_x, rot_y, rot_z, rot_w),
-          scale: Vec3f32::from_components(scale_x, scale_y, scale_z),
+          position: pos,
+          rotation: rot,
+          scale,
         },
       )
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
-  /// TODO: Document this item
   pub fn set_transform_component(
     &self,
     scene_id: u64,
@@ -299,77 +292,6 @@ impl SimulationContext {
   }
 
   /// TODO: Document this item
-  pub fn set_bvh_node_visibility(
-    &self,
-    scene_id: u64,
-    entity: u64,
-    node_index: u32,
-    is_visible: bool,
-  ) -> EngineResult<()> {
-    let (scene, entity_id) = expect_scene_and_entity!(
-      self.get_scene(scene_id),
-      entity,
-      "component_api:set_bvh_node_visibility"
-    );
-    let mut bvh_len = 0;
-    scene
-      .read()
-      .scene
-      .with_component(entity_id, |mesh: &PhysicalMeshComponent| {
-        if let Some(bvh) = &mesh.mesh.bvh {
-          bvh_len = bvh.nodes.len();
-        }
-      })
-      .ok_or(EngineError::InvalidOperation(
-        "component_api:set_bvh_node_visibility entity doesn't have PhysicalMeshComponent",
-      ))?;
-
-    if (node_index as usize) < bvh_len {
-      let mut dbg_opt = None;
-      let _ =
-        scene
-          .read()
-          .scene
-          .with_component(entity_id, |dbg: &crate::scene::BvhDebugComponent| {
-            dbg_opt = Some(dbg.node_render_states.clone());
-          });
-
-      let mut states = match dbg_opt {
-        Some(s) => s,
-        None => {
-          let mut s = Vec::with_capacity(bvh_len);
-          s.resize(bvh_len, false);
-          s
-        }
-      };
-
-      if (node_index as usize) < states.len() {
-        states[node_index as usize] = is_visible;
-
-        let res = scene.write().scene.add_component(
-          entity_id,
-          crate::scene::BvhDebugComponent {
-            node_render_states: states,
-            use_new_path: true, // TODO test first
-          },
-        );
-        if let Err(err) = res {
-          match err {
-            AddComponentError::EntityNotFound
-            | AddComponentError::ComponentNotRegistered
-            | AddComponentError::DependencyNotSatisfied { .. } => {
-              // TODO should we return error or continue? Maybe accumulate errors and return error if at least one?
-              oshal::log!("components_api:set_bvh_node_visibility failed, {}", err);
-            }
-            AddComponentError::ComponentAlreadyExists => {}
-          }
-        }
-      }
-    }
-    Ok(())
-  }
-
-  /// TODO: Document this item
   pub fn add_camera_component(
     &self,
     scene_id: u64,
@@ -480,46 +402,6 @@ impl SimulationContext {
       ))
   }
 
-  /// TODO: Document this item
-  pub fn add_physical_mesh_component(
-    &self,
-    scene_id: u64,
-    entity: u64,
-    gltf_path: &fs::Path,
-    emissive_intensity: f32,
-    emissive_color: [f32; 3],
-  ) -> EngineResult<()> {
-    let (scene, entity_id) = expect_scene_and_entity!(
-      self.get_scene(scene_id),
-      entity,
-      "component_api:add_physical_mesh_component"
-    );
-    let path_str = gltf_path.to_str_unified().unwrap().to_string();
-    let mesh = simulation::comet::load_comet_from_gltf(&path_str, false, None)?;
-    let mesh_arc = Arc::from(mesh);
-    scene
-      .write()
-      .scene
-      .add_component(
-        entity_id,
-        // TODO first test this extensively, once stable transition to new rendering
-        PhysicalMeshComponent {
-          asset_path: path_str,
-          mesh: mesh_arc,
-          emissive_intensity,
-          emissive_color,
-          use_new_path: true,
-          paint_display_mode: 0,
-          sphere_center: [0.0, 0.0, 0.0],
-          sphere_radius: 1.0,
-          grid_color: [0.0, 0.0, 0.0],
-          grid_density: 1.0,
-          rotational_model: None,
-        },
-      )
-      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
-  }
-
   pub fn add_component_to_entity<C: scene::Component>(
     &self,
     scene_id: u64,
@@ -572,7 +454,6 @@ impl SimulationContext {
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))
   }
 
-  /// TODO: Document this item
   pub fn add_sun_component(
     &self,
     scene_id: u64,
@@ -589,17 +470,6 @@ impl SimulationContext {
     scene_guard
       .scene
       .add_component(entity_id, SunComponent { resolution, radius })
-      .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;
-
-    scene_guard
-      .scene
-      .add_component(
-        entity_id,
-        crate::scene::ForceEmitterComponent::Gravity {
-          mu: 1.3271244e11_f32,
-          beta: 0.0,
-        },
-      )
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;
 
     Ok(())
@@ -819,102 +689,9 @@ impl SimulationContext {
     }
     Ok(())
   }
-
-  /// TODO: Document this item
-  pub fn set_particle_emitter_circles_component(
-    &self,
-    scene_id: u64,
-    entity: u64,
-    circles: alloc::vec::Vec<crate::scene::EmissionCircle>,
-  ) -> EngineResult<()> {
-    let (scene, entity_id) = expect_scene_and_entity!(
-      self.get_scene(scene_id),
-      entity,
-      "component_api:set_particle_emitter_circles_component"
-    );
-    let mut final_circles = circles.clone();
-
-    let mut old_children = alloc::vec::Vec::new();
-    let mut found = false;
-    let _ = scene.write().scene.with_component_mut(
-      entity_id,
-      |c: &mut crate::scene::ParticleEmitterCirclesComponent| {
-        for circle in &c.circles {
-          if let Some(id) = circle.child_entity {
-            old_children.push(id);
-          }
-        }
-        c.circles = final_circles.clone();
-        found = true;
-      },
-    );
-
-    // Sync beta from each EmissionCircle to its child ParticleSystemComponent.
-    // This must happen after the with_component_mut above has released its borrow.
-    {
-      let beta_pairs: alloc::vec::Vec<(crate::scene::EntityId, f32)> = final_circles
-        .iter()
-        .filter_map(|circle| circle.child_entity.map(|id| (id, circle.beta)))
-        .collect();
-      let mut scene_write = scene.write();
-      for (child_id, beta_val) in beta_pairs {
-        let _ = scene_write.scene.with_component_mut(
-          child_id,
-          |psc: &mut crate::scene::particles::ParticleSystemComponent| {
-            psc.beta = beta_val;
-          },
-        );
-      }
-    }
-
-    if found {
-      let mut scene_write = scene.write();
-      for old_id in old_children {
-        if !final_circles.iter().any(|c| c.child_entity == Some(old_id)) {
-          let _ = scene_write.scene.remove_entity(old_id);
-        }
-      }
-    } else {
-      scene
-        .write()
-        .scene
-        .add_component(
-          entity_id,
-          crate::scene::ParticleEmitterCirclesComponent {
-            circles: final_circles,
-          },
-        )
-        .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?
-    }
-    Ok(())
-  }
-
-  /// TODO: Document this item
-  pub fn get_particle_emitter_circles_component(
-    &self,
-    scene_id: u64,
-    entity: u64,
-  ) -> EngineResult<alloc::vec::Vec<crate::scene::EmissionCircle>> {
-    let (scene, entity_id) = expect_scene_and_entity!(
-      self.get_scene(scene_id),
-      entity,
-      "component_api:get_particle_emitter_circles_component"
-    );
-    scene
-      .read()
-      .scene
-      .with_component(
-        entity_id,
-        |c: &crate::scene::ParticleEmitterCirclesComponent| c.circles.clone(),
-      )
-      .ok_or(EngineError::InvalidOperation(
-        "component_api:get_particle_emitter_circles_component couldn't find component",
-      ))
-  }
 }
 
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct PerspectiveCameraParams {
   /// Should already be in radians!
   pub fov: f32,
@@ -924,7 +701,6 @@ pub struct PerspectiveCameraParams {
 }
 
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub struct OrthographicCameraParams {
   pub left: f32,
   pub right: f32,
@@ -935,7 +711,6 @@ pub struct OrthographicCameraParams {
 }
 
 #[derive(Debug, Clone, Copy)]
-/// TODO: Document this item
 pub enum CameraParams {
   Perspective(PerspectiveCameraParams),
   Orthographic(OrthographicCameraParams),
@@ -963,7 +738,6 @@ impl From<CameraParams> for CameraProjection {
 }
 
 impl CameraParams {
-  /// TODO: Document this item
   pub fn new_perspective(fov: f32, aspect_ratio: f32, near_plane: f32, far_plane: f32) -> Self {
     Self::Perspective(PerspectiveCameraParams {
       fov,
@@ -973,7 +747,6 @@ impl CameraParams {
     })
   }
 
-  /// TODO: Document this item
   pub fn new_orthographic(
     left: f32,
     right: f32,
@@ -992,7 +765,6 @@ impl CameraParams {
     })
   }
 
-  /// TODO: Document this item
   pub fn near(&self) -> f32 {
     match self {
       CameraParams::Perspective(PerspectiveCameraParams { near_plane, .. }) => *near_plane,
@@ -1000,7 +772,6 @@ impl CameraParams {
     }
   }
 
-  /// TODO: Document this item
   pub fn far(&self) -> f32 {
     match self {
       CameraParams::Perspective(PerspectiveCameraParams { far_plane, .. }) => *far_plane,

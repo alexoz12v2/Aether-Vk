@@ -12,8 +12,7 @@ use ash::vk;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use function_name::named;
 
-/// TODO: Document this item
-pub(super) struct TimelineManager {
+pub struct TimelineManager {
   pub sem_device: ash::khr::timeline_semaphore::Device,
   pub semaphore: crate::gpu_backends::vulkan::utils::NonZeroHandle<vk::Semaphore>,
 

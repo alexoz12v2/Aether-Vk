@@ -1,14 +1,8 @@
 //! scene_api module.
-#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use crate::{
   expect_scene, expect_scene_and_entity,
-  math::collision::linear_bvh::LinearBVHNode,
-  scene::{
-    AddComponentError, ColliderComponent, CursorComponent, EntityId, GridComponent,
-    KinematicComponent, ParticleEmitterCirclesComponent, PhysicalMeshComponent, Scene,
-    SkyComponent, SphereGizmoComponent, SunComponent, TransformComponent,
-  },
+  scene::{Scene, SphereGizmoComponent, StaticMeshComponent, TransformComponent},
   simulation_api::{
     SimulationContext,
     structs::{self, SceneContext},
@@ -16,7 +10,7 @@ use crate::{
   types::{EngineError, EngineResult},
 };
 use aethervk_oshal_rlib::{self as oshal, math::vector::vec3f64::DVec3};
-use alloc::{string::String, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
 use core::ffi::c_char;
 use oshal::math::{
   matrix::mat4::Mat4x4f32,
@@ -26,67 +20,6 @@ use oshal::math::{
 use parking_lot::RwLock;
 
 impl SimulationContext {
-  /// TODO: Document this item
-  pub fn raycast_ndc(
-    &self,
-    scene_id: u64,
-    camera_id: u64,
-    ndc_x: f32,
-    ndc_y: f32,
-  ) -> EngineResult<core::num::NonZero<u64>> {
-    let mut task_manager = self.task_manager.write();
-    let task_id = task_manager.create_task();
-    self
-      .threads
-      .logic_thread
-      .tx()
-      .try_send(structs::LogicCommand::RaycastNdc {
-        task_id: task_id.get(),
-        scene_id,
-        camera_id,
-        ndc_x,
-        ndc_y,
-      })
-      .map_err(|_| {
-        task_manager.fail_task(
-          task_id.get(),
-          alloc::string::String::from("logic thread closed"),
-        );
-        EngineError::InvalidOperation("scene_api: failed to send raycast command")
-      })?;
-    Ok(task_id)
-  }
-
-  /// TODO: Document this item
-  pub fn raycast(
-    &self,
-    scene_id: u64,
-    ro: Vec3f32,
-    rd: Vec3f32,
-  ) -> EngineResult<core::num::NonZero<u64>> {
-    let mut task_manager = self.task_manager.write();
-    let task_id = task_manager.create_task();
-    self
-      .threads
-      .logic_thread
-      .tx()
-      .try_send(structs::LogicCommand::Raycast {
-        task_id: task_id.get(),
-        scene_id,
-        ro,
-        rd,
-      })
-      .map_err(|_| {
-        task_manager.fail_task(
-          task_id.get(),
-          alloc::string::String::from("logic thread closed"),
-        );
-        EngineError::InvalidOperation("scene_api: failed to send raycast command")
-      })?;
-    Ok(task_id)
-  }
-
-  /// TODO: Document this item
   pub fn spawn_entity(&self, scene_id: u64, name: &str) -> EngineResult<u64> {
     let scene_data = self.scenes.read();
     let active = expect_scene!(scene_data.get_scene(scene_id), "scene_api:spawn_entity");
@@ -97,7 +30,6 @@ impl SimulationContext {
     Ok(guard.register_entity(id))
   }
 
-  /// TODO: Document this item
   pub fn remove_entity(&self, scene_id: u64, entity: u64) -> EngineResult<()> {
     let scene_data = self.scenes.read();
     let (active, entity_id) = expect_scene_and_entity!(
@@ -117,7 +49,6 @@ impl SimulationContext {
     }
   }
 
-  /// TODO: Document this item
   pub fn set_parent(&self, scene_id: u64, entity: u64, parent: u64) -> EngineResult<()> {
     let (active, entity_id) =
       expect_scene_and_entity!(self.get_scene(scene_id), entity, "scene_api:set_parent");
@@ -133,48 +64,6 @@ impl SimulationContext {
     Ok(())
   }
 
-  /// TODO: Document this item
-  pub fn get_bvh_nodes<FFI: From<LinearBVHNode<f32>> + Copy>(
-    &self,
-    scene_id: u64,
-    entity: u64,
-    count: *mut u32,
-  ) -> EngineResult<*mut FFI> {
-    let (active, entity_id) =
-      expect_scene_and_entity!(self.get_scene(scene_id), entity, "scene_api:get_bvh_nodes");
-    let mut ffi_nodes = Vec::new();
-
-    active.read().scene.with_component(entity_id, |mesh: &PhysicalMeshComponent| {
-      if let Some(_bvh) = &mesh.mesh.bvh {
-        // Linear BVH is gone; returning empty for now
-        // TODO: support FFI export of MultiBVH nodes
-      }
-    });
-
-    if !count.is_null() {
-      unsafe {
-        *count = ffi_nodes.len() as u32;
-      }
-    }
-
-    if ffi_nodes.is_empty() {
-      return Ok(core::ptr::null_mut());
-    }
-
-    let ptr = ffi_nodes.as_mut_ptr();
-    // TODO should this method marked unsafe for this?
-    core::mem::forget(ffi_nodes);
-    Ok(ptr)
-  }
-
-  /// TODO: Document this item
-  pub fn free_bvh_nodes<FFI: From<LinearBVHNode<f32>> + Copy + Sized>(ptr: *mut FFI, count: u32) {
-    if !ptr.is_null() {
-      let _ = unsafe { Vec::from_raw_parts(ptr, count as usize, count as usize) };
-    }
-  }
-
-  /// TODO: Document this item
   pub fn get_entity_count(&self, scene_id: u64) -> EngineResult<u32> {
     let scene = expect_scene!(self.get_scene(scene_id), "scene_api:get_entity_count");
     Ok(scene.read().entity_map.len() as u32)
@@ -224,7 +113,6 @@ impl SimulationContext {
     Ok(missing)
   }
 
-  /// TODO: Document this item
   pub fn get_entity_parent(&self, scene_id: u64, entity: u64) -> EngineResult<u64> {
     let scene = expect_scene!(self.get_scene(scene_id), "scene_api:get_entity_parent");
     let internal_id = scene.read().get_entity(entity).ok_or(EngineError::InvalidOperation(
@@ -246,6 +134,7 @@ impl SimulationContext {
         "scene_api:get_entity_parent parent has no external mapping",
       ))
   }
+
   pub fn destroy_scene(&self, scene_id: u64) -> EngineResult<()> {
     let mut pes_to_destroy = Vec::new();
     if let Some(scene_ctx) = self.scenes.read().get(&scene_id) {
@@ -286,7 +175,12 @@ impl SimulationContext {
       ));
     }
 
-    let (scene, root_entity) = empty_scene_object(Arc::clone(&self.texture_cache))?;
+    let (scene, root_entity) = {
+      let scene = Scene::new(Arc::clone(&self.texture_cache));
+      scene.register_all_crate_components();
+      let root_entity = scene.spawn_entity("Root");
+      (scene, root_entity)
+    };
 
     // 1. Cursor Entity
     let cursor_entity = scene.spawn_entity("cursor");
@@ -317,13 +211,6 @@ impl SimulationContext {
       crate::scene::SunComponent {
         resolution: (2048, 2048, 1),
         radius: 0.0046524726,
-      },
-    )?;
-    scene.add_component(
-      sun_entity,
-      crate::scene::ForceEmitterComponent::Gravity {
-        mu: 1.3271244e11_f32,
-        beta: 0.0,
       },
     )?;
 
@@ -374,6 +261,7 @@ impl SimulationContext {
       let scene_id = scene_data.next_scene_id();
       let time_manager = oshal::os::time::v2::TimeManager::new(
         start_epoch,
+        end_epoch,
         SimSpeed::Paused,
         super::MAX_UNSCALED_DELTA_MS,
       );
@@ -382,9 +270,7 @@ impl SimulationContext {
       time_state
     };
 
-    let mut scene_ctx_obj =
-      SceneContext::new_empty(Arc::new(scene), root_entity, time_state, end_epoch)
-        .with_physics_scene();
+    let mut scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity, time_state);
     scene_ctx_obj.cursor_entity = Some(cursor_entity);
     scene_ctx_obj.sun_entity = Some(sun_entity);
     if let Some(c) = camera_id {
@@ -406,11 +292,6 @@ impl SimulationContext {
     }
 
     Ok(self.scenes.write().insert_scene(scene_ctx))
-  }
-
-  /// TODO: Document this item
-  pub fn camera_start_pos() -> Vec3f32 {
-    Vec3f32::from_components(0.0, -7.07, 7.07)
   }
 
   #[cfg(test)]
@@ -557,17 +438,19 @@ impl SimulationContext {
     let time_scale = {
       use oshal::os::time::v2::{SimSpeed, TimeManager};
       let scene_data = self.scenes.read();
-      let time_manager =
-        TimeManager::new(start_epoch, SimSpeed::Paused, super::MAX_UNSCALED_DELTA_MS);
+      let time_manager = TimeManager::new(
+        start_epoch,
+        end_epoch,
+        SimSpeed::Paused,
+        super::MAX_UNSCALED_DELTA_MS,
+      );
       let scene_id = scene_data.next_scene_id();
       let time_scale = time_manager.state.clone();
       scene_data.time_managers.insert(scene_id, time_manager);
       time_scale
     };
 
-    let mut scene_ctx_obj =
-      SceneContext::new_empty(Arc::new(scene), root_entity, time_scale, end_epoch)
-        .with_physics_scene();
+    let mut scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity, time_scale);
     oshal::log!("create_default_scene: with_physics_scene OK, calling with_cursor_entity");
     let mut scene_ctx_obj = scene_ctx_obj.with_cursor_entity(cursor_entity)?;
     oshal::log!("create_default_scene: with_cursor_entity OK");
@@ -617,61 +500,6 @@ impl SimulationContext {
         EngineError::InvalidOperation("scene_api:set_entity_visibility | logic thread closed")
       })
   }
-
-  /// TODO: Document this item
-  pub fn set_entity_selected(
-    &self,
-    scene_id: u64,
-    entity: u64,
-    selected: bool,
-  ) -> EngineResult<()> {
-    let (scene, id) = expect_scene_and_entity!(
-      self.get_scene(scene_id),
-      entity,
-      "scene_api:set_entity_selected"
-    );
-    if selected {
-      scene
-        .write()
-        .scene
-        .add_component(id, crate::scene::SelectedComponent {})
-        .map_err(|e| <AddComponentError as Into<EngineError>>::into(e.into()))?;
-    } else {
-      scene
-        .write()
-        .scene
-        .remove_component::<crate::scene::SelectedComponent>(id)
-        .map_err(|e| EngineError::InvalidOperation(e))?;
-    }
-    Ok(())
-  }
-
-  /// TODO: Document this item
-  pub fn set_entity_following(
-    &self,
-    scene_id: u64,
-    entity: u64,
-    following: bool,
-  ) -> EngineResult<()> {
-    let (active, entity_id) = expect_scene_and_entity!(
-      self.get_scene(scene_id),
-      entity,
-      "scene_api:set_entity_following"
-    );
-    if following {
-      active
-        .write()
-        .scene
-        .add_component(entity_id, crate::scene::FollowingComponent {})?;
-    } else {
-      active
-        .write()
-        .scene
-        .remove_component::<crate::scene::FollowingComponent>(entity_id)
-        .map_err(|s| EngineError::InvalidOperation(s))?;
-    }
-    Ok(())
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -692,6 +520,7 @@ impl SimulationContext {
   /// * `physics_type` – `0` = Static, `1` = Kinematic, `2` = Dynamic.
   ///
   /// Returns `(lca_frame_ext_id, comet_ext_id)` on success.
+  // TODO rewrite completely
   pub fn spawn_comet_internal(
     &self,
     scene_id: u64,
@@ -757,19 +586,6 @@ impl SimulationContext {
       },
     )?;
 
-    // Add bounding box collider to LCA micro frame to enclose the particles
-    scene_ctx.scene.add_component(
-      lca_id,
-      crate::scene::ColliderComponent {
-        shape: crate::scene::ColliderShape::OBB {
-          half_extents: Vec3f32::from_components(soi_radius_au, soi_radius_au, soi_radius_au),
-        },
-        mass: 0.0,
-        restitution: 0.0,
-        friction: 0.0,
-      },
-    )?;
-
     // ReferenceFrameComponent::scale = AU/km (the factor that converts
     // micro-frame km to macro-frame AU).  This is the ONLY correct value
     // for physics: the compute shaders do
@@ -826,7 +642,7 @@ impl SimulationContext {
       1.0 / KM_PER_AU
     );
 
-    let sim_local_rotation = mesh_arc.bf_to_pa.unwrap_or(Quat::identity());
+    let sim_local_rotation = Quat::identity();
 
     scene_ctx.scene.add_component(
       comet_id,
@@ -839,25 +655,13 @@ impl SimulationContext {
 
     scene_ctx.scene.add_component(
       comet_id,
-      PhysicalMeshComponent {
+      StaticMeshComponent {
         asset_path: path_str,
         mesh: mesh_arc,
-        emissive_intensity: 0.0,
-        emissive_color: [0.0, 0.0, 0.0],
-        use_new_path: true,
-        paint_display_mode: 0,
-        sphere_center: [0.0, 0.0, 0.0],
-        // sphere_radius is in micro-frame km — matches radius_km directly.
-        sphere_radius: radius_km,
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
-        rotational_model,
+        emissive_color: [0.0, 0.0, 0.0, 0.0],
+        is_visible: true,
       },
     )?;
-
-    scene_ctx
-      .is_static_tlas_dirty
-      .store(true, core::sync::atomic::Ordering::Relaxed);
 
     scene_ctx.scene.add_component(
       comet_id,
@@ -872,69 +676,6 @@ impl SimulationContext {
         is_visible: true,
       },
     )?;
-
-    scene_ctx.scene.add_component(
-      comet_id,
-      ParticleEmitterCirclesComponent {
-        circles: alloc::vec::Vec::new(),
-      },
-    )?;
-
-    // Physics-type specific components
-    match physics_type {
-      0 => {
-        // Static: participates as collider, never moves.
-        scene_ctx.scene.add_component(
-          comet_id,
-          ColliderComponent {
-            shape: crate::scene::ColliderShape::Sphere { radius: radius_km },
-            mass: 0.0,
-            restitution: 0.3,
-            friction: 0.6,
-          },
-        )?;
-      }
-      1 => {
-        // Kinematic: collider + velocity-driven by almanac each tick.
-        scene_ctx.scene.add_component(
-          comet_id,
-          ColliderComponent {
-            shape: crate::scene::ColliderShape::Sphere { radius: radius_km },
-            mass: 0.0,
-            restitution: 0.3,
-            friction: 0.6,
-          },
-        )?;
-        scene_ctx.scene.add_component(
-          comet_id,
-          KinematicComponent {
-            velocity: Vec3f32::zero(),
-            angular_velocity,
-            use_model_rotation: rotational_model.is_some(),
-          },
-        )?;
-        // For Kinematic bodies, position is driven by the Almanac.
-        scene_ctx.scene.add_component(
-          comet_id,
-          crate::scene::almanac_planet::AlmanacPlanet::new(naif_id, 0.0, 0.0),
-        )?;
-      }
-      2 => {
-        // Dynamic: full rigid-body physics.
-        // KinematicComponent carries velocity/angular-velocity state.
-        scene_ctx.scene.add_component(comet_id, KinematicComponent::default())?;
-        scene_ctx.scene.add_component(
-          comet_id,
-          ColliderComponent {
-            shape: crate::scene::ColliderShape::Sphere { radius: radius_km },
-            mass: mass_kg,
-            restitution: 0.3,
-            friction: 0.6,
-          },
-        )?;
-      }
-      _ => {}
-    }
 
     scene_ctx.scene.set_parent(comet_id, Some(lca_id));
     let comet_ext_id = scene_ctx.register_entity(comet_id);
@@ -1093,8 +834,6 @@ impl SimulationContext {
     // ── Mesh entity (child of LCA frame) ───────────────────────────────
     let mesh_id = scene_ctx.scene.spawn_entity(entity_name);
 
-    let bounding_sphere = compute_bounding_sphere_radius(&mesh_arc.vertices);
-
     scene_ctx.scene.add_component(
       mesh_id,
       TransformComponent {
@@ -1106,31 +845,17 @@ impl SimulationContext {
 
     scene_ctx.scene.add_component(
       mesh_id,
-      PhysicalMeshComponent {
+      StaticMeshComponent {
         asset_path: path_str,
         mesh: mesh_arc,
-        emissive_intensity: 0.0,
-        emissive_color: [0.0, 0.0, 0.0],
-        use_new_path: true,
-        paint_display_mode: 0,
-        sphere_center: [0.0, 0.0, 0.0],
-        sphere_radius: bounding_sphere * scale.x().max(scale.y()).max(scale.z()),
-        grid_color: [0.0, 0.0, 0.0],
-        grid_density: 1.0,
-        rotational_model: None,
+        emissive_color: [0.0, 0.0, 0.0, 0.0],
+        is_visible: true,
       },
     )?;
 
     scene_ctx.scene.add_component(
       mesh_id,
       crate::scene::SphericalGizmoComponent { is_visible: true },
-    )?;
-
-    scene_ctx.scene.add_component(
-      mesh_id,
-      crate::scene::particles::ParticleEmitterCirclesComponent {
-        circles: alloc::vec::Vec::new(),
-      },
     )?;
 
     scene_ctx.scene.set_parent(mesh_id, Some(lca_id));
@@ -1147,7 +872,7 @@ impl SimulationContext {
 /// Returns the radius of the smallest sphere centred at the mesh origin that
 /// encloses all vertices. Result is in the same unit as vertex positions
 /// (object-space km for comet meshes).
-pub fn compute_bounding_sphere_radius(vertices: &[crate::simulation::comet::Vertex]) -> f32 {
+fn compute_bounding_sphere_radius(vertices: &[crate::simulation::comet::Vertex]) -> f32 {
   vertices
     .iter()
     .map(|v| {
@@ -1155,43 +880,4 @@ pub fn compute_bounding_sphere_radius(vertices: &[crate::simulation::comet::Vert
     })
     .fold(0.0_f32, f32::max)
     .sqrt()
-}
-
-// ------------------------- INTERNAL --------------------------------------
-
-// TODO probably to move in scene.rs in rlib
-/// TODO: Document this item
-pub(crate) fn empty_scene_object(
-  texture_cache: alloc::sync::Arc<
-    parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>,
-  >,
-) -> EngineResult<(Scene, EntityId)> {
-  let scene = Scene::new(texture_cache);
-  scene.register_all_crate_components();
-
-  let root_entity = scene.spawn_entity("root");
-  scene
-    .add_component(
-      root_entity,
-      TransformComponent {
-        position: Vec3f32::from_components(0.0, 0.0, 0.0),
-        rotation: Quat::identity(),
-        scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-      },
-    )
-    .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;
-
-  scene
-    .add_component(
-      root_entity,
-      crate::scene::ReferenceFrameComponent {
-        frame_type: crate::scene::ReferenceFrameType::Macro,
-        scale: 1.0,
-        soi_radius: 1000.0,
-        depth_layer: 0,
-      },
-    )
-    .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;
-
-  Ok((scene, root_entity))
 }

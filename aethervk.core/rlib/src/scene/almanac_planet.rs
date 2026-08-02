@@ -109,9 +109,10 @@ impl AlmanacPlanet {
       // We loaded `earth_latest_high_prec.bpc`
       assert!(
         almanac.almanac.bpc_data.contains_key("earth_latest_high_prec.bpc"),
-        "Earth rotation requires `earth_latest_high_prec.bpc` to be loaded. Instead we have [ {} ]",
-        almanac.almanac.bpc_data.keys().join(", ")
+        "Earth rotation requires `earth_latest_high_prec.bpc` to be loaded. Instead we have [ {:?} ]",
+        almanac.almanac.bpc_data.keys()
       );
+
       // Fallbacks for Earth: high precision Binary PCKs (BPC files like earth_latest_high_prec.bpc)
       // do not store orientation data under the ephemeris ID 399. Instead, they store Earth's
       // orientation under the International Terrestrial Reference Frame ITRF93 (ID: 13000),
@@ -201,8 +202,6 @@ mod tests {
       naif_id: 399,
       rot_period: 0.0,
       mu: 0.0,
-      bf_to_pa,
-      surface_offset_bf: Vec3f32::zero(),
     };
 
     // Mock an Almanac rotation: identity (BF is aligned with World)

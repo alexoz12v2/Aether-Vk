@@ -1,3 +1,5 @@
+// @assets/dust.frag
+
 #version 450 core
 
 #extension GL_EXT_buffer_reference2      : require
@@ -7,14 +9,14 @@
 #include "debug_utils.glsl"
 #include "bvh_utils.glsl"
 
-// 124 bytes, below 128 threshold
+// 128 bytes
 layout(push_constant, std430) uniform PushConstants {
     ParticleChunkBuffer globalParticleBuffer;
     ParticlePageTable   particlePageTable;
 
     mat4  viewProj;
     vec4  streamColor;
-    uint  chunkOffset;  // TODO see if useful
+    uint  chunkOffset;
     uint  currentTime;  // In 1/300 seconds
     float maxTtl;       // limit for age fading (in 1/300 s)
     float macroScale;   // base point sprite pixel size multiplier
@@ -105,4 +107,3 @@ void main() {
 
     fragColor = vec4(v_Color.rgb * darkness, v_Color.a * macroFade);
 }
-

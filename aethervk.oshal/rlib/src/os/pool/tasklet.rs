@@ -7,18 +7,19 @@ use spin::Mutex;
 use super::{ThreadPool, Workload, WorkloadStatus};
 use crate::os::NativeResult;
 
-/// TODO: Document this item
 #[derive(Debug)]
 pub struct TaskletState<R> {
   result: Mutex<Option<R>>,
   done: AtomicBool,
 }
 
-/// TODO: Document this item
 #[derive(Debug)]
 pub struct TaskletHandle<R> {
   state: Arc<TaskletState<R>>,
 }
+
+unsafe impl<R> Sync for TaskletHandle<R> {}
+unsafe impl<R> Send for TaskletHandle<R> {}
 
 impl<R> TaskletHandle<R> {
   /// Spin-wait until the tasklet completes and return its result.
@@ -30,6 +31,7 @@ impl<R> TaskletHandle<R> {
       };
       #[cfg(not(any(unix, target_os = "macos")))]
       core::hint::spin_loop();
+      // TODO windows add YieldProcessor
     }
 
     self
@@ -68,7 +70,9 @@ impl<R> TaskletHandle<R> {
         return Err(self); // deadline expired — caller retains ownership
       }
       #[cfg(any(unix, target_os = "macos"))]
-      unsafe { libc::sched_yield() };
+      unsafe {
+        libc::sched_yield()
+      };
       #[cfg(not(any(unix, target_os = "macos")))]
       core::hint::spin_loop();
     }
