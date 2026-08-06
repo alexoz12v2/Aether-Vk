@@ -18,6 +18,23 @@
     <AvaloniaResource Include="Assets\**" />
   </ItemGroup>
 
+  <!-- Exclude Debug Views in non-Debug builds -->
+  <ItemGroup Condition="'$(Configuration)' != 'Debug'">
+    <!-- Stop avalonia from compiling and embedding all AXAML in the Debug folder-->
+    <AvaloniaResource Remove="Views\Debug\**\*.axaml" />
+    <!-- Prevent the .NET Sdk from falling back and treating them as None items -->
+    <None Remove="Views\Debug\**\*.axaml" />
+    <!-- Stop Rolyn from compiling the code-behind files from the Debug Folder -->
+    <Compile Remove="Views\Debug\**\*.axaml.cs" />
+  </ItemGroup>
+
+  <!-- References I'm keeping for rework until i'm finished. But to be removed -->
+  <ItemGroup>
+    <AvaloniaResource Remove="Views\References\**\*.axaml" />
+    <None Remove="Views\References\**\*.axaml" />
+    <Compile Remove="Views\References\**\*.axaml.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.12" />
     <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.3.12" />

@@ -1,8 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
-using System.Diagnostics.CodeAnalysis;
 using System.Linq;
-using System.Reflection;
 using AetherVk.Logic.Messages;
 using AetherVk.Logic.Services; // Added for ConsoleService
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -69,8 +67,7 @@ public partial class SplitNodeViewModel : LayoutNodeViewModelBase
 /// Represents a "box" or leaf node that actually holds tabs
 /// </summary>
 public partial class TabGroupNodeViewModel
-  : LayoutNodeViewModelBase,
-    IRecipient<EntitySelectedMessage>
+  : LayoutNodeViewModelBase
 {
   public ObservableCollection<TabItemViewModel> Tabs { get; } = [];
 
@@ -95,19 +92,6 @@ public partial class TabGroupNodeViewModel
     HasTabs = true;
 
     Tabs.CollectionChanged += (s, e) => HasTabs = Tabs.Count > 0;
-    WeakReferenceMessenger.Default.Register<EntitySelectedMessage>(this);
-  }
-
-  public void Receive(EntitySelectedMessage message)
-  {
-    if (message.SelectedEntity != null)
-    {
-      var propTab = Tabs.OfType<PropertiesViewModel>().FirstOrDefault();
-      if (propTab != null)
-      {
-        SelectedTab = propTab;
-      }
-    }
   }
 
   [RelayCommand]
@@ -202,17 +186,14 @@ public partial class DockingManagerViewModel
   private LayoutNodeViewModelBase _rootNode;
 
   private readonly ITabFactory _tabFactory;
-  private readonly IAudio2DService _audioService;
 
   public DockingManagerViewModel(
     ITabFactory tabFactory,
-    IAudio2DService audioService,
     LayoutNodeViewModelBase? rootNode = null
   )
     : base()
   {
     _tabFactory = tabFactory;
-    _audioService = audioService;
     WeakReferenceMessenger.Default.Register<TabDroppedMessage>(this);
     WeakReferenceMessenger.Default.Register<TabDragTaskMessage>(this);
     WeakReferenceMessenger.Default.Register<CoalesceGroupMessage>(this);
@@ -261,7 +242,7 @@ public partial class DockingManagerViewModel
   // --- Track your Task safely from within the ViewModel ---
   public async void Receive(TabDragTaskMessage message)
   {
-    _audioService.PlayGrabAsync();
+    // _audioService.PlayGrabAsync();
     string finalAction = await message.DragTask;
 
     if (finalAction == "None")
@@ -274,7 +255,7 @@ public partial class DockingManagerViewModel
   // --- Fix the TabDroppedMessage ---
   public void Receive(TabDroppedMessage message)
   {
-    _audioService.PlayDropAsync();
+    // _audioService.PlayDropAsync();
     var draggedTab = message.DraggedTab;
     var targetNode = message.TargetNode;
     var zone = message.Zone;

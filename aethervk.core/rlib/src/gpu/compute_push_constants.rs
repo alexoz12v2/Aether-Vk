@@ -81,3 +81,11 @@ pub struct NewParticlesOffsetParticlesPushConstants {
   pub delta_rot: [f32; 4],
   pub delta_pos: [f32; 4],
 }
+
+/// Push constants for shader `reset_particles.comp`
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ResetParticlesPushConstants {
+  pub particle_page_table: u64,
+  pub free_list: u64,
+}

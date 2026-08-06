@@ -23,9 +23,9 @@ public partial class KeyBindingsViewModel : ViewModelBase, ISettingsCategory
       .Select(g => new ShortcutGroup(
         g.Key,
         g.Select(m => new ShortcutDisplay(
-            m.Action.DisplayName,
+            "COMMAND",
             m.Chord.DisplayText,
-            m.Action.Description
+            "DESCRIPTION"
           ))
           .ToList()
       ))

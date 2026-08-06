@@ -509,18 +509,10 @@ pub enum LogicCommand {
     target_entity: EntityId,
     scene: Arc<RwLock<SceneContext>>,
   },
-  // TODO for now commented out. If needed, implement the Scene Observer concept
-  // FollowEntity {
-  //   snap_entity: EntityId,
-  //   entity_id: EntityId,
-  //   scene: Arc<RwLock<SceneContext>>,
-  //   unfollow_other: bool,
-  // },
-  // TODO for now commented out. If needed, implement the Scene Observer concept
-  // UnfollowEntity {
-  //   entity_id: EntityId,
-  //   scene: Arc<RwLock<SceneContext>>,
-  // },
+  StartSimlulation {
+    scene_id: u64,
+    speed: oshal::os::time::v2::SimSpeed,
+  },
   PlaySceneToEnd {
     scene_id: u64,
     speed: oshal::os::time::v2::SimSpeed,

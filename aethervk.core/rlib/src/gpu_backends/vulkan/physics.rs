@@ -4,16 +4,10 @@
 //! It assumes Vulkan 1.1 with `VK_KHR_buffer_device_address` and `VK_KHR_shader_subgroup_basic`.
 
 use crate::{
-  gpu::CommandBuffer,
   gpu_backends::vulkan::device::{LogicalDevice, resources},
   types::{GpuError, GpuResult},
 };
-use aethervk_oshal_rlib::math::{
-  matrix::Matrix4,
-  vector::{Vector, Vector3, Vector4},
-};
 use ash::vk;
-use vk_mem::{Alloc, AsAllocatorView};
 
 // Disabled by default: Enabling PRINTF shaders under Lavapipe (ARM64) dramatically increases
 // register pressure in the llvmpipe JIT compiler. This leads to register spilling bugs that
@@ -62,6 +56,7 @@ pub struct PhysicsPipelines {
   pub integrate_particles_p1_p2_new: vk::Pipeline,
   pub integrate_particles_p4_5_new: vk::Pipeline,
   pub new_particles_offset_particles: vk::Pipeline,
+  pub reset_particles: vk::Pipeline,
 
   /// SPIR-V-reflected push constant block size per pipeline.
   /// Used by `debug_assert!` in dispatch helpers to catch size mismatches
@@ -377,6 +372,7 @@ impl PhysicsPipelines {
         integrate_particles_p1_p2_new: mk_wg!("integrate_particles_p1_p2_new.comp"),
         integrate_particles_p4_5_new: mk_wg!("integrate_particles_p4_5_new.comp"),
         new_particles_offset_particles: mk_wg!("new_particles_offset_particles.comp"),
+        reset_particles: mk_wg!("reset_particles.comp"),
         pc_sizes,
         wg_sizes,
         subgroup_size,
@@ -419,6 +415,7 @@ impl PhysicsPipelines {
     discard_pool.discard_pipeline(self.integrate_particles_p1_p2_new, timeline);
     discard_pool.discard_pipeline(self.integrate_particles_p4_5_new, timeline);
     discard_pool.discard_pipeline(self.new_particles_offset_particles, timeline);
+    discard_pool.discard_pipeline(self.reset_particles, timeline);
 
     discard_pool.discard_pipeline_layout(self.pipeline_layout, timeline);
   }

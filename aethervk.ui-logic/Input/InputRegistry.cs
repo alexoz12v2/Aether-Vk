@@ -29,7 +29,7 @@ public class InputRegistry
   public IEnumerable<(string Context, InputChord Chord, AppAction Action)> GetAllMappings()
   {
     return from ctx in _bindings
-      from binding in ctx.Value
-      select (ctx.Key, binding.Key, binding.Value);
+           from binding in ctx.Value
+           select (ctx.Key, binding.Key, binding.Value);
   }
 }

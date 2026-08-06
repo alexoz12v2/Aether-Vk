@@ -300,11 +300,33 @@ pub mod external_state {
     }
   }
 
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, PartialEq, Eq, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct CAlamanacImported {
+    pub was_successful: u32, // 0: no, !=0: yes
+    pub path_bytes: [u8; 32],
+  }
+  impl CAlamanacImported {
+    pub fn new(was_successful: u32, path: &str) -> Self {
+      let mut path_bytes = [0u8; 32];
+      let bytes = path.rfind(['/', '\\']).map(|idx| &path[idx + 1..]).unwrap_or(path).as_bytes();
+      // truncate to 31 to null-terminate the string
+      let len = bytes.len().min(31);
+      path_bytes[..len].copy_from_slice(&bytes[..len]);
+      Self {
+        was_successful,
+        path_bytes,
+      }
+    }
+  }
+
   pub enum ExternalState {
     /// Signifies a change in the epoch range state
     TimeRange(CTimeRange),
     /// Signifies a new model was successfully imported
     ModelImported(CModelImported),
+    /// Tells whether an almanac was loaded successfully or not
+    AlmanacImported(CAlamanacImported)
   }
 
   impl ExternalState {
@@ -312,6 +334,7 @@ pub mod external_state {
       match self {
         Self::TimeRange(_) => 1,
         Self::ModelImported(_) => 2,
+        Self::AlmanacImported(_) => 3,
       }
     }
   }
@@ -327,6 +350,9 @@ pub fn emit_external_state_change(external_state: &external_state::ExternalState
       }
       ExternalState::ModelImported(model_imported) => {
         bytemuck::bytes_of(model_imported).as_ptr().cast()
+      }
+      ExternalState::AlmanacImported(almanac_imported) => {
+        bytemuck::bytes_of(almanac_imported).as_ptr().cast()
       }
     };
     unsafe { cb(id, bytes_ptr) };

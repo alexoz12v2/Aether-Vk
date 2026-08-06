@@ -5,7 +5,8 @@ use crate::{
   gpu::{
     self, AcquireResult, ArchetypeId, CommandBufferHandle, GpuResourceHandle, NativeGpuProperty,
     PipelineKey, PipelineKeyable, PresentationEngineHandle, RenderDevice, RenderableInstanceId,
-    TextureFlags, frame::ResourceUploadResult, new_particles::DustPushConstants,
+    TextureFlags, compute_push_constants::ResetParticlesPushConstants, frame::ResourceUploadResult,
+    new_particles::DustPushConstants,
   },
   gpu_backends::vulkan::{
     self,
@@ -1198,6 +1199,64 @@ impl Device {
     + 4
       * crate::gpu::new_particles::MAX_PARTICLES_PER_SYSTEM
         .div_ceil(crate::gpu::new_particles::PCHUNK_SIZE)) as _;
+
+  /// Executes synchronously the `reset_particles` shader for
+  /// # Safety
+  /// There should be no compute or graphics command in flight. Externally synchronized
+  pub unsafe fn reset_all_particle_systems(&self) -> GpuResult<()> {
+    // create a quick one off compute queue compatible command buffer (ARM guidelines)
+    // already in record state here
+    let cmd: vk::CommandBuffer = todo!();
+    unsafe {
+      self.device.cmd_bind_pipeline(
+        cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.kernels.pipelines.reset_particles,
+      );
+    }
+    // record, for each particle system, a reset
+    // Note we are only resetting the back state. will this cause problems for rendering until next
+    // cross sync?
+    {
+      let res = self.res.read();
+      let psm = res.particle_system_manager.as_ref().unwrap();
+      let back_state = psm.back();
+      for kvref in back_state.page_tables.iter() {
+        let ps = kvref.value();
+        let push_constants = ResetParticlesPushConstants {
+          particle_page_table: ps.address,
+          free_list: back_state.free_list.address,
+        };
+
+        let local_size_x = unsafe {
+          self
+            .kernels
+            .pipelines
+            .wg_sizes
+            .get(&self.kernels.pipelines.reset_particles.as_raw())
+            .unwrap_unchecked()
+        }[0];
+        let particle_count = gpu::new_particles::MAX_PARTICLES_PER_SYSTEM as u32;
+        let num_workgroups_x =
+          Self::particle_system_shaders_num_workgroups(local_size_x, particle_count);
+
+        unsafe {
+          self.device.cmd_push_constants(
+            cmd,
+            self.kernels.pipelines.pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            bytemuck::bytes_of(&push_constants),
+          );
+
+          self.device.cmd_dispatch(cmd, num_workgroups_x, 1, 1);
+        }
+      }
+    }
+
+    // submit and cleanup
+    todo!()
+  }
 
   /// `push_constants` should be fully populated except for some zeroed out fields populated here:
   /// - `global_particle_buffer`,

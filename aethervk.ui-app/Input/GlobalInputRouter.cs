@@ -6,41 +6,94 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
+using AetherVk.Logic.Services;
 
 namespace AetherVk.Input;
 
-public class GlobalInputRouter
+/// <summary>
+/// The GlobalInputRouter doesn't keep a list of registered View models in memory. Instead, it uses
+/// *Avalonia Attached Properties* to store the registration directoy inside the XAML UI Tree.
+/// In fact, our <see cref="ActionContext" /> defines properties such as `ActionContext.Handler`
+/// <pre>
+///   <Border input:ActionContext.Id="MyViewportContext" input:ActionContext.Handler="{Binding}">
+///     <!-- All children of this Border will trigger this handler -->
+///   </Border>
+/// </pre>
+///
+/// It routes with visual coordinates as it listens to the absolute Root of the window, meaning
+/// <see cref="TopLevel" />, using "Tunneling" events, meaning that every single click is processed
+/// by routers *Before* textboxes or buttons.
+///
+/// Example: when a user clicks the mouse:
+/// - Avalonia communicates mouse was clicked for a specific Element, eg TextBlock (e.Source as Visual)
+/// - Router takes the TextBlock and walks up the visual tree
+/// - Whet it finds a parent with view model attached, asks the `InputRegistry` to convert the raw
+///   click into a <see cref="AppAction" />
+/// - inovke `ProcessAction` method
+///
+/// Important Note: Should Code-Behind dispatch an AppAction or should it do the GlobalInputRouter?
+/// - Code-Behind: Catch raw mouse/pointers event, package them into an AppAction with a coordinate
+///     payload, and push them directly to its *own* view model's Operator stack
+/// - Global Router: Catch raw keyboard events globally, translate them into absract AppAction
+///   strings using user's custom keybindings, and route them to whichever view model is currently
+///   in the UI Tree
+/// </summary>
+public class GlobalInputRouter : IWindowInputRouter
 {
   private readonly InputRegistry _registry;
   private readonly Dictionary<
     IPointer,
     (Visual Target, IActionHandler Handler, AppAction Action)
-  > _pressedVisuals = new();
+  > _pressedVisuals = [];
+  private TopLevel? _attachedWindow;
 
-  public GlobalInputRouter(TopLevel window, InputRegistry registry)
+  public GlobalInputRouter(InputRegistry registry)
   {
     _registry = registry;
+  }
 
-    window.AddHandler(
+  public AttachToWindow(object windowRoot)
+  {
+    if (windowRoot is not TopLevel window)
+      throw new ArgumentException("windowRoot must be an Avalonia TopLevel", nameof(windowRoot));
+    if (_attachedWindow != null)
+      throw new InvalidOperationException("Router is already attached to a window");
+
+    _attachedWindow = window;
+
+    _attachedWindow.AddHandler(
       InputElement.KeyDownEvent,
       OnKeyDown,
       Avalonia.Interactivity.RoutingStrategies.Tunnel
     );
-    window.AddHandler(
+    _attachedWindow.AddHandler(
       InputElement.KeyUpEvent,
       OnKeyUp,
       Avalonia.Interactivity.RoutingStrategies.Tunnel
     );
-    window.AddHandler(
+    _attachedWindow.AddHandler(
       InputElement.PointerPressedEvent,
       OnPointerPressed,
       Avalonia.Interactivity.RoutingStrategies.Tunnel
     );
-    window.AddHandler(
+    _attachedWindow.AddHandler(
       InputElement.PointerReleasedEvent,
       OnPointerReleased,
       Avalonia.Interactivity.RoutingStrategies.Tunnel
     );
+  }
+
+  public void Dispose()
+  {
+    if (_attachedWindow != null)
+    {
+      _attachedWindow.AddHandler(InputElement.KeyDownEvent, OnKeyDown);
+      _attachedWindow.AddHandler(InputElement.KeyUpEvent, OnKeyUp);
+      _attachedWindow.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed);
+      _attachedWindow.AddHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
+    }
+    _pressedVisuals.Clear();
+    _attachedWindow = null;
   }
 
   private void OnKeyDown(object? sender, KeyEventArgs e) => HandleInput(e, true);
@@ -70,8 +123,9 @@ public class GlobalInputRouter
       Ctrl: e.KeyModifiers.HasFlag(KeyModifiers.Control),
       Alt: e.KeyModifiers.HasFlag(KeyModifiers.Alt)
     );
+    var state = new InputState(isPressed, GetModifiers(e.KeyModifiers));
 
-    var (handler, action) = RouteAction(focused, chord, isPressed);
+    var (handler, action) = RouteAction(focused, chord, state);
     if (handler != null)
     {
       e.Handled = true;
@@ -139,11 +193,7 @@ public class GlobalInputRouter
     }
   }
 
-  private (IActionHandler? Handler, AppAction? Action) RouteAction(
-    Visual focused,
-    InputChord chord,
-    bool isPressed
-  )
+  private (IActionHandler? Handler, AppAction? Action) RouteAction(Visual focused, InputChord chord, InputState state)
   {
     var current = focused;
     while (current != null)
@@ -157,7 +207,7 @@ public class GlobalInputRouter
         {
           if (_registry.Resolve(contextId, chord) is { } action)
           {
-            if (handler.ProcessAction(action, isPressed))
+            if (handler.Process(action, state))
             {
               return (handler, action);
             }
@@ -167,5 +217,14 @@ public class GlobalInputRouter
       current = current.GetVisualParent() ?? (current as ILogical)?.LogicalParent as Visual;
     }
     return (null, null);
+  }
+
+  private InputModifiers GetModifiers(KeyModifiers avaloniaModifiers)
+  {
+    InputModifiers mods = InputModifiers.None;
+    if (avaloniaModifiers.HasFlag(KeyModifiers.Shift)) mods |= InputModifiers.Shift;
+    if (avaloniaModifiers.HasFlag(KeyModifiers.Control)) mods |= InputModifiers.Ctrl;
+    if (avaloniaModifiers.HasFlag(KeyModifiers.Alt)) mods |= InputModifiers.Alt;
+    return mods;
   }
 }
