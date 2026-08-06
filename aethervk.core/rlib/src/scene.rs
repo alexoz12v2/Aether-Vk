@@ -13,12 +13,6 @@
 //! 2. Generational Compaction: The Archetype organically monitors its own fragmentation. When holes exceed a calculated threshold (e.g. >25% and >64 elements), it performs an ultra-fast Two-Pointer defragmentation (compact()) that seamlessly sorts the holes to the end, shifts active rows left, and correctly resyncs your SlotMap.
 //! 3. Column Dropping: Safely stripping a component (with or without ThreadPool) becomes virtually instantaneous.
 
-// TODO add the cache class for meshes and billboard data as specified in simulation api
-
-// TODO reduce duplicate code on query
-
-// TODO add tests for new methods
-
 use crate::{
   simulation::comet::Comet,
   types,
@@ -83,6 +77,54 @@ impl From<AddComponentError> for types::EngineError {
 }
 
 // === Core ECS Types ===
+
+#[repr(u64)]
+pub enum ComponentTypeId {
+  // ---- Core Components ----
+  Transform = 1,
+  Camera = 2,
+  HighResTransform = 3,
+  ReferenceFrame = 4,
+  Hidden = 5,
+
+  // ---- Visual / Mesh Components ----
+  StaticMesh = 6,
+  PhysicalMesh = 7,
+
+  // ---- Environment & Lighting ----
+  Sun = 8,
+  Sky = 9,
+  Background = 10,
+
+  // ---- Billboards ----
+  ScreenSpaceBillboard = 11,
+  ImageBillboard = 12,
+
+  // ---- Markers & Gizmos ----
+  CometMarker = 13,
+  PlanetMarker = 14,
+  Cursor = 15,
+  Markers = 16,
+  Gizmo = 17,
+  SphereGizmo = 18,
+  Grid = 19,
+  BvhDebug = 20,
+  Measurement = 21,
+
+  // ---- Simulation & Physics ----
+  ParticleSystem = 22,
+  Kinematic = 23,
+  BodyRotationalModel = 24,
+  Trajectory = 25,
+  AlmanacPlanet = 26,
+
+  // ---- UI & Logic ----
+  Transform2D = 27,
+  Ui = 28,
+  ScreenSpaceText = 29,
+  TransformAnimation = 30,
+  Update = 31,
+}
 
 /// A thread-safe, basic Asset Cache
 pub struct AssetCache<T> {
@@ -159,6 +201,8 @@ pub trait ForeignSerializable: Component {
   fn apply_foreign(&mut self, data: &Self::ForeignData);
 
   /// Update the component from a raw void pointer to the DTO
+  /// # Safety
+  /// `ptr` should represent a valid [`Self::ForeignData`] object
   unsafe fn apply_foreign_ptr(&mut self, ptr: *const core::ffi::c_void) {
     unsafe { self.apply_foreign(&*(ptr as *const Self::ForeignData)) };
   }
@@ -168,9 +212,11 @@ pub trait ForeignSerializable: Component {
 pub trait ErasedForeignSerializable {
   fn component_id(&self) -> u64;
   fn foreign_data_size(&self) -> usize;
-  /// SAFETY: `dst` should be a non-null pointer to a buffer of at least `foreign_data_size`
+  /// # Safety
+  /// `dst` should be a non-null pointer to a buffer of at least `foreign_data_size`
   unsafe fn write_foreign_bytes(&self, dst: *mut core::ffi::c_void);
-  /// SAFETY: `src` should be a non-null pointer to a buffer of at least `foreign_data_size`
+  /// # Safety
+  /// `src` should be a non-null pointer to a buffer of at least `foreign_data_size`
   /// which represents the required object layout as specified by [`ForeignSerializable::ForeignData`]
   unsafe fn apply_foreign_bytes(&mut self, src: *const core::ffi::c_void);
 }
@@ -223,47 +269,6 @@ impl Component for CometMarkerComponent {}
 pub struct PlanetMarkerComponent {}
 
 impl Component for PlanetMarkerComponent {}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TransformDTO {
-  pub px: f32,
-  pub py: f32,
-  pub pz: f32,
-  pub rw: f32,
-  pub rx: f32,
-  pub ry: f32,
-  pub rz: f32,
-  pub sx: f32,
-  pub sy: f32,
-  pub sz: f32,
-}
-
-impl ForeignSerializable for TransformComponent {
-  type ForeignData = TransformDTO;
-  const COMPONENT_ID: u64 = 1;
-
-  fn to_foreign(&self) -> Self::ForeignData {
-    TransformDTO {
-      px: self.position.x(),
-      py: self.position.y(),
-      pz: self.position.z(),
-      rw: self.rotation.0.w(),
-      rx: self.rotation.0.x(),
-      ry: self.rotation.0.y(),
-      rz: self.rotation.0.z(),
-      sx: self.scale.x(),
-      sy: self.scale.y(),
-      sz: self.scale.z(),
-    }
-  }
-
-  fn apply_foreign(&mut self, data: &Self::ForeignData) {
-    self.position = Vec3f32::from_components(data.px, data.py, data.pz);
-    self.rotation = Quat::from_components(data.rx, data.ry, data.rz, data.rw);
-    self.scale = Vec3f32::from_components(data.sx, data.sy, data.sz);
-  }
-}
 
 impl Default for TransformComponent {
   fn default() -> Self {
@@ -348,47 +353,6 @@ impl PartialEq for HighResTransformComponent {
 
 impl Component for HighResTransformComponent {}
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct HighResTransformDTO {
-  pub px: f64,
-  pub py: f64,
-  pub pz: f64,
-  pub rw: f32,
-  pub rx: f32,
-  pub ry: f32,
-  pub rz: f32,
-  pub sx: f32,
-  pub sy: f32,
-  pub sz: f32,
-}
-
-impl ForeignSerializable for HighResTransformComponent {
-  type ForeignData = HighResTransformDTO;
-  const COMPONENT_ID: u64 = 3;
-
-  fn to_foreign(&self) -> Self::ForeignData {
-    HighResTransformDTO {
-      px: self.position.x(),
-      py: self.position.y(),
-      pz: self.position.z(),
-      rw: self.rotation.0.w(),
-      rx: self.rotation.0.x(),
-      ry: self.rotation.0.y(),
-      rz: self.rotation.0.z(),
-      sx: self.scale.x(),
-      sy: self.scale.y(),
-      sz: self.scale.z(),
-    }
-  }
-
-  fn apply_foreign(&mut self, data: &Self::ForeignData) {
-    self.position = Vec3f64::from_components(data.px, data.py, data.pz);
-    self.rotation = Quat::from_components(data.rx, data.ry, data.rz, data.rw);
-    self.scale = Vec3f32::from_components(data.sx, data.sy, data.sz);
-  }
-}
-
 impl HighResTransformComponent {
   /// Create from an existing f32 TransformComponent (lossless upcast of position).
   pub fn from_transform(t: &TransformComponent) -> Self {
@@ -442,93 +406,6 @@ impl Default for CameraProjection {
 pub struct CameraComponent {
   pub projection: CameraProjection,
   pub focus_distance: f32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CameraDTO {
-  pub is_orthographic: bool,
-  pub fov: f32,
-  pub aspect: f32,
-  pub near: f32,
-  pub far: f32,
-  pub left: f32,
-  pub right: f32,
-  pub bottom: f32,
-  pub top: f32,
-  pub focus_distance: f32,
-  pub proj: [f32; 16],
-}
-
-impl ForeignSerializable for CameraComponent {
-  type ForeignData = CameraDTO;
-  const COMPONENT_ID: u64 = 2;
-
-  fn to_foreign(&self) -> Self::ForeignData {
-    let proj_mat = self.get_projection_matrix();
-    let proj: [f32; 16] = proj_mat.into();
-    match self.projection {
-      CameraProjection::Perspective {
-        fov,
-        aspect_ratio,
-        near,
-        far,
-      } => CameraDTO {
-        is_orthographic: false,
-        fov: fov.to_degrees(),
-        aspect: aspect_ratio,
-        near,
-        far,
-        left: 0.0,
-        right: 0.0,
-        bottom: 0.0,
-        top: 0.0,
-        focus_distance: self.focus_distance,
-        proj,
-      },
-      CameraProjection::Orthographic {
-        left,
-        right,
-        bottom,
-        top,
-        near,
-        far,
-      } => CameraDTO {
-        is_orthographic: true,
-        fov: 0.0,
-        aspect: 1.0,
-        near,
-        far,
-        left,
-        right,
-        bottom,
-        top,
-        focus_distance: self.focus_distance,
-        proj,
-      },
-    }
-  }
-
-  fn apply_foreign(&mut self, data: &Self::ForeignData) {
-    self.focus_distance = data.focus_distance;
-    if data.is_orthographic {
-      self.projection = CameraProjection::Orthographic {
-        left: data.left,
-        right: data.right,
-        bottom: data.bottom,
-        top: data.top,
-        near: data.near,
-        far: data.far,
-      };
-    } else {
-      self.projection = CameraProjection::Perspective {
-        fov: data.fov.to_radians(),
-        aspect_ratio: data.aspect,
-        near: data.near,
-        far: data.far,
-      };
-    }
-  }
 }
 
 impl Component for CameraComponent {}
@@ -617,7 +494,6 @@ pub struct CursorComponent {}
 impl Component for CursorComponent {}
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-/// TODO: Document this item
 pub struct Marker {
   pub local_pos: [f32; 3],
   pub color: [f32; 3],
@@ -625,7 +501,6 @@ pub struct Marker {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-/// TODO: Document this item
 pub struct MarkersComponent {
   pub markers: alloc::vec::Vec<Marker>,
 }
@@ -722,45 +597,6 @@ impl Default for ScreenSpaceBillboardComponent {
 
 impl Component for ScreenSpaceBillboardComponent {}
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ScreenSpaceBillboardDTO {
-  pub ndc_x: f32,
-  pub ndc_y: f32,
-  pub scale: f32,
-  pub rotation_deg: f32,
-  pub opacity: f32,
-  pub z_index: i32,
-  pub viewport_id: u64,
-}
-
-impl ForeignSerializable for ScreenSpaceBillboardComponent {
-  type ForeignData = ScreenSpaceBillboardDTO;
-  const COMPONENT_ID: u64 = 5;
-
-  fn to_foreign(&self) -> Self::ForeignData {
-    ScreenSpaceBillboardDTO {
-      ndc_x: self.ndc_x,
-      ndc_y: self.ndc_y,
-      scale: self.scale,
-      rotation_deg: self.rotation_deg,
-      opacity: self.opacity,
-      z_index: self.z_index,
-      viewport_id: self.viewport_id,
-    }
-  }
-
-  fn apply_foreign(&mut self, data: &Self::ForeignData) {
-    self.ndc_x = data.ndc_x;
-    self.ndc_y = data.ndc_y;
-    self.scale = data.scale;
-    self.rotation_deg = data.rotation_deg;
-    self.opacity = data.opacity;
-    self.z_index = data.z_index;
-    self.viewport_id = data.viewport_id;
-  }
-}
-
 /// Tags an entity as a Renderable Sun
 #[derive(Clone, Copy, Debug)]
 pub struct SunComponent {
@@ -793,38 +629,6 @@ pub struct SphereGizmoComponent {
   pub is_visible: bool,
 }
 impl Component for SphereGizmoComponent {}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SphereGizmoDTO {
-  pub radius: f32,
-  pub subdivisions: f32,
-  pub local_frame: [f32; 16],
-  pub is_visible: bool,
-}
-
-impl ForeignSerializable for SphereGizmoComponent {
-  type ForeignData = SphereGizmoDTO;
-  const COMPONENT_ID: u64 = 4;
-
-  fn to_foreign(&self) -> Self::ForeignData {
-    SphereGizmoDTO {
-      radius: self.radius,
-      subdivisions: self.subdivisions,
-      local_frame: self.local_frame.into(),
-      is_visible: self.is_visible,
-    }
-  }
-
-  fn apply_foreign(&mut self, data: &Self::ForeignData) {
-    self.radius = data.radius;
-    self.subdivisions = data.subdivisions;
-    // For now we don't apply local_frame back, or we'd need Mat4x4f32::from or similar.
-    // Given gizmos are usually updated from Rust, this is fine, or we can use:
-    // self.local_frame = Mat4x4f32::from(data.local_frame) if that exists.
-    self.is_visible = data.is_visible;
-  }
-}
 
 /// A spherical gizmo with a simpler toggle, distinct from SphereGizmoComponent
 #[derive(Clone, Debug, PartialEq)]
@@ -4734,6 +4538,302 @@ impl ErasedMutPtr {
     self.0 as *mut T
   }
 }
+
+/// Module which groups all computed properties DTOs
+/// Naming convention "{ComponentNameWithoutComponentSuffix}ComputedDTO"
+pub mod computed_properties {
+
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct ParticleSystemComputedDTO {
+    /// The Finson-Probstein model ratio between radiation pressure force and sun gravitation
+    pub beta: f32,
+    /// Production rate of particles in terms of mass, at a sun distance of 1 AU, assuming point is
+    /// sunlit
+    pub dust_production_rate_at_1au_kgs: f32,
+  }
+}
+
+pub use computed_properties::*;
+
+/// Module containing the DTO used for particle system related FFI functions
+pub mod particles_dto {
+  /// Particle system emission and draw commands. Some properties are grouped by a comment and are
+  /// displayed "commonly", and not for each particle system. they are the "Jet Common Properties"
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct ParticleSystemDTO {
+    // -- start of jet common properties --
+    pub mass_variability_perc: f32,
+    pub diametre_um: f32,
+    pub density_gcm3: f32,
+    pub scattering_efficiency: f32,
+
+    pub afrho_0_cm: f32, // new values with respect to AetherVk Web
+    pub afrho_power: f32,
+    pub afrho_cutoff_au: f32,
+    pub afrho_max_value_cm: f32,
+
+    // -- start jet specific properties --
+    pub latitude_rad: f32,
+    pub longitude_rad: f32,
+    pub aperture_rad: f32,
+    pub start_velocity_mean: f32,
+    pub start_velocity_std: f32,
+    pub stream_color: [f32; 4],
+  }
+}
+
+pub use particles_dto::*;
+
+/// Module which groups all [`ForeignSerializable`] implementations for all components
+pub mod dto {
+  use super::*;
+
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct TransformDTO {
+    pub px: f32,
+    pub py: f32,
+    pub pz: f32,
+    pub rw: f32,
+    pub rx: f32,
+    pub ry: f32,
+    pub rz: f32,
+    pub sx: f32,
+    pub sy: f32,
+    pub sz: f32,
+  }
+
+  impl ForeignSerializable for TransformComponent {
+    type ForeignData = TransformDTO;
+    const COMPONENT_ID: u64 = ComponentTypeId::Transform as u64;
+
+    fn to_foreign(&self) -> Self::ForeignData {
+      TransformDTO {
+        px: self.position.x(),
+        py: self.position.y(),
+        pz: self.position.z(),
+        rw: self.rotation.0.w(),
+        rx: self.rotation.0.x(),
+        ry: self.rotation.0.y(),
+        rz: self.rotation.0.z(),
+        sx: self.scale.x(),
+        sy: self.scale.y(),
+        sz: self.scale.z(),
+      }
+    }
+
+    fn apply_foreign(&mut self, data: &Self::ForeignData) {
+      self.position = Vec3f32::from_components(data.px, data.py, data.pz);
+      self.rotation = Quat::from_components(data.rx, data.ry, data.rz, data.rw);
+      self.scale = Vec3f32::from_components(data.sx, data.sy, data.sz);
+    }
+  }
+
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct HighResTransformDTO {
+    pub px: f64,
+    pub py: f64,
+    pub pz: f64,
+    pub rw: f32,
+    pub rx: f32,
+    pub ry: f32,
+    pub rz: f32,
+    pub sx: f32,
+    pub sy: f32,
+    pub sz: f32,
+    pub _pad: u32,
+  }
+
+  impl ForeignSerializable for HighResTransformComponent {
+    type ForeignData = HighResTransformDTO;
+    const COMPONENT_ID: u64 = ComponentTypeId::HighResTransform as u64;
+
+    fn to_foreign(&self) -> Self::ForeignData {
+      HighResTransformDTO {
+        px: self.position.x(),
+        py: self.position.y(),
+        pz: self.position.z(),
+        rw: self.rotation.0.w(),
+        rx: self.rotation.0.x(),
+        ry: self.rotation.0.y(),
+        rz: self.rotation.0.z(),
+        sx: self.scale.x(),
+        sy: self.scale.y(),
+        sz: self.scale.z(),
+        _pad: 0,
+      }
+    }
+
+    fn apply_foreign(&mut self, data: &Self::ForeignData) {
+      self.position = Vec3f64::from_components(data.px, data.py, data.pz);
+      self.rotation = Quat::from_components(data.rx, data.ry, data.rz, data.rw);
+      self.scale = Vec3f32::from_components(data.sx, data.sy, data.sz);
+    }
+  }
+
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct CameraDTO {
+    pub fov: f32,
+    pub aspect: f32,
+    pub near: f32,
+    pub far: f32,
+    pub left: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub top: f32,
+    pub focus_distance: f32,
+    pub is_orthographic: u8,
+    pub _pad: [u8; 3],
+  }
+
+  impl ForeignSerializable for CameraComponent {
+    type ForeignData = CameraDTO;
+    const COMPONENT_ID: u64 = ComponentTypeId::Camera as u64;
+
+    fn to_foreign(&self) -> Self::ForeignData {
+      match self.projection {
+        CameraProjection::Perspective {
+          fov,
+          aspect_ratio,
+          near,
+          far,
+        } => CameraDTO {
+          is_orthographic: 0,
+          fov: fov.to_degrees(),
+          aspect: aspect_ratio,
+          near,
+          far,
+          left: 0.0,
+          right: 0.0,
+          bottom: 0.0,
+          top: 0.0,
+          focus_distance: self.focus_distance,
+          _pad: [0; 3],
+        },
+        CameraProjection::Orthographic {
+          left,
+          right,
+          bottom,
+          top,
+          near,
+          far,
+        } => CameraDTO {
+          is_orthographic: 1,
+          fov: 0.0,
+          aspect: 1.0,
+          near,
+          far,
+          left,
+          right,
+          bottom,
+          top,
+          focus_distance: self.focus_distance,
+          _pad: [0; 3],
+        },
+      }
+    }
+
+    fn apply_foreign(&mut self, data: &Self::ForeignData) {
+      self.focus_distance = data.focus_distance;
+      if data.is_orthographic == 1 {
+        self.projection = CameraProjection::Orthographic {
+          left: data.left,
+          right: data.right,
+          bottom: data.bottom,
+          top: data.top,
+          near: data.near,
+          far: data.far,
+        };
+      } else {
+        self.projection = CameraProjection::Perspective {
+          fov: data.fov.to_radians(),
+          aspect_ratio: data.aspect,
+          near: data.near,
+          far: data.far,
+        };
+      }
+    }
+  }
+
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct ScreenSpaceBillboardDTO {
+    pub ndc_x: f32,
+    pub ndc_y: f32,
+    pub scale: f32,
+    pub rotation_deg: f32,
+    pub opacity: f32,
+    pub z_index: i32,
+    pub viewport_id: u64,
+  }
+
+  impl ForeignSerializable for ScreenSpaceBillboardComponent {
+    type ForeignData = ScreenSpaceBillboardDTO;
+    const COMPONENT_ID: u64 = ComponentTypeId::ScreenSpaceBillboard as u64;
+
+    fn to_foreign(&self) -> Self::ForeignData {
+      ScreenSpaceBillboardDTO {
+        ndc_x: self.ndc_x,
+        ndc_y: self.ndc_y,
+        scale: self.scale,
+        rotation_deg: self.rotation_deg,
+        opacity: self.opacity,
+        z_index: self.z_index,
+        viewport_id: self.viewport_id,
+      }
+    }
+
+    fn apply_foreign(&mut self, data: &Self::ForeignData) {
+      self.ndc_x = data.ndc_x;
+      self.ndc_y = data.ndc_y;
+      self.scale = data.scale;
+      self.rotation_deg = data.rotation_deg;
+      self.opacity = data.opacity;
+      self.z_index = data.z_index;
+      self.viewport_id = data.viewport_id;
+    }
+  }
+
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct SphereGizmoDTO {
+    pub radius: f32,
+    pub subdivisions: f32,
+    pub local_frame: [f32; 16],
+    pub is_visible: u8,
+    pub _pad: [u8; 3],
+  }
+
+  impl ForeignSerializable for SphereGizmoComponent {
+    type ForeignData = SphereGizmoDTO;
+    const COMPONENT_ID: u64 = ComponentTypeId::SphereGizmo as u64;
+
+    fn to_foreign(&self) -> Self::ForeignData {
+      SphereGizmoDTO {
+        radius: self.radius,
+        subdivisions: self.subdivisions,
+        local_frame: self.local_frame.into(),
+        is_visible: if self.is_visible { 1 } else { 0 },
+        _pad: [0; 3],
+      }
+    }
+
+    fn apply_foreign(&mut self, data: &Self::ForeignData) {
+      self.radius = data.radius;
+      self.subdivisions = data.subdivisions;
+      // For now we don't apply local_frame back, or we'd need Mat4x4f32::from or similar.
+      // Given gizmos are usually updated from Rust, this is fine, or we can use:
+      // self.local_frame = Mat4x4f32::from(data.local_frame) if that exists.
+      self.is_visible = data.is_visible == 1;
+    }
+  }
+}
+
+pub use dto::*;
 
 #[cfg(test)]
 mod tests {

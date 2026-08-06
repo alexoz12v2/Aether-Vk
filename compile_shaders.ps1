@@ -64,7 +64,8 @@ $WgVariantShaders = @(
     "new_particles_compact_reset.comp",
     "new_particles_emit.comp",
     "new_particles_compact.comp",
-    "new_particles_offset_particles.comp"
+    "new_particles_offset_particles.comp",
+    "reset_particles.comp"
 )
 
 function Compile-One {

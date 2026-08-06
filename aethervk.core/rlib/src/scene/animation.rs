@@ -14,7 +14,7 @@ pub struct TransformAnimationComponent {
   pub start_rot: Quat,
   pub target_pos: Vec3f64,
   pub target_rot: Quat,
-  pub duration: f32,
+  pub duration: f32, // unscaled seconds
   pub elapsed: f32,
   pub is_finished: bool,
 }

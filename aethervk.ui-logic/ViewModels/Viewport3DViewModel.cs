@@ -14,11 +14,9 @@ namespace AetherVk.Logic.ViewModels;
 public partial class Viewport3DViewModel
   : TabItemViewModel,
     IActionHandler,
-    IRecipient<AetherVk.Logic.Messages.ToggleAddJetModeMessage>,
-    IRecipient<AetherVk.Logic.Messages.RenderFrameReadyMessage>,
     IDisposable
 {
-  private readonly NativeRuntimeService _runtimeService;
+  private readonly INativeRuntimeService _runtimeService;
   private readonly IFileDialogService _fileDialogService;
 
   public ulong PresentationEngineId { get; private set; }
@@ -37,29 +35,12 @@ public partial class Viewport3DViewModel
 
   partial void OnWidthChanged(uint value)
   {
-    UpdateCameraAspectRatio();
+    throw new InvalidOperationException();
   }
 
   partial void OnHeightChanged(uint value)
   {
-    UpdateCameraAspectRatio();
-  }
-
-  private void UpdateCameraAspectRatio()
-  {
-    if (Width <= 0 || Height <= 0 || _sceneStateManager == null || SceneId == 0)
-      return;
-    var state = _sceneStateManager.GetOrCreateScene(SceneId);
-    if (state.EntityMap.TryGetValue(CameraId, out var entity))
-    {
-      var camera = entity
-        .Components.OfType<AetherVk.Logic.Models.CameraComponent>()
-        .FirstOrDefault();
-      if (camera != null)
-      {
-        camera.AspectRatio = (float)Width / Height;
-      }
-    }
+    throw new InvalidOperationException();
   }
 
   [ObservableProperty]
@@ -81,14 +62,12 @@ public partial class Viewport3DViewModel
 
   public enum EarthObserverState
   {
-    None,
-    AnimatingToEarth,
-    Locked,
-    AnimatingBack,
+    UpZenith,
+    EarthPositioning,
+    CometOrbiting
   }
 
-  private EarthObserverState _earthObserverState = EarthObserverState.None;
-  private NativeInterop.FfiHighResTransform _originalCameraPos;
+  private EarthObserverState _earthObserverState = EarthObserverState.UpZenith;
 
   [ObservableProperty]
   private bool _hasFirstMeasurementPoint;
@@ -190,10 +169,10 @@ public partial class Viewport3DViewModel
   public bool IsSnapObserverHovered => HoveredRadialItem == "snapobserver";
 
   /// <summary>Dynamic label for the comet radial menu item: "Spawn Comet" or "Destroy Comet".</summary>
-  public string CometRadialLabel => HasComet ? "Destroy\nComet" : "Spawn\nComet";
+  public string CometRadialLabel => !CanSpawnComet() ? "Destroy\nComet" : "Spawn\nComet";
 
   /// <summary>Context-sensitive tooltip for the comet radial menu item.</summary>
-  public string CometRadialTooltip => HasComet ? "Remove comet from scene" : "Spawn a comet in the scene";
+  public string CometRadialTooltip => !CanSpawnComet() ? "Remove comet from scene" : "Spawn a comet in the scene";
 
   private const double RadialRadius = 100.0;
   private const double ItemSize = 80.0;
@@ -236,6 +215,8 @@ public partial class Viewport3DViewModel
     }
   }
 
+  public bool HasComet => !CanSpawnComet();
+
   public void OpenRadialMenuAt(double x, double y)
   {
     RadialMenuX = x;
@@ -256,52 +237,35 @@ public partial class Viewport3DViewModel
   /// </summary>
   public void CommitRadialMenuSelection()
   {
+    // TODO if is playing emit breadcrumb and return?
     var item = HoveredRadialItem;
     CloseRadialMenu();
 
     switch (item)
     {
+      // TODO remove or change
       case "comet":
         if (HasComet)
         {
-          // Destroy comet — disabled during playback
-          if (_timelineService != null && _timelineService.IsPlaying)
-          {
-            _breadcrumbService?.ShowMessageAsync(
-              "Cannot Destroy",
-              "Cannot destroy comet while simulation is playing. Pause first.",
-              default,
-              5
-            );
-          }
-          else
-          {
-            DestroyCometInternal();
-          }
+          DestroyCometInternal();
         }
         else
         {
-          CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
-            new AetherVk.Logic.Messages.OpenSpawnCometDialogMessage()
-          );
+          WeakReferenceMessenger.Default.Send(new Messages.OpenSpawnCometDialogMessage());
         }
         break;
       case "billboard":
         InsertBillboardCommand.Execute(null);
         break;
       case "resetcamera":
-        RuntimeService.ResetCamera(SceneId, CameraId);
-        break;
+        // Call transform to reset
+        throw new NotImplementedException();
       case "snap":
-        var selected = SelectedEntity;
-        if (selected != null)
-          RuntimeService.SnapToEntity(SceneId, CameraId, selected.Id);
-        break;
+        throw new NotImplementedException();
       case "snapobserver":
-        SnapObserverCommand.Execute(null);
-        break;
-        // null or unrecognized: just close, no action
+        throw new NotImplementedException();
     }
+    // null or unrecognized: just close, no action
   }
 
   /// <summary>
@@ -339,13 +303,8 @@ public partial class Viewport3DViewModel
 
   public void SnapCameraToSun()
   {
-    var state = _sceneStateManager.GetOrCreateScene(SceneId);
-    var sun = System.Linq.Enumerable.FirstOrDefault(
-      state.EntityMap.Values,
-      e => System.Linq.Enumerable.Any(e.Components.OfType<AetherVk.Logic.Models.SunComponent>())
-    );
-    if (sun != null)
-      RuntimeService.SnapToEntity(SceneId, CameraId, sun.Id);
+    // TODO animation toward home position
+    throw new NotImplementedException();
   }
 
   [RelayCommand]
@@ -359,67 +318,29 @@ public partial class Viewport3DViewModel
   private void SnapToSelectedFromRadial()
   {
     CloseRadialMenu();
-    var selected = SelectedEntity;
-    if (selected != null)
-      RuntimeService.SnapToEntity(SceneId, CameraId, selected.Id);
+    throw new NotImplementedException();
   }
-
-  public bool HasComet => _sceneStateManager.GetOrCreateScene(SceneId).CometEntityId.HasValue;
 
   [RelayCommand(CanExecute = nameof(CanSpawnComet))]
   private void CloseRadialMenuAndSpawnComet()
   {
     CloseRadialMenu();
     // Send a message to open spawn comet dialog from main window.
-    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
-      new AetherVk.Logic.Messages.OpenSpawnCometDialogMessage()
+    WeakReferenceMessenger.Default.Send(new Messages.OpenSpawnCometDialogMessage()
     );
   }
 
-  private bool CanSpawnComet() => !HasComet;
+  private bool CanSpawnComet()
+  {
+    throw new NotImplementedException();
+  }
 
-  /// <summary>
-  /// Destroys the currently spawned comet entity and its LCA microframe parent.
-  /// Clears both CometEntityId and CometLcaFrameEntityId from scene state.
-  /// </summary>
   private void DestroyCometInternal()
   {
-    var state = _sceneStateManager.GetOrCreateScene(SceneId);
-    if (!state.CometEntityId.HasValue)
-      return;
-
-    var cometId = state.CometEntityId.Value;
-    RuntimeService.RemoveEntity(SceneId, cometId);
-
-    // Remove the LCA microframe parent that was spawned alongside the comet.
-    // Without this the LCA entity is permanently orphaned in the Rust ECS.
-    if (state.CometLcaFrameEntityId.HasValue)
-      RuntimeService.RemoveEntity(SceneId, state.CometLcaFrameEntityId.Value);
-
-    _sceneStateManager.ClearComet(SceneId);
-
-    // Notify property changes for radial menu
-    OnPropertyChanged(nameof(HasComet));
-    OnPropertyChanged(nameof(CometRadialLabel));
-    OnPropertyChanged(nameof(CometRadialTooltip));
-
-    CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
-      new AetherVk.Logic.Messages.CometDestroyedMessage { SceneId = SceneId }
-    );
-
-    _breadcrumbService.ShowMessageAsync(
-      "Comet Destroyed",
-      "The comet and all its jets have been removed from the scene.",
-      default,
-      3
-    );
+    throw new NotImplementedException();
   }
 
   public ulong CameraId { get; private set; }
-
-  /// <summary>Returns the currently selected entity in this viewport's scene, or null.</summary>
-  public AetherVk.Logic.Models.Entity? SelectedEntity =>
-    _sceneStateManager.GetOrCreateScene(SceneId).SelectedEntity;
 
   private static int _measurementCounter = 1;
 
@@ -427,8 +348,6 @@ public partial class Viewport3DViewModel
 
   private readonly IUiThreadDispatcher _uiThreadDispatcher;
   private readonly BreadcrumbService _breadcrumbService;
-  private readonly SceneStateManager _sceneStateManager;
-  private readonly AetherVk.Logic.Services.TimelineService _timelineService;
 
   /// <summary>
   /// Opens a native file dialog to permit selecting an image off the disk.
@@ -450,16 +369,19 @@ public partial class Viewport3DViewModel
         float ndcY = 0.5f;
 
         // Spawn ECS entity with ScreenSpaceBillboardComponent in Rust
-        var entityId = _runtimeService.SpawnBillboard(
+        var entityId = _runtimeService.AddScreenSpaceBillboard(
           SceneId,
           path,
           ndcX,
           ndcY,
           1.0f,
+          0.0f,
           1.0f,
+          1,
           PresentationEngineId
         );
 
+        // TODO remove this probably it will be handled rust side
         if (entityId == 0)
         {
           _breadcrumbService.ShowMessageAsync("Error", "Failed to create billboard entity.");
@@ -482,31 +404,6 @@ public partial class Viewport3DViewModel
         };
 
         Billboards.Add(billboard);
-
-        // Wire the entity in the scene with the NativeComponent
-        var state = _sceneStateManager.GetOrCreateScene(SceneId);
-        if (state.EntityMap.TryGetValue(entityId, out var entity))
-        {
-          var nativeComp = new AetherVk.Logic.Models.ScreenSpaceBillboardComponent
-          {
-            ImagePath = path,
-            NdcX = ndcX,
-            NdcY = ndcY,
-            Scale = 1.0f,
-            RotationDeg = 0.0f,
-            Opacity = 1.0f,
-            ZIndex = 1,
-            ViewportId = PresentationEngineId,
-          };
-          entity.Components.Add(nativeComp);
-          entity.IsDeletable = true;
-
-          // Bind to Rust so property changes push to native
-          nativeComp.BindToNative(_runtimeService.SimulationContext, SceneId, entityId);
-
-          // Link to the overlay ViewModel for bidirectional sync
-          nativeComp.LinkBillboard(billboard);
-        }
 
         _breadcrumbService.ShowMessageAsync(
           "Billboard Added",
@@ -531,7 +428,7 @@ public partial class Viewport3DViewModel
 
     if (billboard.EntityId != 0)
     {
-      RuntimeService.RemoveEntity(SceneId, billboard.EntityId);
+      _runtimeService.RemoveScreenSpaceBillboard(SceneId, billboard.EntityId);
     }
     Billboards.Remove(billboard);
   }
@@ -549,141 +446,52 @@ public partial class Viewport3DViewModel
 
   private void SetupViewport()
   {
-    System.Console.WriteLine(
-      $"[SetupViewport] Called. IsInitialized={_runtimeService.IsInitialized}  AllScenes={_sceneStateManager.AllScenes.Count(s => s.SceneId != 0)}  SceneId={SceneId}  PE={PresentationEngineId}  Cam={CameraId}"
-    );
-
-    if (!_runtimeService.IsInitialized)
-      return;
-
-    // Never create a scene here — that is InitializeSimulationContext's job.
-    // Skip any phantom SceneState(0) entries created before the real scene arrives.
-    var existingScene = _sceneStateManager.AllScenes.FirstOrDefault(s => s.SceneId != 0);
-    if (existingScene == null)
-    {
-      System.Console.WriteLine(
-        "[SetupViewport] No valid scene yet — will retry on SimulationStateUpdatedMessage."
-      );
-      return;
-    }
-
-    if (SceneId == 0)
-      SceneId = existingScene.SceneId;
-
-    System.Console.WriteLine(
-      $"[SetupViewport] Using SceneId={SceneId}  EntityMap.Count={existingScene.EntityMap.Count}"
-    );
-
+    Console.WriteLine($"[SetupViewport] Called. SceneId={SceneId}  PE={PresentationEngineId}  Cam={CameraId}");
     if (PresentationEngineId == 0)
     {
-      PresentationEngineId = _runtimeService.CreatePresentationEngine(Width, Height, SceneId);
-      System.Console.WriteLine($"[SetupViewport] Created PE={PresentationEngineId}");
+      // TODO viewport numbering service
+      if (_runtimeService.AddViewport(SceneId, Width, Height, "Viewport_", out var presentationEngineId, out var camera))
+      {
+        PresentationEngineId = presentationEngineId;
+        CameraId = camera;
+      }
+
+      Console.WriteLine($"[SetupViewport] Created PE={PresentationEngineId} CameraId={CameraId}");
     }
 
-    if (CameraId != 0)
-    {
-      System.Console.WriteLine(
-        $"[SetupViewport] Camera already wired (CameraId={CameraId}), done."
-      );
-      return;
-    }
-
-    // Check the entity tree is populated before trying to add a camera.
-    var rootEntity = _runtimeService.GetEntityByName(SceneId, "root");
-    System.Console.WriteLine(
-      $"[SetupViewport] root entity = {rootEntity?.Id.ToString() ?? "NULL"}"
-    );
-    if (rootEntity == null)
-    {
-      System.Console.WriteLine(
-        "[SetupViewport] root not found — waiting for SimulationStateUpdatedMessage."
-      );
-      return;
-    }
-
-    CameraId = _runtimeService.AddPerspectiveCamera(
-      SceneId,
-      PresentationEngineId,
-      $"viewport_camera_{PresentationEngineId}",
-      45f,
-      0.0001f, // near  (~15 000 km at AU scale)
-      1000.0f // far   (1 000 AU covers solar system)
-    );
-
-    System.Console.WriteLine($"[SetupViewport] AddPerspectiveCamera => CameraId={CameraId}");
-
-    if (CameraId == 0)
-    {
-      System.Console.WriteLine("[SetupViewport] ERROR: AddPerspectiveCamera returned 0!");
-      return;
-    }
-
-    System.Console.WriteLine(
-      $"[SetupViewport] Applying default viewport camera position: pos=({HomePosX}, {HomePosY}, {HomePosZ})"
-    );
-    _runtimeService.SetTransformComponent(
-      SceneId,
-      CameraId,
-      HomePosX,
-      HomePosY,
-      HomePosZ,
-      HomeRotW,
-      HomeRotX,
-      HomeRotY,
-      HomeRotZ,
-      1f,
-      1f,
-      1f
-    );
+    // TODO position camera
+    Console.WriteLine($"[SetupViewport] Applying default viewport camera position: pos=({HomePosX}, {HomePosY}, {HomePosZ})");
+    throw new NotImplementedException();
   }
 
   // TODO cleanup.
   public Viewport3DViewModel(
-    NativeRuntimeService runtimeService,
+    INativeRuntimeService runtimeService,
     BreadcrumbService breadcrumbService,
-    SceneStateManager sceneStateManager,
     IUiThreadDispatcher uiThreadDispatcher,
-    IFileDialogService fileDialogService,
-    AetherVk.Logic.Services.TimelineService timelineService
+    IFileDialogService fileDialogService
   )
     : base("Viewport 3D")
   {
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
-    _sceneStateManager = sceneStateManager;
     _uiThreadDispatcher = uiThreadDispatcher;
     _fileDialogService = fileDialogService;
-    _timelineService = timelineService;
 
     OperatorStack = new OperatorStack(new ViewportBaseOperator(this));
+    IsInitialized = true;
 
-    _runtimeService.PropertyChanged += (s, e) =>
-    {
-      if (e.PropertyName == nameof(NativeRuntimeService.IsInitialized))
-      {
-        IsInitialized = _runtimeService.IsInitialized;
-        if (IsInitialized)
-        {
-          SetupViewport();
-        }
-      }
-    };
-    IsInitialized = _runtimeService.IsInitialized;
-    if (IsInitialized)
-    {
-      SetupViewport();
-    }
-    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.RenderFrameReadyMessage>(
+    WeakReferenceMessenger.Default.Register<Messages.RenderFrameReadyMessage>(
       this,
       (r, m) => ((Viewport3DViewModel)r).Receive(m)
     );
-    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.ToggleAddJetModeMessage>(
+    WeakReferenceMessenger.Default.Register<Messages.ToggleAddJetModeMessage>(
       this,
       (r, m) => ((Viewport3DViewModel)r).Receive(m)
     );
     // Retry SetupViewport after CreateScene completes (fires SimulationStateUpdatedMessage),
     // which resolves the timing race where IsInitialized=true fires before scene entities exist.
-    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.SimulationStateUpdatedMessage>(
+    WeakReferenceMessenger.Default.Register<Messages.SimulationStateUpdatedMessage>(
       this,
       (r, m) =>
       {
@@ -697,15 +505,12 @@ public partial class Viewport3DViewModel
       }
     );
 
-    _sceneStateManager.PropertyChanged += (s, e) =>
+    // TODO If CAMERA CHANGES UPDATE INDICATOR
+    _uiThreadDispatcher.DispatchAsync(() =>
     {
-      // If entities changed or camera changed, we should re-eval measurement
-      _uiThreadDispatcher.DispatchAsync(() =>
-      {
-        UpdateMeasurementIndicator();
-        return Task.CompletedTask;
-      });
-    };
+      UpdateMeasurementIndicator();
+      return Task.CompletedTask;
+    });
 
     if (IsInitialized)
     {
@@ -718,351 +523,30 @@ public partial class Viewport3DViewModel
     Stop();
     if (PresentationEngineId != 0)
     {
-      _runtimeService.DestroyPresentationEngine(SceneId, PresentationEngineId, CameraId);
+      _runtimeService.RemoveViewport(SceneId, PresentationEngineId);
       PresentationEngineId = 0;
+      CameraId = 0;
     }
   }
 
-  public void Receive(AetherVk.Logic.Messages.ToggleAddJetModeMessage message)
+  public void Receive(Messages.ToggleAddJetModeMessage message)
   {
     IsAddingJet = true;
   }
 
-  public bool ProcessAction(AppAction action, bool isPressed)
+  public bool Process(AppAction action, InputState state)
   {
-    if (isPressed && action.Id == "viewport.delete")
-    {
-      // Try billboard-overlay delete first
-      var selectedBillboard = Billboards.FirstOrDefault(b => b.IsSelected);
-      if (selectedBillboard != null)
-      {
-        if (selectedBillboard.EntityId != 0)
-        {
-          RuntimeService.RemoveEntity(SceneId, selectedBillboard.EntityId);
-          // Remove from scene state
-          var state = _sceneStateManager.GetOrCreateScene(SceneId);
-          if (state.EntityMap.TryGetValue(selectedBillboard.EntityId, out var entity))
-          {
-            // Remove from parent's children collection
-            foreach (var parent in state.EntityMap.Values)
-            {
-              parent.Children.Remove(entity);
-            }
-            state.EntityMap.Remove(selectedBillboard.EntityId);
-          }
-        }
-        Billboards.Remove(selectedBillboard);
-        return true;
-      }
-
-      // General deletable entity (no billboard overlay, e.g. future use)
-      var selectedEntity = SelectedEntity;
-      if (selectedEntity != null && selectedEntity.IsDeletable)
-      {
-        RuntimeService.RemoveEntity(SceneId, selectedEntity.Id);
-        var state = _sceneStateManager.GetOrCreateScene(SceneId);
-        foreach (var parent in state.EntityMap.Values)
-        {
-          parent.Children.Remove(selectedEntity);
-        }
-        state.EntityMap.Remove(selectedEntity.Id);
-        state.SelectedEntity = null;
-        return true;
-      }
-    }
-    return OperatorStack.ProcessAction(action, isPressed);
+    return OperatorStack.Process(action, state);
   }
 
-  public bool ProcessPointerDelta(float dx, float dy) => OperatorStack.ProcessPointerDelta(dx, dy);
-
-  public bool ProcessPointerWheel(float deltaY) => OperatorStack.ProcessPointerWheel(deltaY);
-
-  public async void PerformRaycast(double x, double y, double w, double h)
+  [RelayCommand]
+  private void ToggleCameraMode()
   {
-    float ndcX = (float)((x / w) * 2.0 - 1.0);
-    float ndcY = (float)((y / h) * 2.0 - 1.0);
-
-    var res = await _runtimeService.RaycastNdcAsync(SceneId, CameraId, ndcX, ndcY);
-
-    var breadcrumb = _breadcrumbService;
-
-    if (IsEarthObserverMode)
-      return;
-
-    if (res.hit)
-    {
-      var state = _sceneStateManager.GetOrCreateScene(SceneId);
-      var entity = _runtimeService.GetEntityById(SceneId, res.entityId);
-
-      if (entity != null)
-      {
-        if (state.SelectedEntity?.Id == entity.Id)
-        {
-          var emitter = entity
-            .Components.OfType<AetherVk.Logic.Models.ParticleEmitterCirclesComponent>()
-            .FirstOrDefault();
-          var tx = entity
-            .Components.OfType<AetherVk.Logic.Models.TransformComponent>()
-            .FirstOrDefault();
-
-          if (emitter != null && tx != null && IsAddingJet)
-          {
-            // Convert world hit point to local space
-            var worldPt = new System.Numerics.Vector3(res.px, res.py, res.pz);
-            var worldPos = new System.Numerics.Vector3(tx.PosX, tx.PosY, tx.PosZ);
-            var worldRot = new System.Numerics.Quaternion(tx.RotX, tx.RotY, tx.RotZ, tx.RotW);
-
-            var localPt = System.Numerics.Vector3.Transform(
-              worldPt - worldPos,
-              System.Numerics.Quaternion.Inverse(worldRot)
-            );
-
-            // Normalize to get spherical coordinates
-            var normalizedPt = System.Numerics.Vector3.Normalize(localPt);
-            float latitude = (float)(Math.Asin(normalizedPt.Z) * 180.0 / Math.PI);
-            float longitude = (float)(Math.Atan2(normalizedPt.Y, normalizedPt.X) * 180.0 / Math.PI);
-
-            var newCircle = new AetherVk.Logic.Models.EmissionCircleItem
-            {
-              LatitudeDeg = latitude,
-              LongitudeDeg = longitude,
-              CircleRadiusKm = 0.5f,
-              ParticlesPerSecond = 600f,  // 600/s ≈ 10/tick at 60 Hz
-              ColorR = 1.0f,
-              ColorG = 0.5f,
-              ColorB = 0.0f,
-              ColorA = 1.0f,
-            };
-
-            emitter.Circles.Add(newCircle);
-
-            breadcrumb?.ShowMessageAsync(
-              "Raycast Hit",
-              $"Added jet at Lat: {latitude:F1}°, Lon: {longitude:F1}°"
-            );
-            IsAddingJet = false; // Turn off mode after adding one
-          }
-          else
-          {
-            breadcrumb?.ShowMessageAsync(
-              "Raycast Info",
-              "Entity selected but it is not a comet, cannot add jets."
-            );
-          }
-        }
-        else
-        {
-          state.SelectedEntity = entity;
-          CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
-            new AetherVk.Logic.ViewModels.EntitySelectedMessage(entity)
-          );
-          breadcrumb?.ShowMessageAsync("Raycast Hit", $"Selected {entity.Name}");
-        }
-      }
-    }
-    else
-    {
-      // Deselect when clicking on empty space
-      var state = _sceneStateManager.GetOrCreateScene(SceneId);
-      if (state.SelectedEntity != null)
-      {
-        state.SelectedEntity = null;
-        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
-          new AetherVk.Logic.ViewModels.EntitySelectedMessage(null)
-        );
-      }
-    }
+    throw new NotImplementedException();
   }
 
-  private void HandleMeasurementPoint(float x, float y, float z)
-  {
-    if (!HasFirstMeasurementPoint)
-    {
-      HasFirstMeasurementPoint = true;
-      FirstMeasurementPointX = x;
-      FirstMeasurementPointY = y;
-      FirstMeasurementPointZ = z;
-    }
-    else
-    {
-      var name = $"Measurement_{_measurementCounter++}";
-      _runtimeService.CreateMeasurement(
-        SceneId,
-        name,
-        new[] { FirstMeasurementPointX, FirstMeasurementPointY, FirstMeasurementPointZ },
-        new[] { x, y, z }
-      );
-
-      // Calculate distance between the two points
-      float dx = x - FirstMeasurementPointX;
-      float dy = y - FirstMeasurementPointY;
-      float dz = z - FirstMeasurementPointZ;
-      float distance = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
-
-      // Calculate midpoint to place the label approximately (in 2D space this requires projection, but we can just put it at 10,10 for now, or 3D project it later. We will just add the billboard with the text)
-      Billboards.Add(
-        new BillboardViewModel
-        {
-          Text = $"{distance:F2} km",
-          X = Width / 2.0 - 50,
-          Y = Height / 2.0 - 50,
-          Width = 100,
-          Height = 40,
-          ZIndex = 10,
-        }
-      );
-
-      HasFirstMeasurementPoint = false;
-      IsEarthObserverMode = false;
-      ShowNoIntersectionFlyout = false;
-    }
-  }
-
-  [CommunityToolkit.Mvvm.Input.RelayCommand]
-  private void SubmitManualMeasurement()
-  {
-    HandleMeasurementPoint(ManualMeasurementX, ManualMeasurementY, ManualMeasurementZ);
-    ShowNoIntersectionFlyout = false;
-  }
-
-  [CommunityToolkit.Mvvm.Input.RelayCommand]
-  private void SubmitCursorMeasurement()
-  {
-    float cx = 0,
-      cy = 0,
-      cz = 0;
-    var state = _sceneStateManager;
-    var rootEntities = state?.GetOrCreateScene(SceneId).RootEntities;
-    var cursor = rootEntities?.FirstOrDefault(e =>
-      e.Name == "cursor" || e.Components.Any(c => c.Name == "Cursor")
-    );
-    if (cursor != null)
-    {
-      var transform = cursor
-        .Components.OfType<AetherVk.Logic.Models.TransformComponent>()
-        .FirstOrDefault();
-      if (transform != null)
-      {
-        cx = transform.PosX;
-        cy = transform.PosY;
-        cz = transform.PosZ;
-      }
-    }
-    HandleMeasurementPoint(cx, cy, cz);
-    ShowNoIntersectionFlyout = false;
-  }
-
-  [CommunityToolkit.Mvvm.Input.RelayCommand]
-  private void UndoMeasurementRaycast()
-  {
-    ShowNoIntersectionFlyout = false;
-  }
-
-  [CommunityToolkit.Mvvm.Input.RelayCommand]
-  private void ToggleEarthObserverMode()
-  {
-    if (_timelineService.IsPlaying)
-    {
-      _ = _breadcrumbService.ShowMessageAsync(
-        "Viewport",
-        "Cannot switch to Earth Observer Mode while simulation is running.",
-        TimeSpan.FromSeconds(3),
-        3
-      );
-      return;
-    }
-
-    if (CameraId == 0)
-      return;
-
-    if (!IsEarthObserverMode)
-    {
-      // Entering mode
-      IsEarthObserverMode = true;
-      _runtimeService.GetHighResTransformComponent(SceneId, CameraId, out _originalCameraPos);
-
-      // Get Earth's position
-      var earthPos = _runtimeService.GetEphemerisPosition(
-        399,
-        _runtimeService.GetSimulationTime(SceneId)
-      );
-      if (earthPos.HasValue)
-      {
-        OperatorStack.IsCameraControlEnabled = false;
-        _runtimeService.AddCameraAnimation(
-          SceneId,
-          CameraId,
-          earthPos.Value.PosX,
-          earthPos.Value.PosY,
-          earthPos.Value.PosZ,
-          2.0f
-        );
-        _earthObserverState = EarthObserverState.AnimatingToEarth;
-      }
-      else
-      {
-        // Fallback if no SPK loaded
-        _runtimeService.AddAlmanacPlanet(SceneId, CameraId, 399);
-        _earthObserverState = EarthObserverState.Locked;
-      }
-    }
-    else
-    {
-      // Exiting mode
-      IsEarthObserverMode = false;
-      _runtimeService.RemoveAlmanacPlanet(SceneId, CameraId);
-      _runtimeService.AddCameraAnimation(
-        SceneId,
-        CameraId,
-        _originalCameraPos.Px,
-        _originalCameraPos.Py,
-        _originalCameraPos.Pz,
-        2.0f
-      );
-      _earthObserverState = EarthObserverState.AnimatingBack;
-    }
-  }
-
-  [CommunityToolkit.Mvvm.Input.RelayCommand]
-  private async Task SnapObserverAsync()
-  {
-    if (!IsEarthObserverMode)
-      return;
-
-    var result = await WeakReferenceMessenger.Default.Send(
-      new AetherVk.Logic.Messages.OpenSnapObserverDialogMessage()
-    );
-    if (result.HasValue)
-    {
-      _runtimeService.SetAlmanacPlanetOffset(
-        SceneId,
-        CameraId,
-        (float)result.Value.X,
-        (float)result.Value.Y,
-        (float)result.Value.Z
-      );
-    }
-  }
-
-  // TODO remove never run
-  [CommunityToolkit.Mvvm.Input.RelayCommand]
-  private async Task InitializeSceneAsync()
-  {
-    if (!_runtimeService.IsInitialized)
-    {
-      IsLoading = true;
-      await Task.Run(() => _runtimeService.InitializeSimulationContext("Vulkan", null, false));
-      IsLoading = false;
-    }
-
-    SetupViewport();
-
-    IsInitialized = true;
-  }
-
-  public NativeRuntimeService RuntimeService => _runtimeService;
-
-  public void Receive(AetherVk.Logic.Messages.RenderFrameReadyMessage message)
+  // TODO remove and go to nativecontrol
+  public void Receive(Messages.RenderFrameReadyMessage message)
   {
     if (message.PresentationEngineId == PresentationEngineId && message.SceneId == SceneId)
     {
@@ -1082,30 +566,11 @@ public partial class Viewport3DViewModel
       return;
     _isProcessingFrame = true;
 
-    if (_earthObserverState == EarthObserverState.AnimatingToEarth)
-    {
-      if (_runtimeService.CheckCameraAnimationFinished(SceneId, CameraId))
-      {
-        _runtimeService.RemoveCameraAnimation(SceneId, CameraId);
-        _runtimeService.AddAlmanacPlanet(SceneId, CameraId, 399);
-        _earthObserverState = EarthObserverState.Locked;
-      }
-    }
-    else if (_earthObserverState == EarthObserverState.AnimatingBack)
-    {
-      if (_runtimeService.CheckCameraAnimationFinished(SceneId, CameraId))
-      {
-        _runtimeService.RemoveCameraAnimation(SceneId, CameraId);
-        _earthObserverState = EarthObserverState.None;
-        OperatorStack.IsCameraControlEnabled = true;
-      }
-    }
-
     UpdateMeasurementIndicator();
 
     try
     {
-      nuint bufferSize = (nuint)(Width * Height * 4);
+      nuint bufferSize = Width * Height * 4;
       IntPtr unmanagedBuffer = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)bufferSize);
 
       try
@@ -1125,10 +590,7 @@ public partial class Viewport3DViewModel
         }
         else
         {
-          System.Console.WriteLine(
-            $"[ProcessFrameAsync] DownloadImageAsync returned false for taskId={_lastRenderTaskId}. "
-              + "Frame skipped."
-          );
+          Console.WriteLine($"[ProcessFrameAsync] DownloadImageAsync returned false for taskId={_lastRenderTaskId}. Frame skipped.");
         }
       }
       finally
@@ -1147,81 +609,81 @@ public partial class Viewport3DViewModel
     if (Width <= 0 || Height <= 0)
       return;
 
-    var state = _sceneStateManager.GetOrCreateScene(SceneId);
-    if (state.EntityMap.TryGetValue(CameraId, out var entity))
-    {
-      var camera = entity
-        .Components.OfType<AetherVk.Logic.Models.CameraComponent>()
-        .FirstOrDefault();
-      if (camera != null)
-      {
-        double target_px_width = Math.Max(24.0, Width * 0.07);
+    throw new NotImplementedException();
 
-        if (camera.IsOrthographic)
-        {
-          double W_au = Width * camera.OrthoScaleFactor;
-          if (W_au > 0)
-          {
-            double min_au = target_px_width * (W_au / Width);
-            double nice_au = GetNiceNumber(min_au);
-            MeasurementIndicatorWidth = nice_au * (Width / W_au);
-            MeasurementIndicatorText = $"{FormatNiceNumber(nice_au)} AU";
-            ShowMeasurementIndicator = true;
-          }
-          else
-          {
-            ShowMeasurementIndicator = false;
-          }
-        }
-        else
-        {
-          // Perspective
-          double fovRad = camera.Fov * Math.PI / 180.0;
-          double hFovRad = 2.0 * Math.Atan(Math.Tan(fovRad / 2.0) * camera.AspectRatio);
-          double W_arcsec = hFovRad * 180.0 / Math.PI * 3600.0;
+    // var state = _sceneStateManager.GetOrCreateScene(SceneId);
+    // if (state.EntityMap.TryGetValue(CameraId, out var entity))
+    // {
+    //   var camera = entity.Components.OfType<AetherVk.Logic.Models.CameraComponent>().FirstOrDefault();
+    //   if (camera != null)
+    //   {
+    //     double target_px_width = Math.Max(24.0, Width * 0.07);
 
-          if (W_arcsec > 0)
-          {
-            double min_arcsec = target_px_width * (W_arcsec / Width);
+    //     if (camera.IsOrthographic)
+    //     {
+    //       double W_au = Width * camera.OrthoScaleFactor;
+    //       if (W_au > 0)
+    //       {
+    //         double min_au = target_px_width * (W_au / Width);
+    //         double nice_au = GetNiceNumber(min_au);
+    //         MeasurementIndicatorWidth = nice_au * (Width / W_au);
+    //         MeasurementIndicatorText = $"{FormatNiceNumber(nice_au)} AU";
+    //         ShowMeasurementIndicator = true;
+    //       }
+    //       else
+    //       {
+    //         ShowMeasurementIndicator = false;
+    //       }
+    //     }
+    //     else
+    //     {
+    //       // Perspective
+    //       double fovRad = camera.Fov * Math.PI / 180.0;
+    //       double hFovRad = 2.0 * Math.Atan(Math.Tan(fovRad / 2.0) * camera.AspectRatio);
+    //       double W_arcsec = hFovRad * 180.0 / Math.PI * 3600.0;
 
-            if (min_arcsec > 3600.0)
-            {
-              double min_deg = min_arcsec / 3600.0;
-              double nice_deg = GetNiceNumber(min_deg);
-              MeasurementIndicatorWidth = nice_deg * 3600.0 * (Width / W_arcsec);
-              MeasurementIndicatorText = $"{FormatNiceNumber(nice_deg)} deg";
-            }
-            else if (min_arcsec > 60.0)
-            {
-              double min_min = min_arcsec / 60.0;
-              double nice_min = GetNiceNumber(min_min);
-              MeasurementIndicatorWidth = nice_min * 60.0 * (Width / W_arcsec);
-              MeasurementIndicatorText = $"{FormatNiceNumber(nice_min)} arcmin";
-            }
-            else
-            {
-              double nice_arcsec = GetNiceNumber(min_arcsec);
-              MeasurementIndicatorWidth = nice_arcsec * (Width / W_arcsec);
-              MeasurementIndicatorText = $"{FormatNiceNumber(nice_arcsec)} arcsec";
-            }
+    //       if (W_arcsec > 0)
+    //       {
+    //         double min_arcsec = target_px_width * (W_arcsec / Width);
 
-            ShowMeasurementIndicator = true;
-          }
-          else
-          {
-            ShowMeasurementIndicator = false;
-          }
-        }
-      }
-      else
-      {
-        ShowMeasurementIndicator = false;
-      }
-    }
-    else
-    {
-      ShowMeasurementIndicator = false;
-    }
+    //         if (min_arcsec > 3600.0)
+    //         {
+    //           double min_deg = min_arcsec / 3600.0;
+    //           double nice_deg = GetNiceNumber(min_deg);
+    //           MeasurementIndicatorWidth = nice_deg * 3600.0 * (Width / W_arcsec);
+    //           MeasurementIndicatorText = $"{FormatNiceNumber(nice_deg)} deg";
+    //         }
+    //         else if (min_arcsec > 60.0)
+    //         {
+    //           double min_min = min_arcsec / 60.0;
+    //           double nice_min = GetNiceNumber(min_min);
+    //           MeasurementIndicatorWidth = nice_min * 60.0 * (Width / W_arcsec);
+    //           MeasurementIndicatorText = $"{FormatNiceNumber(nice_min)} arcmin";
+    //         }
+    //         else
+    //         {
+    //           double nice_arcsec = GetNiceNumber(min_arcsec);
+    //           MeasurementIndicatorWidth = nice_arcsec * (Width / W_arcsec);
+    //           MeasurementIndicatorText = $"{FormatNiceNumber(nice_arcsec)} arcsec";
+    //         }
+
+    //         ShowMeasurementIndicator = true;
+    //       }
+    //       else
+    //       {
+    //         ShowMeasurementIndicator = false;
+    //       }
+    //     }
+    //   }
+    //   else
+    //   {
+    //     ShowMeasurementIndicator = false;
+    //   }
+    // }
+    // else
+    // {
+    //   ShowMeasurementIndicator = false;
+    // }
   }
 
   private double GetNiceNumber(double value)

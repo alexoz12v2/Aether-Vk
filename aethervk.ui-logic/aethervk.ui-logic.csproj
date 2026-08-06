@@ -13,10 +13,22 @@
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="System.Text.Json" Version="10.0.6" />
+    <PackageReference Include="System.Reactive" Version="7.0.0" />
+    <PackageReference Include="System.Collections.Immutable" Version="10.0.10" />
   </ItemGroup>
 
+  <!-- Exclude Debug ViewModels in non-Debug Builds -->
+  <ItemGroup Condition="'$(Configuration)' != 'Debug'">
+    <Compile Remove="ViewModels\Debug\**\*.cs" />
+  </ItemGroup>
+
+  <!-- Exclude Reference ViewModels to remove in the future -->
   <ItemGroup>
-    <AvaloniaResource Include="..\assets\sounds\**\*.wav" />
+    <Compile Remove="ViewModels\References\**\*.cs" />
+
+    <!-- Temporarely excluded for now -->
+    <Compile Remove="Services\References\**\*.cs" />
+    <Compile Remove="Models\References\**\*.cs" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -29,23 +41,13 @@
     <CargoArgs Condition="'$(Configuration)' == 'Release'">--profile release</CargoArgs>
 
     <!-- Cargo Target Mapping for Cross-Platform Publishing -->
-    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'linux-x64'"
-      >x86_64-unknown-linux-gnu</CargoTarget
-    >
-    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'linux-arm64'"
-      >aarch64-unknown-linux-gnu</CargoTarget
-    >
-    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'win-x64'"
-      >x86_64-pc-windows-msvc</CargoTarget
-    >
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'linux-x64'">x86_64-unknown-linux-gnu</CargoTarget>
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">aarch64-unknown-linux-gnu</CargoTarget>
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'win-x64'">x86_64-pc-windows-msvc</CargoTarget>
     <CargoTarget Condition="'$(RuntimeIdentifier)' == 'osx-x64'">x86_64-apple-darwin</CargoTarget>
-    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'osx-arm64'"
-      >aarch64-apple-darwin</CargoTarget
-    >
+    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">aarch64-apple-darwin</CargoTarget>
 
-    <CargoArgs Condition="'$(CargoTarget)' != ''"
-      >-p aethervk-core-cdylib $(CargoArgs) --target $(CargoTarget)</CargoArgs
-    >
+    <CargoArgs Condition="'$(CargoTarget)' != ''">-p aethervk-core-cdylib $(CargoArgs) --target $(CargoTarget)</CargoArgs>
     <CargoOutDir Condition="'$(CargoTarget)' != ''">$(CargoTarget)/$(CargoOutDir)</CargoOutDir>
   </PropertyGroup>
 
@@ -123,13 +125,8 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(IsWindows)' == 'true'">
-    <VkWinLib Condition="'$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/Bin/vulkan-1.dll')"
-      >$(VULKAN_SDK)/Bin</VkWinLib
-    >
-    <VkWinShare
-      Condition="'$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/Config/vk_layer_settings.txt')"
-      >$(VULKAN_SDK)/Config</VkWinShare
-    >
+    <VkWinLib Condition="'$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/Bin/vulkan-1.dll')">$(VULKAN_SDK)/Bin</VkWinLib>
+    <VkWinShare Condition="'$(VULKAN_SDK)' != '' And Exists('$(VULKAN_SDK)/Config/vk_layer_settings.txt')">$(VULKAN_SDK)/Config</VkWinShare>
 
     <!-- Allow fallback -->
     <VkWinLib Condition="'$(VkWinLib)' == ''">$(VULKAN_SDK)/Bin</VkWinLib>

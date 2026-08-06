@@ -1,10 +1,9 @@
+using System;
 using System.Collections.ObjectModel;
 using System.Threading.Tasks;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using CommunityToolkit.Mvvm.Messaging;
-
 namespace AetherVk.Logic.ViewModels;
 
 public enum AppTheme
@@ -14,112 +13,9 @@ public enum AppTheme
   Dark,
 }
 
-public class ImportModelRequestMessage
-  : CommunityToolkit.Mvvm.Messaging.Messages.AsyncRequestMessage<ImportedModelItem?> { }
-
-public class ImportImageRequestMessage { }
-
-public class OpenImportedModelsDialogMessage { }
-
-public partial class ImportedModelItem : ObservableObject
+public partial class MainWindowViewModel : ViewModelBase
 {
-  public ulong Id { get; }
-
-  [ObservableProperty]
-  private string _name = "";
-
-  public string FullPath { get; }
-  public NativeRuntimeService RuntimeService { get; }
-  private readonly IWindowService _windowService;
-  public System.Collections.Generic.List<ulong> SpawnedInstanceIds { get; } = new();
-
-  public ImportedModelItem(
-    ulong id,
-    string name,
-    string fullPath,
-    NativeRuntimeService runtimeService,
-    IWindowService windowService
-  )
-  {
-    Id = id;
-    Name = name;
-    FullPath = fullPath;
-    RuntimeService = runtimeService;
-    _windowService = windowService;
-  }
-
-  [RelayCommand]
-  private async Task SpawnAsync()
-  {
-    var msg = new AetherVk.Logic.Messages.OpenSpawnCometDialogMessage(Id);
-    WeakReferenceMessenger.Default.Send(msg);
-    var instanceId = await msg.Response;
-    if (instanceId > 0)
-    {
-      SpawnedInstanceIds.Add(instanceId);
-    }
-  }
-
-  [RelayCommand]
-  private async Task ViewMeshAsync()
-  {
-    await _windowService.OpenMeshViewerAsync(Id.ToString());
-  }
-
-  [RelayCommand]
-  private void Unload()
-  {
-    // Clean up instances across all known scenes
-    // For now, we only spawn into Scene 1 via ShowSpawnMeshDialogAsync, but let's assume we remove them generally.
-    foreach (var instanceId in SpawnedInstanceIds)
-    {
-      RuntimeService.RemoveEntity(1, instanceId); // Assuming Scene 1 since it's hardcoded in AvaloniaWindowService
-    }
-    SpawnedInstanceIds.Clear();
-
-    RuntimeService.UnloadModel(Id);
-    WeakReferenceMessenger.Default.Send(new ModelUnloadedMessage(this));
-  }
-}
-
-public class OpenSpawnMeshDialogMessage
-{
-  public ImportedModelItem Model { get; }
-
-  public OpenSpawnMeshDialogMessage(ImportedModelItem model) => Model = model;
-}
-
-public class OpenMeshViewerMessage
-{
-  public ImportedModelItem Model { get; }
-
-  public OpenMeshViewerMessage(ImportedModelItem model) => Model = model;
-}
-
-public class ModelUnloadedMessage
-{
-  public ImportedModelItem Model { get; }
-
-  public ModelUnloadedMessage(ImportedModelItem model) => Model = model;
-}
-
-public struct CameraActionParams
-{
-  public ulong SceneId { get; set; }
-  public ulong CameraEntityId { get; set; }
-}
-
-public class SimulationInitializedMessage { }
-
-public partial class MainWindowViewModel
-  : ViewModelBase,
-    IRecipient<ModelUnloadedMessage>,
-    IRecipient<ImportModelRequestMessage>,
-    IRecipient<SimulationInitializedMessage>,
-    IRecipient<AetherVk.Logic.Messages.OpenSpawnCometDialogMessage>,
-    IRecipient<AetherVk.Logic.Messages.OpenSnapObserverDialogMessage>
-{
-  private readonly NativeRuntimeService _runtimeService;
+  private readonly INativeRuntimeService _runtimeService;
   private readonly BreadcrumbService _breadcrumbService;
   private readonly IFileDialogService _fileDialogService;
   private readonly IWindowService _windowService;
@@ -137,169 +33,32 @@ public partial class MainWindowViewModel
   [ObservableProperty]
   private bool _isViewportFocused;
 
-  public ObservableCollection<ImportedModelItem> ImportedModels { get; } = new();
+  /// <summary>Avalonia window should call AttachToWindow on this in OnOpened can call Dispose on
+  /// OnClosed</summary>
+  public IWindowInputRouter InputRouter { get; }
 
   public ObservableCollection<BreadcrumbMessage>? Breadcrumbs => _breadcrumbService.Messages;
 
-  private readonly IAudio2DService _audioService;
-
   public MainWindowViewModel(
-    NativeRuntimeService runtimeService,
+    INativeRuntimeService runtimeService,
     BreadcrumbService breadcrumbService,
     IFileDialogService fileDialogService,
     IWindowService windowService,
+    IWindowInputRouter inputRouter,
     DockingManagerViewModel dockingManager,
-    IUiThreadDispatcher dispatcher,
-    IAudio2DService audioService
+    IUiThreadDispatcher dispatcher
   )
   {
-    _audioService = audioService;
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
     _fileDialogService = fileDialogService;
     _windowService = windowService;
     _dockingManager = dockingManager;
     _dispatcher = dispatcher;
+    InputRouter = inputRouter;
 
     // Set initial theme to system default
     CurrentTheme = AppTheme.System;
-    WeakReferenceMessenger.Default.Register<ModelUnloadedMessage>(this);
-    WeakReferenceMessenger.Default.Register<ImportModelRequestMessage>(this);
-    WeakReferenceMessenger.Default.Register<SimulationInitializedMessage>(this);
-    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.OpenSpawnCometDialogMessage>(
-      this
-    );
-    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.OpenSnapObserverDialogMessage>(
-      this
-    );
-
-    SyncModels();
-  }
-
-  public void SyncModels()
-  {
-    var models = _runtimeService.GetImportedModels();
-    foreach (var m in models)
-    {
-      if (!System.Linq.Enumerable.Any(ImportedModels, im => im.Id == m.Id))
-      {
-        var fileName = System.IO.Path.GetFileName(m.Path);
-        ImportedModels.Add(
-          new ImportedModelItem(m.Id, fileName, m.Path, _runtimeService, _windowService)
-        );
-      }
-    }
-  }
-
-  public void Receive(ModelUnloadedMessage message)
-  {
-    ImportedModels.Remove(message.Model);
-  }
-
-  public void Receive(ImportModelRequestMessage message)
-  {
-    message.Reply(ImportModelAsync());
-  }
-
-  public void Receive(SimulationInitializedMessage message)
-  {
-    _dispatcher.Dispatch(SyncModels);
-    // Auto-import the bundled Comet.glb on a background thread so we never
-    // block (or contend with) the UI thread's FFI calls.
-    Task.Run(async () =>
-    {
-      await ImportBundledCometModelAsync();
-    });
-  }
-
-  /// <summary>
-  /// Imports the Comet.glb model bundled with the application as a startup default.
-  /// Runs on a background thread; only touches ImportedModels via the UI dispatcher.
-  /// </summary>
-  private async Task ImportBundledCometModelAsync()
-  {
-    var basePath = System.AppDomain.CurrentDomain.BaseDirectory;
-    var cometPath = System.IO.Path.Combine(basePath, "assets", "Comet.glb");
-    if (!System.IO.File.Exists(cometPath))
-      return;
-
-    try
-    {
-      // ImportModelAsync → PollTaskAsync runs on this background thread,
-      // so it won't starve or block the UI thread.
-      var modelId = await _runtimeService.ImportModelAsync(cometPath);
-      if (modelId > 0)
-      {
-        // Touch the ObservableCollection on the UI thread.
-        _dispatcher.Dispatch(() =>
-        {
-          if (!System.Linq.Enumerable.Any(ImportedModels, m => m.Id == modelId))
-          {
-            ImportedModels.Add(
-              new ImportedModelItem(
-                modelId,
-                "Comet.glb",
-                cometPath,
-                _runtimeService,
-                _windowService
-              )
-            );
-          }
-        });
-      }
-    }
-    catch (System.Exception ex)
-    {
-      System.Console.WriteLine(
-        $"[MainWindowViewModel] Failed to auto-import Comet.glb: {ex.Message}"
-      );
-    }
-  }
-
-  [RelayCommand]
-  private async Task<ImportedModelItem?> ImportModelAsync()
-  {
-    _audioService.PlayClickAsync();
-    var filters = new[] { "gltf", "glb", "ply", "obj" };
-    var result = await _fileDialogService.ShowOpenFileDialogAsync("Import 3D Model", filters);
-
-    if (!string.IsNullOrEmpty(result))
-    {
-      var fileName = System.IO.Path.GetFileName(result);
-      var loadingMsg = _breadcrumbService.ShowLoadingMessage(
-        "Importing Mesh",
-        $"Loading {fileName} into engine..."
-      );
-      try
-      {
-        var modelId = await _runtimeService.ImportModelAsync(result);
-        if (modelId > 0)
-        {
-          var existing = System.Linq.Enumerable.FirstOrDefault(
-            ImportedModels,
-            m => m.Id == modelId
-          );
-          if (existing == null)
-          {
-            var newItem = new ImportedModelItem(
-              modelId,
-              fileName,
-              result,
-              _runtimeService,
-              _windowService
-            );
-            ImportedModels.Add(newItem);
-            return newItem;
-          }
-          return existing;
-        }
-      }
-      finally
-      {
-        _breadcrumbService.RemoveMessage(loadingMsg);
-      }
-    }
-    return null;
   }
 
   [RelayCommand]
@@ -312,14 +71,11 @@ public partial class MainWindowViewModel
     {
       try
       {
-        // Actually, Avalonia isn't allowed here, but System.Drawing isn't either.
-        // We might need an interface to get image dimensions.
-        // For now, let's keep the actual logic from MainWindow.axaml.cs inside an ImageService, or use IWindowService.ShowSpawnImageDialogAsync(result)
-        await _windowService.ShowSpawnImageDialogAsync(result);
+        await _windowService.ShowSpawnImageDialogAsync(result!);
       }
-      catch (System.Exception ex)
+      catch (Exception ex)
       {
-        _breadcrumbService.ShowMessageAsync(
+        _ = _breadcrumbService.ShowMessageAsync(
           "Import Error",
           $"Failed to load image: {ex.Message}",
           default,
@@ -332,115 +88,31 @@ public partial class MainWindowViewModel
   [RelayCommand]
   private async Task OpenImportedModelsDialogAsync()
   {
-    SyncModels();
     await _windowService.ShowManageImportsDialogAsync();
-  }
-
-  [RelayCommand]
-  private async Task OpenSpawnCometDialogAsync()
-  {
-    _audioService.PlayClickAsync();
-    SyncModels();
-    await _windowService.ShowSpawnCometDialogAsync(ImportedModels);
-  }
-
-  public void Receive(AetherVk.Logic.Messages.OpenSpawnCometDialogMessage message)
-  {
-    var tcs = new TaskCompletionSource<ulong>();
-    _dispatcher.DispatchAsync(async () =>
-    {
-      try
-      {
-        var result = await _windowService.ShowSpawnCometDialogAsync(
-          ImportedModels,
-          message.PreselectedModelId
-        );
-        tcs.SetResult(result);
-      }
-      catch (System.Exception ex)
-      {
-        tcs.SetException(ex);
-      }
-    });
-    message.Reply(tcs.Task);
-  }
-
-  public void Receive(AetherVk.Logic.Messages.OpenSnapObserverDialogMessage message)
-  {
-    var tcs = new TaskCompletionSource<(double, double, double)?>();
-
-    _dispatcher.DispatchAsync(async () =>
-    {
-      try
-      {
-        var result = await _windowService.ShowSnapObserverDialogAsync();
-        tcs.SetResult(result);
-      }
-      catch (System.Exception ex)
-      {
-        tcs.SetException(ex);
-      }
-    });
-
-    message.Reply(tcs.Task);
   }
 
   [RelayCommand]
   private async Task OpenSpawnBillboardDialogAsync()
   {
-    _audioService.PlayClickAsync();
     await _windowService.ShowSpawnBillboardDialogAsync();
   }
 
   [RelayCommand]
   private async Task OpenConsoleAsync()
   {
-    _audioService.PlayClickAsync();
     await _windowService.ShowSettingsDialogAsync();
   }
 
   [RelayCommand]
   private async Task OpenSettingsAsync()
   {
-    _audioService.PlayClickAsync();
     await _windowService.ShowSettingsDialogAsync();
   }
 
   [RelayCommand]
   private void ToggleTheme()
   {
-    _audioService.PlayClickAsync();
     // Simple toggle: if Dark -> Light, otherwise -> Dark (covers Light and System)
     CurrentTheme = CurrentTheme == AppTheme.Dark ? AppTheme.Light : AppTheme.Dark;
-  }
-
-  [RelayCommand]
-  private void RotateCameraLeft(CameraActionParams p)
-  {
-    _runtimeService.RotateCamera(p.SceneId, p.CameraEntityId, 10.0f, 0.0f);
-  }
-
-  [RelayCommand]
-  private void RotateCameraRight(CameraActionParams p)
-  {
-    _runtimeService.RotateCamera(p.SceneId, p.CameraEntityId, -10.0f, 0.0f);
-  }
-
-  [RelayCommand]
-  private void ZoomIn(CameraActionParams p)
-  {
-    _runtimeService.ZoomCamera(p.SceneId, p.CameraEntityId, 2.0f);
-  }
-
-  [RelayCommand]
-  private void ZoomOut(CameraActionParams p)
-  {
-    _runtimeService.ZoomCamera(p.SceneId, p.CameraEntityId, -2.0f);
-  }
-
-  [RelayCommand]
-  private void ResetCamera(CameraActionParams p)
-  {
-    _runtimeService.ResetCamera(p.SceneId, p.CameraEntityId);
   }
 }

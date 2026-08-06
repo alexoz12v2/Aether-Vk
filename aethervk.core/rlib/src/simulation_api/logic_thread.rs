@@ -54,21 +54,6 @@ pub fn is_logic_command_async(cmd: &LogicCommand) -> bool {
   }
 }
 
-/// SAFETY: should be called from an async arm with a non zero task id. Debug will crash it
-unsafe fn logic_command_async_get_task_id(cmd: &LogicCommand) -> u64 {
-  debug_assert!(is_logic_command_async(cmd));
-  match cmd {
-    LogicCommand::ImportModel { task_id, .. }
-    | LogicCommand::LoadAlmanac { task_id, .. }
-    | LogicCommand::UnloadAlmanac { task_id, .. }
-    | LogicCommand::UpdateTrajectoryForSpk { task_id, .. } => {
-      debug_assert_ne!(*task_id, 0);
-      *task_id
-    }
-    _ => panic!("unreachable"),
-  }
-}
-
 fn logic_command_desc(cmd: &LogicCommand) -> alloc::string::String {
   match cmd {
     LogicCommand::SetEpochRange { .. } => "SetEpochRange".to_string(),
@@ -92,6 +77,7 @@ fn logic_command_desc(cmd: &LogicCommand) -> alloc::string::String {
     }
 
     // Scene Playback Commands
+    LogicCommand::StartSimlulation { .. } => "Start Simulation".to_string(),
     LogicCommand::PlaySceneToEnd { .. } => "Play Scene to End".to_string(),
     LogicCommand::PauseScene { .. } => "Pause Scene".to_string(),
     LogicCommand::PlayScene { .. } => "Play Scene".to_string(),
@@ -155,16 +141,14 @@ fn drain_logic_commands(
 }
 
 struct PlayControl {
-  scene_id: u64,
   target_frame_time: timeus_t,
   last_frame_start: timeus_t,
   last_render_ticks: alloc::vec::Vec<core::num::NonZero<u64>>,
 }
 
 impl PlayControl {
-  fn new(scene_id: u64, target_frame_time: timeus_t) -> Self {
+  fn new(target_frame_time: timeus_t) -> Self {
     Self {
-      scene_id,
       target_frame_time,
       last_frame_start: oshal::os::time::get_monotonic_time(),
       last_render_ticks: alloc::vec::Vec::new(),
@@ -219,7 +203,7 @@ pub fn start_logic_thread(
         for scene_id in &scene_ids {
           let pc = play_controls
             .entry(*scene_id)
-            .or_insert_with(|| PlayControl::new(*scene_id, target_frame_time));
+            .or_insert_with(|| PlayControl::new(target_frame_time));
           let now = oshal::os::time::get_monotonic_time();
           let last = pc.last_frame_start;
           let elapsed = now.saturating_sub(last);
@@ -269,10 +253,17 @@ pub fn start_logic_thread(
                 let release_feeback = alloc::sync::Arc::new(core::sync::atomic::AtomicU64::new(0));
                 let feedback_data_ptr =
                   Box::into_raw(Box::new(SyncParticleReleaseFeedback::zeroed()));
-                render_tx.send(structs::RenderCommand::SyncParticleRelease {
-                  feedback: release_feeback.clone(),
-                  feedback_ptr: structs::SendPtrMut(feedback_data_ptr),
-                });
+                // TODO handle error? retime submission?
+                let mut done = false;
+                while !done {
+                  if let Ok(_) = render_tx.try_send(structs::RenderCommand::SyncParticleRelease {
+                    feedback: release_feeback.clone(),
+                    feedback_ptr: structs::SendPtrMut(feedback_data_ptr),
+                  }) {
+                    done = true;
+                  }
+                  core::hint::spin_loop();
+                }
 
                 Some((release_feeback, feedback_data_ptr))
               },
@@ -412,7 +403,7 @@ pub fn start_logic_thread(
               let task_id = alloc::sync::Arc::new(core::sync::atomic::AtomicU64::new(0));
               let scene = {
                 let scenes = context.scenes.read();
-                scenes.get(&scene_id).unwrap().clone()
+                scenes.get(scene_id).unwrap().clone()
               };
 
               let (outlines, sun, sky, cursor, callback) = {
@@ -686,6 +677,70 @@ fn process_command_internal(
   ctx: &alloc::sync::Arc<LogicThreadContext>,
 ) -> EngineResult<()> {
   match command {
+    LogicCommand::StartSimlulation { scene_id, speed } => {
+      let scenes = ctx.scenes.read();
+      let mut time_mgr = scenes.time_managers.get_mut(&scene_id).unwrap();
+
+      // Determine if this is a fresh start, knowing that ResetSimulation will zero out time state
+      let is_fresh_start = {
+        let state = time_mgr.state.read();
+        state.scaled_time == 0
+      };
+
+      if is_fresh_start {
+        use core::sync::atomic::Ordering;
+        // If fresh start, then reset all particle systems present in the scene
+        // Note: on first start this is unncecessary.
+        let (now, elapsed) = {
+          let state = time_mgr.state.read();
+          (state.unscaled_time, state.unscaled_delta)
+        };
+
+        // wait until compute queue is idle (self sync)
+        utils::self_sync_do_if_done(
+          &scenes,
+          scene_id,
+          ctx.kernels.0.clone(), // render frontend is an arc
+          ctx.kernels.1,
+          &ctx.render_tx,
+          now,
+          elapsed,
+          |vulkan_device, scene_write, _render_tx| {
+            use aethervk_oshal_rlib::os::time::get_monotonic_time;
+            // Solve cross sync: Wait for the graphics queue to finish drawing its last frame
+            // Since `StartSimulation` is a synchronous command, once we know that we are not
+            // rendering we are sure that rendering won't restart until this command is processed
+            let last_render_task = scene_write.last_render_task.load(Ordering::Acquire);
+            if last_render_task != 0 {
+              let wait_start = get_monotonic_time();
+              while get_monotonic_time() - wait_start < 500_000_i64 {
+                // 500ms deadline
+                if vulkan_device.is_task_completed(last_render_task).unwrap_or(true) {
+                  break;
+                }
+                core::hint::spin_loop();
+              }
+            }
+
+            // now we are free to zero fill with a GPU memset all particle buffers
+            // TODO error?
+            let _ = unsafe { vulkan_device.reset_all_particle_systems() };
+
+            // Reset the ECS Components so the physics compute shader starts fresh
+            scene_write.scene.query1_mut(|_, comp: &mut ParticleSystemComponent| {
+              comp.last_emission.store(0, Ordering::Relaxed);
+              comp.last_compaction.store(0, Ordering::Relaxed);
+            })
+          },
+        )
+        .unwrap();
+      }
+
+      // 4. Finally, apply the new speed to physically resume/start the time manager
+      time_mgr.set_speed(speed);
+
+      Ok(())
+    }
     LogicCommand::SetEpochRange {
       scene_id,
       start,
@@ -1592,6 +1647,8 @@ fn execute_simulation_tick_fixed_update_phase(
   use oshal::os::time::{timeus_t, us_to_300ths_rounded, v2::SimSpeed};
   let scaled_fixed_dt_us =
     time_mgr.state.read().speed.scaled_from_unscaled(unscaled_fixed_delta_us);
+  // using [`SimSpeed::Custom`] might lead to precision troubles. Assert this is not the case
+  debug_assert!(scaled_fixed_dt_us > 0);
 
   // ------------------------------------------------------------------------------------
   // -- Fixed Update Phase (Step 1: Command buffer creation and CPU side resolution) --
@@ -1797,144 +1854,100 @@ fn execute_simulation_tick_fixed_update_phase(
     // Fixed Update Loop
     // ------------------------------------------------------------------------------------
     let fixed_dt_scaled_s = utils::time_micro_to_seconds(scaled_fixed_dt_us);
-    while time_mgr.consume_fixed_step(scaled_fixed_dt_us) {
-      use aethervk_oshal_rlib::os::time::us_to_300ths_rounded;
 
-      // ------------------------------------------------------------------------------------
-      // Particle Systems Vulkan Shader Recording (Submission inserted after the fixed accumulator
-      // loop)
-      // ------------------------------------------------------------------------------------
-      // -- all emissions --
-      let mut skip_bind = false;
-      for (idx, (ps, id)) in ps_extraction.iter().enumerate() {
-        if particle_executions[idx].dead == 0 {
-          // some emission constants which may be moved if exposed as parameters
-          let mean_intra_grains_distance_mm =
-            structs::particle_constants::MEAN_INTRA_GRAINS_DISTANCE_MM;
-          let min_cumulated_mass_g = structs::particle_constants::MIN_CUMULATED_MASS_G;
+    // Spiral of death prevention: set a max number of physics execution steps
+    const MAX_PHYSICS_STEPS_PER_FRAME: u32 = 10;
+    let mut steps_executed = 0;
 
-          let push_constants = utils::new_particles_emit(
-            vulkan_device,
-            id.as_ffi(),
-            &ps.emission_params,
-            mean_intra_grains_distance_mm,
-            min_cumulated_mass_g,
-            particle_executions[idx].r_helio_au,
-            (-1.0 * DVec3::from_array(particle_executions[idx].global_pos_f64))
-              .normalize()
-              .to_f32(),
-            sim_speed.scaled_from_unscaled(ps.last_emission),
-            from_start_epoch_scaled_us,
+    if scaled_fixed_dt_us > 0 {
+      while time_mgr.consume_fixed_step(scaled_fixed_dt_us) {
+        use aethervk_oshal_rlib::os::time::us_to_300ths_rounded;
+
+        // spiral of death resolution
+        if steps_executed > MAX_PHYSICS_STEPS_PER_FRAME {
+          oshal::log!(
+            "Physics is falling behind! Dropping accumulated time to avoid spiral of death"
           );
+          // Drop accumulated steps but maintain the remainder to avoid stutters
+          let mut time_state = time_mgr.state.write();
+          time_state.scaled_accumulator %= scaled_fixed_dt_us;
 
-          if let Ok(last_emission_unscaled_us) = vulkan_device.cmd_particle_system_emission(
-            cmd,
-            ps.last_emission,
-            now_unscaled_us,
-            &push_constants,
-            skip_bind,
-          ) {
-            particle_executions[idx].last_emission_unscaled_us = last_emission_unscaled_us;
-            skip_bind = true;
-          } else {
-            particle_executions[idx].dead = 1;
-          }
+          break;
         }
-      }
-      skip_bind = false;
-      // -- barrier --
-      vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
-      // -- all integrate p1_p2 --
-      for (idx, (_, id)) in ps_extraction.iter().enumerate() {
-        if particle_executions[idx].dead == 0 {
-          let push_constants =
-            utils::integrate_particles_p1_p2_new(vulkan_device, id.as_ffi(), fixed_dt_scaled_s);
-          if let Ok(()) =
-            vulkan_device.cmd_particle_system_velocity_vertlet_kick(cmd, &push_constants, skip_bind)
-          {
-            skip_bind = true;
-          } else {
-            particle_executions[idx].dead = 1;
-          }
-        }
-      }
-      skip_bind = false;
-      // -- barrier --
-      vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
-      // -- all apply emitters --
-      for (idx, (_, id)) in ps_extraction.iter().enumerate() {
-        if particle_executions[idx].dead == 0 {
-          let emitter_bda = force_emitters[idx].2;
-          let push_constants =
-            utils::apply_emitters_direct_new(vulkan_device, id.as_ffi(), emitter_bda, 1);
-          if let Ok(()) =
-            vulkan_device.cmd_particle_system_next_forces(cmd, &push_constants, skip_bind)
-          {
-            skip_bind = true;
-          } else {
-            particle_executions[idx].dead = 1;
-          }
-        }
-      }
-      skip_bind = false;
-      // -- barrier --
-      vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
-      // -- all integrate p4 p5 --
-      for (idx, (_, id)) in ps_extraction.iter().enumerate() {
-        if particle_executions[idx].dead == 0 {
-          let push_constants =
-            utils::integrate_particles_p4_5_new(vulkan_device, id.as_ffi(), fixed_dt_scaled_s);
-          if let Ok(()) = vulkan_device.cmd_particle_system_velocity_vertlet_correction(
-            cmd,
-            &push_constants,
-            skip_bind,
-          ) {
-            skip_bind = true;
-          } else {
-            particle_executions[idx].dead = 1;
-          }
-        }
-      }
-      skip_bind = false;
-      // -- barrier --
-      vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
-      // -- all compact --
-      let mut has_compacted = false;
-      for (idx, (ps, id)) in ps_extraction.iter().enumerate() {
-        if particle_executions[idx].dead == 0 {
-          let ttl_300ths = us_to_300ths_rounded(ps.ttl_us);
-          let push_constants =
-            utils::new_particles_compact(vulkan_device, id.as_ffi(), now_scaled_300ths, ttl_300ths);
-          if let Ok(last_compaction) = vulkan_device.cmd_particle_system_compaction(
-            cmd,
-            ps.last_compaction,
-            now_unscaled_us,
-            &push_constants,
-            skip_bind,
-          ) {
-            has_compacted = true;
-            skip_bind = true;
-            particle_executions[idx].last_compaction_unscaled_us = last_compaction;
-            particle_executions[idx].did_compact = if last_compaction != ps.last_compaction {
-              1
+
+        steps_executed += 1;
+
+        // ------------------------------------------------------------------------------------
+        // Particle Systems Vulkan Shader Recording (Submission inserted after the fixed accumulator
+        // loop)
+        // ------------------------------------------------------------------------------------
+        // -- all emissions --
+        let mut skip_bind = false;
+        for (idx, (ps, id)) in ps_extraction.iter().enumerate() {
+          if particle_executions[idx].dead == 0 {
+            // some emission constants which may be moved if exposed as parameters
+            let mean_intra_grains_distance_mm =
+              structs::particle_constants::MEAN_INTRA_GRAINS_DISTANCE_MM;
+            let min_cumulated_mass_g = structs::particle_constants::MIN_CUMULATED_MASS_G;
+
+            let push_constants = utils::new_particles_emit(
+              vulkan_device,
+              id.as_ffi(),
+              &ps.emission_params,
+              mean_intra_grains_distance_mm,
+              min_cumulated_mass_g,
+              particle_executions[idx].r_helio_au,
+              (-1.0 * DVec3::from_array(particle_executions[idx].global_pos_f64))
+                .normalize()
+                .to_f32(),
+              sim_speed.scaled_from_unscaled(ps.last_emission),
+              from_start_epoch_scaled_us,
+            );
+
+            if let Ok(last_emission_unscaled_us) = vulkan_device.cmd_particle_system_emission(
+              cmd,
+              ps.last_emission,
+              now_unscaled_us,
+              &push_constants,
+              skip_bind,
+            ) {
+              particle_executions[idx].last_emission_unscaled_us = last_emission_unscaled_us;
+              skip_bind = true;
             } else {
-              0
-            };
-          } else {
-            particle_executions[idx].dead = 1;
+              particle_executions[idx].dead = 1;
+            }
           }
         }
-      }
-      if has_compacted {
         skip_bind = false;
         // -- barrier --
         vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
-        // -- all compact reset (only if compact) --
+        // -- all integrate p1_p2 --
         for (idx, (_, id)) in ps_extraction.iter().enumerate() {
-          if particle_executions[idx].dead == 0 && particle_executions[idx].did_compact == 1 {
-            let push_constants = utils::new_particles_compact_reset(vulkan_device, id.as_ffi());
+          if particle_executions[idx].dead == 0 {
+            let push_constants =
+              utils::integrate_particles_p1_p2_new(vulkan_device, id.as_ffi(), fixed_dt_scaled_s);
+            if let Ok(()) = vulkan_device.cmd_particle_system_velocity_vertlet_kick(
+              cmd,
+              &push_constants,
+              skip_bind,
+            ) {
+              skip_bind = true;
+            } else {
+              particle_executions[idx].dead = 1;
+            }
+          }
+        }
+        skip_bind = false;
+        // -- barrier --
+        vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
+        // -- all apply emitters --
+        for (idx, (_, id)) in ps_extraction.iter().enumerate() {
+          if particle_executions[idx].dead == 0 {
+            let emitter_bda = force_emitters[idx].2;
+            let push_constants =
+              utils::apply_emitters_direct_new(vulkan_device, id.as_ffi(), emitter_bda, 1);
             if let Ok(()) =
-              vulkan_device.cmd_particle_system_compaction_reset(cmd, &push_constants, skip_bind)
+              vulkan_device.cmd_particle_system_next_forces(cmd, &push_constants, skip_bind)
             {
               skip_bind = true;
             } else {
@@ -1942,12 +1955,83 @@ fn execute_simulation_tick_fixed_update_phase(
             }
           }
         }
-      }
-      // -- barrier for next iteration --
-      if time_mgr.has_ready_step(scaled_fixed_dt_us) {
+        skip_bind = false;
+        // -- barrier --
         vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
-      }
-    } // end of accumulator fixed update loop
+        // -- all integrate p4 p5 --
+        for (idx, (_, id)) in ps_extraction.iter().enumerate() {
+          if particle_executions[idx].dead == 0 {
+            let push_constants =
+              utils::integrate_particles_p4_5_new(vulkan_device, id.as_ffi(), fixed_dt_scaled_s);
+            if let Ok(()) = vulkan_device.cmd_particle_system_velocity_vertlet_correction(
+              cmd,
+              &push_constants,
+              skip_bind,
+            ) {
+              skip_bind = true;
+            } else {
+              particle_executions[idx].dead = 1;
+            }
+          }
+        }
+        skip_bind = false;
+        // -- barrier --
+        vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
+        // -- all compact --
+        let mut has_compacted = false;
+        for (idx, (ps, id)) in ps_extraction.iter().enumerate() {
+          if particle_executions[idx].dead == 0 {
+            let ttl_300ths = us_to_300ths_rounded(ps.ttl_us);
+            let push_constants = utils::new_particles_compact(
+              vulkan_device,
+              id.as_ffi(),
+              now_scaled_300ths,
+              ttl_300ths,
+            );
+            if let Ok(last_compaction) = vulkan_device.cmd_particle_system_compaction(
+              cmd,
+              ps.last_compaction,
+              now_unscaled_us,
+              &push_constants,
+              skip_bind,
+            ) {
+              has_compacted = true;
+              skip_bind = true;
+              particle_executions[idx].last_compaction_unscaled_us = last_compaction;
+              particle_executions[idx].did_compact = if last_compaction != ps.last_compaction {
+                1
+              } else {
+                0
+              };
+            } else {
+              particle_executions[idx].dead = 1;
+            }
+          }
+        }
+        if has_compacted {
+          skip_bind = false;
+          // -- barrier --
+          vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
+          // -- all compact reset (only if compact) --
+          for (idx, (_, id)) in ps_extraction.iter().enumerate() {
+            if particle_executions[idx].dead == 0 && particle_executions[idx].did_compact == 1 {
+              let push_constants = utils::new_particles_compact_reset(vulkan_device, id.as_ffi());
+              if let Ok(()) =
+                vulkan_device.cmd_particle_system_compaction_reset(cmd, &push_constants, skip_bind)
+              {
+                skip_bind = true;
+              } else {
+                particle_executions[idx].dead = 1;
+              }
+            }
+          }
+        }
+        // -- barrier for next iteration --
+        if time_mgr.has_ready_step(scaled_fixed_dt_us) {
+          vulkan_device.cmd_dispatch_global_memory_barrier(cmd)?;
+        }
+      } // end of accumulator fixed update loop
+    }
 
     // ------------------------------------------------------------------------------------
     // SPICE EZR Kernel for Comet Cartesian state update.

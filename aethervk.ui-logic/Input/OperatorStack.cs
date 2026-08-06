@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace AetherVk.Logic.Input;
@@ -11,58 +12,39 @@ public class OperatorStack : IActionHandler
     Push(baseOperator);
   }
 
-  public bool IsCameraControlEngaged => _stack.Count > 1;
-
-  public bool IsCameraControlEnabled { get; set; } = true;
-
   public void Push(IActionOperator op)
   {
-    if (!IsCameraControlEnabled && _stack.Count > 0)
-      return;
+    if (_stack.Count > 0 && _stack.Peek() == op)
+      throw new InvalidOperationException($"Operator {op.GetType().Name} is already active on this stack");
+
     op.OnEnter();
     _stack.Push(op);
   }
 
-  public void Pop()
+  public void PopSelf(IActionOperator self)
   {
-    if (_stack.Count > 1)
-      _stack.Pop().OnExit();
-  }
+    // Don't allow popping the base operator
+    if (_stack.Count <= 1)
+      return;
 
-  public bool ProcessAction(AppAction action, bool isPressed)
-  {
-    if (
-      !IsCameraControlEnabled
-      && _stack.Count > 0
-      && action.Id != "viewport.toggle_measuring"
-      && action.Id != "viewport.open_radial_menu"
-    )
-      return false;
-    if (_stack.Count > 0)
+    // 1. Verify the top of the stack is actually 'self'
+    if (_stack.Peek() != self)
     {
-      return _stack.Peek().ProcessAction(action, isPressed);
+      throw new InvalidOperationException(
+        $"Transient Action Operators should be the first to be popped. " +
+        $"Expected to pop '{_stack.Peek().GetType().Name}', but '{self.GetType().Name}' tried to pop itself."
+      );
     }
-    return false;
+
+    // 2. We are safe to pop
+    _stack.Pop().OnExit();
   }
 
-  public bool ProcessPointerDelta(float dx, float dy)
+  public bool Process(AppAction action, InputState state)
   {
-    if (!IsCameraControlEnabled && _stack.Count > 0)
-      return false;
     if (_stack.Count > 0)
     {
-      return _stack.Peek().ProcessPointerDelta(dx, dy);
-    }
-    return false;
-  }
-
-  public bool ProcessPointerWheel(float deltaY)
-  {
-    if (!IsCameraControlEnabled && _stack.Count > 0)
-      return false;
-    if (_stack.Count > 0)
-    {
-      return _stack.Peek().ProcessPointerWheel(deltaY);
+      return _stack.Peek().ProcessAction(action, state);
     }
     return false;
   }

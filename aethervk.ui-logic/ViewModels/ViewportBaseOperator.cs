@@ -1,204 +1,91 @@
+using System;
 using AetherVk.Logic.Input;
 
 namespace AetherVk.Logic.ViewModels;
 
-public class ViewportBaseOperator : IActionOperator
+/// <summary>
+/// Possible actions to be performed when looking at a <see cref="Viewport3DViewModel"/> from the
+/// <see cref="ViewportBaseOperator" />
+///
+/// All members named "Start*" push a new Operator on the base
+/// </summary>
+public enum ViewportAction
 {
-  private readonly Viewport3DViewModel _vm;
+  /// <summary>Toggle between the 3 camera modes in Viewport view model</summary>
+  SwitchCameraMode,
+  /// <summary>Reset the camera towards the standard position, as defined by the current mode in the
+  /// view model</summary>
+  ResetPosition,
+  /// <summary>Rotate the camera, relative to its centre</summary>
+  StartRotate,
+  /// <summary>Translate the camera on the normal plane relative to its forward axis (-y)</summary>
+  StartPan,
+  /// <summary>Translate camera along its forward axis</summary>
+  StartZoom,
+  /// <summary>Rotate and translate camera such that it orbits around a point in space. Its
+  /// resolution uses an IObservable of Vector3 position so that if orbit center rotates camera can
+  /// can rotate and translate accordingly</summary>
+  StartOrbit,
+  /// <summary>Translate camera such that the relative distance between a point and camera's
+  /// position is the same. both camera and object are expressed in world space</summary>
+  StartTracking,
 
-  public ViewportBaseOperator(Viewport3DViewModel vm)
+  CreateBillboard,
+  StartBillboardManip,
+  DeleteBillboard
+}
+
+public static class ViewportActionExtensions
+{
+  // C# 14 intstance extensions
+  extension(ViewportAction action)
   {
-    _vm = vm;
+    public string ToCmdString() => action switch
+    {
+      ViewportAction.SwitchCameraMode => "viewport.switch_camera_mode",
+      ViewportAction.ResetPosition => "viewport.reset_position",
+      ViewportAction.StartRotate => "viewport.start_rotate",
+      ViewportAction.StartPan => "viewport.start_pan",
+      ViewportAction.StartZoom => "viewport.start_zoom",
+      ViewportAction.StartOrbit => "viewport.start_orbit",
+      ViewportAction.StartTracking => "viewport.start_tracking",
+      ViewportAction.CreateBillboard => "viewport.create_billboard",
+      ViewportAction.StartBillboardManip => "viewport.start_billboard_manip",
+      ViewportAction.DeleteBillboard => "viewport.delete_billboard",
+      _ => "nothing"
+    };
   }
+
+  // C# 14 static extensions
+  extension(ViewportAction)
+  {
+    public static ViewportAction FromCmdString(string value) => value switch
+    {
+      "viewport.switch_camera_mode" => ViewportAction.SwitchCameraMode,
+      "viewport.reset_position" => ViewportAction.ResetPosition,
+      "viewport.start_rotate" => ViewportAction.StartRotate,
+      "viewport.start_pan" => ViewportAction.StartPan,
+      "viewport.start_zoom" => ViewportAction.StartZoom,
+      "viewport.start_orbit" => ViewportAction.StartOrbit,
+      "viewport.start_tracking" => ViewportAction.StartTracking,
+      _ => throw new FormatException($"invalid status: {value}")
+
+    };
+  }
+}
+
+// internal and without DI, cause the vm will instantiate it and that's it
+internal class ViewportBaseOperator(Viewport3DViewModel vm) : IActionOperator
+{
+  private readonly Viewport3DViewModel _vm = vm;
 
   public void OnEnter() { }
 
   public void OnExit() { }
 
-  public bool ProcessAction(AppAction action, bool isPressed)
+  public bool ProcessAction(AppAction action, InputState state)
   {
-    // Handle radial menu release ("hold to show, release to select")
-    if (!isPressed)
-    {
-      if (action.Id == "viewport.open_radial_menu" && _vm.IsRadialMenuOpen)
-      {
-        _vm.CommitRadialMenuSelection();
-        return true;
-      }
-      return false;
-    }
-
-    switch (action.Id)
-    {
-      case "viewport.cancel_add_jet":
-        if (_vm.IsAddingJet)
-        {
-          _vm.IsAddingJet = false;
-          return true;
-        }
-        if (_vm.IsRadialMenuOpen)
-        {
-          _vm.CloseRadialMenu();
-          return true;
-        }
-        return false;
-      case "viewport.toggle_measuring":
-        _vm.ToggleEarthObserverModeCommand.Execute(null);
-        return true;
-      case "viewport.reset_camera":
-      case "viewport.snap_to_selected":
-      {
-        var selected = _vm.SelectedEntity;
-        if (selected != null)
-          _vm.RuntimeService.SnapToEntity(_vm.SceneId, _vm.CameraId, selected.Id);
-        else
-          _vm.SnapCameraToSun();
-        return true;
-      }
-      case "viewport.move_cursor_up":
-        _vm.RuntimeService.MoveCursor(_vm.SceneId, 0.0f, -0.5f, 0.0f);
-        return true;
-      case "viewport.move_cursor_down":
-        _vm.RuntimeService.MoveCursor(_vm.SceneId, 0.0f, 0.5f, 0.0f);
-        return true;
-      case "viewport.move_cursor_left":
-        _vm.RuntimeService.MoveCursor(_vm.SceneId, -0.5f, 0.0f, 0.0f);
-        return true;
-      case "viewport.move_cursor_right":
-        _vm.RuntimeService.MoveCursor(_vm.SceneId, 0.5f, 0.0f, 0.0f);
-        return true;
-      case "viewport.move_cursor_z_up":
-        _vm.RuntimeService.MoveCursor(_vm.SceneId, 0.0f, 0.0f, 0.5f);
-        return true;
-      case "viewport.move_cursor_z_down":
-        _vm.RuntimeService.MoveCursor(_vm.SceneId, 0.0f, 0.0f, -0.5f);
-        return true;
-      case "viewport.start_orbit":
-        if (!_vm.IsEarthObserverMode)
-          _vm.OperatorStack.Push(new OrbitOperator(_vm));
-        return true;
-      case "viewport.start_pan":
-        if (!_vm.IsEarthObserverMode)
-          _vm.OperatorStack.Push(new PanOperator(_vm));
-        return true;
-      case "viewport.start_zoom_drag":
-        _vm.OperatorStack.Push(new ZoomDragOperator(_vm));
-        return true;
-      case "viewport.open_radial_menu":
-        if (!_vm.IsRadialMenuOpen)
-          _vm.OpenRadialMenuAt(_vm.RadialMenuX, _vm.RadialMenuY);
-        return true;
-    }
-
-    return false;
+    throw new NotImplementedException();
   }
-
-  public bool ProcessPointerWheel(float deltaY)
-  {
-    if (_vm.IsEarthObserverMode)
-      return true;
-    _vm.RuntimeService.ZoomCamera(_vm.SceneId, _vm.CameraId, deltaY);
-    return true;
-  }
-
-  public bool ProcessPointerDelta(float dx, float dy) => false;
 }
 
-public class OrbitOperator : IActionOperator
-{
-  private readonly Viewport3DViewModel _vm;
-
-  public OrbitOperator(Viewport3DViewModel vm) => _vm = vm;
-
-  public void OnEnter()
-  {
-    _vm.IsOrbiting = true;
-  }
-
-  public void OnExit()
-  {
-    _vm.IsOrbiting = false;
-  }
-
-  public bool ProcessAction(AppAction action, bool isPressed)
-  {
-    if (action.Id == "viewport.start_orbit" && !isPressed)
-    {
-      _vm.OperatorStack.Pop();
-      return true;
-    }
-    return true;
-  }
-
-  public bool ProcessPointerDelta(float dx, float dy)
-  {
-    _vm.RuntimeService.RotateCamera(_vm.SceneId, _vm.CameraId, dx, dy);
-    return true;
-  }
-
-  public bool ProcessPointerWheel(float deltaY) => false;
-}
-
-public class PanOperator : IActionOperator
-{
-  private readonly Viewport3DViewModel _vm;
-
-  public PanOperator(Viewport3DViewModel vm) => _vm = vm;
-
-  public void OnEnter()
-  {
-    _vm.IsPanning = true;
-  }
-
-  public void OnExit()
-  {
-    _vm.IsPanning = false;
-  }
-
-  public bool ProcessAction(AppAction action, bool isPressed)
-  {
-    if (action.Id == "viewport.start_pan" && !isPressed)
-    {
-      _vm.OperatorStack.Pop();
-      return true;
-    }
-    return true;
-  }
-
-  public bool ProcessPointerDelta(float dx, float dy)
-  {
-    _vm.RuntimeService.PanCamera(_vm.SceneId, _vm.CameraId, dx, dy);
-    return true;
-  }
-
-  public bool ProcessPointerWheel(float deltaY) => false;
-}
-
-public class ZoomDragOperator : IActionOperator
-{
-  private readonly Viewport3DViewModel _vm;
-
-  public ZoomDragOperator(Viewport3DViewModel vm) => _vm = vm;
-
-  public void OnEnter() { }
-
-  public void OnExit() { }
-
-  public bool ProcessAction(AppAction action, bool isPressed)
-  {
-    if (action.Id == "viewport.start_zoom_drag" && !isPressed)
-    {
-      _vm.OperatorStack.Pop();
-      return true;
-    }
-    return true;
-  }
-
-  public bool ProcessPointerDelta(float dx, float dy)
-  {
-    _vm.RuntimeService.ZoomCamera(_vm.SceneId, _vm.CameraId, dy * 0.1f);
-    return true;
-  }
-
-  public bool ProcessPointerWheel(float deltaY) => false;
-}

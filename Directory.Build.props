@@ -1,5 +1,6 @@
 <Project>
   <PropertyGroup>
     <RunSettingsFilePath>$(MSBuildThisFileDirectory)/.runsettings</RunSettingsFilePath>
+    <AvaloniaVersion>11.3.12</AvaloniaVersion>
   </PropertyGroup>
 </Project>

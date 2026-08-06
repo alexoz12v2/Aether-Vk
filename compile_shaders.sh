@@ -97,6 +97,8 @@ WG_VARIANT_SHADERS=(
     new_particles_emit.comp
     new_particles_compact.comp
     new_particles_offset_particles.comp
+
+    reset_particles.comp
 )
 
 is_wg_variant() {

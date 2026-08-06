@@ -23,3 +23,4 @@ public static class ActionContext
 
   public static IActionHandler? GetHandler(Control element) => element.GetValue(HandlerProperty);
 }
+
