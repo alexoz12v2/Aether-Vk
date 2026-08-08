@@ -1,4 +1,4 @@
-using System;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.VisualTree;
@@ -10,9 +10,14 @@ public partial class MainWindow : Window
   public MainWindow()
   {
     InitializeComponent();
+#if DEBUG
+    // Opens devtools window for this window
+    this.AttachDevTools();
+#endif
+
     KeyDown += OnKeyDown;
     AddHandler(
-      InputElement.GotFocusEvent,
+      GotFocusEvent,
       OnElementGotFocus,
       Avalonia.Interactivity.RoutingStrategies.Bubble
     );
@@ -22,7 +27,7 @@ public partial class MainWindow : Window
   {
     if (DataContext is Logic.ViewModels.MainWindowViewModel vm)
     {
-      var el = e.Source as Avalonia.Visual;
+      var el = e.Source as Visual;
       Views.Viewport3DView? view = null;
       while (el != null)
       {

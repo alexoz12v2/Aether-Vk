@@ -22,17 +22,10 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<BreadcrumbService>();
     collection.AddSingleton<HorizonJplService>();
     collection.AddSingleton<INativeBufferPoolService, NativeBufferPoolService>();
-    collection.AddSingleton<SceneStateManager>();
-    collection.AddSingleton<INativeRuntimeService, NativeRuntimeService>();
-    // TODO see if we can remove this
-    collection.AddSingleton<NativeRuntimeService>(sp =>
-      (NativeRuntimeService)sp.GetRequiredService<INativeRuntimeService>()
-    );
-    collection.AddSingleton<IAudio2DService, Audio2DService>();
-    collection.AddSingleton<TrajectoryManagerService>();
-    collection.AddSingleton<FileWatcherService>();
+    // TODO do it
+    // collection.AddSingleton<INativeRuntimeService, NativeRuntimeService>();
+    collection.AddSingleton<INativeInputHandlerFactory, NativeInputHandlerFactory>();
     collection.AddSingleton<InputRegistry>();
-    collection.AddSingleton<TimelineService>();
   }
 
   public static void AddViewModels(this IServiceCollection collection)
@@ -46,13 +39,8 @@ public static class ServiceCollectionExtensions
     collection.AddTransient<UITestPanelViewModel>();
     collection.AddTransient<ConsoleViewModel>();
     collection.AddTransient<DebugUiViewModel>();
-    collection.AddTransient<HorizonJplViewModel>();
-    collection.AddTransient<TimelineViewModel>();
-    collection.AddTransient<AlmanacExplorerViewModel>();
     collection.AddTransient<Viewport3DViewModel>();
-    collection.AddTransient<OutlineViewModel>();
-    collection.AddTransient<PropertiesViewModel>();
-    collection.AddTransient<AssetBrowserViewModel>();
+    collection.AddTransient<VulkanViewportControlViewModel>();
 
     // Tab Factories
     collection.AddSingleton<Func<UITestPanelViewModel>>(sp =>
@@ -64,27 +52,11 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<Func<DebugUiViewModel>>(sp =>
       () => sp.GetRequiredService<DebugUiViewModel>()
     );
-    collection.AddSingleton<Func<HorizonJplViewModel>>(sp =>
-      () => sp.GetRequiredService<HorizonJplViewModel>()
-    );
-    collection.AddSingleton<Func<AlmanacExplorerViewModel>>(sp =>
-      () => sp.GetRequiredService<AlmanacExplorerViewModel>()
-    );
     collection.AddSingleton<Func<Viewport3DViewModel>>(sp =>
       () => sp.GetRequiredService<Viewport3DViewModel>()
     );
-    collection.AddSingleton<Func<AssetBrowserViewModel>>(sp =>
-      () => sp.GetRequiredService<AssetBrowserViewModel>()
-    );
-
-    collection.AddSingleton<Func<ulong, OutlineViewModel>>(sp =>
-      id => ActivatorUtilities.CreateInstance<OutlineViewModel>(sp, id)
-    );
-    collection.AddSingleton<Func<ulong, PropertiesViewModel>>(sp =>
-      id => ActivatorUtilities.CreateInstance<PropertiesViewModel>(sp, id)
-    );
-    collection.AddSingleton<Func<ulong, TimelineViewModel>>(sp =>
-      id => ActivatorUtilities.CreateInstance<TimelineViewModel>(sp, id)
+    collection.AddSingleton<Func<VulkanViewportControlViewModel>>(sp =>
+      () => sp.GetRequiredService<VulkanViewportControlViewModel>()
     );
   }
 }

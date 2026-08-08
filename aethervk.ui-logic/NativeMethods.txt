@@ -1,0 +1,37 @@
+// Windows only file
+//
+// To streamline your WindowsNativeInputHandler class using Microsoft's CsWin32 source generator, you need to create a NativeMethods.txt file and update your class to use the auto-generated P/Invoke methods, structs, and constants.
+// Format of NativeMethods.txt
+// The NativeMethods.txt file is a simple, line-by-line configuration file placed at the root of your project. Each line can contain one of the following:
+//
+//     An exported method name: e.g., SetWindowLongPtr.
+//
+//     A macro or constant name: e.g., WM_ERASEBKGND.
+//
+//     A namespace: e.g., Windows.Win32.UI.WindowsAndMessaging (generates all APIs in it).
+//
+//     A module with a wildcard: e.g., User32.* (generates everything from User32.dll).
+//
+//     A specific type name: e.g., RECT or WNDPROC.
+//
+//     A comment: Starts with //. Blank lines are also ignored.
+//
+// Customization of the generated code is found in the `NativeMethods.json` file
+//
+
+// Window setup and message handling
+SetWindowLong
+SetWindowLongPtr
+CallWindowProc
+GetClientRect
+DefWindowProc
+
+// GDI & Drawing
+CreateSolidBrush
+DeleteObject
+FillRect
+InvalidateRect
+
+// Constants
+GWLP_WNDPROC
+WM_ERASEBKGND

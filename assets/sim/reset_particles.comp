@@ -1,0 +1,55 @@
+// @assets/sim/reset_particles.comp
+//
+// Particle reset shader
+// ─────────────────────────────────────────────────
+// Unit contract
+// Given specification of a particle system page table,
+// reset its content and header, so that simulation can restart without particles
+//
+// Target: SPIR-V 1.4 · Vulkan 1.1 · flexible across all hardware subgroup sizes.
+
+#version 450 core
+#extension GL_EXT_buffer_reference2      : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_KHR_shader_subgroup_basic  : require
+#extension GL_GOOGLE_include_directive   : require
+
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
+
+#include "../debug_utils.glsl"
+#include "../bvh_utils.glsl"
+
+// shader must work with all local sizes 4,8,16,32..256
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 128
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    ParticlePageTable      particlePageTable;
+    ParticleFreeChunkStack freeList;
+} pc;
+
+void main() {
+    uint activeChunks = pc.particlePageTable.activeChunkCount;
+
+    // Parallel loop to push all mapped chunks to the FreeStack (grid-stride loop)
+    for (uint i = gl_GlobalInvocationID.x; i < activeChunks; i += gl_WorkGroupSize.x * gl_NumWorkGroups.x) {
+        uint physIdx = pc.particlePageTable.chunks[i];
+
+        // Atomically push back to LIFO Stack. Note: If this is too slow, introduce shared memory and commit first to shared memory with atomic instructions and subgroup occasional reduction
+        uint pushIndex = atomicAdd(pc.freeList.count, 1);
+        pc.freeList.indices[pushIndex] = physIdx;
+    }
+
+    // make sure the whole workgroup finished working on their part
+    barrier();
+
+    // thread 0 will empty out the header
+    if (gl_GlobalInvocationID.x == 0) {
+        pc.particlePageTable.activeChunkCount = 0;
+        pc.particlePageTable.particleCount = 0; // this is the indirect draw command vertexCount
+    }
+}

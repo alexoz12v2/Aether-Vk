@@ -1,11 +1,11 @@
 using System;
 using System.Threading.Tasks;
 
-namespace AetherVk.Logic.Services
+namespace AetherVk.Logic.Services;
+
+public interface IUiThreadDispatcher
 {
-  public interface IUiThreadDispatcher
-  {
-    void Dispatch(Action action);
-    Task DispatchAsync(Func<Task> action);
-  }
+  void Dispatch(Action action);
+  Task DispatchAsync(Func<Task> action);
 }
+

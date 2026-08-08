@@ -1,5 +1,4 @@
 using System;
-using System.ComponentModel;
 using System.Linq;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
@@ -11,16 +10,13 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Styling;
 using CommunityToolkit.Mvvm.Messaging;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AetherVk;
 
 public partial class App : Application
 {
   public static IHost? Host { get; set; }
-
-  // Keep a static reference so the delegate doesn't get garbage collected
-  private static AetherVk.Logic.Services.NativeInterop.PanicCallbackDelegate _rustPanicCallback =
-    OnRustPanic;
 
   private static void OnRustPanic(IntPtr messagePtr, nuint length)
   {
@@ -33,9 +29,7 @@ public partial class App : Application
 
     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
     {
-      if (
-        Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop
-      )
+      if (Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
       {
         var oldMain = desktop.MainWindow;
         var errorWindow = new Views.FatalErrorWindow(
@@ -77,11 +71,7 @@ public partial class App : Application
       }
 #endif
 
-      CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Register<
-        App,
-        AetherVk.Logic.Messages.CriticalErrorMessage
-      >(
-        this,
+      WeakReferenceMessenger.Default.Register<App, Logic.Messages.CriticalErrorMessage>(this,
         (r, m) =>
         {
           Avalonia.Threading.Dispatcher.UIThread.Post(() =>
@@ -99,11 +89,7 @@ public partial class App : Application
         }
       );
 
-      CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Register<
-        App,
-        AetherVk.Logic.Messages.CopyToClipboardMessage
-      >(
-        this,
+      WeakReferenceMessenger.Default.Register<App, Logic.Messages.CopyToClipboardMessage>(this,
         async (r, m) =>
         {
           var cb = TopLevel.GetTopLevel(desktop.MainWindow)?.Clipboard;
@@ -114,28 +100,10 @@ public partial class App : Application
         }
       );
 
-      string libExtension =
-        System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-          System.Runtime.InteropServices.OSPlatform.Windows
-        )
-          ? ".dll"
-        : System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-          System.Runtime.InteropServices.OSPlatform.OSX
-        )
-          ? ".dylib"
-        : ".so";
-      string libPrefix = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-        System.Runtime.InteropServices.OSPlatform.Windows
-      )
-        ? ""
-        : "lib";
-      string libName = $"{libPrefix}aethervk_core_cdylib{libExtension}";
+      string libName = OperatingSystem.IsWindows() ? "aethervk_core.dll" : "libaethervk_core.so";
 
       // Fallback check in case the user runs the app from the CLI without correct working directory
-      string libPath = System.IO.Path.Combine(
-        System.AppDomain.CurrentDomain.BaseDirectory,
-        libName
-      );
+      string libPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, libName);
 
       if (!System.IO.File.Exists(libPath) && !System.IO.File.Exists(libName))
       {
@@ -145,14 +113,9 @@ public partial class App : Application
       }
       else
       {
-        AetherVk.Logic.Services.NativeInterop.avkSimulationContext_registerPanicCallback(
-          _rustPanicCallback
-        );
+        var runtimeService = ServiceProviderServiceExtensions.GetRequiredService<INativeRuntimeService>(Host!.Services);
+        runtimeService.RegisterPanicCallback(OnRustPanic);
 
-        var runtimeService =
-          Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<NativeRuntimeService>(
-            App.Host!.Services
-          );
         var splashViewModel = new SplashViewModel(runtimeService);
         var splashWindow = new Views.SplashWindow { DataContext = splashViewModel };
 
@@ -160,10 +123,11 @@ public partial class App : Application
         {
           Avalonia.Threading.Dispatcher.UIThread.Post(() =>
           {
-            var mainWindowViewModel =
-              Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<MainWindowViewModel>(
-                App.Host!.Services
-              );
+            var inputRegistry = ServiceProviderServiceExtensions.GetRequiredService<Logic.Input.InputRegistry>(Host!.Services);
+            // TODO LOAD INPUT BINDIINGS INTO INPUT REGISTRY
+            // Configure the singleton before instantiating main window view model
+
+            var mainWindowViewModel = ServiceProviderServiceExtensions.GetRequiredService<MainWindowViewModel>(Host!.Services);
             var mainWindow = new MainWindow { DataContext = mainWindowViewModel };
 
             // Listen for theme changes in the ViewModel
@@ -173,28 +137,17 @@ public partial class App : Application
               {
                 if (vmSender is MainWindowViewModel vm)
                 {
-                  Application.Current!.RequestedThemeVariant = vm.CurrentTheme switch
+                  Current!.RequestedThemeVariant = vm.CurrentTheme switch
                   {
-                    AppTheme.Light => Avalonia.Styling.ThemeVariant.Light,
-                    AppTheme.Dark => Avalonia.Styling.ThemeVariant.Dark,
-                    _ => Avalonia.Styling.ThemeVariant.Default,
+                    AppTheme.Light => ThemeVariant.Light,
+                    AppTheme.Dark => ThemeVariant.Dark,
+                    _ => ThemeVariant.Default,
                   };
                 }
               }
             };
 
             desktop.MainWindow = mainWindow;
-
-            var inputRegistry =
-              Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<AetherVk.Logic.Input.InputRegistry>(
-                App.Host!.Services
-              );
-
-
-            // TODO LOAD INPUT BINDIINGS INTO INPUT REGISTRY
-
-            // Attach global router
-            var globalRouter = new AetherVk.Input.GlobalInputRouter(mainWindow, inputRegistry);
 
             mainWindow.Show();
             splashWindow.Close();
@@ -222,7 +175,7 @@ public partial class App : Application
           // All native services which are disposable should be disposed of here
           // TODO ensure all dependencies which use the runtime service are cleaned up with a shutdown message?
           runtimeService.Dispose();
-          System.Environment.Exit(0);
+          Environment.Exit(0);
         };
       }
     }

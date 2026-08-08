@@ -12,7 +12,18 @@
     <!-- Allow Assembly name and Root Namespace to be independent from csproj file -->
     <AssemblyName>AetherVk</AssemblyName>
     <RootNamespace>AetherVk</RootNamespace>
+
+    <!-- https://learn.microsoft.com/en-us/dotnet/standard/native-interop/disabled-marshalling -->
+    <DisableRuntimeMarshalling>false</DisableRuntimeMarshalling>
   </PropertyGroup>
+
+  <!-- Visibility of internal classes to test assemblies -->
+  <ItemGroup>
+    <!-- generates in the code hte [assembly: IntenralsVisibleTo("...")] automatically
+         Note: if we switch to strongly named assemblies we need to provide their public key here
+      -->
+    <InternalsVisibleTo Include="AetherVk.AppNS.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
@@ -21,6 +32,7 @@
   <!-- Exclude Debug Views in non-Debug builds -->
   <ItemGroup Condition="'$(Configuration)' != 'Debug'">
     <!-- Stop avalonia from compiling and embedding all AXAML in the Debug folder-->
+    <AvaloniaXaml Remove="Views\Debug\**\*.axaml" />
     <AvaloniaResource Remove="Views\Debug\**\*.axaml" />
     <!-- Prevent the .NET Sdk from falling back and treating them as None items -->
     <None Remove="Views\Debug\**\*.axaml" />
@@ -30,12 +42,14 @@
 
   <!-- References I'm keeping for rework until i'm finished. But to be removed -->
   <ItemGroup>
+    <AvaloniaXaml Remove="Views\References\**\*.axaml" />
     <AvaloniaResource Remove="Views\References\**\*.axaml" />
     <None Remove="Views\References\**\*.axaml" />
     <Compile Remove="Views\References\**\*.axaml.cs" />
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Note: Avalonia 12 was released (wayland support). Furhtermore, in 12 Avalonia.ReactiveUI -> ReactiveUI.Avalonia -->
     <PackageReference Include="Avalonia" Version="11.3.12" />
     <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.3.12" />
     <PackageReference Include="Avalonia.Controls.DataGrid" Version="11.3.12" />
@@ -48,9 +62,33 @@
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Avalonia.Xaml.Behaviors" Version="11.3.0.6" />
+    <!-- Avalonia.ReactiveUI.AvaloniaScheduler.Instance for having a System.Reactive Compatible MainThread -->
+    <PackageReference Include="Avalonia.ReactiveUI" Version="11.3.8" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.3" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.3" />
     <ProjectReference Include="../aethervk.ui-logic/aethervk.ui-logic.csproj" />
+  </ItemGroup>
+
+  <!-- For now we don't support Native AOT Builds (maybe future)
+       https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/?tabs=windows%2Cnet8
+    -->
+  <Target Name="BlockNativeAot" BeforeTargets="CoreCompile" Condition="'$(PublishAot)' == 'true'">
+    <Error Text="Native AOT publishing is not yet supported for this assembly. Avalonia relies on runtime marshalling. See https://github.com/avaloniaui/avalonia/issues/16273" />
+  </Target>
+
+  <!-- To let VSCode Avalonia LSP parse and locate Source Generator generated files, let it save them onto disk
+      Reference: https://andrewlock.net/creating-a-source-generator-part-6-saving-source-generator-output-in-source-control/
+    -->
+  <PropertyGroup>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <!-- Note: you need to exclude generated files from the compilation, so that while we have them on disk, roslyn will use the ones
+         generated on the current run -->
+    <GeneratedFolder>Generated</GeneratedFolder>
+    <CompilerGeneratedFilesOutputPath>$(GeneratedFolder)\$(TargetFramework)\$(ResolvedRID)</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+  <!-- Excluded dumped Generated C# files from build -->
+  <ItemGroup>
+    <Compile Remove="$(GeneratedFolder)/**/*.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -90,11 +128,5 @@
       <Link>assets\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Update="Views\SplashWindow.axaml.cs">
-      <DependentUpon>SplashWindow.axaml</DependentUpon>
-    </Compile>
   </ItemGroup>
 </Project>

@@ -1,8 +1,8 @@
 using AetherVk.Logic.Services;
 using System.Reactive.Concurrency;
-using Avalonia.Threading;
+using Avalonia.ReactiveUI;
 
-namespace AetherVk.App.Services;
+namespace AetherVk.Services;
 
 public class AvaloniaSchedulerProvider : ISchedulerProvider
 {

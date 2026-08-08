@@ -1,7 +1,4 @@
 using System;
-using System.Diagnostics;
-using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using AetherVk.Logic.Input;
 using AetherVk.Logic.Services;
@@ -10,6 +7,20 @@ using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
+
+public enum EarthObserverState
+{
+  UpZenith,
+  EarthPositioning,
+  CometOrbiting
+}
+
+public enum CameraProjectionType
+{
+  Perspective,
+  Orthographic
+}
+
 
 public partial class Viewport3DViewModel
   : TabItemViewModel,
@@ -20,12 +31,11 @@ public partial class Viewport3DViewModel
   private readonly IFileDialogService _fileDialogService;
 
   public ulong PresentationEngineId { get; private set; }
-  private ulong _lastRenderTaskId;
+  // private ulong _lastRenderTaskId;
 
   public OperatorStack OperatorStack { get; }
 
-  public System.Collections.ObjectModel.ObservableCollection<BillboardViewModel> Billboards { get; } =
-    new();
+  public System.Collections.ObjectModel.ObservableCollection<BillboardViewModel> Billboards { get; } = [];
 
   [ObservableProperty]
   private uint _width = 800;
@@ -60,13 +70,10 @@ public partial class Viewport3DViewModel
     WeakReferenceMessenger.Default.Send(new Messages.EarthObserverModeChangedMessage(value));
   }
 
-  public enum EarthObserverState
-  {
-    UpZenith,
-    EarthPositioning,
-    CometOrbiting
-  }
+  [ObservableProperty]
+  private CameraProjectionType _projectionType = CameraProjectionType.Perspective;
 
+  [ObservableProperty]
   private EarthObserverState _earthObserverState = EarthObserverState.UpZenith;
 
   [ObservableProperty]
@@ -344,7 +351,7 @@ public partial class Viewport3DViewModel
 
   private static int _measurementCounter = 1;
 
-  public IViewportRenderer? Renderer { get; set; }
+
 
   private readonly IUiThreadDispatcher _uiThreadDispatcher;
   private readonly BreadcrumbService _breadcrumbService;
@@ -370,8 +377,7 @@ public partial class Viewport3DViewModel
 
         // Spawn ECS entity with ScreenSpaceBillboardComponent in Rust
         var entityId = _runtimeService.AddScreenSpaceBillboard(
-          SceneId,
-          path,
+          path!,
           ndcX,
           ndcY,
           1.0f,
@@ -384,7 +390,7 @@ public partial class Viewport3DViewModel
         // TODO remove this probably it will be handled rust side
         if (entityId == 0)
         {
-          _breadcrumbService.ShowMessageAsync("Error", "Failed to create billboard entity.");
+          _ = _breadcrumbService.ShowMessageAsync("Error", "Failed to create billboard entity.");
           return;
         }
 
@@ -405,14 +411,14 @@ public partial class Viewport3DViewModel
 
         Billboards.Add(billboard);
 
-        _breadcrumbService.ShowMessageAsync(
+        _ = _breadcrumbService.ShowMessageAsync(
           "Billboard Added",
           $"Loaded image {System.IO.Path.GetFileName(path)}"
         );
       }
       catch (Exception ex)
       {
-        _breadcrumbService.ShowMessageAsync("Error", $"Failed to load image: {ex.Message}");
+        _ = _breadcrumbService.ShowMessageAsync("Error", $"Failed to load image: {ex.Message}");
       }
     }
   }
@@ -428,7 +434,7 @@ public partial class Viewport3DViewModel
 
     if (billboard.EntityId != 0)
     {
-      _runtimeService.RemoveScreenSpaceBillboard(SceneId, billboard.EntityId);
+      _runtimeService.RemoveScreenSpaceBillboard(billboard.EntityId);
     }
     Billboards.Remove(billboard);
   }
@@ -446,11 +452,11 @@ public partial class Viewport3DViewModel
 
   private void SetupViewport()
   {
-    Console.WriteLine($"[SetupViewport] Called. SceneId={SceneId}  PE={PresentationEngineId}  Cam={CameraId}");
+    Console.WriteLine($"[SetupViewport] Called.  PE={PresentationEngineId}  Cam={CameraId}");
     if (PresentationEngineId == 0)
     {
       // TODO viewport numbering service
-      if (_runtimeService.AddViewport(SceneId, Width, Height, "Viewport_", out var presentationEngineId, out var camera))
+      if (_runtimeService.AddViewport(Width, Height, "Viewport_", out var presentationEngineId, out var camera))
       {
         PresentationEngineId = presentationEngineId;
         CameraId = camera;
@@ -481,14 +487,14 @@ public partial class Viewport3DViewModel
     OperatorStack = new OperatorStack(new ViewportBaseOperator(this));
     IsInitialized = true;
 
-    WeakReferenceMessenger.Default.Register<Messages.RenderFrameReadyMessage>(
-      this,
-      (r, m) => ((Viewport3DViewModel)r).Receive(m)
-    );
-    WeakReferenceMessenger.Default.Register<Messages.ToggleAddJetModeMessage>(
-      this,
-      (r, m) => ((Viewport3DViewModel)r).Receive(m)
-    );
+    // WeakReferenceMessenger.Default.Register<Messages.RenderFrameReadyMessage>(
+    //   this,
+    //   (r, m) => ((Viewport3DViewModel)r).Receive(m)
+    // );
+    // WeakReferenceMessenger.Default.Register<Messages.ToggleAddJetModeMessage>(
+    //   this,
+    //   (r, m) => ((Viewport3DViewModel)r).Receive(m)
+    // );
     // Retry SetupViewport after CreateScene completes (fires SimulationStateUpdatedMessage),
     // which resolves the timing race where IsInitialized=true fires before scene entities exist.
     WeakReferenceMessenger.Default.Register<Messages.SimulationStateUpdatedMessage>(
@@ -523,16 +529,16 @@ public partial class Viewport3DViewModel
     Stop();
     if (PresentationEngineId != 0)
     {
-      _runtimeService.RemoveViewport(SceneId, PresentationEngineId);
+      _runtimeService.RemoveViewport(PresentationEngineId);
       PresentationEngineId = 0;
       CameraId = 0;
     }
   }
 
-  public void Receive(Messages.ToggleAddJetModeMessage message)
-  {
-    IsAddingJet = true;
-  }
+  // public void Receive(Messages.ToggleAddJetModeMessage message)
+  // {
+  //   IsAddingJet = true;
+  // }
 
   public bool Process(AppAction action, InputState state)
   {
@@ -545,145 +551,71 @@ public partial class Viewport3DViewModel
     throw new NotImplementedException();
   }
 
-  // TODO remove and go to nativecontrol
-  public void Receive(Messages.RenderFrameReadyMessage message)
-  {
-    if (message.PresentationEngineId == PresentationEngineId && message.SceneId == SceneId)
-    {
-      _lastRenderTaskId = message.RenderGeneration;
-      if (Renderer != null && Width > 0 && Height > 0)
-      {
-        _ = ProcessFrameAsync();
-      }
-    }
-  }
-
-  private bool _isProcessingFrame;
-
-  private async Task ProcessFrameAsync()
-  {
-    if (_isProcessingFrame)
-      return;
-    _isProcessingFrame = true;
-
-    UpdateMeasurementIndicator();
-
-    try
-    {
-      nuint bufferSize = Width * Height * 4;
-      IntPtr unmanagedBuffer = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)bufferSize);
-
-      try
-      {
-        bool downloaded = await _runtimeService.DownloadImageAsync(
-          _lastRenderTaskId,
-          unmanagedBuffer,
-          bufferSize
-        );
-        if (downloaded)
-        {
-          await _uiThreadDispatcher.DispatchAsync(() =>
-          {
-            Renderer?.UpdateFrame(unmanagedBuffer, bufferSize);
-            return Task.CompletedTask;
-          });
-        }
-        else
-        {
-          Console.WriteLine($"[ProcessFrameAsync] DownloadImageAsync returned false for taskId={_lastRenderTaskId}. Frame skipped.");
-        }
-      }
-      finally
-      {
-        System.Runtime.InteropServices.Marshal.FreeHGlobal(unmanagedBuffer);
-      }
-    }
-    finally
-    {
-      _isProcessingFrame = false;
-    }
-  }
+  // Image polling logic completely removed for NativeControlHost transition.
 
   private void UpdateMeasurementIndicator()
   {
     if (Width <= 0 || Height <= 0)
       return;
 
-    throw new NotImplementedException();
+    double target_px_width = Math.Max(24.0, Width * 0.07);
 
-    // var state = _sceneStateManager.GetOrCreateScene(SceneId);
-    // if (state.EntityMap.TryGetValue(CameraId, out var entity))
-    // {
-    //   var camera = entity.Components.OfType<AetherVk.Logic.Models.CameraComponent>().FirstOrDefault();
-    //   if (camera != null)
-    //   {
-    //     double target_px_width = Math.Max(24.0, Width * 0.07);
+    // Dummy values for now since we removed the ECS lookup for this mock refactor
+    double dummyFovOrScale = 1.0;
 
-    //     if (camera.IsOrthographic)
-    //     {
-    //       double W_au = Width * camera.OrthoScaleFactor;
-    //       if (W_au > 0)
-    //       {
-    //         double min_au = target_px_width * (W_au / Width);
-    //         double nice_au = GetNiceNumber(min_au);
-    //         MeasurementIndicatorWidth = nice_au * (Width / W_au);
-    //         MeasurementIndicatorText = $"{FormatNiceNumber(nice_au)} AU";
-    //         ShowMeasurementIndicator = true;
-    //       }
-    //       else
-    //       {
-    //         ShowMeasurementIndicator = false;
-    //       }
-    //     }
-    //     else
-    //     {
-    //       // Perspective
-    //       double fovRad = camera.Fov * Math.PI / 180.0;
-    //       double hFovRad = 2.0 * Math.Atan(Math.Tan(fovRad / 2.0) * camera.AspectRatio);
-    //       double W_arcsec = hFovRad * 180.0 / Math.PI * 3600.0;
+    if (ProjectionType == CameraProjectionType.Orthographic)
+    {
+      double W_au = Width * dummyFovOrScale;
+      if (W_au > 0)
+      {
+        double min_au = target_px_width * (W_au / Width);
+        double nice_au = GetNiceNumber(min_au);
+        MeasurementIndicatorWidth = nice_au * (Width / W_au);
+        MeasurementIndicatorText = $"{FormatNiceNumber(nice_au)} AU";
+        ShowMeasurementIndicator = true;
+      }
+      else
+      {
+        ShowMeasurementIndicator = false;
+      }
+    }
+    else
+    {
+      // Perspective
+      double W_arcsec = dummyFovOrScale * 3600.0; // stub
 
-    //       if (W_arcsec > 0)
-    //       {
-    //         double min_arcsec = target_px_width * (W_arcsec / Width);
+      if (W_arcsec > 0)
+      {
+        double min_arcsec = target_px_width * (W_arcsec / Width);
 
-    //         if (min_arcsec > 3600.0)
-    //         {
-    //           double min_deg = min_arcsec / 3600.0;
-    //           double nice_deg = GetNiceNumber(min_deg);
-    //           MeasurementIndicatorWidth = nice_deg * 3600.0 * (Width / W_arcsec);
-    //           MeasurementIndicatorText = $"{FormatNiceNumber(nice_deg)} deg";
-    //         }
-    //         else if (min_arcsec > 60.0)
-    //         {
-    //           double min_min = min_arcsec / 60.0;
-    //           double nice_min = GetNiceNumber(min_min);
-    //           MeasurementIndicatorWidth = nice_min * 60.0 * (Width / W_arcsec);
-    //           MeasurementIndicatorText = $"{FormatNiceNumber(nice_min)} arcmin";
-    //         }
-    //         else
-    //         {
-    //           double nice_arcsec = GetNiceNumber(min_arcsec);
-    //           MeasurementIndicatorWidth = nice_arcsec * (Width / W_arcsec);
-    //           MeasurementIndicatorText = $"{FormatNiceNumber(nice_arcsec)} arcsec";
-    //         }
+        if (min_arcsec > 3600.0)
+        {
+          double min_deg = min_arcsec / 3600.0;
+          double nice_deg = GetNiceNumber(min_deg);
+          MeasurementIndicatorWidth = nice_deg * 3600.0 * (Width / W_arcsec);
+          MeasurementIndicatorText = $"{FormatNiceNumber(nice_deg)} deg";
+        }
+        else if (min_arcsec > 60.0)
+        {
+          double min_min = min_arcsec / 60.0;
+          double nice_min = GetNiceNumber(min_min);
+          MeasurementIndicatorWidth = nice_min * 60.0 * (Width / W_arcsec);
+          MeasurementIndicatorText = $"{FormatNiceNumber(nice_min)} arcmin";
+        }
+        else
+        {
+          double nice_arcsec = GetNiceNumber(min_arcsec);
+          MeasurementIndicatorWidth = nice_arcsec * (Width / W_arcsec);
+          MeasurementIndicatorText = $"{FormatNiceNumber(nice_arcsec)} arcsec";
+        }
 
-    //         ShowMeasurementIndicator = true;
-    //       }
-    //       else
-    //       {
-    //         ShowMeasurementIndicator = false;
-    //       }
-    //     }
-    //   }
-    //   else
-    //   {
-    //     ShowMeasurementIndicator = false;
-    //   }
-    // }
-    // else
-    // {
-    //   ShowMeasurementIndicator = false;
-    // }
+        ShowMeasurementIndicator = true;
+      }
+      else
+      {
+        ShowMeasurementIndicator = false;
+      }
+    }
   }
 
   private double GetNiceNumber(double value)

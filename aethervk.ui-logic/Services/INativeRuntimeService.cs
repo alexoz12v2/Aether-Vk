@@ -8,8 +8,11 @@ namespace AetherVk.Logic.Services;
 /// <summary>
 /// Safe, exclusive C# interface for interacting with the Aether-Vk Native Runtime.
 /// Implementations of this interface manage the underlying native context pointer.
+///
+/// Note: `sceneId` has been removed from all interface methods as we are managing a single scene
+/// and it's the class' responsability to track that and communicate it to the FFI layer
 /// </summary>
-public interface INativeRuntimeService
+public interface INativeRuntimeService : IDisposable
 {
   // ==========================================
   // Lifecycle & Context Management
@@ -20,9 +23,9 @@ public interface INativeRuntimeService
   // ==========================================
   // Viewport & Rendering
   // ==========================================
-  bool AddViewport(ulong sceneId, uint width, uint height, string name, out ulong presentationEngineId, out ulong cameraEntityId);
-  void RemoveViewport(ulong sceneId, ulong presentationEngineId);
-  void ResizeViewport(ulong sceneId, ulong presentationEngineId, uint width, uint height);
+  bool AddViewport(uint width, uint height, string name, out ulong presentationEngineId, out ulong cameraEntityId);
+  void RemoveViewport(ulong presentationEngineId);
+  void ResizeViewport(ulong presentationEngineId, uint width, uint height);
 
   /// <summary>
   /// Safely polls getTaskStatus without blocking, then copies the frame to the buffer.
@@ -32,26 +35,26 @@ public interface INativeRuntimeService
   // ==========================================
   // Simulation Flow Control
   // ==========================================
-  bool ResetSimulationSync(ulong sceneId);
-  bool PauseSimulationSync(ulong sceneId);
-  bool StartSimulation(ulong sceneId, int simSpeed);
+  bool ResetSimulationSync();
+  bool PauseSimulationSync();
+  bool StartSimulation(int simSpeed);
 
   // ==========================================
   // ECS Components & Camera
   // ==========================================
   // Note: `inDto` and `outComputedDto` are passed as IntPtr to allow unmanaged struct blasting
-  bool ModifyComponent(ulong sceneId, ulong entityId, uint command, IntPtr inDto, IntPtr outComputedDto);
+  bool ModifyComponent(ulong entityId, uint command, IntPtr inDto, IntPtr outComputedDto);
 
-  bool AddCameraAnimation(ulong sceneId, ulong cameraId, ref AnimationTargetDTO animation);
+  bool AddCameraAnimation(ulong cameraId, ref AnimationTargetDTO animation);
 
   // Mode: 0 = Ortho [f32;6], 1 = Persp [f32;4], 2 = RotoTranslate [f32;7]
-  bool TransformStaticCamera(ulong sceneId, ulong cameraId, int mode, IntPtr buffer);
+  bool TransformStaticCamera(ulong cameraId, int mode, IntPtr buffer);
 
   // ==========================================
   // Particle Systems
   // ==========================================
-  bool AddParticleSystem(ulong sceneId, ref ParticleSystemDTO particleSystem, out ulong outPsId);
-  bool ModifyParticleSystem(ulong sceneId, ulong psId, ref ParticleSystemDTO particleSystem, out ParticleSystemComputedDTO outPsComputedProps);
+  bool AddParticleSystem(ref ParticleSystemDTO particleSystem, out ulong outPsId);
+  bool ModifyParticleSystem(ulong psId, ref ParticleSystemDTO particleSystem, out ParticleSystemComputedDTO outPsComputedProps);
 
   // ==========================================
   // Orbital Mechanics & Almanacs
@@ -73,11 +76,11 @@ public interface INativeRuntimeService
   // ==========================================
   // Screen Space Billboards (UI Overlays)
   // ==========================================
-  ulong AddScreenSpaceBillboard(ulong sceneId, string imagePath, float ndcX, float ndcY, float scale, float rotationDeg, float opacity, int zIndex, ulong viewportId);
-  bool SetScreenSpaceBillboard(ulong sceneId, ulong entityId, float ndcX, float ndcY, float scale, float rotationDeg, float opacity, int zIndex);
-  bool RemoveScreenSpaceBillboard(ulong sceneId, ulong entityId);
+  ulong AddScreenSpaceBillboard(string imagePath, float ndcX, float ndcY, float scale, float rotationDeg, float opacity, int zIndex, ulong viewportId);
+  bool SetScreenSpaceBillboard(ulong entityId, float ndcX, float ndcY, float scale, float rotationDeg, float opacity, int zIndex);
+  bool RemoveScreenSpaceBillboard(ulong entityId);
   // TODO Probably to remove
-  bool GetScreenSpaceBillboard(ulong sceneId, ulong entityId, out FfiScreenSpaceBillboardDTO outData);
+  bool GetScreenSpaceBillboard(ulong entityId, out FfiScreenSpaceBillboardDTO outData);
 
   // ==========================================
   // Callbacks & Diagnostics

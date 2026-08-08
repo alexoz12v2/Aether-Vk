@@ -6,6 +6,9 @@
 
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+
+    <AssemblyName>AetherVk.Logic.Tests</AssemblyName>
+    <RootNamespace>AetherVk.Logic.Tests</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>

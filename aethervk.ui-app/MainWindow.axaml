@@ -22,7 +22,7 @@
                         <NativeMenuItem Header="Open"/>
                         <NativeMenuItem Header="Save"/>
                         <NativeMenuItemSeparator/>
-                        <NativeMenuItem Header="Import Model" Command="{Binding ImportModelCommand}" />
+                        <NativeMenuItem Header="Import Model" />
                         <NativeMenuItemSeparator/>
                         <NativeMenuItem Header="Exit"/>
                     </NativeMenu>
@@ -38,7 +38,7 @@
                         <NativeMenuItem Header="Scene">
                             <NativeMenuItem.Menu>
                                 <NativeMenu>
-                                    <NativeMenuItem Header="Spawn Comet" Command="{Binding OpenSpawnCometDialogCommand}" />
+                                    <NativeMenuItem Header="Spawn Comet" />
                                 </NativeMenu>
                             </NativeMenuItem.Menu>
                         </NativeMenuItem>
@@ -47,7 +47,7 @@
                         <NativeMenuItem Header="Insert Billboard" Command="{Binding ActiveViewport.InsertBillboardCommand}" IsVisible="{Binding IsViewportFocused}" />
                         <NativeMenuItem Header="Reset Camera" Command="{Binding ActiveViewport.ResetCameraFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
                         <NativeMenuItem Header="Snap to Selected" Command="{Binding ActiveViewport.SnapToSelectedFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
-                        <NativeMenuItem Header="Snap Observer" Command="{Binding ActiveViewport.SnapObserverCommand}" IsVisible="{Binding ActiveViewport.IsEarthObserverMode, FallbackValue=False}" />
+                        <NativeMenuItem Header="Snap Observer" IsVisible="{Binding ActiveViewport.IsEarthObserverMode, FallbackValue=False}" />
                         <NativeMenuItemSeparator/>
                         <NativeMenuItem Header="Settings..." Gesture="Cmd+OemComma" Command="{Binding OpenSettingsCommand}" />
                     </NativeMenu>
@@ -64,7 +64,7 @@
                     <MenuItem Header="Open" />
                     <MenuItem Header="Save" />
                     <Separator />
-                    <MenuItem Header="Import Model" Command="{Binding ImportModelCommand}" />
+                    <MenuItem Header="Import Model" />
                     <Separator />
                     <MenuItem Header="Exit" />
                 </MenuItem>
@@ -74,14 +74,14 @@
                     <MenuItem Header="Paste" />
                     <Separator />
                     <MenuItem Header="Scene">
-                        <MenuItem Header="Spawn Comet" Command="{Binding OpenSpawnCometDialogCommand}" />
+                        <MenuItem Header="Spawn Comet" />
                     </MenuItem>
                     <Separator IsVisible="{Binding IsViewportFocused}"/>
                     <MenuItem Header="Spawn Comet" Command="{Binding ActiveViewport.CloseRadialMenuAndSpawnCometCommand}" IsVisible="{Binding IsViewportFocused}" />
                     <MenuItem Header="Insert Billboard" Command="{Binding ActiveViewport.InsertBillboardCommand}" IsVisible="{Binding IsViewportFocused}" />
                     <MenuItem Header="Reset Camera" Command="{Binding ActiveViewport.ResetCameraFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
                     <MenuItem Header="Snap to Selected" Command="{Binding ActiveViewport.SnapToSelectedFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
-                    <MenuItem Header="Snap Observer" Command="{Binding ActiveViewport.SnapObserverCommand}" IsVisible="{Binding ActiveViewport.IsEarthObserverMode, FallbackValue=False}" />
+                    <MenuItem Header="Snap Observer" IsVisible="{Binding ActiveViewport.IsEarthObserverMode, FallbackValue=False}" />
                     <Separator />
                     <MenuItem Header="Settings..." HotKey="Ctrl+OemComma" Command="{Binding OpenSettingsCommand}" />
                     <MenuItem Header="Imported Models" Command="{Binding OpenImportedModelsDialogCommand}" />

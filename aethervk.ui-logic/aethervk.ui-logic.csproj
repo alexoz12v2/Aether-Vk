@@ -1,20 +1,41 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
+    <!-- at least 14 for extension blocks, at least 9 for delegate* unmanaged (AOT compatible) -->
     <LangVersion>14</LangVersion>
     <Nullable>enable</Nullable>
+    <!-- Good for interactive with native API, but also required by CsWin32 -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
     <!-- Allow Assembly name and Root Namespace to be independent from csproj file -->
     <AssemblyName>AetherVk.Logic</AssemblyName>
     <RootNamespace>AetherVk.Logic</RootNamespace>
+
+    <!-- Note: For now, skip native builds (TODO: Remove this) -->
+    <SkipNativeBuild>true</SkipNativeBuild>
+
+    <!-- https://learn.microsoft.com/en-us/dotnet/standard/native-interop/disabled-marshalling -->
+    <DisableRuntimeMarshalling>true</DisableRuntimeMarshalling>
   </PropertyGroup>
+
+  <!-- Visibility of internal classes to test assemblies -->
+  <ItemGroup>
+    <!-- generates in the code hte [assembly: IntenralsVisibleTo("...")] automatically
+         Note: if we switch to strongly named assemblies we need to provide their public key here
+      -->
+    <InternalsVisibleTo Include="AetherVk.Logic.Tests" />
+    <InternalsVisibleTo Include="AetherVk.AppNS.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="System.Text.Json" Version="10.0.6" />
     <PackageReference Include="System.Reactive" Version="7.0.0" />
     <PackageReference Include="System.Collections.Immutable" Version="10.0.10" />
+
+    <PackageReference Include="System.Memory" Version = "4.6.3" />
+    <!-- Transitive dep. of System.Memory, inserted anyways for clarity and because it's what CsWin32 recommends -->
+    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version = "6.1.2" />
   </ItemGroup>
 
   <!-- Exclude Debug ViewModels in non-Debug Builds -->
@@ -31,6 +52,63 @@
     <Compile Remove="Models\References\**\*.cs" />
   </ItemGroup>
 
+  <!-- Exclude cleanly platform specific files. Reintroduce them LATER in this file (don't reorder). Removal performed only if AOT build? -->
+  <ItemGroup Condition="'$(PublishAot)' == 'true'">
+    <Compile Remove="**\*.Windows.cs" />
+    <Compile Remove="**\*.Linux.cs" />
+    <Compile Remove="**\*.Mac.cs" />
+  </ItemGroup>
+
+  <!-- compilation constants to handle native or jit build -->
+  <PropertyGroup Condition="'$(PublishAot)' == 'true'">
+    <DefineConstants>$(DefineConstants);IS_NATIVE_AOT</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(PublishAot)' != 'true'">
+    <DefineConstants>$(DefineConstants);IS_JIT_COMPILED</DefineConstants>
+  </PropertyGroup>
+
+  <!-- For now we don't support Native AOT Builds (maybe future)
+       https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/?tabs=windows%2Cnet8
+    -->
+  <Target Name="BlockNativeAot" BeforeTargets="CoreCompile" Condition="'$(PublishAot)' == 'true'">
+    <Error Text="Native AOT publishing is not yet supported for this assembly. AOT support is planned as a future objective. Please publish without AOT" />
+  </Target>
+
+  <!-- ========= Now Platform specific segments =========== -->
+  <!-- Windows/Win32 Only Dependencies and configuration -->
+  <ItemGroup Condition="'$(PublishAot)' != 'true' Or '$(RuntimeIdentifier.StartsWith(`win`))' == 'true' Or ( '$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows')) ) ">
+    <Compile Condition="'$(PublishAot)' == true" Include="**\*.Windows.cs" />
+
+    <!-- Note: CsWin32 expects in the project's directory a `NativeMethods.txt`, `NativeMethods.json` file which tells it which methods to generate/export -->
+    <!-- Note: CsWin32 Source Code Generator runs only if the "Effective" Runtime Identifier is Windows for method generation (structs are still generated). -->
+    <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.298" />
+    <!-- https://microsoft.github.io/CsWin32/docs/getting-started.html says that when targeting .NET Standard 2.0, you should also add per
+        Note for condition: https://learn.microsoft.com/en-us/dotnet/standard/frameworks the following Dependencies
+      - System.Memory
+      - System.Runtime.CompilerServices.Unsafe (even if this is a transitive dep of the former)
+      Added without conditioning cause they are useful
+    -->
+  </ItemGroup>
+  <PropertyGroup Condition=" '$(RuntimeIdentifier.StartsWith(`win`))' == 'true' Or ( '$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows')) ) ">
+    <DefineConstants>$(DefineConstants);TARGET_IS_WINDOWS</DefineConstants>
+  </PropertyGroup>
+
+  <!-- Linux/X11 (xlib) Only Dependencies and configuration -->
+  <ItemGroup Condition="'$(PublishAot)' != 'true' Or '$(RuntimeIdentifier.StartsWith(`linux`))' == 'true' Or ( '$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Linux')) ) ">
+    <Compile Condition="'$(PublishAot)' == true" Include="**\*.Linux.cs" />
+  </ItemGroup>
+  <PropertyGroup Condition=" '$(RuntimeIdentifier.StartsWith(`linux`))' == 'true' Or ( '$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Linux')) ) ">
+    <DefineConstants>$(DefineConstants);TARGET_IS_LINUX</DefineConstants>
+  </PropertyGroup>
+
+  <!-- MacOS/AppKit Only Dependencies and configuration -->
+  <ItemGroup Condition="'$(PublishAot)' != 'true' Or '$(RuntimeIdentifier.StartsWith(`osx`))' == 'true' Or ( '$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('OSX')) ) ">
+    <Compile Condition="'$(PublishAot)' == true" Include="**\*.Mac.cs" />
+  </ItemGroup>
+  <PropertyGroup Condition=" '$(RuntimeIdentifier.StartsWith(`osx`))' == 'true' Or ( '$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('OSX')) ) ">
+    <DefineConstants>$(DefineConstants);TARGET_IS_OSX</DefineConstants>
+  </PropertyGroup>
+
   <PropertyGroup>
     <!--
       Build cargo command. Example
@@ -41,18 +119,34 @@
     <CargoArgs Condition="'$(Configuration)' == 'Release'">--profile release</CargoArgs>
 
     <!-- Cargo Target Mapping for Cross-Platform Publishing -->
-    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'linux-x64'">x86_64-unknown-linux-gnu</CargoTarget>
-    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">aarch64-unknown-linux-gnu</CargoTarget>
-    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'win-x64'">x86_64-pc-windows-msvc</CargoTarget>
-    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'osx-x64'">x86_64-apple-darwin</CargoTarget>
-    <CargoTarget Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">aarch64-apple-darwin</CargoTarget>
+    <CargoTarget Condition="'$(ResolvedRID)' == 'linux-x64'">x86_64-unknown-linux-gnu</CargoTarget>
+    <CargoTarget Condition="'$(ResolvedRID)' == 'linux-arm64'">aarch64-unknown-linux-gnu</CargoTarget>
+    <CargoTarget Condition="'$(ResolvedRID)' == 'win-x64'">x86_64-pc-windows-msvc</CargoTarget>
+    <CargoTarget Condition="'$(ResolvedRID)' == 'win-arm64'">aarch64-pc-windows-msvc</CargoTarget>
+    <CargoTarget Condition="'$(ResolvedRID)' == 'osx-x64'">x86_64-apple-darwin</CargoTarget>
+    <CargoTarget Condition="'$(ResolvedRID)' == 'osx-arm64'">aarch64-apple-darwin</CargoTarget>
 
     <CargoArgs Condition="'$(CargoTarget)' != ''">-p aethervk-core-cdylib $(CargoArgs) --target $(CargoTarget)</CargoArgs>
     <CargoOutDir Condition="'$(CargoTarget)' != ''">$(CargoTarget)/$(CargoOutDir)</CargoOutDir>
   </PropertyGroup>
 
+  <!-- To let VSCode Avalonia LSP parse and locate Source Generator generated files, let it save them onto disk
+      Reference: https://andrewlock.net/creating-a-source-generator-part-6-saving-source-generator-output-in-source-control/
+    -->
   <PropertyGroup>
-    <!-- Determine platform specifically to help with VULKAN_SDK -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <!-- Note: you need to exclude generated files from the compilation, so that while we have them on disk, roslyn will use the ones
+         generated on the current run -->
+    <GeneratedFolder>Generated</GeneratedFolder>
+    <CompilerGeneratedFilesOutputPath>$(GeneratedFolder)\$(TargetFramework)\$(ResolvedRID)</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+  <!-- Excluded dumped Generated C# files from build -->
+  <ItemGroup>
+    <Compile Remove="$(GeneratedFolder)/**/*.cs" />
+  </ItemGroup>
+
+  <!-- Determine platform specifically to help with VULKAN_SDK -->
+  <PropertyGroup>
     <IsWindows>false</IsWindows>
     <IsLinux>false</IsLinux>
     <IsMac>false</IsMac>
