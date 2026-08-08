@@ -1,6 +1,7 @@
 using System;
 using AetherVk.Utils;
 using Avalonia;
+using Avalonia.ReactiveUI;
 using Microsoft.Extensions.Hosting;
 
 namespace AetherVk;
@@ -20,7 +21,6 @@ class Program
         {
           services.AddCommonServices();
           services.AddViewModels();
-          // Register custom services (todo)
         }
       )
       .Build();
@@ -45,7 +45,10 @@ class Program
   }
 
   // Avalonia configuration, don't remove; also used by visual designer.
-  // TODO: ReactiveUI.Avalonia;
   public static AppBuilder BuildAvaloniaApp() =>
-    AppBuilder.Configure<App>().UsePlatformDetect().WithInterFont().LogToTrace();
+    AppBuilder.Configure<App>()
+      .UsePlatformDetect()
+      .WithInterFont() // use Inter as default font everywhere
+      .LogToTrace()
+      .UseReactiveUI();
 }

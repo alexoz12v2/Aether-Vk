@@ -2,5 +2,18 @@
   <PropertyGroup>
     <RunSettingsFilePath>$(MSBuildThisFileDirectory)/.runsettings</RunSettingsFilePath>
     <AvaloniaVersion>11.3.12</AvaloniaVersion>
+
+    <!-- ============ Runtime Identifier Construction (when missing) =================== -->
+    <!-- Determine Host OS -->
+    <HostOS Condition="$([MSBuild]::IsOSPlatform('Windows'))">win</HostOS>
+    <HostOS Condition="$([MSBuild]::IsOSPlatform('OSX'))">osx</HostOS>
+    <HostOS Condition="$([MSBuild]::IsOSPlatform('Linux'))">linux</HostOS>
+
+    <!-- Determine Host Architecture-->
+    <HostArch>$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant())</HostArch>
+
+    <!-- Resolve RID. use command line if given, otherwise fallback to host -->
+    <ResolvedRID>$(RuntimeIdentifier)</ResolvedRID>
+    <ResolvedRID Condition="'$(ResolvedRID)' == ''">$(HostOS)-$(HostArch)</ResolvedRID>
   </PropertyGroup>
 </Project>

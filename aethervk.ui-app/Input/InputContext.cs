@@ -1,5 +1,7 @@
 
-namespace AetherVk.App.Input;
+using System;
+
+namespace AetherVk.Input;
 
 /// <summary>
 /// List of hardcoded input contexts for <see cref="InputRegistry" /> as a string enum

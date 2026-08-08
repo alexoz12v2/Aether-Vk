@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using System.Linq;
+using System;
 using AetherVk.Logic.Input;
 using Avalonia;
 using Avalonia.Controls;
@@ -38,21 +38,16 @@ namespace AetherVk.Input;
 ///   strings using user's custom keybindings, and route them to whichever view model is currently
 ///   in the UI Tree
 /// </summary>
-public class GlobalInputRouter : IWindowInputRouter
+public class GlobalInputRouter(InputRegistry registry) : IWindowInputRouter
 {
-  private readonly InputRegistry _registry;
+  private readonly InputRegistry _registry = registry;
   private readonly Dictionary<
     IPointer,
     (Visual Target, IActionHandler Handler, AppAction Action)
   > _pressedVisuals = [];
   private TopLevel? _attachedWindow;
 
-  public GlobalInputRouter(InputRegistry registry)
-  {
-    _registry = registry;
-  }
-
-  public AttachToWindow(object windowRoot)
+  public void AttachToWindow(object windowRoot)
   {
     if (windowRoot is not TopLevel window)
       throw new ArgumentException("windowRoot must be an Avalonia TopLevel", nameof(windowRoot));
@@ -148,10 +143,11 @@ public class GlobalInputRouter : IWindowInputRouter
       return;
 
     var target = visual;
+    var state = new InputState(isPressed, GetModifiers(e.KeyModifiers));
 
     if (!isPressed && _pressedVisuals.TryGetValue(e.Pointer, out var info))
     {
-      info.Handler.ProcessAction(info.Action, false);
+      info.Handler.Process(info.Action, state);
       _pressedVisuals.Remove(e.Pointer);
       e.Pointer.Capture(null);
       e.Handled = true;
@@ -175,13 +171,13 @@ public class GlobalInputRouter : IWindowInputRouter
         Pointer: pointerStr
       );
 
-      var (handler, action) = RouteAction(target, chord, isPressed);
+      var (handler, action) = RouteAction(target, chord, state);
       if (handler != null && action != null)
       {
         e.Handled = true;
         if (isPressed)
         {
-          _pressedVisuals[e.Pointer] = (target, handler, action);
+          _pressedVisuals[e.Pointer] = (target, handler, action.Value);
           e.Pointer.Capture(target as IInputElement);
 
           if (target is InputElement ie && ie.Focusable)

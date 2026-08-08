@@ -8,30 +8,18 @@
              x:Class="AetherVk.Views.Viewport3DView"
              input:ActionContext.Id="Viewport"
              input:ActionContext.Handler="{Binding}"
-             xmlns:conv="using:AetherVk.Converters">
+             xmlns:conv="using:AetherVk.Converters"
+             xmlns:controls="clr-namespace:AetherVk.Controls">
 
     <Grid>
-        <Image x:Name="RenderTargetImage" Stretch="Uniform" Focusable="True"
-               PointerPressed="OnPointerPressed"
-               PointerReleased="OnPointerReleased"
-               PointerMoved="OnPointerMoved"
-               PointerWheelChanged="OnPointerWheelChanged">
-            <i:Interaction.Behaviors>
-                <ia:DataTriggerBehavior Binding="{Binding IsOrbiting}" ComparisonCondition="Equal" Value="False">
-                    <ia:ChangePropertyAction PropertyName="Cursor" Value="Arrow" />
-                </ia:DataTriggerBehavior>
-                <ia:DataTriggerBehavior Binding="{Binding IsPanning}" ComparisonCondition="Equal" Value="False">
-                    <ia:ChangePropertyAction PropertyName="Cursor" Value="Arrow" />
-                </ia:DataTriggerBehavior>
-
-                <ia:DataTriggerBehavior Binding="{Binding IsOrbiting}" ComparisonCondition="Equal" Value="True">
-                    <ia:ChangePropertyAction PropertyName="Cursor" Value="SizeAll" />
-                </ia:DataTriggerBehavior>
-                <ia:DataTriggerBehavior Binding="{Binding IsPanning}" ComparisonCondition="Equal" Value="True">
-                    <ia:ChangePropertyAction PropertyName="Cursor" Value="Hand" />
-                </ia:DataTriggerBehavior>
-            </i:Interaction.Behaviors>
-        </Image>
+        <!-- 8px border for UI overlays to prevent airspace issues with NativeControlHost -->
+        <Border Padding="8">
+            <Grid>
+                <!-- Placeholder solid background, to be replaced by Vulkan rendering -->
+                <Border Background="#1A1A1A" />
+                <controls:VulkanViewportControl x:Name="ViewportHost" />
+            </Grid>
+        </Border>
 
         <ItemsControl ItemsSource="{Binding Billboards}">
             <ItemsControl.ItemsPanel>
@@ -54,11 +42,7 @@
                                    Width="{Binding ScaledWidth}" Height="{Binding ScaledHeight}" Opacity="{Binding Opacity}"
                                    IsVisible="{Binding ImageSource, Converter={x:Static ObjectConverters.IsNotNull}}"
                                    IsHitTestVisible="{Binding IsSelected}"
-                                   Cursor="SizeAll"
-                                   PointerPressed="OnBillboardDragPressed"
-                                   PointerMoved="OnBillboardPointerMoved"
-                                   PointerReleased="OnBillboardPointerReleased"
-                                   PointerWheelChanged="OnBillboardWheelChanged" />
+                                   Cursor="SizeAll" />
                             <Border Background="{DynamicResource Bg.Surface}" CornerRadius="4" Padding="4"
                                     IsVisible="{Binding Text, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                                 <TextBlock Text="{Binding Text}" Foreground="{DynamicResource Text.Primary}"
@@ -85,41 +69,26 @@
                         <Ellipse IsVisible="{Binding IsSelected}" Width="10" Height="10"
                                  Fill="{DynamicResource Sem.Warning}" Stroke="White" StrokeThickness="1"
                                  HorizontalAlignment="Left" VerticalAlignment="Top"
-                                 Margin="-5,-5,0,0" Cursor="TopLeftCorner"
-                                 PointerPressed="OnScaleHandlePressed"
-                                 PointerMoved="OnScaleHandleMoved"
-                                 PointerReleased="OnScaleHandleReleased" />
+                                 Margin="-5,-5,0,0" Cursor="TopLeftCorner" />
                         <Ellipse IsVisible="{Binding IsSelected}" Width="10" Height="10"
                                  Fill="{DynamicResource Sem.Warning}" Stroke="White" StrokeThickness="1"
                                  HorizontalAlignment="Right" VerticalAlignment="Top"
-                                 Margin="0,-5,-5,0" Cursor="TopRightCorner"
-                                 PointerPressed="OnScaleHandlePressed"
-                                 PointerMoved="OnScaleHandleMoved"
-                                 PointerReleased="OnScaleHandleReleased" />
+                                 Margin="0,-5,-5,0" Cursor="TopRightCorner" />
                         <Ellipse IsVisible="{Binding IsSelected}" Width="10" Height="10"
                                  Fill="{DynamicResource Sem.Warning}" Stroke="White" StrokeThickness="1"
                                  HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                                 Margin="-5,0,0,-5" Cursor="BottomLeftCorner"
-                                 PointerPressed="OnScaleHandlePressed"
-                                 PointerMoved="OnScaleHandleMoved"
-                                 PointerReleased="OnScaleHandleReleased" />
+                                 Margin="-5,0,0,-5" Cursor="BottomLeftCorner" />
                         <Ellipse IsVisible="{Binding IsSelected}" Width="10" Height="10"
                                  Fill="{DynamicResource Sem.Warning}" Stroke="White" StrokeThickness="1"
                                  HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                 Margin="0,0,-5,-5" Cursor="BottomRightCorner"
-                                 PointerPressed="OnScaleHandlePressed"
-                                 PointerMoved="OnScaleHandleMoved"
-                                 PointerReleased="OnScaleHandleReleased" />
+                                 Margin="0,0,-5,-5" Cursor="BottomRightCorner" />
 
                         <!-- Rotation handle: circle at top-center -->
                         <Ellipse IsVisible="{Binding IsSelected}"
                                  Width="14" Height="14" Fill="{DynamicResource Accent.Primary}"
                                  Stroke="White" StrokeThickness="1.5"
                                  HorizontalAlignment="Center" VerticalAlignment="Top"
-                                 Margin="0,-18,0,0" Cursor="Cross"
-                                 PointerPressed="OnRotateHandlePressed"
-                                 PointerMoved="OnRotateHandleMoved"
-                                 PointerReleased="OnRotateHandleReleased"
+                                 Margin="0,-20,0,0" Cursor="Hand"
                                  ToolTip.Tip="Drag to rotate (Ctrl = 15° snap)" />
                     </Grid>
                 </DataTemplate>
