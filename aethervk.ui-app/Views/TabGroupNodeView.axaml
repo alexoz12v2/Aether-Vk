@@ -85,19 +85,19 @@
                       ToolTip.Tip="Add new tab"
                       Classes="accent">
                 <Button.Flyout>
-                  <MenuFlyout>
-                    <MenuItem Header="UI Test Panel" Command="{Binding AddNewTabCommand}" CommandParameter="UITestPanel" />
-                    <MenuItem Header="Console" Command="{Binding AddNewTabCommand}" CommandParameter="Console" />
-                    <MenuItem Header="Horizon JPL Data Viewer" Command="{Binding AddNewTabCommand}" CommandParameter="HorizonJpl" />
-                    <MenuItem Header="Timeline Editor" Command="{Binding AddNewTabCommand}" CommandParameter="Timeline" />
-                    <MenuItem Header="Almanac Explorer" Command="{Binding AddNewTabCommand}" CommandParameter="Almanac" />
-                    <MenuItem Header="Outline" Command="{Binding AddNewTabCommand}" CommandParameter="Outline" />
-                    <MenuItem Header="Properties" Command="{Binding AddNewTabCommand}" CommandParameter="Properties" />
-                    <MenuItem Header="Viewport 3D" Command="{Binding AddNewTabCommand}" CommandParameter="Viewport3D" />
+                  <MenuFlyout ItemsSource="{Binding AvailableTabs}">
+                    <!-- Here DataContext is TabDescriptor -->
+                    <MenuFlyout.ItemContainerTheme>
+                      <ControlTheme TargetType="MenuItem">
+                        <Setter Property="Header" Value="{Binding Header}" />
+                        <Setter Property="Command" Value="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).AddNewTabCommand}" />
+                        <Setter Property="CommandParameter" Value="{Binding TabType}" />
+                      </ControlTheme>
+                    </MenuFlyout.ItemContainerTheme>
                   </MenuFlyout>
                 </Button.Flyout>
               </Button>
-              
+
               <Button Content="⇆"
                       Width="28" Height="28"
                       Padding="0" FontSize="18"
@@ -105,20 +105,19 @@
                       ToolTip.Tip="Change Selected Tab"
                       IsVisible="{Binding HasTabs}">
                 <Button.Flyout>
-                  <MenuFlyout>
-                    <MenuItem Header="UI Test Panel" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="UITestPanel" />
-                    <MenuItem Header="Console" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="Console" />
-                    <MenuItem Header="Debug UI" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="DebugUI" />
-                    <MenuItem Header="Horizon JPL Data Viewer" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="HorizonJpl" />
-                    <MenuItem Header="Timeline Editor" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="Timeline" />
-                    <MenuItem Header="Almanac Explorer" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="Almanac" />
-                    <MenuItem Header="Outline" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="Outline" />
-                    <MenuItem Header="Properties" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="Properties" />
-                    <MenuItem Header="Viewport 3D" Command="{Binding ChangeSelectedTabCommand}" CommandParameter="Viewport3D" />
+                  <MenuFlyout ItemsSource="{Binding AvailableTabs}">
+                    <!-- Here DataContext is TabDescriptor -->
+                    <MenuFlyout.ItemContainerTheme>
+                      <ControlTheme TargetType="MenuItem">
+                        <Setter Property="Header" Value="{Binding Header}" />
+                        <Setter Property="Command" Value="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).ChangeSelectedTabCommand}" />
+                        <Setter Property="CommandParameter" Value="{Binding TabType}" />
+                      </ControlTheme>
+                    </MenuFlyout.ItemContainerTheme>
                   </MenuFlyout>
                 </Button.Flyout>
               </Button>
-              
+
               <Button Content="✕"
                       Width="28" Height="28"
                       Padding="0" FontSize="14"
@@ -133,21 +132,21 @@
       </Border>
 
       <ContentControl Grid.Row="1" Content="{Binding SelectedTab}" Margin="4" IsVisible="{Binding HasTabs}" />
-      
-      <Button Grid.Row="1" Content="+" Classes="accent" FontSize="48" Width="100" Height="100" 
-              HorizontalAlignment="Center" VerticalAlignment="Center" 
+
+      <Button Grid.Row="1" Content="+" Classes="accent" FontSize="48" Width="100" Height="100"
+              HorizontalAlignment="Center" VerticalAlignment="Center"
               IsVisible="{Binding !HasTabs}" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
           <Button.Flyout>
-              <MenuFlyout>
-                  <MenuItem Header="UI Test Panel" Command="{Binding AddNewTabCommand}" CommandParameter="UITestPanel" />
-                  <MenuItem Header="Console" Command="{Binding AddNewTabCommand}" CommandParameter="Console" />
-                  <MenuItem Header="Horizon JPL Data Viewer" Command="{Binding AddNewTabCommand}" CommandParameter="HorizonJpl" />
-                  <MenuItem Header="Timeline Editor" Command="{Binding AddNewTabCommand}" CommandParameter="Timeline" />
-                  <MenuItem Header="Almanac Explorer" Command="{Binding AddNewTabCommand}" CommandParameter="Almanac" />
-                  <MenuItem Header="Outline" Command="{Binding AddNewTabCommand}" CommandParameter="Outline" />
-                  <MenuItem Header="Properties" Command="{Binding AddNewTabCommand}" CommandParameter="Properties" />
-                  <MenuItem Header="Viewport 3D" Command="{Binding AddNewTabCommand}" CommandParameter="Viewport3D" />
-              </MenuFlyout>
+            <MenuFlyout ItemsSource="{Binding AvailableTabs}">
+              <!-- Here DataContext is TabDescriptor -->
+              <MenuFlyout.ItemContainerTheme>
+                <ControlTheme TargetType="MenuItem">
+                  <Setter Property="Header" Value="{Binding Header}" />
+                  <Setter Property="Command" Value="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).AddNewTabCommand}" />
+                  <Setter Property="CommandParameter" Value="{Binding TabType}" />
+                </ControlTheme>
+              </MenuFlyout.ItemContainerTheme>
+            </MenuFlyout>
           </Button.Flyout>
       </Button>
 

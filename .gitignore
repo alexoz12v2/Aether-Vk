@@ -893,3 +893,24 @@ assets/sim/cross/
 scripts/*.bsp
 figma.png
 
+# Ignore everything inside the Generated folder then unigniore only one combination, so repository doesn't get bloated
+# order is important
+
+# 1. ignore all generated
+aethervk.ui-logic/Generated/*
+aethervk.ui-app/Generated/*
+
+# 2. un-ignore the folder so git looks inside it
+!aethervk.ui-logic/Generated/netstandard2.0/
+!aethervk.ui-logic/Generated/net10.0/
+!aethervk.ui-app/Generated/net10.0/
+
+# 3. Ignore all contents
+aethervk.ui-logic/Generated/netstandard2.0/*
+aethervk.ui-logic/Generated/net10.0/*
+aethervk.ui-app/Generated/net10.0/*
+
+# 4. unignore the combination we want to track
+!aethervk.ui-logic/Generated/netstandard2.0/win-x64/
+!aethervk.ui-logic/Generated/net10.0/win-x64/
+!aethervk.ui-app/Generated/net10.0/win-x64/

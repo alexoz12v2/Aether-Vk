@@ -277,7 +277,7 @@ public unsafe class MacNativeInputHandler(IntPtr handle, string handleDescriptor
     ushort keyCode = PInvokeObjC.ushort_objc_msgSend(nsEvent, PInvokeObjC.GetSelector("keyCode"u8));
     ulong modifierFlags = PInvokeObjC.ulong_objc_msgSend(nsEvent, PInvokeObjC.GetSelector("modifierFlags"u8));
 
-    instance.PublishKeyEvent(keyCode, isDown, ParseModifiers(modifierFlags));
+    instance.PublishKeyEvent(NormalizeMacKeyCode(keyCode), isDown, ParseModifiers(modifierFlags));
   }
 
   private static void HandleMouseEvent(nint self, nint nsEvent, MouseButton button, bool isDown)
@@ -292,7 +292,7 @@ public unsafe class MacNativeInputHandler(IntPtr handle, string handleDescriptor
     ulong modifierFlags = PInvokeObjC.ulong_objc_msgSend(nsEvent, PInvokeObjC.GetSelector("modifierFlags"u8));
 
     // Note: AppKit origin (0,0) is on the bottom left, Vulkan and Avalonia Both expect Top-Left, so
-    // TODO HERE invert Y
+    // our view has the isFlipped property set to YES
     instance.PublishMouseEvent(viewPoint.X, viewPoint.Y, button, isDown, ParseModifiers(modifierFlags));
   }
 
@@ -306,6 +306,49 @@ public unsafe class MacNativeInputHandler(IntPtr handle, string handleDescriptor
     if (flags.HasFlag(NSEventModifierFlags.Command)) m |= NativeModifierFlags.Super;
     return m;
   }
+
+  /// <summary>
+  /// Translates macOS physical hardware keyCodes into the unified Win32-style
+  /// virtual key standard used by the shared logic dictionary.
+  /// </summary>
+  private static uint NormalizeMacKeyCode(ushort macKeyCode) => macKeyCode switch
+  {
+    // --- Alphabet (A-Z) ---
+    0x00 => 0x41, // A
+    0x0B => 0x42, // B
+    0x08 => 0x43, // C
+    0x02 => 0x44, // D
+    0x0E => 0x45, // E
+    0x03 => 0x46, // F
+    0x05 => 0x47, // G
+    0x04 => 0x48, // H
+    0x22 => 0x49, // I
+    0x26 => 0x4A, // J
+    0x28 => 0x4B, // K
+    0x25 => 0x4C, // L
+    0x2E => 0x4D, // M
+    0x2D => 0x4E, // N
+    0x1F => 0x4F, // O
+    0x23 => 0x50, // P
+    0x0C => 0x51, // Q
+    0x0F => 0x52, // R
+    0x01 => 0x53, // S
+    0x11 => 0x54, // T
+    0x20 => 0x55, // U
+    0x09 => 0x56, // V
+    0x0D => 0x57, // W
+    0x07 => 0x58, // X
+    0x10 => 0x59, // Y
+    0x06 => 0x5A, // Z
+
+    // --- Control Keys ---
+    0x35 => 0x1B, // Escape
+    0x24 => 0x0D, // Return
+    0x4C => 0x0D, // Keypad Enter -> Return
+    0x31 => 0x20, // Space
+
+    _ => macKeyCode // Unmapped keys pass through
+  };
 }
 
 /// <summary>

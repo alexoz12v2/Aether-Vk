@@ -22,6 +22,26 @@ namespace Windows.Win32
 	/// </content>
 	public static partial class PInvoke
 	{
+		/// <summary>Changes an attribute of the specified window. The function also sets the 32-bit (long) value at the specified offset into the extra window memory. (Unicode)</summary>
+		/// <param name="hWnd">
+		/// <para>Type: <b>HWND</b> A handle to the window and, indirectly, the class to which the window belongs.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setwindowlongw#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <param name="nIndex">Type: <b>int</b></param>
+		/// <param name="dwNewLong">
+		/// <para>Type: <b>LONG</b> The replacement value.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setwindowlongw#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <returns>
+		/// <para>Type: <b>LONG</b> If the function succeeds, the return value is the previous value of the specified 32-bit integer. If the function fails, the return value is zero. To get extended error information, call <a href="https://docs.microsoft.com/windows/desktop/api/errhandlingapi/nf-errhandlingapi-getlasterror">GetLastError</a>. If the previous value of the specified 32-bit integer is zero, and the function succeeds, the return value is zero, but the function does not clear the last error information. This makes it difficult to determine success or failure. To deal with this, you should clear the last error information by calling <a href="https://docs.microsoft.com/windows/desktop/api/errhandlingapi/nf-errhandlingapi-setlasterror">SetLastError</a> with 0 before calling <b>SetWindowLong</b>. Then, function failure will be indicated by a return value of zero and a <a href="https://docs.microsoft.com/windows/desktop/api/errhandlingapi/nf-errhandlingapi-getlasterror">GetLastError</a> result that is nonzero.</para>
+		/// </returns>
+		/// <remarks>
+		/// <para>Certain window data is cached, so changes you make using <b>SetWindowLong</b> will not take effect until you call the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-setwindowpos">SetWindowPos</a> function. Specifically, if you change any of the frame styles, you must call <b>SetWindowPos</b> with the <b>SWP_FRAMECHANGED</b> flag for the cache to be updated properly. If you use <b>SetWindowLong</b> with the <b>GWL_WNDPROC</b> index to replace the window procedure, the window procedure must conform to the guidelines specified in the description of the <a href="https://docs.microsoft.com/previous-versions/windows/desktop/legacy/ms633573(v=vs.85)">WindowProc</a> callback function. If you use <b>SetWindowLong</b> with the <b>DWL_MSGRESULT</b> index to set the return value for a message processed by a dialog procedure, you should return <b>TRUE</b> directly afterward. Otherwise, if you call any function that results in your dialog procedure receiving a window message, the nested window message could overwrite the return value you set using <b>DWL_MSGRESULT</b>. Calling <b>SetWindowLong</b> with the <b>GWL_WNDPROC</b> index creates a subclass of the window class used to create the window. An application can subclass a system class, but should not subclass a window class created by another process. The <b>SetWindowLong</b> function creates the window subclass by changing the window procedure associated with a particular window class, causing the system to call the new window procedure instead of the previous one. An application must pass any messages not processed by the new window procedure to the previous window procedure by calling <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-callwindowproca">CallWindowProc</a>. This allows the application to create a chain of window procedures. Reserve extra window memory by specifying a nonzero value in the <b>cbWndExtra</b> member of the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/ns-winuser-wndclassexa">WNDCLASSEX</a> structure used with the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-registerclassexa">RegisterClassEx</a> function. You must not call <b>SetWindowLong</b> with the <b>GWL_HWNDPARENT</b> index to change the parent of a child window. Instead, use the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-setparent">SetParent</a> function. If the window has a class style of <b>CS_CLASSDC</b> or <b>CS_OWNDC</b>, do not set the extended window styles <b>WS_EX_COMPOSITED</b> or <b>WS_EX_LAYERED</b>. Calling <b>SetWindowLong</b> to set the style on a progressbar will reset its position.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setwindowlongw#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		[DllImport("USER32.dll", ExactSpelling = true, EntryPoint = "SetWindowLongW", SetLastError = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+		public static extern int SetWindowLong(winmdroot.Foundation.HWND hWnd, winmdroot.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX nIndex, int dwNewLong);
+
 		/// <summary>Changes an attribute of the specified window. (Unicode)</summary>
 		/// <param name="hWnd">
 		/// <para>Type: <b>HWND</b> A handle to the window and, indirectly, the class to which the window belongs. The <b>SetWindowLongPtr</b> function fails if the process that owns the window specified by the <i>hWnd</i> parameter is at a higher process privilege in the UIPI hierarchy than the process the calling thread resides in. <b>Windows XP/2000:  </b> The <b>SetWindowLongPtr</b> function fails if the window specified by the <i>hWnd</i> parameter does not belong to the same process as the calling thread.</para>
@@ -103,6 +123,33 @@ namespace Windows.Win32
 		[DllImport("USER32.dll", ExactSpelling = true, SetLastError = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 		public static extern unsafe winmdroot.Foundation.BOOL GetClientRect(winmdroot.Foundation.HWND hWnd, winmdroot.Foundation.RECT* lpRect);
 
+		/// <summary>Calls the default window procedure to provide default processing for any window messages that an application does not process. (Unicode)</summary>
+		/// <param name="hWnd">
+		/// <para>Type: <b>HWND</b> A handle to the window procedure that received the message.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-defwindowprocw#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <param name="Msg">
+		/// <para>Type: <b>UINT</b> The message.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-defwindowprocw#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <param name="wParam">
+		/// <para>Type: <b>WPARAM</b> Additional message information. The content of this parameter depends on the value of the <i>Msg</i> parameter.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-defwindowprocw#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <param name="lParam">
+		/// <para>Type: <b>LPARAM</b> Additional message information. The content of this parameter depends on the value of the <i>Msg</i> parameter.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-defwindowprocw#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <returns>
+		/// <para>Type: <b>LRESULT</b> The return value is the result of the message processing and depends on the message.</para>
+		/// </returns>
+		/// <remarks>
+		/// <para>> [!NOTE] > The winuser.h header defines DefWindowProc as an alias which automatically selects the ANSI or Unicode version of this function based on the definition of the UNICODE preprocessor constant. Mixing usage of the encoding-neutral alias with code that not encoding-neutral can lead to mismatches that result in compilation or runtime errors. For more information, see [Conventions for Function Prototypes](/windows/win32/intl/conventions-for-function-prototypes).</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-defwindowprocw#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		[DllImport("USER32.dll", ExactSpelling = true, EntryPoint = "DefWindowProcW"),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+		public static extern winmdroot.Foundation.LRESULT DefWindowProc(winmdroot.Foundation.HWND hWnd, uint Msg, winmdroot.Foundation.WPARAM wParam, winmdroot.Foundation.LPARAM lParam);
+
 		/// <inheritdoc cref="FillRect(winmdroot.Graphics.Gdi.HDC, winmdroot.Foundation.RECT*, winmdroot.Graphics.Gdi.HBRUSH)"/>
 		[OverloadResolutionPriority(1)]
 		public static unsafe int FillRect(winmdroot.Graphics.Gdi.HDC hDC, in winmdroot.Foundation.RECT lprc, SafeHandle hbr)
@@ -169,5 +216,44 @@ namespace Windows.Win32
 		/// </remarks>
 		[DllImport("USER32.dll", ExactSpelling = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 		public static extern unsafe winmdroot.Foundation.BOOL InvalidateRect([Optional] winmdroot.Foundation.HWND hWnd, [Optional] winmdroot.Foundation.RECT* lpRect, winmdroot.Foundation.BOOL bErase);
+
+		/// <summary>Retrieves the status of the specified virtual key. The status specifies whether the key is up, down, or toggled (on, off�alternating each time the key is pressed).</summary>
+		/// <param name="nVirtKey">
+		/// <para>Type: <b>int</b> A virtual key. If the desired virtual key is a letter or digit (A through Z, a through z, or 0 through 9), <i>nVirtKey</i> must be set to the ASCII value of that character. For other keys, it must be a virtual-key code. If a non-English keyboard layout is used, virtual keys with values in the range ASCII A through Z and 0 through 9 are used to specify most of the character keys. For example, for the German keyboard layout, the virtual key of value ASCII O (0x4F) refers to the "o" key, whereas VK_OEM_1 refers to the "o with umlaut" key.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getkeystate#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <returns>
+		/// <para>Type: <b>SHORT</b> The return value specifies the status of the specified virtual key, as follows: </para>
+		/// <para>This doc was truncated.</para>
+		/// </returns>
+		/// <remarks>
+		/// <para>The key status returned from this function changes as a thread reads key messages from its message queue. The status does not reflect the interrupt-level state associated with the hardware. Use the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-getasynckeystate">GetAsyncKeyState</a> function to retrieve that information. An application calls <b>GetKeyState</b> in response to a keyboard-input message. This function retrieves the state of the key when the input message was generated. To retrieve state information for all the virtual keys, use the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-getkeyboardstate">GetKeyboardState</a> function. An application can use the <a href="https://docs.microsoft.com/windows/desktop/inputdev/virtual-key-codes">virtual key code</a> constants <b>VK_SHIFT</b>, <b>VK_CONTROL</b>, and <b>VK_MENU</b> as values for the <i>nVirtKey</i> parameter. This gives the status of the SHIFT, CTRL, or ALT keys without distinguishing between left and right. An application can also use the following virtual-key code constants as values for <i>nVirtKey</i> to distinguish between the left and right instances of those keys: <b>VK_LSHIFT</b> <b>VK_RSHIFT</b> <b>VK_LCONTROL</b> <b>VK_RCONTROL</b> <b>VK_LMENU</b> <b>VK_RMENU</b> These left- and right-distinguishing constants are available to an application only through the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-getkeyboardstate">GetKeyboardState</a>, <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-setkeyboardstate">SetKeyboardState</a>, <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-getasynckeystate">GetAsyncKeyState</a>, <b>GetKeyState</b>, and <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-mapvirtualkeya">MapVirtualKey</a> functions.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getkeystate#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		[DllImport("USER32.dll", ExactSpelling = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+		public static extern short GetKeyState(int nVirtKey);
+
+		/// <summary>Sets the mouse capture to the specified window belonging to the current thread.</summary>
+		/// <param name="hWnd">
+		/// <para>Type: <b>HWND</b> A handle to the window in the current thread that is to capture the mouse.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setcapture#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <returns>
+		/// <para>Type: <b>HWND</b> The return value is a handle to the window that had previously captured the mouse. If there is no such window, the return value is <b>NULL</b>.</para>
+		/// </returns>
+		/// <remarks>
+		/// <para>Only the foreground window can capture the mouse. When a background window attempts to do so, the window receives messages only for mouse events that occur when the cursor hot spot is within the visible portion of the window. Also, even if the foreground window has captured the mouse, the user can still click another window, bringing it to the foreground. When the window no longer requires all mouse input, the thread that created the window should call the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-releasecapture">ReleaseCapture</a> function to release the mouse. This function cannot be used to capture mouse input meant for another process. When the mouse is captured, menu hotkeys and other keyboard accelerators do not work.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setcapture#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		[DllImport("USER32.dll", ExactSpelling = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+		public static extern winmdroot.Foundation.HWND SetCapture(winmdroot.Foundation.HWND hWnd);
+
+		/// <summary>Releases the mouse capture from a window in the current thread and restores normal mouse input processing.</summary>
+		/// <returns>
+		/// <para>Type: <b>BOOL</b> If the function succeeds, the return value is nonzero. If the function fails, the return value is zero. To get extended error information, call <a href="https://docs.microsoft.com/windows/desktop/api/errhandlingapi/nf-errhandlingapi-getlasterror">GetLastError</a>.</para>
+		/// </returns>
+		/// <remarks>An application calls this function after calling the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-setcapture">SetCapture</a> function.</remarks>
+		[DllImport("USER32.dll", ExactSpelling = true, SetLastError = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+		public static extern winmdroot.Foundation.BOOL ReleaseCapture();
 	}
 }

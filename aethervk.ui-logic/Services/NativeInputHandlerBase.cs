@@ -14,7 +14,7 @@ public enum TraceLevel
   Max
 }
 
-public abstract class NativeInputHandlerBase : INativeInputHandler
+public abstract class NativeInputHandlerBase : INativeInputHandlerSubscribable
 {
   protected readonly IntPtr _handle;
   protected readonly string _handleDescriptor;
@@ -28,6 +28,11 @@ public abstract class NativeInputHandlerBase : INativeInputHandler
   // public observables (only to logic assembly)
   internal IObservable<NativeInputEvent> RawInput => _rawInputSubject.ObserveOn(_schedulerProvider.Background);
   internal IObservable<ComposedKeystroke> ComposedKeystrokes { get; }
+
+  // INativeInputHandlerSubscribable implementation — subscribes to the internal Rx pipeline
+  // without exposing Rx or ComposedKeystroke to ui-app (both are internal to ui-logic).
+  IDisposable INativeInputHandlerSubscribable.SubscribeComposedKeystrokes(Action<ComposedKeystroke> onNext)
+    => ComposedKeystrokes.Subscribe(onNext);
 
   // private protected = only derived classes in the same assembly can use this
   private protected NativeInputHandlerBase(

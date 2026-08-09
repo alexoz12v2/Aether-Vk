@@ -1,41 +1,34 @@
+using System;
 using Avalonia.Controls;
 using Avalonia.Platform;
-using System;
-using AetherVk.Logic.Services;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace AetherVk.Controls;
 
+/// <summary>
+/// A <see cref="NativeControlHost"/> that hosts the Vulkan rendering surface.
+/// This class is intentionally thin: it creates the OS native window handle and
+/// delegates all handler lifecycle (input, Vulkan initialisation) to
+/// <see cref="Logic.ViewModels.VulkanViewportControlViewModel"/> via
+/// <see cref="Logic.ViewModels.VulkanViewportControlViewModel.InitializeHandle"/>.
+/// No service locator — all dependencies flow through the ViewModel's DI constructor.
+/// </summary>
 public class VulkanViewportControl : NativeControlHost
 {
-  private INativeInputHandler? _nativeInputHandler;
-
   protected override IPlatformHandle CreateNativeControlCore(IPlatformHandle parent)
   {
-    // Check: We don't want wayland (TODO fatal error message)
-    if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux) &&
-        parent.HandleDescriptor != "XID")
-      throw new NotSupportedException("We don't support wayland. How did it even get enabled?");
+    // X11 only — Wayland is not supported (no raw input hooks available)
+    if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+            System.Runtime.InteropServices.OSPlatform.Linux)
+        && parent.HandleDescriptor != "XID")
+      throw new NotSupportedException("Wayland is not supported. Launch with AVALONIA_SCREEN_SCALE_FACTORS or force X11.");
 
     var handle = base.CreateNativeControlCore(parent);
 
-    bool success = false;
-    if (handle != null && handle.Handle != IntPtr.Zero)
+    if (handle != null && handle.Handle != IntPtr.Zero
+        && DataContext is Logic.ViewModels.VulkanViewportControlViewModel vm)
     {
-      var factory = App.Host?.Services.GetRequiredService<INativeInputHandlerFactory>();
-      if (factory != null)
-      {
-        _nativeInputHandler = factory.Create(handle.Handle, handle.HandleDescriptor ?? "window", TraceLevel.Max);
-        success = true;
-      }
-    }
-
-    if (!success)
-    {
-      if (DataContext is Logic.ViewModels.VulkanViewportControlViewModel vm)
-      {
-        vm.ReportFatalError("Failed to initialize OS Window Handle or resolve INativeInputHandlerFactory.");
-      }
+      if (!vm.InitializeHandle(handle.Handle, handle.HandleDescriptor ?? "window"))
+        vm.ReportFatalError("Failed to initialize native input handler.");
     }
 
     return handle!;
@@ -43,8 +36,8 @@ public class VulkanViewportControl : NativeControlHost
 
   protected override void DestroyNativeControlCore(IPlatformHandle control)
   {
-    _nativeInputHandler?.Dispose();
-    _nativeInputHandler = null;
+    // Handler and subscription lifecycle is owned by the ViewModel (IDisposable).
+    // Nothing to clean up here.
     base.DestroyNativeControlCore(control);
   }
 }
