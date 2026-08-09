@@ -17,7 +17,7 @@
             <Grid>
                 <!-- Placeholder solid background, to be replaced by Vulkan rendering -->
                 <Border Background="#1A1A1A" />
-                <controls:VulkanViewportControl x:Name="ViewportHost" />
+                <controls:VulkanViewportControl x:Name="ViewportHost" DataContext="{Binding VulkanViewModel}" />
             </Grid>
         </Border>
 
@@ -106,7 +106,7 @@
         <!-- Goniometer overlay: shown during billboard rotation -->
         <Canvas x:Name="GoniometerOverlay" IsHitTestVisible="False" IsVisible="False" />
 
-        <!-- ── Radial Menu Overlay (Alt+S hold) ─────────────────────────────── -->
+        <!-- ── Radial Menu Overlay (Alt+S hold) TODO REMOVE AND MAKE WINDOW FOR IT  ─────────────────────────────── -->
         <Canvas IsHitTestVisible="False" IsVisible="{Binding IsRadialMenuOpen}">
             <Canvas.Styles>
                 <Style Selector="Border.radial-item">

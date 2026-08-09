@@ -32,12 +32,17 @@ class Program
       catch (DllNotFoundException) { }
     }
 
+    bool skipNative = false;
+#if DEBUG
+    skipNative = Array.IndexOf(args, "--skip-native") >= 0;
+#endif
+
     // 1. Setup Microsoft Hosting
     var host = Host.CreateDefaultBuilder(args)
       .ConfigureServices(
         (context, services) =>
         {
-          services.AddCommonServices();
+          services.AddCommonServices(skipNative);
           services.AddViewModels();
         }
       )

@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading.Tasks;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
 using Avalonia;
@@ -60,7 +61,10 @@ public partial class App : Application
 
     if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
     {
+      bool skipNative = false;
 #if DEBUG
+      skipNative = desktop.Args?.Contains("--skip-native") == true;
+
       if (desktop.Args?.Contains("--force-fatal-error") == true)
       {
         desktop.MainWindow = new Views.FatalErrorWindow(
@@ -105,7 +109,7 @@ public partial class App : Application
       // Fallback check in case the user runs the app from the CLI without correct working directory
       string libPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, libName);
 
-      if (!System.IO.File.Exists(libPath) && !System.IO.File.Exists(libName))
+      if (!skipNative && !System.IO.File.Exists(libPath) && !System.IO.File.Exists(libName))
       {
         desktop.MainWindow = new Views.FatalErrorWindow(
           $"The required native library '{libName}' was not found in the executable directory.\n\nThe application cannot run without the core simulation engine."
@@ -183,3 +187,58 @@ public partial class App : Application
     base.OnFrameworkInitializationCompleted();
   }
 }
+
+#if DEBUG
+public class MockNativeRuntimeService : INativeRuntimeService
+{
+  public void Dispose() { GC.SuppressFinalize(this); }
+  public bool Startup() => true;
+  public void ShutdownSync() { }
+  public bool AddViewport(uint width, uint height, string name, out ulong presentationEngineId, out ulong cameraEntityId)
+  {
+    presentationEngineId = 1;
+    cameraEntityId = 2;
+    return true;
+  }
+  public void RemoveViewport(ulong presentationEngineId) { }
+  public void ResizeViewport(ulong presentationEngineId, uint width, uint height) { }
+  public Task<bool> DownloadImageAsync(ulong taskId, IntPtr bufferPtr, nuint bufferSize) => Task.FromResult(true);
+  public bool ResetSimulationSync() => true;
+  public bool PauseSimulationSync() => true;
+  public bool StartSimulation(int simSpeed) => true;
+  public bool ModifyComponent(ulong entityId, uint command, IntPtr inDto, IntPtr outComputedDto) => true;
+  public bool AddCameraAnimation(ulong cameraId, ref AnimationTargetDTO animation) => true;
+  public bool TransformStaticCamera(ulong cameraId, int mode, IntPtr buffer) => true;
+  public bool AddParticleSystem(ref ParticleSystemDTO particleSystem, out ulong outPsId)
+  {
+    outPsId = 3;
+    return true;
+  }
+  public bool ModifyParticleSystem(ulong psId, ref ParticleSystemDTO particleSystem, out ParticleSystemComputedDTO outPsComputedProps)
+  {
+    outPsComputedProps = new ParticleSystemComputedDTO();
+    return true;
+  }
+  public bool ReconfigureComet() => true;
+  public Task<ulong> LoadAlmanacFileAsync(string path) => Task.FromResult(4UL);
+  public bool UnloadAlmanacFile(string path) => true;
+  public void SetAssetPath(string path) { }
+  public Task<ulong> ImportModelAsync(string path) => Task.FromResult(5UL);
+  public void UnloadModel(ulong modelId) { }
+  public ulong AddScreenSpaceBillboard(string imagePath, float ndcX, float ndcY, float scale, float rotationDeg, float opacity, int zIndex, ulong viewportId) => 6;
+  public bool SetScreenSpaceBillboard(ulong entityId, float ndcX, float ndcY, float scale, float rotationDeg, float opacity, int zIndex) => true;
+  public bool RemoveScreenSpaceBillboard(ulong entityId) => true;
+  public bool GetScreenSpaceBillboard(ulong entityId, out FfiScreenSpaceBillboardDTO outData)
+  {
+    outData = new FfiScreenSpaceBillboardDTO();
+    return true;
+  }
+  public void RegisterPanicCallback(PanicCallbackDelegate cb) { }
+  public void SetLoggerCallback(LoggerCallbackDelegate cb) { }
+  public void SetBreadcrumbCallback(BreadcrumbCallbackDelegate cb) { }
+  public void SetSimulationCallback(SimulationCallbackDelegate cb) { }
+  public void SetExternalStateSimulationCallback(ExternalStateSimulationCallbackDelegate cb) { }
+  public void SetRenderCallback(RenderCallbackDelegate cb) { }
+  public void SetMainThreadDispatchCallback(MainThreadDispatchCallbackDelegate cb) { }
+}
+#endif

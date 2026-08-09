@@ -145,31 +145,14 @@ public unsafe class WindowsNativeInputHandler(IntPtr handle, string handleDescri
 
       // --- MOUSE MOVEMENT --
       case PInvoke.WM_MOUSEMOVE:
-        bool isDragging = false;
-        // wParam explicitly contains the state of the mouse buttons.
-        // If multiple buttons are held, we publish a drag for each, accurately matching macOS
-        // chorded dragging behaviour without needing to cache state
-        // (note: we purposefully don't use else if to capture all state, mimicking AppKit)
+        // Only publish motion when a button is held (drag). Hover-only motion
+        // is not consumed by any camera mode — consistent with Linux/macOS.
         if ((wParam.Value & MK_LBUTTON) != 0)
-        {
-          instance.PublishMouseEvent(GetX(lParam), GetY(lParam), MouseButton.Left, isDown: true, GetModifiers());
-          isDragging = true;
-        }
+          instance.PublishMouseEvent(GetX(lParam), GetY(lParam), MouseButton.Left,   isDown: true, GetModifiers());
         if ((wParam.Value & MK_RBUTTON) != 0)
-        {
-          instance.PublishMouseEvent(GetX(lParam), GetY(lParam), MouseButton.Right, isDown: true, GetModifiers());
-          isDragging = true;
-        }
+          instance.PublishMouseEvent(GetX(lParam), GetY(lParam), MouseButton.Right,  isDown: true, GetModifiers());
         if ((wParam.Value & MK_MBUTTON) != 0)
-        {
           instance.PublishMouseEvent(GetX(lParam), GetY(lParam), MouseButton.Middle, isDown: true, GetModifiers());
-          isDragging = true;
-        }
-
-        // normal move
-        if (!isDragging)
-          instance.PublishMouseEvent(GetX(lParam), GetY(lParam), MouseButton.None, isDown: false, GetModifiers());
-
         break;
 
       // --- MOUSE CLICKS --

@@ -53,18 +53,16 @@ public abstract class NativeInputHandlerBase : INativeInputHandlerSubscribable
       .Select(buffer => new ComposedKeystroke([.. buffer], DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
       .ObserveOn(_schedulerProvider.Background); // emit on the background thread
 
-    if (!_isHooked || handle != IntPtr.Zero)
+    // Hook only when we have a valid handle and haven't hooked yet
+    if (!_isHooked && handle != IntPtr.Zero)
     {
       _dispatcher.Dispatch(() =>
       {
         if (HookEvents())
-        {
           _isHooked = true;
-        }
-        // error handling? maybe send fatalerror message?
+        // TODO: send a fatal error message to the UI on failure
       });
     }
-    // error handling? maybe send fatalerror message?
   }
 
   #region Publishing_API

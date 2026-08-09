@@ -7,24 +7,16 @@ using AetherVk.Logic.Services;
 
 namespace AetherVk.Logic.ViewModels;
 
-public partial class VulkanViewportControlViewModel : ObservableObject, IDisposable
+public partial class VulkanViewportControlViewModel(IWindowInputRouter router, INativeInputHandlerFactory handlerFactory) : ObservableObject, IDisposable
 {
   // The context ID used when forwarding native composed keystrokes to the router.
   // Must match the string registered via ActionContext.Id in the Viewport3DView XAML.
   private const string ViewportContextId = "Viewport";
 
-  private readonly IWindowInputRouter _router;
-  private readonly INativeInputHandlerFactory _handlerFactory;
+  private readonly IWindowInputRouter _router = router;
+  private readonly INativeInputHandlerFactory _handlerFactory = handlerFactory;
   private INativeInputHandler? _handler;
   private IDisposable? _keystrokeSubscription;
-
-  public VulkanViewportControlViewModel(
-    IWindowInputRouter router,
-    INativeInputHandlerFactory handlerFactory)
-  {
-    _router = router;
-    _handlerFactory = handlerFactory;
-  }
 
   /// <summary>
   /// Called by <see cref="AetherVk.Controls.VulkanViewportControl.CreateNativeControlCore"/>
@@ -37,6 +29,10 @@ public partial class VulkanViewportControlViewModel : ObservableObject, IDisposa
   public bool InitializeHandle(IntPtr handle, string handleDescriptor)
   {
     if (handle == IntPtr.Zero) return false;
+
+#if DEBUG
+    Console.WriteLine($"Spawining Handle {handle:X} with handleDescriptor \"{handleDescriptor}\"");
+#endif
 
     _handler = _handlerFactory.Create(handle, handleDescriptor, TraceLevel.Max);
 

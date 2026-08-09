@@ -248,6 +248,7 @@ public partial class Viewport3DViewModel
     var item = HoveredRadialItem;
     CloseRadialMenu();
 
+    // TODO needs to be reworked here
     switch (item)
     {
       // TODO remove or change
@@ -350,8 +351,6 @@ public partial class Viewport3DViewModel
   public ulong CameraId { get; private set; }
 
   private static int _measurementCounter = 1;
-
-
 
   private readonly IUiThreadDispatcher _uiThreadDispatcher;
   private readonly BreadcrumbService _breadcrumbService;
@@ -467,15 +466,18 @@ public partial class Viewport3DViewModel
 
     // TODO position camera
     Console.WriteLine($"[SetupViewport] Applying default viewport camera position: pos=({HomePosX}, {HomePosY}, {HomePosZ})");
-    throw new NotImplementedException();
+    // throw new NotImplementedException();
   }
+
+  public VulkanViewportControlViewModel VulkanViewModel { get; }
 
   // TODO cleanup.
   public Viewport3DViewModel(
     INativeRuntimeService runtimeService,
     BreadcrumbService breadcrumbService,
     IUiThreadDispatcher uiThreadDispatcher,
-    IFileDialogService fileDialogService
+    IFileDialogService fileDialogService,
+    VulkanViewportControlViewModel vulkanViewportControlViewModel
   )
     : base("Viewport 3D")
   {
@@ -483,6 +485,7 @@ public partial class Viewport3DViewModel
     _breadcrumbService = breadcrumbService;
     _uiThreadDispatcher = uiThreadDispatcher;
     _fileDialogService = fileDialogService;
+    VulkanViewModel = vulkanViewportControlViewModel;
 
     OperatorStack = new OperatorStack(new ViewportBaseOperator(this));
     IsInitialized = true;
