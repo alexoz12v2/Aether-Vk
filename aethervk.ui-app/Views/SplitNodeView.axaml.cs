@@ -25,6 +25,32 @@ public class EnumToBoolConverter : Avalonia.Data.Converters.IValueConverter
   }
 }
 
+/// <summary>
+/// Converts a [0..1] double SplitRatio to a Star <see cref="GridLength"/> for the first pane.
+/// e.g. 0.7 → GridLength("0.7*")
+/// </summary>
+public class RatioToStarConverter : Avalonia.Data.Converters.IValueConverter
+{
+  public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    => value is double d ? new GridLength(d, GridUnitType.Star) : GridLength.Auto;
+
+  public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    => value is GridLength gl && gl.IsStar ? gl.Value : 0.5;
+}
+
+/// <summary>
+/// Converts a [0..1] double SplitRatio to a Star <see cref="GridLength"/> for the second pane (1 - ratio).
+/// e.g. 0.7 → GridLength("0.3*")
+/// </summary>
+public class InverseRatioToStarConverter : Avalonia.Data.Converters.IValueConverter
+{
+  public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    => value is double d ? new GridLength(1.0 - d, GridUnitType.Star) : GridLength.Auto;
+
+  public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    => value is GridLength gl && gl.IsStar ? 1.0 - gl.Value : 0.5;
+}
+
 public partial class SplitNodeView : UserControl
 {
   public SplitNodeView()

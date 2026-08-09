@@ -27,6 +27,11 @@ public class ViewLocator : IDataTemplate
     [typeof(Logic.ViewModels.DebugUiViewModel)] = () => new Views.DebugUiView(),
     [typeof(Logic.ViewModels.UITestPanelViewModel)] = () => new Views.UITestPanelView(),
 #endif
+    [typeof(Logic.ViewModels.SettingsTabViewModel)] = () => new Views.SettingsTabView(),
+    [typeof(Logic.ViewModels.ModelTabViewModel)] = () => new Views.ModelTabView(),
+    [typeof(Logic.ViewModels.CometTabViewModel)] = () => new Views.CometTabView(),
+    [typeof(Logic.ViewModels.TimelineTabViewModel)] = () => new Views.TimelineTabView(),
+    [typeof(Logic.ViewModels.ImportsTabViewModel)] = () => new Views.ImportsTabView(),
   };
 
   public Control? Build(object? data)

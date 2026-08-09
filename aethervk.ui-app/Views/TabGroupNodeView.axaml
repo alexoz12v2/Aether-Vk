@@ -88,7 +88,7 @@
                   <MenuFlyout ItemsSource="{Binding AvailableTabs}">
                     <!-- Here DataContext is TabDescriptor -->
                     <MenuFlyout.ItemContainerTheme>
-                      <ControlTheme TargetType="MenuItem">
+                      <ControlTheme TargetType="MenuItem" x:DataType="vm:TabDescriptor">
                         <Setter Property="Header" Value="{Binding Header}" />
                         <Setter Property="Command" Value="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).AddNewTabCommand}" />
                         <Setter Property="CommandParameter" Value="{Binding TabType}" />
@@ -108,7 +108,7 @@
                   <MenuFlyout ItemsSource="{Binding AvailableTabs}">
                     <!-- Here DataContext is TabDescriptor -->
                     <MenuFlyout.ItemContainerTheme>
-                      <ControlTheme TargetType="MenuItem">
+                      <ControlTheme TargetType="MenuItem" x:DataType="vm:TabDescriptor">
                         <Setter Property="Header" Value="{Binding Header}" />
                         <Setter Property="Command" Value="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).ChangeSelectedTabCommand}" />
                         <Setter Property="CommandParameter" Value="{Binding TabType}" />
@@ -140,7 +140,7 @@
             <MenuFlyout ItemsSource="{Binding AvailableTabs}">
               <!-- Here DataContext is TabDescriptor -->
               <MenuFlyout.ItemContainerTheme>
-                <ControlTheme TargetType="MenuItem">
+                <ControlTheme TargetType="MenuItem" x:DataType="vm:TabDescriptor">
                   <Setter Property="Header" Value="{Binding Header}" />
                   <Setter Property="Command" Value="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).AddNewTabCommand}" />
                   <Setter Property="CommandParameter" Value="{Binding TabType}" />

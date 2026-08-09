@@ -209,32 +209,61 @@ public partial class DockingManagerViewModel
     _rootNode = rootNode ?? CreateDefaultLayout();
   }
 
+  // admittedly, the fact that the starting layout is read from code in logic assembly sucks.
+  // TODO: file based configuration at the app layer (like input registry, which now is code based
+  // in App.axaml.cs)
   private LayoutNodeViewModelBase CreateDefaultLayout()
   {
+    // -- Tab creation  --
+    // center, most of space, 60% width centered, 80% height top
     var viewportTab = _tabFactory.CreateTab<Viewport3DViewModel>();
-    var viewportGroup = new TabGroupNodeViewModel(viewportTab!, _tabFactory);
+    var centerGroup = new TabGroupNodeViewModel(viewportTab!, _tabFactory);
 
-    // Vertical split: Outline on top, Properties on bottom
-    // var rightSplit = new SplitNodeViewModel(
-    //   outlineGroup,
-    //   propertiesGroup,
-    //   SplitOrientation.Vertical,
-    //   0.5
-    // );
-    // outlineGroup.Parent = rightSplit;
-    // propertiesGroup.Parent = rightSplit;
+    // left (27%)
+    var settingsTab = _tabFactory.CreateTab<SettingsTabViewModel>();
+    var cometTab = _tabFactory.CreateTab<CometTabViewModel>();
+    var modelTab = _tabFactory.CreateTab<ModelTabViewModel>();
 
-    // Horizontal split: Viewport on left, rightSplit on right
-    // var mainSplit = new SplitNodeViewModel(
-    //   viewportGroup,
-    //   rightSplit,
-    //   SplitOrientation.Horizontal,
-    //   0.7
-    // );
-    // viewportGroup.Parent = mainSplit;
-    // rightSplit.Parent = mainSplit;
+    var leftGroup = new TabGroupNodeViewModel(settingsTab!, _tabFactory);
+    leftGroup.Tabs.Add(cometTab!);
+    leftGroup.Tabs.Add(modelTab!);
 
-    return viewportGroup;
+    // right (13%) (17.8% when referring to viewport+imports = 73%)
+    var importsTab = _tabFactory.CreateTab<ImportsTabViewModel>();
+    var rightGroup = new TabGroupNodeViewModel(importsTab!, _tabFactory);
+
+    // bottom (20% height)
+    var timelineTab = _tabFactory.CreateTab<TimelineTabViewModel>();
+    var bottomGroup = new TabGroupNodeViewModel(timelineTab!, _tabFactory);
+
+    // viewport - imports horizontal split
+    var viewportAndImportsGroup = new SplitNodeViewModel(
+        centerGroup,
+        rightGroup,
+        SplitOrientation.Horizontal,
+        0.822);
+    centerGroup.Parent = viewportAndImportsGroup;
+    rightGroup.Parent = viewportAndImportsGroup;
+
+    // (...) - timeline vertical split
+    var allButSettingsGroup = new SplitNodeViewModel(
+        viewportAndImportsGroup,
+        bottomGroup,
+        SplitOrientation.Vertical,
+        0.80);
+    viewportAndImportsGroup.Parent = allButSettingsGroup;
+    bottomGroup.Parent = allButSettingsGroup;
+
+    // settings - (...) Horizontal split
+    var settingsSplit = new SplitNodeViewModel(
+        leftGroup,
+        allButSettingsGroup,
+        SplitOrientation.Horizontal,
+        0.27);
+    leftGroup.Parent = settingsSplit;
+    allButSettingsGroup.Parent = settingsSplit;
+
+    return settingsSplit;
   }
 
   // --- Track your Task safely from within the ViewModel ---

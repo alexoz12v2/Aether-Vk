@@ -218,7 +218,11 @@ public class GlobalInputRouter(InputRegistry registry) : IWindowInputRouter
   public void RouteNativeComposed(string contextId, InputChord chord, InputState state)
   {
     if (_attachedWindow == null) return;
-    FindAndDispatch(_attachedWindow, contextId, chord, state);
+    // FindAndDispatch walks the Avalonia visual tree (GetVisualChildren / GetVisualParent).
+    // Visual tree access is NOT thread-safe and must happen on the UI thread.
+    // The Rx Buffer timer fires this callback on a TP worker — dispatch back to UI thread.
+    Avalonia.Threading.Dispatcher.UIThread.Post(
+      () => FindAndDispatch(_attachedWindow, contextId, chord, state));
   }
 
   /// <summary>

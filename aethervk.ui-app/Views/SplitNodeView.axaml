@@ -13,27 +13,29 @@
     </Design.DataContext>
     <UserControl.Resources>
         <local:EnumToBoolConverter x:Key="EnumToBoolConverter" />
+        <local:RatioToStarConverter x:Key="RatioToStar" />
+        <local:InverseRatioToStarConverter x:Key="InverseRatioToStar" />
     </UserControl.Resources>
     <Grid>
+        <!-- Horizontal split: FirstChild | splitter | SecondChild -->
         <Grid IsVisible="{Binding Orientation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static vm:SplitOrientation.Horizontal}}">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="{Binding SplitRatio, Converter={StaticResource RatioToStar}}" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="{Binding SplitRatio, Converter={StaticResource InverseRatioToStar}}" />
             </Grid.ColumnDefinitions>
-            <!-- TODO: 2 way binding for splitRatio with converter -->
             <ContentControl Grid.Column="0" Content="{Binding FirstChild}" />
             <GridSplitter Grid.Column="1" Background="{DynamicResource Bg.Outline}" ResizeDirection="Columns" />
             <ContentControl Grid.Column="2" Content="{Binding SecondChild}" />
         </Grid>
 
+        <!-- Vertical split: FirstChild / splitter / SecondChild -->
         <Grid IsVisible="{Binding Orientation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static vm:SplitOrientation.Vertical}}">
             <Grid.RowDefinitions>
-                <RowDefinition Height="*" />
+                <RowDefinition Height="{Binding SplitRatio, Converter={StaticResource RatioToStar}}" />
                 <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
+                <RowDefinition Height="{Binding SplitRatio, Converter={StaticResource InverseRatioToStar}}" />
             </Grid.RowDefinitions>
-            <!-- TODO: 2 way binding for splitRatio with converter -->
             <ContentControl Grid.Row="0" Content="{Binding FirstChild}" />
             <GridSplitter Grid.Row="1" Background="{DynamicResource Bg.Outline}" ResizeDirection="Rows" />
             <ContentControl Grid.Row="2" Content="{Binding SecondChild}" />

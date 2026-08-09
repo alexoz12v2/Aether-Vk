@@ -284,6 +284,11 @@ public unsafe class MacNativeInputHandler(IntPtr handle, string handleDescriptor
   {
     if (!s_instances.TryGetValue(self, out var instance)) return;
 
+    // Hover-only motion (no button) is not consumed by any camera mode.
+    // mouseMoved: still fires (AppKit requires the override) but we don't publish.
+    // Consistent with Windows (WM_MOUSEMOVE without MK_* flags) and Linux (MotionNotify without state).
+    if (button == MouseButton.None) return;
+
     // Get window coordinates with nsEvent.locationInWindow
     PInvokeObjC.CGPoint windowPoint = PInvokeObjC.CGPoint_obj_msgSend(nsEvent, PInvokeObjC.GetSelector("locationInWindow"u8));
     // convert in view coordinates with [view convertPoint:windowPoint fromView:nil]
