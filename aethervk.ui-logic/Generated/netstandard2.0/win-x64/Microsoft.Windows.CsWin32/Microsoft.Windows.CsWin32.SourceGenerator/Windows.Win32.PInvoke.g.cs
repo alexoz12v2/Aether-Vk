@@ -27,5 +27,107 @@ namespace Windows.Win32
 		/// <para><see href="https://learn.microsoft.com/windows/win32/winmsg/wm-erasebkgnd#">Read more on learn.microsoft.com</see>.</para>
 		/// </remarks>
 		public const uint WM_ERASEBKGND = 20U;
+
+		/// <summary>Posted to the window with the keyboard focus when a nonsystem key is pressed. A nonsystem key is a key that is pressed when the ALT key is not pressed.</summary>
+		/// <returns>An application should return zero if it processes this message.</returns>
+		/// <remarks>
+		/// <para>If the F10 key is pressed, the [**DefWindowProc**](/windows/desktop/api/winuser/nf-winuser-defwindowproca) function sets an internal flag. When **DefWindowProc** receives the [**WM\_KEYUP**](wm-keyup.md) message, the function checks whether the internal flag is set and, if so, sends a [**WM\_SYSCOMMAND**](/windows/desktop/menurc/wm-syscommand) message to the top-level window. The **WM\_SYSCOMMAND** parameter of the message is set to SC\_KEYMENU. Because of the autorepeat feature, more than one **WM\_KEYDOWN** message may be posted before a [**WM\_KEYUP**](wm-keyup.md) message is posted. The previous key state (bit 30) can be used to determine whether the **WM\_KEYDOWN** message indicates the first down transition or a repeated down transition. For enhanced 101- and 102-key keyboards, extended keys are the right ALT and CTRL keys on the main section of the keyboard; the INS, DEL, HOME, END, PAGE UP, PAGE DOWN, and arrow keys in the clusters to the left of the numeric keypad; and the divide (/) and ENTER keys in the numeric keypad. Other keyboards may support the extended-key bit in the *lParam* parameter. Applications must pass *wParam* to [**TranslateMessage**](/windows/desktop/api/winuser/nf-winuser-translatemessage) without altering it at all.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/inputdev/wm-keydown#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		public const uint WM_KEYDOWN = 256U;
+
+		/// <summary>Posted to the window with the keyboard focus when the user presses the F10 key (which activates the menu bar) or holds down the ALT key and then presses another key.</summary>
+		/// <returns>An application should return zero if it processes this message.</returns>
+		/// <remarks>
+		/// <para>The [**DefWindowProc**](/windows/desktop/api/winuser/nf-winuser-defwindowproca) function examines the specified key and generates a [**WM\_SYSCOMMAND**](/windows/desktop/menurc/wm-syscommand) message if the key is either TAB or ENTER. When the context code is zero, the message can be passed to the [**TranslateAccelerator**](/windows/desktop/api/winuser/nf-winuser-translateacceleratora) function, which will handle it as though it were a normal key message instead of a character-key message. This allows accelerator keys to be used with the active window even if the active window does not have the keyboard focus. Because of automatic repeat, more than one **WM\_SYSKEYDOWN** message may occur before a [**WM\_SYSKEYUP**](wm-syskeyup.md) message is sent. The previous key state (bit 30) can be used to determine whether the **WM\_SYSKEYDOWN** message indicates the first down transition or a repeated down transition. For enhanced 101- and 102-key keyboards, enhanced keys are the right ALT and CTRL keys on the main section of the keyboard; the INS, DEL, HOME, END, PAGE UP, PAGE DOWN, and arrow keys in the clusters to the left of the numeric keypad; and the divide (/) and ENTER keys in the numeric keypad. Other keyboards may support the extended-key bit in the *lParam* parameter. This message is also sent whenever the user presses the F10 key without the ALT key.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/inputdev/wm-syskeydown#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		public const uint WM_SYSKEYDOWN = 260U;
+
+		/// <summary>Posted to the window with the keyboard focus when a nonsystem key is released. A nonsystem key is a key that is pressed when the ALT key is not pressed, or a keyboard key that is pressed when a window has the keyboard focus.</summary>
+		/// <returns>An application should return zero if it processes this message.</returns>
+		/// <remarks>
+		/// <para>The [**DefWindowProc**](/windows/desktop/api/winuser/nf-winuser-defwindowproca) function sends a [**WM\_SYSCOMMAND**](/windows/desktop/menurc/wm-syscommand) message to the top-level window if the F10 key or the ALT key was released. The *wParam* parameter of the message is set to SC\_KEYMENU. For enhanced 101- and 102-key keyboards, extended keys are the right ALT and CTRL keys on the main section of the keyboard; the INS, DEL, HOME, END, PAGE UP, PAGE DOWN, and arrow keys in the clusters to the left of the numeric keypad; and the divide (/) and ENTER keys in the numeric keypad. Other keyboards may support the extended-key bit in the *lParam* parameter. Applications must pass *wParam* to [**TranslateMessage**](/windows/desktop/api/winuser/nf-winuser-translatemessage) without altering it at all.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/inputdev/wm-keyup#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		public const uint WM_KEYUP = 257U;
+
+		/// <summary>Posted to the window with the keyboard focus when the user releases a key that was pressed while the ALT key was held down.</summary>
+		/// <returns>An application should return zero if it processes this message.</returns>
+		/// <remarks>
+		/// <para>The [**DefWindowProc**](/windows/desktop/api/winuser/nf-winuser-defwindowproca) function sends a [**WM\_SYSCOMMAND**](/windows/desktop/menurc/wm-syscommand) message to the top-level window if the F10 key or the ALT key was released. The *wParam* parameter of the message is set to **SC\_KEYMENU**. When the context code is zero, the message can be passed to the [**TranslateAccelerator**](/windows/desktop/api/winuser/nf-winuser-translateacceleratora) function, which will handle it as though it were a normal key message instead of a character-key message. This allows accelerator keys to be used with the active window even if the active window does not have the keyboard focus. For enhanced 101- and 102-key keyboards, extended keys are the right ALT and CTRL keys on the main section of the keyboard; the INS, DEL, HOME, END, PAGE UP, PAGE DOWN, and arrow keys in the clusters to the left of the numeric keypad; and the divide (/) and ENTER keys in the numeric keypad. Other keyboards may support the extended-key bit in the *lParam* parameter. For non-U.S. enhanced 102-key keyboards, the right ALT key is handled as a CTRL+ALT key. The following table shows the sequence of messages that result when the user presses and releases this key.</para>
+		/// <para>| Message                           | Virtual-key code | |-----------------------------------|------------------| | [**WM\_KEYDOWN**](wm-keydown.md) | **VK\_CONTROL**  | | [**WM\_KEYDOWN**](wm-keydown.md) | **VK\_MENU**     | | [**WM\_KEYUP**](wm-keyup.md)     | **VK\_CONTROL**  | | **WM\_SYSKEYUP**                  | **VK\_MENU**     |</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/inputdev/wm-syskeyup#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		public const uint WM_SYSKEYUP = 261U;
+
+		/// <summary>Posted to a window when the cursor moves. If the mouse is not captured, the message is posted to the window that contains the cursor. Otherwise, the message is posted to the window that has captured the mouse.</summary>
+		/// <returns>If an application processes this message, it should return zero.</returns>
+		/// <remarks>
+		/// <para>Use the following code to obtain the horizontal and vertical position:</para>
+		/// <para></para>
+		/// <para>This doc was truncated.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/inputdev/wm-mousemove#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		public const uint WM_MOUSEMOVE = 512U;
+
+		/// <summary>Posted when the user presses the left mouse button while the cursor is in the client area of a window.</summary>
+		/// <returns>If an application processes this message, it should return zero.</returns>
+		/// <remarks>
+		/// <para>As noted above, the x-coordinate is in the low-order **short** of the return value; the y-coordinate is in the high-order **short** (both represent *signed* values because they can take negative values on systems with multiple monitors). If the return value is assigned to a variable, you can use the [**MAKEPOINTS**](/windows/desktop/api/wingdi/nf-wingdi-makepoints) macro to obtain a [**POINTS**](/windows/win32/api/windef/ns-windef-points) structure from the return value. You can also use the [**GET\_X\_LPARAM**](/windows/desktop/api/windowsx/nf-windowsx-get_x_lparam) or [**GET\_Y\_LPARAM**](/windows/desktop/api/windowsx/nf-windowsx-get_y_lparam) macro to extract the x- or y-coordinate. > [!IMPORTANT] > Do not use the [**LOWORD**](/previous-versions/windows/desktop/legacy/ms632659(v=vs.85)) or [**HIWORD**](/previous-versions/windows/desktop/legacy/ms632657(v=vs.85)) macros to extract the x- and y- coordinates of the cursor position because these macros return incorrect results on systems with multiple monitors. Systems with multiple monitors can have negative x- and y- coordinates, and **LOWORD** and **HIWORD** treat the coordinates as unsigned quantities.</para>
+		/// <para>To detect that the ALT key was pressed, check whether [**GetKeyState**](/windows/win32/api/winuser/nf-winuser-getkeystate) with **VK\_MENU** < 0. Note, this must not be [**GetAsyncKeyState**](/windows/win32/api/winuser/nf-winuser-getasynckeystate).</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/inputdev/wm-lbuttondown#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		public const uint WM_LBUTTONDOWN = 513U;
+
+		/// <summary>Posted when the user releases the left mouse button while the cursor is in the client area of a window.</summary>
+		/// <returns>If an application processes this message, it should return zero.</returns>
+		/// <remarks>
+		/// <para>Use the following code to obtain the horizontal and vertical position:</para>
+		/// <para></para>
+		/// <para>This doc was truncated.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/inputdev/wm-lbuttonup#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		public const uint WM_LBUTTONUP = 514U;
+
+		/// <summary>Posted when the user presses the right mouse button while the cursor is in the client area of a window.</summary>
+		/// <returns>If an application processes this message, it should return zero.</returns>
+		/// <remarks>
+		/// <para>Use the following code to obtain the horizontal and vertical position:</para>
+		/// <para></para>
+		/// <para>This doc was truncated.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/inputdev/wm-rbuttondown#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		public const uint WM_RBUTTONDOWN = 516U;
+
+		/// <summary>Posted when the user releases the right mouse button while the cursor is in the client area of a window.</summary>
+		/// <returns>If an application processes this message, it should return zero.</returns>
+		/// <remarks>
+		/// <para>Use the following code to obtain the horizontal and vertical position:</para>
+		/// <para></para>
+		/// <para>This doc was truncated.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/inputdev/wm-rbuttonup#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		public const uint WM_RBUTTONUP = 517U;
+
+		/// <summary>Posted when the user presses the middle mouse button while the cursor is in the client area of a window.</summary>
+		/// <returns>If an application processes this message, it should return zero.</returns>
+		/// <remarks>
+		/// <para>Use the following code to obtain the horizontal and vertical position:</para>
+		/// <para></para>
+		/// <para>This doc was truncated.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/inputdev/wm-mbuttondown#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		public const uint WM_MBUTTONDOWN = 519U;
+
+		/// <summary>Posted when the user releases the middle mouse button while the cursor is in the client area of a window.</summary>
+		/// <returns>If an application processes this message, it should return zero.</returns>
+		/// <remarks>
+		/// <para>Use the following code to obtain the horizontal and vertical position:</para>
+		/// <para></para>
+		/// <para>This doc was truncated.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/inputdev/wm-mbuttonup#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		public const uint WM_MBUTTONUP = 520U;
 	}
 }

@@ -142,10 +142,20 @@ public unsafe class LinuxNativeInputHandler(IntPtr handle, string handleDescript
     {
       // --- Keyboard ---
       case XEventName.KeyPress:
-        PublishKeyEvent(ev.xkey.keycode, isDown: true, GetModifiers(ev.xkey.state));
+        // index 0 ignores Shift state, so 'Shift + A' still reports the base 'a' key, like Win32
+        nint keysymDown = 0;
+        fixed (PInvokeX11.XKeyEvent* pEv = &ev.xkey)
+          keysymDown = PInvokeX11.XLookupKeySym(pEv, 0);
+
+        PublishKeyEvent(NormalizeX11KeySym(keysymDown), isDown: true, GetModifiers(ev.xkey.state));
         break;
       case XEventName.KeyRelease:
-        PublishKeyEvent(ev.xkey.keycode, isDown: false, GetModifiers(ev.xkey.state));
+        // index 0 ignores Shift state, so 'Shift + A' still reports the base 'a' key, like Win32
+        nint keysymUp = 0;
+        fixed (PInvokeX11.XKeyEvent* pEv = &ev.xkey)
+          keysymUp = PInvokeX11.XLookupKeySym(pEv, 0);
+
+        PublishKeyEvent(NormalizeX11KeySym(keysymUp), isDown: false, GetModifiers(ev.xkey.state));
         break;
 
       // --- Mouse Movement ---
@@ -203,6 +213,34 @@ public unsafe class LinuxNativeInputHandler(IntPtr handle, string handleDescript
     if (state.HasFlag(XKeyMask.Mod1Mask)) flags |= NativeModifierFlags.Alt; // usually alt on linux?
     if (state.HasFlag(XKeyMask.Mod4Mask)) flags |= NativeModifierFlags.Super; // usually win on linux?
     return flags;
+  }
+
+  /// <summary>
+  /// Normalizes X11 KeySyms into the unified Win32-style virtual key standard.
+  /// </summary>
+  private static uint NormalizeX11KeySym(nint keysym)
+  {
+    // 1. Letters: If it's a lowercase letter (0x61 'a' to 0x7A 'z'),
+    // convert it to uppercase (0x41 'A' to 0x5A 'Z')
+    if (keysym >= 0x61 && keysym <= 0x7A)
+    {
+      return (uint)(keysym - 0x20);
+    }
+
+    // 2. Control Keys: X11 prefixes control keys with 0xFF00.
+    // E.g., XK_Escape is 0xFF1B. XK_Return is 0xFF0D.
+    // We bitwise AND with 0x00FF to strip the prefix and perfectly match the Windows equivalents.
+    if ((keysym & 0xFF00) == 0xFF00)
+    {
+      uint masked = (uint)(keysym & 0x00FF);
+
+      // Only apply to Return and Escape, pass other control keys through unmodified
+      if (masked == 0x0D || masked == 0x1B)
+        return masked;
+    }
+
+    // Space (XK_Space) is 0x0020, which matches exactly without modification
+    return (uint)keysym;
   }
 }
 
@@ -262,6 +300,11 @@ public unsafe static class PInvokeX11
 
   [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   internal static extern int XClearWindow(nint display, nint window);
+
+  // maps hardware evdev key into a standardized KeySym. We need to invoke this and then handle
+  // lowercase (converts to ASCII, but we want raw logical key), and extract control keys
+  [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern nint XLookupKeySym(XKeyEvent* key_event, int index);
 
   // --- Structs (AOT Safe Zero-Marshaling) ---
 
@@ -445,3 +488,4 @@ internal enum XKeyMask : uint
   Mod4Mask = 1 << 6,
   Mod5Mask = 1 << 7
 }
+

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using AetherVk.Logic.Messages;
@@ -8,6 +9,11 @@ using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
+
+/// <summary>
+/// Used in <see cref="ITabFactory" />
+/// </summary>
+public record TabDescriptor(string Header, Type TabType);
 
 public enum SplitOrientation
 {
@@ -79,6 +85,8 @@ public partial class TabGroupNodeViewModel
 
   private readonly ITabFactory _tabFactory;
 
+  public IReadOnlyList<TabDescriptor> AvailableTabs => _tabFactory.AvailableTabs;
+
   public TabGroupNodeViewModel(
     TabItemViewModel defaultTab,
     ITabFactory tabFactory,
@@ -129,7 +137,7 @@ public partial class TabGroupNodeViewModel
   }
 
   [RelayCommand]
-  private void ChangeSelectedTab(string tabType)
+  private void ChangeSelectedTab(Type tabType)
   {
     if (SelectedTab == null)
       return;
@@ -147,7 +155,7 @@ public partial class TabGroupNodeViewModel
   }
 
   [RelayCommand]
-  private void AddNewTab(string tabType = "UITestPanel")
+  private void AddNewTab(Type tabType)
   {
     var newTab = _tabFactory.CreateTab(tabType) as TabItemViewModel;
     if (newTab != null && !Tabs.Contains(newTab))
@@ -203,40 +211,30 @@ public partial class DockingManagerViewModel
 
   private LayoutNodeViewModelBase CreateDefaultLayout()
   {
-    var viewportTab = _tabFactory.CreateTab("Viewport3D") as TabItemViewModel;
+    var viewportTab = _tabFactory.CreateTab<Viewport3DViewModel>();
     var viewportGroup = new TabGroupNodeViewModel(viewportTab!, _tabFactory);
 
-    var outlineTab = _tabFactory.CreateTab("Outline") as TabItemViewModel;
-    var outlineGroup = new TabGroupNodeViewModel(outlineTab!, _tabFactory);
-
-    var assetBrowserTab = _tabFactory.CreateTab("AssetBrowser") as TabItemViewModel;
-    if (assetBrowserTab != null)
-      outlineGroup.Tabs.Add(assetBrowserTab);
-
-    var propertiesTab = _tabFactory.CreateTab("Properties") as TabItemViewModel;
-    var propertiesGroup = new TabGroupNodeViewModel(propertiesTab!, _tabFactory);
-
     // Vertical split: Outline on top, Properties on bottom
-    var rightSplit = new SplitNodeViewModel(
-      outlineGroup,
-      propertiesGroup,
-      SplitOrientation.Vertical,
-      0.5
-    );
-    outlineGroup.Parent = rightSplit;
-    propertiesGroup.Parent = rightSplit;
+    // var rightSplit = new SplitNodeViewModel(
+    //   outlineGroup,
+    //   propertiesGroup,
+    //   SplitOrientation.Vertical,
+    //   0.5
+    // );
+    // outlineGroup.Parent = rightSplit;
+    // propertiesGroup.Parent = rightSplit;
 
     // Horizontal split: Viewport on left, rightSplit on right
-    var mainSplit = new SplitNodeViewModel(
-      viewportGroup,
-      rightSplit,
-      SplitOrientation.Horizontal,
-      0.7
-    );
-    viewportGroup.Parent = mainSplit;
-    rightSplit.Parent = mainSplit;
+    // var mainSplit = new SplitNodeViewModel(
+    //   viewportGroup,
+    //   rightSplit,
+    //   SplitOrientation.Horizontal,
+    //   0.7
+    // );
+    // viewportGroup.Parent = mainSplit;
+    // rightSplit.Parent = mainSplit;
 
-    return mainSplit;
+    return viewportGroup;
   }
 
   // --- Track your Task safely from within the ViewModel ---

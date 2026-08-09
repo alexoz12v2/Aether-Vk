@@ -82,10 +82,10 @@ public class GlobalInputRouter(InputRegistry registry) : IWindowInputRouter
   {
     if (_attachedWindow != null)
     {
-      _attachedWindow.AddHandler(InputElement.KeyDownEvent, OnKeyDown);
-      _attachedWindow.AddHandler(InputElement.KeyUpEvent, OnKeyUp);
-      _attachedWindow.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed);
-      _attachedWindow.AddHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
+      _attachedWindow.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown);
+      _attachedWindow.RemoveHandler(InputElement.KeyUpEvent, OnKeyUp);
+      _attachedWindow.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
+      _attachedWindow.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
     }
     _pressedVisuals.Clear();
     _attachedWindow = null;
@@ -213,6 +213,34 @@ public class GlobalInputRouter(InputRegistry registry) : IWindowInputRouter
       current = current.GetVisualParent() ?? (current as ILogical)?.LogicalParent as Visual;
     }
     return (null, null);
+  }
+
+  public void RouteNativeComposed(string contextId, InputChord chord, InputState state)
+  {
+    if (_attachedWindow == null) return;
+    FindAndDispatch(_attachedWindow, contextId, chord, state);
+  }
+
+  /// <summary>
+  /// Depth-first walk of the visual tree to find the first <see cref="Control"/> tagged
+  /// with <paramref name="contextId"/> via <see cref="ActionContext"/> and dispatch to it.
+  /// Stops at the first match to avoid duplicate dispatches.
+  /// </summary>
+  private void FindAndDispatch(Visual root, string contextId, InputChord chord, InputState state)
+  {
+    if (root is Control c)
+    {
+      var id = ActionContext.GetId(c);
+      var handler = ActionContext.GetHandler(c);
+      if (id == contextId && handler != null)
+      {
+        if (_registry.Resolve(contextId, chord) is { } action)
+          handler.Process(action, state);
+        return; // found — stop walking
+      }
+    }
+    foreach (var child in root.GetVisualChildren())
+      FindAndDispatch(child, contextId, chord, state);
   }
 
   private InputModifiers GetModifiers(KeyModifiers avaloniaModifiers)

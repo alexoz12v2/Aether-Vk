@@ -1,4 +1,5 @@
 using System;
+using AetherVk.Input;
 using AetherVk.Logic.Input;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
@@ -25,6 +26,7 @@ public static class ServiceCollectionExtensions
     // TODO do it
     // collection.AddSingleton<INativeRuntimeService, NativeRuntimeService>();
     collection.AddSingleton<INativeInputHandlerFactory, NativeInputHandlerFactory>();
+    collection.AddSingleton<IWindowInputRouter, GlobalInputRouter>();
     collection.AddSingleton<InputRegistry>();
   }
 
@@ -41,22 +43,5 @@ public static class ServiceCollectionExtensions
     collection.AddTransient<DebugUiViewModel>();
     collection.AddTransient<Viewport3DViewModel>();
     collection.AddTransient<VulkanViewportControlViewModel>();
-
-    // Tab Factories
-    collection.AddSingleton<Func<UITestPanelViewModel>>(sp =>
-      () => sp.GetRequiredService<UITestPanelViewModel>()
-    );
-    collection.AddSingleton<Func<ConsoleViewModel>>(sp =>
-      () => sp.GetRequiredService<ConsoleViewModel>()
-    );
-    collection.AddSingleton<Func<DebugUiViewModel>>(sp =>
-      () => sp.GetRequiredService<DebugUiViewModel>()
-    );
-    collection.AddSingleton<Func<Viewport3DViewModel>>(sp =>
-      () => sp.GetRequiredService<Viewport3DViewModel>()
-    );
-    collection.AddSingleton<Func<VulkanViewportControlViewModel>>(sp =>
-      () => sp.GetRequiredService<VulkanViewportControlViewModel>()
-    );
   }
 }

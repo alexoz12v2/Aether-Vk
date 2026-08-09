@@ -1,32 +1,40 @@
 using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
+using Microsoft.Extensions.DependencyInjection;
 
-namespace AetherVk.Services
+namespace AetherVk.Services;
+
+public class TabFactory(IServiceProvider serviceProvider) : ITabFactory
 {
-  public class TabFactory(
-      Func<UITestPanelViewModel> createUITestPanel,
-      Func<ConsoleViewModel> createConsole,
-      Func<DebugUiViewModel> createDebugUi,
-      Func<Viewport3DViewModel> createViewport
-    ) : ITabFactory
-  {
-    private readonly Func<UITestPanelViewModel> _createUITestPanel = createUITestPanel;
-    private readonly Func<ConsoleViewModel> _createConsole = createConsole;
-    private readonly Func<DebugUiViewModel> _createDebugUi = createDebugUi;
-    private readonly Func<Viewport3DViewModel> _createViewport = createViewport;
+  private readonly IServiceProvider _serviceProvider = serviceProvider;
 
-    public object CreateTab(string tabType)
+  private static readonly Dictionary<Type, (string Header, Func<IServiceProvider, object> Factory)> _registry = new()
+  {
+    [typeof(UITestPanelViewModel)] = ("UI Test Panel", sp => sp.GetRequiredService<UITestPanelViewModel>()),
+    [typeof(ConsoleViewModel)] = ("Console", sp => sp.GetRequiredService<ConsoleViewModel>()),
+    [typeof(DebugUiViewModel)] = ("Debug UI", sp => sp.GetRequiredService<DebugUiViewModel>()),
+    [typeof(Viewport3DViewModel)] = ("Viewport 3D", sp => sp.GetRequiredService<Viewport3DViewModel>())
+    // Add other view models here when they are properly implemented
+  };
+
+  public object? CreateTab(Type tabType)
+  {
+    if (_registry.TryGetValue(tabType, out var value))
     {
-      // TODO enum string
-      return tabType switch
-      {
-        "UITestPanel" => _createUITestPanel(),
-        "Console" => _createConsole(),
-        "DebugUi" => _createDebugUi(),
-        "Viewport3D" => _createViewport(),
-        _ => throw new ArgumentException($"Unknown tab type: {tabType}"),
-      };
+      return value.Factory(_serviceProvider);
     }
+    return null;
   }
+
+  public T? CreateTab<T>() where T : class
+  {
+    return CreateTab(typeof(T)) as T;
+  }
+
+  public IReadOnlyList<TabDescriptor> AvailableTabs { get; } = [.. _registry.Select(kv => new TabDescriptor(kv.Value.Header, kv.Key))];
 }
+

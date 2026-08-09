@@ -19,18 +19,18 @@ public class DockingManagerViewModelTests : IDisposable
   {
     _mockFactory = new Mock<ITabFactory>();
     _mockAudioService = new Mock<IAudio2DService>();
-    _mockFactory.Setup(f => f.CreateTab("UITestPanel")).Returns(new UITestPanelViewModel());
+    _mockFactory.Setup(f => f.CreateTab(typeof(UITestPanelViewModel))).Returns(new UITestPanelViewModel());
     _mockFactory
-      .Setup(f => f.CreateTab("Console"))
+      .Setup(f => f.CreateTab(typeof(ConsoleViewModel)))
       .Returns(
         new ConsoleViewModel(
           new ConsoleService(new Mock<IUiThreadDispatcher>().Object),
           new Mock<IFileDialogService>().Object
         )
       );
-    _mockFactory.Setup(f => f.CreateTab("Viewport3D")).Returns(new DebugUiViewModel());
-    _mockFactory.Setup(f => f.CreateTab("Outline")).Returns(new DebugUiViewModel());
-    _mockFactory.Setup(f => f.CreateTab("Properties")).Returns(new DebugUiViewModel());
+    _mockFactory.Setup(f => f.CreateTab(typeof(Viewport3DViewModel))).Returns(new DebugUiViewModel());
+    _mockFactory.Setup(f => f.CreateTab(typeof(Logic.ViewModels.References.OutlineViewModel))).Returns(new DebugUiViewModel());
+    _mockFactory.Setup(f => f.CreateTab(typeof(Logic.ViewModels.References.PropertiesViewModel))).Returns(new DebugUiViewModel());
   }
 
   public void Dispose() { }
@@ -56,7 +56,7 @@ public class DockingManagerViewModelTests : IDisposable
     var vm = new DockingManagerViewModel(_mockFactory.Object, _mockAudioService.Object, rootGroup);
     var initialTabCount = rootGroup.Tabs.Count;
 
-    rootGroup.AddNewTabCommand.Execute("UITestPanel");
+    rootGroup.AddNewTabCommand.Execute(typeof(UITestPanelViewModel));
 
     Assert.Equal(initialTabCount + 1, rootGroup.Tabs.Count);
     Assert.IsType<UITestPanelViewModel>(rootGroup.SelectedTab);
@@ -70,7 +70,7 @@ public class DockingManagerViewModelTests : IDisposable
     var vm = new DockingManagerViewModel(_mockFactory.Object, _mockAudioService.Object, rootGroup);
     var initialTabCount = rootGroup.Tabs.Count;
 
-    rootGroup.AddNewTabCommand.Execute("Console");
+    rootGroup.AddNewTabCommand.Execute(typeof(ConsoleViewModel));
 
     Assert.Equal(initialTabCount + 1, rootGroup.Tabs.Count);
     Assert.IsType<ConsoleViewModel>(rootGroup.SelectedTab);
