@@ -34,4 +34,33 @@ InvalidateRect
 
 // Constants
 GWLP_WNDPROC
+
+// Messages Constants
 WM_ERASEBKGND
+WM_KEYDOWN
+WM_SYSKEYDOWN
+WM_KEYUP
+WM_SYSKEYUP
+WM_MOUSEMOVE
+WM_LBUTTONDOWN
+WM_LBUTTONUP
+WM_RBUTTONDOWN
+WM_RBUTTONUP
+WM_MBUTTONDOWN
+WM_MBUTTONUP
+
+// Keyboard
+GetKeyState
+
+// Keyboard Constants
+VK_SHIFT
+VK_CONTROL
+VK_MENU
+VK_LWIN
+VK_RWIN
+
+// Mouse Capturing: Cursor movement message is emitted only if a mouse moves within the window itself. If movement goes outside the window,
+// the window stops receivim messages. That means that the window needs to capture the mouse. Furthermore, if we want to replicate a "dragging"
+// functionality, wParam stores the window button being pressed
+SetCapture
+ReleaseCapture

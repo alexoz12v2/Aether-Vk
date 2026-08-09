@@ -1,8 +1,10 @@
 using System;
+#if TARGET_IS_OSX
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using AetherVk.Logic.Services.NativeInput;
+#endif
 
 namespace AetherVk.Logic.Services;
 

@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using AetherVk.Utils;
 using Avalonia;
 using Avalonia.ReactiveUI;
@@ -14,6 +15,23 @@ class Program
   [STAThread]
   public static void Main(string[] args)
   {
+    // Initialize X11 threading, necessary for multithreaded Xlib usage (we don't know whether
+    // Avalonia does it, and even so, we don't want to rely on it)
+    // Since we are on Avalonia 11 (and in the latest version at the time of writing, which is
+    // 12.1), We don't have Wayland support with a IPlatformHandle, so we can safely assume for now
+    // that we are on X11
+    //
+    // AvaloniaX11Platform actually does this, but we prefer doing it regardless
+    // Furthermore, X11 docs says that you should call this before creating any other threads
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+    {
+      try
+      {
+        _ = Logic.Services.PInvokeX11.XInitThreads();
+      }
+      catch (DllNotFoundException) { }
+    }
+
     // 1. Setup Microsoft Hosting
     var host = Host.CreateDefaultBuilder(args)
       .ConfigureServices(
