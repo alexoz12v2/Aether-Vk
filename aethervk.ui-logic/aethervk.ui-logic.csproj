@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <!-- TODO add net10 as another target, and therefore add the optimizations for it and LibraryImport -->
     <TargetFramework>netstandard2.0</TargetFramework>
     <!-- at least 14 for extension blocks, at least 9 for delegate* unmanaged (AOT compatible) -->
     <LangVersion>14</LangVersion>
@@ -15,6 +16,28 @@
     <SkipNativeBuild>true</SkipNativeBuild>
 
     <!-- https://learn.microsoft.com/en-us/dotnet/standard/native-interop/disabled-marshalling -->
+    <!--
+      <DisableRuntimeMarshalling>true was introduced in .NET 7.
+      If you put this in an MSBuild file for a .NET Standard 2.0 project, the compiler is almost certainly ignoring it.
+      The underlying attribute it generates ([assembly: DisableRuntimeMarshalling]) does not exist in the .NET Standard 2.0 API surface,
+      and older runtimes (like .NET Framework 4.8) do not understand it.
+      (Note: If you are using a modern .NET 7+ SDK to build the project, it might polyfill the attribute,
+      but the runtime behavior is only guaranteed if the consuming application is actually running on .NET 7 or newer).
+
+      avalonia doesn't support disabling runtime marshalling, but the runtime (7 or higher) is smart enough to apply this per assembly.
+
+      Since Avalonia is being JIT-Compiled, even if this assembly is AOT-configured, .NET CoreCLR (JIT-Compiler) will still be used
+
+      In short
+      - AOT Is all or nothing -> the executable and all referenced assemblies (the whole dependency graph) needs to be AOT-Compatible.
+      - Marshalling is per assembly -> [assembly: DisableRuntimeMarshalling] dictates how runtime behaves when encountering [DllImport]
+
+      Note: While avalonia doesn't support disabling Marshalling, it seems that, under constraints, by using .NET 7 Source-Generated Interop,
+        hence we would need to add a TargetFramework here, we can achieve AOT in the whole application
+      reference: https://docs.avaloniaui.net/docs/deployment/native-aot
+
+      TODO: Goal for later
+    -->
     <DisableRuntimeMarshalling>true</DisableRuntimeMarshalling>
   </PropertyGroup>
 
