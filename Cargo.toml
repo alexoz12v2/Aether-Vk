@@ -2,7 +2,7 @@
 members = [
     "aethervk.core/cdylib",
     "aethervk.core/rlib",
-    "aethervk.oshal/rlib",
+    "aethervk.oshal/rlib", "aethervk.utils/tpc2pca",
 ]
 default-members = [
     "aethervk.core/cdylib",

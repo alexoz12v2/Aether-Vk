@@ -72,13 +72,13 @@ void main() {
     vec4 py = pc.globalParticleBuffer[chunkIndex].positionY[chunkOffset];
     vec4 pz = pc.globalParticleBuffer[chunkIndex].positionZ[chunkOffset];
 
-    f16vec4 vx = pc.globalParticleBuffer[chunkIndex].velocityX[chunkOffset];
-    f16vec4 vy = pc.globalParticleBuffer[chunkIndex].velocityY[chunkOffset];
-    f16vec4 vz = pc.globalParticleBuffer[chunkIndex].velocityZ[chunkOffset];
+    FVEC4 vx = pc.globalParticleBuffer[chunkIndex].velocityX[chunkOffset];
+    FVEC4 vy = pc.globalParticleBuffer[chunkIndex].velocityY[chunkOffset];
+    FVEC4 vz = pc.globalParticleBuffer[chunkIndex].velocityZ[chunkOffset];
 
-    f16vec4 fx = pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset];
-    f16vec4 fy = pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset];
-    f16vec4 fz = pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset];
+    FVEC4 fx = pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset];
+    FVEC4 fy = pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset];
+    FVEC4 fz = pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset];
 
     vec4 q = pc.deltaRot;
     vec3 dPos = pc.deltaPos.xyz;
@@ -101,8 +101,8 @@ void main() {
             px[i] = pos.x; py[i] = pos.y; pz[i] = pos.z;
 
             // demote to float16_t safely
-            vx[i] = float16_t(vel.x); vy[i] = float16_t(vel.y); vz[i] = float16_t(vel.z);
-            fx[i] = float16_t(frc.x); fy[i] = float16_t(frc.y); fz[i] = float16_t(frc.z);
+            vx[i] = FP(vel.x); vy[i] = FP(vel.y); vz[i] = FP(vel.z);
+            fx[i] = FP(frc.x); fy[i] = FP(frc.y); fz[i] = FP(frc.z);
         }
     }
 
@@ -111,11 +111,11 @@ void main() {
     pc.globalParticleBuffer[chunkIndex].positionY[chunkOffset] = py;
     pc.globalParticleBuffer[chunkIndex].positionZ[chunkOffset] = pz;
 
-    pc.globalParticleBuffer[chunkIndex].velocityX[chunkOffset] = vx;
-    pc.globalParticleBuffer[chunkIndex].velocityY[chunkOffset] = vy;
-    pc.globalParticleBuffer[chunkIndex].velocityZ[chunkOffset] = vz;
+    pc.globalParticleBuffer[chunkIndex].velocityX[chunkOffset] = STORE_FVEC4(vx);
+    pc.globalParticleBuffer[chunkIndex].velocityY[chunkOffset] = STORE_FVEC4(vy);
+    pc.globalParticleBuffer[chunkIndex].velocityZ[chunkOffset] = STORE_FVEC4(vz);
 
-    pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset] = fx;
-    pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset] = fy;
-    pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset] = fz;
+    pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset] = STORE_FVEC4(fx);
+    pc.globalParticleBuffer[chunkIndex].forceY[chunkOffset] = STORE_FVEC4(fy);
+    pc.globalParticleBuffer[chunkIndex].forceZ[chunkOffset] = STORE_FVEC4(fz);
 }

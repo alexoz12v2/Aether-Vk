@@ -43,6 +43,7 @@ public unsafe class LinuxNativeInputHandler(IntPtr handle, string handleDescript
 public unsafe class LinuxNativeInputHandler(IntPtr handle, string handleDescriptor, TraceLevel traceLevel, IUiThreadDispatcher dispatcher, ISchedulerProvider schedulerProvider)
   : NativeInputHandlerBase(handle, handleDescriptor, traceLevel, dispatcher, schedulerProvider)
 {
+  public nint DisplayPointer => _display;
   private nint _display = 0;
   private CancellationTokenSource? _cts;
   private Task? _eventLoopTask;

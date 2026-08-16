@@ -17,11 +17,37 @@
 #extension GL_KHR_memory_scope_semantics : require
 // TODO remove int8, which isn't universally supported (should be available on majority though)
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
-// 16 bit. meaning shaderFloat16 feature
-#extension GL_EXT_shader_16bit_storage : require
-#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+// 16-bit STORAGE (load/store from SSBOs) — universally supported on Vulkan 1.1+ hardware.
+#extension GL_EXT_shader_16bit_storage                         : require
+// 16-bit ARITHMETIC (float16_t registers) — missing on Pascal (GTX 10xx) and older.
+// Demoted to 'enable'; usage guarded by NATIVE_FLOAT16 macro below.
+#extension GL_EXT_shader_explicit_arithmetic_types_float16     : enable
 // ability to use [[dont_unroll]]
 #extension GL_EXT_control_flow_attributes : require
+
+// ── float16 arithmetic abstraction ──────────────────────────────────────────
+// NATIVE_FLOAT16 is injected by compile_shaders.sh / compile_shaders.ps1:
+//   -DNATIVE_FLOAT16=1  → shaderFloat16 available; use native f16vec4 / float16_t for ALU
+//   -DNATIVE_FLOAT16=0  → no native fp16 ALU; promote registers to vec4 / float
+// Buffer layout (f16vec4 fields in ParticleChunkData) is UNCHANGED in both paths:
+// GL_EXT_shader_16bit_storage handles the 16↔32-bit widening on load/store.
+#ifndef NATIVE_FLOAT16
+#define NATIVE_FLOAT16 1   // default: assume capable (preserves existing behaviour)
+#endif
+
+#if NATIVE_FLOAT16
+#  define FVEC4    f16vec4
+#  define FP_T     float16_t
+#  define FP(x)    float16_t(x)
+#  define FP_ZERO  0.0hf
+#  define STORE_FVEC4(x) (x)
+#else
+#  define FVEC4    vec4
+#  define FP_T     float
+#  define FP(x)    float(x)
+#  define FP_ZERO  0.0
+#  define STORE_FVEC4(x) f16vec4(x)
+#endif
 
 layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
 layout(constant_id = 4) const uint PARTICLES_IN_LEAF = 64;

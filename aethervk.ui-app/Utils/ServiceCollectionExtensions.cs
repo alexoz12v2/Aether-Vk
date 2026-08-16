@@ -1,3 +1,4 @@
+using System;
 using System.Globalization;
 using System.Resources;
 using AetherVk.Input;
@@ -79,7 +80,13 @@ public static class ServiceCollectionExtensions
     collection.AddTransient<ConsoleViewModel>();
     collection.AddTransient<DebugUiViewModel>();
     collection.AddTransient<Viewport3DViewModel>();
-    collection.AddTransient<VulkanViewportControlViewModel>();
+    collection.AddTransient<Func<Viewport3DViewModel, VulkanViewportControlViewModel>>(sp =>
+    {
+      var router = sp.GetRequiredService<IWindowInputRouter>();
+      var factory = sp.GetRequiredService<INativeInputHandlerFactory>();
+      var runtime = sp.GetRequiredService<INativeRuntimeService>();
+      return vm => new VulkanViewportControlViewModel(router, factory, runtime, vm);
+    });
   }
 
   /// <summary>

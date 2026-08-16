@@ -135,7 +135,7 @@ impl SceneConversionExt2 for Scene {
     // for each micro layer, compute transform relative to camera, and from that, bounds
     self.query1_without::<ReferenceFrameComponent, HiddenComponent, _>(
       |id, frame: &ReferenceFrameComponent| {
-        debug_assert!((frame.depth_layer == 0) ^ (self.get_root().unwrap() == id));
+        debug_assert!((frame.depth_layer == 0) == (self.get_root().unwrap() == id));
         if frame.depth_layer > 0 {
           layer_frame_entities.insert(frame.depth_layer, id);
           if let Some(cam_in_frame_f64) = self.get_relative_transform_f64(camera_entity, id) {

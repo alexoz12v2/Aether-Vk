@@ -708,7 +708,7 @@ public sealed class NativeRuntimeService : INativeRuntimeService
       return;
     }
 
-    instance._uiThreadDispatcher.Dispatch(() =>
+    void Execute()
     {
 #if TARGET_IS_OSX
       using var pool = new CocoaAutoreleasePool();
@@ -724,7 +724,16 @@ public sealed class NativeRuntimeService : INativeRuntimeService
       {
         SignalDone(signalDonePtr);
       }
-    });
+    }
+
+    if (instance._uiThreadDispatcher.CheckAccess())
+    {
+      Execute();
+    }
+    else
+    {
+      instance._uiThreadDispatcher.Dispatch(Execute);
+    }
   }
 
   /// <summary>

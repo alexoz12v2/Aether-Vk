@@ -5,6 +5,7 @@ namespace AetherVk.Logic.Services;
 
 public interface IUiThreadDispatcher
 {
+  bool CheckAccess();
   void Dispatch(Action action);
   Task DispatchAsync(Func<Task> action);
 }

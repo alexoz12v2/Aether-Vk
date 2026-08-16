@@ -596,7 +596,7 @@ impl Instance {
           }
         };
 
-        // f. TODO: optional extension and features bookkeeping and score increase/decrease
+        // f. Optional extension and features bookkeeping
         let mut optional_extensions = utils::OptionalExtensionSupportFlags::NONE;
 
         let supports_swapchain_maintenance1 = device_extension_properties.iter().any(|prop| {
@@ -605,6 +605,12 @@ impl Instance {
 
         if supports_swapchain_maintenance1 && self.has_surface_maintenance1 {
           optional_extensions.insert(utils::OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1);
+        }
+
+        // shaderFloat16 is queried (not requested) — absent on Pascal/GTX10xx.
+        // required_features was already populated by get_physical_device_features2 above.
+        if required_features.shader_float16_int8.shader_float16 == ash::vk::TRUE {
+          optional_extensions.insert(utils::OptionalExtensionSupportFlags::NATIVE_FLOAT16);
         }
 
         Some(utils::PhysicalDeviceQueryResult {

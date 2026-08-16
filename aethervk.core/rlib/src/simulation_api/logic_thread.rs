@@ -2459,14 +2459,13 @@ fn execute_simulation_tick_clear_changed_entities_phase(
   // - pass this vector's ownership into a tasklet and let it acquire a readlock on the callback to
   //   notify C# side. Note: tasklet will wait for the current task to be finished before starting
   //   streaming changes
-  // acquire write lock so we prevent other entities from change this
-  let scene_arc_clone = alloc::sync::Arc::clone(&scene_arc);
   let mut scene_write = scene_arc.write();
   let previous_update_tasklet = scene_write.entities_update_tasklet.take();
-  if let Ok(tasklet) = thread_pool.spawn_tasklet(None, move || {
-    // assert that we transfered ownership here (waits for spawner thread to drop the write lock)
-    let scene_wlock = scene_arc_clone.write();
+  
+  // clear it now since we've already extracted what we need
+  scene_write.changed_entities.write().clear();
 
+  if let Ok(tasklet) = thread_pool.spawn_tasklet(None, move || {
     // wait for previous bulk update to finish
     if let Some(wait_handle) = previous_update_tasklet {
       wait_handle.wait();
@@ -2482,8 +2481,6 @@ fn execute_simulation_tick_clear_changed_entities_phase(
     for (ext_id, comp_id, data) in changes_to_stream {
       unsafe { callback(scene_id, ext_id, comp_id, data.as_slice().as_ptr().cast()) }
     }
-
-    scene_wlock.changed_entities.write().clear();
   }) {
     scene_write.entities_update_tasklet = Some(tasklet);
   } else {

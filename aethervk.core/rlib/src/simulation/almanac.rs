@@ -59,7 +59,7 @@ impl AlmanacPackedData {
   pub fn load_almanac<P: os::fs::IntoPathBuf>(&mut self, path: P) -> EngineResult<()> {
     let path_ref = path.into_pathbuf();
     let is_valid_ext =
-      |ext: Option<&str>| ext == Some("bsp") || ext == Some("bpc") || ext == Some("tpc");
+      |ext: Option<&str>| ext == Some("bsp") || ext == Some("bpc") || ext == Some("tpc") || ext == Some("pca");
 
     if path_ref.is_file() && is_valid_ext(path_ref.extension().as_deref()) {
       self.load_single_spk(&path_ref)?;
@@ -73,9 +73,10 @@ impl AlmanacPackedData {
     }
 
     aethervk_oshal_rlib::log!(
-      "Loaded {} SPK files, {} BPC files",
+      "Loaded {} SPK files, {} BPC files, {} PCA datasets",
       self.almanac.num_loaded_spk(),
-      self.almanac.num_loaded_bpc()
+      self.almanac.num_loaded_bpc(),
+      self.almanac.planetary_data.len()
     );
 
     Ok(())

@@ -56,12 +56,20 @@ public abstract class NativeInputHandlerBase : INativeInputHandlerSubscribable
     // Hook only when we have a valid handle and haven't hooked yet
     if (!_isHooked && handle != IntPtr.Zero)
     {
-      _dispatcher.Dispatch(() =>
+      if (_dispatcher.CheckAccess())
       {
         if (HookEvents())
           _isHooked = true;
-        // TODO: send a fatal error message to the UI on failure
-      });
+      }
+      else
+      {
+        _dispatcher.Dispatch(() =>
+        {
+          if (HookEvents())
+            _isHooked = true;
+          // TODO: send a fatal error message to the UI on failure
+        });
+      }
     }
   }
 

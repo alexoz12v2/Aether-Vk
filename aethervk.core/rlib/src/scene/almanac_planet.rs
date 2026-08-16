@@ -106,9 +106,13 @@ impl AlmanacPlanet {
       // Cascade the orientation to offsets completely
       q_world_from_j2000 * q_j2000_from_bf
     } else if self.naif_id == anise::constants::celestial_objects::EARTH {
-      // We loaded `earth_latest_high_prec.bpc`
+      // We loaded `earth_latest_high_prec.bpc` and `pck00011.tpc` (not checking the latter)
       assert!(
-        almanac.almanac.bpc_data.contains_key("earth_latest_high_prec.bpc"),
+        almanac
+          .almanac
+          .bpc_data
+          .keys()
+          .any(|k| k.ends_with("earth_latest_high_prec.bpc")),
         "Earth rotation requires `earth_latest_high_prec.bpc` to be loaded. Instead we have [ {:?} ]",
         almanac.almanac.bpc_data.keys()
       );

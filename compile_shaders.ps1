@@ -68,6 +68,16 @@ $WgVariantShaders = @(
     "reset_particles.comp"
 )
 
+# Shaders that use float16_t / f16vec4 arithmetic (not just buffer layout).
+# Compiled with NATIVE_FLOAT16=1 (native) and NATIVE_FLOAT16=0 (.nofp16 fallback).
+$Float16VariantShaders = @(
+    "apply_emitters_direct_new.comp",
+    "integrate_particles_p1_p2_new.comp",
+    "integrate_particles_p4_5_new.comp",
+    "new_particles_emit.comp",
+    "new_particles_offset_particles.comp"
+)
+
 function Compile-One {
     param (
         [string]$File,
@@ -116,28 +126,40 @@ foreach ($file in $compFiles) {
     $outBase = $file.FullName -replace '\.comp$', ''
 
     if ($WgVariantShaders -contains $base) {
-        Compile-One -File $file.FullName -Stage "comp" -ExtraFlags @() -Out "$($file.FullName).spv"
-        Compile-One -File $file.FullName -Stage "comp" -ExtraFlags @("-DDEBUG_SHADERS") -Out "$outBase.comp.d.spv"
+        if ($Float16VariantShaders -contains $base) {
+            # Produce fp16-native (NATIVE_FLOAT16=1) and fp32-fallback (NATIVE_FLOAT16=0)
+            # blobs for every workgroup size. The .nofp16 infix marks the fallback blobs.
+            foreach ($fp16 in @(1, 0)) {
+                $fp16Flag = "-DNATIVE_FLOAT16=$fp16"
+                $fp16Infix = if ($fp16 -eq 1) { "" } else { ".nofp16" }
 
-        $bvhUtilsPath = Join-Path $PWD "assets\bvh_utils.glsl"
-        $bvhUtilsBak = Join-Path $PWD "assets\bvh_utils.glsl.bak"
+                Compile-One -File $file.FullName -Stage "comp" `
+                    -ExtraFlags @($fp16Flag) `
+                    -Out "$outBase.comp$fp16Infix.spv"
+                Compile-One -File $file.FullName -Stage "comp" `
+                    -ExtraFlags @($fp16Flag, "-DDEBUG_SHADERS") `
+                    -Out "$outBase.comp$fp16Infix.d.spv"
 
-        foreach ($wg in $WgSizes) {
-            if (Test-Path $bvhUtilsPath) {
-                Copy-Item -Path $bvhUtilsPath -Destination $bvhUtilsBak -Force
-                $content = [System.IO.File]::ReadAllText($bvhUtilsPath)
-                $newContent = $content -replace "SUBGROUP_SIZE\s*=\s*[0-9]+", "SUBGROUP_SIZE = $wg"
-                [System.IO.File]::WriteAllText($bvhUtilsPath, $newContent)
+                foreach ($wg in $WgSizes) {
+                    Compile-One -File $file.FullName -Stage "comp" `
+                        -ExtraFlags @($fp16Flag, "-DLOCAL_SIZE_X=$wg") `
+                        -Out "$outBase.comp$fp16Infix.wg$wg.spv"
+                    Compile-One -File $file.FullName -Stage "comp" `
+                        -ExtraFlags @($fp16Flag, "-DLOCAL_SIZE_X=$wg", "-DDEBUG_SHADERS") `
+                        -Out "$outBase.comp$fp16Infix.wg$wg.d.spv"
+                }
             }
+        } else {
+            # Non-float16 wg-variant: single compile pass (existing behaviour).
+            Compile-One -File $file.FullName -Stage "comp" -ExtraFlags @() -Out "$($file.FullName).spv"
+            Compile-One -File $file.FullName -Stage "comp" -ExtraFlags @("-DDEBUG_SHADERS") -Out "$outBase.comp.d.spv"
 
-            $outWg = "$outBase.comp.wg$wg.spv"
-            Compile-One -File $file.FullName -Stage "comp" -ExtraFlags @("-DLOCAL_SIZE_X=$wg") -Out $outWg
+            foreach ($wg in $WgSizes) {
+                $outWg = "$outBase.comp.wg$wg.spv"
+                Compile-One -File $file.FullName -Stage "comp" -ExtraFlags @("-DLOCAL_SIZE_X=$wg") -Out $outWg
 
-            $outWgD = "$outBase.comp.wg$wg.d.spv"
-            Compile-One -File $file.FullName -Stage "comp" -ExtraFlags @("-DLOCAL_SIZE_X=$wg", "-DDEBUG_SHADERS") -Out $outWgD
-
-            if (Test-Path $bvhUtilsBak) {
-                Move-Item -Path $bvhUtilsBak -Destination $bvhUtilsPath -Force
+                $outWgD = "$outBase.comp.wg$wg.d.spv"
+                Compile-One -File $file.FullName -Stage "comp" -ExtraFlags @("-DLOCAL_SIZE_X=$wg", "-DDEBUG_SHADERS") -Out $outWgD
             }
         }
     } else {

@@ -35,6 +35,9 @@ bitflags! {
     const NONE = 0;
     const SOME_EXTENSION = 1 << 0;
     const SWAPCHAIN_MAINTENANCE1 = 1 << 1;
+    /// shaderFloat16 feature (VK_KHR_shader_float16_int8).
+    /// False on Pascal (GTX 10xx) and older pre-Turing NVIDIA GPUs.
+    const NATIVE_FLOAT16 = 1 << 2;
   }
 }
 
@@ -1026,7 +1029,8 @@ impl RequiredFeatures<'_> {
     self.descriptor_indexing.descriptor_binding_storage_buffer_update_after_bind = vk::TRUE;
     self.shader_float16_int8.shader_int8 = vk::TRUE;
     self.storage_16bit.storage_buffer16_bit_access = vk::TRUE;
-    self.shader_float16_int8.shader_float16 = vk::TRUE;
+    // shader_float16 is NOT required — queried as an optional capability (NATIVE_FLOAT16 flag).
+    // Shaders select between native f16vec4 arithmetic and promoted vec4 fallback at compile time.
     // Required for SPIR-V shaders that use StorageBuffer8BitAccess capability
     self.storage_8bit.storage_buffer8_bit_access = vk::TRUE;
 
@@ -1093,9 +1097,7 @@ impl RequiredFeatures<'_> {
     if self.storage_16bit.storage_buffer16_bit_access != vk::TRUE {
       the_vec.push("storage_buffer16_bit_access".to_string());
     }
-    if self.shader_float16_int8.shader_float16 != vk::TRUE {
-      the_vec.push("shader_float16_float16".to_string());
-    }
+    // shader_float16 is optional — see OptionalExtensionSupportFlags::NATIVE_FLOAT16
     if self.storage_8bit.storage_buffer8_bit_access != vk::TRUE {
       the_vec.push("storage_buffer_8_bit_access".to_string());
     }

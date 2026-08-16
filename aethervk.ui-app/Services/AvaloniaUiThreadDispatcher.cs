@@ -7,6 +7,11 @@ namespace AetherVk.Services;
 
 public class AvaloniaUiThreadDispatcher : IUiThreadDispatcher
 {
+  public bool CheckAccess()
+  {
+    return Dispatcher.UIThread.CheckAccess();
+  }
+
   public void Dispatch(Action action)
   {
     Dispatcher.UIThread.Post(action);
