@@ -1,0 +1,1 @@
+L'angolo (in gradi) misurato lungo la traiettoria orbitale della cometa stessa. Indica quanto il punto più vicino al Sole (perielio) dista dal punto in cui la cometa ha attraversato il piano principale del sistema solare (il nodo ascendente).

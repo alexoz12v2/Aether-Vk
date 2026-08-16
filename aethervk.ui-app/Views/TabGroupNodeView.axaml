@@ -3,6 +3,8 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:AetherVk.Logic.ViewModels"
+             xmlns:controls="using:AetherVk.Controls"
+             xmlns:converters="using:AetherVk.Converters"
              xmlns:i="clr-namespace:Avalonia.Xaml.Interactivity;assembly=Avalonia.Xaml.Interactivity"
              xmlns:ia="clr-namespace:Avalonia.Xaml.Interactions.Core;assembly=Avalonia.Xaml.Interactions"
              mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
@@ -62,6 +64,10 @@
                                     Foreground="{DynamicResource Accent.Primary}" />
                         </Border>
 
+                        <TextBlock Text="{Binding Icon}"
+                                   Padding="0,6,2,6" VerticalAlignment="Center"
+                                   FontSize="13"
+                                   IsVisible="{Binding Icon, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         <TextBlock Text="{Binding Title}" Padding="4,6,4,6" VerticalAlignment="Center" Foreground="{DynamicResource Text.Primary}" />
                         <Button Content="✕"
                                 Width="20" Height="20" Padding="0"
@@ -131,7 +137,23 @@
         </Grid>
       </Border>
 
-      <ContentControl Grid.Row="1" Content="{Binding SelectedTab}" Margin="4" IsVisible="{Binding HasTabs}" />
+      <!-- Tab content area: CommonTabHeader (for stateful tabs) + the actual content view -->
+      <Grid Grid.Row="1" RowDefinitions="Auto,*">
+
+        <!-- Session strip — only visible when SelectedTab implements IStatefulTabHeader -->
+        <controls:CommonTabHeader
+            Grid.Row="0"
+            DataContext="{Binding SelectedTab}"
+            IsVisible="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).SelectedTab,
+                Converter={x:Static converters:IsStatefulTabConverter.Instance}}"/>
+
+        <!-- Tab content view resolved via DataTemplate / ViewLocator -->
+        <ContentControl Grid.Row="1"
+                        Content="{Binding SelectedTab}"
+                        Margin="4"
+                        IsVisible="{Binding HasTabs}"/>
+
+      </Grid>
 
       <Button Grid.Row="1" Content="+" Classes="accent" FontSize="48" Width="100" Height="100"
               HorizontalAlignment="Center" VerticalAlignment="Center"

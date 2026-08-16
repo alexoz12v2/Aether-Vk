@@ -1,0 +1,1 @@
+L'inclinazione verticale dell'orbita della cometa rispetto al piano dell'eclittica (il piano su cui orbita la Terra). Viene misurata in gradi. Un'inclinazione di 0° significa che orbita piatta sullo stesso piano della Terra; 90° significa che orbita in modo perfettamente perpendicolare ad essa.

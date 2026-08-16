@@ -1,58 +1,104 @@
 
 using System;
-using System.Reactive.Subjects;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 
 namespace AetherVk.Logic.Services;
 
-// TODO in Model
+// TODO: move to AetherVk.Logic.Models
 public sealed class ImportedModel(ulong id, string name)
 {
   public readonly ulong Id = id;
   public readonly string Name = name;
 }
 
+// TODO: add once TextureImported ExternalState arm lands in Rust (state_id = 4)
+// public sealed class ImportedTexture(ulong id, string name) { ... }
+
 /// <summary>
-/// Service dedicated to interacting with <see cref="INativeRuntimeService" /> to track the
-/// list of imported models
+/// Tracks the list of models (and future textures) imported in the current session.
+/// Listens to <c>ExternalState::ModelImported</c> (state_id = 2) from the native runtime.
+///
+/// <para>Exposes the asset catalogue as a reactive <c>ImmutableArray</c> observable
+/// so that both logic and UI layers can observe changes. Observed on the main-thread
+/// scheduler so ViewModels can bind directly without extra marshaling.</para>
+///
+/// - part of the "Companion Runtime Service" group
 /// </summary>
-public class ImportedModelsTrackerService(INativeRuntimeService runtimeService, ISchedulerProvider schedulerProvider) : IDisposable
+/// <seealso cref="CameraService" />
+/// <seealso cref="CometPositionTrackerService" />
+/// <seealso cref="TimelineService" />
+public sealed class ImportedModelsTrackerService : IDisposable
 {
-  private readonly BehaviorSubject<ImmutableArray<ImportedModel>> _importedModelsSubject = new([]);
+  private readonly ISchedulerProvider _schedulerProvider;
+  private readonly BehaviorSubject<ImmutableArray<ImportedModel>> _modelsSubject = new([]);
+  private readonly IDisposable _listenerToken;
 
-  private readonly ISchedulerProvider _schedulerProvider = schedulerProvider;
-
-  /// <summary>
-  /// Immutable getter for the reactive list of models.
-  ///
-  /// Why are we leaning towards an IObservable of ImmutableArray instead of ObservableCollection?
-  /// Because of *Thread Safety*. UI Is not allowed to be updated from a background thread. In
-  /// Avalonia only the UI thread can do that, so you'd need to wrap everything in
-  /// `Dispatcher.UIThread.Post` callback. If we push stuff into a `BehaviorSubject`, exposed as
-  /// an observable of array, then the change will be picked up on the UI thread
-  /// <summary>
-  public IObservable<ImmutableArray<ImportedModel>> ImportedModels => _importedModelsSubject.ObserveOn(_schedulerProvider.MainThread);
-
-  // TODO hook with runtime service to update model list (external state callback)
-  private void addModel(ImportedModel item)
+  public ImportedModelsTrackerService(INativeRuntimeService runtimeService, ISchedulerProvider schedulerProvider)
   {
-    // get current array, create a new one with an additional element, swap the arrays
-    var currentArray = _importedModelsSubject.Value;
-    var newArray = currentArray.Add(item);
-    _importedModelsSubject.OnNext(newArray);
+    _schedulerProvider = schedulerProvider;
+
+    _listenerToken = runtimeService.RegisterExternalStateListener(
+      ExternalStateType.ModelImported,
+      HandleModelImportedCallback);
   }
 
-  private void RemoveModel(ImportedModel item)
+  // ── Observables ────────────────────────────────────────────────────────────
+
+  /// <summary>
+  /// Reactive catalogue of imported models. Observed on the main-thread scheduler.
+  /// Each emission is the complete, up-to-date list — subscribers do not need to
+  /// track changes themselves.
+  /// </summary>
+  public IObservable<ImmutableArray<ImportedModel>> ImportedModels =>
+    _modelsSubject.ObserveOn(_schedulerProvider.MainThread);
+
+  // Future: public IObservable<ImmutableArray<ImportedTexture>> ImportedTextures { get; }
+
+  // ── Mutation helpers ───────────────────────────────────────────────────────
+
+  private void AddModel(ImportedModel item)
   {
-    var currentArray = _importedModelsSubject.Value;
-    var newArray = currentArray.Remove(item);
-    _importedModelsSubject.OnNext(newArray);
+    var next = _modelsSubject.Value.Add(item);
+    _modelsSubject.OnNext(next);
   }
 
-  // unregister from callbacks
+  private void RemoveModel(ulong id)
+  {
+    var current = _modelsSubject.Value;
+    for (int i = 0; i < current.Length; i++)
+    {
+      if (current[i].Id == id)
+      {
+        _modelsSubject.OnNext(current.RemoveAt(i));
+        return;
+      }
+    }
+  }
+
+  // ── Internal callback handling ─────────────────────────────────────────────
+
+  // Invoked on the native callback thread — must not block, must not throw.
+  private unsafe void HandleModelImportedCallback(nint dataPtr)
+  {
+    // dataPtr is valid only for the duration of this call — copy immediately.
+    var dto = *(CModelImportedDTO*)dataPtr;
+    if (dto.WasSuccessful == 0) return; // failed import — breadcrumb already emitted by Rust
+
+    var name = dto.GetPath();
+    // Generate a stable ID: runtime will eventually surface the entity ID via a
+    // richer DTO. For now use a deterministic hash of the name as placeholder.
+    // TODO (Rust): extend CModelImportedDTO to carry the entity/model ID directly.
+    ulong id = (uint)name.GetHashCode();
+    AddModel(new ImportedModel(id, name));
+  }
+
+  // ── IDisposable ────────────────────────────────────────────────────────────
+
   public void Dispose()
   {
-
+    _listenerToken.Dispose();
+    _modelsSubject.Dispose();
   }
 }

@@ -5,13 +5,13 @@ use crate::{
   gpu_backends::vulkan,
   scene::{
     AlmanacPlanet, BodyRotationalModel, CameraComponent, CometMarkerComponent, CursorComponent,
-    EntityId, HighResTransformComponent, PlanetMarkerComponent, ReferenceFrameComponent,
-    TransformAnimationComponent, TransformComponent, camera::QuatToEulerAngles,
-    particles::v2::ParticleSystemComponent,
+    EntityId, ErasedForeignSerializable, HighResTransformComponent, PlanetMarkerComponent,
+    ReferenceFrameComponent, TransformAnimationComponent, TransformComponent,
+    camera::QuatToEulerAngles, particles::v2::ParticleSystemComponent,
   },
   simulation::almanac::AlmanacPackedData,
   simulation_api::{
-    emit_breadcrumb, emit_external_state_change,
+    ComponentForeignId, emit_breadcrumb, emit_external_state_change,
     external_state::{CModelImported, CTimeRange, ExternalState},
     structs::{
       self, CartesianState, LogicCommand, LogicThreadContext, LogicWorkload, PhysicsDeviceSelfSync,
@@ -92,6 +92,17 @@ fn logic_command_desc(cmd: &LogicCommand) -> alloc::string::String {
     // Trajectory
     LogicCommand::UpdateTrajectoryForSpk { spk_id, .. } => {
       alloc::format!("Update trajectory for SPK {}", spk_id)
+    }
+
+    // Comet lifecycle
+    LogicCommand::InitComet { spk_id, .. } => {
+      alloc::format!("Init comet SPK {}", spk_id)
+    }
+    LogicCommand::CleanupComet { .. } => "Cleanup comet".to_string(),
+
+    // Animation commands
+    LogicCommand::AnimateCameraTo { camera_id, .. } => {
+      alloc::format!("Animate camera {} to target", camera_id)
     }
   }
 }
@@ -756,6 +767,137 @@ fn process_command_internal(
         time_mgr.start_epoch,
         time_mgr.end_epoch,
       )));
+      drop(time_mgr);
+
+      // ── Forced repositioning ─────────────────────────────────────────────────────────────
+      // If Earth has an AlmanacPlanet component (i.e. initEarth ran successfully), snap it
+      // to the new start_epoch. This ensures the Earth sphere appears at the correct
+      // heliocentric position when the user changes the timeline.
+      let scene_arc = scene_data.get_scene(scene_id).ok_or(EngineError::InvalidOperation(
+        "SetEpochRange: scene not found",
+      ))?;
+      let scene_guard = scene_arc.read();
+      if let Some(earth) = scene_guard.earth {
+        let planet_opt = scene_guard.scene.with_component(earth.body, |p: &AlmanacPlanet| *p);
+        if let Some(planet) = planet_opt {
+          let logic_state = ctx.logic_state.read();
+          if let Err(e) = crate::simulation_api::reposition::force_reposition(
+            &scene_guard.scene,
+            earth.subtree,
+            earth.body,
+            &logic_state.almanac_data,
+            &planet,
+            start,
+          ) {
+            emit_breadcrumb(
+              3,
+              &alloc::format!("[SetEpochRange] Earth reposition failed: {}", e),
+            );
+          }
+        }
+      }
+
+      // ── Trajectory year-change detection ─────────────────────────────────────────────────
+      // Rebuild Earth orbit trajectory if start_epoch crosses into a new calendar year.
+      // The trajectory covers the full year, so it only needs rebuilding at year boundaries.
+      let new_year = crate::simulation_api::reposition::year_of_epoch(start);
+      let stored_year = scene_guard.earth_orbit_year;
+      if stored_year != Some(new_year) {
+        if let Some(earth) = scene_guard.earth {
+          // Only rebuild if Earth is driven by almanac (AlmanacPlanet attached)
+          let has_planet =
+            scene_guard.scene.with_component(earth.body, |_: &AlmanacPlanet| ()).is_some();
+          if has_planet {
+            let (traj_start, traj_end) =
+              crate::simulation_api::reposition::full_year_tai_seconds(new_year);
+            let workload = Box::new(structs::LogicWorkload {
+              cmd: LogicCommand::UpdateTrajectoryForSpk {
+                task_id: 0,
+                scene_id,
+                entity_id: EntityId::as_ffi(&earth.orbit),
+                spk_id: anise::constants::celestial_objects::EARTH,
+                start_epoch_tai_sec: traj_start,
+                end_epoch_tai_sec: traj_end,
+                sample_step_days: 1.0,
+              },
+              ctx: alloc::sync::Arc::clone(ctx),
+            });
+            let _ = ctx.thread_pool.scatter(alloc::vec![workload]);
+            drop(scene_guard);
+            scene_arc.write().earth_orbit_year = Some(new_year);
+          }
+        }
+      }
+
+      Ok(())
+    }
+    LogicCommand::InitComet { scene_id, spk_id } => {
+      // TODO: implement comet initialization (attach AlmanacPlanet, force_reposition,
+      // dispatch UpdateTrajectoryForSpk for Comet_orbit). Requires probe_spk_file_with_domain
+      // to discover the NAIF ID and validate coverage.
+      let _ = (scene_id, spk_id);
+      Ok(())
+    }
+    LogicCommand::CleanupComet { scene_id } => {
+      // TODO: implement comet cleanup (remove AlmanacPlanet, remove TrajectoryComponent,
+      // reset Comet_subtree to 1 AU +X, reset Comet_body to origin).
+      let _ = scene_id;
+      Ok(())
+    }
+    LogicCommand::AnimateCameraTo {
+      scene_id,
+      camera_id,
+      target_pos,
+      target_rot,
+      duration_s,
+    } => {
+      let scenes = ctx.scenes.read();
+      let scene_arc = crate::expect_scene!(scenes.get_scene(scene_id), "AnimateCameraTo");
+      let mut scene = scene_arc.write();
+
+      let cam_int = scene.get_entity(camera_id).ok_or(EngineError::InvalidOperation(
+        "AnimateCameraTo | camera entity not found",
+      ))?;
+
+      // If an animation is already in flight, retarget it — no snap, speed preserved.
+      let retargeted = scene.scene.with_component_mut(
+        cam_int,
+        |anim: &mut crate::scene::animation::TransformAnimationComponent| {
+          anim.retarget(target_pos, target_rot);
+        },
+      );
+
+      if retargeted.is_none() {
+        // No active animation — read current transform as the start point.
+        let (start_pos, start_rot) = scene
+          .scene
+          .with_component(cam_int, |t: &HighResTransformComponent| {
+            (t.position, t.rotation)
+          })
+          .ok_or(EngineError::InvalidOperation(
+            "AnimateCameraTo | camera has no HighResTransformComponent",
+          ))?;
+
+        let _ = scene.scene.add_component(
+          cam_int,
+          crate::scene::animation::TransformAnimationComponent {
+            start_pos,
+            start_rot,
+            target_pos,
+            target_rot,
+            duration: duration_s,
+            elapsed: 0.0,
+            is_finished: false,
+          },
+        );
+      }
+
+      // Immediately mark changed so the first interpolated frame reaches C# without
+      // waiting for the next full tick.
+      scene.mark_component_changed(
+        camera_id,
+        <HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+      );
 
       Ok(())
     }
@@ -960,17 +1102,10 @@ fn process_command_internal(
         cursor_pos,
       )?;
 
-      if let Some(ext_id) = scene_read
-        .entity_map
-        .iter()
-        .find(|&(_, v)| *v == camera_entity)
-        .map(|(k, _)| *k)
-      {
-        scene_read.mark_component_changed(
-          ext_id,
-          <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-        );
-      }
+      scene_read.mark_component_changed(
+        EntityId::as_ffi(&camera_entity),
+        <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+      );
       Ok(())
     }
 
@@ -1008,17 +1143,10 @@ fn process_command_internal(
             *top *= zoom_factor;
           }
         });
-        if let Some(ext_id) = scene_read
-          .entity_map
-          .iter()
-          .find(|&(_, v)| *v == camera_entity)
-          .map(|(k, _)| *k)
-        {
-          scene_read.mark_component_changed(
-            ext_id,
-            <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-          );
-        }
+        scene_read.mark_component_changed(
+          EntityId::as_ffi(&camera_entity),
+          <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
         return Ok(());
       }
 
@@ -1050,21 +1178,14 @@ fn process_command_internal(
         },
       );
 
-      if let Some(ext_id) = scene_read
-        .entity_map
-        .iter()
-        .find(|&(_, v)| *v == camera_entity)
-        .map(|(k, _)| *k)
-      {
-        scene_read.mark_component_changed(
-          ext_id,
+      scene_read.mark_component_changed(
+          EntityId::as_ffi(&camera_entity),
           <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
         );
-        scene_read.mark_component_changed(
-          ext_id,
-          <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-        );
-      }
+      scene_read.mark_component_changed(
+        EntityId::as_ffi(&camera_entity),
+        <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+      );
       Ok(())
     }
     LogicCommand::ResetCamera {
@@ -1116,17 +1237,12 @@ fn process_command_internal(
       let _ = scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
         c.focus_distance = HOME_DISTANCE;
       });
-      if let Some(ext_id) = scene_read
-        .entity_map
-        .iter()
-        .find(|&(_, v)| *v == camera_entity)
-        .map(|(k, _)| *k)
-      {
-        scene_read.mark_component_changed(
-          ext_id,
-          <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-        );
-      }
+
+      scene_read.mark_component_changed(
+        EntityId::as_ffi(&camera_entity),
+        <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+      );
+
       Ok(())
     }
     LogicCommand::PanCamera {
@@ -1138,17 +1254,12 @@ fn process_command_internal(
       let scene_read = scene.read();
       use crate::scene::camera::SceneCameraExt;
       scene_read.scene.pan_camera(camera_entity, delta_x, delta_y)?;
-      if let Some(ext_id) = scene_read
-        .entity_map
-        .iter()
-        .find(|&(_, v)| *v == camera_entity)
-        .map(|(k, _)| *k)
-      {
-        scene_read.mark_component_changed(
-          ext_id,
-          <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-        );
-      }
+
+      scene_read.mark_component_changed(
+        EntityId::as_ffi(&camera_entity),
+        <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+      );
+
       Ok(())
     }
     LogicCommand::MoveCursor {
@@ -1165,14 +1276,10 @@ fn process_command_internal(
           let translation = Vec3f32::from_components(delta_x, delta_y, delta_z) * speed;
           t.position = t.position + translation.to_f64();
 
-          if let Some(ext_id) =
-            scene_read.entity_map.iter().find(|&(_, v)| *v == id).map(|(k, _)| *k)
-          {
-            scene_read.mark_component_changed(
-              ext_id,
-              <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-            );
-          }
+          scene_read.mark_component_changed(
+            EntityId::as_ffi(&id),
+            <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+          );
 
           Some(())
         })
@@ -1190,7 +1297,6 @@ fn process_command_internal(
       let mut scene_write = scene.write();
       // 'F' behavior: move cursor to target entity position, then position the camera dynamically
       let target_pos_dvec = {
-        #[allow(deprecated)]
         scene_write
           .scene
           .global_transform_f64(target_entity)
@@ -1284,14 +1390,11 @@ fn process_command_internal(
         c.focus_distance = snap_distance as f32;
       });
 
-      if let Some(ext_id) =
-        scene_write.entity_map.iter().find(|&(_, v)| *v == snap_entity).map(|(k, _)| *k)
-      {
-        scene_write.mark_component_changed(
-          ext_id,
-          <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
-        );
-      }
+      scene_write.mark_component_changed(
+        EntityId::as_ffi(&snap_entity),
+        <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+      );
+
       Ok(())
     }
     LogicCommand::PlayScene { scene_id, speed } => {
@@ -1383,14 +1486,11 @@ fn process_command_internal(
       // TODO check why we are using internal id in the command here.
       let entity = EntityId::from(slotmap::KeyData::from_ffi(entity_id));
 
-      // check that entity is direct child of root (meaning its in the macro frame and heliocentric)
-      if scene_guard.scene.get_parent(entity).ok_or(EngineError::InvalidNullArgument)?
-        != scene_guard.root_entity
-      {
-        return Err(EngineError::InvalidOperation(
-          "Update trajectories is measured in heliocentric Ecliptic J2000 AU, therefore needs to be child of root",
-        ));
-      }
+      // Note: trajectory control points are computed in heliocentric SUN_ECLIPJ2000 AU.
+      // Orbit entities (Earth_orbit, Comet_orbit) are direct children of root_entity
+      // (depth_layer=0) so the renderer's RTE path applies no AU_TO_KM scale distortion.
+      // This structural invariant is enforced at construction time in create_subtree;
+      // no runtime parent check is needed here.
 
       struct SampledPoints {
         pub position_km: DVec3,
@@ -2330,12 +2430,25 @@ fn execute_simulation_tick_clear_changed_entities_phase(
   let mut changes_to_stream =
     alloc::vec::Vec::<(u64, u64, utils::AlignedBoxedBytes)>::with_capacity(64);
   for (ext_id, components) in scene.changed_entities.read().iter() {
-    if let Some(entity_id) = scene.entity_map.get(ext_id) {
-      for comp_id in components.iter() {
-        let _ = scene.scene.with_component_by_id(*entity_id, *comp_id, |dyn_comp| {
-          // give u64 for 8 byte alignment
-          let data =
+    let entity_id = EntityId::from_ffi(*ext_id);
+    for comp_id in components.iter() {
+      if *comp_id == ComponentForeignId::HighResTransform.as_u64() {
+        // C# is not aware of the scene hierarchy, so we must emit the *world-space* global
+        // transform. `global_transform_f64` accumulates parent transforms up the tree.
+        if let Some(global_t) = scene.scene.global_transform_f64(entity_id) {
+          let size = core::mem::size_of::<crate::scene::HighResTransformDTO>();
+          let mut data = unsafe { utils::AlignedBoxedBytes::new_zeroed(size, 8) };
+          // SAFETY: buffer is exactly `foreign_data_size()` bytes, 8-byte aligned.
+          unsafe { global_t.write_foreign_bytes(data.ptr.as_ptr().cast()) };
+          changes_to_stream.push((*ext_id, *comp_id, data));
+        }
+      } else {
+        // All other ForeignSerializable components: serialize local component data as-is.
+        let _ = scene.scene.with_component_by_id(entity_id, *comp_id, |dyn_comp| {
+          let mut data =
             unsafe { utils::AlignedBoxedBytes::new_zeroed(dyn_comp.foreign_data_size(), 8) };
+          // SAFETY: buffer is exactly `foreign_data_size()` bytes, 8-byte aligned.
+          unsafe { dyn_comp.write_foreign_bytes(data.ptr.as_ptr().cast()) };
           changes_to_stream.push((*ext_id, *comp_id, data));
         });
       }
@@ -2653,10 +2766,12 @@ mod utils {
   unsafe impl Send for AlignedBoxedBytes {}
 
   impl AlignedBoxedBytes {
-    /// SAFETY: assumes `align` is a power of two, and that `len <= align`. (checked in debug)
+    /// SAFETY: `align` must be a power of two and `len` must be non-zero for a real allocation.
     pub unsafe fn new_zeroed(len: usize, align: usize) -> Self {
-      debug_assert!(align != 0 && (align & (align - 1)) == 0);
-      debug_assert!(len <= align);
+      debug_assert!(
+        align != 0 && (align & (align - 1)) == 0,
+        "align must be a power of two"
+      );
 
       if len == 0 {
         // dangling pointer with alignment 8
@@ -2717,27 +2832,27 @@ mod utils {
   }
 
   /// Utility function to mark a component of a given entity as changed starting from its internal id
-  // TODO rewrite entity map to be a two way mapping
   pub fn mark_component_changed<T: ForeignSerializable>(scene: &SceneContext, entity_id: EntityId) {
-    if let Some(ext_id) = scene.entity_map.iter().find(|&(_, v)| *v == entity_id).map(|(k, _)| *k) {
-      scene.mark_component_changed(ext_id, T::COMPONENT_ID);
-    }
+    scene.mark_component_changed(EntityId::as_ffi(&entity_id), T::COMPONENT_ID);
   }
 
   /// Utility to quickly mark all [`ForeignSerializable`] implementations (camera component,
   /// cursor component, transform component, hires tranform component) as changed.
   pub fn mark_all_serializable_as_changed(scene: &SceneContext) {
-    for (ext_id, entity_id) in scene.entity_map.iter() {
-      if Into::<bool>::into(scene.scene.has_component::<TransformComponent>(*entity_id)) {
-        scene.mark_component_changed(*ext_id, TransformComponent::COMPONENT_ID);
+    scene.scene.for_each_entity(|id| {
+      if Into::<bool>::into(scene.scene.has_component::<TransformComponent>(id)) {
+        scene.mark_component_changed(EntityId::as_ffi(&id), TransformComponent::COMPONENT_ID);
       }
-      if Into::<bool>::into(scene.scene.has_component::<HighResTransformComponent>(*entity_id)) {
-        scene.mark_component_changed(*ext_id, HighResTransformComponent::COMPONENT_ID);
+      if Into::<bool>::into(scene.scene.has_component::<HighResTransformComponent>(id)) {
+        scene.mark_component_changed(
+          EntityId::as_ffi(&id),
+          HighResTransformComponent::COMPONENT_ID,
+        );
       }
-      if Into::<bool>::into(scene.scene.has_component::<CameraComponent>(*entity_id)) {
-        scene.mark_component_changed(*ext_id, CameraComponent::COMPONENT_ID);
+      if Into::<bool>::into(scene.scene.has_component::<CameraComponent>(id)) {
+        scene.mark_component_changed(EntityId::as_ffi(&id), CameraComponent::COMPONENT_ID);
       }
-    }
+    });
   }
 
   /// Utility function to wait and consume self synchronization and do something when task is

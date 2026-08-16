@@ -187,6 +187,9 @@ pub trait Component: 'static + Send + Sync + core::fmt::Debug + Clone {
 }
 
 /// A trait for components that can be serialized into a stable FFI representation.
+/// # Note
+/// `COMPONENT_ID` must use [`crate::simulation_api::ComponentForeignId`] values, which are
+/// kept in sync with `aethervk.ui-logic/Services/ComponentForeignId.cs` on the C# side.
 pub trait ForeignSerializable: Component {
   /// The associated DTO struct that is #[repr(C)] and Blittable
   type ForeignData: Copy + Send + Sync + 'static;
@@ -1101,6 +1104,21 @@ impl Scene {
 
   pub fn entity_count(&self) -> usize {
     self.entities.read().len()
+  }
+
+  /// Returns a list of all currently active EntityIds in the scene.
+  pub fn get_all_entities(&self) -> alloc::vec::Vec<EntityId> {
+    self.entities.read().keys().collect()
+  }
+
+  /// Iterates over all currently active EntityIds in the scene without allocating.
+  pub fn for_each_entity<F>(&self, mut f: F)
+  where
+    F: FnMut(EntityId),
+  {
+    for entity in self.entities.read().keys() {
+      f(entity);
+    }
   }
 
   pub fn hierarchy_depth(&self) -> usize {
@@ -4649,7 +4667,7 @@ pub mod dto {
 
   impl ForeignSerializable for HighResTransformComponent {
     type ForeignData = HighResTransformDTO;
-    const COMPONENT_ID: u64 = ComponentTypeId::HighResTransform as u64;
+    const COMPONENT_ID: u64 = crate::simulation_api::ComponentForeignId::HighResTransform.as_u64();
 
     fn to_foreign(&self) -> Self::ForeignData {
       HighResTransformDTO {
@@ -4692,7 +4710,7 @@ pub mod dto {
 
   impl ForeignSerializable for CameraComponent {
     type ForeignData = CameraDTO;
-    const COMPONENT_ID: u64 = ComponentTypeId::Camera as u64;
+    const COMPONENT_ID: u64 = crate::simulation_api::ComponentForeignId::CameraProjection.as_u64();
 
     fn to_foreign(&self) -> Self::ForeignData {
       match self.projection {

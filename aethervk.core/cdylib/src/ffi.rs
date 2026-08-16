@@ -32,37 +32,126 @@ pub unsafe extern "C" fn avkRegisterPanicCallback(cb: PanicCallback) {
   }
 }
 
+/// Startup Parameters
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct CStartupParameters {
+  pub start_range: CTimeRange,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct CStartupReturn {
+  pub earth_planet_entity: u64,
+  pub comet_planet_entity: u64,
+  pub scene_id: u64,
+  pub ctx: isize,
+  // compiles only on 64 bit platforms. 32 bit require padding here
+}
+
 /// - Should create initial scene
 /// - should set initial epoch to 2020 and end epoch 1 month later (TDB)
 /// # Safety
 /// FFI Contract
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_startup() -> *mut SimulationContext {
-  SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, None)
-    .map(Box::into_raw)
-    .unwrap_or_else(|e| {
+pub unsafe extern "C" fn avkSimulationContext_startup(
+  params: *const CStartupParameters,
+  out: *mut CStartupReturn,
+) -> bool {
+  if params.is_null() || out.is_null() {
+    return false;
+  }
+  let range = unsafe {
+    let crange = params.as_ref().unwrap_unchecked().start_range;
+    let min_index;
+    if crange.centuries[0] < crange.centuries[1] {
+      min_index = 0;
+    } else if crange.centuries[0] == crange.centuries[1]
+      && crange.nanoseconds[0] < crange.nanoseconds[1]
+    {
+      min_index = 0;
+    } else {
+      min_index = 1;
+    }
+    let start = anise::time::Epoch::from_tai_parts(
+      crange.centuries[min_index],
+      crange.nanoseconds[min_index],
+    );
+    let end = anise::time::Epoch::from_tai_parts(
+      crange.centuries[1 - min_index],
+      crange.nanoseconds[1 - min_index],
+    );
+    if end - start < anise::time::Duration::from_days(30.0) {
+      oshal::log!(
+        "avkSimulationContext_startup failed: start and end epoch must be at least 1 month apart"
+      );
+      emit_breadcrumb(
+        1,
+        "Startup failed: start and end epoch must be at least 1 month apart",
+      );
+      return false;
+    }
+    [start, end]
+  };
+  match SimulationContext::startup(None) {
+    Ok(ctx_box) => {
+      // ── Auto-load Earth almanac files from ASSET_DIR ─────────────────────────────────────
+      // avkSetAssetPath must be called before avkSimulationContext_startup for this to work.
+      // Loading is done synchronously here so that create_empty_scene2 sees the data
+      // immediately and can perform Earth initialization (attach AlmanacPlanet, force_reposition,
+      // dispatch trajectory) in the same startup call.
+      if let Some(asset_dir) = aethervk_core_rlib::gpu::ASSET_DIR.read().clone() {
+        let de442_path = alloc::format!("{}/planets/de442.bsp", asset_dir);
+        let bpc_path = alloc::format!("{}/earth_latest_high_prec.bpc", asset_dir);
+        let mut logic = ctx_box.logic_state.write();
+        if let Err(e) = logic.almanac_data.load_almanac(oshal::os::fs::PathBuf::from(&de442_path)) {
+          oshal::log!("[startup] de442.bsp load failed: {}", e);
+          emit_breadcrumb(
+            2,
+            "de442.bsp not available at startup — Earth will be at origin",
+          );
+        }
+        if let Err(e) = logic.almanac_data.load_almanac(oshal::os::fs::PathBuf::from(&bpc_path)) {
+          oshal::log!("[startup] earth_latest_high_prec.bpc load failed: {}", e);
+          emit_breadcrumb(
+            2,
+            "earth_latest_high_prec.bpc not available at startup — Earth rotation unavailable",
+          );
+        }
+        drop(logic);
+      }
+
+      // purposefully unwrap to crash
+      let scene_return = ctx_box.create_empty_scene2(false, range[0], range[1]).unwrap();
+      let out_mut = unsafe { out.as_mut().unwrap_unchecked() };
+
+      out_mut.earth_planet_entity = scene_return.earth_body;
+      out_mut.comet_planet_entity = scene_return.comet_body;
+      out_mut.scene_id = scene_return.scene_id;
+      out_mut.ctx = alloc::boxed::Box::into_raw(ctx_box) as _;
+
+      true
+    }
+    Err(e) => {
       oshal::log!("avkSimulationContext_startup failed: {}", e.to_string());
-      emit_breadcrumb(1, &alloc::format!("Startup failed: {}", e.to_string()));
-      core::ptr::null_mut()
-    })
+      oshal::os::debug::print_aethervk_stacktrace(0, 10);
+      emit_breadcrumb(1, &alloc::format!("Startup failed: {}", e));
+      false
+    }
+  }
 }
 
-/// Called after loading `assets/planets/de442.bsp` and `assets/earth_latest_high_prec.bpc`. Should
-/// - Create Earth entity subtree, with alamanac component
-/// - Create Earth orbit as a trajectory component
-/// - Earth alamnac entity is returned so that during simulation it cam be tracked through
-///   simulation callback
-///
-/// Error if returned 0
+/// Earth initialization is now performed automatically inside `avkSimulationContext_startup` if
+/// `avkSetAssetPath` has been called beforehand. This function is no longer needed.
+/// Kept as a no-op for ABI compatibility — will be removed in a future version.
 ///
 /// # Safety
 /// FFI Contract
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_initEarth() -> u64 {
-  // todo
-  todo!()
+  0
 }
 
 /// # Safety
@@ -103,6 +192,22 @@ pub unsafe extern "C" fn avkSimulationContext_getTaskStatus(
 
 /// # Safety
 /// FFI Contract
+/// - `handle_type == 0` → windowless path (backward compat, no callback fired).
+/// - `handle_type > 0` → windowed path; `GET_NATIVE_WINDOW_HANDLE_CALLBACK` must have been
+///   registered via `avkSetGetNativeWindowHandleCallback`. Rust fires the callback and
+///   spin-waits for the C# UI thread to fill the native handle.
+///
+/// `handle_type` values match `gpu::NativeHandleType`:
+/// - `0` = Unknown / windowless
+/// - `1` = Win32   (ptr0 = HINSTANCE, ptr1 = HWND)
+/// - `3` = Xlib    (ptr0 = Display*, ptr1 = Window / XID)
+/// - `4` = Xcb     (ptr0 = xcb_connection_t*, ptr1 = xcb_window_t)
+/// - `5` = Metal   (ptr0 = CAMetalLayer*, ptr1 = 0)
+///
+/// Note: Wayland (2) is intentionally omitted — Avalonia 11 does not support native Wayland.
+///
+/// **Must NOT be called from the UI thread in windowed mode** — the callback dispatches work
+/// there; calling it from the UI thread would deadlock.
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_addViewport(
@@ -111,6 +216,7 @@ pub unsafe extern "C" fn avkSimulationContext_addViewport(
   width: u32,
   height: u32,
   name: *const c_char,
+  handle_type: u32,
   out_presentation_engine: *mut u64,
   out_camera_entity: *mut u64,
 ) -> bool {
@@ -138,19 +244,71 @@ pub unsafe extern "C" fn avkSimulationContext_addViewport(
   const DEFAULT_NEAR: f32 = 0.001;
   const DEFAULT_FAR: f32 = 10000.0;
 
-  // TODO windowed
-  match ctx_ref.create_presentation_engine(scene_id, width, height).and_then(|pe_id| {
-    ctx_ref
-      .add_perspective_camera(
-        scene_id,
-        pe_id,
-        name_str,
-        DEFAULT_FOV,
-        DEFAULT_NEAR,
-        DEFAULT_FAR,
-      )
-      .map(|id| (id.get(), pe_id.0))
-  }) {
+  // Resolve the NativeHandleType discriminator. `None` means windowless.
+  let native_handle_type: Option<gpu::NativeHandleType> = match handle_type {
+    0 => None,
+    1 => Some(gpu::NativeHandleType::Win32),
+    3 => Some(gpu::NativeHandleType::Xlib),
+    4 => Some(gpu::NativeHandleType::Xcb),
+    5 => Some(gpu::NativeHandleType::Metal),
+    _ => {
+      emit_breadcrumb(1, "avkSimulationContext_addViewport: unknown handle_type");
+      return false;
+    }
+  };
+
+  let result = if let Some(ht) = native_handle_type {
+    // ── Windowed path ─────────────────────────────────────────────────────
+    // Request the OS window handle from the C# UI thread. Rust spin-waits until
+    // C# fills the handle and signals the AtomicBool (see get_native_window_handle_sync).
+    match unsafe { get_native_window_handle_sync() } {
+      Some(raw) => {
+        let window_info = gpu::OpaqueNativeHandleInfo {
+          ptr0: raw.field0 as *mut _,
+          ptr1: raw.field1 as *mut _,
+          handle_type: ht,
+        };
+        ctx_ref
+          .create_presentation_engine_windowed(scene_id, width, height, window_info)
+          .and_then(|pe_id| {
+            ctx_ref
+              .add_perspective_camera(
+                scene_id,
+                pe_id,
+                name_str,
+                DEFAULT_FOV,
+                DEFAULT_NEAR,
+                DEFAULT_FAR,
+              )
+              .map(|id| (id.get(), pe_id.0))
+          })
+      }
+      None => {
+        emit_breadcrumb(
+          1,
+          "avkSimulationContext_addViewport: GET_NATIVE_WINDOW_HANDLE_CALLBACK not registered \
+           or returned a null handle",
+        );
+        return false;
+      }
+    }
+  } else {
+    // ── Windowless path (backward compat) ─────────────────────────────────
+    ctx_ref.create_presentation_engine(scene_id, width, height).and_then(|pe_id| {
+      ctx_ref
+        .add_perspective_camera(
+          scene_id,
+          pe_id,
+          name_str,
+          DEFAULT_FOV,
+          DEFAULT_NEAR,
+          DEFAULT_FAR,
+        )
+        .map(|id| (id.get(), pe_id.0))
+    })
+  };
+
+  match result {
     Ok((cam_id, pe_id)) => {
       if !out_presentation_engine.is_null() {
         unsafe { *out_presentation_engine = pe_id };
@@ -169,6 +327,9 @@ pub unsafe extern "C" fn avkSimulationContext_addViewport(
 
 /// # Safety
 /// FFI Contract
+// TODO handle windowed, main thread callback to delete swapchain and surface. Shuld rely on either
+// timelnie semaphore or present fence. (Actually queue wait idle is affordable here cause you don't
+// do this often)
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_removeViewport(
@@ -291,8 +452,27 @@ pub unsafe extern "C" fn avkSimulationContext_addCameraAnimation(
   if ctx.is_null() || animation.is_null() {
     return false;
   }
-  // execution
-  todo!()
+  let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
+  let anim = unsafe { animation.as_ref().unwrap_unchecked() };
+
+  use aethervk_core_rlib::simulation_api::structs::LogicCommand;
+  use aethervk_oshal_rlib::math::vector::{Vector3, vec3f64::DVec3, vec4::Quat};
+
+  let target_pos = DVec3::from_components(anim.pos_x as f64, anim.pos_y as f64, anim.pos_z as f64);
+  let target_rot = Quat::from_components(anim.rot_x, anim.rot_y, anim.rot_z, anim.rot_w);
+
+  ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(LogicCommand::AnimateCameraTo {
+      scene_id,
+      camera_id,
+      target_pos,
+      target_rot,
+      duration_s: anim.duration_s,
+    })
+    .is_ok()
 }
 
 #[derive(Debug)]
@@ -464,7 +644,9 @@ pub unsafe extern "C" fn avkSimulationContext_startSimulation(
 
 /// Why isn't this included in modifyComponent? Because this adds a new child entity. Furthermore it
 /// picks up "Jet Common Parameters" to sibling particle systems if present.
-/// Doesn't return computed properties cause they didn't change.
+///
+/// Returns computed properties only if you ask for them, by giving a non-null out pointer to a
+/// computed DTO
 ///
 /// # Safety
 /// FFI Contract
@@ -475,6 +657,7 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
   scene_id: u64,
   particle_system: *const ParticleSystemDTO,
   out_ps_id: *mut u64,
+  out_ps_computed_props: *mut ParticleSystemComputedDTO,
 ) -> bool {
   // null check
   if ctx.is_null() || particle_system.is_null() {
@@ -519,12 +702,17 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
 
 /// Adds/Updates the comet orbit (trajectory) and rechecks SPK coverage
 ///
+/// Optionally used to get the comet id too
+///
 /// # Safety
 /// FFI Contract
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_reconfigureComet(
   ctx: *mut SimulationContext,
+  scene_id: u64,
+  command_flags: i32, // 0 -> do nothing, meaning give me the comet id
+  out_comet_id: *mut u64,
 ) -> bool {
   todo!()
 }
@@ -681,6 +869,23 @@ pub unsafe extern "C" fn avkSetRenderCallback(cb: Option<unsafe extern "C" fn(u6
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSetMainThreadDispatchCallback(cb: Option<MainThreadDispatchCallback>) {
   register_main_thread_dispatcher(cb);
+}
+
+/// Registers the C# callback that Rust calls (synchronously, from a non-UI thread) to obtain
+/// the OS native window handle when creating a windowed presentation engine.
+///
+/// Must be installed before the first call to `avkSimulationContext_addViewport` with
+/// `handle_type > 0`. The callback marshals to the C# UI thread, fills the handle, and
+/// signals an `AtomicBool` so Rust can stop spin-waiting.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSetGetNativeWindowHandleCallback(
+  cb: Option<GetNativeWindowHandleCallback>,
+) {
+  register_get_native_window_handle_callback(cb);
 }
 
 /// the C# caller should be responsible for polling getTaskStatus and only calling download_image once the status is completed.
@@ -960,14 +1165,6 @@ pub unsafe extern "C" fn avkProbeSpkFile(
 /// FFI Contract
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub unsafe extern "C" fn registerMainThreadDispatcher(cb: Option<MainThreadDispatchCallback>) {
-  register_main_thread_dispatcher(cb);
-}
-
-/// # Safety
-/// FFI Contract
-#[unsafe(no_mangle)]
-#[allow(non_snake_case)]
 pub unsafe extern "C" fn executeMainThreadCleanup(
   device_ptr: *const vulkan::device::Device,
   command: u32,
@@ -983,6 +1180,8 @@ pub use debug::*;
 
 #[cfg(debug_assertions)]
 pub mod debug {
+  use aethervk_core_rlib::scene::EntityId;
+
   use super::*;
 
   #[repr(C)]
@@ -1009,7 +1208,7 @@ pub mod debug {
     let ctx_ref = unsafe { &*ctx };
     if let Some(scene_ctx_rw) = ctx_ref.get_scene(scene_id) {
       let scene_ctx = scene_ctx_rw.read();
-      let count = scene_ctx.entity_map.len() as u32;
+      let count = scene_ctx.scene.entity_count() as u32;
       if !out_count.is_null() {
         unsafe {
           *out_count = count;
@@ -1019,23 +1218,20 @@ pub mod debug {
         return false;
       }
 
-      let mut reverse_map = alloc::collections::BTreeMap::new();
-      for (&ext_id, &int_id) in scene_ctx.entity_map.iter() {
-        reverse_map.insert(int_id, ext_id);
-      }
-
-      for (idx, (&ext_id, &int_id)) in scene_ctx.entity_map.iter().enumerate() {
-        // Scene has a method to get parent directly, or we can add it
-        let parent_internal = scene_ctx.scene.get_parent(int_id);
-        let parent_id = parent_internal.and_then(|pid| reverse_map.get(&pid).copied()).unwrap_or(0);
+      let mut idx = 0_usize;
+      scene_ctx.scene.for_each_entity(|id| {
+        let parent_id =
+          scene_ctx.scene.get_parent(id).map(|id| EntityId::as_ffi(&id)).unwrap_or(0_u64);
         let dto = SceneHierarchyNodeDTO {
-          entity_id: ext_id,
+          entity_id: EntityId::as_ffi(&id),
           parent_id,
         };
         unsafe {
           out_buffer.add(idx).write(dto);
+          idx += 1;
         }
-      }
+      });
+
       return true;
     }
     false
@@ -1119,7 +1315,7 @@ pub mod debug {
   }
 
   /// # Safety
-  /// FFI Contract
+  /// FFI Contract: Must be allocated with [`avkSimulationContext_getEntityComponentNames`]
   #[unsafe(no_mangle)]
   #[allow(non_snake_case)]
   pub unsafe extern "C" fn avkSimulationContext_freeComponentNames(
@@ -1138,7 +1334,7 @@ pub mod debug {
   }
 
   /// # Safety
-  /// FFI Contract
+  /// FFI Contract: Must be freed with [`avkSimulationContext_freeComponentNames`]
   #[unsafe(no_mangle)]
   #[allow(non_snake_case)]
   pub unsafe extern "C" fn avkSimulationContext_getEntityComponentNames(

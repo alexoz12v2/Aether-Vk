@@ -8,10 +8,10 @@ namespace AetherVk.Logic.ViewModels
     {
         /// <summary>The backing field for <see cref="ChangeSelectedTabCommand"/>.</summary>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.RelayCommandGenerator", "8.4.0.0")]
-        private global::CommunityToolkit.Mvvm.Input.RelayCommand<string>? changeSelectedTabCommand;
+        private global::CommunityToolkit.Mvvm.Input.RelayCommand<global::System.Type>? changeSelectedTabCommand;
         /// <summary>Gets an <see cref="global::CommunityToolkit.Mvvm.Input.IRelayCommand{T}"/> instance wrapping <see cref="ChangeSelectedTab"/>.</summary>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.RelayCommandGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public global::CommunityToolkit.Mvvm.Input.IRelayCommand<string> ChangeSelectedTabCommand => changeSelectedTabCommand ??= new global::CommunityToolkit.Mvvm.Input.RelayCommand<string>(new global::System.Action<string>(ChangeSelectedTab));
+        public global::CommunityToolkit.Mvvm.Input.IRelayCommand<global::System.Type> ChangeSelectedTabCommand => changeSelectedTabCommand ??= new global::CommunityToolkit.Mvvm.Input.RelayCommand<global::System.Type>(new global::System.Action<global::System.Type>(ChangeSelectedTab));
     }
 }

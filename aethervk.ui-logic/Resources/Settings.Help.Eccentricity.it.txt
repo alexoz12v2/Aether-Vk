@@ -1,0 +1,1 @@
+Descrive la forma dell'orbita. Una e pari a 0 indica un cerchio perfetto. Un valore compreso tra 0 e 1 è un'ellisse. Una e esattamente pari a 1 è una parabola, e un valore maggiore di 1 è un'iperbole (il che significa che la cometa lascerà il sistema solare per non tornare mai più).

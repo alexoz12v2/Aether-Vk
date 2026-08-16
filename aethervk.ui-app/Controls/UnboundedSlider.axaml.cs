@@ -1,7 +1,10 @@
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Xaml.Interactivity;
+using AetherVk.Behaviors;
 
 namespace AetherVk.Controls;
 
@@ -117,6 +120,27 @@ public partial class UnboundedSlider : UserControl
     private set => SetValue(IsDraggingProperty, value);
   }
 
+  /// <summary>
+  /// Gets or sets the raw text currently displayed in the input box.
+  /// Intended for behavior interop — prefer binding <see cref="Value"/> directly.
+  /// </summary>
+  internal string? InputText
+  {
+    get => InputBox.Text;
+    set => InputBox.Text = value;
+  }
+
+  public static readonly StyledProperty<object?> InnerRightContentProperty = AvaloniaProperty.Register<
+    UnboundedSlider,
+    object?
+  >(nameof(InnerRightContent), null);
+
+  public object? InnerRightContent
+  {
+    get => GetValue(InnerRightContentProperty);
+    set => SetValue(InnerRightContentProperty, value);
+  }
+
   private Point _lastPos;
   private bool _hasMoved;
 
@@ -166,24 +190,7 @@ public partial class UnboundedSlider : UserControl
           newValue = Value + delta * Step * mult * 0.1;
         }
 
-        if (IsWrapped)
-        {
-          double range = WrapMax - WrapMin;
-          while (newValue > WrapMax)
-            newValue -= range;
-          while (newValue < WrapMin)
-            newValue += range;
-        }
-
-        if (HasBounds)
-        {
-          if (newValue < MinBound)
-            newValue = MinBound;
-          if (newValue > MaxBound)
-            newValue = MaxBound;
-        }
-
-        Value = newValue;
+        Value = Constrain(newValue);
         _lastPos = pos;
       }
       e.Handled = true;
@@ -209,28 +216,26 @@ public partial class UnboundedSlider : UserControl
     }
   }
 
+  protected override void OnGotFocus(GotFocusEventArgs e)
+  {
+    base.OnGotFocus(e);
+    // When focus arrives via Tab (keyboard navigation), activate edit mode
+    // so the user can type immediately without needing to click.
+    if (e.NavigationMethod == NavigationMethod.Tab)
+    {
+      InputBox.IsHitTestVisible = true;
+      InputBox.Focus();
+    }
+  }
+
   private void OnInputLostFocus(object? sender, RoutedEventArgs e)
   {
     InputBox.IsHitTestVisible = false;
+    if (HasCommitBehavior()) return; // behavior owns the commit
+
     if (double.TryParse(InputBox.Text, out double parsed))
     {
-      if (IsWrapped)
-      {
-        double range = WrapMax - WrapMin;
-        while (parsed > WrapMax)
-          parsed -= range;
-        while (parsed < WrapMin)
-          parsed += range;
-      }
-
-      if (HasBounds)
-      {
-        if (parsed < MinBound)
-          parsed = MinBound;
-        if (parsed > MaxBound)
-          parsed = MaxBound;
-      }
-      Value = parsed;
+      Value = Constrain(parsed);
     }
   }
 
@@ -238,25 +243,9 @@ public partial class UnboundedSlider : UserControl
   {
     if (e.Key == Key.Enter)
     {
-      if (double.TryParse(InputBox.Text, out double parsed))
+      if (!HasCommitBehavior() && double.TryParse(InputBox.Text, out double parsed))
       {
-        if (IsWrapped)
-        {
-          double range = WrapMax - WrapMin;
-          while (parsed > WrapMax)
-            parsed -= range;
-          while (parsed < WrapMin)
-            parsed += range;
-        }
-
-        if (HasBounds)
-        {
-          if (parsed < MinBound)
-            parsed = MinBound;
-          if (parsed > MaxBound)
-            parsed = MaxBound;
-        }
-        Value = parsed;
+        Value = Constrain(parsed);
       }
       TopLevel.GetTopLevel(this)?.FocusManager?.ClearFocus();
     }
@@ -265,5 +254,26 @@ public partial class UnboundedSlider : UserControl
       InputBox.Text = Value.ToString("0.###");
       TopLevel.GetTopLevel(this)?.FocusManager?.ClearFocus();
     }
+  }
+
+  /// <summary>
+  /// Returns true when at least one attached behavior implements <see cref="IHandlesCommit"/>,
+  /// meaning the slider should not do its own parse-and-set on focus loss / Enter.
+  /// </summary>
+  private bool HasCommitBehavior() =>
+    Interaction.GetBehaviors(this).Cast<IBehavior>().OfType<IHandlesCommit>().Any();
+
+  /// <summary>
+  /// Applies the slider's wrap and/or clamp rules to <paramref name="value"/>.
+  /// Wrap is applied first; bounds clamping is applied second.
+  /// Both can be active simultaneously.
+  /// </summary>
+  private double Constrain(double value)
+  {
+    if (IsWrapped)
+      value = NumericConstraint.Wrap(value, WrapMin, WrapMax);
+    if (HasBounds)
+      value = NumericConstraint.Clamp(value, MinBound, MaxBound);
+    return value;
   }
 }

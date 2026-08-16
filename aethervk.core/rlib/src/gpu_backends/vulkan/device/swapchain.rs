@@ -633,10 +633,37 @@ impl WindowedPresentationState {
     _rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<()> {
     if self.width != width || self.height != height {
+      // ── macOS / MoltenVK threading model ────────────────────────────────────────
+      // This method intentionally does NOT call any Vulkan or CAMetalLayer APIs.
+      // It only stores the new dimensions and sets a flag — matching the recommended
+      // pattern for MoltenVK + CAMetalLayer resize:
+      //
+      //  "Main Thread (AppKit / NSView): just store the new width/height in an atomic
+      //   variable or thread-safe structure and set a needs_resize flag.
+      //   Do NOT call Vulkan functions here."
+      //
+      //  "Render Thread: check needs_resize at the start of the frame loop, call
+      //   vkDeviceWaitIdle, then recreate the swapchain via vkCreateSwapchainKHR.
+      //   MoltenVK safely allows vkCreateSwapchainKHR on a background thread when
+      //   called with a CAMetalLayer pointer obtained on the main thread at init."
+      //
+      // The actual recreate_swapchain() call happens inside acquire_next_image() on
+      // the render thread when it picks up this pending_resize.
+      //
+      // Calling vkCreateSwapchainKHR on the main thread during a live resize would
+      // cause severe stuttering because macOS blocks the main thread during window drags.
+      //
+      // Refs:
+      //  - Apple CAMetalLayer.drawableSize threading:
+      //    https://developer.apple.com/documentation/quartzcore/cametallayer/drawablesize
+      //  - MoltenVK background-thread swapchain creation with VK_EXT_metal_surface:
+      //    https://github.com/KhronosGroup/MoltenVK/issues/1087#issuecomment-791524289
+      // ────────────────────────────────────────────────────────────────────────────
       self.pending_resize = Some((width, height));
     }
     Ok(())
   }
+
 
   pub(super) fn extent(&self) -> (u32, u32) {
     (self.width, self.height)

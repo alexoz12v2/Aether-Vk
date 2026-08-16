@@ -8,106 +8,107 @@
         x:DataType="vm:MainWindowViewModel"
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
         x:Class="AetherVk.MainWindow"
+        MinWidth="600" MinHeight="400"
         Icon="/Assets/icon.ico"
         Title="AetherVk">
-    <Design.DataContext>
-        <vm:MainWindowViewModel />
-    </Design.DataContext>
+  <Design.DataContext>
+    <vm:MainWindowViewModel />
+  </Design.DataContext>
 
-    <NativeMenu.Menu>
-        <NativeMenu>
-            <NativeMenuItem Header="File">
-                <NativeMenuItem.Menu>
-                    <NativeMenu>
-                        <NativeMenuItem Header="Open"/>
-                        <NativeMenuItem Header="Save"/>
-                        <NativeMenuItemSeparator/>
-                        <NativeMenuItem Header="Import Model" />
-                        <NativeMenuItemSeparator/>
-                        <NativeMenuItem Header="Exit"/>
-                    </NativeMenu>
-                </NativeMenuItem.Menu>
+  <NativeMenu.Menu>
+    <NativeMenu>
+      <NativeMenuItem Header="File">
+        <NativeMenuItem.Menu>
+          <NativeMenu>
+            <NativeMenuItem Header="Open"/>
+            <NativeMenuItem Header="Save"/>
+            <NativeMenuItemSeparator/>
+            <NativeMenuItem Header="Import Model" />
+            <NativeMenuItemSeparator/>
+            <NativeMenuItem Header="Exit"/>
+          </NativeMenu>
+        </NativeMenuItem.Menu>
+      </NativeMenuItem>
+
+      <NativeMenuItem Header="Edit">
+        <NativeMenuItem.Menu>
+          <NativeMenu>
+            <NativeMenuItem Header="Copy"/>
+            <NativeMenuItem Header="Paste"/>
+            <NativeMenuItemSeparator/>
+            <NativeMenuItem Header="Scene">
+              <NativeMenuItem.Menu>
+                <NativeMenu>
+                  <NativeMenuItem Header="Spawn Comet" />
+                </NativeMenu>
+              </NativeMenuItem.Menu>
             </NativeMenuItem>
+            <NativeMenuItemSeparator IsVisible="{Binding IsViewportFocused}"/>
+            <NativeMenuItem Header="Spawn Comet" Command="{Binding ActiveViewport.CloseRadialMenuAndSpawnCometCommand}" IsVisible="{Binding IsViewportFocused}" />
+            <NativeMenuItem Header="Insert Billboard" Command="{Binding ActiveViewport.InsertBillboardCommand}" IsVisible="{Binding IsViewportFocused}" />
+            <NativeMenuItem Header="Reset Camera" Command="{Binding ActiveViewport.ResetCameraFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
+            <NativeMenuItem Header="Snap to Selected" Command="{Binding ActiveViewport.SnapToSelectedFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
+            <NativeMenuItem Header="Snap Observer" IsVisible="{Binding ActiveViewport.IsEarthObserverMode, FallbackValue=False}" />
+            <NativeMenuItemSeparator/>
+            <NativeMenuItem Header="Settings..." Gesture="Cmd+OemComma" Command="{Binding OpenSettingsCommand}" />
+          </NativeMenu>
+        </NativeMenuItem.Menu>
+      </NativeMenuItem>
+    </NativeMenu>
+  </NativeMenu.Menu>
+  <!-- TODO: NativeDock property for MacOS when right clicking the icon on dock -->
 
-            <NativeMenuItem Header="Edit">
-                <NativeMenuItem.Menu>
-                    <NativeMenu>
-                        <NativeMenuItem Header="Copy"/>
-                        <NativeMenuItem Header="Paste"/>
-                        <NativeMenuItemSeparator/>
-                        <NativeMenuItem Header="Scene">
-                            <NativeMenuItem.Menu>
-                                <NativeMenu>
-                                    <NativeMenuItem Header="Spawn Comet" />
-                                </NativeMenu>
-                            </NativeMenuItem.Menu>
-                        </NativeMenuItem>
-                        <NativeMenuItemSeparator IsVisible="{Binding IsViewportFocused}"/>
-                        <NativeMenuItem Header="Spawn Comet" Command="{Binding ActiveViewport.CloseRadialMenuAndSpawnCometCommand}" IsVisible="{Binding IsViewportFocused}" />
-                        <NativeMenuItem Header="Insert Billboard" Command="{Binding ActiveViewport.InsertBillboardCommand}" IsVisible="{Binding IsViewportFocused}" />
-                        <NativeMenuItem Header="Reset Camera" Command="{Binding ActiveViewport.ResetCameraFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
-                        <NativeMenuItem Header="Snap to Selected" Command="{Binding ActiveViewport.SnapToSelectedFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
-                        <NativeMenuItem Header="Snap Observer" IsVisible="{Binding ActiveViewport.IsEarthObserverMode, FallbackValue=False}" />
-                        <NativeMenuItemSeparator/>
-                        <NativeMenuItem Header="Settings..." Gesture="Cmd+OemComma" Command="{Binding OpenSettingsCommand}" />
-                    </NativeMenu>
-                </NativeMenuItem.Menu>
-            </NativeMenuItem>
-        </NativeMenu>
-    </NativeMenu.Menu>
-    <!-- TODO: NativeDock property for MacOS when right clicking the icon on dock -->
+  <Grid RowDefinitions="Auto, *" Background="{DynamicResource Bg.Canvas}">
+    <DockPanel Grid.Row="0" IsVisible="{OnPlatform Default=True, macOS=False}">
+      <Menu DockPanel.Dock="Top">
+        <MenuItem Header="File">
+          <MenuItem Header="Open" />
+          <MenuItem Header="Save" />
+          <Separator />
+          <MenuItem Header="Import Model" />
+          <Separator />
+          <MenuItem Header="Exit" />
+        </MenuItem>
 
-    <Grid RowDefinitions="Auto, *" Background="{DynamicResource Bg.Canvas}">
-        <DockPanel Grid.Row="0" IsVisible="{OnPlatform Default=True, macOS=False}">
-            <Menu DockPanel.Dock="Top">
-                <MenuItem Header="File">
-                    <MenuItem Header="Open" />
-                    <MenuItem Header="Save" />
-                    <Separator />
-                    <MenuItem Header="Import Model" />
-                    <Separator />
-                    <MenuItem Header="Exit" />
-                </MenuItem>
+        <MenuItem Header="Edit">
+          <MenuItem Header="Copy" />
+          <MenuItem Header="Paste" />
+          <Separator />
+          <MenuItem Header="Scene">
+            <MenuItem Header="Spawn Comet" />
+          </MenuItem>
+          <Separator IsVisible="{Binding IsViewportFocused}"/>
+          <MenuItem Header="Spawn Comet" Command="{Binding ActiveViewport.CloseRadialMenuAndSpawnCometCommand}" IsVisible="{Binding IsViewportFocused}" />
+          <MenuItem Header="Insert Billboard" Command="{Binding ActiveViewport.InsertBillboardCommand}" IsVisible="{Binding IsViewportFocused}" />
+          <MenuItem Header="Reset Camera" Command="{Binding ActiveViewport.ResetCameraFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
+          <MenuItem Header="Snap to Selected" Command="{Binding ActiveViewport.SnapToSelectedFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
+          <MenuItem Header="Snap Observer" IsVisible="{Binding ActiveViewport.IsEarthObserverMode, FallbackValue=False}" />
+          <Separator />
+          <MenuItem Header="Settings..." HotKey="Ctrl+OemComma" Command="{Binding OpenSettingsCommand}" />
+          <MenuItem Header="Imported Models" Command="{Binding OpenImportedModelsDialogCommand}" />
+        </MenuItem>
+      </Menu>
+      <Button Content="Toggle Theme" Command="{Binding ToggleThemeCommand}" DockPanel.Dock="Right" Margin="5" />
+    </DockPanel>
+    <Border Grid.Row="1">
+      <views:DockingManagerView DataContext="{Binding DockingManager}"/>
+    </Border>
 
-                <MenuItem Header="Edit">
-                    <MenuItem Header="Copy" />
-                    <MenuItem Header="Paste" />
-                    <Separator />
-                    <MenuItem Header="Scene">
-                        <MenuItem Header="Spawn Comet" />
-                    </MenuItem>
-                    <Separator IsVisible="{Binding IsViewportFocused}"/>
-                    <MenuItem Header="Spawn Comet" Command="{Binding ActiveViewport.CloseRadialMenuAndSpawnCometCommand}" IsVisible="{Binding IsViewportFocused}" />
-                    <MenuItem Header="Insert Billboard" Command="{Binding ActiveViewport.InsertBillboardCommand}" IsVisible="{Binding IsViewportFocused}" />
-                    <MenuItem Header="Reset Camera" Command="{Binding ActiveViewport.ResetCameraFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
-                    <MenuItem Header="Snap to Selected" Command="{Binding ActiveViewport.SnapToSelectedFromRadialCommand}" IsVisible="{Binding IsViewportFocused}" />
-                    <MenuItem Header="Snap Observer" IsVisible="{Binding ActiveViewport.IsEarthObserverMode, FallbackValue=False}" />
-                    <Separator />
-                    <MenuItem Header="Settings..." HotKey="Ctrl+OemComma" Command="{Binding OpenSettingsCommand}" />
-                    <MenuItem Header="Imported Models" Command="{Binding OpenImportedModelsDialogCommand}" />
-                </MenuItem>
-            </Menu>
-            <Button Content="Toggle Theme" Command="{Binding ToggleThemeCommand}" DockPanel.Dock="Right" Margin="5" />
-        </DockPanel>
-        <Border Grid.Row="1">
-            <views:DockingManagerView DataContext="{Binding DockingManager}"/>
-        </Border>
-
-        <!-- Breadcrumbs Overlay -->
-        <ItemsControl Grid.Row="0" Grid.RowSpan="2" ItemsSource="{Binding Breadcrumbs}" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="20" IsHitTestVisible="False">
-            <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="services:BreadcrumbMessage">
-                    <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,12" BoxShadow="0 8 16 0 #20000000">
-                        <StackPanel Orientation="Horizontal">
-                            <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoading}" Width="20" Height="20" Margin="0,0,12,0" VerticalAlignment="Center"/>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource Text.Primary}" Margin="0,0,0,4"/>
-                                <TextBlock Text="{Binding Content}" FontSize="12" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap" MaxWidth="280"/>
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-                </DataTemplate>
-            </ItemsControl.ItemTemplate>
-        </ItemsControl>
-    </Grid>
+    <!-- Breadcrumbs Overlay -->
+    <ItemsControl Grid.Row="0" Grid.RowSpan="2" ItemsSource="{Binding Breadcrumbs}" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="20" IsHitTestVisible="False">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="services:BreadcrumbMessage">
+          <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,12" BoxShadow="0 8 16 0 #20000000">
+            <StackPanel Orientation="Horizontal">
+              <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoading}" Width="20" Height="20" Margin="0,0,12,0" VerticalAlignment="Center"/>
+              <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource Text.Primary}" Margin="0,0,0,4"/>
+                <TextBlock Text="{Binding Content}" FontSize="12" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap" MaxWidth="280"/>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+  </Grid>
 </Window>

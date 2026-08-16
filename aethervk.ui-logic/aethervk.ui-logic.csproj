@@ -59,6 +59,45 @@
     <PackageReference Include="System.Memory" Version = "4.6.3" />
     <!-- Transitive dep. of System.Memory, inserted anyways for clarity and because it's what CsWin32 recommends -->
     <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version = "6.1.2" />
+
+    <!-- String Localization -->
+    <PackageReference Include="System.Globalization" Version="4.3.0" />
+  </ItemGroup>
+
+  <!-- ── LocalizedStringsGenerator ──────────────────────────────────────── -->
+  <!-- The generator is loaded as a Roslyn Analyzer (not a runtime reference). -->
+  <ItemGroup>
+    <ProjectReference
+      Include="..\aethervk.sourcegenerators\aethervk.sourcegenerators.csproj"
+      OutputItemType="Analyzer"
+      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <!-- Expose the resx so the generator can read it via AdditionalTextsProvider. -->
+  <ItemGroup>
+    <AdditionalFiles Include="Resources\AppStrings.resx" />
+  </ItemGroup>
+
+  <!-- .resx configuration -->
+  <ItemGroup>
+    <!--
+        Update the default .resx to trigger the C# class generator.
+        Using 'PublicResXFileCodeGenerator' ensures the generated class is public,
+        so the UI Assembly can see it if needed
+      -->
+    <!-- en (config here) -->
+    <EmbeddedResource Update="Resources\AppStrings.resx">
+      <Generator>PublicResXFileCodeGenerator</Generator>
+      <LastGenOutput>AppStrings.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+    <!-- it: localized doesn't need a generator, as it is compiled in a satellite assembly .resoruces.dll -->
+    <EmbeddedResource Update="Resources\AppStrings.it.resx" />
+
+    <!-- Ensure generated Designer.cs file is included in the compilation -->
+    <Compile Update="Resources\AppStrings.Designer.cs">
+      <DesignTime>True</DesignTime>
+      <AutoGen>True</AutoGen>
+      <DependentUpon>AppStrings.resx</DependentUpon>
+    </Compile>
   </ItemGroup>
 
   <!-- Exclude Debug ViewModels in non-Debug Builds -->

@@ -104,6 +104,21 @@ impl SceneEntityId {
   }
 }
 
+/// The three entity IDs that make up a planet or comet subtree.
+/// Stored in [`SceneContext`] so the logic thread can find them without name-based queries.
+#[derive(Debug, Clone, Copy)]
+pub struct SubtreeEntities {
+  /// The Micro frame entity (AU scale, parent = root_entity). Repositioned on frame shifts.
+  pub subtree: EntityId,
+  /// The body entity (km scale, parent = subtree). Holds AlmanacPlanet when driven.
+  pub body: EntityId,
+  /// The orbit trajectory entity (AU scale, parent = root_entity). Holds TrajectoryComponent.
+  /// NOTE: orbit must be a child of root (depth_layer=0) so its AU control points are rendered
+  /// in the heliocentric frame. Placing it in the Micro frame (depth_layer=1) would cause the
+  /// renderer's RTE path to scale AU control points by AU_TO_KM, breaking the trajectory.
+  pub orbit: EntityId,
+}
+
 #[derive(Debug, Clone)]
 pub struct CartesianStateComet {
   pub transform: TransformComponent,
@@ -565,6 +580,31 @@ pub enum LogicCommand {
     start: hifitime::Epoch,
     end: hifitime::Epoch,
   },
+  /// Internal command dispatched by the LoadAlmanac handler when a comet SPK is detected and
+  /// validated against the current epoch range. Attaches AlmanacPlanet to comet_body,
+  /// force-repositions to start_epoch, and queues trajectory generation.
+  InitComet {
+    scene_id: u64,
+    spk_id: i32,
+  },
+  /// Internal command dispatched by the UnloadAlmanac handler for comet SPK cleanup.
+  /// Removes AlmanacPlanet and TrajectoryComponent, resets comet to 1 AU +X default.
+  CleanupComet {
+    scene_id: u64,
+  },
+
+  /// Animate the camera's `HighResTransformComponent` to a target position/rotation.
+  /// If a `TransformAnimationComponent` is already active on the camera entity, it is
+  /// **retargeted in-flight** via `retarget()` — preserving speed, avoiding any snap.
+  ///
+  /// Submitted by the FFI caller thread from `avkSimulationContext_addCameraAnimation`.
+  AnimateCameraTo {
+    scene_id:   u64,
+    camera_id:  u64, // external (FFI) entity id
+    target_pos: aethervk_oshal_rlib::math::vector::vec3f64::DVec3,
+    target_rot: aethervk_oshal_rlib::math::vector::vec4::Quat,
+    duration_s: f32,
+  },
 }
 
 impl LogicCommand {
@@ -865,8 +905,6 @@ impl PhysicsDeviceSelfSync {
 #[derive(Debug)]
 pub struct SceneContext {
   pub scene: Arc<Scene>,
-  pub entity_map: BTreeMap<u64, EntityId>,
-  next_entity_id: u64,
 
   /// Contains the last render task id for the given scene
   pub last_render_task: core::sync::atomic::AtomicU64,
@@ -910,6 +948,17 @@ pub struct SceneContext {
 
   pub scene_snapshot: Option<alloc::boxed::Box<crate::scene::Scene>>,
   pub particle_snapshot: Option<ParticleSystemSnapshot>,
+
+  /// Earth entity hierarchy (subtree, body, orbit). Populated in create_empty_scene2.
+  /// None until the scene is created.
+  pub earth: Option<SubtreeEntities>,
+  /// Comet entity hierarchy (subtree, body, orbit). Populated in create_empty_scene2.
+  pub comet: Option<SubtreeEntities>,
+  /// Calendar year for which the Earth orbit TrajectoryComponent is currently built.
+  /// None = no trajectory yet. Used to avoid redundant UpdateTrajectoryForSpk dispatches.
+  pub earth_orbit_year: Option<i32>,
+  /// Calendar year for which the Comet orbit TrajectoryComponent is currently built.
+  pub comet_orbit_year: Option<i32>,
 }
 
 impl Drop for SceneContext {
@@ -925,50 +974,8 @@ impl Drop for SceneContext {
 }
 
 impl SceneContext {
-  /// TODO: Document this item
-  pub(crate) fn register_present_entities(&mut self) {
-    self.register_entity(self.root_entity);
-    if self.cursor_entity.is_some() {
-      let cursor_entity = unsafe { self.cursor_entity.unwrap_unchecked() };
-      self.register_entity(cursor_entity);
-    }
-    if self.sun_entity.is_some() {
-      let sun_entity = unsafe { self.sun_entity.unwrap_unchecked() };
-      self.register_entity(sun_entity);
-    }
-    if self.grid_entity.is_some() {
-      let grid_entity = unsafe { self.grid_entity.unwrap_unchecked() };
-      self.register_entity(grid_entity);
-    }
-    if self.sky_entity.is_some() {
-      let sky_entity = unsafe { self.sky_entity.unwrap_unchecked() };
-      self.register_entity(sky_entity);
-    }
-  }
-
-  /// TODO: Document this item
   pub fn register_custom_render_callback(&mut self, callback: Option<CustomRenderCallback>) {
     self.custom_render_callback = callback;
-  }
-
-  fn with_new_entity_inserted(mut self, entity_id: EntityId) -> EngineResult<Self> {
-    if self.entity_map.insert(self.next_entity_id, entity_id).is_some() {
-      return Err(EngineError::InvalidOperation(
-        "simulation_api:with_new_entity_inserted | Failed to insert entity into entity_map",
-      ));
-    }
-    self.next_entity_id += 1;
-    Ok(self)
-  }
-
-  pub fn with_cursor_entity(mut self, cursor_entity: EntityId) -> EngineResult<Self> {
-    if self.cursor_entity.is_some() {
-      return Err(EngineError::InvalidOperation(
-        "simulation_api:with_cursor_entity | cursor_entity already present in scene",
-      ));
-    }
-    self.cursor_entity = Some(cursor_entity);
-    self.with_new_entity_inserted(cursor_entity)
   }
 
   pub fn with_sun_entity(mut self, sun_entity: EntityId) -> EngineResult<Self> {
@@ -978,7 +985,7 @@ impl SceneContext {
       ));
     }
     self.sun_entity = Some(sun_entity);
-    self.with_new_entity_inserted(sun_entity)
+    Ok(self)
   }
 
   pub fn with_grid_entity(mut self, grid_entity: EntityId) -> EngineResult<Self> {
@@ -988,7 +995,7 @@ impl SceneContext {
       ));
     }
     self.grid_entity = Some(grid_entity);
-    self.with_new_entity_inserted(grid_entity)
+    Ok(self)
   }
 
   pub fn with_sky_entity(mut self, sky_entity: EntityId) -> EngineResult<Self> {
@@ -998,7 +1005,7 @@ impl SceneContext {
       ));
     }
     self.sky_entity = Some(sky_entity);
-    self.with_new_entity_inserted(sky_entity)
+    Ok(self)
   }
 
   pub fn new_empty(
@@ -1006,12 +1013,8 @@ impl SceneContext {
     root_entity: EntityId,
     time_state: Arc<spin::RwLock<oshal::os::time::v2::TimeState>>,
   ) -> Self {
-    let mut entity_map = BTreeMap::new();
-    entity_map.insert(1, root_entity);
     Self {
       scene,
-      entity_map,
-      next_entity_id: 2,
       root_entity,
       cursor_entity: None,
       sun_entity: None,
@@ -1030,18 +1033,15 @@ impl SceneContext {
       last_render_task: core::sync::atomic::AtomicU64::new(0),
       entities_update_tasklet: None,
       particle_snapshot: None,
+      earth: None,
+      comet: None,
+      earth_orbit_year: None,
+      comet_orbit_year: None,
     }
   }
 
-  pub fn register_entity(&mut self, id: EntityId) -> u64 {
-    let external_id = self.next_entity_id;
-    self.next_entity_id += 1;
-    let _ = self.entity_map.insert(external_id, id);
-    external_id
-  }
-
   pub fn get_entity(&self, external_id: u64) -> Option<EntityId> {
-    self.entity_map.get(&external_id).copied()
+    Some(EntityId::from_ffi(external_id))
   }
 
   // TODO: change this to be generic on a ForeignSerializable.

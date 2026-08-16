@@ -3,29 +3,63 @@
              xmlns:controls="using:AetherVk.Controls"
              xmlns:i="clr-namespace:Avalonia.Xaml.Interactivity;assembly=Avalonia.Xaml.Interactivity"
              xmlns:ia="clr-namespace:Avalonia.Xaml.Interactions.Core;assembly=Avalonia.Xaml.Interactions"
-             x:Class="AetherVk.Controls.UnboundedSlider"
-             Height="24">
-    <Panel Background="Transparent" 
-           PointerPressed="OnPointerPressed"
-           PointerMoved="OnPointerMoved"
-           PointerReleased="OnPointerReleased"
-           Tapped="OnTapped">
-        <i:Interaction.Behaviors>
-            <ia:DataTriggerBehavior Binding="{Binding IsDragging, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}}" ComparisonCondition="Equal" Value="False">
-                <ia:ChangePropertyAction PropertyName="Cursor" Value="SizeWestEast" />
-            </ia:DataTriggerBehavior>
-            <ia:DataTriggerBehavior Binding="{Binding IsDragging, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}}" ComparisonCondition="Equal" Value="True">
-                <ia:ChangePropertyAction PropertyName="Cursor" Value="None" />
-            </ia:DataTriggerBehavior>
-        </i:Interaction.Behaviors>
-        <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="4" x:Name="RootBorder">
-            <TextBox x:Name="InputBox" Text="{Binding Value, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}, StringFormat='0.###', Mode=OneWay}" 
-                     Background="Transparent" BorderThickness="0"
-                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                     IsHitTestVisible="False"
-                     LostFocus="OnInputLostFocus"
-                     KeyDown="OnInputKeyDown"
-                     Padding="0"/>
-        </Border>
-    </Panel>
+             x:Class="AetherVk.Controls.UnboundedSlider">
+  <Panel Background="Transparent"
+         VerticalAlignment="Stretch"
+         PointerPressed="OnPointerPressed"
+         PointerMoved="OnPointerMoved"
+         PointerReleased="OnPointerReleased"
+         Tapped="OnTapped">
+    <i:Interaction.Behaviors>
+      <ia:DataTriggerBehavior Binding="{Binding IsDragging, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}}" ComparisonCondition="Equal" Value="False">
+        <ia:ChangePropertyAction PropertyName="Cursor" Value="SizeWestEast" />
+      </ia:DataTriggerBehavior>
+      <ia:DataTriggerBehavior Binding="{Binding IsDragging, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}}" ComparisonCondition="Equal" Value="True">
+        <ia:ChangePropertyAction PropertyName="Cursor" Value="None" />
+      </ia:DataTriggerBehavior>
+    </i:Interaction.Behaviors>
+    <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="4" x:Name="RootBorder"
+            VerticalAlignment="Stretch">
+      <Grid Grid.IsSharedSizeScope="True" VerticalAlignment="Stretch">
+        <Grid.ColumnDefinitions>
+          <!-- Col 0: ‹ drag indicator  (mirrors Col 3 via SharedSizeGroup) -->
+          <ColumnDefinition Width="Auto" SharedSizeGroup="Arrow"/>
+          <!-- Col 1: mirror of unit column (keeps TextBox center balanced) -->
+          <ColumnDefinition Width="Auto" SharedSizeGroup="UnitMirror"/>
+          <!-- Col 2: TextBox -->
+          <ColumnDefinition Width="*"/>
+          <!-- Col 3: › drag indicator (mirrors Col 0 via SharedSizeGroup) -->
+          <ColumnDefinition Width="Auto" SharedSizeGroup="Arrow"/>
+          <!-- Col 4: unit content -->
+          <ColumnDefinition Width="Auto" SharedSizeGroup="UnitMirror"/>
+        </Grid.ColumnDefinitions>
+
+        <TextBlock Grid.Column="0" Text="‹"
+                   Foreground="{DynamicResource Text.Disabled}"
+                   VerticalAlignment="Center" HorizontalAlignment="Center"
+                   IsHitTestVisible="False" Margin="4,0"/>
+
+        <TextBox x:Name="InputBox" Grid.Column="2"
+                 Text="{Binding Value, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}, StringFormat='0.###', Mode=OneWay}"
+                 Background="Transparent" BorderThickness="0"
+                 HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                 VerticalAlignment="Stretch"
+                 IsHitTestVisible="False"
+                 LostFocus="OnInputLostFocus"
+                 KeyDown="OnInputKeyDown"
+                 Padding="0"/>
+
+        <TextBlock Grid.Column="3" Text="›"
+                   Foreground="{DynamicResource Text.Disabled}"
+                   VerticalAlignment="Center" HorizontalAlignment="Center"
+                   IsHitTestVisible="False" Margin="4,0"/>
+
+        <ContentPresenter Grid.Column="4"
+                          Content="{Binding InnerRightContent, RelativeSource={RelativeSource AncestorType=controls:UnboundedSlider}}"
+                          HorizontalAlignment="Center"
+                          VerticalAlignment="Center"
+                          IsHitTestVisible="False"/>
+      </Grid>
+    </Border>
+  </Panel>
 </UserControl>

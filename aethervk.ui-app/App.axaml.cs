@@ -19,7 +19,7 @@ public partial class App : Application
 {
   public static IHost? Host { get; set; }
 
-  private static void OnRustPanic(IntPtr messagePtr, nuint length)
+  internal static void OnRustPanic(nint messagePtr, nuint length)
   {
     string errorMsg = "Unknown Rust Panic";
     if (messagePtr != IntPtr.Zero)
@@ -104,23 +104,9 @@ public partial class App : Application
         }
       );
 
-      string libName = OperatingSystem.IsWindows() ? "aethervk_core.dll" : "libaethervk_core.so";
-
-      // Fallback check in case the user runs the app from the CLI without correct working directory
-      string libPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, libName);
-
-      if (!skipNative && !System.IO.File.Exists(libPath) && !System.IO.File.Exists(libName))
+      if (!skipNative)
       {
-        desktop.MainWindow = new Views.FatalErrorWindow(
-          $"The required native library '{libName}' was not found in the executable directory.\n\nThe application cannot run without the core simulation engine."
-        );
-      }
-      else
-      {
-        var runtimeService = ServiceProviderServiceExtensions.GetRequiredService<INativeRuntimeService>(Host!.Services);
-        runtimeService.RegisterPanicCallback(OnRustPanic);
-
-        var splashViewModel = new SplashViewModel(runtimeService);
+        var splashViewModel = new SplashViewModel();
         var splashWindow = new Views.SplashWindow { DataContext = splashViewModel };
 
         splashViewModel.OnInitializationCompleted += () =>
@@ -172,14 +158,37 @@ public partial class App : Application
         };
 
         desktop.MainWindow = splashWindow;
-        _ = splashViewModel.InitializeAsync();
+        splashViewModel.Initialize(() =>
+        {
+          return ServiceProviderServiceExtensions.GetRequiredService<INativeRuntimeService>(Host!.Services);
+        });
+
+        var appLifetime = ServiceProviderServiceExtensions.GetRequiredService<IHostApplicationLifetime>(Host!.Services);
+
+        // Link the .NET Generic Host lifetime to Avalonia's lifetime.
+        // This ensures that when the generic host receives a SIGINT (e.g., from CTRL+C or dotnet watch),
+        // it gracefully tells the Avalonia UI thread to shut down. Otherwise, the app would hang.
+        appLifetime.ApplicationStopping.Register(() =>
+        {
+          Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+          {
+            desktop.Shutdown();
+          });
+        });
 
         desktop.Exit += (sender, args) =>
         {
+          // EDIT: I think it's not necessary to call dispose here, cause DI Container should handle
+          // that. This block will remain if there are special actions to be performed on closing
+          // the application
+
           // All native services which are disposable should be disposed of here
           // TODO ensure all dependencies which use the runtime service are cleaned up with a shutdown message?
-          runtimeService.Dispose();
-          Environment.Exit(0);
+          // runtimeService.Dispose();
+
+          // Note: Avoid calling Environment.Exit(0) here. Doing so will forcefully terminate the process
+          // and prevent the generic host in Program.cs from executing its clean shutdown procedure
+          // (like host.StopAsync() and host.Dispose() in the finally block).
         };
       }
     }
@@ -192,9 +201,14 @@ public partial class App : Application
 public class MockNativeRuntimeService : INativeRuntimeService
 {
   public void Dispose() { GC.SuppressFinalize(this); }
-  public bool Startup() => true;
-  public void ShutdownSync() { }
-  public bool AddViewport(uint width, uint height, string name, out ulong presentationEngineId, out ulong cameraEntityId)
+  public bool AddViewport(
+    uint width,
+    uint height,
+    string name,
+    Func<CNativeWindowHandle>? nativeHandleProvider,
+    uint handleType,
+    out ulong presentationEngineId,
+    out ulong cameraEntityId)
   {
     presentationEngineId = 1;
     cameraEntityId = 2;
@@ -202,43 +216,54 @@ public class MockNativeRuntimeService : INativeRuntimeService
   }
   public void RemoveViewport(ulong presentationEngineId) { }
   public void ResizeViewport(ulong presentationEngineId, uint width, uint height) { }
-  public Task<bool> DownloadImageAsync(ulong taskId, IntPtr bufferPtr, nuint bufferSize) => Task.FromResult(true);
   public bool ResetSimulationSync() => true;
   public bool PauseSimulationSync() => true;
   public bool StartSimulation(int simSpeed) => true;
-  public bool ModifyComponent(ulong entityId, uint command, IntPtr inDto, IntPtr outComputedDto) => true;
-  public bool AddCameraAnimation(ulong cameraId, ref AnimationTargetDTO animation) => true;
-  public bool TransformStaticCamera(ulong cameraId, int mode, IntPtr buffer) => true;
-  public bool AddParticleSystem(ref ParticleSystemDTO particleSystem, out ulong outPsId)
+  public bool AddCameraAnimation(ulong cameraId, AnimationTarget animation) => true;
+  public bool TransformStaticCamera(ulong cameraId, int mode, nint buffer) => true;
+  public bool AddParticleSystem(ParticleSystemModel psModel, ParticleSystemJet psJet, out ulong outPsId)
   {
     outPsId = 3;
     return true;
   }
-  public bool ModifyParticleSystem(ulong psId, ref ParticleSystemDTO particleSystem, out ParticleSystemComputedDTO outPsComputedProps)
+  public ParticleSystemComputedProperties? AddFirstParticleSystem(ParticleSystemModel psModel, ParticleSystemJet psJet, out ulong outPsId)
   {
-    outPsComputedProps = new ParticleSystemComputedDTO();
+    outPsId = 3;
+    return new ParticleSystemComputedProperties(0f, 0f);
+  }
+  public bool ModifyParticleSystem(ulong psId, ParticleSystemModel psModel, ParticleSystemJet psJet, out ParticleSystemComputedProperties outPsComputedProps)
+  {
+    outPsComputedProps = new ParticleSystemComputedProperties(0f, 0f);
     return true;
   }
   public bool ReconfigureComet() => true;
   public Task<ulong> LoadAlmanacFileAsync(string path) => Task.FromResult(4UL);
   public bool UnloadAlmanacFile(string path) => true;
-  public void SetAssetPath(string path) { }
   public Task<ulong> ImportModelAsync(string path) => Task.FromResult(5UL);
   public void UnloadModel(ulong modelId) { }
-  public ulong AddScreenSpaceBillboard(string imagePath, float ndcX, float ndcY, float scale, float rotationDeg, float opacity, int zIndex, ulong viewportId) => 6;
-  public bool SetScreenSpaceBillboard(ulong entityId, float ndcX, float ndcY, float scale, float rotationDeg, float opacity, int zIndex) => true;
+  public ulong AddScreenSpaceBillboard(string imagePath, ScreenSpaceBillboard billboard) => 6;
+  public bool SetScreenSpaceBillboard(ulong entityId, ScreenSpaceBillboard billboard) => true;
   public bool RemoveScreenSpaceBillboard(ulong entityId) => true;
-  public bool GetScreenSpaceBillboard(ulong entityId, out FfiScreenSpaceBillboardDTO outData)
+  public bool GetScreenSpaceBillboard(ulong entityId, out ScreenSpaceBillboard outData)
   {
-    outData = new FfiScreenSpaceBillboardDTO();
+    outData = new ScreenSpaceBillboard(0, 0, 1, 0, 1, 0);
     return true;
   }
-  public void RegisterPanicCallback(PanicCallbackDelegate cb) { }
-  public void SetLoggerCallback(LoggerCallbackDelegate cb) { }
-  public void SetBreadcrumbCallback(BreadcrumbCallbackDelegate cb) { }
-  public void SetSimulationCallback(SimulationCallbackDelegate cb) { }
-  public void SetExternalStateSimulationCallback(ExternalStateSimulationCallbackDelegate cb) { }
-  public void SetRenderCallback(RenderCallbackDelegate cb) { }
-  public void SetMainThreadDispatchCallback(MainThreadDispatchCallbackDelegate cb) { }
+
+  // ── Callbacks & Dispatch ──────────────────────────────────────────────────
+  public IDisposable RegisterSimulationListener(ulong entityId, ulong componentForeignId, Action<nint> handler)
+    => System.Reactive.Disposables.Disposable.Empty;
+  public IDisposable RegisterExternalStateListener(ExternalStateType stateType, Action<nint> handler)
+    => System.Reactive.Disposables.Disposable.Empty;
+
+  // ── Cached State ──────────────────────────────────────────────────────────
+  public ulong? CameraEntityId => 2UL;
+  public ulong? CometEntityId => null;
+  public ulong? EarthEntityId => null;
+
+  // ── Timeline ──────────────────────────────────────────────────────────────
+  public bool SetEpochRange(short startCenturies, ulong startNs, short endCenturies, ulong endNs) => true;
+  public bool CheckAlmanacCoverage(int spkId, short startCenturies, ulong startNs, short endCenturies, ulong endNs) => true;
 }
 #endif
+

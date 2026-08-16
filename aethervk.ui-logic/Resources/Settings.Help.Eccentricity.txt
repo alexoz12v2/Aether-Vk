@@ -1,0 +1,1 @@
+Describes the shape of the orbit. An e of 0 is a perfect circle. Between 0 and 1 is an ellipse. An e of exactly 1 is a parabola, and greater than 1 is a hyperbola (meaning the comet will leave the solar system and never return).

@@ -5,12 +5,12 @@ namespace AetherVk.Logic.ViewModels;
 
 public partial class SettingsViewModel : ViewModelBase
 {
-  public ObservableCollection<ISettingsCategory> Categories { get; } = new();
+  public ObservableCollection<ISettingsCategory> Categories { get; } = [];
 
   [ObservableProperty]
   private ISettingsCategory? _selectedCategory;
 
-  public SettingsViewModel(AetherVk.Logic.Input.InputRegistry inputRegistry)
+  public SettingsViewModel(Input.InputRegistry inputRegistry)
   {
     Categories.Add(new KeyBindingsViewModel(inputRegistry));
     SelectedCategory = Categories[0];

@@ -1,0 +1,1 @@
+The exact date and time the comet makes its closest approach to the Sun. It is recorded in Julian Days (JD), a continuous count of days used in astronomy to avoid the complications of the standard calendar.

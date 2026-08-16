@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <!-- Required: disables diagnostic escalation rules that don't apply to generator assemblies -->
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <AssemblyName>AetherVk.SourceGenerators</AssemblyName>
+    <RootNamespace>AetherVk.SourceGenerators</RootNamespace>
+    <!-- Generators must not be included as a runtime reference -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Roslyn API — PrivateAssets="all" keeps them out of consumers -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp"   Version="4.14.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0"  PrivateAssets="all" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,112 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             xmlns:svc="using:AetherVk.Logic.Services"
+             mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="36"
+             x:DataType="vm:CommonTabHeaderViewModel"
+             x:Class="AetherVk.Controls.CommonTabHeader">
+  <!--
+    Session strip shown above every stateful tab's content area.
+    Injected centrally by TabGroupNodeView — no per-tab boilerplate needed.
+    DataContext is set to a CommonTabHeaderViewModel created from the selected tab's
+    IStatefulTabHeader implementation in the code-behind.
+  -->
+  <Border Background="{DynamicResource Bg.Surface}"
+          BorderBrush="{DynamicResource Bg.Outline}"
+          BorderThickness="0,0,0,1"
+          Padding="8,3">
+    <Grid ColumnDefinitions="Auto,*,Auto">
+
+      <!-- Left: session badge -->
+      <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+        <Border Background="{DynamicResource Accent.Primary}"
+                CornerRadius="3" Padding="5,1">
+          <TextBlock Text="{Binding SessionLabel}"
+                     Foreground="{DynamicResource Bg.Canvas}"
+                     FontSize="10" FontWeight="SemiBold"
+                     VerticalAlignment="Center"/>
+        </Border>
+      </StackPanel>
+
+      <!-- Center: spacer -->
+      <Panel Grid.Column="1"/>
+
+      <!-- Right: session management flyout button -->
+      <Button Grid.Column="2"
+              Width="24" Height="24"
+              Padding="0"
+              Background="Transparent"
+              BorderThickness="0"
+              VerticalAlignment="Center"
+              ToolTip.Tip="Manage sessions"
+              IsVisible="{Binding !IsExclusiveSession}">
+        <PathIcon Data="M4,8 L12,16 L20,8" Width="10" Height="10"
+                  Foreground="{DynamicResource Text.Secondary}"/>
+        <Button.Flyout>
+          <Flyout Placement="BottomEdgeAlignedRight">
+            <Border Background="{DynamicResource Bg.Surface}"
+                    BorderBrush="{DynamicResource Bg.Outline}"
+                    BorderThickness="1" CornerRadius="6"
+                    Padding="8" MinWidth="200">
+              <StackPanel Spacing="4">
+
+                <TextBlock Text="Sessions"
+                           FontWeight="SemiBold"
+                           FontSize="12"
+                           Foreground="{DynamicResource Text.Primary}"
+                           Margin="2,0,0,4"/>
+
+                <!-- Session list — each item rendered by CommonTabHeaderSessionItemViewModel -->
+                <ItemsControl ItemsSource="{Binding SessionItems}"
+                              x:DataType="vm:CommonTabHeaderViewModel">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:CommonTabHeaderSessionItemViewModel">
+                      <Grid ColumnDefinitions="*,Auto" Margin="0,1">
+                        <Button Grid.Column="0"
+                                Content="{Binding Label}"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="4,4"
+                                FontSize="12"
+                                Foreground="{DynamicResource Text.Primary}"
+                                Command="{Binding SwitchCommand}"/>
+                        <Button Grid.Column="1"
+                                Content="✕"
+                                Width="20" Height="20"
+                                Padding="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                FontSize="10"
+                                VerticalAlignment="Center"
+                                ToolTip.Tip="Delete session"
+                                Command="{Binding DeleteCommand}"/>
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Separator Margin="0,4"/>
+
+                <Button Content="+ New Session"
+                        IsVisible="{Binding CanAddSession}"
+                        Command="{Binding NewSessionCommand}"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Left"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Padding="4,4"
+                        FontSize="12"
+                        Foreground="{DynamicResource Accent.Primary}"/>
+              </StackPanel>
+            </Border>
+          </Flyout>
+        </Button.Flyout>
+      </Button>
+
+    </Grid>
+  </Border>
+</UserControl>

@@ -7,15 +7,16 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace AetherVk.Services;
 
-public class TabFactory(IServiceProvider serviceProvider) : ITabFactory
+public class TabFactory : ITabFactory
 {
-  private readonly IServiceProvider _serviceProvider = serviceProvider;
+  private readonly IServiceProvider    _serviceProvider;
+  private readonly ITabStateRegistry   _registry;
 
-  private static readonly Dictionary<Type, (string Header, Func<IServiceProvider, object> Factory)> _registry;
+  private static readonly Dictionary<Type, (string Header, Func<IServiceProvider, object> Factory)> _tabMap;
 
   static TabFactory()
   {
-    _registry = new()
+    _tabMap = new()
     {
       [typeof(ConsoleViewModel)]     = ("Console",     sp => sp.GetRequiredService<ConsoleViewModel>()),
       [typeof(Viewport3DViewModel)]  = ("Viewport 3D", sp => sp.GetRequiredService<Viewport3DViewModel>()),
@@ -27,20 +28,31 @@ public class TabFactory(IServiceProvider serviceProvider) : ITabFactory
     };
 
 #if DEBUG
-    _registry[typeof(UITestPanelViewModel)] = ("UI Test Panel", sp => sp.GetRequiredService<UITestPanelViewModel>());
-    _registry[typeof(DebugUiViewModel)]     = ("Debug UI",      sp => sp.GetRequiredService<DebugUiViewModel>());
+    _tabMap[typeof(UITestPanelViewModel)] = ("UI Test Panel", sp => sp.GetRequiredService<UITestPanelViewModel>());
+    _tabMap[typeof(DebugUiViewModel)]     = ("Debug UI",      sp => sp.GetRequiredService<DebugUiViewModel>());
 #endif
+  }
+
+  public TabFactory(IServiceProvider serviceProvider, ITabStateRegistry registry)
+  {
+    _serviceProvider = serviceProvider;
+    _registry        = registry;
   }
 
   public object? CreateTab(Type tabType)
   {
-    if (_registry.TryGetValue(tabType, out var value))
-      return value.Factory(_serviceProvider);
+    if (_tabMap.TryGetValue(tabType, out var entry))
+      return entry.Factory(_serviceProvider);
     return null;
   }
 
   public T? CreateTab<T>() where T : class => CreateTab(typeof(T)) as T;
 
-  public IReadOnlyList<TabDescriptor> AvailableTabs { get; } =
-    _registry.Select(kv => new TabDescriptor(kv.Value.Header, kv.Key)).ToList();
+  public IReadOnlyList<TabDescriptor> AvailableTabs =>
+    _tabMap
+      .Select(kv => new TabDescriptor(
+        kv.Value.Header,
+        kv.Key,
+        _registry.IsStateful(kv.Key)))
+      .ToList();
 }

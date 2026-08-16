@@ -2,7 +2,7 @@
 
 use crate::{
   expect_scene, expect_scene_and_entity,
-  scene::{Scene, SphereGizmoComponent, StaticMeshComponent, TransformComponent},
+  scene::{EntityId, Scene, SphereGizmoComponent, StaticMeshComponent, TransformComponent},
   simulation_api::{
     SimulationContext,
     structs::{self, SceneContext},
@@ -19,6 +19,12 @@ use oshal::math::{
 };
 use parking_lot::RwLock;
 
+pub struct SceneReturn {
+  pub scene_id: u64,
+  pub comet_body: u64,
+  pub earth_body: u64,
+}
+
 impl SimulationContext {
   pub fn spawn_entity(&self, scene_id: u64, name: &str) -> EngineResult<u64> {
     let scene_data = self.scenes.read();
@@ -27,7 +33,7 @@ impl SimulationContext {
     // avoiding the TOCTOU gap that the previous two-write-call pattern had.
     let mut guard = active.write();
     let id = guard.scene.spawn_entity(name);
-    Ok(guard.register_entity(id))
+    Ok(EntityId::as_ffi(&id))
   }
 
   pub fn remove_entity(&self, scene_id: u64, entity: u64) -> EngineResult<()> {
@@ -37,16 +43,10 @@ impl SimulationContext {
       entity,
       "scene_api:remove_entity"
     );
-    let mut write_active = active.write();
+    let write_active = active.write();
     write_active.scene.remove_entity(entity_id);
 
-    if write_active.entity_map.remove(&entity).is_some() {
-      Ok(())
-    } else {
-      Err(EngineError::InvalidOperation(
-        "scene_api:remove_entity | entity not found",
-      ))
-    }
+    Ok(())
   }
 
   pub fn set_parent(&self, scene_id: u64, entity: u64, parent: u64) -> EngineResult<()> {
@@ -66,14 +66,14 @@ impl SimulationContext {
 
   pub fn get_entity_count(&self, scene_id: u64) -> EngineResult<u32> {
     let scene = expect_scene!(self.get_scene(scene_id), "scene_api:get_entity_count");
-    Ok(scene.read().entity_map.len() as u32)
+    Ok(scene.read().scene.entity_count() as u32)
   }
 
   /// Return number of entities copied, and number of missing ones
   pub fn get_entity_ids(&self, scene_id: u64, out_ids: &mut [u64]) -> EngineResult<(u32, u32)> {
     let scene = expect_scene!(self.get_scene(scene_id), "scene_api:get_entity_ids");
     let map = scene.read();
-    let entities_num = map.entity_map.len();
+    let entities_num = map.scene.entity_count();
     let buffer_len = out_ids.len();
     let missing = if buffer_len >= entities_num {
       0
@@ -81,9 +81,12 @@ impl SimulationContext {
       (entities_num - out_ids.len()) as u32
     };
     let take_len = core::cmp::min(entities_num, buffer_len) as u32;
-    for (i, &id) in map.entity_map.keys().enumerate().take(take_len as usize) {
-      out_ids[i] = id;
-    }
+    let mut i = 0;
+    map.scene.for_each_entity(|id| {
+      out_ids[i] = EntityId::as_ffi(&id);
+      i += 1;
+    });
+
     Ok((take_len, missing))
   }
 
@@ -121,18 +124,8 @@ impl SimulationContext {
     let parent_id = scene.read().scene.get_parent(internal_id).ok_or(
       EngineError::InvalidOperation("scene_api:get_entity_parent parent not found"),
     )?;
-    // we don't maintain an inverse mapping, so we need to find it manually
-    // precondition for unwrap: if entity exists, then the simulation api has its external id.
-    // However, some internal nodes might not have an external ID, so return an error instead of panicking.
-    scene
-      .read()
-      .entity_map
-      .iter()
-      .find(|&(_, v)| *v == parent_id)
-      .map(|(ext, _)| *ext)
-      .ok_or(EngineError::InvalidOperation(
-        "scene_api:get_entity_parent parent has no external mapping",
-      ))
+
+    Ok(EntityId::as_ffi(&parent_id))
   }
 
   pub fn destroy_scene(&self, scene_id: u64) -> EngineResult<()> {
@@ -168,6 +161,17 @@ impl SimulationContext {
     start_epoch: hifitime::Epoch,
     end_epoch: hifitime::Epoch,
   ) -> EngineResult<u64> {
+    self
+      .create_empty_scene2(spawn_fallback_camera, start_epoch, end_epoch)
+      .map(|r| r.scene_id)
+  }
+
+  pub fn create_empty_scene2(
+    &self,
+    spawn_fallback_camera: bool,
+    start_epoch: hifitime::Epoch,
+    end_epoch: hifitime::Epoch,
+  ) -> EngineResult<SceneReturn> {
     // if start_epoch comes after end or if time interval is less than a day, then refuse
     if start_epoch >= end_epoch || end_epoch - start_epoch < hifitime::Duration::from_days(1 as _) {
       return Err(EngineError::InvalidOperation(
@@ -181,6 +185,57 @@ impl SimulationContext {
       let root_entity = scene.spawn_entity("Root");
       (scene, root_entity)
     };
+
+    let create_subtree =
+      |name: &str, is_comet: bool, add_gizmo: bool| -> crate::simulation_api::structs::SubtreeEntities {
+        const AU_TO_KM: f32 = 149_597_870.7;
+        // subtree root (AU frame, child of root)
+        let subtree = scene.spawn_entity(&alloc::format!("{}_subtree", name));
+        scene.set_parent(subtree, Some(root_entity));
+        // will be modified on "forced repositioning" (repositioning implemented in logic_thread
+        // per-frame FRAME SHIFT, and explicitly via reposition::force_reposition at scene creation
+        // or epoch range change)
+        scene.add_component(subtree, crate::scene::TransformComponent::default());
+        scene.add_component(
+          subtree,
+          crate::scene::ReferenceFrameComponent {
+            frame_type: crate::scene::ReferenceFrameType::Micro,
+            scale: AU_TO_KM,
+            soi_radius: 1.0,
+            depth_layer: 1,
+          },
+        );
+
+        // body entity (from here on out everything in km)
+        let body = scene.spawn_entity(&alloc::format!("{}_body", name));
+        scene.set_parent(body, Some(subtree));
+        // note for comets: the local frame represents the axis set by the user theorizing the
+        // nucleus model. Movement is expressed in global units (km, heliocentric) in double
+        // precision (see logic_thread)
+        scene.add_component(body, crate::scene::TransformComponent::default());
+        if add_gizmo {
+          scene.add_component(
+            body,
+            crate::scene::SphericalGizmoComponent { is_visible: true },
+          );
+        }
+        // body will see AlmanacPlanet added once the relevant almanac files are confirmed loaded.
+        if is_comet {
+          scene.add_component(body, crate::scene::CometMarkerComponent {});
+        } else {
+          scene.add_component(body, crate::scene::PlanetMarkerComponent {});
+        }
+
+        // orbit entity — MUST be a child of root_entity (depth_layer=0) so that its AU-scale
+        // TrajectoryComponent control points are rendered in the heliocentric frame.
+        // If parented to the Micro-frame subtree (depth_layer=1), the renderer's RTE path would
+        // multiply AU control points by AU_TO_KM (~1.5e8), placing them far off-screen.
+        let orbit = scene.spawn_entity(&alloc::format!("{}_orbit", name));
+        scene.set_parent(orbit, Some(root_entity));
+        scene.add_component(orbit, crate::scene::TransformComponent::default());
+
+        crate::simulation_api::structs::SubtreeEntities { subtree, body, orbit }
+      };
 
     // 1. Cursor Entity
     let cursor_entity = scene.spawn_entity("cursor");
@@ -215,8 +270,7 @@ impl SimulationContext {
     )?;
 
     // 3. Camera Entity & 4. Sky Entity
-    let mut camera_id = None;
-    let mut sky_id = None;
+    // purely for testing
     if spawn_fallback_camera {
       let home_position = Vec3f32::from_components(0.0115, 0.0115, 0.0115);
       let camera_entity = scene.spawn_entity("camera");
@@ -246,14 +300,12 @@ impl SimulationContext {
           focus_distance: 1.0,
         },
       )?;
-
-      let sky_entity = scene.spawn_entity("sky");
-      scene.set_parent(sky_entity, Some(camera_entity));
-      scene.add_component(sky_entity, crate::scene::SkyComponent {})?;
-
-      camera_id = Some(camera_entity);
-      sky_id = Some(sky_entity);
     }
+
+    let sky_entity = scene.spawn_entity("sky");
+    scene.set_parent(sky_entity, Some(root_entity));
+    scene.add_component(sky_entity, crate::scene::SkyComponent {})?;
+    let sky_id = Some(sky_entity);
 
     let time_state = {
       use aethervk_oshal_rlib::os::time::v2::SimSpeed;
@@ -270,29 +322,163 @@ impl SimulationContext {
       time_state
     };
 
+    // ── Create planet Earth and comet subtree hierarchies ────────────────────────────────────
+    // Must be called BEFORE Arc::new(scene) on the next line, because the closure borrows `scene`
+    // by shared reference and Rust NLL requires the last use of the borrow to precede the move.
+    let earth = create_subtree("Earth", false, false);
+    let comet = create_subtree("Comet", true, true);
+    // Drop the closure explicitly so the borrow of `scene` ends here.
+    let _ = create_subtree;
+
     let mut scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity, time_state);
     scene_ctx_obj.cursor_entity = Some(cursor_entity);
     scene_ctx_obj.sun_entity = Some(sun_entity);
-    if let Some(c) = camera_id {
-      scene_ctx_obj.register_entity(c);
-    }
     if let Some(s) = sky_id {
       scene_ctx_obj.sky_entity = Some(s);
-      scene_ctx_obj.register_entity(s);
     }
-    scene_ctx_obj.register_entity(cursor_entity);
-    scene_ctx_obj.register_entity(sun_entity);
 
     let scene_ctx = Arc::new(RwLock::new(scene_ctx_obj));
 
-    if spawn_fallback_camera {
-      if let Some(tx) = self.threads.render_thread.tx_opt() {
-        let _ = tx.try_send(crate::simulation_api::structs::RenderCommand::GenerateSky);
+    if let Some(tx) = self.threads.render_thread.tx_opt() {
+      let _ = tx.try_send(crate::simulation_api::structs::RenderCommand::GenerateSky);
+    }
+
+
+    // Store entity IDs on SceneContext before insert_scene.
+    // We hold a write lock here; insert_scene will assert strong_count == 1, which is satisfied
+    // because this write guard does not increment the Arc count — it borrows through it.
+    {
+      let mut guard = scene_ctx.write();
+      guard.earth = Some(earth);
+      guard.comet = Some(comet);
+    }
+
+    // ── Move insert_scene before Earth init so we have scene_id for trajectory dispatch ──────
+    // The user confirmed that holding a write lock on the newly inserted SceneContext during init
+    // is safe (no other thread has the scene_id yet, so no concurrent access is possible).
+    let scene_id = self.scenes.write().insert_scene(scene_ctx);
+
+    // ── Earth Initialization ──────────────────────────────────────────────────────────────────
+    //
+    // Earth requires two almanac files to be fully operational:
+    //   1. `de442.bsp`  — planetary SPK ephemeris for Earth's heliocentric position (NAIF ID 399)
+    //   2. `earth_latest_high_prec.bpc` — high-precision Binary PCK for Earth's rotation
+    //
+    // avkSimulationContext_startup now loads both synchronously from ASSET_DIR before calling
+    // create_empty_scene2, so can_move_earth should be true on the first call.
+    //
+    // If `can_move_earth` is false (e.g. asset path not set, or files not found), Earth_body
+    // is left at identity with no AlmanacPlanet component. The logic_thread will not drive it.
+    let can_move_earth = {
+      let logic_state = self.logic_state.read();
+      let has_de442 = logic_state
+        .almanac_data
+        .file_names
+        .iter()
+        .any(|f| f.contains("de442.bsp"));
+      let has_earth_bpc = logic_state
+        .almanac_data
+        .file_names
+        .iter()
+        .any(|f| f.contains("earth_latest_high_prec.bpc"));
+      has_de442 && has_earth_bpc
+    };
+
+    if can_move_earth {
+      // STEP 1 — Attach AlmanacPlanet. This causes logic_thread's per-frame
+      // query3(PlanetMarkerComponent + AlmanacPlanet) sweep to insert earth.body into
+      // cartesian_state_cache and begin driving it on the next simulation tick.
+      let planet = crate::scene::AlmanacPlanet::new(
+        anise::constants::celestial_objects::EARTH, // NAIF ID 399
+        86400.0 * 0.99726968_f64,                  // sidereal rotation period (seconds)
+        3.986004418e5_f32,                          // Earth GM (km³/s²)
+      );
+      {
+        let scenes_guard = self.scenes.read();
+        if let Some(scene_arc) = scenes_guard.get_scene(scene_id) {
+          let scene_guard = scene_arc.read();
+          let _ = scene_guard.scene.add_component(earth.body, planet);
+
+          // STEP 2 — Forced repositioning at start_epoch.
+          // Snaps Earth_subtree (AU) and Earth_body (km residual) to the almanac position.
+          {
+            let logic_state = self.logic_state.read();
+            if let Err(e) = crate::simulation_api::reposition::force_reposition(
+              &scene_guard.scene,
+              earth.subtree,
+              earth.body,
+              &logic_state.almanac_data,
+              &planet,
+              start_epoch,
+            ) {
+              aethervk_oshal_rlib::log!(
+                "[scene_api] Earth force_reposition failed: {}",
+                e
+              );
+            }
+          }
+        }
+      }
+
+      // STEP 3 — Queue trajectory generation for the full calendar year containing start_epoch.
+      // UpdateTrajectoryForSpk is an async command processed on the thread pool; earth.orbit
+      // will gain a TrajectoryComponent once complete.
+      let year = crate::simulation_api::reposition::year_of_epoch(start_epoch);
+      let (traj_start_tai, traj_end_tai) =
+        crate::simulation_api::reposition::full_year_tai_seconds(year);
+      let _ = self.threads.logic_thread.tx().try_send(
+        crate::simulation_api::structs::LogicCommand::UpdateTrajectoryForSpk {
+          task_id: 0,
+          scene_id,
+          entity_id: crate::scene::EntityId::as_ffi(&earth.orbit),
+          spk_id: anise::constants::celestial_objects::EARTH,
+          start_epoch_tai_sec: traj_start_tai,
+          end_epoch_tai_sec: traj_end_tai,
+          sample_step_days: 1.0,
+        },
+      );
+      // Record the trajectory year so SetEpochRange can skip redundant rebuilds.
+      {
+        let scenes_guard = self.scenes.read();
+        if let Some(scene_arc) = scenes_guard.get_scene(scene_id) {
+          scene_arc.write().earth_orbit_year = Some(year);
+        }
+      }
+    } else {
+      aethervk_oshal_rlib::log!(
+        "[scene_api] Earth almanac data not ready — Earth_body at origin. \
+         avkSimulationContext_startup will retry loading de442.bsp and \
+         earth_latest_high_prec.bpc from ASSET_DIR before scene creation."
+      );
+    }
+
+    // ── Comet Default Placement — 1 AU along +X ──────────────────────────────────────────────
+    //
+    // The comet subtree is placed at (1, 0, 0) AU (heliocentric EclipJ2000). The comet body
+    // stays at local origin within the km-frame subtree. This is the "no SPK loaded" default.
+    // Once a comet SPK is loaded and validated (via LoadAlmanac → InitComet), force_reposition
+    // will snap the subtree to the ephemeris position and AlmanacPlanet will be attached.
+    {
+      let scenes_guard = self.scenes.read();
+      if let Some(scene_arc) = scenes_guard.get_scene(scene_id) {
+        let scene_guard = scene_arc.read();
+        let _ = scene_guard.scene.with_component_mut(
+          comet.subtree,
+          |t: &mut crate::scene::TransformComponent| {
+            t.position =
+              aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, 0.0, 0.0);
+          },
+        );
       }
     }
 
-    Ok(self.scenes.write().insert_scene(scene_ctx))
+    Ok(SceneReturn {
+      scene_id,
+      comet_body: crate::scene::EntityId::as_ffi(&comet.body),
+      earth_body: crate::scene::EntityId::as_ffi(&earth.body),
+    })
   }
+
 
   #[cfg(test)]
   pub fn create_default_scene(&self, spawn_fallback_camera: bool) -> EngineResult<u64> {
@@ -604,7 +790,6 @@ impl SimulationContext {
 
     let root = scene_ctx.root_entity;
     scene_ctx.scene.set_parent(lca_id, Some(root));
-    let lca_ext_id = scene_ctx.register_entity(lca_id);
 
     // ── Comet mesh entity (child of LCA frame) ───────────────────────────────
     let comet_id = scene_ctx.scene.spawn_entity(entity_name);
@@ -678,9 +863,8 @@ impl SimulationContext {
     )?;
 
     scene_ctx.scene.set_parent(comet_id, Some(lca_id));
-    let comet_ext_id = scene_ctx.register_entity(comet_id);
 
-    Ok((lca_ext_id, comet_ext_id))
+    Ok((EntityId::as_ffi(&lca_id), EntityId::as_ffi(&comet_id)))
   }
 
   pub fn spawn_trajectory_internal(
@@ -692,10 +876,7 @@ impl SimulationContext {
     segments: &[crate::gpu::RationalBezierGpu],
   ) -> EngineResult<u64> {
     use crate::scene::{TransformComponent, trajectory::TrajectoryComponent};
-    use aethervk_oshal_rlib::math::{
-      matrix::SquareMatrix,
-      vector::{vec3::Vec3f32, vec4::Quat},
-    };
+    use aethervk_oshal_rlib::math::vector::{vec3::Vec3f32, vec4::Quat};
 
     let scene_ctx_lock = {
       let scenes = self.scenes.read();
@@ -703,7 +884,7 @@ impl SimulationContext {
         "spawn_trajectory: scene not found",
       ))?
     };
-    let mut scene_ctx = scene_ctx_lock.write();
+    let scene_ctx = scene_ctx_lock.write();
 
     let entity_id = scene_ctx.scene.spawn_entity(entity_name);
 
@@ -743,9 +924,8 @@ impl SimulationContext {
     );
 
     scene_ctx.scene.add_component(entity_id, traj_comp)?;
-    let ext_id = scene_ctx.register_entity(entity_id);
 
-    Ok(ext_id)
+    Ok(EntityId::as_ffi(&entity_id))
   }
 
   /// Atomically spawns the LCA micro-frame entity and the static mesh entity
@@ -829,7 +1009,7 @@ impl SimulationContext {
 
     let root = scene_ctx.root_entity;
     scene_ctx.scene.set_parent(lca_id, Some(root));
-    let lca_ext_id = scene_ctx.register_entity(lca_id);
+    let lca_ext_id = EntityId::as_ffi(&lca_id);
 
     // ── Mesh entity (child of LCA frame) ───────────────────────────────
     let mesh_id = scene_ctx.scene.spawn_entity(entity_name);
@@ -859,7 +1039,7 @@ impl SimulationContext {
     )?;
 
     scene_ctx.scene.set_parent(mesh_id, Some(lca_id));
-    let mesh_ext_id = scene_ctx.register_entity(mesh_id);
+    let mesh_ext_id = EntityId::as_ffi(&mesh_id);
 
     Ok((lca_ext_id, mesh_ext_id))
   }

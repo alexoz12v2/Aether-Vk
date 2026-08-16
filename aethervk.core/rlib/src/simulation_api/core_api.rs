@@ -3,7 +3,7 @@
 use crate::{
   expect_scene,
   gpu::{self, ASSET_DIR, PresentationEngineHandle, WeakRenderFrontendExt},
-  scene::{CameraComponent, TransformComponent},
+  scene::{CameraComponent, EntityId, TransformComponent},
   simulation::texture_cache::TextureCache,
   simulation_api::{
     SimulationContext,
@@ -21,10 +21,8 @@ use parking_lot::RwLock;
 impl SimulationContext {
   const NUM_WORKERS: usize = 8;
 
-  pub fn startup(
-    backend: gpu::RenderBackendId,
-    error_debug_callback: Option<fn(&str)>,
-  ) -> EngineResult<Box<SimulationContext>> {
+  pub fn startup(error_debug_callback: Option<fn(&str)>) -> EngineResult<Box<SimulationContext>> {
+    let backend: gpu::RenderBackendId = gpu::VULKAN_RENDER_BACKEND;
     let mut boxed_uninit = Box::<SimulationContext>::new_uninit();
     unsafe {
       let ptr = boxed_uninit.as_mut_ptr();
@@ -180,7 +178,7 @@ impl SimulationContext {
       camera_entity
     };
 
-    let camera_id = scene_write.register_entity(camera_entity);
+    let camera_id = EntityId::as_ffi(&camera_entity);
     Ok(core::num::NonZeroU64::new(camera_id).unwrap())
   }
 
@@ -229,7 +227,7 @@ impl SimulationContext {
       camera_entity
     };
 
-    let camera_id = scene_write.register_entity(camera_entity);
+    let camera_id = EntityId::as_ffi(&camera_entity);
     Ok(core::num::NonZeroU64::new(camera_id).unwrap())
   }
 
@@ -332,9 +330,8 @@ impl SimulationContext {
     };
 
     if let Some(camera_internal_id) = camera_to_remove {
-      let mut write_scene = scene_ctx.write();
+      let write_scene = scene_ctx.write();
       write_scene.scene.remove_entity(camera_internal_id);
-      write_scene.entity_map.retain(|_, v| *v != camera_internal_id);
     }
 
     self.with_device(|render_device| {
