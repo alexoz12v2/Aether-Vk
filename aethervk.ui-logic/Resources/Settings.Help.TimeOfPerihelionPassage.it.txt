@@ -1,0 +1,1 @@
+La data e l'ora esatte in cui la cometa compie il suo massimo avvicinamento al Sole. È registrato in Giorni Giuliani (JD), un conteggio continuo dei giorni utilizzato in astronomia per evitare le complicazioni del calendario standard.

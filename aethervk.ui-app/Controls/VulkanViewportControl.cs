@@ -27,7 +27,9 @@ public class VulkanViewportControl : NativeControlHost
     if (handle != null && handle.Handle != IntPtr.Zero
         && DataContext is Logic.ViewModels.VulkanViewportControlViewModel vm)
     {
-      if (!vm.InitializeHandle(handle.Handle, handle.HandleDescriptor ?? "window"))
+      // Pass both child handle (XID / HWND) and parent handle (Display* / HINSTANCE)
+      // so the ViewModel can build the correct CNativeWindowHandle for AddViewport.
+      if (!vm.InitializeHandle(handle.Handle, handle.HandleDescriptor ?? "window", parent.Handle))
         vm.ReportFatalError("Failed to initialize native input handler.");
     }
 

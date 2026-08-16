@@ -13,7 +13,8 @@ namespace AetherVk.Logic.ViewModels;
 /// <summary>
 /// Used in <see cref="ITabFactory" />
 /// </summary>
-public record TabDescriptor(string Header, Type TabType);
+public record TabDescriptor(string Header, Type TabType, bool IsStateful);
+
 
 public enum SplitOrientation
 {

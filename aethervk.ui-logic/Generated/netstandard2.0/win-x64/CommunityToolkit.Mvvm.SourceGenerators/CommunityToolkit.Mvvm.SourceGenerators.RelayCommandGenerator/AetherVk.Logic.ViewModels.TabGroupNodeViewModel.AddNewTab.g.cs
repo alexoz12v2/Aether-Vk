@@ -8,10 +8,10 @@ namespace AetherVk.Logic.ViewModels
     {
         /// <summary>The backing field for <see cref="AddNewTabCommand"/>.</summary>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.RelayCommandGenerator", "8.4.0.0")]
-        private global::CommunityToolkit.Mvvm.Input.RelayCommand<string>? addNewTabCommand;
+        private global::CommunityToolkit.Mvvm.Input.RelayCommand<global::System.Type>? addNewTabCommand;
         /// <summary>Gets an <see cref="global::CommunityToolkit.Mvvm.Input.IRelayCommand{T}"/> instance wrapping <see cref="AddNewTab"/>.</summary>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.RelayCommandGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public global::CommunityToolkit.Mvvm.Input.IRelayCommand<string> AddNewTabCommand => addNewTabCommand ??= new global::CommunityToolkit.Mvvm.Input.RelayCommand<string>(new global::System.Action<string>(AddNewTab));
+        public global::CommunityToolkit.Mvvm.Input.IRelayCommand<global::System.Type> AddNewTabCommand => addNewTabCommand ??= new global::CommunityToolkit.Mvvm.Input.RelayCommand<global::System.Type>(new global::System.Action<global::System.Type>(AddNewTab));
     }
 }

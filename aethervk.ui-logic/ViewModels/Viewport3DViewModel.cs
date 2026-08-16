@@ -23,9 +23,8 @@ public enum CameraProjectionType
 
 
 public partial class Viewport3DViewModel
-  : TabItemViewModel,
-    IActionHandler,
-    IDisposable
+  : StatefulTabViewModelBase<ViewportSession>,
+    IActionHandler
 {
   private readonly INativeRuntimeService _runtimeService;
   private readonly IFileDialogService _fileDialogService;
@@ -377,13 +376,14 @@ public partial class Viewport3DViewModel
         // Spawn ECS entity with ScreenSpaceBillboardComponent in Rust
         var entityId = _runtimeService.AddScreenSpaceBillboard(
           path!,
-          ndcX,
-          ndcY,
-          1.0f,
-          0.0f,
-          1.0f,
-          1,
-          PresentationEngineId
+          new ScreenSpaceBillboard(
+            NdcX: ndcX,
+            NdcY: ndcY,
+            Scale: 1.0f,
+            RotationDeg: 0.0f,
+            Opacity: 1.0f,
+            ZIndex: 1
+          )
         );
 
         // TODO remove this probably it will be handled rust side
@@ -451,22 +451,29 @@ public partial class Viewport3DViewModel
 
   private void SetupViewport()
   {
-    Console.WriteLine($"[SetupViewport] Called.  PE={PresentationEngineId}  Cam={CameraId}");
-    if (PresentationEngineId == 0)
+    // Viewport creation is now driven by VulkanViewportControlViewModel.InitializeHandle,
+    // which is called by VulkanViewportControl.CreateNativeControlCore once the OS handle
+    // is available. AddViewport is called there with the correct platform handle.
+    // This method is kept as a hook for future post-creation camera positioning.
+
+    if (PresentationEngineId != 0)
     {
-      // TODO viewport numbering service
-      if (_runtimeService.AddViewport(Width, Height, "Viewport_", out var presentationEngineId, out var camera))
-      {
-        PresentationEngineId = presentationEngineId;
-        CameraId = camera;
-      }
-
-      Console.WriteLine($"[SetupViewport] Created PE={PresentationEngineId} CameraId={CameraId}");
+      // TODO: apply default camera position once the PE is live
+      Console.WriteLine($"[SetupViewport] PE={PresentationEngineId} CameraId={CameraId} — ready for camera init");
     }
+  }
 
-    // TODO position camera
-    Console.WriteLine($"[SetupViewport] Applying default viewport camera position: pos=({HomePosX}, {HomePosY}, {HomePosZ})");
-    // throw new NotImplementedException();
+  /// <summary>
+  /// Called by <see cref="Logic.ViewModels.VulkanViewportControlViewModel"/> after
+  /// <see cref="INativeRuntimeService.AddViewport"/> succeeds, so this ViewModel can
+  /// track the presentation engine and camera entity IDs.
+  /// </summary>
+  public void OnViewportCreated(ulong presentationEngineId, ulong cameraEntityId)
+  {
+    PresentationEngineId = presentationEngineId;
+    CameraId = cameraEntityId;
+    Console.WriteLine($"[Viewport3DViewModel] OnViewportCreated PE={PresentationEngineId} Cam={CameraId}");
+    SetupViewport();
   }
 
   public VulkanViewportControlViewModel VulkanViewModel { get; }
@@ -477,9 +484,10 @@ public partial class Viewport3DViewModel
     BreadcrumbService breadcrumbService,
     IUiThreadDispatcher uiThreadDispatcher,
     IFileDialogService fileDialogService,
-    VulkanViewportControlViewModel vulkanViewportControlViewModel
+    VulkanViewportControlViewModel vulkanViewportControlViewModel,
+    ITabStateService<ViewportSession> sessionService
   )
-    : base("Viewport 3D")
+    : base("Viewport 3D", sessionService)
   {
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
@@ -527,7 +535,9 @@ public partial class Viewport3DViewModel
     }
   }
 
-  public void Dispose()
+  // Hides the base class Dispose() intentionally: we need to call both our native
+  // cleanup AND the base class Rx subscription teardown.
+  public new void Dispose()
   {
     Stop();
     if (PresentationEngineId != 0)
@@ -536,6 +546,7 @@ public partial class Viewport3DViewModel
       PresentationEngineId = 0;
       CameraId = 0;
     }
+    base.Dispose(); // tears down Rx session subscriptions
   }
 
   // public void Receive(Messages.ToggleAddJetModeMessage message)

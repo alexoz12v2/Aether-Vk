@@ -62,10 +62,18 @@
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Avalonia.Xaml.Behaviors" Version="11.3.0.6" />
+
     <!-- Avalonia.ReactiveUI.AvaloniaScheduler.Instance for having a System.Reactive Compatible MainThread -->
     <PackageReference Include="Avalonia.ReactiveUI" Version="11.3.8" />
+
+    <!-- Transitive dependency of avalonia with https://github.com/advisories/GHSA-xrw6-gwf8-vvr9 vulkerability -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
+
+    <!-- Dependency Injection -->
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.3" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.3" />
+
+    <!-- Our stuff -->
     <ProjectReference Include="../aethervk.ui-logic/aethervk.ui-logic.csproj" />
   </ItemGroup>
 
@@ -125,6 +133,10 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="..\assets\**\*.ttf">
+      <Link>assets\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\assets\**\*.wav">
       <Link>assets\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

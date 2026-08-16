@@ -1,0 +1,1 @@
+The closest distance the comet gets to the Sun. It is measured in Astronomical Units (AU), where 1 AU is the average distance between the Earth and the Sun (~93 million miles).

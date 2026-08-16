@@ -75,6 +75,15 @@ public partial class MainWindow : Window
         e.Handled = true;
       }
     }
+
+    // Global: plain Enter clears focus so any focused input commits and unfocuses.
+    // Child controls (behaviors, sliders) fire first via event bubbling; if they set
+    // e.Handled we skip. Otherwise we clear focus here as a catch-all.
+    if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None && !e.Handled)
+    {
+      FocusManager?.ClearFocus();
+      e.Handled = true;
+    }
   }
 
   private void ToggleFullscreen()

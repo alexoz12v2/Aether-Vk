@@ -206,4 +206,62 @@
         <Setter Property="CornerRadius" Value="4"/>
     </Style>
 
+    <!-- CalendarDatePicker Style                                          -->
+    <!-- Mirrors TextBox colours exactly: same border, background, and     -->
+    <!-- state transitions (hover, focus, disabled).                       -->
+    <!-- Override Fluent's hardcoded 232px MinWidth to match TextBox.      -->
+    <Style Selector="CalendarDatePicker">
+        <Setter Property="MinWidth"           Value="64"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="Background"         Value="{DynamicResource Bg.Surface}"/>
+        <Setter Property="Foreground"         Value="{DynamicResource Text.Primary}"/>
+        <Setter Property="BorderBrush"        Value="{DynamicResource Bg.Outline}"/>
+        <Setter Property="BorderThickness"    Value="1"/>
+        <Setter Property="CornerRadius"       Value="4"/>
+    </Style>
+
+    <!-- Inner TextBox: strip its own border so the outer one is the only frame -->
+    <Style Selector="CalendarDatePicker /template/ TextBox#PART_TextBox">
+        <Setter Property="Background"         Value="Transparent"/>
+        <Setter Property="BorderThickness"    Value="0"/>
+        <Setter Property="Padding"            Value="8,6"/>
+        <Setter Property="CaretBrush"         Value="{DynamicResource Accent.Primary}"/>
+        <Setter Property="SelectionBrush"     Value="{DynamicResource Accent.Subtle}"/>
+        <Setter Property="SelectionForegroundBrush" Value="{DynamicResource Text.Primary}"/>
+    </Style>
+
+    <!-- Calendar icon button: transparent, keeps the outer border clean -->
+    <Style Selector="CalendarDatePicker /template/ Button#PART_Button">
+        <Setter Property="Background"      Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Foreground"      Value="{DynamicResource Text.Secondary}"/>
+        <Setter Property="Padding"         Value="6,6"/>
+    </Style>
+    <Style Selector="CalendarDatePicker /template/ Button#PART_Button:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource Accent.Primary}"/>
+    </Style>
+
+    <!-- Pointer-over: accent border (same as TextBox:pointerover /template/ Border) -->
+    <Style Selector="CalendarDatePicker:pointerover /template/ Border">
+        <Setter Property="BorderBrush" Value="{DynamicResource Accent.Hover}"/>
+    </Style>
+
+    <!-- Focus-within: fires when the inner PART_TextBox receives focus -->
+    <!-- :focus would only fire if CalendarDatePicker itself held focus  -->
+    <Style Selector="CalendarDatePicker:focus-within /template/ Border">
+        <Setter Property="BorderBrush" Value="{DynamicResource Accent.Primary}"/>
+        <Setter Property="Background"  Value="{DynamicResource Bg.Canvas}"/>
+    </Style>
+
+    <!-- Disabled: muted colours (same as TextBox:disabled) -->
+    <Style Selector="CalendarDatePicker:disabled">
+        <Setter Property="Background"  Value="{DynamicResource Bg.Subtle}"/>
+        <Setter Property="Foreground"  Value="{DynamicResource Text.Disabled}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Bg.Default}"/>
+    </Style>
+    <Style Selector="CalendarDatePicker:disabled /template/ TextBox#PART_TextBox">
+        <Setter Property="Foreground" Value="{DynamicResource Text.Disabled}"/>
+    </Style>
+
 </Styles>

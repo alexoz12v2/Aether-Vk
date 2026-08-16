@@ -24,6 +24,7 @@ pub mod core_api;
 pub mod logic_thread;
 pub mod misc_api;
 pub mod render_thread;
+pub mod reposition;
 pub mod scene_api;
 pub mod structs;
 pub mod time_api;
@@ -65,9 +66,7 @@ impl SimulationContext {
       self.render_proxy.0.as_frontend().ok_or(EngineError::InvalidOperation(
         "SimulationContext::with_device | couldn't upgrade weak pointer to render context",
       ))?;
-    render_frontend
-      .with_device(render_device_handle, f)
-      .map_err(|e| EngineError::from(e))
+    render_frontend.with_device(render_device_handle, f).map_err(EngineError::from)
   }
 
   pub fn get_scene(&self, scene_id: u64) -> Option<Arc<RwLock<SceneContext>>> {
@@ -258,6 +257,86 @@ pub(crate) unsafe fn invoke_main_thread_flush_cleanup(
   }
 }
 
+/// Platform-agnostic 16-byte handle passed back from C# when Rust requests the OS window.
+///
+/// Layout (all fields `u64`, matching `CNativeWindowHandle` in C# `INativeRuntimeService.cs`):
+/// - **Linux (Xlib)**: `field0` = `Display*` as u64, `field1` = `Window` (XID) as u64.
+///   Note: Avalonia 11 does not support native Wayland — Linux always uses Xlib (XWayland
+///   bridges Wayland compositors transparently).
+/// - **Windows**: `field0` = `HINSTANCE` as u64, `field1` = `HWND` as u64.
+/// - **macOS**: `field0` = `CAMetalLayer*` as u64, `field1` = 0.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct CNativeWindowHandle {
+  pub field0: u64,
+  pub field1: u64,
+}
+
+/// Callback signature: Rust calls this with a pointer to an output handle and an
+/// `AtomicBool` signal. C# must:
+/// 1. Marshal the call to the UI thread.
+/// 2. Fill `*out_handle` with the OS window handle.
+/// 3. Store `true` in `*signal_done` with Release ordering.
+///
+/// On macOS the C# implementation wraps its body in `CocoaAutoreleasePool`
+/// (`#if TARGET_IS_OSX`) before reading `MacNativeInputHandler.MetalLayerPointer`.
+///
+/// # Safety
+/// - `out_handle` must point to a valid `CNativeWindowHandle`.
+/// - `signal_done` must point to a valid `AtomicBool` that is `false` on entry.
+/// - The callback must set `*signal_done` to `true` before returning — even on failure —
+///   or the Rust spin-wait will never terminate.
+pub type GetNativeWindowHandleCallback = unsafe extern "C" fn(
+  out_handle: *mut CNativeWindowHandle,
+  signal_done: *const core::sync::atomic::AtomicBool,
+);
+
+pub static GET_NATIVE_WINDOW_HANDLE_CALLBACK:
+  parking_lot::RwLock<Option<GetNativeWindowHandleCallback>> =
+    parking_lot::RwLock::new(None);
+
+/// Registers the delegate called when Rust needs the OS window handle.
+/// Must be set before `avkSimulationContext_addViewport` is called in windowed mode.
+pub fn register_get_native_window_handle_callback(
+  cb: Option<GetNativeWindowHandleCallback>,
+) {
+  *GET_NATIVE_WINDOW_HANDLE_CALLBACK.write() = cb;
+}
+
+/// Synchronously requests the native window handle from the managed UI thread.
+///
+/// Fires `GET_NATIVE_WINDOW_HANDLE_CALLBACK` and spin-waits (with `core::hint::spin_loop`)
+/// until the C# side sets `signal_done` to `true` (Release ordering).
+///
+/// Returns `None` if the callback is not registered or if `field0` of the returned
+/// handle is zero (indicating failure on the managed side).
+///
+/// # Safety
+/// - Must **not** be called from the UI thread — this would deadlock because the callback
+///   dispatches work onto that same thread.
+/// - `GET_NATIVE_WINDOW_HANDLE_CALLBACK` must be registered before calling this.
+pub unsafe fn get_native_window_handle_sync() -> Option<CNativeWindowHandle> {
+  use core::sync::atomic::{AtomicBool, Ordering};
+  use bytemuck::Zeroable;
+
+  let cb = (*GET_NATIVE_WINDOW_HANDLE_CALLBACK.read())?;
+
+  let mut out = CNativeWindowHandle::zeroed();
+  let signal_done = AtomicBool::new(false);
+
+  // SAFETY: `out` and `signal_done` live on this stack frame for the duration of the
+  // spin-wait below, so the pointers remain valid until C# has written and signalled.
+  unsafe { cb(&mut out as *mut _, &signal_done as *const _) };
+
+  // Spin-wait: C# stores `true` with Release ordering; we use Acquire to observe it.
+  while !signal_done.load(Ordering::Acquire) {
+    core::hint::spin_loop();
+  }
+
+  // field0 == 0 means the managed side failed to provide a handle.
+  if out.field0 == 0 { None } else { Some(out) }
+}
+
 pub mod external_state {
   #[repr(C)]
   #[derive(Debug, Clone, Copy, PartialEq, Eq, bytemuck::Zeroable, bytemuck::Pod)]
@@ -326,7 +405,7 @@ pub mod external_state {
     /// Signifies a new model was successfully imported
     ModelImported(CModelImported),
     /// Tells whether an almanac was loaded successfully or not
-    AlmanacImported(CAlamanacImported)
+    AlmanacImported(CAlamanacImported),
   }
 
   impl ExternalState {
@@ -371,6 +450,8 @@ pub fn emit_breadcrumb(status: u32, msg: &str) {
 /// Prints the full scene hierarchy to the log in a tree format (debug builds only).
 #[cfg(debug_assertions)]
 pub fn debug_print_scene_hierarchy(ctx_ref: &SimulationContext, scene_id: u64) {
+  use crate::scene::EntityId;
+
   let scene_arc = match ctx_ref.scenes.read().get_scene(scene_id) {
     Some(s) => s,
     None => {
@@ -381,21 +462,13 @@ pub fn debug_print_scene_hierarchy(ctx_ref: &SimulationContext, scene_id: u64) {
   let scene_ctx = scene_arc.read();
 
   // Find root entities (those with no parent).
-  let all_ext_ids: alloc::vec::Vec<u64> = scene_ctx.entity_map.keys().copied().collect();
   let mut roots: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
-  for &ext_id in &all_ext_ids {
-    if let Some(int_id) = scene_ctx.get_entity(ext_id) {
-      let parent = scene_ctx.scene.get_parent(int_id);
-      if parent.is_none() {
-        roots.push(ext_id);
-      }
-    }
-  }
+  roots.push(EntityId::as_ffi(&scene_ctx.root_entity));
 
   oshal::log!(
     "[Scene Hierarchy] scene={} total_entities={}",
     scene_id,
-    all_ext_ids.len()
+    scene_ctx.scene.entity_count()
   );
 
   // DFS print helper using an explicit stack to avoid recursion in no_std.
@@ -433,11 +506,7 @@ pub fn debug_print_scene_hierarchy(ctx_ref: &SimulationContext, scene_id: u64) {
       // Map internal ids back to external ids.
       let mut child_ext: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
       for child_int in &children {
-        if let Some((&child_ext_id, _)) =
-          scene_ctx.entity_map.iter().find(|&(_, &v)| v == *child_int)
-        {
-          child_ext.push(child_ext_id);
-        }
+        child_ext.push(EntityId::as_ffi(&child_int));
       }
       child_ext.reverse();
       for cext in child_ext {
@@ -445,6 +514,27 @@ pub fn debug_print_scene_hierarchy(ctx_ref: &SimulationContext, scene_id: u64) {
       }
     }
   }
+}
+
+/// Stable discriminators for the `comp_foreign_id` argument of `SIMULATION_CALLBACK`.
+///
+/// These values are the **single source of truth** for the Rust side. The C# side mirrors
+/// them in `aethervk.ui-logic/Services/ComponentForeignId.cs`. Never renumber an existing
+/// variant without a matching C# change.
+///
+/// All components that implement [`crate::scene::ForeignSerializable`] must use these
+/// values (via `as u64`) for their `COMPONENT_ID` constant, rather than the internal
+/// `ComponentTypeId` enum which has different numbering.
+#[repr(u64)]
+pub enum ComponentForeignId {
+  HighResTransform = 1,
+  CameraProjection = 2,
+  CometPosition    = 3,
+}
+
+impl ComponentForeignId {
+  /// Returns the discriminator as a `u64` for use in `COMPONENT_ID` constants.
+  pub const fn as_u64(self) -> u64 { self as u64 }
 }
 
 #[cfg(test)]
