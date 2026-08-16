@@ -141,7 +141,9 @@ impl ops::Div<Self> for Vec3f32 {
   type Output = Self;
   #[inline]
   fn div(self, rhs: Self) -> Self::Output {
-    Self(self.0 / rhs.0)
+    let mut safe_rhs = rhs.0;
+    safe_rhs.set_component(3, 1.0);
+    Self(self.0 / safe_rhs)
   }
 }
 
@@ -176,7 +178,9 @@ impl ops::MulAssign<f32> for Vec3f32 {
 impl ops::DivAssign<Self> for Vec3f32 {
   #[inline]
   fn div_assign(&mut self, rhs: Self) {
-    self.0 = self.0 / rhs.0;
+    let mut safe_rhs = rhs.0;
+    safe_rhs.set_component(3, 1.0);
+    self.0 = self.0 / safe_rhs;
   }
 }
 

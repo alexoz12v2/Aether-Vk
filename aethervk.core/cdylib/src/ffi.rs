@@ -104,6 +104,7 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
       if let Some(asset_dir) = aethervk_core_rlib::gpu::ASSET_DIR.read().clone() {
         let de442_path = alloc::format!("{}/planets/de442.bsp", asset_dir);
         let bpc_path = alloc::format!("{}/earth_latest_high_prec.bpc", asset_dir);
+        let pca_path = alloc::format!("{}/planets/pck00011.pca", asset_dir);
         let mut logic = ctx_box.logic_state.write();
         if let Err(e) = logic.almanac_data.load_almanac(oshal::os::fs::PathBuf::from(&de442_path)) {
           oshal::log!("[startup] de442.bsp load failed: {}", e);
@@ -117,6 +118,13 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
           emit_breadcrumb(
             2,
             "earth_latest_high_prec.bpc not available at startup — Earth rotation unavailable",
+          );
+        }
+        if let Err(e) = logic.almanac_data.load_almanac(oshal::os::fs::PathBuf::from(&pca_path)) {
+          oshal::log!("[startup] pck00011.pca load failed: {}", e);
+          emit_breadcrumb(
+            2,
+            "pck00011.pca not available at startup — Earth constants unavailable",
           );
         }
         drop(logic);

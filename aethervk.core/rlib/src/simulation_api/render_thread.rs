@@ -81,8 +81,12 @@ pub fn start_render_thread(
             if do_discard {
               let items = {
                 let res = vulkan_device.res.read();
+                let cached_timeline = res.get_timeline_semaphore_cached_value();
+                if cached_timeline == 0 {
+                  return Ok(()); // don't care about do_main_queue_cleanup, we just started
+                }
                 // not sure about this `- 1`, but it's conservative, so it's fine
-                let timeline = res.get_timeline_semaphore_cached_value() - 1;
+                let timeline = cached_timeline - 1;
                 res.discard_pool.pop_ready_items(timeline)
               };
               vulkan::device::DiscardPool::destroy_items_lock_free(&vulkan_device.device, items);

@@ -109,6 +109,26 @@ is_wg_variant() {
     return 1
 }
 
+# Shaders that use float16_t / f16vec4 arithmetic (not just buffer layout).
+# These receive an extra NATIVE_FLOAT16 compile dimension: native (.comp[.wgN].spv)
+# and fallback (.comp.nofp16[.wgN].spv) blobs. Buffer layout (f16vec4 fields in
+# ParticleChunkData) is unchanged in both — GL_EXT_shader_16bit_storage covers that.
+FLOAT16_VARIANT_SHADERS=(
+    apply_emitters_direct_new.comp
+    integrate_particles_p1_p2_new.comp
+    integrate_particles_p4_5_new.comp
+    new_particles_emit.comp
+    new_particles_offset_particles.comp
+)
+
+is_float16_variant() {
+    local base="$1"
+    for s in "${FLOAT16_VARIANT_SHADERS[@]}"; do
+        [ "$s" = "$base" ] && return 0
+    done
+    return 1
+}
+
 compile_one() {
     local file="$1" stage="$2" extra_flags="${3:-}" out="$4"
     echo "  glslc $extra_flags -> $(basename "$out")"
@@ -134,17 +154,37 @@ for file in assets/*.comp assets/sim/*.comp; do
     echo "Shader: $file"
 
     if is_wg_variant "$base"; then
-        # Also produce the natural .comp.spv (no -D override) so mk!() still works
-        # for shaders that haven't been converted to mk_wg!() yet.
-        compile_one "$file" comp "" "${file}.spv"
-        compile_one "$file" comp "-DDEBUG_SHADERS" "${file%.comp}.comp.d.spv"
-        # Produce one SPIR-V per candidate workgroup size for mk_wg!() shaders.
-        for wg in "${WG_SIZES[@]}"; do
-            out="${file%.comp}.comp.wg${wg}.spv"
-            compile_one "$file" comp "-DLOCAL_SIZE_X=$wg" "$out"
-            out_d="${file%.comp}.comp.wg${wg}.d.spv"
-            compile_one "$file" comp "-DLOCAL_SIZE_X=$wg -DDEBUG_SHADERS" "$out_d"
-        done
+        if is_float16_variant "$base"; then
+            # Produce fp16-native (NATIVE_FLOAT16=1) and fp32-fallback (NATIVE_FLOAT16=0)
+            # variants for every workgroup size. The .nofp16 infix marks the fallback blobs.
+            for fp16 in 1 0; do
+                fp16_flag="-DNATIVE_FLOAT16=$fp16"
+                if [ "$fp16" -eq 1 ]; then
+                    fp16_infix=""
+                else
+                    fp16_infix=".nofp16"
+                fi
+                compile_one "$file" comp "$fp16_flag"                             "${file%.comp}.comp${fp16_infix}.spv"
+                compile_one "$file" comp "$fp16_flag -DDEBUG_SHADERS"             "${file%.comp}.comp${fp16_infix}.d.spv"
+                for wg in "${WG_SIZES[@]}"; do
+                    compile_one "$file" comp "$fp16_flag -DLOCAL_SIZE_X=$wg"               "${file%.comp}.comp${fp16_infix}.wg${wg}.spv"
+                    compile_one "$file" comp "$fp16_flag -DLOCAL_SIZE_X=$wg -DDEBUG_SHADERS" "${file%.comp}.comp${fp16_infix}.wg${wg}.d.spv"
+                done
+            done
+        else
+            # Non-float16 wg-variant: single compile pass (existing behaviour).
+            # Also produce the natural .comp.spv (no -D override) so mk!() still works
+            # for shaders that haven't been converted to mk_wg!() yet.
+            compile_one "$file" comp "" "${file}.spv"
+            compile_one "$file" comp "-DDEBUG_SHADERS" "${file%.comp}.comp.d.spv"
+            # Produce one SPIR-V per candidate workgroup size for mk_wg!() shaders.
+            for wg in "${WG_SIZES[@]}"; do
+                out="${file%.comp}.comp.wg${wg}.spv"
+                compile_one "$file" comp "-DLOCAL_SIZE_X=$wg" "$out"
+                out_d="${file%.comp}.comp.wg${wg}.d.spv"
+                compile_one "$file" comp "-DLOCAL_SIZE_X=$wg -DDEBUG_SHADERS" "$out_d"
+            done
+        fi
     else
         # Single-variant (specialization-constant or always-single-thread)
         compile_one "$file" comp "" "${file}.spv"

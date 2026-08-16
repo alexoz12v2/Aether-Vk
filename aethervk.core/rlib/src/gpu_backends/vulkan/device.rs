@@ -2815,6 +2815,9 @@ impl Device {
       chosen_physical_device_query_result.debug_shaders,
       chosen_physical_device_query_result.subgroup_size,
       chosen_physical_device_query_result.is_cpu,
+      chosen_physical_device_query_result
+        .optional_extensions
+        .contains(utils::OptionalExtensionSupportFlags::NATIVE_FLOAT16),
     ) {
       Ok(k) => k,
       Err(e) => {
@@ -9728,7 +9731,8 @@ pub mod particles {
     }
 
     /// Swaps the roles of the front and back buffers.
-    /// SAFETY: GPU side needs to be externally synchronized
+    /// # Safety
+    /// GPU side needs to be externally synchronized
     #[inline]
     pub unsafe fn swap_buffers(&mut self) {
       self.front_index = 1 - self.front_index;
@@ -9880,6 +9884,7 @@ pub mod particles {
       let mut _cleanup = TransientCleanup::command_only(device, command_pool, fence);
       let command_buffer_info = vk::CommandBufferAllocateInfo::default()
         .level(vk::CommandBufferLevel::PRIMARY)
+        .command_pool(command_pool)
         .command_buffer_count(1);
       let command_buffer = unsafe {
         let mut c = vk::CommandBuffer::null();

@@ -85,7 +85,7 @@ void main() {
     }
 
     // ── Read particle data from AOSOA ─────────────────────────────────────
-    f16vec4 invM = pc.globalParticleBufferAddress[chunkIndex].invMass[chunkOffset];
+    FVEC4 invM = pc.globalParticleBufferAddress[chunkIndex].invMass[chunkOffset];
     vec4 beta = vec4(pc.globalParticleBufferAddress[chunkIndex].beta[chunkOffset]);
 
     vec4 px_n = pc.globalParticleBufferAddress[chunkIndex].positionX[chunkOffset];
@@ -152,10 +152,10 @@ void main() {
     // ── Atomic-add force directly into AOSOA slots 7-9 ───────────────────
     // F = acc × mass, matching the convention of accumulate_bvh_forces_to_particles.
     // we don't care about dead/free particles, so write zero
-    f16vec4 zeroForce = f16vec4(0.0hf);
-    f16vec4 fx_final = mix(zeroForce, f16vec4(fx_acc), isAlive);
-    f16vec4 fy_final = mix(zeroForce, f16vec4(fy_acc), isAlive);
-    f16vec4 fz_final = mix(zeroForce, f16vec4(fz_acc), isAlive);
+    FVEC4 zeroForce = FVEC4(FP_ZERO);
+    FVEC4 fx_final = mix(zeroForce, FVEC4(fx_acc), isAlive);
+    FVEC4 fy_final = mix(zeroForce, FVEC4(fy_acc), isAlive);
+    FVEC4 fz_final = mix(zeroForce, FVEC4(fz_acc), isAlive);
 
 #ifdef DEBUG_SHADERS
     if (all(equal(fx_final, zeroForce)) &&
@@ -166,7 +166,7 @@ void main() {
     }
 #endif
 
-    pc.globalParticleBufferAddress[chunkIndex].forceX[chunkOffset] = fx_final;
-    pc.globalParticleBufferAddress[chunkIndex].forceY[chunkOffset] = fy_final;
-    pc.globalParticleBufferAddress[chunkIndex].forceZ[chunkOffset] = fz_final;
+    pc.globalParticleBufferAddress[chunkIndex].forceX[chunkOffset] = STORE_FVEC4(fx_final);
+    pc.globalParticleBufferAddress[chunkIndex].forceY[chunkOffset] = STORE_FVEC4(fy_final);
+    pc.globalParticleBufferAddress[chunkIndex].forceZ[chunkOffset] = STORE_FVEC4(fz_final);
 }

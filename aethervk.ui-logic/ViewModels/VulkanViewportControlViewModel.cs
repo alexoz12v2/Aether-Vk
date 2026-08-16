@@ -79,9 +79,10 @@ public partial class VulkanViewportControlViewModel(
 
     if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
     {
-      // Avalonia 11: Linux always uses Xlib. handle = XID (Window), parentHandle = Display*.
+      // Avalonia 11: Linux always uses Xlib. handle = XID (Window).
+      // We must get the Display* from the input handler, NOT parentHandle (which is the parent XID).
       var xid = handle;
-      var display = parentHandle;
+      var display = (_handler as LinuxNativeInputHandler)?.DisplayPointer ?? IntPtr.Zero;
       provider = () => NativeWindowHandleProvider.ForXlib(display, xid);
       handleType = NativeWindowHandleProvider.HandleType.Xlib;
     }

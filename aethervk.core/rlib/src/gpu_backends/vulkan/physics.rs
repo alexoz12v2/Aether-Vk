@@ -68,6 +68,9 @@ pub struct PhysicsPipelines {
   /// True when running on a CPU Vulkan device (Lavapipe / llvmpipe).
   /// Enables CPU-optimised SPIR-V variants and reduced workgroup sizes.
   pub is_lavapipe: bool,
+  /// True when the device supports shaderFloat16 (VK_KHR_shader_float16_int8 feature bit).
+  /// False on Pascal (GTX 10xx) and older NVIDIA GPUs — selects .nofp16 SPIR-V variants.
+  pub has_native_float16: bool,
 }
 
 impl PhysicsPipelines {
@@ -77,7 +80,14 @@ impl PhysicsPipelines {
     debug_shaders: bool,
     subgroup_size: u32,
     is_cpu: bool,
+    has_native_float16: bool,
   ) -> GpuResult<Self> {
+    if has_native_float16 {
+      aethervk_oshal_rlib::log!("[Physics] Native float16 arithmetic is SUPPORTED (VK_KHR_shader_float16_int8:shaderFloat16).");
+    } else {
+      aethervk_oshal_rlib::log!("[Physics] Native float16 arithmetic is MISSING. Using fallback FP32 shaders with 16-bit storage.");
+    }
+
     if subgroup_size <= 16 && is_cpu {
       // For Lavapipe, if subgroup_size <= 16, workgroup size will be reduced to subgroup_size.
       // So subgroup_size remains the hardware subgroup_size.
@@ -361,22 +371,72 @@ impl PhysicsPipelines {
       }};
     }
 
+    // mk_wg_fp! — like mk_wg! but also selects the NATIVE_FLOAT16 SPIR-V variant.
+    // Used for the five particle shaders that use float16_t / f16vec4 arithmetic.
+    //   NATIVE_FLOAT16=1 (capable hardware): loads the bare .comp[.wgN].spv
+    //   NATIVE_FLOAT16=0 (Pascal / GTX10xx): loads .comp.nofp16[.wgN].spv
+    macro_rules! mk_wg_fp {
+      ($stem:expr) => {{
+        let fp16_infix = if has_native_float16 { "" } else { ".nofp16" };
+        let mut path;
+        if is_cpu && subgroup_size <= 16 {
+          let wg_suffix = match subgroup_size {
+            1..=4 => "wg4",
+            5..=8 => "wg8",
+            _ => "wg16",
+          };
+          path = alloc::format!("{}/{}{}.{}.spv", sim_dir, $stem, fp16_infix, wg_suffix);
+        } else {
+          path = alloc::format!("{}/{}{}.spv", sim_dir, $stem, fp16_infix);
+        };
+        if use_debug {
+          path = path.replace(".spv", ".d.spv");
+        }
+        let (pipeline, pc_size, wg_size) = create_pipeline(&path)?;
+        pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
+        wg_sizes.insert(ash::vk::Handle::as_raw(pipeline), wg_size);
+        pipeline
+      }};
+      ($stem:expr, $wg:expr) => {{
+        let fp16_infix = if has_native_float16 { "" } else { ".nofp16" };
+        let mut path;
+        if is_cpu && subgroup_size <= 16 {
+          let wg_suffix = match subgroup_size {
+            1..=4 => "wg4",
+            5..=8 => "wg8",
+            _ => "wg16",
+          };
+          path = alloc::format!("{}/{}{}.{}.spv", sim_dir, $stem, fp16_infix, wg_suffix);
+        } else {
+          path = alloc::format!("{}/{}{}.{}.spv", sim_dir, $stem, fp16_infix, $wg);
+        };
+        if use_debug {
+          path = path.replace(".spv", ".d.spv");
+        }
+        let (pipeline, pc_size, wg_size) = create_pipeline(&path)?;
+        pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
+        wg_sizes.insert(ash::vk::Handle::as_raw(pipeline), wg_size);
+        pipeline
+      }};
+    }
+
     let res: GpuResult<Self> = (|| {
       Ok(Self {
         pipeline_layout,
-        // ── New Particle System ───────────────────────────────────────────────────
+        // ── New Particle System ──────────────────────────────────────────────────────────────────────────────
         new_particles_compact_reset: mk_wg!("new_particles_compact_reset.comp"),
-        new_particles_emit: mk_wg!("new_particles_emit.comp", "wg64"),
+        new_particles_emit: mk_wg_fp!("new_particles_emit.comp", "wg64"),
         new_particles_compact: mk_wg!("new_particles_compact.comp", "wg64"),
-        apply_emitters_direct_new: mk_wg!("apply_emitters_direct_new.comp"),
-        integrate_particles_p1_p2_new: mk_wg!("integrate_particles_p1_p2_new.comp"),
-        integrate_particles_p4_5_new: mk_wg!("integrate_particles_p4_5_new.comp"),
-        new_particles_offset_particles: mk_wg!("new_particles_offset_particles.comp"),
+        apply_emitters_direct_new: mk_wg_fp!("apply_emitters_direct_new.comp"),
+        integrate_particles_p1_p2_new: mk_wg_fp!("integrate_particles_p1_p2_new.comp"),
+        integrate_particles_p4_5_new: mk_wg_fp!("integrate_particles_p4_5_new.comp"),
+        new_particles_offset_particles: mk_wg_fp!("new_particles_offset_particles.comp"),
         reset_particles: mk_wg!("reset_particles.comp"),
         pc_sizes,
         wg_sizes,
         subgroup_size,
         is_lavapipe: is_cpu,
+        has_native_float16,
       })
     })();
     match res {
@@ -436,8 +496,9 @@ impl VulkanComputeKernels {
     debug_shaders: bool,
     subgroup_size: u32,
     is_cpu: bool,
+    has_native_float16: bool,
   ) -> GpuResult<Self> {
-    let pipelines = PhysicsPipelines::new(device, debug_shaders, subgroup_size, is_cpu)?;
+    let pipelines = PhysicsPipelines::new(device, debug_shaders, subgroup_size, is_cpu, has_native_float16)?;
 
     let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()
       .initial_value(0)

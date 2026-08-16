@@ -224,7 +224,7 @@ void main() {
             vec4 uNorm2 = prng(vec4(rState = pcg(rState)));
 
             vec4 pX, pY, pZ;
-            f16vec4 vX, vY, vZ, invMass;
+            FVEC4 vX, vY, vZ, invMass;
             uvec4 sTime;
 
             [[dont_unroll]]
@@ -249,14 +249,14 @@ void main() {
 
                         float mass = pc.massVelMeanStd.x + (nDist.x * pc.massVelMeanStd.y);
                         mass = max(mass, PARTICLE_MINIMUM_MASS); // Note, this is a threshold in grams. Cluster stuff
-                        invMass[i] = float16_t(1.0 / mass);
+                        invMass[i] = FP(1.0 / mass);
 
                         float speed = pc.massVelMeanStd.z + (nDist.y * pc.massVelMeanStd.w);
                         speed = max(speed, 0.0);
                         vec3 vel = dir * speed;
-                        vX[i] = float16_t(vel.x);
-                        vY[i] = float16_t(vel.y);
-                        vZ[i] = float16_t(vel.z);
+                        vX[i] = FP(vel.x);
+                        vY[i] = FP(vel.y);
+                        vZ[i] = FP(vel.z);
 
                         sTime[i] = pc.currentTime;
                     } else {
@@ -269,8 +269,8 @@ void main() {
                     // fill unused lanes with dead markers for compaction
                     sTime[i] = 0xFFFFFFFF;
                     pX[i] = pY[i] = pZ[i] = 0.0;
-                    vX[i] = vY[i] = vZ[i] = 0.0hf;
-                    invMass[i] = 0.0hf;
+                    vX[i] = vY[i] = vZ[i] = FP_ZERO;
+                    invMass[i] = FP_ZERO;
                 }
             }
 
@@ -279,18 +279,18 @@ void main() {
             pc.globalParticleBuffer.chunks[physIdx].positionY[localVec4Index] = pY;
             pc.globalParticleBuffer.chunks[physIdx].positionZ[localVec4Index] = pZ;
 
-            pc.globalParticleBuffer.chunks[physIdx].velocityX[localVec4Index] = vX;
-            pc.globalParticleBuffer.chunks[physIdx].velocityY[localVec4Index] = vY;
-            pc.globalParticleBuffer.chunks[physIdx].velocityZ[localVec4Index] = vZ;
+            pc.globalParticleBuffer.chunks[physIdx].velocityX[localVec4Index] = STORE_FVEC4(vX);
+            pc.globalParticleBuffer.chunks[physIdx].velocityY[localVec4Index] = STORE_FVEC4(vY);
+            pc.globalParticleBuffer.chunks[physIdx].velocityZ[localVec4Index] = STORE_FVEC4(vZ);
 
-            pc.globalParticleBuffer.chunks[physIdx].invMass[localVec4Index]   = invMass;
+            pc.globalParticleBuffer.chunks[physIdx].invMass[localVec4Index]   = STORE_FVEC4(invMass);
             pc.globalParticleBuffer.chunks[physIdx].spawnTime[localVec4Index] = sTime;
 
-            pc.globalParticleBuffer.chunks[physIdx].forceX[localVec4Index] = f16vec4(0.0hf);
-            pc.globalParticleBuffer.chunks[physIdx].forceY[localVec4Index] = f16vec4(0.0hf);
-            pc.globalParticleBuffer.chunks[physIdx].forceZ[localVec4Index] = f16vec4(0.0hf);
+            pc.globalParticleBuffer.chunks[physIdx].forceX[localVec4Index] = STORE_FVEC4(FVEC4(FP_ZERO));
+            pc.globalParticleBuffer.chunks[physIdx].forceY[localVec4Index] = STORE_FVEC4(FVEC4(FP_ZERO));
+            pc.globalParticleBuffer.chunks[physIdx].forceZ[localVec4Index] = STORE_FVEC4(FVEC4(FP_ZERO));
 
-            pc.globalParticleBuffer.chunks[physIdx].beta[localVec4Index] = f16vec4(float16_t(pc.sunDirAndBeta.w));
+            pc.globalParticleBuffer.chunks[physIdx].beta[localVec4Index] = STORE_FVEC4(FVEC4(FP(pc.sunDirAndBeta.w)));
         }
 
         // 4. Safely update Global Particle Count

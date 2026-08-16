@@ -70,10 +70,10 @@ void main() {
 
     // 1. Fetch lifecycle states for all 4 particles
     uvec4 st = pc.globalParticleBufferAddress[chunkIndex].spawnTime[chunkOffset];
-    float16_t dt_half = float16_t(pc.deltaTime / 2);
+    FP_T dt_half = FP(pc.deltaTime / 2);
     float dt_f32 = pc.deltaTime;
 #ifdef DEBUG_SHADERS
-    if (isnan(dt_half) || dt_half == 0hf) {
+    if (isnan(dt_half) || dt_half == FP_ZERO) {
         debugPrintfEXT("Help half dt died\n");
         return;
     }
@@ -91,21 +91,21 @@ void main() {
     }
 
     // ── Skip inactive / massless particles ────────────────────────────────
-    f16vec4 invM = pc.globalParticleBufferAddress[chunkIndex].invMass[chunkOffset];
+    FVEC4 invM = pc.globalParticleBufferAddress[chunkIndex].invMass[chunkOffset];
 
     // Write v_{n+1} back — force buffer stays intact for next frame
-    f16vec4 fx_next = pc.globalParticleBufferAddress[chunkIndex].forceX[chunkOffset];
-    f16vec4 fy_next = pc.globalParticleBufferAddress[chunkIndex].forceY[chunkOffset];
-    f16vec4 fz_next = pc.globalParticleBufferAddress[chunkIndex].forceZ[chunkOffset];
+    FVEC4 fx_next = pc.globalParticleBufferAddress[chunkIndex].forceX[chunkOffset];
+    FVEC4 fy_next = pc.globalParticleBufferAddress[chunkIndex].forceY[chunkOffset];
+    FVEC4 fz_next = pc.globalParticleBufferAddress[chunkIndex].forceZ[chunkOffset];
 
-    f16vec4 vx_half = pc.globalParticleBufferAddress[chunkIndex].velocityX[chunkOffset];
-    f16vec4 vy_half = pc.globalParticleBufferAddress[chunkIndex].velocityY[chunkOffset];
-    f16vec4 vz_half = pc.globalParticleBufferAddress[chunkIndex].velocityZ[chunkOffset];
+    FVEC4 vx_half = pc.globalParticleBufferAddress[chunkIndex].velocityX[chunkOffset];
+    FVEC4 vy_half = pc.globalParticleBufferAddress[chunkIndex].velocityY[chunkOffset];
+    FVEC4 vz_half = pc.globalParticleBufferAddress[chunkIndex].velocityZ[chunkOffset];
 
     // VV corrector: [m/s] + [m/s²] * [s/2] = [m/s]
-    f16vec4 vx = vx_half + dt_half * invM * fx_next;
-    f16vec4 vy = vy_half + dt_half * invM * fy_next;
-    f16vec4 vz = vz_half + dt_half * invM * fz_next;
+    FVEC4 vx = vx_half + dt_half * invM * fx_next;
+    FVEC4 vy = vy_half + dt_half * invM * fy_next;
+    FVEC4 vz = vz_half + dt_half * invM * fz_next;
 
 #ifdef DEBUG_SHADERS
     [[dont_unroll]]
@@ -133,7 +133,7 @@ void main() {
     vy_half = mix(vy_half, vy, isAlive);
     vz_half = mix(vz_half, vz, isAlive);
 
-    pc.globalParticleBufferAddress[chunkIndex].velocityX[chunkOffset] = vx_half;
-    pc.globalParticleBufferAddress[chunkIndex].velocityY[chunkOffset] = vy_half;
-    pc.globalParticleBufferAddress[chunkIndex].velocityZ[chunkOffset] = vz_half;
+    pc.globalParticleBufferAddress[chunkIndex].velocityX[chunkOffset] = STORE_FVEC4(vx_half);
+    pc.globalParticleBufferAddress[chunkIndex].velocityY[chunkOffset] = STORE_FVEC4(vy_half);
+    pc.globalParticleBufferAddress[chunkIndex].velocityZ[chunkOffset] = STORE_FVEC4(vz_half);
 }

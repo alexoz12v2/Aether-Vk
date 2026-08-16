@@ -484,7 +484,7 @@ public partial class Viewport3DViewModel
     BreadcrumbService breadcrumbService,
     IUiThreadDispatcher uiThreadDispatcher,
     IFileDialogService fileDialogService,
-    VulkanViewportControlViewModel vulkanViewportControlViewModel,
+    Func<Viewport3DViewModel, VulkanViewportControlViewModel> vulkanVmFactory,
     ITabStateService<ViewportSession> sessionService
   )
     : base("Viewport 3D", sessionService)
@@ -493,7 +493,7 @@ public partial class Viewport3DViewModel
     _breadcrumbService = breadcrumbService;
     _uiThreadDispatcher = uiThreadDispatcher;
     _fileDialogService = fileDialogService;
-    VulkanViewModel = vulkanViewportControlViewModel;
+    VulkanViewModel = vulkanVmFactory(this);
 
     OperatorStack = new OperatorStack(new ViewportBaseOperator(this));
     IsInitialized = true;

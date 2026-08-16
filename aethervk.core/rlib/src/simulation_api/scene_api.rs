@@ -186,56 +186,62 @@ impl SimulationContext {
       (scene, root_entity)
     };
 
-    let create_subtree =
-      |name: &str, is_comet: bool, add_gizmo: bool| -> crate::simulation_api::structs::SubtreeEntities {
-        const AU_TO_KM: f32 = 149_597_870.7;
-        // subtree root (AU frame, child of root)
-        let subtree = scene.spawn_entity(&alloc::format!("{}_subtree", name));
-        scene.set_parent(subtree, Some(root_entity));
-        // will be modified on "forced repositioning" (repositioning implemented in logic_thread
-        // per-frame FRAME SHIFT, and explicitly via reposition::force_reposition at scene creation
-        // or epoch range change)
-        scene.add_component(subtree, crate::scene::TransformComponent::default());
+    let create_subtree = |name: &str,
+                          is_comet: bool,
+                          add_gizmo: bool|
+     -> crate::simulation_api::structs::SubtreeEntities {
+      const AU_TO_KM: f32 = 149_597_870.7;
+      // subtree root (AU frame, child of root)
+      let subtree = scene.spawn_entity(&alloc::format!("{}_subtree", name));
+      scene.set_parent(subtree, Some(root_entity));
+      // will be modified on "forced repositioning" (repositioning implemented in logic_thread
+      // per-frame FRAME SHIFT, and explicitly via reposition::force_reposition at scene creation
+      // or epoch range change)
+      scene.add_component(subtree, crate::scene::TransformComponent::default());
+      scene.add_component(
+        subtree,
+        crate::scene::ReferenceFrameComponent {
+          frame_type: crate::scene::ReferenceFrameType::Micro,
+          scale: AU_TO_KM,
+          soi_radius: 1.0,
+          depth_layer: 1,
+        },
+      );
+
+      // body entity (from here on out everything in km)
+      let body = scene.spawn_entity(&alloc::format!("{}_body", name));
+      scene.set_parent(body, Some(subtree));
+      // note for comets: the local frame represents the axis set by the user theorizing the
+      // nucleus model. Movement is expressed in global units (km, heliocentric) in double
+      // precision (see logic_thread)
+      scene.add_component(body, crate::scene::TransformComponent::default());
+      if add_gizmo {
         scene.add_component(
-          subtree,
-          crate::scene::ReferenceFrameComponent {
-            frame_type: crate::scene::ReferenceFrameType::Micro,
-            scale: AU_TO_KM,
-            soi_radius: 1.0,
-            depth_layer: 1,
-          },
+          body,
+          crate::scene::SphericalGizmoComponent { is_visible: true },
         );
+      }
+      // body will see AlmanacPlanet added once the relevant almanac files are confirmed loaded.
+      if is_comet {
+        scene.add_component(body, crate::scene::CometMarkerComponent {});
+      } else {
+        scene.add_component(body, crate::scene::PlanetMarkerComponent {});
+      }
 
-        // body entity (from here on out everything in km)
-        let body = scene.spawn_entity(&alloc::format!("{}_body", name));
-        scene.set_parent(body, Some(subtree));
-        // note for comets: the local frame represents the axis set by the user theorizing the
-        // nucleus model. Movement is expressed in global units (km, heliocentric) in double
-        // precision (see logic_thread)
-        scene.add_component(body, crate::scene::TransformComponent::default());
-        if add_gizmo {
-          scene.add_component(
-            body,
-            crate::scene::SphericalGizmoComponent { is_visible: true },
-          );
-        }
-        // body will see AlmanacPlanet added once the relevant almanac files are confirmed loaded.
-        if is_comet {
-          scene.add_component(body, crate::scene::CometMarkerComponent {});
-        } else {
-          scene.add_component(body, crate::scene::PlanetMarkerComponent {});
-        }
+      // orbit entity — MUST be a child of root_entity (depth_layer=0) so that its AU-scale
+      // TrajectoryComponent control points are rendered in the heliocentric frame.
+      // If parented to the Micro-frame subtree (depth_layer=1), the renderer's RTE path would
+      // multiply AU control points by AU_TO_KM (~1.5e8), placing them far off-screen.
+      let orbit = scene.spawn_entity(&alloc::format!("{}_orbit", name));
+      scene.set_parent(orbit, Some(root_entity));
+      scene.add_component(orbit, crate::scene::TransformComponent::default());
 
-        // orbit entity — MUST be a child of root_entity (depth_layer=0) so that its AU-scale
-        // TrajectoryComponent control points are rendered in the heliocentric frame.
-        // If parented to the Micro-frame subtree (depth_layer=1), the renderer's RTE path would
-        // multiply AU control points by AU_TO_KM (~1.5e8), placing them far off-screen.
-        let orbit = scene.spawn_entity(&alloc::format!("{}_orbit", name));
-        scene.set_parent(orbit, Some(root_entity));
-        scene.add_component(orbit, crate::scene::TransformComponent::default());
-
-        crate::simulation_api::structs::SubtreeEntities { subtree, body, orbit }
-      };
+      crate::simulation_api::structs::SubtreeEntities {
+        subtree,
+        body,
+        orbit,
+      }
+    };
 
     // 1. Cursor Entity
     let cursor_entity = scene.spawn_entity("cursor");
@@ -343,7 +349,6 @@ impl SimulationContext {
       let _ = tx.try_send(crate::simulation_api::structs::RenderCommand::GenerateSky);
     }
 
-
     // Store entity IDs on SceneContext before insert_scene.
     // We hold a write lock here; insert_scene will assert strong_count == 1, which is satisfied
     // because this write guard does not increment the Arc count — it borrows through it.
@@ -371,17 +376,15 @@ impl SimulationContext {
     // is left at identity with no AlmanacPlanet component. The logic_thread will not drive it.
     let can_move_earth = {
       let logic_state = self.logic_state.read();
-      let has_de442 = logic_state
-        .almanac_data
-        .file_names
-        .iter()
-        .any(|f| f.contains("de442.bsp"));
+      let has_de442 = logic_state.almanac_data.file_names.iter().any(|f| f.contains("de442.bsp"));
       let has_earth_bpc = logic_state
         .almanac_data
         .file_names
         .iter()
         .any(|f| f.contains("earth_latest_high_prec.bpc"));
-      has_de442 && has_earth_bpc
+      let has_planetary_constants =
+        logic_state.almanac_data.file_names.iter().any(|f| f.contains("pck00011.tpc"));
+      has_de442 && has_earth_bpc && has_planetary_constants
     };
 
     if can_move_earth {
@@ -390,7 +393,7 @@ impl SimulationContext {
       // cartesian_state_cache and begin driving it on the next simulation tick.
       let planet = crate::scene::AlmanacPlanet::new(
         anise::constants::celestial_objects::EARTH, // NAIF ID 399
-        86400.0 * 0.99726968_f64,                  // sidereal rotation period (seconds)
+        86400.0 * 0.99726968_f64,                   // sidereal rotation period (seconds)
         3.986004418e5_f32,                          // Earth GM (km³/s²)
       );
       {
@@ -411,10 +414,7 @@ impl SimulationContext {
               &planet,
               start_epoch,
             ) {
-              aethervk_oshal_rlib::log!(
-                "[scene_api] Earth force_reposition failed: {}",
-                e
-              );
+              aethervk_oshal_rlib::log!("[scene_api] Earth force_reposition failed: {}", e);
             }
           }
         }
@@ -478,7 +478,6 @@ impl SimulationContext {
       earth_body: crate::scene::EntityId::as_ffi(&earth.body),
     })
   }
-
 
   #[cfg(test)]
   pub fn create_default_scene(&self, spawn_fallback_camera: bool) -> EngineResult<u64> {
