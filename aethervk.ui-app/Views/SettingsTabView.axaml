@@ -39,128 +39,130 @@
     </Style>
   </UserControl.Styles>
 
-  <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16">
+  <ScrollViewer Classes="left-scrollbar" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+    <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16">
 
-    <!-- General Settings for Research -->
-    <Border Classes="accordion">
-      <Expander Header="{Binding StrGeneral}">
-        <!-- Form-Like: label auto-sizes, input stretches -->
-        <Grid ColumnDefinitions="Auto,16,*"
-              RowDefinitions="Auto,8,Auto,8,Auto"
-              Margin="12,8,12,12">
+      <!-- General Settings for Research -->
+      <Border Classes="accordion">
+        <Expander Header="{Binding StrGeneral}">
+          <!-- Form-Like: label auto-sizes, input stretches -->
+          <Grid ColumnDefinitions="Auto,16,*"
+                RowDefinitions="Auto,8,Auto,8,Auto"
+                Margin="12,8,12,12">
 
-          <!-- 1: Comet Name -->
-          <TextBlock Grid.Row="0" Grid.Column="0"
-                     Text="{Binding StrCometName}" />
-          <!-- TODO: binding to POCO state -->
-          <TextBox Grid.Row="0" Grid.Column="2"
-                   Watermark="e.g. 67P"
-                   HorizontalAlignment="Stretch" />
+            <!-- 1: Comet Name -->
+            <TextBlock Grid.Row="0" Grid.Column="0"
+                       Text="{Binding StrCometName}" />
+            <!-- TODO: binding to POCO state -->
+            <TextBox Grid.Row="0" Grid.Column="2"
+                     Watermark="e.g. 67P"
+                     HorizontalAlignment="Stretch" />
 
-          <!-- 2. Start Date -->
-          <TextBlock Grid.Row="2" Grid.Column="0"
-                     Text="{Binding StrStartDate}" />
-          <!-- TODO: binding to POCO state -->
-          <CalendarDatePicker Grid.Row="2" Grid.Column="2"
-                              SelectedDateFormat="Custom"
-                              CustomDateFormatString="yyyy-MM-dd"
-                              Watermark="yyyy-mm-dd"
-                              HorizontalAlignment="Stretch" />
+            <!-- 2. Start Date -->
+            <TextBlock Grid.Row="2" Grid.Column="0"
+                       Text="{Binding StrStartDate}" />
+            <!-- TODO: binding to POCO state -->
+            <CalendarDatePicker Grid.Row="2" Grid.Column="2"
+                                SelectedDateFormat="Custom"
+                                CustomDateFormatString="yyyy-MM-dd"
+                                Watermark="yyyy-mm-dd"
+                                HorizontalAlignment="Stretch" />
 
-          <!-- 3: End Date -->
-          <TextBlock Grid.Row="4" Grid.Column="0"
-                     Text="{Binding StrEndDate}" />
-          <!-- TODO: binding to POCO state -->
-          <CalendarDatePicker Grid.Row="4" Grid.Column="2"
-                              SelectedDateFormat="Custom"
-                              CustomDateFormatString="yyyy-MM-dd"
-                              Watermark="yyyy-mm-dd"
-                              HorizontalAlignment="Stretch" />
-        </Grid>
-      </Expander>
-    </Border>
+            <!-- 3: End Date -->
+            <TextBlock Grid.Row="4" Grid.Column="0"
+                       Text="{Binding StrEndDate}" />
+            <!-- TODO: binding to POCO state -->
+            <CalendarDatePicker Grid.Row="4" Grid.Column="2"
+                                SelectedDateFormat="Custom"
+                                CustomDateFormatString="yyyy-MM-dd"
+                                Watermark="yyyy-mm-dd"
+                                HorizontalAlignment="Stretch" />
+          </Grid>
+        </Expander>
+      </Border>
 
-    <!-- Orbital Elements (Bunch of computed properties over the selected record in the CSV Tab) -->
-    <Border Classes="accordion">
-      <Expander Header="{Binding StrOrbitalElements}">
-        <!--
-          Column layout:
-            0 : Auto  – symbol label (TextBlock)
-            1 : 6     – gap between label and help icon
-            2 : Auto  – PropertyHelpButton (circled ?)
-            3 : 12    – gap between help icon and computed field
-            4 : *     – read-only computed TextBox
-        -->
-        <Grid ColumnDefinitions="Auto,6,Auto,12,*"
-              RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
-              Margin="12,8,12,12">
-          <!-- Unit of measurements will be formatted in the computed textbox -->
-          <!-- TODO Bind on POCO state -->
+      <!-- Orbital Elements (Bunch of computed properties over the selected record in the CSV Tab) -->
+      <Border Classes="accordion">
+        <Expander Header="{Binding StrOrbitalElements}">
+          <!--
+            Column layout:
+              0 : Auto  – symbol label (TextBlock)
+              1 : 6     – gap between label and help icon
+              2 : Auto  – PropertyHelpButton (circled ?)
+              3 : 12    – gap between help icon and computed field
+              4 : *     – read-only computed TextBox
+          -->
+          <Grid ColumnDefinitions="Auto,6,Auto,12,*"
+                RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                Margin="12,8,12,12">
+            <!-- Unit of measurements will be formatted in the computed textbox -->
+            <!-- TODO Bind on POCO state -->
 
-          <!-- Eccentricity -->
-          <TextBlock Grid.Row="0" Grid.Column="0"
-                     Text="𝑒" />
-          <controls:PropertyHelpButton Grid.Row="0" Grid.Column="2"
-                                       HelpHeader="{Binding StrHelpHeaderEccentricity}"
-                                       HelpContent="{Binding StrHelpContentEccentricity}" />
-          <TextBox Grid.Row="0" Grid.Column="4"
-                   Classes="computed"
-                   HorizontalAlignment="Stretch" />
+            <!-- Eccentricity -->
+            <TextBlock Grid.Row="0" Grid.Column="0"
+                       Text="𝑒" />
+            <controls:PropertyHelpButton Grid.Row="0" Grid.Column="2"
+                                         HelpHeader="{Binding StrHelpHeaderEccentricity}"
+                                         HelpContent="{Binding StrHelpContentEccentricity}" />
+            <TextBox Grid.Row="0" Grid.Column="4"
+                     Classes="computed"
+                     HorizontalAlignment="Stretch" />
 
-          <!-- Perihelion Distance -->
-          <TextBlock Grid.Row="2" Grid.Column="0"
-                     Text="𝑞" />
-          <controls:PropertyHelpButton Grid.Row="2" Grid.Column="2"
-                                       HelpHeader="{Binding StrHelpHeaderPerihelionDistance}"
-                                       HelpContent="{Binding StrHelpContentPerihelionDistance}" />
-          <TextBox Grid.Row="2" Grid.Column="4"
-                   Classes="computed"
-                   HorizontalAlignment="Stretch" />
+            <!-- Perihelion Distance -->
+            <TextBlock Grid.Row="2" Grid.Column="0"
+                       Text="𝑞" />
+            <controls:PropertyHelpButton Grid.Row="2" Grid.Column="2"
+                                         HelpHeader="{Binding StrHelpHeaderPerihelionDistance}"
+                                         HelpContent="{Binding StrHelpContentPerihelionDistance}" />
+            <TextBox Grid.Row="2" Grid.Column="4"
+                     Classes="computed"
+                     HorizontalAlignment="Stretch" />
 
-          <!-- Time of Perihelion Passage -->
-          <TextBlock Grid.Row="4" Grid.Column="0"
-                     Text="𝑇ₚ" />
-          <controls:PropertyHelpButton Grid.Row="4" Grid.Column="2"
-                                       HelpHeader="{Binding StrHelpHeaderTimeOfPerihelionPassage}"
-                                       HelpContent="{Binding StrHelpContentTimeOfPerihelionPassage}" />
-          <TextBox Grid.Row="4" Grid.Column="4"
-                   Classes="computed"
-                   HorizontalAlignment="Stretch" />
+            <!-- Time of Perihelion Passage -->
+            <TextBlock Grid.Row="4" Grid.Column="0"
+                       Text="𝑇ₚ" />
+            <controls:PropertyHelpButton Grid.Row="4" Grid.Column="2"
+                                         HelpHeader="{Binding StrHelpHeaderTimeOfPerihelionPassage}"
+                                         HelpContent="{Binding StrHelpContentTimeOfPerihelionPassage}" />
+            <TextBox Grid.Row="4" Grid.Column="4"
+                     Classes="computed"
+                     HorizontalAlignment="Stretch" />
 
-          <!-- Longitude of the Ascending Node -->
-          <TextBlock Grid.Row="6" Grid.Column="0"
-                     Text="𝛺" />
-          <controls:PropertyHelpButton Grid.Row="6" Grid.Column="2"
-                                       HelpHeader="{Binding StrHelpHeaderAscendingNodeLongitude}"
-                                       HelpContent="{Binding StrHelpContentAscendingNodeLongitude}" />
-          <TextBox Grid.Row="6" Grid.Column="4"
-                   Classes="computed"
-                   HorizontalAlignment="Stretch" />
+            <!-- Longitude of the Ascending Node -->
+            <TextBlock Grid.Row="6" Grid.Column="0"
+                       Text="𝛺" />
+            <controls:PropertyHelpButton Grid.Row="6" Grid.Column="2"
+                                         HelpHeader="{Binding StrHelpHeaderAscendingNodeLongitude}"
+                                         HelpContent="{Binding StrHelpContentAscendingNodeLongitude}" />
+            <TextBox Grid.Row="6" Grid.Column="4"
+                     Classes="computed"
+                     HorizontalAlignment="Stretch" />
 
-          <!-- Argument of Perihelion -->
-          <TextBlock Grid.Row="8" Grid.Column="0"
-                     Text="𝜔" />
-          <controls:PropertyHelpButton Grid.Row="8" Grid.Column="2"
-                                       HelpHeader="{Binding StrHelpHeaderArgumentOfPerihelion}"
-                                       HelpContent="{Binding StrHelpContentArgumentOfPerihelion}" />
-          <TextBox Grid.Row="8" Grid.Column="4"
-                   Classes="computed"
-                   HorizontalAlignment="Stretch" />
+            <!-- Argument of Perihelion -->
+            <TextBlock Grid.Row="8" Grid.Column="0"
+                       Text="𝜔" />
+            <controls:PropertyHelpButton Grid.Row="8" Grid.Column="2"
+                                         HelpHeader="{Binding StrHelpHeaderArgumentOfPerihelion}"
+                                         HelpContent="{Binding StrHelpContentArgumentOfPerihelion}" />
+            <TextBox Grid.Row="8" Grid.Column="4"
+                     Classes="computed"
+                     HorizontalAlignment="Stretch" />
 
-          <!-- Inclination -->
-          <TextBlock Grid.Row="10" Grid.Column="0"
-                     Text="𝑖" />
-          <controls:PropertyHelpButton Grid.Row="10" Grid.Column="2"
-                                       HelpHeader="{Binding StrHelpHeaderInclination}"
-                                       HelpContent="{Binding StrHelpContentInclination}" />
-          <TextBox Grid.Row="10" Grid.Column="4"
-                   Classes="computed"
-                   HorizontalAlignment="Stretch" />
+            <!-- Inclination -->
+            <TextBlock Grid.Row="10" Grid.Column="0"
+                       Text="𝑖" />
+            <controls:PropertyHelpButton Grid.Row="10" Grid.Column="2"
+                                         HelpHeader="{Binding StrHelpHeaderInclination}"
+                                         HelpContent="{Binding StrHelpContentInclination}" />
+            <TextBox Grid.Row="10" Grid.Column="4"
+                     Classes="computed"
+                     HorizontalAlignment="Stretch" />
 
 
-        </Grid>
-      </Expander>
-    </Border>
+          </Grid>
+        </Expander>
+      </Border>
 
-  </StackPanel>
+    </StackPanel>
+  </ScrollViewer>
 </UserControl>

@@ -36,211 +36,213 @@
     </Style>
   </UserControl.Styles>
 
-  <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16">
+  <ScrollViewer Classes="left-scrollbar" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+    <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16">
 
-    <!-- Sun Settings -->
-    <Border Classes="accordion">
-      <Expander>
-        <Expander.Header>
-          <StackPanel Orientation="Horizontal" Spacing="4">
-            <TextBlock Text="Sun" /> <!-- TODO: appstring-->
-            <controls:PropertyHelpButton HelpHeader="Sun"
-                                         HelpContent="Sun" />
-          </StackPanel>
-        </Expander.Header>
+      <!-- Sun Settings -->
+      <Border Classes="accordion">
+        <Expander>
+          <Expander.Header>
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <TextBlock Text="Sun" /> <!-- TODO: appstring-->
+              <controls:PropertyHelpButton HelpHeader="Sun"
+                                           HelpContent="Sun" />
+            </StackPanel>
+          </Expander.Header>
 
-        <Grid ColumnDefinitions="*,12,1.6*"
-              RowDefinitions="Auto,8,Auto,8,Auto,8,Auto"
-              Margin="12,8,12,12">
-          <!-- Distance -->
-          <TextBlock Grid.Row="0" Grid.Column="0"
-                     Text="Distance" />
-          <TextBox Grid.Row="0" Grid.Column="2"
-                   HorizontalAlignment="Stretch">
-            <TextBox.InnerRightContent>
-              <TextBlock Text="AU" Foreground="{DynamicResource Text.Disabled}" Margin="4,0,8,0"
-                         VerticalAlignment="Center" />
-            </TextBox.InnerRightContent>
-
-            <i:Interaction.Behaviors>
-              <b:DistanceBehavior />
-            </i:Interaction.Behaviors>
-          </TextBox>
-
-          <!-- Subsolar Latitude -->
-          <TextBlock Grid.Row="2" Grid.Column="0"
-                     Text="Subsolar Latitude" />
-          <TextBox Grid.Row="2" Grid.Column="2"
-                   Classes="computed"
-                   HorizontalAlignment="Stretch">
-            <TextBox.InnerRightContent>
-              <TextBlock Text="°" Foreground="{DynamicResource Text.Disabled}" Margin="4,0,8,0"
-                         VerticalAlignment="Center" />
-            </TextBox.InnerRightContent>
-
-            <i:Interaction.Behaviors>
-              <b:AngleBehavior />
-            </i:Interaction.Behaviors>
-          </TextBox>
-
-          <!-- Sun-Target-Observer Angle -->
-          <TextBlock Grid.Row="4" Grid.Column="0"
-                     Text="STO" />
-          <TextBox Grid.Row="4" Grid.Column="2"
-                   HorizontalAlignment="Stretch">
-            <TextBox.InnerRightContent>
-              <TextBlock Text="°" Foreground="{DynamicResource Text.Disabled}" Margin="4,0,8,0"
-                         VerticalAlignment="Center" />
-            </TextBox.InnerRightContent>
-
-            <i:Interaction.Behaviors>
-              <b:AngleBehavior />
-            </i:Interaction.Behaviors>
-          </TextBox>
-
-          <!-- Sun Position Angle -->
-          <TextBlock Grid.Row="6" Grid.Column="0"
-                     Text="Sun PA" />
-          <TextBox Grid.Row="6" Grid.Column="2"
-                   HorizontalAlignment="Stretch">
-            <TextBox.InnerRightContent>
-              <TextBlock Text="°" Foreground="{DynamicResource Text.Disabled}" Margin="4,0,8,0"
-                         VerticalAlignment="Center" />
-            </TextBox.InnerRightContent>
-
-            <i:Interaction.Behaviors>
-              <b:AngleBehavior />
-            </i:Interaction.Behaviors>
-          </TextBox>
-        </Grid>
-      </Expander>
-    </Border>
-
-    <!-- Nucleus and spin axis -->
-    <Border Classes="accordion">
-      <Expander>
-        <Expander.Header>
-          <StackPanel Orientation="Horizontal" Spacing="4">
-            <TextBlock Text="Nucleus and Spin Axis" /> <!-- TODO: appstring-->
-            <controls:PropertyHelpButton HelpHeader="Nucleus and Spin Axis"
-                                         HelpContent="Nucleus and Spin Axis" />
-          </StackPanel>
-        </Expander.Header>
-
-        <Grid ColumnDefinitions="*,12,1.6*"
-              RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto">
-          <!-- Radius -->
-          <TextBlock Grid.Row="0" Grid.Column="0" Text="Radius" />
-          <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" />
-
-          <!-- Rotation Period -->
-          <TextBlock Grid.Row="2" Grid.Column="0" Text="Rotation Period" />
-          <controls:UnboundedSlider Grid.Row="2" Grid.Column="2" VerticalAlignment="Stretch">
-            <controls:UnboundedSlider.InnerRightContent>
-              <TextBlock Classes="unit-of-measurement" Text="h" />
-            </controls:UnboundedSlider.InnerRightContent>
-          </controls:UnboundedSlider>
-
-          <!-- Number Rotations  -->
-          <TextBlock Grid.Row="4" Grid.Column="0" Text="Rotations" />
-          <TextBox Grid.Row="4" Grid.Column="2" VerticalAlignment="Stretch">
-            <i:Interaction.Behaviors>
-              <b:NaturalNumberBehavior />
-            </i:Interaction.Behaviors>
-          </TextBox>
-
-          <!-- RA -->
-          <TextBlock Grid.Row="6" Grid.Column="0" Text="RA" />
-          <controls:UnboundedSlider Grid.Row="6" Grid.Column="2" VerticalAlignment="Stretch">
-            <controls:UnboundedSlider.InnerRightContent>
-              <TextBlock Classes="unit-of-measurement" Text="°"/>
-            </controls:UnboundedSlider.InnerRightContent>
-            <i:Interaction.Behaviors>
-              <b:AngleBehavior />
-            </i:Interaction.Behaviors>
-          </controls:UnboundedSlider>
-
-          <!-- Dec -->
-          <TextBlock Grid.Row="8" Grid.Column="0" Text="Dec" />
-          <controls:UnboundedSlider Grid.Row="8" Grid.Column="2" VerticalAlignment="Stretch">
-            <controls:UnboundedSlider.InnerRightContent>
-              <TextBlock Classes="unit-of-measurement" Text="°" />
-            </controls:UnboundedSlider.InnerRightContent>
-            <i:Interaction.Behaviors>
-              <b:AngleBehavior />
-            </i:Interaction.Behaviors>
-          </controls:UnboundedSlider>
-
-          <!-- Spin Axis PA -->
-          <TextBlock Grid.Row="10" Grid.Column="0" Text="Spin Axis PA" />
-          <TextBox Grid.Row="10" Grid.Column="2" VerticalAlignment="Stretch">
-            <TextBox.InnerRightContent>
-              <TextBlock Classes="unit-of-measurement" Text="°" />
-            </TextBox.InnerRightContent>
-            <i:Interaction.Behaviors>
-              <b:AngleBehavior />
-            </i:Interaction.Behaviors>
-          </TextBox>
-
-          <!-- Spin Axis Inclination -->
-          <TextBlock Grid.Row="12" Grid.Column="0" Text="Spin Axis Inclination" />
-          <TextBox Grid.Row="12" Grid.Column="2" VerticalAlignment="Stretch">
-            <i:Interaction.Behaviors>
-              <b:AngleBehavior />
-            </i:Interaction.Behaviors>
-          </TextBox>
-
-          <!-- Computed Props grid  -->
-          <Grid Grid.Row="14" Grid.ColumnSpan="3"
-                ColumnDefinitions="12,8,*,20,12,8,*"
-                RowDefinitions="Auto,8,Auto">
-            <TextBlock Grid.Row="0" Grid.Column="0" Text="𝜆" />
-            <TextBox Grid.Row="0" Grid.Column="2" Classes="computed">
+          <Grid ColumnDefinitions="*,12,1.6*"
+                RowDefinitions="Auto,8,Auto,8,Auto,8,Auto"
+                Margin="12,8,12,12">
+            <!-- Distance -->
+            <TextBlock Grid.Row="0" Grid.Column="0"
+                       Text="Distance" />
+            <TextBox Grid.Row="0" Grid.Column="2"
+                     HorizontalAlignment="Stretch">
               <TextBox.InnerRightContent>
-                <TextBlock Classes="unit-of-measurement" Text="°" />
+                <TextBlock Text="AU" Foreground="{DynamicResource Text.Disabled}" Margin="4,0,8,0"
+                           VerticalAlignment="Center" />
               </TextBox.InnerRightContent>
+
+              <i:Interaction.Behaviors>
+                <b:DistanceBehavior />
+              </i:Interaction.Behaviors>
             </TextBox>
 
-            <TextBlock Grid.Row="0" Grid.Column="4" Text="ϕ" />
-            <TextBox Grid.Row="0" Grid.Column="6" Classes="computed">
+            <!-- Subsolar Latitude -->
+            <TextBlock Grid.Row="2" Grid.Column="0"
+                       Text="Subsolar Latitude" />
+            <TextBox Grid.Row="2" Grid.Column="2"
+                     Classes="computed"
+                     HorizontalAlignment="Stretch">
               <TextBox.InnerRightContent>
-                <TextBlock Classes="unit-of-measurement" Text="°" />
+                <TextBlock Text="°" Foreground="{DynamicResource Text.Disabled}" Margin="4,0,8,0"
+                           VerticalAlignment="Center" />
               </TextBox.InnerRightContent>
+
+              <i:Interaction.Behaviors>
+                <b:AngleBehavior />
+              </i:Interaction.Behaviors>
             </TextBox>
 
-            <TextBlock Grid.Row="2" Grid.Column="0" Text="𝛽" />
-            <TextBox Grid.Row="2" Grid.Column="2" Classes="computed">
+            <!-- Sun-Target-Observer Angle -->
+            <TextBlock Grid.Row="4" Grid.Column="0"
+                       Text="STO" />
+            <TextBox Grid.Row="4" Grid.Column="2"
+                     HorizontalAlignment="Stretch">
               <TextBox.InnerRightContent>
-                <TextBlock Classes="unit-of-measurement" Text="°" />
+                <TextBlock Text="°" Foreground="{DynamicResource Text.Disabled}" Margin="4,0,8,0"
+                           VerticalAlignment="Center" />
               </TextBox.InnerRightContent>
+
+              <i:Interaction.Behaviors>
+                <b:AngleBehavior />
+              </i:Interaction.Behaviors>
             </TextBox>
 
-            <TextBlock Grid.Row="2" Grid.Column="4" Text="𝐼" />
-            <TextBox Grid.Row="2" Grid.Column="6" Classes="computed">
+            <!-- Sun Position Angle -->
+            <TextBlock Grid.Row="6" Grid.Column="0"
+                       Text="Sun PA" />
+            <TextBox Grid.Row="6" Grid.Column="2"
+                     HorizontalAlignment="Stretch">
               <TextBox.InnerRightContent>
-                <TextBlock Classes="unit-of-measurement" Text="°" />
+                <TextBlock Text="°" Foreground="{DynamicResource Text.Disabled}" Margin="4,0,8,0"
+                           VerticalAlignment="Center" />
               </TextBox.InnerRightContent>
-            </TextBox>
 
+              <i:Interaction.Behaviors>
+                <b:AngleBehavior />
+              </i:Interaction.Behaviors>
+            </TextBox>
           </Grid>
-        </Grid>
-      </Expander>
-    </Border>
+        </Expander>
+      </Border>
 
-    <!-- Dust and jets configuration -->
-    <Border Classes="accordion">
-      <Expander>
-        <Expander.Header>
-          <StackPanel Orientation="Horizontal" Spacing="4">
-            <TextBlock Text="Dust" /> <!-- TODO: appstring-->
-            <controls:PropertyHelpButton HelpHeader="Dust"
-                                         HelpContent="Dust" />
-          </StackPanel>
-        </Expander.Header>
+      <!-- Nucleus and spin axis -->
+      <Border Classes="accordion">
+        <Expander>
+          <Expander.Header>
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <TextBlock Text="Nucleus and Spin Axis" /> <!-- TODO: appstring-->
+              <controls:PropertyHelpButton HelpHeader="Nucleus and Spin Axis"
+                                           HelpContent="Nucleus and Spin Axis" />
+            </StackPanel>
+          </Expander.Header>
 
-        <!-- TODO: Content Control for particle system selection -->
-      </Expander>
-    </Border>
+          <Grid ColumnDefinitions="*,12,1.6*"
+                RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto">
+            <!-- Radius -->
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Radius" />
+            <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" />
 
-  </StackPanel>
+            <!-- Rotation Period -->
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="Rotation Period" />
+            <controls:UnboundedSlider Grid.Row="2" Grid.Column="2" VerticalAlignment="Stretch">
+              <controls:UnboundedSlider.InnerRightContent>
+                <TextBlock Classes="unit-of-measurement" Text="h" />
+              </controls:UnboundedSlider.InnerRightContent>
+            </controls:UnboundedSlider>
+
+            <!-- Number Rotations  -->
+            <TextBlock Grid.Row="4" Grid.Column="0" Text="Rotations" />
+            <TextBox Grid.Row="4" Grid.Column="2" VerticalAlignment="Stretch">
+              <i:Interaction.Behaviors>
+                <b:NaturalNumberBehavior />
+              </i:Interaction.Behaviors>
+            </TextBox>
+
+            <!-- RA -->
+            <TextBlock Grid.Row="6" Grid.Column="0" Text="RA" />
+            <controls:UnboundedSlider Grid.Row="6" Grid.Column="2" VerticalAlignment="Stretch">
+              <controls:UnboundedSlider.InnerRightContent>
+                <TextBlock Classes="unit-of-measurement" Text="°"/>
+              </controls:UnboundedSlider.InnerRightContent>
+              <i:Interaction.Behaviors>
+                <b:AngleBehavior />
+              </i:Interaction.Behaviors>
+            </controls:UnboundedSlider>
+
+            <!-- Dec -->
+            <TextBlock Grid.Row="8" Grid.Column="0" Text="Dec" />
+            <controls:UnboundedSlider Grid.Row="8" Grid.Column="2" VerticalAlignment="Stretch">
+              <controls:UnboundedSlider.InnerRightContent>
+                <TextBlock Classes="unit-of-measurement" Text="°" />
+              </controls:UnboundedSlider.InnerRightContent>
+              <i:Interaction.Behaviors>
+                <b:AngleBehavior />
+              </i:Interaction.Behaviors>
+            </controls:UnboundedSlider>
+
+            <!-- Spin Axis PA -->
+            <TextBlock Grid.Row="10" Grid.Column="0" Text="Spin Axis PA" />
+            <TextBox Grid.Row="10" Grid.Column="2" VerticalAlignment="Stretch">
+              <TextBox.InnerRightContent>
+                <TextBlock Classes="unit-of-measurement" Text="°" />
+              </TextBox.InnerRightContent>
+              <i:Interaction.Behaviors>
+                <b:AngleBehavior />
+              </i:Interaction.Behaviors>
+            </TextBox>
+
+            <!-- Spin Axis Inclination -->
+            <TextBlock Grid.Row="12" Grid.Column="0" Text="Spin Axis Inclination" />
+            <TextBox Grid.Row="12" Grid.Column="2" VerticalAlignment="Stretch">
+              <i:Interaction.Behaviors>
+                <b:AngleBehavior />
+              </i:Interaction.Behaviors>
+            </TextBox>
+
+            <!-- Computed Props grid  -->
+            <Grid Grid.Row="14" Grid.ColumnSpan="3"
+                  ColumnDefinitions="12,8,*,20,12,8,*"
+                  RowDefinitions="Auto,8,Auto">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="𝜆" />
+              <TextBox Grid.Row="0" Grid.Column="2" Classes="computed">
+                <TextBox.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="°" />
+                </TextBox.InnerRightContent>
+              </TextBox>
+
+              <TextBlock Grid.Row="0" Grid.Column="4" Text="ϕ" />
+              <TextBox Grid.Row="0" Grid.Column="6" Classes="computed">
+                <TextBox.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="°" />
+                </TextBox.InnerRightContent>
+              </TextBox>
+
+              <TextBlock Grid.Row="2" Grid.Column="0" Text="𝛽" />
+              <TextBox Grid.Row="2" Grid.Column="2" Classes="computed">
+                <TextBox.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="°" />
+                </TextBox.InnerRightContent>
+              </TextBox>
+
+              <TextBlock Grid.Row="2" Grid.Column="4" Text="𝐼" />
+              <TextBox Grid.Row="2" Grid.Column="6" Classes="computed">
+                <TextBox.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="°" />
+                </TextBox.InnerRightContent>
+              </TextBox>
+
+            </Grid>
+          </Grid>
+        </Expander>
+      </Border>
+
+      <!-- Dust and jets configuration -->
+      <Border Classes="accordion">
+        <Expander>
+          <Expander.Header>
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <TextBlock Text="Dust" /> <!-- TODO: appstring-->
+              <controls:PropertyHelpButton HelpHeader="Dust"
+                                           HelpContent="Dust" />
+            </StackPanel>
+          </Expander.Header>
+
+          <!-- TODO: Content Control for particle system selection -->
+        </Expander>
+      </Border>
+
+    </StackPanel>
+  </ScrollViewer>
 </UserControl>

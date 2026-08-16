@@ -1589,7 +1589,9 @@ impl Device {
           // which therefore have a presentation engine
           let pe_handle = unsafe { pe_handle_opt.unwrap_unchecked() };
           if let Some(mut pe) = state.live_presentation_engines.get_mut(&pe_handle) {
-            pe.mark_fence_submitted(data.presentation.unwrap().acquire_result.frame_index as u32);
+            if let Some(pres) = &data.presentation {
+              pe.mark_fence_submitted(pres.acquire_result.frame_index as u32);
+            }
             if let swapchain::PresentationState::Windowless(windowless) = pe.value() {
               windowless
                 .last_timeline_value
@@ -3485,7 +3487,7 @@ impl RenderDevice for Device {
         macro_rules! init_arch {
           // standard
           ($arena_field:ident, $ensure_fn:ident, $archetype_id:expr, $arena_type:ident, $create_fn:ident) => {
-            let needs_init = pe.archetypes().registry.read().contains_key(&$archetype_id);
+            let needs_init = !pe.archetypes().registry.read().contains_key(&$archetype_id);
             if needs_init {
               let (vkey, fkey) = {
                 let mut sm = locks::DebugTrackedRwLock::write(shader_manager);
@@ -3511,7 +3513,7 @@ impl RenderDevice for Device {
           };
           // text
           ($arena_field:ident, $ensure_fn:ident, $archetype_id:expr, $arena_type:ident, $create_fn:ident, text) => {
-            let needs_init = pe.archetypes().registry.read().contains_key(&$archetype_id);
+            let needs_init = !pe.archetypes().registry.read().contains_key(&$archetype_id);
             if needs_init {
               let (vkey, fkey) = {
                 let mut sm = locks::DebugTrackedRwLock::write(shader_manager);
@@ -3541,7 +3543,7 @@ impl RenderDevice for Device {
           };
           // mesh
           ($arena_field:ident, $ensure_fn:ident, $archetype_id:expr, $arena_type:ident, $create_fn:ident, mesh) => {
-            let needs_init = pe.archetypes().registry.read().contains_key(&$archetype_id);
+            let needs_init = !pe.archetypes().registry.read().contains_key(&$archetype_id);
             if needs_init {
               let (vkey, fkey, ovkey, ofkey) = {
                 let mut sm = locks::DebugTrackedRwLock::write(shader_manager);
@@ -8248,7 +8250,7 @@ impl Device {
       if wpresentation_engine.swapchain_generation() != acquire_result.swapchain_generation {
         return Err(GpuError::ResizeRequired);
       }
-      drop(cmd_buffers);
+      drop(data);
 
       let (wait_semaphore, submission_fence) =
         unsafe { wpresentation_engine.get_frame_resources(acquire_result.frame_index as usize) };
