@@ -52,7 +52,8 @@ public partial class VulkanViewportControlViewModel(
     Console.WriteLine($"[VulkanViewportControl] InitializeHandle handle={handle:X} desc=\"{handleDescriptor}\" parent={parentHandle:X}");
 #endif
 
-    _handler = _handlerFactory.Create(handle, handleDescriptor, TraceLevel.Max);
+    // TODO: from global preferences
+    _handler = _handlerFactory.Create(handle, handleDescriptor, TraceLevel.Basic);
 
     if (_handler is not INativeInputHandlerSubscribable subscribable)
       return false;

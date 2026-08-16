@@ -74,9 +74,11 @@ impl Archetypes {
   }
 
   pub fn discard(&self, device: &LogicalDevice, pool: &DiscardPool) {
-    for (_, archetype) in self.registry.write().iter_mut() {
+    let mut reg = self.registry.write();
+    for (_, archetype) in reg.iter_mut() {
       archetype.discard_archetype(device, pool, u64::MAX);
     }
+    reg.clear();
   }
 }
 

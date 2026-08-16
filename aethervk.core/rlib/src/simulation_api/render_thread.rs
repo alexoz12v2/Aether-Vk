@@ -59,8 +59,7 @@ pub fn start_render_thread(
     const CLEANUP_DELTA_UNSCALED_US: timeus_t = oshal::os::time::timeus_milliseconds(500);
 
     // atomic boolean used as a signaling mechanism to ensure that main thread callbacks are
-    // executed in proper order, and that we wait for it during Shutdown
-    let main_thread_cb_signal_done = core::sync::atomic::AtomicBool::new(false);
+    let main_thread_cb_signal_done = core::sync::atomic::AtomicBool::new(true);
 
     loop {
       let mut core_logic = || -> bool {
