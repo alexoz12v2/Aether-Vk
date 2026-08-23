@@ -112,6 +112,9 @@ public abstract class NativeInputHandlerBase : INativeInputHandlerSubscribable
     }
   }
 
+  /// <inheritdoc/>
+  public virtual void FocusViewportWindow() { /* no-op on Windows and macOS */ }
+
   // Note: public abstract is an antipattern. This is a temporary method to test native control
   // calls the abstract method from the main thread
   public void SetSolidColor(byte r, byte g, byte b)
@@ -125,15 +128,18 @@ public abstract class NativeInputHandlerBase : INativeInputHandlerSubscribable
   {
     if (_handle != IntPtr.Zero && _isHooked)
     {
-      _dispatcher.Dispatch(() =>
-      {
-        UnhookEvents();
-        _isHooked = false;
-      });
+      // Call UnhookEvents directly rather than posting to the UI thread.
+      // All platform implementations only perform thread-safe operations
+      // (CTS.Cancel, Win32 PostMessage, etc.) — no UI thread required.
+      // Posting (the previous approach) caused a race: UnhookEvents would be
+      // scheduled AFTER _rawInputSubject.Dispose(), letting the background
+      // event loop call OnNext on an already-disposed subject.
+      UnhookEvents();
+      _isHooked = false;
     }
-    if (_isHooked && _handle == IntPtr.Zero)
+    if (!_isHooked && _handle == IntPtr.Zero)
     {
-      // error hadling? maybe fatalerror message
+      // error handling? maybe fatal error message
       Console.WriteLine($"[{DateTime.Now:O}] [{GetType().Name}] Hooked but Null window handle!");
     }
 

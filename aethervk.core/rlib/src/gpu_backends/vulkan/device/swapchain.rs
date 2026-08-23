@@ -664,7 +664,6 @@ impl WindowedPresentationState {
     Ok(())
   }
 
-
   pub(super) fn extent(&self) -> (u32, u32) {
     (self.width, self.height)
   }

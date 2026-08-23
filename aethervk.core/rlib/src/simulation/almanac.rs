@@ -58,8 +58,9 @@ pub struct AlmanacPackedData {
 impl AlmanacPackedData {
   pub fn load_almanac<P: os::fs::IntoPathBuf>(&mut self, path: P) -> EngineResult<()> {
     let path_ref = path.into_pathbuf();
-    let is_valid_ext =
-      |ext: Option<&str>| ext == Some("bsp") || ext == Some("bpc") || ext == Some("tpc") || ext == Some("pca");
+    let is_valid_ext = |ext: Option<&str>| {
+      ext == Some("bsp") || ext == Some("bpc") || ext == Some("tpc") || ext == Some("pca")
+    };
 
     if path_ref.is_file() && is_valid_ext(path_ref.extension().as_deref()) {
       self.load_single_spk(&path_ref)?;
@@ -378,39 +379,4 @@ impl VecTypeConversionScaled<anise::math::Vector3> for Vec3f32 {
 }
 
 #[cfg(test)]
-mod tests {
-  use super::*;
-  use anise::time::Epoch;
-
-  #[test]
-  fn test_fetch_earth_position_eclipj2000() {
-    let mut data = AlmanacPackedData::default();
-
-    // Load the SPK and BPC files requested by the user
-    // Note: Paths are relative to the crate root `aethervk.core/rlib` when running tests
-    data.load_almanac("../../assets/planets/de442.bsp").unwrap();
-    data.load_almanac("../../assets/earth_latest_high_prec.bpc").unwrap();
-
-    // J2000 epoch
-    let epoch = Epoch::from_tdb_seconds(0.0);
-
-    // Fetch Earth (399) position with SUN_ECLIPJ2000
-    let state = data
-      .get_ephem_full(
-        399,
-        crate::simulation::almanac::SUN_ECLIPJ2000,
-        epoch,
-        true,
-        false,
-      )
-      .unwrap();
-
-    println!("Earth State (SUN_ECLIPJ2000) at J2000 epoch:");
-    println!("Position: {:?}", state.position);
-    println!("Velocity: {:?}", state.velocity);
-    println!("Rotation: {:?}", state.rotation);
-    println!("Angular Velocity: {:?}", state.angular_velocity);
-
-    assert_ne!(state.position.x(), 0.0);
-  }
-}
+mod test_almanac;

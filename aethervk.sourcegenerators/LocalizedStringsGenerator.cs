@@ -372,7 +372,7 @@ public sealed class LocalizedStringsGenerator : IIncrementalGenerator
     sb.AppendLine();
     AppendNamespace(sb, model.Namespace);
 
-    sb.AppendLine($"public interface {ifaceName}");
+    sb.AppendLine($"public partial interface {ifaceName}");
     sb.AppendLine("{");
     foreach (var e in entries)
       sb.AppendLine($"    string {e.PropertyName} {{ get; set; }}");
@@ -390,7 +390,7 @@ public sealed class LocalizedStringsGenerator : IIncrementalGenerator
     sb.AppendLine();
     AppendNamespace(sb, model.Namespace);
 
-    sb.AppendLine($"public class {designName} : {ifaceName}");
+    sb.AppendLine($"public partial class {designName} : {ifaceName}");
     sb.AppendLine("{");
     sb.AppendLine($"    public string Title    {{ get; set; }} = {Quote(model.DesignTitle)};");
     sb.AppendLine($"    public string Icon     {{ get; set; }} = {Quote(model.DesignIcon)};");

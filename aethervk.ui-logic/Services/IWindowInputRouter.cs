@@ -13,6 +13,12 @@ public interface IWindowInputRouter : IDisposable
   void AttachToWindow(object windowRoot);
 
   /// <summary>
+  /// Detaches the router from a previously attached window root and removes all its
+  /// event subscriptions. Safe to call even if the window was never attached (no-op).
+  /// </summary>
+  void DetachFromWindow(object windowRoot);
+
+  /// <summary>
   /// Routes a pre-composed <see cref="InputChord"/> (from native OS input, not an Avalonia
   /// keyboard event) through the <c>InputRegistry</c> and dispatches it to the matching
   /// <see cref="IActionHandler"/> registered in the visual tree under <paramref name="contextId"/>.

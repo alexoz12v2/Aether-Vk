@@ -26,6 +26,9 @@ internal static class NativeInputConverter
     [0x1B] = "Escape",
     [0x0D] = "Return",
     [0x20] = "Space",
+    [0x60] = "NumPad0", [0x61] = "NumPad1", [0x62] = "NumPad2", [0x63] = "NumPad3",
+    [0x64] = "NumPad4", [0x65] = "NumPad5", [0x66] = "NumPad6", [0x67] = "NumPad7",
+    [0x68] = "NumPad8", [0x69] = "NumPad9", [0x6E] = "NumPadDecimal",
   };
 
   /// <summary>

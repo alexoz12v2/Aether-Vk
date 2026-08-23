@@ -1,12 +1,12 @@
-using System.Collections.Generic;
 using System;
+using System.Collections.Generic;
 using AetherVk.Logic.Input;
+using AetherVk.Logic.Services;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
-using AetherVk.Logic.Services;
 
 namespace AetherVk.Input;
 
@@ -37,58 +37,83 @@ namespace AetherVk.Input;
 /// - Global Router: Catch raw keyboard events globally, translate them into absract AppAction
 ///   strings using user's custom keybindings, and route them to whichever view model is currently
 ///   in the UI Tree
+///
+/// Multi-window support: the router tracks a set of attached TopLevels (e.g. MainWindow + one
+/// OverlayWindow per viewport). AttachToWindow / DetachFromWindow manage membership. Dispose
+/// removes all at once when the application exits.
 /// </summary>
-public class GlobalInputRouter(InputRegistry registry) : IWindowInputRouter
+public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRouter
 {
   private readonly InputRegistry _registry = registry;
   private readonly Dictionary<
     IPointer,
     (Visual Target, IActionHandler Handler, AppAction Action)
   > _pressedVisuals = [];
-  private TopLevel? _attachedWindow;
+
+  // All attached TopLevels: main window + one overlay per active viewport.
+  private readonly HashSet<TopLevel> _attachedWindows = [];
 
   public void AttachToWindow(object windowRoot)
   {
     if (windowRoot is not TopLevel window)
       throw new ArgumentException("windowRoot must be an Avalonia TopLevel", nameof(windowRoot));
-    if (_attachedWindow != null)
-      throw new InvalidOperationException("Router is already attached to a window");
 
-    _attachedWindow = window;
+    if (!_attachedWindows.Add(window))
+      return; // idempotent — prevents double-attach
 
-    _attachedWindow.AddHandler(
+    window.AddHandler(
       InputElement.KeyDownEvent,
       OnKeyDown,
       Avalonia.Interactivity.RoutingStrategies.Tunnel
     );
-    _attachedWindow.AddHandler(
+    window.AddHandler(
       InputElement.KeyUpEvent,
       OnKeyUp,
       Avalonia.Interactivity.RoutingStrategies.Tunnel
     );
-    _attachedWindow.AddHandler(
+    window.AddHandler(
       InputElement.PointerPressedEvent,
       OnPointerPressed,
       Avalonia.Interactivity.RoutingStrategies.Tunnel
     );
-    _attachedWindow.AddHandler(
+    window.AddHandler(
       InputElement.PointerReleasedEvent,
       OnPointerReleased,
       Avalonia.Interactivity.RoutingStrategies.Tunnel
     );
+
+    Log($"[Router] Attached to window: {window.GetType().Name}");
+  }
+
+  public void DetachFromWindow(object windowRoot)
+  {
+    if (windowRoot is not TopLevel window)
+      return;
+    if (!_attachedWindows.Remove(window))
+      return; // wasn't attached — no-op
+
+    window.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown);
+    window.RemoveHandler(InputElement.KeyUpEvent, OnKeyUp);
+    window.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
+    window.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
+
+    // Discard any in-flight press state that was captured on this window's controls.
+    _pressedVisuals.Clear();
+
+    Log($"[Router] Detached from window: {window.GetType().Name}");
   }
 
   public void Dispose()
   {
-    if (_attachedWindow != null)
+    foreach (var window in _attachedWindows)
     {
-      _attachedWindow.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown);
-      _attachedWindow.RemoveHandler(InputElement.KeyUpEvent, OnKeyUp);
-      _attachedWindow.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
-      _attachedWindow.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
+      window.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown);
+      window.RemoveHandler(InputElement.KeyUpEvent, OnKeyUp);
+      window.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
+      window.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
     }
+    _attachedWindows.Clear();
     _pressedVisuals.Clear();
-    _attachedWindow = null;
   }
 
   private void OnKeyDown(object? sender, KeyEventArgs e) => HandleInput(e, true);
@@ -105,6 +130,7 @@ public class GlobalInputRouter(InputRegistry registry) : IWindowInputRouter
     if (focused == null)
       return;
 
+    // Let TextBoxes handle normal typing; only intercept Escape or modifier+key combos.
     if (
       focused is TextBox
       && e.KeyModifiers is KeyModifiers.None or KeyModifiers.Shift
@@ -120,10 +146,18 @@ public class GlobalInputRouter(InputRegistry registry) : IWindowInputRouter
     );
     var state = new InputState(isPressed, GetModifiers(e.KeyModifiers));
 
+    Log($"[Router] Key {(isPressed ? "↓" : "↑")} chord={chord.DisplayText} focused={focused.GetType().Name}");
+
     var (handler, action) = RouteAction(focused, chord, state);
-    if (handler != null)
+    if (handler != null && action != null)
     {
+      Log($"[Router] → dispatching action={action.Value.Id} to {handler.GetType().Name}");
+      handler.Process(action.Value, state);
       e.Handled = true;
+    }
+    else
+    {
+      Log($"[Router] → no binding found for chord={chord.DisplayText}");
     }
   }
 
@@ -140,6 +174,15 @@ public class GlobalInputRouter(InputRegistry registry) : IWindowInputRouter
 
     var visual = e.Source as Visual;
     if (visual == null)
+      return;
+
+    // ── Transparent Overlay Bypass ──────────────────────────────────────────────
+    // If the pointer landed on the overlay's transparent void (the Window root itself
+    // or the sentinel "TransparentRoot" Panel), this is not a UI action.
+    // Returning without setting e.Handled lets the OS deliver the event natively to
+    // the NativeControlHost XID below. The native input hooks pick it up and call
+    // RouteNativeComposed, re-entering this router for viewport actions.
+    if (visual is Window || (visual is Control ctrl && ctrl.Name == "TransparentRoot"))
       return;
 
     var target = visual;
@@ -171,9 +214,12 @@ public class GlobalInputRouter(InputRegistry registry) : IWindowInputRouter
         Pointer: pointerStr
       );
 
+      Log($"[Router] Pointer {(isPressed ? "↓" : "↑")} chord={chord.DisplayText} visual={visual.GetType().Name}");
+
       var (handler, action) = RouteAction(target, chord, state);
       if (handler != null && action != null)
       {
+        Log($"[Router] → dispatching action={action.Value.Id} to {handler.GetType().Name}");
         e.Handled = true;
         if (isPressed)
         {
@@ -186,11 +232,20 @@ public class GlobalInputRouter(InputRegistry registry) : IWindowInputRouter
           }
         }
       }
+      else
+      {
+        Log($"[Router] → no binding found for chord={chord.DisplayText}");
+      }
     }
   }
 
-  private (IActionHandler? Handler, AppAction? Action) RouteAction(Visual focused, InputChord chord, InputState state)
+  private (IActionHandler? Handler, AppAction? Action) RouteAction(
+    Visual focused,
+    InputChord chord,
+    InputState state
+  )
   {
+    Log($"[Router] RouteAction: start walk from {focused.GetType().Name} for chord={chord.DisplayText}");
     var current = focused;
     while (current != null)
     {
@@ -199,60 +254,113 @@ public class GlobalInputRouter(InputRegistry registry) : IWindowInputRouter
         var contextId = ActionContext.GetId(c);
         var handler = ActionContext.GetHandler(c);
 
+        string cName = c.Name ?? "(null)";
+        string ctx = contextId ?? "(none)";
+        string hName = handler != null ? handler.GetType().Name : "null";
+        Log($"[Router]   walk node={c.GetType().Name} name={cName} contextId={ctx} handler={hName}");
+
         if (!string.IsNullOrEmpty(contextId) && handler != null)
         {
-          if (_registry.Resolve(contextId, chord) is { } action)
+          var action = _registry.Resolve(contextId, chord);
+          Log($"[Router]   resolved context={contextId} ({c.GetType().Name}) → {(action.HasValue ? $"action={action.Value.Id}" : "no binding")}");
+          if (action is { } resolved)
           {
-            if (handler.Process(action, state))
-            {
-              return (handler, action);
-            }
+            return (handler, resolved);
           }
         }
       }
       current = current.GetVisualParent() ?? (current as ILogical)?.LogicalParent as Visual;
     }
+    Log($"[Router] RouteAction: end walk, no binding found.");
     return (null, null);
   }
 
   public void RouteNativeComposed(string contextId, InputChord chord, InputState state)
   {
-    if (_attachedWindow == null) return;
+    if (_attachedWindows.Count == 0)
+    {
+      Log($"[Router] RouteNativeComposed called but no attached windows.");
+      return;
+    }
     // FindAndDispatch walks the Avalonia visual tree (GetVisualChildren / GetVisualParent).
     // Visual tree access is NOT thread-safe and must happen on the UI thread.
     // The Rx Buffer timer fires this callback on a TP worker — dispatch back to UI thread.
-    Avalonia.Threading.Dispatcher.UIThread.Post(
-      () => FindAndDispatch(_attachedWindow, contextId, chord, state));
+    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+    {
+      Log($"[Router] RouteNativeComposed contextId={contextId} chord={chord.DisplayText} state.IsPressed={state.IsPressed}");
+      // Search across all attached windows (main + all overlay windows).
+      // Stop as soon as the contextId is found in one window's visual tree.
+      bool found = false;
+      foreach (var window in _attachedWindows)
+      {
+        Log($"[Router]   searching in window: {window.GetType().Name}");
+        if (FindAndDispatch(window, contextId, chord, state))
+        {
+          found = true;
+          break;
+        }
+      }
+      if (!found)
+      {
+        Log($"[Router]   RouteNativeComposed failed to find contextId={contextId} in any window.");
+      }
+    });
   }
 
   /// <summary>
   /// Depth-first walk of the visual tree to find the first <see cref="Control"/> tagged
   /// with <paramref name="contextId"/> via <see cref="ActionContext"/> and dispatch to it.
-  /// Stops at the first match to avoid duplicate dispatches.
+  /// Returns <c>true</c> on the first match so the caller can stop searching other windows.
   /// </summary>
-  private void FindAndDispatch(Visual root, string contextId, InputChord chord, InputState state)
+  private bool FindAndDispatch(Visual root, string contextId, InputChord chord, InputState state)
   {
     if (root is Control c)
     {
       var id = ActionContext.GetId(c);
       var handler = ActionContext.GetHandler(c);
+      Log($"[Router]   walk node={c.GetType().Name} name={c.Name ?? "(null)"} id={id ?? "(none)"} handler={(handler != null ? handler.GetType().Name : "null")}");
       if (id == contextId && handler != null)
       {
         if (_registry.Resolve(contextId, chord) is { } action)
+        {
+          Log($"[Router] FindAndDispatch context={contextId} → action={action.Id}");
           handler.Process(action, state);
-        return; // found — stop walking
+        }
+        else
+        {
+          Log($"[Router] FindAndDispatch context={contextId} chord={chord.DisplayText} → no binding in registry");
+        }
+        return true; // found — stop walking
       }
     }
     foreach (var child in root.GetVisualChildren())
-      FindAndDispatch(child, contextId, chord, state);
+      if (FindAndDispatch(child, contextId, chord, state))
+        return true;
+    return false;
   }
 
   private InputModifiers GetModifiers(KeyModifiers avaloniaModifiers)
   {
     InputModifiers mods = InputModifiers.None;
-    if (avaloniaModifiers.HasFlag(KeyModifiers.Shift)) mods |= InputModifiers.Shift;
-    if (avaloniaModifiers.HasFlag(KeyModifiers.Control)) mods |= InputModifiers.Ctrl;
-    if (avaloniaModifiers.HasFlag(KeyModifiers.Alt)) mods |= InputModifiers.Alt;
+    if (avaloniaModifiers.HasFlag(KeyModifiers.Shift))
+      mods |= InputModifiers.Shift;
+    if (avaloniaModifiers.HasFlag(KeyModifiers.Control))
+      mods |= InputModifiers.Ctrl;
+    if (avaloniaModifiers.HasFlag(KeyModifiers.Alt))
+      mods |= InputModifiers.Alt;
     return mods;
+  }
+
+  /// <summary>
+  /// Structured logging for the input routing pipeline.
+  /// In DEBUG builds: writes to both Console and Debug output.
+  /// In Release builds: compiled out completely — zero overhead.
+  /// </summary>
+  [System.Diagnostics.Conditional("DEBUG")]
+  private static void Log(string message)
+  {
+    var line = $"[{DateTime.Now:HH:mm:ss.fff}] {message}";
+    Console.WriteLine(line);
+    System.Diagnostics.Debug.WriteLine(line);
   }
 }

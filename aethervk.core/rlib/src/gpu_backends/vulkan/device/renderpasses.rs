@@ -533,7 +533,12 @@ impl RenderPasses {
       .set_layouts(core::slice::from_ref(&ds_layout_raw))
       .push_constant_ranges(core::slice::from_ref(&push_constant_range));
     let pipeline_layout = unsafe {
-      NonZeroHandle::new_unchecked(device.create_pipeline_layout(&pipeline_layout_ci, None)?)
+      use crate::gpu_backends::vulkan::device::VulkanDebugNameExt;
+      NonZeroHandle::new_unchecked(
+        device
+          .create_pipeline_layout(&pipeline_layout_ci, None)
+          .with_name(device, "VkPipelineLayout_Composite")?,
+      )
     };
 
     // Create descriptor pool with capacity for 4 INPUT_ATTACHMENT descriptors

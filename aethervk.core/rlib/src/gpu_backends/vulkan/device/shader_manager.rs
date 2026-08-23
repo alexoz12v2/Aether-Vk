@@ -71,6 +71,8 @@ pub struct Shader {
   pub entry_point: CString,
   pub shader_stage: vk::ShaderStageFlags,
   pub spv_module: spirv_reflect::ShaderModule,
+  /// Path of the SPIR-V file this shader was loaded from, for debug logging.
+  pub path: alloc::string::String,
 }
 
 impl Shader {
@@ -87,6 +89,7 @@ impl Shader {
     code: &[u32],
     entry_point: &str,
     execution_model: spirv::ExecutionModel,
+    path: &str,
   ) -> GpuResult<Self> {
     let mut patched_code = code.to_vec();
     if cfg!(debug_assertions) || cfg!(test) {
@@ -108,15 +111,17 @@ impl Shader {
       }
       #[cfg(windows)]
       unsafe {
-        use windows::Win32::System::Environment::GetEnvironmentVariableW;
-        use windows::Win32::System::Pipes::CreatePipe;
-        use windows::Win32::Foundation::{HANDLE, SetHandleInformation, HANDLE_FLAGS, HANDLE_FLAG_INHERIT, CloseHandle};
-        use windows::Win32::System::Threading::{
-          CreateProcessW, STARTUPINFOW, PROCESS_INFORMATION, STARTF_USESTDHANDLES, PROCESS_CREATION_FLAGS,
-          WaitForSingleObject, INFINITE
+        use windows::Win32::Foundation::{
+          CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation,
         };
         use windows::Win32::Storage::FileSystem::WriteFile;
-        use windows::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+        use windows::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+        use windows::Win32::System::Environment::GetEnvironmentVariableW;
+        use windows::Win32::System::Pipes::CreatePipe;
+        use windows::Win32::System::Threading::{
+          CreateProcessW, INFINITE, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
+          STARTF_USESTDHANDLES, STARTUPINFOW, WaitForSingleObject,
+        };
         use windows::core::{PCWSTR, PWSTR};
 
         let mut sdk_buf = [0u16; 512];
@@ -132,7 +137,14 @@ impl Shader {
           sa.nLength = core::mem::size_of::<windows::Win32::Security::SECURITY_ATTRIBUTES>() as u32;
           sa.bInheritHandle = true.into();
 
-          if CreatePipe(&mut h_stdin_read, &mut h_stdin_write, Some(&sa), 1024 * 1024 * 10).is_ok() {
+          if CreatePipe(
+            &mut h_stdin_read,
+            &mut h_stdin_write,
+            Some(&sa),
+            1024 * 1024 * 10,
+          )
+          .is_ok()
+          {
             let _ = SetHandleInformation(h_stdin_write, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
 
             let mut si = STARTUPINFOW::default();
@@ -157,7 +169,9 @@ impl Shader {
               PCWSTR::null(),
               &mut si,
               &mut pi,
-            ).is_ok() {
+            )
+            .is_ok()
+            {
               let _ = CloseHandle(h_stdin_read);
               let mut written = 0;
               let _ = WriteFile(h_stdin_write, Some(spv_u8), Some(&mut written), None);
@@ -201,6 +215,7 @@ impl Shader {
       entry_point: CString::new(entry_point).map_err(|_| crate::gpu_err_device!())?,
       shader_stage: execution_model_to_shader_flags(execution_model),
       spv_module,
+      path: alloc::string::String::from(path),
     })
   }
 }
@@ -244,7 +259,9 @@ impl ShaderManager {
       return Err(GpuError::InvalidShader);
     }
 
-    let shader = alloc::sync::Arc::new(Shader::new(device, code, entry_point, execution_model)?);
+    let path_str = path.to_str_unified().map(|s| s.into_owned()).unwrap_or_else(|| alloc::string::String::from("<unknown>"));
+    aethervk_oshal_rlib::log!("[ShaderManager] Loading shader: {}", path_str);
+    let shader = alloc::sync::Arc::new(Shader::new(device, code, entry_point, execution_model, &path_str)?);
     let key = self.shaders.insert(shader);
     self.shader_paths.insert(path.to_pathbuf(), key);
 
@@ -330,14 +347,16 @@ pub fn disassemble_and_log_spirv(spv_code: &[u8]) {
 
   #[cfg(windows)]
   unsafe {
+    use windows::Win32::Foundation::{
+      CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation,
+    };
+    use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
     use windows::Win32::System::Environment::GetEnvironmentVariableW;
     use windows::Win32::System::Pipes::CreatePipe;
-    use windows::Win32::Foundation::{HANDLE, SetHandleInformation, HANDLE_FLAGS, HANDLE_FLAG_INHERIT, CloseHandle};
     use windows::Win32::System::Threading::{
-      CreateProcessW, STARTUPINFOW, PROCESS_INFORMATION, STARTF_USESTDHANDLES, PROCESS_CREATION_FLAGS,
-      WaitForSingleObject, INFINITE
+      CreateProcessW, INFINITE, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+      STARTUPINFOW, WaitForSingleObject,
     };
-    use windows::Win32::Storage::FileSystem::{WriteFile, ReadFile};
     use windows::core::{PCWSTR, PWSTR};
 
     let mut sdk_buf = [0u16; 512];
@@ -355,8 +374,20 @@ pub fn disassemble_and_log_spirv(spv_code: &[u8]) {
       sa.nLength = core::mem::size_of::<windows::Win32::Security::SECURITY_ATTRIBUTES>() as u32;
       sa.bInheritHandle = true.into();
 
-      if CreatePipe(&mut h_stdin_read, &mut h_stdin_write, Some(&sa), 1024 * 1024 * 10).is_ok()
-         && CreatePipe(&mut h_stdout_read, &mut h_stdout_write, Some(&sa), 1024 * 1024 * 10).is_ok()
+      if CreatePipe(
+        &mut h_stdin_read,
+        &mut h_stdin_write,
+        Some(&sa),
+        1024 * 1024 * 10,
+      )
+      .is_ok()
+        && CreatePipe(
+          &mut h_stdout_read,
+          &mut h_stdout_write,
+          Some(&sa),
+          1024 * 1024 * 10,
+        )
+        .is_ok()
       {
         let _ = SetHandleInformation(h_stdin_write, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
         let _ = SetHandleInformation(h_stdout_read, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
@@ -383,7 +414,9 @@ pub fn disassemble_and_log_spirv(spv_code: &[u8]) {
           PCWSTR::null(),
           &mut si,
           &mut pi,
-        ).is_ok() {
+        )
+        .is_ok()
+        {
           let _ = CloseHandle(h_stdin_read);
           let _ = CloseHandle(h_stdout_write);
 

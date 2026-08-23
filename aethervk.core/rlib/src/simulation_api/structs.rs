@@ -319,14 +319,42 @@ pub struct LogicWorkload {
 }
 
 impl LogicThreadContext {
-  pub fn load_almanac_file_internal(&self, path: &str) -> EngineResult<()> {
+  /// Loads an almanac file into the shared logic state.
+  ///
+  /// Returns the discovered primary NAIF body ID (0 if unknown, multi-body, or already loaded).
+  /// Emitting the `ExternalState::AlmanacImported` callback is the caller's responsibility.
+  pub fn load_almanac_file_internal(&self, path: &str) -> EngineResult<i32> {
     let mut logic = self.logic_state.write();
     if logic.almanac_data.file_names.iter().any(|f| f == path) {
-      return Ok(());
+      return Ok(0); // already loaded; NAIF ID not re-discovered
     }
 
     let path_buf = oshal::os::fs::PathBuf::from(path);
-    logic.almanac_data.load_almanac(&path_buf)
+    logic.almanac_data.load_almanac(&path_buf)?;
+
+    // Discover the primary NAIF body ID from the freshly-loaded SPK data.
+    // Exclude SSB (0) and well-known solar-system bodies (1–999) to isolate
+    // comet/asteroid IDs, which JPL Horizons places at 1 000 000+ or negative.
+    let naif_id = logic
+      .almanac_data
+      .almanac
+      .spk_domains()
+      .ok()
+      .and_then(|domains| {
+        let targets: alloc::vec::Vec<i32> = domains
+          .into_iter()
+          .map(|(id, _)| id)
+          .filter(|&id| id != 0 && !(1..=999).contains(&id))
+          .collect();
+        if targets.len() == 1 {
+          Some(targets[0])
+        } else {
+          None
+        }
+      })
+      .unwrap_or(0);
+
+    Ok(naif_id)
   }
 
   pub fn unload_almanac_file_internal(&self, path: &str) -> EngineResult<()> {
@@ -599,11 +627,28 @@ pub enum LogicCommand {
   ///
   /// Submitted by the FFI caller thread from `avkSimulationContext_addCameraAnimation`.
   AnimateCameraTo {
-    scene_id:   u64,
-    camera_id:  u64, // external (FFI) entity id
+    scene_id: u64,
+    camera_id: u64, // external (FFI) entity id
     target_pos: aethervk_oshal_rlib::math::vector::vec3f64::DVec3,
     target_rot: aethervk_oshal_rlib::math::vector::vec4::Quat,
     duration_s: f32,
+  },
+
+  /// Apply an immediate (non-animated) camera transform and/or projection update.
+  ///
+  /// Submitted by `avkSimulationContext_transformStaticCamera`. Writes
+  /// [`HighResTransformComponent`](crate::scene::HighResTransformComponent) directly via
+  /// `set_global_transform_f64` (no `TransformAnimationComponent` is created or retargeted).
+  SetCameraTransform {
+    scene_id: u64,
+    camera_id: u64, // external (FFI) entity id
+    /// `Some((pos, rot))` → write world-space position + rotation via `set_global_transform_f64`.
+    transform: Option<(
+      aethervk_oshal_rlib::math::vector::vec3f64::DVec3,
+      aethervk_oshal_rlib::math::vector::vec4::Quat,
+    )>,
+    /// `Some(proj)` → overwrite `CameraComponent::projection`.
+    projection: Option<crate::scene::CameraProjection>,
   },
 }
 

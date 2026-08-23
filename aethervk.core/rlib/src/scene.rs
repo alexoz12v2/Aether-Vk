@@ -3434,6 +3434,137 @@ impl Scene {
     Ok(())
   }
 
+  /// f64 counterpart to [`set_global_transform`].
+  ///
+  /// Sets the entity's world-space position and rotation, converting to parent-local space
+  /// before writing to [`HighResTransformComponent`].
+  ///
+  /// Uses an explicit ancestor stack with two while-loops — no recursive calls,
+  /// no call to [`global_transform_f64`].
+  ///
+  /// - **Phase 1:** walk UP through parents collecting `ancestors = [direct_parent, …, root]`.
+  /// - **Phase 2:** seed from root and walk DOWN, composing transforms to get the
+  ///   direct parent's world transform.
+  /// - **Phase 3:** invert parent world transform and write entity's component.
+  ///
+  /// The f32 [`TransformComponent`] shadow is left for the next
+  /// [`sync_highres_to_transform`] call.
+  ///
+  /// Returns `Err` if the entity has no [`HighResTransformComponent`].
+  pub fn set_global_transform_f64(
+    &self,
+    entity_id: EntityId,
+    new_pos: Vec3f64,
+    new_rot: Quat,
+  ) -> EngineResult<()> {
+    // ── Phase 1: collect [direct_parent, …, root] with a while loop ───────────
+    let mut ancestors: Vec<EntityId> = Vec::new();
+    {
+      let hierarchy = self.hierarchy.read();
+      let mut current = entity_id;
+      let mut depth = 0usize;
+      while let Some(&parent_id) = hierarchy.parents.get(&current) {
+        ancestors.push(parent_id);
+        current = parent_id;
+        depth += 1;
+        if depth > 128 {
+          break; // cycle guard — same limit as global_transform_f64
+        }
+      }
+    }
+
+    // ── Phase 2: accumulate direct parent world transform root → parent ────────
+    let parent_world: Option<HighResTransformComponent> = if ancestors.is_empty() {
+      None
+    } else {
+      // Seed from root (ancestors.last()): a root entity's local == world transform.
+      let root_id = *ancestors.last().unwrap();
+      let mut acc_pos = self
+        .with_component(root_id, |c: &HighResTransformComponent| c.position)
+        .or_else(|| self.with_component(root_id, |c: &TransformComponent| c.position.to_f64()))
+        .unwrap_or(Vec3f64::from_components(0.0, 0.0, 0.0));
+      let mut acc_rot = self
+        .with_component(root_id, |c: &HighResTransformComponent| c.rotation)
+        .or_else(|| self.with_component(root_id, |c: &TransformComponent| c.rotation))
+        .unwrap_or(Quat::identity());
+      let mut acc_scale = self
+        .with_component(root_id, |c: &HighResTransformComponent| c.scale)
+        .or_else(|| self.with_component(root_id, |c: &TransformComponent| c.scale))
+        .unwrap_or(Vec3f32::one());
+
+      // Walk DOWN: ancestors[len-2] → ancestors[0] (= direct parent).
+      // `ancestors` is ordered [direct_parent, …, root], so iterating in reverse
+      // (skipping root at index len-1) goes root's-child → direct_parent.
+      let mut idx = ancestors.len(); // decremented before each use
+      while idx > 1 {
+        idx -= 1;
+        let node_id = ancestors[idx - 1];
+        let local_pos = self
+          .with_component(node_id, |c: &HighResTransformComponent| c.position)
+          .or_else(|| self.with_component(node_id, |c: &TransformComponent| c.position.to_f64()))
+          .unwrap_or(Vec3f64::from_components(0.0, 0.0, 0.0));
+        let local_rot = self
+          .with_component(node_id, |c: &HighResTransformComponent| c.rotation)
+          .or_else(|| self.with_component(node_id, |c: &TransformComponent| c.rotation))
+          .unwrap_or(Quat::identity());
+        let local_scale = self
+          .with_component(node_id, |c: &HighResTransformComponent| c.scale)
+          .or_else(|| self.with_component(node_id, |c: &TransformComponent| c.scale))
+          .unwrap_or(Vec3f32::one());
+
+        // Compose: world = parent_world ∘ local
+        //   world_pos   = acc_pos + acc_rot * (acc_scale * local_pos)
+        //   world_rot   = acc_rot * local_rot
+        //   world_scale = acc_scale * local_scale
+        let rotated = acc_rot.rotate_vector(Vec3f32::from_components(
+          (acc_scale.x() as f64 * local_pos.x()) as f32,
+          (acc_scale.y() as f64 * local_pos.y()) as f32,
+          (acc_scale.z() as f64 * local_pos.z()) as f32,
+        ));
+        acc_pos = acc_pos + rotated.to_f64();
+        acc_rot = acc_rot * local_rot;
+        acc_scale = acc_scale * local_scale;
+      }
+
+      Some(HighResTransformComponent { position: acc_pos, rotation: acc_rot, scale: acc_scale })
+    };
+
+    // ── Phase 3: world → local, write HighResTransformComponent ───────────────
+    self
+      .with_component_mut(entity_id, |t: &mut HighResTransformComponent| {
+        if let Some(pg) = parent_world {
+          let inv_rot = pg.rotation.inverse();
+          t.rotation = inv_rot * new_rot;
+
+          let safe_div_f64 =
+            |a: f64, b: f64| -> f64 { if b.abs() < 1e-30 { 0.0 } else { a / b } };
+
+          // Un-rotate and un-scale the world-space offset into parent-local coordinates.
+          let diff = new_pos - pg.position;
+          let diff_f32 = Vec3f32::from_components(
+            diff.x() as f32,
+            diff.y() as f32,
+            diff.z() as f32,
+          );
+          let unrotated = inv_rot.rotate_vector(diff_f32).to_f64();
+          t.position = Vec3f64::from_components(
+            safe_div_f64(unrotated.x(), pg.scale.x() as f64),
+            safe_div_f64(unrotated.y(), pg.scale.y() as f64),
+            safe_div_f64(unrotated.z(), pg.scale.z() as f64),
+          );
+        } else {
+          // Root entity: local space == world space.
+          t.position = new_pos;
+          t.rotation = new_rot;
+        }
+      })
+      .ok_or(EngineError::InvalidOperation(
+        "set_global_transform_f64: Entity missing HighResTransformComponent",
+      ))?;
+
+    Ok(())
+  }
+
   /// TODO: Document this item
   pub fn set_global_position_and_rotation(
     &self,
@@ -4599,6 +4730,8 @@ pub mod particles_dto {
     pub start_velocity_mean: f32,
     pub start_velocity_std: f32,
     pub stream_color: [f32; 4],
+    pub nucleus_radius_km: f32,
+    pub seed: u32,
   }
 }
 

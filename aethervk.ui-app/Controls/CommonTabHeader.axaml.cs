@@ -1,5 +1,5 @@
-using Avalonia.Controls;
 using AetherVk.Logic.ViewModels;
+using Avalonia.Controls;
 
 namespace AetherVk.Controls;
 

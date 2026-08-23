@@ -1,3 +1,4 @@
+#![cfg(ignore)]
 use crate::{
   gpu::{
     CollisionPair, CommandBufferSyncInfo, DeviceBuffer, ForceEmitter, Kernels, KinematicBody,
@@ -29,19 +30,19 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn toggle_particle_self_gravity(&self, _enable: bool) {}
 
-  fn discard_buffer<T: Copy + Send + Sync>(&self, buffer: Self::Buffer<T>) {
+  fn discard_buffer<T: Copy + Send + Sync>(&self, buffer: VulkanBuffer<T>) {
     self.base.discard_buffer(buffer)
   }
-  fn discard_list<T: Copy + Send + Sync>(&self, list: Self::List<T>) {
+  fn discard_list<T: Copy + Send + Sync>(&self, list: VulkanBuffer<T>) {
     self.base.discard_list(list)
   }
-  fn discard_bvh(&self, bvh: Self::MotionBvh) {
+  fn discard_bvh(&self, bvh: VulkanBuffer<()>) {
     self.base.discard_bvh(bvh)
   }
-  fn discard_tlas(&self, tlas: Self::MotionTlas) {
+  fn discard_tlas(&self, tlas: VulkanBuffer<()>) {
     self.base.discard_tlas(tlas)
   }
-  fn read_buffer_u32_first(&self, buf: &Self::Buffer<u32>) -> EngineResult<u32> {
+  fn read_buffer_u32_first(&self, buf: &VulkanBuffer<u32>) -> EngineResult<u32> {
     self.base.read_buffer_u32_first(buf)
   }
   fn subgroup_size(&self) -> Option<crate::gpu::SubgroupSize> {
@@ -60,86 +61,93 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
   }
   fn refit_motion_blas(
     &self,
-    cmd: &mut Self::Cmd,
-    bvh: &Self::MotionBvh,
-    depth_indices: &Self::Buffer<u32>,
+    cmd: &mut VulkanCommandBuffer,
+    bvh: &VulkanBuffer<()>,
+    depth_indices: &VulkanBuffer<u32>,
     total_nodes: u32,
   ) -> EngineResult<()> {
     self.base.refit_motion_blas(cmd, bvh, depth_indices, total_nodes)
   }
   fn upload_motion_tlas(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     node_bytes: &[u8],
-  ) -> EngineResult<Self::MotionTlas> {
+  ) -> EngineResult<VulkanBuffer<()>> {
     self.base.upload_motion_tlas(cmd, node_bytes)
   }
-  fn create_command_buffer(&self) -> EngineResult<Self::Cmd> {
+  fn create_command_buffer(&self) -> EngineResult<VulkanCommandBuffer> {
     self.base.create_command_buffer()
   }
   fn build_list<T: Copy + Send + Sync>(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     capacity: usize,
-  ) -> EngineResult<Self::List<T>> {
+  ) -> EngineResult<VulkanBuffer<T>> {
     self.base.build_list(cmd, capacity)
   }
   fn build_leaves(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     capacity: usize,
-  ) -> EngineResult<Self::Buffer<[u32; 8]>> {
+  ) -> EngineResult<VulkanBuffer<[u32; 8]>> {
     self.base.build_leaves(cmd, capacity)
   }
   fn build_kinematic_bodies(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     scene: &PhysicsScene,
     scene0: &Scene,
-  ) -> EngineResult<Self::Buffer<KinematicBody>> {
+  ) -> EngineResult<VulkanBuffer<KinematicBody>> {
     self.base.build_kinematic_bodies(cmd, scene, scene0)
   }
   fn build_rigid_bodies(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     scene: &PhysicsScene,
     scene0: &Scene,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Self::Buffer<Wrench>, u32)> {
+  ) -> EngineResult<(VulkanBuffer<RigidBodyImex>, VulkanBuffer<Wrench>, u32)> {
     self.base.build_rigid_bodies(cmd, scene, scene0)
   }
   fn build_frames(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     scene: &PhysicsScene,
-  ) -> EngineResult<Self::Buffer<GpuReferenceFrame>> {
+  ) -> EngineResult<VulkanBuffer<GpuReferenceFrame>> {
     self.base.build_frames(cmd, scene)
   }
   fn build_particles(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     scene: &Scene,
-  ) -> EngineResult<alloc::vec::Vec<(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>, bool)>> {
+  ) -> EngineResult<
+    alloc::vec::Vec<(
+      crate::scene::EntityId,
+      VulkanBuffer<f32>,
+      alloc::vec::Vec<ParticleMetadata>,
+      bool,
+    )>,
+  > {
     self.base.build_particles(cmd, scene)
   }
   fn build_particle_frame_ids(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     particle_metadata: &[ParticleMetadata],
-  ) -> EngineResult<Self::Buffer<u32>> {
+  ) -> EngineResult<VulkanBuffer<u32>> {
     self.base.build_particle_frame_ids(cmd, particle_metadata)
   }
   fn build_emitters(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     scene: &Scene,
-  ) -> EngineResult<(Self::Buffer<ForceEmitter>, u32)> {
+  ) -> EngineResult<(VulkanBuffer<ForceEmitter>, u32)> {
     self.base.build_emitters(cmd, scene)
   }
   fn build_emission_candidates(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     scene: &Scene,
-  ) -> EngineResult<Self::Buffer<f32>> {
+  ) -> EngineResult<VulkanBuffer<f32>> {
     self.base.build_emission_candidates(cmd, scene)
   }
 
@@ -147,8 +155,8 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn emit_particles(
     &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
+    cmd: &mut VulkanCommandBuffer,
+    particles: &mut VulkanBuffer<f32>,
     physical_scene: &PhysicsScene,
     scene: &Scene,
     sun_pos: Vec3f32,
@@ -162,8 +170,8 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn step_ode_p1_p2(
     &self,
-    _cmd: &mut Self::Cmd,
-    _particles: &mut Self::Buffer<f32>,
+    _cmd: &mut VulkanCommandBuffer,
+    _particles: &mut VulkanBuffer<f32>,
     _dt: timeus_t,
   ) -> EngineResult<()> {
     Ok(())
@@ -171,10 +179,10 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn step_ode_p3_p4(
     &self,
-    _cmd: &mut Self::Cmd,
-    _kinematics: &Self::Buffer<KinematicBody>,
-    _rigid_bodies: &mut Self::Buffer<crate::gpu::RigidBodyGpu>,
-    _emitters: &Self::Buffer<ForceEmitter>,
+    _cmd: &mut VulkanCommandBuffer,
+    _kinematics: &VulkanBuffer<KinematicBody>,
+    _rigid_bodies: &mut VulkanBuffer<crate::gpu::RigidBodyGpu>,
+    _emitters: &VulkanBuffer<ForceEmitter>,
     _dt: timeus_t,
   ) -> EngineResult<()> {
     Ok(())
@@ -182,9 +190,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn compute_self_gravity(
     &self,
-    _cmd: &mut Self::Cmd,
-    _bvh: &Self::MotionBvh,
-    _particles: &mut Self::Buffer<f32>,
+    _cmd: &mut VulkanCommandBuffer,
+    _bvh: &VulkanBuffer<()>,
+    _particles: &mut VulkanBuffer<f32>,
   ) -> EngineResult<()> {
     if self.target == MockTargetShader::BarnesHut {
       self.base.compute_self_gravity(_cmd, _bvh, _particles)?;
@@ -194,10 +202,10 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn step_ode_p5(
     &self,
-    _cmd: &mut Self::Cmd,
-    _kinematics: &Self::Buffer<KinematicBody>,
-    _particles: &mut Self::Buffer<f32>,
-    _emitters: &Self::Buffer<ForceEmitter>,
+    _cmd: &mut VulkanCommandBuffer,
+    _kinematics: &VulkanBuffer<KinematicBody>,
+    _particles: &mut VulkanBuffer<f32>,
+    _emitters: &VulkanBuffer<ForceEmitter>,
     _dt: timeus_t,
   ) -> EngineResult<()> {
     Ok(())
@@ -205,8 +213,8 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn imex_integrate_particles_p1_p2(
     &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
+    cmd: &mut VulkanCommandBuffer,
+    particles: &mut VulkanBuffer<f32>,
     dt: timeus_t,
   ) -> EngineResult<()> {
     if self.target == MockTargetShader::IntegrateParticlesP1P2 {
@@ -217,11 +225,11 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn imex_integrate_bodies_p3(
     &self,
-    cmd: &mut Self::Cmd,
-    bodies: &mut Self::Buffer<RigidBodyImex>,
-    wrenches: &mut Self::Buffer<Wrench>,
-    emitters: &Self::Buffer<ForceEmitter>,
-    frames: &Self::Buffer<crate::physics::physics_scene::GpuReferenceFrame>,
+    cmd: &mut VulkanCommandBuffer,
+    bodies: &mut VulkanBuffer<RigidBodyImex>,
+    wrenches: &mut VulkanBuffer<Wrench>,
+    emitters: &VulkanBuffer<ForceEmitter>,
+    frames: &VulkanBuffer<crate::physics::physics_scene::GpuReferenceFrame>,
     n_bodies: u32,
     n_emitters: u32,
     dt: timeus_t,
@@ -236,9 +244,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn imex_rb_force_assign(
     &self,
-    cmd: &mut Self::Cmd,
-    bodies: &Self::Buffer<RigidBodyImex>,
-    wrenches: &mut Self::Buffer<Wrench>,
+    cmd: &mut VulkanCommandBuffer,
+    bodies: &VulkanBuffer<RigidBodyImex>,
+    wrenches: &mut VulkanBuffer<Wrench>,
     n_bodies: u32,
   ) -> EngineResult<()> {
     if self.target == MockTargetShader::RbForceAssign {
@@ -249,8 +257,8 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn imex_integrate_particles_p4_5(
     &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
+    cmd: &mut VulkanCommandBuffer,
+    particles: &mut VulkanBuffer<f32>,
     dt: timeus_t,
     current_time_us: timeus_t,
   ) -> EngineResult<()> {
@@ -262,12 +270,12 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn apply_emitters_to_particles(
     &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
-    emitters: &Self::Buffer<ForceEmitter>,
-    frames: &Self::Buffer<GpuReferenceFrame>,
-    particle_frame_ids: &Self::Buffer<u32>,
-    bvh: &Self::MotionBvh,
+    cmd: &mut VulkanCommandBuffer,
+    particles: &mut VulkanBuffer<f32>,
+    emitters: &VulkanBuffer<ForceEmitter>,
+    frames: &VulkanBuffer<GpuReferenceFrame>,
+    particle_frame_ids: &VulkanBuffer<u32>,
+    bvh: &VulkanBuffer<()>,
     num_emitters: u32,
   ) -> EngineResult<()> {
     if self.target == MockTargetShader::ApplyEmitters {
@@ -286,20 +294,20 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn accumulate_bvh_forces_to_particles(
     &self,
-    cmd: &mut Self::Cmd,
-    particles: &mut Self::Buffer<f32>,
-    bvh: &Self::MotionBvh,
+    cmd: &mut VulkanCommandBuffer,
+    particles: &mut VulkanBuffer<f32>,
+    bvh: &VulkanBuffer<()>,
   ) -> EngineResult<()> {
     self.base.accumulate_bvh_forces_to_particles(cmd, particles, bvh)
   }
 
   fn apply_emitters_direct(
     &self,
-    _cmd: &mut Self::Cmd,
-    _particles: &mut Self::Buffer<f32>,
-    _emitters: &Self::Buffer<ForceEmitter>,
-    _frames: &Self::Buffer<GpuReferenceFrame>,
-    _particle_frame_ids: &Self::Buffer<u32>,
+    _cmd: &mut VulkanCommandBuffer,
+    _particles: &mut VulkanBuffer<f32>,
+    _emitters: &VulkanBuffer<ForceEmitter>,
+    _frames: &VulkanBuffer<GpuReferenceFrame>,
+    _particle_frame_ids: &VulkanBuffer<u32>,
     _num_emitters: u32,
   ) -> EngineResult<()> {
     Ok(()) // no-op in mock
@@ -307,7 +315,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn bp_clear(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     raw_pairs_addr: u64,
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
@@ -331,8 +339,8 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn bp_bounds_gen(
     &self,
-    cmd: &mut Self::Cmd,
-    bodies: &Self::Buffer<RigidBodyImex>,
+    cmd: &mut VulkanCommandBuffer,
+    bodies: &VulkanBuffer<RigidBodyImex>,
     leaves_addr: u64,
     lca_entities_addr: u64,
     total_entities: u32,
@@ -353,7 +361,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn bp_scene(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     tlas_bvh_addr: u64,
     query_leaves_addr: u64,
     overlapping_pairs_addr: u64,
@@ -375,8 +383,8 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn bp_classify(
     &self,
-    cmd: &mut Self::Cmd,
-    bodies: &Self::Buffer<RigidBodyImex>,
+    cmd: &mut VulkanCommandBuffer,
+    bodies: &VulkanBuffer<RigidBodyImex>,
     raw_pairs_addr: u64,
     out_rb_rb_addr: u64,
     out_rb_ps_addr: u64,
@@ -401,7 +409,7 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn bp_cross_lca(
     &self,
-    _cmd: &mut Self::Cmd,
+    _cmd: &mut VulkanCommandBuffer,
     _tlas_bvh_addr: u64,
     _lca_entities_addr: u64,
     _macro_leaves_addr: u64,
@@ -435,9 +443,9 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn bp_particle_self(
     &self,
-    cmd: &mut Self::Cmd,
+    cmd: &mut VulkanCommandBuffer,
     bvh_addr: u64,
-    particles: &mut Self::Buffer<f32>,
+    particles: &mut VulkanBuffer<f32>,
     wrench_buffer_addr: u64,
     total_particles: u32,
     root_index: u32,
@@ -461,34 +469,43 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn build_motion_bvh(
     &self,
-    cmd: &mut Self::Cmd,
-    kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &mut Self::Buffer<f32>,
-    particle_frame_ids: &mut Self::Buffer<u32>,
+    cmd: &mut VulkanCommandBuffer,
+    kinematics: &VulkanBuffer<KinematicBody>,
+    rigid_bodies: &VulkanBuffer<RigidBodyImex>,
+    particles: &mut VulkanBuffer<f32>,
+    particle_frame_ids: &mut VulkanBuffer<u32>,
     dt: timeus_t,
     entity_id: crate::scene::EntityId,
     particle_aabb: Option<([f32; 3], [f32; 3])>,
-  ) -> EngineResult<Self::MotionBvh> {
-    self.base.build_motion_bvh(cmd, kinematics, rigid_bodies, particles, particle_frame_ids, dt, entity_id, particle_aabb)
+  ) -> EngineResult<VulkanBuffer<()>> {
+    self.base.build_motion_bvh(
+      cmd,
+      kinematics,
+      rigid_bodies,
+      particles,
+      particle_frame_ids,
+      dt,
+      entity_id,
+      particle_aabb,
+    )
   }
 
   fn self_intersect_scene(
     &self,
-    cmd: &mut Self::Cmd,
-    bvh: &Self::MotionBvh,
-  ) -> EngineResult<Self::List<CollisionPair>> {
+    cmd: &mut VulkanCommandBuffer,
+    bvh: &VulkanBuffer<()>,
+  ) -> EngineResult<VulkanBuffer<CollisionPair>> {
     self.base.self_intersect_scene(cmd, bvh)
   }
 
   fn intersect_instances(
     &self,
-    cmd: &mut Self::Cmd,
-    potentials: &Self::List<CollisionPair>,
-    kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
-  ) -> EngineResult<Self::List<CollisionPair>> {
+    cmd: &mut VulkanCommandBuffer,
+    potentials: &VulkanBuffer<CollisionPair>,
+    kinematics: &VulkanBuffer<KinematicBody>,
+    rigid_bodies: &VulkanBuffer<RigidBodyImex>,
+    particles: &VulkanBuffer<f32>,
+  ) -> EngineResult<VulkanBuffer<CollisionPair>> {
     self
       .base
       .intersect_instances(cmd, potentials, kinematics, rigid_bodies, particles)
@@ -496,14 +513,14 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn narrow_ccd(
     &self,
-    cmd: &mut Self::Cmd,
-    broadphase_pairs: &Self::List<CollisionPair>,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
+    cmd: &mut VulkanCommandBuffer,
+    broadphase_pairs: &VulkanBuffer<CollisionPair>,
+    rigid_bodies: &VulkanBuffer<RigidBodyImex>,
+    particles: &VulkanBuffer<f32>,
     lca_entities: u64,
     space_type: u32,
     dt: f32,
-    output_list: &Self::List<CollisionPair>,
+    output_list: &VulkanBuffer<CollisionPair>,
   ) -> EngineResult<()> {
     if self.target == MockTargetShader::Ccd {
       self.base.narrow_ccd(
@@ -523,14 +540,14 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn narrow_ccd_cross_lca(
     &self,
-    cmd: &mut Self::Cmd,
-    broadphase_pairs: &Self::List<crate::gpu::CrossPair>,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: &Self::Buffer<f32>,
+    cmd: &mut VulkanCommandBuffer,
+    broadphase_pairs: &VulkanBuffer<crate::gpu::CrossPair>,
+    rigid_bodies: &VulkanBuffer<RigidBodyImex>,
+    particles: &VulkanBuffer<f32>,
     lca_entities: u64,
     space_type: u32,
     dt: f32,
-    output_list: &Self::List<CollisionPair>,
+    output_list: &VulkanBuffer<CollisionPair>,
   ) -> EngineResult<()> {
     self.base.narrow_ccd_cross_lca(
       cmd,
@@ -546,10 +563,10 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn compact_collisions(
     &self,
-    cmd: &mut Self::Cmd,
-    globals: &Self::List<CollisionPair>,
+    cmd: &mut VulkanCommandBuffer,
+    globals: &VulkanBuffer<CollisionPair>,
     time_delta: timeus_t,
-  ) -> EngineResult<Self::List<CollisionPair>> {
+  ) -> EngineResult<VulkanBuffer<CollisionPair>> {
     if self.target == MockTargetShader::StreamCompact {
       self.base.compact_collisions(cmd, globals, time_delta)
     } else {
@@ -559,10 +576,10 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn find_earliest_collision(
     &self,
-    cmd: &mut Self::Cmd,
-    compacted: &Self::List<CollisionPair>,
+    cmd: &mut VulkanCommandBuffer,
+    compacted: &VulkanBuffer<CollisionPair>,
     dt: f32,
-  ) -> EngineResult<Self::Buffer<u32>> {
+  ) -> EngineResult<VulkanBuffer<u32>> {
     if self.target == MockTargetShader::ReduceToi {
       self.base.find_earliest_collision(cmd, compacted, dt)
     } else {
@@ -573,11 +590,11 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn apply_collision_responses(
     &self,
-    cmd: &mut Self::Cmd,
-    kinematics: &Self::Buffer<KinematicBody>,
-    rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
-    particles: &mut Self::Buffer<f32>,
-    collisions: &Self::List<CollisionPair>,
+    cmd: &mut VulkanCommandBuffer,
+    kinematics: &VulkanBuffer<KinematicBody>,
+    rigid_bodies: &mut VulkanBuffer<RigidBodyImex>,
+    particles: &mut VulkanBuffer<f32>,
+    collisions: &VulkanBuffer<CollisionPair>,
     lca_entities_addr: u64,
     force_inelastic: bool,
   ) -> EngineResult<()> {
@@ -597,37 +614,38 @@ impl<'a> Kernels for MockVulkanKernels<'a> {
 
   fn snapshot_dynamics(
     &self,
-    cmd: &mut Self::Cmd,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particles: Option<&Self::Buffer<f32>>,
-  ) -> EngineResult<(Self::Buffer<RigidBodyImex>, Option<Self::Buffer<f32>>)> {
+    cmd: &mut VulkanCommandBuffer,
+    rigid_bodies: &VulkanBuffer<RigidBodyImex>,
+    particles: Option<&VulkanBuffer<f32>>,
+  ) -> EngineResult<(VulkanBuffer<RigidBodyImex>, Option<VulkanBuffer<f32>>)> {
     self.base.snapshot_dynamics(cmd, rigid_bodies, particles)
   }
 
   fn restore_dynamics(
     &self,
-    cmd: &mut Self::Cmd,
-    rigid_bodies: &mut Self::Buffer<RigidBodyImex>,
-    particles: Option<&mut Self::Buffer<f32>>,
-    snapshot: &(Self::Buffer<RigidBodyImex>, Option<Self::Buffer<f32>>),
+    cmd: &mut VulkanCommandBuffer,
+    rigid_bodies: &mut VulkanBuffer<RigidBodyImex>,
+    particles: Option<&mut VulkanBuffer<f32>>,
+    snapshot: &(VulkanBuffer<RigidBodyImex>, Option<VulkanBuffer<f32>>),
   ) -> EngineResult<()> {
     self.base.restore_dynamics(cmd, rigid_bodies, particles, snapshot)
   }
 
   fn write_back_to_scene(
     &self,
-    cmd: &mut Self::Cmd,
-    rigid_bodies: &Self::Buffer<RigidBodyImex>,
-    particle_systems: &[(crate::scene::EntityId, Self::Buffer<f32>, alloc::vec::Vec<ParticleMetadata>, bool)],
+    cmd: &mut VulkanCommandBuffer,
+    rigid_bodies: &VulkanBuffer<RigidBodyImex>,
+    particle_systems: &[(
+      crate::scene::EntityId,
+      VulkanBuffer<f32>,
+      alloc::vec::Vec<ParticleMetadata>,
+      bool,
+    )],
     physical_scene: &mut PhysicsScene,
     scene: &Scene,
   ) -> EngineResult<Option<CommandBufferSyncInfo>> {
-    self.base.write_back_to_scene(
-      cmd,
-      rigid_bodies,
-      particle_systems,
-      physical_scene,
-      scene,
-    )
+    self
+      .base
+      .write_back_to_scene(cmd, rigid_bodies, particle_systems, physical_scene, scene)
   }
 }

@@ -21,7 +21,6 @@
 #extension GL_EXT_shader_16bit_storage                         : require
 // 16-bit ARITHMETIC (float16_t registers) — missing on Pascal (GTX 10xx) and older.
 // Demoted to 'enable'; usage guarded by NATIVE_FLOAT16 macro below.
-#extension GL_EXT_shader_explicit_arithmetic_types_float16     : enable
 // ability to use [[dont_unroll]]
 #extension GL_EXT_control_flow_attributes : require
 
@@ -36,17 +35,25 @@
 #endif
 
 #if NATIVE_FLOAT16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+#endif
+
+#if NATIVE_FLOAT16
 #  define FVEC4    f16vec4
+#  define SFVEC4   f16vec4
+#  define LOAD_FVEC4(x) (x)
+#  define STORE_FVEC4(x) (x)
 #  define FP_T     float16_t
 #  define FP(x)    float16_t(x)
 #  define FP_ZERO  0.0hf
-#  define STORE_FVEC4(x) (x)
 #else
 #  define FVEC4    vec4
+#  define SFVEC4   uvec2
+#  define LOAD_FVEC4(v) vec4(unpackHalf2x16((v).x), unpackHalf2x16((v).y))
+#  define STORE_FVEC4(v) uvec2(packHalf2x16((v).xy), packHalf2x16((v).zw))
 #  define FP_T     float
 #  define FP(x)    float(x)
 #  define FP_ZERO  0.0
-#  define STORE_FVEC4(x) f16vec4(x)
 #endif
 
 layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
@@ -372,17 +379,17 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticleChu
     vec4 positionY[PCHUNK_VEC4_SIZE]; // in metres (m)
     vec4 positionZ[PCHUNK_VEC4_SIZE];
 
-    f16vec4 velocityX[PCHUNK_VEC4_SIZE]; // p1p2: vel_N | emit: vel_N+1/2 | p4p5: vel_N+1
-    f16vec4 velocityY[PCHUNK_VEC4_SIZE]; // in metres per second (m/s)
-    f16vec4 velocityZ[PCHUNK_VEC4_SIZE];
+    SFVEC4 velocityX[PCHUNK_VEC4_SIZE]; // p1p2: vel_N | emit: vel_N+1/2 | p4p5: vel_N+1
+    SFVEC4 velocityY[PCHUNK_VEC4_SIZE]; // in metres per second (m/s)
+    SFVEC4 velocityZ[PCHUNK_VEC4_SIZE];
 
-    f16vec4 invMass[PCHUNK_VEC4_SIZE]; // 1 / grams (1/g)
+    SFVEC4 invMass[PCHUNK_VEC4_SIZE]; // 1 / grams (1/g)
 
-    f16vec4 forceX[PCHUNK_VEC4_SIZE];
-    f16vec4 forceY[PCHUNK_VEC4_SIZE];
-    f16vec4 forceZ[PCHUNK_VEC4_SIZE]; // in g * m / s^2
+    SFVEC4 forceX[PCHUNK_VEC4_SIZE];
+    SFVEC4 forceY[PCHUNK_VEC4_SIZE];
+    SFVEC4 forceZ[PCHUNK_VEC4_SIZE]; // in g * m / s^2
 
-    f16vec4 beta[PCHUNK_VEC4_SIZE];
+    SFVEC4 beta[PCHUNK_VEC4_SIZE];
 
     uvec4 spawnTime[PCHUNK_VEC4_SIZE]; // in 1/300 seconds of unscaled simulation time, which can then be scaled and compared to user provided TTL
 };

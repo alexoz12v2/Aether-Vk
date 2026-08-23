@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 
 namespace AetherVk.Logic.Services;
 
-public class LocalStorageService : ILocalStorageService
+public sealed class LocalStorageService : ILocalStorageService
 {
   public string PersistentDirectory { get; }
   public string SessionDirectory { get; }
@@ -88,7 +88,17 @@ public class LocalStorageService : ILocalStorageService
     return path;
   }
 
+  public string GetDownloadsPath(string fileName)
+  {
+    // Cross-platform: ~/Downloads on Linux/macOS, %USERPROFILE%\Downloads on Windows
+    var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    var downloadsDir = Path.Combine(homeDir, "Downloads", $"AetherVk_{SessionId}");
+    Directory.CreateDirectory(downloadsDir);
+    return Path.Combine(downloadsDir, fileName);
+  }
+
   private void EnsureParentDirectoryExists(string path)
+
   {
     var dir = Path.GetDirectoryName(path);
     if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -153,5 +163,36 @@ public class LocalStorageService : ILocalStorageService
     );
     data.Position = 0;
     await data.CopyToAsync(fs);
+  }
+
+  public void Dispose()
+  {
+    // Clean up downloads directory for this session
+    try
+    {
+      var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+      var downloadsDir = Path.Combine(homeDir, "Downloads", $"AetherVk_{SessionId}");
+      if (Directory.Exists(downloadsDir))
+      {
+        Directory.Delete(downloadsDir, true);
+      }
+    }
+    catch
+    {
+      // Ignore cleanup failures during shutdown
+    }
+
+    // Clean up current session directory
+    try
+    {
+      if (Directory.Exists(SessionDirectory))
+      {
+        Directory.Delete(SessionDirectory, true);
+      }
+    }
+    catch
+    {
+      // Ignore cleanup failures during shutdown
+    }
   }
 }

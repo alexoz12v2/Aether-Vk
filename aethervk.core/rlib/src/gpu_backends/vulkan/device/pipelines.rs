@@ -96,6 +96,10 @@ impl PartialEq for ComputeInfo {
       }
     }
 
+    if self.specialization_constants_values != other.specialization_constants_values {
+      return false;
+    }
+
     true
   }
 }
@@ -231,7 +235,9 @@ impl VertexIn {
 impl Default for VertexIn {
   fn default() -> Self {
     Self {
-      topology: Default::default(),
+      // TRIANGLE_LIST is the sensible default; callers that need POINT_LIST
+      // (e.g. the particle/dust archetype) must call .with_topology() explicitly.
+      topology: vk::PrimitiveTopology::TRIANGLE_LIST,
       attributes: Vec::with_capacity(8),
       bindings: Vec::with_capacity(8),
     }
@@ -255,20 +261,18 @@ fn vertex_input_binding_description_eq(
 impl PartialEq for VertexIn {
   fn eq(&self, other: &Self) -> bool {
     self.topology == other.topology
+      && self.attributes.len() == other.attributes.len()
+      && self.bindings.len() == other.bindings.len()
       && self
         .attributes
         .iter()
         .zip(other.attributes.iter())
-        .map(|(a, b)| vertex_input_attribute_description_eq(a, b))
-        .reduce(|acc, x| acc && x)
-        .unwrap_or(true)
+        .all(|(a, b)| vertex_input_attribute_description_eq(a, b))
       && self
         .bindings
         .iter()
         .zip(other.bindings.iter())
-        .map(|(a, b)| vertex_input_binding_description_eq(a, b))
-        .reduce(|acc, x| acc && x)
-        .unwrap_or(true)
+        .all(|(a, b)| vertex_input_binding_description_eq(a, b))
   }
 }
 
@@ -404,10 +408,16 @@ pub struct GraphicsInfo {
   pub stencil_reference: u32,
   pub stencil_compare_mask: u32,
   pub stencil_write_mask: u32,
+  /// Human-readable label for logging/debugging. Not included in pipeline key or equality checks.
+  pub debug_name: alloc::string::String,
 }
 
 impl PartialEq for GraphicsInfo {
   fn eq(&self, other: &Self) -> bool {
+    if self.specialization_constants.len() != other.specialization_constants.len() {
+      return false;
+    }
+
     for i in 0..self.specialization_constants.len() {
       if unsafe {
         !eq_specialization_constants(
@@ -433,6 +443,7 @@ impl PartialEq for GraphicsInfo {
       && self.stencil_reference == other.stencil_reference
       && self.stencil_compare_mask == other.stencil_compare_mask
       && self.stencil_write_mask == other.stencil_write_mask
+      && self.specialization_constants_values == other.specialization_constants_values
   }
 }
 
@@ -1133,6 +1144,13 @@ impl PipelinePool {
 
     // Heavy Vulkan creation executed purely lock-free
     let raw_info = RawGraphicsInfo::from(info);
+    aethervk_oshal_rlib::log!(
+      "[PipelinePool] Creating graphics pipeline: \"{}\" | vert=0x{:x} frag=0x{:x} topology={:?}",
+      info.debug_name,
+      ash::vk::Handle::as_raw(info.pre_rasterization.vertex_module),
+      ash::vk::Handle::as_raw(info.fragment_shader.fragment_module),
+      info.vertex_in.topology,
+    );
     let mut pipeline = vk::Pipeline::null();
     let res = unsafe {
       let graphics_info = raw_info.borrow_graphics_pipeline_create_info();

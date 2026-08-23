@@ -99,15 +99,15 @@ void main() {
     }
 
     // 3. fetch physics data
-    FVEC4 fx_n = pc.globalParticleBufferAddress[chunkIndex].forceX[chunkOffset];
-    FVEC4 fy_n = pc.globalParticleBufferAddress[chunkIndex].forceY[chunkOffset];
-    FVEC4 fz_n = pc.globalParticleBufferAddress[chunkIndex].forceZ[chunkOffset];
+    FVEC4 fx_n = LOAD_FVEC4(pc.globalParticleBufferAddress[chunkIndex].forceX[chunkOffset]);
+    FVEC4 fy_n = LOAD_FVEC4(pc.globalParticleBufferAddress[chunkIndex].forceY[chunkOffset]);
+    FVEC4 fz_n = LOAD_FVEC4(pc.globalParticleBufferAddress[chunkIndex].forceZ[chunkOffset]);
 
-    FVEC4 vx_n = pc.globalParticleBufferAddress[chunkIndex].velocityX[chunkOffset];
-    FVEC4 vy_n = pc.globalParticleBufferAddress[chunkIndex].velocityY[chunkOffset];
-    FVEC4 vz_n = pc.globalParticleBufferAddress[chunkIndex].velocityZ[chunkOffset];
+    FVEC4 vx_n = LOAD_FVEC4(pc.globalParticleBufferAddress[chunkIndex].velocityX[chunkOffset]);
+    FVEC4 vy_n = LOAD_FVEC4(pc.globalParticleBufferAddress[chunkIndex].velocityY[chunkOffset]);
+    FVEC4 vz_n = LOAD_FVEC4(pc.globalParticleBufferAddress[chunkIndex].velocityZ[chunkOffset]);
 
-    FVEC4 invM = pc.globalParticleBufferAddress[chunkIndex].invMass[chunkOffset];
+    FVEC4 invM = LOAD_FVEC4(pc.globalParticleBufferAddress[chunkIndex].invMass[chunkOffset]);
 
     // 4. compute new velocities
     // Note: if a particle is dead or free, invM might be garbage, hence NaN. discarded in CSEL (next step)
@@ -141,11 +141,11 @@ void main() {
     [[dont_unroll]]
     for (uint i = 0; i < 4; ++i) {
         if (isAlive[i]) {
-            vec3 v_n = vec3(f16vec3(vx_n_old[i], vy_n_old[i], vz_n_old[i]));
+            vec3 v_n = vec3(vx_n_old[i], vy_n_old[i], vz_n_old[i]);
             vec3 pos_n = vec3(px_n[i], py_n[i], pz_n[i]);
-            vec3 v_half = vec3(f16vec3(vx_n[i], vy_n[i], vz_n[i]));
+            vec3 v_half = vec3(vx_n[i], vy_n[i], vz_n[i]);
             vec3 pos_next = vec3(px_next[i], py_next[i], pz_next[i]);
-            vec3 f_n = vec3(f16vec3(fx_n[i], fy_n[i], fz_n[i]));
+            vec3 f_n = vec3(fx_n[i], fy_n[i], fz_n[i]);
             if (isnan(pos_n.x) || length(v_half) > 100000.0) {
                 debugPrintfEXT("[P1_P2 FATAL] Particle %d exploded!\n", gid);
                 debugPrintfEXT("   -> Prev Pos: (%1.2f, %1.2f, %1.2f) | Prev Vel: (%1.2f, %1.2f, %1.2f)\n", pos_n.x, pos_n.y, pos_n.z, v_n.x, v_n.y, v_n.z);

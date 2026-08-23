@@ -10,10 +10,6 @@ namespace AetherVk.Views
     {
         [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
         internal global::AetherVk.Controls.VulkanViewportControl ViewportHost;
-        [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
-        internal global::Avalonia.Controls.Canvas GoniometerOverlay;
-        [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
-        internal global::Avalonia.Controls.Shapes.Rectangle LivelinessIndicator;
 
         /// <summary>
         /// Wires up the controls and optionally loads XAML markup and attaches dev tools (if Avalonia.Diagnostics package is referenced).
@@ -31,8 +27,6 @@ namespace AetherVk.Views
 
             var __thisNameScope__ = this.FindNameScope();
             ViewportHost = __thisNameScope__?.Find<global::AetherVk.Controls.VulkanViewportControl>("ViewportHost");
-            GoniometerOverlay = __thisNameScope__?.Find<global::Avalonia.Controls.Canvas>("GoniometerOverlay");
-            LivelinessIndicator = __thisNameScope__?.Find<global::Avalonia.Controls.Shapes.Rectangle>("LivelinessIndicator");
         }
     }
 }

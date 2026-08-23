@@ -12,7 +12,7 @@ use crate::{
   simulation::almanac::AlmanacPackedData,
   simulation_api::{
     ComponentForeignId, emit_breadcrumb, emit_external_state_change,
-    external_state::{CModelImported, CTimeRange, ExternalState},
+    external_state::{CAlamanacImported, CModelImported, CTimeRange, ExternalState},
     structs::{
       self, CartesianState, LogicCommand, LogicThreadContext, LogicWorkload, PhysicsDeviceSelfSync,
       SceneContext, SyncParticleReleaseFeedback,
@@ -103,6 +103,9 @@ fn logic_command_desc(cmd: &LogicCommand) -> alloc::string::String {
     // Animation commands
     LogicCommand::AnimateCameraTo { camera_id, .. } => {
       alloc::format!("Animate camera {} to target", camera_id)
+    }
+    LogicCommand::SetCameraTransform { camera_id, .. } => {
+      alloc::format!("SetCameraTransform camera={}", camera_id)
     }
   }
 }
@@ -832,18 +835,102 @@ fn process_command_internal(
       Ok(())
     }
     LogicCommand::InitComet { scene_id, spk_id } => {
-      // TODO: implement comet initialization (attach AlmanacPlanet, force_reposition,
-      // dispatch UpdateTrajectoryForSpk for Comet_orbit). Requires probe_spk_file_with_domain
-      // to discover the NAIF ID and validate coverage.
-      let _ = (scene_id, spk_id);
+      // Attach AlmanacPlanet to comet body, force-reposition to start_epoch,
+      // and queue UpdateTrajectoryForSpk — mirroring Earth initialization.
+      let scenes = ctx.scenes.read();
+      let scene_arc =
+        crate::expect_scene!(scenes.get_scene(scene_id), "InitComet: scene not found");
+      let scene_guard = scene_arc.read();
+
+      let comet = scene_guard.comet.ok_or(EngineError::InvalidOperation(
+        "InitComet: comet SubtreeEntities not populated",
+      ))?;
+
+      // Build AlmanacPlanet. rot_period and mu are set to zero for comets —
+      // rotation is driven by BodyRotationalModel (if present) not rot_period.
+      let planet = AlmanacPlanet::new(spk_id);
+      let _ = scene_guard.scene.add_component(comet.body, planet);
+
+      // Force-reposition to current start_epoch (same pattern as SetEpochRange).
+      let start = {
+        scenes.time_managers.get(&scene_id).map(|tm| tm.start_epoch).unwrap_or_else(|| {
+          // Fallback: J2000 (2000-01-01 12:00 TDB)
+          anise::time::Epoch::from_tdb_seconds(0.0)
+        })
+      };
+      let logic_state = ctx.logic_state.read();
+      if let Err(e) = crate::simulation_api::reposition::force_reposition(
+        &scene_guard.scene,
+        comet.subtree,
+        comet.body,
+        &logic_state.almanac_data,
+        &planet,
+        start,
+      ) {
+        emit_breadcrumb(
+          3,
+          &alloc::format!("[InitComet] force_reposition failed: {}", e),
+        );
+      }
+      drop(logic_state);
+
+      // Queue trajectory generation for the full calendar year of start_epoch.
+      let year = crate::simulation_api::reposition::year_of_epoch(start);
+      let (traj_start, traj_end) = crate::simulation_api::reposition::full_year_tai_seconds(year);
+      let workload = Box::new(structs::LogicWorkload {
+        cmd: LogicCommand::UpdateTrajectoryForSpk {
+          task_id: 0,
+          scene_id,
+          entity_id: EntityId::as_ffi(&comet.orbit),
+          spk_id,
+          start_epoch_tai_sec: traj_start,
+          end_epoch_tai_sec: traj_end,
+          sample_step_days: 1.0,
+        },
+        ctx: alloc::sync::Arc::clone(ctx),
+      });
+      let _ = ctx.thread_pool.scatter(alloc::vec![workload]);
+
+      drop(scene_guard);
+      scene_arc.write().comet_orbit_year = Some(year);
+
       Ok(())
     }
     LogicCommand::CleanupComet { scene_id } => {
-      // TODO: implement comet cleanup (remove AlmanacPlanet, remove TrajectoryComponent,
-      // reset Comet_subtree to 1 AU +X, reset Comet_body to origin).
-      let _ = scene_id;
+      // Remove AlmanacPlanet and TrajectoryComponent from the comet subtree,
+      // then reset the comet subtree to its 1 AU +X default position.
+      let scenes = ctx.scenes.read();
+      let scene_arc =
+        crate::expect_scene!(scenes.get_scene(scene_id), "CleanupComet: scene not found");
+      let scene_guard = scene_arc.read();
+
+      let comet = scene_guard.comet.ok_or(EngineError::InvalidOperation(
+        "CleanupComet: comet SubtreeEntities not populated",
+      ))?;
+
+      let _ = scene_guard.scene.remove_component::<AlmanacPlanet>(comet.body);
+      let _ = scene_guard
+        .scene
+        .remove_component::<crate::scene::trajectory::TrajectoryComponent>(comet.orbit);
+
+      // Reset subtree to 1 AU +X (default "no SPK" placement)
+      let _ = scene_guard
+        .scene
+        .with_component_mut(comet.subtree, |t: &mut TransformComponent| {
+          t.position =
+            aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(1.0, 0.0, 0.0);
+        });
+      // Reset body to local origin
+      let _ = scene_guard.scene.with_component_mut(comet.body, |t: &mut TransformComponent| {
+        t.position = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
+      });
+
+      drop(scene_guard);
+      scene_arc.write().comet_orbit_year = None;
+
       Ok(())
     }
+
     LogicCommand::AnimateCameraTo {
       scene_id,
       camera_id,
@@ -898,6 +985,47 @@ fn process_command_internal(
         camera_id,
         <HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
       );
+
+      Ok(())
+    }
+    LogicCommand::SetCameraTransform {
+      scene_id,
+      camera_id,
+      transform,
+      projection,
+    } => {
+      let scenes = ctx.scenes.read();
+      let scene_arc = crate::expect_scene!(scenes.get_scene(scene_id), "SetCameraTransform");
+      let scene = scene_arc.read();
+
+      let cam_int = scene.get_entity(camera_id).ok_or(EngineError::InvalidOperation(
+        "SetCameraTransform | camera entity not found",
+      ))?;
+
+      if let Some((pos, rot)) = transform {
+        scene.scene.set_global_transform_f64(cam_int, pos, rot)?;
+
+        scene.mark_component_changed(
+          camera_id,
+          <HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
+      }
+
+      if let Some(proj) = projection {
+        scene
+          .scene
+          .with_component_mut(cam_int, |c: &mut CameraComponent| {
+            c.projection = proj;
+          })
+          .ok_or(EngineError::InvalidOperation(
+            "SetCameraTransform | camera has no CameraComponent",
+          ))?;
+
+        scene.mark_component_changed(
+          camera_id,
+          <crate::scene::CameraComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+        );
+      }
 
       Ok(())
     }
@@ -958,7 +1086,7 @@ fn process_command_internal(
           let state = time_mgr.state.read();
           (state.unscaled_time, state.unscaled_delta)
         };
-        if let Some(_) = utils::self_sync_do_if_done(
+        if utils::self_sync_do_if_done(
           &scenes,
           scene_id,
           ctx.kernels.0.clone(), // render frontend is an arc
@@ -966,7 +1094,7 @@ fn process_command_internal(
           &ctx.render_tx,
           now,
           elapsed,
-          |vulkan_device, scene_write, render_tx| {
+          |vulkan_device, scene_write, _render_tx| {
             // 1 Wait for the render thread to be dile to that we can overwrite the front buffer for
             //   particle systems
             let last_render_task =
@@ -1003,9 +1131,11 @@ fn process_command_internal(
             }
 
             // 5 mark as changed all transform, camera, highres transform components
-            utils::mark_all_serializable_as_changed(&scene_write);
+            utils::mark_all_serializable_as_changed(scene_write);
           },
-        ) {
+        )
+        .is_some()
+        {
           return Ok(());
         }
       }
@@ -1069,26 +1199,23 @@ fn process_command_internal(
       if let Some((cursor_id, _)) = scene_read
         .scene
         .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
-      {
-        if let Some(pos) = scene_read
+        && let Some(pos) = scene_read
           .scene
           .with_component(cursor_id, |t: &HighResTransformComponent| t.position)
-        {
-          cursor_pos = Some(pos);
+      {
+        cursor_pos = Some(pos);
 
-          // Sync focus distance dynamically so zoom/pan speeds stay stable
-          // based on the distance to the cursor object you are pivoting around.
-          // Computed in f64 to preserve precision at extreme zoom.
-          if let Some(cam_pos) = scene_read
-            .scene
-            .with_component(camera_entity, |t: &HighResTransformComponent| t.position)
-          {
-            let dist = (pos - cam_pos).length();
-            let _ =
-              scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
-                c.focus_distance = (dist as f32).max(0.000001);
-              });
-          }
+        // Sync focus distance dynamically so zoom/pan speeds stay stable
+        // based on the distance to the cursor object you are pivoting around.
+        // Computed in f64 to preserve precision at extreme zoom.
+        if let Some(cam_pos) = scene_read
+          .scene
+          .with_component(camera_entity, |t: &HighResTransformComponent| t.position)
+        {
+          let dist = (pos - cam_pos).length();
+          let _ = scene_read.scene.with_component_mut(camera_entity, |c: &mut CameraComponent| {
+            c.focus_distance = (dist as f32).max(0.000001);
+          });
         }
       }
 
@@ -1198,12 +1325,10 @@ fn process_command_internal(
       if let Some((sun_id, _)) = scene_read
         .scene
         .query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
-      {
-        if let Some(pos) =
+        && let Some(pos) =
           scene_read.scene.with_component(sun_id, |t: &TransformComponent| t.position)
-        {
-          cursor_pos = pos;
-        }
+      {
+        cursor_pos = pos;
       }
 
       if let Some((cursor_id, _)) = scene_read
@@ -1274,7 +1399,7 @@ fn process_command_internal(
         .scene
         .query2_res_first_mut(|id, t: &mut HighResTransformComponent, _c: &mut CursorComponent| {
           let translation = Vec3f32::from_components(delta_x, delta_y, delta_z) * speed;
-          t.position = t.position + translation.to_f64();
+          t.position += translation.to_f64();
 
           scene_read.mark_component_changed(
             EntityId::as_ffi(&id),
@@ -1310,17 +1435,15 @@ fn process_command_internal(
       if let Some((cursor_id, _)) = scene_write
         .scene
         .query1_first_res::<crate::scene::CursorComponent, _, _>(|id, _| Some(id))
-      {
-        if let Some(_) =
+        && let Some(_) =
           scene_write
             .scene
             .with_component_mut(cursor_id, |c: &mut HighResTransformComponent| {
               c.position = target_pos_dvec;
             })
-        {
-          // Mark cursor entity as changed.
-          utils::mark_component_changed::<HighResTransformComponent>(&scene_write, cursor_id);
-        }
+      {
+        // Mark cursor entity as changed.
+        utils::mark_component_changed::<HighResTransformComponent>(&scene_write, cursor_id);
       }
 
       // TODO maybe: Dynamic offset calculation based on object bounds and camera FOV
@@ -1328,18 +1451,15 @@ fn process_command_internal(
 
       let mut fov = core::f64::consts::FRAC_PI_4;
       let mut aspect = 16.0 / 9.0;
-      if let Some(cam) =
-        scene_write.scene.with_component(snap_entity, |c: &CameraComponent| c.clone())
-      {
-        if let crate::scene::CameraProjection::Perspective {
+      if let Some(cam) = scene_write.scene.with_component(snap_entity, |c: &CameraComponent| *c)
+        && let crate::scene::CameraProjection::Perspective {
           fov: cam_fov,
           aspect_ratio,
           ..
         } = cam.projection
-        {
-          fov = cam_fov as f64;
-          aspect = aspect_ratio as f64;
-        }
+      {
+        fov = cam_fov as f64;
+        aspect = aspect_ratio as f64;
       }
 
       let half_min_fov = if aspect > 1.0 {
@@ -1450,11 +1570,17 @@ fn process_command_internal(
       }
     }
     LogicCommand::LoadAlmanac { task_id: _, path } => {
-      ctx.load_almanac_file_internal(&path)?;
+      let naif_id = ctx.load_almanac_file_internal(&path)?;
+      emit_external_state_change(&ExternalState::AlmanacImported(
+        CAlamanacImported::new_loaded(naif_id, &path),
+      ));
       Ok(())
     }
     LogicCommand::UnloadAlmanac { task_id: _, path } => {
       ctx.unload_almanac_file_internal(&path)?;
+      emit_external_state_change(&ExternalState::AlmanacImported(
+        CAlamanacImported::new_unloaded(&path),
+      ));
       Ok(())
     }
 
@@ -1593,26 +1719,20 @@ fn process_command_internal(
       }
 
       // Update TransformComponent to match the Sun's position
-      let mut sun_pos = aethervk_oshal_rlib::math::vector::vec3::Vec3f32::zero();
+      let mut sun_pos = aethervk_oshal_rlib::math::vector::vec3f64::DVec3::zero();
       if let Some((sun_id, _)) = scene_guard
         .scene
         .query1_first_res::<crate::scene::SunComponent, _, _>(|id, _| Some(id))
+        && let Some(pos) = { scene_guard.scene.global_transform_f64(sun_id) }.map(|t| t.position)
       {
-        if let Some(pos) = {
-          #[allow(deprecated)]
-          scene_guard.scene.global_transform(sun_id)
-        }
-        .map(|t| t.position)
-        {
-          sun_pos = pos;
-        }
+        sun_pos = pos;
       }
 
       let mut handled_highres = false;
       let _ = scene_guard.scene.with_component_mut(
         entity,
         |transform: &mut HighResTransformComponent| {
-          transform.position = sun_pos.to_f64();
+          transform.position = sun_pos;
           handled_highres = true;
         },
       );
@@ -1623,12 +1743,14 @@ fn process_command_internal(
           scene_guard
             .scene
             .with_component_mut(entity, |transform: &mut TransformComponent| {
-              transform.position = sun_pos;
+              transform.position = sun_pos.to_f32();
               handled_transform = true;
             });
         if !handled_transform {
-          let mut new_transform = TransformComponent::default();
-          new_transform.position = sun_pos;
+          let new_transform = crate::scene::TransformComponent {
+            position: sun_pos.to_f32(),
+            ..Default::default()
+          };
           let _ = scene_guard.scene.add_component(entity, new_transform);
         }
       }
@@ -1688,11 +1810,7 @@ impl<'a> ScopedComputeCommand<'a> {
     let (compute_sem, signal_value) = self.vulkan_device.submit_command_buffer_generic(
       self.cmd_handle,
       None,
-      self
-        .gfx_release_sync_info
-        .as_ref()
-        .map(|x| core::slice::from_ref(x))
-        .unwrap_or(&[]),
+      self.gfx_release_sync_info.as_slice(),
       &[],
       QueueRole::Compute,
     )?;
@@ -1708,11 +1826,7 @@ impl<'a> Drop for ScopedComputeCommand<'a> {
       let _ = self.vulkan_device.submit_command_buffer_generic(
         self.cmd_handle,
         None,
-        self
-          .gfx_release_sync_info
-          .as_ref()
-          .map(|x| core::slice::from_ref(x))
-          .unwrap_or(&[]),
+        self.gfx_release_sync_info.as_slice(),
         &[],
         QueueRole::Compute,
       );
@@ -1883,7 +1997,7 @@ fn execute_simulation_tick_fixed_update_phase(
 
     for (idx, (ps, id)) in ps_extraction.iter().enumerate() {
       let (t_scene, id) = scene.scene.get_micro_frame_entity(*id).unwrap();
-      let t = CartesianState::frame_data(&cartesian_state_cache, scene_id, id).unwrap_or(t_scene);
+      let t = CartesianState::frame_data(cartesian_state_cache, scene_id, id).unwrap_or(t_scene);
       let r_helio_au = t.position.length();
       force_emitters.push(
         vulkan_device.cmd_allocate_transient_emitter_for_particle_system(
@@ -2461,7 +2575,7 @@ fn execute_simulation_tick_clear_changed_entities_phase(
   //   streaming changes
   let mut scene_write = scene_arc.write();
   let previous_update_tasklet = scene_write.entities_update_tasklet.take();
-  
+
   // clear it now since we've already extracted what we need
   scene_write.changed_entities.write().clear();
 
@@ -2914,22 +3028,5 @@ mod utils {
 }
 
 #[cfg(test)]
-mod tests {
-  use super::*;
-  use crate::simulation_api::structs::LogicCommand;
-
-  #[test]
-  fn test_update_trajectory_command_exists() {
-    let _cmd = LogicCommand::UpdateTrajectoryForSpk {
-      task_id: 1,
-      scene_id: 1,
-      entity_id: 1,
-      spk_id: 399,
-      start_epoch_tai_sec: 0.0,
-      end_epoch_tai_sec: 100.0,
-      sample_step_days: 1.0,
-    };
-    // If it compiles, the variant exists and fields are correct.
-    assert!(true);
-  }
-}
+#[path = "logic_thread_tests.rs"]
+mod logic_thread_tests;

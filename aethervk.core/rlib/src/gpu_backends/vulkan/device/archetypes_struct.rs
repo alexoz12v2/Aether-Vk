@@ -266,6 +266,13 @@ macro_rules! impl_create_archetype {
       arena: alloc::sync::Arc<DebugTrackedRwLock<resources::$arena_struct>>,
       rollback: &mut utils::RollbackContext<'_>,
     ) -> GpuResult<()> {
+      aethervk_oshal_rlib::log!(
+        "[Archetype] Compiling {} (archetype={:?}) | vert={} frag={}",
+        stringify!($fn_name),
+        $archetype_id,
+        vertex_shader.path,
+        fragment_shader.path,
+      );
       let mut registry = self.registry.write();
       if registry.contains_key(&$archetype_id) {
         return Err(crate::gpu_err_device!());
@@ -282,6 +289,9 @@ macro_rules! impl_create_archetype {
           .add_scissors(ignored_scissor())
         )
         .with_rasterization_polygon_mode(vk::PolygonMode::FILL);
+      graphics_info.debug_name = alloc::format!(
+        "{} | vert={} frag={}", stringify!($fn_name), vertex_shader.path, fragment_shader.path
+      );
 
       $(
         graphics_info = {
@@ -337,6 +347,13 @@ macro_rules! impl_create_archetype {
       arena: alloc::sync::Arc<DebugTrackedRwLock<resources::$arena_struct>>,
       rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
     ) -> GpuResult<()> {
+      aethervk_oshal_rlib::log!(
+        "[Archetype] Compiling {} (archetype={:?}) | vert={} frag={}",
+        stringify!($fn_name),
+        $archetype_id,
+        vertex_shader.path,
+        fragment_shader.path,
+      );
       let mut registry = self.registry.write();
       if registry.contains_key(&$archetype_id) {
         return Err(crate::gpu_err_device!());
@@ -352,6 +369,9 @@ macro_rules! impl_create_archetype {
           .add_scissors(ignored_scissor())
         )
         .with_rasterization_polygon_mode(vk::PolygonMode::FILL);
+      graphics_info.debug_name = alloc::format!(
+        "{} | vert={} frag={}", stringify!($fn_name), vertex_shader.path, fragment_shader.path
+      );
 
       $(
         graphics_info = {
@@ -398,6 +418,15 @@ macro_rules! impl_create_archetype {
       arena: alloc::sync::Arc<DebugTrackedRwLock<resources::$arena_struct>>,
       rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
     ) -> GpuResult<()> {
+      aethervk_oshal_rlib::log!(
+        "[Archetype] Compiling {} (archetype={:?}) | vert={} frag={} outline_vert={} outline_frag={}",
+        stringify!($fn_name),
+        $archetype_id,
+        vertex_shader.path,
+        fragment_shader.path,
+        outline_vertex_shader.path,
+        outline_fragment_shader.path,
+      );
       let mut registry = self.registry.write();
       if registry.contains_key(&$archetype_id) {
         return Err(crate::gpu_err_device!());
@@ -413,6 +442,9 @@ macro_rules! impl_create_archetype {
           .add_scissors(ignored_scissor())
         )
         .with_rasterization_polygon_mode(vk::PolygonMode::FILL);
+      graphics_info.debug_name = alloc::format!(
+        "{} | vert={} frag={}", stringify!($fn_name), vertex_shader.path, fragment_shader.path
+      );
 
       $(
         graphics_info = {
@@ -425,7 +457,7 @@ macro_rules! impl_create_archetype {
       pipeline_pool_lock.get_or_create_graphics_pipeline(device, &pipeline_graphics_info, rollback)?;
       let pipeline_key = pipeline_graphics_info.pipeline_key();
 
-      let outline_graphics_info = pipeline_graphics_info.clone()
+      let mut outline_graphics_info = pipeline_graphics_info.clone()
         .with_pre_rasterization(PreRasterization::default().with_vertex_module(outline_vertex_shader.module.get()))
         .with_fragment_shader(FragmentShader::default()
           .with_fragment_module(outline_fragment_shader.module.get())
@@ -444,6 +476,9 @@ macro_rules! impl_create_archetype {
         .with_stencil_reference(255)
         .with_stencil_compare_mask(255)
         .with_stencil_write_mask(0);
+      outline_graphics_info.debug_name = alloc::format!(
+        "{}_outline | vert={} frag={}", stringify!($fn_name), outline_vertex_shader.path, outline_fragment_shader.path
+      );
       pipeline_pool_lock.get_or_create_graphics_pipeline(device, &outline_graphics_info, rollback)?;
       let outline_pipeline_key = outline_graphics_info.pipeline_key();
       let res = resources::$resource_struct {
@@ -582,7 +617,19 @@ impl Archetypes {
     ArchetypeId::Mesh,
     ForwardMesh2RenderResourceArchetype,
     ForwardMesh2RenderResourceArchetypeArena,
-    mesh
+    mesh,
+    |gi| {
+      // physical_mesh2.vert expects: vec3 pos (loc 0), vec3 normal (loc 1),
+      // vec2 uv (loc 2), vec4 tangent (loc 3) — all interleaved, stride = 48 bytes.
+      gi.with_vertex_in(
+        VertexIn::default()
+          .add_binding(0, 48, vk::VertexInputRate::VERTEX)
+          .add_attribute(0, 0, vk::Format::R32G32B32_SFLOAT, 0)   // position
+          .add_attribute(0, 1, vk::Format::R32G32B32_SFLOAT, 12)  // normal
+          .add_attribute(0, 2, vk::Format::R32G32_SFLOAT,    24)  // uv
+          .add_attribute(0, 3, vk::Format::R32G32B32A32_SFLOAT, 32) // tangent
+      )
+    }
   );
   impl_create_archetype!(
     create_text2_archetype,

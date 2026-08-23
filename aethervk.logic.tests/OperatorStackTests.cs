@@ -15,11 +15,7 @@ public class OperatorStackTests
 
     public void OnExit() => IsExited = true;
 
-    public bool ProcessAction(AppAction action, bool isPressed) => HandledAction;
-
-    public bool ProcessPointerDelta(float dx, float dy) => false;
-
-    public bool ProcessPointerWheel(float deltaY) => false;
+    public bool ProcessAction(AppAction action, InputState state) => HandledAction;
   }
 
   [Fact]
@@ -36,12 +32,12 @@ public class OperatorStackTests
 
     Assert.True(secondOp.IsEntered);
 
-    stack.Pop();
+    stack.PopSelf(secondOp);
 
     Assert.True(secondOp.IsExited);
 
     // Ensure base operator isn't popped
-    stack.Pop();
+    stack.PopSelf(baseOp);
     Assert.False(baseOp.IsExited);
   }
 
@@ -54,7 +50,7 @@ public class OperatorStackTests
     var secondOp = new MockOperator { HandledAction = true };
     stack.Push(secondOp);
 
-    bool result = stack.ProcessAction(new AppAction("test", "test"), true);
+    bool result = stack.Process(new AppAction("test"), new InputState(isPressed: true, InputModifiers.None));
 
     Assert.True(result);
   }

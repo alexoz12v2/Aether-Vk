@@ -142,7 +142,7 @@
     <Setter Property="MinHeight" Value="72"/>
   </Style>
 
-  <!-- Computed / read-only fiels, derived values, not user-editable -->
+  <!-- Computed / read-only fields, derived values, not user-editable -->
   <Style Selector="TextBox.computed">
     <!-- IsReadOnly, not IsEnabled at false, cause like this it still is copyable -->
     <Setter Property="IsReadOnly" Value="True" />
@@ -151,12 +151,13 @@
     <Setter Property="BorderBrush" Value="{DynamicResource Bg.Default}" />
     <Setter Property="CaretBrush" Value="Transparent" />
   </Style>
+  
   <!-- Computed: Suppress hover/focus border changes so it never looks interactive -->
-  <Style Selector="TextBox.computed:pointerover /template/ Border">
+  <Style Selector="TextBox.computed:pointerover /template/ Border, TextBox.computed:focus /template/ Border, TextBox.computed:focus-within /template/ Border">
     <Setter Property="BorderBrush" Value="{DynamicResource Bg.Default}" />
     <Setter Property="Background" Value="{DynamicResource Bg.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
   </Style>
-  <!-- TODO: Computed doesn't suppress the on click style -->
 
   <!-- ── PropertyHelpButton ─────────────────────────────────────────────── -->
 

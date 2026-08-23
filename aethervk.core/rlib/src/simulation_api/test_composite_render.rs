@@ -11,6 +11,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use std::println;
 
 fn panic_error_callback(msg: &str) {
+  println!("Vulkan Validation Error in test: {}", msg);
   panic!("Vulkan Error: {}", msg);
 }
 
@@ -18,10 +19,7 @@ fn get_test_context() -> Option<*mut SimulationContext> {
   let asset_dir = format!("{}/../../assets", env!("CARGO_MANIFEST_DIR"));
   SimulationContext::set_asset_path(&asset_dir);
 
-  let ctx_ptr = SimulationContext::startup(
-    crate::gpu::VULKAN_RENDER_BACKEND,
-    Some(panic_error_callback),
-  );
+  let ctx_ptr = SimulationContext::startup(Some(panic_error_callback));
   if let Ok(boxed) = ctx_ptr {
     return Some(alloc::boxed::Box::into_raw(boxed));
   }
@@ -100,7 +98,7 @@ fn wait_and_download(
   }
 
   let mut buffer = alloc::vec![0u8; (width * height * 4) as usize];
-  if ctx.download_image(tid, buffer.as_mut_ptr(), buffer.len()) {
+  if unsafe { ctx.download_image(tid, buffer.as_mut_ptr(), buffer.len()) } {
     Some(buffer)
   } else {
     None
@@ -125,7 +123,13 @@ fn test_composite_render_output() {
 
     unsafe {
       let ctx = &mut *ctx_ptr;
-      let scene_id = ctx.create_empty_scene(true).unwrap();
+      let scene_id = ctx
+        .create_empty_scene(
+          true,
+          hifitime::Epoch::from_gregorian_at_midnight(2020, 12, 25, hifitime::TimeScale::UTC),
+          hifitime::Epoch::from_gregorian_at_midnight(2020, 12, 26, hifitime::TimeScale::UTC),
+        )
+        .unwrap();
 
       let width: u32 = 256;
       let height: u32 = 256;
@@ -164,11 +168,14 @@ fn test_composite_render_output() {
         )
         .unwrap();
 
-      // Add reference frame component to make it a microframe
+      // Parent lca to the scene root so it doesn't become a spurious second root,
+      // which would break scene_conversion's depth_layer == 0 invariant check.
       {
         let scene_ctx = ctx.get_scene(scene_id).unwrap();
         let mut guard = scene_ctx.write();
+        let root_eid = guard.root_entity;
         let lca_eid = slotmap::KeyData::from_ffi(lca_id).into();
+        guard.scene.set_parent(lca_eid, Some(root_eid));
         let _ = guard.scene.add_component(
           lca_eid,
           crate::scene::ReferenceFrameComponent {
@@ -253,11 +260,12 @@ fn test_composite_render_output() {
       SimulationContext::set_render_callback(Some(composite_render_callback));
 
       // ─── Start rendering ─────────────────────────────────────────────────
-      let _ = ctx
-        .threads
-        .logic_thread
-        .tx()
-        .try_send(crate::simulation_api::structs::LogicCommand::PlayScene { scene_id });
+      let _ = ctx.threads.logic_thread.tx().try_send(
+        crate::simulation_api::structs::LogicCommand::PlayScene {
+          scene_id,
+          speed: aethervk_oshal_rlib::os::time::v2::SimSpeed::Realtime,
+        },
+      );
 
       // ─── Download and validate ───────────────────────────────────────────
       // The panic_error_callback ensures any Vulkan validation error crashes
@@ -335,7 +343,13 @@ fn test_composite_scale_overlap() {
 
     unsafe {
       let ctx = &mut *ctx_ptr;
-      let scene_id = ctx.create_empty_scene(true).unwrap();
+      let scene_id = ctx
+        .create_empty_scene(
+          true,
+          hifitime::Epoch::from_gregorian_at_midnight(2020, 12, 25, hifitime::TimeScale::UTC),
+          hifitime::Epoch::from_gregorian_at_midnight(2020, 12, 26, hifitime::TimeScale::UTC),
+        )
+        .unwrap();
 
       let width: u32 = 256;
       let height: u32 = 256;
@@ -374,11 +388,15 @@ fn test_composite_scale_overlap() {
         )
         .unwrap();
 
-      // Add reference frame component to make it a microframe
+      // Add reference frame component and parent to scene root.
+      // Without set_parent, lca_id has no parent and gizmo makes it a child-owner,
+      // so get_root() could return lca_id, breaking the depth_layer invariant check.
       {
         let scene_ctx = ctx.get_scene(scene_id).unwrap();
         let mut guard = scene_ctx.write();
+        let root_eid = guard.root_entity;
         let lca_eid = slotmap::KeyData::from_ffi(lca_id).into();
+        guard.scene.set_parent(lca_eid, Some(root_eid));
         let _ = guard.scene.add_component(
           lca_eid,
           crate::scene::ReferenceFrameComponent {
@@ -459,11 +477,12 @@ fn test_composite_scale_overlap() {
       SimulationContext::set_render_callback(Some(composite_render_callback));
 
       // ─── Start rendering ─────────────────────────────────────────────────
-      let _ = ctx
-        .threads
-        .logic_thread
-        .tx()
-        .try_send(crate::simulation_api::structs::LogicCommand::PlayScene { scene_id });
+      let _ = ctx.threads.logic_thread.tx().try_send(
+        crate::simulation_api::structs::LogicCommand::PlayScene {
+          scene_id,
+          speed: aethervk_oshal_rlib::os::time::v2::SimSpeed::Realtime,
+        },
+      );
 
       // ─── Download and validate ───────────────────────────────────────────
       if let Some(buffer) = wait_and_download(ctx, width, height, 5000) {

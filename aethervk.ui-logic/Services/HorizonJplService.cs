@@ -103,6 +103,8 @@ public class HorizonJplService
         var url = $"{SbdbBase}?sb-kind=c&fields=full_name,pdes";
         _console.Log($"[HorizonJpl] GET {url}");
         using var resp = await _httpClient.GetAsync(url);
+        _breadcrumb.RemoveMessage(loadMsg);
+        loadMsg = null;
         if (!resp.IsSuccessStatusCode)
         {
           await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status {(int)resp.StatusCode}");
@@ -123,11 +125,14 @@ public class HorizonJplService
     catch (Exception ex)
     {
       _console.Log($"[HorizonJpl] FetchComets error: {ex.Message}");
+      if (loadMsg != null)
+        _breadcrumb.RemoveMessage(loadMsg);
       await _breadcrumb.ShowMessageAsync("Horizon API Error", ex.Message, status: 3);
     }
     finally
     {
-      _breadcrumb.RemoveMessage(loadMsg);
+      if (loadMsg != null)
+        _breadcrumb.RemoveMessage(loadMsg);
     }
   }
 

@@ -508,6 +508,7 @@ impl DeviceResource for CommandPools {
     use super::utils::RwLockable;
     for ref_mut_multi in self.registry.iter_mut() {
       let inner = ref_mut_multi.inner.write();
+      unsafe { device.destroy_command_pool(inner.active.pool, None) };
       for p in &inner.pending {
         unsafe { device.destroy_command_pool(p.pool, None) };
       }

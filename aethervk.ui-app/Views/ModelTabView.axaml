@@ -5,9 +5,10 @@
              xmlns:vm="using:AetherVk.Logic.ViewModels"
              xmlns:view="using:AetherVk.Views"
              xmlns:controls="using:AetherVk.Controls"
+             xmlns:converters="using:AetherVk.Converters"
              xmlns:i="clr-namespace:Avalonia.Xaml.Interactivity;assembly=Avalonia.Xaml.Interactivity"
              xmlns:b="using:AetherVk.Behaviors"
-             mc:Ignorable="d" d:DesignWidth="450" d:DesignHeight="800"
+             mc:Ignorable="d" d:DesignWidth="450" d:DesignHeight="900"
              x:Class="AetherVk.Views.ModelTabView"
              x:DataType="vm:IModelTabViewModel">
   <Design.DataContext>
@@ -26,89 +27,85 @@
     <Style Selector="TextBlock">
       <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
+    <Style Selector="TextBlock.unit-of-measurement">
+      <Setter Property="Foreground" Value="{DynamicResource Text.Disabled}" />
+      <Setter Property="Margin" Value="4,0,8,0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <!-- Centre TextBox text by default in this view -->
     <Style Selector="TextBox">
       <Setter Property="HorizontalContentAlignment" Value="Center" />
     </Style>
-    <Style Selector="TextBlock.unit-of-measurement">
-      <Setter Property="Foreground" Value="{DynamicResource Text.Disabled}" />
-      <Setter Property="Margin" Value="4,0,0,0" />
-      <Setter Property="VerticalAlignment" Value="Center" />
+    <!-- Unit label overlay: float the unit over the right edge of the control
+         without participating in layout so text stays truly centred.
+         Usage:  <Panel Classes="unit-overlay">
+                   <TextBox ... />
+                   <TextBlock Classes="unit-of-measurement" Text="kg/s"
+                              HorizontalAlignment="Right" IsHitTestVisible="False" />
+                 </Panel>                                                           -->
+    <Style Selector="Panel.unit-overlay TextBlock.unit-of-measurement">
+      <Setter Property="HorizontalAlignment" Value="Right" />
+      <Setter Property="IsHitTestVisible" Value="False" />
+      <Setter Property="ZIndex" Value="1" />
+    </Style>
+    <!-- Suppress Fluent blue tint on selected list-tray items -->
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource Accent.Subtle}" />
     </Style>
   </UserControl.Styles>
 
-  <ScrollViewer Classes="left-scrollbar" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+  <ScrollViewer Classes="left-scrollbar"
+                HorizontalScrollBarVisibility="Disabled"
+                VerticalScrollBarVisibility="Auto">
     <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16">
 
-      <!-- Sun Settings -->
+      <!-- ══════════════════ SUN ══════════════════════════════════════════════ -->
       <Border Classes="accordion">
         <Expander>
           <Expander.Header>
             <StackPanel Orientation="Horizontal" Spacing="4">
-              <TextBlock Text="Sun" /> <!-- TODO: appstring-->
-              <controls:PropertyHelpButton HelpHeader="Sun"
-                                           HelpContent="Sun" />
+              <TextBlock Text="{Binding StrSun}" />
+              <controls:PropertyHelpButton HelpHeader="{Binding StrSun}"
+                                           HelpContent="{Binding StrSun}" />
             </StackPanel>
           </Expander.Header>
 
           <Grid ColumnDefinitions="*,12,1.6*"
                 RowDefinitions="Auto,8,Auto,8,Auto,8,Auto"
                 Margin="12,8,12,12">
-            <!-- Distance -->
-            <TextBlock Grid.Row="0" Grid.Column="0"
-                       Text="Distance" />
-            <TextBox Grid.Row="0" Grid.Column="2"
-                     HorizontalAlignment="Stretch">
-              <TextBox.InnerRightContent>
-                <TextBlock Text="AU" Foreground="{DynamicResource Text.Disabled}" Margin="4,0,8,0"
-                           VerticalAlignment="Center" />
-              </TextBox.InnerRightContent>
 
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrDistance}" />
+            <TextBox Grid.Row="0" Grid.Column="2">
+              <TextBox.InnerRightContent>
+                <TextBlock Classes="unit-of-measurement" Text="AU" />
+              </TextBox.InnerRightContent>
               <i:Interaction.Behaviors>
                 <b:DistanceBehavior />
               </i:Interaction.Behaviors>
             </TextBox>
 
-            <!-- Subsolar Latitude -->
-            <TextBlock Grid.Row="2" Grid.Column="0"
-                       Text="Subsolar Latitude" />
-            <TextBox Grid.Row="2" Grid.Column="2"
-                     Classes="computed"
-                     HorizontalAlignment="Stretch">
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding StrSubsolarLatitude}" />
+            <TextBox Grid.Row="2" Grid.Column="2" Classes="computed">
               <TextBox.InnerRightContent>
-                <TextBlock Text="°" Foreground="{DynamicResource Text.Disabled}" Margin="4,0,8,0"
-                           VerticalAlignment="Center" />
+                <TextBlock Classes="unit-of-measurement" Text="°" />
               </TextBox.InnerRightContent>
+            </TextBox>
 
+            <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrSTO}" />
+            <TextBox Grid.Row="4" Grid.Column="2">
+              <TextBox.InnerRightContent>
+                <TextBlock Classes="unit-of-measurement" Text="°" />
+              </TextBox.InnerRightContent>
               <i:Interaction.Behaviors>
                 <b:AngleBehavior />
               </i:Interaction.Behaviors>
             </TextBox>
 
-            <!-- Sun-Target-Observer Angle -->
-            <TextBlock Grid.Row="4" Grid.Column="0"
-                       Text="STO" />
-            <TextBox Grid.Row="4" Grid.Column="2"
-                     HorizontalAlignment="Stretch">
+            <TextBlock Grid.Row="6" Grid.Column="0" Text="{Binding StrSunPA}" />
+            <TextBox Grid.Row="6" Grid.Column="2">
               <TextBox.InnerRightContent>
-                <TextBlock Text="°" Foreground="{DynamicResource Text.Disabled}" Margin="4,0,8,0"
-                           VerticalAlignment="Center" />
+                <TextBlock Classes="unit-of-measurement" Text="°" />
               </TextBox.InnerRightContent>
-
-              <i:Interaction.Behaviors>
-                <b:AngleBehavior />
-              </i:Interaction.Behaviors>
-            </TextBox>
-
-            <!-- Sun Position Angle -->
-            <TextBlock Grid.Row="6" Grid.Column="0"
-                       Text="Sun PA" />
-            <TextBox Grid.Row="6" Grid.Column="2"
-                     HorizontalAlignment="Stretch">
-              <TextBox.InnerRightContent>
-                <TextBlock Text="°" Foreground="{DynamicResource Text.Disabled}" Margin="4,0,8,0"
-                           VerticalAlignment="Center" />
-              </TextBox.InnerRightContent>
-
               <i:Interaction.Behaviors>
                 <b:AngleBehavior />
               </i:Interaction.Behaviors>
@@ -117,53 +114,36 @@
         </Expander>
       </Border>
 
-      <!-- Nucleus and spin axis -->
+      <!-- ══════════════════ NUCLEUS AND SPIN AXIS ═══════════════════════════ -->
       <Border Classes="accordion">
         <Expander>
           <Expander.Header>
-            <StackPanel Orientation="Horizontal" Spacing="4">
-              <TextBlock Text="Nucleus and Spin Axis" /> <!-- TODO: appstring-->
-              <controls:PropertyHelpButton HelpHeader="Nucleus and Spin Axis"
-                                           HelpContent="Nucleus and Spin Axis" />
-            </StackPanel>
+            <TextBlock Text="Nucleus and Spin Axis" />
           </Expander.Header>
 
           <Grid ColumnDefinitions="*,12,1.6*"
-                RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto">
-            <!-- Radius -->
-            <TextBlock Grid.Row="0" Grid.Column="0" Text="Radius" />
+                RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                Margin="12,8,12,12">
+
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrRadius}" />
             <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" />
 
-            <!-- Rotation Period -->
-            <TextBlock Grid.Row="2" Grid.Column="0" Text="Rotation Period" />
-            <controls:UnboundedSlider Grid.Row="2" Grid.Column="2" VerticalAlignment="Stretch">
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding StrRotationPeriod}" />
+            <controls:UnboundedSlider Grid.Row="2" Grid.Column="2">
               <controls:UnboundedSlider.InnerRightContent>
                 <TextBlock Classes="unit-of-measurement" Text="h" />
               </controls:UnboundedSlider.InnerRightContent>
             </controls:UnboundedSlider>
 
-            <!-- Number Rotations  -->
-            <TextBlock Grid.Row="4" Grid.Column="0" Text="Rotations" />
-            <TextBox Grid.Row="4" Grid.Column="2" VerticalAlignment="Stretch">
+            <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrRotations}" />
+            <TextBox Grid.Row="4" Grid.Column="2">
               <i:Interaction.Behaviors>
                 <b:NaturalNumberBehavior />
               </i:Interaction.Behaviors>
             </TextBox>
 
-            <!-- RA -->
-            <TextBlock Grid.Row="6" Grid.Column="0" Text="RA" />
-            <controls:UnboundedSlider Grid.Row="6" Grid.Column="2" VerticalAlignment="Stretch">
-              <controls:UnboundedSlider.InnerRightContent>
-                <TextBlock Classes="unit-of-measurement" Text="°"/>
-              </controls:UnboundedSlider.InnerRightContent>
-              <i:Interaction.Behaviors>
-                <b:AngleBehavior />
-              </i:Interaction.Behaviors>
-            </controls:UnboundedSlider>
-
-            <!-- Dec -->
-            <TextBlock Grid.Row="8" Grid.Column="0" Text="Dec" />
-            <controls:UnboundedSlider Grid.Row="8" Grid.Column="2" VerticalAlignment="Stretch">
+            <TextBlock Grid.Row="6" Grid.Column="0" Text="{Binding StrRA}" />
+            <controls:UnboundedSlider Grid.Row="6" Grid.Column="2">
               <controls:UnboundedSlider.InnerRightContent>
                 <TextBlock Classes="unit-of-measurement" Text="°" />
               </controls:UnboundedSlider.InnerRightContent>
@@ -172,9 +152,18 @@
               </i:Interaction.Behaviors>
             </controls:UnboundedSlider>
 
-            <!-- Spin Axis PA -->
-            <TextBlock Grid.Row="10" Grid.Column="0" Text="Spin Axis PA" />
-            <TextBox Grid.Row="10" Grid.Column="2" VerticalAlignment="Stretch">
+            <TextBlock Grid.Row="8" Grid.Column="0" Text="{Binding StrDec}" />
+            <controls:UnboundedSlider Grid.Row="8" Grid.Column="2">
+              <controls:UnboundedSlider.InnerRightContent>
+                <TextBlock Classes="unit-of-measurement" Text="°" />
+              </controls:UnboundedSlider.InnerRightContent>
+              <i:Interaction.Behaviors>
+                <b:AngleBehavior />
+              </i:Interaction.Behaviors>
+            </controls:UnboundedSlider>
+
+            <TextBlock Grid.Row="10" Grid.Column="0" Text="{Binding StrSpinAxisPA}" />
+            <TextBox Grid.Row="10" Grid.Column="2">
               <TextBox.InnerRightContent>
                 <TextBlock Classes="unit-of-measurement" Text="°" />
               </TextBox.InnerRightContent>
@@ -183,63 +172,295 @@
               </i:Interaction.Behaviors>
             </TextBox>
 
-            <!-- Spin Axis Inclination -->
-            <TextBlock Grid.Row="12" Grid.Column="0" Text="Spin Axis Inclination" />
-            <TextBox Grid.Row="12" Grid.Column="2" VerticalAlignment="Stretch">
+            <TextBlock Grid.Row="12" Grid.Column="0" Text="{Binding StrSpinAxisInclination}" />
+            <TextBox Grid.Row="12" Grid.Column="2">
               <i:Interaction.Behaviors>
                 <b:AngleBehavior />
               </i:Interaction.Behaviors>
             </TextBox>
-
-            <!-- Computed Props grid  -->
-            <Grid Grid.Row="14" Grid.ColumnSpan="3"
-                  ColumnDefinitions="12,8,*,20,12,8,*"
-                  RowDefinitions="Auto,8,Auto">
-              <TextBlock Grid.Row="0" Grid.Column="0" Text="𝜆" />
-              <TextBox Grid.Row="0" Grid.Column="2" Classes="computed">
-                <TextBox.InnerRightContent>
-                  <TextBlock Classes="unit-of-measurement" Text="°" />
-                </TextBox.InnerRightContent>
-              </TextBox>
-
-              <TextBlock Grid.Row="0" Grid.Column="4" Text="ϕ" />
-              <TextBox Grid.Row="0" Grid.Column="6" Classes="computed">
-                <TextBox.InnerRightContent>
-                  <TextBlock Classes="unit-of-measurement" Text="°" />
-                </TextBox.InnerRightContent>
-              </TextBox>
-
-              <TextBlock Grid.Row="2" Grid.Column="0" Text="𝛽" />
-              <TextBox Grid.Row="2" Grid.Column="2" Classes="computed">
-                <TextBox.InnerRightContent>
-                  <TextBlock Classes="unit-of-measurement" Text="°" />
-                </TextBox.InnerRightContent>
-              </TextBox>
-
-              <TextBlock Grid.Row="2" Grid.Column="4" Text="𝐼" />
-              <TextBox Grid.Row="2" Grid.Column="6" Classes="computed">
-                <TextBox.InnerRightContent>
-                  <TextBlock Classes="unit-of-measurement" Text="°" />
-                </TextBox.InnerRightContent>
-              </TextBox>
-
-            </Grid>
           </Grid>
         </Expander>
       </Border>
 
-      <!-- Dust and jets configuration -->
+      <!-- ══════════════════ DUST ═════════════════════════════════════════════ -->
       <Border Classes="accordion">
         <Expander>
           <Expander.Header>
-            <StackPanel Orientation="Horizontal" Spacing="4">
-              <TextBlock Text="Dust" /> <!-- TODO: appstring-->
-              <controls:PropertyHelpButton HelpHeader="Dust"
-                                           HelpContent="Dust" />
-            </StackPanel>
+            <TextBlock Text="Dust" />
           </Expander.Header>
 
-          <!-- TODO: Content Control for particle system selection -->
+          <StackPanel Orientation="Vertical" Spacing="0">
+
+            <!-- ──── Nucleus radius (required for jet placement) ──────── -->
+            <Grid ColumnDefinitions="*,12,1.6*"
+                  Margin="12,10,12,4">
+              <TextBlock Grid.Column="0"
+                         Text="Nucleus Radius"
+                         VerticalAlignment="Center" />
+              <Panel Grid.Column="2" Classes="unit-overlay">
+                <NumericUpDown Value="{Binding ManualNucleusRadiusKmNullable}"
+                               Minimum="0.001"
+                               Maximum="1000"
+                               Increment="0.1"
+                               FormatString="0.###"
+                               Watermark="(from Horizon)"
+                               HorizontalContentAlignment="Center"
+                               ToolTip.Tip="Bounding-sphere radius of the comet nucleus in km.&#x0A;Auto-filled from Horizon when a comet is committed. Override here if needed before committing." />
+                <TextBlock Classes="unit-of-measurement" Text="km" />
+              </Panel>
+            </Grid>
+
+            <!-- Warning: no radius known yet -->
+            <TextBlock Margin="12,0,12,6"
+                       IsVisible="{Binding IsNucleusRadiusUnknown}"
+                       Text="⚠ Enter a radius or commit a comet to enable jet creation."
+                       Foreground="{DynamicResource Text.Tertiary}"
+                       FontSize="11"
+                       TextWrapping="Wrap" />
+
+            <!-- ──── Jet list header ──────────────────────────────────────── -->
+            <Grid ColumnDefinitions="*,Auto"
+                  Margin="12,10,12,6">
+              <TextBlock Grid.Column="0"
+                         Text="Jets"
+                         FontSize="11"
+                         FontWeight="SemiBold"
+                         Foreground="{DynamicResource Text.Secondary}"
+                         VerticalAlignment="Center" />
+              <Button Grid.Column="1"
+                      Classes="accent"
+                      Command="{Binding AddJetCommand}"
+                      ToolTip.Tip="Add a new dust emission jet"
+                      Padding="10,2"
+                      Content="+" />
+            </Grid>
+
+            <!-- ──── Jet list ─────────────────────────────────────────────── -->
+            <ListBox x:Name="JetListBox"
+                     Classes="list-tray"
+                     SelectionMode="Toggle"
+                     ItemsSource="{Binding Jets}"
+                     SelectedItem="{Binding SelectedJet, Mode=TwoWay}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:JetViewModel">
+                  <Grid ColumnDefinitions="*,32" VerticalAlignment="Center">
+
+                    <!-- Jet label + coordinate summary -->
+                    <StackPanel Grid.Column="0"
+                                Orientation="Vertical"
+                                Spacing="2"
+                                VerticalAlignment="Center">
+                      <TextBlock FontWeight="SemiBold"
+                                 Foreground="{DynamicResource Text.Primary}">
+                        <Run Text="Jet #" /><Run Text="{Binding DisplayIndex}" />
+                      </TextBlock>
+                      <StackPanel Orientation="Horizontal" Spacing="10">
+                        <TextBlock FontSize="11" Foreground="{DynamicResource Text.Tertiary}">
+                          <Run Text="λ " /><Run Text="{Binding LatitudeDeg, StringFormat='{}{0:F1}°'}" />
+                        </TextBlock>
+                        <TextBlock FontSize="11" Foreground="{DynamicResource Text.Tertiary}">
+                          <Run Text="φ " /><Run Text="{Binding LongitudeDeg, StringFormat='{}{0:F1}°'}" />
+                        </TextBlock>
+                        <TextBlock FontSize="11" Foreground="{DynamicResource Text.Tertiary}">
+                          <Run Text="∠ " /><Run Text="{Binding ApertureDeg, StringFormat='{}{0:F0}°'}" />
+                        </TextBlock>
+                      </StackPanel>
+                    </StackPanel>
+
+                    <!-- Remove button — reflection binding to reach the parent UserControl's VM -->
+                    <Button Grid.Column="1"
+                            Content="−"
+                            Command="{Binding #JetListBox.((vm:IModelTabViewModel)DataContext).RemoveJetCommand}"
+                            CommandParameter="{Binding}"
+                            Padding="6,2"
+                            FontSize="15"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center"
+                            ToolTip.Tip="Remove this jet" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- Empty-state hint -->
+            <TextBlock Margin="12,10,12,10"
+                       IsVisible="{Binding !Jets.Count}"
+                       Text="No jets configured. Press + to add one."
+                       Foreground="{DynamicResource Text.Tertiary}"
+                       FontSize="12"
+                       HorizontalAlignment="Center"
+                       TextAlignment="Center" />
+
+            <!-- ──── Jet detail panel ─────────────────────────────────────── -->
+            <!-- Slides in below the list when a jet is selected.             -->
+            <Border IsVisible="{Binding SelectedJet, Converter={x:Static ObjectConverters.IsNotNull}}"
+                    BorderBrush="{DynamicResource Bg.Outline}"
+                    BorderThickness="0,1,0,0">
+
+              <!-- Coloured header strip -->
+              <StackPanel Orientation="Vertical" Spacing="0">
+                <Border Background="{DynamicResource Accent.Subtle}"
+                        Padding="12,7">
+                  <TextBlock Text="Jet Properties"
+                             FontSize="11"
+                             FontWeight="SemiBold"
+                             Foreground="{DynamicResource Accent.Primary}" />
+                </Border>
+
+                <!-- Property rows, DataContext switches to the selected JetViewModel -->
+                <Border Background="{DynamicResource Bg.Subtle}"
+                        Padding="12,12,12,12"
+                        DataContext="{Binding SelectedJet}">
+
+                <Grid ColumnDefinitions="*,12,1.6*"
+                      RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                      x:DataType="vm:JetViewModel">
+
+                  <!-- Latitude -->
+                  <TextBlock Grid.Row="0" Grid.Column="0" Text="Latitude" />
+                  <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
+                                            Value="{Binding LatitudeDeg}">
+                    <controls:UnboundedSlider.InnerRightContent>
+                      <TextBlock Classes="unit-of-measurement" Text="°" />
+                    </controls:UnboundedSlider.InnerRightContent>
+                  </controls:UnboundedSlider>
+
+                  <!-- Longitude -->
+                  <TextBlock Grid.Row="2" Grid.Column="0" Text="Longitude" />
+                  <controls:UnboundedSlider Grid.Row="2" Grid.Column="2"
+                                            Value="{Binding LongitudeDeg}">
+                    <controls:UnboundedSlider.InnerRightContent>
+                      <TextBlock Classes="unit-of-measurement" Text="°" />
+                    </controls:UnboundedSlider.InnerRightContent>
+                  </controls:UnboundedSlider>
+
+                  <!-- Aperture -->
+                  <TextBlock Grid.Row="4" Grid.Column="0" Text="Aperture" />
+                  <controls:UnboundedSlider Grid.Row="4" Grid.Column="2"
+                                            Value="{Binding ApertureDeg}">
+                    <controls:UnboundedSlider.InnerRightContent>
+                      <TextBlock Classes="unit-of-measurement" Text="°" />
+                    </controls:UnboundedSlider.InnerRightContent>
+                  </controls:UnboundedSlider>
+
+                  <!-- Start Velocity Mean -->
+                  <TextBlock Grid.Row="6" Grid.Column="0" Text="Velocity" />
+                  <Panel Grid.Row="6" Grid.Column="2" Classes="unit-overlay">
+                    <TextBox>
+                      <i:Interaction.Behaviors>
+                        <b:NumericTextBoxBehavior Value="{Binding StartVelocityMeanMs}"
+                                                 Minimum="0.01" Maximum="100" Format="0.##" />
+                      </i:Interaction.Behaviors>
+                    </TextBox>
+                    <TextBlock Classes="unit-of-measurement" Text="m/s" />
+                  </Panel>
+
+                  <!-- Velocity Std -->
+                  <TextBlock Grid.Row="8" Grid.Column="0" Text="Vel. σ" />
+                  <Panel Grid.Row="8" Grid.Column="2" Classes="unit-overlay">
+                    <TextBox>
+                      <i:Interaction.Behaviors>
+                        <b:NumericTextBoxBehavior Value="{Binding StartVelocityStdMs}"
+                                                 Minimum="0" Maximum="50" Format="0.###" />
+                      </i:Interaction.Behaviors>
+                    </TextBox>
+                    <TextBlock Classes="unit-of-measurement" Text="m/s" />
+                  </Panel>
+
+                  <!-- Computed: β -->
+                  <TextBlock Grid.Row="10" Grid.Column="0" Text="β (beta)" />
+                  <TextBox Grid.Row="10" Grid.Column="2"
+                           Classes="computed"
+                           Text="{Binding Beta, StringFormat='{}{0:F4}'}" />
+
+                  <!-- Computed: Dust production rate -->
+                  <TextBlock Grid.Row="12" Grid.Column="0" Text="Q_dust @ 1 AU" />
+                  <Panel Grid.Row="12" Grid.Column="2" Classes="unit-overlay">
+                    <TextBox Classes="computed"
+                             Text="{Binding DustProductionRateAt1AuKgs, StringFormat='{}{0:F4}'}" />
+                    <TextBlock Classes="unit-of-measurement" Text="kg/s" />
+                  </Panel>
+
+                </Grid>
+              </Border><!-- /content Border -->
+            </StackPanel><!-- /detail StackPanel -->
+          </Border><!-- /detail outer Border -->
+
+
+            <!-- ──── Shared model properties (common to all jets) ─────────── -->
+            <!-- Thin divider + section label separates this from the jet panel -->
+            <Border BorderBrush="{DynamicResource Bg.Outline}"
+                    BorderThickness="0,1,0,0"
+                    Margin="0,0,0,0"
+                    Padding="12,8,12,0">
+              <TextBlock Text="Grain &amp; Activity Parameters"
+                         FontSize="11"
+                         FontWeight="SemiBold"
+                         Foreground="{DynamicResource Text.Secondary}" />
+            </Border>
+
+            <Grid ColumnDefinitions="*,12,1.6*"
+                  RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                  Margin="12,8,12,12">
+
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrDustDensity}" />
+              <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
+                <TextBox>
+                  <i:Interaction.Behaviors>
+                    <b:NumericTextBoxBehavior Minimum="0.00001" />
+                  </i:Interaction.Behaviors>
+                </TextBox>
+                <TextBlock Classes="unit-of-measurement" Text="g/cm³" />
+              </Panel>
+
+              <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding StrDustDiameter}" />
+              <Panel Grid.Row="2" Grid.Column="2" Classes="unit-overlay">
+                <TextBox>
+                  <i:Interaction.Behaviors>
+                    <b:NumericTextBoxBehavior Minimum="0.0001" Maximum="10000" />
+                  </i:Interaction.Behaviors>
+                </TextBox>
+                <TextBlock Classes="unit-of-measurement" Text="μm" />
+              </Panel>
+
+              <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrAlbedo}" />
+              <TextBox Grid.Row="4" Grid.Column="2">
+                <i:Interaction.Behaviors>
+                  <b:NumericTextBoxBehavior Minimum="0.5" Maximum="2" />
+                </i:Interaction.Behaviors>
+              </TextBox>
+
+              <TextBlock Grid.Row="6" Grid.Column="0" Text="Afρ₀" />
+              <Panel Grid.Row="6" Grid.Column="2" Classes="unit-overlay">
+                <TextBox>
+                  <i:Interaction.Behaviors>
+                    <b:NumericTextBoxBehavior Minimum="1" Maximum="2000000" />
+                  </i:Interaction.Behaviors>
+                </TextBox>
+                <TextBlock Classes="unit-of-measurement" Text="cm" />
+              </Panel>
+
+              <TextBlock Grid.Row="8" Grid.Column="0" Text="Afρ power" />
+              <TextBox Grid.Row="8" Grid.Column="2">
+                <i:Interaction.Behaviors>
+                  <b:NumericTextBoxBehavior Minimum="1" Maximum="4" />
+                </i:Interaction.Behaviors>
+              </TextBox>
+
+              <!-- Computed properties -->
+              <TextBlock Grid.Row="10" Grid.Column="0" Text="{Binding StrBeta}" />
+              <TextBox Grid.Row="10" Grid.Column="2" Classes="computed" />
+
+              <TextBlock Grid.Row="12" Grid.Column="0" Text="{Binding StrAcceleration}" />
+              <Panel Grid.Row="12" Grid.Column="2" Classes="unit-overlay">
+                <TextBox Classes="computed" />
+                <TextBlock Classes="unit-of-measurement" Text="m/s²" />
+              </Panel>
+
+            </Grid>
+          </StackPanel>
         </Expander>
       </Border>
 

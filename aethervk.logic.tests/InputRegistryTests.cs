@@ -17,7 +17,7 @@ public class InputRegistryTests
 
     var resolved = registry.Resolve("TestContext", chord);
     Assert.NotNull(resolved);
-    Assert.Equal("test.action", resolved.Id);
+    Assert.Equal("test.action", resolved.Value.Id);
 
     var notFound = registry.Resolve("WrongContext", chord);
     Assert.Null(notFound);

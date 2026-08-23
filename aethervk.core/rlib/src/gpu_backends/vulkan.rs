@@ -31,6 +31,9 @@ pub mod mock_kernels;
 #[cfg(test)]
 pub mod mock_scene_data;
 
+#[cfg(test)]
+pub mod trajectory_tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncMode {
   /// CPU uploads data. Needs Transfer Write -> Vertex Read barrier.
