@@ -54,4 +54,5 @@ void main() {
     vec3 relativePos = p.position - cameraPos;
     vec3 worldPos = relativePos + (pc.cameraRight * localPos.x + pc.cameraUp * localPos.y) * pc.radius;
     gl_Position = pc.viewProj * vec4(worldPos, 1.0);
+    gl_PointSize = 1.0;
 }

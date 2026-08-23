@@ -5,9 +5,8 @@ namespace AetherVk.Views;
 
 public partial class TimelineTabView : UserControl
 {
-    public TimelineTabView()
-    {
-        InitializeComponent();
-    }
+  public TimelineTabView()
+  {
+    InitializeComponent();
+  }
 }
-

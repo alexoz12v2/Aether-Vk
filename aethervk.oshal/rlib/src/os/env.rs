@@ -162,16 +162,5 @@ pub fn var(key: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-  use super::*;
+mod tests;
 
-  #[test]
-  fn test_args() {
-    let cmd_args = args().expect("Failed to get command line arguments");
-    // At least the executable name should be present in args
-    assert!(!cmd_args.is_empty());
-
-    // The first argument is typically the path to the executable
-    println!("Executable arg: {}", cmd_args[0]);
-  }
-}

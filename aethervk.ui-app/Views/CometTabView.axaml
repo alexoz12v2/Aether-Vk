@@ -4,26 +4,310 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:AetherVk.Logic.ViewModels"
              xmlns:view="using:AetherVk.Views"
-             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             xmlns:controls="using:AetherVk.Controls"
+             mc:Ignorable="d" d:DesignWidth="450" d:DesignHeight="900"
              x:Class="AetherVk.Views.CometTabView"
              x:DataType="vm:ICometTabViewModel">
-    <Design.DataContext>
-        <vm:DesignCometTabViewModel />
-    </Design.DataContext>
+  <Design.DataContext>
+    <vm:DesignCometTabViewModel />
+  </Design.DataContext>
 
-    <UserControl.Resources>
-        <ResourceDictionary>
-            <ResourceDictionary.MergedDictionaries>
-                <ResourceInclude Source="../Styles/Colors.axaml" />
-            </ResourceDictionary.MergedDictionaries>
-        </ResourceDictionary>
-    </UserControl.Resources>
+  <UserControl.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="../Styles/Colors.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </UserControl.Resources>
 
-    <!-- TODO: implement CometTabView -->
-    <Border Background="{DynamicResource Bg.Canvas}" Padding="16">
-        <TextBlock Text="TODO: implement CometTabView"
-                   Foreground="{DynamicResource Text.Secondary}"
-                   HorizontalAlignment="Center"
-                   VerticalAlignment="Center" />
-    </Border>
+  <UserControl.Styles>
+    <Style Selector="TextBlock">
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.label">
+      <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Margin" Value="0,0,6,0" />
+    </Style>
+    <Style Selector="TextBlock.value">
+      <Setter Property="Foreground" Value="{DynamicResource Text.Primary}" />
+      <Setter Property="FontWeight" Value="Medium" />
+    </Style>
+    <Style Selector="TextBlock.status-ok">
+      <Setter Property="Foreground" Value="{DynamicResource Sem.Success}" />
+    </Style>
+    <Style Selector="TextBlock.status-warn">
+      <Setter Property="Foreground" Value="{DynamicResource Sem.Warning}" />
+    </Style>
+    <Style Selector="TextBlock.status-error">
+      <Setter Property="Foreground" Value="{DynamicResource Sem.Error}" />
+    </Style>
+    <Style Selector="Expander">
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="Padding" Value="0,4,0,0" />
+    </Style>
+  </UserControl.Styles>
+
+  <Border Background="{DynamicResource Bg.Canvas}" Padding="0">
+    <ScrollViewer Classes="left-scrollbar" VerticalScrollBarVisibility="Auto">
+      <StackPanel Spacing="8" Margin="12,12,12,24">
+
+        <!-- ═══════════════════════════════════════════════════════════════
+        SECTION 1: PROPOSED TIMELINE (read-only display)
+        ═══════════════════════════════════════════════════════════════ -->
+        <Expander Header="Proposed Timeline" IsExpanded="True">
+          <StackPanel Spacing="6" Margin="4,4,4,4">
+
+            <!-- No timeline warning -->
+            <Border Background="{DynamicResource Bg.Canvas.Alt}"
+                    BorderBrush="{DynamicResource Sem.Warning}"
+                    BorderThickness="1" CornerRadius="4" Padding="8,6"
+                    IsVisible="{Binding !HasProposedTimeline}">
+              <TextBlock TextWrapping="Wrap" FontSize="11"
+                         Foreground="{DynamicResource Sem.Warning}"
+                         Text="No timeline committed yet. Go to the Timeline tab to set start and end epochs before selecting a comet." />
+            </Border>
+
+            <!-- Timeline display (visible when set) -->
+            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto"
+                  RowSpacing="4" ColumnSpacing="8"
+                  IsVisible="{Binding HasProposedTimeline}">
+              <TextBlock Grid.Row="0" Grid.Column="0" Classes="label" Text="Start:" />
+              <TextBox Grid.Row="0" Grid.Column="1" Classes="computed"
+                       Text="{Binding ProposedStartEpoch, Mode=OneWay}"
+                       IsReadOnly="True"
+                       FontFamily="Cascadia Mono, Consolas, monospace"
+                       FontSize="11"
+                       ToolTip.Tip="Go to the Timeline tab to change the epoch range"
+                       ToolTip.ShowDelay="500" />
+              <TextBlock Grid.Row="1" Grid.Column="0" Classes="label" Text="End:" />
+              <TextBox Grid.Row="1" Grid.Column="1" Classes="computed"
+                       Text="{Binding ProposedEndEpoch, Mode=OneWay}"
+                       IsReadOnly="True"
+                       FontFamily="Cascadia Mono, Consolas, monospace"
+                       FontSize="11"
+                       ToolTip.Tip="Go to the Timeline tab to change the epoch range"
+                       ToolTip.ShowDelay="500" />
+            </Grid>
+
+          </StackPanel>
+        </Expander>
+
+        <!-- ═══════════════════════════════════════════════════════════════
+        SECTION 2: COMET SELECTION
+        ═══════════════════════════════════════════════════════════════ -->
+        <Expander Header="Comet Selection" IsExpanded="True">
+          <StackPanel Spacing="8" Margin="4,4,4,4">
+
+            <!-- Committed state banner -->
+            <Border Background="{DynamicResource Bg.Canvas.Alt}"
+                    BorderBrush="{DynamicResource Sem.Success}"
+                    BorderThickness="1" CornerRadius="4" Padding="8,6"
+                    IsVisible="{Binding IsAlmanacCommitted}">
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Spacing="2">
+                  <TextBlock Classes="status-ok" FontWeight="SemiBold"
+                             Text="✓ Committed" FontSize="11" />
+                  <TextBlock Text="{Binding CommittedCometName}"
+                             FontSize="11" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Text.Primary}" />
+                </StackPanel>
+                <Button Grid.Column="1"
+                        Content="Undo"
+                        Command="{Binding DecommitCometCommand}"
+                        VerticalAlignment="Center"
+                        Padding="8,4"
+                        ToolTip.Tip="Detach comet SPK from simulation and reset to default"
+                        ToolTip.ShowDelay="500" />
+              </Grid>
+            </Border>
+
+            <!-- Timeline-changed-after-commit warning -->
+            <Border Background="{DynamicResource Bg.Canvas.Alt}"
+                    BorderBrush="{DynamicResource Sem.Warning}"
+                    BorderThickness="1" CornerRadius="4" Padding="8,6"
+                    IsVisible="{Binding HasTimelineChangedAfterCommit}">
+              <TextBlock TextWrapping="Wrap" FontSize="11"
+                         Foreground="{DynamicResource Sem.Warning}"
+                         Text="⚠ Timeline has changed since last commit. Re-commit to update the comet trajectory." />
+            </Border>
+
+            <!-- Search row -->
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+              <TextBox Grid.Column="0"
+                       Text="{Binding SearchQuery}"
+                       Watermark="Search comets (e.g. 67P, Halley)…"
+                       FontSize="12" />
+              <Button Grid.Column="1"
+                      Content="Search"
+                      Command="{Binding SearchCometsCommand}"
+                      Classes="accent"
+                      IsEnabled="{Binding !IsSearching}"
+                      Padding="10,6" />
+            </Grid>
+
+            <!-- Loading indicator -->
+            <TextBlock Text="Searching…" FontSize="11"
+                       Foreground="{DynamicResource Text.Secondary}"
+                       IsVisible="{Binding IsSearching}" />
+
+            <!-- Search results -->
+            <ListBox ItemsSource="{Binding FilteredSearchResults}"
+                     SelectedItem="{Binding SelectedComet}"
+                     MaxHeight="140"
+                     IsVisible="{Binding FilteredSearchResults.Count}"
+                     Background="{DynamicResource Bg.Canvas.Alt}"
+                     BorderThickness="1"
+                     BorderBrush="{DynamicResource Bg.Outline}">
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <StackPanel Spacing="2" Margin="2,2">
+                    <TextBlock Text="{Binding Name}" FontSize="12" />
+                    <TextBlock Text="{Binding PrimaryDesignation}"
+                               FontSize="10"
+                               Foreground="{DynamicResource Text.Disabled}" />
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- SPK records section (visible when comet selected) -->
+            <StackPanel Spacing="6"
+                        IsVisible="{Binding SelectedComet, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <TextBlock Text="Available SPK Records:" FontSize="11"
+                         Foreground="{DynamicResource Text.Secondary}" />
+              <TextBlock Text="Loading records…" FontSize="11"
+                         Foreground="{DynamicResource Text.Disabled}"
+                         IsVisible="{Binding IsLoadingSpkRecords}" />
+              <ListBox ItemsSource="{Binding SpkRecords}"
+                       SelectedItem="{Binding SelectedSpkRecord}"
+                       MaxHeight="120"
+                       IsVisible="{Binding SpkRecords.Count}"
+                       Background="{DynamicResource Bg.Canvas.Alt}"
+                       BorderThickness="1"
+                       BorderBrush="{DynamicResource Bg.Outline}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8" Margin="2,2">
+                      <TextBlock Grid.Column="0" Text="{Binding RecordId}"
+                                 FontFamily="Cascadia Mono, Consolas, monospace"
+                                 FontSize="11" Width="70"
+                                 Foreground="{DynamicResource Text.Disabled}" />
+                      <StackPanel Grid.Column="1" Spacing="1">
+                        <TextBlock Text="{Binding Name}" FontSize="11" />
+                        <TextBlock Text="{Binding EpochYear}"
+                                   FontSize="10"
+                                   Foreground="{DynamicResource Text.Disabled}" />
+                      </StackPanel>
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </StackPanel>
+
+            <!-- Download & Commit button -->
+            <Button Content="Download &amp; Commit"
+                    Command="{Binding DownloadAndCommitCommand}"
+                    Classes="accent"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    Padding="0,8"
+                    IsEnabled="{Binding !IsDownloading}"
+                    ToolTip.Tip="Download the selected SPK and attach it to the simulation"
+                    ToolTip.ShowDelay="500" />
+
+            <!-- Status text -->
+            <TextBlock Text="{Binding DownloadStatus}"
+                       FontSize="11"
+                       TextWrapping="Wrap"
+                       IsVisible="{Binding DownloadStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                       Foreground="{DynamicResource Text.Secondary}" />
+
+          </StackPanel>
+        </Expander>
+
+        <!-- ═══════════════════════════════════════════════════════════════
+        SECTION 3: ROTATIONAL MODEL (enabled only when committed)
+        ═══════════════════════════════════════════════════════════════ -->
+        <Expander Header="Rotational Model"
+                  IsExpanded="{Binding IsAlmanacCommitted}"
+                  IsEnabled="{Binding IsAlmanacCommitted}">
+          <StackPanel Spacing="6" Margin="4,4,4,4">
+
+            <TextBlock Text="Changes are pushed live to the simulation (debounced 250 ms)."
+                       FontSize="10" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Text.Disabled}" />
+
+            <!-- Pole RA -->
+            <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
+              <TextBlock Grid.Column="0" Classes="label" Text="Pole RA" VerticalAlignment="Center" />
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleRaDeg}">
+                <controls:UnboundedSlider.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="°" />
+                </controls:UnboundedSlider.InnerRightContent>
+              </controls:UnboundedSlider>
+            </Grid>
+
+            <!-- Pole Dec -->
+            <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
+              <TextBlock Grid.Column="0" Classes="label" Text="Pole Dec" VerticalAlignment="Center" />
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleDecDeg}">
+                <controls:UnboundedSlider.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="°" />
+                </controls:UnboundedSlider.InnerRightContent>
+              </controls:UnboundedSlider>
+            </Grid>
+
+            <!-- Prime Meridian -->
+            <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
+              <TextBlock Grid.Column="0" Classes="label" Text="Prime Meridian" VerticalAlignment="Center" />
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PrimeMeridianDeg}">
+                <controls:UnboundedSlider.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="°" />
+                </controls:UnboundedSlider.InnerRightContent>
+              </controls:UnboundedSlider>
+            </Grid>
+
+            <!-- RA Rate -->
+            <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
+              <TextBlock Grid.Column="0" Classes="label" Text="RA Rate" VerticalAlignment="Center" />
+              <TextBox Grid.Column="2"
+                       Text="{Binding PoleRaRateDegCen}">
+                <TextBox.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="°/cen" />
+                </TextBox.InnerRightContent>
+              </TextBox>
+            </Grid>
+
+            <!-- Dec Rate -->
+            <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
+              <TextBlock Grid.Column="0" Classes="label" Text="Dec Rate" VerticalAlignment="Center" />
+              <TextBox Grid.Column="2"
+                       Text="{Binding PoleDecRateDegCen}">
+                <TextBox.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="°/cen" />
+                </TextBox.InnerRightContent>
+              </TextBox>
+            </Grid>
+
+            <!-- Rotation Rate -->
+            <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
+              <TextBlock Grid.Column="0" Classes="label" Text="Rotation Rate" VerticalAlignment="Center" />
+              <TextBox Grid.Column="2"
+                       Text="{Binding RotRateDegDay}"
+                       ToolTip.Tip="Sidereal rotation rate. Positive = prograde."
+                       ToolTip.ShowDelay="500">
+                <TextBox.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="°/day" />
+                </TextBox.InnerRightContent>
+              </TextBox>
+            </Grid>
+
+
+          </StackPanel>
+        </Expander>
+
+      </StackPanel>
+    </ScrollViewer>
+  </Border>
 </UserControl>

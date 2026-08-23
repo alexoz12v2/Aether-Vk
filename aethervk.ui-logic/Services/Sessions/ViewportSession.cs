@@ -9,8 +9,13 @@ namespace AetherVk.Logic.Services;
 [ExclusiveSession]
 public sealed class ViewportSession : ITabSession
 {
-  // Placeholder — future fields might include:
-  //   public ViewModels.CameraProjectionType ProjectionType { get; set; }
-  //   public bool ShowGrid { get; set; } = true;
-  //   public bool ShowBillboards { get; set; } = true;
+  /// <summary>
+  /// Camera mode to restore when the viewport tab reopens.
+  /// Defaults to <see cref="CameraMode.EarthPosition"/> — the safest starting view.
+  /// </summary>
+  public CameraMode ActiveCameraMode { get; set; } = CameraMode.EarthPosition;
+
+  /// <summary>Camera projection type to restore on tab reopen.</summary>
+  public ViewModels.CameraProjectionType ProjectionType { get; set; } =
+    ViewModels.CameraProjectionType.Perspective;
 }

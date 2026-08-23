@@ -53,7 +53,7 @@ public partial class VulkanViewportControlViewModel(
 #endif
 
     // TODO: from global preferences
-    _handler = _handlerFactory.Create(handle, handleDescriptor, TraceLevel.Basic);
+    _handler = _handlerFactory.Create(handle, handleDescriptor, TraceLevel.Verbose);
 
     if (_handler is not INativeInputHandlerSubscribable subscribable)
       return false;
@@ -131,6 +131,13 @@ public partial class VulkanViewportControlViewModel(
   /// <summary>Broadcasts a fatal error via <see cref="WeakReferenceMessenger"/>.</summary>
   public void ReportFatalError(string message)
     => WeakReferenceMessenger.Default.Send(new CriticalErrorMessage(message));
+
+  /// <summary>
+  /// Requests keyboard focus be moved to the native viewport window (XID on Linux, HWND on
+  /// Windows). Call this whenever a pointer event passes through the transparent Avalonia overlay
+  /// so that subsequent key events reach the native input handler's event loop.
+  /// </summary>
+  public void FocusViewport() => _handler?.FocusViewportWindow();
 
   public void Dispose()
   {

@@ -49,10 +49,14 @@ public static class ServiceCollectionExtensions
       collection.AddSingleton<CometPositionTrackerService>();
       collection.AddSingleton<ImportedModelsTrackerService>();
       collection.AddSingleton<CameraService>();
+      collection.AddSingleton<CometConfigService>();
     }
     collection.AddSingleton<INativeInputHandlerFactory, NativeInputHandlerFactory>();
     collection.AddSingleton<IWindowInputRouter, GlobalInputRouter>();
-    collection.AddSingleton<InputRegistry>();
+    collection.AddSingleton<IPlatformWindowService, PlatformWindowService>();
+    var inputRegistry = new InputRegistry();
+    inputRegistry.RegisterViewportDefaults();
+    collection.AddSingleton<InputRegistry>(_ => inputRegistry);
     collection.AddSingleton<ITranslationService, TranslationService>(provider =>
     {
       // if this is used elsewhere then add it as a singleton
@@ -86,6 +90,15 @@ public static class ServiceCollectionExtensions
       var factory = sp.GetRequiredService<INativeInputHandlerFactory>();
       var runtime = sp.GetRequiredService<INativeRuntimeService>();
       return vm => new VulkanViewportControlViewModel(router, factory, runtime, vm);
+    });
+    collection.AddTransient<Func<Viewport3DViewModel, ViewportOverlayViewModel>>(sp =>
+    {
+      var cameraService     = sp.GetRequiredService<CameraService>();
+      var runtimeService    = sp.GetRequiredService<INativeRuntimeService>();
+      var breadcrumbService = sp.GetRequiredService<BreadcrumbService>();
+      var dispatcher        = sp.GetRequiredService<IUiThreadDispatcher>();
+      var fileDialog        = sp.GetRequiredService<IFileDialogService>();
+      return vm => new ViewportOverlayViewModel(cameraService, runtimeService, breadcrumbService, dispatcher, fileDialog, vm);
     });
   }
 

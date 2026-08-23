@@ -14,21 +14,29 @@ namespace AetherVk.Logic.Services;
 
 #region Interface
 
-using unsafe PanicCallbackDelegate = delegate* unmanaged[Cdecl]<IntPtr, nuint, void>;
-// utf8Buffer: byte*
-using unsafe LoggerCallbackDelegate = delegate* unmanaged[Cdecl]<byte*, void>;
 // severity: int, utf8Message: byte*
 using unsafe BreadcrumbCallbackDelegate = delegate* unmanaged[Cdecl]<uint, byte*, void>;
-// scene_id, ext_id, comp_id, data.as_slice().as_ptr().cast()
-using unsafe SimulationCallbackDelegate = delegate* unmanaged[Cdecl]<ulong, ulong, ulong, nint, void>;
 //stateId: int, structPtr: nint
 using unsafe ExternalStateSimulationCallbackDelegate = delegate* unmanaged[Cdecl]<uint, nint, void>;
-// scene id, pe_handle, timeline completion value
-using unsafe RenderCallbackDelegate = delegate* unmanaged[Cdecl]<ulong, ulong, ulong, void>;
+// out_handle: CNativeWindowHandle*, signal_done: *AtomicBool (byte) — C# fills handle on UI thread then writes 1
+using unsafe GetNativeWindowHandleCallbackDelegate = delegate* unmanaged[Cdecl]<
+  CNativeWindowHandle*,
+  nint,
+  void>;
+// utf8Buffer: byte*
+using unsafe LoggerCallbackDelegate = delegate* unmanaged[Cdecl]<byte*, void>;
 // void*, int, void* (don't care about types, we pass them to `executeMainThreadCleanup`)
 using unsafe MainThreadDispatchCallbackDelegate = delegate* unmanaged[Cdecl]<nint, int, nint, void>;
-// out_handle: CNativeWindowHandle*, signal_done: *AtomicBool (byte) — C# fills handle on UI thread then writes 1
-using unsafe GetNativeWindowHandleCallbackDelegate = delegate* unmanaged[Cdecl]<CNativeWindowHandle*, nint, void>;
+using unsafe PanicCallbackDelegate = delegate* unmanaged[Cdecl]<IntPtr, nuint, void>;
+// scene id, pe_handle, timeline completion value
+using unsafe RenderCallbackDelegate = delegate* unmanaged[Cdecl]<ulong, ulong, ulong, void>;
+// scene_id, ext_id, comp_id, data.as_slice().as_ptr().cast()
+using unsafe SimulationCallbackDelegate = delegate* unmanaged[Cdecl]<
+  ulong,
+  ulong,
+  ulong,
+  nint,
+  void>;
 
 /// <summary>
 /// Safe, exclusive C# interface for interacting with the Aether-Vk Native Runtime.
@@ -72,7 +80,8 @@ public interface INativeRuntimeService : IDisposable
     Func<CNativeWindowHandle>? nativeHandleProvider,
     uint handleType,
     out ulong presentationEngineId,
-    out ulong cameraEntityId);
+    out ulong cameraEntityId
+  );
 
   void RemoveViewport(ulong presentationEngineId);
   void ResizeViewport(ulong presentationEngineId, uint width, uint height);
@@ -99,8 +108,31 @@ public interface INativeRuntimeService : IDisposable
 
   bool AddCameraAnimation(ulong cameraId, AnimationTarget animation);
 
-  // Mode: 0 = Ortho [f32;6], 1 = Persp [f32;4], 2 = RotoTranslate [f32;7]
-  bool TransformStaticCamera(ulong cameraId, int mode, nint buffer);
+  /// <summary>
+  /// Directly writes the camera's world-space position and orientation.
+  /// Returns <c>false</c> (rejected) if a <c>TransformAnimationComponent</c> is still active
+  /// on the camera entity — the caller should treat <c>false</c> as a silent no-op.
+  /// Result is confirmed asynchronously via <c>SIMULATION_CALLBACK</c>.
+  /// </summary>
+  bool CameraSetRotoTranslate(
+    ulong cameraId,
+    System.Numerics.Vector3 position,
+    System.Numerics.Quaternion rotation
+  );
+
+  /// <summary>Sets the camera projection to perspective. Not blocked by an active animation.</summary>
+  bool CameraSetPerspective(ulong cameraId, float fov, float aspectRatio, float near, float far);
+
+  /// <summary>Sets the camera projection to orthographic. Not blocked by an active animation.</summary>
+  bool CameraSetOrthographic(
+    ulong cameraId,
+    float left,
+    float right,
+    float bottom,
+    float top,
+    float near,
+    float far
+  );
 
   // ==========================================
   // Particle Systems
@@ -109,13 +141,45 @@ public interface INativeRuntimeService : IDisposable
   //       we are now reflecting Native side, in which model properties are stored separately, and
   //       we are actively synchronizing them
   bool AddParticleSystem(ParticleSystemModel psModel, ParticleSystemJet psJet, out ulong outPsId);
-  ParticleSystemComputedProperties? AddFirstParticleSystem(ParticleSystemModel psModel, ParticleSystemJet psJet, out ulong outPsId);
-  bool ModifyParticleSystem(ulong psId, ParticleSystemModel psModel, ParticleSystemJet psJet, out ParticleSystemComputedProperties outPsComputedProps);
+  ParticleSystemComputedProperties? AddFirstParticleSystem(
+    ParticleSystemModel psModel,
+    ParticleSystemJet psJet,
+    out ulong outPsId
+  );
+  bool ModifyParticleSystem(
+    ulong psId,
+    ParticleSystemModel psModel,
+    ParticleSystemJet psJet,
+    out ParticleSystemComputedProperties outPsComputedProps
+  );
+  bool RemoveParticleSystem(ulong psId);
 
   // ==========================================
   // Orbital Mechanics & Almanacs
   // ==========================================
-  bool ReconfigureComet();
+
+  /// <summary>
+  /// Command flags for <see cref="ReconfigureComet"/>.
+  /// </summary>
+  // 0x0 = query comet entity id only; 0x1 = ATTACH AlmanacPlanet; 0x2 = DETACH AlmanacPlanet
+  // These mirror the Rust bitmask in avkSimulationContext_reconfigureComet.
+
+  /// <summary>
+  /// Reconfigures the native comet entity.
+  /// </summary>
+  /// <param name="commandFlags">
+  ///   Bitmask: <c>0</c> = query id only; <c>1</c> = ATTACH (InitComet); <c>2</c> = DETACH (CleanupComet).
+  /// </param>
+  /// <param name="spkId">NAIF SPK id of the comet (used when commandFlags has ATTACH bit set).</param>
+  /// <param name="cometBodyId">Receives the comet body entity id (always populated on success).</param>
+  bool ReconfigureComet(int commandFlags, int spkId, out ulong cometBodyId);
+
+  /// <summary>
+  /// Synchronously updates the <c>BodyRotationalModel</c> ECS component on the comet body entity.
+  /// Takes effect within one logic frame (~16 ms). No-op if the entity does not exist.
+  /// </summary>
+  bool SetBodyRotationalModel(ulong cometBodyEntityId, BodyRotationalModelDto dto);
+
   // Async: completion is signalled by a one-shot (transient) handler registered via the
   // `ExternalStateDispatcher` utility inside the implementation. Permanent subscriptions
   // (companion services) use `RegisterExternalStateListener` instead.
@@ -161,7 +225,11 @@ public interface INativeRuntimeService : IDisposable
   ///   Must not block. Must not throw.
   /// </param>
   /// <returns>Dispose to deregister.</returns>
-  IDisposable RegisterSimulationListener(ulong entityId, ulong componentForeignId, Action<nint> handler);
+  IDisposable RegisterSimulationListener(
+    ulong entityId,
+    ulong componentForeignId,
+    Action<nint> handler
+  );
 
   /// <summary>
   /// Register a listener for <c>EXTERNAL_STATE_SIMULATION_CALLBACK</c> filtered by state type.
@@ -194,6 +262,14 @@ public interface INativeRuntimeService : IDisposable
   /// </summary>
   ulong? CometEntityId { get; }
 
+  /// <summary>
+  /// Cancelled when <see cref="IDisposable.Dispose"/> is called on this service.
+  /// Companion services (e.g. <see cref="CometConfigService"/>) link their async operations
+  /// to this token so they terminate immediately on shutdown rather than waiting for
+  /// the internal 30-second wall-clock timeout.
+  /// </summary>
+  CancellationToken ShutdownToken { get; }
+
   // ==========================================
   // Timeline (async — fires ExternalState::TimeRange callback on success)
   // ==========================================
@@ -206,7 +282,13 @@ public interface INativeRuntimeService : IDisposable
   bool SetEpochRange(short startCenturies, ulong startNs, short endCenturies, ulong endNs);
 
   /// <summary>Synchronous almanac coverage check against loaded SPK data.</summary>
-  bool CheckAlmanacCoverage(int spkId, short startCenturies, ulong startNs, short endCenturies, ulong endNs);
+  bool CheckAlmanacCoverage(
+    int spkId,
+    short startCenturies,
+    ulong startNs,
+    short endCenturies,
+    ulong endNs
+  );
 }
 
 #endregion
@@ -242,9 +324,14 @@ internal unsafe static class PInvokeAetherVkCore
 
 #if NET
   // Modern .NET (.NET 5+) Implementation
-  private static IntPtr ResolveNativeLibrary(string libraryName, System.Reflection.Assembly assembly, DllImportResearchPath? searchPath)
+  private static IntPtr ResolveNativeLibrary(
+    string libraryName,
+    System.Reflection.Assembly assembly,
+    DllImportResearchPath? searchPath
+  )
   {
-    if (libraryName != LibName) return IntPtr.Zero;
+    if (libraryName != LibName)
+      return IntPtr.Zero;
 
     string basePath = AppContext.BaseDirectory;
 
@@ -259,7 +346,9 @@ internal unsafe static class PInvokeAetherVkCore
 
       // 2. Check the Frameworks folder (Apple's standard location for shared libraries)
       // base path is "Contents/MacOS" so we go up one levels and into Frameworks
-      string frameworksPath = Path.GetFullPath(Path.Combine(basePath, "..", "Frameworks", fileName));
+      string frameworksPath = Path.GetFullPath(
+        Path.Combine(basePath, "..", "Frameworks", fileName)
+      );
       if (NativeLibrary.TryLoad(frameworksPath, out IntPtr handle2))
         return handle2;
 
@@ -292,8 +381,10 @@ internal unsafe static class PInvokeAetherVkCore
     {
       string fileName = "libaethervk_core_cdylib.dylib";
       // 1. Check MacOS folder
-      if (TryLoadMac(Path.Combine(basePath, fileName))) return;
-      if (TryLoadMac(Path.Combine(basePath, basePath, "..", "Frameworks", fileName))) return;
+      if (TryLoadMac(Path.Combine(basePath, fileName)))
+        return;
+      if (TryLoadMac(Path.Combine(basePath, basePath, "..", "Frameworks", fileName)))
+        return;
     }
     else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
     {
@@ -308,7 +399,8 @@ internal unsafe static class PInvokeAetherVkCore
   // -- OS Specific Utility functions
   private static bool TryLoadWindows(string path)
   {
-    if (!File.Exists(path)) return false;
+    if (!File.Exists(path))
+      return false;
 
     // C# strings are UTF-16 and null terminated by the CLR (from microsoft docs)
     // Pinning it gives us a LPCWSTR compatible with Win32 functions
@@ -318,7 +410,8 @@ internal unsafe static class PInvokeAetherVkCore
 
   private static bool TryLoadMac(string path)
   {
-    if (!File.Exists(path)) return false;
+    if (!File.Exists(path))
+      return false;
 
     // 2 -> RTLD_NOW, 8 -> RTLD_GLOBAL
     return TryLoadUnixDynamic(path, 2 | 8, isMac: true);
@@ -326,7 +419,8 @@ internal unsafe static class PInvokeAetherVkCore
 
   private static bool TryLoadLinux(string path)
   {
-    if (!File.Exists(path)) return false;
+    if (!File.Exists(path))
+      return false;
 
     // 2 -> RTLD_NOW, 256 -> RTLD_GLOBAL
     return TryLoadUnixDynamic(path, 2 | 256, isMac: false);
@@ -352,9 +446,24 @@ internal unsafe static class PInvokeAetherVkCore
       return dlopen_mac(utf8Buffer, flags) != IntPtr.Zero;
     else
     {
-      try { if (dlopen_linux(utf8Buffer, flags) != IntPtr.Zero) return true; } catch (DllNotFoundException) { }
-      try { if (dlopen_linux_glibc(utf8Buffer, flags) != IntPtr.Zero) return true; } catch (DllNotFoundException) { }
-      try { if (dlopen_linux_musl(utf8Buffer, flags) != IntPtr.Zero) return true; } catch (DllNotFoundException) { }
+      try
+      {
+        if (dlopen_linux(utf8Buffer, flags) != IntPtr.Zero)
+          return true;
+      }
+      catch (DllNotFoundException) { }
+      try
+      {
+        if (dlopen_linux_glibc(utf8Buffer, flags) != IntPtr.Zero)
+          return true;
+      }
+      catch (DllNotFoundException) { }
+      try
+      {
+        if (dlopen_linux_musl(utf8Buffer, flags) != IntPtr.Zero)
+          return true;
+      }
+      catch (DllNotFoundException) { }
       return false;
     }
   }
@@ -381,7 +490,13 @@ internal unsafe static class PInvokeAetherVkCore
   // =========================================================================
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern bool avkProbeSpkFile(byte* path, int spkId, CTimeRange* inTaiParts, CTimeRange* outDomainTaiParts, int* outDiscoveredNaifId);
+  public static extern bool avkProbeSpkFile(
+    byte* path,
+    int spkId,
+    CTimeRange* inTaiParts,
+    CTimeRange* outDomainTaiParts,
+    int* outDiscoveredNaifId
+  );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkRegisterPanicCallback(PanicCallbackDelegate cb);
@@ -393,7 +508,9 @@ internal unsafe static class PInvokeAetherVkCore
   public static extern void avkSetBreadcrumbCallback(BreadcrumbCallbackDelegate cb);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSetExternalStateSimulationCallback(ExternalStateSimulationCallbackDelegate cb);
+  public static extern void avkSetExternalStateSimulationCallback(
+    ExternalStateSimulationCallbackDelegate cb
+  );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSetLoggerCallback(LoggerCallbackDelegate cb);
@@ -402,7 +519,9 @@ internal unsafe static class PInvokeAetherVkCore
   public static extern void avkSetMainThreadDispatchCallback(MainThreadDispatchCallbackDelegate cb);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSetGetNativeWindowHandleCallback(GetNativeWindowHandleCallbackDelegate cb);
+  public static extern void avkSetGetNativeWindowHandleCallback(
+    GetNativeWindowHandleCallbackDelegate cb
+  );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSetRenderCallback(RenderCallbackDelegate cb);
@@ -411,10 +530,21 @@ internal unsafe static class PInvokeAetherVkCore
   public static extern void avkSetSimulationCallback(SimulationCallbackDelegate cb);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern bool avkSimulationContext_addCameraAnimation(nint ctx, ulong sceneId, ulong cameraId, AnimationTargetDTO* animation);
+  public static extern bool avkSimulationContext_addCameraAnimation(
+    nint ctx,
+    ulong sceneId,
+    ulong cameraId,
+    AnimationTargetDTO* animation
+  );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern bool avkSimulationContext_addParticleSystem(nint ctx, ulong sceneId, ParticleSystemDTO* particleSystem, long* outPsId, ParticleSystemComputedDTO* outComputedDto);
+  public static extern bool avkSimulationContext_addParticleSystem(
+    nint ctx,
+    ulong sceneId,
+    ParticleSystemDTO* particleSystem,
+    ulong* outPsId,
+    ParticleSystemComputedDTO* outComputedDto
+  );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_addScreenSpaceBillboard(
@@ -438,13 +568,17 @@ internal unsafe static class PInvokeAetherVkCore
     uint width,
     uint height,
     byte* name,
-    uint handleType,              // 0 = windowless | 1 = Win32 | 3 = Xlib | 4 = Xcb | 5 = Metal
+    uint handleType, // 0 = windowless | 1 = Win32 | 3 = Xlib | 4 = Xcb | 5 = Metal
     ulong* outPresentationEngine,
     ulong* outCameraEntity
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern bool avkSimulationContext_checkAlmanacCoverage(nint ctx, int spkId, CTimeRange* taiRange);
+  public static extern bool avkSimulationContext_checkAlmanacCoverage(
+    nint ctx,
+    int spkId,
+    CTimeRange* taiRange
+  );
 
   // associated with get task status. We are not using it anymore, so drop it
   // avkSimulationContext_downloadImage
@@ -483,7 +617,11 @@ internal unsafe static class PInvokeAetherVkCore
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern ulong avkSimulationContext_getEntityParent(nint ctx, ulong sceneId, ulong entity);
+  public static extern ulong avkSimulationContext_getEntityParent(
+    nint ctx,
+    ulong sceneId,
+    ulong entity
+  );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_getSceneHierarchy(
@@ -496,7 +634,12 @@ internal unsafe static class PInvokeAetherVkCore
 #endif
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern bool avkSimulationContext_getScreenSpaceBillboard(nint ctx, ulong sceneId, ulong entity, FfiScreenSpaceBillboardDTO* outData);
+  public static extern bool avkSimulationContext_getScreenSpaceBillboard(
+    nint ctx,
+    ulong sceneId,
+    ulong entity,
+    FfiScreenSpaceBillboardDTO* outData
+  );
 
   // associated with download image and rendering callback. We are not using it anymore, so drop it
   // avkSimulationContext_getTaskStatus
@@ -531,16 +674,37 @@ internal unsafe static class PInvokeAetherVkCore
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_removeParticleSystem(
+    nint ctx,
+    ulong sceneId,
+    ulong psId
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_pauseSimulationSync(nint ctx, ulong sceneId);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern bool avkSimulationContext_reconfigureComet(nint ctx, ulong sceneId, int commandFlags, ulong* outCometId);
+  public static extern bool avkSimulationContext_reconfigureComet(
+    nint ctx,
+    ulong sceneId,
+    int commandFlags, // 0=query, 1=ATTACH, 2=DETACH
+    int spkId,
+    ulong* outCometId
+  );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern bool avkSimulationContext_removeScreenSpaceBillboard(nint ctx, ulong sceneId, ulong entityId);
+  public static extern bool avkSimulationContext_removeScreenSpaceBillboard(
+    nint ctx,
+    ulong sceneId,
+    ulong entityId
+  );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_removeViewport(nint ctx, ulong sceneId, ulong peHandle);
+  public static extern void avkSimulationContext_removeViewport(
+    nint ctx,
+    ulong sceneId,
+    ulong peHandle
+  );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_resetSimulationSync(nint ctx, ulong sceneId);
@@ -550,7 +714,11 @@ internal unsafe static class PInvokeAetherVkCore
 
   // This is async, callback will handle it. false -> failed to submit to logic thread
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern bool avkSimulationContext_setEpochRange(nint ctx, ulong sceneId, CTimeRange* inTai);
+  public static extern bool avkSimulationContext_setEpochRange(
+    nint ctx,
+    ulong sceneId,
+    CTimeRange* inTai
+  );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_setScreenSpaceBillboard(
@@ -570,14 +738,27 @@ internal unsafe static class PInvokeAetherVkCore
   public static extern void avkSimulationContext_shutdownSync(nint ctx);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern bool avkSimulationContext_startSimulation(nint ctx, ulong sceneId, int speed);
+  public static extern bool avkSimulationContext_startSimulation(
+    nint ctx,
+    ulong sceneId,
+    int speed
+  );
 
   // "throwning" constructor for ctx (To put in constructor of runtime)
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern bool avkSimulationContext_startup(CStartupParameters* inParams, CStartupReturn* outParams);
+  public static extern bool avkSimulationContext_startup(
+    CStartupParameters* inParams,
+    CStartupReturn* outParams
+  );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern bool avkSimulationContext_transformStaticCamera(nint ctx, ulong sceneId, ulong cameraId, int mode, nint buffer);
+  public static extern bool avkSimulationContext_transformStaticCamera(
+    nint ctx,
+    ulong sceneId,
+    ulong cameraId,
+    int mode,
+    nint buffer
+  );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_unloadAlmanacFile(nint ctx, byte* utf8Path);
@@ -585,10 +766,69 @@ internal unsafe static class PInvokeAetherVkCore
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern void avkSimulationContext_unloadModel(nint ctx, ulong modelId);
 
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_setBodyRotationalModel(
+    nint ctx,
+    ulong sceneId,
+    ulong cometBodyEntityId,
+    CBodyRotationalModelDTO* dto
+  );
+
   // never called directly, MainThreadDispatchCallbackDelegate does that
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void executeMainThreadCleanup(nint vulkanDevice, int command, nint signalDonePtr);
+  public static extern void executeMainThreadCleanup(
+    nint vulkanDevice,
+    int command,
+    nint signalDonePtr
+  );
+}
 
+#endregion
+
+#region comet_dtos
+
+/// <summary>
+/// Blittable C-layout DTO matching <c>CBodyRotationalModelDTO</c> in <c>ffi.rs</c>.
+/// Passed by pointer to <see cref="PInvokeAetherVkCore.avkSimulationContext_setBodyRotationalModel"/>.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct CBodyRotationalModelDTO
+{
+  public double PoleRaDeg;
+  public double PoleDecDeg;
+  public double PrimeMeridianDeg;
+  public double PoleRaRateDegCen;
+  public double PoleDecRateDegCen;
+  public double RotRateDegDay;
+}
+
+/// <summary>
+/// Managed representation of an IAU rotational model for use in <see cref="INativeRuntimeService.SetBodyRotationalModel"/>.
+/// Values are the same as <see cref="CBodyRotationalModelDTO"/>.
+/// </summary>
+public sealed record BodyRotationalModelDto(
+  double PoleRaDeg,
+  double PoleDecDeg,
+  double PrimeMeridianDeg,
+  double PoleRaRateDegCen,
+  double PoleDecRateDegCen,
+  double RotRateDegDay
+)
+{
+  /// <summary>Converts to the blittable FFI struct.</summary>
+  public CBodyRotationalModelDTO ToDto() =>
+    new()
+    {
+      PoleRaDeg = PoleRaDeg,
+      PoleDecDeg = PoleDecDeg,
+      PrimeMeridianDeg = PrimeMeridianDeg,
+      PoleRaRateDegCen = PoleRaRateDegCen,
+      PoleDecRateDegCen = PoleDecRateDegCen,
+      RotRateDegDay = RotRateDegDay,
+    };
+
+  /// <summary>Default model: north pole aligned, no rotation.</summary>
+  public static BodyRotationalModelDto Default { get; } = new(0, 90, 0, 0, 0, 0);
 }
 
 #endregion
@@ -605,12 +845,14 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   private static NativeRuntimeService? _instance;
 
   private sealed record SimListenerEntry(ulong EntityId, ulong CompForeignId, Action<nint> Handler);
+
   // volatile: ImmutableInterlocked ensures writes have full barrier; volatile ensures reads in
   // the static callback see the latest reference without a memory-barrier instruction on each read.
   private volatile ImmutableList<SimListenerEntry> _simulationListeners =
     ImmutableList<SimListenerEntry>.Empty;
 
   private sealed record ExtStateListenerEntry(ExternalStateType StateType, Action<nint> Handler);
+
   private volatile ImmutableList<ExtStateListenerEntry> _externalStateListeners =
     ImmutableList<ExtStateListenerEntry>.Empty;
 
@@ -623,15 +865,23 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public ulong? EarthEntityId { get; private set; }
 
   /// <inheritdoc/>
-  // TODO (Rust): set this once avkSimulationContext_reconfigureComet exposes out_comet_entity_id
+  // Populated at startup from CStartupReturn.CometPlanetEntity.
+  // Also updated by ReconfigureComet when the ATTACH flag returns a non-zero entity id.
   public ulong? CometEntityId { get; private set; }
 
   // ── Private fields ────────────────────────────────────────────────────────
 
   private readonly IUiThreadDispatcher _uiThreadDispatcher;
+
   // TODO: populated in constructor once Rust startup is wired
   private nint _ctx = 0;
   private ulong _sceneId = 0;
+
+  // Cancelled in Dispose() so async operations (e.g. CommitCometAsync) can observe shutdown.
+  private readonly CancellationTokenSource _shutdownCts = new();
+
+  /// <inheritdoc/>
+  public CancellationToken ShutdownToken => _shutdownCts.Token;
 
   // ── Constructor ───────────────────────────────────────────────────────────
 
@@ -639,22 +889,32 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     IUiThreadDispatcher uiThreadDispatcher,
     ConsoleService consoleService,
     BreadcrumbService breadcrumbService,
-    Action<nint, nuint> panicCallback)
+    Action<nint, nuint> panicCallback
+  )
   {
     // panic registration
     _panicCallback = panicCallback;
-    unsafe { PInvokeAetherVkCore.avkRegisterPanicCallback(&PanicCallbackThunk); }
+    unsafe
+    {
+      PInvokeAetherVkCore.avkRegisterPanicCallback(&PanicCallbackThunk);
+    }
 
     // logger registration
     _loggerCallback = consoleService.Log;
-    unsafe { PInvokeAetherVkCore.avkSetLoggerCallback(&LoggerCallbackThunk); }
+    unsafe
+    {
+      PInvokeAetherVkCore.avkSetLoggerCallback(&LoggerCallbackThunk);
+    }
 
     // breadcrumb registration
     _breadcrumbCallback = (severity, msg) =>
     {
       _ = breadcrumbService.ShowMessageAsync("Engine", msg, TimeSpan.FromSeconds(5), (int)severity);
     };
-    unsafe { PInvokeAetherVkCore.avkSetBreadcrumbCallback(&BreadcrumbCallbackThunk); }
+    unsafe
+    {
+      PInvokeAetherVkCore.avkSetBreadcrumbCallback(&BreadcrumbCallbackThunk);
+    }
 
     _uiThreadDispatcher = uiThreadDispatcher;
     _instance = this;
@@ -691,7 +951,10 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   /// Objective-C message sends (e.g. reading <c>MetalLayerPointer</c>) are safe.
   /// </summary>
   [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-  private static unsafe void GetNativeWindowHandleThunk(CNativeWindowHandle* outHandle, nint signalDonePtr)
+  private static unsafe void GetNativeWindowHandleThunk(
+    CNativeWindowHandle* outHandle,
+    nint signalDonePtr
+  )
   {
     var instance = Volatile.Read(ref _instance);
 
@@ -719,7 +982,9 @@ public sealed class NativeRuntimeService : INativeRuntimeService
         if (provider is not null)
           *outHandle = provider();
       }
-      catch { /* must not propagate across unmanaged boundary */ }
+      catch
+      { /* must not propagate across unmanaged boundary */
+      }
       finally
       {
         SignalDone(signalDonePtr);
@@ -753,16 +1018,25 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   /// <c>executeMainThreadCleanup</c> writes <c>1</c> to signal completion.</para>
   /// </summary>
   [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-  private static unsafe void MainThreadDispatchThunk(nint vulkanDevicePtr, int command, nint signalDonePtr)
+  private static unsafe void MainThreadDispatchThunk(
+    nint vulkanDevicePtr,
+    int command,
+    nint signalDonePtr
+  )
   {
     var instance = Volatile.Read(ref _instance);
 
     static void SignalDone(nint ptr)
     {
-      if (ptr != 0) Volatile.Write(ref *(byte*)ptr, 1);
+      if (ptr != 0)
+        Volatile.Write(ref *(byte*)ptr, 1);
     }
 
-    if (instance is null) { SignalDone(signalDonePtr); return; }
+    if (instance is null)
+    {
+      SignalDone(signalDonePtr);
+      return;
+    }
 
     instance._uiThreadDispatcher.Dispatch(() =>
     {
@@ -789,19 +1063,32 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   /// <para>Called on a native thread. Must not throw or block.</para>
   /// </summary>
   [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-  private static void SimulationCallbackEntry(ulong sceneId, ulong entityId, ulong compForeignId, nint dataPtr)
+  private static void SimulationCallbackEntry(
+    ulong sceneId,
+    ulong entityId,
+    ulong compForeignId,
+    nint dataPtr
+  )
   {
     var instance = Volatile.Read(ref _instance);
-    if (instance is null) return;
+    if (instance is null)
+      return;
 
     // Reference read of a volatile ImmutableList — safe, atomic on all supported architectures
     var listeners = instance._simulationListeners;
     foreach (var entry in listeners)
     {
-      if (entry.EntityId != entityId) continue;
-      if (entry.CompForeignId != 0 && entry.CompForeignId != compForeignId) continue;
-      try { entry.Handler(dataPtr); }
-      catch { /* Handler errors must never escape to native */ }
+      if (entry.EntityId != entityId)
+        continue;
+      if (entry.CompForeignId != 0 && entry.CompForeignId != compForeignId)
+        continue;
+      try
+      {
+        entry.Handler(dataPtr);
+      }
+      catch
+      { /* Handler errors must never escape to native */
+      }
     }
   }
 
@@ -814,21 +1101,32 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   private static void ExternalStateCallbackEntry(uint stateId, nint dataPtr)
   {
     var instance = Volatile.Read(ref _instance);
-    if (instance is null) return;
+    if (instance is null)
+      return;
 
     var listeners = instance._externalStateListeners;
     foreach (var entry in listeners)
     {
-      if ((uint)entry.StateType != stateId) continue;
-      try { entry.Handler(dataPtr); }
-      catch { /* Handler errors must never escape to native */ }
+      if ((uint)entry.StateType != stateId)
+        continue;
+      try
+      {
+        entry.Handler(dataPtr);
+      }
+      catch
+      { /* Handler errors must never escape to native */
+      }
     }
   }
 
   // ── Registration API ──────────────────────────────────────────────────────
 
   /// <inheritdoc/>
-  public IDisposable RegisterSimulationListener(ulong entityId, ulong componentForeignId, Action<nint> handler)
+  public IDisposable RegisterSimulationListener(
+    ulong entityId,
+    ulong componentForeignId,
+    Action<nint> handler
+  )
   {
     var entry = new SimListenerEntry(entityId, componentForeignId, handler);
     // Read volatile field into local to avoid CS0420; ImmutableInterlocked provides full memory barrier
@@ -844,7 +1142,10 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   }
 
   /// <inheritdoc/>
-  public IDisposable RegisterExternalStateListener(ExternalStateType stateType, Action<nint> handler)
+  public IDisposable RegisterExternalStateListener(
+    ExternalStateType stateType,
+    Action<nint> handler
+  )
   {
     var entry = new ExtStateListenerEntry(stateType, handler);
     var list = _externalStateListeners;
@@ -870,32 +1171,43 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
   private static void PanicCallbackThunk(nint messagePtr, nuint length)
   {
-    try { _panicCallback?.Invoke(messagePtr, length); }
-    catch { /* must not propagate to native */ }
+    try
+    {
+      _panicCallback?.Invoke(messagePtr, length);
+    }
+    catch
+    { /* must not propagate to native */
+    }
   }
 
   [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
   private static unsafe void LoggerCallbackThunk(byte* utf8Message)
   {
-    if (_loggerCallback == null || utf8Message == null) return;
+    if (_loggerCallback == null || utf8Message == null)
+      return;
     try
     {
       var msg = StringUtils.GetStringFromUtf8(utf8Message) ?? "Unknown log message";
       _loggerCallback.Invoke(msg);
     }
-    catch { /* must not propagate */ }
+    catch
+    { /* must not propagate */
+    }
   }
 
   [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
   private static unsafe void BreadcrumbCallbackThunk(uint severity, byte* utf8Message)
   {
-    if (_breadcrumbCallback == null || utf8Message == null) return;
+    if (_breadcrumbCallback == null || utf8Message == null)
+      return;
     try
     {
       var msg = StringUtils.GetStringFromUtf8(utf8Message) ?? "Unknown breadcrumb message";
       _breadcrumbCallback.Invoke(severity, msg);
     }
-    catch { /* must not propagate */ }
+    catch
+    { /* must not propagate */
+    }
   }
 
   // ── INativeRuntimeService — Lifecycle stubs ───────────────────────────────
@@ -905,7 +1217,8 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   {
     // 1. Setup Asset path
     var assetPath = Path.Combine(AppContext.BaseDirectory, "assets");
-    if (!Directory.Exists(assetPath)) throw new InvalidOperationException($"Asset Path {assetPath} doesn't exist");
+    if (!Directory.Exists(assetPath))
+      throw new InvalidOperationException($"Asset Path {assetPath} doesn't exist");
 
     unsafe
     { // scope stackalloc
@@ -924,10 +1237,7 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     // TODO: Probably expose this stuff to Preferences menu?
     string start = "2025-10-01T12:00:00";
     string end = "2025-11-11T12:00:00";
-    var startupParams = new CStartupParameters
-    {
-      StartRange = CTimeRange.FromStrings(start, end),
-    };
+    var startupParams = new CStartupParameters { StartRange = CTimeRange.FromStrings(start, end) };
     var returnParams = new CStartupReturn();
 
     unsafe
@@ -959,7 +1269,8 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     Func<CNativeWindowHandle>? nativeHandleProvider,
     uint handleType,
     out ulong presentationEngineId,
-    out ulong cameraEntityId)
+    out ulong cameraEntityId
+  )
   {
     presentationEngineId = 0;
     cameraEntityId = 0;
@@ -976,9 +1287,18 @@ public sealed class NativeRuntimeService : INativeRuntimeService
         Encoding.UTF8.GetBytes(pName, name.Length, utf8Name, byteCount);
       utf8Name[byteCount] = 0;
 
-      ulong pe = 0, cam = 0;
+      ulong pe = 0,
+        cam = 0;
       bool ok = PInvokeAetherVkCore.avkSimulationContext_addViewport(
-        _ctx, _sceneId, width, height, utf8Name, handleType, &pe, &cam);
+        _ctx,
+        _sceneId,
+        width,
+        height,
+        utf8Name,
+        handleType,
+        &pe,
+        &cam
+      );
 
       if (ok)
       {
@@ -1028,52 +1348,262 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   {
     var dto = animation.ToDTO();
     return PInvokeAetherVkCore.avkSimulationContext_addCameraAnimation(
-      _ctx, _sceneId, cameraId, &dto);
+      _ctx,
+      _sceneId,
+      cameraId,
+      &dto
+    );
   }
 
-  public bool TransformStaticCamera(ulong cameraId, int mode, nint buffer)
+  // ── Camera transform typed methods (all map to avkSimulationContext_transformStaticCamera) ──
+
+  public unsafe bool CameraSetRotoTranslate(
+    ulong cameraId,
+    System.Numerics.Vector3 position,
+    System.Numerics.Quaternion rotation
+  )
   {
-    throw new NotImplementedException();
+    // mode 2: disp_x | disp_y | disp_z | quat_x | quat_y | quat_z | quat_w  [f32; 7]
+    float* buf = stackalloc float[7]
+    {
+      position.X,
+      position.Y,
+      position.Z,
+      rotation.X,
+      rotation.Y,
+      rotation.Z,
+      rotation.W,
+    };
+    return PInvokeAetherVkCore.avkSimulationContext_transformStaticCamera(
+      _ctx,
+      _sceneId,
+      cameraId,
+      mode: 2,
+      (nint)buf
+    );
+  }
+
+  public unsafe bool CameraSetPerspective(
+    ulong cameraId,
+    float fov,
+    float aspectRatio,
+    float near,
+    float far
+  )
+  {
+    // mode 1: fov | aspect_ratio | near | far  [f32; 4]
+    float* buf = stackalloc float[4] { fov, aspectRatio, near, far };
+    return PInvokeAetherVkCore.avkSimulationContext_transformStaticCamera(
+      _ctx,
+      _sceneId,
+      cameraId,
+      mode: 1,
+      (nint)buf
+    );
+  }
+
+  public unsafe bool CameraSetOrthographic(
+    ulong cameraId,
+    float left,
+    float right,
+    float bottom,
+    float top,
+    float near,
+    float far
+  )
+  {
+    // mode 0: left | right | bottom | top | near | far  [f32; 6]
+    float* buf = stackalloc float[6] { left, right, bottom, top, near, far };
+    return PInvokeAetherVkCore.avkSimulationContext_transformStaticCamera(
+      _ctx,
+      _sceneId,
+      cameraId,
+      mode: 0,
+      (nint)buf
+    );
   }
 
   // ── INativeRuntimeService — Particle Systems ──────────────────────────────
 
-  public bool AddParticleSystem(ParticleSystemModel psModel, ParticleSystemJet psJet, out ulong outPsId)
+  public unsafe bool AddParticleSystem(
+    ParticleSystemModel psModel,
+    ParticleSystemJet psJet,
+    out ulong outPsId
+  )
   {
-    throw new NotImplementedException();
+    var dto = new ParticleSystemDTO(psModel, psJet);
+    ulong psId = 0;
+    bool ok = PInvokeAetherVkCore.avkSimulationContext_addParticleSystem(
+      _ctx,
+      _sceneId,
+      &dto,
+      &psId,
+      null
+    );
+    outPsId = psId;
+    return ok;
   }
 
-  public ParticleSystemComputedProperties? AddFirstParticleSystem(ParticleSystemModel psModel, ParticleSystemJet psJet, out ulong outPsId)
+  public unsafe ParticleSystemComputedProperties? AddFirstParticleSystem(
+    ParticleSystemModel psModel,
+    ParticleSystemJet psJet,
+    out ulong outPsId
+  )
   {
-    throw new NotImplementedException();
+    var dto = new ParticleSystemDTO(psModel, psJet);
+    ulong psId = 0;
+    var computed = new ParticleSystemComputedDTO();
+    bool ok = PInvokeAetherVkCore.avkSimulationContext_addParticleSystem(
+      _ctx,
+      _sceneId,
+      &dto,
+      &psId,
+      &computed
+    );
+    outPsId = psId;
+    if (!ok)
+      return null;
+    return new ParticleSystemComputedProperties(computed.Beta, computed.DustProductionRateAt1AuKgs);
   }
 
-  public bool ModifyParticleSystem(ulong psId, ParticleSystemModel psModel, ParticleSystemJet psJet, out ParticleSystemComputedProperties outPsComputedProps)
+  public unsafe bool ModifyParticleSystem(
+    ulong psId,
+    ParticleSystemModel psModel,
+    ParticleSystemJet psJet,
+    out ParticleSystemComputedProperties outPsComputedProps
+  )
   {
-    throw new NotImplementedException();
+    var dto = new ParticleSystemDTO(psModel, psJet);
+    var computed = new ParticleSystemComputedDTO();
+    bool ok = PInvokeAetherVkCore.avkSimulationContext_modifyParticleSystem(
+      _ctx,
+      _sceneId,
+      psId,
+      &dto,
+      &computed
+    );
+    outPsComputedProps = new ParticleSystemComputedProperties(
+      computed.Beta,
+      computed.DustProductionRateAt1AuKgs
+    );
+    return ok;
+  }
+
+  public bool RemoveParticleSystem(ulong psId)
+  {
+    if (_ctx == 0 || _sceneId == 0 || psId == 0)
+      return false;
+    return PInvokeAetherVkCore.avkSimulationContext_removeParticleSystem(_ctx, _sceneId, psId);
   }
 
   // ── INativeRuntimeService — Orbital Mechanics & Almanacs ─────────────────
 
-  public bool ReconfigureComet()
+  public unsafe bool ReconfigureComet(int commandFlags, int spkId, out ulong cometBodyId)
   {
-    // TODO (Rust): store returned out_comet_entity_id into CometEntityId
-    throw new NotImplementedException();
+    ulong cometId = 0;
+    bool ok = PInvokeAetherVkCore.avkSimulationContext_reconfigureComet(
+      _ctx,
+      _sceneId,
+      commandFlags,
+      spkId,
+      &cometId
+    );
+    cometBodyId = cometId;
+    // Update cached entity id when ATTACH succeeds and id is non-zero
+    if (ok && cometId != 0)
+      CometEntityId = cometId;
+    return ok;
   }
 
-  public Task<ulong> LoadAlmanacFileAsync(string path)
+  public unsafe bool SetBodyRotationalModel(ulong cometBodyEntityId, BodyRotationalModelDto dto)
   {
-    throw new NotImplementedException();
+    var cDto = dto.ToDto();
+    return PInvokeAetherVkCore.avkSimulationContext_setBodyRotationalModel(
+      _ctx,
+      _sceneId,
+      cometBodyEntityId,
+      &cDto
+    );
   }
 
-  public bool UnloadAlmanacFile(string path)
+  public unsafe Task<ulong> LoadAlmanacFileAsync(string path)
   {
-    throw new NotImplementedException();
+    int byteCount = Encoding.UTF8.GetByteCount(path);
+    byte* utf8Path = stackalloc byte[byteCount + 1];
+    fixed (char* pPath = path)
+      Encoding.UTF8.GetBytes(pPath, path.Length, utf8Path, byteCount);
+    utf8Path[byteCount] = 0;
+
+    // The load is fire-and-forget to the logic thread; completion arrives via
+    // ExternalState::AlmanacImported callback. We return a TCS that CometConfigService
+    // resolves when that callback fires.
+    var tcs = new TaskCompletionSource<ulong>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // Cancel the TCS immediately if the service is being disposed so that callers
+    // (e.g. CommitCometAsync) unblock without waiting for a callback that will never arrive.
+    CancellationTokenRegistration shutdownReg = _shutdownCts.Token.Register(() =>
+      tcs.TrySetCanceled()
+    );
+
+    // Register a one-shot listener for AlmanacImported that resolves the TCS.
+    // The listener stays alive for non-load events (e.g. a concurrent unload, operation=2)
+    // and only self-disposes on the load-success event (operation=1).
+    IDisposable? token = null;
+    token = RegisterExternalStateListener(
+      ExternalStateType.AlmanacImported,
+      dataPtr =>
+      {
+        unsafe
+        {
+          var dto = *(CAlmanacImportedDTO*)dataPtr;
+          if (dto.Operation != 1)
+            return; // unload or load-failure event — keep listening
+        }
+
+        token?.Dispose();
+        shutdownReg.Dispose();
+        unsafe
+        {
+          var dto = *(CAlmanacImportedDTO*)dataPtr;
+          // Cast via uint first to zero-extend rather than sign-extend the i32 naif_id.
+          tcs.TrySetResult((ulong)(uint)dto.NaifId);
+        }
+      }
+    );
+
+    bool enqueued = PInvokeAetherVkCore.avkSimulationContext_loadAlmanacFile(_ctx, utf8Path);
+    if (!enqueued)
+    {
+      token?.Dispose();
+      shutdownReg.Dispose();
+      tcs.TrySetException(
+        new InvalidOperationException(
+          $"LoadAlmanacFile: failed to enqueue command for path '{path}'"
+        )
+      );
+    }
+
+    return tcs.Task;
+  }
+
+  public unsafe bool UnloadAlmanacFile(string path)
+  {
+    int byteCount = Encoding.UTF8.GetByteCount(path);
+    byte* utf8Path = stackalloc byte[byteCount + 1];
+    fixed (char* pPath = path)
+      Encoding.UTF8.GetBytes(pPath, path.Length, utf8Path, byteCount);
+    utf8Path[byteCount] = 0;
+    return PInvokeAetherVkCore.avkSimulationContext_unloadAlmanacFile(_ctx, utf8Path);
   }
 
   // ── INativeRuntimeService — Timeline ─────────────────────────────────────
 
-  public unsafe bool SetEpochRange(short startCenturies, ulong startNs, short endCenturies, ulong endNs)
+  public unsafe bool SetEpochRange(
+    short startCenturies,
+    ulong startNs,
+    short endCenturies,
+    ulong endNs
+  )
   {
     var range = new CTimeRange();
     range.Nanoseconds[0] = startNs;
@@ -1083,7 +1613,13 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     return PInvokeAetherVkCore.avkSimulationContext_setEpochRange(_ctx, _sceneId, &range);
   }
 
-  public unsafe bool CheckAlmanacCoverage(int spkId, short startCenturies, ulong startNs, short endCenturies, ulong endNs)
+  public unsafe bool CheckAlmanacCoverage(
+    int spkId,
+    short startCenturies,
+    ulong startNs,
+    short endCenturies,
+    ulong endNs
+  )
   {
     var range = new CTimeRange();
     range.Nanoseconds[0] = startNs;
@@ -1131,10 +1667,18 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public void Dispose()
   {
+    // Signal shutdown to any in-flight async operations (CommitCometAsync, LoadAlmanacFileAsync)
+    // before tearing down the native context, so they can abort rather than hanging.
+    _shutdownCts.Cancel();
     _instance = null;
-    if (_ctx == 0) return;
+    if (_ctx == 0)
+    {
+      _shutdownCts.Dispose();
+      return;
+    }
 
     ShutdownSync();
+    _shutdownCts.Dispose();
   }
 }
 
@@ -1163,7 +1707,8 @@ public record ParticleSystemModel(
   float Afrho0Cm,
   float AfrhoPower,
   float AfrhoCutoffAu,
-  float AfrhoMaxValueCm);
+  float AfrhoMaxValueCm
+);
 
 /// <summary>
 /// Visual and dispersion Properties of a dust jet
@@ -1174,11 +1719,12 @@ public record ParticleSystemJet(
   float ApertureRad,
   float StartVelocityMean,
   float StartVelocityStd,
-  Vector4 StreamColor);
+  Vector4 StreamColor,
+  float NucleusRadiusKm,
+  uint Seed
+);
 
-public record ParticleSystemComputedProperties(
-  float Beta,
-  float DustProductionRateAt1AuKgs);
+public record ParticleSystemComputedProperties(float Beta, float DustProductionRateAt1AuKgs);
 
 public record ScreenSpaceBillboard(
   float NdcX,
@@ -1186,7 +1732,8 @@ public record ScreenSpaceBillboard(
   float Scale,
   float RotationDeg,
   float Opacity,
-  uint ZIndex);
+  uint ZIndex
+);
 
 #endregion
 
@@ -1213,6 +1760,7 @@ public struct CNativeWindowHandle
 {
   /// <summary>Display* (Xlib) | HINSTANCE (Win32) | CAMetalLayer* (macOS) — as u64.</summary>
   public ulong Field0;
+
   /// <summary>Window/XID (Xlib) | HWND (Win32) | 0 (macOS) — as u64.</summary>
   public ulong Field1;
 }
@@ -1263,6 +1811,9 @@ internal readonly struct ParticleSystemDTO(ParticleSystemModel model, ParticleSy
   public readonly float StreamColor1 = jet.StreamColor.Y;
   public readonly float StreamColor2 = jet.StreamColor.Z;
   public readonly float StreamColor3 = jet.StreamColor.W;
+
+  public readonly float NucleusRadiusKm = jet.NucleusRadiusKm;
+  public readonly uint Seed = jet.Seed;
 }
 
 /// <summary>
@@ -1304,12 +1855,33 @@ public enum ExternalStateType : uint
 
 /// <summary>
 /// C# representation of aethervk_core_rlib::simulation_api::external_state::ExternalState
-/// <c>CAlmanacImported</c> arm.
+/// <c>CAlamanacImported</c> arm.
+///
+/// Layout (40 bytes, matches Rust <c>#[repr(C)]</c>):
+/// <list type="bullet">
+///   <item><c>Operation : u32</c> — 0 = load failed, 1 = loaded, 2 = unloaded.</item>
+///   <item><c>NaifId   : i32</c> — discovered NAIF/SPK body ID; 0 if unknown or on unload.</item>
+///   <item><c>PathBytes : [u8; 32]</c> — UTF-8 basename, null-terminated.</item>
+/// </list>
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 internal unsafe struct CAlmanacImportedDTO
 {
-  public uint WasSuccessful; // 0 = no, !=0 = yes
+  /// <summary>
+  /// Operation discriminant mirroring <c>CAlamanacImported.operation</c> in Rust:
+  /// <list type="bullet">
+  ///   <item>0 = load failed</item>
+  ///   <item>1 = loaded successfully</item>
+  ///   <item>2 = unloaded successfully</item>
+  /// </list>
+  /// </summary>
+  public uint Operation;
+
+  /// <summary>
+  /// Discovered NAIF/SPK body ID. 0 when unknown, multi-body, load failed, or on unload.
+  /// </summary>
+  public int NaifId;
+
   public fixed byte PathBytes[32];
 
   // Helper to extract the string cleanly
@@ -1319,7 +1891,8 @@ internal unsafe struct CAlmanacImportedDTO
     {
       // find null terminator (Assuming UTF-8 from Rust)
       int len = 0;
-      while (len < 32 && p[len] != 0) len++;
+      while (len < 32 && p[len] != 0)
+        len++;
       return Encoding.UTF8.GetString(p, len);
     }
   }
@@ -1341,7 +1914,8 @@ internal unsafe struct CModelImportedDTO
     fixed (byte* p = PathBytes)
     {
       int len = 0;
-      while (len < 32 && p[len] != 0) len++;
+      while (len < 32 && p[len] != 0)
+        len++;
       return Encoding.UTF8.GetString(p, len);
     }
   }
@@ -1352,7 +1926,6 @@ internal unsafe struct CTimeRange
 {
   public fixed ulong Nanoseconds[2];
   public fixed short Centuries[2];
-
 
   internal static CTimeRange FromStrings(string isoStart, string isoEnd)
   {
@@ -1409,6 +1982,7 @@ internal readonly struct HighResTransformDTO
   public readonly float ScaleX;
   public readonly float ScaleY;
   public readonly float ScaleZ;
+
   /// <summary>Padding to reach 56 bytes. Must not be read.</summary>
   private readonly uint _pad;
 }
@@ -1430,6 +2004,7 @@ internal readonly struct CameraProjectionDTO
   public readonly float Bottom;
   public readonly float Top;
   public readonly float FocusDistance;
+
   /// <summary>0 = Perspective, 1 = Orthographic.</summary>
   public readonly byte IsOrthographic;
   private readonly byte _pad0;
@@ -1466,4 +2041,3 @@ internal struct SceneHierarchyDTO
 #endif
 
 #endregion
-

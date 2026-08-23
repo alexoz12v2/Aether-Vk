@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use std::println;
 
 fn panic_error_callback(msg: &str) {
+  println!("Vulkan Validation Error in test: {}", msg);
   panic!("Vulkan Error: {}", msg);
 }
 
@@ -15,7 +16,7 @@ fn get_test_context() -> Option<*mut SimulationContext> {
   let asset_dir = format!("{}/../../assets", env!("CARGO_MANIFEST_DIR"));
   SimulationContext::set_asset_path(&asset_dir);
 
-  let ctx_ptr = SimulationContext::startup(gpu::VULKAN_RENDER_BACKEND, Some(panic_error_callback));
+  let ctx_ptr = SimulationContext::startup(Some(panic_error_callback));
   if let Ok(boxed) = ctx_ptr {
     return Some(alloc::boxed::Box::into_raw(boxed));
   }
@@ -50,7 +51,13 @@ fn test_lca_render() {
     unsafe {
       let ctx = &mut *ctx_ptr;
 
-      let scene_id = ctx.create_empty_scene(true).unwrap();
+      let scene_id = ctx
+        .create_empty_scene(
+          true,
+          hifitime::Epoch::from_gregorian_at_midnight(2020, 12, 25, hifitime::TimeScale::UTC),
+          hifitime::Epoch::from_gregorian_at_midnight(2020, 12, 26, hifitime::TimeScale::UTC),
+        )
+        .unwrap();
 
       // Create an LCA microframe
       let name = alloc::ffi::CString::new("TestLCA").unwrap();
@@ -69,8 +76,13 @@ fn test_lca_render() {
       let mut scene_ctx = ctx.get_scene(scene_id).unwrap();
       {
         let mut guard = scene_ctx.write();
+        let root_eid = guard.root_entity;
+        let lca_eid = slotmap::KeyData::from_ffi(lca_id).into();
+        // Parent to root so lca_id doesn't become a spurious scene root,
+        // which would break scene_conversion's depth_layer == 0 invariant check.
+        guard.scene.set_parent(lca_eid, Some(root_eid));
         let _ = guard.scene.add_component(
-          slotmap::KeyData::from_ffi(lca_id).into(),
+          lca_eid,
           crate::scene::ReferenceFrameComponent {
             frame_type: crate::scene::ReferenceFrameType::Micro,
             scale: 1.0 / 149597870.7, // 1/KM_PER_AU
@@ -118,11 +130,12 @@ fn test_lca_render() {
       let sky_id = ctx.spawn_entity(scene_id, sky_name.to_str().unwrap()).unwrap();
       ctx.add_sky_component(scene_id, sky_id).unwrap();
 
-      let _ = ctx
-        .threads
-        .logic_thread
-        .tx()
-        .try_send(crate::simulation_api::structs::LogicCommand::PlayScene { scene_id });
+      let _ = ctx.threads.logic_thread.tx().try_send(
+        crate::simulation_api::structs::LogicCommand::PlayScene {
+          scene_id,
+          speed: aethervk_oshal_rlib::os::time::v2::SimSpeed::Realtime,
+        },
+      );
 
       let mut ready = false;
       for _ in 0..100 {
@@ -148,7 +161,7 @@ fn test_lca_render() {
         }
 
         let mut buffer = vec![0u8; (width * height * 4) as usize];
-        if ctx.download_image(tid, buffer.as_mut_ptr(), buffer.len()) {
+        if unsafe { ctx.download_image(tid, buffer.as_mut_ptr(), buffer.len()) } {
           // Just assert we successfully downloaded
           assert!(buffer.len() > 0, "Downloaded buffer should not be empty");
 

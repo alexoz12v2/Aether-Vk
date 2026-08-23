@@ -83,6 +83,22 @@ public unsafe class LinuxNativeInputHandler(IntPtr handle, string handleDescript
     _cts?.Cancel();
   }
 
+  /// <inheritdoc/>
+  /// <remarks>
+  /// The overlay Avalonia window sits on top of the viewport XID in the X11 stacking order and
+  /// intercepts all pointer events. This means XSetInputFocus is never called from ButtonPress
+  /// inside ManageDragGrab. Calling FocusViewportWindow() explicitly (from the overlay's
+  /// transparent-area pointer handler) restores keyboard focus to the viewport XID so that
+  /// KeyPress events are delivered to the X11 event loop and composed keystrokes fire.
+  /// </remarks>
+  public override void FocusViewportWindow()
+  {
+    if (_display == 0 || _handle == IntPtr.Zero) return;
+    PInvokeX11.XSetInputFocus(_display, (nint)_handle, 2 /*RevertToParent*/, 0 /*CurrentTime*/);
+    PInvokeX11.XFlush(_display);
+    if (_traceLevel >= TraceLevel.Verbose)
+      Log(TraceLevel.Verbose, $"FocusViewportWindow: focus set to XID 0x{_handle:X}");
+  }
 
   protected override void DoSetSolidColor(byte r, byte g, byte b)
   {
@@ -105,13 +121,20 @@ public unsafe class LinuxNativeInputHandler(IntPtr handle, string handleDescript
   /// </summary>
   public override void Dispose()
   {
-    base.Dispose(); // signals _rawInputSubject.OnCompleted and calls UnhookEvents via dispatcher
+    // 1. Signal the event loop to stop FIRST — thread-safe, no UI thread needed.
+    //    This must happen before base.Dispose() completes the Rx subject so the
+    //    background thread cannot call OnNext on a disposed subject.
+    _cts?.Cancel();
 
-    // Now wait for the background task to finish — this is called from the ViewModel's Dispose
-    // which is NOT on the UI thread.
+    // 2. Wait for the background task to fully exit (max 1 s).
+    //    After this point no more PublishKeyEvent / PublishMouseEvent calls will happen.
     _eventLoopTask?.Wait(1000);
     _eventLoopTask = null;
 
+    // 3. Now it is safe to complete and dispose the Rx subject (done by base).
+    base.Dispose(); // calls UnhookEvents() → _cts.Cancel() again (idempotent), then disposes subject
+
+    // 4. Close the secondary X11 display connection.
     if (_display != 0)
     {
       PInvokeX11.XCloseDisplay(_display);
@@ -400,6 +423,21 @@ public unsafe static class PInvokeX11
 
   [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   internal static extern int XFlush(nint display);
+
+  /// <summary>Interns an atom name, returning its numeric ID.</summary>
+  [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern nint XInternAtom(nint display,
+    [MarshalAs(UnmanagedType.LPStr)] string atom_name, bool only_if_exists);
+
+  /// <summary>
+  /// Changes a property on the specified window.
+  /// <paramref name="data"/> must point to an array of <paramref name="nelements"/> values.
+  /// Pass <c>0</c> for <paramref name="data"/> and <c>0</c> for <paramref name="nelements"/>
+  /// to set an empty property list.
+  /// </summary>
+  [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int XChangeProperty(nint display, nint window,
+    nint property, nint type, int format, int mode, nint data, int nelements);
 
   [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   internal static extern int XSetWindowBackground(nint display, nint window, nuint backgroundPixel);

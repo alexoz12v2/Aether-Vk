@@ -1,0 +1,281 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="using:AetherVk.UI"
+        xmlns:vm="using:AetherVk.Logic.ViewModels"
+        xmlns:conv="using:AetherVk.Converters"
+        x:DataType="vm:ViewportOverlayViewModel"
+        x:Class="AetherVk.UI.OverlayWindow"
+        SystemDecorations="None"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Focusable="False"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
+        Topmost="True">
+
+  <Panel Name="TransparentRoot" Background="Transparent">
+
+    <Border HorizontalAlignment="Right" VerticalAlignment="Top"
+            Margin="10,10,10,0"
+            CornerRadius="10"
+            Background="{DynamicResource Bg.Surface}" Opacity="0.85"
+            BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+            ClipToBounds="True"
+            Classes.expanded="{Binding IsModeIndicatorExpanded}">
+
+      <Border.Styles>
+        <Style Selector="Border">
+          <Setter Property="MaxWidth" Value="44"/>
+        </Style>
+        <Style Selector="Border.expanded">
+          <Setter Property="MaxWidth" Value="210"/>
+        </Style>
+      </Border.Styles>
+      <Border.Transitions>
+        <Transitions>
+          <DoubleTransition Property="MaxWidth" Duration="0:0:0.32" Easing="CubicEaseInOut"/>
+        </Transitions>
+      </Border.Transitions>
+
+      <StackPanel Orientation="Horizontal" Spacing="0" Margin="12,8">
+        <Viewbox Width="20" Height="20" Stretch="Uniform">
+          
+          <Grid>
+            <Canvas Width="16" Height="16" IsVisible="{Binding IsModeEarthPosition}">
+              <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2" Fill="Transparent"
+                    Data="M 8 1 A 7 7 0 1 1 7.999 1 Z
+                          M 1 8 L 15 8
+                          M 8 1 C 12 1 12 15 8 15
+                          M 8 1 C 4 1 4 15 8 15"/>
+            </Canvas>
+
+            <Canvas Width="16" Height="16" IsVisible="{Binding IsModeUpZenith}">
+              <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2"
+                    StrokeLineCap="Round" StrokeJoin="Round" Fill="Transparent"
+                    Data="M 0 15 L 16 15
+                          M 8 13 L 8 2
+                          M 4 7 L 8 2 L 12 7"/>
+            </Canvas>
+
+            <Canvas Width="16" Height="16" IsVisible="{Binding IsModeCometOrbiting}">
+              <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2" Fill="Transparent"
+                    Data="M 1 8 A 7 3.5 0 0 1 15 8 A 7 3.5 0 0 1 1 8 Z"/>
+              <Ellipse Canvas.Left="11" Canvas.Top="5" Width="4" Height="4"
+                       Fill="{DynamicResource Text.Primary}"/>
+            </Canvas>
+          </Grid>
+        </Viewbox>
+
+        <TextBlock Text="{Binding CameraModeName}"
+                   FontSize="13" FontWeight="SemiBold"
+                   Foreground="{DynamicResource Text.Primary}"
+                   VerticalAlignment="Center"
+                   Margin="8,0,0,0"
+                   Classes.expanded="{Binding IsModeIndicatorExpanded}">
+          <TextBlock.Styles>
+            <Style Selector="TextBlock">
+              <Setter Property="Opacity" Value="0"/>
+            </Style>
+            <Style Selector="TextBlock.expanded">
+              <Setter Property="Opacity" Value="1"/>
+            </Style>
+          </TextBlock.Styles>
+          <TextBlock.Transitions>
+            <Transitions>
+              <DoubleTransition Property="Opacity" Duration="0:0:0.18"/>
+            </Transitions>
+          </TextBlock.Transitions>
+        </TextBlock>
+      </StackPanel>
+    </Border>
+
+    <ItemsControl ItemsSource="{Binding Billboards}">
+      <ItemsControl.ItemsPanel>
+        <ItemsPanelTemplate>
+          <Canvas />
+        </ItemsPanelTemplate>
+      </ItemsControl.ItemsPanel>
+      <ItemsControl.ItemTemplate>
+        <DataTemplate DataType="vm:BillboardViewModel">
+          <Grid RenderTransformOrigin="50%,50%">
+            <Grid.RenderTransform>
+              <RotateTransform Angle="{Binding Rotation}" />
+            </Grid.RenderTransform>
+
+            <StackPanel Orientation="Vertical">
+              <!-- No conv reference because we don't have it here... Wait, we do! But we need xmlns.
+                   Let's add xmlns:conv="using:AetherVk.Converters" to the Window -->
+              <Image Source="{Binding ImageSource, Converter={x:Static conv:FilePathToBitmapConverter.Instance}}"
+                     Width="{Binding ScaledWidth}" Height="{Binding ScaledHeight}" Opacity="{Binding Opacity}"
+                     IsVisible="{Binding ImageSource, Converter={x:Static ObjectConverters.IsNotNull}}"
+                     IsHitTestVisible="{Binding IsSelected}"
+                     Cursor="SizeAll" />
+              <Border Background="{DynamicResource Bg.Surface}" CornerRadius="4" Padding="4"
+                      IsVisible="{Binding Text, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Text="{Binding Text}" Foreground="{DynamicResource Text.Primary}"
+                           FontWeight="Bold" FontSize="14" HorizontalAlignment="Center"/>
+              </Border>
+            </StackPanel>
+
+            <Border IsVisible="{Binding IsSelected}" IsHitTestVisible="False"
+                    BorderBrush="{DynamicResource Accent.Primary}" BorderThickness="2"
+                    CornerRadius="4" Margin="-4" Padding="0" Background="Transparent" />
+
+            <Button IsVisible="{Binding IsSelected}"
+                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Width="20" Height="20" Padding="0"
+                    Background="{DynamicResource Sem.Error}" Foreground="White"
+                    CornerRadius="10" FontSize="10" Content="✕"
+                    Command="{Binding $parent[ItemsControl].((vm:ViewportOverlayViewModel)DataContext).RemoveBillboardCommand}"
+                    CommandParameter="{Binding}"
+                    Margin="0,-12,-12,0" />
+
+            <Ellipse IsVisible="{Binding IsSelected}" Width="10" Height="10"
+                     Fill="{DynamicResource Sem.Warning}" Stroke="White" StrokeThickness="1"
+                     HorizontalAlignment="Left" VerticalAlignment="Top"
+                     Margin="-5,-5,0,0" Cursor="TopLeftCorner" />
+            <Ellipse IsVisible="{Binding IsSelected}" Width="10" Height="10"
+                     Fill="{DynamicResource Sem.Warning}" Stroke="White" StrokeThickness="1"
+                     HorizontalAlignment="Right" VerticalAlignment="Top"
+                     Margin="0,-5,-5,0" Cursor="TopRightCorner" />
+            <Ellipse IsVisible="{Binding IsSelected}" Width="10" Height="10"
+                     Fill="{DynamicResource Sem.Warning}" Stroke="White" StrokeThickness="1"
+                     HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                     Margin="-5,0,0,-5" Cursor="BottomLeftCorner" />
+            <Ellipse IsVisible="{Binding IsSelected}" Width="10" Height="10"
+                     Fill="{DynamicResource Sem.Warning}" Stroke="White" StrokeThickness="1"
+                     HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                     Margin="0,0,-5,-5" Cursor="BottomRightCorner" />
+
+            <Ellipse IsVisible="{Binding IsSelected}"
+                     Width="14" Height="14" Fill="{DynamicResource Accent.Primary}"
+                     Stroke="White" StrokeThickness="1.5"
+                     HorizontalAlignment="Center" VerticalAlignment="Top"
+                     Margin="0,-20,0,0" Cursor="Hand"
+                     ToolTip.Tip="Drag to rotate (Ctrl = 15° snap)" />
+          </Grid>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+      <ItemsControl.Styles>
+        <Style Selector="ContentPresenter" x:DataType="vm:BillboardViewModel">
+          <Setter Property="Canvas.Left" Value="{Binding X}" />
+          <Setter Property="Canvas.Top" Value="{Binding Y}" />
+          <Setter Property="ZIndex" Value="{Binding ZIndex}" />
+          <Setter Property="IsVisible" Value="{Binding IsEntityVisible}" />
+        </Style>
+      </ItemsControl.Styles>
+    </ItemsControl>
+
+    <Canvas x:Name="GoniometerOverlay" IsHitTestVisible="False" IsVisible="False" />
+
+    <Canvas IsHitTestVisible="False" IsVisible="{Binding IsRadialMenuOpen}">
+      <Canvas.Styles>
+        <Style Selector="Border.radial-item">
+          <Setter Property="Background" Value="{DynamicResource Bg.Surface}"/>
+          <Setter Property="BorderBrush" Value="{DynamicResource Bg.Outline}"/>
+          <Setter Property="BorderThickness" Value="1"/>
+          <Setter Property="CornerRadius" Value="12"/>
+          <Setter Property="Width" Value="80"/>
+          <Setter Property="Height" Value="80"/>
+          <Setter Property="Padding" Value="6"/>
+          <Setter Property="Opacity" Value="0.92"/>
+          <Setter Property="Transitions">
+            <Transitions>
+              <DoubleTransition Property="Opacity" Duration="0:0:0.1"/>
+              <BrushTransition Property="BorderBrush" Duration="0:0:0.1"/>
+              <ThicknessTransition Property="BorderThickness" Duration="0:0:0.1"/>
+            </Transitions>
+          </Setter>
+        </Style>
+        <Style Selector="Border.radial-item.hovered">
+          <Setter Property="Background" Value="{DynamicResource Bg.Raised}"/>
+          <Setter Property="BorderBrush" Value="{DynamicResource Accent.Primary}"/>
+          <Setter Property="BorderThickness" Value="2"/>
+          <Setter Property="Opacity" Value="1"/>
+        </Style>
+        <Style Selector="Border.radial-item TextBlock.label">
+          <Setter Property="FontSize" Value="10"/>
+          <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+          <Setter Property="TextAlignment" Value="Center"/>
+          <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style Selector="Border.radial-item TextBlock.icon">
+          <Setter Property="FontSize" Value="22"/>
+          <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+          <Setter Property="HorizontalAlignment" Value="Center"/>
+        </Style>
+      </Canvas.Styles>
+
+      <Ellipse Width="16" Height="16"
+               Fill="{DynamicResource Accent.Primary}" Opacity="0.7"
+               Canvas.Left="{Binding RadialHubLeft}"
+               Canvas.Top="{Binding RadialHubTop}"/>
+
+      <Border Classes="radial-item"
+              Classes.hovered="{Binding IsCometHovered}"
+              Canvas.Left="{Binding RadialCometLeft}"
+              Canvas.Top="{Binding RadialCometTop}"
+              ToolTip.Tip="{Binding CometRadialTooltip}">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+          <TextBlock Classes="icon" Text="☄"/>
+          <TextBlock Classes="label" Text="{Binding CometRadialLabel}"/>
+        </StackPanel>
+      </Border>
+
+      <Border Classes="radial-item"
+              Classes.hovered="{Binding IsBillboardHovered}"
+              Canvas.Left="{Binding RadialBillboardLeft}"
+              Canvas.Top="{Binding RadialBillboardTop}">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+          <TextBlock Classes="icon" Text="🖼"/>
+          <TextBlock Classes="label" Text="Billboard"/>
+        </StackPanel>
+      </Border>
+
+      <Border Classes="radial-item"
+              Classes.hovered="{Binding IsResetCameraHovered}"
+              Canvas.Left="{Binding RadialResetCameraLeft}"
+              Canvas.Top="{Binding RadialResetCameraTop}">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+          <TextBlock Classes="icon" Text="🎥"/>
+          <TextBlock Classes="label" Text="Reset&#x0a;Camera"/>
+        </StackPanel>
+      </Border>
+
+      <Border Classes="radial-item"
+              Classes.hovered="{Binding IsSnapHovered}"
+              Canvas.Left="{Binding RadialSnapLeft}"
+              Canvas.Top="{Binding RadialSnapTop}">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+          <TextBlock Classes="icon" Text="🔍"/>
+          <TextBlock Classes="label" Text="Snap to&#x0a;Selected"/>
+        </StackPanel>
+      </Border>
+
+      <Border Classes="radial-item"
+              Classes.hovered="{Binding IsSnapObserverHovered}"
+              Canvas.Left="{Binding RadialSnapObserverLeft}"
+              Canvas.Top="{Binding RadialSnapObserverTop}"
+              IsVisible="{Binding IsModeEarthPosition}">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+          <TextBlock Classes="icon" Text="🌍"/>
+          <TextBlock Classes="label" Text="Snap&#x0a;Observer"/>
+        </StackPanel>
+      </Border>
+    </Canvas>
+
+    <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="10" Padding="10,5"
+            Background="Transparent"
+            IsVisible="{Binding ShowMeasurementIndicator}">
+      <StackPanel Spacing="2">
+        <TextBlock Text="{Binding MeasurementIndicatorText}" FontSize="12" Foreground="{DynamicResource Text.Primary}" HorizontalAlignment="Center" FontWeight="Bold"/>
+        <Grid Width="{Binding MeasurementIndicatorWidth}" Height="8" HorizontalAlignment="Center">
+          <Border Height="2" Background="{DynamicResource Text.Primary}" VerticalAlignment="Center" />
+          <Border Width="2" Background="{DynamicResource Text.Primary}" HorizontalAlignment="Left" />
+          <Border Width="2" Background="{DynamicResource Text.Primary}" HorizontalAlignment="Right" />
+        </Grid>
+      </StackPanel>
+    </Border>
+
+  </Panel>
+</Window>

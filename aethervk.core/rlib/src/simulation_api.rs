@@ -291,15 +291,13 @@ pub type GetNativeWindowHandleCallback = unsafe extern "C" fn(
   signal_done: *const core::sync::atomic::AtomicBool,
 );
 
-pub static GET_NATIVE_WINDOW_HANDLE_CALLBACK:
-  parking_lot::RwLock<Option<GetNativeWindowHandleCallback>> =
-    parking_lot::RwLock::new(None);
+pub static GET_NATIVE_WINDOW_HANDLE_CALLBACK: parking_lot::RwLock<
+  Option<GetNativeWindowHandleCallback>,
+> = parking_lot::RwLock::new(None);
 
 /// Registers the delegate called when Rust needs the OS window handle.
 /// Must be set before `avkSimulationContext_addViewport` is called in windowed mode.
-pub fn register_get_native_window_handle_callback(
-  cb: Option<GetNativeWindowHandleCallback>,
-) {
+pub fn register_get_native_window_handle_callback(cb: Option<GetNativeWindowHandleCallback>) {
   *GET_NATIVE_WINDOW_HANDLE_CALLBACK.write() = cb;
 }
 
@@ -316,8 +314,8 @@ pub fn register_get_native_window_handle_callback(
 ///   dispatches work onto that same thread.
 /// - `GET_NATIVE_WINDOW_HANDLE_CALLBACK` must be registered before calling this.
 pub unsafe fn get_native_window_handle_sync() -> Option<CNativeWindowHandle> {
-  use core::sync::atomic::{AtomicBool, Ordering};
   use bytemuck::Zeroable;
+  use core::sync::atomic::{AtomicBool, Ordering};
 
   let cb = (*GET_NATIVE_WINDOW_HANDLE_CALLBACK.read())?;
 
@@ -382,19 +380,42 @@ pub mod external_state {
   #[repr(C)]
   #[derive(Debug, Clone, Copy, PartialEq, Eq, bytemuck::Zeroable, bytemuck::Pod)]
   pub struct CAlamanacImported {
-    pub was_successful: u32, // 0: no, !=0: yes
+    /// Operation discriminant:
+    /// - `0` = load failed
+    /// - `1` = loaded successfully
+    /// - `2` = unloaded successfully
+    pub operation: u32,
+    /// Discovered NAIF/SPK body ID; `0` if unknown, multi-body file, or on unload.
+    pub naif_id: i32,
     pub path_bytes: [u8; 32],
   }
   impl CAlamanacImported {
-    pub fn new(was_successful: u32, path: &str) -> Self {
+    fn fill_path_bytes(path: &str) -> [u8; 32] {
       let mut path_bytes = [0u8; 32];
       let bytes = path.rfind(['/', '\\']).map(|idx| &path[idx + 1..]).unwrap_or(path).as_bytes();
-      // truncate to 31 to null-terminate the string
+      // truncate to 31 to leave room for the null terminator
       let len = bytes.len().min(31);
       path_bytes[..len].copy_from_slice(&bytes[..len]);
+      path_bytes
+    }
+
+    /// Emitted after a successful almanac load.
+    /// `naif_id` is the discovered primary body ID (0 if unknown or multi-body).
+    pub fn new_loaded(naif_id: i32, path: &str) -> Self {
       Self {
-        was_successful,
-        path_bytes,
+        operation: 1,
+        naif_id,
+        path_bytes: Self::fill_path_bytes(path),
+      }
+    }
+
+    /// Emitted after a successful almanac unload.
+    /// `naif_id` is always 0 — the body ID is no longer queryable after removal.
+    pub fn new_unloaded(path: &str) -> Self {
+      Self {
+        operation: 2,
+        naif_id: 0,
+        path_bytes: Self::fill_path_bytes(path),
       }
     }
   }
@@ -529,12 +550,14 @@ pub fn debug_print_scene_hierarchy(ctx_ref: &SimulationContext, scene_id: u64) {
 pub enum ComponentForeignId {
   HighResTransform = 1,
   CameraProjection = 2,
-  CometPosition    = 3,
+  CometPosition = 3,
 }
 
 impl ComponentForeignId {
   /// Returns the discriminator as a `u64` for use in `COMPONENT_ID` constants.
-  pub const fn as_u64(self) -> u64 { self as u64 }
+  pub const fn as_u64(self) -> u64 {
+    self as u64
+  }
 }
 
 #[cfg(test)]

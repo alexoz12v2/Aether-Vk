@@ -72,13 +72,13 @@ void main() {
     vec4 py = pc.globalParticleBuffer[chunkIndex].positionY[chunkOffset];
     vec4 pz = pc.globalParticleBuffer[chunkIndex].positionZ[chunkOffset];
 
-    FVEC4 vx = pc.globalParticleBuffer[chunkIndex].velocityX[chunkOffset];
-    FVEC4 vy = pc.globalParticleBuffer[chunkIndex].velocityY[chunkOffset];
-    FVEC4 vz = pc.globalParticleBuffer[chunkIndex].velocityZ[chunkOffset];
+    FVEC4 vx = LOAD_FVEC4(pc.globalParticleBuffer[chunkIndex].velocityX[chunkOffset]);
+    FVEC4 vy = LOAD_FVEC4(pc.globalParticleBuffer[chunkIndex].velocityY[chunkOffset]);
+    FVEC4 vz = LOAD_FVEC4(pc.globalParticleBuffer[chunkIndex].velocityZ[chunkOffset]);
 
-    FVEC4 fx = pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset];
-    FVEC4 fy = pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset];
-    FVEC4 fz = pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset];
+    FVEC4 fx = LOAD_FVEC4(pc.globalParticleBuffer[chunkIndex].forceX[chunkOffset]);
+    FVEC4 fy = LOAD_FVEC4(pc.globalParticleBuffer[chunkIndex].forceY[chunkOffset]);
+    FVEC4 fz = LOAD_FVEC4(pc.globalParticleBuffer[chunkIndex].forceZ[chunkOffset]);
 
     vec4 q = pc.deltaRot;
     vec3 dPos = pc.deltaPos.xyz;

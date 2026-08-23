@@ -15,10 +15,10 @@ public partial class PropertyHelpButton : UserControl
   // ──────────────────────────────────────────────────────────────────────────
 
   /// <summary>Bold heading shown at the top of the flyout.</summary>
-  public static readonly StyledProperty<string> HelpHeaderProperty =
-    AvaloniaProperty.Register<PropertyHelpButton, string>(
-      nameof(HelpHeader),
-      defaultValue: string.Empty);
+  public static readonly StyledProperty<string> HelpHeaderProperty = AvaloniaProperty.Register<
+    PropertyHelpButton,
+    string
+  >(nameof(HelpHeader), defaultValue: string.Empty);
 
   public string HelpHeader
   {
@@ -27,10 +27,10 @@ public partial class PropertyHelpButton : UserControl
   }
 
   /// <summary>Descriptive body text shown below the header in the flyout.</summary>
-  public static readonly StyledProperty<string> HelpContentProperty =
-    AvaloniaProperty.Register<PropertyHelpButton, string>(
-      nameof(HelpContent),
-      defaultValue: string.Empty);
+  public static readonly StyledProperty<string> HelpContentProperty = AvaloniaProperty.Register<
+    PropertyHelpButton,
+    string
+  >(nameof(HelpContent), defaultValue: string.Empty);
 
   public string HelpContent
   {

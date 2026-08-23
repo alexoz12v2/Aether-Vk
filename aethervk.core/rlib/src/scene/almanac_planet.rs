@@ -1,35 +1,29 @@
 //! almanac_planet module.
 
 use crate::{
-  scene::{Component, TransformComponent},
+  scene::Component,
   simulation::almanac::{AlmanacPackedData, VecTypeConversion},
   types::EngineResult,
 };
 use aethervk_oshal_rlib::math::{
   matrix::mat3::Mat3f32,
   quaternion::Quaternion,
-  vector::{Vector, Vector3, vec3::Vec3f32, vec3f64::DVec3, vec4::Quat},
+  vector::{Vector3, vec3::Vec3f32, vec3f64::DVec3, vec4::Quat},
 };
-use itertools::Itertools;
 
 /// Drives a kinematic body's position (and optionally rotation) from almanac data.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AlmanacPlanet {
   pub naif_id: i32,
-  pub rot_period: f64,
-  pub mu: f32,
 }
 
 impl Component for AlmanacPlanet {}
 
 impl AlmanacPlanet {
-  /// Creates an AlmanacPlanet (standard almanac-driven rotation).
-  pub fn new(naif_id: i32, rot_period: f64, mu: f32) -> Self {
-    Self {
-      naif_id,
-      rot_period,
-      mu,
-    }
+  /// Creates an AlmanacPlanet. Rotation can be driven by almanac if bpc file loaded, or driven by
+  /// an associated RotationBodyModelComponent
+  pub fn new(naif_id: i32) -> Self {
+    Self { naif_id }
   }
 
   /// Steps a kinematic body driven by SPK ephemeris.
@@ -190,40 +184,4 @@ impl AlmanacPlanet {
 }
 
 #[cfg(test)]
-mod tests {
-  use super::*;
-  use crate::scene::TransformComponent;
-  use aethervk_oshal_rlib::math::quaternion::Quaternion;
-
-  #[test]
-  fn test_almanac_planet_with_offset() {
-    let mut transform = TransformComponent::default();
-    let bf_to_pa = Quat::from_axis_angle(
-      Vec3f32::from_components(0.0, 0.0, 1.0),
-      45.0_f32.to_radians(),
-    );
-    let planet = AlmanacPlanet {
-      naif_id: 399,
-      rot_period: 0.0,
-      mu: 0.0,
-    };
-
-    // Mock an Almanac rotation: identity (BF is aligned with World)
-    let rot_bf_world = Quat::identity();
-
-    // PA -> BF -> World
-    // BF -> World is identity.
-    // PA -> BF is bf_to_pa.inverse()
-    // Result should be bf_to_pa.inverse()
-    let expected = bf_to_pa.inverse();
-
-    // We can't easily call `step` without a real Almanac and Epoch.
-    // But we can test the logic directly if we extract it or just test the formula.
-    let result_rot = (rot_bf_world * planet.bf_to_pa.inverse()).normalize();
-
-    assert!((result_rot.vector_part().x() - expected.vector_part().x()).abs() < 1e-6);
-    assert!((result_rot.vector_part().y() - expected.vector_part().y()).abs() < 1e-6);
-    assert!((result_rot.vector_part().z() - expected.vector_part().z()).abs() < 1e-6);
-    assert!((result_rot.scalar_part() - expected.scalar_part()).abs() < 1e-6);
-  }
-}
+mod test_almanac_planet;

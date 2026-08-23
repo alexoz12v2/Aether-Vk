@@ -1,90 +1,221 @@
-using System.Threading;
-using System.Threading.Tasks;
+using System;
+using System.Numerics;
+using System.Reactive.Concurrency;
 using AetherVk.Logic.Input;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
+using Moq;
 using Xunit;
 
 namespace AetherVk.Logic.Tests;
 
+/// <summary>
+/// Unit tests for <see cref="Viewport3DViewModel"/> focusing on the operator-stack input pipeline
+/// and camera-mode switching. Native FFI paths are bypassed via a mocked
+/// <see cref="INativeRuntimeService"/>.
+/// </summary>
 [Collection("Sequential")]
 public class Viewport3DViewModelTests
 {
-  [Fact]
-  public void Initialization_SetsUpDimensions_WithoutNativeCrash()
-  {
-    // Arrange
-    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
-    dispatcherMock
-      .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
-      .Callback<System.Action>(a => a());
-    var runtimeService = new NativeRuntimeService(
-      new SceneStateManager(),
-      new ConsoleService(dispatcherMock.Object),
-      new BreadcrumbService(dispatcherMock.Object),
-      new AetherVk.Logic.Services.NativeBufferPoolService(),
-      dispatcherMock.Object
-    );
-    // Do not call InitializeSimulationContext so it stays in mock state
+  // ── Helpers ─────────────────────────────────────────────────────────────────
 
+  private static ISchedulerProvider MakeImmediateSchedulers()
+  {
+    var sp = new Mock<ISchedulerProvider>();
+    sp.Setup(s => s.MainThread).Returns(ImmediateScheduler.Instance);
+    sp.Setup(s => s.Background).Returns(ImmediateScheduler.Instance);
+    return sp.Object;
+  }
+
+  /// <summary>
+  /// Builds a fully wired <see cref="Viewport3DViewModel"/> using mocked native services
+  /// so no native DLL is required.
+  /// </summary>
+  private static Viewport3DViewModel BuildVm()
+  {
+    var dispatcher = new Mock<IUiThreadDispatcher>();
+    dispatcher
+      .Setup(d => d.Dispatch(It.IsAny<Action>()))
+      .Callback<Action>(a => a());
+    dispatcher
+      .Setup(d => d.CheckAccess())
+      .Returns(true);
+
+    var schedulers    = MakeImmediateSchedulers();
+    var runtime       = new Mock<INativeRuntimeService>();
+    var breadcrumb    = new BreadcrumbService(dispatcher.Object);
+    var timeline      = new TimelineService(runtime.Object, schedulers);
+    var cometTracker  = new CometPositionTrackerService(runtime.Object, schedulers, timeline);
+    var cameraService = new CameraService(runtime.Object, schedulers, cometTracker);
+
+    var sessionService = new Mock<ITabStateService<ViewportSession>>();
+    var sessionList = new[] { new SessionId(typeof(ViewportSession), 1) };
+    sessionService.Setup(s => s.ActiveSessionIds).Returns(sessionList);
+    sessionService.Setup(s => s.ObserveSessionList()).Returns(System.Reactive.Linq.Observable.Return<System.Collections.Generic.IReadOnlyList<SessionId>>(sessionList));
+    sessionService.Setup(s => s.ObserveSession(It.IsAny<SessionId>())).Returns(System.Reactive.Linq.Observable.Return(new ViewportSession()));
+    sessionService.Setup(s => s.GetSession(It.IsAny<SessionId>())).Returns(new ViewportSession());
+
+    VulkanViewportControlViewModel VulkanFactory(Viewport3DViewModel vm) =>
+      new Mock<VulkanViewportControlViewModel>(
+        MockBehavior.Loose,
+        new Mock<IWindowInputRouter>().Object,
+        new Mock<INativeInputHandlerFactory>().Object,
+        runtime.Object,
+        vm
+      ).Object;
+
+    ViewportOverlayViewModel OverlayFactory(Viewport3DViewModel vm) =>
+      new Mock<ViewportOverlayViewModel>(
+        MockBehavior.Loose,
+        new Mock<CameraService>(MockBehavior.Loose).Object,
+        runtime.Object,
+        new BreadcrumbService(dispatcher.Object),
+        dispatcher.Object,
+        new Mock<IFileDialogService>().Object,
+        vm
+      ).Object;
+
+    var platformWindowService = new Mock<IPlatformWindowService>().Object;
+
+    return new Viewport3DViewModel(
+      runtime.Object,
+      breadcrumb,
+      dispatcher.Object,
+      new Mock<IFileDialogService>().Object,
+      cameraService,
+      VulkanFactory,
+      OverlayFactory,
+      platformWindowService,
+      sessionService.Object
+    );
+  }
+
+  private static InputState Pressed(InputModifiers mods = InputModifiers.None)
+    => new InputState(isPressed: true, mods);
+
+  // ── Tests ────────────────────────────────────────────────────────────────────
+
+  [Fact]
+  public void Initialization_DefaultDimensions()
+  {
     try
     {
-      var sm = new SceneStateManager();
-      var b = new BreadcrumbService(dispatcherMock.Object);
-      var vm = new Viewport3DViewModel(
-        runtimeService,
-        b,
-        sm,
-        dispatcherMock.Object,
-        new Moq.Mock<IFileDialogService>().Object,
-        new TimelineService()
-      );
+      var vm = BuildVm();
       Assert.Equal(800u, vm.Width);
       Assert.Equal(600u, vm.Height);
       vm.Stop();
     }
-    catch (System.TypeInitializationException) { }
-    catch (System.DllNotFoundException) { }
+    catch (TypeInitializationException) { /* native DLL absent in CI */ }
+    catch (DllNotFoundException)        { /* native DLL absent in CI */ }
   }
 
   [Fact]
-  public void ProcessAction_HandlesOrbitCamera()
+  public void SwitchCameraMode_V_CyclesThrough3Modes()
   {
-    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
-    dispatcherMock
-      .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
-      .Callback<System.Action>(a => a());
-    var runtimeService = new NativeRuntimeService(
-      new SceneStateManager(),
-      new ConsoleService(dispatcherMock.Object),
-      new BreadcrumbService(dispatcherMock.Object),
-      new AetherVk.Logic.Services.NativeBufferPoolService(),
-      dispatcherMock.Object
-    );
+    try
+    {
+      var vm = BuildVm();
+      // Initial state is UpZenith (EarthPosition requires SPK data)
+      Assert.Equal(CameraMode.UpZenith, vm.CameraService.CurrentMode);
 
-    var sm = new SceneStateManager();
-    var b = new BreadcrumbService(dispatcherMock.Object);
-    var vm = new Viewport3DViewModel(
-      runtimeService,
-      b,
-      sm,
-      dispatcherMock.Object,
-      new Moq.Mock<IFileDialogService>().Object,
-      new TimelineService()
-    );
-    // Press middle button to start orbit
-    bool handled = vm.ProcessAction(new AppAction("viewport.start_orbit", "Orbit"), true);
-    Assert.True(handled);
+      vm.Process(new AppAction(ViewportAction.SwitchCameraMode.ToCmdString()), Pressed());
+      Assert.Equal(CameraMode.CometOrbiting, vm.CameraService.CurrentMode);
 
-    // Pointer delta should now be handled by OrbitOperator
-    bool deltaHandled = vm.OperatorStack.ProcessPointerDelta(10, 10);
-    Assert.True(deltaHandled);
+      vm.Process(new AppAction(ViewportAction.SwitchCameraMode.ToCmdString()), Pressed());
+      Assert.Equal(CameraMode.EarthPosition, vm.CameraService.CurrentMode);
 
-    // Release middle button to stop orbit
-    vm.ProcessAction(new AppAction("viewport.start_orbit", "Orbit"), false);
+      vm.Process(new AppAction(ViewportAction.SwitchCameraMode.ToCmdString()), Pressed());
+      Assert.Equal(CameraMode.UpZenith, vm.CameraService.CurrentMode);
+    }
+    catch (TypeInitializationException) { }
+    catch (DllNotFoundException)        { }
+  }
 
-    // Delta should now fall back to base operator which returns false
-    bool finalDeltaHandled = vm.OperatorStack.ProcessPointerDelta(10, 10);
-    Assert.False(finalDeltaHandled);
+  [Fact]
+  public void SwitchToEarthPosition_DirectJump()
+  {
+    try
+    {
+      var vm = BuildVm();
+      vm.Process(new AppAction(ViewportAction.SwitchToCometOrbiting.ToCmdString()), Pressed());
+      Assert.Equal(CameraMode.CometOrbiting, vm.CameraService.CurrentMode);
+
+      vm.Process(new AppAction(ViewportAction.SwitchToEarthPosition.ToCmdString()), Pressed());
+      Assert.Equal(CameraMode.EarthPosition, vm.CameraService.CurrentMode);
+    }
+    catch (TypeInitializationException) { }
+    catch (DllNotFoundException)        { }
+  }
+
+  [Fact]
+  public void SwitchToCometOrbiting_DirectJump()
+  {
+    try
+    {
+      var vm = BuildVm();
+      vm.Process(new AppAction(ViewportAction.SwitchToCometOrbiting.ToCmdString()), Pressed());
+      Assert.Equal(CameraMode.CometOrbiting, vm.CameraService.CurrentMode);
+    }
+    catch (TypeInitializationException) { }
+    catch (DllNotFoundException)        { }
+  }
+
+  [Fact]
+  public void IsEarthObserverMode_TrueOnlyForEarthPosition()
+  {
+    try
+    {
+      var vm = BuildVm();
+
+      vm.Process(new AppAction(ViewportAction.SwitchToEarthPosition.ToCmdString()), Pressed());
+      Assert.True(vm.IsEarthObserverMode);
+      Assert.Equal(EarthObserverState.EarthPositioning, vm.EarthObserverState);
+
+      vm.Process(new AppAction(ViewportAction.SwitchToUpZenith.ToCmdString()), Pressed());
+      Assert.False(vm.IsEarthObserverMode);  // UpZenith is NOT EarthObserver
+      Assert.Equal(EarthObserverState.UpZenith, vm.EarthObserverState);
+
+      vm.Process(new AppAction(ViewportAction.SwitchToCometOrbiting.ToCmdString()), Pressed());
+      Assert.False(vm.IsEarthObserverMode);
+      Assert.Equal(EarthObserverState.CometOrbiting, vm.EarthObserverState);
+    }
+    catch (TypeInitializationException) { }
+    catch (DllNotFoundException)        { }
+  }
+
+  [Fact]
+  public void StartOrbit_PushesOperator_PointerDeltaHandled_ThenPopsOnRelease()
+  {
+    try
+    {
+      var vm = BuildVm();
+
+      // EarthPosition required so IsOrbitAllowed() returns true
+      vm.Process(new AppAction(ViewportAction.SwitchToEarthPosition.ToCmdString()), Pressed());
+
+      bool startHandled = vm.Process(
+        new AppAction(ViewportAction.StartOrbit.ToCmdString(), new Vector2(0, 0)),
+        Pressed());
+      Assert.True(startHandled);
+
+      // OrbitCameraOperator consumes pointer_delta
+      bool deltaHandled = vm.Process(
+        new AppAction("viewport.pointer_delta", new Vector2(10, 10)),
+        Pressed());
+      Assert.True(deltaHandled);
+
+      // Release pops the operator
+      vm.Process(
+        new AppAction("viewport.pointer_end"),
+        new InputState(isPressed: false, InputModifiers.None));
+
+      // Base operator ignores pointer_delta
+      bool fallthrough = vm.Process(
+        new AppAction("viewport.pointer_delta", new Vector2(10, 10)),
+        Pressed());
+      Assert.False(fallthrough);
+    }
+    catch (TypeInitializationException) { }
+    catch (DllNotFoundException)        { }
   }
 }

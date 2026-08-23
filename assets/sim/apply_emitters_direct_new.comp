@@ -85,8 +85,8 @@ void main() {
     }
 
     // ── Read particle data from AOSOA ─────────────────────────────────────
-    FVEC4 invM = pc.globalParticleBufferAddress[chunkIndex].invMass[chunkOffset];
-    vec4 beta = vec4(pc.globalParticleBufferAddress[chunkIndex].beta[chunkOffset]);
+    FVEC4 invM = LOAD_FVEC4(pc.globalParticleBufferAddress[chunkIndex].invMass[chunkOffset]);
+    vec4 beta = vec4(LOAD_FVEC4(pc.globalParticleBufferAddress[chunkIndex].beta[chunkOffset]));
 
     vec4 px_n = pc.globalParticleBufferAddress[chunkIndex].positionX[chunkOffset];
     vec4 py_n = pc.globalParticleBufferAddress[chunkIndex].positionY[chunkOffset];

@@ -17,15 +17,23 @@ public class VulkanViewportControl : NativeControlHost
   protected override IPlatformHandle CreateNativeControlCore(IPlatformHandle parent)
   {
     // X11 only — Wayland is not supported (no raw input hooks available)
-    if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-            System.Runtime.InteropServices.OSPlatform.Linux)
-        && parent.HandleDescriptor != "XID")
-      throw new NotSupportedException("Wayland is not supported. Launch with AVALONIA_SCREEN_SCALE_FACTORS or force X11.");
+    if (
+      System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+        System.Runtime.InteropServices.OSPlatform.Linux
+      )
+      && parent.HandleDescriptor != "XID"
+    )
+      throw new NotSupportedException(
+        "Wayland is not supported. Launch with AVALONIA_SCREEN_SCALE_FACTORS or force X11."
+      );
 
     var handle = base.CreateNativeControlCore(parent);
 
-    if (handle != null && handle.Handle != IntPtr.Zero
-        && DataContext is Logic.ViewModels.VulkanViewportControlViewModel vm)
+    if (
+      handle != null
+      && handle.Handle != IntPtr.Zero
+      && DataContext is Logic.ViewModels.VulkanViewportControlViewModel vm
+    )
     {
       // Pass both child handle (XID / HWND) and parent handle (Display* / HINSTANCE)
       // so the ViewModel can build the correct CNativeWindowHandle for AddViewport.
@@ -38,8 +46,10 @@ public class VulkanViewportControl : NativeControlHost
 
   protected override void DestroyNativeControlCore(IPlatformHandle control)
   {
-    // Handler and subscription lifecycle is owned by the ViewModel (IDisposable).
-    // Nothing to clean up here.
+    // The ViewModel owns the input handler and Rx subscriptions — dispose it here
+    // so the X11 event loop background thread exits cleanly before the process shuts down.
+    if (DataContext is Logic.ViewModels.VulkanViewportControlViewModel vm)
+      vm.Dispose();
     base.DestroyNativeControlCore(control);
   }
 }

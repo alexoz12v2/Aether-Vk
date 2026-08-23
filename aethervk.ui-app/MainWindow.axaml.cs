@@ -1,3 +1,4 @@
+using System;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -21,6 +22,23 @@ public partial class MainWindow : Window
       OnElementGotFocus,
       Avalonia.Interactivity.RoutingStrategies.Bubble
     );
+  }
+
+  protected override void OnOpened(EventArgs e)
+  {
+    base.OnOpened(e);
+    // The visual tree is live at this point — safe to subscribe to tunneling events.
+    if (DataContext is Logic.ViewModels.MainWindowViewModel vm)
+      vm.InputRouter.AttachToWindow(this);
+  }
+
+  protected override void OnClosed(EventArgs e)
+  {
+    // Dispose removes event handlers from all attached windows (main + all overlays).
+    // Overlay windows are already closed by their OverlaySynchronizers at this point.
+    if (DataContext is Logic.ViewModels.MainWindowViewModel vm)
+      vm.InputRouter.Dispose();
+    base.OnClosed(e);
   }
 
   private void OnElementGotFocus(object? sender, GotFocusEventArgs e)

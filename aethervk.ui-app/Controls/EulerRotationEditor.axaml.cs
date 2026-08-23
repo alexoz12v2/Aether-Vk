@@ -15,8 +15,10 @@ namespace AetherVk.Controls;
 /// </summary>
 public partial class EulerRotationEditor : UserControl
 {
-  public static readonly StyledProperty<Quaternion?> RotationProperty =
-    AvaloniaProperty.Register<EulerRotationEditor, Quaternion?>(nameof(Quaternion));
+  public static readonly StyledProperty<Quaternion?> RotationProperty = AvaloniaProperty.Register<
+    EulerRotationEditor,
+    Quaternion?
+  >(nameof(Quaternion));
 
   public Quaternion? Rotation
   {
@@ -85,7 +87,8 @@ public partial class EulerRotationEditor : UserControl
 
   private void SyncFromQuaternion()
   {
-    if (_isUpdatingFromSliders || Rotation == null) return;
+    if (_isUpdatingFromSliders || Rotation == null)
+      return;
     _isUpdatingFromComponent = true;
 
     try
@@ -104,7 +107,8 @@ public partial class EulerRotationEditor : UserControl
 
   private void SyncToQuaternion()
   {
-    if (_isUpdatingFromComponent) return;
+    if (_isUpdatingFromComponent)
+      return;
     _isUpdatingFromSliders = true;
 
     try
@@ -117,7 +121,7 @@ public partial class EulerRotationEditor : UserControl
     }
   }
 
-  static private (double, double, double) FromQuatToDegRot(Quaternion quat)
+  private static (double, double, double) FromQuatToDegRot(Quaternion quat)
   {
     double x = quat.X;
     double y = quat.Y;
@@ -149,7 +153,7 @@ public partial class EulerRotationEditor : UserControl
   }
 
   // Note: not using `Quaternion.FromYawPitchRoll ` to preserve original behaviour. Try it if needed
-  static private Quaternion FromDegRotToQuat(double rotDegX, double rotDegY, double rotDegZ)
+  private static Quaternion FromDegRotToQuat(double rotDegX, double rotDegY, double rotDegZ)
   {
     double rx = rotDegX * Math.PI / 180.0;
     double ry = rotDegY * Math.PI / 180.0;
@@ -172,7 +176,7 @@ public partial class EulerRotationEditor : UserControl
       X = x,
       Y = y,
       Z = z,
-      W = w
+      W = w,
     };
   }
 }

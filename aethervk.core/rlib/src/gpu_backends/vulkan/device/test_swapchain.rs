@@ -110,6 +110,7 @@ mod tests {
     let cmd_pool = unsafe { device.create_command_pool(&cmd_pool_info, None).unwrap() };
 
     let log_device = LogicalDevice {
+      submission_lock_compute: spin::Mutex::new(()),
       timeline_semaphore: ash::khr::timeline_semaphore::Device::new(&instance.instance, &device),
       create_renderpass2: ash::khr::create_renderpass2::Device::new(&instance.instance, &device),
       swapchain_maintenance1: if enable_maintenance1
@@ -134,9 +135,14 @@ mod tests {
       metal_objects: ash::ext::metal_objects::Device::new(&instance.instance, &device),
       #[cfg(debug_assertions)]
       debug_utils: ash::ext::debug_utils::Device::new(&instance.instance, &device),
-      max_per_stage_descriptor_update_after_bind_samplers: phys_device.max_per_stage_descriptor_update_after_bind_samplers,
-      max_per_stage_descriptor_samplers: phys_device.physical_device_properties.limits.max_per_stage_descriptor_samplers,
-      max_descriptor_set_update_after_bind_samplers: phys_device.max_descriptor_set_update_after_bind_samplers,
+      max_per_stage_descriptor_update_after_bind_samplers: phys_device
+        .max_per_stage_descriptor_update_after_bind_samplers,
+      max_per_stage_descriptor_samplers: phys_device
+        .physical_device_properties
+        .limits
+        .max_per_stage_descriptor_samplers,
+      max_descriptor_set_update_after_bind_samplers: phys_device
+        .max_descriptor_set_update_after_bind_samplers,
     };
 
     let params = crate::gpu::PresentationEngineParams::windowless(256, 256);
@@ -384,8 +390,11 @@ mod tests {
 
   fn test_lifecycle_wraparound_internal(enable_maintenance1: bool) {
     let setup_env = setup_test_render(enable_maintenance1);
-    if setup_env.is_none() { return; }
-    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) = setup_env.unwrap();
+    if setup_env.is_none() {
+      return;
+    }
+    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) =
+      setup_env.unwrap();
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
     let mut engine = PresentationState::new(
       &entry,
@@ -425,7 +434,7 @@ mod tests {
     }
     unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
-    engine.cleanup(&device);
+    engine.cleanup(&log_device);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
       device.destroy_device(None);
@@ -444,8 +453,11 @@ mod tests {
 
   fn test_cancel_image_recovery_internal(enable_maintenance1: bool) {
     let setup_env = setup_test_render(enable_maintenance1);
-    if setup_env.is_none() { return; }
-    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) = setup_env.unwrap();
+    if setup_env.is_none() {
+      return;
+    }
+    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) =
+      setup_env.unwrap();
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
     let mut engine = PresentationState::new(
       &entry,
@@ -510,7 +522,7 @@ mod tests {
     unsafe { device.queue_wait_idle(queue).unwrap() };
     println!("Cleaning up...");
     rollback.defuse();
-    engine.cleanup(&device);
+    engine.cleanup(&log_device);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
       device.destroy_device(None);
@@ -529,8 +541,11 @@ mod tests {
 
   fn test_resize_in_flight_discard_bins_internal(enable_maintenance1: bool) {
     let setup_env = setup_test_render(enable_maintenance1);
-    if setup_env.is_none() { return; }
-    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) = setup_env.unwrap();
+    if setup_env.is_none() {
+      return;
+    }
+    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) =
+      setup_env.unwrap();
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
     let mut engine = PresentationState::new(
       &entry,
@@ -607,7 +622,7 @@ mod tests {
 
     unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
-    engine.cleanup(&device);
+    engine.cleanup(&log_device);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
       device.destroy_device(None);
@@ -626,8 +641,11 @@ mod tests {
 
   fn test_windowless_export_png_internal(enable_maintenance1: bool) {
     let setup_env = setup_test_render(enable_maintenance1);
-    if setup_env.is_none() { return; }
-    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) = setup_env.unwrap();
+    if setup_env.is_none() {
+      return;
+    }
+    let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) =
+      setup_env.unwrap();
     params.ty = crate::gpu::PresentationEngineType::WindowLess;
     params.width = 128;
     params.height = 128;
@@ -694,7 +712,7 @@ mod tests {
 
     unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
-    engine.cleanup(&device);
+    engine.cleanup(&log_device);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
       device.destroy_device(None);
@@ -713,7 +731,9 @@ mod tests {
 
   fn test_windowed_presentation_internal(enable_maintenance1: bool) {
     let setup_env = setup_test_render(enable_maintenance1);
-    if setup_env.is_none() { return; }
+    if setup_env.is_none() {
+      return;
+    }
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) = setup_env.unwrap();
     let cleanup_queue = new_test_cleanup_queue();
 
@@ -743,15 +763,18 @@ mod tests {
       cleanup_queue.clone(),
     );
     let mut engine = match engine {
-        Ok(e) => e,
-        Err(e) => {
-            std::println!("Warning: Skipping test, device does not support presentation: {:?}", e);
-            unsafe {
-                device.destroy_command_pool(cmd_pool, None);
-                device.destroy_device(None);
-            }
-            return;
+      Ok(e) => e,
+      Err(e) => {
+        std::println!(
+          "Warning: Skipping test, device does not support presentation: {:?}",
+          e
+        );
+        unsafe {
+          device.destroy_command_pool(cmd_pool, None);
+          device.destroy_device(None);
         }
+        return;
+      }
     };
 
     for _ in 0..20 {
@@ -820,7 +843,7 @@ mod tests {
 
     unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
-    engine.cleanup(&device);
+    engine.cleanup(&log_device);
     drain_test_cleanup_queue(&cleanup_queue);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
@@ -840,7 +863,9 @@ mod tests {
 
   fn test_multiple_viewports_and_mesh_viewer_internal(enable_maintenance1: bool) {
     let setup_env = setup_test_render(enable_maintenance1);
-    if setup_env.is_none() { return; }
+    if setup_env.is_none() {
+      return;
+    }
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) = setup_env.unwrap();
     let cleanup_queue = new_test_cleanup_queue();
 
@@ -868,15 +893,18 @@ mod tests {
       cleanup_queue.clone(),
     );
     let mut vp1 = match vp1 {
-        Ok(e) => e,
-        Err(e) => {
-            std::println!("Warning: Skipping test, device does not support presentation: {:?}", e);
-            unsafe {
-                device.destroy_command_pool(cmd_pool, None);
-                device.destroy_device(None);
-            }
-            return;
+      Ok(e) => e,
+      Err(e) => {
+        std::println!(
+          "Warning: Skipping test, device does not support presentation: {:?}",
+          e
+        );
+        unsafe {
+          device.destroy_command_pool(cmd_pool, None);
+          device.destroy_device(None);
         }
+        return;
+      }
     };
 
     let params2 = crate::gpu::PresentationEngineParams {
@@ -902,15 +930,18 @@ mod tests {
       cleanup_queue.clone(),
     );
     let mut vp2 = match vp2 {
-        Ok(e) => e,
-        Err(e) => {
-            std::println!("Warning: Skipping test, device does not support presentation: {:?}", e);
-            unsafe {
-                device.destroy_command_pool(cmd_pool, None);
-                device.destroy_device(None);
-            }
-            return;
+      Ok(e) => e,
+      Err(e) => {
+        std::println!(
+          "Warning: Skipping test, device does not support presentation: {:?}",
+          e
+        );
+        unsafe {
+          device.destroy_command_pool(cmd_pool, None);
+          device.destroy_device(None);
         }
+        return;
+      }
     };
 
     let params3 = crate::gpu::PresentationEngineParams {
@@ -936,15 +967,18 @@ mod tests {
       cleanup_queue.clone(),
     );
     let mut mv = match mv {
-        Ok(e) => e,
-        Err(e) => {
-            std::println!("Warning: Skipping test, device does not support presentation: {:?}", e);
-            unsafe {
-                device.destroy_command_pool(cmd_pool, None);
-                device.destroy_device(None);
-            }
-            return;
+      Ok(e) => e,
+      Err(e) => {
+        std::println!(
+          "Warning: Skipping test, device does not support presentation: {:?}",
+          e
+        );
+        unsafe {
+          device.destroy_command_pool(cmd_pool, None);
+          device.destroy_device(None);
         }
+        return;
+      }
     };
 
     for _ in 0..5 {
@@ -1093,9 +1127,9 @@ mod tests {
 
     unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
-    vp1.cleanup(&device);
-    vp2.cleanup(&device);
-    mv.cleanup(&device);
+    vp1.cleanup(&log_device);
+    vp2.cleanup(&log_device);
+    mv.cleanup(&log_device);
     drain_test_cleanup_queue(&cleanup_queue);
 
     unsafe {
@@ -1116,7 +1150,9 @@ mod tests {
 
   fn test_rapid_resize_stress_internal(enable_maintenance1: bool) {
     let setup_env = setup_test_render(enable_maintenance1);
-    if setup_env.is_none() { return; }
+    if setup_env.is_none() {
+      return;
+    }
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, _) = setup_env.unwrap();
     let cleanup_queue = new_test_cleanup_queue();
 
@@ -1146,15 +1182,18 @@ mod tests {
       cleanup_queue.clone(),
     );
     let mut engine = match engine {
-        Ok(e) => e,
-        Err(e) => {
-            std::println!("Warning: Skipping test, device does not support presentation: {:?}", e);
-            unsafe {
-                device.destroy_command_pool(cmd_pool, None);
-                device.destroy_device(None);
-            }
-            return;
+      Ok(e) => e,
+      Err(e) => {
+        std::println!(
+          "Warning: Skipping test, device does not support presentation: {:?}",
+          e
+        );
+        unsafe {
+          device.destroy_command_pool(cmd_pool, None);
+          device.destroy_device(None);
         }
+        return;
+      }
     };
 
     let mut width = 800;
@@ -1202,7 +1241,7 @@ mod tests {
 
     unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
-    engine.cleanup(&device);
+    engine.cleanup(&log_device);
     drain_test_cleanup_queue(&cleanup_queue);
 
     unsafe {

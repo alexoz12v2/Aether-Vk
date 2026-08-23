@@ -75,9 +75,7 @@ unsafe extern "C" fn on_device_alloc(
   // --- end original code ---
 
   // Enqueue into the lock-free ring; drain_vma_events() does the real tracking.
-  aethervk_oshal_rlib::os::memory::tracking::push_vma_event_alloc(
-    memory.as_raw(), size,
-  );
+  aethervk_oshal_rlib::os::memory::tracking::push_vma_event_alloc(memory.as_raw(), size);
 }
 
 #[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
@@ -105,9 +103,7 @@ unsafe extern "C" fn on_device_free(
   // aethervk_oshal_rlib::os::debug::print_aethervk_stacktrace(7, 4);
   // --- end original code ---
 
-  aethervk_oshal_rlib::os::memory::tracking::push_vma_event_free(
-    memory.as_raw(), size,
-  );
+  aethervk_oshal_rlib::os::memory::tracking::push_vma_event_free(memory.as_raw(), size);
 }
 
 impl GlobalDeviceAllocator {

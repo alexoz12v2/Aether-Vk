@@ -31,11 +31,15 @@ public class EnumToBoolConverter : Avalonia.Data.Converters.IValueConverter
 /// </summary>
 public class RatioToStarConverter : Avalonia.Data.Converters.IValueConverter
 {
-  public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-    => value is double d ? new GridLength(d, GridUnitType.Star) : GridLength.Auto;
+  public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+    value is double d ? new GridLength(d, GridUnitType.Star) : GridLength.Auto;
 
-  public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-    => value is GridLength gl && gl.IsStar ? gl.Value : 0.5;
+  public object ConvertBack(
+    object? value,
+    Type targetType,
+    object? parameter,
+    CultureInfo culture
+  ) => value is GridLength gl && gl.IsStar ? gl.Value : 0.5;
 }
 
 /// <summary>
@@ -44,11 +48,15 @@ public class RatioToStarConverter : Avalonia.Data.Converters.IValueConverter
 /// </summary>
 public class InverseRatioToStarConverter : Avalonia.Data.Converters.IValueConverter
 {
-  public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-    => value is double d ? new GridLength(1.0 - d, GridUnitType.Star) : GridLength.Auto;
+  public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+    value is double d ? new GridLength(1.0 - d, GridUnitType.Star) : GridLength.Auto;
 
-  public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-    => value is GridLength gl && gl.IsStar ? 1.0 - gl.Value : 0.5;
+  public object ConvertBack(
+    object? value,
+    Type targetType,
+    object? parameter,
+    CultureInfo culture
+  ) => value is GridLength gl && gl.IsStar ? 1.0 - gl.Value : 0.5;
 }
 
 public partial class SplitNodeView : UserControl

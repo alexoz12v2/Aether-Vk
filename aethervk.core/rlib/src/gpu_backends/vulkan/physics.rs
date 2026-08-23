@@ -4,7 +4,7 @@
 //! It assumes Vulkan 1.1 with `VK_KHR_buffer_device_address` and `VK_KHR_shader_subgroup_basic`.
 
 use crate::{
-  gpu_backends::vulkan::device::{LogicalDevice, resources},
+  gpu_backends::vulkan::device::{LogicalDevice, VulkanDebugNameExt, resources},
   types::{GpuError, GpuResult},
 };
 use ash::vk;
@@ -83,9 +83,13 @@ impl PhysicsPipelines {
     has_native_float16: bool,
   ) -> GpuResult<Self> {
     if has_native_float16 {
-      aethervk_oshal_rlib::log!("[Physics] Native float16 arithmetic is SUPPORTED (VK_KHR_shader_float16_int8:shaderFloat16).");
+      aethervk_oshal_rlib::log!(
+        "[Physics] Native float16 arithmetic is SUPPORTED (VK_KHR_shader_float16_int8:shaderFloat16)."
+      );
     } else {
-      aethervk_oshal_rlib::log!("[Physics] Native float16 arithmetic is MISSING. Using fallback FP32 shaders with 16-bit storage.");
+      aethervk_oshal_rlib::log!(
+        "[Physics] Native float16 arithmetic is MISSING. Using fallback FP32 shaders with 16-bit storage."
+      );
     }
 
     if subgroup_size <= 16 && is_cpu {
@@ -101,8 +105,9 @@ impl PhysicsPipelines {
     let layout_info = vk::PipelineLayoutCreateInfo::default()
       .push_constant_ranges(core::slice::from_ref(&push_constant_range));
 
-    let pipeline_layout =
-      unsafe { device.create_pipeline_layout(&layout_info, None) }.map_err(|e| {
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
+      .with_name(device, "VkPipelineLayout_Physics")
+      .map_err(|e| {
         GpuError::BackendSpecific(alloc::format!("Failed to create pipeline layout: {:?}", e))
       })?;
 
@@ -498,7 +503,13 @@ impl VulkanComputeKernels {
     is_cpu: bool,
     has_native_float16: bool,
   ) -> GpuResult<Self> {
-    let pipelines = PhysicsPipelines::new(device, debug_shaders, subgroup_size, is_cpu, has_native_float16)?;
+    let pipelines = PhysicsPipelines::new(
+      device,
+      debug_shaders,
+      subgroup_size,
+      is_cpu,
+      has_native_float16,
+    )?;
 
     let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()
       .initial_value(0)

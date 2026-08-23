@@ -10,7 +10,10 @@ using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.Services;
 
-public partial class NativeRuntimeService : ObservableObject, IDisposable, INativeRuntimeService
+public sealed partial class NativeRuntimeService
+  : ObservableObject,
+    IDisposable,
+    INativeRuntimeService
 {
   [ObservableProperty]
   private bool _isInitialized;
@@ -33,6 +36,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
   private readonly BreadcrumbService _breadcrumbService;
   private readonly INativeBufferPoolService _bufferPool;
   private readonly IUiThreadDispatcher _uiThreadDispatcher;
+
+  /// <summary>Cancellation Token tied to shutdown</summary>
+  private readonly CancellationTokenSource _shutdownCts = new();
+
+  /// <inheritdoc/>
+  public CancellationToken ShutdownToken => _shutdownCts.Token;
 
   public void PlaySound(AvkSoundEvent soundEvent, AvkAudioParams audioParams)
   {
@@ -79,6 +88,9 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
         );
         System.Threading.Monitor.Wait(_nativeLock);
       }
+
+      // CancellationTokenSource
+      _shutdownCts.Cancel();
 
       if (_simulationContext != IntPtr.Zero)
       {
@@ -2502,7 +2514,10 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
     if (_simulationContext != IntPtr.Zero && entityId != 0 && entityId != ulong.MaxValue)
     {
       return NativeInterop.avkSimulationContext_getParticleSystemAliveCount(
-        _simulationContext, sceneId, entityId);
+        _simulationContext,
+        sceneId,
+        entityId
+      );
     }
     return 0;
   }
@@ -3212,7 +3227,12 @@ public partial class NativeRuntimeService : ObservableObject, IDisposable, INati
       uint maxCount = 64;
       var existing = new NativeInterop.FfiEmissionCircle[maxCount];
       bool hasExisting = NativeInterop.avkSimulationContext_getParticleEmitterCirclesComponent(
-        _simulationContext, sceneId, entityId, existing, maxCount, out uint existingCount
+        _simulationContext,
+        sceneId,
+        entityId,
+        existing,
+        maxCount,
+        out uint existingCount
       );
 
       float boundingRadius = NativeInterop.avkSimulationContext_getMeshBoundingSphereRadius(

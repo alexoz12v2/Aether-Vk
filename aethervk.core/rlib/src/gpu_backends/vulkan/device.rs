@@ -2678,6 +2678,14 @@ impl Device {
     // 1. enable required
     let mut required_features = utils::RequiredFeatures::new();
     required_features.populate();
+
+    if chosen_physical_device_query_result
+      .optional_extensions
+      .contains(utils::OptionalExtensionSupportFlags::NATIVE_FLOAT16)
+    {
+      required_features.shader_float16_int8.shader_float16 = vk::TRUE;
+    }
+
     let mut features2 = required_features.as_features2();
 
     // 2. Setup queue create infos for necessary queues from query result
@@ -3613,6 +3621,7 @@ impl RenderDevice for Device {
         state.text2_render_archetype_arena = arenas.text2;
         state.sphere_gizmo_render_archetype_arena = arenas.sphere_gizmo;
         state.gizmo_render_archetype_arena = arenas.gizmo;
+        state.dust_render_archetype_arena = arenas.dust;
 
         Ok(())
       })?;
@@ -4613,7 +4622,8 @@ impl RenderDevice for Device {
         let pipeline_layout_info =
           vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
         let pipeline_layout =
-          unsafe { self.device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+          unsafe { self.device.create_pipeline_layout(&pipeline_layout_info, None) }
+            .with_name(&self.device, "VkPipelineLayout_Sky")?;
 
         let pool_sizes = [vk::DescriptorPoolSize::default()
           .ty(vk::DescriptorType::STORAGE_IMAGE)
@@ -4797,10 +4807,6 @@ impl RenderDevice for Device {
           self.device.destroy_semaphore(timeline_semaphore, None);
         }
         oshal::log!("generate_sky: done waiting");
-
-        unsafe {
-          self.device.destroy_fence(fence, None);
-        }
 
         // VVL Bug Fix: The validation layer associates image layout transitions with the command pool they were allocated from.
         // If the pool is destroyed *at any point* during the app's lifetime, VVL loses the layout state for the image and reverts to UNDEFINED.
@@ -6491,7 +6497,8 @@ impl RenderDevice for Device {
                 .set_layouts(&set_layouts)
                 .push_constant_ranges(&push_constant_ranges);
               let pipeline_layout =
-                unsafe { self.device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+                unsafe { self.device.create_pipeline_layout(&pipeline_layout_info, None) }
+                  .with_name(&self.device, "VkPipelineLayout_Sun")?;
               rollback
                 .defer(move |dev| unsafe { dev.destroy_pipeline_layout(pipeline_layout, None) });
 
@@ -10130,10 +10137,12 @@ impl DeviceResource for TransientCleanupResources {
       if !self.pipeline_layout.is_null() {
         device.destroy_pipeline_layout(self.pipeline_layout, None);
       }
-      if !self.pipeline_layout.is_null() {
+      if !self.set_layout.is_null() {
         device.destroy_descriptor_set_layout(self.set_layout, None);
       }
-      // We do not destroy the fence here anymore as it's not a fence.
+      if !self.fence.is_null() {
+        device.destroy_fence(self.fence, None);
+      }
     }
   }
 }
@@ -10280,5 +10289,13 @@ mod meshutils {
 #[cfg(test)]
 mod test_swapchain;
 
+// #[cfg(test)]
+// mod test_ui_text;
+
 #[cfg(test)]
-mod test_ui_text;
+pub mod test_utils;
+#[cfg(test)]
+mod ui_tests;
+
+#[cfg(test)]
+mod test_pipelines;

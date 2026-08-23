@@ -49,6 +49,26 @@ pub struct CStartupReturn {
   // compiles only on 64 bit platforms. 32 bit require padding here
 }
 
+/// IAU rotational model parameters for a small body (comet/asteroid).
+/// All angles in degrees; rates per century or per day as noted.
+/// Passed to `avkSimulationContext_setBodyRotationalModel`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct CBodyRotationalModelDTO {
+  /// Right ascension of rotation pole at J2000 (degrees).
+  pub pole_ra_deg: f64,
+  /// Declination of rotation pole at J2000 (degrees).
+  pub pole_dec_deg: f64,
+  /// Prime meridian angle at J2000 (degrees).
+  pub prime_meridian_deg: f64,
+  /// Rate of change of pole RA (degrees/century).
+  pub pole_ra_rate_deg_cen: f64,
+  /// Rate of change of pole Dec (degrees/century).
+  pub pole_dec_rate_deg_cen: f64,
+  /// Sidereal rotation rate (degrees/day).
+  pub rot_rate_deg_day: f64,
+}
+
 /// - Should create initial scene
 /// - should set initial epoch to 2020 and end epoch 1 month later (TDB)
 /// # Safety
@@ -64,16 +84,14 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
   }
   let range = unsafe {
     let crange = params.as_ref().unwrap_unchecked().start_range;
-    let min_index;
-    if crange.centuries[0] < crange.centuries[1] {
-      min_index = 0;
-    } else if crange.centuries[0] == crange.centuries[1]
-      && crange.nanoseconds[0] < crange.nanoseconds[1]
+    let min_index = if crange.centuries[0] < crange.centuries[1]
+      || (crange.centuries[0] == crange.centuries[1]
+        && crange.nanoseconds[0] < crange.nanoseconds[1])
     {
-      min_index = 0;
+      0
     } else {
-      min_index = 1;
-    }
+      1
+    };
     let start = anise::time::Epoch::from_tai_parts(
       crange.centuries[min_index],
       crange.nanoseconds[min_index],
@@ -575,8 +593,26 @@ pub unsafe extern "C" fn avkSimulationContext_transformStaticCamera(
     None => return false,
   };
   // execution
-  todo!()
+  let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
+
+  use aethervk_core_rlib::simulation_api::structs::LogicCommand;
+
+  let transform = transform_request.as_srt_transform().map(|srt| (srt.position, srt.rotation));
+  let projection = transform_request.as_camera_projection();
+
+  ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(LogicCommand::SetCameraTransform {
+      scene_id,
+      camera_id,
+      transform,
+      projection,
+    })
+    .is_ok()
 }
+
 
 /// # Safety
 /// FFI Contract
@@ -650,6 +686,43 @@ pub unsafe extern "C" fn avkSimulationContext_startSimulation(
   todo!()
 }
 
+/// Propagates the "Jet Common Parameters" from `ps_dto` to all sibling jet entities
+/// (other children of `parent_entity` that have a `ParticleSystemComponent`), excluding
+/// `skip_entity` (the jet just created or currently being modified).
+///
+/// Common params: mass_variability_perc, diametre_um, density_gcm3, scattering_efficiency,
+/// afrho_0_cm, afrho_power, afrho_cutoff_au, afrho_max_value_cm.
+fn propagate_common_params(
+  scene: &aethervk_core_rlib::scene::Scene,
+  parent_entity: aethervk_core_rlib::scene::EntityId,
+  ps_dto: &ParticleSystemDTO,
+  skip_entity: aethervk_core_rlib::scene::EntityId,
+) {
+  let children = match scene.get_children(parent_entity) {
+    Some(c) => c,
+    None => return,
+  };
+  for child in children {
+    if child == skip_entity {
+      continue;
+    }
+    scene.with_component_mut(
+      child,
+      |ps: &mut aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
+        let ep = &mut ps.emission_params;
+        ep.mass_variability_perc = ps_dto.mass_variability_perc;
+        ep.diametre_um = ps_dto.diametre_um;
+        ep.density_gcm3 = ps_dto.density_gcm3;
+        ep.scattering_efficiency = ps_dto.scattering_efficiency;
+        ep.afrho_0_cm = ps_dto.afrho_0_cm;
+        ep.afrho_power = ps_dto.afrho_power;
+        ep.afrho_cutoff_au = ps_dto.afrho_cutoff_au;
+        ep.afrho_max_value_cm = ps_dto.afrho_max_value_cm;
+      },
+    );
+  }
+}
+
 /// Why isn't this included in modifyComponent? Because this adds a new child entity. Furthermore it
 /// picks up "Jet Common Parameters" to sibling particle systems if present.
 ///
@@ -667,27 +740,137 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
   out_ps_id: *mut u64,
   out_ps_computed_props: *mut ParticleSystemComputedDTO,
 ) -> bool {
-  // null check
   if ctx.is_null() || particle_system.is_null() {
     return false;
   }
   let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
-  let particle_system_ref = unsafe { particle_system.as_ref().unwrap_unchecked() };
-  // zero init results
+  let ps_dto = unsafe { particle_system.as_ref().unwrap_unchecked() };
+
   if !out_ps_id.is_null() {
     unsafe { *out_ps_id = 0 };
   }
-  // execution
-  //   Notes for rlib implementation:
-  //    Note that these steps are basically the same for modifyParticleSystem with the only
-  //    exception of creating a new entity. Functions can be the same
-  //   - check that scene exists and grab the comet subtree.
-  //     Note that the comet can also be not fully configured.
-  //   - check that simulation is not playing
-  //   - add a new entity and add to it static mesh as a small sphere and particle system component
-  //   - check for siblings. If there are, the pre-existing added values take precedence, so overwrite "Jet
-  //     common parameters"
-  todo!()
+
+  let scenes = ctx_ref.scenes.read();
+  let scene_arc = match scenes.get_scene(scene_id) {
+    Some(s) => s,
+    None => return false,
+  };
+  let scene_guard = scene_arc.read();
+  let comet = match scene_guard.comet {
+    Some(c) => c,
+    None => {
+      emit_breadcrumb(1, "avkSimulationContext_addParticleSystem: comet not found");
+      return false;
+    }
+  };
+
+  let lat = ps_dto.latitude_rad;
+  let lon = ps_dto.longitude_rad;
+  let r = ps_dto.nucleus_radius_km;
+  let pos = Vec3f32::from_components(
+    r * lat.cos() * lon.cos(),
+    r * lat.cos() * lon.sin(),
+    r * lat.sin(),
+  );
+
+  let jet_entity = scene_guard.scene.spawn_entity("jet");
+  scene_guard.scene.set_parent(jet_entity, Some(comet.body));
+
+  let _ = scene_guard.scene.add_component(
+    jet_entity,
+    aethervk_core_rlib::scene::TransformComponent {
+      position: pos,
+      rotation: Quat::identity(),
+      scale: Vec3f32::from_components(0.05, 0.05, 0.05),
+    },
+  );
+
+  let sphere_mesh = alloc::sync::Arc::new(
+    aethervk_core_rlib::simulation::comet::generate_uv_sphere(1.0, 8, 8, 1.0, false),
+  );
+  let _ = scene_guard.scene.add_component(
+    jet_entity,
+    aethervk_core_rlib::scene::StaticMeshComponent {
+      asset_path: alloc::string::String::from("__jet_marker__"),
+      mesh: sphere_mesh,
+      emissive_color: ps_dto.stream_color,
+      is_visible: true,
+    },
+  );
+
+  let emit_params = aethervk_core_rlib::scene::particles::ParticleSystemEmitParams {
+    mass_variability_perc: ps_dto.mass_variability_perc,
+    diametre_um: ps_dto.diametre_um,
+    density_gcm3: ps_dto.density_gcm3,
+    scattering_efficiency: ps_dto.scattering_efficiency,
+    afrho_0_cm: ps_dto.afrho_0_cm,
+    afrho_power: ps_dto.afrho_power,
+    afrho_cutoff_au: ps_dto.afrho_cutoff_au,
+    afrho_max_value_cm: ps_dto.afrho_max_value_cm,
+    latitude_rad: ps_dto.latitude_rad,
+    longitude_rad: ps_dto.longitude_rad,
+    aperture_rad: ps_dto.aperture_rad,
+    start_velocity_mean: ps_dto.start_velocity_mean,
+    start_velocity_std: ps_dto.start_velocity_std,
+    seed: ps_dto.seed,
+  };
+
+  let draw_params = aethervk_core_rlib::scene::particles::ParticleSystemDrawParams {
+    stream_color: ps_dto.stream_color,
+  };
+
+  // TODO Add this as a function parameter in the jet common area
+  const JET_TTL_US: aethervk_oshal_rlib::os::time::timeus_t = 60_000_000_000i64;
+
+  let render_frontend = match ctx_ref.render_frontend() {
+    Some(rf) => rf,
+    None => {
+      emit_breadcrumb(
+        1,
+        "avkSimulationContext_addParticleSystem: render frontend not found",
+      );
+      scene_guard.scene.remove_entity(jet_entity);
+      return false;
+    }
+  };
+  let render_device_handle = ctx_ref.render_device_handle();
+
+  let ps_component = match aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(
+    render_frontend,
+    render_device_handle,
+    jet_entity,
+    emit_params,
+    draw_params,
+    JET_TTL_US,
+  ) {
+    Ok(c) => c,
+    Err(e) => {
+      emit_breadcrumb(
+        1,
+        &alloc::format!(
+          "avkSimulationContext_addParticleSystem: failed to create particle system component: {}",
+          e
+        ),
+      );
+      scene_guard.scene.remove_entity(jet_entity);
+      return false;
+    }
+  };
+  let _ = scene_guard.scene.add_component(jet_entity, ps_component);
+
+  if !out_ps_id.is_null() {
+    unsafe { *out_ps_id = jet_entity.as_ffi() };
+  }
+  if !out_ps_computed_props.is_null() {
+    unsafe {
+      (*out_ps_computed_props).beta = emit_params.beta();
+      (*out_ps_computed_props).dust_production_rate_at_1au_kgs =
+        emit_params.dust_production_rate_kgs(1.0);
+    }
+  }
+
+  propagate_common_params(&scene_guard.scene, comet.body, ps_dto, jet_entity);
+  true
 }
 
 /// Why isn't thid included in modifyComponent? Because this also propagates changes in
@@ -705,12 +888,122 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
   particle_system: *const ParticleSystemDTO,
   out_ps_computed_props: *mut ParticleSystemComputedDTO,
 ) -> bool {
-  todo!()
+  if ctx.is_null() || particle_system.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
+  let ps_dto = unsafe { particle_system.as_ref().unwrap_unchecked() };
+
+  let scenes = ctx_ref.scenes.read();
+  let scene_arc = match scenes.get_scene(scene_id) {
+    Some(s) => s,
+    None => return false,
+  };
+  let scene_guard = scene_arc.read();
+
+  let jet_eid = aethervk_core_rlib::scene::EntityId::from_ffi(ps_id);
+
+  let lat = ps_dto.latitude_rad;
+  let lon = ps_dto.longitude_rad;
+  let r = ps_dto.nucleus_radius_km;
+  let pos = Vec3f32::from_components(
+    r * lat.cos() * lon.cos(),
+    r * lat.cos() * lon.sin(),
+    r * lat.sin(),
+  );
+
+  scene_guard.scene.with_component_mut(
+    jet_eid,
+    |t: &mut aethervk_core_rlib::scene::TransformComponent| {
+      t.position = pos;
+    },
+  );
+
+  scene_guard.scene.with_component_mut(
+    jet_eid,
+    |s: &mut aethervk_core_rlib::scene::StaticMeshComponent| {
+      s.emissive_color = ps_dto.stream_color;
+    },
+  );
+
+  let emit_params = aethervk_core_rlib::scene::particles::ParticleSystemEmitParams {
+    mass_variability_perc: ps_dto.mass_variability_perc,
+    diametre_um: ps_dto.diametre_um,
+    density_gcm3: ps_dto.density_gcm3,
+    scattering_efficiency: ps_dto.scattering_efficiency,
+    afrho_0_cm: ps_dto.afrho_0_cm,
+    afrho_power: ps_dto.afrho_power,
+    afrho_cutoff_au: ps_dto.afrho_cutoff_au,
+    afrho_max_value_cm: ps_dto.afrho_max_value_cm,
+    latitude_rad: ps_dto.latitude_rad,
+    longitude_rad: ps_dto.longitude_rad,
+    aperture_rad: ps_dto.aperture_rad,
+    start_velocity_mean: ps_dto.start_velocity_mean,
+    start_velocity_std: ps_dto.start_velocity_std,
+    seed: ps_dto.seed,
+  };
+
+  scene_guard.scene.with_component_mut(
+    jet_eid,
+    |p: &mut aethervk_core_rlib::scene::ParticleSystemComponent| {
+      p.emission_params = emit_params;
+      p.draw_params.stream_color = ps_dto.stream_color;
+    },
+  );
+
+  if !out_ps_computed_props.is_null() {
+    unsafe {
+      (*out_ps_computed_props).beta = emit_params.beta();
+      (*out_ps_computed_props).dust_production_rate_at_1au_kgs =
+        emit_params.dust_production_rate_kgs(1.0);
+    }
+  }
+
+  if let Some(comet) = scene_guard.comet {
+    propagate_common_params(&scene_guard.scene, comet.body, ps_dto, jet_eid);
+  }
+  true
 }
 
-/// Adds/Updates the comet orbit (trajectory) and rechecks SPK coverage
+/// Removes a jet (particle system) entity from the scene.
+/// `ParticleSystemComponent::drop` handles deferred GPU resource deallocation via timeline semaphores.
 ///
-/// Optionally used to get the comet id too
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_removeParticleSystem(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  ps_id: u64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
+  let scenes = ctx_ref.scenes.read();
+  let scene_arc = match scenes.get_scene(scene_id) {
+    Some(s) => s,
+    None => return false,
+  };
+  let scene_guard = scene_arc.read();
+  let jet_eid = aethervk_core_rlib::scene::EntityId::from_ffi(ps_id);
+  scene_guard.scene.remove_entity(jet_eid);
+  true
+}
+
+/// Reconfigures the comet entity in the simulation scene.
+///
+/// `command_flags` is a bitmask:
+/// - `0` — query only: write comet body entity id to `out_comet_id` and return.
+/// - `0x1` (ATTACH) — attach `AlmanacPlanet` to comet body, force-reposition to start_epoch,
+///   and queue trajectory generation. The `spk_id` C# field is carried by the matching
+///   `LogicCommand::InitComet` that C# sends first via `LoadAlmanac`. This flag signals
+///   the logic thread to finalise init.
+/// - `0x2` (DETACH) — remove `AlmanacPlanet` and `TrajectoryComponent`, reset comet to
+///   1 AU +X default placement.
+///
+/// Returns `false` if `ctx` is null or the command could not be enqueued.
 ///
 /// # Safety
 /// FFI Contract
@@ -719,10 +1012,104 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
 pub unsafe extern "C" fn avkSimulationContext_reconfigureComet(
   ctx: *mut SimulationContext,
   scene_id: u64,
-  command_flags: i32, // 0 -> do nothing, meaning give me the comet id
+  command_flags: i32,
+  spk_id: i32,
   out_comet_id: *mut u64,
 ) -> bool {
-  todo!()
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+
+  // Always populate out_comet_id from the stored SubtreeEntities if available.
+  if !out_comet_id.is_null() {
+    let scenes = ctx_ref.scenes.read();
+    if let Some(scene_arc) = scenes.get_scene(scene_id)
+      && let Some(comet) = scene_arc.read().comet
+    {
+      unsafe { *out_comet_id = comet.body.as_ffi() };
+    }
+  }
+
+  if command_flags == 0 {
+    return true; // query only
+  }
+
+  if command_flags & 0x1 != 0 {
+    // ATTACH — request the logic thread to attach AlmanacPlanet + force-reposition.
+    let _ = ctx_ref
+      .threads
+      .logic_thread
+      .tx()
+      .try_send(structs::LogicCommand::InitComet { scene_id, spk_id });
+    return true;
+  }
+
+  if command_flags & 0x2 != 0 {
+    // DETACH — remove AlmanacPlanet + TrajectoryComponent, reset comet subtree.
+    let _ = ctx_ref
+      .threads
+      .logic_thread
+      .tx()
+      .try_send(structs::LogicCommand::CleanupComet { scene_id });
+    return true;
+  }
+
+  true
+}
+
+/// Synchronously updates the `BodyRotationalModel` ECS component on the comet body entity.
+///
+/// Safe to call from any thread — the write is protected by the scene's internal lock.
+/// The logic thread reads `BodyRotationalModel` on each step tick so changes take effect
+/// within one logic frame (~16 ms at 60 Hz).
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setBodyRotationalModel(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  comet_body_entity: u64,
+  dto: *const CBodyRotationalModelDTO,
+) -> bool {
+  if ctx.is_null() || dto.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let dto_ref = unsafe { &*dto };
+
+  let model = aethervk_core_rlib::scene::BodyRotationalModel {
+    pole_ra: dto_ref.pole_ra_deg,
+    pole_dec: dto_ref.pole_dec_deg,
+    prime_meridian: dto_ref.prime_meridian_deg,
+    pole_ra_rate: dto_ref.pole_ra_rate_deg_cen,
+    pole_dec_rate: dto_ref.pole_dec_rate_deg_cen,
+    rotation_rate: dto_ref.rot_rate_deg_day,
+  };
+
+  let scenes = ctx_ref.scenes.read();
+  if let Some(scene_arc) = scenes.get_scene(scene_id) {
+    let scene_guard = scene_arc.read();
+    // Try to update an existing BodyRotationalModel component.
+    // If none exists yet, add it.
+    let entity = scene_guard.get_entity(comet_body_entity);
+    if let Some(entity_id) = entity {
+      let updated = scene_guard.scene.with_component_mut(
+        entity_id,
+        |m: &mut aethervk_core_rlib::scene::BodyRotationalModel| {
+          *m = model;
+        },
+      );
+      if updated.is_none() {
+        // Component absent — add it
+        let _ = scene_guard.scene.add_component(entity_id, model);
+      }
+      return true;
+    }
+  }
+  false
 }
 
 /// # Safety

@@ -13,15 +13,7 @@ use crate::{
   simulation::almanac::AlmanacPackedData,
   types::EngineResult,
 };
-use aethervk_oshal_rlib::math::{
-  quaternion::Quaternion,
-  vector::{
-    Vector3,
-    vec3::Vec3f32,
-    vec3f64::DVec3,
-    vec4::Quat,
-  },
-};
+use aethervk_oshal_rlib::math::vector::{Vector3, vec3::Vec3f32, vec3f64::DVec3};
 
 const KM_TO_AU: f64 = 6.6845871226706e-9_f64;
 const AU_TO_KM: f64 = 149_597_870.7_f64;

@@ -1,10 +1,10 @@
 using System.Linq;
+using AetherVk.Behaviors;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Xaml.Interactivity;
-using AetherVk.Behaviors;
 
 namespace AetherVk.Controls;
 
@@ -130,10 +130,8 @@ public partial class UnboundedSlider : UserControl
     set => InputBox.Text = value;
   }
 
-  public static readonly StyledProperty<object?> InnerRightContentProperty = AvaloniaProperty.Register<
-    UnboundedSlider,
-    object?
-  >(nameof(InnerRightContent), null);
+  public static readonly StyledProperty<object?> InnerRightContentProperty =
+    AvaloniaProperty.Register<UnboundedSlider, object?>(nameof(InnerRightContent), null);
 
   public object? InnerRightContent
   {
@@ -231,7 +229,8 @@ public partial class UnboundedSlider : UserControl
   private void OnInputLostFocus(object? sender, RoutedEventArgs e)
   {
     InputBox.IsHitTestVisible = false;
-    if (HasCommitBehavior()) return; // behavior owns the commit
+    if (HasCommitBehavior())
+      return; // behavior owns the commit
 
     if (double.TryParse(InputBox.Text, out double parsed))
     {

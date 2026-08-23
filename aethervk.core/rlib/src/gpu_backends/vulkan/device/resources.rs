@@ -1406,7 +1406,8 @@ impl ArchetypeArenaCreate for Text2RenderResourceArchetypeArena {
     let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
       .set_layouts(core::slice::from_ref(&set_layout))
       .push_constant_ranges(&push_constant_ranges);
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .with_name(device, "VkPipelineLayout_Text2RenderResourceArchetypeArena")?;
 
     let buffer_size = (100_000 * core::mem::size_of::<crate::gpu::TextGlyphGpu>()) as u64;
     let buffer_info = vk::BufferCreateInfo::default().size(buffer_size).usage(
@@ -1602,8 +1603,13 @@ impl ArchetypeArenaCreate for SphereGizmoRenderResourceArchetypeArena {
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
 
     unsafe {
-      let pipeline_layout =
-        device.create_pipeline_layout(&pipeline_layout_info, None).map_err(|e| {
+      let pipeline_layout = device
+        .create_pipeline_layout(&pipeline_layout_info, None)
+        .with_name(
+          device,
+          "VkPipelineLayout_SphereGizmoRenderResourceArchetytpeArena",
+        )
+        .map_err(|e| {
           aethervk_oshal_rlib::log!("create_pipeline_layout failed: {:?}", e);
           e
         })?;
@@ -2693,7 +2699,8 @@ impl ArchetypeArenaCreate for SkyRenderResourceArchetypeArena {
       .set_layouts(core::slice::from_ref(&set_layout))
       .push_constant_ranges(&push_constant_ranges);
 
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .with_name(device, "VkPipelineLayout_SkyRenderResourceArchetypeArena")?;
 
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -2741,7 +2748,11 @@ impl ArchetypeArenaCreate for BackgroundRenderResourceArchetypeArena {
       .size(core::mem::size_of::<crate::gpu::BackgroundPushConstants>() as u32)];
     let pipeline_layout_info =
       vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }?;
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
+      .with_name(
+        device,
+        "VkPipelineLayout_BackgroundRenderResourceArchetypeArena",
+      )?;
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
     })
@@ -3480,7 +3491,12 @@ impl ArchetypeArenaCreate for DustRenderArchetypeArena {
       .push_constant_ranges(core::slice::from_ref(&push_constant_range));
 
     // create pipeline layout
-    let pipeline_layout = unsafe { ctx.device.create_pipeline_layout(&create_info, None)? };
+    let pipeline_layout = unsafe {
+      ctx
+        .device
+        .create_pipeline_layout(&create_info, None)
+        .with_name(ctx.device, "VkPipelineLayout_DustRenderArchetypeArena")?
+    };
     ctx.rollback.defer(move |dev| unsafe {
       dev.destroy_pipeline_layout(pipeline_layout, None);
     });

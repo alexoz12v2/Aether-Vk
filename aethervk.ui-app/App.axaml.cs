@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
@@ -10,8 +11,8 @@ using Avalonia.Data.Core.Plugins;
 using Avalonia.Markup.Xaml;
 using Avalonia.Styling;
 using CommunityToolkit.Mvvm.Messaging;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace AetherVk;
 
@@ -75,7 +76,8 @@ public partial class App : Application
       }
 #endif
 
-      WeakReferenceMessenger.Default.Register<App, Logic.Messages.CriticalErrorMessage>(this,
+      WeakReferenceMessenger.Default.Register<App, Logic.Messages.CriticalErrorMessage>(
+        this,
         (r, m) =>
         {
           Avalonia.Threading.Dispatcher.UIThread.Post(() =>
@@ -93,7 +95,8 @@ public partial class App : Application
         }
       );
 
-      WeakReferenceMessenger.Default.Register<App, Logic.Messages.CopyToClipboardMessage>(this,
+      WeakReferenceMessenger.Default.Register<App, Logic.Messages.CopyToClipboardMessage>(
+        this,
         async (r, m) =>
         {
           var cb = TopLevel.GetTopLevel(desktop.MainWindow)?.Clipboard;
@@ -113,11 +116,17 @@ public partial class App : Application
         {
           Avalonia.Threading.Dispatcher.UIThread.Post(() =>
           {
-            var inputRegistry = ServiceProviderServiceExtensions.GetRequiredService<Logic.Input.InputRegistry>(Host!.Services);
+            var inputRegistry =
+              ServiceProviderServiceExtensions.GetRequiredService<Logic.Input.InputRegistry>(
+                Host!.Services
+              );
             // TODO LOAD INPUT BINDIINGS INTO INPUT REGISTRY
             // Configure the singleton before instantiating main window view model
 
-            var mainWindowViewModel = ServiceProviderServiceExtensions.GetRequiredService<MainWindowViewModel>(Host!.Services);
+            var mainWindowViewModel =
+              ServiceProviderServiceExtensions.GetRequiredService<MainWindowViewModel>(
+                Host!.Services
+              );
             var mainWindow = new MainWindow { DataContext = mainWindowViewModel };
 
             // Listen for theme changes in the ViewModel
@@ -160,10 +169,15 @@ public partial class App : Application
         desktop.MainWindow = splashWindow;
         splashViewModel.Initialize(() =>
         {
-          return ServiceProviderServiceExtensions.GetRequiredService<INativeRuntimeService>(Host!.Services);
+          return ServiceProviderServiceExtensions.GetRequiredService<INativeRuntimeService>(
+            Host!.Services
+          );
         });
 
-        var appLifetime = ServiceProviderServiceExtensions.GetRequiredService<IHostApplicationLifetime>(Host!.Services);
+        var appLifetime =
+          ServiceProviderServiceExtensions.GetRequiredService<IHostApplicationLifetime>(
+            Host!.Services
+          );
 
         // Link the .NET Generic Host lifetime to Avalonia's lifetime.
         // This ensures that when the generic host receives a SIGINT (e.g., from CTRL+C or dotnet watch),
@@ -176,8 +190,7 @@ public partial class App : Application
           });
         });
 
-        desktop.Exit += (sender, args) =>
-        {
+        desktop.Exit += (sender, args) => {
           // EDIT: I think it's not necessary to call dispose here, cause DI Container should handle
           // that. This block will remain if there are special actions to be performed on closing
           // the application
@@ -200,7 +213,11 @@ public partial class App : Application
 #if DEBUG
 public class MockNativeRuntimeService : INativeRuntimeService
 {
-  public void Dispose() { GC.SuppressFinalize(this); }
+  public void Dispose()
+  {
+    GC.SuppressFinalize(this);
+  }
+
   public bool AddViewport(
     uint width,
     uint height,
@@ -208,42 +225,105 @@ public class MockNativeRuntimeService : INativeRuntimeService
     Func<CNativeWindowHandle>? nativeHandleProvider,
     uint handleType,
     out ulong presentationEngineId,
-    out ulong cameraEntityId)
+    out ulong cameraEntityId
+  )
   {
     presentationEngineId = 1;
     cameraEntityId = 2;
     return true;
   }
+
   public void RemoveViewport(ulong presentationEngineId) { }
+
   public void ResizeViewport(ulong presentationEngineId, uint width, uint height) { }
+
   public bool ResetSimulationSync() => true;
+
   public bool PauseSimulationSync() => true;
+
   public bool StartSimulation(int simSpeed) => true;
+
   public bool AddCameraAnimation(ulong cameraId, AnimationTarget animation) => true;
-  public bool TransformStaticCamera(ulong cameraId, int mode, nint buffer) => true;
-  public bool AddParticleSystem(ParticleSystemModel psModel, ParticleSystemJet psJet, out ulong outPsId)
+
+  public bool CameraSetRotoTranslate(
+    ulong cameraId,
+    System.Numerics.Vector3 position,
+    System.Numerics.Quaternion rotation
+  ) => true;
+
+  public bool CameraSetPerspective(
+    ulong cameraId,
+    float fov,
+    float aspectRatio,
+    float near,
+    float far
+  ) => true;
+
+  public bool CameraSetOrthographic(
+    ulong cameraId,
+    float left,
+    float right,
+    float bottom,
+    float top,
+    float near,
+    float far
+  ) => true;
+
+  public bool AddParticleSystem(
+    ParticleSystemModel psModel,
+    ParticleSystemJet psJet,
+    out ulong outPsId
+  )
   {
     outPsId = 3;
     return true;
   }
-  public ParticleSystemComputedProperties? AddFirstParticleSystem(ParticleSystemModel psModel, ParticleSystemJet psJet, out ulong outPsId)
+
+  public ParticleSystemComputedProperties? AddFirstParticleSystem(
+    ParticleSystemModel psModel,
+    ParticleSystemJet psJet,
+    out ulong outPsId
+  )
   {
     outPsId = 3;
     return new ParticleSystemComputedProperties(0f, 0f);
   }
-  public bool ModifyParticleSystem(ulong psId, ParticleSystemModel psModel, ParticleSystemJet psJet, out ParticleSystemComputedProperties outPsComputedProps)
+
+  public bool ModifyParticleSystem(
+    ulong psId,
+    ParticleSystemModel psModel,
+    ParticleSystemJet psJet,
+    out ParticleSystemComputedProperties outPsComputedProps
+  )
   {
     outPsComputedProps = new ParticleSystemComputedProperties(0f, 0f);
     return true;
   }
-  public bool ReconfigureComet() => true;
+
+  public bool RemoveParticleSystem(ulong psId) => true;
+
+  public bool ReconfigureComet(int commandFlags, int spkId, out ulong cometBodyId)
+  {
+    cometBodyId = 0;
+    return true;
+  }
+
+  public bool SetBodyRotationalModel(ulong cometBodyEntityId, BodyRotationalModelDto dto) => true;
+
   public Task<ulong> LoadAlmanacFileAsync(string path) => Task.FromResult(4UL);
+
   public bool UnloadAlmanacFile(string path) => true;
+
   public Task<ulong> ImportModelAsync(string path) => Task.FromResult(5UL);
+
   public void UnloadModel(ulong modelId) { }
+
   public ulong AddScreenSpaceBillboard(string imagePath, ScreenSpaceBillboard billboard) => 6;
+
   public bool SetScreenSpaceBillboard(ulong entityId, ScreenSpaceBillboard billboard) => true;
+
   public bool RemoveScreenSpaceBillboard(ulong entityId) => true;
+
   public bool GetScreenSpaceBillboard(ulong entityId, out ScreenSpaceBillboard outData)
   {
     outData = new ScreenSpaceBillboard(0, 0, 1, 0, 1, 0);
@@ -251,19 +331,35 @@ public class MockNativeRuntimeService : INativeRuntimeService
   }
 
   // ── Callbacks & Dispatch ──────────────────────────────────────────────────
-  public IDisposable RegisterSimulationListener(ulong entityId, ulong componentForeignId, Action<nint> handler)
-    => System.Reactive.Disposables.Disposable.Empty;
-  public IDisposable RegisterExternalStateListener(ExternalStateType stateType, Action<nint> handler)
-    => System.Reactive.Disposables.Disposable.Empty;
+  public IDisposable RegisterSimulationListener(
+    ulong entityId,
+    ulong componentForeignId,
+    Action<nint> handler
+  ) => System.Reactive.Disposables.Disposable.Empty;
+
+  public IDisposable RegisterExternalStateListener(
+    ExternalStateType stateType,
+    Action<nint> handler
+  ) => System.Reactive.Disposables.Disposable.Empty;
 
   // ── Cached State ──────────────────────────────────────────────────────────
   public ulong? CameraEntityId => 2UL;
   public ulong? CometEntityId => null;
   public ulong? EarthEntityId => null;
 
+  // Mock never shuts down mid-flight; expose a never-cancelled token.
+  public CancellationToken ShutdownToken => CancellationToken.None;
+
   // ── Timeline ──────────────────────────────────────────────────────────────
-  public bool SetEpochRange(short startCenturies, ulong startNs, short endCenturies, ulong endNs) => true;
-  public bool CheckAlmanacCoverage(int spkId, short startCenturies, ulong startNs, short endCenturies, ulong endNs) => true;
+  public bool SetEpochRange(short startCenturies, ulong startNs, short endCenturies, ulong endNs) =>
+    true;
+
+  public bool CheckAlmanacCoverage(
+    int spkId,
+    short startCenturies,
+    ulong startNs,
+    short endCenturies,
+    ulong endNs
+  ) => true;
 }
 #endif
-
