@@ -15,4 +15,5 @@ internal interface INativeInputHandlerSubscribable : INativeInputHandler
   /// The returned <see cref="IDisposable"/> cancels the subscription when disposed.
   /// </summary>
   IDisposable SubscribeComposedKeystrokes(Action<ComposedKeystroke> onNext);
+  IDisposable SubscribeNativeMouseEvents(Action<NativeMouseEvent> onNext);
 }

@@ -1,0 +1,37 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             x:Class="AetherVk.Views.CometTabDebugView"
+             x:DataType="vm:ICometTabViewModel">
+  <Expander Header="Debug Tools (ECS Print)" IsExpanded="False" Margin="4,4,4,4">
+    <StackPanel Spacing="6" Margin="4,4,4,4">
+      <TextBlock Text="These tools query the native simulation context directly and log to the console." 
+                 FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource Text.Disabled}" />
+      
+      <Button Content="Query Comet" 
+              Command="{Binding DebugQueryCometCommand}" 
+              HorizontalAlignment="Stretch" 
+              HorizontalContentAlignment="Center" />
+      
+      <TextBlock Text="Dust Jets:" FontSize="11" Margin="0,4,0,0" Foreground="{DynamicResource Text.Secondary}" />
+      
+      <ItemsControl ItemsSource="{Binding DebugJets}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Button Content="{Binding DisplayIndex, StringFormat='Query Jet {0}'}"
+                    Command="{Binding $parent[UserControl].((vm:ICometTabViewModel)DataContext).DebugQueryJetCommand}"
+                    CommandParameter="{Binding NativePsId}"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    Margin="0,2" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Spacing="2" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+      </ItemsControl>
+    </StackPanel>
+  </Expander>
+</UserControl>

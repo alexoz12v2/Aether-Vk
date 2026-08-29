@@ -93,6 +93,14 @@ public sealed class CometPositionTrackerService : IDisposable
   /// </summary>
   internal IObservable<Vector3?> CometPositionRaw => _positionSubject;
 
+  /// <summary>
+  /// Synchronous read of the last known comet position.
+  /// Used by <see cref="CameraService"/> to apply orbit zoom immediately when the
+  /// simulation is paused (i.e. no pending <c>SIMULATION_CALLBACK</c> tick to trigger
+  /// <c>SnapCameraToOrbit</c>).
+  /// </summary>
+  internal Vector3? LastKnownCometPosition => _positionSubject.Value;
+
   // ── State transitions ──────────────────────────────────────────────────────
 
   private void EmitDefaultPosition()

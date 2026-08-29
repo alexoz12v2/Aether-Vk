@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using AetherVk.Logic.Services;
 
 namespace AetherVk.Logic.ViewModels;
@@ -8,7 +9,7 @@ public partial class SplashViewModel : ViewModelBase
   public event Action? OnInitializationCompleted;
   public event Action<string>? OnInitializationFailed;
 
-  public void Initialize(Func<INativeRuntimeService> factory)
+  public async Task InitializeAsync(Func<INativeRuntimeService> factory)
   {
     bool success = false;
     string errorMessage = "Unknown error";
@@ -20,7 +21,7 @@ public partial class SplashViewModel : ViewModelBase
       // native function has a assets path available
       // _runtimeService.LoadAlmanacFileAsync("assets/planets/de442.bsp"),
       // _runtimeService.LoadAlmanacFileAsync("assets/earth_latest_high_prec.bpc")
-      _ = factory.Invoke();
+      await Task.Run(() => factory.Invoke());
 
       success = true;
     }

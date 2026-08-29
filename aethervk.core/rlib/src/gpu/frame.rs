@@ -322,12 +322,33 @@ impl SkyDrawCall {
 
   #[named]
   pub fn from_camera(camera_data: &CameraRenderData, pipeline_key: PipelineKey) -> GpuResult<Self> {
-    let sky_view_proj = {
-      let sky_view = camera_data.view.zeroed_translation();
-      camera_data.proj * sky_view
+    let sky_view = camera_data.view.zeroed_translation();
+
+    // For orthographic cameras we cannot use the actual projection for the sky:
+    // inv(ortho_proj)*NDC gives view-space *positions* (parallel rays), so all
+    // pixels sample nearly the same sky direction producing a flat / extreme-fisheye
+    // look. Use a fixed 90° perspective proj for the sky direction computation so the
+    // environment map always appears spherical, regardless of scene projection.
+    let sky_proj = match camera_data.projection_params {
+      CameraProjectionParams::Perspective { fov, aspect_ratio } => {
+        Mat4x4f32::perspective_vk_reverse_z(fov, aspect_ratio, camera_data.near, camera_data.far)
+      }
+      CameraProjectionParams::Orthographic { .. } => {
+        let aspect = camera_data.window_extent[0] as f32
+          / camera_data.window_extent[1].max(1) as f32;
+        // 90° FOV gives a natural-looking sky for a top-down orthographic view.
+        Mat4x4f32::perspective_vk_reverse_z(
+          core::f32::consts::FRAC_PI_2,
+          aspect,
+          camera_data.near,
+          camera_data.far,
+        )
+      }
     };
-    let inv_view_proj_mat = camera_data.view_proj.inverse().ok_or(crate::gpu_err!(
-      "SkyDrawCall: couldn't invert view_proj matrix"
+
+    let sky_view_proj = sky_proj * sky_view;
+    let inv_view_proj_mat = sky_view_proj.inverse().ok_or(crate::gpu_err!(
+      "SkyDrawCall: couldn't invert sky_view_proj matrix"
     ))?;
 
     Ok(Self {
@@ -833,8 +854,9 @@ pub fn do_draw_sun(
   _handle: PresentationEngineHandle,
   draw_call: &SunDrawCall,
 ) -> GpuResult<()> {
+  // prepare_sun_for_render binds the graphics pipeline and the descriptor set
+  // (set 0 = sampler3D sunVolume).  No second bind_pipeline call needed.
   device.prepare_sun_for_render(cmd_buffer, draw_call.entity)?;
-  device.bind_pipeline(cmd_buffer, draw_call.pipeline)?;
   let mvp = camera.view_proj * draw_call.model_matrix;
   let push_constants = SunPushConstants {
     model_view_proj: mvp.into(),

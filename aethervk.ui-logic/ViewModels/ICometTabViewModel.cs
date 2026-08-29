@@ -78,16 +78,21 @@ public partial interface ICometTabViewModel
 
   // ── Commands ──────────────────────────────────────────────────────────────
 
-  /// <summary>Executes a comet search against the JPL SBDB API.</summary>
+  /// <summary>Updates <see cref="FilteredSearchResults"/> from JPL API (async).</summary>
   IAsyncRelayCommand SearchCometsCommand { get; }
 
-  /// <summary>Fetches SPK records for the currently selected comet.</summary>
+  /// <summary>Fetches SPK records for <see cref="SelectedComet"/>.</summary>
   IAsyncRelayCommand LoadSpkRecordsCommand { get; }
 
-
-  /// <summary>Downloads the selected SPK file and commits it to the native runtime.</summary>
+  /// <summary>Downloads SPK, commits it to native, and tracks comet state.</summary>
   IAsyncRelayCommand DownloadAndCommitCommand { get; }
 
-  /// <summary>Detaches the current comet configuration and resets to defaults.</summary>
+  /// <summary>Undoes commit, detaching the SPK from the simulation.</summary>
   IRelayCommand DecommitCometCommand { get; }
+  
+  // ── Debug Commands ────────────────────────────────────────────────────────
+  
+  System.Collections.ObjectModel.ObservableCollection<JetViewModel>? DebugJets { get; }
+  IRelayCommand DebugQueryCometCommand { get; }
+  IRelayCommand<ulong> DebugQueryJetCommand { get; }
 }

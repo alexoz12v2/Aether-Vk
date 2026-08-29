@@ -447,6 +447,46 @@ pub unsafe extern "C" fn avkSimulationContext_modifyComponent(
   todo!()
 }
 
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_debugECSPrint(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_count: u32,
+  entity_ids: *const u64,
+  comp_count: u32,
+  comps: *const u64,
+) {
+  #[cfg(debug_assertions)]
+  {
+    if ctx.is_null() || entity_count == 0 || comp_count == 0 || entity_ids.is_null() || comps.is_null() {
+      return;
+    }
+    let ctx_ref = unsafe { &*ctx };
+    let e_ids = unsafe { core::slice::from_raw_parts(entity_ids, entity_count as usize) };
+    let c_ids = unsafe { core::slice::from_raw_parts(comps, comp_count as usize) };
+
+    if let Some(scene_arc) = ctx_ref.scenes.read().get_scene(scene_id) {
+      let scene_guard = scene_arc.read();
+      for &e_id in e_ids {
+        let entity = aethervk_core_rlib::scene::EntityId::from_ffi(e_id);
+        oshal::log!("--- Entity {} ---", e_id);
+        for &c_id in c_ids {
+          if let Some(_) = scene_guard.scene.with_component_mut_by_id(entity, c_id, |erased| {
+             erased.debug_print();
+          }) {
+             // Successfully printed
+          } else {
+             oshal::log!("Component {} not found", c_id);
+          }
+        }
+      }
+    }
+  }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct AnimationTargetDTO {
@@ -1766,4 +1806,142 @@ pub mod debug {
     }
     0
   }
+}
+
+// ── RenderDoc in-application API (debug builds only) ─────────────────────────
+
+/// Returns `1` if the process was launched under RenderDoc and the in-app
+/// capture API was successfully acquired, `0` otherwise.
+///
+/// Call once at startup (or lazily) to determine whether to show the capture
+/// button in the UI.  The first call performs the one-time library probe;
+/// subsequent calls return the cached result instantly.
+///
+/// # Safety
+/// FFI Contract — no preconditions beyond a valid calling environment.
+#[cfg(debug_assertions)]
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkDebug_isRenderDocAvailable() -> u8 {
+  if aethervk_core_rlib::gpu_backends::vulkan::renderdoc::is_available() { 1 } else { 0 }
+}
+
+/// Requests RenderDoc to save the next presented frame to a `.rdc` capture file.
+///
+/// Equivalent to pressing F12 in the RenderDoc UI.  No-op (and safe to call)
+/// if RenderDoc is not loaded into this process.
+///
+/// # Safety
+/// FFI Contract — no preconditions beyond a valid calling environment.
+#[cfg(debug_assertions)]
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkDebug_triggerCapture() {
+  aethervk_core_rlib::gpu_backends::vulkan::renderdoc::trigger_capture();
+}
+
+/// Queues a scoped RenderDoc capture for the **next rendered frame** of the
+/// given windowed presentation engine.  Only that swapchain is captured —
+/// Avalonia's own rendering queues are unaffected.
+///
+/// Returns 1 on success, 0 if `ctx` is null, RenderDoc is unavailable, or
+/// the render thread channel is full / not yet started.
+///
+/// # Safety
+/// `ctx` must be a valid non-null pointer to a live `SimulationContext`.
+#[cfg(debug_assertions)]
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkDebug_startScopedCapture(ctx: *mut SimulationContext, pe_id: u64) -> u8 {
+  use aethervk_core_rlib::gpu_backends::vulkan::renderdoc;
+  use aethervk_core_rlib::simulation_api::render_thread::channel_utils;
+
+  if ctx.is_null() || !renderdoc::is_available() {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let pe_handle = gpu::PresentationEngineHandle(pe_id);
+  let cmd = RenderCommand::CaptureNextFrame { pe_handle };
+  let Some(tx) = ctx_ref.threads.render_thread.tx_opt() else {
+    return 0;
+  };
+  if channel_utils::retry_with_limit(tx, cmd, 10, core::time::Duration::from_millis(1)) {
+    1
+  } else {
+    0
+  }
+}
+/// Debug-only telemetry DTO. All fields are fixed-size for stable C ABI.
+/// In release builds this type and its associated FFI function are not compiled.
+#[cfg(debug_assertions)]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct CDebugTelemetryStatsDTO {
+    /// RSS physical RAM from /proc/self/statm (bytes)
+    pub os_physical_ram_bytes: u64,
+    /// Virtual address space from /proc/self/statm (bytes)
+    pub os_virtual_ram_bytes: u64,
+    /// CPU heap allocated via TrackingAllocator (bytes)
+    pub cpu_allocated_bytes: u64,
+    /// GPU VRAM allocated via VMA tracking (bytes)
+    pub gpu_allocated_bytes: u64,
+    /// Last logic-thread loop wall time (ms)
+    pub logic_thread_cpu_time_ms: f64,
+    /// Last render-thread CPU submission time (ms, NOT GPU execution time)
+    pub render_thread_cpu_time_ms: f64,
+    /// Reserved for future VK_QUERY_TYPE_TIMESTAMP GPU timing
+    pub reserved_gpu_execution_ms: f64,
+}
+
+/// Query engine-side debug telemetry statistics.
+/// Only available in debug builds (`cfg(debug_assertions)`).
+/// In release builds this symbol is not exported.
+///
+/// # Safety
+/// `out` must be a valid non-null pointer to a `CDebugTelemetryStatsDTO`.
+/// The caller is responsible for ensuring `out` is properly aligned and sized.
+#[cfg(debug_assertions)]
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getDebugTelemetryStats(
+    _ctx: isize,
+    out: *mut CDebugTelemetryStatsDTO,
+) -> bool {
+    if out.is_null() {
+        return false;
+    }
+
+    use aethervk_oshal_rlib::os::memory;
+    use core::sync::atomic::Ordering;
+
+    let proc_mem = memory::query_process_memory();
+    let cpu_bytes = memory::tracking::CPU_ALLOCATED.load(Ordering::Relaxed) as u64;
+    let gpu_bytes = memory::tracking::GPU_ALLOCATED.load(Ordering::Relaxed) as u64;
+
+    let logic_ms = f64::from_bits(
+        aethervk_core_rlib::simulation_api::logic_thread::DEBUG_LOGIC_THREAD_TIME_MS
+            .load(Ordering::Relaxed),
+    );
+    let render_ms = f64::from_bits(
+        aethervk_core_rlib::gpu_backends::vulkan::DEBUG_RENDER_THREAD_CPU_TIME_MS
+            .load(Ordering::Relaxed),
+    );
+
+    let gpu_exec_ms = f64::from_bits(
+        aethervk_core_rlib::gpu_backends::vulkan::DEBUG_RENDER_THREAD_GPU_TIME_MS
+            .load(Ordering::Relaxed),
+    );
+
+    unsafe {
+        *out = CDebugTelemetryStatsDTO {
+            os_physical_ram_bytes: proc_mem.physical_bytes,
+            os_virtual_ram_bytes: proc_mem.virtual_bytes,
+            cpu_allocated_bytes: cpu_bytes,
+            gpu_allocated_bytes: gpu_bytes,
+            logic_thread_cpu_time_ms: logic_ms,
+            render_thread_cpu_time_ms: render_ms,
+            reserved_gpu_execution_ms: gpu_exec_ms,
+        };
+    }
+    true
 }

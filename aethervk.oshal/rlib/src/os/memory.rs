@@ -298,7 +298,7 @@ impl StackAllocator {
   }
 }
 
-#[cfg(all(debug_assertions, any(feature = "debug_gpu", test)))]
+#[cfg(debug_assertions)]
 pub mod tracking {
   use core::{
     alloc::{GlobalAlloc, Layout},

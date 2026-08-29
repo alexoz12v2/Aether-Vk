@@ -3,7 +3,7 @@
 
 namespace AetherVk.Logic.ViewModels;
 
-public interface ITimelineTabViewModel
+public partial interface ITimelineTabViewModel
 {
     string StrTitle { get; set; }
 }

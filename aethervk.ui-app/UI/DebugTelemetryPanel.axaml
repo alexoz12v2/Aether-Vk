@@ -1,0 +1,75 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:AetherVk.Logic.ViewModels.Debug"
+             x:DataType="vm:DebugTelemetryPanelViewModel"
+             x:Class="AetherVk.UI.DebugTelemetryPanel">
+
+    <Expander IsExpanded="{Binding IsExpanded}"
+              HorizontalAlignment="Right"
+              VerticalAlignment="Top"
+              Background="{DynamicResource Bg.Surface}"
+              BorderBrush="{DynamicResource Bg.Outline}"
+              BorderThickness="1"
+              CornerRadius="8"
+              Opacity="0.9">
+        <Expander.Header>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="📊" VerticalAlignment="Center"/>
+                <TextBlock Text="Debug Telemetry" 
+                           FontWeight="Bold" 
+                           Foreground="{DynamicResource Text.Primary}"
+                           VerticalAlignment="Center"/>
+            </StackPanel>
+        </Expander.Header>
+
+        <StackPanel Margin="10" Spacing="8" MinWidth="220">
+            <TextBlock Text="Memory Tracking" FontWeight="Bold" Foreground="{DynamicResource Accent.Primary}"/>
+            
+            <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="OS Physical RAM:" Foreground="{DynamicResource Text.Secondary}"/>
+                <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding PhysicalRamMb, StringFormat=\{0:F2\} MB}" HorizontalAlignment="Right" Foreground="{DynamicResource Text.Primary}"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="OS Virtual RAM:" Foreground="{DynamicResource Text.Secondary}"/>
+                <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding VirtualRamMb, StringFormat=\{0:F2\} MB}" HorizontalAlignment="Right" Foreground="{DynamicResource Text.Primary}"/>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="CPU Allocated:" Foreground="{DynamicResource Text.Secondary}"/>
+                <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding CpuAllocatedMb, StringFormat=\{0:F2\} MB}" HorizontalAlignment="Right" Foreground="{DynamicResource Text.Primary}"/>
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Text="GPU VRAM:" Foreground="{DynamicResource Text.Secondary}"/>
+                <TextBlock Grid.Row="3" Grid.Column="2" Text="{Binding GpuAllocatedMb, StringFormat=\{0:F2\} MB}" HorizontalAlignment="Right" Foreground="{DynamicResource Text.Primary}"/>
+                
+                <TextBlock Grid.Row="4" Grid.Column="0" Text=".NET Heap:" Foreground="{DynamicResource Text.Secondary}"/>
+                <TextBlock Grid.Row="4" Grid.Column="2" Text="{Binding DotNetHeapMb, StringFormat=\{0:F2\} MB}" HorizontalAlignment="Right" Foreground="{DynamicResource Text.Primary}"/>
+            </Grid>
+
+            <Separator Background="{DynamicResource Bg.Outline}" Margin="0,4"/>
+
+            <TextBlock Text="Thread Timings" FontWeight="Bold" Foreground="{DynamicResource Accent.Primary}"/>
+            
+            <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Logic Tick:" Foreground="{DynamicResource Text.Secondary}"/>
+                <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding LogicThreadMs, StringFormat=\{0:F2\} ms}" HorizontalAlignment="Right" Foreground="{DynamicResource Text.Primary}"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Render Submit:" Foreground="{DynamicResource Text.Secondary}"/>
+                <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding RenderCpuMs, StringFormat=\{0:F2\} ms}" HorizontalAlignment="Right" Foreground="{DynamicResource Text.Primary}"/>
+                
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="GPU Exec:" Foreground="{DynamicResource Text.Secondary}"/>
+                <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding GpuExecMs, StringFormat=\{0:F2\} ms}" HorizontalAlignment="Right" Foreground="{DynamicResource Text.Primary}"/>
+            </Grid>
+
+            <Separator Background="{DynamicResource Bg.Outline}" Margin="0,4"/>
+
+            <TextBlock Text=".NET GC Collections" FontWeight="Bold" Foreground="{DynamicResource Accent.Primary}"/>
+            <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Gen 0:" Foreground="{DynamicResource Text.Secondary}"/>
+                <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding Gen0Collections}" HorizontalAlignment="Right" Foreground="{DynamicResource Text.Primary}"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Gen 1:" Foreground="{DynamicResource Text.Secondary}"/>
+                <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding Gen1Collections}" HorizontalAlignment="Right" Foreground="{DynamicResource Text.Primary}"/>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Gen 2:" Foreground="{DynamicResource Text.Secondary}"/>
+                <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding Gen2Collections}" HorizontalAlignment="Right" Foreground="{DynamicResource Text.Primary}"/>
+            </Grid>
+        </StackPanel>
+    </Expander>
+</UserControl>

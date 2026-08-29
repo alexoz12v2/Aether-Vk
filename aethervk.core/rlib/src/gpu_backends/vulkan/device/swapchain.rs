@@ -91,7 +91,7 @@ pub(super) struct WindowedPresentationState {
   pre_transform: vk::SurfaceTransformFlagsKHR,
   surface_format: vk::SurfaceFormatKHR,
   vsync: bool,
-  native_handle: OpaqueNativeHandleInfo,
+  pub native_handle: OpaqueNativeHandleInfo,
 
   swapchain_generation: u64,
   physical_device: NonZeroHandle<vk::PhysicalDevice>,
@@ -1355,7 +1355,6 @@ impl WindowedPresentationState {
       self.recreate_swapchain(device, true, self.physical_device, rollback)?;
     }
 
-    const FIRST_ATTEMPT_TIMEOUT_NS: u64 = 167;
     let images_count = self.images.len();
     let frame_count = self.frames.len();
     let next_frame = (self.current_frame + 1) % frame_count;
@@ -1374,44 +1373,20 @@ impl WindowedPresentationState {
         frame_count,
       )));
     }
-    let fences: &[vk::Fence] = unsafe {
-      core::slice::from_ref(&swapchain_image.submission_fence.as_ref().unwrap_unchecked())
-    };
 
-    // ── Frame-fence wait with hard timeout ─────────────────────────────
-    // Previously this loop escalated to u64::MAX (infinite) on the first
-    // 167-ns timeout miss. If the GPU was in a bad state after a physics
-    // device-lost, the fence never signalled, and the render thread blocked
-    // forever inside xcb_wait_for_special_event (confirmed by GDB trace on
-    // Thread 28 — libGLX_nvidia.so.0 / xcb_wait_for_special_event).
-    // Now we cap at SWAPCHAIN_HARD_TIMEOUT_NS (5 s). A second timeout means
-    // the GPU is genuinely hung; we return an error so the render thread
-    // skips the frame and retries next tick instead of hanging forever.
+    // ── Pre-acquire fence wait REMOVED ─────────────────────────────────
+    // The previous code waited on images[next_image].submission_fence here,
+    // BEFORE calling vkAcquireNextImageKHR. This completely serialised the
+    // CPU and GPU: the CPU had to stall until the GPU finished the previous
+    // frame before it could even acquire the next image — destroying Vulkan's
+    // asynchronous pipelining and capping the app at ~7 FPS.
+    //
+    // The correct place to wait on an image's fence is AFTER acquire returns
+    // the actual image_index, which is already done below in the fence-swap
+    // block (see "if image_index as usize != self.next_image"). That wait
+    // only blocks if the WM returns an image index different from next_image,
+    // and only blocks for exactly as long as needed.
     const SWAPCHAIN_HARD_TIMEOUT_NS: u64 = 5_000_000_000; // 5 s
-    let mut timeout = FIRST_ATTEMPT_TIMEOUT_NS;
-    loop {
-      let result = unsafe { device.wait_for_fences(fences, false, timeout) };
-      if let Err(vk_result) = result {
-        if vk_result == vk::Result::TIMEOUT {
-          if timeout == FIRST_ATTEMPT_TIMEOUT_NS {
-            // Short probe missed — give the GPU a proper 5-second window.
-            timeout = SWAPCHAIN_HARD_TIMEOUT_NS;
-          } else {
-            // Still not signalled after 5 s — GPU is hung or device-lost.
-            aethervk_oshal_rlib::log!(
-              "[swapchain] frame-fence timed out after 5 s — GPU hung, skipping frame"
-            );
-            return Err(crate::types::GpuError::BackendSpecific(alloc::format!(
-              "swapchain frame-fence timed out (GPU hung)"
-            )));
-          }
-        } else {
-          return Err(vk_result.into());
-        }
-      } else {
-        break;
-      }
-    }
 
     // Pre-drain discarded swapchains to the main-thread queue before cleanup.
     // On macOS, MoltenVK requires swapchain destruction on the main UI thread.
@@ -1431,8 +1406,6 @@ impl WindowedPresentationState {
       }
     }
     self.frame_discards[self.current_frame].cleanup(&self.swapchain_device, device);
-
-    // DELETED from here: unsafe { device.reset_fences(fences) }?;
 
     let (image_index, vk_result) = unsafe {
       let mut index = 0u32;
@@ -1455,26 +1428,37 @@ impl WindowedPresentationState {
 
     match vk_result {
       vk::Result::SUCCESS | vk::Result::SUBOPTIMAL_KHR => {
-        // ADDED here: Only reset the fence when we successfully acquired the image!
-        unsafe { device.reset_fences(fences).map_err(GpuError::from)? };
+        // We must wait for the fence associated with the image we are about to use
+        // before resetting it. Calling vkResetFences on a fence that is still in-flight
+        // is a Vulkan spec violation (VUID-vkResetFences-pFences-01123) and crashes VVL:
+        // VVL resets the internal std::promise prematurely, so when the GPU later signals
+        // the fence and Retire() calls set_value() again, it throws std::future_error.
+        if let Some(fence) = self.images[image_index as usize].submission_fence {
+          unsafe {
+            // Cap at 5 s — same reasoning as vkAcquireNextImageKHR above.
+            let _ = device.wait_for_fences(&[fence.get()], false, SWAPCHAIN_HARD_TIMEOUT_NS);
+            device.reset_fences(&[fence.get()]).map_err(GpuError::from)?
+          };
+        }
 
         if image_index as usize != self.next_image {
-          let next_fence = self.images[self.next_image].submission_fence.take();
+          // WSI signaled images[next_image].acquire_semaphore but handed us image_index.
+          // We must move that signaled semaphore to images[image_index] so that
+          // steal_from_swapchain_image picks up the right one for the render submission.
+          //
+          // Do NOT swap submission_fence. The fence tracks per-image GPU work:
+          // images[i].submission_fence is the fence from the last render into image i,
+          // and we must wait+reset it before reusing image i (already done above for
+          // images[image_index]). Swapping fences here would put images[next_image]'s
+          // fence — which is NOT waited on and NOT reset — into images[image_index],
+          // where steal_from_swapchain_image would pass it straight to vkQueueSubmit,
+          // causing a double-submission → double VVL Retire() → "Promise already satisfied" crash.
+          // images[next_image].submission_fence stays in place and will be properly
+          // waited on the next time that image is acquired.
           let next_sem = self.images[self.next_image].acquire_semaphore.take();
-          let actual_fence = self.images[image_index as usize].submission_fence.take();
           let actual_sem = self.images[image_index as usize].acquire_semaphore.take();
-
-          self.images[image_index as usize].submission_fence = next_fence;
           self.images[image_index as usize].acquire_semaphore = next_sem;
-          self.images[self.next_image].submission_fence = actual_fence;
           self.images[self.next_image].acquire_semaphore = actual_sem;
-
-          if let Some(fence) = self.images[self.next_image].submission_fence {
-            unsafe {
-              // Cap at 5 s — same reasoning as the frame-fence wait above.
-              let _ = device.wait_for_fences(&[fence.get()], false, SWAPCHAIN_HARD_TIMEOUT_NS);
-            }
-          }
         }
 
         let actual_image = &mut self.images[image_index as usize];

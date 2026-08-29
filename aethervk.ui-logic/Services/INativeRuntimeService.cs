@@ -106,6 +106,10 @@ public interface INativeRuntimeService : IDisposable
   // TODO: Swap this for specific versions, namely, particle system
   // bool ModifyComponent(ulong entityId, uint command, nint inDto, nint outComputedDto);
 
+#if DEBUG
+  void DebugECSPrint(uint entityCount, ulong[] entityIds, uint compCount, ulong[] comps);
+#endif
+
   bool AddCameraAnimation(ulong cameraId, AnimationTarget animation);
 
   /// <summary>
@@ -249,6 +253,10 @@ public interface INativeRuntimeService : IDisposable
   /// <summary>Camera entity ID — set when <see cref="AddViewport"/> succeeds.</summary>
   ulong? CameraEntityId { get; }
 
+  /// <summary>Windowed presentation engine ID — set when <see cref="AddViewport"/> succeeds.
+  /// Pass to <see cref="StartScopedRenderDocCapture"/> to scope frame captures.</summary>
+  ulong? PresentationEngineId { get; }
+
   /// <summary>
   /// Earth body entity ID — populated from <c>CStartupReturn.EarthPlanetEntity</c> at startup.
   /// Used by <see cref="CameraService"/> to register a position-tracking listener.
@@ -289,6 +297,38 @@ public interface INativeRuntimeService : IDisposable
     short endCenturies,
     ulong endNs
   );
+
+#if DEBUG
+  // ==========================================
+  // Frame Debugging (RenderDoc)
+  // ==========================================
+
+  /// <summary>
+  /// Returns <c>true</c> if the process was launched under RenderDoc and the
+  /// in-app capture API is available.
+  /// </summary>
+  bool IsRenderDocAvailable();
+
+  /// <summary>
+  /// Requests RenderDoc to capture the next rendered frame and write it to a
+  /// <c>.rdc</c> file in the current working directory.
+  /// No-op (and safe to call) if <see cref="IsRenderDocAvailable"/> is <c>false</c>.
+  /// </summary>
+  void TriggerRenderDocCapture();
+
+  /// <summary>
+  /// Queues a scoped RenderDoc capture bracketing the very next rendered frame
+  /// of the specified windowed presentation engine.  Only that swapchain is
+  /// captured — Avalonia's own rendering queues are not included.
+  /// </summary>
+  /// <param name="presentationEngineId">
+  ///   The PE id returned by <see cref="AddViewport"/>.
+  /// </param>
+  /// <returns><c>true</c> if the command was successfully enqueued.</returns>
+  bool StartScopedRenderDocCapture(ulong presentationEngineId);
+  
+  bool GetDebugTelemetryStats(out DebugTelemetryStats stats);
+#endif
 }
 
 #endregion
@@ -664,6 +704,18 @@ internal unsafe static class PInvokeAetherVkCore
     nint outDto
   );
 
+#if DEBUG
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkSimulationContext_debugECSPrint(
+    nint ctx,
+    ulong sceneId,
+    uint entityCount,
+    ulong* entityIds,
+    uint compCount,
+    ulong* comps
+  );
+#endif
+
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_modifyParticleSystem(
     nint ctx,
@@ -781,6 +833,40 @@ internal unsafe static class PInvokeAetherVkCore
     int command,
     nint signalDonePtr
   );
+
+#if DEBUG
+  // ── RenderDoc in-application API ─────────────────────────────────────────
+
+  /// <summary>
+  /// Returns 1 if the process was launched under RenderDoc and the in-app API
+  /// is available, 0 otherwise.  Triggers the one-time library probe on first call.
+  /// Only exported from the native library in Debug builds.
+  /// </summary>
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern byte avkDebug_isRenderDocAvailable();
+
+  /// <summary>
+  /// Requests RenderDoc to capture the next presented frame.
+  /// No-op if RenderDoc is not loaded.
+  /// Only exported from the native library in Debug builds.
+  /// </summary>
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void avkDebug_triggerCapture();
+
+  /// <summary>
+  /// Queues a scoped RenderDoc capture for the next frame of the given windowed PE.
+  /// Returns 1 on success, 0 if unavailable or channel full.
+  /// Only exported from the native library in Debug builds.
+  /// </summary>
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern byte avkDebug_startScopedCapture(nint ctx, ulong peId);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_getDebugTelemetryStats(
+    IntPtr ctx,
+    out CDebugTelemetryStatsDTO stats);
+#endif
 }
 
 #endregion
@@ -860,6 +946,9 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   /// <inheritdoc/>
   public ulong? CameraEntityId { get; private set; }
+
+  /// <inheritdoc/>
+  public ulong? PresentationEngineId { get; private set; }
 
   /// <inheritdoc/>
   public ulong? EarthEntityId { get; private set; }
@@ -1038,7 +1127,13 @@ public sealed class NativeRuntimeService : INativeRuntimeService
       return;
     }
 
-    instance._uiThreadDispatcher.Dispatch(() =>
+    // Run inline if we are already on the UI thread (e.g. during shutdown, where
+    // ShutdownSync() is called from the UI thread and the Avalonia event loop is no
+    // longer pumping). Posting asynchronously in that case deadlocks: the render thread
+    // spin-waits on signal_done, but the posted action can never execute because the
+    // UI thread is blocked in pthread_join waiting for the render thread.
+    // This mirrors the identical pattern in GetNativeWindowHandleThunk.
+    void Execute()
     {
 #if TARGET_IS_OSX
       using var pool = new CocoaAutoreleasePool();
@@ -1054,7 +1149,12 @@ public sealed class NativeRuntimeService : INativeRuntimeService
         // Fallback: ensure Rust's spin-wait terminates even if the native call threw.
         SignalDone(signalDonePtr);
       }
-    });
+    }
+
+    if (instance._uiThreadDispatcher.CheckAccess())
+      Execute();
+    else
+      instance._uiThreadDispatcher.Dispatch(Execute);
   }
 
   /// <summary>
@@ -1305,6 +1405,7 @@ public sealed class NativeRuntimeService : INativeRuntimeService
         presentationEngineId = pe;
         cameraEntityId = cam;
         CameraEntityId = cam;
+        PresentationEngineId = pe;
       }
 
       return ok;
@@ -1317,7 +1418,7 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public void RemoveViewport(ulong presentationEngineId)
   {
-    throw new NotImplementedException();
+    PInvokeAetherVkCore.avkSimulationContext_removeViewport(_ctx, _sceneId, presentationEngineId);
   }
 
   public void ResizeViewport(ulong presentationEngineId, uint width, uint height)
@@ -1663,6 +1764,81 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     throw new NotImplementedException();
   }
 
+#if DEBUG
+  // ── INativeRuntimeService — RenderDoc (debug only) ───────────────────────
+
+  /// <inheritdoc/>
+  public bool IsRenderDocAvailable()
+  {
+    try
+    {
+      return PInvokeAetherVkCore.avkDebug_isRenderDocAvailable() != 0;
+    }
+    catch (EntryPointNotFoundException)
+    {
+      // Loaded a release build of the native library in a debug .NET build.
+      return false;
+    }
+  }
+
+  /// <inheritdoc/>
+  public void TriggerRenderDocCapture()
+  {
+    try
+    {
+      PInvokeAetherVkCore.avkDebug_triggerCapture();
+    }
+    catch (EntryPointNotFoundException)
+    {
+      // No-op: loaded a release native library.
+    }
+  }
+
+  /// <inheritdoc/>
+  public bool StartScopedRenderDocCapture(ulong presentationEngineId)
+  {
+    try
+    {
+      return PInvokeAetherVkCore.avkDebug_startScopedCapture((nint)_ctx, presentationEngineId) != 0;
+    }
+    catch (EntryPointNotFoundException)
+    {
+      // Loaded a release build of the native library in a debug .NET build.
+      return false;
+    }
+  }
+
+  public unsafe void DebugECSPrint(uint entityCount, ulong[] entityIds, uint compCount, ulong[] comps)
+  {
+    if (_ctx == 0) return;
+    fixed (ulong* pEntities = entityIds)
+    fixed (ulong* pComps = comps)
+    {
+      PInvokeAetherVkCore.avkSimulationContext_debugECSPrint(_ctx, _sceneId, entityCount, pEntities, compCount, pComps);
+    }
+  }
+
+  public bool GetDebugTelemetryStats(out DebugTelemetryStats stats)
+  {
+    if (_ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_getDebugTelemetryStats(_ctx, out var cStats))
+    {
+      stats = new DebugTelemetryStats(
+        cStats.OsPhysicalRamBytes,
+        cStats.OsVirtualRamBytes,
+        cStats.CpuAllocatedBytes,
+        cStats.GpuAllocatedBytes,
+        cStats.LogicThreadCpuTimeMs,
+        cStats.RenderThreadCpuTimeMs,
+        cStats.ReservedGpuExecutionMs
+      );
+      return true;
+    }
+
+    stats = null!;
+    return false;
+  }
+#endif
+
   // ── IDisposable ───────────────────────────────────────────────────────────
 
   public void Dispose()
@@ -1734,6 +1910,18 @@ public record ScreenSpaceBillboard(
   float Opacity,
   uint ZIndex
 );
+
+#if DEBUG
+public sealed record DebugTelemetryStats(
+    ulong OsPhysicalRamBytes,
+    ulong OsVirtualRamBytes,
+    ulong CpuAllocatedBytes,
+    ulong GpuAllocatedBytes,
+    double LogicThreadCpuTimeMs,
+    double RenderThreadCpuTimeMs,
+    double ReservedGpuExecutionMs
+);
+#endif
 
 #endregion
 
@@ -2030,6 +2218,17 @@ internal readonly struct CStartupReturn
 }
 
 #if DEBUG
+[StructLayout(LayoutKind.Sequential)]
+internal struct CDebugTelemetryStatsDTO
+{
+  public ulong OsPhysicalRamBytes;
+  public ulong OsVirtualRamBytes;
+  public ulong CpuAllocatedBytes;
+  public ulong GpuAllocatedBytes;
+  public double LogicThreadCpuTimeMs;
+  public double RenderThreadCpuTimeMs;
+  public double ReservedGpuExecutionMs;
+}
 
 [StructLayout(LayoutKind.Sequential)]
 internal struct SceneHierarchyDTO

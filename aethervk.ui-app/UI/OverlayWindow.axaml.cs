@@ -1,3 +1,5 @@
+using Avalonia;
+
 namespace AetherVk.UI;
 
 public partial class OverlayWindow : Avalonia.Controls.Window
@@ -5,5 +7,8 @@ public partial class OverlayWindow : Avalonia.Controls.Window
   public OverlayWindow()
   {
     InitializeComponent();
+#if DEBUG
+    this.AttachDevTools();
+#endif
   }
 }

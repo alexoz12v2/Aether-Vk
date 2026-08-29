@@ -3,7 +3,7 @@
 
 namespace AetherVk.Logic.ViewModels;
 
-public interface ISettingsTabViewModel
+public partial interface ISettingsTabViewModel
 {
     string StrGeneral { get; set; }
     string StrCometName { get; set; }

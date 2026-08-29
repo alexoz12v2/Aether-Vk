@@ -4,7 +4,7 @@
 
 namespace AetherVk.Logic.ViewModels;
 
-public class DesignTimelineTabViewModel : ITimelineTabViewModel
+public partial class DesignTimelineTabViewModel : ITimelineTabViewModel
 {
     public string Title    { get; set; } = "Timeline";
     public string Icon     { get; set; } = "⏱";

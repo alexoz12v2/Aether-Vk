@@ -3,7 +3,7 @@
 
 namespace AetherVk.Logic.ViewModels;
 
-public interface IModelTabViewModel
+public partial interface IModelTabViewModel
 {
     string StrSun { get; set; }
     string StrDistance { get; set; }

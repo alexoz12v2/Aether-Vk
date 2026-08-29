@@ -30,6 +30,11 @@ pub fn start_render_thread(
     }
     let mut first_render_map: hashbrown::HashMap<PresentationEngineHandle, bool> =
       hashbrown::HashMap::new();
+    // Tracks PEs for which the next frame should be bracketed with
+    // RenderDoc StartFrameCapture / EndFrameCapture.
+    #[cfg(debug_assertions)]
+    let mut pending_rdoc_captures: hashbrown::HashSet<PresentationEngineHandle> =
+      hashbrown::HashSet::new();
     let render_device_handle = render_params.render_device_handle;
     let render_frontend = {
       let r = render_params
@@ -141,6 +146,8 @@ pub fn start_render_thread(
                 &mut first_render_map,
                 render_frontend.clone(),
                 render_device_handle,
+                #[cfg(debug_assertions)]
+                &mut pending_rdoc_captures,
               )
             }) {
               oshal::log!("render_thread | process_command failed: {:?}", e);
@@ -151,7 +158,9 @@ pub fn start_render_thread(
             if let thingbuf::mpsc::errors::TryRecvError::Closed = e {
               return true;
             }
-            oshal::os::native::this_thread::yield_now();
+            oshal::os::native::this_thread::sleep_for(
+              core::time::Duration::from_micros(500),
+            );
             false
           }
         }
@@ -179,11 +188,18 @@ fn process_command(
   first_render_map: &mut hashbrown::HashMap<PresentationEngineHandle, bool>,
   render_frontend: gpu::RenderFrontend,
   render_device_handle: gpu::RenderDeviceHandle,
+  #[cfg(debug_assertions)] pending_rdoc_captures: &mut hashbrown::HashSet<PresentationEngineHandle>,
 ) -> GpuResult<()> {
   let _1ms = core::time::Duration::from_millis(1);
   match cmd {
     // this is processed in render_thread function
     RenderCommand::Shutdown => Ok(()),
+    #[cfg(debug_assertions)]
+    RenderCommand::CaptureNextFrame { pe_handle } => {
+      pending_rdoc_captures.insert(pe_handle);
+      aethervk_oshal_rlib::log!("[RenderDoc] CaptureNextFrame queued for PE {:?}", pe_handle);
+      Ok(())
+    }
     RenderCommand::SyncParticleRelease {
       feedback,
       feedback_ptr,
@@ -254,6 +270,28 @@ fn process_command(
       render_device.start_frame()?;
 
       let mut handles = alloc::vec::Vec::with_capacity(8);
+
+      // ── RenderDoc scoped capture (debug only) ──────────────────────────────
+      // If any PE was scheduled for capture, call StartFrameCapture with null
+      // handles (= capture all active swapchains this frame).  Using null
+      // rather than specific VkDevice/window pointers avoids any mismatch
+      // between the handles we reconstruct and what RenderDoc registered at
+      // vkCreateDevice / vkCreateSwapchainKHR time.
+      #[cfg(debug_assertions)]
+      let rdoc_capture_requested = !pending_rdoc_captures.is_empty();
+      #[cfg(debug_assertions)]
+      pending_rdoc_captures.clear();
+      #[cfg(debug_assertions)]
+      if rdoc_capture_requested {
+        // SAFETY: null device/window = capture all swapchains; pointers are not dereferenced.
+        unsafe {
+          crate::gpu_backends::vulkan::renderdoc::start_frame_capture(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+          )
+        };
+      }
+      // ── end RenderDoc setup ────────────────────────────────────────────────
 
       for render_frame in render_frames {
         let task_id_feedback = alloc::sync::Arc::clone(&render_frame.task_id);
@@ -427,7 +465,12 @@ fn process_command(
                       cmd_buffer,
                       sun_call.entity,
                       (128, 128, 128),
-                      sun_call.radius,
+                      // Normalised photosphere radius in volume space [-2,2].
+                      // sun_call.radius holds the AU-scale world radius (~0.00465),
+                      // which would make rSun ≈ 0 in the shader and produce an
+                      // all-black volume.  0.6 places the photosphere at 60 % of
+                      // the half-extent, giving a clearly visible sun disk.
+                      0.6_f32,
                     )
                     .map_err(|e| {
                       aethervk_oshal_rlib::log!("[render tasklet] update_sun failed: {:?}", e);
@@ -592,6 +635,23 @@ fn process_command(
         if is_first_render {
           *unsafe { first_render_map.get_mut(&pe_handle).unwrap_unchecked() } = false;
         }
+        // Shutdown guard: if the main thread set `skip_present` (early in
+        // SimulationThreads::drop), skip vkQueuePresentKHR for this PE.
+        //
+        // On Linux/X11 + NVIDIA, the present call blocks waiting for a DRI3
+        // present-completion event from the X server.  By the time ShutdownSync
+        // is called from the UI thread Avalonia's event loop has stopped, so
+        // nobody reads that event and the call hangs indefinitely.  Skipping
+        // it here is safe: the GPU submission already ran (Step 1 above), so
+        // the GPU timeline advances correctly; only the final scanout is lost,
+        // which is acceptable during process teardown.
+        if ctx.skip_present.load(core::sync::atomic::Ordering::Acquire) {
+          oshal::log!(
+            "[Render Thread] skip_present set — skipping vkQueuePresentKHR for PE {:?}",
+            pe_handle
+          );
+          continue;
+        }
         match render_device.present(
           pe_handle,
           acquire_result.image_index as usize,
@@ -615,6 +675,18 @@ fn process_command(
           }
         }
       }
+      // ── RenderDoc scoped capture end (debug only) ─────────────────────────
+      #[cfg(debug_assertions)]
+      if rdoc_capture_requested {
+        // SAFETY: null device/window = capture all swapchains; pointers are not dereferenced.
+        unsafe {
+          crate::gpu_backends::vulkan::renderdoc::end_frame_capture(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+          )
+        };
+      }
+      // ── end RenderDoc teardown ─────────────────────────────────────────────
       Ok(())
     }
     RenderCommand::Resize(resize_cmd) => render_device.resize_presentation_engine(

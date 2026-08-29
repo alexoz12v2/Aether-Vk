@@ -34,6 +34,9 @@ public abstract class NativeInputHandlerBase : INativeInputHandlerSubscribable
   IDisposable INativeInputHandlerSubscribable.SubscribeComposedKeystrokes(Action<ComposedKeystroke> onNext)
     => ComposedKeystrokes.Subscribe(onNext);
 
+  IDisposable INativeInputHandlerSubscribable.SubscribeNativeMouseEvents(Action<NativeMouseEvent> onNext)
+    => _rawInputSubject.OfType<NativeMouseEvent>().ObserveOn(_schedulerProvider.Background).Subscribe(onNext);
+
   // private protected = only derived classes in the same assembly can use this
   private protected NativeInputHandlerBase(
     IntPtr handle, string handleDescriptor, TraceLevel traceLevel, IUiThreadDispatcher dispatcher, ISchedulerProvider schedulerProvider)

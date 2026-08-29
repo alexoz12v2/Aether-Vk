@@ -26,8 +26,11 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   private readonly CompositeDisposable _disposables = [];
   private readonly BreadcrumbService _breadcrumbService;
 
-  // Committed timeline range tracked for "changed after commit" detection
-  private TimeRange? _lastCommittedRange;
+  // ISO strings of the proposed range at the moment the comet was committed.
+  // Used to detect "proposed timeline changed after comet commit".
+  // Stored as strings (not TAI TimeRange) to avoid nanosecond rounding
+  // false-positives when comparing against the ProposedTimeRange stream.
+  private (string Start, string End)? _lastCommittedProposedRange;
 
   // Pending rotational model debounce timer
   private IDisposable? _rotDebounceToken;
@@ -109,6 +112,26 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
 
   /// <summary>SPK records for the selected comet from the JPL service (bound directly).</summary>
   public ObservableCollection<SpkRecordItem> SpkRecords => _jpl.SpkRecordsData;
+  
+  // ── Debug Properties ─────────────────────────────────────────────────────
+
+  public ObservableCollection<JetViewModel>? DebugJets
+  {
+    get
+    {
+#if DEBUG
+      if (_modelSessionService.ActiveSessionIds.Count == 0) return null;
+      return _modelSessionService.GetSession(_modelSessionService.ActiveSessionIds[0])?.Jets;
+#else
+      return null;
+#endif
+    }
+  }
+
+  // ── Dependencies ─────────────────────────────────────────────────────────
+
+  private readonly INativeRuntimeService _runtimeService;
+  private readonly ITabStateService<ModelSession> _modelSessionService;
 
   // ── Construction ─────────────────────────────────────────────────────────
 
@@ -120,7 +143,9 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     CometConfigService cometConfig,
     TimelineService timeline,
     BreadcrumbService breadcrumbService,
-    ILocalStorageService storage
+    ILocalStorageService storage,
+    INativeRuntimeService runtimeService,
+    ITabStateService<ModelSession> modelSessionService
   )
     : base("Comet", sessionService)
   {
@@ -130,6 +155,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     _timeline = timeline;
     _storage = storage;
     _breadcrumbService = breadcrumbService;
+    _runtimeService = runtimeService;
+    _modelSessionService = modelSessionService;
 
     Icon = "☄"; // comet — U+2604
     SubscribeToStrings(schedulerProvider);
@@ -145,7 +172,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   {
     // 1. Proposed timeline display from TimelineService
     _timeline
-      .ValidatedTimeRange.ObserveOn(schedulerProvider.MainThread)
+      .ProposedTimeRange.ObserveOn(schedulerProvider.MainThread)
       .Subscribe(range =>
       {
         if (range is null)
@@ -157,10 +184,12 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         {
           HasProposedTimeline = true;
           ProposedStartEpoch = FormatTaiEpoch(range.StartCenturies, range.StartNs);
-          ProposedEndEpoch = FormatTaiEpoch(range.EndCenturies, range.EndNs);
+          ProposedEndEpoch   = FormatTaiEpoch(range.EndCenturies,   range.EndNs);
 
-          // Detect change-after-commit
-          if (IsAlmanacCommitted && _lastCommittedRange is not null && _lastCommittedRange != range)
+          // Detect change-after-commit by comparing ISO display strings — avoids
+          // nanosecond rounding false-positives that occur with TAI record equality.
+          if (IsAlmanacCommitted && _lastCommittedProposedRange is { } snap
+              && (ProposedStartEpoch != snap.Start || ProposedEndEpoch != snap.End))
             HasTimelineChangedAfterCommit = true;
         }
       })
@@ -369,8 +398,9 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
 
         CommittedCometName = SelectedComet.Name;
 
-        // Snapshot the committed timeline range for change detection
-        _lastCommittedRange = await _timeline.ValidatedTimeRange.FirstAsync();
+        // Snapshot the proposed range ISO strings at commit time for change detection.
+        // Using display strings (not TAI TimeRange) avoids nanosecond rounding false-positives.
+        _lastCommittedProposedRange = (ProposedStartEpoch, ProposedEndEpoch);
         HasTimelineChangedAfterCommit = false;
         DownloadStatus = string.Concat("✓ Committed: ", SelectedComet.Name);
       }
@@ -406,8 +436,9 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       session.IsAlmanacLoaded = false;
     }
 
-    _lastCommittedRange = null;
+    _lastCommittedProposedRange = null;
     DownloadStatus = string.Empty;
+    WeakReferenceMessenger.Default.Send(new Messages.CometDecommittedMessage());
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -488,5 +519,27 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       default,
       1
     );
+  }
+
+  [RelayCommand]
+  private void DebugQueryComet()
+  {
+#if DEBUG
+    if (_runtimeService.CometEntityId.HasValue)
+    {
+      ulong cometId = _runtimeService.CometEntityId.Value;
+      // Component IDs for Almanac Planet (26) and Rotational Body (24)
+      _runtimeService.DebugECSPrint(1, [cometId], 2, [26, 24]);
+    }
+#endif
+  }
+
+  [RelayCommand]
+  private void DebugQueryJet(ulong jetId)
+  {
+#if DEBUG
+    // Component ID for Particle System (22)
+    _runtimeService.DebugECSPrint(1, [jetId], 1, [22]);
+#endif
   }
 }

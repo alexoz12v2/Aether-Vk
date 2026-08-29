@@ -52,4 +52,13 @@ public class VulkanViewportControl : NativeControlHost
       vm.Dispose();
     base.DestroyNativeControlCore(control);
   }
+
+  protected override void OnSizeChanged(Avalonia.Controls.SizeChangedEventArgs e)
+  {
+    base.OnSizeChanged(e);
+    if (DataContext is Logic.ViewModels.VulkanViewportControlViewModel vm)
+    {
+      vm.NotifyResized(e.NewSize.Width, e.NewSize.Height);
+    }
+  }
 }

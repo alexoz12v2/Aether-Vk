@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="using:AetherVk.UI"
         xmlns:vm="using:AetherVk.Logic.ViewModels"
+        xmlns:vmDebug="using:AetherVk.Logic.ViewModels.Debug"
         xmlns:conv="using:AetherVk.Converters"
         x:DataType="vm:ViewportOverlayViewModel"
         x:Class="AetherVk.UI.OverlayWindow"
@@ -11,7 +12,7 @@
         Focusable="False"
         Background="Transparent"
         TransparencyLevelHint="Transparent"
-        Topmost="True">
+        Topmost="False">
 
   <Panel Name="TransparentRoot" Background="Transparent">
 
@@ -276,6 +277,46 @@
         </Grid>
       </StackPanel>
     </Border>
+
+    <!-- Debug Telemetry Panel -->
+    <ContentControl Content="{Binding DebugTelemetry}"
+                    HorizontalAlignment="Left" VerticalAlignment="Top"
+                    Margin="10,10,0,0">
+      <ContentControl.DataTemplates>
+        <DataTemplate DataType="vmDebug:DebugTelemetryPanelViewModel">
+          <ui:DebugTelemetryPanel />
+        </DataTemplate>
+      </ContentControl.DataTemplates>
+    </ContentControl>
+
+    <!--
+      RenderDoc frame-capture button.
+      ContentControl with an untyped DataTemplate: when RenderDoc is null (Release builds)
+      no DataTemplate matches so nothing is added to the visual tree. When RenderDoc is a
+      live RenderDocCaptureViewModel (DEBUG + process launched under RenderDoc) the template
+      fires and the Button is instantiated. No type reference to RenderDocCaptureViewModel
+      needed in AXAML — bindings inside the DataTemplate are reflection-based.
+    -->
+    <ContentControl Content="{Binding RenderDoc}"
+                    HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Margin="0,0,10,10">
+      <ContentControl.DataTemplates>
+        <DataTemplate DataType="vmDebug:RenderDocCaptureViewModel">
+          <Border CornerRadius="6"
+                  Background="{DynamicResource Bg.Surface}" Opacity="0.9"
+                  BorderBrush="#994444" BorderThickness="1"
+                  IsVisible="{Binding IsRenderDocAvailable}">
+            <Button Command="{Binding CaptureCommand}"
+                    ToolTip.Tip="Capture the next rendered frame (RenderDoc)"
+                    Padding="8,5"
+                    Background="Transparent"
+                    Foreground="{DynamicResource Text.Primary}">
+              📷 Capture Frame
+            </Button>
+          </Border>
+        </DataTemplate>
+      </ContentControl.DataTemplates>
+    </ContentControl>
 
   </Panel>
 </Window>

@@ -109,6 +109,17 @@ public partial class UnboundedSlider : UserControl
     set => SetValue(MaxBoundProperty, value);
   }
 
+  public static readonly StyledProperty<double> DragSensitivityProperty = AvaloniaProperty.Register<
+    UnboundedSlider,
+    double
+  >(nameof(DragSensitivity), 1.0);
+
+  public double DragSensitivity
+  {
+    get => GetValue(DragSensitivityProperty);
+    set => SetValue(DragSensitivityProperty, value);
+  }
+
   public static readonly StyledProperty<bool> IsDraggingProperty = AvaloniaProperty.Register<
     UnboundedSlider,
     bool
@@ -178,14 +189,14 @@ public partial class UnboundedSlider : UserControl
           double minLog = HasBounds && MinBound > 0 ? System.Math.Log10(MinBound) : -10.0;
           double currentLog = Value > 0 ? System.Math.Log10(Value) : minLog;
 
-          double deltaLog = delta * Step * mult * 0.005; // Base sensitivity for log
+          double deltaLog = delta * Step * mult * 0.005 * DragSensitivity; // Base sensitivity for log
           double newLog = currentLog + deltaLog;
 
           newValue = System.Math.Pow(10, newLog);
         }
         else
         {
-          newValue = Value + delta * Step * mult * 0.1;
+          newValue = Value + delta * Step * mult * 0.1 * DragSensitivity;
         }
 
         Value = Constrain(newValue);

@@ -81,6 +81,11 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
       OnPointerReleased,
       Avalonia.Interactivity.RoutingStrategies.Tunnel
     );
+    window.AddHandler(
+      InputElement.PointerCaptureLostEvent,
+      OnPointerCaptureLost,
+      Avalonia.Interactivity.RoutingStrategies.Tunnel
+    );
 
     Log($"[Router] Attached to window: {window.GetType().Name}");
   }
@@ -96,6 +101,7 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
     window.RemoveHandler(InputElement.KeyUpEvent, OnKeyUp);
     window.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
     window.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
+    window.RemoveHandler(InputElement.PointerCaptureLostEvent, OnPointerCaptureLost);
 
     // Discard any in-flight press state that was captured on this window's controls.
     _pressedVisuals.Clear();
@@ -111,6 +117,7 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
       window.RemoveHandler(InputElement.KeyUpEvent, OnKeyUp);
       window.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
       window.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
+      window.RemoveHandler(InputElement.PointerCaptureLostEvent, OnPointerCaptureLost);
     }
     _attachedWindows.Clear();
     _pressedVisuals.Clear();
@@ -166,6 +173,26 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
 
   private void OnPointerReleased(object? sender, PointerReleasedEventArgs e) =>
     HandlePointerInput(e, false);
+
+  /// <summary>
+  /// Fired by the OS when pointer capture is lost (focus change, window occlusion,
+  /// Wayland surface-leave, etc.) without a matching <c>PointerReleased</c>.
+  /// Synthesises a <c>viewport.pointer_end</c> action so that any transient operator
+  /// currently on the <c>OperatorStack</c> pops itself cleanly.
+  /// </summary>
+  private void OnPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+  {
+    if (!_pressedVisuals.TryGetValue(e.Pointer, out var info))
+      return; // no in-flight press for this pointer — nothing to clean up
+
+    // Synthesise pointer_end — modifiers are not relevant for the end action.
+    var endAction = new AppAction("viewport.pointer_end");
+    var releaseState = new InputState(isPressed: false, InputModifiers.None);
+    info.Handler.Process(endAction, releaseState);
+    _pressedVisuals.Remove(e.Pointer);
+
+    Log($"[Router] PointerCaptureLost — synthesised pointer_end for {info.Handler.GetType().Name}");
+  }
 
   private void HandlePointerInput(PointerEventArgs e, bool isPressed)
   {

@@ -2,6 +2,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Threading.Tasks;
 using AetherVk.Logic.Services;
+using AetherVk.Logic.ViewModels.Debug;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
@@ -142,6 +143,20 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     // Billboards
     public ObservableCollection<BillboardViewModel> Billboards { get; } = new();
 
+#if DEBUG
+    /// <summary>
+    /// RenderDoc frame-capture sub-ViewModel. Non-null only in DEBUG builds.
+    /// The overlay binds the button's <c>IsVisible</c> and <c>Command</c> here.
+    /// </summary>
+    public RenderDocCaptureViewModel? RenderDoc { get; }
+
+    public DebugTelemetryPanelViewModel? DebugTelemetry { get; }
+#else
+    /// <summary>Always null in Release — ContentControl DataTemplate never fires.</summary>
+    public object? RenderDoc => null;
+    public object? DebugTelemetry => null;
+#endif
+
     public ViewportOverlayViewModel(
         CameraService cameraService,
         INativeRuntimeService runtimeService,
@@ -156,6 +171,10 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
         _dispatcher = dispatcher;
         _fileDialogService = fileDialogService;
         _viewportVm = viewportVm;
+#if DEBUG
+        RenderDoc = new RenderDocCaptureViewModel(runtimeService);
+        DebugTelemetry = new DebugTelemetryPanelViewModel(runtimeService);
+#endif
 
         _modeSubscription = _cameraService.CameraModeChanged.Subscribe(mode =>
         {

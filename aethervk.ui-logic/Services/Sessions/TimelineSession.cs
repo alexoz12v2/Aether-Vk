@@ -9,4 +9,7 @@ public sealed class TimelineSession : ITabSession
 {
   public string CommittedStartEpoch { get; set; } = string.Empty;
   public string CommittedEndEpoch { get; set; } = string.Empty;
+  
+  public string ProposedStartEpoch { get; set; } = string.Empty;
+  public string ProposedEndEpoch { get; set; } = string.Empty;
 }

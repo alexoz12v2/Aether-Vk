@@ -132,27 +132,58 @@ impl SceneConversionExt2 for Scene {
 
     camera_in_frames.insert(0, cam_global_f64);
 
-    // for each micro layer, compute transform relative to camera, and from that, bounds
-    self.query1_without::<ReferenceFrameComponent, HiddenComponent, _>(
-      |id, frame: &ReferenceFrameComponent| {
-        debug_assert!((frame.depth_layer == 0) == (self.get_root().unwrap() == id));
-        if frame.depth_layer > 0 {
-          layer_frame_entities.insert(frame.depth_layer, id);
-          if let Some(cam_in_frame_f64) = self.get_relative_transform_f64(camera_entity, id) {
-            camera_in_frames.insert(frame.depth_layer, cam_in_frame_f64);
-
-            let dist_local = cam_in_frame_f64.position.length() as f32;
-            let soi_local = frame.soi_radius / frame.scale; // TODO check if useful
-            let safe_micro_near = (dist_local * 0.01).max(0.001);
-            let tight_near = (dist_local - soi_local).max(safe_micro_near);
-            let tight_far = (dist_local + soi_local).max(tight_near + safe_micro_near);
-
-            layer_bounds.insert(frame.depth_layer, (tight_near, tight_far));
-            layer_frame_scales.insert(frame.depth_layer, frame.scale);
+    // for each micro layer, compute transform relative to camera, and from that, bounds.
+    //
+    // DEADLOCK FIX: `query1_without` holds `archetypes.read()` for the duration of its
+    // callback. Calling `get_relative_transform_f64` (→ `with_component` → `archetypes.read()`)
+    // from inside that callback creates a re-entrant read acquisition. Under `parking_lot`'s
+    // write-preferring policy, a concurrent `archetypes.write()` from the logic thread's
+    // `remove_component` will block the re-entrant read while the outer read guard is still
+    // live, deadlocking both threads.
+    //
+    // Fix: Phase 1 — collect only the data we need from each frame entity into a Vec,
+    // keeping the callback free of nested scene queries so the read lock is released
+    // before Phase 2.
+    struct FrameEntry {
+      id: EntityId,
+      depth_layer: u32,
+      scale: f32,
+      soi_radius: f32,
+    }
+    let frame_entries: alloc::vec::Vec<FrameEntry> = {
+      let mut entries = alloc::vec::Vec::new();
+      self.query1_without::<ReferenceFrameComponent, HiddenComponent, _>(
+        |id, frame: &ReferenceFrameComponent| {
+          debug_assert!((frame.depth_layer == 0) == (self.get_root().unwrap() == id));
+          if frame.depth_layer > 0 {
+            entries.push(FrameEntry {
+              id,
+              depth_layer: frame.depth_layer,
+              scale: frame.scale,
+              soi_radius: frame.soi_radius,
+            });
           }
-        }
-      },
-    );
+        },
+      );
+      entries
+    };
+    // Phase 2 — `archetypes.read()` from `query1_without` is now released.
+    // Safe to call `get_relative_transform_f64` which re-acquires `archetypes.read()`.
+    for entry in frame_entries {
+      layer_frame_entities.insert(entry.depth_layer, entry.id);
+      if let Some(cam_in_frame_f64) = self.get_relative_transform_f64(camera_entity, entry.id) {
+        camera_in_frames.insert(entry.depth_layer, cam_in_frame_f64);
+
+        let dist_local = cam_in_frame_f64.position.length() as f32;
+        let soi_local = entry.soi_radius / entry.scale; // TODO check if useful
+        let safe_micro_near = (dist_local * 0.01).max(0.001);
+        let tight_near = (dist_local - soi_local).max(safe_micro_near);
+        let tight_far = (dist_local + soi_local).max(tight_near + safe_micro_near);
+
+        layer_bounds.insert(entry.depth_layer, (tight_near, tight_far));
+        layer_frame_scales.insert(entry.depth_layer, entry.scale);
+      }
+    }
 
     let mut layer_map: hashbrown::HashMap<u32, RenderLayer> = hashbrown::HashMap::with_capacity(16);
 
@@ -817,17 +848,37 @@ impl SceneConversionExt2 for Scene {
       let frame = FRAME_COUNTER.fetch_add(1, Ordering::Relaxed);
       if frame % 120 == 0 {
         aethervk_oshal_rlib::log!(
-          "\x1b[36m[MULTI-SCALE] Frame {} | camera pos=({:.6},{:.6},{:.6})\x1b[0m",
+          "\x1b[36m[MULTI-SCALE] Frame {} | pos=({:.4},{:.4},{:.4}) yaw={:.1}\u{00b0} pitch={:.1}\u{00b0}\x1b[0m",
           frame,
           camera_data.absolute_pos.x(),
           camera_data.absolute_pos.y(),
-          camera_data.absolute_pos.z()
+          camera_data.absolute_pos.z(),
+          camera_yaw_deg(&camera_data.rot),
+          camera_pitch_deg(&camera_data.rot),
         )
       }
     }
 
     Ok(render_scene)
   }
+}
+
+/// Yaw = azimuth of the camera's forward direction in the XY plane,
+/// measured CCW from +X (degrees). Engine convention: forward = rotate(0, -1, 0).
+#[cfg(debug_assertions)]
+fn camera_yaw_deg(rot: &aethervk_oshal_rlib::math::vector::vec4::Quat) -> f32 {
+  use aethervk_oshal_rlib::math::quaternion::Quaternion as _;
+  let fwd = rot.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+  fwd.y().atan2(fwd.x()).to_degrees()
+}
+
+/// Pitch = elevation of the camera's forward direction above the XY plane (degrees).
+/// Positive = looking upward (+Z). Engine convention: forward = rotate(0, -1, 0).
+#[cfg(debug_assertions)]
+fn camera_pitch_deg(rot: &aethervk_oshal_rlib::math::vector::vec4::Quat) -> f32 {
+  use aethervk_oshal_rlib::math::quaternion::Quaternion as _;
+  let fwd = rot.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+  fwd.z().asin().to_degrees()
 }
 
 fn safe_div(a: f32, b: f32) -> f32 {

@@ -31,7 +31,25 @@ public partial class Viewport3DView : UserControl
   protected override void OnDataContextChanged(EventArgs e)
   {
     base.OnDataContextChanged(e);
-    _viewModel = DataContext as Viewport3DViewModel;
+
+    var newVm = DataContext as Viewport3DViewModel;
+
+    // If the DataContext is being swapped while already attached (edge case: tab reuse),
+    // tear down the old overlay first so we don't leak it.
+    if (_viewModel != newVm && _overlay != null)
+      TeardownOverlay();
+
+    _viewModel = newVm;
+
+    Console.WriteLine($"[Viewport3DView] OnDataContextChanged: newVm={newVm != null}, TopLevel={TopLevel.GetTopLevel(this)?.GetType().Name ?? "null"}");
+
+    // DataContext normally arrives AFTER OnAttachedToVisualTree when the view is
+    // instantiated by ViewLocator / DataTemplate (Avalonia propagates DataContext
+    // top-down after inserting the child into the visual tree).
+    // Call TrySetupOverlay here so the overlay is created even in that common case.
+    // TrySetupOverlay is idempotent — it no-ops if the overlay already exists.
+    if (TopLevel.GetTopLevel(this) != null)
+      TrySetupOverlay();
   }
 
   protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
@@ -42,14 +60,48 @@ public partial class Viewport3DView : UserControl
     AddHandler(PointerReleasedEvent, OnViewportPointerReleased, RoutingStrategies.Tunnel);
     // Scroll wheel intentionally not attached — zoom uses Ctrl+Middle-Mouse drag only.
 
+    Console.WriteLine($"[Viewport3DView] OnAttachedToVisualTree: _viewModel={_viewModel != null}, TopLevel={TopLevel.GetTopLevel(this)?.GetType().Name ?? "null"}");
+
     // ── Overlay Window ─────────────────────────────────────────────────────────
-    // Walk up fresh every time — no caching of parent VM or host window.
-    // All services come from _viewModel (set via DataContext); no DI lookups here.
-    var mainWindow   = TopLevel.GetTopLevel(this) as Window;
-    var mainWindowVm = mainWindow?.DataContext as MainWindowViewModel;
-    if (mainWindow != null && mainWindowVm != null && _viewModel != null)
+    // If DataContext is already set (unusual but possible if a view is re-inserted),
+    // set up the overlay immediately. Otherwise OnDataContextChanged will call this
+    // once DataContext is propagated — TrySetupOverlay is idempotent either way.
+    TrySetupOverlay();
+  }
+
+  protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+  {
+    TeardownOverlay();
+
+    RemoveHandler(PointerPressedEvent,  OnViewportPointerPressed);
+    RemoveHandler(PointerMovedEvent,    OnViewportPointerMoved);
+    RemoveHandler(PointerReleasedEvent, OnViewportPointerReleased);
+    base.OnDetachedFromVisualTree(e);
+  }
+
+  // ── Overlay lifecycle helpers ─────────────────────────────────────────────
+
+  /// <summary>
+  /// Creates and wires the <see cref="OverlayWindow"/> when both preconditions are met:
+  /// the view is attached to a visual tree (so <c>TopLevel</c> is reachable) and
+  /// <c>_viewModel</c> has been set via <c>DataContext</c>.
+  /// Idempotent — subsequent calls are no-ops once <c>_overlay</c> is non-null.
+  /// </summary>
+  private void TrySetupOverlay()
+  {
+    Console.WriteLine($"[Viewport3DView] TrySetupOverlay called: _overlay={_overlay != null}, _viewModel={_viewModel != null}, TopLevel={TopLevel.GetTopLevel(this)?.GetType().Name ?? "null"}, ViewportHost={ViewportHost != null}");
+
+    // Idempotent guard — do nothing if already set up or either precondition is missing.
+    if (_overlay != null) { Console.WriteLine("[Viewport3DView] TrySetupOverlay: already set up"); return; }
+    if (_viewModel == null) { Console.WriteLine("[Viewport3DView] TrySetupOverlay: _viewModel is null — waiting for DataContext"); return; }
+
+    var mainWindow = TopLevel.GetTopLevel(this) as Window;
+    if (mainWindow == null) { Console.WriteLine($"[Viewport3DView] TrySetupOverlay: TopLevel is not a Window (type={TopLevel.GetTopLevel(this)?.GetType().Name ?? "null"})"); return; }
+
+    Console.WriteLine("[Viewport3DView] TrySetupOverlay: creating OverlayWindow…");
+    try
     {
-      _routerRef    = mainWindowVm.InputRouter;
+      _routerRef    = _viewModel.InputRouter;
       _overlay      = new OverlayWindow { DataContext = _viewModel.OverlayViewModel };
       _synchronizer = new OverlaySynchronizer(mainWindow, _overlay, ViewportHost, _viewModel.PlatformWindowService);
       _routerRef.AttachToWindow(_overlay);
@@ -62,10 +114,22 @@ public partial class Viewport3DView : UserControl
       _overlay.AddHandler(PointerPressedEvent,  OnOverlayPassThrough_Pressed,  RoutingStrategies.Tunnel);
       _overlay.AddHandler(PointerMovedEvent,    OnOverlayPassThrough_Moved,    RoutingStrategies.Tunnel);
       _overlay.AddHandler(PointerReleasedEvent, OnOverlayPassThrough_Released, RoutingStrategies.Tunnel);
+      Console.WriteLine("[Viewport3DView] TrySetupOverlay: OverlayWindow created and wired OK");
+    }
+    catch (Exception ex)
+    {
+      Console.WriteLine($"[Viewport3DView] TrySetupOverlay: EXCEPTION — {ex}");
+      _overlay      = null;
+      _synchronizer = null;
+      _routerRef    = null;
     }
   }
 
-  protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+  /// <summary>
+  /// Removes overlay event handlers, detaches the router, disposes the synchronizer,
+  /// and closes the overlay window. Safe to call when <c>_overlay</c> is null.
+  /// </summary>
+  private void TeardownOverlay()
   {
     // Unsubscribe overlay pass-through BEFORE nulling _overlay.
     if (_overlay != null)
@@ -83,11 +147,6 @@ public partial class Viewport3DView : UserControl
     _synchronizer = null;
     _overlay      = null;
     _routerRef    = null;
-
-    RemoveHandler(PointerPressedEvent,  OnViewportPointerPressed);
-    RemoveHandler(PointerMovedEvent,    OnViewportPointerMoved);
-    RemoveHandler(PointerReleasedEvent, OnViewportPointerReleased);
-    base.OnDetachedFromVisualTree(e);
   }
 
   // ── Overlay pass-through ──────────────────────────────────────────────────

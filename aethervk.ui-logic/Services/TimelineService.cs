@@ -33,6 +33,7 @@ public sealed class TimelineService : IDisposable
 
   // Null until first successful timeline commit from the runtime
   private readonly BehaviorSubject<TimeRange?> _timeRangeSubject = new(null);
+  private readonly BehaviorSubject<TimeRange?> _proposedTimeRangeSubject = new(null);
   private readonly IDisposable _listenerToken;
 
   public TimelineService(INativeRuntimeService runtimeService, ISchedulerProvider schedulerProvider)
@@ -46,6 +47,12 @@ public sealed class TimelineService : IDisposable
   }
 
   // ── Observables ────────────────────────────────────────────────────────────
+
+  /// <summary>
+  /// The most recently proposed epoch range (not yet committed to the runtime).
+  /// </summary>
+  public IObservable<TimeRange?> ProposedTimeRange =>
+    _proposedTimeRangeSubject.ObserveOn(_schedulerProvider.MainThread);
 
   /// <summary>
   /// The most recently confirmed epoch range, or <c>null</c> before any timeline
@@ -87,6 +94,11 @@ public sealed class TimelineService : IDisposable
 
   public bool CheckAlmanacCoverage(int spkId, TimeRange range) =>
     _runtimeService.CheckAlmanacCoverage(spkId, range.StartCenturies, range.StartNs, range.EndCenturies, range.EndNs);
+    
+  public void ProposeEpochRange(TimeRange range)
+  {
+    _proposedTimeRangeSubject.OnNext(range);
+  }
 
   // ── Internal callback handling ─────────────────────────────────────────────
 
@@ -106,5 +118,6 @@ public sealed class TimelineService : IDisposable
   {
     _listenerToken.Dispose();
     _timeRangeSubject.Dispose();
+    _proposedTimeRangeSubject.Dispose();
   }
 }

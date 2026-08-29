@@ -399,6 +399,15 @@ pub static ASSET_DIR: parking_lot::RwLock<Option<alloc::string::String>> =
 
 #[cfg(test)]
 pub fn set_asset_dir_for_tests() {
+  #[cfg(not(windows))]
+  unsafe {
+    let mut rlim: libc::rlimit = core::mem::zeroed();
+    if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) == 0 {
+      rlim.rlim_cur = rlim.rlim_max;
+      libc::setrlimit(libc::RLIMIT_NOFILE, &rlim);
+    }
+  }
+
   if ASSET_DIR.read().is_some() {
     return;
   }

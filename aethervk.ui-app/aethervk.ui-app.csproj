@@ -94,9 +94,13 @@
     <GeneratedFolder>Generated</GeneratedFolder>
     <CompilerGeneratedFilesOutputPath>$(GeneratedFolder)\$(TargetFramework)\$(ResolvedRID)</CompilerGeneratedFilesOutputPath>
   </PropertyGroup>
-  <!-- Excluded dumped Generated C# files from build -->
+  <!-- 
+    Exclude dumped Generated C# files from normal builds to avoid duplicate definition errors. 
+    We explicitly keep them included when evaluated by the Neovim Avalonia LSP (AVALONIA_LSP=1) 
+    so it can resolve source-generated XAML bindings without running the generators itself.
+  -->
   <ItemGroup>
-    <Compile Remove="$(GeneratedFolder)/**/*.cs" />
+    <Compile Remove="$(GeneratedFolder)/**/*.cs" Condition="'$(AVALONIA_LSP)' != '1'" />
   </ItemGroup>
 
   <ItemGroup>

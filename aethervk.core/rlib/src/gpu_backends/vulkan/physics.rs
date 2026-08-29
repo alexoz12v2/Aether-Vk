@@ -120,9 +120,10 @@ impl PhysicsPipelines {
       if cfg!(debug_assertions) || cfg!(test) {
         let (_, code_mut, _) = unsafe { spv_code.align_to_mut::<u32>() };
         crate::gpu_backends::vulkan::device::shader_manager::patch_spirv_prevent_inlining(code_mut);
-        crate::gpu_backends::vulkan::device::shader_manager::disassemble_and_log_spirv(
-          spv_code.as_slice(),
-        );
+        // TODO: re-enable once fixed issues .NET Side
+        // crate::gpu_backends::vulkan::device::shader_manager::disassemble_and_log_spirv(
+        //   spv_code.as_slice(),
+        // );
       }
 
       let (prefix, code, suffix) = unsafe { spv_code.align_to::<u32>() };

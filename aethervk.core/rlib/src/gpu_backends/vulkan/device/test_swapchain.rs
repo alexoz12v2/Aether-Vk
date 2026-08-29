@@ -143,6 +143,7 @@ mod tests {
         .max_per_stage_descriptor_samplers,
       max_descriptor_set_update_after_bind_samplers: phys_device
         .max_descriptor_set_update_after_bind_samplers,
+      telemetry_query_pool: None,
     };
 
     let params = crate::gpu::PresentationEngineParams::windowless(256, 256);
@@ -396,6 +397,7 @@ mod tests {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) =
       setup_env.unwrap();
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
+    let cleanup_queue = new_test_cleanup_queue();
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
@@ -404,7 +406,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params,
       &mut rollback,
-      alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new())),
+      cleanup_queue.clone(),
     )
     .unwrap();
 
@@ -435,6 +437,7 @@ mod tests {
     unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
     engine.cleanup(&log_device);
+    drain_test_cleanup_queue(&cleanup_queue);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
       device.destroy_device(None);
@@ -459,6 +462,7 @@ mod tests {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, params) =
       setup_env.unwrap();
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
+    let cleanup_queue = new_test_cleanup_queue();
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
@@ -467,7 +471,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params,
       &mut rollback,
-      alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new())),
+      cleanup_queue.clone(),
     )
     .unwrap();
 
@@ -523,6 +527,7 @@ mod tests {
     println!("Cleaning up...");
     rollback.defuse();
     engine.cleanup(&log_device);
+    drain_test_cleanup_queue(&cleanup_queue);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
       device.destroy_device(None);
@@ -547,6 +552,7 @@ mod tests {
     let (entry, instance, device, phys_device, log_device, queue, cmd_pool, mut params) =
       setup_env.unwrap();
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
+    let cleanup_queue = new_test_cleanup_queue();
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
@@ -555,7 +561,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params,
       &mut rollback,
-      alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new())),
+      cleanup_queue.clone(),
     )
     .unwrap();
 
@@ -623,6 +629,7 @@ mod tests {
     unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
     engine.cleanup(&log_device);
+    drain_test_cleanup_queue(&cleanup_queue);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
       device.destroy_device(None);
@@ -652,6 +659,7 @@ mod tests {
 
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
 
+    let cleanup_queue = new_test_cleanup_queue();
     let mut engine = PresentationState::new(
       &entry,
       &instance.instance,
@@ -660,7 +668,7 @@ mod tests {
       log_device.swapchain_maintenance1.clone(),
       &params,
       &mut rollback,
-      alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new())),
+      cleanup_queue.clone(),
     )
     .unwrap();
 
@@ -713,6 +721,7 @@ mod tests {
     unsafe { device.queue_wait_idle(queue).unwrap() };
     rollback.defuse();
     engine.cleanup(&log_device);
+    drain_test_cleanup_queue(&cleanup_queue);
     unsafe {
       device.destroy_command_pool(cmd_pool, None);
       device.destroy_device(None);

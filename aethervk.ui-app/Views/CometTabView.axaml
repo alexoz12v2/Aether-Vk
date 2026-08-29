@@ -303,9 +303,10 @@
               </TextBox>
             </Grid>
 
-
           </StackPanel>
         </Expander>
+
+        <ContentControl x:Name="DebugContainer" />
 
       </StackPanel>
     </ScrollViewer>

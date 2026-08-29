@@ -13,6 +13,8 @@ extern crate core;
 // publish panic_handler for our own cdylib
 pub use aethervk_oshal_rlib::panic_handler_impl;
 
+#[cfg(test)]
+pub mod fd_tracker;
 pub mod gpu_backends;
 
 pub mod audio;

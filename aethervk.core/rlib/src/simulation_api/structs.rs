@@ -272,12 +272,119 @@ pub struct SimulationThreads {
   pool: Arc<os::pool::ThreadPool>,
   /// Audio device thread handle
   pub audio_device: Option<alloc::boxed::Box<dyn oshal::os::audio::AudioDevice + Send + Sync>>,
+  /// Shared flag that is set to `true` early in `drop` to signal the render thread that it
+  /// must not call `vkQueuePresentKHR` for any new frames.  On Linux/X11 with NVIDIA, the
+  /// present call can block indefinitely waiting for a DRI3 completion event that nobody will
+  /// deliver once Avalonia's event loop has stopped — which is exactly the state we are in
+  /// when `ShutdownSync` is invoked from the UI thread.
+  ///
+  /// The Arc is cloned into [`RenderThreadContext`] so the render thread can observe it
+  /// without any lifetime coupling to `SimulationThreads`.
+  pub skip_present: Arc<core::sync::atomic::AtomicBool>,
 }
 
 impl Drop for SimulationThreads {
   fn drop(&mut self) {
     oshal::log!("SimulationThreads drop started");
 
+    // ── Shutdown watchdog ──────────────────────────────────────────────────────
+    // Spawn a thread that forcibly terminates the process after 5 seconds.
+    // This guards against `pthread_join` / `WaitForSingleObject` hanging forever
+    // (e.g. due to a deadlock in the render or logic thread during shutdown).
+    // If the normal shutdown sequence completes first, the process exits cleanly
+    // and this thread is killed with it. The handle is intentionally not joined.
+    //
+    // We use `_exit` (Unix) / `TerminateProcess` (Windows) rather than `exit`
+    // to bypass atexit handlers and C++ destructors, which could themselves block
+    // if the process is already deadlocked.
+    const SHUTDOWN_WATCHDOG_S: u64 = 5;
+    let _watchdog = oshal::os::thread::Builder::new()
+      .name(alloc::format!("shutdown_watchdog"))
+      .spawn(move || {
+        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_secs(
+          SHUTDOWN_WATCHDOG_S,
+        ));
+        oshal::log!(
+          "[shutdown] watchdog fired after {} s — forcing process exit.",
+          SHUTDOWN_WATCHDOG_S
+        );
+
+        #[cfg(debug_assertions)]
+        {
+          #[cfg(any(unix, target_os = "macos"))]
+          {
+            oshal::log!("Attempting to print backtraces for all threads...");
+            let pid = unsafe { libc::getpid() };
+            let debugger = if cfg!(target_os = "macos") {
+              "lldb"
+            } else {
+              "gdb"
+            };
+            let cmd = if cfg!(target_os = "macos") {
+              alloc::format!(
+                "{} -p {} -o 'thread backtrace all' -o 'quit'",
+                debugger,
+                pid
+              )
+            } else {
+              // full is too much output
+              alloc::format!(
+                "{} -p {} -ex 'thread apply all bt' -ex 'quit' --batch",
+                debugger,
+                pid
+              )
+            };
+
+            if let Ok(c_cmd) = alloc::ffi::CString::new(cmd) {
+              unsafe {
+                libc::system(c_cmd.as_ptr());
+              }
+            }
+          }
+          #[cfg(windows)]
+          {
+            oshal::log!("Watchdog backtrace (Windows does not support native all-thread trace):");
+            oshal::os::debug::print_stacktrace();
+          }
+        }
+
+        // SAFETY: called only on a terminal shutdown path after all normal
+        // shutdown attempts have timed out.
+        #[cfg(any(unix, target_os = "macos"))]
+        unsafe {
+          libc::_exit(1);
+        }
+        #[cfg(windows)]
+        unsafe {
+          use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+          let _ = TerminateProcess(GetCurrentProcess(), 1);
+        }
+      });
+    // Intentionally drop without joining — the thread runs detached.
+    // Either the process exits cleanly (watchdog killed with it) or the watchdog
+    // fires and terminates us after SHUTDOWN_WATCHDOG_S seconds.
+    drop(_watchdog);
+
+    // ── Phase 1: Signal "no more presents" ────────────────────────────────────
+    // Set the flag BEFORE closing channels so the render thread observes it
+    // between the end of its current command and the channel-closed check.
+    //
+    // This is a best-effort guard for the common case: if the render thread is
+    // *between frames* when shutdown starts, it will see the flag and skip the
+    // next `vkQueuePresentKHR` call entirely.  If `vkQueuePresentKHR` is already
+    // in-flight, the timed join below (Phase 4) is the safety net.
+    //
+    // Background: on Linux/X11 + NVIDIA, `vkQueuePresentKHR` blocks waiting for a
+    // DRI3 present-completion event from the X server.  That event is delivered
+    // through the Xlib connection that Avalonia's event loop reads.  But by the
+    // time `ShutdownSync` is called from the UI thread, Avalonia's event loop has
+    // already stopped — so nobody reads the X socket, the call never returns, and
+    // a plain `pthread_join` on the main thread deadlocks.
+    use core::sync::atomic::Ordering;
+    self.skip_present.store(true, Ordering::Release);
+    oshal::log!("SimulationThreads: skip_present flag set");
+
+    // ── Phase 2: Close logic channel ──────────────────────────────────────────
     // Drop the sender — this closes the channel from the sender side.
     // The logic thread's try_recv loop returns on TryRecvError::Closed (line ~326
     // of logic_thread.rs), so closing the channel is the reliable shutdown signal.
@@ -286,21 +393,76 @@ impl Drop for SimulationThreads {
     // handle.join() hangs forever.
     self.logic_thread.tx.take();
     self.logic_feedback_rx = None;
+
+    // ── Phase 3: Join logic thread (safe — no X11 involvement) ────────────────
+    // The logic thread does not call Vulkan WSI / X11 present, so joining it
+    // directly from the main thread is always safe.
     if let Some(handle) = self.logic_thread.handle.take() {
+      oshal::log!("SimulationThreads: joining logic thread...");
       handle.join();
+      oshal::log!("SimulationThreads: logic thread joined.");
     }
 
-    // Same pattern for render thread.
+    // ── Phase 4: Close render channel ─────────────────────────────────────────
     // MUST drop render thread BEFORE gathering the pool!
     // Dropping the render thread drops the `Device`, which sets `callback_stop_signal`
     // to true. This stops `TimelinePollingWorkload` which is running on the pool.
     self.render_thread.tx.take();
     self.render_feedback_rx = None;
-    if let Some(handle) = self.render_thread.handle.take() {
-      handle.join();
+
+    // ── Phase 5: Timed join of render thread ──────────────────────────────────
+    // Do NOT join the render thread directly from the main thread.  If
+    // `vkQueuePresentKHR` is still in-flight (i.e. the skip_present flag arrived
+    // too late), that call can block indefinitely on X11/NVIDIA, deadlocking the
+    // main thread in `pthread_join`.
+    //
+    // Instead: spawn a tiny helper thread that calls `thread.join()`, and wait for
+    // it via a `parking_lot::Condvar` with a 2-second timeout.  The join itself
+    // still happens, preserving RAII "we know exactly when threads exit" semantics;
+    // it just happens off the main thread.  If the 2-second timeout fires, the
+    // watchdog at SHUTDOWN_WATCHDOG_S will terminate the process regardless.
+    if let Some(render_handle) = self.render_thread.handle.take() {
+      oshal::log!("SimulationThreads: timed-join of render thread (2 s timeout)...");
+
+      let pair = Arc::new((
+        parking_lot::Mutex::<bool>::new(false), // joined?
+        parking_lot::Condvar::new(),
+      ));
+      let pair_for_helper = Arc::clone(&pair);
+
+      let join_thread = oshal::os::thread::Builder::new()
+        .name(alloc::format!("render_join"))
+        .spawn(move || {
+          render_handle.join();
+          let (lock, cvar) = &*pair_for_helper;
+          *lock.lock() = true;
+          cvar.notify_one();
+          oshal::log!("SimulationThreads: render thread joined (from helper thread).");
+        });
+      // Detach the join thread — we synchronise via condvar, not by joining it.
+      drop(join_thread);
+
+      const RENDER_JOIN_TIMEOUT_MS: u64 = 2_000;
+      let (lock, cvar) = &*pair;
+      let mut done = lock.lock();
+      if !*done {
+        let timed_out = cvar
+          .wait_for(&mut done, core::time::Duration::from_millis(RENDER_JOIN_TIMEOUT_MS))
+          .timed_out();
+        if timed_out {
+          oshal::log!(
+            "SimulationThreads: render thread join timed out after {} ms — \
+             vkQueuePresentKHR may be deadlocked on X11/NVIDIA. \
+             Watchdog will terminate the process in {} s.",
+            RENDER_JOIN_TIMEOUT_MS,
+            SHUTDOWN_WATCHDOG_S,
+          );
+        }
+      }
     }
 
-    // Ensure all logic-launched tasklets are finished before shutting down the renderer
+    // ── Phase 6: Pool gather + audio ──────────────────────────────────────────
+    // Ensure all logic-launched tasklets are finished before shutting down the renderer.
     oshal::log!("SimulationThreads waiting for thread pool tasks to complete...");
     self.pool.gather();
 
@@ -400,14 +562,24 @@ impl SimulationThreads {
     logic_thread_params: LogicThreadParams,
   ) -> EngineResult<Self> {
     oshal::os::debug::fpe::setup_fpu_panic();
-    let mut this = Self::new_idle()?;
+    // Extract skip_present from the render params before moving them into
+    // start_render_thread, so we can store our own Arc clone in `self`.
+    let skip_present = Arc::clone(&render_thread_params.skip_present);
+    let mut this = Self::new_idle_with_skip_present(skip_present)?;
     this.start_render_thread(render_thread_params)?;
     this.start_logic_thread(logic_thread_params)?;
     Ok(this)
   }
 
-  /// Creates the thread pool only.
+  /// Creates the thread pool only, with a fresh `skip_present` flag.
   pub fn new_idle() -> EngineResult<Self> {
+    Self::new_idle_with_skip_present(Arc::new(core::sync::atomic::AtomicBool::new(false)))
+  }
+
+  /// Internal helper: creates the thread pool and wires up a caller-supplied `skip_present` Arc.
+  fn new_idle_with_skip_present(
+    skip_present: Arc<core::sync::atomic::AtomicBool>,
+  ) -> EngineResult<Self> {
     let thread_pool = Arc::new(os::pool::ThreadPool::new(4).map_err(|e| {
       oshal::log!("Failed to create thread pool: {:?}", e);
       EngineError::InvalidOperation("core_api:startup | failed to create thread pool")
@@ -420,6 +592,7 @@ impl SimulationThreads {
       logic_thread: ThreadTxContainer::empty(),
       logic_feedback_rx: None,
       audio_device: None,
+      skip_present,
     })
   }
 
@@ -791,6 +964,13 @@ pub enum RenderCommand {
     feedback: alloc::sync::Arc<core::sync::atomic::AtomicU64>,
     feedback_ptr: SendPtrMut<SyncParticleReleaseFeedback>,
   },
+  /// Instructs the render thread to bracket the next frame for this PE with
+  /// RenderDoc `StartFrameCapture` / `EndFrameCapture`, capturing only that
+  /// windowed swapchain.  Emitted only in debug builds.
+  #[cfg(debug_assertions)]
+  CaptureNextFrame {
+    pe_handle: crate::gpu::PresentationEngineHandle,
+  },
 }
 
 unsafe impl Send for RenderCommand {}
@@ -938,7 +1118,10 @@ impl PhysicsDeviceSelfSync {
       if self.timeline_value == value {
         true
       } else {
-        self.query_exp_backoff_us <<= 1;
+        // Cap at 8ms to prevent exponential freeze on slow GPU dispatches.
+        // Without this cap, after ~20 missed polls the backoff exceeds 8 seconds.
+        const MAX_BACKOFF_US: oshal::os::time::timeus_t = 8_000;
+        self.query_exp_backoff_us = (self.query_exp_backoff_us << 1).min(MAX_BACKOFF_US);
         false
       }
     } else {
@@ -1104,6 +1287,9 @@ pub struct RenderThreadParams {
   pub render_device_handle: gpu::RenderDeviceHandle,
   pub render_frontend: gpu::RenderFrontend,
   thread_pool: Arc<os::pool::ThreadPool>,
+  /// See [`SimulationThreads::skip_present`].  Created by the caller and Arc-shared with
+  /// `SimulationThreads` so both sides observe the same flag.
+  pub skip_present: Arc<core::sync::atomic::AtomicBool>,
 }
 
 impl RenderThreadParams {
@@ -1114,6 +1300,7 @@ impl RenderThreadParams {
     backend: gpu::RenderBackendId,
     error_debug_callback: Option<fn(&str)>,
     thread_pool: Arc<os::pool::ThreadPool>,
+    skip_present: Arc<core::sync::atomic::AtomicBool>,
   ) -> EngineResult<Self> {
     let render_frontend = {
       let params = RuntimeParams::new_with_callback(error_debug_callback);
@@ -1138,6 +1325,7 @@ impl RenderThreadParams {
       render_frontend,
       render_device_handle,
       thread_pool,
+      skip_present,
     })
   }
 
@@ -1148,6 +1336,7 @@ impl RenderThreadParams {
       render_frontend: RefCell::new(Some(self.render_frontend)),
       render_device_handle: self.render_device_handle,
       thread_pool: self.thread_pool,
+      skip_present: self.skip_present,
     }
   }
 }
@@ -1159,6 +1348,10 @@ pub struct RenderThreadContext {
   pub render_device_handle: gpu::RenderDeviceHandle,
   /// Thread pool for task submission shared between render thread and logic thread
   pub thread_pool: Arc<os::pool::ThreadPool>,
+  /// Set to `true` by [`SimulationThreads::drop`] early in the shutdown sequence
+  /// to prevent the render thread from calling `vkQueuePresentKHR` on any new
+  /// frame.  See [`SimulationThreads::skip_present`] for the full rationale.
+  pub skip_present: Arc<core::sync::atomic::AtomicBool>,
 }
 
 impl RenderThreadContext {

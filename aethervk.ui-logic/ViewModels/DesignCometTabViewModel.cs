@@ -78,5 +78,10 @@ public partial class DesignCometTabViewModel
   public IAsyncRelayCommand LoadSpkRecordsCommand  => new AsyncRelayCommand(async () => { });
   public IAsyncRelayCommand DownloadAndCommitCommand => new AsyncRelayCommand(async () => { });
   public IRelayCommand      DecommitCometCommand   => new RelayCommand(() => { });
+  
+  // ── Debug Commands (no-ops for design time) ──────────────────────────────
+  public ObservableCollection<JetViewModel>? DebugJets { get; } = null;
+  public IRelayCommand DebugQueryCometCommand => new RelayCommand(() => { });
+  public IRelayCommand<ulong> DebugQueryJetCommand => new RelayCommand<ulong>(_ => { });
 }
 #endif

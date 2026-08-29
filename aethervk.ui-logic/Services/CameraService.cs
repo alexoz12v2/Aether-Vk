@@ -1,7 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Numerics;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Threading;
+using System.Threading.Tasks;
 using AetherVk.Logic.Input;
 
 namespace AetherVk.Logic.Services;
@@ -76,6 +80,8 @@ public sealed class CameraService : IDisposable
   private readonly INativeRuntimeService _runtimeService;
   private readonly ISchedulerProvider _schedulerProvider;
   private readonly CometPositionTrackerService _cometTracker;
+  private readonly CometConfigService _cometConfigService;
+  private readonly BreadcrumbService _breadcrumbService;
 
   private readonly BehaviorSubject<CameraTransformState?> _transformSubject = new(null);
   private readonly BehaviorSubject<CameraProjectionState?> _projectionSubject = new(null);
@@ -88,14 +94,36 @@ public sealed class CameraService : IDisposable
 
   // Orbit offset in simulation units — kept constant while in CometOrbiting mode
   private Vector3 _orbitOffset = new(0f, 0f, 5e-5f); // ~7500 km at 1 AU scale
+  private readonly object _orbitOffsetLock = new();
 
   // Earth position cache — updated via SIMULATION_CALLBACK for the earth entity.
   // Initialised to 1 AU on +X as a safe fallback before the first callback fires.
   private Vector3 _lastEarthPos = new(1f, 0f, 0f);
 
+  // Lock protecting _lastEarthPos, _earthOffset, and _earthRotation.
+  private readonly object _earthPosLock = new();
+
+  private Vector3 _earthOffset;
+  private Quaternion _earthRotation = Quaternion.Identity;
+
   // Last authoritative transform confirmed by the runtime. Populated by HandleTransformCallback.
   // Read synchronously by Request* methods to compute new absolute target transforms.
   private CameraTransformState? _lastConfirmedTransform;
+
+  // ── Mode state memory ────────────────────────────────────────────────────────
+  // Saved (transform, projection) per mode — restored via animation on re-entry.
+  private sealed record ModeSnapshot(
+    CameraTransformState Transform,
+    CameraProjectionState? Projection
+  );
+
+  private readonly Dictionary<CameraMode, ModeSnapshot> _modeSnapshots = new();
+
+  // Aspect ratio (W/H) of the Vulkan render target — set by OnViewportReady.
+  private float _viewportAspect = 1f;
+
+  // Cancels any pending deferred projection change when a new mode switch fires.
+  private CancellationTokenSource? _pendingProjectionCts;
 
   // Animation durations
   private const float ModeSwitchAnimationSeconds = 2.5f;
@@ -120,15 +148,16 @@ public sealed class CameraService : IDisposable
   public CameraService(
     INativeRuntimeService runtimeService,
     ISchedulerProvider schedulerProvider,
-    CometPositionTrackerService cometTracker
+    CometPositionTrackerService cometTracker,
+    CometConfigService cometConfigService,
+    BreadcrumbService breadcrumbService
   )
   {
     _runtimeService = runtimeService;
     _schedulerProvider = schedulerProvider;
     _cometTracker = cometTracker;
-
-    RegisterSimListeners();
-    RegisterEarthListener();
+    _cometConfigService = cometConfigService;
+    _breadcrumbService = breadcrumbService;
   }
 
   // ── Observables ────────────────────────────────────────────────────────────
@@ -156,6 +185,7 @@ public sealed class CameraService : IDisposable
 
   /// <summary>Current camera mode.</summary>
   public CameraMode CurrentMode => _modeSubject.Value;
+  public ulong? CameraEntityId { get; private set; }
 
   /// <summary>
   /// Last authoritative camera transform confirmed by the runtime callback.
@@ -163,6 +193,9 @@ public sealed class CameraService : IDisposable
   /// At most one frame stale between callback fires.
   /// </summary>
   public CameraTransformState? LastConfirmedTransform => _lastConfirmedTransform;
+
+  /// <summary>Last authoritative projection state confirmed by the runtime callback.</summary>
+  public CameraProjectionState? LastConfirmedProjection => _projectionSubject.Value;
 
   // ── Mode management ────────────────────────────────────────────────────────
 
@@ -174,9 +207,30 @@ public sealed class CameraService : IDisposable
   /// </summary>
   public void SetCameraMode(CameraMode mode)
   {
+    // Guard: CometOrbiting requires a committed comet SPK.
+    // Show a warning toast and return without changing mode.
+    if (mode == CameraMode.CometOrbiting && !_cometConfigService.IsAlmanacCommittedValue)
+    {
+      _ = _breadcrumbService.ShowMessageAsync(
+        "No Comet Configured",
+        "Load and commit a comet SPK to enter Comet Orbiting mode.",
+        TimeSpan.FromSeconds(4),
+        status: 2 // Warning
+      );
+      return;
+    }
+
     var previous = _modeSubject.Value;
     if (previous == mode)
       return;
+
+    // Snapshot the outgoing mode's confirmed state for restoration on re-entry.
+    SaveModeSnapshot(previous);
+
+    // Cancel any projection change that was still pending from the previous transition.
+    _pendingProjectionCts?.Cancel();
+    _pendingProjectionCts = null;
+
     _modeSubject.OnNext(mode);
 
     if (mode == CameraMode.CometOrbiting)
@@ -191,37 +245,69 @@ public sealed class CameraService : IDisposable
   /// Sets the orbit offset used when <see cref="CurrentMode"/> is
   /// <see cref="CameraMode.CometOrbiting"/>.
   /// </summary>
-  public void SetOrbitOffset(Vector3 offset) => _orbitOffset = offset;
+  public void SetOrbitOffset(Vector3 offset)
+  {
+    lock (_orbitOffsetLock)
+      _orbitOffset = offset;
+  }
 
   /// <summary>Advance to the next camera mode (EarthPosition → UpZenith → CometOrbiting → EarthPosition).</summary>
-  public void CycleCameraMode() =>
-    SetCameraMode(
-      _modeSubject.Value switch
-      {
-        CameraMode.EarthPosition => CameraMode.UpZenith,
-        CameraMode.UpZenith => CameraMode.CometOrbiting,
-        CameraMode.CometOrbiting => CameraMode.EarthPosition,
-        _ => CameraMode.EarthPosition,
-      }
-    );
+  public void CycleCameraMode()
+  {
+    var next = _modeSubject.Value switch
+    {
+      CameraMode.EarthPosition => CameraMode.UpZenith,
+      CameraMode.UpZenith => CameraMode.CometOrbiting,
+      CameraMode.CometOrbiting => CameraMode.EarthPosition,
+      _ => CameraMode.EarthPosition,
+    };
+    if (next == CameraMode.CometOrbiting && !_cometConfigService.IsAlmanacCommittedValue)
+      next = CameraMode.EarthPosition;
+    SetCameraMode(next);
+  }
 
   /// <summary>
   /// Re-issues the canonical mode-default animation for the current mode.
+  /// Clears any saved snapshot so the hard-coded first-entry default fires.
   /// Called by <c>ViewportBaseOperator</c> via <c>Viewport3DViewModel.CameraService</c>
   /// when the user presses the Reset camera shortcut.
   /// </summary>
-  public void ResetToModeDefault() => TriggerModeTransitionAnimation(_modeSubject.Value);
+  public void ResetToModeDefault()
+  {
+    // Discard saved state — next TriggerModeTransitionAnimation will use first-entry defaults.
+    _modeSnapshots.Remove(_modeSubject.Value);
+    // Cancel any in-flight deferred projection change.
+    _pendingProjectionCts?.Cancel();
+    _pendingProjectionCts = null;
+    TriggerModeTransitionAnimation(_modeSubject.Value);
+  }
 
-  /// <summary>Toggle between perspective and orthographic projection.</summary>
+  /// Capture the confirmed (transform, projection) for <paramref name="mode"/> so it can
+  /// be restored next time that mode is entered.
+  private void SaveModeSnapshot(CameraMode mode)
+  {
+    var t = _lastConfirmedTransform;
+    if (t is null)
+      return; // nothing confirmed yet — skip
+    _modeSnapshots[mode] = new ModeSnapshot(t, _projectionSubject.Value);
+  }
+
   public void ToggleProjection()
   {
     var proj = _projectionSubject.Value;
     if (proj is null)
       return;
     if (proj.IsPerspective)
-      RequestOrthographicProjection(-proj.Aspect, proj.Aspect, -1f, 1f, proj.Near, proj.Far);
+    {
+      float height = Math.Abs(proj.Top - proj.Bottom);
+      if (height < 1e-5f) height = 2f; // Fallback if 0
+      float width = height * _viewportAspect;
+      RequestOrthographicProjection(-width / 2f, width / 2f, -height / 2f, height / 2f, proj.Near, proj.Far);
+    }
     else
-      RequestPerspectiveProjection(proj.Fov, proj.Aspect, proj.Near, proj.Far);
+    {
+      RequestPerspectiveProjection(proj.Fov, _viewportAspect, proj.Near, proj.Far);
+    }
   }
 
   // ── Mode-gate predicates (public — also checked by ViewportBaseOperator at push time) ────
@@ -236,8 +322,15 @@ public sealed class CameraService : IDisposable
       _ => false,
     };
 
-  /// <summary>Pan (lateral translate) is permitted in all modes.</summary>
-  public bool IsPanAllowed() => true;
+  /// <summary>Pan (lateral translate) is permitted only in <see cref="CameraMode.UpZenith"/>.</summary>
+  public bool IsPanAllowed() =>
+    _modeSubject.Value switch
+    {
+      CameraMode.UpZenith => true,
+      CameraMode.EarthPosition => false, // orbit changes orientation only
+      CameraMode.CometOrbiting => false, // tracking animation owns position
+      _ => false,
+    };
 
   /// <summary>True when the current mode permits dolly zoom.</summary>
   public bool IsZoomAllowed() =>
@@ -251,71 +344,186 @@ public sealed class CameraService : IDisposable
 
   // ── Mode transition animation ──────────────────────────────────────────────
 
-  internal void TriggerModeTransitionAnimation(CameraMode mode)
+  internal void TriggerModeTransitionAnimation(CameraMode mode, bool snapImmediate = false)
   {
-    ulong? camId = _runtimeService.CameraEntityId;
+    ulong? camId = CameraEntityId;
     if (camId is null)
       return;
 
     Vector3 targetPos;
     Quaternion targetRot;
 
-    switch (mode)
+    // Projection to apply after the animation completes (null = no change).
+    Action? deferredProjection = null;
+
+    if (_modeSnapshots.TryGetValue(mode, out var snap))
     {
-      case CameraMode.UpZenith:
-        // 1 AU above the Sun (origin), looking inward.
-        // 1 AU == 1.0 in engine simulation units.
-        targetPos = new Vector3(0f, 0f, 1f);
-        targetRot = LookAtOriginFrom(targetPos);
-        break;
+      // ── Restore saved state ──────────────────────────────────────────────
+      var t = snap.Transform;
+      targetPos = new Vector3((float)t.PosX, (float)t.PosY, (float)t.PosZ);
+      targetRot = new Quaternion(t.RotX, t.RotY, t.RotZ, t.RotW);
+      if (snap.Projection is { } savedProj)
+        deferredProjection = () => ApplyProjectionSnapshot(savedProj);
+    }
+    else
+    {
+      // ── First-entry defaults ─────────────────────────────────────────────
+      switch (mode)
+      {
+        case CameraMode.UpZenith:
+          // 0.05 AU above the Sun (origin), looking inward.
+          // Sun radius ≈ 0.00465 AU. To fill ~30% of the half-extent:
+          //   halfH = sun_radius / 0.30 ≈ 0.0155 AU
+          targetPos = new Vector3(0f, 0f, 0.05f);
+          targetRot = LookAtOriginFrom(targetPos);
+          deferredProjection = ApplyUpZenithDefaultProjection;
+          break;
 
-      case CameraMode.EarthPosition:
-        // 2 × Earth radius standoff from the Earth body centre.
-        // Earth radius ≈ 6 371 km ≈ 4.26e-5 AU in engine units.
-        const float EarthRadiusAu = 4.26e-5f;
-        targetPos = _lastEarthPos + new Vector3(0f, 0f, 2f * EarthRadiusAu);
-        targetRot = LookAtOriginFrom(targetPos);
-        break;
+        case CameraMode.EarthPosition:
+          // 2 × Earth radius standoff from the Earth body centre.
+          // Earth radius ≈ 6 371 km ≈ 4.26e-5 AU in engine units.
+          const float EarthRadiusAu = 4.26e-5f;
+          lock (_earthPosLock)
+          {
+            _earthOffset = new Vector3(0f, 0f, 2f * EarthRadiusAu);
+            _earthRotation = LookAtOriginFrom(_lastEarthPos + _earthOffset);
+            targetPos = _lastEarthPos + _earthOffset;
+            targetRot = _earthRotation;
+          }
+          break;
 
-      case CameraMode.CometOrbiting:
-        // The comet orbit subscription takes over the moment it fires.
-        // SnapCameraToOrbit will issue the first AddCameraAnimation on the next
-        // comet position callback — no separate initial animation needed here.
-        return;
+        case CameraMode.CometOrbiting:
+          // The comet orbit subscription takes over the moment it fires.
+          return;
 
-      default:
-        return;
+        default:
+          return;
+      }
     }
 
+    // ── Dispatch the transform animation ─────────────────────────────────
+    // snapImmediate=true on the first viewport-ready call so the sun is
+    // visible from frame 1, not after a 2.5 s ramp from the Rust default.
+    float animDuration = snapImmediate ? 0.01f : ModeSwitchAnimationSeconds;
     _runtimeService.AddCameraAnimation(
       camId.Value,
-      new AnimationTarget(targetPos, targetRot, ModeSwitchAnimationSeconds)
+      new AnimationTarget(targetPos, targetRot, animDuration)
     );
+
+    // ── Defer the projection change until after the animation completes ────
+    if (deferredProjection is not null)
+    {
+      var cts = new CancellationTokenSource();
+      _pendingProjectionCts = cts;
+      var targetMode = mode; // capture — prevents closure over a variable that may change
+      float projDelay = snapImmediate ? 0.05f : ModeSwitchAnimationSeconds;
+      _ = Task.Delay(TimeSpan.FromSeconds(projDelay), cts.Token)
+        .ContinueWith(
+          t =>
+          {
+            // Guard: if the mode changed again while we were waiting, discard the projection.
+            if (t.IsCanceled || _modeSubject.Value != targetMode)
+              return;
+            // Dispatch to the main-thread scheduler — projection commands touch the runtime
+            // and must not be called from a thread-pool continuation.
+            _schedulerProvider.MainThread.Schedule(deferredProjection);
+          },
+          CancellationToken.None,
+          TaskContinuationOptions.ExecuteSynchronously,
+          TaskScheduler.Default
+        );
+    }
   }
 
   /// <summary>
-  /// Builds a rotation quaternion that orients the camera to look toward the world
-  /// origin from <paramref name="pos"/>. Falls back to +X as world-up when the
-  /// position is nearly on the Y axis.
+  /// Builds a rotation quaternion compatible with the Rust engine that orients
+  /// the camera to look toward the world origin from <paramref name="pos"/>.
+  ///
+  /// <para>Engine convention (vec4.rs <c>Quat::from_mat4</c>):
+  /// column-major — col0 = right (+X), col1 = backward (+Y), col2 = up (+Z).
+  /// Forward = local −Y. This function ports <c>from_mat4</c> directly so the
+  /// XYZW bytes are interpreted identically on the Rust side.</para>
+  /// <para>Falls back to +X as the world-up hint when the camera is nearly on the Z axis.</para>
   /// </summary>
   private static Quaternion LookAtOriginFrom(Vector3 pos)
   {
-    var forward = Vector3.Normalize(-pos); // toward origin
-    var up = Math.Abs(forward.Y) < 0.99f ? Vector3.UnitY : Vector3.UnitX;
-    var right = Vector3.Normalize(Vector3.Cross(up, forward));
-    up = Vector3.Cross(forward, right);
-#pragma warning disable format
-    return Quaternion.CreateFromRotationMatrix(
-      // csharpier-ignore-start
-      new Matrix4x4(
-        right.X,   right.Y,   right.Z,   0,
-        up.X,      up.Y,      up.Z,      0,
-        forward.X, forward.Y, forward.Z, 0,
-        0,         0,         0,         1
-      )
-    );
-#pragma warning restore format
-    // csharpier-ignore-end
+    var worldFwd = Vector3.Normalize(-pos); // toward origin (engine −Y)
+
+    // World-up hint: prefer +Z; fall back to -Y when nearly on the Z axis to maintain +X right vector.
+    var worldUpHint = Math.Abs(worldFwd.Z) < 0.99f ? Vector3.UnitZ : -Vector3.UnitY;
+
+    // right = cross(upHint, fwd) — NOT cross(fwd, upHint).
+    // Verified by hand: for fwd=(0,0,-1) + hint=(1,0,0) this gives right=(0,1,0),
+    // up=(1,0,0), q=(0.5,0.5,0.5,0.5), q.rotate(0,-1,0)=(0,0,-1) → pitch=−90° ✓.
+    var worldRight = Vector3.Normalize(Vector3.Cross(worldUpHint, worldFwd));
+    var worldUp = Vector3.Cross(worldFwd, worldRight);
+
+    return EngineQuatFromBasis(worldRight, -worldFwd, worldUp);
+  }
+
+  /// <summary>
+  /// Ports <c>Quat::from_mat4</c> (vec4.rs) verbatim. Builds the engine-compatible
+  /// quaternion from three orthonormal world-space basis vectors:
+  /// <paramref name="right"/> → col0, <paramref name="backward"/> → col1,
+  /// <paramref name="up"/> → col2.
+  /// </summary>
+  private static Quaternion EngineQuatFromBasis(Vector3 right, Vector3 backward, Vector3 up)
+  {
+    // m[row][col] — column-major 3×3: col0=right, col1=backward, col2=up.
+    float m00 = right.X,
+      m01 = backward.X,
+      m02 = up.X;
+    float m10 = right.Y,
+      m11 = backward.Y,
+      m12 = up.Y;
+    float m20 = right.Z,
+      m21 = backward.Z,
+      m22 = up.Z;
+
+    float trace = m00 + m11 + m22;
+    float x,
+      y,
+      z,
+      w;
+
+    if (trace > 0f)
+    {
+      float s = (float)Math.Sqrt(trace + 1f) * 2f; // s = 4w
+      float invS = 1f / s;
+      x = (m21 - m12) * invS;
+      y = (m02 - m20) * invS;
+      z = (m10 - m01) * invS;
+      w = 0.25f * s;
+    }
+    else if (m00 > m11 && m00 > m22)
+    {
+      float s = (float)Math.Sqrt(1f + m00 - m11 - m22) * 2f; // s = 4x
+      float invS = 1f / s;
+      x = 0.25f * s;
+      y = (m01 + m10) * invS;
+      z = (m02 + m20) * invS;
+      w = (m21 - m12) * invS;
+    }
+    else if (m11 > m22)
+    {
+      float s = (float)Math.Sqrt(1f + m11 - m00 - m22) * 2f; // s = 4y
+      float invS = 1f / s;
+      x = (m01 + m10) * invS;
+      y = 0.25f * s;
+      z = (m12 + m21) * invS;
+      w = (m02 - m20) * invS;
+    }
+    else
+    {
+      float s = (float)Math.Sqrt(1f + m22 - m00 - m11) * 2f; // s = 4z
+      float invS = 1f / s;
+      x = (m02 + m20) * invS;
+      y = (m12 + m21) * invS;
+      z = 0.25f * s;
+      w = (m10 - m01) * invS;
+    }
+
+    return new Quaternion(x, y, z, w);
   }
 
   // ── Interactive movement (called by transient camera operators) ────────────
@@ -325,48 +533,74 @@ public sealed class CameraService : IDisposable
   /// Applies <see cref="OrbitSensitivity"/> (halved when Shift held).
   /// No-op if <see cref="IsOrbitAllowed"/> returns false or no transform is cached yet.
   /// </summary>
-  public bool RequestOrbit(Vector2 pixelDelta, InputModifiers mods, Vector3 pivotWorld)
+  public bool RequestOrbit(Vector2 pixelDelta, InputModifiers mods)
   {
     if (!IsOrbitAllowed())
-      return false;
-    var last = _lastConfirmedTransform;
-    if (last is null)
       return false;
 
     float sens = mods.HasFlag(InputModifiers.Shift)
       ? OrbitSensitivity * ShiftFactor
       : OrbitSensitivity;
-    float yawRad = -pixelDelta.X * sens;
-    float pitchRad = -pixelDelta.Y * sens;
 
-    var camPos = new Vector3((float)last.PosX, (float)last.PosY, (float)last.PosZ);
-    var camRot = new Quaternion(last.RotX, last.RotY, last.RotZ, last.RotW);
-
-    var yaw = Quaternion.CreateFromAxisAngle(Vector3.UnitY, yawRad);
-    var right = Vector3.Transform(Vector3.UnitX, camRot);
-    var pitch = Quaternion.CreateFromAxisAngle(right, pitchRad);
-    var rot = pitch * yaw;
-
-    var newPos = pivotWorld + Vector3.Transform(camPos - pivotWorld, rot);
-    var newRot = Quaternion.Normalize(camRot * rot);
-
-    bool ok = RotoTranslateDirect(newPos, newRot);
-    if (ok)
+    if (_modeSubject.Value == CameraMode.CometOrbiting)
     {
-      _lastConfirmedTransform = new CameraTransformState(
-        newPos.X, newPos.Y, newPos.Z,
-        newRot.X, newRot.Y, newRot.Z, newRot.W
-      );
+      float yawRad = -pixelDelta.X * sens;
+      float pitchRad = -pixelDelta.Y * sens;
+
+      lock (_orbitOffsetLock)
+      {
+        var yaw = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, yawRad);
+        var currentFwd = Vector3.Normalize(-_orbitOffset);
+        var currentUpHint = Math.Abs(currentFwd.Z) < 0.99f ? Vector3.UnitZ : -Vector3.UnitY;
+        var currentRight = Vector3.Normalize(Vector3.Cross(currentUpHint, currentFwd));
+        var pitch = Quaternion.CreateFromAxisAngle(currentRight, pitchRad);
+
+        var proposedOffset = Vector3.Transform(_orbitOffset, pitch * yaw);
+        var proposedFwd = Vector3.Normalize(-proposedOffset);
+        if (Math.Abs(proposedFwd.Z) >= 0.98f)
+        {
+          // Gimbal lock avoidance: skip pitch if too close to poles.
+          proposedOffset = Vector3.Transform(_orbitOffset, yaw);
+        }
+        _orbitOffset = proposedOffset;
+      }
+
+      var lastCometPos = _cometTracker.LastKnownCometPosition;
+      if (lastCometPos.HasValue)
+        SnapCameraToOrbit(lastCometPos.Value);
+      return true;
     }
-    return ok;
+
+    if (_modeSubject.Value == CameraMode.EarthPosition)
+    {
+      float earthSens = sens * 0.1f;
+      float earthYawRad = -pixelDelta.X * earthSens;
+      float earthPitchRad = -pixelDelta.Y * earthSens;
+
+      lock (_earthPosLock)
+      {
+        var earthYaw = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, earthYawRad);
+        var right = Vector3.Transform(Vector3.UnitX, _earthRotation);
+        var earthPitch = Quaternion.CreateFromAxisAngle(right, earthPitchRad);
+        _earthRotation = Quaternion.Normalize(_earthRotation * earthPitch * earthYaw);
+
+        SnapCameraToEarth(_lastEarthPos);
+      }
+      return true;
+    }
+
+    return false;
   }
 
   /// <summary>
   /// Pan the camera (translate on the view-right / view-up plane).
-  /// Rotation is held fixed. Allowed in all modes including <see cref="CameraMode.UpZenith"/>.
+  /// Rotation is held fixed. Permitted only in <see cref="CameraMode.UpZenith"/>.
   /// </summary>
   public bool RequestPan(Vector2 pixelDelta, InputModifiers mods)
   {
+    if (!IsPanAllowed())
+      return false;
+
     var last = _lastConfirmedTransform;
     if (last is null)
       return false;
@@ -374,8 +608,11 @@ public sealed class CameraService : IDisposable
     float sens = mods.HasFlag(InputModifiers.Shift) ? PanSensitivity * ShiftFactor : PanSensitivity;
 
     var camRot = new Quaternion(last.RotX, last.RotY, last.RotZ, last.RotW);
+    // Engine convention: +X = Right, +Z = Up
     var right = Vector3.Transform(Vector3.UnitX, camRot);
-    var up = Vector3.Transform(Vector3.UnitY, camRot);
+    var up = Vector3.Transform(Vector3.UnitZ, camRot);
+
+    // Note: pixelDelta.X is positive right, pixelDelta.Y is positive down in Avalonia
     var worldD = (-right * pixelDelta.X + up * pixelDelta.Y) * sens;
 
     var newPos = new Vector3(
@@ -384,13 +621,17 @@ public sealed class CameraService : IDisposable
       (float)last.PosZ + worldD.Z
     );
 
-    // Pan bypasses mode gating — structurally always permitted.
     bool ok = RotoTranslateDirect(newPos, camRot);
     if (ok)
     {
       _lastConfirmedTransform = new CameraTransformState(
-        newPos.X, newPos.Y, newPos.Z,
-        camRot.X, camRot.Y, camRot.Z, camRot.W
+        newPos.X,
+        newPos.Y,
+        newPos.Z,
+        camRot.X,
+        camRot.Y,
+        camRot.Z,
+        camRot.W
       );
     }
     return ok;
@@ -418,41 +659,36 @@ public sealed class CameraService : IDisposable
 
     if (_modeSubject.Value == CameraMode.CometOrbiting)
     {
-      // Adjust orbit radius — picked up by the next SnapCameraToOrbit tick.
-      float scaleFactor = 1f + pixelDy * sens;
-      float currentLen = _orbitOffset.Length();
-      var newLen = currentLen * scaleFactor;
-      if (newLen < OrbitMinDistance)
-        newLen = OrbitMinDistance;
-      if (newLen > OrbitMaxDistance)
-        newLen = OrbitMaxDistance;
-      if (currentLen > 1e-10f)
-        _orbitOffset = Vector3.Normalize(_orbitOffset) * newLen;
-      return true; // orbit subscription will apply it
+      lock (_orbitOffsetLock)
+      {
+        float scaleFactor = 1f + pixelDy * sens;
+        float currentLen = _orbitOffset.Length();
+        var newLen = currentLen * scaleFactor;
+        if (newLen < OrbitMinDistance)
+          newLen = OrbitMinDistance;
+        if (newLen > OrbitMaxDistance)
+          newLen = OrbitMaxDistance;
+        if (currentLen > 1e-10f)
+          _orbitOffset = Vector3.Normalize(_orbitOffset) * newLen;
+      }
+      var lastCometPos = _cometTracker.LastKnownCometPosition;
+      if (lastCometPos.HasValue)
+        SnapCameraToOrbit(lastCometPos.Value);
+      return true;
     }
 
-    // EarthPosition / UpZenith — direct immediate transform.
-    var last = _lastConfirmedTransform;
-    if (last is null)
-      return false;
-
-    var camRot = new Quaternion(last.RotX, last.RotY, last.RotZ, last.RotW);
-    var camForward = Vector3.Transform(-Vector3.UnitZ, camRot); // -Z = forward (Vulkan convention)
-    var newPos = new Vector3(
-      (float)last.PosX + camForward.X * pixelDy * sens,
-      (float)last.PosY + camForward.Y * pixelDy * sens,
-      (float)last.PosZ + camForward.Z * pixelDy * sens
-    );
-
-    bool ok = RotoTranslateDirect(newPos, camRot);
-    if (ok)
+    if (_modeSubject.Value == CameraMode.EarthPosition)
     {
-      _lastConfirmedTransform = new CameraTransformState(
-        newPos.X, newPos.Y, newPos.Z,
-        camRot.X, camRot.Y, camRot.Z, camRot.W
-      );
+      lock (_earthPosLock)
+      {
+        var camForward = Vector3.Transform(-Vector3.UnitY, _earthRotation);
+        _earthOffset += camForward * pixelDy * sens;
+        SnapCameraToEarth(_lastEarthPos);
+      }
+      return true;
     }
-    return ok;
+
+    return false;
   }
 
   // ── Projection commands ────────────────────────────────────────────────────
@@ -461,13 +697,7 @@ public sealed class CameraService : IDisposable
   /// Request a perspective projection change. Not mode-gated.
   /// </summary>
   public bool RequestPerspectiveProjection(float fov, float aspectRatio, float near, float far) =>
-    _runtimeService.CameraSetPerspective(
-      _runtimeService.CameraEntityId ?? 0,
-      fov,
-      aspectRatio,
-      near,
-      far
-    );
+    _runtimeService.CameraSetPerspective(CameraEntityId ?? 0, fov, aspectRatio, near, far);
 
   /// <summary>
   /// Request an orthographic projection change. Not mode-gated.
@@ -480,15 +710,7 @@ public sealed class CameraService : IDisposable
     float near,
     float far
   ) =>
-    _runtimeService.CameraSetOrthographic(
-      _runtimeService.CameraEntityId ?? 0,
-      left,
-      right,
-      bottom,
-      top,
-      near,
-      far
-    );
+    _runtimeService.CameraSetOrthographic(CameraEntityId ?? 0, left, right, bottom, top, near, far);
 
   // ── Legacy roto-translate (kept for external callers not yet migrated) ─────
 
@@ -508,12 +730,41 @@ public sealed class CameraService : IDisposable
 
   // ── Internal helpers ───────────────────────────────────────────────────────
 
+  // UpZenith first-entry orthographic half-extent (AU).
+  // sun_radius ≈ 0.00465 AU; halfH = sun_radius / 0.30 ≈ 0.0155 AU
+  // so the sun fills ~30% of the ±halfH ortho box on first entry.
+  private const float UpZenithObservationHalfExtent = 0.0155f;
+
+  /// <summary>
+  /// Applies the UpZenith first-entry orthographic projection:
+  /// half-height = 0.3 AU, half-width = 0.3 × aspect, mapped to the full VkExtent2D.
+  /// near/far are taken from the current confirmed projection state (fallback: 0.001 / 1000).
+  /// </summary>
+  private void ApplyUpZenithDefaultProjection()
+  {
+    var cur = _projectionSubject.Value;
+    float near = cur?.Near ?? 0.001f;
+    float far = cur?.Far ?? 1000f;
+    float halfH = UpZenithObservationHalfExtent;
+    float halfW = halfH * _viewportAspect;
+    RequestOrthographicProjection(-halfW, halfW, -halfH, halfH, near, far);
+  }
+
+  /// <summary>Re-applies a previously saved projection snapshot to the runtime.</summary>
+  private void ApplyProjectionSnapshot(CameraProjectionState proj)
+  {
+    if (proj.IsPerspective)
+      RequestPerspectiveProjection(proj.Fov, _viewportAspect, proj.Near, proj.Far);
+    else
+      RequestOrthographicProjection(proj.Left, proj.Right, proj.Bottom, proj.Top, proj.Near, proj.Far);
+  }
+
   /// <summary>
   /// Apply a validated absolute roto-translate via the typed runtime interface.
   /// All unsafe buffer packing lives in <c>NativeRuntimeService.CameraSetRotoTranslate</c>.
   /// </summary>
   private bool RotoTranslateDirect(Vector3 position, Quaternion rotation) =>
-    _runtimeService.CameraSetRotoTranslate(_runtimeService.CameraEntityId ?? 0, position, rotation);
+    _runtimeService.CameraSetRotoTranslate(CameraEntityId ?? 0, position, rotation);
 
   /// <summary>Coarse move-allowed predicate used by the legacy <see cref="RequestRotoTranslate"/>.</summary>
   private bool IsMoveAllowed() =>
@@ -546,36 +797,20 @@ public sealed class CameraService : IDisposable
 
   private void SnapCameraToOrbit(Vector3 cometPos)
   {
-    ulong? camId = _runtimeService.CameraEntityId;
+    ulong? camId = CameraEntityId;
     if (camId is null)
       return;
 
-    var targetPos = cometPos + _orbitOffset;
-    // Look toward the comet nucleus
-    var forward = Vector3.Normalize(cometPos - targetPos);
-    var up = Vector3.UnitY;
-    var right = Vector3.Normalize(Vector3.Cross(up, forward));
-    up = Vector3.Cross(forward, right);
-    var rot = Quaternion.CreateFromRotationMatrix(
-      new Matrix4x4(
-        right.X,
-        right.Y,
-        right.Z,
-        0,
-        up.X,
-        up.Y,
-        up.Z,
-        0,
-        forward.X,
-        forward.Y,
-        forward.Z,
-        0,
-        0,
-        0,
-        0,
-        1
-      )
-    );
+    Vector3 offset;
+    lock (_orbitOffsetLock)
+      offset = _orbitOffset;
+
+    var targetPos = cometPos + offset;
+    var worldFwd = Vector3.Normalize(cometPos - targetPos);
+    var worldUpHint = Math.Abs(worldFwd.Z) < 0.99f ? Vector3.UnitZ : -Vector3.UnitY;
+    var worldRight = Vector3.Normalize(Vector3.Cross(worldUpHint, worldFwd));
+    var worldUp = Vector3.Cross(worldFwd, worldRight);
+    var rot = EngineQuatFromBasis(worldRight, -worldFwd, worldUp);
 
     // Use AddCameraAnimation instead of CameraSetRotoTranslate.
     // The short duration keeps a TransformAnimationComponent always in-flight on
@@ -597,37 +832,60 @@ public sealed class CameraService : IDisposable
   /// Re-attempts simulation listener registration that was skipped in the
   /// constructor because the camera entity did not yet exist.
   /// </summary>
-  public void OnViewportReady()
+  public void OnViewportReady(ulong cameraEntityId, uint viewportWidth, uint viewportHeight)
   {
-    RegisterSimListeners();
+    CameraEntityId = cameraEntityId;
+    _viewportAspect = viewportHeight > 0 ? (float)viewportWidth / viewportHeight : 1f;
+    RegisterSimListeners(cameraEntityId);
     RegisterEarthListener();
-    // Trigger initial mode animation so the runtime assigns a valid transform
-    // and fires the SIMULATION_CALLBACK to populate _lastConfirmedTransform.
-    TriggerModeTransitionAnimation(_modeSubject.Value);
+    // Snap immediately on first viewport-ready so the camera starts at the
+    // correct mode position from frame 1 rather than animating over 2.5 s.
+    TriggerModeTransitionAnimation(_modeSubject.Value, snapImmediate: true);
   }
 
-  private void RegisterSimListeners()
+  public void OnViewportResized(uint viewportWidth, uint viewportHeight)
   {
-    ulong? camId = _runtimeService.CameraEntityId;
-    if (camId is null)
-    {
-      // CameraEntityId is populated after AddViewport — register lazily on first use.
-      // TODO: expose an event or observable from runtime service to retry registration.
-      return;
-    }
+    _viewportAspect = viewportHeight > 0 ? (float)viewportWidth / viewportHeight : 1f;
 
+    // We must resend the projection matrix when the viewport aspect ratio changes
+    // to prevent the native swapchain from stretching the old projection.
+    var last = LastConfirmedProjection;
+    if (last is not null)
+    {
+      if (last.IsPerspective)
+      {
+        RequestPerspectiveProjection(last.Fov, _viewportAspect, last.Near, last.Far);
+      }
+      else
+      {
+        float height = Math.Abs(last.Top - last.Bottom);
+        float width = height * _viewportAspect;
+        RequestOrthographicProjection(
+          -width / 2f,
+          width / 2f,
+          -height / 2f,
+          height / 2f,
+          last.Near,
+          last.Far
+        );
+      }
+    }
+  }
+
+  private void RegisterSimListeners(ulong camId)
+  {
     // Already registered — prevent double-registration if OnViewportReady is called twice.
     if (_transformListenerToken is not null)
       return;
 
     _transformListenerToken = _runtimeService.RegisterSimulationListener(
-      camId.Value,
+      camId,
       ComponentForeignId.HighResTransform,
       HandleTransformCallback
     );
 
     _projectionListenerToken = _runtimeService.RegisterSimulationListener(
-      camId.Value,
+      camId,
       ComponentForeignId.CameraProjection,
       HandleProjectionCallback
     );
@@ -659,39 +917,100 @@ public sealed class CameraService : IDisposable
       dto.PosX,
       dto.PosY,
       dto.PosZ,
-      dto.RotW,
       dto.RotX,
       dto.RotY,
-      dto.RotZ
+      dto.RotZ,
+      dto.RotW
     );
+    // Reference write is pointer-width atomic in .NET — no lock needed for _lastConfirmedTransform.
     _lastConfirmedTransform = state;
-    _transformSubject.OnNext(state);
+    // BehaviorSubject.OnNext is not thread-safe for concurrent calls; marshal to the UI thread.
+    _schedulerProvider.MainThread.Schedule(() => _transformSubject.OnNext(state));
   }
 
   private unsafe void HandleProjectionCallback(nint dataPtr)
   {
     var dto = *(CameraProjectionDTO*)dataPtr;
-    _projectionSubject.OnNext(
-      new CameraProjectionState(
-        IsPerspective: dto.IsOrthographic == 0,
-        dto.Fov,
-        dto.Aspect,
-        dto.Near,
-        dto.Far,
-        dto.Left,
-        dto.Right,
-        dto.Bottom,
-        dto.Top,
-        dto.FocusDistance
-      )
+    float fov = 45f;
+    float aspect = 1f;
+    float near = 0.1f;
+    float far = 1000f;
+    float left = 0;
+    float right = 800;
+    float bottom = 0;
+    float top = 600;
+    float focusDistance = 1f;
+    if (dto.IsOrthographic == 0)
+    {
+      fov = dto.Fov;
+      aspect = dto.Aspect;
+    }
+    else
+    {
+      left = dto.Left;
+      right = dto.Right;
+      bottom = dto.Bottom;
+      top = dto.Top;
+    }
+    near = dto.Near;
+    far = dto.Far;
+    focusDistance = dto.FocusDistance;
+
+    if (_projectionSubject.Value != null)
+    {
+      if (dto.IsOrthographic == 0)
+      {
+        left = _projectionSubject.Value.Left;
+        right = _projectionSubject.Value.Right;
+        bottom = _projectionSubject.Value.Bottom;
+        top = _projectionSubject.Value.Top;
+      }
+      else
+      {
+        fov = _projectionSubject.Value.Fov;
+        aspect = _projectionSubject.Value.Aspect;
+      }
+    }
+    var projState = new CameraProjectionState(
+      IsPerspective: dto.IsOrthographic == 0,
+      fov,
+      aspect,
+      near,
+      far,
+      left,
+      right,
+      bottom,
+      top,
+      focusDistance
     );
+    // Marshal to the UI thread — same reason as HandleTransformCallback.
+    _schedulerProvider.MainThread.Schedule(() => _projectionSubject.OnNext(projState));
   }
 
   private unsafe void HandleEarthTransformCallback(nint dataPtr)
   {
     var dto = *(HighResTransformDTO*)dataPtr;
-    // f32 is sufficient precision for mode-switch animation targets.
-    _lastEarthPos = new Vector3((float)dto.PosX, (float)dto.PosY, (float)dto.PosZ);
+    var newPos = new Vector3((float)dto.PosX, (float)dto.PosY, (float)dto.PosZ);
+    lock (_earthPosLock)
+    {
+      _lastEarthPos = newPos;
+      if (_modeSubject.Value == CameraMode.EarthPosition)
+      {
+        SnapCameraToEarth(newPos);
+      }
+    }
+  }
+
+  private void SnapCameraToEarth(Vector3 earthPos)
+  {
+    ulong? camId = CameraEntityId;
+    if (camId is null)
+      return;
+
+    _runtimeService.AddCameraAnimation(
+      camId.Value,
+      new AnimationTarget(earthPos + _earthOffset, _earthRotation, OrbitTrackingAnimationSeconds)
+    );
   }
 
   // ── IDisposable ────────────────────────────────────────────────────────────
@@ -699,6 +1018,9 @@ public sealed class CameraService : IDisposable
   public void Dispose()
   {
     StopCometOrbitTracking();
+    _pendingProjectionCts?.Cancel();
+    _pendingProjectionCts?.Dispose();
+    _pendingProjectionCts = null;
     _transformListenerToken?.Dispose();
     _projectionListenerToken?.Dispose();
     _earthListenerToken?.Dispose();

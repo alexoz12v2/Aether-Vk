@@ -28,6 +28,7 @@ public partial class Viewport3DViewModel
 {
   private readonly INativeRuntimeService _runtimeService;
   private readonly IFileDialogService _fileDialogService;
+  private readonly Services.IViewportRegistry _viewportRegistry;
 
   /// <summary>
   /// Authoritative camera-state and movement manager.
@@ -50,12 +51,18 @@ public partial class Viewport3DViewModel
 
   partial void OnWidthChanged(uint value)
   {
-    throw new InvalidOperationException();
+    if (CameraId != 0 && CameraService != null)
+    {
+      CameraService.OnViewportResized(value, _height);
+    }
   }
 
   partial void OnHeightChanged(uint value)
   {
-    throw new InvalidOperationException();
+    if (CameraId != 0 && CameraService != null)
+    {
+      CameraService.OnViewportResized(_width, value);
+    }
   }
 
   [ObservableProperty]
@@ -108,28 +115,15 @@ public partial class Viewport3DViewModel
   [ObservableProperty]
   private ulong _sceneId;
 
-
-
   [ObservableProperty]
   private bool _isOrbiting;
 
   [ObservableProperty]
   private bool _isPanning;
 
-
-
-
-
   private readonly IUiThreadDispatcher _uiThreadDispatcher;
   private readonly BreadcrumbService _breadcrumbService;
   private IDisposable? _cameraModeSubscription;
-
-  /// <summary>
-  /// Opens a native file dialog to permit selecting an image off the disk.
-  /// Spawns a Rust ECS entity with ScreenSpaceBillboardComponent, then creates
-  /// a <see cref="BillboardViewModel"/> linked to it for Avalonia rendering.
-  /// </summary>
-
 
   // HOME_POSITION: (AU) 0.049,0.034,0.039
   private const float HomePosX = 0.049f;
@@ -144,29 +138,23 @@ public partial class Viewport3DViewModel
 
   private void SetupViewport()
   {
-    // Viewport creation is now driven by VulkanViewportControlViewModel.InitializeHandle,
-    // which is called by VulkanViewportControl.CreateNativeControlCore once the OS handle
-    // is available. AddViewport is called there with the correct platform handle.
-    // This method is kept as a hook for future post-creation camera positioning.
-
     if (PresentationEngineId != 0)
     {
-      // TODO: apply default camera position once the PE is live
       Console.WriteLine($"[SetupViewport] PE={PresentationEngineId} CameraId={CameraId} — ready for camera init");
     }
   }
 
   /// <summary>
   /// Called by <see cref="Logic.ViewModels.VulkanViewportControlViewModel"/> after
-  /// <see cref="INativeRuntimeService.AddViewport"/> succeeds, so this ViewModel can
-  /// track the presentation engine and camera entity IDs.
+  /// <see cref="INativeRuntimeService.AddViewport"/> succeeds.
   /// </summary>
   public void OnViewportCreated(ulong presentationEngineId, ulong cameraEntityId)
   {
     PresentationEngineId = presentationEngineId;
     CameraId = cameraEntityId;
     Console.WriteLine($"[Viewport3DViewModel] OnViewportCreated PE={PresentationEngineId} Cam={CameraId}");
-    CameraService.OnViewportReady();
+    _viewportRegistry.Register(presentationEngineId, cameraEntityId);
+    CameraService.OnViewportReady(cameraEntityId, Width, Height);
     SetupViewport();
   }
 
@@ -185,6 +173,7 @@ public partial class Viewport3DViewModel
   /// pass it to <c>OverlaySynchronizer</c> without performing DI lookups.
   /// </summary>
   public IPlatformWindowService PlatformWindowService { get; }
+  public IWindowInputRouter InputRouter { get; }
 
   // TODO cleanup.
   public Viewport3DViewModel(
@@ -196,7 +185,9 @@ public partial class Viewport3DViewModel
     Func<Viewport3DViewModel, VulkanViewportControlViewModel> vulkanVmFactory,
     Func<Viewport3DViewModel, ViewportOverlayViewModel> overlayVmFactory,
     IPlatformWindowService platformWindowService,
-    ITabStateService<ViewportSession> sessionService
+    IWindowInputRouter inputRouter,
+    ITabStateService<ViewportSession> sessionService,
+    Services.IViewportRegistry viewportRegistry
   )
     : base("Viewport 3D", sessionService)
   {
@@ -208,6 +199,8 @@ public partial class Viewport3DViewModel
     VulkanViewModel = vulkanVmFactory(this);
     OverlayViewModel = overlayVmFactory(this);
     PlatformWindowService = platformWindowService;
+    InputRouter = inputRouter;
+    _viewportRegistry = viewportRegistry;
 
     // Keep EarthObserverState and IsEarthObserverMode in sync with CameraService.
     // IsEarthObserverMode is true only for EarthPosition — UpZenith is a zenith-offset
@@ -273,6 +266,7 @@ public partial class Viewport3DViewModel
     Stop();
     if (PresentationEngineId != 0)
     {
+      _viewportRegistry.Unregister(PresentationEngineId);
       _runtimeService.RemoveViewport(PresentationEngineId);
       PresentationEngineId = 0;
       CameraId = 0;
