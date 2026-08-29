@@ -15,8 +15,8 @@
   </Design.DataContext>
 
   <!-- Inject theme resources so DynamicResource keys resolve in the previewer.
-       Uses a relative path (not avares://) because the designer host resolves
-       from disk — avares:// is only available in the fully running assembly. -->
+  Uses a relative path (not avares://) because the designer host resolves
+  from disk — avares:// is only available in the fully running assembly. -->
   <UserControl.Resources>
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
@@ -85,12 +85,12 @@
       <Border Classes="accordion">
         <Expander Header="{Binding StrOrbitalElements}">
           <!--
-            Column layout:
-              0 : Auto  – symbol label (TextBlock)
-              1 : 6     – gap between label and help icon
-              2 : Auto  – PropertyHelpButton (circled ?)
-              3 : 12    – gap between help icon and computed field
-              4 : *     – read-only computed TextBox
+          Column layout:
+          0 : Auto  – symbol label (TextBlock)
+          1 : 6     – gap between label and help icon
+          2 : Auto  – PropertyHelpButton (circled ?)
+          3 : 12    – gap between help icon and computed field
+          4 : *     – read-only computed TextBox
           -->
           <Grid ColumnDefinitions="Auto,6,Auto,12,*"
                 RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
@@ -162,6 +162,95 @@
           </Grid>
         </Expander>
       </Border>
+
+      <!-- Camera Projection Parameters per Viewport -->
+      <ItemsControl ItemsSource="{Binding ActiveViewports}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate DataType="vm:ViewportSettingsViewModel">
+            <Border Classes="accordion" Margin="0,0,0,16">
+              <Expander Header="{Binding ViewportName}">
+                <StackPanel Spacing="12" Margin="12,8,12,12">
+                  <TextBlock Text="{ReflectionBinding $parent[UserControl].DataContext.CameraModeName, StringFormat='Mode: {0}'}"
+                             Foreground="{DynamicResource Accent.Primary}"
+                             FontWeight="SemiBold" />
+
+                  <!-- Projection type -->
+                  <Grid ColumnDefinitions="Auto,16,*">
+                    <TextBlock Grid.Column="0" Text="Type" />
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16">
+                      <RadioButton Content="Perspective"
+                                   IsChecked="{Binding IsPerspective}" />
+                      <RadioButton Content="Orthographic"
+                                   IsChecked="{Binding IsOrthographic}" />
+                    </StackPanel>
+                  </Grid>
+
+                  <!-- Perspective parameters -->
+                  <Grid ColumnDefinitions="Auto,16,*"
+                        RowDefinitions="Auto,8,Auto,8,Auto"
+                        IsVisible="{Binding IsPerspective}">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV (°)" />
+                    <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
+                                              Value="{Binding PerspFovDeg}"
+                                              HasBounds="True" MinBound="1" MaxBound="179"
+                                              Step="1" IsLogarithmic="False"
+                                              DragSensitivity="2.0"
+                                              HorizontalAlignment="Stretch" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Near (AU)" />
+                    <controls:UnboundedSlider Grid.Row="2" Grid.Column="2"
+                                              Value="{Binding PerspNear}"
+                                              HasBounds="True" MinBound="0.000001" MaxBound="1"
+                                              Step="0.0001" IsLogarithmic="True"
+                                              HorizontalAlignment="Stretch" />
+
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Far (AU)" />
+                    <controls:UnboundedSlider Grid.Row="4" Grid.Column="2"
+                                              Value="{Binding PerspFar}"
+                                              HasBounds="True" MinBound="10" MaxBound="1000000"
+                                              Step="100" IsLogarithmic="True"
+                                              HorizontalAlignment="Stretch" />
+                  </Grid>
+
+                  <!-- Orthographic parameters -->
+                  <Grid ColumnDefinitions="Auto,16,*"
+                        RowDefinitions="Auto,8,Auto,8,Auto,8,Auto"
+                        IsVisible="{Binding IsOrthographic}">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Half-Width (AU)" />
+                    <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
+                                              Value="{Binding OrthoHalfWidth}"
+                                              HasBounds="True" MinBound="0.0001" MaxBound="1000"
+                                              Step="0.001" IsLogarithmic="True"
+                                              HorizontalAlignment="Stretch" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Half-Height (AU)" />
+                    <controls:UnboundedSlider Grid.Row="2" Grid.Column="2"
+                                              Value="{Binding OrthoHalfHeight}"
+                                              HasBounds="True" MinBound="0.0001" MaxBound="1000"
+                                              Step="0.001" IsLogarithmic="True"
+                                              HorizontalAlignment="Stretch" />
+
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Near (AU)" />
+                    <controls:UnboundedSlider Grid.Row="4" Grid.Column="2"
+                                              Value="{Binding OrthoNear}"
+                                              HasBounds="True" MinBound="0.000001" MaxBound="1"
+                                              Step="0.0001" IsLogarithmic="True"
+                                              HorizontalAlignment="Stretch" />
+
+                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Far (AU)" />
+                    <controls:UnboundedSlider Grid.Row="6" Grid.Column="2"
+                                              Value="{Binding OrthoFar}"
+                                              HasBounds="True" MinBound="10" MaxBound="1000000"
+                                              Step="100" IsLogarithmic="True"
+                                              HorizontalAlignment="Stretch" />
+                  </Grid>
+
+                </StackPanel>
+              </Expander>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
 
     </StackPanel>
   </ScrollViewer>

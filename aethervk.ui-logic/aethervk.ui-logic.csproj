@@ -104,6 +104,12 @@
   <ItemGroup Condition="'$(Configuration)' != 'Debug'">
     <Compile Remove="ViewModels\Debug\**\*.cs" />
   </ItemGroup>
+  <!-- RenderDocCaptureViewModel always compiles: OverlayWindow.axaml references its type
+       in a DataTemplate DataType, which the AXAML compiler resolves at build time. The
+       DataTemplate is never instantiated in Release (ContentControl.Content is null). -->
+  <ItemGroup Condition="'$(Configuration)' != 'Debug'">
+    <Compile Include="ViewModels\Debug\RenderDocCaptureViewModel.cs" />
+  </ItemGroup>
 
   <!-- Exclude Reference ViewModels to remove in the future -->
   <ItemGroup>
@@ -202,9 +208,13 @@
     <GeneratedFolder>Generated</GeneratedFolder>
     <CompilerGeneratedFilesOutputPath>$(GeneratedFolder)\$(TargetFramework)\$(ResolvedRID)</CompilerGeneratedFilesOutputPath>
   </PropertyGroup>
-  <!-- Excluded dumped Generated C# files from build -->
+  <!-- 
+    Exclude dumped Generated C# files from normal builds to avoid duplicate definition errors. 
+    We explicitly keep them included when evaluated by the Neovim Avalonia LSP (AVALONIA_LSP=1) 
+    so it can resolve source-generated XAML bindings without running the generators itself.
+  -->
   <ItemGroup>
-    <Compile Remove="$(GeneratedFolder)/**/*.cs" />
+    <Compile Remove="$(GeneratedFolder)/**/*.cs" Condition="'$(AVALONIA_LSP)' != '1'" />
   </ItemGroup>
 
   <!-- Determine platform specifically to help with VULKAN_SDK -->

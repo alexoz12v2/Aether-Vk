@@ -1,4 +1,7 @@
 [profile.default]
+# WORKAROUND: Prevent Vulkan GPU-AV from leaking File Descriptors 
+# during rapid test setups/teardowns by disabling dynamic library unloading.
+env = { VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING = "1" }
 test-threads = 8
 
 [[profile.default.overrides]]

@@ -167,7 +167,7 @@ public partial class App : Application
         };
 
         desktop.MainWindow = splashWindow;
-        splashViewModel.Initialize(() =>
+        _ = splashViewModel.InitializeAsync(() =>
         {
           return ServiceProviderServiceExtensions.GetRequiredService<INativeRuntimeService>(
             Host!.Services
@@ -344,6 +344,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   // ── Cached State ──────────────────────────────────────────────────────────
   public ulong? CameraEntityId => 2UL;
+  public ulong? PresentationEngineId => 1UL;
   public ulong? CometEntityId => null;
   public ulong? EarthEntityId => null;
 
@@ -361,5 +362,26 @@ public class MockNativeRuntimeService : INativeRuntimeService
     short endCenturies,
     ulong endNs
   ) => true;
+
+  // ── RenderDoc (debug only — always unavailable in the mock) ───────────────
+  public bool IsRenderDocAvailable() => false;
+  public void TriggerRenderDocCapture() { }
+  public bool StartScopedRenderDocCapture(ulong presentationEngineId) => false;
+
+  public void DebugECSPrint(uint entityCount, ulong[] entityIds, uint compCount, ulong[] comps) { }
+
+  public bool GetDebugTelemetryStats(out DebugTelemetryStats stats)
+  {
+      stats = new DebugTelemetryStats(
+          1024 * 1024 * 128,
+          1024 * 1024 * 256,
+          1024 * 1024 * 64,
+          1024 * 1024 * 512,
+          1.5,
+          2.0,
+          0.5
+      );
+      return true;
+  }
 }
 #endif

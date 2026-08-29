@@ -101,88 +101,94 @@ impl Shader {
         )
       };
 
-      #[cfg(not(windows))]
-      {
-        let _ = aethervk_oshal_rlib::os::fs::write(&PathBuf::from("/tmp/dump.spv"), spv_u8);
-        unsafe {
-          let cmd = alloc::ffi::CString::new("spirv-dis /tmp/dump.spv").unwrap();
-          libc::system(cmd.as_ptr());
+      // TODO: Uncomment once we fix stuff .NET Side, logs too polluted
+      if false {
+        #[cfg(not(windows))]
+        {
+          let _ = aethervk_oshal_rlib::os::fs::write(PathBuf::from("/tmp/dump.spv"), spv_u8);
+          unsafe {
+            let cmd = alloc::ffi::CString::new("spirv-dis /tmp/dump.spv").unwrap();
+            libc::system(cmd.as_ptr());
+          }
         }
-      }
-      #[cfg(windows)]
-      unsafe {
-        use windows::Win32::Foundation::{
-          CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation,
-        };
-        use windows::Win32::Storage::FileSystem::WriteFile;
-        use windows::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
-        use windows::Win32::System::Environment::GetEnvironmentVariableW;
-        use windows::Win32::System::Pipes::CreatePipe;
-        use windows::Win32::System::Threading::{
-          CreateProcessW, INFINITE, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
-          STARTF_USESTDHANDLES, STARTUPINFOW, WaitForSingleObject,
-        };
-        use windows::core::{PCWSTR, PWSTR};
+        #[cfg(windows)]
+        unsafe {
+          use windows::Win32::Foundation::{
+            CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation,
+          };
+          use windows::Win32::Storage::FileSystem::WriteFile;
+          use windows::Win32::System::Console::{
+            GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+          };
+          use windows::Win32::System::Environment::GetEnvironmentVariableW;
+          use windows::Win32::System::Pipes::CreatePipe;
+          use windows::Win32::System::Threading::{
+            CreateProcessW, INFINITE, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
+            STARTF_USESTDHANDLES, STARTUPINFOW, WaitForSingleObject,
+          };
+          use windows::core::{PCWSTR, PWSTR};
 
-        let mut sdk_buf = [0u16; 512];
-        let len = GetEnvironmentVariableW(windows::core::w!("VULKAN_SDK"), Some(&mut sdk_buf));
-        if len > 0 && len <= 512 {
-          let sdk_str = alloc::string::String::from_utf16_lossy(&sdk_buf[..len as usize]);
-          let spirv_dis_exe = alloc::format!("{}\\Bin\\spirv-dis.exe", sdk_str);
+          let mut sdk_buf = [0u16; 512];
+          let len = GetEnvironmentVariableW(windows::core::w!("VULKAN_SDK"), Some(&mut sdk_buf));
+          if len > 0 && len <= 512 {
+            let sdk_str = alloc::string::String::from_utf16_lossy(&sdk_buf[..len as usize]);
+            let spirv_dis_exe = alloc::format!("{}\\Bin\\spirv-dis.exe", sdk_str);
 
-          let mut h_stdin_read = HANDLE::default();
-          let mut h_stdin_write = HANDLE::default();
+            let mut h_stdin_read = HANDLE::default();
+            let mut h_stdin_write = HANDLE::default();
 
-          let mut sa = windows::Win32::Security::SECURITY_ATTRIBUTES::default();
-          sa.nLength = core::mem::size_of::<windows::Win32::Security::SECURITY_ATTRIBUTES>() as u32;
-          sa.bInheritHandle = true.into();
+            let mut sa = windows::Win32::Security::SECURITY_ATTRIBUTES::default();
+            sa.nLength =
+              core::mem::size_of::<windows::Win32::Security::SECURITY_ATTRIBUTES>() as u32;
+            sa.bInheritHandle = true.into();
 
-          if CreatePipe(
-            &mut h_stdin_read,
-            &mut h_stdin_write,
-            Some(&sa),
-            1024 * 1024 * 10,
-          )
-          .is_ok()
-          {
-            let _ = SetHandleInformation(h_stdin_write, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
-
-            let mut si = STARTUPINFOW::default();
-            si.cb = core::mem::size_of::<STARTUPINFOW>() as u32;
-            si.dwFlags = STARTF_USESTDHANDLES;
-            si.hStdInput = h_stdin_read;
-            si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE).unwrap_or(HANDLE::default());
-            si.hStdError = GetStdHandle(STD_ERROR_HANDLE).unwrap_or(HANDLE::default());
-
-            let mut pi = PROCESS_INFORMATION::default();
-            let cmd_str = alloc::format!("\"{}\" -\0", spirv_dis_exe);
-            let mut cmd: alloc::vec::Vec<u16> = cmd_str.encode_utf16().collect();
-
-            if CreateProcessW(
-              PCWSTR::null(),
-              Some(PWSTR(cmd.as_mut_ptr())),
-              None,
-              None,
-              true,
-              PROCESS_CREATION_FLAGS(0),
-              None,
-              PCWSTR::null(),
-              &mut si,
-              &mut pi,
+            if CreatePipe(
+              &mut h_stdin_read,
+              &mut h_stdin_write,
+              Some(&sa),
+              1024 * 1024 * 10,
             )
             .is_ok()
             {
-              let _ = CloseHandle(h_stdin_read);
-              let mut written = 0;
-              let _ = WriteFile(h_stdin_write, Some(spv_u8), Some(&mut written), None);
-              let _ = CloseHandle(h_stdin_write);
+              let _ = SetHandleInformation(h_stdin_write, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
 
-              let _ = WaitForSingleObject(pi.hProcess, INFINITE);
-              let _ = CloseHandle(pi.hProcess);
-              let _ = CloseHandle(pi.hThread);
-            } else {
-              let _ = CloseHandle(h_stdin_read);
-              let _ = CloseHandle(h_stdin_write);
+              let mut si = STARTUPINFOW::default();
+              si.cb = core::mem::size_of::<STARTUPINFOW>() as u32;
+              si.dwFlags = STARTF_USESTDHANDLES;
+              si.hStdInput = h_stdin_read;
+              si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE).unwrap_or(HANDLE::default());
+              si.hStdError = GetStdHandle(STD_ERROR_HANDLE).unwrap_or(HANDLE::default());
+
+              let mut pi = PROCESS_INFORMATION::default();
+              let cmd_str = alloc::format!("\"{}\" -\0", spirv_dis_exe);
+              let mut cmd: alloc::vec::Vec<u16> = cmd_str.encode_utf16().collect();
+
+              if CreateProcessW(
+                PCWSTR::null(),
+                Some(PWSTR(cmd.as_mut_ptr())),
+                None,
+                None,
+                true,
+                PROCESS_CREATION_FLAGS(0),
+                None,
+                PCWSTR::null(),
+                &mut si,
+                &mut pi,
+              )
+              .is_ok()
+              {
+                let _ = CloseHandle(h_stdin_read);
+                let mut written = 0;
+                let _ = WriteFile(h_stdin_write, Some(spv_u8), Some(&mut written), None);
+                let _ = CloseHandle(h_stdin_write);
+
+                let _ = WaitForSingleObject(pi.hProcess, INFINITE);
+                let _ = CloseHandle(pi.hProcess);
+                let _ = CloseHandle(pi.hThread);
+              } else {
+                let _ = CloseHandle(h_stdin_read);
+                let _ = CloseHandle(h_stdin_write);
+              }
             }
           }
         }
@@ -259,9 +265,18 @@ impl ShaderManager {
       return Err(GpuError::InvalidShader);
     }
 
-    let path_str = path.to_str_unified().map(|s| s.into_owned()).unwrap_or_else(|| alloc::string::String::from("<unknown>"));
+    let path_str = path
+      .to_str_unified()
+      .map(|s| s.into_owned())
+      .unwrap_or_else(|| alloc::string::String::from("<unknown>"));
     aethervk_oshal_rlib::log!("[ShaderManager] Loading shader: {}", path_str);
-    let shader = alloc::sync::Arc::new(Shader::new(device, code, entry_point, execution_model, &path_str)?);
+    let shader = alloc::sync::Arc::new(Shader::new(
+      device,
+      code,
+      entry_point,
+      execution_model,
+      &path_str,
+    )?);
     let key = self.shaders.insert(shader);
     self.shader_paths.insert(path.to_pathbuf(), key);
 

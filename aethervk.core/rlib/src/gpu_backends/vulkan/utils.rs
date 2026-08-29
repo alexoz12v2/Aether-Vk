@@ -563,6 +563,16 @@ impl EntryWrapper {
             }
           });
 
+        unsafe {
+          // WORKAROUND: Disable dynamic library unloading in the Vulkan loader.
+          // Prevents driver FD leaks when rapidly recreating devices in test suites.
+          libc::setenv(
+            b"VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING\0".as_ptr().cast(),
+            b"1\0".as_ptr().cast(),
+            1,
+          );
+        }
+
         // Load the Vulkan shared library
         let loader_name = sdk_loader
           .as_deref()
@@ -717,6 +727,13 @@ impl EntryWrapper {
             libc::setenv(
               b"VK_DRIVER_FILES\0".as_ptr().cast(),
               vk_icd_path.as_ptr(),
+              1,
+            );
+            
+            // GPU-AV Workaround: Prevents stealthy FD leaks
+            libc::setenv(
+              b"VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING\0".as_ptr().cast(),
+              b"1\0".as_ptr().cast(),
               1,
             );
           };

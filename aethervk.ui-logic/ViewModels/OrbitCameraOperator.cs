@@ -23,7 +23,7 @@ internal sealed class OrbitCameraOperator(Viewport3DViewModel vm, Vector2 startP
     {
       case "viewport.pointer_delta":
         if (action.Payload is not Vector2 cur) return false;
-        vm.CameraService.RequestOrbit(cur - _lastPos, state.Modifiers, Vector3.Zero);
+        vm.CameraService.RequestOrbit(cur - _lastPos, state.Modifiers);
         _lastPos = cur;
         return true;
 

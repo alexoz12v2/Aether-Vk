@@ -3,7 +3,7 @@
 
 namespace AetherVk.Logic.ViewModels;
 
-public interface IImportsTabViewModel
+public partial interface IImportsTabViewModel
 {
     string StrTitle { get; set; }
 }

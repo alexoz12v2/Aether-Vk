@@ -3,173 +3,259 @@
 // ============================================================
 // VULKAN EXTENSIONS
 // ============================================================
-// Physical Storage Buffer (64-bit pointers)
-// Vulkan Memory Model
-// Subgroup Intrinsics
-#extension GL_EXT_buffer_reference : enable
+#extension GL_EXT_buffer_reference   : enable
 #extension GL_EXT_scalar_block_layout : enable
 #extension GL_KHR_shader_subgroup_arithmetic : enable
-#extension GL_KHR_shader_subgroup_basic : enable
-#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic      : enable
+#extension GL_GOOGLE_include_directive       : require
 
 #include "debug_utils.glsl"
 
-// ============================================================
-// WORKGROUP AND RESOURCES
-// ============================================================
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
-// Output 3D Volumetric Texture (rgba16f ideal for physically accurate HDR)
+// Output 3-D volumetric texture (rgba16f for HDR physically accurate values).
+// RGB = pre-weighted emission (density already baked in by this shader).
+// A   = optical depth / density per unit length.
 layout(set = 0, binding = 0, rgba16f) uniform writeonly image3D sunVolume;
 
+// Physical-storage-buffer interface for per-frame animated params
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer SunParams {
-  float time;              // Animation time
-  float photosphereTemp;   // Surface Temp, typically ~5778K
-  float coronaTemp;        // Atmosphere Temp, typically ~1,000,000K
-  float radius;            // Normalized core radius (e.g., 0.6)
-  float scaleHeight;       // Scale height for density falloff
-  float noiseScale;        // Frequency of convection granulation
+  float time;            // Animation time (increments each frame)
+  float photosphereTemp; // Photosphere temperature in K  (~5778)
+  float coronaTemp;      // Corona temperature in K       (~1 000 000)
+  float radius;          // Photosphere boundary in volume space  (~0.6)
+  float scaleHeight;     // Atmospheric exponential scale height  (~0.25)
+  float noiseScale;      // Global noise frequency multiplier     (~2.0)
 };
 
 layout(push_constant, std430) uniform Push {
   SunParams params;
 } push;
 
-// Noise Generation for Simulated Convection
-// Part 1: stateless hashing/rng
+// ============================================================
+// PROCEDURAL NOISE
+// ============================================================
+
+// Stateless hash -- maps a 3-D lattice point to [0, 1].
 float hash(vec3 p) {
   p = fract(p * 0.3183099 + 0.1);
   p *= 17.0;
   return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
 }
 
-// Noise Generation for Simulated Convection
-// Part 2: 3D noise function with hermite curves
-float noise(vec3 x) {
+// Smooth 3-D value noise with Hermite interpolation.
+float noise3(vec3 x) {
   vec3 i = floor(x);
   vec3 f = fract(x);
   f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(mix(hash(i + vec3(0,0,0)), hash(i + vec3(1,0,0)), f.x),
-                 mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
-             mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
-                 mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+  return mix(
+    mix(mix(hash(i),               hash(i + vec3(1,0,0)), f.x),
+        mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+    mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
+        mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
 }
 
-// Fractional Brownian Motion (FBM)
-// Used to simulate turbolent plasma convection cells (Granulation) and magnetic field perturbations
+// Fractional Brownian Motion -- 6 octaves.
+// Prime-ish offsets between octaves break visible tiling.
 float fbm(vec3 p) {
-  float value = 0.0;
-  float amplitude = 0.5;
-  float frequency = 1.0;
-  for (int i = 0; i < 5; i++) {
-    value += amplitude * noise(p * frequency);
-    p = p * 2.0 + vec3(100.0); // shift to break repetition
-    amplitude *= 0.5;
-    frequency *= 2.0;
+  float v = 0.0, a = 0.5, f = 1.0;
+  for (int i = 0; i < 6; ++i) {
+    v += a * noise3(p * f);
+    p  = p * 2.17 + vec3(31.41, 17.73, 22.17);
+    a *= 0.5;
+    f *= 2.0;
   }
-  return value;
+  return v;
 }
 
-// Barometric formula (Hydrostatic Equilibrium)
-// Calculates exponential density decay fof the solar atmosphere (corona)
-// Equation: ⍴(r) = ⍴₀ * exp(-(r - R) / H)
-float hydrostaticDensity(float r, float R, float H) {
-  if (r <= R) return 1.0; // Interior/Photosphere is fully dense
-  return exp(-(r - R) / H);
+// Domain-warped FBM -- creates organic swirling shapes.
+// Used for sunspot masks, corona streamers, and prominences.
+float fbmWarped(vec3 p, float warpStrength) {
+  vec3 q = vec3(
+    fbm(p),
+    fbm(p + vec3(5.2, 1.3, 2.8)),
+    fbm(p + vec3(1.7, 9.2, 3.4))
+  );
+  return fbm(p + warpStrength * q);
 }
 
-// Planck's Lay (Blackbody Radiation - Tanner Helland Approximation)
-// Converts Temperature to RGB Radiance
-// While we should also map to human cone responses to various radiance spectra,
-// it's an approximation for 1000K-40000K (hopefully?)
+// ============================================================
+// BLACKBODY RADIATION
+// Tanner Helland approximation, valid 1 000 K to 40 000 K.
+// Returns linear RGB in [0, 1].  Multiply by emissionScale for HDR.
+// ============================================================
 vec3 blackbody(float tempK) {
-  vec3 color;
   float t = clamp(tempK, 1000.0, 40000.0) / 100.0;
-
-  // Red
-  if (t <= 66.0) {
-    color.r = 255.0;
-  } else {
-    color.r = 329.698727446 * pow(t - 60.0, -0.1332047592);
-  }
-
-  // Green
-  if (t <= 60.0) {
-    color.g = 99.4708025861 * log(t) - 161.1195681661;
-  } else {
-    color.g = 288.1221695283 * pow(max(t - 60.0, 0.001), -0.0755148492);
-  }
-
-  // Blue
-  if (t >= 66.0) {
-    color.b = 255.0;
-  } else if (t <= 19.0) {
-    color.b = 0.0;
-  } else {
-    color.b = 138.5177312231 * log(t - 10.0) - 305.0447927307;
-  }
-
-  return clamp(color / 255.0, 0.0, 1.0); // Normalize to [0,1]
+  float r = (t <= 66.0)
+    ? 1.0
+    : clamp(329.698727446 * pow(t - 60.0, -0.1332047592) / 255.0, 0.0, 1.0);
+  float g = (t <= 60.0)
+    ? clamp((99.4708025861 * log(t) - 161.1195681661) / 255.0, 0.0, 1.0)
+    : clamp(288.1221695283 * pow(max(t - 60.0, 0.001), -0.0755148492) / 255.0, 0.0, 1.0);
+  float b = (t >= 66.0)
+    ? 1.0
+    : (t <= 19.0)
+      ? 0.0
+      : clamp((138.5177312231 * log(t - 10.0) - 305.0447927307) / 255.0, 0.0, 1.0);
+  return vec3(r, g, b);
 }
 
+// ============================================================
+// MAIN
+// ============================================================
 void main() {
   ivec3 texelCoord = ivec3(gl_GlobalInvocationID);
-  ivec3 size = imageSize(sunVolume);
+  ivec3 size       = imageSize(sunVolume);
 
-  // Normalized coordinates from -2.0 to 2.0 (0,0,0 is the center of the sun)
-  vec3 uvw = (vec3(texelCoord) + 0.5) / vec3(size) * 4.0 - 2.0;
-  float distFromCenter = length(uvw);
+  // Bounds guard MUST precede all subgroup ops.
+  // With 128^3 / 8^3 = 16 groups this never fires, but is required for
+  // correctness if the resolution ever changes to a non-multiple of 8.
+  if (any(greaterThanEqual(texelCoord, size))) return;
 
-  // Subgroup Intrinsics Demonstration:
-  // Averaging distance across the subgroup footprint
-  // While physically arabitrary, it demonstates GL_KHR_shader_subgroup_arithmetic usage
-  // over non-uniform control flow execution
-  float subgroupAvgDist = subgroupAdd(distFromCenter) / float(gl_SubgroupSize);
+  // Normalised 3-D position: [-2, 2]^3, origin = sun centre.
+  vec3  uvw = (vec3(texelCoord) + 0.5) / vec3(size) * 4.0 - 2.0;
+  float r   = length(uvw);
+  vec3  dir = (r > 1e-4) ? uvw / r : vec3(0.0, 0.0, 1.0);
 
-  if (any(greaterThanEqual(texelCoord, size))) {
-    return;
+  // Subgroup average radius -- exercises GL_KHR_shader_subgroup_arithmetic.
+  float subgroupAvgR = subgroupAdd(r) / float(gl_SubgroupSize);
+
+  // Load params from physical-storage buffer
+  float time       = push.params.time;
+  float rSun       = push.params.radius;          // photosphere boundary  (~0.6)
+  float H          = push.params.scaleHeight;     // corona scale height   (~0.25)
+  float photoTemp  = push.params.photosphereTemp; // ~5778 K
+  float coronaTemp = push.params.coronaTemp;      // ~1 000 000 K
+  float nScale     = push.params.noiseScale;      // ~2.0
+
+  // Differential rotation animation.
+  // Equatorial belt rotates faster than the poles -- matches real solar physics.
+  float latitude = abs(dir.y);
+  float rotRate  = 0.04 * (1.0 - 0.30 * latitude * latitude);
+  float cs = cos(time * rotRate), sn = sin(time * rotRate);
+  vec3  rotPos;
+  rotPos.y  = uvw.y;
+  rotPos.xz = mat2(cs, -sn, sn, cs) * uvw.xz;
+
+  vec3 nPos = rotPos * nScale; // globally scaled noise position
+
+  // Granulation (photospheric convection cells).
+  // Two frequency bands: coarse cells + fine intra-cell texture.
+  float gran  = fbm(nPos * 3.5);
+  float fineG = fbm(nPos * 9.0 + vec3(47.1, 23.3, 61.9));
+  float gran2 = gran * 0.70 + fineG * 0.30;
+
+  // Sunspot regions.
+  // Large-scale domain-warped noise creates stable dark patches.
+  // spotMask = 1 inside the umbra, 0 in the quiet sun.
+  float spotN    = fbmWarped(nPos * 0.8 + vec3(time * 0.005, 0.0, time * 0.007), 0.6);
+  float spotMask = smoothstep(0.60, 0.54, spotN);
+
+  // Surface turbulence (MHD boundary perturbation).
+  // Jitters the effective photosphere radius so the limb is not a perfect sphere.
+  float turb       = fbm(nPos * 1.2 + vec3(time * 0.10, time * 0.07, 0.0));
+  float effectiveR = r - (turb - 0.5) * 0.06;
+
+  float distFromSurf = effectiveR - rSun;
+
+  // Solar prominences.
+  // Bright plasma arches in the chromosphere / low-corona limb band.
+  float promN    = fbmWarped(nPos * 2.5 + vec3(time * 0.06, 0.0, time * 0.04), 0.8);
+  float promBand = smoothstep(0.20, 0.0, distFromSurf)
+                 * smoothstep(0.0,  0.20, distFromSurf);
+  float promMask = promBand * smoothstep(0.52, 0.72, promN);
+
+  // Coronal streamers.
+  // Ray-like bright structures extending radially outward from active regions.
+  // Noise in direction-space creates features elongated along the radial axis.
+  float streamN    = fbmWarped(dir * 4.0 + vec3(time * 0.02), 0.4);
+  float streamMask = smoothstep(rSun + H * 0.5, rSun + H * 3.0, effectiveR)
+                   * smoothstep(rSun + H * 9.0, rSun + H * 4.0, effectiveR)
+                   * smoothstep(0.45, 0.65, streamN);
+
+  // Density & emission per region
+  float density;
+  vec3  emission;
+
+  if (effectiveR <= rSun) {
+    // PHOTOSPHERE (interior plasma)
+    // Dense, opaque; the "surface" visible to external observers.
+    density = 1.0;
+
+    // Granulation +-400 K variation; sunspot umbrae are ~1800 K cooler.
+    float localTemp = photoTemp
+                    + (gran2 - 0.5) * 800.0
+                    - spotMask * 1800.0;
+
+    vec3 bbColor = blackbody(localTemp);
+
+    // Artistic warm tint: blend from yellow-orange granules to dark red-brown
+    // sunspot umbrae.
+    vec3 warmTint = mix(
+      vec3(1.00, 0.78, 0.22),   // hot granule
+      vec3(0.55, 0.22, 0.08),   // cool sunspot umbra
+      spotMask
+    );
+    bbColor *= warmTint;
+
+    // Saturated yellow highlight at the hot cores of the brightest granules.
+    float hotCore = smoothstep(0.50, 0.72, gran2) * (1.0 - spotMask);
+    bbColor      += hotCore * vec3(0.50, 0.25, 0.02);
+
+    emission = bbColor;
+
+  } else {
+    // ATMOSPHERE (chromosphere -> transition region -> corona)
+    // Exponential density falloff above the photosphere boundary.
+    density = clamp(exp(-distFromSurf / H), 0.0, 1.0);
+
+    // Temperature inversion profile.
+    // Above the photosphere temperature decreases to a minimum (~4600 K),
+    // then rises sharply through the transition region into the million-degree corona.
+    float tChrom  = smoothstep(0.0,     H,       distFromSurf);
+    float tTrans  = smoothstep(H,       2.0 * H, distFromSurf);
+    float tCorona = smoothstep(2.0 * H, 5.0 * H, distFromSurf);
+
+    float localTemp =
+      mix(photoTemp * 0.80,
+          mix(30000.0,
+              mix(500000.0, coronaTemp, tCorona),
+              tTrans),
+          tChrom);
+
+    vec3 bbColor = blackbody(localTemp);
+
+    // Chromosphere: H-alpha red tint in the thin layer just above the surface.
+    float chromoMask = 1.0 - tChrom;
+    bbColor = mix(bbColor, vec3(1.0, 0.10, 0.04), chromoMask * 0.70);
+
+    // Corona: blue-white colour of million-degree plasma.
+    bbColor = mix(bbColor, vec3(0.82, 0.91, 1.00), tCorona * 0.55);
+
+    // Coronal streamer brightening.
+    bbColor  += streamMask * vec3(0.55, 0.70, 0.85) * 0.9;
+    density   = max(density, streamMask * 0.06);
+
+    // Prominences: bright red-pink arches; extra density for visibility.
+    bbColor   = mix(bbColor, vec3(1.00, 0.22, 0.08), promMask);
+    density   = max(density, promMask * 0.50);
+
+    // Soft hot rim at prominence edges.
+    float promRim = promBand * smoothstep(0.45, 0.55, promN) * (1.0 - promMask);
+    bbColor      += promRim * vec3(0.80, 0.40, 0.10) * 0.40;
+
+    emission = bbColor;
   }
 
-  // Load simulation parameters from the PHysicalStorageBuffer pointer
-  float time = push.params.time;
-  float rSun = push.params.radius;
-  float scaleHeight = push.params.scaleHeight;
-  float photoTemp = push.params.photosphereTemp;
-  float coronaTemp = push.params.coronaTemp;
+  // HDR output.
+  // rgba16f supports values > 1.0.  Boost photosphere to HDR range so the
+  // fragment raymarcher accumulates plausible luminance before saturation.
+  float emissionScale = (effectiveR <= rSun) ? 3.5 : 1.5;
+  vec3  finalColor    = emission * density * emissionScale;
 
-  // Animate turbolence: (Simulating solar rotation and convection currents)
-  // (Velocity towards v and w arbitrary, what feels right)
-  vec3 noisePos = uvw * push.params.noiseScale - vec3(time * 0.2, time * 2.5, time * 1.5);
-  float turbolence = fbm(noisePos);
+  // Subgroup validation: ratio approx 1.0 confirms correct arithmetic.
+  float validation = clamp(subgroupAvgR / max(r, 0.001), 0.9, 1.1);
+  finalColor *= validation;
 
-  // Temperature Granulation: Creates Hot/Cold spots on the Photosphere
-  // Amplify visual contrast of the temperature differences so we can see the fancy shader
-  float localTemp = photoTemp + (turbolence - 0.5) * 1200.0;
-
-  // Magnetohydrodynamics (MHD) Surface Perturbation:
-  // Make the surface turbulence more pronounced
-  float effectiveRadius = distFromCenter - (turbolence - 0.5) * 0.1;
-  // Calculate density and atmospheric transition mask
-  float density = exp(-(effectiveRadius - rSun) / scaleHeight);
-  density = clamp(density, 0.0, 1.0);
-  float transitionMask = smoothstep(0.0, 1.0, density);
-
-  // Surface temperature
-  float finalTemp = mix(localTemp, coronaTemp, transitionMask);
-
-// Calculate final HDR Emission Color (Blackbody curve)
-vec3 emissionColor = blackbody(finalTemp);
-
-// Apply a pleasing yellow-orange artistic tint because a physically correct
-// 5778K blackbody is technically white, which doesn't resemble a sun to human eyes.
-vec3 artisticTint = mix(vec3(1.0, 0.15, 0.02), vec3(1.0, 0.35, 0.05), transitionMask);
-emissionColor *= artisticTint;
-
-// Radiative Transfer: Simplified Volume rendering emission/absorption model
-// RGB = Emission (Glowing Plasma), Alpha = Density (Optical Depth / Opacity)
-// we boost emission slightly by integrating our subgroup distance scalar for validation
-float intrinsicValidation = clamp(subgroupAvgDist / max(distFromCenter, 0.001), 0.9, 1.1);
-vec3 finalColor = emissionColor * density * 0.9 * intrinsicValidation;
-// Write out volumetric representation
-imageStore(sunVolume, texelCoord, vec4(finalColor, density));
+  imageStore(sunVolume, texelCoord, vec4(finalColor, density));
 }

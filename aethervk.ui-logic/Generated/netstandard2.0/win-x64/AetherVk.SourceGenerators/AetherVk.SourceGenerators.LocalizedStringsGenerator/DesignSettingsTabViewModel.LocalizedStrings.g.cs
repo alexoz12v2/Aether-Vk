@@ -4,7 +4,7 @@
 
 namespace AetherVk.Logic.ViewModels;
 
-public class DesignSettingsTabViewModel : ISettingsTabViewModel
+public partial class DesignSettingsTabViewModel : ISettingsTabViewModel
 {
     public string Title    { get; set; } = "Settings";
     public string Icon     { get; set; } = "⚙";

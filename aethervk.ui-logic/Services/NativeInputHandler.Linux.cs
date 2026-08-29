@@ -345,9 +345,15 @@ public unsafe class LinuxNativeInputHandler(IntPtr handle, string handleDescript
     58 => 0x4D, // M    52 => 0x5A, // Z
 
     // --- Digits 0-9 (Win32 0x30-0x39) ---
-    19 => 0x30, // 0    10 => 0x31, // 1    11 => 0x32, // 2
-    12 => 0x33, // 3    13 => 0x34, // 4    14 => 0x35, // 5
-    15 => 0x36, // 6    16 => 0x37, // 7    17 => 0x38, // 8
+    19 => 0x30, // 0
+    10 => 0x31, // 1
+    11 => 0x32, // 2
+    12 => 0x33, // 3
+    13 => 0x34, // 4
+    14 => 0x35, // 5
+    15 => 0x36, // 6
+    16 => 0x37, // 7
+    17 => 0x38, // 8
     18 => 0x39, // 9
 
     // --- Control / Navigation ---
@@ -446,6 +452,50 @@ public unsafe static class PInvokeX11
   internal static extern int XClearWindow(nint display, nint window);
 
   [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int XReparentWindow(nint display, nint window, nint parent, int x, int y);
+
+  [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int XRaiseWindow(nint display, nint window);
+
+  /// <summary>
+  /// Mirror of Xlib's XSetWindowAttributes. LP64 layout (112 bytes on x86_64):
+  ///   - Pixmap / unsigned long fields → nuint (8 bytes on LP64)
+  ///   - long fields (event_mask, do_not_propagate_mask) → nint (8 bytes on LP64)
+  ///   - Bool fields (save_under, override_redirect) → int (Xlib Bool is int, NOT C# bool)
+  ///   - int fields → int (always 4 bytes)
+  /// C#'s [LayoutKind.Sequential] inserts natural padding identical to GCC's default packing,
+  /// so no explicit offsets are needed.
+  /// </summary>
+  [StructLayout(LayoutKind.Sequential)]
+  internal struct XSetWindowAttributes
+  {
+    public nuint background_pixmap;       // Pixmap      (unsigned long, 8B) — offset   0
+    public nuint background_pixel;        // unsigned long, 8B                — offset   8
+    public nuint border_pixmap;           // Pixmap      (unsigned long, 8B) — offset  16
+    public nuint border_pixel;            // unsigned long, 8B                — offset  24
+    public int   bit_gravity;             // int, 4B                          — offset  32
+    public int   win_gravity;             // int, 4B                          — offset  36
+    public int   backing_store;           // int, 4B → 4B natural pad before nuint — offset 40
+    public nuint backing_planes;          // unsigned long, 8B                — offset  48
+    public nuint backing_pixel;           // unsigned long, 8B                — offset  56
+    public int   save_under;              // Bool=int (NOT bool!), 4B → 4B pad before nint — offset 64
+    public nint  event_mask;              // long, 8B                         — offset  72
+    public nint  do_not_propagate_mask;   // long, 8B                         — offset  80
+    public int   override_redirect;       // Bool=int (NOT bool!), 4B → 4B pad before nuint — offset 88
+    public nuint colormap;               // Colormap (unsigned long, 8B)     — offset  96
+    public nuint cursor;                 // Cursor   (unsigned long, 8B)     — offset 104
+    // Total: 112 bytes
+  }
+
+  /// <summary>
+  /// valuemask is 'unsigned long' in Xlib → nuint.
+  /// Use CWOverrideRedirect = 0x200 to touch only the override_redirect field.
+  /// </summary>
+  [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int XChangeWindowAttributes(
+    nint display, nint window, nuint valuemask, ref XSetWindowAttributes attributes);
+
+  [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   internal static extern nint XLookupKeySym(XKeyEvent* key_event, int index);
 
   /// <summary>
@@ -506,7 +556,10 @@ public unsafe static class PInvokeX11
   [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   internal static extern int XPending(nint display);
 
-  // --- Structs ---
+  /// <summary>Returns the root window of the default screen on the given display connection.</summary>
+  [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern nint XDefaultRootWindow(nint display);
+
 
   /// <summary>
   /// Partial layout of XWindowAttributes — we only need map_state.

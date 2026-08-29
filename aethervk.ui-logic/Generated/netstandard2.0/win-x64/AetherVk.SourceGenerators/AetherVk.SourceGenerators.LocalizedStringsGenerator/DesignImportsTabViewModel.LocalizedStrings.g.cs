@@ -4,7 +4,7 @@
 
 namespace AetherVk.Logic.ViewModels;
 
-public class DesignImportsTabViewModel : IImportsTabViewModel
+public partial class DesignImportsTabViewModel : IImportsTabViewModel
 {
     public string Title    { get; set; } = "Imports";
     public string Icon     { get; set; } = "⬇";

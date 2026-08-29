@@ -8,7 +8,8 @@ namespace AetherVk.Views
 {
     partial class CometTabView
     {
-
+        [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
+        internal global::Avalonia.Controls.ContentControl DebugContainer;
 
         /// <summary>
         /// Wires up the controls and optionally loads XAML markup and attaches dev tools (if Avalonia.Diagnostics package is referenced).
@@ -24,7 +25,8 @@ namespace AetherVk.Views
                 AvaloniaXamlLoader.Load(this);
             }
 
-
+            var __thisNameScope__ = this.FindNameScope();
+            DebugContainer = __thisNameScope__?.Find<global::Avalonia.Controls.ContentControl>("DebugContainer");
         }
     }
 }

@@ -31,7 +31,11 @@ public class Viewport3DViewModelTests
   /// Builds a fully wired <see cref="Viewport3DViewModel"/> using mocked native services
   /// so no native DLL is required.
   /// </summary>
-  private static Viewport3DViewModel BuildVm()
+  /// <param name="cometCommitted">
+  /// When <c>true</c>, pre-configures <see cref="CometConfigService"/> as having a committed
+  /// almanac so that tests exercising <see cref="CameraMode.CometOrbiting"/> can enter that mode.
+  /// </param>
+  private static Viewport3DViewModel BuildVm(bool cometCommitted = false)
   {
     var dispatcher = new Mock<IUiThreadDispatcher>();
     dispatcher
@@ -46,7 +50,17 @@ public class Viewport3DViewModelTests
     var breadcrumb    = new BreadcrumbService(dispatcher.Object);
     var timeline      = new TimelineService(runtime.Object, schedulers);
     var cometTracker  = new CometPositionTrackerService(runtime.Object, schedulers, timeline);
-    var cameraService = new CameraService(runtime.Object, schedulers, cometTracker);
+    var cometConfig   = new CometConfigService(runtime.Object, schedulers);
+    var cameraService = new CameraService(runtime.Object, schedulers, cometTracker, cometConfig, breadcrumb);
+
+    // Pre-set the committed state so tests that switch to CometOrbiting work.
+    if (cometCommitted)
+    {
+      var field = typeof(CometConfigService)
+        .GetField("_isCommittedSubject", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+      var subject = (System.Reactive.Subjects.BehaviorSubject<bool>?)field?.GetValue(cometConfig);
+      subject?.OnNext(true);
+    }
 
     var sessionService = new Mock<ITabStateService<ViewportSession>>();
     var sessionList = new[] { new SessionId(typeof(ViewportSession), 1) };
@@ -67,7 +81,7 @@ public class Viewport3DViewModelTests
     ViewportOverlayViewModel OverlayFactory(Viewport3DViewModel vm) =>
       new Mock<ViewportOverlayViewModel>(
         MockBehavior.Loose,
-        new Mock<CameraService>(MockBehavior.Loose).Object,
+        cameraService,
         runtime.Object,
         new BreadcrumbService(dispatcher.Object),
         dispatcher.Object,
@@ -86,7 +100,9 @@ public class Viewport3DViewModelTests
       VulkanFactory,
       OverlayFactory,
       platformWindowService,
-      sessionService.Object
+      new Mock<IWindowInputRouter>().Object,
+      sessionService.Object,
+      new Mock<IViewportRegistry>().Object
     );
   }
 
@@ -114,7 +130,7 @@ public class Viewport3DViewModelTests
   {
     try
     {
-      var vm = BuildVm();
+      var vm = BuildVm(cometCommitted: true);
       // Initial state is UpZenith (EarthPosition requires SPK data)
       Assert.Equal(CameraMode.UpZenith, vm.CameraService.CurrentMode);
 
@@ -136,7 +152,7 @@ public class Viewport3DViewModelTests
   {
     try
     {
-      var vm = BuildVm();
+      var vm = BuildVm(cometCommitted: true);
       vm.Process(new AppAction(ViewportAction.SwitchToCometOrbiting.ToCmdString()), Pressed());
       Assert.Equal(CameraMode.CometOrbiting, vm.CameraService.CurrentMode);
 
@@ -152,7 +168,7 @@ public class Viewport3DViewModelTests
   {
     try
     {
-      var vm = BuildVm();
+      var vm = BuildVm(cometCommitted: true);
       vm.Process(new AppAction(ViewportAction.SwitchToCometOrbiting.ToCmdString()), Pressed());
       Assert.Equal(CameraMode.CometOrbiting, vm.CameraService.CurrentMode);
     }
@@ -165,7 +181,7 @@ public class Viewport3DViewModelTests
   {
     try
     {
-      var vm = BuildVm();
+      var vm = BuildVm(cometCommitted: true);
 
       vm.Process(new AppAction(ViewportAction.SwitchToEarthPosition.ToCmdString()), Pressed());
       Assert.True(vm.IsEarthObserverMode);

@@ -47,11 +47,24 @@
             <TextBlock Text="End Epoch (TDB):" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" Margin="8,0,0,0"/>
             <TextBox Text="{Binding EndEpoch}" Width="180" Watermark="e.g. 2000-02-01T12:00:00Z" />
 
-            <Button Content="Commit" Command="{Binding SubmitCommand}" Classes="accent" IsEnabled="{Binding HasUncommittedChanges}" ToolTip.Tip="Validate &amp; Commit Timeline" ToolTip.ShowDelay="1000" />
-            <Button Content="Restore" Command="{Binding RestoreCommand}" IsEnabled="{Binding HasUncommittedChanges}" ToolTip.Tip="Restore Last Committed" ToolTip.ShowDelay="1000" />
+            <Button Content="Propose" Command="{Binding ProposeCommand}" ToolTip.Tip="Propose Timeline for Comet Selection" ToolTip.ShowDelay="1000" />
+            <Button Content="Commit" Command="{Binding SubmitCommand}" Classes="accent" IsEnabled="{Binding IsProposedDifferentFromCommitted}" ToolTip.Tip="Validate &amp; Commit Timeline to Runtime" ToolTip.ShowDelay="1000" />
+            <Button Content="Restore" Command="{Binding RestoreCommand}" IsEnabled="{Binding IsProposedDifferentFromCommitted}" ToolTip.Tip="Restore Proposed to Last Committed" ToolTip.ShowDelay="1000" />
 
-            <!-- Indicator -->
-            <TextBlock Text="●" Foreground="{DynamicResource Sem.Warning}" IsVisible="{Binding HasUncommittedChanges}" ToolTip.Tip="Uncommitted changes" VerticalAlignment="Center" />
+            <!-- Indicator: proposed range differs from committed -->
+            <TextBlock Text="●" Foreground="{DynamicResource Sem.Warning}" IsVisible="{Binding IsProposedDifferentFromCommitted}" ToolTip.Tip="Proposed range differs from committed" VerticalAlignment="Center" />
+          </StackPanel>
+          
+          <StackPanel Orientation="Horizontal" Spacing="24" Margin="0,8,0,0">
+            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasProposedState}">
+              <TextBlock Text="Proposed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
+              <TextBlock Text="{Binding DisplayProposedRange}" FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
+            </StackPanel>
+            
+            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasCommittedState}">
+              <TextBlock Text="Committed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
+              <TextBlock Text="{Binding DisplayCommittedRange}" FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
+            </StackPanel>
           </StackPanel>
 
           <!-- Error Message -->

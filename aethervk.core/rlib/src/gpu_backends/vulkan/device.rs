@@ -1,5 +1,22 @@
 //! device module.
 //! Only `RenderDevice` methods are allowed to start a Vulkan Transaction
+//!
+//! # Troubleshooting File Descriptor Leaks
+//! Unlike memory leaks that cause rapid Out-of-Memory (OOM) crashes, an FD leak is stealthy.
+//! Your application works normally at first but crashes after a sustained period of heavy queue
+//! submissions or device recreation (like during `cargo nextest` runs).
+//! The crash log outputs standard OS errors like `Too many open files` (error 24) or Vulkan
+//! failures like `VK_ERROR_INITIALIZATION_FAILED`.
+//!
+//! ## How to Fix or Workaround
+//! 1. **Pinpoint the Leaking Objects**: Verify the layer is causing the leak via `lsof -p <PID> | wc -l`.
+//!    If the count stops growing when GPU-AV is disabled, it's a validation layer issue.
+//! 2. **Avoid Device Re-creation Loops**: Cache device contexts globally instead of recreating them mid-execution.
+//! 3. **Loader Workaround**: On Linux, an underlying bug with dynamic library unloads can cause driver FDs to persist.
+//!    Setting the environment variable `VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1` before execution stops the
+//!    loader from forcefully closing drivers before the layer clears its handles.
+//! 4. **Update Validation Layers**: Update to the latest Vulkan SDK release or build from Khronos main.
+//! 5. **Bump the System Limit**: Artificially expand the OS's descriptor ceiling (`ulimit -n`).
 
 use crate::{
   gpu::{
@@ -439,7 +456,7 @@ pub struct DeviceResources {
   sun_resources: dashmap::DashMap<EntityId, resources::ResourceState<resources::SunRenderResource>>,
 
   sky_image: DebugTrackedRwLock<Option<Image>>,
-  billboard_resources: DebugTrackedRwLock<Vec<Image>>,
+  billboard_resources: DebugTrackedRwLock<Vec<Option<Image>>>,
 
   pending_downloads: DebugTrackedRwLock<hashbrown::HashMap<u64, PendingDownload>>,
 
@@ -674,7 +691,7 @@ impl DeviceResources {
       }
     }
 
-    for image in self.billboard_resources.write().drain(..) {
+    for image in self.billboard_resources.write().drain(..).flatten() {
       self.discard_pool.discard_image(
         self.allocator.allocator.as_allocator_view(),
         image.image.get(),
@@ -863,6 +880,8 @@ struct RecordingCmdBufferData {
   presentation: Option<RecordingCmdBufferDataPresentation>,
   presentation_engine: Option<PresentationEngineHandle>,
   has_begun: bool,
+  #[cfg(debug_assertions)]
+  debug_query_index: Option<u32>,
   /// Set when inside a compositing render pass; enables transparent
   /// pipeline adaptation in bind_pipeline.
   compositing_ctx: Option<CompositingContext>,
@@ -877,6 +896,8 @@ impl RecordingCmdBufferData {
       presentation: None,
       presentation_engine: None,
       has_begun: false,
+      #[cfg(debug_assertions)]
+      debug_query_index: None,
       compositing_ctx: None,
     }
   }
@@ -926,6 +947,9 @@ pub struct LogicalDevice {
 
   #[cfg(debug_assertions)]
   pub debug_utils: ash::ext::debug_utils::Device,
+
+  #[cfg(debug_assertions)]
+  pub telemetry_query_pool: Option<vk::QueryPool>,
 
   #[cfg(target_vendor = "apple")]
   pub metal_objects: ash::ext::metal_objects::Device,
@@ -1194,6 +1218,9 @@ pub enum QueueRole {
   Compute,
 }
 
+#[cfg(debug_assertions)]
+static GRAPHICS_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 impl Device {
   const PAGE_TABLE_BYTES: u64 = (crate::gpu::new_particles::PARTICLE_PAGE_TABLE_HEADER_SIZE
     + 4
@@ -1206,7 +1233,9 @@ impl Device {
   pub unsafe fn reset_all_particle_systems(&self) -> GpuResult<()> {
     // create a quick one off compute queue compatible command buffer (ARM guidelines)
     // already in record state here
-    let cmd: vk::CommandBuffer = todo!();
+    let (cmd_handle, cmd) = self.get_compute_command_buffer_and_native()?;
+
+    self.begin_command_buffer_all(cmd_handle, QueueRole::Compute)?;
     unsafe {
       self.device.cmd_bind_pipeline(
         cmd,
@@ -1255,7 +1284,15 @@ impl Device {
     }
 
     // submit and cleanup
-    todo!()
+    let (timeline_sem, value) =
+      self.submit_command_buffer_generic(cmd_handle, None, &[], &[], QueueRole::Compute)?;
+
+    self
+      .device
+      .wait_for_semaphore_value(timeline_sem, value, u64::MAX)
+      .map_err(|e| gpu_err!("wait_for_semaphore_value failed: {:?}", e))?;
+
+    Ok(())
   }
 
   /// `push_constants` should be fully populated except for some zeroed out fields populated here:
@@ -1367,7 +1404,53 @@ impl Device {
     .1;
 
     unsafe {
+      #[cfg(debug_assertions)]
+      if let Some(pool) = self.device.telemetry_query_pool {
+        if let Some(query_index) = data.debug_query_index {
+          self.device.cmd_write_timestamp(
+            data.command_buffer.get(),
+            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+            pool,
+            query_index + 1,
+          );
+        }
+      }
+
       self.device.end_command_buffer(data.command_buffer.get())?;
+    }
+
+    // Read back the results from 4 command buffers ago (guaranteed to be finished)
+    #[cfg(debug_assertions)]
+    if let Some(pool) = self.device.telemetry_query_pool {
+      if role == QueueRole::Graphics {
+        let g_count = GRAPHICS_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if g_count >= 4 {
+          let old_query_index = ((g_count - 4) % 512) as u32 * 2;
+          let mut results = [[0u64; 2]; 2];
+          if unsafe {
+            self.device.get_query_pool_results(
+              pool,
+              old_query_index,
+              results.as_mut_slice(),
+              vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WITH_AVAILABILITY,
+            )
+          }
+          .is_ok()
+          {
+            if results[0][1] != 0 && results[1][1] != 0 {
+              let start_ts = results[0][0];
+              let end_ts = results[1][0];
+              if end_ts > start_ts {
+                let diff_ticks = end_ts - start_ts;
+                let period = self.query_result.physical_device_properties.limits.timestamp_period;
+                let diff_ms = (diff_ticks as f64) * (period as f64) / 1_000_000.0;
+                crate::gpu_backends::vulkan::DEBUG_RENDER_THREAD_GPU_TIME_MS
+                  .store(diff_ms.to_bits(), core::sync::atomic::Ordering::Relaxed);
+              }
+            }
+          }
+        }
+      }
     }
 
     let is_graphics = role == QueueRole::Graphics;
@@ -1539,6 +1622,9 @@ impl Device {
             .signal_semaphore_infos(&signal_semaphore_infos)
             .command_buffer_infos(core::slice::from_ref(&command_buffer_info));
 
+          #[cfg(debug_assertions)]
+          let _render_start = aethervk_oshal_rlib::os::time::get_monotonic_time();
+
           unsafe {
             self
               .device
@@ -1557,6 +1643,14 @@ impl Device {
               })?;
           }
           drop(_guard); // unlock here
+
+          #[cfg(debug_assertions)]
+          {
+            let elapsed_ms =
+              (aethervk_oshal_rlib::os::time::get_monotonic_time() - _render_start) as f64 / 1000.0;
+            crate::gpu_backends::vulkan::DEBUG_RENDER_THREAD_CPU_TIME_MS
+              .store(elapsed_ms.to_bits(), core::sync::atomic::Ordering::Relaxed);
+          }
 
           // Inform the task registry of the timeline value to wait for
           if is_graphics {
@@ -1635,6 +1729,26 @@ impl Device {
       vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
     unsafe {
       self.device.begin_command_buffer(data.command_buffer.get(), &begin_info)?;
+
+      #[cfg(debug_assertions)]
+      if let Some(pool) = self.device.telemetry_query_pool {
+        if role == QueueRole::Graphics {
+          // cmd_buffer.0 is monotonically increasing. We have a 1024-query pool.
+          // 2 queries per cmd buffer means we can hold 512 cmd buffers.
+          let query_index =
+            (GRAPHICS_COUNT.load(core::sync::atomic::Ordering::Relaxed) % 512) as u32 * 2;
+          data.debug_query_index = Some(query_index);
+          self
+            .device
+            .cmd_reset_query_pool(data.command_buffer.get(), pool, query_index, 2);
+          self.device.cmd_write_timestamp(
+            data.command_buffer.get(),
+            vk::PipelineStageFlags::TOP_OF_PIPE,
+            pool,
+            query_index,
+          );
+        }
+      }
     }
     data.has_begun = true;
 
@@ -2781,6 +2895,15 @@ impl Device {
 
     #[cfg(debug_assertions)]
     let debug_utils = ash::ext::debug_utils::Device::new(&instance.instance, &device);
+
+    #[cfg(debug_assertions)]
+    let telemetry_query_pool = {
+      let create_info = vk::QueryPoolCreateInfo::default()
+        .query_type(vk::QueryType::TIMESTAMP)
+        .query_count(1024);
+      unsafe { device.create_query_pool(&create_info, None).ok() }
+    };
+
     #[cfg(target_vendor = "apple")]
     let metal_objects = ash::ext::metal_objects::Device::new(&instance.instance, &device);
     let device = LogicalDevice {
@@ -2796,6 +2919,8 @@ impl Device {
       metal_objects,
       #[cfg(debug_assertions)]
       debug_utils,
+      #[cfg(debug_assertions)]
+      telemetry_query_pool,
       max_per_stage_descriptor_update_after_bind_samplers: chosen_physical_device_query_result
         .max_per_stage_descriptor_update_after_bind_samplers,
       max_per_stage_descriptor_samplers: chosen_physical_device_query_result
@@ -2912,6 +3037,12 @@ impl Drop for Device {
       }
 
       aethervk_oshal_rlib::log!("Device::drop cleanup complete. Destroying device...");
+
+      #[cfg(debug_assertions)]
+      if let Some(pool) = self.device.telemetry_query_pool {
+        unsafe { self.device.destroy_query_pool(pool, None) };
+      }
+
       // in the end, destroy the device
       unsafe { self.device.destroy_device(None) };
       aethervk_oshal_rlib::log!("Device::drop finished.");
@@ -6036,11 +6167,7 @@ impl RenderDevice for Device {
         let array_index = billboard_resources.len() as u32;
 
         // Insert a dummy image to securely reserve our bindless slot while we allocate lock-free
-        billboard_resources.push(resources::Image {
-          image: unsafe { NonZeroHandle::new_unchecked(vk::Image::null()) },
-          image_view: unsafe { NonZeroHandle::new_unchecked(vk::ImageView::null()) },
-          allocation: unsafe { core::mem::zeroed() },
-        });
+        billboard_resources.push(None);
 
         let vma_view = state.allocator.allocator.as_allocator_view();
         let staging_arena_ptr =
@@ -6105,7 +6232,7 @@ impl RenderDevice for Device {
 
         // Safely replace the reserved dummy slot with the real uploaded image
         let mut billboard_resources = locks::DebugTrackedRwLock::write(&state.billboard_resources);
-        billboard_resources[array_index as usize] = image;
+        billboard_resources[array_index as usize] = Some(image);
 
         Ok(array_index)
       })
@@ -6291,12 +6418,18 @@ impl RenderDevice for Device {
           let timeline = state.timeline_manager.get_cached_value();
           let vma = state.allocator.allocator.get_raw();
 
-          // 1. Check if the sun resource already exists
+          // 1. Check if the sun resource already exists.
+          // NOTE: The previous `last_timeline == timeline` early-exit guard has been
+          // intentionally removed.  That guard caused DispatchOnly to be skipped
+          // whenever the cached GPU timeline hadn't advanced (common when update_sun
+          // is called early in the frame before the previous submit is signalled),
+          // making the sun volume permanently black after the first frame.
+          // The user requires the compute dispatch to run every frame (once per frame,
+          // not once per viewport).  DispatchOnly is safe to call repeatedly: the
+          // layout transitions are idempotent and it records into the per-viewport
+          // graphics command buffer before any render pass begins.
           if let Some(entry) = state.sun_resources.get(&entity_id) {
             if let resources::ResourceState::Ready(sun_res) = entry.value() {
-              if sun_res.last_timeline == timeline {
-                return Ok((timeline, SunOperation::None));
-              }
               let op = SunOperation::DispatchOnly {
                 vma,
                 image: sun_res.image.as_ref().unwrap().image.get(),
@@ -6557,8 +6690,8 @@ impl RenderDevice for Device {
                 5778.0,
                 1000000.0,
                 radius,
-                0.05,
-                15.0,
+                0.25, // scaleHeight: extended corona (was 0.05 — density hit zero at r≈0.75)
+                2.0,  // noiseScale:  well-scaled granulation (was 15.0 — too fine / aliased)
               ];
 
               // 5. Graphics Descriptor Set
@@ -6615,8 +6748,8 @@ impl RenderDevice for Device {
                 *(ptr.add(1)) = 5778.0;
                 *(ptr.add(2)) = 1000000.0;
                 *(ptr.add(3)) = radius;
-                *(ptr.add(4)) = 0.05;
-                *(ptr.add(5)) = 15.0;
+                *(ptr.add(4)) = 0.25; // scaleHeight: extended corona (was 0.05)
+                *(ptr.add(5)) = 2.0; // noiseScale:  balanced granulation (was 15.0)
                 allocator.flush_allocation(&params_alloc, 0, vk::WHOLE_SIZE as u64)?;
               }
 
@@ -7793,6 +7926,32 @@ impl<'a> Drop for PoolGuard<'a> {
 }
 
 impl Device {
+  /// Returns `(vk_device_ptr, window_ptr)` suitable for RenderDoc's
+  /// `StartFrameCapture` / `EndFrameCapture`, or `None` when the PE is
+  /// windowless, unknown, or this is a release build.
+  ///
+  /// - `vk_device_ptr` — raw `VkDevice` handle cast to `*mut c_void`.
+  /// - `window_ptr` — the native surface handle stored at swapchain creation:
+  ///   XCB → `xcb_window_t` reinterpreted as pointer; Wayland → `wl_surface *`;
+  ///   Win32 → `HWND`.
+  #[cfg(debug_assertions)]
+  pub fn get_windowed_pe_renderdoc_handles(
+    &self,
+    pe: crate::gpu::PresentationEngineHandle,
+  ) -> Option<(*mut core::ffi::c_void, *mut core::ffi::c_void)> {
+    use crate::gpu_backends::vulkan::utils::RwLockable;
+    let state = self.res.read();
+    let pe_ref = state.live_presentation_engines.get(&pe)?;
+    if let swapchain::PresentationState::Windowed(w) = pe_ref.value() {
+      // VkDevice is a dispatchable (pointer-sized) handle on all 64-bit targets.
+      let dev_ptr = ash::vk::Handle::as_raw(self.device.handle()) as *mut core::ffi::c_void;
+      // ptr1 always holds the window-side handle regardless of windowing system.
+      Some((dev_ptr, w.native_handle.ptr1))
+    } else {
+      None
+    }
+  }
+
   pub fn get_pipeline_key(
     &self,
     handle: PresentationEngineHandle,

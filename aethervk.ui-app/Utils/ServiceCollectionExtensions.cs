@@ -54,6 +54,7 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<INativeInputHandlerFactory, NativeInputHandlerFactory>();
     collection.AddSingleton<IWindowInputRouter, GlobalInputRouter>();
     collection.AddSingleton<IPlatformWindowService, PlatformWindowService>();
+    collection.AddSingleton<IViewportRegistry, ViewportRegistry>();
     var inputRegistry = new InputRegistry();
     inputRegistry.RegisterViewportDefaults();
     collection.AddSingleton<InputRegistry>(_ => inputRegistry);

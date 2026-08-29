@@ -190,7 +190,7 @@ pub trait Component: 'static + Send + Sync + core::fmt::Debug + Clone {
 /// # Note
 /// `COMPONENT_ID` must use [`crate::simulation_api::ComponentForeignId`] values, which are
 /// kept in sync with `aethervk.ui-logic/Services/ComponentForeignId.cs` on the C# side.
-pub trait ForeignSerializable: Component {
+pub trait ForeignSerializable: Component + core::fmt::Debug {
   /// The associated DTO struct that is #[repr(C)] and Blittable
   type ForeignData: Copy + Send + Sync + 'static;
 
@@ -222,6 +222,9 @@ pub trait ErasedForeignSerializable {
   /// `src` should be a non-null pointer to a buffer of at least `foreign_data_size`
   /// which represents the required object layout as specified by [`ForeignSerializable::ForeignData`]
   unsafe fn apply_foreign_bytes(&mut self, src: *const core::ffi::c_void);
+
+  #[cfg(debug_assertions)]
+  fn debug_print(&self);
 }
 
 impl<T: ForeignSerializable> ErasedForeignSerializable for T {
@@ -237,6 +240,11 @@ impl<T: ForeignSerializable> ErasedForeignSerializable for T {
   }
   unsafe fn apply_foreign_bytes(&mut self, src: *const core::ffi::c_void) {
     unsafe { self.apply_foreign_ptr(src) };
+  }
+  
+  #[cfg(debug_assertions)]
+  fn debug_print(&self) {
+    aethervk_oshal_rlib::log!("{:#?}", self);
   }
 }
 
@@ -4854,7 +4862,7 @@ pub mod dto {
           far,
         } => CameraDTO {
           is_orthographic: 0,
-          fov: fov.to_degrees(),
+          fov,
           aspect: aspect_ratio,
           near,
           far,
@@ -4872,19 +4880,23 @@ pub mod dto {
           top,
           near,
           far,
-        } => CameraDTO {
-          is_orthographic: 1,
-          fov: 0.0,
-          aspect: 1.0,
-          near,
-          far,
-          left,
-          right,
-          bottom,
-          top,
-          focus_distance: self.focus_distance,
-          _pad: [0; 3],
-        },
+        } => {
+          let height = (top - bottom).abs();
+          let aspect = if height < 1e-5 { 1.0 } else { (right - left).abs() / height };
+          CameraDTO {
+            is_orthographic: 1,
+            fov: 0.0,
+            aspect,
+            near,
+            far,
+            left,
+            right,
+            bottom,
+            top,
+            focus_distance: self.focus_distance,
+            _pad: [0; 3],
+          }
+        }
       }
     }
 
@@ -4901,7 +4913,7 @@ pub mod dto {
         };
       } else {
         self.projection = CameraProjection::Perspective {
-          fov: data.fov.to_radians(),
+          fov: data.fov,
           aspect_ratio: data.aspect,
           near: data.near,
           far: data.far,

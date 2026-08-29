@@ -1,10 +1,11 @@
 using System;
 using System.Runtime.InteropServices;
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Messaging;
 using AetherVk.Logic.Input;
 using AetherVk.Logic.Messages;
 using AetherVk.Logic.Services;
+using AetherVk.Logic.Services.NativeInput;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
 
@@ -25,6 +26,10 @@ public partial class VulkanViewportControlViewModel(
   private readonly Viewport3DViewModel _viewport3DViewModel = viewport3DViewModel;
   private INativeInputHandler? _handler;
   private IDisposable? _keystrokeSubscription;
+  private IDisposable? _mouseSubscription;
+  private MouseButton _lastPressedButton = MouseButton.None;
+
+  private ulong _presentationEngineId;
 
   /// <summary>
   /// Called by <see cref="AetherVk.Controls.VulkanViewportControl.CreateNativeControlCore"/>
@@ -44,12 +49,19 @@ public partial class VulkanViewportControlViewModel(
   /// </para>
   /// </summary>
   /// <returns><c>false</c> if <paramref name="handle"/> is zero or factory creation fails.</returns>
-  public bool InitializeHandle(IntPtr handle, string handleDescriptor, IntPtr parentHandle = default)
+  public bool InitializeHandle(
+    IntPtr handle,
+    string handleDescriptor,
+    IntPtr parentHandle = default
+  )
   {
-    if (handle == IntPtr.Zero) return false;
+    if (handle == IntPtr.Zero)
+      return false;
 
 #if DEBUG
-    Console.WriteLine($"[VulkanViewportControl] InitializeHandle handle={handle:X} desc=\"{handleDescriptor}\" parent={parentHandle:X}");
+    Console.WriteLine(
+      $"[VulkanViewportControl] InitializeHandle handle={handle:X} desc=\"{handleDescriptor}\" parent={parentHandle:X}"
+    );
 #endif
 
     // TODO: from global preferences
@@ -61,14 +73,63 @@ public partial class VulkanViewportControlViewModel(
     _keystrokeSubscription = subscribable.SubscribeComposedKeystrokes(stroke =>
     {
       var chord = NativeInputConverter.ToInputChord(stroke);
-      if (chord is null) return;
+      if (chord is null)
+        return;
 
       var last = stroke.Sequence[stroke.Sequence.Length - 1];
       var state = new InputState(
         isPressed: true,
-        modifiers: NativeInputConverter.ToInputModifiers(last.Modifiers));
+        modifiers: NativeInputConverter.ToInputModifiers(last.Modifiers)
+      );
 
       _router.RouteNativeComposed(ViewportContextId, chord, state);
+    });
+
+    _mouseSubscription = subscribable.SubscribeNativeMouseEvents(ev =>
+    {
+      var state = new InputState(
+        isPressed: ev.IsDown,
+        modifiers: NativeInputConverter.ToInputModifiers(ev.Modifiers)
+      );
+
+      var payload = new System.Numerics.Vector2((float)ev.X, (float)ev.Y);
+      string actionId = "viewport.pointer_delta";
+
+      if (ev.IsDown)
+      {
+        if (_lastPressedButton != ev.Button)
+        {
+          _lastPressedButton = ev.Button;
+          if (ev.Button == MouseButton.Middle)
+          {
+            if (state.Modifiers.HasFlag(InputModifiers.Shift))
+              actionId = ViewportAction.StartPan.ToCmdString();
+            else if (state.Modifiers.HasFlag(InputModifiers.Ctrl))
+              actionId = ViewportAction.StartZoom.ToCmdString();
+            else
+              actionId = ViewportAction.StartOrbit.ToCmdString();
+          }
+          else
+          {
+            actionId = "viewport.pointer_pressed";
+          }
+        }
+        else
+        {
+          actionId = "viewport.pointer_delta";
+        }
+      }
+      else if (ev.Button != MouseButton.None)
+      {
+        if (_lastPressedButton == ev.Button)
+        {
+          _lastPressedButton = MouseButton.None;
+        }
+        actionId = "viewport.pointer_end";
+      }
+
+      var action = new AppAction(actionId, payload);
+      _viewport3DViewModel.OperatorStack.Process(action, state);
     });
 
     // ── Wire AddViewport ─────────────────────────────────────────────────────
@@ -83,7 +144,11 @@ public partial class VulkanViewportControlViewModel(
       // Avalonia 11: Linux always uses Xlib. handle = XID (Window).
       // We must get the Display* from the input handler, NOT parentHandle (which is the parent XID).
       var xid = handle;
+#if TARGET_IS_LINUX
       var display = (_handler as LinuxNativeInputHandler)?.DisplayPointer ?? IntPtr.Zero;
+#else
+      var display = IntPtr.Zero;
+#endif
       provider = () => NativeWindowHandleProvider.ForXlib(display, xid);
       handleType = NativeWindowHandleProvider.HandleType.Xlib;
     }
@@ -97,7 +162,7 @@ public partial class VulkanViewportControlViewModel(
 #if TARGET_IS_OSX
     else if (_handler is MacNativeInputHandler macHandler)
     {
-      provider   = () => NativeWindowHandleProvider.ForMetal(macHandler);
+      provider = () => NativeWindowHandleProvider.ForMetal(macHandler);
       handleType = NativeWindowHandleProvider.HandleType.Metal;
     }
 #endif
@@ -107,16 +172,22 @@ public partial class VulkanViewportControlViewModel(
     }
 
     bool ok = _runtimeService.AddViewport(
-      w, h, "Viewport_",
+      w,
+      h,
+      "Viewport_",
       nativeHandleProvider: provider,
       handleType: handleType,
       out var presentationEngineId,
-      out var cameraEntityId);
+      out var cameraEntityId
+    );
 
     if (ok)
     {
+      _presentationEngineId = presentationEngineId;
 #if DEBUG
-      Console.WriteLine($"[VulkanViewportControl] AddViewport ok — PE={presentationEngineId} Cam={cameraEntityId}");
+      Console.WriteLine(
+        $"[VulkanViewportControl] AddViewport ok — PE={presentationEngineId} Cam={cameraEntityId}"
+      );
 #endif
       _viewport3DViewModel.OnViewportCreated(presentationEngineId, cameraEntityId);
     }
@@ -129,8 +200,8 @@ public partial class VulkanViewportControlViewModel(
   }
 
   /// <summary>Broadcasts a fatal error via <see cref="WeakReferenceMessenger"/>.</summary>
-  public void ReportFatalError(string message)
-    => WeakReferenceMessenger.Default.Send(new CriticalErrorMessage(message));
+  public void ReportFatalError(string message) =>
+    WeakReferenceMessenger.Default.Send(new CriticalErrorMessage(message));
 
   /// <summary>
   /// Requests keyboard focus be moved to the native viewport window (XID on Linux, HWND on
@@ -139,9 +210,21 @@ public partial class VulkanViewportControlViewModel(
   /// </summary>
   public void FocusViewport() => _handler?.FocusViewportWindow();
 
+  public void NotifyResized(double width, double height)
+  {
+    _viewport3DViewModel.Width = (uint)Math.Max(1, width);
+    _viewport3DViewModel.Height = (uint)Math.Max(1, height);
+  }
+
   public void Dispose()
   {
+    if (_presentationEngineId != 0)
+    {
+      _runtimeService.RemoveViewport(_presentationEngineId);
+      _presentationEngineId = 0;
+    }
     _keystrokeSubscription?.Dispose();
+    _mouseSubscription?.Dispose();
     _handler?.Dispose();
   }
 }

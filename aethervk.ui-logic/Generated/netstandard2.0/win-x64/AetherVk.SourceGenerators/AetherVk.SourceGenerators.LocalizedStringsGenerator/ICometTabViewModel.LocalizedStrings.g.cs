@@ -3,7 +3,7 @@
 
 namespace AetherVk.Logic.ViewModels;
 
-public interface ICometTabViewModel
+public partial interface ICometTabViewModel
 {
     string StrTitle { get; set; }
 }

@@ -44,5 +44,26 @@ public static class ViewportInputRegistrar
     registry.Register(ctx,
       new InputChord(Key: "NumPad3"),
       new AppAction(ViewportAction.SwitchToCometOrbiting.ToCmdString()));
+
+    // Tab — Cycle camera mode (EarthPosition → UpZenith → CometOrbiting → …)
+    // Matches NativeInputConverter keycode 23 → 0x09 → "Tab" and Avalonia Key.Tab.ToString().
+    registry.Register(ctx,
+      new InputChord(Key: "Tab"),
+      new AppAction(ViewportAction.SwitchCameraMode.ToCmdString()));
+
+    // Row-key 1 — Jump directly to EarthPosition mode
+    registry.Register(ctx,
+      new InputChord(Key: "D1"),
+      new AppAction(ViewportAction.SwitchToEarthPosition.ToCmdString()));
+
+    // Row-key 2 — Jump directly to UpZenith mode
+    registry.Register(ctx,
+      new InputChord(Key: "D2"),
+      new AppAction(ViewportAction.SwitchToUpZenith.ToCmdString()));
+
+    // Row-key 3 — Jump directly to CometOrbiting mode
+    registry.Register(ctx,
+      new InputChord(Key: "D3"),
+      new AppAction(ViewportAction.SwitchToCometOrbiting.ToCmdString()));
   }
 }

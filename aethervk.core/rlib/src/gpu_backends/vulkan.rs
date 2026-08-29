@@ -1,5 +1,13 @@
 //! vulkan module.
 
+#[cfg(debug_assertions)]
+pub static DEBUG_RENDER_THREAD_CPU_TIME_MS: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+#[cfg(debug_assertions)]
+pub static DEBUG_RENDER_THREAD_GPU_TIME_MS: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
 use core::{
   ffi::{self, CStr},
   str::FromStr,
@@ -24,6 +32,9 @@ pub mod physics;
 pub mod utils;
 
 pub mod shader_tests;
+
+#[cfg(debug_assertions)]
+pub mod renderdoc;
 
 #[cfg(test)]
 pub mod mock_kernels;
@@ -298,17 +309,6 @@ pub struct SimpleParticleEmissionStepParams<'a> {
   pub scene: &'a crate::scene::Scene,
   pub t_prev: aethervk_oshal_rlib::os::time::timeus_t,
   pub t_current: aethervk_oshal_rlib::os::time::timeus_t,
-}
-
-/// new particle logic, implemented here only for vulkan. Function
-pub fn simple_simulation_step(
-  params: SimpleSimulationStepParams<'_>,
-) -> EngineResult<crate::gpu::CommandBufferSyncInfo> {
-  todo!()
-}
-
-pub fn simple_particle_emission_step() -> EngineResult<crate::gpu::CommandBufferSyncInfo> {
-  todo!()
 }
 
 /// Vulkan Utility to allocate a vulkan command buffer from a given

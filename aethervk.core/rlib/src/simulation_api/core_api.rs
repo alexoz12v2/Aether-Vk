@@ -22,6 +22,8 @@ impl SimulationContext {
   const NUM_WORKERS: usize = 8;
 
   pub fn startup(error_debug_callback: Option<fn(&str)>) -> EngineResult<Box<SimulationContext>> {
+    #[cfg(test)]
+    crate::gpu::set_asset_dir_for_tests();
     let backend: gpu::RenderBackendId = gpu::VULKAN_RENDER_BACKEND;
     let mut boxed_uninit = Box::<SimulationContext>::new_uninit();
     unsafe {
@@ -69,7 +71,7 @@ impl SimulationContext {
 
       // TODO test: if this fails, render frontend should drop.
       let render_thread_params =
-        RenderThreadParams::new(backend, error_debug_callback, render_thread_thread_pool)?;
+        RenderThreadParams::new(backend, error_debug_callback, render_thread_thread_pool, Arc::new(core::sync::atomic::AtomicBool::new(false)))?;
       let render_proxy = (
         render_thread_params.render_frontend.weak_self(),
         render_thread_params.render_device_handle,

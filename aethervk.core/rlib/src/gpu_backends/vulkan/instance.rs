@@ -194,32 +194,66 @@ impl Instance {
     #[cfg(debug_assertions)]
     let mut printf_features = alloc::vec![];
 
-    #[cfg(debug_assertions)]
-    let disable_gpu_av = aethervk_oshal_rlib::os::env::var("AETHERVK_DISABLE_GPU_AV").is_some();
+    #[cfg(any(debug_assertions, test))]
+    {
+      let is_apple = cfg!(target_vendor = "apple");
+      let disable_requested =
+        aethervk_oshal_rlib::os::env::var("AETHERVK_DISABLE_GPU_AV").is_some();
+      let enable_requested = aethervk_oshal_rlib::os::env::var("AETHERVK_ENABLE_GPU_AV").is_some();
 
-    #[cfg(debug_assertions)]
-    if cfg!(target_vendor = "apple") || disable_gpu_av {
-      aethervk_oshal_rlib::log!("Disabling GPU-Assisted/Printf Validation.");
-    } else {
+      #[cfg(not(target_vendor = "apple"))]
+      let use_printf = crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+        .load(core::sync::atomic::Ordering::Relaxed);
+      #[cfg(target_vendor = "apple")]
+      let use_printf = false;
+
       #[cfg(test)]
-      {
-        #[cfg(all(test, not(target_vendor = "apple")))]
-        if crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
-          .load(core::sync::atomic::Ordering::Relaxed)
-        {
-          printf_features.push(vk::ValidationFeatureEnableEXT::DEBUG_PRINTF);
-        } else {
-          printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
-          printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED_RESERVE_BINDING_SLOT);
-        }
-        #[cfg(not(all(test, not(target_vendor = "apple"))))]
-        {
-          printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
-          printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED_RESERVE_BINDING_SLOT);
+      let is_test = true;
+      #[cfg(not(test))]
+      let is_test = false;
+
+      // By default, tests use GPU-AV (unless USE_PRINTF is on). Non-tests don't.
+      let mut wants_gpu_av = (is_test || enable_requested) && !use_printf;
+      let wants_printf = (!is_test && !wants_gpu_av) || use_printf;
+
+      if is_apple || disable_requested {
+        aethervk_oshal_rlib::log!("Disabling GPU-Assisted/Printf Validation.");
+        wants_gpu_av = false;
+      }
+
+      // Filter Lavapipe / CPU-only out of GPU-AV automatically
+      if wants_gpu_av {
+        let dummy_ci = vk::InstanceCreateInfo::default().application_info(&app_info);
+        if let Ok(dummy_inst) = unsafe { vk_entry.create_instance(&dummy_ci, None) } {
+          if let Ok(pdevs) = unsafe { dummy_inst.enumerate_physical_devices() }
+            && !pdevs.is_empty()
+          {
+            let mut all_cpu = true;
+            for pdev in pdevs {
+              let props = unsafe { dummy_inst.get_physical_device_properties(pdev) };
+              if props.device_type != vk::PhysicalDeviceType::CPU
+                && props.device_type != vk::PhysicalDeviceType::OTHER
+              {
+                all_cpu = false;
+                break;
+              }
+            }
+            if all_cpu {
+              aethervk_oshal_rlib::log!(
+                "Detected only CPU devices (e.g. Lavapipe). Force-disabling GPU-AV."
+              );
+              wants_gpu_av = false;
+            }
+          }
+
+          unsafe { dummy_inst.destroy_instance(None) };
         }
       }
-      #[cfg(not(test))]
-      {
+
+      if wants_gpu_av {
+        printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED);
+        printf_features.push(vk::ValidationFeatureEnableEXT::GPU_ASSISTED_RESERVE_BINDING_SLOT);
+      } else if wants_printf && !is_apple && !disable_requested {
         printf_features.push(vk::ValidationFeatureEnableEXT::DEBUG_PRINTF);
       }
     }

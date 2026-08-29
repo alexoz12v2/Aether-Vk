@@ -4,7 +4,7 @@
 
 namespace AetherVk.Logic.ViewModels;
 
-public class DesignCometTabViewModel : ICometTabViewModel
+public partial class DesignCometTabViewModel : ICometTabViewModel
 {
     public string Title    { get; set; } = "Comet";
     public string Icon     { get; set; } = "☄";

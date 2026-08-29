@@ -1,5 +1,9 @@
 //! logic_thread module.
 
+#[cfg(debug_assertions)]
+pub static DEBUG_LOGIC_THREAD_TIME_MS: core::sync::atomic::AtomicU64 =
+  core::sync::atomic::AtomicU64::new(0);
+
 use crate::{
   gpu::{RenderDevice, WeakRenderFrontendExt},
   gpu_backends::vulkan,
@@ -188,6 +192,9 @@ pub fn start_logic_thread(
 
     loop {
       let mut core_logic = || -> bool {
+        #[cfg(debug_assertions)]
+        let _tick_start = oshal::os::time::get_monotonic_time();
+
         let mut processed_any = false;
 
         // perform compute discard every 500ms
@@ -269,14 +276,23 @@ pub fn start_logic_thread(
                   Box::into_raw(Box::new(SyncParticleReleaseFeedback::zeroed()));
                 // TODO handle error? retime submission?
                 let mut done = false;
+                let send_deadline = get_monotonic_time() + oshal::os::time::timeus_milliseconds(16);
                 while !done {
                   if let Ok(_) = render_tx.try_send(structs::RenderCommand::SyncParticleRelease {
                     feedback: release_feeback.clone(),
                     feedback_ptr: structs::SendPtrMut(feedback_data_ptr),
                   }) {
                     done = true;
+                  } else if get_monotonic_time() >= send_deadline {
+                    // Channel is persistently full — render thread is overloaded.
+                    // Drop the sync for this tick; it will be retried next fixed update.
+                    // SAFETY: feedback_data_ptr is still owned by us since the render thread
+                    // never received the command.
+                    let _ = unsafe { alloc::boxed::Box::from_raw(feedback_data_ptr) };
+                    return None;
+                  } else {
+                    this_thread::sleep_for(core::time::Duration::from_micros(200));
                   }
-                  core::hint::spin_loop();
                 }
 
                 Some((release_feeback, feedback_data_ptr))
@@ -576,6 +592,13 @@ pub fn start_logic_thread(
         // drain_logic_commands also handles heavy tasks (scattered to pool).
         if drain_logic_commands(&logic_rx, &context) {
           return true; // Shutdown received
+        }
+
+        #[cfg(debug_assertions)]
+        {
+          let elapsed_ms = (oshal::os::time::get_monotonic_time() - _tick_start) as f64 / 1000.0;
+          crate::simulation_api::logic_thread::DEBUG_LOGIC_THREAD_TIME_MS
+            .store(elapsed_ms.to_bits(), core::sync::atomic::Ordering::Relaxed);
         }
 
         if !processed_any {
@@ -1888,11 +1911,19 @@ fn execute_simulation_tick_fixed_update_phase(
     let start = get_monotonic_time();
     // first task will be used as "transaction in progress" state cause we are sure that first value
     // is used for rendering task, not release
-    while (release_task_id == 0 && (get_monotonic_time() - start) < 2000) || release_task_id == 1 {
+    loop {
+      let now = get_monotonic_time();
       release_task_id = feedback_arc.load(core::sync::atomic::Ordering::Acquire);
-      if release_task_id <= 1 {
-        this_thread::sleep_for(core::time::Duration::from_micros(200));
+      if release_task_id >= 2 {
+        // Got a real task_id or u64::MAX sentinel — done waiting
+        break;
       }
+      if release_task_id == 0 && (now - start) >= 2000 {
+        // Deadline expired without receiving a response
+        break;
+      }
+      // release_task_id is 0 (waiting) or 1 (transaction in progress) — sleep and retry
+      this_thread::sleep_for(core::time::Duration::from_micros(200));
     }
 
     do_cross_sync = release_task_id <= 1 && release_task_id != u64::MAX;

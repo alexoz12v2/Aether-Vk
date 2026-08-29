@@ -16,6 +16,8 @@ internal static class NativeInputConverter
   // Extend as new Viewport actions require additional keys.
   private static readonly Dictionary<uint, string> _keyNames = new()
   {
+    [0x30] = "D0", [0x31] = "D1", [0x32] = "D2", [0x33] = "D3", [0x34] = "D4",
+    [0x35] = "D5", [0x36] = "D6", [0x37] = "D7", [0x38] = "D8", [0x39] = "D9",
     [0x41] = "A", [0x42] = "B", [0x43] = "C", [0x44] = "D",
     [0x45] = "E", [0x46] = "F", [0x47] = "G", [0x48] = "H",
     [0x49] = "I", [0x4A] = "J", [0x4B] = "K", [0x4C] = "L",
@@ -23,6 +25,7 @@ internal static class NativeInputConverter
     [0x51] = "Q", [0x52] = "R", [0x53] = "S", [0x54] = "T",
     [0x55] = "U", [0x56] = "V", [0x57] = "W", [0x58] = "X",
     [0x59] = "Y", [0x5A] = "Z",
+    [0x09] = "Tab",
     [0x1B] = "Escape",
     [0x0D] = "Return",
     [0x20] = "Space",
@@ -66,5 +69,24 @@ internal static class NativeInputConverter
     if (flags.HasFlag(NativeModifierFlags.Control)) result |= InputModifiers.Ctrl;
     if (flags.HasFlag(NativeModifierFlags.Alt))     result |= InputModifiers.Alt;
     return result;
+  }
+
+  internal static InputChord ToInputChord(NativeMouseEvent ev)
+  {
+    string pointerStr = ev.Button switch
+    {
+      MouseButton.Left => "LeftPressed",
+      MouseButton.Middle => "MiddlePressed",
+      MouseButton.Right => "RightPressed",
+      _ => "Other"
+    };
+
+    return new InputChord(
+      Key: null,
+      Shift: ev.Modifiers.HasFlag(NativeModifierFlags.Shift),
+      Ctrl: ev.Modifiers.HasFlag(NativeModifierFlags.Control),
+      Alt: ev.Modifiers.HasFlag(NativeModifierFlags.Alt),
+      Pointer: pointerStr
+    );
   }
 }
