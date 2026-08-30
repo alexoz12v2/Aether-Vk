@@ -6,6 +6,7 @@ using AetherVk.Logic.Services;
 using AetherVk.Logic.Utils;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
 
@@ -73,6 +74,26 @@ public abstract partial class StatefulTabViewModelBase<TSession>
     SubscribeToSession(_sessionId);
   }
 
+  protected StatefulTabViewModelBase(
+    string                      title,
+    ITabStateService<TSession>  sessionService,
+    IMessenger                  messenger)
+    : base(title, messenger)
+  {
+    _sessionService    = sessionService;
+    IsExclusiveSession = sessionService.IsExclusive;
+
+    _allSubs.Add(_dataSub);
+
+    _sessionId = sessionService.ActiveSessionIds[0];
+
+    sessionService.ObserveSessionList()
+      .Subscribe(ids => AvailableSessions = ids)
+      .AddDisposableTo(_allSubs);
+
+    SubscribeToSession(_sessionId);
+  }
+
   // ── Session management commands ────────────────────────────────────────────
 
   [RelayCommand]
@@ -131,8 +152,9 @@ public abstract partial class StatefulTabViewModelBase<TSession>
 
   // ── IDisposable ────────────────────────────────────────────────────────────
 
-  public void Dispose()
+  public virtual void Dispose()
   {
+    IsActive = false;   // → OnDeactivated() → Messenger.UnregisterAll(this)
     _allSubs.Dispose(); // also disposes _dataSub and its current inner subscription
   }
 }

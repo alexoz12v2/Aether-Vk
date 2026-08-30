@@ -9,7 +9,10 @@ use crate::{
   },
   types::{EngineError, EngineResult},
 };
-use aethervk_oshal_rlib::{self as oshal, math::vector::vec3f64::DVec3};
+use aethervk_oshal_rlib::{
+  self as oshal,
+  math::{matrix::SquareMatrix, vector::vec3f64::DVec3},
+};
 use alloc::{sync::Arc, vec::Vec};
 use core::ffi::c_char;
 use oshal::math::{
@@ -192,7 +195,7 @@ impl SimulationContext {
      -> crate::simulation_api::structs::SubtreeEntities {
       const AU_TO_KM: f32 = 149_597_870.7;
       // subtree root (AU frame, child of root)
-      let subtree = scene.spawn_entity(&alloc::format!("{}_subtree", name));
+      let subtree = scene.spawn_entity(alloc::format!("{}_subtree", name));
       scene.set_parent(subtree, Some(root_entity));
       // will be modified on "forced repositioning" (repositioning implemented in logic_thread
       // per-frame FRAME SHIFT, and explicitly via reposition::force_reposition at scene creation
@@ -216,10 +219,17 @@ impl SimulationContext {
       // precision (see logic_thread)
       scene.add_component(body, crate::scene::TransformComponent::default());
       if add_gizmo {
-        scene.add_component(
-          body,
-          crate::scene::SphericalGizmoComponent { is_visible: true },
-        );
+        scene
+          .add_component(
+            body,
+            crate::scene::SphereGizmoComponent {
+              radius: 1.0,
+              subdivisions: 4.0,
+              local_frame: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::identity(),
+              is_visible: true,
+            },
+          )
+          .unwrap(); // TODO map_err and early return
       }
       // body will see AlmanacPlanet added once the relevant almanac files are confirmed loaded.
       if is_comet {
@@ -232,7 +242,7 @@ impl SimulationContext {
       // TrajectoryComponent control points are rendered in the heliocentric frame.
       // If parented to the Micro-frame subtree (depth_layer=1), the renderer's RTE path would
       // multiply AU control points by AU_TO_KM (~1.5e8), placing them far off-screen.
-      let orbit = scene.spawn_entity(&alloc::format!("{}_orbit", name));
+      let orbit = scene.spawn_entity(alloc::format!("{}_orbit", name));
       scene.set_parent(orbit, Some(root_entity));
       scene.add_component(orbit, crate::scene::TransformComponent::default());
 
@@ -383,7 +393,7 @@ impl SimulationContext {
         .iter()
         .any(|f| f.contains("earth_latest_high_prec.bpc"));
       let has_planetary_constants =
-        logic_state.almanac_data.file_names.iter().any(|f| f.contains("pck00011.tpc"));
+        logic_state.almanac_data.file_names.iter().any(|f| f.contains("pck00011.pca"));
       has_de442 && has_earth_bpc && has_planetary_constants
     };
 

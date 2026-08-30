@@ -47,9 +47,7 @@
             <TextBlock Text="End Epoch (TDB):" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" Margin="8,0,0,0"/>
             <TextBox Text="{Binding EndEpoch}" Width="180" Watermark="e.g. 2000-02-01T12:00:00Z" />
 
-            <Button Content="Propose" Command="{Binding ProposeCommand}" ToolTip.Tip="Propose Timeline for Comet Selection" ToolTip.ShowDelay="1000" />
-            <Button Content="Commit" Command="{Binding SubmitCommand}" Classes="accent" IsEnabled="{Binding IsProposedDifferentFromCommitted}" ToolTip.Tip="Validate &amp; Commit Timeline to Runtime" ToolTip.ShowDelay="1000" />
-            <Button Content="Restore" Command="{Binding RestoreCommand}" IsEnabled="{Binding IsProposedDifferentFromCommitted}" ToolTip.Tip="Restore Proposed to Last Committed" ToolTip.ShowDelay="1000" />
+            <Button Content="Restore" Command="{Binding RestoreCommand}" IsEnabled="{Binding CanRestore}" ToolTip.Tip="Restore Proposed to Last Committed" ToolTip.ShowDelay="1000" />
 
             <!-- Indicator: proposed range differs from committed -->
             <TextBlock Text="●" Foreground="{DynamicResource Sem.Warning}" IsVisible="{Binding IsProposedDifferentFromCommitted}" ToolTip.Tip="Proposed range differs from committed" VerticalAlignment="Center" />

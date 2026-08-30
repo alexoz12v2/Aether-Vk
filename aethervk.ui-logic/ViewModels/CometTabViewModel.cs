@@ -25,6 +25,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   private readonly ILocalStorageService _storage;
   private readonly CompositeDisposable _disposables = [];
   private readonly BreadcrumbService _breadcrumbService;
+  private readonly ICometMessenger _cometMessenger;
 
   // ISO strings of the proposed range at the moment the comet was committed.
   // Used to detect "proposed timeline changed after comet commit".
@@ -82,6 +83,9 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   [ObservableProperty]
   private bool _hasTimelineChangedAfterCommit;
 
+  [ObservableProperty]
+  private string _committedSpkRecordId = string.Empty;
+
   // ── Observable properties — Rotational model ─────────────────────────────
 
   [ObservableProperty]
@@ -108,11 +112,12 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   /// Filtered view of <see cref="HorizonJplService.CometsData"/> based on
   /// <see cref="SearchQuery"/>. Updated whenever the query or the source list changes.
   /// </summary>
-  public ObservableCollection<CometSearchResult> FilteredSearchResults { get; } = [];
+  [ObservableProperty]
+  private ObservableCollection<CometSearchResult> _filteredSearchResults = [];
 
   /// <summary>SPK records for the selected comet from the JPL service (bound directly).</summary>
   public ObservableCollection<SpkRecordItem> SpkRecords => _jpl.SpkRecordsData;
-  
+
   // ── Debug Properties ─────────────────────────────────────────────────────
 
   public ObservableCollection<JetViewModel>? DebugJets
@@ -120,7 +125,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     get
     {
 #if DEBUG
-      if (_modelSessionService.ActiveSessionIds.Count == 0) return null;
+      if (_modelSessionService.ActiveSessionIds.Count == 0)
+        return null;
       return _modelSessionService.GetSession(_modelSessionService.ActiveSessionIds[0])?.Jets;
 #else
       return null;
@@ -145,7 +151,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     BreadcrumbService breadcrumbService,
     ILocalStorageService storage,
     INativeRuntimeService runtimeService,
-    ITabStateService<ModelSession> modelSessionService
+    ITabStateService<ModelSession> modelSessionService,
+    ICometMessenger cometMessenger
   )
     : base("Comet", sessionService)
   {
@@ -157,16 +164,16 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     _breadcrumbService = breadcrumbService;
     _runtimeService = runtimeService;
     _modelSessionService = modelSessionService;
+    _cometMessenger = cometMessenger;
 
     Icon = "☄"; // comet — U+2604
     SubscribeToStrings(schedulerProvider);
     WireReactiveSubscriptions(schedulerProvider);
-
-    // Keep FilteredSearchResults in sync with the source collection
-    _jpl.CometsData.CollectionChanged += (_, _) => ApplySearchFilter();
   }
 
   // ── Reactive wiring ───────────────────────────────────────────────────────
+
+  private TimeRange? _currentProposedTimeRange;
 
   private void WireReactiveSubscriptions(ISchedulerProvider schedulerProvider)
   {
@@ -175,6 +182,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       .ProposedTimeRange.ObserveOn(schedulerProvider.MainThread)
       .Subscribe(range =>
       {
+        _currentProposedTimeRange = range;
         if (range is null)
         {
           HasProposedTimeline = false;
@@ -184,12 +192,15 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         {
           HasProposedTimeline = true;
           ProposedStartEpoch = FormatTaiEpoch(range.StartCenturies, range.StartNs);
-          ProposedEndEpoch   = FormatTaiEpoch(range.EndCenturies,   range.EndNs);
+          ProposedEndEpoch = FormatTaiEpoch(range.EndCenturies, range.EndNs);
 
           // Detect change-after-commit by comparing ISO display strings — avoids
           // nanosecond rounding false-positives that occur with TAI record equality.
-          if (IsAlmanacCommitted && _lastCommittedProposedRange is { } snap
-              && (ProposedStartEpoch != snap.Start || ProposedEndEpoch != snap.End))
+          if (
+            IsAlmanacCommitted
+            && _lastCommittedProposedRange is { } snap
+            && (ProposedStartEpoch != snap.Start || ProposedEndEpoch != snap.End)
+          )
             HasTimelineChangedAfterCommit = true;
         }
       })
@@ -241,6 +252,20 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     // Auto-load SPK records when a comet is selected
     if (e.PropertyName == nameof(SelectedComet) && SelectedComet is not null)
       _ = LoadSpkRecordsAsync();
+
+    if (
+      e.PropertyName
+      is nameof(SelectedComet)
+        or nameof(SelectedSpkRecord)
+        or nameof(HasProposedTimeline)
+        or nameof(IsAlmanacCommitted)
+        or nameof(CommittedCometName)
+        or nameof(CommittedSpkRecordId)
+        or nameof(HasTimelineChangedAfterCommit)
+    )
+    {
+      DownloadAndCommitCommand.NotifyCanExecuteChanged();
+    }
   }
 
   /// <summary>
@@ -252,7 +277,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   {
     var query = SearchQuery?.Trim() ?? string.Empty;
 
-    FilteredSearchResults.Clear();
+    var temp = new System.Collections.Generic.List<CometSearchResult>();
     foreach (var comet in _jpl.CometsData)
     {
       if (
@@ -260,8 +285,9 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         || comet.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
         || comet.PrimaryDesignation.Contains(query, StringComparison.OrdinalIgnoreCase)
       )
-        FilteredSearchResults.Add(comet);
+        temp.Add(comet);
     }
+    FilteredSearchResults = new ObservableCollection<CometSearchResult>(temp);
   }
 
   // ── Commands ──────────────────────────────────────────────────────────────
@@ -273,6 +299,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     try
     {
       await _jpl.FetchCometsAsync();
+      ApplySearchFilter();
     }
     finally
     {
@@ -299,7 +326,18 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     }
   }
 
-  [RelayCommand]
+  private bool CanDownloadAndCommit =>
+    SelectedComet is not null
+    && SelectedSpkRecord is not null
+    && HasProposedTimeline
+    && (
+      !IsAlmanacCommitted
+      || CommittedCometName != SelectedComet.Name
+      || CommittedSpkRecordId != SelectedSpkRecord.RecordId
+      || HasTimelineChangedAfterCommit
+    );
+
+  [RelayCommand(CanExecute = nameof(CanDownloadAndCommit))]
   private async Task DownloadAndCommitAsync()
   {
     if (!HasProposedTimeline || SelectedComet is null || SelectedSpkRecord is null)
@@ -356,11 +394,20 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       if (IsAlmanacCommitted)
         _cometConfig.DecommitComet();
 
+      // Auto-commit timeline before loading SPK
+      if (_currentProposedTimeRange is not null)
+      {
+        _timeline.RequestEpochRange(_currentProposedTimeRange);
+      }
+
       // Commit the new SPK
       bool committed = await _cometConfig.CommitCometAsync(filePath, naifId);
 
       if (committed)
       {
+        CommittedSpkRecordId = SelectedSpkRecord.RecordId;
+        _cometMessenger.Send(new Messages.CometCommittedMessage());
+
         // Update session
         var session = CurrentSession;
         if (session is not null)
@@ -386,7 +433,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
           if (session is not null && orbitData is not null && orbitData.CometRadiusKm > 0.0)
           {
             session.NucleusRadiusKm = (float)orbitData.CometRadiusKm;
-            WeakReferenceMessenger.Default.Send(
+            _cometMessenger.Send(
               new Messages.NucleusRadiusKnownMessage { RadiusKm = session.NucleusRadiusKm }
             );
           }
@@ -394,6 +441,11 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         catch
         {
           // Best-effort — user can enter radius manually in Model tab
+          _ = _breadcrumbService.ShowMessageAsync(
+            "Nucleus Radius",
+            "SPK committed, but nucleus radius fetch failed. Please configure it manually in the Model tab.",
+            status: 3
+          );
         }
 
         CommittedCometName = SelectedComet.Name;
@@ -438,7 +490,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
 
     _lastCommittedProposedRange = null;
     DownloadStatus = string.Empty;
-    WeakReferenceMessenger.Default.Send(new Messages.CometDecommittedMessage());
+    _cometMessenger.Send(new Messages.CometDecommittedMessage());
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

@@ -75,7 +75,7 @@ impl TransformAnimationComponent {
     let new_distance = (self.target_pos - self.start_pos).length();
 
     if speed > 1e-6 {
-      self.duration = (new_distance / speed) as f32;
+      self.duration = ((new_distance / speed) as f32).max(0.001);
     } else {
       // fallback if the animation was previously stationary or purely rotation
       self.duration = self.duration.max(0.001);

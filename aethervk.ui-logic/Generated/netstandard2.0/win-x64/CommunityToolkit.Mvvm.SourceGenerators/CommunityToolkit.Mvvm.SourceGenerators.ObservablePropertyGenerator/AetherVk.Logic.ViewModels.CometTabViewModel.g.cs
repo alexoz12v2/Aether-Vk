@@ -405,6 +405,27 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_filteredSearchResults"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public global::System.Collections.ObjectModel.ObservableCollection<global::AetherVk.Logic.Models.CometSearchResult> FilteredSearchResults
+        {
+            get => _filteredSearchResults;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<global::System.Collections.ObjectModel.ObservableCollection<global::AetherVk.Logic.Models.CometSearchResult>>.Default.Equals(_filteredSearchResults, value))
+                {
+                    OnFilteredSearchResultsChanging(value);
+                    OnFilteredSearchResultsChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.FilteredSearchResults);
+                    _filteredSearchResults = value;
+                    OnFilteredSearchResultsChanged(value);
+                    OnFilteredSearchResultsChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.FilteredSearchResults);
+                }
+            }
+        }
+
         /// <summary>Executes the logic for when <see cref="ProposedStartEpoch"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="ProposedStartEpoch"/> is changed.</remarks>
@@ -823,5 +844,27 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="RotRateDegDay"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnRotRateDegDayChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="FilteredSearchResults"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="FilteredSearchResults"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnFilteredSearchResultsChanging(global::System.Collections.ObjectModel.ObservableCollection<global::AetherVk.Logic.Models.CometSearchResult> value);
+        /// <summary>Executes the logic for when <see cref="FilteredSearchResults"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="FilteredSearchResults"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnFilteredSearchResultsChanging(global::System.Collections.ObjectModel.ObservableCollection<global::AetherVk.Logic.Models.CometSearchResult>? oldValue, global::System.Collections.ObjectModel.ObservableCollection<global::AetherVk.Logic.Models.CometSearchResult> newValue);
+        /// <summary>Executes the logic for when <see cref="FilteredSearchResults"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="FilteredSearchResults"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnFilteredSearchResultsChanged(global::System.Collections.ObjectModel.ObservableCollection<global::AetherVk.Logic.Models.CometSearchResult> value);
+        /// <summary>Executes the logic for when <see cref="FilteredSearchResults"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="FilteredSearchResults"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnFilteredSearchResultsChanged(global::System.Collections.ObjectModel.ObservableCollection<global::AetherVk.Logic.Models.CometSearchResult>? oldValue, global::System.Collections.ObjectModel.ObservableCollection<global::AetherVk.Logic.Models.CometSearchResult> newValue);
     }
 }

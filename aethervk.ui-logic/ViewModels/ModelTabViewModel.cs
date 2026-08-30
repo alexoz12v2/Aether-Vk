@@ -46,8 +46,9 @@ public partial class ModelTabViewModel
     ITabStateService<ModelSession> sessionService,
     ITabStateService<CometSession> cometSessionService,
     INativeRuntimeService runtimeService,
-    IUiThreadDispatcher dispatcher)
-    : base("Model", sessionService)
+    IUiThreadDispatcher dispatcher,
+    ICometMessenger cometMessenger)
+    : base("Model", sessionService, cometMessenger)
   {
     _translationService = translationService;
     _cometSessionService = cometSessionService;
@@ -55,7 +56,12 @@ public partial class ModelTabViewModel
     _dispatcher = dispatcher;
     Icon = "⬡"; // hexagon / 3D object — U+2B21
     SubscribeToStrings(schedulerProvider);
-    WeakReferenceMessenger.Default.Register<AetherVk.Logic.Messages.NucleusRadiusKnownMessage>(this);
+    IsActive = true;  // → OnActivated() → registers NucleusRadiusKnownMessage
+  }
+
+  protected override void OnActivated()
+  {
+    Messenger.Register<ModelTabViewModel, AetherVk.Logic.Messages.NucleusRadiusKnownMessage>(this, (r, m) => r.Receive(m));
   }
 
   // ── Session passthrough ──────────────────────────────────────────────────────

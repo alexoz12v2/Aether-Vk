@@ -143,6 +143,9 @@ impl AlmanacPackedData {
     let ids_to_try = [spk_id, -spk_id];
     for &try_id in &ids_to_try {
       if let Ok((domain_start, domain_end)) = almanac.spk_domain(try_id) {
+        if let Ok((summary, _, _, _)) = almanac.spk_summary_at_epoch(try_id, domain_start) {
+            aethervk_oshal_rlib::log!("[Almanac] SPK {} uses Record Type {}", try_id, summary.data_type_i);
+        }
         let covers = domain_start <= start_epoch + tolerance && domain_end >= end_epoch - tolerance;
         return (covers, Some((domain_start, domain_end)), try_id);
       }
@@ -159,6 +162,9 @@ impl AlmanacPackedData {
 
       if target_bodies.len() == 1 {
         let (found_id, (ds, de)) = target_bodies[0];
+        if let Ok((summary, _, _, _)) = almanac.spk_summary_at_epoch(found_id, ds) {
+            aethervk_oshal_rlib::log!("[Almanac] SPK {} uses Record Type {}", found_id, summary.data_type_i);
+        }
         let covers = ds <= start_epoch + tolerance && de >= end_epoch - tolerance;
         return (covers, Some((ds, de)), found_id);
       }

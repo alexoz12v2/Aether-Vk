@@ -30,16 +30,24 @@ public sealed class TimelineService : IDisposable
 {
   private readonly INativeRuntimeService _runtimeService;
   private readonly ISchedulerProvider _schedulerProvider;
+  private readonly CometConfigService _cometConfigService;
+  private readonly BreadcrumbService _breadcrumbService;
 
   // Null until first successful timeline commit from the runtime
   private readonly BehaviorSubject<TimeRange?> _timeRangeSubject = new(null);
   private readonly BehaviorSubject<TimeRange?> _proposedTimeRangeSubject = new(null);
   private readonly IDisposable _listenerToken;
 
-  public TimelineService(INativeRuntimeService runtimeService, ISchedulerProvider schedulerProvider)
+  public TimelineService(
+      INativeRuntimeService runtimeService, 
+      ISchedulerProvider schedulerProvider,
+      CometConfigService cometConfigService,
+      BreadcrumbService breadcrumbService)
   {
     _runtimeService = runtimeService;
     _schedulerProvider = schedulerProvider;
+    _cometConfigService = cometConfigService;
+    _breadcrumbService = breadcrumbService;
 
     _listenerToken = runtimeService.RegisterExternalStateListener(
       ExternalStateType.TimeRange,
@@ -87,10 +95,18 @@ public sealed class TimelineService : IDisposable
   /// a breadcrumb is emitted; the observable is left unchanged (implicit rollback).</para>
   /// </summary>
   /// <returns><c>true</c> if the command was successfully enqueued.</returns>
-  public bool RequestEpochRange(TimeRange range) =>
-    _runtimeService.SetEpochRange(
+  public bool RequestEpochRange(TimeRange range)
+  {
+    if (_cometConfigService.IsAlmanacCommittedValue)
+    {
+        _ = _breadcrumbService.ShowMessageAsync("Timeline Lock", "Cannot change timeline while a comet is committed. Unload the comet first.", TimeSpan.FromSeconds(5), 2);
+        return false;
+    }
+
+    return _runtimeService.SetEpochRange(
       range.StartCenturies, range.StartNs,
       range.EndCenturies, range.EndNs);
+  }
 
   public bool CheckAlmanacCoverage(int spkId, TimeRange range) =>
     _runtimeService.CheckAlmanacCoverage(spkId, range.StartCenturies, range.StartNs, range.EndCenturies, range.EndNs);

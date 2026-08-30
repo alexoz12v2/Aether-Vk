@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
+using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.Services;
 
@@ -59,6 +60,10 @@ public sealed class CometConfigService : IDisposable
   // ── Listener token ────────────────────────────────────────────────────────
 
   private readonly IDisposable _almanacListenerToken;
+
+  // ── Messenger ─────────────────────────────────────────────────────────────
+
+  public StrongReferenceMessenger Messenger { get; } = new();
 
   // ── Constructor ───────────────────────────────────────────────────────────
 
@@ -213,6 +218,11 @@ public sealed class CometConfigService : IDisposable
     // Unload events (operation = 2) and load-failure events (operation = 0) are ignored here;
     // the pending-null check above already handles the unload path safely.
     var dto = *(CAlmanacImportedDTO*)dataPtr;
+    if (dto.Operation == 0)
+    {
+      pending.TrySetResult(false);
+      return;
+    }
     if (dto.Operation != 1)
       return;
 

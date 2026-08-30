@@ -53,7 +53,8 @@ pub fn is_logic_command_async(cmd: &LogicCommand) -> bool {
     LogicCommand::ImportModel { .. }
     | LogicCommand::LoadAlmanac { .. }
     | LogicCommand::UnloadAlmanac { .. }
-    | LogicCommand::UpdateTrajectoryForSpk { .. } => true,
+    | LogicCommand::UpdateTrajectoryForSpk { .. }
+    | LogicCommand::BuildCometTrajectory { .. } => true,
     _ => false,
   }
 }
@@ -97,10 +98,13 @@ fn logic_command_desc(cmd: &LogicCommand) -> alloc::string::String {
     LogicCommand::UpdateTrajectoryForSpk { spk_id, .. } => {
       alloc::format!("Update trajectory for SPK {}", spk_id)
     }
+    LogicCommand::BuildCometTrajectory { spk_id, .. } => {
+      alloc::format!("Build comet trajectory for SPK {}", spk_id)
+    }
 
     // Comet lifecycle
-    LogicCommand::InitComet { spk_id, .. } => {
-      alloc::format!("Init comet SPK {}", spk_id)
+    LogicCommand::TryInitComet { spk_id, .. } => {
+      alloc::format!("Try init comet SPK {}", spk_id)
     }
     LogicCommand::CleanupComet { .. } => "Cleanup comet".to_string(),
 
@@ -854,71 +858,58 @@ fn process_command_internal(
           }
         }
       }
-
       Ok(())
     }
-    LogicCommand::InitComet { scene_id, spk_id } => {
-      // Attach AlmanacPlanet to comet body, force-reposition to start_epoch,
-      // and queue UpdateTrajectoryForSpk — mirroring Earth initialization.
-      let scenes = ctx.scenes.read();
-      let scene_arc =
-        crate::expect_scene!(scenes.get_scene(scene_id), "InitComet: scene not found");
-      let scene_guard = scene_arc.read();
-
-      let comet = scene_guard.comet.ok_or(EngineError::InvalidOperation(
-        "InitComet: comet SubtreeEntities not populated",
-      ))?;
-
-      // Build AlmanacPlanet. rot_period and mu are set to zero for comets —
-      // rotation is driven by BodyRotationalModel (if present) not rot_period.
-      let planet = AlmanacPlanet::new(spk_id);
-      let _ = scene_guard.scene.add_component(comet.body, planet);
-
-      // Force-reposition to current start_epoch (same pattern as SetEpochRange).
-      let start = {
-        scenes.time_managers.get(&scene_id).map(|tm| tm.start_epoch).unwrap_or_else(|| {
-          // Fallback: J2000 (2000-01-01 12:00 TDB)
-          anise::time::Epoch::from_tdb_seconds(0.0)
-        })
-      };
+    LogicCommand::TryInitComet {
+      scene_id,
+      spk_id,
+      proposed_start,
+      proposed_end,
+    } => {
       let logic_state = ctx.logic_state.read();
-      if let Err(e) = crate::simulation_api::reposition::force_reposition(
-        &scene_guard.scene,
-        comet.subtree,
-        comet.body,
-        &logic_state.almanac_data,
-        &planet,
-        start,
-      ) {
+      let planet = AlmanacPlanet::new(spk_id);
+
+      // 1. Dry run validation: ensure both start and end can be evaluated
+      if let Err(e) = planet.step(proposed_start, &logic_state.almanac_data, None) {
         emit_breadcrumb(
           3,
-          &alloc::format!("[InitComet] force_reposition failed: {}", e),
+          &alloc::format!("[TryInitComet] Validation failed for start epoch: {}", e),
         );
+        crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
+          crate::simulation_api::external_state::CCometInitialized::new(false, spk_id),
+        ));
+        return Ok(());
+      }
+      if let Err(e) = planet.step(proposed_end, &logic_state.almanac_data, None) {
+        emit_breadcrumb(
+          3,
+          &alloc::format!("[TryInitComet] Validation failed for end epoch: {}", e),
+        );
+        crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
+          crate::simulation_api::external_state::CCometInitialized::new(false, spk_id),
+        ));
+        return Ok(());
       }
       drop(logic_state);
 
-      // Queue trajectory generation for the full calendar year of start_epoch.
-      let year = crate::simulation_api::reposition::year_of_epoch(start);
-      let (traj_start, traj_end) = crate::simulation_api::reposition::full_year_tai_seconds(year);
+      // 2. Spawn Async Trajectory Job (Phase 1 math)
+      let start_sec = proposed_start.to_tai_seconds();
+      let end_sec = proposed_end.to_tai_seconds();
       let workload = Box::new(structs::LogicWorkload {
-        cmd: LogicCommand::UpdateTrajectoryForSpk {
-          task_id: 0,
+        cmd: LogicCommand::BuildCometTrajectory {
           scene_id,
-          entity_id: EntityId::as_ffi(&comet.orbit),
           spk_id,
-          start_epoch_tai_sec: traj_start,
-          end_epoch_tai_sec: traj_end,
+          start_epoch_tai_sec: start_sec,
+          end_epoch_tai_sec: end_sec,
           sample_step_days: 1.0,
         },
         ctx: alloc::sync::Arc::clone(ctx),
       });
       let _ = ctx.thread_pool.scatter(alloc::vec![workload]);
 
-      drop(scene_guard);
-      scene_arc.write().comet_orbit_year = Some(year);
-
       Ok(())
     }
+
     LogicCommand::CleanupComet { scene_id } => {
       // Remove AlmanacPlanet and TrajectoryComponent from the comet subtree,
       // then reset the comet subtree to its 1 AU +X default position.
@@ -1604,6 +1595,182 @@ fn process_command_internal(
       emit_external_state_change(&ExternalState::AlmanacImported(
         CAlamanacImported::new_unloaded(&path),
       ));
+      Ok(())
+    }
+
+    LogicCommand::BuildCometTrajectory {
+      scene_id,
+      spk_id,
+      start_epoch_tai_sec,
+      end_epoch_tai_sec,
+      sample_step_days,
+    } => {
+      let frame = crate::simulation::almanac::SUN_ECLIPJ2000;
+      if sample_step_days <= 0.0 {
+        crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
+          crate::simulation_api::external_state::CCometInitialized::new(false, spk_id),
+        ));
+        return Err(EngineError::InvalidOperation(
+          "BuildCometTrajectory: sample_step_days must be > 0",
+        ));
+      }
+      if start_epoch_tai_sec >= end_epoch_tai_sec {
+        crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
+          crate::simulation_api::external_state::CCometInitialized::new(false, spk_id),
+        ));
+        return Err(EngineError::InvalidOperation(
+          "BuildCometTrajectory: start_epoch >= end_epoch",
+        ));
+      }
+
+      let scenes = ctx.scenes.read();
+      let scene_ctx =
+        scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
+      let scene_guard = scene_ctx.read();
+
+      let comet = scene_guard.comet.ok_or(EngineError::InvalidOperation(
+        "BuildCometTrajectory: comet SubtreeEntities not populated",
+      ))?;
+
+      struct SampledPoints {
+        pub position_km: DVec3,
+        pub velocity_km: DVec3,
+      }
+      let mut samples = alloc::vec::Vec::<SampledPoints>::with_capacity(256);
+      let mut t = start_epoch_tai_sec;
+
+      let logic_state = ctx.logic_state.read();
+      let step_sec = sample_step_days * 86400.0;
+
+      while t <= end_epoch_tai_sec {
+        let epoch = anise::time::Epoch::from_tai_seconds(t);
+        let state = match logic_state.almanac_data.get_cartesian_state(
+          spk_id,
+          frame.orientation_id,
+          frame.ephemeris_id,
+          epoch,
+          true,
+        ) {
+          Ok(s) => s,
+          Err(e) => {
+            emit_breadcrumb(
+              3,
+              &alloc::format!("[TryInitComet] Trajectory generation failed: {}", e),
+            );
+            crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
+              crate::simulation_api::external_state::CCometInitialized::new(false, spk_id),
+            ));
+            return Err(e);
+          }
+        };
+
+        samples.push(SampledPoints {
+          position_km: DVec3::from_components(
+            state.radius_km[0],
+            state.radius_km[1],
+            state.radius_km[2],
+          ),
+          velocity_km: DVec3::from_components(
+            state.velocity_km_s[0],
+            state.velocity_km_s[1],
+            state.velocity_km_s[2],
+          ),
+        });
+
+        if t == end_epoch_tai_sec {
+          break;
+        }
+        t += step_sec;
+        if t > end_epoch_tai_sec {
+          t = end_epoch_tai_sec;
+        }
+      }
+
+      if samples.len() < 2 {
+        emit_breadcrumb(
+          3,
+          "[TryInitComet] Trajectory generation failed: not enough samples",
+        );
+        crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
+          crate::simulation_api::external_state::CCometInitialized::new(false, spk_id),
+        ));
+        return Err(EngineError::InvalidOperation(
+          "BuildCometTrajectory: not enough samples",
+        ));
+      }
+
+      let dt_sec = step_sec;
+      let mut control_points = alloc::vec::Vec::<[f32; 4]>::with_capacity(256);
+
+      for i in 0..(samples.len() - 1) {
+        const KM_TO_AU: f64 = 6.6845871226706e-9_f64;
+        let s0 = &samples[i];
+        let s1 = &samples[i + 1];
+
+        let p0 = s0.position_km;
+        let v0 = s0.velocity_km;
+        let p1 = s1.position_km;
+        let v1 = s1.velocity_km;
+
+        let p0_au = p0 * KM_TO_AU;
+        let cp0 = p0_au.to_f32();
+
+        if cp0.length_squared() == 0.0 && p0_au.length_squared() > 0.0 {
+          emit_breadcrumb(3, "[BuildCometTrajectory] Warning: Precision loss! Trajectory point collapsed to zero during f64 -> f32 AU conversion.");
+        }
+
+        let cp1 = ((p0 + v0 * (dt_sec / 3.0)) * KM_TO_AU).to_f32();
+        let cp2 = ((p1 - v1 * (dt_sec / 3.0)) * KM_TO_AU).to_f32();
+        let cp3 = (p1 * KM_TO_AU).to_f32();
+
+        control_points.push([cp0.x(), cp0.y(), cp0.z(), 1.0]);
+        control_points.push([cp1.x(), cp1.y(), cp1.z(), 1.0]);
+        control_points.push([cp2.x(), cp2.y(), cp2.z(), 1.0]);
+        control_points.push([cp3.x(), cp3.y(), cp3.z(), 1.0]);
+      }
+
+      let new_comp = crate::scene::trajectory::TrajectoryComponent::new(
+        control_points,
+        [0.3, 0.6, 1.0, 1.0], // Default color
+        2.0,
+        0,
+        32,
+      );
+
+      // We have successfully computed trajectory, now commit everything to ECS!
+      let planet = AlmanacPlanet::new(spk_id);
+      let _ = scene_guard.scene.add_component(comet.body, planet);
+
+      let mut replaced = false;
+      let _ = scene_guard.scene.with_component_mut(
+        comet.orbit,
+        |comp: &mut crate::scene::trajectory::TrajectoryComponent| {
+          *comp = new_comp.clone();
+          replaced = true;
+        },
+      );
+      if !replaced {
+        let _ = scene_guard.scene.add_component(comet.orbit, new_comp);
+      }
+
+      // Force reposition to the start of our newly validated proposed bounds
+      // (This will become the global timeline shortly)
+      let start = anise::time::Epoch::from_tai_seconds(start_epoch_tai_sec);
+      let _ = crate::simulation_api::reposition::force_reposition(
+        &scene_guard.scene,
+        comet.subtree,
+        comet.body,
+        &logic_state.almanac_data,
+        &planet,
+        start,
+      );
+
+      drop(logic_state);
+
+      crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
+        crate::simulation_api::external_state::CCometInitialized::new(true, spk_id),
+      ));
+
       Ok(())
     }
 

@@ -218,6 +218,9 @@ public class MockNativeRuntimeService : INativeRuntimeService
     GC.SuppressFinalize(this);
   }
 
+  public IObservable<ulong> SimulationStateUpdated =>
+    System.Reactive.Linq.Observable.Never<ulong>();
+
   public bool AddViewport(
     uint width,
     uint height,

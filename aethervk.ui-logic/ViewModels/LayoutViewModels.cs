@@ -85,17 +85,24 @@ public partial class TabGroupNodeViewModel
   private bool _hasTabs;
 
   private readonly ITabFactory _tabFactory;
+  private readonly ILayoutMessenger _layoutMessenger;
+
+  // Maps each open tab to the Action that disposes its DI scope.
+  // Populated by AddNewTab/ChangeSelectedTab and by AttachDetachedTab (drag-move).
+  private readonly Dictionary<TabItemViewModel, Action> _tabDisposers = new();
 
   public IReadOnlyList<TabDescriptor> AvailableTabs => _tabFactory.AvailableTabs;
 
   public TabGroupNodeViewModel(
     TabItemViewModel defaultTab,
     ITabFactory tabFactory,
+    ILayoutMessenger layoutMessenger,
     SplitNodeViewModel? parent = null
   )
     : base(parent)
   {
     _tabFactory = tabFactory;
+    _layoutMessenger = layoutMessenger;
     Tabs.Add(defaultTab);
     SelectedTab = defaultTab;
     HasTabs = true;
@@ -107,10 +114,19 @@ public partial class TabGroupNodeViewModel
   private void CloseTab(TabItemViewModel tab)
   {
     Tabs.Remove(tab);
-    if (tab is IDisposable disposable)
+
+    // Dispose the tab's DI scope (which disposes the ViewModel automatically).
+    if (_tabDisposers.TryGetValue(tab, out var disposer))
     {
-      disposable.Dispose();
+      _tabDisposers.Remove(tab);
+      disposer();
     }
+    else if (tab is IDisposable d)
+    {
+      // Fallback for tabs that were created before scope tracking (e.g. the initial default tab).
+      d.Dispose();
+    }
+
     if (Tabs.Count > 0 && SelectedTab == tab)
     {
       SelectedTab = Tabs[Tabs.Count - 1];
@@ -118,7 +134,7 @@ public partial class TabGroupNodeViewModel
     else if (Tabs.Count == 0)
     {
       SelectedTab = null;
-      WeakReferenceMessenger.Default.Send(new CoalesceGroupMessage(this));
+      _layoutMessenger.Send(new CoalesceGroupMessage(this));
     }
   }
 
@@ -127,14 +143,15 @@ public partial class TabGroupNodeViewModel
   {
     foreach (var tab in Tabs)
     {
-      if (tab is IDisposable disposable)
-      {
-        disposable.Dispose();
-      }
+      if (_tabDisposers.TryGetValue(tab, out var disposer))
+        disposer();
+      else if (tab is IDisposable d)
+        d.Dispose();
     }
+    _tabDisposers.Clear();
     Tabs.Clear();
     SelectedTab = null;
-    WeakReferenceMessenger.Default.Send(new CoalesceGroupMessage(this));
+    _layoutMessenger.Send(new CoalesceGroupMessage(this));
   }
 
   [RelayCommand]
@@ -146,40 +163,95 @@ public partial class TabGroupNodeViewModel
     if (index == -1)
       return;
 
-    TabItemViewModel? newTab = _tabFactory.CreateTab(tabType) as TabItemViewModel;
+    var old = SelectedTab;
+
+    var (vm, dispose) = _tabFactory.CreateScopedTab(tabType);
+    var newTab = vm as TabItemViewModel;
 
     if (newTab != null)
     {
       Tabs[index] = newTab;
       SelectedTab = newTab;
+      if (dispose != null)
+        _tabDisposers[newTab] = dispose;
+
+      // Dispose old tab's scope
+      if (_tabDisposers.TryGetValue(old, out var oldDisposer))
+      {
+        _tabDisposers.Remove(old);
+        oldDisposer();
+      }
+      else if (old is IDisposable d)
+      {
+        d.Dispose();
+      }
     }
   }
 
   [RelayCommand]
   private void AddNewTab(Type tabType)
   {
-    var newTab = _tabFactory.CreateTab(tabType) as TabItemViewModel;
+    var (vm, dispose) = _tabFactory.CreateScopedTab(tabType);
+    var newTab = vm as TabItemViewModel;
     if (newTab != null && !Tabs.Contains(newTab))
     {
       Tabs.Add(newTab);
       SelectedTab = newTab;
+      if (dispose != null)
+        _tabDisposers[newTab] = dispose;
     }
+  }
+
+  /// <summary>
+  /// Removes a tab from this group WITHOUT disposing its scope.
+  /// Used during drag-move so the scope travels with the tab to the target group.
+  /// </summary>
+  internal (TabItemViewModel Tab, Action? Disposer) DetachTab(TabItemViewModel tab)
+  {
+    Tabs.Remove(tab);
+    _tabDisposers.TryGetValue(tab, out var disposer);
+    _tabDisposers.Remove(tab);
+    return (tab, disposer);
+  }
+
+  /// <summary>
+  /// Attaches a tab (and its pre-existing scope disposer) that was detached from another group.
+  /// </summary>
+  internal void AttachDetachedTab(TabItemViewModel tab, Action? disposer)
+  {
+    if (!Tabs.Contains(tab))
+      Tabs.Add(tab);
+    SelectedTab = tab;
+    if (disposer != null)
+      _tabDisposers[tab] = disposer;
   }
 }
 
 /// <summary>
 /// Represents the actual content of a single tab
 /// </summary>
-public partial class TabItemViewModel(string title) : ViewModelBase
+public partial class TabItemViewModel : ViewModelBase
 {
   [ObservableProperty]
-  private string _title = title;
+  private string _title;
 
   [ObservableProperty]
   private string? _icon;
 
   [ObservableProperty]
   private bool _canClose = true;
+
+  public TabItemViewModel(string title)
+    : base()
+  {
+    _title = title;
+  }
+
+  protected TabItemViewModel(string title, IMessenger messenger)
+    : base(messenger)
+  {
+    _title = title;
+  }
 }
 
 /// <summary>
@@ -195,19 +267,27 @@ public partial class DockingManagerViewModel
   private LayoutNodeViewModelBase _rootNode;
 
   private readonly ITabFactory _tabFactory;
+  private readonly ILayoutMessenger _layoutMessenger;
 
   public DockingManagerViewModel(
     ITabFactory tabFactory,
+    ILayoutMessenger layoutMessenger,
     LayoutNodeViewModelBase? rootNode = null
   )
-    : base()
+    : base(layoutMessenger)
   {
     _tabFactory = tabFactory;
-    WeakReferenceMessenger.Default.Register<TabDroppedMessage>(this);
-    WeakReferenceMessenger.Default.Register<TabDragTaskMessage>(this);
-    WeakReferenceMessenger.Default.Register<CoalesceGroupMessage>(this);
+    _layoutMessenger = layoutMessenger;
+    IsActive = true;  // → OnActivated() → registers TabDropped/TabDragTask/CoalesceGroup
 
     _rootNode = rootNode ?? CreateDefaultLayout();
+  }
+
+  protected override void OnActivated()
+  {
+    Messenger.Register<DockingManagerViewModel, TabDroppedMessage>(this, (r, m) => r.Receive(m));
+    Messenger.Register<DockingManagerViewModel, TabDragTaskMessage>(this, (r, m) => r.Receive(m));
+    Messenger.Register<DockingManagerViewModel, CoalesceGroupMessage>(this, (r, m) => r.Receive(m));
   }
 
   // admittedly, the fact that the starting layout is read from code in logic assembly sucks.
@@ -215,27 +295,38 @@ public partial class DockingManagerViewModel
   // in App.axaml.cs)
   private LayoutNodeViewModelBase CreateDefaultLayout()
   {
+    // Helper: create a scoped tab and return (vm, disposer)
+    (TabItemViewModel Tab, Action? Disposer) MakeScopedTab<T>() where T : TabItemViewModel
+    {
+      var (vm, dispose) = _tabFactory.CreateScopedTab(typeof(T));
+      return ((vm as TabItemViewModel)!, dispose);
+    }
+
     // -- Tab creation  --
     // center, most of space, 60% width centered, 80% height top
-    var viewportTab = _tabFactory.CreateTab<Viewport3DViewModel>();
-    var centerGroup = new TabGroupNodeViewModel(viewportTab!, _tabFactory);
+    var (viewportTab, viewportDispose) = MakeScopedTab<Viewport3DViewModel>();
+    var centerGroup = new TabGroupNodeViewModel(viewportTab, _tabFactory, _layoutMessenger);
+    if (viewportDispose != null) centerGroup.AttachDetachedTab(viewportTab, viewportDispose);
 
     // left (27%)
-    var settingsTab = _tabFactory.CreateTab<SettingsTabViewModel>();
-    var cometTab = _tabFactory.CreateTab<CometTabViewModel>();
-    var modelTab = _tabFactory.CreateTab<ModelTabViewModel>();
+    var (settingsTab, settingsDispose) = MakeScopedTab<SettingsTabViewModel>();
+    var (cometTab,    cometDispose)    = MakeScopedTab<CometTabViewModel>();
+    var (modelTab,    modelDispose)    = MakeScopedTab<ModelTabViewModel>();
 
-    var leftGroup = new TabGroupNodeViewModel(settingsTab!, _tabFactory);
-    leftGroup.Tabs.Add(cometTab!);
-    leftGroup.Tabs.Add(modelTab!);
+    var leftGroup = new TabGroupNodeViewModel(settingsTab, _tabFactory, _layoutMessenger);
+    if (settingsDispose != null) leftGroup.AttachDetachedTab(settingsTab, settingsDispose);
+    leftGroup.AttachDetachedTab(cometTab, cometDispose);
+    leftGroup.AttachDetachedTab(modelTab, modelDispose);
 
     // right (13%) (17.8% when referring to viewport+imports = 73%)
-    var importsTab = _tabFactory.CreateTab<ImportsTabViewModel>();
-    var rightGroup = new TabGroupNodeViewModel(importsTab!, _tabFactory);
+    var (importsTab, importsDispose) = MakeScopedTab<ImportsTabViewModel>();
+    var rightGroup = new TabGroupNodeViewModel(importsTab, _tabFactory, _layoutMessenger);
+    if (importsDispose != null) rightGroup.AttachDetachedTab(importsTab, importsDispose);
 
     // bottom (20% height)
-    var timelineTab = _tabFactory.CreateTab<TimelineTabViewModel>();
-    var bottomGroup = new TabGroupNodeViewModel(timelineTab!, _tabFactory);
+    var (timelineTab, timelineDispose) = MakeScopedTab<TimelineTabViewModel>();
+    var bottomGroup = new TabGroupNodeViewModel(timelineTab, _tabFactory, _layoutMessenger);
+    if (timelineDispose != null) bottomGroup.AttachDetachedTab(timelineTab, timelineDispose);
 
     // viewport - imports horizontal split
     var viewportAndImportsGroup = new SplitNodeViewModel(
@@ -251,7 +342,7 @@ public partial class DockingManagerViewModel
         viewportAndImportsGroup,
         bottomGroup,
         SplitOrientation.Vertical,
-        0.80);
+        0.77);
     viewportAndImportsGroup.Parent = allButSettingsGroup;
     bottomGroup.Parent = allButSettingsGroup;
 
@@ -333,7 +424,7 @@ public partial class DockingManagerViewModel
     // Mutate Old List
     if (!message.IsCopy)
     {
-      sourceNode.Tabs.Remove(draggedTab);
+      var (_, scopeDisposer) = sourceNode.DetachTab(draggedTab);
       if (sourceNode.Tabs.Count > 0 && sourceNode.SelectedTab == draggedTab)
       {
         sourceNode.SelectedTab = sourceNode.Tabs[sourceNode.Tabs.Count - 1];
@@ -343,9 +434,19 @@ public partial class DockingManagerViewModel
         sourceNode.SelectedTab = null;
         RemoveTabAndCoalesce(draggedTab, sourceNode);
       }
+
+      // Apply into New List — carry the scope disposer along
+      if (zone == DockZone.Center)
+      {
+        targetNode.AttachDetachedTab(tabToInsert, scopeDisposer);
+      }
+      else
+        SplitNodeAndInsertTab(targetNode, tabToInsert, zone, scopeDisposer);
+
+      return;
     }
 
-    // Apply into New List
+    // IsCopy path — tab is a new wrapper (no scope to carry; the original tab's scope stays in sourceNode)
     if (zone == DockZone.Center)
     {
       if (!targetNode.Tabs.Contains(tabToInsert))
@@ -385,10 +486,14 @@ public partial class DockingManagerViewModel
   private void SplitNodeAndInsertTab(
     TabGroupNodeViewModel target,
     TabItemViewModel tab,
-    DockZone zone
+    DockZone zone,
+    Action? disposer = null
   )
   {
-    var newGroup = new TabGroupNodeViewModel(tab, _tabFactory);
+    var newGroup = new TabGroupNodeViewModel(tab, _tabFactory, _layoutMessenger);
+    if (disposer != null)
+      newGroup.AttachDetachedTab(tab, disposer);
+
     var orientation =
       (zone == DockZone.Left || zone == DockZone.Right)
         ? SplitOrientation.Horizontal

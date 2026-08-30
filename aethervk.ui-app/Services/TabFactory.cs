@@ -48,6 +48,16 @@ public class TabFactory : ITabFactory
 
   public T? CreateTab<T>() where T : class => CreateTab(typeof(T)) as T;
 
+  public (object? ViewModel, Action? Dispose) CreateScopedTab(Type tabType)
+  {
+    if (!_tabMap.TryGetValue(tabType, out var entry))
+      return (null, null);
+
+    var scope = _serviceProvider.CreateScope();
+    var vm    = entry.Factory(scope.ServiceProvider);
+    return (vm, scope.Dispose);
+  }
+
   public IReadOnlyList<TabDescriptor> AvailableTabs =>
     _tabMap
       .Select(kv => new TabDescriptor(

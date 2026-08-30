@@ -17,7 +17,7 @@ namespace AetherVk.Logic.ViewModels;
   keyPrefix: "Tabs_Timeline_",
   designTitle: "Timeline",
   designIcon: "⏱")]
-public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSession>, ITimelineTabViewModel, IRecipient<CometDecommittedMessage>
+public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSession>, ITimelineTabViewModel, IRecipient<CometDecommittedMessage>, IRecipient<CometCommittedMessage>
 {
   private readonly ITranslationService _translationService;
   private readonly TimelineService _timelineService;
@@ -27,11 +27,19 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
 
   [ObservableProperty]
   private string _startEpoch = string.Empty;
-  partial void OnStartEpochChanged(string value) => CheckProposedVsCommitted();
+  partial void OnStartEpochChanged(string value)
+  {
+    CheckProposedVsCommitted();
+    TryPropose();
+  }
 
   [ObservableProperty]
   private string _endEpoch = string.Empty;
-  partial void OnEndEpochChanged(string value) => CheckProposedVsCommitted();
+  partial void OnEndEpochChanged(string value)
+  {
+    CheckProposedVsCommitted();
+    TryPropose();
+  }
 
   /// <summary>
   /// True when the values currently in the text boxes differ from the last committed range.
@@ -39,7 +47,10 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   /// committed to the runtime yet.
   /// </summary>
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(CanRestore))]
   private bool _isProposedDifferentFromCommitted;
+
+  public bool CanRestore => HasCommittedState && IsProposedDifferentFromCommitted;
 
   [ObservableProperty]
   private bool _hasError;
@@ -65,6 +76,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   /// Controls visibility of the playback toolbar and progress bar.
   /// </summary>
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(CanRestore))]
   private bool _hasCommittedState;
   
   [ObservableProperty]
@@ -87,8 +99,6 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     }
   }
 
-  public ICommand ProposeCommand { get; }
-  public ICommand SubmitCommand { get; }
   public ICommand RestoreCommand { get; }
   public ICommand PlayPauseCommand { get; }
   public ICommand ResetCommand { get; }
@@ -99,8 +109,9 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     ISchedulerProvider schedulerProvider,
     ITabStateService<TimelineSession> sessionService,
     ITabStateService<CometSession> cometSessionService,
-    TimelineService timelineService)
-    : base("Timeline", sessionService)
+    TimelineService timelineService,
+    ICometMessenger cometMessenger)
+    : base("Timeline", sessionService, cometMessenger)
   {
     _translationService = translationService;
     _timelineSessionService = sessionService;
@@ -108,8 +119,6 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     _timelineService = timelineService;
     Icon = "⏱"; // stopwatch — U+23F1
 
-    ProposeCommand = new RelayCommand(Propose);
-    SubmitCommand = new RelayCommand(Submit);
     RestoreCommand = new RelayCommand(Restore);
     PlayPauseCommand = new RelayCommand(() => IsPlaying = !IsPlaying);
     ResetCommand = new RelayCommand(() => { IsPlaying = false; });
@@ -120,10 +129,15 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
       .Subscribe(isValid => IsTimelineValid = isValid)
       .AddDisposableTo(_disposables);
 
-    WeakReferenceMessenger.Default.Register(this);
-
     SubscribeToStrings(schedulerProvider);
     Restore();
+    IsActive = true;  // → OnActivated() → registers CometCommitted/CometDecommitted
+  }
+
+  protected override void OnActivated()
+  {
+    Messenger.Register<TimelineTabViewModel, CometCommittedMessage>(this, (r, m) => r.Receive(m));
+    Messenger.Register<TimelineTabViewModel, CometDecommittedMessage>(this, (r, m) => r.Receive(m));
   }
 
   public void Receive(CometDecommittedMessage message)
@@ -237,45 +251,43 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     CheckProposedVsCommitted();
   }
 
-  private void Propose()
+  private bool _isProposing;
+  private void TryPropose()
   {
-    HasError = false;
-    ErrorMessage = string.Empty;
-    if (CurrentSession == null) return;
-
-    if (!TimeUtils.TryParseIso8601(StartEpoch, out var startDt))
+    if (_isProposing) return;
+    _isProposing = true;
+    try
     {
-      HasError = true;
-      ErrorMessage = "Invalid Start Epoch format.";
-      return;
-    }
+      HasError = false;
+      ErrorMessage = string.Empty;
+      if (CurrentSession == null) return;
 
-    if (!TimeUtils.TryParseIso8601(EndEpoch, out var endDt))
-    {
-      HasError = true;
-      ErrorMessage = "Invalid End Epoch format.";
-      return;
-    }
+      if (!TimeUtils.TryParseIso8601(StartEpoch, out var startDt) ||
+          !TimeUtils.TryParseIso8601(EndEpoch, out var endDt))
+      {
+        StartEpoch = CurrentSession.ProposedStartEpoch;
+        EndEpoch = CurrentSession.ProposedEndEpoch;
+        return;
+      }
 
-    var diff = endDt - startDt;
-    if (diff.TotalDays < 0)
-    {
-      HasError = true;
-      ErrorMessage = "Reverse time ranges are not allowed.";
-      return;
-    }
-    if (diff.TotalDays < 28)
-    {
-      HasError = true;
-      ErrorMessage = "Date range must be at least one month.";
-      return;
-    }
+      var diff = endDt - startDt;
+      if (diff.TotalDays < 0 || diff.TotalDays < 28)
+      {
+        StartEpoch = CurrentSession.ProposedStartEpoch;
+        EndEpoch = CurrentSession.ProposedEndEpoch;
+        return;
+      }
 
-    var startTai = TimeUtils.ToTaiParts(startDt);
-    var endTai   = TimeUtils.ToTaiParts(endDt);
-    var range    = new TimeRange(startTai.centuries, startTai.nanoseconds,
-                                 endTai.centuries,   endTai.nanoseconds);
-    PersistProposal(StartEpoch, EndEpoch, range);
+      var startTai = TimeUtils.ToTaiParts(startDt);
+      var endTai   = TimeUtils.ToTaiParts(endDt);
+      var range    = new TimeRange(startTai.centuries, startTai.nanoseconds,
+                                   endTai.centuries,   endTai.nanoseconds);
+      PersistProposal(StartEpoch, EndEpoch, range);
+    }
+    finally
+    {
+      _isProposing = false;
+    }
   }
 
   /// <summary>
@@ -297,90 +309,18 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     CheckProposedVsCommitted();
   }
 
-  private void Submit()
+  public void Receive(CometCommittedMessage message)
   {
-    HasError = false;
-    ErrorMessage = string.Empty;
     if (CurrentSession == null) return;
 
-    if (!TimeUtils.TryParseIso8601(StartEpoch, out var startDt))
+    _timelineSessionService.UpdateSession(SessionId, s =>
     {
-      HasError = true;
-      ErrorMessage = "Invalid Start Epoch format.";
-      return;
-    }
+      s.CommittedStartEpoch = StartEpoch;
+      s.CommittedEndEpoch   = EndEpoch;
+    });
 
-    if (!TimeUtils.TryParseIso8601(EndEpoch, out var endDt))
-    {
-      HasError = true;
-      ErrorMessage = "Invalid End Epoch format.";
-      return;
-    }
-
-    var diff = endDt - startDt;
-    if (diff.TotalDays < 0)
-    {
-      HasError = true;
-      ErrorMessage = "Reverse time ranges are not allowed.";
-      return;
-    }
-    if (diff.TotalDays < 28) // Using 28 days as "less than a month"
-    {
-      HasError = true;
-      ErrorMessage = "Date range must be at least one month.";
-      return;
-    }
-
-    var cometSessionId = _cometSessionService.ActiveSessionIds[0];
-    var cometSession   = _cometSessionService.GetSession(cometSessionId);
-    if (cometSession == null || cometSession.SpkId == null)
-    {
-      HasError = true;
-      ErrorMessage = "A comet must be selected first.";
-      return;
-    }
-
-    var startTai = TimeUtils.ToTaiParts(startDt);
-    var endTai   = TimeUtils.ToTaiParts(endDt);
-    var range    = new TimeRange(startTai.centuries, startTai.nanoseconds,
-                                 endTai.centuries,   endTai.nanoseconds);
-
-    if (!_timelineService.CheckAlmanacCoverage(cometSession.SpkId.Value, range))
-    {
-      HasError = true;
-      ErrorMessage = "The timeline is not fully covered by the selected comet's almanac. Restoring proposed from committed.";
-
-      // Rollback: proposed snaps back to the last committed range if one exists.
-      if (!string.IsNullOrEmpty(CurrentSession.CommittedStartEpoch)
-          && TimeUtils.TryParseIso8601(CurrentSession.CommittedStartEpoch, out var cs)
-          && TimeUtils.TryParseIso8601(CurrentSession.CommittedEndEpoch,   out var ce))
-      {
-        StartEpoch = CurrentSession.CommittedStartEpoch;
-        EndEpoch   = CurrentSession.CommittedEndEpoch;
-        var csTai = TimeUtils.ToTaiParts(cs);
-        var ceTai = TimeUtils.ToTaiParts(ce);
-        PersistProposal(StartEpoch, EndEpoch,
-          new TimeRange(csTai.centuries, csTai.nanoseconds, ceTai.centuries, ceTai.nanoseconds));
-      }
-      return;
-    }
-
-    if (_timelineService.RequestEpochRange(range))
-    {
-      _timelineSessionService.UpdateSession(SessionId, s =>
-      {
-        s.CommittedStartEpoch = StartEpoch;
-        s.CommittedEndEpoch   = EndEpoch;
-      });
-      // Keep proposed in sync with what was just committed.
-      PersistProposal(StartEpoch, EndEpoch, range);
-      RefreshCommittedState();
-    }
-    else
-    {
-      HasError = true;
-      ErrorMessage = "Failed to submit timeline to runtime.";
-    }
+    RefreshCommittedState();
+    CheckProposedVsCommitted();
   }
 
   private void SubscribeToStrings(ISchedulerProvider schedulerProvider)

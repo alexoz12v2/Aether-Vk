@@ -1,6 +1,6 @@
 using System;
 using System.Numerics;
-using System.Reactive.Concurrency;
+using Microsoft.Reactive.Testing;
 using AetherVk.Logic.Input;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels;
@@ -19,11 +19,11 @@ public class Viewport3DViewModelTests
 {
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
-  private static ISchedulerProvider MakeImmediateSchedulers()
+  private static ISchedulerProvider MakeTestSchedulers(TestScheduler scheduler)
   {
     var sp = new Mock<ISchedulerProvider>();
-    sp.Setup(s => s.MainThread).Returns(ImmediateScheduler.Instance);
-    sp.Setup(s => s.Background).Returns(ImmediateScheduler.Instance);
+    sp.Setup(s => s.MainThread).Returns(System.Reactive.Concurrency.ImmediateScheduler.Instance);
+    sp.Setup(s => s.Background).Returns(scheduler);
     return sp.Object;
   }
 
@@ -35,7 +35,7 @@ public class Viewport3DViewModelTests
   /// When <c>true</c>, pre-configures <see cref="CometConfigService"/> as having a committed
   /// almanac so that tests exercising <see cref="CameraMode.CometOrbiting"/> can enter that mode.
   /// </param>
-  private static Viewport3DViewModel BuildVm(bool cometCommitted = false)
+  private static Viewport3DViewModel BuildVm(bool cometCommitted = false, TestScheduler? testScheduler = null)
   {
     var dispatcher = new Mock<IUiThreadDispatcher>();
     dispatcher
@@ -45,12 +45,12 @@ public class Viewport3DViewModelTests
       .Setup(d => d.CheckAccess())
       .Returns(true);
 
-    var schedulers    = MakeImmediateSchedulers();
+    var schedulers    = MakeTestSchedulers(testScheduler ?? new TestScheduler());
     var runtime       = new Mock<INativeRuntimeService>();
     var breadcrumb    = new BreadcrumbService(dispatcher.Object);
-    var timeline      = new TimelineService(runtime.Object, schedulers);
-    var cometTracker  = new CometPositionTrackerService(runtime.Object, schedulers, timeline);
     var cometConfig   = new CometConfigService(runtime.Object, schedulers);
+    var timeline      = new TimelineService(runtime.Object, schedulers, cometConfig, breadcrumb);
+    var cometTracker  = new CometPositionTrackerService(runtime.Object, schedulers, timeline);
     var cameraService = new CameraService(runtime.Object, schedulers, cometTracker, cometConfig, breadcrumb);
 
     // Pre-set the committed state so tests that switch to CometOrbiting work.
@@ -119,7 +119,7 @@ public class Viewport3DViewModelTests
       var vm = BuildVm();
       Assert.Equal(800u, vm.Width);
       Assert.Equal(600u, vm.Height);
-      vm.Stop();
+      vm.Dispose();
     }
     catch (TypeInitializationException) { /* native DLL absent in CI */ }
     catch (DllNotFoundException)        { /* native DLL absent in CI */ }
@@ -130,11 +130,13 @@ public class Viewport3DViewModelTests
   {
     try
     {
-      var vm = BuildVm(cometCommitted: true);
+      var scheduler = new TestScheduler();
+      var vm = BuildVm(cometCommitted: true, scheduler);
       // Initial state is UpZenith (EarthPosition requires SPK data)
       Assert.Equal(CameraMode.UpZenith, vm.CameraService.CurrentMode);
 
       vm.Process(new AppAction(ViewportAction.SwitchCameraMode.ToCmdString()), Pressed());
+      scheduler.AdvanceBy(TimeSpan.FromMilliseconds(100).Ticks);
       Assert.Equal(CameraMode.CometOrbiting, vm.CameraService.CurrentMode);
 
       vm.Process(new AppAction(ViewportAction.SwitchCameraMode.ToCmdString()), Pressed());
@@ -152,8 +154,10 @@ public class Viewport3DViewModelTests
   {
     try
     {
-      var vm = BuildVm(cometCommitted: true);
+      var scheduler = new TestScheduler();
+      var vm = BuildVm(cometCommitted: true, scheduler);
       vm.Process(new AppAction(ViewportAction.SwitchToCometOrbiting.ToCmdString()), Pressed());
+      scheduler.AdvanceBy(TimeSpan.FromMilliseconds(100).Ticks);
       Assert.Equal(CameraMode.CometOrbiting, vm.CameraService.CurrentMode);
 
       vm.Process(new AppAction(ViewportAction.SwitchToEarthPosition.ToCmdString()), Pressed());
@@ -168,8 +172,10 @@ public class Viewport3DViewModelTests
   {
     try
     {
-      var vm = BuildVm(cometCommitted: true);
+      var scheduler = new TestScheduler();
+      var vm = BuildVm(cometCommitted: true, scheduler);
       vm.Process(new AppAction(ViewportAction.SwitchToCometOrbiting.ToCmdString()), Pressed());
+      scheduler.AdvanceBy(TimeSpan.FromMilliseconds(100).Ticks);
       Assert.Equal(CameraMode.CometOrbiting, vm.CameraService.CurrentMode);
     }
     catch (TypeInitializationException) { }
@@ -181,7 +187,8 @@ public class Viewport3DViewModelTests
   {
     try
     {
-      var vm = BuildVm(cometCommitted: true);
+      var scheduler = new TestScheduler();
+      var vm = BuildVm(cometCommitted: true, scheduler);
 
       vm.Process(new AppAction(ViewportAction.SwitchToEarthPosition.ToCmdString()), Pressed());
       Assert.True(vm.IsEarthObserverMode);
@@ -192,6 +199,7 @@ public class Viewport3DViewModelTests
       Assert.Equal(EarthObserverState.UpZenith, vm.EarthObserverState);
 
       vm.Process(new AppAction(ViewportAction.SwitchToCometOrbiting.ToCmdString()), Pressed());
+      scheduler.AdvanceBy(TimeSpan.FromMilliseconds(100).Ticks);
       Assert.False(vm.IsEarthObserverMode);
       Assert.Equal(EarthObserverState.CometOrbiting, vm.EarthObserverState);
     }

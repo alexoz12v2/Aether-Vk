@@ -267,6 +267,9 @@ fn process_command(
       }
     }
     RenderCommand::RenderFrames(render_frames) => {
+      if ctx.skip_present.load(core::sync::atomic::Ordering::Acquire) {
+        return Ok(());
+      }
       render_device.start_frame()?;
 
       let mut handles = alloc::vec::Vec::with_capacity(8);
