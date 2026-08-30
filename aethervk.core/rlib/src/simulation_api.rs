@@ -420,6 +420,22 @@ pub mod external_state {
     }
   }
 
+  #[repr(C)]
+  #[derive(Copy, Clone, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct CCometInitialized {
+    pub success: u32,
+    pub spk_id: i32,
+  }
+
+  impl CCometInitialized {
+    pub fn new(success: bool, spk_id: i32) -> Self {
+      Self {
+        success: if success { 1 } else { 0 },
+        spk_id,
+      }
+    }
+  }
+
   pub enum ExternalState {
     /// Signifies a change in the epoch range state
     TimeRange(CTimeRange),
@@ -427,6 +443,8 @@ pub mod external_state {
     ModelImported(CModelImported),
     /// Tells whether an almanac was loaded successfully or not
     AlmanacImported(CAlamanacImported),
+    /// Tells whether comet initialization (Two-Phase Commit) succeeded
+    CometInitialized(CCometInitialized),
   }
 
   impl ExternalState {
@@ -435,6 +453,7 @@ pub mod external_state {
         Self::TimeRange(_) => 1,
         Self::ModelImported(_) => 2,
         Self::AlmanacImported(_) => 3,
+        Self::CometInitialized(_) => 4,
       }
     }
   }
@@ -453,6 +472,9 @@ pub fn emit_external_state_change(external_state: &external_state::ExternalState
       }
       ExternalState::AlmanacImported(almanac_imported) => {
         bytemuck::bytes_of(almanac_imported).as_ptr().cast()
+      }
+      ExternalState::CometInitialized(comet_initialized) => {
+        bytemuck::bytes_of(comet_initialized).as_ptr().cast()
       }
     };
     unsafe { cb(id, bytes_ptr) };

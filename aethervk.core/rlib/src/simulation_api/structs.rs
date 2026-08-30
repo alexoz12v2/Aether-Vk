@@ -297,7 +297,7 @@ impl Drop for SimulationThreads {
     // We use `_exit` (Unix) / `TerminateProcess` (Windows) rather than `exit`
     // to bypass atexit handlers and C++ destructors, which could themselves block
     // if the process is already deadlocked.
-    const SHUTDOWN_WATCHDOG_S: u64 = 5;
+    const SHUTDOWN_WATCHDOG_S: u64 = 8;
     let _watchdog = oshal::os::thread::Builder::new()
       .name(alloc::format!("shutdown_watchdog"))
       .spawn(move || {
@@ -442,7 +442,7 @@ impl Drop for SimulationThreads {
       // Detach the join thread — we synchronise via condvar, not by joining it.
       drop(join_thread);
 
-      const RENDER_JOIN_TIMEOUT_MS: u64 = 2_000;
+      const RENDER_JOIN_TIMEOUT_MS: u64 = 6_000;
       let (lock, cvar) = &*pair;
       let mut done = lock.lock();
       if !*done {
@@ -781,12 +781,20 @@ pub enum LogicCommand {
     start: hifitime::Epoch,
     end: hifitime::Epoch,
   },
-  /// Internal command dispatched by the LoadAlmanac handler when a comet SPK is detected and
-  /// validated against the current epoch range. Attaches AlmanacPlanet to comet_body,
-  /// force-repositions to start_epoch, and queues trajectory generation.
-  InitComet {
+  /// Phase 1 of Two-Phase Commit: Validates proposed timeline without mutating ECS.
+  TryInitComet {
     scene_id: u64,
     spk_id: i32,
+    proposed_start: hifitime::Epoch,
+    proposed_end: hifitime::Epoch,
+  },
+  /// Phase 1 Async Math: Background thread generates trajectory points.
+  BuildCometTrajectory {
+    scene_id: u64,
+    spk_id: i32,
+    start_epoch_tai_sec: f64,
+    end_epoch_tai_sec: f64,
+    sample_step_days: f64,
   },
   /// Internal command dispatched by the UnloadAlmanac handler for comet SPK cleanup.
   /// Removes AlmanacPlanet and TrajectoryComponent, resets comet to 1 AU +X default.

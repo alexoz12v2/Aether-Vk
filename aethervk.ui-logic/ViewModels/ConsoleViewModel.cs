@@ -1,3 +1,4 @@
+using System;
 using System.Collections.ObjectModel;
 using System.Text;
 using AetherVk.Logic.Services;
@@ -7,7 +8,7 @@ using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.ViewModels;
 
-public partial class ConsoleViewModel : TabItemViewModel, IRecipient<ConsoleMessage>
+public partial class ConsoleViewModel : TabItemViewModel, IRecipient<ConsoleMessage>, IDisposable
 {
   private readonly ConsoleService _consoleService;
   private readonly IFileDialogService _fileDialogService;
@@ -20,8 +21,11 @@ public partial class ConsoleViewModel : TabItemViewModel, IRecipient<ConsoleMess
 
   public ObservableCollection<string> Messages => _consoleService.Messages;
 
-  public ConsoleViewModel(ConsoleService consoleService, IFileDialogService fileDialogService)
-    : base("Console")
+  public ConsoleViewModel(
+    ConsoleService consoleService,
+    IFileDialogService fileDialogService,
+    IConsoleMessenger consoleMessenger)
+    : base("Console", consoleMessenger)
   {
     _consoleService = consoleService;
     _fileDialogService = fileDialogService;
@@ -31,7 +35,12 @@ public partial class ConsoleViewModel : TabItemViewModel, IRecipient<ConsoleMess
     SyncFullText();
 
     _consoleService.Log("Console initialized.");
-    WeakReferenceMessenger.Default.Register<ConsoleMessage>(this);
+    IsActive = true;  // → OnActivated() → registers ConsoleMessage
+  }
+
+  protected override void OnActivated()
+  {
+    Messenger.Register<ConsoleViewModel, ConsoleMessage>(this, (r, m) => r.Receive(m));
   }
 
   private void OnMessagesChanged(
@@ -101,5 +110,11 @@ public partial class ConsoleViewModel : TabItemViewModel, IRecipient<ConsoleMess
   public void Receive(ConsoleMessage message)
   {
     _consoleService.Log($"[Debug UI] {message.Message}");
+  }
+
+  public void Dispose()
+  {
+    IsActive = false;   // → OnDeactivated() → Messenger.UnregisterAll(this)
+    _consoleService.Messages.CollectionChanged -= OnMessagesChanged;
   }
 }

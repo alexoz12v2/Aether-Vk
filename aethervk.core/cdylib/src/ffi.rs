@@ -123,6 +123,7 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
         let de442_path = alloc::format!("{}/planets/de442.bsp", asset_dir);
         let bpc_path = alloc::format!("{}/earth_latest_high_prec.bpc", asset_dir);
         let pca_path = alloc::format!("{}/planets/pck00011.pca", asset_dir);
+        let gm_path = alloc::format!("{}/planets/gm_de431.pca", asset_dir);
         let mut logic = ctx_box.logic_state.write();
         if let Err(e) = logic.almanac_data.load_almanac(oshal::os::fs::PathBuf::from(&de442_path)) {
           oshal::log!("[startup] de442.bsp load failed: {}", e);
@@ -143,6 +144,13 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
           emit_breadcrumb(
             2,
             "pck00011.pca not available at startup — Earth constants unavailable",
+          );
+        }
+        if let Err(e) = logic.almanac_data.load_almanac(oshal::os::fs::PathBuf::from(&gm_path)) {
+          oshal::log!("[startup] gm_de431.pca load failed: {}", e);
+          emit_breadcrumb(
+            2,
+            "gm_de431.pca not available at startup — Gravity mass unavailable",
           );
         }
         drop(logic);
@@ -461,7 +469,12 @@ pub unsafe extern "C" fn avkSimulationContext_debugECSPrint(
 ) {
   #[cfg(debug_assertions)]
   {
-    if ctx.is_null() || entity_count == 0 || comp_count == 0 || entity_ids.is_null() || comps.is_null() {
+    if ctx.is_null()
+      || entity_count == 0
+      || comp_count == 0
+      || entity_ids.is_null()
+      || comps.is_null()
+    {
       return;
     }
     let ctx_ref = unsafe { &*ctx };
@@ -475,11 +488,11 @@ pub unsafe extern "C" fn avkSimulationContext_debugECSPrint(
         oshal::log!("--- Entity {} ---", e_id);
         for &c_id in c_ids {
           if let Some(_) = scene_guard.scene.with_component_mut_by_id(entity, c_id, |erased| {
-             erased.debug_print();
+            erased.debug_print();
           }) {
-             // Successfully printed
+            // Successfully printed
           } else {
-             oshal::log!("Component {} not found", c_id);
+            oshal::log!("Component {} not found", c_id);
           }
         }
       }
@@ -652,7 +665,6 @@ pub unsafe extern "C" fn avkSimulationContext_transformStaticCamera(
     })
     .is_ok()
 }
-
 
 /// # Safety
 /// FFI Contract
@@ -1036,10 +1048,6 @@ pub unsafe extern "C" fn avkSimulationContext_removeParticleSystem(
 ///
 /// `command_flags` is a bitmask:
 /// - `0` — query only: write comet body entity id to `out_comet_id` and return.
-/// - `0x1` (ATTACH) — attach `AlmanacPlanet` to comet body, force-reposition to start_epoch,
-///   and queue trajectory generation. The `spk_id` C# field is carried by the matching
-///   `LogicCommand::InitComet` that C# sends first via `LoadAlmanac`. This flag signals
-///   the logic thread to finalise init.
 /// - `0x2` (DETACH) — remove `AlmanacPlanet` and `TrajectoryComponent`, reset comet to
 ///   1 AU +X default placement.
 ///
@@ -1075,16 +1083,6 @@ pub unsafe extern "C" fn avkSimulationContext_reconfigureComet(
     return true; // query only
   }
 
-  if command_flags & 0x1 != 0 {
-    // ATTACH — request the logic thread to attach AlmanacPlanet + force-reposition.
-    let _ = ctx_ref
-      .threads
-      .logic_thread
-      .tx()
-      .try_send(structs::LogicCommand::InitComet { scene_id, spk_id });
-    return true;
-  }
-
   if command_flags & 0x2 != 0 {
     // DETACH — remove AlmanacPlanet + TrajectoryComponent, reset comet subtree.
     let _ = ctx_ref
@@ -1094,6 +1092,42 @@ pub unsafe extern "C" fn avkSimulationContext_reconfigureComet(
       .try_send(structs::LogicCommand::CleanupComet { scene_id });
     return true;
   }
+
+  true
+}
+
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_tryInitComet(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  spk_id: i32,
+  proposed_range: *const external_state::CTimeRange,
+  out_comet_id: *mut u64,
+) -> bool {
+  if ctx.is_null() || proposed_range.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+
+  if !out_comet_id.is_null() {
+    let scenes = ctx_ref.scenes.read();
+    if let Some(scene_arc) = scenes.get_scene(scene_id)
+      && let Some(comet) = scene_arc.read().comet
+    {
+      unsafe { *out_comet_id = comet.body.as_ffi() };
+    }
+  }
+
+  let range = unsafe { *proposed_range };
+  let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::TryInitComet {
+    scene_id,
+    spk_id,
+    proposed_start: anise::time::Epoch::from_tai_parts(range.centuries[0], range.nanoseconds[0]),
+    proposed_end: anise::time::Epoch::from_tai_parts(range.centuries[1], range.nanoseconds[1]),
+  });
 
   true
 }
@@ -1823,7 +1857,11 @@ pub mod debug {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkDebug_isRenderDocAvailable() -> u8 {
-  if aethervk_core_rlib::gpu_backends::vulkan::renderdoc::is_available() { 1 } else { 0 }
+  if aethervk_core_rlib::gpu_backends::vulkan::renderdoc::is_available() {
+    1
+  } else {
+    0
+  }
 }
 
 /// Requests RenderDoc to save the next presented frame to a `.rdc` capture file.
@@ -1852,7 +1890,10 @@ pub unsafe extern "C" fn avkDebug_triggerCapture() {
 #[cfg(debug_assertions)]
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub unsafe extern "C" fn avkDebug_startScopedCapture(ctx: *mut SimulationContext, pe_id: u64) -> u8 {
+pub unsafe extern "C" fn avkDebug_startScopedCapture(
+  ctx: *mut SimulationContext,
+  pe_id: u64,
+) -> u8 {
   use aethervk_core_rlib::gpu_backends::vulkan::renderdoc;
   use aethervk_core_rlib::simulation_api::render_thread::channel_utils;
 
@@ -1877,20 +1918,20 @@ pub unsafe extern "C" fn avkDebug_startScopedCapture(ctx: *mut SimulationContext
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct CDebugTelemetryStatsDTO {
-    /// RSS physical RAM from /proc/self/statm (bytes)
-    pub os_physical_ram_bytes: u64,
-    /// Virtual address space from /proc/self/statm (bytes)
-    pub os_virtual_ram_bytes: u64,
-    /// CPU heap allocated via TrackingAllocator (bytes)
-    pub cpu_allocated_bytes: u64,
-    /// GPU VRAM allocated via VMA tracking (bytes)
-    pub gpu_allocated_bytes: u64,
-    /// Last logic-thread loop wall time (ms)
-    pub logic_thread_cpu_time_ms: f64,
-    /// Last render-thread CPU submission time (ms, NOT GPU execution time)
-    pub render_thread_cpu_time_ms: f64,
-    /// Reserved for future VK_QUERY_TYPE_TIMESTAMP GPU timing
-    pub reserved_gpu_execution_ms: f64,
+  /// RSS physical RAM from /proc/self/statm (bytes)
+  pub os_physical_ram_bytes: u64,
+  /// Virtual address space from /proc/self/statm (bytes)
+  pub os_virtual_ram_bytes: u64,
+  /// CPU heap allocated via TrackingAllocator (bytes)
+  pub cpu_allocated_bytes: u64,
+  /// GPU VRAM allocated via VMA tracking (bytes)
+  pub gpu_allocated_bytes: u64,
+  /// Last logic-thread loop wall time (ms)
+  pub logic_thread_cpu_time_ms: f64,
+  /// Last render-thread CPU submission time (ms, NOT GPU execution time)
+  pub render_thread_cpu_time_ms: f64,
+  /// Reserved for future VK_QUERY_TYPE_TIMESTAMP GPU timing
+  pub reserved_gpu_execution_ms: f64,
 }
 
 /// Query engine-side debug telemetry statistics.
@@ -1904,44 +1945,44 @@ pub struct CDebugTelemetryStatsDTO {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_getDebugTelemetryStats(
-    _ctx: isize,
-    out: *mut CDebugTelemetryStatsDTO,
+  _ctx: isize,
+  out: *mut CDebugTelemetryStatsDTO,
 ) -> bool {
-    if out.is_null() {
-        return false;
-    }
+  if out.is_null() {
+    return false;
+  }
 
-    use aethervk_oshal_rlib::os::memory;
-    use core::sync::atomic::Ordering;
+  use aethervk_oshal_rlib::os::memory;
+  use core::sync::atomic::Ordering;
 
-    let proc_mem = memory::query_process_memory();
-    let cpu_bytes = memory::tracking::CPU_ALLOCATED.load(Ordering::Relaxed) as u64;
-    let gpu_bytes = memory::tracking::GPU_ALLOCATED.load(Ordering::Relaxed) as u64;
+  let proc_mem = memory::query_process_memory();
+  let cpu_bytes = memory::tracking::CPU_ALLOCATED.load(Ordering::Relaxed) as u64;
+  let gpu_bytes = memory::tracking::GPU_ALLOCATED.load(Ordering::Relaxed) as u64;
 
-    let logic_ms = f64::from_bits(
-        aethervk_core_rlib::simulation_api::logic_thread::DEBUG_LOGIC_THREAD_TIME_MS
-            .load(Ordering::Relaxed),
-    );
-    let render_ms = f64::from_bits(
-        aethervk_core_rlib::gpu_backends::vulkan::DEBUG_RENDER_THREAD_CPU_TIME_MS
-            .load(Ordering::Relaxed),
-    );
+  let logic_ms = f64::from_bits(
+    aethervk_core_rlib::simulation_api::logic_thread::DEBUG_LOGIC_THREAD_TIME_MS
+      .load(Ordering::Relaxed),
+  );
+  let render_ms = f64::from_bits(
+    aethervk_core_rlib::gpu_backends::vulkan::DEBUG_RENDER_THREAD_CPU_TIME_MS
+      .load(Ordering::Relaxed),
+  );
 
-    let gpu_exec_ms = f64::from_bits(
-        aethervk_core_rlib::gpu_backends::vulkan::DEBUG_RENDER_THREAD_GPU_TIME_MS
-            .load(Ordering::Relaxed),
-    );
+  let gpu_exec_ms = f64::from_bits(
+    aethervk_core_rlib::gpu_backends::vulkan::DEBUG_RENDER_THREAD_GPU_TIME_MS
+      .load(Ordering::Relaxed),
+  );
 
-    unsafe {
-        *out = CDebugTelemetryStatsDTO {
-            os_physical_ram_bytes: proc_mem.physical_bytes,
-            os_virtual_ram_bytes: proc_mem.virtual_bytes,
-            cpu_allocated_bytes: cpu_bytes,
-            gpu_allocated_bytes: gpu_bytes,
-            logic_thread_cpu_time_ms: logic_ms,
-            render_thread_cpu_time_ms: render_ms,
-            reserved_gpu_execution_ms: gpu_exec_ms,
-        };
-    }
-    true
+  unsafe {
+    *out = CDebugTelemetryStatsDTO {
+      os_physical_ram_bytes: proc_mem.physical_bytes,
+      os_virtual_ram_bytes: proc_mem.virtual_bytes,
+      cpu_allocated_bytes: cpu_bytes,
+      gpu_allocated_bytes: gpu_bytes,
+      logic_thread_cpu_time_ms: logic_ms,
+      render_thread_cpu_time_ms: render_ms,
+      reserved_gpu_execution_ms: gpu_exec_ms,
+    };
+  }
+  true
 }

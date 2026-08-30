@@ -113,18 +113,18 @@ public partial class HorizonJplViewModel : TabItemViewModel
       return;
 
     var pdes = SelectedComet.PrimaryDesignation.Trim().Replace("/", "_").Replace(" ", "_");
-    var spkId = SelectedSpkRecord.RecordId.Trim();
+    var cmdId = SelectedSpkRecord.RecordId.Trim();  // JPL Horizons Record #, not NAIF SPK ID
     var start = _timelineService.StartDate;
     var stop = _timelineService.StopDate;
 
     var fileName =
-      $"spk-kernels/{pdes}-{spkId}-{start.ToString("yyyy-MM-dd")}-{stop.ToString("yyyy-MM-dd")}.spk";
+      $"spk-kernels/{pdes}-{cmdId}-{start.ToString("yyyy-MM-dd")}-{stop.ToString("yyyy-MM-dd")}.spk";
     var savePath = _localStorage.GetPersistentPath(fileName);
 
     IsDownloading = true;
     var success = await _horizonService.DownloadObservationAsync(
       pdes,
-      spkId,
+      cmdId,
       start,
       stop,
       savePath

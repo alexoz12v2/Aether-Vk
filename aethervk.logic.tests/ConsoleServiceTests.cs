@@ -15,7 +15,7 @@ public class ConsoleServiceTests
       .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
       .Callback<System.Action>(a => a());
     // Arrange
-    var service = new ConsoleService(dispatcherMock.Object);
+    using var service = new ConsoleService(dispatcherMock.Object);
 
     // Act
     service.Log("Test Message");
@@ -34,7 +34,7 @@ public class ConsoleServiceTests
       .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
       .Callback<System.Action>(a => a());
     // Arrange
-    var service = new ConsoleService(dispatcherMock.Object);
+    using var service = new ConsoleService(dispatcherMock.Object);
     service.Log("Msg 1");
     service.Log("Msg 2");
     System.Threading.Thread.Sleep(200);

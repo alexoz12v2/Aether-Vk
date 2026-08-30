@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
@@ -79,12 +80,19 @@ public class HorizonJplService
   /// <summary>Returns the session-scoped file path where a downloaded SPK .bsp should be saved.</summary>
   public string GetSpkSavePath(int naifId) => _storage.GetSessionPath($"spk_{naifId}.bsp");
 
+  private DateTime _lastCometFetch = DateTime.MinValue;
+
   // ═══════════════════════════════════════════════════════════════════════════
   //  1. COMET LIST  (SBDB JSON — only place we use JSON, because it's clean)
   // ═══════════════════════════════════════════════════════════════════════════
 
   public virtual async Task FetchCometsAsync()
   {
+    if (CometsData.Count > 0 && (DateTime.UtcNow - _lastCometFetch).TotalHours < 10)
+    {
+      return;
+    }
+
     var loadMsg = _breadcrumb.ShowLoadingMessage("Horizon API", "Downloading comet database…");
     try
     {
@@ -92,22 +100,43 @@ public class HorizonJplService
       const string cacheKey = "comets_list.json";
       var cachePath = _storage.GetPersistentPath(cacheKey);
 
-      string json;
+      bool useCache = false;
       if (File.Exists(cachePath))
       {
+        if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(cachePath)).TotalHours < 10)
+        {
+          useCache = true;
+        }
+        else
+        {
+          _console.Log("[HorizonJpl] Persistent cache is older than 10 hours, invalidating.");
+          File.Delete(cachePath);
+        }
+      }
+
+      string json;
+      if (useCache)
+      {
         _console.Log("[HorizonJpl] Loading comet list from persistent cache.");
-        json = File.ReadAllText(cachePath);
+        using (var reader = new StreamReader(cachePath))
+        {
+          json = await reader.ReadToEndAsync();
+        }
       }
       else
       {
         var url = $"{SbdbBase}?sb-kind=c&fields=full_name,pdes";
         _console.Log($"[HorizonJpl] GET {url}");
         using var resp = await _httpClient.GetAsync(url);
-        _breadcrumb.RemoveMessage(loadMsg);
-        loadMsg = null;
+
         if (!resp.IsSuccessStatusCode)
         {
-          await _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status {(int)resp.StatusCode}");
+          if (loadMsg != null)
+          {
+            _breadcrumb.RemoveMessage(loadMsg);
+            loadMsg = null;
+          }
+          _ = _breadcrumb.ShowMessageAsync("Horizon API Error", $"Status {(int)resp.StatusCode}");
           return;
         }
         json = await resp.Content.ReadAsStringAsync();
@@ -115,8 +144,22 @@ public class HorizonJplService
         await _storage.SavePersistentAsync(cacheKey, System.Text.Encoding.UTF8.GetBytes(json));
       }
 
-      ParseCometsJson(json);
-      await _breadcrumb.ShowMessageAsync(
+      var parsedList = await Task.Run(() => ParseCometsJson(json));
+      CometsData.Clear();
+      foreach (var item in parsedList)
+      {
+        CometsData.Add(item);
+      }
+
+      _lastCometFetch = DateTime.UtcNow;
+
+      if (loadMsg != null)
+      {
+        _breadcrumb.RemoveMessage(loadMsg);
+        loadMsg = null;
+      }
+
+      _ = _breadcrumb.ShowMessageAsync(
         "Horizon API",
         $"{CometsData.Count} comets loaded.",
         status: 1
@@ -126,8 +169,11 @@ public class HorizonJplService
     {
       _console.Log($"[HorizonJpl] FetchComets error: {ex.Message}");
       if (loadMsg != null)
+      {
         _breadcrumb.RemoveMessage(loadMsg);
-      await _breadcrumb.ShowMessageAsync("Horizon API Error", ex.Message, status: 3);
+        loadMsg = null;
+      }
+      _ = _breadcrumb.ShowMessageAsync("Horizon API Error", ex.Message, status: 3);
     }
     finally
     {
@@ -136,9 +182,9 @@ public class HorizonJplService
     }
   }
 
-  private void ParseCometsJson(string json)
+  private List<CometSearchResult> ParseCometsJson(string json)
   {
-    CometsData.Clear();
+    var list = new System.Collections.Generic.List<CometSearchResult>();
     try
     {
       using var doc = System.Text.Json.JsonDocument.Parse(json);
@@ -149,7 +195,7 @@ public class HorizonJplService
           var cols = row.EnumerateArray().ToArray();
           if (cols.Length >= 2)
           {
-            CometsData.Add(
+            list.Add(
               new CometSearchResult
               {
                 Name =
@@ -170,6 +216,7 @@ public class HorizonJplService
     {
       _console.Log($"[HorizonJpl] ParseComets: {ex.Message}");
     }
+    return list;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -189,7 +236,21 @@ public class HorizonJplService
     var cachePath = _storage.GetPersistentPath(cacheKey);
 
     string json;
+    bool useCache = false;
     if (File.Exists(cachePath))
+    {
+      if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(cachePath)).TotalHours < 10)
+      {
+        useCache = true;
+      }
+      else
+      {
+        _console.Log($"[HorizonJpl] SBDB cache expired for {cacheKey}, re-fetching.");
+        File.Delete(cachePath);
+      }
+    }
+
+    if (useCache)
     {
       _console.Log($"[HorizonJpl] SBDB cache hit: {cacheKey}");
       json = File.ReadAllText(cachePath);
@@ -210,6 +271,7 @@ public class HorizonJplService
       _console.Log($"[HorizonJpl] SBDB response ({json.Length} bytes)");
       await _storage.SavePersistentAsync(cacheKey, System.Text.Encoding.UTF8.GetBytes(json));
     }
+
 
     return ParseSmallBodyJson(json);
   }
@@ -446,6 +508,9 @@ public class HorizonJplService
         massKg = gm / 6.6743e-20; // G in km³/(kg·s²)
       else
       {
+        // For reference, the Rosetta mission measured the density of comet 67P/Churyumov–Gerasimenko to be about 533 kg/m³.
+        // If you want to make it even more robust, you could integrate an additional call to the sbdb.api to explicitly check for the density property, but keeping the 600 kg/m³ fallback for when it fails is exactly what you should be
+        Console.WriteLine("[WARNING] mass GM not found in small body object constants");
         double rm = radiusKm * 1000.0;
         massKg = (4.0 / 3.0) * Math.PI * rm * rm * rm * 600.0; // density 600 kg/m³
       }
@@ -758,19 +823,35 @@ public class HorizonJplService
   //  6. SPK BINARY DOWNLOAD
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // Note as second param you pass the JPL COMMAND Identifier, not SPK ID
+  // eg for 67/P: cmdId: 90000703, spkId: 10000012
   public async Task<string?> DownloadSpkByIdAsync(
     string pdes,
-    string spkId,
+    string cmdId,
     string savePath,
     string startTime,
     string stopTime
   )
   {
     // ── Persistent cache: SPK data is immutable for a given ID + epoch range ──
-    var cacheKey = $"spk_{Sanitize(spkId)}_{Sanitize(startTime)}_{Sanitize(stopTime)}.bsp";
+    var cacheKey = $"spk_{Sanitize(cmdId)}_{Sanitize(startTime)}_{Sanitize(stopTime)}.bsp";
     var cachePath = _storage.GetPersistentPath(cacheKey);
 
+    bool useCache = false;
     if (File.Exists(cachePath) && new FileInfo(cachePath).Length > 0)
+    {
+      if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(cachePath)).TotalHours < 10)
+      {
+        useCache = true;
+      }
+      else
+      {
+        _console.Log($"[HorizonJpl] SPK cache expired for {cacheKey}, invalidating.");
+        File.Delete(cachePath);
+      }
+    }
+
+    if (useCache)
     {
       _console.Log($"[HorizonJpl] SPK persistent cache hit: {cacheKey}");
       // Copy to caller-requested path if different
@@ -783,7 +864,7 @@ public class HorizonJplService
     {
       var start = Uri.EscapeDataString($"'{startTime}'");
       var stop = Uri.EscapeDataString($"'{stopTime}'");
-      var cmd = Uri.EscapeDataString($"'{spkId};'");
+      var cmd = Uri.EscapeDataString($"'{cmdId};'");
       var yes = Uri.EscapeDataString("'YES'");
       var no = Uri.EscapeDataString("'NO'");
       var spk = Uri.EscapeDataString("'SPK'");
@@ -832,10 +913,15 @@ public class HorizonJplService
       {
         if (!markerSeen)
         {
-          if (line.Contains("REFGL1NQ"))
+          // "REFGL1NQ" is the Base64 encoding of the "DAF/SPK" file magic number.
+          // We use TrimStart().StartsWith() instead of Contains() to ensure we don't 
+          // falsely trigger if this sequence coincidentally appears in the header text 
+          // (e.g. in the target name or a time string).
+          var trimmedLine = line.TrimStart();
+          if (trimmedLine.StartsWith("REFGL1NQ"))
           {
             markerSeen = true;
-            sb.Append(line.Trim());
+            sb.Append(trimmedLine.TrimEnd());
           }
           continue;
         }
@@ -896,7 +982,8 @@ public class HorizonJplService
 
   public async Task<bool> DownloadObservationAsync(
     string pdes,
-    string spkId,
+    // JPL Horizons Record # (e.g. 90000703), NOT NAIF SPK ID
+    string cmdId,
     DateTimeOffset start,
     DateTimeOffset stop,
     string savePath
@@ -908,11 +995,11 @@ public class HorizonJplService
       string startStr = start.ToString("yyyy-MM-dd");
       string stopStr = stop.ToString("yyyy-MM-dd");
 
-      var spkResult = await DownloadSpkByIdAsync(pdes, spkId, savePath, startStr, stopStr);
+      var spkResult = await DownloadSpkByIdAsync(pdes, cmdId, savePath, startStr, stopStr);
       if (spkResult == null)
         throw new Exception("SPK download failed.");
 
-      await FetchObjectDataAsync(spkId);
+      await FetchObjectDataAsync(cmdId);
       // EPA stored in ObjectData display; call FetchEpaAsync if needed separately
 
       await _breadcrumb.ShowMessageAsync(

@@ -14,6 +14,11 @@ public static class ServiceCollectionExtensions
 {
   public static void AddCommonServices(this IServiceCollection collection, bool skipNative = false)
   {
+    // Domain messenger singletons — each marker interface is its own injection token.
+    collection.AddSingleton<ICometMessenger, CometMessenger>();
+    collection.AddSingleton<IConsoleMessenger, ConsoleMessenger>();
+    collection.AddSingleton<ILayoutMessenger, LayoutMessenger>();
+
     collection.AddSingleton<IUiThreadDispatcher, AvaloniaUiThreadDispatcher>();
     collection.AddSingleton<IWindowService, AvaloniaWindowService>();
     collection.AddSingleton<IFileDialogService, AvaloniaFileDialogService>();
@@ -61,7 +66,10 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<ITranslationService, TranslationService>(provider =>
     {
       // if this is used elsewhere then add it as a singleton
-      var resourceManager = new ResourceManager("AetherVk.Logic.Resources.AppStrings", typeof(ITranslationService).Assembly);
+      var resourceManager = new ResourceManager(
+        "AetherVk.Logic.Resources.AppStrings",
+        typeof(ITranslationService).Assembly
+      );
       // TODO probably taken from global/local file config?
       var startCulture = new CultureInfo("en");
       return new TranslationService(resourceManager, startCulture);
@@ -75,16 +83,17 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<MainWindowViewModel>();
     collection.AddTransient<SplashViewModel>();
 
-    // Tabs
-    collection.AddTransient<ImportsTabViewModel>();
-    collection.AddTransient<TimelineTabViewModel>();
-    collection.AddTransient<CometTabViewModel>();
-    collection.AddTransient<ModelTabViewModel>();
-    collection.AddTransient<SettingsTabViewModel>();
-    collection.AddTransient<UITestPanelViewModel>();
-    collection.AddTransient<ConsoleViewModel>();
-    collection.AddTransient<DebugUiViewModel>();
-    collection.AddTransient<Viewport3DViewModel>();
+    // Tabs — AddScoped so each per-tab IServiceScope owns exactly one instance.
+    // The scope is created by TabFactory.CreateScopedTab() and disposed by TabGroupNodeViewModel.
+    collection.AddScoped<ImportsTabViewModel>();
+    collection.AddScoped<TimelineTabViewModel>();
+    collection.AddScoped<CometTabViewModel>();
+    collection.AddScoped<ModelTabViewModel>();
+    collection.AddScoped<SettingsTabViewModel>();
+    collection.AddScoped<UITestPanelViewModel>();
+    collection.AddScoped<ConsoleViewModel>();
+    collection.AddScoped<DebugUiViewModel>();
+    collection.AddScoped<Viewport3DViewModel>();
     collection.AddTransient<Func<Viewport3DViewModel, VulkanViewportControlViewModel>>(sp =>
     {
       var router = sp.GetRequiredService<IWindowInputRouter>();
@@ -94,12 +103,19 @@ public static class ServiceCollectionExtensions
     });
     collection.AddTransient<Func<Viewport3DViewModel, ViewportOverlayViewModel>>(sp =>
     {
-      var cameraService     = sp.GetRequiredService<CameraService>();
-      var runtimeService    = sp.GetRequiredService<INativeRuntimeService>();
+      var cameraService = sp.GetRequiredService<CameraService>();
+      var runtimeService = sp.GetRequiredService<INativeRuntimeService>();
       var breadcrumbService = sp.GetRequiredService<BreadcrumbService>();
-      var dispatcher        = sp.GetRequiredService<IUiThreadDispatcher>();
-      var fileDialog        = sp.GetRequiredService<IFileDialogService>();
-      return vm => new ViewportOverlayViewModel(cameraService, runtimeService, breadcrumbService, dispatcher, fileDialog, vm);
+      var dispatcher = sp.GetRequiredService<IUiThreadDispatcher>();
+      var fileDialog = sp.GetRequiredService<IFileDialogService>();
+      return vm => new ViewportOverlayViewModel(
+        cameraService,
+        runtimeService,
+        breadcrumbService,
+        dispatcher,
+        fileDialog,
+        vm
+      );
     });
   }
 
@@ -115,8 +131,8 @@ public static class ServiceCollectionExtensions
       var schedulers = sp.GetRequiredService<ISchedulerProvider>();
       var registry = new TabStateRegistry();
 
-      TabStateService<T> MakeService<T>() where T : class, ITabSession, new()
-        => new TabStateService<T>(schedulers);
+      TabStateService<T> MakeService<T>()
+        where T : class, ITabSession, new() => new TabStateService<T>(schedulers);
 
       var cometSvc = MakeService<CometSession>();
       var modelSvc = MakeService<ModelSession>();
@@ -145,18 +161,36 @@ public static class ServiceCollectionExtensions
 
     // Each ITabStateService<T> delegates to the already-built registry singleton so the
     // same object is always returned regardless of resolution order.
-    collection.AddSingleton<ITabStateService<CometSession>>(
-      sp => { sp.GetRequiredService<ITabStateRegistry>(); return _pendingCometSvc!; });
-    collection.AddSingleton<ITabStateService<ModelSession>>(
-      sp => { sp.GetRequiredService<ITabStateRegistry>(); return _pendingModelSvc!; });
-    collection.AddSingleton<ITabStateService<SettingsSession>>(
-      sp => { sp.GetRequiredService<ITabStateRegistry>(); return _pendingSettingsSvc!; });
-    collection.AddSingleton<ITabStateService<ImportsSession>>(
-      sp => { sp.GetRequiredService<ITabStateRegistry>(); return _pendingImportsSvc!; });
-    collection.AddSingleton<ITabStateService<TimelineSession>>(
-      sp => { sp.GetRequiredService<ITabStateRegistry>(); return _pendingTimelineSvc!; });
-    collection.AddSingleton<ITabStateService<ViewportSession>>(
-      sp => { sp.GetRequiredService<ITabStateRegistry>(); return _pendingViewportSvc!; });
+    collection.AddSingleton<ITabStateService<CometSession>>(sp =>
+    {
+      sp.GetRequiredService<ITabStateRegistry>();
+      return _pendingCometSvc!;
+    });
+    collection.AddSingleton<ITabStateService<ModelSession>>(sp =>
+    {
+      sp.GetRequiredService<ITabStateRegistry>();
+      return _pendingModelSvc!;
+    });
+    collection.AddSingleton<ITabStateService<SettingsSession>>(sp =>
+    {
+      sp.GetRequiredService<ITabStateRegistry>();
+      return _pendingSettingsSvc!;
+    });
+    collection.AddSingleton<ITabStateService<ImportsSession>>(sp =>
+    {
+      sp.GetRequiredService<ITabStateRegistry>();
+      return _pendingImportsSvc!;
+    });
+    collection.AddSingleton<ITabStateService<TimelineSession>>(sp =>
+    {
+      sp.GetRequiredService<ITabStateRegistry>();
+      return _pendingTimelineSvc!;
+    });
+    collection.AddSingleton<ITabStateService<ViewportSession>>(sp =>
+    {
+      sp.GetRequiredService<ITabStateRegistry>();
+      return _pendingViewportSvc!;
+    });
   }
 
   // Holding fields — set once inside the ITabStateRegistry factory lambda, effectively immutable after DI build.

@@ -300,9 +300,17 @@ public sealed class CameraService : IDisposable
     if (proj.IsPerspective)
     {
       float height = Math.Abs(proj.Top - proj.Bottom);
-      if (height < 1e-5f) height = 2f; // Fallback if 0
+      if (height < 1e-5f)
+        height = 2f; // Fallback if 0
       float width = height * _viewportAspect;
-      RequestOrthographicProjection(-width / 2f, width / 2f, -height / 2f, height / 2f, proj.Near, proj.Far);
+      RequestOrthographicProjection(
+        -width / 2f,
+        width / 2f,
+        -height / 2f,
+        height / 2f,
+        proj.Near,
+        proj.Far
+      );
     }
     else
     {
@@ -756,7 +764,14 @@ public sealed class CameraService : IDisposable
     if (proj.IsPerspective)
       RequestPerspectiveProjection(proj.Fov, _viewportAspect, proj.Near, proj.Far);
     else
-      RequestOrthographicProjection(proj.Left, proj.Right, proj.Bottom, proj.Top, proj.Near, proj.Far);
+      RequestOrthographicProjection(
+        proj.Left,
+        proj.Right,
+        proj.Bottom,
+        proj.Top,
+        proj.Near,
+        proj.Far
+      );
   }
 
   /// <summary>
@@ -786,6 +801,7 @@ public sealed class CameraService : IDisposable
     StopCometOrbitTracking(); // ensure only one subscription at a time
     _cometOrbitSubscription = _cometTracker
       .CometPositionRaw.Where(static pos => pos.HasValue)
+      .Sample(TimeSpan.FromMilliseconds(50), _schedulerProvider.Background)
       .Subscribe(pos => SnapCameraToOrbit(pos!.Value));
   }
 
@@ -806,7 +822,18 @@ public sealed class CameraService : IDisposable
       offset = _orbitOffset;
 
     var targetPos = cometPos + offset;
-    var worldFwd = Vector3.Normalize(cometPos - targetPos);
+
+    if (targetPos == cometPos)
+    {
+      // TODO: The target position has suffered from catastrophic cancellation in f32 addition.
+      // We should design a better coordinate system (e.g., using double/f64 for camera position)
+      // to handle large AU distances with microscopic offsets safely.
+      Console.WriteLine(
+        "[WARNING] CameraService: targetPos == cometPos due to f32 precision loss!"
+      );
+    }
+
+    var worldFwd = Vector3.Normalize(-offset);
     var worldUpHint = Math.Abs(worldFwd.Z) < 0.99f ? Vector3.UnitZ : -Vector3.UnitY;
     var worldRight = Vector3.Normalize(Vector3.Cross(worldUpHint, worldFwd));
     var worldUp = Vector3.Cross(worldFwd, worldRight);

@@ -33,6 +33,8 @@ aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = f
 image = "0.25.10"
 ntest = "*"
 approx = "*"
+reqwest = { version = "0.11", features = ["blocking"] }
+base64 = "0.21"
 
 [dependencies]
 dashmap = { version = "3.11.10", default-features = false, features = ["no_std"] }

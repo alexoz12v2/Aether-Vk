@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Numerics;
 using System.Reactive.Disposables;
+using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -95,6 +96,14 @@ public interface INativeRuntimeService : IDisposable
   // ==========================================
   // Simulation Flow Control
   // ==========================================
+
+  /// <summary>
+  /// Fires with the scene ID when a simulation scene becomes active after <see cref="StartSimulation"/>.
+  /// Observed on the native callback thread — use <c>ObserveOn(schedulerProvider.MainThread)</c>
+  /// before subscribing on the UI thread.
+  /// </summary>
+  IObservable<ulong> SimulationStateUpdated { get; }
+
   bool ResetSimulationSync();
   bool PauseSimulationSync();
   bool StartSimulation(int simSpeed);
@@ -326,7 +335,7 @@ public interface INativeRuntimeService : IDisposable
   /// </param>
   /// <returns><c>true</c> if the command was successfully enqueued.</returns>
   bool StartScopedRenderDocCapture(ulong presentationEngineId);
-  
+
   bool GetDebugTelemetryStats(out DebugTelemetryStats stats);
 #endif
 }
@@ -865,7 +874,8 @@ internal unsafe static class PInvokeAetherVkCore
   [return: MarshalAs(UnmanagedType.I1)]
   public static extern bool avkSimulationContext_getDebugTelemetryStats(
     IntPtr ctx,
-    out CDebugTelemetryStatsDTO stats);
+    out CDebugTelemetryStatsDTO stats
+  );
 #endif
 }
 
@@ -971,6 +981,12 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   /// <inheritdoc/>
   public CancellationToken ShutdownToken => _shutdownCts.Token;
+
+  // Fires when StartSimulation completes and the scene becomes active.
+  private readonly System.Reactive.Subjects.Subject<ulong> _simulationStateUpdated = new();
+
+  /// <inheritdoc/>
+  public IObservable<ulong> SimulationStateUpdated => _simulationStateUpdated.AsObservable();
 
   // ── Constructor ───────────────────────────────────────────────────────────
 
@@ -1808,19 +1824,35 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     }
   }
 
-  public unsafe void DebugECSPrint(uint entityCount, ulong[] entityIds, uint compCount, ulong[] comps)
+  public unsafe void DebugECSPrint(
+    uint entityCount,
+    ulong[] entityIds,
+    uint compCount,
+    ulong[] comps
+  )
   {
-    if (_ctx == 0) return;
+    if (_ctx == 0)
+      return;
     fixed (ulong* pEntities = entityIds)
     fixed (ulong* pComps = comps)
     {
-      PInvokeAetherVkCore.avkSimulationContext_debugECSPrint(_ctx, _sceneId, entityCount, pEntities, compCount, pComps);
+      PInvokeAetherVkCore.avkSimulationContext_debugECSPrint(
+        _ctx,
+        _sceneId,
+        entityCount,
+        pEntities,
+        compCount,
+        pComps
+      );
     }
   }
 
   public bool GetDebugTelemetryStats(out DebugTelemetryStats stats)
   {
-    if (_ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_getDebugTelemetryStats(_ctx, out var cStats))
+    if (
+      _ctx != 0
+      && PInvokeAetherVkCore.avkSimulationContext_getDebugTelemetryStats(_ctx, out var cStats)
+    )
     {
       stats = new DebugTelemetryStats(
         cStats.OsPhysicalRamBytes,
@@ -1846,6 +1878,7 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     // Signal shutdown to any in-flight async operations (CommitCometAsync, LoadAlmanacFileAsync)
     // before tearing down the native context, so they can abort rather than hanging.
     _shutdownCts.Cancel();
+    _simulationStateUpdated.Dispose();
     _instance = null;
     if (_ctx == 0)
     {
@@ -1913,13 +1946,13 @@ public record ScreenSpaceBillboard(
 
 #if DEBUG
 public sealed record DebugTelemetryStats(
-    ulong OsPhysicalRamBytes,
-    ulong OsVirtualRamBytes,
-    ulong CpuAllocatedBytes,
-    ulong GpuAllocatedBytes,
-    double LogicThreadCpuTimeMs,
-    double RenderThreadCpuTimeMs,
-    double ReservedGpuExecutionMs
+  ulong OsPhysicalRamBytes,
+  ulong OsVirtualRamBytes,
+  ulong CpuAllocatedBytes,
+  ulong GpuAllocatedBytes,
+  double LogicThreadCpuTimeMs,
+  double RenderThreadCpuTimeMs,
+  double ReservedGpuExecutionMs
 );
 #endif
 
