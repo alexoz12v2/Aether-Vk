@@ -320,30 +320,38 @@ pub struct SkyDrawCall {
 impl SkyDrawCall {
   const VERTEX_COUNT_VK: u32 = 3;
 
+  /// Builds the sky draw call from camera data and an optional parallax offset quaternion.
+  ///
+  /// # FOV
+  /// The sky always uses a fixed 90° FOV regardless of the scene's current FOV, so that
+  /// user-controlled zoom does not affect the sky's apparent angular size.
+  ///
+  /// # Parallax offset
+  /// `sky_rotation_offset` is a small extra rotation applied to the sky's view matrix
+  /// (on top of the camera's rotation) to create a motion-feedback "lag" effect. Pass
+  /// `Quat::identity()` for no effect.
   #[named]
-  pub fn from_camera(camera_data: &CameraRenderData, pipeline_key: PipelineKey) -> GpuResult<Self> {
-    let sky_view = camera_data.view.zeroed_translation();
+  pub fn from_camera(
+    camera_data: &CameraRenderData,
+    pipeline_key: PipelineKey,
+    sky_rotation_offset: Quat,
+  ) -> GpuResult<Self> {
+    // Sky view = camera orientation only (no translation — sky is "at infinity").
+    // Apply the parallax offset on top: the sky appears to slightly lag the camera.
+    let offset_mat = Mat4x4f32::from_quat_custom_frame::<Quat, Vec3f32>(sky_rotation_offset);
+    let sky_view = offset_mat * camera_data.view.zeroed_translation();
 
-    // For orthographic cameras we cannot use the actual projection for the sky:
-    // inv(ortho_proj)*NDC gives view-space *positions* (parallel rays), so all
-    // pixels sample nearly the same sky direction producing a flat / extreme-fisheye
-    // look. Use a fixed 90° perspective proj for the sky direction computation so the
-    // environment map always appears spherical, regardless of scene projection.
-    let sky_proj = match camera_data.projection_params {
-      CameraProjectionParams::Perspective { fov, aspect_ratio } => {
-        Mat4x4f32::perspective_vk_reverse_z(fov, aspect_ratio, camera_data.near, camera_data.far)
-      }
-      CameraProjectionParams::Orthographic { .. } => {
-        let aspect = camera_data.window_extent[0] as f32
-          / camera_data.window_extent[1].max(1) as f32;
-        // 90° FOV gives a natural-looking sky for a top-down orthographic view.
-        Mat4x4f32::perspective_vk_reverse_z(
-          core::f32::consts::FRAC_PI_2,
-          aspect,
-          camera_data.near,
-          camera_data.far,
-        )
-      }
+    // For both perspective and orthographic cameras the sky uses a fixed 90° FOV so
+    // that user zoom (narrow/wide FOV) does not affect the apparent sky scale.
+    let sky_proj = {
+      let aspect = camera_data.window_extent[0] as f32
+        / camera_data.window_extent[1].max(1) as f32;
+      Mat4x4f32::perspective_vk_reverse_z(
+        core::f32::consts::FRAC_PI_2,
+        aspect,
+        camera_data.near,
+        camera_data.far,
+      )
     };
 
     let sky_view_proj = sky_proj * sky_view;
@@ -357,6 +365,109 @@ impl SkyDrawCall {
       inv_view_proj_mat,
       vertex_count: Self::VERTEX_COUNT_VK,
     })
+  }
+}
+
+/// Per-PE sky parallax state maintained across frames by the render thread.
+///
+/// On each frame, call [`SkyParallaxState::update`] with the camera's current
+/// absolute world position and the frame delta-time to get the rotation offset
+/// quaternion to pass into [`SkyDrawCall::from_camera`].
+pub struct SkyParallaxState {
+  /// Exponentially low-pass–filtered camera velocity (world units / second).
+  smoothed_velocity: Vec3f32,
+  /// Current parallax yaw offset in radians (rotation around world-Z / up).
+  current_yaw: f32,
+  /// Current parallax pitch offset in radians (rotation around world-X / right).
+  current_pitch: f32,
+  /// Camera absolute position from the previous frame, for velocity estimation.
+  last_cam_pos: Vec3f32,
+  /// Whether `last_cam_pos` has been initialized (false on the very first frame).
+  initialized: bool,
+}
+
+impl Default for SkyParallaxState {
+  fn default() -> Self {
+    Self {
+      smoothed_velocity: Vec3f32::from_components(0.0, 0.0, 0.0),
+      current_yaw: 0.0,
+      current_pitch: 0.0,
+      last_cam_pos: Vec3f32::from_components(0.0, 0.0, 0.0),
+      initialized: false,
+    }
+  }
+}
+
+impl SkyParallaxState {
+  /// Radians of sky rotation per (world-unit / second) of camera velocity.
+  /// Tweak this to make the effect stronger or weaker.
+  const SENSITIVITY: f32 = 0.003;
+
+  /// Time constant for the exponential decay back to neutral (seconds).
+  /// Smaller = snappier return.
+  const DECAY_TAU: f32 = 0.2;
+
+  /// Hard angular cap on the parallax offset (≈ 5°).
+  const MAX_OFFSET_RAD: f32 = 0.0873;
+
+  /// Low-pass alpha for velocity smoothing (per-frame blend factor).
+  /// Lower = smoother but more lag.
+  const VEL_ALPHA: f32 = 0.15;
+
+  /// Update state with the camera's new absolute position and the frame delta time.
+  /// Returns the rotation quaternion to apply to the sky view, or the identity
+  /// quaternion when dt is too small to compute a meaningful update.
+  pub fn update(&mut self, new_cam_pos: Vec3f32, dt_s: f32) -> Quat {
+    use aethervk_oshal_rlib::math::{
+      quaternion::Quaternion as _,
+      vector::{Vector, Vector3},
+    };
+
+    if dt_s < 1e-6 {
+      // Return the last computed offset without recomputing.
+      return Self::compose_yaw_pitch(self.current_yaw, self.current_pitch);
+    }
+
+    // ── Velocity estimation ──────────────────────────────────────────────────
+    let raw_velocity = if self.initialized {
+      (new_cam_pos - self.last_cam_pos) * (1.0 / dt_s)
+    } else {
+      // Skip velocity on the very first frame to avoid a huge transient.
+      self.initialized = true;
+      Vec3f32::from_components(0.0, 0.0, 0.0)
+    };
+    self.last_cam_pos = new_cam_pos;
+
+    // Exponential low-pass filter on raw velocity.
+    let alpha = Self::VEL_ALPHA;
+    self.smoothed_velocity = self.smoothed_velocity * (1.0 - alpha) + raw_velocity * alpha;
+
+    // ── Target offset angles (yaw from X-velocity, pitch from Z-velocity) ───
+    let vel = self.smoothed_velocity;
+    let target_yaw =
+      (-(vel.x()) * Self::SENSITIVITY).clamp(-Self::MAX_OFFSET_RAD, Self::MAX_OFFSET_RAD);
+    let target_pitch =
+      (-(vel.z()) * Self::SENSITIVITY).clamp(-Self::MAX_OFFSET_RAD, Self::MAX_OFFSET_RAD);
+
+    // ── Exponential decay toward target, operating on scalars ────────────────
+    // Storing yaw/pitch directly avoids any decompose round-trip: the identity
+    // corresponds to (0, 0) here, so there is no constant-offset bug.
+    let decay = (-dt_s / Self::DECAY_TAU).exp();
+    self.current_yaw = self.current_yaw * decay + target_yaw * (1.0 - decay);
+    self.current_pitch = self.current_pitch * decay + target_pitch * (1.0 - decay);
+
+    Self::compose_yaw_pitch(self.current_yaw, self.current_pitch)
+  }
+
+  /// Build a quaternion from a yaw (Z-axis) and pitch (X-axis) angle in radians.
+  /// No roll is introduced to avoid instability.
+  fn compose_yaw_pitch(yaw: f32, pitch: f32) -> Quat {
+    use aethervk_oshal_rlib::math::quaternion::Quaternion as _;
+    let up = Vec3f32::from_components(0.0, 0.0, 1.0);
+    let right = Vec3f32::from_components(1.0, 0.0, 0.0);
+    let q_yaw = Quat::from_axis_angle(up, yaw);
+    let q_pitch = Quat::from_axis_angle(right, pitch);
+    (q_yaw * q_pitch).normalize()
   }
 }
 
@@ -1076,8 +1187,9 @@ pub fn render_frame(
     .iter()
     .find_map(|l| l.sun_call.as_ref().map(|s| s.sun_pos()));
 
-  // ── Multi-layer compositing mode (always 3 subpasses now) ─────────
-  // Subpass 0: draw the macro layer (layer_index == 0)
+  // ── Multi-layer compositing mode (always 3 subpasses) ──────────────────
+  // ── Subpass 0: macro layer (AU-scale) ──────────────────────────────────
+  device.debug_label_begin(cmd_buffer, c"[SP0] Macro Layer", [0.2, 0.6, 1.0, 1.0]);
   if let Some(macro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 0) {
     draw_layer_content(
       device,
@@ -1088,6 +1200,7 @@ pub fn render_frame(
       global_sun_pos,
     )?;
   }
+  device.debug_label_end(cmd_buffer);
 
   // Transition to subpass 1 (micro)
   device.next_subpass(cmd_buffer)?;
@@ -1100,7 +1213,8 @@ pub fn render_frame(
     &gpu::Rect2D::from_extent(render_scene.window_extent),
   )?;
 
-  // Subpass 1: draw the micro layer (layer_index == 1)
+  // ── Subpass 1: micro layer (km-scale) ──────────────────────────────────
+  device.debug_label_begin(cmd_buffer, c"[SP1] Micro Layer", [0.2, 1.0, 0.4, 1.0]);
   if let Some(micro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 1) {
     draw_layer_content(
       device,
@@ -1111,6 +1225,7 @@ pub fn render_frame(
       global_sun_pos,
     )?;
   }
+  device.debug_label_end(cmd_buffer);
 
   // Transition to subpass 2 (composite + UI)
   device.next_subpass(cmd_buffer)?;
@@ -1123,7 +1238,10 @@ pub fn render_frame(
     &gpu::Rect2D::from_extent(render_scene.window_extent),
   )?;
 
-  // Draw fullscreen composite triangle to merge macro+micro
+  // ── Subpass 2: composite + UI ───────────────────────────────────────────
+  device.debug_label_begin(cmd_buffer, c"[SP2] Composite + UI", [1.0, 0.6, 0.2, 1.0]);
+
+  // Draw fullscreen composite triangle to merge macro+micro layers
   let macro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 0);
   let micro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 1);
   let constants = gpu::CompositePushConstants {
@@ -1153,7 +1271,7 @@ pub fn render_frame(
     )?;
   }
 
-  // ── UI / Text (always drawn last, in the final subpass) ────────────
+  // ── UI / Text (always drawn last, in the composite subpass) ────────────
   if let Some(draw_call) = &render_scene.ui_call {
     do_draw_ui_batch(
       device,
@@ -1181,6 +1299,8 @@ pub fn render_frame(
       ],
     )?;
   }
+
+  device.debug_label_end(cmd_buffer);
 
   Ok(())
 }
@@ -1223,10 +1343,15 @@ fn draw_layer_content(
   let layer_camera = render_scene.camera_data.rebuild_for_layer(layer.near, layer.far);
 
   if let Some(draw_call) = &layer.background_call {
+    device.debug_label_insert(cmd_buffer, c"Background", [0.15, 0.15, 0.15, 1.0]);
     do_draw_background(device, cmd_buffer, handle, draw_call)?;
   }
   if let Some(draw_call) = &layer.sky_call {
+    device.debug_label_insert(cmd_buffer, c"Sky", [0.2, 0.4, 0.9, 1.0]);
     do_draw_sky(device, cmd_buffer, handle, draw_call)?;
+  }
+  if !layer.draw_calls.is_empty() {
+    device.debug_label_insert(cmd_buffer, c"Static Meshes", [0.7, 0.7, 0.7, 1.0]);
   }
   for draw_call in &layer.draw_calls {
     do_draw_call2(
@@ -1258,6 +1383,7 @@ fn draw_layer_content(
   }
 
   if !layer.billboard_calls.is_empty() {
+    device.debug_label_insert(cmd_buffer, c"Billboards", [0.9, 0.5, 0.9, 1.0]);
     device.prepare_billboard_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
     for billboard_call in &layer.billboard_calls {
       do_draw_billboard(device, &layer_camera, cmd_buffer, handle, billboard_call)?;
@@ -1265,6 +1391,7 @@ fn draw_layer_content(
   }
 
   if !layer.gizmo_calls.is_empty() {
+    device.debug_label_insert(cmd_buffer, c"Gizmos", [0.5, 0.9, 0.9, 1.0]);
     device.prepare_gizmo_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
     for draw_call in &layer.gizmo_calls {
       do_draw_gizmo(device, &layer_camera, cmd_buffer, handle, draw_call)?;
@@ -1272,18 +1399,26 @@ fn draw_layer_content(
   }
 
   if let Some(batch_call) = &layer.sphere_gizmo_batch_call {
+    device.debug_label_insert(cmd_buffer, c"Sphere Gizmos", [1.0, 0.8, 0.0, 1.0]);
     do_draw_sphere_gizmo_batch(device, &layer_camera, cmd_buffer, handle, batch_call)?;
   }
 
+  if !layer.measurement_calls.is_empty() {
+    device.debug_label_insert(cmd_buffer, c"Measurements", [0.6, 0.9, 0.6, 1.0]);
+  }
   for measurement_call in &layer.measurement_calls {
     do_draw_measurement(device, &layer_camera, cmd_buffer, handle, measurement_call)?;
   }
 
+  if !layer.marker_calls.is_empty() {
+    device.debug_label_insert(cmd_buffer, c"Markers", [0.9, 0.9, 0.4, 1.0]);
+  }
   for marker_call in &layer.marker_calls {
     do_draw_marker(device, &layer_camera, cmd_buffer, handle, marker_call)?;
   }
 
   if let Some(draw_call) = &layer.trajectory_call {
+    device.debug_label_insert(cmd_buffer, c"Trajectories", [0.0, 0.8, 0.5, 1.0]);
     do_draw_trajectory_batch(
       device,
       &layer_camera,
@@ -1297,10 +1432,11 @@ fn draw_layer_content(
     )?;
   }
 
-  // End of opaque Stuff, beginning semitransparent/transparent stuff
+  // End of opaque stuff, beginning semitransparent/transparent stuff
 
   // particles here (transparency)
   if !layer.dust_calls.is_empty() {
+    device.debug_label_insert(cmd_buffer, c"Particles", [0.8, 0.3, 0.1, 1.0]);
     do_draw_dust_batch(
       device.as_any().downcast_ref().unwrap(),
       cmd_buffer,
@@ -1312,6 +1448,7 @@ fn draw_layer_content(
 
   // Draw Sun Volume after opaque meshes so it properly blends over them instead of being overwritten
   if let Some(draw_call) = &layer.sun_call {
+    device.debug_label_insert(cmd_buffer, c"Sun", [1.0, 0.9, 0.1, 1.0]);
     do_draw_sun(device, &layer_camera, cmd_buffer, handle, draw_call)?;
   }
 

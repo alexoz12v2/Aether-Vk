@@ -48,10 +48,12 @@ public sealed class CometConfigService : IDisposable
   private record class PendingState(
     TaskCompletionSource<bool>? CommitTcs,
     int SpkId,
-    string? FilePath
+    string? FilePath,
+    TimeRange? ProposedRange,
+    Models.SmallBodyDataComponent? SbData
   );
 
-  private PendingState? _pendingState = new(null, 0, null);
+  private PendingState? _pendingState = new(null, 0, null, null, null);
 
   // Last committed values (used for decommit)
   private int _lastCommittedSpkId;
@@ -60,10 +62,7 @@ public sealed class CometConfigService : IDisposable
   // ── Listener token ────────────────────────────────────────────────────────
 
   private readonly IDisposable _almanacListenerToken;
-
-  // ── Messenger ─────────────────────────────────────────────────────────────
-
-  public StrongReferenceMessenger Messenger { get; } = new();
+  private readonly IDisposable _cometInitListenerToken;
 
   // ── Constructor ───────────────────────────────────────────────────────────
 
@@ -80,6 +79,11 @@ public sealed class CometConfigService : IDisposable
     _almanacListenerToken = runtimeService.RegisterExternalStateListener(
       ExternalStateType.AlmanacImported,
       HandleAlmanacImportedCallback
+    );
+    
+    _cometInitListenerToken = runtimeService.RegisterExternalStateListener(
+      ExternalStateType.CometInitialized,
+      HandleCometInitializedCallback
     );
   }
 
@@ -120,12 +124,14 @@ public sealed class CometConfigService : IDisposable
   public async Task<bool> CommitCometAsync(
     string spkFilePath,
     int naifId,
+    TimeRange proposedRange,
+    Models.SmallBodyDataComponent sbData,
     CancellationToken ct = default
   )
   {
     // Allow only one concurrent commit.
     var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-    Volatile.Write(ref _pendingState, new PendingState(tcs, naifId, spkFilePath));
+    Volatile.Write(ref _pendingState, new PendingState(tcs, naifId, spkFilePath, proposedRange, sbData));
 
     try
     {
@@ -227,27 +233,50 @@ public sealed class CometConfigService : IDisposable
       return;
 
     int spkId = PendingSpkId;
-    string? filePath = PendingFilePath;
+    var pendingSnapshot = Volatile.Read(ref _pendingState);
+    var proposedRange = pendingSnapshot?.ProposedRange;
+    var sbData = pendingSnapshot?.SbData;
 
     try
     {
-      // Step 2 — tell the Rust logic thread to attach AlmanacPlanet + force-reposition.
-      bool attached = _runtimeService.ReconfigureComet(commandFlags: 0x1, spkId: spkId, out _);
-
-      if (attached)
+      if (proposedRange is null || sbData is null)
       {
-        _lastCommittedSpkId = spkId;
-        _lastCommittedFilePath = filePath;
-        _isCommittedSubject.OnNext(true);
-        _committedSpkIdSubject.OnNext(spkId);
-        pending.TrySetResult(true);
+         pending.TrySetResult(false);
+         return;
       }
-      else
+      
+      // Step 2 — tell the Rust logic thread to begin Phase 1 of Two-Phase Commit
+      bool ok = _runtimeService.TryInitComet(spkId, proposedRange, sbData, out _);
+
+      if (!ok)
       {
         pending.TrySetResult(false);
       }
+      // If ok, we DO NOT resolve PendingTcs yet. We wait for CometInitialized callback.
     }
     catch
+    {
+      pending.TrySetResult(false);
+    }
+  }
+  
+  private unsafe void HandleCometInitializedCallback(nint dataPtr)
+  {
+    var pending = PendingTcs;
+    if (pending is null)
+      return; // no commit in flight — ignore
+      
+    var dto = *(CCometInitializedDTO*)dataPtr;
+    
+    if (dto.Success != 0)
+    {
+      _lastCommittedSpkId = PendingSpkId;
+      _lastCommittedFilePath = PendingFilePath;
+      _isCommittedSubject.OnNext(true);
+      _committedSpkIdSubject.OnNext(PendingSpkId);
+      pending.TrySetResult(true);
+    }
+    else
     {
       pending.TrySetResult(false);
     }
@@ -267,7 +296,7 @@ public sealed class CometConfigService : IDisposable
   }
 
   private void UpdateTcs(TaskCompletionSource<bool>? newTcs) =>
-    UpdateState(c => c == null ? new PendingState(newTcs, 0, null) : c with { CommitTcs = newTcs });
+    UpdateState(c => c == null ? new PendingState(newTcs, 0, null, null, null) : c with { CommitTcs = newTcs });
 
   private TaskCompletionSource<bool>? PendingTcs => Volatile.Read(ref _pendingState)?.CommitTcs;
 
@@ -280,6 +309,7 @@ public sealed class CometConfigService : IDisposable
   public void Dispose()
   {
     _almanacListenerToken.Dispose();
+    _cometInitListenerToken.Dispose();
     _isCommittedSubject.Dispose();
     _committedSpkIdSubject.Dispose();
   }

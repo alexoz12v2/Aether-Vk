@@ -129,6 +129,16 @@ public partial class App : Application
               );
             var mainWindow = new MainWindow { DataContext = mainWindowViewModel };
 
+            // Sync OS theme state for the first-click bug fix
+            mainWindowViewModel.IsSystemThemeDark = Current!.ActualThemeVariant == ThemeVariant.Dark;
+            Current.ActualThemeVariantChanged += (s, e) =>
+            {
+                if (mainWindowViewModel.CurrentTheme == AppTheme.System)
+                {
+                    mainWindowViewModel.IsSystemThemeDark = Current.ActualThemeVariant == ThemeVariant.Dark;
+                }
+            };
+
             // Listen for theme changes in the ViewModel
             mainWindowViewModel.PropertyChanged += (vmSender, vmArgs) =>
             {
@@ -240,6 +250,17 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   public void ResizeViewport(ulong presentationEngineId, uint width, uint height) { }
 
+  public bool TryInitComet(
+    int spkId,
+    TimeRange proposedRange,
+    AetherVk.Logic.Models.SmallBodyDataComponent sbData,
+    out ulong cometBodyId
+  )
+  {
+    cometBodyId = 3;
+    return true;
+  }
+
   public bool ResetSimulationSync() => true;
 
   public bool PauseSimulationSync() => true;
@@ -304,6 +325,12 @@ public class MockNativeRuntimeService : INativeRuntimeService
   }
 
   public bool RemoveParticleSystem(ulong psId) => true;
+
+  public bool TryInitComet(int spkId, TimeRange proposedRange, out ulong cometBodyId)
+  {
+    cometBodyId = 0;
+    return true;
+  }
 
   public bool ReconfigureComet(int commandFlags, int spkId, out ulong cometBodyId)
   {

@@ -617,6 +617,9 @@ internal static class PInvokeCoreGraphics
   [DllImport(CoreGraphics, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern nint CGColorCreateGenericRGB(double red, double green, double blue, double alpha);
 
+  [DllImport(CoreGraphics, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern void CGWarpMouseCursorPosition(PInvokeObjC.CGPoint newCursorPosition);
+
   /// <summary>
   /// Decrements the retain count of a `CGColorRef`. Functionally equivalient to `CFRelease`,
   /// opposite to `CGColorRetain`

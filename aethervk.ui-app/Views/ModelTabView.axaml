@@ -60,8 +60,18 @@
     <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16">
 
       <!-- ══════════════════ SUN ══════════════════════════════════════════════ -->
-      <Border Classes="accordion">
-        <Expander>
+      <Border Background="Transparent" IsHitTestVisible="{Binding !EnableLegacyExpanders}">
+        <FlyoutBase.AttachedFlyout>
+          <Flyout Placement="Right">
+            <TextBlock MaxWidth="280" TextWrapping="Wrap"
+                       Text="This legacy panel is disabled. The simulation now automatically computes the positions of the Comet, Earth, and Sun using exact NASA JPL Horizon SPK ephemeris kernels across the epoch timeline. Procedural overrides for relative properties like Subsolar Latitude and distance are implicitly calculated by the engine and no longer require manual input." />
+          </Flyout>
+        </FlyoutBase.AttachedFlyout>
+        <i:Interaction.Behaviors>
+          <b:ShowFlyoutOnHoverBehavior DelayMs="500" />
+        </i:Interaction.Behaviors>
+        <Border Classes="accordion" IsEnabled="{Binding EnableLegacyExpanders}">
+          <Expander>
           <Expander.Header>
             <StackPanel Orientation="Horizontal" Spacing="4">
               <TextBlock Text="{Binding StrSun}" />
@@ -112,11 +122,22 @@
             </TextBox>
           </Grid>
         </Expander>
+        </Border>
       </Border>
 
       <!-- ══════════════════ NUCLEUS AND SPIN AXIS ═══════════════════════════ -->
-      <Border Classes="accordion">
-        <Expander>
+      <Border Background="Transparent" IsHitTestVisible="{Binding !EnableLegacyExpanders}">
+        <FlyoutBase.AttachedFlyout>
+          <Flyout Placement="Right">
+            <TextBlock MaxWidth="280" TextWrapping="Wrap"
+                       Text="This legacy panel is disabled. The IAU Rotational Model (Pole RA/Dec, Prime Meridian, and rotation rates) is now automatically parametrized and editable within the Comet tab upon committing a comet SPK." />
+          </Flyout>
+        </FlyoutBase.AttachedFlyout>
+        <i:Interaction.Behaviors>
+          <b:ShowFlyoutOnHoverBehavior DelayMs="500" />
+        </i:Interaction.Behaviors>
+        <Border Classes="accordion" IsEnabled="{Binding EnableLegacyExpanders}">
+          <Expander>
           <Expander.Header>
             <TextBlock Text="Nucleus and Spin Axis" />
           </Expander.Header>
@@ -180,6 +201,7 @@
             </TextBox>
           </Grid>
         </Expander>
+        </Border>
       </Border>
 
       <!-- ══════════════════ DUST ═════════════════════════════════════════════ -->
@@ -197,17 +219,16 @@
               <TextBlock Grid.Column="0"
                          Text="Nucleus Radius"
                          VerticalAlignment="Center" />
-              <Panel Grid.Column="2" Classes="unit-overlay">
-                <NumericUpDown Value="{Binding ManualNucleusRadiusKmNullable}"
-                               Minimum="0.001"
-                               Maximum="1000"
-                               Increment="0.1"
-                               FormatString="0.###"
-                               Watermark="(from Horizon)"
-                               HorizontalContentAlignment="Center"
-                               ToolTip.Tip="Bounding-sphere radius of the comet nucleus in km.&#x0A;Auto-filled from Horizon when a comet is committed. Override here if needed before committing." />
-                <TextBlock Classes="unit-of-measurement" Text="km" />
-              </Panel>
+              <controls:UnboundedSlider Grid.Column="2"
+                                        Value="{Binding ManualNucleusRadiusKmNullable}"
+                                        HasBounds="True"
+                                        MinBound="0.1"
+                                        MaxBound="100.0"
+                                        ToolTip.Tip="Bounding-sphere radius of the comet nucleus in km.&#x0A;Auto-filled from Horizon when a comet is committed. Override here if needed before committing.">
+                <controls:UnboundedSlider.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="km" />
+                </controls:UnboundedSlider.InnerRightContent>
+              </controls:UnboundedSlider>
             </Grid>
 
             <!-- Warning: no radius known yet -->
@@ -227,12 +248,24 @@
                          FontWeight="SemiBold"
                          Foreground="{DynamicResource Text.Secondary}"
                          VerticalAlignment="Center" />
-              <Button Grid.Column="1"
-                      Classes="accent"
-                      Command="{Binding AddJetCommand}"
-                      ToolTip.Tip="Add a new dust emission jet"
-                      Padding="10,2"
-                      Content="+" />
+              <Panel Grid.Column="1">
+                <Button Classes="accent"
+                        Command="{Binding AddJetCommand}"
+                        ToolTip.Tip="Add a new dust emission jet"
+                        Padding="10,2"
+                        Content="+" />
+
+                <Border Background="Transparent" IsHitTestVisible="{Binding !IsCometCommitted}">
+                  <FlyoutBase.AttachedFlyout>
+                    <Flyout>
+                      <TextBlock Text="Commit a comet first in the Almanac tab to add jets." MaxWidth="250" TextWrapping="Wrap" />
+                    </Flyout>
+                  </FlyoutBase.AttachedFlyout>
+                  <i:Interaction.Behaviors>
+                    <b:ShowFlyoutOnHoverBehavior />
+                  </i:Interaction.Behaviors>
+                </Border>
+              </Panel>
             </Grid>
 
             <!-- ──── Jet list ─────────────────────────────────────────────── -->
@@ -409,7 +442,7 @@
               <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
                 <TextBox>
                   <i:Interaction.Behaviors>
-                    <b:NumericTextBoxBehavior Minimum="0.00001" />
+                    <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DensityGCm3}" Minimum="0.00001" Maximum="7.0" />
                   </i:Interaction.Behaviors>
                 </TextBox>
                 <TextBlock Classes="unit-of-measurement" Text="g/cm³" />
@@ -419,7 +452,7 @@
               <Panel Grid.Row="2" Grid.Column="2" Classes="unit-overlay">
                 <TextBox>
                   <i:Interaction.Behaviors>
-                    <b:NumericTextBoxBehavior Minimum="0.0001" Maximum="10000" />
+                    <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DiametreUm}" Minimum="0.0001" Maximum="10000" />
                   </i:Interaction.Behaviors>
                 </TextBox>
                 <TextBlock Classes="unit-of-measurement" Text="μm" />
@@ -428,7 +461,7 @@
               <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrAlbedo}" />
               <TextBox Grid.Row="4" Grid.Column="2">
                 <i:Interaction.Behaviors>
-                  <b:NumericTextBoxBehavior Minimum="0.5" Maximum="2" />
+                  <b:NumericTextBoxBehavior Value="{Binding CurrentSession.ScatteringEfficiency}" Minimum="0.5" Maximum="2" />
                 </i:Interaction.Behaviors>
               </TextBox>
 
@@ -436,7 +469,7 @@
               <Panel Grid.Row="6" Grid.Column="2" Classes="unit-overlay">
                 <TextBox>
                   <i:Interaction.Behaviors>
-                    <b:NumericTextBoxBehavior Minimum="1" Maximum="2000000" />
+                    <b:NumericTextBoxBehavior Value="{Binding CurrentSession.Afrho0Cm}" Minimum="1" Maximum="2000000" />
                   </i:Interaction.Behaviors>
                 </TextBox>
                 <TextBlock Classes="unit-of-measurement" Text="cm" />
@@ -445,19 +478,9 @@
               <TextBlock Grid.Row="8" Grid.Column="0" Text="Afρ power" />
               <TextBox Grid.Row="8" Grid.Column="2">
                 <i:Interaction.Behaviors>
-                  <b:NumericTextBoxBehavior Minimum="1" Maximum="4" />
+                  <b:NumericTextBoxBehavior Value="{Binding CurrentSession.AfrhoPower}" Minimum="1" Maximum="4" />
                 </i:Interaction.Behaviors>
               </TextBox>
-
-              <!-- Computed properties -->
-              <TextBlock Grid.Row="10" Grid.Column="0" Text="{Binding StrBeta}" />
-              <TextBox Grid.Row="10" Grid.Column="2" Classes="computed" />
-
-              <TextBlock Grid.Row="12" Grid.Column="0" Text="{Binding StrAcceleration}" />
-              <Panel Grid.Row="12" Grid.Column="2" Classes="unit-overlay">
-                <TextBox Classes="computed" />
-                <TextBlock Classes="unit-of-measurement" Text="m/s²" />
-              </Panel>
 
             </Grid>
           </StackPanel>

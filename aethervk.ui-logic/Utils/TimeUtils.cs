@@ -35,4 +35,22 @@ public static class TimeUtils
     ulong nanoseconds = (ulong)remainderTicks * 100UL;
     return ((short)centuries, nanoseconds);
   }
+
+  /// <summary>
+  /// Converts TAI parts back to a DateTimeOffset.
+  /// </summary>
+  public static DateTimeOffset FromTaiParts(short centuries, ulong nanoseconds)
+  {
+    long ticksPerCentury = TimeSpan.TicksPerDay * 36525L;
+    long ticks = (long)centuries * ticksPerCentury + (long)(nanoseconds / 100UL);
+    return J2000.AddTicks(ticks);
+  }
+
+  /// <summary>
+  /// Formats TAI parts as a UTC display string.
+  /// </summary>
+  public static string FormatTaiEpoch(short centuries, ulong nanoseconds)
+  {
+    return FromTaiParts(centuries, nanoseconds).ToString("yyyy-MM-dd HH:mm");
+  }
 }

@@ -52,9 +52,15 @@ public sealed class CometPositionTrackerService : IDisposable
   // null = no comet (or sim stopped + comet removed)
   private readonly BehaviorSubject<Vector3?> _positionSubject = new(null);
 
+  // f64 shadow of the comet position — kept in sync with _positionSubject but never
+  // truncated to f32. Used by CameraService to compute the orbit-offset addition without
+  // catastrophic cancellation at large heliocentric distances.
+  private (double X, double Y, double Z)? _lastKnownCometPositionF64;
+
   private CometTrackerState _state = CometTrackerState.DefaultComet;
   private IDisposable? _simListenerToken;
   private IDisposable? _timelineSubscription;
+  private IDisposable? _cometSnapshotListenerToken;
 
   public CometPositionTrackerService(
     INativeRuntimeService runtimeService,
@@ -76,6 +82,12 @@ public sealed class CometPositionTrackerService : IDisposable
         else
           OnTimelineInvalidated();
       });
+
+    // Subscribe to the post-commit position snapshot so the position is available
+    // immediately after BuildCometTrajectory completes, even when the simulation is paused.
+    _cometSnapshotListenerToken = runtimeService.RegisterExternalStateListener(
+      ExternalStateType.CometPositionSnapshot,
+      HandleCometPositionSnapshotCallback);
   }
 
   // ── Observables ────────────────────────────────────────────────────────────
@@ -100,6 +112,16 @@ public sealed class CometPositionTrackerService : IDisposable
   /// <c>SnapCameraToOrbit</c>).
   /// </summary>
   internal Vector3? LastKnownCometPosition => _positionSubject.Value;
+
+  /// <summary>
+  /// Synchronous read of the last known comet position in full double precision (AU).
+  /// Kept in sync with <see cref="LastKnownCometPosition"/> but without the f64→f32 truncation.
+  /// Used by <see cref="CameraService"/> to compute <c>cometPos + orbitOffset</c> in f64
+  /// so the result survives f32 addition at large heliocentric distances (catastrophic cancellation
+  /// occurs when the offset is small relative to the position magnitude in f32).
+  /// </summary>
+  internal (double X, double Y, double Z)? LastKnownCometPositionF64 => _lastKnownCometPositionF64;
+
 
   // ── State transitions ──────────────────────────────────────────────────────
 
@@ -163,18 +185,25 @@ public sealed class CometPositionTrackerService : IDisposable
 
   private void RegisterCometSimListener()
   {
-    if (_simListenerToken is not null) return; // already registered
-
-    ulong? cometEntityId = _runtimeService.CometEntityId;
-    if (cometEntityId is null)
+    if (_simListenerToken is not null)
     {
-      // TODO (Rust): revisit once CometEntityId is populated from reconfigureComet out-param
+      Console.WriteLine("[CometPositionTrackerService] RegisterCometSimListener: already registered, skipping.");
       return;
     }
 
+    ulong? cometEntityId = _runtimeService.CometEntityId;
+    Console.WriteLine($"[CometPositionTrackerService] RegisterCometSimListener: CometEntityId={cometEntityId?.ToString() ?? "null"} state={_state}");
+    if (cometEntityId is null)
+    {
+      // TODO (Rust): revisit once CometEntityId is populated from reconfigureComet out-param
+      Console.WriteLine("[CometPositionTrackerService] RegisterCometSimListener: SKIPPED — CometEntityId is null. Position callbacks will not fire.");
+      return;
+    }
+
+    Console.WriteLine($"[CometPositionTrackerService] RegisterCometSimListener: Registering for entity {cometEntityId.Value} comp={ComponentForeignId.HighResTransform}");
     _simListenerToken = _runtimeService.RegisterSimulationListener(
       cometEntityId.Value,
-      ComponentForeignId.CometPosition,
+      ComponentForeignId.HighResTransform,
       HandleCometPositionCallback);
   }
 
@@ -189,16 +218,37 @@ public sealed class CometPositionTrackerService : IDisposable
   // Invoked on the native callback thread — must not block, must not throw.
   private unsafe void HandleCometPositionCallback(nint dataPtr)
   {
-    var dto = *(CometPositionDTO*)dataPtr;
-    // Cast f64 → f32 for Vector3 (precision sufficient for UI coordinates)
-    _positionSubject.OnNext(new Vector3((float)dto.X, (float)dto.Y, (float)dto.Z));
+    var dto = *(HighResTransformDTO*)dataPtr;
+    Console.WriteLine($"[CometPositionTrackerService] SIMULATION_CALLBACK comet pos: ({dto.PosX:F6}, {dto.PosY:F6}, {dto.PosZ:F6}) AU");
+    // Store f64 before truncating to f32 for the subject
+    _lastKnownCometPositionF64 = (dto.PosX, dto.PosY, dto.PosZ);
+    _positionSubject.OnNext(new Vector3((float)dto.PosX, (float)dto.PosY, (float)dto.PosZ));
   }
+
+  // Invoked on the native callback thread when BuildCometTrajectory emits
+  // ExternalState::CometPositionSnapshot. Updates _positionSubject immediately so
+  // CameraService can enter CometOrbiting mode at the correct position even when
+  // the simulation is not yet running.
+  private unsafe void HandleCometPositionSnapshotCallback(nint dataPtr)
+  {
+    var dto = *(CCometPositionSnapshotDTO*)dataPtr;
+    // Store f64 before truncating to f32 for the subject
+    _lastKnownCometPositionF64 = (dto.PosX, dto.PosY, dto.PosZ);
+    var pos = new Vector3((float)dto.PosX, (float)dto.PosY, (float)dto.PosZ);
+    Console.WriteLine(
+      $"[CometPositionTrackerService] CometPositionSnapshot received: SPK={dto.SpkId} "
+      + $"pos=({dto.PosX:F6}, {dto.PosY:F6}, {dto.PosZ:F6}) AU → f32=({pos.X:F4}, {pos.Y:F4}, {pos.Z:F4})"
+    );
+    _positionSubject.OnNext(pos);
+  }
+
 
   // ── IDisposable ────────────────────────────────────────────────────────────
 
   public void Dispose()
   {
     _timelineSubscription?.Dispose();
+    _cometSnapshotListenerToken?.Dispose();
     DeregisterCometSimListener();
     _positionSubject.Dispose();
   }

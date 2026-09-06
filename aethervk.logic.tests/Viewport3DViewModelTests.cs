@@ -51,7 +51,7 @@ public class Viewport3DViewModelTests
     var cometConfig   = new CometConfigService(runtime.Object, schedulers);
     var timeline      = new TimelineService(runtime.Object, schedulers, cometConfig, breadcrumb);
     var cometTracker  = new CometPositionTrackerService(runtime.Object, schedulers, timeline);
-    var cameraService = new CameraService(runtime.Object, schedulers, cometTracker, cometConfig, breadcrumb);
+    var cameraService = new CameraService(runtime.Object, schedulers, cometTracker, cometConfig, breadcrumb, Mock.Of<ICometMessenger>());
 
     // Pre-set the committed state so tests that switch to CometOrbiting work.
     if (cometCommitted)

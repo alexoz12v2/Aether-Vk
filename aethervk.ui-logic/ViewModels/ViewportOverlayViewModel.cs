@@ -19,6 +19,9 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     private readonly Viewport3DViewModel _viewportVm;
 
     private readonly IDisposable _modeSubscription;
+    private readonly IDisposable _sunSubscription;
+    private readonly IDisposable _projectionSubscription;
+    private CameraProjectionState? _currentProjection;
 
     // ── Camera Mode Badge ──────────────────────────────────────────────────────
     [ObservableProperty]
@@ -140,6 +143,51 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _showMeasurementIndicator = false;
 
+    // ── Sun direction indicator ──────────────────────────────────────────────
+    /// <summary>
+    /// True when the sun is outside the camera frustum and the arrowhead should be shown.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SunIndicatorLeft), nameof(SunIndicatorTop))]
+    private bool _isSunOffScreen = false;
+
+    /// <summary>
+    /// Rotation angle of the arrowhead in degrees, measured clockwise from screen-up.
+    /// 0° = sun is above centre, 90° = right, 180° = below, 270° = left.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SunIndicatorLeft), nameof(SunIndicatorTop))]
+    private double _sunIndicatorAngleDeg = 0.0;
+
+    /// <summary>Radius of the indicator circle: min(32 epx, min(W,H)/2).</summary>
+    private const double SunIndicatorMaxRadiusEpx = 32.0;
+
+    private double ComputeIndicatorRadius() =>
+        Math.Min(SunIndicatorMaxRadiusEpx,
+                 Math.Min(_viewportVm.Width, _viewportVm.Height) / 2.0);
+
+    /// <summary>Canvas.Left of the arrowhead border (centred on the indicator circle point).</summary>
+    public double SunIndicatorLeft
+    {
+        get
+        {
+            double r   = ComputeIndicatorRadius();
+            double rad = SunIndicatorAngleDeg * Math.PI / 180.0;
+            return (_viewportVm.Width  / 2.0) + r * Math.Sin(rad) - 12.0;
+        }
+    }
+
+    /// <summary>Canvas.Top of the arrowhead border (centred on the indicator circle point).</summary>
+    public double SunIndicatorTop
+    {
+        get
+        {
+            double r   = ComputeIndicatorRadius();
+            double rad = SunIndicatorAngleDeg * Math.PI / 180.0;
+            return (_viewportVm.Height / 2.0) - r * Math.Cos(rad) - 12.0;
+        }
+    }
+
     // Billboards
     public ObservableCollection<BillboardViewModel> Billboards { get; } = new();
 
@@ -196,11 +244,40 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
             UpdateMeasurementIndicator();
             return Task.CompletedTask;
         });
+
+        // ── Sun direction indicator subscription ─────────────────────────────
+        _sunSubscription = _cameraService.SunVisibilityChanged.Subscribe(state =>
+        {
+            if (state.IsVisible)
+            {
+                // Sun re-entered the frustum — hide the arrowhead.
+                IsSunOffScreen = false;
+                return;
+            }
+
+            // NDC convention from Rust: ndc_x > 0 = right, ndc_y > 0 = above screen centre.
+            // atan2(ndc_x, ndc_y) → 0° = up, 90° = right, 180° = down, 270° = left (clockwise).
+            double angleDeg = Math.Atan2(state.NdcX, state.NdcY) * 180.0 / Math.PI;
+            SunIndicatorAngleDeg = angleDeg;
+            IsSunOffScreen = true;
+        });
+
+        _projectionSubscription = _cameraService.CameraProjection.Subscribe(proj =>
+        {
+            _currentProjection = proj;
+            _dispatcher.DispatchAsync(() =>
+            {
+                UpdateMeasurementIndicator();
+                return Task.CompletedTask;
+            });
+        });
     }
 
     public void Dispose()
     {
         _modeSubscription.Dispose();
+        _sunSubscription.Dispose();
+        _projectionSubscription.Dispose();
     }
 
     partial void OnIsRadialMenuOpenChanged(bool oldValue, bool newValue)
@@ -354,21 +431,44 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
 
     public void UpdateMeasurementIndicator()
     {
-        if (_viewportVm.Width <= 0 || _viewportVm.Height <= 0)
+        if (_viewportVm.Width <= 0 || _viewportVm.Height <= 0 || _currentProjection == null)
+        {
+            ShowMeasurementIndicator = false;
             return;
+        }
 
         double target_px_width = Math.Max(24.0, _viewportVm.Width * 0.07);
-        double dummyFovOrScale = 1.0;
 
-        if (_viewportVm.ProjectionType == CameraProjectionType.Orthographic)
+        if (!_currentProjection.IsPerspective)
         {
-            double W_au = _viewportVm.Width * dummyFovOrScale;
+            double W_au = _currentProjection.Right - _currentProjection.Left;
             if (W_au > 0)
             {
                 double min_au = target_px_width * (W_au / _viewportVm.Width);
-                double nice_au = GetNiceNumber(min_au);
-                MeasurementIndicatorWidth = nice_au * (_viewportVm.Width / W_au);
-                MeasurementIndicatorText = $"{FormatNiceNumber(nice_au)} AU";
+                
+                if (min_au < 1e-6)
+                {
+                    double min_km = min_au * 1.495978707e8;
+                    if (min_km < 1.0)
+                    {
+                        double min_m = min_km * 1000.0;
+                        double nice_m = GetNiceNumber(min_m);
+                        MeasurementIndicatorWidth = nice_m * (_viewportVm.Width / (W_au * 1.495978707e11));
+                        MeasurementIndicatorText = $"{FormatNiceNumber(nice_m)} m";
+                    }
+                    else
+                    {
+                        double nice_km = GetNiceNumber(min_km);
+                        MeasurementIndicatorWidth = nice_km * (_viewportVm.Width / (W_au * 1.495978707e8));
+                        MeasurementIndicatorText = $"{FormatNiceNumber(nice_km)} km";
+                    }
+                }
+                else
+                {
+                    double nice_au = GetNiceNumber(min_au);
+                    MeasurementIndicatorWidth = nice_au * (_viewportVm.Width / W_au);
+                    MeasurementIndicatorText = $"{FormatNiceNumber(nice_au)} AU";
+                }
                 ShowMeasurementIndicator = true;
             }
             else
@@ -378,19 +478,21 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
         }
         else
         {
-            double W_arcsec = dummyFovOrScale * 3600.0;
+            double W_rad = 2.0 * Math.Atan(Math.Tan(_currentProjection.Fov / 2.0) * _currentProjection.Aspect);
+            double W_arcsec = (W_rad * 180.0 / Math.PI) * 3600.0;
+
             if (W_arcsec > 0)
             {
                 double min_arcsec = target_px_width * (W_arcsec / _viewportVm.Width);
 
-                if (min_arcsec > 3600.0)
+                if (min_arcsec >= 3600.0)
                 {
                     double min_deg = min_arcsec / 3600.0;
                     double nice_deg = GetNiceNumber(min_deg);
                     MeasurementIndicatorWidth = nice_deg * 3600.0 * (_viewportVm.Width / W_arcsec);
                     MeasurementIndicatorText = $"{FormatNiceNumber(nice_deg)} deg";
                 }
-                else if (min_arcsec > 60.0)
+                else if (min_arcsec >= 60.0)
                 {
                     double min_min = min_arcsec / 60.0;
                     double nice_min = GetNiceNumber(min_min);

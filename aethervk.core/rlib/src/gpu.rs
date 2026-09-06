@@ -968,6 +968,26 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// Uses VK_KHR_create_renderpass2's cmd_next_subpass2.
   fn next_subpass(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
+  /// Begin a named debug label region in the command buffer.
+  /// Visible in RenderDoc / validation layers. No-op in release builds.
+  fn debug_label_begin(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    name: &'static core::ffi::CStr,
+    color: [f32; 4],
+  );
+
+  /// End the innermost open debug label region.
+  fn debug_label_end(&self, cmd_buffer: CommandBufferHandle);
+
+  /// Insert a single-point (non-scoped) label — no matching end required.
+  fn debug_label_insert(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    name: &'static core::ffi::CStr,
+    color: [f32; 4],
+  );
+
   /// Draw the fullscreen compositing triangle (3 vertices, no vertex buffer).
   /// Binds the composite pipeline, pushes near/far constants, and draws.
   fn draw_composite(

@@ -1992,8 +1992,8 @@ impl ArchetypeArenaCreate for UiRenderResourceArchetypeArena {
 
     let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?[0];
 
-    // Create the mega-buffer for UI elements
-    let elements_size = (250_000 * core::mem::size_of::<crate::gpu::UiElementGpu>()) as u64;
+    // 10,000 UI elements is sufficient for even the densest Avalonia-backed viewport UI.
+    let elements_size = (10_000 * core::mem::size_of::<crate::gpu::UiElementGpu>()) as u64;
 
     let elements_buffer_info = vk::BufferCreateInfo {
       size: elements_size,
@@ -2159,9 +2159,11 @@ impl ArchetypeArenaCreate for TrajectoryRenderResourceArchetypeArena {
 
     let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }?[0];
 
-    let segments_size = (1_000_000 * core::mem::size_of::<crate::gpu::RationalBezierGpu>()) as u64;
-    let traj_size = (100_000 * core::mem::size_of::<crate::gpu::TrajectoryGpu>()) as u64;
-    let map_size = (1_000_000 * core::mem::size_of::<crate::gpu::SegmentMapGpu>()) as u64;
+    // Capacity: 50,000 Bézier curve segments across all trajectories.
+    // At 1,000 samples/orbit this supports ~50 simultaneous high-resolution trajectories.
+    let segments_size = (50_000 * core::mem::size_of::<crate::gpu::RationalBezierGpu>()) as u64;
+    let traj_size = (1_000 * core::mem::size_of::<crate::gpu::TrajectoryGpu>()) as u64;
+    let map_size = (50_000 * core::mem::size_of::<crate::gpu::SegmentMapGpu>()) as u64;
 
     let create_mega_buffer =
       |size: u64,
@@ -2207,7 +2209,7 @@ impl ArchetypeArenaCreate for TrajectoryRenderResourceArchetypeArena {
       map_buffer,
       map_alloc,
       map_ptr,
-      segment_allocator: RangeAllocator::new(1_000_000),
+      segment_allocator: RangeAllocator::new(50_000),
       curves: BTreeMap::new(),
       tick: 0,
       allocator_raw: allocator,

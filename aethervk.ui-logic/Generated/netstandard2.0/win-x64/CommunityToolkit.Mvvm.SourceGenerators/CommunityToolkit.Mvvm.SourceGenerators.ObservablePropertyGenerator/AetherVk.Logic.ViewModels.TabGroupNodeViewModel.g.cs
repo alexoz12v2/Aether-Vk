@@ -16,12 +16,13 @@ namespace AetherVk.Logic.ViewModels
             {
                 if (!global::System.Collections.Generic.EqualityComparer<global::AetherVk.Logic.ViewModels.TabItemViewModel?>.Default.Equals(_selectedTab, value))
                 {
+                    global::AetherVk.Logic.ViewModels.TabItemViewModel? __oldValue = _selectedTab;
                     OnSelectedTabChanging(value);
-                    OnSelectedTabChanging(default, value);
+                    OnSelectedTabChanging(__oldValue, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SelectedTab);
                     _selectedTab = value;
                     OnSelectedTabChanged(value);
-                    OnSelectedTabChanged(default, value);
+                    OnSelectedTabChanged(__oldValue, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SelectedTab);
                 }
             }

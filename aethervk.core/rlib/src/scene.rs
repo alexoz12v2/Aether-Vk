@@ -537,6 +537,43 @@ pub struct BodyRotationalModel {
   /// Rotation rate (degrees/day)
   pub rotation_rate: f64,
 }
+impl Component for BodyRotationalModel {}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct BodyRotationalModelDTO {
+  pub pole_ra: f64,
+  pub pole_dec: f64,
+  pub prime_meridian: f64,
+  pub pole_ra_rate: f64,
+  pub pole_dec_rate: f64,
+  pub rotation_rate: f64,
+}
+
+impl ForeignSerializable for BodyRotationalModel {
+  type ForeignData = BodyRotationalModelDTO;
+  const COMPONENT_ID: u64 = ComponentTypeId::BodyRotationalModel as u64;
+
+  fn to_foreign(&self) -> Self::ForeignData {
+    BodyRotationalModelDTO {
+      pole_ra: self.pole_ra,
+      pole_dec: self.pole_dec,
+      prime_meridian: self.prime_meridian,
+      pole_ra_rate: self.pole_ra_rate,
+      pole_dec_rate: self.pole_dec_rate,
+      rotation_rate: self.rotation_rate,
+    }
+  }
+
+  fn apply_foreign(&mut self, data: &Self::ForeignData) {
+    self.pole_ra = data.pole_ra;
+    self.pole_dec = data.pole_dec;
+    self.prime_meridian = data.prime_meridian;
+    self.pole_ra_rate = data.pole_ra_rate;
+    self.pole_dec_rate = data.pole_dec_rate;
+    self.rotation_rate = data.rotation_rate;
+  }
+}
 
 impl Default for BodyRotationalModel {
   fn default() -> Self {
@@ -551,7 +588,7 @@ impl Default for BodyRotationalModel {
   }
 }
 
-impl Component for BodyRotationalModel {}
+
 
 /// A display-only mesh that is not included in physical simulation.
 #[derive(Debug, Clone)]
@@ -1448,6 +1485,8 @@ impl Scene {
     self.register_foreign_component::<TransformComponent>();
     self.register_foreign_component::<HighResTransformComponent>();
     self.register_foreign_component::<CameraComponent>();
+    self.register_foreign_component::<AlmanacPlanet>();
+    self.register_foreign_component::<BodyRotationalModel>();
 
     // this module
     self.register_component::<TransformComponent>(&[]);

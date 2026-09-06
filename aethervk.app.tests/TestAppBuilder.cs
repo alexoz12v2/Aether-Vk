@@ -24,6 +24,8 @@ public class TestAppBuilder
     AetherVk.App.Host = host;
     host.Start();
 
-    return AppBuilder.Configure<AetherVk.App>().UseHeadless(new AvaloniaHeadlessPlatformOptions());
+    return AppBuilder.Configure<AetherVk.App>()
+      .UseSkia()
+      .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
   }
 }

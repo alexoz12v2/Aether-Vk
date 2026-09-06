@@ -29,7 +29,10 @@ public partial class MainWindow : Window
     base.OnOpened(e);
     // The visual tree is live at this point — safe to subscribe to tunneling events.
     if (DataContext is Logic.ViewModels.MainWindowViewModel vm)
+    {
       vm.InputRouter.AttachToWindow(this);
+      UI.MenuMapper.ApplyMenu(this, MenuContainer, vm.MainMenu);
+    }
   }
 
   protected override void OnClosed(EventArgs e)

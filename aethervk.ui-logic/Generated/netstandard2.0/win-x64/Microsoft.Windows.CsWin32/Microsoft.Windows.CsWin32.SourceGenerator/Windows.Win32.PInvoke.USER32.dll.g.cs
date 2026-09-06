@@ -255,5 +255,24 @@ namespace Windows.Win32
 		/// <remarks>An application calls this function after calling the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-setcapture">SetCapture</a> function.</remarks>
 		[DllImport("USER32.dll", ExactSpelling = true, SetLastError = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 		public static extern winmdroot.Foundation.BOOL ReleaseCapture();
+
+		/// <summary>Moves the cursor to the specified screen coordinates.</summary>
+		/// <param name="X">
+		/// <para>Type: <b>int</b> The new x-coordinate of the cursor, in screen coordinates.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setcursorpos#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <param name="Y">
+		/// <para>Type: <b>int</b> The new y-coordinate of the cursor, in screen coordinates.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setcursorpos#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <returns>
+		/// <para>Type: <b>BOOL</b> Returns nonzero if successful or zero otherwise. To get extended error information, call <a href="https://docs.microsoft.com/windows/desktop/api/errhandlingapi/nf-errhandlingapi-getlasterror">GetLastError</a>.</para>
+		/// </returns>
+		/// <remarks>
+		/// <para>The cursor is a shared resource. A window should move the cursor only when the cursor is in the window's client area. The calling process must have <b>WINSTA_WRITEATTRIBUTES</b> access to the window station. The input desktop must be the current desktop when you call <b>SetCursorPos</b>. Call <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-openinputdesktop">OpenInputDesktop</a> to determine whether the current desktop is the input desktop. If it is not, call <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-setthreaddesktop">SetThreadDesktop</a> with the <b>HDESK</b> returned by <b>OpenInputDesktop</b> to switch to that desktop.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setcursorpos#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		[DllImport("USER32.dll", ExactSpelling = true, SetLastError = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+		public static extern winmdroot.Foundation.BOOL SetCursorPos(int X, int Y);
 	}
 }

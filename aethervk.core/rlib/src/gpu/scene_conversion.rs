@@ -17,7 +17,7 @@ use aethervk_oshal_rlib::{
   math::{
     FloatLike,
     matrix::{Matrix4, MatrixVectorMul, mat4::Mat4x4f32},
-    vector::{Vector, Vector3, vec3::Vec3f32},
+    vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
   },
   os::{
     pool::ThreadPool,
@@ -45,6 +45,7 @@ pub trait SceneConversionExt2 {
     scaled_time_delta_us: timeus_t,
     mean_intra_grains_distance_mm: f32,
     min_cumulated_mass_g: f32,
+    sky_rotation_offset: Quat,
     debug_name: &str,
   ) -> GpuResult<gpu::RenderScene>;
 }
@@ -66,6 +67,7 @@ impl SceneConversionExt2 for Scene {
     scaled_time_delta_us: timeus_t,
     mean_intra_grains_distance_mm: f32,
     min_cumulated_mass_g: f32,
+    sky_rotation_offset: Quat,
     debug_name: &str,
   ) -> GpuResult<gpu::RenderScene> {
     // ------ 1. Precompute Camera & Hierarchy ----------------------------------------------
@@ -238,12 +240,25 @@ impl SceneConversionExt2 for Scene {
 
       let diff = pos_f64 - cam_in_frame.position;
 
+      // For macro layer (0): cam_in_frame.scale ≈ 1.0 (camera global AU scale).
+      // Dividing obj_scale by ≈1.0 is harmless — result is in AU, matching AU viewProj. ✓
+      //
+      // For micro layers (>0): cam_in_frame.scale ≈ 1/frame_scale ≈ 1.49e8 (km per world unit).
+      // Dividing obj_scale_km by 1.49e8 converts km→AU, but the micro-layer viewProj uses km
+      // (tight near/far computed from dist_local in km). Use obj_scale directly so the result
+      // is in km, matching the km viewProj. Without this, a 2 km mesh or 50 km sphere would be
+      // scaled down to ~0.01 μm — sub-pixel at any viewing distance.
+      let scale = if layer_idx == 0 {
+        obj_scale / cam_in_frame.scale
+      } else {
+        obj_scale // micro: km scale, matches km viewProj — no frame-scale division
+      };
       Some((
         layer_idx,
         TransformComponent {
           position: diff.to_f32(),
           rotation: rot,
-          scale: obj_scale / cam_global_f32.scale,
+          scale,
         },
       ))
     };
@@ -470,16 +485,25 @@ impl SceneConversionExt2 for Scene {
       }
       // TODO remove sg.local_frame
       compute_rte(self, id).map(|(layer_idx, rte)| {
+        // sphere_gizmo.vert generates localPos in km (from data.radius in km).
+        // viewProj for the micro layer is also in km.
+        // The RTE scale (≈6.68e-9 AU/km) baked into rte.to_mat4() diagonal would
+        // multiply every sphere vertex offset by 6.68e-9, collapsing a 50 km sphere
+        // to a 334 μm point — invisible at any viewing distance.
+        // Override scale to (1,1,1): preserves rotation and translation, lets km be km.
+        let mut rte_for_gizmo = rte;
+        rte_for_gizmo.scale = Vec3f32::one();
         (
           layer_idx,
           id,
-          rte.to_mat4::<Mat4x4f32>() * sg.local_frame,
+          rte_for_gizmo.to_mat4::<Mat4x4f32>() * sg.local_frame,
           sg.radius,
           sg.subdivisions,
         )
       })
     });
     for (layer_idx, id, mat, rad, sub) in extracted_sg {
+      get_or_create_layer!(layer_idx);
       sg_batch_buffers.entry(layer_idx).or_default().push((id, mat, rad, sub));
     }
 
@@ -493,6 +517,7 @@ impl SceneConversionExt2 for Scene {
       compute_rte(self, id).map(|(layer_idx, rte)| (layer_idx, id, traj.clone(), rte.to_mat4()))
     });
     for (layer_idx, id, traj, mat) in extracted_traj {
+      get_or_create_layer!(layer_idx);
       traj_batch_buffers.entry(layer_idx).or_default().push((id, traj, mat));
     }
 
@@ -664,11 +689,16 @@ impl SceneConversionExt2 for Scene {
       })
     {
       if let Ok(pipe) = device.get_sky_pipeline_key(pe_handle) {
-        // TODO sky should not be in layer but global in macro
-        let l = get_or_create_layer!(self.ancestor_depth_layer(id));
+        let sky_layer_idx = self.ancestor_depth_layer(id);
+        debug_assert_eq!(
+          sky_layer_idx, 0,
+          "SkyComponent entity must be a direct child of root (depth_layer=0); \
+           drawing it in a micro layer would incorrectly render the sky with micro near/far planes."
+        );
+        let l = get_or_create_layer!(sky_layer_idx);
         let sky_cam = render_scene.camera_data.rebuild_for_layer(l.near, l.far);
         // projection matrix inversion can fail.
-        l.sky_call = SkyDrawCall::from_camera(&sky_cam, pipe).ok();
+        l.sky_call = SkyDrawCall::from_camera(&sky_cam, pipe, sky_rotation_offset).ok();
       } else {
         aethervk_oshal_rlib::log!("GPU Error getting Sky resources");
       }

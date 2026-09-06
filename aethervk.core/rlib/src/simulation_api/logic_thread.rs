@@ -189,6 +189,9 @@ pub fn start_logic_thread(
     }
     let target_frame_time = oshal::os::time::timeus_milliseconds(16); // ~60 FPS
     let mut play_controls: hashbrown::HashMap<u64, PlayControl> = hashbrown::HashMap::new();
+    // Tracks the last known sun-in-frustum state per scene so we only fire the
+    // ExternalState::SunVisibilityChanged callback on *transitions*, not every frame.
+    let mut sun_visibility_state: hashbrown::HashMap<u64, bool> = hashbrown::HashMap::new();
 
     // periodic compute discard
     let mut last_discard_unscaled_us: timeus_t = 0;
@@ -196,13 +199,24 @@ pub fn start_logic_thread(
 
     loop {
       let mut core_logic = || -> bool {
+        // Single clock_gettime per outer iteration — reused for all purposes below.
+        // In debug+Linux builds this also feeds the debug_perf call-rate tracer.
+        #[cfg(all(debug_assertions, target_os = "linux"))]
+        use crate::simulation_api::debug_perf::traced_get_monotonic_time as get_monotonic_time_outer;
+        #[cfg(not(all(debug_assertions, target_os = "linux")))]
+        use oshal::os::time::get_monotonic_time as get_monotonic_time_outer;
+
         #[cfg(debug_assertions)]
-        let _tick_start = oshal::os::time::get_monotonic_time();
+        let _tick_start;
 
         let mut processed_any = false;
 
         // perform compute discard every 500ms
-        let now = oshal::os::time::get_monotonic_time();
+        let now = get_monotonic_time_outer();
+
+        #[cfg(debug_assertions)]
+        { _tick_start = now; }
+
         if now - last_discard_unscaled_us > DISCARD_DELTA_UNSCALED_US {
           last_discard_unscaled_us = now;
           let _ = context.kernels.0.with_device(context.kernels.1, |dyn_device| {
@@ -229,7 +243,7 @@ pub fn start_logic_thread(
           let pc = play_controls
             .entry(*scene_id)
             .or_insert_with(|| PlayControl::new(target_frame_time));
-          let now = oshal::os::time::get_monotonic_time();
+          // Reuse `now` from above — one syscall per outer loop, not one per scene.
           let last = pc.last_frame_start;
           let elapsed = now.saturating_sub(last);
 
@@ -250,9 +264,12 @@ pub fn start_logic_thread(
                 // Cross Sync: send a SyncParticleRelease command to render thread, register
                 // its Arc pointer for polling
                 let last_render_task = scene_write.last_render_task.load(Ordering::Acquire);
-                if last_render_task == 0 {
+                if last_render_task == 0 || !scene_write.pending_cross_sync {
                   return None;
                 }
+                
+                // We are initiating a cross sync, clear the flag
+                scene_write.pending_cross_sync = false;
 
                 // 1. Polling Window: (0.2ms interval, max 2ms deadline)
                 // Ensure the render thread is idle for this scene and we don't race
@@ -305,7 +322,13 @@ pub fn start_logic_thread(
             if opt.is_some() {
               (true, unsafe { opt.unwrap_unchecked() })
             } else {
-              (false, None)
+              // If there's no active physics task, we consider physics 'done' so the simulation can begin.
+              let no_task = if let Some(scene_arc) = scenes.get(&scene_id) {
+                !scene_arc.read().active_physics_task.load(core::sync::atomic::Ordering::Relaxed)
+              } else {
+                false
+              };
+              (no_task, None)
             }
           };
 
@@ -332,7 +355,13 @@ pub fn start_logic_thread(
             }; // <- dashmap write shard lock dropped
 
             // - Phase 1: Fixed update
-            let phase1_res: Option<EngineResult<_>> = if physics_done && !end_epoch_reached {
+            let has_physics_work = {
+              let mut time_mgr = unsafe { scenes.time_managers.get_mut(&scene_id).unwrap_unchecked() };
+              let scaled_fixed_dt_us = time_mgr.state.read().speed.scaled_from_unscaled(crate::simulation_api::structs::UNSCALED_FIXED_DELTA_US);
+              scaled_fixed_dt_us > 0 && time_mgr.has_ready_step(scaled_fixed_dt_us)
+            };
+
+            let phase1_res: Option<EngineResult<_>> = if physics_done && !end_epoch_reached && (has_physics_work || do_cross_sync) {
               context
                 .kernels
                 .0
@@ -362,6 +391,13 @@ pub fn start_logic_thread(
             let time_mgr = unsafe { scenes.time_managers.get(&scene_id).unwrap_unchecked() };
             execute_simulation_tick_update_phase(scene_arc.upgradable_read(), &time_mgr);
 
+            // - Phase 2b: Sun frustum visibility check (fires ExternalState callback on change)
+            utils::check_sun_frustum_visibility(
+              &scene_arc.read(),
+              *scene_id,
+              &mut sun_visibility_state,
+            );
+
             // - Phase 3: Clear Changed
             execute_simulation_tick_clear_changed_entities_phase(
               &scene_arc,
@@ -373,12 +409,18 @@ pub fn start_logic_thread(
               None => Ok(SimulationTickOutput {
                 pending_particle_acquire: None,
                 latest_physics_sync: None,
+                did_physics_work: false,
               }),
               Some(Ok(s)) => {
                 use core::sync::atomic::Ordering;
                 // self sync function put this to false. Since we executed correctly a physics
                 // step, put this to true
                 scene_arc.read().active_physics_task.store(true, Ordering::Relaxed);
+                
+                // If physics actually executed steps, we will need to cross-sync them later
+                if s.did_physics_work {
+                  scene_arc.write().pending_cross_sync = true;
+                }
                 Ok(s)
               }
               Some(Err(e)) => Err(e),
@@ -839,7 +881,7 @@ fn process_command_internal(
             scene_guard.scene.with_component(earth.body, |_: &AlmanacPlanet| ()).is_some();
           if has_planet {
             let (traj_start, traj_end) =
-              crate::simulation_api::reposition::full_year_tai_seconds(new_year);
+              crate::simulation_api::reposition::full_year_tai_seconds(start);
             let workload = Box::new(structs::LogicWorkload {
               cmd: LogicCommand::UpdateTrajectoryForSpk {
                 task_id: 0,
@@ -865,11 +907,15 @@ fn process_command_internal(
       spk_id,
       proposed_start,
       proposed_end,
+      keplerian_elements,
     } => {
       let logic_state = ctx.logic_state.read();
       let planet = AlmanacPlanet::new(spk_id);
 
       // 1. Dry run validation: ensure both start and end can be evaluated
+      aethervk_oshal_rlib::log!("============================================================");
+      aethervk_oshal_rlib::log!("=== TryInitComet: Evaluating Start Epoch for SPK {} ===", spk_id);
+      aethervk_oshal_rlib::log!("============================================================");
       if let Err(e) = planet.step(proposed_start, &logic_state.almanac_data, None) {
         emit_breadcrumb(
           3,
@@ -880,6 +926,10 @@ fn process_command_internal(
         ));
         return Ok(());
       }
+
+      aethervk_oshal_rlib::log!("============================================================");
+      aethervk_oshal_rlib::log!("=== TryInitComet: Evaluating End Epoch for SPK {} ===", spk_id);
+      aethervk_oshal_rlib::log!("============================================================");
       if let Err(e) = planet.step(proposed_end, &logic_state.almanac_data, None) {
         emit_breadcrumb(
           3,
@@ -902,6 +952,7 @@ fn process_command_internal(
           start_epoch_tai_sec: start_sec,
           end_epoch_tai_sec: end_sec,
           sample_step_days: 1.0,
+          keplerian_elements,
         },
         ctx: alloc::sync::Arc::clone(ctx),
       });
@@ -923,9 +974,25 @@ fn process_command_internal(
       ))?;
 
       let _ = scene_guard.scene.remove_component::<AlmanacPlanet>(comet.body);
+      let _ = scene_guard.scene.remove_component::<crate::scene::BodyRotationalModel>(comet.body);
       let _ = scene_guard
         .scene
         .remove_component::<crate::scene::trajectory::TrajectoryComponent>(comet.orbit);
+
+      // Hide comet body components
+      let _ = scene_guard.scene.with_component_mut(comet.body, |mesh: &mut crate::scene::StaticMeshComponent| {
+        mesh.is_visible = false;
+      });
+      let _ = scene_guard.scene.with_component_mut(comet.body, |gizmo: &mut crate::scene::SphereGizmoComponent| {
+        gizmo.is_visible = false;
+      });
+
+      // Remove all jet entities (children of the comet body)
+      if let Some(children) = scene_guard.scene.get_children(comet.body) {
+        for child in children {
+          scene_guard.scene.remove_entity(child);
+        }
+      }
 
       // Reset subtree to 1 AU +X (default "no SPK" placement)
       let _ = scene_guard
@@ -965,6 +1032,11 @@ fn process_command_internal(
         cam_int,
         |anim: &mut crate::scene::animation::TransformAnimationComponent| {
           anim.retarget(target_pos, target_rot);
+          // If this is a mode switch (duration >= 1.0s), override the speed-preserved duration
+          // so the camera doesn't get stuck for thousands of seconds.
+          if duration_s >= 1.0 {
+            anim.duration = duration_s;
+          }
         },
       );
 
@@ -1603,17 +1675,9 @@ fn process_command_internal(
       spk_id,
       start_epoch_tai_sec,
       end_epoch_tai_sec,
-      sample_step_days,
+      sample_step_days: _,
+      keplerian_elements,
     } => {
-      let frame = crate::simulation::almanac::SUN_ECLIPJ2000;
-      if sample_step_days <= 0.0 {
-        crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
-          crate::simulation_api::external_state::CCometInitialized::new(false, spk_id),
-        ));
-        return Err(EngineError::InvalidOperation(
-          "BuildCometTrajectory: sample_step_days must be > 0",
-        ));
-      }
       if start_epoch_tai_sec >= end_epoch_tai_sec {
         crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
           crate::simulation_api::external_state::CCometInitialized::new(false, spk_id),
@@ -1624,6 +1688,10 @@ fn process_command_internal(
       }
 
       let scenes = ctx.scenes.read();
+      aethervk_oshal_rlib::log!(
+        "[BuildCometTrajectory] Starting Keplerian track for SPK {} | e={:.4} q={:.4} AU",
+        spk_id, keplerian_elements.eccentricity, keplerian_elements.perihelion_distance_au
+      );
       let scene_ctx =
         scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
       let scene_guard = scene_ctx.read();
@@ -1632,106 +1700,124 @@ fn process_command_internal(
         "BuildCometTrajectory: comet SubtreeEntities not populated",
       ))?;
 
-      struct SampledPoints {
-        pub position_km: DVec3,
-        pub velocity_km: DVec3,
-      }
-      let mut samples = alloc::vec::Vec::<SampledPoints>::with_capacity(256);
-      let mut t = start_epoch_tai_sec;
+      // ── Analytical Keplerian orbit track ──────────────────────────────────
+      // Generate orbit vertices from Keplerian elements (SBDB Ecliptic frame),
+      // then rotate to Heliocentric Equatorial (ICRF) via Earth's obliquity.
+      //
+      // Reference: 5 elements needed — e, q, i, om, w (all angles in radians here)
+      // P vector: Sun → perihelion direction
+      // Q vector: 90° ahead of P in the orbital plane
 
-      let logic_state = ctx.logic_state.read();
-      let step_sec = sample_step_days * 86400.0;
+      use core::f64::consts::PI;
+      const DEG_TO_RAD: f64 = PI / 180.0;
+      // Earth's obliquity (J2000) — rotates Ecliptic → Equatorial (ICRF)
+      const OBLIQUITY_RAD: f64 = 23.43928_f64 * DEG_TO_RAD;
 
-      while t <= end_epoch_tai_sec {
-        let epoch = anise::time::Epoch::from_tai_seconds(t);
-        let state = match logic_state.almanac_data.get_cartesian_state(
-          spk_id,
-          frame.orientation_id,
-          frame.ephemeris_id,
-          epoch,
-          true,
-        ) {
-          Ok(s) => s,
-          Err(e) => {
-            emit_breadcrumb(
-              3,
-              &alloc::format!("[TryInitComet] Trajectory generation failed: {}", e),
-            );
-            crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
-              crate::simulation_api::external_state::CCometInitialized::new(false, spk_id),
-            ));
-            return Err(e);
-          }
-        };
+      let e   = keplerian_elements.eccentricity;
+      let q   = keplerian_elements.perihelion_distance_au;
+      let i   = keplerian_elements.inclination_deg * DEG_TO_RAD;
+      let om  = keplerian_elements.longitude_of_ascending_node_deg * DEG_TO_RAD;
+      let w   = keplerian_elements.argument_of_perihelion_deg * DEG_TO_RAD;
 
-        samples.push(SampledPoints {
-          position_km: DVec3::from_components(
-            state.radius_km[0],
-            state.radius_km[1],
-            state.radius_km[2],
-          ),
-          velocity_km: DVec3::from_components(
-            state.velocity_km_s[0],
-            state.velocity_km_s[1],
-            state.velocity_km_s[2],
-          ),
-        });
+      // Perifocal basis vectors (Ecliptic frame)
+      let px = om.cos() * w.cos() - om.sin() * i.cos() * w.sin();
+      let py = om.sin() * w.cos() + om.cos() * i.cos() * w.sin();
+      let pz = i.sin() * w.sin();
+      let qx = -om.cos() * w.sin() - om.sin() * i.cos() * w.cos();
+      let qy = -om.sin() * w.sin() + om.cos() * i.cos() * w.cos();
+      let qz = i.sin() * w.cos();
 
-        if t == end_epoch_tai_sec {
-          break;
+      // Rotate a perifocal (x_prime, y_prime) point to ICRF by applying obliquity
+      let perifocal_to_icrf = |x_prime: f64, y_prime: f64| -> [f32; 3] {
+        let x_ecl = px * x_prime + qx * y_prime;
+        let y_ecl = py * x_prime + qy * y_prime;
+        let z_ecl = pz * x_prime + qz * y_prime;
+        // Rotate ecliptic → equatorial (ICRF)
+        let x_eq = x_ecl;
+        let y_eq = y_ecl * OBLIQUITY_RAD.cos() - z_ecl * OBLIQUITY_RAD.sin();
+        let z_eq = y_ecl * OBLIQUITY_RAD.sin() + z_ecl * OBLIQUITY_RAD.cos();
+        [x_eq as f32, y_eq as f32, z_eq as f32]
+      };
+
+      // Number of segments for the track
+      const N_SEGMENTS: usize = 128;
+
+      // Build a list of (x_prime, y_prime) in the perifocal plane
+      let mut perifocal_pts = alloc::vec::Vec::<(f64, f64)>::with_capacity(N_SEGMENTS + 1);
+
+      if e < 1.0 {
+        // Ellipse — sweep Eccentric Anomaly E from 0 to 2π
+        let a = q / (1.0 - e); // semi-major axis (AU)
+        let b_sq = a * a * (1.0 - e * e);
+        let b = b_sq.sqrt();
+        for k in 0..=N_SEGMENTS {
+          let eccentric_anomaly = 2.0 * PI * (k as f64) / (N_SEGMENTS as f64);
+          let x = a * (eccentric_anomaly.cos() - e);
+          let y = b * eccentric_anomaly.sin();
+          perifocal_pts.push((x, y));
         }
-        t += step_sec;
-        if t > end_epoch_tai_sec {
-          t = end_epoch_tai_sec;
+      } else {
+        // Hyperbola (or parabola) — sweep True Anomaly ν up to a safe limit
+        // Limit: cos(ν_max) = -1/e, i.e. the asymptote. Stay 5° clear of it.
+        let nu_asymptote = (1.0_f64 / e).acos();
+        let nu_max = nu_asymptote - 5.0 * DEG_TO_RAD;
+        for k in 0..=N_SEGMENTS {
+          let nu = -nu_max + 2.0 * nu_max * (k as f64) / (N_SEGMENTS as f64);
+          let r = (q * (1.0 + e)) / (1.0 + e * nu.cos());
+          let x = r * nu.cos();
+          let y = r * nu.sin();
+          perifocal_pts.push((x, y));
         }
       }
 
-      if samples.len() < 2 {
+      // Convert perifocal points to Bezier cubic control points in ICRF (AU, f32)
+      // We use a simple linear→cubic approach: P0=point, P3=next point,
+      // P1 and P2 are the midpoints (degenerate cubic = linear segment — fine for
+      // angle-stepped orbit data which is already smooth).
+      let mut control_points = alloc::vec::Vec::<[f32; 4]>::with_capacity(N_SEGMENTS * 4);
+      for k in 0..N_SEGMENTS {
+        let (x0, y0) = perifocal_pts[k];
+        let (x1, y1) = perifocal_pts[k + 1];
+        let p0 = perifocal_to_icrf(x0, y0);
+        let p3 = perifocal_to_icrf(x1, y1);
+        // Approximate cubic handle positions as 1/3 and 2/3 interpolations
+        let p1 = [
+          p0[0] + (p3[0] - p0[0]) / 3.0,
+          p0[1] + (p3[1] - p0[1]) / 3.0,
+          p0[2] + (p3[2] - p0[2]) / 3.0,
+        ];
+        let p2 = [
+          p0[0] + 2.0 * (p3[0] - p0[0]) / 3.0,
+          p0[1] + 2.0 * (p3[1] - p0[1]) / 3.0,
+          p0[2] + 2.0 * (p3[2] - p0[2]) / 3.0,
+        ];
+        control_points.push([p0[0], p0[1], p0[2], 1.0]);
+        control_points.push([p1[0], p1[1], p1[2], 1.0]);
+        control_points.push([p2[0], p2[1], p2[2], 1.0]);
+        control_points.push([p3[0], p3[1], p3[2], 1.0]);
+      }
+
+      aethervk_oshal_rlib::log!(
+        "[BuildCometTrajectory] Keplerian track: {} control points ({} segments, e={:.4})",
+        control_points.len(), N_SEGMENTS, e
+      );
+
+      if control_points.len() < 8 {
         emit_breadcrumb(
           3,
-          "[TryInitComet] Trajectory generation failed: not enough samples",
+          "[BuildCometTrajectory] Trajectory generation failed: not enough control points",
         );
         crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
           crate::simulation_api::external_state::CCometInitialized::new(false, spk_id),
         ));
         return Err(EngineError::InvalidOperation(
-          "BuildCometTrajectory: not enough samples",
+          "BuildCometTrajectory: not enough control points",
         ));
-      }
-
-      let dt_sec = step_sec;
-      let mut control_points = alloc::vec::Vec::<[f32; 4]>::with_capacity(256);
-
-      for i in 0..(samples.len() - 1) {
-        const KM_TO_AU: f64 = 6.6845871226706e-9_f64;
-        let s0 = &samples[i];
-        let s1 = &samples[i + 1];
-
-        let p0 = s0.position_km;
-        let v0 = s0.velocity_km;
-        let p1 = s1.position_km;
-        let v1 = s1.velocity_km;
-
-        let p0_au = p0 * KM_TO_AU;
-        let cp0 = p0_au.to_f32();
-
-        if cp0.length_squared() == 0.0 && p0_au.length_squared() > 0.0 {
-          emit_breadcrumb(3, "[BuildCometTrajectory] Warning: Precision loss! Trajectory point collapsed to zero during f64 -> f32 AU conversion.");
-        }
-
-        let cp1 = ((p0 + v0 * (dt_sec / 3.0)) * KM_TO_AU).to_f32();
-        let cp2 = ((p1 - v1 * (dt_sec / 3.0)) * KM_TO_AU).to_f32();
-        let cp3 = (p1 * KM_TO_AU).to_f32();
-
-        control_points.push([cp0.x(), cp0.y(), cp0.z(), 1.0]);
-        control_points.push([cp1.x(), cp1.y(), cp1.z(), 1.0]);
-        control_points.push([cp2.x(), cp2.y(), cp2.z(), 1.0]);
-        control_points.push([cp3.x(), cp3.y(), cp3.z(), 1.0]);
       }
 
       let new_comp = crate::scene::trajectory::TrajectoryComponent::new(
         control_points,
-        [0.3, 0.6, 1.0, 1.0], // Default color
+        [1.0, 0.2, 0.2, 1.0], // Red color for comet
         2.0,
         0,
         32,
@@ -1740,6 +1826,14 @@ fn process_command_internal(
       // We have successfully computed trajectory, now commit everything to ECS!
       let planet = AlmanacPlanet::new(spk_id);
       let _ = scene_guard.scene.add_component(comet.body, planet);
+
+      // Make comet body visible again
+      let _ = scene_guard.scene.with_component_mut(comet.body, |mesh: &mut crate::scene::StaticMeshComponent| {
+        mesh.is_visible = true;
+      });
+      let _ = scene_guard.scene.with_component_mut(comet.body, |gizmo: &mut crate::scene::SphereGizmoComponent| {
+        gizmo.is_visible = true;
+      });
 
       let mut replaced = false;
       let _ = scene_guard.scene.with_component_mut(
@@ -1753,8 +1847,10 @@ fn process_command_internal(
         let _ = scene_guard.scene.add_component(comet.orbit, new_comp);
       }
 
-      // Force reposition to the start of our newly validated proposed bounds
-      // (This will become the global timeline shortly)
+      aethervk_oshal_rlib::log!("[BuildCometTrajectory] ECS commit done: AlmanacPlanet + TrajectoryComponent applied for comet.body ext_id={} (SPK {})", comet.body.as_ffi(), spk_id);
+
+      // Force reposition using SPK data (body position only, not track)
+      let logic_state = ctx.logic_state.read();
       let start = anise::time::Epoch::from_tai_seconds(start_epoch_tai_sec);
       let _ = crate::simulation_api::reposition::force_reposition(
         &scene_guard.scene,
@@ -1765,8 +1861,33 @@ fn process_command_internal(
         start,
       );
 
+      // Emit the post-commit comet position to C# immediately.
+      if let Some(global_t) = scene_guard.scene.global_transform_f64(comet.body) {
+        let pos_au = global_t.position;
+        aethervk_oshal_rlib::log!(
+          "[BuildCometTrajectory] force_reposition done. Emitting CometPositionSnapshot @ ({:.6}, {:.6}, {:.6}) AU for SPK {}",
+          pos_au.x(), pos_au.y(), pos_au.z(), spk_id
+        );
+        let snapshot = crate::simulation_api::external_state::CCometPositionSnapshot {
+          spk_id,
+          _pad: 0,
+          pos_x: pos_au.x(),
+          pos_y: pos_au.y(),
+          pos_z: pos_au.z(),
+        };
+        crate::simulation_api::emit_external_state_change(
+          &ExternalState::CometPositionSnapshot(snapshot),
+        );
+      } else {
+        aethervk_oshal_rlib::log!(
+          "[BuildCometTrajectory] WARNING: global_transform_f64 returned None for comet.body after force_reposition (SPK {})",
+          spk_id
+        );
+      }
+
       drop(logic_state);
 
+      aethervk_oshal_rlib::log!("[BuildCometTrajectory] Emitting CometInitialized(true) for SPK {}", spk_id);
       crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
         crate::simulation_api::external_state::CCometInitialized::new(true, spk_id),
       ));
@@ -1811,6 +1932,7 @@ fn process_command_internal(
       struct SampledPoints {
         pub position_km: DVec3,
         pub velocity_km: DVec3,
+        pub time_sec: f64,
       }
       let mut samples = alloc::vec::Vec::<SampledPoints>::with_capacity(256);
       let mut t = start_epoch_tai_sec;
@@ -1840,6 +1962,7 @@ fn process_command_internal(
             state.velocity_km_s[1],
             state.velocity_km_s[2],
           ),
+          time_sec: t,
         });
 
         if t == end_epoch_tai_sec {
@@ -1857,7 +1980,6 @@ fn process_command_internal(
         ));
       }
 
-      let dt_sec = step_sec;
       let mut control_points = alloc::vec::Vec::<[f32; 4]>::with_capacity(256);
 
       for i in 0..(samples.len() - 1) {
@@ -1869,10 +1991,12 @@ fn process_command_internal(
         let v0 = s0.velocity_km;
         let p1 = s1.position_km;
         let v1 = s1.velocity_km;
+        
+        let actual_dt = s1.time_sec - s0.time_sec;
 
         let cp0 = (p0 * KM_TO_AU).to_f32();
-        let cp1 = ((p0 + v0 * (dt_sec / 3.0)) * KM_TO_AU).to_f32();
-        let cp2 = ((p1 - v1 * (dt_sec / 3.0)) * KM_TO_AU).to_f32();
+        let cp1 = ((p0 + v0 * (actual_dt / 3.0)) * KM_TO_AU).to_f32();
+        let cp2 = ((p1 - v1 * (actual_dt / 3.0)) * KM_TO_AU).to_f32();
         let cp3 = (p1 * KM_TO_AU).to_f32();
 
         control_points.push([cp0.x(), cp0.y(), cp0.z(), 1.0]);
@@ -1958,6 +2082,7 @@ struct SimulationTickOutput {
   /// after a cross sync
   pending_particle_acquire: Option<u64>,
   latest_physics_sync: Option<PhysicsDeviceSelfSync>,
+  did_physics_work: bool,
 }
 
 /// Equivalent of [`crate::gpu::ScopedCommandBuffer`] for compute submission
@@ -2156,7 +2281,7 @@ fn execute_simulation_tick_fixed_update_phase(
     )
   };
   let now_scaled_300ths = us_to_300ths_rounded(now_scaled_us);
-  let latest_physics_sync: Option<PhysicsDeviceSelfSync> = if sim_speed != SimSpeed::Paused {
+  let latest_physics_sync = if sim_speed != SimSpeed::Paused {
     // used for SPICE EZR Data Kernel and simulation
     let current_epoch = time_mgr.current_epoch();
 
@@ -2246,13 +2371,32 @@ fn execute_simulation_tick_fixed_update_phase(
       }
     };
 
+    #[cfg(debug_assertions)]
+    fn debug_log_query4_match(e_id: EntityId) {
+      use core::sync::atomic::{AtomicI64, Ordering};
+      static LAST_LOG: AtomicI64 = AtomicI64::new(0);
+      let now = aethervk_oshal_rlib::os::time::get_monotonic_time() as i64;
+      let last = LAST_LOG.load(Ordering::Relaxed);
+      if now - last >= 2_000_000 {
+        if LAST_LOG.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+          oshal::log!("query4 matched comet entity: {:?}", e_id);
+        }
+      }
+    }
+    #[cfg(not(debug_assertions))]
+    #[inline(always)]
+    fn debug_log_query4_match(_: EntityId) {}
+
     // insert into cache if absent all active comets
     scene.scene.query4(
       |e_id,
        t: &TransformComponent,
        _m: &CometMarkerComponent,
        ap: &AlmanacPlanet,
-       iau_rot: &BodyRotationalModel| insert_into_cache(e_id, *t, Some(*iau_rot), *ap),
+       iau_rot: &BodyRotationalModel| {
+        debug_log_query4_match(e_id);
+        insert_into_cache(e_id, *t, Some(*iau_rot), *ap)
+      },
     );
 
     // insert into cache if absent all active planets (earth)
@@ -2623,9 +2767,9 @@ fn execute_simulation_tick_fixed_update_phase(
         if idx % 32 == 0 {
           let now_unscaled_us = get_monotonic_time();
           if now_unscaled_us - start_time_unscaled_us >= 2000_i64 {
-            // Yield lock
+            // Yield the write lock briefly so readers (render thread) can proceed.
             scene = parking_lot::RwLockWriteGuard::downgrade_to_upgradable(scene_write);
-            core::hint::spin_loop();
+            oshal::os::native::this_thread::sleep_for(core::time::Duration::from_micros(50));
             scene_write = parking_lot::RwLockUpgradableReadGuard::upgrade(scene);
             start_time_unscaled_us = get_monotonic_time();
           }
@@ -2639,17 +2783,18 @@ fn execute_simulation_tick_fixed_update_phase(
       // - or swap for &mut DashMap and use mem::replace
     }
 
-    Some(PhysicsDeviceSelfSync::new(
+    Some((PhysicsDeviceSelfSync::new(
       compute_semaphore,
       compute_signal_value,
-    ))
+    ), steps_executed))
   } else {
     None
   };
 
   Ok(SimulationTickOutput {
-    pending_particle_acquire: latest_physics_sync.as_ref().map(|s| s.timeline_value),
-    latest_physics_sync,
+    pending_particle_acquire: latest_physics_sync.as_ref().map(|(s, _)| s.timeline_value),
+    latest_physics_sync: latest_physics_sync.as_ref().map(|(s, _)| s.clone()),
+    did_physics_work: latest_physics_sync.map(|(_, steps)| steps > 0).unwrap_or(false),
   })
 }
 
@@ -2683,6 +2828,15 @@ fn execute_simulation_tick_update_phase(
       let smooth_t = utils::hermite_smoothstep(anim.elapsed / anim.duration);
       let new_pos_dvec = DVec3::lerp(anim.start_pos, anim.target_pos, smooth_t as f64);
       let new_rot = Quat::slerp(anim.start_rot, anim.target_rot, smooth_t);
+      // Strip roll from camera animations: slerp on SO(3) does not preserve the roll-free
+      // subspace; over many retarget() cycles (orbit tracking fires every ~50 ms) the
+      // small numerical error compounds into a visible camera tilt.  Non-camera entities
+      // are unaffected.
+      let new_rot = if Into::<bool>::into(scene.scene.has_component::<CameraComponent>(e_id)) {
+        crate::scene::animation::strip_roll(new_rot)
+      } else {
+        new_rot
+      };
       if anim.elapsed > anim.duration {
         anim.is_finished = true;
       }
@@ -3207,8 +3361,13 @@ mod utils {
           let mut scene_write = parking_lot::RwLockUpgradableReadGuard::upgrade(scene);
           // SAFETY: `latest_physics_sync` written by `execute_simulation_tick`, which was
           // executed if `active_physics_task` is `true`
-          let is_done = unsafe { scene_write.latest_physics_sync.as_mut().unwrap_unchecked() }
-            .try_wait(&vulkan_device.device, now, elapsed);
+          let physics_sync =
+            unsafe { scene_write.latest_physics_sync.as_mut().unwrap_unchecked() };
+
+          // Block (zero CPU) until the GPU signals the compute timeline semaphore,
+          // with a hard deadline of 8ms (half a frame).  This replaces the old
+          let is_done = physics_sync.blocking_wait(&vulkan_device.device, 8_000_000);
+
           if is_done {
             // Self Sync: destroy consumed synchronization primitives
             let _ = scene_write.latest_physics_sync.take();
@@ -3222,6 +3381,149 @@ mod utils {
     } else {
       None
     }
+  }
+
+  /// Maximum distance (AU) beyond which the sun is treated as out of the camera frustum,
+  /// regardless of projection. Matches `MAX_SUN_DISTANCE_AU` agreed on the C# side.
+  const MAX_SUN_DISTANCE_AU: f64 = 100.0;
+
+  /// Projects the sun entity (always at world origin) through the primary camera's
+  /// view-projection matrix and emits [`ExternalState::SunVisibilityChanged`] only when
+  /// the visibility state changes (sun entered or exited the frustum).
+  ///
+  /// - No raycasting — purely a CPU-side clip-space test.
+  /// - `ndc_x` / `ndc_y` in the payload are the *actual* projection (may exceed ±1 when
+  ///   off-screen), so the C# overlay can compute the arrowhead bearing directly.
+  pub fn check_sun_frustum_visibility(
+    scene: &SceneContext,
+    scene_id: u64,
+    sun_visibility_state: &mut hashbrown::HashMap<u64, bool>,
+  ) {
+    use crate::scene::CameraProjection;
+    use crate::simulation_api::external_state::{CSunVisibilityChanged, ExternalState};
+    use aethervk_oshal_rlib::math::vector::Vector;
+
+    // Require a sun entity.
+    let _sun_entity = match scene.sun_entity {
+      Some(e) => e,
+      None => return,
+    };
+
+    // Find the primary camera entity from the first presentation engine.
+    let camera_entity = {
+      let pes = scene.presentation_engines.read();
+      pes.values().find_map(|pe| pe.camera_entity)
+    };
+    let camera_entity = match camera_entity {
+      Some(e) => e,
+      None => return,
+    };
+
+    // Read camera high-res transform (position f64, rotation f32 quat).
+    let (cam_pos, cam_rot) = match scene.scene.with_component(
+      camera_entity,
+      |hrt: &HighResTransformComponent| (hrt.position, hrt.rotation),
+    ) {
+      Some(v) => v,
+      None => return,
+    };
+
+    // Read camera projection parameters.
+    let cam_proj = match scene.scene.with_component(camera_entity, |c: &CameraComponent| {
+      c.projection
+    }) {
+      Some(p) => p,
+      None => return,
+    };
+
+    // ── Distance cap ──────────────────────────────────────────────────────────
+    // Sun is at world origin. Camera-to-sun distance = length of camera position.
+    let dist = cam_pos.length();
+    if dist > MAX_SUN_DISTANCE_AU {
+      let prev = sun_visibility_state.get(&scene_id).copied().unwrap_or(true);
+      if prev {
+        sun_visibility_state.insert(scene_id, false);
+        emit_external_state_change(&ExternalState::SunVisibilityChanged(CSunVisibilityChanged {
+          is_visible: 0,
+          ndc_x: 0.0,
+          ndc_y: 0.0,
+        }));
+      }
+      return;
+    }
+
+    // ── Build view-space sun position ─────────────────────────────────────────
+    // Engine convention: col0=right(+X), col1=backward(+Y), col2=up(+Z).
+    // The sun is "in front" when its projection onto backward (local +Y) is positive.
+    //
+    // sun_camera = R^T * (sun_world - cam_pos) = R^T * (-cam_pos)
+    // cam_pos is f64; we cast the delta to f32 (safe for distances up to 100 AU).
+    let delta_f32 = Vec3f32::from_components(
+      (-cam_pos.x()) as f32,
+      (-cam_pos.y()) as f32,
+      (-cam_pos.z()) as f32,
+    );
+
+    // Rotate into camera-local space by the conjugate (inverse) of cam_rot.
+    let cam_rot_conj = cam_rot.conjugate();
+    let sun_local = cam_rot_conj.rotate_vector(delta_f32);
+
+    // Local axes: +X=right, +Y=backward, +Z=up. Forward = -Y.
+    // depth = backward component (positive when sun is in front).
+    let depth  = sun_local.y();
+    let view_x = sun_local.x();
+    let view_z = sun_local.z();
+
+    // ── Projection ────────────────────────────────────────────────────────────
+    let (ndc_x, ndc_y, in_front) = match cam_proj {
+      CameraProjection::Perspective { fov, aspect_ratio, near, .. } => {
+        let tan_half_fov_y = (fov * 0.5).tan();
+        if depth <= near {
+          // Sun is behind the near plane — cannot project normally, but we can
+          // still derive the screen-space bearing from the lateral view components
+          // (view_x = right, view_z = up).  Use the near plane itself as a
+          // positive reference depth so the formula produces a meaningful ratio
+          // with the correct sign; the resulting magnitude is >> 1 (clearly
+          // off-screen), which the C# side uses to compute the arrowhead angle.
+          let ref_depth = near.max(1e-6);
+          let ny = view_z / (ref_depth * tan_half_fov_y);
+          let nx = view_x / (ref_depth * tan_half_fov_y * aspect_ratio);
+          (nx, ny, false) // in_front=false → off-screen; angle is still valid
+        } else {
+          let ny = view_z / (depth * tan_half_fov_y);
+          let nx = view_x / (depth * tan_half_fov_y * aspect_ratio);
+          (nx, ny, true)
+        }
+      }
+      CameraProjection::Orthographic { left, right, bottom, top, near, .. } => {
+        // Orthographic NDC depends only on lateral position, not depth — so
+        // view_x / half_w and view_z / half_h give the correct ratio whether
+        // the sun is in front of or behind the near plane.
+        let half_w = (right - left) * 0.5;
+        let half_h = (top - bottom) * 0.5;
+        let nx = if half_w > 1e-9 { view_x / half_w } else { 0.0 };
+        let ny = if half_h > 1e-9 { view_z / half_h } else { 0.0 };
+        (nx, ny, depth > near)
+      }
+    };
+
+    // ── Frustum test & transition detection ───────────────────────────────────
+    let now_visible = in_front && ndc_x.abs() <= 1.0 && ndc_y.abs() <= 1.0;
+
+    // Default assumption is the opposite of the current result so the very first tick always
+    // fires an event to initialise the C# side.
+    let prev = sun_visibility_state.get(&scene_id).copied().unwrap_or(!now_visible);
+    if prev == now_visible {
+      return; // no change — nothing to emit
+    }
+    sun_visibility_state.insert(scene_id, now_visible);
+
+    let payload = CSunVisibilityChanged {
+      is_visible: if now_visible { 1 } else { 0 },
+      ndc_x,
+      ndc_y,
+    };
+    emit_external_state_change(&ExternalState::SunVisibilityChanged(payload));
   }
 }
 

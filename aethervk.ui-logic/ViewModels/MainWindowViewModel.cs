@@ -39,6 +39,11 @@ public partial class MainWindowViewModel : ViewModelBase
 
   public ObservableCollection<BreadcrumbMessage>? Breadcrumbs => _breadcrumbService.Messages;
 
+  public bool IsSystemThemeDark { get; set; }
+
+  public ObservableCollection<MenuItemViewModel> MainMenu { get; } = new ObservableCollection<MenuItemViewModel>();
+  private MenuItemViewModel? _snapObserverMenuItem;
+
   public MainWindowViewModel(
     INativeRuntimeService runtimeService,
     BreadcrumbService breadcrumbService,
@@ -59,6 +64,69 @@ public partial class MainWindowViewModel : ViewModelBase
 
     // Set initial theme to system default
     CurrentTheme = AppTheme.System;
+
+    BuildMenu();
+  }
+
+  private void BuildMenu()
+  {
+    var fileMenu = new MenuItemViewModel { Header = "File" };
+    fileMenu.Items.Add(new MenuItemViewModel { Header = "Open" });
+    fileMenu.Items.Add(new MenuItemViewModel { Header = "Save" });
+    fileMenu.Items.Add(new MenuItemViewModel { IsSeparator = true });
+    fileMenu.Items.Add(new MenuItemViewModel { Header = "Import Model" });
+    fileMenu.Items.Add(new MenuItemViewModel { IsSeparator = true });
+    fileMenu.Items.Add(new MenuItemViewModel { Header = "Exit" });
+
+    var editMenu = new MenuItemViewModel { Header = "Edit" };
+    editMenu.Items.Add(new MenuItemViewModel { Header = "Copy" });
+    editMenu.Items.Add(new MenuItemViewModel { Header = "Paste" });
+    editMenu.Items.Add(new MenuItemViewModel { IsSeparator = true });
+
+    var sceneMenu = new MenuItemViewModel { Header = "Scene" };
+    sceneMenu.Items.Add(new MenuItemViewModel { Header = "Spawn Comet" });
+    editMenu.Items.Add(sceneMenu);
+
+    _snapObserverMenuItem = new MenuItemViewModel { Header = "Snap Observer", IsVisible = false };
+    editMenu.Items.Add(_snapObserverMenuItem);
+
+    editMenu.Items.Add(new MenuItemViewModel { IsSeparator = true });
+    editMenu.Items.Add(new MenuItemViewModel { Header = "Settings...", Gesture = "Cmd+OemComma", Command = OpenSettingsCommand });
+    editMenu.Items.Add(new MenuItemViewModel { Header = "Imported Models", Command = OpenImportedModelsDialogCommand });
+    editMenu.Items.Add(new MenuItemViewModel { IsSeparator = true });
+    editMenu.Items.Add(new MenuItemViewModel { Header = "Toggle Theme", Command = ToggleThemeCommand });
+
+    MainMenu.Add(fileMenu);
+    MainMenu.Add(editMenu);
+  }
+
+  partial void OnActiveViewportChanged(Viewport3DViewModel? oldValue, Viewport3DViewModel? newValue)
+  {
+      if (oldValue != null)
+      {
+          oldValue.PropertyChanged -= ActiveViewport_PropertyChanged;
+      }
+      if (newValue != null)
+      {
+          newValue.PropertyChanged += ActiveViewport_PropertyChanged;
+      }
+      UpdateSnapObserverVisibility();
+  }
+
+  private void ActiveViewport_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+  {
+      if (e.PropertyName == nameof(Viewport3DViewModel.IsEarthObserverMode))
+      {
+          UpdateSnapObserverVisibility();
+      }
+  }
+
+  private void UpdateSnapObserverVisibility()
+  {
+      if (_snapObserverMenuItem != null)
+      {
+          _snapObserverMenuItem.IsVisible = ActiveViewport?.IsEarthObserverMode ?? false;
+      }
   }
 
   [RelayCommand]
@@ -112,7 +180,13 @@ public partial class MainWindowViewModel : ViewModelBase
   [RelayCommand]
   private void ToggleTheme()
   {
-    // Simple toggle: if Dark -> Light, otherwise -> Dark (covers Light and System)
-    CurrentTheme = CurrentTheme == AppTheme.Dark ? AppTheme.Light : AppTheme.Dark;
+    if (CurrentTheme == AppTheme.System)
+    {
+        CurrentTheme = IsSystemThemeDark ? AppTheme.Light : AppTheme.Dark;
+    }
+    else
+    {
+        CurrentTheme = CurrentTheme == AppTheme.Dark ? AppTheme.Light : AppTheme.Dark;
+    }
   }
 }

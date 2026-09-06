@@ -40,22 +40,22 @@
 
       <StackPanel Orientation="Horizontal" Spacing="0" Margin="12,8">
         <Viewbox Width="20" Height="20" Stretch="Uniform">
-          
+
           <Grid>
             <Canvas Width="16" Height="16" IsVisible="{Binding IsModeEarthPosition}">
               <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2" Fill="Transparent"
                     Data="M 8 1 A 7 7 0 1 1 7.999 1 Z
-                          M 1 8 L 15 8
-                          M 8 1 C 12 1 12 15 8 15
-                          M 8 1 C 4 1 4 15 8 15"/>
+                    M 1 8 L 15 8
+                    M 8 1 C 12 1 12 15 8 15
+                    M 8 1 C 4 1 4 15 8 15"/>
             </Canvas>
 
             <Canvas Width="16" Height="16" IsVisible="{Binding IsModeUpZenith}">
               <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2"
                     StrokeLineCap="Round" StrokeJoin="Round" Fill="Transparent"
                     Data="M 0 15 L 16 15
-                          M 8 13 L 8 2
-                          M 4 7 L 8 2 L 12 7"/>
+                    M 8 13 L 8 2
+                    M 4 7 L 8 2 L 12 7"/>
             </Canvas>
 
             <Canvas Width="16" Height="16" IsVisible="{Binding IsModeCometOrbiting}">
@@ -105,7 +105,7 @@
 
             <StackPanel Orientation="Vertical">
               <!-- No conv reference because we don't have it here... Wait, we do! But we need xmlns.
-                   Let's add xmlns:conv="using:AetherVk.Converters" to the Window -->
+              Let's add xmlns:conv="using:AetherVk.Converters" to the Window -->
               <Image Source="{Binding ImageSource, Converter={x:Static conv:FilePathToBitmapConverter.Instance}}"
                      Width="{Binding ScaledWidth}" Height="{Binding ScaledHeight}" Opacity="{Binding Opacity}"
                      IsVisible="{Binding ImageSource, Converter={x:Static ObjectConverters.IsNotNull}}"
@@ -265,6 +265,7 @@
       </Border>
     </Canvas>
 
+    <!--  Measurement Indicator -->
     <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="10" Padding="10,5"
             Background="Transparent"
             IsVisible="{Binding ShowMeasurementIndicator}">
@@ -290,12 +291,12 @@
     </ContentControl>
 
     <!--
-      RenderDoc frame-capture button.
-      ContentControl with an untyped DataTemplate: when RenderDoc is null (Release builds)
-      no DataTemplate matches so nothing is added to the visual tree. When RenderDoc is a
-      live RenderDocCaptureViewModel (DEBUG + process launched under RenderDoc) the template
-      fires and the Button is instantiated. No type reference to RenderDocCaptureViewModel
-      needed in AXAML — bindings inside the DataTemplate are reflection-based.
+    RenderDoc frame-capture button.
+    ContentControl with an untyped DataTemplate: when RenderDoc is null (Release builds)
+    no DataTemplate matches so nothing is added to the visual tree. When RenderDoc is a
+    live RenderDocCaptureViewModel (DEBUG + process launched under RenderDoc) the template
+    fires and the Button is instantiated. No type reference to RenderDocCaptureViewModel
+    needed in AXAML — bindings inside the DataTemplate are reflection-based.
     -->
     <ContentControl Content="{Binding RenderDoc}"
                     HorizontalAlignment="Right" VerticalAlignment="Bottom"
@@ -317,6 +318,32 @@
         </DataTemplate>
       </ContentControl.DataTemplates>
     </ContentControl>
+
+    <!-- Sun direction indicator ─────────────────────────────────────────────
+    Shown only when the sun is outside the camera frustum (IsSunOffScreen = true).
+    A gold "^" chevron rotates to point toward the off-screen sun.
+    SunIndicatorLeft / SunIndicatorTop position the 24×24 border so its centre sits
+    on a circle of radius min(32 epx, min(W,H)/2) around the viewport centre.
+    SunIndicatorAngleDeg (clockwise from screen-up) is applied by the RotateTransform. -->
+    <Canvas IsHitTestVisible="False"
+            IsVisible="{Binding IsSunOffScreen}">
+      <Border Canvas.Left="{Binding SunIndicatorLeft}"
+              Canvas.Top="{Binding SunIndicatorTop}"
+              Width="24" Height="24"
+              Background="Transparent">
+        <Border.RenderTransform>
+          <!-- Rotate around the border centre so the ^ tip always points toward the sun -->
+          <RotateTransform Angle="{Binding SunIndicatorAngleDeg}"
+                           CenterX="12" CenterY="12"/>
+        </Border.RenderTransform>
+        <!-- "^" chevron pointing up at 0°; yellow/gold (#FFD700) -->
+        <Path Stroke="#FFD700" StrokeThickness="2.5"
+              StrokeLineCap="Round" StrokeJoin="Round"
+              Data="M 12 2 L 22 14 M 12 2 L 2 14"
+              HorizontalAlignment="Stretch"
+              VerticalAlignment="Stretch"/>
+      </Border>
+    </Canvas>
 
   </Panel>
 </Window>

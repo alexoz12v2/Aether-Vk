@@ -205,7 +205,7 @@ impl SimulationContext {
         subtree,
         crate::scene::ReferenceFrameComponent {
           frame_type: crate::scene::ReferenceFrameType::Micro,
-          scale: AU_TO_KM,
+          scale: 1.0 / AU_TO_KM,
           soi_radius: 1.0,
           depth_layer: 1,
         },
@@ -223,7 +223,9 @@ impl SimulationContext {
           .add_component(
             body,
             crate::scene::SphereGizmoComponent {
-              radius: 1.0,
+              // 50 km default: angular diameter ~13 px at 7 500 km orbital distance
+              // (0.4° at 45° FOV / 1920 px). User can override via nucleus radius UI.
+              radius: 50.0,
               subdivisions: 4.0,
               local_frame: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::identity(),
               is_visible: true,
@@ -434,9 +436,8 @@ impl SimulationContext {
       // STEP 3 — Queue trajectory generation for the full calendar year containing start_epoch.
       // UpdateTrajectoryForSpk is an async command processed on the thread pool; earth.orbit
       // will gain a TrajectoryComponent once complete.
-      let year = crate::simulation_api::reposition::year_of_epoch(start_epoch);
       let (traj_start_tai, traj_end_tai) =
-        crate::simulation_api::reposition::full_year_tai_seconds(year);
+        crate::simulation_api::reposition::full_year_tai_seconds(start_epoch);
       let _ = self.threads.logic_thread.tx().try_send(
         crate::simulation_api::structs::LogicCommand::UpdateTrajectoryForSpk {
           task_id: 0,
@@ -450,6 +451,7 @@ impl SimulationContext {
       );
       // Record the trajectory year so SetEpochRange can skip redundant rebuilds.
       {
+        let year = crate::simulation_api::reposition::year_of_epoch(start_epoch);
         let scenes_guard = self.scenes.read();
         if let Some(scene_arc) = scenes_guard.get_scene(scene_id) {
           scene_arc.write().earth_orbit_year = Some(year);

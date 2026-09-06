@@ -195,4 +195,29 @@ public sealed class PlatformWindowService : IPlatformWindowService
 #endif
     // Windows/macOS: no-op — Show(ownerWindow) already guarantees correct Z-order.
   }
+
+  /// <inheritdoc/>
+  public void SetCursorPosition(int x, int y)
+  {
+#if TARGET_IS_LINUX
+    nint disp = PInvokeX11.XOpenDisplay(0);
+    if (disp != 0)
+    {
+      try
+      {
+        nint rootWindow = PInvokeX11.XDefaultRootWindow(disp);
+        PInvokeX11.XWarpPointer(disp, 0, rootWindow, 0, 0, 0, 0, x, y);
+        PInvokeX11.XFlush(disp);
+      }
+      finally
+      {
+        PInvokeX11.XCloseDisplay(disp);
+      }
+    }
+#elif TARGET_IS_WINDOWS
+    Windows.Win32.PInvoke.SetCursorPos(x, y);
+#elif TARGET_IS_OSX
+    PInvokeCoreGraphics.CGWarpMouseCursorPosition(new PInvokeObjC.CGPoint { X = x, Y = y });
+#endif
+  }
 }

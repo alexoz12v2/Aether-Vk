@@ -8,7 +8,7 @@ namespace AetherVk.Logic.ViewModels;
 /// The localized string members are emitted by the <c>[GenerateLocalizedStrings]</c>
 /// source generator into <c>IModelTabViewModel.LocalizedStrings.g.cs</c>.
 /// </summary>
-public partial interface IModelTabViewModel
+public partial interface IModelTabViewModel : ICursorWarpingViewModel
 {
   /// <summary>Live collection of dust emission jets managed for this scene.</summary>
   ObservableCollection<JetViewModel>? Jets { get; }
@@ -25,7 +25,7 @@ public partial interface IModelTabViewModel
   /// <summary>
   /// Manual override for nucleus bounding-sphere radius in km.
   /// When &gt; 0, takes precedence over the Horizon-fetched value from CometSession.
-  /// <c>AddJetCommand</c> is disabled until this or the Horizon radius is &gt; 0.
+  /// <c>AddJetCommand</c> is disabled until a comet is committed AND this or the Horizon radius is &gt; 0.
   /// </summary>
   float ManualNucleusRadiusKm { get; set; }
 
@@ -37,4 +37,21 @@ public partial interface IModelTabViewModel
 
   /// <summary><c>true</c> when no nucleus radius is available — shows the warning hint.</summary>
   bool IsNucleusRadiusUnknown { get; }
+
+  /// <summary>
+  /// <c>true</c> when a comet has been committed to the native runtime.
+  /// <c>AddJetCommand</c> is disabled until this is <c>true</c>.
+  /// Bind to this to show a "Commit a comet first" hint in the view.
+  /// </summary>
+  bool IsCometCommitted { get; }
+
+  /// <summary>
+  /// When true, enables the legacy Sun and Nucleus expanders for debugging purposes.
+  /// </summary>
+  bool EnableLegacyExpanders { get; set; }
+
+  /// <summary>
+  /// The current model session.
+  /// </summary>
+  AetherVk.Logic.Services.ModelSession? CurrentSession { get; }
 }

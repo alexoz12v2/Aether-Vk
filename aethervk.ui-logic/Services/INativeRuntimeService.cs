@@ -172,18 +172,24 @@ public interface INativeRuntimeService : IDisposable
   // ==========================================
 
   /// <summary>
-  /// Command flags for <see cref="ReconfigureComet"/>.
+  /// Initializes the native comet entity (Phase 1 of two-phase commit).
+  /// Sends <c>TryInitComet</c> to the Rust logic thread, which attaches
+  /// <c>AlmanacPlanet</c>, force-repositions, and queues trajectory generation
+  /// using the supplied Keplerian elements for the orbital track.
   /// </summary>
-  // 0x0 = query comet entity id only; 0x1 = ATTACH AlmanacPlanet; 0x2 = DETACH AlmanacPlanet
-  // These mirror the Rust bitmask in avkSimulationContext_reconfigureComet.
+  /// <param name="spkId">NAIF SPK id of the comet.</param>
+  /// <param name="proposedRange">The epoch window selected by the user.</param>
+  /// <param name="sbData">SBDB Keplerian elements used to draw the analytical orbit track.</param>
+  /// <param name="cometBodyId">Receives the comet body entity id on success.</param>
+  bool TryInitComet(int spkId, TimeRange proposedRange, Models.SmallBodyDataComponent sbData, out ulong cometBodyId);
 
   /// <summary>
-  /// Reconfigures the native comet entity.
+  /// Reconfigures the native comet entity (query or DETACH).
   /// </summary>
   /// <param name="commandFlags">
-  ///   Bitmask: <c>0</c> = query id only; <c>1</c> = ATTACH (InitComet); <c>2</c> = DETACH (CleanupComet).
+  ///   Bitmask: <c>0</c> = query id only; <c>2</c> = DETACH (CleanupComet).
   /// </param>
-  /// <param name="spkId">NAIF SPK id of the comet (used when commandFlags has ATTACH bit set).</param>
+  /// <param name="spkId">NAIF SPK id of the comet.</param>
   /// <param name="cometBodyId">Receives the comet body entity id (always populated on success).</param>
   bool ReconfigureComet(int commandFlags, int spkId, out ulong cometBodyId);
 
@@ -744,11 +750,21 @@ internal unsafe static class PInvokeAetherVkCore
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_pauseSimulationSync(nint ctx, ulong sceneId);
 
+  [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_tryInitComet(
+    nint ctx,
+    ulong sceneId,
+    int spkId,
+    CTimeRange* proposedRange,
+    CKeplerianElementsDTO* elements,
+    ulong* outCometId
+  );
+
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_reconfigureComet(
     nint ctx,
     ulong sceneId,
-    int commandFlags, // 0=query, 1=ATTACH, 2=DETACH
+    int commandFlags, // 0=query, 2=DETACH
     int spkId,
     ulong* outCometId
   );
@@ -1632,6 +1648,37 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     return ok;
   }
 
+  public unsafe bool TryInitComet(int spkId, TimeRange proposedRange, Models.SmallBodyDataComponent sbData, out ulong cometBodyId)
+  {
+    cometBodyId = 0;
+    if (_ctx == 0) return false;
+
+    var rangeDto = default(CTimeRange);
+    rangeDto.Nanoseconds[0] = proposedRange.StartNs;
+    rangeDto.Nanoseconds[1] = proposedRange.EndNs;
+    rangeDto.Centuries[0] = proposedRange.StartCenturies;
+    rangeDto.Centuries[1] = proposedRange.EndCenturies;
+
+    var keplerianDto = new CKeplerianElementsDTO
+    {
+      Eccentricity = sbData.E,
+      PerihelionDistanceAu = sbData.Q,
+      InclinationDeg = sbData.I,
+      LongitudeOfAscendingNodeDeg = sbData.Om,
+      ArgumentOfPerihelionDeg = sbData.W
+    };
+
+    ulong outId = 0;
+    bool ok = PInvokeAetherVkCore.avkSimulationContext_tryInitComet(
+        _ctx, _sceneId, spkId, &rangeDto, &keplerianDto, &outId);
+        
+    cometBodyId = outId;
+    if (ok && outId != 0)
+      CometEntityId = outId;
+      
+    return ok;
+  }
+
   public unsafe bool SetBodyRotationalModel(ulong cometBodyEntityId, BodyRotationalModelDto dto)
   {
     var cDto = dto.ToDto();
@@ -2068,10 +2115,17 @@ internal readonly struct FfiScreenSpaceBillboardDTO
 /// </summary>
 public enum ExternalStateType : uint
 {
-  TimeRange = 1,
-  ModelImported = 2,
-  AlmanacImported = 3,
-  // Future: TextureImported = 4 — add when Rust ExternalState::TextureImported arm lands
+  TimeRange            = 1,
+  ModelImported        = 2,
+  AlmanacImported      = 3,
+  CometInitialized     = 4,
+  SunVisibilityChanged = 5,
+  /// <summary>
+  /// Emitted once by <c>BuildCometTrajectory</c> after <c>force_reposition</c> completes.
+  /// Carries the post-commit comet position in AU (heliocentric SUN_ECLIPJ2000, f64).
+  /// Payload: <see cref="CCometPositionSnapshotDTO"/>.
+  /// </summary>
+  CometPositionSnapshot = 6,
 }
 
 /// <summary>
@@ -2117,6 +2171,40 @@ internal unsafe struct CAlmanacImportedDTO
       return Encoding.UTF8.GetString(p, len);
     }
   }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct CCometInitializedDTO
+{
+  public uint Success;
+  public int SpkId;
+}
+
+/// <summary>
+/// C# mirror of <c>CCometPositionSnapshot</c> (Rust, <c>external_state</c> module).
+///
+/// Emitted via <c>ExternalState::CometPositionSnapshot</c> (state_id = 6) once by
+/// <c>BuildCometTrajectory</c> after <c>force_reposition</c> completes. Allows
+/// <see cref="CometPositionTrackerService"/> to update its position subject immediately
+/// — without requiring the simulation to be running.
+///
+/// Layout: 32 bytes—matches Rust <c>#[repr(C)]</c>:
+/// <list type="bullet">
+///   <item><c>SpkId  : i32</c></item>
+///   <item><c>_Pad   : i32</c></item>
+///   <item><c>PosX   : f64</c> — AU (heliocentric SUN_ECLIPJ2000)</item>
+///   <item><c>PosY   : f64</c></item>
+///   <item><c>PosZ   : f64</c></item>
+/// </list>
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal readonly struct CCometPositionSnapshotDTO
+{
+  public readonly int  SpkId;
+  public readonly int  _Pad;
+  public readonly double PosX;
+  public readonly double PosY;
+  public readonly double PosZ;
 }
 
 /// <summary>
@@ -2273,3 +2361,38 @@ internal struct SceneHierarchyDTO
 #endif
 
 #endregion
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct CKeplerianElementsDTO
+{
+  public double Eccentricity;
+  public double PerihelionDistanceAu;
+  public double InclinationDeg;
+  public double LongitudeOfAscendingNodeDeg;
+  public double ArgumentOfPerihelionDeg;
+}
+
+/// <summary>
+/// C# mirror of <c>CSunVisibilityChanged</c> (Rust, <c>external_state</c> module).
+///
+/// Layout: 12 bytes — matches Rust <c>#[repr(C)]</c>:
+/// <list type="bullet">
+///   <item><c>IsVisible : u32</c> — 1 = sun entered the camera frustum; 0 = sun exited.</item>
+///   <item><c>NdcX : f32</c> — projected NDC X of the sun (may exceed ±1 when off-screen).</item>
+///   <item><c>NdcY : f32</c> — projected NDC Y of the sun (may exceed ±1 when off-screen).</item>
+/// </list>
+///
+/// Both <c>NdcX</c> and <c>NdcY</c> are valid regardless of on/off-screen status.
+/// Consumers should use <c>IsVisible</c> to gate on/off logic, and the NDC pair to
+/// compute the direction angle for the arrowhead indicator.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct CSunVisibilityChangedDTO
+{
+  /// <summary>1 = sun entered frustum; 0 = sun exited.</summary>
+  public uint  IsVisible;
+  /// <summary>Projected NDC X (may exceed ±1 when sun is off-screen).</summary>
+  public float NdcX;
+  /// <summary>Projected NDC Y (may exceed ±1 when sun is off-screen).</summary>
+  public float NdcY;
+}

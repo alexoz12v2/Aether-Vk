@@ -102,4 +102,28 @@ unsafe extern "system" fn DllMain(
 
 unsafe fn load() {
   SYSTEM_INFO.call_once(|| AvkSystemInfo::new());
+
+  let _ = log::set_logger(&LOGGER);
+  #[cfg(debug_assertions)]
+  log::set_max_level(log::LevelFilter::Trace);
+  #[cfg(not(debug_assertions))]
+  log::set_max_level(log::LevelFilter::Debug);
 }
+
+struct AvkLogger;
+
+impl log::Log for AvkLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            aethervk_oshal_rlib::log!("[{}] {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static LOGGER: AvkLogger = AvkLogger;

@@ -61,10 +61,12 @@ namespace AetherVk.Logic.ViewModels
                     OnIsProposedDifferentFromCommittedChanging(value);
                     OnIsProposedDifferentFromCommittedChanging(default, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsProposedDifferentFromCommitted);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CanRestore);
                     _isProposedDifferentFromCommitted = value;
                     OnIsProposedDifferentFromCommittedChanged(value);
                     OnIsProposedDifferentFromCommittedChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsProposedDifferentFromCommitted);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CanRestore);
                 }
             }
         }
@@ -187,10 +189,12 @@ namespace AetherVk.Logic.ViewModels
                     OnHasCommittedStateChanging(value);
                     OnHasCommittedStateChanging(default, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.HasCommittedState);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CanRestore);
                     _hasCommittedState = value;
                     OnHasCommittedStateChanged(value);
                     OnHasCommittedStateChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.HasCommittedState);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CanRestore);
                 }
             }
         }

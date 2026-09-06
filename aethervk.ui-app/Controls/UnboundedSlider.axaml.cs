@@ -201,6 +201,36 @@ public partial class UnboundedSlider : UserControl
 
         Value = Constrain(newValue);
         _lastPos = pos;
+        
+        // --- Cursor Wrapping Logic ---
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel != null)
+        {
+          var screen = topLevel.Screens?.ScreenFromVisual(this);
+          if (screen != null)
+          {
+            var currentScreenPoint = this.PointToScreen(pos);
+            var bounds = screen.Bounds;
+            int newX;
+            bool warped = AetherVk.Logic.Utils.CursorWrapHelper.TryWrapCursor(
+                currentScreenPoint.X, bounds.X, bounds.Right, 2, 10, out newX);
+            int newY = currentScreenPoint.Y;
+
+            if (warped)
+            {
+              var newScreenPt = new PixelPoint(newX, newY);
+              
+              if (this.DataContext is AetherVk.Logic.ViewModels.ICursorWarpingViewModel cursorVm)
+              {
+                cursorVm.SetCursorPosition(newScreenPt.X, newScreenPt.Y);
+              }
+              
+              // Update our local pos so the next event doesn't register a huge jump
+              var newLocalPt = this.PointToClient(newScreenPt);
+              _lastPos = newLocalPt;
+            }
+          }
+        }
       }
       e.Handled = true;
     }

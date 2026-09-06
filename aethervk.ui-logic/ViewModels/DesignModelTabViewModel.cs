@@ -15,6 +15,19 @@ public partial class DesignModelTabViewModel
   private static JetViewModel MakeSampleJet(int index)
   {
     var j = new JetViewModel { DisplayIndex = index };
+    
+    // Override random values with fixed sensible defaults for the design previewer
+    if (index == 1)
+    {
+        j.LatitudeDeg = 30f;
+        j.LongitudeDeg = 45f;
+    }
+    else
+    {
+        j.LatitudeDeg = -15f;
+        j.LongitudeDeg = 120f;
+    }
+    
     return j;
   }
 
@@ -34,8 +47,14 @@ public partial class DesignModelTabViewModel
 
   public IRelayCommand AddJetCommand    => new RelayCommand(() => { });
   public IRelayCommand<JetViewModel?> RemoveJetCommand => new RelayCommand<JetViewModel?>(_ => { });
-  public float ManualNucleusRadiusKm { get; set; } = 0f;
-  public float? ManualNucleusRadiusKmNullable { get; set; } = null;
+  public float ManualNucleusRadiusKm { get; set; } = 2.0f;
+  public float? ManualNucleusRadiusKmNullable { get; set; } = 2.0f;
   public bool IsNucleusRadiusUnknown => ManualNucleusRadiusKm == 0f;
+  public bool IsCometCommitted { get; } = false;
+  public bool EnableLegacyExpanders { get; set; } = false;
+  
+  public AetherVk.Logic.Services.ModelSession? CurrentSession { get; } = new AetherVk.Logic.Services.ModelSession();
+
+  public void SetCursorPosition(int x, int y) { }
 }
 #endif
