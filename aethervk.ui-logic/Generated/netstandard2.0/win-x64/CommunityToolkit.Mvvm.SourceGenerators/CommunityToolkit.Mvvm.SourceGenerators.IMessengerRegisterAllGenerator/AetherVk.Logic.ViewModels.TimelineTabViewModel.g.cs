@@ -18,6 +18,7 @@ namespace CommunityToolkit.Mvvm.Messaging.__Internals
             {
                 var recipient = (global::AetherVk.Logic.ViewModels.TimelineTabViewModel)obj;
                 messenger.Register<global::AetherVk.Logic.Messages.CometDecommittedMessage>(recipient);
+                messenger.Register<global::AetherVk.Logic.Messages.CometCommittedMessage>(recipient);
             }
 
             return RegisterAll;
@@ -38,6 +39,7 @@ namespace CommunityToolkit.Mvvm.Messaging.__Internals
             {
                 var recipient = (global::AetherVk.Logic.ViewModels.TimelineTabViewModel)obj;
                 messenger.Register<global::AetherVk.Logic.Messages.CometDecommittedMessage, TToken>(recipient, token);
+                messenger.Register<global::AetherVk.Logic.Messages.CometCommittedMessage, TToken>(recipient, token);
             }
 
             return RegisterAll;

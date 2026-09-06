@@ -23,12 +23,12 @@ pub fn year_of_epoch(e: hifitime::Epoch) -> i32 {
   e.to_gregorian_utc().0
 }
 
-/// Returns TAI seconds for Jan 1 00:00 and Dec 31 23:00 UTC of `year`.
-/// Used to compute the full-year range for `UpdateTrajectoryForSpk`.
-pub fn full_year_tai_seconds(year: i32) -> (f64, f64) {
-  let start = hifitime::Epoch::from_gregorian_utc(year, 1, 1, 0, 0, 0, 0);
-  let end = hifitime::Epoch::from_gregorian_utc(year, 12, 31, 23, 0, 0, 0);
-  (start.to_tai_seconds(), end.to_tai_seconds())
+/// Returns TAI seconds for exactly one Julian year (365.25 days) from the given epoch.
+/// Used to compute the full-year range for `UpdateTrajectoryForSpk` so the Earth orbit closes.
+pub fn full_year_tai_seconds(start: hifitime::Epoch) -> (f64, f64) {
+  let start_sec = start.to_tai_seconds();
+  let end_sec = start_sec + 365.25 * 86400.0;
+  (start_sec, end_sec)
 }
 
 /// Snaps `subtree` (AU frame, child of root) and `body` (km-residual frame, child of subtree)

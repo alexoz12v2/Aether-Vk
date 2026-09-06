@@ -77,4 +77,9 @@ public interface IPlatformWindowService
   /// The XID of the overlay window from <c>TopLevel.TryGetPlatformHandle().Handle</c>.
   /// </param>
   void SetOverlayOverrideRedirect(nint overlayHandle);
+
+  /// <summary>
+  /// Sets the global cursor position on the screen.
+  /// </summary>
+  void SetCursorPosition(int x, int y);
 }

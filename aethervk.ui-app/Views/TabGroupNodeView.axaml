@@ -35,12 +35,26 @@
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:TabItemViewModel">
-
-                    <Border Background="Transparent" CornerRadius="4" PointerPressed="OnTabPointerPressed">
+                    <Border CornerRadius="4" PointerPressed="OnTabPointerPressed" Classes.selected="{Binding IsSelected}">
 
                       <Border.Styles>
-                        <Style Selector="Border:pointerover">
-                          <Setter Property="Background" Value="{DynamicResource Bg.Hover}" />
+                        <Style Selector="Border">
+                          <Setter Property="Background" Value="Transparent" />
+                        </Style>
+                        <Style Selector="Border.selected">
+                          <Setter Property="Background" Value="{DynamicResource Accent.Subtle}" />
+                        </Style>
+                        <Style Selector="Border:pointerover:not(.selected)">
+                          <Style.Animations>
+                            <Animation Duration="0:0:0.75" IterationCount="Infinite" PlaybackDirection="Alternate">
+                              <KeyFrame Cue="0%">
+                                <Setter Property="Background" Value="{DynamicResource Accent.Subtle}" />
+                              </KeyFrame>
+                              <KeyFrame Cue="100%">
+                                <Setter Property="Background" Value="{DynamicResource Accent.Hover}" />
+                              </KeyFrame>
+                            </Animation>
+                          </Style.Animations>
                         </Style>
                       </Border.Styles>
                       <StackPanel Orientation="Horizontal" Spacing="4">

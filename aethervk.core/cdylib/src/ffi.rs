@@ -69,6 +69,25 @@ pub struct CBodyRotationalModelDTO {
   pub rot_rate_deg_day: f64,
 }
 
+/// Osculating Keplerian elements from the JPL Small-Body Database.
+/// All angles in degrees; perihelion distance in AU.
+/// Passed to `avkSimulationContext_tryInitComet` so the logic thread can draw
+/// the analytical orbit track without depending on the SPK time coverage.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct CKeplerianElementsDTO {
+  /// Orbital eccentricity (e ≥ 0; <1 = ellipse, ≥1 = hyperbola/parabola).
+  pub eccentricity: f64,
+  /// Perihelion distance (AU).
+  pub perihelion_distance_au: f64,
+  /// Inclination to the ecliptic (degrees).
+  pub inclination_deg: f64,
+  /// Longitude of the ascending node Ω (degrees).
+  pub longitude_of_ascending_node_deg: f64,
+  /// Argument of perihelion ω (degrees).
+  pub argument_of_perihelion_deg: f64,
+}
+
 /// - Should create initial scene
 /// - should set initial epoch to 2020 and end epoch 1 month later (TDB)
 /// # Safety
@@ -92,14 +111,15 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
     } else {
       1
     };
-    let start = anise::time::Epoch::from_tai_parts(
+    let max_index = 1 - min_index;
+    let start = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(
       crange.centuries[min_index],
       crange.nanoseconds[min_index],
-    );
-    let end = anise::time::Epoch::from_tai_parts(
-      crange.centuries[1 - min_index],
-      crange.nanoseconds[1 - min_index],
-    );
+    ));
+    let end = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(
+      crange.centuries[max_index],
+      crange.nanoseconds[max_index],
+    ));
     if end - start < anise::time::Duration::from_days(30.0) {
       oshal::log!(
         "avkSimulationContext_startup failed: start and end epoch must be at least 1 month apart"
@@ -131,6 +151,7 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
             2,
             "de442.bsp not available at startup — Earth will be at origin",
           );
+          panic!("de442.bsp");
         }
         if let Err(e) = logic.almanac_data.load_almanac(oshal::os::fs::PathBuf::from(&bpc_path)) {
           oshal::log!("[startup] earth_latest_high_prec.bpc load failed: {}", e);
@@ -145,6 +166,7 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
             2,
             "pck00011.pca not available at startup — Earth constants unavailable",
           );
+          panic!("pck00011.pca");
         }
         if let Err(e) = logic.almanac_data.load_almanac(oshal::os::fs::PathBuf::from(&gm_path)) {
           oshal::log!("[startup] gm_de431.pca load failed: {}", e);
@@ -152,6 +174,7 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
             2,
             "gm_de431.pca not available at startup — Gravity mass unavailable",
           );
+          panic!("gm_de431.pca");
         }
         drop(logic);
       }
@@ -487,6 +510,55 @@ pub unsafe extern "C" fn avkSimulationContext_debugECSPrint(
         let entity = aethervk_core_rlib::scene::EntityId::from_ffi(e_id);
         oshal::log!("--- Entity {} ---", e_id);
         for &c_id in c_ids {
+          if c_id == 1 {
+            // HighResTransform (ComponentForeignId = 1) -> Print global f64 transform in km
+            if let Some(global_t) = scene_guard.scene.global_transform_f64(entity) {
+              const AU_TO_KM: f64 = 149_597_870.7_f64;
+              let pos_km = global_t.position * AU_TO_KM;
+              oshal::log!(
+                "Global Transform (km): pos=({:.2}, {:.2}, {:.2}), scale=({:.2e}, {:.2e}, {:.2e})",
+                pos_km.x(),
+                pos_km.y(),
+                pos_km.z(),
+                global_t.scale.x(),
+                global_t.scale.y(),
+                global_t.scale.z()
+              );
+            } else {
+              oshal::log!("Global Transform not available");
+            }
+            continue;
+          }
+          if c_id == u64::MAX {
+            fn print_entity_tree(
+                scene: &aethervk_core_rlib::scene::Scene,
+                entity: aethervk_core_rlib::scene::EntityId,
+                depth: usize,
+            ) {
+                let name = scene.get_name(entity).unwrap_or_else(|| "Unknown".into());
+                let mut comp_names = scene.get_entity_component_names(entity);
+                comp_names.sort();
+                let indent = "  ".repeat(depth);
+                oshal::log!("{}- Entity {} '{}' [{}]", indent, entity.as_ffi(), name, comp_names.join(", "));
+                if let Some(children) = scene.get_children(entity) {
+                    for child in children {
+                        print_entity_tree(scene, child, depth + 1);
+                    }
+                }
+            }
+            let root_to_print = scene_guard.scene.get_parent(entity).unwrap_or(entity);
+            oshal::log!("--- Subtree for {} ---", e_id);
+            print_entity_tree(&scene_guard.scene, root_to_print, 0);
+            
+            let name = scene_guard.scene.get_name(root_to_print).unwrap_or_default();
+            if let Some(prefix) = name.strip_suffix("_subtree") {
+                let orbit_name = alloc::format!("{}_orbit", prefix);
+                if let Some(orbit_entity) = scene_guard.scene.get_entity_by_name(&orbit_name) {
+                    print_entity_tree(&scene_guard.scene, orbit_entity, 0);
+                }
+            }
+            continue;
+          }
           if let Some(_) = scene_guard.scene.with_component_mut_by_id(entity, c_id, |erased| {
             erased.debug_print();
           }) {
@@ -849,6 +921,13 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
       is_visible: true,
     },
   );
+  debug_assert!(
+    scene_guard
+      .scene
+      .has_component::<aethervk_core_rlib::scene::StaticMeshComponent>(jet_entity)
+      == aethervk_core_rlib::scene::HasComponentResultEnum::EntityHasComponent,
+    "jet entity must have StaticMeshComponent before ParticleSystemComponent is created"
+  );
 
   let emit_params = aethervk_core_rlib::scene::particles::ParticleSystemEmitParams {
     mass_variability_perc: ps_dto.mass_variability_perc,
@@ -1105,9 +1184,10 @@ pub unsafe extern "C" fn avkSimulationContext_tryInitComet(
   scene_id: u64,
   spk_id: i32,
   proposed_range: *const external_state::CTimeRange,
+  keplerian_elements: *const CKeplerianElementsDTO,
   out_comet_id: *mut u64,
 ) -> bool {
-  if ctx.is_null() || proposed_range.is_null() {
+  if ctx.is_null() || proposed_range.is_null() || keplerian_elements.is_null() {
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
@@ -1122,11 +1202,20 @@ pub unsafe extern "C" fn avkSimulationContext_tryInitComet(
   }
 
   let range = unsafe { *proposed_range };
+  let dto = unsafe { *keplerian_elements };
+  let elements = KeplerianElements {
+    eccentricity: dto.eccentricity,
+    perihelion_distance_au: dto.perihelion_distance_au,
+    inclination_deg: dto.inclination_deg,
+    longitude_of_ascending_node_deg: dto.longitude_of_ascending_node_deg,
+    argument_of_perihelion_deg: dto.argument_of_perihelion_deg,
+  };
   let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::TryInitComet {
     scene_id,
     spk_id,
-    proposed_start: anise::time::Epoch::from_tai_parts(range.centuries[0], range.nanoseconds[0]),
-    proposed_end: anise::time::Epoch::from_tai_parts(range.centuries[1], range.nanoseconds[1]),
+    proposed_start: anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(range.centuries[0], range.nanoseconds[0])),
+    proposed_end: anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(range.centuries[1], range.nanoseconds[1])),
+    keplerian_elements: elements,
   });
 
   true
@@ -1528,8 +1617,8 @@ pub unsafe extern "C" fn avkSimulationContext_setEpochRange(
   }
   let ctx_ref = unsafe { &*ctx };
   let tai_ref = unsafe { tai.as_ref().unwrap_unchecked() };
-  let start = anise::time::Epoch::from_tai_parts(tai_ref.centuries[0], tai_ref.nanoseconds[0]);
-  let end = anise::time::Epoch::from_tai_parts(tai_ref.centuries[1], tai_ref.nanoseconds[1]);
+  let start = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(tai_ref.centuries[0], tai_ref.nanoseconds[0]));
+  let end = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(tai_ref.centuries[1], tai_ref.nanoseconds[1]));
   // the only kind of error cdylib logs is the one from sending
   if let Err(e) = ctx_ref.threads.logic_thread.tx().try_send(LogicCommand::SetEpochRange {
     scene_id,
@@ -1568,8 +1657,8 @@ pub unsafe extern "C" fn avkSimulationContext_checkAlmanacCoverage(
   let almanac = &logic_state.almanac_data;
 
   let tai_cov = unsafe { tai.as_ref().unwrap_unchecked() };
-  let start = anise::time::Epoch::from_tai_parts(tai_cov.centuries[0], tai_cov.nanoseconds[0]);
-  let end = anise::time::Epoch::from_tai_parts(tai_cov.centuries[1], tai_cov.nanoseconds[1]);
+  let start = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(tai_cov.centuries[0], tai_cov.nanoseconds[0]));
+  let end = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(tai_cov.centuries[1], tai_cov.nanoseconds[1]));
 
   // Check Earth coverage (required for orbit reference frame)
   let earth_ok = almanac.covers_interval(anise::constants::celestial_objects::EARTH, start, end);
@@ -1613,8 +1702,8 @@ pub unsafe extern "C" fn avkProbeSpkFile(
 
   let path_str = unsafe { CStr::from_ptr(path).to_str().unwrap_or("") };
   let tai = unsafe { tai_parts.as_ref().unwrap_unchecked() };
-  let start_epoch = anise::time::Epoch::from_tai_parts(tai.centuries[0], tai.nanoseconds[0]);
-  let end_epoch = anise::time::Epoch::from_tai_parts(tai.centuries[1], tai.nanoseconds[1]);
+  let start_epoch = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(tai.centuries[0], tai.nanoseconds[0]));
+  let end_epoch = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(tai.centuries[1], tai.nanoseconds[1]));
   let (covers, domain, discovered_id) =
     AlmanacPackedData::probe_spk_file_with_domain(path_str, spk_id, start_epoch, end_epoch);
 
@@ -1985,4 +2074,28 @@ pub unsafe extern "C" fn avkSimulationContext_getDebugTelemetryStats(
     };
   }
   true
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use anise::time::{Duration, Epoch};
+
+  #[test]
+  fn test_epoch_from_tdb_duration_is_j2000() {
+    // 0 centuries, 0 nanoseconds should be EXACTLY J2000 TDB.
+    let dur_zero = Duration::from_parts(0, 0);
+    let epoch_zero = Epoch::from_tdb_duration(dur_zero);
+    
+    // JDE for J2000 is 2451545.0
+    approx::assert_relative_eq!(epoch_zero.to_jde_tdb_days(), 2451545.0, epsilon = 1e-9);
+
+    // Now test the user's specific duration: 812548800000000000 ns (~25.75 years)
+    let dur = Duration::from_parts(0, 812548800000000000);
+    let epoch = Epoch::from_tdb_duration(dur);
+    
+    // 812548800 seconds = 812548800 / 86400 = 9404.5 days
+    // 2451545.0 + 9404.5 = 2460949.5
+    approx::assert_relative_eq!(epoch.to_jde_tdb_days(), 2460949.5, epsilon = 1e-9);
+  }
 }

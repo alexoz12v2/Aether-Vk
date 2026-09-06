@@ -217,6 +217,10 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
           CommittedCometName = string.Empty;
           HasTimelineChangedAfterCommit = false;
         }
+        else
+        {
+          PushRotationalModel();
+        }
       })
       .AddDisposableTo(_disposables);
   }
@@ -400,8 +404,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         _timeline.RequestEpochRange(_currentProposedTimeRange);
       }
 
-      // Commit the new SPK
-      bool committed = await _cometConfig.CommitCometAsync(filePath, naifId);
+      // Commit the new SPK — sbData carries the SBDB Keplerian elements for orbit track generation
+      bool committed = await _cometConfig.CommitCometAsync(filePath, naifId, _currentProposedTimeRange!, sbData);
 
       if (committed)
       {
@@ -524,13 +528,9 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   {
     try
     {
-      // TAI seconds since J2000: centuries * SecsPerCentury + ns / 1e9
-      // J2000 = 2000-01-01T12:00:00 TAI = 2000-01-01T11:59:27.816 UTC (approx)
-      const double SecsPerCentury = 3_155_760_000.0;
-      const double J2000UnixSec = 946727967.816; // J2000 in Unix seconds (UTC)
-      double taiSec = (double)centuries * SecsPerCentury + (double)nanoseconds / 1e9;
-      double unixSec = taiSec + J2000UnixSec;
-      var dt = DateTimeOffset.FromUnixTimeSeconds((long)unixSec).UtcDateTime;
+      long ticksPerCentury = TimeSpan.TicksPerDay * 36525L;
+      long ticks = (long)centuries * ticksPerCentury + (long)(nanoseconds / 100UL);
+      var dt = new DateTimeOffset(2000, 1, 1, 12, 0, 0, TimeSpan.Zero).AddTicks(ticks);
       return dt.ToString("yyyy-MM-dd HH:mm");
     }
     catch
@@ -580,8 +580,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     if (_runtimeService.CometEntityId.HasValue)
     {
       ulong cometId = _runtimeService.CometEntityId.Value;
-      // Component IDs for Almanac Planet (26) and Rotational Body (24)
-      _runtimeService.DebugECSPrint(1, [cometId], 2, [26, 24]);
+      // Component IDs for Almanac Planet (26) and Rotational Body (24), and HighResTransform (1)
+      _runtimeService.DebugECSPrint(1, [cometId], 4, [26, 24, 1, ulong.MaxValue]);
     }
 #endif
   }

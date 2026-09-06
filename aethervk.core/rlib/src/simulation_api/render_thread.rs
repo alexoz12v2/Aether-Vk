@@ -30,6 +30,10 @@ pub fn start_render_thread(
     }
     let mut first_render_map: hashbrown::HashMap<PresentationEngineHandle, bool> =
       hashbrown::HashMap::new();
+    let mut sky_parallax_map: hashbrown::HashMap<
+      PresentationEngineHandle,
+      crate::gpu::frame::SkyParallaxState,
+    > = hashbrown::HashMap::new();
     // Tracks PEs for which the next frame should be bracketed with
     // RenderDoc StartFrameCapture / EndFrameCapture.
     #[cfg(debug_assertions)]
@@ -144,6 +148,7 @@ pub fn start_render_thread(
                 render_device,
                 &render_params,
                 &mut first_render_map,
+                &mut sky_parallax_map,
                 render_frontend.clone(),
                 render_device_handle,
                 #[cfg(debug_assertions)]
@@ -186,6 +191,10 @@ fn process_command(
   render_device: &dyn RenderDevice,
   ctx: &RenderThreadContext,
   first_render_map: &mut hashbrown::HashMap<PresentationEngineHandle, bool>,
+  sky_parallax_map: &mut hashbrown::HashMap<
+    PresentationEngineHandle,
+    crate::gpu::frame::SkyParallaxState,
+  >,
   render_frontend: gpu::RenderFrontend,
   render_device_handle: gpu::RenderDeviceHandle,
   #[cfg(debug_assertions)] pending_rdoc_captures: &mut hashbrown::HashSet<PresentationEngineHandle>,
@@ -346,6 +355,30 @@ fn process_command(
         let task_id_feedback_err = alloc::sync::Arc::clone(&render_frame.task_id);
         let task_id_feedback_err_clone = alloc::sync::Arc::clone(&task_id_feedback_err);
 
+        // Compute the sky parallax offset for this PE using the current scene's delta time.
+        // We read it here (outside the closure) so we can mutate sky_parallax_map without
+        // conflicting with the immutable closure captures below.
+        let sky_rotation_offset: aethervk_oshal_rlib::math::vector::vec4::Quat = {
+          use aethervk_oshal_rlib::math::quaternion::Quaternion as _;
+          let scene_read = render_frame.scene.read();
+          let (cam_abs_pos, dt_s) = {
+            let time = scene_read.time_state.read();
+            let cam_entity = render_frame.camera_entity;
+            let cam_pos = scene_read
+              .scene
+              .global_transform_f64(cam_entity)
+              .map(|t| t.position.to_f32())
+              .unwrap_or_default();
+            let dt_s = (time.unscaled_delta as f32) * 1e-6;
+            (cam_pos, dt_s)
+          };
+          drop(scene_read);
+          sky_parallax_map
+            .entry(pe_handle)
+            .or_default()
+            .update(cam_abs_pos, dt_s)
+        };
+
         let res: GpuResult<(gpu::CommandBufferHandle, bool, bool)> = {
           let core_logic = || -> GpuResult<(gpu::CommandBufferHandle, bool, bool)> {
             let result =
@@ -450,6 +483,7 @@ fn process_command(
                     scaled_time_delta_us,
                     render_frame.mean_intra_grains_distance_mm,
                     render_frame.min_cumulated_mass_g,
+                    sky_rotation_offset,
                     &debug_name,
                   )
                   .map_err(|e| {

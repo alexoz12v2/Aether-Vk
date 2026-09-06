@@ -428,6 +428,9 @@ public unsafe static class PInvokeX11
   internal static extern int XSendEvent(nint display, nint window, int propagate, XEventMask eventMask, XEvent* eventSend);
 
   [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  internal static extern int XWarpPointer(nint display, nint src_w, nint dest_w, int src_x, int src_y, uint src_width, uint src_height, int dest_x, int dest_y);
+
+  [DllImport(Lib, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   internal static extern int XFlush(nint display);
 
   /// <summary>Interns an atom name, returning its numeric ID.</summary>

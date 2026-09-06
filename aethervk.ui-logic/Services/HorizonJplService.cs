@@ -321,6 +321,28 @@ public class HorizonJplService
           result.OrbitClassCode = ocCode.GetString() ?? string.Empty;
       }
 
+      if (doc.RootElement.TryGetProperty("orbit", out var orbit) && orbit.TryGetProperty("elements", out var elements))
+      {
+        foreach (var el in elements.EnumerateArray())
+        {
+          if (el.TryGetProperty("name", out var nameProp) && el.TryGetProperty("value", out var valProp))
+          {
+            var name = nameProp.GetString();
+            if (double.TryParse(valProp.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double val))
+            {
+              switch (name)
+              {
+                case "e": result.E = val; break;
+                case "q": result.Q = val; break;
+                case "i": result.I = val; break;
+                case "om": result.Om = val; break;
+                case "w": result.W = val; break;
+              }
+            }
+          }
+        }
+      }
+
       _console.Log(
         $"[HorizonJpl] SBDB parsed: spkid={result.SpkId} des={result.Designation} name={result.FullName}"
       );
@@ -862,8 +884,20 @@ public class HorizonJplService
 
     try
     {
-      var start = Uri.EscapeDataString($"'{startTime}'");
-      var stop = Uri.EscapeDataString($"'{stopTime}'");
+      string startTimeApi = startTime;
+      if (DateTime.TryParse(startTime, out var dtStart))
+      {
+          startTimeApi = dtStart.AddDays(-1).ToString("yyyy-MM-dd");
+      }
+
+      string stopTimeApi = stopTime;
+      if (DateTime.TryParse(stopTime, out var dtStop))
+      {
+          stopTimeApi = dtStop.AddDays(2).ToString("yyyy-MM-dd");
+      }
+      
+      var start = Uri.EscapeDataString($"'{startTimeApi}'");
+      var stop = Uri.EscapeDataString($"'{stopTimeApi}'");
       var cmd = Uri.EscapeDataString($"'{cmdId};'");
       var yes = Uri.EscapeDataString("'YES'");
       var no = Uri.EscapeDataString("'NO'");

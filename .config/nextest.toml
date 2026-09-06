@@ -4,6 +4,15 @@
 env = { VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING = "1" }
 test-threads = 8
 
+[test-groups]
+vulkan-tests = { max-threads = 2 }
+
 [[profile.default.overrides]]
 filter = 'test(vulkan_math_tests) | test(physics_tests)'
 threads-required = "num-test-threads"
+
+[[profile.default.overrides]]
+# Apply the Vulkan test group concurrency limit to all tests that spawn a Vulkan frontend.
+# This includes the low-level Vulkan tests, higher-level Simulation API integration tests, and dust config tests.
+filter = 'test(gpu_backends::vulkan) | test(simulation_api) | test(test_dust_config)'
+test-group = "vulkan-tests"

@@ -131,7 +131,8 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
 
     SubscribeToStrings(schedulerProvider);
     Restore();
-    IsActive = true;  // → OnActivated() → registers CometCommitted/CometDecommitted
+    
+    IsActive = true;
   }
 
   protected override void OnActivated()

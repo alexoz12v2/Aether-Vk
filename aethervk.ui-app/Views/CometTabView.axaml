@@ -48,6 +48,11 @@
       <Setter Property="HorizontalAlignment" Value="Stretch" />
       <Setter Property="Padding" Value="0,4,0,0" />
     </Style>
+    <Style Selector="TextBlock.unit-of-measurement">
+      <Setter Property="Foreground" Value="{DynamicResource Text.Disabled}" />
+      <Setter Property="Margin" Value="4,0,8,0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
   </UserControl.Styles>
 
   <Border Background="{DynamicResource Bg.Canvas}" Padding="0">
@@ -272,7 +277,7 @@
             <!-- Pole RA -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Pole RA" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleRaDeg}">
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleRaDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -282,7 +287,7 @@
             <!-- Pole Dec -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Pole Dec" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleDecDeg}">
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleDecDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -292,7 +297,7 @@
             <!-- Prime Meridian -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Prime Meridian" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PrimeMeridianDeg}">
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PrimeMeridianDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -302,36 +307,31 @@
             <!-- RA Rate -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="RA Rate" VerticalAlignment="Center" />
-              <TextBox Grid.Column="2"
-                       Text="{Binding PoleRaRateDegCen}">
-                <TextBox.InnerRightContent>
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleRaRateDegCen}" Step="0.001">
+                <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°/cen" />
-                </TextBox.InnerRightContent>
-              </TextBox>
+                </controls:UnboundedSlider.InnerRightContent>
+              </controls:UnboundedSlider>
             </Grid>
 
             <!-- Dec Rate -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Dec Rate" VerticalAlignment="Center" />
-              <TextBox Grid.Column="2"
-                       Text="{Binding PoleDecRateDegCen}">
-                <TextBox.InnerRightContent>
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleDecRateDegCen}" Step="0.001">
+                <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°/cen" />
-                </TextBox.InnerRightContent>
-              </TextBox>
+                </controls:UnboundedSlider.InnerRightContent>
+              </controls:UnboundedSlider>
             </Grid>
 
             <!-- Rotation Rate -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Rotation Rate" VerticalAlignment="Center" />
-              <TextBox Grid.Column="2"
-                       Text="{Binding RotRateDegDay}"
-                       ToolTip.Tip="Sidereal rotation rate. Positive = prograde."
-                       ToolTip.ShowDelay="500">
-                <TextBox.InnerRightContent>
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding RotRateDegDay}" Step="0.01" ToolTip.Tip="Sidereal rotation rate. Positive = prograde." ToolTip.ShowDelay="500">
+                <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°/day" />
-                </TextBox.InnerRightContent>
-              </TextBox>
+                </controls:UnboundedSlider.InnerRightContent>
+              </controls:UnboundedSlider>
             </Grid>
 
           </StackPanel>

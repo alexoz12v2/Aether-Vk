@@ -345,6 +345,7 @@ pub(super) mod resources;
 pub(super) mod shader_manager;
 pub(super) mod swapchain;
 pub(super) mod timeline_manager;
+pub(super) mod debug_labels;
 
 pub use resources::DiscardPool;
 
@@ -799,7 +800,7 @@ impl DeviceResources {
     debug_assert!(instance.api_version() < vk::API_VERSION_1_2);
 
     let frame_staging_arena =
-      memory::FrameStagingArena::new(&allocator.allocator, 128 * 1024 * 1024)?;
+      memory::FrameStagingArena::new(&allocator.allocator, 32 * 1024 * 1024)?;
 
     let particle_system_manager = ParticleSystemManager::new(
       device,
@@ -5493,10 +5494,12 @@ impl RenderDevice for Device {
         ui_elements.len() * core::mem::size_of::<crate::gpu::UiElementGpu>(),
       );
 
+      let valid_size =
+        (ui_elements.len() * core::mem::size_of::<crate::gpu::UiElementGpu>()) as u64;
       let _ = res_guard.allocator.allocator.flush_allocation(
         &arena_write.elements_alloc,
         0,
-        vk::WHOLE_SIZE as u64,
+        valid_size,
       );
 
       res_guard.allocator.allocator.unmap_memory(&mut arena_write.elements_alloc);
@@ -5512,7 +5515,7 @@ impl RenderDevice for Device {
         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .buffer(arena_write.elements_buffer.get())
         .offset(0)
-        .size(vk::WHOLE_SIZE);
+        .size(valid_size);
 
       let dep_info =
         vk::DependencyInfo::default().buffer_memory_barriers(core::slice::from_ref(&barrier));
@@ -5560,10 +5563,12 @@ impl RenderDevice for Device {
         glyphs.len() * core::mem::size_of::<crate::gpu::TextGlyphGpu>(),
       );
 
+      let valid_size =
+        (glyphs.len() * core::mem::size_of::<crate::gpu::TextGlyphGpu>()) as u64;
       let _ = res_guard.allocator.allocator.flush_allocation(
         &arena_write.glyphs_alloc,
         0,
-        vk::WHOLE_SIZE as u64,
+        valid_size,
       );
 
       res_guard.allocator.allocator.unmap_memory(&mut arena_write.glyphs_alloc);
@@ -5581,7 +5586,7 @@ impl RenderDevice for Device {
         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .buffer(arena_write.glyphs_buffer.get())
         .offset(0)
-        .size(vk::WHOLE_SIZE);
+        .size(valid_size);
 
       let dep_info =
         vk::DependencyInfo::default().buffer_memory_barriers(core::slice::from_ref(&barrier));
@@ -7421,6 +7426,64 @@ impl RenderDevice for Device {
       );
     }
     Ok(())
+  }
+
+  fn debug_label_begin(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    name: &'static core::ffi::CStr,
+    color: [f32; 4],
+  ) {
+    if let Ok(cmd) = self.get_cmd(cmd_buffer) {
+      #[cfg(debug_assertions)]
+      {
+        let label = ash::vk::DebugUtilsLabelEXT::default()
+          .label_name(name)
+          .color(color);
+        unsafe {
+          self
+            .device
+            .debug_utils
+            .cmd_begin_debug_utils_label(cmd, &label)
+        };
+      }
+    }
+  }
+
+  fn debug_label_end(&self, cmd_buffer: crate::gpu::CommandBufferHandle) {
+    #[cfg(debug_assertions)]
+    {
+      if let Ok(cmd) = self.get_cmd(cmd_buffer) {
+        unsafe {
+          self
+            .device
+            .debug_utils
+            .cmd_end_debug_utils_label(cmd)
+        };
+      }
+    }
+  }
+
+  fn debug_label_insert(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    name: &'static core::ffi::CStr,
+    color: [f32; 4],
+  ) {
+    #[cfg(debug_assertions)]
+    {
+      if let Ok(cmd) = self.get_cmd(cmd_buffer) {
+        let label = ash::vk::DebugUtilsLabelEXT::default()
+          .label_name(name)
+          .color(color);
+        unsafe {
+          self
+            .device
+            .debug_utils
+            .cmd_insert_debug_utils_label(cmd, &label)
+        };
+      }
+    }
   }
 
   fn next_subpass(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {

@@ -49,6 +49,49 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_isCometCommitted"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsCometCommitted
+        {
+            get => _isCometCommitted;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isCometCommitted, value))
+                {
+                    OnIsCometCommittedChanging(value);
+                    OnIsCometCommittedChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsCometCommitted);
+                    _isCometCommitted = value;
+                    OnIsCometCommittedChanged(value);
+                    OnIsCometCommittedChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsCometCommitted);
+                    AddJetCommand.NotifyCanExecuteChanged();
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_enableLegacyExpanders"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool EnableLegacyExpanders
+        {
+            get => _enableLegacyExpanders;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_enableLegacyExpanders, value))
+                {
+                    OnEnableLegacyExpandersChanging(value);
+                    OnEnableLegacyExpandersChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EnableLegacyExpanders);
+                    _enableLegacyExpanders = value;
+                    OnEnableLegacyExpandersChanged(value);
+                    OnEnableLegacyExpandersChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EnableLegacyExpanders);
+                }
+            }
+        }
+
         /// <summary>Executes the logic for when <see cref="SelectedJet"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="SelectedJet"/> is changed.</remarks>
@@ -93,5 +136,49 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="ManualNucleusRadiusKm"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnManualNucleusRadiusKmChanged(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="IsCometCommitted"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsCometCommitted"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsCometCommittedChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsCometCommitted"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsCometCommitted"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsCometCommittedChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsCometCommitted"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsCometCommitted"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsCometCommittedChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsCometCommitted"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsCometCommitted"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsCometCommittedChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="EnableLegacyExpanders"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EnableLegacyExpanders"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEnableLegacyExpandersChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="EnableLegacyExpanders"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EnableLegacyExpanders"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEnableLegacyExpandersChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="EnableLegacyExpanders"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EnableLegacyExpanders"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEnableLegacyExpandersChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="EnableLegacyExpanders"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EnableLegacyExpanders"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEnableLegacyExpandersChanged(bool oldValue, bool newValue);
     }
 }

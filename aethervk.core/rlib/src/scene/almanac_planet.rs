@@ -19,6 +19,27 @@ pub struct AlmanacPlanet {
 
 impl Component for AlmanacPlanet {}
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct AlmanacPlanetDTO {
+  pub naif_id: i32,
+}
+
+impl crate::scene::ForeignSerializable for AlmanacPlanet {
+  type ForeignData = AlmanacPlanetDTO;
+  const COMPONENT_ID: u64 = crate::scene::ComponentTypeId::AlmanacPlanet as u64;
+
+  fn to_foreign(&self) -> Self::ForeignData {
+    AlmanacPlanetDTO {
+      naif_id: self.naif_id,
+    }
+  }
+
+  fn apply_foreign(&mut self, data: &Self::ForeignData) {
+    self.naif_id = data.naif_id;
+  }
+}
+
 impl AlmanacPlanet {
   /// Creates an AlmanacPlanet. Rotation can be driven by almanac if bpc file loaded, or driven by
   /// an associated RotationBodyModelComponent

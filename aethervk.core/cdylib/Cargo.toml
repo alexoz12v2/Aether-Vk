@@ -24,6 +24,7 @@ aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = f
     "console_log",
 ] }
 anise = { path = "../../external/anise/anise", default-features = false }
+log = { version = "0.4.34", default-features = false, features = ["release_max_level_debug"] }
 bytes = { version = "1.11.1", default-features = false }
 heapless = { version = "0.9" }
 spin = { version = "0.10", features = ["once", "rwlock", "mutex"] }
@@ -60,3 +61,4 @@ panic = "abort"
 
 [dev-dependencies]
 ntest = "0.9.5"
+approx = "0.5"

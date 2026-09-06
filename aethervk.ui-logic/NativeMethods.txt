@@ -64,3 +64,4 @@ VK_RWIN
 // functionality, wParam stores the window button being pressed
 SetCapture
 ReleaseCapture
+SetCursorPos

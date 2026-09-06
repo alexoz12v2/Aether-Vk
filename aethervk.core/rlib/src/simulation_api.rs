@@ -21,6 +21,7 @@ use parking_lot::RwLock;
 
 pub mod components_api;
 pub mod core_api;
+pub mod debug_perf;
 pub mod logic_thread;
 pub mod misc_api;
 pub mod render_thread;
@@ -346,8 +347,9 @@ pub mod external_state {
   }
   impl CTimeRange {
     pub fn new(start: hifitime::Epoch, end: hifitime::Epoch) -> Self {
-      let (start_c, start_ns) = start.to_tai_parts();
-      let (end_c, end_ns) = end.to_tai_parts();
+      let j2000 = hifitime::Epoch::from_tdb_duration(hifitime::Duration::from_parts(0, 0));
+      let (start_c, start_ns) = (start - j2000).to_parts();
+      let (end_c, end_ns) = (end - j2000).to_parts();
       Self {
         nanoseconds: [start_ns, end_ns],
         centuries: [start_c, end_c],
@@ -436,6 +438,24 @@ pub mod external_state {
     }
   }
 
+  /// Payload for [`ExternalState::CometPositionSnapshot`].
+  ///
+  /// Emitted by `BuildCometTrajectory` after `force_reposition` succeeds, so C# can
+  /// update `CometPositionTrackerService` immediately — without waiting for a running
+  /// simulation to fire a `SIMULATION_CALLBACK`.
+  ///
+  /// Position is in AU (heliocentric SUN_ECLIPJ2000), f64 precision.
+  /// Layout: 8 (spk_id i32 + _pad i32) + 24 (3×f64) = 32 bytes.
+  #[repr(C)]
+  #[derive(Copy, Clone, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct CCometPositionSnapshot {
+    pub spk_id: i32,
+    pub _pad: i32,
+    pub pos_x: f64,
+    pub pos_y: f64,
+    pub pos_z: f64,
+  }
+
   pub enum ExternalState {
     /// Signifies a change in the epoch range state
     TimeRange(CTimeRange),
@@ -445,6 +465,13 @@ pub mod external_state {
     AlmanacImported(CAlamanacImported),
     /// Tells whether comet initialization (Two-Phase Commit) succeeded
     CometInitialized(CCometInitialized),
+    /// Emitted when the sun (world origin) enters or exits the primary camera frustum.
+    /// Fired only on *state changes*, not every frame.
+    SunVisibilityChanged(CSunVisibilityChanged),
+    /// Emitted once by `BuildCometTrajectory` after `force_reposition` completes.
+    /// Carries the post-commit comet position in AU (heliocentric SUN_ECLIPJ2000, f64).
+    /// Allows C# to update `CometPositionTrackerService` without a running simulation.
+    CometPositionSnapshot(CCometPositionSnapshot),
   }
 
   impl ExternalState {
@@ -454,8 +481,29 @@ pub mod external_state {
         Self::ModelImported(_) => 2,
         Self::AlmanacImported(_) => 3,
         Self::CometInitialized(_) => 4,
+        Self::SunVisibilityChanged(_) => 5,
+        Self::CometPositionSnapshot(_) => 6,
       }
     }
+  }
+
+  /// Payload for [`ExternalState::SunVisibilityChanged`].
+  ///
+  /// Layout: 12 bytes, `#[repr(C)]`, `bytemuck::Pod`.
+  ///
+  /// `ndc_x` and `ndc_y` carry the actual projected NDC coordinates regardless of on/off screen
+  /// status — they can exceed ±1 when the sun is outside the frustum. The C# side uses
+  /// `is_visible` to distinguish the two states, and `ndc_x / ndc_y` to compute the direction
+  /// angle for the arrowhead indicator.
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct CSunVisibilityChanged {
+    /// `1` = sun entered the camera frustum; `0` = sun exited.
+    pub is_visible: u32,
+    /// Projected NDC X coordinate of the sun (may exceed ±1 when off-screen).
+    pub ndc_x: f32,
+    /// Projected NDC Y coordinate of the sun (may exceed ±1 when off-screen).
+    pub ndc_y: f32,
   }
 }
 
@@ -475,6 +523,12 @@ pub fn emit_external_state_change(external_state: &external_state::ExternalState
       }
       ExternalState::CometInitialized(comet_initialized) => {
         bytemuck::bytes_of(comet_initialized).as_ptr().cast()
+      }
+      ExternalState::SunVisibilityChanged(sv) => {
+        bytemuck::bytes_of(sv).as_ptr().cast::<core::ffi::c_void>()
+      }
+      ExternalState::CometPositionSnapshot(snapshot) => {
+        bytemuck::bytes_of(snapshot).as_ptr().cast::<core::ffi::c_void>()
       }
     };
     unsafe { cb(id, bytes_ptr) };

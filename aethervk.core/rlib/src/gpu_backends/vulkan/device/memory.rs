@@ -207,8 +207,7 @@ impl FrameStagingArena {
     let alloc_info = vk_mem::AllocationCreateInfo {
       usage: vk_mem::MemoryUsage::Auto,
       flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-        | vk_mem::AllocationCreateFlags::MAPPED
-        | vk_mem::AllocationCreateFlags::DEDICATED_MEMORY,
+        | vk_mem::AllocationCreateFlags::MAPPED,
       required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
         | vk::MemoryPropertyFlags::HOST_COHERENT,
       ..Default::default()

@@ -38,6 +38,27 @@ use thingbuf::mpsc;
 /// target rate for physical simulation, in unscaled(read) monotonic time
 pub const UNSCALED_FIXED_DELTA_US: timeus_t = timeus_milliseconds(16);
 
+/// Osculating Keplerian orbital elements from the JPL Small-Body Database (SBDB).
+///
+/// Used by [`LogicCommand::TryInitComet`] and [`LogicCommand::BuildCometTrajectory`] to
+/// generate an analytical orbit track (full ellipse or large hyperbola arc) independently
+/// of the SPK file time coverage. The elements are in the **Heliocentric Ecliptic** frame
+/// (J2000 ecliptic plane), which must be rotated by Earth's obliquity (~23.44°) before
+/// storing as Heliocentric Equatorial (ICRF) control points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeplerianElements {
+  /// Orbital eccentricity (e ≥ 0; <1 = ellipse, ≥1 = hyperbola).
+  pub eccentricity: f64,
+  /// Perihelion distance (AU).
+  pub perihelion_distance_au: f64,
+  /// Inclination to the J2000 ecliptic plane (degrees).
+  pub inclination_deg: f64,
+  /// Longitude of the ascending node Ω (degrees).
+  pub longitude_of_ascending_node_deg: f64,
+  /// Argument of perihelion ω (degrees).
+  pub argument_of_perihelion_deg: f64,
+}
+
 pub mod particle_constants {
   pub const MEAN_INTRA_GRAINS_DISTANCE_MM: f32 = 1_f32;
   pub const MIN_CUMULATED_MASS_G: f32 = 0.001_f32; // from bvh_utils.glsl
@@ -787,6 +808,8 @@ pub enum LogicCommand {
     spk_id: i32,
     proposed_start: hifitime::Epoch,
     proposed_end: hifitime::Epoch,
+    /// Osculating Keplerian elements from SBDB, used to generate the analytical orbit track.
+    keplerian_elements: KeplerianElements,
   },
   /// Phase 1 Async Math: Background thread generates trajectory points.
   BuildCometTrajectory {
@@ -795,6 +818,8 @@ pub enum LogicCommand {
     start_epoch_tai_sec: f64,
     end_epoch_tai_sec: f64,
     sample_step_days: f64,
+    /// Osculating Keplerian elements from SBDB, forwarded from TryInitComet.
+    keplerian_elements: KeplerianElements,
   },
   /// Internal command dispatched by the UnloadAlmanac handler for comet SPK cleanup.
   /// Removes AlmanacPlanet and TrajectoryComponent, resets comet to 1 AU +X default.
@@ -1116,6 +1141,10 @@ impl PhysicsDeviceSelfSync {
       return false;
     }
 
+    // Count every poll in debug builds so debug_perf can report rate + backtraces.
+    #[cfg(all(debug_assertions, target_os = "linux"))]
+    crate::simulation_api::debug_perf::traced_semaphore_poll();
+
     if let Ok(value) = unsafe {
       vulkan_device
         .timeline_semaphore
@@ -1136,6 +1165,24 @@ impl PhysicsDeviceSelfSync {
       false
     }
   }
+
+  /// Blocking wait: parks the thread until the GPU signals the timeline value.
+  ///
+  /// Uses `vkWaitSemaphoresKHR` — the correct API for waiting on GPU completion.
+  /// The calling thread consumes **zero CPU** while parked (kernel-level wait,
+  /// signalled via GPU interrupt).
+  ///
+  /// `timeout_ns`: hard deadline in nanoseconds. Returns `true` if the GPU
+  /// signalled within the deadline, `false` if the deadline expired.
+  pub fn blocking_wait(
+    &self,
+    vulkan_device: &crate::gpu_backends::vulkan::device::LogicalDevice,
+    timeout_ns: u64,
+  ) -> bool {
+    vulkan_device
+      .wait_for_semaphore_value(self.timeline_handle, self.timeline_value, timeout_ns)
+      .is_ok()
+  }
 }
 
 #[derive(Debug)]
@@ -1144,6 +1191,8 @@ pub struct SceneContext {
 
   /// Contains the last render task id for the given scene
   pub last_render_task: core::sync::atomic::AtomicU64,
+
+  pub pending_cross_sync: bool,
 
   pub root_entity: EntityId,
   pub cursor_entity: Option<EntityId>,
@@ -1267,6 +1316,7 @@ impl SceneContext {
       custom_render_callback: None,
       debug_name: alloc::string::String::new(),
       last_render_task: core::sync::atomic::AtomicU64::new(0),
+      pending_cross_sync: false,
       entities_update_tasklet: None,
       particle_snapshot: None,
       earth: None,

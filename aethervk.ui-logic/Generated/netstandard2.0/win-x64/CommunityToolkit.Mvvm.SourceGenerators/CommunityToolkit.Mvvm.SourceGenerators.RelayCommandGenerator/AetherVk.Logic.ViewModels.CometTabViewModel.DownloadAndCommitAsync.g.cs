@@ -12,6 +12,6 @@ namespace AetherVk.Logic.ViewModels
         /// <summary>Gets an <see cref="global::CommunityToolkit.Mvvm.Input.IAsyncRelayCommand"/> instance wrapping <see cref="DownloadAndCommitAsync"/>.</summary>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.RelayCommandGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public global::CommunityToolkit.Mvvm.Input.IAsyncRelayCommand DownloadAndCommitCommand => downloadAndCommitCommand ??= new global::CommunityToolkit.Mvvm.Input.AsyncRelayCommand(new global::System.Func<global::System.Threading.Tasks.Task>(DownloadAndCommitAsync));
+        public global::CommunityToolkit.Mvvm.Input.IAsyncRelayCommand DownloadAndCommitCommand => downloadAndCommitCommand ??= new global::CommunityToolkit.Mvvm.Input.AsyncRelayCommand(new global::System.Func<global::System.Threading.Tasks.Task>(DownloadAndCommitAsync), () => CanDownloadAndCommit);
     }
 }

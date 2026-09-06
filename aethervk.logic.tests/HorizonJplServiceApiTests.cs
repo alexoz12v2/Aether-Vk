@@ -124,8 +124,11 @@ namespace aethervk.logic.tests
       Assert.Contains("MAKE_EPHEM=%27YES%27", url);
       Assert.Contains("EPHEM_TYPE=%27SPK%27", url);
       Assert.Contains("OBJ_DATA=%27NO%27", url);
-      Assert.Contains("START_TIME=%272026-05-27%27", url);
-      Assert.Contains("STOP_TIME=%272026-06-27%27", url);
+      // We expect 2026-05-26 and 2026-06-29 because the JPL Horizons STOP_TIME is exclusive,
+      // and we aggressively pad both bounds to prevent microsecond floating point truncation
+      // panics when the simulation evaluates exactly at the limits.
+      Assert.Contains("START_TIME=%272026-05-26%27", url);
+      Assert.Contains("STOP_TIME=%272026-06-29%27", url);
     }
   }
 }

@@ -134,6 +134,21 @@ public class NumericTextBoxBehavior : Behavior<Control>, IHandlesCommit
     AssociatedObject.KeyDown   -= OnKeyDown;
   }
 
+  protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+  {
+    base.OnPropertyChanged(change);
+    
+    if (change.Property == ValueProperty)
+    {
+      // If the value changed externally (e.g. from the ViewModel), update the text.
+      // We check focus to avoid overriding what the user is currently typing.
+      if (AssociatedObject is { IsFocused: false })
+      {
+        SetText(Value.ToString(Format));
+      }
+    }
+  }
+
   // ── Input handling ────────────────────────────────────────────────────────
 
   private void OnKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)

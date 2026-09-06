@@ -47,4 +47,24 @@ public partial class SmallBodyDataComponent : ObservableObject
   /// <summary>Orbit solution ID (e.g. "K213/6").</summary>
   [ObservableProperty]
   private string _orbitId = string.Empty;
+
+  /// <summary>Eccentricity (e).</summary>
+  [ObservableProperty]
+  private double _e;
+
+  /// <summary>Perihelion distance in AU (q).</summary>
+  [ObservableProperty]
+  private double _q;
+
+  /// <summary>Inclination in degrees (i).</summary>
+  [ObservableProperty]
+  private double _i;
+
+  /// <summary>Longitude of the Ascending Node in degrees (om).</summary>
+  [ObservableProperty]
+  private double _om;
+
+  /// <summary>Argument of Perihelion in degrees (w).</summary>
+  [ObservableProperty]
+  private double _w;
 }

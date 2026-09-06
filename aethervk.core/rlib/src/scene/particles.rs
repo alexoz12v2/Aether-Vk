@@ -437,3 +437,6 @@ pub mod v2 {
 
 #[cfg(test)]
 mod test_particles;
+
+#[cfg(test)]
+mod test_dust_config;

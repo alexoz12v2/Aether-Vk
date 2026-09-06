@@ -4,7 +4,7 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 struct RationalBezier {
-    vec4 cp0, cp1, cp2, cp3; 
+    vec4 cp0, cp1, cp2, cp3;
 };
 
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer SegmentArray {
@@ -13,9 +13,9 @@ layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Seg
 
 struct Trajectory {
     SegmentArray segmentsPtr;
-    vec4 color;               
-    float lineWidth;          
-    uint textureId;           
+    vec4 color;
+    float lineWidth;
+    uint textureId;
 };
 
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer TrajectoryArray {
@@ -25,7 +25,7 @@ layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Tra
 struct SegmentMap {
     uint trajectoryId;
     uint localSegmentId;
-    uint subdivisions; 
+    uint subdivisions;
 };
 
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer MapArray {
@@ -33,8 +33,8 @@ layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Map
 };
 
 layout(push_constant, std430) uniform PushConstants {
-    MapArray mapPtr;         
-    TrajectoryArray trajPtr; 
+    MapArray mapPtr;
+    TrajectoryArray trajPtr;
     mat4 viewProj;
     vec2 viewportSize;
 } pc;
@@ -45,13 +45,13 @@ layout(location = 2) out flat float vLineWidth;
 layout(location = 3) out flat uint vTexId;
 
 void main() {
-    uint mapIdx = gl_InstanceIndex; 
+    uint mapIdx = gl_InstanceIndex;
     SegmentMap map = pc.mapPtr.maps[mapIdx];
-    
+
     uint validSubdivisions = max(map.subdivisions, 1u);
-    
+
     uint rawStepIdx = gl_VertexIndex / 2;
-    uint side = gl_VertexIndex % 2; 
+    uint side = gl_VertexIndex % 2;
 
     uint stepIdx = min(rawStepIdx, validSubdivisions);
 
@@ -63,7 +63,7 @@ void main() {
     vec4 cp1 = segArray.segments[map.localSegmentId].cp1;
     vec4 cp2 = segArray.segments[map.localSegmentId].cp2;
     vec4 cp3 = segArray.segments[map.localSegmentId].cp3;
-    
+
     float lineWidth = pc.trajPtr.trajectories[trajId].lineWidth;
     vec4 color = pc.trajPtr.trajectories[trajId].color;
     uint textureId = pc.trajPtr.trajectories[trajId].textureId;
@@ -89,33 +89,35 @@ void main() {
     vec4 vClip = v0 * b0 + v1 * b1 + v2 * b2 + v3 * b3;
     vec4 dvClip = v0 * db0 + v1 * db1 + v2 * db2 + v3 * db3;
 
-    float w2 = max(vClip.w * vClip.w, 1e-6); 
+    float w2 = max(vClip.w * vClip.w, 1e-6);
     vec2 tNdc = (dvClip.xy * vClip.w - vClip.xy * dvClip.w) / w2;
-    
+
     vec2 tScreen = tNdc * pc.viewportSize;
     float len = length(tScreen);
-    
+
     vec2 nScreen = (len > 1e-5) ? vec2(-tScreen.y, tScreen.x) / len : vec2(0.0, 1.0);
     float lateral = (side == 0) ? -1.0 : 1.0;
 
     // Minimum fixed screen-space width (e.g. 2 pixels) so it never becomes invisible
     float minThickness = lineWidth;
-    
+
     // Physical world-space width: 0.0001 AU (approx 15,000 km) per line width unit
     float physicalWidthAu = lineWidth * 0.0001;
-    
+
     // Project physical width to screen space. pc.viewportSize.y is used as reference scale
     float projectedThickness = (physicalWidthAu / max(abs(vClip.w), 1e-6)) * pc.viewportSize.y;
-    
-    // Final thickness ensures the line never shrinks below the minimum width, but grows when close
-    float finalThickness = max(minThickness, projectedThickness);
+
+    // Cap at 5% of viewport height: trajectories must never fill the screen even when the
+    // camera is inside an arc (vClip.w near zero makes projectedThickness diverge without this).
+    float maxThickness = 0.05 * pc.viewportSize.y;
+    float finalThickness = min(max(minThickness, projectedThickness), maxThickness);
 
     vec2 offsetNdc = nScreen * lateral * (finalThickness / pc.viewportSize);
 
     gl_Position = vec4(vClip.xy + offsetNdc * abs(vClip.w), vClip.z, vClip.w);
 
     vColor = color;
-    vUV = vec2(t, lateral); 
+    vUV = vec2(t, lateral);
     vLineWidth = lineWidth;
     vTexId = textureId;
 }

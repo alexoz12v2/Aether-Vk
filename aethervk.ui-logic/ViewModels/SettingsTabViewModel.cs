@@ -76,7 +76,7 @@ public partial class SettingsTabViewModel
           if (!ActiveViewports.Any(vm => vm.CameraId == entry.CameraId))
           {
             ActiveViewports.Add(
-              new ViewportSettingsViewModel(entry.CameraId, i, _runtimeService, _schedulerProvider)
+              new ViewportSettingsViewModel(entry.CameraId, i, _runtimeService, _schedulerProvider, _cameraService)
             );
           }
         }

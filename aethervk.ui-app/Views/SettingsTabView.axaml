@@ -5,6 +5,8 @@
              xmlns:vm="using:AetherVk.Logic.ViewModels"
              xmlns:view="using:AetherVk.Views"
              xmlns:controls="using:AetherVk.Controls"
+             xmlns:converters="using:AetherVk.Converters"
+             xmlns:services="using:AetherVk.Logic.Services"
              xmlns:i="clr-namespace:Avalonia.Xaml.Interactivity;assembly=Avalonia.Xaml.Interactivity"
              xmlns:b="using:AetherVk.Behaviors"
              mc:Ignorable="d" d:DesignWidth="450" d:DesignHeight="800"
@@ -22,6 +24,7 @@
       <ResourceDictionary.MergedDictionaries>
         <ResourceInclude Source="../Styles/Colors.axaml" />
       </ResourceDictionary.MergedDictionaries>
+      <converters:EnumToBoolConverter x:Key="EnumToBool" />
     </ResourceDictionary>
   </UserControl.Resources>
 
@@ -187,7 +190,7 @@
 
                   <!-- Perspective parameters -->
                   <Grid ColumnDefinitions="Auto,16,*"
-                        RowDefinitions="Auto,8,Auto,8,Auto"
+                        RowDefinitions="Auto"
                         IsVisible="{Binding IsPerspective}">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV (°)" />
                     <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
@@ -196,31 +199,18 @@
                                               Step="1" IsLogarithmic="False"
                                               DragSensitivity="2.0"
                                               HorizontalAlignment="Stretch" />
-
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Near (AU)" />
-                    <controls:UnboundedSlider Grid.Row="2" Grid.Column="2"
-                                              Value="{Binding PerspNear}"
-                                              HasBounds="True" MinBound="0.000001" MaxBound="1"
-                                              Step="0.0001" IsLogarithmic="True"
-                                              HorizontalAlignment="Stretch" />
-
-                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Far (AU)" />
-                    <controls:UnboundedSlider Grid.Row="4" Grid.Column="2"
-                                              Value="{Binding PerspFar}"
-                                              HasBounds="True" MinBound="10" MaxBound="1000000"
-                                              Step="100" IsLogarithmic="True"
-                                              HorizontalAlignment="Stretch" />
                   </Grid>
 
                   <!-- Orthographic parameters -->
                   <Grid ColumnDefinitions="Auto,16,*"
-                        RowDefinitions="Auto,8,Auto,8,Auto,8,Auto"
+                        RowDefinitions="Auto,8,Auto,8,Auto"
                         IsVisible="{Binding IsOrthographic}">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Half-Width (AU)" />
                     <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
                                               Value="{Binding OrthoHalfWidth}"
                                               HasBounds="True" MinBound="0.0001" MaxBound="1000"
                                               Step="0.001" IsLogarithmic="True"
+                                              DragSensitivity="5.0"
                                               HorizontalAlignment="Stretch" />
 
                     <TextBlock Grid.Row="2" Grid.Column="0" Text="Half-Height (AU)" />
@@ -228,22 +218,60 @@
                                               Value="{Binding OrthoHalfHeight}"
                                               HasBounds="True" MinBound="0.0001" MaxBound="1000"
                                               Step="0.001" IsLogarithmic="True"
+                                              DragSensitivity="5.0"
                                               HorizontalAlignment="Stretch" />
 
-                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Near (AU)" />
-                    <controls:UnboundedSlider Grid.Row="4" Grid.Column="2"
-                                              Value="{Binding OrthoNear}"
-                                              HasBounds="True" MinBound="0.000001" MaxBound="1"
-                                              Step="0.0001" IsLogarithmic="True"
-                                              HorizontalAlignment="Stretch" />
-
-                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Far (AU)" />
-                    <controls:UnboundedSlider Grid.Row="6" Grid.Column="2"
-                                              Value="{Binding OrthoFar}"
-                                              HasBounds="True" MinBound="10" MaxBound="1000000"
-                                              Step="100" IsLogarithmic="True"
-                                              HorizontalAlignment="Stretch" />
+                    <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Spacing="8">
+                      <CheckBox Content="Keep Proportions Locked" IsChecked="{Binding IsOrthoProportionsLocked}" />
+                      <Button Content="Restore Proportions" Command="{Binding RestoreOrthoProportionsCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                    </StackPanel>
                   </Grid>
+
+                  <!-- ── Earth Observer Mode Settings ─────────────────────── -->
+                  <!-- Visible only when CameraMode = EarthPosition            -->
+                  <StackPanel Spacing="12" IsVisible="{Binding IsEarthObserverMode}">
+                    <Separator />
+                    <TextBlock Text="Earth Observer Settings"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource Accent.Primary}" />
+
+                    <!-- Latitude -->
+                    <Grid ColumnDefinitions="Auto,16,*">
+                      <TextBlock Grid.Column="0" Text="Latitude (°N)" />
+                      <controls:UnboundedSlider Grid.Column="2"
+                                                Value="{Binding EarthObserverLatDeg}"
+                                                HasBounds="True" MinBound="-90" MaxBound="90"
+                                                Step="0.1"
+                                                HorizontalAlignment="Stretch" />
+                    </Grid>
+
+                    <!-- Longitude -->
+                    <Grid ColumnDefinitions="Auto,16,*">
+                      <TextBlock Grid.Column="0" Text="Longitude (°E)" />
+                      <controls:UnboundedSlider Grid.Column="2"
+                                                Value="{Binding EarthObserverLonDeg}"
+                                                HasBounds="True" MinBound="-180" MaxBound="180"
+                                                Step="0.1"
+                                                HorizontalAlignment="Stretch" />
+                    </Grid>
+
+                    <!-- Look Direction -->
+                    <TextBlock Text="Look Direction" FontWeight="SemiBold" />
+                    <StackPanel Orientation="Vertical" Spacing="4">
+                      <RadioButton Content="Inertial (fixed in space)"
+                                   IsChecked="{Binding EarthObserverOrientationMode,
+                                     Converter={StaticResource EnumToBool},
+                                     ConverterParameter=Inertial}" />
+                      <RadioButton Content="Comet-tracking (always face comet)"
+                                   IsChecked="{Binding EarthObserverOrientationMode,
+                                     Converter={StaticResource EnumToBool},
+                                     ConverterParameter=CometTracking}" />
+                      <RadioButton Content="Earth-fixed (physical telescope)"
+                                   IsChecked="{Binding EarthObserverOrientationMode,
+                                     Converter={StaticResource EnumToBool},
+                                     ConverterParameter=EarthFixed}" />
+                    </StackPanel>
+                  </StackPanel>
 
                 </StackPanel>
               </Expander>

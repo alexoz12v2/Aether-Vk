@@ -138,6 +138,14 @@ public partial class TabGroupNodeViewModel
     }
   }
 
+  partial void OnSelectedTabChanged(TabItemViewModel? oldValue, TabItemViewModel? newValue)
+  {
+      if (oldValue != null)
+          oldValue.IsSelected = false;
+      if (newValue != null)
+          newValue.IsSelected = true;
+  }
+
   [RelayCommand]
   private void CloseAllTabs()
   {
@@ -240,6 +248,9 @@ public partial class TabItemViewModel : ViewModelBase
 
   [ObservableProperty]
   private bool _canClose = true;
+
+  [ObservableProperty]
+  private bool _isSelected;
 
   public TabItemViewModel(string title)
     : base()

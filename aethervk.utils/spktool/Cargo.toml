@@ -1,0 +1,8 @@
+[package]
+name = "spktool"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anise = { path = "../../external/anise/anise", default-features = false, features = ["std"] }
+hifitime = { version = "4.2.6", default-features = false }

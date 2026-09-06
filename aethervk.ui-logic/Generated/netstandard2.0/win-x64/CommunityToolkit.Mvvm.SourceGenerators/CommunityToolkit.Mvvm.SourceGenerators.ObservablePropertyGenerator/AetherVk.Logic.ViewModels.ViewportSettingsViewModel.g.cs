@@ -176,6 +176,92 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_currentCameraMode"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public global::AetherVk.Logic.Services.CameraMode CurrentCameraMode
+        {
+            get => _currentCameraMode;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<global::AetherVk.Logic.Services.CameraMode>.Default.Equals(_currentCameraMode, value))
+                {
+                    OnCurrentCameraModeChanging(value);
+                    OnCurrentCameraModeChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CurrentCameraMode);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsEarthObserverMode);
+                    _currentCameraMode = value;
+                    OnCurrentCameraModeChanged(value);
+                    OnCurrentCameraModeChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CurrentCameraMode);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsEarthObserverMode);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_earthObserverLatDeg"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public double EarthObserverLatDeg
+        {
+            get => _earthObserverLatDeg;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_earthObserverLatDeg, value))
+                {
+                    OnEarthObserverLatDegChanging(value);
+                    OnEarthObserverLatDegChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EarthObserverLatDeg);
+                    _earthObserverLatDeg = value;
+                    OnEarthObserverLatDegChanged(value);
+                    OnEarthObserverLatDegChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EarthObserverLatDeg);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_earthObserverLonDeg"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public double EarthObserverLonDeg
+        {
+            get => _earthObserverLonDeg;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_earthObserverLonDeg, value))
+                {
+                    OnEarthObserverLonDegChanging(value);
+                    OnEarthObserverLonDegChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EarthObserverLonDeg);
+                    _earthObserverLonDeg = value;
+                    OnEarthObserverLonDegChanged(value);
+                    OnEarthObserverLonDegChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EarthObserverLonDeg);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_earthObserverOrientationMode"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public global::AetherVk.Logic.Services.EarthObserverOrientationMode EarthObserverOrientationMode
+        {
+            get => _earthObserverOrientationMode;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<global::AetherVk.Logic.Services.EarthObserverOrientationMode>.Default.Equals(_earthObserverOrientationMode, value))
+                {
+                    OnEarthObserverOrientationModeChanging(value);
+                    OnEarthObserverOrientationModeChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EarthObserverOrientationMode);
+                    _earthObserverOrientationMode = value;
+                    OnEarthObserverOrientationModeChanged(value);
+                    OnEarthObserverOrientationModeChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EarthObserverOrientationMode);
+                }
+            }
+        }
+
         /// <summary>Executes the logic for when <see cref="IsPerspective"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="IsPerspective"/> is changed.</remarks>
@@ -352,5 +438,93 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="OrthoFar"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnOrthoFarChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="CurrentCameraMode"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="CurrentCameraMode"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnCurrentCameraModeChanging(global::AetherVk.Logic.Services.CameraMode value);
+        /// <summary>Executes the logic for when <see cref="CurrentCameraMode"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="CurrentCameraMode"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnCurrentCameraModeChanging(global::AetherVk.Logic.Services.CameraMode oldValue, global::AetherVk.Logic.Services.CameraMode newValue);
+        /// <summary>Executes the logic for when <see cref="CurrentCameraMode"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="CurrentCameraMode"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnCurrentCameraModeChanged(global::AetherVk.Logic.Services.CameraMode value);
+        /// <summary>Executes the logic for when <see cref="CurrentCameraMode"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="CurrentCameraMode"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnCurrentCameraModeChanged(global::AetherVk.Logic.Services.CameraMode oldValue, global::AetherVk.Logic.Services.CameraMode newValue);
+        /// <summary>Executes the logic for when <see cref="EarthObserverLatDeg"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EarthObserverLatDeg"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverLatDegChanging(double value);
+        /// <summary>Executes the logic for when <see cref="EarthObserverLatDeg"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EarthObserverLatDeg"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverLatDegChanging(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="EarthObserverLatDeg"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EarthObserverLatDeg"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverLatDegChanged(double value);
+        /// <summary>Executes the logic for when <see cref="EarthObserverLatDeg"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EarthObserverLatDeg"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverLatDegChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="EarthObserverLonDeg"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EarthObserverLonDeg"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverLonDegChanging(double value);
+        /// <summary>Executes the logic for when <see cref="EarthObserverLonDeg"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EarthObserverLonDeg"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverLonDegChanging(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="EarthObserverLonDeg"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EarthObserverLonDeg"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverLonDegChanged(double value);
+        /// <summary>Executes the logic for when <see cref="EarthObserverLonDeg"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EarthObserverLonDeg"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverLonDegChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="EarthObserverOrientationMode"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EarthObserverOrientationMode"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverOrientationModeChanging(global::AetherVk.Logic.Services.EarthObserverOrientationMode value);
+        /// <summary>Executes the logic for when <see cref="EarthObserverOrientationMode"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EarthObserverOrientationMode"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverOrientationModeChanging(global::AetherVk.Logic.Services.EarthObserverOrientationMode oldValue, global::AetherVk.Logic.Services.EarthObserverOrientationMode newValue);
+        /// <summary>Executes the logic for when <see cref="EarthObserverOrientationMode"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EarthObserverOrientationMode"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverOrientationModeChanged(global::AetherVk.Logic.Services.EarthObserverOrientationMode value);
+        /// <summary>Executes the logic for when <see cref="EarthObserverOrientationMode"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EarthObserverOrientationMode"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverOrientationModeChanged(global::AetherVk.Logic.Services.EarthObserverOrientationMode oldValue, global::AetherVk.Logic.Services.EarthObserverOrientationMode newValue);
     }
 }

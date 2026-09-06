@@ -76,40 +76,52 @@ public sealed class OverlaySynchronizer : IDisposable
 
     if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
     {
-      // 3. Linux/XWayland: set override_redirect on the XID.
-      //    This tells Xwayland to stop asking Mutter to manage this window and instead
-      //    export it as its own independent Wayland surface. Mutter then GPU-composites
-      //    it with full ARGB alpha-blending AFTER the Vulkan sub-surface.
-      _platformWindowService.SetOverlayOverrideRedirect(_overlayHandle);
+      bool isWayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") != null ||
+                       Environment.GetEnvironmentVariable("XDG_SESSION_TYPE")?.ToLower() == "wayland";
 
-      // 4. Pulse Hide → Show so Xwayland re-exports the window with override_redirect active.
-      //    The overlay is transparent, so the brief unmap is invisible.
-      _overlayWindow.Hide();
-      _overlayWindow.Show(_mainWindow);
-      _isOverrideRedirect = true;
+      if (isWayland)
+      {
+        // Invoke SyncBounds *before* setting override_redirect. 
+        // This allows the Window Manager to process the initial ConfigureRequest 
+        // and move the window to the correct location while it still manages the window.
+        // Once override_redirect is applied, the WM will ignore position updates.
+        SyncBounds();
 
-      // 5. Manual WM responsibilities: override_redirect windows are completely ignored by
-      //    Mutter, so we must manually hide/show in response to window state changes.
-      _mainWindow.Activated          += OnMainWindowActivated;
-      _mainWindow.Deactivated        += OnMainWindowDeactivated;
-      _mainWindow.PropertyChanged    += OnMainWindowPropertyChanged;
+        // 3a. Linux/XWayland: set override_redirect on the XID.
+        //     This tells Xwayland to stop asking Mutter to manage this window and instead
+        //     export it as its own independent Wayland surface. Mutter then GPU-composites
+        //     it with full ARGB alpha-blending AFTER the Vulkan sub-surface.
+        _platformWindowService.SetOverlayOverrideRedirect(_overlayHandle);
+
+        // 4. Pulse Hide → Show so Xwayland re-exports the window with override_redirect active.
+        _overlayWindow.Hide();
+        _overlayWindow.Show(_mainWindow);
+        _isOverrideRedirect = true;
+
+        // 5. Manual WM responsibilities: override_redirect windows are completely ignored by
+        //    Mutter, so we must manually hide/show in response to window state changes.
+        _mainWindow.Activated       += OnMainWindowActivated;
+        _mainWindow.Deactivated     += OnMainWindowDeactivated;
+        _mainWindow.PropertyChanged += OnMainWindowPropertyChanged;
+      }
+      else
+      {
+        // 3b. Linux/X11: apply EWMH UTILITY type + empty ALLOWED_ACTIONS, then pulse
+        //    Hide → Show so the WM re-reads them.
+        _platformWindowService.SetWindowAsCompanionPanel(_overlayHandle);
+        _overlayWindow.Hide();
+        _overlayWindow.Show(_mainWindow);
+
+        // Raise via _NET_WM_STATE_ABOVE.
+        _rootHandle = _platformWindowService.GetRootWindowHandle();
+        _platformWindowService.SetOverlayAbove(_overlayHandle, _rootHandle, raise: true);
+
+        // Focus-driven Z-order toggle.
+        _mainWindow.Activated   += OnMainWindowActivated;
+        _mainWindow.Deactivated += OnMainWindowDeactivated;
+      }
     }
-    else
-    {
-      // 3. Non-Linux: apply EWMH UTILITY type + empty ALLOWED_ACTIONS, then pulse
-      //    Hide → Show so the WM re-reads them. No-op on Windows/macOS.
-      _platformWindowService.SetWindowAsCompanionPanel(_overlayHandle);
-      _overlayWindow.Hide();
-      _overlayWindow.Show(_mainWindow);
-
-      // Raise via _NET_WM_STATE_ABOVE (no-op on Windows/macOS).
-      _rootHandle = _platformWindowService.GetRootWindowHandle();
-      _platformWindowService.SetOverlayAbove(_overlayHandle, _rootHandle, raise: true);
-
-      // Focus-driven Z-order toggle (no-op on Windows/macOS).
-      _mainWindow.Activated   += OnMainWindowActivated;
-      _mainWindow.Deactivated += OnMainWindowDeactivated;
-    }
+    // Windows/macOS: Show(ownerWindow) naturally enforces child Z-order natively. No extra logic needed.
 
     // 6. Subscribe to position/bounds AFTER setup to avoid spurious events from the remap cycle.
     _mainWindow.PositionChanged    += OnPositionChanged;

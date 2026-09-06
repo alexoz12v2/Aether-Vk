@@ -279,6 +279,27 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_committedSpkRecordId"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string CommittedSpkRecordId
+        {
+            get => _committedSpkRecordId;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_committedSpkRecordId, value))
+                {
+                    OnCommittedSpkRecordIdChanging(value);
+                    OnCommittedSpkRecordIdChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CommittedSpkRecordId);
+                    _committedSpkRecordId = value;
+                    OnCommittedSpkRecordIdChanged(value);
+                    OnCommittedSpkRecordIdChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CommittedSpkRecordId);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_poleRaDeg"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -712,6 +733,28 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="HasTimelineChangedAfterCommit"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnHasTimelineChangedAfterCommitChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="CommittedSpkRecordId"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="CommittedSpkRecordId"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnCommittedSpkRecordIdChanging(string value);
+        /// <summary>Executes the logic for when <see cref="CommittedSpkRecordId"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="CommittedSpkRecordId"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnCommittedSpkRecordIdChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="CommittedSpkRecordId"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="CommittedSpkRecordId"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnCommittedSpkRecordIdChanged(string value);
+        /// <summary>Executes the logic for when <see cref="CommittedSpkRecordId"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="CommittedSpkRecordId"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnCommittedSpkRecordIdChanged(string? oldValue, string newValue);
         /// <summary>Executes the logic for when <see cref="PoleRaDeg"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="PoleRaDeg"/> is changed.</remarks>

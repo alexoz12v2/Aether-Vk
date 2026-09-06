@@ -122,8 +122,8 @@ public sealed partial class JetViewModel : ObservableObject
     // Aperture: moderately focused cone, 10–40°
     _apertureDeg = (float)(_rng.NextDouble() * 30.0 + 10.0);
 
-    // Velocity mean: 0.3–1.5 m/s, realistic cometary dust
-    _startVelocityMeanMs = (float)(_rng.NextDouble() * 1.2 + 0.3);
+    // Velocity mean: 1.5–3.5 m/s, realistic cometary dust for 67P
+    _startVelocityMeanMs = (float)(_rng.NextDouble() * 2.0 + 1.5);
 
     // Velocity std: 15–35% of mean
     _startVelocityStdMs = _startVelocityMeanMs * (float)(_rng.NextDouble() * 0.20 + 0.15);
