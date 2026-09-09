@@ -26,6 +26,10 @@
 //   Emitter pos  : m relative to particle system. Conversion of positions is handled host side before launching the kernel. all emitters whose position exceeds metre distance conversion is discarded, as it's far away anyways, unless it has the special value and it's not a distance-based emitter
 //   Force output : m/s² (per-particle acceleration × mass → force in slots 7-9)
 #version 450 core
+#if defined(USE_VMM) && USE_VMM == 1
+#pragma use_vulkan_memory_model
+#extension GL_KHR_memory_scope_semantics : require
+#endif
 #extension GL_EXT_buffer_reference2         : require
 #extension GL_EXT_buffer_reference_uvec2    : require
 #extension GL_KHR_shader_subgroup_basic     : require

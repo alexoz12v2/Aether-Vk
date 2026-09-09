@@ -583,4 +583,3 @@ impl Mat4x4f32 {
 
 #[cfg(test)]
 mod tests;
-

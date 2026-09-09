@@ -585,6 +585,59 @@ pub struct AnimationTargetDTO {
   pub duration_s: f32,
 }
 
+/// Toggles the visibility of all indicators (`IndicatorComponent`, `ReferentialIndicatorComponent`, `TrajectoryIndicatorComponent`) in a scene.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setIndicatorVisibilityForScene(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  b_value: bool,
+) -> bool {
+  use aethervk_core_rlib::scene::{HiddenComponent, IndicatorComponent, ReferentialIndicatorComponent, TrajectoryIndicatorComponent};
+  
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+
+  let scene_arc = match ctx_ref.scenes.read().get_scene(scene_id) {
+    Some(s) => s,
+    None => return false,
+  };
+  
+  let scene_guard = scene_arc.read();
+  let scene = &scene_guard.scene;
+
+  let mut targets = alloc::vec::Vec::new();
+  
+  scene.query1::<IndicatorComponent, _>(|id, _| {
+    targets.push(id);
+  });
+  scene.query1::<ReferentialIndicatorComponent, _>(|id, _| {
+    targets.push(id);
+  });
+  scene.query1::<TrajectoryIndicatorComponent, _>(|id, _| {
+    targets.push(id);
+  });
+  
+  if b_value {
+    // b_value = true means visible, so remove HiddenComponent
+    for id in targets {
+      let _ = scene.remove_component::<HiddenComponent>(id);
+    }
+  } else {
+    // b_value = false means hidden, so add HiddenComponent
+    for id in targets {
+      let _ = scene.add_component(id, HiddenComponent {});
+    }
+  }
+
+  true
+}
+
 /// Why is this separate from modifyComponent? because this explicitly calls
 /// [`aethervk_core_rlib::scene::animation::TransformAnimationComponent`] `retarget` method in case
 /// the previous animation didn't fully play out yet

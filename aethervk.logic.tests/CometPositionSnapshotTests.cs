@@ -159,7 +159,7 @@ public class CometPositionSnapshotTests
     var cometConfig = new CometConfigService(runtime.Object, schedulers);
     var timeline    = new TimelineService(runtime.Object, schedulers, cometConfig, breadcrumb);
     var tracker     = new CometPositionTrackerService(runtime.Object, schedulers, timeline);
-    var camera      = new CameraService(runtime.Object, schedulers, tracker, cometConfig, breadcrumb, Mock.Of<ICometMessenger>());
+    var camera      = new CameraService(runtime.Object, schedulers, tracker, cometConfig, breadcrumb, Mock.Of<ICometMessenger>(), Mock.Of<ICameraServiceRegistry>());
     camera.OnViewportReady(77UL, 800, 600);
 
     // Pre-commit almanac so CometOrbiting mode is allowed

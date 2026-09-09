@@ -1,5 +1,8 @@
 //! scene_conversion module.
 
+pub mod indicator_layout;
+pub mod trajectory_indicator;
+
 use crate::{
   gpu::{self, RenderDevice, frame::*},
   gpu_backends::vulkan,
@@ -7,17 +10,18 @@ use crate::{
   scene::{
     BackgroundComponent, CameraComponent, CameraProjection, CursorComponent, EntityId,
     GizmoComponent, GridComponent, HiddenComponent, HighResTransformComponent,
-    ImageBillboardComponent, MarkersComponent, MeasurementComponent, ParticleSystemComponent,
-    ReferenceFrameComponent, Scene, SkyComponent, SphereGizmoComponent, StaticMeshComponent,
-    SunComponent, TransformComponent, text, trajectory::TrajectoryComponent, ui,
+    ImageBillboardComponent, IndicatorComponent, MarkersComponent, MeasurementComponent,
+    ParticleSystemComponent, ReferenceFrameComponent, ReferentialIndicatorComponent, Scene,
+    SkyComponent, SphereGizmoComponent, StaticMeshComponent, SunComponent,
+    TrajectoryIndicatorComponent, TransformComponent, text, trajectory::TrajectoryComponent, ui,
   },
   types::GpuResult,
 };
 use aethervk_oshal_rlib::{
   math::{
     FloatLike,
-    matrix::{Matrix4, MatrixVectorMul, mat4::Mat4x4f32},
-    vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
+    matrix::{Matrix4, MatrixVectorMul, mat4::Mat4x4f32, mat4f64::Mat4x4f64},
+    vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat},
   },
   os::{
     pool::ThreadPool,
@@ -225,43 +229,44 @@ impl SceneConversionExt2 for Scene {
     }
 
     // Instant O(1) mathematical `f64` Relative-To-Eye (RTE) calculation using the cache
-    let compute_rte = |scene: &Scene, id: EntityId| -> Option<(u32, TransformComponent)> {
-      let layer_idx = scene.ancestor_depth_layer(id);
-      let cam_in_frame = camera_in_frames.get(&layer_idx)?;
+    let compute_rte =
+      |scene: &Scene, id: EntityId| -> Option<(u32, crate::scene::HighResTransformComponent)> {
+        let layer_idx = scene.ancestor_depth_layer(id);
+        let cam_in_frame = camera_in_frames.get(&layer_idx)?;
 
-      let (pos_f64, rot, obj_scale) = if layer_idx == 0 {
-        let g = scene.global_transform_f64(id)?;
-        (g.position, g.rotation, g.scale)
-      } else {
-        let frame_id = layer_frame_entities.get(&layer_idx)?;
-        let l = scene.get_relative_transform_f64(id, *frame_id)?;
-        (l.position, l.rotation, l.scale)
+        let (pos_f64, rot, obj_scale) = if layer_idx == 0 {
+          let g = scene.global_transform_f64(id)?;
+          (g.position, g.rotation, g.scale)
+        } else {
+          let frame_id = layer_frame_entities.get(&layer_idx)?;
+          let l = scene.get_relative_transform_f64(id, *frame_id)?;
+          (l.position, l.rotation, l.scale)
+        };
+
+        let diff = pos_f64 - cam_in_frame.position;
+
+        // For macro layer (0): cam_in_frame.scale ≈ 1.0 (camera global AU scale).
+        // Dividing obj_scale by ≈1.0 is harmless — result is in AU, matching AU viewProj. ✓
+        //
+        // For micro layers (>0): cam_in_frame.scale ≈ 1/frame_scale ≈ 1.49e8 (km per world unit).
+        // Dividing obj_scale_km by 1.49e8 converts km→AU, but the micro-layer viewProj uses km
+        // (tight near/far computed from dist_local in km). Use obj_scale directly so the result
+        // is in km, matching the km viewProj. Without this, a 2 km mesh or 50 km sphere would be
+        // scaled down to ~0.01 μm — sub-pixel at any viewing distance.
+        let scale = if layer_idx == 0 {
+          obj_scale / cam_in_frame.scale
+        } else {
+          obj_scale // micro: km scale, matches km viewProj — no frame-scale division
+        };
+        Some((
+          layer_idx,
+          crate::scene::HighResTransformComponent {
+            position: diff,
+            rotation: rot,
+            scale,
+          },
+        ))
       };
-
-      let diff = pos_f64 - cam_in_frame.position;
-
-      // For macro layer (0): cam_in_frame.scale ≈ 1.0 (camera global AU scale).
-      // Dividing obj_scale by ≈1.0 is harmless — result is in AU, matching AU viewProj. ✓
-      //
-      // For micro layers (>0): cam_in_frame.scale ≈ 1/frame_scale ≈ 1.49e8 (km per world unit).
-      // Dividing obj_scale_km by 1.49e8 converts km→AU, but the micro-layer viewProj uses km
-      // (tight near/far computed from dist_local in km). Use obj_scale directly so the result
-      // is in km, matching the km viewProj. Without this, a 2 km mesh or 50 km sphere would be
-      // scaled down to ~0.01 μm — sub-pixel at any viewing distance.
-      let scale = if layer_idx == 0 {
-        obj_scale / cam_in_frame.scale
-      } else {
-        obj_scale // micro: km scale, matches km viewProj — no frame-scale division
-      };
-      Some((
-        layer_idx,
-        TransformComponent {
-          position: diff.to_f32(),
-          rotation: rot,
-          scale,
-        },
-      ))
-    };
 
     let mut render_scene = gpu::RenderScene {
       unscaled_time_us,
@@ -346,7 +351,7 @@ impl SceneConversionExt2 for Scene {
         )
       });
       if let Ok(res) = gpu_res {
-        let mat = rte.to_mat4();
+        let mat = rte.to_transform().to_mat4();
         let l = get_or_create_layer!(layer_idx);
 
         l.draw_calls.push(DrawCall::from_handles_and_matrix(
@@ -371,8 +376,14 @@ impl SceneConversionExt2 for Scene {
 
     // 2. Billboards
     let extracted_billboards = extract!(ImageBillboardComponent, |id, i| {
-      compute_rte(self, id)
-        .map(|(layer_idx, rte)| (layer_idx, rte.to_mat4(), i.texture_id, i.billboard_type))
+      compute_rte(self, id).map(|(layer_idx, rte)| {
+        (
+          layer_idx,
+          rte.to_transform().to_mat4(),
+          i.texture_id,
+          i.billboard_type,
+        )
+      })
     });
     if !extracted_billboards.is_empty() {
       if let Ok(pipe) = device
@@ -392,7 +403,8 @@ impl SceneConversionExt2 for Scene {
 
     // 3. Markers (TODO remove)
     let extracted_markers = extract!(MarkersComponent, |id, m| {
-      compute_rte(self, id).map(|(layer_idx, rte)| (layer_idx, rte.to_mat4(), m.clone()))
+      compute_rte(self, id)
+        .map(|(layer_idx, rte)| (layer_idx, rte.to_transform().to_mat4(), m.clone()))
     });
     if !extracted_markers.is_empty() {
       if let Ok(pipe) = device
@@ -420,7 +432,7 @@ impl SceneConversionExt2 for Scene {
     // 4. Measurements
     let extracted_meas = extract!(MeasurementComponent, |id, m| {
       compute_rte(self, id).map(|(layer_idx, rte)| {
-        let mat: Mat4x4f32 = rte.to_mat4();
+        let mat: Mat4x4f32 = rte.to_transform().to_mat4();
         let p1 = Vec3f32(mat.mul_vector(m.pos1.to_point()));
         let p2 = Vec3f32(mat.mul_vector(m.pos2.to_point()));
         (layer_idx, p1, p2, m.points, m.significant_digits)
@@ -451,7 +463,8 @@ impl SceneConversionExt2 for Scene {
         (
           layer_idx,
           id,
-          Mat4x4f32::translation(rte.position) * Mat4x4f32::from_quat_custom_frame(rte.rotation),
+          Mat4x4f64::translation(rte.position),
+          Mat4x4f32::from_quat_custom_frame(rte.rotation),
           g.gizmo_scale, // ignore scale from transform and use gizmo scale
         )
       })
@@ -462,8 +475,8 @@ impl SceneConversionExt2 for Scene {
         .or_else(|_| device.create_gizmo_resources(cmd_buffer, pe_handle))
         .map(|r| r.pipeline)
       {
-        for (layer_idx, id, mat, scale) in extracted_gizmos {
-          if let Ok(idx) = device.update_gizmo_instance(id, mat, pe_handle) {
+        for (layer_idx, id, t_mat_f64, r_mat, scale) in extracted_gizmos {
+          if let Ok(idx) = device.update_gizmo_instance(id, t_mat_f64, r_mat, pe_handle) {
             get_or_create_layer!(layer_idx)
               .gizmo_calls
               .push(GizmoDrawCall::from_values(pipe, scale, idx));
@@ -492,11 +505,11 @@ impl SceneConversionExt2 for Scene {
         // to a 334 μm point — invisible at any viewing distance.
         // Override scale to (1,1,1): preserves rotation and translation, lets km be km.
         let mut rte_for_gizmo = rte;
-        rte_for_gizmo.scale = Vec3f32::one();
+        rte_for_gizmo.scale = Vec3f32::from_components(1.0, 1.0, 1.0);
         (
           layer_idx,
           id,
-          rte_for_gizmo.to_mat4::<Mat4x4f32>() * sg.local_frame,
+          rte_for_gizmo.to_transform().to_mat4::<Mat4x4f32>() * sg.local_frame,
           sg.radius,
           sg.subdivisions,
         )
@@ -514,7 +527,8 @@ impl SceneConversionExt2 for Scene {
     >::with_capacity(16);
     let extracted_traj = extract!(TrajectoryComponent, |id, traj| {
       // Note: traj.clone() copies the array of control points
-      compute_rte(self, id).map(|(layer_idx, rte)| (layer_idx, id, traj.clone(), rte.to_mat4()))
+      compute_rte(self, id)
+        .map(|(layer_idx, rte)| (layer_idx, id, traj.clone(), rte.to_transform().to_mat4()))
     });
     for (layer_idx, id, traj, mat) in extracted_traj {
       get_or_create_layer!(layer_idx);
@@ -589,7 +603,7 @@ impl SceneConversionExt2 for Scene {
           layer_idx,
           DustDrawCall {
             entity_id: id,
-            rte_mat: rte.to_mat4(),
+            rte_mat_f64: rte.to_mat4_f64(),
             stream_color: ps.draw_params.stream_color,
             chunk_offset: 0,
             current_time: current_time_scaled_300ths,
@@ -631,7 +645,7 @@ impl SceneConversionExt2 for Scene {
           l.cursor_call = Some(CursorDrawCall::from_result_and_matrix(
             res,
             CURSOR_VERTEX_COUNT,
-            rte.to_mat4(),
+            rte.to_transform().to_mat4(),
             rte.scale.x(),
             l.near,
             l.far,
@@ -658,7 +672,7 @@ impl SceneConversionExt2 for Scene {
         // root
         if layer_idx != self.ancestor_depth_layer(camera_entity) {
           if let Some(sun_g) = self.global_transform_f64(id) {
-            rte.position = (sun_g.position - cam_global_f64.position).to_f32();
+            rte.position = sun_g.position - cam_global_f64.position;
             rte.scale = safe_div_vec3(sun_g.scale, cam_global_f64.scale);
           }
         }
@@ -666,7 +680,7 @@ impl SceneConversionExt2 for Scene {
           let l = get_or_create_layer!(layer_idx);
           let sun_cam = render_scene.camera_data.rebuild_for_layer(l.near, l.far);
           l.sun_call = Some(SunDrawCall::from_model_and_camera(
-            rte.to_mat4(),
+            rte.to_mat4_f64(),
             &sun_cam,
             pipe,
             id,
@@ -786,10 +800,6 @@ impl SceneConversionExt2 for Scene {
       });
     }
 
-    if !gpu_ui.is_empty() {
-      render_scene.ui_call = device.upload_ui(cmd_buffer, &gpu_ui).ok().flatten();
-    }
-
     let mut text_items = extract!(
       ui::Transform2DComponent,
       ui::ScreenSpaceTextComponent,
@@ -832,6 +842,287 @@ impl SceneConversionExt2 for Scene {
       }
     }
 
+    // ------ 8. Indicators -----------------------------------------------------------------
+    {
+      let w = window_extent[0] as f32;
+      let h = window_extent[1] as f32;
+
+      const AU_TO_KM: f64 = 149_597_870.700_f64;
+      let cam_pos_km = Vec3f64::from_components(
+        cam_global_f64.position.x() * AU_TO_KM,
+        cam_global_f64.position.y() * AU_TO_KM,
+        cam_global_f64.position.z() * AU_TO_KM,
+      );
+
+      use aethervk_oshal_rlib::math::matrix::{Matrix, mat4f64::Mat4x4f64};
+      use aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64;
+      let view_proj_f64: Mat4x4f64 = camera_data.proj_f64 * camera_data.view_f64;
+
+      let mut indicator_inputs: alloc::vec::Vec<indicator_layout::IndicatorInput> =
+        alloc::vec::Vec::new();
+
+      let mut atlas_candidates: alloc::vec::Vec<(
+        alloc::sync::Arc<crate::scene::text::FontAtlas>,
+        u64,
+      )> = alloc::vec::Vec::new();
+
+      // Track NDC of referential indicators so trajectories can avoid them
+      let mut parent_ndc_map: hashbrown::HashMap<EntityId, [f32; 2]> = hashbrown::HashMap::new();
+
+      // 8a. Basic IndicatorComponent
+      self.query1_without::<IndicatorComponent, HiddenComponent, _>(
+        |id, ind: &IndicatorComponent| {
+          if hidden_set.contains(&id) {
+            return;
+          }
+
+          let rte_km = ind.global_position_km - cam_pos_km;
+          let clip = view_proj_f64.mul_vector(Vec4f64::from_components(
+            rte_km.x(),
+            rte_km.y(),
+            rte_km.z(),
+            1.0,
+          ));
+
+          if clip.w() <= 0.0 {
+            return;
+          }
+          let ndc_x = clip.x() / clip.w();
+          let ndc_y = clip.y() / clip.w();
+          if ndc_x < -1.0 || ndc_x > 1.0 || ndc_y < -1.0 || ndc_y > 1.0 {
+            return;
+          }
+
+          let px = (ndc_x as f32 + 1.0) * 0.5 * w;
+          let py = (ndc_y as f32 + 1.0) * 0.5 * h;
+
+          let cam_dist_km =
+            (rte_km.x() * rte_km.x() + rte_km.y() * rte_km.y() + rte_km.z() * rte_km.z()).sqrt();
+
+          let desired_px = if cam_dist_km > 1e-6 {
+            (ind.desired_label_distance_km / cam_dist_km * proj_scale as f64).clamp(20.0, 300.0)
+              as f32
+          } else {
+            80.0
+          };
+
+          indicator_inputs.push(indicator_layout::IndicatorInput {
+            screen_pos: [px, py],
+            cam_dist_km,
+            desired_px_dist: desired_px,
+            label: ind.label.clone(),
+            text_color: ind.text_color,
+          });
+
+          atlas_candidates.push((ind.font_atlas.clone(), ind.font_hash));
+          let _ = device.allocate_rasterized_font_atlas(
+            cmd_buffer,
+            ind.font_hash,
+            ind.font_atlas.clone(),
+          );
+        },
+      );
+
+      // 8b. ReferentialIndicatorComponent
+      self.query1_without::<ReferentialIndicatorComponent, HiddenComponent, _>(|id, ref_ind| {
+        if hidden_set.contains(&id) {
+          return;
+        }
+
+        let (layer_idx, rte) = match compute_rte(self, ref_ind.target_entity) {
+          Some(v) => v,
+          None => return,
+        };
+
+        if layer_idx != 0 {
+          return; // Macro only
+        }
+
+        let clip = view_proj_f64.mul_vector(Vec4f64::from_components(
+          rte.position.x(),
+          rte.position.y(),
+          rte.position.z(),
+          1.0,
+        ));
+
+        if clip.w() <= 0.0 {
+          return;
+        }
+        let ndc_x = (clip.x() / clip.w()) as f32;
+        let ndc_y = (clip.y() / clip.w()) as f32;
+
+        // Track NDC for trajectory avoidance, even if slightly offscreen
+        parent_ndc_map.insert(ref_ind.target_entity, [ndc_x, ndc_y]);
+
+        if ndc_x < -1.0 || ndc_x > 1.0 || ndc_y < -1.0 || ndc_y > 1.0 {
+          return;
+        }
+
+        let px = (ndc_x + 1.0) * 0.5 * w;
+        let py = (ndc_y + 1.0) * 0.5 * h;
+
+        let cam_dist_km = rte.position.length() as f64 * AU_TO_KM;
+        let desired_px = if cam_dist_km > 1e-6 {
+          (ref_ind.desired_label_distance_km / cam_dist_km * proj_scale as f64).clamp(20.0, 300.0)
+            as f32
+        } else {
+          80.0
+        };
+
+        indicator_inputs.push(indicator_layout::IndicatorInput {
+          screen_pos: [px, py],
+          cam_dist_km,
+          desired_px_dist: desired_px,
+          label: ref_ind.label.clone(),
+          text_color: ref_ind.text_color,
+        });
+
+        atlas_candidates.push((ref_ind.font_atlas.clone(), ref_ind.font_hash));
+        let _ = device.allocate_rasterized_font_atlas(
+          cmd_buffer,
+          ref_ind.font_hash,
+          ref_ind.font_atlas.clone(),
+        );
+      });
+
+      // 8c. TrajectoryIndicatorComponent
+      let dt_s = unscaled_time_delta_us as f32 / 1_000_000.0;
+      self.query1_without::<TrajectoryIndicatorComponent, HiddenComponent, _>(|id, traj_ind| {
+        if hidden_set.contains(&id) {
+          return;
+        }
+
+        let traj =
+          match self.with_component(traj_ind.target_entity, |c: &TrajectoryComponent| c.clone()) {
+            Some(t) => t,
+            None => return,
+          };
+
+        let (layer_idx, rte) = match compute_rte(self, traj_ind.target_entity) {
+          Some(v) => v,
+          None => return,
+        };
+        if layer_idx != 0 {
+          return; // Macro only
+        }
+
+        // Build translation matrix manually using from_cols
+        let model_f64 = Mat4x4f64::from_cols(
+          Vec4f64::from_components(1.0, 0.0, 0.0, 0.0),
+          Vec4f64::from_components(0.0, 1.0, 0.0, 0.0),
+          Vec4f64::from_components(0.0, 0.0, 1.0, 0.0),
+          Vec4f64::from_components(rte.position.x(), rte.position.y(), rte.position.z(), 1.0),
+        );
+        let mvp_f64 = view_proj_f64 * model_f64;
+
+        let samples =
+          trajectory_indicator::sample_and_project_trajectory(&traj.control_points, &mvp_f64, 16);
+        if samples.is_empty() {
+          return;
+        }
+
+        let parent_ndc = parent_ndc_map.get(&traj_ind.target_entity).copied();
+        let best_idx = match trajectory_indicator::find_best_trajectory_anchor(&samples, parent_ndc)
+        {
+          Some(i) => i,
+          None => return,
+        };
+
+        let ideal_t = samples[best_idx].global_t;
+        let smoothed_t =
+          trajectory_indicator::smooth_trajectory_t(traj_ind.get_current_t(), ideal_t, dt_s, 5.0);
+        traj_ind.set_current_t(smoothed_t);
+
+        let exact_pos =
+          match trajectory_indicator::evaluate_bezier_at(&traj.control_points, smoothed_t) {
+            Some(p) => p,
+            None => return,
+          };
+
+        let clip = mvp_f64.mul_vector(Vec4f64::from_components(
+          exact_pos[0],
+          exact_pos[1],
+          exact_pos[2],
+          1.0,
+        ));
+        if clip.w() <= 0.0 {
+          return;
+        }
+        let ndc_x = (clip.x() / clip.w()) as f32;
+        let ndc_y = (clip.y() / clip.w()) as f32;
+        if ndc_x < -1.0 || ndc_x > 1.0 || ndc_y < -1.0 || ndc_y > 1.0 {
+          return;
+        }
+
+        let px = (ndc_x + 1.0) * 0.5 * w;
+        let py = (ndc_y + 1.0) * 0.5 * h;
+        let cam_dist_km = rte.position.length() as f64 * AU_TO_KM;
+
+        indicator_inputs.push(indicator_layout::IndicatorInput {
+          screen_pos: [px, py],
+          cam_dist_km,
+          desired_px_dist: 80.0,
+          label: traj_ind.label.clone(),
+          text_color: traj_ind.text_color,
+        });
+
+        atlas_candidates.push((traj_ind.font_atlas.clone(), traj_ind.font_hash));
+        let _ = device.allocate_rasterized_font_atlas(
+          cmd_buffer,
+          traj_ind.font_hash,
+          traj_ind.font_atlas.clone(),
+        );
+      });
+
+      if !indicator_inputs.is_empty() {
+        let outputs = indicator_layout::layout_indicators(&indicator_inputs, w, h);
+
+        let mut atlas_info: Option<(alloc::sync::Arc<crate::scene::text::FontAtlas>, u32)> = None;
+        for (atlas, hash) in atlas_candidates {
+          if let Ok(desc_idx) =
+            device.allocate_rasterized_font_atlas(cmd_buffer, hash, atlas.clone())
+          {
+            atlas_info = Some((atlas, desc_idx));
+            break;
+          }
+        }
+
+        if let Some((font_atlas, descriptor_index)) = atlas_info {
+          for output in &outputs {
+            gpu_ui.push(segment_to_ui_quad(
+              output.seg1_start,
+              output.seg1_end,
+              indicator_layout::LINE_THICKNESS_PX,
+              output.text_color,
+            ));
+            gpu_ui.push(segment_to_ui_quad(
+              output.seg2_start,
+              output.seg2_end,
+              indicator_layout::LINE_THICKNESS_PX,
+              output.text_color,
+            ));
+
+            let style = text::TextStyle {
+              size_pt: output.text_pts,
+              color: output.text_color,
+              style_flags: 0,
+            };
+            text::push_text_to_batch(
+              &output.label,
+              output.text_pos,
+              &style,
+              &font_atlas,
+              descriptor_index,
+              &mut text_batch,
+            );
+          }
+        }
+      }
+    }
+
+    if !gpu_ui.is_empty() {
+      render_scene.ui_call = device.upload_ui(cmd_buffer, &gpu_ui).ok().flatten();
+    }
     if !text_batch.is_empty() {
       render_scene.text2_call = device.upload_text2(cmd_buffer, &text_batch).ok().flatten();
     }
@@ -946,6 +1237,51 @@ const fn get_mesh_outline(
   }
 }
 
-#[cfg(test)]
+/// Convert a 2D line segment into a rotated `UiElementGpu` rectangle.
+///
+/// The rectangle's centre is at the segment midpoint, its width equals the segment
+/// length, and its height equals `thickness_px`. The `rotation` field of
+/// `UiElementGpu` is set to the angle of the segment direction (radians, using
+/// `atan2(dy, dx)` where +x is right and +y is down in pixel space).
+///
+/// `bounds` carries `[cx - len/2, cy - thickness/2, len, thickness]` — the UI shader
+/// rotates around the rectangle's centre before rasterising.
+fn segment_to_ui_quad(
+  p0: [f32; 2],
+  p1: [f32; 2],
+  thickness_px: f32,
+  color: [f32; 4],
+) -> gpu::UiElementGpu {
+  let dx = p1[0] - p0[0];
+  let dy = p1[1] - p0[1];
+  let length = (dx * dx + dy * dy).sqrt().max(1.0);
+  let angle = dy.atan2(dx); // radians in pixel-space (+y down); CCW from +x in math convention
+  let cx = (p0[0] + p1[0]) * 0.5;
+  let cy = (p0[1] + p1[1]) * 0.5;
+
+  gpu::UiElementGpu {
+    bounds: [
+      cx - length * 0.5,
+      cy - thickness_px * 0.5,
+      length,
+      thickness_px,
+    ],
+    clip_rect: [-9999.0, -9999.0, 9999.0, 9999.0],
+    color_start: color,
+    color_end: color,
+    color_border: [0.0; 4],
+    color_shadow: [0.0; 4],
+    border_radius: [0.0; 4],
+    shadow_params: [0.0; 4],
+    gradient_dir: [1.0, 0.0],
+    border_width: 0.0,
+    texture_id: 0xFFFF_FFFF,
+    flags: 0,
+    opacity: color[3],
+    rotation: angle,
+    _pad: 0,
+  }
+}
+
 #[cfg(test)]
 mod tests;

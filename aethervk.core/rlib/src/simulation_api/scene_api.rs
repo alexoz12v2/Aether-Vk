@@ -2,6 +2,7 @@
 
 use crate::{
   expect_scene, expect_scene_and_entity,
+  gpu::ASSET_DIR,
   scene::{EntityId, Scene, SphereGizmoComponent, StaticMeshComponent, TransformComponent},
   simulation_api::{
     SimulationContext,
@@ -236,6 +237,19 @@ impl SimulationContext {
       // body will see AlmanacPlanet added once the relevant almanac files are confirmed loaded.
       if is_comet {
         scene.add_component(body, crate::scene::CometMarkerComponent {});
+
+        // Add default procedural sphere so comet has a physical mesh
+        let _ = scene.add_component(
+          body,
+          crate::scene::StaticMeshComponent {
+            asset_path: alloc::string::String::from("__default_comet__"),
+            mesh: alloc::sync::Arc::new(crate::simulation::comet::generate_uv_sphere(
+              50.0, 16, 16, 1.0, false,
+            )),
+            emissive_color: [0.0, 0.0, 0.0, 0.0],
+            is_visible: false,
+          },
+        );
       } else {
         scene.add_component(body, crate::scene::PlanetMarkerComponent {});
       }
@@ -286,6 +300,33 @@ impl SimulationContext {
         radius: 0.0046524726,
       },
     )?;
+
+    let asset_dir: alloc::string::String = ASSET_DIR.read().clone().unwrap();
+    let font_path = alloc::format!("{}/fonts/JetBrainsMono-Regular.ttf", asset_dir);
+    if let Ok(atlas) = crate::scene::text::FontAtlas::from_path(&font_path, 32.0) {
+      let atlas = alloc::sync::Arc::new(atlas);
+      let font_hash = atlas.hash_metadata();
+
+      let sun_indicator_entity = scene.spawn_entity("sun_indicator");
+      scene.set_parent(sun_indicator_entity, Some(sun_entity));
+      // Give it a default transform (relative to Sun, so origin is fine)
+      let _ = scene.add_component(
+        sun_indicator_entity,
+        crate::scene::TransformComponent::default(),
+      );
+
+      scene.add_component(
+        sun_indicator_entity,
+        crate::scene::IndicatorComponent {
+          global_position_km: aethervk_oshal_rlib::math::vector::vec3f64::DVec3::zero(),
+          label: alloc::string::String::from("Sun"),
+          text_color: [1.0, 0.8, 0.2, 1.0],
+          desired_label_distance_km: 2_000_000.0,
+          font_atlas: atlas,
+          font_hash,
+        },
+      )?;
+    }
 
     // 3. Camera Entity & 4. Sky Entity
     // purely for testing

@@ -195,7 +195,9 @@ mod tests {
     let pool = PipelinePool::new(&device, None).unwrap();
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
 
-    let spv_data = std::fs::read("comp.spv").unwrap();
+    let asset_dir = crate::gpu::ASSET_DIR.read().clone().unwrap();
+    let spv_path = std::path::Path::new(&asset_dir).join("dummy_bvh.comp.spv");
+    let spv_data = std::fs::read(&spv_path).unwrap_or_else(|e| panic!("Failed to read {}: {}", spv_path.display(), e));
 
     // Ensure properly aligned for u32
     let mut words = vec![0u32; spv_data.len() / 4];

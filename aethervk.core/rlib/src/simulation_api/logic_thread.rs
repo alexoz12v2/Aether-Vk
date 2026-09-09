@@ -413,9 +413,16 @@ pub fn start_logic_thread(
               }),
               Some(Ok(s)) => {
                 use core::sync::atomic::Ordering;
+
+                if let Some(sync) = s.latest_physics_sync.clone() {
+                  let mut scene_write = scene_arc.write();
+                  scene_write.latest_physics_sync = Some(sync);
+                  scene_write.active_physics_task.store(true, Ordering::Relaxed);
+                }
+
                 // self sync function put this to false. Since we executed correctly a physics
                 // step, put this to true
-                scene_arc.read().active_physics_task.store(true, Ordering::Relaxed);
+                // scene_arc.read().active_physics_task.store(true, Ordering::Relaxed);
                 
                 // If physics actually executed steps, we will need to cross-sync them later
                 if s.did_physics_work {
@@ -1090,6 +1097,7 @@ fn process_command_internal(
 
       if let Some((pos, rot)) = transform {
         scene.scene.set_global_transform_f64(cam_int, pos, rot)?;
+        let _ = scene.scene.remove_component::<crate::scene::animation::TransformAnimationComponent>(cam_int);
 
         scene.mark_component_changed(
           camera_id,
@@ -2218,7 +2226,7 @@ fn execute_simulation_tick_fixed_update_phase(
       this_thread::sleep_for(core::time::Duration::from_micros(200));
     }
 
-    do_cross_sync = release_task_id <= 1 && release_task_id != u64::MAX;
+    do_cross_sync = release_task_id >= 2 && release_task_id != u64::MAX;
     if do_cross_sync {
       use crate::gpu::new_particles::PAGE_TABLE_BYTES;
       use crate::gpu_backends::vulkan::utils::RwLockable;
@@ -2792,7 +2800,11 @@ fn execute_simulation_tick_fixed_update_phase(
   };
 
   Ok(SimulationTickOutput {
-    pending_particle_acquire: latest_physics_sync.as_ref().map(|(s, _)| s.timeline_value),
+    pending_particle_acquire: if do_cross_sync {
+      latest_physics_sync.as_ref().map(|(s, _)| s.timeline_value)
+    } else {
+      None
+    },
     latest_physics_sync: latest_physics_sync.as_ref().map(|(s, _)| s.clone()),
     did_physics_work: latest_physics_sync.map(|(_, steps)| steps > 0).unwrap_or(false),
   })
@@ -2832,7 +2844,7 @@ fn execute_simulation_tick_update_phase(
       // subspace; over many retarget() cycles (orbit tracking fires every ~50 ms) the
       // small numerical error compounds into a visible camera tilt.  Non-camera entities
       // are unaffected.
-      let new_rot = if Into::<bool>::into(scene.scene.has_component::<CameraComponent>(e_id)) {
+      let new_rot = if false {
         crate::scene::animation::strip_roll(new_rot)
       } else {
         new_rot

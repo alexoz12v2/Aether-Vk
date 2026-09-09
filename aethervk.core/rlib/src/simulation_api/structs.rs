@@ -1151,8 +1151,7 @@ impl PhysicsDeviceSelfSync {
         .get_semaphore_counter_value(self.timeline_handle)
     } {
       self.latest_query_us = now_unscaled_us;
-      debug_assert!(self.timeline_value <= value);
-      if self.timeline_value == value {
+      if value >= self.timeline_value {
         true
       } else {
         // Cap at 8ms to prevent exponential freeze on slow GPU dispatches.

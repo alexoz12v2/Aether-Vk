@@ -449,9 +449,10 @@ impl Image {
   pub fn to_descriptor_image_info(
     &self,
     sampler: NonZeroHandle<vk::Sampler>,
+    layout: vk::ImageLayout,
   ) -> vk::DescriptorImageInfo {
     vk::DescriptorImageInfo::default()
-      .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+      .image_layout(layout)
       .image_view(self.image_view.get())
       .sampler(sampler.get())
   }
@@ -1064,11 +1065,11 @@ impl ForwardMesh2RenderResource {
       });
     };
     let mut push_image_fallback =
-      |descriptor_index: u32, img: Option<&Image>, fallback: vk::DescriptorImageInfo| {
+      |descriptor_index: u32, img: Option<&Image>, fallback: vk::DescriptorImageInfo, layout: vk::ImageLayout| {
         if let Some(image) = img {
           image_infos.push((
             descriptor_index,
-            image.to_descriptor_image_info(params.sampler),
+            image.to_descriptor_image_info(params.sampler, layout),
           ));
         } else {
           image_infos.push((descriptor_index, fallback));
@@ -1151,13 +1152,13 @@ impl ForwardMesh2RenderResource {
     )?;
     rollback_buffer(object_buffer.buffer.get(), object_buffer.allocation);
 
-    let dummy_info = params.dummy_texture.to_descriptor_image_info(params.sampler);
-    push_image_fallback(0, params.albedo_image.as_ref(), dummy_info);
-    push_image_fallback(1, params.normal_image.as_ref(), dummy_info);
-    push_image_fallback(2, params.roughness_image.as_ref(), dummy_info);
-    push_image_fallback(3, params.ao_image.as_ref(), dummy_info);
-    push_image_fallback(4, params.sky_image.as_ref(), dummy_info);
-    push_image_fallback(5, params.emissive_paint_image.as_ref(), dummy_info);
+    let dummy_info = params.dummy_texture.to_descriptor_image_info(params.sampler, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    push_image_fallback(0, params.albedo_image.as_ref(), dummy_info, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    push_image_fallback(1, params.normal_image.as_ref(), dummy_info, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    push_image_fallback(2, params.roughness_image.as_ref(), dummy_info, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    push_image_fallback(3, params.ao_image.as_ref(), dummy_info, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    push_image_fallback(4, params.sky_image.as_ref(), dummy_info, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    push_image_fallback(5, params.emissive_paint_image.as_ref(), dummy_info, vk::ImageLayout::GENERAL);
 
     let write_descriptor_sets: Vec<_> = image_infos
       .iter()

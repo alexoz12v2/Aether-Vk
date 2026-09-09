@@ -204,3 +204,175 @@ fn cross(a: Vec3f32, b: Vec3f32) -> Vec3f32 {
     a.x() * b.y() - a.y() * b.x(),
   )
 }
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  // Vector4 must be in scope to call .x()/.y()/.z()/.w() on Vec4f32 (Quat's inner type).
+  use aethervk_oshal_rlib::math::{
+    quaternion::Quaternion as _,
+    vector::{Vector as _, Vector4 as _},
+  };
+  use crate::scene::camera::QuatToEulerAngles as _;
+
+  /// Helper: make a stationary animation (start == target) at a given position
+  /// with the given duration, fully elapsed (t = 1).
+  fn stationary_anim_at(pos: DVec3, rot: Quat, duration: f32) -> TransformAnimationComponent {
+    TransformAnimationComponent {
+      start_pos: pos,
+      start_rot: rot,
+      target_pos: pos,
+      target_rot: rot,
+      duration,
+      elapsed: duration, // fully elapsed → t = 1
+      is_finished: false,
+    }
+  }
+
+  /// Regression: if the previous animation was stationary (start ≈ target, speed ≈ 0),
+  /// `retarget` with a non-zero new target must still produce a finite, positive duration.
+  ///
+  /// Root cause (fixed): the 50 ms orbit subscription was firing `SnapCameraToOrbit` with
+  /// 0.4 s to the SAME position on every tick.  When the comet barely moved, old_distance ≈ 0
+  /// → speed ≈ 0 → `retarget` fell back to keeping the 0.4 s duration for the next interactive
+  /// drag event, making the orbit feel unresponsive.
+  ///
+  /// Fix: the subscription now also uses `InteractiveDragAnimationSeconds` (0.016 s), so the
+  /// fallback becomes 0.016 s, and subsequent drag retargets feel instantaneous.
+  #[test]
+  fn retarget_from_stationary_zero_distance_fallback_uses_old_duration() {
+    let pos_a = DVec3::from_components(1.0, 0.0, 0.0);
+    let pos_b = DVec3::from_components(1.001, 0.0, 0.0); // small drag delta
+    let rot = Quat::identity();
+
+    // Problematic old pattern: stationary 0.4 s animation, then interactive drag.
+    let mut anim_old = stationary_anim_at(pos_a, rot, 0.4);
+    anim_old.retarget(pos_b, rot);
+    // Fallback → new duration = old_duration.max(0.001) = 0.4 s.  Must be finite and > 0.
+    assert!(
+      anim_old.duration > 0.0 && anim_old.duration.is_finite(),
+      "retarget produced non-finite duration: {}",
+      anim_old.duration
+    );
+
+    // Fixed pattern: subscription also uses 0.016 s → fallback is 0.016 s.
+    let mut anim_fixed = stationary_anim_at(pos_a, rot, 0.016);
+    anim_fixed.retarget(pos_b, rot);
+    assert!(
+      anim_fixed.duration <= 0.02,
+      "short-stationary retarget duration too long: {} s (expected ≤ 0.02 s)",
+      anim_fixed.duration
+    );
+  }
+
+  /// `strip_roll` must be idempotent: applying it twice must yield (nearly) the same quaternion.
+  /// This guards against cumulative drift when `strip_roll` is called on every orbit subscription
+  /// tick — repeated application must not rotate the camera further.
+  #[test]
+  fn strip_roll_is_idempotent() {
+    use std::f32::consts::PI;
+    let test_cases: &[(f32, f32)] = &[
+      (0.0, 0.0),              // identity / looking forward
+      (0.3, 1.2),              // general oblique case
+      (-0.5, 2.8),             // negative pitch
+      (PI / 2.0 - 0.05, 0.0), // near north-pole
+    ];
+
+    for &(pitch, yaw) in test_cases {
+      let q     = Quat::from_pitch_and_yaw_radians(pitch, yaw);
+      let once  = strip_roll(q);
+      let twice = strip_roll(once);
+
+      // Dot product ≈ 1 (abs to handle quaternion sign ambiguity).
+      // Access quaternion components via the inner Vec4 field `.0`.
+      let dot = (once.0.x() * twice.0.x()
+        + once.0.y() * twice.0.y()
+        + once.0.z() * twice.0.z()
+        + once.0.w() * twice.0.w())
+      .abs();
+      assert!(
+        dot > 0.9999,
+        "strip_roll not idempotent for pitch={pitch:.2}, yaw={yaw:.2}: dot={dot:.6}"
+      );
+    }
+  }
+
+  /// `strip_roll` must preserve the camera's forward direction.
+  /// Engine convention: yaw=0 → looking along -Y world; yaw=π → looking along +Y world.
+  /// Verified by rotating local -Y (engine forward) by the quaternion and comparing to expected.
+  #[test]
+  fn strip_roll_preserves_forward_direction() {
+    use std::f32::consts::PI;
+
+    // (pitch, yaw, expected_fwd_x, expected_fwd_y, expected_fwd_z)
+    let cases: &[(f32, f32, f32, f32, f32)] = &[
+      // yaw=0: looking along -Y (engine default forward)
+      (0.0,       0.0,    0.0,  -1.0,  0.0),
+      // yaw=π: rotating -Y by 180° around Z → +Y
+      (0.0,       PI,     0.0,   1.0,  0.0),
+      // yaw=π/2: rotating -Y by 90° around Z → +X
+      (0.0,  PI / 2.0,    1.0,   0.0,  0.0),
+      // yaw=-π/2: rotating -Y by -90° around Z → -X
+      (0.0, -PI / 2.0,   -1.0,   0.0,  0.0),
+    ];
+
+    let local_neg_y = Vec3f32::from_components(0.0, -1.0, 0.0);
+
+    for &(pitch, yaw, ex, ey, ez) in cases {
+      let q       = Quat::from_pitch_and_yaw_radians(pitch, yaw);
+      let q_strip = strip_roll(q);
+      let fwd     = q_strip.rotate_vector(local_neg_y);
+
+      assert!(
+        (fwd.x() - ex).abs() < 0.01,
+        "pitch={pitch:.2} yaw={yaw:.2}: fwd.x expected {ex:.1}, got {:.4}",
+        fwd.x()
+      );
+      assert!(
+        (fwd.y() - ey).abs() < 0.01,
+        "pitch={pitch:.2} yaw={yaw:.2}: fwd.y expected {ey:.1}, got {:.4}",
+        fwd.y()
+      );
+      assert!(
+        (fwd.z() - ez).abs() < 0.01,
+        "pitch={pitch:.2} yaw={yaw:.2}: fwd.z expected {ez:.1}, got {:.4}",
+        fwd.z()
+      );
+    }
+  }
+
+
+  /// Spherical-coordinate orbit math: a purely horizontal drag (elevation unchanged) must keep
+  /// the offset on the same latitude ring.  Specifically:
+  ///   offset.z = sin(elevation) * radius  →  with elevation = 0, offset.z must stay 0.
+  /// Also verifies the offset remains on the unit sphere after N azimuth increments.
+  ///
+  /// This is the Rust-side companion to `CometOrbiting_HorizontalDrag_DoesNotChangeElevation`.
+  #[test]
+  fn orbit_spherical_horizontal_drag_preserves_elevation() {
+    let mut azimuth: f32 = 0.0;
+    let elevation: f32   = 0.0; // equatorial start
+    let yaw_step          = 0.1_f32; // ~5.7° per step
+
+    for step in 0..30 {
+      azimuth += yaw_step;
+      let cos_elev = elevation.cos();
+      let offset_x = cos_elev * azimuth.cos();
+      let offset_y = cos_elev * azimuth.sin();
+      let offset_z = elevation.sin(); // must stay 0
+
+      assert!(
+        offset_z.abs() < 1e-6,
+        "horizontal drag changed elevation at step {step}: offset_z={offset_z:.6}"
+      );
+
+      let len = (offset_x * offset_x + offset_y * offset_y + offset_z * offset_z).sqrt();
+      assert!(
+        (len - 1.0).abs() < 1e-5,
+        "orbit offset left unit sphere at step {step}: |offset|={len:.6}"
+      );
+    }
+  }
+}

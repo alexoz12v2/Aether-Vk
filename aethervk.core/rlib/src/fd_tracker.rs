@@ -9,10 +9,85 @@ pub mod tracker {
 
     lazy_static::lazy_static! {
         pub static ref OPEN_TRACES: Mutex<HashMap<i32, String>> = Mutex::new(HashMap::new());
+        pub static ref CONFIG: (bool, i32) = {
+            let disabled = std::env::var("FD_TRACKER_DISABLE").map(|v| v == "1" || v == "true").unwrap_or(false);
+            let delta = std::env::var("FD_TRACKER_DELTA").ok().and_then(|v| v.parse::<i32>().ok()).unwrap_or(1);
+            (disabled, delta)
+        };
     }
 
     thread_local! {
         pub static IN_HOOK: std::cell::Cell<bool> = std::cell::Cell::new(false);
+    }
+
+    pub fn compress_backtrace(bt: &str) -> String {
+        let mut compressed = String::new();
+        let mut count = 0;
+        let mut unknown_count = 0;
+        
+        let mut iter = bt.lines().peekable();
+        
+        while let Some(line) = iter.next() {
+            let trimmed = line.trim_start();
+            
+            if trimmed.contains("<unknown>") {
+                unknown_count += 1;
+                continue;
+            }
+            
+            if trimmed.chars().next().map_or(false, |c| c.is_digit(10)) {
+                if unknown_count > 0 {
+                    compressed.push_str(&format!("      ... [{} unknown frames]\n", unknown_count));
+                    unknown_count = 0;
+                }
+                
+                let func_line = line;
+                let mut has_file_line = false;
+                let mut file_line = "";
+                
+                if let Some(next) = iter.peek() {
+                    if next.trim_start().starts_with("at ") {
+                        file_line = next;
+                        has_file_line = true;
+                    }
+                }
+                
+                if has_file_line {
+                    iter.next(); // consume file line
+                    if file_line.contains("/rustc/") || file_line.contains(".cargo/registry") || 
+                       func_line.contains("std::") || func_line.contains("core::") || 
+                       func_line.contains("backtrace::") || func_line.contains("libc") {
+                        continue;
+                    }
+                    compressed.push_str(func_line);
+                    compressed.push('\n');
+                    compressed.push_str(file_line);
+                    compressed.push('\n');
+                } else {
+                    if func_line.contains("libc") || func_line.contains("pthread") {
+                        continue;
+                    }
+                    compressed.push_str(func_line);
+                    compressed.push('\n');
+                }
+                
+                count += 1;
+                if count >= 8 {
+                    compressed.push_str("      ... [truncated]\n");
+                    break;
+                }
+            }
+        }
+        
+        if unknown_count > 0 && count < 8 {
+            compressed.push_str(&format!("      ... [{} unknown frames]\n", unknown_count));
+        }
+        
+        if compressed.is_empty() {
+            bt.lines().take(5).collect::<Vec<_>>().join("\n")
+        } else {
+            compressed
+        }
     }
 }
 
@@ -40,8 +115,13 @@ pub unsafe extern "C" fn open64(path: *const libc::c_char, oflag: libc::c_int, m
                             in_hook.set(true);
                             let count = tracker::NVIDIA_OPEN_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                             let backtrace = std::backtrace::Backtrace::force_capture().to_string();
-                            if count > 50 || fd > 500 {
-                                println!("[FD_TRACKER] Warning: open64('{}') returned fd {}. Nvidia open count: {}.\n{}", s, fd, count, backtrace);
+                            if !tracker::CONFIG.0 {
+                                if count > 50 || fd > 500 {
+                                    if count % tracker::CONFIG.1 == 0 {
+                                        let compressed = tracker::compress_backtrace(&backtrace);
+                                        println!("[FD_TRACKER] Warning: open64('{}') returned fd {}. Nvidia open count: {}.\n{}", s, fd, count, compressed);
+                                    }
+                                }
                             }
                             tracker::OPEN_TRACES.lock().unwrap().insert(fd, backtrace);
                             in_hook.set(false);
@@ -79,8 +159,13 @@ pub unsafe extern "C" fn open(path: *const libc::c_char, oflag: libc::c_int, mod
                             in_hook.set(true);
                             let count = tracker::NVIDIA_OPEN_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                             let backtrace = std::backtrace::Backtrace::force_capture().to_string();
-                            if count > 50 || fd > 500 {
-                                println!("[FD_TRACKER] Warning: open('{}') returned fd {}. Nvidia open count: {}.\n{}", s, fd, count, backtrace);
+                            if !tracker::CONFIG.0 {
+                                if count > 50 || fd > 500 {
+                                    if count % tracker::CONFIG.1 == 0 {
+                                        let compressed = tracker::compress_backtrace(&backtrace);
+                                        println!("[FD_TRACKER] Warning: open('{}') returned fd {}. Nvidia open count: {}.\n{}", s, fd, count, compressed);
+                                    }
+                                }
                             }
                             tracker::OPEN_TRACES.lock().unwrap().insert(fd, backtrace);
                             in_hook.set(false);

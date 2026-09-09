@@ -134,6 +134,10 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     }
   }
 
+  // ── Preview Viewports ────────────────────────────────────────────────────
+  public Viewport3DViewModel PreviewPerspective { get; }
+  public Viewport3DViewModel PreviewOrthographic { get; }
+
   // ── Dependencies ─────────────────────────────────────────────────────────
 
   private readonly INativeRuntimeService _runtimeService;
@@ -152,7 +156,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     ILocalStorageService storage,
     INativeRuntimeService runtimeService,
     ITabStateService<ModelSession> modelSessionService,
-    ICometMessenger cometMessenger
+    ICometMessenger cometMessenger,
+    ITabFactory tabFactory
   )
     : base("Comet", sessionService)
   {
@@ -165,6 +170,9 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     _runtimeService = runtimeService;
     _modelSessionService = modelSessionService;
     _cometMessenger = cometMessenger;
+
+    PreviewPerspective = (Viewport3DViewModel)tabFactory.CreateScopedTab(typeof(Viewport3DViewModel)).ViewModel!;
+    PreviewOrthographic = (Viewport3DViewModel)tabFactory.CreateScopedTab(typeof(Viewport3DViewModel)).ViewModel!;
 
     Icon = "☄"; // comet — U+2604
     SubscribeToStrings(schedulerProvider);
@@ -437,9 +445,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
           if (session is not null && orbitData is not null && orbitData.CometRadiusKm > 0.0)
           {
             session.NucleusRadiusKm = (float)orbitData.CometRadiusKm;
-            _cometMessenger.Send(
-              new Messages.NucleusRadiusKnownMessage { RadiusKm = session.NucleusRadiusKm }
-            );
+            _cometConfig.SetNucleusRadiusKm(session.NucleusRadiusKm);
           }
         }
         catch

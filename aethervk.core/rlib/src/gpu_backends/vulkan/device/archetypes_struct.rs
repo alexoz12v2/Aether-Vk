@@ -620,14 +620,15 @@ impl Archetypes {
     mesh,
     |gi| {
       // physical_mesh2.vert expects: vec3 pos (loc 0), vec3 normal (loc 1),
-      // vec2 uv (loc 2), vec4 tangent (loc 3) — all interleaved, stride = 48 bytes.
+      // vec2 uv (loc 2), vec4 tangent (loc 3) — split into two bindings.
       gi.with_vertex_in(
         VertexIn::default()
-          .add_binding(0, 48, vk::VertexInputRate::VERTEX)
+          .add_binding(0, 12, vk::VertexInputRate::VERTEX)
+          .add_binding(1, 36, vk::VertexInputRate::VERTEX)
           .add_attribute(0, 0, vk::Format::R32G32B32_SFLOAT, 0)   // position
-          .add_attribute(0, 1, vk::Format::R32G32B32_SFLOAT, 12)  // normal
-          .add_attribute(0, 2, vk::Format::R32G32_SFLOAT,    24)  // uv
-          .add_attribute(0, 3, vk::Format::R32G32B32A32_SFLOAT, 32) // tangent
+          .add_attribute(1, 1, vk::Format::R32G32B32_SFLOAT, 0)   // normal
+          .add_attribute(1, 2, vk::Format::R32G32_SFLOAT,    12)  // uv
+          .add_attribute(1, 3, vk::Format::R32G32B32A32_SFLOAT, 20) // tangent
       )
     }
   );

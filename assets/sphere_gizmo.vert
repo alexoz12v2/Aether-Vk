@@ -24,9 +24,21 @@ layout(location = 0) out vec3 fragColor;
 const float PI = 3.14159265359;
 
 void main() {
-    SphereGizmoData data = push.gizmoPtr.gizmos[gl_InstanceIndex];
-    int latSegments = max(4, int(data.subdivisions));
-    int lonSegments = max(4, int(data.subdivisions));
+    mat4 model = push.gizmoPtr.gizmos[gl_InstanceIndex].model;
+    
+    // Compute the anchor center identically to other shaders
+    vec4 centerClip = push.viewProj * vec4(model[3].xyz, 1.0);
+    float screenSize = abs(push.viewProj[1][1] * push.gizmoPtr.gizmos[gl_InstanceIndex].radius / centerClip.w);
+
+    int lodSubdivs = 8;
+    if (screenSize > 0.15) {
+        lodSubdivs = 36;
+    } else if (screenSize >= 0.05) {
+        lodSubdivs = 18;
+    }
+
+    int latSegments = max(4, lodSubdivs);
+    int lonSegments = max(4, lodSubdivs);
 
     // A UV sphere wireframe rendered as a LINE_LIST.
     // For each latitude segment (except the poles), we draw a horizontal ring segment.
@@ -59,7 +71,7 @@ void main() {
 
         int numHorizontalLines = (latSegments - 1) * lonSegments;
 
-        float r = data.radius;
+        float r = push.gizmoPtr.gizmos[gl_InstanceIndex].radius;
 
         if (lineIdx < numHorizontalLines) {
             // Horizontal ring segments
@@ -91,7 +103,7 @@ void main() {
         // Render axes lines
         int axisIdx = (gl_VertexIndex - axesOffset) / 2;
         int pt = (gl_VertexIndex - axesOffset) % 2;
-        float r = data.radius * 1.5; // Axes extend beyond the sphere
+        float r = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * 1.5; // Axes extend beyond the sphere
 
         if (axisIdx == 0) { // X Axis (Right) -> Red
             localPos = vec3(pt == 0 ? 0.0 : r, 0.0, 0.0);
@@ -110,9 +122,9 @@ void main() {
         int lineIdx = (vIdx % arrowheadVerticesPerAxis) / 2;
         int pt = vIdx % 2;
 
-        float r = data.radius * 1.5;
-        float headLength = data.radius * 0.2;
-        float headWidth = data.radius * 0.1;
+        float r = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * 1.5;
+        float headLength = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * 0.2;
+        float headWidth = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * 0.1;
 
         float angle = float(lineIdx) * (2.0 * PI / float(arrowheadLines));
 
@@ -143,8 +155,9 @@ void main() {
     }
 
     if (valid) {
-        vec4 worldPos = data.model * vec4(localPos, 1.0);
-        gl_Position = push.viewProj * worldPos;
+        // Project localized vector natively inside clip space
+        vec4 localClip = push.viewProj * vec4(mat3(model) * localPos, 0.0);
+        gl_Position = centerClip + localClip;
         fragColor = color;
     } else {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);

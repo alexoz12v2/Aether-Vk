@@ -19,8 +19,7 @@ namespace AetherVk.Logic.ViewModels;
   designIcon:   "⬡")]
 public partial class ModelTabViewModel
   : StatefulTabViewModelBase<ModelSession>,
-    IModelTabViewModel,
-    IRecipient<AetherVk.Logic.Messages.NucleusRadiusKnownMessage>
+    IModelTabViewModel
 {
   private readonly ITranslationService _translationService;
   private readonly INativeRuntimeService _runtimeService;
@@ -121,12 +120,16 @@ public partial class ModelTabViewModel
       })
       .AddDisposableTo(_disposables);
 
-    IsActive = true;  // → OnActivated() → registers NucleusRadiusKnownMessage
-  }
-
-  protected override void OnActivated()
-  {
-    Messenger.Register<ModelTabViewModel, AetherVk.Logic.Messages.NucleusRadiusKnownMessage>(this, (r, m) => r.Receive(m));
+    _cometConfigService.NucleusRadiusKm
+      .Subscribe(_ =>
+      {
+        _dispatcher.Dispatch(() =>
+        {
+          AddJetCommand.NotifyCanExecuteChanged();
+          OnPropertyChanged(nameof(IsNucleusRadiusUnknown));
+        });
+      })
+      .AddDisposableTo(_disposables);
   }
 
   // ── Session passthrough ──────────────────────────────────────────────────────────
@@ -171,16 +174,7 @@ public partial class ModelTabViewModel
   /// </summary>
   public bool IsNucleusRadiusUnknown => EffectiveNucleusRadiusKm == 0f;
 
-  /// <inheritdoc />
-  public void Receive(AetherVk.Logic.Messages.NucleusRadiusKnownMessage message)
-  {
-    // Re-evaluate AddJetCommand.CanExecute on the UI thread when Horizon radius arrives.
-    _dispatcher.Dispatch(() =>
-    {
-      AddJetCommand.NotifyCanExecuteChanged();
-      OnPropertyChanged(nameof(IsNucleusRadiusUnknown));
-    });
-  }
+
 
   /// <summary>
   /// Raised automatically by the MVVM toolkit when <see cref="ManualNucleusRadiusKm"/> changes.

@@ -21,25 +21,28 @@ void main() {
   
   if (gl_VertexIndex == 0) {
     pos = vec3(0.0);
-    color = vec3(1.0, 0.0, 0.0); // Red (x)
+    color = vec3(1.0, 0.0, 0.0);
   } else if (gl_VertexIndex == 1) {
     pos = vec3(push.scale, 0.0, 0.0);
     color = vec3(1.0, 0.0, 0.0);
   } else if (gl_VertexIndex == 2) {
     pos = vec3(0.0);
-    color = vec3(0.0, 1.0, 0.0); // Green (y)
+    color = vec3(0.0, 1.0, 0.0);
   } else if (gl_VertexIndex == 3) {
     pos = vec3(0.0, push.scale, 0.0);
     color = vec3(0.0, 1.0, 0.0);
   } else if (gl_VertexIndex == 4) {
     pos = vec3(0.0);
-    color = vec3(0.0, 0.0, 1.0); // Blue (z)
+    color = vec3(0.0, 0.0, 1.0);
   } else if (gl_VertexIndex == 5) {
     pos = vec3(0.0, 0.0, push.scale);
     color = vec3(0.0, 0.0, 1.0);
   }
 
-  vec4 worldPos = model * vec4(pos, 1.0);
-  gl_Position = push.viewProj * worldPos;
+  // Isolate the RTE precision offset by bypassing matrix addition inside the shader
+  vec4 centerClip = push.viewProj * vec4(model[3].xyz, 1.0);
+  vec4 localClip = push.viewProj * vec4(mat3(model) * pos, 0.0);
+
+  gl_Position = centerClip + localClip;
   outColor = color;
 }

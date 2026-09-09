@@ -140,8 +140,8 @@ internal class ViewportBaseOperator(Viewport3DViewModel vm) : IActionOperator
         return true;
 
       case ViewportAction.StartPan when state.IsPressed:
-        // Pan is always allowed — no gate check needed.
-        if (action.Payload is Vector2 startPanPos)
+        // Pan is blocked in CometOrbiting (position is controlled by orbit) and EarthPosition.
+        if (action.Payload is Vector2 startPanPos && _vm.CameraService.IsPanAllowed())
           _vm.OperatorStack.Push(new PanCameraOperator(_vm, startPanPos));
         return true;
 

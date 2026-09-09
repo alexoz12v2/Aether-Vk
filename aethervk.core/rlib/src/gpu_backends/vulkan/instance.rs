@@ -647,6 +647,12 @@ impl Instance {
           optional_extensions.insert(utils::OptionalExtensionSupportFlags::NATIVE_FLOAT16);
         }
 
+        if required_features.vulkan_memory_model.vulkan_memory_model == ash::vk::TRUE
+          && required_features.vulkan_memory_model.vulkan_memory_model_device_scope == ash::vk::TRUE
+        {
+          optional_extensions.insert(utils::OptionalExtensionSupportFlags::VULKAN_MEMORY_MODEL);
+        }
+
         Some(utils::PhysicalDeviceQueryResult {
           physical_device,
           physical_device_properties: unsafe {
