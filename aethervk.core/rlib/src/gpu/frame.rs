@@ -238,7 +238,7 @@ impl BillboardDrawCall {
 pub struct SunDrawCall {
   pub entity: EntityId,
   pub pipeline: PipelineKey,
-  pub model_matrix: Mat4x4f32,
+  pub model_matrix_f64: aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64,
   /// camera position in local space of the sun
   pub local_camera_pos: Vec3f32,
   pub vertex_count: u32,
@@ -250,12 +250,13 @@ impl SunDrawCall {
 
   /// Result is meant to be logged and converted to a None. Shouldn't stop rendering
   pub fn from_model_and_camera(
-    model: Mat4x4f32,
+    model_f64: aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64,
     c: &CameraRenderData,
     pipeline_key: PipelineKey,
     entity: EntityId,
     radius: f32,
   ) -> Self {
+    let model = model_f64.to_mat4_f32();
     let model_inv = model.inverse().unwrap_or_else(|| {
       use aethervk_oshal_rlib::math::vector::vec4::Vec4f32;
       let scale_sq =
@@ -298,7 +299,7 @@ impl SunDrawCall {
     Self {
       entity,
       pipeline: pipeline_key,
-      model_matrix: model,
+      model_matrix_f64: model_f64,
       local_camera_pos,
       vertex_count: Self::VERTEX_COUNT_TRIANGLE_STRIP_VK,
       radius,
@@ -306,7 +307,8 @@ impl SunDrawCall {
   }
 
   pub fn sun_pos(&self) -> Vec3f32 {
-    Vec3f32(self.model_matrix.w)
+    let model_matrix = self.model_matrix_f64.to_mat4_f32();
+    Vec3f32(model_matrix.w)
   }
 }
 
@@ -344,8 +346,7 @@ impl SkyDrawCall {
     // For both perspective and orthographic cameras the sky uses a fixed 90° FOV so
     // that user zoom (narrow/wide FOV) does not affect the apparent sky scale.
     let sky_proj = {
-      let aspect = camera_data.window_extent[0] as f32
-        / camera_data.window_extent[1].max(1) as f32;
+      let aspect = camera_data.window_extent[0] as f32 / camera_data.window_extent[1].max(1) as f32;
       Mat4x4f32::perspective_vk_reverse_z(
         core::f32::consts::FRAC_PI_2,
         aspect,
@@ -499,7 +500,9 @@ pub struct CameraRenderData {
   pub absolute_pos: Vec3f32,
   pub rot: Quat,
   pub view: Mat4x4f32,
+  pub view_f64: aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64,
   pub proj: Mat4x4f32,
+  pub proj_f64: aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64,
   pub view_proj: Mat4x4f32,
   pub up: [f32; 3],
   pub right: [f32; 3],
@@ -542,13 +545,88 @@ impl CameraRenderData {
     // RTE View Matrix: Camera is at the center [0,0,0], only rotating.
     let view = Mat4x4f32::look_at_axes(right, forward, up, Vec3f32::from_components(0.0, 0.0, 0.0));
 
+    let right_f64 = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+      right.x() as f64,
+      right.y() as f64,
+      right.z() as f64,
+    );
+    let forward_f64 = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+      forward.x() as f64,
+      forward.y() as f64,
+      forward.z() as f64,
+    );
+    let up_f64 = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+      up.x() as f64,
+      up.y() as f64,
+      up.z() as f64,
+    );
+    let view_f64 = {
+      let _0 = 0.0;
+      let _1 = 1.0;
+      let c0 = aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+        right_f64.x(),
+        right_f64.y(),
+        right_f64.z(),
+        _0,
+      );
+      let c1 = aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+        -forward_f64.x(),
+        -forward_f64.y(),
+        -forward_f64.z(),
+        _0,
+      );
+      let c2 = aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+        up_f64.x(),
+        up_f64.y(),
+        up_f64.z(),
+        _0,
+      );
+      let c3 = aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(_0, _0, _0, _1);
+      let mut mat =
+        aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::from_cols(c0, c1, c2, c3);
+      // Transpose to match look_at_axes
+      mat = aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::from_cols(
+        aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+          c0.x(),
+          c1.x(),
+          c2.x(),
+          c3.x(),
+        ),
+        aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+          c0.y(),
+          c1.y(),
+          c2.y(),
+          c3.y(),
+        ),
+        aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+          c0.z(),
+          c1.z(),
+          c2.z(),
+          c3.z(),
+        ),
+        aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+          c0.w(),
+          c1.w(),
+          c2.w(),
+          c3.w(),
+        ),
+      );
+      mat
+    };
+
     let near = camera.near_plane() * frame_scale;
     let far = camera.far_plane() * frame_scale;
-    let (proj, projection_params) = match camera.projection {
+    let (proj, proj_f64, projection_params) = match camera.projection {
       crate::scene::CameraProjection::Perspective {
         fov, aspect_ratio, ..
       } => (
         Mat4x4f32::perspective_vk_reverse_z(fov, aspect_ratio, near, far),
+        aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::perspective_vk_reverse_z(
+          fov as f64,
+          aspect_ratio as f64,
+          near as f64,
+          far as f64,
+        ),
         CameraProjectionParams::Perspective { fov, aspect_ratio },
       ),
       crate::scene::CameraProjection::Orthographic {
@@ -559,6 +637,14 @@ impl CameraRenderData {
         ..
       } => (
         Mat4x4f32::orthographic_vk_reverse_z(left, right, bottom, top, near, far),
+        aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::orthographic_vk_reverse_z(
+          left as f64,
+          right as f64,
+          bottom as f64,
+          top as f64,
+          near as f64,
+          far as f64,
+        ),
         CameraProjectionParams::Orthographic {
           left,
           right,
@@ -575,7 +661,9 @@ impl CameraRenderData {
       absolute_pos: transform.position,
       rot: transform.rotation,
       view,
+      view_f64,
       proj,
+      proj_f64,
       view_proj,
       up: [up.x(), up.y(), up.z()],
       right: [right.x(), right.y(), right.z()],
@@ -586,19 +674,35 @@ impl CameraRenderData {
     }
   }
 
-  /// Rebuild this camera's projection and view_proj for a specific depth layer's
+  /// Rebuilds the projection matrix (and resulting view-projection matrix) for the specified
   /// near/far planes. The view matrix (rotation-only in RTE) is shared across all layers.
   pub fn rebuild_for_layer(&self, layer_near: f32, layer_far: f32) -> Self {
-    let proj = match self.projection_params {
-      CameraProjectionParams::Perspective { fov, aspect_ratio } => {
-        Mat4x4f32::perspective_vk_reverse_z(fov, aspect_ratio, layer_near, layer_far)
-      }
+    let (proj, proj_f64) = match self.projection_params {
+      CameraProjectionParams::Perspective { fov, aspect_ratio } => (
+        Mat4x4f32::perspective_vk_reverse_z(fov, aspect_ratio, layer_near, layer_far),
+        aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::perspective_vk_reverse_z(
+          fov as f64,
+          aspect_ratio as f64,
+          layer_near as f64,
+          layer_far as f64,
+        ),
+      ),
       CameraProjectionParams::Orthographic {
         left,
         right,
         bottom,
         top,
-      } => Mat4x4f32::orthographic_vk_reverse_z(left, right, bottom, top, layer_near, layer_far),
+      } => (
+        Mat4x4f32::orthographic_vk_reverse_z(left, right, bottom, top, layer_near, layer_far),
+        aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::orthographic_vk_reverse_z(
+          left as f64,
+          right as f64,
+          bottom as f64,
+          top as f64,
+          layer_near as f64,
+          layer_far as f64,
+        ),
+      ),
     };
     let view_proj = proj * self.view;
     Self {
@@ -606,7 +710,9 @@ impl CameraRenderData {
       absolute_pos: self.absolute_pos,
       rot: self.rot,
       view: self.view,
+      view_f64: self.view_f64,
       proj,
+      proj_f64,
       view_proj,
       up: self.up,
       right: self.right,
@@ -638,7 +744,7 @@ pub struct SphereGizmoBatchCall {
 #[derive(Clone)]
 pub struct DustDrawCall {
   pub entity_id: EntityId,
-  pub rte_mat: Mat4x4f32,
+  pub rte_mat_f64: aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64,
   pub stream_color: [f32; 4],
   pub chunk_offset: u32,
   pub current_time: u32,
@@ -730,8 +836,24 @@ pub fn do_draw_cursor(
   let right = [inv_view_slice[0], inv_view_slice[1], inv_view_slice[2]];
   let up = [inv_view_slice[8], inv_view_slice[9], inv_view_slice[10]];
 
+  let center_pos = aethervk_oshal_rlib::math::vector::vec4::Vec4f32::from_components(
+    -draw_call.relative_cam_pos[0],
+    -draw_call.relative_cam_pos[1],
+    -draw_call.relative_cam_pos[2],
+    1.0,
+  );
+
+  let clip_pos = camera.view_proj.mul_vector(center_pos);
+
+  // Pack clip_pos into the first vec4 of view_proj
+  let mut view_proj_override: [f32; 16] = camera.view_proj.into();
+  view_proj_override[0] = clip_pos.x();
+  view_proj_override[1] = clip_pos.y();
+  view_proj_override[2] = clip_pos.z();
+  view_proj_override[3] = clip_pos.w();
+
   let push_constants = crate::gpu::CursorPushConstants {
-    view_proj: camera.view_proj.into(),
+    view_proj: view_proj_override,
     right_proj11: [right[0], right[1], right[2], proj_1_1],
     screen_y_win_x: [up[0], up[1], up[2], window_extent[0] as f32],
     relative_cam_pos_win_y: [
@@ -767,14 +889,16 @@ pub fn do_draw_marker(
     ),
   );
 
+  let clip_pos = camera.view_proj.mul_vector(global_center);
+
   let push_constants = crate::gpu::MarkerPushConstants {
     view_proj: camera.view_proj.into(),
-    center_pos: [global_center.x(), global_center.y(), global_center.z()],
+    center_pos: [clip_pos.x(), clip_pos.y(), clip_pos.z()],
     size: draw_call.size,
     color: draw_call.color,
-    camera_up: camera.up,       // <--- Passed directly!
-    camera_right: camera.right, // <--- Passed directly!
-    _pad0: 0.0,
+    camera_up: camera.up,
+    camera_right: camera.right,
+    _pad0: clip_pos.w(), // Pack W into pad0
     _pad1: 0.0,
     _pad2: 0.0,
   };
@@ -886,15 +1010,21 @@ pub fn do_draw_billboard(
     } => ([pct_width, pct_height], 1),
   };
 
+  let clip_pos = if is_screen_space == 1 {
+    center_pos // Screen space is already NDC
+  } else {
+    camera.view_proj.mul_vector(center_pos)
+  };
+
   let push_constants = crate::gpu::BillboardPushConstants {
     view_proj: camera.view_proj.into(),
-    center_pos: [center_pos.x(), center_pos.y(), center_pos.z()],
+    center_pos: [clip_pos.x(), clip_pos.y(), clip_pos.z()],
     size,
     is_screen_space,
     texture_id: draw_call.texture_id as u32,
     camera_up: camera.up,
     camera_right: camera.right,
-    _pad0: 0.0,
+    _pad0: clip_pos.w(), // Pack W into pad0
     _pad1: 0.0,
     _pad2: 0.0,
   };
@@ -968,9 +1098,9 @@ pub fn do_draw_sun(
   // prepare_sun_for_render binds the graphics pipeline and the descriptor set
   // (set 0 = sampler3D sunVolume).  No second bind_pipeline call needed.
   device.prepare_sun_for_render(cmd_buffer, draw_call.entity)?;
-  let mvp = camera.view_proj * draw_call.model_matrix;
+  let mvp_f64 = camera.proj_f64 * camera.view_f64 * draw_call.model_matrix_f64;
   let push_constants = SunPushConstants {
-    model_view_proj: mvp.into(),
+    model_view_proj: mvp_f64.to_mat4_f32().into(),
     local_camera_pos: draw_call.local_camera_pos.into(),
     _unused: 0,
   };
@@ -1132,16 +1262,14 @@ pub fn do_draw_dust_batch(
   for call in draw_calls {
     // Large World Coordinates (LWC) Camera Relative Transformation
     // Proj * ViewRot * RelativeModel
-    let view_rot_only = {
-      let mut v = camera.view.clone();
-      v.w = Vec4f32::from_components(0.0, 0.0, 0.0, 1.0);
-      v
-    };
-    let mvp = camera.proj * view_rot_only * call.rte_mat;
+    let mut view_rot_only_f64 = camera.view_f64;
+    view_rot_only_f64.cols[3] =
+      aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(0.0, 0.0, 0.0, 1.0);
+    let mvp_f64 = camera.proj_f64 * view_rot_only_f64 * call.rte_mat_f64;
     let mut pc = gpu::new_particles::DustPushConstants {
       global_particle_buffer: 0, // populated by Device
       particle_page_table: 0,    // populated by Device
-      view_proj: mvp.into(),
+      view_proj: mvp_f64.to_mat4_f32().into(),
       stream_color: call.stream_color,
       chunk_offset: call.chunk_offset,
       current_time: call.current_time,

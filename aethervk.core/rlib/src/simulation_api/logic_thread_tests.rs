@@ -43,12 +43,19 @@ fn test_two_phase_commit_comet() {
   *MOCK_SENDER.lock() = Some(tx);
   crate::simulation_api::set_external_state_simulation_callback(Some(mock_external_state_cb));
 
-  fn fetch_spk() -> std::path::PathBuf {
+  fn fetch_spk() -> Option<std::path::PathBuf> {
     use std::io::Write;
     // Query Horizons API for 67P (spk id 1000012)
     let url = "https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND=%2790000703%3B%27&MAKE_EPHEM=%27YES%27&EPHEM_TYPE=%27SPK%27&OBJ_DATA=%27NO%27&START_TIME=%272025-10-01%27&STOP_TIME=%272025-11-02%27";
-    let resp = reqwest::blocking::get(url).expect("Failed to fetch SPK");
-    let text = resp.text().expect("Failed to read text");
+    let resp = match reqwest::blocking::get(url) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Skipping test: network unreachable ({e})");
+            return None;
+        }
+    };
+    let text = resp.text().unwrap_or_default();
+    if text.is_empty() { return None; }
 
     let mut base64_clean = String::new();
     let mut marker_seen = false;
@@ -77,7 +84,7 @@ fn test_two_phase_commit_comet() {
     let path = std::env::temp_dir().join("1000012.bsp");
     let mut file = std::fs::File::create(&path).unwrap();
     file.write_all(&decoded).unwrap();
-    path
+    Some(path)
   }
 
   // Manually load the almanac into logic_state so valid dates pass
@@ -98,7 +105,7 @@ fn test_two_phase_commit_comet() {
       .expect("Failed to load DE442");
     logic_state
       .almanac_data
-      .load_almanac(spk_path.to_str().unwrap())
+      .load_almanac(spk_path.as_ref().unwrap().to_str().unwrap())
       .expect("Failed to load fetched SPK");
   }
 

@@ -53,7 +53,8 @@ public static class ServiceCollectionExtensions
       collection.AddSingleton<TimelineService>();
       collection.AddSingleton<CometPositionTrackerService>();
       collection.AddSingleton<ImportedModelsTrackerService>();
-      collection.AddSingleton<CameraService>();
+      collection.AddSingleton<ICameraServiceRegistry, CameraServiceRegistry>();
+      collection.AddScoped<CameraService>();
     }
     // CometConfigService only depends on INativeRuntimeService + ISchedulerProvider,
     // both of which are registered in both the real and mock paths above.
@@ -61,7 +62,6 @@ public static class ServiceCollectionExtensions
     collection.AddSingleton<INativeInputHandlerFactory, NativeInputHandlerFactory>();
     collection.AddSingleton<IWindowInputRouter, GlobalInputRouter>();
     collection.AddSingleton<IPlatformWindowService, PlatformWindowService>();
-    collection.AddSingleton<IViewportRegistry, ViewportRegistry>();
     var inputRegistry = new InputRegistry();
     inputRegistry.RegisterViewportDefaults();
     collection.AddSingleton<InputRegistry>(_ => inputRegistry);

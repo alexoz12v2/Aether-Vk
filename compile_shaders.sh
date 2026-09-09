@@ -153,43 +153,52 @@ for file in assets/*.comp assets/sim/*.comp; do
     base="$(basename "$file")"
     echo "Shader: $file"
 
-    if is_wg_variant "$base"; then
-        if is_float16_variant "$base"; then
-            # Produce fp16-native (NATIVE_FLOAT16=1) and fp32-fallback (NATIVE_FLOAT16=0)
-            # variants for every workgroup size. The .nofp16 infix marks the fallback blobs.
-            for fp16 in 1 0; do
-                fp16_flag="-DNATIVE_FLOAT16=$fp16"
-                if [ "$fp16" -eq 1 ]; then
-                    fp16_infix=""
-                else
-                    fp16_infix=".nofp16"
-                fi
-                compile_one "$file" comp "$fp16_flag"                             "${file%.comp}.comp${fp16_infix}.spv"
-                compile_one "$file" comp "$fp16_flag -DDEBUG_SHADERS"             "${file%.comp}.comp${fp16_infix}.d.spv"
-                for wg in "${WG_SIZES[@]}"; do
-                    compile_one "$file" comp "$fp16_flag -DLOCAL_SIZE_X=$wg"               "${file%.comp}.comp${fp16_infix}.wg${wg}.spv"
-                    compile_one "$file" comp "$fp16_flag -DLOCAL_SIZE_X=$wg -DDEBUG_SHADERS" "${file%.comp}.comp${fp16_infix}.wg${wg}.d.spv"
-                done
-            done
+    for vmm in 1 0; do
+        vmm_flag="-DUSE_VMM=$vmm"
+        if [ "$vmm" -eq 1 ]; then
+            vmm_infix=".vmm"
         else
-            # Non-float16 wg-variant: single compile pass (existing behaviour).
-            # Also produce the natural .comp.spv (no -D override) so mk!() still works
-            # for shaders that haven't been converted to mk_wg!() yet.
-            compile_one "$file" comp "" "${file}.spv"
-            compile_one "$file" comp "-DDEBUG_SHADERS" "${file%.comp}.comp.d.spv"
-            # Produce one SPIR-V per candidate workgroup size for mk_wg!() shaders.
-            for wg in "${WG_SIZES[@]}"; do
-                out="${file%.comp}.comp.wg${wg}.spv"
-                compile_one "$file" comp "-DLOCAL_SIZE_X=$wg" "$out"
-                out_d="${file%.comp}.comp.wg${wg}.d.spv"
-                compile_one "$file" comp "-DLOCAL_SIZE_X=$wg -DDEBUG_SHADERS" "$out_d"
-            done
+            vmm_infix=""
         fi
-    else
-        # Single-variant (specialization-constant or always-single-thread)
-        compile_one "$file" comp "" "${file}.spv"
-        compile_one "$file" comp "-DDEBUG_SHADERS" "${file%.comp}.comp.d.spv"
-    fi
+
+        if is_wg_variant "$base"; then
+            if is_float16_variant "$base"; then
+                # Produce fp16-native (NATIVE_FLOAT16=1) and fp32-fallback (NATIVE_FLOAT16=0)
+                # variants for every workgroup size. The .nofp16 infix marks the fallback blobs.
+                for fp16 in 1 0; do
+                    fp16_flag="-DNATIVE_FLOAT16=$fp16"
+                    if [ "$fp16" -eq 1 ]; then
+                        fp16_infix=""
+                    else
+                        fp16_infix=".nofp16"
+                    fi
+                    compile_one "$file" comp "$fp16_flag $vmm_flag"                             "${file%.comp}.comp${vmm_infix}${fp16_infix}.spv"
+                    compile_one "$file" comp "$fp16_flag -DDEBUG_SHADERS $vmm_flag"             "${file%.comp}.comp${vmm_infix}${fp16_infix}.d.spv"
+                    for wg in "${WG_SIZES[@]}"; do
+                        compile_one "$file" comp "$fp16_flag -DLOCAL_SIZE_X=$wg $vmm_flag"               "${file%.comp}.comp${vmm_infix}${fp16_infix}.wg${wg}.spv"
+                        compile_one "$file" comp "$fp16_flag -DLOCAL_SIZE_X=$wg -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp${vmm_infix}${fp16_infix}.wg${wg}.d.spv"
+                    done
+                done
+            else
+                # Non-float16 wg-variant: single compile pass (existing behaviour).
+                # Also produce the natural .comp.spv (no -D override) so mk!() still works
+                # for shaders that haven't been converted to mk_wg!() yet.
+                compile_one "$file" comp "$vmm_flag" "${file%.comp}.comp${vmm_infix}.spv"
+                compile_one "$file" comp "-DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp${vmm_infix}.d.spv"
+                # Produce one SPIR-V per candidate workgroup size for mk_wg!() shaders.
+                for wg in "${WG_SIZES[@]}"; do
+                    out="${file%.comp}.comp${vmm_infix}.wg${wg}.spv"
+                    compile_one "$file" comp "-DLOCAL_SIZE_X=$wg $vmm_flag" "$out"
+                    out_d="${file%.comp}.comp${vmm_infix}.wg${wg}.d.spv"
+                    compile_one "$file" comp "-DLOCAL_SIZE_X=$wg -DDEBUG_SHADERS $vmm_flag" "$out_d"
+                done
+            fi
+        else
+            # Single-variant (specialization-constant or always-single-thread)
+            compile_one "$file" comp "$vmm_flag" "${file%.comp}.comp${vmm_infix}.spv"
+            compile_one "$file" comp "-DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp${vmm_infix}.d.spv"
+        fi
+    done
 done
 
 echo ""

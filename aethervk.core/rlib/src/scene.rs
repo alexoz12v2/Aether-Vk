@@ -38,17 +38,24 @@ use thiserror::Error;
 pub mod almanac_planet;
 pub mod animation;
 pub mod camera;
+pub mod indicator;
 pub mod interaction;
 pub mod particles;
+pub mod referential_indicator;
 pub mod script_components;
 pub mod text;
 pub mod trajectory;
+pub mod trajectory_indicator;
 pub mod ui;
 
 pub use almanac_planet::AlmanacPlanet;
 pub use animation::*;
+pub use indicator::IndicatorComponent;
 pub use particles::ParticleSystemComponent;
+pub use referential_indicator::ReferentialIndicatorComponent;
+pub use trajectory_indicator::TrajectoryIndicatorComponent;
 pub use ui::{Transform2DComponent, UiComponent};
+
 
 /// An error that can occur when adding a component.
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -124,6 +131,11 @@ pub enum ComponentTypeId {
   ScreenSpaceText = 29,
   TransformAnimation = 30,
   Update = 31,
+
+  // ---- HUD Indicators ----
+  Indicator = 32,
+  ReferentialIndicator = 33,
+  TrajectoryIndicator = 34,
 }
 
 /// A thread-safe, basic Asset Cache
@@ -381,6 +393,24 @@ impl HighResTransformComponent {
       rotation: self.rotation,
       scale: self.scale,
     }
+  }
+
+  pub fn to_mat4_f64(&self) -> aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64 {
+      let mut rot_f32 = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_quat_custom_frame(self.rotation);
+      rot_f32.x = rot_f32.x * (self.scale.x() as f32);
+      rot_f32.y = rot_f32.y * (self.scale.y() as f32);
+      rot_f32.z = rot_f32.z * (self.scale.z() as f32);
+      
+      let mut mat = aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::from_cols(
+         aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(rot_f32.x.x() as f64, rot_f32.x.y() as f64, rot_f32.x.z() as f64, rot_f32.x.w() as f64),
+         aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(rot_f32.y.x() as f64, rot_f32.y.y() as f64, rot_f32.y.z() as f64, rot_f32.y.w() as f64),
+         aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(rot_f32.z.x() as f64, rot_f32.z.y() as f64, rot_f32.z.z() as f64, rot_f32.z.w() as f64),
+         aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(0.0, 0.0, 0.0, 1.0)
+      );
+      mat.cols[3] = aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+          self.position.x(), self.position.y(), self.position.z(), 1.0
+      );
+      mat
   }
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1542,6 +1572,11 @@ impl Scene {
 
     // animation module
     self.register_component::<TransformAnimationComponent>(&highres_type_id);
+
+    // indicator module
+    self.register_component::<indicator::IndicatorComponent>(&[]);
+    self.register_component::<referential_indicator::ReferentialIndicatorComponent>(&[]);
+    self.register_component::<trajectory_indicator::TrajectoryIndicatorComponent>(&[]);
   }
 
   pub fn register_component<T: Component>(&self, dependencies: &[TypeId]) {

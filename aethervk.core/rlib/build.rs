@@ -13,28 +13,26 @@ fn main() {
 
   // Check if any .spv file is older than its source
   let mut needs_recompile = false;
+  let dirs_to_check = [assets_dir.clone(), assets_dir.join("sim")];
 
-  if let Ok(entries) = fs::read_dir(&assets_dir) {
-    for entry in entries.flatten() {
-      let path = entry.path();
-      if let Some(ext) = path.extension() {
-        if ext == "spv" {
-          let file_name = path.file_name().unwrap().to_string_lossy();
-          let mut src_name = file_name.to_string();
-          let mut found = false;
-          for src_ext in [".comp", ".vert", ".frag"] {
-            if let Some(idx) = src_name.find(src_ext) {
-              src_name.truncate(idx + src_ext.len());
-              found = true;
-              break;
-            }
-          }
+  for dir in &dirs_to_check {
+    if let Ok(entries) = fs::read_dir(dir) {
+      for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+          if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if ext == "comp" || ext == "vert" || ext == "frag" {
+              let mut spv_path = path.clone().into_os_string();
+              spv_path.push(".spv");
+              let spv_path = PathBuf::from(spv_path);
 
-          if found {
-            let src_path = assets_dir.join(&src_name);
-            if src_path.exists() {
-              if let (Ok(spv_meta), Ok(src_meta)) = (fs::metadata(&path), fs::metadata(&src_path)) {
-                if let (Ok(spv_time), Ok(src_time)) = (spv_meta.modified(), src_meta.modified()) {
+              if !spv_path.exists() {
+                needs_recompile = true;
+                break;
+              }
+
+              if let (Ok(src_meta), Ok(spv_meta)) = (fs::metadata(&path), fs::metadata(&spv_path)) {
+                if let (Ok(src_time), Ok(spv_time)) = (src_meta.modified(), spv_meta.modified()) {
                   if spv_time < src_time {
                     needs_recompile = true;
                     break;
@@ -45,6 +43,9 @@ fn main() {
           }
         }
       }
+    }
+    if needs_recompile {
+      break;
     }
   }
 
@@ -67,9 +68,14 @@ fn main() {
     };
 
     cmd.current_dir(&root_dir);
-    let status = cmd.status().expect("Failed to execute shader compilation script");
-    if !status.success() {
-      panic!("Shader compilation failed");
+    let output = cmd.output().expect("Failed to execute shader compilation script");
+    if !output.status.success() {
+      let stdout = String::from_utf8_lossy(&output.stdout);
+      let stderr = String::from_utf8_lossy(&output.stderr);
+      panic!(
+        "Shader compilation failed!\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
+        stdout, stderr
+      );
     }
   }
 

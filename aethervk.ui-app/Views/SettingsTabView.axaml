@@ -195,33 +195,47 @@
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV (°)" />
                     <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
                                               Value="{Binding PerspFovDeg}"
-                                              HasBounds="True" MinBound="1" MaxBound="179"
-                                              Step="1" IsLogarithmic="False"
                                               DragSensitivity="2.0"
-                                              HorizontalAlignment="Stretch" />
+                                              HorizontalAlignment="Stretch">
+                      <i:Interaction.Behaviors>
+                        <b:FovBehavior />
+                      </i:Interaction.Behaviors>
+                    </controls:UnboundedSlider>
                   </Grid>
 
                   <!-- Orthographic parameters -->
                   <Grid ColumnDefinitions="Auto,16,*"
-                        RowDefinitions="Auto,8,Auto,8,Auto"
+                        RowDefinitions="Auto,8,Auto,8,Auto,8,Auto"
                         IsVisible="{Binding IsOrthographic}">
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Half-Width (AU)" />
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Half-Width" VerticalAlignment="Center" />
                     <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
-                                              Value="{Binding OrthoHalfWidth}"
-                                              HasBounds="True" MinBound="0.0001" MaxBound="1000"
-                                              Step="0.001" IsLogarithmic="True"
+                                              Value="{Binding OrthoHalfWidthDisplay}"
+                                              HasBounds="True"
+                                              MinBound="{Binding OrthoExtentMin}"
+                                              MaxBound="{Binding OrthoExtentMax}"
+                                              Step="{Binding OrthoExtentStep}"
+                                              IsLogarithmic="True"
                                               DragSensitivity="5.0"
                                               HorizontalAlignment="Stretch" />
 
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Half-Height (AU)" />
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Half-Height" VerticalAlignment="Center" />
                     <controls:UnboundedSlider Grid.Row="2" Grid.Column="2"
-                                              Value="{Binding OrthoHalfHeight}"
-                                              HasBounds="True" MinBound="0.0001" MaxBound="1000"
-                                              Step="0.001" IsLogarithmic="True"
+                                              Value="{Binding OrthoHalfHeightDisplay}"
+                                              HasBounds="True"
+                                              MinBound="{Binding OrthoExtentMin}"
+                                              MaxBound="{Binding OrthoExtentMax}"
+                                              Step="{Binding OrthoExtentStep}"
+                                              IsLogarithmic="True"
                                               DragSensitivity="5.0"
                                               HorizontalAlignment="Stretch" />
 
-                    <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Spacing="8">
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Units" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="4" Grid.Column="2"
+                              HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding DistanceUnits}"
+                              SelectedIndex="{Binding OrthoUnitIndex}" />
+
+                    <StackPanel Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Spacing="8">
                       <CheckBox Content="Keep Proportions Locked" IsChecked="{Binding IsOrthoProportionsLocked}" />
                       <Button Content="Restore Proportions" Command="{Binding RestoreOrthoProportionsCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </StackPanel>
@@ -260,16 +274,16 @@
                     <StackPanel Orientation="Vertical" Spacing="4">
                       <RadioButton Content="Inertial (fixed in space)"
                                    IsChecked="{Binding EarthObserverOrientationMode,
-                                     Converter={StaticResource EnumToBool},
-                                     ConverterParameter=Inertial}" />
+                                   Converter={StaticResource EnumToBool},
+                                   ConverterParameter=Inertial}" />
                       <RadioButton Content="Comet-tracking (always face comet)"
                                    IsChecked="{Binding EarthObserverOrientationMode,
-                                     Converter={StaticResource EnumToBool},
-                                     ConverterParameter=CometTracking}" />
+                                   Converter={StaticResource EnumToBool},
+                                   ConverterParameter=CometTracking}" />
                       <RadioButton Content="Earth-fixed (physical telescope)"
                                    IsChecked="{Binding EarthObserverOrientationMode,
-                                     Converter={StaticResource EnumToBool},
-                                     ConverterParameter=EarthFixed}" />
+                                   Converter={StaticResource EnumToBool},
+                                   ConverterParameter=EarthFixed}" />
                     </StackPanel>
                   </StackPanel>
 

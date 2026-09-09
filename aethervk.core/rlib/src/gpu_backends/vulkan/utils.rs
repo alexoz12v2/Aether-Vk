@@ -38,6 +38,8 @@ bitflags! {
     /// shaderFloat16 feature (VK_KHR_shader_float16_int8).
     /// False on Pascal (GTX 10xx) and older pre-Turing NVIDIA GPUs.
     const NATIVE_FLOAT16 = 1 << 2;
+    /// Vulkan Memory Model feature (VK_KHR_vulkan_memory_model).
+    const VULKAN_MEMORY_MODEL = 1 << 3;
   }
 }
 
@@ -1078,12 +1080,8 @@ impl RequiredFeatures<'_> {
     if self.buffer_device_address.buffer_device_address != vk::TRUE {
       the_vec.push("buffer_device_address".to_string());
     }
-    if self.vulkan_memory_model.vulkan_memory_model != vk::TRUE {
-      the_vec.push("vulkan_memory_model".to_string());
-    }
-    if self.vulkan_memory_model.vulkan_memory_model_device_scope != vk::TRUE {
-      the_vec.push("vulkan_memory_model_device_scope".to_string());
-    }
+    // vulkan_memory_model is now considered optional to support older drivers and mobile devices.
+    // We conditionally enable it below if supported.
     if self.timeline_semaphore.timeline_semaphore != vk::TRUE {
       the_vec.push("timeline_semaphore".to_string());
     }

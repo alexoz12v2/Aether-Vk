@@ -26,7 +26,6 @@ public partial class Viewport3DViewModel : StatefulTabViewModelBase<ViewportSess
 {
   private readonly INativeRuntimeService _runtimeService;
   private readonly IFileDialogService _fileDialogService;
-  private readonly Services.IViewportRegistry _viewportRegistry;
 
   /// <summary>
   /// Authoritative camera-state and movement manager.
@@ -141,7 +140,6 @@ public partial class Viewport3DViewModel : StatefulTabViewModelBase<ViewportSess
     Console.WriteLine(
       $"[Viewport3DViewModel] OnViewportCreated PE={PresentationEngineId} Cam={CameraId}"
     );
-    _viewportRegistry.Register(presentationEngineId, cameraEntityId);
     CameraService.OnViewportReady(cameraEntityId, Width, Height);
     SetupViewport();
   }
@@ -173,8 +171,7 @@ public partial class Viewport3DViewModel : StatefulTabViewModelBase<ViewportSess
     Func<Viewport3DViewModel, ViewportOverlayViewModel> overlayVmFactory,
     IPlatformWindowService platformWindowService,
     IWindowInputRouter inputRouter,
-    ITabStateService<ViewportSession> sessionService,
-    IViewportRegistry viewportRegistry
+    ITabStateService<ViewportSession> sessionService
   )
     : base("Viewport 3D", sessionService)
   {
@@ -187,7 +184,6 @@ public partial class Viewport3DViewModel : StatefulTabViewModelBase<ViewportSess
     OverlayViewModel = overlayVmFactory(this);
     PlatformWindowService = platformWindowService;
     InputRouter = inputRouter;
-    _viewportRegistry = viewportRegistry;
 
     OperatorStack = new OperatorStack(new ViewportBaseOperator(this));
 
@@ -229,7 +225,6 @@ public partial class Viewport3DViewModel : StatefulTabViewModelBase<ViewportSess
     VulkanViewModel.Dispose();
     if (PresentationEngineId != 0)
     {
-      _viewportRegistry.Unregister(PresentationEngineId);
       _runtimeService.RemoveViewport(PresentationEngineId);
       PresentationEngineId = 0;
       CameraId = 0;

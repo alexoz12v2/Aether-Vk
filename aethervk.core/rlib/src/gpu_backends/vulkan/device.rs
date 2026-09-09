@@ -48,10 +48,19 @@ use crate::{
 use aethervk_oshal_rlib::{
   self as oshal,
   math::{
+    matrix::MatrixVectorMul,
     quaternion::Quaternion,
-    vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
+    vector::{
+      Vector, Vector3, Vector4,
+      vec3::Vec3f32,
+      vec4::{Quat, Vec4f32},
+    },
   },
-  os::{fs::FileSystemObject, fs::PathBuf, native::this_thread, pool::WorkloadStatus},
+  os::{
+    fs::{FileSystemObject, PathBuf},
+    native::this_thread,
+    pool::WorkloadStatus,
+  },
 };
 use alloc::{
   boxed::Box,
@@ -334,6 +343,7 @@ macro_rules! gpu_err_archetype_absent {
 
 pub(super) mod archetypes_struct;
 pub(super) mod commands;
+pub(super) mod debug_labels;
 pub(super) mod descriptors;
 #[cfg(any(debug_assertions, test))]
 pub mod hooks;
@@ -345,7 +355,6 @@ pub(super) mod resources;
 pub(super) mod shader_manager;
 pub(super) mod swapchain;
 pub(super) mod timeline_manager;
-pub(super) mod debug_labels;
 
 pub use resources::DiscardPool;
 
@@ -1866,13 +1875,23 @@ impl Device {
         let mut _cleanup = TransientCleanup::command_only(device, command_pool, fence);
 
         // allocate GPU-only page table resource
-        let buffer_info = vk::BufferCreateInfo::default().size(Self::PAGE_TABLE_BYTES).usage(
+        let mut buffer_info = vk::BufferCreateInfo::default().size(Self::PAGE_TABLE_BYTES).usage(
           vk::BufferUsageFlags::STORAGE_BUFFER
             | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
             | vk::BufferUsageFlags::TRANSFER_SRC // for copy synchronization
             | vk::BufferUsageFlags::TRANSFER_DST // for copy synchronization
             | vk::BufferUsageFlags::INDIRECT_BUFFER, // to be fed to `vkCmdDrawIndirect`
         );
+        let mut queue_family_indices = alloc::vec::Vec::new();
+        let compute_family = compute_queue.family_index;
+        let graphics_family = self.get_graphics_queue().family_index;
+        if compute_family != graphics_family {
+          queue_family_indices.push(compute_family);
+          queue_family_indices.push(graphics_family);
+          buffer_info = buffer_info
+            .sharing_mode(vk::SharingMode::CONCURRENT)
+            .queue_family_indices(&queue_family_indices);
+        }
         let mut alloc_info = vk_mem::AllocationCreateInfo::default();
         alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
         crate::apply_test_dedicated_alloc!(alloc_info);
@@ -1909,6 +1928,7 @@ impl Device {
 
         // fill both buffers with 0xFFFF'FFFF
         let command_buffer_info = vk::CommandBufferAllocateInfo::default()
+          .command_pool(command_pool)
           .level(vk::CommandBufferLevel::PRIMARY)
           .command_buffer_count(1);
         let command_buffer = unsafe {
@@ -2954,6 +2974,9 @@ impl Device {
       chosen_physical_device_query_result
         .optional_extensions
         .contains(utils::OptionalExtensionSupportFlags::NATIVE_FLOAT16),
+      chosen_physical_device_query_result
+        .optional_extensions
+        .contains(utils::OptionalExtensionSupportFlags::VULKAN_MEMORY_MODEL),
     ) {
       Ok(k) => k,
       Err(e) => {
@@ -4590,9 +4613,14 @@ impl RenderDevice for Device {
          _rollback| {
           // 4. Construct Data lock-free
           let scene_data = crate::gpu::SceneData {
-            view_proj: (camera.view_proj).into(),
-            camera_pos: [camera.pos.x(), camera.pos.y(), camera.pos.z(), 0.0],
-            sun_pos: [sun_pos.x(), sun_pos.y(), sun_pos.z(), 0.0],
+            view_proj: (camera.proj).into(),  // Just the projection matrix!
+            camera_pos: [0.0, 0.0, 0.0, 1.0], // Camera is fixed at origin in View Space
+            sun_pos: {
+              let sun_pos_vec =
+                Vec4f32::from_components(sun_pos.x(), sun_pos.y(), sun_pos.z(), 0.0);
+              let sun_view = camera.view.mul_vector(sun_pos_vec);
+              [sun_view.x(), sun_view.y(), sun_view.z(), 0.0]
+            },
             sun_color,
             window_extent,
             _pad: [0.0, 0.0],
@@ -4614,8 +4642,9 @@ impl RenderDevice for Device {
             grid_color_density: [0.0; 4],
           };
 
+          let model_view = camera.view * draw_call.model_matrix; // Multiply View * Model
           let object_data = crate::gpu::ObjectData {
-            model: draw_call.model_matrix.into(),
+            model: model_view.into(),
           };
 
           unsafe {
@@ -5008,7 +5037,8 @@ impl RenderDevice for Device {
   fn update_gizmo_instance(
     &self,
     entity: EntityId,
-    model: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    translation_model: aethervk_oshal_rlib::math::matrix::mat4f64::Mat4f64,
+    rotation_model: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
     handle: PresentationEngineHandle,
   ) -> GpuResult<u32> {
     utils::VulkanTransaction::new(&*self.res, &self.device)
@@ -5037,6 +5067,9 @@ impl RenderDevice for Device {
           let buffer_index = (entity_hash
             % resources::GizmoRenderResourceArchetypeArena::MAX_BUFFER_COUNT as u64)
             as u32;
+
+          let mut model = rotation_model;
+          model.w = translation_model.to_mat4_f32().w;
 
           let data: [[f32; 16]; 1] = [model.into()];
           let buffer_size = core::mem::size_of::<[f32; 16]>() as u64;
@@ -5496,11 +5529,11 @@ impl RenderDevice for Device {
 
       let valid_size =
         (ui_elements.len() * core::mem::size_of::<crate::gpu::UiElementGpu>()) as u64;
-      let _ = res_guard.allocator.allocator.flush_allocation(
-        &arena_write.elements_alloc,
-        0,
-        valid_size,
-      );
+      let _ =
+        res_guard
+          .allocator
+          .allocator
+          .flush_allocation(&arena_write.elements_alloc, 0, valid_size);
 
       res_guard.allocator.allocator.unmap_memory(&mut arena_write.elements_alloc);
 
@@ -5563,13 +5596,12 @@ impl RenderDevice for Device {
         glyphs.len() * core::mem::size_of::<crate::gpu::TextGlyphGpu>(),
       );
 
-      let valid_size =
-        (glyphs.len() * core::mem::size_of::<crate::gpu::TextGlyphGpu>()) as u64;
-      let _ = res_guard.allocator.allocator.flush_allocation(
-        &arena_write.glyphs_alloc,
-        0,
-        valid_size,
-      );
+      let valid_size = (glyphs.len() * core::mem::size_of::<crate::gpu::TextGlyphGpu>()) as u64;
+      let _ =
+        res_guard
+          .allocator
+          .allocator
+          .flush_allocation(&arena_write.glyphs_alloc, 0, valid_size);
 
       res_guard.allocator.allocator.unmap_memory(&mut arena_write.glyphs_alloc);
 
@@ -7079,17 +7111,14 @@ impl RenderDevice for Device {
       self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dependency_info);
     }
 
-    let mut total_vertices = 0;
-    for (_, data) in gizmos {
-      let sub_divs = data.subdivisions.max(4.0) as u32;
-      let lat_segments = sub_divs;
-      let lon_segments = sub_divs;
-      let total_sphere_vertices = lon_segments * (2 * lat_segments - 1) * 2;
-      let total_axes_vertices = 6;
-      let total_arrowhead_vertices = 4 * 2 * 3;
-      total_vertices =
-        total_vertices.max(total_sphere_vertices + total_axes_vertices + total_arrowhead_vertices);
-    }
+    // Always allocate enough vertices for the maximum LOD (36 subdivisions)
+    let sub_divs = 36u32;
+    let lat_segments = sub_divs;
+    let lon_segments = sub_divs;
+    let total_sphere_vertices = lon_segments * (2 * lat_segments - 1) * 2;
+    let total_axes_vertices = 6;
+    let total_arrowhead_vertices = 4 * 2 * 3;
+    let total_vertices = total_sphere_vertices + total_axes_vertices + total_arrowhead_vertices;
 
     Ok(Some(crate::gpu::frame::SphereGizmoBatchCall {
       pipeline,
@@ -7437,15 +7466,8 @@ impl RenderDevice for Device {
     if let Ok(cmd) = self.get_cmd(cmd_buffer) {
       #[cfg(debug_assertions)]
       {
-        let label = ash::vk::DebugUtilsLabelEXT::default()
-          .label_name(name)
-          .color(color);
-        unsafe {
-          self
-            .device
-            .debug_utils
-            .cmd_begin_debug_utils_label(cmd, &label)
-        };
+        let label = ash::vk::DebugUtilsLabelEXT::default().label_name(name).color(color);
+        unsafe { self.device.debug_utils.cmd_begin_debug_utils_label(cmd, &label) };
       }
     }
   }
@@ -7454,12 +7476,7 @@ impl RenderDevice for Device {
     #[cfg(debug_assertions)]
     {
       if let Ok(cmd) = self.get_cmd(cmd_buffer) {
-        unsafe {
-          self
-            .device
-            .debug_utils
-            .cmd_end_debug_utils_label(cmd)
-        };
+        unsafe { self.device.debug_utils.cmd_end_debug_utils_label(cmd) };
       }
     }
   }
@@ -7473,15 +7490,8 @@ impl RenderDevice for Device {
     #[cfg(debug_assertions)]
     {
       if let Ok(cmd) = self.get_cmd(cmd_buffer) {
-        let label = ash::vk::DebugUtilsLabelEXT::default()
-          .label_name(name)
-          .color(color);
-        unsafe {
-          self
-            .device
-            .debug_utils
-            .cmd_insert_debug_utils_label(cmd, &label)
-        };
+        let label = ash::vk::DebugUtilsLabelEXT::default().label_name(name).color(color);
+        unsafe { self.device.debug_utils.cmd_insert_debug_utils_label(cmd, &label) };
       }
     }
   }
@@ -9782,8 +9792,8 @@ pub mod particles {
         vk::AccessFlags2::VERTEX_ATTRIBUTE_READ
           | vk::AccessFlags2::SHADER_READ
           | vk::AccessFlags2::INDIRECT_COMMAND_READ,
-        vk::PipelineStageFlags2::NONE, // Vulkan Spec: Release Dst must be NONE
-        vk::AccessFlags2::NONE,
+        vk::PipelineStageFlags2::TRANSFER,
+        vk::AccessFlags2::TRANSFER_WRITE,
         graphics_family,
         compute_family,
       );
@@ -9814,8 +9824,13 @@ pub mod particles {
         self.create_state_barriers_inline(
           &mut pre_barriers,
           front,
-          vk::PipelineStageFlags2::NONE,
-          vk::AccessFlags2::NONE, // Vulkan Spec: Acquire Src must be NONE
+          vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT
+            | vk::PipelineStageFlags2::VERTEX_SHADER
+            | vk::PipelineStageFlags2::FRAGMENT_SHADER
+            | vk::PipelineStageFlags2::DRAW_INDIRECT,
+          vk::AccessFlags2::VERTEX_ATTRIBUTE_READ
+            | vk::AccessFlags2::SHADER_READ
+            | vk::AccessFlags2::INDIRECT_COMMAND_READ,
           vk::PipelineStageFlags2::TRANSFER, // transfer ownership before copy op
           vk::AccessFlags2::TRANSFER_WRITE,
           graphics_family,
@@ -9897,8 +9912,13 @@ pub mod particles {
           back,
           vk::PipelineStageFlags2::TRANSFER,
           vk::AccessFlags2::TRANSFER_READ,
-          vk::PipelineStageFlags2::NONE, // Vulkan Spec: Release Dst must be NONE
-          vk::AccessFlags2::NONE,
+          vk::PipelineStageFlags2::DRAW_INDIRECT
+            | vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT
+            | vk::PipelineStageFlags2::VERTEX_SHADER
+            | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+          vk::AccessFlags2::INDIRECT_COMMAND_READ
+            | vk::AccessFlags2::VERTEX_ATTRIBUTE_READ
+            | vk::AccessFlags2::SHADER_READ,
           compute_family,
           graphics_family,
         );
@@ -9937,10 +9957,15 @@ pub mod particles {
       let barriers = if is_cross_family {
         self.create_state_barriers(
           new_front,
-          vk::PipelineStageFlags2::NONE, // Vulkan Spec: Acquire src is NONE
-          vk::AccessFlags2::NONE,
-          vk::PipelineStageFlags2::DRAW_INDIRECT,
-          vk::AccessFlags2::INDIRECT_COMMAND_READ,
+          vk::PipelineStageFlags2::TRANSFER,
+          vk::AccessFlags2::TRANSFER_READ,
+          vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT
+            | vk::PipelineStageFlags2::VERTEX_SHADER
+            | vk::PipelineStageFlags2::FRAGMENT_SHADER
+            | vk::PipelineStageFlags2::DRAW_INDIRECT,
+          vk::AccessFlags2::VERTEX_ATTRIBUTE_READ
+            | vk::AccessFlags2::SHADER_READ
+            | vk::AccessFlags2::INDIRECT_COMMAND_READ,
           compute_family,
           graphics_family,
         )
@@ -9950,8 +9975,13 @@ pub mod particles {
           new_front,
           vk::PipelineStageFlags2::TRANSFER,
           vk::AccessFlags2::TRANSFER_READ, // we have copied to new_back
-          vk::PipelineStageFlags2::DRAW_INDIRECT,
-          vk::AccessFlags2::INDIRECT_COMMAND_READ,
+          vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT
+            | vk::PipelineStageFlags2::VERTEX_SHADER
+            | vk::PipelineStageFlags2::FRAGMENT_SHADER
+            | vk::PipelineStageFlags2::DRAW_INDIRECT,
+          vk::AccessFlags2::VERTEX_ATTRIBUTE_READ
+            | vk::AccessFlags2::SHADER_READ
+            | vk::AccessFlags2::INDIRECT_COMMAND_READ,
           vk::QUEUE_FAMILY_IGNORED,
           vk::QUEUE_FAMILY_IGNORED,
         )
@@ -10194,7 +10224,18 @@ pub mod particles {
       push(state.buffer.buffer, self.buffer_size);
       push(state.free_list.buffer, self.free_list_size);
       for pt_entry in state.page_tables.iter() {
-        push(pt_entry.value().buffer, vk::WHOLE_SIZE)
+        barriers.push(
+          vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(src_stage)
+            .src_access_mask(src_access)
+            .dst_stage_mask(dst_stage)
+            .dst_access_mask(dst_access)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .buffer(pt_entry.value().buffer)
+            .offset(0)
+            .size(vk::WHOLE_SIZE),
+        );
       }
 
       barriers
@@ -10230,7 +10271,18 @@ pub mod particles {
       push(state.buffer.buffer, self.buffer_size);
       push(state.free_list.buffer, self.free_list_size);
       for pt_entry in state.page_tables.iter() {
-        push(pt_entry.value().buffer, vk::WHOLE_SIZE)
+        the_vec.push(
+          vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(src_stage)
+            .src_access_mask(src_access)
+            .dst_stage_mask(dst_stage)
+            .dst_access_mask(dst_access)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .buffer(pt_entry.value().buffer)
+            .offset(0)
+            .size(vk::WHOLE_SIZE),
+        );
       }
     }
 

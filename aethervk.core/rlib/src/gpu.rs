@@ -752,7 +752,8 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   fn update_gizmo_instance(
     &self,
     entity: EntityId,
-    model: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    translation_model: aethervk_oshal_rlib::math::matrix::mat4f64::Mat4f64,
+    rotation_model: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
     handle: PresentationEngineHandle,
   ) -> GpuResult<u32>;
 

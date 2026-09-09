@@ -37,6 +37,7 @@ public sealed class CometConfigService : IDisposable
 
   private readonly BehaviorSubject<bool> _isCommittedSubject = new(false);
   private readonly BehaviorSubject<int?> _committedSpkIdSubject = new(null);
+  private readonly BehaviorSubject<float> _nucleusRadiusKmSubject = new(0f);
 
   // ── Pending commit state ──────────────────────────────────────────────────
   // When CommitCometAsync is in flight, these fields track what we are committing.
@@ -107,6 +108,16 @@ public sealed class CometConfigService : IDisposable
   /// </summary>
   public IObservable<int?> CommittedSpkId =>
     _committedSpkIdSubject.ObserveOn(_schedulerProvider.MainThread);
+
+  public IObservable<float> NucleusRadiusKm =>
+    _nucleusRadiusKmSubject.ObserveOn(_schedulerProvider.MainThread);
+
+  public float NucleusRadiusKmValue => _nucleusRadiusKmSubject.Value;
+
+  public void SetNucleusRadiusKm(float radiusKm)
+  {
+    _nucleusRadiusKmSubject.OnNext(radiusKm);
+  }
 
   // ── Commands ──────────────────────────────────────────────────────────────
 

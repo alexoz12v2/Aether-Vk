@@ -137,7 +137,9 @@ public sealed class CameraService : IDisposable
   // Orbit offset in simulation units (AU) — kept constant while in CometOrbiting mode.
   // Orbit addition is done in f64 (see SnapCameraToOrbit / TriggerModeTransitionAnimation),
   // so this value does not need to be large to survive f32 cancellation. 5e-5 AU ≈ 7,500 km.
-  private Vector3 _orbitOffset = new(0f, 0f, 5e-5f); // ~7,500 km — orbit-offset arithmetic is f64
+  // Direction must NOT be the north pole (+Z) — at elevation π/2, cos(elev)=0 and horizontal
+  // drag produces no offset change (orbit appears frozen). Use equatorial +X as the safe default.
+  private Vector3 _orbitOffset = new(1f, 0f, 0f); // unit +X; magnitude is scaled on mode entry
   private readonly object _orbitOffsetLock = new();
 
   // Cinemachine OrbitalFollow "Sphere" style: store the camera's position on the sphere as
@@ -250,13 +252,16 @@ public sealed class CameraService : IDisposable
   // 0 = unknown (fallback to legacy default orbit offset).
   private float _lastKnownNucleusRadiusKm = 0f;
 
+  private readonly ICameraServiceRegistry _cameraServiceRegistry;
+
   public CameraService(
     INativeRuntimeService runtimeService,
     ISchedulerProvider schedulerProvider,
     CometPositionTrackerService cometTracker,
     CometConfigService cometConfigService,
     BreadcrumbService breadcrumbService,
-    ICometMessenger cometMessenger
+    ICometMessenger cometMessenger,
+    ICameraServiceRegistry cameraServiceRegistry
   )
   {
     _runtimeService = runtimeService;
@@ -265,12 +270,36 @@ public sealed class CameraService : IDisposable
     _cometConfigService = cometConfigService;
     _breadcrumbService = breadcrumbService;
     _cometMessenger = cometMessenger;
+    _cameraServiceRegistry = cameraServiceRegistry;
 
-    // Cache the nucleus radius whenever it becomes known (Horizon fetch or manual entry).
-    cometMessenger.Register<NucleusRadiusKnownMessage>(this, (_, msg) =>
+    _cometConfigService.NucleusRadiusKm.Subscribe(radius =>
     {
-      _lastKnownNucleusRadiusKm = msg.RadiusKm;
-      Console.WriteLine($"[CameraService] NucleusRadius updated: {msg.RadiusKm:F2} km");
+      _lastKnownNucleusRadiusKm = radius;
+      Console.WriteLine($"[CameraService] NucleusRadius updated: {radius:F2} km");
+
+      if (_modeSubject.Value == CameraMode.CometOrbiting)
+      {
+        const double AuToKm = 149_597_870.7;
+        const double TargetFraction = 0.30;
+        const double FovRad = Math.PI / 4.0;
+        double rAu = radius / AuToKm;
+        double halfAngTan = Math.Tan(TargetFraction * 0.5 * FovRad);
+        float autoOrbitDistanceAu = (float)(rAu / halfAngTan);
+
+        _orbitMinDistance = (float)(rAu * 1.1);
+        _orbitMaxDistance = (float)(rAu * 500.0);
+
+        lock (_orbitOffsetLock)
+        {
+          var dir = _orbitOffset.Length() > 1e-10f ? Vector3.Normalize(_orbitOffset) : new Vector3(0f, 0f, 1f);
+          _orbitOffset = dir * autoOrbitDistanceAu;
+          InitOrbitAnglesFromOffset(_orbitOffset);
+        }
+
+        var lastCometPos = _cometTracker.LastKnownCometPosition;
+        if (lastCometPos.HasValue)
+          SnapCameraToOrbit(lastCometPos.Value);
+      }
     });
   }
 
@@ -376,6 +405,13 @@ public sealed class CameraService : IDisposable
     }
   }
 
+  /// <summary>Thread-safe read of the current orbit offset.</summary>
+  public Vector3 GetOrbitOffset()
+  {
+    lock (_orbitOffsetLock)
+      return _orbitOffset;
+  }
+
   /// <summary>Advance to the next camera mode (EarthPosition → UpZenith → CometOrbiting → EarthPosition).</summary>
   public void CycleCameraMode()
   {
@@ -411,6 +447,9 @@ public sealed class CameraService : IDisposable
   /// be restored next time that mode is entered.
   private void SaveModeSnapshot(CameraMode mode)
   {
+    if (mode == CameraMode.UpZenith)
+      return;
+
     var t = _lastConfirmedTransform;
     if (t is null)
       return; // nothing confirmed yet — skip
@@ -489,7 +528,7 @@ public sealed class CameraService : IDisposable
     // Projection to apply after the animation completes (null = no change).
     Action? deferredProjection = null;
 
-    if (_modeSnapshots.TryGetValue(mode, out var snap))
+    if (mode != CameraMode.UpZenith && _modeSnapshots.TryGetValue(mode, out var snap))
     {
       // ── Restore saved state ──────────────────────────────────────────────
       var t = snap.Transform;
@@ -520,7 +559,8 @@ public sealed class CameraService : IDisposable
           {
             var surfaceWorld = Vector3.Transform(_earthSurfacePointBf, _earthBodyRot);
             var camPos = _lastEarthPos + surfaceWorld;
-            _earthRotation  = LookAtOriginFrom(camPos);
+            var zenith = Vector3.Normalize(surfaceWorld);
+            _earthRotation  = LookAtOriginFrom(camPos, zenith);
             _inertialLookDir   = _earthRotation;
             _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, _earthRotation);
             targetPos = camPos;
@@ -623,7 +663,7 @@ public sealed class CameraService : IDisposable
             float cometNear = Math.Max(1e-6f, Math.Min(orbitMag * 0.05f, 0.001f));
             var cur = _projectionSubject.Value;
             float far = cur?.Far ?? 1000f;
-            RequestPerspectiveProjection(45f, _viewportAspect, cometNear, far);
+            RequestPerspectiveProjection(30f * (float)Math.PI / 180f, _viewportAspect, cometNear, far);
           };
           break;
 
@@ -677,17 +717,28 @@ public sealed class CameraService : IDisposable
   /// XYZW bytes are interpreted identically on the Rust side.</para>
   /// <para>Falls back to +X as the world-up hint when the camera is nearly on the Z axis.</para>
   /// </summary>
-  private static Quaternion LookAtOriginFrom(Vector3 pos)
+  private static Quaternion LookAtOriginFrom(Vector3 pos, Vector3? upHint = null)
   {
     var worldFwd = Vector3.Normalize(-pos); // toward origin (engine −Y)
 
-    // World-up hint: prefer +Z; fall back to -Y when nearly on the Z axis to maintain +X right vector.
-    var worldUpHint = Math.Abs(worldFwd.Z) < 0.99f ? Vector3.UnitZ : -Vector3.UnitY;
+    // World-up hint: prefer +Z (or the provided hint); fall back to -Y when nearly collinear
+    Vector3 actualUpHint;
+    if (upHint.HasValue)
+    {
+      actualUpHint = upHint.Value;
+      // If the provided hint is nearly collinear with forward, still fallback
+      if (Math.Abs(Vector3.Dot(worldFwd, actualUpHint)) > 0.99f)
+          actualUpHint = Math.Abs(worldFwd.Z) < 0.99f ? Vector3.UnitZ : -Vector3.UnitY;
+    }
+    else
+    {
+      actualUpHint = Math.Abs(worldFwd.Z) < 0.99f ? Vector3.UnitZ : -Vector3.UnitY;
+    }
 
     // right = cross(upHint, fwd) — NOT cross(fwd, upHint).
     // Verified by hand: for fwd=(0,0,-1) + hint=(1,0,0) this gives right=(0,1,0),
     // up=(1,0,0), q=(0.5,0.5,0.5,0.5), q.rotate(0,-1,0)=(0,0,-1) → pitch=−90° ✓.
-    var worldRight = Vector3.Normalize(Vector3.Cross(worldUpHint, worldFwd));
+    var worldRight = Vector3.Normalize(Vector3.Cross(actualUpHint, worldFwd));
     var worldUp = Vector3.Cross(worldFwd, worldRight);
 
     return EngineQuatFromBasis(worldRight, -worldFwd, worldUp);
@@ -695,7 +746,7 @@ public sealed class CameraService : IDisposable
 
   /// <summary>
   /// Strips any roll component from <paramref name="q"/> by rebuilding the camera basis from
-  /// its forward direction alone, constraining world-up to +Z.
+  /// its forward direction alone, constraining world-up to +Z (or the provided upHint).
   ///
   /// <para>Engine convention: forward = local −Y rotated by <paramref name="q"/>.
   /// The returned quaternion has the same yaw and pitch as <paramref name="q"/> but zero roll.</para>
@@ -703,7 +754,7 @@ public sealed class CameraService : IDisposable
   /// <para>Falls back to returning <paramref name="q"/> unchanged when the forward vector is
   /// degenerate (near-zero length).</para>
   /// </summary>
-  private static Quaternion StripRoll(Quaternion q)
+  private static Quaternion StripRoll(Quaternion q, Vector3? upHint = null)
   {
     // Extract the forward direction: engine forward is local −Y.
     var fwd = Vector3.Transform(-Vector3.UnitY, q);
@@ -712,8 +763,8 @@ public sealed class CameraService : IDisposable
 
     // LookAtOriginFrom(pos) builds a rotation toward the origin from pos.
     // Passing -fwd as "pos" gives worldFwd = normalize(-(-fwd)) = normalize(fwd),
-    // which is exactly the forward direction we want, constrained to up=+Z.
-    return LookAtOriginFrom(-fwd);
+    // which is exactly the forward direction we want, constrained to the up hint.
+    return LookAtOriginFrom(-fwd, upHint);
   }
 
   /// <summary>
@@ -799,10 +850,13 @@ public sealed class CameraService : IDisposable
 
     if (_modeSubject.Value == CameraMode.CometOrbiting)
     {
-      // Positive ΔX (drag right) → decrease azimuth (camera moves left around comet → comet appears right).
-      // Positive ΔY (drag down in Avalonia) → decrease elevation (tilt down).
-      float yawRad   = -pixelDelta.X * sens;
-      float pitchRad = -pixelDelta.Y * sens;
+      // Sign convention (standard orbit camera, verified with engine frame +X=right, +Z=up):
+      //   Camera at azimuth=0 → position=(r,0,0), worldRight = Cross(+Z, −X) = (0,−1,0) = −Y world.
+      //   Moving camera in worldRight direction (−Y) = azimuth DECREASES.
+      //   So drag-left (ΔX<0) → camera moves to camera's right → azimuth decreases → yawRad = +ΔX*sens.
+      //   Drag-down (ΔY>0 in Avalonia) → camera moves down on sphere → elevation decreases → pitchRad = −ΔY*sens.
+      float yawRad   =  pixelDelta.X * sens;
+      float pitchRad =  pixelDelta.Y * sens; // fixed: positive ΔY -> pitchRad > 0 -> elevation increases
 
       lock (_orbitOffsetLock)
       {
@@ -837,10 +891,7 @@ public sealed class CameraService : IDisposable
 
       var lastCometPos = _cometTracker.LastKnownCometPosition;
       if (lastCometPos.HasValue)
-        // Use a 1-frame animation duration so retarget() in Rust completes within one
-        // render tick — CameraSetRotoTranslate is rejected while an animation is active,
-        // so we must always go through AddCameraAnimation even during interactive drag.
-        SnapCameraToOrbit(lastCometPos.Value, InteractiveDragAnimationSeconds);
+        SnapCameraToOrbit(lastCometPos.Value, 0f, snapImmediate: true);
       return true;
     }
 
@@ -855,17 +906,12 @@ public sealed class CameraService : IDisposable
 
       lock (_earthPosLock)
       {
-        // Both yaw (around world +Z) and pitch (around the camera's world-space right)
-        // are world-space rotations, so they must be PRE-multiplied onto the base
-        // orientation.  In System.Numerics, A * B = "apply B first then A", so:
-        //   pitch * yaw * _earthRotation  =  (base → yaw → pitch)
-        // The old order (_earthRotation * pitch * yaw) applied the deltas in the
-        // camera's already-rotated local frame, making vertical drag bleed into
-        // horizontal rotation.
-        var yaw   = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, earthYawRad);
-        var right = Vector3.Transform(Vector3.UnitX, _earthRotation); // camera's world-right
-        var pitch = Quaternion.CreateFromAxisAngle(right, earthPitchRad);
-        var newRot = StripRoll(Quaternion.Normalize(pitch * yaw * _earthRotation));
+        var zenith = Vector3.Normalize(Vector3.Transform(_earthSurfacePointBf, _earthBodyRot));
+        var yaw   = Quaternion.CreateFromAxisAngle(zenith, earthYawRad);
+        var pitch = Quaternion.CreateFromAxisAngle(Vector3.UnitX, earthPitchRad);
+        
+        // Apply yaw in world space (pre-multiply), and pitch in local space (post-multiply).
+        var newRot = StripRoll(Quaternion.Normalize(pitch * yaw * _earthRotation), zenith);
 
         // Update all cached look directions so a later mode switch has fresh anchors.
         _earthRotation     = newRot;
@@ -973,7 +1019,7 @@ public sealed class CameraService : IDisposable
       }
       var lastCometPos = _cometTracker.LastKnownCometPosition;
       if (lastCometPos.HasValue)
-        SnapCameraToOrbit(lastCometPos.Value, InteractiveDragAnimationSeconds);
+        SnapCameraToOrbit(lastCometPos.Value, 0f, snapImmediate: true);
       return true;
     }
 
@@ -1103,7 +1149,7 @@ public sealed class CameraService : IDisposable
     var cur = _projectionSubject.Value;
     float near = cur?.Near ?? 0.001f;
     float far = cur?.Far ?? 1000f;
-    RequestPerspectiveProjection(45f, _viewportAspect, near, far);
+    RequestPerspectiveProjection(30f * (float)Math.PI / 180f, _viewportAspect, near, far);
   }
 
   /// <summary>Re-applies a previously saved projection snapshot to the runtime.</summary>
@@ -1163,7 +1209,11 @@ public sealed class CameraService : IDisposable
         if (_modeSubject.Value != CameraMode.CometOrbiting)
           return;
         Console.WriteLine($"[CameraService] CometPositionRaw update → SnapCameraToOrbit({pos!.Value})");
-        SnapCameraToOrbit(pos!.Value);
+        // Use the same short duration as interactive drag — if we used the default 0.4 s here,
+        // the Rust retarget() would record old_distance≈0 / speed≈0 whenever the comet barely
+        // moved between ticks, and the NEXT drag event would retarget with speed≈0, falling
+        // back to a 0.4 s animation that makes the orbit appear unresponsive.
+        SnapCameraToOrbit(pos!.Value, InteractiveDragAnimationSeconds);
       });
   }
 
@@ -1175,7 +1225,8 @@ public sealed class CameraService : IDisposable
 
   private void SnapCameraToOrbit(
     Vector3 cometPos,
-    float animSeconds = OrbitTrackingAnimationSeconds)
+    float animSeconds = OrbitTrackingAnimationSeconds,
+    bool snapImmediate = false)
   {
     ulong? camId = CameraEntityId;
     if (camId is null)
@@ -1219,10 +1270,17 @@ public sealed class CameraService : IDisposable
     var worldUp = Vector3.Cross(worldFwd, worldRight);
     var rot = EngineQuatFromBasis(worldRight, -worldFwd, worldUp);
 
-    _runtimeService.AddCameraAnimation(
-      camId.Value,
-      new AnimationTarget(targetPos, rot, animSeconds)
-    );
+    if (snapImmediate)
+    {
+      RotoTranslateDirect(targetPos, rot);
+    }
+    else
+    {
+      _runtimeService.AddCameraAnimation(
+        camId.Value,
+        new AnimationTarget(targetPos, rot, animSeconds)
+      );
+    }
   }
   /// <summary>
   /// Initialises the spherical coordinate angles (<see cref="_orbitAzimuthRad"/> and
@@ -1263,6 +1321,7 @@ public sealed class CameraService : IDisposable
   public void OnViewportReady(ulong cameraEntityId, uint viewportWidth, uint viewportHeight)
   {
     CameraEntityId = cameraEntityId;
+    _cameraServiceRegistry.RegisterSelf(cameraEntityId, this);
     _viewportAspect = viewportHeight > 0 ? (float)viewportWidth / viewportHeight : 1f;
     RegisterSimListeners(cameraEntityId);
     RegisterEarthListener();
@@ -1371,6 +1430,81 @@ public sealed class CameraService : IDisposable
     );
     // Reference write is pointer-width atomic in .NET — no lock needed for _lastConfirmedTransform.
     _lastConfirmedTransform = state;
+#if DEBUG
+    if (_modeSubject.Value == CameraMode.CometOrbiting && _cometTracker.LastKnownCometPositionF64 is { } cometF64)
+    {
+        double dx = dto.PosX - cometF64.X;
+        double dy = dto.PosY - cometF64.Y;
+        double dz = dto.PosZ - cometF64.Z;
+        double currentDistance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        
+        float expectedDistance;
+        lock (_orbitOffsetLock) { expectedDistance = _orbitOffset.Length(); }
+        
+        if (Math.Abs(currentDistance - expectedDistance) > 1e-5)
+        {
+            Console.WriteLine($"[FATAL] CometOrbiting invariant broken!");
+            Console.WriteLine($"Expected dist: {expectedDistance}, Actual dist: {currentDistance}, Diff: {Math.Abs(currentDistance - expectedDistance)}");
+            Console.WriteLine($"Camera Pos: {dto.PosX}, {dto.PosY}, {dto.PosZ}");
+            Console.WriteLine($"Comet Pos: {cometF64.X}, {cometF64.Y}, {cometF64.Z}");
+            
+            try
+            {
+                int pid = System.Diagnostics.Process.GetCurrentProcess().Id;
+                string debugger = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX) ? "lldb" : "gdb";
+                
+                if (debugger == "gdb")
+                {
+                    string pythonScript = @"
+import gdb
+def dump_context():
+    for t in gdb.selected_inferior().threads():
+        if not t.is_valid(): continue
+        t.switch()
+        frame = gdb.newest_frame()
+        while frame:
+            if frame.name() and 'start_logic_thread' in frame.name():
+                frame.select()
+                print('Found logic thread: %d' % t.num)
+                try:
+                    # Depending on ECS layout, printing context.scenes might be enough
+                    # for Rust's pretty printers to expand the components.
+                    gdb.execute('print *context')
+                except Exception as e:
+                    print('Error evaluating context: %s' % e)
+                return
+            frame = frame.older()
+    print('Could not find start_logic_thread in any thread backtrace!')
+dump_context()
+";
+                    string scriptPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dump_logic.py");
+                    System.IO.File.WriteAllText(scriptPath, pythonScript);
+                    string cmd = $"gdb -p {pid} -x {scriptPath} --batch";
+                    
+                    Console.WriteLine($"Attempting to run GDB script on logic thread...");
+                    var process = new System.Diagnostics.Process
+                    {
+                        StartInfo = new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = "sh",
+                            Arguments = $"-c \"{cmd}\"",
+                            UseShellExecute = false
+                        }
+                    };
+                    process.Start();
+                    process.WaitForExit();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to run debugger: {ex}");
+            }
+            
+            Environment.Exit(1);
+        }
+    }
+#endif
+
     // BehaviorSubject.OnNext is not thread-safe for concurrent calls; marshal to the UI thread.
     _schedulerProvider.MainThread.Schedule(() => _transformSubject.OnNext(state));
   }
@@ -1378,7 +1512,7 @@ public sealed class CameraService : IDisposable
   private unsafe void HandleProjectionCallback(nint dataPtr)
   {
     var dto = *(CameraProjectionDTO*)dataPtr;
-    float fov = 45f;
+    float fov = 30f * (float)Math.PI / 180f;
     float aspect = 1f;
     float near = 0.1f;
     float far = 1000f;
@@ -1460,6 +1594,7 @@ public sealed class CameraService : IDisposable
     // Transform the body-fixed surface anchor into world space using Earth's
     // current orientation (updated from the BPC callback).
     var surfaceWorld = Vector3.Transform(_earthSurfacePointBf, _earthBodyRot);
+    var zenith = Vector3.Normalize(surfaceWorld);
     var camPos = earthPos + surfaceWorld;
 
     // Resolve look direction from the current orientation sub-mode.
@@ -1471,7 +1606,7 @@ public sealed class CameraService : IDisposable
 
       EarthObserverOrientationMode.CometTracking =>
         // Re-compute a look-at toward the comet every tick.
-        ComputeLookAtComet(camPos),
+        ComputeLookAtComet(camPos, zenith),
 
       EarthObserverOrientationMode.EarthFixed =>
         // Rotate the body-fixed anchor by the current Earth rotation.
@@ -1494,7 +1629,7 @@ public sealed class CameraService : IDisposable
   /// Falls back to the current <see cref="_earthRotation"/> when the comet position
   /// is not yet known (before simulation starts or no comet loaded).
   /// </summary>
-  private Quaternion ComputeLookAtComet(Vector3 camPos)
+  private Quaternion ComputeLookAtComet(Vector3 camPos, Vector3? upHint = null)
   {
     var cometPos = _cometTracker.LastKnownCometPosition;
     if (!cometPos.HasValue)
@@ -1502,9 +1637,20 @@ public sealed class CameraService : IDisposable
 
     var toComet = Vector3.Normalize(cometPos.Value - camPos);
 
-    // World-up hint: prefer +Z; fall back when nearly on the Z axis.
-    var upHint = Math.Abs(toComet.Z) < 0.99f ? Vector3.UnitZ : -Vector3.UnitY;
-    var right   = Vector3.Normalize(Vector3.Cross(upHint, toComet));
+    // World-up hint: prefer +Z (or upHint); fall back when nearly collinear.
+    Vector3 actualUpHint;
+    if (upHint.HasValue)
+    {
+      actualUpHint = upHint.Value;
+      if (Math.Abs(Vector3.Dot(toComet, actualUpHint)) > 0.99f)
+          actualUpHint = -Vector3.UnitY;
+    }
+    else
+    {
+      actualUpHint = Math.Abs(toComet.Z) < 0.99f ? Vector3.UnitZ : -Vector3.UnitY;
+    }
+
+    var right   = Vector3.Normalize(Vector3.Cross(actualUpHint, toComet));
     var up      = Vector3.Cross(toComet, right);
 
     // Engine forward = −Y; toComet is the desired forward direction.
@@ -1538,7 +1684,10 @@ public sealed class CameraService : IDisposable
 
   public void Dispose()
   {
-    _cometMessenger.Unregister<NucleusRadiusKnownMessage>(this);
+    if (CameraEntityId.HasValue)
+    {
+      _cameraServiceRegistry.UnregisterSelf(CameraEntityId.Value);
+    }
     StopCometOrbitTracking();
     _pendingProjectionCts?.Cancel();
     _pendingProjectionCts?.Dispose();

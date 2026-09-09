@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using AetherVk.Logic.Attributes;
@@ -16,7 +17,6 @@ public partial class SettingsTabViewModel
     ISettingsTabViewModel
 {
   private readonly ITranslationService _translationService;
-  private readonly CameraService _cameraService;
   private readonly CompositeDisposable _disposables = [];
   private readonly INativeRuntimeService _runtimeService;
   private readonly ISchedulerProvider _schedulerProvider;
@@ -33,14 +33,12 @@ public partial class SettingsTabViewModel
     ITranslationService translationService,
     ISchedulerProvider schedulerProvider,
     ITabStateService<SettingsSession> sessionService,
-    CameraService cameraService,
-    INativeRuntimeService runtimeService,
-    IViewportRegistry viewportRegistry
+    ICameraServiceRegistry cameraServiceRegistry,
+    INativeRuntimeService runtimeService
   )
     : base("Settings", sessionService)
   {
     _translationService = translationService;
-    _cameraService = cameraService;
     _runtimeService = runtimeService;
     _schedulerProvider = schedulerProvider;
 
@@ -48,38 +46,44 @@ public partial class SettingsTabViewModel
 
     SubscribeToStrings(schedulerProvider);
 
-    _cameraService
-      .CameraModeChanged.ObserveOn(schedulerProvider.MainThread)
-      .Subscribe(mode => CameraModeName = mode.ToString())
+    cameraServiceRegistry.ViewportCreated
+      .ObserveOn(schedulerProvider.Background)
+      .Subscribe(cameraId =>
+      {
+        var cameraService = cameraServiceRegistry.Get(cameraId);
+        if (cameraService != null)
+        {
+          schedulerProvider.MainThread.Schedule(() =>
+          {
+            int nextIndex = ActiveViewports.Count;
+            var vm = new ViewportSettingsViewModel(cameraId, nextIndex, _runtimeService, _schedulerProvider, cameraService);
+            ActiveViewports.Add(vm);
+            HasActiveViewport = true;
+
+            // Simple fallback to keep the global mode display somewhat functional
+            if (ActiveViewports.Count == 1)
+            {
+              cameraService.CameraModeChanged
+                .ObserveOn(schedulerProvider.MainThread)
+                .Subscribe(mode => CameraModeName = mode.ToString())
+                .AddDisposableTo(_disposables);
+            }
+          });
+        }
+      })
       .AddDisposableTo(_disposables);
 
-    viewportRegistry
-      .ActiveViewports.ObserveOn(schedulerProvider.MainThread)
-      .Subscribe(list =>
+    cameraServiceRegistry.ViewportDestroyed
+      .ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(cameraId =>
       {
-        HasActiveViewport = list.Length > 0;
-
-        // Remove viewports that no longer exist
-        var toRemove = ActiveViewports
-          .Where(vm => !list.Any(e => e.CameraId == vm.CameraId))
-          .ToList();
-        foreach (var vm in toRemove)
+        var vm = ActiveViewports.FirstOrDefault(v => v.CameraId == cameraId);
+        if (vm != null)
         {
           vm.Dispose();
           ActiveViewports.Remove(vm);
         }
-
-        // Add new viewports
-        for (int i = 0; i < list.Length; i++)
-        {
-          var entry = list[i];
-          if (!ActiveViewports.Any(vm => vm.CameraId == entry.CameraId))
-          {
-            ActiveViewports.Add(
-              new ViewportSettingsViewModel(entry.CameraId, i, _runtimeService, _schedulerProvider, _cameraService)
-            );
-          }
-        }
+        HasActiveViewport = ActiveViewports.Count > 0;
       })
       .AddDisposableTo(_disposables);
   }

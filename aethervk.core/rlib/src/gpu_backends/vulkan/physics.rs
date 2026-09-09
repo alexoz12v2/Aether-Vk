@@ -81,6 +81,7 @@ impl PhysicsPipelines {
     subgroup_size: u32,
     is_cpu: bool,
     has_native_float16: bool,
+    has_vulkan_memory_model: bool,
   ) -> GpuResult<Self> {
     if has_native_float16 {
       aethervk_oshal_rlib::log!(
@@ -270,11 +271,13 @@ impl PhysicsPipelines {
     let mut pc_sizes = hashbrown::HashMap::<u64, u32>::new();
     // Helper to unwrap (Pipeline, workgroup_size) — stores pc_size, returns pipeline
     let mut wg_sizes = hashbrown::HashMap::<u64, [u32; 3]>::new();
+    let vmm_infix = if has_vulkan_memory_model { ".vmm" } else { "" };
 
     // Create all pipelines using a helper that extracts and stores reflected PC sizes
     macro_rules! mk {
       ($path:expr) => {{
         let mut final_path = alloc::format!("{}/{}", sim_dir, $path);
+        final_path = final_path.replace(".spv", &alloc::format!("{}.spv", vmm_infix));
         if use_debug {
           final_path = final_path.replace(".spv", ".d.spv");
         }
@@ -320,9 +323,9 @@ impl PhysicsPipelines {
             5..=8 => "wg8",
             _ => "wg16",
           };
-          path = alloc::format!("{}/{}.{}.spv", sim_dir, $stem, wg_suffix);
+          path = alloc::format!("{}/{}{}.{}.spv", sim_dir, $stem, vmm_infix, wg_suffix);
         } else {
-          path = alloc::format!("{}/{}.spv", sim_dir, $stem);
+          path = alloc::format!("{}/{}{}.spv", sim_dir, $stem, vmm_infix);
         };
         if use_debug {
           path = path.replace(".spv", ".d.spv");
@@ -340,9 +343,9 @@ impl PhysicsPipelines {
             5..=8 => "wg8",
             _ => "wg16",
           };
-          path = alloc::format!("{}/{}.{}.spv", sim_dir, $stem, wg_suffix);
+          path = alloc::format!("{}/{}{}.{}.spv", sim_dir, $stem, vmm_infix, wg_suffix);
         } else {
-          path = alloc::format!("{}/{}.{}.spv", sim_dir, $stem, $wg);
+          path = alloc::format!("{}/{}{}.{}.spv", sim_dir, $stem, vmm_infix, $wg);
         };
         if use_debug {
           path = path.replace(".spv", ".d.spv");
@@ -366,7 +369,7 @@ impl PhysicsPipelines {
           65..=128 => "wg128",
           _ => "wg256",
         };
-        let mut path = alloc::format!("{}/{}.{}.spv", sim_dir, $stem, wg_suffix);
+        let mut path = alloc::format!("{}/{}{}.{}.spv", sim_dir, $stem, vmm_infix, wg_suffix);
         if use_debug {
           path = path.replace(".spv", ".d.spv");
         }
@@ -391,9 +394,9 @@ impl PhysicsPipelines {
             5..=8 => "wg8",
             _ => "wg16",
           };
-          path = alloc::format!("{}/{}{}.{}.spv", sim_dir, $stem, fp16_infix, wg_suffix);
+          path = alloc::format!("{}/{}{}{}.{}.spv", sim_dir, $stem, vmm_infix, fp16_infix, wg_suffix);
         } else {
-          path = alloc::format!("{}/{}{}.spv", sim_dir, $stem, fp16_infix);
+          path = alloc::format!("{}/{}{}{}.spv", sim_dir, $stem, vmm_infix, fp16_infix);
         };
         if use_debug {
           path = path.replace(".spv", ".d.spv");
@@ -412,9 +415,9 @@ impl PhysicsPipelines {
             5..=8 => "wg8",
             _ => "wg16",
           };
-          path = alloc::format!("{}/{}{}.{}.spv", sim_dir, $stem, fp16_infix, wg_suffix);
+          path = alloc::format!("{}/{}{}{}.{}.spv", sim_dir, $stem, vmm_infix, fp16_infix, wg_suffix);
         } else {
-          path = alloc::format!("{}/{}{}.{}.spv", sim_dir, $stem, fp16_infix, $wg);
+          path = alloc::format!("{}/{}{}{}.{}.spv", sim_dir, $stem, vmm_infix, fp16_infix, $wg);
         };
         if use_debug {
           path = path.replace(".spv", ".d.spv");
@@ -503,6 +506,7 @@ impl VulkanComputeKernels {
     subgroup_size: u32,
     is_cpu: bool,
     has_native_float16: bool,
+    has_vulkan_memory_model: bool,
   ) -> GpuResult<Self> {
     let pipelines = PhysicsPipelines::new(
       device,
@@ -510,6 +514,7 @@ impl VulkanComputeKernels {
       subgroup_size,
       is_cpu,
       has_native_float16,
+      has_vulkan_memory_model,
     )?;
 
     let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()

@@ -1,3 +1,8 @@
+#if defined(USE_VMM) && USE_VMM == 1
+#pragma use_vulkan_memory_model
+#extension GL_KHR_memory_scope_semantics : require
+#endif
+
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 
