@@ -123,12 +123,12 @@ impl SceneConversionExt2 for Scene {
     let macro_near = cam_comp.near_plane();
     let macro_far = cam_comp.far_plane();
 
-    let mut layer_bounds: hashbrown::HashMap<u32, (f32, f32)> =
+    let mut layer_bounds: hashbrown::HashMap<u32, (f64, f64)> =
       hashbrown::HashMap::with_capacity(64);
     let mut layer_frame_scales: hashbrown::HashMap<u32, f32> =
       hashbrown::HashMap::with_capacity(64);
 
-    layer_bounds.insert(0, (macro_near, macro_far));
+    layer_bounds.insert(0, (macro_near as f64, macro_far as f64));
     layer_frame_scales.insert(0, 1.0);
 
     let mut layer_frame_entities: hashbrown::HashMap<u32, EntityId> =
@@ -180,8 +180,8 @@ impl SceneConversionExt2 for Scene {
       if let Some(cam_in_frame_f64) = self.get_relative_transform_f64(camera_entity, entry.id) {
         camera_in_frames.insert(entry.depth_layer, cam_in_frame_f64);
 
-        let dist_local = cam_in_frame_f64.position.length() as f32;
-        let soi_local = entry.soi_radius / entry.scale; // TODO check if useful
+        let dist_local = cam_in_frame_f64.position.length();
+        let soi_local = (entry.soi_radius / entry.scale) as f64;
         let safe_micro_near = (dist_local * 0.01).max(0.001);
         let tight_near = (dist_local - soi_local).max(safe_micro_near);
         let tight_far = (dist_local + soi_local).max(tight_near + safe_micro_near);
@@ -199,7 +199,7 @@ impl SceneConversionExt2 for Scene {
       ($layer_idx:expr) => {
         layer_map.entry($layer_idx).or_insert_with(|| {
           let (near, far) =
-            layer_bounds.get(&$layer_idx).copied().unwrap_or((macro_near, macro_far));
+            layer_bounds.get(&$layer_idx).copied().unwrap_or((macro_near as f64, macro_far as f64));
           let scale = layer_frame_scales.get(&$layer_idx).copied().unwrap_or(1.0);
           RenderLayer {
             layer_index: $layer_idx,
@@ -329,10 +329,33 @@ impl SceneConversionExt2 for Scene {
       }};
     }
 
+    // ------ 0. Flush pending mesh vertex buffer updates ------------------------------
+    // Records vkCmdCopyBuffer + TRANSFER→VERTEX_INPUT barrier for each pending update
+    // into this frame's cmd_buffer, then swaps the handles in physical_mesh2_resources.
+    // Must run before any draw call that references the position buffer of an affected mesh.
+    //
+    // INVARIANT: All presentation engines submit to the same Vulkan graphics queue,
+    // so draining the queue here (on the first PE's cmd_buffer) is safe. Subsequent
+    // PE command buffers in the same vkQueueSubmit batch will see the already-swapped
+    // ForwardMesh2RenderResource and the barrier is resolved for all of them.
+    let _ = device.flush_pending_mesh_updates(cmd_buffer);
+
     // ------ 4. Fused Component Extraction & GPU Draw Call Creation ------------------------
     // 1. Meshes
     let extracted_meshes = extract!(StaticMeshComponent, |id, mesh| {
-      compute_rte(self, id).map(|(layer_idx, rte)| {
+      compute_rte(self, id).map(|(layer_idx, mut rte)| {
+        // Apply MeshScaleMultiplierComponent if present
+        self.with_component(
+          id,
+          |scale_cmp: &crate::scene::MeshScaleMultiplierComponent| {
+            rte.scale = Vec3f32::from_components(
+              rte.scale.x() * scale_cmp.multiplier,
+              rte.scale.y() * scale_cmp.multiplier,
+              rte.scale.z() * scale_cmp.multiplier,
+            );
+          },
+        );
+
         // TODO reintroduce following and selected if necessary. If reintroduced, the selection and
         // following state should have been stored in the scene
         let outline = get_mesh_outline(false, false, render_outline);
@@ -647,8 +670,9 @@ impl SceneConversionExt2 for Scene {
             CURSOR_VERTEX_COUNT,
             rte.to_transform().to_mat4(),
             rte.scale.x(),
-            l.near,
-            l.far,
+            l.near as f32,
+            l.far as f32,
+            l.frame_scale,
             rel_pos.to_f32().into(),
           ));
         } else {
@@ -678,7 +702,7 @@ impl SceneConversionExt2 for Scene {
         }
         if let Ok(pipe) = device.get_sun_pipeline_key(pe_handle) {
           let l = get_or_create_layer!(layer_idx);
-          let sun_cam = render_scene.camera_data.rebuild_for_layer(l.near, l.far);
+          let sun_cam = render_scene.camera_data.rebuild_for_layer(l.near, l.far, l.frame_scale);
           l.sun_call = Some(SunDrawCall::from_model_and_camera(
             rte.to_mat4_f64(),
             &sun_cam,
@@ -710,7 +734,7 @@ impl SceneConversionExt2 for Scene {
            drawing it in a micro layer would incorrectly render the sky with micro near/far planes."
         );
         let l = get_or_create_layer!(sky_layer_idx);
-        let sky_cam = render_scene.camera_data.rebuild_for_layer(l.near, l.far);
+        let sky_cam = render_scene.camera_data.rebuild_for_layer(l.near, l.far, l.frame_scale);
         // projection matrix inversion can fail.
         l.sky_call = SkyDrawCall::from_camera(&sky_cam, pipe, sky_rotation_offset).ok();
       } else {
@@ -877,10 +901,15 @@ impl SceneConversionExt2 for Scene {
           }
 
           let rte_km = ind.global_position_km - cam_pos_km;
+          let rte_au = aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+            rte_km.x() / AU_TO_KM,
+            rte_km.y() / AU_TO_KM,
+            rte_km.z() / AU_TO_KM,
+          );
           let clip = view_proj_f64.mul_vector(Vec4f64::from_components(
-            rte_km.x(),
-            rte_km.y(),
-            rte_km.z(),
+            rte_au.x(),
+            rte_au.y(),
+            rte_au.z(),
             1.0,
           ));
 
@@ -899,11 +928,19 @@ impl SceneConversionExt2 for Scene {
           let cam_dist_km =
             (rte_km.x() * rte_km.x() + rte_km.y() * rte_km.y() + rte_km.z() * rte_km.z()).sqrt();
 
-          let desired_px = if cam_dist_km > 1e-6 {
-            (ind.desired_label_distance_km / cam_dist_km * proj_scale as f64).clamp(20.0, 300.0)
-              as f32
-          } else {
-            80.0
+          let desired_px = match camera_data.projection_params {
+            CameraProjectionParams::Perspective { .. } => {
+              if cam_dist_km > 1e-6 {
+                (ind.desired_label_distance_km / cam_dist_km * proj_scale as f64).clamp(20.0, 300.0)
+                  as f32
+              } else {
+                80.0
+              }
+            }
+            CameraProjectionParams::Orthographic { .. } => {
+              ((ind.desired_label_distance_km / AU_TO_KM) * proj_scale as f64).clamp(20.0, 300.0)
+                as f32
+            }
           };
 
           indicator_inputs.push(indicator_layout::IndicatorInput {
@@ -962,11 +999,19 @@ impl SceneConversionExt2 for Scene {
         let py = (ndc_y + 1.0) * 0.5 * h;
 
         let cam_dist_km = rte.position.length() as f64 * AU_TO_KM;
-        let desired_px = if cam_dist_km > 1e-6 {
-          (ref_ind.desired_label_distance_km / cam_dist_km * proj_scale as f64).clamp(20.0, 300.0)
-            as f32
-        } else {
-          80.0
+        let desired_px = match camera_data.projection_params {
+          CameraProjectionParams::Perspective { .. } => {
+            if cam_dist_km > 1e-6 {
+              (ref_ind.desired_label_distance_km / cam_dist_km * proj_scale as f64)
+                .clamp(20.0, 300.0) as f32
+            } else {
+              80.0
+            }
+          }
+          CameraProjectionParams::Orthographic { .. } => {
+            ((ref_ind.desired_label_distance_km / AU_TO_KM) * proj_scale as f64).clamp(20.0, 300.0)
+              as f32
+          }
         };
 
         indicator_inputs.push(indicator_layout::IndicatorInput {
@@ -1105,7 +1150,7 @@ impl SceneConversionExt2 for Scene {
             let style = text::TextStyle {
               size_pt: output.text_pts,
               color: output.text_color,
-              style_flags: 0,
+              style_flags: 2, // Enable software bold for better readability
             };
             text::push_text_to_batch(
               &output.label,

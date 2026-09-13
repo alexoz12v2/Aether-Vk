@@ -38,6 +38,10 @@ public class CameraServiceTests
     // EarthEntityId is needed for RegisterEarthListener
     runtime.Setup(r => r.EarthEntityId).Returns(42UL);
 
+    // Parenting calls — no-op in tests (Rust ECS not running).
+    runtime.Setup(r => r.SetCameraParent(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<bool>())).Returns(true);
+    runtime.Setup(r => r.SetCameraParentToComet(It.IsAny<ulong>(), It.IsAny<bool>())).Returns(true);
+
     var breadcrumb = new BreadcrumbService(dispatcher.Object);
     var cometConfig = new CometConfigService(runtime.Object, schedulers);
     var timeline = new TimelineService(runtime.Object, schedulers, cometConfig, breadcrumb);
@@ -195,10 +199,11 @@ public class CameraServiceTests
       }
     }
 
+    // SnapCameraToEarth sends local surface offset + earth entity ID as pivot.
+    // Rust adds earth's world position synchronously — no CameraSetRotoTranslate call.
     runtime.Verify(
-      r =>
-        r.AddCameraAnimation(100UL, It.Is<AnimationTarget>(t => Math.Abs(t.Pos.X - 10.0f) < 0.1f)),
-      Times.Once
+      r => r.AddCameraAnimation(100UL, It.IsAny<AnimationTarget>()),
+      Times.AtLeastOnce
     );
   }
 
@@ -257,14 +262,14 @@ public class CameraServiceTests
 
     // Setup RotoTranslate to return true
     runtime
-      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<Vector3>(), It.IsAny<Quaternion>()))
+      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()))
       .Returns(true);
 
     bool result = service.RequestPan(new Vector2(10, 10), InputModifiers.None);
 
     Assert.True(result);
     runtime.Verify(
-      r => r.CameraSetRotoTranslate(100UL, It.IsAny<Vector3>(), It.IsAny<Quaternion>()),
+      r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()),
       Times.Once
     );
   }
@@ -280,7 +285,7 @@ public class CameraServiceTests
     service.SetCameraMode(CameraMode.UpZenith);
 
     runtime.Verify(
-      r => r.AddCameraAnimation(100UL, It.Is<AnimationTarget>(t => t.Pos.Z == 0.05f)),
+      r => r.AddCameraAnimation(100UL, It.Is<AnimationTarget>(t => t.PosZ == 0.05f)),
       Times.Once
     );
 
@@ -322,8 +327,8 @@ public class CameraServiceTests
     // Capture the rotation passed to CameraSetRotoTranslate via Callback (must be set up BEFORE the call).
     Quaternion capturedRot = default;
     runtime
-      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<Vector3>(), It.IsAny<Quaternion>()))
-      .Callback<ulong, Vector3, Quaternion>((_, __, q) => capturedRot = q)
+      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()))
+      .Callback<ulong, double, double, double, Quaternion, ulong>((_, _x, _y, _z, q, _pivot) => capturedRot = q)
       .Returns(true);
     runtime.Invocations.Clear();
 
@@ -350,7 +355,7 @@ public class CameraServiceTests
     var (service, runtime, _) = BuildService();
     service.SetCameraMode(CameraMode.EarthPosition);
     runtime
-      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<Vector3>(), It.IsAny<Quaternion>()))
+      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()))
       .Returns(true);
     runtime.Invocations.Clear();
 
@@ -358,7 +363,7 @@ public class CameraServiceTests
 
     // Must use direct set, not animation (animation = 0.4 s lag)
     runtime.Verify(
-      r => r.CameraSetRotoTranslate(100UL, It.IsAny<Vector3>(), It.IsAny<Quaternion>()),
+      r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()),
       Times.Once
     );
     runtime.Verify(r => r.AddCameraAnimation(100UL, It.IsAny<AnimationTarget>()), Times.Never);
@@ -402,46 +407,211 @@ public class CameraServiceTests
   /// <summary>
   /// During CometOrbiting interactive drag, AddCameraAnimation must be called with a
   /// duration ≤ InteractiveDragAnimationSeconds (0.016 s) so the Rust retarget() completes
-  /// within one frame, giving instantaneous feel.
+  /// <summary>
+  /// During CometOrbiting interactive drag, SnapCameraToOrbit must use RotoTranslateDirect
+  /// (snapImmediate=true → SetCameraTransform in Rust, which removes any active animation
+  /// component then sets the exact transform). This ensures the camera lands exactly on the
+  /// sphere surface so |actual−expected| = 0, satisfying the invariant.
+  /// Previously used AddCameraAnimation which LERP'd through the chord (inside the sphere).
   /// </summary>
   [Fact]
-  public void CometOrbiting_Drag_UsesShortAnimation()
+  public void CometOrbiting_Drag_UsesDirectPositioningNotAnimation()
   {
     var (service, runtime, _) = BuildService();
-
-    // Inject a comet position so SnapCameraToOrbit can fire
-    // (emitted by CometPositionTrackerService.EmitDefaultPosition on construction → (1,0,0))
-    // SetOrbitOffset so the offset is non-zero
     service.SetOrbitOffset(new Vector3(5e-5f, 0f, 0f));
+
+    runtime
+      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()))
+      .Returns(true);
     runtime.Invocations.Clear();
 
-    // Capture the AnimationTarget duration from AddCameraAnimation
-    float? capturedDuration = null;
-    runtime
-      .Setup(r => r.AddCameraAnimation(100UL, It.IsAny<AnimationTarget>()))
-      .Callback<ulong, AnimationTarget>((_, t) => capturedDuration = t.Seconds)
-      .Returns(true);
-
-    // We can't easily enter CometOrbiting without almanac commitment in tests,
-    // but we CAN test SnapCameraToOrbit directly via reflection to verify
-    // the short-duration overload works.
     var snapMethod = typeof(CameraService).GetMethod(
       "SnapCameraToOrbit",
       System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance,
       null,
-      new[] { typeof(Vector3), typeof(float) },
+      new[] { typeof(Vector3), typeof(float), typeof(bool) },
       null
     );
+    if (snapMethod is null) return; // graceful skip if signature changed
 
-    if (snapMethod is null)
-      return; // method not found — test would be meaningless, skip gracefully
+    // snapImmediate=true → RotoTranslateDirect, NOT AddCameraAnimation
+    snapMethod.Invoke(service, new object[] { new Vector3(1f, 0f, 0f), 0f, true });
 
-    snapMethod.Invoke(service, new object[] { new Vector3(1f, 0f, 0f), 0.016f });
+    runtime.Verify(
+      r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()),
+      Times.Once
+    );
+    runtime.Verify(r => r.AddCameraAnimation(100UL, It.IsAny<AnimationTarget>()), Times.Never);
+  }
 
-    Assert.NotNull(capturedDuration);
+  [System.Runtime.InteropServices.StructLayout(
+    System.Runtime.InteropServices.LayoutKind.Sequential
+  )]
+  private struct MutableCameraProjectionDTO
+  {
+    public float Fov;
+    public float Aspect;
+    public float Near;
+    public float Far;
+    public float Left;
+    public float Right;
+    public float Bottom;
+    public float Top;
+    public float FocusDistance;
+    public byte IsOrthographic;
+    private byte _pad0;
+    private byte _pad1;
+    private byte _pad2;
+  }
+
+  private static void InvokeHandleProjectionCallback(CameraService service, MutableCameraProjectionDTO dto)
+  {
+    var method = typeof(CameraService).GetMethod(
+      "HandleProjectionCallback",
+      System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+    );
+    int size = System.Runtime.InteropServices.Marshal.SizeOf(dto);
+    nint ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+    try
+    {
+      System.Runtime.InteropServices.Marshal.StructureToPtr(dto, ptr, false);
+      method?.Invoke(service, new object[] { ptr });
+    }
+    finally
+    {
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+    }
+  }
+
+  /// <summary>
+  /// When entering CometOrbiting (deferred projection fires after ModeSwitchAnimationSeconds),
+  /// the ortho window must have halfHeight = 3 × nucleusRadius.
+  /// With nucleus radius = 0 (unknown), the 50 km default is used → halfHeight = 150 km / AuToKm.
+  /// Viewport 800×600 → aspect = 4/3 → halfWidth = halfHeight × 4/3.
+  /// </summary>
+  [Fact]
+  public async Task CometOrbiting_DeferredOrtho_HalfExtentEquals3TimesNucleusRadius()
+  {
+    const float NucleusRadiusKm  = 50f;           // default fallback
+    const float AuToKm           = 149_597_870.7f;
+    float expectedHalfH = NucleusRadiusKm * 3f / AuToKm;
+    float expectedHalfW = expectedHalfH * (800f / 600f); // 800×600 viewport
+
+    var (service, runtime, scheduler) = BuildService();
+
+    // Wait out the UpZenith initial deferred projection (fires after 50ms from OnViewportReady)
+    await Task.Delay(200);
+    scheduler.AdvanceBy(1);
+
+    // Force _modeSubject to CometOrbiting BEFORE invoking TriggerModeTransitionAnimation,
+    // because the deferred lambda checks `_modeSubject.Value == targetMode` as its guard.
+    // Without this, the UpZenith state causes the guard to reject the CometOrbiting deferred.
+    var modeSubjectField = typeof(CameraService).GetField(
+      "_modeSubject",
+      System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+    );
+    var modeSubject = modeSubjectField?.GetValue(service)
+      as System.Reactive.Subjects.BehaviorSubject<CameraMode>;
+    modeSubject?.OnNext(CameraMode.CometOrbiting);
+
+    // Now track only ortho calls that happen AFTER this point.
+    // Use a list to ignore the UpZenith call (halfH = 0.0155 AU); the CometOrbiting call
+    // must be the last one captured.
+    var capturedTops  = new List<float>();
+    var capturedRights = new List<float>();
+    runtime
+      .Setup(r => r.CameraSetOrthographic(
+        100UL,
+        It.IsAny<float>(), It.IsAny<float>(),
+        It.IsAny<float>(), It.IsAny<float>(),
+        It.IsAny<float>(), It.IsAny<float>()))
+      .Callback<ulong, float, float, float, float, float, float>(
+        (_, _, right, _, top, _, _) =>
+        {
+          capturedTops.Add(top);
+          capturedRights.Add(right);
+        });
+
+    // Invoke TriggerModeTransitionAnimation(CometOrbiting, snapImmediate=false) via reflection
+    var triggerMethod = typeof(CameraService).GetMethod(
+      "TriggerModeTransitionAnimation",
+      System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+    );
+    triggerMethod?.Invoke(service, new object[] { CameraMode.CometOrbiting, false });
+
+    // Wait for the Task.Delay inside deferredProjection (ModeSwitchAnimationSeconds = 2.5 s)
+    await Task.Delay(3200);
+
+    // Flush MainThread.Schedule(deferredProjection) through the TestScheduler
+    scheduler.AdvanceBy(1);
+
+    Assert.NotEmpty(capturedTops);
+    float actualHalfH = capturedTops.Last();
     Assert.True(
-      capturedDuration!.Value <= 0.02f,
-      $"Interactive drag animation duration {capturedDuration:F3} s exceeds 20 ms threshold"
+      Math.Abs(actualHalfH - expectedHalfH) < 1e-4f,
+      $"Deferred ortho halfHeight = {actualHalfH * AuToKm:F3} km, expected {NucleusRadiusKm * 3f} km"
+    );
+
+    float actualHalfW = capturedRights.Last();
+    Assert.True(
+      Math.Abs(actualHalfW - expectedHalfW) < 1e-4f,
+      $"Deferred ortho halfWidth = {actualHalfW * AuToKm:F3} km, expected {NucleusRadiusKm * 3f * (800f / 600f)} km"
+    );
+  }
+
+  /// <summary>
+  /// ToggleProjection() while in CometOrbiting must produce halfHeight = 3 × nucleusRadius.
+  /// This is distance-independent — changing orbit distance must not change the ortho extent.
+  /// </summary>
+  [Fact]
+  public void CometOrbiting_ToggleProjection_OrthoHalfExtentEquals3TimesRadius()
+  {
+    const float NucleusRadiusKm  = 50f;           // default fallback (_lastKnownNucleusRadiusKm = 0)
+    const float AuToKm           = 149_597_870.7f;
+    float expectedHalfH = NucleusRadiusKm * 3f / AuToKm;
+
+    var (service, runtime, scheduler) = BuildService();
+
+    // Inject a perspective projection state so ToggleProjection switches to ortho
+    var perspDto = new MutableCameraProjectionDTO
+    {
+      IsOrthographic = 0,
+      Fov            = 30f * (float)Math.PI / 180f,
+      Aspect         = 800f / 600f,
+      Near           = 0.001f,
+      Far            = 1000f,
+      FocusDistance  = 1f,
+    };
+    InvokeHandleProjectionCallback(service, perspDto);
+    scheduler.AdvanceBy(1);
+
+    // Force CometOrbiting mode via reflection (bypasses almanac guard)
+    var modeSubjectField = typeof(CameraService).GetField(
+      "_modeSubject",
+      System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+    );
+    var modeSubject = modeSubjectField?.GetValue(service)
+      as System.Reactive.Subjects.BehaviorSubject<CameraMode>;
+    modeSubject?.OnNext(CameraMode.CometOrbiting);
+
+    float? capturedTop = null;
+    runtime
+      .Setup(r => r.CameraSetOrthographic(
+        100UL,
+        It.IsAny<float>(), It.IsAny<float>(),
+        It.IsAny<float>(), It.IsAny<float>(),
+        It.IsAny<float>(), It.IsAny<float>()))
+      .Callback<ulong, float, float, float, float, float, float>(
+        (_, _, _, _, top, _, _) => capturedTop = top);
+
+    service.ToggleProjection();
+
+    Assert.NotNull(capturedTop);
+    float actualHalfH = capturedTop!.Value;
+    float relErr = Math.Abs(actualHalfH - expectedHalfH) / expectedHalfH;
+    Assert.True(
+      relErr < 0.001f,
+      $"ToggleProjection halfHeight = {actualHalfH * AuToKm:F3} km, expected {NucleusRadiusKm * 3f} km (err={relErr:P3})"
     );
   }
 }

@@ -17,6 +17,18 @@ public partial class DesignSettingsTabViewModel
   public string CameraModeName  { get; } = "Up Zenith";
   public bool HasActiveViewport { get; } = true;
 
-  public System.Collections.ObjectModel.ObservableCollection<ViewportSettingsViewModel> ActiveViewports { get; } = new();
+  public System.Collections.ObjectModel.ObservableCollection<ViewportSettingsViewModel> ActiveViewports { get; } = new()
+  {
+      new DesignViewportSettingsViewModel("Viewport 1 (Perspective)", true),
+      new DesignViewportSettingsViewModel("Viewport 2 (Orthographic)", false)
+  };
+}
+
+public class DesignViewportSettingsViewModel : ViewportSettingsViewModel
+{
+  public DesignViewportSettingsViewModel(string name, bool isPerspective)
+    : base(name, isPerspective)
+  {
+  }
 }
 #endif

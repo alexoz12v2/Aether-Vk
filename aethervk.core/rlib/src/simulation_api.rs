@@ -27,8 +27,11 @@ pub mod misc_api;
 pub mod render_thread;
 pub mod reposition;
 pub mod scene_api;
+pub mod scene_dump;
 pub mod structs;
 pub mod time_api;
+#[cfg(test)]
+mod scene_dump_tests;
 const MAX_UNSCALED_DELTA_MS: u32 = 500_u32;
 
 /// Holds State for the whole simulation. For now, default drop order (from first to last)
@@ -72,6 +75,74 @@ impl SimulationContext {
 
   pub fn get_scene(&self, scene_id: u64) -> Option<Arc<RwLock<SceneContext>>> {
     self.scenes.read().get(&scene_id).cloned()
+  }
+
+  pub fn start_simulation(
+    &self,
+    scene_id: u64,
+    speed: aethervk_oshal_rlib::os::time::v2::SimSpeed,
+  ) -> bool {
+    let scenes = self.scenes.read();
+    let scene_lock = scenes.scenes.get(&scene_id);
+
+    if let Some(scene) = scene_lock {
+      let read_scene = scene.read();
+      if read_scene.active_physics_task.load(core::sync::atomic::Ordering::Acquire)
+        || read_scene.pending_cross_sync
+      {
+        oshal::log!("Cannot start simulation: previous syncs are not resolved.");
+        return false;
+      }
+
+      read_scene.simulation_running.store(true, core::sync::atomic::Ordering::Release);
+    } else {
+      return false;
+    }
+
+    if let Some(mut time_mgr) = scenes.time_managers.get_mut(&scene_id) {
+      time_mgr.set_speed(speed);
+    }
+
+    true
+  }
+
+  pub fn pause_simulation_sync(&self, scene_id: u64) -> bool {
+    let scene_clone = {
+      let scenes = self.scenes.read();
+
+      if let Some(scene) = scenes.scenes.get(&scene_id) {
+        scene
+          .read()
+          .simulation_running
+          .store(false, core::sync::atomic::Ordering::Release);
+      } else {
+        return false;
+      }
+
+      if let Some(mut time_mgr) = scenes.time_managers.get_mut(&scene_id) {
+        time_mgr.set_speed(aethervk_oshal_rlib::os::time::v2::SimSpeed::Paused);
+      }
+
+      scenes.scenes.get(&scene_id).unwrap().clone()
+    };
+
+    // Spin wait without holding the outer DashMap or scenes lock
+    loop {
+      let (active_physics, pending_cross) = {
+        let scene = scene_clone.read();
+        (
+          scene.active_physics_task.load(core::sync::atomic::Ordering::Acquire),
+          scene.pending_cross_sync,
+        )
+      };
+
+      if !active_physics && !pending_cross {
+        break;
+      }
+      oshal::os::native::this_thread::sleep_for(core::time::Duration::from_micros(200));
+    }
+
+    true
   }
 
   pub fn unload_model(&self, model_id: u64) {
@@ -336,6 +407,24 @@ pub unsafe fn get_native_window_handle_sync() -> Option<CNativeWindowHandle> {
   if out.field0 == 0 { None } else { Some(out) }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct CTime {
+  pub nanoseconds: u64,
+  pub centuries: i16,
+  _padding: [u8; 6],
+}
+
+impl CTime {
+  pub fn new(nanoseconds: u64, centuries: i16) -> Self {
+    Self {
+      nanoseconds,
+      centuries,
+      _padding: [0; 6],
+    }
+  }
+}
+
 pub mod external_state {
   #[repr(C)]
   #[derive(Debug, Clone, Copy, PartialEq, Eq, bytemuck::Zeroable, bytemuck::Pod)]
@@ -472,6 +561,13 @@ pub mod external_state {
     /// Carries the post-commit comet position in AU (heliocentric SUN_ECLIPJ2000, f64).
     /// Allows C# to update `CometPositionTrackerService` without a running simulation.
     CometPositionSnapshot(CCometPositionSnapshot),
+    /// Emitted after a `DumpScene` command completes (success or failure).
+    SceneDumped(CSceneDumped),
+    /// Emitted after a `RestoreSceneDump` command completes (success or failure).
+    SceneRestored(CSceneRestored),
+    /// Emitted when camera matrices change (debug builds only).
+    #[cfg(debug_assertions)]
+    CameraMatrices(CCameraMatrices),
   }
 
   impl ExternalState {
@@ -483,8 +579,28 @@ pub mod external_state {
         Self::CometInitialized(_) => 4,
         Self::SunVisibilityChanged(_) => 5,
         Self::CometPositionSnapshot(_) => 6,
+        Self::SceneDumped(_) => 7,
+        Self::SceneRestored(_) => 8,
+        #[cfg(debug_assertions)]
+        Self::CameraMatrices(_) => 9,
       }
     }
+  }
+
+  /// Payload for [`ExternalState::SceneDumped`].
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct CSceneDumped {
+    /// `1` = dump succeeded, `0` = dump failed.
+    pub success: u32,
+  }
+
+  /// Payload for [`ExternalState::SceneRestored`].
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct CSceneRestored {
+    /// `1` = restore succeeded, `0` = restore failed.
+    pub success: u32,
   }
 
   /// Payload for [`ExternalState::SunVisibilityChanged`].
@@ -504,6 +620,20 @@ pub mod external_state {
     pub ndc_x: f32,
     /// Projected NDC Y coordinate of the sun (may exceed ±1 when off-screen).
     pub ndc_y: f32,
+  }
+
+  /// Camera view + projection matrices emitted after each Micro-layer render.
+  /// Debug builds only (state identifier 9).
+  ///
+  /// Layout: 128 bytes — 16×f32 view (column-major) + 16×f32 proj (column-major).
+  #[cfg(debug_assertions)]
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct CCameraMatrices {
+    /// Column-major view matrix (rotation-only; camera is at RTE origin).
+    pub view: [f32; 16],
+    /// Column-major projection matrix for the Micro layer (km-scale).
+    pub proj: [f32; 16],
   }
 }
 
@@ -530,6 +660,12 @@ pub fn emit_external_state_change(external_state: &external_state::ExternalState
       ExternalState::CometPositionSnapshot(snapshot) => {
         bytemuck::bytes_of(snapshot).as_ptr().cast::<core::ffi::c_void>()
       }
+      ExternalState::SceneDumped(d) => bytemuck::bytes_of(d).as_ptr().cast::<core::ffi::c_void>(),
+      ExternalState::SceneRestored(r) => {
+        bytemuck::bytes_of(r).as_ptr().cast::<core::ffi::c_void>()
+      }
+      #[cfg(debug_assertions)]
+      ExternalState::CameraMatrices(m) => bytemuck::bytes_of(m).as_ptr().cast::<core::ffi::c_void>(),
     };
     unsafe { cb(id, bytes_ptr) };
   }

@@ -327,16 +327,18 @@ pub struct SphereGizmoDataGpu {
 
 /// push constant layout for `sphere_gizmo.frag/vert`
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct SphereGizmoPushConstants {
   // Must match GLSL: layout(push_constant, std430) uniform PushConstants {
-  //     mat4 viewProj;             // offset 0,  64 bytes
+  //     mat4 viewProj;             // offset  0, 64 bytes
   //     SphereGizmoArray gizmoPtr; // offset 64,  8 bytes
-  //     uint64_t _pad;             // offset 72,  8 bytes
+  //     vec3 sunPos;               // offset 72, 12 bytes  (layer-local coords)
+  //     float _pad;                // offset 84,  4 bytes  (total: 88)
   // };
   pub view_proj: [f32; 16], // 64 bytes at offset 0
   pub gizmo_ptr: u64,       //  8 bytes at offset 64
-  pub _pad: u64,            //  8 bytes padding to align block to 16 bytes (80 total)
+  pub sun_pos: [f32; 3],    // 12 bytes at offset 72
+  pub _pad: u32,            //  4 bytes at offset 84  (total: 88, ≤ 128 byte limit)
 }
 
 /// Push constants for the depth-compositing fullscreen pass.
@@ -601,6 +603,28 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// Eagerly compiles pipelines and creates archetypes during initialization
   /// so we don't lazily compile on the first frame a specific mesh is requested.
   fn init_archetypes(&self, handle: PresentationEngineHandle) -> GpuResult<()>;
+
+  /// Enqueues a position-only vertex buffer update for an already-uploaded mesh.
+  ///
+  /// The logic thread calls this after mutating the `Comet` vertices in-place.
+  /// The actual Vulkan buffer swap (vkCmdCopyBuffer + pipeline barrier) is recorded
+  /// on the main graphics command buffer at the start of the next `build_render_scene`
+  /// call via `flush_pending_mesh_updates`.
+  ///
+  /// If the same `mesh_id` is already pending, the existing entry is overwritten
+  /// (coalesced) so rapidly-repeated calls don't accumulate stale work.
+  fn enqueue_mesh_position_update(&self, mesh_id: u64, position_data: alloc::vec::Vec<f32>);
+
+  /// Drains all pending mesh position updates and records a `vkCmdCopyBuffer` +
+  /// `TRANSFER → VERTEX_ATTRIBUTE_INPUT` pipeline barrier for each one into
+  /// `cmd_buffer`, then atomically swaps the old position vertex buffer handle.
+  ///
+  /// Must be called **before** any draw call that reads the position buffer of an
+  /// affected mesh, but **after** the command buffer has been opened for recording.
+  ///
+  /// INVARIANT: All presentation engines submit to the same Vulkan graphics queue,
+  /// so this only needs to run on the first PE's command buffer per frame.
+  fn flush_pending_mesh_updates(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
   /// Traverses a QuadTree of viewports and issues the respective drawing programs
   /// (3D Viewport or GUI elements)

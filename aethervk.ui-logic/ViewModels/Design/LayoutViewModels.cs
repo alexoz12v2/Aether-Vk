@@ -20,4 +20,15 @@ public class SplitNodeViewModelDesign : SplitNodeViewModel
       SplitOrientation.Horizontal
     ) { }
 }
+public class DockingManagerViewModelDesign : DockingManagerViewModel
+{
+  public DockingManagerViewModelDesign()
+    : base(new SplitNodeViewModelDesign()) { }
+}
+
+public class MainWindowViewModelDesign : MainWindowViewModel
+{
+  public MainWindowViewModelDesign()
+    : base(null!, null!, null!, null!, null!, new DockingManagerViewModelDesign(), null!) { }
+}
 #endif

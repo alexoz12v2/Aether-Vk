@@ -89,7 +89,8 @@ impl SceneCameraExt for Scene {
         let (mut p, mut y) = q_old.to_pitch_yaw();
         p += delta_pitch;
         y += delta_yaw;
-        p = p.clamp(-<f32 as FloatOps>::PI_OVER_2, <f32 as FloatOps>::PI_OVER_2);
+        let max_pitch = 1.55334_f32;
+        p = p.clamp(-max_pitch, max_pitch);
         y = y.fmod(<f32 as FloatOps>::PI * 2.0);
         let q_new = Quat::from_pitch_and_yaw_radians(p, y);
 
@@ -187,17 +188,15 @@ pub trait QuatToEulerAngles {
 
 impl QuatToEulerAngles for Quat {
   fn to_pitch_yaw(self) -> (f32, f32) {
-    let (w, x, y, z) = (self.0.w(), self.0.x(), self.0.y(), self.0.z());
-
-    // Pitch (rotation around X axis)
-    let sin_pitch = 2.0 * (w * x + y * z);
-    let cos_pitch = 1.0 - 2.0 * (x * x + y * y);
-    let pitch = sin_pitch.atan2(cos_pitch);
-
-    // Yaw (rotation around Z axis)
-    let sin_yaw = 2.0 * (w * z + x * y);
-    let cos_yaw = 1.0 - 2.0 * (y * y + z * z);
-    let yaw = sin_yaw.atan2(cos_yaw);
+    // Extract forward vector (local -Y rotated by self)
+    let fwd = self.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+    
+    // Pitch is the angle above/below the XY plane
+    // Clamp to avoid NaN from precision errors slightly outside [-1, 1]
+    let pitch = fwd.z().clamp(-1.0, 1.0).asin();
+    
+    // Yaw is the angle in the XY plane. 0 yaw means looking down -Y.
+    let yaw = fwd.x().atan2(-fwd.y());
 
     (pitch, yaw)
   }
@@ -228,7 +227,9 @@ fn updated_pitch_yaw_highres(
   let (mut pitch, mut yaw) = t.rotation.to_pitch_yaw();
   pitch += delta_pitch;
   yaw += delta_yaw;
-  pitch = pitch.clamp(-<f32 as FloatOps>::PI_OVER_2, <f32 as FloatOps>::PI_OVER_2);
+  // Clamp to 89 degrees (1.55334 radians) to prevent Gimbal lock pole flips
+  let max_pitch = 1.55334_f32;
+  pitch = pitch.clamp(-max_pitch, max_pitch);
   yaw = yaw.fmod(<f32 as FloatOps>::PI * 2.0);
   (pitch, yaw)
 }

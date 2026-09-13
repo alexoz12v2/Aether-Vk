@@ -56,7 +56,6 @@ pub use referential_indicator::ReferentialIndicatorComponent;
 pub use trajectory_indicator::TrajectoryIndicatorComponent;
 pub use ui::{Transform2DComponent, UiComponent};
 
-
 /// An error that can occur when adding a component.
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum AddComponentError {
@@ -253,7 +252,7 @@ impl<T: ForeignSerializable> ErasedForeignSerializable for T {
   unsafe fn apply_foreign_bytes(&mut self, src: *const core::ffi::c_void) {
     unsafe { self.apply_foreign_ptr(src) };
   }
-  
+
   #[cfg(debug_assertions)]
   fn debug_print(&self) {
     aethervk_oshal_rlib::log!("{:#?}", self);
@@ -396,21 +395,40 @@ impl HighResTransformComponent {
   }
 
   pub fn to_mat4_f64(&self) -> aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64 {
-      let mut rot_f32 = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_quat_custom_frame(self.rotation);
-      rot_f32.x = rot_f32.x * (self.scale.x() as f32);
-      rot_f32.y = rot_f32.y * (self.scale.y() as f32);
-      rot_f32.z = rot_f32.z * (self.scale.z() as f32);
-      
-      let mut mat = aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::from_cols(
-         aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(rot_f32.x.x() as f64, rot_f32.x.y() as f64, rot_f32.x.z() as f64, rot_f32.x.w() as f64),
-         aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(rot_f32.y.x() as f64, rot_f32.y.y() as f64, rot_f32.y.z() as f64, rot_f32.y.w() as f64),
-         aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(rot_f32.z.x() as f64, rot_f32.z.y() as f64, rot_f32.z.z() as f64, rot_f32.z.w() as f64),
-         aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(0.0, 0.0, 0.0, 1.0)
-      );
-      mat.cols[3] = aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
-          self.position.x(), self.position.y(), self.position.z(), 1.0
-      );
-      mat
+    let mut rot_f32 =
+      aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_quat_custom_frame(self.rotation);
+    rot_f32.x = rot_f32.x * (self.scale.x() as f32);
+    rot_f32.y = rot_f32.y * (self.scale.y() as f32);
+    rot_f32.z = rot_f32.z * (self.scale.z() as f32);
+
+    let mut mat = aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::from_cols(
+      aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+        rot_f32.x.x() as f64,
+        rot_f32.x.y() as f64,
+        rot_f32.x.z() as f64,
+        rot_f32.x.w() as f64,
+      ),
+      aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+        rot_f32.y.x() as f64,
+        rot_f32.y.y() as f64,
+        rot_f32.y.z() as f64,
+        rot_f32.y.w() as f64,
+      ),
+      aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+        rot_f32.z.x() as f64,
+        rot_f32.z.y() as f64,
+        rot_f32.z.z() as f64,
+        rot_f32.z.w() as f64,
+      ),
+      aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(0.0, 0.0, 0.0, 1.0),
+    );
+    mat.cols[3] = aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+      self.position.x(),
+      self.position.y(),
+      self.position.z(),
+      1.0,
+    );
+    mat
   }
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -618,8 +636,6 @@ impl Default for BodyRotationalModel {
   }
 }
 
-
-
 /// A display-only mesh that is not included in physical simulation.
 #[derive(Debug, Clone)]
 pub struct StaticMeshComponent {
@@ -630,6 +646,13 @@ pub struct StaticMeshComponent {
 }
 
 impl Component for StaticMeshComponent {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MeshScaleMultiplierComponent {
+  pub multiplier: f32,
+}
+
+impl Component for MeshScaleMultiplierComponent {}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BillboardType {
@@ -1179,6 +1202,60 @@ impl Scene {
 
   pub fn entity_count(&self) -> usize {
     self.entities.read().len()
+  }
+
+  /// Clone the scene's structural layout without copying any component data.
+  ///
+  /// The returned scene has the same entity ID → archetype/row mappings, hierarchy, and names as
+  /// `self`, so calls to `with_component_mut` targeting those entity IDs are valid. All component
+  /// slots are initialized to `None` — the caller must fill them (e.g. via `deserialize_scene`).
+  ///
+  /// `texture_cache` is shared (Arc clone). `foreign_registry` vtables are copied.
+  pub fn clone_structure_only(&self) -> Self {
+    let entities = self.entities.read().clone();
+    let component_meta = self.component_meta.read().clone();
+
+    // Rebuild each archetype: preserve slot layout (entity-to-row mapping + free slots),
+    // but replace every ComponentStorage with a same-length all-None version.
+    let archetypes_guard = self.archetypes.read();
+    let new_archetypes: alloc::vec::Vec<Archetype> = archetypes_guard
+      .iter()
+      .map(|arch| {
+        let slot_count = arch.entities.len();
+
+        let mut new_components: HashMap<TypeId, RwLock<Box<dyn ComponentStorage>>> =
+          HashMap::with_capacity(arch.component_types.len());
+
+        for type_id in &arch.component_types {
+          if let Some(meta) = component_meta.get(type_id) {
+            // Creates a correctly-typed empty Vec<Option<T>> via the registered fn pointer.
+            let mut storage_lock = (meta.new_storage)();
+            let storage_inner = storage_lock.get_mut();
+            for _ in 0..slot_count {
+              storage_inner.push_none();
+            }
+            new_components.insert(*type_id, storage_lock);
+          }
+        }
+
+        Archetype {
+          components: new_components,
+          component_types: arch.component_types.clone(),
+          entities: arch.entities.clone(), // preserves Some/None occupancy per row
+          free_slots: arch.free_slots.clone(),
+        }
+      })
+      .collect();
+
+    Self {
+      entities: RwLock::new(entities),
+      archetypes: RwLock::new(new_archetypes),
+      component_meta: RwLock::new(component_meta),
+      hierarchy: RwLock::new(self.hierarchy.read().clone()),
+      names: RwLock::new(self.names.read().clone()),
+      texture_cache: alloc::sync::Arc::clone(&self.texture_cache),
+      foreign_registry: parking_lot::RwLock::new(self.foreign_registry.read().clone()),
+    }
   }
 
   /// Returns a list of all currently active EntityIds in the scene.
@@ -3022,7 +3099,7 @@ impl Scene {
             (scaled_parent_scale.z() as f64 * acc_pos.z()) as f32,
           ));
           acc_pos = p_pos + rotated.to_f64();
-          acc_rot = p_rot * acc_rot;
+          acc_rot = (p_rot * acc_rot).normalize();
           acc_scale = scaled_parent_scale * acc_scale;
         }
         current_entity = parent_id;
@@ -3275,7 +3352,7 @@ impl Scene {
             (scaled_parent_scale.z() as f64 * acc_pos.z()) as f32,
           ));
           acc_pos = p_pos + rotated.to_f64();
-          acc_rot = p_rot * acc_rot;
+          acc_rot = (p_rot * acc_rot).normalize();
           acc_scale = scaled_parent_scale * acc_scale;
         }
         current_entity = parent_id;
@@ -3391,7 +3468,7 @@ impl Scene {
         ));
 
         t_pos = node_pos_f64 + rotated.to_f64();
-        t_rot = node_t.rotation * t_rot;
+        t_rot = (node_t.rotation * t_rot).normalize();
         t_scale = node_t.scale * scaled_child_scale;
       }
     }
@@ -3426,7 +3503,7 @@ impl Scene {
         ));
 
         r_pos = node_pos_f64 + rotated.to_f64();
-        r_rot = node_t.rotation * r_rot;
+        r_rot = (node_t.rotation * r_rot).normalize();
         r_scale = node_t.scale * scaled_child_scale;
       }
     }
@@ -3491,7 +3568,7 @@ impl Scene {
           );
 
           let inv_rot = pg.rotation.inverse();
-          t.rotation = inv_rot * new_global.rotation;
+          t.rotation = (inv_rot * new_global.rotation).normalize();
 
           let diff_pos = Vec3f32::from_components(
             new_global.position.x() - pg.position.x(),
@@ -3573,6 +3650,12 @@ impl Scene {
         .with_component(root_id, |c: &HighResTransformComponent| c.scale)
         .or_else(|| self.with_component(root_id, |c: &TransformComponent| c.scale))
         .unwrap_or(Vec3f32::one());
+        
+      let mut root_frame_scale = 1.0_f32;
+      let _ = self.with_component(root_id, |c: &ReferenceFrameComponent| {
+        root_frame_scale = c.scale;
+      });
+      acc_scale = acc_scale * root_frame_scale;
 
       // Walk DOWN: ancestors[len-2] → ancestors[0] (= direct parent).
       // `ancestors` is ordered [direct_parent, …, root], so iterating in reverse
@@ -3589,10 +3672,16 @@ impl Scene {
           .with_component(node_id, |c: &HighResTransformComponent| c.rotation)
           .or_else(|| self.with_component(node_id, |c: &TransformComponent| c.rotation))
           .unwrap_or(Quat::identity());
-        let local_scale = self
+        let mut local_scale = self
           .with_component(node_id, |c: &HighResTransformComponent| c.scale)
           .or_else(|| self.with_component(node_id, |c: &TransformComponent| c.scale))
           .unwrap_or(Vec3f32::one());
+
+        let mut node_frame_scale = 1.0_f32;
+        let _ = self.with_component(node_id, |c: &ReferenceFrameComponent| {
+          node_frame_scale = c.scale;
+        });
+        local_scale = local_scale * node_frame_scale;
 
         // Compose: world = parent_world ∘ local
         //   world_pos   = acc_pos + acc_rot * (acc_scale * local_pos)
@@ -3604,11 +3693,15 @@ impl Scene {
           (acc_scale.z() as f64 * local_pos.z()) as f32,
         ));
         acc_pos = acc_pos + rotated.to_f64();
-        acc_rot = acc_rot * local_rot;
+        acc_rot = (acc_rot * local_rot).normalize();
         acc_scale = acc_scale * local_scale;
       }
 
-      Some(HighResTransformComponent { position: acc_pos, rotation: acc_rot, scale: acc_scale })
+      Some(HighResTransformComponent {
+        position: acc_pos,
+        rotation: acc_rot,
+        scale: acc_scale,
+      })
     };
 
     // ── Phase 3: world → local, write HighResTransformComponent ───────────────
@@ -3616,18 +3709,14 @@ impl Scene {
       .with_component_mut(entity_id, |t: &mut HighResTransformComponent| {
         if let Some(pg) = parent_world {
           let inv_rot = pg.rotation.inverse();
-          t.rotation = inv_rot * new_rot;
+          t.rotation = (inv_rot * new_rot).normalize();
 
-          let safe_div_f64 =
-            |a: f64, b: f64| -> f64 { if b.abs() < 1e-30 { 0.0 } else { a / b } };
+          let safe_div_f64 = |a: f64, b: f64| -> f64 { if b.abs() < 1e-30 { 0.0 } else { a / b } };
 
           // Un-rotate and un-scale the world-space offset into parent-local coordinates.
           let diff = new_pos - pg.position;
-          let diff_f32 = Vec3f32::from_components(
-            diff.x() as f32,
-            diff.y() as f32,
-            diff.z() as f32,
-          );
+          let diff_f32 =
+            Vec3f32::from_components(diff.x() as f32, diff.y() as f32, diff.z() as f32);
           let unrotated = inv_rot.rotate_vector(diff_f32).to_f64();
           t.position = Vec3f64::from_components(
             safe_div_f64(unrotated.x(), pg.scale.x() as f64),
@@ -3668,7 +3757,7 @@ impl Scene {
           };
 
           let inv_rot = pg.rotation.inverse();
-          t.rotation = inv_rot * new_rotation;
+          t.rotation = (inv_rot * new_rotation).normalize();
 
           let diff_pos = Vec3f32::from_components(
             new_position.x() - pg.position.x(),
@@ -4428,7 +4517,7 @@ impl Scene {
             let rotated = rotate_f64(p_t.rotation, scaled_pos);
 
             t_pos = p_t.position + rotated;
-            t_rot = p_t.rotation * t_rot; // safely relies on your Quaternion ops::Mul overload
+            t_rot = (p_t.rotation * t_rot).normalize(); // safely relies on your Quaternion ops::Mul overload
             t_scale = scaled_parent_scale * t_scale;
           }
         }
@@ -4465,7 +4554,7 @@ impl Scene {
               let rotated = rotate_f64(p_t.rotation, scaled_pos);
 
               r_pos = p_t.position + rotated;
-              r_rot = p_t.rotation * r_rot;
+              r_rot = (p_t.rotation * r_rot).normalize();
               r_scale = scaled_parent_scale * r_scale;
             }
           }
@@ -4481,7 +4570,7 @@ impl Scene {
 
         let diff_pos = t_pos - r_pos;
         let inv_r_rot = r_rot.inverse();
-        let new_rot = inv_r_rot * t_rot;
+        let new_rot = (inv_r_rot * t_rot).normalize();
 
         // Execute precise differential un-rotation cleanly using the f64 rotation helper
         let unrotated_diff = rotate_f64(inv_r_rot, diff_pos);
@@ -4956,7 +5045,11 @@ pub mod dto {
           far,
         } => {
           let height = (top - bottom).abs();
-          let aspect = if height < 1e-5 { 1.0 } else { (right - left).abs() / height };
+          let aspect = if height < 1e-5 {
+            1.0
+          } else {
+            (right - left).abs() / height
+          };
           CameraDTO {
             is_orthographic: 1,
             fov: 0.0,

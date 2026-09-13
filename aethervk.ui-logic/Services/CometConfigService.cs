@@ -117,6 +117,12 @@ public sealed class CometConfigService : IDisposable
   public void SetNucleusRadiusKm(float radiusKm)
   {
     _nucleusRadiusKmSubject.OnNext(radiusKm);
+
+    // Push the new radius to the engine so the gizmo (2× radius) and mesh (1× radius)
+    // update immediately. Only fires when a comet is already committed to avoid spurious
+    // calls before the comet entity exists in the scene.
+    if (_isCommittedSubject.Value && radiusKm > 0f)
+      _runtimeService.UpdateCometNucleusRadius(radiusKm);
   }
 
   // ── Commands ──────────────────────────────────────────────────────────────

@@ -129,6 +129,8 @@ mod tests {
         &device,
       ),
       synchronization2: ash::khr::synchronization2::Device::new(&instance.instance, &device),
+      #[cfg(debug_assertions)]
+      host_query_reset: None,
       handle: device.clone(),
       submission_lock: spin::Mutex::new(()),
       #[cfg(target_vendor = "apple")]

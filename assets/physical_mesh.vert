@@ -46,7 +46,10 @@ void main() {
   // Calculate bitangent using the normal, tangent, and handedness sign
   outBitangent = cross(outNormal, outTangent) * inTangent.w;
 
-  vec4 clipPos = push.modelViewProj * vec4(inPosition, 1.0);
+  // Isolate RTE precision offset by bypassing matrix addition inside the shader
+  vec4 centerClip = push.modelViewProj * vec4(0.0, 0.0, 0.0, 1.0);
+  vec4 localClip = push.modelViewProj * vec4(inPosition, 0.0);
+  vec4 clipPos = centerClip + localClip;
 
   if (push.extra.emissiveIntensity < 0.0) {
       vec4 normalClip = push.modelViewProj * vec4(outNormal, 0.0);

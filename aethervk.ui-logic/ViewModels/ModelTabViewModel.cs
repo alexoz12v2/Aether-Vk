@@ -34,6 +34,10 @@ public partial class ModelTabViewModel
   // when the user switches sessions (SerialDisposable disposes the old one first).
   private readonly SerialDisposable _modelChangeSub = new();
 
+  // Subject used to debounce manual nucleus radius edits. Throttle(250 ms) prevents
+  // flooding the native FFI layer when the user drags the slider continuously.
+  private readonly System.Reactive.Subjects.Subject<float> _radiusChanges = new();
+
   // ── Observable properties ───────────────────────────────────────────────────────
 
   /// <summary>The currently selected jet, or <c>null</c> when none is selected.</summary>
@@ -81,8 +85,19 @@ public partial class ModelTabViewModel
     Icon = "⬡"; // hexagon / 3D object — U+2B21
     SubscribeToStrings(schedulerProvider);
 
-    // Track _modelChangeSub lifetime alongside all other subs.
+    // Track _modelChangeSub and _radiusChanges lifetime alongside all other subs.
     _disposables.Add(_modelChangeSub);
+    _disposables.Add(_radiusChanges);
+
+    // Wire the debounced radius subject: fire SetNucleusRadiusKm at most once per 250 ms
+    // so the FFI layer is not flooded while the user drags the slider.
+    _radiusChanges
+      .Throttle(TimeSpan.FromMilliseconds(250), schedulerProvider.MainThread)
+      .Subscribe(r => _cometConfigService.SetNucleusRadiusKm(r))
+      .AddDisposableTo(_disposables);
+      
+    // Push the UI default value at startup so the engine doesn't fall back to 50 km
+    _radiusChanges.OnNext(EffectiveNucleusRadiusKm);
 
     // Re-wire model-session changes now that _schedulerProvider is set.
     // The base constructor already fired OnPropertyChanged(CurrentSession) but
@@ -184,6 +199,10 @@ public partial class ModelTabViewModel
   {
     OnPropertyChanged(nameof(ManualNucleusRadiusKmNullable));
     OnPropertyChanged(nameof(IsNucleusRadiusUnknown));
+    // Publish to the debounced subject — the subscription in the constructor
+    // fires SetNucleusRadiusKm (→ UpdateCometNucleusRadius FFI) at most once
+    // per 250 ms, preventing FFI flood while the user drags the slider.
+    _radiusChanges.OnNext(EffectiveNucleusRadiusKm);
   }
 
   /// <summary>
@@ -369,7 +388,8 @@ public partial class ModelTabViewModel
         h => jet.PropertyChanged -= h)
       .Where(e =>
         e.EventArgs.PropertyName != nameof(JetViewModel.Beta) &&
-        e.EventArgs.PropertyName != nameof(JetViewModel.DustProductionRateAt1AuKgs))
+        e.EventArgs.PropertyName != nameof(JetViewModel.DustProductionRateAt1AuKgs) &&
+        e.EventArgs.PropertyName != nameof(JetViewModel.IsPreviewVisible))
       .Throttle(TimeSpan.FromMilliseconds(250), _schedulerProvider.Background)
       .Subscribe(_ =>
       {
@@ -383,6 +403,21 @@ public partial class ModelTabViewModel
         {
           jet.Beta = computed.Beta;
           jet.DustProductionRateAt1AuKgs = computed.DustProductionRateAt1AuKgs;
+        }
+      })
+      .AddDisposableTo(_disposables);
+
+    Observable
+      .FromEventPattern<PropertyChangedEventHandler, PropertyChangedEventArgs>(
+        h => jet.PropertyChanged += h,
+        h => jet.PropertyChanged -= h)
+      .Where(e => e.EventArgs.PropertyName == nameof(JetViewModel.IsPreviewVisible))
+      .Throttle(TimeSpan.FromMilliseconds(250), _schedulerProvider.Background)
+      .Subscribe(_ =>
+      {
+        if (jet.NativePsId != 0)
+        {
+          _runtimeService.SetJetPreviewVisibility(jet.NativePsId, jet.IsPreviewVisible);
         }
       })
       .AddDisposableTo(_disposables);

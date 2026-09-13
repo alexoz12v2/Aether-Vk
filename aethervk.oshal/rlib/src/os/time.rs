@@ -478,6 +478,17 @@ pub mod v2 {
       self.start_epoch + duration
     }
 
+    pub fn set_epoch_range(&mut self, new_start: Epoch, new_end: Epoch) -> Result<(), &'static str> {
+      if new_end - new_start < Duration::from_days(1.0) {
+        return Err("end - start should be bigger than 1 day");
+      }
+
+      self.start_epoch = new_start;
+      self.end_epoch = new_end;
+
+      Ok(())
+    }
+
     /// Yields/sleeps the caller thread if rendering/simulating too fast to enforce a max unscaled
     /// FPS
     pub fn govern_framerate(&self, target_fps: u32) {

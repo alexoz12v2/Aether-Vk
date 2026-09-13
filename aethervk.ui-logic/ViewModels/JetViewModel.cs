@@ -81,6 +81,13 @@ public sealed partial class JetViewModel : ObservableObject
   [ObservableProperty]
   private Vector4 _streamColor = new Vector4(0.4f, 0.8f, 1.0f, 1.0f); // cyan default
 
+  /// <summary>
+  /// Toggles the jet preview mesh visibility in the rendering scene.
+  /// Dust particle emission itself is unaffected by this toggle.
+  /// </summary>
+  [ObservableProperty]
+  private bool _isPreviewVisible = true;
+
   // ── Computed (native round-trip) ─────────────────────────────────────────────
 
   /// <summary>

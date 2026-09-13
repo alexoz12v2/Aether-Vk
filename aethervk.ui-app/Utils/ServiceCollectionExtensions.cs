@@ -94,7 +94,9 @@ public static class ServiceCollectionExtensions
     collection.AddScoped<SettingsTabViewModel>();
     collection.AddScoped<UITestPanelViewModel>();
     collection.AddScoped<ConsoleViewModel>();
+    #if DEBUG
     collection.AddScoped<DebugUiViewModel>();
+#endif
     collection.AddScoped<Viewport3DViewModel>();
     collection.AddTransient<Func<Viewport3DViewModel, VulkanViewportControlViewModel>>(sp =>
     {
@@ -110,12 +112,16 @@ public static class ServiceCollectionExtensions
       var breadcrumbService = sp.GetRequiredService<BreadcrumbService>();
       var dispatcher = sp.GetRequiredService<IUiThreadDispatcher>();
       var fileDialog = sp.GetRequiredService<IFileDialogService>();
+      var timelineSessionService = sp.GetRequiredService<ITabStateService<TimelineSession>>();
+      var cometConfigService = sp.GetRequiredService<CometConfigService>();
       return vm => new ViewportOverlayViewModel(
         cameraService,
         runtimeService,
         breadcrumbService,
         dispatcher,
         fileDialog,
+        timelineSessionService,
+        cometConfigService,
         vm
       );
     });

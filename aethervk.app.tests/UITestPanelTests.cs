@@ -1,3 +1,4 @@
+#if DEBUG
 using System.Linq;
 using AetherVk.Logic.ViewModels;
 using AetherVk.Views;
@@ -32,3 +33,4 @@ public class UITestPanelTests
     Assert.NotNull(titleBlock);
   }
 }
+#endif

@@ -224,9 +224,10 @@ impl SimulationContext {
           .add_component(
             body,
             crate::scene::SphereGizmoComponent {
-              // 50 km default: angular diameter ~13 px at 7 500 km orbital distance
-              // (0.4° at 45° FOV / 1920 px). User can override via nucleus radius UI.
-              radius: 50.0,
+              // Gizmo radius = 2× nucleus radius. Default nucleus = 2 km → gizmo = 4 km.
+              // Updated live via LogicCommand::UpdateCometNucleusRadius when the user sets
+              // a custom nucleus radius in the UI.
+              radius: 4.0,
               subdivisions: 4.0,
               local_frame: aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::identity(),
               is_visible: true,
@@ -244,7 +245,7 @@ impl SimulationContext {
           crate::scene::StaticMeshComponent {
             asset_path: alloc::string::String::from("__default_comet__"),
             mesh: alloc::sync::Arc::new(crate::simulation::comet::generate_uv_sphere(
-              50.0, 16, 16, 1.0, false,
+              2.0, 16, 16, 1.0, false,
             )),
             emissive_color: [0.0, 0.0, 0.0, 0.0],
             is_visible: false,

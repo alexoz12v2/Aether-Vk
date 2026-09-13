@@ -653,6 +653,17 @@ impl Instance {
           optional_extensions.insert(utils::OptionalExtensionSupportFlags::VULKAN_MEMORY_MODEL);
         }
 
+        #[cfg(debug_assertions)]
+        {
+          let supports_host_query_reset = device_extension_properties.iter().any(|prop| {
+            prop.extension_name_as_c_str().unwrap() == ash::ext::host_query_reset::NAME
+          });
+
+          if supports_host_query_reset {
+            optional_extensions.insert(utils::OptionalExtensionSupportFlags::HOST_QUERY_RESET);
+          }
+        }
+
         Some(utils::PhysicalDeviceQueryResult {
           physical_device,
           physical_device_properties: unsafe {

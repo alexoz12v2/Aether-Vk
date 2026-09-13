@@ -1014,6 +1014,27 @@ impl ForwardMesh2RenderResource {
     }
   }
 
+  /// Replaces the position vertex buffer with a freshly uploaded one.
+  ///
+  /// The old buffer is scheduled for VMA destruction at `next_submit_timeline + 2`
+  /// via the `DiscardPool`, matching the convention used by transient staging resources
+  /// (see `device.rs:4467`). This gives both in-flight frames time to finish before
+  /// the allocation is freed — no polling required.
+  pub fn swap_position_buffer(
+    &mut self,
+    new_buf: Buffer,
+    discard_pool: &DiscardPool,
+    next_submit_timeline: u64,
+  ) {
+    let old = core::mem::replace(&mut self.position_vertex_buffer, new_buf);
+    discard_pool.discard_buffer(
+      self.allocator,
+      old.buffer.get(),
+      old.allocation,
+      next_submit_timeline + 2,
+    );
+  }
+
   pub fn frontend_texture_flags(&self) -> TextureFlags {
     let mut flags = TextureFlags::empty();
     if self.albedo_image.is_some() {

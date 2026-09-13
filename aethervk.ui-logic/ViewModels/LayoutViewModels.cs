@@ -280,6 +280,15 @@ public partial class DockingManagerViewModel
   private readonly ITabFactory _tabFactory;
   private readonly ILayoutMessenger _layoutMessenger;
 
+#if DEBUG
+  protected DockingManagerViewModel(LayoutNodeViewModelBase rootNode)
+  {
+    _tabFactory = null!;
+    _layoutMessenger = null!;
+    _rootNode = rootNode;
+  }
+#endif
+
   public DockingManagerViewModel(
     ITabFactory tabFactory,
     ILayoutMessenger layoutMessenger,

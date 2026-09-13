@@ -43,7 +43,7 @@ impl core::hash::Hash for Vertex {
   }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[allow(non_camel_case_types)]
 pub enum TexelFormat {
   // Basic formats
@@ -103,7 +103,14 @@ pub struct Texture {
   pub has_mipmaps: bool,
 }
 
-static NEXT_COMET_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+pub(crate) static NEXT_COMET_ID: core::sync::atomic::AtomicU64 =
+  core::sync::atomic::AtomicU64::new(1);
+
+/// Allocate a fresh monotonically-increasing mesh ID. Used when reconstructing a `Comet`
+/// from serialized data (scene restore) where no existing ID is available.
+pub fn next_comet_id() -> u64 {
+  NEXT_COMET_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+}
 
 // TODO change name of this class to `Mesh`
 /// Warning: `PartialEq` implemented only with `id` field
@@ -952,6 +959,23 @@ pub fn generate_quad(normal: Vec3f32, size: f32) -> Comet {
     normal_map: None,
     roughness_map: None,
     ao_map: None,
+  }
+}
+
+/// Rescales all vertex positions in-place using the stored unit normals.
+///
+/// Because a UV sphere's surface normal equals its unit-sphere position vector,
+/// `position = normal * radius` is sufficient to rescale without recomputing
+/// trigonometric values.
+///
+/// Does NOT touch `mesh.id` — GPU-side buffer tracking is driven by a separate
+/// `enqueue_mesh_position_update` call so that the DashMap cache key in
+/// `physical_mesh2_resources` remains stable.
+pub fn update_uv_sphere_radius_in_place(mesh: &mut Comet, new_radius: f32) {
+  for vertex in &mut mesh.vertices {
+    vertex.position[0] = vertex.normal[0] * new_radius;
+    vertex.position[1] = vertex.normal[1] * new_radius;
+    vertex.position[2] = vertex.normal[2] * new_radius;
   }
 }
 

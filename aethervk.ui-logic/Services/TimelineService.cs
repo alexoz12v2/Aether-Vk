@@ -116,6 +116,10 @@ public sealed class TimelineService : IDisposable
     _proposedTimeRangeSubject.OnNext(range);
   }
 
+  public bool Play(int speed) => _runtimeService.StartSimulation(speed);
+  public bool Pause() => _runtimeService.PauseSimulationSync();
+  public bool Reset() => _runtimeService.ResetSimulationSync();
+
   // ── Internal callback handling ─────────────────────────────────────────────
 
   // Invoked on the native callback thread — must not block, must not throw.

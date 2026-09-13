@@ -97,12 +97,7 @@ public interface INativeRuntimeService : IDisposable
   // Simulation Flow Control
   // ==========================================
 
-  /// <summary>
-  /// Fires with the scene ID when a simulation scene becomes active after <see cref="StartSimulation"/>.
-  /// Observed on the native callback thread — use <c>ObserveOn(schedulerProvider.MainThread)</c>
-  /// before subscribing on the UI thread.
-  /// </summary>
-  IObservable<ulong> SimulationStateUpdated { get; }
+
 
   bool ResetSimulationSync();
   bool PauseSimulationSync();
@@ -122,16 +117,37 @@ public interface INativeRuntimeService : IDisposable
   bool AddCameraAnimation(ulong cameraId, AnimationTarget animation);
 
   /// <summary>
-  /// Directly writes the camera's world-space position and orientation.
-  /// Returns <c>false</c> (rejected) if a <c>TransformAnimationComponent</c> is still active
-  /// on the camera entity — the caller should treat <c>false</c> as a silent no-op.
-  /// Result is confirmed asynchronously via <c>SIMULATION_CALLBACK</c>.
+  /// Directly writes the camera's position and orientation.
+  /// When <paramref name="pivotEntityId"/> is non-zero, Rust resolves that entity's
+  /// current world position synchronously and adds <paramref name="posX/Y/Z"/> as a
+  /// local offset — giving zero-latency body tracking with no ECS parenting.
   /// </summary>
   bool CameraSetRotoTranslate(
     ulong cameraId,
-    System.Numerics.Vector3 position,
-    System.Numerics.Quaternion rotation
+    double posX,
+    double posY,
+    double posZ,
+    System.Numerics.Quaternion rotation,
+    ulong pivotEntityId = 0
   );
+
+  /// <summary>
+  /// Parents or un-parents the camera to a given entity.
+  /// <para><b>enabled=true</b>: calls <c>set_parent(camera, parentEntityId)</c> only.
+  /// The caller MUST write the correct local offset immediately after via
+  /// <see cref="CameraSetRotoTranslate"/> (pivotEntityId=0).</para>
+  /// <para><b>enabled=false</b>: world-preserving unparent. Rust reads
+  /// <c>global_transform_f64</c>, removes the parent, and writes the world
+  /// position back so the camera stays exactly where it was.</para>
+  /// </summary>
+  bool SetCameraParent(ulong cameraId, ulong parentEntityId, bool enabled);
+
+  /// <summary>
+  /// Parents or un-parents the camera to the comet body entity (resolved internally).
+  /// enabled=false is world-preserving (same as <see cref="SetCameraParent"/>).
+  /// Returns false if the comet has not been initialised.
+  /// </summary>
+  bool SetCameraParentToComet(ulong cameraId, bool enabled);
 
   /// <summary>Sets the camera projection to perspective. Not blocked by an active animation.</summary>
   bool CameraSetPerspective(ulong cameraId, float fov, float aspectRatio, float near, float far);
@@ -165,7 +181,37 @@ public interface INativeRuntimeService : IDisposable
     ParticleSystemJet psJet,
     out ParticleSystemComputedProperties outPsComputedProps
   );
+  bool SetJetPreviewVisibility(ulong jetEntityId, bool isVisible);
+
+  /// <summary>
+  /// Function responsible to cleanup/reset the state of the selected particle system. This means
+  /// emptiing the compute queue owned and graphics queue owned (both front and back) buffers, and
+  /// removing particle page table associations to obtain a clean slate without changing parameters
+  /// of the particle system. Cleanup should be scheduled for the next cross sync and this should be
+  /// a sync operation (so using a blocking wait for the next cross sync and a transient command
+  /// buffer)
+  ///
+  /// - Should be called only when simulation is not running (responsiibility of the view modle
+  /// layers to enforce this condiiton))
+  /// </summary>
+  bool CleanupParticleSystem(ulong psId);
+
+  /// <summary>
+  /// Wait for the next cross sync in a blocking manner, and then remove a particle system from the
+  /// ECS scene, while deleting/freeing all Vulkan Device related state
+  ///
+  /// - Should be called only when simulation is not running (responsiibility of the view modle
+  /// layers to enforce this condiiton))
+  /// </summary>
   bool RemoveParticleSystem(ulong psId);
+
+  /// <summary>
+  /// Queries the current exact epoch of the active simulation scene.
+  /// </summary>
+  /// <param name="centuries">Output TAI centuries</param>
+  /// <param name="nanoseconds">Output TAI nanoseconds</param>
+  /// <returns>True if the simulation clock was successfully retrieved</returns>
+  bool GetSimulationClock(out short centuries, out ulong nanoseconds);
 
   // ==========================================
   // Orbital Mechanics & Almanacs
@@ -181,7 +227,12 @@ public interface INativeRuntimeService : IDisposable
   /// <param name="proposedRange">The epoch window selected by the user.</param>
   /// <param name="sbData">SBDB Keplerian elements used to draw the analytical orbit track.</param>
   /// <param name="cometBodyId">Receives the comet body entity id on success.</param>
-  bool TryInitComet(int spkId, TimeRange proposedRange, Models.SmallBodyDataComponent sbData, out ulong cometBodyId);
+  bool TryInitComet(
+    int spkId,
+    TimeRange proposedRange,
+    Models.SmallBodyDataComponent sbData,
+    out ulong cometBodyId
+  );
 
   /// <summary>
   /// Reconfigures the native comet entity (query or DETACH).
@@ -198,6 +249,15 @@ public interface INativeRuntimeService : IDisposable
   /// Takes effect within one logic frame (~16 ms). No-op if the entity does not exist.
   /// </summary>
   bool SetBodyRotationalModel(ulong cometBodyEntityId, BodyRotationalModelDto dto);
+
+  /// <summary>
+  /// Updates the comet nucleus radius live. Enqueues a Rust logic command that:
+  /// sets the <c>SphereGizmoComponent.radius</c> to 2 × <paramref name="radiusKm"/>
+  /// and regenerates the <c>StaticMeshComponent</c> UV sphere at 1 × <paramref name="radiusKm"/>.
+  /// Takes effect within one logic frame (~16 ms).
+  /// Returns <c>false</c> if no comet is spawned or <paramref name="radiusKm"/> ≤ 0.
+  /// </summary>
+  bool UpdateCometNucleusRadius(float radiusKm);
 
   // Async: completion is signalled by a one-shot (transient) handler registered via the
   // `ExternalStateDispatcher` utility inside the implementation. Permanent subscriptions
@@ -260,6 +320,15 @@ public interface INativeRuntimeService : IDisposable
   /// </param>
   /// <returns>Dispose to deregister.</returns>
   IDisposable RegisterExternalStateListener(ExternalStateType stateType, Action<nint> handler);
+
+#if DEBUG
+  /// <summary>
+  /// Observable that fires after each Micro-layer render with the camera view and projection
+  /// matrices (column-major f32[16] each). Debug builds only.
+  /// Emitted at render frequency; subscribe with <c>Throttle</c> before observing on the UI thread.
+  /// </summary>
+  IObservable<(float[] View, float[] Proj)> CameraMatricesStream { get; }
+#endif
 
   // ==========================================
   // Cached State (populated after successful runtime calls)
@@ -838,6 +907,23 @@ internal unsafe static class PInvokeAetherVkCore
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_setCameraParent(
+    nint ctx,
+    ulong sceneId,
+    ulong cameraId,
+    ulong parentEntityId,
+    [MarshalAs(UnmanagedType.U1)] bool enabled
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_setCameraParentToComet(
+    nint ctx,
+    ulong sceneId,
+    ulong cameraId,
+    [MarshalAs(UnmanagedType.U1)] bool enabled
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_unloadAlmanacFile(nint ctx, byte* utf8Path);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -849,6 +935,35 @@ internal unsafe static class PInvokeAetherVkCore
     ulong sceneId,
     ulong cometBodyEntityId,
     CBodyRotationalModelDTO* dto
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_updateCometNucleusRadius(
+    nint ctx,
+    ulong sceneId,
+    float radiusKm
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_setJetPreviewVisibility(
+    nint ctx,
+    ulong sceneId,
+    ulong jetEntityId,
+    bool isVisible
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern unsafe bool avkSimulationContext_getSimulationClock(
+    nint ctx,
+    ulong sceneId,
+    CTime* outTime
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_cleanupParticleSystem(
+    nint ctx,
+    ulong sceneId,
+    ulong psId
   );
 
   // never called directly, MainThreadDispatchCallbackDelegate does that
@@ -901,6 +1016,37 @@ internal unsafe static class PInvokeAetherVkCore
 
 /// <summary>
 /// Blittable C-layout DTO matching <c>CBodyRotationalModelDTO</c> in <c>ffi.rs</c>.
+/// <summary>
+/// <summary>
+/// Mirrors Rust <c>CRotoTranslateDTO</c>. Buffer for mode = 2 of
+/// <c>avkSimulationContext_transformStaticCamera</c>.
+/// Layout: 3×double (pos, 24 bytes) + 4×float (quat, 16 bytes) + u64 (pivot, 8 bytes) = 48 bytes, 8-byte aligned.
+/// When <see cref="PivotEntityId"/> is non-zero, Rust resolves that entity's world position
+/// synchronously and adds the pos offset to it before writing the camera transform.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal readonly struct CRotoTranslateDTO
+{
+  public readonly double PosX;
+  public readonly double PosY;
+  public readonly double PosZ;
+  public readonly float  RotX;
+  public readonly float  RotY;
+  public readonly float  RotZ;
+  public readonly float  RotW;
+  public readonly ulong  PivotEntityId;
+
+  public CRotoTranslateDTO(
+    double x, double y, double z,
+    float rx, float ry, float rz, float rw,
+    ulong pivotEntityId = 0)
+  {
+    PosX = x; PosY = y; PosZ = z;
+    RotX = rx; RotY = ry; RotZ = rz; RotW = rw;
+    PivotEntityId = pivotEntityId;
+  }
+}
+
 /// Passed by pointer to <see cref="PInvokeAetherVkCore.avkSimulationContext_setBodyRotationalModel"/>.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
@@ -998,13 +1144,18 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   /// <inheritdoc/>
   public CancellationToken ShutdownToken => _shutdownCts.Token;
 
-  // Fires when StartSimulation completes and the scene becomes active.
-  private readonly System.Reactive.Subjects.Subject<ulong> _simulationStateUpdated = new();
+#if DEBUG
+  // Subject that fans out camera view+proj matrices from the Rust render loop (~60 Hz).
+  // Subscribers should throttle before observing on the UI thread.
+  private readonly System.Reactive.Subjects.Subject<(float[] View, float[] Proj)>
+    _cameraMatrixSubject = new();
 
   /// <inheritdoc/>
-  public IObservable<ulong> SimulationStateUpdated => _simulationStateUpdated.AsObservable();
+  public IObservable<(float[] View, float[] Proj)> CameraMatricesStream
+    => _cameraMatrixSubject.AsObservable();
+#endif
 
-  // ── Constructor ───────────────────────────────────────────────────────────
+
 
   public NativeRuntimeService(
     IUiThreadDispatcher uiThreadDispatcher,
@@ -1039,6 +1190,28 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
     _uiThreadDispatcher = uiThreadDispatcher;
     _instance = this;
+
+#if DEBUG
+    // Register camera matrix listener — fires at render frequency, C# throttles downstream.
+    // Read directly from the native pointer (ptr = view[0..63], ptr+64 = proj[0..63]).
+    // Cannot use fixed() on CCameraMatricesDTO.View/Proj because they are already-fixed
+    // buffer fields (CS0213). Reading straight from the nint avoids the extra copy.
+    RegisterExternalStateListener(ExternalStateType.CameraMatrices, ptr =>
+    {
+      unsafe
+      {
+        var view = new float[16];
+        var proj = new float[16];
+        fixed (float* vDst = view)
+        fixed (float* pDst = proj)
+        {
+          Buffer.MemoryCopy((void*)ptr,        vDst, 64, 64);   // view: bytes 0–63
+          Buffer.MemoryCopy((void*)(ptr + 64), pDst, 64, 64);   // proj: bytes 64–127
+        }
+        _cameraMatrixSubject.OnNext((view, proj));
+      }
+    });
+#endif
 
     Startup();
   }
@@ -1462,17 +1635,17 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public bool ResetSimulationSync()
   {
-    throw new NotImplementedException();
+    return PInvokeAetherVkCore.avkSimulationContext_resetSimulationSync(_ctx, _sceneId);
   }
 
   public bool PauseSimulationSync()
   {
-    throw new NotImplementedException();
+    return PInvokeAetherVkCore.avkSimulationContext_pauseSimulationSync(_ctx, _sceneId);
   }
 
   public bool StartSimulation(int simSpeed)
   {
-    throw new NotImplementedException();
+    return PInvokeAetherVkCore.avkSimulationContext_startSimulation(_ctx, _sceneId, simSpeed);
   }
 
   // ── INativeRuntimeService — ECS & Camera ─────────────────────────────────
@@ -1492,29 +1665,33 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public unsafe bool CameraSetRotoTranslate(
     ulong cameraId,
-    System.Numerics.Vector3 position,
-    System.Numerics.Quaternion rotation
+    double posX,
+    double posY,
+    double posZ,
+    System.Numerics.Quaternion rotation,
+    ulong pivotEntityId = 0
   )
   {
-    // mode 2: disp_x | disp_y | disp_z | quat_x | quat_y | quat_z | quat_w  [f32; 7]
-    float* buf = stackalloc float[7]
-    {
-      position.X,
-      position.Y,
-      position.Z,
-      rotation.X,
-      rotation.Y,
-      rotation.Z,
-      rotation.W,
-    };
+    // mode 2: CRotoTranslateDTO — 3×double position + 4×float quaternion + u64 pivot (48 bytes, 8-byte aligned).
+    var dto = new CRotoTranslateDTO(posX, posY, posZ,
+                                     rotation.X, rotation.Y, rotation.Z, rotation.W,
+                                     pivotEntityId);
     return PInvokeAetherVkCore.avkSimulationContext_transformStaticCamera(
       _ctx,
       _sceneId,
       cameraId,
       mode: 2,
-      (nint)buf
+      (nint)(&dto)
     );
   }
+
+  public bool SetCameraParent(ulong cameraId, ulong parentEntityId, bool enabled) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setCameraParent(
+      _ctx, _sceneId, cameraId, parentEntityId, enabled);
+
+  public bool SetCameraParentToComet(ulong cameraId, bool enabled) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setCameraParentToComet(
+      _ctx, _sceneId, cameraId, enabled);
 
   public unsafe bool CameraSetPerspective(
     ulong cameraId,
@@ -1622,6 +1799,13 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     return ok;
   }
 
+  public bool CleanupParticleSystem(ulong psId)
+  {
+    if (_ctx == 0 || _sceneId == 0 || psId == 0)
+      return false;
+    return PInvokeAetherVkCore.avkSimulationContext_cleanupParticleSystem(_ctx, _sceneId, psId);
+  }
+
   public bool RemoveParticleSystem(ulong psId)
   {
     if (_ctx == 0 || _sceneId == 0 || psId == 0)
@@ -1648,10 +1832,16 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     return ok;
   }
 
-  public unsafe bool TryInitComet(int spkId, TimeRange proposedRange, Models.SmallBodyDataComponent sbData, out ulong cometBodyId)
+  public unsafe bool TryInitComet(
+    int spkId,
+    TimeRange proposedRange,
+    Models.SmallBodyDataComponent sbData,
+    out ulong cometBodyId
+  )
   {
     cometBodyId = 0;
-    if (_ctx == 0) return false;
+    if (_ctx == 0)
+      return false;
 
     var rangeDto = default(CTimeRange);
     rangeDto.Nanoseconds[0] = proposedRange.StartNs;
@@ -1665,17 +1855,23 @@ public sealed class NativeRuntimeService : INativeRuntimeService
       PerihelionDistanceAu = sbData.Q,
       InclinationDeg = sbData.I,
       LongitudeOfAscendingNodeDeg = sbData.Om,
-      ArgumentOfPerihelionDeg = sbData.W
+      ArgumentOfPerihelionDeg = sbData.W,
     };
 
     ulong outId = 0;
     bool ok = PInvokeAetherVkCore.avkSimulationContext_tryInitComet(
-        _ctx, _sceneId, spkId, &rangeDto, &keplerianDto, &outId);
-        
+      _ctx,
+      _sceneId,
+      spkId,
+      &rangeDto,
+      &keplerianDto,
+      &outId
+    );
+
     cometBodyId = outId;
     if (ok && outId != 0)
       CometEntityId = outId;
-      
+
     return ok;
   }
 
@@ -1688,6 +1884,42 @@ public sealed class NativeRuntimeService : INativeRuntimeService
       cometBodyEntityId,
       &cDto
     );
+  }
+
+  public bool UpdateCometNucleusRadius(float radiusKm) =>
+    PInvokeAetherVkCore.avkSimulationContext_updateCometNucleusRadius(_ctx, _sceneId, radiusKm);
+
+  public bool SetJetPreviewVisibility(ulong jetEntityId, bool isVisible) =>
+    PInvokeAetherVkCore.avkSimulationContext_setJetPreviewVisibility(
+      _ctx,
+      _sceneId,
+      jetEntityId,
+      isVisible
+    );
+
+  public bool GetSimulationClock(out short centuries, out ulong nanoseconds)
+  {
+    if (_ctx == 0 || _sceneId == 0)
+    {
+      centuries = 0;
+      nanoseconds = 0;
+      return false;
+    }
+
+    unsafe
+    {
+      CTime time;
+      if (PInvokeAetherVkCore.avkSimulationContext_getSimulationClock(_ctx, _sceneId, &time))
+      {
+        centuries = time.Centuries;
+        nanoseconds = time.Nanoseconds;
+        return true;
+      }
+    }
+    
+    centuries = 0;
+    nanoseconds = 0;
+    return false;
   }
 
   public unsafe Task<ulong> LoadAlmanacFileAsync(string path)
@@ -1925,7 +2157,6 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     // Signal shutdown to any in-flight async operations (CommitCometAsync, LoadAlmanacFileAsync)
     // before tearing down the native context, so they can abort rather than hanging.
     _shutdownCts.Cancel();
-    _simulationStateUpdated.Dispose();
     _instance = null;
     if (_ctx == 0)
     {
@@ -1944,11 +2175,18 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 // Probably to move into AetherVk.Logic.Models
 #region public_facing_record_classes
 
-public record AnimationTarget(Vector3 Pos, Quaternion Rot, float Seconds)
+public record AnimationTarget(
+  double PosX,
+  double PosY,
+  double PosZ,
+  Quaternion Rot,
+  float Seconds,
+  ulong? PivotEntityId = null
+)
 {
   internal AnimationTargetDTO ToDTO()
   {
-    return new AnimationTargetDTO(Pos, Rot, Seconds);
+    return new AnimationTargetDTO(PosX, PosY, PosZ, Rot, Seconds, PivotEntityId);
   }
 }
 
@@ -2034,19 +2272,42 @@ public struct CNativeWindowHandle
 }
 
 /// <summary>
-/// C# representation of the Rust AnimationTargetDTO
+/// C# representation of the Rust AnimationTargetDTO.
+/// Layout must match <c>AnimationTargetDTO</c> in ffi.rs exactly.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-internal readonly struct AnimationTargetDTO(Vector3 pos, Quaternion rot, float durationS)
+internal readonly struct AnimationTargetDTO
 {
-  public readonly float posX = pos.X;
-  public readonly float posY = pos.Y;
-  public readonly float posZ = pos.Z;
-  public readonly float rotX = rot.X;
-  public readonly float rotY = rot.Y;
-  public readonly float rotZ = rot.Z;
-  public readonly float rotW = rot.W;
-  public readonly float durationS = durationS;
+  public readonly double posX;
+  public readonly double posY;
+  public readonly double posZ;
+  public readonly float rotX;
+  public readonly float rotY;
+  public readonly float rotZ;
+  public readonly float rotW;
+  public readonly float durationS;
+  private readonly uint _padAlign;   // 4-byte pad to align pivotEntityId to 8 bytes
+  public readonly ulong pivotEntityId;
+  public readonly byte hasPivot;
+  private readonly byte _pad1;
+  private readonly byte _pad2;
+  private readonly byte _pad3;
+  private readonly uint _pad4;
+
+  public AnimationTargetDTO(
+    double x, double y, double z,
+    Quaternion r, float d,
+    ulong? pivotEntityId)
+  {
+    posX = x; posY = y; posZ = z;
+    rotX = r.X; rotY = r.Y; rotZ = r.Z; rotW = r.W;
+    durationS = d;
+    _padAlign = 0;
+    this.pivotEntityId = pivotEntityId ?? 0;
+    hasPivot = pivotEntityId.HasValue ? (byte)1 : (byte)0;
+    _pad1 = _pad2 = _pad3 = 0;
+    _pad4 = 0;
+  }
 }
 
 /// <summary>
@@ -2115,18 +2376,47 @@ internal readonly struct FfiScreenSpaceBillboardDTO
 /// </summary>
 public enum ExternalStateType : uint
 {
-  TimeRange            = 1,
-  ModelImported        = 2,
-  AlmanacImported      = 3,
-  CometInitialized     = 4,
+  TimeRange = 1,
+  ModelImported = 2,
+  AlmanacImported = 3,
+  CometInitialized = 4,
   SunVisibilityChanged = 5,
+
   /// <summary>
   /// Emitted once by <c>BuildCometTrajectory</c> after <c>force_reposition</c> completes.
   /// Carries the post-commit comet position in AU (heliocentric SUN_ECLIPJ2000, f64).
   /// Payload: <see cref="CCometPositionSnapshotDTO"/>.
   /// </summary>
   CometPositionSnapshot = 6,
+
+  /// <summary>Emitted after a DumpScene command completes (success or failure).</summary>
+  SceneDumped           = 7,
+
+  /// <summary>Emitted after a RestoreSceneDump command completes (success or failure).</summary>
+  SceneRestored         = 8,
+
+#if DEBUG
+  /// <summary>
+  /// Emitted after each Micro-layer render (debug builds only).
+  /// Payload: 128 bytes — view[16] + proj[16] (f32, column-major).
+  /// Mirrors Rust <c>CCameraMatrices</c> (state id = 9).
+  /// </summary>
+  CameraMatrices        = 9,
+#endif
 }
+
+#if DEBUG
+/// <summary>
+/// Mirrors Rust <c>CCameraMatrices</c> in the <c>external_state</c> module (debug builds only).
+/// Layout: 128 bytes — 16 × f32 view (column-major) followed by 16 × f32 proj (column-major).
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct CCameraMatricesDTO
+{
+  public fixed float View[16];
+  public fixed float Proj[16];
+}
+#endif
 
 /// <summary>
 /// C# representation of aethervk_core_rlib::simulation_api::external_state::ExternalState
@@ -2200,8 +2490,8 @@ internal unsafe struct CCometInitializedDTO
 [StructLayout(LayoutKind.Sequential)]
 internal readonly struct CCometPositionSnapshotDTO
 {
-  public readonly int  SpkId;
-  public readonly int  _Pad;
+  public readonly int SpkId;
+  public readonly int _Pad;
   public readonly double PosX;
   public readonly double PosY;
   public readonly double PosZ;
@@ -2228,6 +2518,14 @@ internal unsafe struct CModelImportedDTO
       return Encoding.UTF8.GetString(p, len);
     }
   }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct CTime
+{
+  public ulong Nanoseconds;
+  public short Centuries;
+  public fixed byte Padding[6];
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -2390,9 +2688,11 @@ internal struct CKeplerianElementsDTO
 internal struct CSunVisibilityChangedDTO
 {
   /// <summary>1 = sun entered frustum; 0 = sun exited.</summary>
-  public uint  IsVisible;
+  public uint IsVisible;
+
   /// <summary>Projected NDC X (may exceed ±1 when sun is off-screen).</summary>
   public float NdcX;
+
   /// <summary>Projected NDC Y (may exceed ±1 when sun is off-screen).</summary>
   public float NdcY;
 }

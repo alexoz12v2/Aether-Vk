@@ -130,13 +130,15 @@ public partial class App : Application
             var mainWindow = new MainWindow { DataContext = mainWindowViewModel };
 
             // Sync OS theme state for the first-click bug fix
-            mainWindowViewModel.IsSystemThemeDark = Current!.ActualThemeVariant == ThemeVariant.Dark;
+            mainWindowViewModel.IsSystemThemeDark =
+              Current!.ActualThemeVariant == ThemeVariant.Dark;
             Current.ActualThemeVariantChanged += (s, e) =>
             {
-                if (mainWindowViewModel.CurrentTheme == AppTheme.System)
-                {
-                    mainWindowViewModel.IsSystemThemeDark = Current.ActualThemeVariant == ThemeVariant.Dark;
-                }
+              if (mainWindowViewModel.CurrentTheme == AppTheme.System)
+              {
+                mainWindowViewModel.IsSystemThemeDark =
+                  Current.ActualThemeVariant == ThemeVariant.Dark;
+              }
             };
 
             // Listen for theme changes in the ViewModel
@@ -228,8 +230,6 @@ public class MockNativeRuntimeService : INativeRuntimeService
     GC.SuppressFinalize(this);
   }
 
-  public IObservable<ulong> SimulationStateUpdated =>
-    System.Reactive.Linq.Observable.Never<ulong>();
 
   public bool AddViewport(
     uint width,
@@ -246,6 +246,17 @@ public class MockNativeRuntimeService : INativeRuntimeService
     return true;
   }
 
+  public bool GetSimulationClock(out short centuries, out ulong nanoseconds)
+  {
+    centuries = 0;
+    nanoseconds = 0;
+    return true;
+  }
+
+  public bool CleanupParticleSystem(ulong psId) => true;
+
+  public bool SetJetPreviewVisibility(ulong psId, bool visibility) => true;
+
   public void RemoveViewport(ulong presentationEngineId) { }
 
   public void ResizeViewport(ulong presentationEngineId, uint width, uint height) { }
@@ -253,7 +264,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool TryInitComet(
     int spkId,
     TimeRange proposedRange,
-    AetherVk.Logic.Models.SmallBodyDataComponent sbData,
+    Logic.Models.SmallBodyDataComponent sbData,
     out ulong cometBodyId
   )
   {
@@ -271,9 +282,15 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   public bool CameraSetRotoTranslate(
     ulong cameraId,
-    System.Numerics.Vector3 position,
-    System.Numerics.Quaternion rotation
+    double posX,
+    double posY,
+    double posZ,
+    System.Numerics.Quaternion rotation,
+    ulong pivotEntityId = 0
   ) => true;
+
+  public bool SetCameraParent(ulong cameraId, ulong parentEntityId, bool enabled) => true;
+  public bool SetCameraParentToComet(ulong cameraId, bool enabled) => true;
 
   public bool CameraSetPerspective(
     ulong cameraId,
@@ -340,6 +357,8 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   public bool SetBodyRotationalModel(ulong cometBodyEntityId, BodyRotationalModelDto dto) => true;
 
+  public bool UpdateCometNucleusRadius(float radiusKm) => true;
+
   public Task<ulong> LoadAlmanacFileAsync(string path) => Task.FromResult(4UL);
 
   public bool UnloadAlmanacFile(string path) => true;
@@ -395,23 +414,29 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   // ── RenderDoc (debug only — always unavailable in the mock) ───────────────
   public bool IsRenderDocAvailable() => false;
+
   public void TriggerRenderDocCapture() { }
+
   public bool StartScopedRenderDocCapture(ulong presentationEngineId) => false;
 
   public void DebugECSPrint(uint entityCount, ulong[] entityIds, uint compCount, ulong[] comps) { }
 
   public bool GetDebugTelemetryStats(out DebugTelemetryStats stats)
   {
-      stats = new DebugTelemetryStats(
-          1024 * 1024 * 128,
-          1024 * 1024 * 256,
-          1024 * 1024 * 64,
-          1024 * 1024 * 512,
-          1.5,
-          2.0,
-          0.5
-      );
-      return true;
+    stats = new DebugTelemetryStats(
+      1024 * 1024 * 128,
+      1024 * 1024 * 256,
+      1024 * 1024 * 64,
+      1024 * 1024 * 512,
+      1.5,
+      2.0,
+      0.5
+    );
+    return true;
   }
+
+  // CameraMatricesStream: never fires in the design-time/mock implementation.
+  public IObservable<(float[] View, float[] Proj)> CameraMatricesStream
+    => System.Reactive.Linq.Observable.Empty<(float[] View, float[] Proj)>();
 }
 #endif

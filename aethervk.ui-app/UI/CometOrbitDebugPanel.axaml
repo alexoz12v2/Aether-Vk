@@ -1,0 +1,89 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vmDebug="using:AetherVk.Logic.ViewModels.Debug"
+             x:DataType="vmDebug:CometOrbitDebugViewModel"
+             x:Class="AetherVk.UI.CometOrbitDebugPanel">
+
+  <Border CornerRadius="8"
+          Background="{DynamicResource Bg.Surface}"
+          BorderBrush="{DynamicResource Bg.Outline}"
+          BorderThickness="1"
+          Opacity="0.9"
+          Padding="10,8">
+    <StackPanel Spacing="5" MinWidth="230">
+
+      <TextBlock Text="🛸 Orbit Debug"
+                 FontWeight="Bold"
+                 Foreground="{DynamicResource Accent.Primary}"/>
+
+      <Separator Background="{DynamicResource Bg.Outline}" Margin="0,2"/>
+
+      <!-- Distance telemetry -->
+      <TextBlock Text="{Binding ActualDistanceKm}"
+                 Foreground="{DynamicResource Text.Primary}"
+                 FontFamily="Consolas,Monospace" FontSize="11"/>
+      <TextBlock Text="{Binding ExpectedDistanceKm}"
+                 Foreground="{DynamicResource Text.Primary}"
+                 FontFamily="Consolas,Monospace" FontSize="11"/>
+
+      <!-- Drift — three overlapping labels, each visible for one severity level -->
+      <Panel>
+        <TextBlock Text="{Binding DriftKm}"
+                   FontFamily="Consolas,Monospace" FontSize="11"
+                   Foreground="#4CAF50"
+                   IsVisible="{Binding IsDriftOk}"/>
+        <TextBlock Text="{Binding DriftKm}"
+                   FontFamily="Consolas,Monospace" FontSize="11"
+                   Foreground="#FFC107"
+                   IsVisible="{Binding IsDriftWarn}"/>
+        <TextBlock Text="{Binding DriftKm}"
+                   FontFamily="Consolas,Monospace" FontSize="11"
+                   Foreground="#F44336"
+                   IsVisible="{Binding IsDriftError}"/>
+      </Panel>
+
+      <Separator Background="{DynamicResource Bg.Outline}" Margin="0,2"/>
+
+      <!-- Orientation telemetry -->
+      <TextBlock Text="{Binding OrbitAzimuthDeg}"
+                 Foreground="{DynamicResource Text.Primary}"
+                 FontFamily="Consolas,Monospace" FontSize="11"/>
+      <TextBlock Text="{Binding OrbitElevationDeg}"
+                 Foreground="{DynamicResource Text.Primary}"
+                 FontFamily="Consolas,Monospace" FontSize="11"/>
+      <TextBlock Text="{Binding CameraOrientationQ}"
+                 Foreground="{DynamicResource Text.Secondary}"
+                 FontFamily="Consolas,Monospace" FontSize="10"
+                 TextWrapping="Wrap"/>
+
+      <Separator Background="{DynamicResource Bg.Outline}" Margin="0,2"/>
+
+      <!-- Ortho projection invariant (halfHeight = 3 × nucleus radius) -->
+      <TextBlock Text="── ortho ──"
+                 Foreground="{DynamicResource Text.Secondary}"
+                 FontFamily="Consolas,Monospace" FontSize="10"/>
+      <TextBlock FontFamily="Consolas,Monospace" FontSize="11"
+                 Foreground="{DynamicResource Text.Primary}">
+        <Run Text="half-h: "/>
+        <Run Text="{Binding OrthoHalfHeightKm}"/>
+      </TextBlock>
+      <TextBlock FontFamily="Consolas,Monospace" FontSize="11"
+                 Foreground="{DynamicResource Text.Primary}">
+        <Run Text="expect: "/>
+        <Run Text="{Binding OrthoExpectedKm}"/>
+      </TextBlock>
+      <!-- Pass/fail indicator — overlapping Panel so only one is shown at a time -->
+      <Panel>
+        <TextBlock Text="ortho: OK ✓"
+                   FontFamily="Consolas,Monospace" FontSize="11"
+                   Foreground="#4CAF50"
+                   IsVisible="{Binding IsOrthoOk}"/>
+        <TextBlock Text="ortho: FAIL ✗"
+                   FontFamily="Consolas,Monospace" FontSize="11"
+                   Foreground="#F44336"
+                   IsVisible="{Binding IsOrthoErr}"/>
+      </Panel>
+
+    </StackPanel>
+  </Border>
+</UserControl>

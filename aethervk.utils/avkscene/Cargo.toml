@@ -1,0 +1,17 @@
+[package]
+name = "avkscene"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+bincode = { version = "2", default-features = false, features = ["alloc", "serde"] }
+bytes = { version = "1", default-features = false }
+aethervk-core-rlib = { path = "../../aethervk.core/rlib", default-features = false, features = [] }
+log = { version = "0.4.34", default-features = false, features = ["release_max_level_debug"] }
+heapless = { version = "0.9" }
+rustyline = "14.0"
+miette = { version = "7.2", features = ["fancy"] }
+thiserror = "2"
+ron = "0.8"
+

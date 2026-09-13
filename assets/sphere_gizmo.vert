@@ -15,8 +15,10 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Sp
 };
 
 layout(push_constant, std430) uniform PushConstants {
-    mat4 viewProj;             // 64 bytes
-    SphereGizmoArray gizmoPtr; // 8 bytes
+    mat4 viewProj;             // 64 bytes @ offset  0
+    SphereGizmoArray gizmoPtr; //  8 bytes @ offset 64
+    vec3 sunPos;               // 12 bytes @ offset 72  (layer-local world position)
+    float _pad;                //  4 bytes @ offset 84  (total: 88)
 } push;
 
 layout(location = 0) out vec3 fragColor;
@@ -25,10 +27,20 @@ const float PI = 3.14159265359;
 
 void main() {
     mat4 model = push.gizmoPtr.gizmos[gl_InstanceIndex].model;
-    
-    // Compute the anchor center identically to other shaders
+
     vec4 centerClip = push.viewProj * vec4(model[3].xyz, 1.0);
-    float screenSize = abs(push.viewProj[1][1] * push.gizmoPtr.gizmos[gl_InstanceIndex].radius / centerClip.w);
+
+    // Use clip-space w as the distance proxy for screen-size LOD.
+    // Perspective:   w = eye-space depth (orbit distance). Rotation-invariant: computed
+    //                from a single dot product, not from length(xyz) which suffers from
+    //                f32 component-wise cancellation as the camera rotates around the comet.
+    // Orthographic:  w = 1.0, so screenSize = P11 * radius, which scales
+    //                correctly with orthographic zoom and is distance-independent.
+    // NOTE: viewProj is P * V. The second row of viewProj is P11 * V_row1.
+    // Since V_row1 is a unit vector, we can extract the true P11 scale by taking the magnitude of the second row.
+    float distForSize = max(0.0001, abs(centerClip.w));
+    float p11 = length(vec3(push.viewProj[0][1], push.viewProj[1][1], push.viewProj[2][1]));
+    float screenSize = abs(p11 * push.gizmoPtr.gizmos[gl_InstanceIndex].radius / distForSize);
 
     int lodSubdivs = 8;
     if (screenSize > 0.15) {
@@ -49,23 +61,24 @@ void main() {
     // Vertices per line = 2
     int totalSphereVertices = lonSegments * (2 * latSegments - 1) * 2;
 
-    // Axes line segments (3 axes * 2 vertices)
+    // 4 axes: X(red), Y(green), Z(blue), Sun(yellow). 2 vertices each.
     int axesOffset = totalSphereVertices;
-    int totalAxesVertices = 6;
+    int totalAxesVertices = 8; // 4 axes * 2 vertices
 
-    // Arrowheads: 4 lines = 8 vertices per arrowhead. 3 arrowheads = 24 vertices.
+    // Arrowheads: 4 lines = 8 vertices per arrowhead. 4 arrowheads = 32 vertices.
     int arrowheadLines = 4;
     int arrowheadVerticesPerAxis = arrowheadLines * 2;
-    int totalArrowheadVertices = arrowheadVerticesPerAxis * 3;
+    int totalArrowheadVertices = arrowheadVerticesPerAxis * 4; // 4 axes
 
     int totalExpectedVertices = totalSphereVertices + totalAxesVertices + totalArrowheadVertices;
 
     vec3 localPos = vec3(0.0);
     vec3 color = vec3(1.0); // Default white for the sphere
     bool valid = true;
+    bool isAxis = false; // Axes receive Z-bias; sphere grid does not
 
     if (gl_VertexIndex < totalSphereVertices) {
-        // Render UV Sphere wireframe
+        // ── UV Sphere wireframe ──────────────────────────────────────────────
         int lineIdx = gl_VertexIndex / 2;
         int isEndVertex = gl_VertexIndex % 2;
 
@@ -100,7 +113,8 @@ void main() {
             localPos = vec3(cos(phi) * sin(theta) * r, sin(phi) * sin(theta) * r, cos(theta) * r);
         }
     } else if (gl_VertexIndex < axesOffset + totalAxesVertices) {
-        // Render axes lines
+        // ── 4 axes (X=red, Y=green, Z=blue, Sun=yellow) ─────────────────────
+        isAxis = true;
         int axisIdx = (gl_VertexIndex - axesOffset) / 2;
         int pt = (gl_VertexIndex - axesOffset) % 2;
         float r = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * 1.5; // Axes extend beyond the sphere
@@ -111,12 +125,22 @@ void main() {
         } else if (axisIdx == 1) { // Y Axis (Backward) -> Green
             localPos = vec3(0.0, pt == 0 ? 0.0 : r, 0.0);
             color = vec3(0.0, 1.0, 0.0);
-        } else { // Z Axis (Up) -> Blue
+        } else if (axisIdx == 2) { // Z Axis (Up) -> Blue
             localPos = vec3(0.0, 0.0, pt == 0 ? 0.0 : r);
             color = vec3(0.0, 0.0, 1.0);
+        } else { // Axis 3: Sun direction -> Yellow (1.4x length)
+            float sunR = r * 1.4;
+            // Transform global sun direction into the model's local space.
+            // scene_conversion.rs enforces scale=1 for sphere gizmos, so mat3(model)
+            // is orthonormal -> inverse == transpose (cheaper, no singularity risk).
+            vec3 worldSunDir = normalize(push.sunPos - model[3].xyz);
+            vec3 localSunDir = normalize(transpose(mat3(model)) * worldSunDir);
+            localPos = pt == 0 ? vec3(0.0) : localSunDir * sunR;
+            color = vec3(1.0, 1.0, 0.0);
         }
     } else if (gl_VertexIndex < totalExpectedVertices) {
-        // Render arrowheads
+        // ── Arrowheads (4 axes) ──────────────────────────────────────────────
+        isAxis = true;
         int vIdx = gl_VertexIndex - axesOffset - totalAxesVertices;
         int axisIdx = vIdx / arrowheadVerticesPerAxis;
         int lineIdx = (vIdx % arrowheadVerticesPerAxis) / 2;
@@ -139,17 +163,27 @@ void main() {
             tip = vec3(0.0, r, 0.0);
             baseOffset = vec3(cos(angle)*headWidth, -headLength, sin(angle)*headWidth);
             color = vec3(0.0, 1.0, 0.0);
-        } else {
+        } else if (axisIdx == 2) {
             tip = vec3(0.0, 0.0, r);
             baseOffset = vec3(cos(angle)*headWidth, sin(angle)*headWidth, -headLength);
             color = vec3(0.0, 0.0, 1.0);
+        } else { // Axis 3: Sun arrowhead -> Yellow
+            float sunR = r * 1.4;
+            vec3 worldSunDir = normalize(push.sunPos - model[3].xyz);
+            vec3 localSunDir = normalize(transpose(mat3(model)) * worldSunDir);
+            tip = localSunDir * sunR;
+
+            // Gram-Schmidt: build orthonormal basis perpendicular to localSunDir
+            vec3 up     = abs(localSunDir.z) < 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+            vec3 right  = normalize(cross(up, localSunDir));
+            vec3 trueUp = cross(localSunDir, right);
+
+            vec3 radial = right * cos(angle) * headWidth + trueUp * sin(angle) * headWidth;
+            baseOffset  = -localSunDir * headLength + radial;
+            color = vec3(1.0, 1.0, 0.0);
         }
 
-        if (pt == 0) {
-            localPos = tip;
-        } else {
-            localPos = tip + baseOffset;
-        }
+        localPos = (pt == 0) ? tip : tip + baseOffset;
     } else {
         valid = false;
     }
@@ -158,8 +192,20 @@ void main() {
         // Project localized vector natively inside clip space
         vec4 localClip = push.viewProj * vec4(mat3(model) * localPos, 0.0);
         gl_Position = centerClip + localClip;
+
+        if (isAxis) {
+            // Z-Bias Depth Hack for axes (Reverse-Z pipeline: near=1.0, far=0.0,
+            // CompareOp::GREATER_OR_EQUAL). Adding to gl_Position.z before perspective
+            // divide increases the final NDC depth, pulling axes toward the near plane.
+            // This makes them pass the depth test against the comet surface (axes always
+            // visible), while still being occluded by massive objects in front of the
+            // comet (hardware depth test remains active).
+            // 1.5% of w gives enough clearance without visual artifacts on other objects.
+            gl_Position.z += 0.015 * gl_Position.w;
+        }
+
         fragColor = color;
     } else {
-        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // cull degenerate vertices outside clip space
     }
 }
