@@ -57,6 +57,9 @@ gltf = { version = "1.4.0", path = "../../external/gltf" }
 polyhedral_mass_properties = "0.2.2"
 ahash = { version = "0.8", default-features = false }
 bytemuck = { version = "1.15", default-features = false, features = ["derive"] }
+# Scene serialization (no_std compatible)
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+bincode = { version = "2", default-features = false, features = ["alloc", "serde"] }
 # Texture Loading
 png-decoder = { version = "0.2.0" }
 zune-jpeg = { version = "0.5.14", default-features = false, features = ["x86", "neon"] }

@@ -23,6 +23,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   private readonly TimelineService _timelineService;
   private readonly ITabStateService<TimelineSession> _timelineSessionService;
   private readonly ITabStateService<CometSession> _cometSessionService;
+  private readonly INativeRuntimeService _runtimeService;
   private readonly CompositeDisposable _disposables = [];
 
   [ObservableProperty]
@@ -64,6 +65,34 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   [ObservableProperty]
   private bool _isPlaying;
 
+  public System.Collections.Generic.IReadOnlyList<SimulationSpeed> AvailableSpeeds { get; } = new[]
+  {
+      SimulationSpeed.OneHourPerSec,
+      SimulationSpeed.ThreeHoursPerSec,
+      SimulationSpeed.OneDayPerSec
+  };
+
+  public enum SimulationSpeed : int
+  {
+    OneHourPerSec = 2,
+    ThreeHoursPerSec = 3,
+    OneDayPerSec = 4
+  }
+
+  [ObservableProperty]
+  [NotifyCanExecuteChangedFor(nameof(PlayPauseCommand))]
+  private SimulationSpeed? _selectedSpeed;
+
+  private bool CanPlayPause() => SelectedSpeed.HasValue;
+
+  partial void OnIsPlayingChanged(bool value)
+  {
+    if (value && SelectedSpeed.HasValue)
+      _timelineService.Play((int)SelectedSpeed.Value);
+    else
+      _timelineService.Pause();
+  }
+
   /// <summary>
   /// Playback progress in the range [0, 100]. Driven externally once the
   /// simulation clock is wired; starts at 0.
@@ -99,8 +128,8 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     }
   }
 
-  public ICommand RestoreCommand { get; }
-  public ICommand PlayPauseCommand { get; }
+  public IRelayCommand RestoreCommand { get; }
+  public IRelayCommand PlayPauseCommand { get; }
   public ICommand ResetCommand { get; }
   public ICommand RunToEndCommand { get; }
 
@@ -110,6 +139,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     ITabStateService<TimelineSession> sessionService,
     ITabStateService<CometSession> cometSessionService,
     TimelineService timelineService,
+    INativeRuntimeService runtimeService,
     ICometMessenger cometMessenger)
     : base("Timeline", sessionService, cometMessenger)
   {
@@ -117,11 +147,12 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     _timelineSessionService = sessionService;
     _cometSessionService = cometSessionService;
     _timelineService = timelineService;
+    _runtimeService = runtimeService;
     Icon = "⏱"; // stopwatch — U+23F1
 
     RestoreCommand = new RelayCommand(Restore);
-    PlayPauseCommand = new RelayCommand(() => IsPlaying = !IsPlaying);
-    ResetCommand = new RelayCommand(() => { IsPlaying = false; });
+    PlayPauseCommand = new RelayCommand(() => IsPlaying = !IsPlaying, CanPlayPause);
+    ResetCommand = new RelayCommand(() => { IsPlaying = false; _timelineService.Reset(); });
     RunToEndCommand = new RelayCommand(() => { IsPlaying = false; });
 
     _timelineService.IsTimelineValid
@@ -129,10 +160,65 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
       .Subscribe(isValid => IsTimelineValid = isValid)
       .AddDisposableTo(_disposables);
 
+    Observable.Interval(TimeSpan.FromMilliseconds(33), schedulerProvider.MainThread)
+      .Where(_ => IsPlaying)
+      .Subscribe(_ => PollSimulationClock())
+      .AddDisposableTo(_disposables);
+
     SubscribeToStrings(schedulerProvider);
     Restore();
     
     IsActive = true;
+  }
+
+  private void PollSimulationClock()
+  {
+    if (_runtimeService.GetSimulationClock(out var cent, out var ns))
+    {
+      string startEpochStr = CurrentSession?.CommittedStartEpoch ?? "";
+      string endEpochStr = CurrentSession?.CommittedEndEpoch ?? "";
+
+      if (string.IsNullOrEmpty(startEpochStr) || string.IsNullOrEmpty(endEpochStr))
+      {
+         return;
+      }
+
+      var currentDt = new DateTimeOffset(2000, 1, 1, 12, 0, 0, TimeSpan.Zero)
+         .AddTicks((long)cent * TimeSpan.TicksPerDay * 36525L + (long)(ns / 100UL));
+      
+      var currentStr = currentDt.ToString("yyyy-MM-dd HH:mm");
+
+      if (TimeUtils.TryParseIso8601(startEpochStr, out var startDt) && TimeUtils.TryParseIso8601(endEpochStr, out var endDt))
+      {
+         var startTai = TimeUtils.ToTaiParts(startDt);
+         var endTai = TimeUtils.ToTaiParts(endDt);
+
+         double startTicks = (double)startTai.centuries * TimeSpan.TicksPerDay * 36525.0 * 1e7 + startTai.nanoseconds / 100.0;
+         double endTicks = (double)endTai.centuries * TimeSpan.TicksPerDay * 36525.0 * 1e7 + endTai.nanoseconds / 100.0;
+         double currentTicks = (double)cent * TimeSpan.TicksPerDay * 36525.0 * 1e7 + ns / 100.0;
+
+         double progress = (currentTicks - startTicks) / (endTicks - startTicks) * 100.0;
+         Progress = Math.Max(0, Math.Min(100, progress));
+
+         // Format the start epoch the same way to compare
+         var startFormatted = startDt.ToString("yyyy-MM-dd HH:mm");
+         if (currentStr != startFormatted)
+         {
+             // Publish the current epoch string to the session for Overlay window
+             _timelineSessionService.UpdateSession(SessionId, s =>
+             {
+                 s.CurrentEpochString = currentStr;
+             });
+         }
+         else
+         {
+             _timelineSessionService.UpdateSession(SessionId, s =>
+             {
+                 s.CurrentEpochString = string.Empty;
+             });
+         }
+      }
+    }
   }
 
   protected override void OnActivated()

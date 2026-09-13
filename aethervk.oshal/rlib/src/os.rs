@@ -46,6 +46,7 @@ pub enum FsError {
   CouldNotGetCurrentExe,
   CouldNotCreateFile,
   CouldNotWriteFile,
+  CouldNotCreateDirectory,
 }
 
 #[derive(Debug, Error)]

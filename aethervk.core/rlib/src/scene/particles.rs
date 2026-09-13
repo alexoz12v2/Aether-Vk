@@ -72,7 +72,7 @@ pub mod v2 {
   }
 
   // TODO C# side: copy paste from a jet to another, godot edition has params shared
-  #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable)]
+  #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, serde::Serialize, serde::Deserialize)]
   pub struct ParticleSystemEmitParams {
     /// radians -π/2 to π/2, relative to particle system entity frame
     pub latitude_rad: f32,

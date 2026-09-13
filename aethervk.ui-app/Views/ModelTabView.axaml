@@ -52,11 +52,19 @@
     <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource Accent.Subtle}" />
     </Style>
+
+    <!-- Forces flyouts inside this view to bound to the local VisualLayerManager. 
+         To allow the flyout to act as a free-floating OS window (which can spill 
+         outside the tab but might overlap the 3D viewport), remove this Setter. -->
+    <Style Selector="Popup">
+      <Setter Property="ShouldUseOverlayLayer" Value="True" />
+    </Style>
   </UserControl.Styles>
 
-  <ScrollViewer Classes="left-scrollbar"
-                HorizontalScrollBarVisibility="Disabled"
-                VerticalScrollBarVisibility="Auto">
+  <VisualLayerManager>
+    <ScrollViewer Classes="left-scrollbar"
+                  HorizontalScrollBarVisibility="Disabled"
+                  VerticalScrollBarVisibility="Auto">
     <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16">
 
       <!-- ══════════════════ SUN ══════════════════════════════════════════════ -->
@@ -348,7 +356,7 @@
                         DataContext="{Binding SelectedJet}">
 
                 <Grid ColumnDefinitions="*,12,1.6*"
-                      RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                      RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                       x:DataType="vm:JetViewModel">
 
                   <!-- Latitude -->
@@ -402,15 +410,21 @@
                     <TextBlock Classes="unit-of-measurement" Text="m/s" />
                   </Panel>
 
+                  <!-- Stream Color -->
+                  <TextBlock Grid.Row="10" Grid.Column="0" Text="Stream Color" />
+                  <ColorPicker Grid.Row="10" Grid.Column="2"
+                               Color="{Binding StreamColor, Converter={x:Static converters:Vector4ToColorConverter.Instance}}"
+                               HorizontalAlignment="Left" />
+
                   <!-- Computed: β -->
-                  <TextBlock Grid.Row="10" Grid.Column="0" Text="β (beta)" />
-                  <TextBox Grid.Row="10" Grid.Column="2"
+                  <TextBlock Grid.Row="12" Grid.Column="0" Text="β (beta)" />
+                  <TextBox Grid.Row="12" Grid.Column="2"
                            Classes="computed"
                            Text="{Binding Beta, StringFormat='{}{0:F4}'}" />
 
                   <!-- Computed: Dust production rate -->
-                  <TextBlock Grid.Row="12" Grid.Column="0" Text="Q_dust @ 1 AU" />
-                  <Panel Grid.Row="12" Grid.Column="2" Classes="unit-overlay">
+                  <TextBlock Grid.Row="14" Grid.Column="0" Text="Q_dust @ 1 AU" />
+                  <Panel Grid.Row="14" Grid.Column="2" Classes="unit-overlay">
                     <TextBox Classes="computed"
                              Text="{Binding DustProductionRateAt1AuKgs, StringFormat='{}{0:F4}'}" />
                     <TextBlock Classes="unit-of-measurement" Text="kg/s" />
@@ -489,4 +503,5 @@
 
     </StackPanel>
   </ScrollViewer>
+  </VisualLayerManager>
 </UserControl>

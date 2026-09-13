@@ -33,10 +33,12 @@ public partial class DebugTelemetryPanel : UserControl
     /// </summary>
     private void OnHeaderPointerPressed(object? sender, PointerPressedEventArgs e)
     {
+#if DEBUG
         if (DataContext is DebugTelemetryPanelViewModel vm)
         {
             vm.IsExpanded = !vm.IsExpanded;
             e.Handled = true;
         }
+#endif
     }
 }

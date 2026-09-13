@@ -190,17 +190,23 @@
 
                   <!-- Perspective parameters -->
                   <Grid ColumnDefinitions="Auto,16,*"
-                        RowDefinitions="Auto"
+                        RowDefinitions="Auto,8,Auto"
                         IsVisible="{Binding IsPerspective}">
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV (°)" />
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV" VerticalAlignment="Center" />
                     <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
-                                              Value="{Binding PerspFovDeg}"
-                                              DragSensitivity="2.0"
-                                              HorizontalAlignment="Stretch">
-                      <i:Interaction.Behaviors>
-                        <b:FovBehavior />
-                      </i:Interaction.Behaviors>
-                    </controls:UnboundedSlider>
+                                              Value="{Binding PerspFovDisplay}"
+                                              HasBounds="True"
+                                              MinBound="{Binding PerspFovMin}"
+                                              MaxBound="{Binding PerspFovMax}"
+                                              Step="{Binding PerspFovStep}"
+                                              DragSensitivity="5.0"
+                                              HorizontalAlignment="Stretch" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Units" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="2" Grid.Column="2"
+                              HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding FovUnits}"
+                              SelectedIndex="{Binding FovUnitIndex}" />
                   </Grid>
 
                   <!-- Orthographic parameters -->

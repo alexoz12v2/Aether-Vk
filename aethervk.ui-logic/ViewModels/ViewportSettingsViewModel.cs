@@ -33,6 +33,57 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   [ObservableProperty]
   private double _perspFovDeg = 30.0;
 
+  public System.Collections.Generic.IReadOnlyList<string> FovUnits { get; } =
+    new[] { "deg", "arcmin", "arcsec" };
+
+  [ObservableProperty]
+  private int _fovUnitIndex = 0;
+
+  partial void OnFovUnitIndexChanged(int value)
+  {
+    OnPropertyChanged(nameof(PerspFovDisplay));
+    OnPropertyChanged(nameof(PerspFovStep));
+    OnPropertyChanged(nameof(PerspFovMin));
+    OnPropertyChanged(nameof(PerspFovMax));
+  }
+
+  public double PerspFovDisplay
+  {
+    get => FovUnitIndex switch
+    {
+      1 => Math.Round(PerspFovDeg * 60.0, 6),
+      2 => Math.Round(PerspFovDeg * 3600.0, 6),
+      _ => Math.Round(PerspFovDeg, 6)
+    };
+    set => PerspFovDeg = FovUnitIndex switch
+    {
+      1 => value / 60.0,
+      2 => value / 3600.0,
+      _ => value
+    };
+  }
+
+  public double PerspFovMin => FovUnitIndex switch
+  {
+    1 => (1.0 / 60.0), 
+    2 => 1.0,          
+    _ => (1.0 / 3600.0)
+  };
+
+  public double PerspFovMax => FovUnitIndex switch
+  {
+    1 => 179.0 * 60.0,
+    2 => 179.0 * 3600.0,
+    _ => 179.0
+  };
+
+  public double PerspFovStep => FovUnitIndex switch
+  {
+    1 => 1.0, 
+    2 => 10.0, 
+    _ => 1.0 
+  };
+
   [ObservableProperty]
   private double _perspNear = 0.001;
 
@@ -89,10 +140,10 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
 
   public bool IsOrthoProportionsLocked
   {
-    get => _cameraService.IsOrthoProportionsLocked;
+    get => _cameraService?.IsOrthoProportionsLocked ?? false;
     set
     {
-      if (_cameraService.IsOrthoProportionsLocked != value)
+      if (_cameraService != null && _cameraService.IsOrthoProportionsLocked != value)
       {
         _cameraService.IsOrthoProportionsLocked = value;
         OnPropertyChanged();
@@ -130,6 +181,20 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   [ObservableProperty]
   private EarthObserverOrientationMode _earthObserverOrientationMode =
     EarthObserverOrientationMode.Inertial;
+
+
+
+#if DEBUG
+  protected ViewportSettingsViewModel(string name, bool isPerspective)
+  {
+    _runtimeService = null!;
+    _schedulerProvider = null!;
+    _cameraService = null!;
+    _isUpdatingFromRuntime = true;
+    ViewportName = name;
+    IsPerspective = isPerspective;
+  }
+#endif
 
   public ViewportSettingsViewModel(
     ulong cameraId,
@@ -218,7 +283,11 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     });
   }
 
-  partial void OnPerspFovDegChanged(double value) => DispatchPerspective();
+  partial void OnPerspFovDegChanged(double value)
+  {
+      OnPropertyChanged(nameof(PerspFovDisplay));
+      DispatchPerspective();
+  }
 
   partial void OnPerspNearChanged(double value) => DispatchPerspective();
 
@@ -264,7 +333,7 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
 
   private bool CanRestoreOrthoProportions()
   {
-    if (IsPerspective)
+    if (IsPerspective || _cameraService == null)
       return false;
     if (Math.Abs(_cameraService.ViewportAspect) < 1e-5f)
       return false;
@@ -284,6 +353,8 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     if (value)
       DispatchPerspective();
     else
+      // DispatchOrthographic handles the CometOrbiting branch internally, ensuring
+      // formula-correct halfH (3×radius) and comet-appropriate near/far planes.
       DispatchOrthographic();
   }
 
@@ -312,7 +383,8 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   {
     if (_isUpdatingFromRuntime || !IsPerspective)
       return;
-    float aspect = _aspectRatio;
+    // Use live viewport aspect ratio — _aspectRatio starts at 1.0 before the first Rust callback.
+    float aspect = _cameraService.ViewportAspect;
     if (Math.Abs(aspect) < 1e-5f)
       aspect = 1f;
 
@@ -329,6 +401,22 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   {
     if (_isUpdatingFromRuntime || IsPerspective)
       return;
+
+    if (CurrentCameraMode == CameraMode.CometOrbiting)
+    {
+      var orbitOffset = _cameraService.GetOrbitOffset();
+      float orbitMag  = orbitOffset.Length();
+      float nearC = Math.Max(1e-12f, orbitMag * 0.05f);
+      float farC  = orbitMag * 200f;
+      
+      _runtimeService.CameraSetOrthographic(
+        CameraId,
+        (float)-OrthoHalfWidth, (float)OrthoHalfWidth,
+        (float)-OrthoHalfHeight, (float)OrthoHalfHeight,
+        nearC, farC);
+      return;
+    }
+
     _runtimeService.CameraSetOrthographic(
       CameraId,
       (float)-OrthoHalfWidth,

@@ -57,23 +57,33 @@ pub trait IntoPathBuf {
 }
 
 impl IntoPathBuf for str {
-  fn into_pathbuf(&self) -> PathBuf { PathBuf::from(self) }
+  fn into_pathbuf(&self) -> PathBuf {
+    PathBuf::from(self)
+  }
 }
 
 impl IntoPathBuf for alloc::string::String {
-  fn into_pathbuf(&self) -> PathBuf { PathBuf::from(self) }
+  fn into_pathbuf(&self) -> PathBuf {
+    PathBuf::from(self)
+  }
 }
 
 impl IntoPathBuf for Path {
-  fn into_pathbuf(&self) -> PathBuf { self.to_pathbuf() }
+  fn into_pathbuf(&self) -> PathBuf {
+    self.to_pathbuf()
+  }
 }
 
 impl IntoPathBuf for PathBuf {
-  fn into_pathbuf(&self) -> PathBuf { self.clone() }
+  fn into_pathbuf(&self) -> PathBuf {
+    self.clone()
+  }
 }
 
 impl<T: IntoPathBuf + ?Sized> IntoPathBuf for &T {
-  fn into_pathbuf(&self) -> PathBuf { (**self).into_pathbuf() }
+  fn into_pathbuf(&self) -> PathBuf {
+    (**self).into_pathbuf()
+  }
 }
 
 impl PartialEq for Path {
@@ -693,6 +703,56 @@ pub fn read<T: IntoPathBuf>(path: T) -> Result<Vec<u8>, FsError> {
   }
 }
 
+/// Creates a new, empty directory at the provided path.
+pub fn create_dir<T: IntoPathBuf>(path: T) -> Result<(), FsError> {
+  #[cfg(windows)]
+  {
+    use windows::Win32::Storage::FileSystem::CreateDirectoryW;
+    let mut path_buf = path.into_pathbuf();
+    let success = unsafe { CreateDirectoryW(windows::core::PCWSTR(path_buf.as_ptr_mut()), None) };
+    if success.is_err() {
+      Err(FsError::CouldNotCreateDirectory)
+    } else {
+      Ok(())
+    }
+  }
+  #[cfg(not(windows))]
+  {
+    use libc::mkdir;
+    let mut path_buf = path.into_pathbuf();
+    // 0o777 = rwxrwxrwx
+    let result = unsafe { mkdir(path_buf.as_ptr_mut(), 0o777) };
+    if result < 0 {
+      Err(FsError::CouldNotCreateDirectory)
+    } else {
+      Ok(())
+    }
+  }
+}
+
+/// Recursively creates a directory and all of its parent components if they are missing.
+pub fn create_dir_all<T: IntoPathBuf>(path: T) -> Result<(), FsError> {
+  let path_buf = path.into_pathbuf();
+  if path_buf.is_dir() {
+    return Ok(());
+  }
+
+  // Find parent
+  if let Some(parent) = path_buf.parent() {
+    if !parent.is_dir() {
+      create_dir_all(parent)?;
+    }
+  }
+
+  let result = create_dir(&path_buf);
+  // It's possible another thread/process created it in the meantime
+  if result.is_err() && path_buf.is_dir() {
+    Ok(())
+  } else {
+    result
+  }
+}
+
 /// TODO: Document this item
 pub fn write<T: IntoPathBuf>(path: T, content: &[u8]) -> Result<(), FsError> {
   #[cfg(windows)]
@@ -971,4 +1031,3 @@ impl<T: AsRef<str>> ExtensionToStr for T {
 
 #[cfg(test)]
 mod tests;
-

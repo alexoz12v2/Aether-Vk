@@ -1,3 +1,4 @@
+#if DEBUG
 using System;
 using System.Linq;
 using AetherVk.Logic.Messages;
@@ -296,3 +297,4 @@ public class DockingManagerViewModelTests : IDisposable
     Assert.Null(foundNode);
   }
 }
+#endif

@@ -86,6 +86,8 @@ public class Viewport3DViewModelTests
         new BreadcrumbService(dispatcher.Object),
         dispatcher.Object,
         new Mock<IFileDialogService>().Object,
+        new Mock<ITabStateService<TimelineSession>>().Object,
+        cometConfig,
         vm
       ).Object;
 

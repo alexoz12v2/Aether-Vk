@@ -279,6 +279,18 @@
       </StackPanel>
     </Border>
 
+    <!-- Comet Orbit Debug Panel — bottom-left, visible only in CometOrbiting mode -->
+    <ContentControl Content="{Binding CometOrbitDebug}"
+                    HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                    Margin="10,0,0,60"
+                    IsVisible="{Binding CometOrbitDebug.IsVisible}">
+      <ContentControl.DataTemplates>
+        <DataTemplate DataType="vmDebug:CometOrbitDebugViewModel">
+          <ui:CometOrbitDebugPanel/>
+        </DataTemplate>
+      </ContentControl.DataTemplates>
+    </ContentControl>
+
     <!-- Debug Telemetry Panel -->
     <ContentControl Content="{Binding DebugTelemetry}"
                     HorizontalAlignment="Left" VerticalAlignment="Top"
@@ -286,6 +298,18 @@
       <ContentControl.DataTemplates>
         <DataTemplate DataType="vmDebug:DebugTelemetryPanelViewModel">
           <ui:DebugTelemetryPanel />
+        </DataTemplate>
+      </ContentControl.DataTemplates>
+    </ContentControl>
+
+    <!-- Camera Matrix Debug Panel — right-center edge, debug builds only.
+         When CameraMatrixDebug is null (Release), no DataTemplate matches → nothing rendered. -->
+    <ContentControl Content="{Binding CameraMatrixDebug}"
+                    HorizontalAlignment="Right" VerticalAlignment="Center"
+                    Margin="0,0,8,0">
+      <ContentControl.DataTemplates>
+        <DataTemplate DataType="vmDebug:CameraMatrixDebugViewModel">
+          <ui:CameraMatrixDebugPanel/>
         </DataTemplate>
       </ContentControl.DataTemplates>
     </ContentControl>
@@ -344,6 +368,24 @@
               VerticalAlignment="Stretch"/>
       </Border>
     </Canvas>
+
+    <!-- Simulation Current Epoch Overlay -->
+    <ContentControl Content="{Binding CurrentEpochString}" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,16">
+      <ContentControl.DataTemplates>
+        <DataTemplate DataType="{x:Type x:String}">
+          <TextBlock Text="{Binding}" Foreground="White" FontSize="14" FontWeight="SemiBold" IsVisible="{Binding Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        </DataTemplate>
+      </ContentControl.DataTemplates>
+    </ContentControl>
+
+    <!-- Jet Preview Size Overlay -->
+    <ContentControl Content="{Binding JetPreviewSizeString}" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,10,10,0">
+      <ContentControl.DataTemplates>
+        <DataTemplate DataType="{x:Type x:String}">
+          <TextBlock Text="{Binding}" Foreground="LightGray" FontSize="12" IsVisible="{Binding Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        </DataTemplate>
+      </ContentControl.DataTemplates>
+    </ContentControl>
 
   </Panel>
 </Window>

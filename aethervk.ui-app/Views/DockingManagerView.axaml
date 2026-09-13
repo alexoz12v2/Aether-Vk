@@ -9,7 +9,7 @@
              x:DataType="vm:DockingManagerViewModel"
              x:Class="AetherVk.Views.DockingManagerView">
     <Design.DataContext>
-        <vm:DockingManagerViewModel />
+        <dvm:DockingManagerViewModelDesign />
     </Design.DataContext>
     <!-- Data Template defined in App. TODO: ResourceDict -->
     <Grid>

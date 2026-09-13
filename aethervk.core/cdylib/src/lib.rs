@@ -113,17 +113,17 @@ unsafe fn load() {
 struct AvkLogger;
 
 impl log::Log for AvkLogger {
-    fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        true
-    }
+  fn enabled(&self, _metadata: &log::Metadata) -> bool {
+    true
+  }
 
-    fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            aethervk_oshal_rlib::log!("[{}] {}", record.level(), record.args());
-        }
+  fn log(&self, record: &log::Record) {
+    if self.enabled(record.metadata()) {
+      aethervk_oshal_rlib::log!("[{}] {}", record.level(), record.args());
     }
+  }
 
-    fn flush(&self) {}
+  fn flush(&self) {}
 }
 
 static LOGGER: AvkLogger = AvkLogger;

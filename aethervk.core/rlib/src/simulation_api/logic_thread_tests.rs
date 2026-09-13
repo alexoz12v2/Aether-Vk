@@ -210,3 +210,113 @@ fn test_two_phase_commit_comet() {
 
   ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
 }
+#[test]
+fn test_simulation_start_pause_sync() {
+  use aethervk_oshal_rlib::os::time::v2::SimSpeed;
+
+  let mut ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
+  
+  let start = hifitime::Epoch::from_gregorian_utc(2025, 10, 15, 0, 0, 0, 0);
+  let end = start + hifitime::Duration::from_days(10.0);
+  let scene_ret = ctx.create_empty_scene2(false, start, end).expect("Failed to create scene");
+  let scene_id = scene_ret.scene_id;
+
+  // 1. Initial state should be paused/not running
+  let is_running = {
+    let scene = ctx.get_scene(scene_id).unwrap();
+    scene.read().simulation_running.load(core::sync::atomic::Ordering::Acquire)
+  };
+  assert!(!is_running, "Simulation should be stopped initially");
+
+  // 2. Start simulation
+  let start_ok = ctx.start_simulation(scene_id, SimSpeed::Realtime);
+  assert!(start_ok, "start_simulation should succeed");
+  
+  let is_running = {
+    let scene = ctx.get_scene(scene_id).unwrap();
+    scene.read().simulation_running.load(core::sync::atomic::Ordering::Acquire)
+  };
+  assert!(is_running, "Simulation should be running after start");
+
+  // Mock an active physics task to ensure start fails if we try to restart while running/syncing
+  {
+    let scene = ctx.get_scene(scene_id).unwrap();
+    scene.read().active_physics_task.store(true, core::sync::atomic::Ordering::Release);
+  }
+
+  // 3. Attempting to start again while physics is active should fail
+  let start_fail = ctx.start_simulation(scene_id, SimSpeed::Realtime);
+  assert!(!start_fail, "start_simulation should fail if active_physics_task is true");
+
+  // Clean up mock state so pause can resolve (otherwise it spins forever)
+  {
+    let scene = ctx.get_scene(scene_id).unwrap();
+    scene.read().active_physics_task.store(false, core::sync::atomic::Ordering::Release);
+  }
+
+  // 4. Pause simulation
+  let pause_ok = ctx.pause_simulation_sync(scene_id);
+  assert!(pause_ok, "pause_simulation_sync should succeed");
+
+  let is_running = {
+    let scene = ctx.get_scene(scene_id).unwrap();
+    scene.read().simulation_running.load(core::sync::atomic::Ordering::Acquire)
+  };
+  assert!(!is_running, "Simulation should be stopped after pause");
+
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}
+
+#[test]
+fn test_cleanup_and_remove_particle_system() {
+  use alloc::sync::Arc;
+  use core::sync::atomic::{AtomicBool, Ordering};
+
+  let ctx = SimulationContext::startup(None).expect("Failed to create context");
+  let start = hifitime::Epoch::from_gregorian_utc(2025, 10, 15, 0, 0, 0, 0);
+  let end = start + hifitime::Duration::from_days(10.0);
+  let scene_ret = ctx.create_empty_scene2(false, start, end).unwrap();
+  let scene_id = scene_ret.scene_id;
+
+  aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(100));
+
+  let entity_id = scene_ret.comet_body;
+  
+  let done_flag = Arc::new(AtomicBool::new(false));
+  
+  let send_res = ctx.threads.logic_thread.tx().try_send(LogicCommand::CleanupParticleSystem {
+    scene_id,
+    entity_id,
+    done_flag: done_flag.clone(),
+  });
+  assert!(send_res.is_ok(), "Failed to send CleanupParticleSystem command");
+
+  let mut spins = 0;
+  while !done_flag.load(Ordering::Acquire) {
+    if spins > 500 {
+      panic!("Timeout waiting for CleanupParticleSystem command");
+    }
+    aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(10));
+    spins += 1;
+  }
+  
+  done_flag.store(false, Ordering::Release);
+  
+  let send_res = ctx.threads.logic_thread.tx().try_send(LogicCommand::RemoveParticleSystem {
+    scene_id,
+    entity_id,
+    done_flag: done_flag.clone(),
+  });
+  assert!(send_res.is_ok(), "Failed to send RemoveParticleSystem command");
+
+  spins = 0;
+  while !done_flag.load(Ordering::Acquire) {
+    if spins > 500 {
+      panic!("Timeout waiting for RemoveParticleSystem command");
+    }
+    aethervk_oshal_rlib::os::native::this_thread::sleep_for(core::time::Duration::from_millis(10));
+    spins += 1;
+  }
+  
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}

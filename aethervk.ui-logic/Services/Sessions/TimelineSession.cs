@@ -12,4 +12,6 @@ public sealed class TimelineSession : ITabSession
   
   public string ProposedStartEpoch { get; set; } = string.Empty;
   public string ProposedEndEpoch { get; set; } = string.Empty;
+  
+  public string CurrentEpochString { get; set; } = string.Empty;
 }

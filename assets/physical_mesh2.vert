@@ -30,7 +30,10 @@ void main() {
     outTangent = normalize(normalMatrix * inTangent.xyz);
     outBitangent = cross(outNormal, outTangent) * inTangent.w;
 
-    vec4 clipPos = viewProj * worldPos;
+    // Isolate RTE precision offset by bypassing matrix addition inside the shader
+    vec4 centerClip = viewProj * vec4(model[3].xyz, 1.0);
+    vec4 localClip = viewProj * vec4(mat3(model) * inPosition, 0.0);
+    vec4 clipPos = centerClip + localClip;
 
     // Emissive outline expansion hack (triggers on negative intensity)
     if (push.material.emissiveColor.a < 0.0) {

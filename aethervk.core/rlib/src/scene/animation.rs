@@ -18,6 +18,7 @@ pub struct TransformAnimationComponent {
   pub duration: f32, // unscaled seconds
   pub elapsed: f32,
   pub is_finished: bool,
+  pub orbit_pivot: Option<Vec3f64>,
 }
 
 impl Default for TransformAnimationComponent {
@@ -30,6 +31,7 @@ impl Default for TransformAnimationComponent {
       duration: 1.0,
       elapsed: 0.0,
       is_finished: false,
+      orbit_pivot: None,
     }
   }
 }
@@ -51,7 +53,12 @@ impl TransformAnimationComponent {
     // We use your exact smoothing function to find true mid-air position
     let smooth_t = hermite_smoothstep(t);
     let current_pos = DVec3::lerp(self.start_pos, self.target_pos, smooth_t as f64);
-    let current_rot = Quat::slerp(self.start_rot, self.target_rot, smooth_t);
+    
+    let current_rot = if self.orbit_pivot.is_some() {
+      slerp_constrained(self.start_rot, self.target_rot, smooth_t)
+    } else {
+      Quat::slerp(self.start_rot, self.target_rot, smooth_t)
+    };
 
     // 2. Calculate the original average speed (units per second)
     let old_distance = (self.target_pos - self.start_pos).length();
@@ -65,7 +72,7 @@ impl TransformAnimationComponent {
     // Normalise start_rot: the mid-slerp quaternion is rarely exactly unit-length;
     // accumulated numerical error would otherwise compound across every retarget call.
     self.start_pos = current_pos;
-    self.start_rot = current_rot.normalize();
+    self.start_rot = strip_roll(current_rot.normalize());
     self.target_pos = new_target_pos;
     self.target_rot = new_target_rot;
 
@@ -195,6 +202,116 @@ pub fn strip_roll(q: Quat) -> Quat {
   Quat::from_components(x, y, z, w)
 }
 
+/// Interpolates between two quaternions, enforcing that the resulting 
+/// rotation's Up vector never exceeds 90 degrees from the Global Up (+Z).
+/// Engine convention: +X = Right, -Y = Forward, +Z = Up.
+pub fn slerp_constrained(q0: Quat, q1: Quat, t: f32) -> Quat {
+  use aethervk_oshal_rlib::math::quaternion::Quaternion as _;
+  use aethervk_oshal_rlib::math::vector::{Vector as _, Vector3 as _};
+
+  // 1. Perform standard spherical linear interpolation
+  let q = Quat::slerp(q0, q1, t);
+
+  // 2. Extract the local Up vector (rotating the global +Z vector)
+  let local_z = Vec3f32::from_components(0.0, 0.0, 1.0);
+  let local_up = q.rotate_vector(local_z);
+
+  // 3. Check constraint: if Z >= 0, the angle is <= 90 degrees.
+  if local_up.z() >= 0.0 {
+    return q; // Constraint satisfied
+  }
+
+  // 4. Constraint violated. Extract the local Forward vector (-Y).
+  let local_neg_y = Vec3f32::from_components(0.0, -1.0, 0.0);
+  let local_fwd = q.rotate_vector(local_neg_y);
+
+  // 5. Project the Up vector onto the XY plane (forcing Z = 0)
+  let mut new_up = Vec3f32::from_components(local_up.x(), local_up.y(), 0.0);
+  let up_len_sq = new_up.x() * new_up.x() + new_up.y() * new_up.y();
+
+  // Edge case: if it was pointing exactly straight down (0, 0, -1)
+  if up_len_sq < 1e-10 {
+    // Fall back to using the right vector to derive a valid up
+    let local_x = Vec3f32::from_components(1.0, 0.0, 0.0);
+    let local_right = q.rotate_vector(local_x);
+    new_up = cross(local_z, local_right);
+    let len = (new_up.x()*new_up.x() + new_up.y()*new_up.y() + new_up.z()*new_up.z()).sqrt();
+    new_up = Vec3f32::from_components(new_up.x()/len, new_up.y()/len, new_up.z()/len);
+  } else {
+    let inv = 1.0 / up_len_sq.sqrt();
+    new_up = Vec3f32::from_components(new_up.x()*inv, new_up.y()*inv, new_up.z()*inv);
+  }
+
+  // 6. Rebuild an orthogonal basis
+  // Right = Up x Forward (Using the local cross helper in animation.rs)
+  let mut right = cross(new_up, local_fwd);
+  let right_len_sq = right.x()*right.x() + right.y()*right.y() + right.z()*right.z();
+
+  // Edge case: parallel vectors
+  if right_len_sq < 1e-10 {
+    right = cross(local_z, new_up);
+    let len = (right.x()*right.x() + right.y()*right.y() + right.z()*right.z()).sqrt();
+    right = Vec3f32::from_components(right.x()/len, right.y()/len, right.z()/len);
+  } else {
+    let inv = 1.0 / right_len_sq.sqrt();
+    right = Vec3f32::from_components(right.x()*inv, right.y()*inv, right.z()*inv);
+  }
+
+  // Calculate strictly orthogonal Forward (Forward = Right x Up)
+  let strict_fwd = cross(right, new_up);
+
+  // 7. Map back to rotation matrix columns
+  // X-axis: Right (+X)
+  // Y-axis: Backward (+Y = -Forward)
+  // Z-axis: Up (+Z)
+  // Uses the exact Shepperd trace method from `strip_roll`
+  let m00 = right.x();
+  let m10 = right.y();
+  let m20 = right.z();
+  let m01 = -strict_fwd.x(); // backward = −forward
+  let m11 = -strict_fwd.y();
+  let m21 = -strict_fwd.z();
+  let m02 = new_up.x();
+  let m12 = new_up.y();
+  let m22 = new_up.z();
+
+  let trace = m00 + m11 + m22;
+  let (x, y, z, w);
+
+  if trace > 0.0 {
+    let s = (trace + 1.0_f32).sqrt() * 2.0; // s = 4w
+    let inv_s = 1.0 / s;
+    x = (m21 - m12) * inv_s;
+    y = (m02 - m20) * inv_s;
+    z = (m10 - m01) * inv_s;
+    w = 0.25 * s;
+  } else if m00 > m11 && m00 > m22 {
+    let s = (1.0 + m00 - m11 - m22).sqrt() * 2.0; // s = 4x
+    let inv_s = 1.0 / s;
+    x = 0.25 * s;
+    y = (m01 + m10) * inv_s;
+    z = (m02 + m20) * inv_s;
+    w = (m21 - m12) * inv_s;
+  } else if m11 > m22 {
+    let s = (1.0 + m11 - m00 - m22).sqrt() * 2.0; // s = 4y
+    let inv_s = 1.0 / s;
+    x = (m01 + m10) * inv_s;
+    y = 0.25 * s;
+    z = (m12 + m21) * inv_s;
+    w = (m02 - m20) * inv_s;
+  } else {
+    let s = (1.0 + m22 - m00 - m11).sqrt() * 2.0; // s = 4z
+    let inv_s = 1.0 / s;
+    x = (m02 + m20) * inv_s;
+    y = (m12 + m21) * inv_s;
+    z = 0.25 * s;
+    w = (m10 - m01) * inv_s;
+  }
+
+  // Normalise out any trace drift
+  Quat::from_components(x, y, z, w).normalize()
+}
+
 /// Cross product for Vec3f32 (not in the Vector3 trait).
 #[inline(always)]
 fn cross(a: Vec3f32, b: Vec3f32) -> Vec3f32 {
@@ -228,6 +345,7 @@ mod tests {
       duration,
       elapsed: duration, // fully elapsed → t = 1
       is_finished: false,
+      orbit_pivot: None,
     }
   }
 
@@ -374,5 +492,20 @@ mod tests {
         "orbit offset left unit sphere at step {step}: |offset|={len:.6}"
       );
     }
+  }
+
+  /// slerp_constrained must never produce a rotation where the local up-vector dips below Z=0.
+  #[test]
+  fn slerp_constrained_never_flips_upvector() {
+      // q0 = identity (up = +Z), q1 = flipped 180° around X (up = -Z)
+      let q0 = Quat::identity();
+      let q1 = Quat::from_components(1.0, 0.0, 0.0, 0.0); // 180° around X
+      let local_z = Vec3f32::from_components(0.0, 0.0, 1.0);
+      for i in 0..=100 {
+          let t = i as f32 / 100.0;
+          let q = super::slerp_constrained(q0, q1, t);
+          let up = q.rotate_vector(local_z);
+          assert!(up.z() >= -1e-5, "up.z dipped below 0 at t={t}: {}", up.z());
+      }
   }
 }

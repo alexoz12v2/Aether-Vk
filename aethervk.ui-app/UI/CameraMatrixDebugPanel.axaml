@@ -1,0 +1,87 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="AetherVk.UI.CameraMatrixDebugPanel">
+
+  <!--
+    Camera Matrix Debug Panel (DEBUG builds only).
+    Collapsed state: circled ⊙ icon button on the right edge of the viewport overlay.
+    Expanded state: 4×4 view + projection matrix grid expands to the left of the icon.
+
+    All bindings use ReflectionBinding (no x:DataType required) because
+    CameraMatrixDebugViewModel is a #if DEBUG type — compiled bindings would
+    silently become no-ops in Release builds.
+  -->
+  <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="6">
+
+    <!-- Matrix grid — hidden when collapsed -->
+    <Border IsVisible="{ReflectionBinding IsExpanded}"
+            Background="{DynamicResource Bg.Surface}"
+            BorderBrush="{DynamicResource Bg.Outline}"
+            BorderThickness="1"
+            CornerRadius="6"
+            Opacity="0.92"
+            Padding="10,8">
+      <Grid ColumnDefinitions="Auto,12,Auto">
+
+        <!-- VIEW column -->
+        <StackPanel Grid.Column="0" Spacing="1">
+          <TextBlock Text="VIEW"
+                     FontWeight="Bold" FontSize="9"
+                     Foreground="{DynamicResource Accent.Primary}"
+                     Margin="0,0,0,3"/>
+          <TextBlock Text="{ReflectionBinding VRow0}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+          <TextBlock Text="{ReflectionBinding VRow1}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+          <TextBlock Text="{ReflectionBinding VRow2}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+          <TextBlock Text="{ReflectionBinding VRow3}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+        </StackPanel>
+
+        <!-- PROJ column -->
+        <StackPanel Grid.Column="2" Spacing="1">
+          <TextBlock Text="PROJ"
+                     FontWeight="Bold" FontSize="9"
+                     Foreground="{DynamicResource Accent.Primary}"
+                     Margin="0,0,0,3"/>
+          <TextBlock Text="{ReflectionBinding PRow0}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+          <TextBlock Text="{ReflectionBinding PRow1}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+          <TextBlock Text="{ReflectionBinding PRow2}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+          <TextBlock Text="{ReflectionBinding PRow3}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+        </StackPanel>
+
+      </Grid>
+    </Border>
+
+    <!-- Circled camera icon toggle button -->
+    <Button Command="{ReflectionBinding ToggleExpandedCommand}"
+            Width="28" Height="28"
+            Padding="0"
+            Background="{DynamicResource Bg.Surface}"
+            BorderBrush="{DynamicResource Bg.Outline}"
+            BorderThickness="1"
+            CornerRadius="14"
+            Opacity="0.92"
+            ToolTip.Tip="Toggle camera matrix panel">
+      <TextBlock Text="⊙"
+                 FontSize="14"
+                 HorizontalAlignment="Center"
+                 VerticalAlignment="Center"
+                 Foreground="{DynamicResource Accent.Primary}"/>
+    </Button>
+
+  </StackPanel>
+</UserControl>

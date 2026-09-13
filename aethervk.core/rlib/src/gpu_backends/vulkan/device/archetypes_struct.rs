@@ -829,6 +829,9 @@ impl Archetypes {
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::LINE)
+      // depth_test_enable = true (default: NO_DEPTH_TEST is absent → sphere is occluded by comet)
+      // depth_write_enable = false (prevent corrupting the depth buffer for subsequent transparency)
+      .with_pipeline_flags(pipelines::PipelineFlags::NO_DEPTH_WRITE)
       .clone();
 
     let pipeline_key = pipeline_graphics_info.pipeline_key();

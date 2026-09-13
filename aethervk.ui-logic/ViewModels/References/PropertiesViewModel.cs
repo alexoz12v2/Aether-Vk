@@ -13,7 +13,6 @@ namespace AetherVk.Logic.ViewModels;
 public partial class PropertiesViewModel
   : TabItemViewModel,
     IRecipient<EntitySelectedMessage>,
-    IRecipient<SimulationStateUpdatedMessage>,
     IActionHandler
 {
   private readonly SceneStateManager _stateManager;

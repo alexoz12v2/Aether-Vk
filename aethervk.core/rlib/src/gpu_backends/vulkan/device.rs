@@ -29,7 +29,7 @@ use crate::{
     self,
     device::{
       commands::CommandBufferId,
-      locks::DebugTrackedRwLock,
+      locks::{DebugTrackedMutex, DebugTrackedRwLock},
       memory::GlobalDeviceAllocator,
       particles::{ParticleSystemManager, PushConstantMutUnion},
       renderpasses::RenderPassSpecification,
@@ -961,6 +961,9 @@ pub struct LogicalDevice {
   #[cfg(debug_assertions)]
   pub telemetry_query_pool: Option<vk::QueryPool>,
 
+  #[cfg(debug_assertions)]
+  pub host_query_reset: Option<ash::ext::host_query_reset::Device>,
+
   #[cfg(target_vendor = "apple")]
   pub metal_objects: ash::ext::metal_objects::Device,
 
@@ -1120,6 +1123,26 @@ pub struct Device {
   /// Recording command buffers
   recording_command_buffers:
     dashmap::DashMap<(CommandBufferHandle, QueueRole), RecordingCmdBufferData>,
+
+  /// Pending CPU-to-GPU mesh vertex position updates, enqueued from the logic thread
+  /// via `UpdateCometNucleusRadius` and flushed during `flush_pending_mesh_updates`
+  /// on the main per-frame graphics command buffer.
+  ///
+  /// Lives on `Device` (not inside `DeviceResources`) so the logic thread can
+  /// enqueue without acquiring the `DeviceResources` read lock.
+  pub(crate) pending_mesh_updates: locks::DebugTrackedMutex<alloc::vec::Vec<PendingMeshUpdate>>,
+}
+
+/// Produced by the logic thread (UpdateCometNucleusRadius), consumed once per
+/// frame by `flush_pending_mesh_updates` on the main graphics command buffer.
+pub(super) struct PendingMeshUpdate {
+  /// Identifies the ForwardMesh2RenderResource to patch.
+  /// Equals the originating `Comet::id` — must NOT be changed on the CPU side
+  /// so the `physical_mesh2_resources` DashMap cache key remains stable.
+  pub mesh_id: RenderableInstanceId,
+  /// Flat f32 vertex positions: [x0,y0,z0, x1,y1,z1, …]
+  /// Same layout as `ForwardMesh2RenderResourceParams::position_data`.
+  pub position_data: alloc::vec::Vec<f32>,
 }
 
 const MAX_QUEUE_COUNT: usize = 4;
@@ -1297,6 +1320,90 @@ impl Device {
     let (timeline_sem, value) =
       self.submit_command_buffer_generic(cmd_handle, None, &[], &[], QueueRole::Compute)?;
 
+    self
+      .device
+      .wait_for_semaphore_value(timeline_sem, value, u64::MAX)
+      .map_err(|e| gpu_err!("wait_for_semaphore_value failed: {:?}", e))?;
+
+    Ok(())
+  }
+
+  pub unsafe fn reset_particle_system_gpu(
+    &self,
+    id: u64,
+    also_clear_page_tables: bool,
+  ) -> GpuResult<()> {
+    let res = self.res.read();
+    let psm = res
+      .particle_system_manager
+      .as_ref()
+      .ok_or(gpu_err!("particle_system_manager absent"))?;
+
+    let back_state = psm.back();
+    let ps = back_state
+      .page_tables
+      .get(&id)
+      .ok_or(gpu_err!("Particle system {} not found", id))?;
+
+    let (cmd_handle, cmd) = self.get_compute_command_buffer_and_native()?;
+    self.begin_command_buffer_all(cmd_handle, QueueRole::Compute)?;
+
+    unsafe {
+      self.device.cmd_bind_pipeline(
+        cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        self.kernels.pipelines.reset_particles,
+      );
+
+      let push_constants = crate::gpu::compute_push_constants::ResetParticlesPushConstants {
+        particle_page_table: ps.address,
+        free_list: back_state.free_list.address,
+      };
+
+      let local_size_x = self
+        .kernels
+        .pipelines
+        .wg_sizes
+        .get(&self.kernels.pipelines.reset_particles.as_raw())
+        .unwrap()[0];
+      let particle_count = gpu::new_particles::MAX_PARTICLES_PER_SYSTEM as u32;
+      let num_workgroups_x =
+        Self::particle_system_shaders_num_workgroups(local_size_x, particle_count);
+
+      self.device.cmd_push_constants(
+        cmd,
+        self.kernels.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytemuck::bytes_of(&push_constants),
+      );
+      self.device.cmd_dispatch(cmd, num_workgroups_x, 1, 1);
+    }
+
+    if also_clear_page_tables {
+      self.cmd_dispatch_global_memory_barrier(cmd)?;
+      let front_state = psm.front();
+      let front_ps = front_state.page_tables.get(&id).unwrap();
+      unsafe {
+        self.device.cmd_fill_buffer(
+          cmd,
+          ps.buffer,
+          0,
+          Self::PAGE_TABLE_BYTES as vk::DeviceSize,
+          0,
+        );
+        self.device.cmd_fill_buffer(
+          cmd,
+          front_ps.buffer,
+          0,
+          Self::PAGE_TABLE_BYTES as vk::DeviceSize,
+          0,
+        );
+      }
+    }
+
+    let (timeline_sem, value) =
+      self.submit_command_buffer_generic(cmd_handle, None, &[], &[], QueueRole::Compute)?;
     self
       .device
       .wait_for_semaphore_value(timeline_sem, value, u64::MAX)
@@ -2840,6 +2947,9 @@ impl Device {
 
     let mut swapchain_maintenance1_features =
       vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default().swapchain_maintenance1(true);
+    #[cfg(debug_assertions)]
+    let mut host_query_reset_features =
+      vk::PhysicalDeviceHostQueryResetFeatures::default().host_query_reset(true);
 
     let mut device_create_info = vk::DeviceCreateInfo::default()
       .enabled_extension_names(&enabled_extension_names)
@@ -2851,6 +2961,14 @@ impl Device {
       .contains(utils::OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1)
     {
       device_create_info = device_create_info.push_next(&mut swapchain_maintenance1_features);
+    }
+
+    #[cfg(debug_assertions)]
+    if chosen_physical_device_query_result
+      .optional_extensions
+      .contains(utils::OptionalExtensionSupportFlags::HOST_QUERY_RESET)
+    {
+      device_create_info = device_create_info.push_next(&mut host_query_reset_features);
     }
 
     #[cfg(any(debug_assertions, test))]
@@ -2918,11 +3036,28 @@ impl Device {
     let debug_utils = ash::ext::debug_utils::Device::new(&instance.instance, &device);
 
     #[cfg(debug_assertions)]
+    let host_query_reset = if chosen_physical_device_query_result
+      .optional_extensions
+      .contains(utils::OptionalExtensionSupportFlags::HOST_QUERY_RESET)
+    {
+      Some(ash::ext::host_query_reset::Device::new(
+        &instance.instance,
+        &device,
+      ))
+    } else {
+      None
+    };
+
+    #[cfg(debug_assertions)]
     let telemetry_query_pool = {
       let create_info = vk::QueryPoolCreateInfo::default()
         .query_type(vk::QueryType::TIMESTAMP)
         .query_count(1024);
-      unsafe { device.create_query_pool(&create_info, None).ok() }
+      let pool = unsafe { device.create_query_pool(&create_info, None).ok() };
+      if let (Some(p), Some(hqr)) = (pool, host_query_reset.as_ref()) {
+        unsafe { (hqr.fp().reset_query_pool_ext)(device.handle(), p, 0, 1024) };
+      }
+      pool
     };
 
     #[cfg(target_vendor = "apple")]
@@ -2942,6 +3077,8 @@ impl Device {
       debug_utils,
       #[cfg(debug_assertions)]
       telemetry_query_pool,
+      #[cfg(debug_assertions)]
+      host_query_reset,
       max_per_stage_descriptor_update_after_bind_samplers: chosen_physical_device_query_result
         .max_per_stage_descriptor_update_after_bind_samplers,
       max_per_stage_descriptor_samplers: chosen_physical_device_query_result
@@ -3001,6 +3138,7 @@ impl Device {
       instance,
       depth_stencil_format,
       recording_command_buffers: dashmap::DashMap::with_capacity(32),
+      pending_mesh_updates: locks::DebugTrackedMutex::new(alloc::vec::Vec::new()),
     })
   }
 
@@ -3555,6 +3693,78 @@ impl RenderDevice for Device {
 
         Ok(())
       })
+  }
+
+  fn enqueue_mesh_position_update(&self, mesh_id: u64, position_data: alloc::vec::Vec<f32>) {
+    let id = RenderableInstanceId::from_physical_mesh(mesh_id);
+    let mut q = locks::DebugTrackedMutex::lock(&self.pending_mesh_updates);
+    // Coalesce: overwrite any existing pending entry for the same mesh so
+    // rapid slider changes don't accumulate stale work.
+    if let Some(existing) = q.iter_mut().find(|u| u.mesh_id == id) {
+      existing.position_data = position_data;
+    } else {
+      q.push(PendingMeshUpdate {
+        mesh_id: id,
+        position_data,
+      });
+    }
+  }
+
+  #[named]
+  fn flush_pending_mesh_updates(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+  ) -> GpuResult<()> {
+    // 1. Drain queue with a brief lock — no Vulkan calls inside the lock.
+    let updates: alloc::vec::Vec<PendingMeshUpdate> = {
+      let mut q = locks::DebugTrackedMutex::lock(&self.pending_mesh_updates);
+      core::mem::take(&mut *q)
+    };
+    if updates.is_empty() {
+      return Ok(());
+    }
+
+    let cmd = self.get_cmd(cmd_buffer)?;
+
+    self.debug_label_insert(cmd_buffer, c"MeshPositionUpdates", [0.9, 0.6, 0.1, 1.0]);
+
+    let res_guard = utils::RwLockable::read(&*self.res);
+    let staging_arena_guard = utils::RwLockable::read(&res_guard.frame_staging_arena);
+    let staging_arena = staging_arena_guard.as_ref().ok_or_else(|| {
+      crate::gpu_err!("flush_pending_mesh_updates: staging arena not initialised")
+    })?;
+    let allocator = res_guard.allocator.allocator.as_allocator_view();
+    let next_timeline = res_guard.timeline_manager.get_next_submit_value();
+
+    for update in updates {
+      let byte_size =
+        (update.position_data.len() * core::mem::size_of::<f32>()) as ash::vk::DeviceSize;
+      if byte_size == 0 {
+        continue;
+      }
+
+      // 2. Upload via the FrameStagingArena → vkCmdCopyBuffer into a new device-local buffer.
+      let new_buf = resources::create_buffer_with_staging(
+        &self.device,
+        allocator,
+        cmd,
+        staging_arena,
+        &update.position_data,
+        ash::vk::BufferUsageFlags::VERTEX_BUFFER,
+        &alloc::format!("MeshPos_{}", update.mesh_id.0),
+      )?;
+      // Note: create_buffer_with_staging already inserts the TRANSFER→VERTEX_INPUT barrier.
+
+      // 3. Swap the handle inside the existing ForwardMesh2RenderResource.
+      //    The old buffer is deferred for VMA destruction at next_timeline + 2.
+      if let Some(mut entry) = res_guard.physical_mesh2_resources.get_mut(&update.mesh_id) {
+        if let resources::ResourceState::Ready(ref mut fwd) = *entry {
+          fwd.swap_position_buffer(new_buf, &res_guard.discard_pool, next_timeline);
+        }
+      }
+    }
+
+    Ok(())
   }
 
   /// Initializes all archetypes in the order they are declared inside `DeviceResources`
@@ -7111,13 +7321,15 @@ impl RenderDevice for Device {
       self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dependency_info);
     }
 
-    // Always allocate enough vertices for the maximum LOD (36 subdivisions)
+    // Always allocate enough vertices for the maximum LOD (36 subdivisions).
+    // 4 axes: X(red), Y(green), Z(blue), Sun(yellow). Each axis: 2 vertices.
+    // Each arrowhead: 4 lines × 2 vertices = 8 vertices.
     let sub_divs = 36u32;
     let lat_segments = sub_divs;
     let lon_segments = sub_divs;
     let total_sphere_vertices = lon_segments * (2 * lat_segments - 1) * 2;
-    let total_axes_vertices = 6;
-    let total_arrowhead_vertices = 4 * 2 * 3;
+    let total_axes_vertices = 8;           // 4 axes × 2 vertices (added sun axis)
+    let total_arrowhead_vertices = 4 * 2 * 4; // 4 lines × 2 verts × 4 arrowheads
     let total_vertices = total_sphere_vertices + total_axes_vertices + total_arrowhead_vertices;
 
     Ok(Some(crate::gpu::frame::SphereGizmoBatchCall {
@@ -8031,6 +8243,92 @@ impl Device {
     archetype: ArchetypeId,
   ) -> GpuResult<PipelineKey> {
     self.get_pipeline_key_internal(handle, archetype)
+  }
+
+  /// After an ECS scene restore, evict GPU resources that are no longer referenced by any
+  /// entity in the restored scene.
+  ///
+  /// Specifically:
+  /// - Removes `ForwardMesh2RenderResource` entries whose content hash (`Comet::id`) is **not**
+  ///   in `live_mesh_hashes`, calling `.discard()` to enqueue their buffers/images for deferred
+  ///   destruction via the graphics `DiscardPool`.
+  /// - Drains `pending_mesh_updates` entries for removed mesh IDs.
+  /// - Removes `sun_resources` entries for entity IDs **not** in `live_sun_entity_ids`.
+  ///
+  /// # Safety
+  /// Must only be called when both the graphics and compute queues are idle
+  /// (i.e., inside a `self_sync_do_if_done` callback after `is_task_completed(last_render_task)`).
+  pub fn cleanup_stale_scene_resources(
+    &self,
+    live_mesh_hashes: &alloc::collections::BTreeSet<u64>,
+    live_sun_entity_ids: &[crate::scene::EntityId],
+  ) -> GpuResult<()> {
+    let res = self.res.read();
+
+    // ── 1. Evict stale ForwardMesh2RenderResource entries ──────────────────
+    // Use the next graphics timeline value so cleanup happens after the GPU finishes
+    // the last submitted frame.
+    let gfx_timeline = res.timeline_manager.get_next_submit_value();
+
+    let stale_mesh_keys: alloc::vec::Vec<gpu::RenderableInstanceId> = res
+      .physical_mesh2_resources
+      .iter()
+      .filter_map(|kv| {
+        if !live_mesh_hashes.contains(&kv.key().0) {
+          Some(*kv.key())
+        } else {
+          None
+        }
+      })
+      .collect();
+
+    for key in stale_mesh_keys {
+      if let Some((_, state)) = res.physical_mesh2_resources.remove(&key) {
+        if let resources::ResourceState::Ready(mut resource) = state {
+          // Enqueues: position/attributes/index/material/object buffers +
+          // albedo/normal/roughness/ao/emissive_paint images.
+          // Descriptor sets are intentionally NOT freed (pre-existing design).
+          resource.discard(&res.discard_pool, gfx_timeline);
+        }
+      }
+    }
+
+    // ── 2. Drain stale pending_mesh_updates ────────────────────────────────
+    {
+      let mut queue = DebugTrackedMutex::lock(&self.pending_mesh_updates);
+      queue.retain(|update| live_mesh_hashes.contains(&update.mesh_id.0));
+    }
+
+    // ── 3. Evict stale sun_resources entries ───────────────────────────────
+    let live_sun_set: alloc::collections::BTreeSet<crate::scene::EntityId> =
+      live_sun_entity_ids.iter().cloned().collect();
+
+    let stale_sun_keys: alloc::vec::Vec<crate::scene::EntityId> = res
+      .sun_resources
+      .iter()
+      .filter_map(|kv| {
+        if !live_sun_set.contains(kv.key()) {
+          Some(*kv.key())
+        } else {
+          None
+        }
+      })
+      .collect();
+
+    for key in stale_sun_keys {
+      if let Some((_, state)) = res.sun_resources.remove(&key) {
+        if let resources::ResourceState::Ready(mut resource) = state {
+          resource.discard(
+            &self.device,
+            res.allocator.allocator.as_allocator_view(),
+            &res.discard_pool,
+            gfx_timeline,
+          );
+        }
+      }
+    }
+
+    Ok(())
   }
 
   /// Copies the back state of the particle system onto CPU backed memory buffers. To be called

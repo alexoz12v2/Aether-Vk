@@ -109,6 +109,8 @@
        DataTemplate is never instantiated in Release (ContentControl.Content is null). -->
   <ItemGroup Condition="'$(Configuration)' != 'Debug'">
     <Compile Include="ViewModels\Debug\RenderDocCaptureViewModel.cs" />
+    <Compile Include="ViewModels\Debug\CometOrbitDebugViewModel.cs" />
+    <Compile Include="ViewModels\Debug\DebugTelemetryPanelViewModel.cs" />
   </ItemGroup>
 
   <!-- Exclude Reference ViewModels to remove in the future -->

@@ -40,6 +40,8 @@ bitflags! {
     const NATIVE_FLOAT16 = 1 << 2;
     /// Vulkan Memory Model feature (VK_KHR_vulkan_memory_model).
     const VULKAN_MEMORY_MODEL = 1 << 3;
+    /// Host Query Reset feature (VK_EXT_host_query_reset).
+    const HOST_QUERY_RESET = 1 << 4;
   }
 }
 
@@ -239,6 +241,14 @@ impl PhysicalDeviceQueryResult {
       .contains(OptionalExtensionSupportFlags::SWAPCHAIN_MAINTENANCE1)
     {
       the_vec.push(ash::ext::swapchain_maintenance1::NAME.as_ptr());
+    }
+
+    #[cfg(debug_assertions)]
+    if self
+      .optional_extensions
+      .contains(OptionalExtensionSupportFlags::HOST_QUERY_RESET)
+    {
+      the_vec.push(ash::ext::host_query_reset::NAME.as_ptr());
     }
 
     the_vec

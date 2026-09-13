@@ -154,6 +154,12 @@ public class CometPositionSnapshotTests
         It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<Action<nint>>()))
       .Returns(Mock.Of<IDisposable>());
     runtime.Setup(r => r.EarthEntityId).Returns(42UL);
+    runtime.Setup(r => r.CometEntityId).Returns(99UL);  // mock comet entity ID
+    runtime.Setup(r => r.SetCameraParent(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<bool>())).Returns(true);
+    runtime.Setup(r => r.SetCameraParentToComet(It.IsAny<ulong>(), It.IsAny<bool>())).Returns(true);
+    runtime.Setup(r => r.CameraSetRotoTranslate(
+      It.IsAny<ulong>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(),
+      It.IsAny<Quaternion>(), It.IsAny<ulong>())).Returns(true);
 
     var breadcrumb  = new BreadcrumbService(Mock.Of<IUiThreadDispatcher>());
     var cometConfig = new CometConfigService(runtime.Object, schedulers);
@@ -178,11 +184,15 @@ public class CometPositionSnapshotTests
     // Enter CometOrbiting
     camera.SetCameraMode(CameraMode.CometOrbiting);
 
-    // The animation target X must be clearly negative (comet is at ~-1.92 AU, not +1 AU)
+    // With the pivot entity ID approach: camera sends LOCAL orbit offset + CometEntityId.
+    // Rust resolves the comet's world position synchronously on the logic thread, so C#
+    // does NOT embed the world position into the animation target.
+    // Verify that AddCameraAnimation was called with PivotEntityId = CometEntityId (99UL)
+    // — this guarantees Rust will track the actual snapshot comet position, not the default.
     runtime.Verify(r => r.AddCameraAnimation(
         77UL,
-        It.Is<AnimationTarget>(t => t.Pos.X < -0.5f)),
+        It.Is<AnimationTarget>(t => t.PivotEntityId == 99UL)),
       Times.Once,
-      "Camera must animate to the snapshot position (X < -0.5 AU), not the default +1 AU.");
+      "Camera must animate with CometEntityId pivot so Rust resolves the real comet position.");
   }
 }

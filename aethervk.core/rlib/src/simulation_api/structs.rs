@@ -468,7 +468,10 @@ impl Drop for SimulationThreads {
       let mut done = lock.lock();
       if !*done {
         let timed_out = cvar
-          .wait_for(&mut done, core::time::Duration::from_millis(RENDER_JOIN_TIMEOUT_MS))
+          .wait_for(
+            &mut done,
+            core::time::Duration::from_millis(RENDER_JOIN_TIMEOUT_MS),
+          )
           .timed_out();
         if timed_out {
           oshal::log!(
@@ -838,6 +841,7 @@ pub enum LogicCommand {
     target_pos: aethervk_oshal_rlib::math::vector::vec3f64::DVec3,
     target_rot: aethervk_oshal_rlib::math::vector::vec4::Quat,
     duration_s: f32,
+    orbit_pivot: Option<aethervk_oshal_rlib::math::vector::vec3f64::DVec3>,
   },
 
   /// Apply an immediate (non-animated) camera transform and/or projection update.
@@ -855,6 +859,42 @@ pub enum LogicCommand {
     )>,
     /// `Some(proj)` → overwrite `CameraComponent::projection`.
     projection: Option<crate::scene::CameraProjection>,
+  },
+
+  /// Update the comet nucleus radius live:
+  ///  - `SphereGizmoComponent.radius` → 2 × `radius_km`  (wireframe gizmo is 2× the nucleus)
+  ///  - Regenerates `StaticMeshComponent.mesh`        → UV sphere at 1 × `radius_km`
+  UpdateCometNucleusRadius {
+    scene_id: u64,
+    radius_km: f32,
+  },
+
+  CleanupParticleSystem {
+    scene_id: u64,
+    entity_id: u64,
+    done_flag: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
+  },
+
+  RemoveParticleSystem {
+    scene_id: u64,
+    entity_id: u64,
+    done_flag: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
+  },
+
+  /// Serialize the current scene ECS + GPU particle state to disk.
+  /// Writes to `<base_dir>/scene_<scene_id>/scene.bin`.
+  /// Result is reported via `ExternalState::SceneDumped`.
+  DumpScene {
+    scene_id: u64,
+    base_dir: alloc::string::String,
+  },
+
+  /// Restore a scene from a decoded `SceneDump`.
+  /// The FFI layer reads the file and decodes it before sending here.
+  /// Result is reported via `ExternalState::SceneRestored`.
+  RestoreSceneDump {
+    scene_id: u64,
+    dump: alloc::boxed::Box<SceneDump>,
   },
 }
 
@@ -1204,6 +1244,10 @@ pub struct SceneContext {
   /// means that when this is `false`, it means that either we compute queue is idle or is still in
   /// flight on previous dispatch, therefore `latest_physics_sync` should also be checked
   pub active_physics_task: core::sync::atomic::AtomicBool,
+
+  /// Atomic variable to let the logic thread start or stop the simulation
+  pub simulation_running: core::sync::atomic::AtomicBool,
+
   /// necessary synchronization primitives for "Self Synchronization" (compute N -> compute N + 1).
   /// This means that it packs timeline handle and value (Note: we are assuming vulkan only for now)
   /// We are also packing last semaphore query time and accumulated backoff time.
@@ -1306,6 +1350,7 @@ impl SceneContext {
       sky_entity: None,
       outlines_enabled: Arc::new(AtomicBool::new(false)),
       active_physics_task: core::sync::atomic::AtomicBool::new(false),
+      simulation_running: core::sync::atomic::AtomicBool::new(false),
       latest_physics_sync: None,
       physics_engine_type: Arc::new(RwLock::new(PhysicsEngineType::VulkanCompute)),
       time_state,
@@ -1512,7 +1557,7 @@ impl TaskStatusCode {
 
 /// Struct to hold the binary dump of the GPU buffers for particle system. Can't differentiate
 /// between scenes
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ParticleSystemSnapshot {
   pub global_buffer: alloc::vec::Vec<u8>,
   pub free_list: alloc::vec::Vec<u8>,
@@ -1523,4 +1568,137 @@ impl core::fmt::Debug for ParticleSystemSnapshot {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     core::fmt::write(f, format_args!("ParticleSystemSnapshot {{ ... }}"))
   }
+}
+
+// ─── Scene Serialization Types ───────────────────────────────────────────────
+
+/// Top-level file written to `<base_dir>/scene_<scene_id>/scene.bin`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SceneDump {
+  /// Version discriminant. Bump on breaking format changes.
+  pub version: u32,
+  pub scene_id: u64,
+  /// Start of the simulated epoch range (centuries, nanoseconds since J2000)
+  pub start_epoch_parts: (i16, u64),
+  /// End of the simulated epoch range (centuries, nanoseconds since J2000)
+  pub end_epoch_parts: (i16, u64),
+  /// ECS entity list (all CPU-side data only)
+  pub entities: alloc::vec::Vec<SerializedEntity>,
+  /// Raw GPU particle buffer bytes. `None` if no particle systems existed.
+  pub particle_snapshot: Option<ParticleSystemSnapshot>,
+}
+
+impl SceneDump {
+  pub const CURRENT_VERSION: u32 = 1;
+}
+
+/// Serialized representation of a single scene entity.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SerializedEntity {
+  pub ffi_id: u64,
+  pub name: alloc::string::String,
+  pub parent_ffi_id: Option<u64>,
+  pub components: alloc::vec::Vec<SerializedComponent>,
+}
+
+/// All component types that can be serialized.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum SerializedComponent {
+  HighResTransform(SerializedHighResTransform),
+  Transform(SerializedTransform),
+  Camera(SerializedCamera),
+  StaticMesh(SerializedStaticMesh),
+  ParticleSystemConfig(SerializedParticleSystemConfig),
+  // Marker / flag components (no payload)
+  SunMarker,
+  SkyMarker,
+  GridMarker,
+  CometMarker,
+  AlmanacPlanet(SerializedAlmanacPlanet),
+}
+
+/// Serialized `HighResTransformComponent`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SerializedHighResTransform {
+  pub position: [f64; 3],
+  pub rotation: [f32; 4],
+  pub scale: [f32; 3],
+}
+
+/// Serialized `TransformComponent`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SerializedTransform {
+  pub position: [f32; 3],
+  pub rotation: [f32; 4],
+  pub scale: [f32; 3],
+}
+
+/// Serialized `CameraComponent`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SerializedCamera {
+  pub fov_y_rad: f32,
+  pub near: f32,
+  pub far: f32,
+  pub is_perspective: bool,
+}
+
+/// Serialized `StaticMeshComponent`.
+///
+/// Two cases:
+/// - `asset_path` non-empty → asset-backed; no inline geometry needed.
+/// - `asset_path` empty     → procedural; inline `vertices`/`indices` are present.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SerializedStaticMesh {
+  pub asset_path: alloc::string::String,
+  /// Populated only when `asset_path` is empty (procedural meshes).
+  pub vertices: Option<alloc::vec::Vec<SerializedVertex>>,
+  pub indices: Option<alloc::vec::Vec<u32>>,
+  /// Inline texture bytes for each PBR map (RGBA, `width * height * 4` bytes).
+  pub albedo_map: Option<SerializedTexture>,
+  pub normal_map: Option<SerializedTexture>,
+  pub roughness_map: Option<SerializedTexture>,
+  pub ao_map: Option<SerializedTexture>,
+  pub emissive_color: [f32; 4],
+  pub is_visible: bool,
+}
+
+/// Vertex as stored in the serialized file.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Copy)]
+pub struct SerializedVertex {
+  pub position: [f32; 3],
+  pub normal: [f32; 3],
+  pub uv: [f32; 2],
+  pub tangent: [f32; 4],
+}
+
+/// Inline texture for serialization.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SerializedTexture {
+  pub width: u32,
+  pub height: u32,
+  /// Texel format required for correct GPU upload (UNORM, compressed, etc.).
+  pub format: crate::simulation::comet::TexelFormat,
+  /// Whether pre-generated mip levels are included in `data`.
+  pub has_mipmaps: bool,
+  /// Raw texel bytes. Length depends on `format` and mip chain.
+  pub data: alloc::vec::Vec<u8>,
+}
+
+/// Config-only snapshot of a `ParticleSystemComponent`.
+/// GPU particle state is stored separately in `SceneDump::particle_snapshot`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SerializedParticleSystemConfig {
+  pub entity_ffi_id: u64,
+  pub emission_params: crate::scene::particles::v2::ParticleSystemEmitParams,
+  pub stream_color: [f32; 4],
+  pub ttl_us: i64,
+  pub last_emission: i64,
+  pub last_compaction: i64,
+}
+
+/// Serialized `AlmanacPlanet` component.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SerializedAlmanacPlanet {
+  pub naif_id: i32,
+  pub mass_kg: f32,
 }

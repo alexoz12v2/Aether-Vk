@@ -96,6 +96,7 @@ pub struct CursorDrawCall {
   /// Near/far planes for the cursor's depth layer (km for micro, AU for macro)
   pub layer_near: f32,
   pub layer_far: f32,
+  pub layer_frame_scale: f32,
   pub relative_cam_pos: [f32; 3],
 }
 
@@ -107,6 +108,7 @@ impl CursorDrawCall {
     cursor_size: f32,
     layer_near: f32,
     layer_far: f32,
+    layer_frame_scale: f32,
     relative_cam_pos: [f32; 3],
   ) -> Self {
     Self {
@@ -116,6 +118,7 @@ impl CursorDrawCall {
       cursor_size,
       layer_near,
       layer_far,
+      layer_frame_scale,
       relative_cam_pos,
     }
   }
@@ -635,23 +638,32 @@ impl CameraRenderData {
         bottom,
         top,
         ..
-      } => (
-        Mat4x4f32::orthographic_vk_reverse_z(left, right, bottom, top, near, far),
-        aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::orthographic_vk_reverse_z(
-          left as f64,
-          right as f64,
-          bottom as f64,
-          top as f64,
-          near as f64,
-          far as f64,
-        ),
-        CameraProjectionParams::Orthographic {
-          left,
-          right,
-          bottom,
-          top,
-        },
-      ),
+      } => {
+        let l = left * frame_scale;
+        let r = right * frame_scale;
+        let b = bottom * frame_scale;
+        let t = top * frame_scale;
+        (
+          Mat4x4f32::orthographic_vk_reverse_z(l, r, b, t, near, far),
+          aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::orthographic_vk_reverse_z(
+            l as f64,
+            r as f64,
+            b as f64,
+            t as f64,
+            near as f64,
+            far as f64,
+          ),
+          // Store raw AU values. `rebuild_for_layer` divides by `layer_frame_scale` to
+          // get km. Storing AU-pre-scaled values (left*frame_scale) caused double-scaling
+          // when frame_scale != layer_frame_scale → ortho bounds ≈ 4e-8 km instead of 6 km.
+          CameraProjectionParams::Orthographic {
+            left,
+            right,
+            bottom,
+            top,
+          },
+        )
+      }
     };
     let view_proj = proj * view;
 
@@ -676,33 +688,38 @@ impl CameraRenderData {
 
   /// Rebuilds the projection matrix (and resulting view-projection matrix) for the specified
   /// near/far planes. The view matrix (rotation-only in RTE) is shared across all layers.
-  pub fn rebuild_for_layer(&self, layer_near: f32, layer_far: f32) -> Self {
+  pub fn rebuild_for_layer(&self, layer_near: f64, layer_far: f64, layer_frame_scale: f32) -> Self {
     let (proj, proj_f64) = match self.projection_params {
-      CameraProjectionParams::Perspective { fov, aspect_ratio } => (
-        Mat4x4f32::perspective_vk_reverse_z(fov, aspect_ratio, layer_near, layer_far),
-        aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::perspective_vk_reverse_z(
+      CameraProjectionParams::Perspective { fov, aspect_ratio } => {
+        let proj_f64 = aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::perspective_vk_reverse_z(
           fov as f64,
           aspect_ratio as f64,
-          layer_near as f64,
-          layer_far as f64,
-        ),
-      ),
+          layer_near,
+          layer_far,
+        );
+        (proj_f64.to_mat4_f32(), proj_f64)
+      },
       CameraProjectionParams::Orthographic {
         left,
         right,
         bottom,
         top,
-      } => (
-        Mat4x4f32::orthographic_vk_reverse_z(left, right, bottom, top, layer_near, layer_far),
-        aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::orthographic_vk_reverse_z(
-          left as f64,
-          right as f64,
-          bottom as f64,
-          top as f64,
-          layer_near as f64,
-          layer_far as f64,
-        ),
-      ),
+      } => {
+        let inv = if layer_frame_scale.abs() > f32::MIN_POSITIVE {
+          1.0 / layer_frame_scale as f64
+        } else {
+          1.0
+        };
+        let l = left as f64 * inv;
+        let r = right as f64 * inv;
+        let b = bottom as f64 * inv;
+        let t = top as f64 * inv;
+        
+        let proj_f64 = aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::orthographic_vk_reverse_z(
+            l, r, b, t, layer_near, layer_far
+        );
+        (proj_f64.to_mat4_f32(), proj_f64)
+      }
     };
     let view_proj = proj * self.view;
     Self {
@@ -716,8 +733,8 @@ impl CameraRenderData {
       view_proj,
       up: self.up,
       right: self.right,
-      near: layer_near,
-      far: layer_far,
+      near: layer_near as f32,
+      far: layer_far as f32,
       projection_params: self.projection_params,
       window_extent: self.window_extent,
     }
@@ -762,8 +779,8 @@ pub struct RenderLayer {
   /// in frame-local units (e.g. km for micro). Used by the grid shader
   /// so that absolutePosXY is numerically precise instead of mixing AU + km.
   pub camera_frame_local_pos: Vec3f32,
-  pub near: f32,
-  pub far: f32,
+  pub near: f64,
+  pub far: f64,
   pub draw_calls: Vec<DrawCall>,
   pub billboard_calls: Vec<BillboardDrawCall>,
   pub marker_calls: Vec<MarkerDrawCall>,
@@ -1150,6 +1167,7 @@ pub fn do_draw_grid(
 pub fn do_draw_sphere_gizmo_batch(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
+  sun_pos: Vec3f32,
   cmd_buffer: super::CommandBufferHandle,
   _handle: PresentationEngineHandle,
   draw_call: &SphereGizmoBatchCall,
@@ -1158,6 +1176,7 @@ pub fn do_draw_sphere_gizmo_batch(
   let push_constants = crate::gpu::SphereGizmoPushConstants {
     view_proj: camera.view_proj.into(),
     gizmo_ptr: draw_call.data_ptr,
+    sun_pos: [sun_pos.x(), sun_pos.y(), sun_pos.z()],
     _pad: 0,
   };
   device.push_sphere_gizmo_constants(cmd_buffer, &push_constants)?;
@@ -1355,7 +1374,24 @@ pub fn render_frame(
   }
   device.debug_label_end(cmd_buffer);
 
-  // Transition to subpass 2 (composite + UI)
+  // ── [DEBUG] Emit camera view + proj matrices for the matrix debug panel ──────
+  // Fires after the Micro layer (which renders the comet) so the matrices reflect
+  // the actual Micro-layer projection. rebuild_for_layer is pure CPU math — no GPU ops.
+  #[cfg(debug_assertions)]
+  if let Some(micro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 1) {
+    use crate::simulation_api::external_state::{CCameraMatrices, ExternalState};
+    let micro_cam = render_scene.camera_data.rebuild_for_layer(
+      micro_layer.near,
+      micro_layer.far,
+      micro_layer.frame_scale,
+    );
+    let view: [f32; 16] = micro_cam.view.into();
+    let proj: [f32; 16] = micro_cam.proj.into();
+    crate::simulation_api::emit_external_state_change(&ExternalState::CameraMatrices(
+      CCameraMatrices { view, proj },
+    ));
+  }
+
   device.next_subpass(cmd_buffer)?;
   device.set_viewport(
     cmd_buffer,
@@ -1373,10 +1409,10 @@ pub fn render_frame(
   let macro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 0);
   let micro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 1);
   let constants = gpu::CompositePushConstants {
-    macro_near: macro_layer.map(|l| l.near).unwrap_or(0.1),
-    macro_far: macro_layer.map(|l| l.far).unwrap_or(1000.0),
-    micro_near: micro_layer.map(|l| l.near).unwrap_or(0.001),
-    micro_far: micro_layer.map(|l| l.far).unwrap_or(10.0),
+    macro_near: macro_layer.map(|l| l.near as f32).unwrap_or(0.1),
+    macro_far: macro_layer.map(|l| l.far as f32).unwrap_or(1000.0),
+    micro_near: micro_layer.map(|l| l.near as f32).unwrap_or(0.001),
+    micro_far: micro_layer.map(|l| l.far as f32).unwrap_or(10.0),
     macro_scale: macro_layer.map(|l| l.frame_scale).unwrap_or(1.0),
     micro_scale: micro_layer.map(|l| l.frame_scale).unwrap_or(1.0),
   };
@@ -1388,7 +1424,7 @@ pub fn render_frame(
     // matches the cursor's coordinate space (km for micro, AU for macro).
     let cursor_camera = render_scene
       .camera_data
-      .rebuild_for_layer(cursor_call.layer_near, cursor_call.layer_far);
+      .rebuild_for_layer(cursor_call.layer_near as f64, cursor_call.layer_far as f64, cursor_call.layer_frame_scale);
     do_draw_cursor(
       device,
       &cursor_camera,
@@ -1468,7 +1504,7 @@ fn draw_layer_content(
 
   // Rebuild projection matrix for this layer's near/far planes.
   // The view matrix (rotation-only in RTE) is shared across all layers.
-  let layer_camera = render_scene.camera_data.rebuild_for_layer(layer.near, layer.far);
+  let layer_camera = render_scene.camera_data.rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
 
   if let Some(draw_call) = &layer.background_call {
     device.debug_label_insert(cmd_buffer, c"Background", [0.15, 0.15, 0.15, 1.0]);
@@ -1528,7 +1564,7 @@ fn draw_layer_content(
 
   if let Some(batch_call) = &layer.sphere_gizmo_batch_call {
     device.debug_label_insert(cmd_buffer, c"Sphere Gizmos", [1.0, 0.8, 0.0, 1.0]);
-    do_draw_sphere_gizmo_batch(device, &layer_camera, cmd_buffer, handle, batch_call)?;
+    do_draw_sphere_gizmo_batch(device, &layer_camera, sun_pos, cmd_buffer, handle, batch_call)?;
   }
 
   if !layer.measurement_calls.is_empty() {
@@ -1581,4 +1617,67 @@ fn draw_layer_content(
   }
 
   Ok(())
+}
+#[cfg(test)]
+mod camera_render_data_tests {
+  use super::*;
+  use crate::scene::{CameraComponent, CameraProjection, TransformComponent};
+
+  #[test]
+  fn test_ortho_bounds_survive_micro_scale_rebuild() {
+    let micro_frame_scale = 6.684587e-9_f32;
+    // Arrange: 12km wide viewing window (left -6, right +6) in km.
+    // In v8 architecture, CameraComponent projection is ALWAYS stored in AU.
+    let left_au = -6.0 * micro_frame_scale;
+    let right_au = 6.0 * micro_frame_scale;
+    let bottom_au = -6.0 * micro_frame_scale;
+    let top_au = 6.0 * micro_frame_scale;
+
+    let transform = TransformComponent::default();
+    
+    let camera = CameraComponent {
+      projection: CameraProjection::Orthographic {
+        left: left_au,
+        right: right_au,
+        bottom: bottom_au,
+        top: top_au,
+        near: 0.1,
+        far: 1000.0,
+      },
+      focus_distance: 10.0,
+    };
+
+    // Act 1: Build the camera data at the micro layer scale (AU per km)
+    let micro_frame_scale = 6.684587e-9_f32;
+    let camera_data = CameraRenderData::new(&transform, &camera, micro_frame_scale, [800, 800]);
+
+    // Assert 1: Ensure the stored projection params retain the unscaled bounds (v8 fix)
+    if let CameraProjectionParams::Orthographic { left, right, .. } = camera_data.projection_params {
+      assert_eq!(left, left_au, "Left bound should be unscaled AU");
+      assert_eq!(right, right_au, "Right bound should be unscaled AU");
+    } else {
+      panic!("Expected Orthographic projection params");
+    }
+
+    // Act 2: Rebuild for the layer (This is where the f32::EPSILON bug used to crash the bounds!)
+    let rebuilt_data = camera_data.rebuild_for_layer(0.001, 10.0, micro_frame_scale);
+
+    // Extract the reconstructed Orthographic matrix
+    let proj_matrix: [f32; 16] = rebuilt_data.proj.into();
+    
+    // In Vulkan Ortho, the M00 (index 0) component is 2.0 / (right - left)
+    // If left = -6 and right = 6, M00 should be 2.0 / 12.0 = 0.1666666
+    let m00 = proj_matrix[0];
+    
+    // Assert 2: Verify the matrix successfully restored the 12km bounds
+    let expected_m00 = 2.0 / 12.0;
+    let diff = (m00 - expected_m00).abs();
+    
+    assert!(
+      diff < 1e-5,
+      "Ortho bounds collapsed! Expected M00 approx {}, got {} (f32::EPSILON bug?)",
+      expected_m00,
+      m00
+    );
+  }
 }
