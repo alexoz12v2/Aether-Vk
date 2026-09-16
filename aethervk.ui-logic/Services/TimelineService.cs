@@ -36,7 +36,10 @@ public sealed class TimelineService : IDisposable
   // Null until first successful timeline commit from the runtime
   private readonly BehaviorSubject<TimeRange?> _timeRangeSubject = new(null);
   private readonly BehaviorSubject<TimeRange?> _proposedTimeRangeSubject = new(null);
+  private readonly BehaviorSubject<bool> _isSimulationRunningSubject = new(false);
+  private readonly Subject<System.Reactive.Unit> _snapshotRestoreSubject = new();
   private readonly IDisposable _listenerToken;
+
 
   public TimelineService(
       INativeRuntimeService runtimeService, 
@@ -80,6 +83,14 @@ public sealed class TimelineService : IDisposable
       .DistinctUntilChanged()
       .ObserveOn(_schedulerProvider.MainThread);
 
+  public IObservable<bool> IsSimulationRunning =>
+    _isSimulationRunningSubject.ObserveOn(_schedulerProvider.MainThread);
+
+  public bool IsSimulationRunningValue => _isSimulationRunningSubject.Value;
+
+  public IObservable<System.Reactive.Unit> OnSnapshotRestore =>
+    _snapshotRestoreSubject.ObserveOn(_schedulerProvider.MainThread);
+
   // ── Commands ───────────────────────────────────────────────────────────────
 
   /// <summary>
@@ -116,9 +127,38 @@ public sealed class TimelineService : IDisposable
     _proposedTimeRangeSubject.OnNext(range);
   }
 
-  public bool Play(int speed) => _runtimeService.StartSimulation(speed);
-  public bool Pause() => _runtimeService.PauseSimulationSync();
-  public bool Reset() => _runtimeService.ResetSimulationSync();
+  public bool Play(int speed)
+  {
+      _runtimeService.SnapshotSceneSync();
+      bool ok = _runtimeService.StartSimulation(speed);
+      if (ok) _isSimulationRunningSubject.OnNext(true);
+      return ok;
+  }
+
+  public bool Pause()
+  {
+      bool ok = _runtimeService.PauseSimulationSync();
+      if (ok) _isSimulationRunningSubject.OnNext(false);
+      return ok;
+  }
+
+  public bool Reset()
+  {
+      bool ok = _runtimeService.ResetSimulationSync();
+      if (ok) _isSimulationRunningSubject.OnNext(false);
+      return ok;
+  }
+
+  public bool SnapshotRestore()
+  {
+      bool ok = _runtimeService.RestoreSnapshotSync();
+      if (ok) 
+      {
+          _isSimulationRunningSubject.OnNext(false);
+          _snapshotRestoreSubject.OnNext(System.Reactive.Unit.Default);
+      }
+      return ok;
+  }
 
   // ── Internal callback handling ─────────────────────────────────────────────
 
@@ -139,5 +179,7 @@ public sealed class TimelineService : IDisposable
     _listenerToken.Dispose();
     _timeRangeSubject.Dispose();
     _proposedTimeRangeSubject.Dispose();
+    _isSimulationRunningSubject.Dispose();
+    _snapshotRestoreSubject.Dispose();
   }
 }

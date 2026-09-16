@@ -106,6 +106,58 @@ impl SimulationContext {
     true
   }
 
+  pub fn reset_simulation_sync(&self, scene_id: u64) -> bool {
+    if !self.pause_simulation_sync(scene_id) {
+      return false;
+    }
+    let done_flag = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
+    let res = self.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::ResetSimulation {
+      scene_id,
+      done_flag: done_flag.clone(),
+    });
+    if res.is_err() { return false; }
+    use aethervk_oshal_rlib::os::time::get_monotonic_time;
+    let start = get_monotonic_time();
+    while get_monotonic_time() - start < 2_000_000_i64 {
+      if done_flag.load(core::sync::atomic::Ordering::Acquire) { return true; }
+      core::hint::spin_loop();
+    }
+    false
+  }
+
+  pub fn snapshot_scene_sync(&self, scene_id: u64) -> bool {
+    let done_flag = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
+    let res = self.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::SnapshotScene {
+      scene_id,
+      done_flag: done_flag.clone(),
+    });
+    if res.is_err() { return false; }
+    use aethervk_oshal_rlib::os::time::get_monotonic_time;
+    let start = get_monotonic_time();
+    while get_monotonic_time() - start < 2_000_000_i64 {
+      if done_flag.load(core::sync::atomic::Ordering::Acquire) { return true; }
+      core::hint::spin_loop();
+    }
+    false
+  }
+
+  pub fn restore_snapshot_sync(&self, scene_id: u64) -> bool {
+    self.pause_simulation_sync(scene_id);
+    let done_flag = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
+    let res = self.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::RestoreSnapshot {
+      scene_id,
+      done_flag: done_flag.clone(),
+    });
+    if res.is_err() { return false; }
+    use aethervk_oshal_rlib::os::time::get_monotonic_time;
+    let start = get_monotonic_time();
+    while get_monotonic_time() - start < 2_000_000_i64 {
+      if done_flag.load(core::sync::atomic::Ordering::Acquire) { return true; }
+      core::hint::spin_loop();
+    }
+    false
+  }
+
   pub fn pause_simulation_sync(&self, scene_id: u64) -> bool {
     let scene_clone = {
       let scenes = self.scenes.read();
@@ -126,6 +178,7 @@ impl SimulationContext {
       scenes.scenes.get(&scene_id).unwrap().clone()
     };
 
+    let mut spins = 0;
     // Spin wait without holding the outer DashMap or scenes lock
     loop {
       let (active_physics, pending_cross) = {
@@ -138,6 +191,11 @@ impl SimulationContext {
 
       if !active_physics && !pending_cross {
         break;
+      }
+      
+      spins += 1;
+      if spins > 2500 {
+         return false;
       }
       oshal::os::native::this_thread::sleep_for(core::time::Duration::from_micros(200));
     }

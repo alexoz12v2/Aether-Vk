@@ -23,42 +23,39 @@
             Padding="10,8">
       <Grid ColumnDefinitions="Auto,12,Auto">
 
-        <!-- VIEW column -->
+        <!-- POS column -->
         <StackPanel Grid.Column="0" Spacing="1">
-          <TextBlock Text="VIEW"
+          <TextBlock Text="POSITION (AU)"
                      FontWeight="Bold" FontSize="9"
                      Foreground="{DynamicResource Accent.Primary}"
                      Margin="0,0,0,3"/>
-          <TextBlock Text="{ReflectionBinding VRow0}"
+          <TextBlock Text="{ReflectionBinding PosX, StringFormat='X: {0:F6}'}"
                      FontFamily="Consolas,Monospace" FontSize="9"
                      Foreground="{DynamicResource Text.Primary}"/>
-          <TextBlock Text="{ReflectionBinding VRow1}"
+          <TextBlock Text="{ReflectionBinding PosY, StringFormat='Y: {0:F6}'}"
                      FontFamily="Consolas,Monospace" FontSize="9"
                      Foreground="{DynamicResource Text.Primary}"/>
-          <TextBlock Text="{ReflectionBinding VRow2}"
-                     FontFamily="Consolas,Monospace" FontSize="9"
-                     Foreground="{DynamicResource Text.Primary}"/>
-          <TextBlock Text="{ReflectionBinding VRow3}"
+          <TextBlock Text="{ReflectionBinding PosZ, StringFormat='Z: {0:F6}'}"
                      FontFamily="Consolas,Monospace" FontSize="9"
                      Foreground="{DynamicResource Text.Primary}"/>
         </StackPanel>
 
-        <!-- PROJ column -->
+        <!-- ROT column -->
         <StackPanel Grid.Column="2" Spacing="1">
-          <TextBlock Text="PROJ"
+          <TextBlock Text="ROTATION (Quat)"
                      FontWeight="Bold" FontSize="9"
                      Foreground="{DynamicResource Accent.Primary}"
                      Margin="0,0,0,3"/>
-          <TextBlock Text="{ReflectionBinding PRow0}"
+          <TextBlock Text="{ReflectionBinding RotX, StringFormat='X: {0:F4}'}"
                      FontFamily="Consolas,Monospace" FontSize="9"
                      Foreground="{DynamicResource Text.Primary}"/>
-          <TextBlock Text="{ReflectionBinding PRow1}"
+          <TextBlock Text="{ReflectionBinding RotY, StringFormat='Y: {0:F4}'}"
                      FontFamily="Consolas,Monospace" FontSize="9"
                      Foreground="{DynamicResource Text.Primary}"/>
-          <TextBlock Text="{ReflectionBinding PRow2}"
+          <TextBlock Text="{ReflectionBinding RotZ, StringFormat='Z: {0:F4}'}"
                      FontFamily="Consolas,Monospace" FontSize="9"
                      Foreground="{DynamicResource Text.Primary}"/>
-          <TextBlock Text="{ReflectionBinding PRow3}"
+          <TextBlock Text="{ReflectionBinding RotW, StringFormat='W: {0:F4}'}"
                      FontFamily="Consolas,Monospace" FontSize="9"
                      Foreground="{DynamicResource Text.Primary}"/>
         </StackPanel>

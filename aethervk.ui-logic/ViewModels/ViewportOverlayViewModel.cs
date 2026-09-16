@@ -237,7 +237,8 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     IFileDialogService fileDialogService,
     ITabStateService<TimelineSession> timelineSessionService,
     CometConfigService cometConfigService,
-    Viewport3DViewModel viewportVm
+    Viewport3DViewModel viewportVm,
+    ISchedulerProvider schedulerProvider
   )
   {
     _cameraService = cameraService;
@@ -251,7 +252,7 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
 #if DEBUG
     RenderDoc        = new RenderDocCaptureViewModel(runtimeService);
     DebugTelemetry   = new DebugTelemetryPanelViewModel(runtimeService);
-    CameraMatrixDebug = new CameraMatrixDebugViewModel(runtimeService);
+    CameraMatrixDebug = new CameraMatrixDebugViewModel(runtimeService, schedulerProvider);
 #endif
 
     _cameraService

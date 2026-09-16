@@ -61,6 +61,12 @@ public partial class ModelTabViewModel
   [ObservableProperty]
   private bool _enableLegacyExpanders;
 
+  [ObservableProperty]
+  private bool _isSimulationRunning;
+
+  private bool _snapshotExists;
+  private readonly TimelineService _timelineService;
+
   // ── Construction ─────────────────────────────────────────────────────────────────
 
   public ModelTabViewModel(
@@ -72,7 +78,8 @@ public partial class ModelTabViewModel
     INativeRuntimeService runtimeService,
     IUiThreadDispatcher dispatcher,
     ICometMessenger cometMessenger,
-    IPlatformWindowService platformWindowService)
+    IPlatformWindowService platformWindowService,
+    TimelineService timelineService)
     : base("Model", sessionService, cometMessenger)
   {
     _translationService = translationService;
@@ -82,8 +89,18 @@ public partial class ModelTabViewModel
     _runtimeService = runtimeService;
     _dispatcher = dispatcher;
     _platformWindowService = platformWindowService;
+    _timelineService = timelineService;
     Icon = "⬡"; // hexagon / 3D object — U+2B21
     SubscribeToStrings(schedulerProvider);
+
+    _timelineService.IsSimulationRunning
+      .ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(running =>
+      {
+          IsSimulationRunning = running;
+          if (running) _snapshotExists = true;
+      })
+      .AddDisposableTo(_disposables);
 
     // Track _modelChangeSub and _radiusChanges lifetime alongside all other subs.
     _disposables.Add(_modelChangeSub);
@@ -214,6 +231,13 @@ public partial class ModelTabViewModel
   protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
   {
     base.OnPropertyChanged(e);
+
+    if (e.PropertyName == nameof(ManualNucleusRadiusKm) && !_timelineService.IsSimulationRunningValue && _snapshotExists)
+    {
+        _timelineService.SnapshotRestore();
+        _snapshotExists = false;
+    }
+
     if (e.PropertyName == nameof(CurrentSession))
     {
       if (CurrentSession is null)
@@ -387,9 +411,23 @@ public partial class ModelTabViewModel
         h => jet.PropertyChanged += h,
         h => jet.PropertyChanged -= h)
       .Where(e =>
-        e.EventArgs.PropertyName != nameof(JetViewModel.Beta) &&
-        e.EventArgs.PropertyName != nameof(JetViewModel.DustProductionRateAt1AuKgs) &&
-        e.EventArgs.PropertyName != nameof(JetViewModel.IsPreviewVisible))
+      {
+        if (e.EventArgs.PropertyName != nameof(JetViewModel.Beta) &&
+            e.EventArgs.PropertyName != nameof(JetViewModel.DustProductionRateAt1AuKgs) &&
+            e.EventArgs.PropertyName != nameof(JetViewModel.IsPreviewVisible))
+        {
+            _dispatcher.Dispatch(() => 
+            {
+                if (!_timelineService.IsSimulationRunningValue && _snapshotExists)
+                {
+                    _timelineService.SnapshotRestore();
+                    _snapshotExists = false;
+                }
+            });
+            return true;
+        }
+        return false;
+      })
       .Throttle(TimeSpan.FromMilliseconds(250), _schedulerProvider.Background)
       .Subscribe(_ =>
       {

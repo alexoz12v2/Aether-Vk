@@ -67,6 +67,8 @@ public partial interface ICometTabViewModel
   /// </summary>
   bool HasTimelineChangedAfterCommit { get; }
 
+  bool IsSimulationRunning { get; }
+
   // ── Rotational model ──────────────────────────────────────────────────────
 
   double PoleRaDeg { get; set; }

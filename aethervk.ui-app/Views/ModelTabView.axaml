@@ -65,7 +65,7 @@
     <ScrollViewer Classes="left-scrollbar"
                   HorizontalScrollBarVisibility="Disabled"
                   VerticalScrollBarVisibility="Auto">
-    <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16">
+    <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16" IsEnabled="{Binding !IsSimulationRunning}">
 
       <!-- ══════════════════ SUN ══════════════════════════════════════════════ -->
       <Border Background="Transparent" IsHitTestVisible="{Binding !EnableLegacyExpanders}">

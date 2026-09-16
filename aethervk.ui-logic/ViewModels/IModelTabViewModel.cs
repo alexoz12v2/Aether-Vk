@@ -44,6 +44,8 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
   /// Bind to this to show a "Commit a comet first" hint in the view.
   /// </summary>
   bool IsCometCommitted { get; }
+  
+  bool IsSimulationRunning { get; }
 
   /// <summary>
   /// When true, enables the legacy Sun and Nucleus expanders for debugging purposes.

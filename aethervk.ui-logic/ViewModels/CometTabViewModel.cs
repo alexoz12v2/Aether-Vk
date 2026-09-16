@@ -179,12 +179,26 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     WireReactiveSubscriptions(schedulerProvider);
   }
 
+  [ObservableProperty]
+  private bool _isSimulationRunning;
+
+  private bool _snapshotExists;
+
   // ── Reactive wiring ───────────────────────────────────────────────────────
 
   private TimeRange? _currentProposedTimeRange;
 
   private void WireReactiveSubscriptions(ISchedulerProvider schedulerProvider)
   {
+    _timeline.IsSimulationRunning
+      .ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(running =>
+      {
+          IsSimulationRunning = running;
+          if (running) _snapshotExists = true;
+      })
+      .AddDisposableTo(_disposables);
+
     // 1. Proposed timeline display from TimelineService
     _timeline
       .ProposedTimeRange.ObserveOn(schedulerProvider.MainThread)
@@ -247,6 +261,15 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         or nameof(PoleRaRateDegCen)
         or nameof(PoleDecRateDegCen)
         or nameof(RotRateDegDay);
+
+    bool isStateChangingProp = isRotProp || e.PropertyName is nameof(SelectedComet) or nameof(SelectedSpkRecord);
+
+    if (isStateChangingProp && !_timeline.IsSimulationRunningValue && _snapshotExists)
+    {
+        _timeline.SnapshotRestore();
+        _snapshotExists = false;
+    }
+
 
     if (isRotProp && IsAlmanacCommitted)
     {
@@ -486,6 +509,14 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   {
     if (!IsAlmanacCommitted)
       return;
+
+    // Enforce pause invariant: Reset simulation before yanking the comet entity
+    if (_timeline.IsSimulationRunningValue || _snapshotExists)
+    {
+        _timeline.Reset(); 
+        _snapshotExists = false;
+    }
+
     _cometConfig.DecommitComet();
 
     var session = CurrentSession;
@@ -587,7 +618,6 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     {
       ulong cometId = _runtimeService.CometEntityId.Value;
       // Component IDs for Almanac Planet (26) and Rotational Body (24), and HighResTransform (1)
-      _runtimeService.DebugECSPrint(1, [cometId], 4, [26, 24, 1, ulong.MaxValue]);
     }
 #endif
   }
@@ -597,7 +627,6 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   {
 #if DEBUG
     // Component ID for Particle System (22)
-    _runtimeService.DebugECSPrint(1, [jetId], 1, [22]);
 #endif
   }
 }

@@ -16,12 +16,13 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Sp
 
 layout(push_constant, std430) uniform PushConstants {
     mat4 viewProj;             // 64 bytes @ offset  0
-    SphereGizmoArray gizmoPtr; //  8 bytes @ offset 64
-    vec3 sunPos;               // 12 bytes @ offset 72  (layer-local world position)
-    float _pad;                //  4 bytes @ offset 84  (total: 88)
+    vec3 sunPos;               // 12 bytes @ offset 64
+    float _pad;                //  4 bytes @ offset 76
+    SphereGizmoArray gizmoPtr; //  8 bytes @ offset 80  (total: 88)
 } push;
 
 layout(location = 0) out vec3 fragColor;
+layout(location = 1) out float outAlpha;
 
 const float PI = 3.14159265359;
 
@@ -70,7 +71,7 @@ void main() {
     int arrowheadVerticesPerAxis = arrowheadLines * 2;
     int totalArrowheadVertices = arrowheadVerticesPerAxis * 4; // 4 axes
 
-    int totalExpectedVertices = totalSphereVertices + totalAxesVertices + totalArrowheadVertices;
+    int totalExpectedVertices = axesOffset + totalAxesVertices + totalArrowheadVertices;
 
     vec3 localPos = vec3(0.0);
     vec3 color = vec3(1.0); // Default white for the sphere
@@ -193,19 +194,27 @@ void main() {
         vec4 localClip = push.viewProj * vec4(mat3(model) * localPos, 0.0);
         gl_Position = centerClip + localClip;
 
+        // Front-hemisphere discard signal.
+        // localClip was computed with w=0 (direction vector).
+        // Since the camera looks down the -Y axis, points in front have y_eye < 0.
+        // P_22 (c1.z) is positive in our projection, so localClip.z = y_eye * P_22 
+        // is negative for the front hemisphere.
+        outAlpha = isAxis ? 1.0 : (localClip.z < 0.0 ? 1.0 : 0.0);
+
         if (isAxis) {
-            // Z-Bias Depth Hack for axes (Reverse-Z pipeline: near=1.0, far=0.0,
-            // CompareOp::GREATER_OR_EQUAL). Adding to gl_Position.z before perspective
-            // divide increases the final NDC depth, pulling axes toward the near plane.
-            // This makes them pass the depth test against the comet surface (axes always
-            // visible), while still being occluded by massive objects in front of the
-            // comet (hardware depth test remains active).
-            // 1.5% of w gives enough clearance without visual artifacts on other objects.
-            gl_Position.z += 0.015 * gl_Position.w;
+            // Pull axes forward by the comet's radius in clip space + a tiny margin,
+            // so they are not occluded by the comet mesh itself (fixes occlusion from top-down/orthographic).
+            vec3 pRow2 = vec3(push.viewProj[0][2], push.viewProj[1][2], push.viewProj[2][2]);
+            float maxSphereZ = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * length(pRow2);
+            gl_Position.z += maxSphereZ + 0.001 * gl_Position.w;
+        } else {
+            // Tiny bias for the sphere wireframe to avoid Z-fighting with the solid mesh
+            gl_Position.z += 0.0001 * gl_Position.w;
         }
 
         fragColor = color;
     } else {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // cull degenerate vertices outside clip space
+        outAlpha = 0.0;
     }
 }
