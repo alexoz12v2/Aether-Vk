@@ -320,3 +320,38 @@ fn test_cleanup_and_remove_particle_system() {
   
   ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
 }
+
+#[test]
+fn test_pause_simulation_timeout_safety() {
+  let mut ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
+  let start = hifitime::Epoch::from_gregorian_utc(2025, 10, 15, 0, 0, 0, 0);
+  let end = start + hifitime::Duration::from_days(10.0);
+  let scene_ret = ctx.create_empty_scene2(false, start, end).expect("Failed to create scene");
+  let scene_id = scene_ret.scene_id;
+
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+  // Wait for the logic thread to shut down so it doesn't hit a panic when we mock active_physics_task
+  std::thread::sleep(std::time::Duration::from_millis(50));
+
+  {
+    let scene = ctx.get_scene(scene_id).unwrap();
+    let mut scene_write = scene.write();
+    scene_write.pending_cross_sync = true;
+    scene_write.active_physics_task.store(true, core::sync::atomic::Ordering::Relaxed);
+  }
+
+  let start_time = std::time::Instant::now();
+  let pause_ok = ctx.pause_simulation_sync(scene_id);
+  let elapsed = start_time.elapsed();
+
+  assert!(!pause_ok, "pause_simulation_sync should timeout and return false");
+  assert!(elapsed.as_millis() >= 500, "Should have waited for at least 500ms before timeout");
+
+  // Clean up
+  {
+    let scene = ctx.get_scene(scene_id).unwrap();
+    let mut scene_write = scene.write();
+    scene_write.pending_cross_sync = false;
+    scene_write.active_physics_task.store(false, core::sync::atomic::Ordering::Relaxed);
+  }
+}

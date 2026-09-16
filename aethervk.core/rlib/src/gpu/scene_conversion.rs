@@ -1244,7 +1244,11 @@ fn camera_yaw_deg(rot: &aethervk_oshal_rlib::math::vector::vec4::Quat) -> f32 {
 fn camera_pitch_deg(rot: &aethervk_oshal_rlib::math::vector::vec4::Quat) -> f32 {
   use aethervk_oshal_rlib::math::quaternion::Quaternion as _;
   let fwd = rot.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
-  fwd.z().asin().to_degrees()
+  // Clamp to [-1, 1] before asin: slerp/retarget cycles can accumulate tiny FP rounding
+  // errors that push fwd.z() fractionally outside the unit sphere. On Linux glibc raises
+  // SIGFPE for out-of-domain asinf; clamping is the mathematically correct fix since
+  // fwd is by definition a unit vector with z ∈ [-1, 1].
+  fwd.z().clamp(-1.0, 1.0).asin().to_degrees()
 }
 
 fn safe_div(a: f32, b: f32) -> f32 {

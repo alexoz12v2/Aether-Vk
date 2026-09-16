@@ -21,6 +21,14 @@ public class JetAndTimelineTests
     
     Assert.False(timelineVm.IsPlaying);
     
+    timelineVm.SelectedSpeed = TimelineTabViewModel.SimulationSpeed.OneHourPerSec;
+    // ensure session has committed state
+    if (timelineVm.CurrentSession != null)
+    {
+        timelineVm.CurrentSession.CommittedStartEpoch = "2020-01-01T00:00:00Z";
+        timelineVm.CurrentSession.CommittedEndEpoch = "2020-02-01T00:00:00Z";
+    }
+    
     timelineVm.PlayPauseCommand.Execute(null);
     Assert.True(timelineVm.IsPlaying);
     

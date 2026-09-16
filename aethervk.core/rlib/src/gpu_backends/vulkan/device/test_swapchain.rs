@@ -62,7 +62,8 @@ mod tests {
     let phys_device = eligible.into_iter().next().unwrap();
 
     let mut required_features = crate::gpu_backends::vulkan::utils::RequiredFeatures::new();
-    required_features.populate();
+    let supported = vk::PhysicalDeviceFeatures::default();
+    required_features.populate(&supported);
     let mut features2 = required_features.as_features2();
     let priorities = [1.0];
     let queue_info = vk::DeviceQueueCreateInfo::default()

@@ -766,6 +766,7 @@ pub enum LogicCommand {
   },
   SnapshotScene {
     scene_id: u64,
+    done_flag: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
   },
 
   ImportModel {
@@ -791,6 +792,11 @@ pub enum LogicCommand {
   },
   RestoreSnapshot {
     scene_id: u64,
+    done_flag: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
+  },
+  ResetSimulation {
+    scene_id: u64,
+    done_flag: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
   },
   /// Set the visibility (hidden/visible) of an entity and all its descendants.
   /// Dispatched asynchronously to the logic thread to avoid spin-wait deadlocks.
@@ -1276,6 +1282,7 @@ pub struct SceneContext {
 
   pub scene_snapshot: Option<alloc::boxed::Box<crate::scene::Scene>>,
   pub particle_snapshot: Option<ParticleSystemSnapshot>,
+  pub time_snapshot: Option<alloc::boxed::Box<oshal::os::time::v2::TimeState>>,
 
   /// Earth entity hierarchy (subtree, body, orbit). Populated in create_empty_scene2.
   /// None until the scene is created.
@@ -1363,6 +1370,7 @@ impl SceneContext {
       pending_cross_sync: false,
       entities_update_tasklet: None,
       particle_snapshot: None,
+      time_snapshot: None,
       earth: None,
       comet: None,
       earth_orbit_year: None,

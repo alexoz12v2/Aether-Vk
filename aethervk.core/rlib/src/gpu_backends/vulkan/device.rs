@@ -2919,7 +2919,10 @@ impl Device {
 
     // 1. enable required
     let mut required_features = utils::RequiredFeatures::new();
-    required_features.populate();
+    let supported_features = unsafe {
+      instance.instance.get_physical_device_features(physical_device)
+    };
+    required_features.populate(&supported_features);
 
     if chosen_physical_device_query_result
       .optional_extensions

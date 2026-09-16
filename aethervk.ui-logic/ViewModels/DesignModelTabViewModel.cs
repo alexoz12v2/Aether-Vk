@@ -52,6 +52,7 @@ public partial class DesignModelTabViewModel
   public bool IsNucleusRadiusUnknown => ManualNucleusRadiusKm == 0f;
   public bool IsCometCommitted { get; } = false;
   public bool EnableLegacyExpanders { get; set; } = false;
+  public bool IsSimulationRunning { get; } = false;
   
   public AetherVk.Logic.Services.ModelSession? CurrentSession { get; } = new AetherVk.Logic.Services.ModelSession();
 

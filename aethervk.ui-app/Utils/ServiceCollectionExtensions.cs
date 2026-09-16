@@ -114,6 +114,7 @@ public static class ServiceCollectionExtensions
       var fileDialog = sp.GetRequiredService<IFileDialogService>();
       var timelineSessionService = sp.GetRequiredService<ITabStateService<TimelineSession>>();
       var cometConfigService = sp.GetRequiredService<CometConfigService>();
+      var schedulerProvider = sp.GetRequiredService<ISchedulerProvider>();
       return vm => new ViewportOverlayViewModel(
         cameraService,
         runtimeService,
@@ -122,7 +123,8 @@ public static class ServiceCollectionExtensions
         fileDialog,
         timelineSessionService,
         cometConfigService,
-        vm
+        vm,
+        schedulerProvider
       );
     });
   }

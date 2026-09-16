@@ -89,6 +89,14 @@ public class ModelTabViewModelTests
 
       var cometMessenger = new Mock<ICometMessenger>();
 
+      var breadcrumbService = new BreadcrumbService(dispatcher.Object);
+      var timelineService = new TimelineService(
+        Runtime.Object,
+        schedulers.Object,
+        cometConfig,
+        breadcrumbService
+      );
+
       Vm = new ModelTabViewModel(
         translationService.Object,
         schedulers.Object,
@@ -98,7 +106,8 @@ public class ModelTabViewModelTests
         Runtime.Object,
         dispatcher.Object,
         cometMessenger.Object,
-        new Mock<IPlatformWindowService>().Object
+        new Mock<IPlatformWindowService>().Object,
+        timelineService
       ); // Most tests need a committed comet — simulate commitment via the observable property.
       if (cometCommitted)
         Vm.IsCometCommitted = true;
@@ -438,10 +447,9 @@ public class ModelTabViewModelTests
     s.Vm.RemoveJetCommand.Execute(jet);
 
     // PushModelToAllJets iterates session.Jets — now empty — so no ModifyParticleSystem calls
-    ParticleSystemComputedProperties computed = default;
     s.Runtime.Verify(r => r.ModifyParticleSystem(
         jetId, It.IsAny<ParticleSystemModel>(), It.IsAny<ParticleSystemJet>(),
-        out computed),
+        out It.Ref<ParticleSystemComputedProperties>.IsAny),
       Times.Never,
       "Removed jet must not receive ModifyParticleSystem calls");
   }

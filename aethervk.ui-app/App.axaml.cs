@@ -277,6 +277,26 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool PauseSimulationSync() => true;
 
   public bool StartSimulation(int simSpeed) => true;
+  
+  public bool SnapshotSceneSync() => true;
+  
+  public bool RestoreSnapshotSync() => true;
+
+  public bool DebugCameraState(
+    ulong cameraEntityId,
+    out double posX,
+    out double posY,
+    out double posZ,
+    out float rotX,
+    out float rotY,
+    out float rotZ,
+    out float rotW
+  )
+  {
+    posX = posY = posZ = 0.0;
+    rotX = rotY = rotZ = rotW = 0.0f;
+    return true;
+  }
 
   public bool AddCameraAnimation(ulong cameraId, AnimationTarget animation) => true;
 
@@ -419,7 +439,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   public bool StartScopedRenderDocCapture(ulong presentationEngineId) => false;
 
-  public void DebugECSPrint(uint entityCount, ulong[] entityIds, uint compCount, ulong[] comps) { }
+
 
   public bool GetDebugTelemetryStats(out DebugTelemetryStats stats)
   {
@@ -435,8 +455,6 @@ public class MockNativeRuntimeService : INativeRuntimeService
     return true;
   }
 
-  // CameraMatricesStream: never fires in the design-time/mock implementation.
-  public IObservable<(float[] View, float[] Proj)> CameraMatricesStream
-    => System.Reactive.Linq.Observable.Empty<(float[] View, float[] Proj)>();
+
 }
 #endif

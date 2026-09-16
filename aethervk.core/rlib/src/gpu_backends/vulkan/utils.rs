@@ -1041,7 +1041,7 @@ impl RequiredFeatures<'_> {
     f
   }
 
-  pub fn populate(&mut self) -> &mut Self {
+  pub fn populate(&mut self, supported: &vk::PhysicalDeviceFeatures) -> &mut Self {
     self.features.fill_mode_non_solid = vk::TRUE;
     self.features.shader_int64 = vk::TRUE;
     self.buffer_device_address.buffer_device_address = vk::TRUE;
@@ -1064,6 +1064,18 @@ impl RequiredFeatures<'_> {
     self.storage_8bit.storage_buffer8_bit_access = vk::TRUE;
 
     self.features.large_points = vk::TRUE;
+    
+    // Enable features required by GPU-AV so the validation layer doesn't try to force them 
+    // and potentially corrupt the pNext chain / device creation on NVIDIA drivers.
+    #[cfg(debug_assertions)]
+    {
+      if supported.fragment_stores_and_atomics == vk::TRUE
+        && supported.vertex_pipeline_stores_and_atomics == vk::TRUE
+      {
+        self.features.fragment_stores_and_atomics = vk::TRUE;
+        self.features.vertex_pipeline_stores_and_atomics = vk::TRUE;
+      }
+    }
 
     // [TEST ONLY] Enable robustBufferAccess when AETHERVK_ROBUST_ACCESS=1.
     // When enabled, OOB GPU reads return 0 and OOB writes are discarded instead of

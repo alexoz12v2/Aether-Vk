@@ -331,14 +331,14 @@ pub struct SphereGizmoDataGpu {
 pub struct SphereGizmoPushConstants {
   // Must match GLSL: layout(push_constant, std430) uniform PushConstants {
   //     mat4 viewProj;             // offset  0, 64 bytes
-  //     SphereGizmoArray gizmoPtr; // offset 64,  8 bytes
-  //     vec3 sunPos;               // offset 72, 12 bytes  (layer-local coords)
-  //     float _pad;                // offset 84,  4 bytes  (total: 88)
+  //     vec3 sunPos;               // offset 64, 12 bytes  (layer-local coords)
+  //     float _pad;                // offset 76,  4 bytes
+  //     SphereGizmoArray gizmoPtr; // offset 80,  8 bytes  (total: 88)
   // };
   pub view_proj: [f32; 16], // 64 bytes at offset 0
-  pub gizmo_ptr: u64,       //  8 bytes at offset 64
-  pub sun_pos: [f32; 3],    // 12 bytes at offset 72
-  pub _pad: u32,            //  4 bytes at offset 84  (total: 88, ≤ 128 byte limit)
+  pub sun_pos: [f32; 3],    // 12 bytes at offset 64
+  pub _pad: u32,            //  4 bytes at offset 76
+  pub gizmo_ptr: u64,       //  8 bytes at offset 80  (total: 88, ≤ 128 byte limit)
 }
 
 /// Push constants for the depth-compositing fullscreen pass.

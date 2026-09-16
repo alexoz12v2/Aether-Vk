@@ -482,112 +482,37 @@ pub unsafe extern "C" fn avkSimulationContext_modifyComponent(
 /// FFI Contract
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub unsafe extern "C" fn avkSimulationContext_debugECSPrint(
+pub unsafe extern "C" fn avkSimulationContext_debugCameraState(
   ctx: *mut SimulationContext,
   scene_id: u64,
-  entity_count: u32,
-  entity_ids: *const u64,
-  comp_count: u32,
-  comps: *const u64,
-) {
-  #[cfg(debug_assertions)]
-  {
-    if ctx.is_null()
-      || entity_count == 0
-      || comp_count == 0
-      || entity_ids.is_null()
-      || comps.is_null()
-    {
-      return;
-    }
-    let ctx_ref = unsafe { &*ctx };
-    let e_ids = unsafe { core::slice::from_raw_parts(entity_ids, entity_count as usize) };
-    let c_ids = unsafe { core::slice::from_raw_parts(comps, comp_count as usize) };
+  camera_entity: u64,
+  out_pos: *mut f64,
+  out_rot: *mut f32,
+) -> bool {
+  if ctx.is_null() || out_pos.is_null() || out_rot.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
 
-    if let Some(scene_arc) = ctx_ref.scenes.read().get_scene(scene_id) {
-      let scene_guard = scene_arc.read();
-      for &e_id in e_ids {
-        let entity = aethervk_core_rlib::scene::EntityId::from_ffi(e_id);
-        oshal::log!("--- Entity {} ---", e_id);
-        for &c_id in c_ids {
-          if c_id == 1 {
-            // HighResTransform (ComponentForeignId = 1) -> Print global f64 transform in km
-            if let Some(global_t) = scene_guard.scene.global_transform_f64(entity) {
-              const AU_TO_KM: f64 = 149_597_870.7_f64;
-              let pos_km = global_t.position * AU_TO_KM;
-              oshal::log!(
-                "Global Transform (km): pos=({:.2}, {:.2}, {:.2}), scale=({:.2e}, {:.2e}, {:.2e})",
-                pos_km.x(),
-                pos_km.y(),
-                pos_km.z(),
-                global_t.scale.x(),
-                global_t.scale.y(),
-                global_t.scale.z()
-              );
-            } else {
-              oshal::log!("Global Transform not available");
-            }
-            continue;
-          }
-          if c_id == 22 {
-            // ParticleSystem (ComponentForeignId = 22) is purely 1-way (C# -> Rust) and
-            // does not implement ForeignSerializable, so it is not in the foreign_registry.
-            if let Some(_) = scene_guard.scene.with_component::<aethervk_core_rlib::scene::particles::ParticleSystemComponent, _, _>(entity, |comp| {
-              oshal::log!("{:#?}", comp);
-            }) {
-              // Successfully printed
-            } else {
-              oshal::log!("ParticleSystemComponent not found on entity");
-            }
-            continue;
-          }
-          if c_id == u64::MAX {
-            fn print_entity_tree(
-              scene: &aethervk_core_rlib::scene::Scene,
-              entity: aethervk_core_rlib::scene::EntityId,
-              depth: usize,
-            ) {
-              let name = scene.get_name(entity).unwrap_or_else(|| "Unknown".into());
-              let mut comp_names = scene.get_entity_component_names(entity);
-              comp_names.sort();
-              let indent = "  ".repeat(depth);
-              oshal::log!(
-                "{}- Entity {} '{}' [{}]",
-                indent,
-                entity.as_ffi(),
-                name,
-                comp_names.join(", ")
-              );
-              if let Some(children) = scene.get_children(entity) {
-                for child in children {
-                  print_entity_tree(scene, child, depth + 1);
-                }
-              }
-            }
-            let root_to_print = scene_guard.scene.get_parent(entity).unwrap_or(entity);
-            oshal::log!("--- Subtree for {} ---", e_id);
-            print_entity_tree(&scene_guard.scene, root_to_print, 0);
+  if let Some(scene_arc) = ctx_ref.scenes.read().get_scene(scene_id) {
+    let scene_guard = scene_arc.read();
+    let entity = aethervk_core_rlib::scene::EntityId::from_ffi(camera_entity);
+    if let Some(global_t) = scene_guard.scene.global_transform_f64(entity) {
+      let pos_slice = unsafe { core::slice::from_raw_parts_mut(out_pos, 3) };
+      pos_slice[0] = global_t.position.x();
+      pos_slice[1] = global_t.position.y();
+      pos_slice[2] = global_t.position.z();
 
-            let name = scene_guard.scene.get_name(root_to_print).unwrap_or_default();
-            if let Some(prefix) = name.strip_suffix("_subtree") {
-              let orbit_name = alloc::format!("{}_orbit", prefix);
-              if let Some(orbit_entity) = scene_guard.scene.get_entity_by_name(&orbit_name) {
-                print_entity_tree(&scene_guard.scene, orbit_entity, 0);
-              }
-            }
-            continue;
-          }
-          if let Some(_) = scene_guard.scene.with_component_mut_by_id(entity, c_id, |erased| {
-            erased.debug_print();
-          }) {
-            // Successfully printed
-          } else {
-            oshal::log!("Component {} not found", c_id);
-          }
-        }
-      }
+      let rot_slice = unsafe { core::slice::from_raw_parts_mut(out_rot, 4) };
+      rot_slice[0] = global_t.rotation.0.x();
+      rot_slice[1] = global_t.rotation.0.y();
+      rot_slice[2] = global_t.rotation.0.z();
+      rot_slice[3] = global_t.rotation.0.w();
+
+      return true;
     }
   }
+  false
 }
 
 /// Layout (64 bytes, 8-byte aligned):
@@ -1048,18 +973,33 @@ pub unsafe extern "C" fn avkSimulationContext_resetSimulationSync(
   ctx: *mut SimulationContext,
   scene_id: u64,
 ) -> bool {
-  // null check
   if ctx.is_null() {
     return false;
   }
-  // execution
-  //   Notes for rlib implementation: (first 3 steps are in common with pauseSimulationSync)
-  //   - check if scene exists and that SimSpeed for its time manager is not Paused
-  //   - sets the simspeed to paused
-  //   - explicitly waits for the next self sync and cross sync
-  //   - reset current epoch to start epoch, discard accumulator in time state
-  //   - restore snapshot command and wait for its conclusion (spin wait atomic flag)
-  return false;
+  let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
+  ctx_ref.reset_simulation_sync(scene_id)
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_snapshotSceneSync(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+) -> bool {
+  if ctx.is_null() { return false; }
+  let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
+  ctx_ref.snapshot_scene_sync(scene_id)
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_restoreSnapshotSync(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+) -> bool {
+  if ctx.is_null() { return false; }
+  let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
+  ctx_ref.restore_snapshot_sync(scene_id)
 }
 
 /// # Safety

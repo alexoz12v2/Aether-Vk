@@ -100,6 +100,8 @@ public interface INativeRuntimeService : IDisposable
 
 
   bool ResetSimulationSync();
+  bool SnapshotSceneSync();
+  bool RestoreSnapshotSync();
   bool PauseSimulationSync();
   bool StartSimulation(int simSpeed);
 
@@ -110,9 +112,7 @@ public interface INativeRuntimeService : IDisposable
   // TODO: Swap this for specific versions, namely, particle system
   // bool ModifyComponent(ulong entityId, uint command, nint inDto, nint outComputedDto);
 
-#if DEBUG
-  void DebugECSPrint(uint entityCount, ulong[] entityIds, uint compCount, ulong[] comps);
-#endif
+
 
   bool AddCameraAnimation(ulong cameraId, AnimationTarget animation);
 
@@ -322,12 +322,7 @@ public interface INativeRuntimeService : IDisposable
   IDisposable RegisterExternalStateListener(ExternalStateType stateType, Action<nint> handler);
 
 #if DEBUG
-  /// <summary>
-  /// Observable that fires after each Micro-layer render with the camera view and projection
-  /// matrices (column-major f32[16] each). Debug builds only.
-  /// Emitted at render frequency; subscribe with <c>Throttle</c> before observing on the UI thread.
-  /// </summary>
-  IObservable<(float[] View, float[] Proj)> CameraMatricesStream { get; }
+  bool DebugCameraState(ulong cameraEntityId, out double posX, out double posY, out double posZ, out float rotX, out float rotY, out float rotZ, out float rotW);
 #endif
 
   // ==========================================
@@ -790,13 +785,12 @@ internal unsafe static class PInvokeAetherVkCore
 
 #if DEBUG
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-  public static extern void avkSimulationContext_debugECSPrint(
+  public static extern bool avkSimulationContext_debugCameraState(
     nint ctx,
     ulong sceneId,
-    uint entityCount,
-    ulong* entityIds,
-    uint compCount,
-    ulong* comps
+    ulong cameraEntity,
+    double* outPos,
+    float* outRot
   );
 #endif
 
@@ -854,6 +848,12 @@ internal unsafe static class PInvokeAetherVkCore
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_resetSimulationSync(nint ctx, ulong sceneId);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_snapshotSceneSync(nint ctx, ulong sceneId);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_restoreSnapshotSync(nint ctx, ulong sceneId);
 
   // associated with windowless. Shouldn't be needed now that we are transitioning towards swapchain
   // avkSimulationContext_resize
@@ -1144,17 +1144,6 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   /// <inheritdoc/>
   public CancellationToken ShutdownToken => _shutdownCts.Token;
 
-#if DEBUG
-  // Subject that fans out camera view+proj matrices from the Rust render loop (~60 Hz).
-  // Subscribers should throttle before observing on the UI thread.
-  private readonly System.Reactive.Subjects.Subject<(float[] View, float[] Proj)>
-    _cameraMatrixSubject = new();
-
-  /// <inheritdoc/>
-  public IObservable<(float[] View, float[] Proj)> CameraMatricesStream
-    => _cameraMatrixSubject.AsObservable();
-#endif
-
 
 
   public NativeRuntimeService(
@@ -1191,27 +1180,7 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     _uiThreadDispatcher = uiThreadDispatcher;
     _instance = this;
 
-#if DEBUG
-    // Register camera matrix listener — fires at render frequency, C# throttles downstream.
-    // Read directly from the native pointer (ptr = view[0..63], ptr+64 = proj[0..63]).
-    // Cannot use fixed() on CCameraMatricesDTO.View/Proj because they are already-fixed
-    // buffer fields (CS0213). Reading straight from the nint avoids the extra copy.
-    RegisterExternalStateListener(ExternalStateType.CameraMatrices, ptr =>
-    {
-      unsafe
-      {
-        var view = new float[16];
-        var proj = new float[16];
-        fixed (float* vDst = view)
-        fixed (float* pDst = proj)
-        {
-          Buffer.MemoryCopy((void*)ptr,        vDst, 64, 64);   // view: bytes 0–63
-          Buffer.MemoryCopy((void*)(ptr + 64), pDst, 64, 64);   // proj: bytes 64–127
-        }
-        _cameraMatrixSubject.OnNext((view, proj));
-      }
-    });
-#endif
+
 
     Startup();
   }
@@ -1636,6 +1605,16 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public bool ResetSimulationSync()
   {
     return PInvokeAetherVkCore.avkSimulationContext_resetSimulationSync(_ctx, _sceneId);
+  }
+
+  public bool SnapshotSceneSync()
+  {
+    return PInvokeAetherVkCore.avkSimulationContext_snapshotSceneSync(_ctx, _sceneId);
+  }
+
+  public bool RestoreSnapshotSync()
+  {
+    return PInvokeAetherVkCore.avkSimulationContext_restoreSnapshotSync(_ctx, _sceneId);
   }
 
   public bool PauseSimulationSync()
@@ -2103,26 +2082,48 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     }
   }
 
-  public unsafe void DebugECSPrint(
-    uint entityCount,
-    ulong[] entityIds,
-    uint compCount,
-    ulong[] comps
+  public unsafe bool DebugCameraState(
+    ulong cameraEntityId,
+    out double posX,
+    out double posY,
+    out double posZ,
+    out float rotX,
+    out float rotY,
+    out float rotZ,
+    out float rotW
   )
   {
+    posX = posY = posZ = 0.0;
+    rotX = rotY = rotZ = rotW = 0.0f;
+
     if (_ctx == 0)
-      return;
-    fixed (ulong* pEntities = entityIds)
-    fixed (ulong* pComps = comps)
+      return false;
+
+    double[] pos = new double[3];
+    float[] rot = new float[4];
+
+    fixed (double* pPos = pos)
+    fixed (float* pRot = rot)
     {
-      PInvokeAetherVkCore.avkSimulationContext_debugECSPrint(
+      bool res = PInvokeAetherVkCore.avkSimulationContext_debugCameraState(
         _ctx,
         _sceneId,
-        entityCount,
-        pEntities,
-        compCount,
-        pComps
+        cameraEntityId,
+        pPos,
+        pRot
       );
+
+      if (res)
+      {
+        posX = pos[0];
+        posY = pos[1];
+        posZ = pos[2];
+        rotX = rot[0];
+        rotY = rot[1];
+        rotZ = rot[2];
+        rotW = rot[3];
+      }
+      return res;
     }
   }
 

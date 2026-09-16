@@ -88,9 +88,18 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   partial void OnIsPlayingChanged(bool value)
   {
     if (value && SelectedSpeed.HasValue)
-      _timelineService.Play((int)SelectedSpeed.Value);
+    {
+        _timelineSessionService.UpdateSession(SessionId, s =>
+        {
+            s.SnapshotStartEpoch = s.CommittedStartEpoch;
+            s.SnapshotEndEpoch = s.CommittedEndEpoch;
+        });
+        _timelineService.Play((int)SelectedSpeed.Value);
+    }
     else
-      _timelineService.Pause();
+    {
+        _timelineService.Pause();
+    }
   }
 
   /// <summary>
@@ -152,7 +161,26 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
 
     RestoreCommand = new RelayCommand(Restore);
     PlayPauseCommand = new RelayCommand(() => IsPlaying = !IsPlaying, CanPlayPause);
-    ResetCommand = new RelayCommand(() => { IsPlaying = false; _timelineService.Reset(); });
+    ResetCommand = new RelayCommand(() =>
+    {
+        IsPlaying = false;
+        _timelineService.Reset();
+        Progress = 0.0;
+        
+        // Clear current epoch in session so the 3D viewport overlay resets immediately
+        _timelineSessionService.UpdateSession(SessionId, s =>
+        {
+            s.CurrentEpochString = string.Empty;
+        });
+    });
+
+    _timelineService.IsSimulationRunning
+      .ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(running =>
+      {
+          if (!running && IsPlaying) IsPlaying = false; // external stop -> sync UI
+      })
+      .AddDisposableTo(_disposables);
     RunToEndCommand = new RelayCommand(() => { IsPlaying = false; });
 
     _timelineService.IsTimelineValid
@@ -301,7 +329,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
 
   private void Restore()
   {
-    if (CurrentSession == null) return;
+    if (CurrentSession == null || _timelineSessionService == null) return;
 
     // Seed default proposed range if the session has never had one set.
     // TODO: read defaults from a configuration file in the future.

@@ -97,6 +97,7 @@ fn logic_command_desc(cmd: &LogicCommand) -> alloc::string::String {
     LogicCommand::PlayScene { .. } => "Play Scene".to_string(),
     LogicCommand::SnapshotScene { .. } => "Snapshot Scene".to_string(),
     LogicCommand::RestoreSnapshot { .. } => "Restore Snapshot".to_string(),
+    LogicCommand::ResetSimulation { .. } => "Reset Simulation".to_string(),
     LogicCommand::DumpScene { scene_id, .. } => alloc::format!("Dump Scene {}", scene_id),
     LogicCommand::RestoreSceneDump { scene_id, .. } => {
       alloc::format!("Restore Scene Dump {}", scene_id)
@@ -278,6 +279,7 @@ pub fn start_logic_thread(
                 // its Arc pointer for polling
                 let last_render_task = scene_write.last_render_task.load(Ordering::Acquire);
                 if last_render_task == 0 || !scene_write.pending_cross_sync {
+                  scene_write.pending_cross_sync = false;
                   return None;
                 }
 
@@ -1170,7 +1172,7 @@ fn process_command_internal(
 
       Ok(())
     }
-    LogicCommand::SnapshotScene { scene_id } => {
+    LogicCommand::SnapshotScene { scene_id, done_flag } => {
       use oshal::os::time::get_monotonic_time;
       let scenes = ctx.scenes.read();
       // Retry stopping the current task for a deadline of 500ms. Otherwise die
@@ -1198,8 +1200,13 @@ fn process_command_internal(
             if let Ok(particle_snap) = vulkan_device.snapshot_particles() {
               scene_write.particle_snapshot = Some(particle_snap);
             }
+            
+            // Snapshot the TimeManager state
+            let time_state = scenes.time_managers.get(&scene_id).unwrap().state.read().clone();
+            scene_write.time_snapshot = Some(alloc::boxed::Box::new(time_state));
           },
         ) {
+          done_flag.store(true, core::sync::atomic::Ordering::Release);
           return Ok(());
         }
       }
@@ -1215,7 +1222,7 @@ fn process_command_internal(
 
     // TODO now this command will be fused with StopScene, therefore
     //commenting out pieces as I see fit is perfectly fine
-    LogicCommand::RestoreSnapshot { scene_id } => {
+    LogicCommand::RestoreSnapshot { scene_id, done_flag } => {
       use oshal::os::time::get_monotonic_time;
       let scenes = ctx.scenes.read();
       // Retry stopping the current task for a deadline of 500ms. Otherwise die
@@ -1261,6 +1268,12 @@ fn process_command_internal(
             if let Some(snapshot) = scene_write.scene_snapshot.take() {
               scene_write.scene = snapshot.into();
             }
+            
+            // Restore TimeManager state
+            if let Some(ts) = scene_write.time_snapshot.take() {
+              let mut time_mgr = scenes.time_managers.get_mut(&scene_id).unwrap();
+              *time_mgr.state.write() = *ts;
+            }
 
             // 4 empty the cartesian cache
             let mut keys = alloc::vec::Vec::with_capacity(128);
@@ -1277,11 +1290,68 @@ fn process_command_internal(
         )
         .is_some()
         {
+          done_flag.store(true, core::sync::atomic::Ordering::Release);
           return Ok(());
         }
       }
 
       Err(EngineError::InvalidOperation("Failed to restore snapshot"))
+    }
+    
+    LogicCommand::ResetSimulation { scene_id, done_flag } => {
+      use oshal::os::time::get_monotonic_time;
+      let scenes = ctx.scenes.read();
+    
+      let (now, elapsed) = {
+        let mut time_mgr = scenes.time_managers.get_mut(&scene_id).unwrap();
+        let mut state = time_mgr.state.write();
+        
+        // Zero out the clock to snap epoch back to start_epoch
+        state.scaled_time = 0;
+        state.scaled_accumulator = 0;
+        
+        (state.unscaled_time, state.unscaled_delta)
+      };
+    
+      let start = get_monotonic_time();
+      while get_monotonic_time() - start <= 1_000_000_i64 {
+        if let Some(_) = utils::self_sync_do_if_done(
+          &scenes, scene_id, ctx.kernels.0.clone(), ctx.kernels.1, &ctx.render_tx, now, elapsed,
+          |vulkan_device, scene_write, _| {
+            
+            // 1. Wait for render thread idle
+            let last_render_task = scene_write.last_render_task.load(core::sync::atomic::Ordering::Acquire);
+            if last_render_task != 0 {
+              let w_start = get_monotonic_time();
+              while get_monotonic_time() - w_start < 500_000_i64 {
+                if vulkan_device.is_task_completed(last_render_task).unwrap_or(true) { break; }
+                core::hint::spin_loop();
+              }
+            }
+    
+            // 2. GPU-level particle reset (device.rs)
+            unsafe { let _ = vulkan_device.reset_all_particle_systems(); }
+    
+            // 3. ECS component reset
+            scene_write.scene.query1_mut(|_, comp: &mut crate::scene::particles::ParticleSystemComponent| {
+              comp.last_emission.store(0, core::sync::atomic::Ordering::Relaxed);
+              comp.last_compaction.store(0, core::sync::atomic::Ordering::Relaxed);
+            });
+    
+            // 4. Evict cached SPICE state so interpolation restarts clean
+            let mut keys = alloc::vec::Vec::with_capacity(128);
+            scenes.cartesian_state_cache.iter().for_each(|kv_ref| keys.push(*kv_ref.key()));
+            for key in keys {
+              if key.scene_id == scene_id { scenes.cartesian_state_cache.remove(&key); }
+            }
+    
+            utils::mark_all_serializable_as_changed(scene_write);
+          }
+        ) { break; }
+      }
+    
+      done_flag.store(true, core::sync::atomic::Ordering::Release);
+      Ok(())
     }
 
     // ─── DumpScene ──────────────────────────────────────────────────────────

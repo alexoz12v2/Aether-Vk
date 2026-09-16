@@ -57,7 +57,7 @@
 
   <Border Background="{DynamicResource Bg.Canvas}" Padding="0">
     <ScrollViewer Classes="left-scrollbar" VerticalScrollBarVisibility="Auto">
-      <StackPanel Spacing="8" Margin="12,12,12,24">
+      <StackPanel Spacing="8" Margin="12,12,12,24" IsEnabled="{Binding !IsSimulationRunning}">
 
         <!-- ═══════════════════════════════════════════════════════════════
         SECTION 1: PROPOSED TIMELINE (read-only display)

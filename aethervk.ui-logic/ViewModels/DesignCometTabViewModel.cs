@@ -64,6 +64,7 @@ public partial class DesignCometTabViewModel
   public string DownloadStatus               { get; } = string.Empty;
   public bool   IsDownloading                { get; } = false;
   public bool   HasTimelineChangedAfterCommit { get; } = false;
+  public bool   IsSimulationRunning { get; } = false;
 
   // ── Rotational model ──────────────────────────────────────────────────────
   public double PoleRaDeg        { get; set; } = 69.54;
