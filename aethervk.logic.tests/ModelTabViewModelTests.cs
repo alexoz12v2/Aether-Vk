@@ -89,7 +89,7 @@ public class ModelTabViewModelTests
 
       var cometMessenger = new Mock<ICometMessenger>();
 
-      var breadcrumbService = new BreadcrumbService(dispatcher.Object);
+      var breadcrumbService = new BreadcrumbService();
       var timelineService = new TimelineService(
         Runtime.Object,
         schedulers.Object,

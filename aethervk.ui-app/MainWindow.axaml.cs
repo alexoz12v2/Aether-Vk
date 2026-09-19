@@ -8,6 +8,9 @@ namespace AetherVk;
 
 public partial class MainWindow : Window
 {
+  private UI.BreadcrumbWindow?    _breadcrumbWindow;
+  private UI.OverlaySynchronizer? _breadcrumbSynchronizer;
+
   public MainWindow()
   {
     InitializeComponent();
@@ -32,17 +35,32 @@ public partial class MainWindow : Window
     {
       vm.InputRouter.AttachToWindow(this);
       UI.MenuMapper.ApplyMenu(this, MenuContainer, vm.MainMenu);
+
+      // Breadcrumb overlay — tracks the full MainWindow frame, not the NativeControlHost.
+      _breadcrumbWindow = new UI.BreadcrumbWindow { DataContext = vm.BreadcrumbViewModel };
+      _breadcrumbSynchronizer = new UI.OverlaySynchronizer(
+        mainWindow: this,
+        overlayWindow: _breadcrumbWindow,
+        nativeHost: this,                     // follow full MainWindow, not the viewport
+        platformWindowService: vm.PlatformWindowService
+      );
     }
   }
 
   protected override void OnClosed(EventArgs e)
   {
+    // Dispose breadcrumb overlay first — OverlaySynchronizer.Dispose() closes the window.
+    _breadcrumbSynchronizer?.Dispose();
+    _breadcrumbSynchronizer = null;
+    _breadcrumbWindow = null;
+
     // Dispose removes event handlers from all attached windows (main + all overlays).
     // Overlay windows are already closed by their OverlaySynchronizers at this point.
     if (DataContext is Logic.ViewModels.MainWindowViewModel vm)
       vm.InputRouter.Dispose();
     base.OnClosed(e);
   }
+
 
   private void OnElementGotFocus(object? sender, GotFocusEventArgs e)
   {

@@ -22,6 +22,7 @@
 // Window setup and message handling
 SetWindowLong
 SetWindowLongPtr
+GetWindowLongPtr
 CallWindowProc
 GetClientRect
 DefWindowProc

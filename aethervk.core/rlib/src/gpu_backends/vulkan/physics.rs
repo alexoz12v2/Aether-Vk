@@ -30,6 +30,11 @@ pub static READBACK_DIAGNOSTICS: core::sync::atomic::AtomicBool =
 pub static USE_PARTICLE_SYSTEM_V2: core::sync::atomic::AtomicBool =
   core::sync::atomic::AtomicBool::new(false);
 
+/// Enables the V2 particle system physics pipelines
+pub fn enable_particle_system_v2() {
+  USE_PARTICLE_SYSTEM_V2.store(true, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// Configuration parameters for the physics pipeline
 pub struct PhysicsPipelineConfig {
   pub max_particles: u32,

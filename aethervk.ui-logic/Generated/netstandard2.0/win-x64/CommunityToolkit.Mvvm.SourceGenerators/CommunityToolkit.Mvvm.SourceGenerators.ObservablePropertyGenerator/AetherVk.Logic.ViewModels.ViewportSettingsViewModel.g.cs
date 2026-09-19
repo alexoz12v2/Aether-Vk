@@ -50,6 +50,27 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_fovUnitIndex"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public int FovUnitIndex
+        {
+            get => _fovUnitIndex;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<int>.Default.Equals(_fovUnitIndex, value))
+                {
+                    OnFovUnitIndexChanging(value);
+                    OnFovUnitIndexChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.FovUnitIndex);
+                    _fovUnitIndex = value;
+                    OnFovUnitIndexChanged(value);
+                    OnFovUnitIndexChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.FovUnitIndex);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_perspNear"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -105,10 +126,12 @@ namespace AetherVk.Logic.ViewModels
                     OnOrthoHalfWidthChanging(value);
                     OnOrthoHalfWidthChanging(default, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.OrthoHalfWidth);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.OrthoHalfWidthDisplay);
                     _orthoHalfWidth = value;
                     OnOrthoHalfWidthChanged(value);
                     OnOrthoHalfWidthChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.OrthoHalfWidth);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.OrthoHalfWidthDisplay);
                 }
             }
         }
@@ -126,10 +149,33 @@ namespace AetherVk.Logic.ViewModels
                     OnOrthoHalfHeightChanging(value);
                     OnOrthoHalfHeightChanging(default, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.OrthoHalfHeight);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.OrthoHalfHeightDisplay);
                     _orthoHalfHeight = value;
                     OnOrthoHalfHeightChanged(value);
                     OnOrthoHalfHeightChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.OrthoHalfHeight);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.OrthoHalfHeightDisplay);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_orthoUnitIndex"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public int OrthoUnitIndex
+        {
+            get => _orthoUnitIndex;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<int>.Default.Equals(_orthoUnitIndex, value))
+                {
+                    OnOrthoUnitIndexChanging(value);
+                    OnOrthoUnitIndexChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.OrthoUnitIndex);
+                    _orthoUnitIndex = value;
+                    OnOrthoUnitIndexChanged(value);
+                    OnOrthoUnitIndexChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.OrthoUnitIndex);
                 }
             }
         }
@@ -306,6 +352,28 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="PerspFovDeg"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnPerspFovDegChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="FovUnitIndex"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="FovUnitIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnFovUnitIndexChanging(int value);
+        /// <summary>Executes the logic for when <see cref="FovUnitIndex"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="FovUnitIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnFovUnitIndexChanging(int oldValue, int newValue);
+        /// <summary>Executes the logic for when <see cref="FovUnitIndex"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="FovUnitIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnFovUnitIndexChanged(int value);
+        /// <summary>Executes the logic for when <see cref="FovUnitIndex"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="FovUnitIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnFovUnitIndexChanged(int oldValue, int newValue);
         /// <summary>Executes the logic for when <see cref="PerspNear"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="PerspNear"/> is changed.</remarks>
@@ -394,6 +462,28 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="OrthoHalfHeight"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnOrthoHalfHeightChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="OrthoUnitIndex"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="OrthoUnitIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnOrthoUnitIndexChanging(int value);
+        /// <summary>Executes the logic for when <see cref="OrthoUnitIndex"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="OrthoUnitIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnOrthoUnitIndexChanging(int oldValue, int newValue);
+        /// <summary>Executes the logic for when <see cref="OrthoUnitIndex"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="OrthoUnitIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnOrthoUnitIndexChanged(int value);
+        /// <summary>Executes the logic for when <see cref="OrthoUnitIndex"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="OrthoUnitIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnOrthoUnitIndexChanged(int oldValue, int newValue);
         /// <summary>Executes the logic for when <see cref="OrthoNear"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="OrthoNear"/> is changed.</remarks>

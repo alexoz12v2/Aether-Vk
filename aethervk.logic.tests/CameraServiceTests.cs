@@ -42,7 +42,7 @@ public class CameraServiceTests
     runtime.Setup(r => r.SetCameraParent(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<bool>())).Returns(true);
     runtime.Setup(r => r.SetCameraParentToComet(It.IsAny<ulong>(), It.IsAny<bool>())).Returns(true);
 
-    var breadcrumb = new BreadcrumbService(dispatcher.Object);
+    var breadcrumb = new BreadcrumbService();
     var cometConfig = new CometConfigService(runtime.Object, schedulers);
     var timeline = new TimelineService(runtime.Object, schedulers, cometConfig, breadcrumb);
     var cometTracker = new CometPositionTrackerService(runtime.Object, schedulers, timeline);
@@ -68,7 +68,7 @@ public class CameraServiceTests
     var (_, runtime, scheduler) = BuildService();
     var schedulers = MakeTestSchedulers(scheduler);
     var dispatcher = new Mock<IUiThreadDispatcher>();
-    var breadcrumb = new BreadcrumbService(dispatcher.Object);
+    var breadcrumb = new BreadcrumbService();
     var cometConfig = new CometConfigService(runtime.Object, schedulers);
     var timeline = new TimelineService(runtime.Object, schedulers, cometConfig, breadcrumb);
     var cometTracker = new CometPositionTrackerService(runtime.Object, schedulers, timeline);
@@ -492,7 +492,7 @@ public class CameraServiceTests
   [Fact]
   public async Task CometOrbiting_DeferredOrtho_HalfExtentEquals3TimesNucleusRadius()
   {
-    const float NucleusRadiusKm  = 50f;           // default fallback
+    const float NucleusRadiusKm  = 2f;           // default fallback
     const float AuToKm           = 149_597_870.7f;
     float expectedHalfH = NucleusRadiusKm * 3f / AuToKm;
     float expectedHalfW = expectedHalfH * (800f / 600f); // 800×600 viewport
@@ -566,7 +566,7 @@ public class CameraServiceTests
   [Fact]
   public void CometOrbiting_ToggleProjection_OrthoHalfExtentEquals3TimesRadius()
   {
-    const float NucleusRadiusKm  = 50f;           // default fallback (_lastKnownNucleusRadiusKm = 0)
+    const float NucleusRadiusKm  = 2f;           // default fallback (_lastKnownNucleusRadiusKm = 0)
     const float AuToKm           = 149_597_870.7f;
     float expectedHalfH = NucleusRadiusKm * 3f / AuToKm;
 

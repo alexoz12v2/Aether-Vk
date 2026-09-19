@@ -220,4 +220,54 @@ public sealed class PlatformWindowService : IPlatformWindowService
     PInvokeCoreGraphics.CGWarpMouseCursorPosition(new PInvokeObjC.CGPoint { X = x, Y = y });
 #endif
   }
+
+  /// <inheritdoc/>
+  public void SetWindowInputPassthrough(nint windowHandle)
+  {
+#if TARGET_IS_LINUX
+    // Use the XFixes extension to set an empty input shape region on the XID.
+    // An empty region (zero rectangles) removes the window from the X server's hit-test map
+    // entirely — the server delivers no ButtonPress, MotionNotify or EnterNotify events to it.
+    // ShapeInput = 2  (from <X11/extensions/shape.h>)
+    if (windowHandle == 0) return;
+    nint disp = PInvokeX11.XOpenDisplay(0);
+    if (disp == 0) return;
+    try
+    {
+      nint emptyRegion = PInvokeXFixes.XFixesCreateRegion(disp, 0, 0);
+      PInvokeXFixes.XFixesSetWindowShapeRegion(disp, windowHandle, 2 /*ShapeInput*/, 0, 0, emptyRegion);
+      PInvokeXFixes.XFixesDestroyRegion(disp, emptyRegion);
+      PInvokeX11.XFlush(disp);
+    }
+    finally
+    {
+      PInvokeX11.XCloseDisplay(disp);
+    }
+#elif TARGET_IS_WINDOWS
+    // Add WS_EX_TRANSPARENT to the window's extended style.
+    // Windows delivers pointer hit-testing to the first window beneath this one in Z-order
+    // whose WS_EX_TRANSPARENT flag is NOT set, i.e. clicks fall through completely.
+    if (windowHandle == 0) return;
+    const int GWL_EXSTYLE = -20;
+    const long WS_EX_TRANSPARENT = 0x00000020L;
+    nint hwnd = windowHandle;
+    long exStyle = (long)Windows.Win32.PInvoke.GetWindowLongPtr(
+      new Windows.Win32.Foundation.HWND(hwnd), (Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX)GWL_EXSTYLE);
+    Windows.Win32.PInvoke.SetWindowLongPtr(
+      new Windows.Win32.Foundation.HWND(hwnd),
+      (Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX)GWL_EXSTYLE,
+      (nint)(exStyle | WS_EX_TRANSPARENT));
+#elif TARGET_IS_OSX
+    // Send [nsWindow setIgnoresMouseEvents:YES] via the ObjC runtime.
+    // windowHandle is the NSWindow* pointer (nint on 64-bit macOS).
+    if (windowHandle == 0) return;
+    // void_objc_msgSend_byte sends objc_msgSend(receiver, selector, byteArg)
+    // where byteArg=1 maps to Objective-C BOOL YES.
+    PInvokeObjC.void_objc_msgSend_byte(
+      windowHandle,
+      PInvokeObjC.GetSelector("setIgnoresMouseEvents:"u8),
+      1 /*YES*/);
+#endif
+    // All three branches are compile-time gated; on an unrecognised platform this is a safe no-op.
+  }
 }

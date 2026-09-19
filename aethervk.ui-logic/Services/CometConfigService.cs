@@ -37,7 +37,7 @@ public sealed class CometConfigService : IDisposable
 
   private readonly BehaviorSubject<bool> _isCommittedSubject = new(false);
   private readonly BehaviorSubject<int?> _committedSpkIdSubject = new(null);
-  private readonly BehaviorSubject<float> _nucleusRadiusKmSubject = new(0f);
+  private readonly BehaviorSubject<float> _nucleusRadiusKmSubject = new(2.0f);
 
   // ── Pending commit state ──────────────────────────────────────────────────
   // When CommitCometAsync is in flight, these fields track what we are committing.

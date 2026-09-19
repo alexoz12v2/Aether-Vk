@@ -1,7 +1,9 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Markup.Xaml;
+#if DEBUG
 using AetherVk.Logic.ViewModels.Debug;
+#endif
 
 namespace AetherVk.UI;
 

@@ -14,7 +14,7 @@ public class HorizonJplIntegrationTests
   {
     var dispatcherMock = new Mock<IUiThreadDispatcher>();
     var console = new ConsoleService(dispatcherMock.Object);
-    var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
+    var breadcrumb = new BreadcrumbService();
     var storage = new LocalStorageService();
     var service = new HorizonJplService(console, breadcrumb, storage);
 
@@ -50,7 +50,7 @@ public class HorizonJplIntegrationTests
     // ── 1. Build the service stack (no DI host needed — pure service test) ──
     var dispatcherMock = new Mock<IUiThreadDispatcher>();
     var console   = new ConsoleService(dispatcherMock.Object);
-    var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
+    var breadcrumb = new BreadcrumbService();
     var storage   = new LocalStorageService();
     var service   = new HorizonJplService(console, breadcrumb, storage);
 

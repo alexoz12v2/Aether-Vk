@@ -195,11 +195,14 @@ void main() {
         gl_Position = centerClip + localClip;
 
         // Front-hemisphere discard signal.
-        // localClip was computed with w=0 (direction vector).
-        // Since the camera looks down the -Y axis, points in front have y_eye < 0.
-        // P_22 (c1.z) is positive in our projection, so localClip.z = y_eye * P_22 
-        // is negative for the front hemisphere.
-        outAlpha = isAxis ? 1.0 : (localClip.z < 0.0 ? 1.0 : 0.0);
+        // View-direction-independent: a sphere surface point is front-facing if its
+        // outward world-space normal has a positive component toward the camera.
+        // Camera is at RTE origin; gizmo center is at model[3].xyz.
+        // camDir = direction from gizmo center toward camera = -model[3].xyz.
+        // Using un-normalized vectors is fine — we only need the sign of the dot product.
+        vec3 worldNormal = mat3(model) * localPos;  // outward world-space direction
+        vec3 camDir = -model[3].xyz;                // gizmo center → camera (RTE origin)
+        outAlpha = isAxis ? 1.0 : (dot(worldNormal, camDir) > 0.0 ? 1.0 : 0.0);
 
         if (isAxis) {
             // Pull axes forward by the comet's radius in clip space + a tiny margin,

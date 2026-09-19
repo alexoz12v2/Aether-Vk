@@ -18,7 +18,7 @@ public class SimulationLockTests
     private readonly Mock<ICometMessenger> _cometMessengerMock;
     private readonly Mock<IPlatformWindowService> _platformWindowServiceMock;
     private readonly CometConfigService _cometConfig;
-    private readonly Mock<BreadcrumbService> _breadcrumbServiceMock;
+    private readonly BreadcrumbService _breadcrumbService;
     private readonly TimelineService _timelineService;
     private readonly Mock<IUiThreadDispatcher> _dispatcherMock;
     private readonly HorizonJplService _jpl;
@@ -45,16 +45,16 @@ public class SimulationLockTests
         
         _cometConfig = new CometConfigService(_runtimeServiceMock.Object, _schedulerProvider);
             
-        _breadcrumbServiceMock = new Mock<BreadcrumbService>(_dispatcherMock.Object);
+        _breadcrumbService = new BreadcrumbService();
         _storageMock = new Mock<ILocalStorageService>();
-        _jpl = new HorizonJplService(null, _breadcrumbServiceMock.Object, _storageMock.Object);
+        _jpl = new HorizonJplService(null, _breadcrumbService, _storageMock.Object);
         _tabFactoryMock = new Mock<ITabFactory>();
 
         _timelineService = new TimelineService(
             _runtimeServiceMock.Object,
             _schedulerProvider,
             _cometConfig,
-            _breadcrumbServiceMock.Object);
+            _breadcrumbService);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class SimulationLockTests
             _jpl,
             _cometConfig,
             _timelineService,
-            _breadcrumbServiceMock.Object,
+            _breadcrumbService,
             _storageMock.Object,
             _runtimeServiceMock.Object,
             _modelSessionServiceMock.Object,

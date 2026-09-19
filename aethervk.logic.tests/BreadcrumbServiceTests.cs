@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Reactive.Subjects;
 using System.Threading.Tasks;
 using AetherVk.Logic.Services;
 using Xunit;
@@ -7,26 +9,25 @@ namespace AetherVk.Logic.Tests;
 public class BreadcrumbServiceTests
 {
   [Fact]
-  public async Task ShowMessageAsync_AddsAndRemovesMessage()
+  public async Task ShowMessageAsync_EmitsAddedThenRemovedEvents()
   {
     // Arrange
-    var dispatcherMock = new Moq.Mock<IUiThreadDispatcher>();
-    dispatcherMock
-      .Setup(d => d.Dispatch(Moq.It.IsAny<System.Action>()))
-      .Callback<System.Action>(a => a());
-    var service = new BreadcrumbService(dispatcherMock.Object);
+    var service = new BreadcrumbService();
+    var received = new List<BreadcrumbEvent>();
+    using var _ = service.Events.Subscribe(ev => received.Add(ev));
 
     // Act
     var task = service.ShowMessageAsync("Title", "Content", System.TimeSpan.FromMilliseconds(50));
 
-    // Before delay finishes, it should be in the collection
-    Assert.Single(service.Messages);
-    Assert.Equal("Title", service.Messages[0].Title);
-    Assert.Equal("Content", service.Messages[0].Content);
+    // Before delay finishes, Added should have been emitted synchronously
+    Assert.Single(received);
+    Assert.IsType<BreadcrumbEvent.Added>(received[0]);
+    Assert.Equal("Title", ((BreadcrumbEvent.Added)received[0]).Message.Title);
 
     await task;
 
-    // Assert - After delay, it should be removed
-    Assert.Empty(service.Messages);
+    // After delay, Removed should also be emitted
+    Assert.Equal(2, received.Count);
+    Assert.IsType<BreadcrumbEvent.Removed>(received[1]);
   }
 }

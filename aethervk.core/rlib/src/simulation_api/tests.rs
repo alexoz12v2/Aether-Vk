@@ -157,7 +157,29 @@ fn test_core_api() {}
 fn test_misc_and_models_api_direct() {}
 
 #[test]
-fn test_snapshot_and_restore() {}
+fn test_snapshot_and_restore() {
+  use crate::simulation_api::SimulationContext;
+  use hifitime::{Epoch, Duration};
+
+  let mut ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
+
+  let start = Epoch::from_gregorian_utc(2025, 10, 15, 0, 0, 0, 0);
+  let end = start + Duration::from_days(10.0);
+  let scene_ret = ctx
+    .create_empty_scene2(false, start, end)
+    .expect("Failed to create empty scene");
+  let scene_id = scene_ret.scene_id;
+
+  // Regression: SnapshotScene / RestoreSnapshot must succeed when simulation is idle/paused.
+  // Bug 1: self_sync_do_if_done skipped the GPU closure when had_task=false (logic_thread.rs).
+  // Bug 2: render thread held scene RwLock read guard across build_render_scene + render pass +
+  //        submit, blocking self_sync_do_if_done's upgradable→write upgrade (render_thread.rs).
+  let snapshot_ok = ctx.snapshot_scene_sync(scene_id);
+  assert!(snapshot_ok, "SnapshotSceneSync should succeed when simulation is idle/paused");
+
+  let restore_ok = ctx.restore_snapshot_sync(scene_id);
+  assert!(restore_ok, "RestoreSnapshotSync should succeed when simulation is idle/paused");
+}
 
 #[test]
 fn test_spawn_comet_internal_bounds_and_hierarchy() {}

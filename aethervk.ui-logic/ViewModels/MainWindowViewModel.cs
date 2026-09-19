@@ -37,7 +37,11 @@ public partial class MainWindowViewModel : ViewModelBase
   /// OnClosed</summary>
   public IWindowInputRouter InputRouter { get; }
 
-  public ObservableCollection<BreadcrumbMessage>? Breadcrumbs => _breadcrumbService?.Messages;
+  /// <summary>The dedicated breadcrumb overlay ViewModel — sole UI recipient of BreadcrumbService events.</summary>
+  public BreadcrumbWindowViewModel BreadcrumbViewModel { get; }
+
+  /// <summary>Exposed so MainWindow code-behind can pass it to OverlaySynchronizer.</summary>
+  public IPlatformWindowService PlatformWindowService { get; }
 
   public bool IsSystemThemeDark { get; set; }
 
@@ -51,7 +55,9 @@ public partial class MainWindowViewModel : ViewModelBase
     IWindowService windowService,
     IWindowInputRouter inputRouter,
     DockingManagerViewModel dockingManager,
-    IUiThreadDispatcher dispatcher
+    IUiThreadDispatcher dispatcher,
+    BreadcrumbWindowViewModel breadcrumbWindowViewModel,
+    IPlatformWindowService platformWindowService
   )
   {
     _runtimeService = runtimeService;
@@ -61,12 +67,15 @@ public partial class MainWindowViewModel : ViewModelBase
     _dockingManager = dockingManager;
     _dispatcher = dispatcher;
     InputRouter = inputRouter;
+    BreadcrumbViewModel = breadcrumbWindowViewModel;
+    PlatformWindowService = platformWindowService;
 
     // Set initial theme to system default
     CurrentTheme = AppTheme.System;
 
     BuildMenu();
   }
+
 
   private void BuildMenu()
   {

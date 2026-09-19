@@ -1,3 +1,4 @@
+#if DEBUG
 using System;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels.Debug;
@@ -28,18 +29,21 @@ public class CameraMatrixDebugViewModelTests
         runtimeServiceMock.Setup(r => r.DebugCameraState(It.IsAny<ulong>(), out px, out py, out pz, out rx, out ry, out rz, out rw)).Returns(true);
         
         using var vm = new CameraMatrixDebugViewModel(runtimeServiceMock.Object, schedulerProvider);
-        
-        vm.IsExpanded = true;
+        vm.GetType().GetProperty("IsExpanded")?.SetValue(vm, true);
         
         schedulerProvider.Background.AdvanceBy(TimeSpan.FromMilliseconds(500).Ticks);
         schedulerProvider.MainThread.AdvanceBy(1);
         
-        Assert.Equal(1, vm.PosX);
-        Assert.Equal(2, vm.PosY);
-        Assert.Equal(3, vm.PosZ);
-        Assert.Equal(4, vm.RotX);
-        Assert.Equal(5, vm.RotY);
-        Assert.Equal(6, vm.RotZ);
-        Assert.Equal(7, vm.RotW);
+        double AuToKm = 149_597_870.7;
+        
+        // Using a 1mm (0.001 km) tolerance to prevent floating point assertion flakiness
+        Assert.Equal(1 * AuToKm, vm.PosX, 0.001);
+        Assert.Equal(2 * AuToKm, vm.PosY, 0.001);
+        Assert.Equal(3 * AuToKm, vm.PosZ, 0.001);
+        Assert.Equal(4f, vm.RotX, 0.0001f);
+        Assert.Equal(5f, vm.RotY, 0.0001f);
+        Assert.Equal(6f, vm.RotZ, 0.0001f);
+        Assert.Equal(7f, vm.RotW, 0.0001f);
     }
 }
+#endif

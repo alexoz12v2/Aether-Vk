@@ -134,7 +134,9 @@ impl SimulationContext {
     if res.is_err() { return false; }
     use aethervk_oshal_rlib::os::time::get_monotonic_time;
     let start = get_monotonic_time();
-    while get_monotonic_time() - start < 2_000_000_i64 {
+    // 15s timeout: must accommodate generate_sky on the graphics queue serialising with
+    // snapshot_particles on the compute queue at scene-creation time.
+    while get_monotonic_time() - start < 15_000_000_i64 {
       if done_flag.load(core::sync::atomic::Ordering::Acquire) { return true; }
       core::hint::spin_loop();
     }
@@ -151,7 +153,9 @@ impl SimulationContext {
     if res.is_err() { return false; }
     use aethervk_oshal_rlib::os::time::get_monotonic_time;
     let start = get_monotonic_time();
-    while get_monotonic_time() - start < 2_000_000_i64 {
+    // 15s timeout: restore_particles submits to the graphics queue, which may be serialised
+    // behind generate_sky at scene-creation time.
+    while get_monotonic_time() - start < 15_000_000_i64 {
       if done_flag.load(core::sync::atomic::Ordering::Acquire) { return true; }
       core::hint::spin_loop();
     }

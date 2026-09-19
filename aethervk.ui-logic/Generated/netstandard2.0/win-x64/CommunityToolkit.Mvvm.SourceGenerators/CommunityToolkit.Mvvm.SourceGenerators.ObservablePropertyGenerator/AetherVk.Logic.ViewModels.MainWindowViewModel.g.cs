@@ -58,13 +58,12 @@ namespace AetherVk.Logic.ViewModels
             {
                 if (!global::System.Collections.Generic.EqualityComparer<global::AetherVk.Logic.ViewModels.Viewport3DViewModel?>.Default.Equals(_activeViewport, value))
                 {
-                    global::AetherVk.Logic.ViewModels.Viewport3DViewModel? __oldValue = _activeViewport;
                     OnActiveViewportChanging(value);
-                    OnActiveViewportChanging(__oldValue, value);
+                    OnActiveViewportChanging(default, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ActiveViewport);
                     _activeViewport = value;
                     OnActiveViewportChanged(value);
-                    OnActiveViewportChanged(__oldValue, value);
+                    OnActiveViewportChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ActiveViewport);
                 }
             }

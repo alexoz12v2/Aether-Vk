@@ -304,7 +304,7 @@ impl SimulationContext {
 
     let asset_dir: alloc::string::String = ASSET_DIR.read().clone().unwrap();
     let font_path = alloc::format!("{}/fonts/JetBrainsMono-Regular.ttf", asset_dir);
-    if let Ok(atlas) = crate::scene::text::FontAtlas::from_path(&font_path, 32.0) {
+    if let Ok(atlas) = crate::scene::text::FontAtlas::from_path(&font_path, 64.0) {
       let atlas = alloc::sync::Arc::new(atlas);
       let font_hash = atlas.hash_metadata();
 

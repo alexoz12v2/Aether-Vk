@@ -36,7 +36,7 @@ namespace aethervk.logic.tests
       var handler = new MockHttpMessageHandler();
       var dispatcherMock = new Mock<IUiThreadDispatcher>();
       var console = new ConsoleService(dispatcherMock.Object);
-      var breadcrumb = new BreadcrumbService(dispatcherMock.Object);
+      var breadcrumb = new BreadcrumbService();
       var storageMock = new Mock<ILocalStorageService>();
 
       // Setup storage mock to return some valid paths so it doesn't fail File operations
