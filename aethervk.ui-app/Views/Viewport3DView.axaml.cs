@@ -195,7 +195,7 @@ public partial class Viewport3DView : UserControl
 
     // Forward whenever ANY mouse button is held (active drag) OR the pointer is over the
     // transparent void. The IsTransparentVoid-only check broke drags that crossed over
-    // non-transparent widgets (badge, radial hub, etc.) mid-drag.
+    // non-transparent widgets (badge, etc.) mid-drag.
     bool anyButtonDown = pt.Properties.IsLeftButtonPressed
                       || pt.Properties.IsMiddleButtonPressed
                       || pt.Properties.IsRightButtonPressed;
@@ -206,9 +206,6 @@ public partial class Viewport3DView : UserControl
       new AppAction("viewport.pointer_delta", pos),
       new InputState(isPressed: anyButtonDown, mods));
 
-    var overlayVm = _viewModel.OverlayViewModel;
-    if (overlayVm.IsRadialMenuOpen)
-      overlayVm.UpdateRadialMenuHover(pt.Position.X, pt.Position.Y);
   }
 
   private void OnOverlayPassThrough_Released(object? sender, PointerReleasedEventArgs e)
@@ -264,9 +261,6 @@ public partial class Viewport3DView : UserControl
       new AppAction("viewport.pointer_delta", pos),
       new InputState(isPressed: true, mods));
 
-    var overlayVm = _viewModel.OverlayViewModel;
-    if (overlayVm.IsRadialMenuOpen)
-      overlayVm.UpdateRadialMenuHover(pt.Position.X, pt.Position.Y);
   }
 
   private void OnViewportPointerReleased(object? sender, PointerReleasedEventArgs e)

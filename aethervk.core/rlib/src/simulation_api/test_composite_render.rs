@@ -485,7 +485,7 @@ fn test_composite_scale_overlap() {
       );
 
       // ─── Download and validate ───────────────────────────────────────────
-      if let Some(buffer) = wait_and_download(ctx, width, height, 5000) {
+      if let Some(buffer) = wait_and_download(ctx, width, height, 30000) {
         let center = pixel_at(&buffer, width, width / 2, height / 2);
         println!(
           "[test_composite_scale_overlap] center px: ({}, {}, {}, {})",

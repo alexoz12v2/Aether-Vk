@@ -22,4 +22,12 @@ public class PlatformWindowServiceTests
         var service = new PlatformWindowService();
         service.SetCursorPosition(100, 100);
     }
+
+    [Fact]
+    public void SetWindowInputPassthrough_ZeroHandle_DoesNotThrow()
+    {
+        // A zero/null handle must be a safe no-op on all platforms (guard at the top of each branch).
+        var service = new PlatformWindowService();
+        service.SetWindowInputPassthrough(0);
+    }
 }

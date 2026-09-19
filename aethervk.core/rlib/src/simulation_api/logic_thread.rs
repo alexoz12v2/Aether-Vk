@@ -201,6 +201,10 @@ pub fn start_logic_thread(
     {
       oshal::os::debug::fpe::unmask_fpu_for_current_thread();
     }
+    
+    // Enable V2 particles at simulation startup
+    crate::gpu_backends::vulkan::physics::enable_particle_system_v2();
+
     let target_frame_time = oshal::os::time::timeus_milliseconds(16); // ~60 FPS
     let mut play_controls: hashbrown::HashMap<u64, PlayControl> = hashbrown::HashMap::new();
     // Tracks the last known sun-in-frustum state per scene so we only fire the
@@ -1225,9 +1229,13 @@ fn process_command_internal(
     LogicCommand::RestoreSnapshot { scene_id, done_flag } => {
       use oshal::os::time::get_monotonic_time;
       let scenes = ctx.scenes.read();
-      // Retry stopping the current task for a deadline of 500ms. Otherwise die
+      // Retry stopping the current task for a deadline of 10s.
+      // restore_particles performs actual GPU work (staging buffer copies), which can take
+      // several seconds on a cold GPU (e.g. first frame with generate_sky still in flight).
+      // self_sync_do_if_done blocks inside the closure until that GPU work completes, so the
+      // outer loop must accommodate the full GPU copy duration.
       let start = get_monotonic_time();
-      while get_monotonic_time() - start <= 500_000_i64 {
+      while get_monotonic_time() - start <= 10_000_000_i64 {
         let (now, elapsed) = {
           let time_mgr =
             scenes.time_managers.get(&scene_id).ok_or(EngineError::InvalidNullArgument)?;
@@ -1243,7 +1251,7 @@ fn process_command_internal(
           now,
           elapsed,
           |vulkan_device, scene_write, _render_tx| {
-            // 1 Wait for the render thread to be dile to that we can overwrite the front buffer for
+            // 1 Wait for the render thread to be idle so that we can overwrite the front buffer for
             //   particle systems
             let last_render_task =
               scene_write.last_render_task.load(core::sync::atomic::Ordering::Acquire);
@@ -1271,7 +1279,7 @@ fn process_command_internal(
             
             // Restore TimeManager state
             if let Some(ts) = scene_write.time_snapshot.take() {
-              let mut time_mgr = scenes.time_managers.get_mut(&scene_id).unwrap();
+              let time_mgr = scenes.time_managers.get(&scene_id).unwrap();
               *time_mgr.state.write() = *ts;
             }
 
@@ -1288,8 +1296,7 @@ fn process_command_internal(
             utils::mark_all_serializable_as_changed(scene_write);
           },
         )
-        .is_some()
-        {
+        .is_some() {
           done_flag.store(true, core::sync::atomic::Ordering::Release);
           return Ok(());
         }
@@ -3873,16 +3880,17 @@ mod utils {
     // Note: Check simulattion speed after checking `physics_done`, so that we can process
     // remaining GPU tasks and then pause the simulation
     if !scenes.time_managers.contains_key(&scene_id) {
+      oshal::log!("self_sync_do_if_done failed: time_managers does not contain scene_id {}", scene_id);
       return None;
     }
 
-    if let Some(scene_lock) = scenes.get(&scene_id)
-      && scene_lock
+    if let Some(scene_lock) = scenes.get(&scene_id) {
+      let had_task = scene_lock
         .read()
         .active_physics_task
         .compare_exchange_weak(true, false, Ordering::Acquire, Ordering::Relaxed)
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+
       let scene = scene_lock.upgradable_read();
       // acquire a read lock on the timeline manager in the scene just to prevent
       // execution of a simulation step from someone else
@@ -3893,25 +3901,34 @@ mod utils {
         .with_device(device_handle, |dyn_device| {
           let vulkan_device: &Device = dyn_device.as_any().downcast_ref().unwrap();
           let mut scene_write = parking_lot::RwLockUpgradableReadGuard::upgrade(scene);
-          // SAFETY: `latest_physics_sync` written by `execute_simulation_tick`, which was
-          // executed if `active_physics_task` is `true`
-          let physics_sync = unsafe { scene_write.latest_physics_sync.as_mut().unwrap_unchecked() };
-
-          // Block (zero CPU) until the GPU signals the compute timeline semaphore,
-          // with a hard deadline of 8ms (half a frame).  This replaces the old
-          let is_done = physics_sync.blocking_wait(&vulkan_device.device, 8_000_000);
+          
+          let is_done = if had_task {
+            // SAFETY: `latest_physics_sync` written by `execute_simulation_tick`, which was
+            // executed if `active_physics_task` is `true`
+            let physics_sync = unsafe { scene_write.latest_physics_sync.as_mut().unwrap_unchecked() };
+            // Block (zero CPU) until the GPU signals the compute timeline semaphore,
+            // with a hard deadline of 8ms (half a frame).  This replaces the old
+            physics_sync.blocking_wait(&vulkan_device.device, 8_000_000)
+          } else {
+            true
+          };
 
           if is_done {
-            // Self Sync: destroy consumed synchronization primitives
-            let _ = scene_write.latest_physics_sync.take();
+            if had_task {
+              // Self Sync: destroy consumed synchronization primitives
+              let _ = scene_write.latest_physics_sync.take();
+            }
             Ok(Some(f(vulkan_device, &mut scene_write, render_tx)))
           } else {
+            // Normal polling timeout (e.g. physics frame takes > 8ms). 
+            // We just restore the flag and let the caller loop.
             scene_write.active_physics_task.store(true, Ordering::Release);
             Ok(None)
           }
         })
         .unwrap_or(None)
     } else {
+      oshal::log!("self_sync_do_if_done failed: scene_id {} not found in scenes", scene_id);
       None
     }
   }

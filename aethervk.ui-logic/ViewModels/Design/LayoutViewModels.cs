@@ -29,6 +29,6 @@ public class DockingManagerViewModelDesign : DockingManagerViewModel
 public class MainWindowViewModelDesign : MainWindowViewModel
 {
   public MainWindowViewModelDesign()
-    : base(null!, null!, null!, null!, null!, new DockingManagerViewModelDesign(), null!) { }
+    : base(null!, null!, null!, null!, null!, new DockingManagerViewModelDesign(), null!, null!, null!) { }
 }
 #endif

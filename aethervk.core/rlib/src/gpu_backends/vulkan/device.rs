@@ -4825,15 +4825,14 @@ impl RenderDevice for Device {
         ),
          _rollback| {
           // 4. Construct Data lock-free
+          // Bug fix: use the full V×P matrix (not just P) so that outWorldPos
+          // and lighting normals are in world/RTE space, not view space. This is
+          // required for the spherical-grid paint mode which uses world-space phi/theta.
           let scene_data = crate::gpu::SceneData {
-            view_proj: (camera.proj).into(),  // Just the projection matrix!
-            camera_pos: [0.0, 0.0, 0.0, 1.0], // Camera is fixed at origin in View Space
-            sun_pos: {
-              let sun_pos_vec =
-                Vec4f32::from_components(sun_pos.x(), sun_pos.y(), sun_pos.z(), 0.0);
-              let sun_view = camera.view.mul_vector(sun_pos_vec);
-              [sun_view.x(), sun_view.y(), sun_view.z(), 0.0]
-            },
+            view_proj: camera.view_proj.into(),
+            camera_pos: [0.0, 0.0, 0.0, 1.0], // Camera is at origin in RTE world space
+            // sun_pos stays in world/RTE space (consistent with world-space outWorldPos).
+            sun_pos: [sun_pos.x(), sun_pos.y(), sun_pos.z(), 0.0],
             sun_color,
             window_extent,
             _pad: [0.0, 0.0],
@@ -4855,9 +4854,11 @@ impl RenderDevice for Device {
             grid_color_density: [0.0; 4],
           };
 
-          let model_view = camera.view * draw_call.model_matrix; // Multiply View * Model
+          // Bug fix: store M only (not V×M) so that outWorldPos = M*pos = world-space.
+          // The VS RTE trick (centerClip = VP*center + localClip = VP*direction) is
+          // already correct when viewProj = VP and model = M.
           let object_data = crate::gpu::ObjectData {
-            model: model_view.into(),
+            model: draw_call.model_matrix.into(),
           };
 
           unsafe {
@@ -5158,21 +5159,28 @@ impl RenderDevice for Device {
         let semaphore_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
         let timeline_semaphore = unsafe { self.device.create_semaphore(&semaphore_info, None) }?;
 
-        let signal_semaphores = [timeline_semaphore];
-        let signal_values = [1];
-        let mut timeline_info =
-          vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&signal_values);
-
-        let submit_info = vk::SubmitInfo::default()
-          .command_buffers(core::slice::from_ref(&command_buffer))
-          .signal_semaphores(&signal_semaphores)
-          .push_next(&mut timeline_info);
+        // Use vkQueueSubmit2 to match all other submissions on this queue (see
+        // run_transient_commands for the full rationale).
+        let signal_sem_info = vk::SemaphoreSubmitInfo::default()
+          .semaphore(timeline_semaphore)
+          .value(1)
+          .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS);
+        let cmd_info = vk::CommandBufferSubmitInfo::default().command_buffer(command_buffer);
+        let submit_info2 = vk::SubmitInfo2::default()
+          .command_buffer_infos(core::slice::from_ref(&cmd_info))
+          .signal_semaphore_infos(core::slice::from_ref(&signal_sem_info));
 
         oshal::log!("generate_sky: submitting to graphics queue...");
-        self
-          .device
-          .locked_queue_submit(graphics_queue.handle, &[submit_info], vk::Fence::null())
+        {
+          let _guard = self.device.submission_lock.lock();
+          unsafe {
+            self
+              .device
+              .synchronization2
+              .queue_submit2(graphics_queue.handle, core::slice::from_ref(&submit_info2), vk::Fence::null())
+          }
           .map_err(GpuError::from)?;
+        }
 
         oshal::log!("generate_sky: waiting for timeline semaphore...");
         self.device.wait_for_semaphore_value(timeline_semaphore, 1, u64::MAX)?;
@@ -8420,26 +8428,25 @@ impl Device {
       allocator.invalidate_allocation(&alloc, 0, vk::WHOLE_SIZE)?;
       let mut snap = crate::simulation_api::structs::ParticleSystemSnapshot::default();
 
-      let mut offset = 0;
-      snap.global_buffer.extend_from_slice(core::slice::from_raw_parts(
-        mapped_ptr.add(offset as usize).cast(),
+      let mut offset = 0u64;
+      snap.global_buffer = alloc::boxed::Box::from(core::slice::from_raw_parts(
+        mapped_ptr.add(offset as usize).cast::<u8>(),
         psm.buffer_size as usize,
       ));
       offset += psm.buffer_size;
 
-      snap.free_list.extend_from_slice(core::slice::from_raw_parts(
-        mapped_ptr.add(offset as usize).cast(),
+      snap.free_list = alloc::boxed::Box::from(core::slice::from_raw_parts(
+        mapped_ptr.add(offset as usize).cast::<u8>(),
         psm.free_list_size as usize,
       ));
       offset += psm.free_list_size;
 
       for pt in back.page_tables.iter() {
-        let mut pt_vec = alloc::vec![0u8; pt_size as usize];
-        pt_vec.copy_from_slice(core::slice::from_raw_parts(
-          mapped_ptr.add(offset as usize).cast(),
+        let pt_box = alloc::boxed::Box::from(core::slice::from_raw_parts(
+          mapped_ptr.add(offset as usize).cast::<u8>(),
           pt_size as usize,
         ));
-        snap.page_tables.insert(*pt.key(), pt_vec);
+        snap.page_tables.insert(*pt.key(), pt_box);
         offset += pt_size;
       }
 
@@ -8575,8 +8582,9 @@ impl Device {
     }
     unsafe { self.device.destroy_command_pool(res_cmd_back.unwrap().pool, None) };
 
-    // 2. Copy RAM to Front buffer (assumes Graphics queue has ownership, therefore there is no
-    //    cross sync in bound)
+    // 2. Copy RAM to Front buffer via the graphics queue (which owns the front buffer).
+    //    Uses vkQueueSubmit2 to match all other graphics queue submissions — mixing the
+    //    legacy vkQueueSubmit with vkQueueSubmit2 on the same queue can break FIFO ordering.
     let res_cmd_front = self.run_transient_commands(|cmd| {
       unsafe {
         let mut offset = 0;
@@ -8652,19 +8660,11 @@ impl Device {
     f(cmd)?;
     unsafe { self.device.end_command_buffer(cmd) }?;
 
-    let mut type_info = vk::SemaphoreTypeCreateInfo::default()
-      .semaphore_type(vk::SemaphoreType::TIMELINE)
-      .initial_value(0);
-    let semaphore_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
-    let timeline_semaphore = unsafe { self.device.create_semaphore(&semaphore_info, None) }?;
+    let fence_info = vk::FenceCreateInfo::default();
+    let fence = unsafe { self.device.create_fence(&fence_info, None) }?;
 
-    let sem_submit_info = vk::SemaphoreSubmitInfo::default()
-      .semaphore(timeline_semaphore)
-      .value(1)
-      .stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE);
     let cmd_submit_info = vk::CommandBufferSubmitInfo::default().command_buffer(cmd);
     let submit_info = vk::SubmitInfo2::default()
-      .signal_semaphore_infos(core::slice::from_ref(&sem_submit_info))
       .command_buffer_infos(core::slice::from_ref(&cmd_submit_info));
 
     // locked submit with synchronization2
@@ -8673,18 +8673,16 @@ impl Device {
       self.device.synchronization2.queue_submit2(
         queue.handle,
         core::slice::from_ref(&submit_info),
-        vk::Fence::null(),
+        fence,
       )?;
-
-      let wait_info = vk::SemaphoreWaitInfo::default()
-        .semaphores(core::slice::from_ref(&timeline_semaphore))
-        .values(&[1]);
-      self.device.timeline_semaphore.wait_semaphores(&wait_info, u64::MAX)?;
-
-      self.device.destroy_semaphore(timeline_semaphore, None);
     }
 
-    guard.disarmed = false;
+    unsafe {
+      self.device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX)?;
+      self.device.destroy_fence(fence, None);
+    }
+
+    guard.disarmed = true;
     Ok(TransientCmdPoolResource { pool, cmd })
   }
 
@@ -8693,7 +8691,6 @@ impl Device {
   where
     F: FnOnce(vk::CommandBuffer) -> GpuResult<()>,
   {
-    aethervk_oshal_rlib::log!("run_transient_commands called!");
     let queue = self.queues.get_graphics_queue();
     let pool_info = vk::CommandPoolCreateInfo::default()
       .queue_family_index(queue.family_index)
@@ -8723,30 +8720,29 @@ impl Device {
 
     unsafe { self.device.end_command_buffer(cmd) }?;
 
-    let mut type_info = vk::SemaphoreTypeCreateInfo::default()
-      .semaphore_type(vk::SemaphoreType::TIMELINE)
-      .initial_value(0);
-    let semaphore_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
-    let timeline_semaphore = unsafe { self.device.create_semaphore(&semaphore_info, None) }?;
+    let fence_info = vk::FenceCreateInfo::default();
+    let fence = unsafe { self.device.create_fence(&fence_info, None) }?;
 
-    let signal_semaphores = [timeline_semaphore];
-    let signal_values = [1];
-    let mut timeline_info =
-      vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&signal_values);
+    let cmd_info = vk::CommandBufferSubmitInfo::default().command_buffer(cmd);
+    let submit_info2 = vk::SubmitInfo2::default()
+      .command_buffer_infos(core::slice::from_ref(&cmd_info));
 
-    let submit_info = vk::SubmitInfo::default()
-      .command_buffers(core::slice::from_ref(&cmd))
-      .signal_semaphores(&signal_semaphores)
-      .push_next(&mut timeline_info);
-
-    self
-      .device
-      .locked_queue_submit(queue.handle, &[submit_info], vk::Fence::null())
+    {
+      // Hold the same submission_lock that locked_queue_submit used, to preserve
+      // the ordering guarantee.
+      let _guard = self.device.submission_lock.lock();
+      unsafe {
+        self
+          .device
+          .synchronization2
+          .queue_submit2(queue.handle, core::slice::from_ref(&submit_info2), fence)
+      }
       .map_err(GpuError::from)?;
+    }
 
-    self.device.wait_for_semaphore_value(timeline_semaphore, 1, u64::MAX)?;
     unsafe {
-      self.device.destroy_semaphore(timeline_semaphore, None);
+      self.device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX)?;
+      self.device.destroy_fence(fence, None);
     }
 
     guard.disarmed = true;

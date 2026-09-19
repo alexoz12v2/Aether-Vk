@@ -2,83 +2,44 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="AetherVk.UI.CameraMatrixDebugPanel">
 
-  <!--
-    Camera Matrix Debug Panel (DEBUG builds only).
-    Collapsed state: circled ⊙ icon button on the right edge of the viewport overlay.
-    Expanded state: 4×4 view + projection matrix grid expands to the left of the icon.
+  <Grid ColumnDefinitions="Auto,24,Auto" Margin="0,4,0,0">
 
-    All bindings use ReflectionBinding (no x:DataType required) because
-    CameraMatrixDebugViewModel is a #if DEBUG type — compiled bindings would
-    silently become no-ops in Release builds.
-  -->
-  <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="6">
+    <!-- POS column -->
+    <StackPanel Grid.Column="0" Spacing="1">
+      <TextBlock Text="POSITION (km)"
+                 FontWeight="Bold" FontSize="9"
+                 Foreground="{DynamicResource Accent.Primary}"
+                 Margin="0,0,0,3"/>
+      <TextBlock Text="{ReflectionBinding PosX, StringFormat='X: {0:F3}'}"
+                 FontFamily="Consolas,Monospace" FontSize="9"
+                 Foreground="{DynamicResource Text.Primary}"/>
+      <TextBlock Text="{ReflectionBinding PosY, StringFormat='Y: {0:F3}'}"
+                 FontFamily="Consolas,Monospace" FontSize="9"
+                 Foreground="{DynamicResource Text.Primary}"/>
+      <TextBlock Text="{ReflectionBinding PosZ, StringFormat='Z: {0:F3}'}"
+                 FontFamily="Consolas,Monospace" FontSize="9"
+                 Foreground="{DynamicResource Text.Primary}"/>
+    </StackPanel>
 
-    <!-- Matrix grid — hidden when collapsed -->
-    <Border IsVisible="{ReflectionBinding IsExpanded}"
-            Background="{DynamicResource Bg.Surface}"
-            BorderBrush="{DynamicResource Bg.Outline}"
-            BorderThickness="1"
-            CornerRadius="6"
-            Opacity="0.92"
-            Padding="10,8">
-      <Grid ColumnDefinitions="Auto,12,Auto">
+    <!-- ROT column -->
+    <StackPanel Grid.Column="2" Spacing="1">
+      <TextBlock Text="ROTATION (Quat)"
+                 FontWeight="Bold" FontSize="9"
+                 Foreground="{DynamicResource Accent.Primary}"
+                 Margin="0,0,0,3"/>
+      <TextBlock Text="{ReflectionBinding RotX, StringFormat='X: {0:F4}'}"
+                 FontFamily="Consolas,Monospace" FontSize="9"
+                 Foreground="{DynamicResource Text.Primary}"/>
+      <TextBlock Text="{ReflectionBinding RotY, StringFormat='Y: {0:F4}'}"
+                 FontFamily="Consolas,Monospace" FontSize="9"
+                 Foreground="{DynamicResource Text.Primary}"/>
+      <TextBlock Text="{ReflectionBinding RotZ, StringFormat='Z: {0:F4}'}"
+                 FontFamily="Consolas,Monospace" FontSize="9"
+                 Foreground="{DynamicResource Text.Primary}"/>
+      <TextBlock Text="{ReflectionBinding RotW, StringFormat='W: {0:F4}'}"
+                 FontFamily="Consolas,Monospace" FontSize="9"
+                 Foreground="{DynamicResource Text.Primary}"/>
+    </StackPanel>
 
-        <!-- POS column -->
-        <StackPanel Grid.Column="0" Spacing="1">
-          <TextBlock Text="POSITION (AU)"
-                     FontWeight="Bold" FontSize="9"
-                     Foreground="{DynamicResource Accent.Primary}"
-                     Margin="0,0,0,3"/>
-          <TextBlock Text="{ReflectionBinding PosX, StringFormat='X: {0:F6}'}"
-                     FontFamily="Consolas,Monospace" FontSize="9"
-                     Foreground="{DynamicResource Text.Primary}"/>
-          <TextBlock Text="{ReflectionBinding PosY, StringFormat='Y: {0:F6}'}"
-                     FontFamily="Consolas,Monospace" FontSize="9"
-                     Foreground="{DynamicResource Text.Primary}"/>
-          <TextBlock Text="{ReflectionBinding PosZ, StringFormat='Z: {0:F6}'}"
-                     FontFamily="Consolas,Monospace" FontSize="9"
-                     Foreground="{DynamicResource Text.Primary}"/>
-        </StackPanel>
-
-        <!-- ROT column -->
-        <StackPanel Grid.Column="2" Spacing="1">
-          <TextBlock Text="ROTATION (Quat)"
-                     FontWeight="Bold" FontSize="9"
-                     Foreground="{DynamicResource Accent.Primary}"
-                     Margin="0,0,0,3"/>
-          <TextBlock Text="{ReflectionBinding RotX, StringFormat='X: {0:F4}'}"
-                     FontFamily="Consolas,Monospace" FontSize="9"
-                     Foreground="{DynamicResource Text.Primary}"/>
-          <TextBlock Text="{ReflectionBinding RotY, StringFormat='Y: {0:F4}'}"
-                     FontFamily="Consolas,Monospace" FontSize="9"
-                     Foreground="{DynamicResource Text.Primary}"/>
-          <TextBlock Text="{ReflectionBinding RotZ, StringFormat='Z: {0:F4}'}"
-                     FontFamily="Consolas,Monospace" FontSize="9"
-                     Foreground="{DynamicResource Text.Primary}"/>
-          <TextBlock Text="{ReflectionBinding RotW, StringFormat='W: {0:F4}'}"
-                     FontFamily="Consolas,Monospace" FontSize="9"
-                     Foreground="{DynamicResource Text.Primary}"/>
-        </StackPanel>
-
-      </Grid>
-    </Border>
-
-    <!-- Circled camera icon toggle button -->
-    <Button Command="{ReflectionBinding ToggleExpandedCommand}"
-            Width="28" Height="28"
-            Padding="0"
-            Background="{DynamicResource Bg.Surface}"
-            BorderBrush="{DynamicResource Bg.Outline}"
-            BorderThickness="1"
-            CornerRadius="14"
-            Opacity="0.92"
-            ToolTip.Tip="Toggle camera matrix panel">
-      <TextBlock Text="⊙"
-                 FontSize="14"
-                 HorizontalAlignment="Center"
-                 VerticalAlignment="Center"
-                 Foreground="{DynamicResource Accent.Primary}"/>
-    </Button>
-
-  </StackPanel>
+  </Grid>
 </UserControl>

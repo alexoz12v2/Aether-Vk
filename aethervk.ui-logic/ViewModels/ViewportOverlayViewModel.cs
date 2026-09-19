@@ -59,91 +59,6 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   public bool IsModeUpZenith => CurrentMode == EarthObserverState.UpZenith;
   public bool IsModeCometOrbiting => CurrentMode == EarthObserverState.CometOrbiting;
 
-  // ── Radial Menu ───────────────────────────────────────────────────────────
-  [ObservableProperty]
-  [NotifyPropertyChangedFor(
-    nameof(RadialHubLeft),
-    nameof(RadialHubTop),
-    nameof(RadialCometLeft),
-    nameof(RadialCometTop),
-    nameof(RadialBillboardLeft),
-    nameof(RadialBillboardTop),
-    nameof(RadialResetCameraLeft),
-    nameof(RadialResetCameraTop),
-    nameof(RadialSnapLeft),
-    nameof(RadialSnapTop),
-    nameof(RadialSnapObserverLeft),
-    nameof(RadialSnapObserverTop)
-  )]
-  private bool _isRadialMenuOpen = false;
-
-  [ObservableProperty]
-  [NotifyPropertyChangedFor(
-    nameof(RadialHubLeft),
-    nameof(RadialCometLeft),
-    nameof(RadialBillboardLeft),
-    nameof(RadialResetCameraLeft),
-    nameof(RadialSnapLeft),
-    nameof(RadialSnapObserverLeft)
-  )]
-  private double _radialMenuX = 0.0;
-
-  [ObservableProperty]
-  [NotifyPropertyChangedFor(
-    nameof(RadialHubTop),
-    nameof(RadialCometTop),
-    nameof(RadialBillboardTop),
-    nameof(RadialResetCameraTop),
-    nameof(RadialSnapTop),
-    nameof(RadialSnapObserverTop)
-  )]
-  private double _radialMenuY = 0.0;
-
-  [ObservableProperty]
-  [NotifyPropertyChangedFor(
-    nameof(IsCometHovered),
-    nameof(IsBillboardHovered),
-    nameof(IsResetCameraHovered),
-    nameof(IsSnapHovered),
-    nameof(IsSnapObserverHovered)
-  )]
-  private string? _hoveredRadialItem;
-
-  public bool IsCometHovered => HoveredRadialItem == "comet";
-  public bool IsBillboardHovered => HoveredRadialItem == "billboard";
-  public bool IsResetCameraHovered => HoveredRadialItem == "resetcamera";
-  public bool IsSnapHovered => HoveredRadialItem == "snap";
-  public bool IsSnapObserverHovered => HoveredRadialItem == "snapobserver";
-
-  public string CometRadialLabel => !CanSpawnComet() ? "Destroy\nComet" : "Spawn\nComet";
-  public string CometRadialTooltip =>
-    !CanSpawnComet() ? "Remove comet from scene" : "Spawn a comet in the scene";
-
-  public bool HasComet => !CanSpawnComet();
-
-  private const double RadialRadius = 100.0;
-  private const double ItemSize = 80.0;
-  private const double HalfItem = ItemSize / 2.0;
-  private const double HubSize = 16.0;
-
-  public double RadialHubLeft => RadialMenuX - HubSize / 2;
-  public double RadialHubTop => RadialMenuY - HubSize / 2;
-
-  public double RadialCometLeft => RadialMenuX - HalfItem;
-  public double RadialCometTop => RadialMenuY - RadialRadius - HalfItem;
-
-  private static readonly double _cos45 = Math.Cos(Math.PI / 4.0);
-  public double RadialBillboardLeft => RadialMenuX + RadialRadius * _cos45 - HalfItem;
-  public double RadialBillboardTop => RadialMenuY - RadialRadius * _cos45 - HalfItem;
-
-  public double RadialResetCameraLeft => RadialMenuX + RadialRadius - HalfItem;
-  public double RadialResetCameraTop => RadialMenuY - HalfItem;
-
-  public double RadialSnapLeft => RadialMenuX + RadialRadius * _cos45 - HalfItem;
-  public double RadialSnapTop => RadialMenuY + RadialRadius * _cos45 - HalfItem;
-
-  public double RadialSnapObserverLeft => RadialMenuX - HalfItem;
-  public double RadialSnapObserverTop => RadialMenuY + RadialRadius - HalfItem;
 
   // Measurement indicator
   [ObservableProperty]
@@ -220,14 +135,20 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   /// <summary>Always null in Release — ContentControl DataTemplate never fires.</summary>
   public object? RenderDoc => null;
   public object? DebugTelemetry => null;
-  public object? CameraMatrixDebug => null;
 #endif
 
+#if DEBUG
   /// <summary>
-  /// Comet orbit debug panel ViewModel. Always compiled; <see cref="CometOrbitDebugViewModel.IsVisible"/>
-  /// is true only when the camera is in <see cref="CameraMode.CometOrbiting"/> mode.
+  /// Comet orbit debug panel ViewModel. Non-null only in DEBUG builds.
   /// </summary>
-  public CometOrbitDebugViewModel CometOrbitDebug { get; } = new();
+  public CometOrbitDebugViewModel? CometOrbitDebug { get; }
+#else
+  public object? CometOrbitDebug => null;
+#endif
+
+  private int _modeIndicatorChangeId;
+
+
 
   public ViewportOverlayViewModel(
     CameraService cameraService,
@@ -253,6 +174,7 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     RenderDoc        = new RenderDocCaptureViewModel(runtimeService);
     DebugTelemetry   = new DebugTelemetryPanelViewModel(runtimeService);
     CameraMatrixDebug = new CameraMatrixDebugViewModel(runtimeService, schedulerProvider);
+    CometOrbitDebug   = new CometOrbitDebugViewModel();
 #endif
 
     _cameraService
@@ -319,12 +241,24 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
           CameraMode.CometOrbiting => EarthObserverState.CometOrbiting,
           _ => EarthObserverState.UpZenith,
         };
+        
+        int changeId = ++_modeIndicatorChangeId;
         IsModeIndicatorExpanded = true;
+        
         _ = Task.Delay(1800)
-          .ContinueWith(_ => _dispatcher.Dispatch(() => IsModeIndicatorExpanded = false));
+          .ContinueWith(_ => _dispatcher.Dispatch(() =>
+          {
+            if (_modeIndicatorChangeId == changeId)
+              IsModeIndicatorExpanded = false;
+          }));
 
+#if DEBUG
         // Show/hide the comet orbit debug panel.
-        CometOrbitDebug.IsVisible = mode == CameraMode.CometOrbiting;
+        if (CometOrbitDebug != null)
+        {
+          CometOrbitDebug.IsVisible = mode == CameraMode.CometOrbiting;
+        }
+#endif
       })
       .AddDisposableTo(_disposables);
 
@@ -391,6 +325,8 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
 
   private void UpdateOrbitDebugPanel(CameraTransformState state)
   {
+#if DEBUG
+    if (CometOrbitDebug == null) return;
     // Actual camera-to-comet distance (km), computed from authoritative transform.
     var comet = _cameraService.LastKnownCometPositionAu;
     double actualKm = 0.0;
@@ -419,6 +355,7 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     CometOrbitDebug.OrbitElevationDeg = $"elevation:    {_cameraService.OrbitElevationDeg:F2}°";
     CometOrbitDebug.CameraOrientationQ =
       $"rot: ({state.RotX:F3}, {state.RotY:F3}, {state.RotZ:F3}, {state.RotW:F3})";
+#endif
   }
 
   /// <summary>
@@ -428,6 +365,8 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   /// </summary>
   private void UpdateOrbitDebugOrtho(CameraProjectionState proj)
   {
+#if DEBUG
+    if (CometOrbitDebug == null) return;
     if (proj.IsPerspective)
     {
       CometOrbitDebug.OrthoHalfHeightKm  = "perspective";
@@ -450,94 +389,9 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     CometOrbitDebug.OrthoHalfHeightKm   = $"{actualHalfH_km:F3} km";
     CometOrbitDebug.OrthoExpectedKm     = $"{expectedHalfH_km:F3} km";
     CometOrbitDebug.OrthoInvariantPassed = relErr < 0.01; // 1% tolerance
+#endif
   }
 
-  partial void OnIsRadialMenuOpenChanged(bool oldValue, bool newValue)
-  {
-    if (newValue)
-    {
-      OnPropertyChanged(nameof(HasComet));
-      OnPropertyChanged(nameof(CometRadialLabel));
-      OnPropertyChanged(nameof(CometRadialTooltip));
-      CloseRadialMenuAndSpawnCometCommand.NotifyCanExecuteChanged();
-    }
-  }
-
-  public void OpenRadialMenuAt(double x, double y)
-  {
-    RadialMenuX = x;
-    RadialMenuY = y;
-    HoveredRadialItem = null;
-    IsRadialMenuOpen = true;
-  }
-
-  public void CloseRadialMenu()
-  {
-    IsRadialMenuOpen = false;
-    HoveredRadialItem = null;
-  }
-
-  public void UpdateRadialMenuHover(double pointerX, double pointerY)
-  {
-    if (!IsRadialMenuOpen)
-      return;
-
-    if (HitTestItem(pointerX, pointerY, RadialCometLeft, RadialCometTop))
-      HoveredRadialItem = "comet";
-    else if (HitTestItem(pointerX, pointerY, RadialBillboardLeft, RadialBillboardTop))
-      HoveredRadialItem = "billboard";
-    else if (HitTestItem(pointerX, pointerY, RadialResetCameraLeft, RadialResetCameraTop))
-      HoveredRadialItem = "resetcamera";
-    else if (HitTestItem(pointerX, pointerY, RadialSnapLeft, RadialSnapTop))
-      HoveredRadialItem = "snap";
-    else if (
-      _viewportVm.IsEarthObserverMode
-      && HitTestItem(pointerX, pointerY, RadialSnapObserverLeft, RadialSnapObserverTop)
-    )
-      HoveredRadialItem = "snapobserver";
-    else
-      HoveredRadialItem = null;
-  }
-
-  private bool HitTestItem(double px, double py, double itemLeft, double itemTop)
-  {
-    return px >= itemLeft && px <= itemLeft + ItemSize && py >= itemTop && py <= itemTop + ItemSize;
-  }
-
-  [RelayCommand]
-  private void CloseRadialMenuCmd() => CloseRadialMenu();
-
-  [RelayCommand]
-  private void ResetCameraFromRadial()
-  {
-    CloseRadialMenu();
-    _cameraService.ResetToModeDefault();
-  }
-
-  [RelayCommand]
-  private void SnapToSelectedFromRadial()
-  {
-    CloseRadialMenu();
-    throw new NotImplementedException();
-  }
-
-  [RelayCommand(CanExecute = nameof(CanSpawnComet))]
-  private void CloseRadialMenuAndSpawnComet()
-  {
-    CloseRadialMenu();
-    WeakReferenceMessenger.Default.Send(new Messages.OpenSpawnCometDialogMessage());
-  }
-
-  private bool CanSpawnComet()
-  {
-    // TODO: return true when no comet exists, false when one already does.
-    return false;
-  }
-
-  private void DestroyCometInternal()
-  {
-    // TODO: call _runtimeService.ReconfigureComet with destroy flags.
-  }
 
   [RelayCommand]
   private async Task InsertBillboard()

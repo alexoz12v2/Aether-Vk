@@ -4,7 +4,7 @@ namespace AetherVk.Logic.ViewModels;
 
 /// <summary>
 /// Utility methods for IAU rotational model → quaternion / Euler angle conversions.
-/// These are extracted from RotationalModelEditor and SpawnCometResult for testability.
+/// These are extracted from RotationalModelEditor for testability.
 /// </summary>
 public static class IauRotationMath
 {

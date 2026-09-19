@@ -682,7 +682,6 @@ public class HorizonJplService
 
   // ═══════════════════════════════════════════════════════════════════════════
   //  5. FULL "Get Planet Data" (constants + EPA in sequence)
-  //     Used by SpawnCometViewModel Step 3 "Fetch Orbit Data" button.
   // ═══════════════════════════════════════════════════════════════════════════
 
   public virtual async Task<PlanetOrbitData?> GetPlanetDataAsync(

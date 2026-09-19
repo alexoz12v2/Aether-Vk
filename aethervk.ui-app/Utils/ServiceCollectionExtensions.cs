@@ -82,6 +82,7 @@ public static class ServiceCollectionExtensions
   {
     collection.AddTransient<HomePageViewModel>();
     collection.AddSingleton<DockingManagerViewModel>();
+    collection.AddSingleton<BreadcrumbWindowViewModel>();
     collection.AddSingleton<MainWindowViewModel>();
     collection.AddTransient<SplashViewModel>();
 

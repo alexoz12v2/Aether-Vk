@@ -47,7 +47,7 @@ public class Viewport3DViewModelTests
 
     var schedulers    = MakeTestSchedulers(testScheduler ?? new TestScheduler());
     var runtime       = new Mock<INativeRuntimeService>();
-    var breadcrumb    = new BreadcrumbService(dispatcher.Object);
+    var breadcrumb    = new BreadcrumbService();
     var cometConfig   = new CometConfigService(runtime.Object, schedulers);
     var timeline      = new TimelineService(runtime.Object, schedulers, cometConfig, breadcrumb);
     var cometTracker  = new CometPositionTrackerService(runtime.Object, schedulers, timeline);
@@ -83,7 +83,7 @@ public class Viewport3DViewModelTests
         MockBehavior.Loose,
         cameraService,
         runtime.Object,
-        new BreadcrumbService(dispatcher.Object),
+        new BreadcrumbService(),
         dispatcher.Object,
         new Mock<IFileDialogService>().Object,
         new Mock<ITabStateService<TimelineSession>>().Object,

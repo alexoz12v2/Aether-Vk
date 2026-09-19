@@ -155,6 +155,28 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_selectedSpeed"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public global::AetherVk.Logic.ViewModels.TimelineTabViewModel.SimulationSpeed? SelectedSpeed
+        {
+            get => _selectedSpeed;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<global::AetherVk.Logic.ViewModels.TimelineTabViewModel.SimulationSpeed?>.Default.Equals(_selectedSpeed, value))
+                {
+                    OnSelectedSpeedChanging(value);
+                    OnSelectedSpeedChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SelectedSpeed);
+                    _selectedSpeed = value;
+                    OnSelectedSpeedChanged(value);
+                    OnSelectedSpeedChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SelectedSpeed);
+                    PlayPauseCommand.NotifyCanExecuteChanged();
+                }
+            }
+        }
+
         /// <inheritdoc cref="_progress"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -416,6 +438,28 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="IsPlaying"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnIsPlayingChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="SelectedSpeed"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="SelectedSpeed"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSelectedSpeedChanging(global::AetherVk.Logic.ViewModels.TimelineTabViewModel.SimulationSpeed? value);
+        /// <summary>Executes the logic for when <see cref="SelectedSpeed"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="SelectedSpeed"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSelectedSpeedChanging(global::AetherVk.Logic.ViewModels.TimelineTabViewModel.SimulationSpeed? oldValue, global::AetherVk.Logic.ViewModels.TimelineTabViewModel.SimulationSpeed? newValue);
+        /// <summary>Executes the logic for when <see cref="SelectedSpeed"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="SelectedSpeed"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSelectedSpeedChanged(global::AetherVk.Logic.ViewModels.TimelineTabViewModel.SimulationSpeed? value);
+        /// <summary>Executes the logic for when <see cref="SelectedSpeed"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="SelectedSpeed"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSelectedSpeedChanged(global::AetherVk.Logic.ViewModels.TimelineTabViewModel.SimulationSpeed? oldValue, global::AetherVk.Logic.ViewModels.TimelineTabViewModel.SimulationSpeed? newValue);
         /// <summary>Executes the logic for when <see cref="Progress"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="Progress"/> is changed.</remarks>

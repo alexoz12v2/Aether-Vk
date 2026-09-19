@@ -20,7 +20,7 @@ public class TimelineTabViewModelPlayTests
     private readonly Mock<INativeRuntimeService> _runtimeServiceMock;
     private readonly Mock<ICometMessenger> _cometMessengerMock;
     private readonly CometConfigService _cometConfig;
-    private readonly Mock<BreadcrumbService> _breadcrumbServiceMock;
+    private readonly BreadcrumbService _breadcrumbService;
     private readonly TimelineService _timelineService;
     private readonly Mock<IUiThreadDispatcher> _dispatcherMock;
     private readonly TimelineSession _session;
@@ -44,13 +44,13 @@ public class TimelineTabViewModelPlayTests
         _cometConfig = new CometConfigService(_runtimeServiceMock.Object, _schedulerProvider);
             
         _dispatcherMock = new Mock<IUiThreadDispatcher>();
-        _breadcrumbServiceMock = new Mock<BreadcrumbService>(_dispatcherMock.Object);
+        _breadcrumbService = new BreadcrumbService();
 
         _timelineService = new TimelineService(
             _runtimeServiceMock.Object,
             _schedulerProvider,
             _cometConfig,
-            _breadcrumbServiceMock.Object);
+            _breadcrumbService);
 
         _session = new TimelineSession
         {

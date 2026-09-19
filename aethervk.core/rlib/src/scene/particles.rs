@@ -320,23 +320,50 @@ pub mod v2 {
     pub micro_radius: f32,
   }
 
-  pub struct ParticleSystemComponent {
+  /// Owns the GPU-side resources for one particle system.
+  /// Wrapped in `Arc` so that a shallow `Scene` clone (for snapshots) can share the handle
+  /// without duplicating GPU memory.  GPU cleanup only fires when the *last* `Arc` is dropped.
+  pub struct ParticleSystemResource {
     /// Strong reference to vulkan device resources
     pub device_data: (crate::gpu::RenderFrontend, crate::gpu::RenderDeviceHandle),
+    /// GPU-side key into `ParticleSystemManager::page_tables` (= ECS EntityId as u64)
+    pub id: u64,
+  }
+
+  impl Drop for ParticleSystemResource {
+    fn drop(&mut self) {
+      let _ = self.device_data.0.with_device(self.device_data.1, |dyn_device: &_| {
+        use crate::gpu_backends::vulkan::utils::RwLockable;
+        // unwrap cause the only particle system we support here is with vulkan
+        let vulkan_device = dyn_device.as_any().downcast_ref::<vulkan::device::Device>().unwrap();
+        // heuristic: use the next release timeline value as discard value
+        let gfx_release = vulkan_device.res.read().get_timeline_semaphore_cached_value() + 1;
+        let comp_release = vulkan_device
+          .kernels
+          .next_submit_value
+          .load(core::sync::atomic::Ordering::Relaxed);
+        vulkan_device.discard_particle_system(self.id, comp_release, gfx_release)
+      });
+    }
+  }
+
+  pub struct ParticleSystemComponent {
+    /// Shared GPU resource handle.  `Arc` allows a safe shallow clone when snapshotting a
+    /// `Scene`: the clone holds a second reference to the same GPU allocations, preventing
+    /// premature `discard_particle_system` until *all* clones are dropped.
+    pub resource: alloc::sync::Arc<ParticleSystemResource>,
     /// used to measure whether particle system should emit or not in next simulation step.
     /// initialized at zero so that first simulation step always emits (timeus_t)
     /// Unscaled time in μs
     pub last_emission: AtomicI64,
     /// used to measure whether we should perform compaction or not in the next step
-    /// gets initialized to zero in construcor, but if last_emission is zero, then in the first
+    /// gets initialized to zero in constructor, but if last_emission is zero, then in the first
     /// emission this is assigned to the last_emission value, such that we skip a useless
     /// compaction at start. Unscaled time in μs
     pub last_compaction: AtomicI64,
     /// time to live for each particle. used to compute `doomsday` in compaction shader.
     /// Scaled time.
     pub ttl_us: timeus_t,
-    /// necessary evil for Drop
-    pub id: u64,
     /// emission parameters
     pub emission_params: ParticleSystemEmitParams,
     /// Draw parameters
@@ -344,6 +371,7 @@ pub mod v2 {
   }
 
   /// Non physically based draw parameters
+  #[derive(Clone)]
   pub struct ParticleSystemDrawParams {
     pub stream_color: [f32; 4],
   }
@@ -377,14 +405,22 @@ pub mod v2 {
   impl core::fmt::Debug for ParticleSystemComponent {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
       f.debug_struct("ParticleSystemComponent")
-        .field("device_data", &self.device_data.1)
+        .field("device_data", &self.resource.device_data.1)
         .finish()
     }
   }
 
   impl Clone for ParticleSystemComponent {
     fn clone(&self) -> Self {
-      todo!()
+      use core::sync::atomic::Ordering::SeqCst;
+      Self {
+        resource: alloc::sync::Arc::clone(&self.resource),
+        last_emission: AtomicI64::new(self.last_emission.load(SeqCst)),
+        last_compaction: AtomicI64::new(self.last_compaction.load(SeqCst)),
+        ttl_us: self.ttl_us,
+        emission_params: self.emission_params.clone(),
+        draw_params: self.draw_params.clone(),
+      }
     }
   }
 
@@ -406,33 +442,20 @@ pub mod v2 {
         })
         .map_err(EngineError::from)
         .map(|_timeline| Self {
-          device_data: (render_frontend, render_device_handle),
+          resource: alloc::sync::Arc::new(ParticleSystemResource {
+            device_data: (render_frontend, render_device_handle),
+            id: entity_u64,
+          }),
           last_emission: AtomicI64::new(0),
           last_compaction: AtomicI64::new(0),
-          id: entity_u64,
           ttl_us,
           emission_params,
           draw_params,
         })
     }
   }
-
-  impl Drop for ParticleSystemComponent {
-    fn drop(&mut self) {
-      let _ = self.device_data.0.with_device(self.device_data.1, |dyn_device: &_| {
-        use crate::gpu_backends::vulkan::utils::RwLockable;
-        // unwrap cause the only particle system we support here is with vulkan
-        let vulkan_device = dyn_device.as_any().downcast_ref::<vulkan::device::Device>().unwrap();
-        // euristic: use the next release timeline value as discard value
-        let gfx_release = vulkan_device.res.read().get_timeline_semaphore_cached_value() + 1;
-        let comp_release = vulkan_device
-          .kernels
-          .next_submit_value
-          .load(core::sync::atomic::Ordering::Relaxed);
-        vulkan_device.discard_particle_system(self.id, comp_release, gfx_release)
-      });
-    }
-  }
+  // Note: Drop is implemented on ParticleSystemResource (inside the Arc).
+  // When the last Arc clone is dropped, GPU resources are freed exactly once.
 }
 
 #[cfg(test)]

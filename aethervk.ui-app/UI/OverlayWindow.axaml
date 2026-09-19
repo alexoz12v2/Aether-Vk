@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="using:AetherVk.UI"
+        xmlns:controls="using:AetherVk.UI.Controls"
         xmlns:vm="using:AetherVk.Logic.ViewModels"
         xmlns:vmDebug="using:AetherVk.Logic.ViewModels.Debug"
         xmlns:conv="using:AetherVk.Converters"
@@ -16,6 +17,7 @@
 
   <Panel Name="TransparentRoot" Background="Transparent">
 
+    <!-- Restored Camera Mode Indicator -->
     <Border HorizontalAlignment="Right" VerticalAlignment="Top"
             Margin="10,10,10,0"
             CornerRadius="10"
@@ -23,7 +25,6 @@
             BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
             ClipToBounds="True"
             Classes.expanded="{Binding IsModeIndicatorExpanded}">
-
       <Border.Styles>
         <Style Selector="Border">
           <Setter Property="MaxWidth" Value="44"/>
@@ -40,7 +41,6 @@
 
       <StackPanel Orientation="Horizontal" Spacing="0" Margin="12,8">
         <Viewbox Width="20" Height="20" Stretch="Uniform">
-
           <Grid>
             <Canvas Width="16" Height="16" IsVisible="{Binding IsModeEarthPosition}">
               <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2" Fill="Transparent"
@@ -89,6 +89,21 @@
         </TextBlock>
       </StackPanel>
     </Border>
+
+    <!-- Detached Camera Matrix Debug Panel -->
+    <controls:DebugOnly>
+      <Template>
+        <Border x:CompileBindings="False"
+                DataContext="{ReflectionBinding CameraMatrixDebug}"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="10,60,10,0"
+                Background="{DynamicResource Bg.Surface}" Opacity="0.85"
+                BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+                CornerRadius="8" Padding="12,8">
+          <ui:CameraMatrixDebugPanel />
+        </Border>
+      </Template>
+    </controls:DebugOnly>
 
     <ItemsControl ItemsSource="{Binding Billboards}">
       <ItemsControl.ItemsPanel>
@@ -169,101 +184,7 @@
 
     <Canvas x:Name="GoniometerOverlay" IsHitTestVisible="False" IsVisible="False" />
 
-    <Canvas IsHitTestVisible="False" IsVisible="{Binding IsRadialMenuOpen}">
-      <Canvas.Styles>
-        <Style Selector="Border.radial-item">
-          <Setter Property="Background" Value="{DynamicResource Bg.Surface}"/>
-          <Setter Property="BorderBrush" Value="{DynamicResource Bg.Outline}"/>
-          <Setter Property="BorderThickness" Value="1"/>
-          <Setter Property="CornerRadius" Value="12"/>
-          <Setter Property="Width" Value="80"/>
-          <Setter Property="Height" Value="80"/>
-          <Setter Property="Padding" Value="6"/>
-          <Setter Property="Opacity" Value="0.92"/>
-          <Setter Property="Transitions">
-            <Transitions>
-              <DoubleTransition Property="Opacity" Duration="0:0:0.1"/>
-              <BrushTransition Property="BorderBrush" Duration="0:0:0.1"/>
-              <ThicknessTransition Property="BorderThickness" Duration="0:0:0.1"/>
-            </Transitions>
-          </Setter>
-        </Style>
-        <Style Selector="Border.radial-item.hovered">
-          <Setter Property="Background" Value="{DynamicResource Bg.Raised}"/>
-          <Setter Property="BorderBrush" Value="{DynamicResource Accent.Primary}"/>
-          <Setter Property="BorderThickness" Value="2"/>
-          <Setter Property="Opacity" Value="1"/>
-        </Style>
-        <Style Selector="Border.radial-item TextBlock.label">
-          <Setter Property="FontSize" Value="10"/>
-          <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
-          <Setter Property="TextAlignment" Value="Center"/>
-          <Setter Property="TextWrapping" Value="Wrap"/>
-        </Style>
-        <Style Selector="Border.radial-item TextBlock.icon">
-          <Setter Property="FontSize" Value="22"/>
-          <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
-          <Setter Property="HorizontalAlignment" Value="Center"/>
-        </Style>
-      </Canvas.Styles>
 
-      <Ellipse Width="16" Height="16"
-               Fill="{DynamicResource Accent.Primary}" Opacity="0.7"
-               Canvas.Left="{Binding RadialHubLeft}"
-               Canvas.Top="{Binding RadialHubTop}"/>
-
-      <Border Classes="radial-item"
-              Classes.hovered="{Binding IsCometHovered}"
-              Canvas.Left="{Binding RadialCometLeft}"
-              Canvas.Top="{Binding RadialCometTop}"
-              ToolTip.Tip="{Binding CometRadialTooltip}">
-        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
-          <TextBlock Classes="icon" Text="☄"/>
-          <TextBlock Classes="label" Text="{Binding CometRadialLabel}"/>
-        </StackPanel>
-      </Border>
-
-      <Border Classes="radial-item"
-              Classes.hovered="{Binding IsBillboardHovered}"
-              Canvas.Left="{Binding RadialBillboardLeft}"
-              Canvas.Top="{Binding RadialBillboardTop}">
-        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
-          <TextBlock Classes="icon" Text="🖼"/>
-          <TextBlock Classes="label" Text="Billboard"/>
-        </StackPanel>
-      </Border>
-
-      <Border Classes="radial-item"
-              Classes.hovered="{Binding IsResetCameraHovered}"
-              Canvas.Left="{Binding RadialResetCameraLeft}"
-              Canvas.Top="{Binding RadialResetCameraTop}">
-        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
-          <TextBlock Classes="icon" Text="🎥"/>
-          <TextBlock Classes="label" Text="Reset&#x0a;Camera"/>
-        </StackPanel>
-      </Border>
-
-      <Border Classes="radial-item"
-              Classes.hovered="{Binding IsSnapHovered}"
-              Canvas.Left="{Binding RadialSnapLeft}"
-              Canvas.Top="{Binding RadialSnapTop}">
-        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
-          <TextBlock Classes="icon" Text="🔍"/>
-          <TextBlock Classes="label" Text="Snap to&#x0a;Selected"/>
-        </StackPanel>
-      </Border>
-
-      <Border Classes="radial-item"
-              Classes.hovered="{Binding IsSnapObserverHovered}"
-              Canvas.Left="{Binding RadialSnapObserverLeft}"
-              Canvas.Top="{Binding RadialSnapObserverTop}"
-              IsVisible="{Binding IsModeEarthPosition}">
-        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
-          <TextBlock Classes="icon" Text="🌍"/>
-          <TextBlock Classes="label" Text="Snap&#x0a;Observer"/>
-        </StackPanel>
-      </Border>
-    </Canvas>
 
     <!--  Measurement Indicator -->
     <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="10" Padding="10,5"
@@ -280,68 +201,56 @@
     </Border>
 
     <!-- Comet Orbit Debug Panel — bottom-left, visible only in CometOrbiting mode -->
-    <ContentControl Content="{Binding CometOrbitDebug}"
-                    HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                    Margin="10,0,0,60"
-                    IsVisible="{Binding CometOrbitDebug.IsVisible}">
-      <ContentControl.DataTemplates>
-        <DataTemplate DataType="vmDebug:CometOrbitDebugViewModel">
+    <controls:DebugOnly>
+      <Template>
+        <Border x:CompileBindings="False"
+                DataContext="{ReflectionBinding CometOrbitDebug}"
+                HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                Margin="10,0,0,60"
+                IsVisible="{Binding IsVisible}">
           <ui:CometOrbitDebugPanel/>
-        </DataTemplate>
-      </ContentControl.DataTemplates>
-    </ContentControl>
+        </Border>
+      </Template>
+    </controls:DebugOnly>
 
     <!-- Debug Telemetry Panel -->
-    <ContentControl Content="{Binding DebugTelemetry}"
-                    HorizontalAlignment="Left" VerticalAlignment="Top"
-                    Margin="10,10,0,0">
-      <ContentControl.DataTemplates>
-        <DataTemplate DataType="vmDebug:DebugTelemetryPanelViewModel">
+    <controls:DebugOnly>
+      <Template>
+        <Border x:CompileBindings="False"
+                DataContext="{ReflectionBinding DebugTelemetry}"
+                HorizontalAlignment="Left" VerticalAlignment="Top"
+                Margin="10,10,0,0">
           <ui:DebugTelemetryPanel />
-        </DataTemplate>
-      </ContentControl.DataTemplates>
-    </ContentControl>
+        </Border>
+      </Template>
+    </controls:DebugOnly>
 
-    <!-- Camera Matrix Debug Panel — right-center edge, debug builds only.
-         When CameraMatrixDebug is null (Release), no DataTemplate matches → nothing rendered. -->
-    <ContentControl Content="{Binding CameraMatrixDebug}"
-                    HorizontalAlignment="Right" VerticalAlignment="Center"
-                    Margin="0,0,8,0">
-      <ContentControl.DataTemplates>
-        <DataTemplate DataType="vmDebug:CameraMatrixDebugViewModel">
-          <ui:CameraMatrixDebugPanel/>
-        </DataTemplate>
-      </ContentControl.DataTemplates>
-    </ContentControl>
+
 
     <!--
     RenderDoc frame-capture button.
-    ContentControl with an untyped DataTemplate: when RenderDoc is null (Release builds)
-    no DataTemplate matches so nothing is added to the visual tree. When RenderDoc is a
-    live RenderDocCaptureViewModel (DEBUG + process launched under RenderDoc) the template
-    fires and the Button is instantiated. No type reference to RenderDocCaptureViewModel
-    needed in AXAML — bindings inside the DataTemplate are reflection-based.
+    Wrapped in DebugOnly so it's not instantiated in Release builds.
     -->
-    <ContentControl Content="{Binding RenderDoc}"
-                    HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                    Margin="0,0,10,10">
-      <ContentControl.DataTemplates>
-        <DataTemplate DataType="vmDebug:RenderDocCaptureViewModel">
-          <Border CornerRadius="6"
-                  Background="{DynamicResource Bg.Surface}" Opacity="0.9"
-                  BorderBrush="#994444" BorderThickness="1"
-                  IsVisible="{Binding IsRenderDocAvailable}">
-            <Button Command="{Binding CaptureCommand}"
-                    ToolTip.Tip="Capture the next rendered frame (RenderDoc)"
-                    Padding="8,5"
-                    Background="Transparent"
-                    Foreground="{DynamicResource Text.Primary}">
-              📷 Capture Frame
-            </Button>
-          </Border>
-        </DataTemplate>
-      </ContentControl.DataTemplates>
-    </ContentControl>
+    <controls:DebugOnly>
+      <Template>
+        <Border x:CompileBindings="False"
+                DataContext="{ReflectionBinding RenderDoc}"
+                CornerRadius="6"
+                Background="{DynamicResource Bg.Surface}" Opacity="0.9"
+                BorderBrush="#994444" BorderThickness="1"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                Margin="0,0,10,10"
+                IsVisible="{Binding IsRenderDocAvailable}">
+          <Button Command="{Binding CaptureCommand}"
+                  ToolTip.Tip="Capture the next rendered frame (RenderDoc)"
+                  Padding="8,5"
+                  Background="Transparent"
+                  Foreground="{DynamicResource Text.Primary}">
+            📷 Capture Frame
+          </Button>
+        </Border>
+      </Template>
+    </controls:DebugOnly>
 
     <!-- Sun direction indicator ─────────────────────────────────────────────
     Shown only when the sun is outside the camera frustum (IsSunOffScreen = true).

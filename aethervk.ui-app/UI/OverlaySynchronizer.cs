@@ -123,7 +123,17 @@ public sealed class OverlaySynchronizer : IDisposable
     }
     // Windows/macOS: Show(ownerWindow) naturally enforces child Z-order natively. No extra logic needed.
 
-    // 6. Subscribe to position/bounds AFTER setup to avoid spurious events from the remap cycle.
+    // 6. Make the overlay window fully click-through at the OS level.
+    //    This must happen after Show() so the platform handle (_overlayHandle) is valid.
+    //    - Linux/X11:  XFixes empty input shape region → X server delivers no pointer events to this XID.
+    //    - Windows:    WS_EX_TRANSPARENT extended style → DWM passes all clicks to the window behind.
+    //    - macOS:      NSWindow.ignoresMouseEvents = YES → AppKit never hit-tests this window.
+    //    Avalonia's IsHitTestVisible="False" on the content is still set as a defence-in-depth
+    //    measure for Avalonia-internal routing, but it is the OS-level call here that actually
+    //    prevents events from being delivered to the process.
+    _platformWindowService.SetWindowInputPassthrough(_overlayHandle);
+
+    // 7. Subscribe to position/bounds AFTER setup to avoid spurious events from the remap cycle.
     _mainWindow.PositionChanged    += OnPositionChanged;
     _overlayWindow.PositionChanged += OnOverlayPositionChanged;
 

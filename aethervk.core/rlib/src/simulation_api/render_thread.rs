@@ -448,27 +448,34 @@ fn process_command(
                   });
                 }
 
-                // read lock for scene context
-                let scene_context_read = render_frame.scene.read();
-
-                let (
-                  unscaled_time_us,
-                  unscaled_time_delta_us,
-                  scaled_time_us,
-                  scaled_time_delta_us,
-                ) = {
-                  let time_state_read = scene_context_read.time_state.read();
-                  (
-                    time_state_read.unscaled_time,
-                    time_state_read.unscaled_delta,
-                    time_state_read.scaled_time,
-                    time_state_read.scaled_delta,
-                  )
+                // Narrow the scene read-lock scope: extract only what we need, then drop
+                // the guard before build_render_scene.  Holding it across the full frame
+                // (build + render pass + submit) blocked the logic thread's
+                // upgradable→write upgrade inside self_sync_do_if_done, causing
+                // SnapshotScene / RestoreSnapshot to time out.
+                // build_render_scene is an extension method on Arc<Scene> and reads no
+                // other SceneContext fields, so releasing the guard here is safe.
+                let (scene_arc, unscaled_time_us, unscaled_time_delta_us,
+                     scaled_time_us, scaled_time_delta_us, debug_name) = {
+                  let scene_context_read = render_frame.scene.read();
+                  let (unscaled_time_us, unscaled_time_delta_us,
+                       scaled_time_us, scaled_time_delta_us) = {
+                    let time_state_read = scene_context_read.time_state.read();
+                    (
+                      time_state_read.unscaled_time,
+                      time_state_read.unscaled_delta,
+                      time_state_read.scaled_time,
+                      time_state_read.scaled_delta,
+                    )
+                  };
+                  let debug_name = scene_context_read.debug_name.clone();
+                  let scene_arc = alloc::sync::Arc::clone(&scene_context_read.scene);
+                  // scene_context_read guard dropped here — before any GPU work
+                  (scene_arc, unscaled_time_us, unscaled_time_delta_us,
+                   scaled_time_us, scaled_time_delta_us, debug_name)
                 };
-                let debug_name = scene_context_read.debug_name.clone();
 
-                let render_scene = scene_context_read
-                  .scene
+                let render_scene = scene_arc
                   .build_render_scene(
                     &vulkan_device,
                     pe_handle,

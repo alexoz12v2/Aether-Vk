@@ -82,4 +82,26 @@ public interface IPlatformWindowService
   /// Sets the global cursor position on the screen.
   /// </summary>
   void SetCursorPosition(int x, int y);
+
+  /// <summary>
+  /// Makes the overlay window fully transparent to OS-level input (mouse clicks, keyboard focus).
+  /// The window remains visible and composited normally, but no pointer or keyboard event will be
+  /// delivered to it by the window server — events fall through to whatever is behind it.
+  /// <para>
+  /// On Linux/X11:  applies an empty XFixes input shape region via
+  ///               <c>XFixesSetWindowShapeRegion(disp, xid, ShapeInput=2, 0, 0, emptyRegion)</c>.
+  ///               This removes the window from the X server's hit-test map entirely.
+  ///               Requires <c>libXfixes.so.3</c> (available on all modern desktop Linux systems).
+  /// On Windows:   adds <c>WS_EX_TRANSPARENT</c> to the window's extended style via
+  ///               <c>GetWindowLongPtr</c> + <c>SetWindowLongPtr(GWL_EXSTYLE)</c>.
+  /// On macOS:     sends <c>setIgnoresMouseEvents:YES</c> to the <c>NSWindow</c> object via
+  ///               the Objective-C runtime (<c>objc_msgSend</c>).
+  /// </para>
+  /// <para>Must be called after the window has been shown/mapped so the OS handle is valid.</para>
+  /// </summary>
+  /// <param name="windowHandle">
+  /// The OS window handle from <c>TopLevel.TryGetPlatformHandle().Handle</c>.
+  /// On Linux this is the XID; on Windows the HWND; on macOS the NSWindow pointer.
+  /// </param>
+  void SetWindowInputPassthrough(nint windowHandle);
 }

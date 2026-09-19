@@ -21,7 +21,7 @@ use alloc::{string::String, vec::Vec};
 
 /// Five font-size buckets (pt), linearly spaced between min and max.
 /// Bucket 0 → farthest (smallest text), bucket 4 → nearest (largest text).
-pub const SIZE_BUCKETS_PT: [f32; 5] = [7.0, 9.4, 11.8, 14.2, 18.67];
+pub const SIZE_BUCKETS_PT: [f32; 5] = [14.0, 18.8, 23.6, 28.4, 37.34];
 
 /// Camera distance (km) that maps to the smallest text bucket.
 const D_MAX_KM: f64 = 1_000_000_000.0; // 1e9 km

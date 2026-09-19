@@ -86,7 +86,7 @@ public class CometPositionSnapshotTests
         It.IsNotIn(ExternalStateType.CometPositionSnapshot), It.IsAny<Action<nint>>()))
       .Returns(Mock.Of<IDisposable>());
 
-    var breadcrumb  = new BreadcrumbService(Mock.Of<IUiThreadDispatcher>());
+    var breadcrumb  = new BreadcrumbService();
     var cometConfig = new CometConfigService(runtime.Object, schedulers);
     var timeline    = new TimelineService(runtime.Object, schedulers, cometConfig, breadcrumb);
     var tracker     = new CometPositionTrackerService(runtime.Object, schedulers, timeline);
@@ -161,7 +161,7 @@ public class CometPositionSnapshotTests
       It.IsAny<ulong>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(),
       It.IsAny<Quaternion>(), It.IsAny<ulong>())).Returns(true);
 
-    var breadcrumb  = new BreadcrumbService(Mock.Of<IUiThreadDispatcher>());
+    var breadcrumb  = new BreadcrumbService();
     var cometConfig = new CometConfigService(runtime.Object, schedulers);
     var timeline    = new TimelineService(runtime.Object, schedulers, cometConfig, breadcrumb);
     var tracker     = new CometPositionTrackerService(runtime.Object, schedulers, timeline);

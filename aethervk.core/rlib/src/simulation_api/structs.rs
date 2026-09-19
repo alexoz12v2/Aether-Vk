@@ -319,12 +319,18 @@ impl Drop for SimulationThreads {
     // to bypass atexit handlers and C++ destructors, which could themselves block
     // if the process is already deadlocked.
     const SHUTDOWN_WATCHDOG_S: u64 = 8;
+    let cancel_watchdog = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
+    let cancel_watchdog_clone = cancel_watchdog.clone();
     let _watchdog = oshal::os::thread::Builder::new()
       .name(alloc::format!("shutdown_watchdog"))
       .spawn(move || {
-        oshal::os::native::this_thread::sleep_for(core::time::Duration::from_secs(
-          SHUTDOWN_WATCHDOG_S,
-        ));
+        let iterations = SHUTDOWN_WATCHDOG_S * 10;
+        for _ in 0..iterations {
+          if cancel_watchdog_clone.load(core::sync::atomic::Ordering::Acquire) {
+            return;
+          }
+          oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(100));
+        }
         oshal::log!(
           "[shutdown] watchdog fired after {} s — forcing process exit.",
           SHUTDOWN_WATCHDOG_S
@@ -495,6 +501,7 @@ impl Drop for SimulationThreads {
       audio.stop();
     }
 
+    cancel_watchdog.store(true, core::sync::atomic::Ordering::Release);
     oshal::log!("SimulationThreads drop finished");
   }
 }
@@ -1567,9 +1574,9 @@ impl TaskStatusCode {
 /// between scenes
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ParticleSystemSnapshot {
-  pub global_buffer: alloc::vec::Vec<u8>,
-  pub free_list: alloc::vec::Vec<u8>,
-  pub page_tables: alloc::collections::BTreeMap<u64, alloc::vec::Vec<u8>>,
+  pub global_buffer: alloc::boxed::Box<[u8]>,
+  pub free_list: alloc::boxed::Box<[u8]>,
+  pub page_tables: alloc::collections::BTreeMap<u64, alloc::boxed::Box<[u8]>>,
 }
 
 impl core::fmt::Debug for ParticleSystemSnapshot {

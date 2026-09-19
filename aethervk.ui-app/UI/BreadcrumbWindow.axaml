@@ -1,0 +1,42 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:AetherVk.Logic.ViewModels"
+        xmlns:services="using:AetherVk.Logic.Services"
+        x:DataType="vm:BreadcrumbWindowViewModel"
+        x:Class="AetherVk.UI.BreadcrumbWindow"
+        SystemDecorations="None"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Focusable="False"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
+        Topmost="False">
+
+  <Panel IsHitTestVisible="False">
+    <!-- Breadcrumbs Overlay — top-right of the full MainWindow -->
+    <ItemsControl ItemsSource="{Binding Messages}"
+                  HorizontalAlignment="Right" VerticalAlignment="Top"
+                  Margin="20" IsHitTestVisible="False">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="services:BreadcrumbMessage">
+          <Border Background="{DynamicResource Bg.Surface}"
+                  BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+                  CornerRadius="8" Padding="16" Margin="0,0,0,12"
+                  BoxShadow="0 8 16 0 #20000000">
+            <StackPanel Orientation="Horizontal">
+              <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoading}"
+                           Width="20" Height="20" Margin="0,0,12,0" VerticalAlignment="Center"/>
+              <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="14"
+                           Foreground="{DynamicResource Text.Primary}" Margin="0,0,0,4"/>
+                <TextBlock Text="{Binding Content}" FontSize="12"
+                           Foreground="{DynamicResource Text.Secondary}"
+                           TextWrapping="Wrap" MaxWidth="280"/>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+  </Panel>
+</Window>

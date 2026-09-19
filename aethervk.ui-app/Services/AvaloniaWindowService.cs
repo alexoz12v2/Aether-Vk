@@ -73,14 +73,6 @@ namespace AetherVk.Services
       throw new NotImplementedException();
     }
 
-    public Task<ulong> ShowSpawnCometDialogAsync(
-      System.Collections.Generic.IEnumerable<object> models, // TODO: restore ImportedModelItem when SpawnCometWindow rework is complete
-      ulong? preselectedModelId = null
-    )
-    {
-      throw new NotImplementedException();
-    }
-
     public Task ShowSpawnBillboardDialogAsync()
     {
       throw new NotImplementedException();
