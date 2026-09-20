@@ -65,8 +65,8 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
 
   public double PerspFovMin => FovUnitIndex switch
   {
-    1 => (1.0 / 60.0), 
-    2 => 1.0,          
+    1 => (1.0 / 60.0),
+    2 => 1.0,
     _ => (1.0 / 3600.0)
   };
 
@@ -79,9 +79,9 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
 
   public double PerspFovStep => FovUnitIndex switch
   {
-    1 => 1.0, 
-    2 => 10.0, 
-    _ => 1.0 
+    1 => 1.0,
+    2 => 10.0,
+    _ => 1.0
   };
 
   [ObservableProperty]
@@ -128,7 +128,7 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     set => OrthoHalfHeight = OrthoUnitIndex == 1 ? value / 149597870.7 : value;
   }
 
-  public double OrthoExtentMin => OrthoUnitIndex == 1 ? 1.0 : 0.00000001;
+  public double OrthoExtentMin => OrthoUnitIndex == 0.01 ? 1.0 : 0.00000001; // if problems, km min to 1
   public double OrthoExtentMax => OrthoUnitIndex == 1 ? 149597870700.0 : 1000.0;
   public double OrthoExtentStep => OrthoUnitIndex == 1 ? 100.0 : 0.001;
 
@@ -408,7 +408,7 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
       float orbitMag  = orbitOffset.Length();
       float nearC = Math.Max(1e-12f, orbitMag * 0.05f);
       float farC  = orbitMag * 200f;
-      
+
       _runtimeService.CameraSetOrthographic(
         CameraId,
         (float)-OrthoHalfWidth, (float)OrthoHalfWidth,

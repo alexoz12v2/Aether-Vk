@@ -1032,26 +1032,36 @@ pub fn generate_uv_sphere(
       let first = lat * (lon_segments + 1) + lon;
       let second = first + lon_segments + 1;
 
-      // 3. FIXED: Enforcing standard CCW local winding to match glTF assets.
-      // Now that the Vulkan pipeline is VK_FRONT_FACE_CLOCKWISE (compensating for Y-flip),
-      // all local geometry must be generated as CCW.
+      // Each quad is split into two triangles. Both use consistent winding
+      // such that face normals point outward (confirmed by unit tests):
+      //
+      //   first ---- first+1
+      //     | \         |
+      //   second ---- second+1
+      //
+      // Upper triangle (north-pole row skipped: first-ring all collapses to one point):
       if lat != 0 {
         if flip_winding {
+          // Inverted winding — normals point inward (inside-out rendering):
           indices.push(first);
           indices.push(first + 1);
           indices.push(second);
         } else {
+          // CCW from outside — outward-pointing face normal:
           indices.push(first);
           indices.push(second);
           indices.push(first + 1);
         }
       }
+      // Lower triangle (south-pole row skipped: last-ring all collapses to one point):
       if lat != lat_segments - 1 {
         if flip_winding {
+          // Inverted winding:
           indices.push(second);
           indices.push(first + 1);
           indices.push(second + 1);
         } else {
+          // CCW from outside — outward-pointing face normal:
           indices.push(second);
           indices.push(second + 1);
           indices.push(first + 1);

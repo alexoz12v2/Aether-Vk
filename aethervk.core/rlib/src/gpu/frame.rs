@@ -48,6 +48,10 @@ pub struct DrawCall {
   pub index_count: u32,
   /// The model matrix of the object to draw.
   pub model_matrix: Mat4x4f32,
+  /// RTE center of the mesh in the layer's units (km for micro-layer), stored in f64
+  /// so that `draw_layer_content` can compute a body-fixed sun direction without
+  /// losing precision from the large-magnitude RTE translation.
+  pub center_rte_f64: [f64; 3],
   pub texture_flags: TextureFlags,
   /// From `PhysicalMeshComponent`
   pub emissive_intensity: f32,
@@ -65,6 +69,7 @@ impl DrawCall {
     index_count: u32,
     outline: Option<[f32; 4]>,
     model_matrix: Mat4x4f32,
+    center_rte_f64: [f64; 3],
     emissive_intensity: f32,
     emissive_color: [f32; 3],
     use_new_path: bool,
@@ -76,6 +81,7 @@ impl DrawCall {
       buffers: result.buffers,
       index_count,
       model_matrix,
+      center_rte_f64,
       texture_flags: result.texture_flags,
       emissive_intensity,
       emissive_color,
@@ -312,6 +318,16 @@ impl SunDrawCall {
   pub fn sun_pos(&self) -> Vec3f32 {
     let model_matrix = self.model_matrix_f64.to_mat4_f32();
     Vec3f32(model_matrix.w)
+  }
+
+  /// Sun RTE position in f64, in the macro layer's unit (AU).
+  /// For micro layers, caller must divide by `frame_scale as f64` to convert to km.
+  /// Keeps the full f64 precision of `model_matrix_f64` — use this instead of
+  /// `sun_pos()` when computing body-fixed sun direction for PBR lighting.
+  pub fn sun_pos_au_f64(&self) -> [f64; 3] {
+    use aethervk_oshal_rlib::math::vector::Vector3;
+    let col = &self.model_matrix_f64.cols[3];
+    [col.x(), col.y(), col.z()]
   }
 }
 
@@ -755,6 +771,11 @@ pub struct SphereGizmoBatchCall {
   pub pipeline: PipelineKey,
   pub total_gizmos: u32,
   pub total_vertices: u32,
+  /// First vertex index of the axes+arrowheads section.
+  /// = lon*(2*lat-1)*2 at max subdivision (subdiv=36) = 5112.
+  /// The Rust side always allocates for max subdivisions; the vertex shader
+  /// discards excess sphere-grid vertices via valid=false at lower LOD.
+  pub axis_vertex_start: u32,
   pub data_ptr: u64,
 }
 
@@ -1172,17 +1193,41 @@ pub fn do_draw_sphere_gizmo_batch(
   _handle: PresentationEngineHandle,
   draw_call: &SphereGizmoBatchCall,
 ) -> GpuResult<()> {
-  device.prepare_sphere_gizmo_archetype_for_render_and_bind_pipeline(cmd_buffer)?;
   let push_constants = crate::gpu::SphereGizmoPushConstants {
     view_proj: camera.view_proj.into(),
     gizmo_ptr: draw_call.data_ptr,
     sun_pos: [sun_pos.x(), sun_pos.y(), sun_pos.z()],
     _pad: 0,
   };
+
+  let sphere_count = draw_call.axis_vertex_start;
+  let axis_start   = draw_call.axis_vertex_start;
+  let axis_count   = draw_call.total_vertices.saturating_sub(axis_start);
+  let n            = draw_call.total_gizmos;
+
+  // ── Pass A: OverMesh pipeline (NO_DEPTH_TEST, stencil=EQUAL(1)) ──────────
+  // Draws at pixels where the comet mesh wrote stencil=1.
+  // Both wireframe and axes are unconditionally visible over the comet surface.
+  device.bind_sphere_gizmo_pipeline_over_mesh(cmd_buffer)?;
   device.push_sphere_gizmo_constants(cmd_buffer, &push_constants)?;
-  device.draw_instanced(cmd_buffer, draw_call.total_vertices, draw_call.total_gizmos)?;
+  // Draw 1: sphere wireframe [0 .. axis_vertex_start)
+  device.draw_instanced_first(cmd_buffer, sphere_count, n, 0)?;
+  // Draw 2: axes + arrowheads [axis_vertex_start .. total)
+  device.draw_instanced_first(cmd_buffer, axis_count, n, axis_start)?;
+
+  // ── Pass B: Elsewhere pipeline (depth_test=GEQ, stencil=EQUAL(0)) ────────
+  // Draws at pixels where NO comet mesh was rendered.
+  // Occluded by any other depth-writing geometry in the scene.
+  device.bind_sphere_gizmo_pipeline_elsewhere(cmd_buffer)?;
+  device.push_sphere_gizmo_constants(cmd_buffer, &push_constants)?;
+  // Draw 3: sphere wireframe [0 .. axis_vertex_start)
+  device.draw_instanced_first(cmd_buffer, sphere_count, n, 0)?;
+  // Draw 4: axes + arrowheads [axis_vertex_start .. total)
+  device.draw_instanced_first(cmd_buffer, axis_count, n, axis_start)?;
+
   Ok(())
 }
+
 
 pub fn do_draw_ui_batch(
   device: &dyn RenderDevice,
@@ -1502,6 +1547,42 @@ fn draw_layer_content(
     sun_pos
   };
 
+  // For directional lights (sunColor.w = 1.0), compute the sun's RTE position in f64
+  // so the per-mesh body-fixed direction subtraction and normalization always happen,
+  // producing a unit-length lightDir in the shader.
+  //
+  // The sun's SunDrawCall is typically in the macro layer (layer_index=0); the micro
+  // layer's sun_call is None.  We therefore always fall back to the already-frame-scaled
+  // f32 sun_pos (cast to f64) when no f64 source is available.  This guarantees
+  // sun_pos_f64_km is Some(_) for every directional draw and the normalize below runs.
+  let sun_color: [f32; 4] = [1.0, 1.0, 1.0, 1.0]; // TODO: per-light color
+  let is_directional = sun_color[3] > 0.5;
+  let sun_pos_f64_km: Option<[f64; 3]> = if is_directional {
+    use aethervk_oshal_rlib::math::vector::Vector3;
+    let km = layer
+      .sun_call
+      .as_ref()
+      .map(|sc| {
+        // Own SunDrawCall in this layer: use full f64 model matrix.
+        let au = sc.sun_pos_au_f64();
+        let fs = layer.frame_scale as f64;
+        if layer.layer_index > 0 && fs > 0.0 && fs < 1.0 {
+          [au[0] / fs, au[1] / fs, au[2] / fs]
+        } else {
+          au
+        }
+      })
+      .unwrap_or_else(|| {
+        // Sun is in another layer (e.g. macro).  sun_pos is already converted to this
+        // layer's units (km for micro) by the frame_scale division above, so we just
+        // widen to f64.  Body-fixed subtraction and normalization still happen in f64.
+        [sun_pos.x() as f64, sun_pos.y() as f64, sun_pos.z() as f64]
+      });
+    Some(km)
+  } else {
+    None
+  };
+
   // Rebuild projection matrix for this layer's near/far planes.
   // The view matrix (rotation-only in RTE) is shared across all layers.
   let layer_camera = render_scene.camera_data.rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
@@ -1518,11 +1599,36 @@ fn draw_layer_content(
     device.debug_label_insert(cmd_buffer, c"Static Meshes", [0.7, 0.7, 0.7, 1.0]);
   }
   for draw_call in &layer.draw_calls {
+    // Compute the body-fixed sun direction for this mesh.
+    // For directional lights: both sunPos_RTE and the mesh center (center_rte_f64) are in
+    // the same RTE frame and rotate together as the camera orbits.  Their difference
+    // sunPos_RTE − meshCenter_RTE = direction from the mesh to the sun, which is
+    // camera-independent (body-fixed).  We do this in f64 to avoid cancellation when
+    // the mesh center and sun position have similar magnitudes.
+    // The result is pre-normalized, so the fragment shader uses it directly as lightDir.
+    // For point lights: sun_pos is passed unchanged; the shader computes the per-fragment
+    // direction from sunPos − inWorldPos as before.
+    let effective_sun_pos = match &sun_pos_f64_km {
+      Some(sun_km) => {
+        let c = &draw_call.center_rte_f64;
+        let dx = sun_km[0] - c[0];
+        let dy = sun_km[1] - c[1];
+        let dz = sun_km[2] - c[2];
+        let len = (dx * dx + dy * dy + dz * dz).sqrt();
+        if len > 1e-30 {
+          Vec3f32::from_components((dx / len) as f32, (dy / len) as f32, (dz / len) as f32)
+        } else {
+          sun_pos // degenerate: sun at comet center, fall back
+        }
+      }
+      None => sun_pos, // point light: shader computes direction per-fragment
+    };
+
     do_draw_call2(
       device,
       &layer_camera,
-      sun_pos,
-      [1.0, 1.0, 1.0, 1.0], // TODO
+      effective_sun_pos,
+      sun_color,
       cmd_buffer,
       handle,
       draw_call,

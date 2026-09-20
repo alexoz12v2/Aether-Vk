@@ -201,7 +201,7 @@ pub fn start_logic_thread(
     {
       oshal::os::debug::fpe::unmask_fpu_for_current_thread();
     }
-    
+
     // Enable V2 particles at simulation startup
     crate::gpu_backends::vulkan::physics::enable_particle_system_v2();
 
@@ -1087,13 +1087,14 @@ fn process_command_internal(
       );
 
       if retargeted.is_none() {
-        // Read global transform so start_pos is safely in AU, regardless of whether 
+        // Read global transform so start_pos is safely in AU, regardless of whether
         // the camera was currently parented to the comet (km) or root (AU).
-        let (mut start_pos, start_rot) = if let Some(global_t) = scene.scene.global_transform_f64(cam_int) {
+        let (mut start_pos, start_rot) =
+          if let Some(global_t) = scene.scene.global_transform_f64(cam_int) {
             (global_t.position, global_t.rotation)
-        } else {
+          } else {
             return Ok(()); // Safety fallback
-        };
+          };
 
         let start_rot = crate::scene::animation::strip_roll(start_rot);
 
@@ -1102,7 +1103,9 @@ fn process_command_internal(
           let pivot_id_bits = pivot.x().to_bits();
           if pivot_id_bits != 0 {
             let pivot_ent = EntityId::from_ffi(pivot_id_bits);
-            if let Some(pivot_t) = utils::global_transform_f64_with_overrides(&scene.scene, pivot_ent, |_| None) {
+            if let Some(pivot_t) =
+              utils::global_transform_f64_with_overrides(&scene.scene, pivot_ent, |_| None)
+            {
               start_pos -= pivot_t.position;
             }
           }
@@ -1176,7 +1179,10 @@ fn process_command_internal(
 
       Ok(())
     }
-    LogicCommand::SnapshotScene { scene_id, done_flag } => {
+    LogicCommand::SnapshotScene {
+      scene_id,
+      done_flag,
+    } => {
       use oshal::os::time::get_monotonic_time;
       let scenes = ctx.scenes.read();
       // Retry stopping the current task for a deadline of 500ms. Otherwise die
@@ -1204,7 +1210,7 @@ fn process_command_internal(
             if let Ok(particle_snap) = vulkan_device.snapshot_particles() {
               scene_write.particle_snapshot = Some(particle_snap);
             }
-            
+
             // Snapshot the TimeManager state
             let time_state = scenes.time_managers.get(&scene_id).unwrap().state.read().clone();
             scene_write.time_snapshot = Some(alloc::boxed::Box::new(time_state));
@@ -1226,7 +1232,10 @@ fn process_command_internal(
 
     // TODO now this command will be fused with StopScene, therefore
     //commenting out pieces as I see fit is perfectly fine
-    LogicCommand::RestoreSnapshot { scene_id, done_flag } => {
+    LogicCommand::RestoreSnapshot {
+      scene_id,
+      done_flag,
+    } => {
       use oshal::os::time::get_monotonic_time;
       let scenes = ctx.scenes.read();
       // Retry stopping the current task for a deadline of 10s.
@@ -1276,7 +1285,7 @@ fn process_command_internal(
             if let Some(snapshot) = scene_write.scene_snapshot.take() {
               scene_write.scene = snapshot.into();
             }
-            
+
             // Restore TimeManager state
             if let Some(ts) = scene_write.time_snapshot.take() {
               let time_mgr = scenes.time_managers.get(&scene_id).unwrap();
@@ -1296,7 +1305,8 @@ fn process_command_internal(
             utils::mark_all_serializable_as_changed(scene_write);
           },
         )
-        .is_some() {
+        .is_some()
+        {
           done_flag.store(true, core::sync::atomic::Ordering::Release);
           return Ok(());
         }
@@ -1304,59 +1314,114 @@ fn process_command_internal(
 
       Err(EngineError::InvalidOperation("Failed to restore snapshot"))
     }
-    
-    LogicCommand::ResetSimulation { scene_id, done_flag } => {
+
+    LogicCommand::ResetSimulation {
+      scene_id,
+      done_flag,
+    } => {
       use oshal::os::time::get_monotonic_time;
       let scenes = ctx.scenes.read();
-    
-      let (now, elapsed) = {
+
+      let (now, elapsed, start_epoch) = {
         let mut time_mgr = scenes.time_managers.get_mut(&scene_id).unwrap();
         let mut state = time_mgr.state.write();
-        
+
         // Zero out the clock to snap epoch back to start_epoch
         state.scaled_time = 0;
         state.scaled_accumulator = 0;
-        
-        (state.unscaled_time, state.unscaled_delta)
+
+        (
+          state.unscaled_time,
+          state.unscaled_delta,
+          time_mgr.start_epoch,
+        )
       };
-    
+
       let start = get_monotonic_time();
       while get_monotonic_time() - start <= 1_000_000_i64 {
         if let Some(_) = utils::self_sync_do_if_done(
-          &scenes, scene_id, ctx.kernels.0.clone(), ctx.kernels.1, &ctx.render_tx, now, elapsed,
+          &scenes,
+          scene_id,
+          ctx.kernels.0.clone(),
+          ctx.kernels.1,
+          &ctx.render_tx,
+          now,
+          elapsed,
           |vulkan_device, scene_write, _| {
-            
             // 1. Wait for render thread idle
-            let last_render_task = scene_write.last_render_task.load(core::sync::atomic::Ordering::Acquire);
+            let last_render_task =
+              scene_write.last_render_task.load(core::sync::atomic::Ordering::Acquire);
             if last_render_task != 0 {
               let w_start = get_monotonic_time();
               while get_monotonic_time() - w_start < 500_000_i64 {
-                if vulkan_device.is_task_completed(last_render_task).unwrap_or(true) { break; }
+                if vulkan_device.is_task_completed(last_render_task).unwrap_or(true) {
+                  break;
+                }
                 core::hint::spin_loop();
               }
             }
-    
+
             // 2. GPU-level particle reset (device.rs)
-            unsafe { let _ = vulkan_device.reset_all_particle_systems(); }
-    
+            unsafe {
+              let _ = vulkan_device.reset_all_particle_systems();
+            }
+
             // 3. ECS component reset
-            scene_write.scene.query1_mut(|_, comp: &mut crate::scene::particles::ParticleSystemComponent| {
-              comp.last_emission.store(0, core::sync::atomic::Ordering::Relaxed);
-              comp.last_compaction.store(0, core::sync::atomic::Ordering::Relaxed);
-            });
-    
+            scene_write.scene.query1_mut(
+              |_, comp: &mut crate::scene::particles::ParticleSystemComponent| {
+                comp.last_emission.store(0, core::sync::atomic::Ordering::Relaxed);
+                comp.last_compaction.store(0, core::sync::atomic::Ordering::Relaxed);
+              },
+            );
+
             // 4. Evict cached SPICE state so interpolation restarts clean
             let mut keys = alloc::vec::Vec::with_capacity(128);
             scenes.cartesian_state_cache.iter().for_each(|kv_ref| keys.push(*kv_ref.key()));
             for key in keys {
-              if key.scene_id == scene_id { scenes.cartesian_state_cache.remove(&key); }
+              if key.scene_id == scene_id {
+                scenes.cartesian_state_cache.remove(&key);
+              }
             }
-    
+
+            let logic_state = ctx.logic_state.read();
+            if let Some(earth) = scene_write.earth {
+              if let Some(planet) = scene_write
+                .scene
+                .with_component(earth.body, |p: &crate::scene::AlmanacPlanet| *p)
+              {
+                let _ = crate::simulation_api::reposition::force_reposition(
+                  &scene_write.scene,
+                  earth.subtree,
+                  earth.body,
+                  &logic_state.almanac_data,
+                  &planet,
+                  start_epoch,
+                );
+              }
+            }
+            if let Some(comet) = scene_write.comet {
+              if let Some(planet) = scene_write
+                .scene
+                .with_component(comet.body, |p: &crate::scene::AlmanacPlanet| *p)
+              {
+                let _ = crate::simulation_api::reposition::force_reposition(
+                  &scene_write.scene,
+                  comet.subtree,
+                  comet.body,
+                  &logic_state.almanac_data,
+                  &planet,
+                  start_epoch,
+                );
+              }
+            }
+
             utils::mark_all_serializable_as_changed(scene_write);
-          }
-        ) { break; }
+          },
+        ) {
+          break;
+        }
       }
-    
+
       done_flag.store(true, core::sync::atomic::Ordering::Release);
       Ok(())
     }
@@ -2722,6 +2787,7 @@ fn execute_simulation_tick_fixed_update_phase(
   // Spin wait for the render thread to finish the polling with a 2ms deadline, 0.2ms
   // interval. If we can't finish on time, abort the update procedure
   let mut do_cross_sync = false;
+  let is_cross_sync_none = cross_sync_data.is_none();
   if let Some((feedback_arc, feedback_ptr)) = cross_sync_data {
     use oshal::os::native::this_thread;
     use oshal::os::time::get_monotonic_time;
@@ -3152,11 +3218,13 @@ fn execute_simulation_tick_fixed_update_phase(
                 // The comet drifted too far. Move the Micro Frame to the Comet's exact AU location
                 // works because, due to assertion, we know that micro frame is child of root
                 // Note: position of the micro frame is in AU
-                frame_updates.push((parent_id, (global_dpos * KM_TO_AU).to_f32()));
+                let (subtree_pos_f32, residual_f32) =
+                  crate::simulation_api::reposition::compute_macro_and_residual(global_dpos);
+                frame_updates.push((parent_id, subtree_pos_f32));
                 // now update the comet so that its rotation relative to its parent, which in this
-                // case is equal to relative to root, is updated. Position relative to frame is reset
-                // to zero
-                body_state.transform.position = Vec3f32::zero();
+                // case is equal to relative to root, is updated. Position relative to frame is the
+                // exact km residual after f32 truncation to prevent jumping!
+                body_state.transform.position = residual_f32;
               } else {
                 // --- NORMAL DRIFT ---
                 // The frame stays still, just update the Comet's local offset
@@ -3263,7 +3331,8 @@ fn execute_simulation_tick_fixed_update_phase(
     // ------------------------------------------------------------------------------------
     // SPICE EZR Kernel: Commit Comet Cartesian state update from dashmap to scene
     // ------------------------------------------------------------------------------------
-    if do_cross_sync {
+    let commit_ecs = is_cross_sync_none || do_cross_sync;
+    if commit_ecs {
       // 1. upgrade to a write lock to start applying updates
       let mut scene_write = parking_lot::RwLockUpgradableReadGuard::upgrade(scene);
       let mut start_time_unscaled_us = get_monotonic_time();
@@ -3370,7 +3439,9 @@ fn execute_simulation_tick_update_phase(
         if pivot_id_bits != 0 {
           let pivot_ent = EntityId::from_ffi(pivot_id_bits);
           let lerped_offset = DVec3::lerp(anim.start_pos, anim.target_pos, smooth_t as f64);
-          if let Some(pivot_t) = utils::global_transform_f64_with_overrides(&scene.scene, pivot_ent, |_| None) {
+          if let Some(pivot_t) =
+            utils::global_transform_f64_with_overrides(&scene.scene, pivot_ent, |_| None)
+          {
             pivot_t.position + lerped_offset
           } else {
             lerped_offset
@@ -3384,7 +3455,8 @@ fn execute_simulation_tick_update_phase(
 
       // Rotation: enforce slerp_constrained unconditionally for all camera animations
       // so the camera's up-vector never crosses the global equator (no pole flip or unwanted roll).
-      let new_rot = crate::scene::animation::slerp_constrained(anim.start_rot, anim.target_rot, smooth_t);
+      let new_rot =
+        crate::scene::animation::slerp_constrained(anim.start_rot, anim.target_rot, smooth_t);
 
       if anim.elapsed > anim.duration {
         anim.is_finished = true;
@@ -3431,6 +3503,43 @@ fn execute_simulation_tick_clear_changed_entities_phase(
     return;
   }
   let scene = scene_arc.read();
+
+  let mut cameras_to_mark = alloc::vec::Vec::new();
+
+  let mut comet_changed = false;
+  if let Some(comet) = &scene.comet {
+    if scene.changed_entities.read().contains_key(&comet.body.as_ffi()) {
+      comet_changed = true;
+    }
+  }
+
+  let mut earth_changed = false;
+  if let Some(earth) = &scene.earth {
+    if scene.changed_entities.read().contains_key(&earth.body.as_ffi()) {
+      earth_changed = true;
+    }
+  }
+
+  if comet_changed || earth_changed {
+    scene.scene.query1(|e_id, _: &crate::scene::CameraComponent| {
+      let hierarchy = scene.scene.hierarchy.read();
+      let mut current = e_id;
+      while let Some(&parent) = hierarchy.parents.get(&current) {
+        let is_comet = comet_changed && scene.comet.as_ref().is_some_and(|c| c.body == parent);
+        let is_earth = earth_changed && scene.earth.as_ref().is_some_and(|e| e.body == parent);
+
+        if is_comet || is_earth {
+          cameras_to_mark.push(e_id);
+          break;
+        }
+        current = parent;
+      }
+    });
+  }
+
+  for cam in cameras_to_mark {
+    utils::mark_component_changed::<crate::scene::HighResTransformComponent>(&scene, cam);
+  }
 
   // - accumulate all entities changes into a vector
   // (external entity id, component id, component data)
@@ -3880,7 +3989,10 @@ mod utils {
     // Note: Check simulattion speed after checking `physics_done`, so that we can process
     // remaining GPU tasks and then pause the simulation
     if !scenes.time_managers.contains_key(&scene_id) {
-      oshal::log!("self_sync_do_if_done failed: time_managers does not contain scene_id {}", scene_id);
+      oshal::log!(
+        "self_sync_do_if_done failed: time_managers does not contain scene_id {}",
+        scene_id
+      );
       return None;
     }
 
@@ -3901,11 +4013,12 @@ mod utils {
         .with_device(device_handle, |dyn_device| {
           let vulkan_device: &Device = dyn_device.as_any().downcast_ref().unwrap();
           let mut scene_write = parking_lot::RwLockUpgradableReadGuard::upgrade(scene);
-          
+
           let is_done = if had_task {
             // SAFETY: `latest_physics_sync` written by `execute_simulation_tick`, which was
             // executed if `active_physics_task` is `true`
-            let physics_sync = unsafe { scene_write.latest_physics_sync.as_mut().unwrap_unchecked() };
+            let physics_sync =
+              unsafe { scene_write.latest_physics_sync.as_mut().unwrap_unchecked() };
             // Block (zero CPU) until the GPU signals the compute timeline semaphore,
             // with a hard deadline of 8ms (half a frame).  This replaces the old
             physics_sync.blocking_wait(&vulkan_device.device, 8_000_000)
@@ -3920,7 +4033,7 @@ mod utils {
             }
             Ok(Some(f(vulkan_device, &mut scene_write, render_tx)))
           } else {
-            // Normal polling timeout (e.g. physics frame takes > 8ms). 
+            // Normal polling timeout (e.g. physics frame takes > 8ms).
             // We just restore the flag and let the caller loop.
             scene_write.active_physics_task.store(true, Ordering::Release);
             Ok(None)
@@ -3928,7 +4041,10 @@ mod utils {
         })
         .unwrap_or(None)
     } else {
-      oshal::log!("self_sync_do_if_done failed: scene_id {} not found in scenes", scene_id);
+      oshal::log!(
+        "self_sync_do_if_done failed: scene_id {} not found in scenes",
+        scene_id
+      );
       None
     }
   }

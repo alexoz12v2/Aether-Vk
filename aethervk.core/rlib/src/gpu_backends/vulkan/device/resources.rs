@@ -1566,8 +1566,12 @@ pub(super) struct SphereGizmoRenderResourceArchetype {
       SphereGizmoRenderResourceArchetypeArena,
     >,
   >,
-  pub pipeline_key: PipelineKey,
-  pub graphics_info: GraphicsInfo,
+  /// Pipeline for drawing over the comet mesh: NO_DEPTH_TEST + stencil=EQUAL(1)
+  pub pipeline_key_over_mesh: PipelineKey,
+  /// Pipeline for drawing where there is no comet mesh: depth_test=GEQ + stencil=EQUAL(0)
+  pub pipeline_key_elsewhere: PipelineKey,
+  pub graphics_info_over_mesh: GraphicsInfo,
+  pub graphics_info_elsewhere: GraphicsInfo,
 }
 
 impl SphereGizmoRenderResourceArchetype {

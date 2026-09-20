@@ -182,7 +182,7 @@ impl SceneConversionExt2 for Scene {
 
         let dist_local = cam_in_frame_f64.position.length();
         let soi_local = (entry.soi_radius / entry.scale) as f64;
-        let safe_micro_near = (dist_local * 0.01).max(0.001);
+        let safe_micro_near = 0.001_f64;
         let tight_near = (dist_local - soi_local).max(safe_micro_near);
         let tight_far = (dist_local + soi_local).max(tight_near + safe_micro_near);
 
@@ -198,8 +198,10 @@ impl SceneConversionExt2 for Scene {
     macro_rules! get_or_create_layer {
       ($layer_idx:expr) => {
         layer_map.entry($layer_idx).or_insert_with(|| {
-          let (near, far) =
-            layer_bounds.get(&$layer_idx).copied().unwrap_or((macro_near as f64, macro_far as f64));
+          let (near, far) = layer_bounds
+            .get(&$layer_idx)
+            .copied()
+            .unwrap_or((macro_near as f64, macro_far as f64));
           let scale = layer_frame_scales.get(&$layer_idx).copied().unwrap_or(1.0);
           RenderLayer {
             layer_index: $layer_idx,
@@ -363,6 +365,186 @@ impl SceneConversionExt2 for Scene {
       })
     });
 
+    // Sphere gizmo extraction is done early so the depth fitting pass below can
+    // include gizmo bounding spheres in the per-layer near/far computation.
+    // The sg_batch_buffers push and get_or_create_layer! call still happen downstream.
+    let extracted_sg = extract!(SphereGizmoComponent, |id, sg| {
+      if !sg.is_visible {
+        return None;
+      }
+      // TODO remove sg.local_frame
+      compute_rte(self, id).map(|(layer_idx, rte)| {
+        // sphere_gizmo.vert generates localPos in km (from data.radius in km).
+        // viewProj for the micro layer is also in km.
+        // The RTE scale (≈6.68e-9 AU/km) baked into rte.to_mat4() diagonal would
+        // multiply every sphere vertex offset by 6.68e-9, collapsing a 50 km sphere
+        // to a 334 μm point — invisible at any viewing distance.
+        // Override scale to (1,1,1): preserves rotation and translation, lets km be km.
+        let mut rte_for_gizmo = rte;
+        rte_for_gizmo.scale = Vec3f32::from_components(1.0, 1.0, 1.0);
+        (
+          layer_idx,
+          id,
+          rte_for_gizmo.to_transform().to_mat4::<Mat4x4f32>() * sg.local_frame,
+          sg.radius,
+          sg.subdivisions,
+        )
+      })
+    });
+
+    // ------ Depth fitting pass -------------------------------------------------------
+    // Refits micro-layer near/far from actual draw-call geometry rather than the
+    // conservative SOI sphere. Only meshes whose bounding sphere passes a frustum
+    // cull test contribute to the tight bounds — objects outside the frustum (behind
+    // the camera, off to the sides, etc.) must not expand the depth range.
+    //
+    // The SOI-sphere bounds (computed in Phase 2 above) remain as a fallback if no
+    // StaticMeshComponent survives the cull test for a given micro layer.
+    //
+    // Scale is always 1 for comet meshes (radius is baked into vertex positions via
+    // update_uv_sphere_radius_in_place), so bounding radius is read from vertex data.
+    //
+    // Constants:
+    //   DEPTH_NEAR_FLOOR — absolute minimum near plane (1 m) to handle camera-inside-mesh
+    //   DEPTH_MARGIN     — 5% padding on both sides to prevent near/far edge clipping
+    {
+      const DEPTH_NEAR_FLOOR: f64 = 0.001; // km (= 1 m)
+      const DEPTH_MARGIN: f64 = 1.05;
+
+      // Frustum plane extraction via Gribb-Hartmann from VP in f64.
+      // L/R/T/B planes depend only on FOV + aspect (not near/far), so the macro-layer
+      // VP is valid for culling objects in any micro layer.
+      // Planes are in RTE world space (km); testing rte.position directly is correct.
+      let vp = camera_data.proj_f64 * camera_data.view_f64;
+
+      // Helper: element at (row i, col j) from column-major Mat4x4f64.
+      // cols[j] = column j; element at row i uses .x()/.y()/.z()/.w().
+      let vp_e = |i: usize, j: usize| -> f64 {
+        use aethervk_oshal_rlib::math::vector::Vector4;
+        match i {
+          0 => vp.cols[j].x(),
+          1 => vp.cols[j].y(),
+          2 => vp.cols[j].z(),
+          _ => vp.cols[j].w(),
+        }
+      };
+
+      // Extract rows 0, 1, 3 from VP (rows 2 encodes depth — not needed for L/R/T/B).
+      let r0 = [vp_e(0, 0), vp_e(0, 1), vp_e(0, 2), vp_e(0, 3)];
+      let r1 = [vp_e(1, 0), vp_e(1, 1), vp_e(1, 2), vp_e(1, 3)];
+      let r3 = [vp_e(3, 0), vp_e(3, 1), vp_e(3, 2), vp_e(3, 3)];
+
+      // Gribb-Hartmann frustum planes (Vulkan NDC z∈[0,1]).
+      // A point p is inside plane iff dot(plane.xyz, p) + plane.w ≥ 0.
+      let frustum_planes: [[f64; 4]; 5] = [
+        [r3[0] + r0[0], r3[1] + r0[1], r3[2] + r0[2], r3[3] + r0[3]], // Left
+        [r3[0] - r0[0], r3[1] - r0[1], r3[2] - r0[2], r3[3] - r0[3]], // Right
+        [r3[0] + r1[0], r3[1] + r1[1], r3[2] + r1[2], r3[3] + r1[3]], // Bottom
+        [r3[0] - r1[0], r3[1] - r1[1], r3[2] - r1[2], r3[3] - r1[3]], // Top
+        r3, // Front (w_clip ≥ 0 — object is in front of the camera)
+      ];
+
+      // Sphere-vs-frustum: returns false if the sphere is COMPLETELY outside any plane.
+      let sphere_in_frustum = |cx: f64, cy: f64, cz: f64, r: f64| -> bool {
+        for p in &frustum_planes {
+          let dot = p[0] * cx + p[1] * cy + p[2] * cz + p[3];
+          // Plane magnitude needed to convert homogeneous dot to world-space distance.
+          let mag = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+          if dot < -r * mag {
+            return false; // sphere entirely outside this half-space
+          }
+        }
+        true
+      };
+
+      let mut per_layer_depth: hashbrown::HashMap<u32, (f64, f64)> =
+        hashbrown::HashMap::with_capacity(4);
+
+      for (layer_idx, _id, mesh, rte, _outline) in &extracted_meshes {
+        if *layer_idx == 0 {
+          continue; // macro layer uses camera near/far from UI — do not touch
+        }
+
+        // Bounding radius from vertex positions (scale=1, radius baked into positions).
+        let obj_radius = mesh
+          .mesh
+          .vertices
+          .iter()
+          .map(|v| {
+            let [x, y, z] = v.position;
+            ((x * x + y * y + z * z) as f64).sqrt()
+          })
+          .fold(0.0f64, f64::max);
+
+        // Camera-to-object-center vector in km (rte.position = obj_pos − cam_pos in km).
+        let (cx, cy, cz) = {
+          use aethervk_oshal_rlib::math::vector::Vector3;
+          (
+            rte.position.x() as f64,
+            rte.position.y() as f64,
+            rte.position.z() as f64,
+          )
+        };
+        let obj_dist = (cx * cx + cy * cy + cz * cz).sqrt();
+
+        // Frustum cull: skip objects whose bounding sphere lies entirely outside the view.
+        if !sphere_in_frustum(cx, cy, cz, obj_radius) {
+          continue;
+        }
+
+        let obj_near = (obj_dist - obj_radius * DEPTH_MARGIN).max(DEPTH_NEAR_FLOOR);
+        let obj_far = obj_dist + obj_radius * DEPTH_MARGIN;
+
+        let e = per_layer_depth.entry(*layer_idx).or_insert((f64::MAX, f64::NEG_INFINITY));
+        e.0 = e.0.min(obj_near);
+        e.1 = e.1.max(obj_far);
+      }
+
+      // Sphere gizmos: axes extend to `radius * 1.5` km beyond the sphere surface
+      // (sphere_gizmo.vert line 121), with arrowheads adding another `radius * 0.2`
+      // (line 151). The full gizmo bounding sphere is therefore `radius * 1.7` km.
+      // -> scratch that, it seems that the yellow one is still cut. Trying out 2.1 km
+      // extracted_sg tuple: (layer_idx, id, mat, rad, sub)
+      for (layer_idx, _id, _mat, rad, _sub) in &extracted_sg {
+        if *layer_idx == 0 {
+          continue;
+        }
+
+        // Gizmo center = RTE position of the parent entity. We need to recompute it
+        // here since extracted_sg stores the final mat4, not the raw rte.position.
+        // Mat4x4f32 columns are named .x/.y/.z/.w (column-major); .w is the
+        // translation column (RTE offset in km, since scale was forced to 1).
+        let (cx, cy, cz) = {
+          use aethervk_oshal_rlib::math::vector::Vector4;
+          (_mat.w.x() as f64, _mat.w.y() as f64, _mat.w.z() as f64)
+        };
+        let obj_dist = (cx * cx + cy * cy + cz * cz).sqrt();
+
+        // Bounding radius: full axis + arrowhead envelope.
+        let gizmo_radius = (*rad as f64) * 2.1;
+
+        if !sphere_in_frustum(cx, cy, cz, gizmo_radius) {
+          continue;
+        }
+
+        let obj_near = (obj_dist - gizmo_radius * DEPTH_MARGIN).max(DEPTH_NEAR_FLOOR);
+        let obj_far = obj_dist + gizmo_radius * DEPTH_MARGIN;
+
+        let e = per_layer_depth.entry(*layer_idx).or_insert((f64::MAX, f64::NEG_INFINITY));
+        e.0 = e.0.min(obj_near);
+        e.1 = e.1.max(obj_far);
+      }
+
+      // Commit: replace SOI-sphere fallback with per-object tight bounds where
+      // visible geometry is present. Invalid entries (obj_far <= obj_near) are skipped.
+      for (layer_idx, (obj_near, obj_far)) in per_layer_depth {
+        if obj_far > obj_near {
+          layer_bounds.insert(layer_idx, (obj_near, obj_far));
+        }
+      }
+    }
+    // ------ End depth fitting pass ---------------------------------------------------
+
     for (layer_idx, _id, mesh, rte, outline) in extracted_meshes {
       let gpu_res = device.get_physical_mesh2_resources(mesh.mesh.id, pe_handle).or_else(|_| {
         device.create_physical_mesh2_resources(
@@ -375,6 +557,13 @@ impl SceneConversionExt2 for Scene {
       });
       if let Ok(res) = gpu_res {
         let mat = rte.to_transform().to_mat4();
+        // Capture the f64 RTE center before to_mat4() truncates it to f32.
+        // rte.position = pos_f64 − cam_pos_f64 (computed by compute_rte), so it is
+        // already the exact RTE translation in f64, ready for body-fixed sun direction.
+        let center_rte_f64 = {
+          use aethervk_oshal_rlib::math::vector::Vector3;
+          [rte.position.x(), rte.position.y(), rte.position.z()]
+        };
         let l = get_or_create_layer!(layer_idx);
 
         l.draw_calls.push(DrawCall::from_handles_and_matrix(
@@ -382,6 +571,7 @@ impl SceneConversionExt2 for Scene {
           mesh.mesh.indices.len() as u32,
           outline,
           mat,
+          center_rte_f64,
           mesh.emissive_color[3],
           [
             mesh.emissive_color[0],
@@ -515,29 +705,6 @@ impl SceneConversionExt2 for Scene {
       u32,
       alloc::vec::Vec<(EntityId, Mat4x4f32, f32, f32)>,
     >::with_capacity(16);
-    let extracted_sg = extract!(SphereGizmoComponent, |id, sg| {
-      if !sg.is_visible {
-        return None;
-      }
-      // TODO remove sg.local_frame
-      compute_rte(self, id).map(|(layer_idx, rte)| {
-        // sphere_gizmo.vert generates localPos in km (from data.radius in km).
-        // viewProj for the micro layer is also in km.
-        // The RTE scale (≈6.68e-9 AU/km) baked into rte.to_mat4() diagonal would
-        // multiply every sphere vertex offset by 6.68e-9, collapsing a 50 km sphere
-        // to a 334 μm point — invisible at any viewing distance.
-        // Override scale to (1,1,1): preserves rotation and translation, lets km be km.
-        let mut rte_for_gizmo = rte;
-        rte_for_gizmo.scale = Vec3f32::from_components(1.0, 1.0, 1.0);
-        (
-          layer_idx,
-          id,
-          rte_for_gizmo.to_transform().to_mat4::<Mat4x4f32>() * sg.local_frame,
-          sg.radius,
-          sg.subdivisions,
-        )
-      })
-    });
     for (layer_idx, id, mat, rad, sub) in extracted_sg {
       get_or_create_layer!(layer_idx);
       sg_batch_buffers.entry(layer_idx).or_default().push((id, mat, rad, sub));

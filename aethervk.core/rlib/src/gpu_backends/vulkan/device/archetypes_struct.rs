@@ -224,7 +224,69 @@ impl_render_archetype!(TrajectoryRenderResourceArchetype);
 impl_render_archetype!(UiRenderResourceArchetype);
 impl_render_archetype!(CursorRenderResourceArchetype);
 impl_render_archetype!(Text2RenderResourceArchetype);
-impl_render_archetype!(SphereGizmoRenderResourceArchetype);
+// SphereGizmoRenderResourceArchetype has two pipelines (OverMesh + Elsewhere) and
+// cannot use the single-pipeline impl_render_archetype! macro.
+impl RenderArchetype for resources::SphereGizmoRenderResourceArchetype {
+  fn pipeline_key(&self) -> PipelineKey {
+    // The "primary" key used by get_archetype_pipeline_key (not used for sphere gizmo draws;
+    // draw calls bind variants explicitly). Return over_mesh as the canonical key.
+    self.pipeline_key_over_mesh
+  }
+  fn pipeline_layout(&self) -> vk::PipelineLayout {
+    self.arena.upgrade().unwrap().read().pipeline_layout.get()
+  }
+  fn prepare_update(
+    &self,
+    format: vk::Format,
+    passes: &RenderPasses,
+  ) -> GpuResult<Option<PreparedArchetypeUpdate>> {
+    let needs_update = self
+      .graphics_info_over_mesh
+      .fragment_out
+      .color_attachment_formats
+      .first()
+      .copied()
+      != Some(format);
+    if needs_update {
+      let mut gi_over = self.graphics_info_over_mesh.clone();
+      let mut gi_else = self.graphics_info_elsewhere.clone();
+      let dsf = gi_over
+        .fragment_out
+        .depth_attachment_format
+        .unwrap_or(vk::Format::UNDEFINED);
+      let rp = passes.get_pipeline_render_pass(format, dsf)?.get();
+      gi_over.fragment_out.color_attachment_formats.clear();
+      gi_over.fragment_out.color_attachment_formats.push(format);
+      gi_over.render_pass = rp;
+      gi_else.fragment_out.color_attachment_formats.clear();
+      gi_else.fragment_out.color_attachment_formats.push(format);
+      gi_else.render_pass = rp;
+      Ok(Some(PreparedArchetypeUpdate {
+        main_graphics_info: gi_over,
+        outline_graphics_info: Some(gi_else),
+      }))
+    } else {
+      Ok(None)
+    }
+  }
+  fn commit_update(&mut self, data: CompiledArchetypeData) {
+    self.pipeline_key_over_mesh = data.pipeline_key;
+    self.graphics_info_over_mesh = data.graphics_info;
+    if let Some((elsewhere_key, elsewhere_info)) = data.outline_data {
+      self.pipeline_key_elsewhere = elsewhere_key;
+      self.graphics_info_elsewhere = elsewhere_info;
+    }
+  }
+  fn discard_archetype(&mut self, device: &LogicalDevice, pool: &DiscardPool, timeline: u64) {
+    self.discard(device, pool, timeline);
+  }
+  fn as_any(&self) -> &dyn core::any::Any {
+    self
+  }
+  fn as_any_mut(&mut self) -> &mut dyn core::any::Any {
+    self
+  }
+}
 impl_render_archetype!(GizmoRenderResourceArchetype);
 impl_render_archetype!(DustRenderArchetype);
 
@@ -621,6 +683,8 @@ impl Archetypes {
     |gi| {
       // physical_mesh2.vert expects: vec3 pos (loc 0), vec3 normal (loc 1),
       // vec2 uv (loc 2), vec4 tangent (loc 3) — split into two bindings.
+      // Also writes stencil=1 at every rendered pixel so the sphere gizmo's
+      // OverMesh pass (stencil=EQUAL(1)) can distinguish comet-covered pixels.
       gi.with_vertex_in(
         VertexIn::default()
           .add_binding(0, 12, vk::VertexInputRate::VERTEX)
@@ -630,14 +694,24 @@ impl Archetypes {
           .add_attribute(1, 2, vk::Format::R32G32_SFLOAT,    12)  // uv
           .add_attribute(1, 3, vk::Format::R32G32B32A32_SFLOAT, 20) // tangent
       )
+      .with_pipeline_flags(PipelineFlags::STENCIL_ENABLE)
+      .with_stencil_compare_op(StencilCompareOp::Always)
+      .with_stencil_logic_op(StencilLogicOp::Replace)
+      .with_stencil_reference(1)
+      .with_stencil_compare_mask(0xFF)
+      .with_stencil_write_mask(0xFF)
     }
   );
+
   impl_create_archetype!(
     create_text2_archetype,
     ArchetypeId::Text,
     Text2RenderResourceArchetype,
     Text2RenderResourceArchetypeArena,
-    text
+    text,
+    |gi| {
+      gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
+    }
   );
 
   #[named]
@@ -799,7 +873,7 @@ impl Archetypes {
       return Err(crate::gpu_err_device!());
     }
 
-    let pipeline_graphics_info = pipelines::GraphicsInfo::default()
+    let base_gi = pipelines::GraphicsInfo::default()
       .with_vertex_in(
         pipelines::VertexIn::default()
           .with_topology(vk::PrimitiveTopology::LINE_LIST)
@@ -829,28 +903,58 @@ impl Archetypes {
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::LINE)
-      // depth_test_enable = true (default: NO_DEPTH_TEST is absent → sphere is occluded by comet)
-      // depth_write_enable = false (prevent corrupting the depth buffer for subsequent transparency)
-      .with_pipeline_flags(pipelines::PipelineFlags::NO_DEPTH_WRITE)
       .clone();
 
-    let pipeline_key = pipeline_graphics_info.pipeline_key();
+    // Pipeline A — SphereGizmoOverMesh:
+    //   drawn at pixels where the comet mesh wrote stencil=1.
+    //   NO depth test (axes must be visible regardless of comet mesh depth).
+    //   Stencil test = EQUAL(1), write_mask=0 (read-only).
+    let gi_over_mesh = base_gi.clone()
+      .with_pipeline_flags(
+        pipelines::PipelineFlags::NO_DEPTH_TEST | pipelines::PipelineFlags::NO_DEPTH_WRITE
+        | pipelines::PipelineFlags::STENCIL_ENABLE,
+      )
+      .with_stencil_compare_op(pipelines::StencilCompareOp::Equal)
+      .with_stencil_logic_op(pipelines::StencilLogicOp::None) // KEEP on pass (read-only)
+      .with_stencil_reference(1)
+      .with_stencil_compare_mask(0xFF)
+      .with_stencil_write_mask(0x00)
+      .clone();
 
-    pipeline_pool_lock.get_or_create_graphics_pipeline(
-      &device,
-      &pipeline_graphics_info,
-      rollback,
-    )?;
+    // Pipeline B — SphereGizmoElsewhere:
+    //   drawn at pixels where NO comet mesh was rendered (stencil=0).
+    //   Normal reverse-Z depth test (occluded by other scene geometry).
+    //   NO depth write (don't corrupt depth buffer).
+    //   Stencil test = EQUAL(0), write_mask=0 (read-only).
+    let gi_elsewhere = base_gi
+      .with_pipeline_flags(
+        pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::STENCIL_ENABLE,
+      )
+      .with_stencil_compare_op(pipelines::StencilCompareOp::Equal)
+      .with_stencil_logic_op(pipelines::StencilLogicOp::None) // KEEP on pass (read-only)
+      .with_stencil_reference(0)
+      .with_stencil_compare_mask(0xFF)
+      .with_stencil_write_mask(0x00)
+      .clone();
+
+    let pipeline_key_over_mesh = gi_over_mesh.pipeline_key();
+    let pipeline_key_elsewhere = gi_elsewhere.pipeline_key();
+
+    pipeline_pool_lock.get_or_create_graphics_pipeline(device, &gi_over_mesh, rollback)?;
+    pipeline_pool_lock.get_or_create_graphics_pipeline(device, &gi_elsewhere, rollback)?;
 
     let res = resources::SphereGizmoRenderResourceArchetype {
       arena: alloc::sync::Arc::downgrade(&arena),
-      pipeline_key,
-      graphics_info: pipeline_graphics_info.clone(),
+      pipeline_key_over_mesh,
+      pipeline_key_elsewhere,
+      graphics_info_over_mesh: gi_over_mesh,
+      graphics_info_elsewhere: gi_elsewhere,
     };
     registry.insert(ArchetypeId::SphereGizmo, Box::new(res));
 
     Ok(())
   }
+
 
   #[named]
   pub fn create_gizmo_archetype(

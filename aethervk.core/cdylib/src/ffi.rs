@@ -1585,6 +1585,15 @@ pub unsafe extern "C" fn avkSimulationContext_setBodyRotationalModel(
         // Component absent — add it
         let _ = scene_guard.scene.add_component(entity_id, model);
       }
+
+      // Update the 1-way binding directly into the cartesian cache for immediate effect
+      let key = aethervk_core_rlib::simulation_api::structs::SceneEntityId::new(scene_id, entity_id);
+      if let Some(mut state) = scenes.cartesian_state_cache.get_mut(&key) {
+        if let Some(ref mut comet_state) = state.comet_state {
+          comet_state.body_rotational_model = Some(model);
+        }
+      }
+
       return true;
     }
   }

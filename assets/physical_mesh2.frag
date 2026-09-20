@@ -80,7 +80,10 @@ void main() {
             outColor = vec4(vec3(paintSample.a), 1.0);
             return;
         } else if (mat.paintDisplayMode == PAINT_MODE_SPHERICAL_GRID) {
-            vec3 localPos = inWorldPos - mat.sphereCenterRadius.xyz;
+            // Use the mesh's RTE translation (model[3].xyz) as the sphere center.
+            // mat.sphereCenterRadius.xyz is always [0,0,0] (never populated by the CPU);
+            // the model column is the correct body-fixed center in RTE space.
+            vec3 localPos = inWorldPos - push.object.model[3].xyz;
             vec3 n = normalize(localPos);
             
             float phi = atan(n.y, n.x);
@@ -141,11 +144,21 @@ void main() {
     vec3 V = normalize(scene.cameraPos.xyz - inWorldPos);
     
     bool isDirectional = scene.sunColor.w > 0.5;
-    vec3 unnormalizedLightVector = isDirectional ? scene.sunPos.xyz : (scene.sunPos.xyz - inWorldPos);
-    float distanceToSun = isDirectional ? 0.0 : length(unnormalizedLightVector);
-    vec3 lightDir = isDirectional ? normalize(unnormalizedLightVector) : (unnormalizedLightVector / distanceToSun);
-
-    float attenuation = isDirectional ? 1.0 : (1.0 / (1.0 + 0.001 * distanceToSun));
+    // For directional lights: scene.sunPos.xyz is a pre-normalized body-fixed direction
+    // (sun−comet center, computed in f64 on the CPU) and is used directly as lightDir.
+    // For point lights: scene.sunPos.xyz is the RTE sun position; direction and
+    // attenuation are computed per-fragment from sunPos − inWorldPos.
+    vec3 lightDir;
+    float attenuation;
+    if (isDirectional) {
+        lightDir = scene.sunPos.xyz; // already unit-length, body-fixed
+        attenuation = 1.0;
+    } else {
+        vec3 toSun = scene.sunPos.xyz - inWorldPos;
+        float distToSun = max(length(toSun), 1e-6);
+        lightDir = toSun / distToSun;
+        attenuation = 1.0 / (1.0 + 0.001 * distToSun);
+    }
     vec3 lightColor = scene.sunColor.xyz * attenuation;
 
     vec3 albedo = mat.baseAlbedo.rgb;

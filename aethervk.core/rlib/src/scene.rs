@@ -1088,7 +1088,7 @@ pub struct Scene {
   entities: RwLock<SlotMap<EntityId, EntityLocation>>,
   archetypes: RwLock<Vec<Archetype>>,
   component_meta: RwLock<HashMap<TypeId, ComponentMeta>>,
-  hierarchy: RwLock<SceneHierarchy>,
+  pub hierarchy: RwLock<SceneHierarchy>,
   names: RwLock<HashMap<EntityId, String>>,
   pub texture_cache:
     alloc::sync::Arc<parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>>,
@@ -1111,8 +1111,8 @@ impl Clone for Scene {
 
 #[derive(Default, Debug, Clone)]
 pub struct SceneHierarchy {
-  parents: HashMap<EntityId, EntityId>,
-  children: HashMap<EntityId, Vec<EntityId>>,
+  pub parents: HashMap<EntityId, EntityId>,
+  pub children: HashMap<EntityId, Vec<EntityId>>,
 }
 
 impl SceneHierarchy {
@@ -3650,7 +3650,7 @@ impl Scene {
         .with_component(root_id, |c: &HighResTransformComponent| c.scale)
         .or_else(|| self.with_component(root_id, |c: &TransformComponent| c.scale))
         .unwrap_or(Vec3f32::one());
-        
+
       let mut root_frame_scale = 1.0_f32;
       let _ = self.with_component(root_id, |c: &ReferenceFrameComponent| {
         root_frame_scale = c.scale;

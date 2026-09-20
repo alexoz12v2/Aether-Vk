@@ -6573,6 +6573,23 @@ impl RenderDevice for Device {
   }
 
   #[named]
+  fn draw_instanced_first(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    vertex_count: u32,
+    instance_count: u32,
+    first_vertex: u32,
+  ) -> GpuResult<()> {
+    let cmd = self.get_cmd(cmd_buffer)?;
+
+    unsafe {
+      self.device.cmd_draw(cmd, vertex_count, instance_count, first_vertex, 0);
+    }
+
+    Ok(())
+  }
+
+  #[named]
   fn draw_indirect(
     &self,
     cmd_buffer: crate::gpu::CommandBufferHandle,
@@ -7189,7 +7206,7 @@ impl RenderDevice for Device {
   }
 
   #[named]
-  fn prepare_sphere_gizmo_archetype_for_render_and_bind_pipeline(
+  fn bind_sphere_gizmo_pipeline_over_mesh(
     &self,
     cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()> {
@@ -7200,8 +7217,36 @@ impl RenderDevice for Device {
       let archetype_lock = pe.archetypes().registry.read();
       let archetype = archetype_lock
         .get(&ArchetypeId::SphereGizmo)
-        .ok_or(gpu_err_archetype_absent!())?;
-      (cmd, archetype.pipeline_key())
+        .ok_or(gpu_err_archetype_absent!())?
+        .as_any()
+        .downcast_ref::<crate::gpu_backends::vulkan::device::resources::SphereGizmoRenderResourceArchetype>()
+        .ok_or(gpu_err!("SphereGizmo downcast failed"))?;
+      (cmd, archetype.pipeline_key_over_mesh)
+    };
+    self.bind_pipeline(cmd_buffer, pipeline_key)?;
+    unsafe {
+      self.device.cmd_set_line_width(cmd, 1.0);
+    }
+    Ok(())
+  }
+
+  #[named]
+  fn bind_sphere_gizmo_pipeline_elsewhere(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+  ) -> GpuResult<()> {
+    let (cmd, pipeline_key) = {
+      let res = self.res.read();
+      let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
+      let pe = wait_for_pe_direct!(&res.live_presentation_engines, handle)?;
+      let archetype_lock = pe.archetypes().registry.read();
+      let archetype = archetype_lock
+        .get(&ArchetypeId::SphereGizmo)
+        .ok_or(gpu_err_archetype_absent!())?
+        .as_any()
+        .downcast_ref::<crate::gpu_backends::vulkan::device::resources::SphereGizmoRenderResourceArchetype>()
+        .ok_or(gpu_err!("SphereGizmo downcast failed"))?;
+      (cmd, archetype.pipeline_key_elsewhere)
     };
     self.bind_pipeline(cmd_buffer, pipeline_key)?;
     unsafe {
@@ -7338,7 +7383,7 @@ impl RenderDevice for Device {
     let sub_divs = 36u32;
     let lat_segments = sub_divs;
     let lon_segments = sub_divs;
-    let total_sphere_vertices = lon_segments * (2 * lat_segments - 1) * 2;
+    let total_sphere_vertices = lon_segments * (2 * lat_segments - 1) * 2; // = 5112
     let total_axes_vertices = 8;           // 4 axes × 2 vertices (added sun axis)
     let total_arrowhead_vertices = 4 * 2 * 4; // 4 lines × 2 verts × 4 arrowheads
     let total_vertices = total_sphere_vertices + total_axes_vertices + total_arrowhead_vertices;
@@ -7347,9 +7392,11 @@ impl RenderDevice for Device {
       pipeline,
       total_gizmos: (gizmos.iter().map(|(idx, _)| *idx).max().unwrap_or(0) + 1) as u32,
       total_vertices,
+      axis_vertex_start: total_sphere_vertices,
       data_ptr,
     }))
   }
+
 
   #[named]
   fn prepare_gizmo_archetype_for_render_and_bind_pipeline(
@@ -8214,7 +8261,7 @@ impl<'a> Drop for PoolGuard<'a> {
   fn drop(&mut self) {
     if !self.disarmed {
       unsafe {
-        // self.device.free_command_buffers(self.pool, &[self.cmd]);
+        self.device.free_command_buffers(self.pool, &[self.cmd]);
         self.device.destroy_command_pool(self.pool, None);
       }
     }
@@ -8418,9 +8465,8 @@ impl Device {
       return Err(e);
     }
 
-    let transient_res = res_cmd.unwrap();
-    unsafe { self.device.destroy_command_pool(transient_res.pool, None) };
-    drop(transient_res);
+    let mut transient_res = res_cmd.unwrap();
+    transient_res.cleanup(&self.device);
 
     unsafe {
       // vkInvalidateMappedMemoryRanges is a core API function in the Vulkan Graphics API.
@@ -8580,7 +8626,8 @@ impl Device {
       unsafe { allocator.destroy_buffer(staging_buffer, &mut a) };
       return Err(e);
     }
-    unsafe { self.device.destroy_command_pool(res_cmd_back.unwrap().pool, None) };
+    let mut res_back = res_cmd_back.unwrap();
+    res_back.cleanup(&self.device);
 
     // 2. Copy RAM to Front buffer via the graphics queue (which owns the front buffer).
     //    Uses vkQueueSubmit2 to match all other graphics queue submissions — mixing the
@@ -8620,10 +8667,10 @@ impl Device {
       Ok(())
     });
 
+    let mut res_front = res_cmd_front?;
     let mut a = alloc;
     unsafe { allocator.destroy_buffer(staging_buffer, &mut a) };
-    // return if error on graphics "?"
-    unsafe { self.device.destroy_command_pool(res_cmd_front?.pool, None) };
+    res_front.cleanup(&self.device);
 
     Ok(())
   }
@@ -8660,8 +8707,22 @@ impl Device {
     f(cmd)?;
     unsafe { self.device.end_command_buffer(cmd) }?;
 
+    struct FenceGuard<'a> {
+      device: &'a ash::Device,
+      fence: vk::Fence,
+      disarmed: bool,
+    }
+    impl<'a> Drop for FenceGuard<'a> {
+      fn drop(&mut self) {
+        if !self.disarmed {
+          unsafe { self.device.destroy_fence(self.fence, None); }
+        }
+      }
+    }
+
     let fence_info = vk::FenceCreateInfo::default();
     let fence = unsafe { self.device.create_fence(&fence_info, None) }?;
+    let mut fence_guard = FenceGuard { device: &self.device, fence, disarmed: false };
 
     let cmd_submit_info = vk::CommandBufferSubmitInfo::default().command_buffer(cmd);
     let submit_info = vk::SubmitInfo2::default()
@@ -8679,8 +8740,10 @@ impl Device {
 
     unsafe {
       self.device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX)?;
-      self.device.destroy_fence(fence, None);
     }
+    
+    fence_guard.disarmed = true;
+    unsafe { self.device.destroy_fence(fence, None); }
 
     guard.disarmed = true;
     Ok(TransientCmdPoolResource { pool, cmd })
@@ -8720,8 +8783,22 @@ impl Device {
 
     unsafe { self.device.end_command_buffer(cmd) }?;
 
+    struct FenceGuard<'a> {
+      device: &'a ash::Device,
+      fence: vk::Fence,
+      disarmed: bool,
+    }
+    impl<'a> Drop for FenceGuard<'a> {
+      fn drop(&mut self) {
+        if !self.disarmed {
+          unsafe { self.device.destroy_fence(self.fence, None); }
+        }
+      }
+    }
+
     let fence_info = vk::FenceCreateInfo::default();
     let fence = unsafe { self.device.create_fence(&fence_info, None) }?;
+    let mut fence_guard = FenceGuard { device: &self.device, fence, disarmed: false };
 
     let cmd_info = vk::CommandBufferSubmitInfo::default().command_buffer(cmd);
     let submit_info2 = vk::SubmitInfo2::default()
@@ -8742,8 +8819,10 @@ impl Device {
 
     unsafe {
       self.device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX)?;
-      self.device.destroy_fence(fence, None);
     }
+    
+    fence_guard.disarmed = true;
+    unsafe { self.device.destroy_fence(fence, None); }
 
     guard.disarmed = true;
     Ok(TransientCmdPoolResource { pool, cmd })

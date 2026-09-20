@@ -618,6 +618,12 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     {
       ulong cometId = _runtimeService.CometEntityId.Value;
       // Component IDs for Almanac Planet (26) and Rotational Body (24), and HighResTransform (1)
+      Console.WriteLine($"[CometTabViewModel] Querying Comet Entity ID: {cometId}");
+      Console.WriteLine($"[CometTabViewModel] Use this ID in gdb: print-ecs-entity {cometId}");
+    }
+    else
+    {
+      Console.WriteLine("[CometTabViewModel] Comet Entity ID is null. The comet might not be initialized.");
     }
 #endif
   }
