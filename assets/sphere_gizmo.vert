@@ -205,14 +205,13 @@ void main() {
         outAlpha = isAxis ? 1.0 : (dot(worldNormal, camDir) > 0.0 ? 1.0 : 0.0);
 
         if (isAxis) {
-            // Pull axes forward by the comet's radius in clip space + a tiny margin,
-            // so they are not occluded by the comet mesh itself (fixes occlusion from top-down/orthographic).
-            vec3 pRow2 = vec3(push.viewProj[0][2], push.viewProj[1][2], push.viewProj[2][2]);
-            float maxSphereZ = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * length(pRow2);
-            gl_Position.z += maxSphereZ + 0.001 * gl_Position.w;
+            // Reverse-Z: SUBTRACT a small margin so axes sit just inside the near-plane clip range.
+            // The stencil-based two-pass draw calls (OverMesh / Elsewhere) determine
+            // which pixels actually render on top of the comet, not z-bias.
+            gl_Position.z -= 0.001 * gl_Position.w;
         } else {
-            // Tiny bias for the sphere wireframe to avoid Z-fighting with the solid mesh
-            gl_Position.z += 0.0001 * gl_Position.w;
+            // Reverse-Z: subtract tiny margin to avoid z-fighting with the solid mesh.
+            gl_Position.z -= 0.0001 * gl_Position.w;
         }
 
         fragColor = color;

@@ -922,6 +922,17 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     instance_count: u32,
   ) -> GpuResult<()>;
 
+  /// Like `draw_instanced` but with a non-zero `first_vertex`.
+  /// Used by the sphere gizmo to split sphere wireframe [0..axis_start)
+  /// from axes+arrowheads [axis_start..total) in separate draw calls.
+  fn draw_instanced_first(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    vertex_count: u32,
+    instance_count: u32,
+    first_vertex: u32,
+  ) -> GpuResult<()>;
+
   fn draw_indirect(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -950,7 +961,16 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     constants: &SphereGizmoPushConstants,
   ) -> GpuResult<()>;
 
-  fn prepare_sphere_gizmo_archetype_for_render_and_bind_pipeline(
+  /// Bind the SphereGizmoOverMesh pipeline (NO_DEPTH_TEST + stencil=EQUAL(1))
+  /// and set line width to 1.0. Called once before the two OverMesh draw calls.
+  fn bind_sphere_gizmo_pipeline_over_mesh(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+  ) -> GpuResult<()>;
+
+  /// Bind the SphereGizmoElsewhere pipeline (depth_test=GEQ + stencil=EQUAL(0))
+  /// and set line width to 1.0. Called once before the two Elsewhere draw calls.
+  fn bind_sphere_gizmo_pipeline_elsewhere(
     &self,
     cmd_buffer: CommandBufferHandle,
   ) -> GpuResult<()>;

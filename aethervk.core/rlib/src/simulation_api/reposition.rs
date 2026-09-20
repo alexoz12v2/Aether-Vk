@@ -31,6 +31,17 @@ pub fn full_year_tai_seconds(start: hifitime::Epoch) -> (f64, f64) {
   (start_sec, end_sec)
 }
 
+pub fn compute_macro_and_residual(position_km: DVec3) -> (Vec3f32, Vec3f32) {
+  let subtree_pos_f32: Vec3f32 = (position_km * KM_TO_AU).to_f32();
+  let subtree_km = DVec3::from_components(
+    subtree_pos_f32.x() as f64,
+    subtree_pos_f32.y() as f64,
+    subtree_pos_f32.z() as f64,
+  ) * AU_TO_KM;
+  let residual_f32: Vec3f32 = (position_km - subtree_km).to_f32();
+  (subtree_pos_f32, residual_f32)
+}
+
 /// Snaps `subtree` (AU frame, child of root) and `body` (km-residual frame, child of subtree)
 /// to the almanac-driven position at `epoch`.
 ///
@@ -57,21 +68,12 @@ pub fn force_reposition(
 ) -> EngineResult<()> {
   let (position_km, rotation) = planet.step(epoch, almanac, None)?;
 
-  // AU position (f64 precision)
-  let subtree_pos_f32: Vec3f32 = (position_km * KM_TO_AU).to_f32();
+  let (subtree_pos_f32, residual_f32) = compute_macro_and_residual(position_km);
 
   // Subtree: lossy f32 (AU frame). Scale = AU_TO_KM is applied by the renderer, not here.
   let _ = scene.with_component_mut(subtree, |t: &mut TransformComponent| {
     t.position = subtree_pos_f32;
   });
-
-  // Body: km residual after f32 truncation — recovers sub-AU precision
-  let subtree_km = DVec3::from_components(
-    subtree_pos_f32.x() as f64,
-    subtree_pos_f32.y() as f64,
-    subtree_pos_f32.z() as f64,
-  ) * AU_TO_KM;
-  let residual_f32: Vec3f32 = (position_km - subtree_km).to_f32();
 
   let _ = scene.with_component_mut(body, |t: &mut TransformComponent| {
     t.position = residual_f32;
