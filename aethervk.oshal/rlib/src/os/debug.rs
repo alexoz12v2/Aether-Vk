@@ -289,6 +289,45 @@ mod windows_debug {
     }
   }
 
+  pub fn resolve_trace_to_single_line(trace: &[usize]) -> alloc::string::String {
+    use core::fmt::Write;
+    let mut out = alloc::string::String::new();
+    unsafe {
+      let process = GetCurrentProcess();
+      init_sym(process);
+
+      const SYMBOL_BUFFER_SIZE: usize = core::mem::size_of::<SYMBOL_INFO>() + 256;
+      #[repr(C, align(8))]
+      struct SymbolBuffer([u8; SYMBOL_BUFFER_SIZE]);
+
+      for (i, &addr) in trace.iter().enumerate() {
+        if addr == 0 {
+          continue;
+        }
+        let mut sym_buf = core::mem::MaybeUninit::<SymbolBuffer>::zeroed();
+        let symbol_info = sym_buf.as_mut_ptr() as *mut SYMBOL_INFO;
+
+        (*symbol_info).SizeOfStruct = core::mem::size_of::<SYMBOL_INFO>() as u32;
+        (*symbol_info).MaxNameLen = 255;
+
+        let mut displacement: u64 = 0;
+        if SymFromAddr(process, addr as u64, Some(&mut displacement), symbol_info).is_ok() {
+          let name_len = core::cmp::min((*symbol_info).NameLen as usize, 254);
+          let name_ptr = (*symbol_info).Name.as_ptr() as *const u8;
+          let name_slice = core::slice::from_raw_parts(name_ptr, name_len);
+
+          if let Ok(name_str) = core::str::from_utf8(name_slice) {
+            let _ = write!(&mut out, "{} -> ", name_str);
+            continue;
+          }
+        }
+        let _ = write!(&mut out, "{:#X} -> ", addr);
+      }
+    }
+    let out = out.trim_end_matches(" -> ").trim_end();
+    alloc::string::String::from(out)
+  }
+
   pub fn print_aethervk_stacktrace(skip: usize, max: usize) {
     unsafe {
       let process = GetCurrentProcess();
@@ -532,6 +571,57 @@ mod unix_debug {
   /// TODO: Document this item
   pub fn print_aethervk_stacktrace(skip: usize, max: usize) {
     crate::log!("AetherVk Stacktrace: Not natively supported by libc in this target environment.");
+  }
+
+  #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
+  pub fn resolve_trace_to_single_line(trace: &[usize]) -> alloc::string::String {
+    use core::fmt::Write;
+    let mut out = alloc::string::String::new();
+    unsafe extern "C" {
+      fn backtrace_symbols(
+        buffer: *const *mut core::ffi::c_void,
+        size: core::ffi::c_int,
+      ) -> *mut *mut core::ffi::c_char;
+    }
+
+    unsafe {
+      let size = trace.len() as core::ffi::c_int;
+      if size > 0 {
+        let symbols = backtrace_symbols(trace.as_ptr() as *const *mut core::ffi::c_void, size);
+        if !symbols.is_null() {
+          for i in 0..size {
+            if trace[i as usize] == 0 {
+              continue;
+            }
+            let ptr = *symbols.add(i as usize);
+            if !ptr.is_null() {
+              let c_str = core::ffi::CStr::from_ptr(ptr);
+              if let Ok(s) = c_str.to_str() {
+                let _ = write!(&mut out, "{} -> ", s);
+              } else {
+                let _ = write!(&mut out, "{:#X} -> ", trace[i as usize]);
+              }
+            } else {
+              let _ = write!(&mut out, "{:#X} -> ", trace[i as usize]);
+            }
+          }
+          libc::free(symbols as *mut core::ffi::c_void);
+        } else {
+          for (i, &addr) in trace.iter().enumerate() {
+            if addr != 0 {
+              let _ = write!(&mut out, "{:#X} -> ", addr);
+            }
+          }
+        }
+      }
+    }
+    let out = out.trim_end_matches(" -> ").trim_end();
+    alloc::string::String::from(out)
+  }
+
+  #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
+  pub fn resolve_trace_to_single_line(trace: &[usize]) -> alloc::string::String {
+      alloc::string::String::from("<no backtrace available>")
   }
 
   #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]

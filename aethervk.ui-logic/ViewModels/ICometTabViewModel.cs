@@ -77,6 +77,7 @@ public partial interface ICometTabViewModel
   double PoleRaRateDegCen { get; set; }
   double PoleDecRateDegCen { get; set; }
   double RotRateDegDay { get; set; }
+  int BodyFixedOrientationIndex { get; set; }
 
   // ── Commands ──────────────────────────────────────────────────────────────
 

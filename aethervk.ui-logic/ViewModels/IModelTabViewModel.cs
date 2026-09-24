@@ -52,6 +52,9 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
   /// </summary>
   bool EnableLegacyExpanders { get; set; }
 
+  int IsGizmoVisibleIndex { get; set; }
+  string? StrPM { get; set; }
+
   /// <summary>
   /// The current model session.
   /// </summary>

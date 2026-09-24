@@ -338,7 +338,7 @@ pub fn deserialize_scene(
           new_sun_entity_ids.push(entity);
           // Restore a zero-value SunComponent; radius/resolution are typically set
           // via SetSunParameters after restore if needed.
-          let _ = scene.add_component(entity, SunComponent { radius: 0.0, resolution: (0, 0, 0) });
+          let _ = scene.add_component(entity, SunComponent { radius_km: 0.0, resolution: (0, 0, 0) });
         }
         SerializedComponent::SkyMarker => {
           let _ = scene.add_component(entity, SkyComponent {});

@@ -584,6 +584,7 @@ pub struct BodyRotationalModel {
   pub pole_dec_rate: f64,
   /// Rotation rate (degrees/day)
   pub rotation_rate: f64,
+  pub body_fixed_orientation: bool,
 }
 impl Component for BodyRotationalModel {}
 
@@ -596,6 +597,8 @@ pub struct BodyRotationalModelDTO {
   pub pole_ra_rate: f64,
   pub pole_dec_rate: f64,
   pub rotation_rate: f64,
+  pub body_fixed_orientation: u32,
+  pub _padding: u32,
 }
 
 impl ForeignSerializable for BodyRotationalModel {
@@ -610,6 +613,8 @@ impl ForeignSerializable for BodyRotationalModel {
       pole_ra_rate: self.pole_ra_rate,
       pole_dec_rate: self.pole_dec_rate,
       rotation_rate: self.rotation_rate,
+      body_fixed_orientation: if self.body_fixed_orientation { 1 } else { 0 },
+      _padding: 0,
     }
   }
 
@@ -620,6 +625,7 @@ impl ForeignSerializable for BodyRotationalModel {
     self.pole_ra_rate = data.pole_ra_rate;
     self.pole_dec_rate = data.pole_dec_rate;
     self.rotation_rate = data.rotation_rate;
+    self.body_fixed_orientation = data.body_fixed_orientation != 0;
   }
 }
 
@@ -632,6 +638,7 @@ impl Default for BodyRotationalModel {
       pole_ra_rate: 0.0,
       pole_dec_rate: 0.0,
       rotation_rate: 0.0,
+      body_fixed_orientation: true,
     }
   }
 }
@@ -702,7 +709,10 @@ impl Component for ScreenSpaceBillboardComponent {}
 #[derive(Clone, Copy, Debug)]
 pub struct SunComponent {
   pub resolution: (u32, u32, u32),
-  pub radius: f32,
+  /// Physical radius in kilometres. Frame-agnostic: the renderer
+  /// uses `ReferenceFrameComponent::scale` to convert to the layer's
+  /// local unit when computing near/far planes.
+  pub radius_km: f32,
 }
 impl Component for SunComponent {}
 
@@ -5345,7 +5355,7 @@ mod tests {
         sun1,
         SunComponent {
           resolution: (1, 1, 1),
-          radius: 0.6,
+          radius_km: 0.6,
         },
       )
       .unwrap();
@@ -5357,7 +5367,7 @@ mod tests {
         sun2,
         SunComponent {
           resolution: (1, 1, 1),
-          radius: 0.6,
+          radius_km: 0.6,
         },
       )
       .unwrap();

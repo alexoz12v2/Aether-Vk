@@ -367,6 +367,9 @@ pub(super) struct FragmentOut {
   pub color_attachment_formats: Vec<vk::Format>,
   pub depth_attachment_format: Option<vk::Format>,
   pub stencil_attachment_format: Option<vk::Format>,
+  /// Per-attachment color write masks. If shorter than `color_attachment_formats`,
+  /// remaining attachments default to RGBA. If empty, all attachments get RGBA.
+  pub color_write_masks: Vec<vk::ColorComponentFlags>,
 }
 
 impl FragmentOut {
@@ -385,6 +388,13 @@ impl FragmentOut {
   /// TODO: Document this item
   pub fn with_stencil_attachment_format(mut self, format: vk::Format) -> Self {
     self.stencil_attachment_format = Some(format);
+    self
+  }
+
+  /// Set per-attachment color write masks. Masks are applied in order;
+  /// attachments beyond the end of the slice use full RGBA write mask.
+  pub fn with_color_write_masks(mut self, masks: alloc::vec::Vec<vk::ColorComponentFlags>) -> Self {
+    self.color_write_masks = masks;
     self
   }
 }
@@ -492,7 +502,9 @@ impl GraphicsInfo {
       self.fragment_shader.scissors.push(vk::Rect2D::default());
     }
 
-    self.fragment_out.color_attachment_formats.push(color_format);
+    if self.fragment_out.color_attachment_formats.is_empty() {
+      self.fragment_out.color_attachment_formats.push(color_format);
+    }
     self.fragment_out.depth_attachment_format = Some(depth_format);
     if self.pipeline_flags.contains(PipelineFlags::STENCIL_ENABLE) {
       self.fragment_out.stencil_attachment_format = Some(depth_format);
@@ -738,12 +750,18 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
       },
     );
     let blend_enable = !graphics_info.pipeline_flags.contains(PipelineFlags::NO_BLEND);
-    for _ in 0..color_blend_attachments.capacity() {
-      // over operator
+    for i in 0..color_blend_attachments.capacity() {
+      let write_mask = graphics_info
+        .fragment_out
+        .color_write_masks
+        .get(i)
+        .copied()
+        .unwrap_or(vk::ColorComponentFlags::RGBA);
+      // over operator blending
       color_blend_attachments.push(
         vk::PipelineColorBlendAttachmentState::default()
-          .color_write_mask(vk::ColorComponentFlags::RGBA)
-          .blend_enable(blend_enable)
+          .color_write_mask(write_mask)
+          .blend_enable(if i == 0 { blend_enable } else { false })
           .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
           .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
           .color_blend_op(vk::BlendOp::ADD)

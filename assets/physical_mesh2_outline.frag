@@ -9,7 +9,9 @@
 layout(location = 0) in vec3 inColor;
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec2 outGlobalDepth; // MRT: write-masked to 0 by pipeline
 
 void main() {
     outColor = vec4(inColor, 1.0);
+    outGlobalDepth = vec2(-1.0, -1.0); // pipeline write mask zeroes this out
 }

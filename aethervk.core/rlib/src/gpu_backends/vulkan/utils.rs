@@ -1044,6 +1044,9 @@ impl RequiredFeatures<'_> {
   pub fn populate(&mut self, supported: &vk::PhysicalDeviceFeatures) -> &mut Self {
     self.features.fill_mode_non_solid = vk::TRUE;
     self.features.shader_int64 = vk::TRUE;
+    // Required for MRT pipelines with per-attachment color write masks
+    // (e.g. GlobalDepth attachment has write mask = empty() on transparent pipelines).
+    self.features.independent_blend = vk::TRUE;
     self.buffer_device_address.buffer_device_address = vk::TRUE;
     self.vulkan_memory_model.vulkan_memory_model = vk::TRUE;
     self.vulkan_memory_model.vulkan_memory_model_device_scope = vk::TRUE;
@@ -1098,6 +1101,9 @@ impl RequiredFeatures<'_> {
     let mut the_vec = Vec::with_capacity(64);
     if self.features.fill_mode_non_solid != vk::TRUE {
       the_vec.push("fill_mode_non_solid".to_string());
+    }
+    if self.features.independent_blend != vk::TRUE {
+      the_vec.push("independent_blend".to_string());
     }
     if self.buffer_device_address.buffer_device_address != vk::TRUE {
       the_vec.push("buffer_device_address".to_string());
@@ -1339,8 +1345,54 @@ impl<'a> RollbackContext<'a> {
   pub fn defuse(&mut self) {
     self.defused = true;
   }
+
+  /// Spawns a child scope that mutably borrows this parent context.
+  pub fn child<'child>(&'child mut self) -> ChildRollbackContext<'a, 'child> {
+    ChildRollbackContext {
+      parent: self,
+      rollbacks: alloc::vec::Vec::new(),
+      defused: false,
+    }
+  }
 }
 
+pub struct ChildRollbackContext<'a, 'parent> {
+  parent: &'parent mut RollbackContext<'a>,
+  rollbacks: alloc::vec::Vec<alloc::boxed::Box<dyn FnOnce(&LogicalDevice) + 'a>>,
+  defused: bool,
+}
+
+impl<'a, 'parent> ChildRollbackContext<'a, 'parent> {
+  pub fn defer<F: FnOnce(&LogicalDevice) + 'a>(&mut self, f: F) {
+    self.rollbacks.push(alloc::boxed::Box::new(f));
+  }
+
+  pub fn defuse(&mut self) {
+    self.defused = true;
+    self.rollbacks.clear();
+  }
+
+  pub fn commit_to_parent(mut self) {
+    self.defused = true;
+    while let Some(rollback) = self.rollbacks.pop() {
+      self.parent.rollbacks.push(rollback);
+    }
+  }
+
+  pub fn device(&self) -> &'a LogicalDevice {
+    self.parent.device
+  }
+}
+
+impl<'a, 'parent> Drop for ChildRollbackContext<'a, 'parent> {
+  fn drop(&mut self) {
+    if !self.defused {
+      while let Some(rollback) = self.rollbacks.pop() {
+        rollback(self.parent.device);
+      }
+    }
+  }
+}
 impl<'a> Drop for RollbackContext<'a> {
   fn drop(&mut self) {
     if !self.defused {

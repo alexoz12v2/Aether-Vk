@@ -9,7 +9,7 @@
 //! triggers when the body drifts >0.1 AU during a running simulation.
 
 use crate::{
-  scene::{AlmanacPlanet, EntityId, Scene, TransformComponent},
+  scene::{AlmanacPlanet, EntityId, Scene, TransformComponent, BodyRotationalModel},
   simulation::almanac::AlmanacPackedData,
   types::EngineResult,
 };
@@ -66,7 +66,8 @@ pub fn force_reposition(
   planet: &AlmanacPlanet,
   epoch: hifitime::Epoch,
 ) -> EngineResult<()> {
-  let (position_km, rotation) = planet.step(epoch, almanac, None)?;
+  let rot_model = scene.with_component(body, |m: &BodyRotationalModel| *m);
+  let (position_km, rotation) = planet.step(epoch, almanac, rot_model.as_ref())?;
 
   let (subtree_pos_f32, residual_f32) = compute_macro_and_residual(position_km);
 

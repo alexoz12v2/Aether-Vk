@@ -37,9 +37,11 @@ layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer Obj
     mat4 model;
 };
 
-// Total Size: Exactly 24 bytes! (Three 64-bit pointers)
+// Total Size: 32 bytes (three 64-bit BDA pointers + uvec2 layer info)
 layout(push_constant, std430) uniform Push {
     SceneData scene;
     MaterialData material;
     ObjectData object;
+    uint layerIndex;
+    uint _pad;
 } push;

@@ -611,7 +611,7 @@ fn test_layout_transition_on_failed_update() {
     sun_e,
     SunComponent {
       resolution: (64, 64, 64),
-      radius: 0.6,
+      radius_km: 0.6,
     },
   );
 

@@ -73,6 +73,7 @@ public partial class DesignCometTabViewModel
   public double PoleRaRateDegCen { get; set; } = 0.0;
   public double PoleDecRateDegCen { get; set; } = 0.0;
   public double RotRateDegDay    { get; set; } = 696.0;
+  public int BodyFixedOrientationIndex { get; set; } = 0;
 
   // ── Commands (no-ops for design time) ────────────────────────────────────
   public IAsyncRelayCommand SearchCometsCommand    => new AsyncRelayCommand(async () => { });

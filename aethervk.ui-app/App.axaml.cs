@@ -379,6 +379,8 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   public bool UpdateCometNucleusRadius(float radiusKm) => true;
 
+  public bool SetSphereGizmoVisibility(bool isVisible) => true;
+
   public Task<ulong> LoadAlmanacFileAsync(string path) => Task.FromResult(4UL);
 
   public bool UnloadAlmanacFile(string path) => true;

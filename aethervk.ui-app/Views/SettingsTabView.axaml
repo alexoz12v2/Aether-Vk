@@ -277,20 +277,31 @@
 
                     <!-- Look Direction -->
                     <TextBlock Text="Look Direction" FontWeight="SemiBold" />
-                    <StackPanel Orientation="Vertical" Spacing="4">
-                      <RadioButton Content="Inertial (fixed in space)"
-                                   IsChecked="{Binding EarthObserverOrientationMode,
-                                   Converter={StaticResource EnumToBool},
-                                   ConverterParameter=Inertial}" />
-                      <RadioButton Content="Comet-tracking (always face comet)"
-                                   IsChecked="{Binding EarthObserverOrientationMode,
-                                   Converter={StaticResource EnumToBool},
-                                   ConverterParameter=CometTracking}" />
-                      <RadioButton Content="Earth-fixed (physical telescope)"
-                                   IsChecked="{Binding EarthObserverOrientationMode,
-                                   Converter={StaticResource EnumToBool},
-                                   ConverterParameter=EarthFixed}" />
-                    </StackPanel>
+                    <Grid ColumnDefinitions="Auto, 16, *" RowDefinitions="Auto, Auto, Auto">
+                      <RadioButton Grid.Row="0" Grid.Column="0" Content="Inertial (fixed in space)"
+                                  IsChecked="{Binding EarthObserverOrientationMode,
+                                  Converter={StaticResource EnumToBool},
+                                  ConverterParameter=Inertial}" />
+                      <RadioButton Grid.Row="1" Grid.Column="0" Content="Comet-tracking (always face comet)"
+                                  IsChecked="{Binding EarthObserverOrientationMode,
+                                  Converter={StaticResource EnumToBool},
+                                  ConverterParameter=CometTracking}" />
+                      <RadioButton Grid.Row="2" Grid.Column="0" Content="Earth-fixed (physical telescope)"
+                                  IsChecked="{Binding EarthObserverOrientationMode,
+                                  Converter={StaticResource EnumToBool},
+                                  ConverterParameter=EarthFixed}" />
+                      
+                      <!-- Snap commands on the right -->
+                      <StackPanel Grid.Row="0" Grid.RowSpan="3" Grid.Column="2" 
+                                  VerticalAlignment="Center" Spacing="8">
+                         <Button Content="Point towards Sun" 
+                                 Command="{Binding PointTowardsSunCommand}" 
+                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                         <Button Content="Point towards Comet" 
+                                 Command="{Binding PointTowardsCometCommand}" 
+                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                      </StackPanel>
+                    </Grid>
                   </StackPanel>
 
                 </StackPanel>

@@ -31,6 +31,8 @@ pub type MainThreadCleanupQueue = Arc<spin::Mutex<alloc::vec::Vec<MainThreadClea
 pub struct RenderBackendId(pub u64);
 pub const NULL_RENDER_BACKEND: RenderBackendId = RenderBackendId(0);
 pub const VULKAN_RENDER_BACKEND: RenderBackendId = RenderBackendId(1);
+/// Bit flag used in test task IDs to distinguish globalDepth downloads from color downloads.
+pub const GLOBAL_DEPTH_TASK_BIT: u64 = 1u64 << 62;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct GpuResourceHandle(pub u64);
@@ -212,7 +214,8 @@ pub struct PhysicalMesh2PushConstants {
   pub material_addr: u64,
   // BDA to [`ObjectData`]
   pub object_addr: u64,
-  pub _pad: u64,
+  pub layer_index: u32,
+  pub _pad: u32,
 }
 
 #[repr(C)]
@@ -352,6 +355,7 @@ pub struct CompositePushConstants {
   pub micro_far: f32,
   pub macro_scale: f32,
   pub micro_scale: f32,
+  pub _pad: [u32; 2],
 }
 
 #[repr(C)]
@@ -1076,6 +1080,25 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
     handle: PresentationEngineHandle,
+  ) -> GpuResult<()>;
+
+  /// [TEST ONLY] Records a vkCmdCopyImageToBuffer for the finalGlobalDepth attachment
+  /// (att[7], R32G32_SFLOAT) into the current command buffer. Must be called after the
+  /// render pass ends. The download can be retrieved via `read_global_depth_download`.
+  #[cfg(test)]
+  fn record_global_depth_download(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    task_id: u64,
+  ) -> GpuResult<()>;
+
+  /// [TEST ONLY] Reads back the finalGlobalDepth staging buffer for `task_id`.
+  /// `buffer` must be `width * height * 8` bytes (two f32s per pixel).
+  #[cfg(test)]
+  fn read_global_depth_download(
+    &self,
+    task_id: u64,
+    buffer: &mut [u8],
   ) -> GpuResult<()>;
 }
 

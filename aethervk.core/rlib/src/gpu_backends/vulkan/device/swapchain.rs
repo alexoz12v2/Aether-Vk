@@ -761,16 +761,19 @@ impl WindowedPresentationState {
     let (mut new_swapchain, extent, transform, surface_format, _) =
       self.create_swapchain_internal(physical_device, use_old_swapchain)?;
 
+    // 1. Spawn the isolated child context
+    let mut local_rollback = rollback.child();
+
     // 🛡️ RAII Protection: If anything below fails, destroy the NEW swapchain!
     let sc_device = self.swapchain_device.clone();
     let sc_handle = new_swapchain.get();
-    rollback.defer(move |_| unsafe { sc_device.destroy_swapchain(sc_handle, None) });
+    local_rollback.defer(move |_| unsafe { sc_device.destroy_swapchain(sc_handle, None) });
 
     let swapchain_images =
-      self.recreate_swapchain_images(device, new_swapchain, surface_format.format, rollback)?;
+      self.recreate_swapchain_images(device, new_swapchain, surface_format.format, &mut local_rollback)?;
 
     let (frame_semaphores, frame_fences) =
-      self.recreate_swapchain_frame_resources(device, swapchain_images.len(), rollback)?;
+      self.recreate_swapchain_frame_resources(device, swapchain_images.len(), &mut local_rollback)?;
 
     mem::swap(&mut new_swapchain, &mut self.swapchain);
 
@@ -898,6 +901,11 @@ impl WindowedPresentationState {
       self.frame_discards.len() == self.frames.len()
         && self.frame_discards.len() >= self.images.len()
     );
+    
+    // 3. Success! Defuse the child. The parent will no longer touch these resources 
+    //    if the subsequent vkAcquireNextImageKHR call triggers a rollback.
+    local_rollback.defuse();
+    
     self.swapchain_generation += 1;
     Ok(())
   }
@@ -912,7 +920,7 @@ impl WindowedPresentationState {
     device: &LogicalDevice,
     swapchain: NonZeroHandle<vk::SwapchainKHR>,
     format: vk::Format,
-    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::ChildRollbackContext<'_, '_>,
   ) -> GpuResult<heapless::Vec<SwapchainImage, MAX_FRAMES>> {
     let mut images = heapless::Vec::<vk::Image, MAX_FRAMES>::new();
     let mut count: u32 = unsafe {
@@ -1027,7 +1035,7 @@ impl WindowedPresentationState {
     &self,
     device: &LogicalDevice,
     count: usize,
-    rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
+    rollback: &mut crate::gpu_backends::vulkan::utils::ChildRollbackContext<'_, '_>,
   ) -> GpuResult<(
     heapless::Vec<NonZeroHandle<vk::Semaphore>, MAX_FRAMES>,
     heapless::Vec<vk::Fence, MAX_FRAMES>,

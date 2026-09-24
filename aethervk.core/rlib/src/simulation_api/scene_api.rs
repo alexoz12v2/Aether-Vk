@@ -245,7 +245,7 @@ impl SimulationContext {
           crate::scene::StaticMeshComponent {
             asset_path: alloc::string::String::from("__default_comet__"),
             mesh: alloc::sync::Arc::new(crate::simulation::comet::generate_uv_sphere(
-              2.0, 16, 16, 1.0, false,
+              2.0, 16, 16, 1.0, true,
             )),
             emissive_color: [0.0, 0.0, 0.0, 0.0],
             is_visible: false,
@@ -283,22 +283,46 @@ impl SimulationContext {
     scene.add_component(cursor_entity, crate::scene::CursorComponent {})?;
     scene.set_parent(cursor_entity, Some(root_entity));
 
-    // 2. Sun Entity
+    // 2. Sun Micro-frame + Sun Entity
+    // The sun sits at the heliocentric origin (0,0,0 AU). It gets its own
+    // micro-frame so it is rendered with correct near/far planes when the
+    // camera is physically close to it (e.g. studying the solar disk).
+    // scale = 1/AU_TO_KM so that child positions expressed in km map to AU
+    // in the macro frame. soi_radius is a rendering hint (AU); 5 AU is large
+    // enough to encompass any realistic close-approach trajectory.
+    const AU_TO_KM_SUN: f32 = 149_597_870.7;
+    let sun_frame_entity = scene.spawn_entity("sun_microframe");
+    scene.set_parent(sun_frame_entity, Some(root_entity));
+    scene.add_component(sun_frame_entity, crate::scene::TransformComponent::default())?;
+    scene.add_component(
+      sun_frame_entity,
+      crate::scene::ReferenceFrameComponent {
+        frame_type: crate::scene::ReferenceFrameType::Micro,
+        scale: 1.0 / AU_TO_KM_SUN,
+        soi_radius: 5.0, // AU — trigger micro rendering within 5 AU of the sun
+        depth_layer: 1,
+      },
+    )?;
+
+    // Sun entity: child of the micro-frame; position/scale in km.
+    // Radius = 0.0046524726 AU = ~695,700 km — expressed in km below.
+    const SUN_RADIUS_KM: f32 = 695_700.0;
     let sun_entity = scene.spawn_entity("sun");
-    scene.set_parent(sun_entity, Some(root_entity));
+    scene.set_parent(sun_entity, Some(sun_frame_entity));
     scene.add_component(
       sun_entity,
       crate::scene::TransformComponent {
         position: Vec3f32::from_components(0.0, 0.0, 0.0),
         rotation: Quat::identity(),
-        scale: Vec3f32::from_components(0.0046524726, 0.0046524726, 0.0046524726),
+        // scale in km (the micro-frame converts to AU for the macro renderer)
+        scale: Vec3f32::from_components(SUN_RADIUS_KM, SUN_RADIUS_KM, SUN_RADIUS_KM),
       },
     )?;
     scene.add_component(
       sun_entity,
       crate::scene::SunComponent {
         resolution: (2048, 2048, 1),
-        radius: 0.0046524726,
+        radius_km: SUN_RADIUS_KM,
       },
     )?;
 
@@ -354,8 +378,8 @@ impl SimulationContext {
           projection: crate::scene::CameraProjection::Perspective {
             fov: 60.0_f32.to_radians(),
             aspect_ratio: 16.0 / 9.0,
-            near: 0.00001,
-            far: 1000.0,
+            near: 0.0001,
+            far: 200.0,
           },
           focus_distance: 1.0,
         },

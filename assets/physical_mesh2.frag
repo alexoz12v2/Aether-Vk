@@ -15,6 +15,7 @@ layout(location = 3) in vec3 inTangent;
 layout(location = 4) in vec3 inBitangent;
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec2 outGlobalDepth; // MRT: (layer_index_f32, local_distance)
 
 layout(binding = 0) uniform sampler2D albedoMap;
 layout(binding = 1) uniform sampler2D normalMap;
@@ -62,6 +63,7 @@ void main() {
 
     if (mat.emissiveColor.a < 0.0) {
         outColor = vec4(mat.emissiveColor.rgb, 1.0);
+        outGlobalDepth = vec2(-1.0, -1.0);
         return;
     }
 
@@ -74,10 +76,12 @@ void main() {
         if (mat.paintDisplayMode == PAINT_MODE_COLOR) {
             // Visualizes painted RGB channels directly (Unlit)
             outColor = vec4(paintSample.rgb, 1.0);
+            outGlobalDepth = vec2(-1.0, -1.0);
             return;
         } else if (mat.paintDisplayMode == PAINT_MODE_DISTRIBUTION) {
             // Visualizes probability density via Alpha channel as pure Unlit grayscale
             outColor = vec4(vec3(paintSample.a), 1.0);
+            outGlobalDepth = vec2(-1.0, -1.0);
             return;
         } else if (mat.paintDisplayMode == PAINT_MODE_SPHERICAL_GRID) {
             // Use the mesh's RTE translation (model[3].xyz) as the sphere center.
@@ -128,6 +132,7 @@ void main() {
             
             if (alpha < 0.01) discard;
             outColor = vec4(color, alpha);
+            outGlobalDepth = vec2(-1.0, -1.0);
             return;
         }
     }
@@ -216,4 +221,10 @@ void main() {
     }
 
     outColor = vec4(diffuse * lightColor * ao + ambient + emission, 1.0);
+
+    // MRT depth map: write (layer_index, distance from camera) for solid geometry.
+    // inWorldPos is in RTE coordinates (same frame as view); length() gives
+    // the precise distance from the RTE camera origin in this layer's units.
+    float localDist = length(inWorldPos);
+    outGlobalDepth = vec2(float(push.layerIndex), localDist);
 }

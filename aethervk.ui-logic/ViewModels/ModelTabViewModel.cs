@@ -34,6 +34,8 @@ public partial class ModelTabViewModel
   // when the user switches sessions (SerialDisposable disposes the old one first).
   private readonly SerialDisposable _modelChangeSub = new();
 
+  public string? StrPM { get; set; } = "PM";
+
   // Subject used to debounce manual nucleus radius edits. Throttle(250 ms) prevents
   // flooding the native FFI layer when the user drags the slider continuously.
   private readonly System.Reactive.Subjects.Subject<float> _radiusChanges = new();
@@ -60,6 +62,14 @@ public partial class ModelTabViewModel
 
   [ObservableProperty]
   private bool _enableLegacyExpanders;
+
+  [ObservableProperty]
+  private int _isGizmoVisibleIndex = 0; // 0 = Yes, 1 = No
+
+  partial void OnIsGizmoVisibleIndexChanged(int value)
+  {
+    _runtimeService?.SetSphereGizmoVisibility(value == 0);
+  }
 
   [ObservableProperty]
   private bool _isSimulationRunning;

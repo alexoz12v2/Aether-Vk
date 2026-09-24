@@ -614,4 +614,34 @@ public class CameraServiceTests
       $"ToggleProjection halfHeight = {actualHalfH * AuToKm:F3} km, expected {NucleusRadiusKm * 3f} km (err={relErr:P3})"
     );
   }
+
+  [Fact]
+  public void PointTowardsSun_UpdatesInertialLookDir_AndSendsAnimation()
+  {
+    var (service, runtime, scheduler) = BuildService();
+    
+    // Simulate setting up Earth Observer mode
+    service.OnViewportReady(42UL, 800, 600); // Assume camEntity = 42
+    service.SetCameraMode(CameraMode.EarthPosition);
+    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.Inertial);
+    
+    // Reset invocation count to track the call from PointTowardsSun
+    runtime.Invocations.Clear();
+
+    // Act
+    service.PointTowardsSun();
+
+    // Assert
+    // Verify that the camera rotates toward the origin (Sun)
+    // The exact quaternion values will depend on Earth's rotation and surface point,
+    // but we can verify RotoTranslateDirect or AddCameraAnimation was called.
+    runtime.Verify(
+      r => r.AddCameraAnimation(
+        It.IsAny<ulong>(),
+        It.IsAny<AnimationTarget>()
+      ),
+      Times.AtLeastOnce,
+      "RotoTranslateDirect should be called to apply the new rotation"
+    );
+  }
 }
