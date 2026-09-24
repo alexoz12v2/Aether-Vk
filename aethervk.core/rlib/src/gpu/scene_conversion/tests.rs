@@ -74,3 +74,127 @@ fn test_ui_layout_relative_placement() {
     })
     .unwrap();
 }
+
+#[test]
+fn test_multi_micro_layer_draw_call_assignment() {
+  use crate::{
+    scene::{
+      CameraComponent, CameraProjection, HighResTransformComponent, ReferenceFrameComponent,
+      ReferenceFrameType, Scene, StaticMeshComponent, TransformComponent,
+    },
+    simulation::comet::generate_uv_sphere,
+    simulation::texture_cache::TextureCache,
+  };
+  use alloc::sync::Arc;
+  use aethervk_oshal_rlib::math::{
+    vector::{vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat},
+  };
+  use parking_lot::RwLock;
+
+  const AU_TO_KM: f32 = 149_597_870.7;
+
+  let tex_cache = Arc::new(RwLock::new(TextureCache::new("test_multi_micro_layer")));
+  let scene = Scene::new(tex_cache);
+  scene.register_all_crate_components();
+
+  // Root entity
+  let root = scene.spawn_entity("Root");
+  scene.add_component(
+    root,
+    ReferenceFrameComponent {
+      frame_type: ReferenceFrameType::Macro,
+      scale: 1.0,
+      soi_radius: f32::MAX,
+      depth_layer: 0,
+    },
+  ).unwrap();
+
+  // Camera at origin
+  let camera = scene.spawn_entity("camera");
+  scene.set_parent(camera, Some(root));
+  scene.add_component(
+    camera,
+    HighResTransformComponent {
+      position: Vec3f64::zero(),
+      rotation: Quat::from_components(1.0, 0.0, 0.0, 0.0),
+      scale: Vec3f32::one(),
+    },
+  ).unwrap();
+  scene.add_component(
+    camera,
+    CameraComponent {
+      projection: CameraProjection::Perspective {
+        fov: 60.0f32.to_radians(),
+        aspect_ratio: 16.0 / 9.0,
+        near: 1e-5,
+        far: 1000.0,
+      },
+      focus_distance: 1.0,
+    },
+  ).unwrap();
+
+  // 3 micro frames and their sphere children
+  let sphere_mesh = Arc::new(generate_uv_sphere(2.0, 8, 8, 1.0, false));
+  let layer_positions_au: [f32; 3] = [0.5, 1.0, 1.5];
+  let mut sphere_ids = [root; 3]; // placeholder
+
+  for (i, &pos_au) in layer_positions_au.iter().enumerate() {
+    let layer_idx = (i + 1) as u32;
+
+    let frame_id = scene.spawn_entity(&alloc::format!("frame_{}", layer_idx));
+    scene.set_parent(frame_id, Some(root));
+    scene.add_component(
+      frame_id,
+      TransformComponent {
+        position: Vec3f32::from_components(pos_au, 0.0, 0.0),
+        rotation: Quat::from_components(1.0, 0.0, 0.0, 0.0),
+        scale: Vec3f32::one(),
+      },
+    ).unwrap();
+    scene.add_component(
+      frame_id,
+      ReferenceFrameComponent {
+        frame_type: ReferenceFrameType::Micro,
+        scale: 1.0 / AU_TO_KM,
+        soi_radius: 50.0, // 50 km SOI
+        depth_layer: layer_idx,
+      },
+    ).unwrap();
+
+    let sphere_id = scene.spawn_entity(&alloc::format!("sphere_{}", layer_idx));
+    scene.set_parent(sphere_id, Some(frame_id));
+    scene.add_component(
+      sphere_id,
+      TransformComponent {
+        position: Vec3f32::zero(),
+        rotation: Quat::from_components(1.0, 0.0, 0.0, 0.0),
+        scale: Vec3f32::one(),
+      },
+    ).unwrap();
+    scene.add_component(
+      sphere_id,
+      StaticMeshComponent {
+        asset_path: alloc::format!("sphere_{}", layer_idx),
+        mesh: Arc::clone(&sphere_mesh),
+        emissive_color: [0.0; 4],
+        is_visible: true,
+      },
+    ).unwrap();
+    sphere_ids[i] = sphere_id;
+  }
+
+  // Assertions: each sphere's ancestor_depth_layer matches its layer index
+  for (i, &sphere_id) in sphere_ids.iter().enumerate() {
+    let expected_layer = (i + 1) as u32;
+    let actual_layer = scene.ancestor_depth_layer(sphere_id);
+    assert_eq!(
+      actual_layer, expected_layer,
+      "sphere_{} should be in depth_layer {} but got {}",
+      i + 1, expected_layer, actual_layer
+    );
+  }
+
+  // Camera and root are in the macro layer (0)
+  assert_eq!(scene.ancestor_depth_layer(camera), 0, "camera should be in macro layer 0");
+  assert_eq!(scene.ancestor_depth_layer(root), 0, "root should be in macro layer 0");
+}

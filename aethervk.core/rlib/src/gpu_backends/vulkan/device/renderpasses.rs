@@ -191,7 +191,7 @@ impl RenderPassSpecification {
   pub fn num_attachments(&self) -> usize {
     match self {
       Self::ColorDepthSingleSubpass { .. } => 2,
-      Self::ColorDepthCompositing { .. } => 5,
+      Self::ColorDepthCompositing { .. } => 8,
     }
   }
 }
@@ -202,6 +202,11 @@ pub(super) struct RenderPasses {
   >,
   pipeline_render_passes: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
     hashbrown::HashMap<(vk::Format, vk::Format), NonZeroHandle<vk::RenderPass>>,
+  >,
+  /// Cache for MRT (multi-color-output) pipeline compatibility render passes.
+  /// Keyed on (color_format, mrt_format, depth_format).
+  pipeline_render_passes_mrt: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<
+    hashbrown::HashMap<(vk::Format, vk::Format, vk::Format), NonZeroHandle<vk::RenderPass>>,
   >,
   render_pass_device: ash::khr::create_renderpass2::Device,
   allocator: vk_mem::AllocatorView,
@@ -303,6 +308,13 @@ impl DeviceResource for RenderPasses {
     {
       unsafe { device.destroy_render_pass(rp.get(), None) };
     }
+    for (_, rp) in crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+      &self.pipeline_render_passes_mrt,
+    )
+    .drain()
+    {
+      unsafe { device.destroy_render_pass(rp.get(), None) };
+    }
   }
 }
 
@@ -322,6 +334,9 @@ impl RenderPasses {
         hashbrown::HashMap::with_capacity(8),
       ),
       pipeline_render_passes: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(
+        hashbrown::HashMap::with_capacity(8),
+      ),
+      pipeline_render_passes_mrt: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(
         hashbrown::HashMap::with_capacity(8),
       ),
       render_pass_device: ash::khr::create_renderpass2::Device::new(instance, device),
@@ -361,6 +376,34 @@ impl RenderPasses {
       &self.pipeline_render_passes,
     )
     .insert(key, rp);
+    Ok(rp)
+  }
+
+  /// Creates a single-subpass MRT render pass for pipeline compatibility.
+  /// Same as get_pipeline_render_pass but with a second color attachment (for MRT GlobalDepth).
+  #[named]
+  pub fn get_pipeline_render_pass_mrt(
+    &self,
+    color_format: vk::Format,
+    mrt_format: vk::Format,
+    depth_stencil_format: vk::Format,
+  ) -> GpuResult<NonZeroHandle<vk::RenderPass>> {
+    let key = (color_format, mrt_format, depth_stencil_format);
+    if let Some(&rp) = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(
+      &self.pipeline_render_passes_mrt,
+    ).get(&key) {
+      return Ok(rp);
+    }
+    let rp = Self::create_color_depth_mrt_render_pass(
+      &self.render_pass_device,
+      color_format,
+      mrt_format,
+      depth_stencil_format,
+      vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+    )?;
+    crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::write(
+      &self.pipeline_render_passes_mrt,
+    ).insert(key, rp);
     Ok(rp)
   }
 
@@ -486,14 +529,14 @@ impl RenderPasses {
       return Ok(());
     }
 
-    // Only compositing bundles should have this — verify we have 5 attachments
-    if bundle.attachments.len() < 5 {
+    // Only compositing bundles should have this — verify we have 8 attachments
+    if bundle.attachments.len() < 8 {
       return Err(crate::gpu_err!(
         "init_composite_pipeline called on non-compositing bundle"
       ));
     }
 
-    // Create descriptor set layout with 4 INPUT_ATTACHMENT bindings (set 0, bindings 0-3)
+    // Create descriptor set layout with 6 INPUT_ATTACHMENT bindings (set 0, bindings 0-5)
     let bindings = [
       vk::DescriptorSetLayoutBinding::default()
         .binding(0)
@@ -512,6 +555,16 @@ impl RenderPasses {
         .stage_flags(vk::ShaderStageFlags::FRAGMENT),
       vk::DescriptorSetLayoutBinding::default()
         .binding(3)
+        .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+      vk::DescriptorSetLayoutBinding::default()
+        .binding(4)
+        .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+      vk::DescriptorSetLayoutBinding::default()
+        .binding(5)
         .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::FRAGMENT),
@@ -541,10 +594,10 @@ impl RenderPasses {
       )
     };
 
-    // Create descriptor pool with capacity for 4 INPUT_ATTACHMENT descriptors
+    // Create descriptor pool with capacity for 6 INPUT_ATTACHMENT descriptors
     let pool_size = vk::DescriptorPoolSize::default()
       .ty(vk::DescriptorType::INPUT_ATTACHMENT)
-      .descriptor_count(4);
+      .descriptor_count(6);
     let pool_ci = vk::DescriptorPoolCreateInfo::default()
       .max_sets(1)
       .pool_sizes(core::slice::from_ref(&pool_size));
@@ -557,48 +610,52 @@ impl RenderPasses {
       .set_layouts(core::slice::from_ref(&ds_layout_raw));
     let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info)?[0] };
 
-    // Write descriptor set to point at the 4 transient attachment image views
-    // Attachments: [0]=swapColor, [1]=macroColor, [2]=macroDepth,
-    //              [3]=microColor, [4]=microDepth
-    // Input attachment indices: 0=macroColor(att 1), 1=macroDepth(att 2),
-    //                          2=microColor(att 3), 3=microDepth(att 4)
-    //
-    // For depth attachments, we MUST use depth-only views (DEPTH aspect only),
-    // not the DEPTH|STENCIL views used for framebuffer attachments.
-    let mut image_views = [vk::ImageView::null(); 4];
+    // Write descriptor set to point at the 6 transient attachment image views
+    // For depth attachments, we MUST use depth-only views (DEPTH aspect only).
+    let mut image_views = [vk::ImageView::null(); 6];
 
-    // [0] macroColor — use the color attachment view directly
+    // [0] macroColor
     match &bundle.attachments[1] {
       RenderPassAttachment::ColorAttachment(_, _, view) => image_views[0] = view.get(),
       _ => return Err(crate::gpu_err!("expected ColorAttachment at index 1")),
     }
-    // [1] macroDepth — use depth-only view
+    // [1] macroDepth
     if bundle.depth_only_views.len() < 2 {
       return Err(crate::gpu_err!("depth_only_views not populated"));
     }
     image_views[1] = bundle.depth_only_views[0].get();
 
-    // [2] microColor — use the color attachment view directly
+    // [2] macroGlobalDepth
     match &bundle.attachments[3] {
       RenderPassAttachment::ColorAttachment(_, _, view) => image_views[2] = view.get(),
       _ => return Err(crate::gpu_err!("expected ColorAttachment at index 3")),
     }
-    // [3] microDepth — use depth-only view
-    image_views[3] = bundle.depth_only_views[1].get();
 
-    let image_infos: [vk::DescriptorImageInfo; 4] = core::array::from_fn(|i| {
+    // [3] microColor
+    match &bundle.attachments[4] {
+      RenderPassAttachment::ColorAttachment(_, _, view) => image_views[3] = view.get(),
+      _ => return Err(crate::gpu_err!("expected ColorAttachment at index 4")),
+    }
+    // [4] microDepth
+    image_views[4] = bundle.depth_only_views[1].get();
+
+    // [5] microGlobalDepth
+    match &bundle.attachments[6] {
+      RenderPassAttachment::ColorAttachment(_, _, view) => image_views[5] = view.get(),
+      _ => return Err(crate::gpu_err!("expected ColorAttachment at index 6")),
+    }
+
+    let image_infos: [vk::DescriptorImageInfo; 6] = core::array::from_fn(|i| {
+      let layout = match i {
+        1 | 4 => vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        _ => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+      };
       vk::DescriptorImageInfo::default()
-        .image_layout(if i % 2 == 0 {
-          // Even indices are color attachments
-          vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-        } else {
-          // Odd indices are depth attachments
-          vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL
-        })
+        .image_layout(layout)
         .image_view(image_views[i])
     });
 
-    let writes: [vk::WriteDescriptorSet; 4] = core::array::from_fn(|i| {
+    let writes: [vk::WriteDescriptorSet; 6] = core::array::from_fn(|i| {
       vk::WriteDescriptorSet::default()
         .dst_set(descriptor_set)
         .dst_binding(i as u32)
@@ -680,6 +737,10 @@ impl RenderPasses {
         .fragment_out
         .color_attachment_formats
         .push(vk::Format::B8G8R8A8_SRGB);
+      graphics_info
+        .fragment_out
+        .color_attachment_formats
+        .push(vk::Format::R32G32_SFLOAT); // finalGlobalDepth
       graphics_info.pipeline_layout = pipeline_layout.get();
       graphics_info.render_pass = bundle.render_pass.get();
       graphics_info.subpass = 2; // Composite subpass
@@ -745,6 +806,26 @@ impl RenderPasses {
     // (meaning it was created as a compositing bundle)
     bundle.composite.as_ref()?;
     Some(bundle.render_pass.get())
+  }
+
+  /// [TEST ONLY] Returns the `finalGlobalDepth` image handle (att[7]) and
+  /// the (width, height) of the bundle for the given presentation engine.
+  /// Returns `None` if the bundle is not a compositing bundle or att[7] is absent.
+  #[cfg(test)]
+  pub fn final_global_depth_image(
+    &self,
+    pe_handle: PresentationEngineHandle,
+  ) -> Option<(vk::Image, u32, u32)> {
+    let read_guard =
+      crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.render_passes);
+    let bundle = read_guard.get(&pe_handle)?;
+    // att[7] = finalGlobalDepth (R32G32_SFLOAT, STORED)
+    let att = bundle.attachments.get(7)?;
+    let image = match att {
+      RenderPassAttachment::ColorAttachment(image, _, _) => image.get(),
+      _ => return None,
+    };
+    Some((image, bundle.width, bundle.height))
   }
 
   // ---------------------------------------------------------------------------
@@ -1019,6 +1100,48 @@ impl RenderPasses {
       ));
     }
 
+    // [3] macroGlobalDepth — R32G32_SFLOAT, transient MRT
+    let (macro_gdepth_img, macro_gdepth_alloc) = {
+      #[cfg(test)]
+      {
+        create_test_attachment(
+          allocator,
+          ext2d,
+          vk::Format::R32G32_SFLOAT,
+          color_transient_usage,
+          vk::SampleCountFlags::TYPE_1,
+        )?
+      }
+      #[cfg(not(test))]
+      {
+        create_transient_attachment(
+          allocator,
+          ext2d,
+          vk::Format::R32G32_SFLOAT,
+          color_transient_usage,
+          vk::SampleCountFlags::TYPE_1,
+        )?
+      }
+    };
+    {
+      let ih = macro_gdepth_img.get();
+      let mut ac = macro_gdepth_alloc;
+      rollback.defer(move |_| unsafe { allocator.destroy_image(ih, &mut ac) });
+    }
+    let macro_gdepth_view =
+      Self::create_color_view(device, macro_gdepth_img, vk::Format::R32G32_SFLOAT)?;
+    {
+      let vh = macro_gdepth_view.get();
+      rollback.defer(move |dev| unsafe { dev.destroy_image_view(vh, None) });
+    }
+    unsafe {
+      attachments.push_unchecked(RenderPassAttachment::ColorAttachment(
+        macro_gdepth_img,
+        macro_gdepth_alloc,
+        macro_gdepth_view,
+      ));
+    }
+
     // [4] microColor — RGBA8, transient color
     let (micro_color_img, micro_color_alloc) = {
       #[cfg(test)]
@@ -1103,6 +1226,93 @@ impl RenderPasses {
       ));
     }
 
+    // [6] microGlobalDepth — R32G32_SFLOAT, transient MRT
+    let (micro_gdepth_img, micro_gdepth_alloc) = {
+      #[cfg(test)]
+      {
+        create_test_attachment(
+          allocator,
+          ext2d,
+          vk::Format::R32G32_SFLOAT,
+          color_transient_usage,
+          vk::SampleCountFlags::TYPE_1,
+        )?
+      }
+      #[cfg(not(test))]
+      {
+        create_transient_attachment(
+          allocator,
+          ext2d,
+          vk::Format::R32G32_SFLOAT,
+          color_transient_usage,
+          vk::SampleCountFlags::TYPE_1,
+        )?
+      }
+    };
+    {
+      let ih = micro_gdepth_img.get();
+      let mut ac = micro_gdepth_alloc;
+      rollback.defer(move |_| unsafe { allocator.destroy_image(ih, &mut ac) });
+    }
+    let micro_gdepth_view =
+      Self::create_color_view(device, micro_gdepth_img, vk::Format::R32G32_SFLOAT)?;
+    {
+      let vh = micro_gdepth_view.get();
+      rollback.defer(move |dev| unsafe { dev.destroy_image_view(vh, None) });
+    }
+    unsafe {
+      attachments.push_unchecked(RenderPassAttachment::ColorAttachment(
+        micro_gdepth_img,
+        micro_gdepth_alloc,
+        micro_gdepth_view,
+      ));
+    }
+
+    // [7] finalGlobalDepth — R32G32_SFLOAT, STORED
+    let final_gdepth_usage = vk::ImageUsageFlags::COLOR_ATTACHMENT
+        | vk::ImageUsageFlags::TRANSFER_SRC
+        | vk::ImageUsageFlags::INPUT_ATTACHMENT; // not transient
+    let (final_gdepth_img, final_gdepth_alloc) = {
+      #[cfg(test)]
+      {
+        create_test_attachment(
+          allocator,
+          ext2d,
+          vk::Format::R32G32_SFLOAT,
+          final_gdepth_usage,
+          vk::SampleCountFlags::TYPE_1,
+        )?
+      }
+      #[cfg(not(test))]
+      {
+        create_transient_attachment(
+          allocator,
+          ext2d,
+          vk::Format::R32G32_SFLOAT,
+          final_gdepth_usage,
+          vk::SampleCountFlags::TYPE_1,
+        )?
+      }
+    };
+    {
+      let ih = final_gdepth_img.get();
+      let mut ac = final_gdepth_alloc;
+      rollback.defer(move |_| unsafe { allocator.destroy_image(ih, &mut ac) });
+    }
+    let final_gdepth_view =
+      Self::create_color_view(device, final_gdepth_img, vk::Format::R32G32_SFLOAT)?;
+    {
+      let vh = final_gdepth_view.get();
+      rollback.defer(move |dev| unsafe { dev.destroy_image_view(vh, None) });
+    }
+    unsafe {
+      attachments.push_unchecked(RenderPassAttachment::ColorAttachment(
+        final_gdepth_img,
+        final_gdepth_alloc,
+        final_gdepth_view,
+      ));
+    }
+
     // Create depth-only image views for input attachment descriptors.
     // Vulkan requires that input attachment descriptors for D32S8 images use
     // views with a single aspect (DEPTH), not DEPTH|STENCIL.
@@ -1125,22 +1335,28 @@ impl RenderPasses {
     }
 
     // --- Framebuffers ---
-    // The swapchain color view varies per-framebuffer; the other 4 views are shared.
+    // The swapchain color view varies per-framebuffer; the other 7 views are shared.
     let shared_views = [
-      macro_color_view.get(), // [1]
-      macro_depth_view.get(), // [2]
-      micro_color_view.get(), // [3]
-      micro_depth_view.get(), // [4]
+      macro_color_view.get(),   // [1]
+      macro_depth_view.get(),   // [2]
+      macro_gdepth_view.get(),  // [3]
+      micro_color_view.get(),   // [4]
+      micro_depth_view.get(),   // [5]
+      micro_gdepth_view.get(),  // [6]
+      final_gdepth_view.get(),  // [7]
     ];
 
     let mut framebuffer = heapless::Vec::new();
     for image_view in image_views {
       let fb_attachments = [
-        image_view.get(), // [0] swapchain color (varies per frame)
-        shared_views[0],  // [1] macroColor
-        shared_views[1],  // [2] macroDepth
-        shared_views[2],  // [3] microColor
-        shared_views[3],  // [4] microDepth
+        image_view.get(),  // [0] swapchain (varies per frame)
+        shared_views[0],   // [1] macroColor
+        shared_views[1],   // [2] macroDepth
+        shared_views[2],   // [3] macroGlobalDepth
+        shared_views[3],   // [4] microColor
+        shared_views[4],   // [5] microDepth
+        shared_views[5],   // [6] microGlobalDepth
+        shared_views[6],   // [7] finalGlobalDepth
       ];
       let framebuffer_create_info = vk::FramebufferCreateInfo::default()
         .render_pass(render_pass.get())
@@ -1158,7 +1374,7 @@ impl RenderPasses {
       };
     }
 
-    // --- Clear values (5 attachments) ---
+    // --- Clear values (8 attachments) ---
     let black_opaque = vk::ClearValue {
       color: vk::ClearColorValue {
         float32: [0.0, 0.0, 0.0, 1.0],
@@ -1175,14 +1391,22 @@ impl RenderPasses {
         stencil: 0,
       },
     };
+    let mrt_clear = vk::ClearValue {
+      color: vk::ClearColorValue {
+        float32: [-1.0, -1.0, 0.0, 0.0], // sentinel: no depth written
+      },
+    };
 
     let mut clear_value = heapless::Vec::new();
     unsafe {
-      clear_value.push_unchecked(black_opaque); // [0] swapchainColor
-      clear_value.push_unchecked(black_opaque); // [1] macroColor
-      clear_value.push_unchecked(depth_clear); // [2] macroDepth
-      clear_value.push_unchecked(black_transparent); // [3] microColor (alpha=0)
-      clear_value.push_unchecked(depth_clear); // [4] microDepth
+      clear_value.push_unchecked(black_opaque);       // [0] swapchainColor
+      clear_value.push_unchecked(black_opaque);       // [1] macroColor  
+      clear_value.push_unchecked(depth_clear);        // [2] macroDepth
+      clear_value.push_unchecked(mrt_clear);          // [3] macroGlobalDepth
+      clear_value.push_unchecked(black_transparent);  // [4] microColor
+      clear_value.push_unchecked(depth_clear);        // [5] microDepth
+      clear_value.push_unchecked(mrt_clear);          // [6] microGlobalDepth
+      clear_value.push_unchecked(mrt_clear);          // [7] finalGlobalDepth
     }
 
     Ok(RenderPassBundle {
@@ -1395,6 +1619,151 @@ impl RenderPasses {
     Ok(render_pass)
   }
 
+  /// Creates a single-subpass render pass with TWO color attachments for MRT pipeline compatibility.
+  /// Used so mesh pipelines compiled against this single-subpass RP are compatible with
+  /// the compositing RP subpasses that also have two color outputs.
+  #[named]
+  fn create_color_depth_mrt_render_pass(
+    render_pass_device: &ash::khr::create_renderpass2::Device,
+    color_format: vk::Format,
+    mrt_format: vk::Format,
+    depth_stencil_format: vk::Format,
+    final_color_layout: vk::ImageLayout,
+  ) -> GpuResult<NonZeroHandle<vk::RenderPass>> {
+    let (depth_store_op, stencil_store_op) = if cfg!(test) {
+      (vk::AttachmentStoreOp::STORE, vk::AttachmentStoreOp::STORE)
+    } else {
+      (vk::AttachmentStoreOp::DONT_CARE, vk::AttachmentStoreOp::DONT_CARE)
+    };
+    let attachments = [
+      // [0] color
+      vk::AttachmentDescription2::default()
+        .format(color_format)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(final_color_layout),
+      // [1] mrt (R32G32_SFLOAT GlobalDepth)
+      vk::AttachmentDescription2::default()
+        .format(mrt_format)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+      // [2] depth/stencil
+      vk::AttachmentDescription2::default()
+        .format(depth_stencil_format)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(depth_store_op)
+        .stencil_load_op(vk::AttachmentLoadOp::CLEAR)
+        .stencil_store_op(stencil_store_op)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
+    ];
+    let color_refs = [
+      vk::AttachmentReference2::default()
+        .attachment(0)
+        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .aspect_mask(vk::ImageAspectFlags::COLOR),
+      vk::AttachmentReference2::default()
+        .attachment(1)
+        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .aspect_mask(vk::ImageAspectFlags::COLOR),
+    ];
+    let depth_ref = vk::AttachmentReference2::default()
+      .attachment(2)
+      .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+      .aspect_mask(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL);
+    let subpass_0 = vk::SubpassDescription2::default()
+      .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+      .color_attachments(&color_refs)
+      .depth_stencil_attachment(&depth_ref);
+    // Use same memory barrier pattern as create_color_depth_single_render_pass
+    let mut external_0_memory_barrier = vk::MemoryBarrier2::default()
+      .src_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
+      .dst_stage_mask(
+        vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT
+          | vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+          | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+      )
+      .src_access_mask(vk::AccessFlags2::empty())
+      .dst_access_mask(
+        vk::AccessFlags2::COLOR_ATTACHMENT_READ
+          | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+          | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
+          | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+      );
+    let mut _0_external_memory_barrier = vk::MemoryBarrier2::default()
+      .src_stage_mask(
+        vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT
+          | vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+          | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+      )
+      .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
+      .src_access_mask(
+        vk::AccessFlags2::COLOR_ATTACHMENT_READ
+          | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+          | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
+          | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+      )
+      .dst_access_mask(vk::AccessFlags2::empty());
+    let subpass_dependencies = [
+      vk::SubpassDependency2::default()
+        .dependency_flags(vk::DependencyFlags::BY_REGION)
+        .src_subpass(VK_SUBPASS_EXTERNAL)
+        .dst_subpass(0)
+        .src_stage_mask(vk::PipelineStageFlags::BOTTOM_OF_PIPE)
+        .dst_stage_mask(
+          vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+            | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+        )
+        .src_access_mask(vk::AccessFlags::empty())
+        .dst_access_mask(
+          vk::AccessFlags::COLOR_ATTACHMENT_READ
+            | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        )
+        .push_next(&mut external_0_memory_barrier),
+      vk::SubpassDependency2::default()
+        .dependency_flags(vk::DependencyFlags::BY_REGION)
+        .src_subpass(0)
+        .dst_subpass(VK_SUBPASS_EXTERNAL)
+        .src_stage_mask(
+          vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+            | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+        )
+        .dst_stage_mask(vk::PipelineStageFlags::BOTTOM_OF_PIPE)
+        .src_access_mask(
+          vk::AccessFlags::COLOR_ATTACHMENT_READ
+            | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        )
+        .dst_access_mask(vk::AccessFlags::empty())
+        .push_next(&mut _0_external_memory_barrier),
+    ];
+    let render_pass_create_info = vk::RenderPassCreateInfo2::default()
+      .attachments(&attachments)
+      .subpasses(slice::from_ref(&subpass_0))
+      .dependencies(&subpass_dependencies);
+    let render_pass = unsafe {
+      NonZeroHandle::new_unchecked(
+        render_pass_device.create_render_pass2(&render_pass_create_info, None)?,
+      )
+    };
+    Ok(render_pass)
+  }
+
   // ---------------------------------------------------------------------------
   // VkRenderPass creation — 3-subpass compositing
   // ---------------------------------------------------------------------------
@@ -1404,15 +1773,17 @@ impl RenderPasses {
   /// ```text
   /// Attachments:
   ///   [0] swapchainColor  — final output (PRESENT_SRC_KHR or COLOR_ATTACHMENT_OPTIMAL)
-  ///   [1] swapchainDepth  — D32S8
-  ///   [2] macroColor      — RGBA8, transient
-  ///   [3] macroDepth      — D32S8, transient
+  ///   [1] macroColor      — RGBA8, transient
+  ///   [2] macroDepth      — D32S8, transient
+  ///   [3] macroGlobalDepth— R32G32_SFLOAT, transient MRT
   ///   [4] microColor      — RGBA8, transient
   ///   [5] microDepth      — D32S8, transient
+  ///   [6] microGlobalDepth— R32G32_SFLOAT, transient MRT
+  ///   [7] finalGlobalDepth— R32G32_SFLOAT, STORED
   ///
-  /// Subpass 0 (macro):     color=[2], depth=[3]
-  /// Subpass 1 (micro):     color=[4], depth=[5]
-  /// Subpass 2 (composite): color=[0], depth=[1], input=[2,3,4,5]
+  /// Subpass 0 (macro):     color=[1, 3], depth=[2]
+  /// Subpass 1 (micro):     color=[4, 6], depth=[5]
+  /// Subpass 2 (composite): color=[0, 7], input=[1, 2, 3, 4, 5, 6]
   /// ```
   #[named]
   fn create_compositing_render_pass(
@@ -1426,124 +1797,166 @@ impl RenderPasses {
     // Transient store ops: DONT_CARE in production (never read back).
     // In tests the compositing pass' own transients still don't need STORE.
     let attachments = [
-      // [0] swapchainColor
-      vk::AttachmentDescription2::default()
-        .format(color_format)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(final_color_layout),
-      // [1] macroColor — transient
-      vk::AttachmentDescription2::default()
-        .format(vk::Format::R8G8B8A8_UNORM)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-      // [2] macroDepth — transient
-      vk::AttachmentDescription2::default()
-        .format(depth_stencil_format)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .stencil_load_op(vk::AttachmentLoadOp::CLEAR)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
-      // [3] microColor — transient
-      vk::AttachmentDescription2::default()
-        .format(vk::Format::R8G8B8A8_UNORM)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-      // [4] microDepth — transient
-      vk::AttachmentDescription2::default()
-        .format(depth_stencil_format)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .stencil_load_op(vk::AttachmentLoadOp::CLEAR)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
+        // [0] swapchainColor
+        vk::AttachmentDescription2::default()
+            .format(color_format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(final_color_layout),
+        // [1] macroColor — transient
+        vk::AttachmentDescription2::default()
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+        // [2] macroDepth — transient
+        vk::AttachmentDescription2::default()
+            .format(depth_stencil_format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(vk::AttachmentLoadOp::CLEAR)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
+        // [3] macroGlobalDepth — R32G32_SFLOAT, transient MRT
+        vk::AttachmentDescription2::default()
+            .format(vk::Format::R32G32_SFLOAT)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+        // [4] microColor — transient
+        vk::AttachmentDescription2::default()
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+        // [5] microDepth — transient
+        vk::AttachmentDescription2::default()
+            .format(depth_stencil_format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(vk::AttachmentLoadOp::CLEAR)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
+        // [6] microGlobalDepth — R32G32_SFLOAT, transient MRT
+        vk::AttachmentDescription2::default()
+            .format(vk::Format::R32G32_SFLOAT)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+        // [7] finalGlobalDepth — R32G32_SFLOAT, STORED (readable from CPU)
+        vk::AttachmentDescription2::default()
+            .format(vk::Format::R32G32_SFLOAT)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
     ];
 
-    // --- Subpass 0 (macro): color=[1], depth=[2] ---
-
-    let sp0_color_ref = vk::AttachmentReference2::default()
-      .attachment(1)
-      .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-      .aspect_mask(vk::ImageAspectFlags::COLOR);
-
+    let sp0_color_refs = [
+        vk::AttachmentReference2::default()
+            .attachment(1)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .aspect_mask(vk::ImageAspectFlags::COLOR),
+        vk::AttachmentReference2::default()
+            .attachment(3) // macroGlobalDepth MRT
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .aspect_mask(vk::ImageAspectFlags::COLOR),
+    ];
     let sp0_depth_ref = vk::AttachmentReference2::default()
-      .attachment(2)
-      .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-      .aspect_mask(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL);
-
+        .attachment(2)
+        .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+        .aspect_mask(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL);
     let subpass_0 = vk::SubpassDescription2::default()
-      .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-      .color_attachments(slice::from_ref(&sp0_color_ref))
-      .depth_stencil_attachment(&sp0_depth_ref);
+        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+        .color_attachments(&sp0_color_refs)
+        .depth_stencil_attachment(&sp0_depth_ref);
 
-    // --- Subpass 1 (micro): color=[3], depth=[4] ---
-
-    let sp1_color_ref = vk::AttachmentReference2::default()
-      .attachment(3)
-      .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-      .aspect_mask(vk::ImageAspectFlags::COLOR);
-
-    let sp1_depth_ref = vk::AttachmentReference2::default()
-      .attachment(4)
-      .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-      .aspect_mask(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL);
-
-    let subpass_1 = vk::SubpassDescription2::default()
-      .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-      .color_attachments(slice::from_ref(&sp1_color_ref))
-      .depth_stencil_attachment(&sp1_depth_ref);
-
-    // --- Subpass 2 (composite): color=[0], input=[1,2,3,4] ---
-
-    let sp2_color_ref = vk::AttachmentReference2::default()
-      .attachment(0)
-      .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-      .aspect_mask(vk::ImageAspectFlags::COLOR);
-
-    // Input attachment references: color inputs use COLOR aspect,
-    // depth inputs use DEPTH aspect only (not STENCIL) for subpassInput reads.
-    let sp2_input_refs = [
-      vk::AttachmentReference2::default()
-        .attachment(1) // macroColor
-        .layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .aspect_mask(vk::ImageAspectFlags::COLOR),
-      vk::AttachmentReference2::default()
-        .attachment(2) // macroDepth
-        .layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL)
-        .aspect_mask(vk::ImageAspectFlags::DEPTH),
-      vk::AttachmentReference2::default()
-        .attachment(3) // microColor
-        .layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .aspect_mask(vk::ImageAspectFlags::COLOR),
-      vk::AttachmentReference2::default()
-        .attachment(4) // microDepth
-        .layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL)
-        .aspect_mask(vk::ImageAspectFlags::DEPTH),
+    let sp1_color_refs = [
+        vk::AttachmentReference2::default()
+            .attachment(4)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .aspect_mask(vk::ImageAspectFlags::COLOR),
+        vk::AttachmentReference2::default()
+            .attachment(6) // microGlobalDepth MRT
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .aspect_mask(vk::ImageAspectFlags::COLOR),
     ];
+    let sp1_depth_ref = vk::AttachmentReference2::default()
+        .attachment(5)
+        .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+        .aspect_mask(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL);
+    let subpass_1 = vk::SubpassDescription2::default()
+        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+        .color_attachments(&sp1_color_refs)
+        .depth_stencil_attachment(&sp1_depth_ref);
 
+    let sp2_color_refs = [
+        vk::AttachmentReference2::default()
+            .attachment(0) // swapchainColor
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .aspect_mask(vk::ImageAspectFlags::COLOR),
+        vk::AttachmentReference2::default()
+            .attachment(7) // finalGlobalDepth
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .aspect_mask(vk::ImageAspectFlags::COLOR),
+    ];
+    let sp2_input_refs = [
+        vk::AttachmentReference2::default()
+            .attachment(1) // macroColor
+            .layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .aspect_mask(vk::ImageAspectFlags::COLOR),
+        vk::AttachmentReference2::default()
+            .attachment(2) // macroDepth (depth-only view used by descriptor)
+            .layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL)
+            .aspect_mask(vk::ImageAspectFlags::DEPTH),
+        vk::AttachmentReference2::default()
+            .attachment(3) // macroGlobalDepth
+            .layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .aspect_mask(vk::ImageAspectFlags::COLOR),
+        vk::AttachmentReference2::default()
+            .attachment(4) // microColor
+            .layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .aspect_mask(vk::ImageAspectFlags::COLOR),
+        vk::AttachmentReference2::default()
+            .attachment(5) // microDepth (depth-only view used by descriptor)
+            .layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL)
+            .aspect_mask(vk::ImageAspectFlags::DEPTH),
+        vk::AttachmentReference2::default()
+            .attachment(6) // microGlobalDepth
+            .layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .aspect_mask(vk::ImageAspectFlags::COLOR),
+    ];
     let subpass_2 = vk::SubpassDescription2::default()
-      .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-      .color_attachments(slice::from_ref(&sp2_color_ref))
-      .input_attachments(&sp2_input_refs);
+        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+        .color_attachments(&sp2_color_refs)
+        .input_attachments(&sp2_input_refs);
 
     let subpasses = [subpass_0, subpass_1, subpass_2];
 

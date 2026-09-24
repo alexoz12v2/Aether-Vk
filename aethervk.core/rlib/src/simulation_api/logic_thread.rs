@@ -2515,7 +2515,28 @@ fn process_command_internal(
         },
       );
 
-      // ── 3. Enqueue GPU position buffer swap for the next frame ────────────────
+      // ── 3. Update all Jet Previews ────────────────────────
+      let parent_scale = scene_guard.scene.with_component(comet.body, |t: &crate::scene::TransformComponent| t.scale.x()).unwrap_or(1.0);
+      let local_r = radius_km / parent_scale;
+      let desired_global_radius = radius_km / 50.0;
+      let local_scale = desired_global_radius / parent_scale;
+
+      if let Some(children) = scene_guard.scene.get_children(comet.body) {
+          for child in children {
+              if scene_guard.scene.has_component::<crate::scene::ParticleSystemComponent>(child) == crate::scene::HasComponentResultEnum::EntityHasComponent {
+                  let _ = scene_guard.scene.with_component_mut(child, |t: &mut crate::scene::TransformComponent| {
+                      let mut dir = t.position.normalize();
+                      if dir.x().is_nan() {
+                          dir = Vec3f32::from_components(1.0, 0.0, 0.0);
+                      }
+                      t.position = dir * local_r;
+                      t.scale = Vec3f32::from_components(local_scale, local_scale, local_scale);
+                  });
+              }
+          }
+      }
+
+      // ── 4. Enqueue GPU position buffer swap for the next frame ────────────────
       // `flush_pending_mesh_updates` is called at the top of `build_render_scene`
       // and records vkCmdCopyBuffer + TRANSFER→VERTEX barrier on the main graphics
       // command buffer, then swaps the handle in `physical_mesh2_resources`.
@@ -3341,6 +3362,12 @@ fn execute_simulation_tick_fixed_update_phase(
         let state = kv_ref.value();
         let entity_id = EntityId::from_ffi(key.entity_id);
         if let Some(ref body_state) = state.comet_state {
+          let old_rot = scene_write
+            .scene
+            .with_component(entity_id, |t: &TransformComponent| t.rotation)
+            .unwrap();
+          let new_rot = body_state.transform.rotation;
+
           // comet/planet, update its trasform
           scene_write
             .scene
@@ -3348,6 +3375,48 @@ fn execute_simulation_tick_fixed_update_phase(
               *t = body_state.transform;
             })
             .unwrap();
+
+          if !body_state
+            .body_rotational_model
+            .as_ref()
+            .map_or(true, |m| m.body_fixed_orientation)
+          {
+            let delta_rot = new_rot * old_rot.conjugate();
+            let inv_delta_rot = delta_rot.conjugate();
+
+            let mut cameras = alloc::vec::Vec::new();
+            scene_write.scene.query1(|cam_id, _: &crate::scene::CameraComponent| {
+              let mut is_desc = false;
+              let mut curr = scene_write.scene.get_parent(cam_id);
+              while let Some(p) = curr {
+                if p == entity_id {
+                  is_desc = true;
+                  break;
+                }
+                curr = scene_write.scene.get_parent(p);
+              }
+              if is_desc {
+                cameras.push(cam_id);
+              }
+            });
+
+            for cam_id in cameras {
+              scene_write.scene.with_component_mut(
+                cam_id,
+                |h: &mut crate::scene::HighResTransformComponent| {
+                  let old_pos_f32 =
+                    aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
+                      h.position.x() as f32,
+                      h.position.y() as f32,
+                      h.position.z() as f32,
+                    );
+                  let new_pos = inv_delta_rot.rotate_vector(old_pos_f32).to_f64();
+                  h.rotation = inv_delta_rot * h.rotation;
+                  h.position = new_pos;
+                },
+              );
+            }
+          }
         } else {
           // reference frame, update its transform
           scene_write

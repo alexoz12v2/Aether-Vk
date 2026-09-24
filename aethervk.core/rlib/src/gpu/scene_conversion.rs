@@ -30,6 +30,8 @@ use aethervk_oshal_rlib::{
 };
 use function_name::named;
 
+const AU_TO_KM: f64 = 149_597_870.700_f64;
+
 /// New implemnetation for ECS scene conversion into a list of draw calls
 pub trait SceneConversionExt2 {
   /// Fused Step for Querying ECS scene, computing cross-frame spatial math, request GPU resources,
@@ -485,15 +487,26 @@ impl SceneConversionExt2 for Scene {
             rte.position.z() as f64,
           )
         };
-        let obj_dist = (cx * cx + cy * cy + cz * cz).sqrt();
+
+        // We need the planar depth along the camera's forward axis for clipping planes.
+        use aethervk_oshal_rlib::math::vector::Vector4;
+        use aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64;
+        let view_pos = camera_data.view_f64 * Vec4f64::from_components(cx, cy, cz, 1.0);
+        let obj_dist_y = view_pos.y().abs();
 
         // Frustum cull: skip objects whose bounding sphere lies entirely outside the view.
-        if !sphere_in_frustum(cx, cy, cz, obj_radius) {
+        let au_scale = 1.0 / AU_TO_KM as f64;
+        if !sphere_in_frustum(
+          cx * au_scale,
+          cy * au_scale,
+          cz * au_scale,
+          obj_radius * au_scale,
+        ) {
           continue;
         }
 
-        let obj_near = (obj_dist - obj_radius * DEPTH_MARGIN).max(DEPTH_NEAR_FLOOR);
-        let obj_far = obj_dist + obj_radius * DEPTH_MARGIN;
+        let obj_near = (obj_dist_y - obj_radius * DEPTH_MARGIN).max(DEPTH_NEAR_FLOOR);
+        let obj_far = obj_dist_y + obj_radius * DEPTH_MARGIN;
 
         let e = per_layer_depth.entry(*layer_idx).or_insert((f64::MAX, f64::NEG_INFINITY));
         e.0 = e.0.min(obj_near);
@@ -518,17 +531,29 @@ impl SceneConversionExt2 for Scene {
           use aethervk_oshal_rlib::math::vector::Vector4;
           (_mat.w.x() as f64, _mat.w.y() as f64, _mat.w.z() as f64)
         };
-        let obj_dist = (cx * cx + cy * cy + cz * cz).sqrt();
+
+        let view_pos = camera_data.view_f64
+          * aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(cx, cy, cz, 1.0);
+        let obj_dist_y = {
+          use aethervk_oshal_rlib::math::vector::Vector4;
+          view_pos.y().abs()
+        };
 
         // Bounding radius: full axis + arrowhead envelope.
         let gizmo_radius = (*rad as f64) * 2.1;
 
-        if !sphere_in_frustum(cx, cy, cz, gizmo_radius) {
+        let au_scale = 1.0 / AU_TO_KM as f64;
+        if !sphere_in_frustum(
+          cx * au_scale,
+          cy * au_scale,
+          cz * au_scale,
+          gizmo_radius * au_scale,
+        ) {
           continue;
         }
 
-        let obj_near = (obj_dist - gizmo_radius * DEPTH_MARGIN).max(DEPTH_NEAR_FLOOR);
-        let obj_far = obj_dist + gizmo_radius * DEPTH_MARGIN;
+        let obj_near = (obj_dist_y - gizmo_radius * DEPTH_MARGIN).max(DEPTH_NEAR_FLOOR);
+        let obj_far = obj_dist_y + gizmo_radius * DEPTH_MARGIN;
 
         let e = per_layer_depth.entry(*layer_idx).or_insert((f64::MAX, f64::NEG_INFINITY));
         e.0 = e.0.min(obj_near);
@@ -566,6 +591,8 @@ impl SceneConversionExt2 for Scene {
         };
         let l = get_or_create_layer!(layer_idx);
 
+        // capture for debug
+        aethervk_oshal_rlib::log!("StaticMesh {} pushed to layer {}", mesh.mesh.id, layer_idx);
         l.draw_calls.push(DrawCall::from_handles_and_matrix(
           res,
           mesh.mesh.indices.len() as u32,
@@ -580,6 +607,7 @@ impl SceneConversionExt2 for Scene {
           ],
           true,
           0,
+          layer_idx as u32,
         ));
       } else {
         let err = unsafe { gpu_res.unwrap_err_unchecked() };
@@ -849,33 +877,44 @@ impl SceneConversionExt2 for Scene {
     }
 
     // Sun
-    if let Some((rad, id)) = self.query2_first_res_without::<_, _, HiddenComponent, _, _>(
+    if let Some((rad_km, id)) = self.query2_first_res_without::<_, _, HiddenComponent, _, _>(
       |id, _t: &TransformComponent, s: &SunComponent| {
         if hidden_set.contains(&id) {
           None
         } else {
-          Some(s.radius)
+          Some(s.radius_km)
         }
       },
     ) {
       if let Some((layer_idx, mut rte)) = compute_rte(self, id) {
-        // Note: this should never happen cause either sun is son of root with identity or sun is
-        // root
-        if layer_idx != self.ancestor_depth_layer(camera_entity) {
-          if let Some(sun_g) = self.global_transform_f64(id) {
-            rte.position = sun_g.position - cam_global_f64.position;
-            rte.scale = safe_div_vec3(sun_g.scale, cam_global_f64.scale);
-          }
-        }
         if let Ok(pipe) = device.get_sun_pipeline_key(pe_handle) {
           let l = get_or_create_layer!(layer_idx);
+
+          if layer_idx > 0 {
+            use aethervk_oshal_rlib::math::vector::Vector3;
+            let (cx, cy, cz) = (
+              rte.position.x() as f64,
+              rte.position.y() as f64,
+              rte.position.z() as f64,
+            );
+            let obj_dist = (cx * cx + cy * cy + cz * cz).sqrt();
+            // rad_km is already in km, matching the micro-layer's local unit.
+            // For a macro layer (layer_idx == 0) this branch is skipped.
+            let obj_radius = 2.0 * (rad_km as f64);
+            let obj_near = (obj_dist - obj_radius * 1.05).max(0.001);
+            let obj_far = obj_dist + obj_radius * 1.05;
+
+            l.near = l.near.min(obj_near);
+            l.far = l.far.max(obj_far);
+          }
+
           let sun_cam = render_scene.camera_data.rebuild_for_layer(l.near, l.far, l.frame_scale);
           l.sun_call = Some(SunDrawCall::from_model_and_camera(
             rte.to_mat4_f64(),
             &sun_cam,
             pipe,
             id,
-            rad,
+            rad_km,
           ));
         } else {
           aethervk_oshal_rlib::log!("GPU Error While getting Sun upload");
@@ -1038,7 +1077,6 @@ impl SceneConversionExt2 for Scene {
       let w = window_extent[0] as f32;
       let h = window_extent[1] as f32;
 
-      const AU_TO_KM: f64 = 149_597_870.700_f64;
       let cam_pos_km = Vec3f64::from_components(
         cam_global_f64.position.x() * AU_TO_KM,
         cam_global_f64.position.y() * AU_TO_KM,

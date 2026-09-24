@@ -334,6 +334,15 @@
               </controls:UnboundedSlider>
             </Grid>
 
+            <!-- Body-Fixed Camera -->
+            <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
+              <TextBlock Grid.Column="0" Classes="label" Text="Camera orientation is body-fixed with respect to camera" VerticalAlignment="Center" TextWrapping="Wrap" />
+              <ComboBox Grid.Column="2" SelectedIndex="{Binding BodyFixedOrientationIndex}" HorizontalAlignment="Center">
+                <ComboBoxItem>Yes</ComboBoxItem>
+                <ComboBoxItem>No</ComboBoxItem>
+              </ComboBox>
+            </Grid>
+
           </StackPanel>
         </Expander>
 

@@ -151,37 +151,33 @@
           </Expander.Header>
 
           <Grid ColumnDefinitions="*,12,1.6*"
-                RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                 Margin="12,8,12,12">
 
             <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrRadius}" />
             <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" />
 
-            <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding StrRotationPeriod}" />
-            <controls:UnboundedSlider Grid.Row="2" Grid.Column="2">
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="Gizmo Visible" VerticalAlignment="Center" />
+            <ComboBox Grid.Row="2" Grid.Column="2" SelectedIndex="{Binding IsGizmoVisibleIndex}" HorizontalAlignment="Center">
+              <ComboBoxItem>Yes</ComboBoxItem>
+              <ComboBoxItem>No</ComboBoxItem>
+            </ComboBox>
+
+            <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrRotationPeriod}" />
+            <controls:UnboundedSlider Grid.Row="4" Grid.Column="2">
               <controls:UnboundedSlider.InnerRightContent>
                 <TextBlock Classes="unit-of-measurement" Text="h" />
               </controls:UnboundedSlider.InnerRightContent>
             </controls:UnboundedSlider>
 
-            <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrRotations}" />
-            <TextBox Grid.Row="4" Grid.Column="2">
+            <TextBlock Grid.Row="6" Grid.Column="0" Text="{Binding StrRotations}" />
+            <TextBox Grid.Row="6" Grid.Column="2">
               <i:Interaction.Behaviors>
                 <b:NaturalNumberBehavior />
               </i:Interaction.Behaviors>
             </TextBox>
 
-            <TextBlock Grid.Row="6" Grid.Column="0" Text="{Binding StrRA}" />
-            <controls:UnboundedSlider Grid.Row="6" Grid.Column="2">
-              <controls:UnboundedSlider.InnerRightContent>
-                <TextBlock Classes="unit-of-measurement" Text="°" />
-              </controls:UnboundedSlider.InnerRightContent>
-              <i:Interaction.Behaviors>
-                <b:AngleBehavior />
-              </i:Interaction.Behaviors>
-            </controls:UnboundedSlider>
-
-            <TextBlock Grid.Row="8" Grid.Column="0" Text="{Binding StrDec}" />
+            <TextBlock Grid.Row="8" Grid.Column="0" Text="{Binding StrRA}" />
             <controls:UnboundedSlider Grid.Row="8" Grid.Column="2">
               <controls:UnboundedSlider.InnerRightContent>
                 <TextBlock Classes="unit-of-measurement" Text="°" />
@@ -191,8 +187,28 @@
               </i:Interaction.Behaviors>
             </controls:UnboundedSlider>
 
-            <TextBlock Grid.Row="10" Grid.Column="0" Text="{Binding StrSpinAxisPA}" />
-            <TextBox Grid.Row="10" Grid.Column="2">
+            <TextBlock Grid.Row="10" Grid.Column="0" Text="{Binding StrDec}" />
+            <controls:UnboundedSlider Grid.Row="10" Grid.Column="2">
+              <controls:UnboundedSlider.InnerRightContent>
+                <TextBlock Classes="unit-of-measurement" Text="°" />
+              </controls:UnboundedSlider.InnerRightContent>
+              <i:Interaction.Behaviors>
+                <b:AngleBehavior />
+              </i:Interaction.Behaviors>
+            </controls:UnboundedSlider>
+
+            <TextBlock Grid.Row="12" Grid.Column="0" Text="{Binding StrPM}" />
+            <controls:UnboundedSlider Grid.Row="12" Grid.Column="2">
+              <controls:UnboundedSlider.InnerRightContent>
+                <TextBlock Classes="unit-of-measurement" Text="°" />
+              </controls:UnboundedSlider.InnerRightContent>
+              <i:Interaction.Behaviors>
+                <b:AngleBehavior />
+              </i:Interaction.Behaviors>
+            </controls:UnboundedSlider>
+
+            <TextBlock Grid.Row="14" Grid.Column="0" Text="{Binding StrSpinAxisPA}" />
+            <TextBox Grid.Row="14" Grid.Column="2">
               <TextBox.InnerRightContent>
                 <TextBlock Classes="unit-of-measurement" Text="°" />
               </TextBox.InnerRightContent>
@@ -201,8 +217,8 @@
               </i:Interaction.Behaviors>
             </TextBox>
 
-            <TextBlock Grid.Row="12" Grid.Column="0" Text="{Binding StrSpinAxisInclination}" />
-            <TextBox Grid.Row="12" Grid.Column="2">
+            <TextBlock Grid.Row="16" Grid.Column="0" Text="{Binding StrSpinAxisInclination}" />
+            <TextBox Grid.Row="16" Grid.Column="2">
               <i:Interaction.Behaviors>
                 <b:AngleBehavior />
               </i:Interaction.Behaviors>

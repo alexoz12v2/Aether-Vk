@@ -371,6 +371,11 @@ pub(crate) unsafe fn invoke_main_thread_process_cleanup(
 ) {
   if let Some(cb) = *MAIN_THREAD_DISPATCH_CALLBACK.read() {
     unsafe { cb(vulkan_device as *const _, 1, signal_done as *const _) };
+  } else {
+    // No C# dispatch callback registered (e.g. test mode without Avalonia).
+    // Immediately signal completion so the render thread's spin-wait at
+    // render_thread.rs:104-106 doesn't hang forever on the second 500 ms cleanup trigger.
+    signal_done.store(true, core::sync::atomic::Ordering::Release);
   }
 }
 
@@ -388,8 +393,12 @@ pub(crate) unsafe fn invoke_main_thread_flush_cleanup(
 ) {
   if let Some(cb) = *MAIN_THREAD_DISPATCH_CALLBACK.read() {
     unsafe { cb(vulkan_device as *const _, 2, signal_done as *const _) };
+  } else {
+    // No C# dispatch callback: signal completion immediately (same reasoning as above).
+    signal_done.store(true, core::sync::atomic::Ordering::Release);
   }
 }
+
 
 /// Platform-agnostic 16-byte handle passed back from C# when Rust requests the OS window.
 ///
@@ -839,6 +848,9 @@ pub mod test_composite_render;
 
 #[cfg(test)]
 pub mod test_lca_render;
+
+#[cfg(test)]
+pub mod test_multi_micro_render;
 
 #[cfg(test)]
 mod tests;

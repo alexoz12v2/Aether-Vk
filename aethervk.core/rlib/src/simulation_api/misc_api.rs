@@ -134,6 +134,36 @@ impl SimulationContext {
     }
   }
 
+  /// [TEST ONLY] Downloads the finalGlobalDepth MRT attachment for the given render task.
+  /// `buffer_ptr` must point to `width * height * 8` bytes (two f32 per pixel).
+  ///
+  /// # Safety
+  /// - `buffer_ptr` must be valid for `buffer_size` bytes.
+  #[cfg(test)]
+  pub unsafe fn download_global_depth_image(
+    &self,
+    task_id: u64,
+    buffer_ptr: *mut u8,
+    buffer_size: usize,
+  ) -> bool {
+    let gdepth_tid = task_id | crate::gpu::GLOBAL_DEPTH_TASK_BIT;
+    let result = self
+      .render_proxy
+      .0
+      .as_frontend()
+      .ok_or(crate::simulation_api::EngineError::InvalidOperation("render_frontend"))
+      .and_then(|frontend| {
+        frontend
+          .with_device(self.render_proxy.1, |device| {
+            device.read_global_depth_download(gdepth_tid, unsafe {
+              core::slice::from_raw_parts_mut(buffer_ptr, buffer_size)
+            })
+          })
+          .map_err(crate::simulation_api::EngineError::from)
+      });
+    result.is_ok()
+  }
+
   pub fn set_asset_path(path: &str) {
     let mut guard = crate::gpu::ASSET_DIR.write();
     *guard = Some(alloc::string::String::from(path));

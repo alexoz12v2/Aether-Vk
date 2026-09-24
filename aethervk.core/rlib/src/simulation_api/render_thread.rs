@@ -501,8 +501,7 @@ fn process_command(
                     e
                   })?;
 
-                if let Some(layer) = render_scene.depth_layers.first()
-                  && let Some(sun_call) = &layer.sun_call
+                if let Some(sun_call) = render_scene.depth_layers.iter().find_map(|l| l.sun_call.as_ref())
                 {
                   render_device
                     .update_sun(
@@ -621,6 +620,17 @@ fn process_command(
                     );
                     e
                   })?;
+
+                  #[cfg(test)]
+                  {
+                    let gdepth_tid = task_id | crate::gpu::GLOBAL_DEPTH_TASK_BIT;
+                    render_device.record_global_depth_download(cmd_buffer, gdepth_tid).map_err(|e| {
+                      aethervk_oshal_rlib::log!(
+                        "[render tasklet] record_global_depth_download failed: {:?}", e
+                      );
+                      e
+                    })?;
+                  }
                 }
 
                 cmd_scope.submit().map_err(|e| {

@@ -53,6 +53,9 @@ public sealed class CometSession : ITabSession
   /// <summary>Sidereal rotation rate (degrees/day).</summary>
   public double RotRateDegDay { get; set; }
 
+  /// <summary>Camera body-fixed orientation toggle. 0 = Yes, 1 = No.</summary>
+  public int RotBodyFixedOrientationIndex { get; set; } = 0;
+
   // ── Nucleus radius ────────────────────────────────────────────────────────
 
   /// <summary>

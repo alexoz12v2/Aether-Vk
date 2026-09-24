@@ -106,6 +106,9 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   [ObservableProperty]
   private double _rotRateDegDay;
 
+  [ObservableProperty]
+  private int _bodyFixedOrientationIndex = 0; // 0 = Yes, 1 = No
+
   // ── Collections from JPL service ─────────────────────────────────────────
 
   /// <summary>
@@ -260,7 +263,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         or nameof(PrimeMeridianDeg)
         or nameof(PoleRaRateDegCen)
         or nameof(PoleDecRateDegCen)
-        or nameof(RotRateDegDay);
+        or nameof(RotRateDegDay)
+        or nameof(BodyFixedOrientationIndex);
 
     bool isStateChangingProp = isRotProp || e.PropertyName is nameof(SelectedComet) or nameof(SelectedSpkRecord);
 
@@ -544,7 +548,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       PrimeMeridianDeg,
       PoleRaRateDegCen,
       PoleDecRateDegCen,
-      RotRateDegDay
+      RotRateDegDay,
+      BodyFixedOrientationIndex == 0
     );
     _cometConfig.SetRotationalModel(dto);
 
@@ -557,6 +562,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       session.RotPoleRaRateDegCen = PoleRaRateDegCen;
       session.RotPoleDecRateDegCen = PoleDecRateDegCen;
       session.RotRateDegDay = RotRateDegDay;
+      session.RotBodyFixedOrientationIndex = BodyFixedOrientationIndex;
     }
   }
 

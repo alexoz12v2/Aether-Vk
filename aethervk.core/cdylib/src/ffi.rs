@@ -67,6 +67,8 @@ pub struct CBodyRotationalModelDTO {
   pub pole_dec_rate_deg_cen: f64,
   /// Sidereal rotation rate (degrees/day).
   pub rot_rate_deg_day: f64,
+  pub body_fixed_orientation: u32,
+  pub _padding: u32,
 }
 
 /// Osculating Keplerian elements from the JPL Small-Body Database.
@@ -699,7 +701,9 @@ impl<'a> TransformStaticCamera<'a> {
       1 => Some(Self::ProjectionPersp(unsafe {
         &*buffer.cast::<[f32; 4]>()
       })),
-      2 => Some(Self::RotoTranslate(unsafe { &*buffer.cast::<CRotoTranslateDTO>() })),
+      2 => Some(Self::RotoTranslate(unsafe {
+        &*buffer.cast::<CRotoTranslateDTO>()
+      })),
       _ => None,
     }
   }
@@ -735,7 +739,9 @@ impl<'a> TransformStaticCamera<'a> {
       Self::ProjectionPersp(_) | Self::ProjectionOrtho(_) => None,
       Self::RotoTranslate(dto) => Some(HighResTransformComponent {
         position: DVec3::from_components(dto.pos_x, dto.pos_y, dto.pos_z),
-        rotation: Quat(Vec4f32::from_components(dto.rot_x, dto.rot_y, dto.rot_z, dto.rot_w)),
+        rotation: Quat(Vec4f32::from_components(
+          dto.rot_x, dto.rot_y, dto.rot_z, dto.rot_w,
+        )),
         scale: Vec3f32::one(),
       }),
     }
@@ -781,9 +787,14 @@ pub unsafe extern "C" fn avkSimulationContext_transformStaticCamera(
     drop(scenes);
     let mut scene_guard = scene_arc.write();
     let cam_entity = aethervk_core_rlib::scene::EntityId::from_ffi(camera_id);
-    use aethervk_oshal_rlib::math::vector::{vec3f64::DVec3, vec4::{Quat, Vec4f32}};
+    use aethervk_oshal_rlib::math::vector::{
+      vec3f64::DVec3,
+      vec4::{Quat, Vec4f32},
+    };
     let offset = DVec3::from_components(dto.pos_x, dto.pos_y, dto.pos_z);
-    let rot = Quat(Vec4f32::from_components(dto.rot_x, dto.rot_y, dto.rot_z, dto.rot_w));
+    let rot = Quat(Vec4f32::from_components(
+      dto.rot_x, dto.rot_y, dto.rot_z, dto.rot_w,
+    ));
 
     // Resolve pivot entity position synchronously if provided.
     let final_global_pos = if dto.pivot_entity_id != 0 {
@@ -800,9 +811,11 @@ pub unsafe extern "C" fn avkSimulationContext_transformStaticCamera(
     // FIX: Use set_global_transform_f64! It automatically converts the global AU pos
     // into the correct local km coordinates if the camera is parented to the comet.
     let _ = scene_guard.scene.set_global_transform_f64(cam_entity, final_global_pos, rot);
-    let _ = scene_guard.scene.remove_component::<
-      aethervk_core_rlib::scene::animation::TransformAnimationComponent
-    >(cam_entity);
+    let _ = scene_guard
+      .scene
+      .remove_component::<aethervk_core_rlib::scene::animation::TransformAnimationComponent>(
+        cam_entity,
+      );
     scene_guard.mark_component_changed(
       camera_id,
       <aethervk_core_rlib::scene::HighResTransformComponent
@@ -818,7 +831,7 @@ pub unsafe extern "C" fn avkSimulationContext_transformStaticCamera(
   };
 
   use aethervk_core_rlib::simulation_api::structs::LogicCommand;
-  let transform  = transform_request.as_srt_transform().map(|srt| (srt.position, srt.rotation));
+  let transform = transform_request.as_srt_transform().map(|srt| (srt.position, srt.rotation));
   let projection = transform_request.as_camera_projection();
 
   ctx_ref
@@ -854,7 +867,7 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraParent(
   parent_entity_id: u64,
   enabled: bool,
 ) -> bool {
-  use aethervk_core_rlib::scene::{EntityId, HighResTransformComponent, ForeignSerializable};
+  use aethervk_core_rlib::scene::{EntityId, ForeignSerializable, HighResTransformComponent};
   if ctx.is_null() {
     return false;
   }
@@ -886,13 +899,13 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraParent(
     };
     scene_guard.scene.set_parent(cam_entity, Some(root));
     // 3. Write world position back (local == world at root level).
-    let _ = scene_guard.scene.with_component_mut(
-      cam_entity,
-      |t: &mut HighResTransformComponent| {
-        t.position = world_t.position;
-        t.rotation = world_t.rotation;
-      },
-    );
+    let _ =
+      scene_guard
+        .scene
+        .with_component_mut(cam_entity, |t: &mut HighResTransformComponent| {
+          t.position = world_t.position;
+          t.rotation = world_t.rotation;
+        });
     scene_guard.mark_component_changed(
       camera_id,
       <HighResTransformComponent as ForeignSerializable>::COMPONENT_ID,
@@ -919,7 +932,7 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraParentToComet(
   camera_id: u64,
   enabled: bool,
 ) -> bool {
-  use aethervk_core_rlib::scene::{EntityId, HighResTransformComponent, ForeignSerializable};
+  use aethervk_core_rlib::scene::{EntityId, ForeignSerializable, HighResTransformComponent};
   if ctx.is_null() {
     return false;
   }
@@ -950,13 +963,13 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraParentToComet(
       None => return false,
     };
     scene_guard.scene.set_parent(cam_entity, Some(root));
-    let _ = scene_guard.scene.with_component_mut(
-      cam_entity,
-      |t: &mut HighResTransformComponent| {
-        t.position = world_t.position;
-        t.rotation = world_t.rotation;
-      },
-    );
+    let _ =
+      scene_guard
+        .scene
+        .with_component_mut(cam_entity, |t: &mut HighResTransformComponent| {
+          t.position = world_t.position;
+          t.rotation = world_t.rotation;
+        });
     scene_guard.mark_component_changed(
       camera_id,
       <HighResTransformComponent as ForeignSerializable>::COMPONENT_ID,
@@ -986,7 +999,9 @@ pub unsafe extern "C" fn avkSimulationContext_snapshotSceneSync(
   ctx: *mut SimulationContext,
   scene_id: u64,
 ) -> bool {
-  if ctx.is_null() { return false; }
+  if ctx.is_null() {
+    return false;
+  }
   let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
   ctx_ref.snapshot_scene_sync(scene_id)
 }
@@ -997,7 +1012,9 @@ pub unsafe extern "C" fn avkSimulationContext_restoreSnapshotSync(
   ctx: *mut SimulationContext,
   scene_id: u64,
 ) -> bool {
-  if ctx.is_null() { return false; }
+  if ctx.is_null() {
+    return false;
+  }
   let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
   ctx_ref.restore_snapshot_sync(scene_id)
 }
@@ -1214,11 +1231,16 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
 
   let lat = ps_dto.latitude_rad;
   let lon = ps_dto.longitude_rad;
-  let r = ps_dto.nucleus_radius_km;
+  
+  let parent_scale = scene_guard.scene.with_component(comet.body, |t: &aethervk_core_rlib::scene::TransformComponent| t.scale.x()).unwrap_or(1.0);
+  let local_r = ps_dto.nucleus_radius_km / parent_scale;
+  let desired_global_radius = ps_dto.nucleus_radius_km / 50.0;
+  let local_scale = desired_global_radius / parent_scale;
+
   let pos = Vec3f32::from_components(
-    r * lat.cos() * lon.cos(),
-    r * lat.cos() * lon.sin(),
-    r * lat.sin(),
+    local_r * lat.cos() * lon.cos(),
+    local_r * lat.cos() * lon.sin(),
+    local_r * lat.sin(),
   );
 
   let jet_entity = scene_guard.scene.spawn_entity("jet");
@@ -1229,14 +1251,7 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
     aethervk_core_rlib::scene::TransformComponent {
       position: pos,
       rotation: Quat::identity(),
-      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
-    },
-  );
-
-  let _ = scene_guard.scene.add_component(
-    jet_entity,
-    aethervk_core_rlib::scene::MeshScaleMultiplierComponent {
-      multiplier: ps_dto.nucleus_radius_km,
+      scale: Vec3f32::from_components(local_scale, local_scale, local_scale),
     },
   );
 
@@ -1245,7 +1260,7 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
   > = spin::Once::new();
   let sphere_mesh = alloc::sync::Arc::clone(JET_PREVIEW_MESH.call_once(|| {
     alloc::sync::Arc::new(aethervk_core_rlib::simulation::comet::generate_uv_sphere(
-      0.001, 8, 8, 1.0, false,
+      1.0, 16, 16, 1.0, false,
     ))
   }));
 
@@ -1370,20 +1385,27 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
   let scene_guard = scene_arc.read();
 
   let jet_eid = aethervk_core_rlib::scene::EntityId::from_ffi(ps_id);
+  let comet = scene_guard.comet.as_ref().unwrap();
 
   let lat = ps_dto.latitude_rad;
   let lon = ps_dto.longitude_rad;
-  let r = ps_dto.nucleus_radius_km;
+  
+  let parent_scale = scene_guard.scene.with_component(comet.body, |t: &aethervk_core_rlib::scene::TransformComponent| t.scale.x()).unwrap_or(1.0);
+  let local_r = ps_dto.nucleus_radius_km / parent_scale;
+  let desired_global_radius = ps_dto.nucleus_radius_km / 50.0;
+  let local_scale = desired_global_radius / parent_scale;
+
   let pos = Vec3f32::from_components(
-    r * lat.cos() * lon.cos(),
-    r * lat.cos() * lon.sin(),
-    r * lat.sin(),
+    local_r * lat.cos() * lon.cos(),
+    local_r * lat.cos() * lon.sin(),
+    local_r * lat.sin(),
   );
 
   scene_guard.scene.with_component_mut(
     jet_eid,
     |t: &mut aethervk_core_rlib::scene::TransformComponent| {
       t.position = pos;
+      t.scale = Vec3f32::from_components(local_scale, local_scale, local_scale);
     },
   );
 
@@ -1566,6 +1588,7 @@ pub unsafe extern "C" fn avkSimulationContext_setBodyRotationalModel(
     pole_ra_rate: dto_ref.pole_ra_rate_deg_cen,
     pole_dec_rate: dto_ref.pole_dec_rate_deg_cen,
     rotation_rate: dto_ref.rot_rate_deg_day,
+    body_fixed_orientation: dto_ref.body_fixed_orientation != 0,
   };
 
   let scenes = ctx_ref.scenes.read();
@@ -1586,11 +1609,41 @@ pub unsafe extern "C" fn avkSimulationContext_setBodyRotationalModel(
         let _ = scene_guard.scene.add_component(entity_id, model);
       }
 
+      let mut cache_exists = false;
       // Update the 1-way binding directly into the cartesian cache for immediate effect
-      let key = aethervk_core_rlib::simulation_api::structs::SceneEntityId::new(scene_id, entity_id);
+      let key =
+        aethervk_core_rlib::simulation_api::structs::SceneEntityId::new(scene_id, entity_id);
       if let Some(mut state) = scenes.cartesian_state_cache.get_mut(&key) {
+        cache_exists = true;
         if let Some(ref mut comet_state) = state.comet_state {
           comet_state.body_rotational_model = Some(model);
+        }
+      }
+
+      // If the simulation is NOT running, or the cache entry doesn't exist (not animating),
+      // instantly snap the transform so the UI slider updates take effect immediately
+      let is_running = scene_guard.simulation_running.load(core::sync::atomic::Ordering::Relaxed);
+      if !is_running || !cache_exists {
+        if let Some(time_mgr) = scenes.time_managers.get(&scene_id) {
+          let current_epoch = time_mgr.current_epoch();
+          let logic_state = ctx_ref.logic_state.read();
+          let almanac = &logic_state.almanac_data;
+
+          if let Some(planet) = scene_guard
+            .scene
+            .with_component(entity_id, |p: &aethervk_core_rlib::scene::AlmanacPlanet| *p)
+          {
+            if let Some(subtree) = scene_guard.scene.get_parent(entity_id) {
+              let _ = aethervk_core_rlib::simulation_api::reposition::force_reposition(
+                &scene_guard.scene,
+                subtree,
+                entity_id,
+                almanac,
+                &planet,
+                current_epoch,
+              );
+            }
+          }
         }
       }
 
@@ -2488,6 +2541,40 @@ pub unsafe extern "C" fn avkSimulationContext_setJetPreviewVisibility(
 /// FFI Contract
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setSphereGizmoVisibility(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity_ext_id: u64,
+  is_visible: bool,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { ctx.as_ref().unwrap() };
+  let scene_arc = match ctx_ref.scenes.read().get_scene(scene_id) {
+    Some(s) => s,
+    None => return false,
+  };
+
+  let scene_guard = scene_arc.read();
+  let entity_id = aethervk_core_rlib::scene::EntityId::from_ffi(entity_ext_id);
+
+  let mut changed = false;
+  scene_guard.scene.with_component_mut(
+    entity_id,
+    |gizmo: &mut aethervk_core_rlib::scene::SphereGizmoComponent| {
+      gizmo.is_visible = is_visible;
+      changed = true;
+    },
+  );
+
+  changed
+}
+
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_getSimulationClock(
   ctx: *mut SimulationContext,
   scene_id: u64,
@@ -2655,7 +2742,10 @@ mod tests {
 #[cfg(test)]
 mod ffi_roto_translate_tests {
   use super::*;
-  use aethervk_oshal_rlib::math::vector::{vec3f64::DVec3, vec4::{Quat, Vec4f32}};
+  use aethervk_oshal_rlib::math::vector::{
+    vec3f64::DVec3,
+    vec4::{Quat, Vec4f32},
+  };
 
   #[test]
   fn test_transform_static_camera_mode2_decodes_f64_and_pivot() {
@@ -2675,18 +2765,21 @@ mod ffi_roto_translate_tests {
 
     // Act
     let transform_request = TransformStaticCamera::from_mode_and_buffer(2, buffer_ptr)
-        .expect("Failed to decode mode 2 buffer");
+      .expect("Failed to decode mode 2 buffer");
 
     // Assert
     if let TransformStaticCamera::RotoTranslate(decoded_dto) = transform_request {
-        // Verify f64 precision survived
-        let diff = (decoded_dto.pos_x - 1.000000042).abs();
-        assert!(diff < 1e-12, "f64 precision lost across FFI boundary!");
-        
-        // Verify pivot ID survived
-        assert_eq!(decoded_dto.pivot_entity_id, 999, "Pivot Entity ID corrupted across FFI boundary!");
+      // Verify f64 precision survived
+      let diff = (decoded_dto.pos_x - 1.000000042).abs();
+      assert!(diff < 1e-12, "f64 precision lost across FFI boundary!");
+
+      // Verify pivot ID survived
+      assert_eq!(
+        decoded_dto.pivot_entity_id, 999,
+        "Pivot Entity ID corrupted across FFI boundary!"
+      );
     } else {
-        panic!("Expected RotoTranslate variant");
+      panic!("Expected RotoTranslate variant");
     }
   }
 }

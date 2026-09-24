@@ -61,6 +61,7 @@ pub struct DrawCall {
   pub outline_color: [f32; 4],
   pub use_new_path: bool,
   pub paint_display_mode: u32,
+  pub layer_index: u32,
 }
 
 impl DrawCall {
@@ -74,6 +75,7 @@ impl DrawCall {
     emissive_color: [f32; 3],
     use_new_path: bool,
     paint_display_mode: u32,
+    layer_index: u32,
   ) -> Self {
     Self {
       pipeline: result.pipeline,
@@ -89,6 +91,7 @@ impl DrawCall {
       outline_color: outline.unwrap_or([0.0; 4]),
       use_new_path,
       paint_display_mode,
+      layer_index,
     }
   }
 }
@@ -251,7 +254,8 @@ pub struct SunDrawCall {
   /// camera position in local space of the sun
   pub local_camera_pos: Vec3f32,
   pub vertex_count: u32,
-  pub radius: f32,
+  /// Physical solar radius in km. Matches `SunComponent::radius_km`.
+  pub radius_km: f32,
 }
 
 impl SunDrawCall {
@@ -263,7 +267,7 @@ impl SunDrawCall {
     c: &CameraRenderData,
     pipeline_key: PipelineKey,
     entity: EntityId,
-    radius: f32,
+    radius_km: f32,
   ) -> Self {
     let model = model_f64.to_mat4_f32();
     let model_inv = model.inverse().unwrap_or_else(|| {
@@ -311,7 +315,7 @@ impl SunDrawCall {
       model_matrix_f64: model_f64,
       local_camera_pos,
       vertex_count: Self::VERTEX_COUNT_TRIANGLE_STRIP_VK,
-      radius,
+      radius_km,
     }
   }
 
@@ -1405,17 +1409,34 @@ pub fn render_frame(
     &gpu::Rect2D::from_extent(render_scene.window_extent),
   )?;
 
-  // ── Subpass 1: micro layer (km-scale) ──────────────────────────────────
-  device.debug_label_begin(cmd_buffer, c"[SP1] Micro Layer", [0.2, 1.0, 0.4, 1.0]);
-  if let Some(micro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 1) {
-    draw_layer_content(
-      device,
-      cmd_buffer,
-      handle,
-      render_scene,
-      micro_layer,
-      global_sun_pos,
-    )?;
+  // ── Subpass 1: ALL micro layers, back-to-front with depth clears ────────
+  // Layers are sorted back-to-front (higher layer_index = farther SOI = drawn first).
+  // The MRT GlobalDepth attachment is NOT explicitly cleared between layers —
+  // the Painter's Algorithm naturally overwrites it as closer layers render last.
+  device.debug_label_begin(cmd_buffer, c"[SP1] Micro Layers", [0.2, 1.0, 0.4, 1.0]);
+  {
+    let mut micro_layers: alloc::vec::Vec<&crate::gpu::frame::RenderLayer> = render_scene
+      .depth_layers
+      .iter()
+      .filter(|l| l.layer_index > 0)
+      .collect();
+    // Sort back-to-front: highest layer_index drawn first.
+    micro_layers.sort_by(|a, b| b.layer_index.cmp(&a.layer_index));
+    for (i, layer) in micro_layers.iter().enumerate() {
+      if i > 0 {
+        // Clear depth before each subsequent layer so that the hardware Z-buffer
+        // handles intra-layer occlusion correctly within this new layer.
+        device.clear_depth(cmd_buffer, handle)?;
+      }
+      draw_layer_content(
+        device,
+        cmd_buffer,
+        handle,
+        render_scene,
+        layer,
+        global_sun_pos,
+      )?;
+    }
   }
   device.debug_label_end(cmd_buffer);
 
@@ -1423,7 +1444,10 @@ pub fn render_frame(
   // Fires after the Micro layer (which renders the comet) so the matrices reflect
   // the actual Micro-layer projection. rebuild_for_layer is pure CPU math — no GPU ops.
   #[cfg(debug_assertions)]
-  if let Some(micro_layer) = render_scene.depth_layers.iter().find(|l| l.layer_index == 1) {
+  if let Some(micro_layer) = render_scene.depth_layers.iter()
+    .filter(|l| l.layer_index > 0)
+    .min_by_key(|l| l.layer_index)
+  {
     use crate::simulation_api::external_state::{CCameraMatrices, ExternalState};
     let micro_cam = render_scene.camera_data.rebuild_for_layer(
       micro_layer.near,
@@ -1454,12 +1478,13 @@ pub fn render_frame(
   let macro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 0);
   let micro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 1);
   let constants = gpu::CompositePushConstants {
-    macro_near: macro_layer.map(|l| l.near as f32).unwrap_or(0.1),
-    macro_far: macro_layer.map(|l| l.far as f32).unwrap_or(1000.0),
+    macro_near: macro_layer.map(|l| l.near as f32).unwrap_or(0.0001),
+    macro_far: macro_layer.map(|l| l.far as f32).unwrap_or(200.0),
     micro_near: micro_layer.map(|l| l.near as f32).unwrap_or(0.001),
     micro_far: micro_layer.map(|l| l.far as f32).unwrap_or(10.0),
     macro_scale: macro_layer.map(|l| l.frame_scale).unwrap_or(1.0),
     micro_scale: micro_layer.map(|l| l.frame_scale).unwrap_or(1.0),
+    _pad: [0; 2],
   };
   device.draw_composite(cmd_buffer, handle, &constants)?;
 
@@ -1551,10 +1576,10 @@ fn draw_layer_content(
   // so the per-mesh body-fixed direction subtraction and normalization always happen,
   // producing a unit-length lightDir in the shader.
   //
-  // The sun's SunDrawCall is typically in the macro layer (layer_index=0); the micro
-  // layer's sun_call is None.  We therefore always fall back to the already-frame-scaled
-  // f32 sun_pos (cast to f64) when no f64 source is available.  This guarantees
-  // sun_pos_f64_km is Some(_) for every directional draw and the normalize below runs.
+  // The sun's SunDrawCall is now in its own micro layer (layer_index=1).
+  // Other micro layers that contain no SunDrawCall fall back to the already-frame-scaled
+  // f32 sun_pos (cast to f64). This guarantees sun_pos_f64_km is Some(_) for every
+  // directional draw and the normalize below runs.
   let sun_color: [f32; 4] = [1.0, 1.0, 1.0, 1.0]; // TODO: per-light color
   let is_directional = sun_color[3] > 0.5;
   let sun_pos_f64_km: Option<[f64; 3]> = if is_directional {

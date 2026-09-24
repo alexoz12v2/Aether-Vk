@@ -319,13 +319,24 @@ macro_rules! gpu_err_pipeline_key_absent {
 /// can be used only on a #[named] function
 #[macro_export]
 macro_rules! gpu_err_pipeline_absent {
-  () => {
-    $crate::types::GpuError::InvalidState(alloc::format!(
-      "[Vulkan RenderDevice] {} {}:{} - vulkan pipeline absent in pipeline pool",
-      "function",
-      core::file!(),
-      core::line!()
-    ))
+  ($key:expr, $pool:expr) => {
+    {
+      let pipeline_name = $pool.get_graphics_info($key)
+        .map(|info| info.debug_name.clone())
+        .unwrap_or_else(|| alloc::format!("unknown (raw key: {:#X})", $key.0));
+      
+      let trace = aethervk_oshal_rlib::os::debug::capture_aethervk_trace(0).unwrap_or([0; 4]);
+      let trace_str = aethervk_oshal_rlib::os::debug::resolve_trace_to_single_line(&trace);
+      
+      $crate::types::GpuError::InvalidState(alloc::format!(
+        "[Vulkan RenderDevice] {} {}:{} - vulkan pipeline '{}' absent in pipeline pool | trace: {}",
+        "function",
+        core::file!(),
+        core::line!(),
+        pipeline_name,
+        trace_str
+      ))
+    }
   };
 }
 /// can be used only on a #[named] function
@@ -3222,6 +3233,199 @@ impl Drop for Device {
 }
 
 impl RenderDevice for Device {
+
+  #[cfg(test)]
+  fn record_global_depth_download(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    task_id: u64,
+  ) -> GpuResult<()> {
+    let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
+
+    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |state, _| {
+        let (image, width, height) = state
+          .renderpasses
+          .final_global_depth_image(handle)
+          .ok_or_else(|| gpu_err_device!())?;
+        let vma = state.allocator.allocator.as_allocator_view();
+        Ok::<_, crate::types::GpuError>((image, width, height, vma))
+      })?
+      .execute(|(image, width, height, vma), rollback| {
+        let allocator = vma;
+        let buffer_size = (width * height * 8) as ash::vk::DeviceSize;
+
+        let buffer_info = ash::vk::BufferCreateInfo::default()
+          .size(buffer_size)
+          .usage(ash::vk::BufferUsageFlags::TRANSFER_DST);
+
+        let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+        alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
+        alloc_info.flags =
+          vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED;
+        crate::apply_test_dedicated_alloc!(alloc_info);
+
+        let (staging_buffer, alloc) =
+          unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }?;
+
+        let mut alloc_mut = alloc;
+        rollback.defer(move |_dev| unsafe {
+          allocator.destroy_buffer(staging_buffer, &mut alloc_mut);
+        });
+
+        unsafe {
+          let image_barrier = ash::vk::ImageMemoryBarrier2::default()
+            .src_stage_mask(ash::vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+            .src_access_mask(ash::vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+            .dst_stage_mask(ash::vk::PipelineStageFlags2::COPY)
+            .dst_access_mask(ash::vk::AccessFlags2::TRANSFER_READ)
+            .old_layout(ash::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .new_layout(ash::vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .image(image)
+            .subresource_range(
+              ash::vk::ImageSubresourceRange::default()
+                .aspect_mask(ash::vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1),
+            );
+
+          let dep_info = ash::vk::DependencyInfo::default()
+            .image_memory_barriers(core::slice::from_ref(&image_barrier));
+          self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
+
+          let region = ash::vk::BufferImageCopy::default()
+            .image_subresource(
+              ash::vk::ImageSubresourceLayers::default()
+                .aspect_mask(ash::vk::ImageAspectFlags::COLOR)
+                .mip_level(0)
+                .base_array_layer(0)
+                .layer_count(1),
+            )
+            .image_extent(ash::vk::Extent3D {
+              width,
+              height,
+              depth: 1,
+            });
+
+          self.device.cmd_copy_image_to_buffer(
+            cmd,
+            image,
+            ash::vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            staging_buffer,
+            &[region],
+          );
+
+          let image_barrier_back = ash::vk::ImageMemoryBarrier2::default()
+            .src_stage_mask(ash::vk::PipelineStageFlags2::COPY)
+            .src_access_mask(ash::vk::AccessFlags2::TRANSFER_READ)
+            .dst_stage_mask(ash::vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+            .dst_access_mask(ash::vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+            .old_layout(ash::vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .new_layout(ash::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .image(image)
+            .subresource_range(
+              ash::vk::ImageSubresourceRange::default()
+                .aspect_mask(ash::vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1),
+            );
+
+          let buffer_barrier = ash::vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(ash::vk::PipelineStageFlags2::TRANSFER)
+            .src_access_mask(ash::vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(ash::vk::PipelineStageFlags2::HOST)
+            .dst_access_mask(ash::vk::AccessFlags2::HOST_READ)
+            .buffer(staging_buffer)
+            .size(buffer_size)
+            .offset(0);
+
+          let buf_dep_info = ash::vk::DependencyInfo::default()
+            .buffer_memory_barriers(core::slice::from_ref(&buffer_barrier))
+            .image_memory_barriers(core::slice::from_ref(&image_barrier_back));
+          self.device.synchronization2.cmd_pipeline_barrier2(cmd, &buf_dep_info);
+        }
+
+        Ok((staging_buffer, alloc, buffer_size as usize))
+      })
+      .commit_read(|state, execute_result| {
+        let (staging_buffer, allocation, size) = execute_result?;
+        let mut pending_lock = locks::DebugTrackedRwLock::write(&state.pending_downloads);
+        pending_lock.insert(
+          task_id,
+          PendingDownload {
+            staging_buffer,
+            allocation,
+            size,
+            presentation_engine: None,
+          },
+        );
+        Ok(())
+      })
+  }
+
+  #[cfg(test)]
+  fn read_global_depth_download(
+    &self,
+    task_id: u64,
+    buffer: &mut [u8],
+  ) -> GpuResult<()> {
+    let base_tid = task_id & !crate::gpu::GLOBAL_DEPTH_TASK_BIT;
+    if !self.is_task_completed(base_tid)? {
+      return Err(crate::gpu_err_device!());
+    }
+
+    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |state, _| {
+        let mut pending_lock = locks::DebugTrackedRwLock::write(&state.pending_downloads);
+        let download = pending_lock.remove(&task_id).ok_or(gpu_invalid_arg!(
+          "Invalid or previously consumed global-depth download ID: {}",
+          task_id
+        ))?;
+        let vma_view = state.allocator.allocator.as_allocator_view();
+        Ok((download, vma_view))
+      })?
+      .execute(|(download, vma_view), _rollback| {
+        struct StagingCleanup {
+          allocator: vk_mem::AllocatorView,
+          buffer: ash::vk::Buffer,
+          allocation: vk_mem::Allocation,
+        }
+        impl Drop for StagingCleanup {
+          fn drop(&mut self) {
+            unsafe { self.allocator.destroy_buffer(self.buffer, &mut self.allocation); }
+          }
+        }
+        let _cleanup = StagingCleanup {
+          allocator: vma_view.clone(),
+          buffer: download.staging_buffer,
+          allocation: download.allocation.clone(),
+        };
+        let alloc_info = vma_view.get_allocation_info(&download.allocation);
+
+        if buffer.len() != download.size {
+          return Err(gpu_invalid_arg!(
+            "Buffer size {} does not match download size {}",
+            buffer.len(),
+            download.size
+          ));
+        }
+
+        unsafe {
+          core::ptr::copy_nonoverlapping(
+            alloc_info.mapped_data as *const u8,
+            buffer.as_mut_ptr(),
+            download.size,
+          );
+        }
+
+        Ok(())
+      })
+      .commit_read(|_, _| Ok(()))
+  }
   #[named]
   fn get_measurement_resources(
     &self,
@@ -4883,6 +5087,7 @@ impl RenderDevice for Device {
             scene_addr: base_addr + scene_offset as u64,
             material_addr: base_addr + material_offset as u64,
             object_addr: base_addr + object_offset as u64,
+            layer_index: draw_call.layer_index,
             _pad: 0,
           };
 
@@ -6358,7 +6563,7 @@ impl RenderDevice for Device {
     let pipeline = res_guard
       .pipeline_pool
       .get_graphics_pipeline(actual_pipeline_key)
-      .ok_or(gpu_err_pipeline_absent!())?;
+      .ok_or(gpu_err_pipeline_absent!(actual_pipeline_key, res_guard.pipeline_pool))?;
 
     let cmd = self.get_cmd(cmd_buffer)?;
 
@@ -9941,8 +10146,13 @@ fn ensure_sphere_gizmo_shader_modules(
   let frag_path: aethervk_oshal_rlib::os::fs::PathBuf;
 
   let assets_dir = shaders_asset_dir()?;
-  vert_path = assets_dir.join("sphere_gizmo.vert.spv");
-  frag_path = assets_dir.join("sphere_gizmo.frag.spv");
+  if cfg!(debug_assertions) && cfg!(feature = "debug_gizmo_depth") {
+      vert_path = assets_dir.join("sphere_gizmo.vert.d.spv");
+      frag_path = assets_dir.join("sphere_gizmo.frag.d.spv");
+  } else {
+      vert_path = assets_dir.join("sphere_gizmo.vert.spv");
+      frag_path = assets_dir.join("sphere_gizmo.frag.spv");
+  }
 
   let vkey = shader_manager.get_or_load(
     device,

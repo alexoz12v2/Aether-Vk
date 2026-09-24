@@ -143,6 +143,7 @@ for file in assets/*.vert assets/*.frag; do
     [ -e "$file" ] || continue
     ext="${file##*.}"
     compile_one "$file" "$ext" "" "${file}.spv"
+    compile_one "$file" "$ext" "-DDEBUG_SHADERS" "${file%.*}.${ext}.d.spv"
 done
 
 # ── Compute shaders ───────────────────────────────────────────────────────────

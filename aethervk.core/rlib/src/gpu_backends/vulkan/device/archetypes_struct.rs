@@ -5,7 +5,6 @@ use crate::gpu_backends::vulkan::device::{renderpasses::RenderPasses, resources:
 use crate::{
   gpu::PipelineKeyable,
   gpu_backends::vulkan::device::{
-    LogicalDevice, Queue,
     locks::DebugTrackedRwLock,
     pipelines::{
       self, FragmentOut, FragmentShader, GraphicsInfo, PipelineFlags, PreRasterization,
@@ -14,6 +13,7 @@ use crate::{
     renderpasses, resources,
     shader_manager::{self, ShaderKey},
     utils::{self, RwLockable},
+    LogicalDevice, Queue,
   },
   types::{GpuError, GpuResult},
 };
@@ -105,8 +105,25 @@ macro_rules! impl_render_archetype {
 
           graphics_info.fragment_out.color_attachment_formats.clear();
           graphics_info.fragment_out.color_attachment_formats.push(format);
-          graphics_info.render_pass =
-            passes.get_pipeline_render_pass(format, depth_stencil_format)?.get();
+          graphics_info
+            .fragment_out
+            .color_attachment_formats
+            .push(vk::Format::R32G32_SFLOAT);
+
+          graphics_info.fragment_out.color_write_masks.clear();
+          graphics_info.fragment_out.color_write_masks.push(vk::ColorComponentFlags::RGBA);
+          graphics_info
+            .fragment_out
+            .color_write_masks
+            .push(vk::ColorComponentFlags::R | vk::ColorComponentFlags::G);
+
+          graphics_info.render_pass = passes
+            .get_pipeline_render_pass_mrt(
+              format,
+              ash::vk::Format::R32G32_SFLOAT,
+              depth_stencil_format,
+            )?
+            .get();
 
           Ok(Some(PreparedArchetypeUpdate {
             main_graphics_info: graphics_info,
@@ -160,8 +177,23 @@ macro_rules! impl_render_archetype {
 
           graphics_info.fragment_out.color_attachment_formats.clear();
           graphics_info.fragment_out.color_attachment_formats.push(format);
-          graphics_info.render_pass =
-            passes.get_pipeline_render_pass(format, depth_stencil_format)?.get();
+          graphics_info
+            .fragment_out
+            .color_attachment_formats
+            .push(vk::Format::R32G32_SFLOAT);
+          graphics_info.fragment_out.color_write_masks.clear();
+          graphics_info.fragment_out.color_write_masks.push(vk::ColorComponentFlags::RGBA);
+          graphics_info
+            .fragment_out
+            .color_write_masks
+            .push(vk::ColorComponentFlags::R | vk::ColorComponentFlags::G);
+          graphics_info.render_pass = passes
+            .get_pipeline_render_pass_mrt(
+              format,
+              ash::vk::Format::R32G32_SFLOAT,
+              depth_stencil_format,
+            )?
+            .get();
           needs_update = true;
         }
 
@@ -175,8 +207,26 @@ macro_rules! impl_render_archetype {
 
           outline_graphics_info.fragment_out.color_attachment_formats.clear();
           outline_graphics_info.fragment_out.color_attachment_formats.push(format);
-          outline_graphics_info.render_pass =
-            passes.get_pipeline_render_pass(format, depth_stencil_format)?.get();
+          outline_graphics_info
+            .fragment_out
+            .color_attachment_formats
+            .push(vk::Format::R32G32_SFLOAT);
+          outline_graphics_info.fragment_out.color_write_masks.clear();
+          outline_graphics_info
+            .fragment_out
+            .color_write_masks
+            .push(vk::ColorComponentFlags::RGBA);
+          outline_graphics_info
+            .fragment_out
+            .color_write_masks
+            .push(vk::ColorComponentFlags::R | vk::ColorComponentFlags::G);
+          outline_graphics_info.render_pass = passes
+            .get_pipeline_render_pass_mrt(
+              format,
+              ash::vk::Format::R32G32_SFLOAT,
+              depth_stencil_format,
+            )?
+            .get();
           needs_update = true;
         }
 
@@ -250,11 +300,10 @@ impl RenderArchetype for resources::SphereGizmoRenderResourceArchetype {
     if needs_update {
       let mut gi_over = self.graphics_info_over_mesh.clone();
       let mut gi_else = self.graphics_info_elsewhere.clone();
-      let dsf = gi_over
-        .fragment_out
-        .depth_attachment_format
-        .unwrap_or(vk::Format::UNDEFINED);
-      let rp = passes.get_pipeline_render_pass(format, dsf)?.get();
+      let dsf = gi_over.fragment_out.depth_attachment_format.unwrap_or(vk::Format::UNDEFINED);
+      let rp = passes
+        .get_pipeline_render_pass_mrt(format, ash::vk::Format::R32G32_SFLOAT, dsf)?
+        .get();
       gi_over.fragment_out.color_attachment_formats.clear();
       gi_over.fragment_out.color_attachment_formats.push(format);
       gi_over.render_pass = rp;
@@ -341,7 +390,7 @@ macro_rules! impl_create_archetype {
       }
 
       let layout = arena.read().pipeline_layout.get();
-      let render_pass = renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
+      let render_pass = renderpasses.get_pipeline_render_pass_mrt(color_format, ash::vk::Format::R32G32_SFLOAT, depth_stencil_format)?.get();
 
       let mut graphics_info = GraphicsInfo::default()
         .with_pre_rasterization(PreRasterization::default().with_vertex_module(vertex_shader.module.get()))
@@ -362,7 +411,12 @@ macro_rules! impl_create_archetype {
         };
       )?
 
-      let pipeline_graphics_info = graphics_info.apply_presentation_defaults(color_format, depth_stencil_format, layout, render_pass);
+      let pipeline_graphics_info = {
+        let mut gi = graphics_info.apply_presentation_defaults(color_format, depth_stencil_format, layout, render_pass);
+        gi.fragment_out.color_write_masks.resize(2, ash::vk::ColorComponentFlags::RGBA);
+        gi.fragment_out.color_attachment_formats.push(ash::vk::Format::R32G32_SFLOAT);
+        gi
+      };
       pipeline_pool_lock.get_or_create_graphics_pipeline(device, &pipeline_graphics_info, rollback)?;
       let pipeline_key = pipeline_graphics_info.pipeline_key();
 
@@ -422,7 +476,7 @@ macro_rules! impl_create_archetype {
       }
 
       let layout = arena.read().pipeline_layout.get();
-      let render_pass = renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
+      let render_pass = renderpasses.get_pipeline_render_pass_mrt(color_format, ash::vk::Format::R32G32_SFLOAT, depth_stencil_format)?.get();
       let mut graphics_info = GraphicsInfo::default()
         .with_pre_rasterization(PreRasterization::default().with_vertex_module(vertex_shader.module.get()))
         .with_fragment_shader(FragmentShader::default()
@@ -442,7 +496,12 @@ macro_rules! impl_create_archetype {
         };
       )?
 
-      let pipeline_graphics_info = graphics_info.apply_presentation_defaults(color_format, depth_stencil_format, layout, render_pass);
+      let pipeline_graphics_info = {
+        let mut gi = graphics_info.apply_presentation_defaults(color_format, depth_stencil_format, layout, render_pass);
+        gi.fragment_out.color_write_masks.resize(2, ash::vk::ColorComponentFlags::RGBA);
+        gi.fragment_out.color_attachment_formats.push(ash::vk::Format::R32G32_SFLOAT);
+        gi
+      };
       pipeline_pool_lock.get_or_create_graphics_pipeline(device, &pipeline_graphics_info, rollback)?;
       let pipeline_key = pipeline_graphics_info.pipeline_key();
       let res = resources::$resource_struct { arena: alloc::sync::Arc::downgrade(&arena), pipeline_key, graphics_info: pipeline_graphics_info };
@@ -495,7 +554,7 @@ macro_rules! impl_create_archetype {
       }
 
       let layout = arena.read().pipeline_layout.get();
-      let render_pass = renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
+      let render_pass = renderpasses.get_pipeline_render_pass_mrt(color_format, ash::vk::Format::R32G32_SFLOAT, depth_stencil_format)?.get();
       let mut graphics_info = GraphicsInfo::default()
         .with_pre_rasterization(PreRasterization::default().with_vertex_module(vertex_shader.module.get()))
         .with_fragment_shader(FragmentShader::default()
@@ -515,7 +574,12 @@ macro_rules! impl_create_archetype {
         };
       )?
 
-      let pipeline_graphics_info = graphics_info.apply_presentation_defaults(color_format, depth_stencil_format, layout, render_pass);
+      let pipeline_graphics_info = {
+        let mut gi = graphics_info.apply_presentation_defaults(color_format, depth_stencil_format, layout, render_pass);
+        gi.fragment_out.color_write_masks.resize(2, ash::vk::ColorComponentFlags::RGBA);
+        gi.fragment_out.color_attachment_formats.push(ash::vk::Format::R32G32_SFLOAT);
+        gi
+      };
       pipeline_pool_lock.get_or_create_graphics_pipeline(device, &pipeline_graphics_info, rollback)?;
       let pipeline_key = pipeline_graphics_info.pipeline_key();
 
@@ -541,6 +605,9 @@ macro_rules! impl_create_archetype {
       outline_graphics_info.debug_name = alloc::format!(
         "{}_outline | vert={} frag={}", stringify!($fn_name), outline_vertex_shader.path, outline_fragment_shader.path
       );
+      if outline_graphics_info.fragment_out.color_write_masks.len() >= 2 {
+          outline_graphics_info.fragment_out.color_write_masks[1] = ash::vk::ColorComponentFlags::empty();
+      }
       pipeline_pool_lock.get_or_create_graphics_pipeline(device, &outline_graphics_info, rollback)?;
       let outline_pipeline_key = outline_graphics_info.pipeline_key();
       let res = resources::$resource_struct {
@@ -689,12 +756,12 @@ impl Archetypes {
         VertexIn::default()
           .add_binding(0, 12, vk::VertexInputRate::VERTEX)
           .add_binding(1, 36, vk::VertexInputRate::VERTEX)
-          .add_attribute(0, 0, vk::Format::R32G32B32_SFLOAT, 0)   // position
-          .add_attribute(1, 1, vk::Format::R32G32B32_SFLOAT, 0)   // normal
-          .add_attribute(1, 2, vk::Format::R32G32_SFLOAT,    12)  // uv
-          .add_attribute(1, 3, vk::Format::R32G32B32A32_SFLOAT, 20) // tangent
+          .add_attribute(0, 0, vk::Format::R32G32B32_SFLOAT, 0) // position
+          .add_attribute(1, 1, vk::Format::R32G32B32_SFLOAT, 0) // normal
+          .add_attribute(1, 2, vk::Format::R32G32_SFLOAT, 12) // uv
+          .add_attribute(1, 3, vk::Format::R32G32B32A32_SFLOAT, 20), // tangent
       )
-      .with_pipeline_flags(PipelineFlags::STENCIL_ENABLE)
+      .with_pipeline_flags(PipelineFlags::STENCIL_ENABLE | PipelineFlags::CULL_BACK)
       .with_stencil_compare_op(StencilCompareOp::Always)
       .with_stencil_logic_op(StencilLogicOp::Replace)
       .with_stencil_reference(1)
@@ -754,13 +821,24 @@ impl Archetypes {
       .with_fragment_out(
         FragmentOut::default()
           .add_color_attachment_format(color_format)
+          .add_color_attachment_format(ash::vk::Format::R32G32_SFLOAT)
+          .with_color_write_masks(alloc::vec![
+            ash::vk::ColorComponentFlags::RGBA,
+            ash::vk::ColorComponentFlags::empty()
+          ])
           .with_depth_attachment_format(depth_stencil_format)
           .clone(),
       )
       .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE | PipelineFlags::NO_DEPTH_TEST)
       .with_render_pass(
-        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
+        renderpasses
+          .get_pipeline_render_pass_mrt(
+            color_format,
+            ash::vk::Format::R32G32_SFLOAT,
+            depth_stencil_format,
+          )?
+          .get(),
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
@@ -823,13 +901,24 @@ impl Archetypes {
       .with_fragment_out(
         FragmentOut::default()
           .add_color_attachment_format(color_format)
+          .add_color_attachment_format(ash::vk::Format::R32G32_SFLOAT)
+          .with_color_write_masks(alloc::vec![
+            ash::vk::ColorComponentFlags::RGBA,
+            ash::vk::ColorComponentFlags::empty()
+          ])
           .with_depth_attachment_format(depth_stencil_format)
           .clone(),
       )
       .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(PipelineFlags::empty())
       .with_render_pass(
-        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
+        renderpasses
+          .get_pipeline_render_pass_mrt(
+            color_format,
+            ash::vk::Format::R32G32_SFLOAT,
+            depth_stencil_format,
+          )?
+          .get(),
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
@@ -894,12 +983,23 @@ impl Archetypes {
       .with_fragment_out(
         pipelines::FragmentOut::default()
           .add_color_attachment_format(color_format)
+          .add_color_attachment_format(ash::vk::Format::R32G32_SFLOAT)
+          .with_color_write_masks(alloc::vec![
+            ash::vk::ColorComponentFlags::RGBA,
+            ash::vk::ColorComponentFlags::empty(),
+          ])
           .with_depth_attachment_format(depth_stencil_format)
           .clone(),
       )
       .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_render_pass(
-        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
+        renderpasses
+          .get_pipeline_render_pass_mrt(
+            color_format,
+            ash::vk::Format::R32G32_SFLOAT,
+            depth_stencil_format,
+          )?
+          .get(),
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::LINE)
@@ -909,10 +1009,12 @@ impl Archetypes {
     //   drawn at pixels where the comet mesh wrote stencil=1.
     //   NO depth test (axes must be visible regardless of comet mesh depth).
     //   Stencil test = EQUAL(1), write_mask=0 (read-only).
-    let gi_over_mesh = base_gi.clone()
+    let gi_over_mesh = base_gi
+      .clone()
       .with_pipeline_flags(
-        pipelines::PipelineFlags::NO_DEPTH_TEST | pipelines::PipelineFlags::NO_DEPTH_WRITE
-        | pipelines::PipelineFlags::STENCIL_ENABLE,
+        pipelines::PipelineFlags::NO_DEPTH_TEST
+          | pipelines::PipelineFlags::NO_DEPTH_WRITE
+          | pipelines::PipelineFlags::STENCIL_ENABLE,
       )
       .with_stencil_compare_op(pipelines::StencilCompareOp::Equal)
       .with_stencil_logic_op(pipelines::StencilLogicOp::None) // KEEP on pass (read-only)
@@ -954,7 +1056,6 @@ impl Archetypes {
 
     Ok(())
   }
-
 
   #[named]
   pub fn create_gizmo_archetype(
@@ -998,6 +1099,11 @@ impl Archetypes {
       .with_fragment_out(
         pipelines::FragmentOut::default()
           .add_color_attachment_format(color_format)
+          .add_color_attachment_format(ash::vk::Format::R32G32_SFLOAT)
+          .with_color_write_masks(alloc::vec![
+            ash::vk::ColorComponentFlags::RGBA,
+            ash::vk::ColorComponentFlags::empty()
+          ])
           .with_depth_attachment_format(depth_stencil_format)
           .clone(),
       )
@@ -1008,7 +1114,13 @@ impl Archetypes {
           | pipelines::PipelineFlags::INVERT_FRONT_FACE,
       )
       .with_render_pass(
-        renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get(),
+        renderpasses
+          .get_pipeline_render_pass_mrt(
+            color_format,
+            ash::vk::Format::R32G32_SFLOAT,
+            depth_stencil_format,
+          )?
+          .get(),
       )
       .with_subpass(0)
       .with_rasterization_polygon_mode(vk::PolygonMode::LINE)
@@ -1053,8 +1165,13 @@ impl Archetypes {
       return Err(crate::gpu_err_device!());
     }
     let layout = arena.read().pipeline_layout.get();
-    let render_pass =
-      renderpasses.get_pipeline_render_pass(color_format, depth_stencil_format)?.get();
+    let render_pass = renderpasses
+      .get_pipeline_render_pass_mrt(
+        color_format,
+        ash::vk::Format::R32G32_SFLOAT,
+        depth_stencil_format,
+      )?
+      .get();
 
     let graphics_info = pipelines::GraphicsInfo::default()
       .with_pre_rasterization(
@@ -1069,12 +1186,18 @@ impl Archetypes {
           .with_fragment_module(fragment_shader.module.get()),
       )
       .with_pipeline_flags(pipelines::PipelineFlags::NO_DEPTH_WRITE);
-    let pipeline_graphics_info = graphics_info.apply_presentation_defaults(
-      color_format,
-      depth_stencil_format,
-      layout,
-      render_pass,
-    );
+    let pipeline_graphics_info = {
+      let mut gi = graphics_info.apply_presentation_defaults(
+        color_format,
+        depth_stencil_format,
+        layout,
+        render_pass,
+      );
+      gi.fragment_out.color_write_masks.push(ash::vk::ColorComponentFlags::RGBA);
+      gi.fragment_out.color_write_masks.push(ash::vk::ColorComponentFlags::empty());
+      gi.fragment_out.color_attachment_formats.push(ash::vk::Format::R32G32_SFLOAT);
+      gi
+    };
 
     pipeline_pool_lock.get_or_create_graphics_pipeline(
       device,

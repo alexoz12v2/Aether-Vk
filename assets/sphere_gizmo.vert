@@ -2,6 +2,10 @@
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 
+#ifdef DEBUG_SHADERS
+#extension GL_EXT_debug_printf : enable
+#endif
+
 struct SphereGizmoData {
     mat4 model;
     float radius;
@@ -195,26 +199,44 @@ void main() {
         gl_Position = centerClip + localClip;
 
         // Front-hemisphere discard signal.
-        // View-direction-independent: a sphere surface point is front-facing if its
-        // outward world-space normal has a positive component toward the camera.
-        // Camera is at RTE origin; gizmo center is at model[3].xyz.
-        // camDir = direction from gizmo center toward camera = -model[3].xyz.
-        // Using un-normalized vectors is fine — we only need the sign of the dot product.
-        vec3 worldNormal = mat3(model) * localPos;  // outward world-space direction
-        vec3 camDir = -model[3].xyz;                // gizmo center → camera (RTE origin)
-        outAlpha = isAxis ? 1.0 : (dot(worldNormal, camDir) > 0.0 ? 1.0 : 0.0);
+        // Use the true vector from the vertex to the camera to properly cull when zoomed in close.
+        // vec3 worldNormal = mat3(model) * localPos;  // outward world-space direction
+        // vec3 trueCamDir = -(model[3].xyz + mat3(model) * localPos); // true vector to camera
+        
+        // Fix: Use the vector from the GIZMO CENTER to the camera, rather than from the vertex.
+        // This guarantees we always render a perfect 180-degree half-sphere, preventing the 
+        // "missing outward parts" caused by true perspective horizon shrinking.
+        vec3 worldNormal = mat3(model) * localPos;  
+        vec3 trueCamDir = -model[3].xyz;
+        
+        // Calculate distance squared from camera (origin) to the gizmo center (model[3].xyz)
+        float distToCenterSq = dot(model[3].xyz, model[3].xyz);
+        float radiusSq = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * push.gizmoPtr.gizmos[gl_InstanceIndex].radius;
+        bool isInside = distToCenterSq < radiusSq;
+        
+        // If the camera is inside the gizmo, do not discard any faces.
+        outAlpha = (isAxis || isInside) ? 1.0 : (dot(worldNormal, trueCamDir) > 0.0 ? 1.0 : 0.0);
 
         if (isAxis) {
-            // Reverse-Z: SUBTRACT a small margin so axes sit just inside the near-plane clip range.
-            // The stencil-based two-pass draw calls (OverMesh / Elsewhere) determine
-            // which pixels actually render on top of the comet, not z-bias.
-            gl_Position.z -= 0.001 * gl_Position.w;
+            // Reverse-Z: ADD a small margin so it renders on top.
+            gl_Position.z += 0.001 * gl_Position.w;
         } else {
-            // Reverse-Z: subtract tiny margin to avoid z-fighting with the solid mesh.
-            gl_Position.z -= 0.0001 * gl_Position.w;
+            // Reverse-Z: add tiny margin to pull forward and win z-fighting with the solid mesh.
+            gl_Position.z += 0.0001 * gl_Position.w;
         }
+        
+        // Prevent depth bias from pushing fragments outside the Reverse-Z near clip plane (1.0).
+        gl_Position.z = min(gl_Position.z, gl_Position.w);
 
         fragColor = color;
+        
+#ifdef DEBUG_SHADERS
+        float trueDist = length(model[3].xyz + mat3(model) * localPos);
+        if (gl_VertexIndex == 0) {
+            debugPrintfEXT("Sphere Gizmo Vertex 0: dist=%.3f, camDir=(%.2f, %.2f, %.2f)", 
+                           trueDist, trueCamDir.x, trueCamDir.y, trueCamDir.z);
+        }
+#endif
     } else {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // cull degenerate vertices outside clip space
         outAlpha = 0.0;

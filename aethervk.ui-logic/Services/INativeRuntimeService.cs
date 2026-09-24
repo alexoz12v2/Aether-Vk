@@ -97,8 +97,6 @@ public interface INativeRuntimeService : IDisposable
   // Simulation Flow Control
   // ==========================================
 
-
-
   bool ResetSimulationSync();
   bool SnapshotSceneSync();
   bool RestoreSnapshotSync();
@@ -111,8 +109,6 @@ public interface INativeRuntimeService : IDisposable
   // Note: `inDto` and `outComputedDto` are passed as IntPtr to allow unmanaged struct blasting
   // TODO: Swap this for specific versions, namely, particle system
   // bool ModifyComponent(ulong entityId, uint command, nint inDto, nint outComputedDto);
-
-
 
   bool AddCameraAnimation(ulong cameraId, AnimationTarget animation);
 
@@ -259,6 +255,11 @@ public interface INativeRuntimeService : IDisposable
   /// </summary>
   bool UpdateCometNucleusRadius(float radiusKm);
 
+  /// <summary>
+  /// Sets the <c>SphereGizmoComponent.is_visible</c> flag.
+  /// </summary>
+  bool SetSphereGizmoVisibility(bool isVisible);
+
   // Async: completion is signalled by a one-shot (transient) handler registered via the
   // `ExternalStateDispatcher` utility inside the implementation. Permanent subscriptions
   // (companion services) use `RegisterExternalStateListener` instead.
@@ -322,7 +323,16 @@ public interface INativeRuntimeService : IDisposable
   IDisposable RegisterExternalStateListener(ExternalStateType stateType, Action<nint> handler);
 
 #if DEBUG
-  bool DebugCameraState(ulong cameraEntityId, out double posX, out double posY, out double posZ, out float rotX, out float rotY, out float rotZ, out float rotW);
+  bool DebugCameraState(
+    ulong cameraEntityId,
+    out double posX,
+    out double posY,
+    out double posZ,
+    out float rotX,
+    out float rotY,
+    out float rotZ,
+    out float rotW
+  );
 #endif
 
   // ==========================================
@@ -953,6 +963,14 @@ internal unsafe static class PInvokeAetherVkCore
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_setSphereGizmoVisibility(
+    nint ctx,
+    ulong sceneId,
+    ulong entityId,
+    bool isVisible
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern unsafe bool avkSimulationContext_getSimulationClock(
     nint ctx,
     ulong sceneId,
@@ -1030,19 +1048,30 @@ internal readonly struct CRotoTranslateDTO
   public readonly double PosX;
   public readonly double PosY;
   public readonly double PosZ;
-  public readonly float  RotX;
-  public readonly float  RotY;
-  public readonly float  RotZ;
-  public readonly float  RotW;
-  public readonly ulong  PivotEntityId;
+  public readonly float RotX;
+  public readonly float RotY;
+  public readonly float RotZ;
+  public readonly float RotW;
+  public readonly ulong PivotEntityId;
 
   public CRotoTranslateDTO(
-    double x, double y, double z,
-    float rx, float ry, float rz, float rw,
-    ulong pivotEntityId = 0)
+    double x,
+    double y,
+    double z,
+    float rx,
+    float ry,
+    float rz,
+    float rw,
+    ulong pivotEntityId = 0
+  )
   {
-    PosX = x; PosY = y; PosZ = z;
-    RotX = rx; RotY = ry; RotZ = rz; RotW = rw;
+    PosX = x;
+    PosY = y;
+    PosZ = z;
+    RotX = rx;
+    RotY = ry;
+    RotZ = rz;
+    RotW = rw;
     PivotEntityId = pivotEntityId;
   }
 }
@@ -1058,6 +1087,8 @@ public struct CBodyRotationalModelDTO
   public double PoleRaRateDegCen;
   public double PoleDecRateDegCen;
   public double RotRateDegDay;
+  public uint BodyFixedOrientation;
+  public uint Padding;
 }
 
 /// <summary>
@@ -1070,7 +1101,8 @@ public sealed record BodyRotationalModelDto(
   double PrimeMeridianDeg,
   double PoleRaRateDegCen,
   double PoleDecRateDegCen,
-  double RotRateDegDay
+  double RotRateDegDay,
+  bool BodyFixedOrientation = true
 )
 {
   /// <summary>Converts to the blittable FFI struct.</summary>
@@ -1083,10 +1115,12 @@ public sealed record BodyRotationalModelDto(
       PoleRaRateDegCen = PoleRaRateDegCen,
       PoleDecRateDegCen = PoleDecRateDegCen,
       RotRateDegDay = RotRateDegDay,
+      BodyFixedOrientation = BodyFixedOrientation ? 1u : 0u,
+      Padding = 0u,
     };
 
   /// <summary>Default model: north pole aligned, no rotation.</summary>
-  public static BodyRotationalModelDto Default { get; } = new(0, 90, 0, 0, 0, 0);
+  public static BodyRotationalModelDto Default { get; } = new(0, 90, 0, 0, 0, 0, true);
 }
 
 #endregion
@@ -1144,8 +1178,6 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   /// <inheritdoc/>
   public CancellationToken ShutdownToken => _shutdownCts.Token;
 
-
-
   public NativeRuntimeService(
     IUiThreadDispatcher uiThreadDispatcher,
     ConsoleService consoleService,
@@ -1179,8 +1211,6 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
     _uiThreadDispatcher = uiThreadDispatcher;
     _instance = this;
-
-
 
     Startup();
   }
@@ -1652,9 +1682,16 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   )
   {
     // mode 2: CRotoTranslateDTO — 3×double position + 4×float quaternion + u64 pivot (48 bytes, 8-byte aligned).
-    var dto = new CRotoTranslateDTO(posX, posY, posZ,
-                                     rotation.X, rotation.Y, rotation.Z, rotation.W,
-                                     pivotEntityId);
+    var dto = new CRotoTranslateDTO(
+      posX,
+      posY,
+      posZ,
+      rotation.X,
+      rotation.Y,
+      rotation.Z,
+      rotation.W,
+      pivotEntityId
+    );
     return PInvokeAetherVkCore.avkSimulationContext_transformStaticCamera(
       _ctx,
       _sceneId,
@@ -1665,12 +1702,23 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   }
 
   public bool SetCameraParent(ulong cameraId, ulong parentEntityId, bool enabled) =>
-    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setCameraParent(
-      _ctx, _sceneId, cameraId, parentEntityId, enabled);
+    _ctx != 0
+    && PInvokeAetherVkCore.avkSimulationContext_setCameraParent(
+      _ctx,
+      _sceneId,
+      cameraId,
+      parentEntityId,
+      enabled
+    );
 
   public bool SetCameraParentToComet(ulong cameraId, bool enabled) =>
-    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setCameraParentToComet(
-      _ctx, _sceneId, cameraId, enabled);
+    _ctx != 0
+    && PInvokeAetherVkCore.avkSimulationContext_setCameraParentToComet(
+      _ctx,
+      _sceneId,
+      cameraId,
+      enabled
+    );
 
   public unsafe bool CameraSetPerspective(
     ulong cameraId,
@@ -1868,6 +1916,19 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public bool UpdateCometNucleusRadius(float radiusKm) =>
     PInvokeAetherVkCore.avkSimulationContext_updateCometNucleusRadius(_ctx, _sceneId, radiusKm);
 
+  public bool SetSphereGizmoVisibility(bool isVisible)
+  {
+    if (_ctx == 0 || !CometEntityId.HasValue)
+      return false;
+
+    return PInvokeAetherVkCore.avkSimulationContext_setSphereGizmoVisibility(
+      _ctx,
+      _sceneId,
+      CometEntityId.Value,
+      isVisible
+    );
+  }
+
   public bool SetJetPreviewVisibility(ulong jetEntityId, bool isVisible) =>
     PInvokeAetherVkCore.avkSimulationContext_setJetPreviewVisibility(
       _ctx,
@@ -1895,7 +1956,7 @@ public sealed class NativeRuntimeService : INativeRuntimeService
         return true;
       }
     }
-    
+
     centuries = 0;
     nanoseconds = 0;
     return false;
@@ -2287,7 +2348,7 @@ internal readonly struct AnimationTargetDTO
   public readonly float rotZ;
   public readonly float rotW;
   public readonly float durationS;
-  private readonly uint _padAlign;   // 4-byte pad to align pivotEntityId to 8 bytes
+  private readonly uint _padAlign; // 4-byte pad to align pivotEntityId to 8 bytes
   public readonly ulong pivotEntityId;
   public readonly byte hasPivot;
   private readonly byte _pad1;
@@ -2296,12 +2357,21 @@ internal readonly struct AnimationTargetDTO
   private readonly uint _pad4;
 
   public AnimationTargetDTO(
-    double x, double y, double z,
-    Quaternion r, float d,
-    ulong? pivotEntityId)
+    double x,
+    double y,
+    double z,
+    Quaternion r,
+    float d,
+    ulong? pivotEntityId
+  )
   {
-    posX = x; posY = y; posZ = z;
-    rotX = r.X; rotY = r.Y; rotZ = r.Z; rotW = r.W;
+    posX = x;
+    posY = y;
+    posZ = z;
+    rotX = r.X;
+    rotY = r.Y;
+    rotZ = r.Z;
+    rotW = r.W;
     durationS = d;
     _padAlign = 0;
     this.pivotEntityId = pivotEntityId ?? 0;
@@ -2391,10 +2461,10 @@ public enum ExternalStateType : uint
   CometPositionSnapshot = 6,
 
   /// <summary>Emitted after a DumpScene command completes (success or failure).</summary>
-  SceneDumped           = 7,
+  SceneDumped = 7,
 
   /// <summary>Emitted after a RestoreSceneDump command completes (success or failure).</summary>
-  SceneRestored         = 8,
+  SceneRestored = 8,
 
 #if DEBUG
   /// <summary>
@@ -2402,7 +2472,7 @@ public enum ExternalStateType : uint
   /// Payload: 128 bytes — view[16] + proj[16] (f32, column-major).
   /// Mirrors Rust <c>CCameraMatrices</c> (state id = 9).
   /// </summary>
-  CameraMatrices        = 9,
+  CameraMatrices = 9,
 #endif
 }
 

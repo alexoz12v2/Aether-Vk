@@ -85,10 +85,10 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   };
 
   [ObservableProperty]
-  private double _perspNear = 0.001;
+  private double _perspNear = 0.0001;
 
   [ObservableProperty]
-  private double _perspFar = 1000.0;
+  private double _perspFar = 200.0;
 
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(OrthoHalfWidthDisplay))]
@@ -133,10 +133,10 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   public double OrthoExtentStep => OrthoUnitIndex == 1 ? 100.0 : 0.001;
 
   [ObservableProperty]
-  private double _orthoNear = 0.001;
+  private double _orthoNear = 0.0001;
 
   [ObservableProperty]
-  private double _orthoFar = 1000.0;
+  private double _orthoFar = 200.0;
 
   public bool IsOrthoProportionsLocked
   {
@@ -377,6 +377,18 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     if (_isUpdatingFromRuntime)
       return;
     _cameraService.SetEarthObserverOrientationMode(value);
+  }
+
+  [RelayCommand]
+  private void PointTowardsSun()
+  {
+    _cameraService.PointTowardsSun();
+  }
+
+  [RelayCommand]
+  private void PointTowardsComet()
+  {
+    _cameraService.PointTowardsComet();
   }
 
   private void DispatchPerspective()

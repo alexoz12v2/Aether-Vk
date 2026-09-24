@@ -707,7 +707,7 @@ public sealed class CameraService : IDisposable
         new AnimationTarget(targetPos.X, targetPos.Y, targetPos.Z, targetRot, animDuration, pivotEntityId));
     }
 
-    if (mode == CameraMode.CometOrbiting && !snapImmediate)
+    if ((mode == CameraMode.CometOrbiting || mode == CameraMode.EarthPosition) && !snapImmediate)
     {
       Volatile.Write(ref _invariantSuppressUntilMs,
         DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + (long)((ModeSwitchAnimationSeconds + 0.5f) * 1000));
@@ -1174,8 +1174,8 @@ public sealed class CameraService : IDisposable
   private void ApplyUpZenithDefaultProjection()
   {
     var cur = _projectionSubject.Value;
-    float near = cur?.Near ?? 0.001f;
-    float far = cur?.Far ?? 1000f;
+    float near = cur?.Near ?? 0.0001f;
+    float far = cur?.Far ?? 200f;
     float halfH = UpZenithObservationHalfExtent;
     float halfW = halfH * _viewportAspect;
     RequestOrthographicProjection(-halfW, halfW, -halfH, halfH, near, far);
@@ -1185,8 +1185,8 @@ public sealed class CameraService : IDisposable
   private void ApplyDefaultPerspectiveProjection()
   {
     var cur = _projectionSubject.Value;
-    float near = cur?.Near ?? 0.001f;
-    float far = cur?.Far ?? 1000f;
+    float near = cur?.Near ?? 0.0001f;
+    float far = cur?.Far ?? 200f;
     RequestPerspectiveProjection(30f * (float)Math.PI / 180f, _viewportAspect, near, far);
   }
 
@@ -1491,6 +1491,24 @@ dump_context()
             }
         } // end if (!inTransit)
     }
+    else if (_modeSubject.Value == CameraMode.EarthPosition)
+    {
+        bool inTransit = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() < Volatile.Read(ref _invariantSuppressUntilMs);
+        if (!inTransit)
+        {
+            lock (_earthPosLock)
+            {
+                double dx = dto.PosX - _lastEarthPos.X;
+                double dy = dto.PosY - _lastEarthPos.Y;
+                double dz = dto.PosZ - _lastEarthPos.Z;
+                double currentDistance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                double expectedDistance = EarthRadiusAu;
+
+                System.Diagnostics.Debug.Assert(Math.Abs(currentDistance - expectedDistance) < 1e-5,
+                    $"Earth observer mode invariant broken! Expected dist: {expectedDistance}, Actual dist: {currentDistance}, Diff: {Math.Abs(currentDistance - expectedDistance)}");
+            }
+        }
+    }
 #endif
 
     // BehaviorSubject.OnNext is not thread-safe for concurrent calls; marshal to the UI thread.
@@ -1502,8 +1520,8 @@ dump_context()
     var dto = *(CameraProjectionDTO*)dataPtr;
     float fov = 30f * (float)Math.PI / 180f;
     float aspect = 1f;
-    float near = 0.1f;
-    float far = 1000f;
+    float near = 0.0001f;
+    float far = 200f;
     float left = 0;
     float right = 800;
     float bottom = 0;
@@ -1605,12 +1623,12 @@ dump_context()
     // When the camera is ECS-parented to the earth entity: write local surface offset directly.
     // ECS propagates world pos = earth_world + surfaceOffset automatically.
     // When NOT yet parented (fly-in): use pivot entity ID so Rust adds earth world pos each frame.
-    ulong earthPivot = _bodyCameraParented ? 0 : (_runtimeService.EarthEntityId ?? 0);
+    ulong earthPivot = _runtimeService.EarthEntityId ?? 0;
 
     if (_bodyCameraParented)
     {
       // Direct synchronous write of local offset (camera is parented, mode-2 writes HRT.position = local).
-      RotoTranslateDirect(surfaceWorld.X, surfaceWorld.Y, surfaceWorld.Z, camRot, 0);
+      RotoTranslateDirect(surfaceWorld.X, surfaceWorld.Y, surfaceWorld.Z, camRot, earthPivot);
     }
     else
     {
@@ -1621,6 +1639,72 @@ dump_context()
           camRot,
           OrbitTrackingAnimationSeconds,
           earthPivot == 0 ? null : earthPivot));
+    }
+  }
+
+  public void PointTowardsSun()
+  {
+    lock (_earthPosLock)
+    {
+      if (_modeSubject.Value != CameraMode.EarthPosition) return;
+
+      var surfaceWorld = Vector3.Transform(_earthSurfacePointBf, _earthBodyRot);
+      var camPos = _lastEarthPos + surfaceWorld;
+
+      // Sun is at origin (0,0,0) in the macro layer
+      var toSun = Vector3.Normalize(-camPos);
+      var zenith = Vector3.Normalize(surfaceWorld);
+
+      var right = Vector3.Normalize(Vector3.Cross(zenith, toSun));
+      var up = Vector3.Cross(toSun, right);
+      var newRot = EngineQuatFromBasis(right, -toSun, up);
+
+      switch (_earthOrientationMode)
+      {
+        case EarthObserverOrientationMode.Inertial:
+          _inertialLookDir = newRot;
+          break;
+        case EarthObserverOrientationMode.EarthFixed:
+          _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, newRot);
+          break;
+      }
+
+      _earthRotation = newRot;
+      SnapCameraToEarth(_lastEarthPos);
+    }
+  }
+
+  public void PointTowardsComet()
+  {
+    lock (_earthPosLock)
+    {
+      if (_modeSubject.Value != CameraMode.EarthPosition) return;
+
+      var cometPos = _cometTracker.LastKnownCometPosition;
+      if (!cometPos.HasValue) return;
+
+      var surfaceWorld = Vector3.Transform(_earthSurfacePointBf, _earthBodyRot);
+      var camPos = _lastEarthPos + surfaceWorld;
+
+      var toComet = Vector3.Normalize(cometPos.Value - camPos);
+      var zenith = Vector3.Normalize(surfaceWorld);
+
+      var right = Vector3.Normalize(Vector3.Cross(zenith, toComet));
+      var up = Vector3.Cross(toComet, right);
+      var newRot = EngineQuatFromBasis(right, -toComet, up);
+
+      switch (_earthOrientationMode)
+      {
+        case EarthObserverOrientationMode.Inertial:
+          _inertialLookDir = newRot;
+          break;
+        case EarthObserverOrientationMode.EarthFixed:
+          _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, newRot);
+          break;
+      }
+
+      _earthRotation = newRot;
+      SnapCameraToEarth(_lastEarthPos);
     }
   }
 
