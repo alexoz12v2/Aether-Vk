@@ -93,7 +93,7 @@ pub mod tracker {
 
 #[cfg(all(test, target_os = "linux"))]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn open64(path: *const libc::c_char, oflag: libc::c_int, mode: libc::mode_t) -> libc::c_int {
+pub unsafe extern "C" fn open64(path: *const libc::c_char, oflag: libc::c_int, mut args: ...) -> libc::c_int {
     type Open64Func = unsafe extern "C" fn(*const libc::c_char, libc::c_int, libc::mode_t) -> libc::c_int;
     lazy_static::lazy_static! {
         static ref REAL_OPEN64: Open64Func = unsafe {
@@ -101,6 +101,12 @@ pub unsafe extern "C" fn open64(path: *const libc::c_char, oflag: libc::c_int, m
             std::mem::transmute(handle)
         };
     }
+    
+    let mode = if (oflag & libc::O_CREAT) != 0 || (oflag & libc::O_TMPFILE) == libc::O_TMPFILE {
+        unsafe { args.next_arg::<libc::mode_t>() }
+    } else {
+        0
+    };
     
     let fd = unsafe { REAL_OPEN64(path, oflag, mode) };
     
@@ -137,7 +143,7 @@ pub unsafe extern "C" fn open64(path: *const libc::c_char, oflag: libc::c_int, m
 
 #[cfg(all(test, target_os = "linux"))]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn open(path: *const libc::c_char, oflag: libc::c_int, mode: libc::mode_t) -> libc::c_int {
+pub unsafe extern "C" fn open(path: *const libc::c_char, oflag: libc::c_int, mut args: ...) -> libc::c_int {
     type OpenFunc = unsafe extern "C" fn(*const libc::c_char, libc::c_int, libc::mode_t) -> libc::c_int;
     lazy_static::lazy_static! {
         static ref REAL_OPEN: OpenFunc = unsafe {
@@ -145,6 +151,12 @@ pub unsafe extern "C" fn open(path: *const libc::c_char, oflag: libc::c_int, mod
             std::mem::transmute(handle)
         };
     }
+    
+    let mode = if (oflag & libc::O_CREAT) != 0 || (oflag & libc::O_TMPFILE) == libc::O_TMPFILE {
+        unsafe { args.next_arg::<libc::mode_t>() }
+    } else {
+        0
+    };
     
     let fd = unsafe { REAL_OPEN(path, oflag, mode) };
     

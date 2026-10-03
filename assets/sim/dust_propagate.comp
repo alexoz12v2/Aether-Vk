@@ -1,0 +1,56 @@
+// @assets/sim/dust_propagate.comp
+//
+// Dust v3 per-frame evaluation: one thread per live cluster. Closed-form Kepler propagation
+// with mu = GM_sun (1 - beta) from the emission record, then df64 subtraction of the particle
+// system's current heliocentric position -> f32 particle-system local metres.
+// Mirror of `dust::evaluate_cluster`. Reads ring slot (firstSlot + i) & ringMask, writes render
+// index i (compact), so the renderer needs no ring arithmetic.
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+#include "dust_common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    DustClusterBuffer clusters;  // 0
+    DustRenderBuffer  render;    // 8
+    uint firstSlot;              // 16
+    uint liveCount;              // 20
+    uint ringMask;               // 24
+    uint _pad0;                  // 28
+    vec4 ps_r_t_hi;              // 32: particle-system heliocentric position (m), w = t_now (s); df64 hi
+    vec4 ps_r_t_lo;              // 48: ... low part
+    vec4 rot_inv;                // 64: root -> particle-system quaternion (xyzw)
+    vec4 ttl;                    // 80: x = TTL (s)
+} pc;                            // 96 bytes
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.liveCount) return;
+    uint slot = (pc.firstSlot + i) & pc.ringMask;
+    DustCluster C = pc.clusters.c[slot];
+
+    DustRenderCluster R;
+    R.pos_size = vec4(0.0);
+    R.age_id_dbeta_flux = vec4(0.0, uintBitsToFloat(slot), 0.0, 0.0);
+
+    vec2 t_now = vec2(pc.ps_r_t_hi.w, pc.ps_r_t_lo.w);
+    vec2 age = df_sub(t_now, vec2(C.r0_t0_hi.w, C.r0_t0_lo.w));
+    float age_f = age.x + age.y;
+    float ttl = pc.ttl.x;
+    if (age_f >= 0.0 && age_f <= ttl) {
+        float beta = C.v0_hi_beta.w;
+        vec2 mu = df_mul(DF_SUN_MU, df_two_sum(1.0, -beta));
+        Df3 r0, v0, r, v;
+        r0.hi = C.r0_t0_hi.xyz;   r0.lo = C.r0_t0_lo.xyz;
+        v0.hi = C.v0_hi_beta.xyz; v0.lo = C.v0_lo_mass.xyz;
+        dust_kepler(r0, v0, mu, age, r, v);
+        Df3 ps;
+        ps.hi = pc.ps_r_t_hi.xyz; ps.lo = pc.ps_r_t_lo.xyz;
+        vec3 local = dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(r, ps)));
+        float fade = clamp((1.0 - age_f / ttl) * 10.0, 0.0, 1.0);
+        R.pos_size = vec4(local, C.misc.x * age_f);
+        R.age_id_dbeta_flux = vec4(age_f, uintBitsToFloat(slot), C.misc.w, C.v0_lo_mass.w * C.misc.z * fade);
+    }
+    pc.render.c[i] = R;
+}

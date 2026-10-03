@@ -134,6 +134,11 @@ bitflags! {
     const NO_DEPTH_TEST = 1 << 6;
     const NO_LINE_DYNAMIC_STATE = 1 << 7;
     const NO_BLEND = 1 << 8;
+    /// premultiplied "over" on attachment 0 (`ONE, ONE_MINUS_SRC_ALPHA` for color and alpha).
+    /// Splats of one color `c` with opacities `a_i` converge to `c·(1 − Π(1 − a_i))`
+    /// ≈ `c·(1 − e^(−Σa))`: linear when faint, saturating at exactly `c` (never white), and order
+    /// independent for a single color.
+    const PREMULTIPLIED_BLEND = 1 << 9;
   }
 }
 
@@ -750,6 +755,13 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
       },
     );
     let blend_enable = !graphics_info.pipeline_flags.contains(PipelineFlags::NO_BLEND);
+    let premultiplied = graphics_info.pipeline_flags.contains(PipelineFlags::PREMULTIPLIED_BLEND);
+    let (src_color, dst_color) = if premultiplied {
+      (vk::BlendFactor::ONE, vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+    } else {
+      (vk::BlendFactor::SRC_ALPHA, vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+    };
+    let (src_alpha, dst_alpha) = (vk::BlendFactor::ONE, vk::BlendFactor::ONE_MINUS_SRC_ALPHA);
     for i in 0..color_blend_attachments.capacity() {
       let write_mask = graphics_info
         .fragment_out
@@ -757,16 +769,16 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
         .get(i)
         .copied()
         .unwrap_or(vk::ColorComponentFlags::RGBA);
-      // over operator blending
+      // over operator blending (premultiplied source with `PREMULTIPLIED_BLEND`)
       color_blend_attachments.push(
         vk::PipelineColorBlendAttachmentState::default()
           .color_write_mask(write_mask)
           .blend_enable(if i == 0 { blend_enable } else { false })
-          .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-          .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+          .src_color_blend_factor(src_color)
+          .dst_color_blend_factor(dst_color)
           .color_blend_op(vk::BlendOp::ADD)
-          .src_alpha_blend_factor(vk::BlendFactor::ONE)
-          .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+          .src_alpha_blend_factor(src_alpha)
+          .dst_alpha_blend_factor(dst_alpha)
           .alpha_blend_op(vk::BlendOp::ADD),
       );
     }

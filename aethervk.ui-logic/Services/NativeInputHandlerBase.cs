@@ -92,8 +92,9 @@ public abstract class NativeInputHandlerBase : INativeInputHandlerSubscribable
   {
     var ev = new NativeMouseEvent(x, y, button, isDown, modifiers, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     _rawInputSubject.OnNext(ev);
-    if (button != MouseButton.None && _traceLevel >= TraceLevel.Verbose)
-      Log(TraceLevel.Verbose, $"[Mouse] {button} Down: {isDown} at ({x}, {y}) | mods: {modifiers}");
+    // TODO uncommend after particles fixed
+    // if (button != MouseButton.None && _traceLevel >= TraceLevel.Verbose)
+    //   Log(TraceLevel.Verbose, $"[Mouse] {button} Down: {isDown} at ({x}, {y}) | mods: {modifiers}");
   }
 
   #endregion

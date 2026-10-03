@@ -101,13 +101,32 @@ pub fn start_render_thread(
             }
             if do_main_queue_cleanup {
               use core::sync::atomic::Ordering;
-              while !main_thread_cb_signal_done.load(Ordering::Acquire) {
+              // Spin-wait with a 200 ms timeout.
+              // If the UI thread is not pumping its event loop (e.g. blocked in a condvar),
+              // the posted action can never execute and the render thread deadlocks.
+              // On timeout we restore signal_done to `true` and skip this cleanup cycle;
+              // it will be retried on the next 500 ms CLEANUP_DELTA_UNSCALED_US interval.
+              const SPIN_TIMEOUT_US: u64 = 200_000; // 200 ms
+              let spin_deadline = get_monotonic_time() + SPIN_TIMEOUT_US as i64;
+              let signal_acquired = loop {
+                if main_thread_cb_signal_done.load(Ordering::Acquire) {
+                  break true;
+                }
+                if get_monotonic_time() >= spin_deadline {
+                  oshal::log!(
+                    "[WARN] render_thread: main-thread cleanup timed out after 200 ms \
+                     (UI thread may be blocked). Skipping this cycle."
+                  );
+                  break false;
+                }
                 core::hint::spin_loop();
-              }
-              main_thread_cb_signal_done.store(false, Ordering::Release);
-              unsafe {
-                invoke_main_thread_process_cleanup(vulkan_device, &main_thread_cb_signal_done)
               };
+              if signal_acquired {
+                main_thread_cb_signal_done.store(false, Ordering::Release);
+                unsafe {
+                  invoke_main_thread_process_cleanup(vulkan_device, &main_thread_cb_signal_done)
+                };
+              }
             }
             Ok(())
           });
@@ -208,72 +227,6 @@ fn process_command(
       pending_rdoc_captures.insert(pe_handle);
       aethervk_oshal_rlib::log!("[RenderDoc] CaptureNextFrame queued for PE {:?}", pe_handle);
       Ok(())
-    }
-    RenderCommand::SyncParticleRelease {
-      feedback,
-      feedback_ptr,
-    } => {
-      use crate::gpu_backends::vulkan::utils::RwLockable;
-      let task_id = render_device.create_task();
-      let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
-        render_device.as_any().downcast_ref().unwrap();
-      let store_failure = |e: &GpuError| {
-        render_device.fail_task(task_id, e.clone());
-        feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
-      };
-
-      let (cmd_buffer, cmd) = vulkan_device
-        .get_command_buffer_and_native()
-        .inspect_err(|e| store_failure(e))?;
-      let cmd_scope = gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id))
-        .inspect_err(|e| store_failure(e))?;
-
-      let res = vulkan_device.res.read();
-      let psm = res.particle_system_manager.as_ref().unwrap();
-      psm.cmd_sync_graphics_release_front(
-        &vulkan_device.device,
-        cmd,
-        vulkan_device.get_graphics_queue().family_index,
-        vulkan_device.get_compute_queue().family_index,
-      );
-      drop(res);
-
-      // if we are not beyond deadline, then we can submit and get value
-      loop {
-        use core::sync::atomic::Ordering;
-        match feedback.compare_exchange_weak(0, 1, Ordering::AcqRel, Ordering::Acquire) {
-          Ok(_) => {
-            // ready
-            // sumbitting signals the timeline semaphore upon completion. we can query the task_id
-            cmd_scope.submit().inspect_err(|e| store_failure(e))?;
-            let timeline_value =
-              vulkan_device.get_task_target_value(task_id).inspect_err(|e| store_failure(e))?;
-            // SAFETY: this was populated from a Boxed type. Shouldn't be null unless we are out of
-            // memory, in which case we crash anyways
-            let feedback_mut = unsafe { feedback_ptr.get().as_mut().unwrap() };
-            feedback_mut.timeline_semaphore =
-              vulkan_device.res.read().timeline_manager.semaphore.get();
-            feedback_mut.timeline_release_value = timeline_value;
-            drop(feedback_mut);
-
-            feedback.store(task_id, core::sync::atomic::Ordering::Release);
-            break Ok(());
-          }
-          Err(old) => {
-            use alloc::string::ToString;
-            if old == u64::MAX {
-              // deadline expired, rollback command buffer and store failure, free pointer
-              core::mem::forget(cmd_scope);
-              store_failure(&GpuError::InvalidState("Deadline".to_string()));
-
-              // SAFETY: if deadline, logic_thread has renounced ownership of this pointer
-              let _ = unsafe { alloc::boxed::Box::from_raw(feedback_ptr.get()) };
-
-              break Ok(());
-            }
-          }
-        }
-      }
     }
     RenderCommand::RenderFrames(render_frames) => {
       if ctx.skip_present.load(core::sync::atomic::Ordering::Acquire) {
@@ -422,32 +375,6 @@ fn process_command(
                     },
                   )?;
 
-                // Before extracting or rendering scenes, first record necessary commands to ensure
-                // that Cross Sync step 4 (graphics queue new front buffers acquisition) end
-                // perfectly
-                if let Some(wait_timeline_val) = render_frame.particle_acquire_sync {
-                  use crate::gpu_backends::vulkan::utils::RwLockable;
-                  let res = vulkan_device.res.read();
-                  if let Some(psm) = res.particle_system_manager.as_ref() {
-                    let gfx_fam = vulkan_device.get_graphics_queue().family_index;
-                    let comp_fam = vulkan_device.get_compute_queue().family_index;
-                    psm.cmd_sync_graphics_acquire_new_front(
-                      &vulkan_device.device,
-                      cmd,
-                      gfx_fam,
-                      comp_fam,
-                    );
-                  }
-
-                  // add wait timeline val and compute timeline semaphore to wait
-                  let compute_timeline_sem = vulkan_device.kernels.timeline;
-                  cmd_scope.add_sync_info(gpu::CommandBufferSyncInfo {
-                    timeline_semaphore: compute_timeline_sem.as_raw(),
-                    timeline_value: wait_timeline_val,
-                    wait_stage_mask: gpu::CommandBufferSyncInfoStageMask::VertexAttributeInput,
-                  });
-                }
-
                 // Narrow the scene read-lock scope: extract only what we need, then drop
                 // the guard before build_render_scene.  Holding it across the full frame
                 // (build + render pass + submit) blocked the logic thread's
@@ -475,7 +402,7 @@ fn process_command(
                    scaled_time_us, scaled_time_delta_us, debug_name)
                 };
 
-                let render_scene = scene_arc
+                let mut render_scene = scene_arc
                   .build_render_scene(
                     &vulkan_device,
                     pe_handle,
@@ -500,6 +427,22 @@ fn process_command(
                     );
                     e
                   })?;
+
+                // Dust v3: evaluate clusters before the render pass; the draw must wait for the
+                // compute submit that emitted the newest drawn clusters
+                let dust_wait = gpu::frame::prepare_dust(vulkan_device, cmd, &mut render_scene)
+                  .unwrap_or_else(|e| {
+                    aethervk_oshal_rlib::log!("[render tasklet] prepare_dust failed: {:?}", e);
+                    0
+                  });
+                if dust_wait > 0 {
+                  use ash::vk::Handle;
+                  cmd_scope.add_sync_info(gpu::CommandBufferSyncInfo {
+                    timeline_semaphore: vulkan_device.kernels.timeline.as_raw(),
+                    timeline_value: dust_wait,
+                    wait_stage_mask: gpu::CommandBufferSyncInfoStageMask::ComputeShader,
+                  });
+                }
 
                 if let Some(sun_call) = render_scene.depth_layers.iter().find_map(|l| l.sun_call.as_ref())
                 {

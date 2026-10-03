@@ -119,13 +119,18 @@ impl Instance {
     #[cfg(debug_assertions)]
     {
       let features_ext = ash::ext::validation_features::NAME;
-      if has_khronos_validation
-        && available_extensions
-          .iter()
-          .any(|e| unsafe { CStr::from_ptr(e.extension_name.as_ptr()) } == features_ext)
+      let force_printf = aethervk_oshal_rlib::os::env::var("AETHERVK_ENABLE_PRINTF").is_some();
+      if force_printf
+        || (has_khronos_validation
+          && available_extensions
+            .iter()
+            .any(|e| unsafe { CStr::from_ptr(e.extension_name.as_ptr()) } == features_ext))
       {
         desired_instance_extensions.push(features_ext);
         has_validation_features = true;
+        if force_printf {
+           oshal::log!("Forcing VK_EXT_validation_features for debugPrintfEXT.");
+        }
       } else {
         // If we hit this, RenderDoc is likely hiding the extension.
         // We log it and move on without crashing.
@@ -200,6 +205,11 @@ impl Instance {
       let disable_requested =
         aethervk_oshal_rlib::os::env::var("AETHERVK_DISABLE_GPU_AV").is_some();
       let enable_requested = aethervk_oshal_rlib::os::env::var("AETHERVK_ENABLE_GPU_AV").is_some();
+
+      if aethervk_oshal_rlib::os::env::var("AETHERVK_ENABLE_PRINTF").is_some() {
+        crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+          .store(true, core::sync::atomic::Ordering::Relaxed);
+      }
 
       #[cfg(not(target_vendor = "apple"))]
       let use_printf = crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
@@ -390,6 +400,12 @@ impl Instance {
 
         match result {
           Ok(inst) => {
+            // RenderDoc layer is now loaded into the process. We can safely unmute it.
+            #[cfg(any(debug_assertions, test))]
+            if crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.load(core::sync::atomic::Ordering::Relaxed) {
+                crate::gpu_backends::vulkan::renderdoc::unmute_debug_output();
+            }
+
             // If the creation-phase callback captured a real (non-extension-compat)
             // validation error, call the user callback NOW — safely, in Rust, not through FFI.
             #[cfg(debug_assertions)]

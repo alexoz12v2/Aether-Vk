@@ -11,7 +11,6 @@ use bitflags::bitflags;
 use core::{ffi, hash::Hash};
 use heapless::index_map::FnvIndexMap;
 
-pub mod compute_push_constants;
 pub mod frame;
 pub mod scene_conversion;
 
@@ -44,51 +43,6 @@ impl GpuResourceHandle {
   }
 }
 
-pub mod new_particles {
-  // maximum supported subgroup size is 128, and this is a multiple of it
-  pub const PCHUNK_SIZE: usize = 256;
-  pub const MAX_PARTICLES: usize = 1_000_000;
-  pub const MAX_PARTICLES_PER_SYSTEM: usize = 100_000;
-  pub const MAX_CHUNKS: usize = MAX_PARTICLES.div_ceil(PCHUNK_SIZE);
-  pub const PARTICLE_PAGE_TABLE_HEADER_SIZE: usize = 32;
-  pub const PAGE_TABLE_BYTES: u64 =
-    (PARTICLE_PAGE_TABLE_HEADER_SIZE + 4 * MAX_PARTICLES_PER_SYSTEM.div_ceil(PCHUNK_SIZE)) as _;
-
-  #[repr(C)]
-  #[derive(Debug, Copy, Clone, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
-  pub struct ParticleChunk {
-    pub position_x: [f32; PCHUNK_SIZE],
-    pub position_y: [f32; PCHUNK_SIZE],
-    pub position_z: [f32; PCHUNK_SIZE],
-    pub velocity_x: [f32; PCHUNK_SIZE],
-    pub velocity_y: [f32; PCHUNK_SIZE],
-    pub velocity_z: [f32; PCHUNK_SIZE],
-    pub inv_mass: [f32; PCHUNK_SIZE],
-    pub force_x: [f32; PCHUNK_SIZE],
-    pub force_y: [f32; PCHUNK_SIZE],
-    pub force_z: [f32; PCHUNK_SIZE],
-    pub beta: [f32; PCHUNK_SIZE],
-    pub spawn_time: [u32; PCHUNK_SIZE],
-  }
-
-  /// Push Constant layout for `dust.vert/frag` shaders
-  #[repr(C)]
-  #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
-  pub struct DustPushConstants {
-    pub global_particle_buffer: u64,
-    pub particle_page_table: u64,
-    pub view_proj: [f32; 16],
-    pub stream_color: [f32; 4],
-    pub chunk_offset: u32,
-    pub current_time: u32,
-    pub max_ttl: f32,
-    pub macro_scale: f32,
-    pub micro_radius: f32,
-    pub num_spots: u32,
-    pub dispersion_rate: f32,
-    pub _pad: u32,
-  }
-}
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct CommandBufferHandle(pub u64);
@@ -355,7 +309,10 @@ pub struct CompositePushConstants {
   pub micro_far: f32,
   pub macro_scale: f32,
   pub micro_scale: f32,
-  pub _pad: [u32; 2],
+  /// 1 when the camera uses an orthographic projection (linear reverse-Z depth), 0 for
+  /// perspective (hyperbolic reverse-Z depth). Selects the depth linearisation in composite.frag.
+  pub is_orthographic: u32,
+  pub _pad: u32,
 }
 
 #[repr(C)]
@@ -450,6 +407,7 @@ pub enum CommandBufferSyncInfoStageMask {
   TopBottom, // signal at bottom, wait on top
   Transfer,
   VertexAttributeInput,
+  ComputeShader,
 }
 
 /// Information about the synchronization payload after submitting a command buffer.

@@ -1,86 +1,106 @@
 // @assets/dust.vert
 //
-// Note: We are setting `gl_PointSize` to values bigger than 1.0. As such, we need
-// the `largePoints` device feature
-
+// Dust v3 renderer: instanced camera-facing quads. Instance = cluster * children + child.
+// Each cluster (super-particle) is amplified into `children` sub-splats at render time (8..64,
+// more while the ring is sparse, chosen by the host within a fixed instance budget) with a
+// linearized perturbation relative to the cluster's exact Keplerian position:
+//   dx_k = sigma_v * age * N3(0,1)              (ejection velocity dispersion)
+//        + 1/2 * dbeta_k * g_sun * age^2 * (-sun) (size spread within the cluster's beta stratum)
+// Total light per cluster is independent of the children count, the super-particle weight and the
+// sim speed; the per-pixel falloff is a display stretch (see `intensity`).
 #version 450 core
+#extension GL_GOOGLE_include_directive : require
+#include "sim/dust_common.glsl"
 
-#extension GL_EXT_buffer_reference2      : require
-#extension GL_EXT_buffer_reference_uvec2 : require
-#extension GL_GOOGLE_include_directive   : require
+layout(push_constant, std430) uniform PushConstants {
+    DustRenderBuffer render;  // 0
+    uint children;            // 8: render-time children per cluster (DUST_CHILDREN..DUST_MAX_CHILDREN)
+    uint liveCount;           // 12
+    mat4 mvp;                 // 16: particle-system local metres -> clip
+    vec4 color;               // 80: rgb stream color, a = flux scale (gain / mean child flux)
+    vec4 antiSunG;            // 96: unit anti-sun direction (ps frame), w = solar gravity at comet (m/s^2)
+    vec4 params;              // 112: x units per metre, y P00, z P11, w 2/viewport_height
+} pc;                         // 128 bytes
 
-#include "debug_utils.glsl"
-#include "bvh_utils.glsl"
+layout(location = 0) out vec3 v_color;   // stream color: the saturation ceiling
+layout(location = 1) out vec2 v_uv;
+layout(location = 2) out float v_opacity; // peak opacity of this splat (before the gaussian)
 
-uint pcg(uint v) {
-    uint state = v * 747796405u + 2891336453u;
-    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-    return (word >> 22u) ^ word;
+const float MIN_PX = 1.5;
+const float MAX_PX = 48.0;
+// child footprint radius as a fraction of the cluster spread (the 8 children already scatter over
+// the spread; a footprint as large as the whole spread smears each cluster into a faint disc)
+const float CHILD_RADIUS_FRAC = 0.5;
+// stride of the child hash: keeps children decorrelated for any `children` <= this
+const uint DUST_MAX_CHILDREN = 64u;
+
+const vec2 CORNERS[6] = vec2[6](
+    vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(1.0, 1.0),
+    vec2(-1.0, -1.0), vec2(1.0, 1.0), vec2(-1.0, 1.0)
+);
+
+void cull() {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // outside the clip volume
+    v_color = vec3(0.0);
+    v_uv = vec2(0.0);
+    v_opacity = 0.0;
 }
 
-// 128 bytes
-layout(push_constant, std430) uniform PushConstants {
-    ParticleChunkBuffer globalParticleBuffer;
-    ParticlePageTable   particlePageTable;
-
-    mat4  viewProj;
-    vec4  streamColor;
-    uint  chunkOffset;
-    uint  currentTime;  // In 1/300 seconds
-    float maxTtl;       // limit for age fading (in 1/300 s)
-    float macroScale;   // base point sprite pixel size multiplier
-    float microRadius;  // physical size of the dust specks (eg 0.15)
-    uint  numSpots;     // how many spots per blob (eg 12 or 16)
-    float dispersionRate;
-} pc;
-
-layout(location = 0) out vec4 v_Color;
-layout(location = 1) out flat uint v_Seed;
-layout(location = 2) out flat float v_PointSize;
-
 void main() {
-    uint idx = gl_VertexIndex;
+    uint inst = uint(gl_InstanceIndex);
+    uint k = clamp(pc.children, 1u, DUST_MAX_CHILDREN);
+    uint cluster = inst / k;
+    uint child = inst - cluster * k;
+    if (cluster >= pc.liveCount) { cull(); return; }
+    // render buffer is compact (index = live-range offset); y carries the stable ring slot
+    DustRenderCluster R = pc.render.c[cluster];
+    uint slot = floatBitsToUint(R.age_id_dbeta_flux.y);
+    float flux = R.age_id_dbeta_flux.w;
+    if (!(flux > 0.0)) { cull(); return; }
 
-    if (idx > pc.particlePageTable.particleCount) {
-        gl_Position = vec4(0.0);
-        gl_PointSize = 0.0;
-        return;
-    }
+    float age = R.age_id_dbeta_flux.x;
+    float spread = R.pos_size.w;
 
-    // extract components from vertex index OS page table style
-    uint logicalChunk = idx >> 8;   // idx / 256
-    uint lane         = idx & 255;  // idx % 256
-    uint vecIdx       = lane >> 2;  // lane / 4
-    uint compIdx      = lane & 3;   // lane % 4
+    // deterministic child perturbation
+    uint h0 = dust_pcg(slot * DUST_MAX_CHILDREN + child + 0x9E3779B9u);
+    uint h1 = dust_pcg(h0);
+    uint h2 = dust_pcg(h1);
+    uint h3 = dust_pcg(h2);
+    uint h4 = dust_pcg(h3);
+    vec3 n3 = vec3(
+        dust_gauss(dust_u01(h0), dust_u01(h1)),
+        dust_gauss(dust_u01(h1 ^ 0x68E31DA4u), dust_u01(h2)),
+        dust_gauss(dust_u01(h3), dust_u01(h4))
+    );
+    float dbeta = R.age_id_dbeta_flux.z * (2.0 * dust_u01(dust_pcg(h4)) - 1.0);
+    vec3 offset = spread * n3 + (0.5 * dbeta * pc.antiSunG.w * age * age) * pc.antiSunG.xyz;
+    vec3 pos_m = R.pos_size.xyz + offset;
 
-    uint physicalIdx = pc.particlePageTable.chunks[pc.chunkOffset + logicalChunk];
+    vec4 clip = pc.mvp * vec4(pos_m, 1.0);
+    if (!(clip.w > 0.0) || !(pc.params.y > 0.0) || !(pc.params.z > 0.0)) { cull(); return; }
+    // The tail spans 1e5..1e7 m, far beyond the tight depth range of the comet's layer. Dust
+    // writes no depth, so clamp it into range instead of letting it be clipped: it stays
+    // occluded by the comet through the depth test (reverse Z: 0 = far, w = near).
+    clip.z = clamp(clip.z, 0.0, clip.w);
 
-    float px = pc.globalParticleBuffer.chunks[physicalIdx].positionX[vecIdx][compIdx];
-    float py = pc.globalParticleBuffer.chunks[physicalIdx].positionY[vecIdx][compIdx];
-    float pz = pc.globalParticleBuffer.chunks[physicalIdx].positionZ[vecIdx][compIdx];
-    uint spawn = pc.globalParticleBuffer.chunks[physicalIdx].spawnTime[vecIdx][compIdx];
+    // child footprint: physical radius, clamped to [MIN_PX, MAX_PX] pixels
+    float units_per_m = pc.params.x;
+    float px_to_ndc_y = pc.params.w;
+    float px_to_ndc_x = px_to_ndc_y * (pc.params.y / pc.params.z);
+    float r_units = max(spread * CHILD_RADIUS_FRAC, 1.0) * units_per_m;
+    float r_px = r_units * pc.params.z / clip.w / px_to_ndc_y;
+    r_px = clamp(r_px, MIN_PX, MAX_PX);
 
-    vec4 worldPos = vec4(px, py, pz, 1.0);
-    gl_Position = pc.viewProj * worldPos;
+    // Display stretch: the micro layer is RGBA8, so an energy-conserving 1/r_px^2 falloff drives
+    // spread-out splats below 1/510 per pixel, where additive blending accumulates nothing.
+    // 1/r_px keeps large (old) splats visible while compact (young) ones stay brightest.
+    // color.a = gain / mean child flux, so the mean child peaks at `gain` at MIN_PX.
+    float intensity = pc.color.a * (flux / float(k)) * (MIN_PX / r_px);
 
-    // time to live fade out
-    float age = float(pc.currentTime - spawn);
-    float fade = 1.0 - clamp(age / pc.maxTtl, 0.0, 1.0);
-
-    // scale macro-particle cluster based on distance
-    // scale macro-particle as it ages so internal spots drift apart
-    float pSize = 0;
-    if (gl_Position.w > 0.0) {
-        float expandedScale = pc.macroScale + (age * pc.dispersionRate);
-        pSize = max(1.0, expandedScale / gl_Position.w);
-    } else {
-        pSize = 0.0;
-    }
-    gl_PointSize = pSize;
-    v_PointSize = pSize; // send it down the pipeline
-
-    v_Color = vec4(pc.streamColor.rgb, pc.streamColor.a * fade);
-
-    // temporaly stable seed based on spawnTime so particles look different when recycled
-    v_Seed = spawn ^ pcg(idx * 1973u);
+    vec2 corner = CORNERS[gl_VertexIndex % 6];
+    clip.xy += corner * r_px * vec2(px_to_ndc_x, px_to_ndc_y) * clip.w;
+    gl_Position = clip;
+    v_color = pc.color.rgb;
+    v_opacity = intensity;
+    v_uv = corner;
 }

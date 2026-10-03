@@ -13,6 +13,8 @@ public class OperatorStack : IActionHandler
     Push(baseOperator);
   }
 
+  // TODO uncommend operator stack after solving movement and particles problem
+
   public void Push(IActionOperator op)
   {
     // Silently ignore pushing the same instance or same type that is already on top.
@@ -20,15 +22,15 @@ public class OperatorStack : IActionHandler
     // cannot guard against duplicate type pushes from rapid/multi-touch events.
     if (_stack.Count > 0 && (_stack.Peek() == op || _stack.Peek().GetType() == op.GetType()))
     {
-      Console.WriteLine(
-        $"[OperatorStack] Push SKIPPED (duplicate): {op.GetType().Name}, top={_stack.Peek().GetType().Name}"
-      );
+      // Console.WriteLine(
+      //   $"[OperatorStack] Push SKIPPED (duplicate): {op.GetType().Name}, top={_stack.Peek().GetType().Name}"
+      // );
       return;
     }
 
-    Console.WriteLine(
-      $"[OperatorStack] Push: {op.GetType().Name} (depth {_stack.Count} → {_stack.Count + 1})"
-    );
+    // Console.WriteLine(
+    //   $"[OperatorStack] Push: {op.GetType().Name} (depth {_stack.Count} → {_stack.Count + 1})"
+    // );
     op.OnEnter();
     _stack.Push(op);
   }
@@ -38,11 +40,11 @@ public class OperatorStack : IActionHandler
     // Don't allow popping the base operator
     if (_stack.Count <= 1)
     {
-      Console.WriteLine($"[OperatorStack] PopSelf SKIPPED (base operator): {self.GetType().Name}");
+      // Console.WriteLine($"[OperatorStack] PopSelf SKIPPED (base operator): {self.GetType().Name}");
       return;
     }
 
-    Console.WriteLine($"[OperatorStack] PopSelf: {self.GetType().Name} (depth {_stack.Count} → ?)");
+    // Console.WriteLine($"[OperatorStack] PopSelf: {self.GetType().Name} (depth {_stack.Count} → ?)");
 
     // Assert in debug builds; gracefully recover in release to avoid a field crash
     // from any out-of-order pointer events (e.g. multi-touch interleaving).
@@ -56,7 +58,7 @@ public class OperatorStack : IActionHandler
       _stack.Pop().OnExit();
     if (_stack.Count > 1)
       _stack.Pop().OnExit(); // pop 'self'
-    Console.WriteLine($"[OperatorStack] PopSelf done, depth now {_stack.Count}");
+    // Console.WriteLine($"[OperatorStack] PopSelf done, depth now {_stack.Count}");
   }
 
   /// <summary>
@@ -65,7 +67,7 @@ public class OperatorStack : IActionHandler
   /// </summary>
   public void ForceReset()
   {
-    Console.WriteLine($"[OperatorStack] ForceReset (depth {_stack.Count})");
+    // Console.WriteLine($"[OperatorStack] ForceReset (depth {_stack.Count})");
     while (_stack.Count > 1)
       _stack.Pop().OnExit();
   }
@@ -74,12 +76,12 @@ public class OperatorStack : IActionHandler
   {
     if (_stack.Count > 0)
     {
-      Console.WriteLine(
-        $"[OperatorStack] Process: action={action.Id} isPressed={state.IsPressed} → top={_stack.Peek().GetType().Name}"
-      );
+      //Console.WriteLine(
+      //  $"[OperatorStack] Process: action={action.Id} isPressed={state.IsPressed} → top={_stack.Peek().GetType().Name}"
+      //);
       return _stack.Peek().ProcessAction(action, state);
     }
-    Console.WriteLine($"[OperatorStack] Process: action={action.Id} — stack empty!");
+    // Console.WriteLine($"[OperatorStack] Process: action={action.Id} — stack empty!");
     return false;
   }
 }

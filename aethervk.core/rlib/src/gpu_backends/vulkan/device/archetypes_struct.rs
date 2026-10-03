@@ -761,7 +761,17 @@ impl Archetypes {
           .add_attribute(1, 2, vk::Format::R32G32_SFLOAT, 12) // uv
           .add_attribute(1, 3, vk::Format::R32G32B32A32_SFLOAT, 20), // tangent
       )
-      .with_pipeline_flags(PipelineFlags::STENCIL_ENABLE | PipelineFlags::CULL_BACK)
+      // INVERT_FRONT_FACE: meshes are wound CCW when seen from outside (generate_uv_sphere,
+      // and GLTF/OBJ/PLY loads verified by the signed-volume check in finalize_comet), but the
+      // engine's projection (view −Y forward, clip.y = −f·view.z, Vulkan y-down framebuffer)
+      // mirrors the winding, so outward faces rasterise CLOCKWISE. With the default
+      // COUNTER_CLOCKWISE front face, CULL_BACK removed the camera-facing hemisphere and the
+      // inside of the far hemisphere was shaded instead — its normals point away from the
+      // camera, so the comet looked black with the Sun behind the camera and lit when facing
+      // the Sun (confirmed in why_comet_cut.rdc via DebugPixel: shaded point = far side).
+      .with_pipeline_flags(
+        PipelineFlags::STENCIL_ENABLE | PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE,
+      )
       .with_stencil_compare_op(StencilCompareOp::Always)
       .with_stencil_logic_op(StencilLogicOp::Replace)
       .with_stencil_reference(1)
@@ -1177,7 +1187,9 @@ impl Archetypes {
       .with_pre_rasterization(
         PreRasterization::default().with_vertex_module(vertex_shader.module.get()),
       )
-      .with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::POINT_LIST))
+      // dust v3: instanced camera-facing quads (6 vertices per instance), premultiplied-over
+      // splats saturating at the stream color
+      .with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_LIST))
       .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
       .with_fragment_shader(
         FragmentShader::default()
@@ -1185,7 +1197,9 @@ impl Archetypes {
           .add_scissors(ignored_scissor())
           .with_fragment_module(fragment_shader.module.get()),
       )
-      .with_pipeline_flags(pipelines::PipelineFlags::NO_DEPTH_WRITE);
+      .with_pipeline_flags(
+        pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::PREMULTIPLIED_BLEND,
+      );
     let pipeline_graphics_info = {
       let mut gi = graphics_info.apply_presentation_defaults(
         color_format,

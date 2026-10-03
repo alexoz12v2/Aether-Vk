@@ -145,6 +145,11 @@ pub struct CartesianStateComet {
   pub transform: TransformComponent,
   pub almanac_planet: AlmanacPlanet,
   pub body_rotational_model: Option<BodyRotationalModel>,
+  /// heliocentric `(position_km, velocity_km_s)` at the last step, f64 (`SUN_ECLIPJ2000`)
+  pub helio_state_km: Option<(
+    aethervk_oshal_rlib::math::vector::vec3f64::DVec3,
+    aethervk_oshal_rlib::math::vector::vec3f64::DVec3,
+  )>,
 }
 
 #[derive(Debug, Clone)]
@@ -168,6 +173,7 @@ impl CartesianState {
         transform,
         almanac_planet,
         body_rotational_model,
+        helio_state_km: None,
       }),
       parent_frame,
       parent_frame_transform,
@@ -996,19 +1002,6 @@ pub struct RenderFrame {
   pub cursor_entity: Option<EntityId>,
   pub custom_render_callback: Option<CustomRenderCallback>,
 
-  /// Step 4 of the cross sync procedure: if the compute workload which is invoking this command
-  /// generated a cross sync procedure, we need to wait on a particular compute timeline value to
-  /// finish, and then insert graphics queue acquire commands. Whether to insert commands or not is
-  /// signaled by cross queue AND presence of this sync value
-  /// This is the compute timeline value to wait for
-  ///
-  /// Note: We are packing only the release value and not the `vk::Semaphore` itself cause we know
-  /// we are implicitly referring to the compute queue global timeline semaphore
-  /// `vulkan_device.kernels.timeline`. It can implicitly be taken by
-  /// `vulkan_device.kernels.next_submit_value`, but that would create a race condition between the
-  /// render thread and the physics tasklet threads
-  pub particle_acquire_sync: Option<u64>,
-
   /// particles constants to reproduce cluster params coherent with what the logic thread computes
   pub mean_intra_grains_distance_mm: f32,
   /// particles constants to reproduce cluster params coherent with what the logic thread computes
@@ -1023,18 +1016,6 @@ pub struct Resize {
   pub height: u32,
 }
 
-/// Struct pointed to in the [`RenderCommand::SyncParticleRelease`], whose writes are protected by
-/// a memory barrier issued through an atomic load/store on `feedback`
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SyncParticleReleaseFeedback {
-  pub timeline_semaphore: ash::vk::Semaphore,
-  pub timeline_release_value: u64,
-}
-
-unsafe impl bytemuck::Zeroable for SyncParticleReleaseFeedback {}
-unsafe impl bytemuck::Pod for SyncParticleReleaseFeedback {}
-
 #[derive(Clone, Default)]
 pub enum RenderCommand {
   #[default]
@@ -1042,14 +1023,6 @@ pub enum RenderCommand {
   RenderFrames(alloc::vec::Vec<RenderFrame>),
   Resize(Resize),
   GenerateSky,
-  /// Step 1 of Cross Sync 4 steps procedure to hand over compute owned updates to the render
-  /// thread. The render thread will write its generated task_id into `feedback`
-  SyncParticleRelease {
-    // Note: it could also be a raw pointer instead of a shared one, cause we know that the caller
-    // will outlive this command as it will poll the content of this atomic
-    feedback: alloc::sync::Arc<core::sync::atomic::AtomicU64>,
-    feedback_ptr: SendPtrMut<SyncParticleReleaseFeedback>,
-  },
   /// Instructs the render thread to bracket the next frame for this PE with
   /// RenderDoc `StartFrameCapture` / `EndFrameCapture`, capturing only that
   /// windowed swapchain.  Emitted only in debug builds.
@@ -1241,10 +1214,9 @@ impl PhysicsDeviceSelfSync {
 pub struct SceneContext {
   pub scene: Arc<Scene>,
 
-  /// Contains the last render task id for the given scene
-  pub last_render_task: core::sync::atomic::AtomicU64,
+  /// Contains the last render task feedback Arc for the given scene
+  pub last_render_task: Arc<core::sync::atomic::AtomicU64>,
 
-  pub pending_cross_sync: bool,
 
   pub root_entity: EntityId,
   pub cursor_entity: Option<EntityId>,
@@ -1373,8 +1345,7 @@ impl SceneContext {
       changed_entities: Arc::new(RwLock::new(BTreeMap::new())),
       custom_render_callback: None,
       debug_name: alloc::string::String::new(),
-      last_render_task: core::sync::atomic::AtomicU64::new(0),
-      pending_cross_sync: false,
+      last_render_task: Arc::new(core::sync::atomic::AtomicU64::new(0)),
       entities_update_tasklet: None,
       particle_snapshot: None,
       time_snapshot: None,

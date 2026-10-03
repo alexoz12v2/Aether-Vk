@@ -66,6 +66,11 @@ public partial class App : Application
 #if DEBUG
       skipNative = desktop.Args?.Contains("--skip-native") == true;
 
+      var debugWindow = new Views.Debug.ShaderDebugWindow();
+      debugWindow.Show();
+      
+      AetherVk.Logic.Services.NativeRuntimeService.ShaderDebugLogAction = debugWindow.AppendLog;
+
       if (desktop.Args?.Contains("--force-fatal-error") == true)
       {
         desktop.MainWindow = new Views.FatalErrorWindow(

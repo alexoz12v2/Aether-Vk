@@ -249,6 +249,35 @@ define_hook!(
   fn(command_buffer: vk::CommandBuffer, group_count_x: u32, group_count_y: u32, group_count_z: u32)
 );
 
+// ── Stall-watcher submit timestamp ───────────────────────────────────────────
+
+/// Monotonic nanosecond timestamp of the most recent `vkQueueSubmit` call.
+/// Updated by [`stall_watcher_submit_hook`] (Linux debug builds only).
+/// Read by the stall-watcher thread to detect render hangs.
+#[cfg(all(target_os = "linux", debug_assertions))]
+pub static LAST_SUBMIT_NS: core::sync::atomic::AtomicU64 =
+  core::sync::atomic::AtomicU64::new(0);
+
+/// Hook function registered into [`vkQueueSubmit_HOOK`] at device creation time.
+/// Records the current CLOCK_MONOTONIC nanosecond timestamp on every submit.
+#[cfg(all(target_os = "linux", debug_assertions))]
+fn stall_watcher_submit_hook(
+  _queue: vk::Queue,
+  _submit_count: u32,
+  _p_submits: *const vk::SubmitInfo,
+  _fence: vk::Fence,
+) -> vk::Result {
+  let now = unsafe {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+    (ts.tv_sec as u64)
+      .wrapping_mul(1_000_000_000)
+      .wrapping_add(ts.tv_nsec as u64)
+  };
+  LAST_SUBMIT_NS.store(now, core::sync::atomic::Ordering::Relaxed);
+  vk::Result::SUCCESS
+}
+
 pub unsafe fn load_device_with_hooks(
   instance: &ash::Instance,
   physical_device: vk::PhysicalDevice,
@@ -386,6 +415,12 @@ pub unsafe fn load_device_with_hooks(
       },
       device_handle,
     );
+
+    // Register the stall-watcher timestamp hook so every vkQueueSubmit updates LAST_SUBMIT_NS.
+    #[cfg(all(target_os = "linux", debug_assertions))]
+    unsafe {
+      vkQueueSubmit_HOOK = Some(stall_watcher_submit_hook);
+    }
 
     Ok(device)
   }

@@ -25,7 +25,7 @@ use aethervk_oshal_rlib::{
   },
   os::{
     pool::ThreadPool,
-    time::{timeus_t, us_to_300ths_rounded},
+    time::timeus_t,
   },
 };
 use function_name::named;
@@ -403,11 +403,13 @@ impl SceneConversionExt2 for Scene {
     // The SOI-sphere bounds (computed in Phase 2 above) remain as a fallback if no
     // StaticMeshComponent survives the cull test for a given micro layer.
     //
-    // Scale is always 1 for comet meshes (radius is baked into vertex positions via
-    // update_uv_sphere_radius_in_place), so bounding radius is read from vertex data.
+    // Bounding radius is read from vertex data and multiplied by the entity's RTE scale
+    // (procedural spheres have scale 1 with the radius baked in via
+    // update_uv_sphere_radius_in_place; imported meshes carry radius_km / bounding_sphere).
     //
     // Constants:
     //   DEPTH_NEAR_FLOOR — absolute minimum near plane (1 m) to handle camera-inside-mesh
+    //                      (perspective only; orthographic near may be negative)
     //   DEPTH_MARGIN     — 5% padding on both sides to prevent near/far edge clipping
     {
       const DEPTH_NEAR_FLOOR: f64 = 0.001; // km (= 1 m)
@@ -462,12 +464,39 @@ impl SceneConversionExt2 for Scene {
       let mut per_layer_depth: hashbrown::HashMap<u32, (f64, f64)> =
         hashbrown::HashMap::with_capacity(4);
 
+      // Orthographic projections have no w=0 singularity: depth is linear in view distance and
+      // the near plane may legitimately be negative (geometry behind the camera plane is still
+      // visible). Perspective projections need a strictly positive near plane.
+      let is_ortho = matches!(
+        camera_data.projection_params,
+        CameraProjectionParams::Orthographic { .. }
+      );
+      // `depth` is the signed view depth along the camera forward axis (view −Y is forward).
+      // Returns the (near, far) slab enclosing a sphere of radius `r` centred at `depth`.
+      let fit_slab = |depth: f64, r: f64| -> (f64, f64) {
+        if is_ortho {
+          (depth - r * DEPTH_MARGIN, depth + r * DEPTH_MARGIN)
+        } else {
+          let d = depth.abs();
+          ((d - r * DEPTH_MARGIN).max(DEPTH_NEAR_FLOOR), d + r * DEPTH_MARGIN)
+        }
+      };
+
       for (layer_idx, _id, mesh, rte, _outline) in &extracted_meshes {
         if *layer_idx == 0 {
           continue; // macro layer uses camera near/far from UI — do not touch
         }
 
-        // Bounding radius from vertex positions (scale=1, radius baked into positions).
+        // Bounding radius from vertex positions, multiplied by the entity's RTE scale.
+        // The procedural sphere has scale 1 (radius baked into positions), but GLTF/OBJ/PLY
+        // comets get `scale = radius_km / bounding_sphere` and MeshScaleMultiplierComponent
+        // also scales rte — ignoring it produced too-tight near/far and clipped the mesh.
+        let max_scale = {
+          use aethervk_oshal_rlib::math::vector::Vector3;
+          (rte.scale.x().abs())
+            .max(rte.scale.y().abs())
+            .max(rte.scale.z().abs()) as f64
+        };
         let obj_radius = mesh
           .mesh
           .vertices
@@ -476,7 +505,8 @@ impl SceneConversionExt2 for Scene {
             let [x, y, z] = v.position;
             ((x * x + y * y + z * z) as f64).sqrt()
           })
-          .fold(0.0f64, f64::max);
+          .fold(0.0f64, f64::max)
+          * max_scale;
 
         // Camera-to-object-center vector in km (rte.position = obj_pos − cam_pos in km).
         let (cx, cy, cz) = {
@@ -492,7 +522,8 @@ impl SceneConversionExt2 for Scene {
         use aethervk_oshal_rlib::math::vector::Vector4;
         use aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64;
         let view_pos = camera_data.view_f64 * Vec4f64::from_components(cx, cy, cz, 1.0);
-        let obj_dist_y = view_pos.y().abs();
+        // Signed forward depth (view −Y is forward). `fit_slab` takes abs() for perspective.
+        let obj_depth = -view_pos.y();
 
         // Frustum cull: skip objects whose bounding sphere lies entirely outside the view.
         let au_scale = 1.0 / AU_TO_KM as f64;
@@ -505,8 +536,7 @@ impl SceneConversionExt2 for Scene {
           continue;
         }
 
-        let obj_near = (obj_dist_y - obj_radius * DEPTH_MARGIN).max(DEPTH_NEAR_FLOOR);
-        let obj_far = obj_dist_y + obj_radius * DEPTH_MARGIN;
+        let (obj_near, obj_far) = fit_slab(obj_depth, obj_radius);
 
         let e = per_layer_depth.entry(*layer_idx).or_insert((f64::MAX, f64::NEG_INFINITY));
         e.0 = e.0.min(obj_near);
@@ -534,9 +564,9 @@ impl SceneConversionExt2 for Scene {
 
         let view_pos = camera_data.view_f64
           * aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(cx, cy, cz, 1.0);
-        let obj_dist_y = {
+        let obj_depth = {
           use aethervk_oshal_rlib::math::vector::Vector4;
-          view_pos.y().abs()
+          -view_pos.y()
         };
 
         // Bounding radius: full axis + arrowhead envelope.
@@ -552,8 +582,7 @@ impl SceneConversionExt2 for Scene {
           continue;
         }
 
-        let obj_near = (obj_dist_y - gizmo_radius * DEPTH_MARGIN).max(DEPTH_NEAR_FLOOR);
-        let obj_far = obj_dist_y + gizmo_radius * DEPTH_MARGIN;
+        let (obj_near, obj_far) = fit_slab(obj_depth, gizmo_radius);
 
         let e = per_layer_depth.entry(*layer_idx).or_insert((f64::MAX, f64::NEG_INFINITY));
         e.0 = e.0.min(obj_near);
@@ -592,7 +621,7 @@ impl SceneConversionExt2 for Scene {
         let l = get_or_create_layer!(layer_idx);
 
         // capture for debug
-        aethervk_oshal_rlib::log!("StaticMesh {} pushed to layer {}", mesh.mesh.id, layer_idx);
+        // aethervk_oshal_rlib::log!("StaticMesh {} pushed to layer {}", mesh.mesh.id, layer_idx);
         l.draw_calls.push(DrawCall::from_handles_and_matrix(
           res,
           mesh.mesh.indices.len() as u32,
@@ -724,7 +753,7 @@ impl SceneConversionExt2 for Scene {
           }
         }
       } else {
-        aethervk_oshal_rlib::log!("GPU Upload Error creating/getting gizmo resources")
+        aethervk_oshal_rlib::log!("GPU Upload Error creating/getting gizmo resources");
       }
     }
 
@@ -753,8 +782,6 @@ impl SceneConversionExt2 for Scene {
       traj_batch_buffers.entry(layer_idx).or_default().push((id, traj, mat));
     }
 
-    // 9. Particles
-    let current_time_scaled_300ths = us_to_300ths_rounded(scaled_time_us);
     let proj_scale = match cam_comp.projection {
       CameraProjection::Perspective { fov, .. } => {
         // Formula: (ViewportHeight / 2) / tan(FOV / 2)
@@ -766,70 +793,25 @@ impl SceneConversionExt2 for Scene {
       }
     };
 
+    // 9. Particles (dust v3): ranges and evaluation parameters come from the host state the
+    // logic thread maintains; positions are evaluated by `frame::prepare_dust` before the pass
     let dust_calls = extract!(ParticleSystemComponent, |id, ps| {
-      const DISPERSION_RATE_MULTIPLIER: f32 = 0.5;
-
-      let v_exp_m_per_s = ps.emission_params.start_velocity_std * DISPERSION_RATE_MULTIPLIER;
-
-      let ttl_300ths_f32 = us_to_300ths_rounded(ps.ttl_us) as f32;
-      let cluster_params = ps
-        .emission_params
-        .cluster_params(mean_intra_grains_distance_mm, min_cumulated_mass_g);
-
-      let single_grain_mass_g = {
-        use core::f32::consts::PI;
-        let radius_cm = (ps.emission_params.diametre_um * 0.5) * 1e-4;
-        let volume_cm3 = (4.0 / 3.0) * PI * radius_cm.powi(3);
-        volume_cm3 * ps.emission_params.density_gcm3
-      };
-
-      let num_spots = (cluster_params.mass_g / single_grain_mass_g) as u32;
-
-      // calculate cluster diametre in metres (double precision)
-      let grain_radius_m = (ps.emission_params.diametre_um * 0.5) * 1e-6;
-      debug_assert!(grain_radius_m > f32::EPSILON);
-      // calculate cluster diametre in metres (double precision)
-      let cluster_diameter_m = 2.0 * cluster_params.radius_m;
-
-      // Micro Radius in UV Space: spans 1.0 across the cluster diametre
-      let micro_radius = if cluster_diameter_m > 0.0 {
-        (grain_radius_m / cluster_diameter_m) as f32
-      } else {
-        0.0
-      };
-
+      let state = ps.dust.lock().draw_state()?;
       compute_rte(self, id).map(|(layer_idx, rte)| {
-        // convert from metres to correct unit of measurement based on layer
-        let (cluster_diameter_units, v_exp_units_per_s) = if layer_idx == 0 {
-          // Macro layer: convert metres to AU
-          (
-            cluster_diameter_m / 149_597_870_700.0,
-            v_exp_m_per_s / 149_597_870_700.0,
-          )
+        let units_per_m = if layer_idx == 0 {
+          1.0 / crate::scene::dust::AU_M
         } else {
-          // Micro layer: convert metres to km
-          (cluster_diameter_m / 1000.0, v_exp_m_per_s / 1000.0)
+          1.0e-3 // micro layers are in km
         };
-        // Macro scale in screen space by assuming base pixel size at distance = 1.0 units
-        let macro_scale = (cluster_diameter_units * proj_scale) as f32;
-
-        // Dispersion rate (Screen space pixel expansion per 1/300th second at distance = 1.0 units)
-        // Shader computes: expandedScale = macroScale + (age * dispersionRate)
-        let dispersion_rate = (v_exp_units_per_s / 300.0) * proj_scale;
-
         (
           layer_idx,
           DustDrawCall {
             entity_id: id,
-            rte_mat_f64: rte.to_mat4_f64(),
+            rte_position: [rte.position.x(), rte.position.y(), rte.position.z()],
+            units_per_m,
             stream_color: ps.draw_params.stream_color,
-            chunk_offset: 0,
-            current_time: current_time_scaled_300ths,
-            max_ttl: ttl_300ths_f32,
-            macro_scale,
-            micro_radius,
-            num_spots,
-            dispersion_rate,
+            state,
+            render_address: 0,
           },
         )
       })
@@ -966,7 +948,7 @@ impl SceneConversionExt2 for Scene {
           }
         }
       } else {
-        aethervk_oshal_rlib::log!("GPU Error getting grid resources")
+        aethervk_oshal_rlib::log!("GPU Error getting grid resources");
       }
     }
 
@@ -989,7 +971,7 @@ impl SceneConversionExt2 for Scene {
             color_bottom,
           });
       } else {
-        aethervk_oshal_rlib::log!("GPU Error getting background resources")
+        aethervk_oshal_rlib::log!("GPU Error getting background resources");
       }
     }
 
@@ -1426,7 +1408,7 @@ impl SceneConversionExt2 for Scene {
           camera_data.absolute_pos.z(),
           camera_yaw_deg(&camera_data.rot),
           camera_pitch_deg(&camera_data.rot),
-        )
+        );
       }
     }
 

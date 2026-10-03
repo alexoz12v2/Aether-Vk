@@ -23,16 +23,22 @@ pub static USE_PRINTF_SHADERS: core::sync::atomic::AtomicBool =
 pub static READBACK_DIAGNOSTICS: core::sync::atomic::AtomicBool =
   core::sync::atomic::AtomicBool::new(false);
 
-/// Particle System v2: boolean to switch from v1 to v2. All
-/// ['crate::gpu_backends::vulkan::physics::VulkanComputeKernels'] instantiated when this is true
-/// will use the new particle system simulation path, when combined with the new simulation
-/// function
-pub static USE_PARTICLE_SYSTEM_V2: core::sync::atomic::AtomicBool =
+/// When true, dust emission and evaluation run on the CPU with the reference implementation
+/// ([`crate::scene::dust`]) instead of `dust_emit.comp` / `dust_propagate.comp`; only drawing
+/// stays on the GPU. Activated by setting `AETHERVK_PARTICLES_CPU=1` at startup.
+pub static USE_CPU_PARTICLES: core::sync::atomic::AtomicBool =
   core::sync::atomic::AtomicBool::new(false);
 
-/// Enables the V2 particle system physics pipelines
-pub fn enable_particle_system_v2() {
-  USE_PARTICLE_SYSTEM_V2.store(true, core::sync::atomic::Ordering::Relaxed);
+/// Activates the CPU particle simulation path. Call once at startup.
+pub fn enable_cpu_particles() {
+  USE_CPU_PARTICLES.store(true, core::sync::atomic::Ordering::Relaxed);
+  aethervk_oshal_rlib::log!("[Physics] CPU particle simulation mode ENABLED.");
+}
+
+/// Returns `true` when `AETHERVK_PARTICLES_CPU=1` was set at startup.
+#[inline]
+pub fn is_cpu_particles_mode() -> bool {
+  USE_CPU_PARTICLES.load(core::sync::atomic::Ordering::Relaxed)
 }
 
 /// Configuration parameters for the physics pipeline
@@ -49,19 +55,11 @@ pub struct PhysicsPipelines {
   /// Pipeline Layout shared by all pipelines
   pub pipeline_layout: vk::PipelineLayout,
 
-  // ── New Particle System ───────────────────────────────────────────────────
-  pub new_particles_compact_reset: vk::Pipeline,
-  /// Constrained to a workgroup size of 64, because Since `PCHUNK_VEC4_SIZE` is 64, every thread
-  /// processes one `vec4`. It's a perfect 1 to 1 mapping. It still works on smaller or bigger
-  /// sizes, but with smaller, the workgroup does a stride loop, while on bigger excess threads
-  /// sleep on the `barrier()`
-  pub new_particles_emit: vk::Pipeline,
-  pub new_particles_compact: vk::Pipeline,
-  pub apply_emitters_direct_new: vk::Pipeline,
-  pub integrate_particles_p1_p2_new: vk::Pipeline,
-  pub integrate_particles_p4_5_new: vk::Pipeline,
-  pub new_particles_offset_particles: vk::Pipeline,
-  pub reset_particles: vk::Pipeline,
+  // ── Dust v3 (see `crate::scene::dust`) ────────────────────────────────────
+  /// writes one batch of immutable cluster records into a ring (`dust_emit.comp`, wg 64)
+  pub dust_emit: vk::Pipeline,
+  /// per-frame closed-form Kepler evaluation of the live ring range (`dust_propagate.comp`, wg 64)
+  pub dust_propagate: vk::Pipeline,
 
   /// SPIR-V-reflected push constant block size per pipeline.
   /// Used by `debug_assert!` in dispatch helpers to catch size mismatches
@@ -267,9 +265,18 @@ impl PhysicsPipelines {
       alloc::format!("{}/sim", base_dir)
     };
 
-    #[cfg(all(test, not(target_vendor = "apple")))]
+    #[cfg(all(
+      not(test),
+      any(debug_assertions, feature = "shader_debug_sync"),
+      not(target_vendor = "apple")
+    ))]
     let use_debug = USE_PRINTF_SHADERS.load(core::sync::atomic::Ordering::Relaxed);
-    #[cfg(not(all(test, not(target_vendor = "apple"))))]
+    
+    #[cfg(not(all(
+      not(test),
+      any(debug_assertions, feature = "shader_debug_sync"),
+      not(target_vendor = "apple")
+    )))]
     let use_debug = false;
 
     // Helper to unwrap (Pipeline, pc_size) — stores pc_size, returns pipeline
@@ -319,6 +326,7 @@ impl PhysicsPipelines {
     // mk_wg!  → throughput shaders: CPU picks wg{sg}, GPU uses the bare .spv (LOCAL_SIZE_X=128).
     // mk_wg_sg! → one-subgroup-per-WG shaders (BVH builders, gravity): always picks wg{sg}
     //             so LOCAL_SIZE_X == SUBGROUP_SIZE on every platform.
+    #[allow(unused_macros)]
     macro_rules! mk_wg {
       ($stem:expr) => {{
         let mut path;
@@ -363,6 +371,7 @@ impl PhysicsPipelines {
     }
     // For shaders that need LOCAL_SIZE_X == SUBGROUP_SIZE (one subgroup per WG):
     // BVH builders use gl_SubgroupID == 0 and subgroup ops over the full WG.
+    #[allow(unused_macros)]
     macro_rules! mk_wg_sg {
       ($stem:expr) => {{
         let wg_suffix = match subgroup_size {
@@ -389,6 +398,7 @@ impl PhysicsPipelines {
     // Used for the five particle shaders that use float16_t / f16vec4 arithmetic.
     //   NATIVE_FLOAT16=1 (capable hardware): loads the bare .comp[.wgN].spv
     //   NATIVE_FLOAT16=0 (Pascal / GTX10xx): loads .comp.nofp16[.wgN].spv
+    #[allow(unused_macros)]
     macro_rules! mk_wg_fp {
       ($stem:expr) => {{
         let fp16_infix = if has_native_float16 { "" } else { ".nofp16" };
@@ -437,15 +447,9 @@ impl PhysicsPipelines {
     let res: GpuResult<Self> = (|| {
       Ok(Self {
         pipeline_layout,
-        // ── New Particle System ──────────────────────────────────────────────────────────────────────────────
-        new_particles_compact_reset: mk_wg!("new_particles_compact_reset.comp"),
-        new_particles_emit: mk_wg_fp!("new_particles_emit.comp", "wg64"),
-        new_particles_compact: mk_wg!("new_particles_compact.comp", "wg64"),
-        apply_emitters_direct_new: mk_wg_fp!("apply_emitters_direct_new.comp"),
-        integrate_particles_p1_p2_new: mk_wg_fp!("integrate_particles_p1_p2_new.comp"),
-        integrate_particles_p4_5_new: mk_wg_fp!("integrate_particles_p4_5_new.comp"),
-        new_particles_offset_particles: mk_wg_fp!("new_particles_offset_particles.comp"),
-        reset_particles: mk_wg!("reset_particles.comp"),
+        // ── Dust v3 ──────────────────────────────────────────────────────────────
+        dust_emit: mk!("dust_emit.comp.spv"),
+        dust_propagate: mk!("dust_propagate.comp.spv"),
         pc_sizes,
         wg_sizes,
         subgroup_size,
@@ -481,15 +485,8 @@ impl PhysicsPipelines {
   }
 
   pub fn discard(&mut self, discard_pool: &resources::DiscardPool, timeline: u64) {
-    // ── New Particle System ───────────────────────────────────────────────────
-    discard_pool.discard_pipeline(self.new_particles_compact_reset, timeline);
-    discard_pool.discard_pipeline(self.new_particles_emit, timeline);
-    discard_pool.discard_pipeline(self.new_particles_compact, timeline);
-    discard_pool.discard_pipeline(self.apply_emitters_direct_new, timeline);
-    discard_pool.discard_pipeline(self.integrate_particles_p1_p2_new, timeline);
-    discard_pool.discard_pipeline(self.integrate_particles_p4_5_new, timeline);
-    discard_pool.discard_pipeline(self.new_particles_offset_particles, timeline);
-    discard_pool.discard_pipeline(self.reset_particles, timeline);
+    discard_pool.discard_pipeline(self.dust_emit, timeline);
+    discard_pool.discard_pipeline(self.dust_propagate, timeline);
 
     discard_pool.discard_pipeline_layout(self.pipeline_layout, timeline);
   }

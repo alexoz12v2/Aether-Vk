@@ -40,6 +40,7 @@ pub mod animation;
 pub mod camera;
 pub mod indicator;
 pub mod interaction;
+pub mod dust;
 pub mod particles;
 pub mod referential_indicator;
 pub mod script_components;

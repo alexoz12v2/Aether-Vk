@@ -159,7 +159,9 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     ITabStateService<TimelineSession> timelineSessionService,
     CometConfigService cometConfigService,
     Viewport3DViewModel viewportVm,
-    ISchedulerProvider schedulerProvider
+    ISchedulerProvider schedulerProvider,
+    TimelineService timelineService,
+    ITabStateService<ModelSession> modelSessionService
   )
   {
     _cameraService = cameraService;
@@ -171,7 +173,7 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     _cometConfigService = cometConfigService;
     _viewportVm = viewportVm;
 #if DEBUG
-    RenderDoc        = new RenderDocCaptureViewModel(runtimeService);
+    RenderDoc        = new RenderDocCaptureViewModel(runtimeService, timelineService, modelSessionService, schedulerProvider);
     DebugTelemetry   = new DebugTelemetryPanelViewModel(runtimeService);
     CameraMatrixDebug = new CameraMatrixDebugViewModel(runtimeService, schedulerProvider);
     CometOrbitDebug   = new CometOrbitDebugViewModel();
@@ -206,16 +208,10 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     _cometConfigService
       .NucleusRadiusKm.Subscribe(r =>
       {
-        // The MeshScaleMultiplierComponent multiplies the 1-meter base radius by the comet radius (in km).
-        // So if nucleus is 2km, the jet mesh is scaled by 2000 compared to 1 meter? Wait!
-        // The FFI sets: multiplier = ps_dto.nucleus_radius_km
-        // The base mesh is 0.001 (1 meter)
-        // Wait, 0.001 is 1 meter? Yes, 0.001 km = 1 meter.
-        // If multiplier = nucleus_radius_km, then scale is 0.001 * 2 = 0.002 km = 2 meters.
-        // So the Jet Preview size is linearly proportional to the comet radius.
-        // A 1km comet gives a 1 meter jet preview.
-        // So Jet Preview Size = Nucleus Radius * 1 meter.
-        JetPreviewSizeString = r > 0 ? $"Jet Preview Size: {r:F1} m" : string.Empty;
+        // The Rust native runtime sets the jet preview sphere radius to exactly 1/50th of the nucleus radius.
+        // radius_km / 50.0 = preview_radius_km
+        // To display in meters, we multiply by 1000: (r / 50.0) * 1000 = r * 20.0 meters.
+        JetPreviewSizeString = r > 0 ? $"Jet Preview Size: {r * 20.0:F1} m" : string.Empty;
         
         if (_currentProjection is { } p)
         {

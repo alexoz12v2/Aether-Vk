@@ -104,7 +104,7 @@ pub(crate) struct QueueFamilyPoolsInner {
   pub free: heapless::Vec<TrackedPool, MAX_FREE_TRACKED_POOL>,
   /// fast mapping to know which pool a recycled command buffer belongs to
   pub buffer_to_pool:
-    heapless::index_map::FnvIndexMap<vk::CommandBuffer, u64, MAX_BUFFERS_PER_POOL>,
+    heapless::index_map::FnvIndexMap<vk::CommandBuffer, u64, 2048>,
   pub next_pool_id: u64,
 }
 
@@ -230,6 +230,9 @@ impl QueueFamilyPoolsInner {
       // Back up the current `active` pool in the next stot in pending.
       copy_nonoverlapping(active_ptr, pending_dst_ptr, 1);
 
+      // Zero the memory before creating the new pool
+      core::ptr::write_bytes(active_ptr as *mut u8, 0, core::mem::size_of::<TrackedPool>());
+
       // Attempt to initialize the new pool directly into the now-available slot in `active`
       match TrackedPool::new_at_ptr(active_ptr, device, queue_family_index, id) {
         Ok(_) => {
@@ -330,7 +333,7 @@ impl QueueFamilyPools {
             core::ptr::addr_of_mut!((*ptr).active),
             device,
             queue_family_index,
-            id,
+            0,
           )?;
 
           // 3. other fields are zero initialized, which should be a valid state for `heapless` structs
@@ -396,7 +399,9 @@ impl CommandPools {
           .rotate_active_pool()
           .map_err(|s| GpuError::BackendSpecific(s.to_string()))?;
       } else {
-        inner.move_active_to_pending_and_allocate_new(device, queue_family_index, id.0)?;
+        let new_pool_id = inner.next_pool_id;
+        inner.next_pool_id += 1;
+        inner.move_active_to_pending_and_allocate_new(device, queue_family_index, new_pool_id)?;
       }
     }
     let active = &mut inner.active;

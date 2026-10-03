@@ -24,6 +24,7 @@ pub mod core_api;
 pub mod debug_perf;
 pub mod logic_thread;
 pub mod misc_api;
+pub mod render_stall_watcher;
 pub mod render_thread;
 pub mod reposition;
 pub mod scene_api;
@@ -45,13 +46,25 @@ pub struct SimulationContext {
   pub threads: structs::SimulationThreads,
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub logic_state: Arc<RwLock<structs::LogicState>>,
-  texture_cache: Arc<RwLock<TextureCache>>,
+  texture_cache: Arc<RwLock<crate::simulation::texture_cache::TextureCache>>,
   pub audio_mixer: Arc<RwLock<crate::audio::AudioMixer>>,
+  /// Set to `true` while any scene simulation is running; read by the stall-watcher thread.
+  #[cfg(all(target_os = "linux", debug_assertions))]
+  pub stall_watcher_simulation_active: Arc<core::sync::atomic::AtomicBool>,
+  /// Set to `true` on shutdown to stop the stall-watcher thread.
+  #[cfg(all(target_os = "linux", debug_assertions))]
+  pub stall_watcher_shutdown: Arc<core::sync::atomic::AtomicBool>,
 }
 
 impl Drop for SimulationContext {
   fn drop(&mut self) {
     oshal::log!("SimulationContext drop started");
+    // Signal the stall-watcher thread to exit.
+    #[cfg(all(target_os = "linux", debug_assertions))]
+    {
+      self.stall_watcher_simulation_active.store(false, core::sync::atomic::Ordering::Release);
+      self.stall_watcher_shutdown.store(true, core::sync::atomic::Ordering::Release);
+    }
     // Now drop from top to bottom all members
   }
 }
@@ -87,14 +100,15 @@ impl SimulationContext {
 
     if let Some(scene) = scene_lock {
       let read_scene = scene.read();
-      if read_scene.active_physics_task.load(core::sync::atomic::Ordering::Acquire)
-        || read_scene.pending_cross_sync
-      {
+      if read_scene.active_physics_task.load(core::sync::atomic::Ordering::Acquire) {
         oshal::log!("Cannot start simulation: previous syncs are not resolved.");
         return false;
       }
 
       read_scene.simulation_running.store(true, core::sync::atomic::Ordering::Release);
+      // Arm the stall-watcher so it monitors GPU submits while simulation is active.
+      #[cfg(all(target_os = "linux", debug_assertions))]
+      self.stall_watcher_simulation_active.store(true, core::sync::atomic::Ordering::Release);
     } else {
       return false;
     }
@@ -171,6 +185,9 @@ impl SimulationContext {
           .read()
           .simulation_running
           .store(false, core::sync::atomic::Ordering::Release);
+        // Disarm the stall-watcher; GPU submits are expected to stop.
+        #[cfg(all(target_os = "linux", debug_assertions))]
+        self.stall_watcher_simulation_active.store(false, core::sync::atomic::Ordering::Release);
       } else {
         return false;
       }
@@ -185,15 +202,9 @@ impl SimulationContext {
     let mut spins = 0;
     // Spin wait without holding the outer DashMap or scenes lock
     loop {
-      let (active_physics, pending_cross) = {
-        let scene = scene_clone.read();
-        (
-          scene.active_physics_task.load(core::sync::atomic::Ordering::Acquire),
-          scene.pending_cross_sync,
-        )
-      };
+      let active_physics = scene_clone.read().active_physics_task.load(core::sync::atomic::Ordering::Acquire);
 
-      if !active_physics && !pending_cross {
+      if !active_physics {
         break;
       }
       

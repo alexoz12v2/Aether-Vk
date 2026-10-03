@@ -1484,6 +1484,10 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     }
   }
 
+#if DEBUG
+  public static Action<string>? ShaderDebugLogAction;
+#endif
+
   [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
   private static unsafe void LoggerCallbackThunk(byte* utf8Message)
   {
@@ -1492,6 +1496,14 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     try
     {
       var msg = StringUtils.GetStringFromUtf8(utf8Message) ?? "Unknown log message";
+      
+#if DEBUG
+      if (msg.StartsWith("VULKAN INFO:"))
+      {
+          ShaderDebugLogAction?.Invoke(msg);
+      }
+#endif
+
       _loggerCallback.Invoke(msg);
     }
     catch

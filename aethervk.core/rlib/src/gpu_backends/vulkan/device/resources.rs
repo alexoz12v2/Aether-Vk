@@ -3514,7 +3514,7 @@ impl ArchetypeArenaCreate for DustRenderArchetypeArena {
     let push_constant_range = vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
-      .size(core::mem::size_of::<gpu::new_particles::DustPushConstants>() as _);
+      .size(core::mem::size_of::<crate::scene::dust::DustDrawPushConstants>() as _);
     let create_info = vk::PipelineLayoutCreateInfo::default()
       .push_constant_ranges(core::slice::from_ref(&push_constant_range));
 

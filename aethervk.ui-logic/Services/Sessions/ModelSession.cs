@@ -74,11 +74,11 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
 
   /// <summary>
   /// Heliocentric distance cut-off in AU beyond which emission drops to zero.
-  /// Must be ≥ 3 AU. Default: 5 AU.
+  /// Must be ≥ 3 AU. Default: 15 AU.
   /// Corresponds to <c>ParticleSystemEmitParams.afrho_cutoff_au</c>.
   /// </summary>
   [ObservableProperty]
-  private float _afrhoCutoffAu = 5.0f;
+  private float _afrhoCutoffAu = 15.0f;
 
   /// <summary>
   /// Upper clamp on the Afρ value to prevent infinite emission at small distances, in cm.

@@ -116,6 +116,8 @@ public static class ServiceCollectionExtensions
       var timelineSessionService = sp.GetRequiredService<ITabStateService<TimelineSession>>();
       var cometConfigService = sp.GetRequiredService<CometConfigService>();
       var schedulerProvider = sp.GetRequiredService<ISchedulerProvider>();
+      var timelineService = sp.GetRequiredService<TimelineService>();
+      var modelSessionService = sp.GetRequiredService<ITabStateService<ModelSession>>();
       return vm => new ViewportOverlayViewModel(
         cameraService,
         runtimeService,
@@ -125,7 +127,9 @@ public static class ServiceCollectionExtensions
         timelineSessionService,
         cometConfigService,
         vm,
-        schedulerProvider
+        schedulerProvider,
+        timelineService,
+        modelSessionService
       );
     });
   }

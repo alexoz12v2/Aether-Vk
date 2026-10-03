@@ -454,7 +454,6 @@ fn test_pause_simulation_timeout_safety() {
   {
     let scene = ctx.get_scene(scene_id).unwrap();
     let mut scene_write = scene.write();
-    scene_write.pending_cross_sync = true;
     scene_write
       .active_physics_task
       .store(true, core::sync::atomic::Ordering::Relaxed);
@@ -477,7 +476,6 @@ fn test_pause_simulation_timeout_safety() {
   {
     let scene = ctx.get_scene(scene_id).unwrap();
     let mut scene_write = scene.write();
-    scene_write.pending_cross_sync = false;
     scene_write
       .active_physics_task
       .store(false, core::sync::atomic::Ordering::Relaxed);

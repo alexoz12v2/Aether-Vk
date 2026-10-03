@@ -783,18 +783,80 @@ pub struct SphereGizmoBatchCall {
   pub data_ptr: u64,
 }
 
+/// Dust v3 draw of one particle system. Cluster positions are metres relative to the jet, in root
+/// (= reference frame) axes, so the model matrix is translation × uniform scale only.
 #[derive(Clone)]
 pub struct DustDrawCall {
   pub entity_id: EntityId,
-  pub rte_mat_f64: aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64,
+  /// jet position relative to the eye, in layer units (km on micro layers, AU on the macro one)
+  pub rte_position: [f64; 3],
+  /// layer units per metre
+  pub units_per_m: f64,
   pub stream_color: [f32; 4],
-  pub chunk_offset: u32,
-  pub current_time: u32,
-  pub max_ttl: f32, // still 300ths, but float so vertex shader doesn't need to perform conversion
-  pub macro_scale: f32,
-  pub micro_radius: f32,
-  pub num_spots: u32,
-  pub dispersion_rate: f32,
+  pub state: crate::scene::dust::DustDrawState,
+  /// compact render buffer address, filled by [`prepare_dust`]
+  pub render_address: u64,
+}
+
+/// Dust exposure gain (`AETHERVK_DUST_GAIN`, default 0.7): mean child peak intensity at the
+/// minimum splat size, before the stream color alpha (falls off as `MIN_PX / r_px`).
+fn dust_gain() -> f32 {
+  use core::sync::atomic::{AtomicU32, Ordering};
+  static GAIN_BITS: AtomicU32 = AtomicU32::new(u32::MAX);
+  let bits = GAIN_BITS.load(Ordering::Relaxed);
+  if bits != u32::MAX {
+    return f32::from_bits(bits);
+  }
+  let g = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_GAIN")
+    .and_then(|s| s.trim().parse::<f32>().ok())
+    .filter(|g| g.is_finite() && *g > 0.0)
+    .unwrap_or(0.7);
+  GAIN_BITS.store(g.to_bits(), Ordering::Relaxed);
+  g
+}
+
+/// `(|x scale|, |y scale|)` of an engine projection matrix (clip units per view unit at depth 1,
+/// or per unit for orthographic). The engine is Z-up: view depth runs along −Y and screen y comes
+/// from view **z**, so the y scale is `cols[2].y`, not `cols[1].y` (which is 0). See
+/// `Mat4x4f64::perspective_vk_reverse_z` / `orthographic_vk_reverse_z`.
+pub fn dust_projection_scales(proj: &aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64) -> (f32, f32) {
+  (proj.cols[0].x().abs() as f32, proj.cols[2].y().abs() as f32)
+}
+
+/// Evaluates every dust system of the frame (compute dispatches on the graphics command buffer,
+/// or CPU evaluation in CPU particle mode) and fills `render_address` of each call. Must be
+/// recorded before the render pass begins. Returns the compute timeline value the graphics submit
+/// must wait on (0 = none): the newest emission included in the drawn ranges.
+pub fn prepare_dust(
+  device: &crate::gpu_backends::vulkan::device::Device,
+  cmd: ash::vk::CommandBuffer,
+  render_scene: &mut RenderScene,
+) -> GpuResult<u64> {
+  let mut wait = 0u64;
+  let mut any = false;
+  for layer in render_scene.depth_layers.iter_mut() {
+    for call in layer.dust_calls.iter_mut() {
+      if !any {
+        device.cmd_dust_pre_propagate_barrier(cmd);
+        any = true;
+      }
+      let s = &call.state;
+      match device.cmd_dust_propagate(cmd, call.entity_id.as_ffi(), s.first_slot, s.live_count, &s.frame) {
+        Ok(addr) => {
+          call.render_address = addr;
+          wait = wait.max(s.compute_wait);
+        }
+        Err(e) => {
+          aethervk_oshal_rlib::log!("[Dust] propagate failed for {:?}: {}", call.entity_id, e);
+          call.state.live_count = 0;
+        }
+      }
+    }
+  }
+  if any {
+    device.cmd_dust_post_propagate_barrier(cmd);
+  }
+  Ok(wait)
 }
 
 pub struct RenderLayer {
@@ -1316,6 +1378,7 @@ pub fn do_draw_dust_batch(
   handle: PresentationEngineHandle,
   camera: &CameraRenderData,
   draw_calls: &[DustDrawCall],
+  window_extent: [u32; 2],
 ) -> GpuResult<()> {
   if draw_calls.is_empty() {
     return Ok(());
@@ -1327,42 +1390,44 @@ pub fn do_draw_dust_batch(
 
   let cmd = device.get_cmd(cmd_buffer)?;
 
+  let gain = dust_gain();
+  let mut view_rot_only_f64 = camera.view_f64;
+  view_rot_only_f64.cols[3] =
+    aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(0.0, 0.0, 0.0, 1.0);
+  let view_proj_f64 = camera.proj_f64 * view_rot_only_f64;
+  let (p00, p11) = dust_projection_scales(&camera.proj_f64);
   for call in draw_calls {
-    // Large World Coordinates (LWC) Camera Relative Transformation
-    // Proj * ViewRot * RelativeModel
-    let mut view_rot_only_f64 = camera.view_f64;
-    view_rot_only_f64.cols[3] =
-      aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(0.0, 0.0, 0.0, 1.0);
-    let mvp_f64 = camera.proj_f64 * view_rot_only_f64 * call.rte_mat_f64;
-    let mut pc = gpu::new_particles::DustPushConstants {
-      global_particle_buffer: 0, // populated by Device
-      particle_page_table: 0,    // populated by Device
-      view_proj: mvp_f64.to_mat4_f32().into(),
-      stream_color: call.stream_color,
-      chunk_offset: call.chunk_offset,
-      current_time: call.current_time,
-      max_ttl: call.max_ttl,
-      macro_scale: call.macro_scale,
-      micro_radius: call.micro_radius,
-      num_spots: call.num_spots,
-      dispersion_rate: call.dispersion_rate,
-      _pad: 0,
+    if call.state.live_count == 0 || call.render_address == 0 {
+      continue;
+    }
+    // Large World Coordinates (LWC): Proj * ViewRot * Translate(jet RTE) * Scale(units per metre)
+    use aethervk_oshal_rlib::math::{matrix::mat4f64::Mat4x4f64, vector::vec4f64::Vec4f64};
+    let u = call.units_per_m;
+    let model = Mat4x4f64::from_cols(
+      Vec4f64::from_components(u, 0.0, 0.0, 0.0),
+      Vec4f64::from_components(0.0, u, 0.0, 0.0),
+      Vec4f64::from_components(0.0, 0.0, u, 0.0),
+      Vec4f64::from_components(call.rte_position[0], call.rte_position[1], call.rte_position[2], 1.0),
+    );
+    let mvp_f64 = view_proj_f64 * model;
+    let children = crate::scene::dust::render_children(call.state.capacity, call.state.live_count);
+    let mean_child_flux = (call.state.mean_cluster_flux / children as f32).max(1e-30);
+    let pc = crate::scene::dust::DustDrawPushConstants {
+      render: call.render_address,
+      children,
+      live_count: call.state.live_count,
+      mvp: mvp_f64.to_mat4_f32().into(),
+      color: [
+        call.stream_color[0],
+        call.stream_color[1],
+        call.stream_color[2],
+        gain * call.stream_color[3] / mean_child_flux,
+      ],
+      anti_sun_g: call.state.anti_sun_g,
+      params: [u as f32, p00, p11, 2.0 / window_extent[1].max(1) as f32],
     };
-
-    // 2. Feed the GPU-managed buffers intto the push constant
-    // The device uses EntityId as the particle system ID
-    match device.complete_graphics_particle_push_constant(call.entity_id.as_ffi(), &mut pc) {
-      Ok(indirect_buffer) => {
-        // 3. Issue the dispatch
-        device.cmd_draw_particle_system(cmd, indirect_buffer, &pc)?;
-      }
-      Err(e) => {
-        aethervk_oshal_rlib::log!(
-          "Skipping dust draw call for {:?} due to error: '{}'",
-          call.entity_id,
-          e
-        );
-      }
+    if let Err(e) = device.cmd_dust_draw(cmd, &pc) {
+      aethervk_oshal_rlib::log!("Skipping dust draw call for {:?} due to error: '{}'", call.entity_id, e);
     }
   }
   Ok(())
@@ -1484,7 +1549,11 @@ pub fn render_frame(
     micro_far: micro_layer.map(|l| l.far as f32).unwrap_or(10.0),
     macro_scale: macro_layer.map(|l| l.frame_scale).unwrap_or(1.0),
     micro_scale: micro_layer.map(|l| l.frame_scale).unwrap_or(1.0),
-    _pad: [0; 2],
+    is_orthographic: matches!(
+      render_scene.camera_data.projection_params,
+      CameraProjectionParams::Orthographic { .. }
+    ) as u32,
+    _pad: 0,
   };
   device.draw_composite(cmd_buffer, handle, &constants)?;
 
@@ -1576,7 +1645,8 @@ fn draw_layer_content(
   // so the per-mesh body-fixed direction subtraction and normalization always happen,
   // producing a unit-length lightDir in the shader.
   //
-  // The sun's SunDrawCall is now in its own micro layer (layer_index=1).
+  // The sun's SunDrawCall is in its own micro layer (layer_index=2), separate from the
+  // comet/planet layer (1) so the Sun's AU-scale depth range doesn't collapse km-scale depth.
   // Other micro layers that contain no SunDrawCall fall back to the already-frame-scaled
   // f32 sun_pos (cast to f64). This guarantees sun_pos_f64_km is Some(_) for every
   // directional draw and the normalize below runs.
@@ -1738,6 +1808,7 @@ fn draw_layer_content(
       handle,
       &layer_camera,
       &layer.dust_calls,
+      render_scene.window_extent,
     )?;
   }
 
@@ -1810,5 +1881,46 @@ mod camera_render_data_tests {
       expected_m00,
       m00
     );
+  }
+}
+
+#[cfg(test)]
+mod dust_projection_tests {
+  use super::dust_projection_scales;
+  use aethervk_oshal_rlib::math::{
+    matrix::mat4f64::Mat4x4f64,
+    vector::{Vector4, vec4f64::Vec4f64},
+  };
+
+  /// |Δndc| for a one-unit view-space step `dir` at view depth `d` (engine view: depth along −Y)
+  fn ndc_step(proj: &Mat4x4f64, d: f64, dir: [f64; 3]) -> (f64, f64) {
+    let a = *proj * Vec4f64::from_components(0.0, -d, 0.0, 1.0);
+    let b = *proj * Vec4f64::from_components(dir[0], -d + dir[1], dir[2], 1.0);
+    ((b.x() / b.w() - a.x() / a.w()).abs(), (b.y() / b.w() - a.y() / a.w()).abs())
+  }
+
+  #[test]
+  fn dust_scales_match_engine_perspective() {
+    let proj = Mat4x4f64::perspective_vk_reverse_z(60f64.to_radians(), 1.5, 0.1, 1000.0);
+    let (sx, sy) = dust_projection_scales(&proj);
+    assert!(sx > 0.0 && sy > 0.0, "scales must be non zero: {sx} {sy}");
+    for d in [1.0, 10.0, 250.0] {
+      let (dx, _) = ndc_step(&proj, d, [1.0, 0.0, 0.0]);
+      let (_, dy) = ndc_step(&proj, d, [0.0, 0.0, 1.0]); // screen y comes from view z
+      assert!((dx - sx as f64 / d).abs() < 1e-6 * dx.max(1e-12), "x at {d}: {dx} vs {}", sx as f64 / d);
+      assert!((dy - sy as f64 / d).abs() < 1e-6 * dy.max(1e-12), "y at {d}: {dy} vs {}", sy as f64 / d);
+    }
+    // P00 / P11 = 1 / aspect (used by dust.vert to convert pixels to NDC in x)
+    assert!(((sx / sy) as f64 - 1.0 / 1.5).abs() < 1e-6);
+  }
+
+  #[test]
+  fn dust_scales_match_engine_orthographic() {
+    let proj = Mat4x4f64::orthographic_vk_reverse_z(-15.0, 15.0, -10.0, 10.0, 0.1, 100.0);
+    let (sx, sy) = dust_projection_scales(&proj);
+    assert!(sx > 0.0 && sy > 0.0, "scales must be non zero: {sx} {sy}");
+    let (dx, _) = ndc_step(&proj, 5.0, [1.0, 0.0, 0.0]);
+    let (_, dy) = ndc_step(&proj, 5.0, [0.0, 0.0, 1.0]);
+    assert!((dx - sx as f64).abs() < 1e-6 * dx && (dy - sy as f64).abs() < 1e-6 * dy, "{dx} {sx} / {dy} {sy}");
   }
 }

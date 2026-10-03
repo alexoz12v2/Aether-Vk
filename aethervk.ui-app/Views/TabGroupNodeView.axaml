@@ -1,4 +1,4 @@
-<UserControl xmlns="https://github.com/avaloniaui"
+<UserControl x:Name="RootControl" xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -90,7 +90,7 @@
                                 HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                                 Background="Transparent" BorderThickness="0"
                                 ToolTip.Tip="Close Tab"
-                                Command="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).CloseTabCommand}"
+                                Command="{Binding #RootControl.((vm:TabGroupNodeViewModel)DataContext).CloseTabCommand}"
                                 CommandParameter="{Binding}" />
                       </StackPanel>
                     </Border>
@@ -108,9 +108,9 @@
                   <MenuFlyout ItemsSource="{Binding AvailableTabs}">
                     <!-- Here DataContext is TabDescriptor -->
                     <MenuFlyout.ItemContainerTheme>
-                      <ControlTheme TargetType="MenuItem" x:DataType="vm:TabDescriptor">
+                      <ControlTheme TargetType="MenuItem" x:DataType="vm:TabDescriptor" BasedOn="{StaticResource {x:Type MenuItem}}">
                         <Setter Property="Header" Value="{Binding Header}" />
-                        <Setter Property="Command" Value="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).AddNewTabCommand}" />
+                        <Setter Property="Command" Value="{Binding $parent[MenuFlyoutPresenter].((vm:TabGroupNodeViewModel)DataContext).AddNewTabCommand}" />
                         <Setter Property="CommandParameter" Value="{Binding TabType}" />
                       </ControlTheme>
                     </MenuFlyout.ItemContainerTheme>
@@ -128,9 +128,9 @@
                   <MenuFlyout ItemsSource="{Binding AvailableTabs}">
                     <!-- Here DataContext is TabDescriptor -->
                     <MenuFlyout.ItemContainerTheme>
-                      <ControlTheme TargetType="MenuItem" x:DataType="vm:TabDescriptor">
+                      <ControlTheme TargetType="MenuItem" x:DataType="vm:TabDescriptor" BasedOn="{StaticResource {x:Type MenuItem}}">
                         <Setter Property="Header" Value="{Binding Header}" />
-                        <Setter Property="Command" Value="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).ChangeSelectedTabCommand}" />
+                        <Setter Property="Command" Value="{Binding $parent[MenuFlyoutPresenter].((vm:TabGroupNodeViewModel)DataContext).ChangeSelectedTabCommand}" />
                         <Setter Property="CommandParameter" Value="{Binding TabType}" />
                       </ControlTheme>
                     </MenuFlyout.ItemContainerTheme>
@@ -158,7 +158,7 @@
         <controls:CommonTabHeader
             Grid.Row="0"
             DataContext="{Binding SelectedTab}"
-            IsVisible="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).SelectedTab,
+            IsVisible="{Binding #RootControl.((vm:TabGroupNodeViewModel)DataContext).SelectedTab,
                 Converter={x:Static converters:IsStatefulTabConverter.Instance}}"/>
 
         <!-- Tab content view resolved via DataTemplate / ViewLocator -->
@@ -176,9 +176,9 @@
             <MenuFlyout ItemsSource="{Binding AvailableTabs}">
               <!-- Here DataContext is TabDescriptor -->
               <MenuFlyout.ItemContainerTheme>
-                <ControlTheme TargetType="MenuItem" x:DataType="vm:TabDescriptor">
+                <ControlTheme TargetType="MenuItem" x:DataType="vm:TabDescriptor" BasedOn="{StaticResource {x:Type MenuItem}}">
                   <Setter Property="Header" Value="{Binding Header}" />
-                  <Setter Property="Command" Value="{Binding $parent[UserControl].((vm:TabGroupNodeViewModel)DataContext).AddNewTabCommand}" />
+                  <Setter Property="Command" Value="{Binding $parent[MenuFlyoutPresenter].((vm:TabGroupNodeViewModel)DataContext).AddNewTabCommand}" />
                   <Setter Property="CommandParameter" Value="{Binding TabType}" />
                 </ControlTheme>
               </MenuFlyout.ItemContainerTheme>

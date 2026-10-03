@@ -89,7 +89,9 @@ public class Viewport3DViewModelTests
         new Mock<ITabStateService<TimelineSession>>().Object,
         cometConfig,
         vm,
-        new AetherVk.Logic.Tests.Mocks.TestSchedulerProvider()
+        new AetherVk.Logic.Tests.Mocks.TestSchedulerProvider(),
+        timeline,
+        new Mock<ITabStateService<ModelSession>>().Object
       ).Object;
 
     var platformWindowService = new Mock<IPlatformWindowService>().Object;

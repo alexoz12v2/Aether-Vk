@@ -68,8 +68,9 @@ public unsafe class LinuxNativeInputHandler(IntPtr handle, string handleDescript
       TaskCreationOptions.LongRunning,
       TaskScheduler.Default);
 
-    if (_traceLevel >= TraceLevel.Basic)
-      Log(TraceLevel.Basic, $"Started LinuxNativeInputHandler for handle 0x{_handle:X}, display 0x{_display:X}");
+    // TODO: Uncommend after fixing everything
+    // if (_traceLevel >= TraceLevel.Basic)
+    //  Log(TraceLevel.Basic, $"Started LinuxNativeInputHandler for handle 0x{_handle:X}, display 0x{_display:X}");
 
     return true;
   }
@@ -263,8 +264,9 @@ public unsafe class LinuxNativeInputHandler(IntPtr handle, string handleDescript
     const uint Button3Mask = 1 << 10;
 
     // Diagnostic: log every raw event type. Change to Basic for active debugging.
-    if (_traceLevel >= TraceLevel.Verbose)
-      Log(TraceLevel.Verbose, $"XEvent type={ev.type} ({(int)ev.type})");
+    // TODO Once vulkan fixed renenable
+    // if (_traceLevel >= TraceLevel.Verbose)
+    //   Log(TraceLevel.Verbose, $"XEvent type={ev.type} ({(int)ev.type})");
 
     switch (ev.type)
     {
