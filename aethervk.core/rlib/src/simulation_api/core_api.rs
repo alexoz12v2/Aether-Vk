@@ -2,14 +2,14 @@
 
 use crate::{
   expect_scene,
-  gpu::{self, ASSET_DIR, PresentationEngineHandle, WeakRenderFrontendExt},
+  gpu::{self, PresentationEngineHandle, WeakRenderFrontendExt, ASSET_DIR},
   scene::{CameraComponent, EntityId, TransformComponent},
   simulation::texture_cache::TextureCache,
   simulation_api::{
-    SimulationContext,
     structs::{
       LogicState, LogicThreadParams, RenderThreadParams, SimulationSceneData, SimulationThreads,
     },
+    SimulationContext,
   },
   types::{EngineError, EngineResult, GpuError},
 };
@@ -70,8 +70,12 @@ impl SimulationContext {
       addr_of_mut!((*ptr).audio_mixer).write(Arc::clone(&audio_mixer));
 
       // TODO test: if this fails, render frontend should drop.
-      let render_thread_params =
-        RenderThreadParams::new(backend, error_debug_callback, render_thread_thread_pool, Arc::new(core::sync::atomic::AtomicBool::new(false)))?;
+      let render_thread_params = RenderThreadParams::new(
+        backend,
+        error_debug_callback,
+        render_thread_thread_pool,
+        Arc::new(core::sync::atomic::AtomicBool::new(false)),
+      )?;
       let render_proxy = (
         render_thread_params.render_frontend.weak_self(),
         render_thread_params.render_device_handle,
@@ -90,6 +94,23 @@ impl SimulationContext {
 
       // 4. Render Proxy
       addr_of_mut!((*ptr).render_proxy).write(render_proxy);
+
+      // 5. Stall-watcher (Linux debug only)
+      #[cfg(all(target_os = "linux", debug_assertions))]
+      {
+        let sim_active = Arc::new(core::sync::atomic::AtomicBool::new(false));
+        let shutdown = Arc::new(core::sync::atomic::AtomicBool::new(false));
+        addr_of_mut!((*ptr).stall_watcher_simulation_active).write(Arc::clone(&sim_active));
+        addr_of_mut!((*ptr).stall_watcher_shutdown).write(Arc::clone(&shutdown));
+        crate::simulation_api::render_stall_watcher::spawn_render_stall_watcher(
+          sim_active, shutdown,
+        );
+      }
+
+      // 6. CPU particle simulation mode (activated by AETHERVK_PARTICLES_CPU=1)
+      if aethervk_oshal_rlib::os::env::var("AETHERVK_PARTICLES_CPU").as_deref() == Some("1") {
+        crate::gpu_backends::vulkan::physics::enable_cpu_particles();
+      }
 
       Ok(boxed_uninit.assume_init())
     }

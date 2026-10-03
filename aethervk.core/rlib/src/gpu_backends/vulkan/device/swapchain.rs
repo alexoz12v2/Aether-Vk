@@ -1358,9 +1358,24 @@ impl WindowedPresentationState {
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<AcquireResult> {
     if let Some((w, h)) = self.pending_resize.take() {
-      self.width = w;
-      self.height = h;
-      self.recreate_swapchain(device, true, self.physical_device, rollback)?;
+      // Defer swapchain recreation during an active RenderDoc capture to avoid
+      // deadlocking against RenderDoc's GL overlay thread via the nvidia GL/VK
+      // internal mutex (vkCreateSwapchainKHR holds it; glXMakeContextCurrent waits).
+      #[cfg(debug_assertions)]
+      if crate::gpu_backends::vulkan::renderdoc::is_frame_capturing() {
+        self.pending_resize = Some((w, h)); // put it back
+        // fall through and let the normal acquire proceed with the old swapchain
+      } else {
+        self.width = w;
+        self.height = h;
+        self.recreate_swapchain(device, true, self.physical_device, rollback)?;
+      }
+      #[cfg(not(debug_assertions))]
+      {
+        self.width = w;
+        self.height = h;
+        self.recreate_swapchain(device, true, self.physical_device, rollback)?;
+      }
     }
 
     let images_count = self.images.len();

@@ -17,12 +17,31 @@ float hash(vec3 p) {
   return fract(sin(dot(p, vec3(12.9898, 4.1414, 5.7777))) * 43758.5453);
 }
 
-// Simple Fractional Brownian Motion for the Milky Way dust
+// Smooth (trilinearly interpolated) value noise in [0,1]. The previous version
+// fed `hash(p)` directly into the fbm, which is uncorrelated per-texel white noise,
+// so the galactic band came out as a grainy streak rather than soft diffuse glow.
+float valueNoise(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float n000 = hash(i + vec3(0, 0, 0));
+  float n100 = hash(i + vec3(1, 0, 0));
+  float n010 = hash(i + vec3(0, 1, 0));
+  float n110 = hash(i + vec3(1, 1, 0));
+  float n001 = hash(i + vec3(0, 0, 1));
+  float n101 = hash(i + vec3(1, 0, 1));
+  float n011 = hash(i + vec3(0, 1, 1));
+  float n111 = hash(i + vec3(1, 1, 1));
+  return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+             mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+}
+
+// Fractional Brownian Motion for the Milky Way glow, range roughly [-1,1]
 float fbm(vec3 p) {
   float f = 0.0;
   float w = 0.5;
   for (int i = 0; i < 4; i++) {
-    f += w * (hash(p) * 2.0 - 1.0); // Rough noise, replace with Simplex if more quality needed
+    f += w * (valueNoise(p) * 2.0 - 1.0);
     p *= 2.0;
     w *= 0.5;
   }
@@ -38,9 +57,12 @@ vec3 generateSpace(vec3 dir) {
   vec3 stars = vec3(isStar * starBrightness);
 
   // 2. Milky Way Band (oriented along XZ plane)
-  float galacticPlane = exp(-pow(dir.y * 3.0, 2.0));
-  float dust = smoothstep(0.0, 1.0, fbm(dir * 10.0) * 0.5 + 0.5);
-  vec3 milkyWay = vec3(0.1, 0.2, 0.4) * galacticPlane * dust * 0.8;
+  // Kept deliberately faint, wide and neutral (slightly warm white, like integrated
+  // starlight) so it cannot be mistaken for a comet dust/ion tail. It used to be a
+  // narrow saturated blue band (vec3(0.1,0.2,0.4) * 0.8) that read as a blue streak.
+  float galacticPlane = exp(-pow(dir.y * 2.0, 2.0));
+  float glow = smoothstep(0.0, 1.0, fbm(dir * 4.0) * 0.5 + 0.5);
+  vec3 milkyWay = vec3(1.0, 0.96, 0.90) * galacticPlane * glow * 0.025;
 
   return stars + milkyWay;
 }

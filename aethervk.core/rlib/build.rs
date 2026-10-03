@@ -76,6 +76,11 @@ fn main() {
         "Shader compilation failed!\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
         stdout, stderr
       );
+    } else {
+      let stdout = String::from_utf8_lossy(&output.stdout);
+      for line in stdout.lines() {
+        println!("cargo:warning={}", line);
+      }
     }
   }
 

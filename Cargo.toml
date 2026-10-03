@@ -2,7 +2,9 @@
 members = [
     "aethervk.core/cdylib",
     "aethervk.core/rlib",
-    "aethervk.oshal/rlib", "aethervk.utils/avkscene", "aethervk.utils/spktool", "aethervk.utils/tpc2pca"
+    "aethervk.oshal/rlib", "aethervk.utils/avkscene", "aethervk.utils/spktool", "aethervk.utils/tpc2pca",
+    "aethervk.ui-logic-rs",
+    "aethervk.ui-app-rs",
 ]
 default-members = [
     "aethervk.core/cdylib",
@@ -15,6 +17,7 @@ exclude = [
     "external/gltf",
     "external/vk-mem",
     "external/spirv-reflect",
+    "external/egui-ash-renderer",
 ]
 
 # settings to strip and optimize release

@@ -301,7 +301,7 @@ public class ModelTabViewModelTests
     Assert.Equal(1.0f, session.ScatteringEfficiency);
     Assert.Equal(100f, session.Afrho0Cm);
     Assert.Equal(2.0f, session.AfrhoPower);
-    Assert.Equal(5.0f, session.AfrhoCutoffAu);
+    Assert.Equal(15.0f, session.AfrhoCutoffAu);
     Assert.Equal(100_000f, session.AfrhoMaxValueCm);
   }
 

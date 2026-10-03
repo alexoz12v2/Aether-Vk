@@ -1,0 +1,79 @@
+// @assets/sim/dust_emit.comp
+//
+// Dust v3 emission: one thread per cluster of the batch. Writes immutable `DustCluster` records
+// into the ring at slot (first_index + j) & ring_mask. Mirror of `dust::emit_cluster`.
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+#include "dust_common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    DustClusterBuffer clusters;
+    DustBatchRef      batch;
+} pc;
+
+void main() {
+    uint j = gl_GlobalInvocationID.x;
+    DustBatch B = pc.batch.b;
+    if (j >= B.count) return;
+
+    uint global = B.first_index + j;
+    uint h0 = dust_pcg(B.seed ^ dust_pcg(global));
+    uint h1 = dust_pcg(h0);
+    uint h2 = dust_pcg(h1);
+    uint h3 = dust_pcg(h2);
+    uint h4 = dust_pcg(h3);
+
+    // staggered emission time: one sample per time stratum
+    float count = float(max(B.count, 1u));
+    float u_t = (float(j) + dust_u01(h0)) / count;
+    vec2 t_start = vec2(B.comet_r_t_hi.w, B.comet_r_t_lo.w);
+    vec2 dur = vec2(B.comet_v_dur_hi.w, B.comet_v_dur_lo.w);
+    vec2 dt_in = df_mul_f(dur, u_t);
+    vec2 t0 = df_add(t_start, dt_in);
+
+    // jet location at t0 (comet free fall over the sub-interval)
+    Df3 rc0, vc0, rc, vc;
+    rc0.hi = B.comet_r_t_hi.xyz;   rc0.lo = B.comet_r_t_lo.xyz;
+    vc0.hi = B.comet_v_dur_hi.xyz; vc0.lo = B.comet_v_dur_lo.xyz;
+    dust_kepler(rc0, vc0, DF_SUN_MU, dt_in, rc, vc);
+
+    // direction: cone in the particle-system frame, rotated with the interpolated attitude
+    vec3 dir_ps = dust_sample_cone(dust_u01(h1), dust_u01(h2), B.jet_dir_aperture.xyz, B.jet_dir_aperture.w);
+    vec4 rot = dust_nlerp(B.rot_start, B.rot_end, u_t);
+    vec3 dir = dust_qrot(rot, dir_ps);
+    // night side: reflect across the terminator plane
+    vec3 sun = -normalize(rc.hi);
+    float ds = dot(dir, sun);
+    if (ds < 0.0) dir -= 2.0 * ds * sun;
+
+    // grain size: log-uniform proposal, rank-1 lattice
+    float s_min = B.size_params.x;
+    float s_max = B.size_params.y;
+    float u_s = dust_lattice_u01(j, B.mass_params.z);
+    float s_um = s_min * pow(s_max / s_min, u_s);
+    float beta = B.vel_params.w / s_um;
+
+    // importance weight against the mass distribution
+    float mass_g = B.mass_params.x / count * B.size_params.w * pow(s_um, B.size_params.z);
+
+    // ejection speed
+    float v_mean = B.vel_params.x * sqrt(B.vel_params.z / s_um);
+    float v_ej = max(v_mean * (1.0 + B.vel_params.y * dust_gauss(dust_u01(h3), dust_u01(h4))), 0.0);
+    float sigma_v = max(v_mean * B.vel_params.y, v_mean * DUST_CHILD_SIGMA_V_REL);
+
+    Df3 v0 = df3_add(vc, df3_from_f32(dir * v_ej));
+
+    float rho_g_m3 = B.mass_params.y * 1.0e6;
+    float xsec_per_g = 3.0 / (4.0 * rho_g_m3 * s_um * 1.0e-6);
+    float dbeta = beta * 0.5 * log(s_max / s_min) / count;
+
+    DustCluster C;
+    C.r0_t0_hi   = vec4(rc.hi, t0.x);
+    C.r0_t0_lo   = vec4(rc.lo, t0.y);
+    C.v0_hi_beta = vec4(v0.hi, beta);
+    C.v0_lo_mass = vec4(v0.lo, mass_g);
+    C.misc       = vec4(sigma_v, s_um, xsec_per_g, dbeta);
+    pc.clusters.c[global & B.ring_mask] = C;
+}

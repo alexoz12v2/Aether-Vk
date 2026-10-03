@@ -153,12 +153,13 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
     );
     var state = new InputState(isPressed, GetModifiers(e.KeyModifiers));
 
-    Log($"[Router] Key {(isPressed ? "↓" : "↑")} chord={chord.DisplayText} focused={focused.GetType().Name}");
+    // TODO uncomment logs when vulkan debugged
+    // Log($"[Router] Key {(isPressed ? "↓" : "↑")} chord={chord.DisplayText} focused={focused.GetType().Name}");
 
     var (handler, action) = RouteAction(focused, chord, state);
     if (handler != null && action != null)
     {
-      Log($"[Router] → dispatching action={action.Value.Id} to {handler.GetType().Name}");
+      // Log($"[Router] → dispatching action={action.Value.Id} to {handler.GetType().Name}");
       handler.Process(action.Value, state);
       e.Handled = true;
     }
@@ -241,7 +242,9 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
         Pointer: pointerStr
       );
 
-      Log($"[Router] Pointer {(isPressed ? "↓" : "↑")} chord={chord.DisplayText} visual={visual.GetType().Name}");
+      Log(
+        $"[Router] Pointer {(isPressed ? "↓" : "↑")} chord={chord.DisplayText} visual={visual.GetType().Name}"
+      );
 
       var (handler, action) = RouteAction(target, chord, state);
       if (handler != null && action != null)
@@ -272,7 +275,7 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
     InputState state
   )
   {
-    Log($"[Router] RouteAction: start walk from {focused.GetType().Name} for chord={chord.DisplayText}");
+    // Log($"[Router] RouteAction: start walk from {focused.GetType().Name} for chord={chord.DisplayText}");
     var current = focused;
     while (current != null)
     {
@@ -284,12 +287,12 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
         string cName = c.Name ?? "(null)";
         string ctx = contextId ?? "(none)";
         string hName = handler != null ? handler.GetType().Name : "null";
-        Log($"[Router]   walk node={c.GetType().Name} name={cName} contextId={ctx} handler={hName}");
+        // Log($"[Router]   walk node={c.GetType().Name} name={cName} contextId={ctx} handler={hName}");
 
         if (!string.IsNullOrEmpty(contextId) && handler != null)
         {
           var action = _registry.Resolve(contextId, chord);
-          Log($"[Router]   resolved context={contextId} ({c.GetType().Name}) → {(action.HasValue ? $"action={action.Value.Id}" : "no binding")}");
+          // Log($"[Router]   resolved context={contextId} ({c.GetType().Name}) → {(action.HasValue ? $"action={action.Value.Id}" : "no binding")}");
           if (action is { } resolved)
           {
             return (handler, resolved);
@@ -314,13 +317,15 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
     // The Rx Buffer timer fires this callback on a TP worker — dispatch back to UI thread.
     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
     {
-      Log($"[Router] RouteNativeComposed contextId={contextId} chord={chord.DisplayText} state.IsPressed={state.IsPressed}");
+      //Log(
+      //  $"[Router] RouteNativeComposed contextId={contextId} chord={chord.DisplayText} state.IsPressed={state.IsPressed}"
+      //);
       // Search across all attached windows (main + all overlay windows).
       // Stop as soon as the contextId is found in one window's visual tree.
       bool found = false;
       foreach (var window in _attachedWindows)
       {
-        Log($"[Router]   searching in window: {window.GetType().Name}");
+        // Log($"[Router]   searching in window: {window.GetType().Name}");
         if (FindAndDispatch(window, contextId, chord, state))
         {
           found = true;
@@ -345,17 +350,21 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
     {
       var id = ActionContext.GetId(c);
       var handler = ActionContext.GetHandler(c);
-      Log($"[Router]   walk node={c.GetType().Name} name={c.Name ?? "(null)"} id={id ?? "(none)"} handler={(handler != null ? handler.GetType().Name : "null")}");
+      // Log(
+      //   $"[Router]   walk node={c.GetType().Name} name={c.Name ?? "(null)"} id={id ?? "(none)"} handler={(handler != null ? handler.GetType().Name : "null")}"
+      // );
       if (id == contextId && handler != null)
       {
         if (_registry.Resolve(contextId, chord) is { } action)
         {
-          Log($"[Router] FindAndDispatch context={contextId} → action={action.Id}");
+          // Log($"[Router] FindAndDispatch context={contextId} → action={action.Id}");
           handler.Process(action, state);
         }
         else
         {
-          Log($"[Router] FindAndDispatch context={contextId} chord={chord.DisplayText} → no binding in registry");
+          Log(
+            $"[Router] FindAndDispatch context={contextId} chord={chord.DisplayText} → no binding in registry"
+          );
         }
         return true; // found — stop walking
       }

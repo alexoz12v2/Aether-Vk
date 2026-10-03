@@ -118,9 +118,10 @@ impl log::Log for AvkLogger {
   }
 
   fn log(&self, record: &log::Record) {
-    if self.enabled(record.metadata()) {
-      aethervk_oshal_rlib::log!("[{}] {}", record.level(), record.args());
-    }
+    // TODO put false if you need anise logs
+    // if self.enabled(record.metadata()) {
+    //   aethervk_oshal_rlib::log!("[{}] {}", record.level(), record.args());
+    // }
   }
 
   fn flush(&self) {}

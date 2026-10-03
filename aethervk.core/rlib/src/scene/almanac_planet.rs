@@ -54,6 +54,17 @@ impl AlmanacPlanet {
     almanac: &AlmanacPackedData,
     rotational_model: Option<&crate::scene::BodyRotationalModel>,
   ) -> EngineResult<(DVec3, Quat)> {
+    self.step_with_velocity(epoch, almanac, rotational_model).map(|(p, _v, q)| (p, q))
+  }
+
+  /// Like [`Self::step`], also returning the heliocentric velocity (km/s, `SUN_ECLIPJ2000`):
+  /// `(position_km, velocity_km_s, rotation)`.
+  pub fn step_with_velocity(
+    &self,
+    epoch: anise::time::Epoch,
+    almanac: &AlmanacPackedData,
+    rotational_model: Option<&crate::scene::BodyRotationalModel>,
+  ) -> EngineResult<(DVec3, DVec3, Quat)> {
     let target_frame = crate::simulation::almanac::SUN_ECLIPJ2000;
 
     // fetch state. if rotational model is missing, then we demand it from IAU rotational model
@@ -152,6 +163,7 @@ impl AlmanacPlanet {
 
     Ok((
       DVec3::from_components(state.radius_km[0], state.radius_km[1], state.radius_km[2]),
+      DVec3::from_components(state.velocity_km_s[0], state.velocity_km_s[1], state.velocity_km_s[2]),
       q_world_from_bf,
     ))
   }

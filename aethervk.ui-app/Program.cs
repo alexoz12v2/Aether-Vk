@@ -73,6 +73,32 @@ class Program
       .Configure<App>()
       .UsePlatformDetect()
       .WithInterFont() // use Inter as default font everywhere
+      .With(
+        new X11PlatformOptions
+        {
+          RenderingMode =
+          [
+            // bad bugwith nvidia driver: deadlock on thread 31 between glXMakeContextCurrent and any
+            // "heavy" vulkan function (end cmd buffer, present, ..). Egl and Vulkan do not support
+            // consistently window transparency (tested on wayland gnome-shell with xwayland), so
+            // software is the only way
+            // X11RenderingMode.Glx,
+            X11RenderingMode.Software,
+          ],
+        }
+      )
+      // TODO: test on windows
+      .With(
+        new Win32PlatformOptions
+        {
+          RenderingMode =
+          [
+            Win32RenderingMode.Vulkan, // 1. Try vulkan first
+            Win32RenderingMode.AngleEgl, // 2. then go to default, angle translates to Direct3D 11
+            Win32RenderingMode.Software, // 3. CPU
+          ],
+        }
+      )
       .LogToTrace()
       .UseReactiveUI();
 }

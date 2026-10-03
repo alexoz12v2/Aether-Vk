@@ -161,14 +161,14 @@ fn ps_to_serial(
   entity: crate::scene::EntityId,
   ps: &ParticleSystemComponent,
 ) -> SerializedParticleSystemConfig {
-  use core::sync::atomic::Ordering;
   SerializedParticleSystemConfig {
     entity_ffi_id: entity.as_ffi(),
     emission_params: ps.emission_params,
     stream_color: ps.draw_params.stream_color,
     ttl_us: ps.ttl_us,
-    last_emission: ps.last_emission.load(Ordering::Relaxed),
-    last_compaction: ps.last_compaction.load(Ordering::Relaxed),
+    last_emission: ps.dust.lock().last_emit_unscaled_us,
+    // dust v3 has no compaction; kept for dump format compatibility
+    last_compaction: 0,
   }
 }
 
@@ -318,13 +318,12 @@ pub fn deserialize_scene(
         SerializedComponent::ParticleSystemConfig(psc) => {
           // Cannot freshly construct a ParticleSystemComponent from serialized data alone
           // (GPU `device_data` must already exist). Use with_component_mut to patch config fields.
-          use core::sync::atomic::Ordering;
+          // Dust clusters are not serialized: the restored system starts empty and regrows.
           scene.with_component_mut(entity, |ps: &mut ParticleSystemComponent| {
             ps.emission_params = psc.emission_params;
             ps.draw_params = ParticleSystemDrawParams { stream_color: psc.stream_color };
             ps.ttl_us = psc.ttl_us;
-            ps.last_emission.store(psc.last_emission, Ordering::Relaxed);
-            ps.last_compaction.store(psc.last_compaction, Ordering::Relaxed);
+            ps.dust.get_mut().reset();
           });
         }
 

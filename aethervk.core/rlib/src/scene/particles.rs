@@ -10,66 +10,10 @@ pub use v2::*;
 
 /// Note: tight coupling with vulkan here
 pub mod v2 {
-  use aethervk_oshal_rlib::math::vector::vec4::Quat;
-  use aethervk_oshal_rlib::os::time::us_to_300ths_rounded;
-
   use super::*;
-  use crate::gpu::compute_push_constants::NewParticlesEmitPushConstants;
   use crate::gpu_backends::vulkan;
-  use crate::scene::{EntityId, TransformComponent};
+  use crate::scene::EntityId;
   use crate::types::{EngineError, EngineResult};
-  use core::sync::atomic::AtomicI64;
-
-  /// Computes some parameters for emit shader. Left to fill are
-  /// - `global_particle_buffer`
-  /// - `particle_page_table`
-  /// - `free_list`
-  pub fn emit_push_constants_from_params(
-    emit_params: &ParticleSystemEmitParams,
-    mean_intra_grains_distance_mm: f32,
-    min_cumulated_mass_g: f32,
-    r_helio_au: f32,
-    ps_to_sun_dir: Vec3f32,
-    scaled_time_since_last_emission_us: timeus_t,
-    scaled_time_since_start_epoch_us: timeus_t,
-  ) -> NewParticlesEmitPushConstants {
-    use bytemuck::Zeroable;
-    // TODO when writing loop, this will be moved, cause we'll have these available already
-    let cluster_params =
-      emit_params.cluster_params(mean_intra_grains_distance_mm, min_cumulated_mass_g);
-    let beta = emit_params.beta();
-    let dust_production_rate_kgs = emit_params.dust_production_rate_kgs(r_helio_au);
-    let emit_count =
-      emit_params.emission_count(dust_production_rate_kgs, scaled_time_since_last_emission_us);
-    let current_time = us_to_300ths_rounded(scaled_time_since_start_epoch_us);
-    let velocity_dir = emit_params.particle_system_relative_cone_direction();
-
-    let mut push_constants = NewParticlesEmitPushConstants::zeroed();
-    push_constants.cone_dir_aperture = [
-      velocity_dir.x(),
-      velocity_dir.y(),
-      velocity_dir.z(),
-      emit_params.aperture_rad,
-    ];
-    push_constants.mass_vel_mean_std = [
-      cluster_params.mass_g,
-      cluster_params.mass_std(emit_params.mass_variability_perc),
-      emit_params.start_velocity_mean,
-      emit_params.start_velocity_std,
-    ];
-    push_constants.emit_count = emit_count;
-    push_constants.current_time = current_time;
-    push_constants.seed = emit_params.seed;
-    push_constants.radius = cluster_params.radius_m;
-    push_constants.sun_dir_and_beta = [
-      ps_to_sun_dir.x(),
-      ps_to_sun_dir.y(),
-      ps_to_sun_dir.z(),
-      beta,
-    ];
-
-    push_constants
-  }
 
   // TODO C# side: copy paste from a jet to another, godot edition has params shared
   #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, serde::Serialize, serde::Deserialize)]
@@ -164,38 +108,6 @@ pub mod v2 {
       Vec3f32::from_components(cos_lat * cos_lon, cos_lat * sin_lon, sin_lat)
     }
 
-    /// pass dust production rate as a parameter so user can cache it if needed
-    pub fn emission_count(
-      &self,
-      q_dust_kgs: f32,
-      scaled_time_since_last_emission_us: timeus_t,
-    ) -> u32 {
-      use aethervk_oshal_rlib::math::FloatLike;
-      // 4/3 * PI * r^3 * density
-      // done in f64 to avoid loss for very small values
-      let radius_cube_m3 = {
-        let x = (self.diametre_um as f64 / 2.0) * 1e-6;
-        x * x * x
-      };
-      let single_grain_mass_kg: f64 =
-        (4.0 / 3.0) * core::f64::consts::PI * radius_cube_m3 * (self.density_gcm3 as f64 * 1e3);
-
-      // i64 as time can store up to ~292271 years, so can't overflow. it is safe to cast timeus_t
-      // to f64 only if it is less than 2^53, which is ~285.4 years. should be always true.
-      #[cfg(debug_assertions)]
-      {
-        const MAX_SAFE_TIMEUS: i64 = 1_i64 << 53;
-        debug_assert!(scaled_time_since_last_emission_us <= MAX_SAFE_TIMEUS);
-      }
-      let scaled_delta_time_since_last_emission_s =
-        scaled_time_since_last_emission_us as f64 * 1e-6;
-
-      let particles_this_tick =
-        q_dust_kgs as f64 / single_grain_mass_kg * scaled_delta_time_since_last_emission_s;
-
-      <f64 as FloatLike>::floor(particles_this_tick) as u32
-    }
-
     /// Starting from dataset observation "Lowell Observatory Cometary Database" from NASA PDS
     /// (Planetary Data System) Small Bodies Node. Link: https://pdssbn.astro.umd.edu/holdings/ear-c-phot-3-rdr-lowell-comet-db-v1.0/dataset.shtml
     /// It contains various parameters for ~100 comets, including $A f \rho$, which has to do with
@@ -285,39 +197,6 @@ pub mod v2 {
       self.mass_g * mass_variability_perc
     }
 
-    /// `grain_diametre_um` from [`ParticleSystemEmitParams`]
-    pub fn compute_scales(
-      &self,
-      fov_y_rad: f32,
-      viewport_height_px: f32,
-      grain_diametre_um: f32,
-    ) -> ParticleSystemRenderScales {
-      use aethervk_oshal_rlib::math::FloatLike;
-      // 1. Compute macroScale (World to Screen-Space Pixels)
-      let tan_half_fov = <f32 as FloatLike>::tan(fov_y_rad * 0.5);
-      let macro_scale = (self.radius_m * viewport_height_px) / tan_half_fov;
-
-      // 2. Compute microRadius (World to UV-Space Ratio)
-      let grain_radius_m = (grain_diametre_um * 0.5) * 1e-6; // μm to m
-      let cluster_radius_m = self.radius_m;
-
-      // in the fragment shader, the cluster spans UV [0.0, 1.0], meaning its UV radius is 0.5
-      // we need to find the UV radius of a single grain through a simple proportion
-      let micro_radius_uv = 0.5 * (grain_radius_m / cluster_radius_m);
-
-      ParticleSystemRenderScales {
-        macro_scale,
-        micro_radius: micro_radius_uv,
-      }
-    }
-  }
-
-  #[derive(Debug, Clone, Copy, PartialEq)]
-  pub struct ParticleSystemRenderScales {
-    /// Screen Space size, in NDC coordinates, of a particle cluster/macro-particle `pc.macroScale`
-    pub macro_scale: f32,
-    /// Screen Space size, in NDC coordinates, of a dust grain. `pc.microRadius`
-    pub micro_radius: f32,
   }
 
   /// Owns the GPU-side resources for one particle system.
@@ -326,7 +205,7 @@ pub mod v2 {
   pub struct ParticleSystemResource {
     /// Strong reference to vulkan device resources
     pub device_data: (crate::gpu::RenderFrontend, crate::gpu::RenderDeviceHandle),
-    /// GPU-side key into `ParticleSystemManager::page_tables` (= ECS EntityId as u64)
+    /// key into the device's `DustManager` (= ECS EntityId as u64)
     pub id: u64,
   }
 
@@ -342,7 +221,7 @@ pub mod v2 {
           .kernels
           .next_submit_value
           .load(core::sync::atomic::Ordering::Relaxed);
-        vulkan_device.discard_particle_system(self.id, comp_release, gfx_release)
+        vulkan_device.discard_particle_system(self.id, gfx_release, comp_release)
       });
     }
   }
@@ -352,17 +231,12 @@ pub mod v2 {
     /// `Scene`: the clone holds a second reference to the same GPU allocations, preventing
     /// premature `discard_particle_system` until *all* clones are dropped.
     pub resource: alloc::sync::Arc<ParticleSystemResource>,
-    /// used to measure whether particle system should emit or not in next simulation step.
-    /// initialized at zero so that first simulation step always emits (timeus_t)
-    /// Unscaled time in μs
-    pub last_emission: AtomicI64,
-    /// used to measure whether we should perform compaction or not in the next step
-    /// gets initialized to zero in constructor, but if last_emission is zero, then in the first
-    /// emission this is assigned to the last_emission value, such that we skip a useless
-    /// compaction at start. Unscaled time in μs
-    pub last_compaction: AtomicI64,
-    /// time to live for each particle. used to compute `doomsday` in compaction shader.
-    /// Scaled time.
+    /// Dust v3 host state: ring bookkeeping, emission window, latest jet state. Written by the
+    /// logic thread, read by the render scene builder. A cloned (snapshotted) component carries
+    /// a copy, whose GPU ring content must be re-emitted on restore
+    /// (`DustHostState::ring.invalidate_gpu`).
+    pub dust: spin::Mutex<crate::scene::dust::DustHostState>,
+    /// time to live for each cluster. Scaled time.
     pub ttl_us: timeus_t,
     /// emission parameters
     pub emission_params: ParticleSystemEmitParams,
@@ -376,26 +250,23 @@ pub mod v2 {
     pub stream_color: [f32; 4],
   }
 
-  /// Not taking id cause it's the entity id
-  pub struct ParticleSystemComponentExtraction {
-    pub emission_params: ParticleSystemEmitParams,
-    pub last_compaction: timeus_t,
-    pub last_emission: timeus_t,
-    pub framerel_pos_km: Vec3f32,
-    pub framerel_rot: Quat,
-    pub ttl_us: timeus_t,
-  }
-
-  impl ParticleSystemComponentExtraction {
-    pub fn from_component(comp: &ParticleSystemComponent, t: &TransformComponent) -> Self {
-      use core::sync::atomic::Ordering;
-      Self {
-        emission_params: comp.emission_params,
-        last_compaction: comp.last_compaction.load(Ordering::Relaxed),
-        last_emission: comp.last_emission.load(Ordering::Relaxed),
-        framerel_pos_km: t.position,
-        framerel_rot: t.rotation,
-        ttl_us: comp.ttl_us,
+  impl ParticleSystemEmitParams {
+    /// Emission inputs for [`crate::scene::dust::DustHostState::tick`] at heliocentric distance
+    /// `r_helio_au`.
+    pub fn dust_emit_config(&self, r_helio_au: f32, ttl_us: timeus_t) -> crate::scene::dust::DustEmitConfig {
+      let dir = self.particle_system_relative_cone_direction();
+      crate::scene::dust::DustEmitConfig {
+        q_dust_kgs: self.dust_production_rate_kgs(r_helio_au) as f64,
+        ttl_s: ttl_us.max(0) as f64 * 1e-6,
+        dist: crate::scene::dust::SizeDistribution::from_diameter_um(self.diametre_um),
+        diameter_um: self.diametre_um,
+        density_gcm3: self.density_gcm3,
+        beta_ref: self.beta(),
+        v_mean: self.start_velocity_mean,
+        v_std: self.start_velocity_std,
+        jet_dir: [dir.x(), dir.y(), dir.z()],
+        aperture_rad: self.aperture_rad,
+        seed: self.seed,
       }
     }
   }
@@ -412,13 +283,11 @@ pub mod v2 {
 
   impl Clone for ParticleSystemComponent {
     fn clone(&self) -> Self {
-      use core::sync::atomic::Ordering::SeqCst;
       Self {
         resource: alloc::sync::Arc::clone(&self.resource),
-        last_emission: AtomicI64::new(self.last_emission.load(SeqCst)),
-        last_compaction: AtomicI64::new(self.last_compaction.load(SeqCst)),
+        dust: spin::Mutex::new(self.dust.lock().clone()),
         ttl_us: self.ttl_us,
-        emission_params: self.emission_params.clone(),
+        emission_params: self.emission_params,
         draw_params: self.draw_params.clone(),
       }
     }
@@ -441,13 +310,12 @@ pub mod v2 {
           vulkan_device.create_particle_system(entity_u64)
         })
         .map_err(EngineError::from)
-        .map(|_timeline| Self {
+        .map(|capacity| Self {
           resource: alloc::sync::Arc::new(ParticleSystemResource {
             device_data: (render_frontend, render_device_handle),
             id: entity_u64,
           }),
-          last_emission: AtomicI64::new(0),
-          last_compaction: AtomicI64::new(0),
+          dust: spin::Mutex::new(crate::scene::dust::DustHostState::new(capacity)),
           ttl_us,
           emission_params,
           draw_params,

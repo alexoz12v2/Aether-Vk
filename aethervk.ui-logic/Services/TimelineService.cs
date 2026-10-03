@@ -131,6 +131,16 @@ public sealed class TimelineService : IDisposable
   {
       _runtimeService.SnapshotSceneSync();
       bool ok = _runtimeService.StartSimulation(speed);
+      
+      // Defensively recover: if it failed to start, it might be due to a stale pending_cross_sync
+      // left over from an interrupted run (e.g. RenderDoc capture deadlock).
+      if (!ok)
+      {
+          _runtimeService.ResetSimulationSync();
+          _runtimeService.SnapshotSceneSync();
+          ok = _runtimeService.StartSimulation(speed);
+      }
+      
       if (ok) _isSimulationRunningSubject.OnNext(true);
       return ok;
   }

@@ -299,6 +299,7 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
     }
     #[cfg(not(test))]
     {
+      aethervk_oshal_rlib::os::debug::append_debug_printf(&alloc::format!("VULKAN INFO: {}\n", s));
       aethervk_oshal_rlib::log!("VULKAN INFO: {}", s);
     }
   }

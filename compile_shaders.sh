@@ -88,17 +88,6 @@ WG_VARIANT_SHADERS=(
     # Gravity / sorting
     barnes_hut.comp
     radix_sort.comp
-    # new particle system
-    apply_emitters_direct_new.comp
-    integrate_particles_p1_p2_new.comp
-    integrate_particles_p4_5_new.comp
-
-    new_particles_compact_reset.comp
-    new_particles_emit.comp
-    new_particles_compact.comp
-    new_particles_offset_particles.comp
-
-    reset_particles.comp
 )
 
 is_wg_variant() {
@@ -114,11 +103,6 @@ is_wg_variant() {
 # and fallback (.comp.nofp16[.wgN].spv) blobs. Buffer layout (f16vec4 fields in
 # ParticleChunkData) is unchanged in both — GL_EXT_shader_16bit_storage covers that.
 FLOAT16_VARIANT_SHADERS=(
-    apply_emitters_direct_new.comp
-    integrate_particles_p1_p2_new.comp
-    integrate_particles_p4_5_new.comp
-    new_particles_emit.comp
-    new_particles_offset_particles.comp
 )
 
 is_float16_variant() {

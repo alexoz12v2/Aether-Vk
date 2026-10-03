@@ -21,6 +21,8 @@ layout(push_constant, std430) uniform CompositePush {
     float microFar;
     float macroScale;
     float microScale;
+    uint  isOrthographic; // 1 = orthographic (linear depth), 0 = perspective
+    uint  _pad;
 };
 
 layout(location = 0) in vec2 inUV;
@@ -31,6 +33,11 @@ layout(location = 1) out vec2 finalGlobalDepth; // (layer_index_f32, local_dista
 // Reverse-Z:  depth = 1.0 -> at near plane,  depth = 0.0 -> at far plane.
 // Returns the physical distance from the camera.
 float linearizeReverseZ(float d, float near, float far) {
+    if (isOrthographic != 0u) {
+        // Orthographic reverse-Z: d = (far - dist) / (far - near)  (linear; near may be < 0)
+        return far - d * (far - near);
+    }
+    // Perspective reverse-Z: d = near * (far - dist) / (dist * (far - near))
     return (near * far) / mix(near, far, d);
 }
 
@@ -57,7 +64,10 @@ void main() {
     } else if (dMicro == 0.0 && cMicro.a > 0.0) {
         // Micro layer has color but no depth (e.g. wireframe gizmo, or depth was cleared
         // between layers) — blend over macro. Use gdMicro since micro content exists here.
-        outColor = vec4(mix(cMacro.rgb, cMicro.rgb, cMicro.a), max(cMacro.a, cMicro.a));
+        // The micro target is cleared to transparent black and blended "over" (or additively for
+        // dust), so its rgb is already premultiplied by alpha: premultiplied over, not mix()
+        // (which would multiply by alpha twice and wipe out faint content).
+        outColor = vec4(cMicro.rgb + cMacro.rgb * (1.0 - cMicro.a), max(cMacro.a, cMicro.a));
         finalGlobalDepth = gdMicro; // micro content present — prefer micro global depth
     } else if (dMacro == 0.0) {
         // Macro layer is empty, use Micro

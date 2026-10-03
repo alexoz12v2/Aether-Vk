@@ -383,11 +383,11 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer ParticleChu
     SFVEC4 velocityY[PCHUNK_VEC4_SIZE]; // in metres per second (m/s)
     SFVEC4 velocityZ[PCHUNK_VEC4_SIZE];
 
-    SFVEC4 invMass[PCHUNK_VEC4_SIZE]; // 1 / grams (1/g)
+    SFVEC4 mass[PCHUNK_VEC4_SIZE]; // grams (g). f16: super-particles stay <= 60 kg (MAX_SUPER_PARTICLE_MASS_G)
 
-    SFVEC4 forceX[PCHUNK_VEC4_SIZE];
-    SFVEC4 forceY[PCHUNK_VEC4_SIZE];
-    SFVEC4 forceZ[PCHUNK_VEC4_SIZE]; // in g * m / s^2
+    SFVEC4 forceX[PCHUNK_VEC4_SIZE]; // Note: Stores ACCELERATION
+    SFVEC4 forceY[PCHUNK_VEC4_SIZE]; // in mm/s^2 (scaled from m/s^2 by 1000.0)
+    SFVEC4 forceZ[PCHUNK_VEC4_SIZE]; 
 
     SFVEC4 beta[PCHUNK_VEC4_SIZE];
 

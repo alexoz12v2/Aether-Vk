@@ -100,6 +100,8 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
   params: *const CStartupParameters,
   out: *mut CStartupReturn,
 ) -> bool {
+  aethervk_oshal_rlib::os::debug::spawn_dedicated_console();
+
   if params.is_null() || out.is_null() {
     return false;
   }
@@ -1303,7 +1305,10 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
   };
 
   // TODO Add this as a function parameter in the jet common area
-  const JET_TTL_US: aethervk_oshal_rlib::os::time::timeus_t = 60_000_000_000i64;
+  // Dust v3: lifetime of a cluster (scaled). A tail needs weeks: at 5 AU radiation pressure moves
+  // a β = 0.2 grain ~90 km in 17 h but ~10⁶ km in 30 days. Cost is independent of it (the ring
+  // budget spreads over the TTL).
+  const JET_TTL_US: aethervk_oshal_rlib::os::time::timeus_t = 30 * 86_400 * 1_000_000i64;
 
   let render_frontend = match ctx_ref.render_frontend() {
     Some(rf) => rf,

@@ -430,6 +430,171 @@ mod unix_debug {
     }
   }
 
+  #[cfg(all(target_os = "linux", feature = "debug_gpu"))]
+  pub fn spawn_dedicated_console() {
+    unsafe {
+      let log_file = alloc::ffi::CString::new("/tmp/aethervk_gpu_debug.log").unwrap();
+      let fd = libc::open(log_file.as_ptr(), libc::O_CREAT | libc::O_WRONLY | libc::O_TRUNC, 0o666);
+      if fd >= 0 {
+        libc::close(fd); // Just create/truncate it, we don't redirect stdout anymore
+        
+        let pid = libc::fork();
+        if pid == 0 {
+          let term = alloc::ffi::CString::new("gnome-terminal").unwrap();
+          let arg1 = alloc::ffi::CString::new("--").unwrap();
+          let arg2 = alloc::ffi::CString::new("tail").unwrap();
+          let arg3 = alloc::ffi::CString::new("-f").unwrap();
+          let arg4 = alloc::ffi::CString::new("/tmp/aethervk_gpu_debug.log").unwrap();
+          
+          let mut args = [
+            term.as_ptr() as *mut libc::c_char,
+            arg1.as_ptr() as *mut libc::c_char,
+            arg2.as_ptr() as *mut libc::c_char,
+            arg3.as_ptr() as *mut libc::c_char,
+            arg4.as_ptr() as *mut libc::c_char,
+            core::ptr::null_mut()
+          ];
+          
+          libc::execvp(term.as_ptr(), args.as_ptr() as *const *const libc::c_char);
+          libc::_exit(1);
+        }
+      }
+    }
+  }
+
+  #[cfg(not(all(target_os = "linux", feature = "debug_gpu")))]
+  pub fn spawn_dedicated_console() {}
+
+  #[cfg(all(target_os = "linux", feature = "debug_gpu"))]
+  pub fn append_debug_printf(msg: &str) {
+    unsafe {
+      let log_file = alloc::ffi::CString::new("/tmp/aethervk_gpu_debug.log").unwrap();
+      let fd = libc::open(log_file.as_ptr(), libc::O_CREAT | libc::O_WRONLY | libc::O_APPEND, 0o666);
+      if fd >= 0 {
+        libc::write(fd, msg.as_ptr().cast(), msg.len());
+        libc::close(fd);
+      }
+    }
+  }
+
+  #[cfg(not(all(target_os = "linux", feature = "debug_gpu")))]
+  pub fn append_debug_printf(_msg: &str) {}
+
+  // ── Stall-watcher: automatic GDB backtrace dump ───────────────────────────
+
+  /// Forks a child that exec's `gdb --pid <self> --batch -ex "thread apply all bt"`,
+  /// pipes its stdout back into `oshal::log!` line by line, and writes the full
+  /// output to `/tmp/aethervk_stall_<pid>.txt`.
+  ///
+  /// Returns immediately (no panic) if `gdb` is not on PATH or ptrace is blocked.
+  /// Only available on Linux debug builds.
+  #[cfg(all(target_os = "linux", debug_assertions))]
+  pub fn dump_all_thread_backtraces_gdb() {
+    use alloc::format;
+
+    let pid = unsafe { libc::getpid() };
+    let out_path = format!("/tmp/aethervk_stall_{}.txt\0", pid);
+
+    crate::log!(
+      "[StallWatcher] Render stall detected — launching gdb on PID {}",
+      pid
+    );
+
+    let pid_str = alloc::ffi::CString::new(format!("{}", pid)).unwrap();
+    let argv: [*const libc::c_char; 9] = [
+      b"gdb\0".as_ptr().cast(),
+      b"--pid\0".as_ptr().cast(),
+      pid_str.as_ptr(),
+      b"--batch\0".as_ptr().cast(),
+      b"-ex\0".as_ptr().cast(),
+      b"set pagination off\0".as_ptr().cast(),
+      b"-ex\0".as_ptr().cast(),
+      b"thread apply all bt\0".as_ptr().cast(),
+      core::ptr::null(),
+    ];
+
+    let child = unsafe { libc::fork() };
+    if child < 0 {
+      crate::log!("[StallWatcher] fork() failed, errno={}", unsafe {
+        *libc::__errno_location()
+      });
+      return;
+    }
+
+    if child == 0 {
+      unsafe {
+        let fd = libc::open(
+          out_path.as_ptr().cast(),
+          libc::O_CREAT | libc::O_WRONLY | libc::O_TRUNC,
+          0o644u32,
+        );
+        if fd >= 0 {
+          libc::dup2(fd, libc::STDOUT_FILENO);
+          libc::dup2(fd, libc::STDERR_FILENO);
+          libc::close(fd);
+        }
+        libc::execvp(b"gdb\0".as_ptr().cast(), argv.as_ptr());
+        libc::_exit(127); // exec failed
+      }
+    }
+
+    // ── parent: wait for gdb to finish, then read the file ──
+    unsafe {
+      // Reap child with 15 s wall-clock timeout.
+      let deadline = libc::time(core::ptr::null_mut()) + 15;
+      loop {
+        let mut status = 0i32;
+        let r = libc::waitpid(child, &mut status, libc::WNOHANG);
+        if r != 0 {
+          break;
+        }
+        if libc::time(core::ptr::null_mut()) >= deadline {
+          libc::kill(child, libc::SIGKILL);
+          break;
+        }
+        libc::usleep(100_000);
+      }
+    }
+
+    let file_fd = unsafe { libc::open(out_path.as_ptr().cast(), libc::O_RDONLY, 0) };
+    if file_fd >= 0 {
+      let mut buf = [0u8; 256];
+      let mut line_buf = alloc::vec::Vec::<u8>::new();
+      loop {
+        let n = unsafe { libc::read(file_fd, buf.as_mut_ptr().cast(), buf.len()) };
+        if n <= 0 {
+          break;
+        }
+        let chunk = &buf[..n as usize];
+        for &byte in chunk {
+          if byte == b'\n' {
+            if let Ok(s) = core::str::from_utf8(&line_buf) {
+              crate::log!("[GDB] {}", s);
+            }
+            line_buf.clear();
+          } else {
+            line_buf.push(byte);
+          }
+        }
+      }
+      if !line_buf.is_empty() {
+        if let Ok(s) = core::str::from_utf8(&line_buf) {
+          crate::log!("[GDB] {}", s);
+        }
+      }
+      unsafe { libc::close(file_fd) };
+    }
+
+    crate::log!(
+      "[StallWatcher] GDB dump complete → /tmp/aethervk_stall_{}.txt",
+      pid
+    );
+  }
+
+  /// No-op on non-Linux or release builds.
+  #[cfg(not(all(target_os = "linux", debug_assertions)))]
+  pub fn dump_all_thread_backtraces_gdb() {}
+
   #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
   pub fn capture_aethervk_trace(skip: usize) -> Option<[usize; 4]> {
     unsafe extern "C" {

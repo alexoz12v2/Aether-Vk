@@ -245,7 +245,7 @@ impl SimulationContext {
           crate::scene::StaticMeshComponent {
             asset_path: alloc::string::String::from("__default_comet__"),
             mesh: alloc::sync::Arc::new(crate::simulation::comet::generate_uv_sphere(
-              2.0, 16, 16, 1.0, true,
+              2.0, 16, 16, 1.0, false,
             )),
             emissive_color: [0.0, 0.0, 0.0, 0.0],
             is_visible: false,
@@ -300,7 +300,12 @@ impl SimulationContext {
         frame_type: crate::scene::ReferenceFrameType::Micro,
         scale: 1.0 / AU_TO_KM_SUN,
         soi_radius: 5.0, // AU — trigger micro rendering within 5 AU of the sun
-        depth_layer: 1,
+        // Dedicated depth layer: the Sun must NOT share layer 1 with the comet/planet frames.
+        // The Sun's depth fit widens the layer far plane to the Sun distance (~1e8–1e9 km);
+        // in a shared layer this collapsed the comet's km-scale depth (especially with an
+        // orthographic camera, where every comet vertex quantised to z = 1.0 and sat on the
+        // near-clip boundary). Higher layer indices are drawn first, followed by a depth clear.
+        depth_layer: 2,
       },
     )?;
 

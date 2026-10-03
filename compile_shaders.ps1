@@ -56,26 +56,12 @@ $WgVariantShaders = @(
     "graph_coloring.comp",
     "lcp_solver.comp",
     "barnes_hut.comp",
-    "radix_sort.comp",
-    # new stuff
-    "apply_emitters_direct_new.comp",
-    "integrate_particles_p1_p2_new.comp",
-    "integrate_particles_p4_5_new.comp",
-    "new_particles_compact_reset.comp",
-    "new_particles_emit.comp",
-    "new_particles_compact.comp",
-    "new_particles_offset_particles.comp",
-    "reset_particles.comp"
+    "radix_sort.comp"
 )
 
 # Shaders that use float16_t / f16vec4 arithmetic (not just buffer layout).
 # Compiled with NATIVE_FLOAT16=1 (native) and NATIVE_FLOAT16=0 (.nofp16 fallback).
 $Float16VariantShaders = @(
-    "apply_emitters_direct_new.comp",
-    "integrate_particles_p1_p2_new.comp",
-    "integrate_particles_p4_5_new.comp",
-    "new_particles_emit.comp",
-    "new_particles_offset_particles.comp"
 )
 
 function Compile-One {
