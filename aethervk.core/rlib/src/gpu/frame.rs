@@ -1512,6 +1512,7 @@ pub fn do_draw_dust_batch(
   camera: &CameraRenderData,
   draw_calls: &[DustDrawCall],
   window_extent: [u32; 2],
+  dither: bool,
 ) -> GpuResult<()> {
   if draw_calls.is_empty() {
     return Ok(());
@@ -1553,7 +1554,12 @@ pub fn do_draw_dust_batch(
     let tau_ref = call.state.tau_ref.max(1e-30);
     let pc = crate::scene::dust::DustDrawPushConstants {
       render: call.render_address,
-      children,
+      children: children
+        | if dither {
+          crate::scene::dust::DUST_DITHER_FLAG
+        } else {
+          0
+        },
       live_count: call.state.live_count,
       mvp: mvp_f64.to_mat4_f32().into(),
       color: [
@@ -1956,13 +1962,19 @@ fn draw_layer_content(
   // particles here (transparency)
   if !layer.dust_calls.is_empty() {
     device.debug_label_insert(cmd_buffer, c"Particles", [0.8, 0.3, 0.1, 1.0]);
+    let vk_device: &crate::gpu_backends::vulkan::device::Device =
+      device.as_any().downcast_ref().unwrap();
+    // 8-bit targets: the macro layer always, the micro layer where RGBA16F is unsupported
+    let dither = layer.layer_index == 0
+      || vk_device.micro_color_format() != ash::vk::Format::R16G16B16A16_SFLOAT;
     do_draw_dust_batch(
-      device.as_any().downcast_ref().unwrap(),
+      vk_device,
       cmd_buffer,
       handle,
       &layer_camera,
       &layer.dust_calls,
       render_scene.window_extent,
+      dither,
     )?;
   }
 

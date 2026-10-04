@@ -9,6 +9,7 @@ layout(location = 3) in flat uint vTexId;
 layout(set = 0, binding = 0) uniform sampler2D trajectoryTextures[];
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec2 outGlobalDepth; // MRT: (layer_index_f32, local_distance)
 
 void main() {
     float distFromCenter = abs(vUV.y);
@@ -28,4 +29,7 @@ void main() {
 
     outColor = vColor * tex;
     outColor.a *= alphaEdge;
+
+    // Not an occlusion/pick target: same sentinel as the MRT clear value.
+    outGlobalDepth = vec2(-1.0, -1.0);
 }

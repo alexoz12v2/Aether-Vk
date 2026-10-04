@@ -155,6 +155,9 @@ pub struct SubtreeEntities {
   pub subtree: EntityId,
   /// The body entity (km scale, parent = subtree). Holds AlmanacPlanet when driven.
   pub body: EntityId,
+  /// Comet only: child of `body` rendering the nucleus (`StaticMeshComponent` +
+  /// `CometAppearanceComponent`), see `simulation_api::comet_appearance`. `None` for planets.
+  pub visual: Option<EntityId>,
   /// The orbit trajectory entity (AU scale, parent = root_entity). Holds TrajectoryComponent.
   /// NOTE: orbit must be a child of root (depth_layer=0) so its AU control points are rendered
   /// in the heliocentric frame. Placing it in the Micro frame (depth_layer=1) would cause the
@@ -243,6 +246,9 @@ pub struct SimulationSceneData {
   /// Cache used by the simulation to store computed next positions in `fixed_update` phase
   /// before the next cross sync window
   pub cartesian_state_cache: dashmap::DashMap<SceneEntityId, CartesianState>,
+  /// Imported meshes / textures (Imports tab), backed by memory-mapped cache files. Behind its
+  /// own lock so that a long import on the thread pool never holds the scenes lock.
+  pub asset_library: Arc<RwLock<simulation::asset_library::AssetLibrary>>,
 }
 
 impl Default for SimulationSceneData {
@@ -271,6 +277,7 @@ impl SimulationSceneData {
       model_registry: Default::default(),
       next_model_id: 1,
       cartesian_state_cache: dashmap::DashMap::with_capacity(16),
+      asset_library: Arc::new(RwLock::new(simulation::asset_library::AssetLibrary::new())),
     }
   }
 
@@ -803,6 +810,20 @@ pub enum LogicCommand {
   ImportModel {
     task_id: u64,
     path: String,
+  },
+  /// Imports a mesh or texture into the asset library (async, thread pool). Completion is
+  /// reported through `ExternalState::AssetImported` carrying `request_id`.
+  ImportAsset {
+    request_id: u64,
+    path: String,
+    /// Directory for the decoded, memory-mapped cache files (the .NET session folder).
+    cache_dir: String,
+  },
+  /// Changes the comet nucleus appearance (see `comet_appearance`).
+  SetCometAppearance {
+    scene_id: u64,
+    wiring: crate::simulation_api::comet_appearance::CometAppearanceWiring,
+    offset: crate::simulation_api::comet_appearance::CometVisualOffset,
   },
   LoadAlmanac {
     task_id: u64,
@@ -1633,7 +1654,8 @@ pub struct SceneDump {
 impl SceneDump {
   /// 2: current epoch + compatibility JSON, rotational model / trajectory / frame / Sun data.
   /// 3: f64 `HighResTransformComponent` rotation.
-  pub const CURRENT_VERSION: u32 = 3;
+  /// 4: nucleus mesh moved from `Comet_body` to the `Comet_visual` child, which is not dumped.
+  pub const CURRENT_VERSION: u32 = 4;
 }
 
 /// Serialized representation of a single scene entity.

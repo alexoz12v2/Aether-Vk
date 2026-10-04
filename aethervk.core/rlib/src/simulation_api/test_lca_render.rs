@@ -35,6 +35,7 @@ extern "C" fn render_callback(scene_id: u64, pe_id: u64, render_generation: u64)
 
 #[test]
 fn test_lca_render() {
+  let _render_lock = crate::simulation_api::lock_render_callback_tests();
   LAST_PE_TASK_ID.store(0, Ordering::Release);
 
   if let Some(ctx_ptr) = get_test_context() {

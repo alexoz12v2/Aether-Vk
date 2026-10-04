@@ -232,7 +232,8 @@ public class HorizonJplService
   /// </summary>
   public async Task<SmallBodyDataComponent?> FetchSmallBodyDataAsync(string designation)
   {
-    var cacheKey = $"sbdb_{Sanitize(designation)}.json";
+    // "_fp": full-precision elements; the old key cached the default (~3 significant digits) response
+    var cacheKey = $"sbdb_{Sanitize(designation)}_fp.json";
     var cachePath = _storage.GetPersistentPath(cacheKey);
 
     string json;
@@ -258,7 +259,8 @@ public class HorizonJplService
     else
     {
       var sstr = Uri.EscapeDataString(designation);
-      var url = $"{SbdbSingleBase}?sstr={sstr}";
+      // full-prec: without it SBDB rounds the elements (67P q=1.24 vs 1.2432656 AU), ~2e6 km on the track
+      var url = $"{SbdbSingleBase}?sstr={sstr}&full-prec=1";
       _console.Log($"[HorizonJpl] SBDB GET: {url}");
 
       using var resp = await _httpClient.GetAsync(url);

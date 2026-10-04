@@ -230,4 +230,28 @@ public class SnapshotRestoreTests
         _runtimeServiceMock.Verify(r => r.SetReferenceErrorVisible(false), Times.Once);
         Assert.False(session.ShowReferencePositionError);
     }
+
+    /// Tabs are scoped: a reopened Model tab is a new VM over the same session and must show the
+    /// checkbox as the session (and the native runtime) has it.
+    [Fact]
+    public void ShowReferencePositionError_IsRestored_ByANewVmOverTheSameSession()
+    {
+        var session = new ModelSession { ShowReferencePositionError = true };
+        _modelSessionServiceMock.Setup(x => x.ObserveSession(It.IsAny<SessionId>()))
+            .Returns(System.Reactive.Linq.Observable.Return(session));
+        var vm = new ModelTabViewModel(
+            _translationServiceMock.Object,
+            _schedulerProvider,
+            _modelSessionServiceMock.Object,
+            _cometSessionServiceMock.Object,
+            _cometConfig,
+            _runtimeServiceMock.Object,
+            _dispatcherMock.Object,
+            _cometMessengerMock.Object,
+            _platformWindowServiceMock.Object,
+            _timelineService);
+
+        Assert.True(vm.ShowReferencePositionError);
+        Assert.True(session.ShowReferencePositionError);
+    }
 }

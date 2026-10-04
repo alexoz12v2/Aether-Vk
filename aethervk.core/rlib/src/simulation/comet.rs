@@ -22,13 +22,18 @@ pub mod uv_grid;
 
 // TODO rename this file into mesh.rs
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// `#[repr(C)]` + `Pod` so vertex arrays can be written to / mapped from the asset cache
+/// (`simulation::asset_library`) as raw bytes without per-field (de)serialization.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct Vertex {
   pub position: [f32; 3],
   pub normal: [f32; 3],
   pub uv: [f32; 2],
   pub tangent: [f32; 4],
 }
+
+static_assertions::const_assert_eq!(core::mem::size_of::<Vertex>(), 48);
 
 pub const POSITION_COMPONENTS: u32 = 3;
 pub const NORMAL_COMPONENTS: u32 = 3;
@@ -188,100 +193,364 @@ impl From<CometLoadError> for EngineError {
   }
 }
 
-fn get_texture_data(
-  source: gltf::image::Source,
-  base_path: &PathBuf,
-  blob: Option<&[u8]>,
-) -> Result<Option<Texture>, CometLoadError> {
-  let (encoded_data, mime_type, uri_path) = match source {
-    gltf::image::Source::View { view, mime_type } => {
-      if view.buffer().index() != 0 {
-        return Ok(None); // We only support the main binary blob for embedded
-      }
-      let blob = blob.ok_or(CometLoadError::MissingBuffer)?;
-      let start = view.offset();
-      let end = start + view.length();
-      (blob[start..end].to_vec(), Some(mime_type), None)
-    }
-    gltf::image::Source::Uri { uri, mime_type } => {
-      let path = base_path.join(uri);
-      let data = fs::read(&path).map_err(|_| CometLoadError::TextureNotFound)?;
-      (data, mime_type, Some(path))
-    }
-  };
+/// Container/codec of an encoded image, derived from a MIME type or a file extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EncodedImageKind {
+  Jpeg,
+  Png,
+  Ktx2,
+}
 
-  let (decoded_data, format, width, height, has_mipmaps) = if let Some(mime) = mime_type {
+impl EncodedImageKind {
+  pub(crate) fn from_mime(mime: &str) -> Option<Self> {
     match mime {
-      "image/jpeg" => {
-        let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(&encoded_data));
-        let info = decoder.info().ok_or(CometLoadError::ImageDecodingError)?;
-        let data = decoder.decode().map_err(|_| CometLoadError::ImageDecodingError)?;
-        let format = match info.components {
-          1 => TexelFormat::R8_UNORM,
-          3 => TexelFormat::R8G8B8_UNORM,
-          4 => TexelFormat::R8G8B8A8_UNORM,
-          _ => return Err(CometLoadError::UnsupportedImageFormat),
-        };
-        (data, format, info.width as u32, info.height as u32, false)
-      }
-      "image/png" => {
-        let (header, image_data) =
-          png_decoder::decode(&encoded_data).map_err(|_| CometLoadError::ImageDecodingError)?;
-        if header.bit_depth != png_decoder::BitDepth::Eight
-          || (header.color_type != png_decoder::ColorType::RgbAlpha
-            && header.color_type != png_decoder::ColorType::Grayscale)
-          || header.interlace_method != png_decoder::InterlaceMethod::None
-        {
-          return Err(CometLoadError::UnsupportedImageFormat);
-        }
-
-        (
-          image_data.into_flattened(),
-          if header.color_type == png_decoder::ColorType::RgbAlpha {
-            TexelFormat::R8G8B8A8_UNORM
-          } else {
-            TexelFormat::R8_UNORM
-          },
-          header.width,
-          header.height,
-          false,
-        )
-      }
-      _ => return Err(CometLoadError::UnsupportedImageFormat),
+      "image/jpeg" | "image/jpg" => Some(Self::Jpeg),
+      "image/png" => Some(Self::Png),
+      "image/ktx2" => Some(Self::Ktx2),
+      _ => None,
     }
-  } else if let Some(path) = uri_path {
-    if path.extension().map(|s| s == "ktx2").unwrap_or(false) {
-      let reader =
-        ktx2::Reader::new(&encoded_data).map_err(|_| CometLoadError::ImageDecodingError)?;
+  }
+
+  pub(crate) fn from_path(path: &str) -> Option<Self> {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+      "jpg" | "jpeg" => Some(Self::Jpeg),
+      "png" => Some(Self::Png),
+      "ktx2" => Some(Self::Ktx2),
+      _ => None,
+    }
+  }
+}
+
+/// Decodes an encoded image into an uploadable [`Texture`].
+///
+/// Normalisation rules (the GPU path samples UNORM formats only):
+/// - PNG: `png_decoder` always yields RGBA8 pixels, whatever the source colour type.
+/// - JPEG: 1 channel → `R8_UNORM`, 3 channels → expanded to RGBA8 (`R8G8B8_UNORM` is often not
+///   supported as an optimal-tiling sampled format), 4 channels → RGBA8.
+/// - KTX2: single mip level only, texels passed through in their stored format.
+pub(crate) fn decode_encoded_image(
+  encoded: &[u8],
+  kind: EncodedImageKind,
+) -> Result<Texture, CometLoadError> {
+  let (data, format, width, height, has_mipmaps) = match kind {
+    EncodedImageKind::Jpeg => {
+      let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(encoded));
+      if let Err(e) = decoder.decode_headers() {
+        oshal::log!("zune_jpeg header decode error: {:?}", e);
+      }
+      let info = decoder.info().ok_or(CometLoadError::ImageDecodingError)?;
+      let mut data = decoder.decode().map_err(|e| {
+        oshal::log!("zune_jpeg decode error: {:?}", e);
+        CometLoadError::ImageDecodingError
+      })?;
+      let format = match info.components {
+        1 => TexelFormat::R8_UNORM,
+        3 => {
+          let mut rgba = Vec::with_capacity(data.len() / 3 * 4);
+          for chunk in data.chunks_exact(3) {
+            rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
+          }
+          data = rgba;
+          TexelFormat::R8G8B8A8_UNORM
+        }
+        4 => TexelFormat::R8G8B8A8_UNORM,
+        _ => return Err(CometLoadError::UnsupportedImageFormat),
+      };
+      (data, format, info.width as u32, info.height as u32, false)
+    }
+    EncodedImageKind::Png => {
+      let (header, image_data) =
+        png_decoder::decode(encoded).map_err(|_| CometLoadError::ImageDecodingError)?;
+      (
+        image_data.into_flattened(),
+        TexelFormat::R8G8B8A8_UNORM,
+        header.width,
+        header.height,
+        false,
+      )
+    }
+    EncodedImageKind::Ktx2 => {
+      let reader = ktx2::Reader::new(encoded).map_err(|_| CometLoadError::ImageDecodingError)?;
       let header = reader.header();
-      let mip_level_count = reader.levels().len();
-      if mip_level_count != 1 {
+      if reader.levels().len() != 1 {
         return Err(CometLoadError::UnsupportedImageFormat);
       }
-      let data = unsafe { reader.levels().take(1).next().unwrap_unchecked() }.data;
-
+      let level = reader.levels().next().ok_or(CometLoadError::ImageDecodingError)?;
       let vk_format = header.format.ok_or(CometLoadError::ImageDecodingError)?;
       (
-        data.to_vec(),
+        level.data.to_vec(),
         TexelFormat::from_vk_format(vk_format.value()),
         header.pixel_width,
         header.pixel_height,
         header.level_count > 1,
       )
-    } else {
-      return Err(CometLoadError::UnsupportedImageFormat);
     }
-  } else {
-    return Err(CometLoadError::UnsupportedImageFormat);
   };
 
-  Ok(Some(Texture {
-    data: decoded_data.into(),
+  Ok(Texture {
+    data: data.into(),
     format,
     width,
     height,
     has_mipmaps,
-  }))
+  })
+}
+
+fn get_texture_data(
+  source: gltf::image::Source,
+  base_path: &PathBuf,
+  file: &GltfFile,
+) -> Result<Option<Texture>, CometLoadError> {
+  match source {
+    gltf::image::Source::View { view, mime_type } => {
+      let Some(buffer) = file.buffer_data(view.buffer().index()) else {
+        return Ok(None);
+      };
+      let start = view.offset();
+      let end = start + view.length();
+      let encoded = buffer.get(start..end).ok_or(CometLoadError::MissingBuffer)?;
+      let kind =
+        EncodedImageKind::from_mime(mime_type).ok_or(CometLoadError::UnsupportedImageFormat)?;
+      decode_encoded_image(encoded, kind).map(Some)
+    }
+    gltf::image::Source::Uri { uri, mime_type } => {
+      if uri.starts_with("data:") {
+        oshal::log!("ERROR: data-URI images are not supported");
+        return Err(CometLoadError::UnsupportedImageFormat);
+      }
+      let path = base_path.join(uri);
+      let kind = mime_type
+        .and_then(EncodedImageKind::from_mime)
+        .or_else(|| EncodedImageKind::from_path(uri))
+        .ok_or(CometLoadError::UnsupportedImageFormat)?;
+      let mapped =
+        oshal::os::files::MappedFile::new(&path).map_err(|_| CometLoadError::TextureNotFound)?;
+      decode_encoded_image(&mapped, kind).map(Some)
+    }
+  }
+}
+
+/// A glTF/GLB document whose binary buffers are *borrowed from memory maps* instead of being
+/// copied into heap `Vec`s (`gltf::Gltf::from_slice` copies the whole GLB BIN chunk).
+pub(crate) struct GltfFile {
+  pub document: gltf::Document,
+  pub base_path: PathBuf,
+  /// The whole `.glb` file, when the source is binary glTF.
+  glb: Option<oshal::os::files::MappedFile>,
+  /// Byte range of the GLB `BIN` chunk inside `glb`.
+  bin_range: Option<(usize, usize)>,
+  /// External `.bin` buffers referenced by URI, indexed by buffer index.
+  external: Vec<Option<oshal::os::files::MappedFile>>,
+}
+
+impl GltfFile {
+  pub(crate) fn open(path: &str) -> Result<Self, CometLoadError> {
+    let mut path_buf = PathBuf::new();
+    path_buf.push(path);
+    if !path_buf.is_file() {
+      oshal::log!("ERROR: File not found at path: {}", path);
+      return Err(CometLoadError::PathNotFound);
+    }
+    let base_path = path_buf.parent().unwrap_or_else(PathBuf::new);
+    let mapped =
+      oshal::os::files::MappedFile::new(&path_buf).map_err(|_| CometLoadError::IoError)?;
+
+    let (root, glb, bin_range) = if mapped.starts_with(b"glTF") {
+      let glb = gltf::binary::Glb::from_slice(&mapped).map_err(CometLoadError::GltfImportError)?;
+      let root = gltf::json::Root::from_slice(&glb.json)
+        .map_err(|e| CometLoadError::GltfImportError(e.into()))?;
+      let bin_range = glb.bin.as_ref().map(|bin| {
+        let start = bin.as_ptr() as usize - mapped.as_ptr() as usize;
+        (start, start + bin.len())
+      });
+      drop(glb);
+      (root, Some(mapped), bin_range)
+    } else {
+      let root = gltf::json::Root::from_slice(&mapped)
+        .map_err(|e| CometLoadError::GltfImportError(e.into()))?;
+      (root, None, None)
+    };
+    let document = gltf::Document::from_json(root).map_err(CometLoadError::GltfImportError)?;
+
+    let mut external = Vec::new();
+    for buffer in document.as_json().buffers.iter() {
+      let mapped = match buffer.uri.as_deref() {
+        Some(uri) if !uri.starts_with("data:") => Some(
+          oshal::os::files::MappedFile::new(base_path.join(uri)).map_err(|_| {
+            oshal::log!("ERROR: could not map external glTF buffer '{}'", uri);
+            CometLoadError::MissingBuffer
+          })?,
+        ),
+        _ => None,
+      };
+      external.push(mapped);
+    }
+
+    Ok(Self {
+      document,
+      base_path,
+      glb,
+      bin_range,
+      external,
+    })
+  }
+
+  /// Raw bytes of buffer `index`, or `None` when it is not available (e.g. data URIs).
+  pub(crate) fn buffer_data(&self, index: usize) -> Option<&[u8]> {
+    if let Some(Some(ext)) = self.external.get(index) {
+      return Some(ext.as_slice());
+    }
+    let has_uri = self
+      .document
+      .as_json()
+      .buffers
+      .get(index)
+      .map(|b| b.uri.is_some())
+      .unwrap_or(true);
+    if has_uri {
+      return None;
+    }
+    // A URI-less buffer is the GLB BIN chunk (glTF 2.0 §4.4.3.3: only buffer 0 may be).
+    let (start, end) = self.bin_range?;
+    self.glb.as_ref().map(|m| &m.as_slice()[start..end])
+  }
+}
+
+/// PBR texture slot a glTF material assigns an image to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum GltfTextureSlot {
+  BaseColor,
+  Normal,
+  MetallicRoughness,
+  Occlusion,
+}
+
+/// Geometry of the single mesh of a glTF document plus the images its materials reference.
+pub(crate) struct GltfGeometry {
+  pub vertices: Vec<Vertex>,
+  pub indices: Vec<u32>,
+  /// `(slot, image index)`, first occurrence wins per slot.
+  pub texture_refs: Vec<(GltfTextureSlot, usize)>,
+}
+
+/// Reads the (single) mesh of `file`, merging all its triangle primitives.
+///
+/// Missing optional attributes are synthesised instead of failing the import:
+/// normals (area-weighted from faces), UVs (zero) and tangents ([`generate_tangents`]).
+pub(crate) fn read_gltf_geometry(file: &GltfFile) -> Result<GltfGeometry, CometLoadError> {
+  let doc = &file.document;
+  if doc.animations().next().is_some() {
+    oshal::log!("ERROR: Animations found, but are not supported.");
+    return Err(CometLoadError::AnimationsNotSupported);
+  }
+  let mesh_count = doc.meshes().count();
+  if mesh_count > 1 {
+    oshal::log!("ERROR: Found {} meshes. Only 1 is supported.", mesh_count);
+    return Err(CometLoadError::MultipleMeshesNotSupported);
+  }
+  let mesh = doc.meshes().next().ok_or_else(|| {
+    oshal::log!("ERROR: GLTF contains no meshes.");
+    CometLoadError::PathNotFound
+  })?;
+
+  let mut vertices: Vec<Vertex> = Vec::new();
+  let mut indices: Vec<u32> = Vec::new();
+  let mut texture_refs: Vec<(GltfTextureSlot, usize)> = Vec::new();
+  let mut needs_normals = false;
+  let mut needs_tangents = false;
+
+  for (i, primitive) in mesh.primitives().enumerate() {
+    if primitive.mode() != gltf::json::mesh::Mode::Triangles {
+      oshal::log!(
+        "  ERROR: Primitive {} is not triangulated. Mode: {:?}",
+        i,
+        primitive.mode()
+      );
+      return Err(CometLoadError::UnsupportedPrimitiveMode);
+    }
+
+    let reader = primitive.reader(|buffer| file.buffer_data(buffer.index()));
+    let positions: Vec<[f32; 3]> = reader
+      .read_positions()
+      .ok_or_else(|| {
+        oshal::log!("  ERROR: Primitive {} is missing POSITION data.", i);
+        CometLoadError::UnsupportedNormalData
+      })?
+      .collect();
+    let count = positions.len();
+    let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|n| n.collect());
+    let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|v| v.into_f32().collect());
+    let tangents: Option<Vec<[f32; 4]>> = reader.read_tangents().map(|t| t.collect());
+    needs_normals |= normals.is_none();
+    needs_tangents |= tangents.is_none() || normals.is_none();
+
+    let base = vertices.len() as u32;
+    vertices.reserve(count);
+    for v in 0..count {
+      vertices.push(Vertex {
+        position: positions[v],
+        normal: normals.as_ref().and_then(|n| n.get(v).copied()).unwrap_or([0.0; 3]),
+        uv: uvs.as_ref().and_then(|u| u.get(v).copied()).unwrap_or([0.0; 2]),
+        tangent: tangents
+          .as_ref()
+          .and_then(|t| t.get(v).copied())
+          .unwrap_or([1.0, 0.0, 0.0, 1.0]),
+      });
+    }
+
+    match reader.read_indices() {
+      // Indices are primitive-local: rebase onto the merged vertex array.
+      Some(it) => indices.extend(it.into_u32().map(|idx| idx + base)),
+      None => indices.extend(base..base + count as u32),
+    }
+
+    let material = primitive.material();
+    let pbr = material.pbr_metallic_roughness();
+    let mut push = |slot: GltfTextureSlot, image: usize| {
+      if !texture_refs.iter().any(|(s, _)| *s == slot) {
+        texture_refs.push((slot, image));
+      }
+    };
+    if let Some(info) = pbr.base_color_texture() {
+      push(GltfTextureSlot::BaseColor, info.texture().source().index());
+    }
+    if let Some(info) = material.normal_texture() {
+      push(GltfTextureSlot::Normal, info.texture().source().index());
+    }
+    if let Some(info) = pbr.metallic_roughness_texture() {
+      push(
+        GltfTextureSlot::MetallicRoughness,
+        info.texture().source().index(),
+      );
+    }
+    if let Some(info) = material.occlusion_texture() {
+      push(GltfTextureSlot::Occlusion, info.texture().source().index());
+    }
+  }
+
+  if needs_normals {
+    oshal::log!("  NORMAL missing on some primitive: generating area-weighted normals");
+    generate_normals(&mut vertices, &indices);
+  }
+  if needs_tangents {
+    generate_tangents(&mut vertices, &indices);
+  }
+
+  Ok(GltfGeometry {
+    vertices,
+    indices,
+    texture_refs,
+  })
+}
+
+/// Decodes image `image_index` of `file`.
+pub(crate) fn decode_gltf_image(
+  file: &GltfFile,
+  image_index: usize,
+) -> Result<Option<Texture>, CometLoadError> {
+  let image = file.document.images().nth(image_index).ok_or(CometLoadError::TextureNotFound)?;
+  get_texture_data(image.source(), &file.base_path, file)
 }
 
 /// Function to load a GLTF/GLB file
@@ -294,139 +563,29 @@ pub fn load_comet_from_gltf(
 ) -> Result<Comet, CometLoadError> {
   oshal::log!("--- Starting GLTF load for: {} ---", path);
 
-  let mut path_buf = PathBuf::new();
-  path_buf.push(path);
-
-  if !path_buf.is_file() {
-    oshal::log!("ERROR: File not found at path: {}", path);
-    return Err(CometLoadError::PathNotFound);
-  }
-
-  let base_path = path_buf.parent().unwrap_or_else(PathBuf::new);
-  let data = fs::read(&path_buf)?;
-
-  oshal::log!(
-    "File read successfully ({} bytes). Parsing GLTF...",
-    data.len()
-  );
-  let gltf = gltf::Gltf::from_slice(&data).map_err(|e| {
+  let file = GltfFile::open(path).map_err(|e| {
     oshal::log!("ERROR: GLTF Parse failed: {:?}", e);
-    CometLoadError::GltfImportError(e)
+    e
   })?;
-
-  oshal::log!("Correctly parsed GLB");
-
-  // Validations
-  if gltf.animations().next().is_some() {
-    oshal::log!("ERROR: Animations found, but are not supported.");
-    return Err(CometLoadError::AnimationsNotSupported);
-  }
-
-  let mesh_count = gltf.meshes().count();
-  if mesh_count > 1 {
-    oshal::log!("ERROR: Found {} meshes. Only 1 is supported.", mesh_count);
-    return Err(CometLoadError::MultipleMeshesNotSupported);
-  }
-
-  let mesh = gltf.meshes().next().ok_or_else(|| {
-    oshal::log!("ERROR: GLTF contains no meshes.");
-    CometLoadError::PathNotFound
-  })?;
-
-  oshal::log!(
-    "Mesh found: '{}'. Processing primitives...",
-    mesh.name().unwrap_or("Unnamed")
-  );
-
-  let mut vertices = Vec::new();
-  let mut indices = Vec::new();
+  let geometry = read_gltf_geometry(&file)?;
 
   let mut albedo_map = None;
   let mut normal_map = None;
   let mut roughness_map = None;
   let mut ao_map = None;
-
-  let blob = gltf.blob.as_deref();
-
-  for (i, primitive) in mesh.primitives().enumerate() {
-    oshal::log!("  Processing primitive {}...", i);
-
-    if primitive.mode() != gltf::json::mesh::Mode::Triangles {
-      oshal::log!(
-        "  ERROR: Primitive {} is not triangulated. Mode: {:?}",
-        i,
-        primitive.mode()
-      );
-      return Err(CometLoadError::UnsupportedPrimitiveMode);
-    }
-
-    let reader = primitive.reader(|buffer| if buffer.index() == 0 { blob } else { None });
-
-    // Granular attribute checks
-    let positions = reader.read_positions().ok_or_else(|| {
-      oshal::log!("  ERROR: Primitive {} is missing POSITION data.", i);
-      CometLoadError::UnsupportedNormalData // Or a more specific error
-    })?;
-
-    let normals = reader.read_normals().ok_or_else(|| {
-      oshal::log!("  ERROR: Primitive {} is missing NORMAL data.", i);
-      CometLoadError::UnsupportedNormalData
-    })?;
-
-    let uvs = reader.read_tex_coords(0).map(|v| v.into_f32()).ok_or_else(|| {
-      oshal::log!("  ERROR: Primitive {} is missing TEXCOORD_0 (UV) data.", i);
-      CometLoadError::UnsupportedNormalData
-    })?;
-
-    let tangents = reader.read_tangents().ok_or_else(|| {
-      oshal::log!("  ERROR: Primitive {} is missing TANGENT data.", i);
-      CometLoadError::UnsupportedNormalData
-    })?;
-
-    oshal::log!("  All required vertex attributes found. Building vertices...");
-    let start_vertex_count = vertices.len();
-    for ((position, normal), (uv, tangent)) in positions.zip(normals).zip(uvs.zip(tangents)) {
-      vertices.push(Vertex {
-        position,
-        normal,
-        uv,
-        tangent,
-      });
-    }
-    oshal::log!("  Added {} vertices.", vertices.len() - start_vertex_count);
-
-    if let Some(indices_iter) = reader.read_indices() {
-      let start_index_count = indices.len();
-      indices.extend(indices_iter.into_u32());
-      oshal::log!("  Added {} indices.", indices.len() - start_index_count);
-    } else {
-      oshal::log!("  ERROR: Primitive {} is missing index buffer data.", i);
-      // Depending on your architecture, you might want to auto-generate indices here,
-      // but if you strictly require them:
-      return Err(CometLoadError::UnsupportedNormalData); // Swap for MissingIndices error
-    }
-
-    // Textures... (Assuming get_texture_data has its own logs or succeeds silently)
-    let material = primitive.material();
-    let pbr = material.pbr_metallic_roughness();
-
-    if let Some(info) = pbr.base_color_texture() {
-      albedo_map = get_texture_data(info.texture().source().source(), &base_path, blob)?;
-    }
-    if let Some(info) = material.normal_texture() {
-      normal_map = get_texture_data(info.texture().source().source(), &base_path, blob)?;
-    }
-    if let Some(info) = pbr.metallic_roughness_texture() {
-      roughness_map = get_texture_data(info.texture().source().source(), &base_path, blob)?;
-    }
-    if let Some(info) = material.occlusion_texture() {
-      ao_map = get_texture_data(info.texture().source().source(), &base_path, blob)?;
+  for (slot, image) in &geometry.texture_refs {
+    let tex = decode_gltf_image(&file, *image)?;
+    match slot {
+      GltfTextureSlot::BaseColor => albedo_map = tex,
+      GltfTextureSlot::Normal => normal_map = tex,
+      GltfTextureSlot::MetallicRoughness => roughness_map = tex,
+      GltfTextureSlot::Occlusion => ao_map = tex,
     }
   }
 
   let result = finalize_comet(
-    vertices,
-    indices,
+    geometry.vertices,
+    geometry.indices,
     albedo_map,
     normal_map,
     roughness_map,
@@ -816,8 +975,42 @@ pub fn load_comet_from_ply(
   result
 }
 
+/// Area-weighted smooth vertex normals (face cross products accumulated per vertex).
+pub(crate) fn generate_normals(vertices: &mut [Vertex], indices: &[u32]) {
+  let mut acc = alloc::vec![[0.0f32; 3]; vertices.len()];
+  for tri in indices.chunks_exact(3) {
+    let (a, b, c) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+    if a >= vertices.len() || b >= vertices.len() || c >= vertices.len() {
+      continue;
+    }
+    let p0 = vertices[a].position;
+    let p1 = vertices[b].position;
+    let p2 = vertices[c].position;
+    let e1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+    let e2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+    let n = [
+      e1[1] * e2[2] - e1[2] * e2[1],
+      e1[2] * e2[0] - e1[0] * e2[2],
+      e1[0] * e2[1] - e1[1] * e2[0],
+    ];
+    for &i in &[a, b, c] {
+      acc[i][0] += n[0];
+      acc[i][1] += n[1];
+      acc[i][2] += n[2];
+    }
+  }
+  for (v, n) in vertices.iter_mut().zip(acc) {
+    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    v.normal = if len > 0.0 {
+      [n[0] / len, n[1] / len, n[2] / len]
+    } else {
+      [0.0, 1.0, 0.0]
+    };
+  }
+}
+
 // Simple tangent generation (Lengyel, Eric. "Computing Tangent Space Basis Vectors for an Arbitrary Mesh")
-fn generate_tangents(vertices: &mut [Vertex], indices: &[u32]) {
+pub(crate) fn generate_tangents(vertices: &mut [Vertex], indices: &[u32]) {
   let mut tan1 = alloc::vec![Vec3f32::from_components(0.0, 0.0, 0.0); vertices.len()];
   let mut tan2 = alloc::vec![Vec3f32::from_components(0.0, 0.0, 0.0); vertices.len()];
 
@@ -1088,65 +1281,11 @@ pub fn load_texture_from_file(path: &str) -> Result<Texture, CometLoadError> {
   if !path_buf.is_file() {
     return Err(CometLoadError::PathNotFound);
   }
-  let encoded_data = fs::read(&path_buf).map_err(|_| CometLoadError::TextureNotFound)?;
-
-  let extension = path.split('.').last().unwrap_or("").to_lowercase();
-  let (decoded_data, format, width, height, has_mipmaps) = match extension.as_str() {
-    "jpg" | "jpeg" => {
-      let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(&encoded_data));
-      if let Err(e) = decoder.decode_headers() {
-        oshal::log!("zune_jpeg header decode error: {:?}", e);
-      }
-      let info = decoder.info().ok_or_else(|| {
-        oshal::log!("zune_jpeg info error: no info available");
-        CometLoadError::ImageDecodingError
-      })?;
-      let mut data = decoder.decode().map_err(|e| {
-        oshal::log!("zune_jpeg decode error: {:?}", e);
-        CometLoadError::ImageDecodingError
-      })?;
-
-      let format = match info.components {
-        1 => TexelFormat::R8_UNORM,
-        3 => {
-          let mut rgba = Vec::with_capacity(data.len() / 3 * 4);
-          for chunk in data.chunks_exact(3) {
-            rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
-          }
-          data = rgba;
-          TexelFormat::R8G8B8A8_UNORM
-        }
-        4 => TexelFormat::R8G8B8A8_UNORM,
-        _ => return Err(CometLoadError::UnsupportedImageFormat),
-      };
-
-      (data, format, info.width as u32, info.height as u32, false)
-    }
-    "png" => {
-      let (header, image_data) =
-        png_decoder::decode(&encoded_data).map_err(|_| CometLoadError::ImageDecodingError)?;
-      (
-        image_data.into_flattened(),
-        if header.color_type == png_decoder::ColorType::RgbAlpha {
-          TexelFormat::R8G8B8A8_UNORM
-        } else {
-          TexelFormat::R8_UNORM
-        },
-        header.width,
-        header.height,
-        false,
-      )
-    }
-    _ => return Err(CometLoadError::UnsupportedImageFormat),
-  };
-
-  Ok(Texture {
-    data: decoded_data.into(),
-    format,
-    width,
-    height,
-    has_mipmaps,
-  })
+  let kind = EncodedImageKind::from_path(path).ok_or(CometLoadError::UnsupportedImageFormat)?;
+  // Map rather than read: the encoded bytes are only needed transiently while decoding.
+  let encoded =
+    oshal::os::files::MappedFile::new(&path_buf).map_err(|_| CometLoadError::TextureNotFound)?;
+  decode_encoded_image(&encoded, kind)
 }
 
 /// Returns the squared distance to the closest point on the triangle

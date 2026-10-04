@@ -755,6 +755,14 @@ pub fn create_dir_all<T: IntoPathBuf>(path: T) -> Result<(), FsError> {
 
 /// TODO: Document this item
 pub fn write<T: IntoPathBuf>(path: T, content: &[u8]) -> Result<(), FsError> {
+  write_parts(path, &[content])
+}
+
+/// Writes the concatenation of `parts` to `path` (create or truncate), looping on short writes.
+///
+/// Lets callers emit a header followed by a large payload without first concatenating them into
+/// one heap buffer (e.g. the asset cache writes a 4 KiB header plus tens of MiB of texels).
+pub fn write_parts<T: IntoPathBuf>(path: T, parts: &[&[u8]]) -> Result<(), FsError> {
   #[cfg(windows)]
   {
     use windows::Win32::{
@@ -782,23 +790,32 @@ pub fn write<T: IntoPathBuf>(path: T, content: &[u8]) -> Result<(), FsError> {
       return Err(FsError::CouldNotCreateFile);
     }
 
-    let mut bytes_written: u32 = 0;
-    let success = unsafe {
-      WriteFile(
-        handle,
-        Some(content),
-        Some(core::ptr::from_mut(&mut bytes_written)),
-        None,
-      )
-    };
+    let mut result = Ok(());
+    'outer: for part in parts {
+      // WriteFile takes a u32 length: chunk anything larger.
+      for chunk in part.chunks(1 << 30) {
+        let mut remaining = chunk;
+        while !remaining.is_empty() {
+          let mut bytes_written: u32 = 0;
+          let success = unsafe {
+            WriteFile(
+              handle,
+              Some(remaining),
+              Some(core::ptr::from_mut(&mut bytes_written)),
+              None,
+            )
+          };
+          if success.is_err() || bytes_written == 0 {
+            result = Err(FsError::CouldNotWriteFile);
+            break 'outer;
+          }
+          remaining = &remaining[bytes_written as usize..];
+        }
+      }
+    }
 
     unsafe { CloseHandle(handle) }.map_err(|_| FsError::CouldNotCreateFile)?;
-
-    if success.is_err() {
-      Err(FsError::CouldNotWriteFile)
-    } else {
-      Ok(())
-    }
+    result
   }
   #[cfg(not(windows))]
   {
@@ -811,13 +828,38 @@ pub fn write<T: IntoPathBuf>(path: T, content: &[u8]) -> Result<(), FsError> {
       return Err(FsError::CouldNotCreateFile);
     }
 
-    let bytes_written = unsafe { libc::write(fd, content.as_ptr().cast(), content.len()) };
+    let mut result = Ok(());
+    'outer: for part in parts {
+      let mut remaining = *part;
+      while !remaining.is_empty() {
+        let bytes_written = unsafe { libc::write(fd, remaining.as_ptr().cast(), remaining.len()) };
+        if bytes_written <= 0 {
+          result = Err(FsError::CouldNotWriteFile);
+          break 'outer;
+        }
+        remaining = &remaining[bytes_written as usize..];
+      }
+    }
 
     unsafe {
       close(fd);
     }
+    result
+  }
+}
 
-    if bytes_written < 0 || bytes_written as usize != content.len() {
+/// Deletes a file. Fails if the file does not exist (or, on Windows, is still memory mapped).
+pub fn remove_file<T: IntoPathBuf>(path: T) -> Result<(), FsError> {
+  let mut path_buf = path.into_pathbuf();
+  #[cfg(windows)]
+  {
+    use windows::Win32::Storage::FileSystem::DeleteFileW;
+    unsafe { DeleteFileW(windows::core::PCWSTR(path_buf.as_ptr_mut())) }
+      .map_err(|_| FsError::CouldNotWriteFile)
+  }
+  #[cfg(not(windows))]
+  {
+    if unsafe { libc::unlink(path_buf.as_ptr_mut()) } != 0 {
       Err(FsError::CouldNotWriteFile)
     } else {
       Ok(())

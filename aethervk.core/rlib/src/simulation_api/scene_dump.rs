@@ -64,6 +64,14 @@ pub fn serialize_scene(scene: &Scene) -> alloc::vec::Vec<SerializedEntity> {
   let mut result = alloc::vec::Vec::with_capacity(entity_ids.len());
 
   for entity in entity_ids {
+    // The comet visual is aesthetic (see `comet_appearance`): a restore must not roll back the
+    // user's display mode / mesh wiring, so it never enters a dump.
+    if scene
+      .with_component(entity, |_: &crate::simulation_api::comet_appearance::CometVisualComponent| ())
+      .is_some()
+    {
+      continue;
+    }
     let mut components = alloc::vec::Vec::new();
 
     scene.with_component(entity, |t: &HighResTransformComponent| {

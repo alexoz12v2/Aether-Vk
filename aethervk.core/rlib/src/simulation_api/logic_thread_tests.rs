@@ -812,6 +812,51 @@ fn test_keplerian_track_hyperbola_stays_on_conic() {
   }
 }
 
+/// Open orbits span (almost) the whole branch: up to 5° before the asymptote acos(-1/e), capped
+/// at `KEPLER_TRACK_MAX_R_AU`. The old acos(1/e) bound drew e = 1.2 over ±33.6° only and a
+/// reversed sliver for a parabola.
+#[test]
+fn test_keplerian_track_open_orbit_extent() {
+  for (e, q) in [(1.2, 1.5), (1.0, 1.0), (3.0, 0.5)] {
+    let el = KeplerianElements {
+      eccentricity: e,
+      perihelion_distance_au: q,
+      inclination_deg: 0.0,
+      longitude_of_ascending_node_deg: 0.0,
+      argument_of_perihelion_deg: 0.0,
+      time_of_perihelion_jd_tdb: f64::NAN,
+    };
+    // i = Ω = ω = 0: perifocal == ecliptic, perihelion on +X
+    let track = utils::keplerian_track_bezier_au_f64(&el);
+    let (first, last) = (track[0], track[track.len() - 1]);
+    let nu = |p: [f64; 3]| p[1].atan2(p[0]);
+    let r = |p: [f64; 3]| (p[0] * p[0] + p[1] * p[1]).sqrt();
+    assert!(
+      nu(first) < 0.0 && nu(last) > 0.0,
+      "e={e}: track runs from -nu to +nu"
+    );
+    assert!(
+      (nu(first) + nu(last)).abs() < 1e-9,
+      "e={e}: track symmetric about perihelion"
+    );
+    assert!(
+      nu(last) > 90f64.to_radians(),
+      "e={e}: nu_max {} deg",
+      nu(last).to_degrees()
+    );
+    let asymptote = (-1.0 / e).acos();
+    assert!(
+      nu(last) <= asymptote - 5f64.to_radians() + 1e-9,
+      "e={e}: past asymptote - 5 deg"
+    );
+    let r_max = track.iter().map(|p| r(*p)).fold(0.0, f64::max);
+    assert!(
+      r_max <= utils::KEPLER_TRACK_MAX_R_AU * (1.0 + 1e-9),
+      "e={e}: r_max {r_max} AU"
+    );
+  }
+}
+
 /// The logic thread records the comet SPK path on `effective_comet_trajectory`; a reset removes
 /// the components but keeps the (empty container) entity.
 #[test]

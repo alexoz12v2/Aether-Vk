@@ -107,6 +107,7 @@ fn wait_and_download(
 
 #[test]
 fn test_composite_render_output() {
+  let _render_lock = crate::simulation_api::lock_render_callback_tests();
   COMPOSITE_TASK_ID.store(0, Ordering::Release);
 
   if let Some(ctx_ptr) = get_test_context() {
@@ -328,6 +329,7 @@ fn test_composite_render_output() {
 
 #[test]
 fn test_composite_scale_overlap() {
+  let _render_lock = crate::simulation_api::lock_render_callback_tests();
   COMPOSITE_TASK_ID.store(0, Ordering::Release);
 
   if let Some(ctx_ptr) = get_test_context() {

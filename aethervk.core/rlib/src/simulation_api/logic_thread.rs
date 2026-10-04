@@ -51,6 +51,7 @@ use thingbuf::mpsc;
 pub fn is_logic_command_async(cmd: &LogicCommand) -> bool {
   match cmd {
     LogicCommand::ImportModel { .. }
+    | LogicCommand::ImportAsset { .. }
     | LogicCommand::LoadAlmanac { .. }
     | LogicCommand::UnloadAlmanac { .. }
     | LogicCommand::UpdateTrajectoryForSpk { .. }
@@ -105,6 +106,8 @@ fn logic_command_desc(cmd: &LogicCommand) -> alloc::string::String {
 
     // Data/Asset Commands
     LogicCommand::ImportModel { path, .. } => alloc::format!("Import model {}", path),
+    LogicCommand::ImportAsset { path, .. } => alloc::format!("Import asset {}", path),
+    LogicCommand::SetCometAppearance { .. } => "SetCometAppearance".to_string(),
     LogicCommand::LoadAlmanac { path, .. } => alloc::format!("Load almanac {}", path),
     LogicCommand::UnloadAlmanac { path, .. } => alloc::format!("Unload almanac {}", path),
 
@@ -879,13 +882,15 @@ fn process_command_internal(
         .scene
         .remove_component::<crate::scene::trajectory::TrajectoryComponent>(comet.orbit);
 
-      // Hide comet body components
-      let _ = scene_guard.scene.with_component_mut(
-        comet.body,
-        |mesh: &mut crate::scene::StaticMeshComponent| {
-          mesh.is_visible = false;
-        },
-      );
+      // Hide comet body components (the nucleus mesh lives on the visual child)
+      if let Some(visual) = comet.visual {
+        let _ = scene_guard.scene.with_component_mut(
+          visual,
+          |mesh: &mut crate::scene::StaticMeshComponent| {
+            mesh.is_visible = false;
+          },
+        );
+      }
       let _ = scene_guard.scene.with_component_mut(
         comet.body,
         |gizmo: &mut crate::scene::SphereGizmoComponent| {
@@ -897,6 +902,10 @@ fn process_command_internal(
       // (CometOrbiting mode) is not a jet: move it to root keeping its world transform.
       if let Some(children) = scene_guard.scene.get_children(comet.body) {
         for child in children {
+          // the nucleus visual is part of the comet subtree, not a jet
+          if Some(child) == comet.visual {
+            continue;
+          }
           if scene_guard
             .scene
             .with_component(child, |_: &crate::scene::CameraComponent| ())
@@ -2027,6 +2036,70 @@ fn process_command_internal(
       Ok(())
     }
 
+    LogicCommand::ImportAsset {
+      request_id,
+      path,
+      cache_dir,
+    } => {
+      let library = alloc::sync::Arc::clone(&ctx.scenes.read().asset_library);
+      let result = import_asset(&library, &path, &cache_dir);
+      let payload = match &result {
+        Ok(outcome) => crate::simulation_api::external_state::CAssetImported {
+          request_id,
+          mesh_id: outcome.mesh.unwrap_or(0),
+          success: 1,
+          added_count: outcome.added.len() as u32,
+        },
+        Err(e) => {
+          emit_breadcrumb(3, &alloc::format!("Import of '{}' failed: {}", path, e.message()));
+          crate::simulation_api::external_state::CAssetImported {
+            request_id,
+            mesh_id: 0,
+            success: 0,
+            added_count: 0,
+          }
+        }
+      };
+      emit_external_state_change(&ExternalState::AssetImported(payload));
+      result.map(|_| ()).map_err(EngineError::from)
+    }
+
+    LogicCommand::SetCometAppearance {
+      scene_id,
+      wiring,
+      offset,
+    } => {
+      let scenes = ctx.scenes.read();
+      let scene_arc =
+        crate::expect_scene!(scenes.get_scene(scene_id), "SetCometAppearance: scene not found");
+      let library = alloc::sync::Arc::clone(&scenes.asset_library);
+      let scene_guard = scene_arc.read();
+      let comet = scene_guard.comet.ok_or(EngineError::InvalidOperation(
+        "SetCometAppearance: comet SubtreeEntities not populated",
+      ))?;
+      let visual = comet.visual.ok_or(EngineError::InvalidOperation(
+        "SetCometAppearance: comet has no visual entity",
+      ))?;
+      let running =
+        scene_guard.time_state.read().speed != aethervk_oshal_rlib::os::time::v2::SimSpeed::Paused;
+      let radius_km =
+        crate::simulation_api::comet_appearance::nucleus_radius_km(&scene_guard.scene, comet.body);
+      // An import holds the write lock for its whole duration: never stall the logic thread on it.
+      let library = library.try_read().ok_or(EngineError::InvalidOperation(
+        "SetCometAppearance: asset import in progress, retry once it completes",
+      ))?;
+      crate::simulation_api::comet_appearance::apply_comet_appearance(
+        &scene_guard.scene,
+        visual,
+        radius_km,
+        wiring,
+        offset,
+        &library,
+        running,
+      )
+      .map_err(EngineError::from)
+    }
+
     LogicCommand::ImportModel { task_id: _, path } => {
       let mesh_res = if path.ends_with(".obj") || path.ends_with(".OBJ") {
         crate::simulation::comet::load_comet_from_obj(&path, false, None)
@@ -2160,6 +2233,9 @@ fn process_command_internal(
       );
       let scene_ctx =
         scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
+      // before the track / AlmanacPlanet commit: `update_reference_errors` keys on AlmanacPlanet,
+      // so writing the elements afterwards let it pair the new comet with the previous elements
+      scene_ctx.write().comet_reference_elements = Some(keplerian_elements);
       let scene_guard = scene_ctx.read();
 
       let comet = scene_guard.comet.ok_or(EngineError::InvalidOperation(
@@ -2206,12 +2282,14 @@ fn process_command_internal(
       utils::clear_effective_trajectory(&scene_guard);
 
       // Make comet body visible again
-      let _ = scene_guard.scene.with_component_mut(
-        comet.body,
-        |mesh: &mut crate::scene::StaticMeshComponent| {
-          mesh.is_visible = true;
-        },
-      );
+      if let Some(visual) = comet.visual {
+        let _ = scene_guard.scene.with_component_mut(
+          visual,
+          |mesh: &mut crate::scene::StaticMeshComponent| {
+            mesh.is_visible = true;
+          },
+        );
+      }
       let _ = scene_guard.scene.with_component_mut(
         comet.body,
         |gizmo: &mut crate::scene::SphereGizmoComponent| {
@@ -2279,7 +2357,6 @@ fn process_command_internal(
       }
 
       drop(scene_guard);
-      scene_ctx.write().comet_reference_elements = Some(keplerian_elements);
 
       aethervk_oshal_rlib::log!(
         "[BuildCometTrajectory] Emitting CometInitialized(true) for SPK {}",
@@ -2472,9 +2549,22 @@ fn process_command_internal(
       // We deliberately do NOT bump `mesh.id` so that the `physical_mesh2_resources`
       // DashMap cache key stays stable and no duplicate Vulkan resource is created.
       // The GPU-side buffer swap is driven by `enqueue_mesh_position_update` below.
-      let comet_mesh_id = scene_guard.scene.with_component_mut(
-        comet.body,
-        |mesh_comp: &mut crate::scene::StaticMeshComponent| {
+      // A custom (imported) nucleus mesh is not touched: only its visual transform (scale from
+      // its bounding sphere) follows the new radius.
+      let visual = comet.visual.ok_or(EngineError::InvalidOperation(
+        "UpdateCometNucleusRadius: comet has no visual entity",
+      ))?;
+      let custom_mesh = crate::simulation_api::comet_appearance::rescale_custom_visual(
+        &scene_guard.scene,
+        visual,
+        radius_km,
+      );
+      let comet_mesh_id = if custom_mesh {
+        None
+      } else {
+        scene_guard.scene.with_component_mut(
+          visual,
+          |mesh_comp: &mut crate::scene::StaticMeshComponent| {
           let original_id = mesh_comp.mesh.id;
           if let Some(m) = alloc::sync::Arc::get_mut(&mut mesh_comp.mesh) {
             // Fast path: we are the sole owner — mutate in place, zero allocation.
@@ -2489,7 +2579,8 @@ fn process_command_internal(
           }
           original_id
         },
-      );
+        )
+      };
 
       // ── 3. Update all Jet Previews ────────────────────────
       let parent_scale = scene_guard
@@ -2531,7 +2622,7 @@ fn process_command_internal(
         let position_data: alloc::vec::Vec<f32> = scene_guard
           .scene
           .with_component(
-            comet.body,
+            visual,
             |mesh_comp: &crate::scene::StaticMeshComponent| {
               mesh_comp
                 .mesh
@@ -3421,6 +3512,9 @@ mod utils {
   /// with 2048 by ~0.1 m.
   pub const KEPLER_TRACK_SEGMENTS: usize = 2048;
 
+  /// Heliocentric distance where the open (e >= 1) branch of the analytical track stops.
+  pub const KEPLER_TRACK_MAX_R_AU: f64 = 50.0;
+
   /// Analytical orbit track from SBDB osculating elements, as cubic Bezier control points in AU
   /// (4 per segment, `[x, y, z, 1]`) in **SUN_ECLIPJ2000**, the scene frame (the SBDB elements are
   /// referred to the J2000 ecliptic, so no obliquity rotation: applying one tilted the track by
@@ -3534,9 +3628,12 @@ mod utils {
           (-a * ea.sin(), b * ea.cos()),
         )
       } else {
-        let nu_max = (1.0 / e).acos() - 5f64.to_radians();
-        let nu = -nu_max + 2.0 * nu_max * t;
+        // open branch: up to 5° short of the asymptote (acos(-1/e); π for a parabola), and no
+        // farther than KEPLER_TRACK_MAX_R_AU (r = p / (1 + e cos ν) <= R  <=>  cos ν >= (p/R - 1)/e)
         let p = q * (1.0 + e);
+        let nu_max = ((-1.0 / e).acos() - 5f64.to_radians())
+          .min(((p / KEPLER_TRACK_MAX_R_AU - 1.0) / e).clamp(-1.0, 1.0).acos());
+        let nu = -nu_max + 2.0 * nu_max * t;
         let den = 1.0 + e * nu.cos();
         let r = p / den;
         let dr = p * e * nu.sin() / (den * den);
@@ -4282,3 +4379,20 @@ mod utils {
 #[cfg(test)]
 #[path = "logic_thread_tests.rs"]
 mod logic_thread_tests;
+
+/// Body of [`LogicCommand::ImportAsset`]. The library write lock is held for the whole import
+/// (decode + cache write); readers (FFI listing, appearance changes) wait for it to finish.
+pub(crate) fn import_asset(
+  library: &parking_lot::RwLock<crate::simulation::asset_library::AssetLibrary>,
+  path: &str,
+  cache_dir: &str,
+) -> Result<
+  crate::simulation::asset_library::ImportOutcome,
+  crate::simulation::asset_library::AssetError,
+> {
+  let mut library = library.write();
+  if library.cache_dir() != Some(cache_dir.trim_end_matches(['/', '\\'])) {
+    library.set_cache_dir(cache_dir)?;
+  }
+  library.import_file(path)
+}

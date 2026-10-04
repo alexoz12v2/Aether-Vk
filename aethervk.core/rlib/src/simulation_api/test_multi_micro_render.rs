@@ -129,6 +129,7 @@ fn wait_and_download_both(
 
 #[test]
 fn test_multi_micro_layer_spheres_render() {
+  let _render_lock = crate::simulation_api::lock_render_callback_tests();
   MULTI_MICRO_TASK_ID.store(0, Ordering::Release);
 
   if let Some(ctx_ptr) = get_test_context() {

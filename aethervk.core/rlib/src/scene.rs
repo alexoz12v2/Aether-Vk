@@ -1644,6 +1644,12 @@ impl Scene {
     self.register_component::<ReferenceFrameComponent>(&[]);
 
     self.register_component::<CometMarkerComponent>(&transform_type_id);
+    self.register_component::<crate::simulation_api::comet_appearance::CometVisualComponent>(
+      &transform_type_id,
+    );
+    self.register_component::<crate::simulation_api::comet_appearance::CometAppearanceComponent>(
+      &transform_type_id,
+    );
     self.register_component::<PlanetMarkerComponent>(&transform_type_id);
     self.register_component::<BodyRotationalModel>(&transform_type_id);
 

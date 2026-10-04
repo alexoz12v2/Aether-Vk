@@ -247,19 +247,6 @@ impl SimulationContext {
       // body will see AlmanacPlanet added once the relevant almanac files are confirmed loaded.
       if is_comet {
         scene.add_component(body, crate::scene::CometMarkerComponent {});
-
-        // Add default procedural sphere so comet has a physical mesh
-        let _ = scene.add_component(
-          body,
-          crate::scene::StaticMeshComponent {
-            asset_path: alloc::string::String::from("__default_comet__"),
-            mesh: alloc::sync::Arc::new(crate::simulation::comet::generate_uv_sphere(
-              2.0, 16, 16, 1.0, false,
-            )),
-            emissive_color: [0.0, 0.0, 0.0, 0.0],
-            is_visible: false,
-          },
-        );
       } else {
         scene.add_component(body, crate::scene::PlanetMarkerComponent {});
       }
@@ -272,9 +259,15 @@ impl SimulationContext {
       scene.set_parent(orbit, Some(root_entity));
       scene.add_component(orbit, crate::scene::TransformComponent::default());
 
+      // Comet appearance is decoupled from the physical body: the default procedural sphere
+      // (and later any custom mesh) lives on a `Comet_visual` child, see `comet_appearance`.
+      let visual = is_comet
+        .then(|| crate::simulation_api::comet_appearance::spawn_comet_visual(&scene, body));
+
       crate::simulation_api::structs::SubtreeEntities {
         subtree,
         body,
+        visual,
         orbit,
       }
     };
