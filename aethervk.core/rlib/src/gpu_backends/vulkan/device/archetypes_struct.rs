@@ -601,7 +601,6 @@ macro_rules! impl_create_archetype {
           pipelines::PipelineFlags::STENCIL_ENABLE
           | pipelines::PipelineFlags::NO_DEPTH_TEST
           | pipelines::PipelineFlags::NO_DEPTH_WRITE
-          | pipelines::PipelineFlags::INVERT_FRONT_FACE
         )
         .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
         .with_stencil_compare_op(pipelines::StencilCompareOp::NotEqual)
@@ -641,7 +640,7 @@ impl Archetypes {
     SunRenderResourceArchetypeArena,
     |gi| {
       gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
-        .with_pipeline_flags(PipelineFlags::INVERT_FRONT_FACE | PipelineFlags::NO_DEPTH_WRITE)
+        .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE)
     }
   );
   impl_create_archetype!(
@@ -768,17 +767,12 @@ impl Archetypes {
           .add_attribute(1, 2, vk::Format::R32G32_SFLOAT, 12) // uv
           .add_attribute(1, 3, vk::Format::R32G32B32A32_SFLOAT, 20), // tangent
       )
-      // INVERT_FRONT_FACE: meshes are wound CCW when seen from outside (generate_uv_sphere,
-      // and GLTF/OBJ/PLY loads verified by the signed-volume check in finalize_comet), but the
-      // engine's projection (view −Y forward, clip.y = −f·view.z, Vulkan y-down framebuffer)
-      // mirrors the winding, so outward faces rasterise CLOCKWISE. With the default
-      // COUNTER_CLOCKWISE front face, CULL_BACK removed the camera-facing hemisphere and the
-      // inside of the far hemisphere was shaded instead — its normals point away from the
-      // camera, so the comet looked black with the Sun behind the camera and lit when facing
-      // the Sun (confirmed in why_comet_cut.rdc via DebugPixel: shaded point = far side).
-      .with_pipeline_flags(
-        PipelineFlags::STENCIL_ENABLE | PipelineFlags::CULL_BACK | PipelineFlags::INVERT_FRONT_FACE,
-      )
+      // Meshes are wound CCW when seen from outside (generate_uv_sphere, and GLTF/OBJ/PLY loads
+      // verified by the signed-volume check in finalize_comet), and the view is not mirrored
+      // (screen right = camera local -X, see `gpu::frame::camera_screen_axes`), so outward faces
+      // rasterise COUNTER_CLOCKWISE, the default front face. Before that fix the view was
+      // mirrored and this pipeline needed INVERT_FRONT_FACE (why_comet_cut.rdc).
+      .with_pipeline_flags(PipelineFlags::STENCIL_ENABLE | PipelineFlags::CULL_BACK)
       .with_stencil_compare_op(StencilCompareOp::Always)
       .with_stencil_logic_op(StencilLogicOp::Replace)
       .with_stencil_reference(1)
@@ -1126,9 +1120,7 @@ impl Archetypes {
       )
       .with_pipeline_layout(DebugTrackedRwLock::read(&arena).pipeline_layout.get())
       .with_pipeline_flags(
-        pipelines::PipelineFlags::NO_DEPTH_TEST
-          | pipelines::PipelineFlags::NO_DEPTH_WRITE
-          | pipelines::PipelineFlags::INVERT_FRONT_FACE,
+        pipelines::PipelineFlags::NO_DEPTH_TEST | pipelines::PipelineFlags::NO_DEPTH_WRITE,
       )
       .with_render_pass(
         renderpasses

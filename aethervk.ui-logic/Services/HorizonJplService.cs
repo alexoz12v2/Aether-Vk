@@ -321,6 +321,12 @@ public class HorizonJplService
           result.OrbitClassCode = ocCode.GetString() ?? string.Empty;
       }
 
+      if (doc.RootElement.TryGetProperty("orbit", out var orbitForEpoch)
+          && orbitForEpoch.TryGetProperty("epoch", out var epochProp)
+          && double.TryParse(epochProp.ValueKind == System.Text.Json.JsonValueKind.String ? epochProp.GetString() : epochProp.GetRawText(),
+               System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double epochJd))
+        result.ElementsEpochJd = epochJd;
+
       if (doc.RootElement.TryGetProperty("orbit", out var orbit) && orbit.TryGetProperty("elements", out var elements))
       {
         foreach (var el in elements.EnumerateArray())
@@ -337,6 +343,7 @@ public class HorizonJplService
                 case "i": result.I = val; break;
                 case "om": result.Om = val; break;
                 case "w": result.W = val; break;
+                case "tp": result.Tp = val; break;
               }
             }
           }
@@ -1076,17 +1083,20 @@ public class HorizonJplService
 
   private static double ParseValue(string text, string pattern)
   {
-    var m = Regex.Match(text, pattern, RegexOptions.IgnoreCase);
-    if (
-      m.Success
-      && double.TryParse(
-        m.Groups[1].Value,
-        System.Globalization.NumberStyles.Any,
-        System.Globalization.CultureInfo.InvariantCulture,
-        out double v
+    // First match that parses: Horizons prints unit legends such as
+    // "Comet physical (GM= km^3/s^2; RAD= km):" before the actual values.
+    foreach (Match m in Regex.Matches(text, pattern, RegexOptions.IgnoreCase))
+    {
+      if (
+        double.TryParse(
+          m.Groups[1].Value,
+          System.Globalization.NumberStyles.Any,
+          System.Globalization.CultureInfo.InvariantCulture,
+          out double v
+        )
       )
-    )
-      return v;
+        return v;
+    }
     return 0.0;
   }
 

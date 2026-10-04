@@ -218,6 +218,17 @@ pub struct TextStyle {
   pub style_flags: u32,
 }
 
+/// Width in pixels of `text` (single line) at `size_pt`, with the same advances as
+/// [`push_text_to_batch`].
+pub fn text_width_px(text: &str, size_pt: f32, font_atlas: &FontAtlas) -> f32 {
+  let fallback = font_atlas.glyphs.get(&'█');
+  text
+    .chars()
+    .filter_map(|c| font_atlas.glyphs.get(&c).or(fallback))
+    .map(|g| g.scaled_advance(size_pt, font_atlas.scale))
+    .sum()
+}
+
 pub fn push_text_to_batch(
   text: &str,
   start_pos: [f32; 2],

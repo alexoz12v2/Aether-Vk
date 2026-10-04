@@ -436,8 +436,9 @@ pub struct DustBatch {
   pub comet_v_dur_lo: [f32; 4],
   /// particle-system → root rotation quaternion (xyzw) at `t_start`
   pub rot_start: [f32; 4],
-  /// particle-system → root rotation quaternion (xyzw) at `t_start + dur`
-  pub rot_end: [f32; 4],
+  /// nucleus spin: unit axis (root frame) `xyz`, `w` = angular rate ω ≥ 0 (rad/s). The attitude at
+  /// `t_start + dt` is `Rot(axis, ω·dt) · rot_start` (exact for any window length, no aliasing)
+  pub spin: [f32; 4],
   /// jet direction in the particle-system frame (unit), `w` cone half aperture (rad)
   pub jet_dir_aperture: [f32; 4],
   /// `x` s_min (µm), `y` s_max (µm), `z` mass exponent `4 − q`, `w` mass normalization
@@ -451,7 +452,10 @@ pub struct DustBatch {
   pub count: u32,
   pub ring_mask: u32,
   pub seed: u32,
-  pub _pad: [u32; 4],
+  /// jet site illumination over the batch window, see [`LitWindow`]: `x` spin phase `ψ_start` at
+  /// `t_start` (`[−π, π)`), `y` lit half arc `ψ0` (`(0, π)`), `z` total lit phase (rad), `w` mode
+  /// ([`LIT_MODE_ALWAYS`] or [`LIT_MODE_PERIODIC`]). Emission times are spread over lit time only.
+  pub lit: [f32; 4],
 }
 const _: () = assert!(core::mem::size_of::<DustBatch>() == 192);
 
@@ -574,19 +578,63 @@ fn qrot(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
   ]
 }
 
+/// Hamilton product `a · b` (xyzw)
 #[inline]
-fn nlerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
-  let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-  let sgn = if d < 0.0 { -1.0 } else { 1.0 };
-  let q = [
-    a[0] + (sgn * b[0] - a[0]) * t,
-    a[1] + (sgn * b[1] - a[1]) * t,
-    a[2] + (sgn * b[2] - a[2]) * t,
-    a[3] + (sgn * b[3] - a[3]) * t,
-  ];
-  let n = <f32 as FloatLike>::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-  let n = if n > 0.0 { 1.0 / n } else { 1.0 };
-  [q[0] * n, q[1] * n, q[2] * n, q[3] * n]
+fn qmul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+  [
+    a[3] * b[0] + a[0] * b[3] + (a[1] * b[2] - a[2] * b[1]),
+    a[3] * b[1] + a[1] * b[3] + (a[2] * b[0] - a[0] * b[2]),
+    a[3] * b[2] + a[2] * b[3] + (a[0] * b[1] - a[1] * b[0]),
+    a[3] * b[3] - (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]),
+  ]
+}
+
+/// rotation by `angle` (any magnitude) about unit `axis`. The half angle is reduced to
+/// `[−π, π)` first: GPU `sin`/`cos` have no accuracy guarantee outside that range.
+#[inline]
+fn qaxis_angle(axis: [f32; 3], angle: f32) -> [f32; 4] {
+  const TWO_PI: f32 = 2.0 * core::f32::consts::PI;
+  let h = 0.5 * angle;
+  let k = <f32 as FloatLike>::floor((h + core::f32::consts::PI) * (1.0 / TWO_PI));
+  let h = h - k * TWO_PI;
+  let s = <f32 as FloatLike>::sin(h);
+  [
+    axis[0] * s,
+    axis[1] * s,
+    axis[2] * s,
+    <f32 as FloatLike>::cos(h),
+  ]
+}
+
+/// Emission offset `dt ∈ [0, dur]` (s) of the stratified sample `u ∈ [0, 1)`, uniform over the
+/// *lit* time of the batch window (see [`LitWindow`]). `omega` = `spin.w`.
+#[inline]
+pub fn lit_time_map(u: f32, lit: [f32; 4], omega: f32, dur: f32) -> f32 {
+  const TWO_PI: f32 = 2.0 * core::f32::consts::PI;
+  if !(lit[3] == LIT_MODE_PERIODIC) || !(omega > 0.0) || !(lit[1] > 0.0) {
+    return u * dur;
+  }
+  let (ps, p0) = (lit[0], lit[1]);
+  let arc = 2.0 * p0;
+  // lit arcs are `(−ψ0, ψ0) + 2πk`; the first lit segment at or after `ψ_start`
+  let (seg_start, arc_start) = if ps < -p0 {
+    (-p0, -p0)
+  } else if ps < p0 {
+    (ps, -p0)
+  } else {
+    (TWO_PI - p0, TWO_PI - p0)
+  };
+  let seg_len = arc_start + arc - seg_start;
+  let m = u * lit[2];
+  let psi = if m < seg_len {
+    seg_start + m
+  } else {
+    let m = m - seg_len;
+    let k = <f32 as FloatLike>::floor(m / arc);
+    let r = m - k * arc;
+    arc_start + TWO_PI + k * TWO_PI + r
+  };
+  ((psi - ps) / omega).clamp(0.0, dur)
 }
 
 /// uniform direction inside a cone around unit `dir` with half aperture `aperture`
@@ -655,8 +703,9 @@ pub fn lattice_u01(j: u32, shift: f32) -> f32 {
 /// Builds cluster `j` (`0 ≤ j < batch.count`) of `batch`; it goes to ring slot
 /// `(batch.first_index + j) & batch.ring_mask`.
 pub fn emit_cluster(batch: &DustBatch, j: u32) -> DustCluster {
-  let global = batch.first_index.wrapping_add(j);
-  let h0 = pcg(batch.seed ^ pcg(global));
+  // randomness from the in-batch index: the seed is unique per emission window, so a window
+  // always produces the same clusters whatever ring slots it lands on (deterministic seek)
+  let h0 = pcg(batch.seed ^ pcg(j));
   let h1 = pcg(h0);
   let h2 = pcg(h1);
   let h3 = pcg(h2);
@@ -667,7 +716,12 @@ pub fn emit_cluster(batch: &DustBatch, j: u32) -> DustCluster {
   let u_t = ((j as f32) + u01(h0)) / count;
   let t_start = Df::new(batch.comet_r_t_hi[3], batch.comet_r_t_lo[3]);
   let dur = Df::new(batch.comet_v_dur_hi[3], batch.comet_v_dur_lo[3]);
-  let dt_in = dur.mul_f(u_t);
+  // lit time only: dark phases of the jet site get no clusters (full df64 when always lit)
+  let dt_in = if batch.lit[3] == LIT_MODE_PERIODIC {
+    Df::from_f32(lit_time_map(u_t, batch.lit, batch.spin[3], dur.hi + dur.lo))
+  } else {
+    dur.mul_f(u_t)
+  };
   let t0 = t_start.add(dt_in);
 
   // jet location at t0 (comet free fall over the sub-interval)
@@ -704,19 +758,13 @@ pub fn emit_cluster(batch: &DustBatch, j: u32) -> DustCluster {
     batch.jet_dir_aperture[2],
   ];
   let dir_ps = sample_cone(u01(h1), u01(h2), jet, batch.jet_dir_aperture[3]);
-  let rot = nlerp(batch.rot_start, batch.rot_end, u_t);
-  let mut dir = qrot(rot, dir_ps);
-  // night side: reflect across the terminator plane (keeps the batch mass, stays deterministic)
-  let sun = normalize3(rc.hi);
-  let sun = [-sun[0], -sun[1], -sun[2]];
-  let ds = dir[0] * sun[0] + dir[1] * sun[1] + dir[2] * sun[2];
-  if ds < 0.0 {
-    dir = [
-      dir[0] - 2.0 * ds * sun[0],
-      dir[1] - 2.0 * ds * sun[1],
-      dir[2] - 2.0 * ds * sun[2],
-    ];
-  }
+  // exact nucleus spin from the window start
+  let spin = qaxis_angle(
+    [batch.spin[0], batch.spin[1], batch.spin[2]],
+    batch.spin[3] * (dt_in.hi + dt_in.lo),
+  );
+  let rot = qmul(spin, batch.rot_start);
+  let dir = qrot(rot, dir_ps);
 
   // grain size: log-uniform proposal, rank-1 lattice (decorrelated from time order)
   let s_min = batch.size_params[0];
@@ -857,12 +905,14 @@ pub struct BatchPlan {
 
 /// Advances the accumulator by `[acc.window_start_s .. t_now_s]` worth of production and decides
 /// whether to emit. Mass is conserved exactly: everything produced since the last batch goes into
-/// the next one. The cluster count follows the steady-state budget
-/// `capacity · Δt / TTL`, bounded by `free_slots`.
+/// the next one. Production only runs while the jet site is lit (`lit_dt_s ≤ dt_s`). The cluster
+/// count follows the steady-state budget `capacity · Δt / TTL`, bounded by `free_slots`.
+#[allow(clippy::too_many_arguments)]
 pub fn plan_batch(
   acc: &mut EmissionAccumulator,
   q_dust_kgs: f64,
   dt_s: f64,
+  lit_dt_s: f64,
   t_now_s: f64,
   ttl_s: f64,
   capacity: u32,
@@ -878,7 +928,12 @@ pub fn plan_batch(
   if !(acc.window_start_s > 0.0) || acc.window_start_s > t_now_s {
     acc.window_start_s = t_now_s - dt_s;
   }
-  acc.mass_g += q * 1e3 * dt_s;
+  let lit_dt_s = if lit_dt_s.is_finite() {
+    lit_dt_s.clamp(0.0, dt_s)
+  } else {
+    0.0
+  };
+  acc.mass_g += q * 1e3 * lit_dt_s;
   let budget = capacity as f64 * BUDGET_SAFETY;
   let ttl = if ttl_s.is_finite() && ttl_s > 0.0 {
     ttl_s
@@ -944,6 +999,149 @@ pub fn batch_params(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Jet site illumination
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// [`DustBatch::lit`] mode: the site stays lit over the whole window (emission time is uniform)
+pub const LIT_MODE_ALWAYS: f32 = 0.0;
+/// [`DustBatch::lit`] mode: the site goes in and out of daylight with the nucleus spin
+pub const LIT_MODE_PERIODIC: f32 = 1.0;
+
+/// Illumination of the jet site over `[0, dur]` from a window start, for a nucleus spinning
+/// uniformly about a fixed axis, with the Sun direction frozen over the window (it moves < 1°/day).
+///
+/// With `n(t) = Rot(a, ωt)·n₀`, `ŝ·n(t) = A + R cos(ωt − φ)`, `A = (ŝ·a)(a·n₀)`,
+/// `R = |ŝ⊥|·|n₀⊥|`. The site is lit (binary, the production rate assumes a sunlit site) iff the
+/// spin phase `ψ = ωt − φ` lies in `(−ψ0, ψ0) mod 2π`, `ψ0 = acos(−A/R)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LitWindow {
+  pub mode: f32,
+  /// spin phase at the window start, `[−π, π)`
+  pub psi_start: f64,
+  /// lit half arc, `(0, π)` in periodic mode
+  pub psi0: f64,
+  /// total lit phase over the window (rad, periodic mode)
+  pub lit_phase: f64,
+  /// lit time over the window (s)
+  pub lit_time_s: f64,
+}
+
+/// wraps to `[−π, π)`
+fn wrap_pi(x: f64) -> f64 {
+  use core::f64::consts::PI;
+  x - 2.0 * PI * <f64 as FloatLike>::floor((x + PI) / (2.0 * PI))
+}
+
+impl LitWindow {
+  /// `sun`: unit direction towards the Sun; `n0`: unit site normal at the window start (root
+  /// frame); `axis`: unit spin axis; `omega ≥ 0` (rad/s).
+  pub fn new(sun: V3, n0: V3, axis: V3, omega: f64, dur_s: f64) -> Self {
+    use core::f64::consts::PI;
+    let dur_s = if dur_s.is_finite() {
+      dur_s.max(0.0)
+    } else {
+      0.0
+    };
+    let constant = |lit: bool| LitWindow {
+      mode: LIT_MODE_ALWAYS,
+      psi_start: 0.0,
+      psi0: if lit { PI } else { 0.0 },
+      lit_phase: 0.0,
+      lit_time_s: if lit { dur_s } else { 0.0 },
+    };
+    let (sa, na) = (dot(sun, axis), dot(n0, axis));
+    let s_perp = sub(sun, scale(axis, sa));
+    let n_perp = sub(n0, scale(axis, na));
+    let a = sa * na;
+    let r = norm(s_perp) * norm(n_perp);
+    if !(omega > 0.0) || !omega.is_finite() || r < 1e-9 {
+      return constant(dot(sun, n0) > 0.0);
+    }
+    let c = -a / r;
+    if c <= -1.0 {
+      return constant(true);
+    }
+    if c >= 1.0 {
+      return constant(false);
+    }
+    let psi0 = <f64 as FloatLike>::acos(c);
+    // ŝ·n(t) − A = (ŝ⊥·n⊥) cos ωt + ŝ·(a × n⊥) sin ωt = R cos(ωt − φ)
+    let a_x_n = [
+      axis[1] * n_perp[2] - axis[2] * n_perp[1],
+      axis[2] * n_perp[0] - axis[0] * n_perp[2],
+      axis[0] * n_perp[1] - axis[1] * n_perp[0],
+    ];
+    let phi = <f64 as FloatLike>::atan2(dot(sun, a_x_n), dot(s_perp, n_perp));
+    let psi_start = wrap_pi(-phi);
+    let lit_phase = lit_measure(psi_start + omega * dur_s, psi0) - lit_measure(psi_start, psi0);
+    LitWindow {
+      mode: LIT_MODE_PERIODIC,
+      psi_start,
+      psi0,
+      lit_phase,
+      lit_time_s: (lit_phase / omega).clamp(0.0, dur_s),
+    }
+  }
+
+  /// [`DustBatch::lit`] encoding
+  pub fn to_gpu(&self) -> [f32; 4] {
+    [
+      self.psi_start as f32,
+      self.psi0 as f32,
+      self.lit_phase as f32,
+      self.mode,
+    ]
+  }
+}
+
+/// lit phase measure of `[−π, x]` (monotonic, periodic increments of `2ψ0` per turn)
+fn lit_measure(x: f64, psi0: f64) -> f64 {
+  use core::f64::consts::PI;
+  let turns = <f64 as FloatLike>::floor((x + PI) / (2.0 * PI));
+  turns * 2.0 * psi0 + (wrap_pi(x) + psi0).clamp(0.0, 2.0 * psi0)
+}
+
+/// rotates `v` by angle `angle` about unit `axis` (Rodrigues, f64)
+pub fn rotate_axis_angle(v: V3, axis: V3, angle: f64) -> V3 {
+  let (s, c) = (
+    <f64 as FloatLike>::sin(angle),
+    <f64 as FloatLike>::cos(angle),
+  );
+  let kxv = [
+    axis[1] * v[2] - axis[2] * v[1],
+    axis[2] * v[0] - axis[0] * v[2],
+    axis[0] * v[1] - axis[1] * v[0],
+  ];
+  let kv = dot(axis, v) * (1.0 - c);
+  [
+    v[0] * c + kxv[0] * s + axis[0] * kv,
+    v[1] * c + kxv[1] * s + axis[1] * kv,
+    v[2] * c + kxv[2] * s + axis[2] * kv,
+  ]
+}
+
+/// Spin `(axis, ω ≥ 0)` from two attitudes `dt_s` apart (shortest arc). Fallback for bodies without a
+/// rotational model: aliases once `dt_s` exceeds half a rotation.
+pub fn spin_from_attitudes(q0: [f32; 4], q1: [f32; 4], dt_s: f64) -> [f64; 4] {
+  let none = [0.0, 0.0, 1.0, 0.0];
+  if !(dt_s > 0.0) {
+    return none;
+  }
+  // dq = q1 · conj(q0), in the root frame
+  let d = qmul(q1, [-q0[0], -q0[1], -q0[2], q0[3]]);
+  let (mut x, mut y, mut z, mut w) = (d[0] as f64, d[1] as f64, d[2] as f64, d[3] as f64);
+  if w < 0.0 {
+    (x, y, z, w) = (-x, -y, -z, -w);
+  }
+  let s = <f64 as FloatLike>::sqrt(x * x + y * y + z * z);
+  if s < 1e-9 {
+    return none;
+  }
+  let angle = 2.0 * <f64 as FloatLike>::atan2(s, w);
+  [x / s, y / s, z / s, angle / dt_s]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Ring bookkeeping, shared by GPU and CPU modes
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -957,6 +1155,8 @@ pub const READY_NEEDS_EMIT: u64 = 0;
 pub struct LiveBatch {
   pub first: u64,
   pub count: u32,
+  /// emission window index on the scaled-time grid (see [`DustHostState::tick`])
+  pub window: i64,
   pub t_end_s: f64,
   pub mass_g: f64,
   /// descriptor as emitted (deterministic: re-emitting it rewrites identical clusters)
@@ -1001,16 +1201,27 @@ impl RingState {
   }
   /// Reserves `desc.count` slots at the head, fills `first_index` / `ring_mask` of `desc` and
   /// records it as [`READY_PENDING`]. Returns the completed descriptor.
-  pub fn push_batch(&mut self, mut desc: DustBatch, t_end_s: f64, mass_g: f64) -> DustBatch {
+  pub fn push_batch(&mut self, desc: DustBatch, t_end_s: f64, mass_g: f64) -> DustBatch {
+    self.push_window_batch(desc, t_end_s, mass_g, -1)
+  }
+  /// [`Self::push_batch`] recording the emission window index `window`.
+  pub fn push_window_batch(
+    &mut self,
+    mut desc: DustBatch,
+    t_end_s: f64,
+    mass_g: f64,
+    window: i64,
+  ) -> DustBatch {
     debug_assert!(desc.count <= self.free_slots());
     let first = self.head;
     self.head += desc.count as u64;
-    // RNG index = monotonic index (wrapping u32), ring slot = index & mask
+    // ring slot = monotonic index & mask (randomness comes from the seed + in-batch index)
     desc.first_index = first as u32;
     desc.ring_mask = self.mask();
     self.batches.push_back(LiveBatch {
       first,
       count: desc.count,
+      window,
       t_end_s,
       mass_g,
       desc,
@@ -1099,8 +1310,10 @@ impl RingState {
 // render scene builder)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// minimum unscaled interval between two emissions of one system (µs)
-pub const EMIT_INTERVAL_UNSCALED_US: i64 = 100_000;
+/// emission windows per TTL: the scaled-time grid of [`DustHostState::tick`]
+pub const WINDOWS_PER_TTL: f64 = 256.0;
+/// closed emission windows emitted per tick at most (a seek fills one TTL in a few ticks)
+pub const MAX_WINDOWS_PER_TICK: usize = 64;
 /// ring slots kept free so a new batch never lands on slots retired moments ago (which a frame in
 /// flight may still evaluate): 1/8 of the ring
 pub const RING_GUARD_DIVISOR: u32 = 8;
@@ -1116,6 +1329,38 @@ pub struct JetState {
   pub v_ms: V3,
   /// particle-system → root rotation (xyzw)
   pub rot: [f32; 4],
+  /// unit outward surface normal at the jet site (root frame): lit iff it faces the Sun
+  pub site_normal: V3,
+  /// nucleus spin, unit axis (root frame) + ω ≥ 0 (rad/s). `None`: estimated by
+  /// [`DustHostState::tick`] from consecutive attitudes ([`spin_from_attitudes`])
+  pub spin: Option<[f64; 4]>,
+}
+
+impl JetState {
+  /// unit direction towards the Sun
+  pub fn sun_dir(&self) -> V3 {
+    let n = norm(self.r_m);
+    if n > 0.0 {
+      scale(self.r_m, -1.0 / n)
+    } else {
+      [0.0, 0.0, 1.0]
+    }
+  }
+  /// spin, `[0, 0, 1, 0]` (no rotation) when unknown
+  pub fn spin_or_still(&self) -> [f64; 4] {
+    self.spin.unwrap_or([0.0, 0.0, 1.0, 0.0])
+  }
+  /// illumination of the site over `[t_s, t_s + dur_s]`
+  pub fn lit_window(&self, dur_s: f64) -> LitWindow {
+    let w = self.spin_or_still();
+    LitWindow::new(
+      self.sun_dir(),
+      self.site_normal,
+      [w[0], w[1], w[2]],
+      w[3],
+      dur_s,
+    )
+  }
 }
 
 /// Everything the renderer needs to evaluate and draw one system this frame.
@@ -1166,38 +1411,33 @@ impl DustEmitConfig {
 #[derive(Debug, Clone)]
 pub struct DustHostState {
   pub ring: RingState,
-  pub acc: EmissionAccumulator,
-  /// unscaled µs of the last emission gate pass (0 = not started)
-  pub last_emit_unscaled_us: i64,
   /// monotonic counter of batch descriptor uploads (selects the upload slot)
   pub upload_seq: u64,
-  /// monotonic counter of created batches (seed, low-discrepancy shift)
-  pub batch_seq: u64,
-  /// jet state at the start of the pending emission window
-  pub window_jet: Option<JetState>,
-  /// jet time at the last emission gate
-  pub last_gate_t_s: Option<f64>,
   /// latest jet state (written every tick)
   pub jet: Option<JetState>,
   /// TTL (scaled s) of the latest tick
   pub ttl_s: f64,
   /// cross-section per gram at the reference grain size (m²/g)
   pub xsec_per_g_ref: f32,
+  /// next closed window to emit (None: derive it from the ring / the TTL)
+  pub next_window: Option<i64>,
+  /// the youngest ring batch is the provisional preview of the open window
+  pub provisional: bool,
+  /// window length (scaled s) the ring was filled with
+  pub grid_s: f64,
 }
 
 impl DustHostState {
   pub fn new(capacity: u32) -> Self {
     Self {
       ring: RingState::new(capacity),
-      acc: EmissionAccumulator::default(),
-      last_emit_unscaled_us: 0,
       upload_seq: 0,
-      batch_seq: 0,
-      window_jet: None,
-      last_gate_t_s: None,
       jet: None,
       ttl_s: 0.0,
       xsec_per_g_ref: 0.0,
+      next_window: None,
+      provisional: false,
+      grid_s: 0.0,
     }
   }
 
@@ -1206,88 +1446,159 @@ impl DustHostState {
     *self = Self::new(self.ring.capacity);
   }
 
-  /// One logic tick of host-side emission bookkeeping at jet state `jet`.
+  /// Window length (scaled s) of the emission grid for a TTL.
+  pub fn window_len_s(ttl_s: f64) -> f64 {
+    (ttl_s / WINDOWS_PER_TTL).max(1.0)
+  }
+
+  /// Clusters per closed window: the steady-state budget spread over one TTL of windows.
+  pub fn clusters_per_window(&self) -> u32 {
+    ((self.ring.capacity as f64 * BUDGET_SAFETY / WINDOWS_PER_TTL) as u32).max(1)
+  }
+
+  /// One logic tick of host-side emission at scaled time `t_now_s`, **deterministic in time**:
+  /// emission happens on a fixed scaled-time grid of windows `[kΔ, (k+1)Δ)`,
+  /// `Δ = ttl / WINDOWS_PER_TTL`, and window `k` always produces the same batch (jet state at
+  /// `kΔ` from `jet_at`, mass `q(r)·lit time`, budgeted count, seed from `k`). The dust at any
+  /// epoch is a pure function of the parameters and the epoch, so playing, pausing, changing the
+  /// speed or seeking all give the same result:
   ///
-  /// - time scrubbed backwards: drops batches emitted after `jet.t_s` and restarts the window;
-  /// - retires expired batches;
-  /// - re-emits (at most [`REEMIT_PER_TICK`]) batches invalidated by a restore;
-  /// - every [`EMIT_INTERVAL_UNSCALED_US`] closes the emission window `[window_jet.t_s, jet.t_s]`
-  ///   into one batch (mass conserving, see [`plan_batch`]).
+  /// - the provisional batch of the previous tick is dropped;
+  /// - time scrubbed backwards drops the batches ending after `t_now_s`;
+  /// - expired batches are retired, batches invalidated by a restore re-emitted
+  ///   ([`REEMIT_PER_TICK`]);
+  /// - the closed windows not emitted yet (within the last TTL) are emitted, at most
+  ///   [`MAX_WINDOWS_PER_TICK`] per tick, oldest first;
+  /// - once caught up, the open window `[KΔ, t_now)` is emitted as a provisional preview (so slow
+  ///   playback shows emission before the window closes), replaced on the next tick.
   ///
-  /// Returns the descriptors to emit, in order (ring slots already reserved, [`READY_PENDING`]).
-  /// The caller records them and calls `ring.mark_submitted(value)` after the submit.
+  /// `jet_at(t)` gives the jet state at scaled time `t` (almanac), `cfg_at(jet)` the emission
+  /// config there. Returns the descriptors to emit, in order (ring slots reserved,
+  /// [`READY_PENDING`]); the caller records them and calls `ring.mark_submitted(value)`.
   pub fn tick(
     &mut self,
-    jet: JetState,
-    now_unscaled_us: i64,
-    cfg: &DustEmitConfig,
+    t_now_s: f64,
+    jet_at: &dyn Fn(f64) -> Option<JetState>,
+    cfg_at: &dyn Fn(&JetState) -> DustEmitConfig,
   ) -> alloc::vec::Vec<DustBatch> {
-    self.ttl_s = cfg.ttl_s;
-    self.xsec_per_g_ref = cfg.xsec_per_g_ref();
+    let Some(jet_now) = jet_at(t_now_s).map(|j| self.with_spin(j, jet_at)) else {
+      return alloc::vec::Vec::new();
+    };
+    let cfg_now = cfg_at(&jet_now);
+    self.ttl_s = cfg_now.ttl_s;
+    self.xsec_per_g_ref = cfg_now.xsec_per_g_ref();
+    let dt_w = Self::window_len_s(cfg_now.ttl_s);
+    if self.grid_s != dt_w {
+      // another TTL changes the grid: the ring content no longer matches it
+      let (capacity, upload_seq) = (self.ring.capacity, self.upload_seq);
+      *self = Self::new(capacity);
+      self.upload_seq = upload_seq;
+      self.grid_s = dt_w;
+    }
+    if self.provisional {
+      if let Some(b) = self.ring.batches.pop_back() {
+        self.ring.head = b.first;
+      }
+      self.provisional = false;
+    }
     if let Some(prev) = self.jet {
-      if jet.t_s < prev.t_s {
-        self.ring.rewind(jet.t_s);
-        self.acc = EmissionAccumulator::default();
-        self.window_jet = None;
-        self.last_gate_t_s = None;
+      if t_now_s < prev.t_s {
+        self.ring.rewind(t_now_s);
+        self.next_window = None;
       }
     }
-    self.jet = Some(jet);
-    self.ring.retire(jet.t_s, cfg.ttl_s);
+    self.jet = Some(jet_now);
+    self.ring.retire(t_now_s, cfg_now.ttl_s);
     let mut out = self.ring.take_reemit(REEMIT_PER_TICK);
 
-    let Some(window) = self.window_jet else {
-      // start the first window here
-      self.window_jet = Some(jet);
-      self.acc = EmissionAccumulator {
-        clusters: 0.0,
-        mass_g: 0.0,
-        window_start_s: jet.t_s,
-      };
-      self.last_emit_unscaled_us = now_unscaled_us;
-      return out;
-    };
-    if now_unscaled_us - self.last_emit_unscaled_us < EMIT_INTERVAL_UNSCALED_US {
-      return out;
+    let k_open = <f64 as FloatLike>::floor(t_now_s / dt_w) as i64;
+    let k_min = (<f64 as FloatLike>::floor((t_now_s - cfg_now.ttl_s) / dt_w) as i64).max(0);
+    let mut k = self
+      .next_window
+      .or_else(|| self.ring.batches.back().map(|b| b.window + 1))
+      .unwrap_or(k_min)
+      .max(k_min);
+    let mut emitted = 0;
+    while k < k_open && emitted < MAX_WINDOWS_PER_TICK {
+      if let Some(b) = self.emit_window(k, k as f64 * dt_w, dt_w, dt_w, jet_at, cfg_at) {
+        out.push(b);
+      }
+      k += 1;
+      emitted += 1;
     }
-    self.last_emit_unscaled_us = now_unscaled_us;
-    // time since the last gate (the accumulator already holds everything before it)
-    let last_gate_t = self.last_gate_t_s.unwrap_or(window.t_s);
-    let dt = jet.t_s - last_gate_t;
-    if !(dt > 0.0) {
-      return out;
+    self.next_window = Some(k);
+    if k == k_open {
+      let t0 = k_open as f64 * dt_w;
+      if t_now_s > t0 {
+        if let Some(b) = self.emit_window(k_open, t0, t_now_s - t0, dt_w, jet_at, cfg_at) {
+          out.push(b);
+          self.provisional = true;
+        }
+      }
     }
-    self.last_gate_t_s = Some(jet.t_s);
-    self.acc.window_start_s = window.t_s;
-    let free = self.emit_free_slots();
-    let Some(plan) = plan_batch(
-      &mut self.acc,
-      cfg.q_dust_kgs,
-      dt,
-      jet.t_s,
-      cfg.ttl_s,
-      self.ring.capacity,
-      free,
-    ) else {
-      return out;
-    };
+    out
+  }
 
+  /// `jet` with its spin, estimated from the attitude a minute later when the body has no model
+  fn with_spin(&self, mut jet: JetState, jet_at: &dyn Fn(f64) -> Option<JetState>) -> JetState {
+    if jet.spin.is_none() {
+      const DT: f64 = 60.0;
+      jet.spin = Some(
+        jet_at(jet.t_s + DT)
+          .map(|j1| spin_from_attitudes(jet.rot, j1.rot, DT))
+          .unwrap_or([0.0, 0.0, 1.0, 0.0]),
+      );
+    }
+    jet
+  }
+
+  /// Emits window `k` (`[t0, t0 + dur)`, `dur ≤ dt_w`): `None` when nothing is produced (night
+  /// side, beyond the production cutoff) or the ring is full.
+  fn emit_window(
+    &mut self,
+    k: i64,
+    t0: f64,
+    dur: f64,
+    dt_w: f64,
+    jet_at: &dyn Fn(f64) -> Option<JetState>,
+    cfg_at: &dyn Fn(&JetState) -> DustEmitConfig,
+  ) -> Option<DustBatch> {
+    let jet0 = self.with_spin(jet_at(t0)?, jet_at);
+    let cfg = cfg_at(&jet0);
+    let lit = jet0.lit_window(dur);
+    let q = if cfg.q_dust_kgs.is_finite() {
+      cfg.q_dust_kgs.max(0.0)
+    } else {
+      0.0
+    };
+    let mass_g = q * 1e3 * lit.lit_time_s;
+    if !(mass_g > 0.0) {
+      return None;
+    }
+    let full = self.clusters_per_window() as f64;
+    let want = (-<f64 as FloatLike>::floor(-full * (dur / dt_w).clamp(0.0, 1.0))).max(1.0) as u32;
+    let count = want.min(self.emit_free_slots());
+    if count == 0 {
+      return None;
+    }
     let mut desc: DustBatch = bytemuck::Zeroable::zeroed();
-    desc.set_comet(
-      window.r_m,
-      window.v_ms,
-      window.t_s,
-      (jet.t_s - window.t_s).max(0.0),
-    );
-    desc.rot_start = window.rot;
-    desc.rot_end = jet.rot;
+    desc.set_comet(jet0.r_m, jet0.v_ms, t0, dur);
+    desc.rot_start = jet0.rot;
+    let spin = jet0.spin_or_still();
+    desc.spin = [
+      spin[0] as f32,
+      spin[1] as f32,
+      spin[2] as f32,
+      spin[3] as f32,
+    ];
+    desc.lit = lit.to_gpu();
     desc.jet_dir_aperture = [
       cfg.jet_dir[0],
       cfg.jet_dir[1],
       cfg.jet_dir[2],
       cfg.aperture_rad,
     ];
-    let shift = (self.batch_seq as f64 * 0.618_033_988_749_895).fract() as f32;
+    let shift = (k as f64 * 0.618_033_988_749_895).rem_euclid(1.0) as f32;
     let (size_params, vel_params, mass_params) = batch_params(
       &cfg.dist,
       cfg.diameter_um,
@@ -1295,18 +1606,15 @@ impl DustHostState {
       cfg.beta_ref,
       cfg.v_mean,
       cfg.v_std,
-      plan.mass_g,
+      mass_g,
       shift,
     );
     desc.size_params = size_params;
     desc.vel_params = vel_params;
     desc.mass_params = mass_params;
-    desc.count = plan.count;
-    desc.seed = cfg.seed ^ pcg(self.batch_seq as u32 ^ 0x5DEE_CE66);
-    self.batch_seq += 1;
-    out.push(self.ring.push_batch(desc, jet.t_s, plan.mass_g));
-    self.window_jet = Some(jet);
-    out
+    desc.count = count;
+    desc.seed = cfg.seed ^ pcg(k as u32 ^ 0x5DEE_CE66);
+    Some(self.ring.push_window_batch(desc, t0 + dur, mass_g, k))
   }
 
   /// emission slots usable now (ring free space minus the guard band)

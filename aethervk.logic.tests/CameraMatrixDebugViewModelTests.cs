@@ -1,4 +1,3 @@
-#if DEBUG
 using System;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels.Debug;
@@ -20,7 +19,7 @@ public class CameraMatrixDebugViewModelTests
         runtimeServiceMock.Setup(r => r.CameraEntityId).Returns(42);
         
         double px = 1, py = 2, pz = 3;
-        float rx = 4, ry = 5, rz = 6, rw = 7;
+        double rx = 4, ry = 5, rz = 6, rw = 7;
         
         // This setup is needed if it uses `out` parameters
         // Depending on Moq version, this could be:
@@ -40,10 +39,9 @@ public class CameraMatrixDebugViewModelTests
         Assert.Equal(1 * AuToKm, vm.PosX, 0.001);
         Assert.Equal(2 * AuToKm, vm.PosY, 0.001);
         Assert.Equal(3 * AuToKm, vm.PosZ, 0.001);
-        Assert.Equal(4f, vm.RotX, 0.0001f);
-        Assert.Equal(5f, vm.RotY, 0.0001f);
-        Assert.Equal(6f, vm.RotZ, 0.0001f);
-        Assert.Equal(7f, vm.RotW, 0.0001f);
+        Assert.Equal(4.0, vm.RotX, 4);
+        Assert.Equal(5.0, vm.RotY, 4);
+        Assert.Equal(6.0, vm.RotZ, 4);
+        Assert.Equal(7.0, vm.RotW, 4);
     }
 }
-#endif

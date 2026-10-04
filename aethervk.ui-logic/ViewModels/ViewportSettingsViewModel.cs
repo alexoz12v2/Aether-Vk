@@ -20,7 +20,19 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   public string ViewportName { get; }
 
   public System.Collections.Generic.IReadOnlyList<string> DistanceUnits { get; } =
-    new[] { "Astronomical Units (AU)", "Kilometers (km)" };
+    new[] { "Astronomical Units (AU)", "Kilometers (km)", "Meters (m)" };
+
+  private const double AuToKm = 149_597_870.7;
+
+  /// <summary>Display units per AU for <paramref name="unitIndex"/> (0 AU, 1 km, 2 m).</summary>
+  public static double DistanceUnitFactor(int unitIndex) => unitIndex switch
+  {
+    1 => AuToKm,
+    2 => AuToKm * 1000.0,
+    _ => 1.0,
+  };
+
+  private double DistFactor => DistanceUnitFactor(OrthoUnitIndex);
 
   // ── Projection ────────────────────────────────────────────────────────────
 
@@ -85,9 +97,11 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   };
 
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(PerspNearDisplay))]
   private double _perspNear = 0.0001;
 
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(PerspFarDisplay))]
   private double _perspFar = 200.0;
 
   [ObservableProperty]
@@ -105,37 +119,65 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   {
     OnPropertyChanged(nameof(OrthoHalfWidthDisplay));
     OnPropertyChanged(nameof(OrthoHalfHeightDisplay));
+    OnPropertyChanged(nameof(OrthoNearDisplay));
+    OnPropertyChanged(nameof(OrthoFarDisplay));
+    OnPropertyChanged(nameof(PerspNearDisplay));
+    OnPropertyChanged(nameof(PerspFarDisplay));
     OnPropertyChanged(nameof(OrthoExtentMin));
     OnPropertyChanged(nameof(OrthoExtentMax));
     OnPropertyChanged(nameof(OrthoExtentStep));
   }
 
+  // Distances are stored canonically in AU and only converted for display: no rounding here, a
+  // km-sized extent is ~1e-8 AU and Math.Round(x, 6) used to turn it into 0.
+
   public double OrthoHalfWidthDisplay
   {
-    get =>
-      OrthoUnitIndex == 1
-        ? Math.Round(OrthoHalfWidth * 149597870.7, 6)
-        : Math.Round(OrthoHalfWidth, 6);
-    set => OrthoHalfWidth = OrthoUnitIndex == 1 ? value / 149597870.7 : value;
+    get => OrthoHalfWidth * DistFactor;
+    set => OrthoHalfWidth = value / DistFactor;
   }
 
   public double OrthoHalfHeightDisplay
   {
-    get =>
-      OrthoUnitIndex == 1
-        ? Math.Round(OrthoHalfHeight * 149597870.7, 6)
-        : Math.Round(OrthoHalfHeight, 6);
-    set => OrthoHalfHeight = OrthoUnitIndex == 1 ? value / 149597870.7 : value;
+    get => OrthoHalfHeight * DistFactor;
+    set => OrthoHalfHeight = value / DistFactor;
   }
 
-  public double OrthoExtentMin => OrthoUnitIndex == 0.01 ? 1.0 : 0.00000001; // if problems, km min to 1
-  public double OrthoExtentMax => OrthoUnitIndex == 1 ? 149597870700.0 : 1000.0;
-  public double OrthoExtentStep => OrthoUnitIndex == 1 ? 100.0 : 0.001;
+  public double OrthoNearDisplay
+  {
+    get => OrthoNear * DistFactor;
+    set => OrthoNear = value / DistFactor;
+  }
+
+  public double OrthoFarDisplay
+  {
+    get => OrthoFar * DistFactor;
+    set => OrthoFar = value / DistFactor;
+  }
+
+  public double PerspNearDisplay
+  {
+    get => PerspNear * DistFactor;
+    set => PerspNear = value / DistFactor;
+  }
+
+  public double PerspFarDisplay
+  {
+    get => PerspFar * DistFactor;
+    set => PerspFar = value / DistFactor;
+  }
+
+  /// <summary>Distance slider bounds in display units: 1e-12 AU (0.15 m) .. 1000 AU.</summary>
+  public double OrthoExtentMin => 1e-12 * DistFactor;
+  public double OrthoExtentMax => 1000.0 * DistFactor;
+  public double OrthoExtentStep => 0.001 * DistFactor;
 
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(OrthoNearDisplay))]
   private double _orthoNear = 0.0001;
 
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(OrthoFarDisplay))]
   private double _orthoFar = 200.0;
 
   public bool IsOrthoProportionsLocked
@@ -164,10 +206,27 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
 
   /// <summary>True when the camera is in Earth Observer mode (EarthPosition).</summary>
   [ObservableProperty]
-  [NotifyPropertyChangedFor(nameof(IsEarthObserverMode))]
+  [NotifyPropertyChangedFor(nameof(IsEarthObserverMode), nameof(IsUpZenithMode))]
   private CameraMode _currentCameraMode = CameraMode.UpZenith;
 
   public bool IsEarthObserverMode => CurrentCameraMode == CameraMode.EarthPosition;
+
+  /// <summary>True in UpZenith mode: shows the "snap above" buttons.</summary>
+  public bool IsUpZenithMode => CurrentCameraMode == CameraMode.UpZenith;
+
+  /// <summary>Whether a comet is committed (enables the comet snap target).</summary>
+  [ObservableProperty]
+  [NotifyCanExecuteChangedFor(nameof(SnapAboveCometCommand))]
+  private bool _isCometCommitted;
+
+  [RelayCommand]
+  private void SnapAboveSun() => _cameraService.SnapAbove(SnapTarget.Sun);
+
+  [RelayCommand(CanExecute = nameof(IsCometCommitted))]
+  private void SnapAboveComet() => _cameraService.SnapAbove(SnapTarget.Comet);
+
+  [RelayCommand]
+  private void SnapAboveEarth() => _cameraService.SnapAbove(SnapTarget.Earth);
 
   /// <summary>Observer latitude in degrees (−90 … +90). Writes to <see cref="CameraService"/>.</summary>
   [ObservableProperty]
@@ -180,7 +239,7 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   /// <summary>Current Earth Observer look-direction mode. Two-way bound to <see cref="CameraService"/>.</summary>
   [ObservableProperty]
   private EarthObserverOrientationMode _earthObserverOrientationMode =
-    EarthObserverOrientationMode.Inertial;
+    EarthObserverOrientationMode.Free;
 
 
 
@@ -220,6 +279,21 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     _cameraService
       .CameraModeChanged.ObserveOn(schedulerProvider.MainThread)
       .Subscribe(mode => CurrentCameraMode = mode)
+      .AddDisposableTo(_disposables);
+
+    _cameraService
+      .CometCommitted.ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(committed => IsCometCommitted = committed)
+      .AddDisposableTo(_disposables);
+
+    // "Restore preset projection" reacts to any projection change (user or Rust side).
+    _cameraService
+      .CameraProjection
+      .CombineLatest(_cameraService.EarthObserverPresetProjection,
+        (proj, preset) => CameraService.DiffersFromPreset(proj, preset))
+      .DistinctUntilChanged()
+      .ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(modified => IsEarthPresetProjectionModified = modified)
       .AddDisposableTo(_disposables);
 
     // Mirror orientation mode changes that originate from other callers (e.g. future keybindings).
@@ -379,17 +453,13 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     _cameraService.SetEarthObserverOrientationMode(value);
   }
 
-  [RelayCommand]
-  private void PointTowardsSun()
-  {
-    _cameraService.PointTowardsSun();
-  }
+  /// <summary>Enabled when the projection was changed away from the lock-in / tracking preset.</summary>
+  [ObservableProperty]
+  [NotifyCanExecuteChangedFor(nameof(RestoreEarthPresetProjectionCommand))]
+  private bool _isEarthPresetProjectionModified;
 
-  [RelayCommand]
-  private void PointTowardsComet()
-  {
-    _cameraService.PointTowardsComet();
-  }
+  [RelayCommand(CanExecute = nameof(IsEarthPresetProjectionModified))]
+  private void RestoreEarthPresetProjection() => _cameraService.ApplyEarthPresetProjection();
 
   private void DispatchPerspective()
   {

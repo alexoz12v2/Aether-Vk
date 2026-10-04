@@ -3,7 +3,7 @@
 #[macro_export]
 macro_rules! log {
   ($($arg:tt)*) => {
-    $crate::os::debug::log_message(core::format_args!($($arg)*));
+    $crate::os::debug::log_message(core::format_args!($($arg)*))
   };
 }
 

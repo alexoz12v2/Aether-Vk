@@ -23,6 +23,11 @@ use oshal::math::{
 };
 use parking_lot::RwLock;
 
+/// Micro-frame depth layers of the scene bodies (unique per frame; the Sun uses 2).
+pub const EARTH_DEPTH_LAYER: u32 = 1;
+pub const SUN_DEPTH_LAYER: u32 = 2;
+pub const COMET_DEPTH_LAYER: u32 = 3;
+
 pub struct SceneReturn {
   pub scene_id: u64,
   pub comet_body: u64,
@@ -190,9 +195,13 @@ impl SimulationContext {
       (scene, root_entity)
     };
 
+    // Every micro frame needs its own depth layer: the renderer keys frames by layer, so two
+    // subtrees sharing a layer made one of them render relative to the other's frame (the comet
+    // appeared ~0.8 AU off, behind the camera, when snapped above it in UpZenith).
     let create_subtree = |name: &str,
                           is_comet: bool,
-                          add_gizmo: bool|
+                          add_gizmo: bool,
+                          depth_layer: u32|
      -> crate::simulation_api::structs::SubtreeEntities {
       const AU_TO_KM: f32 = 149_597_870.7;
       // subtree root (AU frame, child of root)
@@ -208,7 +217,7 @@ impl SimulationContext {
           frame_type: crate::scene::ReferenceFrameType::Micro,
           scale: 1.0 / AU_TO_KM,
           soi_radius: 1.0,
-          depth_layer: 1,
+          depth_layer,
         },
       );
 
@@ -276,7 +285,7 @@ impl SimulationContext {
       cursor_entity,
       crate::scene::HighResTransformComponent {
         position: DVec3::zero(),
-        rotation: Quat::identity(),
+        rotation: aethervk_oshal_rlib::math::vector::vec4f64::Quat64::identity(),
         scale: Vec3f32::from_components(0.02, 0.02, 0.02),
       },
     )?;
@@ -336,9 +345,12 @@ impl SimulationContext {
 
     let asset_dir: alloc::string::String = ASSET_DIR.read().clone().unwrap();
     let font_path = alloc::format!("{}/fonts/JetBrainsMono-Regular.ttf", asset_dir);
+    // shared by the body labels spawned below (Sun now, comet after its subtree)
+    let mut label_font: Option<(alloc::sync::Arc<crate::scene::text::FontAtlas>, u64)> = None;
     if let Ok(atlas) = crate::scene::text::FontAtlas::from_path(&font_path, 64.0) {
       let atlas = alloc::sync::Arc::new(atlas);
       let font_hash = atlas.hash_metadata();
+      label_font = Some((alloc::sync::Arc::clone(&atlas), font_hash));
 
       let sun_indicator_entity = scene.spawn_entity("sun_indicator");
       scene.set_parent(sun_indicator_entity, Some(sun_entity));
@@ -376,7 +388,7 @@ impl SimulationContext {
             home_position.y() as f64,
             home_position.z() as f64,
           ),
-          rotation: Quat::identity(),
+          rotation: aethervk_oshal_rlib::math::vector::vec4f64::Quat64::identity(),
           scale: Vec3f32::from_components(1.0, 1.0, 1.0),
         },
       )?;
@@ -417,14 +429,70 @@ impl SimulationContext {
     // ── Create planet Earth and comet subtree hierarchies ────────────────────────────────────
     // Must be called BEFORE Arc::new(scene) on the next line, because the closure borrows `scene`
     // by shared reference and Rust NLL requires the last use of the borrow to precede the move.
-    let earth = create_subtree("Earth", false, false);
-    let comet = create_subtree("Comet", true, true);
+    // layer 2 is the Sun's micro frame
+    let earth = create_subtree("Earth", false, false, EARTH_DEPTH_LAYER);
+    let comet = create_subtree("Comet", true, true, COMET_DEPTH_LAYER);
+
+    // Empty container for the path the comet actually follows during a run (logic thread adds an
+    // EffectiveTrajectoryComponent + TrajectoryComponent). Child of root: AU control points.
+    let effective_comet_trajectory = scene.spawn_entity("effective_comet_trajectory");
+    scene.set_parent(effective_comet_trajectory, Some(root_entity));
+    let _ = scene.add_component(
+      effective_comet_trajectory,
+      crate::scene::TransformComponent::default(),
+    );
+
+    // Comet label (Earth observer mode only): follows the comet body wherever its frame is,
+    // spawned hidden.
+    let comet_indicator = label_font.as_ref().map(|(atlas, font_hash)| {
+      let e = scene.spawn_entity("comet_indicator");
+      scene.set_parent(e, Some(root_entity));
+      let _ = scene.add_component(e, crate::scene::TransformComponent::default());
+      let _ = scene.add_component(
+        e,
+        crate::scene::ReferentialIndicatorComponent {
+          target_entity: comet.body,
+          label: alloc::string::String::from("Comet"),
+          text_color: [0.6, 0.9, 1.0, 1.0],
+          desired_label_distance_km: 2_000_000.0,
+          font_atlas: alloc::sync::Arc::clone(atlas),
+          font_hash: *font_hash,
+        },
+      );
+      let _ = scene.add_component(e, crate::scene::HiddenComponent {});
+      e
+    });
+
+    // Reference-position error annotations (cross-track, same-epoch), spawned hidden.
+    let reference_error_entities = label_font.as_ref().map(|(atlas, font_hash)| {
+      ["reference_error_cross", "reference_error_epoch"].map(|name| {
+        let e = scene.spawn_entity(name);
+        scene.set_parent(e, Some(root_entity));
+        let _ = scene.add_component(e, crate::scene::TransformComponent::default());
+        let _ = scene.add_component(
+          e,
+          crate::scene::trajectory::ScreenMeasurementComponent {
+            from_au: aethervk_oshal_rlib::math::vector::vec3f64::DVec3::zero(),
+            to_au: aethervk_oshal_rlib::math::vector::vec3f64::DVec3::zero(),
+            label: alloc::string::String::new(),
+            color: [1.0, 1.0, 1.0, 1.0],
+            font_atlas: alloc::sync::Arc::clone(atlas),
+            font_hash: *font_hash,
+          },
+        );
+        let _ = scene.add_component(e, crate::scene::HiddenComponent {});
+        e
+      })
+    });
     // Drop the closure explicitly so the borrow of `scene` ends here.
     let _ = create_subtree;
 
     let mut scene_ctx_obj = SceneContext::new_empty(Arc::new(scene), root_entity, time_state);
     scene_ctx_obj.cursor_entity = Some(cursor_entity);
     scene_ctx_obj.sun_entity = Some(sun_entity);
+    scene_ctx_obj.effective_comet_trajectory = Some(effective_comet_trajectory);
+    scene_ctx_obj.comet_indicator = comet_indicator;
+    scene_ctx_obj.reference_error_entities = reference_error_entities;
     if let Some(s) = sky_id {
       scene_ctx_obj.sky_entity = Some(s);
     }
@@ -486,23 +554,31 @@ impl SimulationContext {
       {
         let scenes_guard = self.scenes.read();
         if let Some(scene_arc) = scenes_guard.get_scene(scene_id) {
-          let scene_guard = scene_arc.read();
-          let _ = scene_guard.scene.add_component(earth.body, planet);
+          let rot_model = {
+            let scene_guard = scene_arc.read();
+            let _ = scene_guard.scene.add_component(earth.body, planet);
+            scene_guard
+              .scene
+              .with_component(earth.body, |m: &crate::scene::BodyRotationalModel| *m)
+          };
 
           // STEP 2 — Forced repositioning at start_epoch.
           // Snaps Earth_subtree (AU) and Earth_body (km residual) to the almanac position.
-          {
+          // Lock order: the almanac is stepped with no SceneContext lock held (see
+          // BuildCometTrajectory in logic_thread).
+          let state = {
             let logic_state = self.logic_state.read();
-            if let Err(e) = crate::simulation_api::reposition::force_reposition(
-              &scene_guard.scene,
+            planet.step(start_epoch, &logic_state.almanac_data, rot_model.as_ref())
+          };
+          match state {
+            Ok((position_km, rotation)) => crate::simulation_api::reposition::apply_reposition(
+              &scene_arc.read().scene,
               earth.subtree,
               earth.body,
-              &logic_state.almanac_data,
-              &planet,
-              start_epoch,
-            ) {
-              aethervk_oshal_rlib::log!("[scene_api] Earth force_reposition failed: {}", e);
-            }
+              position_km,
+              rotation,
+            ),
+            Err(e) => aethervk_oshal_rlib::log!("[scene_api] Earth force_reposition failed: {}", e),
           }
         }
       }
@@ -511,7 +587,7 @@ impl SimulationContext {
       // UpdateTrajectoryForSpk is an async command processed on the thread pool; earth.orbit
       // will gain a TrajectoryComponent once complete.
       let (traj_start_tai, traj_end_tai) =
-        crate::simulation_api::reposition::full_year_tai_seconds(start_epoch);
+        crate::simulation_api::reposition::earth_orbit_span_tai(start_epoch, end_epoch);
       let _ = self.threads.logic_thread.tx().try_send(
         crate::simulation_api::structs::LogicCommand::UpdateTrajectoryForSpk {
           task_id: 0,
@@ -523,12 +599,11 @@ impl SimulationContext {
           sample_step_days: 1.0,
         },
       );
-      // Record the trajectory year so SetEpochRange can skip redundant rebuilds.
+      // Record the covered span so SetEpochRange can skip redundant rebuilds.
       {
-        let year = crate::simulation_api::reposition::year_of_epoch(start_epoch);
         let scenes_guard = self.scenes.read();
         if let Some(scene_arc) = scenes_guard.get_scene(scene_id) {
-          scene_arc.write().earth_orbit_year = Some(year);
+          scene_arc.write().earth_orbit_coverage = Some((traj_start_tai, traj_end_tai));
         }
       }
     } else {
@@ -577,6 +652,42 @@ impl SimulationContext {
   /// spin-waiting for a write lock. This prevents the logic_thread from hanging when
   /// it holds the scene read lock during a simulation tick while this is called from
   /// an FFI/UI thread. The command is processed by the logic thread between ticks.
+  /// Enables or disables the "reference-position error" annotations of the committed comet and
+  /// refreshes them right away (the logic loop keeps them updated, also while paused).
+  pub fn set_reference_error_visible(&self, scene_id: u64, visible: bool) -> bool {
+    let scenes = self.scenes.read();
+    let Some(scene_arc) = scenes.get_scene(scene_id) else {
+      return false;
+    };
+    let Some(epoch) = scenes.time_managers.get(&scene_id).map(|t| t.current_epoch()) else {
+      return false;
+    };
+    let guard = scene_arc.read();
+    guard
+      .reference_error_enabled
+      .store(visible, core::sync::atomic::Ordering::Relaxed);
+    crate::simulation_api::logic_thread::update_reference_errors(&guard, epoch);
+    true
+  }
+
+  /// Shows or hides the comet label (`comet_indicator`), e.g. while in Earth observer mode.
+  /// Synchronous `HiddenComponent` toggle; returns false when the scene or label is missing.
+  pub fn set_comet_indicator_visible(&self, scene_id: u64, visible: bool) -> bool {
+    let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
+      return false;
+    };
+    let guard = scene_arc.read();
+    let Some(e) = guard.comet_indicator else {
+      return false;
+    };
+    if visible {
+      let _ = guard.scene.remove_component::<crate::scene::HiddenComponent>(e);
+    } else {
+      let _ = guard.scene.add_component(e, crate::scene::HiddenComponent {});
+    }
+    true
+  }
+
   pub fn set_entity_visibility(
     &self,
     scene_id: u64,

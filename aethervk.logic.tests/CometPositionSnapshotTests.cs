@@ -1,3 +1,4 @@
+using AetherVk.Logic.Utils;
 using System;
 using System.Numerics;
 using System.Reactive.Concurrency;
@@ -159,7 +160,7 @@ public class CometPositionSnapshotTests
     runtime.Setup(r => r.SetCameraParentToComet(It.IsAny<ulong>(), It.IsAny<bool>())).Returns(true);
     runtime.Setup(r => r.CameraSetRotoTranslate(
       It.IsAny<ulong>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(),
-      It.IsAny<Quaternion>(), It.IsAny<ulong>())).Returns(true);
+      It.IsAny<Quaterniond>(), It.IsAny<ulong>())).Returns(true);
 
     var breadcrumb  = new BreadcrumbService();
     var cometConfig = new CometConfigService(runtime.Object, schedulers);

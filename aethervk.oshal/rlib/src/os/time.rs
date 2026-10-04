@@ -478,6 +478,20 @@ pub mod v2 {
       self.start_epoch + duration
     }
 
+    /// Jumps the simulation clock to `epoch`, clamped to `[start_epoch, end_epoch]`; pending
+    /// fixed-step time is dropped. Returns the epoch actually reached.
+    /// Takes `&self` (the clock state is internally locked): callers holding only a read guard
+    /// on the time manager (e.g. inside `self_sync_do_if_done`) can seek without deadlocking.
+    pub fn seek(&self, epoch: Epoch) -> Epoch {
+      let total = (self.end_epoch - self.start_epoch).to_seconds().max(0.0);
+      let target = (epoch - self.start_epoch).to_seconds().clamp(0.0, total);
+      let mut state = self.state.write();
+      state.scaled_time = (target * 1e6) as timeus_t;
+      state.scaled_accumulator = 0;
+      drop(state);
+      self.current_epoch()
+    }
+
     pub fn set_epoch_range(
       &mut self,
       new_start: Epoch,

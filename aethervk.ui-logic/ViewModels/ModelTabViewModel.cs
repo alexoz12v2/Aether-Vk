@@ -414,6 +414,24 @@ public partial class ModelTabViewModel
   /// Subscribes to a jet's <see cref="INotifyPropertyChanged"/> so that any edit
   /// is forwarded to the native runtime (debounced 250 ms to avoid flooding).
   /// </summary>
+  /// <summary>Draws the comet's reference-position error lines (cross-track, same-epoch).</summary>
+  [ObservableProperty]
+  private bool _showReferencePositionError;
+
+  partial void OnShowReferencePositionErrorChanged(bool value)
+  {
+    if (CurrentSession is { } session)
+      session.ShowReferencePositionError = value;
+    _runtimeService.SetReferenceErrorVisible(value);
+  }
+
+  /// <summary>
+  /// Jet properties that only affect drawing (not emission or physics): editing them while paused
+  /// must not restore the snapshot.
+  /// </summary>
+  internal static readonly System.Collections.Generic.HashSet<string?> VisualOnlyJetProperties =
+    new() { nameof(JetViewModel.StreamColor) };
+
   private void SubscribeJetChanges(JetViewModel jet, ModelSession session)
   {
     Observable
@@ -422,9 +440,17 @@ public partial class ModelTabViewModel
         h => jet.PropertyChanged -= h)
       .Where(e =>
       {
-        if (e.EventArgs.PropertyName != nameof(JetViewModel.Beta) &&
-            e.EventArgs.PropertyName != nameof(JetViewModel.DustProductionRateAt1AuKgs) &&
-            e.EventArgs.PropertyName != nameof(JetViewModel.IsPreviewVisible))
+        var name = e.EventArgs.PropertyName;
+        // computed outputs and the preview toggle (own subscription below) are not forwarded
+        if (name == nameof(JetViewModel.Beta) ||
+            name == nameof(JetViewModel.DustProductionRateAt1AuKgs) ||
+            name == nameof(JetViewModel.IsPreviewVisible))
+          return false;
+
+        // Visual-only edits (draw parameters, read by the renderer every frame) are forwarded
+        // without restoring the snapshot: a restore swaps in the scene cloned at Play, whose dust
+        // ring only re-emits on simulation ticks, so the tail vanished while paused.
+        if (!VisualOnlyJetProperties.Contains(name))
         {
             _dispatcher.Dispatch(() => 
             {
@@ -434,9 +460,8 @@ public partial class ModelTabViewModel
                     _snapshotExists = false;
                 }
             });
-            return true;
         }
-        return false;
+        return true;
       })
       .Throttle(TimeSpan.FromMilliseconds(250), _schedulerProvider.Background)
       .Subscribe(_ =>

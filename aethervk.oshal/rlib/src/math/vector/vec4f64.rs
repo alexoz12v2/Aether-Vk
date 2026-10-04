@@ -48,6 +48,18 @@ pub struct Quat64(pub Vec4f64);
 
 pub type DQuat = Quat64;
 
+impl From<super::vec4::Quat> for Quat64 {
+  fn from(q: super::vec4::Quat) -> Self {
+    Self::from_quat(q)
+  }
+}
+
+impl From<Quat64> for super::vec4::Quat {
+  fn from(q: Quat64) -> Self {
+    q.to_quat()
+  }
+}
+
 impl Default for Quat64 {
   fn default() -> Self {
     Self::identity()
@@ -66,6 +78,16 @@ impl Quat64 {
 
   pub fn from_components(p0: f64, p1: f64, p2: f64, p3: f64) -> Quat64 {
     Self(Vec4f64::from_components(p0, p1, p2, p3))
+  }
+
+  /// Rounds to an f32 quaternion (x, y, z, w order preserved).
+  pub fn to_quat(&self) -> super::vec4::Quat {
+    super::vec4::Quat::from_components(
+      self.0.x() as f32,
+      self.0.y() as f32,
+      self.0.z() as f32,
+      self.0.w() as f32,
+    )
   }
 
   /// Extracts the rotation component from a 4x4 transformation matrix into a Quaternion.
@@ -793,5 +815,50 @@ impl Quaternion for Quat64 {
     } else {
       Self::identity()
     }
+  }
+}
+
+#[cfg(test)]
+mod quat64_tests {
+  use super::*;
+  use crate::math::vector::{vec3::Vec3f32, vec4::Quat};
+
+  #[test]
+  fn f32_round_trip_and_rotation_agree() {
+    let q32 = Quat::from_axis_angle(Vec3f32::from_components(0.3, -0.5, 0.8).normalize(), 1.234);
+    let q = Quat64::from_quat(q32);
+    assert_eq!(q.to_quat(), q32, "upcast then downcast is exact");
+    let v = Vec3f64::from_components(1.0, 2.0, -3.0);
+    let r64 = q.rotate_vector(v);
+    let r32 = q32.rotate_vector(Vec3f32::from_components(1.0, 2.0, -3.0));
+    assert!((r64.x() - r32.x() as f64).abs() < 1e-5);
+    assert!((r64.y() - r32.y() as f64).abs() < 1e-5);
+    assert!((r64.z() - r32.z() as f64).abs() < 1e-5);
+  }
+
+  #[test]
+  fn f64_composition_cancels_exactly() {
+    // a body rotation known only in f32, undone in f64: what a camera parented to a spinning
+    // body relies on (local = inv(parent) * world, world = parent * local)
+    let parent = Quat64::from_quat(Quat::from_axis_angle(
+      Vec3f32::from_components(0.0, 0.4, 0.9).normalize(),
+      2.1,
+    ));
+    let world = Quat64::from_axis_angle(Vec3f64::from_components(1.0, 1.0, 0.2).normalize(), 0.7);
+    let local = (parent.inverse() * world).normalize();
+    let back = (parent * local).normalize();
+    let d = back * world.conjugate();
+    let angle = 2.0 * d.vector_part().length().atan2(d.scalar_part().abs());
+    assert!(angle < 1e-14, "composition error {angle} rad");
+  }
+
+  #[test]
+  fn slerp_endpoints() {
+    let a = Quat64::identity();
+    let b = Quat64::from_axis_angle(Vec3f64::from_components(0.0, 0.0, 1.0), 1.0);
+    let s0 = Quat64::slerp(a, b, 0.0);
+    let s1 = Quat64::slerp(a, b, 1.0);
+    assert!((s0.scalar_part() - 1.0).abs() < 1e-12);
+    assert!((s1.scalar_part() - b.scalar_part()).abs() < 1e-12);
   }
 }

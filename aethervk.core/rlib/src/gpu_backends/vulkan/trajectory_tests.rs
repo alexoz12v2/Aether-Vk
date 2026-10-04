@@ -62,6 +62,7 @@ fn test_trajectory_rendering_api() {
       texture_id: 0,
       subdivisions_per_segment: 32,
       control_points: alloc::vec::Vec::new(),
+      control_points_f64: alloc::vec::Vec::new(),
     };
 
     // In real scenario we need a command buffer.

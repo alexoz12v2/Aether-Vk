@@ -255,7 +255,7 @@ fn test_batch(count: u32, dur: f64) -> DustBatch {
     comet_v_dur_hi: [0.0; 4],
     comet_v_dur_lo: [0.0; 4],
     rot_start: [0.0, 0.0, 0.0, 1.0],
-    rot_end: [0.0, 0.0, 0.0, 1.0],
+    spin: [0.0, 0.0, 1.0, 0.0],
     // jet roughly sunward
     jet_dir_aperture: [0.35, 0.93, 0.04, 0.6],
     size_params,
@@ -265,7 +265,7 @@ fn test_batch(count: u32, dur: f64) -> DustBatch {
     count,
     ring_mask: RING_CAPACITY_HIGH - 1,
     seed: 0xC0FFEE,
-    _pad: [0; 4],
+    lit: [0.0, 0.0, 0.0, LIT_MODE_ALWAYS],
   };
   b.set_comet(rc, vc, T_START, dur);
   b
@@ -413,78 +413,6 @@ fn test_cfg(q: f64, ttl_s: f64) -> DustEmitConfig {
 }
 
 #[test]
-fn host_tick_conserves_mass_tracks_readiness_and_rewinds() {
-  let (r0, v0) = comet_state();
-  let mut host = DustHostState::new(RING_CAPACITY_LOW);
-  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
-  // 3 h/s at 60 ticks/s: 180 scaled s per 16.6 ms tick
-  let (dt_tick_s, dt_tick_us) = (180.0, 16_667_i64);
-  let jet_at = |t: f64| {
-    let (r, v) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, t);
-    JetState {
-      t_s: t,
-      r_m: r,
-      v_ms: v,
-      rot: [0.0, 0.0, 0.0, 1.0],
-    }
-  };
-  let mut emitted_mass = 0.0;
-  let mut batches = 0;
-  let (mut t, mut now) = (0.0, 1_000_000_i64);
-  for tick in 0..6000u64 {
-    let out = host.tick(jet_at(t), now, &cfg);
-    for b in &out {
-      emitted_mass += b.mass_params[0] as f64;
-      batches += 1;
-      // window coherence: duration matches the gate interval, slots are inside the ring
-      assert!(b.comet_v_dur_hi[3] >= 0.0);
-      assert_eq!(b.ring_mask, RING_CAPACITY_LOW - 1);
-    }
-    // pending batches are never drawable
-    let (_, live, _) = host.ring.drawable();
-    let pending: u32 = host
-      .ring
-      .batches
-      .iter()
-      .filter(|b| b.ready == READY_PENDING)
-      .map(|b| b.count)
-      .sum();
-    assert!(live + pending <= host.ring.live());
-    host.ring.mark_submitted(tick + 1);
-    assert!(host.ring.live() <= RING_CAPACITY_LOW - RING_CAPACITY_LOW / RING_GUARD_DIVISOR);
-    t += dt_tick_s;
-    now += dt_tick_us;
-  }
-  assert!(batches > 100, "batches {batches}");
-  // produced up to the last gate; the remainder sits in the accumulator
-  let produced = cfg.q_dust_kgs * 1e3 * host.last_gate_t_s.unwrap();
-  let rel = ((emitted_mass + host.acc.mass_g) - produced).abs() / produced;
-  assert!(rel < 1e-5, "mass rel err {rel}");
-  let ds = host.draw_state().unwrap();
-  assert!(ds.live_count > 0 && ds.compute_wait > 0 && ds.mean_cluster_flux > 0.0);
-
-  // restore: everything must be re-emitted, oldest first, before it is drawable again
-  host.ring.invalidate_gpu();
-  assert!(host.draw_state().is_none());
-  let n_live = host.ring.batches.len();
-  let mut reemitted = 0;
-  while reemitted < n_live {
-    let out = host.tick(jet_at(t), now, &cfg);
-    reemitted += out.len().min(REEMIT_PER_TICK);
-    host.ring.mark_submitted(1_000_000);
-    t += dt_tick_s;
-    now += dt_tick_us;
-  }
-  assert!(host.ring.batches.iter().all(|b| b.ready != READY_NEEDS_EMIT));
-
-  // scrub back by a day: newer batches dropped, accumulator restarted
-  let t_back = t - 86400.0;
-  host.tick(jet_at(t_back), now, &cfg);
-  assert!(host.ring.batches.iter().all(|b| b.t_end_s <= t_back));
-  assert_eq!(host.acc.mass_g, 0.0);
-}
-
-#[test]
 fn planner_conserves_mass_and_respects_budget() {
   for capacity in [RING_CAPACITY_HIGH, RING_CAPACITY_LOW] {
     let mut acc = EmissionAccumulator::default();
@@ -497,7 +425,16 @@ fn planner_conserves_mass_and_respects_budget() {
     for _ in 0..2000 {
       t += dt;
       ring.retire(t, ttl);
-      if let Some(p) = plan_batch(&mut acc, q, dt, t, ttl, ring.capacity, ring.free_slots()) {
+      if let Some(p) = plan_batch(
+        &mut acc,
+        q,
+        dt,
+        dt,
+        t,
+        ttl,
+        ring.capacity,
+        ring.free_slots(),
+      ) {
         emitted += p.mass_g;
         ring.push_batch(desc(p.count), t, p.mass_g);
       }
@@ -559,4 +496,393 @@ fn render_children_keep_the_instance_budget() {
         || k == CHILDREN_PER_CLUSTER
     );
   }
+}
+
+// ─── jet site illumination ─────────────────────────────────────────────────
+
+/// 67P sidereal rotation period (s)
+const P_ROT: f64 = 12.4 * 3600.0;
+const OMEGA: f64 = 2.0 * core::f64::consts::PI / P_ROT;
+
+fn unit(a: V3) -> V3 {
+  scale(a, 1.0 / norm(a))
+}
+
+/// lit time of `[0, dur]` by midpoint sampling
+fn brute_lit_time(sun: V3, n0: V3, axis: V3, omega: f64, dur: f64, samples: usize) -> f64 {
+  let h = dur / samples as f64;
+  (0..samples)
+    .filter(|&i| {
+      dot(
+        rotate_axis_angle(n0, axis, omega * (i as f64 + 0.5) * h),
+        sun,
+      ) > 0.0
+    })
+    .count() as f64
+    * h
+}
+
+#[test]
+fn lit_window_closed_form() {
+  let z = [0.0, 0.0, 1.0];
+  let cases: [(V3, V3, V3, f64); 5] = [
+    // equatorial site, sun in the equatorial plane: half lit
+    ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], z, 3.25 * P_ROT),
+    // sun 30° above the equator, site at 20° latitude: lit more than half
+    (
+      [0.866_025_4, 0.0, 0.5],
+      [0.0, 0.939_692_6, 0.342_020_1],
+      z,
+      3.25 * P_ROT,
+    ),
+    // retrograde (axis flipped), partial window starting mid arc
+    (
+      [0.3, -0.9, 0.1],
+      [0.6, 0.7, -0.2],
+      [0.0, 0.0, -1.0],
+      0.37 * P_ROT,
+    ),
+    // tilted axis, short window (< 1 rotation)
+    (
+      [0.35, 0.93, 0.04],
+      [1.0, 0.0, 0.0],
+      [0.2, 0.1, 0.97],
+      0.8 * P_ROT,
+    ),
+    // many rotations (high time scale)
+    ([0.35, 0.93, 0.04], [1.0, 0.0, 0.0], z, 37.6 * P_ROT),
+  ];
+  for (k, (sun, n0, axis, dur)) in cases.into_iter().enumerate() {
+    let (sun, n0, axis) = (unit(sun), unit(n0), unit(axis));
+    let w = LitWindow::new(sun, n0, axis, OMEGA, dur);
+    let brute = brute_lit_time(sun, n0, axis, OMEGA, dur, 400_000);
+    assert_eq!(w.mode, LIT_MODE_PERIODIC, "case {k}");
+    assert!(
+      (w.lit_time_s - brute).abs() < 1e-4 * dur,
+      "case {k}: closed form {} vs brute {brute} (dur {dur})",
+      w.lit_time_s
+    );
+    assert!(w.psi_start >= -core::f64::consts::PI && w.psi_start < core::f64::consts::PI);
+    assert!(w.psi0 > 0.0 && w.psi0 < core::f64::consts::PI);
+  }
+  // equinox: exactly half
+  let w = LitWindow::new([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], z, OMEGA, 4.0 * P_ROT);
+  assert!((w.lit_time_s - 2.0 * P_ROT).abs() < 1e-6 * P_ROT);
+  // polar site: constant illumination
+  let lit = LitWindow::new(unit([0.3, 0.0, 1.0]), z, z, OMEGA, 1000.0);
+  assert_eq!((lit.mode, lit.lit_time_s), (LIT_MODE_ALWAYS, 1000.0));
+  let dark = LitWindow::new(unit([0.3, 0.0, -1.0]), z, z, OMEGA, 1000.0);
+  assert_eq!(dark.lit_time_s, 0.0);
+  // polar night / midnight sun at mid latitudes (|A| > R)
+  let n = unit([1.0, 0.0, 3.0]);
+  let sun_high = unit([1.0, 0.0, 2.0]);
+  assert_eq!(
+    LitWindow::new(sun_high, n, z, OMEGA, P_ROT).lit_time_s,
+    P_ROT
+  );
+  assert_eq!(
+    LitWindow::new(scale(sun_high, -1.0), n, z, OMEGA, P_ROT).lit_time_s,
+    0.0
+  );
+  // no spin: lit iff the site faces the sun
+  assert_eq!(
+    LitWindow::new([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], z, 0.0, 10.0).lit_time_s,
+    0.0
+  );
+}
+
+/// batch over `dur` with a spinning jet: identity attitude at the start, so the particle-system
+/// frame is the root frame and the jet axis is the site normal `n0`
+fn spinning_batch(count: u32, dur: f64, n0: V3, axis: V3, aperture: f32) -> (DustBatch, V3) {
+  let (rc, _) = comet_state();
+  let sun = scale(rc, -1.0 / norm(rc));
+  let mut b = test_batch(count, dur);
+  b.jet_dir_aperture = [n0[0] as f32, n0[1] as f32, n0[2] as f32, aperture];
+  b.spin = [axis[0] as f32, axis[1] as f32, axis[2] as f32, OMEGA as f32];
+  b.lit = LitWindow::new(sun, n0, axis, OMEGA, dur).to_gpu();
+  (b, sun)
+}
+
+#[test]
+fn emitted_clusters_are_sunlit_and_uniform_in_lit_time() {
+  let axis = unit([0.2, 0.1, 0.97]);
+  let n0 = unit([1.0, -0.3, 0.1]);
+  let dur = 2.5 * P_ROT;
+  let (b, sun) = spinning_batch(4000, dur, n0, axis, 0.6);
+  assert_eq!(b.lit[3], LIT_MODE_PERIODIC);
+  let total = LitWindow::new(sun, n0, axis, OMEGA, dur).lit_time_s;
+  assert!(total > 0.2 * dur && total < 0.8 * dur, "lit {total}");
+  let mut prev = -1.0;
+  for j in 0..b.count {
+    let c = emit_cluster(&b, j);
+    let dt = c.t0().to_f64() - T_START;
+    assert!(dt >= 0.0 && dt <= dur + 1e-3, "dt {dt}");
+    assert!(
+      dt >= prev - 1e-3,
+      "emission time must grow with j: {prev} -> {dt}"
+    );
+    prev = dt;
+    // the site faces the sun at emission
+    let n = rotate_axis_angle(n0, axis, OMEGA * dt);
+    assert!(
+      dot(n, sun) > -1e-3,
+      "cluster {j} emitted in the dark: {}",
+      dot(n, sun)
+    );
+    // uniform in lit time: lit time elapsed before t0 is the stratum position u_t
+    let frac = LitWindow::new(sun, n0, axis, OMEGA, dt).lit_time_s / total;
+    let u_mid = (j as f64 + 0.5) / b.count as f64;
+    assert!(
+      (frac - u_mid).abs() <= 1.0 / b.count as f64 + 1e-4,
+      "cluster {j}: lit fraction {frac} vs stratum {u_mid}"
+    );
+  }
+  // importance weights still carry the whole batch mass
+  let mass: f64 = (0..b.count).map(|j| emit_cluster(&b, j).mass_g() as f64).sum();
+  assert!((mass - 1.0e6).abs() < 0.01e6);
+}
+
+#[test]
+fn ejection_follows_exact_spin() {
+  // zero aperture and no speed spread: the ejection direction is the rotated jet axis
+  let axis = unit([0.0, 0.3, 1.0]);
+  let n0 = unit([1.0, 0.2, 0.0]);
+  let dur = 3.7 * P_ROT;
+  let (mut b, _) = spinning_batch(300, dur, n0, axis, 0.0);
+  b.vel_params[1] = 0.0;
+  let (rc, vc) = comet_state();
+  for j in 0..b.count {
+    let c = emit_cluster(&b, j);
+    let dt = c.t0().to_f64() - T_START;
+    let (_, v_comet) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, dt);
+    let ej = sub(c.v0().to_f64(), v_comet);
+    let expect = rotate_axis_angle(n0, axis, OMEGA * dt);
+    let err = norm(sub(unit(ej), expect));
+    assert!(err < 1e-4, "cluster {j}: direction error {err}");
+  }
+}
+
+/// jet on an equatorial site of a nucleus spinning about `axis`, riding the comet orbit
+fn spinning_jet(t: f64, axis: V3, n0: V3, model_spin: bool) -> JetState {
+  let (r0, v0) = comet_state();
+  let (r, v) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, t);
+  let half = 0.5 * OMEGA * t;
+  let s = half.sin();
+  JetState {
+    t_s: t,
+    r_m: r,
+    v_ms: v,
+    rot: [
+      (axis[0] * s) as f32,
+      (axis[1] * s) as f32,
+      (axis[2] * s) as f32,
+      half.cos() as f32,
+    ],
+    site_normal: rotate_axis_angle(n0, axis, OMEGA * t),
+    spin: model_spin.then_some([axis[0], axis[1], axis[2], OMEGA]),
+  }
+}
+
+/// true lit time over `[0, t_end]` with the sun moving along the orbit
+fn brute_orbit_lit_time(n0: V3, t_end: f64, samples: usize) -> f64 {
+  let (r0, v0) = comet_state();
+  let h = t_end / samples as f64;
+  (0..samples)
+    .filter(|&i| {
+      let t = (i as f64 + 0.5) * h;
+      let (r, _) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, t);
+      dot(rotate_axis_angle(n0, [0.0, 0.0, 1.0], OMEGA * t), r) < 0.0
+    })
+    .count() as f64
+    * h
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Deterministic emission grid (DustHostState::tick)
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn orbit_jet(t: f64) -> Option<JetState> {
+  let (r0, v0) = comet_state();
+  let (r, v) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, t);
+  Some(JetState {
+    t_s: t,
+    r_m: r,
+    v_ms: v,
+    rot: [0.0, 0.0, 0.0, 1.0],
+    // sub-solar site, no spin: always lit
+    site_normal: scale(r, -1.0 / norm(r)),
+    spin: Some([0.0, 0.0, 1.0, 0.0]),
+  })
+}
+
+/// runs ticks at the given scaled times, marking every batch submitted; returns the host
+fn run_ticks(
+  times: impl IntoIterator<Item = f64>,
+  jet_at: &dyn Fn(f64) -> Option<JetState>,
+  cfg: &DustEmitConfig,
+) -> DustHostState {
+  let mut host = DustHostState::new(RING_CAPACITY_LOW);
+  for (i, t) in times.into_iter().enumerate() {
+    host.tick(t, jet_at, &|_| *cfg);
+    host.ring.mark_submitted(i as u64 + 1);
+  }
+  host
+}
+
+/// closed-window descriptors of the ring (slot fields cleared): what determinism is about
+fn closed_windows(host: &DustHostState) -> alloc::vec::Vec<(i64, DustBatch)> {
+  let n = host.ring.batches.len() - host.provisional as usize;
+  host
+    .ring
+    .batches
+    .iter()
+    .take(n)
+    .map(|b| {
+      let mut d = b.desc;
+      d.first_index = 0;
+      (b.window, d)
+    })
+    .collect()
+}
+
+#[test]
+fn grid_conserves_mass_tracks_readiness_and_restores() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let mut host = DustHostState::new(RING_CAPACITY_LOW);
+  // 3 h/s at 60 ticks/s for ~12.5 days (< TTL: nothing retired)
+  let mut t = 0.0;
+  for tick in 0..6000u64 {
+    for b in host.tick(t, &orbit_jet, &|_| cfg) {
+      assert_eq!(b.ring_mask, RING_CAPACITY_LOW - 1);
+      assert!(b.count > 0);
+    }
+    // pending batches are never drawable
+    let (_, live, _) = host.ring.drawable();
+    assert!(live <= host.ring.live());
+    host.ring.mark_submitted(tick + 1);
+    assert!(host.ring.live() <= RING_CAPACITY_LOW - RING_CAPACITY_LOW / RING_GUARD_DIVISOR);
+    t += 180.0;
+  }
+  let t_last = t - 180.0;
+  // closed windows + the provisional open one hold exactly q·t (always lit, constant q)
+  let produced = cfg.q_dust_kgs * 1e3 * t_last;
+  let rel = (host.ring.live_mass_g() - produced).abs() / produced;
+  assert!(rel < 1e-6, "mass rel err {rel}");
+  assert!(host.provisional);
+  let ds = host.draw_state().unwrap();
+  assert!(ds.live_count > 0 && ds.compute_wait > 0 && ds.mean_cluster_flux > 0.0);
+
+  // restore: everything re-emitted, oldest first, before it is drawable again
+  host.ring.invalidate_gpu();
+  assert!(host.draw_state().is_none());
+  for i in 0..64 {
+    host.tick(t_last, &orbit_jet, &|_| cfg);
+    host.ring.mark_submitted(1_000_000 + i);
+    if host.ring.batches.iter().all(|b| b.ready != READY_NEEDS_EMIT) {
+      break;
+    }
+  }
+  assert!(host.ring.batches.iter().all(|b| b.ready != READY_NEEDS_EMIT));
+
+  // scrub back by a day: newer batches dropped, the open window rebuilt at the new time
+  let t_back = t_last - 86400.0;
+  host.tick(t_back, &orbit_jet, &|_| cfg);
+  assert!(host.ring.batches.iter().all(|b| b.t_end_s <= t_back + 1e-6));
+  let rel = (host.ring.live_mass_g() - cfg.q_dust_kgs * 1e3 * t_back).abs() / produced;
+  assert!(rel < 1e-6, "after rewind: mass rel err {rel}");
+}
+
+/// The dust at an epoch does not depend on how it was reached: different tick rates, a pause and
+/// a direct seek (jump) all give identical closed-window batches.
+#[test]
+fn grid_is_deterministic_across_tick_rates_pauses_and_seeks() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let t_end = 20.0 * 86400.0;
+  let a = run_ticks(
+    (0..=12_000).map(|i| (i as f64 * 144.0).min(t_end)),
+    &orbit_jet,
+    &cfg,
+  );
+  // irregular steps with a long pause in the middle
+  let mut ts = alloc::vec::Vec::new();
+  let mut t = 0.0;
+  while t < t_end {
+    ts.push(t);
+    if (5.0 * 86400.0..5.2 * 86400.0).contains(&t) {
+      for _ in 0..50 {
+        ts.push(t); // paused
+      }
+    }
+    t += 37.0 + (ts.len() % 7) as f64 * 53.0;
+  }
+  ts.push(t_end);
+  let b = run_ticks(ts, &orbit_jet, &cfg);
+  // seek: straight to t_end, a few ticks there to emit the windows (64 per tick)
+  let c = run_ticks(core::iter::repeat_n(t_end, 6), &orbit_jet, &cfg);
+
+  let (wa, wb, wc) = (closed_windows(&a), closed_windows(&b), closed_windows(&c));
+  assert!(wa.len() > 100, "windows {}", wa.len());
+  assert_eq!(wa.len(), wb.len());
+  assert_eq!(wa.len(), wc.len());
+  for ((x, y), z) in wa.iter().zip(&wb).zip(&wc) {
+    assert_eq!(x, y, "tick rate / pause changed window {}", x.0);
+    assert_eq!(x, z, "seek changed window {}", x.0);
+  }
+  // and so do the emitted clusters
+  for (_, d) in wa.iter().take(3) {
+    let (ca, cc) = (
+      emit_cluster(d, 5),
+      emit_cluster(&wc.iter().find(|w| w.1 == *d).unwrap().1, 5),
+    );
+    assert_eq!(ca, cc);
+  }
+}
+
+/// jet on an equatorial site of a nucleus spinning about +z, riding the comet orbit
+fn spinning_orbit_jet(t: f64, n0: V3, model_spin: bool) -> Option<JetState> {
+  Some(spinning_jet(t, [0.0, 0.0, 1.0], n0, model_spin))
+}
+
+#[test]
+fn grid_mass_tracks_lit_time_and_spin_fallback_matches_model() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let n0 = [1.0, 0.0, 0.0];
+  let t_end = 10.0 * 86400.0;
+  let times = || (0..=4800).map(move |i| i as f64 * t_end / 4800.0);
+  let with_model = run_ticks(times(), &|t| spinning_orbit_jet(t, n0, true), &cfg);
+  let estimated = run_ticks(times(), &|t| spinning_orbit_jet(t, n0, false), &cfg);
+  let lit = brute_orbit_lit_time(n0, t_end, 2_000_000);
+  let produced = cfg.q_dust_kgs * 1e3 * lit;
+  let m = with_model.ring.live_mass_g();
+  assert!(
+    ((m - produced) / produced).abs() < 2e-3,
+    "mass rel err {}",
+    (m - produced) / produced
+  );
+  assert!(lit > 0.4 * t_end && lit < 0.6 * t_end);
+  assert!(with_model.ring.batches.iter().all(|b| b.desc.lit[3] == LIT_MODE_PERIODIC));
+  let e = estimated.ring.live_mass_g();
+  assert!(
+    ((m - e) / m).abs() < 2e-3,
+    "finite-difference spin: mass rel err {}",
+    (m - e) / m
+  );
+}
+
+#[test]
+fn grid_dark_site_emits_nothing() {
+  // site on the pole, the pole pointing away from the sun: polar night
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let (r0, _) = comet_state();
+  let anti_sun = unit(r0);
+  let dark = |t: f64| {
+    orbit_jet(t).map(|mut j| {
+      j.site_normal = anti_sun;
+      j.spin = Some([anti_sun[0], anti_sun[1], anti_sun[2], OMEGA]);
+      j
+    })
+  };
+  let host = run_ticks((0..2000).map(|i| i as f64 * 180.0), &dark, &cfg);
+  assert_eq!(host.ring.live(), 0);
+  assert!(host.draw_state().is_none());
 }

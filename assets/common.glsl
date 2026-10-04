@@ -35,6 +35,8 @@ layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer Mat
 
 layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer ObjectData {
     mat4 model;
+    // P*V*center composed in f64 on the CPU; all zero = compute it here (f32)
+    vec4 centerClip;
 };
 
 // Total Size: 32 bytes (three 64-bit BDA pointers + uvec2 layer info)

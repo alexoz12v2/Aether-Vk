@@ -14,9 +14,9 @@ use aethervk_oshal_rlib::{
 };
 use alloc::{string::String, vec::Vec};
 
-/// scale factor between coordinates from SPK ephemeris and simulation space
-/// basically 1 km / 1 AU
-pub const DISTANCE_SCALE_FACTOR: f64 = 1.0 / 6.6846e-9;
+/// km per AU: SPK ephemeris (km) to macro simulation space (AU). Alias of
+/// [`crate::simulation_api::reposition::AU_TO_KM`].
+pub const DISTANCE_SCALE_FACTOR: f64 = crate::simulation_api::reposition::AU_TO_KM;
 
 /// Defines a frame whose origin is the Sun, and whose orientation (equatorial plane) is the Ecliptic plane
 /// (the plane containing Earth's orbit). This is rotated ~23.4 degrees with respect to J2000 (which is the

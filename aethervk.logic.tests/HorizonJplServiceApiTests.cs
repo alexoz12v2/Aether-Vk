@@ -130,5 +130,54 @@ namespace aethervk.logic.tests
       Assert.Contains("START_TIME=%272026-05-26%27", url);
       Assert.Contains("STOP_TIME=%272026-06-29%27", url);
     }
-  }
+  
+    private sealed class FixedResponseHandler : HttpMessageHandler
+    {
+      private readonly string _body;
+      public string? LastRequestUrl { get; private set; }
+
+      public FixedResponseHandler(string body) => _body = body;
+
+      protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken
+      )
+      {
+        LastRequestUrl = request.RequestUri?.ToString();
+        return Task.FromResult(
+          new HttpResponseMessage { StatusCode = HttpStatusCode.OK, Content = new StringContent(_body) }
+        );
+      }
+    }
+
+    /// The post-commit nucleus radius is fetched by apparition record id: a bare designation
+    /// ("67P;") makes Horizons answer with the record index, which used to raise a spurious
+    /// error breadcrumb after a successful commit.
+    [Fact]
+    public async Task FetchObjectConstantsAsync_ByRecordId_ParsesCometRadius()
+    {
+      var handler = new FixedResponseHandler(
+        "Rec #:90000703 (+COV) Soln.date: 2026-Sep-04_10:25:07\n"
+          + "Comet physical (GM= km^3/s^2; RAD= km):\n"
+          + "   GM= 6.622E-7            RAD= 1.7\n"
+      );
+      var storageMock = new Mock<ILocalStorageService>();
+      storageMock
+        .Setup(s => s.GetPersistentPath(It.IsAny<string>()))
+        .Returns(System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".txt"));
+      var breadcrumb = new BreadcrumbService();
+      var service = new HorizonJplService(
+        new ConsoleService(new Mock<IUiThreadDispatcher>().Object),
+        breadcrumb,
+        storageMock.Object
+      );
+      service._httpClient = new HttpClient(handler);
+
+      var (radiusKm, massKg) = await service.FetchObjectConstantsAsync("90000703");
+
+      Assert.Contains("COMMAND=%2790000703%3B%27", handler.LastRequestUrl);
+      Assert.Equal(1.7, radiusKm, 6);
+      Assert.Equal(6.622e-7 / 6.6743e-20, massKg, 1);
+    }
+}
 }

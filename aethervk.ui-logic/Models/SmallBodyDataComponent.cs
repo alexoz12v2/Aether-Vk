@@ -49,6 +49,14 @@ public partial class SmallBodyDataComponent : ObservableObject
   private string _orbitId = string.Empty;
 
   /// <summary>Eccentricity (e).</summary>
+  /// <summary>Time of perihelion passage (JD TDB), NaN when SBDB did not provide it.</summary>
+  [ObservableProperty]
+  private double _tp = double.NaN;
+
+  /// <summary>Epoch the SBDB elements are osculating at (JD TDB), NaN when unknown.</summary>
+  [ObservableProperty]
+  private double _elementsEpochJd = double.NaN;
+
   [ObservableProperty]
   private double _e;
 

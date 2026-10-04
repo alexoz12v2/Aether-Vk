@@ -19,7 +19,9 @@ void main() {
     if (j >= B.count) return;
 
     uint global = B.first_index + j;
-    uint h0 = dust_pcg(B.seed ^ dust_pcg(global));
+    // randomness from the in-batch index (seed unique per emission window): a window always
+    // produces the same clusters whatever ring slots it lands on (deterministic seek)
+    uint h0 = dust_pcg(B.seed ^ dust_pcg(j));
     uint h1 = dust_pcg(h0);
     uint h2 = dust_pcg(h1);
     uint h3 = dust_pcg(h2);
@@ -30,7 +32,10 @@ void main() {
     float u_t = (float(j) + dust_u01(h0)) / count;
     vec2 t_start = vec2(B.comet_r_t_hi.w, B.comet_r_t_lo.w);
     vec2 dur = vec2(B.comet_v_dur_hi.w, B.comet_v_dur_lo.w);
-    vec2 dt_in = df_mul_f(dur, u_t);
+    // lit time only: dark phases of the jet site get no clusters (full df64 when always lit)
+    vec2 dt_in = B.lit.w == DUST_LIT_MODE_PERIODIC
+        ? vec2(dust_lit_time_map(u_t, B.lit, B.spin.w, dur.x + dur.y), 0.0)
+        : df_mul_f(dur, u_t);
     vec2 t0 = df_add(t_start, dt_in);
 
     // jet location at t0 (comet free fall over the sub-interval)
@@ -41,12 +46,9 @@ void main() {
 
     // direction: cone in the particle-system frame, rotated with the interpolated attitude
     vec3 dir_ps = dust_sample_cone(dust_u01(h1), dust_u01(h2), B.jet_dir_aperture.xyz, B.jet_dir_aperture.w);
-    vec4 rot = dust_nlerp(B.rot_start, B.rot_end, u_t);
+    // exact nucleus spin from the window start
+    vec4 rot = dust_qmul(dust_qaxis_angle(B.spin.xyz, B.spin.w * (dt_in.x + dt_in.y)), B.rot_start);
     vec3 dir = dust_qrot(rot, dir_ps);
-    // night side: reflect across the terminator plane
-    vec3 sun = -normalize(rc.hi);
-    float ds = dot(dir, sun);
-    if (ds < 0.0) dir -= 2.0 * ds * sun;
 
     // grain size: log-uniform proposal, rank-1 lattice
     float s_min = B.size_params.x;

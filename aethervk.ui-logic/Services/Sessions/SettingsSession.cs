@@ -16,5 +16,5 @@ public sealed class SettingsSession : ITabSession
 
   /// <summary>How the camera's look direction behaves in Earth Observer mode.</summary>
   public EarthObserverOrientationMode EarthObserverOrientation { get; set; } =
-    EarthObserverOrientationMode.Inertial;
+    EarthObserverOrientationMode.Free;
 }

@@ -70,50 +70,6 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   [ObservableProperty]
   private bool _showMeasurementIndicator = false;
 
-  // ── Sun direction indicator ──────────────────────────────────────────────
-  /// <summary>
-  /// True when the sun is outside the camera frustum and the arrowhead should be shown.
-  /// </summary>
-  [ObservableProperty]
-  [NotifyPropertyChangedFor(nameof(SunIndicatorLeft), nameof(SunIndicatorTop))]
-  private bool _isSunOffScreen = false;
-
-  /// <summary>
-  /// Rotation angle of the arrowhead in degrees, measured clockwise from screen-up.
-  /// 0° = sun is above centre, 90° = right, 180° = below, 270° = left.
-  /// </summary>
-  [ObservableProperty]
-  [NotifyPropertyChangedFor(nameof(SunIndicatorLeft), nameof(SunIndicatorTop))]
-  private double _sunIndicatorAngleDeg = 0.0;
-
-  /// <summary>Radius of the indicator circle: min(32 epx, min(W,H)/2).</summary>
-  private const double SunIndicatorMaxRadiusEpx = 32.0;
-
-  private double ComputeIndicatorRadius() =>
-    Math.Min(SunIndicatorMaxRadiusEpx, Math.Min(_viewportVm.Width, _viewportVm.Height) / 2.0);
-
-  /// <summary>Canvas.Left of the arrowhead border (centred on the indicator circle point).</summary>
-  public double SunIndicatorLeft
-  {
-    get
-    {
-      double r = ComputeIndicatorRadius();
-      double rad = SunIndicatorAngleDeg * Math.PI / 180.0;
-      return (_viewportVm.Width / 2.0) + r * Math.Sin(rad) - 12.0;
-    }
-  }
-
-  /// <summary>Canvas.Top of the arrowhead border (centred on the indicator circle point).</summary>
-  public double SunIndicatorTop
-  {
-    get
-    {
-      double r = ComputeIndicatorRadius();
-      double rad = SunIndicatorAngleDeg * Math.PI / 180.0;
-      return (_viewportVm.Height / 2.0) - r * Math.Cos(rad) - 12.0;
-    }
-  }
-
   // Billboards
   public ObservableCollection<BillboardViewModel> Billboards { get; } = new();
 
@@ -125,26 +81,21 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   public RenderDocCaptureViewModel? RenderDoc { get; }
 
   public DebugTelemetryPanelViewModel? DebugTelemetry { get; }
-
-  /// <summary>
-  /// Camera matrix debug panel ViewModel. Non-null only in DEBUG builds.
-  /// Shows the micro-layer view and projection matrices, throttled to ~5 fps.
-  /// </summary>
-  public CameraMatrixDebugViewModel? CameraMatrixDebug { get; }
 #else
   /// <summary>Always null in Release — ContentControl DataTemplate never fires.</summary>
   public object? RenderDoc => null;
   public object? DebugTelemetry => null;
 #endif
 
-#if DEBUG
   /// <summary>
-  /// Comet orbit debug panel ViewModel. Non-null only in DEBUG builds.
+  /// Camera global position/rotation tracker (all builds), polled every 500 ms.
   /// </summary>
-  public CometOrbitDebugViewModel? CometOrbitDebug { get; }
-#else
-  public object? CometOrbitDebug => null;
-#endif
+  public CameraMatrixDebugViewModel CameraMatrixDebug { get; }
+
+  /// <summary>
+  /// Comet orbit debug panel ViewModel (all builds), refreshed at most every 100 ms.
+  /// </summary>
+  public CometOrbitDebugViewModel CometOrbitDebug { get; }
 
   private int _modeIndicatorChangeId;
 
@@ -175,9 +126,9 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
 #if DEBUG
     RenderDoc        = new RenderDocCaptureViewModel(runtimeService, timelineService, modelSessionService, schedulerProvider);
     DebugTelemetry   = new DebugTelemetryPanelViewModel(runtimeService);
+#endif
     CameraMatrixDebug = new CameraMatrixDebugViewModel(runtimeService, schedulerProvider);
     CometOrbitDebug   = new CometOrbitDebugViewModel();
-#endif
 
     _cameraService
       .CameraProjection.Subscribe(proj =>
@@ -248,21 +199,18 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
               IsModeIndicatorExpanded = false;
           }));
 
-#if DEBUG
         // Show/hide the comet orbit debug panel.
-        if (CometOrbitDebug != null)
-        {
-          CometOrbitDebug.IsVisible = mode == CameraMode.CometOrbiting;
-        }
-#endif
+        CometOrbitDebug.IsVisible = mode == CameraMode.CometOrbiting;
       })
       .AddDisposableTo(_disposables);
 
-    // ── Comet orbit debug panel subscription (~10 Hz) ─────────────────────
-    // Sample the authoritative camera transform and update the debug panel
-    // with actual vs expected orbit distance and drift indicators.
+    // ── Comet orbit debug panel subscription (10 Hz) ──────────────────────
+    // Sample the authoritative camera transform (it arrives at the logic tick rate) and update
+    // the debug panel with actual vs expected orbit distance and drift indicators.
     _cameraService
-      .CameraTransform.Subscribe(state =>
+      .CameraTransform
+      .Sample(OrbitDebugRefreshInterval, schedulerProvider.MainThread)
+      .Subscribe(state =>
       {
         if (state == null || _cameraService.CurrentMode != CameraMode.CometOrbiting)
           return;
@@ -275,25 +223,6 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
       UpdateMeasurementIndicator();
       return Task.CompletedTask;
     });
-
-    // ── Sun direction indicator subscription ─────────────────────────────
-    _cameraService
-      .SunVisibilityChanged.Subscribe(state =>
-      {
-        if (state.IsVisible)
-        {
-          // Sun re-entered the frustum — hide the arrowhead.
-          IsSunOffScreen = false;
-          return;
-        }
-
-        // NDC convention from Rust: ndc_x > 0 = right, ndc_y > 0 = above screen centre.
-        // atan2(ndc_x, ndc_y) → 0° = up, 90° = right, 180° = down, 270° = left (clockwise).
-        double angleDeg = Math.Atan2(state.NdcX, state.NdcY) * 180.0 / Math.PI;
-        SunIndicatorAngleDeg = angleDeg;
-        IsSunOffScreen = true;
-      })
-      .AddDisposableTo(_disposables);
 
     _cameraService
       .CameraProjection.Subscribe(proj =>
@@ -319,10 +248,11 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
 
   private const double AuToKm = 149_597_870.7;
 
+  /// <summary>Refresh period of the comet orbit debug panel (it is shown in Release too).</summary>
+  public static readonly TimeSpan OrbitDebugRefreshInterval = TimeSpan.FromMilliseconds(100);
+
   private void UpdateOrbitDebugPanel(CameraTransformState state)
   {
-#if DEBUG
-    if (CometOrbitDebug == null) return;
     // Actual camera-to-comet distance (km), computed from authoritative transform.
     var comet = _cameraService.LastKnownCometPositionAu;
     double actualKm = 0.0;
@@ -351,7 +281,6 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     CometOrbitDebug.OrbitElevationDeg = $"elevation:    {_cameraService.OrbitElevationDeg:F2}°";
     CometOrbitDebug.CameraOrientationQ =
       $"rot: ({state.RotX:F3}, {state.RotY:F3}, {state.RotZ:F3}, {state.RotW:F3})";
-#endif
   }
 
   /// <summary>
@@ -361,8 +290,6 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   /// </summary>
   private void UpdateOrbitDebugOrtho(CameraProjectionState proj)
   {
-#if DEBUG
-    if (CometOrbitDebug == null) return;
     if (proj.IsPerspective)
     {
       CometOrbitDebug.OrthoHalfHeightKm  = "perspective";
@@ -385,7 +312,6 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     CometOrbitDebug.OrthoHalfHeightKm   = $"{actualHalfH_km:F3} km";
     CometOrbitDebug.OrthoExpectedKm     = $"{expectedHalfH_km:F3} km";
     CometOrbitDebug.OrthoInvariantPassed = relErr < 0.01; // 1% tolerance
-#endif
   }
 
 

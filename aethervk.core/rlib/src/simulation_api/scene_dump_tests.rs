@@ -280,7 +280,7 @@ mod scene_dump_tests {
         entity,
         HighResTransformComponent {
           position: Vec3f64::from_components(1.496e11_f64, -2.3e10_f64, 5.7e9_f64),
-          rotation: Quat::identity(),
+          rotation: aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_quat(Quat::identity()),
           scale: Vec3f32::one(),
         },
       )
@@ -307,6 +307,11 @@ mod scene_dump_tests {
         assert_eq!(t.position.x(), 1.496e11_f64, "x AU position");
         assert_eq!(t.position.y(), -2.3e10_f64, "y AU position");
         assert_eq!(t.position.z(), 5.7e9_f64, "z AU position");
+        assert_eq!(
+          t.rotation,
+          aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_quat(Quat::identity()),
+          "rotation order (xyzw) must survive"
+        );
       })
       .expect("HighResTransformComponent must exist after restore");
 
@@ -315,6 +320,11 @@ mod scene_dump_tests {
         assert_eq!(t.position.x(), 1.0_f32);
         assert_eq!(t.position.y(), -2.0_f32);
         assert_eq!(t.position.z(), 3.5_f32);
+        assert_eq!(
+          t.rotation,
+          Quat::identity(),
+          "rotation order (xyzw) must survive"
+        );
       })
       .expect("TransformComponent must exist after restore");
   }
@@ -330,6 +340,8 @@ mod scene_dump_tests {
       scene_id: 42,
       start_epoch_parts: (0, 0),
       end_epoch_parts: (0, 86_400_000_000_000),
+      current_epoch_parts: (0, 3_600_000_000_000),
+      compatibility: "{\"version\":2}".to_string(),
       entities: vec![SerializedEntity {
         ffi_id: 999,
         name: "earth".to_string(),
@@ -368,5 +380,85 @@ mod scene_dump_tests {
       }
       other => panic!("unexpected component: {:?}", other),
     }
+  }
+
+  /// v2 components round-trip: rotational model, f64 trajectory, reference frame, Sun parameters.
+  #[test]
+  fn test_serialize_v2_components_round_trip() {
+    use crate::scene::{
+      BodyRotationalModel, ReferenceFrameComponent, ReferenceFrameType, SunComponent,
+      trajectory::TrajectoryComponent,
+    };
+    let src = make_test_scene();
+    let e = src.spawn_entity("comet");
+    src.add_component(e, TransformComponent::default()).unwrap();
+    let model = BodyRotationalModel {
+      pole_ra: 69.3,
+      pole_dec: 64.1,
+      prime_meridian: 12.0,
+      pole_ra_rate: 0.1,
+      pole_dec_rate: -0.2,
+      rotation_rate: 696.5,
+      body_fixed_orientation: true,
+    };
+    src.add_component(e, model).unwrap();
+    let traj = TrajectoryComponent::from_f64(
+      vec![
+        [1.5, 0.25, 0.01],
+        [1.6, 0.3, 0.0],
+        [1.7, 0.31, -0.01],
+        [1.8, 0.4, 0.0],
+      ],
+      [1.0, 0.2, 0.2, 1.0],
+      2.0,
+      0,
+      32,
+    );
+    src.add_component(e, traj.clone()).unwrap();
+    let frame = ReferenceFrameComponent {
+      frame_type: ReferenceFrameType::Micro,
+      scale: 1.0 / 149_597_870.7,
+      soi_radius: 1.0,
+      depth_layer: 3,
+    };
+    let frame_scale = frame.scale;
+    src.add_component(e, frame).unwrap();
+    src
+      .add_component(
+        e,
+        SunComponent {
+          radius_km: 695_700.0,
+          resolution: (2048, 2048, 1),
+        },
+      )
+      .unwrap();
+
+    let entities = serialize_scene(&src);
+    let bytes = bincode::serde::encode_to_vec(&entities, bincode::config::standard()).unwrap();
+    let (entities, _): (alloc::vec::Vec<SerializedEntity>, usize) =
+      bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
+
+    let mut dst = make_test_scene();
+    let e2 = dst.spawn_entity("comet");
+    assert_eq!(e2, e, "same slot in a fresh scene");
+    let cache = AssetCache::<Comet>::new();
+    deserialize_scene(&mut dst, &entities, &cache);
+    assert_eq!(
+      dst.with_component(e, |m: &BodyRotationalModel| *m),
+      Some(model)
+    );
+    let t = dst.with_component(e, |t: &TrajectoryComponent| t.clone()).unwrap();
+    assert_eq!(t.control_points_f64, traj.control_points_f64);
+    assert_eq!(t.color, traj.color);
+    let f = dst
+      .with_component(e, |f: &ReferenceFrameComponent| (f.depth_layer, f.scale))
+      .unwrap();
+    assert_eq!(f, (3, frame_scale));
+    let sun = dst.with_component(e, |s: &SunComponent| (s.radius_km, s.resolution)).unwrap();
+    assert_eq!(
+      sun,
+      (695_700.0, (2048, 2048, 1)),
+      "the Sun must not be zeroed on restore"
+    );
   }
 }

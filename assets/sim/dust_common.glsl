@@ -190,7 +190,7 @@ struct DustBatch {
     vec4  comet_v_dur_hi;   // jet heliocentric velocity (m/s), w = duration (s); df64 high part
     vec4  comet_v_dur_lo;   // ... low part
     vec4  rot_start;        // ps -> root quaternion (xyzw) at t_start
-    vec4  rot_end;          // ps -> root quaternion (xyzw) at t_start + dur
+    vec4  spin;             // nucleus spin: unit axis (root frame), w omega >= 0 (rad/s)
     vec4  jet_dir_aperture; // jet direction (ps frame), w half aperture (rad)
     vec4  size_params;      // s_min, s_max (um), 4 - q, mass normalization
     vec4  vel_params;       // v_ref (m/s), relative speed std, s_ref (um), beta * s (um)
@@ -199,7 +199,7 @@ struct DustBatch {
     uint  count;
     uint  ring_mask;
     uint  seed;
-    uvec4 _pad;
+    vec4  lit;              // jet site illumination: psi_start, psi0, total lit phase (rad), mode
 };
 
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer DustClusterBuffer {
@@ -231,11 +231,45 @@ vec3 dust_qrot(vec4 q, vec3 v) {
     return v + q.w * t + cross(q.xyz, t);
 }
 
-vec4 dust_nlerp(vec4 a, vec4 b, float t) {
-    float sgn = dot(a, b) < 0.0 ? -1.0 : 1.0;
-    vec4 q = a + (sgn * b - a) * t;
-    float n = length(q);
-    return n > 0.0 ? q / n : q;
+// Hamilton product a * b (xyzw)
+vec4 dust_qmul(vec4 a, vec4 b) {
+    return vec4(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
+}
+
+// rotation by `angle` about unit `axis`; half angle reduced to [-pi, pi) (sin/cos accuracy range)
+vec4 dust_qaxis_angle(vec3 axis, float angle) {
+    const float TWO_PI = 2.0 * DUST_PI_F32;
+    precise float h = 0.5 * angle;
+    precise float k = floor((h + DUST_PI_F32) * (1.0 / TWO_PI));
+    precise float hr = h - k * TWO_PI;
+    return vec4(axis * sin(hr), cos(hr));
+}
+
+// Emission offset dt in [0, dur] of the stratified sample u, uniform over the lit time of the
+// batch window. Mirror of `dust::lit_time_map`.
+const float DUST_LIT_MODE_PERIODIC = 1.0;
+float dust_lit_time_map(float u, vec4 lit, float omega, float dur) {
+    const float TWO_PI = 2.0 * DUST_PI_F32;
+    if (!(lit.w == DUST_LIT_MODE_PERIODIC) || !(omega > 0.0) || !(lit.y > 0.0)) return u * dur;
+    float ps = lit.x, p0 = lit.y;
+    precise float arc = 2.0 * p0;
+    float seg_start, arc_start;
+    if (ps < -p0)     { seg_start = -p0;          arc_start = -p0; }
+    else if (ps < p0) { seg_start = ps;           arc_start = -p0; }
+    else              { seg_start = TWO_PI - p0;  arc_start = TWO_PI - p0; }
+    precise float seg_len = arc_start + arc - seg_start;
+    precise float m = u * lit.z;
+    precise float psi;
+    if (m < seg_len) {
+        psi = seg_start + m;
+    } else {
+        precise float mr = m - seg_len;
+        precise float k = floor(mr / arc);
+        precise float r = mr - k * arc;
+        psi = arc_start + TWO_PI + k * TWO_PI + r;
+    }
+    precise float dt = (psi - ps) / omega;
+    return clamp(dt, 0.0, dur);
 }
 
 vec3 dust_sample_cone(float u1, float u2, vec3 dir, float aperture) {

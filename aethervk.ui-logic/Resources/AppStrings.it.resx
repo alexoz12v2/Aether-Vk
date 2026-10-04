@@ -177,6 +177,9 @@
 
   <!-- Model Tab -->
   <!-- Model Tab: Sun Expander -->
+  <data name="Tabs_Model_ShowReferenceError" xml:space="preserve">
+    <value>mostra errore posizione-riferimento</value>
+  </data>
   <data name="Tabs_Model_Sun" xml:space="preserve">
     <value>Sole</value>
   </data>
