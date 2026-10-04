@@ -298,7 +298,13 @@ pub fn deserialize_scene(
               far: sc.far,
             }
           };
-          let _ = scene.add_component(entity, CameraComponent { projection, focus_distance: 10.0 });
+          let _ = scene.add_component(
+            entity,
+            CameraComponent {
+              projection,
+              focus_distance: 10.0,
+            },
+          );
         }
 
         SerializedComponent::StaticMesh(sm) => {
@@ -321,7 +327,9 @@ pub fn deserialize_scene(
           // Dust clusters are not serialized: the restored system starts empty and regrows.
           scene.with_component_mut(entity, |ps: &mut ParticleSystemComponent| {
             ps.emission_params = psc.emission_params;
-            ps.draw_params = ParticleSystemDrawParams { stream_color: psc.stream_color };
+            ps.draw_params = ParticleSystemDrawParams {
+              stream_color: psc.stream_color,
+            };
             ps.ttl_us = psc.ttl_us;
             ps.dust.get_mut().reset();
           });
@@ -337,7 +345,13 @@ pub fn deserialize_scene(
           new_sun_entity_ids.push(entity);
           // Restore a zero-value SunComponent; radius/resolution are typically set
           // via SetSunParameters after restore if needed.
-          let _ = scene.add_component(entity, SunComponent { radius_km: 0.0, resolution: (0, 0, 0) });
+          let _ = scene.add_component(
+            entity,
+            SunComponent {
+              radius_km: 0.0,
+              resolution: (0, 0, 0),
+            },
+          );
         }
         SerializedComponent::SkyMarker => {
           let _ = scene.add_component(entity, SkyComponent {});
@@ -352,7 +366,10 @@ pub fn deserialize_scene(
     }
   }
 
-  DeserializeResult { new_mesh_hashes, new_sun_entity_ids }
+  DeserializeResult {
+    new_mesh_hashes,
+    new_sun_entity_ids,
+  }
 }
 
 /// Return an existing `Arc<Comet>` from the cache (lookup by `asset_path`), or construct a

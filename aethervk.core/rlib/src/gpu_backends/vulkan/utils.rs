@@ -742,7 +742,7 @@ impl EntryWrapper {
               vk_icd_path.as_ptr(),
               1,
             );
-            
+
             // GPU-AV Workaround: Prevents stealthy FD leaks
             libc::setenv(
               b"VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING\0".as_ptr().cast(),
@@ -1068,8 +1068,8 @@ impl RequiredFeatures<'_> {
     self.storage_8bit.storage_buffer8_bit_access = vk::TRUE;
 
     self.features.large_points = vk::TRUE;
-    
-    // Enable features required by GPU-AV so the validation layer doesn't try to force them 
+
+    // Enable features required by GPU-AV so the validation layer doesn't try to force them
     // and potentially corrupt the pNext chain / device creation on NVIDIA drivers.
     #[cfg(debug_assertions)]
     {

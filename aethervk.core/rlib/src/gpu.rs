@@ -43,7 +43,6 @@ impl GpuResourceHandle {
   }
 }
 
-
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct CommandBufferHandle(pub u64);
 
@@ -925,17 +924,11 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
 
   /// Bind the SphereGizmoOverMesh pipeline (NO_DEPTH_TEST + stencil=EQUAL(1))
   /// and set line width to 1.0. Called once before the two OverMesh draw calls.
-  fn bind_sphere_gizmo_pipeline_over_mesh(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-  ) -> GpuResult<()>;
+  fn bind_sphere_gizmo_pipeline_over_mesh(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
   /// Bind the SphereGizmoElsewhere pipeline (depth_test=GEQ + stencil=EQUAL(0))
   /// and set line width to 1.0. Called once before the two Elsewhere draw calls.
-  fn bind_sphere_gizmo_pipeline_elsewhere(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-  ) -> GpuResult<()>;
+  fn bind_sphere_gizmo_pipeline_elsewhere(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()>;
 
   fn get_sphere_gizmo_pipeline_key(
     &self,
@@ -1053,11 +1046,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// [TEST ONLY] Reads back the finalGlobalDepth staging buffer for `task_id`.
   /// `buffer` must be `width * height * 8` bytes (two f32s per pixel).
   #[cfg(test)]
-  fn read_global_depth_download(
-    &self,
-    task_id: u64,
-    buffer: &mut [u8],
-  ) -> GpuResult<()>;
+  fn read_global_depth_download(&self, task_id: u64, buffer: &mut [u8]) -> GpuResult<()>;
 }
 
 macro_rules! implement_render_device_ext {

@@ -478,7 +478,11 @@ pub mod v2 {
       self.start_epoch + duration
     }
 
-    pub fn set_epoch_range(&mut self, new_start: Epoch, new_end: Epoch) -> Result<(), &'static str> {
+    pub fn set_epoch_range(
+      &mut self,
+      new_start: Epoch,
+      new_end: Epoch,
+    ) -> Result<(), &'static str> {
       if new_end - new_start < Duration::from_days(1.0) {
         return Err("end - start should be bigger than 1 day");
       }

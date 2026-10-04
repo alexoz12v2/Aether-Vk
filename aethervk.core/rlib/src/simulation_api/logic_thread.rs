@@ -249,16 +249,16 @@ pub fn start_logic_thread(
           last_discard_unscaled_us = now;
           let _ = context.kernels.0.with_device(context.kernels.1, |dyn_device| {
             let vulkan_device: &vulkan::device::Device = dyn_device.as_any().downcast_ref().unwrap();
-              
+
             let gpu_timeline_val = unsafe {
                 vulkan_device.device.timeline_semaphore.get_semaphore_counter_value(
                     vulkan_device.kernels.timeline
                 )
             }.unwrap_or(last_gpu_recycled_val);
-            
+
             // Update our cached recycled value
             last_gpu_recycled_val = gpu_timeline_val;
-            
+
             let items = vulkan_device.kernels.discard_pool.pop_ready_items(gpu_timeline_val);
             if !items.is_empty() {
                 vulkan::device::DiscardPool::destroy_items_lock_free(&vulkan_device.device, items);
@@ -1130,9 +1130,11 @@ fn process_command_internal(
             let mut cloned_scene = (*scene_write.scene).clone();
             // dust: the snapshot keeps the batch list (emission is deterministic); by the time it
             // is restored the GPU ring content is stale, so it will be re-emitted
-            cloned_scene.query1_mut(|_, comp: &mut crate::scene::particles::ParticleSystemComponent| {
-              comp.dust.get_mut().ring.invalidate_gpu();
-            });
+            cloned_scene.query1_mut(
+              |_, comp: &mut crate::scene::particles::ParticleSystemComponent| {
+                comp.dust.get_mut().ring.invalidate_gpu();
+              },
+            );
             scene_write.scene_snapshot = Some(alloc::boxed::Box::new(cloned_scene));
             let _ = vulkan_device;
 
@@ -2426,24 +2428,34 @@ fn process_command_internal(
       );
 
       // ── 3. Update all Jet Previews ────────────────────────
-      let parent_scale = scene_guard.scene.with_component(comet.body, |t: &crate::scene::TransformComponent| t.scale.x()).unwrap_or(1.0);
+      let parent_scale = scene_guard
+        .scene
+        .with_component(comet.body, |t: &crate::scene::TransformComponent| {
+          t.scale.x()
+        })
+        .unwrap_or(1.0);
       let local_r = radius_km / parent_scale;
       let desired_global_radius = radius_km / 50.0;
       let local_scale = desired_global_radius / parent_scale;
 
       if let Some(children) = scene_guard.scene.get_children(comet.body) {
-          for child in children {
-              if scene_guard.scene.has_component::<crate::scene::ParticleSystemComponent>(child) == crate::scene::HasComponentResultEnum::EntityHasComponent {
-                  let _ = scene_guard.scene.with_component_mut(child, |t: &mut crate::scene::TransformComponent| {
-                      let mut dir = t.position.normalize();
-                      if dir.x().is_nan() {
-                          dir = Vec3f32::from_components(1.0, 0.0, 0.0);
-                      }
-                      t.position = dir * local_r;
-                      t.scale = Vec3f32::from_components(local_scale, local_scale, local_scale);
-                  });
-              }
+        for child in children {
+          if scene_guard.scene.has_component::<crate::scene::ParticleSystemComponent>(child)
+            == crate::scene::HasComponentResultEnum::EntityHasComponent
+          {
+            let _ = scene_guard.scene.with_component_mut(
+              child,
+              |t: &mut crate::scene::TransformComponent| {
+                let mut dir = t.position.normalize();
+                if dir.x().is_nan() {
+                  dir = Vec3f32::from_components(1.0, 0.0, 0.0);
+                }
+                t.position = dir * local_r;
+                t.scale = Vec3f32::from_components(local_scale, local_scale, local_scale);
+              },
+            );
           }
+        }
       }
 
       // ── 4. Enqueue GPU position buffer swap for the next frame ────────────────
@@ -2662,7 +2674,6 @@ impl<'a> Drop for ScopedComputeCommand<'a> {
   }
 }
 
-
 /// 1/3 Step of a simulation tick: Physics Update
 ///
 /// ticks `time_mgr always`, updates `scene` after a simulation step executed successfully
@@ -2685,8 +2696,7 @@ fn execute_simulation_tick_fixed_update_phase(
     core::sync::atomic::AtomicBool::new(true);
   let mut capture_this_tick =
     CAPTURE_COMPUTE_ONCE.swap(false, core::sync::atomic::Ordering::Relaxed);
-  use crate::gpu_backends::vulkan::device::QueueRole;
-  use crate::simulation_api::structs::SceneEntityId;
+  use crate::{gpu_backends::vulkan::device::QueueRole, simulation_api::structs::SceneEntityId};
   use oshal::os::time::v2::SimSpeed;
   let scaled_fixed_dt_us =
     time_mgr.state.read().speed.scaled_from_unscaled(unscaled_fixed_delta_us);
@@ -2796,7 +2806,6 @@ fn execute_simulation_tick_fixed_update_phase(
 
     if scaled_fixed_dt_us > 0 {
       while time_mgr.consume_fixed_step(scaled_fixed_dt_us) {
-
         // spiral of death resolution
         if steps_executed > MAX_PHYSICS_STEPS_PER_FRAME {
           oshal::log!(
@@ -2903,31 +2912,34 @@ fn execute_simulation_tick_fixed_update_phase(
     // ------------------------------------------------------------------------------------
     #[cfg(debug_assertions)]
     if capture_this_tick {
-        unsafe {
-            crate::gpu_backends::vulkan::renderdoc::start_frame_capture(
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-            );
-            aethervk_oshal_rlib::log!("[RenderDoc] Triggered manual compute queue capture");
-        }
+      unsafe {
+        crate::gpu_backends::vulkan::renderdoc::start_frame_capture(
+          core::ptr::null_mut(),
+          core::ptr::null_mut(),
+        );
+        aethervk_oshal_rlib::log!("[RenderDoc] Triggered manual compute queue capture");
+      }
     }
 
     let (compute_semaphore, compute_signal_value) = cmd_scope.submit()?;
     // batches recorded above become drawable once the render submit waits on this value
     for ps_id in &dust_systems {
-      let _ = scene.scene.with_component(*ps_id, |ps: &crate::scene::particles::ParticleSystemComponent| {
-        ps.dust.lock().ring.mark_submitted(compute_signal_value);
-      });
+      let _ = scene.scene.with_component(
+        *ps_id,
+        |ps: &crate::scene::particles::ParticleSystemComponent| {
+          ps.dust.lock().ring.mark_submitted(compute_signal_value);
+        },
+      );
     }
 
     #[cfg(debug_assertions)]
     if capture_this_tick {
-        unsafe {
-            crate::gpu_backends::vulkan::renderdoc::end_frame_capture(
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-            );
-        }
+      unsafe {
+        crate::gpu_backends::vulkan::renderdoc::end_frame_capture(
+          core::ptr::null_mut(),
+          core::ptr::null_mut(),
+        );
+      }
     }
 
     // ------------------------------------------------------------------------------------
@@ -3252,10 +3264,12 @@ fn execute_simulation_tick_clear_changed_entities_phase(
 /// Utilities for logic thread module
 mod utils {
   use super::*;
-  use crate::gpu::{RenderDeviceHandle, RenderFrontend};
-  use crate::gpu_backends::vulkan::device::Device;
-  use crate::scene::ForeignSerializable;
-  use crate::simulation_api::structs::{RenderCommand, SimulationSceneData};
+  use crate::{
+    gpu::{RenderDeviceHandle, RenderFrontend},
+    gpu_backends::vulkan::device::Device,
+    scene::ForeignSerializable,
+    simulation_api::structs::{RenderCommand, SimulationSceneData},
+  };
 
   /// Dust v3 emission for every particle system of the scene (logic tick, compute queue).
   ///
@@ -3268,12 +3282,17 @@ mod utils {
     cmd: ash::vk::CommandBuffer,
     scene: &crate::scene::Scene,
     scene_id: u64,
-    cartesian_state_cache: &dashmap::DashMap<crate::simulation_api::structs::SceneEntityId, CartesianState>,
+    cartesian_state_cache: &dashmap::DashMap<
+      crate::simulation_api::structs::SceneEntityId,
+      CartesianState,
+    >,
     now_unscaled_us: timeus_t,
     now_scaled_us: timeus_t,
   ) -> alloc::vec::Vec<EntityId> {
-    use crate::scene::dust::{AU_M, JetState};
-    use crate::scene::particles::ParticleSystemComponent;
+    use crate::scene::{
+      dust::{AU_M, JetState},
+      particles::ParticleSystemComponent,
+    };
     use aethervk_oshal_rlib::math::quaternion::Quaternion as _;
     let t_s = now_scaled_us as f64 * 1e-6;
     let mut ps_ids = alloc::vec::Vec::new();
@@ -3281,15 +3300,25 @@ mod utils {
     let mut recorded = alloc::vec::Vec::new();
     for ps_id in ps_ids {
       // the jet is a direct child of the comet body (see `avkSimulationContext_addParticleSystem`)
-      let Some(body_id) = scene.get_parent(ps_id) else { continue };
-      let Some(cached) = cartesian_state_cache.get(&crate::simulation_api::structs::SceneEntityId::new(scene_id, body_id)) else {
+      let Some(body_id) = scene.get_parent(ps_id) else {
         continue;
       };
-      let Some(comet) = cached.comet_state.as_ref() else { continue };
-      let Some((pos_km, vel_kms)) = comet.helio_state_km else { continue };
+      let Some(cached) = cartesian_state_cache.get(
+        &crate::simulation_api::structs::SceneEntityId::new(scene_id, body_id),
+      ) else {
+        continue;
+      };
+      let Some(comet) = cached.comet_state.as_ref() else {
+        continue;
+      };
+      let Some((pos_km, vel_kms)) = comet.helio_state_km else {
+        continue;
+      };
       let body_rot = comet.transform.rotation;
       drop(cached);
-      let Some(jet_local) = scene.with_component(ps_id, |t: &TransformComponent| *t) else { continue };
+      let Some(jet_local) = scene.with_component(ps_id, |t: &TransformComponent| *t) else {
+        continue;
+      };
       let off_km = body_rot.rotate_vector(jet_local.position);
       let r_m = [
         (pos_km.x() + off_km.x() as f64) * 1000.0,
@@ -3297,9 +3326,18 @@ mod utils {
         (pos_km.z() + off_km.z() as f64) * 1000.0,
       ];
       // nucleus rotation velocity (ω × r, < 1 m/s) is neglected
-      let v_ms = [vel_kms.x() * 1000.0, vel_kms.y() * 1000.0, vel_kms.z() * 1000.0];
+      let v_ms = [
+        vel_kms.x() * 1000.0,
+        vel_kms.y() * 1000.0,
+        vel_kms.z() * 1000.0,
+      ];
       let rot = (body_rot * jet_local.rotation).0;
-      let jet = JetState { t_s, r_m, v_ms, rot: [rot.x(), rot.y(), rot.z(), rot.w()] };
+      let jet = JetState {
+        t_s,
+        r_m,
+        v_ms,
+        rot: [rot.x(), rot.y(), rot.z(), rot.w()],
+      };
       let r_au = (r_m[0] * r_m[0] + r_m[1] * r_m[1] + r_m[2] * r_m[2]).sqrt() / AU_M;
 
       let batches = scene
@@ -3332,7 +3370,9 @@ mod utils {
       } else {
         // never leave batches pending forever (they would block the drawable prefix): the whole
         // ring gets re-emitted from its descriptors on the next ticks
-        let _ = scene.with_component(ps_id, |ps: &ParticleSystemComponent| ps.dust.lock().ring.invalidate_gpu());
+        let _ = scene.with_component(ps_id, |ps: &ParticleSystemComponent| {
+          ps.dust.lock().ring.invalidate_gpu()
+        });
       }
       static LOG_COUNTER: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
       if LOG_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % 120 == 0 {
@@ -3453,8 +3493,7 @@ mod utils {
   pub use crate::scene::animation::hermite_smoothstep;
 
   use alloc::alloc::{Layout, alloc_zeroed, dealloc, handle_alloc_error};
-  use core::ptr::NonNull;
-  use core::slice;
+  use core::{ptr::NonNull, slice};
 
   /// Custom wrapper to dynamically allocate `Drop` managed memory with a given alignment
   pub struct AlignedBoxedBytes {
@@ -3653,8 +3692,10 @@ mod utils {
     scene_id: u64,
     sun_visibility_state: &mut hashbrown::HashMap<u64, bool>,
   ) {
-    use crate::scene::CameraProjection;
-    use crate::simulation_api::external_state::{CSunVisibilityChanged, ExternalState};
+    use crate::{
+      scene::CameraProjection,
+      simulation_api::external_state::{CSunVisibilityChanged, ExternalState},
+    };
     use aethervk_oshal_rlib::math::vector::Vector;
 
     // Require a sun entity.

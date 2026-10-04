@@ -149,8 +149,7 @@ fn get_symbol(handle: *mut core::ffi::c_void, name: &[u8]) -> Option<*mut core::
 
 #[cfg(windows)]
 fn get_symbol(handle: *mut core::ffi::c_void, name: &[u8]) -> Option<*mut core::ffi::c_void> {
-  use windows::Win32::Foundation::HMODULE;
-  use windows::Win32::System::LibraryLoader::GetProcAddress;
+  use windows::Win32::{Foundation::HMODULE, System::LibraryLoader::GetProcAddress};
   let name_cstr = unsafe { core::ffi::CStr::from_bytes_with_nul_unchecked(name) };
   unsafe {
     GetProcAddress(

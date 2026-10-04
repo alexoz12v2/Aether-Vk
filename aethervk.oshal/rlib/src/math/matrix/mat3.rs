@@ -290,4 +290,3 @@ impl Mat3f32 {
 
 #[cfg(test)]
 mod tests;
-

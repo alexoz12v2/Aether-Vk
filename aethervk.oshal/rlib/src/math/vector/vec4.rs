@@ -893,4 +893,3 @@ impl Quaternion for Quat {
 
 #[cfg(test)]
 mod tests;
-

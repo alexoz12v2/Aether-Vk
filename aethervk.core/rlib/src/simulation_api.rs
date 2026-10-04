@@ -29,10 +29,10 @@ pub mod render_thread;
 pub mod reposition;
 pub mod scene_api;
 pub mod scene_dump;
-pub mod structs;
-pub mod time_api;
 #[cfg(test)]
 mod scene_dump_tests;
+pub mod structs;
+pub mod time_api;
 const MAX_UNSCALED_DELTA_MS: u32 = 500_u32;
 
 /// Holds State for the whole simulation. For now, default drop order (from first to last)
@@ -62,7 +62,9 @@ impl Drop for SimulationContext {
     // Signal the stall-watcher thread to exit.
     #[cfg(all(target_os = "linux", debug_assertions))]
     {
-      self.stall_watcher_simulation_active.store(false, core::sync::atomic::Ordering::Release);
+      self
+        .stall_watcher_simulation_active
+        .store(false, core::sync::atomic::Ordering::Release);
       self.stall_watcher_shutdown.store(true, core::sync::atomic::Ordering::Release);
     }
     // Now drop from top to bottom all members
@@ -108,7 +110,9 @@ impl SimulationContext {
       read_scene.simulation_running.store(true, core::sync::atomic::Ordering::Release);
       // Arm the stall-watcher so it monitors GPU submits while simulation is active.
       #[cfg(all(target_os = "linux", debug_assertions))]
-      self.stall_watcher_simulation_active.store(true, core::sync::atomic::Ordering::Release);
+      self
+        .stall_watcher_simulation_active
+        .store(true, core::sync::atomic::Ordering::Release);
     } else {
       return false;
     }
@@ -125,15 +129,21 @@ impl SimulationContext {
       return false;
     }
     let done_flag = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
-    let res = self.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::ResetSimulation {
-      scene_id,
-      done_flag: done_flag.clone(),
-    });
-    if res.is_err() { return false; }
+    let res = self.threads.logic_thread.tx().try_send(
+      crate::simulation_api::structs::LogicCommand::ResetSimulation {
+        scene_id,
+        done_flag: done_flag.clone(),
+      },
+    );
+    if res.is_err() {
+      return false;
+    }
     use aethervk_oshal_rlib::os::time::get_monotonic_time;
     let start = get_monotonic_time();
     while get_monotonic_time() - start < 2_000_000_i64 {
-      if done_flag.load(core::sync::atomic::Ordering::Acquire) { return true; }
+      if done_flag.load(core::sync::atomic::Ordering::Acquire) {
+        return true;
+      }
       core::hint::spin_loop();
     }
     false
@@ -141,17 +151,23 @@ impl SimulationContext {
 
   pub fn snapshot_scene_sync(&self, scene_id: u64) -> bool {
     let done_flag = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
-    let res = self.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::SnapshotScene {
-      scene_id,
-      done_flag: done_flag.clone(),
-    });
-    if res.is_err() { return false; }
+    let res = self.threads.logic_thread.tx().try_send(
+      crate::simulation_api::structs::LogicCommand::SnapshotScene {
+        scene_id,
+        done_flag: done_flag.clone(),
+      },
+    );
+    if res.is_err() {
+      return false;
+    }
     use aethervk_oshal_rlib::os::time::get_monotonic_time;
     let start = get_monotonic_time();
     // 15s timeout: must accommodate generate_sky on the graphics queue serialising with
     // snapshot_particles on the compute queue at scene-creation time.
     while get_monotonic_time() - start < 15_000_000_i64 {
-      if done_flag.load(core::sync::atomic::Ordering::Acquire) { return true; }
+      if done_flag.load(core::sync::atomic::Ordering::Acquire) {
+        return true;
+      }
       core::hint::spin_loop();
     }
     false
@@ -160,17 +176,23 @@ impl SimulationContext {
   pub fn restore_snapshot_sync(&self, scene_id: u64) -> bool {
     self.pause_simulation_sync(scene_id);
     let done_flag = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
-    let res = self.threads.logic_thread.tx().try_send(crate::simulation_api::structs::LogicCommand::RestoreSnapshot {
-      scene_id,
-      done_flag: done_flag.clone(),
-    });
-    if res.is_err() { return false; }
+    let res = self.threads.logic_thread.tx().try_send(
+      crate::simulation_api::structs::LogicCommand::RestoreSnapshot {
+        scene_id,
+        done_flag: done_flag.clone(),
+      },
+    );
+    if res.is_err() {
+      return false;
+    }
     use aethervk_oshal_rlib::os::time::get_monotonic_time;
     let start = get_monotonic_time();
     // 15s timeout: restore_particles submits to the graphics queue, which may be serialised
     // behind generate_sky at scene-creation time.
     while get_monotonic_time() - start < 15_000_000_i64 {
-      if done_flag.load(core::sync::atomic::Ordering::Acquire) { return true; }
+      if done_flag.load(core::sync::atomic::Ordering::Acquire) {
+        return true;
+      }
       core::hint::spin_loop();
     }
     false
@@ -187,7 +209,9 @@ impl SimulationContext {
           .store(false, core::sync::atomic::Ordering::Release);
         // Disarm the stall-watcher; GPU submits are expected to stop.
         #[cfg(all(target_os = "linux", debug_assertions))]
-        self.stall_watcher_simulation_active.store(false, core::sync::atomic::Ordering::Release);
+        self
+          .stall_watcher_simulation_active
+          .store(false, core::sync::atomic::Ordering::Release);
       } else {
         return false;
       }
@@ -202,15 +226,18 @@ impl SimulationContext {
     let mut spins = 0;
     // Spin wait without holding the outer DashMap or scenes lock
     loop {
-      let active_physics = scene_clone.read().active_physics_task.load(core::sync::atomic::Ordering::Acquire);
+      let active_physics = scene_clone
+        .read()
+        .active_physics_task
+        .load(core::sync::atomic::Ordering::Acquire);
 
       if !active_physics {
         break;
       }
-      
+
       spins += 1;
       if spins > 2500 {
-         return false;
+        return false;
       }
       oshal::os::native::this_thread::sleep_for(core::time::Duration::from_micros(200));
     }
@@ -409,7 +436,6 @@ pub(crate) unsafe fn invoke_main_thread_flush_cleanup(
     signal_done.store(true, core::sync::atomic::Ordering::Release);
   }
 }
-
 
 /// Platform-agnostic 16-byte handle passed back from C# when Rust requests the OS window.
 ///
@@ -743,11 +769,11 @@ pub fn emit_external_state_change(external_state: &external_state::ExternalState
         bytemuck::bytes_of(snapshot).as_ptr().cast::<core::ffi::c_void>()
       }
       ExternalState::SceneDumped(d) => bytemuck::bytes_of(d).as_ptr().cast::<core::ffi::c_void>(),
-      ExternalState::SceneRestored(r) => {
-        bytemuck::bytes_of(r).as_ptr().cast::<core::ffi::c_void>()
-      }
+      ExternalState::SceneRestored(r) => bytemuck::bytes_of(r).as_ptr().cast::<core::ffi::c_void>(),
       #[cfg(debug_assertions)]
-      ExternalState::CameraMatrices(m) => bytemuck::bytes_of(m).as_ptr().cast::<core::ffi::c_void>(),
+      ExternalState::CameraMatrices(m) => {
+        bytemuck::bytes_of(m).as_ptr().cast::<core::ffi::c_void>()
+      }
     };
     unsafe { cb(id, bytes_ptr) };
   }

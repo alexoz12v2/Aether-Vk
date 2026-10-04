@@ -9,8 +9,13 @@ use crate::{
   },
   types::{EngineError, EngineResult, GpuError, GpuResult},
 };
-use aethervk_oshal_rlib::os::{pool::tasklet::ThreadPoolExt, time::get_monotonic_time};
-use aethervk_oshal_rlib::{self as oshal, os::time::timeus_t};
+use aethervk_oshal_rlib::{
+  self as oshal,
+  os::{
+    pool::tasklet::ThreadPoolExt,
+    time::{get_monotonic_time, timeus_t},
+  },
+};
 use ash::vk::Handle;
 use oshal::{
   os,
@@ -182,9 +187,7 @@ pub fn start_render_thread(
             if let thingbuf::mpsc::errors::TryRecvError::Closed = e {
               return true;
             }
-            oshal::os::native::this_thread::sleep_for(
-              core::time::Duration::from_micros(500),
-            );
+            oshal::os::native::this_thread::sleep_for(core::time::Duration::from_micros(500));
             false
           }
         }
@@ -326,267 +329,269 @@ fn process_command(
             (cam_pos, dt_s)
           };
           drop(scene_read);
-          sky_parallax_map
-            .entry(pe_handle)
-            .or_default()
-            .update(cam_abs_pos, dt_s)
+          sky_parallax_map.entry(pe_handle).or_default().update(cam_abs_pos, dt_s)
         };
 
         let res: GpuResult<(gpu::CommandBufferHandle, bool, bool)> = {
           let core_logic = || -> GpuResult<(gpu::CommandBufferHandle, bool, bool)> {
-            let result =
-              frontend.with_device(handle, |render_device| {
-                let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
-                  render_device.as_any().downcast_ref().unwrap();
-                let task_id = render_device.create_task();
+            let result = frontend.with_device(handle, |render_device| {
+              let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+                render_device.as_any().downcast_ref().unwrap();
+              let task_id = render_device.create_task();
 
-                let present_guard = gpu::FrameCancelGuard::new(
-                  render_device,
+              let present_guard = gpu::FrameCancelGuard::new(
+                render_device,
+                render_frame.presentation_engine_handle,
+                acquire_result,
+              );
+
+              let (cmd_buffer, cmd) =
+                vulkan_device.get_command_buffer_and_native().map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] get_command_buffer failed: {:?}", e);
+                  e
+                })?;
+
+              render_device
+                .set_command_buffer_presentation_engine(
+                  cmd_buffer,
                   render_frame.presentation_engine_handle,
-                  acquire_result,
-                );
-
-                let (cmd_buffer, cmd) =
-                  vulkan_device.get_command_buffer_and_native().map_err(|e| {
+                )
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] set_cmd_pe failed: {:?}", e);
+                  e
+                })?;
+              let mut cmd_scope =
+                gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id)).map_err(
+                  |e| {
                     aethervk_oshal_rlib::log!(
-                      "[render tasklet] get_command_buffer failed: {:?}",
+                      "[render tasklet] ScopedCommandBuffer::new failed: {:?}",
                       e
                     );
                     e
-                  })?;
+                  },
+                )?;
 
-                render_device
-                  .set_command_buffer_presentation_engine(
-                    cmd_buffer,
-                    render_frame.presentation_engine_handle,
+              // Narrow the scene read-lock scope: extract only what we need, then drop
+              // the guard before build_render_scene.  Holding it across the full frame
+              // (build + render pass + submit) blocked the logic thread's
+              // upgradable→write upgrade inside self_sync_do_if_done, causing
+              // SnapshotScene / RestoreSnapshot to time out.
+              // build_render_scene is an extension method on Arc<Scene> and reads no
+              // other SceneContext fields, so releasing the guard here is safe.
+              let (
+                scene_arc,
+                unscaled_time_us,
+                unscaled_time_delta_us,
+                scaled_time_us,
+                scaled_time_delta_us,
+                debug_name,
+              ) = {
+                let scene_context_read = render_frame.scene.read();
+                let (
+                  unscaled_time_us,
+                  unscaled_time_delta_us,
+                  scaled_time_us,
+                  scaled_time_delta_us,
+                ) = {
+                  let time_state_read = scene_context_read.time_state.read();
+                  (
+                    time_state_read.unscaled_time,
+                    time_state_read.unscaled_delta,
+                    time_state_read.scaled_time,
+                    time_state_read.scaled_delta,
                   )
-                  .map_err(|e| {
-                    aethervk_oshal_rlib::log!("[render tasklet] set_cmd_pe failed: {:?}", e);
-                    e
-                  })?;
-                let mut cmd_scope =
-                  gpu::ScopedCommandBuffer::new(render_device, cmd_buffer, Some(task_id)).map_err(
-                    |e| {
-                      aethervk_oshal_rlib::log!(
-                        "[render tasklet] ScopedCommandBuffer::new failed: {:?}",
-                        e
-                      );
-                      e
-                    },
-                  )?;
-
-                // Narrow the scene read-lock scope: extract only what we need, then drop
-                // the guard before build_render_scene.  Holding it across the full frame
-                // (build + render pass + submit) blocked the logic thread's
-                // upgradable→write upgrade inside self_sync_do_if_done, causing
-                // SnapshotScene / RestoreSnapshot to time out.
-                // build_render_scene is an extension method on Arc<Scene> and reads no
-                // other SceneContext fields, so releasing the guard here is safe.
-                let (scene_arc, unscaled_time_us, unscaled_time_delta_us,
-                     scaled_time_us, scaled_time_delta_us, debug_name) = {
-                  let scene_context_read = render_frame.scene.read();
-                  let (unscaled_time_us, unscaled_time_delta_us,
-                       scaled_time_us, scaled_time_delta_us) = {
-                    let time_state_read = scene_context_read.time_state.read();
-                    (
-                      time_state_read.unscaled_time,
-                      time_state_read.unscaled_delta,
-                      time_state_read.scaled_time,
-                      time_state_read.scaled_delta,
-                    )
-                  };
-                  let debug_name = scene_context_read.debug_name.clone();
-                  let scene_arc = alloc::sync::Arc::clone(&scene_context_read.scene);
-                  // scene_context_read guard dropped here — before any GPU work
-                  (scene_arc, unscaled_time_us, unscaled_time_delta_us,
-                   scaled_time_us, scaled_time_delta_us, debug_name)
                 };
+                let debug_name = scene_context_read.debug_name.clone();
+                let scene_arc = alloc::sync::Arc::clone(&scene_context_read.scene);
+                // scene_context_read guard dropped here — before any GPU work
+                (
+                  scene_arc,
+                  unscaled_time_us,
+                  unscaled_time_delta_us,
+                  scaled_time_us,
+                  scaled_time_delta_us,
+                  debug_name,
+                )
+              };
 
-                let mut render_scene = scene_arc
-                  .build_render_scene(
-                    &vulkan_device,
-                    pe_handle,
+              let mut render_scene = scene_arc
+                .build_render_scene(
+                  &vulkan_device,
+                  pe_handle,
+                  cmd_buffer,
+                  render_frame.camera_entity,
+                  render_frame.render_physical_meshes_outline,
+                  Some(&ctx.thread_pool),
+                  extent,
+                  unscaled_time_us,
+                  unscaled_time_delta_us,
+                  scaled_time_us,
+                  scaled_time_delta_us,
+                  render_frame.mean_intra_grains_distance_mm,
+                  render_frame.min_cumulated_mass_g,
+                  sky_rotation_offset,
+                  &debug_name,
+                )
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] build_render_scene failed: {:?}", e);
+                  e
+                })?;
+
+              // Dust v3: evaluate clusters before the render pass; the draw must wait for the
+              // compute submit that emitted the newest drawn clusters
+              let dust_wait = gpu::frame::prepare_dust(vulkan_device, cmd, &mut render_scene)
+                .unwrap_or_else(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] prepare_dust failed: {:?}", e);
+                  0
+                });
+              if dust_wait > 0 {
+                use ash::vk::Handle;
+                cmd_scope.add_sync_info(gpu::CommandBufferSyncInfo {
+                  timeline_semaphore: vulkan_device.kernels.timeline.as_raw(),
+                  timeline_value: dust_wait,
+                  wait_stage_mask: gpu::CommandBufferSyncInfoStageMask::ComputeShader,
+                });
+              }
+
+              if let Some(sun_call) =
+                render_scene.depth_layers.iter().find_map(|l| l.sun_call.as_ref())
+              {
+                render_device
+                  .update_sun(
                     cmd_buffer,
-                    render_frame.camera_entity,
-                    render_frame.render_physical_meshes_outline,
-                    Some(&ctx.thread_pool),
-                    extent,
-                    unscaled_time_us,
-                    unscaled_time_delta_us,
-                    scaled_time_us,
-                    scaled_time_delta_us,
-                    render_frame.mean_intra_grains_distance_mm,
-                    render_frame.min_cumulated_mass_g,
-                    sky_rotation_offset,
-                    &debug_name,
+                    sun_call.entity,
+                    (128, 128, 128),
+                    // Normalised photosphere radius in volume space [-2,2].
+                    // sun_call.radius holds the AU-scale world radius (~0.00465),
+                    // which would make rSun ≈ 0 in the shader and produce an
+                    // all-black volume.  0.6 places the photosphere at 60 % of
+                    // the half-extent, giving a clearly visible sun disk.
+                    0.6_f32,
                   )
                   .map_err(|e| {
-                    aethervk_oshal_rlib::log!(
-                      "[render tasklet] build_render_scene failed: {:?}",
-                      e
-                    );
+                    aethervk_oshal_rlib::log!("[render tasklet] update_sun failed: {:?}", e);
                     e
                   })?;
+              }
 
-                // Dust v3: evaluate clusters before the render pass; the draw must wait for the
-                // compute submit that emitted the newest drawn clusters
-                let dust_wait = gpu::frame::prepare_dust(vulkan_device, cmd, &mut render_scene)
-                  .unwrap_or_else(|e| {
-                    aethervk_oshal_rlib::log!("[render tasklet] prepare_dust failed: {:?}", e);
-                    0
-                  });
-                if dust_wait > 0 {
-                  use ash::vk::Handle;
-                  cmd_scope.add_sync_info(gpu::CommandBufferSyncInfo {
-                    timeline_semaphore: vulkan_device.kernels.timeline.as_raw(),
-                    timeline_value: dust_wait,
-                    wait_stage_mask: gpu::CommandBufferSyncInfoStageMask::ComputeShader,
-                  });
-                }
-
-                if let Some(sun_call) = render_scene.depth_layers.iter().find_map(|l| l.sun_call.as_ref())
-                {
-                  render_device
-                    .update_sun(
-                      cmd_buffer,
-                      sun_call.entity,
-                      (128, 128, 128),
-                      // Normalised photosphere radius in volume space [-2,2].
-                      // sun_call.radius holds the AU-scale world radius (~0.00465),
-                      // which would make rSun ≈ 0 in the shader and produce an
-                      // all-black volume.  0.6 places the photosphere at 60 % of
-                      // the half-extent, giving a clearly visible sun disk.
-                      0.6_f32,
-                    )
-                    .map_err(|e| {
-                      aethervk_oshal_rlib::log!("[render tasklet] update_sun failed: {:?}", e);
-                      e
-                    })?;
-                }
-
-                if is_first_render && render_frame.custom_render_callback.is_some() {
-                  let c =
-                    unsafe { render_frame.custom_render_callback.as_ref().unwrap_unchecked() };
-                  (c.on_first_render_fn)(
-                    render_device,
-                    cmd_buffer,
-                    render_frame.presentation_engine_handle,
-                    &render_scene,
-                    c.user_data.0,
-                  )
-                  .map_err(|e| {
-                    aethervk_oshal_rlib::log!(
-                      "[render tasklet] on_first_render_fn failed: {:?}",
-                      e
-                    );
-                    e
-                  })?
-                }
-
-                // Always select compositing render pass
-                render_device
-                  .begin_compositing_render_pass(
-                    cmd_buffer,
-                    render_frame.presentation_engine_handle,
-                    &acquire_result,
-                  )
-                  .map_err(|e| {
-                    aethervk_oshal_rlib::log!(
-                      "[render tasklet] begin_compositing_render_pass failed: {:?}",
-                      e
-                    );
-                    e
-                  })?;
-                let render_pass_scope = gpu::ScopedRenderPass::new(render_device, cmd_buffer);
-
-                render_device
-                  .set_viewport(cmd_buffer, &gpu::Viewport::from_extent(extent))
-                  .map_err(|e| {
-                    aethervk_oshal_rlib::log!("[render tasklet] set_viewport failed: {:?}", e);
-                    e
-                  })?;
-                render_device
-                  .set_scissor(cmd_buffer, &gpu::Rect2D::from_extent(extent))
-                  .map_err(|e| {
-                    aethervk_oshal_rlib::log!("[render tasklet] set_scissor failed: {:?}", e);
-                    e
-                  })?;
-
-                gpu::frame::render_frame(
+              if is_first_render && render_frame.custom_render_callback.is_some() {
+                let c = unsafe { render_frame.custom_render_callback.as_ref().unwrap_unchecked() };
+                (c.on_first_render_fn)(
                   render_device,
                   cmd_buffer,
                   render_frame.presentation_engine_handle,
                   &render_scene,
+                  c.user_data.0,
                 )
                 .map_err(|e| {
-                  aethervk_oshal_rlib::log!("[render tasklet] render_frame failed: {:?}", e);
+                  aethervk_oshal_rlib::log!("[render tasklet] on_first_render_fn failed: {:?}", e);
+                  e
+                })?
+              }
+
+              // Always select compositing render pass
+              render_device
+                .begin_compositing_render_pass(
+                  cmd_buffer,
+                  render_frame.presentation_engine_handle,
+                  &acquire_result,
+                )
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!(
+                    "[render tasklet] begin_compositing_render_pass failed: {:?}",
+                    e
+                  );
+                  e
+                })?;
+              let render_pass_scope = gpu::ScopedRenderPass::new(render_device, cmd_buffer);
+
+              render_device
+                .set_viewport(cmd_buffer, &gpu::Viewport::from_extent(extent))
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] set_viewport failed: {:?}", e);
+                  e
+                })?;
+              render_device
+                .set_scissor(cmd_buffer, &gpu::Rect2D::from_extent(extent))
+                .map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] set_scissor failed: {:?}", e);
                   e
                 })?;
 
-                if render_frame.custom_render_callback.is_some() {
-                  let c =
-                    unsafe { render_frame.custom_render_callback.as_ref().unwrap_unchecked() };
-                  (c.after_render_frame_fn)(
-                    render_device,
-                    cmd_buffer,
-                    render_frame.presentation_engine_handle,
-                    &render_scene,
-                    c.user_data.0,
-                  )
-                  .map_err(|e| {
-                    aethervk_oshal_rlib::log!(
-                      "[render tasklet] after_render_frame_fn failed: {:?}",
-                      e
-                    );
-                    e
-                  })?;
-                }
+              gpu::frame::render_frame(
+                render_device,
+                cmd_buffer,
+                render_frame.presentation_engine_handle,
+                &render_scene,
+              )
+              .map_err(|e| {
+                aethervk_oshal_rlib::log!("[render tasklet] render_frame failed: {:?}", e);
+                e
+              })?;
 
-                render_pass_scope.end().map_err(|e| {
+              if render_frame.custom_render_callback.is_some() {
+                let c = unsafe { render_frame.custom_render_callback.as_ref().unwrap_unchecked() };
+                (c.after_render_frame_fn)(
+                  render_device,
+                  cmd_buffer,
+                  render_frame.presentation_engine_handle,
+                  &render_scene,
+                  c.user_data.0,
+                )
+                .map_err(|e| {
                   aethervk_oshal_rlib::log!(
-                    "[render tasklet] render_pass_scope.end failed: {:?}",
+                    "[render tasklet] after_render_frame_fn failed: {:?}",
+                    e
+                  );
+                  e
+                })?;
+              }
+
+              render_pass_scope.end().map_err(|e| {
+                aethervk_oshal_rlib::log!("[render tasklet] render_pass_scope.end failed: {:?}", e);
+                e
+              })?;
+
+              let is_windowless = unsafe {
+                render_device
+                  .is_presentation_engine_windowless(render_frame.presentation_engine_handle)
+                  .unwrap_unchecked()
+              };
+              if is_windowless {
+                render_device.record_windowless_download(cmd_buffer, task_id).map_err(|e| {
+                  aethervk_oshal_rlib::log!(
+                    "[render tasklet] record_windowless_download failed: {:?}",
                     e
                   );
                   e
                 })?;
 
-                let is_windowless = unsafe {
-                  render_device
-                    .is_presentation_engine_windowless(render_frame.presentation_engine_handle)
-                    .unwrap_unchecked()
-                };
-                if is_windowless {
-                  render_device.record_windowless_download(cmd_buffer, task_id).map_err(|e| {
-                    aethervk_oshal_rlib::log!(
-                      "[render tasklet] record_windowless_download failed: {:?}",
-                      e
-                    );
-                    e
-                  })?;
-
-                  #[cfg(test)]
-                  {
-                    let gdepth_tid = task_id | crate::gpu::GLOBAL_DEPTH_TASK_BIT;
-                    render_device.record_global_depth_download(cmd_buffer, gdepth_tid).map_err(|e| {
+                #[cfg(test)]
+                {
+                  let gdepth_tid = task_id | crate::gpu::GLOBAL_DEPTH_TASK_BIT;
+                  render_device.record_global_depth_download(cmd_buffer, gdepth_tid).map_err(
+                    |e| {
                       aethervk_oshal_rlib::log!(
-                        "[render tasklet] record_global_depth_download failed: {:?}", e
+                        "[render tasklet] record_global_depth_download failed: {:?}",
+                        e
                       );
                       e
-                    })?;
-                  }
+                    },
+                  )?;
                 }
+              }
 
-                cmd_scope.submit().map_err(|e| {
-                  aethervk_oshal_rlib::log!("[render tasklet] cmd_scope.submit failed: {:?}", e);
-                  e
-                })?;
-                present_guard.defuse();
+              cmd_scope.submit().map_err(|e| {
+                aethervk_oshal_rlib::log!("[render tasklet] cmd_scope.submit failed: {:?}", e);
+                e
+              })?;
+              present_guard.defuse();
 
-                let task_id_feedback = alloc::sync::Arc::clone(&render_frame.task_id);
-                task_id_feedback.store(task_id, core::sync::atomic::Ordering::Release);
+              let task_id_feedback = alloc::sync::Arc::clone(&render_frame.task_id);
+              task_id_feedback.store(task_id, core::sync::atomic::Ordering::Release);
 
-                Ok((cmd_buffer, is_windowless, is_first_render))
-              });
+              Ok((cmd_buffer, is_windowless, is_first_render))
+            });
 
             if let Err(ref e) = result {
               aethervk_oshal_rlib::log!(

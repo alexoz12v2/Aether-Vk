@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::math::{matrix::mat3::Mat3f32, vector::vec3::vec3};
 

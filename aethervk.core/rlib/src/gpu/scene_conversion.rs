@@ -23,10 +23,7 @@ use aethervk_oshal_rlib::{
     matrix::{Matrix4, MatrixVectorMul, mat4::Mat4x4f32, mat4f64::Mat4x4f64},
     vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat},
   },
-  os::{
-    pool::ThreadPool,
-    time::timeus_t,
-  },
+  os::{pool::ThreadPool, time::timeus_t},
 };
 use function_name::named;
 
@@ -478,7 +475,10 @@ impl SceneConversionExt2 for Scene {
           (depth - r * DEPTH_MARGIN, depth + r * DEPTH_MARGIN)
         } else {
           let d = depth.abs();
-          ((d - r * DEPTH_MARGIN).max(DEPTH_NEAR_FLOOR), d + r * DEPTH_MARGIN)
+          (
+            (d - r * DEPTH_MARGIN).max(DEPTH_NEAR_FLOOR),
+            d + r * DEPTH_MARGIN,
+          )
         }
       };
 
@@ -493,9 +493,7 @@ impl SceneConversionExt2 for Scene {
         // also scales rte — ignoring it produced too-tight near/far and clipped the mesh.
         let max_scale = {
           use aethervk_oshal_rlib::math::vector::Vector3;
-          (rte.scale.x().abs())
-            .max(rte.scale.y().abs())
-            .max(rte.scale.z().abs()) as f64
+          (rte.scale.x().abs()).max(rte.scale.y().abs()).max(rte.scale.z().abs()) as f64
         };
         let obj_radius = mesh
           .mesh
@@ -519,8 +517,7 @@ impl SceneConversionExt2 for Scene {
         };
 
         // We need the planar depth along the camera's forward axis for clipping planes.
-        use aethervk_oshal_rlib::math::vector::Vector4;
-        use aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64;
+        use aethervk_oshal_rlib::math::vector::{Vector4, vec4f64::Vec4f64};
         let view_pos = camera_data.view_f64 * Vec4f64::from_components(cx, cy, cz, 1.0);
         // Signed forward depth (view −Y is forward). `fit_slab` takes abs() for perspective.
         let obj_depth = -view_pos.y();
@@ -1065,8 +1062,10 @@ impl SceneConversionExt2 for Scene {
         cam_global_f64.position.z() * AU_TO_KM,
       );
 
-      use aethervk_oshal_rlib::math::matrix::{Matrix, mat4f64::Mat4x4f64};
-      use aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64;
+      use aethervk_oshal_rlib::math::{
+        matrix::{Matrix, mat4f64::Mat4x4f64},
+        vector::vec4f64::Vec4f64,
+      };
       let view_proj_f64: Mat4x4f64 = camera_data.proj_f64 * camera_data.view_f64;
 
       let mut indicator_inputs: alloc::vec::Vec<indicator_layout::IndicatorInput> =

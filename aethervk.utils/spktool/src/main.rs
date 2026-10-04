@@ -1,10 +1,9 @@
-use anise::almanac::Almanac;
-use anise::constants::celestial_objects;
-use anise::constants::orientations;
+use anise::{
+  almanac::Almanac,
+  constants::{celestial_objects, orientations},
+};
 use hifitime::Epoch;
-use std::env;
-use std::path::Path;
-use std::str::FromStr;
+use std::{env, path::Path, str::FromStr};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut args: Vec<String> = env::args().skip(1).collect();

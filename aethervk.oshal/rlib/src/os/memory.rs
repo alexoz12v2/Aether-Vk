@@ -347,14 +347,23 @@ pub mod tracking {
   const VMA_RING_CAP: usize = 1024; // must be a power of two
   const VMA_OP_EMPTY: u8 = 0;
   const VMA_OP_ALLOC: u8 = 1;
-  const VMA_OP_FREE:  u8 = 2;
+  const VMA_OP_FREE: u8 = 2;
 
   use core::sync::atomic::{AtomicU8, AtomicU64};
 
   // Parallel arrays: write op LAST (Release) so readers always see consistent addr+size.
-  static VMA_RING_OPS:   [AtomicU8;  VMA_RING_CAP] = { const Z: AtomicU8  = AtomicU8::new(0);  [Z; VMA_RING_CAP] };
-  static VMA_RING_ADDRS: [AtomicU64; VMA_RING_CAP] = { const Z: AtomicU64 = AtomicU64::new(0); [Z; VMA_RING_CAP] };
-  static VMA_RING_SIZES: [AtomicU64; VMA_RING_CAP] = { const Z: AtomicU64 = AtomicU64::new(0); [Z; VMA_RING_CAP] };
+  static VMA_RING_OPS: [AtomicU8; VMA_RING_CAP] = {
+    const Z: AtomicU8 = AtomicU8::new(0);
+    [Z; VMA_RING_CAP]
+  };
+  static VMA_RING_ADDRS: [AtomicU64; VMA_RING_CAP] = {
+    const Z: AtomicU64 = AtomicU64::new(0);
+    [Z; VMA_RING_CAP]
+  };
+  static VMA_RING_SIZES: [AtomicU64; VMA_RING_CAP] = {
+    const Z: AtomicU64 = AtomicU64::new(0);
+    [Z; VMA_RING_CAP]
+  };
   // Monotonically incrementing write cursor (used mod VMA_RING_CAP).
   static VMA_RING_WRITE: AtomicUsize = AtomicUsize::new(0);
 
@@ -399,8 +408,8 @@ pub mod tracking {
       let size = VMA_RING_SIZES[i].load(Ordering::Relaxed) as usize;
       match op {
         VMA_OP_ALLOC => track_gpu_allocation(addr, size),
-        VMA_OP_FREE  => untrack_gpu_allocation(addr),
-        _            => {}
+        VMA_OP_FREE => untrack_gpu_allocation(addr),
+        _ => {}
       }
     }
   }
@@ -540,4 +549,3 @@ pub mod tracking {
 
 #[cfg(test)]
 mod tests;
-

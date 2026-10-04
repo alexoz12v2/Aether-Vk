@@ -7,11 +7,14 @@ use aethervk_core_rlib::{
   simulation::almanac::AlmanacPackedData,
   simulation_api::{external_state::CTimeRange, structs::*, *},
 };
-use aethervk_oshal_rlib::math::{
-  quaternion::Quaternion,
-  vector::{Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
+use aethervk_oshal_rlib::{
+  self as oshal,
+  math::{
+    quaternion::Quaternion,
+    vector::{Vector3, Vector4, vec3::Vec3f32, vec4::Quat},
+  },
+  os::fs,
 };
-use aethervk_oshal_rlib::{self as oshal, os::fs};
 use alloc::{boxed::Box, string::ToString};
 use bytemuck::Zeroable;
 use core::{
@@ -1233,8 +1236,14 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
 
   let lat = ps_dto.latitude_rad;
   let lon = ps_dto.longitude_rad;
-  
-  let parent_scale = scene_guard.scene.with_component(comet.body, |t: &aethervk_core_rlib::scene::TransformComponent| t.scale.x()).unwrap_or(1.0);
+
+  let parent_scale = scene_guard
+    .scene
+    .with_component(
+      comet.body,
+      |t: &aethervk_core_rlib::scene::TransformComponent| t.scale.x(),
+    )
+    .unwrap_or(1.0);
   let local_r = ps_dto.nucleus_radius_km / parent_scale;
   let desired_global_radius = ps_dto.nucleus_radius_km / 50.0;
   let local_scale = desired_global_radius / parent_scale;
@@ -1394,8 +1403,14 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
 
   let lat = ps_dto.latitude_rad;
   let lon = ps_dto.longitude_rad;
-  
-  let parent_scale = scene_guard.scene.with_component(comet.body, |t: &aethervk_core_rlib::scene::TransformComponent| t.scale.x()).unwrap_or(1.0);
+
+  let parent_scale = scene_guard
+    .scene
+    .with_component(
+      comet.body,
+      |t: &aethervk_core_rlib::scene::TransformComponent| t.scale.x(),
+    )
+    .unwrap_or(1.0);
   let local_r = ps_dto.nucleus_radius_km / parent_scale;
   let desired_global_radius = ps_dto.nucleus_radius_km / 50.0;
   let local_scale = desired_global_radius / parent_scale;
@@ -2415,8 +2430,9 @@ pub unsafe extern "C" fn avkDebug_startScopedCapture(
   ctx: *mut SimulationContext,
   pe_id: u64,
 ) -> u8 {
-  use aethervk_core_rlib::gpu_backends::vulkan::renderdoc;
-  use aethervk_core_rlib::simulation_api::render_thread::channel_utils;
+  use aethervk_core_rlib::{
+    gpu_backends::vulkan::renderdoc, simulation_api::render_thread::channel_utils,
+  };
 
   if ctx.is_null() || !renderdoc::is_available() {
     return 0;

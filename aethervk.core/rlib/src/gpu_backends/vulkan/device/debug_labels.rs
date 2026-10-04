@@ -40,10 +40,8 @@ use ash::vk;
 pub fn set_object_name<H: vk::Handle>(
   #[cfg_attr(not(debug_assertions), allow(unused_variables))]
   debug_utils: &ash::ext::debug_utils::Device,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  handle: H,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  name: &core::ffi::CStr,
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] handle: H,
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] name: &core::ffi::CStr,
 ) {
   #[cfg(debug_assertions)]
   {
@@ -66,12 +64,9 @@ pub fn set_object_name<H: vk::Handle>(
 pub fn set_object_tag<H: vk::Handle>(
   #[cfg_attr(not(debug_assertions), allow(unused_variables))]
   debug_utils: &ash::ext::debug_utils::Device,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  handle: H,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  tag_name: u64,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  tag_data: &[u8],
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] handle: H,
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] tag_name: u64,
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] tag_data: &[u8],
 ) {
   #[cfg(debug_assertions)]
   {
@@ -111,12 +106,9 @@ impl<'d> DebugLabelScope<'d> {
   pub fn begin(
     #[cfg_attr(not(debug_assertions), allow(unused_variables))]
     debug_utils: &'d ash::ext::debug_utils::Device,
-    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-    cmd: vk::CommandBuffer,
-    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-    name: &core::ffi::CStr,
-    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-    color: [f32; 4],
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))] cmd: vk::CommandBuffer,
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))] name: &core::ffi::CStr,
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))] color: [f32; 4],
   ) -> Self {
     #[cfg(debug_assertions)]
     {
@@ -151,12 +143,9 @@ impl Drop for DebugLabelScope<'_> {
 pub fn cmd_insert(
   #[cfg_attr(not(debug_assertions), allow(unused_variables))]
   debug_utils: &ash::ext::debug_utils::Device,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  cmd: vk::CommandBuffer,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  name: &core::ffi::CStr,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  color: [f32; 4],
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] cmd: vk::CommandBuffer,
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] name: &core::ffi::CStr,
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] color: [f32; 4],
 ) {
   #[cfg(debug_assertions)]
   {
@@ -187,12 +176,9 @@ impl<'d> QueueLabelScope<'d> {
   pub fn begin(
     #[cfg_attr(not(debug_assertions), allow(unused_variables))]
     debug_utils: &'d ash::ext::debug_utils::Device,
-    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-    queue: vk::Queue,
-    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-    name: &core::ffi::CStr,
-    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-    color: [f32; 4],
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))] queue: vk::Queue,
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))] name: &core::ffi::CStr,
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))] color: [f32; 4],
   ) -> Self {
     #[cfg(debug_assertions)]
     {
@@ -226,12 +212,9 @@ impl Drop for QueueLabelScope<'_> {
 pub fn queue_insert(
   #[cfg_attr(not(debug_assertions), allow(unused_variables))]
   debug_utils: &ash::ext::debug_utils::Device,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  queue: vk::Queue,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  name: &core::ffi::CStr,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  color: [f32; 4],
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] queue: vk::Queue,
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] name: &core::ffi::CStr,
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] color: [f32; 4],
 ) {
   #[cfg(debug_assertions)]
   {
@@ -259,10 +242,8 @@ pub fn submit_message(
   severity: vk::DebugUtilsMessageSeverityFlagsEXT,
   #[cfg_attr(not(debug_assertions), allow(unused_variables))]
   types: vk::DebugUtilsMessageTypeFlagsEXT,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  message_id_name: &core::ffi::CStr,
-  #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-  message: &core::ffi::CStr,
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] message_id_name: &core::ffi::CStr,
+  #[cfg_attr(not(debug_assertions), allow(unused_variables))] message: &core::ffi::CStr,
   #[cfg_attr(not(debug_assertions), allow(unused_variables))]
   objects: &[vk::DebugUtilsObjectNameInfoEXT<'_>],
 ) {
@@ -278,6 +259,3 @@ pub fn submit_message(
     }
   }
 }
-
-
-

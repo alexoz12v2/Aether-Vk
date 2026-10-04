@@ -55,11 +55,17 @@ pub struct DustManager {
 
 impl DustManager {
   pub fn new(allocator_view: vk_mem::AllocatorView) -> Self {
-    Self { systems: dashmap::DashMap::new(), allocator_view }
+    Self {
+      systems: dashmap::DashMap::new(),
+      allocator_view,
+    }
   }
 
   fn destroy_system(allocator: &vk_mem::AllocatorView, mut sys: DustGpuSystem) {
-    for b in [sys.clusters.take(), sys.render.take(), sys.batches.take()].into_iter().flatten() {
+    for b in [sys.clusters.take(), sys.render.take(), sys.batches.take()]
+      .into_iter()
+      .flatten()
+    {
       let mut a = b.alloc;
       unsafe { allocator.destroy_buffer(b.buffer, &mut a) };
     }
@@ -81,11 +87,13 @@ impl Device {
   /// Ring capacity for this device: high tier on discrete GPUs, low tier otherwise, small in CPU
   /// particle mode. `AETHERVK_DUST_RING=<power of two>` overrides it.
   pub fn dust_ring_capacity(&self) -> u32 {
-    let env = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_RING").and_then(|s| s.trim().parse::<u32>().ok());
+    let env = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_RING")
+      .and_then(|s| s.trim().parse::<u32>().ok());
     if crate::gpu_backends::vulkan::physics::is_cpu_particles_mode() {
       return dust::ring_capacity(false, env.or(Some(DUST_RING_CAPACITY_CPU)));
     }
-    let high_end = self.query_result.physical_device_properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
+    let high_end = self.query_result.physical_device_properties.device_type
+      == vk::PhysicalDeviceType::DISCRETE_GPU;
     dust::ring_capacity(high_end, env)
   }
 
@@ -105,7 +113,10 @@ impl Device {
           | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
           | vk::BufferUsageFlags::TRANSFER_SRC,
       );
-    let families = [self.get_compute_queue().family_index, self.get_graphics_queue().family_index];
+    let families = [
+      self.get_compute_queue().family_index,
+      self.get_graphics_queue().family_index,
+    ];
     if concurrent && families[0] != families[1] {
       info = info.sharing_mode(vk::SharingMode::CONCURRENT).queue_family_indices(&families);
     }
@@ -113,18 +124,29 @@ impl Device {
     crate::apply_test_dedicated_alloc!(alloc_info);
     if host_visible {
       alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
-      alloc_info.flags =
-        vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE | vk_mem::AllocationCreateFlags::MAPPED;
+      alloc_info.flags = vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+        | vk_mem::AllocationCreateFlags::MAPPED;
     } else {
       alloc_info.usage = vk_mem::MemoryUsage::AutoPreferDevice;
       alloc_info.priority = 1.0;
     }
     let (buffer, alloc, alloc_res) =
-      unsafe { allocator.create_buffer_get_info(&info, &alloc_info) }.with_name(&self.device, name)?;
+      unsafe { allocator.create_buffer_get_info(&info, &alloc_info) }
+        .with_name(&self.device, name)?;
     let address = unsafe {
-      self.device.buffer_device_address.get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(buffer))
+      self
+        .device
+        .buffer_device_address
+        .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(buffer))
     };
-    Ok((DustBuffer { buffer, alloc, address }, alloc_res.mapped_data.cast()))
+    Ok((
+      DustBuffer {
+        buffer,
+        alloc,
+        address,
+      },
+      alloc_res.mapped_data.cast(),
+    ))
   }
 
   /// Allocates the dust resources of particle system `id`. Returns the ring capacity.
@@ -140,30 +162,64 @@ impl Device {
         render: None,
         batches: None,
         batches_mapped: core::ptr::null_mut(),
-        cpu_ring: Some(spin::RwLock::new(alloc::vec![bytemuck::Zeroable::zeroed(); capacity as usize])),
+        cpu_ring: Some(spin::RwLock::new(
+          alloc::vec![bytemuck::Zeroable::zeroed(); capacity as usize],
+        )),
       }
     } else {
       let size_c = capacity as u64 * core::mem::size_of::<DustCluster>() as u64;
       let size_r = capacity as u64 * core::mem::size_of::<DustRenderCluster>() as u64;
       let size_b = DUST_BATCH_SLOTS as u64 * core::mem::size_of::<DustBatch>() as u64;
-      let (clusters, _) = self.dust_create_buffer(&allocator, size_c, false, true, &alloc::format!("DustClusters_{id}"))?;
-      let render = match self.dust_create_buffer(&allocator, size_r, false, false, &alloc::format!("DustRender_{id}")) {
+      let (clusters, _) = self.dust_create_buffer(
+        &allocator,
+        size_c,
+        false,
+        true,
+        &alloc::format!("DustClusters_{id}"),
+      )?;
+      let render = match self.dust_create_buffer(
+        &allocator,
+        size_r,
+        false,
+        false,
+        &alloc::format!("DustRender_{id}"),
+      ) {
         Ok((b, _)) => b,
         Err(e) => {
-          DustManager::destroy_system(&allocator, DustGpuSystem {
-            capacity, clusters: Some(clusters), render: None, batches: None,
-            batches_mapped: core::ptr::null_mut(), cpu_ring: None,
-          });
+          DustManager::destroy_system(
+            &allocator,
+            DustGpuSystem {
+              capacity,
+              clusters: Some(clusters),
+              render: None,
+              batches: None,
+              batches_mapped: core::ptr::null_mut(),
+              cpu_ring: None,
+            },
+          );
           return Err(e);
         }
       };
-      let (batches, mapped) = match self.dust_create_buffer(&allocator, size_b, true, false, &alloc::format!("DustBatches_{id}")) {
+      let (batches, mapped) = match self.dust_create_buffer(
+        &allocator,
+        size_b,
+        true,
+        false,
+        &alloc::format!("DustBatches_{id}"),
+      ) {
         Ok(x) => x,
         Err(e) => {
-          DustManager::destroy_system(&allocator, DustGpuSystem {
-            capacity, clusters: Some(clusters), render: Some(render), batches: None,
-            batches_mapped: core::ptr::null_mut(), cpu_ring: None,
-          });
+          DustManager::destroy_system(
+            &allocator,
+            DustGpuSystem {
+              capacity,
+              clusters: Some(clusters),
+              render: Some(render),
+              batches: None,
+              batches_mapped: core::ptr::null_mut(),
+              cpu_ring: None,
+            },
+          );
           return Err(e);
         }
       };
@@ -184,25 +240,51 @@ impl Device {
   }
 
   /// Discards the resources of particle system `id`, once both queues are past the given values.
-  pub fn discard_particle_system(&self, id: u64, gfx_timeline: u64, comp_timeline: u64) -> GpuResult<()> {
+  pub fn discard_particle_system(
+    &self,
+    id: u64,
+    gfx_timeline: u64,
+    comp_timeline: u64,
+  ) -> GpuResult<()> {
     let res = self.res.read();
     let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
-    let (_, mut sys) = mgr.systems.remove(&id).ok_or(gpu_err!("particle system with id {} not found", id))?;
+    let (_, mut sys) = mgr
+      .systems
+      .remove(&id)
+      .ok_or(gpu_err!("particle system with id {} not found", id))?;
     let allocator = res.allocator.allocator.as_allocator_view();
     // clusters: written by compute, read by graphics. Wait (bounded) for the last compute submit,
     // then retire it with the graphics frames that may still read it. Discards are rare.
     if let Some(b) = sys.clusters.take() {
       let last_compute = comp_timeline.saturating_sub(1);
       if last_compute > 0 {
-        let _ = self.device.wait_for_semaphore_value(self.kernels.timeline, last_compute, 1_000_000_000);
+        let _ =
+          self
+            .device
+            .wait_for_semaphore_value(self.kernels.timeline, last_compute, 1_000_000_000);
       }
-      res.discard_pool.discard_buffer(allocator.as_allocator_view(), b.buffer, b.alloc, gfx_timeline);
+      res.discard_pool.discard_buffer(
+        allocator.as_allocator_view(),
+        b.buffer,
+        b.alloc,
+        gfx_timeline,
+      );
     }
     if let Some(b) = sys.batches.take() {
-      self.kernels.discard_pool.discard_buffer(allocator.as_allocator_view(), b.buffer, b.alloc, comp_timeline);
+      self.kernels.discard_pool.discard_buffer(
+        allocator.as_allocator_view(),
+        b.buffer,
+        b.alloc,
+        comp_timeline,
+      );
     }
     if let Some(b) = sys.render.take() {
-      res.discard_pool.discard_buffer(allocator.as_allocator_view(), b.buffer, b.alloc, gfx_timeline);
+      res.discard_pool.discard_buffer(
+        allocator.as_allocator_view(),
+        b.buffer,
+        b.alloc,
+        gfx_timeline,
+      );
     }
     Ok(())
   }
@@ -210,7 +292,13 @@ impl Device {
   /// Records the emission of `batch` (its `first_index`, `count`, `ring_mask` already set).
   /// `seq` is the monotonic batch sequence number of the system (selects the descriptor slot).
   /// CPU particle mode: emits on the host immediately, records nothing.
-  pub fn cmd_dust_emit(&self, cmd: vk::CommandBuffer, id: u64, batch: &DustBatch, seq: u64) -> GpuResult<()> {
+  pub fn cmd_dust_emit(
+    &self,
+    cmd: vk::CommandBuffer,
+    id: u64,
+    batch: &DustBatch,
+    seq: u64,
+  ) -> GpuResult<()> {
     if batch.count == 0 {
       return Ok(());
     }
@@ -238,8 +326,15 @@ impl Device {
         stride,
       );
     }
-    res.allocator.allocator.as_allocator_view().flush_allocation(&batches.alloc, (slot * stride) as u64, stride as u64)?;
-    let pc = DustEmitPushConstants { clusters: clusters.address, batch: batches.address + (slot * stride) as u64 };
+    res.allocator.allocator.as_allocator_view().flush_allocation(
+      &batches.alloc,
+      (slot * stride) as u64,
+      stride as u64,
+    )?;
+    let pc = DustEmitPushConstants {
+      clusters: clusters.address,
+      batch: batches.address + (slot * stride) as u64,
+    };
     let pipeline = self.kernels.pipelines.dust_emit;
     self.kernels.pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&pc));
     unsafe {
@@ -302,13 +397,18 @@ impl Device {
       let bytes = (live_count.max(1) as usize) * core::mem::size_of::<DustRenderCluster>();
       let (offset, ptr) = arena.allocate(bytes, 16).ok_or(GpuError::OutOfMemory)?;
       let ring = ring.read();
-      let out = unsafe { core::slice::from_raw_parts_mut(ptr.cast::<DustRenderCluster>(), live_count as usize) };
+      let out = unsafe {
+        core::slice::from_raw_parts_mut(ptr.cast::<DustRenderCluster>(), live_count as usize)
+      };
       for (i, o) in out.iter_mut().enumerate() {
         let slot = first_slot.wrapping_add(i as u32) & mask;
         *o = dust::evaluate_cluster(&ring[slot as usize], slot, frame);
       }
       let base = unsafe {
-        self.device.buffer_device_address.get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(arena.buffer))
+        self
+          .device
+          .buffer_device_address
+          .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(arena.buffer))
       };
       return Ok(base + offset as u64);
     }

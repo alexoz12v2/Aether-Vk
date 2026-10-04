@@ -469,7 +469,13 @@ impl SimulationContext {
     let mut scene_guard = scene.write();
     scene_guard
       .scene
-      .add_component(entity_id, SunComponent { resolution, radius_km })
+      .add_component(
+        entity_id,
+        SunComponent {
+          resolution,
+          radius_km,
+        },
+      )
       .map_err(|e| <AddComponentError as Into<EngineError>>::into(e))?;
 
     Ok(())

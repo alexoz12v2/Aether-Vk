@@ -110,8 +110,12 @@ struct Aabb {
 }
 
 impl Aabb {
-  fn right(&self) -> f32 { self.x + self.w }
-  fn bottom(&self) -> f32 { self.y + self.h }
+  fn right(&self) -> f32 {
+    self.x + self.w
+  }
+  fn bottom(&self) -> f32 {
+    self.y + self.h
+  }
 
   /// Returns `true` if the two boxes overlap.
   fn overlaps(&self, other: &Aabb) -> bool {
@@ -250,7 +254,9 @@ fn initial_placement(
   for c in 1..=current_cluster {
     let mut cluster_indices: Vec<usize> = (0..n).filter(|&i| cluster_ids[i] == c).collect();
     let count = cluster_indices.len();
-    if count == 0 { continue; }
+    if count == 0 {
+      continue;
+    }
 
     let mut cx = 0.0;
     let mut cy = 0.0;
@@ -306,59 +312,75 @@ fn push_apart_boxes(
 ) {
   let n = boxes.len();
   let screen_padding = 20.0;
-  
+
   for _ in 0..15 {
     let mut any_overlap = false;
     for i in 0..n {
       for j in (i + 1)..n {
-        if !boxes[i].overlaps(&boxes[j]) { continue; }
+        if !boxes[i].overlaps(&boxes[j]) {
+          continue;
+        }
         any_overlap = true;
-        
+
         let cx_i = boxes[i].x + boxes[i].w * 0.5;
         let cy_i = boxes[i].y + boxes[i].h * 0.5;
         let cx_j = boxes[j].x + boxes[j].w * 0.5;
         let cy_j = boxes[j].y + boxes[j].h * 0.5;
-        
+
         let mut dx = cx_i - cx_j;
         let mut dy = cy_i - cy_j;
         let mut dist = (dx * dx + dy * dy).sqrt();
-        
+
         if dist < 0.1 {
-          dx = 1.0; dy = 0.0; dist = 1.0;
+          dx = 1.0;
+          dy = 0.0;
+          dist = 1.0;
         }
-        
-        let overlap_x = (boxes[i].right().min(boxes[j].right()) - boxes[i].x.max(boxes[j].x)).max(0.0);
-        let overlap_y = (boxes[i].bottom().min(boxes[j].bottom()) - boxes[i].y.max(boxes[j].y)).max(0.0);
-        
+
+        let overlap_x =
+          (boxes[i].right().min(boxes[j].right()) - boxes[i].x.max(boxes[j].x)).max(0.0);
+        let overlap_y =
+          (boxes[i].bottom().min(boxes[j].bottom()) - boxes[i].y.max(boxes[j].y)).max(0.0);
+
         let push_dist = overlap_x.min(overlap_y) * 0.6; // soft push
         let push_x = (dx / dist) * push_dist;
         let push_y = (dy / dist) * push_dist;
-        
+
         let di = (inputs[i].cam_dist_km as f32).max(1.0);
         let dj = (inputs[j].cam_dist_km as f32).max(1.0);
-        
+
         // Corrected weight: far object gets pushed more (di/dj inverted)
         let weight_i = di / (di + dj);
         let weight_j = dj / (di + dj);
-        
+
         boxes[i].x += push_x * weight_i;
         boxes[i].y += push_y * weight_i;
         boxes[j].x -= push_x * weight_j;
         boxes[j].y -= push_y * weight_j;
       }
     }
-    
+
     // Soft boundary repulsion
     for b in boxes.iter_mut() {
-      if b.x < screen_padding { b.x += (screen_padding - b.x) * 0.5; }
-      if b.y < screen_padding { b.y += (screen_padding - b.y) * 0.5; }
-      if b.right() > screen_w - screen_padding { b.x -= (b.right() - (screen_w - screen_padding)) * 0.5; }
-      if b.bottom() > screen_h - screen_padding { b.y -= (b.bottom() - (screen_h - screen_padding)) * 0.5; }
+      if b.x < screen_padding {
+        b.x += (screen_padding - b.x) * 0.5;
+      }
+      if b.y < screen_padding {
+        b.y += (screen_padding - b.y) * 0.5;
+      }
+      if b.right() > screen_w - screen_padding {
+        b.x -= (b.right() - (screen_w - screen_padding)) * 0.5;
+      }
+      if b.bottom() > screen_h - screen_padding {
+        b.y -= (b.bottom() - (screen_h - screen_padding)) * 0.5;
+      }
     }
-    
-    if !any_overlap { break; }
+
+    if !any_overlap {
+      break;
+    }
   }
-  
+
   // Final hard clamp
   for b in boxes.iter_mut() {
     b.x = b.x.clamp(0.0, (screen_w - b.w).max(0.0));
@@ -409,15 +431,22 @@ fn build_output(
 
     // seg1_dir: from end toward start (this matches the test logic)
     let seg1_dir = if go_left { [-1.0f32, 0.0] } else { [1.0, 0.0] };
-    
+
     // seg2: from end to target
-    let seg2_raw = [inp.screen_pos[0] - seg1_end[0], inp.screen_pos[1] - seg1_end[1]];
+    let seg2_raw = [
+      inp.screen_pos[0] - seg1_end[0],
+      inp.screen_pos[1] - seg1_end[1],
+    ];
     let seg2_len = (seg2_raw[0] * seg2_raw[0] + seg2_raw[1] * seg2_raw[1]).sqrt();
 
-    if seg2_len < 1e-3 { break; }
+    if seg2_len < 1e-3 {
+      break;
+    }
 
     let dot = seg1_dir[0] * (seg2_raw[0] / seg2_len) + seg1_dir[1] * (seg2_raw[1] / seg2_len);
-    if dot <= 0.0 { break; } // Angle >= 90
+    if dot <= 0.0 {
+      break;
+    } // Angle >= 90
 
     extra_surplus += 5.0; // expand until satisfied
   }

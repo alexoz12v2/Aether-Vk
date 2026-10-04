@@ -711,14 +711,15 @@ impl CameraRenderData {
   pub fn rebuild_for_layer(&self, layer_near: f64, layer_far: f64, layer_frame_scale: f32) -> Self {
     let (proj, proj_f64) = match self.projection_params {
       CameraProjectionParams::Perspective { fov, aspect_ratio } => {
-        let proj_f64 = aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::perspective_vk_reverse_z(
-          fov as f64,
-          aspect_ratio as f64,
-          layer_near,
-          layer_far,
-        );
+        let proj_f64 =
+          aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::perspective_vk_reverse_z(
+            fov as f64,
+            aspect_ratio as f64,
+            layer_near,
+            layer_far,
+          );
         (proj_f64.to_mat4_f32(), proj_f64)
-      },
+      }
       CameraProjectionParams::Orthographic {
         left,
         right,
@@ -734,10 +735,11 @@ impl CameraRenderData {
         let r = right as f64 * inv;
         let b = bottom as f64 * inv;
         let t = top as f64 * inv;
-        
-        let proj_f64 = aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::orthographic_vk_reverse_z(
-            l, r, b, t, layer_near, layer_far
-        );
+
+        let proj_f64 =
+          aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::orthographic_vk_reverse_z(
+            l, r, b, t, layer_near, layer_far,
+          );
         (proj_f64.to_mat4_f32(), proj_f64)
       }
     };
@@ -819,7 +821,9 @@ fn dust_gain() -> f32 {
 /// or per unit for orthographic). The engine is Z-up: view depth runs along −Y and screen y comes
 /// from view **z**, so the y scale is `cols[2].y`, not `cols[1].y` (which is 0). See
 /// `Mat4x4f64::perspective_vk_reverse_z` / `orthographic_vk_reverse_z`.
-pub fn dust_projection_scales(proj: &aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64) -> (f32, f32) {
+pub fn dust_projection_scales(
+  proj: &aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64,
+) -> (f32, f32) {
   (proj.cols[0].x().abs() as f32, proj.cols[2].y().abs() as f32)
 }
 
@@ -841,7 +845,13 @@ pub fn prepare_dust(
         any = true;
       }
       let s = &call.state;
-      match device.cmd_dust_propagate(cmd, call.entity_id.as_ffi(), s.first_slot, s.live_count, &s.frame) {
+      match device.cmd_dust_propagate(
+        cmd,
+        call.entity_id.as_ffi(),
+        s.first_slot,
+        s.live_count,
+        &s.frame,
+      ) {
         Ok(addr) => {
           call.render_address = addr;
           wait = wait.max(s.compute_wait);
@@ -1267,9 +1277,9 @@ pub fn do_draw_sphere_gizmo_batch(
   };
 
   let sphere_count = draw_call.axis_vertex_start;
-  let axis_start   = draw_call.axis_vertex_start;
-  let axis_count   = draw_call.total_vertices.saturating_sub(axis_start);
-  let n            = draw_call.total_gizmos;
+  let axis_start = draw_call.axis_vertex_start;
+  let axis_count = draw_call.total_vertices.saturating_sub(axis_start);
+  let n = draw_call.total_gizmos;
 
   // ── Pass A: OverMesh pipeline (NO_DEPTH_TEST, stencil=EQUAL(1)) ──────────
   // Draws at pixels where the comet mesh wrote stencil=1.
@@ -1293,7 +1303,6 @@ pub fn do_draw_sphere_gizmo_batch(
 
   Ok(())
 }
-
 
 pub fn do_draw_ui_batch(
   device: &dyn RenderDevice,
@@ -1407,7 +1416,12 @@ pub fn do_draw_dust_batch(
       Vec4f64::from_components(u, 0.0, 0.0, 0.0),
       Vec4f64::from_components(0.0, u, 0.0, 0.0),
       Vec4f64::from_components(0.0, 0.0, u, 0.0),
-      Vec4f64::from_components(call.rte_position[0], call.rte_position[1], call.rte_position[2], 1.0),
+      Vec4f64::from_components(
+        call.rte_position[0],
+        call.rte_position[1],
+        call.rte_position[2],
+        1.0,
+      ),
     );
     let mvp_f64 = view_proj_f64 * model;
     let children = crate::scene::dust::render_children(call.state.capacity, call.state.live_count);
@@ -1427,7 +1441,11 @@ pub fn do_draw_dust_batch(
       params: [u as f32, p00, p11, 2.0 / window_extent[1].max(1) as f32],
     };
     if let Err(e) = device.cmd_dust_draw(cmd, &pc) {
-      aethervk_oshal_rlib::log!("Skipping dust draw call for {:?} due to error: '{}'", call.entity_id, e);
+      aethervk_oshal_rlib::log!(
+        "Skipping dust draw call for {:?} due to error: '{}'",
+        call.entity_id,
+        e
+      );
     }
   }
   Ok(())
@@ -1480,11 +1498,8 @@ pub fn render_frame(
   // the Painter's Algorithm naturally overwrites it as closer layers render last.
   device.debug_label_begin(cmd_buffer, c"[SP1] Micro Layers", [0.2, 1.0, 0.4, 1.0]);
   {
-    let mut micro_layers: alloc::vec::Vec<&crate::gpu::frame::RenderLayer> = render_scene
-      .depth_layers
-      .iter()
-      .filter(|l| l.layer_index > 0)
-      .collect();
+    let mut micro_layers: alloc::vec::Vec<&crate::gpu::frame::RenderLayer> =
+      render_scene.depth_layers.iter().filter(|l| l.layer_index > 0).collect();
     // Sort back-to-front: highest layer_index drawn first.
     micro_layers.sort_by(|a, b| b.layer_index.cmp(&a.layer_index));
     for (i, layer) in micro_layers.iter().enumerate() {
@@ -1509,7 +1524,9 @@ pub fn render_frame(
   // Fires after the Micro layer (which renders the comet) so the matrices reflect
   // the actual Micro-layer projection. rebuild_for_layer is pure CPU math — no GPU ops.
   #[cfg(debug_assertions)]
-  if let Some(micro_layer) = render_scene.depth_layers.iter()
+  if let Some(micro_layer) = render_scene
+    .depth_layers
+    .iter()
     .filter(|l| l.layer_index > 0)
     .min_by_key(|l| l.layer_index)
   {
@@ -1561,9 +1578,11 @@ pub fn render_frame(
   if let Some(cursor_call) = &render_scene.cursor_call {
     // Rebuild viewProj for the cursor's depth layer so the projection matrix
     // matches the cursor's coordinate space (km for micro, AU for macro).
-    let cursor_camera = render_scene
-      .camera_data
-      .rebuild_for_layer(cursor_call.layer_near as f64, cursor_call.layer_far as f64, cursor_call.layer_frame_scale);
+    let cursor_camera = render_scene.camera_data.rebuild_for_layer(
+      cursor_call.layer_near as f64,
+      cursor_call.layer_far as f64,
+      cursor_call.layer_frame_scale,
+    );
     do_draw_cursor(
       device,
       &cursor_camera,
@@ -1680,7 +1699,10 @@ fn draw_layer_content(
 
   // Rebuild projection matrix for this layer's near/far planes.
   // The view matrix (rotation-only in RTE) is shared across all layers.
-  let layer_camera = render_scene.camera_data.rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
+  let layer_camera =
+    render_scene
+      .camera_data
+      .rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
 
   if let Some(draw_call) = &layer.background_call {
     device.debug_label_insert(cmd_buffer, c"Background", [0.15, 0.15, 0.15, 1.0]);
@@ -1765,7 +1787,14 @@ fn draw_layer_content(
 
   if let Some(batch_call) = &layer.sphere_gizmo_batch_call {
     device.debug_label_insert(cmd_buffer, c"Sphere Gizmos", [1.0, 0.8, 0.0, 1.0]);
-    do_draw_sphere_gizmo_batch(device, &layer_camera, sun_pos, cmd_buffer, handle, batch_call)?;
+    do_draw_sphere_gizmo_batch(
+      device,
+      &layer_camera,
+      sun_pos,
+      cmd_buffer,
+      handle,
+      batch_call,
+    )?;
   }
 
   if !layer.measurement_calls.is_empty() {
@@ -1836,7 +1865,7 @@ mod camera_render_data_tests {
     let top_au = 6.0 * micro_frame_scale;
 
     let transform = TransformComponent::default();
-    
+
     let camera = CameraComponent {
       projection: CameraProjection::Orthographic {
         left: left_au,
@@ -1854,7 +1883,8 @@ mod camera_render_data_tests {
     let camera_data = CameraRenderData::new(&transform, &camera, micro_frame_scale, [800, 800]);
 
     // Assert 1: Ensure the stored projection params retain the unscaled bounds (v8 fix)
-    if let CameraProjectionParams::Orthographic { left, right, .. } = camera_data.projection_params {
+    if let CameraProjectionParams::Orthographic { left, right, .. } = camera_data.projection_params
+    {
       assert_eq!(left, left_au, "Left bound should be unscaled AU");
       assert_eq!(right, right_au, "Right bound should be unscaled AU");
     } else {
@@ -1866,15 +1896,15 @@ mod camera_render_data_tests {
 
     // Extract the reconstructed Orthographic matrix
     let proj_matrix: [f32; 16] = rebuilt_data.proj.into();
-    
+
     // In Vulkan Ortho, the M00 (index 0) component is 2.0 / (right - left)
     // If left = -6 and right = 6, M00 should be 2.0 / 12.0 = 0.1666666
     let m00 = proj_matrix[0];
-    
+
     // Assert 2: Verify the matrix successfully restored the 12km bounds
     let expected_m00 = 2.0 / 12.0;
     let diff = (m00 - expected_m00).abs();
-    
+
     assert!(
       diff < 1e-5,
       "Ortho bounds collapsed! Expected M00 approx {}, got {} (f32::EPSILON bug?)",
@@ -1896,7 +1926,10 @@ mod dust_projection_tests {
   fn ndc_step(proj: &Mat4x4f64, d: f64, dir: [f64; 3]) -> (f64, f64) {
     let a = *proj * Vec4f64::from_components(0.0, -d, 0.0, 1.0);
     let b = *proj * Vec4f64::from_components(dir[0], -d + dir[1], dir[2], 1.0);
-    ((b.x() / b.w() - a.x() / a.w()).abs(), (b.y() / b.w() - a.y() / a.w()).abs())
+    (
+      (b.x() / b.w() - a.x() / a.w()).abs(),
+      (b.y() / b.w() - a.y() / a.w()).abs(),
+    )
   }
 
   #[test]
@@ -1907,8 +1940,16 @@ mod dust_projection_tests {
     for d in [1.0, 10.0, 250.0] {
       let (dx, _) = ndc_step(&proj, d, [1.0, 0.0, 0.0]);
       let (_, dy) = ndc_step(&proj, d, [0.0, 0.0, 1.0]); // screen y comes from view z
-      assert!((dx - sx as f64 / d).abs() < 1e-6 * dx.max(1e-12), "x at {d}: {dx} vs {}", sx as f64 / d);
-      assert!((dy - sy as f64 / d).abs() < 1e-6 * dy.max(1e-12), "y at {d}: {dy} vs {}", sy as f64 / d);
+      assert!(
+        (dx - sx as f64 / d).abs() < 1e-6 * dx.max(1e-12),
+        "x at {d}: {dx} vs {}",
+        sx as f64 / d
+      );
+      assert!(
+        (dy - sy as f64 / d).abs() < 1e-6 * dy.max(1e-12),
+        "y at {d}: {dy} vs {}",
+        sy as f64 / d
+      );
     }
     // P00 / P11 = 1 / aspect (used by dust.vert to convert pixels to NDC in x)
     assert!(((sx / sy) as f64 - 1.0 / 1.5).abs() < 1e-6);
@@ -1921,6 +1962,9 @@ mod dust_projection_tests {
     assert!(sx > 0.0 && sy > 0.0, "scales must be non zero: {sx} {sy}");
     let (dx, _) = ndc_step(&proj, 5.0, [1.0, 0.0, 0.0]);
     let (_, dy) = ndc_step(&proj, 5.0, [0.0, 0.0, 1.0]);
-    assert!((dx - sx as f64).abs() < 1e-6 * dx && (dy - sy as f64).abs() < 1e-6 * dy, "{dx} {sx} / {dy} {sy}");
+    assert!(
+      (dx - sx as f64).abs() < 1e-6 * dx && (dy - sy as f64).abs() < 1e-6 * dy,
+      "{dx} {sx} / {dy} {sy}"
+    );
   }
 }

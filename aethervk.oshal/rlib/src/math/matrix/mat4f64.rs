@@ -8,10 +8,10 @@ use core::arch::aarch64::*;
 
 use core::ops;
 
-use crate::math::matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix};
 use crate::math::{
-  vector::{vec3f64::Vec3f64, vec4f64::Vec4f64, Vector, Vector4},
   FloatLike,
+  matrix::{Matrix, Matrix4, MatrixVectorMul, SquareMatrix},
+  vector::{Vector, Vector4, vec3f64::Vec3f64, vec4f64::Vec4f64},
 };
 
 #[repr(C, align(32))]
@@ -415,7 +415,6 @@ impl ops::MulAssign<Mat4x4f64> for Mat4x4f64 {
     *self = *self * rhs;
   }
 }
-
 
 impl Into<[f64; 16]> for Mat4x4f64 {
   #[inline]

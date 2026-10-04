@@ -190,11 +190,11 @@ impl QuatToEulerAngles for Quat {
   fn to_pitch_yaw(self) -> (f32, f32) {
     // Extract forward vector (local -Y rotated by self)
     let fwd = self.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
-    
+
     // Pitch is the angle above/below the XY plane
     // Clamp to avoid NaN from precision errors slightly outside [-1, 1]
     let pitch = fwd.z().clamp(-1.0, 1.0).asin();
-    
+
     // Yaw is the angle in the XY plane. 0 yaw means looking down -Y.
     let yaw = fwd.x().atan2(-fwd.y());
 

@@ -759,7 +759,10 @@ impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
     let (src_color, dst_color) = if premultiplied {
       (vk::BlendFactor::ONE, vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
     } else {
-      (vk::BlendFactor::SRC_ALPHA, vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+      (
+        vk::BlendFactor::SRC_ALPHA,
+        vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+      )
     };
     let (src_alpha, dst_alpha) = (vk::BlendFactor::ONE, vk::BlendFactor::ONE_MINUS_SRC_ALPHA);
     for i in 0..color_blend_attachments.capacity() {

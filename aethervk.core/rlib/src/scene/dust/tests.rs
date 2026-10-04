@@ -17,15 +17,32 @@ fn rk4(r0: V3, v0: V3, mu: f64, dt_total: f64, h: f64) -> (V3, V3) {
     let k3r = add(v, scale(k2v, h / 2.0));
     let k4v = acc(add(r, scale(k3r, h)));
     let k4r = add(v, scale(k3v, h));
-    r = add(r, scale(add(add(k1r, scale(k2r, 2.0)), add(scale(k3r, 2.0), k4r)), h / 6.0));
-    v = add(v, scale(add(add(k1v, scale(k2v, 2.0)), add(scale(k3v, 2.0), k4v)), h / 6.0));
+    r = add(
+      r,
+      scale(
+        add(add(k1r, scale(k2r, 2.0)), add(scale(k3r, 2.0), k4r)),
+        h / 6.0,
+      ),
+    );
+    v = add(
+      v,
+      scale(
+        add(add(k1v, scale(k2v, 2.0)), add(scale(k3v, 2.0), k4v)),
+        h / 6.0,
+      ),
+    );
   }
   (r, v)
 }
 
 /// df64 propagation with f64 in/out
 fn prop_df(r0: V3, v0: V3, mu: f64, dt: f64) -> (V3, V3) {
-  let (r, v) = kepler::propagate(&Df3::from_f64(r0), &Df3::from_f64(v0), Df::from_f64(mu), Df::from_f64(dt));
+  let (r, v) = kepler::propagate(
+    &Df3::from_f64(r0),
+    &Df3::from_f64(v0),
+    Df::from_f64(mu),
+    Df::from_f64(dt),
+  );
   (r.to_f64(), v.to_f64())
 }
 
@@ -58,15 +75,28 @@ fn df_constants_match_f64() {
 #[test]
 fn df_arithmetic_is_df64_accurate() {
   // df64 has the f32 exponent range: keep products below ~1e34 (Dekker split headroom)
-  let xs = [1.0e12 / 3.0, -7.25e-3, 9.87654321e5, 1.0 / 7.0, -3.3e16, 2.0e-9];
+  let xs = [
+    1.0e12 / 3.0,
+    -7.25e-3,
+    9.87654321e5,
+    1.0 / 7.0,
+    -3.3e16,
+    2.0e-9,
+  ];
   let tol = |x: f64| x.abs() * 4.0e-14 + 1e-35;
   for &a in &xs {
     for &b in &xs {
       let (da, db) = (Df::from_f64(a), Df::from_f64(b));
       // inputs are df-rounded; compare against f64 ops on the df-rounded values
       let (a, b) = (da.to_f64(), db.to_f64());
-      assert!((da.add(db).to_f64() - (a + b)).abs() <= tol(a.abs() + b.abs()), "{a}+{b}");
-      assert!((da.sub(db).to_f64() - (a - b)).abs() <= tol(a.abs() + b.abs()), "{a}-{b}");
+      assert!(
+        (da.add(db).to_f64() - (a + b)).abs() <= tol(a.abs() + b.abs()),
+        "{a}+{b}"
+      );
+      assert!(
+        (da.sub(db).to_f64() - (a - b)).abs() <= tol(a.abs() + b.abs()),
+        "{a}-{b}"
+      );
       assert!((da.mul(db).to_f64() - a * b).abs() <= tol(a * b), "{a}*{b}");
       assert!((da.div(db).to_f64() - a / b).abs() <= tol(a / b), "{a}/{b}");
     }
@@ -86,12 +116,27 @@ fn stumpff_matches_closed_form() {
   for &x in &[-50.0f64, -3.0, -0.2, -1e-6, 0.0, 1e-6, 0.3, 2.0, 9.0, 39.0] {
     let (c0, c1, c2, c3) = if x > 1e-4 {
       let s = x.sqrt();
-      (s.cos(), s.sin() / s, (1.0 - s.cos()) / x, (s - s.sin()) / (x * s))
+      (
+        s.cos(),
+        s.sin() / s,
+        (1.0 - s.cos()) / x,
+        (s - s.sin()) / (x * s),
+      )
     } else if x < -1e-4 {
       let s = (-x).sqrt();
-      (s.cosh(), s.sinh() / s, (s.cosh() - 1.0) / (-x), (s.sinh() - s) / (-x * s))
+      (
+        s.cosh(),
+        s.sinh() / s,
+        (s.cosh() - 1.0) / (-x),
+        (s.sinh() - s) / (-x * s),
+      )
     } else {
-      (1.0 - x / 2.0 + x * x / 24.0, 1.0 - x / 6.0 + x * x / 120.0, 0.5 - x / 24.0 + x * x / 720.0, 1.0 / 6.0 - x / 120.0 + x * x / 5040.0)
+      (
+        1.0 - x / 2.0 + x * x / 24.0,
+        1.0 - x / 6.0 + x * x / 120.0,
+        0.5 - x / 24.0 + x * x / 720.0,
+        1.0 / 6.0 - x / 120.0 + x * x / 5040.0,
+      )
     };
     let refs = [c0, c1, c2, c3];
     let c = kepler::stumpff_f64(x);
@@ -99,9 +144,24 @@ fn stumpff_matches_closed_form() {
     let f = kepler::stumpff_f32(x as f32);
     for k in 0..4 {
       let scale = 1.0 + refs[k].abs() + c0.abs();
-      assert!((c[k] - refs[k]).abs() < 1e-11 * scale, "f64 c{k}({x}) {} vs {}", c[k], refs[k]);
-      assert!((d[k].to_f64() - refs[k]).abs() < 1e-10 * scale, "df c{k}({x}) {} vs {}", d[k].to_f64(), refs[k]);
-      assert!((f[k] as f64 - refs[k]).abs() < 1e-4 * scale, "f32 c{k}({x}) {} vs {}", f[k], refs[k]);
+      assert!(
+        (c[k] - refs[k]).abs() < 1e-11 * scale,
+        "f64 c{k}({x}) {} vs {}",
+        c[k],
+        refs[k]
+      );
+      assert!(
+        (d[k].to_f64() - refs[k]).abs() < 1e-10 * scale,
+        "df c{k}({x}) {} vs {}",
+        d[k].to_f64(),
+        refs[k]
+      );
+      assert!(
+        (f[k] as f64 - refs[k]).abs() < 1e-4 * scale,
+        "f32 c{k}({x}) {} vs {}",
+        f[k],
+        refs[k]
+      );
     }
   }
 }
@@ -138,7 +198,10 @@ fn kepler_df_long_hyperbolic_and_backwards() {
     assert!(rel < 2e-12, "round trip dt {dt}: rel err {rel}");
     assert!(norm(sub(v2, v0)) / norm(v0) < 1e-10);
     let e = |r: V3, v: V3| dot(v, v) / 2.0 - SUN_MU_M3_S2 / norm(r);
-    assert!(((e(r1, v1) - e(r0, v0)) / e(r0, v0)).abs() < 1e-11, "energy dt {dt}");
+    assert!(
+      ((e(r1, v1) - e(r0, v0)) / e(r0, v0)).abs() < 1e-11,
+      "energy dt {dt}"
+    );
     let (r64, _) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, dt);
     // many periods: phase error scales with the period count
     assert!(norm(sub(r1, r64)) / norm(r0) < 1e-11, "df vs f64 dt {dt}");
@@ -156,12 +219,25 @@ fn kepler_df_resolves_metre_scale_relative_motion() {
   let (r0, v0) = comet_state();
   let dt = 10.0 * 86400.0;
   let (ra, _) = prop_df(r0, v0, SUN_MU_M3_S2, dt);
-  let (rb, _) = prop_df(add(r0, [1.0, 0.0, 0.0]), add(v0, [0.0, 1e-3, 0.0]), SUN_MU_M3_S2, dt);
+  let (rb, _) = prop_df(
+    add(r0, [1.0, 0.0, 0.0]),
+    add(v0, [0.0, 1e-3, 0.0]),
+    SUN_MU_M3_S2,
+    dt,
+  );
   let (ra64, _) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, dt);
-  let (rb64, _) = kepler::propagate_f64(add(r0, [1.0, 0.0, 0.0]), add(v0, [0.0, 1e-3, 0.0]), SUN_MU_M3_S2, dt);
+  let (rb64, _) = kepler::propagate_f64(
+    add(r0, [1.0, 0.0, 0.0]),
+    add(v0, [0.0, 1e-3, 0.0]),
+    SUN_MU_M3_S2,
+    dt,
+  );
   let d = sub(rb, ra);
   let d64 = sub(rb64, ra64);
-  assert!(norm(sub(d, d64)) < 0.05, "relative displacement df {d:?} vs f64 {d64:?}");
+  assert!(
+    norm(sub(d, d64)) < 0.05,
+    "relative displacement df {d:?} vs f64 {d64:?}"
+  );
 }
 
 // ─── emission / evaluation ─────────────────────────────────────────────────
@@ -171,7 +247,8 @@ const T_START: f64 = 4.0e8; // ~12.7 years after the epoch: exercises df64 time
 fn test_batch(count: u32, dur: f64) -> DustBatch {
   let (rc, vc) = comet_state();
   let dist = SizeDistribution::from_diameter_um(100.0);
-  let (size_params, vel_params, mass_params) = batch_params(&dist, 100.0, 0.533, 0.0213, 2.0, 0.5, 1.0e6, 0.37);
+  let (size_params, vel_params, mass_params) =
+    batch_params(&dist, 100.0, 0.533, 0.0213, 2.0, 0.5, 1.0e6, 0.37);
   let mut b = DustBatch {
     comet_r_t_hi: [0.0; 4],
     comet_r_t_lo: [0.0; 4],
@@ -240,7 +317,11 @@ fn syndynes_point_antisunward_and_grow_with_beta() {
     let e = evaluate_cluster(&c, j, &frame);
     assert!(e.age_id_dbeta_flux[3] > 0.0);
     assert_eq!(e.age_id_dbeta_flux[1].to_bits(), j);
-    let p = [e.pos_size[0] as f64, e.pos_size[1] as f64, e.pos_size[2] as f64];
+    let p = [
+      e.pos_size[0] as f64,
+      e.pos_size[1] as f64,
+      e.pos_size[2] as f64,
+    ];
     pts.push((c.beta(), dot(p, anti_sun)));
   }
   // radiation pressure: displacement ½ β g t² dominates ejection for the small (high β) grains
@@ -249,13 +330,23 @@ fn syndynes_point_antisunward_and_grow_with_beta() {
   let mean = |s: &[(f32, f64)]| s.iter().map(|p| p.1).sum::<f64>() / s.len() as f64;
   let low = mean(&pts[..n / 5]);
   let high = mean(&pts[n - n / 5..]);
-  assert!(high > 0.0, "high-β grains must move anti-sunward, got {high}");
-  assert!(high > low * 2.0, "displacement must grow with β: low {low} high {high}");
+  assert!(
+    high > 0.0,
+    "high-β grains must move anti-sunward, got {high}"
+  );
+  assert!(
+    high > low * 2.0,
+    "displacement must grow with β: low {low} high {high}"
+  );
   // expected order of magnitude for the largest β: ½ β g t²
   let g = SUN_MU_M3_S2 / dot(rc, rc);
   let beta_max = pts[n - 1].0 as f64;
   let expect = 0.5 * beta_max * g * (10.0f64 * 86400.0).powi(2);
-  assert!(pts[n - 1].1 > 0.3 * expect && pts[n - 1].1 < 3.0 * expect, "{} vs {expect}", pts[n - 1].1);
+  assert!(
+    pts[n - 1].1 > 0.3 * expect && pts[n - 1].1 < 3.0 * expect,
+    "{} vs {expect}",
+    pts[n - 1].1
+  );
 }
 
 #[test]
@@ -280,11 +371,21 @@ fn evaluate_culls_by_age() {
   let t0 = c.t0().to_f64();
   let r = c.r0().to_f64();
   let at = |t: f64| DustFrame::new(r, t, [0.0, 0.0, 0.0, 1.0], 100.0);
-  assert_eq!(evaluate_cluster(&c, 7, &at(t0 - 1.0)).age_id_dbeta_flux[3], 0.0);
-  assert_eq!(evaluate_cluster(&c, 7, &at(t0 + 101.0)).age_id_dbeta_flux[3], 0.0);
+  assert_eq!(
+    evaluate_cluster(&c, 7, &at(t0 - 1.0)).age_id_dbeta_flux[3],
+    0.0
+  );
+  assert_eq!(
+    evaluate_cluster(&c, 7, &at(t0 + 101.0)).age_id_dbeta_flux[3],
+    0.0
+  );
   let live = evaluate_cluster(&c, 7, &at(t0 + 50.0));
   assert!(live.age_id_dbeta_flux[3] > 0.0);
-  assert!((live.age_id_dbeta_flux[0] - 50.0).abs() < 1e-3, "age {}", live.age_id_dbeta_flux[0]);
+  assert!(
+    (live.age_id_dbeta_flux[0] - 50.0).abs() < 1e-3,
+    "age {}",
+    live.age_id_dbeta_flux[0]
+  );
 }
 
 // ─── host planning ─────────────────────────────────────────────────────────
@@ -320,7 +421,12 @@ fn host_tick_conserves_mass_tracks_readiness_and_rewinds() {
   let (dt_tick_s, dt_tick_us) = (180.0, 16_667_i64);
   let jet_at = |t: f64| {
     let (r, v) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, t);
-    JetState { t_s: t, r_m: r, v_ms: v, rot: [0.0, 0.0, 0.0, 1.0] }
+    JetState {
+      t_s: t,
+      r_m: r,
+      v_ms: v,
+      rot: [0.0, 0.0, 0.0, 1.0],
+    }
   };
   let mut emitted_mass = 0.0;
   let mut batches = 0;
@@ -336,7 +442,13 @@ fn host_tick_conserves_mass_tracks_readiness_and_rewinds() {
     }
     // pending batches are never drawable
     let (_, live, _) = host.ring.drawable();
-    let pending: u32 = host.ring.batches.iter().filter(|b| b.ready == READY_PENDING).map(|b| b.count).sum();
+    let pending: u32 = host
+      .ring
+      .batches
+      .iter()
+      .filter(|b| b.ready == READY_PENDING)
+      .map(|b| b.count)
+      .sum();
     assert!(live + pending <= host.ring.live());
     host.ring.mark_submitted(tick + 1);
     assert!(host.ring.live() <= RING_CAPACITY_LOW - RING_CAPACITY_LOW / RING_GUARD_DIVISOR);
@@ -395,7 +507,10 @@ fn planner_conserves_mass_and_respects_budget() {
     assert!(((emitted + acc.mass_g) - produced).abs() < 1e-6 * produced);
     // steady state uses ~BUDGET_SAFETY of the ring
     let fill = ring.live() as f64 / capacity as f64;
-    assert!(fill > 0.6 && fill <= 0.85, "capacity {capacity}: fill {fill}");
+    assert!(
+      fill > 0.6 && fill <= 0.85,
+      "capacity {capacity}: fill {fill}"
+    );
   }
 }
 
@@ -439,6 +554,9 @@ fn render_children_keep_the_instance_budget() {
     let k = render_children(cap, live);
     assert!((CHILDREN_PER_CLUSTER..=MAX_CHILDREN_PER_CLUSTER).contains(&k));
     // never more than the dense budget, unless clamped at the minimum
-    assert!(live as u64 * k as u64 <= cap as u64 * CHILDREN_PER_CLUSTER as u64 || k == CHILDREN_PER_CLUSTER);
+    assert!(
+      live as u64 * k as u64 <= cap as u64 * CHILDREN_PER_CLUSTER as u64
+        || k == CHILDREN_PER_CLUSTER
+    );
   }
 }

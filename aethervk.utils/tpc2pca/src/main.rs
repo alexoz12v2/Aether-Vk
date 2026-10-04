@@ -1,8 +1,8 @@
-use anise::naif::kpl::parser::{convert_tpc_items, parse_file};
-use anise::naif::kpl::tpc::TPCItem;
-use std::collections::HashMap;
-use std::env;
-use std::path::PathBuf;
+use anise::naif::kpl::{
+  parser::{convert_tpc_items, parse_file},
+  tpc::TPCItem,
+};
+use std::{collections::HashMap, env, path::PathBuf};
 
 // Note: used for Platetary constants ANISE (.pca) generation -> `cargo run -- ../../assets/planets/pck00011.tpc ../../assets/planets/pck00011.pca ../../assets/planets/gm_de431.tpc`
 

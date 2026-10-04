@@ -103,8 +103,7 @@ pub(crate) struct QueueFamilyPoolsInner {
   pub pending: heapless::Vec<TrackedPool, MAX_PENDING_TRACKED_POOL>,
   pub free: heapless::Vec<TrackedPool, MAX_FREE_TRACKED_POOL>,
   /// fast mapping to know which pool a recycled command buffer belongs to
-  pub buffer_to_pool:
-    heapless::index_map::FnvIndexMap<vk::CommandBuffer, u64, 2048>,
+  pub buffer_to_pool: heapless::index_map::FnvIndexMap<vk::CommandBuffer, u64, 2048>,
   pub next_pool_id: u64,
 }
 
@@ -231,7 +230,11 @@ impl QueueFamilyPoolsInner {
       copy_nonoverlapping(active_ptr, pending_dst_ptr, 1);
 
       // Zero the memory before creating the new pool
-      core::ptr::write_bytes(active_ptr as *mut u8, 0, core::mem::size_of::<TrackedPool>());
+      core::ptr::write_bytes(
+        active_ptr as *mut u8,
+        0,
+        core::mem::size_of::<TrackedPool>(),
+      );
 
       // Attempt to initialize the new pool directly into the now-available slot in `active`
       match TrackedPool::new_at_ptr(active_ptr, device, queue_family_index, id) {

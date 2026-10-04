@@ -3,9 +3,7 @@
 use crate::{
   gpu::{AcquireResult, OpaqueNativeHandleInfo, PresentationEngineParams, SwapchainStatus},
   gpu_backends::vulkan::{
-    device::VulkanDebugNameExt,
-    device::archetypes_struct::Archetypes,
-    device::{DeviceResource, LogicalDevice},
+    device::{DeviceResource, LogicalDevice, VulkanDebugNameExt, archetypes_struct::Archetypes},
     utils::NonZeroHandle,
   },
   types::{GpuError, GpuResult},
@@ -769,11 +767,18 @@ impl WindowedPresentationState {
     let sc_handle = new_swapchain.get();
     local_rollback.defer(move |_| unsafe { sc_device.destroy_swapchain(sc_handle, None) });
 
-    let swapchain_images =
-      self.recreate_swapchain_images(device, new_swapchain, surface_format.format, &mut local_rollback)?;
+    let swapchain_images = self.recreate_swapchain_images(
+      device,
+      new_swapchain,
+      surface_format.format,
+      &mut local_rollback,
+    )?;
 
-    let (frame_semaphores, frame_fences) =
-      self.recreate_swapchain_frame_resources(device, swapchain_images.len(), &mut local_rollback)?;
+    let (frame_semaphores, frame_fences) = self.recreate_swapchain_frame_resources(
+      device,
+      swapchain_images.len(),
+      &mut local_rollback,
+    )?;
 
     mem::swap(&mut new_swapchain, &mut self.swapchain);
 
@@ -901,11 +906,11 @@ impl WindowedPresentationState {
       self.frame_discards.len() == self.frames.len()
         && self.frame_discards.len() >= self.images.len()
     );
-    
-    // 3. Success! Defuse the child. The parent will no longer touch these resources 
+
+    // 3. Success! Defuse the child. The parent will no longer touch these resources
     //    if the subsequent vkAcquireNextImageKHR call triggers a rollback.
     local_rollback.defuse();
-    
+
     self.swapchain_generation += 1;
     Ok(())
   }
@@ -1364,7 +1369,7 @@ impl WindowedPresentationState {
       #[cfg(debug_assertions)]
       if crate::gpu_backends::vulkan::renderdoc::is_frame_capturing() {
         self.pending_resize = Some((w, h)); // put it back
-        // fall through and let the normal acquire proceed with the old swapchain
+      // fall through and let the normal acquire proceed with the old swapchain
       } else {
         self.width = w;
         self.height = h;

@@ -131,7 +131,12 @@ pub mod kepler {
     let c3 = f[3].hi - xr * (f[5].hi - xr * (f[7].hi - xr * (f[9].hi - xr * f[11].hi)));
     let mut c = [1.0 - xr * c2, 1.0 - xr * c3, c2, c3];
     for _ in 0..n {
-      c = [2.0 * c[0] * c[0] - 1.0, c[0] * c[1], 0.5 * c[1] * c[1], 0.25 * (c[3] + c[1] * c[2])];
+      c = [
+        2.0 * c[0] * c[0] - 1.0,
+        c[0] * c[1],
+        0.5 * c[1] * c[1],
+        0.25 * (c[3] + c[1] * c[2]),
+      ];
     }
     c
   }
@@ -145,8 +150,12 @@ pub mod kepler {
       xr = xr.scale_pow2(0.25);
       n += 1;
     }
-    let c2 = f[2].sub(xr.mul(f[4].sub(xr.mul(f[6].sub(xr.mul(f[8].sub(xr.mul(f[10].sub(xr.mul(f[12].sub(xr.mul(f[14]))))))))))));
-    let c3 = f[3].sub(xr.mul(f[5].sub(xr.mul(f[7].sub(xr.mul(f[9].sub(xr.mul(f[11].sub(xr.mul(f[13].sub(xr.mul(f[15]))))))))))));
+    let c2 = f[2].sub(xr.mul(f[4].sub(
+      xr.mul(f[6].sub(xr.mul(f[8].sub(xr.mul(f[10].sub(xr.mul(f[12].sub(xr.mul(f[14]))))))))),
+    )));
+    let c3 = f[3].sub(xr.mul(f[5].sub(
+      xr.mul(f[7].sub(xr.mul(f[9].sub(xr.mul(f[11].sub(xr.mul(f[13].sub(xr.mul(f[15]))))))))),
+    )));
     let mut c = [Df::ONE.sub(xr.mul(c2)), Df::ONE.sub(xr.mul(c3)), c2, c3];
     for _ in 0..n {
       c = [
@@ -165,7 +174,11 @@ pub mod kepler {
     let disc = 16.0 * fp * fp - 20.0 * f * fpp;
     let disc = <f32 as FloatLike>::sqrt(absf(disc));
     let denom = if fp >= 0.0 { fp + disc } else { fp - disc };
-    if denom == 0.0 { None } else { Some(5.0 * f / denom) }
+    if denom == 0.0 {
+      None
+    } else {
+      Some(5.0 * f / denom)
+    }
   }
 
   /// Propagates a two-body state by `dt` seconds under gravitational parameter `mu` (m³/s²).
@@ -186,7 +199,11 @@ pub mod kepler {
     if mu.hi > 0.0 && alpha.hi > 0.0 {
       let period = consts::TWO_PI.mul(mu).div(alpha.mul(alpha.sqrt()));
       let k = t.div(period);
-      let k = if k.hi >= 0.0 { k.floor() } else { k.neg().floor().neg() };
+      let k = if k.hi >= 0.0 {
+        k.floor()
+      } else {
+        k.neg().floor().neg()
+      };
       t = t.sub(k.mul(period));
     }
 
@@ -200,7 +217,9 @@ pub mod kepler {
       let f = r0f * s + etaf * s2 * c[2] + zetaf * s2 * s * c[3] - tf;
       let fp = r0f + etaf * s * c[1] + zetaf * s2 * c[2];
       let fpp = etaf * c[0] + zetaf * s * c[1];
-      let Some(ds) = laguerre_step(f, fp, fpp) else { break };
+      let Some(ds) = laguerre_step(f, fp, fpp) else {
+        break;
+      };
       s -= ds;
       if !(absf(ds) > TOL_F32 * absf(s)) {
         break;
@@ -212,10 +231,16 @@ pub mod kepler {
     for _ in 0..MAX_ITERS_DF {
       let c = stumpff_df(alpha.mul(sd).mul(sd));
       let s2 = sd.mul(sd);
-      let f = r0n.mul(sd).add(eta.mul(s2).mul(c[2])).add(zeta.mul(s2).mul(sd).mul(c[3])).sub(t);
+      let f = r0n
+        .mul(sd)
+        .add(eta.mul(s2).mul(c[2]))
+        .add(zeta.mul(s2).mul(sd).mul(c[3]))
+        .sub(t);
       let fp = r0n.add(eta.mul(sd).mul(c[1])).add(zeta.mul(s2).mul(c[2]));
       let fpp = etaf * c[0].hi + zetaf * sd.hi * c[1].hi;
-      let Some(ds) = laguerre_step(f.hi, fp.hi, fpp) else { break };
+      let Some(ds) = laguerre_step(f.hi, fp.hi, fpp) else {
+        break;
+      };
       sd = sd.add_f(-ds);
       if !(absf(ds) > TOL_DF * absf(sd.hi)) {
         break;
@@ -232,7 +257,10 @@ pub mod kepler {
     let g = t.sub(mu.mul(g3));
     let fd = mu.mul(g1).div(r.mul(r0n)).neg();
     let gd = Df::ONE.sub(mu.mul(g2).div(r));
-    (r0.scale(f).add(&v0.scale(g)), r0.scale(fd).add(&v0.scale(gd)))
+    (
+      r0.scale(f).add(&v0.scale(g)),
+      r0.scale(fd).add(&v0.scale(gd)),
+    )
   }
 
   /// f64 Stumpff (reference / host side)
@@ -244,18 +272,32 @@ pub mod kepler {
       n += 1;
     }
     let c2 = 1.0 / 2.0
-      - xr * (1.0 / 24.0
-        - xr * (1.0 / 720.0
-          - xr * (1.0 / 40320.0
-            - xr * (1.0 / 3628800.0 - xr * (1.0 / 479001600.0 - xr * (1.0 / 87178291200.0))))));
+      - xr
+        * (1.0 / 24.0
+          - xr
+            * (1.0 / 720.0
+              - xr
+                * (1.0 / 40320.0
+                  - xr
+                    * (1.0 / 3628800.0 - xr * (1.0 / 479001600.0 - xr * (1.0 / 87178291200.0))))));
     let c3 = 1.0 / 6.0
-      - xr * (1.0 / 120.0
-        - xr * (1.0 / 5040.0
-          - xr * (1.0 / 362880.0
-            - xr * (1.0 / 39916800.0 - xr * (1.0 / 6227020800.0 - xr * (1.0 / 1307674368000.0))))));
+      - xr
+        * (1.0 / 120.0
+          - xr
+            * (1.0 / 5040.0
+              - xr
+                * (1.0 / 362880.0
+                  - xr
+                    * (1.0 / 39916800.0
+                      - xr * (1.0 / 6227020800.0 - xr * (1.0 / 1307674368000.0))))));
     let mut c = [1.0 - xr * c2, 1.0 - xr * c3, c2, c3];
     for _ in 0..n {
-      c = [2.0 * c[0] * c[0] - 1.0, c[0] * c[1], 0.5 * c[1] * c[1], 0.25 * (c[3] + c[1] * c[2])];
+      c = [
+        2.0 * c[0] * c[0] - 1.0,
+        c[0] * c[1],
+        0.5 * c[1] * c[1],
+        0.25 * (c[3] + c[1] * c[2]),
+      ];
     }
     c
   }
@@ -275,7 +317,11 @@ pub mod kepler {
     if mu > 0.0 && alpha > 0.0 {
       let period = 2.0 * core::f64::consts::PI * mu / (alpha * <f64 as FloatLike>::sqrt(alpha));
       let k = t / period;
-      let k = if k >= 0.0 { <f64 as FloatLike>::floor(k) } else { -<f64 as FloatLike>::floor(-k) };
+      let k = if k >= 0.0 {
+        <f64 as FloatLike>::floor(k)
+      } else {
+        -<f64 as FloatLike>::floor(-k)
+      };
       t -= k * period;
     }
 
@@ -309,7 +355,10 @@ pub mod kepler {
     let g = t - mu * g3;
     let fd = -mu * g1 / (r * r0n);
     let gd = 1.0 - mu * g2 / r;
-    (add(scale(r0, f), scale(v0, g)), add(scale(r0, fd), scale(v0, gd)))
+    (
+      add(scale(r0, f), scale(v0, g)),
+      add(scale(r0, fd), scale(v0, gd)),
+    )
   }
 }
 
@@ -338,7 +387,10 @@ const _: () = assert!(core::mem::size_of::<DustCluster>() == 80);
 
 impl DustCluster {
   pub fn r0(&self) -> Df3 {
-    Df3 { hi: [self.r0_t0_hi[0], self.r0_t0_hi[1], self.r0_t0_hi[2]], lo: [self.r0_t0_lo[0], self.r0_t0_lo[1], self.r0_t0_lo[2]] }
+    Df3 {
+      hi: [self.r0_t0_hi[0], self.r0_t0_hi[1], self.r0_t0_hi[2]],
+      lo: [self.r0_t0_lo[0], self.r0_t0_lo[1], self.r0_t0_lo[2]],
+    }
   }
   pub fn v0(&self) -> Df3 {
     Df3 {
@@ -406,7 +458,12 @@ const _: () = assert!(core::mem::size_of::<DustBatch>() == 192);
 impl DustBatch {
   /// stores the jet state (f64 on the host) as df64
   pub fn set_comet(&mut self, r: V3, v: V3, t_start_s: f64, dur_s: f64) {
-    let (r, t, v, d) = (Df3::from_f64(r), Df::from_f64(t_start_s), Df3::from_f64(v), Df::from_f64(dur_s));
+    let (r, t, v, d) = (
+      Df3::from_f64(r),
+      Df::from_f64(t_start_s),
+      Df3::from_f64(v),
+      Df::from_f64(dur_s),
+    );
     self.comet_r_t_hi = [r.hi[0], r.hi[1], r.hi[2], t.hi];
     self.comet_r_t_lo = [r.lo[0], r.lo[1], r.lo[2], t.lo];
     self.comet_v_dur_hi = [v.hi[0], v.hi[1], v.hi[2], d.hi];
@@ -505,7 +562,11 @@ pub fn u01(h: u32) -> f32 {
 fn qrot(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
   // t = 2 cross(q.xyz, v); v' = v + w t + cross(q.xyz, t)
   let (qx, qy, qz, qw) = (q[0], q[1], q[2], q[3]);
-  let t = [2.0 * (qy * v[2] - qz * v[1]), 2.0 * (qz * v[0] - qx * v[2]), 2.0 * (qx * v[1] - qy * v[0])];
+  let t = [
+    2.0 * (qy * v[2] - qz * v[1]),
+    2.0 * (qz * v[0] - qx * v[2]),
+    2.0 * (qx * v[1] - qy * v[0]),
+  ];
   [
     v[0] + qw * t[0] + (qy * t[2] - qz * t[1]),
     v[1] + qw * t[1] + (qz * t[0] - qx * t[2]),
@@ -534,8 +595,16 @@ fn sample_cone(u1: f32, u2: f32, dir: [f32; 3], aperture: f32) -> [f32; 3] {
   let z = 1.0 + (cos_a - 1.0) * u2;
   let sin_t = <f32 as FloatLike>::sqrt((1.0 - z * z).max(0.0));
   let phi = 2.0 * core::f32::consts::PI * u1;
-  let local = [sin_t * <f32 as FloatLike>::cos(phi), sin_t * <f32 as FloatLike>::sin(phi), z];
-  let up = if absf(dir[2]) < 0.999 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+  let local = [
+    sin_t * <f32 as FloatLike>::cos(phi),
+    sin_t * <f32 as FloatLike>::sin(phi),
+    z,
+  ];
+  let up = if absf(dir[2]) < 0.999 {
+    [0.0, 0.0, 1.0]
+  } else {
+    [1.0, 0.0, 0.0]
+  };
   let t = normalize3(cross3(up, dir));
   let b = cross3(dir, t);
   [
@@ -547,12 +616,20 @@ fn sample_cone(u1: f32, u2: f32, dir: [f32; 3], aperture: f32) -> [f32; 3] {
 
 #[inline]
 fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-  [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+  [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ]
 }
 #[inline]
 fn normalize3(a: [f32; 3]) -> [f32; 3] {
   let n = <f32 as FloatLike>::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-  if n > 0.0 { [a[0] / n, a[1] / n, a[2] / n] } else { a }
+  if n > 0.0 {
+    [a[0] / n, a[1] / n, a[2] / n]
+  } else {
+    a
+  }
 }
 
 /// standard normal from two uniforms (Box–Muller, first output)
@@ -595,17 +672,37 @@ pub fn emit_cluster(batch: &DustBatch, j: u32) -> DustCluster {
 
   // jet location at t0 (comet free fall over the sub-interval)
   let rc0 = Df3 {
-    hi: [batch.comet_r_t_hi[0], batch.comet_r_t_hi[1], batch.comet_r_t_hi[2]],
-    lo: [batch.comet_r_t_lo[0], batch.comet_r_t_lo[1], batch.comet_r_t_lo[2]],
+    hi: [
+      batch.comet_r_t_hi[0],
+      batch.comet_r_t_hi[1],
+      batch.comet_r_t_hi[2],
+    ],
+    lo: [
+      batch.comet_r_t_lo[0],
+      batch.comet_r_t_lo[1],
+      batch.comet_r_t_lo[2],
+    ],
   };
   let vc0 = Df3 {
-    hi: [batch.comet_v_dur_hi[0], batch.comet_v_dur_hi[1], batch.comet_v_dur_hi[2]],
-    lo: [batch.comet_v_dur_lo[0], batch.comet_v_dur_lo[1], batch.comet_v_dur_lo[2]],
+    hi: [
+      batch.comet_v_dur_hi[0],
+      batch.comet_v_dur_hi[1],
+      batch.comet_v_dur_hi[2],
+    ],
+    lo: [
+      batch.comet_v_dur_lo[0],
+      batch.comet_v_dur_lo[1],
+      batch.comet_v_dur_lo[2],
+    ],
   };
   let (rc, vc) = kepler::propagate(&rc0, &vc0, consts::SUN_MU, dt_in);
 
   // direction: cone in the particle-system frame, rotated to root with the interpolated attitude
-  let jet = [batch.jet_dir_aperture[0], batch.jet_dir_aperture[1], batch.jet_dir_aperture[2]];
+  let jet = [
+    batch.jet_dir_aperture[0],
+    batch.jet_dir_aperture[1],
+    batch.jet_dir_aperture[2],
+  ];
   let dir_ps = sample_cone(u01(h1), u01(h2), jet, batch.jet_dir_aperture[3]);
   let rot = nlerp(batch.rot_start, batch.rot_end, u_t);
   let mut dir = qrot(rot, dir_ps);
@@ -614,7 +711,11 @@ pub fn emit_cluster(batch: &DustBatch, j: u32) -> DustCluster {
   let sun = [-sun[0], -sun[1], -sun[2]];
   let ds = dir[0] * sun[0] + dir[1] * sun[1] + dir[2] * sun[2];
   if ds < 0.0 {
-    dir = [dir[0] - 2.0 * ds * sun[0], dir[1] - 2.0 * ds * sun[1], dir[2] - 2.0 * ds * sun[2]];
+    dir = [
+      dir[0] - 2.0 * ds * sun[0],
+      dir[1] - 2.0 * ds * sun[1],
+      dir[2] - 2.0 * ds * sun[2],
+    ];
   }
 
   // grain size: log-uniform proposal, rank-1 lattice (decorrelated from time order)
@@ -625,14 +726,20 @@ pub fn emit_cluster(batch: &DustBatch, j: u32) -> DustCluster {
   let beta = batch.vel_params[3] / s_um;
 
   // importance weight against the mass distribution: m_j = M/N · norm · s^(4−q)
-  let mass_g = batch.mass_params[0] / count * batch.size_params[3] * <f32 as FloatLike>::pow(s_um, batch.size_params[2]);
+  let mass_g = batch.mass_params[0] / count
+    * batch.size_params[3]
+    * <f32 as FloatLike>::pow(s_um, batch.size_params[2]);
 
   // ejection speed: v_ref · sqrt(s_ref / s) · (1 + σ_rel N(0,1)), clamped at 0
   let v_mean = batch.vel_params[0] * <f32 as FloatLike>::sqrt(batch.vel_params[2] / s_um);
   let v_ej = (v_mean * (1.0 + batch.vel_params[1] * gauss(u01(h3), u01(h4)))).max(0.0);
   let sigma_v = (v_mean * batch.vel_params[1]).max(v_mean * CHILD_SIGMA_V_REL);
 
-  let v0 = vc.add(&Df3::from_f32([dir[0] * v_ej, dir[1] * v_ej, dir[2] * v_ej]));
+  let v0 = vc.add(&Df3::from_f32([
+    dir[0] * v_ej,
+    dir[1] * v_ej,
+    dir[2] * v_ej,
+  ]));
 
   // cross-section per gram: π s² / (4/3 π s³ ρ) = 3 / (4 ρ s)  [s in m, ρ in g/m³]
   let rho_g_m3 = batch.mass_params[1] * 1.0e6;
@@ -687,7 +794,10 @@ fn two_sum_one_minus(beta: f32) -> Df {
 
 impl DustRenderCluster {
   pub fn culled(slot: u32) -> Self {
-    Self { pos_size: [0.0; 4], age_id_dbeta_flux: [0.0, f32::from_bits(slot), 0.0, 0.0] }
+    Self {
+      pos_size: [0.0; 4],
+      age_id_dbeta_flux: [0.0, f32::from_bits(slot), 0.0, 0.0],
+    }
   }
 }
 
@@ -706,7 +816,11 @@ pub struct SizeDistribution {
 impl SizeDistribution {
   pub fn from_diameter_um(diameter_um: f32) -> Self {
     let r = (diameter_um as f64 * 0.5).max(1e-3);
-    Self { s_min_um: r / SIZE_RANGE_FACTOR, s_max_um: r * SIZE_RANGE_FACTOR, q: SIZE_POWER_Q }
+    Self {
+      s_min_um: r / SIZE_RANGE_FACTOR,
+      s_max_um: r * SIZE_RANGE_FACTOR,
+      q: SIZE_POWER_Q,
+    }
   }
   /// `(4 − q, ln(s_max/s_min) / Z)`, `Z = ∫ s^(3−q) ds` over `[s_min, s_max]`
   pub fn mass_weight_params(&self) -> (f64, f64) {
@@ -755,14 +869,22 @@ pub fn plan_batch(
   free_slots: u32,
 ) -> Option<BatchPlan> {
   let dt_s = if dt_s.is_finite() { dt_s.max(0.0) } else { 0.0 };
-  let q = if q_dust_kgs.is_finite() { q_dust_kgs.max(0.0) } else { 0.0 };
+  let q = if q_dust_kgs.is_finite() {
+    q_dust_kgs.max(0.0)
+  } else {
+    0.0
+  };
   // first call (or time jumped backwards): the pending window starts `dt` ago
   if !(acc.window_start_s > 0.0) || acc.window_start_s > t_now_s {
     acc.window_start_s = t_now_s - dt_s;
   }
   acc.mass_g += q * 1e3 * dt_s;
   let budget = capacity as f64 * BUDGET_SAFETY;
-  let ttl = if ttl_s.is_finite() && ttl_s > 0.0 { ttl_s } else { 1.0 };
+  let ttl = if ttl_s.is_finite() && ttl_s > 0.0 {
+    ttl_s
+  } else {
+    1.0
+  };
   acc.clusters += (budget * dt_s / ttl).min(budget);
   if !(acc.mass_g > 0.0) {
     // nothing produced: do not accumulate budget forever
@@ -802,11 +924,20 @@ pub fn batch_params(
   let (e, mass_norm) = dist.mass_weight_params();
   let s_ref = (grain_diameter_um * 0.5).max(1e-3);
   let v_ref = start_velocity_mean.max(0.0);
-  let v_std_rel = if v_ref > 0.0 { (start_velocity_std / v_ref).max(0.0) } else { 0.0 };
+  let v_std_rel = if v_ref > 0.0 {
+    (start_velocity_std / v_ref).max(0.0)
+  } else {
+    0.0
+  };
   // β ∝ 1/s: β(s) = β(s_ref) · s_ref / s
   let beta_s = beta_at_configured_size * s_ref;
   (
-    [dist.s_min_um as f32, dist.s_max_um as f32, e as f32, mass_norm as f32],
+    [
+      dist.s_min_um as f32,
+      dist.s_max_um as f32,
+      e as f32,
+      mass_norm as f32,
+    ],
     [v_ref, v_std_rel, s_ref, beta_s],
     [mass_g as f32, density_gcm3, low_discrepancy_shift, 0.0],
   )
@@ -851,7 +982,12 @@ pub struct RingState {
 impl RingState {
   pub fn new(capacity: u32) -> Self {
     assert!(capacity.is_power_of_two());
-    Self { capacity, head: 0, tail: 0, batches: alloc::collections::VecDeque::new() }
+    Self {
+      capacity,
+      head: 0,
+      tail: 0,
+      batches: alloc::collections::VecDeque::new(),
+    }
   }
   #[inline]
   pub fn mask(&self) -> u32 {
@@ -872,7 +1008,14 @@ impl RingState {
     // RNG index = monotonic index (wrapping u32), ring slot = index & mask
     desc.first_index = first as u32;
     desc.ring_mask = self.mask();
-    self.batches.push_back(LiveBatch { first, count: desc.count, t_end_s, mass_g, desc, ready: READY_PENDING });
+    self.batches.push_back(LiveBatch {
+      first,
+      count: desc.count,
+      t_end_s,
+      mass_g,
+      desc,
+      ready: READY_PENDING,
+    });
     desc
   }
   /// every [`READY_PENDING`] batch was submitted with compute timeline value `value`
@@ -906,7 +1049,8 @@ impl RingState {
   /// The drawable prefix: `(first_slot, live_count, compute_wait_value)`. Stops at the first
   /// batch not yet submitted / re-emitted, so the range stays contiguous.
   pub fn drawable(&self) -> (u32, u32, u64) {
-    let first_slot = self.batches.front().map(|b| (b.first & self.mask() as u64) as u32).unwrap_or(0);
+    let first_slot =
+      self.batches.front().map(|b| (b.first & self.mask() as u64) as u32).unwrap_or(0);
     let mut live = 0u32;
     let mut wait = 0u64;
     for b in self.batches.iter() {
@@ -1072,7 +1216,12 @@ impl DustHostState {
   ///
   /// Returns the descriptors to emit, in order (ring slots already reserved, [`READY_PENDING`]).
   /// The caller records them and calls `ring.mark_submitted(value)` after the submit.
-  pub fn tick(&mut self, jet: JetState, now_unscaled_us: i64, cfg: &DustEmitConfig) -> alloc::vec::Vec<DustBatch> {
+  pub fn tick(
+    &mut self,
+    jet: JetState,
+    now_unscaled_us: i64,
+    cfg: &DustEmitConfig,
+  ) -> alloc::vec::Vec<DustBatch> {
     self.ttl_s = cfg.ttl_s;
     self.xsec_per_g_ref = cfg.xsec_per_g_ref();
     if let Some(prev) = self.jet {
@@ -1090,7 +1239,11 @@ impl DustHostState {
     let Some(window) = self.window_jet else {
       // start the first window here
       self.window_jet = Some(jet);
-      self.acc = EmissionAccumulator { clusters: 0.0, mass_g: 0.0, window_start_s: jet.t_s };
+      self.acc = EmissionAccumulator {
+        clusters: 0.0,
+        mass_g: 0.0,
+        window_start_s: jet.t_s,
+      };
       self.last_emit_unscaled_us = now_unscaled_us;
       return out;
     };
@@ -1107,15 +1260,33 @@ impl DustHostState {
     self.last_gate_t_s = Some(jet.t_s);
     self.acc.window_start_s = window.t_s;
     let free = self.emit_free_slots();
-    let Some(plan) = plan_batch(&mut self.acc, cfg.q_dust_kgs, dt, jet.t_s, cfg.ttl_s, self.ring.capacity, free) else {
+    let Some(plan) = plan_batch(
+      &mut self.acc,
+      cfg.q_dust_kgs,
+      dt,
+      jet.t_s,
+      cfg.ttl_s,
+      self.ring.capacity,
+      free,
+    ) else {
       return out;
     };
 
     let mut desc: DustBatch = bytemuck::Zeroable::zeroed();
-    desc.set_comet(window.r_m, window.v_ms, window.t_s, (jet.t_s - window.t_s).max(0.0));
+    desc.set_comet(
+      window.r_m,
+      window.v_ms,
+      window.t_s,
+      (jet.t_s - window.t_s).max(0.0),
+    );
     desc.rot_start = window.rot;
     desc.rot_end = jet.rot;
-    desc.jet_dir_aperture = [cfg.jet_dir[0], cfg.jet_dir[1], cfg.jet_dir[2], cfg.aperture_rad];
+    desc.jet_dir_aperture = [
+      cfg.jet_dir[0],
+      cfg.jet_dir[1],
+      cfg.jet_dir[2],
+      cfg.aperture_rad,
+    ];
     let shift = (self.batch_seq as f64 * 0.618_033_988_749_895).fract() as f32;
     let (size_params, vel_params, mass_params) = batch_params(
       &cfg.dist,
@@ -1159,7 +1330,12 @@ impl DustHostState {
       capacity: self.ring.capacity,
       compute_wait,
       frame: DustFrame::new(jet.r_m, jet.t_s, [0.0, 0.0, 0.0, 1.0], self.ttl_s as f32),
-      anti_sun_g: [(jet.r_m[0] / rn) as f32, (jet.r_m[1] / rn) as f32, (jet.r_m[2] / rn) as f32, g as f32],
+      anti_sun_g: [
+        (jet.r_m[0] / rn) as f32,
+        (jet.r_m[1] / rn) as f32,
+        (jet.r_m[2] / rn) as f32,
+        g as f32,
+      ],
       mean_cluster_flux: (live_mass * self.xsec_per_g_ref as f64 / live_count as f64) as f32,
     })
   }

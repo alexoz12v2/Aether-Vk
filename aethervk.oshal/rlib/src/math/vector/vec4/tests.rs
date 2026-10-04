@@ -1,4 +1,3 @@
-
 // Bring std into scope conditionally for tests, even if the crate is no_std
 extern crate std;
 

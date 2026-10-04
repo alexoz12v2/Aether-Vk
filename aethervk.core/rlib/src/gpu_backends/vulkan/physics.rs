@@ -271,7 +271,7 @@ impl PhysicsPipelines {
       not(target_vendor = "apple")
     ))]
     let use_debug = USE_PRINTF_SHADERS.load(core::sync::atomic::Ordering::Relaxed);
-    
+
     #[cfg(not(all(
       not(test),
       any(debug_assertions, feature = "shader_debug_sync"),
@@ -409,7 +409,14 @@ impl PhysicsPipelines {
             5..=8 => "wg8",
             _ => "wg16",
           };
-          path = alloc::format!("{}/{}{}{}.{}.spv", sim_dir, $stem, vmm_infix, fp16_infix, wg_suffix);
+          path = alloc::format!(
+            "{}/{}{}{}.{}.spv",
+            sim_dir,
+            $stem,
+            vmm_infix,
+            fp16_infix,
+            wg_suffix
+          );
         } else {
           path = alloc::format!("{}/{}{}{}.spv", sim_dir, $stem, vmm_infix, fp16_infix);
         };
@@ -430,9 +437,23 @@ impl PhysicsPipelines {
             5..=8 => "wg8",
             _ => "wg16",
           };
-          path = alloc::format!("{}/{}{}{}.{}.spv", sim_dir, $stem, vmm_infix, fp16_infix, wg_suffix);
+          path = alloc::format!(
+            "{}/{}{}{}.{}.spv",
+            sim_dir,
+            $stem,
+            vmm_infix,
+            fp16_infix,
+            wg_suffix
+          );
         } else {
-          path = alloc::format!("{}/{}{}{}.{}.spv", sim_dir, $stem, vmm_infix, fp16_infix, $wg);
+          path = alloc::format!(
+            "{}/{}{}{}.{}.spv",
+            sim_dir,
+            $stem,
+            vmm_infix,
+            fp16_infix,
+            $wg
+          );
         };
         if use_debug {
           path = path.replace(".spv", ".d.spv");

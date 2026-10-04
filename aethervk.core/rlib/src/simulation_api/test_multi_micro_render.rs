@@ -45,12 +45,7 @@ extern "C" fn multi_micro_render_callback(_scene_id: u64, pe_id: u64, render_gen
 
 /// Returns the (x, y) centroid of all pixels whose `channel` value exceeds `threshold`.
 /// Buffer is BGRA8 (4 bytes per pixel, as returned by download_image on Vulkan).
-fn find_blob_centroid(
-  buf: &[u8],
-  width: u32,
-  channel: usize,
-  threshold: u8,
-) -> Option<(u32, u32)> {
+fn find_blob_centroid(buf: &[u8], width: u32, channel: usize, threshold: u8) -> Option<(u32, u32)> {
   let mut sum_x: u64 = 0;
   let mut sum_y: u64 = 0;
   let mut count: u64 = 0;
@@ -98,8 +93,10 @@ fn wait_and_download_both(
   let tid = MULTI_MICRO_TASK_ID.load(Ordering::Acquire);
   let mut attempt = 0;
   let mut status = ctx.get_task_status(tid);
-  while matches!(status, crate::simulation_api::structs::TaskStatusCode::Pending)
-    && attempt < max_polls
+  while matches!(
+    status,
+    crate::simulation_api::structs::TaskStatusCode::Pending
+  ) && attempt < max_polls
   {
     std::thread::sleep(poll_interval);
     status = ctx.get_task_status(tid);
@@ -118,9 +115,8 @@ fn wait_and_download_both(
   // Download finalGlobalDepth (R32G32_SFLOAT, 8 bytes/px)
   let gdepth_size = (width * height * 8) as usize;
   let mut gdepth_buf = alloc::vec![0u8; gdepth_size];
-  let gdepth_ok = unsafe {
-    ctx.download_global_depth_image(tid, gdepth_buf.as_mut_ptr(), gdepth_buf.len())
-  };
+  let gdepth_ok =
+    unsafe { ctx.download_global_depth_image(tid, gdepth_buf.as_mut_ptr(), gdepth_buf.len()) };
   if !gdepth_ok {
     println!("[multi_micro_test] download_global_depth_image failed");
     return None;
@@ -162,7 +158,10 @@ fn test_multi_micro_layer_spheres_render() {
 
     // scene_id is filled in after create_empty_scene; use a placeholder here
     // and update immediately after creation below.
-    let mut _pause_guard = PauseCtxGuard { ctx: ctx_ptr, scene_id: 0 };
+    let mut _pause_guard = PauseCtxGuard {
+      ctx: ctx_ptr,
+      scene_id: 0,
+    };
 
     unsafe {
       let ctx = &mut *ctx_ptr;
@@ -179,7 +178,6 @@ fn test_multi_micro_layer_spheres_render() {
 
       let width: u32 = 512;
       let height: u32 = 512;
-
 
       // ── Scene constants ───────────────────────────────────────────────────
       const AU_TO_KM: f32 = 149_597_870.7;
@@ -227,9 +225,13 @@ fn test_multi_micro_layer_spheres_render() {
       ];
 
       // ── UV-sphere mesh (shared across all 3 layers) ───────────────────────
-      let sphere_mesh = alloc::sync::Arc::new(
-        crate::simulation::comet::generate_uv_sphere(SPHERE_RADIUS_KM, 16, 16, 1.0, false),
-      );
+      let sphere_mesh = alloc::sync::Arc::new(crate::simulation::comet::generate_uv_sphere(
+        SPHERE_RADIUS_KM,
+        16,
+        16,
+        1.0,
+        false,
+      ));
 
       // ── 3 micro frames, all co-located with camera ────────────────────────
       for spec in &layers {
@@ -317,7 +319,12 @@ fn test_multi_micro_layer_spheres_render() {
         .add_camera_component(
           scene_id,
           cam_id,
-          CameraParams::new_perspective(core::f32::consts::FRAC_PI_3, width as f32 / height as f32, 1e-5, 1000.0),
+          CameraParams::new_perspective(
+            core::f32::consts::FRAC_PI_3,
+            width as f32 / height as f32,
+            1e-5,
+            1000.0,
+          ),
         )
         .unwrap();
 
@@ -349,7 +356,10 @@ fn test_multi_micro_layer_spheres_render() {
           max_g = max_g.max(px[1]);
           max_r = max_r.max(px[2]);
         }
-        println!("[multi_micro_test] MAX CHANNELS - R: {}, G: {}, B: {}", max_r, max_g, max_b);
+        println!(
+          "[multi_micro_test] MAX CHANNELS - R: {}, G: {}, B: {}",
+          max_r, max_g, max_b
+        );
 
         for (i, spec) in layers.iter().enumerate() {
           blob_centers[i] = find_blob_centroid(&color_buf, width, spec.color_channel, 128);
@@ -442,4 +452,3 @@ fn test_multi_micro_layer_spheres_render() {
     }
   }
 }
-

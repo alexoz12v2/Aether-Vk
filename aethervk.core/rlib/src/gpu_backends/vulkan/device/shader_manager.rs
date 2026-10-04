@@ -113,20 +113,24 @@ impl Shader {
         }
         #[cfg(windows)]
         unsafe {
-          use windows::Win32::Foundation::{
-            CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation,
+          use windows::{
+            Win32::{
+              Foundation::{
+                CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation,
+              },
+              Storage::FileSystem::WriteFile,
+              System::{
+                Console::{GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE},
+                Environment::GetEnvironmentVariableW,
+                Pipes::CreatePipe,
+                Threading::{
+                  CreateProcessW, INFINITE, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
+                  STARTF_USESTDHANDLES, STARTUPINFOW, WaitForSingleObject,
+                },
+              },
+            },
+            core::{PCWSTR, PWSTR},
           };
-          use windows::Win32::Storage::FileSystem::WriteFile;
-          use windows::Win32::System::Console::{
-            GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
-          };
-          use windows::Win32::System::Environment::GetEnvironmentVariableW;
-          use windows::Win32::System::Pipes::CreatePipe;
-          use windows::Win32::System::Threading::{
-            CreateProcessW, INFINITE, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
-            STARTF_USESTDHANDLES, STARTUPINFOW, WaitForSingleObject,
-          };
-          use windows::core::{PCWSTR, PWSTR};
 
           let mut sdk_buf = [0u16; 512];
           let len = GetEnvironmentVariableW(windows::core::w!("VULKAN_SDK"), Some(&mut sdk_buf));
@@ -362,17 +366,23 @@ pub fn disassemble_and_log_spirv(spv_code: &[u8]) {
 
   #[cfg(windows)]
   unsafe {
-    use windows::Win32::Foundation::{
-      CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation,
+    use windows::{
+      Win32::{
+        Foundation::{
+          CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation,
+        },
+        Storage::FileSystem::{ReadFile, WriteFile},
+        System::{
+          Environment::GetEnvironmentVariableW,
+          Pipes::CreatePipe,
+          Threading::{
+            CreateProcessW, INFINITE, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
+            STARTF_USESTDHANDLES, STARTUPINFOW, WaitForSingleObject,
+          },
+        },
+      },
+      core::{PCWSTR, PWSTR},
     };
-    use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
-    use windows::Win32::System::Environment::GetEnvironmentVariableW;
-    use windows::Win32::System::Pipes::CreatePipe;
-    use windows::Win32::System::Threading::{
-      CreateProcessW, INFINITE, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
-      STARTUPINFOW, WaitForSingleObject,
-    };
-    use windows::core::{PCWSTR, PWSTR};
 
     let mut sdk_buf = [0u16; 512];
     let len = GetEnvironmentVariableW(windows::core::w!("VULKAN_SDK"), Some(&mut sdk_buf));

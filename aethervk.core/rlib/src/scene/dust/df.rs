@@ -91,7 +91,10 @@ impl Df {
 
   #[inline]
   pub fn neg(self) -> Df {
-    Df { hi: -self.hi, lo: -self.lo }
+    Df {
+      hi: -self.hi,
+      lo: -self.lo,
+    }
   }
   #[inline]
   pub fn add(self, b: Df) -> Df {
@@ -122,7 +125,10 @@ impl Df {
   /// exact scaling by a power of two
   #[inline]
   pub fn scale_pow2(self, p: f32) -> Df {
-    Df { hi: self.hi * p, lo: self.lo * p }
+    Df {
+      hi: self.hi * p,
+      lo: self.lo * p,
+    }
   }
   /// long division with two correction steps
   #[inline]
@@ -166,15 +172,24 @@ impl Df {
 }
 
 impl Df3 {
-  pub const ZERO: Df3 = Df3 { hi: [0.0; 3], lo: [0.0; 3] };
+  pub const ZERO: Df3 = Df3 {
+    hi: [0.0; 3],
+    lo: [0.0; 3],
+  };
 
   #[inline]
   pub fn new(x: Df, y: Df, z: Df) -> Df3 {
-    Df3 { hi: [x.hi, y.hi, z.hi], lo: [x.lo, y.lo, z.lo] }
+    Df3 {
+      hi: [x.hi, y.hi, z.hi],
+      lo: [x.lo, y.lo, z.lo],
+    }
   }
   #[inline]
   pub fn get(&self, i: usize) -> Df {
-    Df { hi: self.hi[i], lo: self.lo[i] }
+    Df {
+      hi: self.hi[i],
+      lo: self.lo[i],
+    }
   }
   #[inline]
   pub fn from_f64(v: [f64; 3]) -> Df3 {
@@ -182,24 +197,43 @@ impl Df3 {
   }
   #[inline]
   pub fn from_f32(v: [f32; 3]) -> Df3 {
-    Df3 { hi: v, lo: [0.0; 3] }
+    Df3 {
+      hi: v,
+      lo: [0.0; 3],
+    }
   }
   #[inline]
   pub fn to_f64(&self) -> [f64; 3] {
-    [self.get(0).to_f64(), self.get(1).to_f64(), self.get(2).to_f64()]
+    [
+      self.get(0).to_f64(),
+      self.get(1).to_f64(),
+      self.get(2).to_f64(),
+    ]
   }
   /// nearest f32 vector (`hi + lo` rounded once)
   #[inline]
   pub fn to_f32(&self) -> [f32; 3] {
-    [self.hi[0] + self.lo[0], self.hi[1] + self.lo[1], self.hi[2] + self.lo[2]]
+    [
+      self.hi[0] + self.lo[0],
+      self.hi[1] + self.lo[1],
+      self.hi[2] + self.lo[2],
+    ]
   }
   #[inline]
   pub fn add(&self, b: &Df3) -> Df3 {
-    Df3::new(self.get(0).add(b.get(0)), self.get(1).add(b.get(1)), self.get(2).add(b.get(2)))
+    Df3::new(
+      self.get(0).add(b.get(0)),
+      self.get(1).add(b.get(1)),
+      self.get(2).add(b.get(2)),
+    )
   }
   #[inline]
   pub fn sub(&self, b: &Df3) -> Df3 {
-    Df3::new(self.get(0).sub(b.get(0)), self.get(1).sub(b.get(1)), self.get(2).sub(b.get(2)))
+    Df3::new(
+      self.get(0).sub(b.get(0)),
+      self.get(1).sub(b.get(1)),
+      self.get(2).sub(b.get(2)),
+    )
   }
   #[inline]
   pub fn scale(&self, s: Df) -> Df3 {
@@ -207,7 +241,11 @@ impl Df3 {
   }
   #[inline]
   pub fn dot(&self, b: &Df3) -> Df {
-    self.get(0).mul(b.get(0)).add(self.get(1).mul(b.get(1))).add(self.get(2).mul(b.get(2)))
+    self
+      .get(0)
+      .mul(b.get(0))
+      .add(self.get(1).mul(b.get(1)))
+      .add(self.get(2).mul(b.get(2)))
   }
 }
 

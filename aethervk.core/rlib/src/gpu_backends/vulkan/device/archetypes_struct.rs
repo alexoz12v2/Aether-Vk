@@ -1,19 +1,20 @@
 //! archetypes_struct module.
 
-use crate::gpu::{ArchetypeId, PipelineKey};
-use crate::gpu_backends::vulkan::device::{renderpasses::RenderPasses, resources::DiscardPool};
 use crate::{
-  gpu::PipelineKeyable,
+  gpu::{ArchetypeId, PipelineKey, PipelineKeyable},
   gpu_backends::vulkan::device::{
+    LogicalDevice, Queue,
     locks::DebugTrackedRwLock,
     pipelines::{
       self, FragmentOut, FragmentShader, GraphicsInfo, PipelineFlags, PreRasterization,
       StencilCompareOp, StencilLogicOp, VertexIn,
     },
-    renderpasses, resources,
+    renderpasses,
+    renderpasses::RenderPasses,
+    resources,
+    resources::DiscardPool,
     shader_manager::{self, ShaderKey},
     utils::{self, RwLockable},
-    LogicalDevice, Queue,
   },
   types::{GpuError, GpuResult},
 };
@@ -111,7 +112,10 @@ macro_rules! impl_render_archetype {
             .push(vk::Format::R32G32_SFLOAT);
 
           graphics_info.fragment_out.color_write_masks.clear();
-          graphics_info.fragment_out.color_write_masks.push(vk::ColorComponentFlags::RGBA);
+          graphics_info
+            .fragment_out
+            .color_write_masks
+            .push(vk::ColorComponentFlags::RGBA);
           graphics_info
             .fragment_out
             .color_write_masks
@@ -182,7 +186,10 @@ macro_rules! impl_render_archetype {
             .color_attachment_formats
             .push(vk::Format::R32G32_SFLOAT);
           graphics_info.fragment_out.color_write_masks.clear();
-          graphics_info.fragment_out.color_write_masks.push(vk::ColorComponentFlags::RGBA);
+          graphics_info
+            .fragment_out
+            .color_write_masks
+            .push(vk::ColorComponentFlags::RGBA);
           graphics_info
             .fragment_out
             .color_write_masks
