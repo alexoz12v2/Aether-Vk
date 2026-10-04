@@ -84,6 +84,9 @@ pub(super) enum RenderPassSpecification {
   ColorDepthCompositing {
     color_format: vk::Format,
     depth_stencil_format: vk::Format,
+    /// micro-layer color target (`[4]`): RGBA16F when supported, see
+    /// `Device::micro_color_format`
+    micro_color_format: vk::Format,
     final_layout: vk::ImageLayout,
     extent: (u32, u32),
     swapchain_generation: u64,
@@ -92,6 +95,16 @@ pub(super) enum RenderPassSpecification {
 }
 
 impl RenderPassSpecification {
+  /// micro-layer color format of a compositing pass (`R8G8B8A8_UNORM` otherwise)
+  pub fn micro_color_format(&self) -> vk::Format {
+    match self {
+      Self::ColorDepthCompositing {
+        micro_color_format, ..
+      } => *micro_color_format,
+      Self::ColorDepthSingleSubpass { .. } => vk::Format::R8G8B8A8_UNORM,
+    }
+  }
+
   pub fn single_pass(presentation_engine: &PresentationState, d: vk::Format) -> Self {
     let final_layout = match presentation_engine {
       PresentationState::Windowed(_) => vk::ImageLayout::PRESENT_SRC_KHR,
@@ -116,7 +129,11 @@ impl RenderPassSpecification {
   }
 
   /// Construct a 3-subpass compositing render pass specification.
-  pub fn compositing_pass(presentation_engine: &PresentationState, d: vk::Format) -> Self {
+  pub fn compositing_pass(
+    presentation_engine: &PresentationState,
+    d: vk::Format,
+    micro_color_format: vk::Format,
+  ) -> Self {
     let final_layout = match presentation_engine {
       PresentationState::Windowed(_) => vk::ImageLayout::PRESENT_SRC_KHR,
       PresentationState::Windowless(_) => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
@@ -132,6 +149,7 @@ impl RenderPassSpecification {
     Self::ColorDepthCompositing {
       color_format: presentation_engine.format(),
       depth_stencil_format: d,
+      micro_color_format,
       final_layout,
       extent: presentation_engine.extent(),
       swapchain_generation: presentation_engine.swapchain_generation(),
@@ -166,6 +184,7 @@ impl RenderPassSpecification {
         extent,
         swapchain_generation,
         image_views,
+        ..
       } => (
         *color_format,
         *depth_stencil_format,
@@ -451,6 +470,7 @@ impl RenderPasses {
       image_views,
     ) = ty.fields();
     let image_views = image_views.clone();
+    let micro_color_format = ty.micro_color_format();
     let is_compositing = matches!(ty, RenderPassSpecification::ColorDepthCompositing { .. });
 
     if let Some(bundle) =
@@ -482,6 +502,7 @@ impl RenderPasses {
             rollback,
             color_format,
             depth_stencil_format,
+            micro_color_format,
             final_layout,
             extent,
             swapchain_generation,
@@ -982,6 +1003,7 @@ impl RenderPasses {
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
     color_format: vk::Format,
     depth_stencil_format: vk::Format,
+    micro_color_format: vk::Format,
     final_layout: vk::ImageLayout,
     extent: (u32, u32),
     swapchain_generation: u64,
@@ -991,6 +1013,7 @@ impl RenderPasses {
       render_pass_device,
       color_format,
       depth_stencil_format,
+      micro_color_format,
       final_layout,
     )?;
     let rp_h = render_pass.get();
@@ -1144,14 +1167,14 @@ impl RenderPasses {
       ));
     }
 
-    // [4] microColor — RGBA8, transient color
+    // [4] microColor — RGBA16F (dust optical depth below 1/255 survives), RGBA8 fallback
     let (micro_color_img, micro_color_alloc) = {
       #[cfg(test)]
       {
         create_test_attachment(
           allocator,
           ext2d,
-          vk::Format::R8G8B8A8_UNORM,
+          micro_color_format,
           color_transient_usage,
           vk::SampleCountFlags::TYPE_1,
         )?
@@ -1161,7 +1184,7 @@ impl RenderPasses {
         create_transient_attachment(
           allocator,
           ext2d,
-          vk::Format::R8G8B8A8_UNORM,
+          micro_color_format,
           color_transient_usage,
           vk::SampleCountFlags::TYPE_1,
         )?
@@ -1172,8 +1195,7 @@ impl RenderPasses {
       let mut ac = micro_color_alloc;
       rollback.defer(move |_| unsafe { allocator.destroy_image(ih, &mut ac) });
     }
-    let micro_color_view =
-      Self::create_color_view(device, micro_color_img, vk::Format::R8G8B8A8_UNORM)?;
+    let micro_color_view = Self::create_color_view(device, micro_color_img, micro_color_format)?;
     {
       let vh = micro_color_view.get();
       rollback.defer(move |dev| unsafe { dev.destroy_image_view(vh, None) });
@@ -1795,6 +1817,7 @@ impl RenderPasses {
     render_pass_device: &ash::khr::create_renderpass2::Device,
     color_format: vk::Format,
     depth_stencil_format: vk::Format,
+    micro_color_format: vk::Format,
     final_color_layout: vk::ImageLayout,
   ) -> GpuResult<NonZeroHandle<vk::RenderPass>> {
     // --- Attachment descriptions ---
@@ -1842,9 +1865,9 @@ impl RenderPasses {
         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-      // [4] microColor — transient
+      // [4] microColor — transient (RGBA16F, or RGBA8 where unsupported)
       vk::AttachmentDescription2::default()
-        .format(vk::Format::R8G8B8A8_UNORM)
+        .format(micro_color_format)
         .samples(vk::SampleCountFlags::TYPE_1)
         .load_op(vk::AttachmentLoadOp::CLEAR)
         .store_op(vk::AttachmentStoreOp::DONT_CARE)

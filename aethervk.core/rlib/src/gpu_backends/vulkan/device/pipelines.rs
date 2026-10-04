@@ -566,6 +566,14 @@ impl GraphicsInfo {
     self
   }
 
+  /// Enables writes to MRT attachment 1 (GlobalDepth) for shaders that output location 1; the
+  /// archetype pipelines mask it off by default.
+  pub fn with_mrt_global_depth_write(mut self) -> Self {
+    self.fragment_out.color_write_masks =
+      alloc::vec![vk::ColorComponentFlags::RGBA, vk::ColorComponentFlags::RGBA];
+    self
+  }
+
   /// TODO: Document this item
   pub fn with_pipeline_flags(mut self, pipeline_flags: PipelineFlags) -> Self {
     self.pipeline_flags = pipeline_flags;

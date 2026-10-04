@@ -111,15 +111,7 @@ macro_rules! impl_render_archetype {
             .color_attachment_formats
             .push(vk::Format::R32G32_SFLOAT);
 
-          graphics_info.fragment_out.color_write_masks.clear();
-          graphics_info
-            .fragment_out
-            .color_write_masks
-            .push(vk::ColorComponentFlags::RGBA);
-          graphics_info
-            .fragment_out
-            .color_write_masks
-            .push(vk::ColorComponentFlags::R | vk::ColorComponentFlags::G);
+          // write masks are kept from creation (MRT 1 is opt-in per archetype)
 
           graphics_info.render_pass = passes
             .get_pipeline_render_pass_mrt(
@@ -185,15 +177,7 @@ macro_rules! impl_render_archetype {
             .fragment_out
             .color_attachment_formats
             .push(vk::Format::R32G32_SFLOAT);
-          graphics_info.fragment_out.color_write_masks.clear();
-          graphics_info
-            .fragment_out
-            .color_write_masks
-            .push(vk::ColorComponentFlags::RGBA);
-          graphics_info
-            .fragment_out
-            .color_write_masks
-            .push(vk::ColorComponentFlags::R | vk::ColorComponentFlags::G);
+          // write masks are kept from creation (MRT 1 is opt-in per archetype)
           graphics_info.render_pass = passes
             .get_pipeline_render_pass_mrt(
               format,
@@ -218,15 +202,7 @@ macro_rules! impl_render_archetype {
             .fragment_out
             .color_attachment_formats
             .push(vk::Format::R32G32_SFLOAT);
-          outline_graphics_info.fragment_out.color_write_masks.clear();
-          outline_graphics_info
-            .fragment_out
-            .color_write_masks
-            .push(vk::ColorComponentFlags::RGBA);
-          outline_graphics_info
-            .fragment_out
-            .color_write_masks
-            .push(vk::ColorComponentFlags::R | vk::ColorComponentFlags::G);
+          // write masks are kept from creation (MRT 1 is opt-in per archetype)
           outline_graphics_info.render_pass = passes
             .get_pipeline_render_pass_mrt(
               format,
@@ -420,7 +396,12 @@ macro_rules! impl_create_archetype {
 
       let pipeline_graphics_info = {
         let mut gi = graphics_info.apply_presentation_defaults(color_format, depth_stencil_format, layout, render_pass);
-        gi.fragment_out.color_write_masks.resize(2, ash::vk::ColorComponentFlags::RGBA);
+        // MRT 1 (GlobalDepth) is masked off unless the archetype opts in: shaders that do not write
+        // location 1 would otherwise store undefined values read by the UI occlusion queries.
+        if gi.fragment_out.color_write_masks.is_empty() {
+          gi.fragment_out.color_write_masks.push(ash::vk::ColorComponentFlags::RGBA);
+        }
+        gi.fragment_out.color_write_masks.resize(2, ash::vk::ColorComponentFlags::empty());
         gi.fragment_out.color_attachment_formats.push(ash::vk::Format::R32G32_SFLOAT);
         gi
       };
@@ -505,7 +486,12 @@ macro_rules! impl_create_archetype {
 
       let pipeline_graphics_info = {
         let mut gi = graphics_info.apply_presentation_defaults(color_format, depth_stencil_format, layout, render_pass);
-        gi.fragment_out.color_write_masks.resize(2, ash::vk::ColorComponentFlags::RGBA);
+        // MRT 1 (GlobalDepth) is masked off unless the archetype opts in: shaders that do not write
+        // location 1 would otherwise store undefined values read by the UI occlusion queries.
+        if gi.fragment_out.color_write_masks.is_empty() {
+          gi.fragment_out.color_write_masks.push(ash::vk::ColorComponentFlags::RGBA);
+        }
+        gi.fragment_out.color_write_masks.resize(2, ash::vk::ColorComponentFlags::empty());
         gi.fragment_out.color_attachment_formats.push(ash::vk::Format::R32G32_SFLOAT);
         gi
       };
@@ -583,7 +569,12 @@ macro_rules! impl_create_archetype {
 
       let pipeline_graphics_info = {
         let mut gi = graphics_info.apply_presentation_defaults(color_format, depth_stencil_format, layout, render_pass);
-        gi.fragment_out.color_write_masks.resize(2, ash::vk::ColorComponentFlags::RGBA);
+        // MRT 1 (GlobalDepth) is masked off unless the archetype opts in: shaders that do not write
+        // location 1 would otherwise store undefined values read by the UI occlusion queries.
+        if gi.fragment_out.color_write_masks.is_empty() {
+          gi.fragment_out.color_write_masks.push(ash::vk::ColorComponentFlags::RGBA);
+        }
+        gi.fragment_out.color_write_masks.resize(2, ash::vk::ColorComponentFlags::empty());
         gi.fragment_out.color_attachment_formats.push(ash::vk::Format::R32G32_SFLOAT);
         gi
       };
@@ -661,13 +652,16 @@ impl Archetypes {
     ref_alloc,
     |gi| {
       gi.with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_STRIP))
-        .with_pipeline_flags(PipelineFlags::NO_DEPTH_WRITE)
+        // Depth write on: with no macro depth the composite let any micro mesh (the nucleus)
+        // hide a track even when the track is in front of it.
+        .with_pipeline_flags(PipelineFlags::empty())
         .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
         .with_stencil_compare_op(StencilCompareOp::None)
         .with_stencil_logic_op(StencilLogicOp::Replace)
         .with_stencil_reference(255)
         .with_stencil_compare_mask(0)
         .with_stencil_write_mask(u32::MAX)
+        .with_mrt_global_depth_write()
     }
   );
   impl_create_archetype!(
@@ -778,6 +772,7 @@ impl Archetypes {
       .with_stencil_reference(1)
       .with_stencil_compare_mask(0xFF)
       .with_stencil_write_mask(0xFF)
+      .with_mrt_global_depth_write()
     }
   );
 

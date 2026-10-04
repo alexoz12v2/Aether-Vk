@@ -445,3 +445,37 @@ fn gpu_dust_tier_sub_ring_and_age_band_match_reference() {
     res.cleanup(&device.device);
   });
 }
+
+/// The micro-layer color target is RGBA16F where supported (dust optical depth below 1/255 per
+/// splat accumulates), RGBA8 otherwise or with `AETHERVK_DUST_8BIT=1`.
+#[test]
+fn micro_color_target_format_selection() {
+  use crate::gpu_backends::vulkan::device::choose_micro_color_format as choose;
+  use ash::vk::{Format, FormatFeatureFlags as F};
+  let full = F::COLOR_ATTACHMENT | F::COLOR_ATTACHMENT_BLEND | F::SAMPLED_IMAGE;
+  assert_eq!(choose(full, true, false), Format::R16G16B16A16_SFLOAT);
+  assert_eq!(
+    choose(F::COLOR_ATTACHMENT, true, false),
+    Format::R8G8B8A8_UNORM,
+    "no blend"
+  );
+  assert_eq!(
+    choose(full, false, false),
+    Format::R8G8B8A8_UNORM,
+    "no transient input usage"
+  );
+  assert_eq!(choose(full, true, true), Format::R8G8B8A8_UNORM, "forced");
+  // this machine's device: R16G16B16A16_SFLOAT is in the required-format table
+  with_dust_device(9005, |device, _, _, _| {
+    assert_eq!(device.micro_color_format(), Format::R16G16B16A16_SFLOAT);
+  });
+}
+
+/// `AETHERVK_DUST_8BIT=1` forces the RGBA8 micro target (own process under nextest).
+#[test]
+fn micro_color_target_8bit_override() {
+  unsafe { std::env::set_var("AETHERVK_DUST_8BIT", "1") };
+  with_dust_device(9006, |device, _, _, _| {
+    assert_eq!(device.micro_color_format(), ash::vk::Format::R8G8B8A8_UNORM);
+  });
+}

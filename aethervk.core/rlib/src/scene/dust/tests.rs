@@ -1190,3 +1190,27 @@ fn exposure_reference_ignores_history_and_tiers() {
   assert_eq!(late.len(), 3);
   assert!(early.iter().chain(late.iter().map(|s| &s.tau_ref)).all(|&t| t == tau as f32));
 }
+
+/// 8-bit fallback (`dust.frag`): stochastic rounding keeps the expected opacity of faint splats
+/// exactly, where round-to-nearest drops everything below 1/510 (the old dust tail).
+#[test]
+fn stochastic_rounding_keeps_faint_optical_depth() {
+  let n = 4096;
+  for v in [1.0e-4f32, 1.5e-3, 3.0e-3, 0.37] {
+    let mean: f64 = (0..n)
+      .map(|i| stochastic_round_8bit(v, (i as f32 + 0.5) / n as f32) as f64)
+      .sum::<f64>()
+      / n as f64;
+    assert!((mean - v as f64).abs() < 1e-6, "v {v}: mean {mean}");
+  }
+  // round to nearest (u = 0.5) loses a faint splat entirely
+  assert_eq!(stochastic_round_8bit(1.5e-3, 0.5), 0.0);
+  // a pixel covered by 300 faint splats with decorrelated offsets keeps its optical depth
+  let v = 1.0e-3f32;
+  let sum: f32 = (0..300u32).map(|k| stochastic_round_8bit(v, u01(pcg(k ^ 0xA511_E9B3)))).sum();
+  assert!(
+    (sum / (300.0 * v) - 1.0).abs() < 0.25,
+    "sum {sum} vs {}",
+    300.0 * v
+  );
+}

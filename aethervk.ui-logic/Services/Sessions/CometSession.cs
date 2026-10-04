@@ -13,6 +13,9 @@ public sealed class CometSession : ITabSession
   /// <summary>NAIF SPK id of the committed comet (e.g. 1000012 for 67P).</summary>
   public int? SpkId { get; set; }
 
+  /// <summary>Horizons SPK record id (e.g. "90000703") of the committed apparition.</summary>
+  public string CommittedSpkRecordId { get; set; } = string.Empty;
+
   /// <summary>Short designation (e.g. "67P") of the committed comet.</summary>
   public string CommittedDesignation { get; set; } = string.Empty;
 
@@ -24,6 +27,9 @@ public sealed class CometSession : ITabSession
 
   /// <summary>Whether the native runtime has the SPK file loaded and AlmanacPlanet is attached.</summary>
   public bool IsAlmanacLoaded { get; set; }
+
+  /// <summary>Reference orbit ComboBox index (-1 = none, 0 = SBDB, 1 = osculating at start).</summary>
+  public int ReferenceOrbitIndex { get; set; } = -1;
 
   // ── Proposed (UI editing, not yet committed) ──────────────────────────────
 

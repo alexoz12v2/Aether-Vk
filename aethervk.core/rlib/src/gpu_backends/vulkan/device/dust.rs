@@ -84,6 +84,12 @@ impl Drop for DustManager {
 }
 
 impl Device {
+  /// Micro-layer color target of the compositing pass (`R16G16B16A16_SFLOAT`, or `R8G8B8A8_UNORM`
+  /// where unsupported): dust drawn into an 8-bit target is stochastically rounded.
+  pub fn micro_color_format(&self) -> vk::Format {
+    self.micro_color_format
+  }
+
   /// Ring capacity for this device: high tier on discrete GPUs, low tier otherwise, small in CPU
   /// particle mode. `AETHERVK_DUST_RING=<power of two>` overrides it.
   pub fn dust_ring_capacity(&self) -> u32 {
@@ -485,7 +491,8 @@ impl Device {
         0,
         bytemuck::bytes_of(pc),
       );
-      let children = pc.children.clamp(1, dust::MAX_CHILDREN_PER_CLUSTER);
+      let children =
+        (pc.children & !dust::DUST_DITHER_FLAG).clamp(1, dust::MAX_CHILDREN_PER_CLUSTER);
       self.device.cmd_draw(cmd, 6, pc.live_count * children, 0, 0);
     }
     Ok(())

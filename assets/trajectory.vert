@@ -117,9 +117,11 @@ void main() {
     vec2 offsetNdc = nScreen * lateral * (finalThickness / pc.viewportSize);
 
     // Never depth-clip a trajectory: the camera near/far come from the view mode (e.g. 0.3 km ..
-    // 1200 km in CometOrbiting, no_trajectories.rdc) while tracks span AU. They do not write depth,
-    // so clamping only removes near/far clipping; the depth test against meshes still applies.
-    gl_Position = vec4(vClip.xy + offsetNdc * abs(vClip.w), clamp(vClip.z, 0.0, vClip.w), vClip.w);
+    // 1200 km in CometOrbiting, no_trajectories.rdc) while tracks span AU. The clamped depth is
+    // written: beyond far it is 0 (= clear, composite treats it as empty), before near it is 1
+    // (in front of everything), in between it is exact, so the composite orders tracks against the
+    // micro layer (nucleus) by real distance. max(w, 0): clamp() is undefined for min > max.
+    gl_Position = vec4(vClip.xy + offsetNdc * abs(vClip.w), clamp(vClip.z, 0.0, max(vClip.w, 0.0)), vClip.w);
 
     vColor = color;
     vUV = vec2(t, lateral);

@@ -12,6 +12,7 @@
 layout(location = 0) in vec3 v_color;
 layout(location = 1) in vec2 v_uv;
 layout(location = 2) in float v_opacity;
+layout(location = 3) flat in float v_dither;
 
 layout(location = 0) out vec4 fragColor;
 
@@ -22,5 +23,15 @@ void main() {
     float r2 = dot(v_uv, v_uv);
     if (r2 > 1.0) discard;
     float a = clamp(v_opacity * exp(-4.0 * r2) * GAUSS_NORM, 0.0, 1.0);
-    fragColor = vec4(v_color * a, a);
+    vec4 c = vec4(v_color * a, a);
+    if (v_dither >= 0.0) {
+        // 8-bit target (RGBA16F unsupported, or the macro layer): optical depth below 1/255 per
+        // splat would round to nothing. Stochastic rounding, floor(v * 255 + u) / 255 with u
+        // uniform per splat and pixel, keeps the expected value exactly (mirror:
+        // dust::stochastic_round_8bit). Interleaved gradient noise + the per-splat offset.
+        float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+        float u = fract(ign + v_dither);
+        c = clamp(floor(c * 255.0 + u) / 255.0, 0.0, 1.0);
+    }
+    fragColor = c;
 }

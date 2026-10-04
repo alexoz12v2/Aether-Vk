@@ -46,6 +46,16 @@ pub fn render_children(capacity: u32, live: u32) -> u32 {
 }
 /// fraction of the ring targeted in steady state
 pub const BUDGET_SAFETY: f64 = 0.8;
+/// bit of `DustDrawPushConstants::children`: the target is 8-bit, stochastically round the splat
+/// (`dust.frag`) so optical depth below 1/255 keeps its expected value instead of vanishing
+pub const DUST_DITHER_FLAG: u32 = 1 << 31;
+
+/// Mirror of the `dust.frag` stochastic rounding to 8 bits: `floor(v·255 + u) / 255` with `u` in
+/// `[0, 1)` per splat and pixel, whose expectation over `u` is exactly `v`.
+pub fn stochastic_round_8bit(v: f32, u: f32) -> f32 {
+  ((v * 255.0 + u).floor() / 255.0).clamp(0.0, 1.0)
+}
+
 /// age of the dust column that defines the exposure reference ([`DustEmitConfig::tau_ref`])
 pub const TAU_REF_AGE_S: f64 = 86400.0;
 /// splat radius clamp in pixels (`dust.vert`)

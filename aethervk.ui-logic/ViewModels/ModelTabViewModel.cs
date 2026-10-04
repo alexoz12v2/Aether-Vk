@@ -378,6 +378,9 @@ public partial class ModelTabViewModel
   /// </summary>
   private void WireModelSessionChanges(ModelSession session)
   {
+    // tabs are scoped: a reopened tab gets a new VM over the same session (native still has it on)
+    ShowReferencePositionError = session.ShowReferencePositionError;
+
     _modelChangeSub.Disposable = Observable
       .FromEventPattern<PropertyChangedEventHandler, PropertyChangedEventArgs>(
         h => session.PropertyChanged += h,
@@ -422,7 +425,8 @@ public partial class ModelTabViewModel
   {
     if (CurrentSession is { } session)
       session.ShowReferencePositionError = value;
-    _runtimeService.SetReferenceErrorVisible(value);
+    // null while the base constructor raises CurrentSession
+    _runtimeService?.SetReferenceErrorVisible(value);
   }
 
   /// <summary>

@@ -213,6 +213,7 @@ mod tests {
 
   #[test]
   fn test_visual_physics_render_sync() {
+    let _render_lock = crate::simulation_api::lock_render_callback_tests();
     // Reset static state from any previous test run in this process.
     LAST_PE_TASK_IDS[0].store(0, core::sync::atomic::Ordering::Release);
     LAST_PE_TASK_IDS[1].store(0, core::sync::atomic::Ordering::Release);

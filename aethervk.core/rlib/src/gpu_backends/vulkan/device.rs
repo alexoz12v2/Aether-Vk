@@ -876,6 +876,24 @@ struct RecordingCmdBufferDataPresentation {
   submission_fence: Option<NonZeroHandle<vk::Fence>>,
 }
 
+/// Micro-layer color target format: `R16G16B16A16_SFLOAT` when the device supports it as a
+/// blendable color attachment (`optimal_features`) usable as a transient input attachment
+/// (`image_ok`), unless `force_8bit` (`AETHERVK_DUST_8BIT=1`); else `R8G8B8A8_UNORM`, where dust is
+/// stochastically rounded (see `dust.frag`) so faint optical depth keeps its expected value.
+pub fn choose_micro_color_format(
+  optimal_features: vk::FormatFeatureFlags,
+  image_ok: bool,
+  force_8bit: bool,
+) -> vk::Format {
+  let needed =
+    vk::FormatFeatureFlags::COLOR_ATTACHMENT | vk::FormatFeatureFlags::COLOR_ATTACHMENT_BLEND;
+  if !force_8bit && image_ok && optimal_features.contains(needed) {
+    vk::Format::R16G16B16A16_SFLOAT
+  } else {
+    vk::Format::R8G8B8A8_UNORM
+  }
+}
+
 /// Compositing context stored per-command-buffer when inside a compositing
 /// render pass. Used by `bind_pipeline` to transparently create compositing-
 /// compatible pipeline variants.
@@ -1124,6 +1142,8 @@ pub struct Device {
 
   // Some bookkeeping I don't know where to put
   depth_stencil_format: vk::Format,
+  /// micro-layer color target of the compositing pass, see [`choose_micro_color_format`]
+  micro_color_format: vk::Format,
   /// Recording command buffers
   recording_command_buffers:
     dashmap::DashMap<(CommandBufferHandle, QueueRole), RecordingCmdBufferData>,
@@ -1972,6 +1992,35 @@ impl Device {
       }
     };
 
+    // Micro-layer color target: RGBA16F so faint dust optical depth (< 1/255 per splat) still
+    // accumulates. Color attachment + blend for it is in the Vulkan required-format table, but it is
+    // queried anyway (and the transient + input attachment usage combination), with RGBA8 fallback.
+    let micro_color_format = {
+      let f = vk::Format::R16G16B16A16_SFLOAT;
+      let features =
+        unsafe { instance.instance.get_physical_device_format_properties(physical_device, f) }
+          .optimal_tiling_features;
+      let usage = vk::ImageUsageFlags::COLOR_ATTACHMENT
+        | vk::ImageUsageFlags::INPUT_ATTACHMENT
+        | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT;
+      let image_ok = unsafe {
+        instance.instance.get_physical_device_image_format_properties(
+          physical_device,
+          f,
+          vk::ImageType::TYPE_2D,
+          vk::ImageTiling::OPTIMAL,
+          usage,
+          vk::ImageCreateFlags::empty(),
+        )
+      }
+      .is_ok();
+      let force_8bit =
+        aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_8BIT").is_some_and(|v| v.trim() == "1");
+      let chosen = choose_micro_color_format(features, image_ok, force_8bit);
+      aethervk_oshal_rlib::log!("[Device] micro-layer color target: {:?}", chosen);
+      chosen
+    };
+
     let create_renderpass2 = ash::khr::create_renderpass2::Device::new(&instance.instance, &device);
     let synchronization2 = ash::khr::synchronization2::Device::new(&instance.instance, &device);
     let buffer_device_address =
@@ -2095,6 +2144,7 @@ impl Device {
       kernels,
       instance,
       depth_stencil_format,
+      micro_color_format,
       recording_command_buffers: dashmap::DashMap::with_capacity(32),
       pending_mesh_updates: locks::DebugTrackedMutex::new(alloc::vec::Vec::new()),
     })
@@ -7767,7 +7817,11 @@ impl Device {
       let renderpasses_ptr = &res_guard.renderpasses as *const renderpasses::RenderPasses;
       let pipeline_pool_ptr = &res_guard.pipeline_pool as *const pipelines::PipelinePool;
       let render_pass_spec = if compositing {
-        RenderPassSpecification::compositing_pass(&wpresentation_engine, self.depth_stencil_format)
+        RenderPassSpecification::compositing_pass(
+          &wpresentation_engine,
+          self.depth_stencil_format,
+          self.micro_color_format,
+        )
       } else {
         RenderPassSpecification::single_pass(&wpresentation_engine, self.depth_stencil_format)
       };

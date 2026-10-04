@@ -15,7 +15,8 @@
 
 layout(push_constant, std430) uniform PushConstants {
     DustRenderBuffer render;  // 0
-    uint children;            // 8: render-time children per cluster (DUST_CHILDREN..DUST_MAX_CHILDREN)
+    uint children;            // 8: render-time children per cluster (DUST_CHILDREN..DUST_MAX_CHILDREN);
+                              //    bit 31 (DUST_DITHER_FLAG): 8-bit target, stochastic rounding
     uint liveCount;           // 12
     mat4 mvp;                 // 16: particle-system local metres -> clip
     vec4 color;               // 80: rgb stream color, a = exposure (gain / reference optical depth)
@@ -26,6 +27,8 @@ layout(push_constant, std430) uniform PushConstants {
 layout(location = 0) out vec3 v_color;   // stream color: the saturation ceiling
 layout(location = 1) out vec2 v_uv;
 layout(location = 2) out float v_opacity; // peak opacity of this splat (before the gaussian)
+// 8-bit target: per-splat stochastic rounding offset in [0, 1); < 0 = float target, no rounding
+layout(location = 3) flat out float v_dither;
 
 const float MIN_PX = 1.5;
 const float MAX_PX = 48.0;
@@ -45,11 +48,13 @@ void cull() {
     v_color = vec3(0.0);
     v_uv = vec2(0.0);
     v_opacity = 0.0;
+    v_dither = -1.0;
 }
 
 void main() {
     uint inst = uint(gl_InstanceIndex);
-    uint k = clamp(pc.children, 1u, DUST_MAX_CHILDREN);
+    uint k = clamp(pc.children & 0x7FFFFFFFu, 1u, DUST_MAX_CHILDREN);
+    bool dither = (pc.children & 0x80000000u) != 0u;
     uint cluster = inst / k;
     uint child = inst - cluster * k;
     if (cluster >= pc.liveCount) { cull(); return; }
@@ -105,4 +110,6 @@ void main() {
     v_color = pc.color.rgb;
     v_opacity = intensity;
     v_uv = corner;
+    // decorrelates the splats covering a pixel: all rounding the same way would bias the sum
+    v_dither = dither ? dust_u01(dust_pcg(inst ^ 0xA511E9B3u)) : -1.0;
 }

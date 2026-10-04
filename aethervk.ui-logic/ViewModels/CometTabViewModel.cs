@@ -56,6 +56,12 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   [NotifyPropertyChangedFor(nameof(ReferenceOrbitMode))]
   private int _referenceOrbitIndex = -1;
 
+  partial void OnReferenceOrbitIndexChanged(int value)
+  {
+    if (CurrentSession is { } session)
+      session.ReferenceOrbitIndex = value;
+  }
+
   /// <summary>The chosen reference orbit, or null while nothing is selected.</summary>
   public Models.ReferenceOrbitMode? ReferenceOrbitMode => ReferenceOrbitIndex switch
   {
@@ -270,11 +276,49 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       .AddDisposableTo(_disposables);
   }
 
+  // ── Session restore ───────────────────────────────────────────────────────
+
+  private bool _restoringFromSession;
+
+  /// <summary>
+  /// Reloads the form from <paramref name="session"/>: tabs are scoped, so reopening the Comet tab
+  /// builds a new VM over the same session. Runs from the base constructor too (fields such as
+  /// <c>_timeline</c> are still null there), hence the side-effect guard in OnPropertyChanged.
+  /// </summary>
+  private void RestoreFromSession(CometSession session)
+  {
+    _restoringFromSession = true;
+    try
+    {
+      ReferenceOrbitIndex = session.ReferenceOrbitIndex;
+      PoleRaDeg = session.RotPoleRaDeg;
+      PoleDecDeg = session.RotPoleDecDeg;
+      PrimeMeridianDeg = session.RotPrimeMeridianDeg;
+      PoleRaRateDegCen = session.RotPoleRaRateDegCen;
+      PoleDecRateDegCen = session.RotPoleDecRateDegCen;
+      RotRateDegDay = session.RotRateDegDay;
+      BodyFixedOrientationIndex = session.RotBodyFixedOrientationIndex;
+      if (session.IsAlmanacLoaded)
+      {
+        CommittedCometName = session.CommittedFullName;
+        CommittedSpkRecordId = session.CommittedSpkRecordId;
+      }
+    }
+    finally
+    {
+      _restoringFromSession = false;
+    }
+  }
+
   // ── Property change override for rotational model debounce ───────────────
 
   protected override void OnPropertyChanged(PropertyChangedEventArgs e)
   {
     base.OnPropertyChanged(e);
+
+    // tabs are scoped: a reopened tab gets a new VM over the same session
+    if (e.PropertyName == nameof(CurrentSession) && CurrentSession is { } session)
+      RestoreFromSession(session);
 
     bool isRotProp =
       e.PropertyName
@@ -287,6 +331,10 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         or nameof(BodyFixedOrientationIndex);
 
     bool isStateChangingProp = isRotProp || e.PropertyName is nameof(SelectedComet) or nameof(SelectedSpkRecord);
+
+    // restored values are what the native runtime already has: no snapshot restore, no push
+    if (_restoringFromSession)
+      isRotProp = isStateChangingProp = false;
 
     if (isStateChangingProp && !_timeline.IsSimulationRunningValue && _snapshotExists)
     {
@@ -478,6 +526,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         if (session is not null)
         {
           session.SpkId = naifId;
+          session.CommittedSpkRecordId = CommittedSpkRecordId;
           session.CommittedDesignation = SelectedComet.PrimaryDesignation;
           session.CommittedFullName = SelectedComet.Name;
           session.CommittedSpkFilePath = filePath;
@@ -550,6 +599,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     if (session is not null)
     {
       session.SpkId = null;
+      session.CommittedSpkRecordId = string.Empty;
       session.CommittedDesignation = string.Empty;
       session.CommittedFullName = string.Empty;
       session.CommittedSpkFilePath = null;

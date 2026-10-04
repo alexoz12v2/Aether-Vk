@@ -19,6 +19,7 @@ use oshal::math::{
 };
 use parking_lot::RwLock;
 
+pub mod comet_appearance;
 pub mod components_api;
 pub mod core_api;
 pub mod debug_perf;
@@ -708,6 +709,8 @@ pub mod external_state {
     /// Emitted when camera matrices change (debug builds only).
     #[cfg(debug_assertions)]
     CameraMatrices(CCameraMatrices),
+    /// Emitted when an `ImportAsset` command completes (success or failure).
+    AssetImported(CAssetImported),
   }
 
   impl ExternalState {
@@ -723,8 +726,24 @@ pub mod external_state {
         Self::SceneRestored(_) => 8,
         #[cfg(debug_assertions)]
         Self::CameraMatrices(_) => 9,
+        Self::AssetImported(_) => 10,
       }
     }
+  }
+
+  /// Payload for [`ExternalState::AssetImported`]. On success C# re-reads the asset list
+  /// (`avkSimulationContext_getAssetInfo`); on failure a breadcrumb carries the reason.
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, PartialEq, Eq, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct CAssetImported {
+    /// Id passed to `avkSimulationContext_importAsset`.
+    pub request_id: u64,
+    /// Mesh asset produced by the import, `0` if none.
+    pub mesh_id: u64,
+    /// `1` = imported (or already present), `0` = failed.
+    pub success: u32,
+    /// Number of assets (mesh + textures) that did not exist before.
+    pub added_count: u32,
   }
 
   /// Payload for [`ExternalState::SceneDumped`].
@@ -784,6 +803,7 @@ pub fn emit_external_state_change(external_state: &external_state::ExternalState
       ExternalState::CameraMatrices(m) => {
         bytemuck::bytes_of(m).as_ptr().cast::<core::ffi::c_void>()
       }
+      ExternalState::AssetImported(a) => bytemuck::bytes_of(a).as_ptr().cast::<core::ffi::c_void>(),
     };
     unsafe { cb(id, bytes_ptr) };
   }
@@ -890,8 +910,22 @@ impl ComponentForeignId {
   }
 }
 
+/// Serialises the tests that install the process-wide render callback
+/// (`SimulationContext::set_render_callback`): run in parallel, each one replaced the others'
+/// callback and they timed out (treated as a pass), so their pixel assertions never ran.
+#[cfg(test)]
+pub(crate) fn lock_render_callback_tests() -> std::sync::MutexGuard<'static, ()> {
+  extern crate std;
+  static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+  // a failed (panicked) render test must not fail the following ones
+  LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 pub mod test_composite_render;
+
+#[cfg(test)]
+pub mod test_trajectory_occlusion_render;
 
 #[cfg(test)]
 pub mod test_lca_render;
