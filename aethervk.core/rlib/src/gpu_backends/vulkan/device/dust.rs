@@ -289,13 +289,15 @@ impl Device {
     Ok(())
   }
 
-  /// Records the emission of `batch` (its `first_index`, `count`, `ring_mask` already set).
+  /// Records the emission of `batch` (its `first_index`, `count`, `ring_mask` already set) into
+  /// the sub-ring starting at slot `ring_base` (age tier, see `dust::DustSystemState`).
   /// `seq` is the monotonic batch sequence number of the system (selects the descriptor slot).
   /// CPU particle mode: emits on the host immediately, records nothing.
   pub fn cmd_dust_emit(
     &self,
     cmd: vk::CommandBuffer,
     id: u64,
+    ring_base: u32,
     batch: &DustBatch,
     seq: u64,
   ) -> GpuResult<()> {
@@ -305,12 +307,19 @@ impl Device {
     let res = self.res.read();
     let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
     let sys = mgr.systems.get(&id).ok_or(gpu_err!("dust system {} not found", id))?;
-    debug_assert_eq!(batch.ring_mask, sys.capacity - 1);
+    if ring_base as u64 + batch.ring_mask as u64 + 1 > sys.capacity as u64 {
+      return Err(gpu_err!(
+        "dust sub-ring {}+{} exceeds capacity {}",
+        ring_base,
+        batch.ring_mask + 1,
+        sys.capacity
+      ));
+    }
     if let Some(ring) = sys.cpu_ring.as_ref() {
       let mut ring = ring.write();
       for j in 0..batch.count {
         let slot = (batch.first_index.wrapping_add(j) & batch.ring_mask) as usize;
-        ring[slot] = dust::emit_cluster(batch, j);
+        ring[ring_base as usize + slot] = dust::emit_cluster(batch, j);
       }
       return Ok(());
     }
@@ -331,8 +340,10 @@ impl Device {
       (slot * stride) as u64,
       stride as u64,
     )?;
+    let cluster_size = core::mem::size_of::<DustCluster>() as u64;
     let pc = DustEmitPushConstants {
-      clusters: clusters.address,
+      // the shaders index the sub-ring from its own base address
+      clusters: clusters.address + ring_base as u64 * cluster_size,
       batch: batches.address + (slot * stride) as u64,
     };
     let pipeline = self.kernels.pipelines.dust_emit;
@@ -375,12 +386,15 @@ impl Device {
   }
 
   /// Records (GPU) or performs (CPU mode) the per-frame evaluation of the live range
-  /// `[first_slot, first_slot + live_count)` of system `id`. Must be outside a render pass.
+  /// `[first_slot, first_slot + live_count)` of the sub-ring `[ring_base, ring_base + capacity)`
+  /// (one age tier) of system `id`. Must be outside a render pass.
   /// Returns the device address of the compact render buffer to draw from.
   pub fn cmd_dust_propagate(
     &self,
     cmd: vk::CommandBuffer,
     id: u64,
+    ring_base: u32,
+    capacity: u32,
     first_slot: u32,
     live_count: u32,
     frame: &DustFrame,
@@ -388,8 +402,16 @@ impl Device {
     let res = self.res.read();
     let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
     let sys = mgr.systems.get(&id).ok_or(gpu_err!("dust system {} not found", id))?;
-    let live_count = live_count.min(sys.capacity);
-    let mask = sys.capacity - 1;
+    if !capacity.is_power_of_two() || ring_base as u64 + capacity as u64 > sys.capacity as u64 {
+      return Err(gpu_err!(
+        "dust sub-ring {}+{} exceeds capacity {}",
+        ring_base,
+        capacity,
+        sys.capacity
+      ));
+    }
+    let live_count = live_count.min(capacity);
+    let mask = capacity - 1;
     if let Some(ring) = sys.cpu_ring.as_ref() {
       // CPU mode: evaluate into the frame staging arena (host visible, device addressable)
       let arena_guard = utils::RwLockable::read(&res.frame_staging_arena);
@@ -402,7 +424,7 @@ impl Device {
       };
       for (i, o) in out.iter_mut().enumerate() {
         let slot = first_slot.wrapping_add(i as u32) & mask;
-        *o = dust::evaluate_cluster(&ring[slot as usize], slot, frame);
+        *o = dust::evaluate_cluster(&ring[(ring_base + slot) as usize], slot, frame);
       }
       let base = unsafe {
         self
@@ -415,10 +437,12 @@ impl Device {
     let (Some(clusters), Some(render)) = (sys.clusters.as_ref(), sys.render.as_ref()) else {
       return Err(gpu_err!("dust system {} has no GPU buffers", id));
     };
+    // each tier evaluates into its own part of the render buffer (drawn by its own draw call)
+    let render_offset = ring_base as u64 * core::mem::size_of::<DustRenderCluster>() as u64;
     if live_count > 0 {
       let pc = DustPropagatePushConstants {
-        clusters: clusters.address,
-        render: render.address,
+        clusters: clusters.address + ring_base as u64 * core::mem::size_of::<DustCluster>() as u64,
+        render: render.address + render_offset,
         first_slot,
         live_count,
         ring_mask: mask,
@@ -439,7 +463,7 @@ impl Device {
         self.device.cmd_dispatch(cmd, live_count.div_ceil(DUST_WG), 1, 1);
       }
     }
-    Ok(render.address)
+    Ok(render.address + render_offset)
   }
 
   /// Draws `live_count × children` instanced quads. The dust pipeline must be bound.

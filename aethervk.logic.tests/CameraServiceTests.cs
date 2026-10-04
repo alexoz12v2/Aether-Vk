@@ -938,15 +938,38 @@ public class CameraServiceTests
       t.PivotEntityId == 42UL && t.PosX == 0 && t.PosY == 0 && Math.Abs(t.PosZ - expectedZ) < 1e-9)), Times.Once);
   }
 
-  /// The comet label is shown only in Earth observer mode.
+  /// The comet label is shown in Earth observer and UpZenith modes while a comet is committed,
+  /// hidden in CometOrbiting and without a comet.
   [Fact]
-  public void CometIndicator_ShownOnlyInEarthObserverMode()
+  public void CometIndicator_ShownInEarthObserverAndUpZenithWithAComet()
   {
-    var (service, runtime, _) = BuildService();
+    var (service, runtime, scheduler) = BuildService();
+    runtime.Setup(r => r.SetCometIndicatorVisible(It.IsAny<bool>())).Returns(true);
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
+    var committed = (System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
+      .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!;
+    bool? last = null;
+    runtime.Setup(r => r.SetCometIndicatorVisible(It.IsAny<bool>())).Callback<bool>(v => last = v).Returns(true);
+
+    // initial mode is UpZenith, no comet: hidden
     service.SetCameraMode(CameraMode.EarthPosition);
-    runtime.Verify(r => r.SetCometIndicatorVisible(true), Times.Once);
+    Assert.NotEqual(true, last);
+    committed.OnNext(true);
     service.SetCameraMode(CameraMode.UpZenith);
-    runtime.Verify(r => r.SetCometIndicatorVisible(false), Times.Once);
+    service.SetCameraMode(CameraMode.EarthPosition);
+    Assert.Equal(true, last);
+    service.SetCameraMode(CameraMode.UpZenith);
+    Assert.Equal(true, last);
+    service.SetCameraMode(CameraMode.CometOrbiting);
+    Assert.Equal(false, last);
+    service.SetCameraMode(CameraMode.UpZenith);
+    Assert.Equal(true, last);
+    committed.OnNext(false);
+    scheduler.AdvanceBy(1);
+    Assert.Equal(false, last);
+    Assert.True(CameraService.ShowsCometLabel(CameraMode.UpZenith));
+    Assert.False(CameraService.ShowsCometLabel(CameraMode.CometOrbiting));
   }
 
   /// Decommitting the comet while snapped above it in UpZenith flies back above the Sun.

@@ -238,7 +238,7 @@ pub mod v2 {
     /// logic thread, read by the render scene builder. A cloned (snapshotted) component carries
     /// a copy, whose GPU ring content must be re-emitted on restore
     /// (`DustHostState::ring.invalidate_gpu`).
-    pub dust: spin::Mutex<crate::scene::dust::DustHostState>,
+    pub dust: spin::Mutex<crate::scene::dust::DustSystemState>,
     /// time to live for each cluster. Scaled time.
     pub ttl_us: timeus_t,
     /// emission parameters
@@ -322,7 +322,7 @@ pub mod v2 {
             device_data: (render_frontend, render_device_handle),
             id: entity_u64,
           }),
-          dust: spin::Mutex::new(crate::scene::dust::DustHostState::new(capacity)),
+          dust: spin::Mutex::new(crate::scene::dust::DustSystemState::new(capacity)),
           ttl_us,
           emission_params,
           draw_params,

@@ -6,8 +6,9 @@
 // linearized perturbation relative to the cluster's exact Keplerian position:
 //   dx_k = sigma_v * age * N3(0,1)              (ejection velocity dispersion)
 //        + 1/2 * dbeta_k * g_sun * age^2 * (-sun) (size spread within the cluster's beta stratum)
-// Total light per cluster is independent of the children count, the super-particle weight and the
-// sim speed; the per-pixel falloff is a display stretch (see `intensity`).
+// Pixels show the dust optical depth: each child spreads its cross-section over its drawn area, so
+// the brightness of a dust column is independent of zoom, distance, the children count and the
+// pixel clamps (mirror: `dust::splat_footprint` / `dust::splat_opacity`).
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
 #include "sim/dust_common.glsl"
@@ -17,7 +18,7 @@ layout(push_constant, std430) uniform PushConstants {
     uint children;            // 8: render-time children per cluster (DUST_CHILDREN..DUST_MAX_CHILDREN)
     uint liveCount;           // 12
     mat4 mvp;                 // 16: particle-system local metres -> clip
-    vec4 color;               // 80: rgb stream color, a = flux scale (gain / mean child flux)
+    vec4 color;               // 80: rgb stream color, a = exposure (gain / reference optical depth)
     vec4 antiSunG;            // 96: unit anti-sun direction (ps frame), w = solar gravity at comet (m/s^2)
     vec4 params;              // 112: x units per metre, y P00, z P11, w 2/viewport_height
 } pc;                         // 128 bytes
@@ -88,14 +89,15 @@ void main() {
     float px_to_ndc_y = pc.params.w;
     float px_to_ndc_x = px_to_ndc_y * (pc.params.y / pc.params.z);
     float r_units = max(spread * CHILD_RADIUS_FRAC, 1.0) * units_per_m;
-    float r_px = r_units * pc.params.z / clip.w / px_to_ndc_y;
-    r_px = clamp(r_px, MIN_PX, MAX_PX);
+    float px_per_unit = pc.params.z / clip.w / px_to_ndc_y;
+    float r_px = clamp(r_units * px_per_unit, MIN_PX, MAX_PX);
+    // the drawn radius back in metres: the clamps change the footprint, never the energy
+    float r_draw_m = r_px / px_per_unit / units_per_m;
 
-    // Display stretch: the micro layer is RGBA8, so an energy-conserving 1/r_px^2 falloff drives
-    // spread-out splats below 1/510 per pixel, where additive blending accumulates nothing.
-    // 1/r_px keeps large (old) splats visible while compact (young) ones stay brightest.
-    // color.a = gain / mean child flux, so the mean child peaks at `gain` at MIN_PX.
-    float intensity = pc.color.a * (flux / float(k)) * (MIN_PX / r_px);
+    // Optical depth: the child's cross-section (m^2) over its drawn area (the frag gaussian
+    // integrates to 1 over the unit disc), times the exposure. A former 1/r_px display stretch made
+    // the dust fainter the nearer the camera (late_near.rdc vs late_far.rdc).
+    float intensity = pc.color.a * (flux / float(k)) / max(r_draw_m * r_draw_m, 1e-30);
 
     vec2 corner = CORNERS[gl_VertexIndex % 6];
     clip.xy += corner * r_px * vec2(px_to_ndc_x, px_to_ndc_y) * clip.w;

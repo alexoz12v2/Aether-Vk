@@ -580,8 +580,10 @@ pub fn compatibility_json(
     })
     .collect();
   format!(
-    "{{\"version\":{},\"start\":[{sc},{sn}],\"end\":[{ec},{en}],\"comet_naif\":{naif},\"nucleus_radius_km\":{radius},\"rotation\":{rotation},\"reference_elements\":{elements},\"jets\":[{}]}}",
+    "{{\"version\":{},\"start\":[{sc},{sn}],\"end\":[{ec},{en}],\"comet_naif\":{naif},\"nucleus_radius_km\":{radius},\"rotation\":{rotation},\"reference_elements\":{elements},\"dust_tiers\":{},\"jets\":[{}]}}",
     crate::simulation_api::structs::SceneDump::CURRENT_VERSION,
+    // the age tiers decide which dust history a restore reproduces
+    crate::scene::dust::dust_tier_count(),
     jets.join(",")
   )
 }

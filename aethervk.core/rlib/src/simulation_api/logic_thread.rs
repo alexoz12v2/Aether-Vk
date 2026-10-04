@@ -1096,7 +1096,7 @@ fn process_command_internal(
             // is restored the GPU ring content is stale, so it will be re-emitted
             cloned_scene.query1_mut(
               |_, comp: &mut crate::scene::particles::ParticleSystemComponent| {
-                comp.dust.get_mut().ring.invalidate_gpu();
+                comp.dust.get_mut().invalidate_gpu();
               },
             );
             scene_write.scene_snapshot = Some(alloc::boxed::Box::new(cloned_scene));
@@ -2835,6 +2835,7 @@ fn execute_simulation_tick_fixed_update_phase(
         almanac,
         time_mgr.start_epoch,
         now_scaled_us,
+        scene.comet_reference_elements,
         CAPTURE_COMPUTE_ONCE.swap(false, core::sync::atomic::Ordering::Relaxed),
       )
       .map(Some),
@@ -3187,6 +3188,7 @@ mod utils {
     almanac: &AlmanacPackedData,
     start_epoch: anise::time::Epoch,
     now_scaled_us: timeus_t,
+    reference: Option<crate::simulation_api::structs::KeplerianElements>,
     capture_this_tick: bool,
   ) -> EngineResult<PhysicsDeviceSelfSync> {
     use crate::gpu_backends::vulkan::device::QueueRole;
@@ -3202,6 +3204,7 @@ mod utils {
       almanac,
       start_epoch,
       now_scaled_us,
+      reference,
     );
 
     #[cfg(debug_assertions)]
@@ -3223,7 +3226,7 @@ mod utils {
       let _ = scene.with_component(
         *ps_id,
         |ps: &crate::scene::particles::ParticleSystemComponent| {
-          ps.dust.lock().ring.mark_submitted(compute_signal_value);
+          ps.dust.lock().mark_submitted(compute_signal_value);
         },
       );
     }
@@ -3663,9 +3666,9 @@ mod utils {
     commit_cartesian_cache(scene_write, scene_id, cache);
     // the recorded comet path belongs to the previous timeline position
     clear_effective_trajectory(scene_write);
-    let passes = (crate::scene::dust::WINDOWS_PER_TTL as usize)
-      .div_ceil(crate::scene::dust::MAX_WINDOWS_PER_TICK)
-      + 1;
+    // every age tier from scratch (shared per-tick window budget)
+    let passes = crate::scene::dust::MAX_SEEK_PASSES;
+    let reference = scene_write.comet_reference_elements;
     let mut last_sync = None;
     for _ in 0..passes {
       match emit_and_submit_dust(
@@ -3676,6 +3679,7 @@ mod utils {
         almanac,
         start_epoch,
         scaled_us,
+        reference,
         false,
       ) {
         Ok(sync) => last_sync = Some(sync),
@@ -3814,6 +3818,7 @@ mod utils {
     almanac: &AlmanacPackedData,
     start_epoch: anise::time::Epoch,
     now_scaled_us: timeus_t,
+    reference: Option<crate::simulation_api::structs::KeplerianElements>,
   ) -> alloc::vec::Vec<EntityId> {
     use crate::scene::{
       dust::{AU_M, JetState},
@@ -3843,10 +3848,33 @@ mod utils {
       };
       // Jet state at any scaled time, straight from the almanac: emission windows are evaluated
       // at their own grid times, so the dust does not depend on when the ticks happened.
+      //
+      // Outside the SPK coverage (dust history before the start epoch, see
+      // `dust::DustSystemState`) the comet follows the committed reference orbit (two-body; the
+      // re-osculated one drifts ~600 km/month, nothing for dust spread over 1e5+ km) and the
+      // rotational model alone.
       let jet_at = |t: f64| -> Option<JetState> {
         let epoch = start_epoch + anise::time::Duration::from_seconds(t);
-        let (pos_km, vel_kms, body_rot) =
-          planet.step_with_velocity(epoch, almanac, rot_model.as_ref()).ok()?;
+        let from_reference = || {
+          let (r, v) = crate::simulation::orbit_elements::state_from_elements(
+            reference.as_ref()?,
+            crate::simulation::orbit_elements::MU_SUN_KM3_S2,
+            epoch.to_jde_tdb_days(),
+          )?;
+          Some((
+            DVec3::from_components(r[0], r[1], r[2]),
+            DVec3::from_components(v[0], v[1], v[2]),
+            planet.rotation_at(epoch, almanac, rot_model.as_ref()),
+          ))
+        };
+        let (pos_km, vel_kms, body_rot) = if t < 0.0 {
+          from_reference()?
+        } else {
+          planet
+            .step_with_velocity(epoch, almanac, rot_model.as_ref())
+            .ok()
+            .or_else(from_reference)?
+        };
         // uniform spin about the body z (pole) axis, see `AlmanacPlanet::step_with_velocity`.
         // Without a rotational model `DustHostState` estimates it from the attitudes.
         let spin = rot_model.as_ref().map(|m| {
@@ -3902,23 +3930,22 @@ mod utils {
             let r = (j.r_m[0] * j.r_m[0] + j.r_m[1] * j.r_m[1] + j.r_m[2] * j.r_m[2]).sqrt() / AU_M;
             ps.emission_params.dust_emit_config(r as f32, ps.ttl_us)
           };
-          let mut host = ps.dust.lock();
-          let batches = host.tick(t_s, &jet_at, &cfg_at);
-          let mut seqs = alloc::vec::Vec::with_capacity(batches.len());
-          for _ in &batches {
-            seqs.push(host.upload_seq);
-            host.upload_seq += 1;
+          let mut sys = ps.dust.lock();
+          // exposure reference from the current activity (smooth along the orbit, independent of
+          // the history and the camera); kept while the jet is beyond its production cutoff
+          let tau_ref = cfg_at(&jet).tau_ref();
+          if tau_ref > 0.0 && tau_ref.is_finite() {
+            sys.tau_ref = tau_ref;
           }
-          (batches, seqs)
+          sys.tick(t_s, &jet_at, &cfg_at)
         })
         .unwrap_or_default();
-      let (batches, seqs) = batches;
       if batches.is_empty() {
         continue;
       }
       let mut ok = true;
-      for (b, seq) in batches.iter().zip(seqs) {
-        if let Err(e) = vulkan_device.cmd_dust_emit(cmd, ps_id.as_ffi(), b, seq) {
+      for (base, b, seq) in batches.iter() {
+        if let Err(e) = vulkan_device.cmd_dust_emit(cmd, ps_id.as_ffi(), *base, b, *seq) {
           oshal::log!("[Dust] emit failed for {:?}: {}", ps_id, e);
           ok = false;
           break;
@@ -3930,21 +3957,33 @@ mod utils {
         // never leave batches pending forever (they would block the drawable prefix): the whole
         // ring gets re-emitted from its descriptors on the next ticks
         let _ = scene.with_component(ps_id, |ps: &ParticleSystemComponent| {
-          ps.dust.lock().ring.invalidate_gpu()
+          ps.dust.lock().invalidate_gpu()
         });
       }
       static LOG_COUNTER: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
       if LOG_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % 120 == 0 {
         let _ = scene.with_component(ps_id, |ps: &ParticleSystemComponent| {
           let host = ps.dust.lock();
+          let tiers: alloc::vec::Vec<alloc::string::String> = host
+            .stats()
+            .iter()
+            .map(|t| {
+              alloc::format!(
+                "{}/{} {:.1}-{:.1} d{}",
+                t.live_clusters,
+                t.capacity,
+                t.youngest_age_s / 86400.0,
+                t.oldest_age_s / 86400.0,
+                if t.caught_up { "" } else { " (building)" }
+              )
+            })
+            .collect();
           oshal::log!(
-            "[Dust] r={:.3} AU live={} / {} batches={} last batch={} clusters, mass {:.3e} g",
+            "[Dust] r={:.3} AU tiers [{}] last batch={} clusters, mass {:.3e} g",
             r_au,
-            host.ring.live(),
-            host.ring.capacity,
-            host.ring.batches.len(),
-            batches.last().map(|b| b.count).unwrap_or(0),
-            batches.last().map(|b| b.mass_params[0]).unwrap_or(0.0),
+            tiers.join(" | "),
+            batches.last().map(|b| b.1.count).unwrap_or(0),
+            batches.last().map(|b| b.1.mass_params[0]).unwrap_or(0.0),
           );
         });
       }

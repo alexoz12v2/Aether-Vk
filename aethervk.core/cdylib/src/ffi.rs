@@ -595,6 +595,59 @@ pub unsafe extern "C" fn avkSimulationContext_setCometIndicatorVisible(
   ctx_ref.set_comet_indicator_visible(scene_id, visible)
 }
 
+/// One dust age tier, summed over the scene's particle systems (see `dust_stats`). 48 bytes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CDustTierStats {
+  pub live_clusters: u32,
+  pub capacity: u32,
+  /// youngest / oldest live cluster age (scaled s)
+  pub youngest_age_s: f64,
+  pub oldest_age_s: f64,
+  /// age band drawn by the tier (scaled s)
+  pub band_min_s: f64,
+  pub band_max_s: f64,
+  /// 1 when every window due so far is emitted
+  pub caught_up: u32,
+  pub _pad: u32,
+}
+const _: () = assert!(core::mem::size_of::<CDustTierStats>() == 48);
+
+/// Writes up to `max` dust tier summaries of `scene_id` into `out`; returns how many tiers exist.
+///
+/// # Safety
+/// FFI Contract: `out` points to `max` writable `CDustTierStats` (or `max` is 0)
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_dustStats(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  out: *mut CDustTierStats,
+  max: u32,
+) -> u32 {
+  if ctx.is_null() {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let stats = ctx_ref.dust_stats(scene_id);
+  if !out.is_null() {
+    let dst = unsafe { core::slice::from_raw_parts_mut(out, max as usize) };
+    for (d, s) in dst.iter_mut().zip(stats.iter()) {
+      *d = CDustTierStats {
+        live_clusters: s.live_clusters,
+        capacity: s.capacity,
+        youngest_age_s: s.youngest_age_s,
+        oldest_age_s: s.oldest_age_s,
+        band_min_s: s.band_min_s,
+        band_max_s: s.band_max_s,
+        caught_up: s.caught_up as u32,
+        _pad: 0,
+      };
+    }
+  }
+  stats.len() as u32
+}
+
 /// Toggles the visibility of all indicators (`IndicatorComponent`, `ReferentialIndicatorComponent`, `TrajectoryIndicatorComponent`) in a scene.
 ///
 /// # Safety

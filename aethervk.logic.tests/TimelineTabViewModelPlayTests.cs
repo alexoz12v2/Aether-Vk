@@ -138,4 +138,34 @@ public class TimelineTabViewModelPlayTests
         _runtimeServiceMock.Verify(r => r.SnapshotSceneSync(), Times.Once);
         _runtimeServiceMock.Verify(r => r.StartSimulation((int)TimelineTabViewModel.SimulationSpeed.OneDayPerSec), Times.Once);
     }
+
+    /// Debug presets 10 s/s and 1 min/s are offered (fastest last) and sent with their appended
+    /// wire values (oshal `SimSpeed`: 5 = 1 min/s, 6 = 10 s/s).
+    [Fact]
+    public void DebugSpeedPresets_AreOfferedAndSentWithTheirWireValues()
+    {
+        _translationServiceMock.Setup(t => t.GetString(It.IsAny<string>())).Returns<string>(k => k);
+        var vm = new TimelineTabViewModel(
+            _translationServiceMock.Object,
+            _schedulerProvider,
+            _timelineSessionServiceMock.Object,
+            _cometSessionServiceMock.Object,
+            _timelineService,
+            _runtimeServiceMock.Object,
+            _cometMessengerMock.Object);
+        Assert.Equal(5, (int)TimelineTabViewModel.SimulationSpeed.OneMinutePerSec);
+        Assert.Equal(6, (int)TimelineTabViewModel.SimulationSpeed.TenSecondsPerSec);
+        var options = vm.SpeedOptions;
+        Assert.Equal(TimelineTabViewModel.SimulationSpeed.TenSecondsPerSec, options[0].Speed);
+        Assert.Equal(TimelineTabViewModel.SimulationSpeed.OneMinutePerSec, options[1].Speed);
+        Assert.Equal(TimelineTabViewModel.SimulationSpeed.OneDayPerSec, options[options.Count - 1].Speed);
+        Assert.Equal("Tabs_Timeline_Speed1min", options[1].Label);
+
+        vm.CurrentSession = _session;
+        vm.SelectedSpeed = TimelineTabViewModel.SimulationSpeed.OneMinutePerSec;
+        _runtimeServiceMock.Setup(r => r.SnapshotSceneSync()).Returns(true);
+        _runtimeServiceMock.Setup(r => r.StartSimulation(5)).Returns(true);
+        vm.IsPlaying = true;
+        _runtimeServiceMock.Verify(r => r.StartSimulation(5), Times.Once);
+    }
 }

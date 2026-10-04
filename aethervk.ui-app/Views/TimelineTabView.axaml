@@ -74,8 +74,12 @@
           <!-- Playback Controls -->
           <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" Margin="0,0,0,8">
             <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,16,0" VerticalAlignment="Center">
-              <TextBlock Text="Speed:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-              <ComboBox ItemsSource="{Binding AvailableSpeeds}" SelectedItem="{Binding SelectedSpeed}" Width="150" PlaceholderText="Select Speed" />
+              <TextBlock Text="{Binding StrSpeed}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+              <ComboBox ItemsSource="{Binding SpeedOptions}"
+                        DisplayMemberBinding="{Binding Label, x:DataType=vm:TimelineTabViewModel+SpeedOption}"
+                        SelectedValueBinding="{Binding Speed, x:DataType=vm:TimelineTabViewModel+SpeedOption}"
+                        SelectedValue="{Binding SelectedSpeed}"
+                        Width="150" PlaceholderText="{Binding StrSelectSpeed}" />
             </StackPanel>
 
             <Button Command="{Binding ResetCommand}" Classes="playback" IsVisible="{Binding !IsPlaying}" ToolTip.Tip="Reset (&lt;&lt;)" ToolTip.ShowDelay="1000">

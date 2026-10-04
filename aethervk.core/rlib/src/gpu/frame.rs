@@ -870,8 +870,8 @@ pub struct DustDrawCall {
   pub render_address: u64,
 }
 
-/// Dust exposure gain (`AETHERVK_DUST_GAIN`, default 0.7): mean child peak intensity at the
-/// minimum splat size, before the stream color alpha (falls off as `MIN_PX / r_px`).
+/// Dust exposure gain (`AETHERVK_DUST_GAIN`, default 0.7): the opacity a column of the reference
+/// optical depth (`DustEmitConfig::tau_ref`) adds, before the stream color alpha.
 fn dust_gain() -> f32 {
   use core::sync::atomic::{AtomicU32, Ordering};
   static GAIN_BITS: AtomicU32 = AtomicU32::new(u32::MAX);
@@ -918,6 +918,8 @@ pub fn prepare_dust(
       match device.cmd_dust_propagate(
         cmd,
         call.entity_id.as_ffi(),
+        s.ring_base,
+        s.capacity,
         s.first_slot,
         s.live_count,
         &s.frame,
@@ -1547,7 +1549,8 @@ pub fn do_draw_dust_batch(
     );
     let mvp_f64 = view_proj_f64 * model;
     let children = crate::scene::dust::render_children(call.state.capacity, call.state.live_count);
-    let mean_child_flux = (call.state.mean_cluster_flux / children as f32).max(1e-30);
+    // exposure from the jet configuration only (not the live clusters, not the camera)
+    let tau_ref = call.state.tau_ref.max(1e-30);
     let pc = crate::scene::dust::DustDrawPushConstants {
       render: call.render_address,
       children,
@@ -1557,7 +1560,7 @@ pub fn do_draw_dust_batch(
         call.stream_color[0],
         call.stream_color[1],
         call.stream_color[2],
-        gain * call.stream_color[3] / mean_child_flux,
+        gain * call.stream_color[3] / tau_ref,
       ],
       anti_sun_g: call.state.anti_sun_g,
       params: [u as f32, p00, p11, 2.0 / window_extent[1].max(1) as f32],
