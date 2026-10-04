@@ -234,7 +234,7 @@ mod tests {
     ];
     let samples = sample_and_project_trajectory(&cps, &mvp, 1);
     assert!(!samples.is_empty());
-    
+
     let pos = evaluate_bezier_at(&cps, 0.5).unwrap();
     // After de-homogenization (1.0/2.0), x=0.5, y=0.5, z=3.0
     assert!((pos[0] - 0.5).abs() < 1e-6);

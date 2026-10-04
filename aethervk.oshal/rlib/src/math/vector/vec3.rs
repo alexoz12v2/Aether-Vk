@@ -400,4 +400,3 @@ impl Vector3 for Vec3f32 {
 
 #[cfg(test)]
 mod tests;
-

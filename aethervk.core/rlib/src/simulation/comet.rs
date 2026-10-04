@@ -2,15 +2,17 @@
 use crate::types::EngineError;
 use aethervk_oshal_rlib::{
   self as oshal,
-  math::matrix::{Matrix, Matrix3, mat3::Mat3f32},
-  math::quaternion::Quaternion,
-  math::vector::vec4::Quat,
-  math::vector::{Vector, Vector3, vec3::Vec3f32},
-  os::FsError,
-  os::fs::{self, FileSystemObject, PathBuf},
+  math::{
+    matrix::{Matrix, Matrix3, mat3::Mat3f32},
+    quaternion::Quaternion,
+    vector::{Vector, Vector3, vec3::Vec3f32, vec4::Quat},
+  },
+  os::{
+    FsError,
+    fs::{self, FileSystemObject, PathBuf},
+  },
 };
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
+use alloc::{collections::BTreeMap, vec::Vec};
 use ktx2;
 use zune_core::bytestream::ZCursor;
 use zune_jpeg;

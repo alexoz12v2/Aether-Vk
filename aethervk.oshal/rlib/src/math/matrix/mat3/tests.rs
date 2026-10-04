@@ -1,4 +1,3 @@
-
 extern crate std;
 use super::*;
 use crate::math::vector::Vector3;

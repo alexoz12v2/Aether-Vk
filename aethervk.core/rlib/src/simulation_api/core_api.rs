@@ -2,14 +2,14 @@
 
 use crate::{
   expect_scene,
-  gpu::{self, PresentationEngineHandle, WeakRenderFrontendExt, ASSET_DIR},
+  gpu::{self, ASSET_DIR, PresentationEngineHandle, WeakRenderFrontendExt},
   scene::{CameraComponent, EntityId, TransformComponent},
   simulation::texture_cache::TextureCache,
   simulation_api::{
+    SimulationContext,
     structs::{
       LogicState, LogicThreadParams, RenderThreadParams, SimulationSceneData, SimulationThreads,
     },
-    SimulationContext,
   },
   types::{EngineError, EngineResult, GpuError},
 };

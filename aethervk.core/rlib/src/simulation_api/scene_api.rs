@@ -293,7 +293,10 @@ impl SimulationContext {
     const AU_TO_KM_SUN: f32 = 149_597_870.7;
     let sun_frame_entity = scene.spawn_entity("sun_microframe");
     scene.set_parent(sun_frame_entity, Some(root_entity));
-    scene.add_component(sun_frame_entity, crate::scene::TransformComponent::default())?;
+    scene.add_component(
+      sun_frame_entity,
+      crate::scene::TransformComponent::default(),
+    )?;
     scene.add_component(
       sun_frame_entity,
       crate::scene::ReferenceFrameComponent {

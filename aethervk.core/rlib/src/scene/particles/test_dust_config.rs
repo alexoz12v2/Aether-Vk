@@ -51,7 +51,9 @@ fn make_transform() -> TransformComponent {
 fn make_static_mesh(color: [f32; 4]) -> StaticMeshComponent {
   StaticMeshComponent {
     asset_path: alloc::string::String::from("__jet_marker__"),
-    mesh: Arc::new(crate::simulation::comet::generate_uv_sphere(1.0, 8, 8, 1.0, false)),
+    mesh: Arc::new(crate::simulation::comet::generate_uv_sphere(
+      1.0, 8, 8, 1.0, false,
+    )),
     emissive_color: color,
     is_visible: true,
   }
@@ -123,18 +125,18 @@ fn propagate_common_params_leaves_jet_specific_fields_intact() {
 
   // Sibling's existing emission params (distinct grain size and latitude)
   let mut sibling = ParticleSystemEmitParams::zeroed();
-  sibling.diametre_um = 10.0;   // original
-  sibling.latitude_rad = 1.2;   // per-jet — must be preserved
+  sibling.diametre_um = 10.0; // original
+  sibling.latitude_rad = 1.2; // per-jet — must be preserved
 
   // Apply common params exactly as propagate_common_params does:
   sibling.mass_variability_perc = dto.mass_variability_perc;
-  sibling.diametre_um           = dto.diametre_um;
-  sibling.density_gcm3          = dto.density_gcm3;
+  sibling.diametre_um = dto.diametre_um;
+  sibling.density_gcm3 = dto.density_gcm3;
   sibling.scattering_efficiency = dto.scattering_efficiency;
-  sibling.afrho_0_cm            = dto.afrho_0_cm;
-  sibling.afrho_power           = dto.afrho_power;
-  sibling.afrho_cutoff_au       = dto.afrho_cutoff_au;
-  sibling.afrho_max_value_cm    = dto.afrho_max_value_cm;
+  sibling.afrho_0_cm = dto.afrho_0_cm;
+  sibling.afrho_power = dto.afrho_power;
+  sibling.afrho_cutoff_au = dto.afrho_cutoff_au;
+  sibling.afrho_max_value_cm = dto.afrho_max_value_cm;
   // latitude_rad is intentionally NOT propagated
 
   assert_eq!(sibling.diametre_um, 20.0);
@@ -168,7 +170,11 @@ fn static_mesh_emissive_color_matches_stream_color() {
 
   // Confirm initial emissive_color
   let read = scene.with_component(jet, |s: &StaticMeshComponent| s.emissive_color);
-  assert_eq!(read, Some(initial_color), "initial emissive_color must match stream_color");
+  assert_eq!(
+    read,
+    Some(initial_color),
+    "initial emissive_color must match stream_color"
+  );
 
   // Update (mirrors avkSimulationContext_modifyParticleSystem)
   let new_color = [1.0_f32, 0.5, 0.0, 1.0];
@@ -206,9 +212,18 @@ fn decommit_cleanup_removes_jets() {
   }
 
   if let Some(children) = scene.get_children(comet) {
-    assert!(children.is_empty(), "comet should have no children after jets are removed");
+    assert!(
+      children.is_empty(),
+      "comet should have no children after jets are removed"
+    );
   }
-  
-  assert!(scene.get_name(jet1).is_none(), "jet1 entity should be destroyed");
-  assert!(scene.get_name(jet2).is_none(), "jet2 entity should be destroyed");
+
+  assert!(
+    scene.get_name(jet1).is_none(),
+    "jet1 entity should be destroyed"
+  );
+  assert!(
+    scene.get_name(jet2).is_none(),
+    "jet2 entity should be destroyed"
+  );
 }

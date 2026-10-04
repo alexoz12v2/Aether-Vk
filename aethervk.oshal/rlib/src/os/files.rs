@@ -252,7 +252,11 @@ impl Mmap {
     use core::{mem, ptr};
     use libc::{MAP_FAILED, MAP_PRIVATE, O_RDONLY, PROT_READ, close, fstat, mmap, open};
 
-    let path_str = path.into_pathbuf().to_str_unified().ok_or(NativeError::InvalidArgument)?.to_string();
+    let path_str = path
+      .into_pathbuf()
+      .to_str_unified()
+      .ok_or(NativeError::InvalidArgument)?
+      .to_string();
     let c_path = alloc::ffi::CString::new(path_str).map_err(|_| NativeError::InvalidArgument)?;
     let fd = unsafe { open(c_path.as_ptr(), O_RDONLY) };
     if fd < 0 {

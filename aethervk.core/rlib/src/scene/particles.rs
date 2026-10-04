@@ -11,12 +11,16 @@ pub use v2::*;
 /// Note: tight coupling with vulkan here
 pub mod v2 {
   use super::*;
-  use crate::gpu_backends::vulkan;
-  use crate::scene::EntityId;
-  use crate::types::{EngineError, EngineResult};
+  use crate::{
+    gpu_backends::vulkan,
+    scene::EntityId,
+    types::{EngineError, EngineResult},
+  };
 
   // TODO C# side: copy paste from a jet to another, godot edition has params shared
-  #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, serde::Serialize, serde::Deserialize)]
+  #[derive(
+    Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, serde::Serialize, serde::Deserialize,
+  )]
   pub struct ParticleSystemEmitParams {
     /// radians -π/2 to π/2, relative to particle system entity frame
     pub latitude_rad: f32,
@@ -196,7 +200,6 @@ pub mod v2 {
       debug_assert!(mass_variability_perc >= 0.0 && mass_variability_perc <= 1.0);
       self.mass_g * mass_variability_perc
     }
-
   }
 
   /// Owns the GPU-side resources for one particle system.
@@ -253,7 +256,11 @@ pub mod v2 {
   impl ParticleSystemEmitParams {
     /// Emission inputs for [`crate::scene::dust::DustHostState::tick`] at heliocentric distance
     /// `r_helio_au`.
-    pub fn dust_emit_config(&self, r_helio_au: f32, ttl_us: timeus_t) -> crate::scene::dust::DustEmitConfig {
+    pub fn dust_emit_config(
+      &self,
+      r_helio_au: f32,
+      ttl_us: timeus_t,
+    ) -> crate::scene::dust::DustEmitConfig {
       let dir = self.particle_system_relative_cone_direction();
       crate::scene::dust::DustEmitConfig {
         q_dust_kgs: self.dust_production_rate_kgs(r_helio_au) as f64,

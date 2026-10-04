@@ -1,9 +1,13 @@
 use super::*;
-use crate::scene::AlmanacPlanet;
-use crate::scene::trajectory::TrajectoryComponent;
-use crate::simulation_api::external_state::CCometInitialized;
-use crate::simulation_api::structs::{KeplerianElements, LogicCommand};
-use crate::simulation_api::{SimulationContext, set_external_state_simulation_callback};
+use crate::{
+  scene::{AlmanacPlanet, trajectory::TrajectoryComponent},
+  simulation_api::{
+    SimulationContext,
+    external_state::CCometInitialized,
+    set_external_state_simulation_callback,
+    structs::{KeplerianElements, LogicCommand},
+  },
+};
 use hifitime::{Duration, Epoch};
 use std::sync::mpsc;
 

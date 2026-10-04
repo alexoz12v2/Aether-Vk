@@ -129,7 +129,7 @@ impl Instance {
         desired_instance_extensions.push(features_ext);
         has_validation_features = true;
         if force_printf {
-           oshal::log!("Forcing VK_EXT_validation_features for debugPrintfEXT.");
+          oshal::log!("Forcing VK_EXT_validation_features for debugPrintfEXT.");
         }
       } else {
         // If we hit this, RenderDoc is likely hiding the extension.
@@ -402,8 +402,10 @@ impl Instance {
           Ok(inst) => {
             // RenderDoc layer is now loaded into the process. We can safely unmute it.
             #[cfg(any(debug_assertions, test))]
-            if crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS.load(core::sync::atomic::Ordering::Relaxed) {
-                crate::gpu_backends::vulkan::renderdoc::unmute_debug_output();
+            if crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
+              .load(core::sync::atomic::Ordering::Relaxed)
+            {
+              crate::gpu_backends::vulkan::renderdoc::unmute_debug_output();
             }
 
             // If the creation-phase callback captured a real (non-extension-compat)

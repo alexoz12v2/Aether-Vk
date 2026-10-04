@@ -2,11 +2,11 @@
 
 #[cfg(debug_assertions)]
 pub static DEBUG_RENDER_THREAD_CPU_TIME_MS: core::sync::atomic::AtomicU64 =
-    core::sync::atomic::AtomicU64::new(0);
+  core::sync::atomic::AtomicU64::new(0);
 
 #[cfg(debug_assertions)]
 pub static DEBUG_RENDER_THREAD_GPU_TIME_MS: core::sync::atomic::AtomicU64 =
-    core::sync::atomic::AtomicU64::new(0);
+  core::sync::atomic::AtomicU64::new(0);
 
 use core::{
   ffi::{self, CStr},
@@ -326,8 +326,7 @@ fn allocate_primary_vk_command_buffer(
   cmd_id: device::commands::CommandBufferId,
   current_timeline: u64,
 ) -> GpuResult<ash::vk::CommandBuffer> {
-  use aethervk_oshal_rlib::os::native::this_thread;
-  use aethervk_oshal_rlib::os::time::get_monotonic_time;
+  use aethervk_oshal_rlib::os::{native::this_thread, time::get_monotonic_time};
 
   let tid = this_thread::id();
   let start = get_monotonic_time();

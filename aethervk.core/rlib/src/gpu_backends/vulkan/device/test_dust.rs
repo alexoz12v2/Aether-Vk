@@ -1,8 +1,10 @@
 //! Dust v3 GPU parity tests: `dust_emit.comp` / `dust_propagate.comp` (df64, no shaderFloat64)
 //! against the Rust reference in `crate::scene::dust`. They need a Vulkan device (any, Lavapipe
 //! included) and the compiled shaders in `assets/sim`.
-use super::test_utils::{setup_assets_dir, setup_render_frontend_for_tests};
-use super::*;
+use super::{
+  test_utils::{setup_assets_dir, setup_render_frontend_for_tests},
+  *,
+};
 use crate::scene::dust::{
   self, AU_M, DustBatch, DustCluster, DustFrame, DustRenderCluster, SUN_MU_M3_S2, SizeDistribution,
   V3, kepler,
@@ -23,7 +25,8 @@ const T_START: f64 = 4.0e8; // ~12.7 years after the epoch: exercises df64 time
 fn test_batch(count: u32, dur: f64, first_index: u32, capacity: u32) -> DustBatch {
   let (rc, vc) = comet_state();
   let dist = SizeDistribution::from_diameter_um(100.0);
-  let (size_params, vel_params, mass_params) = dust::batch_params(&dist, 100.0, 0.533, 0.0213, 2.0, 0.5, 1.0e6, 0.37);
+  let (size_params, vel_params, mass_params) =
+    dust::batch_params(&dist, 100.0, 0.533, 0.0213, 2.0, 0.5, 1.0e6, 0.37);
   let mut b: DustBatch = bytemuck::Zeroable::zeroed();
   b.set_comet(rc, vc, T_START, dur);
   b.rot_start = [0.0, 0.0, 0.0, 1.0];
@@ -47,13 +50,22 @@ fn frame_after(days: f64) -> DustFrame {
 }
 
 /// Copies `bytes` bytes of a device buffer into host memory (synchronous).
-fn read_back(device: &Device, src: vk::Buffer, compute_queue: bool, bytes: u64) -> alloc::vec::Vec<u8> {
+fn read_back(
+  device: &Device,
+  src: vk::Buffer,
+  compute_queue: bool,
+  bytes: u64,
+) -> alloc::vec::Vec<u8> {
   let allocator = device.res.read().allocator.allocator.as_allocator_view();
-  let info = vk::BufferCreateInfo::default().size(bytes).usage(vk::BufferUsageFlags::TRANSFER_DST);
+  let info = vk::BufferCreateInfo::default()
+    .size(bytes)
+    .usage(vk::BufferUsageFlags::TRANSFER_DST);
   let mut alloc_info = vk_mem::AllocationCreateInfo::default();
   alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
-  alloc_info.flags = vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED;
-  let (dst, mut dst_alloc, dst_info) = unsafe { allocator.create_buffer_get_info(&info, &alloc_info) }.unwrap();
+  alloc_info.flags =
+    vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED;
+  let (dst, mut dst_alloc, dst_info) =
+    unsafe { allocator.create_buffer_get_info(&info, &alloc_info) }.unwrap();
   let record = |cmd: vk::CommandBuffer| -> GpuResult<()> {
     let b = vk::MemoryBarrier2::default()
       .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
@@ -63,7 +75,9 @@ fn read_back(device: &Device, src: vk::Buffer, compute_queue: bool, bytes: u64) 
     let dep = vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&b));
     unsafe {
       device.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep);
-      device.device.cmd_copy_buffer(cmd, src, dst, &[vk::BufferCopy::default().size(bytes)]);
+      device
+        .device
+        .cmd_copy_buffer(cmd, src, dst, &[vk::BufferCopy::default().size(bytes)]);
     }
     Ok(())
   };
@@ -75,7 +89,9 @@ fn read_back(device: &Device, src: vk::Buffer, compute_queue: bool, bytes: u64) 
   .unwrap();
   res.cleanup(&device.device);
   allocator.invalidate_allocation(&dst_alloc, 0, bytes).unwrap();
-  let out = unsafe { core::slice::from_raw_parts(dst_info.mapped_data.cast::<u8>(), bytes as usize) }.to_vec();
+  let out =
+    unsafe { core::slice::from_raw_parts(dst_info.mapped_data.cast::<u8>(), bytes as usize) }
+      .to_vec();
   unsafe { allocator.destroy_buffer(dst, &mut dst_alloc) };
   out
 }
@@ -83,11 +99,17 @@ fn read_back(device: &Device, src: vk::Buffer, compute_queue: bool, bytes: u64) 
 fn buffers(device: &Device, id: u64) -> (u32, vk::Buffer, vk::Buffer) {
   let res = device.res.read();
   let sys = res.dust_manager.as_ref().unwrap().systems.get(&id).unwrap();
-  (sys.capacity, sys.clusters.as_ref().unwrap().buffer, sys.render.as_ref().unwrap().buffer)
+  (
+    sys.capacity,
+    sys.clusters.as_ref().unwrap().buffer,
+    sys.render.as_ref().unwrap().buffer,
+  )
 }
 
 fn emit(device: &Device, id: u64, batch: &DustBatch) {
-  let mut res = device.run_transient_compute_commands(|cmd| device.cmd_dust_emit(cmd, id, batch, 0)).unwrap();
+  let mut res = device
+    .run_transient_compute_commands(|cmd| device.cmd_dust_emit(cmd, id, batch, 0))
+    .unwrap();
   res.cleanup(&device.device);
 }
 
@@ -133,7 +155,12 @@ fn gpu_dust_emit_matches_reference() {
     // starts 100 slots before the ring end: exercises the wrap-around
     let batch = test_batch(512, 1800.0, capacity - 100, capacity);
     emit(device, 9001, &batch);
-    let bytes = read_back(device, clusters, true, capacity as u64 * core::mem::size_of::<DustCluster>() as u64);
+    let bytes = read_back(
+      device,
+      clusters,
+      true,
+      capacity as u64 * core::mem::size_of::<DustCluster>() as u64,
+    );
     let ring: &[DustCluster] = bytemuck::cast_slice(&bytes);
     let mut worst_r = 0.0f64;
     for j in 0..batch.count {
@@ -141,7 +168,10 @@ fn gpu_dust_emit_matches_reference() {
       let gpu = &ring[slot];
       let cpu = dust::emit_cluster(&batch, j);
       // emission time: df64 identical up to f32 rounding of u_t (same ops)
-      assert!((gpu.t0().to_f64() - cpu.t0().to_f64()).abs() < 1e-3, "t0 slot {slot}");
+      assert!(
+        (gpu.t0().to_f64() - cpu.t0().to_f64()).abs() < 1e-3,
+        "t0 slot {slot}"
+      );
       // position: GPU df64 Kepler vs CPU df64 Kepler (cm level; only `/` and `sqrt` may differ)
       let dr = {
         let (a, b) = (gpu.r0().to_f64(), cpu.r0().to_f64());
@@ -156,17 +186,30 @@ fn gpu_dust_emit_matches_reference() {
       // velocity: ejection direction/speed use f32 transcendental functions (cos, log, pow)
       assert!(dv < 1e-3, "v0 slot {slot}: |Δ| = {dv} m/s");
       let rel = |a: f32, b: f32| (a - b).abs() / b.abs().max(1e-30);
-      assert!(rel(gpu.beta(), cpu.beta()) < 1e-4, "beta slot {slot}: gpu {} cpu {} (s_um gpu {} cpu {})", gpu.beta(), cpu.beta(), gpu.misc[1], cpu.misc[1]);
+      assert!(
+        rel(gpu.beta(), cpu.beta()) < 1e-4,
+        "beta slot {slot}: gpu {} cpu {} (s_um gpu {} cpu {})",
+        gpu.beta(),
+        cpu.beta(),
+        gpu.misc[1],
+        cpu.misc[1]
+      );
       assert!(rel(gpu.mass_g(), cpu.mass_g()) < 1e-4, "mass slot {slot}");
       for k in 0..4 {
-        assert!(rel(gpu.misc[k], cpu.misc[k]) < 1e-4, "misc[{k}] slot {slot}");
+        assert!(
+          rel(gpu.misc[k], cpu.misc[k]) < 1e-4,
+          "misc[{k}] slot {slot}"
+        );
       }
     }
     std::println!("[dust gpu] emit parity: worst |Δr0| = {worst_r:.4} m");
     // slots outside the batch are untouched (the ring starts zeroed only by chance, so check a
     // slot just before the batch is not one of ours)
     let before = (batch.first_index.wrapping_sub(1) & batch.ring_mask) as usize;
-    assert_ne!(ring[before].t0().to_f64(), dust::emit_cluster(&batch, 0).t0().to_f64());
+    assert_ne!(
+      ring[before].t0().to_f64(),
+      dust::emit_cluster(&batch, 0).t0().to_f64()
+    );
   });
 }
 
@@ -178,12 +221,21 @@ fn gpu_dust_propagate_matches_reference() {
     let frame = frame_after(10.0);
     let first_slot = batch.first_index & batch.ring_mask;
     propagate(device, 9002, first_slot, batch.count, &frame);
-    let bytes = read_back(device, render, false, batch.count as u64 * core::mem::size_of::<DustRenderCluster>() as u64);
+    let bytes = read_back(
+      device,
+      render,
+      false,
+      batch.count as u64 * core::mem::size_of::<DustRenderCluster>() as u64,
+    );
     let out: &[DustRenderCluster] = bytemuck::cast_slice(&bytes);
     let mut worst = 0.0f32;
     for (i, gpu) in out.iter().enumerate() {
       let slot = (first_slot + i as u32) & batch.ring_mask;
-      assert_eq!(gpu.age_id_dbeta_flux[1].to_bits(), slot, "compact index {i} must carry its slot");
+      assert_eq!(
+        gpu.age_id_dbeta_flux[1].to_bits(),
+        slot,
+        "compact index {i} must carry its slot"
+      );
       let cpu = dust::evaluate_cluster(&dust::emit_cluster(&batch, i as u32), slot, &frame);
       let d = [
         gpu.pos_size[0] - cpu.pos_size[0],
@@ -194,9 +246,16 @@ fn gpu_dust_propagate_matches_reference() {
       // tail displacements reach 1e7 m; β from f32 pow differs by ulps between GPU and CPU
       let err = norm3(d);
       worst = worst.max(err);
-      assert!(err < 2.0 + 2e-6 * p, "slot {slot}: |Δpos| = {err} m at |pos| = {p} m");
-      assert!((gpu.age_id_dbeta_flux[0] - cpu.age_id_dbeta_flux[0]).abs() < 1e-2, "age slot {slot}");
-      let flux_rel = (gpu.age_id_dbeta_flux[3] - cpu.age_id_dbeta_flux[3]).abs() / cpu.age_id_dbeta_flux[3].max(1e-30);
+      assert!(
+        err < 2.0 + 2e-6 * p,
+        "slot {slot}: |Δpos| = {err} m at |pos| = {p} m"
+      );
+      assert!(
+        (gpu.age_id_dbeta_flux[0] - cpu.age_id_dbeta_flux[0]).abs() < 1e-2,
+        "age slot {slot}"
+      );
+      let flux_rel = (gpu.age_id_dbeta_flux[3] - cpu.age_id_dbeta_flux[3]).abs()
+        / cpu.age_id_dbeta_flux[3].max(1e-30);
       assert!(flux_rel < 1e-3, "flux slot {slot}");
     }
     std::println!("[dust gpu] propagate parity: worst |Δpos| = {worst:.3} m");
@@ -216,11 +275,22 @@ fn gpu_dust_df64_keeps_zero_beta_cluster_on_comet() {
     for days in [0.5, 5.0, 30.0] {
       let frame = frame_after(days);
       propagate(device, 9003, 0, batch.count, &frame);
-      let bytes = read_back(device, render, false, batch.count as u64 * core::mem::size_of::<DustRenderCluster>() as u64);
+      let bytes = read_back(
+        device,
+        render,
+        false,
+        batch.count as u64 * core::mem::size_of::<DustRenderCluster>() as u64,
+      );
       let out: &[DustRenderCluster] = bytemuck::cast_slice(&bytes);
-      let worst = out.iter().map(|c| norm3([c.pos_size[0], c.pos_size[1], c.pos_size[2]])).fold(0.0f32, f32::max);
+      let worst = out
+        .iter()
+        .map(|c| norm3([c.pos_size[0], c.pos_size[1], c.pos_size[2]]))
+        .fold(0.0f32, f32::max);
       std::println!("[dust gpu] β=0 after {days} d: worst offset {worst:.4} m");
-      assert!(worst < 1.0, "{days} d: β=0 cluster drifted {worst} m from the comet (df64 broken?)");
+      assert!(
+        worst < 1.0,
+        "{days} d: β=0 cluster drifted {worst} m from the comet (df64 broken?)"
+      );
     }
   });
 }

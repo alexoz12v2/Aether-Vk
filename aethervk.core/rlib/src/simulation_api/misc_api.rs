@@ -151,7 +151,9 @@ impl SimulationContext {
       .render_proxy
       .0
       .as_frontend()
-      .ok_or(crate::simulation_api::EngineError::InvalidOperation("render_frontend"))
+      .ok_or(crate::simulation_api::EngineError::InvalidOperation(
+        "render_frontend",
+      ))
       .and_then(|frontend| {
         frontend
           .with_device(self.render_proxy.1, |device| {

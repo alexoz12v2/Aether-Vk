@@ -317,25 +317,24 @@ macro_rules! gpu_err_pipeline_key_absent {
 /// can be used only on a #[named] function
 #[macro_export]
 macro_rules! gpu_err_pipeline_absent {
-  ($key:expr, $pool:expr) => {
-    {
-      let pipeline_name = $pool.get_graphics_info($key)
-        .map(|info| info.debug_name.clone())
-        .unwrap_or_else(|| alloc::format!("unknown (raw key: {:#X})", $key.0));
-      
-      let trace = aethervk_oshal_rlib::os::debug::capture_aethervk_trace(0).unwrap_or([0; 4]);
-      let trace_str = aethervk_oshal_rlib::os::debug::resolve_trace_to_single_line(&trace);
-      
-      $crate::types::GpuError::InvalidState(alloc::format!(
-        "[Vulkan RenderDevice] {} {}:{} - vulkan pipeline '{}' absent in pipeline pool | trace: {}",
-        "function",
-        core::file!(),
-        core::line!(),
-        pipeline_name,
-        trace_str
-      ))
-    }
-  };
+  ($key:expr, $pool:expr) => {{
+    let pipeline_name = $pool
+      .get_graphics_info($key)
+      .map(|info| info.debug_name.clone())
+      .unwrap_or_else(|| alloc::format!("unknown (raw key: {:#X})", $key.0));
+
+    let trace = aethervk_oshal_rlib::os::debug::capture_aethervk_trace(0).unwrap_or([0; 4]);
+    let trace_str = aethervk_oshal_rlib::os::debug::resolve_trace_to_single_line(&trace);
+
+    $crate::types::GpuError::InvalidState(alloc::format!(
+      "[Vulkan RenderDevice] {} {}:{} - vulkan pipeline '{}' absent in pipeline pool | trace: {}",
+      "function",
+      core::file!(),
+      core::line!(),
+      pipeline_name,
+      trace_str
+    ))
+  }};
 }
 /// can be used only on a #[named] function
 #[macro_export]
@@ -1260,7 +1259,6 @@ pub enum QueueRole {
 static GRAPHICS_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 impl Device {
-
   // TODO delete other pipeline key getters
   pub fn get_archetype_pipeline_key(
     &self,
@@ -1570,11 +1568,12 @@ impl Device {
             #[cfg(target_os = "linux")]
             {
               let now = unsafe {
-                let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+                let mut ts = libc::timespec {
+                  tv_sec: 0,
+                  tv_nsec: 0,
+                };
                 libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
-                (ts.tv_sec as u64)
-                  .wrapping_mul(1_000_000_000)
-                  .wrapping_add(ts.tv_nsec as u64)
+                (ts.tv_sec as u64).wrapping_mul(1_000_000_000).wrapping_add(ts.tv_nsec as u64)
               };
               crate::gpu_backends::vulkan::device::hooks::LAST_SUBMIT_NS
                 .store(now, core::sync::atomic::Ordering::Relaxed);
@@ -1765,7 +1764,6 @@ impl Device {
     Ok((CommandBufferHandle(cmd_id), cmd))
   }
 
-
   pub fn cmd_dispatch_global_memory_barrier(&self, cmd: vk::CommandBuffer) -> GpuResult<()> {
     // Define a global memory barrier for compute-to-compute synchronization
     let memory_barrier = vk::MemoryBarrier2::default()
@@ -1784,7 +1782,6 @@ impl Device {
     }
     Ok(())
   }
-
 
   pub fn get_compute_queue(&self) -> Queue {
     self.queues.get_compute_queue()
@@ -1875,9 +1872,8 @@ impl Device {
 
     // 1. enable required
     let mut required_features = utils::RequiredFeatures::new();
-    let supported_features = unsafe {
-      instance.instance.get_physical_device_features(physical_device)
-    };
+    let supported_features =
+      unsafe { instance.instance.get_physical_device_features(physical_device) };
     required_features.populate(&supported_features);
 
     if chosen_physical_device_query_result
@@ -2181,7 +2177,6 @@ impl Drop for Device {
 }
 
 impl RenderDevice for Device {
-
   #[cfg(test)]
   fn record_global_depth_download(
     &self,
@@ -2316,11 +2311,7 @@ impl RenderDevice for Device {
   }
 
   #[cfg(test)]
-  fn read_global_depth_download(
-    &self,
-    task_id: u64,
-    buffer: &mut [u8],
-  ) -> GpuResult<()> {
+  fn read_global_depth_download(&self, task_id: u64, buffer: &mut [u8]) -> GpuResult<()> {
     let base_tid = task_id & !crate::gpu::GLOBAL_DEPTH_TASK_BIT;
     if !self.is_task_completed(base_tid)? {
       return Err(crate::gpu_err_device!());
@@ -2344,7 +2335,9 @@ impl RenderDevice for Device {
         }
         impl Drop for StagingCleanup {
           fn drop(&mut self) {
-            unsafe { self.allocator.destroy_buffer(self.buffer, &mut self.allocation); }
+            unsafe {
+              self.allocator.destroy_buffer(self.buffer, &mut self.allocation);
+            }
           }
         }
         let _cleanup = StagingCleanup {
@@ -4327,10 +4320,11 @@ impl RenderDevice for Device {
         {
           let _guard = self.device.submission_lock.lock();
           unsafe {
-            self
-              .device
-              .synchronization2
-              .queue_submit2(graphics_queue.handle, core::slice::from_ref(&submit_info2), vk::Fence::null())
+            self.device.synchronization2.queue_submit2(
+              graphics_queue.handle,
+              core::slice::from_ref(&submit_info2),
+              vk::Fence::null(),
+            )
           }
           .map_err(GpuError::from)?;
         }
@@ -5508,10 +5502,9 @@ impl RenderDevice for Device {
       }
     };
 
-    let pipeline = res_guard
-      .pipeline_pool
-      .get_graphics_pipeline(actual_pipeline_key)
-      .ok_or(gpu_err_pipeline_absent!(actual_pipeline_key, res_guard.pipeline_pool))?;
+    let pipeline = res_guard.pipeline_pool.get_graphics_pipeline(actual_pipeline_key).ok_or(
+      gpu_err_pipeline_absent!(actual_pipeline_key, res_guard.pipeline_pool),
+    )?;
 
     let cmd = self.get_cmd(cmd_buffer)?;
 
@@ -6359,10 +6352,7 @@ impl RenderDevice for Device {
   }
 
   #[named]
-  fn bind_sphere_gizmo_pipeline_over_mesh(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-  ) -> GpuResult<()> {
+  fn bind_sphere_gizmo_pipeline_over_mesh(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()> {
     let (cmd, pipeline_key) = {
       let res = self.res.read();
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
@@ -6384,10 +6374,7 @@ impl RenderDevice for Device {
   }
 
   #[named]
-  fn bind_sphere_gizmo_pipeline_elsewhere(
-    &self,
-    cmd_buffer: CommandBufferHandle,
-  ) -> GpuResult<()> {
+  fn bind_sphere_gizmo_pipeline_elsewhere(&self, cmd_buffer: CommandBufferHandle) -> GpuResult<()> {
     let (cmd, pipeline_key) = {
       let res = self.res.read();
       let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
@@ -6537,7 +6524,7 @@ impl RenderDevice for Device {
     let lat_segments = sub_divs;
     let lon_segments = sub_divs;
     let total_sphere_vertices = lon_segments * (2 * lat_segments - 1) * 2; // = 5112
-    let total_axes_vertices = 8;           // 4 axes × 2 vertices (added sun axis)
+    let total_axes_vertices = 8; // 4 axes × 2 vertices (added sun axis)
     let total_arrowhead_vertices = 4 * 2 * 4; // 4 lines × 2 verts × 4 arrowheads
     let total_vertices = total_sphere_vertices + total_axes_vertices + total_arrowhead_vertices;
 
@@ -6549,7 +6536,6 @@ impl RenderDevice for Device {
       data_ptr,
     }))
   }
-
 
   #[named]
   fn prepare_gizmo_archetype_for_render_and_bind_pipeline(
@@ -7542,7 +7528,6 @@ impl Device {
     Ok(())
   }
 
-
   #[named]
   pub(super) fn run_transient_compute_commands<F>(
     &self,
@@ -7583,18 +7568,24 @@ impl Device {
     impl<'a> Drop for FenceGuard<'a> {
       fn drop(&mut self) {
         if !self.disarmed {
-          unsafe { self.device.destroy_fence(self.fence, None); }
+          unsafe {
+            self.device.destroy_fence(self.fence, None);
+          }
         }
       }
     }
 
     let fence_info = vk::FenceCreateInfo::default();
     let fence = unsafe { self.device.create_fence(&fence_info, None) }?;
-    let mut fence_guard = FenceGuard { device: &self.device, fence, disarmed: false };
+    let mut fence_guard = FenceGuard {
+      device: &self.device,
+      fence,
+      disarmed: false,
+    };
 
     let cmd_submit_info = vk::CommandBufferSubmitInfo::default().command_buffer(cmd);
-    let submit_info = vk::SubmitInfo2::default()
-      .command_buffer_infos(core::slice::from_ref(&cmd_submit_info));
+    let submit_info =
+      vk::SubmitInfo2::default().command_buffer_infos(core::slice::from_ref(&cmd_submit_info));
 
     // locked submit with synchronization2
     unsafe {
@@ -7609,9 +7600,11 @@ impl Device {
     unsafe {
       self.device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX)?;
     }
-    
+
     fence_guard.disarmed = true;
-    unsafe { self.device.destroy_fence(fence, None); }
+    unsafe {
+      self.device.destroy_fence(fence, None);
+    }
 
     guard.disarmed = true;
     Ok(TransientCmdPoolResource { pool, cmd })
@@ -7659,28 +7652,35 @@ impl Device {
     impl<'a> Drop for FenceGuard<'a> {
       fn drop(&mut self) {
         if !self.disarmed {
-          unsafe { self.device.destroy_fence(self.fence, None); }
+          unsafe {
+            self.device.destroy_fence(self.fence, None);
+          }
         }
       }
     }
 
     let fence_info = vk::FenceCreateInfo::default();
     let fence = unsafe { self.device.create_fence(&fence_info, None) }?;
-    let mut fence_guard = FenceGuard { device: &self.device, fence, disarmed: false };
+    let mut fence_guard = FenceGuard {
+      device: &self.device,
+      fence,
+      disarmed: false,
+    };
 
     let cmd_info = vk::CommandBufferSubmitInfo::default().command_buffer(cmd);
-    let submit_info2 = vk::SubmitInfo2::default()
-      .command_buffer_infos(core::slice::from_ref(&cmd_info));
+    let submit_info2 =
+      vk::SubmitInfo2::default().command_buffer_infos(core::slice::from_ref(&cmd_info));
 
     {
       // Hold the same submission_lock that locked_queue_submit used, to preserve
       // the ordering guarantee.
       let _guard = self.device.submission_lock.lock();
       unsafe {
-        self
-          .device
-          .synchronization2
-          .queue_submit2(queue.handle, core::slice::from_ref(&submit_info2), fence)
+        self.device.synchronization2.queue_submit2(
+          queue.handle,
+          core::slice::from_ref(&submit_info2),
+          fence,
+        )
       }
       .map_err(GpuError::from)?;
     }
@@ -7688,9 +7688,11 @@ impl Device {
     unsafe {
       self.device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX)?;
     }
-    
+
     fence_guard.disarmed = true;
-    unsafe { self.device.destroy_fence(fence, None); }
+    unsafe {
+      self.device.destroy_fence(fence, None);
+    }
 
     guard.disarmed = true;
     Ok(TransientCmdPoolResource { pool, cmd })
@@ -8566,7 +8568,6 @@ fn ensure_sun_shader_modules(
   Ok((vert_key, frag_key))
 }
 
-
 fn ensure_marker_shader_modules(
   device: &LogicalDevice,
   shader_manager: &mut shader_manager::ShaderManager,
@@ -8771,11 +8772,11 @@ fn ensure_sphere_gizmo_shader_modules(
 
   let assets_dir = shaders_asset_dir()?;
   if cfg!(debug_assertions) && cfg!(feature = "debug_gizmo_depth") {
-      vert_path = assets_dir.join("sphere_gizmo.vert.d.spv");
-      frag_path = assets_dir.join("sphere_gizmo.frag.d.spv");
+    vert_path = assets_dir.join("sphere_gizmo.vert.d.spv");
+    frag_path = assets_dir.join("sphere_gizmo.frag.d.spv");
   } else {
-      vert_path = assets_dir.join("sphere_gizmo.vert.spv");
-      frag_path = assets_dir.join("sphere_gizmo.frag.spv");
+    vert_path = assets_dir.join("sphere_gizmo.vert.spv");
+    frag_path = assets_dir.join("sphere_gizmo.frag.spv");
   }
 
   let vkey = shader_manager.get_or_load(
@@ -8880,7 +8881,6 @@ fn pretty_print_vulkan_device(
     family_count,
   )
 }
-
 
 // RAII Cleanup Guard for transient resources.
 // Ensures they are always destroyed when the block ends (success or error).
@@ -9087,8 +9087,8 @@ pub mod test_utils;
 mod ui_tests;
 
 #[cfg(test)]
-mod test_pipelines;
-#[cfg(test)]
 mod test_commands;
 #[cfg(test)]
 mod test_dust;
+#[cfg(test)]
+mod test_pipelines;

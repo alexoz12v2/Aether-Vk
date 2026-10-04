@@ -163,4 +163,3 @@ pub fn var(key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests;
-

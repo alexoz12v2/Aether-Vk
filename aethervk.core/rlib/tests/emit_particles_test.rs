@@ -1,10 +1,12 @@
 //! Dust v3 emission through the public API: `ParticleSystemEmitParams::dust_emit_config` +
 //! `DustHostState::tick` (the exact path the logic thread runs every tick).
-use aethervk_core_rlib::scene::dust::{
-  AU_M, DustHostState, JetState, RING_CAPACITY_HIGH, RING_CAPACITY_LOW, RING_GUARD_DIVISOR,
-  SUN_MU_M3_S2, kepler,
+use aethervk_core_rlib::scene::{
+  dust::{
+    AU_M, DustHostState, JetState, RING_CAPACITY_HIGH, RING_CAPACITY_LOW, RING_GUARD_DIVISOR,
+    SUN_MU_M3_S2, kepler,
+  },
+  particles::v2::ParticleSystemEmitParams,
 };
-use aethervk_core_rlib::scene::particles::v2::ParticleSystemEmitParams;
 use bytemuck::Zeroable;
 
 fn default_params() -> ParticleSystemEmitParams {
@@ -26,7 +28,13 @@ const TTL_US: i64 = 30 * 86_400 * 1_000_000;
 
 /// Runs `ticks` logic ticks of `dt_scaled_s` scaled seconds each (60 Hz real time) on a comet
 /// at `r_au`. Returns `(host, emitted_mass_g)`.
-fn run(params: &ParticleSystemEmitParams, capacity: u32, r_au: f64, dt_scaled_s: f64, ticks: u64) -> (DustHostState, f64) {
+fn run(
+  params: &ParticleSystemEmitParams,
+  capacity: u32,
+  r_au: f64,
+  dt_scaled_s: f64,
+  ticks: u64,
+) -> (DustHostState, f64) {
   let r0 = [r_au * AU_M, 0.0, 0.0];
   let v0 = [0.0, (SUN_MU_M3_S2 / (r_au * AU_M)).sqrt(), 0.0];
   let mut host = DustHostState::new(capacity);
@@ -35,7 +43,12 @@ fn run(params: &ParticleSystemEmitParams, capacity: u32, r_au: f64, dt_scaled_s:
   for tick in 0..ticks {
     let t = tick as f64 * dt_scaled_s;
     let (r, v) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, t);
-    let jet = JetState { t_s: t, r_m: r, v_ms: v, rot: [0.0, 0.0, 0.0, 1.0] };
+    let jet = JetState {
+      t_s: t,
+      r_m: r,
+      v_ms: v,
+      rot: [0.0, 0.0, 0.0, 1.0],
+    };
     let r_au_now = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt() / AU_M;
     let cfg = params.dust_emit_config(r_au_now as f32, TTL_US);
     for b in host.tick(jet, now_us, &cfg) {
@@ -70,8 +83,14 @@ fn mass_is_independent_of_sim_speed() {
   let total1 = m1 + h1.acc.mass_g;
   let total3 = m3 + h3.acc.mass_g;
   let produced = p.dust_production_rate_kgs(5.5) as f64 * 1e3 * 12.0 * 3600.0;
-  assert!(((total1 - produced) / produced).abs() < 1e-3, "1 h/s {total1} vs {produced}");
-  assert!(((total3 - produced) / produced).abs() < 1e-3, "3 h/s {total3} vs {produced}");
+  assert!(
+    ((total1 - produced) / produced).abs() < 1e-3,
+    "1 h/s {total1} vs {produced}"
+  );
+  assert!(
+    ((total3 - produced) / produced).abs() < 1e-3,
+    "3 h/s {total3} vs {produced}"
+  );
 }
 
 #[test]

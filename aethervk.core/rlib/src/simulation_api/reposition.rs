@@ -9,7 +9,7 @@
 //! triggers when the body drifts >0.1 AU during a running simulation.
 
 use crate::{
-  scene::{AlmanacPlanet, EntityId, Scene, TransformComponent, BodyRotationalModel},
+  scene::{AlmanacPlanet, BodyRotationalModel, EntityId, Scene, TransformComponent},
   simulation::almanac::AlmanacPackedData,
   types::EngineResult,
 };

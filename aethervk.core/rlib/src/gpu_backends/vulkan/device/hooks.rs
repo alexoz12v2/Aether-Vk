@@ -255,8 +255,7 @@ define_hook!(
 /// Updated by [`stall_watcher_submit_hook`] (Linux debug builds only).
 /// Read by the stall-watcher thread to detect render hangs.
 #[cfg(all(target_os = "linux", debug_assertions))]
-pub static LAST_SUBMIT_NS: core::sync::atomic::AtomicU64 =
-  core::sync::atomic::AtomicU64::new(0);
+pub static LAST_SUBMIT_NS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Hook function registered into [`vkQueueSubmit_HOOK`] at device creation time.
 /// Records the current CLOCK_MONOTONIC nanosecond timestamp on every submit.
@@ -268,11 +267,12 @@ fn stall_watcher_submit_hook(
   _fence: vk::Fence,
 ) -> vk::Result {
   let now = unsafe {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts = libc::timespec {
+      tv_sec: 0,
+      tv_nsec: 0,
+    };
     libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
-    (ts.tv_sec as u64)
-      .wrapping_mul(1_000_000_000)
-      .wrapping_add(ts.tv_nsec as u64)
+    (ts.tv_sec as u64).wrapping_mul(1_000_000_000).wrapping_add(ts.tv_nsec as u64)
   };
   LAST_SUBMIT_NS.store(now, core::sync::atomic::Ordering::Relaxed);
   vk::Result::SUCCESS

@@ -2,15 +2,18 @@
 
 #[cfg(test)]
 mod tests {
-  use crate::gpu::PipelineKeyable;
-  use crate::gpu_backends::vulkan::device::pipelines::{
-    ComputeInfo, FragmentOut, FragmentShader, GraphicsInfo, PipelineFlags, PipelinePool,
-    PreRasterization, StencilCompareOp, StencilLogicOp, VertexIn,
+  use crate::{
+    gpu::PipelineKeyable,
+    gpu_backends::vulkan::device::{
+      LogicalDevice, VulkanDebugNameExt,
+      pipelines::{
+        ComputeInfo, FragmentOut, FragmentShader, GraphicsInfo, PipelineFlags, PipelinePool,
+        PreRasterization, StencilCompareOp, StencilLogicOp, VertexIn,
+      },
+    },
   };
-  use crate::gpu_backends::vulkan::device::{LogicalDevice, VulkanDebugNameExt};
   use alloc::vec::Vec;
-  use ash::vk;
-  use ash::vk::Handle;
+  use ash::{vk, vk::Handle};
 
   // Borrowed setup function for Vulkan resources
   fn setup_test_render() -> Option<(
@@ -201,7 +204,8 @@ mod tests {
 
     let asset_dir = crate::gpu::ASSET_DIR.read().clone().unwrap();
     let spv_path = std::path::Path::new(&asset_dir).join("dummy_bvh.comp.spv");
-    let spv_data = std::fs::read(&spv_path).unwrap_or_else(|e| panic!("Failed to read {}: {}", spv_path.display(), e));
+    let spv_data = std::fs::read(&spv_path)
+      .unwrap_or_else(|e| panic!("Failed to read {}: {}", spv_path.display(), e));
 
     // Ensure properly aligned for u32
     let mut words = vec![0u32; spv_data.len() / 4];

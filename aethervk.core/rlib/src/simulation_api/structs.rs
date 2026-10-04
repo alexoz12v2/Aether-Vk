@@ -1217,7 +1217,6 @@ pub struct SceneContext {
   /// Contains the last render task feedback Arc for the given scene
   pub last_render_task: Arc<core::sync::atomic::AtomicU64>,
 
-
   pub root_entity: EntityId,
   pub cursor_entity: Option<EntityId>,
   pub sun_entity: Option<EntityId>,

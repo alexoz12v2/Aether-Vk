@@ -267,9 +267,9 @@ mod scene_dump_tests {
   /// positions survive the full serialize / deserialize cycle without precision loss.
   #[test]
   fn test_serialize_transforms_round_trip() {
-    use aethervk_oshal_rlib::math::quaternion::Quaternion;
-    use aethervk_oshal_rlib::math::vector::{
-      Vector, Vector3, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat,
+    use aethervk_oshal_rlib::math::{
+      quaternion::Quaternion,
+      vector::{Vector, Vector3, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat},
     };
 
     let mut scene = make_test_scene();

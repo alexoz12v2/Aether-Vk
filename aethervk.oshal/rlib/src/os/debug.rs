@@ -19,12 +19,16 @@ pub static LOGGER_CALLBACK: core::sync::atomic::AtomicPtr<()> =
 #[cfg(target_os = "windows")]
 mod windows_debug {
   use core::fmt;
-  use windows::{Win32::System::Diagnostics::Debug::OutputDebugStringW, core::HSTRING};
-  use windows::Win32::System::Diagnostics::Debug::{
-    RtlCaptureStackBackTrace, SymFromAddr, SymInitialize, SymSetOptions, SYMBOL_INFO,
+  use windows::{
+    Win32::System::{
+      Diagnostics::Debug::{
+        OutputDebugStringW, RtlCaptureStackBackTrace, SYMBOL_INFO, SymFromAddr, SymInitialize,
+        SymSetOptions,
+      },
+      Threading::GetCurrentProcess,
+    },
+    core::{HSTRING, PCSTR},
   };
-  use windows::Win32::System::Threading::GetCurrentProcess;
-  use windows::core::PCSTR;
   // Removed duplicate HANDLE import
 
   #[cfg(feature = "console_log")]
@@ -434,10 +438,14 @@ mod unix_debug {
   pub fn spawn_dedicated_console() {
     unsafe {
       let log_file = alloc::ffi::CString::new("/tmp/aethervk_gpu_debug.log").unwrap();
-      let fd = libc::open(log_file.as_ptr(), libc::O_CREAT | libc::O_WRONLY | libc::O_TRUNC, 0o666);
+      let fd = libc::open(
+        log_file.as_ptr(),
+        libc::O_CREAT | libc::O_WRONLY | libc::O_TRUNC,
+        0o666,
+      );
       if fd >= 0 {
         libc::close(fd); // Just create/truncate it, we don't redirect stdout anymore
-        
+
         let pid = libc::fork();
         if pid == 0 {
           let term = alloc::ffi::CString::new("gnome-terminal").unwrap();
@@ -445,16 +453,16 @@ mod unix_debug {
           let arg2 = alloc::ffi::CString::new("tail").unwrap();
           let arg3 = alloc::ffi::CString::new("-f").unwrap();
           let arg4 = alloc::ffi::CString::new("/tmp/aethervk_gpu_debug.log").unwrap();
-          
+
           let mut args = [
             term.as_ptr() as *mut libc::c_char,
             arg1.as_ptr() as *mut libc::c_char,
             arg2.as_ptr() as *mut libc::c_char,
             arg3.as_ptr() as *mut libc::c_char,
             arg4.as_ptr() as *mut libc::c_char,
-            core::ptr::null_mut()
+            core::ptr::null_mut(),
           ];
-          
+
           libc::execvp(term.as_ptr(), args.as_ptr() as *const *const libc::c_char);
           libc::_exit(1);
         }
@@ -469,7 +477,11 @@ mod unix_debug {
   pub fn append_debug_printf(msg: &str) {
     unsafe {
       let log_file = alloc::ffi::CString::new("/tmp/aethervk_gpu_debug.log").unwrap();
-      let fd = libc::open(log_file.as_ptr(), libc::O_CREAT | libc::O_WRONLY | libc::O_APPEND, 0o666);
+      let fd = libc::open(
+        log_file.as_ptr(),
+        libc::O_CREAT | libc::O_WRONLY | libc::O_APPEND,
+        0o666,
+      );
       if fd >= 0 {
         libc::write(fd, msg.as_ptr().cast(), msg.len());
         libc::close(fd);
@@ -786,7 +798,7 @@ mod unix_debug {
 
   #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
   pub fn resolve_trace_to_single_line(trace: &[usize]) -> alloc::string::String {
-      alloc::string::String::from("<no backtrace available>")
+    alloc::string::String::from("<no backtrace available>")
   }
 
   #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
@@ -901,7 +913,9 @@ pub mod fpe {
   /// This function registers the VEH
   #[cfg(windows)]
   unsafe fn register_os_handler() {
-    let handler: unsafe extern "system" fn(*mut windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS) -> i32 = core::mem::transmute(veh_handler as usize);
+    let handler: unsafe extern "system" fn(
+      *mut windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+    ) -> i32 = core::mem::transmute(veh_handler as usize);
     windows::Win32::System::Diagnostics::Debug::AddVectoredExceptionHandler(
       1, // Call First
       Some(handler),
@@ -1081,4 +1095,3 @@ macro_rules! set_thread_name {
 
 #[cfg(test)]
 mod tests;
-
