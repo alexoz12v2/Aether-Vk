@@ -11,6 +11,12 @@ namespace AetherVk.Logic.Services;
 [ExclusiveSession]
 public sealed partial class ModelSession : ObservableObject, ITabSession
 {
+  /// <summary>
+  /// "show reference-position error" checkbox. Plain property on purpose: an observable one would
+  /// trigger the push of the shared model to every jet.
+  /// </summary>
+  public bool ShowReferencePositionError { get; set; }
+
   // ── Jet list ───────────────────────────────────────────────────────────────────
 
   /// <summary>

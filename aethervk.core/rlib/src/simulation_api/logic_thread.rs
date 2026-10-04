@@ -91,13 +91,13 @@ fn logic_command_desc(cmd: &LogicCommand) -> alloc::string::String {
     }
 
     // Scene Playback Commands
-    LogicCommand::StartSimlulation { .. } => "Start Simulation".to_string(),
     LogicCommand::PlaySceneToEnd { .. } => "Play Scene to End".to_string(),
     LogicCommand::PauseScene { .. } => "Pause Scene".to_string(),
     LogicCommand::PlayScene { .. } => "Play Scene".to_string(),
     LogicCommand::SnapshotScene { .. } => "Snapshot Scene".to_string(),
     LogicCommand::RestoreSnapshot { .. } => "Restore Snapshot".to_string(),
     LogicCommand::ResetSimulation { .. } => "Reset Simulation".to_string(),
+    LogicCommand::SeekEpoch { epoch, .. } => alloc::format!("Seek to {epoch}"),
     LogicCommand::DumpScene { scene_id, .. } => alloc::format!("Dump Scene {}", scene_id),
     LogicCommand::RestoreSceneDump { scene_id, .. } => {
       alloc::format!("Restore Scene Dump {}", scene_id)
@@ -204,9 +204,6 @@ pub fn start_logic_thread(
 
     let target_frame_time = oshal::os::time::timeus_milliseconds(16); // ~60 FPS
     let mut play_controls: hashbrown::HashMap<u64, PlayControl> = hashbrown::HashMap::new();
-    // Tracks the last known sun-in-frustum state per scene so we only fire the
-    // ExternalState::SunVisibilityChanged callback on *transitions*, not every frame.
-    let mut sun_visibility_state: hashbrown::HashMap<u64, bool> = hashbrown::HashMap::new();
 
     // periodic compute discard
     let mut last_discard_unscaled_us: timeus_t = 0;
@@ -333,27 +330,30 @@ pub fn start_logic_thread(
               scaled_fixed_dt_us > 0 && time_mgr.has_ready_step(scaled_fixed_dt_us) && is_running
             };
 
-            let phase1_res: Option<EngineResult<_>> = if physics_done && !end_epoch_reached && has_physics_work {
-              context
-                .kernels
-                .0
-                .with_device(context.kernels.1, |dyn_device| {
-                  let vulkan_device: &vulkan::device::Device =
-                    dyn_device.as_any().downcast_ref().unwrap();
-                  let mut time_mgr =
-                    unsafe { scenes.time_managers.get_mut(&scene_id).unwrap_unchecked() };
-
-                  Ok(Some(execute_simulation_tick_fixed_update_phase(
-                    vulkan_device,
-                    *scene_id,
-                    scene_arc.upgradable_read(),
-                    &mut time_mgr,
-                    structs::UNSCALED_FIXED_DELTA_US,
-                    &scenes.cartesian_state_cache,
-                    &context.logic_state.read().almanac_data,
-                  )))
-                })
-                .unwrap_or(Some(Err(EngineError::InvalidNullArgument)))
+            // Not gated on `physics_done`: the SPICE step and the cartesian cache commit must run
+            // even while the compute queue is stalled. Only dust emission needs the GPU.
+            let phase1_res: Option<EngineResult<_>> = if !end_epoch_reached && has_physics_work {
+              let run = |vulkan_device: Option<&vulkan::device::Device>| {
+                let mut time_mgr =
+                  unsafe { scenes.time_managers.get_mut(&scene_id).unwrap_unchecked() };
+                execute_simulation_tick_fixed_update_phase(
+                  vulkan_device,
+                  *scene_id,
+                  scene_arc.upgradable_read(),
+                  &mut time_mgr,
+                  structs::UNSCALED_FIXED_DELTA_US,
+                  &scenes.cartesian_state_cache,
+                  &context.logic_state.read().almanac_data,
+                )
+              };
+              let mut ran = None;
+              if physics_done {
+                let _ = context.kernels.0.with_device(context.kernels.1, |dyn_device| {
+                  ran = Some(run(dyn_device.as_any().downcast_ref::<vulkan::device::Device>()));
+                  Ok(())
+                });
+              }
+              Some(ran.unwrap_or_else(|| run(None)))
             } else {
               None
             };
@@ -361,13 +361,6 @@ pub fn start_logic_thread(
             // - Phase 2: Update
             let time_mgr = unsafe { scenes.time_managers.get(&scene_id).unwrap_unchecked() };
             execute_simulation_tick_update_phase(scene_arc.upgradable_read(), &time_mgr);
-
-            // - Phase 2b: Sun frustum visibility check (fires ExternalState callback on change)
-            utils::check_sun_frustum_visibility(
-              &scene_arc.read(),
-              *scene_id,
-              &mut sun_visibility_state,
-            );
 
             // - Phase 3: Clear Changed
             execute_simulation_tick_clear_changed_entities_phase(
@@ -719,65 +712,6 @@ fn process_command_internal(
   ctx: &alloc::sync::Arc<LogicThreadContext>,
 ) -> EngineResult<()> {
   match command {
-    LogicCommand::StartSimlulation { scene_id, speed } => {
-      let scenes = ctx.scenes.read();
-      let mut time_mgr = scenes.time_managers.get_mut(&scene_id).unwrap();
-
-      // Determine if this is a fresh start, knowing that ResetSimulation will zero out time state
-      let is_fresh_start = {
-        let state = time_mgr.state.read();
-        state.scaled_time == 0
-      };
-
-      if is_fresh_start {
-        use core::sync::atomic::Ordering;
-        // If fresh start, then reset all particle systems present in the scene
-        // Note: on first start this is unncecessary.
-        let (now, elapsed) = {
-          let state = time_mgr.state.read();
-          (state.unscaled_time, state.unscaled_delta)
-        };
-
-        // wait until compute queue is idle (self sync)
-        utils::self_sync_do_if_done(
-          &scenes,
-          scene_id,
-          ctx.kernels.0.clone(), // render frontend is an arc
-          ctx.kernels.1,
-          &ctx.render_tx,
-          now,
-          elapsed,
-          |vulkan_device, scene_write, _render_tx| {
-            use aethervk_oshal_rlib::os::time::get_monotonic_time;
-            // Solve cross sync: Wait for the graphics queue to finish drawing its last frame
-            // Since `StartSimulation` is a synchronous command, once we know that we are not
-            // rendering we are sure that rendering won't restart until this command is processed
-            let last_render_task = scene_write.last_render_task.load(Ordering::Acquire);
-            if last_render_task != 0 {
-              let wait_start = get_monotonic_time();
-              while get_monotonic_time() - wait_start < 500_000_i64 {
-                // 500ms deadline
-                if vulkan_device.is_task_completed(last_render_task).unwrap_or(true) {
-                  break;
-                }
-                core::hint::spin_loop();
-              }
-            }
-
-            // dust: forget every cluster, emission restarts with the simulation
-            scene_write.scene.query1_mut(|_, comp: &mut ParticleSystemComponent| {
-              comp.dust.get_mut().reset();
-            })
-          },
-        )
-        .unwrap();
-      }
-
-      // 4. Finally, apply the new speed to physically resume/start the time manager
-      time_mgr.set_speed(speed);
-
-      Ok(())
-    }
     LogicCommand::SetEpochRange {
       scene_id,
       start,
@@ -823,19 +757,21 @@ fn process_command_internal(
         }
       }
 
-      // ── Trajectory year-change detection ─────────────────────────────────────────────────
-      // Rebuild Earth orbit trajectory if start_epoch crosses into a new calendar year.
-      // The trajectory covers the full year, so it only needs rebuilding at year boundaries.
-      let new_year = crate::simulation_api::reposition::year_of_epoch(start);
-      let stored_year = scene_guard.earth_orbit_year;
-      if stored_year != Some(new_year) {
+      // ── Earth trajectory coverage ────────────────────────────────────────────────────────
+      // Rebuild the Earth orbit trajectory when the committed range is not inside the span it
+      // covers (at least one orbit from start, extended to end for multi-year ranges).
+      if crate::simulation_api::reposition::needs_earth_orbit_rebuild(
+        scene_guard.earth_orbit_coverage,
+        start,
+        end,
+      ) {
         if let Some(earth) = scene_guard.earth {
           // Only rebuild if Earth is driven by almanac (AlmanacPlanet attached)
           let has_planet =
             scene_guard.scene.with_component(earth.body, |_: &AlmanacPlanet| ()).is_some();
           if has_planet {
             let (traj_start, traj_end) =
-              crate::simulation_api::reposition::full_year_tai_seconds(start);
+              crate::simulation_api::reposition::earth_orbit_span_tai(start, end);
             let workload = Box::new(structs::LogicWorkload {
               cmd: LogicCommand::UpdateTrajectoryForSpk {
                 task_id: 0,
@@ -850,7 +786,7 @@ fn process_command_internal(
             });
             let _ = ctx.thread_pool.scatter(alloc::vec![workload]);
             drop(scene_guard);
-            scene_arc.write().earth_orbit_year = Some(new_year);
+            scene_arc.write().earth_orbit_coverage = Some((traj_start, traj_end));
           }
         }
       }
@@ -862,6 +798,7 @@ fn process_command_internal(
       proposed_start,
       proposed_end,
       keplerian_elements,
+      reference_mode,
     } => {
       let logic_state = ctx.logic_state.read();
       let planet = AlmanacPlanet::new(spk_id);
@@ -913,6 +850,7 @@ fn process_command_internal(
           end_epoch_tai_sec: end_sec,
           sample_step_days: 1.0,
           keplerian_elements,
+          reference_mode,
         },
         ctx: alloc::sync::Arc::clone(ctx),
       });
@@ -955,11 +893,33 @@ fn process_command_internal(
         },
       );
 
-      // Remove all jet entities (children of the comet body)
+      // Remove all jet entities (children of the comet body). A camera parented to the comet
+      // (CometOrbiting mode) is not a jet: move it to root keeping its world transform.
       if let Some(children) = scene_guard.scene.get_children(comet.body) {
         for child in children {
-          scene_guard.scene.remove_entity(child);
+          if scene_guard
+            .scene
+            .with_component(child, |_: &crate::scene::CameraComponent| ())
+            .is_some()
+          {
+            scene_guard.scene.unparent_to_root_preserving_world(child);
+            scene_guard.mark_component_changed(
+              child.as_ffi(),
+              <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+            );
+          } else {
+            scene_guard.scene.remove_entity(child);
+          }
         }
+      }
+      utils::clear_effective_trajectory(&scene_guard);
+      // Stop the SPICE step from moving the comet back to its SPK position on the next tick.
+      for id in [comet.body, comet.subtree] {
+        scenes
+          .cartesian_state_cache
+          .remove(&crate::simulation_api::structs::SceneEntityId::new(
+            scene_id, id,
+          ));
       }
 
       // Reset subtree to 1 AU +X (default "no SPK" placement)
@@ -975,7 +935,11 @@ fn process_command_internal(
       });
 
       drop(scene_guard);
-      scene_arc.write().comet_orbit_year = None;
+      {
+        let mut w = scene_arc.write();
+        w.comet_orbit_year = None;
+        w.comet_reference_elements = None;
+      }
 
       Ok(())
     }
@@ -1237,9 +1201,78 @@ fn process_command_internal(
       Err(EngineError::InvalidOperation("Failed to restore snapshot"))
     }
 
+    LogicCommand::SeekEpoch {
+      scene_id,
+      epoch,
+      done_flag,
+      succeeded,
+    } => {
+      use oshal::os::time::get_monotonic_time;
+      let scenes = ctx.scenes.read();
+      let Some((reached, start_epoch, now, elapsed, scaled_us)) =
+        scenes.time_managers.get_mut(&scene_id).map(|mut tm| {
+          let reached = tm.seek(epoch);
+          let st = tm.state.read();
+          (
+            reached,
+            tm.start_epoch,
+            st.unscaled_time,
+            st.unscaled_delta,
+            st.scaled_time,
+          )
+        })
+      else {
+        succeeded.store(false, core::sync::atomic::Ordering::Relaxed);
+        done_flag.store(true, core::sync::atomic::Ordering::Release);
+        return Err(EngineError::InvalidOperation("SeekEpoch: no scene"));
+      };
+
+      let mut applied = false;
+      let start = get_monotonic_time();
+      while get_monotonic_time() - start <= 1_000_000_i64 {
+        if let Some(_) = utils::self_sync_do_if_done(
+          &scenes,
+          scene_id,
+          ctx.kernels.0.clone(),
+          ctx.kernels.1,
+          &ctx.render_tx,
+          now,
+          elapsed,
+          |vulkan_device, scene_write, _| {
+            let logic_state = ctx.logic_state.read();
+            utils::apply_seek(
+              vulkan_device,
+              scene_write,
+              scene_id,
+              &scenes.cartesian_state_cache,
+              &logic_state.almanac_data,
+              reached,
+              start_epoch,
+              scaled_us,
+            );
+            utils::mark_all_serializable_as_changed(scene_write);
+          },
+        ) {
+          applied = true;
+          break;
+        }
+      }
+
+      succeeded.store(applied, core::sync::atomic::Ordering::Relaxed);
+      done_flag.store(true, core::sync::atomic::Ordering::Release);
+      if applied {
+        Ok(())
+      } else {
+        Err(EngineError::InvalidOperation(
+          "SeekEpoch: GPU sync timed out, seek not applied",
+        ))
+      }
+    }
+
     LogicCommand::ResetSimulation {
       scene_id,
       done_flag,
+      succeeded,
     } => {
       use oshal::os::time::get_monotonic_time;
       let scenes = ctx.scenes.read();
@@ -1259,6 +1292,7 @@ fn process_command_internal(
         )
       };
 
+      let mut reset_applied = false;
       let start = get_monotonic_time();
       while get_monotonic_time() - start <= 1_000_000_i64 {
         if let Some(_) = utils::self_sync_do_if_done(
@@ -1289,6 +1323,9 @@ fn process_command_internal(
                 comp.dust.get_mut().reset();
               },
             );
+
+            // 3b. the recorded comet path belongs to the previous run
+            utils::clear_effective_trajectory(scene_write);
 
             // 4. Evict cached SPICE state so interpolation restarts clean
             let mut keys = alloc::vec::Vec::with_capacity(128);
@@ -1334,12 +1371,20 @@ fn process_command_internal(
             utils::mark_all_serializable_as_changed(scene_write);
           },
         ) {
+          reset_applied = true;
           break;
         }
       }
 
+      succeeded.store(reset_applied, core::sync::atomic::Ordering::Relaxed);
       done_flag.store(true, core::sync::atomic::Ordering::Release);
-      Ok(())
+      if reset_applied {
+        Ok(())
+      } else {
+        Err(EngineError::InvalidOperation(
+          "ResetSimulation: GPU sync timed out, reset not applied",
+        ))
+      }
     }
 
     // ─── DumpScene ──────────────────────────────────────────────────────────
@@ -1384,11 +1429,27 @@ fn process_command_internal(
               ((start.0, start.1), (end.0, end.1))
             };
 
+            let (current_epoch_parts, compatibility) = {
+              let tm =
+                scenes.time_managers.get(&scene_id).ok_or(EngineError::InvalidNullArgument)?;
+              let now = tm.current_epoch().to_tdb_duration().to_parts();
+              (
+                (now.0, now.1),
+                crate::simulation_api::scene_dump::compatibility_json(
+                  scene_write,
+                  tm.start_epoch,
+                  tm.end_epoch,
+                ),
+              )
+            };
+
             let dump = SceneDump {
               version: SceneDump::CURRENT_VERSION,
               scene_id,
               start_epoch_parts,
               end_epoch_parts,
+              current_epoch_parts,
+              compatibility,
               entities,
               particle_snapshot,
             };
@@ -1458,6 +1519,30 @@ fn process_command_internal(
               }
             }
 
+            // 2. Compatibility: only a scene configured exactly like the dumped one (same range,
+            //    comet, reference orbit, nucleus, jets) can take its state
+            {
+              use crate::simulation_api::structs::SceneDump;
+              if dump.version != SceneDump::CURRENT_VERSION {
+                return Err(EngineError::InvalidOperation(
+                  "RestoreSceneDump: unsupported dump version",
+                ));
+              }
+              let tm =
+                scenes.time_managers.get(&scene_id).ok_or(EngineError::InvalidNullArgument)?;
+              let live = crate::simulation_api::scene_dump::compatibility_json(
+                scene_write,
+                tm.start_epoch,
+                tm.end_epoch,
+              );
+              if live != dump.compatibility {
+                emit_breadcrumb(2, "Saved state does not match the current configuration");
+                return Err(EngineError::InvalidOperation(
+                  "RestoreSceneDump: incompatible configuration",
+                ));
+              }
+            }
+
             // 3. Overwrite ECS + resolve mesh cache (overwrite-merge by asset_path)
             let scene_mut = alloc::sync::Arc::make_mut(&mut scene_write.scene);
             let deser_result = crate::simulation_api::scene_dump::deserialize_scene(
@@ -1472,18 +1557,9 @@ fn process_command_internal(
               &deser_result.new_sun_entity_ids,
             );
 
-            // 5. Reset epoch range in the time_manager
-            if let Some(mut tm) = scenes.time_managers.get_mut(&scene_id) {
-              let start_ep = hifitime::Epoch::from_tdb_duration(hifitime::Duration::from_parts(
-                dump.start_epoch_parts.0,
-                dump.start_epoch_parts.1,
-              ));
-              let end_ep = hifitime::Epoch::from_tdb_duration(hifitime::Duration::from_parts(
-                dump.end_epoch_parts.0,
-                dump.end_epoch_parts.1,
-              ));
-              tm.set_epoch_range(start_ep, end_ep);
-            }
+            // 5. (epoch range: identical by the compatibility check above, nothing to set. A
+            //    `time_managers.get_mut` here self-deadlocked: `self_sync_do_if_done` holds a
+            //    read guard on the same shard for the whole closure)
 
             // 6. Empty the cartesian state cache for this scene
             {
@@ -1496,7 +1572,31 @@ fn process_command_internal(
               }
             }
 
-            // 7. Mark all ForeignSerializable components as changed (notifies C# side)
+            // 7. Back to the dumped epoch: bodies and dust rebuilt deterministically (nothing
+            //    GPU-side is stored in the dump)
+            let seek = scenes.time_managers.get(&scene_id).map(|tm| {
+              let target = hifitime::Epoch::from_tdb_duration(hifitime::Duration::from_parts(
+                dump.current_epoch_parts.0,
+                dump.current_epoch_parts.1,
+              ));
+              let reached = tm.seek(target);
+              (reached, tm.start_epoch, tm.state.read().scaled_time)
+            });
+            if let Some((reached, start_epoch, scaled_us)) = seek {
+              let logic_state = ctx.logic_state.read();
+              utils::apply_seek(
+                vulkan_device,
+                scene_write,
+                scene_id,
+                &scenes.cartesian_state_cache,
+                &logic_state.almanac_data,
+                reached,
+                start_epoch,
+                scaled_us,
+              );
+            }
+
+            // 8. Mark all ForeignSerializable components as changed (notifies C# side)
             utils::mark_all_serializable_as_changed(scene_write);
 
             Ok(())
@@ -1727,7 +1827,7 @@ fn process_command_internal(
         .scene
         .with_component_mut(camera_entity, |t: &mut HighResTransformComponent| {
           t.position = (cursor_pos + offset).to_f64();
-          t.rotation = q;
+          t.rotation = aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_quat(q);
         })
         .ok_or(EngineError::InvalidOperation(
           "logic_thread:ResetCamera | camera entity doesn't have HighResTransformComponent",
@@ -1860,7 +1960,10 @@ fn process_command_internal(
           (t.position, t.rotation)
         })
       {
-        (t.0.to_f64(), t.1)
+        (
+          t.0.to_f64(),
+          aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_quat(t.1),
+        )
       } else {
         return Ok(());
       };
@@ -1869,7 +1972,7 @@ fn process_command_internal(
         start_pos,
         start_rot,
         target_pos: target_pos_dvec + offset.to_f64(),
-        target_rot: q,
+        target_rot: aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_quat(q),
         duration: 2.0,
         elapsed: 0.0,
         is_finished: false,
@@ -1966,6 +2069,7 @@ fn process_command_internal(
       end_epoch_tai_sec,
       sample_step_days: _,
       keplerian_elements,
+      reference_mode,
     } => {
       if start_epoch_tai_sec >= end_epoch_tai_sec {
         crate::simulation_api::emit_external_state_change(&ExternalState::CometInitialized(
@@ -1977,6 +2081,77 @@ fn process_command_internal(
       }
 
       let scenes = ctx.scenes.read();
+
+      // Lock order: never acquire `logic_state` while holding a SceneContext lock. The logic
+      // thread holds SceneContext (upgradable) while reading `logic_state`; with a queued
+      // `LoadAlmanac` writer and a queued scene writer that closes a cycle. So: read what we need
+      // from the scene, release it, step the almanac, then lock the scene again for the commit.
+      let planet = AlmanacPlanet::new(spk_id);
+      let start = anise::time::Epoch::from_tai_seconds(start_epoch_tai_sec);
+      let start_state = {
+        let rot_model = scenes.get(&scene_id).and_then(|sc| {
+          let g = sc.read();
+          g.comet
+            .and_then(|c| g.scene.with_component(c.body, |m: &BodyRotationalModel| *m))
+        });
+        let logic_state = ctx.logic_state.read();
+        planet.step_with_velocity(start, &logic_state.almanac_data, rot_model.as_ref())
+      };
+
+      // Horizons SPK segments only interpolate from a few minutes after the requested start day, so
+      // a midnight start epoch fails: osculate at the first covered instant instead.
+      let reosculate =
+        reference_mode == crate::simulation_api::structs::ReferenceOrbitMode::OsculatingAtStart;
+      let (osc_epoch, osc_state) = if reosculate {
+        let logic_state = ctx.logic_state.read();
+        let data = &logic_state.almanac_data;
+        let end = anise::time::Epoch::from_tai_seconds(end_epoch_tai_sec);
+        let osc_epoch = utils::osculation_epoch(start, end, |t| {
+          planet.step_with_velocity(t, data, None).is_ok()
+        })
+        .unwrap_or(start);
+        (
+          osc_epoch,
+          Some(planet.step_with_velocity(osc_epoch, data, None)),
+        )
+      } else {
+        (start, None)
+      };
+      if let Some(Err(e)) = &osc_state {
+        aethervk_oshal_rlib::log!(
+          "[BuildCometTrajectory] re-osculation failed at {osc_epoch}: {e:?}; using SBDB elements"
+        );
+        emit_breadcrumb(
+          2,
+          "Could not re-osculate the reference orbit from the SPK; the red track uses the SBDB elements",
+        );
+      }
+
+      // Reference orbit: SBDB elements are osculating at their own epoch (67P: 2015-10-10, 0.12 AU
+      // off the 2025 path); re-osculating from the SPK state at the start epoch is exact there.
+      let keplerian_elements = match &osc_state {
+        Some(Ok((r, v, _))) => {
+          use aethervk_oshal_rlib::math::vector::Vector3;
+          let jd = osc_epoch.to_jde_tdb_days();
+          let el = crate::simulation::orbit_elements::elements_from_state(
+            [r.x(), r.y(), r.z()],
+            [v.x(), v.y(), v.z()],
+            crate::simulation::orbit_elements::MU_SUN_KM3_S2,
+            jd,
+          );
+          aethervk_oshal_rlib::log!(
+            "[BuildCometTrajectory] re-osculated at {}: e={:.6} q={:.6} AU (SBDB e={:.6} q={:.6})",
+            osc_epoch,
+            el.eccentricity,
+            el.perihelion_distance_au,
+            keplerian_elements.eccentricity,
+            keplerian_elements.perihelion_distance_au
+          );
+          el
+        }
+        _ => keplerian_elements,
+      };
+
       aethervk_oshal_rlib::log!(
         "[BuildCometTrajectory] Starting Keplerian track for SPK {} | e={:.4} q={:.4} AU",
         spk_id,
@@ -1991,102 +2166,11 @@ fn process_command_internal(
         "BuildCometTrajectory: comet SubtreeEntities not populated",
       ))?;
 
-      // ── Analytical Keplerian orbit track ──────────────────────────────────
-      // Generate orbit vertices from Keplerian elements (SBDB Ecliptic frame),
-      // then rotate to Heliocentric Equatorial (ICRF) via Earth's obliquity.
-      //
-      // Reference: 5 elements needed — e, q, i, om, w (all angles in radians here)
-      // P vector: Sun → perihelion direction
-      // Q vector: 90° ahead of P in the orbital plane
-
-      use core::f64::consts::PI;
-      const DEG_TO_RAD: f64 = PI / 180.0;
-      // Earth's obliquity (J2000) — rotates Ecliptic → Equatorial (ICRF)
-      const OBLIQUITY_RAD: f64 = 23.43928_f64 * DEG_TO_RAD;
+      // ── Analytical Keplerian orbit track (SBDB elements, ecliptic J2000 = scene frame) ──
 
       let e = keplerian_elements.eccentricity;
-      let q = keplerian_elements.perihelion_distance_au;
-      let i = keplerian_elements.inclination_deg * DEG_TO_RAD;
-      let om = keplerian_elements.longitude_of_ascending_node_deg * DEG_TO_RAD;
-      let w = keplerian_elements.argument_of_perihelion_deg * DEG_TO_RAD;
-
-      // Perifocal basis vectors (Ecliptic frame)
-      let px = om.cos() * w.cos() - om.sin() * i.cos() * w.sin();
-      let py = om.sin() * w.cos() + om.cos() * i.cos() * w.sin();
-      let pz = i.sin() * w.sin();
-      let qx = -om.cos() * w.sin() - om.sin() * i.cos() * w.cos();
-      let qy = -om.sin() * w.sin() + om.cos() * i.cos() * w.cos();
-      let qz = i.sin() * w.cos();
-
-      // Rotate a perifocal (x_prime, y_prime) point to ICRF by applying obliquity
-      let perifocal_to_icrf = |x_prime: f64, y_prime: f64| -> [f32; 3] {
-        let x_ecl = px * x_prime + qx * y_prime;
-        let y_ecl = py * x_prime + qy * y_prime;
-        let z_ecl = pz * x_prime + qz * y_prime;
-        // Rotate ecliptic → equatorial (ICRF)
-        let x_eq = x_ecl;
-        let y_eq = y_ecl * OBLIQUITY_RAD.cos() - z_ecl * OBLIQUITY_RAD.sin();
-        let z_eq = y_ecl * OBLIQUITY_RAD.sin() + z_ecl * OBLIQUITY_RAD.cos();
-        [x_eq as f32, y_eq as f32, z_eq as f32]
-      };
-
-      // Number of segments for the track
-      const N_SEGMENTS: usize = 128;
-
-      // Build a list of (x_prime, y_prime) in the perifocal plane
-      let mut perifocal_pts = alloc::vec::Vec::<(f64, f64)>::with_capacity(N_SEGMENTS + 1);
-
-      if e < 1.0 {
-        // Ellipse — sweep Eccentric Anomaly E from 0 to 2π
-        let a = q / (1.0 - e); // semi-major axis (AU)
-        let b_sq = a * a * (1.0 - e * e);
-        let b = b_sq.sqrt();
-        for k in 0..=N_SEGMENTS {
-          let eccentric_anomaly = 2.0 * PI * (k as f64) / (N_SEGMENTS as f64);
-          let x = a * (eccentric_anomaly.cos() - e);
-          let y = b * eccentric_anomaly.sin();
-          perifocal_pts.push((x, y));
-        }
-      } else {
-        // Hyperbola (or parabola) — sweep True Anomaly ν up to a safe limit
-        // Limit: cos(ν_max) = -1/e, i.e. the asymptote. Stay 5° clear of it.
-        let nu_asymptote = (1.0_f64 / e).acos();
-        let nu_max = nu_asymptote - 5.0 * DEG_TO_RAD;
-        for k in 0..=N_SEGMENTS {
-          let nu = -nu_max + 2.0 * nu_max * (k as f64) / (N_SEGMENTS as f64);
-          let r = (q * (1.0 + e)) / (1.0 + e * nu.cos());
-          let x = r * nu.cos();
-          let y = r * nu.sin();
-          perifocal_pts.push((x, y));
-        }
-      }
-
-      // Convert perifocal points to Bezier cubic control points in ICRF (AU, f32)
-      // We use a simple linear→cubic approach: P0=point, P3=next point,
-      // P1 and P2 are the midpoints (degenerate cubic = linear segment — fine for
-      // angle-stepped orbit data which is already smooth).
-      let mut control_points = alloc::vec::Vec::<[f32; 4]>::with_capacity(N_SEGMENTS * 4);
-      for k in 0..N_SEGMENTS {
-        let (x0, y0) = perifocal_pts[k];
-        let (x1, y1) = perifocal_pts[k + 1];
-        let p0 = perifocal_to_icrf(x0, y0);
-        let p3 = perifocal_to_icrf(x1, y1);
-        // Approximate cubic handle positions as 1/3 and 2/3 interpolations
-        let p1 = [
-          p0[0] + (p3[0] - p0[0]) / 3.0,
-          p0[1] + (p3[1] - p0[1]) / 3.0,
-          p0[2] + (p3[2] - p0[2]) / 3.0,
-        ];
-        let p2 = [
-          p0[0] + 2.0 * (p3[0] - p0[0]) / 3.0,
-          p0[1] + 2.0 * (p3[1] - p0[1]) / 3.0,
-          p0[2] + 2.0 * (p3[2] - p0[2]) / 3.0,
-        ];
-        control_points.push([p0[0], p0[1], p0[2], 1.0]);
-        control_points.push([p1[0], p1[1], p1[2], 1.0]);
-        control_points.push([p2[0], p2[1], p2[2], 1.0]);
-        control_points.push([p3[0], p3[1], p3[2], 1.0]);
-      }
+      const N_SEGMENTS: usize = utils::KEPLER_TRACK_SEGMENTS;
+      let control_points = utils::keplerian_track_bezier_au_f64(&keplerian_elements);
 
       aethervk_oshal_rlib::log!(
         "[BuildCometTrajectory] Keplerian track: {} control points ({} segments, e={:.4})",
@@ -2108,7 +2192,7 @@ fn process_command_internal(
         ));
       }
 
-      let new_comp = crate::scene::trajectory::TrajectoryComponent::new(
+      let new_comp = crate::scene::trajectory::TrajectoryComponent::from_f64(
         control_points,
         [1.0, 0.2, 0.2, 1.0], // Red color for comet
         2.0,
@@ -2117,8 +2201,9 @@ fn process_command_internal(
       );
 
       // We have successfully computed trajectory, now commit everything to ECS!
-      let planet = AlmanacPlanet::new(spk_id);
       let _ = scene_guard.scene.add_component(comet.body, planet);
+      // a new comet: the path recorded for the previous one is meaningless
+      utils::clear_effective_trajectory(&scene_guard);
 
       // Make comet body visible again
       let _ = scene_guard.scene.with_component_mut(
@@ -2152,17 +2237,19 @@ fn process_command_internal(
         spk_id
       );
 
-      // Force reposition using SPK data (body position only, not track)
-      let logic_state = ctx.logic_state.read();
-      let start = anise::time::Epoch::from_tai_seconds(start_epoch_tai_sec);
-      let _ = crate::simulation_api::reposition::force_reposition(
-        &scene_guard.scene,
-        comet.subtree,
-        comet.body,
-        &logic_state.almanac_data,
-        &planet,
-        start,
-      );
+      // Force reposition using SPK data (body position only, not track), stepped above
+      match start_state {
+        Ok((position_km, _velocity, rotation)) => {
+          crate::simulation_api::reposition::apply_reposition(
+            &scene_guard.scene,
+            comet.subtree,
+            comet.body,
+            position_km,
+            rotation,
+          )
+        }
+        Err(ref e) => aethervk_oshal_rlib::log!("[BuildCometTrajectory] SPK step failed: {e}"),
+      }
 
       // Emit the post-commit comet position to C# immediately.
       if let Some(global_t) = scene_guard.scene.global_transform_f64(comet.body) {
@@ -2191,7 +2278,8 @@ fn process_command_internal(
         );
       }
 
-      drop(logic_state);
+      drop(scene_guard);
+      scene_ctx.write().comet_reference_elements = Some(keplerian_elements);
 
       aethervk_oshal_rlib::log!(
         "[BuildCometTrajectory] Emitting CometInitialized(true) for SPK {}",
@@ -2228,7 +2316,6 @@ fn process_command_internal(
       let scenes = ctx.scenes.read();
       let scene_ctx =
         scenes.get(&scene_id).ok_or(EngineError::InvalidOperation("scene not found"))?;
-      let scene_guard = scene_ctx.read();
       // TODO check why we are using internal id in the command here.
       let entity = EntityId::from(slotmap::KeyData::from_ffi(entity_id));
 
@@ -2238,11 +2325,7 @@ fn process_command_internal(
       // This structural invariant is enforced at construction time in create_subtree;
       // no runtime parent check is needed here.
 
-      struct SampledPoints {
-        pub position_km: DVec3,
-        pub velocity_km: DVec3,
-        pub time_sec: f64,
-      }
+      use utils::SampledPoint as SampledPoints;
       let mut samples = alloc::vec::Vec::<SampledPoints>::with_capacity(256);
       let mut t = start_epoch_tai_sec;
 
@@ -2289,33 +2372,14 @@ fn process_command_internal(
         ));
       }
 
-      let mut control_points = alloc::vec::Vec::<[f32; 4]>::with_capacity(256);
-
-      for i in 0..(samples.len() - 1) {
-        const KM_TO_AU: f64 = 6.6845871226706e-9_f64;
-        let s0 = &samples[i];
-        let s1 = &samples[i + 1];
-
-        let p0 = s0.position_km;
-        let v0 = s0.velocity_km;
-        let p1 = s1.position_km;
-        let v1 = s1.velocity_km;
-
-        let actual_dt = s1.time_sec - s0.time_sec;
-
-        let cp0 = (p0 * KM_TO_AU).to_f32();
-        let cp1 = ((p0 + v0 * (actual_dt / 3.0)) * KM_TO_AU).to_f32();
-        let cp2 = ((p1 - v1 * (actual_dt / 3.0)) * KM_TO_AU).to_f32();
-        let cp3 = (p1 * KM_TO_AU).to_f32();
-
-        control_points.push([cp0.x(), cp0.y(), cp0.z(), 1.0]);
-        control_points.push([cp1.x(), cp1.y(), cp1.z(), 1.0]);
-        control_points.push([cp2.x(), cp2.y(), cp2.z(), 1.0]);
-        control_points.push([cp3.x(), cp3.y(), cp3.z(), 1.0]);
-      }
+      // almanac no longer needed: release it before locking the scene (lock order, see
+      // BuildCometTrajectory)
+      drop(logic_state);
+      let control_points = crate::scene::trajectory::bezier_from_samples_au_f64(&samples);
+      let scene_guard = scene_ctx.read();
 
       // Apply the component to the entity
-      let new_comp = crate::scene::trajectory::TrajectoryComponent::new(
+      let new_comp = crate::scene::trajectory::TrajectoryComponent::from_f64(
         control_points,
         [0.3, 0.6, 1.0, 1.0], // Default color, maybe should be parameter
         2.0,
@@ -2680,8 +2744,13 @@ impl<'a> Drop for ScopedComputeCommand<'a> {
 /// Should return
 /// - next timeline semaphore value so that we can update our `latest_physics_sync`
 /// - whether or not we reached end epoch, and therefore simulation is finished
+///
+/// `vulkan_device` is `Some` only when the previous compute submission completed (`physics_done`).
+/// The SPICE step and the commit of the cartesian cache into the scene never depend on the GPU:
+/// with `None` (or a failing command buffer) only the dust emission of this tick is skipped, so the
+/// comet keeps following its SPK kernel even while the compute queue is stalled.
 fn execute_simulation_tick_fixed_update_phase(
-  vulkan_device: &crate::gpu_backends::vulkan::device::Device,
+  vulkan_device: Option<&crate::gpu_backends::vulkan::device::Device>,
   scene_id: u64,
   mut scene: parking_lot::lock_api::RwLockUpgradableReadGuard<parking_lot::RawRwLock, SceneContext>,
   time_mgr: &mut oshal::os::time::v2::TimeManager,
@@ -2694,24 +2763,15 @@ fn execute_simulation_tick_fixed_update_phase(
 ) -> EngineResult<SimulationTickOutput> {
   static CAPTURE_COMPUTE_ONCE: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(true);
-  let mut capture_this_tick =
-    CAPTURE_COMPUTE_ONCE.swap(false, core::sync::atomic::Ordering::Relaxed);
-  use crate::{gpu_backends::vulkan::device::QueueRole, simulation_api::structs::SceneEntityId};
+  use crate::simulation_api::structs::SceneEntityId;
   use oshal::os::time::v2::SimSpeed;
   let scaled_fixed_dt_us =
     time_mgr.state.read().speed.scaled_from_unscaled(unscaled_fixed_delta_us);
 
   // ------------------------------------------------------------------------------------
-  // -- Fixed Update Phase (Step 1: Command buffer creation and CPU side resolution) --
-  // consume accumulated time for physics: SPICE spk_ezr Kernel with current epoch and velocity
-  // verlet with `scaled_fixed_dt`
-  // compute whether or not we reached end_epoch. and report it. if end epoch reached, skip fixed
-  // update phase and go to update
+  // -- Fixed Update Phase: consume accumulated time, SPICE spk_ezr step at the current epoch,
+  // dust emission on the compute queue (GPU permitting), commit of the cartesian cache --
   // ------------------------------------------------------------------------------------
-  let (cmd_handle, cmd) = vulkan_device.get_command_buffer_and_native_all(QueueRole::Compute)?;
-  let mut cmd_scope = ScopedComputeCommand::new(vulkan_device, cmd_handle, cmd)?;
-
-  // -- Fixed Update Phase (Step 2: Command buffer record and GPU compute queue submit) --
   let (sim_speed, now_unscaled_us, now_scaled_us) = {
     let time_state = time_mgr.state.read();
     (
@@ -2725,77 +2785,9 @@ fn execute_simulation_tick_fixed_update_phase(
     let current_epoch = time_mgr.current_epoch();
 
     // ------------------------------------------------------------------------------------
-    // SPICE EZR Kernel: Extract all cartesian states which are not in the cache and insert them
-    // there. If present, then use cached value.
+    // SPICE EZR Kernel: insert every almanac-driven body missing from the cache
     // ------------------------------------------------------------------------------------
-    let insert_into_cache = |e_id: EntityId,
-                             t: TransformComponent,
-                             iau_rot: Option<BodyRotationalModel>,
-                             ap: AlmanacPlanet| {
-      let key = SceneEntityId::new(scene_id, e_id);
-      if !cartesian_state_cache.contains_key(&key) {
-        let frame_id = scene.scene.get_parent(e_id).unwrap();
-        let frame_transform =
-          scene.scene.with_component(frame_id, |t: &TransformComponent| *t).unwrap();
-        debug_assert_eq!(frame_transform.rotation, Quat::identity());
-        debug_assert_eq!(frame_transform.scale, Vec3f32::one());
-        let frame_key = SceneEntityId::new(scene_id, frame_id);
-        assert!(
-          scene.scene.with_component(frame_id, |_: &ReferenceFrameComponent| ()).is_some(),
-          "Scene integrity violation: Comet/Planet entity should have as direct parent a reference frame component"
-        );
-        assert!(
-          scene.scene.get_parent(frame_id) == Some(scene.root_entity),
-          "Scene integrity violation: Frame entity of type micro should be child of root"
-        );
-        cartesian_state_cache.insert(
-          key,
-          CartesianState::new_comet(t, ap, iau_rot, frame_id, frame_transform),
-        );
-        cartesian_state_cache.insert(
-          frame_key,
-          CartesianState::new_frame(frame_id, frame_transform),
-        );
-      }
-    };
-
-    #[cfg(debug_assertions)]
-    fn debug_log_query4_match(e_id: EntityId) {
-      use core::sync::atomic::{AtomicI64, Ordering};
-      static LAST_LOG: AtomicI64 = AtomicI64::new(0);
-      let now = aethervk_oshal_rlib::os::time::get_monotonic_time() as i64;
-      let last = LAST_LOG.load(Ordering::Relaxed);
-      if now - last >= 2_000_000 {
-        if LAST_LOG
-          .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
-          .is_ok()
-        {
-          oshal::log!("query4 matched comet entity: {:?}", e_id);
-        }
-      }
-    }
-    #[cfg(not(debug_assertions))]
-    #[inline(always)]
-    fn debug_log_query4_match(_: EntityId) {}
-
-    // insert into cache if absent all active comets
-    scene.scene.query4(
-      |e_id,
-       t: &TransformComponent,
-       _m: &CometMarkerComponent,
-       ap: &AlmanacPlanet,
-       iau_rot: &BodyRotationalModel| {
-        debug_log_query4_match(e_id);
-        insert_into_cache(e_id, *t, Some(*iau_rot), *ap)
-      },
-    );
-
-    // insert into cache if absent all active planets (earth)
-    scene.scene.query3(
-      |e_id, t: &TransformComponent, _m: &PlanetMarkerComponent, ap: &AlmanacPlanet| {
-        insert_into_cache(e_id, *t, None, *ap)
-      },
-    );
+    utils::insert_almanac_bodies_into_cache(&scene, scene_id, cartesian_state_cache);
 
     // ------------------------------------------------------------------------------------
     // Fixed Update Loop
@@ -2828,119 +2820,26 @@ fn execute_simulation_tick_fixed_update_phase(
     // SPICE EZR Kernel for Comet Cartesian state update.
     // Note: Outside of the fixed update accumulator, still inside physics update.
     // ------------------------------------------------------------------------------------
-    // accumulate frame updates into a vec separately from the dashmap cause iter_mut locks shards
-    // Note: rotation and scale stay fixed at identity, therefore we track only positions relative
-    // to root
-    let mut frame_updates = alloc::vec::Vec::<(EntityId, Vec3f32)>::with_capacity(32);
-    cartesian_state_cache.iter_mut().for_each(
-      |mut state: dashmap::mapref::multiple::RefMutMulti<'_, SceneEntityId, CartesianState>| {
-        // skip frame updates
-        const AU_TO_KM: f64 = 149_597_870.7_f64;
-        let micro_frame_pos_km = state.parent_frame_transform.position.to_f64() * AU_TO_KM;
-        let parent_id = state.parent_frame;
-        if let Some(ref mut body_state) = state.comet_state {
-          match body_state.almanac_planet.step_with_velocity(
-            current_epoch,
-            almanac,
-            body_state.body_rotational_model.as_ref(),
-          ) {
-            Ok((global_dpos, global_vel_kms, global_rot)) => {
-              body_state.helio_state_km = Some((global_dpos, global_vel_kms));
-              // - take microframe position and comet new position. we are assuming micro is child of
-              //   root here, ensured in assert in cache insertion, compute distance body to frame in
-              //   world space
-              const KM_TO_AU: f64 = 6.6845871226706e-9_f64;
-              const THRESHOLD_KM: f64 = 0.1 * AU_TO_KM;
-              let diff_km = global_dpos - micro_frame_pos_km;
-              let distance_km = diff_km.length();
-
-              if distance_km > THRESHOLD_KM {
-                // --- FRAME SHIFT ---
-                // The comet drifted too far. Move the Micro Frame to the Comet's exact AU location
-                // works because, due to assertion, we know that micro frame is child of root
-                // Note: position of the micro frame is in AU
-                let (subtree_pos_f32, residual_f32) =
-                  crate::simulation_api::reposition::compute_macro_and_residual(global_dpos);
-                frame_updates.push((parent_id, subtree_pos_f32));
-                // now update the comet so that its rotation relative to its parent, which in this
-                // case is equal to relative to root, is updated. Position relative to frame is the
-                // exact km residual after f32 truncation to prevent jumping!
-                body_state.transform.position = residual_f32;
-              } else {
-                // --- NORMAL DRIFT ---
-                // The frame stays still, just update the Comet's local offset
-                body_state.transform.position = diff_km.to_f32();
-              }
-
-              body_state.transform.rotation = global_rot;
-              debug_assert_eq!(body_state.transform.scale, Vec3f32::one());
-            }
-            Err(e) => {
-              oshal::log!("Error while SPICE update: {e}");
-              emit_breadcrumb(3, &e.to_string());
-            }
-          }
-        }
-      },
-    );
-    // drain all frame updates into the cache
-    for (frame_id, position) in &frame_updates {
-      if let Some(mut state) =
-        cartesian_state_cache.get_mut(&SceneEntityId::new(scene_id, *frame_id))
-      {
-        state.parent_frame_transform.position = *position;
-      }
-    }
+    utils::step_cartesian_cache(cartesian_state_cache, scene_id, current_epoch, almanac);
+    utils::record_effective_trajectory(&scene, scene_id, cartesian_state_cache, current_epoch);
 
     // ------------------------------------------------------------------------------------
-    // Dust v3: emission. Truth source for the jet = almanac comet state (this tick, f64) + the
-    // jet offset rotated by the body rotation, the same one used at every emission and by the
-    // per-frame evaluation, so clusters and comet stay consistent to df64 precision.
+    // Dust v3: emission (GPU only). Its failure must not prevent the commit below.
     // ------------------------------------------------------------------------------------
-    let dust_systems = utils::record_dust_emissions(
-      vulkan_device,
-      cmd,
-      &scene.scene,
-      scene_id,
-      cartesian_state_cache,
-      now_unscaled_us,
-      now_scaled_us,
-    );
-
-    // ------------------------------------------------------------------------------------
-    // Particle System Vulkan Command Buffer Submission
-    // ------------------------------------------------------------------------------------
-    #[cfg(debug_assertions)]
-    if capture_this_tick {
-      unsafe {
-        crate::gpu_backends::vulkan::renderdoc::start_frame_capture(
-          core::ptr::null_mut(),
-          core::ptr::null_mut(),
-        );
-        aethervk_oshal_rlib::log!("[RenderDoc] Triggered manual compute queue capture");
-      }
-    }
-
-    let (compute_semaphore, compute_signal_value) = cmd_scope.submit()?;
-    // batches recorded above become drawable once the render submit waits on this value
-    for ps_id in &dust_systems {
-      let _ = scene.scene.with_component(
-        *ps_id,
-        |ps: &crate::scene::particles::ParticleSystemComponent| {
-          ps.dust.lock().ring.mark_submitted(compute_signal_value);
-        },
-      );
-    }
-
-    #[cfg(debug_assertions)]
-    if capture_this_tick {
-      unsafe {
-        crate::gpu_backends::vulkan::renderdoc::end_frame_capture(
-          core::ptr::null_mut(),
-          core::ptr::null_mut(),
-        );
-      }
-    }
+    let gpu_sync: EngineResult<Option<PhysicsDeviceSelfSync>> = match vulkan_device {
+      Some(device) => utils::emit_and_submit_dust(
+        device,
+        &scene.scene,
+        scene_id,
+        cartesian_state_cache,
+        almanac,
+        time_mgr.start_epoch,
+        now_scaled_us,
+        CAPTURE_COMPUTE_ONCE.swap(false, core::sync::atomic::Ordering::Relaxed),
+      )
+      .map(Some),
+      None => Ok(None),
+    };
 
     // ------------------------------------------------------------------------------------
     // SPICE EZR Kernel: Commit Comet Cartesian state update from dashmap to scene
@@ -2950,7 +2849,11 @@ fn execute_simulation_tick_fixed_update_phase(
       let mut scene_write = parking_lot::RwLockUpgradableReadGuard::upgrade(scene);
 
       let mut start_time_unscaled_us = get_monotonic_time();
-      for (idx, kv_ref) in cartesian_state_cache.iter().enumerate() {
+      for (idx, kv_ref) in cartesian_state_cache
+        .iter()
+        .filter(|kv| kv.key().scene_id == scene_id)
+        .enumerate()
+      {
         let key = kv_ref.key();
         let state = kv_ref.value();
         let entity_id = EntityId::from_ffi(key.entity_id);
@@ -2974,9 +2877,6 @@ fn execute_simulation_tick_fixed_update_phase(
             .as_ref()
             .map_or(true, |m| m.body_fixed_orientation)
           {
-            let delta_rot = new_rot * old_rot.conjugate();
-            let inv_delta_rot = delta_rot.conjugate();
-
             let mut cameras = alloc::vec::Vec::new();
             scene_write.scene.query1(|cam_id, _: &crate::scene::CameraComponent| {
               let mut is_desc = false;
@@ -2997,15 +2897,7 @@ fn execute_simulation_tick_fixed_update_phase(
               scene_write.scene.with_component_mut(
                 cam_id,
                 |h: &mut crate::scene::HighResTransformComponent| {
-                  let old_pos_f32 =
-                    aethervk_oshal_rlib::math::vector::vec3::Vec3f32::from_components(
-                      h.position.x() as f32,
-                      h.position.y() as f32,
-                      h.position.z() as f32,
-                    );
-                  let new_pos = inv_delta_rot.rotate_vector(old_pos_f32).to_f64();
-                  h.rotation = inv_delta_rot * h.rotation;
-                  h.position = new_pos;
+                  utils::compensate_body_spin(h, old_rot, new_rot)
                 },
               );
             }
@@ -3043,16 +2935,14 @@ fn execute_simulation_tick_fixed_update_phase(
       // - or swap for &mut DashMap and use mem::replace
     }
 
-    Some((
-      PhysicsDeviceSelfSync::new(compute_semaphore, compute_signal_value),
-      steps_executed,
-    ))
+    // the transforms are committed: now surface a GPU failure of this tick, if any
+    Some((gpu_sync?, steps_executed))
   } else {
     None
   };
 
   Ok(SimulationTickOutput {
-    latest_physics_sync: latest_physics_sync.as_ref().map(|(s, _)| s.clone()),
+    latest_physics_sync: latest_physics_sync.as_ref().and_then(|(s, _)| s.clone()),
     did_physics_work: latest_physics_sync.map(|(_, steps)| steps > 0).unwrap_or(false),
   })
 }
@@ -3139,10 +3029,16 @@ fn execute_simulation_tick_update_phase(
       let _ = scene.scene.set_global_transform_f64(id, new_pos_dvec, new_rot);
       utils::mark_component_changed::<HighResTransformComponent>(&scene, id);
     } else if has_standard.into() {
-      let _ = scene.scene.set_global_position_and_rotation(id, new_pos_dvec.to_f32(), new_rot);
+      let _ =
+        scene
+          .scene
+          .set_global_position_and_rotation(id, new_pos_dvec.to_f32(), new_rot.to_quat());
       utils::mark_component_changed::<TransformComponent>(&scene, id);
     }
   }
+
+  // -- Reference-position error annotations (also while paused) --
+  utils::update_reference_errors(&scene, time_mgr.current_epoch());
 }
 
 /// 3/3 Step of a simulation tick: Clear all entities marked as changed
@@ -3262,6 +3158,11 @@ fn execute_simulation_tick_clear_changed_entities_phase(
 }
 
 /// Utilities for logic thread module
+/// See `utils::update_reference_errors` (exposed for the FFI toggle, which refreshes immediately).
+pub(crate) fn update_reference_errors(scene_ctx: &SceneContext, epoch: anise::time::Epoch) {
+  utils::update_reference_errors(scene_ctx, epoch)
+}
+
 mod utils {
   use super::*;
   use crate::{
@@ -3270,6 +3171,630 @@ mod utils {
     scene::ForeignSerializable,
     simulation_api::structs::{RenderCommand, SimulationSceneData},
   };
+
+  /// Records the dust v3 emissions of this tick on a fresh compute command buffer and submits it.
+  /// Truth source for the jet = almanac comet state of this tick (f64, already stepped in the
+  /// cartesian cache) + the jet offset rotated by the body rotation, the same one used by the
+  /// per-frame evaluation, so clusters and comet stay consistent to df64 precision.
+  pub fn emit_and_submit_dust(
+    vulkan_device: &Device,
+    scene: &crate::scene::Scene,
+    scene_id: u64,
+    cartesian_state_cache: &dashmap::DashMap<
+      crate::simulation_api::structs::SceneEntityId,
+      CartesianState,
+    >,
+    almanac: &AlmanacPackedData,
+    start_epoch: anise::time::Epoch,
+    now_scaled_us: timeus_t,
+    capture_this_tick: bool,
+  ) -> EngineResult<PhysicsDeviceSelfSync> {
+    use crate::gpu_backends::vulkan::device::QueueRole;
+    let (cmd_handle, cmd) = vulkan_device.get_command_buffer_and_native_all(QueueRole::Compute)?;
+    let mut cmd_scope = ScopedComputeCommand::new(vulkan_device, cmd_handle, cmd)?;
+
+    let dust_systems = record_dust_emissions(
+      vulkan_device,
+      cmd,
+      scene,
+      scene_id,
+      cartesian_state_cache,
+      almanac,
+      start_epoch,
+      now_scaled_us,
+    );
+
+    #[cfg(debug_assertions)]
+    if capture_this_tick {
+      unsafe {
+        crate::gpu_backends::vulkan::renderdoc::start_frame_capture(
+          core::ptr::null_mut(),
+          core::ptr::null_mut(),
+        );
+        aethervk_oshal_rlib::log!("[RenderDoc] Triggered manual compute queue capture");
+      }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = capture_this_tick;
+
+    let (compute_semaphore, compute_signal_value) = cmd_scope.submit()?;
+    // batches recorded above become drawable once the render submit waits on this value
+    for ps_id in &dust_systems {
+      let _ = scene.with_component(
+        *ps_id,
+        |ps: &crate::scene::particles::ParticleSystemComponent| {
+          ps.dust.lock().ring.mark_submitted(compute_signal_value);
+        },
+      );
+    }
+
+    #[cfg(debug_assertions)]
+    if capture_this_tick {
+      unsafe {
+        crate::gpu_backends::vulkan::renderdoc::end_frame_capture(
+          core::ptr::null_mut(),
+          core::ptr::null_mut(),
+        );
+      }
+    }
+
+    Ok(PhysicsDeviceSelfSync::new(
+      compute_semaphore,
+      compute_signal_value,
+    ))
+  }
+
+  pub use crate::scene::trajectory::{
+    TrajectorySample as SampledPoint, bezier_from_samples_au as samples_to_bezier_au,
+  };
+
+  /// Appends the comet SPK state of this tick (already stepped in the cartesian cache) to the
+  /// `effective_comet_trajectory` entity and rebuilds its yellow `TrajectoryComponent` when a sample
+  /// was taken (every `EffectiveTrajectoryComponent::SAMPLE_INTERVAL_SEC` of sim time).
+  pub fn record_effective_trajectory(
+    scene_ctx: &SceneContext,
+    scene_id: u64,
+    cartesian_state_cache: &dashmap::DashMap<
+      crate::simulation_api::structs::SceneEntityId,
+      CartesianState,
+    >,
+    epoch: anise::time::Epoch,
+  ) {
+    use crate::scene::trajectory::{EffectiveTrajectoryComponent, TrajectoryComponent};
+    let (Some(entity), Some(comet)) = (scene_ctx.effective_comet_trajectory, scene_ctx.comet)
+    else {
+      return;
+    };
+    let Some((position_km, velocity_km)) = cartesian_state_cache
+      .get(&crate::simulation_api::structs::SceneEntityId::new(
+        scene_id, comet.body,
+      ))
+      .and_then(|c| c.comet_state.as_ref().and_then(|b| b.helio_state_km))
+    else {
+      return;
+    };
+    let sample = SampledPoint {
+      position_km,
+      velocity_km,
+      time_sec: epoch.to_tai_seconds(),
+    };
+
+    let scene = &scene_ctx.scene;
+    // the head moves every tick (the renderer draws last sample -> head), samples are gated
+    let changed = scene
+      .with_component_mut(entity, |c: &mut EffectiveTrajectoryComponent| {
+        c.head = Some(sample);
+        c.push_sample(sample)
+      })
+      .unwrap_or_else(|| {
+        let mut c = EffectiveTrajectoryComponent::default();
+        c.head = Some(sample);
+        c.push_sample(sample);
+        let _ = scene.add_component(entity, c);
+        true
+      });
+    if !changed {
+      return;
+    }
+    // present from the first sample (zero segments of its own; the head segment is appended by
+    // the renderer)
+    let Some(t) = scene.with_component(entity, |c: &EffectiveTrajectoryComponent| c.trajectory())
+    else {
+      return;
+    };
+    if scene
+      .with_component_mut(entity, |c: &mut TrajectoryComponent| *c = t.clone())
+      .is_none()
+    {
+      let _ = scene.add_component(entity, t);
+    }
+  }
+
+  /// Refreshes the "reference-position error" annotations of the committed comet, every loop (also
+  /// while paused): the cross-track line to the closest point of the red reference track and the
+  /// same-epoch line to the reference's two-body position now. Each is shown only while enabled
+  /// and longer than 10 nucleus radii.
+  pub fn update_reference_errors(scene_ctx: &SceneContext, epoch: anise::time::Epoch) {
+    use crate::{
+      scene::{
+        HiddenComponent, SphereGizmoComponent,
+        trajectory::{
+          ScreenMeasurementComponent, TrajectoryComponent, closest_point_on_bezier_track, format_km,
+        },
+      },
+      simulation::orbit_elements::{MU_SUN_KM3_S2, state_from_elements},
+      simulation_api::reposition::{AU_TO_KM, KM_TO_AU},
+    };
+    use aethervk_oshal_rlib::math::vector::{Vector3, vec3f64::DVec3};
+    let Some([cross_e, epoch_e]) = scene_ctx.reference_error_entities else {
+      return;
+    };
+    let scene = &scene_ctx.scene;
+    let set = |e: EntityId, data: Option<(DVec3, DVec3, alloc::string::String)>| match data {
+      Some((from, to, label)) => {
+        let _ = scene.with_component_mut(e, |m: &mut ScreenMeasurementComponent| {
+          m.from_au = from;
+          m.to_au = to;
+          m.label = label;
+        });
+        let _ = scene.remove_component::<HiddenComponent>(e);
+      }
+      None => {
+        if scene.with_component(e, |_: &HiddenComponent| ()).is_none() {
+          let _ = scene.add_component(e, HiddenComponent {});
+        }
+      }
+    };
+
+    let committed = scene_ctx
+      .comet
+      .filter(|c| scene.with_component(c.body, |_: &AlmanacPlanet| ()).is_some());
+    let comet_au = committed.and_then(|c| scene.global_transform_f64(c.body)).map(|g| g.position);
+    let (Some(comet), Some(comet_au), true) = (
+      committed,
+      comet_au,
+      scene_ctx.reference_error_enabled.load(core::sync::atomic::Ordering::Relaxed),
+    ) else {
+      set(cross_e, None);
+      set(epoch_e, None);
+      return;
+    };
+    let radius_km = scene
+      .with_component(comet.body, |s: &SphereGizmoComponent| s.radius as f64 * 0.5)
+      .unwrap_or(0.0);
+    let threshold_km = 10.0 * radius_km;
+    let p = [comet_au.x(), comet_au.y(), comet_au.z()];
+
+    let cross = scene
+      .with_component(comet.orbit, |t: &TrajectoryComponent| {
+        closest_point_on_bezier_track(&t.control_points_f64, p)
+      })
+      .flatten()
+      .and_then(|(q, d_au)| {
+        let km = d_au * AU_TO_KM;
+        (km > threshold_km).then(|| {
+          (
+            comet_au,
+            DVec3::from_components(q[0], q[1], q[2]),
+            alloc::format!("cross-track {}", format_km(km)),
+          )
+        })
+      });
+    set(cross_e, cross);
+
+    let same_epoch = scene_ctx
+      .comet_reference_elements
+      .and_then(|el| state_from_elements(&el, MU_SUN_KM3_S2, epoch.to_jde_tdb_days()))
+      .and_then(|(r, _)| {
+        let ref_au = DVec3::from_components(r[0], r[1], r[2]) * KM_TO_AU;
+        let km = (ref_au - comet_au).length() * AU_TO_KM;
+        (km > threshold_km).then(|| {
+          (
+            comet_au,
+            ref_au,
+            alloc::format!("same-epoch {}", format_km(km)),
+          )
+        })
+      });
+    set(epoch_e, same_epoch);
+  }
+
+  /// Removes the effective trajectory (components only, the container entity stays): simulation
+  /// reset, comet decommit or change.
+  pub fn clear_effective_trajectory(scene_ctx: &SceneContext) {
+    if let Some(entity) = scene_ctx.effective_comet_trajectory {
+      let _ = scene_ctx
+        .scene
+        .remove_component::<crate::scene::trajectory::EffectiveTrajectoryComponent>(entity);
+      let _ = scene_ctx
+        .scene
+        .remove_component::<crate::scene::trajectory::TrajectoryComponent>(entity);
+    }
+  }
+
+  /// Segments of the analytical comet track built by [`keplerian_track_bezier_au`].
+  /// 2048: the Hermite error of a cubic segment grows with (Δanomaly)⁴; with 128 segments the
+  /// drawn 67P track missed the comet by 7.3 km at the osculation epoch (visible at km zoom),
+  /// with 2048 by ~0.1 m.
+  pub const KEPLER_TRACK_SEGMENTS: usize = 2048;
+
+  /// Analytical orbit track from SBDB osculating elements, as cubic Bezier control points in AU
+  /// (4 per segment, `[x, y, z, 1]`) in **SUN_ECLIPJ2000**, the scene frame (the SBDB elements are
+  /// referred to the J2000 ecliptic, so no obliquity rotation: applying one tilted the track by
+  /// 23.44° about +X away from the SPK path).
+  ///
+  /// Ellipse: uniform eccentric anomaly over a full turn. Hyperbola: true anomaly up to 5° short of
+  /// the asymptote. Handles are exact Hermite tangents (`p ± dr/dθ · Δθ/3`), not straight chords,
+  /// so the curve stays on the conic between samples (chord sag reached ~1e-3 AU at 3.5 AU).
+  pub fn keplerian_track_bezier_au(
+    el: &crate::simulation_api::structs::KeplerianElements,
+  ) -> alloc::vec::Vec<[f32; 4]> {
+    keplerian_track_bezier_au_f64(el)
+      .into_iter()
+      .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32, 1.0])
+      .collect()
+  }
+
+  /// Keeps a camera parented below a spinning body at its inertial pose: undoes the body's rotation
+  /// change `old_rot → new_rot` on the camera's local transform. In f64: the f32 body rotations
+  /// upcast exactly, so nothing is rounded (an f32 quaternion costs ~1e-7 rad, ~15 km at 1 AU).
+  pub fn compensate_body_spin(
+    h: &mut crate::scene::HighResTransformComponent,
+    old_rot: aethervk_oshal_rlib::math::vector::vec4::Quat,
+    new_rot: aethervk_oshal_rlib::math::vector::vec4::Quat,
+  ) {
+    use aethervk_oshal_rlib::math::quaternion::Quaternion;
+    // world = parent · body · local must not change: local' = new⁻¹ · old · local. (The former
+    // `(new · old⁻¹)⁻¹ · local` only matches when the two body rotations commute, which f32 ones
+    // about the "same" axis, or a precessing/nutating Earth, do not: ~1e-9 rad per step.)
+    let to_new_local = aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_quat(new_rot)
+      .conjugate()
+      * aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_quat(old_rot);
+    h.position = to_new_local.rotate_vector(h.position);
+    h.rotation = (to_new_local * h.rotation).normalize();
+  }
+
+  /// Epoch at which the reference orbit is re-osculated: the first epoch in `[start, end]` where
+  /// `steps` succeeds, to within a second. Horizons SPK segments only interpolate from a couple of
+  /// minutes after the requested day (even inside the declared domain), so a midnight start epoch
+  /// would otherwise fail and silently fall back to the SBDB elements.
+  pub fn osculation_epoch(
+    start: anise::time::Epoch,
+    end: anise::time::Epoch,
+    steps: impl Fn(anise::time::Epoch) -> bool,
+  ) -> Option<anise::time::Epoch> {
+    use anise::time::Duration;
+    if steps(start) {
+      return Some(start);
+    }
+    // exponential search for a covered epoch, then bisect the [fail, ok] bracket
+    let (mut lo, mut hi) = (start, None);
+    let mut dt = 1.0;
+    while start + Duration::from_seconds(dt) <= end {
+      let t = start + Duration::from_seconds(dt);
+      if steps(t) {
+        hi = Some(t);
+        break;
+      }
+      lo = t;
+      dt *= 2.0;
+    }
+    let mut hi = match hi {
+      Some(h) => h,
+      None if end > lo && steps(end) => end,
+      None => return None,
+    };
+    while (hi - lo).to_seconds() > 1.0 {
+      let mid = lo + (hi - lo) * 0.5;
+      if steps(mid) { hi = mid } else { lo = mid }
+    }
+    Some(hi)
+  }
+
+  /// f64 version of [`keplerian_track_bezier_au`] (the `TrajectoryComponent` source of truth).
+  pub fn keplerian_track_bezier_au_f64(
+    el: &crate::simulation_api::structs::KeplerianElements,
+  ) -> alloc::vec::Vec<[f64; 3]> {
+    use crate::simulation_api::reposition::AU_TO_KM;
+    use aethervk_oshal_rlib::math::vector::vec3f64::DVec3;
+    use core::f64::consts::PI;
+    let e = el.eccentricity;
+    let q = el.perihelion_distance_au;
+    let (i, om, w) = (
+      el.inclination_deg.to_radians(),
+      el.longitude_of_ascending_node_deg.to_radians(),
+      el.argument_of_perihelion_deg.to_radians(),
+    );
+    // perifocal basis in the ecliptic frame (3-1-3: Ω, i, ω)
+    let p_hat = DVec3::from_components(
+      om.cos() * w.cos() - om.sin() * i.cos() * w.sin(),
+      om.sin() * w.cos() + om.cos() * i.cos() * w.sin(),
+      i.sin() * w.sin(),
+    );
+    let q_hat = DVec3::from_components(
+      -om.cos() * w.sin() - om.sin() * i.cos() * w.cos(),
+      -om.sin() * w.sin() + om.cos() * i.cos() * w.cos(),
+      i.sin() * w.cos(),
+    );
+    let to_ecl = |x: f64, y: f64| p_hat * x + q_hat * y;
+
+    // (theta, perifocal position, d position / d theta), in AU
+    let sample = |k: usize| -> (f64, (f64, f64), (f64, f64)) {
+      let t = k as f64 / KEPLER_TRACK_SEGMENTS as f64;
+      if e < 1.0 {
+        let a = q / (1.0 - e);
+        let b = a * (1.0 - e * e).sqrt();
+        let ea = 2.0 * PI * t;
+        (
+          ea,
+          (a * (ea.cos() - e), b * ea.sin()),
+          (-a * ea.sin(), b * ea.cos()),
+        )
+      } else {
+        let nu_max = (1.0 / e).acos() - 5f64.to_radians();
+        let nu = -nu_max + 2.0 * nu_max * t;
+        let p = q * (1.0 + e);
+        let den = 1.0 + e * nu.cos();
+        let r = p / den;
+        let dr = p * e * nu.sin() / (den * den);
+        (
+          nu,
+          (r * nu.cos(), r * nu.sin()),
+          (dr * nu.cos() - r * nu.sin(), dr * nu.sin() + r * nu.cos()),
+        )
+      }
+    };
+    // reuse the Hermite -> Bezier conversion (expects km and km/"s"; theta plays the time role)
+    let samples: alloc::vec::Vec<SampledPoint> = (0..=KEPLER_TRACK_SEGMENTS)
+      .map(sample)
+      .map(|(theta, (x, y), (dx, dy))| SampledPoint {
+        position_km: to_ecl(x, y) * AU_TO_KM,
+        velocity_km: to_ecl(dx, dy) * AU_TO_KM,
+        time_sec: theta,
+      })
+      .collect();
+    crate::scene::trajectory::bezier_from_samples_au_f64(&samples)
+  }
+
+  /// Inserts every almanac-driven body of the scene (comets with a rotational model, planets)
+  /// missing from the cartesian cache, together with its micro frame entry. Used by the fixed
+  /// update and by `SeekEpoch` (which must step the cache while paused).
+  pub fn insert_almanac_bodies_into_cache(
+    scene: &SceneContext,
+    scene_id: u64,
+    cartesian_state_cache: &dashmap::DashMap<
+      crate::simulation_api::structs::SceneEntityId,
+      CartesianState,
+    >,
+  ) {
+    use crate::simulation_api::structs::SceneEntityId;
+    let insert_into_cache = |e_id: EntityId,
+                             t: TransformComponent,
+                             iau_rot: Option<BodyRotationalModel>,
+                             ap: AlmanacPlanet| {
+      let key = SceneEntityId::new(scene_id, e_id);
+      if !cartesian_state_cache.contains_key(&key) {
+        let frame_id = scene.scene.get_parent(e_id).unwrap();
+        let frame_transform =
+          scene.scene.with_component(frame_id, |t: &TransformComponent| *t).unwrap();
+        debug_assert_eq!(frame_transform.rotation, Quat::identity());
+        debug_assert_eq!(frame_transform.scale, Vec3f32::one());
+        let frame_key = SceneEntityId::new(scene_id, frame_id);
+        assert!(
+          scene.scene.with_component(frame_id, |_: &ReferenceFrameComponent| ()).is_some(),
+          "Scene integrity violation: Comet/Planet entity should have as direct parent a reference frame component"
+        );
+        assert!(
+          scene.scene.get_parent(frame_id) == Some(scene.root_entity),
+          "Scene integrity violation: Frame entity of type micro should be child of root"
+        );
+        cartesian_state_cache.insert(
+          key,
+          CartesianState::new_comet(t, ap, iau_rot, frame_id, frame_transform),
+        );
+        cartesian_state_cache.insert(
+          frame_key,
+          CartesianState::new_frame(frame_id, frame_transform),
+        );
+      }
+    };
+
+    #[cfg(debug_assertions)]
+    fn debug_log_query4_match(e_id: EntityId) {
+      use core::sync::atomic::{AtomicI64, Ordering};
+      static LAST_LOG: AtomicI64 = AtomicI64::new(0);
+      let now = aethervk_oshal_rlib::os::time::get_monotonic_time() as i64;
+      let last = LAST_LOG.load(Ordering::Relaxed);
+      if now - last >= 2_000_000 {
+        if LAST_LOG
+          .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+          .is_ok()
+        {
+          oshal::log!("query4 matched comet entity: {:?}", e_id);
+        }
+      }
+    }
+    #[cfg(not(debug_assertions))]
+    #[inline(always)]
+    fn debug_log_query4_match(_: EntityId) {}
+
+    // insert into cache if absent all active comets
+    scene.scene.query4(
+      |e_id,
+       t: &TransformComponent,
+       _m: &CometMarkerComponent,
+       ap: &AlmanacPlanet,
+       iau_rot: &BodyRotationalModel| {
+        debug_log_query4_match(e_id);
+        insert_into_cache(e_id, *t, Some(*iau_rot), *ap)
+      },
+    );
+
+    // insert into cache if absent all active planets (earth)
+    scene.scene.query3(
+      |e_id, t: &TransformComponent, _m: &PlanetMarkerComponent, ap: &AlmanacPlanet| {
+        insert_into_cache(e_id, *t, None, *ap)
+      },
+    );
+  }
+
+  /// Brings the scene to `epoch` (the clock already moved there, `scaled_us` after
+  /// `start_epoch`): fresh cartesian cache stepped and committed, effective trajectory cleared,
+  /// and the last TTL of dust emitted right away from the deterministic grid (a few passes of
+  /// `MAX_WINDOWS_PER_TICK`), so it also works while paused. Runs inside `self_sync_do_if_done`.
+  #[allow(clippy::too_many_arguments)]
+  pub fn apply_seek(
+    vulkan_device: &Device,
+    scene_write: &mut SceneContext,
+    scene_id: u64,
+    cache: &dashmap::DashMap<crate::simulation_api::structs::SceneEntityId, CartesianState>,
+    almanac: &AlmanacPackedData,
+    epoch: anise::time::Epoch,
+    start_epoch: anise::time::Epoch,
+    scaled_us: timeus_t,
+  ) {
+    let keys: alloc::vec::Vec<_> =
+      cache.iter().map(|kv| *kv.key()).filter(|k| k.scene_id == scene_id).collect();
+    for k in keys {
+      cache.remove(&k);
+    }
+    insert_almanac_bodies_into_cache(scene_write, scene_id, cache);
+    step_cartesian_cache(cache, scene_id, epoch, almanac);
+    commit_cartesian_cache(scene_write, scene_id, cache);
+    // the recorded comet path belongs to the previous timeline position
+    clear_effective_trajectory(scene_write);
+    let passes = (crate::scene::dust::WINDOWS_PER_TTL as usize)
+      .div_ceil(crate::scene::dust::MAX_WINDOWS_PER_TICK)
+      + 1;
+    let mut last_sync = None;
+    for _ in 0..passes {
+      match emit_and_submit_dust(
+        vulkan_device,
+        &scene_write.scene,
+        scene_id,
+        cache,
+        almanac,
+        start_epoch,
+        scaled_us,
+        false,
+      ) {
+        Ok(sync) => last_sync = Some(sync),
+        Err(e) => {
+          oshal::log!("[Seek] dust emission failed: {e}");
+          break;
+        }
+      }
+    }
+    if let Some(sync) = last_sync {
+      scene_write.latest_physics_sync = Some(sync);
+      scene_write
+        .active_physics_task
+        .store(true, core::sync::atomic::Ordering::Release);
+    }
+    mark_all_serializable_as_changed(scene_write);
+  }
+
+  /// Writes the cartesian cache of `scene_id` into the scene (body local transforms, frame
+  /// transforms) and marks them changed. The per-tick commit also compensates the spin of cameras
+  /// parented to spinning bodies; a seek jumps, so it does not.
+  pub fn commit_cartesian_cache(
+    scene: &SceneContext,
+    scene_id: u64,
+    cartesian_state_cache: &dashmap::DashMap<
+      crate::simulation_api::structs::SceneEntityId,
+      CartesianState,
+    >,
+  ) {
+    for kv in cartesian_state_cache.iter().filter(|kv| kv.key().scene_id == scene_id) {
+      let id = EntityId::from_ffi(kv.key().entity_id);
+      let t = match kv.value().comet_state {
+        Some(ref body) => body.transform,
+        None => kv.value().parent_frame_transform,
+      };
+      let _ = scene.scene.with_component_mut(id, |c: &mut TransformComponent| *c = t);
+      mark_component_changed::<TransformComponent>(scene, id);
+    }
+  }
+
+  /// SPICE EZR step of every almanac-driven body of `scene_id` in the cartesian cache, to `epoch`.
+  ///
+  /// Writes the body local transform (km residual w.r.t. its micro frame, which is a child of root)
+  /// and `helio_state_km`. When a body drifts more than [`FRAME_SHIFT_THRESHOLD_KM`] from its frame
+  /// origin, the frame is moved onto the body (AU grid) and the shift is propagated both to the
+  /// frame entry and to the `parent_frame_transform` copy of every entry under that frame, so the
+  /// next step measures the drift against the frame's current origin.
+  ///
+  /// [`FRAME_SHIFT_THRESHOLD_KM`]: crate::simulation_api::reposition::FRAME_SHIFT_THRESHOLD_KM
+  pub fn step_cartesian_cache(
+    cartesian_state_cache: &dashmap::DashMap<
+      crate::simulation_api::structs::SceneEntityId,
+      CartesianState,
+    >,
+    scene_id: u64,
+    epoch: anise::time::Epoch,
+    almanac: &AlmanacPackedData,
+  ) {
+    use crate::simulation_api::reposition::{
+      AU_TO_KM, FRAME_SHIFT_THRESHOLD_KM, compute_macro_and_residual,
+    };
+    // accumulate frame updates into a vec separately from the dashmap cause iter_mut locks shards
+    // Note: rotation and scale stay fixed at identity, therefore we track only positions relative
+    // to root
+    let mut frame_updates = alloc::vec::Vec::<(EntityId, Vec3f32)>::with_capacity(4);
+    cartesian_state_cache.iter_mut().for_each(|mut kv| {
+      if kv.key().scene_id != scene_id {
+        return;
+      }
+      let state = kv.value_mut();
+      let micro_frame_pos_km = state.parent_frame_transform.position.to_f64() * AU_TO_KM;
+      let parent_id = state.parent_frame;
+      let Some(ref mut body_state) = state.comet_state else {
+        return;
+      };
+      match body_state.almanac_planet.step_with_velocity(
+        epoch,
+        almanac,
+        body_state.body_rotational_model.as_ref(),
+      ) {
+        Ok((global_dpos, global_vel_kms, global_rot)) => {
+          body_state.helio_state_km = Some((global_dpos, global_vel_kms));
+          // micro frame is child of root (asserted at cache insertion), so the body local offset
+          // is the world space difference body - frame
+          let diff_km = global_dpos - micro_frame_pos_km;
+          if diff_km.length() > FRAME_SHIFT_THRESHOLD_KM {
+            // --- FRAME SHIFT ---: move the frame onto the body AU grid point, keep the exact km
+            // residual after f32 truncation to prevent jumping
+            let (subtree_pos_f32, residual_f32) = compute_macro_and_residual(global_dpos);
+            frame_updates.push((parent_id, subtree_pos_f32));
+            body_state.transform.position = residual_f32;
+          } else {
+            // --- NORMAL DRIFT ---: the frame stays still
+            body_state.transform.position = diff_km.to_f32();
+          }
+          body_state.transform.rotation = global_rot;
+          debug_assert_eq!(body_state.transform.scale, Vec3f32::one());
+        }
+        Err(e) => {
+          oshal::log!("Error while SPICE update: {e}");
+          emit_breadcrumb(3, &e.to_string());
+        }
+      }
+    });
+
+    if frame_updates.is_empty() {
+      return;
+    }
+    // propagate to the frame entry and to every body copy under it
+    cartesian_state_cache.iter_mut().for_each(|mut kv| {
+      if kv.key().scene_id != scene_id {
+        return;
+      }
+      let state = kv.value_mut();
+      if let Some((_, pos)) = frame_updates.iter().find(|(f, _)| *f == state.parent_frame) {
+        state.parent_frame_transform.position = *pos;
+      }
+    });
+  }
 
   /// Dust v3 emission for every particle system of the scene (logic tick, compute queue).
   ///
@@ -3286,7 +3811,8 @@ mod utils {
       crate::simulation_api::structs::SceneEntityId,
       CartesianState,
     >,
-    now_unscaled_us: timeus_t,
+    almanac: &AlmanacPackedData,
+    start_epoch: anise::time::Epoch,
     now_scaled_us: timeus_t,
   ) -> alloc::vec::Vec<EntityId> {
     use crate::scene::{
@@ -3303,48 +3829,81 @@ mod utils {
       let Some(body_id) = scene.get_parent(ps_id) else {
         continue;
       };
-      let Some(cached) = cartesian_state_cache.get(
-        &crate::simulation_api::structs::SceneEntityId::new(scene_id, body_id),
-      ) else {
+      // the comet must be almanac-driven (committed and stepped at least once)
+      let Some((planet, rot_model)) = cartesian_state_cache
+        .get(&crate::simulation_api::structs::SceneEntityId::new(
+          scene_id, body_id,
+        ))
+        .and_then(|c| c.comet_state.as_ref().map(|b| (b.almanac_planet, b.body_rotational_model)))
+      else {
         continue;
       };
-      let Some(comet) = cached.comet_state.as_ref() else {
-        continue;
-      };
-      let Some((pos_km, vel_kms)) = comet.helio_state_km else {
-        continue;
-      };
-      let body_rot = comet.transform.rotation;
-      drop(cached);
       let Some(jet_local) = scene.with_component(ps_id, |t: &TransformComponent| *t) else {
         continue;
       };
-      let off_km = body_rot.rotate_vector(jet_local.position);
-      let r_m = [
-        (pos_km.x() + off_km.x() as f64) * 1000.0,
-        (pos_km.y() + off_km.y() as f64) * 1000.0,
-        (pos_km.z() + off_km.z() as f64) * 1000.0,
-      ];
-      // nucleus rotation velocity (ω × r, < 1 m/s) is neglected
-      let v_ms = [
-        vel_kms.x() * 1000.0,
-        vel_kms.y() * 1000.0,
-        vel_kms.z() * 1000.0,
-      ];
-      let rot = (body_rot * jet_local.rotation).0;
-      let jet = JetState {
-        t_s,
-        r_m,
-        v_ms,
-        rot: [rot.x(), rot.y(), rot.z(), rot.w()],
+      // Jet state at any scaled time, straight from the almanac: emission windows are evaluated
+      // at their own grid times, so the dust does not depend on when the ticks happened.
+      let jet_at = |t: f64| -> Option<JetState> {
+        let epoch = start_epoch + anise::time::Duration::from_seconds(t);
+        let (pos_km, vel_kms, body_rot) =
+          planet.step_with_velocity(epoch, almanac, rot_model.as_ref()).ok()?;
+        // uniform spin about the body z (pole) axis, see `AlmanacPlanet::step_with_velocity`.
+        // Without a rotational model `DustHostState` estimates it from the attitudes.
+        let spin = rot_model.as_ref().map(|m| {
+          let pole = body_rot.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+          let omega = m.rotation_rate * core::f64::consts::PI / (180.0 * 86400.0);
+          let sgn = if omega < 0.0 { -1.0 } else { 1.0 };
+          [
+            pole.x() as f64 * sgn,
+            pole.y() as f64 * sgn,
+            pole.z() as f64 * sgn,
+            omega.abs(),
+          ]
+        });
+        let off_km = body_rot.rotate_vector(jet_local.position);
+        // the jet sits on the nucleus sphere: its outward normal is its offset direction
+        let site_normal = {
+          let n = [off_km.x() as f64, off_km.y() as f64, off_km.z() as f64];
+          let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+          if l > 0.0 {
+            [n[0] / l, n[1] / l, n[2] / l]
+          } else {
+            [0.0, 0.0, 1.0]
+          }
+        };
+        let rot = (body_rot * jet_local.rotation).0;
+        Some(JetState {
+          t_s: t,
+          r_m: [
+            (pos_km.x() + off_km.x() as f64) * 1000.0,
+            (pos_km.y() + off_km.y() as f64) * 1000.0,
+            (pos_km.z() + off_km.z() as f64) * 1000.0,
+          ],
+          // nucleus rotation velocity (ω × r, < 1 m/s) is neglected
+          v_ms: [
+            vel_kms.x() * 1000.0,
+            vel_kms.y() * 1000.0,
+            vel_kms.z() * 1000.0,
+          ],
+          rot: [rot.x(), rot.y(), rot.z(), rot.w()],
+          site_normal,
+          spin,
+        })
       };
+      let Some(jet) = jet_at(t_s) else {
+        continue;
+      };
+      let r_m = jet.r_m;
       let r_au = (r_m[0] * r_m[0] + r_m[1] * r_m[1] + r_m[2] * r_m[2]).sqrt() / AU_M;
 
       let batches = scene
         .with_component(ps_id, |ps: &ParticleSystemComponent| {
-          let cfg = ps.emission_params.dust_emit_config(r_au as f32, ps.ttl_us);
+          let cfg_at = |j: &JetState| {
+            let r = (j.r_m[0] * j.r_m[0] + j.r_m[1] * j.r_m[1] + j.r_m[2] * j.r_m[2]).sqrt() / AU_M;
+            ps.emission_params.dust_emit_config(r as f32, ps.ttl_us)
+          };
           let mut host = ps.dust.lock();
-          let batches = host.tick(jet, now_unscaled_us, &cfg);
+          let batches = host.tick(t_s, &jet_at, &cfg_at);
           let mut seqs = alloc::vec::Vec::with_capacity(batches.len());
           for _ in &batches {
             seqs.push(host.upload_seq);
@@ -3397,9 +3956,9 @@ mod utils {
   /// ----------------------------------------------------------------------------------------------
   /// < 16 seconds,<1μs,Perfect. You can represent every single microsecond accurately.
   /// > 16 seconds,≈1.9μs,Microsecond loss. The gap between floats becomes larger than 1μs. Consecutive microseconds round to the same f32 value.
-  /// "> 8,192 sec (2.2 hours)",≈1 ms,Millisecond loss. You can no longer distinguish sub-millisecond differences.
-  /// "> 131,072 sec (36.4 hours)",≈15.6 ms,"UI/Physics jitter. At 60fps (16.6ms per frame), your time steps are now larger than a video frame. Physics engines using f32 will glitch."
-  /// "> 8,388,608 sec (97 days)",1 second,Total fractional loss. The f32 can no longer hold fractions. 97 days+0.5 seconds will simply round to 97 days.
+  /// > 8,192 sec (2.2 hours)",≈1 ms,Millisecond loss. You can no longer distinguish sub-millisecond differences.
+  /// > 131,072 sec (36.4 hours)",≈15.6 ms,"UI/Physics jitter. At 60fps (16.6ms per frame), your time steps are now larger than a video frame. Physics engines using f32 will glitch."
+  /// > 8,388,608 sec (97 days)",1 second,Total fractional loss. The f32 can no longer hold fractions. 97 days+0.5 seconds will simply round to 97 days.
   pub fn time_micro_to_seconds(time_us: timeus_t) -> f32 {
     (time_us as f64 / 1_000_000.0) as f32
   }
@@ -3459,14 +4018,16 @@ mod utils {
           let scaled_parent_scale = parent_transform.scale * frame_scale;
 
           // Combine logic with f64 position retention: parent_pos + parent_rot * (parent_scale * child_pos)
-          let rotated = parent_transform.rotation.rotate_vector(Vec3f32::from_components(
-            (scaled_parent_scale.x() as f64 * acc_pos.x()) as f32,
-            (scaled_parent_scale.y() as f64 * acc_pos.y()) as f32,
-            (scaled_parent_scale.z() as f64 * acc_pos.z()) as f32,
-          ));
+          let rotated = parent_transform.rotation.rotate_vector(
+            aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+              scaled_parent_scale.x() as f64 * acc_pos.x(),
+              scaled_parent_scale.y() as f64 * acc_pos.y(),
+              scaled_parent_scale.z() as f64 * acc_pos.z(),
+            ),
+          );
 
-          acc_pos = parent_transform.position + rotated.to_f64();
-          acc_rot = parent_transform.rotation * acc_rot;
+          acc_pos = parent_transform.position + rotated;
+          acc_rot = (parent_transform.rotation * acc_rot).normalize();
           acc_scale = scaled_parent_scale * acc_scale;
         }
         current_entity = parent_id;
@@ -3630,28 +4191,30 @@ mod utils {
         .compare_exchange_weak(true, false, Ordering::Acquire, Ordering::Relaxed)
         .unwrap_or(false);
 
-      let scene = scene_lock.upgradable_read();
-      // acquire a read lock on the timeline manager in the scene just to prevent
-      // execution of a simulation step from someone else
-      // SAFETY: when scene is created, time_manager is associated to it
-      let _time_mgr = unsafe { scenes.time_managers.get(&scene_id).unwrap_unchecked() };
+      // Only the logic thread writes `latest_physics_sync`, so a copy taken under a short read lock
+      // stays valid: the GPU wait below runs with *no* scene lock held, so FFI writers and the
+      // render thread are not blocked for up to 8 ms every tick.
+      let pending_sync = if had_task {
+        scene_lock.read().latest_physics_sync.clone()
+      } else {
+        None
+      };
 
       render_frontend
         .with_device(device_handle, |dyn_device| {
           let vulkan_device: &Device = dyn_device.as_any().downcast_ref().unwrap();
-          let mut scene_write = parking_lot::RwLockUpgradableReadGuard::upgrade(scene);
 
-          let is_done = if had_task {
-            // SAFETY: `latest_physics_sync` written by `execute_simulation_tick`, which was
-            // executed if `active_physics_task` is `true`
-            let physics_sync =
-              unsafe { scene_write.latest_physics_sync.as_mut().unwrap_unchecked() };
-            // Block (zero CPU) until the GPU signals the compute timeline semaphore,
-            // with a hard deadline of 8ms (half a frame).  This replaces the old
-            physics_sync.blocking_wait(&vulkan_device.device, 8_000_000)
-          } else {
-            true
-          };
+          // Block (zero CPU) until the GPU signals the compute timeline semaphore, with a hard
+          // deadline of 8ms (half a frame).
+          let is_done = pending_sync.as_ref().map_or(true, |sync| {
+            sync.blocking_wait(&vulkan_device.device, 8_000_000)
+          });
+
+          // acquire a read lock on the timeline manager in the scene just to prevent
+          // execution of a simulation step from someone else
+          // SAFETY: when scene is created, time_manager is associated to it
+          let _time_mgr = unsafe { scenes.time_managers.get(&scene_id).unwrap_unchecked() };
+          let mut scene_write = scene_lock.write();
 
           if is_done {
             if had_task {
@@ -3674,164 +4237,6 @@ mod utils {
       );
       None
     }
-  }
-
-  /// Maximum distance (AU) beyond which the sun is treated as out of the camera frustum,
-  /// regardless of projection. Matches `MAX_SUN_DISTANCE_AU` agreed on the C# side.
-  const MAX_SUN_DISTANCE_AU: f64 = 100.0;
-
-  /// Projects the sun entity (always at world origin) through the primary camera's
-  /// view-projection matrix and emits [`ExternalState::SunVisibilityChanged`] only when
-  /// the visibility state changes (sun entered or exited the frustum).
-  ///
-  /// - No raycasting — purely a CPU-side clip-space test.
-  /// - `ndc_x` / `ndc_y` in the payload are the *actual* projection (may exceed ±1 when
-  ///   off-screen), so the C# overlay can compute the arrowhead bearing directly.
-  pub fn check_sun_frustum_visibility(
-    scene: &SceneContext,
-    scene_id: u64,
-    sun_visibility_state: &mut hashbrown::HashMap<u64, bool>,
-  ) {
-    use crate::{
-      scene::CameraProjection,
-      simulation_api::external_state::{CSunVisibilityChanged, ExternalState},
-    };
-    use aethervk_oshal_rlib::math::vector::Vector;
-
-    // Require a sun entity.
-    let _sun_entity = match scene.sun_entity {
-      Some(e) => e,
-      None => return,
-    };
-
-    // Find the primary camera entity from the first presentation engine.
-    let camera_entity = {
-      let pes = scene.presentation_engines.read();
-      pes.values().find_map(|pe| pe.camera_entity)
-    };
-    let camera_entity = match camera_entity {
-      Some(e) => e,
-      None => return,
-    };
-
-    // Read camera high-res transform (position f64, rotation f32 quat).
-    let (cam_pos, cam_rot) =
-      match scene.scene.with_component(camera_entity, |hrt: &HighResTransformComponent| {
-        (hrt.position, hrt.rotation)
-      }) {
-        Some(v) => v,
-        None => return,
-      };
-
-    // Read camera projection parameters.
-    let cam_proj =
-      match scene.scene.with_component(camera_entity, |c: &CameraComponent| c.projection) {
-        Some(p) => p,
-        None => return,
-      };
-
-    // ── Distance cap ──────────────────────────────────────────────────────────
-    // Sun is at world origin. Camera-to-sun distance = length of camera position.
-    let dist = cam_pos.length();
-    if dist > MAX_SUN_DISTANCE_AU {
-      let prev = sun_visibility_state.get(&scene_id).copied().unwrap_or(true);
-      if prev {
-        sun_visibility_state.insert(scene_id, false);
-        emit_external_state_change(&ExternalState::SunVisibilityChanged(
-          CSunVisibilityChanged {
-            is_visible: 0,
-            ndc_x: 0.0,
-            ndc_y: 0.0,
-          },
-        ));
-      }
-      return;
-    }
-
-    // ── Build view-space sun position ─────────────────────────────────────────
-    // Engine convention: col0=right(+X), col1=backward(+Y), col2=up(+Z).
-    // The sun is "in front" when its projection onto backward (local +Y) is positive.
-    //
-    // sun_camera = R^T * (sun_world - cam_pos) = R^T * (-cam_pos)
-    // cam_pos is f64; we cast the delta to f32 (safe for distances up to 100 AU).
-    let delta_f32 = Vec3f32::from_components(
-      (-cam_pos.x()) as f32,
-      (-cam_pos.y()) as f32,
-      (-cam_pos.z()) as f32,
-    );
-
-    // Rotate into camera-local space by the conjugate (inverse) of cam_rot.
-    let cam_rot_conj = cam_rot.inverse();
-    let sun_local = cam_rot_conj.rotate_vector(delta_f32);
-
-    // Local axes: +X=right, +Y=backward, +Z=up. Forward = -Y.
-    // depth = backward component (positive when sun is in front).
-    let depth = sun_local.y();
-    let view_x = sun_local.x();
-    let view_z = sun_local.z();
-
-    // ── Projection ────────────────────────────────────────────────────────────
-    let (ndc_x, ndc_y, in_front) = match cam_proj {
-      CameraProjection::Perspective {
-        fov,
-        aspect_ratio,
-        near,
-        ..
-      } => {
-        let tan_half_fov_y = (fov * 0.5).tan();
-        if depth <= near {
-          // Sun is behind the near plane — cannot project normally, but we can
-          // still derive the screen-space bearing from the lateral view components
-          // (view_x = right, view_z = up).  Use the near plane itself as a
-          // positive reference depth so the formula produces a meaningful ratio
-          // with the correct sign; the resulting magnitude is >> 1 (clearly
-          // off-screen), which the C# side uses to compute the arrowhead angle.
-          let ref_depth = near.max(1e-6);
-          let ny = view_z / (ref_depth * tan_half_fov_y);
-          let nx = view_x / (ref_depth * tan_half_fov_y * aspect_ratio);
-          (nx, ny, false) // in_front=false → off-screen; angle is still valid
-        } else {
-          let ny = view_z / (depth * tan_half_fov_y);
-          let nx = view_x / (depth * tan_half_fov_y * aspect_ratio);
-          (nx, ny, true)
-        }
-      }
-      CameraProjection::Orthographic {
-        left,
-        right,
-        bottom,
-        top,
-        near,
-        ..
-      } => {
-        // Orthographic NDC depends only on lateral position, not depth — so
-        // view_x / half_w and view_z / half_h give the correct ratio whether
-        // the sun is in front of or behind the near plane.
-        let half_w = (right - left) * 0.5;
-        let half_h = (top - bottom) * 0.5;
-        let nx = if half_w > 1e-9 { view_x / half_w } else { 0.0 };
-        let ny = if half_h > 1e-9 { view_z / half_h } else { 0.0 };
-        (nx, ny, depth > near)
-      }
-    };
-
-    // ── Frustum test & transition detection ───────────────────────────────────
-    let now_visible = in_front && ndc_x.abs() <= 1.0 && ndc_y.abs() <= 1.0;
-
-    // Default assumption is the opposite of the current result so the very first tick always
-    // fires an event to initialise the C# side.
-    let prev = sun_visibility_state.get(&scene_id).copied().unwrap_or(!now_visible);
-    if prev == now_visible {
-      return; // no change — nothing to emit
-    }
-    sun_visibility_state.insert(scene_id, now_visible);
-
-    let payload = CSunVisibilityChanged {
-      is_visible: if now_visible { 1 } else { 0 },
-      ndc_x,
-      ndc_y,
-    };
-    emit_external_state_change(&ExternalState::SunVisibilityChanged(payload));
   }
 }
 

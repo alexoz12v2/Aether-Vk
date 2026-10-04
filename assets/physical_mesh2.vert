@@ -31,7 +31,8 @@ void main() {
     outBitangent = cross(outNormal, outTangent) * inTangent.w;
 
     // Isolate RTE precision offset by bypassing matrix addition inside the shader
-    vec4 centerClip = viewProj * vec4(model[3].xyz, 1.0);
+    vec4 centerClip = push.object.centerClip;
+    if (centerClip == vec4(0.0)) centerClip = viewProj * vec4(model[3].xyz, 1.0);
     vec4 localClip = viewProj * vec4(mat3(model) * inPosition, 0.0);
     vec4 clipPos = centerClip + localClip;
 

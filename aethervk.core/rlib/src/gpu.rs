@@ -155,6 +155,10 @@ pub struct MaterialData {
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct ObjectData {
   pub model: [f32; 16],
+  /// Clip position of the model origin, `P·V·center` composed in f64 on the CPU (all zero: let
+  /// the shader compute it). At 1 AU the f32 model translation and view rotation each carry
+  /// ~10 km of rounding, more than a telescope field on a comet nucleus.
+  pub center_clip: [f32; 4],
 }
 
 /// push constants layout for `physical_mesh2.vert/frag`
@@ -279,6 +283,9 @@ pub struct SphereGizmoDataGpu {
   pub radius: f32,
   pub subdivisions: f32,
   pub _pad: [f32; 2],
+  /// Clip position of the gizmo center composed in f64 (see `ObjectData::center_clip`); all zero:
+  /// computed by the shader in f32.
+  pub center_clip: [f32; 4],
 }
 
 /// push constant layout for `sphere_gizmo.frag/vert`

@@ -18,7 +18,9 @@ void main() {
     mat4 model = push.object.model;
 
     vec4 worldPos = model * vec4(inPosition, 1.0);
-    vec4 clipPos = viewProj * worldPos;
+    vec4 centerClip = push.object.centerClip;
+    if (centerClip == vec4(0.0)) centerClip = viewProj * vec4(model[3].xyz, 1.0);
+    vec4 clipPos = centerClip + viewProj * vec4(mat3(model) * inPosition, 0.0);
 
     mat3 normalMatrix = mat3(model); // Assuming uniform scaling
     vec3 worldNormal = normalMatrix * inNormal;

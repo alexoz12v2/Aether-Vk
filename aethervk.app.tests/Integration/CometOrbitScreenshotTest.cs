@@ -61,6 +61,8 @@ public class CometOrbitScreenshotTest
     //
     // When running against the real engine (CI with Vulkan / local with GPU)
     // the timeline will be present and we execute the full flow.
+    // the reference orbit must be chosen before committing (required ComboBox)
+    cometTab.ReferenceOrbitIndex = 1;
     if (cometTab.HasProposedTimeline && cometTab.DownloadAndCommitCommand.CanExecute(null))
     {
       await cometTab.DownloadAndCommitCommand.ExecuteAsync(null);

@@ -11,6 +11,7 @@ struct SphereGizmoData {
     float radius;
     float subdivisions; // E.g. 12.0 for every 30 degrees (360/30)
     vec2 _pad;
+    vec4 centerClip;    // P*V*center composed in f64 on the CPU; all zero = compute it here
 };
 
 // Bindless BDA block
@@ -33,7 +34,8 @@ const float PI = 3.14159265359;
 void main() {
     mat4 model = push.gizmoPtr.gizmos[gl_InstanceIndex].model;
 
-    vec4 centerClip = push.viewProj * vec4(model[3].xyz, 1.0);
+    vec4 centerClip = push.gizmoPtr.gizmos[gl_InstanceIndex].centerClip;
+    if (centerClip == vec4(0.0)) centerClip = push.viewProj * vec4(model[3].xyz, 1.0);
 
     // Use clip-space w as the distance proxy for screen-size LOD.
     // Perspective:   w = eye-space depth (orbit distance). Rotation-invariant: computed

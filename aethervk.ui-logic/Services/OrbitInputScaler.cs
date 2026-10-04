@@ -32,6 +32,21 @@ public sealed class OrbitInputScaler
   /// Typically 0.2 when Shift is held (Blender-style fine control), 1.0 otherwise.
   /// </param>
   /// <returns>Angular delta in radians (X = azimuth change, Y = elevation change).</returns>
+  /// <summary>
+  /// Like <see cref="Scale"/> with an explicit base rate (rad/px, e.g. frustum-aware) instead of
+  /// the DPI/sensitivity one; acceleration still applies.
+  /// </summary>
+  public Vector2 ScaleWith(Vector2 pixelDelta, double radPerPixel, float shiftMultiplier = 1f)
+  {
+    float radPerPx = (float)radPerPixel * shiftMultiplier;
+    if (!EnableAcceleration)
+      return pixelDelta * radPerPx;
+    float speed        = pixelDelta.Length();
+    float boostedSpeed = speed + 0.1f * speed * speed;
+    float accelScale   = speed > 1e-6f ? boostedSpeed / speed : 1f;
+    return pixelDelta * (radPerPx * accelScale);
+  }
+
   public Vector2 Scale(Vector2 pixelDelta, float shiftMultiplier = 1f)
   {
     const float DegToRad = (float)(Math.PI / 180.0);

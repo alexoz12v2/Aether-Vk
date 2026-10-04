@@ -124,15 +124,50 @@ impl SimulationContext {
     true
   }
 
+  /// Pauses the simulation and jumps it to `epoch` (clamped to the committed range), waiting up
+  /// to 2 s for the logic thread. True when the seek was applied.
+  pub fn seek_epoch_sync(&self, scene_id: u64, epoch: hifitime::Epoch) -> bool {
+    if !self.pause_simulation_sync(scene_id) {
+      return false;
+    }
+    let done_flag = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
+    let succeeded = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
+    if self
+      .threads
+      .logic_thread
+      .tx()
+      .try_send(crate::simulation_api::structs::LogicCommand::SeekEpoch {
+        scene_id,
+        epoch,
+        done_flag: done_flag.clone(),
+        succeeded: succeeded.clone(),
+      })
+      .is_err()
+    {
+      return false;
+    }
+    use aethervk_oshal_rlib::os::time::get_monotonic_time;
+    let start = get_monotonic_time();
+    while get_monotonic_time() - start < 2_000_000_i64 {
+      if done_flag.load(core::sync::atomic::Ordering::Acquire) {
+        return succeeded.load(core::sync::atomic::Ordering::Relaxed);
+      }
+      core::hint::spin_loop();
+    }
+    false
+  }
+
   pub fn reset_simulation_sync(&self, scene_id: u64) -> bool {
     if !self.pause_simulation_sync(scene_id) {
       return false;
     }
     let done_flag = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
+    let succeeded = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
     let res = self.threads.logic_thread.tx().try_send(
       crate::simulation_api::structs::LogicCommand::ResetSimulation {
         scene_id,
         done_flag: done_flag.clone(),
+        succeeded: succeeded.clone(),
       },
     );
     if res.is_err() {
@@ -142,7 +177,7 @@ impl SimulationContext {
     let start = get_monotonic_time();
     while get_monotonic_time() - start < 2_000_000_i64 {
       if done_flag.load(core::sync::atomic::Ordering::Acquire) {
-        return true;
+        return succeeded.load(core::sync::atomic::Ordering::Relaxed);
       }
       core::hint::spin_loop();
     }
@@ -662,9 +697,6 @@ pub mod external_state {
     AlmanacImported(CAlamanacImported),
     /// Tells whether comet initialization (Two-Phase Commit) succeeded
     CometInitialized(CCometInitialized),
-    /// Emitted when the sun (world origin) enters or exits the primary camera frustum.
-    /// Fired only on *state changes*, not every frame.
-    SunVisibilityChanged(CSunVisibilityChanged),
     /// Emitted once by `BuildCometTrajectory` after `force_reposition` completes.
     /// Carries the post-commit comet position in AU (heliocentric SUN_ECLIPJ2000, f64).
     /// Allows C# to update `CometPositionTrackerService` without a running simulation.
@@ -685,7 +717,7 @@ pub mod external_state {
         Self::ModelImported(_) => 2,
         Self::AlmanacImported(_) => 3,
         Self::CometInitialized(_) => 4,
-        Self::SunVisibilityChanged(_) => 5,
+        // 5: retired (SunVisibilityChanged, off-screen sun indicator removed); not reused
         Self::CometPositionSnapshot(_) => 6,
         Self::SceneDumped(_) => 7,
         Self::SceneRestored(_) => 8,
@@ -709,25 +741,6 @@ pub mod external_state {
   pub struct CSceneRestored {
     /// `1` = restore succeeded, `0` = restore failed.
     pub success: u32,
-  }
-
-  /// Payload for [`ExternalState::SunVisibilityChanged`].
-  ///
-  /// Layout: 12 bytes, `#[repr(C)]`, `bytemuck::Pod`.
-  ///
-  /// `ndc_x` and `ndc_y` carry the actual projected NDC coordinates regardless of on/off screen
-  /// status — they can exceed ±1 when the sun is outside the frustum. The C# side uses
-  /// `is_visible` to distinguish the two states, and `ndc_x / ndc_y` to compute the direction
-  /// angle for the arrowhead indicator.
-  #[repr(C)]
-  #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-  pub struct CSunVisibilityChanged {
-    /// `1` = sun entered the camera frustum; `0` = sun exited.
-    pub is_visible: u32,
-    /// Projected NDC X coordinate of the sun (may exceed ±1 when off-screen).
-    pub ndc_x: f32,
-    /// Projected NDC Y coordinate of the sun (may exceed ±1 when off-screen).
-    pub ndc_y: f32,
   }
 
   /// Camera view + projection matrices emitted after each Micro-layer render.
@@ -761,9 +774,6 @@ pub fn emit_external_state_change(external_state: &external_state::ExternalState
       }
       ExternalState::CometInitialized(comet_initialized) => {
         bytemuck::bytes_of(comet_initialized).as_ptr().cast()
-      }
-      ExternalState::SunVisibilityChanged(sv) => {
-        bytemuck::bytes_of(sv).as_ptr().cast::<core::ffi::c_void>()
       }
       ExternalState::CometPositionSnapshot(snapshot) => {
         bytemuck::bytes_of(snapshot).as_ptr().cast::<core::ffi::c_void>()

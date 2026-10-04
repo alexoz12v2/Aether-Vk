@@ -109,6 +109,19 @@ public partial class UnboundedSlider : UserControl
     set => SetValue(MaxBoundProperty, value);
   }
 
+  /// <summary>.NET format string of the displayed value (default <c>0.###</c>; use e.g. <c>G5</c>
+  /// for values spanning many decades such as distances in AU/km/m).</summary>
+  public static readonly StyledProperty<string> DisplayFormatProperty = AvaloniaProperty.Register<
+    UnboundedSlider,
+    string
+  >(nameof(DisplayFormat), "0.###");
+
+  public string DisplayFormat
+  {
+    get => GetValue(DisplayFormatProperty);
+    set => SetValue(DisplayFormatProperty, value);
+  }
+
   public static readonly StyledProperty<double> DragSensitivityProperty = AvaloniaProperty.Register<
     UnboundedSlider,
     double
@@ -156,6 +169,23 @@ public partial class UnboundedSlider : UserControl
   public UnboundedSlider()
   {
     InitializeComponent();
+    UpdateDisplayedValue();
+  }
+
+  /// <summary>Shows <see cref="Value"/> with <see cref="DisplayFormat"/> unless the user is typing.</summary>
+  private void UpdateDisplayedValue()
+  {
+    if (InputBox is null || InputBox.IsFocused)
+      return;
+    string format = string.IsNullOrEmpty(DisplayFormat) ? "0.###" : DisplayFormat;
+    InputBox.Text = Value.ToString(format, System.Globalization.CultureInfo.CurrentCulture);
+  }
+
+  protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+  {
+    base.OnPropertyChanged(change);
+    if (change.Property == ValueProperty || change.Property == DisplayFormatProperty)
+      UpdateDisplayedValue();
   }
 
   private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -181,23 +211,15 @@ public partial class UnboundedSlider : UserControl
 
       if (_hasMoved)
       {
-        var mult = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? 10.0 : 1.0;
-        double newValue;
-
-        if (IsLogarithmic)
-        {
-          double minLog = HasBounds && MinBound > 0 ? System.Math.Log10(MinBound) : -10.0;
-          double currentLog = Value > 0 ? System.Math.Log10(Value) : minLog;
-
-          double deltaLog = delta * Step * mult * 0.005 * DragSensitivity; // Base sensitivity for log
-          double newLog = currentLog + deltaLog;
-
-          newValue = System.Math.Pow(10, newLog);
-        }
-        else
-        {
-          newValue = Value + delta * Step * mult * 0.1 * DragSensitivity;
-        }
+        // Shift = fine control (x0.1), consistent with the camera drags
+        double newValue = AetherVk.Logic.Utils.SliderDragMath.Next(
+          Value,
+          delta,
+          IsLogarithmic,
+          Step,
+          DragSensitivity,
+          e.KeyModifiers.HasFlag(KeyModifiers.Shift),
+          HasBounds ? MinBound : 0.0);
 
         Value = Constrain(newValue);
         _lastPos = pos;
@@ -277,6 +299,8 @@ public partial class UnboundedSlider : UserControl
     {
       Value = Constrain(parsed);
     }
+    // re-format (also restores the text after an unparsable entry or an unchanged value)
+    UpdateDisplayedValue();
   }
 
   private void OnInputKeyDown(object? sender, KeyEventArgs e)

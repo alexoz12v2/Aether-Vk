@@ -109,12 +109,17 @@ void main() {
 
     // Cap at 5% of viewport height: trajectories must never fill the screen even when the
     // camera is inside an arc (vClip.w near zero makes projectedThickness diverge without this).
-    float maxThickness = 0.05 * pc.viewportSize.y;
+    // Also at most 4x the nominal width: up close (camera km away from the track) the physical
+    // width term diverges and the ribbon would otherwise hit the 5% cap right on the nucleus.
+    float maxThickness = min(0.05 * pc.viewportSize.y, 4.0 * lineWidth);
     float finalThickness = min(max(minThickness, projectedThickness), maxThickness);
 
     vec2 offsetNdc = nScreen * lateral * (finalThickness / pc.viewportSize);
 
-    gl_Position = vec4(vClip.xy + offsetNdc * abs(vClip.w), vClip.z, vClip.w);
+    // Never depth-clip a trajectory: the camera near/far come from the view mode (e.g. 0.3 km ..
+    // 1200 km in CometOrbiting, no_trajectories.rdc) while tracks span AU. They do not write depth,
+    // so clamping only removes near/far clipping; the depth test against meshes still applies.
+    gl_Position = vec4(vClip.xy + offsetNdc * abs(vClip.w), clamp(vClip.z, 0.0, vClip.w), vClip.w);
 
     vColor = color;
     vUV = vec2(t, lateral);

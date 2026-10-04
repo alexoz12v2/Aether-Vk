@@ -22,6 +22,12 @@ public partial interface ICometTabViewModel
   /// <summary><c>true</c> when a proposed timeline is available in the Timeline tab.</summary>
   bool HasProposedTimeline { get; }
 
+  /// <summary>Reference orbit ComboBox index (-1 = none chosen, 0 = SBDB, 1 = re-osculated).</summary>
+  int ReferenceOrbitIndex { get; set; }
+
+  /// <summary>Whether the reference orbit can be changed (no comet committed).</summary>
+  bool IsReferenceOrbitSelectable { get; }
+
   // ── Comet search ──────────────────────────────────────────────────────────
 
   /// <summary>User-entered search query for the comet list.</summary>

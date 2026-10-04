@@ -4004,6 +4004,7 @@ impl RenderDevice for Device {
           // already correct when viewProj = VP and model = M.
           let object_data = crate::gpu::ObjectData {
             model: draw_call.model_matrix.into(),
+            center_clip: crate::gpu::frame::center_clip_f64(camera, draw_call.center_rte_f64),
           };
 
           unsafe {
@@ -4603,7 +4604,7 @@ impl RenderDevice for Device {
     let mut total_segments = 0;
     let mut max_subdivs = 0;
 
-    for (i, (entity_id, traj_comp, model_mat)) in trajectories.iter().enumerate() {
+    for (entity_id, traj_comp, model_mat) in trajectories.iter() {
       let local_segments_count = traj_comp.control_points.len() / 4;
       if local_segments_count == 0 {
         continue;
@@ -4723,6 +4724,8 @@ impl RenderDevice for Device {
       }
 
       // 4. METADATA (Small arrays densely rebuilt per frame for flawless sequential instanced rendering)
+      // Index into `traj_gpus`, not the input: skipped (0-segment) trajectories have no entry.
+      let trajectory_id = traj_gpus.len() as u32;
       traj_gpus.push(TrajectoryGpu {
         segments_ptr: arena_mut.segments_ptr
           + (offset * core::mem::size_of::<RationalBezierGpu>() as u64),
@@ -4735,7 +4738,7 @@ impl RenderDevice for Device {
 
       for j in 0..local_segments_count {
         segment_maps.push(SegmentMapGpu {
-          trajectory_id: i as u32,
+          trajectory_id,
           local_segment_id: j as u32,
           subdivisions: traj_comp.subdivisions_per_segment,
         });
@@ -9067,6 +9070,7 @@ mod meshutils {
         0.0, 0.0, 1.0, 0.0,
         0.0, 0.0, 0.0, 1.0,
       ],
+      center_clip: [0.0; 4],
     }
   }
 }

@@ -190,7 +190,7 @@
 
                   <!-- Perspective parameters -->
                   <Grid ColumnDefinitions="Auto,16,*"
-                        RowDefinitions="Auto,8,Auto"
+                        RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                         IsVisible="{Binding IsPerspective}">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV" VerticalAlignment="Center" />
                     <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
@@ -207,11 +207,41 @@
                               HorizontalAlignment="Stretch"
                               ItemsSource="{Binding FovUnits}"
                               SelectedIndex="{Binding FovUnitIndex}" />
+
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Near" VerticalAlignment="Center" />
+                    <controls:UnboundedSlider Grid.Row="4" Grid.Column="2"
+                                              Value="{Binding PerspNearDisplay}"
+                                              HasBounds="True"
+                                              MinBound="{Binding OrthoExtentMin}"
+                                              MaxBound="{Binding OrthoExtentMax}"
+                                              Step="{Binding OrthoExtentStep}"
+                                              IsLogarithmic="True"
+                                              DragSensitivity="5.0"
+                                              DisplayFormat="G5"
+                                              HorizontalAlignment="Stretch" />
+
+                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Far" VerticalAlignment="Center" />
+                    <controls:UnboundedSlider Grid.Row="6" Grid.Column="2"
+                                              Value="{Binding PerspFarDisplay}"
+                                              HasBounds="True"
+                                              MinBound="{Binding OrthoExtentMin}"
+                                              MaxBound="{Binding OrthoExtentMax}"
+                                              Step="{Binding OrthoExtentStep}"
+                                              IsLogarithmic="True"
+                                              DragSensitivity="5.0"
+                                              DisplayFormat="G5"
+                                              HorizontalAlignment="Stretch" />
+
+                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Distance units" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="8" Grid.Column="2"
+                              HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding DistanceUnits}"
+                              SelectedIndex="{Binding OrthoUnitIndex}" />
                   </Grid>
 
                   <!-- Orthographic parameters -->
                   <Grid ColumnDefinitions="Auto,16,*"
-                        RowDefinitions="Auto,8,Auto,8,Auto,8,Auto"
+                        RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                         IsVisible="{Binding IsOrthographic}">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Half-Width" VerticalAlignment="Center" />
                     <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
@@ -222,6 +252,7 @@
                                               Step="{Binding OrthoExtentStep}"
                                               IsLogarithmic="True"
                                               DragSensitivity="5.0"
+                                              DisplayFormat="G5"
                                               HorizontalAlignment="Stretch" />
 
                     <TextBlock Grid.Row="2" Grid.Column="0" Text="Half-Height" VerticalAlignment="Center" />
@@ -233,6 +264,7 @@
                                               Step="{Binding OrthoExtentStep}"
                                               IsLogarithmic="True"
                                               DragSensitivity="5.0"
+                                              DisplayFormat="G5"
                                               HorizontalAlignment="Stretch" />
 
                     <TextBlock Grid.Row="4" Grid.Column="0" Text="Units" VerticalAlignment="Center" />
@@ -241,11 +273,51 @@
                               ItemsSource="{Binding DistanceUnits}"
                               SelectedIndex="{Binding OrthoUnitIndex}" />
 
-                    <StackPanel Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Spacing="8">
+                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Near" VerticalAlignment="Center" />
+                    <controls:UnboundedSlider Grid.Row="6" Grid.Column="2"
+                                              Value="{Binding OrthoNearDisplay}"
+                                              HasBounds="True"
+                                              MinBound="{Binding OrthoExtentMin}"
+                                              MaxBound="{Binding OrthoExtentMax}"
+                                              Step="{Binding OrthoExtentStep}"
+                                              IsLogarithmic="True"
+                                              DragSensitivity="5.0"
+                                              DisplayFormat="G5"
+                                              HorizontalAlignment="Stretch" />
+
+                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Far" VerticalAlignment="Center" />
+                    <controls:UnboundedSlider Grid.Row="8" Grid.Column="2"
+                                              Value="{Binding OrthoFarDisplay}"
+                                              HasBounds="True"
+                                              MinBound="{Binding OrthoExtentMin}"
+                                              MaxBound="{Binding OrthoExtentMax}"
+                                              Step="{Binding OrthoExtentStep}"
+                                              IsLogarithmic="True"
+                                              DragSensitivity="5.0"
+                                              DisplayFormat="G5"
+                                              HorizontalAlignment="Stretch" />
+
+                    <StackPanel Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Spacing="8">
                       <CheckBox Content="Keep Proportions Locked" IsChecked="{Binding IsOrthoProportionsLocked}" />
                       <Button Content="Restore Proportions" Command="{Binding RestoreOrthoProportionsCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </StackPanel>
                   </Grid>
+
+                  <!-- ── UpZenith: snap above a body (animation only, no tracking) ── -->
+                  <StackPanel Spacing="6" IsVisible="{Binding IsUpZenithMode}">
+                    <TextBlock Text="Snap above" FontWeight="SemiBold" />
+                    <UniformGrid Columns="3" ColumnSpacing="6">
+                      <Button Content="Sun" Command="{Binding SnapAboveSunCommand}"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                              ToolTip.Tip="Fly above the Sun (startup view), fitting the projection" />
+                      <Button Content="Comet" Command="{Binding SnapAboveCometCommand}"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                              ToolTip.Tip="Fly above the committed comet, fitting the projection to its nucleus" />
+                      <Button Content="Earth" Command="{Binding SnapAboveEarthCommand}"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                              ToolTip.Tip="Fly above the Earth, fitting the projection to its radius" />
+                    </UniformGrid>
+                  </StackPanel>
 
                   <!-- ── Earth Observer Mode Settings ─────────────────────── -->
                   <!-- Visible only when CameraMode = EarthPosition            -->
@@ -277,30 +349,36 @@
 
                     <!-- Look Direction -->
                     <TextBlock Text="Look Direction" FontWeight="SemiBold" />
-                    <Grid ColumnDefinitions="Auto, 16, *" RowDefinitions="Auto, Auto, Auto">
-                      <RadioButton Grid.Row="0" Grid.Column="0" Content="Inertial (fixed in space)"
-                                  IsChecked="{Binding EarthObserverOrientationMode,
-                                  Converter={StaticResource EnumToBool},
-                                  ConverterParameter=Inertial}" />
-                      <RadioButton Grid.Row="1" Grid.Column="0" Content="Comet-tracking (always face comet)"
-                                  IsChecked="{Binding EarthObserverOrientationMode,
-                                  Converter={StaticResource EnumToBool},
-                                  ConverterParameter=CometTracking}" />
-                      <RadioButton Grid.Row="2" Grid.Column="0" Content="Earth-fixed (physical telescope)"
-                                  IsChecked="{Binding EarthObserverOrientationMode,
-                                  Converter={StaticResource EnumToBool},
-                                  ConverterParameter=EarthFixed}" />
-                      
-                      <!-- Snap commands on the right -->
-                      <StackPanel Grid.Row="0" Grid.RowSpan="3" Grid.Column="2" 
-                                  VerticalAlignment="Center" Spacing="8">
-                         <Button Content="Point towards Sun" 
-                                 Command="{Binding PointTowardsSunCommand}" 
-                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                         <Button Content="Point towards Comet" 
-                                 Command="{Binding PointTowardsCometCommand}" 
-                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                      </StackPanel>
+                    <Grid RowDefinitions="Auto, Auto, Auto, Auto, Auto, 8, Auto">
+                      <RadioButton Grid.Row="0" Content="Free look"
+                                   ToolTip.Tip="Drag to look around; the direction stays fixed in space"
+                                   IsChecked="{Binding EarthObserverOrientationMode,
+                                   Converter={StaticResource EnumToBool},
+                                   ConverterParameter=Free}" />
+                      <RadioButton Grid.Row="1" Content="Comet lock-in (telescope)"
+                                   ToolTip.Tip="Aims at the comet, then turns with the Earth like a telescope on the ground"
+                                   IsChecked="{Binding EarthObserverOrientationMode,
+                                   Converter={StaticResource EnumToBool},
+                                   ConverterParameter=CometLockIn}" />
+                      <RadioButton Grid.Row="2" Content="Comet tracking"
+                                   ToolTip.Tip="Follows the comet; holds while it is below the horizon"
+                                   IsChecked="{Binding EarthObserverOrientationMode,
+                                   Converter={StaticResource EnumToBool},
+                                   ConverterParameter=CometTracking}" />
+                      <RadioButton Grid.Row="3" Content="Sun lock-in (telescope)"
+                                   ToolTip.Tip="Aims at the Sun, then turns with the Earth like a telescope on the ground"
+                                   IsChecked="{Binding EarthObserverOrientationMode,
+                                   Converter={StaticResource EnumToBool},
+                                   ConverterParameter=SunLockIn}" />
+                      <RadioButton Grid.Row="4" Content="Sun tracking"
+                                   ToolTip.Tip="Follows the Sun; holds while it is below the horizon"
+                                   IsChecked="{Binding EarthObserverOrientationMode,
+                                   Converter={StaticResource EnumToBool},
+                                   ConverterParameter=SunTracking}" />
+                      <Button Grid.Row="6" Content="Restore preset projection"
+                              Command="{Binding RestoreEarthPresetProjectionCommand}"
+                              ToolTip.Tip="Re-applies the lock-in / tracking projection where the target spans 10% of the view"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </Grid>
                   </StackPanel>
 

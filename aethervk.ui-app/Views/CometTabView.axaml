@@ -241,6 +241,23 @@
               </ListBox>
             </StackPanel>
 
+            <!-- Reference orbit (required before the first commit, locked while committed) -->
+            <StackPanel Spacing="4">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="Reference orbit" VerticalAlignment="Center" />
+                <controls:PropertyHelpButton
+                  HelpHeader="Reference orbit"
+                  HelpContent="The red track is a two-body (Keplerian) reference next to the true SPK path.&#x0A;&#x0A;SBDB solution: the elements JPL publishes, osculating at the solution epoch, which can be years away from your window (67P: 2015-10-10, about 0.12 AU off its 2025 path because of Jupiter).&#x0A;&#x0A;Osculating at start epoch: elements recomputed from the SPK position and velocity at your start epoch. Exact there, and within about 10³ km over a month (planetary perturbations and outgassing forces).&#x0A;&#x0A;Cannot be changed while a comet is committed." />
+              </StackPanel>
+              <ComboBox SelectedIndex="{Binding ReferenceOrbitIndex}"
+                        IsEnabled="{Binding IsReferenceOrbitSelectable}"
+                        PlaceholderText="Choose a reference orbit…"
+                        HorizontalAlignment="Stretch">
+                <ComboBoxItem Content="SBDB solution (its own epoch)" />
+                <ComboBoxItem Content="Osculating at start epoch (from SPK)" />
+              </ComboBox>
+            </StackPanel>
+
             <!-- Download & Commit button -->
             <Button Content="Download &amp; Commit"
                     Command="{Binding DownloadAndCommitCommand}"

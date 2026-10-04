@@ -1,10 +1,5 @@
 //! constants module.
 
-// Simulation Scale Factors
-// A single, unified scale factor for all distances (1 engine unit = 10,000,000 km)
-/// TODO: Document this item
-pub const DISTANCE_SCALE_FACTOR: f64 = 10_000_000.0;
-
 // Artificial visual multipliers to make astronomical bodies visible when viewing the solar system.
 // Keeping this the same for both ensures the Sun and planets are perfectly proportionally sized relative to each other!
 /// TODO: Document this item

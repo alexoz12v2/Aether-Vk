@@ -38,6 +38,9 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
   /// <summary><c>true</c> when no nucleus radius is available — shows the warning hint.</summary>
   bool IsNucleusRadiusUnknown { get; }
 
+  /// <summary>Draws the comet's reference-position error lines (cross-track and same-epoch).</summary>
+  bool ShowReferencePositionError { get; set; }
+
   /// <summary>
   /// <c>true</c> when a comet has been committed to the native runtime.
   /// <c>AddJetCommand</c> is disabled until this is <c>true</c>.

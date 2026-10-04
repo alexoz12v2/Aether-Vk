@@ -90,20 +90,16 @@
       </StackPanel>
     </Border>
 
-    <!-- Detached Camera Matrix Debug Panel -->
-    <controls:DebugOnly>
-      <Template>
-        <Border x:CompileBindings="False"
-                DataContext="{ReflectionBinding CameraMatrixDebug}"
-                HorizontalAlignment="Right" VerticalAlignment="Top"
-                Margin="10,60,10,0"
-                Background="{DynamicResource Bg.Surface}" Opacity="0.85"
-                BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
-                CornerRadius="8" Padding="12,8">
-          <ui:CameraMatrixDebugPanel />
-        </Border>
-      </Template>
-    </controls:DebugOnly>
+    <!-- Camera global position tracker (all builds, polled at 2 Hz) -->
+    <Border x:CompileBindings="False"
+            DataContext="{ReflectionBinding CameraMatrixDebug}"
+            HorizontalAlignment="Right" VerticalAlignment="Top"
+            Margin="10,60,10,0"
+            Background="{DynamicResource Bg.Surface}" Opacity="0.85"
+            BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+            CornerRadius="8" Padding="12,8">
+      <ui:CameraMatrixDebugPanel />
+    </Border>
 
     <ItemsControl ItemsSource="{Binding Billboards}">
       <ItemsControl.ItemsPanel>
@@ -200,18 +196,15 @@
       </StackPanel>
     </Border>
 
-    <!-- Comet Orbit Debug Panel — bottom-left, visible only in CometOrbiting mode -->
-    <controls:DebugOnly>
-      <Template>
-        <Border x:CompileBindings="False"
-                DataContext="{ReflectionBinding CometOrbitDebug}"
-                HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                Margin="10,0,0,60"
-                IsVisible="{Binding IsVisible}">
-          <ui:CometOrbitDebugPanel/>
-        </Border>
-      </Template>
-    </controls:DebugOnly>
+    <!-- Comet Orbit Debug Panel — bottom-left, visible only in CometOrbiting mode (all builds,
+         refreshed at 10 Hz) -->
+    <Border x:CompileBindings="False"
+            DataContext="{ReflectionBinding CometOrbitDebug}"
+            HorizontalAlignment="Left" VerticalAlignment="Bottom"
+            Margin="10,0,0,60"
+            IsVisible="{Binding IsVisible}">
+      <ui:CometOrbitDebugPanel/>
+    </Border>
 
     <!-- Debug Telemetry Panel -->
     <controls:DebugOnly>
@@ -251,32 +244,6 @@
         </Border>
       </Template>
     </controls:DebugOnly>
-
-    <!-- Sun direction indicator ─────────────────────────────────────────────
-    Shown only when the sun is outside the camera frustum (IsSunOffScreen = true).
-    A gold "^" chevron rotates to point toward the off-screen sun.
-    SunIndicatorLeft / SunIndicatorTop position the 24×24 border so its centre sits
-    on a circle of radius min(32 epx, min(W,H)/2) around the viewport centre.
-    SunIndicatorAngleDeg (clockwise from screen-up) is applied by the RotateTransform. -->
-    <Canvas IsHitTestVisible="False"
-            IsVisible="{Binding IsSunOffScreen}">
-      <Border Canvas.Left="{Binding SunIndicatorLeft}"
-              Canvas.Top="{Binding SunIndicatorTop}"
-              Width="24" Height="24"
-              Background="Transparent">
-        <Border.RenderTransform>
-          <!-- Rotate around the border centre so the ^ tip always points toward the sun -->
-          <RotateTransform Angle="{Binding SunIndicatorAngleDeg}"
-                           CenterX="12" CenterY="12"/>
-        </Border.RenderTransform>
-        <!-- "^" chevron pointing up at 0°; yellow/gold (#FFD700) -->
-        <Path Stroke="#FFD700" StrokeThickness="2.5"
-              StrokeLineCap="Round" StrokeJoin="Round"
-              Data="M 12 2 L 22 14 M 12 2 L 2 14"
-              HorizontalAlignment="Stretch"
-              VerticalAlignment="Stretch"/>
-      </Border>
-    </Canvas>
 
     <!-- Simulation Current Epoch Overlay -->
     <ContentControl Content="{Binding CurrentEpochString}" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,16">

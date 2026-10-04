@@ -3,18 +3,17 @@ use aethervk_oshal_rlib::math::{
   quaternion::Quaternion,
   vector::{
     Vector, Vector3,
-    vec3::Vec3f32,
     vec3f64::{DVec3, Vec3f64},
-    vec4::Quat,
+    vec4f64::Quat64,
   },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TransformAnimationComponent {
   pub start_pos: Vec3f64,
-  pub start_rot: Quat,
+  pub start_rot: Quat64,
   pub target_pos: Vec3f64,
-  pub target_rot: Quat,
+  pub target_rot: Quat64,
   pub duration: f32, // unscaled seconds
   pub elapsed: f32,
   pub is_finished: bool,
@@ -25,9 +24,9 @@ impl Default for TransformAnimationComponent {
   fn default() -> Self {
     Self {
       start_pos: Vec3f64::from_components(0.0, 0.0, 0.0),
-      start_rot: Quat::identity(),
+      start_rot: Quat64::identity(),
       target_pos: Vec3f64::from_components(0.0, 0.0, 0.0),
-      target_rot: Quat::identity(),
+      target_rot: Quat64::identity(),
       duration: 1.0,
       elapsed: 0.0,
       is_finished: false,
@@ -42,7 +41,7 @@ impl TransformAnimationComponent {
   /// Smoothly redirects an active animation towards a new target.
   /// It prevents "snapping" by establishing the current mid-air position s the new starting point,
   /// and preserves the original movement speed by scaling the duration accodingly
-  pub fn retarget(&mut self, new_target_pos: DVec3, new_target_rot: Quat) {
+  pub fn retarget(&mut self, new_target_pos: DVec3, new_target_rot: Quat64) {
     // 1. Evaluate the exact current state of the animation to prevent teleportation
     let t = if self.duration > 0.0 {
       self.elapsed / self.duration
@@ -57,7 +56,7 @@ impl TransformAnimationComponent {
     let current_rot = if self.orbit_pivot.is_some() {
       slerp_constrained(self.start_rot, self.target_rot, smooth_t)
     } else {
-      Quat::slerp(self.start_rot, self.target_rot, smooth_t)
+      Quat64::slerp(self.start_rot, self.target_rot, smooth_t as f64)
     };
 
     // 2. Calculate the original average speed (units per second)
@@ -117,11 +116,11 @@ pub fn hermite_smoothstep(mut t: f32) -> f32 {
 /// Apply after every slerp that is part of a continuously-retargeted animation (e.g. orbit
 /// tracking). Slerp on SO(3) does not preserve the roll-free subspace, so each retarget cycle
 /// can inject a small roll component that compounds over time.
-pub fn strip_roll(q: Quat) -> Quat {
+pub fn strip_roll(q: Quat64) -> Quat64 {
   use aethervk_oshal_rlib::math::quaternion::Quaternion as _;
 
   // Engine forward direction in world space: rotate local −Y by q.
-  let local_neg_y = Vec3f32::from_components(0.0, -1.0, 0.0);
+  let local_neg_y = Vec3f64::from_components(0.0, -1.0, 0.0);
   let fwd = q.rotate_vector(local_neg_y);
 
   let fwd_len_sq = fwd.x() * fwd.x() + fwd.y() * fwd.y() + fwd.z() * fwd.z();
@@ -131,14 +130,14 @@ pub fn strip_roll(q: Quat) -> Quat {
 
   // Normalise forward.
   let inv_len = 1.0 / fwd_len_sq.sqrt();
-  let fwd = Vec3f32::from_components(fwd.x() * inv_len, fwd.y() * inv_len, fwd.z() * inv_len);
+  let fwd = Vec3f64::from_components(fwd.x() * inv_len, fwd.y() * inv_len, fwd.z() * inv_len);
 
   // World-up hint: prefer +Z; fall back to −Y when looking nearly straight up/down
   // to avoid a degenerate cross product.
   let up_hint = if fwd.z().abs() < 0.99 {
-    Vec3f32::from_components(0.0, 0.0, 1.0) // +Z
+    Vec3f64::from_components(0.0, 0.0, 1.0) // +Z
   } else {
-    Vec3f32::from_components(0.0, -1.0, 0.0) // −Y
+    Vec3f64::from_components(0.0, -1.0, 0.0) // −Y
   };
 
   // right = cross(up_hint, fwd),  up = cross(fwd, right)
@@ -149,7 +148,7 @@ pub fn strip_roll(q: Quat) -> Quat {
     return q; // degenerate — return unchanged
   }
   let inv_r = 1.0 / right_len_sq.sqrt();
-  let right = Vec3f32::from_components(right.x() * inv_r, right.y() * inv_r, right.z() * inv_r);
+  let right = Vec3f64::from_components(right.x() * inv_r, right.y() * inv_r, right.z() * inv_r);
 
   let up = cross(fwd, right);
 
@@ -170,7 +169,7 @@ pub fn strip_roll(q: Quat) -> Quat {
   let (x, y, z, w);
 
   if trace > 0.0 {
-    let s = (trace + 1.0_f32).sqrt() * 2.0; // s = 4w
+    let s = (trace + 1.0_f64).sqrt() * 2.0; // s = 4w
     let inv_s = 1.0 / s;
     x = (m21 - m12) * inv_s;
     y = (m02 - m20) * inv_s;
@@ -199,23 +198,23 @@ pub fn strip_roll(q: Quat) -> Quat {
     w = (m10 - m01) * inv_s;
   }
 
-  Quat::from_components(x, y, z, w)
+  Quat64::from_components(x, y, z, w)
 }
 
 /// Interpolates between two quaternions, enforcing that the resulting
 /// rotation's Up vector never exceeds 90 degrees from the Global Up (+Z).
 /// Engine convention: +X = Right, -Y = Forward, +Z = Up.
-pub fn slerp_constrained(q0: Quat, q1: Quat, t: f32) -> Quat {
+pub fn slerp_constrained(q0: Quat64, q1: Quat64, t: f32) -> Quat64 {
   use aethervk_oshal_rlib::math::{
     quaternion::Quaternion as _,
     vector::{Vector as _, Vector3 as _},
   };
 
   // 1. Perform standard spherical linear interpolation
-  let q = Quat::slerp(q0, q1, t);
+  let q = Quat64::slerp(q0, q1, t as f64);
 
   // 2. Extract the local Up vector (rotating the global +Z vector)
-  let local_z = Vec3f32::from_components(0.0, 0.0, 1.0);
+  let local_z = Vec3f64::from_components(0.0, 0.0, 1.0);
   let local_up = q.rotate_vector(local_z);
 
   // 3. Check constraint: if Z >= 0, the angle is <= 90 degrees.
@@ -224,24 +223,24 @@ pub fn slerp_constrained(q0: Quat, q1: Quat, t: f32) -> Quat {
   }
 
   // 4. Constraint violated. Extract the local Forward vector (-Y).
-  let local_neg_y = Vec3f32::from_components(0.0, -1.0, 0.0);
+  let local_neg_y = Vec3f64::from_components(0.0, -1.0, 0.0);
   let local_fwd = q.rotate_vector(local_neg_y);
 
   // 5. Project the Up vector onto the XY plane (forcing Z = 0)
-  let mut new_up = Vec3f32::from_components(local_up.x(), local_up.y(), 0.0);
+  let mut new_up = Vec3f64::from_components(local_up.x(), local_up.y(), 0.0);
   let up_len_sq = new_up.x() * new_up.x() + new_up.y() * new_up.y();
 
   // Edge case: if it was pointing exactly straight down (0, 0, -1)
   if up_len_sq < 1e-10 {
     // Fall back to using the right vector to derive a valid up
-    let local_x = Vec3f32::from_components(1.0, 0.0, 0.0);
+    let local_x = Vec3f64::from_components(1.0, 0.0, 0.0);
     let local_right = q.rotate_vector(local_x);
     new_up = cross(local_z, local_right);
     let len = (new_up.x() * new_up.x() + new_up.y() * new_up.y() + new_up.z() * new_up.z()).sqrt();
-    new_up = Vec3f32::from_components(new_up.x() / len, new_up.y() / len, new_up.z() / len);
+    new_up = Vec3f64::from_components(new_up.x() / len, new_up.y() / len, new_up.z() / len);
   } else {
     let inv = 1.0 / up_len_sq.sqrt();
-    new_up = Vec3f32::from_components(new_up.x() * inv, new_up.y() * inv, new_up.z() * inv);
+    new_up = Vec3f64::from_components(new_up.x() * inv, new_up.y() * inv, new_up.z() * inv);
   }
 
   // 6. Rebuild an orthogonal basis
@@ -253,10 +252,10 @@ pub fn slerp_constrained(q0: Quat, q1: Quat, t: f32) -> Quat {
   if right_len_sq < 1e-10 {
     right = cross(local_z, new_up);
     let len = (right.x() * right.x() + right.y() * right.y() + right.z() * right.z()).sqrt();
-    right = Vec3f32::from_components(right.x() / len, right.y() / len, right.z() / len);
+    right = Vec3f64::from_components(right.x() / len, right.y() / len, right.z() / len);
   } else {
     let inv = 1.0 / right_len_sq.sqrt();
-    right = Vec3f32::from_components(right.x() * inv, right.y() * inv, right.z() * inv);
+    right = Vec3f64::from_components(right.x() * inv, right.y() * inv, right.z() * inv);
   }
 
   // Calculate strictly orthogonal Forward (Forward = Right x Up)
@@ -281,7 +280,7 @@ pub fn slerp_constrained(q0: Quat, q1: Quat, t: f32) -> Quat {
   let (x, y, z, w);
 
   if trace > 0.0 {
-    let s = (trace + 1.0_f32).sqrt() * 2.0; // s = 4w
+    let s = (trace + 1.0_f64).sqrt() * 2.0; // s = 4w
     let inv_s = 1.0 / s;
     x = (m21 - m12) * inv_s;
     y = (m02 - m20) * inv_s;
@@ -311,13 +310,13 @@ pub fn slerp_constrained(q0: Quat, q1: Quat, t: f32) -> Quat {
   }
 
   // Normalise out any trace drift
-  Quat::from_components(x, y, z, w).normalize()
+  Quat64::from_components(x, y, z, w).normalize()
 }
 
-/// Cross product for Vec3f32 (not in the Vector3 trait).
+/// Cross product for Vec3f64.
 #[inline(always)]
-fn cross(a: Vec3f32, b: Vec3f32) -> Vec3f32 {
-  Vec3f32::from_components(
+fn cross(a: Vec3f64, b: Vec3f64) -> Vec3f64 {
+  Vec3f64::from_components(
     a.y() * b.z() - a.z() * b.y(),
     a.z() * b.x() - a.x() * b.z(),
     a.x() * b.y() - a.y() * b.x(),
@@ -333,12 +332,12 @@ mod tests {
   use crate::scene::camera::QuatToEulerAngles as _;
   use aethervk_oshal_rlib::math::{
     quaternion::Quaternion as _,
-    vector::{Vector as _, Vector4 as _},
+    vector::{Vector as _, Vector4 as _, vec3::Vec3f32, vec4::Quat},
   };
 
   /// Helper: make a stationary animation (start == target) at a given position
   /// with the given duration, fully elapsed (t = 1).
-  fn stationary_anim_at(pos: DVec3, rot: Quat, duration: f32) -> TransformAnimationComponent {
+  fn stationary_anim_at(pos: DVec3, rot: Quat64, duration: f32) -> TransformAnimationComponent {
     TransformAnimationComponent {
       start_pos: pos,
       start_rot: rot,
@@ -365,7 +364,7 @@ mod tests {
   fn retarget_from_stationary_zero_distance_fallback_uses_old_duration() {
     let pos_a = DVec3::from_components(1.0, 0.0, 0.0);
     let pos_b = DVec3::from_components(1.001, 0.0, 0.0); // small drag delta
-    let rot = Quat::identity();
+    let rot = Quat64::identity();
 
     // Problematic old pattern: stationary 0.4 s animation, then interactive drag.
     let mut anim_old = stationary_anim_at(pos_a, rot, 0.4);
@@ -401,7 +400,7 @@ mod tests {
     ];
 
     for &(pitch, yaw) in test_cases {
-      let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
+      let q = Quat64::from_quat(Quat::from_pitch_and_yaw_radians(pitch, yaw));
       let once = strip_roll(q);
       let twice = strip_roll(once);
 
@@ -438,10 +437,11 @@ mod tests {
       (0.0, -PI / 2.0, -1.0, 0.0, 0.0),
     ];
 
-    let local_neg_y = Vec3f32::from_components(0.0, -1.0, 0.0);
+    let local_neg_y = Vec3f64::from_components(0.0, -1.0, 0.0);
 
     for &(pitch, yaw, ex, ey, ez) in cases {
-      let q = Quat::from_pitch_and_yaw_radians(pitch, yaw);
+      let (ex, ey, ez) = (ex as f64, ey as f64, ez as f64);
+      let q = Quat64::from_quat(Quat::from_pitch_and_yaw_radians(pitch, yaw));
       let q_strip = strip_roll(q);
       let fwd = q_strip.rotate_vector(local_neg_y);
 
@@ -499,9 +499,9 @@ mod tests {
   #[test]
   fn slerp_constrained_never_flips_upvector() {
     // q0 = identity (up = +Z), q1 = flipped 180° around X (up = -Z)
-    let q0 = Quat::identity();
-    let q1 = Quat::from_components(1.0, 0.0, 0.0, 0.0); // 180° around X
-    let local_z = Vec3f32::from_components(0.0, 0.0, 1.0);
+    let q0 = Quat64::identity();
+    let q1 = Quat64::from_components(1.0, 0.0, 0.0, 0.0); // 180° around X
+    let local_z = Vec3f64::from_components(0.0, 0.0, 1.0);
     for i in 0..=100 {
       let t = i as f32 / 100.0;
       let q = super::slerp_constrained(q0, q1, t);

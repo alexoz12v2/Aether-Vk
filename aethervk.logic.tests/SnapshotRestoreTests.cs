@@ -139,4 +139,95 @@ public class SnapshotRestoreTests
         // Assert
         _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Once);
     }
+
+    /// Recolouring a jet while paused (snapshot present) must reach the native runtime but must
+    /// NOT restore the snapshot: the restored scene's dust ring only re-emits on ticks, so the
+    /// tail disappeared. A physical jet edit still restores.
+    [Fact]
+    public void ChangingJetStreamColor_WhilePaused_DoesNotRestoreSnapshot()
+    {
+        var vm = new ModelTabViewModel(
+            _translationServiceMock.Object,
+            _schedulerProvider,
+            _modelSessionServiceMock.Object,
+            _cometSessionServiceMock.Object,
+            _cometConfig,
+            _runtimeServiceMock.Object,
+            _dispatcherMock.Object,
+            _cometMessengerMock.Object,
+            _platformWindowServiceMock.Object,
+            _timelineService);
+
+        // a committed comet with a live jet
+        ulong psId = 7;
+        _runtimeServiceMock
+            .Setup(r => r.AddFirstParticleSystem(It.IsAny<ParticleSystemModel>(), It.IsAny<ParticleSystemJet>(), out psId))
+            .Returns(new ParticleSystemComputedProperties(0.1f, 1f));
+        var computed = new ParticleSystemComputedProperties(0.1f, 1f);
+        _runtimeServiceMock
+            .Setup(r => r.ModifyParticleSystem(It.IsAny<ulong>(), It.IsAny<ParticleSystemModel>(), It.IsAny<ParticleSystemJet>(), out computed))
+            .Returns(true);
+        // deliver the initial "not committed" emission first (it would reset NativePsId later)
+        _schedulerProvider.MainThread.Start();
+        vm.ManualNucleusRadiusKm = 2f;
+        vm.IsCometCommitted = true;
+        vm.AddJetCommand.Execute(null);
+        var jet = Assert.Single(vm.Jets!);
+        Assert.Equal(psId, jet.NativePsId);
+
+        // Play, then Pause: a snapshot exists
+        _runtimeServiceMock.Setup(r => r.StartSimulation(It.IsAny<int>())).Returns(true);
+        _runtimeServiceMock.Setup(r => r.SnapshotSceneSync()).Returns(true);
+        _timelineService.Play(1);
+        _schedulerProvider.MainThread.Start();
+        _runtimeServiceMock.Setup(r => r.PauseSimulationSync()).Returns(true);
+        _timelineService.Pause();
+        _schedulerProvider.MainThread.Start();
+        _runtimeServiceMock.Setup(r => r.RestoreSnapshotSync()).Returns(true);
+        _runtimeServiceMock.Invocations.Clear();
+
+        jet.StreamColor = new System.Numerics.Vector4(1f, 0f, 0f, 1f);
+        _schedulerProvider.Background.AdvanceBy(TimeSpan.FromMilliseconds(300).Ticks);
+
+        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Never);
+        _runtimeServiceMock.Verify(
+            r => r.ModifyParticleSystem(psId, It.IsAny<ParticleSystemModel>(),
+                It.Is<ParticleSystemJet>(j => j.StreamColor.X == 1f && j.StreamColor.Y == 0f),
+                out It.Ref<ParticleSystemComputedProperties>.IsAny),
+            Times.Once);
+
+        // a physical edit still restores
+        jet.LatitudeDeg = 12f;
+        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Once);
+    }
+
+    /// "show reference-position error" reaches the native runtime and is kept in the session,
+    /// without restoring the snapshot (it is a drawing option).
+    [Fact]
+    public void ShowReferencePositionError_CallsRuntime_AndPersistsInSession()
+    {
+        var session = new ModelSession();
+        _modelSessionServiceMock.Setup(x => x.ObserveSession(It.IsAny<SessionId>()))
+            .Returns(System.Reactive.Linq.Observable.Return(session));
+        var vm = new ModelTabViewModel(
+            _translationServiceMock.Object,
+            _schedulerProvider,
+            _modelSessionServiceMock.Object,
+            _cometSessionServiceMock.Object,
+            _cometConfig,
+            _runtimeServiceMock.Object,
+            _dispatcherMock.Object,
+            _cometMessengerMock.Object,
+            _platformWindowServiceMock.Object,
+            _timelineService);
+
+        vm.ShowReferencePositionError = true;
+        _runtimeServiceMock.Verify(r => r.SetReferenceErrorVisible(true), Times.Once);
+        Assert.True(session.ShowReferencePositionError);
+        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Never);
+
+        vm.ShowReferencePositionError = false;
+        _runtimeServiceMock.Verify(r => r.SetReferenceErrorVisible(false), Times.Once);
+        Assert.False(session.ShowReferencePositionError);
+    }
 }

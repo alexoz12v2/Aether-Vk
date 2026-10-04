@@ -262,6 +262,10 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   public bool SetJetPreviewVisibility(ulong psId, bool visibility) => true;
 
+  public bool SetCometIndicatorVisible(bool visible) => true;
+
+  public bool SetReferenceErrorVisible(bool visible) => true;
+
   public void RemoveViewport(ulong presentationEngineId) { }
 
   public void ResizeViewport(ulong presentationEngineId, uint width, uint height) { }
@@ -270,6 +274,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
     int spkId,
     TimeRange proposedRange,
     Logic.Models.SmallBodyDataComponent sbData,
+    Logic.Models.ReferenceOrbitMode referenceMode,
     out ulong cometBodyId
   )
   {
@@ -278,6 +283,12 @@ public class MockNativeRuntimeService : INativeRuntimeService
   }
 
   public bool ResetSimulationSync() => true;
+
+  public bool SeekEpochSync(short centuries, ulong nanoseconds) => true;
+
+  public bool DumpScene(string baseDir) => true;
+
+  public bool RestoreScene(string baseDir) => true;
 
   public bool PauseSimulationSync() => true;
 
@@ -292,14 +303,14 @@ public class MockNativeRuntimeService : INativeRuntimeService
     out double posX,
     out double posY,
     out double posZ,
-    out float rotX,
-    out float rotY,
-    out float rotZ,
-    out float rotW
+    out double rotX,
+    out double rotY,
+    out double rotZ,
+    out double rotW
   )
   {
     posX = posY = posZ = 0.0;
-    rotX = rotY = rotZ = rotW = 0.0f;
+    rotX = rotY = rotZ = rotW = 0.0;
     return true;
   }
 
@@ -310,7 +321,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
     double posX,
     double posY,
     double posZ,
-    System.Numerics.Quaternion rotation,
+    AetherVk.Logic.Utils.Quaterniond rotation,
     ulong pivotEntityId = 0
   ) => true;
 

@@ -47,6 +47,26 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   [ObservableProperty]
   private bool _hasProposedTimeline;
 
+  /// <summary>
+  /// Reference orbit choice for the commit, as a ComboBox index: -1 = nothing chosen yet (the
+  /// commit stays disabled, so the user reads the options at least once), 0 = SBDB solution,
+  /// 1 = re-osculated at the start epoch. See <see cref="Models.ReferenceOrbitMode"/>.
+  /// </summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ReferenceOrbitMode))]
+  private int _referenceOrbitIndex = -1;
+
+  /// <summary>The chosen reference orbit, or null while nothing is selected.</summary>
+  public Models.ReferenceOrbitMode? ReferenceOrbitMode => ReferenceOrbitIndex switch
+  {
+    0 => Models.ReferenceOrbitMode.Sbdb,
+    1 => Models.ReferenceOrbitMode.OsculatingAtStart,
+    _ => null,
+  };
+
+  /// <summary>The reference orbit can only be chosen while no comet is committed.</summary>
+  public bool IsReferenceOrbitSelectable => !IsAlmanacCommitted;
+
   // ── Observable properties — Comet Search ─────────────────────────────────
 
   [ObservableProperty]
@@ -301,10 +321,13 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         or nameof(CommittedCometName)
         or nameof(CommittedSpkRecordId)
         or nameof(HasTimelineChangedAfterCommit)
+        or nameof(ReferenceOrbitIndex)
     )
     {
       DownloadAndCommitCommand.NotifyCanExecuteChanged();
     }
+    if (e.PropertyName == nameof(IsAlmanacCommitted))
+      OnPropertyChanged(nameof(IsReferenceOrbitSelectable));
   }
 
   /// <summary>
@@ -369,6 +392,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     SelectedComet is not null
     && SelectedSpkRecord is not null
     && HasProposedTimeline
+    && ReferenceOrbitMode is not null
     && (
       !IsAlmanacCommitted
       || CommittedCometName != SelectedComet.Name
@@ -385,6 +409,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       return;
     }
 
+    string recordId = SelectedSpkRecord.RecordId;
     IsDownloading = true;
     DownloadStatus = "Fetching NAIF ID…";
 
@@ -440,7 +465,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       }
 
       // Commit the new SPK — sbData carries the SBDB Keplerian elements for orbit track generation
-      bool committed = await _cometConfig.CommitCometAsync(filePath, naifId, _currentProposedTimeRange!, sbData);
+      bool committed = await _cometConfig.CommitCometAsync(
+        filePath, naifId, _currentProposedTimeRange!, sbData, ReferenceOrbitMode ?? Models.ReferenceOrbitMode.Sbdb);
 
       if (committed)
       {
@@ -462,16 +488,13 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         DownloadStatus = "Fetching nucleus radius…";
         try
         {
-          var orbitData = await _jpl.GetPlanetDataAsync(
-            SelectedComet.PrimaryDesignation,
-            "@sun",
-            DateTime.UtcNow,
-            DateTime.UtcNow.AddDays(1),
-            "1d"
-          );
-          if (session is not null && orbitData is not null && orbitData.CometRadiusKm > 0.0)
+          // Query by the committed apparition record: the bare designation ("67P;") makes
+          // Horizons return the record index instead of data, which used to surface a
+          // spurious "No ephemeris data" breadcrumb after a successful commit.
+          var (radiusKm, _) = await _jpl.FetchObjectConstantsAsync(recordId);
+          if (session is not null && radiusKm > 0.0)
           {
-            session.NucleusRadiusKm = (float)orbitData.CometRadiusKm;
+            session.NucleusRadiusKm = (float)radiusKm;
             _cometConfig.SetNucleusRadiusKm(session.NucleusRadiusKm);
           }
         }

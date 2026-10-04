@@ -43,8 +43,7 @@ pub const UNSCALED_FIXED_DELTA_US: timeus_t = timeus_milliseconds(16);
 /// Used by [`LogicCommand::TryInitComet`] and [`LogicCommand::BuildCometTrajectory`] to
 /// generate an analytical orbit track (full ellipse or large hyperbola arc) independently
 /// of the SPK file time coverage. The elements are in the **Heliocentric Ecliptic** frame
-/// (J2000 ecliptic plane), which must be rotated by Earth's obliquity (~23.44°) before
-/// storing as Heliocentric Equatorial (ICRF) control points.
+/// (J2000 ecliptic plane), which is the scene frame (SUN_ECLIPJ2000): no obliquity rotation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct KeplerianElements {
   /// Orbital eccentricity (e ≥ 0; <1 = ellipse, ≥1 = hyperbola).
@@ -57,6 +56,29 @@ pub struct KeplerianElements {
   pub longitude_of_ascending_node_deg: f64,
   /// Argument of perihelion ω (degrees).
   pub argument_of_perihelion_deg: f64,
+  /// Time of perihelion passage (JD TDB); NaN when unknown (shape-only elements).
+  pub time_of_perihelion_jd_tdb: f64,
+}
+
+/// Which osculating orbit the comet reference track is drawn from (chosen at commit).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[repr(u32)]
+pub enum ReferenceOrbitMode {
+  /// SBDB solution elements, osculating at their own (possibly distant) epoch.
+  #[default]
+  Sbdb = 0,
+  /// Re-osculated from the SPK state at the simulation start epoch.
+  OsculatingAtStart = 1,
+}
+
+impl ReferenceOrbitMode {
+  pub fn from_u32(v: u32) -> Self {
+    if v == 1 {
+      Self::OsculatingAtStart
+    } else {
+      Self::Sbdb
+    }
+  }
 }
 
 pub mod particle_constants {
@@ -762,10 +784,6 @@ pub enum LogicCommand {
     target_entity: EntityId,
     scene: Arc<RwLock<SceneContext>>,
   },
-  StartSimlulation {
-    scene_id: u64,
-    speed: oshal::os::time::v2::SimSpeed,
-  },
   PlaySceneToEnd {
     scene_id: u64,
     speed: oshal::os::time::v2::SimSpeed,
@@ -807,9 +825,20 @@ pub enum LogicCommand {
     scene_id: u64,
     done_flag: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
   },
+  /// Jumps the simulation to `epoch` (clamped to the committed range): bodies repositioned, the
+  /// dust of the last TTL rebuilt from the deterministic emission grid. Works while paused.
+  SeekEpoch {
+    scene_id: u64,
+    epoch: hifitime::Epoch,
+    done_flag: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
+    /// written before `done_flag`: whether the seek was applied
+    succeeded: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
+  },
   ResetSimulation {
     scene_id: u64,
     done_flag: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
+    /// written before `done_flag`: whether the GPU sync succeeded and the reset was applied
+    succeeded: alloc::sync::Arc<core::sync::atomic::AtomicBool>,
   },
   /// Set the visibility (hidden/visible) of an entity and all its descendants.
   /// Dispatched asynchronously to the logic thread to avoid spin-wait deadlocks.
@@ -832,6 +861,8 @@ pub enum LogicCommand {
     proposed_end: hifitime::Epoch,
     /// Osculating Keplerian elements from SBDB, used to generate the analytical orbit track.
     keplerian_elements: KeplerianElements,
+    /// Which osculating orbit the reference track is drawn from.
+    reference_mode: ReferenceOrbitMode,
   },
   /// Phase 1 Async Math: Background thread generates trajectory points.
   BuildCometTrajectory {
@@ -842,6 +873,7 @@ pub enum LogicCommand {
     sample_step_days: f64,
     /// Osculating Keplerian elements from SBDB, forwarded from TryInitComet.
     keplerian_elements: KeplerianElements,
+    reference_mode: ReferenceOrbitMode,
   },
   /// Internal command dispatched by the UnloadAlmanac handler for comet SPK cleanup.
   /// Removes AlmanacPlanet and TrajectoryComponent, resets comet to 1 AU +X default.
@@ -858,7 +890,7 @@ pub enum LogicCommand {
     scene_id: u64,
     camera_id: u64, // external (FFI) entity id
     target_pos: aethervk_oshal_rlib::math::vector::vec3f64::DVec3,
-    target_rot: aethervk_oshal_rlib::math::vector::vec4::Quat,
+    target_rot: aethervk_oshal_rlib::math::vector::vec4f64::Quat64,
     duration_s: f32,
     orbit_pivot: Option<aethervk_oshal_rlib::math::vector::vec3f64::DVec3>,
   },
@@ -874,7 +906,7 @@ pub enum LogicCommand {
     /// `Some((pos, rot))` → write world-space position + rotation via `set_global_transform_f64`.
     transform: Option<(
       aethervk_oshal_rlib::math::vector::vec3f64::DVec3,
-      aethervk_oshal_rlib::math::vector::vec4::Quat,
+      aethervk_oshal_rlib::math::vector::vec4f64::Quat64,
     )>,
     /// `Some(proj)` → overwrite `CameraComponent::projection`.
     projection: Option<crate::scene::CameraProjection>,
@@ -1267,11 +1299,24 @@ pub struct SceneContext {
   pub earth: Option<SubtreeEntities>,
   /// Comet entity hierarchy (subtree, body, orbit). Populated in create_empty_scene2.
   pub comet: Option<SubtreeEntities>,
-  /// Calendar year for which the Earth orbit TrajectoryComponent is currently built.
-  /// None = no trajectory yet. Used to avoid redundant UpdateTrajectoryForSpk dispatches.
-  pub earth_orbit_year: Option<i32>,
+  /// TAI-second span the Earth orbit TrajectoryComponent covers (see
+  /// `reposition::needs_earth_orbit_rebuild`). None = no trajectory yet.
+  pub earth_orbit_coverage: Option<(f64, f64)>,
   /// Calendar year for which the Comet orbit TrajectoryComponent is currently built.
   pub comet_orbit_year: Option<i32>,
+  /// Empty container (child of root) named `effective_comet_trajectory`: gains an
+  /// `EffectiveTrajectoryComponent` + grey `TrajectoryComponent` while a committed comet runs.
+  pub effective_comet_trajectory: Option<EntityId>,
+  /// Elements of the committed comet reference track (SBDB or re-osculated at the start epoch),
+  /// with the time of perihelion when known: used to measure the reference-position error.
+  pub comet_reference_elements: Option<KeplerianElements>,
+  /// Child of root carrying the comet's `ReferentialIndicatorComponent` label. Hidden except in
+  /// Earth observer mode (see `SimulationContext::set_comet_indicator_visible`).
+  pub comet_indicator: Option<EntityId>,
+  /// "Show reference-position error": `[cross-track, same-epoch]` annotation entities (children
+  /// of root, hidden unless enabled and the error exceeds 10 nucleus radii).
+  pub reference_error_entities: Option<[EntityId; 2]>,
+  pub reference_error_enabled: Arc<AtomicBool>,
 }
 
 impl Drop for SceneContext {
@@ -1350,8 +1395,13 @@ impl SceneContext {
       time_snapshot: None,
       earth: None,
       comet: None,
-      earth_orbit_year: None,
+      earth_orbit_coverage: None,
       comet_orbit_year: None,
+      effective_comet_trajectory: None,
+      comet_reference_elements: None,
+      comet_indicator: None,
+      reference_error_entities: None,
+      reference_error_enabled: Arc::new(AtomicBool::new(false)),
     }
   }
 
@@ -1567,6 +1617,13 @@ pub struct SceneDump {
   pub start_epoch_parts: (i16, u64),
   /// End of the simulated epoch range (centuries, nanoseconds since J2000)
   pub end_epoch_parts: (i16, u64),
+  /// Simulation epoch when dumped (TDB centuries, nanoseconds): restore seeks there, the dust
+  /// being a deterministic function of the epoch (nothing GPU-side is saved)
+  pub current_epoch_parts: (i16, u64),
+  /// Compatibility "hash": deterministic JSON of everything that shapes the simulation (range,
+  /// comet, reference orbit, nucleus, jets), see `scene_dump::compatibility_json`. A dump is only
+  /// restored into a scene with the same JSON.
+  pub compatibility: alloc::string::String,
   /// ECS entity list (all CPU-side data only)
   pub entities: alloc::vec::Vec<SerializedEntity>,
   /// Raw GPU particle buffer bytes. `None` if no particle systems existed.
@@ -1574,7 +1631,9 @@ pub struct SceneDump {
 }
 
 impl SceneDump {
-  pub const CURRENT_VERSION: u32 = 1;
+  /// 2: current epoch + compatibility JSON, rotational model / trajectory / frame / Sun data.
+  /// 3: f64 `HighResTransformComponent` rotation.
+  pub const CURRENT_VERSION: u32 = 3;
 }
 
 /// Serialized representation of a single scene entity.
@@ -1600,13 +1659,57 @@ pub enum SerializedComponent {
   GridMarker,
   CometMarker,
   AlmanacPlanet(SerializedAlmanacPlanet),
+  BodyRotationalModel(SerializedRotationalModel),
+  Trajectory(SerializedTrajectory),
+  ReferenceFrame(SerializedReferenceFrame),
+  Sun(SerializedSun),
+}
+
+/// Serialized `BodyRotationalModel` (IAU elements, degrees / per century / per day).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SerializedRotationalModel {
+  pub pole_ra: f64,
+  pub pole_dec: f64,
+  pub prime_meridian: f64,
+  pub pole_ra_rate: f64,
+  pub pole_dec_rate: f64,
+  pub rotation_rate: f64,
+  pub body_fixed_orientation: bool,
+}
+
+/// Serialized `TrajectoryComponent` (f64 AU control points when available).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SerializedTrajectory {
+  pub control_points: alloc::vec::Vec<[f32; 4]>,
+  pub control_points_f64: alloc::vec::Vec<[f64; 3]>,
+  pub color: [f32; 4],
+  pub line_width: f32,
+  pub texture_id: u32,
+  pub subdivisions_per_segment: u32,
+}
+
+/// Serialized `ReferenceFrameComponent` (`frame_type`: 0 macro, 1 micro).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SerializedReferenceFrame {
+  pub frame_type: u8,
+  pub scale: f32,
+  pub soi_radius: f32,
+  pub depth_layer: u32,
+}
+
+/// Serialized `SunComponent`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SerializedSun {
+  pub radius_km: f32,
+  pub resolution: (u32, u32, u32),
 }
 
 /// Serialized `HighResTransformComponent`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SerializedHighResTransform {
   pub position: [f64; 3],
-  pub rotation: [f32; 4],
+  /// xyzw
+  pub rotation: [f64; 4],
   pub scale: [f32; 3],
 }
 

@@ -30,7 +30,14 @@ fn test_batch(count: u32, dur: f64, first_index: u32, capacity: u32) -> DustBatc
   let mut b: DustBatch = bytemuck::Zeroable::zeroed();
   b.set_comet(rc, vc, T_START, dur);
   b.rot_start = [0.0, 0.0, 0.0, 1.0];
-  b.rot_end = [0.0, 0.0, 0.3826834, 0.9238795]; // 45° about z over the batch: exercises nlerp
+  // 45° about z over the batch: exercises the spin rotation
+  b.spin = [
+    0.0,
+    0.0,
+    1.0,
+    (core::f64::consts::FRAC_PI_4 / dur.max(1.0)) as f32,
+  ];
+  b.lit = [0.0, 0.0, 0.0, dust::LIT_MODE_ALWAYS];
   b.jet_dir_aperture = [0.35, 0.93, 0.04, 0.6];
   b.size_params = size_params;
   b.vel_params = vel_params;
@@ -292,5 +299,80 @@ fn gpu_dust_df64_keeps_zero_beta_cluster_on_comet() {
         "{days} d: β=0 cluster drifted {worst} m from the comet (df64 broken?)"
       );
     }
+  });
+}
+
+#[test]
+fn gpu_dust_emit_lit_time_matches_reference() {
+  // spinning nucleus, jet site in and out of daylight over 2.5 rotations
+  const P_ROT: f64 = 12.4 * 3600.0;
+  let omega = 2.0 * core::f64::consts::PI / P_ROT;
+  let unit = |a: V3| {
+    let n = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    [a[0] / n, a[1] / n, a[2] / n]
+  };
+  let dot = |a: V3, b: V3| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  let axis = unit([0.2, 0.1, 0.97]);
+  let n0 = unit([1.0, -0.3, 0.1]);
+  let dur = 2.5 * P_ROT;
+  with_dust_device(9004, |device, capacity, clusters, _| {
+    let (rc, vc) = comet_state();
+    let sun = unit([-rc[0], -rc[1], -rc[2]]);
+    let mut batch = test_batch(2048, dur, 0, capacity);
+    batch.rot_start = [0.0, 0.0, 0.0, 1.0];
+    batch.jet_dir_aperture = [n0[0] as f32, n0[1] as f32, n0[2] as f32, 0.6];
+    batch.spin = [axis[0] as f32, axis[1] as f32, axis[2] as f32, omega as f32];
+    batch.lit = dust::LitWindow::new(sun, n0, axis, omega, dur).to_gpu();
+    assert_eq!(batch.lit[3], dust::LIT_MODE_PERIODIC);
+    emit(device, 9004, &batch);
+    let bytes = read_back(
+      device,
+      clusters,
+      true,
+      capacity as u64 * core::mem::size_of::<DustCluster>() as u64,
+    );
+    let ring: &[DustCluster] = bytemuck::cast_slice(&bytes);
+    let mut boundary_outliers = 0u32;
+    let mut worst_dt = 0.0f64;
+    for j in 0..batch.count {
+      let gpu = &ring[(j & batch.ring_mask) as usize];
+      let cpu = dust::emit_cluster(&batch, j);
+      let dt_gpu = gpu.t0().to_f64() - T_START;
+      assert!(dt_gpu >= 0.0 && dt_gpu <= dur + 1e-2, "dt {dt_gpu}");
+      // every GPU cluster is emitted in daylight
+      let n = dust::rotate_axis_angle(n0, axis, omega * dt_gpu);
+      assert!(dot(n, sun) > -1e-3, "cluster {j} emitted in the dark");
+      // GPU division / floor may differ by ulps: tiny time offsets, or (at an arc end) the
+      // next lit arc
+      let ddt = (dt_gpu - (cpu.t0().to_f64() - T_START)).abs();
+      if ddt > 0.1 {
+        boundary_outliers += 1;
+        continue;
+      }
+      worst_dt = worst_dt.max(ddt);
+      // r0 lies on the comet orbit at the GPU's own emission time
+      let (r_exp, v_comet) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, dt_gpu);
+      let r0 = gpu.r0().to_f64();
+      let dr =
+        ((r0[0] - r_exp[0]).powi(2) + (r0[1] - r_exp[1]).powi(2) + (r0[2] - r_exp[2]).powi(2))
+          .sqrt();
+      assert!(dr < 0.5, "r0 cluster {j}: |Δ| = {dr} m");
+      // ejection velocity (relative to the comet) matches the reference
+      let (cg, cc) = (gpu.v0().to_f64(), cpu.v0().to_f64());
+      let (_, v_comet_cpu) =
+        kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, cpu.t0().to_f64() - T_START);
+      let dv = (0..3)
+        .map(|k| ((cg[k] - v_comet[k]) - (cc[k] - v_comet_cpu[k])).powi(2))
+        .sum::<f64>()
+        .sqrt();
+      assert!(dv < 1e-3, "ejection cluster {j}: |Δ| = {dv} m/s");
+    }
+    std::println!(
+      "[dust gpu] lit-time emit parity: worst |Δt0| = {worst_dt:.4} s, {boundary_outliers} arc-boundary outliers"
+    );
+    assert!(
+      boundary_outliers <= batch.count / 200,
+      "{boundary_outliers} clusters off the reference lit arc"
+    );
   });
 }

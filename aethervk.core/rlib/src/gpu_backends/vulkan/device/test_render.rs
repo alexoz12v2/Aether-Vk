@@ -208,6 +208,7 @@ fn test_render_all_archetypes_windowless() {
           radius: 1.0,
           subdivisions: 12.0,
           _pad: [0.0, 0.0],
+          center_clip: [0.0; 4],
         },
       )];
 

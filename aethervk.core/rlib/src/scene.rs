@@ -24,7 +24,9 @@ use aethervk_oshal_rlib::{
     matrix::{Matrix4, mat4::Mat4x4f32},
     quaternion::Quaternion,
     safe_div,
-    vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat},
+    vector::{
+      Vector, Vector3, Vector4, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat, vec4f64::Quat64,
+    },
   },
   os::pool::{ThreadPool, chunked::ThreadPoolChunkedExt, tasklet::ThreadPoolExt},
 };
@@ -343,7 +345,9 @@ impl TransformComponent {
 /// Position is stored as `Vec3f64` to avoid catastrophic cancellation when
 /// computing relative transforms between nearly-coincident AU positions.
 ///
-/// Rotation stays f32 `Quat` (sufficient for orientation).
+/// Rotation is f64 (`Quat64`): an f32 quaternion rounds by ~1e-7 rad, ~15 km at 1 AU, more than a
+/// telescope field on a comet nucleus. Body rotations from the almanac stay f32 on their
+/// `TransformComponent` and are upcast (exactly) wherever they are composed with this one.
 /// Scale stays f32 (never needs sub-AU precision).
 ///
 /// The camera entity should have BOTH `TransformComponent` (f32 GPU shadow) and
@@ -354,7 +358,7 @@ impl TransformComponent {
 #[derive(Debug, Clone, Copy)]
 pub struct HighResTransformComponent {
   pub position: Vec3f64,
-  pub rotation: Quat,
+  pub rotation: Quat64,
   pub scale: Vec3f32,
 }
 
@@ -362,7 +366,7 @@ impl Default for HighResTransformComponent {
   fn default() -> Self {
     Self {
       position: Vec3f64::from_components(0.0, 0.0, 0.0),
-      rotation: Quat::identity(),
+      rotation: Quat64::identity(),
       scale: Vec3f32::one(),
     }
   }
@@ -381,7 +385,7 @@ impl HighResTransformComponent {
   pub fn from_transform(t: &TransformComponent) -> Self {
     Self {
       position: t.position.to_f64(),
-      rotation: t.rotation,
+      rotation: Quat64::from_quat(t.rotation),
       scale: t.scale,
     }
   }
@@ -390,14 +394,15 @@ impl HighResTransformComponent {
   pub fn to_transform(&self) -> TransformComponent {
     TransformComponent {
       position: self.position.to_f32(),
-      rotation: self.rotation,
+      rotation: self.rotation.to_quat(),
       scale: self.scale,
     }
   }
 
   pub fn to_mat4_f64(&self) -> aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64 {
-    let mut rot_f32 =
-      aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_quat_custom_frame(self.rotation);
+    let mut rot_f32 = aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32::from_quat_custom_frame(
+      self.rotation.to_quat(),
+    );
     rot_f32.x = rot_f32.x * (self.scale.x() as f32);
     rot_f32.y = rot_f32.y * (self.scale.y() as f32);
     rot_f32.z = rot_f32.z * (self.scale.z() as f32);
@@ -1387,7 +1392,7 @@ impl Scene {
       camera_entity,
       HighResTransformComponent {
         position: inital_pos.to_f64(),
-        rotation: Quat::identity(),
+        rotation: Quat64::identity(),
         scale: Vec3f32::from_components(1.0, 1.0, 1.0),
       },
     )?;
@@ -1651,6 +1656,8 @@ impl Scene {
 
     // trajectory module
     self.register_component::<trajectory::TrajectoryComponent>(&[]);
+    self.register_component::<trajectory::EffectiveTrajectoryComponent>(&[]);
+    self.register_component::<trajectory::ScreenMeasurementComponent>(&[]);
 
     // script components module
     self.register_component::<script_components::UpdateComponent>(&[]);
@@ -2025,7 +2032,8 @@ impl Scene {
 
   /// TODO: Document this item
   pub fn has_component<T: Component>(&self, entity_id: EntityId) -> HasComponentResultEnum {
-    let archetypes = self.archetypes.read();
+    // recursive: see `with_component`
+    let archetypes = self.archetypes.read_recursive();
     let archetype = archetypes
       .iter()
       .find(|archetype| archetype.entities.iter().any(|e| *e == Some(entity_id)));
@@ -2041,17 +2049,25 @@ impl Scene {
     }
   }
 
-  /// TODO: Document this item
+  /// Runs `f` on `entity_id`'s `T`.
+  ///
+  /// The per-entity lookups (`with_component`, `with_component_mut`, `has_component`) are
+  /// routinely called from inside query callbacks that already hold `archetypes` (and possibly
+  /// the same column) for reading. parking_lot is write-preferring: a plain `read()` there parks
+  /// behind any queued writer (e.g. the logic thread's `add_component`), which itself waits for
+  /// the outer read, a deadlock (render `build_render_scene` → `compute_rte` vs logic
+  /// `record_effective_trajectory`). `read_recursive` never parks behind a writer while this
+  /// thread holds a read. Outer queries keep a plain `read()` so writers are not starved.
   pub fn with_component<T: Component, F, R>(&self, entity_id: EntityId, f: F) -> Option<R>
   where
     F: FnOnce(&T) -> R,
   {
-    let archetypes = self.archetypes.read();
-    let entities = self.entities.read();
+    let archetypes = self.archetypes.read_recursive();
+    let entities = self.entities.read_recursive();
     let location = entities.get(entity_id)?;
     let archetype = &archetypes[location.archetype_index];
 
-    let components_lock = archetype.components.get(&TypeId::of::<T>())?.read();
+    let components_lock = archetype.components.get(&TypeId::of::<T>())?.read_recursive();
     let components = components_lock.as_any().downcast_ref::<Vec<Option<T>>>()?;
 
     Some(f(components[location.row_index].as_ref()?))
@@ -2062,8 +2078,9 @@ impl Scene {
   where
     F: FnOnce(&mut T) -> R,
   {
-    let archetypes = self.archetypes.read();
-    let entities = self.entities.read();
+    // recursive reads: see `with_component` (the column itself is written)
+    let archetypes = self.archetypes.read_recursive();
+    let entities = self.entities.read_recursive();
     let location = entities.get(entity_id)?;
     let archetype = &archetypes[location.archetype_index];
 
@@ -3090,8 +3107,12 @@ impl Scene {
         if let Some(p_pos) = parent_pos_f64 {
           let p_rot = self
             .with_component(parent_id, |c: &HighResTransformComponent| c.rotation)
-            .or_else(|| self.with_component(parent_id, |c: &TransformComponent| c.rotation))
-            .unwrap_or(Quat::identity());
+            .or_else(|| {
+              self.with_component(parent_id, |c: &TransformComponent| {
+                Quat64::from_quat(c.rotation)
+              })
+            })
+            .unwrap_or(Quat64::identity());
           let p_scale = self
             .with_component(parent_id, |c: &HighResTransformComponent| c.scale)
             .or_else(|| self.with_component(parent_id, |c: &TransformComponent| c.scale))
@@ -3104,12 +3125,12 @@ impl Scene {
 
           let scaled_parent_scale = p_scale * frame_scale;
 
-          let rotated = p_rot.rotate_vector(Vec3f32::from_components(
-            (scaled_parent_scale.x() as f64 * acc_pos.x()) as f32,
-            (scaled_parent_scale.y() as f64 * acc_pos.y()) as f32,
-            (scaled_parent_scale.z() as f64 * acc_pos.z()) as f32,
+          let rotated = p_rot.rotate_vector(Vec3f64::from_components(
+            scaled_parent_scale.x() as f64 * acc_pos.x(),
+            scaled_parent_scale.y() as f64 * acc_pos.y(),
+            scaled_parent_scale.z() as f64 * acc_pos.z(),
           ));
-          acc_pos = p_pos + rotated.to_f64();
+          acc_pos = p_pos + rotated;
           acc_rot = (p_rot * acc_rot).normalize();
           acc_scale = scaled_parent_scale * acc_scale;
         }
@@ -3303,6 +3324,22 @@ impl Scene {
     }
   }
 
+  /// Reparents a `HighResTransformComponent` entity (e.g. a camera) to root, keeping its world
+  /// position and rotation (local == world at root level). Returns `false` if the entity has no
+  /// global transform or the scene has no root.
+  pub fn unparent_to_root_preserving_world(&self, entity_id: EntityId) -> bool {
+    let (Some(world_t), Some(root)) = (self.global_transform_f64(entity_id), self.get_root())
+    else {
+      return false;
+    };
+    self.set_parent(entity_id, Some(root));
+    let _ = self.with_component_mut(entity_id, |t: &mut HighResTransformComponent| {
+      t.position = world_t.position;
+      t.rotation = world_t.rotation;
+    });
+    true
+  }
+
   /// Like `global_transform`, but accumulates positions in f64 to preserve precision.
   /// Uses `HighResTransformComponent` when available on an entity, falling back to
   /// `TransformComponent` (promoted to f64) otherwise.
@@ -3340,8 +3377,12 @@ impl Scene {
         if let Some(p_pos) = parent_pos_f64 {
           let p_rot = self
             .with_component(parent_id, |c: &HighResTransformComponent| c.rotation)
-            .or_else(|| self.with_component(parent_id, |c: &TransformComponent| c.rotation))
-            .unwrap_or(Quat::identity());
+            .or_else(|| {
+              self.with_component(parent_id, |c: &TransformComponent| {
+                Quat64::from_quat(c.rotation)
+              })
+            })
+            .unwrap_or(Quat64::identity());
           let p_scale = self
             .with_component(parent_id, |c: &HighResTransformComponent| c.scale)
             .or_else(|| self.with_component(parent_id, |c: &TransformComponent| c.scale))
@@ -3357,12 +3398,12 @@ impl Scene {
 
           // combine: parent_pos + parent_rot * (parent_scale * child_pos)
           // All position math in f64:
-          let rotated = p_rot.rotate_vector(Vec3f32::from_components(
-            (scaled_parent_scale.x() as f64 * acc_pos.x()) as f32,
-            (scaled_parent_scale.y() as f64 * acc_pos.y()) as f32,
-            (scaled_parent_scale.z() as f64 * acc_pos.z()) as f32,
+          let rotated = p_rot.rotate_vector(Vec3f64::from_components(
+            scaled_parent_scale.x() as f64 * acc_pos.x(),
+            scaled_parent_scale.y() as f64 * acc_pos.y(),
+            scaled_parent_scale.z() as f64 * acc_pos.z(),
           ));
-          acc_pos = p_pos + rotated.to_f64();
+          acc_pos = p_pos + rotated;
           acc_rot = (p_rot * acc_rot).normalize();
           acc_scale = scaled_parent_scale * acc_scale;
         }
@@ -3391,9 +3432,9 @@ impl Scene {
       return Some(HighResTransformComponent {
         position: Vec3f64::from_components(0.0, 0.0, 0.0),
         rotation: self
-          .global_transform(target_entity)
+          .global_transform_f64(target_entity)
           .map(|t| t.rotation)
-          .unwrap_or(Quat::identity()),
+          .unwrap_or(Quat64::identity()),
         scale: self
           .global_transform(target_entity)
           .map(|t| t.scale)
@@ -3450,18 +3491,19 @@ impl Scene {
 
     // Accumulate target → LCA in f64
     let mut t_pos = Vec3f64::from_components(0.0, 0.0, 0.0);
-    let mut t_rot = Quat::identity();
+    let mut t_rot = Quat64::identity();
     let mut t_scale = Vec3f32::from_components(1.0, 1.0, 1.0);
 
     if t_idx >= 0 {
       for i in 0..=(t_idx as usize) {
         let node_id = target_path[i];
-        let node_t = self.with_component(node_id, |c: &TransformComponent| *c).or_else(|| {
-          self.with_component(node_id, |c: &HighResTransformComponent| c.to_transform())
-        })?;
-        let node_pos_f64 = self
-          .with_component(node_id, |c: &HighResTransformComponent| c.position)
-          .or_else(|| self.with_component(node_id, |c: &TransformComponent| c.position.to_f64()))?;
+        let node_t =
+          self.with_component(node_id, |c: &HighResTransformComponent| *c).or_else(|| {
+            self.with_component(node_id, |c: &TransformComponent| {
+              HighResTransformComponent::from_transform(c)
+            })
+          })?;
+        let node_pos_f64 = node_t.position;
 
         let mut frame_scale = 1.0_f32;
         let _ = self.with_component(node_id, |c: &ReferenceFrameComponent| {
@@ -3471,14 +3513,14 @@ impl Scene {
         let scaled_child_pos = t_pos * (frame_scale as f64);
         let scaled_child_scale = t_scale * frame_scale;
 
-        // rotate the scaled child position by node rotation (f32 quat, f64 position)
-        let rotated = node_t.rotation.rotate_vector(Vec3f32::from_components(
-          (node_t.scale.x() as f64 * scaled_child_pos.x()) as f32,
-          (node_t.scale.y() as f64 * scaled_child_pos.y()) as f32,
-          (node_t.scale.z() as f64 * scaled_child_pos.z()) as f32,
+        // rotate the scaled child position by node rotation (f64)
+        let rotated = node_t.rotation.rotate_vector(Vec3f64::from_components(
+          node_t.scale.x() as f64 * scaled_child_pos.x(),
+          node_t.scale.y() as f64 * scaled_child_pos.y(),
+          node_t.scale.z() as f64 * scaled_child_pos.z(),
         ));
 
-        t_pos = node_pos_f64 + rotated.to_f64();
+        t_pos = node_pos_f64 + rotated;
         t_rot = (node_t.rotation * t_rot).normalize();
         t_scale = node_t.scale * scaled_child_scale;
       }
@@ -3486,18 +3528,19 @@ impl Scene {
 
     // Accumulate ref → LCA in f64
     let mut r_pos = Vec3f64::from_components(0.0, 0.0, 0.0);
-    let mut r_rot = Quat::identity();
+    let mut r_rot = Quat64::identity();
     let mut r_scale = Vec3f32::from_components(1.0, 1.0, 1.0);
 
     if r_idx >= 0 {
       for i in 0..=(r_idx as usize) {
         let node_id = ref_path[i];
-        let node_t = self.with_component(node_id, |c: &TransformComponent| *c).or_else(|| {
-          self.with_component(node_id, |c: &HighResTransformComponent| c.to_transform())
-        })?;
-        let node_pos_f64 = self
-          .with_component(node_id, |c: &HighResTransformComponent| c.position)
-          .or_else(|| self.with_component(node_id, |c: &TransformComponent| c.position.to_f64()))?;
+        let node_t =
+          self.with_component(node_id, |c: &HighResTransformComponent| *c).or_else(|| {
+            self.with_component(node_id, |c: &TransformComponent| {
+              HighResTransformComponent::from_transform(c)
+            })
+          })?;
+        let node_pos_f64 = node_t.position;
 
         let mut frame_scale = 1.0_f32;
         let _ = self.with_component(node_id, |c: &ReferenceFrameComponent| {
@@ -3507,13 +3550,13 @@ impl Scene {
         let scaled_child_pos = r_pos * (frame_scale as f64);
         let scaled_child_scale = r_scale * frame_scale;
 
-        let rotated = node_t.rotation.rotate_vector(Vec3f32::from_components(
-          (node_t.scale.x() as f64 * scaled_child_pos.x()) as f32,
-          (node_t.scale.y() as f64 * scaled_child_pos.y()) as f32,
-          (node_t.scale.z() as f64 * scaled_child_pos.z()) as f32,
+        let rotated = node_t.rotation.rotate_vector(Vec3f64::from_components(
+          node_t.scale.x() as f64 * scaled_child_pos.x(),
+          node_t.scale.y() as f64 * scaled_child_pos.y(),
+          node_t.scale.z() as f64 * scaled_child_pos.z(),
         ));
 
-        r_pos = node_pos_f64 + rotated.to_f64();
+        r_pos = node_pos_f64 + rotated;
         r_rot = (node_t.rotation * r_rot).normalize();
         r_scale = node_t.scale * scaled_child_scale;
       }
@@ -3543,7 +3586,7 @@ impl Scene {
     if let Some(hrt) = self.with_component(entity_id, |c: &HighResTransformComponent| *c) {
       let _ = self.with_component_mut(entity_id, |t: &mut TransformComponent| {
         t.position = hrt.position.to_f32();
-        t.rotation = hrt.rotation;
+        t.rotation = hrt.rotation.to_quat();
         t.scale = hrt.scale;
       });
     }
@@ -3625,7 +3668,7 @@ impl Scene {
     &self,
     entity_id: EntityId,
     new_pos: Vec3f64,
-    new_rot: Quat,
+    new_rot: Quat64,
   ) -> EngineResult<()> {
     // ── Phase 1: collect [direct_parent, …, root] with a while loop ───────────
     let mut ancestors: Vec<EntityId> = Vec::new();
@@ -3655,8 +3698,12 @@ impl Scene {
         .unwrap_or(Vec3f64::from_components(0.0, 0.0, 0.0));
       let mut acc_rot = self
         .with_component(root_id, |c: &HighResTransformComponent| c.rotation)
-        .or_else(|| self.with_component(root_id, |c: &TransformComponent| c.rotation))
-        .unwrap_or(Quat::identity());
+        .or_else(|| {
+          self.with_component(root_id, |c: &TransformComponent| {
+            Quat64::from_quat(c.rotation)
+          })
+        })
+        .unwrap_or(Quat64::identity());
       let mut acc_scale = self
         .with_component(root_id, |c: &HighResTransformComponent| c.scale)
         .or_else(|| self.with_component(root_id, |c: &TransformComponent| c.scale))
@@ -3681,8 +3728,12 @@ impl Scene {
           .unwrap_or(Vec3f64::from_components(0.0, 0.0, 0.0));
         let local_rot = self
           .with_component(node_id, |c: &HighResTransformComponent| c.rotation)
-          .or_else(|| self.with_component(node_id, |c: &TransformComponent| c.rotation))
-          .unwrap_or(Quat::identity());
+          .or_else(|| {
+            self.with_component(node_id, |c: &TransformComponent| {
+              Quat64::from_quat(c.rotation)
+            })
+          })
+          .unwrap_or(Quat64::identity());
         let mut local_scale = self
           .with_component(node_id, |c: &HighResTransformComponent| c.scale)
           .or_else(|| self.with_component(node_id, |c: &TransformComponent| c.scale))
@@ -3698,12 +3749,12 @@ impl Scene {
         //   world_pos   = acc_pos + acc_rot * (acc_scale * local_pos)
         //   world_rot   = acc_rot * local_rot
         //   world_scale = acc_scale * local_scale
-        let rotated = acc_rot.rotate_vector(Vec3f32::from_components(
-          (acc_scale.x() as f64 * local_pos.x()) as f32,
-          (acc_scale.y() as f64 * local_pos.y()) as f32,
-          (acc_scale.z() as f64 * local_pos.z()) as f32,
+        let rotated = acc_rot.rotate_vector(Vec3f64::from_components(
+          acc_scale.x() as f64 * local_pos.x(),
+          acc_scale.y() as f64 * local_pos.y(),
+          acc_scale.z() as f64 * local_pos.z(),
         ));
-        acc_pos = acc_pos + rotated.to_f64();
+        acc_pos = acc_pos + rotated;
         acc_rot = (acc_rot * local_rot).normalize();
         acc_scale = acc_scale * local_scale;
       }
@@ -3726,9 +3777,7 @@ impl Scene {
 
           // Un-rotate and un-scale the world-space offset into parent-local coordinates.
           let diff = new_pos - pg.position;
-          let diff_f32 =
-            Vec3f32::from_components(diff.x() as f32, diff.y() as f32, diff.z() as f32);
-          let unrotated = inv_rot.rotate_vector(diff_f32).to_f64();
+          let unrotated = inv_rot.rotate_vector(diff);
           t.position = Vec3f64::from_components(
             safe_div_f64(unrotated.x(), pg.scale.x() as f64),
             safe_div_f64(unrotated.y(), pg.scale.y() as f64),
@@ -4483,22 +4532,12 @@ impl Scene {
             })
             .unwrap_or_else(|| HighResTransformComponent {
               position: Vec3f64::zero(),
-              rotation: Quat::identity(),
+              rotation: Quat64::identity(),
               scale: Vec3f32::splat(1.0),
             })
         };
 
-        // Helper to rotate a Vec3f64 using an f32 Quat without losing f64 precision.
-        // It elegantly maps the f32 Quat parts to f64 and leverages your `Vector3::cross` trait method!
-        let rotate_f64 = |q: Quat, v: Vec3f64| -> Vec3f64 {
-          let qv = q.vector_part();
-          let q_vec = Vec3f64::from_components(qv.x() as f64, qv.y() as f64, qv.z() as f64);
-          let q_scalar = q.scalar_part() as f64;
-
-          let t = q_vec.cross(v);
-          let t2 = t + t; // native Vector ops::Add
-          v + (t2 * q_scalar) + q_vec.cross(t2) // native Vector ops::Mul for scalar scaling
-        };
+        let rotate_f64 = |q: Quat64, v: Vec3f64| -> Vec3f64 { q.rotate_vector(v) };
 
         let initial_t = get_t(child);
         let mut t_pos = initial_t.position;
@@ -4534,7 +4573,7 @@ impl Scene {
         }
 
         let mut r_pos = Vec3f64::zero();
-        let mut r_rot = Quat::identity();
+        let mut r_rot = Quat64::identity();
         let mut r_scale = Vec3f32::splat(1.0);
 
         // Traverse New Parent Branch natively in f64
@@ -4970,15 +5009,18 @@ pub mod dto {
     pub px: f64,
     pub py: f64,
     pub pz: f64,
-    pub rw: f32,
-    pub rx: f32,
-    pub ry: f32,
-    pub rz: f32,
+    pub rw: f64,
+    pub rx: f64,
+    pub ry: f64,
+    pub rz: f64,
     pub sx: f32,
     pub sy: f32,
     pub sz: f32,
     pub _pad: u32,
   }
+
+  // mirrored by `HighResTransformDTO` in aethervk.ui-logic/Services/INativeRuntimeService.cs
+  const _: () = assert!(core::mem::size_of::<HighResTransformDTO>() == 72);
 
   impl ForeignSerializable for HighResTransformComponent {
     type ForeignData = HighResTransformDTO;
@@ -5002,7 +5044,7 @@ pub mod dto {
 
     fn apply_foreign(&mut self, data: &Self::ForeignData) {
       self.position = Vec3f64::from_components(data.px, data.py, data.pz);
-      self.rotation = Quat::from_components(data.rx, data.ry, data.rz, data.rw);
+      self.rotation = Quat64::from_components(data.rx, data.ry, data.rz, data.rw);
       self.scale = Vec3f32::from_components(data.sx, data.sy, data.sz);
     }
   }
@@ -5204,6 +5246,48 @@ mod tests {
   #[derive(Debug, Clone, PartialEq)]
   struct ShieldComp;
   impl Component for ShieldComp {}
+
+  /// Regression (render-stall gdb dump): a lookup nested in a query callback must not park behind
+  /// a writer queued on another thread while the outer read is held (parking_lot is
+  /// write-preferring). Render `build_render_scene` → `compute_rte` → `with_component` vs logic
+  /// `record_effective_trajectory` → `add_component` deadlocked exactly like this.
+  #[test]
+  fn nested_lookup_does_not_deadlock_behind_queued_writer() {
+    use std::{
+      sync::{Arc, mpsc},
+      time::Duration,
+    };
+    let scene = Arc::new(setup_scene());
+    let e = scene.spawn_entity("a");
+    scene.add_component(e, HealthComp { hp: 1 }).unwrap();
+    scene.add_component(e, VelocityComp { speed: 2 }).unwrap();
+    let other = scene.spawn_entity("b");
+
+    let (in_query_tx, in_query_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let reader = {
+      let scene = scene.clone();
+      std::thread::spawn(move || {
+        scene.query1::<HealthComp, _>(|id, _| {
+          in_query_tx.send(()).unwrap();
+          // let the writer queue up on `archetypes` while this read is held
+          std::thread::sleep(Duration::from_millis(200));
+          let speed = scene.with_component(id, |v: &VelocityComp| v.speed);
+          let _ = scene.with_component_mut(id, |v: &mut VelocityComp| v.speed += 1);
+          done_tx.send(speed).unwrap();
+        });
+      })
+    };
+    in_query_rx.recv().unwrap();
+    let writer = {
+      let scene = scene.clone();
+      std::thread::spawn(move || scene.add_component(other, ShieldComp).unwrap())
+    };
+    let speed = done_rx.recv_timeout(Duration::from_secs(5)).expect("nested lookup deadlocked");
+    assert_eq!(speed, Some(2));
+    reader.join().unwrap();
+    writer.join().unwrap();
+  }
 
   // Helper function to build a pre-registered testing scene
   fn setup_scene() -> Scene {

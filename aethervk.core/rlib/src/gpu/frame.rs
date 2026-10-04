@@ -552,6 +552,45 @@ pub enum CameraProjectionParams {
   },
 }
 
+/// World space `(screen right, forward, screen up)` of a camera with orientation `rotation`.
+///
+/// Camera local frame: forward = −Y, up = +Z. In a right-handed world the screen right is then
+/// `forward × up` = local **−X**. Local +X is screen *left*: using it as view +x mirrored the whole
+/// image (and the triangle winding, previously patched with `INVERT_FRONT_FACE`). The view matrix
+/// built from these axes has determinant −1 by design, it is the (left-handed) camera convention
+/// correction; the camera quaternion itself stays a proper rotation.
+pub fn camera_screen_axes(rotation: &Quat) -> (Vec3f32, Vec3f32, Vec3f32) {
+  let right = rotation.rotate_vector(Vec3f32::from_components(-1.0, 0.0, 0.0));
+  let forward = rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+  let up = rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+  (right, forward, up)
+}
+
+/// `P·V·(center, 1)` in f64, cast: the clip position of an RTE point (see `ObjectData::center_clip`).
+pub fn center_clip_f64(camera: &CameraRenderData, center: [f64; 3]) -> [f32; 4] {
+  use aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64;
+  let c = camera.proj_f64
+    * camera.view_f64
+    * Vec4f64::from_components(center[0], center[1], center[2], 1.0);
+  [c.x() as f32, c.y() as f32, c.z() as f32, c.w() as f32]
+}
+
+/// Rotation-only RTE view matrix (rows: right, −forward, up) from world space screen axes.
+pub fn view_from_axes_f64(
+  right: [f64; 3],
+  forward: [f64; 3],
+  up: [f64; 3],
+) -> aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64 {
+  use aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64;
+  let col = |i: usize| Vec4f64::from_components(right[i], -forward[i], up[i], 0.0);
+  aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64::from_cols(
+    col(0),
+    col(1),
+    col(2),
+    Vec4f64::from_components(0.0, 0.0, 0.0, 1.0),
+  )
+}
+
 impl CameraRenderData {
   /// Note: camera component should have been updated with presentation engine data
   pub fn new(
@@ -560,10 +599,7 @@ impl CameraRenderData {
     frame_scale: f32,
     window_extent: [u32; 2],
   ) -> Self {
-    // Extract camera's local axes in world space
-    let right = transform.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0));
-    let up = transform.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
-    let forward = transform.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0));
+    let (right, forward, up) = camera_screen_axes(&transform.rotation);
 
     // RTE View Matrix: Camera is at the center [0,0,0], only rotating.
     let view = Mat4x4f32::look_at_axes(right, forward, up, Vec3f32::from_components(0.0, 0.0, 0.0));
@@ -706,6 +742,40 @@ impl CameraRenderData {
     }
   }
 
+  /// [`Self::new`] with the view built from the camera's f64 rotation. Rounding the quaternion to
+  /// f32 costs ~1e-7 rad, ~15 km at 1 AU: more than an Earth observer's field on a comet nucleus.
+  /// Only the view is f64; `rot` (debug yaw/pitch) and everything downstream stay f32.
+  pub fn new_f64(
+    transform: &crate::scene::HighResTransformComponent,
+    camera: &CameraComponent,
+    frame_scale: f32,
+    window_extent: [u32; 2],
+  ) -> Self {
+    use aethervk_oshal_rlib::math::{quaternion::Quaternion, vector::vec3f64::Vec3f64};
+    let mut data = Self::new(
+      &transform.to_transform(),
+      camera,
+      frame_scale,
+      window_extent,
+    );
+    let axis = |x: f64, y: f64, z: f64| {
+      let v = transform.rotation.rotate_vector(Vec3f64::from_components(x, y, z));
+      [v.x(), v.y(), v.z()]
+    };
+    // same convention as `camera_screen_axes`: right = R·(−X), forward = R·(−Y), up = R·Z
+    let (right, forward, up) = (
+      axis(-1.0, 0.0, 0.0),
+      axis(0.0, -1.0, 0.0),
+      axis(0.0, 0.0, 1.0),
+    );
+    data.view_f64 = view_from_axes_f64(right, forward, up);
+    data.view = data.view_f64.to_mat4_f32();
+    data.view_proj = (data.proj_f64 * data.view_f64).to_mat4_f32();
+    data.up = [up[0] as f32, up[1] as f32, up[2] as f32];
+    data.right = [right[0] as f32, right[1] as f32, right[2] as f32];
+    data
+  }
+
   /// Rebuilds the projection matrix (and resulting view-projection matrix) for the specified
   /// near/far planes. The view matrix (rotation-only in RTE) is shared across all layers.
   pub fn rebuild_for_layer(&self, layer_near: f64, layer_far: f64, layer_frame_scale: f32) -> Self {
@@ -743,7 +813,7 @@ impl CameraRenderData {
         (proj_f64.to_mat4_f32(), proj_f64)
       }
     };
-    let view_proj = proj * self.view;
+    let view_proj = (proj_f64 * self.view_f64).to_mat4_f32();
     Self {
       pos: self.pos,
       absolute_pos: self.absolute_pos,
@@ -867,6 +937,58 @@ pub fn prepare_dust(
     device.cmd_dust_post_propagate_barrier(cmd);
   }
   Ok(wait)
+}
+
+impl RenderLayer {
+  /// An empty layer (no draw calls yet).
+  pub fn new(
+    layer_index: u32,
+    frame_scale: f32,
+    camera_frame_local_pos: Vec3f32,
+    near: f64,
+    far: f64,
+  ) -> Self {
+    Self {
+      layer_index,
+      frame_scale,
+      camera_frame_local_pos,
+      near,
+      far,
+      draw_calls: Vec::with_capacity(16),
+      billboard_calls: Vec::with_capacity(16),
+      marker_calls: Vec::with_capacity(16),
+      measurement_calls: Vec::with_capacity(16),
+      gizmo_calls: Vec::with_capacity(16),
+      dust_calls: Vec::with_capacity(16),
+      sphere_gizmo_batch_call: None,
+      trajectory_call: None,
+      cursor_call: None,
+      sun_call: None,
+      sky_call: None,
+      grid_call: None,
+      background_call: None,
+    }
+  }
+}
+
+/// Micro layers in draw order: back to front by the camera's distance (AU) to each layer's frame
+/// origin, ties by descending index. `camera_frame_local_pos` is in frame units and
+/// `frame_scale` converts them to AU.
+pub fn micro_draw_order(layers: &[RenderLayer]) -> alloc::vec::Vec<&RenderLayer> {
+  use aethervk_oshal_rlib::math::vector::Vector3;
+  let dist = |l: &RenderLayer| {
+    let p = l.camera_frame_local_pos;
+    ((p.x() as f64).powi(2) + (p.y() as f64).powi(2) + (p.z() as f64).powi(2)).sqrt()
+      * l.frame_scale as f64
+  };
+  let mut v: alloc::vec::Vec<&RenderLayer> = layers.iter().filter(|l| l.layer_index > 0).collect();
+  v.sort_by(|a, b| {
+    dist(b)
+      .partial_cmp(&dist(a))
+      .unwrap_or(core::cmp::Ordering::Equal)
+      .then(b.layer_index.cmp(&a.layer_index))
+  });
+  v
 }
 
 pub struct RenderLayer {
@@ -1493,15 +1615,14 @@ pub fn render_frame(
   )?;
 
   // ── Subpass 1: ALL micro layers, back-to-front with depth clears ────────
-  // Layers are sorted back-to-front (higher layer_index = farther SOI = drawn first).
+  // Layers are drawn back-to-front by the camera's actual distance to each layer's frame
+  // (`micro_draw_order`): the layer index is only an identifier, a body can be the nearest one
+  // (comet snapped above in UpZenith) whatever its index.
   // The MRT GlobalDepth attachment is NOT explicitly cleared between layers —
   // the Painter's Algorithm naturally overwrites it as closer layers render last.
   device.debug_label_begin(cmd_buffer, c"[SP1] Micro Layers", [0.2, 1.0, 0.4, 1.0]);
+  let micro_layers = micro_draw_order(&render_scene.depth_layers);
   {
-    let mut micro_layers: alloc::vec::Vec<&crate::gpu::frame::RenderLayer> =
-      render_scene.depth_layers.iter().filter(|l| l.layer_index > 0).collect();
-    // Sort back-to-front: highest layer_index drawn first.
-    micro_layers.sort_by(|a, b| b.layer_index.cmp(&a.layer_index));
     for (i, layer) in micro_layers.iter().enumerate() {
       if i > 0 {
         // Clear depth before each subsequent layer so that the hardware Z-buffer
@@ -1558,7 +1679,8 @@ pub fn render_frame(
 
   // Draw fullscreen composite triangle to merge macro+micro layers
   let macro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 0);
-  let micro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 1);
+  // the nearest micro layer is drawn last, so its depth is the one left in the buffer
+  let micro_layer = micro_layers.last().copied();
   let constants = gpu::CompositePushConstants {
     macro_near: macro_layer.map(|l| l.near as f32).unwrap_or(0.0001),
     macro_far: macro_layer.map(|l| l.far as f32).unwrap_or(200.0),
@@ -1953,6 +2075,153 @@ mod dust_projection_tests {
     }
     // P00 / P11 = 1 / aspect (used by dust.vert to convert pixels to NDC in x)
     assert!(((sx / sy) as f64 - 1.0 / 1.5).abs() < 1e-6);
+  }
+
+  /// Right-handed world seen from +Z (ecliptic north) looking down with +Y up on screen must show
+  /// +X on the right (Vulkan NDC: x right, y down), so prograde orbits appear counter-clockwise.
+  /// Goes through the render path: camera quaternion -> `camera_screen_axes` -> view -> proj.
+  #[test]
+  fn engine_view_is_not_mirrored() {
+    use aethervk_oshal_rlib::math::{
+      matrix::Matrix4,
+      quaternion::Quaternion,
+      vector::{Vector3, vec3::Vec3f32, vec3f64::DVec3, vec4::Quat},
+    };
+    // local -Y (forward) -> world -Z, local +Z (up) -> world +Y: 180 deg about (0,1,1)/sqrt(2)
+    let h = core::f32::consts::FRAC_1_SQRT_2;
+    let rot = Quat::from_axis_angle(Vec3f32::from_components(0.0, h, h), core::f32::consts::PI);
+    let (right, forward, up) = super::camera_screen_axes(&rot);
+    assert!((forward.z() + 1.0).abs() < 1e-5 && (up.y() - 1.0).abs() < 1e-5);
+    // right-handed screen: right x up points towards the viewer (= -forward)
+    let toward_viewer = right.cross(up);
+    assert!(
+      (toward_viewer.z() - 1.0).abs() < 1e-5,
+      "screen basis is left-handed: {toward_viewer:?}"
+    );
+
+    let d = |v: Vec3f32| DVec3::from_components(v.x() as f64, v.y() as f64, v.z() as f64);
+    let view = <Mat4x4f64 as Matrix4>::look_at_axes(
+      d(right),
+      d(forward),
+      d(up),
+      DVec3::from_components(0.0, 0.0, 0.0),
+    );
+    for proj in [
+      Mat4x4f64::perspective_vk_reverse_z(60f64.to_radians(), 1.0, 0.1, 1000.0),
+      Mat4x4f64::orthographic_vk_reverse_z(-5.0, 5.0, -5.0, 5.0, 0.1, 1000.0),
+    ] {
+      let ndc = |p: [f64; 3]| {
+        let c = proj * (view * Vec4f64::from_components(p[0], p[1], p[2], 1.0));
+        (c.x() / c.w(), c.y() / c.w())
+      };
+      let (x_px, _) = ndc([1.0, 0.0, -10.0]);
+      let (_, y_py) = ndc([0.0, 1.0, -10.0]);
+      assert!(
+        y_py < 0.0,
+        "+Y should be up on screen (NDC y < 0), got {y_py}"
+      );
+      assert!(
+        x_px > 0.0,
+        "+X should be right on screen (NDC x > 0), got {x_px}: view is mirrored"
+      );
+    }
+  }
+
+  /// Earth observer framing a comet nucleus ~1 AU away in a ±9 km orthographic field
+  /// (`earth_observer_comet.rdc`): the view built from the f64 camera rotation puts the nucleus at
+  /// the centre, the same rotation rounded to f32 puts it off-screen.
+  #[test]
+  fn f64_camera_view_frames_nucleus_at_one_au() {
+    use super::{CameraRenderData, center_clip_f64};
+    use crate::scene::{CameraComponent, CameraProjection, HighResTransformComponent};
+    use aethervk_oshal_rlib::math::{
+      matrix::mat4f64::Mat4x4f64,
+      vector::{
+        Vector3 as _,
+        vec3::Vec3f32,
+        vec3f64::Vec3f64,
+        vec4f64::{Quat64, Vec4f64},
+      },
+    };
+    let au = 149_597_870.7_f64;
+    let half_km = 9.0_f64;
+    let camera = CameraComponent {
+      projection: CameraProjection::Orthographic {
+        left: (-half_km / au) as f32,
+        right: (half_km / au) as f32,
+        bottom: (-half_km * 0.6 / au) as f32,
+        top: (half_km * 0.6 / au) as f32,
+        near: 1e-9,
+        far: 10.0,
+      },
+      focus_distance: 1.0,
+    };
+    // comet relative to the observer, km (micro layer units)
+    let d = [-1.0270517e8_f64, 1.1012345e8, 3.3e6];
+    let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    let f = [d[0] / n, d[1] / n, d[2] / n];
+    let r = {
+      let c = [f[1], -f[0], 0.0]; // forward × +Z, in the ecliptic
+      let l = (c[0] * c[0] + c[1] * c[1]).sqrt();
+      [c[0] / l, c[1] / l, 0.0]
+    };
+    let u = [
+      r[1] * f[2] - r[2] * f[1],
+      r[2] * f[0] - r[0] * f[2],
+      r[0] * f[1] - r[1] * f[0],
+    ];
+    // engine local axes: +X = −right, +Y = −forward, +Z = up (`camera_screen_axes`)
+    let col = |a: [f64; 3]| Vec4f64::from_components(a[0], a[1], a[2], 0.0);
+    let m = Mat4x4f64::from_cols(
+      col([-r[0], -r[1], -r[2]]),
+      col([-f[0], -f[1], -f[2]]),
+      col(u),
+      Vec4f64::from_components(0.0, 0.0, 0.0, 1.0),
+    );
+    let hr = HighResTransformComponent {
+      position: Vec3f64::from_components(0.0, 0.0, 0.0),
+      rotation: Quat64::from_mat4(&m),
+      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+    };
+    let micro = (1.0 / au) as f32;
+    let cam =
+      CameraRenderData::new_f64(&hr, &camera, 1.0, [1113, 684]).rebuild_for_layer(1e8, 2e8, micro);
+    let c = center_clip_f64(&cam, d);
+    assert!(
+      (c[0] / c[3]).abs() < 1e-3 && (c[1] / c[3]).abs() < 1e-3,
+      "f64 view off centre: {c:?}"
+    );
+    // 1 km along the screen right lands at x = 1/9
+    let e = center_clip_f64(&cam, [d[0] + r[0], d[1] + r[1], d[2] + r[2]]);
+    assert!(((e[0] / e[3]) as f64 - 1.0 / half_km).abs() < 1e-3, "{e:?}");
+
+    let cam32 = CameraRenderData::new(&hr.to_transform(), &camera, 1.0, [1113, 684])
+      .rebuild_for_layer(1e8, 2e8, micro);
+    let c32 = center_clip_f64(&cam32, d);
+    let off32 = (c32[0] / c32[3]).abs().max((c32[1] / c32[3]).abs());
+    println!(
+      "nucleus |ndc|: f32 view {off32:.3}, f64 view {:.2e}",
+      (c[0] / c[3]).abs().max((c[1] / c[3]).abs())
+    );
+  }
+
+  /// Micro layers are drawn farthest first by actual camera distance, not by index: a comet
+  /// layer (3) next to the camera is drawn after the Sun (2) and the Earth (1).
+  #[test]
+  fn micro_layers_are_drawn_back_to_front_by_distance() {
+    use super::{RenderLayer, micro_draw_order};
+    use aethervk_oshal_rlib::math::vector::{Vector3, vec3::Vec3f32};
+    let km = |d_km: f32| Vec3f32::from_components(d_km, 0.0, 0.0);
+    let au = 1.0 / 149_597_870.7f32;
+    let layers = [
+      RenderLayer::new(0, 1.0, km(0.0), 0.0, 1.0),
+      RenderLayer::new(1, au, km(7.0e8), 0.0, 1.0), // Earth, ~4.7 AU away
+      RenderLayer::new(2, au, km(8.0e8), 0.0, 1.0), // Sun, ~5.3 AU away
+      RenderLayer::new(3, au, km(21.5), 0.0, 1.0),  // comet, 21.5 km away
+    ];
+    let order: alloc::vec::Vec<u32> =
+      micro_draw_order(&layers).iter().map(|l| l.layer_index).collect();
+    assert_eq!(order, [2, 1, 3]);
   }
 
   #[test]

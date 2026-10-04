@@ -237,6 +237,12 @@
 
           <StackPanel Orientation="Vertical" Spacing="0">
 
+            <!-- ──── Reference-position error lines (comet vs osculating reference) ── -->
+            <CheckBox Margin="12,10,12,0"
+                      Content="{Binding StrShowReferenceError}"
+                      IsChecked="{Binding ShowReferencePositionError}"
+                      ToolTip.Tip="Draws two lines from the comet to its reference orbit (red track): the closest point of the track (cross-track) and where the reference says the comet should be now (same-epoch). Each is shown only while longer than 10 nucleus radii." />
+
             <!-- ──── Nucleus radius (required for jet placement) ──────── -->
             <Grid ColumnDefinitions="*,12,1.6*"
                   Margin="12,10,12,4">

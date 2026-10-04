@@ -51,7 +51,8 @@ public sealed class CometConfigService : IDisposable
     int SpkId,
     string? FilePath,
     TimeRange? ProposedRange,
-    Models.SmallBodyDataComponent? SbData
+    Models.SmallBodyDataComponent? SbData,
+    Models.ReferenceOrbitMode ReferenceMode = Models.ReferenceOrbitMode.Sbdb
   );
 
   private PendingState? _pendingState = new(null, 0, null, null, null);
@@ -143,12 +144,13 @@ public sealed class CometConfigService : IDisposable
     int naifId,
     TimeRange proposedRange,
     Models.SmallBodyDataComponent sbData,
+    Models.ReferenceOrbitMode referenceMode,
     CancellationToken ct = default
   )
   {
     // Allow only one concurrent commit.
     var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-    Volatile.Write(ref _pendingState, new PendingState(tcs, naifId, spkFilePath, proposedRange, sbData));
+    Volatile.Write(ref _pendingState, new PendingState(tcs, naifId, spkFilePath, proposedRange, sbData, referenceMode));
 
     try
     {
@@ -263,7 +265,7 @@ public sealed class CometConfigService : IDisposable
       }
       
       // Step 2 — tell the Rust logic thread to begin Phase 1 of Two-Phase Commit
-      bool ok = _runtimeService.TryInitComet(spkId, proposedRange, sbData, out _);
+      bool ok = _runtimeService.TryInitComet(spkId, proposedRange, sbData, pendingSnapshot!.ReferenceMode, out _);
 
       if (!ok)
       {

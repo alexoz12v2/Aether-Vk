@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AetherVk.Logic.Input;
 using AetherVk.Logic.Messages;
+using AetherVk.Logic.Utils;
 using CommunityToolkit.Mvvm.Messaging;
 
 namespace AetherVk.Logic.Services;
@@ -15,6 +16,14 @@ namespace AetherVk.Logic.Services;
 /// <summary>
 /// Current camera mode, governing which transform operations are allowed.
 /// </summary>
+/// <summary>Bodies the UpZenith "snap above" buttons can fly to.</summary>
+public enum SnapTarget
+{
+  Sun,
+  Comet,
+  Earth,
+}
+
 public enum CameraMode
 {
   /// Camera locked to Earth's trajectory. Zoom disabled; pan locked; rotation changes orientation only.
@@ -35,17 +44,46 @@ public enum CameraMode
 /// </summary>
 public enum EarthObserverOrientationMode
 {
-  /// Look direction is fixed in the heliocentric/ecliptic inertial frame.
-  /// Dragging the mouse changes (and permanently stores) the inertial look direction.
-  Inertial,
+  /// Free look: the look direction is fixed in the heliocentric/ecliptic inertial frame and
+  /// dragging changes it.
+  Free,
 
-  /// Camera always points toward the comet's current position.
-  /// Look direction is updated automatically each time the comet position is known.
+  /// Telescope on the comet: aims at the comet when entered, then turns with the Earth (the angle
+  /// relative to the ground stays constant).
+  CometLockIn,
+
+  /// Re-aims at the comet's current position every tick, holding while it is below the horizon.
   CometTracking,
 
-  /// Look direction rotates with Earth's body — like a physical telescope anchored to the ground.
-  /// The angle relative to the surface stays constant; Earth's spin carries it through the sky.
-  EarthFixed,
+  /// Telescope on the Sun (see <see cref="CometLockIn"/>).
+  SunLockIn,
+
+  /// Tracks the Sun (see <see cref="CometTracking"/>).
+  SunTracking,
+}
+
+/// <summary>Body an Earth observer lock-in / tracking submode aims at.</summary>
+public enum EarthObserverTarget
+{
+  Comet,
+  Sun,
+}
+
+public static class EarthObserverOrientationModeExtensions
+{
+  /// <summary>The aimed body, or null for <see cref="EarthObserverOrientationMode.Free"/>.</summary>
+  public static EarthObserverTarget? Target(this EarthObserverOrientationMode m) => m switch
+  {
+    EarthObserverOrientationMode.CometLockIn or EarthObserverOrientationMode.CometTracking => EarthObserverTarget.Comet,
+    EarthObserverOrientationMode.SunLockIn or EarthObserverOrientationMode.SunTracking => EarthObserverTarget.Sun,
+    _ => null,
+  };
+
+  public static bool IsTracking(this EarthObserverOrientationMode m) =>
+    m is EarthObserverOrientationMode.CometTracking or EarthObserverOrientationMode.SunTracking;
+
+  public static bool IsLockIn(this EarthObserverOrientationMode m) =>
+    m is EarthObserverOrientationMode.CometLockIn or EarthObserverOrientationMode.SunLockIn;
 }
 
 /// <summary>
@@ -55,10 +93,10 @@ public sealed record CameraTransformState(
   double PosX,
   double PosY,
   double PosZ,
-  float RotX,
-  float RotY,
-  float RotZ,
-  float RotW
+  double RotX,
+  double RotY,
+  double RotZ,
+  double RotW
 );
 
 /// <summary>
@@ -76,17 +114,6 @@ public sealed record CameraProjectionState(
   float Top,
   float FocusDistance
 );
-
-/// <summary>
-/// Snapshot of the sun's frustum visibility state, as reported by the logic thread via
-/// <c>ExternalState::SunVisibilityChanged</c>.
-///
-/// <para><c>NdcX</c> and <c>NdcY</c> carry the actual projected NDC coordinates even when
-/// the sun is off-screen (values may exceed ±1). Use <see cref="IsVisible"/> to distinguish
-/// on/off-screen, and the NDC pair to compute the arrowhead bearing for the overlay
-/// indicator.</para>
-/// </summary>
-public sealed record SunVisibilityState(bool IsVisible, float NdcX, float NdcY);
 
 /// <summary>
 /// Validates camera movement commands against the current <see cref="CameraMode"/>, submits
@@ -121,17 +148,10 @@ public sealed class CameraService : IDisposable
   private readonly BehaviorSubject<CameraTransformState?> _transformSubject = new(null);
   private readonly BehaviorSubject<CameraProjectionState?> _projectionSubject = new(null);
 
-  // Start with IsVisible=true so the overlay indicator is hidden at launch.
-  // The Rust engine fires the correct transition on its first logic tick (~16 ms),
-  // preventing a brief crosshair flash before the actual state is known.
-  private readonly BehaviorSubject<SunVisibilityState> _sunVisibilitySubject =
-    new(new SunVisibilityState(IsVisible: true, NdcX: 0f, NdcY: 0f));
-
   private readonly BehaviorSubject<CameraMode> _modeSubject = new(CameraMode.UpZenith);
   private IDisposable? _transformListenerToken;
   private IDisposable? _projectionListenerToken;
   private IDisposable? _earthListenerToken;
-  private IDisposable? _sunVisibilityListenerToken;
 
   // Orbit offset in simulation units (AU) — kept constant while in CometOrbiting mode.
   // Orbit addition is done in f64 (see SnapCameraToOrbit / TriggerModeTransitionAnimation),
@@ -152,7 +172,7 @@ public sealed class CameraService : IDisposable
 
   // Earth position cache — updated via SIMULATION_CALLBACK for the earth entity.
   // Initialised to 1 AU on +X as a safe fallback before the first callback fires.
-  private Vector3 _lastEarthPos = new(1f, 0f, 0f);
+  private Vector3d _lastEarthPos = new(1.0, 0.0, 0.0);
 
   // Lock protecting all _earth* fields below.
   private readonly object _earthPosLock = new();
@@ -162,26 +182,40 @@ public sealed class CameraService : IDisposable
 
   // Surface anchor in Earth's body-fixed frame (body-fixed Cartesian, AU scale).
   // Default: (0°N, 0°E) → (1, 0, 0) × EarthRadiusAu in the body-fixed frame.
-  private Vector3 _earthSurfacePointBf = new(EarthRadiusAu, 0f, 0f);
+  private Vector3d _earthSurfacePointBf = new(EarthRadiusAu, 0.0, 0.0);
 
   // Earth body-fixed → world rotation, updated from HighResTransformDTO every tick.
-  private Quaternion _earthBodyRot = Quaternion.Identity;
+  private Quaterniond _earthBodyRot = Quaterniond.Identity;
 
   // Camera orientation in the inertial frame, updated on every drag or mode switch.
-  private Quaternion _earthRotation = Quaternion.Identity;
+  private Quaterniond _earthRotation = Quaterniond.Identity;
 
   // Camera look direction frozen in the inertial frame (Inertial mode anchor).
-  private Quaternion _inertialLookDir = Quaternion.Identity;
+  private Quaterniond _inertialLookDir = Quaterniond.Identity;
 
   // Camera look direction in Earth's body-fixed frame (EarthFixed mode anchor).
-  private Quaternion _earthFixedLookDir = Quaternion.Identity;
+  private Quaterniond _earthFixedLookDir = Quaterniond.Identity;
 
   // Current Earth Observer orientation sub-mode.
-  private EarthObserverOrientationMode _earthOrientationMode = EarthObserverOrientationMode.Inertial;
+  private EarthObserverOrientationMode _earthOrientationMode = EarthObserverOrientationMode.Free;
 
   // Observable that broadcasts orientation mode changes to the Settings tab.
   private readonly BehaviorSubject<EarthObserverOrientationMode> _earthOrientationModeSubject =
-    new(EarthObserverOrientationMode.Inertial);
+    new(EarthObserverOrientationMode.Free);
+
+  // Observer latitude (degrees): its sign picks the ecliptic pole the view "up" leans towards.
+  private float _observerLatDeg;
+
+  // Projection preset of the active lock-in / tracking submode (target spans 10% of the view);
+  // null in Free mode. Exposed to enable "Restore preset projection".
+  private CameraProjectionState? _earthPresetProjection;
+  private readonly BehaviorSubject<CameraProjectionState?> _earthPresetSubject = new(null);
+
+  /// <summary>Preset projection of the current lock-in / tracking submode (null in Free).</summary>
+  public IObservable<CameraProjectionState?> EarthObserverPresetProjection => _earthPresetSubject.AsObservable();
+
+  /// <summary>Fraction of the viewport height a lock-in / tracking target fills on entry.</summary>
+  public const double EarthObserverTargetViewFraction = 0.1;
 
   /// <summary>
   /// Fires on the main thread whenever <see cref="EarthObserverOrientationMode"/> changes.
@@ -216,6 +250,13 @@ public sealed class CameraService : IDisposable
 
   // Aspect ratio (W/H) of the Vulkan render target — set by OnViewportReady.
   private float _viewportAspect = 1f;
+
+  // Pixel height of the render target: converts drags to world units (ViewAngularScale).
+  private float _viewportHeightPx = 600f;
+  public float ViewportHeightPx => _viewportHeightPx;
+
+  /// <summary>Exponential zoom rate: extent (or fov) scales by e^(rate·px) per dragged pixel.</summary>
+  public const float ZoomExpPerPixel = 0.005f;
   
   public float ViewportAspect => _viewportAspect;
   
@@ -287,6 +328,11 @@ public sealed class CameraService : IDisposable
     _cometMessenger = cometMessenger;
     _cameraServiceRegistry = cameraServiceRegistry;
 
+    // Comet decommitted: views anchored to it have nothing left to show.
+    _cometConfigService.IsAlmanacCommitted
+      .Where(committed => !committed)
+      .Subscribe(_ => OnCometDecommitted());
+
     _cometConfigService.NucleusRadiusKm.Subscribe(radius =>
     {
       _lastKnownNucleusRadiusKm = radius;
@@ -344,17 +390,12 @@ public sealed class CameraService : IDisposable
     _projectionSubject.ObserveOn(_schedulerProvider.MainThread);
 
   /// <summary>
-  /// Emits whenever the sun (world origin) enters or exits the primary camera's frustum.
-  /// Only fires on state *transitions*, not every frame.
-  /// Observed on the main (UI) thread — intended for overlay display only.
-  /// </summary>
-  public IObservable<SunVisibilityState> SunVisibilityChanged =>
-    _sunVisibilitySubject.ObserveOn(_schedulerProvider.MainThread);
-
-  /// <summary>
   /// Emits the new <see cref="CameraMode"/> every time <see cref="SetCameraMode"/> causes
   /// an actual transition. Observed on the main thread.
   /// </summary>
+  /// <summary>Whether a comet is committed (gates the comet snap / lock-in targets).</summary>
+  public IObservable<bool> CometCommitted => _cometConfigService.IsAlmanacCommitted;
+
   public IObservable<CameraMode> CameraModeChanged =>
     _modeSubject.ObserveOn(_schedulerProvider.MainThread);
 
@@ -428,6 +469,10 @@ public sealed class CameraService : IDisposable
     _pendingProjectionCts = null;
 
     _modeSubject.OnNext(mode);
+
+    // The comet label is an Earth observer aid: shown in that mode only.
+    if (mode == CameraMode.EarthPosition || previous == CameraMode.EarthPosition)
+      _runtimeService.SetCometIndicatorVisible(mode == CameraMode.EarthPosition);
 
     // World-preserving unparent when leaving a body-anchored mode.
     // Rust reads global_transform_f64 BEFORE removing the parent, then writes
@@ -617,8 +662,8 @@ public sealed class CameraService : IDisposable
     if (camId is null)
       return;
 
-    Vector3 targetPos;
-    Quaternion targetRot;
+    Vector3d targetPos;
+    Quaterniond targetRot;
     ulong? pivotEntityId = null; // Rust resolves this entity's world position synchronously
 
     // Projection to apply after the animation completes (null = no change).
@@ -657,9 +702,9 @@ public sealed class CameraService : IDisposable
       pivotEntityId = _runtimeService.EarthEntityId;
       lock (_earthPosLock)
       {
-        var surfaceWorld = Vector3.Transform(_earthSurfacePointBf, _earthBodyRot);
-        var zenith = Vector3.Normalize(surfaceWorld);
-        _earthRotation = LookAtOriginFrom(_lastEarthPos + surfaceWorld, zenith);
+        var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
+        // look at the Sun, levelled to the ecliptic (camera assertions)
+        _earthRotation = EarthObserverLookAt(-(_lastEarthPos + surfaceWorld));
         _inertialLookDir = _earthRotation;
         _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, _earthRotation);
         targetPos = surfaceWorld; // Use the local offset
@@ -669,8 +714,10 @@ public sealed class CameraService : IDisposable
     }
     else if (mode == CameraMode.UpZenith)
     {
-      targetPos = new Vector3(0f, 0f, 0.05f);
-      targetRot = LookAtOriginFrom(targetPos);
+      // above the Sun, which fills 30% of the view (same geometry as SnapAbove(SnapTarget.Sun))
+      var sunPose = ComputeSnapAbove(SunRadiusAu);
+      targetPos = sunPose.Offset;
+      targetRot = sunPose.Rotation;
       deferredProjection = ApplyUpZenithDefaultProjection;
     }
     else
@@ -759,29 +806,34 @@ public sealed class CameraService : IDisposable
   /// XYZW bytes are interpreted identically on the Rust side.</para>
   /// <para>Falls back to +X as the world-up hint when the camera is nearly on the Z axis.</para>
   /// </summary>
-  private static Quaternion LookAtOriginFrom(Vector3 pos, Vector3? upHint = null)
+  private static Quaternion LookAtOriginFrom(Vector3 pos, Vector3? upHint = null) =>
+    (Quaternion)LookAtOriginFrom((Vector3d)pos, upHint.HasValue ? (Vector3d)upHint.Value : null);
+
+  /// <summary>Double-precision <see cref="LookAtOriginFrom(Vector3, Vector3?)"/>: the Earth observer
+  /// aims across ~1 AU at a ~km nucleus, below float resolution.</summary>
+  private static Quaterniond LookAtOriginFrom(Vector3d pos, Vector3d? upHint = null)
   {
-    var worldFwd = Vector3.Normalize(-pos); // toward origin (engine −Y)
+    var worldFwd = Vector3d.Normalize(-pos); // toward origin (engine −Y)
 
     // World-up hint: prefer +Z (or the provided hint); fall back to -Y when nearly collinear
-    Vector3 actualUpHint;
+    Vector3d actualUpHint;
     if (upHint.HasValue)
     {
       actualUpHint = upHint.Value;
       // If the provided hint is nearly collinear with forward, still fallback
-      if (Math.Abs(Vector3.Dot(worldFwd, actualUpHint)) > 0.99f)
-          actualUpHint = Math.Abs(worldFwd.Z) < 0.99f ? Vector3.UnitZ : -Vector3.UnitY;
+      if (Math.Abs(Vector3d.Dot(worldFwd, actualUpHint)) > 0.99)
+        actualUpHint = Math.Abs(worldFwd.Z) < 0.99 ? Vector3d.UnitZ : -Vector3d.UnitY;
     }
     else
     {
-      actualUpHint = Math.Abs(worldFwd.Z) < 0.99f ? Vector3.UnitZ : -Vector3.UnitY;
+      actualUpHint = Math.Abs(worldFwd.Z) < 0.99 ? Vector3d.UnitZ : -Vector3d.UnitY;
     }
 
     // right = cross(upHint, fwd) — NOT cross(fwd, upHint).
     // Verified by hand: for fwd=(0,0,-1) + hint=(1,0,0) this gives right=(0,1,0),
     // up=(1,0,0), q=(0.5,0.5,0.5,0.5), q.rotate(0,-1,0)=(0,0,-1) → pitch=−90° ✓.
-    var worldRight = Vector3.Normalize(Vector3.Cross(actualUpHint, worldFwd));
-    var worldUp = Vector3.Cross(worldFwd, worldRight);
+    var worldRight = Vector3d.Normalize(Vector3d.Cross(actualUpHint, worldFwd));
+    var worldUp = Vector3d.Cross(worldFwd, worldRight);
 
     return EngineQuatFromBasis(worldRight, -worldFwd, worldUp);
   }
@@ -796,11 +848,14 @@ public sealed class CameraService : IDisposable
   /// <para>Falls back to returning <paramref name="q"/> unchanged when the forward vector is
   /// degenerate (near-zero length).</para>
   /// </summary>
-  private static Quaternion StripRoll(Quaternion q, Vector3? upHint = null)
+  private static Quaternion StripRoll(Quaternion q, Vector3? upHint = null) =>
+    (Quaternion)StripRoll((Quaterniond)q, upHint.HasValue ? (Vector3d)upHint.Value : null);
+
+  private static Quaterniond StripRoll(Quaterniond q, Vector3d? upHint = null)
   {
     // Extract the forward direction: engine forward is local −Y.
-    var fwd = Vector3.Transform(-Vector3.UnitY, q);
-    if (fwd.LengthSquared() < 1e-10f)
+    var fwd = Vector3d.Transform(-Vector3d.UnitY, q);
+    if (fwd.LengthSquared() < 1e-20)
       return q; // degenerate — return unchanged
 
     // LookAtOriginFrom(pos) builds a rotation toward the origin from pos.
@@ -815,63 +870,66 @@ public sealed class CameraService : IDisposable
   /// <paramref name="right"/> → col0, <paramref name="backward"/> → col1,
   /// <paramref name="up"/> → col2.
   /// </summary>
-  private static Quaternion EngineQuatFromBasis(Vector3 right, Vector3 backward, Vector3 up)
+  private static Quaternion EngineQuatFromBasis(Vector3 right, Vector3 backward, Vector3 up) =>
+    (Quaternion)EngineQuatFromBasis((Vector3d)right, (Vector3d)backward, (Vector3d)up);
+
+  private static Quaterniond EngineQuatFromBasis(Vector3d right, Vector3d backward, Vector3d up)
   {
     // m[row][col] — column-major 3×3: col0=right, col1=backward, col2=up.
-    float m00 = right.X,
+    double m00 = right.X,
       m01 = backward.X,
       m02 = up.X;
-    float m10 = right.Y,
+    double m10 = right.Y,
       m11 = backward.Y,
       m12 = up.Y;
-    float m20 = right.Z,
+    double m20 = right.Z,
       m21 = backward.Z,
       m22 = up.Z;
 
-    float trace = m00 + m11 + m22;
-    float x,
+    double trace = m00 + m11 + m22;
+    double x,
       y,
       z,
       w;
 
-    if (trace > 0f)
+    if (trace > 0.0)
     {
-      float s = (float)Math.Sqrt(trace + 1f) * 2f; // s = 4w
-      float invS = 1f / s;
+      double s = Math.Sqrt(trace + 1.0) * 2.0; // s = 4w
+      double invS = 1.0 / s;
       x = (m21 - m12) * invS;
       y = (m02 - m20) * invS;
       z = (m10 - m01) * invS;
-      w = 0.25f * s;
+      w = 0.25 * s;
     }
     else if (m00 > m11 && m00 > m22)
     {
-      float s = (float)Math.Sqrt(1f + m00 - m11 - m22) * 2f; // s = 4x
-      float invS = 1f / s;
-      x = 0.25f * s;
+      double s = Math.Sqrt(1.0 + m00 - m11 - m22) * 2.0; // s = 4x
+      double invS = 1.0 / s;
+      x = 0.25 * s;
       y = (m01 + m10) * invS;
       z = (m02 + m20) * invS;
       w = (m21 - m12) * invS;
     }
     else if (m11 > m22)
     {
-      float s = (float)Math.Sqrt(1f + m11 - m00 - m22) * 2f; // s = 4y
-      float invS = 1f / s;
+      double s = Math.Sqrt(1.0 + m11 - m00 - m22) * 2.0; // s = 4y
+      double invS = 1.0 / s;
       x = (m01 + m10) * invS;
-      y = 0.25f * s;
+      y = 0.25 * s;
       z = (m12 + m21) * invS;
       w = (m02 - m20) * invS;
     }
     else
     {
-      float s = (float)Math.Sqrt(1f + m22 - m00 - m11) * 2f; // s = 4z
-      float invS = 1f / s;
+      double s = Math.Sqrt(1.0 + m22 - m00 - m11) * 2.0; // s = 4z
+      double invS = 1.0 / s;
       x = (m02 + m20) * invS;
       y = (m12 + m21) * invS;
-      z = 0.25f * s;
+      z = 0.25 * s;
       w = (m10 - m01) * invS;
     }
 
-    return new Quaternion(x, y, z, w);
+    return new Quaterniond(x, y, z, w);
   }
 
   // ── Interactive movement (called by transient camera operators) ────────────
@@ -892,11 +950,11 @@ public sealed class CameraService : IDisposable
 
     if (_modeSubject.Value == CameraMode.CometOrbiting)
     {
-      // Step 1 — Scale mouse delta using OrbitInputScaler (DPI-normalized, optionally accelerated).
+      // Step 1 — Frustum-aware rate ("grab"): one pixel of drag moves the nucleus limb by one
+      // pixel, so zooming in (smaller ortho extent / fov) slows the orbit down accordingly.
       // ShiftFactor applies for Blender-style fine control when Shift is held.
-      var scaledDelta = _orbitInputScaler.Scale(
-        pixelDelta,
-        shiftMultiplier: mods.HasFlag(InputModifiers.Shift) ? ShiftFactor : 1f);
+      float shift = mods.HasFlag(InputModifiers.Shift) ? ShiftFactor : 1f;
+      var scaledDelta = _orbitInputScaler.ScaleWith(pixelDelta, CometOrbitRadPerPixel(), shift);
 
       lock (_orbitOffsetLock)
       {
@@ -906,7 +964,10 @@ public sealed class CameraService : IDisposable
         const float PI          = (float)Math.PI;
         const float MaxElevRad  = 80f * (float)Math.PI / 180f;
 
-        _orbitAzimuthRad    = (_orbitAzimuthRad + scaledDelta.X) % (2f * PI);
+        // Drag right → camera moves clockwise seen from +Z (towards its screen left), so the comet
+        // turns with the cursor (turntable feel).
+        _orbitAzimuthRad    = (_orbitAzimuthRad - scaledDelta.X) % (2f * PI);
+        if (_orbitAzimuthRad < 0f) _orbitAzimuthRad += 2f * PI;
         _orbitElevationRad  = Math.Max(-MaxElevRad,
                               Math.Min( MaxElevRad, _orbitElevationRad + scaledDelta.Y));
 
@@ -941,18 +1002,25 @@ public sealed class CameraService : IDisposable
       // In Earth Observer mode, dragging rotates the camera in place — the surface
       // anchor position does not change.  We apply reduced sensitivity (0.1×) to
       // feel natural at human-scale (surface of a planet vs. solar-system orbit).
-      float earthSens = sens * 0.1f;
-      float earthYawRad   = -pixelDelta.X * earthSens;
+      // Frustum-aware: one pixel of drag turns the view by the angle a pixel subtends (fov/height),
+      // so the sky follows the cursor at 30° and at arcsecond fields of view alike.
+      float earthSens = (float)EarthFreeLookRadPerPixel()
+        * (mods.HasFlag(InputModifiers.Shift) ? ShiftFactor : 1f);
+      // Positive yaw about the zenith turns the view towards screen left (right-handed view), so
+      // dragging right turns the camera left and the sky follows the cursor.
+      float earthYawRad   = pixelDelta.X * earthSens;
       float earthPitchRad = -pixelDelta.Y * earthSens;
 
       lock (_earthPosLock)
       {
-        var zenith = Vector3.Normalize(Vector3.Transform(_earthSurfacePointBf, _earthBodyRot));
-        var yaw   = Quaternion.CreateFromAxisAngle(zenith, earthYawRad);
-        var pitch = Quaternion.CreateFromAxisAngle(Vector3.UnitX, earthPitchRad);
-        
+        // Yaw about the ecliptic pole the view is levelled to (the right vector stays in the
+        // ecliptic plane), pitch about the camera's local X; then re-assert the frame.
+        var pole = _observerLatDeg >= 0f ? Vector3d.UnitZ : -Vector3d.UnitZ;
+        var yaw   = Quaterniond.CreateFromAxisAngle(pole, earthYawRad);
+        var pitch = Quaterniond.CreateFromAxisAngle(Vector3d.UnitX, earthPitchRad);
+
         // Apply yaw in world space (pre-multiply), and pitch in local space (post-multiply).
-        var newRot = StripRoll(Quaternion.Normalize(yaw * _earthRotation * pitch), zenith);
+        var newRot = EarthObserverOrient(Quaterniond.Normalize(yaw * _earthRotation * pitch), _observerLatDeg);
 
         // Update all cached look directions so a later mode switch has fresh anchors.
         _earthRotation     = newRot;
@@ -962,7 +1030,7 @@ public sealed class CameraService : IDisposable
         // Apply the rotation directly without animation: CameraSetRotoTranslate succeeds
         // in EarthPosition mode because no tracking animation is permanently in-flight.
         // This gives the user instant 1:1 response (no 0.4 s animation lag).
-        var surfaceWorld = Vector3.Transform(_earthSurfacePointBf, _earthBodyRot);
+        var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
         var camPos       = _lastEarthPos + surfaceWorld;
         RotoTranslateDirect(camPos.X, camPos.Y, camPos.Z, newRot);
       }
@@ -970,6 +1038,37 @@ public sealed class CameraService : IDisposable
     }
 
     return false;
+  }
+
+  /// <summary>Exponential zoom factor for a vertical drag (clamped per event).</summary>
+  internal static float ZoomScaleFactor(float pixelDy, float shift) =>
+    Math.Min(100f, Math.Max(0.01f, (float)Math.Exp(-pixelDy * ZoomExpPerPixel * shift)));
+
+  /// <summary>
+  /// CometOrbiting orbit rate (rad/px): a surface point of the nucleus moves one pixel per dragged
+  /// pixel. Falls back to the scaler's fixed rate while no projection is known.
+  /// </summary>
+  internal double CometOrbitRadPerPixel()
+  {
+    var proj = _projectionSubject.Value;
+    const double AuToKm = 149_597_870.7;
+    double rKm = _lastKnownNucleusRadiusKm > 0f ? _lastKnownNucleusRadiusKm : 50.0;
+    double r = rKm / AuToKm;
+    if (proj is null)
+      return _orbitInputScaler.SensitivityDegPerPixel * Math.PI / 180.0;
+    double orbitRadius = 3.0 * r; // see RequestOrbit Step 3
+    double worldPerPx = ViewAngularScale.WorldPerPixel(proj, orbitRadius - r, _viewportHeightPx);
+    return Math.Min(0.05, Math.Max(1e-9, worldPerPx / r));
+  }
+
+  /// <summary>Earth observer free-look rate (rad/px): the angle one pixel subtends.</summary>
+  internal double EarthFreeLookRadPerPixel()
+  {
+    var proj = _projectionSubject.Value;
+    if (proj is null)
+      return OrbitSensitivity * 0.1;
+    double focus = proj.FocusDistance > 0f ? proj.FocusDistance : 1.0;
+    return Math.Min(0.05, Math.Max(1e-12, ViewAngularScale.RadPerPixel(proj, focus, _viewportHeightPx)));
   }
 
   /// <summary>
@@ -985,19 +1084,21 @@ public sealed class CameraService : IDisposable
     if (last is null)
       return false;
 
-    float sens = mods.HasFlag(InputModifiers.Shift) ? PanSensitivity * ShiftFactor : PanSensitivity;
-
+    // Frustum-aware ("grab"): one pixel of drag moves the world by one pixel at the focus
+    // distance (the Sun, at the origin, for UpZenith); falls back to the fixed rate.
+    float shift = mods.HasFlag(InputModifiers.Shift) ? ShiftFactor : 1f;
     var proj = LastConfirmedProjection;
-    if (proj != null && !proj.IsPerspective)
-    {
-        float halfHeight = Math.Abs(proj.Top - proj.Bottom) / 2f;
-        sens *= (halfHeight / 0.0155f);
-    }
+    double focus = Math.Sqrt(last.PosX * last.PosX + last.PosY * last.PosY + last.PosZ * last.PosZ);
+    float sens = proj is null
+      ? PanSensitivity * shift
+      : (float)ViewAngularScale.WorldPerPixel(proj, focus, _viewportHeightPx) * shift;
 
-    var camRot = new Quaternion(last.RotX, last.RotY, last.RotZ, last.RotW);
-    // Engine convention: +X = Right, +Z = Up
-    var right = Vector3.Transform(Vector3.UnitX, camRot);
-    var up = Vector3.Transform(Vector3.UnitZ, camRot);
+    // double: panning must not round the confirmed rotation to float
+    var camRot = new Quaterniond(last.RotX, last.RotY, last.RotZ, last.RotW);
+    // Engine convention: forward = -Y, up = +Z, screen right = forward x up = local -X
+    // (gpu/frame.rs camera_screen_axes)
+    var right = Vector3d.Transform(-Vector3d.UnitX, camRot);
+    var up = Vector3d.Transform(Vector3d.UnitZ, camRot);
 
     // Note: pixelDelta.X is positive right, pixelDelta.Y is positive down in Avalonia
     var worldD = (-right * pixelDelta.X + up * pixelDelta.Y) * sens;
@@ -1047,16 +1148,22 @@ public sealed class CameraService : IDisposable
       // In CometOrbiting mode the orbit distance is fixed at 3× nucleus radius (set via the
       // radius subject and maintained by RequestOrbit). Zoom therefore changes the ortho
       // half-extents instead of moving the camera, giving a telescope-style zoom-in/out.
+      // Exponential: the same drag changes the view by the same ratio at every scale.
+      // pixelDy > 0 (drag down) → scaleFactor < 1 → smaller extents / fov = zoom in.
+      float shift = mods.HasFlag(InputModifiers.Shift) ? ShiftFactor : 1f;
+      float scaleFactor = ZoomScaleFactor(pixelDy, shift);
       var proj = _projectionSubject.Value;
+      var (nearC, farC) = CometOrbitingNearFar();
       if (proj is { IsPerspective: false } && proj.Top > 0f)
       {
-        // pixelDy < 0 (scroll up) → scaleFactor < 1 → smaller extents = zoom in.
-        float scaleFactor = 1f - pixelDy * sens;
-        scaleFactor = Math.Max(0.01f, Math.Min(100f, scaleFactor));
         float newHalfH = proj.Top * scaleFactor;
         float newHalfW = newHalfH * _viewportAspect;
-        var (nearC, farC) = CometOrbitingNearFar();
         RequestOrthographicProjection(-newHalfW, newHalfW, -newHalfH, newHalfH, nearC, farC);
+      }
+      else if (proj is { IsPerspective: true })
+      {
+        float fov = Math.Min(2.0f, Math.Max(1e-7f, proj.Fov * scaleFactor));
+        RequestPerspectiveProjection(fov, _viewportAspect, nearC, farC);
       }
       return true;
     }
@@ -1075,20 +1182,21 @@ public sealed class CameraService : IDisposable
   /// <param name="lonDeg">Longitude in degrees (−180 … +180, positive = East).</param>
   public void SetEarthObserverLatLon(float latDeg, float lonDeg)
   {
-    float lat = latDeg * (float)Math.PI / 180f;
-    float lon = lonDeg * (float)Math.PI / 180f;
+    double lat = latDeg * Math.PI / 180.0;
+    double lon = lonDeg * Math.PI / 180.0;
 
     // Body-fixed unit vector (IAU/ITRF convention, +Z = North Pole):
     //   X = cos(lat)·cos(lon),  Y = cos(lat)·sin(lon),  Z = sin(lat)
-    var bfUnit = new Vector3(
-      (float)Math.Cos(lat) * (float)Math.Cos(lon),
-      (float)Math.Cos(lat) * (float)Math.Sin(lon),
-      (float)Math.Sin(lat)
+    var bfUnit = new Vector3d(
+      Math.Cos(lat) * Math.Cos(lon),
+      Math.Cos(lat) * Math.Sin(lon),
+      Math.Sin(lat)
     );
 
     lock (_earthPosLock)
     {
       _earthSurfacePointBf = bfUnit * EarthRadiusAu;
+      _observerLatDeg = latDeg;
       if (_modeSubject.Value == CameraMode.EarthPosition)
         SnapCameraToEarth(_lastEarthPos);
     }
@@ -1102,26 +1210,129 @@ public sealed class CameraService : IDisposable
   {
     lock (_earthPosLock)
     {
-      // Snapshot the current look direction into whatever anchor the new mode uses,
-      // so the first frame after the switch looks identical to the last frame before it.
-      switch (mode)
+      var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
+      var camPos = _lastEarthPos + surfaceWorld;
+
+      // A comet submode without a committed comet ejects to Free (radios follow the subject).
+      var target = mode.Target();
+      Vector3d? targetPos = target is { } t ? ResolveEarthObserverTarget(t) : null;
+      if (target is not null && targetPos is null)
       {
-        case EarthObserverOrientationMode.Inertial:
-          _inertialLookDir = _earthRotation;
-          break;
-        case EarthObserverOrientationMode.EarthFixed:
-          _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, _earthRotation);
-          break;
-        // CometTracking: no snapshot needed; look dir is always computed fresh.
+        _ = _breadcrumbService.ShowMessageAsync(
+          "No comet committed",
+          "Commit a comet in the Comet tab to lock onto or track it. Back to free look.",
+          TimeSpan.FromSeconds(4),
+          status: 2 // Warning
+        );
+        mode = EarthObserverOrientationMode.Free;
+      }
+
+      // Snapshot / aim the anchor the new mode uses, so the switch has no jump (Free) or lands on
+      // the target (lock-in: aim now, then turn with the Earth like a ground telescope).
+      if (mode == EarthObserverOrientationMode.Free)
+      {
+        _inertialLookDir = _earthRotation;
+      }
+      else if (mode.IsLockIn() && targetPos is { } aim)
+      {
+        var aimed = EarthObserverLookAt(aim - camPos);
+        _earthRotation = aimed;
+        _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, aimed);
       }
 
       _earthOrientationMode = mode;
       _earthOrientationModeSubject.OnNext(mode);
 
+      // Preset projection: the target spans 10% of the viewport.
+      _earthPresetProjection = targetPos is { } tp && mode != EarthObserverOrientationMode.Free
+        ? ComputeTargetPresetProjection(EarthObserverTargetRadiusAu(mode.Target()!.Value), (float)(tp - camPos).Length())
+        : null;
+      _earthPresetSubject.OnNext(_earthPresetProjection);
+      if (_earthPresetProjection is not null && _modeSubject.Value == CameraMode.EarthPosition)
+        ApplyEarthPresetProjection();
+
       if (_modeSubject.Value == CameraMode.EarthPosition)
         SnapCameraToEarth(_lastEarthPos);
     }
   }
+
+  /// <summary>Re-applies the preset projection of the current lock-in / tracking submode.</summary>
+  public void ApplyEarthPresetProjection()
+  {
+    var p = _earthPresetProjection;
+    if (p is null)
+      return;
+    if (p.IsPerspective)
+      RequestPerspectiveProjection(p.Fov, _viewportAspect, p.Near, p.Far);
+    else
+    {
+      float halfW = p.Top * _viewportAspect;
+      RequestOrthographicProjection(-halfW, halfW, p.Bottom, p.Top, p.Near, p.Far);
+    }
+  }
+
+  /// <summary>
+  /// Projection that makes a body of radius <paramref name="radiusAu"/> at
+  /// <paramref name="distanceAu"/> span <see cref="EarthObserverTargetViewFraction"/> of the view,
+  /// in the projection type currently in use (perspective when unknown).
+  /// </summary>
+  internal CameraProjectionState ComputeTargetPresetProjection(double radiusAu, double distanceAu)
+  {
+    double f = EarthObserverTargetViewFraction;
+    float near = (float)Math.Max(1e-9, Math.Min(1e-4, 0.5 * (distanceAu - radiusAu)));
+    float far = (float)(2.0 * (distanceAu + radiusAu));
+    bool perspective = _projectionSubject.Value?.IsPerspective ?? true;
+    if (perspective)
+    {
+      float fov = (float)(2.0 * Math.Atan(radiusAu / (f * distanceAu)));
+      return new CameraProjectionState(true, fov, _viewportAspect, near, far, 0f, 0f, 0f, 0f, (float)distanceAu);
+    }
+    float halfH = (float)(radiusAu / f);
+    return new CameraProjectionState(false, 0f, _viewportAspect, near, far,
+      -halfH * _viewportAspect, halfH * _viewportAspect, -halfH, halfH, (float)distanceAu);
+  }
+
+  /// <summary>True when <paramref name="p"/> differs from the active preset (enables "Restore").</summary>
+  public static bool DiffersFromPreset(CameraProjectionState? p, CameraProjectionState? preset)
+  {
+    if (p is null || preset is null)
+      return false;
+    static bool Close(float a, float b) => Math.Abs(a - b) <= 1e-4f * Math.Max(Math.Abs(a), Math.Abs(b));
+    if (p.IsPerspective != preset.IsPerspective)
+      return true;
+    return p.IsPerspective ? !Close(p.Fov, preset.Fov) : !Close(p.Top, preset.Top);
+  }
+
+  private double EarthObserverTargetRadiusAu(EarthObserverTarget t)
+  {
+    const double AuToKm = 149_597_870.7;
+    return t == EarthObserverTarget.Sun
+      ? SunRadiusAu
+      : (_lastKnownNucleusRadiusKm > 0f ? _lastKnownNucleusRadiusKm : 50.0) / AuToKm;
+  }
+
+  /// <summary>World position of an observer target: the Sun at the origin, or the last known comet
+  /// position (null when no comet is committed).</summary>
+  internal Vector3d? ResolveEarthObserverTarget(EarthObserverTarget t)
+  {
+    if (t == EarthObserverTarget.Sun)
+      return Vector3d.Zero;
+    if (!_cometConfigService.IsAlmanacCommittedValue)
+      return null;
+    // f64: the float position is ~10 km coarse at 1 AU, wider than a telescope field on the nucleus
+    return _cometTracker.LastKnownCometPositionF64 is { } p ? new Vector3d(p.X, p.Y, p.Z) : null;
+  }
+
+  /// <summary>
+  /// Earth observer camera assertion: the screen right vector lies in the ecliptic (xy) plane and
+  /// the view up leans towards +Z north of the equator, −Z south of it (snapping allowed).
+  /// </summary>
+  internal static Quaterniond EarthObserverOrient(Quaterniond q, float latDeg) =>
+    StripRoll(q, latDeg >= 0f ? Vector3d.UnitZ : -Vector3d.UnitZ);
+
+  private Quaterniond EarthObserverLookAt(Vector3d direction) =>
+    LookAtOriginFrom(-Vector3d.Normalize(direction), _observerLatDeg >= 0f ? Vector3d.UnitZ : -Vector3d.UnitZ);
+
 
 
   /// <summary>
@@ -1164,7 +1375,132 @@ public sealed class CameraService : IDisposable
   // UpZenith first-entry orthographic half-extent (AU).
   // sun_radius ≈ 0.00465 AU; halfH = sun_radius / 0.30 ≈ 0.0155 AU
   // so the sun fills ~30% of the ±halfH ortho box on first entry.
-  private const float UpZenithObservationHalfExtent = 0.0155f;
+  private const float UpZenithObservationHalfExtent = (float)(SunRadiusAu / SnapAboveViewFraction);
+
+  // ── UpZenith "snap above" ────────────────────────────────────────────────────
+
+  /// <summary>Solar radius in AU (695 700 km).</summary>
+  public const double SunRadiusAu = 695_700.0 / 149_597_870.7;
+
+  /// <summary>
+  /// Camera distance above a body, in body radii: the startup pose (0.05 AU above the Sun)
+  /// applied to every body.
+  /// </summary>
+  public const double SnapAboveDistanceRadii = 0.05 / SunRadiusAu;
+
+  /// <summary>Fraction of the viewport height the body fills after a snap (startup Sun: 30%).</summary>
+  public const double SnapAboveViewFraction = 0.3;
+
+  /// <summary>Pose and projection fit for looking straight down (−Z) on a body of radius r.</summary>
+  internal readonly record struct SnapAbovePose(
+    Vector3 Offset, Quaternion Rotation, float OrthoHalfHeight, float PerspFov, float Near, float Far);
+
+  internal static SnapAbovePose ComputeSnapAbove(double radiusAu)
+  {
+    double d = radiusAu * SnapAboveDistanceRadii;
+    var offset = new Vector3(0f, 0f, (float)d);
+    return new SnapAbovePose(
+      offset,
+      LookAtOriginFrom(offset),
+      (float)(radiusAu / SnapAboveViewFraction),
+      (float)(2.0 * Math.Atan(radiusAu / (SnapAboveViewFraction * d))),
+      (float)(0.05 * d),
+      (float)(200.0 * d));
+  }
+
+  /// <summary>
+  /// UpZenith only: animates the camera to a top-down view above the Sun, the comet or the Earth
+  /// (+Y up on screen) and fits the current projection so the body fills
+  /// <see cref="SnapAboveViewFraction"/> of the viewport. No tracking afterwards. Returns false
+  /// (with a breadcrumb for a missing comet) when the snap is not possible.
+  /// </summary>
+  public bool SnapAbove(SnapTarget target)
+  {
+    if (_modeSubject.Value != CameraMode.UpZenith || CameraEntityId is not { } camId)
+      return false;
+
+    const double AuToKm = 149_597_870.7;
+    ulong? pivot;
+    double radiusAu;
+    switch (target)
+    {
+      case SnapTarget.Comet:
+        ulong? cometId = _runtimeService.CometEntityId;
+        if (!_cometConfigService.IsAlmanacCommittedValue || cometId is null)
+        {
+          _ = _breadcrumbService.ShowMessageAsync(
+            "No comet committed",
+            "Commit a comet in the Comet tab to snap above it.",
+            TimeSpan.FromSeconds(4),
+            status: 2 // Warning
+          );
+          return false;
+        }
+        pivot = cometId;
+        radiusAu = (_lastKnownNucleusRadiusKm > 0f ? _lastKnownNucleusRadiusKm : 50.0) / AuToKm;
+        break;
+      case SnapTarget.Earth:
+        if (_runtimeService.EarthEntityId is not { } earthId)
+          return false;
+        pivot = earthId;
+        radiusAu = EarthRadiusAu;
+        break;
+      default:
+        pivot = null; // the Sun sits at the world origin
+        radiusAu = SunRadiusAu;
+        break;
+    }
+
+    _lastSnapTarget = target;
+    var pose = ComputeSnapAbove(radiusAu);
+    _pendingProjectionCts?.Cancel();
+    var cts = new CancellationTokenSource();
+    _pendingProjectionCts = cts;
+    _runtimeService.AddCameraAnimation(
+      camId,
+      new AnimationTarget(pose.Offset.X, pose.Offset.Y, pose.Offset.Z, pose.Rotation,
+        ModeSwitchAnimationSeconds, pivot));
+
+    _ = Task.Delay(TimeSpan.FromSeconds(ModeSwitchAnimationSeconds), cts.Token).ContinueWith(t =>
+    {
+      if (t.IsCanceled || _modeSubject.Value != CameraMode.UpZenith) return;
+      _schedulerProvider.MainThread.Schedule(() => ApplySnapAboveProjection(pose));
+    }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    return true;
+  }
+
+  // Last UpZenith snap target: a decommit while snapped above the comet flies back to the Sun.
+  private SnapTarget? _lastSnapTarget;
+
+  /// <summary>
+  /// Comet decommitted: UpZenith snapped above it flies back to the Sun (the comet resets to its
+  /// placeholder position, leaving an empty view); an Earth observer comet submode ejects to Free.
+  /// </summary>
+  internal void OnCometDecommitted()
+  {
+    if (_modeSubject.Value == CameraMode.UpZenith && _lastSnapTarget == SnapTarget.Comet)
+    {
+      SnapAbove(SnapTarget.Sun);
+    }
+    else if (_earthOrientationMode.Target() == EarthObserverTarget.Comet)
+    {
+      // re-applying the comet submode finds no comet: ejects to Free with a breadcrumb
+      SetEarthObserverOrientationMode(_earthOrientationMode);
+    }
+  }
+
+  private void ApplySnapAboveProjection(SnapAbovePose pose)
+  {
+    if (_projectionSubject.Value is { IsPerspective: true })
+    {
+      RequestPerspectiveProjection(pose.PerspFov, _viewportAspect, pose.Near, pose.Far);
+    }
+    else
+    {
+      float halfW = pose.OrthoHalfHeight * _viewportAspect;
+      RequestOrthographicProjection(-halfW, halfW, -pose.OrthoHalfHeight, pose.OrthoHalfHeight, pose.Near, pose.Far);
+    }
+  }
 
   /// <summary>
   /// Applies the UpZenith first-entry orthographic projection:
@@ -1210,7 +1546,7 @@ public sealed class CameraService : IDisposable
   /// Apply a validated absolute roto-translate via the typed runtime interface.
   /// All unsafe buffer packing lives in <c>NativeRuntimeService.CameraSetRotoTranslate</c>.
   /// </summary>
-  private bool RotoTranslateDirect(double posX, double posY, double posZ, Quaternion rotation, ulong pivotEntityId = 0) =>
+  private bool RotoTranslateDirect(double posX, double posY, double posZ, Quaterniond rotation, ulong pivotEntityId = 0) =>
     _runtimeService.CameraSetRotoTranslate(CameraEntityId ?? 0, posX, posY, posZ, rotation, pivotEntityId);
 
   /// <summary>Coarse move-allowed predicate used by the legacy <see cref="RequestRotoTranslate"/>.</summary>
@@ -1302,9 +1638,9 @@ public sealed class CameraService : IDisposable
     CameraEntityId = cameraEntityId;
     _cameraServiceRegistry.RegisterSelf(cameraEntityId, this);
     _viewportAspect = viewportHeight > 0 ? (float)viewportWidth / viewportHeight : 1f;
+    if (viewportHeight > 0) _viewportHeightPx = viewportHeight;
     RegisterSimListeners(cameraEntityId);
     RegisterEarthListener();
-    RegisterSunVisibilityListener();
     // Snap immediately on first viewport-ready so the camera starts at the
     // correct mode position from frame 1 rather than animating over 2.5 s.
     TriggerModeTransitionAnimation(_modeSubject.Value, snapImmediate: true);
@@ -1313,6 +1649,7 @@ public sealed class CameraService : IDisposable
   public void OnViewportResized(uint viewportWidth, uint viewportHeight)
   {
     _viewportAspect = viewportHeight > 0 ? (float)viewportWidth / viewportHeight : 1f;
+    if (viewportHeight > 0) _viewportHeightPx = viewportHeight;
     ViewportResized?.Invoke();
 
     // We must resend the projection matrix when the viewport aspect ratio changes
@@ -1376,18 +1713,6 @@ public sealed class CameraService : IDisposable
     );
   }
 
-  private void RegisterSunVisibilityListener()
-  {
-    // Already registered — prevent double-registration if OnViewportReady fires twice.
-    if (_sunVisibilityListenerToken is not null)
-      return;
-
-    _sunVisibilityListenerToken = _runtimeService.RegisterExternalStateListener(
-      ExternalStateType.SunVisibilityChanged,
-      HandleSunVisibilityCallback
-    );
-  }
-
   // ── Internal callback handling ─────────────────────────────────────────────
 
   private unsafe void HandleTransformCallback(nint dataPtr)
@@ -1396,7 +1721,7 @@ public sealed class CameraService : IDisposable
     // Strip any roll component accumulated via slerp drift in the animation system.
     // This keeps _lastConfirmedTransform (and any mode snapshots derived from it) roll-free
     // on the C# side even before the Rust side's strip_roll has fully propagated.
-    var rawRot = new Quaternion(dto.RotX, dto.RotY, dto.RotZ, dto.RotW);
+    var rawRot = new Quaterniond(dto.RotX, dto.RotY, dto.RotZ, dto.RotW);
     var cleanRot = StripRoll(rawRot);
     var state = new CameraTransformState(
       dto.PosX,
@@ -1577,10 +1902,11 @@ dump_context()
   private unsafe void HandleEarthTransformCallback(nint dataPtr)
   {
     var dto = *(HighResTransformDTO*)dataPtr;
-    var newPos = new Vector3((float)dto.PosX, (float)dto.PosY, (float)dto.PosZ);
+    // double: at 1 AU a float position is ~10 km coarse, more than the Earth observer's field
+    var newPos = new Vector3d(dto.PosX, dto.PosY, dto.PosZ);
     // Capture the Earth body-fixed → world rotation that AlmanacPlanet::step() computed
     // from the BPC file.  Previously discarded; now used to rotate the surface anchor.
-    var newBodyRot = new Quaternion(dto.RotX, dto.RotY, dto.RotZ, dto.RotW);
+    var newBodyRot = new Quaterniond(dto.RotX, dto.RotY, dto.RotZ, dto.RotW);
 
     lock (_earthPosLock)
     {
@@ -1591,7 +1917,7 @@ dump_context()
     }
   }
 
-  private void SnapCameraToEarth(Vector3 earthPos)
+  private void SnapCameraToEarth(Vector3d earthPos)
   {
     ulong? camId = CameraEntityId;
     if (camId is null)
@@ -1599,25 +1925,31 @@ dump_context()
 
     // Transform the body-fixed surface anchor into world space using Earth's
     // current orientation (updated from the BPC callback).
-    var surfaceWorld = Vector3.Transform(_earthSurfacePointBf, _earthBodyRot);
-    var zenith = Vector3.Normalize(surfaceWorld);
+    var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
+    var zenith = Vector3d.Normalize(surfaceWorld);
     var camPos = earthPos + surfaceWorld;
 
     // Resolve look direction from the current orientation sub-mode.
-    Quaternion camRot = _earthOrientationMode switch
+    Quaterniond camRot;
+    var mode = _earthOrientationMode;
+    if (mode.IsTracking() && ResolveEarthObserverTarget(mode.Target()!.Value) is { } targetPos)
     {
-      EarthObserverOrientationMode.Inertial =>
-        _inertialLookDir,
+      // Re-aim every tick unless the target is below the local horizon: for an observer on the
+      // sphere the line of sight crosses the Earth exactly then. Hold, and snap back once clear.
+      var toTarget = targetPos - camPos;
+      camRot = IsBelowHorizon(toTarget, zenith) ? _earthRotation : EarthObserverLookAt(toTarget);
+    }
+    else if (mode.IsLockIn())
+    {
+      camRot = Quaterniond.Normalize(_earthBodyRot * _earthFixedLookDir);
+    }
+    else
+    {
+      camRot = _inertialLookDir;
+    }
 
-      EarthObserverOrientationMode.CometTracking =>
-        ComputeLookAtComet(camPos, zenith),
-
-      EarthObserverOrientationMode.EarthFixed =>
-        Quaternion.Normalize(_earthBodyRot * _earthFixedLookDir),
-
-      _ => _earthRotation,
-    };
-
+    // Camera assertions: right vector in the ecliptic plane, up towards the latitude's pole.
+    camRot = EarthObserverOrient(camRot, _observerLatDeg);
     _earthRotation = camRot;
 
     // When the camera is ECS-parented to the earth entity: write local surface offset directly.
@@ -1642,130 +1974,20 @@ dump_context()
     }
   }
 
-  public void PointTowardsSun()
-  {
-    lock (_earthPosLock)
-    {
-      if (_modeSubject.Value != CameraMode.EarthPosition) return;
-
-      var surfaceWorld = Vector3.Transform(_earthSurfacePointBf, _earthBodyRot);
-      var camPos = _lastEarthPos + surfaceWorld;
-
-      // Sun is at origin (0,0,0) in the macro layer
-      var toSun = Vector3.Normalize(-camPos);
-      var zenith = Vector3.Normalize(surfaceWorld);
-
-      var right = Vector3.Normalize(Vector3.Cross(zenith, toSun));
-      var up = Vector3.Cross(toSun, right);
-      var newRot = EngineQuatFromBasis(right, -toSun, up);
-
-      switch (_earthOrientationMode)
-      {
-        case EarthObserverOrientationMode.Inertial:
-          _inertialLookDir = newRot;
-          break;
-        case EarthObserverOrientationMode.EarthFixed:
-          _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, newRot);
-          break;
-      }
-
-      _earthRotation = newRot;
-      SnapCameraToEarth(_lastEarthPos);
-    }
-  }
-
-  public void PointTowardsComet()
-  {
-    lock (_earthPosLock)
-    {
-      if (_modeSubject.Value != CameraMode.EarthPosition) return;
-
-      var cometPos = _cometTracker.LastKnownCometPosition;
-      if (!cometPos.HasValue) return;
-
-      var surfaceWorld = Vector3.Transform(_earthSurfacePointBf, _earthBodyRot);
-      var camPos = _lastEarthPos + surfaceWorld;
-
-      var toComet = Vector3.Normalize(cometPos.Value - camPos);
-      var zenith = Vector3.Normalize(surfaceWorld);
-
-      var right = Vector3.Normalize(Vector3.Cross(zenith, toComet));
-      var up = Vector3.Cross(toComet, right);
-      var newRot = EngineQuatFromBasis(right, -toComet, up);
-
-      switch (_earthOrientationMode)
-      {
-        case EarthObserverOrientationMode.Inertial:
-          _inertialLookDir = newRot;
-          break;
-        case EarthObserverOrientationMode.EarthFixed:
-          _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, newRot);
-          break;
-      }
-
-      _earthRotation = newRot;
-      SnapCameraToEarth(_lastEarthPos);
-    }
-  }
-
-  /// <summary>
-  /// Computes an engine-compatible quaternion that makes the camera look toward
-  /// the last-known comet position from <paramref name="camPos"/>.
-  /// Falls back to the current <see cref="_earthRotation"/> when the comet position
-  /// is not yet known (before simulation starts or no comet loaded).
-  /// </summary>
-  private Quaternion ComputeLookAtComet(Vector3 camPos, Vector3? upHint = null)
-  {
-    var cometPos = _cometTracker.LastKnownCometPosition;
-    if (!cometPos.HasValue)
-      return _earthRotation; // safe fallback
-
-    var toComet = Vector3.Normalize(cometPos.Value - camPos);
-
-    // World-up hint: always +Z for CometOrbiting (elevation ≤ ±80° → never collinear).
-    // An explicit upHint (e.g. surface zenith in EarthPosition) overrides this.
-    Vector3 actualUpHint;
-    if (upHint.HasValue)
-    {
-      actualUpHint = upHint.Value;
-      // Still guard against collinearity for the explicit-hint callers.
-      if (Math.Abs(Vector3.Dot(toComet, actualUpHint)) > 0.99f)
-          actualUpHint = Math.Abs(toComet.X) < 0.99f ? Vector3.UnitX : Vector3.UnitZ;
-    }
-    else
-    {
-      // Orbit elevation ≤ ±80° → |toComet.Z| ≤ sin(80°) ≈ 0.985 < 0.99 — safe to use +Z always.
-      actualUpHint = Vector3.UnitZ;
-    }
-
-    var right   = Vector3.Normalize(Vector3.Cross(actualUpHint, toComet));
-    var up      = Vector3.Cross(toComet, right);
-
-    // Engine forward = −Y; toComet is the desired forward direction.
-    return EngineQuatFromBasis(right, -toComet, up);
-  }
+  /// <summary>True when <paramref name="direction"/> points below the horizon of a surface point
+  /// whose local vertical is <paramref name="zenith"/> (the Earth occludes it).</summary>
+  internal static bool IsBelowHorizon(Vector3d direction, Vector3d zenith) =>
+    Vector3d.Dot(direction, zenith) < 0.0;
 
   /// <summary>
   /// Converts a world-space look-direction quaternion into Earth's body-fixed frame.
   /// Used to snapshot the current look direction when switching to
   /// <see cref="EarthObserverOrientationMode.EarthFixed"/>.
   /// </summary>
-  private static Quaternion WorldLookDirToBodyFixed(Quaternion earthBodyRot, Quaternion worldLookDir)
+  private static Quaterniond WorldLookDirToBodyFixed(Quaterniond earthBodyRot, Quaterniond worldLookDir)
   {
     // q_bf = inv(earthBodyRot) · worldLookDir
-    return Quaternion.Normalize(Quaternion.Inverse(earthBodyRot) * worldLookDir);
-  }
-
-  private unsafe void HandleSunVisibilityCallback(nint dataPtr)
-  {
-    var dto = *(CSunVisibilityChangedDTO*)dataPtr;
-    var state = new SunVisibilityState(
-      IsVisible: dto.IsVisible != 0,
-      NdcX: dto.NdcX,
-      NdcY: dto.NdcY
-    );
-    // Marshal to the UI thread — only consumers are overlay ViewModels.
-    _schedulerProvider.MainThread.Schedule(() => _sunVisibilitySubject.OnNext(state));
+    return Quaterniond.Normalize(Quaterniond.Inverse(earthBodyRot) * worldLookDir);
   }
 
   // ── IDisposable ────────────────────────────────────────────────────────────
@@ -1782,10 +2004,9 @@ dump_context()
     _transformListenerToken?.Dispose();
     _projectionListenerToken?.Dispose();
     _earthListenerToken?.Dispose();
-    _sunVisibilityListenerToken?.Dispose();
     _transformSubject.Dispose();
     _projectionSubject.Dispose();
     _modeSubject.Dispose();
-    _sunVisibilitySubject.Dispose();
+    _earthPresetSubject.Dispose();
   }
 }

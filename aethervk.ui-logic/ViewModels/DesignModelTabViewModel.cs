@@ -50,6 +50,7 @@ public partial class DesignModelTabViewModel
   public float ManualNucleusRadiusKm { get; set; } = 2.0f;
   public float? ManualNucleusRadiusKmNullable { get; set; } = 2.0f;
   public bool IsNucleusRadiusUnknown => ManualNucleusRadiusKm == 0f;
+  public bool ShowReferencePositionError { get; set; }
   public bool IsCometCommitted { get; } = false;
   public bool EnableLegacyExpanders { get; set; } = false;
   public bool IsSimulationRunning { get; } = false;

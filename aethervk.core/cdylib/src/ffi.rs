@@ -91,6 +91,13 @@ pub struct CKeplerianElementsDTO {
   pub longitude_of_ascending_node_deg: f64,
   /// Argument of perihelion ω (degrees).
   pub argument_of_perihelion_deg: f64,
+  /// Time of perihelion passage (JD TDB); NaN when unknown.
+  pub time_of_perihelion_jd_tdb: f64,
+  /// Epoch the elements are osculating at (JD TDB, informational); NaN when unknown.
+  pub elements_epoch_jd_tdb: f64,
+  /// `ReferenceOrbitMode`: 0 = SBDB elements, 1 = re-osculate at the start epoch from SPK.
+  pub reference_mode: u32,
+  pub _pad: u32,
 }
 
 /// - Should create initial scene
@@ -494,7 +501,7 @@ pub unsafe extern "C" fn avkSimulationContext_debugCameraState(
   scene_id: u64,
   camera_entity: u64,
   out_pos: *mut f64,
-  out_rot: *mut f32,
+  out_rot: *mut f64,
 ) -> bool {
   if ctx.is_null() || out_pos.is_null() || out_rot.is_null() {
     return false;
@@ -522,26 +529,26 @@ pub unsafe extern "C" fn avkSimulationContext_debugCameraState(
   false
 }
 
-/// Layout (64 bytes, 8-byte aligned):
+/// Layout (80 bytes, 8-byte aligned):
 /// - `pos_x / pos_y / pos_z`       : f64 × 3 = 24 bytes
-/// - `rot_x / rot_y / rot_z / rot_w` : f32 × 4 = 16 bytes
+/// - `rot_x / rot_y / rot_z / rot_w` : f64 × 4 = 32 bytes
 /// - `duration_s`                  : f32       =  4 bytes
 /// - `_pad_align`                  : u32       =  4 bytes  (aligns pivot_entity_id to 8)
 /// - `pivot_entity_id`             : u64       =  8 bytes  (0 = no pivot)
 /// - `has_pivot`                   : u8        =  1 byte
 /// - `_pad1 / _pad2 / _pad3`       : u8 × 3   =  3 bytes
 /// - `_pad4`                       : u32       =  4 bytes
-/// Total: 24 + 16 + 4 + 4 + 8 + 4 + 4 = 64 bytes
+/// Total: 24 + 32 + 4 + 4 + 8 + 4 + 4 = 80 bytes
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct AnimationTargetDTO {
   pub pos_x: f64,
   pub pos_y: f64,
   pub pos_z: f64,
-  pub rot_x: f32,
-  pub rot_y: f32,
-  pub rot_z: f32,
-  pub rot_w: f32,
+  pub rot_x: f64,
+  pub rot_y: f64,
+  pub rot_z: f64,
+  pub rot_w: f64,
   pub duration_s: f32,
   pub _pad_align: u32,
   pub pivot_entity_id: u64,
@@ -550,6 +557,42 @@ pub struct AnimationTargetDTO {
   pub _pad2: u8,
   pub _pad3: u8,
   pub _pad4: u32,
+}
+
+/// Enables or disables the committed comet's "reference-position error" annotations.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setReferenceErrorVisible(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  visible: bool,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_reference_error_visible(scene_id, visible)
+}
+
+/// Shows or hides the comet label (`comet_indicator`), e.g. while in Earth observer mode.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setCometIndicatorVisible(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  visible: bool,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_comet_indicator_visible(scene_id, visible)
 }
 
 /// Toggles the visibility of all indicators (`IndicatorComponent`, `ReferentialIndicatorComponent`, `TrajectoryIndicatorComponent`) in a scene.
@@ -630,10 +673,12 @@ pub unsafe extern "C" fn avkSimulationContext_addCameraAnimation(
   let anim = unsafe { animation.as_ref().unwrap_unchecked() };
 
   use aethervk_core_rlib::simulation_api::structs::LogicCommand;
-  use aethervk_oshal_rlib::math::vector::{Vector3, vec3f64::DVec3, vec4::Quat};
+  use aethervk_oshal_rlib::math::vector::{Vector3, vec3f64::DVec3};
 
   let target_pos = DVec3::from_components(anim.pos_x, anim.pos_y, anim.pos_z);
-  let target_rot = Quat::from_components(anim.rot_x, anim.rot_y, anim.rot_z, anim.rot_w);
+  let target_rot = aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_components(
+    anim.rot_x, anim.rot_y, anim.rot_z, anim.rot_w,
+  );
   let orbit_pivot = if anim.has_pivot != 0 {
     // Encode the entity ID in the x-component as raw f64 bits so it travels through
     // the existing DVec3 path.  The logic thread decodes it via `to_bits()`.
@@ -663,13 +708,13 @@ pub unsafe extern "C" fn avkSimulationContext_addCameraAnimation(
 
 /// Position + orientation payload for mode 2 of [`avkSimulationContext_transformStaticCamera`].
 ///
-/// Layout (40 bytes, 8-byte aligned):
-/// Layout (48 bytes, 8-byte aligned):
+/// Layout (64 bytes, 8-byte aligned):
 /// - `pos_x / pos_y / pos_z`        : f64 × 3 = 24 bytes (heliocentric AU, full double precision)
-/// - `rot_x / rot_y / rot_z / rot_w` : f32 × 4 = 16 bytes (unit quaternion)
+/// - `rot_x / rot_y / rot_z / rot_w` : f64 × 4 = 32 bytes (unit quaternion, f64: an f32 one rounds
+///   by ~1e-7 rad, ~15 km at 1 AU)
 /// - `pivot_entity_id`              : u64      =  8 bytes (0 = no pivot; resolved synchronously)
 ///
-/// No explicit padding needed: 24 + 16 + 8 = 48 bytes, natural alignment is 8 — bytemuck::Pod
+/// No explicit padding needed: 24 + 32 + 8 = 64 bytes, natural alignment is 8 — bytemuck::Pod
 /// derives cleanly.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
@@ -677,10 +722,10 @@ pub struct CRotoTranslateDTO {
   pub pos_x: f64,
   pub pos_y: f64,
   pub pos_z: f64,
-  pub rot_x: f32,
-  pub rot_y: f32,
-  pub rot_z: f32,
-  pub rot_w: f32,
+  pub rot_x: f64,
+  pub rot_y: f64,
+  pub rot_z: f64,
+  pub rot_w: f64,
   /// Entity whose world position is the pivot point.  When non-zero, `pos_x/y/z`
   /// are interpreted as a **local offset** from that entity and are resolved here
   /// synchronously before writing the camera transform.  `0` means no pivot —
@@ -688,13 +733,17 @@ pub struct CRotoTranslateDTO {
   pub pivot_entity_id: u64,
 }
 
+// mirrored in aethervk.ui-logic/Services/INativeRuntimeService.cs (sizes pinned by C# tests too)
+const _: () = assert!(core::mem::size_of::<AnimationTargetDTO>() == 80);
+const _: () = assert!(core::mem::size_of::<CRotoTranslateDTO>() == 64);
+
 #[derive(Debug)]
 pub enum TransformStaticCamera<'a> {
   /// left | right | bottom | top | near | far
   ProjectionOrtho(&'a [f32; 6]),
   /// fov | aspect ratio | near | far
   ProjectionPersp(&'a [f32; 4]),
-  /// f64 pos_x/y/z + f32 rot_x/y/z/w  (see [`CRotoTranslateDTO`])
+  /// f64 pos_x/y/z + f64 rot_x/y/z/w  (see [`CRotoTranslateDTO`])
   RotoTranslate(&'a CRotoTranslateDTO),
 }
 impl<'a> TransformStaticCamera<'a> {
@@ -734,19 +783,17 @@ impl<'a> TransformStaticCamera<'a> {
     }
   }
 
-  /// Position and rotation are stored as full f64/f32 in [`CRotoTranslateDTO`]; no precision loss.
+  /// Position and rotation are stored as full f64 in [`CRotoTranslateDTO`]; no precision loss.
   pub fn as_srt_transform(&self) -> Option<aethervk_core_rlib::scene::HighResTransformComponent> {
     use aethervk_core_rlib::scene::HighResTransformComponent;
-    use aethervk_oshal_rlib::math::vector::{
-      Vector3, Vector4, vec3::Vec3f32, vec3f64::DVec3, vec4::Vec4f32,
-    };
+    use aethervk_oshal_rlib::math::vector::{Vector3, vec3::Vec3f32, vec3f64::DVec3};
     match self {
       Self::ProjectionPersp(_) | Self::ProjectionOrtho(_) => None,
       Self::RotoTranslate(dto) => Some(HighResTransformComponent {
         position: DVec3::from_components(dto.pos_x, dto.pos_y, dto.pos_z),
-        rotation: Quat(Vec4f32::from_components(
+        rotation: aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_components(
           dto.rot_x, dto.rot_y, dto.rot_z, dto.rot_w,
-        )),
+        ),
         scale: Vec3f32::one(),
       }),
     }
@@ -759,7 +806,7 @@ impl<'a> TransformStaticCamera<'a> {
 /// FFI Contract:
 /// - `mode = 0` then `buffer` is 4 byte aligned and points to [f32; 6]
 /// - `mode = 1` then `buffer` is 4 byte aligned and points to [f32; 4]
-/// - `mode = 2` then `buffer` is 8-byte aligned and points to [`CRotoTranslateDTO`] (40 bytes: 3×f64 pos + 4×f32 quat)
+/// - `mode = 2` then `buffer` is 8-byte aligned and points to [`CRotoTranslateDTO`] (64 bytes: 3×f64 pos + 4×f64 quat + pivot)
 ///
 /// Constraints for buffer
 /// - Alignment: buffer must be properly aligned for an f32 (4-byte alignment).
@@ -792,14 +839,11 @@ pub unsafe extern "C" fn avkSimulationContext_transformStaticCamera(
     drop(scenes);
     let mut scene_guard = scene_arc.write();
     let cam_entity = aethervk_core_rlib::scene::EntityId::from_ffi(camera_id);
-    use aethervk_oshal_rlib::math::vector::{
-      vec3f64::DVec3,
-      vec4::{Quat, Vec4f32},
-    };
+    use aethervk_oshal_rlib::math::vector::vec3f64::DVec3;
     let offset = DVec3::from_components(dto.pos_x, dto.pos_y, dto.pos_z);
-    let rot = Quat(Vec4f32::from_components(
+    let rot = aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_components(
       dto.rot_x, dto.rot_y, dto.rot_z, dto.rot_w,
-    ));
+    );
 
     // Resolve pivot entity position synchronously if provided.
     let final_global_pos = if dto.pivot_entity_id != 0 {
@@ -891,26 +935,9 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraParent(
     let parent_entity = EntityId::from_ffi(parent_entity_id);
     scene_guard.scene.set_parent(cam_entity, Some(parent_entity));
   } else {
-    // World-preserving unparent:
-    // 1. Read world position BEFORE removing parent.
-    let world_t = match scene_guard.scene.global_transform_f64(cam_entity) {
-      Some(t) => t,
-      None => return false,
-    };
-    // 2. Move to root (effectively unparent).
-    let root = match scene_guard.scene.get_root() {
-      Some(r) => r,
-      None => return false,
-    };
-    scene_guard.scene.set_parent(cam_entity, Some(root));
-    // 3. Write world position back (local == world at root level).
-    let _ =
-      scene_guard
-        .scene
-        .with_component_mut(cam_entity, |t: &mut HighResTransformComponent| {
-          t.position = world_t.position;
-          t.rotation = world_t.rotation;
-        });
+    if !scene_guard.scene.unparent_to_root_preserving_world(cam_entity) {
+      return false;
+    }
     scene_guard.mark_component_changed(
       camera_id,
       <HighResTransformComponent as ForeignSerializable>::COMPONENT_ID,
@@ -959,22 +986,9 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraParentToComet(
     scene_guard.scene.set_parent(cam_entity, Some(comet_body));
   } else {
     // World-preserving unparent.
-    let world_t = match scene_guard.scene.global_transform_f64(cam_entity) {
-      Some(t) => t,
-      None => return false,
-    };
-    let root = match scene_guard.scene.get_root() {
-      Some(r) => r,
-      None => return false,
-    };
-    scene_guard.scene.set_parent(cam_entity, Some(root));
-    let _ =
-      scene_guard
-        .scene
-        .with_component_mut(cam_entity, |t: &mut HighResTransformComponent| {
-          t.position = world_t.position;
-          t.rotation = world_t.rotation;
-        });
+    if !scene_guard.scene.unparent_to_root_preserving_world(cam_entity) {
+      return false;
+    }
     scene_guard.mark_component_changed(
       camera_id,
       <HighResTransformComponent as ForeignSerializable>::COMPONENT_ID,
@@ -996,6 +1010,31 @@ pub unsafe extern "C" fn avkSimulationContext_resetSimulationSync(
   }
   let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
   ctx_ref.reset_simulation_sync(scene_id)
+}
+
+/// Pauses the simulation and jumps it to the TDB epoch `(centuries, nanoseconds)` (clamped to the
+/// committed range): bodies repositioned, the dust of the last TTL rebuilt deterministically.
+/// Blocks up to 2 s. Returns whether the seek was applied.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_seekEpochSync(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  centuries: i16,
+  nanoseconds: u64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
+  let epoch = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(
+    centuries,
+    nanoseconds,
+  ));
+  ctx_ref.seek_epoch_sync(scene_id, epoch)
 }
 
 #[unsafe(no_mangle)]
@@ -1561,6 +1600,7 @@ pub unsafe extern "C" fn avkSimulationContext_tryInitComet(
     inclination_deg: dto.inclination_deg,
     longitude_of_ascending_node_deg: dto.longitude_of_ascending_node_deg,
     argument_of_perihelion_deg: dto.argument_of_perihelion_deg,
+    time_of_perihelion_jd_tdb: dto.time_of_perihelion_jd_tdb,
   };
   let _ = ctx_ref.threads.logic_thread.tx().try_send(structs::LogicCommand::TryInitComet {
     scene_id,
@@ -1574,6 +1614,7 @@ pub unsafe extern "C" fn avkSimulationContext_tryInitComet(
       range.nanoseconds[1],
     )),
     keplerian_elements: elements,
+    reference_mode: structs::ReferenceOrbitMode::from_u32(dto.reference_mode),
   });
 
   true
@@ -1643,27 +1684,32 @@ pub unsafe extern "C" fn avkSimulationContext_setBodyRotationalModel(
       // If the simulation is NOT running, or the cache entry doesn't exist (not animating),
       // instantly snap the transform so the UI slider updates take effect immediately
       let is_running = scene_guard.simulation_running.load(core::sync::atomic::Ordering::Relaxed);
-      if !is_running || !cache_exists {
-        if let Some(time_mgr) = scenes.time_managers.get(&scene_id) {
-          let current_epoch = time_mgr.current_epoch();
-          let logic_state = ctx_ref.logic_state.read();
-          let almanac = &logic_state.almanac_data;
+      let snap = if !is_running || !cache_exists {
+        let epoch = scenes.time_managers.get(&scene_id).map(|t| t.current_epoch());
+        let planet = scene_guard
+          .scene
+          .with_component(entity_id, |p: &aethervk_core_rlib::scene::AlmanacPlanet| *p);
+        let subtree = scene_guard.scene.get_parent(entity_id);
+        epoch.zip(planet).zip(subtree)
+      } else {
+        None
+      };
+      // Lock order: step the almanac with no SceneContext lock held (see BuildCometTrajectory).
+      drop(scene_guard);
 
-          if let Some(planet) = scene_guard
-            .scene
-            .with_component(entity_id, |p: &aethervk_core_rlib::scene::AlmanacPlanet| *p)
-          {
-            if let Some(subtree) = scene_guard.scene.get_parent(entity_id) {
-              let _ = aethervk_core_rlib::simulation_api::reposition::force_reposition(
-                &scene_guard.scene,
-                subtree,
-                entity_id,
-                almanac,
-                &planet,
-                current_epoch,
-              );
-            }
-          }
+      if let Some(((epoch, planet), subtree)) = snap {
+        let state = {
+          let logic_state = ctx_ref.logic_state.read();
+          planet.step(epoch, &logic_state.almanac_data, Some(&model))
+        };
+        if let Ok((position_km, rotation)) = state {
+          aethervk_core_rlib::simulation_api::reposition::apply_reposition(
+            &scene_arc.read().scene,
+            subtree,
+            entity_id,
+            position_km,
+            rotation,
+          );
         }
       }
 

@@ -2,6 +2,7 @@
 
 pub mod indicator_layout;
 pub mod trajectory_indicator;
+pub mod trajectory_rte;
 
 use crate::{
   gpu::{self, RenderDevice, frame::*},
@@ -27,7 +28,7 @@ use aethervk_oshal_rlib::{
 };
 use function_name::named;
 
-const AU_TO_KM: f64 = 149_597_870.700_f64;
+use crate::simulation_api::reposition::AU_TO_KM;
 
 /// New implemnetation for ECS scene conversion into a list of draw calls
 pub trait SceneConversionExt2 {
@@ -80,7 +81,6 @@ impl SceneConversionExt2 for Scene {
     let cam_global_f64 = self
       .global_transform_f64(camera_entity)
       .ok_or(gpu_invalid_arg!("invalid camera entity"))?;
-    let cam_global_f32 = cam_global_f64.to_transform();
 
     let cam_comp =
       self
@@ -89,12 +89,10 @@ impl SceneConversionExt2 for Scene {
           "scene has no camera compoent on the specified entity"
         ))?;
 
-    let camera_data = CameraRenderData::new(
-      &cam_global_f32,
-      &cam_comp,
-      self.ancestor_frame_scale(camera_entity),
-      window_extent,
-    );
+    // The camera projection (near/far, ortho extents) is always expressed in AU by the UI, even
+    // when the camera is parented inside a micro frame (CometOrbiting / EarthPosition): never
+    // scale it by the camera's ancestor frame scale (that turned 6 km ortho extents into 4e-17).
+    let camera_data = CameraRenderData::new_f64(&cam_global_f64, &cam_comp, 1.0, window_extent);
 
     // Filter hidden subtrees
     let hidden_roots = if should_par {
@@ -202,29 +200,16 @@ impl SceneConversionExt2 for Scene {
             .copied()
             .unwrap_or((macro_near as f64, macro_far as f64));
           let scale = layer_frame_scales.get(&$layer_idx).copied().unwrap_or(1.0);
-          RenderLayer {
-            layer_index: $layer_idx,
-            frame_scale: scale,
-            near,
-            far,
-            camera_frame_local_pos: camera_in_frames
+          RenderLayer::new(
+            $layer_idx,
+            scale,
+            camera_in_frames
               .get(&$layer_idx)
               .map(|c| c.position.to_f32())
               .unwrap_or_default(),
-            draw_calls: alloc::vec::Vec::<DrawCall>::with_capacity(16),
-            billboard_calls: alloc::vec::Vec::<BillboardDrawCall>::with_capacity(16),
-            marker_calls: alloc::vec::Vec::<MarkerDrawCall>::with_capacity(16),
-            measurement_calls: alloc::vec::Vec::<MeasurementDrawCall>::with_capacity(16),
-            gizmo_calls: alloc::vec::Vec::<GizmoDrawCall>::with_capacity(16),
-            dust_calls: alloc::vec::Vec::<DustDrawCall>::with_capacity(16),
-            sphere_gizmo_batch_call: None,
-            trajectory_call: None,
-            cursor_call: None,
-            sun_call: None,
-            sky_call: None,
-            grid_call: None,
-            background_call: None,
-          }
+            near,
+            far,
+          )
         })
       };
     }
@@ -244,28 +229,9 @@ impl SceneConversionExt2 for Scene {
           (l.position, l.rotation, l.scale)
         };
 
-        let diff = pos_f64 - cam_in_frame.position;
-
-        // For macro layer (0): cam_in_frame.scale ≈ 1.0 (camera global AU scale).
-        // Dividing obj_scale by ≈1.0 is harmless — result is in AU, matching AU viewProj. ✓
-        //
-        // For micro layers (>0): cam_in_frame.scale ≈ 1/frame_scale ≈ 1.49e8 (km per world unit).
-        // Dividing obj_scale_km by 1.49e8 converts km→AU, but the micro-layer viewProj uses km
-        // (tight near/far computed from dist_local in km). Use obj_scale directly so the result
-        // is in km, matching the km viewProj. Without this, a 2 km mesh or 50 km sphere would be
-        // scaled down to ~0.01 μm — sub-pixel at any viewing distance.
-        let scale = if layer_idx == 0 {
-          obj_scale / cam_in_frame.scale
-        } else {
-          obj_scale // micro: km scale, matches km viewProj — no frame-scale division
-        };
         Some((
           layer_idx,
-          crate::scene::HighResTransformComponent {
-            position: diff,
-            rotation: rot,
-            scale,
-          },
+          rte_relative_to_camera(pos_f64, rot, obj_scale, cam_in_frame),
         ))
       };
 
@@ -385,6 +351,7 @@ impl SceneConversionExt2 for Scene {
           layer_idx,
           id,
           rte_for_gizmo.to_transform().to_mat4::<Mat4x4f32>() * sg.local_frame,
+          [rte.position.x(), rte.position.y(), rte.position.z()],
           sg.radius,
           sg.subdivisions,
         )
@@ -544,8 +511,8 @@ impl SceneConversionExt2 for Scene {
       // (sphere_gizmo.vert line 121), with arrowheads adding another `radius * 0.2`
       // (line 151). The full gizmo bounding sphere is therefore `radius * 1.7` km.
       // -> scratch that, it seems that the yellow one is still cut. Trying out 2.1 km
-      // extracted_sg tuple: (layer_idx, id, mat, rad, sub)
-      for (layer_idx, _id, _mat, rad, _sub) in &extracted_sg {
+      // extracted_sg tuple: (layer_idx, id, mat, center, rad, sub)
+      for (layer_idx, _id, _mat, _center, rad, _sub) in &extracted_sg {
         if *layer_idx == 0 {
           continue;
         }
@@ -731,7 +698,7 @@ impl SceneConversionExt2 for Scene {
           layer_idx,
           id,
           Mat4x4f64::translation(rte.position),
-          Mat4x4f32::from_quat_custom_frame(rte.rotation),
+          Mat4x4f32::from_quat_custom_frame(rte.rotation.to_quat()),
           g.gizmo_scale, // ignore scale from transform and use gizmo scale
         )
       })
@@ -757,11 +724,11 @@ impl SceneConversionExt2 for Scene {
     // 6. Sphere Gizmos (Batched - deferred upload)
     let mut sg_batch_buffers = hashbrown::HashMap::<
       u32,
-      alloc::vec::Vec<(EntityId, Mat4x4f32, f32, f32)>,
+      alloc::vec::Vec<(EntityId, Mat4x4f32, [f64; 3], f32, f32)>,
     >::with_capacity(16);
-    for (layer_idx, id, mat, rad, sub) in extracted_sg {
+    for (layer_idx, id, mat, center, rad, sub) in extracted_sg {
       get_or_create_layer!(layer_idx);
-      sg_batch_buffers.entry(layer_idx).or_default().push((id, mat, rad, sub));
+      sg_batch_buffers.entry(layer_idx).or_default().push((id, mat, center, rad, sub));
     }
 
     // 7. Trajectories (Batched - deferred upload)
@@ -769,10 +736,25 @@ impl SceneConversionExt2 for Scene {
       u32,
       alloc::vec::Vec<(EntityId, TrajectoryComponent, Mat4x4f32)>,
     >::with_capacity(16);
+    let identity = <Mat4x4f32 as aethervk_oshal_rlib::math::matrix::SquareMatrix>::identity();
+    let view_extent_hint = trajectory_rte::ViewScale::from_projection(&cam_comp.projection);
     let extracted_traj = extract!(TrajectoryComponent, |id, traj| {
-      // Note: traj.clone() copies the array of control points
-      compute_rte(self, id)
-        .map(|(layer_idx, rte)| (layer_idx, id, traj.clone(), rte.to_transform().to_mat4()))
+      // Camera-relative control points computed in f64 and only then cast to f32: the GPU never
+      // sees absolute AU (f32 ulp ~1.2e-7 AU = 18 km at 1 AU), so tracks stay exact up close.
+      let extra = match self.with_component(
+        id,
+        |e: &crate::scene::trajectory::EffectiveTrajectoryComponent| e.head_segment(),
+      ) {
+        Some(Some(seg)) => seg,
+        _ => alloc::vec::Vec::new(),
+      };
+      compute_rte(self, id).map(|(layer_idx, rte)| {
+        let rel =
+          trajectory_rte::camera_relative_control_points(traj, &extra, &rte, view_extent_hint);
+        let mut t = traj.clone();
+        t.control_points = rel;
+        (layer_idx, id, t, identity)
+      })
     });
     for (layer_idx, id, traj, mat) in extracted_traj {
       get_or_create_layer!(layer_idx);
@@ -1152,14 +1134,20 @@ impl SceneConversionExt2 for Scene {
           return;
         }
 
-        let (layer_idx, rte) = match compute_rte(self, ref_ind.target_entity) {
-          Some(v) => v,
-          None => return,
+        // Project the target's global (AU) position in the macro layer whatever frame it lives in:
+        // a comet body sits in a micro frame (layer 1), and its label is still drawn on the macro
+        // overlay. f64 camera-relative, as for every RTE path.
+        let Some(target_global) = self.global_transform_f64(ref_ind.target_entity) else {
+          return;
         };
-
-        if layer_idx != 0 {
-          return; // Macro only
-        }
+        let Some(cam_macro) = camera_in_frames.get(&0) else {
+          return;
+        };
+        let rte = crate::scene::HighResTransformComponent {
+          position: target_global.position - cam_macro.position,
+          rotation: target_global.rotation,
+          scale: target_global.scale,
+        };
 
         let clip = view_proj_f64.mul_vector(Vec4f64::from_components(
           rte.position.x(),
@@ -1351,6 +1339,79 @@ impl SceneConversionExt2 for Scene {
       }
     }
 
+    // ------ 8c. Screen-space measurements (reference-position error) ----------------------
+    // Endpoints are projected from f64 camera-relative positions; line, ticks and label are
+    // overlay UI, so they keep a constant pixel size at any zoom and unit.
+    {
+      use aethervk_oshal_rlib::math::{
+        matrix::{Matrix, mat4f64::Mat4x4f64},
+        vector::vec4f64::Vec4f64,
+      };
+      const TICK_PX: f32 = 6.0;
+      const LINE_PX: f32 = 1.5;
+      const LABEL_PT: f32 = 13.0;
+      let (w, h) = (window_extent[0] as f32, window_extent[1] as f32);
+      let vp: Mat4x4f64 = camera_data.proj_f64 * camera_data.view_f64;
+      let cam = cam_global_f64.position;
+      let to_px = |p: aethervk_oshal_rlib::math::vector::vec3f64::DVec3| -> Option<[f32; 2]> {
+        let r = p - cam;
+        let c = vp.mul_vector(Vec4f64::from_components(r.x(), r.y(), r.z(), 1.0));
+        (c.w() > 0.0).then(|| {
+          [
+            ((c.x() / c.w()) as f32 + 1.0) * 0.5 * w,
+            ((c.y() / c.w()) as f32 + 1.0) * 0.5 * h,
+          ]
+        })
+      };
+      self
+        .query1_without::<crate::scene::trajectory::ScreenMeasurementComponent, HiddenComponent, _>(
+          |id, m| {
+            if hidden_set.contains(&id) {
+              return;
+            }
+            let (Some(a), Some(b)) = (to_px(m.from_au), to_px(m.to_au)) else {
+              return;
+            };
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+            let (nx, ny) = (-dy / len * TICK_PX, dx / len * TICK_PX); // perpendicular, pixels
+            gpu_ui.push(segment_to_ui_quad(a, b, LINE_PX, m.color));
+            gpu_ui.push(segment_to_ui_quad(
+              [a[0] - nx, a[1] - ny],
+              [a[0] + nx, a[1] + ny],
+              LINE_PX,
+              m.color,
+            ));
+            gpu_ui.push(segment_to_ui_quad(
+              [b[0] - nx, b[1] - ny],
+              [b[0] + nx, b[1] + ny],
+              LINE_PX,
+              m.color,
+            ));
+            if let Ok(desc) =
+              device.allocate_rasterized_font_atlas(cmd_buffer, m.font_hash, m.font_atlas.clone())
+            {
+              let tw = text::text_width_px(&m.label, LABEL_PT, &m.font_atlas);
+              let mid = [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5];
+              let style = text::TextStyle {
+                size_pt: LABEL_PT,
+                color: m.color,
+                style_flags: 2,
+              };
+              // centred, just above the line (screen y grows downwards)
+              text::push_text_to_batch(
+                &m.label,
+                [mid[0] - tw * 0.5, mid[1] - TICK_PX - 4.0],
+                &style,
+                &m.font_atlas,
+                desc,
+                &mut text_batch,
+              );
+            }
+          },
+        );
+    }
+
     if !gpu_ui.is_empty() {
       render_scene.ui_call = device.upload_ui(cmd_buffer, &gpu_ui).ok().flatten();
     }
@@ -1363,9 +1424,12 @@ impl SceneConversionExt2 for Scene {
       .into_values()
       .map(|mut l| {
         if let Some(sg_list) = sg_batch_buffers.remove(&l.layer_index) {
+          // same per-layer camera `draw_layer_content` draws with (near/far are final here)
+          let layer_camera =
+            render_scene.camera_data.rebuild_for_layer(l.near, l.far, l.frame_scale);
           let sg_data: alloc::vec::Vec<_> = sg_list
             .into_iter()
-            .filter_map(|(id, m, r, sub)| {
+            .filter_map(|(id, m, center, r, sub)| {
               device.allocate_sphere_gizmo_instance(id).ok().map(|idx| {
                 (
                   idx,
@@ -1374,6 +1438,7 @@ impl SceneConversionExt2 for Scene {
                     radius: r,
                     subdivisions: sub,
                     _pad: [0.0; 2],
+                    center_clip: crate::gpu::frame::center_clip_f64(&layer_camera, center),
                   },
                 )
               })
@@ -1515,6 +1580,26 @@ fn segment_to_ui_quad(
     opacity: color[3],
     rotation: angle,
     _pad: 0,
+  }
+}
+
+/// Transform of an object relative to the camera, in the layer units (AU for the macro layer, km
+/// for micro layers, matching each layer's viewProj).
+///
+/// The object scale is already in those units: it is never divided by the camera scale. A camera
+/// parented inside a micro frame (CometOrbiting, EarthPosition) carries that frame's 1/AU_TO_KM in
+/// its global scale, and dividing by it blew every macro object (trajectories, cursor, ...) up by
+/// ~1.5e8 (no_trajectories.rdc: trajectory NDC ~1e15).
+pub fn rte_relative_to_camera(
+  object_position: aethervk_oshal_rlib::math::vector::vec3f64::DVec3,
+  object_rotation: aethervk_oshal_rlib::math::vector::vec4f64::Quat64,
+  object_scale: Vec3f32,
+  camera_in_frame: &crate::scene::HighResTransformComponent,
+) -> crate::scene::HighResTransformComponent {
+  crate::scene::HighResTransformComponent {
+    position: object_position - camera_in_frame.position,
+    rotation: object_rotation,
+    scale: object_scale,
   }
 }
 

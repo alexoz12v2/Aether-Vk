@@ -61,7 +61,7 @@ impl SimulationContext {
         entity_id,
         HighResTransformComponent {
           position: pos,
-          rotation: rot,
+          rotation: aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_quat(rot),
           scale,
         },
       )
@@ -218,7 +218,9 @@ impl SimulationContext {
         .scene
         .with_component_mut(entity_id, |c: &mut HighResTransformComponent| {
           c.position = Vec3f64::from_components(pos_x, pos_y, pos_z);
-          c.rotation = Quat::from_components(rot_x, rot_y, rot_z, rot_w);
+          c.rotation = aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_quat(
+            Quat::from_components(rot_x, rot_y, rot_z, rot_w),
+          );
           c.scale = Vec3f32::from_components(scale_x, scale_y, scale_z);
         });
     opt.ok_or(EngineError::InvalidOperation(
@@ -265,10 +267,11 @@ impl SimulationContext {
       if !pos_z.is_null() {
         *pos_z = hrt.position.z();
       }
+      let rotation = hrt.rotation.to_quat();
       if !rot_w.is_null() {
-        *rot_w = hrt.rotation.scalar_part();
+        *rot_w = rotation.scalar_part();
       }
-      let v = hrt.rotation.vector_part();
+      let v = rotation.vector_part();
       if !rot_x.is_null() {
         *rot_x = v.x();
       }

@@ -8,7 +8,9 @@ use aethervk_oshal_rlib::math::{
   FloatLike,
   floating::FloatOps,
   quaternion::Quaternion,
-  vector::{Vector, Vector3, Vector4, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat},
+  vector::{
+    Vector, Vector3, Vector4, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat, vec4f64::Quat64,
+  },
 };
 
 // TODO add unit tests
@@ -51,7 +53,7 @@ impl SceneCameraExt for Scene {
     self
       .with_component_mut(camera_entity, |h: &mut HighResTransformComponent| {
         let (pitch, yaw) = updated_pitch_yaw_highres(&h, delta_pitch, delta_yaw);
-        h.rotation = Quat::from_pitch_and_yaw_radians(pitch, yaw);
+        h.rotation = Quat64::from_quat(Quat::from_pitch_and_yaw_radians(pitch, yaw));
       })
       .ok_or(EngineError::InvalidOperation(
         "[SceneCameraExt] rotate_camera: camera entity not found",
@@ -80,19 +82,19 @@ impl SceneCameraExt for Scene {
         let pivot = if let Some(p_override) = pivot_override {
           p_override
         } else {
-          let fwd = h.rotation.rotate_vector(Vec3f32::from_components(0.0, -1.0, 0.0)).to_f64();
+          let fwd = h.rotation.rotate_vector(Vec3f64::from_components(0.0, -1.0, 0.0));
           h.position + fwd * (focus_distance as f64)
         };
 
         // 2. Compute old and new orientations
         let q_old = h.rotation;
-        let (mut p, mut y) = q_old.to_pitch_yaw();
+        let (mut p, mut y) = q_old.to_quat().to_pitch_yaw();
         p += delta_pitch;
         y += delta_yaw;
         let max_pitch = 1.55334_f32;
         p = p.clamp(-max_pitch, max_pitch);
         y = y.fmod(<f32 as FloatOps>::PI * 2.0);
-        let q_new = Quat::from_pitch_and_yaw_radians(p, y);
+        let q_new = Quat64::from_quat(Quat::from_pitch_and_yaw_radians(p, y));
 
         // 3. Rotate offset by q_delta = q_new * q_old^-1.
         // This rotates the camera's position around the pivot by the same amount
@@ -105,13 +107,9 @@ impl SceneCameraExt for Scene {
         if offset_len > 1e-30 {
           // Normalize to unit direction for f32 quaternion rotation,
           // then rescale with exact f64 magnitude (prevents distance drift).
-          let dir_f32 = Vec3f32::from_components(
-            (offset.x() / offset_len) as f32,
-            (offset.y() / offset_len) as f32,
-            (offset.z() / offset_len) as f32,
-          );
+          let dir = offset * (1.0 / offset_len);
           let q_delta = q_new * q_old.conjugate();
-          let rotated_dir = q_delta.rotate_vector(dir_f32).to_f64();
+          let rotated_dir = q_delta.rotate_vector(dir);
           let rotated_len = rotated_dir.length();
           h.position = pivot + rotated_dir * (offset_len / rotated_len);
         }
@@ -133,12 +131,7 @@ impl SceneCameraExt for Scene {
         // Casting the entire delta to f32 would truncate micro-scale values to zero.
         let mag = delta.length();
         if mag > 0.0 {
-          let dir_f32 = Vec3f32::from_components(
-            (delta.x() / mag) as f32,
-            (delta.y() / mag) as f32,
-            (delta.z() / mag) as f32,
-          );
-          let global_dir = h.rotation.rotate_vector(dir_f32).to_f64();
+          let global_dir = h.rotation.rotate_vector(delta * (1.0 / mag));
           h.position = h.position + global_dir * mag;
         }
         // Clamp distance
@@ -164,8 +157,8 @@ impl SceneCameraExt for Scene {
     self
       .with_component_mut(camera_entity, |h: &mut HighResTransformComponent| {
         let pan_speed = focus_distance as f64 * 0.001;
-        let right = h.rotation.rotate_vector(Vec3f32::from_components(1.0, 0.0, 0.0)).to_f64();
-        let up = h.rotation.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0)).to_f64();
+        let right = h.rotation.rotate_vector(Vec3f64::from_components(1.0, 0.0, 0.0));
+        let up = h.rotation.rotate_vector(Vec3f64::from_components(0.0, 0.0, 1.0));
         let translation = right * (-delta_x as f64 * pan_speed) + up * (delta_y as f64 * pan_speed);
         h.position = h.position + translation;
       })
@@ -224,7 +217,7 @@ fn updated_pitch_yaw_highres(
   delta_yaw: f32,
 ) -> (f32, f32) {
   use self::QuatToEulerAngles;
-  let (mut pitch, mut yaw) = t.rotation.to_pitch_yaw();
+  let (mut pitch, mut yaw) = t.rotation.to_quat().to_pitch_yaw();
   pitch += delta_pitch;
   yaw += delta_yaw;
   // Clamp to 89 degrees (1.55334 radians) to prevent Gimbal lock pole flips

@@ -1,3 +1,5 @@
+using AetherVk.Logic.Utils;
+using System.Linq;
 using System;
 using System.Numerics;
 using System.Reactive.Concurrency;
@@ -145,10 +147,10 @@ public class CameraServiceTests
     public double PosX;
     public double PosY;
     public double PosZ;
-    public float RotW;
-    public float RotX;
-    public float RotY;
-    public float RotZ;
+    public double RotW;
+    public double RotX;
+    public double RotY;
+    public double RotZ;
     public float ScaleX;
     public float ScaleY;
     public float ScaleZ;
@@ -262,16 +264,53 @@ public class CameraServiceTests
 
     // Setup RotoTranslate to return true
     runtime
-      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()))
+      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>(), It.IsAny<ulong>()))
       .Returns(true);
 
     bool result = service.RequestPan(new Vector2(10, 10), InputModifiers.None);
 
     Assert.True(result);
     runtime.Verify(
-      r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()),
+      r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>(), It.IsAny<ulong>()),
       Times.Once
     );
+  }
+
+  /// Screen right is camera local -X (forward -Y, up +Z, right-handed view). Dragging right must
+  /// move the camera towards its screen left (+X for identity rotation) so the scene follows the
+  /// cursor.
+  [Fact]
+  public void UpZenith_RequestPan_DragRightMovesCameraTowardsScreenLeft()
+  {
+    var (service, runtime, scheduler) = BuildService();
+    var dto = new MutableHighResTransformDTO { RotW = 1, ScaleX = 1, ScaleY = 1, ScaleZ = 1 };
+    var method = typeof(CameraService).GetMethod(
+      "HandleTransformCallback",
+      System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+    )!;
+    int size = System.Runtime.InteropServices.Marshal.SizeOf(dto);
+    nint ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+    try
+    {
+      System.Runtime.InteropServices.Marshal.StructureToPtr(dto, ptr, false);
+      method.Invoke(service, new object[] { ptr });
+    }
+    finally
+    {
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+    }
+    scheduler.AdvanceBy(1);
+    service.SetCameraMode(CameraMode.UpZenith);
+
+    double newX = double.NaN, newZ = double.NaN;
+    runtime
+      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>(), It.IsAny<ulong>()))
+      .Callback((ulong _, double x, double _, double z, Quaterniond _, ulong _) => { newX = x; newZ = z; })
+      .Returns(true);
+
+    Assert.True(service.RequestPan(new Vector2(10, 0), InputModifiers.None));
+    Assert.True(newX > 0, $"drag right should move the camera to +X (screen left), got {newX}");
+    Assert.Equal(0.0, newZ, 12);
   }
 
   [Fact]
@@ -325,10 +364,10 @@ public class CameraServiceTests
     service.SetCameraMode(CameraMode.EarthPosition);
 
     // Capture the rotation passed to CameraSetRotoTranslate via Callback (must be set up BEFORE the call).
-    Quaternion capturedRot = default;
+    Quaterniond capturedRot = default;
     runtime
-      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()))
-      .Callback<ulong, double, double, double, Quaternion, ulong>((_, _x, _y, _z, q, _pivot) => capturedRot = q)
+      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>(), It.IsAny<ulong>()))
+      .Callback<ulong, double, double, double, Quaterniond, ulong>((_, _x, _y, _z, q, _pivot) => capturedRot = q)
       .Returns(true);
     runtime.Invocations.Clear();
 
@@ -338,7 +377,7 @@ public class CameraServiceTests
 
     // The world-space right vector = Transform(+X, rotation).
     // A pure pitch leaves the right vector in the XY plane: Z component should be ≈ 0.
-    var right = Vector3.Transform(Vector3.UnitX, capturedRot);
+    var right = (Vector3)Vector3d.Transform(Vector3d.UnitX, capturedRot);
     Assert.True(
       Math.Abs(right.Z) < 0.01f,
       $"Vertical drag yawed the camera: right.Z = {right.Z:F4} (expected ≈ 0)"
@@ -355,7 +394,7 @@ public class CameraServiceTests
     var (service, runtime, _) = BuildService();
     service.SetCameraMode(CameraMode.EarthPosition);
     runtime
-      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()))
+      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>(), It.IsAny<ulong>()))
       .Returns(true);
     runtime.Invocations.Clear();
 
@@ -363,7 +402,7 @@ public class CameraServiceTests
 
     // Must use direct set, not animation (animation = 0.4 s lag)
     runtime.Verify(
-      r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()),
+      r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>(), It.IsAny<ulong>()),
       Times.Once
     );
     runtime.Verify(r => r.AddCameraAnimation(100UL, It.IsAny<AnimationTarget>()), Times.Never);
@@ -421,7 +460,7 @@ public class CameraServiceTests
     service.SetOrbitOffset(new Vector3(5e-5f, 0f, 0f));
 
     runtime
-      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()))
+      .Setup(r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>(), It.IsAny<ulong>()))
       .Returns(true);
     runtime.Invocations.Clear();
 
@@ -438,7 +477,7 @@ public class CameraServiceTests
     snapMethod.Invoke(service, new object[] { new Vector3(1f, 0f, 0f), 0f, true });
 
     runtime.Verify(
-      r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaternion>(), It.IsAny<ulong>()),
+      r => r.CameraSetRotoTranslate(100UL, It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>(), It.IsAny<ulong>()),
       Times.Once
     );
     runtime.Verify(r => r.AddCameraAnimation(100UL, It.IsAny<AnimationTarget>()), Times.Never);
@@ -615,33 +654,314 @@ public class CameraServiceTests
     );
   }
 
-  [Fact]
-  public void PointTowardsSun_UpdatesInertialLookDir_AndSendsAnimation()
+  // ── Earth observer submodes and camera assertions ──────────────────────────
+
+  private static Quaterniond LastAnimatedRotation(Mock<INativeRuntimeService> runtime)
   {
-    var (service, runtime, scheduler) = BuildService();
-    
-    // Simulate setting up Earth Observer mode
-    service.OnViewportReady(42UL, 800, 600); // Assume camEntity = 42
+    var call = runtime.Invocations.Last(inv => inv.Method.Name == nameof(INativeRuntimeService.AddCameraAnimation));
+    return ((AnimationTarget)call.Arguments[1]).Rot;
+  }
+
+  /// Sun lock-in aims at the Sun (camera forward = engine −Y towards the origin).
+  [Fact]
+  public void SunLockIn_AimsAtTheSun()
+  {
+    var (service, runtime, _) = BuildService();
     service.SetCameraMode(CameraMode.EarthPosition);
-    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.Inertial);
-    
-    // Reset invocation count to track the call from PointTowardsSun
     runtime.Invocations.Clear();
 
-    // Act
-    service.PointTowardsSun();
+    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.SunLockIn);
 
-    // Assert
-    // Verify that the camera rotates toward the origin (Sun)
-    // The exact quaternion values will depend on Earth's rotation and surface point,
-    // but we can verify RotoTranslateDirect or AddCameraAnimation was called.
-    runtime.Verify(
-      r => r.AddCameraAnimation(
-        It.IsAny<ulong>(),
-        It.IsAny<AnimationTarget>()
-      ),
-      Times.AtLeastOnce,
-      "RotoTranslateDirect should be called to apply the new rotation"
-    );
+    var fwd = Vector3d.Transform(-Vector3d.UnitY, LastAnimatedRotation(runtime));
+    // Earth at the origin in the test, observer at (R, 0, 0): the Sun is along −X
+    Assert.True(fwd.X < -0.999, $"forward {fwd} should point at the Sun");
+  }
+
+  /// Comet tracking aims in double precision from the f64 comet position: the forward hits the
+  /// comet ~0.5 AU away to ~1e-12 rad. In float (positions and quaternion) it was ~1e-7 rad, i.e.
+  /// tens of km, and the nucleus fell outside a ±9 km field (earth_observer_comet.rdc).
+  [Fact]
+  public void CometTracking_AimsAtTheCometInDoublePrecision()
+  {
+    var (service, runtime, _) = BuildService();
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
+    ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
+      .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!).OnNext(true);
+    var tracker = typeof(CameraService).GetField("_cometTracker", flags)!.GetValue(service)!;
+    var comet = new Vector3d(1.3000000123456, -0.4000000987654, 0.0500000314159);
+    tracker.GetType().GetField("_lastKnownCometPositionF64", flags)!
+      .SetValue(tracker, ((double X, double Y, double Z)?)(comet.X, comet.Y, comet.Z));
+
+    service.SetCameraMode(CameraMode.EarthPosition);
+    var earth = new Vector3d(0.9832154321987, 0.1710987654321, -0.0000123456789);
+    var dto = new MutableHighResTransformDTO
+    {
+      PosX = earth.X, PosY = earth.Y, PosZ = earth.Z,
+      RotW = 1, ScaleX = 1, ScaleY = 1, ScaleZ = 1,
+    };
+    var size = System.Runtime.InteropServices.Marshal.SizeOf(dto);
+    nint ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+    try
+    {
+      System.Runtime.InteropServices.Marshal.StructureToPtr(dto, ptr, false);
+      typeof(CameraService).GetMethod("HandleEarthTransformCallback", flags)!.Invoke(service, new object[] { ptr });
+      runtime.Invocations.Clear();
+      service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.CometTracking);
+    }
+    finally
+    {
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+    }
+
+    // observer at (0°N, 0°E) with an identity Earth rotation: earth + (R, 0, 0)
+    var camPos = earth + new Vector3d(4.26e-5, 0, 0);
+    var want = Vector3d.Normalize(comet - camPos);
+    var fwd = Vector3d.Transform(-Vector3d.UnitY, LastAnimatedRotation(runtime));
+    double err = Vector3d.Cross(fwd, want).Length();
+    Assert.True(Vector3d.Dot(fwd, want) > 0 && err < 1e-12, $"aim error {err:E2} rad");
+  }
+
+  /// A comet submode without a committed comet ejects to Free and warns with a breadcrumb.
+  [Fact]
+  public void CometSubmode_WithoutComet_EjectsToFreeWithBreadcrumb()
+  {
+    var (service, _, _) = BuildService();
+    var breadcrumbs = (BreadcrumbService)typeof(CameraService)
+      .GetField("_breadcrumbService", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+      .GetValue(service)!;
+    var warnings = new System.Collections.Generic.List<BreadcrumbMessage>();
+    using var _sub = breadcrumbs.Events.Subscribe(e =>
+    {
+      if (e is BreadcrumbEvent.Added a && a.Message.Status == 2) warnings.Add(a.Message);
+    });
+    EarthObserverOrientationMode? last = null;
+    using var _mode = service.EarthObserverOrientationModeChanged.Subscribe(m => last = m);
+
+    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.CometTracking);
+
+    Assert.Equal(EarthObserverOrientationMode.Free, last);
+    Assert.Single(warnings);
+  }
+
+  /// Camera assertions: the screen right vector lies in the ecliptic plane and the view up leans
+  /// towards +Z north of the equator, −Z south of it, for any look direction.
+  [Fact]
+  public void EarthObserverOrient_KeepsRightInEclipticAndUpTowardsThePole()
+  {
+    var rng = new Random(7);
+    for (int k = 0; k < 200; k++)
+    {
+      var q = Quaterniond.Normalize(new Quaterniond(
+        rng.NextDouble() - 0.5, rng.NextDouble() - 0.5, rng.NextDouble() - 0.5, rng.NextDouble() - 0.5));
+      float lat = (float)(rng.NextDouble() * 180.0 - 90.0);
+      var o = CameraService.EarthObserverOrient(q, lat);
+      var fwd = Vector3d.Transform(-Vector3d.UnitY, o);
+      if (Math.Abs(fwd.Z) > 0.98) continue; // degenerate: snapping allowed
+      var right = Vector3d.Transform(-Vector3d.UnitX, o); // screen right
+      var up = Vector3d.Transform(Vector3d.UnitZ, o);
+      // double precision end to end: the aim must survive at 1 AU to well below a km (~1e-9 rad)
+      Assert.True(Math.Abs(right.Z) < 1e-12, $"right {right} not in the ecliptic plane");
+      Assert.True(Vector3d.Dot(up, lat >= 0 ? Vector3d.UnitZ : -Vector3d.UnitZ) > 0, $"up {up} at lat {lat}");
+      // forward is preserved
+      var fwdIn = Vector3d.Transform(-Vector3d.UnitY, q);
+      Assert.True(Vector3d.Cross(fwd, fwdIn).Length() < 1e-12 && Vector3d.Dot(fwd, fwdIn) > 0, $"forward changed: {fwd} vs {fwdIn}");
+    }
+  }
+
+  [Fact]
+  public void Tracking_HoldsBelowTheHorizon()
+  {
+    var zenith = Vector3d.UnitX;
+    Assert.True(CameraService.IsBelowHorizon(new Vector3d(-1, 0.2, 0), zenith));
+    Assert.False(CameraService.IsBelowHorizon(new Vector3d(0.1, 1, 0), zenith));
+  }
+
+  /// Lock-in / tracking preset: the target spans 10% of the view; a changed fov enables "Restore".
+  [Fact]
+  public void EarthPresetProjection_FitsTargetTo10PercentAndDetectsChanges()
+  {
+    var (service, _, _) = BuildService();
+    double r = CameraService.SunRadiusAu, d = 1.0;
+    var preset = service.ComputeTargetPresetProjection(r, d);
+    Assert.True(preset.IsPerspective);
+    Assert.Equal(0.1, r / (d * Math.Tan(preset.Fov / 2.0)), 4);
+    Assert.False(CameraService.DiffersFromPreset(preset, preset));
+    Assert.True(CameraService.DiffersFromPreset(preset with { Fov = preset.Fov * 2f }, preset));
+    Assert.False(CameraService.DiffersFromPreset(preset, null));
+  }
+
+  // ── Frustum-aware sensitivity ──────────────────────────────────────────────
+
+  private static void SetProjection(CameraService service, CameraProjectionState proj)
+  {
+    var field = typeof(CameraService).GetField(
+      "_projectionSubject",
+      System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+    ((System.Reactive.Subjects.BehaviorSubject<CameraProjectionState?>)field.GetValue(service)!).OnNext(proj);
+  }
+
+  private static CameraProjectionState Ortho(float halfH) =>
+    new(false, 0f, 800f / 600f, 1e-9f, 1f, -halfH * 800f / 600f, halfH * 800f / 600f, -halfH, halfH, 0f);
+
+  private static CameraProjectionState Persp(float fovRad, float focus = 0f) =>
+    new(true, fovRad, 800f / 600f, 1e-9f, 1f, 0f, 0f, 0f, 0f, focus);
+
+  [Fact]
+  public void ViewAngularScale_MatchesFrustumGeometry()
+  {
+    // ortho: full height over pixel height, independent of distance
+    Assert.Equal(2.0 / 600.0, ViewAngularScale.WorldPerPixel(Ortho(1f), 5.0, 600), 9);
+    Assert.Equal(2.0 / 600.0 / 4.0, ViewAngularScale.RadPerPixel(Ortho(1f), 4.0, 600), 9);
+    // perspective: frustum height at the distance; angle per pixel ~ fov / height
+    double fov = Math.PI / 6;
+    Assert.Equal(2.0 * 10.0 * Math.Tan(fov / 2) / 600.0, ViewAngularScale.WorldPerPixel(Persp((float)fov), 10.0, 600), 7);
+    Assert.Equal(fov / 600.0, ViewAngularScale.RadPerPixel(Persp((float)fov), 1.0, 600), 7);
+  }
+
+  /// Zooming in (smaller ortho extent) slows the comet orbit proportionally: the drag "grabs" the
+  /// nucleus whatever the zoom and unit.
+  [Fact]
+  public void CometOrbitRate_ScalesWithOrthoExtent()
+  {
+    var (service, _, _) = BuildService();
+    const double AuToKm = 149_597_870.7;
+    float r = (float)(50.0 / AuToKm); // default nucleus radius fallback (km -> AU)
+    SetProjection(service, Ortho(3f * r));
+    double wide = service.CometOrbitRadPerPixel();
+    SetProjection(service, Ortho(0.3f * r));
+    double tight = service.CometOrbitRadPerPixel();
+    Assert.Equal(10.0, wide / tight, 3);
+    // at the default 3·radius extent one pixel moves the limb by one pixel: 6r/600px / r
+    Assert.Equal(6.0 / 600.0, wide, 5);
+  }
+
+  /// Earth free look at a 1 arcsecond field of view turns by about one arcsecond per 600 px,
+  /// not by the fixed 5e-4 rad/px (~100 arcsec) that made telescope views unusable.
+  [Fact]
+  public void EarthFreeLook_AtArcsecondFov_TakesArcsecondSteps()
+  {
+    var (service, _, _) = BuildService();
+    double arcsec = Math.PI / 180.0 / 3600.0;
+    SetProjection(service, Persp((float)arcsec, 1f));
+    double radPerPx = service.EarthFreeLookRadPerPixel();
+    Assert.InRange(radPerPx, arcsec / 600.0 * 0.99, arcsec / 600.0 * 1.01);
+  }
+
+  [Fact]
+  public void ZoomScaleFactor_IsExponential()
+  {
+    float a = CameraService.ZoomScaleFactor(100f, 1f);
+    float b = CameraService.ZoomScaleFactor(200f, 1f);
+    Assert.True(a < 1f, "drag down zooms in");
+    Assert.Equal(a * a, b, 4);
+    Assert.Equal(1f / a, CameraService.ZoomScaleFactor(-100f, 1f), 4);
+  }
+
+  // ── Settings sliders: units and drag ───────────────────────────────────────
+
+  /// Log drags change a value by the same ratio whatever the display unit (the step used to
+  /// multiply the log increment: AU barely moved, km jumped 2.5 decades per pixel).
+  [Fact]
+  public void LogSliderDrag_IsUnitIndependent()
+  {
+    double au = 4e-8; // ~6 km
+    double km = au * AetherVk.Logic.ViewModels.ViewportSettingsViewModel.DistanceUnitFactor(1);
+    double au2 = AetherVk.Logic.Utils.SliderDragMath.Next(au, 20, true, 0.001, 5.0, false, 1e-12);
+    double km2 = AetherVk.Logic.Utils.SliderDragMath.Next(km, 20, true, 149_597.87, 5.0, false, 1e-3);
+    Assert.Equal(au2 / au, km2 / km, 9);
+    Assert.Equal(Math.Pow(10, 20 * 0.005 * 5.0), au2 / au, 9); // half a decade for 20 px
+    // Shift = fine
+    double fine = AetherVk.Logic.Utils.SliderDragMath.Next(au, 20, true, 0.001, 5.0, true, 1e-12);
+    Assert.Equal(Math.Pow(10, 20 * 0.005 * 5.0 * 0.1), fine / au, 9);
+  }
+
+  /// km- and m-scale extents survive the AU <-> display conversion (Math.Round(x, 6) in AU used
+  /// to zero them) and all three units show the same physical size.
+  [Fact]
+  public void SettingsDistanceUnits_RoundTripWithoutLoss()
+  {
+    var (service, runtime, _) = BuildService();
+    var schedulers = new AetherVk.Logic.Tests.Mocks.TestSchedulerProvider();
+    var vm = new AetherVk.Logic.ViewModels.ViewportSettingsViewModel(100UL, 0, runtime.Object, schedulers, service);
+    vm.OrthoUnitIndex = 1; // km
+    vm.OrthoHalfHeightDisplay = 6.0;
+    Assert.Equal(6.0 / 149_597_870.7, vm.OrthoHalfHeight, 15);
+    vm.OrthoUnitIndex = 2; // m
+    Assert.Equal(6000.0, vm.OrthoHalfHeightDisplay, 6);
+    vm.OrthoUnitIndex = 0; // AU
+    Assert.Equal(6.0 / 149_597_870.7, vm.OrthoHalfHeightDisplay, 15);
+    Assert.True(vm.OrthoExtentMin < vm.OrthoHalfHeightDisplay);
+  }
+
+  // ── UpZenith snap above ────────────────────────────────────────────────────
+
+  /// The Sun snap reproduces the startup pose (0.05 AU above, looking down) and every snap makes
+  /// the body fill 30% of the view in both projections.
+  [Fact]
+  public void SnapAbovePose_FitsBodyTo30PercentOfView()
+  {
+    var sun = CameraService.ComputeSnapAbove(CameraService.SunRadiusAu);
+    Assert.Equal(0.05f, sun.Offset.Z, 6);
+    Assert.Equal(0f, sun.Offset.X);
+    Assert.Equal(0.0155f, sun.OrthoHalfHeight, 4);
+    var down = Vector3.Transform(new Vector3(0, -1, 0), sun.Rotation); // camera forward
+    Assert.True(down.Z < -0.999f, $"camera must look down -Z, forward = {down}");
+
+    foreach (double r in new[] { 2.0 / 149_597_870.7, 4.26e-5, CameraService.SunRadiusAu })
+    {
+      var p = CameraService.ComputeSnapAbove(r);
+      double d = p.Offset.Z;
+      Assert.Equal(0.3, r / p.OrthoHalfHeight, 4);                         // ortho: r / halfH
+      Assert.Equal(0.3, r / (d * Math.Tan(p.PerspFov / 2.0)), 4);           // persp: r / half-frustum
+      Assert.True(p.Near < d - r && p.Far > d + r, "body inside near/far");
+    }
+  }
+
+  [Fact]
+  public void SnapAboveComet_WithoutCommittedComet_IsRefused()
+  {
+    var (service, runtime, _) = BuildService();
+    runtime.Invocations.Clear();
+    Assert.False(service.SnapAbove(SnapTarget.Comet));
+    runtime.Verify(r => r.AddCameraAnimation(It.IsAny<ulong>(), It.IsAny<AnimationTarget>()), Times.Never);
+  }
+
+  [Fact]
+  public void SnapAboveEarth_AnimatesAboveTheEarthPivot()
+  {
+    var (service, runtime, _) = BuildService();
+    runtime.Invocations.Clear();
+    Assert.True(service.SnapAbove(SnapTarget.Earth));
+    double expectedZ = 4.26e-5 * CameraService.SnapAboveDistanceRadii;
+    runtime.Verify(r => r.AddCameraAnimation(100UL, It.Is<AnimationTarget>(t =>
+      t.PivotEntityId == 42UL && t.PosX == 0 && t.PosY == 0 && Math.Abs(t.PosZ - expectedZ) < 1e-9)), Times.Once);
+  }
+
+  /// The comet label is shown only in Earth observer mode.
+  [Fact]
+  public void CometIndicator_ShownOnlyInEarthObserverMode()
+  {
+    var (service, runtime, _) = BuildService();
+    service.SetCameraMode(CameraMode.EarthPosition);
+    runtime.Verify(r => r.SetCometIndicatorVisible(true), Times.Once);
+    service.SetCameraMode(CameraMode.UpZenith);
+    runtime.Verify(r => r.SetCometIndicatorVisible(false), Times.Once);
+  }
+
+  /// Decommitting the comet while snapped above it in UpZenith flies back above the Sun.
+  [Fact]
+  public void Decommit_WhileSnappedAboveComet_FliesBackToTheSun()
+  {
+    var (service, runtime, _) = BuildService();
+    typeof(CameraService)
+      .GetField("_lastSnapTarget", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+      .SetValue(service, (SnapTarget?)SnapTarget.Comet);
+    runtime.Invocations.Clear();
+
+    service.OnCometDecommitted();
+
+    runtime.Verify(r => r.AddCameraAnimation(100UL, It.Is<AnimationTarget>(t =>
+      t.PivotEntityId == null && Math.Abs(t.PosZ - 0.05) < 1e-6)), Times.Once);
   }
 }
