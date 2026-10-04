@@ -1399,3 +1399,30 @@ fn test_parented_camera_keeps_f64_world_rotation_through_spin() {
     "camera moved by the spin step"
   );
 }
+
+/// Dust history before the start epoch needs the comet attitude without its SPK: `rotation_at`
+/// alone equals the rotation of a full ephemeris step (67P-like IAU model on Mars' ephemeris).
+#[test]
+fn test_rotation_at_matches_step_rotation() {
+  let almanac = load_planet_almanac();
+  let model = crate::scene::BodyRotationalModel {
+    pole_ra: 69.3,
+    pole_dec: 64.1,
+    prime_meridian: 114.2,
+    pole_ra_rate: 0.0,
+    pole_dec_rate: 0.0,
+    rotation_rate: 696.5,
+    body_fixed_orientation: false,
+  };
+  let planet = AlmanacPlanet { naif_id: 499 };
+  for days in [0.0, 3.7, 400.0] {
+    let epoch = Epoch::from_gregorian_utc(2025, 10, 1, 0, 0, 0, 0) + Duration::from_days(days);
+    let (_, _, q_step) = planet.step_with_velocity(epoch, &almanac, Some(&model)).unwrap();
+    let q = planet.rotation_at(epoch, &almanac, Some(&model));
+    assert_eq!(q, q_step, "day {days}");
+  }
+  // no model: identity for a small body, also before any ephemeris coverage
+  let early = Epoch::from_gregorian_utc(1990, 1, 1, 0, 0, 0, 0);
+  let q = AlmanacPlanet { naif_id: 1000012 }.rotation_at(early, &almanac, None);
+  assert_eq!(q, aethervk_oshal_rlib::math::vector::vec4::Quat::identity());
+}

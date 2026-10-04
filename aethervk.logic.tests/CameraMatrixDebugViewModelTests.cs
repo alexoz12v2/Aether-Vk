@@ -44,4 +44,18 @@ public class CameraMatrixDebugViewModelTests
         Assert.Equal(6.0, vm.RotZ, 4);
         Assert.Equal(7.0, vm.RotW, 4);
     }
+
+    /// Dust history line per age tier: live/capacity, ages present, band, building flag.
+    [Fact]
+    public void FormatDustHistory_ShowsEachTier()
+    {
+        const double Day = 86400.0;
+        var text = CameraMatrixDebugViewModel.FormatDustHistory(new[]
+        {
+            new DustTierStats(1391, 16384, 0, 0.2 * Day, 0, 30 * Day, false),
+            new DustTierStats(8000, 8192, 30 * Day, 240 * Day, 30 * Day, 240 * Day, true),
+        });
+        Assert.Equal("T0 1,391/16,384 0.0–0.2 d [0–30 d] building\nT1 8,000/8,192 30.0–240.0 d [30–240 d]", text);
+        Assert.Equal(string.Empty, CameraMatrixDebugViewModel.FormatDustHistory(null));
+    }
 }

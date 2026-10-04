@@ -316,6 +316,9 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   public bool AddCameraAnimation(ulong cameraId, AnimationTarget animation) => true;
 
+  public System.Collections.Generic.IReadOnlyList<DustTierStats> DustStats() =>
+    System.Array.Empty<DustTierStats>();
+
   public bool CameraSetRotoTranslate(
     ulong cameraId,
     double posX,

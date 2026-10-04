@@ -21,7 +21,7 @@ layout(push_constant, std430) uniform PushConstants {
     vec4 ps_r_t_hi;              // 32: particle-system heliocentric position (m), w = t_now (s); df64 hi
     vec4 ps_r_t_lo;              // 48: ... low part
     vec4 rot_inv;                // 64: root -> particle-system quaternion (xyzw)
-    vec4 ttl;                    // 80: x = TTL (s)
+    vec4 ttl;                    // 80: age band: x max age = TTL (s), y min age (s), z 1 = no fade
 } pc;                            // 96 bytes
 
 void main() {
@@ -38,7 +38,9 @@ void main() {
     vec2 age = df_sub(t_now, vec2(C.r0_t0_hi.w, C.r0_t0_lo.w));
     float age_f = age.x + age.y;
     float ttl = pc.ttl.x;
-    if (age_f >= 0.0 && age_f <= ttl) {
+    // age band of this tier (dust::DustSystemState): neighbouring tiers overlap in emission time,
+    // each draws only its own ages
+    if (age_f >= pc.ttl.y && age_f >= 0.0 && age_f <= ttl) {
         float beta = C.v0_hi_beta.w;
         vec2 mu = df_mul(DF_SUN_MU, df_two_sum(1.0, -beta));
         Df3 r0, v0, r, v;
@@ -48,7 +50,8 @@ void main() {
         Df3 ps;
         ps.hi = pc.ps_r_t_hi.xyz; ps.lo = pc.ps_r_t_lo.xyz;
         vec3 local = dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(r, ps)));
-        float fade = clamp((1.0 - age_f / ttl) * 10.0, 0.0, 1.0);
+        // fade the last 10% of the lifetime (oldest tier only)
+        float fade = pc.ttl.z > 0.5 ? 1.0 : clamp((1.0 - age_f / ttl) * 10.0, 0.0, 1.0);
         R.pos_size = vec4(local, C.misc.x * age_f);
         R.age_id_dbeta_flux = vec4(age_f, uintBitsToFloat(slot), C.misc.w, C.v0_lo_mass.w * C.misc.z * fade);
     }

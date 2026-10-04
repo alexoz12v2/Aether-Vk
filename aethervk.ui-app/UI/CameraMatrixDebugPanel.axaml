@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="AetherVk.UI.CameraMatrixDebugPanel">
 
+  <StackPanel Spacing="6">
   <Grid ColumnDefinitions="Auto,24,Auto" Margin="0,4,0,0">
 
     <!-- POS column -->
@@ -42,4 +43,16 @@
     </StackPanel>
 
   </Grid>
+
+  <!-- Dust history per age tier (live/capacity, age span present, band) -->
+  <StackPanel Spacing="1" IsVisible="{ReflectionBinding DustHistory, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+    <TextBlock Text="DUST HISTORY"
+               FontWeight="Bold" FontSize="9"
+               Foreground="{DynamicResource Accent.Primary}"
+               Margin="0,0,0,3"/>
+    <TextBlock Text="{ReflectionBinding DustHistory}"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Primary}"/>
+  </StackPanel>
+  </StackPanel>
 </UserControl>

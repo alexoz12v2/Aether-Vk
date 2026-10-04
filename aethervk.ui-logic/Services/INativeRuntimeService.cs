@@ -348,6 +348,9 @@ public interface INativeRuntimeService : IDisposable
   /// <returns>Dispose to deregister.</returns>
   IDisposable RegisterExternalStateListener(ExternalStateType stateType, Action<nint> handler);
 
+  /// Dust history per age tier, summed over the scene's particle systems (overlay diagnostic).
+  System.Collections.Generic.IReadOnlyList<DustTierStats> DustStats();
+
   /// Camera world position (AU) and rotation, for the overlay position tracker (all builds).
   bool DebugCameraState(
     ulong cameraEntityId,
@@ -816,6 +819,14 @@ internal unsafe static class PInvokeAetherVkCore
     uint command, // 1,2,3
     nint inDto,
     nint outDto
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSimulationContext_dustStats(
+    nint ctx,
+    ulong sceneId,
+    CDustTierStatsDTO* outStats,
+    uint max
   );
 
   // exported by the native library in release builds too (not cfg(debug_assertions))
@@ -2197,6 +2208,23 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     throw new NotImplementedException();
   }
 
+  public unsafe System.Collections.Generic.IReadOnlyList<DustTierStats> DustStats()
+  {
+    if (_ctx == 0)
+      return Array.Empty<DustTierStats>();
+    const int Max = 8;
+    var buf = stackalloc CDustTierStatsDTO[Max];
+    uint n = PInvokeAetherVkCore.avkSimulationContext_dustStats(_ctx, _sceneId, buf, Max);
+    var list = new DustTierStats[Math.Min((int)n, Max)];
+    for (int i = 0; i < list.Length; i++)
+    {
+      var d = buf[i];
+      list[i] = new DustTierStats(
+        d.LiveClusters, d.Capacity, d.YoungestAgeS, d.OldestAgeS, d.BandMinS, d.BandMaxS, d.CaughtUp != 0);
+    }
+    return list;
+  }
+
   public unsafe bool DebugCameraState(
     ulong cameraEntityId,
     out double posX,
@@ -2739,6 +2767,31 @@ internal readonly struct CometPositionDTO
   public readonly double Y;
   public readonly double Z;
 }
+
+/// <summary>Mirrors Rust <c>CDustTierStats</c> (ffi.rs), 48 bytes.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal readonly struct CDustTierStatsDTO
+{
+  public readonly uint LiveClusters;
+  public readonly uint Capacity;
+  public readonly double YoungestAgeS;
+  public readonly double OldestAgeS;
+  public readonly double BandMinS;
+  public readonly double BandMaxS;
+  public readonly uint CaughtUp;
+  private readonly uint _pad;
+}
+
+/// <summary>Dust history of one age tier (all particle systems of the scene).</summary>
+public sealed record DustTierStats(
+  uint LiveClusters,
+  uint Capacity,
+  double YoungestAgeS,
+  double OldestAgeS,
+  double BandMinS,
+  double BandMaxS,
+  bool CaughtUp
+);
 
 /// <summary>
 /// DTO emitted by <c>SIMULATION_CALLBACK</c> for <see cref="ComponentForeignId.HighResTransform"/>.

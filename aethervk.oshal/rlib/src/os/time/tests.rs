@@ -41,3 +41,25 @@ fn test_time_manager_seek_clamps_and_clears_accumulator() {
   assert_eq!(tm.seek(end + Duration::from_days(5.0)), end);
   assert_eq!(tm.seek(start - Duration::from_days(5.0)), start);
 }
+
+/// Debug presets are appended on the wire (5, 6) so existing values never shift, and round trip.
+#[test]
+fn test_debug_speed_presets_wire_values_and_scales() {
+  use crate::os::time::v2::SimSpeed;
+  for (wire, speed, scale) in [
+    (2, SimSpeed::OneHourPerSec, 3600.0),
+    (4, SimSpeed::OneDayPerSec, 86400.0),
+    (5, SimSpeed::OneMinutePerSec, 60.0),
+    (6, SimSpeed::TenSecondsPerSec, 10.0),
+  ] {
+    assert_eq!(SimSpeed::from(wire), speed);
+    assert_eq!(i32::from(speed), wire);
+    assert_eq!(speed.scale_factor(), scale);
+    assert_eq!(
+      speed.scaled_from_unscaled(16_000),
+      (16_000.0 * scale) as i64
+    );
+  }
+  // unknown positive values still fall back to Realtime (rejected by the FFI)
+  assert_eq!(SimSpeed::from(7), SimSpeed::Realtime);
+}

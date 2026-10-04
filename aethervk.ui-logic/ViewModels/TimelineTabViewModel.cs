@@ -67,17 +67,42 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
 
   public System.Collections.Generic.IReadOnlyList<SimulationSpeed> AvailableSpeeds { get; } = new[]
   {
+      SimulationSpeed.TenSecondsPerSec,
+      SimulationSpeed.OneMinutePerSec,
       SimulationSpeed.OneHourPerSec,
       SimulationSpeed.ThreeHoursPerSec,
       SimulationSpeed.OneDayPerSec
   };
 
+  /// <summary>Wire values of <c>SimSpeed</c> (oshal time.rs): appended, never renumbered.</summary>
   public enum SimulationSpeed : int
   {
     OneHourPerSec = 2,
     ThreeHoursPerSec = 3,
-    OneDayPerSec = 4
+    OneDayPerSec = 4,
+    /// <summary>60×: watching dust emission windows near the nucleus.</summary>
+    OneMinutePerSec = 5,
+    /// <summary>10×</summary>
+    TenSecondsPerSec = 6,
   }
+
+  /// <summary>A speed preset with its localized label (ComboBox item).</summary>
+  public sealed record SpeedOption(SimulationSpeed Speed, string Label);
+
+  /// <summary><see cref="AvailableSpeeds"/> with localized labels; re-raised on culture change.</summary>
+  public System.Collections.Generic.IReadOnlyList<SpeedOption> SpeedOptions =>
+    System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(AvailableSpeeds, s => new SpeedOption(s, SpeedLabel(s))));
+
+  internal string SpeedLabel(SimulationSpeed s) => s switch
+  {
+    SimulationSpeed.TenSecondsPerSec => StrSpeed10s,
+    SimulationSpeed.OneMinutePerSec => StrSpeed1min,
+    SimulationSpeed.OneHourPerSec => StrSpeed1h,
+    SimulationSpeed.ThreeHoursPerSec => StrSpeed3h,
+    SimulationSpeed.OneDayPerSec => StrSpeed1d,
+    _ => s.ToString(),
+  };
+
 
   [ObservableProperty]
   [NotifyCanExecuteChangedFor(nameof(PlayPauseCommand))]
@@ -129,6 +154,9 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
   {
     base.OnPropertyChanged(e);
+    // localized speed labels changed (culture switch): the ComboBox items follow
+    if (e.PropertyName is { } n && n.StartsWith("StrSpeed", StringComparison.Ordinal))
+      base.OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(SpeedOptions)));
     if (e.PropertyName == nameof(CurrentSession))
     {
       Restore();

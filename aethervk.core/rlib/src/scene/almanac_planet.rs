@@ -59,27 +59,18 @@ impl AlmanacPlanet {
       .map(|(p, _v, q)| (p, q))
   }
 
-  /// Like [`Self::step`], also returning the heliocentric velocity (km/s, `SUN_ECLIPJ2000`):
-  /// `(position_km, velocity_km_s, rotation)`.
-  pub fn step_with_velocity(
+  /// Body-fixed → world (`SUN_ECLIPJ2000`) rotation at `epoch`: from `rotational_model` (IAU
+  /// pole and prime meridian), the Earth BPC, or identity. Needs no ephemeris, so it also works
+  /// outside the SPK coverage (dust history before the start epoch).
+  pub fn rotation_at(
     &self,
     epoch: anise::time::Epoch,
     almanac: &AlmanacPackedData,
     rotational_model: Option<&crate::scene::BodyRotationalModel>,
-  ) -> EngineResult<(DVec3, DVec3, Quat)> {
+  ) -> Quat {
     let target_frame = crate::simulation::almanac::SUN_ECLIPJ2000;
-
-    // fetch state. if rotational model is missing, then we demand it from IAU rotational model
-    let state = almanac.get_cartesian_state(
-      self.naif_id,
-      target_frame.orientation_id,
-      target_frame.ephemeris_id,
-      epoch,
-      true, // allow_barycentre_fallback
-    )?;
-
     // - Resolve *Active* Rotation: Body-Fixed (BF) -> World (target frame)
-    let q_world_from_bf = if let Some(model) = rotational_model {
+    if let Some(model) = rotational_model {
       // calculate elapsed continuous TDB days since J2000 epoch
       let j2000_epoch = anise::time::J2000_REF_EPOCH;
       let d_j2000 = (epoch - j2000_epoch).to_seconds() / 86400.0;
@@ -161,7 +152,29 @@ impl AlmanacPlanet {
       Quat::from_rotation_matrix(&r_mat)
     } else {
       Quat::identity()
-    };
+    }
+  }
+
+  /// Like [`Self::step`], also returning the heliocentric velocity (km/s, `SUN_ECLIPJ2000`):
+  /// `(position_km, velocity_km_s, rotation)`.
+  pub fn step_with_velocity(
+    &self,
+    epoch: anise::time::Epoch,
+    almanac: &AlmanacPackedData,
+    rotational_model: Option<&crate::scene::BodyRotationalModel>,
+  ) -> EngineResult<(DVec3, DVec3, Quat)> {
+    let target_frame = crate::simulation::almanac::SUN_ECLIPJ2000;
+
+    // fetch state. if rotational model is missing, then we demand it from IAU rotational model
+    let state = almanac.get_cartesian_state(
+      self.naif_id,
+      target_frame.orientation_id,
+      target_frame.ephemeris_id,
+      epoch,
+      true, // allow_barycentre_fallback
+    )?;
+
+    let q_world_from_bf = self.rotation_at(epoch, almanac, rotational_model);
 
     Ok((
       DVec3::from_components(state.radius_km[0], state.radius_km[1], state.radius_km[2]),

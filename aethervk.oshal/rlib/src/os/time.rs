@@ -279,6 +279,10 @@ pub mod v2 {
     OneHourPerSec,
     ThreeHoursPerSec,
     OneDayPerSec,
+    /// 60× (wire value 5): watching emission windows near the nucleus
+    OneMinutePerSec,
+    /// 10× (wire value 6)
+    TenSecondsPerSec,
     Custom(f64),
   }
 
@@ -291,6 +295,8 @@ pub mod v2 {
         SimSpeed::OneHourPerSec => 3600.0,
         SimSpeed::ThreeHoursPerSec => 10800.0,
         SimSpeed::OneDayPerSec => 86400.0,
+        SimSpeed::OneMinutePerSec => 60.0,
+        SimSpeed::TenSecondsPerSec => 10.0,
         SimSpeed::Custom(s) => *s,
       }
     }
@@ -323,6 +329,9 @@ pub mod v2 {
         2 => SimSpeed::OneHourPerSec,
         3 => SimSpeed::ThreeHoursPerSec,
         4 => SimSpeed::OneDayPerSec,
+        // appended: existing wire values never shift
+        5 => SimSpeed::OneMinutePerSec,
+        6 => SimSpeed::TenSecondsPerSec,
         v if v < 0 => SimSpeed::Custom(-v as f64),
         _ => {
           // Fallback for unexpected positive integers outside the known range
@@ -342,6 +351,8 @@ pub mod v2 {
         SimSpeed::OneHourPerSec => 2,
         SimSpeed::ThreeHoursPerSec => 3,
         SimSpeed::OneDayPerSec => 4,
+        SimSpeed::OneMinutePerSec => 5,
+        SimSpeed::TenSecondsPerSec => 6,
         SimSpeed::Custom(val) => {
           // Cast the custom float to an i32 and force it to be negative
           // so it maps back correctly across the FFI boundary.

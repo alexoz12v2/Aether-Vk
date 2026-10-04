@@ -115,16 +115,17 @@ fn buffers(device: &Device, id: u64) -> (u32, vk::Buffer, vk::Buffer) {
 
 fn emit(device: &Device, id: u64, batch: &DustBatch) {
   let mut res = device
-    .run_transient_compute_commands(|cmd| device.cmd_dust_emit(cmd, id, batch, 0))
+    .run_transient_compute_commands(|cmd| device.cmd_dust_emit(cmd, id, 0, batch, 0))
     .unwrap();
   res.cleanup(&device.device);
 }
 
 fn propagate(device: &Device, id: u64, first_slot: u32, live: u32, frame: &DustFrame) {
+  let capacity = buffers(device, id).0;
   let mut res = device
     .run_transient_commands(|cmd| {
       device.cmd_dust_pre_propagate_barrier(cmd);
-      device.cmd_dust_propagate(cmd, id, first_slot, live, frame)?;
+      device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, live, frame)?;
       Ok(())
     })
     .unwrap();
@@ -374,5 +375,73 @@ fn gpu_dust_emit_lit_time_matches_reference() {
       boundary_outliers <= batch.count / 200,
       "{boundary_outliers} clusters off the reference lit arc"
     );
+  });
+}
+
+/// Age tiers on the GPU: a batch emitted into a sub-ring at `ring_base` and evaluated with an age
+/// band lands in the tier's part of the render buffer, and the band gate (min age, no fade) matches
+/// the CPU reference cluster by cluster.
+#[test]
+fn gpu_dust_tier_sub_ring_and_age_band_match_reference() {
+  with_dust_device(9004, |device, capacity, _, render| {
+    let (base, sub) = (capacity / 2, capacity / 4);
+    let mut batch = test_batch(256, 3600.0, 3, capacity);
+    batch.ring_mask = sub - 1;
+    let mut res = device
+      .run_transient_compute_commands(|cmd| device.cmd_dust_emit(cmd, 9004, base, &batch, 0))
+      .unwrap();
+    res.cleanup(&device.device);
+    // ages 10 d − [0, 1 h]: a band min in the middle of the batch culls about half of it
+    let frame = frame_after(10.0).with_band((10.0 * 86400.0 - 1800.0) as f32, false);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let mut res = device
+      .run_transient_commands(|cmd| {
+        device.cmd_dust_pre_propagate_barrier(cmd);
+        let addr =
+          device.cmd_dust_propagate(cmd, 9004, base, sub, first_slot, batch.count, &frame)?;
+        assert!(addr > 0);
+        Ok(())
+      })
+      .unwrap();
+    res.cleanup(&device.device);
+    let stride = core::mem::size_of::<DustRenderCluster>();
+    let bytes = read_back(
+      device,
+      render,
+      false,
+      ((base + batch.count) as usize * stride) as u64,
+    );
+    let out: &[DustRenderCluster] = bytemuck::cast_slice(&bytes[base as usize * stride..]);
+    let (mut culled, mut drawn) = (0, 0);
+    for (i, gpu) in out.iter().enumerate() {
+      let slot = (first_slot + i as u32) & batch.ring_mask;
+      let cpu = dust::evaluate_cluster(&dust::emit_cluster(&batch, i as u32), slot, &frame);
+      assert_eq!(
+        gpu.age_id_dbeta_flux[3] > 0.0,
+        cpu.age_id_dbeta_flux[3] > 0.0,
+        "band gate differs at {i}: age {}",
+        cpu.age_id_dbeta_flux[0]
+      );
+      if cpu.age_id_dbeta_flux[3] > 0.0 {
+        drawn += 1;
+        let rel =
+          (gpu.age_id_dbeta_flux[3] - cpu.age_id_dbeta_flux[3]).abs() / cpu.age_id_dbeta_flux[3];
+        assert!(rel < 1e-3, "flux {i}");
+      } else {
+        culled += 1;
+      }
+    }
+    assert!(
+      culled > 32 && drawn > 32,
+      "band should split the batch: {culled} culled, {drawn} drawn"
+    );
+    // over-capacity sub-rings are refused
+    let mut res = device
+      .run_transient_commands(|cmd| {
+        assert!(device.cmd_dust_propagate(cmd, 9004, capacity - 1, sub, 0, 1, &frame).is_err());
+        Ok(())
+      })
+      .unwrap();
+    res.cleanup(&device.device);
   });
 }

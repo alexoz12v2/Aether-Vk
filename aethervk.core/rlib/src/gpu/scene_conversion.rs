@@ -774,30 +774,35 @@ impl SceneConversionExt2 for Scene {
 
     // 9. Particles (dust v3): ranges and evaluation parameters come from the host state the
     // logic thread maintains; positions are evaluated by `frame::prepare_dust` before the pass
+    // one draw call per age tier (see `dust::DustSystemState`)
     let dust_calls = extract!(ParticleSystemComponent, |id, ps| {
-      let state = ps.dust.lock().draw_state()?;
+      let states = ps.dust.lock().draw_states();
+      if states.is_empty() {
+        return None;
+      }
       compute_rte(self, id).map(|(layer_idx, rte)| {
         let units_per_m = if layer_idx == 0 {
           1.0 / crate::scene::dust::AU_M
         } else {
           1.0e-3 // micro layers are in km
         };
-        (
-          layer_idx,
-          DustDrawCall {
+        let calls: alloc::vec::Vec<DustDrawCall> = states
+          .into_iter()
+          .map(|state| DustDrawCall {
             entity_id: id,
             rte_position: [rte.position.x(), rte.position.y(), rte.position.z()],
             units_per_m,
             stream_color: ps.draw_params.stream_color,
             state,
             render_address: 0,
-          },
-        )
+          })
+          .collect();
+        (layer_idx, calls)
       })
     });
     if !dust_calls.is_empty() {
-      for (layer_idx, call) in dust_calls {
-        get_or_create_layer!(layer_idx).dust_calls.push(call);
+      for (layer_idx, calls) in dust_calls {
+        get_or_create_layer!(layer_idx).dust_calls.extend(calls);
       }
     }
 

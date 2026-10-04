@@ -332,6 +332,8 @@ public sealed class CameraService : IDisposable
     _cometConfigService.IsAlmanacCommitted
       .Where(committed => !committed)
       .Subscribe(_ => OnCometDecommitted());
+    // The comet label follows the commit state too (no comet: nothing to label).
+    _cometConfigService.IsAlmanacCommitted.Subscribe(_ => RefreshCometIndicator());
 
     _cometConfigService.NucleusRadiusKm.Subscribe(radius =>
     {
@@ -470,9 +472,7 @@ public sealed class CameraService : IDisposable
 
     _modeSubject.OnNext(mode);
 
-    // The comet label is an Earth observer aid: shown in that mode only.
-    if (mode == CameraMode.EarthPosition || previous == CameraMode.EarthPosition)
-      _runtimeService.SetCometIndicatorVisible(mode == CameraMode.EarthPosition);
+    RefreshCometIndicator();
 
     // World-preserving unparent when leaving a body-anchored mode.
     // Rust reads global_transform_f64 BEFORE removing the parent, then writes
@@ -1476,6 +1476,24 @@ public sealed class CameraService : IDisposable
   /// Comet decommitted: UpZenith snapped above it flies back to the Sun (the comet resets to its
   /// placeholder position, leaving an empty view); an Earth observer comet submode ejects to Free.
   /// </summary>
+  /// <summary>Modes where the comet is far or small enough to need a label.</summary>
+  internal static bool ShowsCometLabel(CameraMode mode) =>
+    mode is CameraMode.EarthPosition or CameraMode.UpZenith;
+
+  // last visibility the runtime accepted (null: unknown, resend)
+  private bool? _cometIndicatorShown;
+
+  /// <summary>Shows the comet label in <see cref="ShowsCometLabel"/> modes while a comet is
+  /// committed (the label targets the comet body, meaningless without one); sends on change.</summary>
+  private void RefreshCometIndicator()
+  {
+    bool show = ShowsCometLabel(_modeSubject.Value) && _cometConfigService.IsAlmanacCommittedValue;
+    if (_cometIndicatorShown == show)
+      return;
+    if (_runtimeService.SetCometIndicatorVisible(show))
+      _cometIndicatorShown = show;
+  }
+
   internal void OnCometDecommitted()
   {
     if (_modeSubject.Value == CameraMode.UpZenith && _lastSnapTarget == SnapTarget.Comet)
@@ -1641,6 +1659,7 @@ public sealed class CameraService : IDisposable
     if (viewportHeight > 0) _viewportHeightPx = viewportHeight;
     RegisterSimListeners(cameraEntityId);
     RegisterEarthListener();
+    RefreshCometIndicator();
     // Snap immediately on first viewport-ready so the camera starts at the
     // correct mode position from frame 1 rather than animating over 2.5 s.
     TriggerModeTransitionAnimation(_modeSubject.Value, snapImmediate: true);

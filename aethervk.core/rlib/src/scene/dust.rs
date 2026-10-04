@@ -46,6 +46,37 @@ pub fn render_children(capacity: u32, live: u32) -> u32 {
 }
 /// fraction of the ring targeted in steady state
 pub const BUDGET_SAFETY: f64 = 0.8;
+/// age of the dust column that defines the exposure reference ([`DustEmitConfig::tau_ref`])
+pub const TAU_REF_AGE_S: f64 = 86400.0;
+/// splat radius clamp in pixels (`dust.vert`)
+pub const SPLAT_MIN_PX: f32 = 1.5;
+pub const SPLAT_MAX_PX: f32 = 48.0;
+/// child footprint radius as a fraction of the cluster spread (`dust.vert`)
+pub const SPLAT_CHILD_RADIUS_FRAC: f32 = 0.5;
+
+/// Mirror of the `dust.vert` footprint: `(r_px, r_draw_m)`, the drawn splat radius in pixels
+/// (clamped to `[SPLAT_MIN_PX, SPLAT_MAX_PX]`) and the same radius back in metres. `p11` is the
+/// projection y scale, `px_to_ndc_y = 2 / viewport height`, `units_per_m` the layer unit.
+pub fn splat_footprint(
+  spread_m: f32,
+  units_per_m: f32,
+  p11: f32,
+  clip_w: f32,
+  px_to_ndc_y: f32,
+) -> (f32, f32) {
+  let r_units = (spread_m * SPLAT_CHILD_RADIUS_FRAC).max(1.0) * units_per_m;
+  let px_per_unit = p11 / clip_w / px_to_ndc_y;
+  let r_px = (r_units * px_per_unit).clamp(SPLAT_MIN_PX, SPLAT_MAX_PX);
+  (r_px, r_px / px_per_unit / units_per_m)
+}
+
+/// Mirror of the `dust.vert` splat peak: the child's cross-section spread over its **drawn** area,
+/// `exposure · σ / r_draw²` (`dust.frag`'s gaussian integrates to 1 over the unit disc), so the
+/// summed opacity of a pixel is `exposure ·` the dust optical depth there: independent of zoom,
+/// distance and the pixel clamps (energy conserving).
+pub fn splat_opacity(exposure: f32, child_flux_m2: f32, r_draw_m: f32) -> f32 {
+  exposure * child_flux_m2 / (r_draw_m * r_draw_m).max(1e-30)
+}
 /// Sun gravitational parameter (m³/s²), f64 reference value of [`consts::SUN_MU`]
 pub const SUN_MU_M3_S2: f64 = 1.32712440018e20;
 /// astronomical unit (m)
@@ -485,7 +516,8 @@ pub struct DustFrame {
   pub ps_r_t_lo: [f32; 4],
   /// root → particle-system rotation quaternion (xyzw), i.e. the conjugate of the entity rotation
   pub rot_inv: [f32; 4],
-  /// `x` TTL (s), `y`..`w` 0
+  /// age band: `x` max age (s, the TTL), `y` min age (s, 0 for the youngest tier), `z` 1 = no fade
+  /// at the max age (an older tier takes over), `w` 0
   pub ttl: [f32; 4],
 }
 const _: () = assert!(core::mem::size_of::<DustFrame>() == 64);
@@ -499,6 +531,12 @@ impl DustFrame {
       rot_inv,
       ttl: [ttl_s, 0.0, 0.0, 0.0],
     }
+  }
+  /// draws only ages in `[min_age_s, ttl]`; `fade` at the max age only when no older tier follows
+  pub fn with_band(mut self, min_age_s: f32, fade: bool) -> Self {
+    self.ttl[1] = min_age_s;
+    self.ttl[2] = if fade { 0.0 } else { 1.0 };
+    self
   }
 }
 
@@ -813,8 +851,9 @@ pub fn evaluate_cluster(c: &DustCluster, slot: u32, frame: &DustFrame) -> DustRe
   let t_now = Df::new(frame.ps_r_t_hi[3], frame.ps_r_t_lo[3]);
   let age = t_now.sub(c.t0());
   let age_f = age.hi + age.lo;
-  let ttl = frame.ttl[0];
-  if !(age_f >= 0.0) || age_f > ttl {
+  let (ttl, min_age) = (frame.ttl[0], frame.ttl[1]);
+  // age band of the tier (see `DustFrame::with_band`): neighbouring tiers overlap in emission time
+  if !(age_f >= min_age) || !(age_f >= 0.0) || age_f > ttl {
     return DustRenderCluster::culled(slot);
   }
   let mu = consts::SUN_MU.mul(two_sum_one_minus(c.beta()));
@@ -825,8 +864,12 @@ pub fn evaluate_cluster(c: &DustCluster, slot: u32, frame: &DustFrame) -> DustRe
   };
   let local = qrot(frame.rot_inv, r.sub(&ps).to_f32());
   let size = c.misc[0] * age_f;
-  // fade the last 10% of the lifetime
-  let fade = ((1.0 - age_f / ttl) * 10.0).clamp(0.0, 1.0);
+  // fade the last 10% of the lifetime (oldest tier only)
+  let fade = if frame.ttl[2] > 0.5 {
+    1.0
+  } else {
+    ((1.0 - age_f / ttl) * 10.0).clamp(0.0, 1.0)
+  };
   let flux = c.mass_g() * c.misc[2] * fade;
   DustRenderCluster {
     pos_size: [local[0], local[1], local[2], size],
@@ -869,6 +912,33 @@ impl SizeDistribution {
       s_max_um: r * SIZE_RANGE_FACTOR,
       q: SIZE_POWER_Q,
     }
+  }
+  /// The distribution without grains smaller than `s_min · factor` (capped at `s_max / 2`), and the
+  /// fraction of the mass that remains. Old dust tiers keep only the larger grains: the small, high
+  /// β ones have long left the field, so their mass is dropped, not redistributed.
+  pub fn truncated(&self, factor: f64) -> (Self, f64) {
+    let s_min = (self.s_min_um * factor.max(1.0)).min(self.s_max_um * 0.5).max(self.s_min_um);
+    let cut = Self {
+      s_min_um: s_min,
+      ..*self
+    };
+    let z = |d: &Self| {
+      let e = 4.0 - d.q;
+      if (if e < 0.0 { -e } else { e }) < 1e-9 {
+        <f64 as FloatLike>::ln(d.s_max_um / d.s_min_um)
+      } else {
+        (<f64 as FloatLike>::pow(d.s_max_um, e) - <f64 as FloatLike>::pow(d.s_min_um, e)) / e
+      }
+    };
+    let full = z(self);
+    (
+      cut,
+      if full > 0.0 {
+        (z(&cut) / full).clamp(0.0, 1.0)
+      } else {
+        1.0
+      },
+    )
   }
   /// `(4 − q, ln(s_max/s_min) / Z)`, `Z = ∫ s^(3−q) ds` over `[s_min, s_max]`
   pub fn mass_weight_params(&self) -> (f64, f64) {
@@ -1366,6 +1436,8 @@ impl JetState {
 /// Everything the renderer needs to evaluate and draw one system this frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DustDrawState {
+  /// first slot of the tier's sub-ring in the system buffers (`first_slot` is relative to it)
+  pub ring_base: u32,
   pub first_slot: u32,
   pub live_count: u32,
   /// ring capacity (render-time children budget)
@@ -1375,8 +1447,8 @@ pub struct DustDrawState {
   pub frame: DustFrame,
   /// unit anti-sun direction (root axes), w = solar gravity at the jet (m/s²)
   pub anti_sun_g: [f32; 4],
-  /// mean cluster flux (m²), for exposure normalization
-  pub mean_cluster_flux: f32,
+  /// exposure reference optical depth ([`DustEmitConfig::tau_ref`], 0 = unknown)
+  pub tau_ref: f32,
 }
 
 /// Emission inputs of one system for one tick (see `ParticleSystemEmitParams::dust_emit_config`).
@@ -1401,6 +1473,16 @@ pub struct DustEmitConfig {
 }
 
 impl DustEmitConfig {
+  /// Exposure reference optical depth: one day of production (`q`, at the heliocentric distance
+  /// this config was made for) spread over a disc of radius `v_mean · 1 day`. Depends only on the
+  /// jet configuration: never on the history, the tiers or the camera, so the brightness of a
+  /// given dust column is stable (see `dust.vert`: pixels show `exposure · τ`).
+  pub fn tau_ref(&self) -> f64 {
+    let t = TAU_REF_AGE_S;
+    let sigma_m2 = self.q_dust_kgs.max(0.0) * 1e3 * self.xsec_per_g_ref() as f64 * t;
+    let r_m = (self.v_mean as f64).max(1e-3) * t;
+    sigma_m2 / (core::f64::consts::PI * r_m * r_m)
+  }
   /// cross-section per gram at the configured grain radius (m²/g)
   pub fn xsec_per_g_ref(&self) -> f32 {
     let s_m = (self.diameter_um * 0.5).max(1e-3) * 1e-6;
@@ -1408,9 +1490,40 @@ impl DustEmitConfig {
   }
 }
 
+/// Age band of one dust tier, as multiples of the TTL: the tier draws clusters aged
+/// `[min_ttl · TTL, max_ttl · TTL)` on its own emission grid of `WINDOWS_PER_TTL` windows over the
+/// band. Older tiers have longer windows (fewer, heavier clusters per scaled day) and keep only the
+/// larger grains (`s_min_factor`): long history at the same memory.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TierBand {
+  pub min_ttl: f64,
+  pub max_ttl: f64,
+  /// minimum grain size multiplier (≥ 1), see [`SizeDistribution::truncated`]
+  pub s_min_factor: f64,
+  /// fade out at the max age (the oldest tier); younger tiers hand over to the next one
+  pub fade: bool,
+}
+
+impl TierBand {
+  /// the single-tier behaviour: ages `[0, TTL]`, all sizes, fade at the end
+  pub const SINGLE: Self = Self {
+    min_ttl: 0.0,
+    max_ttl: 1.0,
+    s_min_factor: 1.0,
+    fade: true,
+  };
+}
+
 #[derive(Debug, Clone)]
 pub struct DustHostState {
   pub ring: RingState,
+  /// first slot of this tier's sub-ring in the system's cluster / render buffers
+  pub ring_base: u32,
+  /// age band (see [`TierBand`])
+  pub band: TierBand,
+  /// emit windows before the start epoch (`jet_at` must cover negative times), so the history
+  /// exists at t = 0
+  pub prestart: bool,
   /// monotonic counter of batch descriptor uploads (selects the upload slot)
   pub upload_seq: u64,
   /// latest jet state (written every tick)
@@ -1425,12 +1538,22 @@ pub struct DustHostState {
   pub provisional: bool,
   /// window length (scaled s) the ring was filled with
   pub grid_s: f64,
+  /// first window not due yet at the latest tick (`next_window ≥ due_window`: caught up)
+  pub due_window: i64,
 }
 
 impl DustHostState {
   pub fn new(capacity: u32) -> Self {
+    Self::with_band(capacity, 0, TierBand::SINGLE, false)
+  }
+
+  /// A tier of `capacity` slots at `ring_base` drawing the ages of `band`.
+  pub fn with_band(capacity: u32, ring_base: u32, band: TierBand, prestart: bool) -> Self {
     Self {
       ring: RingState::new(capacity),
+      ring_base,
+      band,
+      prestart,
       upload_seq: 0,
       jet: None,
       ttl_s: 0.0,
@@ -1438,12 +1561,18 @@ impl DustHostState {
       next_window: None,
       provisional: false,
       grid_s: 0.0,
+      due_window: 0,
     }
   }
 
   /// forgets every cluster and the emission history (simulation reset)
   pub fn reset(&mut self) {
-    *self = Self::new(self.ring.capacity);
+    *self = Self::with_band(self.ring.capacity, self.ring_base, self.band, self.prestart);
+  }
+
+  /// `(min, max)` age (scaled s) of this tier for a TTL
+  pub fn age_band_s(&self, ttl_s: f64) -> (f64, f64) {
+    (self.band.min_ttl * ttl_s, self.band.max_ttl * ttl_s)
   }
 
   /// Window length (scaled s) of the emission grid for a TTL.
@@ -1481,17 +1610,30 @@ impl DustHostState {
     jet_at: &dyn Fn(f64) -> Option<JetState>,
     cfg_at: &dyn Fn(&JetState) -> DustEmitConfig,
   ) -> alloc::vec::Vec<DustBatch> {
+    let mut budget = MAX_WINDOWS_PER_TICK;
+    self.tick_budget(t_now_s, jet_at, cfg_at, &mut budget)
+  }
+
+  /// [`Self::tick`] drawing closed windows from a shared per-tick `budget` (tiers of one system).
+  pub fn tick_budget(
+    &mut self,
+    t_now_s: f64,
+    jet_at: &dyn Fn(f64) -> Option<JetState>,
+    cfg_at: &dyn Fn(&JetState) -> DustEmitConfig,
+    budget: &mut usize,
+  ) -> alloc::vec::Vec<DustBatch> {
     let Some(jet_now) = jet_at(t_now_s).map(|j| self.with_spin(j, jet_at)) else {
       return alloc::vec::Vec::new();
     };
     let cfg_now = cfg_at(&jet_now);
     self.ttl_s = cfg_now.ttl_s;
     self.xsec_per_g_ref = cfg_now.xsec_per_g_ref();
-    let dt_w = Self::window_len_s(cfg_now.ttl_s);
+    let (min_age, max_age) = self.age_band_s(cfg_now.ttl_s);
+    let dt_w = Self::window_len_s(max_age - min_age);
     if self.grid_s != dt_w {
       // another TTL changes the grid: the ring content no longer matches it
-      let (capacity, upload_seq) = (self.ring.capacity, self.upload_seq);
-      *self = Self::new(capacity);
+      let upload_seq = self.upload_seq;
+      self.reset();
       self.upload_seq = upload_seq;
       self.grid_s = dt_w;
     }
@@ -1508,26 +1650,34 @@ impl DustHostState {
       }
     }
     self.jet = Some(jet_now);
-    self.ring.retire(t_now_s, cfg_now.ttl_s);
+    self.ring.retire(t_now_s, max_age);
     let mut out = self.ring.take_reemit(REEMIT_PER_TICK);
 
-    let k_open = <f64 as FloatLike>::floor(t_now_s / dt_w) as i64;
-    let k_min = (<f64 as FloatLike>::floor((t_now_s - cfg_now.ttl_s) / dt_w) as i64).max(0);
+    // Windows overlapping the band `[t_now − max_age, t_now − min_age]` of emission times. The
+    // youngest tier (min 0) ends with the open window; an older one emits a window as soon as its
+    // start enters the band (all of it is in the past: Δ ≤ min_age), the age gate hides the rest.
+    let k_open = if min_age > 0.0 {
+      <f64 as FloatLike>::floor((t_now_s - min_age) / dt_w) as i64 + 1
+    } else {
+      <f64 as FloatLike>::floor(t_now_s / dt_w) as i64
+    };
+    let k_floor = if self.prestart { i64::MIN } else { 0 };
+    let k_min = (<f64 as FloatLike>::floor((t_now_s - max_age) / dt_w) as i64).max(k_floor);
     let mut k = self
       .next_window
       .or_else(|| self.ring.batches.back().map(|b| b.window + 1))
       .unwrap_or(k_min)
       .max(k_min);
-    let mut emitted = 0;
-    while k < k_open && emitted < MAX_WINDOWS_PER_TICK {
+    while k < k_open && *budget > 0 {
       if let Some(b) = self.emit_window(k, k as f64 * dt_w, dt_w, dt_w, jet_at, cfg_at) {
         out.push(b);
       }
       k += 1;
-      emitted += 1;
+      *budget -= 1;
     }
     self.next_window = Some(k);
-    if k == k_open {
+    self.due_window = k_open;
+    if k == k_open && min_age <= 0.0 {
       let t0 = k_open as f64 * dt_w;
       if t_now_s > t0 {
         if let Some(b) = self.emit_window(k_open, t0, t_now_s - t0, dt_w, jet_at, cfg_at) {
@@ -1571,7 +1721,9 @@ impl DustHostState {
     } else {
       0.0
     };
-    let mass_g = q * 1e3 * lit.lit_time_s;
+    // older tiers keep the larger grains only (the trail population), the rest has left the field
+    let (dist, mass_fraction) = cfg.dist.truncated(self.band.s_min_factor);
+    let mass_g = q * 1e3 * lit.lit_time_s * mass_fraction;
     if !(mass_g > 0.0) {
       return None;
     }
@@ -1600,7 +1752,7 @@ impl DustHostState {
     ];
     let shift = (k as f64 * 0.618_033_988_749_895).rem_euclid(1.0) as f32;
     let (size_params, vel_params, mass_params) = batch_params(
-      &cfg.dist,
+      &dist,
       cfg.diameter_um,
       cfg.density_gcm3,
       cfg.beta_ref,
@@ -1631,21 +1783,185 @@ impl DustHostState {
     }
     let rn = norm(jet.r_m);
     let g = SUN_MU_M3_S2 / (rn * rn);
-    let live_mass: f64 = self.ring.live_mass_g();
+    let (min_age, max_age) = self.age_band_s(self.ttl_s);
     Some(DustDrawState {
+      ring_base: self.ring_base,
       first_slot,
       live_count,
       capacity: self.ring.capacity,
       compute_wait,
-      frame: DustFrame::new(jet.r_m, jet.t_s, [0.0, 0.0, 0.0, 1.0], self.ttl_s as f32),
+      frame: DustFrame::new(jet.r_m, jet.t_s, [0.0, 0.0, 0.0, 1.0], max_age as f32)
+        .with_band(min_age as f32, self.band.fade),
       anti_sun_g: [
         (jet.r_m[0] / rn) as f32,
         (jet.r_m[1] / rn) as f32,
         (jet.r_m[2] / rn) as f32,
         g as f32,
       ],
-      mean_cluster_flux: (live_mass * self.xsec_per_g_ref as f64 / live_count as f64) as f32,
+      tau_ref: 0.0,
     })
+  }
+}
+
+/// Number of age tiers ([`DustSystemState`]): `AETHERVK_DUST_TIERS` (1..=3), 3 by default.
+pub fn dust_tier_count() -> usize {
+  aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_TIERS")
+    .and_then(|s| s.trim().parse::<usize>().ok())
+    .unwrap_or(DUST_TIERS_DEFAULT)
+    .clamp(1, DUST_TIERS_DEFAULT)
+}
+
+/// default age tiers: `[0, 1)`, `[1, 8)`, `[8, 64)` TTL (30 d → 240 d → ~5.3 yr)
+pub const DUST_TIERS_DEFAULT: usize = 3;
+/// emission passes that fill every tier from scratch (seek), `MAX_WINDOWS_PER_TICK` windows each
+pub const MAX_SEEK_PASSES: usize =
+  DUST_TIERS_DEFAULT * (WINDOWS_PER_TTL as usize).div_ceil(MAX_WINDOWS_PER_TICK) + 1;
+
+/// Per-tier history summary for the diagnostic overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct DustTierStats {
+  pub live_clusters: u32,
+  pub capacity: u32,
+  /// `(youngest, oldest)` cluster age (scaled s) of the live batches, by window times
+  pub youngest_age_s: f64,
+  pub oldest_age_s: f64,
+  pub band_min_s: f64,
+  pub band_max_s: f64,
+  /// every window due so far is emitted
+  pub caught_up: bool,
+}
+
+/// The dust of one particle system: **age tiers** sharing one ring allocation. Tier `k` draws ages
+/// in its [`TierBand`] from its own deterministic emission grid and sub-ring (`ring_base`), so old
+/// dust gets coarser windows and larger grains: months to years of trail at the memory and
+/// per-frame cost of one TTL. Every tier emits before the start epoch too (`prestart`), so the
+/// history exists at t = 0.
+#[derive(Debug, Clone)]
+pub struct DustSystemState {
+  pub tiers: alloc::vec::Vec<DustHostState>,
+  /// monotonic batch descriptor upload counter of the system (selects the descriptor slot)
+  pub upload_seq: u64,
+  /// exposure reference ([`DustEmitConfig::tau_ref`] at the jet's current distance, the last
+  /// positive one beyond the production cutoff), set by the emission tick
+  pub tau_ref: f64,
+}
+
+impl DustSystemState {
+  /// `capacity` (power of two) split among [`dust_tier_count`] tiers: 1/2, 1/4, 1/4.
+  pub fn new(capacity: u32) -> Self {
+    Self::with_tiers(capacity, dust_tier_count())
+  }
+
+  pub fn with_tiers(capacity: u32, tiers: usize) -> Self {
+    let n = tiers.clamp(1, DUST_TIERS_DEFAULT);
+    const BANDS: [(f64, f64, f64); DUST_TIERS_DEFAULT] =
+      [(0.0, 1.0, 1.0), (1.0, 8.0, 8.0), (8.0, 64.0, 32.0)];
+    let caps: alloc::vec::Vec<u32> = match n {
+      1 => alloc::vec![capacity],
+      2 => alloc::vec![capacity / 2, capacity / 2],
+      _ => alloc::vec![capacity / 2, capacity / 4, capacity / 4],
+    };
+    let mut base = 0;
+    let tiers = (0..n)
+      .map(|k| {
+        let (min_ttl, max_ttl, s_min_factor) = BANDS[k];
+        let band = TierBand {
+          min_ttl,
+          max_ttl,
+          s_min_factor,
+          fade: k + 1 == n,
+        };
+        let t = DustHostState::with_band(caps[k].max(1), base, band, n > 1);
+        base += caps[k];
+        t
+      })
+      .collect();
+    Self {
+      tiers,
+      upload_seq: 0,
+      tau_ref: 0.0,
+    }
+  }
+
+  /// total ring slots of all tiers
+  pub fn capacity(&self) -> u32 {
+    self.tiers.iter().map(|t| t.ring.capacity).sum()
+  }
+
+  pub fn reset(&mut self) {
+    for t in &mut self.tiers {
+      t.reset();
+    }
+  }
+
+  pub fn invalidate_gpu(&mut self) {
+    for t in &mut self.tiers {
+      t.ring.invalidate_gpu();
+    }
+  }
+
+  pub fn mark_submitted(&mut self, value: u64) {
+    for t in &mut self.tiers {
+      t.ring.mark_submitted(value);
+    }
+  }
+
+  /// Ticks every tier (youngest first, sharing [`MAX_WINDOWS_PER_TICK`] closed windows, so the
+  /// near-nucleus part fills first). Returns `(ring_base, descriptor, upload seq)` to emit.
+  pub fn tick(
+    &mut self,
+    t_now_s: f64,
+    jet_at: &dyn Fn(f64) -> Option<JetState>,
+    cfg_at: &dyn Fn(&JetState) -> DustEmitConfig,
+  ) -> alloc::vec::Vec<(u32, DustBatch, u64)> {
+    let mut budget = MAX_WINDOWS_PER_TICK;
+    let mut out = alloc::vec::Vec::new();
+    for t in &mut self.tiers {
+      for b in t.tick_budget(t_now_s, jet_at, cfg_at, &mut budget) {
+        out.push((t.ring_base, b, self.upload_seq));
+        self.upload_seq += 1;
+      }
+    }
+    out
+  }
+
+  /// One draw state per non-empty tier, all with the system's exposure reference. (A mean cluster
+  /// flux over the live clusters used to set the exposure: filling the old tiers with heavy
+  /// clusters dimmed the whole system 10×, `initial_burst.rdc` vs `late_*.rdc`.)
+  pub fn draw_states(&self) -> alloc::vec::Vec<DustDrawState> {
+    let mut states: alloc::vec::Vec<DustDrawState> =
+      self.tiers.iter().filter_map(|t| t.draw_state()).collect();
+    for s in &mut states {
+      s.tau_ref = self.tau_ref as f32;
+    }
+    states
+  }
+
+  /// per-tier history summary (diagnostic)
+  pub fn stats(&self) -> alloc::vec::Vec<DustTierStats> {
+    self
+      .tiers
+      .iter()
+      .map(|t| {
+        let t_now = t.jet.map(|j| j.t_s).unwrap_or(0.0);
+        let t_of = |b: &LiveBatch| b.desc.comet_r_t_hi[3] as f64 + b.desc.comet_r_t_lo[3] as f64;
+        let (min_s, max_s) = t.age_band_s(t.ttl_s);
+        DustTierStats {
+          live_clusters: t.ring.live(),
+          capacity: t.ring.capacity,
+          youngest_age_s: t
+            .ring
+            .batches
+            .back()
+            .map(|b| (t_now - b.t_end_s).max(0.0))
+            .unwrap_or(0.0),
+          oldest_age_s: t.ring.batches.front().map(|b| (t_now - t_of(b)).max(0.0)).unwrap_or(0.0),
+          band_min_s: min_s,
+          band_max_s: max_s,
+          caught_up: t.next_window.is_some_and(|k| k >= t.due_window),
+        }
+      })
+      .collect()
   }
 }
 

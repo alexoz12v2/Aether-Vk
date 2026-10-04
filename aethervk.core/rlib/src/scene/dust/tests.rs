@@ -770,7 +770,7 @@ fn grid_conserves_mass_tracks_readiness_and_restores() {
   assert!(rel < 1e-6, "mass rel err {rel}");
   assert!(host.provisional);
   let ds = host.draw_state().unwrap();
-  assert!(ds.live_count > 0 && ds.compute_wait > 0 && ds.mean_cluster_flux > 0.0);
+  assert!(ds.live_count > 0 && ds.compute_wait > 0);
 
   // restore: everything re-emitted, oldest first, before it is drawable again
   host.ring.invalidate_gpu();
@@ -885,4 +885,308 @@ fn grid_dark_site_emits_nothing() {
   let host = run_ticks((0..2000).map(|i| i as f64 * 180.0), &dark, &cfg);
   assert_eq!(host.ring.live(), 0);
   assert!(host.draw_state().is_none());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Age tiers (DustSystemState)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// ticks a system until every tier is caught up (or `max` ticks), marking batches submitted
+fn fill_system(sys: &mut DustSystemState, t: f64, cfg: &DustEmitConfig, max: usize) {
+  for i in 0..max {
+    sys.tick(t, &orbit_jet, &|_| *cfg);
+    sys.mark_submitted(i as u64 + 1);
+    if sys.stats().iter().all(|s| s.caught_up) {
+      break;
+    }
+  }
+}
+
+/// Tiers split one ring (same total capacity, contiguous sub-rings) and cover contiguous age bands
+/// `[0, 1)`, `[1, 8)`, `[8, 64)` TTL; only the oldest fades; every tier emits before t = 0, so the
+/// whole history exists at the start epoch.
+#[test]
+fn tiers_split_the_ring_and_hold_history_at_start() {
+  let ttl = 86400.0;
+  let cfg = test_cfg(1.5e-3, ttl);
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  assert_eq!(sys.capacity(), RING_CAPACITY_LOW);
+  let mut base = 0;
+  for (k, t) in sys.tiers.iter().enumerate() {
+    assert_eq!(t.ring_base, base);
+    assert!(t.ring.capacity.is_power_of_two());
+    base += t.ring.capacity;
+    assert_eq!(t.band.fade, k == 2);
+    assert!(t.prestart);
+  }
+  assert_eq!(sys.tiers[1].band.min_ttl, sys.tiers[0].band.max_ttl);
+  assert_eq!(sys.tiers[2].band.min_ttl, sys.tiers[1].band.max_ttl);
+
+  fill_system(&mut sys, 0.0, &cfg, MAX_SEEK_PASSES);
+  let stats = sys.stats();
+  assert!(stats.iter().all(|s| s.caught_up), "{stats:?}");
+  // the oldest tier reaches back ~64 TTL before the start epoch
+  assert!(stats[2].oldest_age_s > 63.0 * ttl, "{stats:?}");
+  assert!(stats[1].oldest_age_s > 7.9 * ttl, "{stats:?}");
+  for (s, t) in stats.iter().zip(&sys.tiers) {
+    assert!(s.live_clusters > 0 && s.live_clusters <= t.ring.capacity);
+  }
+  let states = sys.draw_states();
+  assert_eq!(states.len(), 3);
+  // one exposure for the whole system
+  assert!(states.iter().all(|s| s.tau_ref == states[0].tau_ref));
+}
+
+/// Each emitted cluster is drawn by exactly the tier whose band holds its age (the bands overlap in
+/// emission time; the per-cluster age gate resolves it), and no age is left uncovered.
+#[test]
+fn tier_age_gates_partition_the_clusters() {
+  let ttl = 86400.0;
+  let cfg = test_cfg(1.5e-3, ttl);
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  let t_now = 5.0 * ttl;
+  fill_system(&mut sys, t_now, &cfg, MAX_SEEK_PASSES);
+  let states = sys.draw_states();
+  let mut drawn_ages = alloc::vec::Vec::new();
+  for (tier, state) in sys.tiers.iter().zip(&states) {
+    let (lo, hi) = tier.age_band_s(ttl);
+    assert_eq!(state.frame.ttl[0] as f64, hi);
+    assert_eq!(state.frame.ttl[1] as f64, lo);
+    for b in tier.ring.batches.iter() {
+      for j in 0..b.desc.count {
+        let c = emit_cluster(&b.desc, j);
+        let r = evaluate_cluster(&c, j, &state.frame);
+        let age = t_now - c.t0().to_f64();
+        let drawn = r.age_id_dbeta_flux[3] > 0.0;
+        // f32 frame ages: allow a few ulps at the band edges
+        let tol = 1e-6 * hi;
+        if age > lo + tol && age < hi - tol {
+          assert!(drawn, "tier {lo}-{hi}: age {age} not drawn");
+        }
+        if age < lo - tol || age > hi + tol {
+          assert!(!drawn, "tier {lo}-{hi}: age {age} drawn");
+        }
+        if drawn {
+          drawn_ages.push(age);
+        }
+      }
+    }
+  }
+  drawn_ages.sort_by(|a, b| a.partial_cmp(b).unwrap());
+  // coverage: no gap wider than a tier-1 window anywhere in [0, 64 TTL)
+  let max_gap = drawn_ages.windows(2).map(|w| w[1] - w[0]).fold(0.0, f64::max);
+  assert!(max_gap < 0.25 * ttl, "largest age gap {max_gap} s");
+  assert!(drawn_ages.last().copied().unwrap_or(0.0) > 63.0 * ttl);
+}
+
+/// Older tiers keep only the larger grains and drop the mass of the rest (left the field): the
+/// kept fraction is exact for `n(s) ∝ s^-q`.
+#[test]
+fn size_cut_keeps_the_large_grain_mass() {
+  let d = SizeDistribution::from_diameter_um(100.0);
+  let (cut, frac) = d.truncated(8.0);
+  assert!((cut.s_min_um - 8.0 * d.s_min_um).abs() < 1e-9);
+  let e = 4.0 - d.q;
+  let z = |a: f64, b: f64| (b.powf(e) - a.powf(e)) / e;
+  let want = z(cut.s_min_um, d.s_max_um) / z(d.s_min_um, d.s_max_um);
+  assert!((frac - want).abs() < 1e-12, "{frac} vs {want}");
+  assert!(
+    frac > 0.5 && frac < 1.0,
+    "large grains carry most of the mass: {frac}"
+  );
+  let (none, one) = d.truncated(1.0);
+  assert_eq!(none, d);
+  assert_eq!(one, 1.0);
+  // never collapses the range
+  let (c, _) = d.truncated(1e9);
+  assert!(c.s_min_um < c.s_max_um);
+}
+
+/// Mass per tier: the youngest holds q·TTL (+ the open window), an older one q·(band)·kept
+/// fraction, within one of its windows.
+#[test]
+fn tier_mass_matches_production_over_its_band() {
+  let ttl = 86400.0;
+  let cfg = test_cfg(1.5e-3, ttl);
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  let t_now = 3.0 * ttl + 1234.0;
+  fill_system(&mut sys, t_now, &cfg, MAX_SEEK_PASSES);
+  let q_g = cfg.q_dust_kgs * 1e3;
+  for t in &sys.tiers {
+    let (lo, hi) = t.age_band_s(ttl);
+    let (_, frac) = cfg.dist.truncated(t.band.s_min_factor);
+    let want = q_g * (hi - lo) * frac;
+    let window = DustHostState::window_len_s(hi - lo);
+    let got = t.ring.live_mass_g();
+    assert!(
+      (got - want).abs() <= q_g * window * frac * 1.01,
+      "tier [{lo}, {hi}): mass {got} vs {want}"
+    );
+  }
+}
+
+/// CPU mirror of the propagate age gate: below the band min culled, no fade at the max when an
+/// older tier takes over.
+#[test]
+fn evaluate_respects_the_tier_band() {
+  let b = test_batch(64, 3600.0);
+  let c = emit_cluster(&b, 0);
+  let t0 = c.t0().to_f64();
+  let ttl = 10.0 * 86400.0;
+  let frame_at = |age: f64, min: f32, fade: bool| {
+    let (r, _) = kepler::propagate_f64(c.r0().to_f64(), c.v0().to_f64(), SUN_MU_M3_S2, age);
+    DustFrame::new(r, t0 + age, [0.0, 0.0, 0.0, 1.0], ttl as f32).with_band(min, fade)
+  };
+  let flux = |f: &DustFrame| evaluate_cluster(&c, 0, f).age_id_dbeta_flux[3];
+  assert_eq!(
+    flux(&frame_at(86400.0, 2.0 * 86400.0, true)),
+    0.0,
+    "younger than the band min"
+  );
+  assert!(flux(&frame_at(3.0 * 86400.0, 2.0 * 86400.0, true)) > 0.0);
+  let near_end = 0.99 * ttl;
+  let faded = flux(&frame_at(near_end, 0.0, true));
+  let kept = flux(&frame_at(near_end, 0.0, false));
+  assert!(faded < 0.2 * kept, "fade {faded} vs {kept}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Optical-depth splats (dust.vert / dust.frag mirror)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `dust.frag`: opacity at `r2 = |uv|²` of a splat with peak `v_opacity`
+fn frag_opacity(v_opacity: f32, r2: f32) -> f32 {
+  const GAUSS_NORM: f32 = 1.297;
+  if r2 > 1.0 {
+    0.0
+  } else {
+    v_opacity * (-4.0 * r2).exp() * GAUSS_NORM
+  }
+}
+
+/// Rasterizes splats `(x_m, y_m, spread_m, child_flux_m2)` through the shader mirror in an
+/// orthographic view of half-height `half_h_m` (square viewport `px`), summing the fragment
+/// opacities per pixel (no saturation: the optical depth regime). Returns the per-pixel sums.
+fn rasterize_ortho(
+  splats: &[(f32, f32, f32, f32)],
+  half_h_m: f32,
+  px: usize,
+  exposure: f32,
+) -> alloc::vec::Vec<f32> {
+  let mut img = alloc::vec![0.0f32; px * px];
+  let (units_per_m, p11, clip_w, px_to_ndc_y) =
+    (1e-3, 1.0 / (half_h_m * 1e-3), 1.0, 2.0 / px as f32);
+  let px_per_m = px as f32 / (2.0 * half_h_m);
+  for &(x, y, spread, flux) in splats {
+    let (r_px, r_draw_m) = splat_footprint(spread, units_per_m, p11, clip_w, px_to_ndc_y);
+    let peak = splat_opacity(exposure, flux, r_draw_m);
+    let (cx, cy) = (
+      x * px_per_m + px as f32 * 0.5,
+      y * px_per_m + px as f32 * 0.5,
+    );
+    let (x0, x1) = (
+      (cx - r_px).floor().max(0.0) as usize,
+      ((cx + r_px).ceil() as usize).min(px),
+    );
+    let (y0, y1) = (
+      (cy - r_px).floor().max(0.0) as usize,
+      ((cy + r_px).ceil() as usize).min(px),
+    );
+    for j in y0..y1 {
+      for i in x0..x1 {
+        let (u, v) = ((i as f32 + 0.5 - cx) / r_px, (j as f32 + 0.5 - cy) / r_px);
+        img[j * px + i] += frag_opacity(peak, u * u + v * v);
+      }
+    }
+  }
+  img
+}
+
+/// deterministic uniform cloud over a `side_m` square, `n` clusters of cross-section `flux`
+fn uniform_cloud(
+  n: usize,
+  side_m: f32,
+  spread_m: f32,
+  flux: f32,
+) -> alloc::vec::Vec<(f32, f32, f32, f32)> {
+  (0..n as u32)
+    .map(|i| {
+      let (a, b) = (u01(pcg(i * 2 + 1)), u01(pcg(i * 2 + 2)));
+      ((a - 0.5) * side_m, (b - 0.5) * side_m, spread_m, flux)
+    })
+    .collect()
+}
+
+/// Pixels show `exposure · τ`, τ the dust optical depth: zooming in on a cloud does not dim it
+/// (`late_near.rdc` was fainter than `late_far.rdc` under the former 1/r_px stretch), and the
+/// pixel clamps conserve energy (tiny far splats drawn at MIN_PX, huge near ones at MAX_PX).
+#[test]
+fn splat_brightness_is_optical_depth_at_any_zoom() {
+  let exposure = 1e3;
+  let side = 2.0e6; // 2000 km cloud
+  let n = 40_000;
+  let flux = 1.0e3; // m² per cluster
+  let tau_true = n as f32 * flux / (side * side);
+  let px = 256;
+  for &(spread, label) in &[(2.0e3f32, "unclamped"), (10.0, "MIN_PX"), (4.0e5, "MAX_PX")] {
+    let cloud = uniform_cloud(n, side, spread, flux);
+    let mut means = alloc::vec::Vec::new();
+    for half_h in [6.0e5f32, 1.5e5] {
+      let img = rasterize_ortho(&cloud, half_h, px, exposure);
+      // interior of the view (away from the cloud edge and the splat overhang)
+      let m: f32 = img.iter().sum::<f32>() / img.len() as f32;
+      means.push(m);
+      let rel = (m / (exposure * tau_true) - 1.0).abs();
+      assert!(
+        rel < 0.08,
+        "{label}, half-height {half_h} m: mean {m} vs exposure·τ {}",
+        exposure * tau_true
+      );
+    }
+    let zoom_rel = (means[0] / means[1] - 1.0).abs();
+    assert!(
+      zoom_rel < 0.08,
+      "{label}: brightness changes with zoom {means:?}"
+    );
+  }
+}
+
+/// The drawn radius in metres follows the physical footprint while unclamped, also in perspective:
+/// the same cluster twice as far (w ×2) at a twice longer focal (p11 ×2) is the same splat.
+#[test]
+fn splat_footprint_inverts_the_projection() {
+  let (r_px, r_m) = splat_footprint(4.0e3, 1e-3, 3.0, 100.0, 2.0 / 720.0);
+  assert!((r_m - 2.0e3).abs() < 1.0, "unclamped: {r_m}");
+  let (r_px2, r_m2) = splat_footprint(4.0e3, 1e-3, 6.0, 200.0, 2.0 / 720.0);
+  assert!((r_px - r_px2).abs() < 1e-3 && (r_m - r_m2).abs() < 1e-2);
+  // clamped: tiny spread drawn at MIN_PX, the metres follow the drawn size
+  let (r_px, r_m) = splat_footprint(1.0, 1e-3, 3.0, 100.0, 2.0 / 720.0);
+  assert_eq!(r_px, SPLAT_MIN_PX);
+  assert!(r_m > 1.0);
+}
+
+/// The exposure reference depends on the jet configuration only: filling the old tiers (heavy
+/// clusters) leaves it unchanged (`initial_burst.rdc` → `late_*.rdc` dimmed 10×), and it scales
+/// with the production rate so the stream brightness is independent of its scale.
+#[test]
+fn exposure_reference_ignores_history_and_tiers() {
+  let ttl = 86400.0;
+  let cfg = test_cfg(1.5e-3, ttl);
+  let tau = cfg.tau_ref();
+  assert!(tau > 0.0 && tau.is_finite());
+  let doubled = DustEmitConfig {
+    q_dust_kgs: cfg.q_dust_kgs * 2.0,
+    ..cfg
+  };
+  assert!((doubled.tau_ref() / tau - 2.0).abs() < 1e-12);
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  sys.tau_ref = tau;
+  // youngest tier only (one budget-limited tick), then everything
+  sys.tick(0.0, &orbit_jet, &|_| cfg);
+  sys.mark_submitted(1);
+  let early: alloc::vec::Vec<f32> = sys.draw_states().iter().map(|s| s.tau_ref).collect();
+  fill_system(&mut sys, 0.0, &cfg, MAX_SEEK_PASSES);
+  let late = sys.draw_states();
+  assert_eq!(late.len(), 3);
+  assert!(early.iter().chain(late.iter().map(|s| &s.tau_ref)).all(|&t| t == tau as f32));
 }

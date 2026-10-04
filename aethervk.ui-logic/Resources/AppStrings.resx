@@ -267,6 +267,27 @@
   <data name="Tabs_Timeline_Title" xml:space="preserve">
     <value>Timeline</value>
   </data>
+  <data name="Tabs_Timeline_Speed" xml:space="preserve">
+    <value>Speed:</value>
+  </data>
+  <data name="Tabs_Timeline_Speed10s" xml:space="preserve">
+    <value>10 s/s</value>
+  </data>
+  <data name="Tabs_Timeline_Speed1min" xml:space="preserve">
+    <value>1 min/s</value>
+  </data>
+  <data name="Tabs_Timeline_Speed1h" xml:space="preserve">
+    <value>1 h/s</value>
+  </data>
+  <data name="Tabs_Timeline_Speed3h" xml:space="preserve">
+    <value>3 h/s</value>
+  </data>
+  <data name="Tabs_Timeline_Speed1d" xml:space="preserve">
+    <value>1 day/s</value>
+  </data>
+  <data name="Tabs_Timeline_SelectSpeed" xml:space="preserve">
+    <value>Select speed</value>
+  </data>
 
   <!--====================== Dynamic / Interpolated Strings (EXAMPLE TO REMOVE) =================-->
   <!-- These use NamedFormatter {Key} syntax. Callers pre-render typed values. -->

@@ -688,6 +688,43 @@ impl SimulationContext {
     true
   }
 
+  /// Dust history per age tier, summed over the scene's particle systems (diagnostic overlay):
+  /// live / capacity added up, youngest / oldest ages over all systems, caught up iff all are.
+  pub fn dust_stats(&self, scene_id: u64) -> alloc::vec::Vec<crate::scene::dust::DustTierStats> {
+    let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
+      return alloc::vec::Vec::new();
+    };
+    let guard = scene_arc.read();
+    let mut out: alloc::vec::Vec<crate::scene::dust::DustTierStats> = alloc::vec::Vec::new();
+    guard.scene.query1(|_, ps: &crate::scene::particles::ParticleSystemComponent| {
+      for (k, t) in ps.dust.lock().stats().into_iter().enumerate() {
+        if out.len() <= k {
+          out.push(crate::scene::dust::DustTierStats {
+            youngest_age_s: f64::INFINITY,
+            caught_up: true,
+            ..Default::default()
+          });
+        }
+        let o = &mut out[k];
+        o.live_clusters += t.live_clusters;
+        o.capacity += t.capacity;
+        if t.live_clusters > 0 {
+          o.youngest_age_s = o.youngest_age_s.min(t.youngest_age_s);
+          o.oldest_age_s = o.oldest_age_s.max(t.oldest_age_s);
+        }
+        o.band_min_s = t.band_min_s;
+        o.band_max_s = t.band_max_s;
+        o.caught_up &= t.caught_up;
+      }
+    });
+    for o in &mut out {
+      if !o.youngest_age_s.is_finite() {
+        o.youngest_age_s = 0.0;
+      }
+    }
+    out
+  }
+
   pub fn set_entity_visibility(
     &self,
     scene_id: u64,
