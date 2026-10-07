@@ -243,6 +243,44 @@
                       IsChecked="{Binding ShowReferencePositionError}"
                       ToolTip.Tip="Draws two lines from the comet to its reference orbit (red track): the closest point of the track (cross-track) and where the reference says the comet should be now (same-epoch). Each is shown only while longer than 10 nucleus radii." />
 
+            <!-- ──── Dust visibility: asinh display stretch softening ───── -->
+            <Grid ColumnDefinitions="*,12,1.6*"
+                  Margin="12,10,12,0">
+              <TextBlock Grid.Column="0"
+                         Text="{Binding StrDustVisibility}"
+                         VerticalAlignment="Center" />
+              <controls:UnboundedSlider Grid.Column="2"
+                                        Value="{Binding DustSoftening}"
+                                        IsLogarithmic="True"
+                                        HasBounds="True"
+                                        MinBound="0.00001"
+                                        MaxBound="1.0"
+                                        DisplayFormat="G2"
+                                        ToolTip.Tip="Display stretch of the dust (softening of an asinh curve over the accumulated optical depth, relative to the brightest dust in view, which adapts to the view like an eye).&#x0A;Smaller: the faint, old tail and trail (thousands of times fainter than the coma) become visible while the coma saturates.&#x0A;1: close to linear, physically proportional brightness.&#x0A;Visual only." />
+            </Grid>
+
+            <!-- ──── Dust tracers (real particles); the flow marks are always on while simulating ── -->
+            <CheckBox Margin="12,10,12,0"
+                      Content="{Binding StrDustTracers}"
+                      IsChecked="{Binding DustTracers}"
+                      ToolTip.Tip="Draws one dust particle in 256 as a bright dot at its exact position.&#x0A;The dust drifts at 2 to 150 m/s while a pixel of a wide view spans tens of km: at low sim speed it moves far less than a pixel per second, and the dense dots blend into a still fog. Tracers are real particles to follow (raise the sim speed to see them stream).&#x0A;Visual only." />
+
+            <!-- ──── Flow time-lapse factor of the dust marks ──────────── -->
+            <Grid ColumnDefinitions="*,12,1.6*"
+                  Margin="12,10,12,4">
+              <TextBlock Grid.Column="0"
+                         Text="{Binding StrDustFlowSpeed}"
+                         VerticalAlignment="Center" />
+              <controls:UnboundedSlider Grid.Column="2"
+                                        Value="{Binding DustFlowSpeed}"
+                                        IsLogarithmic="True"
+                                        HasBounds="True"
+                                        MinBound="1"
+                                        MaxBound="10000"
+                                        DisplayFormat="G3"
+                                        ToolTip.Tip="Speed of the brightness marks that ride the dust while the simulation runs (they freeze on pause).&#x0A;1: the marks move exactly with the dust (its real speed on screen, often far below a pixel per second in wide views).&#x0A;K: every mark moves K times faster than its dust, in its direction, so the whole swarm keeps its true velocity field at a readable pace. Changing it never jumps the marks.&#x0A;Visual only." />
+            </Grid>
+
             <!-- ──── Nucleus radius (required for jet placement) ──────── -->
             <Grid ColumnDefinitions="*,12,1.6*"
                   Margin="12,10,12,4">

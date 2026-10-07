@@ -28,22 +28,111 @@ use df::{Df, Df3, consts};
 pub const RING_CAPACITY_HIGH: u32 = 262_144;
 /// ring capacity for integrated / mobile GPUs (power of two)
 pub const RING_CAPACITY_LOW: u32 = 32_768;
-/// render-time children (sub-splats) per cluster, minimum (dense ring)
+/// render-time instance budget per cluster of ring capacity: a tier draws at most
+/// `capacity · CHILDREN_PER_CLUSTER` children, spread over its **on-screen** clusters by the LOD
+/// pass ([`lod_children`], `dust_lod.comp`)
 pub const CHILDREN_PER_CLUSTER: u32 = 8;
-/// render-time children per cluster, maximum (sparse ring; `dust.vert` hashes with this stride)
-pub const MAX_CHILDREN_PER_CLUSTER: u32 = 64;
-
-/// Children per cluster for `live` clusters of a ring of `capacity`: keeps the instance count
-/// near `capacity · CHILDREN_PER_CLUSTER`, so a sparse ring (early in a run: it fills over one TTL)
-/// is drawn as a dense, smooth cloud instead of isolated blobs. Total light per cluster is
-/// unchanged (each child carries `1/children` of the flux).
-pub fn render_children(capacity: u32, live: u32) -> u32 {
-  if live == 0 {
-    return CHILDREN_PER_CLUSTER;
-  }
-  let budget = capacity as u64 * CHILDREN_PER_CLUSTER as u64;
-  ((budget / live as u64) as u32).clamp(CHILDREN_PER_CLUSTER, MAX_CHILDREN_PER_CLUSTER)
-}
+/// children per cluster, maximum (the child index has [`LOD_CHILD_BITS`] bits in the instance list,
+/// and `dust.vert` hashes children with this stride)
+pub const MAX_CHILDREN_PER_CLUSTER: u32 = 1024;
+/// instance list entry: `cluster | child << LOD_CLUSTER_BITS` (`dust_lod.comp`, `dust.vert`);
+/// child [`TRACER_CHILD`] is the cluster's tracer dot
+pub const LOD_CLUSTER_BITS: u32 = 22;
+pub const LOD_CHILD_BITS: u32 = 32 - LOD_CLUSTER_BITS;
+const _: () = assert!(MAX_CHILDREN_PER_CLUSTER <= 1 << LOD_CHILD_BITS);
+const _: () = assert!(RING_CAPACITY_HIGH <= 1 << LOD_CLUSTER_BITS);
+/// Bits of the stable child-pattern id a cluster carries in the low mantissa bits of its β
+/// half-spread (`DustCluster::misc.w`, copied to `DustRenderCluster::age_id_dbeta_flux.z`). The id
+/// is hashed from the emission record (window seed, in-batch index), never from the ring slot, so
+/// a cluster draws the same children after a seek, a rewind or in another tier's sub-ring. 16 bits
+/// cost the half-spread ≤ 2⁻⁷ (truncation, irrelevant for a spread) and keep both structs at their
+/// size; the id is exact on GPU and CPU (u32 ops only), the dbeta bits above it may differ by ulps.
+pub const CHILD_ID_BITS: u32 = 16;
+pub const CHILD_ID_MASK: u32 = (1 << CHILD_ID_BITS) - 1;
+const _: () = assert!(CHILD_ID_BITS + LOD_CHILD_BITS <= 32);
+/// Age scale (scaled s) of the child reshaping (`child_offset`, point spreads): a cluster's
+/// children turn from one random cloud to another (per-child rate) once per doubling of
+/// `1 + age / τ`.
+pub const CHILD_RESHAPE_TAU_S: f32 = 3600.0;
+/// Emission streams per jet, at most. Stream `s` has a fixed direction in the jet cone, a fixed
+/// grain-size stratum and a fixed speed draw, hashed from the jet configuration (never from the
+/// window), so its clusters of consecutive time samples are points of one streakline: on a
+/// spinning nucleus it sweeps a spiral / arc, at fixed β it is a syndyne. A tier uses
+/// `S = 2^shift` streams ([`DustHostState::stream_shift`]: fewer on small rings, so a window still
+/// holds [`STREAM_MIN_SAMPLES`] time samples). Batch layout `j = i·S + s` (time sample `i`), every
+/// batch count a multiple of `S`, so in a tier's compact render buffer the stream predecessor of
+/// cluster `r` is `r − S` ([`streak_pred`]).
+pub const DUST_STREAMS: u32 = 64;
+/// time samples per full window a tier keeps at least when choosing its stream count
+pub const STREAM_MIN_SAMPLES: u32 = 4;
+/// per-cluster jitter of a stream's direction: fraction of its cone stratum (polar) and of a turn
+/// (azimuth)
+pub const STREAM_DIR_JITTER: f32 = 0.03;
+/// Lateral velocity dispersion of a stream in units of its cone cell's angular radius
+/// (`aperture / √S`). Cells of area π r² tile the cone with centres d ≈ 1.9 r apart (hexagonal), so
+/// σ = r gives σ/d ≈ 0.53: the S gaussian streams sum to a uniform cone (ripple
+/// 2·exp(−2π²σ²/d²) < 1 %). At 0.5 r (σ/d ≈ 0.26, ripple ~50 %) old dust split into one island per
+/// stream, thousands of km apart (`detached.rdc`).
+pub const STREAM_SIGMA_CELLS: f32 = 1.0;
+/// per-cluster jitter of a stream's size, fraction of its size stratum width
+pub const STREAM_SIZE_JITTER: f32 = 0.05;
+/// part of a time stratum drawn per cluster (the rest is shared by the streams of the sample)
+pub const STREAM_TIME_JITTER: f32 = 0.1;
+/// per-cluster speed jitter, in units of the relative speed spread
+pub const STREAM_SPEED_JITTER: f32 = 0.1;
+/// Sign bit of the β half-spread field (`DustCluster::misc.w` → `DustRenderCluster`): the stream
+/// is interrupted before this cluster (the jet site was dark, or the previous window emitted
+/// nothing), so it draws no streak towards its predecessor. The child-pattern id lives in the low
+/// bits, the half-spread itself is positive.
+pub const STREAM_BREAK_BIT: u32 = 1 << 31;
+/// a dark gap shorter than this fraction of a rotation does not interrupt a stream
+pub const STREAM_BREAK_TURNS: f32 = 0.01;
+/// [`DustBatch::mass_params`] `w` = `shift + BATCH_BREAK_FLAG · break + BATCH_PROVISIONAL_FLAG ·
+/// provisional + BATCH_SIZE_ROTATION_UNIT · rotation` ([`batch_word`]): the stream shift of the batch, whether the previous window of the tier is missing
+/// from the ring, and whether it is the provisional preview of the open window
+pub const BATCH_BREAK_FLAG: u32 = 16;
+/// The provisional batch (open window, re-emitted every tick) pins its last time sample at the
+/// window end, the tick time: every stream then starts at the jet (the fountain's base,
+/// `comet_mode_full.rdc`); at night `lit_time_map` maps it to the last lit instant.
+pub const BATCH_PROVISIONAL_FLAG: u32 = 32;
+/// [`DustBatch::mass_params`] `w` also carries `BATCH_SIZE_ROTATION_UNIT · r`: the size-stratum
+/// rotation of the window's first time sample ([`stream_stratum`]), `r < S ≤ 64`, so the word
+/// stays below 2¹² (exact in f32)
+pub const BATCH_SIZE_ROTATION_UNIT: u32 = 64;
+/// ndc margin around the view where streaks are still drawn (plus 3 lateral sigmas)
+pub const STREAK_MARGIN: f32 = 0.05;
+/// clamp of the streak margin (ndc)
+pub const STREAK_MARGIN_MAX: f32 = 8.0;
+/// `DustRenderCluster::age_id_dbeta_flux.y` bits: the ring slot (low 22 bits), the tier's stream
+/// shift at [`RENDER_SHIFT_BIT0`] (4 bits) and [`RENDER_LIVE_BIT`] (evaluated in the age band;
+/// culled records have only the slot). The LOD never rewrites this word, so a cluster reads its
+/// predecessor's validity race free.
+pub const RENDER_SLOT_MASK: u32 = (1 << LOD_CLUSTER_BITS) - 1;
+pub const RENDER_SHIFT_BIT0: u32 = 27;
+pub const RENDER_LIVE_BIT: u32 = 1 << 31;
+/// LOD header words per tier: `[0..4)` `VkDrawIndirectCommand`, `[4]` demand Σwant, `[5]`
+/// attempted Σk (including the clusters dropped at the budget), then the words of
+/// [`LOD_HEADER_LIST`]..[`LOD_HEADER_ON_SCREEN`]
+pub const LOD_HEADER_WORDS: u32 = 64;
+/// tiers per system with an LOD header (see [`dust_tier_count`])
+pub const LOD_MAX_TIERS: u32 = 4;
+/// white-point tile grid over the screen (`dust_lod.comp`)
+pub const DUST_TILES_X: u32 = 64;
+pub const DUST_TILES_Y: u32 = 36;
+pub const DUST_TILE_COUNT: u32 = DUST_TILES_X * DUST_TILES_Y;
+/// first word of the tile grid in the LOD buffer (after the tier headers)
+pub const LOD_TILE_WORD0: u32 = LOD_MAX_TIERS * LOD_HEADER_WORDS;
+/// first word of the instance lists (tier `t` starts at `ring_base · CHILDREN_PER_CLUSTER`)
+pub const LOD_LIST_WORD0: u32 = LOD_TILE_WORD0 + DUST_TILE_COUNT;
+/// words of the LOD header + tile grid, copied back to the host every frame
+pub const LOD_READBACK_WORDS: u32 = LOD_LIST_WORD0;
+/// child samples per cluster scattered into the white-point tiles
+pub const DUST_TILE_SAMPLES: u32 = 4;
+/// percentile of the non-empty tiles taken as the white point (calibrated offline on
+/// blobber.rdc from 0.3× to 3000× zoom: within 3× of the pixel 99.5th percentile)
+pub const WHITE_TILE_PERCENTILE: f32 = 0.99;
+/// fraction of the instance budget the LOD controller aims for
+pub const LOD_TARGET_FILL: f32 = 0.9;
 /// fraction of the ring targeted in steady state
 pub const BUDGET_SAFETY: f64 = 0.8;
 /// bit of `DustDrawPushConstants::children`: the target is 8-bit, stochastically round the splat
@@ -56,28 +145,487 @@ pub fn stochastic_round_8bit(v: f32, u: f32) -> f32 {
   ((v * 255.0 + u).floor() / 255.0).clamp(0.0, 1.0)
 }
 
+/// Default asinh softening of the dust display stretch, relative to the white point (the measured
+/// brightest dust of the view, [`white_point_from_tiles`]): dust 100× fainter than the brightest
+/// shows at ~30 % opacity.
+pub const DUST_SOFTENING_DEFAULT: f32 = 1e-2;
+/// Accepted softening range ("dust visibility" slider); 1 is close to linear.
+pub const DUST_SOFTENING_MIN: f32 = 1e-5;
+pub const DUST_SOFTENING_MAX: f32 = 1.0;
+
+/// Mirror of `composite.frag`'s display stretch: opacity of a dust optical depth `tau` relative to
+/// the white point (the draw exposure divides by it), black point `black`, softening `s`:
+/// `min(asinh(max(τ − b, 0)/s) / asinh(1/s), 1)`. Linear below `s`, logarithmic above, 1 at the
+/// white point: dust is accumulated linearly (HDR), and this maps the 1e4 dynamic range between
+/// coma and tail onto the display. `s ≤ 0`: linear.
+pub fn display_stretch(tau: f32, black: f32, s: f32) -> f32 {
+  let tau = tau - black.max(0.0);
+  if !(tau > 0.0) {
+    return 0.0;
+  }
+  if !(s > 0.0) {
+    return tau.min(1.0);
+  }
+  ((tau / s).asinh() / (1.0 / s).asinh()).min(1.0)
+}
+
+/// Clamps a softening to [`DUST_SOFTENING_MIN`, `DUST_SOFTENING_MAX`] (default if not finite).
+pub fn clamp_dust_softening(s: f32) -> f32 {
+  if s.is_finite() {
+    s.clamp(DUST_SOFTENING_MIN, DUST_SOFTENING_MAX)
+  } else {
+    DUST_SOFTENING_DEFAULT
+  }
+}
+
 /// age of the dust column that defines the exposure reference ([`DustEmitConfig::tau_ref`])
 pub const TAU_REF_AGE_S: f64 = 86400.0;
-/// splat radius clamp in pixels (`dust.vert`)
-pub const SPLAT_MIN_PX: f32 = 1.5;
-pub const SPLAT_MAX_PX: f32 = 48.0;
-/// child footprint radius as a fraction of the cluster spread (`dust.vert`)
-pub const SPLAT_CHILD_RADIUS_FRAC: f32 = 0.5;
+/// drawn radius of every child in pixels (`dust.vert`): particles split, they never grow. A cloud
+/// larger on screen is drawn with more children ([`lod_want`]), not with larger ones.
+pub const DUST_CHILD_PX: f32 = 1.5;
 
-/// Mirror of the `dust.vert` footprint: `(r_px, r_draw_m)`, the drawn splat radius in pixels
-/// (clamped to `[SPLAT_MIN_PX, SPLAT_MAX_PX]`) and the same radius back in metres. `p11` is the
+/// Mirror of the `dust.vert` footprint: `(r_px, r_draw_m)`, the drawn child radius `r_px` in
+/// pixels ([`splat_radius_px`]) and the same radius in metres at clip depth `clip_w`. `p11` is the
 /// projection y scale, `px_to_ndc_y = 2 / viewport height`, `units_per_m` the layer unit.
 pub fn splat_footprint(
-  spread_m: f32,
+  r_px: f32,
   units_per_m: f32,
   p11: f32,
   clip_w: f32,
   px_to_ndc_y: f32,
 ) -> (f32, f32) {
-  let r_units = (spread_m * SPLAT_CHILD_RADIUS_FRAC).max(1.0) * units_per_m;
   let px_per_unit = p11 / clip_w / px_to_ndc_y;
-  let r_px = (r_units * px_per_unit).clamp(SPLAT_MIN_PX, SPLAT_MAX_PX);
   (r_px, r_px / px_per_unit / units_per_m)
+}
+
+/// Children a streak asks for: [`DUST_CHILD_PX`] dots along its visible length `len_px`, times its
+/// lateral width `width_px` in dots, at least 1 (`dust_streak_want`). A point spread (`len_px` 0)
+/// asks for `(width_px / DUST_CHILD_PX)²`, the former cloud cover.
+pub fn streak_want(len_px: f32, width_px: f32) -> f32 {
+  ((len_px.max(width_px) / DUST_CHILD_PX).max(1.0)) * (width_px / DUST_CHILD_PX).max(1.0)
+}
+
+/// Drawn radius (px) of the `k` children of a cluster asking for `want`: [`DUST_CHILD_PX`] when
+/// fully sampled, `DUST_CHILD_PX·sqrt(want/k)` otherwise (the dots still cover the footprint, so a
+/// tight budget or a near view gives a softer fog instead of sparse bright speckle; `near.rdc`),
+/// at most [`DUST_CHILD_PX_MAX`]. The peak follows (`splat_opacity`): energy exact. Mirror of
+/// `dust_splat_radius`.
+pub fn splat_radius_px(want: f32, k: u32) -> f32 {
+  (DUST_CHILD_PX * <f32 as FloatLike>::sqrt((want / k.max(1) as f32).max(1.0)))
+    .min(DUST_CHILD_PX_MAX)
+}
+
+/// Children of a point spread of radius `spread_px` ([`streak_want`] without length).
+pub fn lod_want(spread_px: f32) -> f32 {
+  streak_want(0.0, spread_px)
+}
+
+/// Children drawn for `want` under the budget share `lambda`, in `[1, TRACER_CHILD)` (the last
+/// child index is the tracer's). Mirror of `dust_lod.comp`.
+pub fn lod_children(want: f32, lambda: f32) -> u32 {
+  <f32 as FloatLike>::floor(lambda * want + 0.5).clamp(1.0, TRACER_CHILD as f32) as u32
+}
+
+// ─── View aids: tracers and flow (`first_particles.rdc` / `second_particles.rdc`) ───
+// In the wide view (25 km/px) dust moves 2–150 m/s relative to the nucleus: 63 s of sim time moved
+// every particle by 0.005 px, so the coma looked like one shape sliding with the comet. And ~1 M
+// dots blend into a fog in which no flow shows even when fast.
+
+/// [`DUST_VIEW_TRACERS`]: one cluster in `TRACER_EVERY` is also drawn as a bright dot at its exact
+/// position (real particles to follow); [`DUST_VIEW_FLOW`]: synchrone marks ([`flow_factor`])
+pub const DUST_VIEW_TRACERS: u32 = 1;
+pub const DUST_VIEW_FLOW: u32 = 2;
+/// view aids by default: both (`AETHERVK_DUST_TRACERS=0` / `AETHERVK_DUST_FLOW=0` turn one off)
+pub fn dust_view_flags_default() -> u32 {
+  let off = |k: &str| aethervk_oshal_rlib::os::env::var(k).is_some_and(|s| s.trim() == "0");
+  let mut f = DUST_VIEW_TRACERS | DUST_VIEW_FLOW;
+  if off("AETHERVK_DUST_TRACERS") {
+    f &= !DUST_VIEW_TRACERS;
+  }
+  if off("AETHERVK_DUST_FLOW") {
+    f &= !DUST_VIEW_FLOW;
+  }
+  f
+}
+/// one tracer per this many clusters (~400 in a wide view of the coma and tail)
+pub const TRACER_EVERY: u32 = 256;
+/// instance child index of a cluster's tracer dot (real children stay below it)
+pub const TRACER_CHILD: u32 = MAX_CHILDREN_PER_CLUSTER - 1;
+/// tracer dot radius (pixels)
+pub const TRACER_PX: f32 = 2.0;
+/// tracer peak in white-point units (the accumulation is relative to the view's white point)
+pub const TRACER_LEVEL: f32 = 0.5;
+
+// Flow: brightness marks on synchrones (the dust of one emission instant `t_e = t_sim − age`,
+// Finson & Probstein 1968): Lagrangian timelines ([`flow_factor`]), marks at fixed emission epochs
+// that ride the real particles (flow-visualization timelines), brightness neutral (mean 1) and
+// continuous in time and age. They are evaluated on the flow clock `T = t_sim + ∫(K − 1)·dt_sim`
+// ([`DustFlowClock`]): at the time-lapse factor `K` = 1 the marks move with the dust; at `K` > 1
+// every crest moves at `K ×` its parcel's real speed, so the swarm keeps its true velocity field
+// (direction and relative speeds) at a readable pace. `T` only advances with sim time, so paused
+// frames are identical, and it is an integral, so changing `K` never jumps the marks.
+
+/// pulse shape: modulated share `D`, crest sharpness κ (von Mises). Tuned offline on
+/// first_particles.rdc: a ±60 % cosine washed out (each pixel of the tail mixes dust of many ages,
+/// the asinh stretch compresses it); this keeps ±20–30 % even averaged over whole annuli.
+pub const FLOW_SHARE: f32 = 0.85;
+pub const FLOW_KAPPA: f32 = 4.0;
+/// `I₀(κ)`, the von Mises normalization (mean of `exp(κ cos φ)` over a turn)
+pub const FLOW_I0_KAPPA: f32 = 11.301_922;
+/// time-lapse factor `K` of the flow marks ([`DustFlowClock::speed`]): 1 = the marks move with the
+/// dust; the UI slider spans `[FLOW_SPEED_MIN, FLOW_SPEED_MAX]` (log scale)
+pub const FLOW_SPEED_DEFAULT: f64 = 1.0;
+pub const FLOW_SPEED_MIN: f64 = 1.0;
+pub const FLOW_SPEED_MAX: f64 = 10_000.0;
+/// LOD header words read by `dust.vert`: the tier's instance-list address (u64, written by
+/// `dust_lod.comp`), then the host's flow uniform ([`DustFlowUniform`]) and view flags
+pub const LOD_HEADER_LIST: u32 = 6;
+/// the time-lapse factor `K` (f32 bits; diagnostics, `dust.vert` reads the clock only)
+pub const LOD_HEADER_FLOW_SPEED: u32 = 8;
+pub const LOD_HEADER_FLAGS: u32 = 9;
+/// the flow clock `T` as a df64-style hi / lo pair (exact emission epochs at 10⁸ s)
+pub const LOD_HEADER_T_HI: u32 = 10;
+pub const LOD_HEADER_T_LO: u32 = 11;
+/// this frame's budget share (f32 bits, written by `dust_lod.comp` pass B for `dust.vert`)
+pub const LOD_HEADER_LAMBDA: u32 = 13;
+/// clusters on screen (demand pass)
+pub const LOD_HEADER_ON_SCREEN: u32 = 14;
+/// solar gravity at the jet (f32 bits, host): the β extent of the footprints ([`dust_extent`])
+pub const LOD_HEADER_SUN_G: u32 = 15;
+/// first word of the demand histogram (count, sum per bin, [`lod_lambda_from`]; demand pass)
+pub const LOD_HEADER_HIST: u32 = 16;
+const _: () = assert!(LOD_HEADER_HIST as usize + 2 * LOD_HIST_BINS <= LOD_HEADER_WORDS as usize);
+/// largest drawn child radius (px): a cluster drawn with fewer dots than its footprint asks for
+/// (`k < want`: budget, or the [`TRACER_CHILD`] cap) gets larger, softer ones ([`splat_radius_px`])
+pub const DUST_CHILD_PX_MAX: f32 = 12.0;
+
+/// Whether the cluster with child-pattern id `id` carries a tracer (stable: the id comes from the
+/// emission record). Mirror of `dust_is_tracer`.
+#[inline]
+pub fn is_tracer(id: u32) -> bool {
+  pcg((id & CHILD_ID_MASK) ^ 0x7AC3_12E5) % TRACER_EVERY == 0
+}
+
+/// Flow clock of the render thread: `T = t_sim + offset`, `offset = ∫(K − 1)·dt_sim` over the
+/// played sim time. The marks are functions of `T − age`: at `K` = 1 they ride the particles, at
+/// `K` > 1 they move `K ×` faster than the dust, in its direction. Advances only with sim time
+/// (paused: identical frames, resuming continues from the same phase; backwards sim moves the
+/// marks inward); a change of `K` changes the pace, never the phase (the offset is continuous).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DustFlowClock {
+  /// time-lapse factor `K` ≥ 1 ([`FLOW_SPEED_DEFAULT`]; `SimulationContext::set_dust_flow_speed`)
+  pub speed: f64,
+  /// `T − t_sim` (s)
+  pub offset_s: f64,
+  /// `(wall µs, sim µs)` of the last [`Self::sync`]
+  last_us: Option<(i64, i64)>,
+}
+
+impl Default for DustFlowClock {
+  fn default() -> Self {
+    Self {
+      speed: FLOW_SPEED_DEFAULT,
+      offset_s: 0.0,
+      last_us: None,
+    }
+  }
+}
+
+impl DustFlowClock {
+  /// Advances to the frame stamped `wall_us` (unscaled) / `sim_us` (scaled). Several viewports
+  /// rendering the same frame (same wall stamp) advance it once.
+  pub fn sync(&mut self, wall_us: i64, sim_us: i64) {
+    if let Some((w, s)) = self.last_us {
+      if wall_us <= w {
+        return;
+      }
+      self.advance((sim_us - s) as f64 * 1e-6);
+    }
+    self.last_us = Some((wall_us, sim_us));
+  }
+
+  /// One rendered frame with `sim_dt_s` of (scaled) sim time elapsed: the offset grows by
+  /// `(K − 1)·sim_dt`. Paused (no sim time): holds.
+  pub fn advance(&mut self, sim_dt_s: f64) {
+    if !(sim_dt_s != 0.0) || !sim_dt_s.is_finite() {
+      return;
+    }
+    self.offset_s += (self.speed - 1.0) * sim_dt_s;
+  }
+
+  /// sets `K`, clamped to `[FLOW_SPEED_MIN, FLOW_SPEED_MAX]` (NaN → default); the phase is kept
+  pub fn set_speed(&mut self, k: f64) -> f64 {
+    self.speed = if k.is_finite() {
+      k.clamp(FLOW_SPEED_MIN, FLOW_SPEED_MAX)
+    } else {
+      FLOW_SPEED_DEFAULT
+    };
+    self.speed
+  }
+
+  /// the flow clock `T` at sim time `t_sim_s`
+  pub fn time(&self, t_sim_s: f64) -> f64 {
+    t_sim_s + self.offset_s
+  }
+}
+
+/// What `dust.vert` needs for the flow (LOD header words [`LOD_HEADER_FLOW_SPEED`]..): the flow
+/// clock `T` as a df64-style hi / lo pair (exact emission epochs at 10⁸ s) and `K` (diagnostics).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct DustFlowUniform {
+  pub t_hi: f32,
+  pub t_lo: f32,
+  pub speed: f32,
+}
+
+impl DustFlowUniform {
+  pub fn new(clock: &DustFlowClock, t_sim_s: f64) -> Self {
+    let t = Df::from_f64(clock.time(t_sim_s));
+    Self {
+      t_hi: t.hi,
+      t_lo: t.lo,
+      speed: clock.speed as f32,
+    }
+  }
+}
+
+/// von Mises pulse of phase `x` (turns): `(1 − D) + D·exp(κ cos 2πx)/I₀(κ)`, mean 1 over a turn,
+/// peak ≈ 4×, trough ≈ 0.15×
+#[inline]
+fn flow_pulse_of(x: f32) -> f32 {
+  let x = x - <f32 as FloatLike>::floor(x);
+  let c = <f32 as FloatLike>::cos(2.0 * core::f32::consts::PI * x);
+  (1.0 - FLOW_SHARE) + FLOW_SHARE * <f32 as FloatLike>::exp(FLOW_KAPPA * c) / FLOW_I0_KAPPA
+}
+
+/// `fract(t_e / P)` of the emission epoch `t_e = T − age` for `P = 2^j` s, exact at any time:
+/// `T / P` scales the hi / lo halves by a power of two (exact), each reduced mod 1 before the sum.
+#[inline]
+fn epoch_phase(t_hi: f32, t_lo: f32, age: f32, j: i32) -> f32 {
+  let inv = f32::from_bits(((127 - j.clamp(-126, 127)) as u32) << 23);
+  let fr = |v: f32| v - <f32 as FloatLike>::floor(v);
+  fr(fr(t_hi * inv) + fr(t_lo * inv) - age * inv)
+}
+
+/// Flow brightness factor of a dot of age `age_s`: Lagrangian timelines, marks at the emission
+/// epochs `t_e = T − age ≡ 0 mod 2^j` s, `j = ⌊log₂ age⌋` and `j + 1` weighted by `fract(log₂ age)`
+/// (crest spacing ≈ the age, ~3 per decade; level `j + 1` marks are every second level-`j` mark,
+/// so as the dust ages alternate crests fade out). A function of the emission instant (and slowly
+/// of the age): the marks ride the real particles, `K ×` faster on the flow clock. Mean 1. Mirror
+/// of `dust_flow_factor`.
+pub fn flow_factor(age_s: f32, flow: &DustFlowUniform) -> f32 {
+  let a = age_s.max(1.0);
+  let l = <f32 as FloatLike>::ln(a) * core::f32::consts::LOG2_E;
+  let j = <f32 as FloatLike>::floor(l);
+  let w = l - j;
+  let j = j as i32;
+  (1.0 - w) * flow_pulse_of(epoch_phase(flow.t_hi, flow.t_lo, a, j))
+    + w * flow_pulse_of(epoch_phase(flow.t_hi, flow.t_lo, a, j + 1))
+}
+
+/// Bins of the demand histogram (`⌊log₂ ⌈want⌉⌋`, wants up to 2²⁰)
+pub const LOD_HIST_BINS: usize = 21;
+
+/// Demand histogram bin of a cluster's demand `d` ([`lod_demand`]). Mirror of `dust_lod_hist_bin`.
+#[inline]
+pub fn lod_hist_bin(d: u32) -> usize {
+  ((31 - d.max(1).leading_zeros()) as usize).min(LOD_HIST_BINS - 1)
+}
+
+/// What a demand `d` adds to its bin's sum: `d / 2^bin` in 1/256 (in `[256, 512)`), so a bin of
+/// 8 M clusters still fits a u32. Mirror of `dust_lod_hist_add`.
+#[inline]
+pub fn lod_hist_add(d: u32) -> u32 {
+  (d.max(1) << 8) >> lod_hist_bin(d)
+}
+
+/// Adds the demand `d` of one on-screen cluster to `hist` (count, scaled sum per bin)
+pub fn lod_hist_push(hist: &mut [u32], d: u32) {
+  let b = lod_hist_bin(d);
+  hist[2 * b] += 1;
+  hist[2 * b + 1] = hist[2 * b + 1].saturating_add(lod_hist_add(d));
+}
+
+/// Budget share of this frame, from this frame's demand (`dust_lod.comp` pass A, the same frame:
+/// no feedback lag, no ramp after a view change). `hist` holds per bin ([`lod_hist_bin`]) the
+/// count and the scaled demand sum of the on-screen clusters (interleaved, [`lod_hist_push`]). A
+/// cluster asking for `w` draws `clamp(round(λ·w), 1, TRACER_CHILD)`, one in [`TRACER_EVERY`] adds
+/// a tracer: λ solves `Σ_b c_b·clamp(λ·w̄_b, 1, TRACER_CHILD) = LOD_TARGET_FILL·budget` by bisection
+/// in log space (the floor at 1 and the cap are what a plain `budget / Σw` gets wrong: many small
+/// clusters underfill, a few huge ones overfill), at most `lambda_max`.
+/// Mirror of `dust_lod_lambda`.
+pub fn lod_lambda_from(budget: u32, hist: &[u32], on_screen: u32, lambda_max: f32) -> f32 {
+  let lmax = lambda_max.max(1e-6);
+  let target = LOD_TARGET_FILL * budget as f32 - (on_screen / TRACER_EVERY) as f32;
+  let cost = |l: f32| {
+    let mut c = 0.0f32;
+    for b in 0..LOD_HIST_BINS {
+      let (n, s) = (hist[2 * b] as f32, hist[2 * b + 1] as f32);
+      if n > 0.0 {
+        // mean demand of the bin: s / (256 n) · 2^b
+        let mean = s / n * (f32::from_bits(((b as u32) + 127) << 23) * (1.0 / 256.0));
+        c += n * (l * mean).clamp(1.0, TRACER_CHILD as f32);
+      }
+    }
+    c
+  };
+  if cost(lmax) <= target {
+    return lmax;
+  }
+  // log2 λ in [log2 1e-6, log2 lmax]: 24 halvings, ~2⁻²⁰ of the range
+  let (mut lo, mut hi) = (
+    -19.93f32,
+    <f32 as FloatLike>::ln(lmax) * core::f32::consts::LOG2_E,
+  );
+  for _ in 0..24 {
+    let mid = 0.5 * (lo + hi);
+    if cost(<f32 as FloatLike>::exp(mid * core::f32::consts::LN_2)) <= target {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  <f32 as FloatLike>::exp(lo * core::f32::consts::LN_2).clamp(1e-6, lmax)
+}
+
+/// `DustLodPushConstants::lambda` of the demand pass (pass A) of `dust_lod.comp`
+pub const LOD_DEMAND_PASS: f32 = -1.0;
+
+/// White point (exposure-scaled optical depth) from the tile grid in fixed point (`unit` = τ per
+/// count): the [`WHITE_TILE_PERCENTILE`] of the non-empty tiles. `None` when all are empty.
+pub fn white_point_from_tiles(tiles: &[u32], unit: f32) -> Option<f32> {
+  let mut v: alloc::vec::Vec<u32> = tiles.iter().copied().filter(|&c| c > 0).collect();
+  if v.is_empty() {
+    return None;
+  }
+  v.sort_unstable();
+  let i = ((v.len() - 1) as f32 * WHITE_TILE_PERCENTILE).round() as usize;
+  Some(v[i.min(v.len() - 1)] as f32 * unit)
+}
+
+/// fraction of the log-distance to the measured white point covered per frame (~0.3 s at 60 Hz)
+pub const WHITE_ADAPT_RATE: f32 = 0.5;
+/// tile fixed-point unit relative to the current white point: τ from 1e-5 to 4e4 white
+pub const WHITE_TILE_UNIT_REL: f32 = 1e-5;
+
+/// Share of the view adaptation in the exposure (log space): the displayed white point is
+/// `measured^share` in units of the system's fixed reference (white 1 = the jet's `tau_ref`). 1 =
+/// full eye adaptation (`near.rdc` / `med.rdc`: the same tail patch, physically within 1.3 %,
+/// showed 1.82× apart because the coma was in one view and not the other), 0 = fixed exposure.
+pub const DUST_VIEW_ADAPTATION: f32 = 0.5;
+
+/// White point the exposure divides by, from the measured one ([`DUST_VIEW_ADAPTATION`]); 0 or
+/// non-finite (not measured yet) gives the fixed reference 1.
+pub fn display_white(measured: f32) -> f32 {
+  if !(measured > 0.0) || !measured.is_finite() {
+    return 1.0;
+  }
+  <f32 as FloatLike>::exp(DUST_VIEW_ADAPTATION * <f32 as FloatLike>::ln(measured))
+}
+
+/// Eye-adaptation step of the white point, in log space (exposure changes by a constant factor
+/// per frame, whatever the magnitude). Non-finite or non-positive measurements keep `prev`.
+pub fn adapt_white(prev: f32, measured: f32) -> f32 {
+  if !(measured > 0.0) || !measured.is_finite() {
+    return prev;
+  }
+  if !(prev > 0.0) || !prev.is_finite() {
+    return measured;
+  }
+  (prev.ln() + (measured.ln() - prev.ln()) * WHITE_ADAPT_RATE).exp()
+}
+
+/// `AETHERVK_DUST_EXPOSURE=fixed`: no view adaptation (white point 1 = the jet's `tau_ref`, no
+/// black point), the dust brightness then depends on the zoom.
+pub fn dust_exposure_fixed() -> bool {
+  use core::sync::atomic::{AtomicU8, Ordering};
+  static FIXED: AtomicU8 = AtomicU8::new(2);
+  match FIXED.load(Ordering::Relaxed) {
+    0 => false,
+    1 => true,
+    _ => {
+      let f = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_EXPOSURE")
+        .is_some_and(|s| s.trim().eq_ignore_ascii_case("fixed"));
+      FIXED.store(f as u8, Ordering::Relaxed);
+      f
+    }
+  }
+}
+
+/// Black point of the display stretch, relative to the white point (`composite.frag`): the
+/// faintest 1e-4 of the dynamic range shows as nothing instead of a uniform veil.
+pub const DUST_BLACK_POINT: f32 = 1e-4;
+
+/// Stable child-pattern id of a cluster from its β half-spread field (`DustCluster::misc[3]` /
+/// `DustRenderCluster::age_id_dbeta_flux[2]`, see [`CHILD_ID_BITS`]).
+#[inline]
+pub fn child_id(dbeta_field: f32) -> u32 {
+  dbeta_field.to_bits() & CHILD_ID_MASK
+}
+
+/// `dbeta` with its low [`CHILD_ID_BITS`] mantissa bits replaced by `id` (`dust_emit.comp`)
+#[inline]
+pub fn pack_child_id(dbeta: f32, id: u32) -> f32 {
+  f32::from_bits((dbeta.to_bits() & !CHILD_ID_MASK) | (id & CHILD_ID_MASK))
+}
+
+/// 3 independent N(0,1) from the hash chain started at `h0` (5 hashes); returns the last hash
+#[inline]
+fn gauss3(h0: u32) -> ([f32; 3], u32) {
+  let h1 = pcg(h0);
+  let h2 = pcg(h1);
+  let h3 = pcg(h2);
+  let h4 = pcg(h3);
+  (
+    [
+      gauss(u01(h0), u01(h1)),
+      gauss(u01(h1 ^ 0x68E3_1DA4), u01(h2)),
+      gauss(u01(h3), u01(h4)),
+    ],
+    h4,
+  )
+}
+
+/// Child `child` of the cluster with child-pattern id `id` ([`child_id`]): its deterministic
+/// offset from the cluster centre (`dust.vert` / `dust_lod.comp`, `dust_child_offset`):
+///
+/// `spread·(cos θ·N3 + sin θ·N3') + ½·Δβ·g·age²·(anti-sun)`, `θ = ρ·(π/2)·log₂(1 + age/τ)`
+///
+/// with two independent normals and a per-child rate `ρ ∈ [0.5, 1.5)`: the per-axis variance stays
+/// `spread²` at any age, but the children move relative to each other as the cluster ages (a pure
+/// `spread·N3` cloud only scales: the same blob zoomed). Child identity depends only on
+/// `(id, child)`, so children `0..k` keep their place when the LOD changes `k`.
+pub fn child_offset(
+  id: u32,
+  child: u32,
+  spread: f32,
+  dbeta_half: f32,
+  age: f32,
+  anti_sun_g: [f32; 4],
+) -> [f32; 3] {
+  let (n3, h4) = gauss3(pcg(
+    (id & CHILD_ID_MASK)
+      .wrapping_mul(MAX_CHILDREN_PER_CLUSTER)
+      .wrapping_add(child)
+      .wrapping_add(0x9E37_79B9),
+  ));
+  let h5 = pcg(h4);
+  let dbeta = absf(dbeta_half) * (2.0 * u01(h5) - 1.0);
+  let (m3, m4) = gauss3(pcg(h5 ^ 0x5BD1_E995));
+  let rate = 0.5 + u01(pcg(m4));
+  let theta = rate
+    * (0.5 * core::f32::consts::PI * core::f32::consts::LOG2_E)
+    * <f32 as FloatLike>::ln(1.0 + age.max(0.0) * (1.0 / CHILD_RESHAPE_TAU_S));
+  let (c, s_th) = (
+    <f32 as FloatLike>::cos(theta),
+    <f32 as FloatLike>::sin(theta),
+  );
+  let s = 0.5 * dbeta * anti_sun_g[3] * age * age;
+  [
+    spread * (c * n3[0] + s_th * m3[0]) + s * anti_sun_g[0],
+    spread * (c * n3[1] + s_th * m3[1]) + s * anti_sun_g[1],
+    spread * (c * n3[2] + s_th * m3[2]) + s * anti_sun_g[2],
+  ]
 }
 
 /// Mirror of the `dust.vert` splat peak: the child's cross-section spread over its **drawn** area,
@@ -420,8 +968,9 @@ pub struct DustCluster {
   pub v0_hi_beta: [f32; 4],
   /// velocity low part, `w` = super-particle mass (g)
   pub v0_lo_mass: [f32; 4],
-  /// `x` child velocity dispersion σ_v (m/s), `y` grain radius (µm), `z` cross-section per gram
-  /// (m²/g), `w` child β half-spread
+  /// `x` lateral velocity dispersion of the stream σ_lat (m/s), `y` grain radius (µm),
+  /// `z` cross-section per gram (m²/g), `w` child β half-spread, low [`CHILD_ID_BITS`] =
+  /// child-pattern id ([`child_id`]), sign bit = [`STREAM_BREAK_BIT`]
   pub misc: [f32; 4],
 }
 const _: () = assert!(core::mem::size_of::<DustCluster>() == 80);
@@ -455,15 +1004,17 @@ impl DustCluster {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct DustRenderCluster {
-  /// particle-system local position (m), `w` cluster spread radius (m)
+  /// particle-system local position (m), `w` lateral spread σ_lat·age (m)
   pub pos_size: [f32; 4],
-  /// `x` age (s), `y` ring slot (u32 bits, stable child seed), `z` child β half-spread,
-  /// `w` flux (cross-section m², 0 = culled)
+  /// `x` age (s), `y` u32 bits: ring slot, stream shift, live flag ([`render_word`]), `z` child β
+  /// half-spread whose low [`CHILD_ID_BITS`] carry the stable child-pattern id ([`child_id`]) and
+  /// whose sign bit is [`STREAM_BREAK_BIT`], `w` flux (cross-section m², 0 = culled; per child
+  /// after the LOD)
   pub age_id_dbeta_flux: [f32; 4],
 }
 const _: () = assert!(core::mem::size_of::<DustRenderCluster>() == 32);
 
-/// Emission batch descriptor (one per emission per system). 192 bytes.
+/// Emission batch descriptor (one per emission per system). 208 bytes.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct DustBatch {
@@ -487,7 +1038,8 @@ pub struct DustBatch {
   pub size_params: [f32; 4],
   /// `x` v_ref (m/s at s_ref), `y` relative speed std, `z` s_ref (µm), `w` β·s constant (µm)
   pub vel_params: [f32; 4],
-  /// `x` batch mass (g), `y` density (g/cm³), `z` per-batch low-discrepancy shift, `w` 0
+  /// `x` batch mass (g), `y` density (g/cm³), `z` stream key ([`stream_key`], u01 with 24 bits),
+  /// `w` stream shift + break flag ([`batch_streams`])
   pub mass_params: [f32; 4],
   pub first_index: u32,
   pub count: u32,
@@ -497,8 +1049,11 @@ pub struct DustBatch {
   /// `t_start` (`[−π, π)`), `y` lit half arc `ψ0` (`(0, π)`), `z` total lit phase (rad), `w` mode
   /// ([`LIT_MODE_ALWAYS`] or [`LIT_MODE_PERIODIC`]). Emission times are spread over lit time only.
   pub lit: [f32; 4],
+  /// `xyz` jet site offset from the nucleus centre (m, particle-system frame), `w` unused: the
+  /// site turns with the nucleus over the window, `comet_r_t` is its position at `t_start`
+  pub site_offset: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<DustBatch>() == 192);
+const _: () = assert!(core::mem::size_of::<DustBatch>() == 208);
 
 impl DustBatch {
   /// stores the jet state (f64 on the host) as df64
@@ -520,14 +1075,18 @@ impl DustBatch {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct DustFrame {
-  /// particle-system heliocentric position (m) at `t_now`, `w` = `t_now` (s); hi
+  /// render anchor: a fixed heliocentric point (m), `w` = `t_now` (s); hi. Particles are evaluated
+  /// relative to it (`r − A`, df64) and drawn at `A − eye` (f64, host): their drawn position is
+  /// `r − eye` whatever the anchor, which only buys f32 precision near it. It is NOT the comet's
+  /// current position and nothing of the comet entity follows it (see `DustDrawState::anchor_m`).
   pub ps_r_t_hi: [f32; 4],
   /// ... low part
   pub ps_r_t_lo: [f32; 4],
   /// root → particle-system rotation quaternion (xyzw), i.e. the conjugate of the entity rotation
   pub rot_inv: [f32; 4],
   /// age band: `x` max age (s, the TTL), `y` min age (s, 0 for the youngest tier), `z` 1 = no fade
-  /// at the max age (an older tier takes over), `w` 0
+  /// at the max age (an older tier takes over), `w` the tier's stream shift (written to the render
+  /// clusters, [`render_word`])
   pub ttl: [f32; 4],
 }
 const _: () = assert!(core::mem::size_of::<DustFrame>() == 64);
@@ -541,6 +1100,30 @@ impl DustFrame {
       rot_inv,
       ttl: [ttl_s, 0.0, 0.0, 0.0],
     }
+  }
+  /// the same anchor and band evaluated at another time (`t_now`)
+  pub fn at_time(mut self, t_now_s: f64) -> Self {
+    let t = Df::from_f64(t_now_s);
+    self.ps_r_t_hi[3] = t.hi;
+    self.ps_r_t_lo[3] = t.lo;
+    self
+  }
+  /// the anchor (df64 hi + lo), heliocentric metres
+  pub fn anchor_m(&self) -> V3 {
+    [
+      self.ps_r_t_hi[0] as f64 + self.ps_r_t_lo[0] as f64,
+      self.ps_r_t_hi[1] as f64 + self.ps_r_t_lo[1] as f64,
+      self.ps_r_t_hi[2] as f64 + self.ps_r_t_lo[2] as f64,
+    ]
+  }
+  /// evaluation time (s)
+  pub fn t_now_s(&self) -> f64 {
+    self.ps_r_t_hi[3] as f64 + self.ps_r_t_lo[3] as f64
+  }
+  /// the tier has `2^shift` streams per time sample ([`DustHostState::stream_shift`])
+  pub fn with_streams(mut self, shift: u32) -> Self {
+    self.ttl[3] = shift as f32;
+    self
   }
   /// draws only ages in `[min_age_s, ttl]`; `fade` at the max age only when no older tier follows
   pub fn with_band(mut self, min_age_s: f32, fade: bool) -> Self {
@@ -579,21 +1162,584 @@ const _: () = assert!(core::mem::size_of::<DustPropagatePushConstants>() == 96);
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct DustDrawPushConstants {
-  /// `DustRenderBuffer` (compact, index = live-range offset)
+  /// `DustRenderBuffer` (compact, index = live-range offset); flux is per child after the LOD
   pub render: u64,
-  /// render-time children per cluster, see [`render_children`]
-  pub children: u32,
-  pub live_count: u32,
+  /// the tier's LOD header: its words [`LOD_HEADER_LIST`] hold the instance list
+  /// (`cluster | child << LOD_CLUSTER_BITS`), [`LOD_HEADER_TIME`] / [`LOD_HEADER_FLAGS`] the view aids
+  pub lod_header: u64,
   /// particle-system local metres → clip
   pub mvp: [f32; 16],
-  /// rgb stream color, a = flux scale
+  /// rgb stream color, a = exposure (gain / (reference optical depth · white point))
   pub color: [f32; 4],
   /// unit anti-sun direction (ps frame), w = solar gravity at the comet (m/s²)
   pub anti_sun_g: [f32; 4],
-  /// x units per metre, y P00, z P11, w 2 / viewport height
+  /// x units per metre, y P00, z P11, w ±2 / viewport height (negative: 8-bit target, the
+  /// fragment shader rounds stochastically, see [`stochastic_round_8bit`])
   pub params: [f32; 4],
 }
 const _: () = assert!(core::mem::size_of::<DustDrawPushConstants>() == 128);
+
+/// `dust_lod.comp` push constants. 128 bytes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct DustLodPushConstants {
+  /// `DustRenderBuffer` of the tier (flux rewritten per child)
+  pub render: u64,
+  /// the tier's LOD header ([`LOD_HEADER_WORDS`] u32)
+  pub header: u64,
+  /// the system's white-point tile grid ([`DUST_TILE_COUNT`] u32, fixed point)
+  pub tiles: u64,
+  /// the tier's instance list (`budget` u32)
+  pub list: u64,
+  pub live_count: u32,
+  pub budget: u32,
+  /// [`LOD_DEMAND_PASS`] for the demand pass; otherwise the largest budget share allowed (1 in
+  /// production; the pass computes this frame's share from the demand, [`lod_lambda_from`])
+  pub lambda: f32,
+  /// tile counts per unit of exposure-scaled cross-section density: exposure / tile unit
+  pub tile_scale: f32,
+  /// particle-system local metres → clip
+  pub mvp: [f32; 16],
+  /// x units per metre, y P00, z P11, w 2 / viewport height
+  pub params: [f32; 4],
+}
+const _: () = assert!(core::mem::size_of::<DustLodPushConstants>() == 128);
+
+/// What the LOD pass of one tier produced (CPU mirror of `dust_lod.comp`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct DustLodResult {
+  /// instances written (≤ budget)
+  pub instances: u32,
+  /// Σ min(⌈want⌉, TRACER_CHILD) of the on-screen clusters (demand pass, statistics)
+  pub demand: u32,
+  /// clusters on screen (demand pass)
+  pub on_screen: u32,
+  /// Σ children attempted, including the clusters dropped at the budget
+  pub attempted: u32,
+  /// this frame's budget share ([`lod_lambda_from`])
+  pub lambda: f32,
+}
+
+/// A cluster's demand: `⌈want⌉`, at most 2²⁰ (the histogram's last bin)
+#[inline]
+pub fn lod_demand(want: f32) -> u32 {
+  (want.ceil() as u32).clamp(1, 1 << 20)
+}
+
+/// Saturating fixed-point tile increment (`dust_lod.comp`): `v` counts, rounded, capped at 1e8 per
+/// add so a handful of extreme samples cannot wrap the u32 sum.
+#[inline]
+pub fn tile_counts(v: f32) -> u32 {
+  if !(v > 0.0) {
+    return 0;
+  }
+  (v + 0.5).min(1e8) as u32
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Streaklines. Mirror of `dust_common.glsl` `dust_streak_*`
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `DustRenderCluster::age_id_dbeta_flux.y` of a live cluster (see [`RENDER_SLOT_MASK`])
+#[inline]
+pub fn render_word(slot: u32, shift: u32) -> u32 {
+  (slot & RENDER_SLOT_MASK) | ((shift & 0xF) << RENDER_SHIFT_BIT0) | RENDER_LIVE_BIT
+}
+/// ring slot of a render cluster's `y` word
+#[inline]
+pub fn render_slot(y: f32) -> u32 {
+  y.to_bits() & RENDER_SLOT_MASK
+}
+/// evaluated in the tier's age band (not culled by the propagate)
+#[inline]
+pub fn render_live(y: f32) -> bool {
+  y.to_bits() & RENDER_LIVE_BIT != 0
+}
+/// stream shift of the tier (`S = 2^shift` streams)
+#[inline]
+pub fn render_stream_shift(y: f32) -> u32 {
+  (y.to_bits() >> RENDER_SHIFT_BIT0) & 0xF
+}
+/// the stream is interrupted before this cluster ([`STREAM_BREAK_BIT`] of the β half-spread field)
+#[inline]
+pub fn stream_break(dbeta_field: f32) -> bool {
+  dbeta_field.to_bits() & STREAM_BREAK_BIT != 0
+}
+
+/// Stream predecessor of render cluster `r` of a tier: `r − S`, the same stream's previous time
+/// sample (older). `None` for the first `S` clusters, after a stream break, or when the predecessor
+/// is outside the tier's age band. Mirror of `dust_streak_pred`.
+pub fn streak_pred(render: &[DustRenderCluster], r: usize) -> Option<usize> {
+  let c = &render[r];
+  let n = 1usize << render_stream_shift(c.age_id_dbeta_flux[1]);
+  if r < n || stream_break(c.age_id_dbeta_flux[2]) {
+    return None;
+  }
+  render_live(render[r - n].age_id_dbeta_flux[1]).then_some(r - n)
+}
+
+/// `mvp · (p, 1)` (column major)
+#[inline]
+fn mvp_mul(mvp: &[f32; 16], p: [f32; 3]) -> [f32; 4] {
+  let mut c = [0.0f32; 4];
+  for (r, cr) in c.iter_mut().enumerate() {
+    *cr = mvp[r] * p[0] + mvp[4 + r] * p[1] + mvp[8 + r] * p[2] + mvp[12 + r];
+  }
+  c
+}
+
+/// One Liang–Barsky plane `f0 + t·fd ≥ 0` on `[a, b]`; false when nothing is left (`dust_lb`).
+#[inline]
+fn lb_clip(f0: f32, fd: f32, a: &mut f32, b: &mut f32) -> bool {
+  if fd == 0.0 {
+    return f0 >= 0.0;
+  }
+  let t = -f0 / fd;
+  if fd > 0.0 {
+    if t > *a {
+      *a = t;
+    }
+  } else if t < *b {
+    *b = t;
+  }
+  *a <= *b
+}
+
+/// `[a, b] ⊂ [0, 1]` snapped outwards to a power-of-two grid of step in `(len/16, len/8]`: the dots
+/// of a streak crossing the view edge stay put while the view moves within a grid cell, and
+/// re-sample when it crosses one (`dust_snap_range`). Exact power-of-two arithmetic (bit ops for
+/// `⌈log₂ len⌉`), bit-identical on the GPU.
+pub fn snap_range(a: f32, b: f32) -> (f32, f32) {
+  let len = (b - a).max(1e-30);
+  let bits = len.to_bits();
+  let ceil_log2 = ((bits >> 23) & 0xFF) as i32 - 127 + ((bits & 0x7F_FFFF) != 0) as i32;
+  let e = (ceil_log2 - 3).clamp(-126, 0);
+  let step = f32::from_bits(((e + 127) as u32) << 23);
+  let floor = <f32 as FloatLike>::floor;
+  (
+    (floor(a / step) * step).max(0.0),
+    (-floor(-b / step) * step).min(1.0),
+  )
+}
+
+/// Visible part of a streak (see [`streak_clip`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StreakClip {
+  /// parameter range on `p + t·(q − p)`, snapped ([`snap_range`])
+  pub t0: f32,
+  pub t1: f32,
+  /// on-screen length of the visible part (unsnapped), pixels
+  pub len_px: f32,
+  /// lateral 1σ width at its nearest point, pixels (at most the viewport height)
+  pub width_px: f32,
+}
+
+/// Clips the streak `p → q` (particle-system metres, lateral σ `sp` at `p`, `sq` at `q`) to the
+/// view: Liang–Barsky in homogeneous clip space against `w > 0` and `|x|, |y| ≤ (1 + m)·w`, margin
+/// `m` = [`STREAK_MARGIN`] + 3σ (ndc, at the nearest visible point, ≤ [`STREAK_MARGIN_MAX`]).
+/// `params` = (units per metre, P00, P11, ±2 / viewport height). `None`: nothing visible. Mirror of
+/// `dust_streak_clip`.
+pub fn streak_clip(
+  mvp: &[f32; 16],
+  p: [f32; 3],
+  q: [f32; 3],
+  sp: f32,
+  sq: f32,
+  params: [f32; 4],
+) -> Option<StreakClip> {
+  let [units, p00, p11, pxn] = params;
+  let pxn = pxn.abs();
+  if !(p00 > 0.0) || !(p11 > 0.0) || !(pxn > 0.0) {
+    return None;
+  }
+  let c0 = mvp_mul(mvp, p);
+  let c1 = mvp_mul(mvp, q);
+  let d = [c1[0] - c0[0], c1[1] - c0[1], c1[2] - c0[2], c1[3] - c0[3]];
+  let (mut a, mut b) = (0.0f32, 1.0f32);
+  let eps = 1e-6 * (c0[3].abs() + c1[3].abs());
+  if !lb_clip(c0[3] - eps, d[3], &mut a, &mut b) {
+    return None;
+  }
+  let w_at = |t: f32| c0[3] + t * d[3];
+  let w_near = w_at(a).min(w_at(b));
+  if !(w_near > 0.0) {
+    return None;
+  }
+  let sigma = sp.max(sq) * units;
+  let m = 1.0 + (STREAK_MARGIN + 3.0 * sigma * p00.max(p11) / w_near).min(STREAK_MARGIN_MAX);
+  for k in 0..2 {
+    if !lb_clip(m * c0[3] - c0[k], m * d[3] - d[k], &mut a, &mut b)
+      || !lb_clip(m * c0[3] + c0[k], m * d[3] + d[k], &mut a, &mut b)
+    {
+      return None;
+    }
+  }
+  let (wa, wb) = (w_at(a), w_at(b));
+  let px_x = pxn * (p00 / p11);
+  let dx = (c0[0] + b * d[0]) / wb - (c0[0] + a * d[0]) / wa;
+  let dy = (c0[1] + b * d[1]) / wb - (c0[1] + a * d[1]) / wa;
+  let len_px = <f32 as FloatLike>::sqrt((dx / px_x) * (dx / px_x) + (dy / pxn) * (dy / pxn));
+  let width_px = (sigma * p11 / wa.min(wb) / pxn).min(2.0 / pxn);
+  let (t0, t1) = snap_range(a, b);
+  Some(StreakClip {
+    t0,
+    t1,
+    len_px,
+    width_px,
+  })
+}
+
+/// golden-ratio conjugate: dot `c` of a streak sits at `fract(u_id + c·φ⁻¹)` of its visible range,
+/// so any prefix `0..k` is evenly spread and the dots keep their place when the LOD changes `k`
+pub const STREAK_PHI_INV: f32 = 0.618_034;
+
+/// Parameter `t0 + (t1 − t0)·fract(u_id + c·φ⁻¹)` of streak dot `child` (`dust_streak_dot_t`)
+#[inline]
+pub fn streak_dot_t(t0: f32, t1: f32, id: u32, child: u32) -> f32 {
+  let x = u01(pcg((id & CHILD_ID_MASK) ^ 0x1B87_3593)) + child as f32 * STREAK_PHI_INV;
+  t0 + (t1 - t0) * (x - <f32 as FloatLike>::floor(x))
+}
+
+/// Unit vectors `(e1, e2)` completing unit `d` to an orthonormal basis (`dust_ortho`)
+#[inline]
+fn ortho_basis(d: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+  let up = if absf(d[2]) < 0.999 {
+    [0.0, 0.0, 1.0]
+  } else {
+    [1.0, 0.0, 0.0]
+  };
+  let e1 = normalize3(cross3(up, d));
+  (e1, cross3(d, e1))
+}
+
+/// Child `child` of the streak from `p` (this cluster, age `ap`, lateral σ `sp`) to `q` (its stream
+/// predecessor) on the visible range `[t0, t1]` (`dust_streak_child`):
+///
+/// `lerp(p, q, t) + σ(t)·(N·e1 + N'·e2) + ½·Δβ·g·age(t)²·(anti-sun)`, `t = t0 + (t1 − t0)·u_c`
+///
+/// with `u_c = fract(u_id + c·φ⁻¹)` and `e1, e2 ⟂ q − p`: the dust emitted between the two time
+/// samples of the stream, spread laterally by the stream's own dispersion. Stable per `(id, child)`
+/// for a given range. `dbeta_field` is the raw β half-spread field (id and break bits ignored).
+#[allow(clippy::too_many_arguments)]
+pub fn streak_child(
+  p: [f32; 3],
+  q: [f32; 3],
+  sp: f32,
+  sq: f32,
+  ap: f32,
+  aq: f32,
+  t0: f32,
+  t1: f32,
+  id: u32,
+  child: u32,
+  dbeta_field: f32,
+  anti_sun_g: [f32; 4],
+) -> [f32; 3] {
+  let id = id & CHILD_ID_MASK;
+  let t = streak_dot_t(t0, t1, id, child);
+  let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+  let (e1, e2) = ortho_basis(normalize3(d));
+  let h0 = pcg(id.wrapping_mul(MAX_CHILDREN_PER_CLUSTER).wrapping_add(child) ^ 0x7F4A_7C15);
+  let h1 = pcg(h0);
+  let h2 = pcg(h1);
+  let h3 = pcg(h2);
+  let h4 = pcg(h3);
+  let (n1, n2) = (gauss(u01(h0), u01(h1)), gauss(u01(h2), u01(h3)));
+  let sigma = sp + (sq - sp) * t;
+  let age = ap + (aq - ap) * t;
+  let dbeta = absf(dbeta_field) * (2.0 * u01(h4) - 1.0);
+  let s = 0.5 * dbeta * anti_sun_g[3] * age * age;
+  [0, 1, 2].map(|k| p[k] + d[k] * t + sigma * (n1 * e1[k] + n2 * e2[k]) + s * anti_sun_g[k])
+}
+
+/// How the LOD draws one cluster (`dust_lod.comp`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LodPlan {
+  /// children wanted at λ = 1 and drawn
+  pub want: f32,
+  pub k: u32,
+  /// cross-section drawn: the flux times the visible fraction of a streak
+  pub flux_in: f32,
+  /// `(predecessor render index, visible part)`; `None`: a point spread
+  pub streak: Option<(usize, StreakClip)>,
+}
+
+/// LOD decision for render cluster `i` (`flux > 0`): a streak towards its stream predecessor
+/// ([`streak_pred`], clipped to the view, [`streak_want`] dots of the visible part) or, without
+/// one, a point spread ([`lod_cluster_children`]). `None`: off screen. Mirror of `dust_lod.comp`.
+pub fn lod_plan(
+  render: &[DustRenderCluster],
+  i: usize,
+  pc: &DustLodPushConstants,
+  sun_g: f32,
+) -> Option<LodPlan> {
+  let rc = &render[i];
+  let flux = rc.age_id_dbeta_flux[3];
+  let pos = [rc.pos_size[0], rc.pos_size[1], rc.pos_size[2]];
+  if let Some(j) = streak_pred(render, i) {
+    let pr = &render[j];
+    let q = [pr.pos_size[0], pr.pos_size[1], pr.pos_size[2]];
+    let (ep, eq) = (dust_extent(rc, sun_g), dust_extent(pr, sun_g));
+    let c = streak_clip(&pc.mvp, pos, q, ep, eq, pc.params)?;
+    let want = streak_want(c.len_px, c.width_px);
+    return Some(LodPlan {
+      want,
+      k: lod_children(want, pc.lambda),
+      flux_in: flux * (c.t1 - c.t0),
+      streak: Some((j, c)),
+    });
+  }
+  let spread = dust_extent(rc, sun_g);
+  let clip = mvp_mul(&pc.mvp, pos);
+  let k = lod_cluster_children(clip, spread, pc)?;
+  let [units, _, p11, px_to_ndc_y] = pc.params;
+  Some(LodPlan {
+    want: lod_want(spread * units * p11 / clip[3] / px_to_ndc_y),
+    k,
+    flux_in: flux,
+    streak: None,
+  })
+}
+
+/// Footprint extent (m) of a render cluster's dust for the LOD: its lateral stream spread or, when
+/// larger, the β spread of its size stratum `½·Δβ·g·age²` (anti-sunward) that its children are
+/// scattered over. For old dust the β spread dominates: counted as the spread alone, the outer tail
+/// asked for one dot per cluster and showed isolated dots (`far_1.rdc`) instead of the fan.
+/// `sun_g`: solar gravity at the jet (`DustDrawState::anti_sun_g[3]`). Mirror of `dust_extent`.
+pub fn dust_extent(rc: &DustRenderCluster, sun_g: f32) -> f32 {
+  let [age, _, dbeta, _] = rc.age_id_dbeta_flux;
+  rc.pos_size[3].max(0.5 * absf(dbeta) * sun_g * age * age)
+}
+
+/// One drawn child of a render cluster (mirror of `dust.vert`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChildSample {
+  /// particle-system metres
+  pub pos: [f32; 3],
+  /// age of the dust there (s): interpolated along a streak ([`flow_factor`] input)
+  pub age: f32,
+  /// the cluster's tracer dot ([`TRACER_CHILD`]): drawn at [`TRACER_PX`], peak [`TRACER_LEVEL`]
+  pub tracer: bool,
+  /// drawn radius (px): [`splat_radius_px`] of the cluster's `want` and `k` at the frame's λ
+  pub r_px: f32,
+}
+
+/// Child `child` of render cluster `i` (mirror of `dust.vert`): the tracer dot at the cluster's
+/// exact position, a dot on its streak ([`streak_child`], the visible range rebuilt from the same
+/// `mvp`) or around it ([`child_offset`]); its radius from `want` and `k` at the frame's `lambda`
+/// (the LOD's [`DustLodResult::lambda`]).
+pub fn child_sample(
+  render: &[DustRenderCluster],
+  i: usize,
+  child: u32,
+  mvp: &[f32; 16],
+  params: [f32; 4],
+  anti_sun_g: [f32; 4],
+  lambda: f32,
+) -> ChildSample {
+  let radius = |want: f32| splat_radius_px(want, lod_children(want, lambda));
+  let rc = &render[i];
+  let pos = [rc.pos_size[0], rc.pos_size[1], rc.pos_size[2]];
+  let [age, _, dbeta, _] = rc.age_id_dbeta_flux;
+  if child == TRACER_CHILD {
+    return ChildSample {
+      pos,
+      age,
+      tracer: true,
+      r_px: TRACER_PX,
+    };
+  }
+  let id = child_id(dbeta);
+  if let Some(j) = streak_pred(render, i) {
+    let pr = &render[j];
+    let q = [pr.pos_size[0], pr.pos_size[1], pr.pos_size[2]];
+    // the LOD saw it: a disagreement can only come from rounding at the view edge
+    let (ep, eq) = (
+      dust_extent(rc, anti_sun_g[3]),
+      dust_extent(pr, anti_sun_g[3]),
+    );
+    let (t0, t1, want) = streak_clip(mvp, pos, q, ep, eq, params)
+      .map(|c| (c.t0, c.t1, streak_want(c.len_px, c.width_px)))
+      .unwrap_or((0.0, 1.0, 1.0));
+    let (sp, sq, aq) = (rc.pos_size[3], pr.pos_size[3], pr.age_id_dbeta_flux[0]);
+    let t = streak_dot_t(t0, t1, id, child);
+    return ChildSample {
+      pos: streak_child(
+        pos, q, sp, sq, age, aq, t0, t1, id, child, dbeta, anti_sun_g,
+      ),
+      age: age + (aq - age) * t,
+      tracer: false,
+      r_px: radius(want),
+    };
+  }
+  let spread = rc.pos_size[3];
+  let o = child_offset(id, child, spread, dbeta, age, anti_sun_g);
+  let w = mvp_mul(mvp, pos)[3];
+  let [units, _, p11, pxn] = params;
+  let want = if w > 0.0 && pxn != 0.0 {
+    lod_want(dust_extent(rc, anti_sun_g[3]) * units * p11 / w / pxn.abs())
+  } else {
+    1.0
+  };
+  ChildSample {
+    pos: [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]],
+    age,
+    tracer: false,
+    r_px: radius(want),
+  }
+}
+
+/// Position of child `child` of render cluster `i` ([`child_sample`])
+pub fn child_position(
+  render: &[DustRenderCluster],
+  i: usize,
+  child: u32,
+  mvp: &[f32; 16],
+  params: [f32; 4],
+  anti_sun_g: [f32; 4],
+) -> [f32; 3] {
+  child_sample(render, i, child, mvp, params, anti_sun_g, 1.0).pos
+}
+
+/// CPU mirror of `dust_lod.comp` for one tier (also the CPU particle mode path): picks the
+/// children of every on-screen cluster of `render` ([`lod_plan`]), rewrites its flux per child
+/// (0 when dropped or off screen), appends `cluster | child << LOD_CLUSTER_BITS` to `list` up to
+/// `budget` and scatters [`DUST_TILE_SAMPLES`] child samples of each cluster into `tiles`. The LOD
+/// rewrites only the flux: a cluster reads its predecessor's position, spread, age and `y` word.
+/// With [`DUST_VIEW_TRACERS`] in `flags`, a drawn tracer cluster ([`is_tracer`]) also gets the
+/// instance [`TRACER_CHILD`] (one more entry of its reservation; not a tile sample).
+pub fn lod_evaluate(
+  render: &mut [DustRenderCluster],
+  pc: &DustLodPushConstants,
+  flags: u32,
+  sun_g: f32,
+  tiles: &mut [u32],
+  list: &mut alloc::vec::Vec<u32>,
+) -> DustLodResult {
+  let mut out = DustLodResult::default();
+  let [units, p00, p11, _] = pc.params;
+  let live = (pc.live_count as usize).min(render.len());
+  // pass A: this frame's demand, then the share that fits the budget (no feedback lag)
+  let mut hist = [0u32; 2 * LOD_HIST_BINS];
+  for i in 0..live {
+    if !(render[i].age_id_dbeta_flux[3] > 0.0) {
+      continue;
+    }
+    if let Some(plan) = lod_plan(render, i, pc, sun_g) {
+      let d = lod_demand(plan.want);
+      lod_hist_push(&mut hist, d);
+      out.demand = out.demand.saturating_add(d.min(TRACER_CHILD));
+      out.on_screen += 1;
+    }
+  }
+  out.lambda = lod_lambda_from(pc.budget, &hist, out.on_screen, pc.lambda);
+  let pc = &DustLodPushConstants {
+    lambda: out.lambda,
+    ..*pc
+  };
+  // pass B
+  for i in 0..live {
+    let flux = render[i].age_id_dbeta_flux[3];
+    if !(flux > 0.0) {
+      continue;
+    }
+    let Some(plan) = lod_plan(render, i, pc, sun_g) else {
+      render[i].age_id_dbeta_flux[3] = 0.0;
+      continue;
+    };
+    let k = plan.k;
+    let tracer =
+      flags & DUST_VIEW_TRACERS != 0 && is_tracer(child_id(render[i].age_id_dbeta_flux[2]));
+    let n = k + tracer as u32;
+    out.attempted = out.attempted.saturating_add(n);
+    if out.instances as u64 + n as u64 > pc.budget as u64 {
+      render[i].age_id_dbeta_flux[3] = 0.0;
+    } else {
+      for c in 0..k {
+        list.push(i as u32 | (c << LOD_CLUSTER_BITS));
+      }
+      if tracer {
+        list.push(i as u32 | (TRACER_CHILD << LOD_CLUSTER_BITS));
+      }
+      out.instances += n;
+      render[i].age_id_dbeta_flux[3] = plan.flux_in / k as f32;
+    }
+    // white point: the cluster's cross-section over the tiles its first children land in
+    // (isotropic part only: the shader has no room for the anti-sun direction)
+    let rc = render[i];
+    let pos = [rc.pos_size[0], rc.pos_size[1], rc.pos_size[2]];
+    let [age, _, dbeta, _] = rc.age_id_dbeta_flux;
+    let id = child_id(dbeta);
+    for sidx in 0..DUST_TILE_SAMPLES {
+      let p = match plan.streak {
+        Some((j, c)) => {
+          let pr = render[j];
+          let q = [pr.pos_size[0], pr.pos_size[1], pr.pos_size[2]];
+          let (sp, sq, aq) = (rc.pos_size[3], pr.pos_size[3], pr.age_id_dbeta_flux[0]);
+          streak_child(pos, q, sp, sq, age, aq, c.t0, c.t1, id, sidx, 0.0, [0.0; 4])
+        }
+        None => {
+          let o = child_offset(id, sidx, rc.pos_size[3], 0.0, age, [0.0; 4]);
+          [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]
+        }
+      };
+      if let Some((t, v)) = tile_sample(
+        mvp_mul(&pc.mvp, p),
+        plan.flux_in,
+        units,
+        p00,
+        p11,
+        pc.tile_scale,
+      ) {
+        tiles[t] = tiles[t].wrapping_add(tile_counts(v));
+      }
+    }
+  }
+  out
+}
+
+/// Children of a cluster at clip position `clip` (`None` = off screen or behind the camera):
+/// on screen within a 3·spread margin. Mirror of `dust_lod.comp`.
+pub fn lod_cluster_children(clip: [f32; 4], spread: f32, pc: &DustLodPushConstants) -> Option<u32> {
+  let [units, p00, p11, px_to_ndc_y] = pc.params;
+  if !(clip[3] > 0.0) || !(p00 > 0.0) || !(p11 > 0.0) {
+    return None;
+  }
+  let su = spread * units / clip[3];
+  let (mx, my) = (3.0 * su * p00, 3.0 * su * p11);
+  let (nx, ny) = (clip[0] / clip[3], clip[1] / clip[3]);
+  if !(nx.abs() <= 1.0 + mx && ny.abs() <= 1.0 + my) {
+    return None;
+  }
+  let spread_px = su * p11 / px_to_ndc_y;
+  Some(lod_children(lod_want(spread_px), pc.lambda))
+}
+
+/// Tile of a child sample at clip `q` carrying `flux / DUST_TILE_SAMPLES` m², and its counts:
+/// cross-section over the tile area at the sample's depth, times `tile_scale`.
+pub fn tile_sample(
+  q: [f32; 4],
+  flux: f32,
+  units: f32,
+  p00: f32,
+  p11: f32,
+  tile_scale: f32,
+) -> Option<(usize, f32)> {
+  if !(q[3] > 0.0) {
+    return None;
+  }
+  let (nx, ny) = (q[0] / q[3], q[1] / q[3]);
+  let tx = ((nx * 0.5 + 0.5) * DUST_TILES_X as f32).floor();
+  let ty = ((ny * 0.5 + 0.5) * DUST_TILES_Y as f32).floor();
+  if !(tx >= 0.0 && tx < DUST_TILES_X as f32 && ty >= 0.0 && ty < DUST_TILES_Y as f32) {
+    return None;
+  }
+  // tile area in m²: (2/TX)(2/TY) ndc², at w/(P·units) metres per ndc unit on each axis
+  let m_per_ndc2 = (q[3] * q[3]) / (p00 * p11 * units * units);
+  let area = 4.0 / DUST_TILE_COUNT as f32 * m_per_ndc2;
+  let v = tile_scale * flux / DUST_TILE_SAMPLES as f32 / area.max(1e-30);
+  Some((ty as usize * DUST_TILES_X as usize + tx as usize, v))
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Deterministic RNG and sampling (bit-identical u32 ops on GPU)
@@ -735,13 +1881,183 @@ fn gauss(u1: f32, u2: f32) -> f32 {
   r * <f32 as FloatLike>::cos(2.0 * core::f32::consts::PI * u2)
 }
 
-/// `fract(j·φ⁻¹ + shift)` in 32-bit fixed point: full 24-bit resolution for any `j` and
-/// bit-identical on GPU (an f32 `j * 0.618 + shift` loses resolution for large `j`, and drivers
-/// may fuse it into an FMA). `shift ∈ [0, 1)` with 24-bit resolution.
+/// Hashed permutation of `[0, n)` keyed by `key` (Kensler, "Correlated Multi-Jittered Sampling",
+/// 2013): a bijection of the next power of two built from invertible u32 steps (odd multiplies,
+/// xor-shifts restricted to the mask), cycle-walked into `[0, n)` (< 2 rounds on average).
+/// Bit-identical on GPU (`dust_permute`). `n ≥ 1`.
 #[inline]
-pub fn lattice_u01(j: u32, shift: f32) -> f32 {
-  let shift_u = ((shift * 16_777_216.0) as u32) << 8;
-  u01(j.wrapping_mul(0x9E37_79B9).wrapping_add(shift_u))
+pub fn permute_index(i: u32, n: u32, key: u32) -> u32 {
+  let mut w = n.max(1) - 1;
+  w |= w >> 1;
+  w |= w >> 2;
+  w |= w >> 4;
+  w |= w >> 8;
+  w |= w >> 16;
+  let p = key;
+  let mut i = i;
+  loop {
+    i ^= p;
+    i = i.wrapping_mul(0xE170_893D);
+    i ^= p >> 16;
+    i ^= (i & w) >> 4;
+    i ^= p >> 8;
+    i = i.wrapping_mul(0x0929_EB3F);
+    i ^= p >> 23;
+    i ^= (i & w) >> 1;
+    i = i.wrapping_mul(1 | p >> 27);
+    i = i.wrapping_mul(0x6935_FA69);
+    i ^= (i & w) >> 11;
+    i = i.wrapping_mul(0x74DC_B303);
+    i ^= (i & w) >> 2;
+    i = i.wrapping_mul(0x9E50_1CC3);
+    i ^= (i & w) >> 2;
+    i = i.wrapping_mul(0xC860_A3DF);
+    i &= w;
+    i ^= i >> 5;
+    if i < n.max(1) {
+      break;
+    }
+  }
+  i.wrapping_add(p) % n.max(1)
+}
+
+/// `(stream shift, break before the batch)` of a batch (`mass_params.w`, [`BATCH_BREAK_FLAG`])
+#[inline]
+pub fn batch_streams(batch: &DustBatch) -> (u32, bool) {
+  let w = batch.mass_params[3] as u32;
+  (w % BATCH_BREAK_FLAG, (w / BATCH_BREAK_FLAG) & 1 != 0)
+}
+
+/// size-stratum rotation of the batch's first time sample ([`BATCH_SIZE_ROTATION_UNIT`])
+#[inline]
+pub fn batch_size_rotation(batch: &DustBatch) -> u32 {
+  batch.mass_params[3] as u32 / BATCH_SIZE_ROTATION_UNIT
+}
+
+/// Size stratum of cluster `j = i·S + s`: the stream's rank (a permutation keyed by
+/// [`stream_key`]) advanced by one per time sample of the tier's grid, `(rank + r + i) mod S`
+/// (`r`: [`batch_size_rotation`]).
+///
+/// Each time sample still covers every stratum once (the batch mass is exact), and over S samples
+/// every cone cell emits every size, as a real jet does. A size fixed per stream tied each size to
+/// one direction: old dust split into one island per stream, ~6× its width apart laterally
+/// (`detached.rdc`). Consecutive samples of a stream are neighbouring strata (the streak spans
+/// the sizes between them); the wrap from the largest to the smallest is a stream break
+/// ([`stream_breaks_before`]).
+pub fn stream_stratum(batch: &DustBatch, j: u32) -> u32 {
+  let shift = batch_streams(batch).0;
+  let n = 1u32 << shift;
+  let s = j & (n - 1);
+  let rank = permute_index(s, n, pcg(stream_key_bits(batch) ^ 0x2545_F491));
+  rank.wrapping_add(batch_size_rotation(batch)).wrapping_add(j >> shift) & (n - 1)
+}
+
+/// the batch is the provisional preview of the open window ([`BATCH_PROVISIONAL_FLAG`])
+#[inline]
+pub fn batch_provisional(batch: &DustBatch) -> bool {
+  (batch.mass_params[3] as u32 / BATCH_PROVISIONAL_FLAG) & 1 != 0
+}
+
+/// `mass_params.w` of a batch with `2^shift` streams ([`batch_streams`])
+#[inline]
+pub fn batch_streams_word(shift: u32, break_before: bool) -> f32 {
+  (shift + if break_before { BATCH_BREAK_FLAG } else { 0 }) as f32
+}
+
+/// [`batch_streams_word`] plus the provisional flag and the size rotation `rotation < 2^shift`
+#[inline]
+pub fn batch_word(shift: u32, break_before: bool, provisional: bool, rotation: u32) -> f32 {
+  batch_streams_word(shift, break_before)
+    + (if provisional { BATCH_PROVISIONAL_FLAG } else { 0 }
+      + BATCH_SIZE_ROTATION_UNIT * (rotation & ((1 << shift) - 1))) as f32
+}
+
+/// Stream key of a jet configuration (`DustBatch::mass_params.z`): u01 with 24 bits, exact in f32,
+/// so the shader recovers the same u32. It fixes every stream's direction, size rank and speed,
+/// independent of the window and the tier.
+pub fn stream_key(cfg_seed: u32) -> f32 {
+  u01(pcg(cfg_seed ^ 0xA3C5_9AC3))
+}
+
+#[inline]
+fn stream_key_bits(batch: &DustBatch) -> u32 {
+  (batch.mass_params[2] * 16_777_216.0) as u32
+}
+
+/// Emission-time quantile `u ∈ [0, 1)` of cluster `j = i·S + s`: time sample `i` of the batch's
+/// `count / S` strata, a jitter shared by the `S` streams of the sample plus
+/// [`STREAM_TIME_JITTER`] of the stratum per cluster. The last sample of a provisional batch is at
+/// `u = 1`: the window end, now ([`BATCH_PROVISIONAL_FLAG`]).
+pub fn stream_time_u01(batch: &DustBatch, j: u32) -> f32 {
+  let shift = batch_streams(batch).0;
+  let samples = (batch.count >> shift).max(1);
+  let i = j >> shift;
+  if i + 1 == samples && batch_provisional(batch) {
+    return 1.0;
+  }
+  let hs = pcg(batch.seed ^ pcg(i ^ 0x3C6E_F372));
+  let hc = pcg(batch.seed ^ pcg(j));
+  (i as f32 + (1.0 - STREAM_TIME_JITTER) * u01(hs) + STREAM_TIME_JITTER * u01(hc)) / samples as f32
+}
+
+/// Emission offset (s from the window start) of the time quantile `u`: lit time only, dark
+/// phases of the jet site get no clusters (full df64 when always lit)
+fn emission_offset(batch: &DustBatch, u: f32) -> Df {
+  let dur = Df::new(batch.comet_v_dur_hi[3], batch.comet_v_dur_lo[3]);
+  if batch.lit[3] == LIT_MODE_PERIODIC {
+    Df::from_f32(lit_time_map(u, batch.lit, batch.spin[3], dur.hi + dur.lo))
+  } else {
+    dur.mul_f(u)
+  }
+}
+
+/// Whether the stream of cluster `j` is interrupted before it ([`STREAM_BREAK_BIT`]): the batch
+/// follows a missing window (first time sample), the stream's size wraps to the smallest stratum
+/// ([`stream_stratum`]), or the jet site was dark in between ([`stream_dark_before`]).
+pub fn stream_breaks_before(batch: &DustBatch, j: u32) -> bool {
+  let (shift, break_before) = batch_streams(batch);
+  (j >> shift == 0 && break_before)
+    || (shift > 0 && stream_stratum(batch, j) == 0)
+    || stream_dark_before(batch, j)
+}
+
+/// Whether the jet site spent more than [`STREAM_BREAK_TURNS`] of a rotation in the dark since the
+/// previous sample of cluster `j`'s stream (the window start for the first one): the spin phase
+/// elapsed minus the lit phase the samples consumed.
+pub fn stream_dark_before(batch: &DustBatch, j: u32) -> bool {
+  let shift = batch_streams(batch).0;
+  let i = j >> shift;
+  let omega = batch.spin[3];
+  if !(batch.lit[3] == LIT_MODE_PERIODIC) || !(omega > 0.0) {
+    return false;
+  }
+  let dur = batch.comet_v_dur_hi[3] + batch.comet_v_dur_lo[3];
+  let u = stream_time_u01(batch, j);
+  let (u_prev, dt_prev) = if i == 0 {
+    (0.0, 0.0)
+  } else {
+    let up = stream_time_u01(batch, j - (1 << shift));
+    (up, lit_time_map(up, batch.lit, omega, dur))
+  };
+  let dt = lit_time_map(u, batch.lit, omega, dur);
+  let dark = omega * (dt - dt_prev) - (u - u_prev) * batch.lit[2];
+  dark > 2.0 * core::f32::consts::PI * STREAM_BREAK_TURNS
+}
+
+/// Mass fraction of the size stratum `[p/n, (p+1)/n]` of the log-uniform size quantile under
+/// `n(s) ∝ s^-q` (`size_params`: s_min, s_max, `e = 4 − q`): `(r^(e·u1) − r^(e·u0)) / (r^e − 1)`,
+/// `r = s_max/s_min`. The strata of a time sample sum to 1: batch mass is conserved exactly.
+pub fn size_stratum_mass(size_params: [f32; 4], p: u32, n: u32) -> f32 {
+  let n = n.max(1);
+  let r = size_params[1] / size_params[0];
+  let e = size_params[2];
+  let pow = <f32 as FloatLike>::pow;
+  let full = pow(r, e) - 1.0;
+  if !(absf(full) > 1e-6) {
+    return 1.0 / n as f32;
+  }
+  let (u0, u1) = (p as f32 / n as f32, (p + 1) as f32 / n as f32);
+  (pow(r, e * u1) - pow(r, e * u0)) / full
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -749,7 +2065,11 @@ pub fn lattice_u01(j: u32, shift: f32) -> f32 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Builds cluster `j` (`0 ≤ j < batch.count`) of `batch`; it goes to ring slot
-/// `(batch.first_index + j) & batch.ring_mask`.
+/// `(batch.first_index + j) & batch.ring_mask`. Cluster `j = i·S + s` is time sample `i` of stream
+/// `s` ([`DUST_STREAMS`]): the stream fixes the direction in the jet cone (a Fibonacci lattice over
+/// its solid angle) and the speed draw, its size stratum advances by one per time sample
+/// ([`stream_stratum`]); the cluster adds small jitters. The stream's mass for the sample is its size stratum's share
+/// ([`size_stratum_mass`]).
 pub fn emit_cluster(batch: &DustBatch, j: u32) -> DustCluster {
   // randomness from the in-batch index: the seed is unique per emission window, so a window
   // always produces the same clusters whatever ring slots it lands on (deterministic seek)
@@ -758,21 +2078,22 @@ pub fn emit_cluster(batch: &DustBatch, j: u32) -> DustCluster {
   let h2 = pcg(h1);
   let h3 = pcg(h2);
   let h4 = pcg(h3);
+  let h5 = pcg(h4);
 
-  // staggered emission time: one sample per time stratum
-  let count = batch.count.max(1) as f32;
-  let u_t = ((j as f32) + u01(h0)) / count;
+  let (shift, _) = batch_streams(batch);
+  let n = 1u32 << shift;
+  let s = j & (n - 1);
+  let samples = (batch.count >> shift).max(1) as f32;
+  let key = stream_key_bits(batch);
+  let g0 = pcg(key ^ pcg(s ^ 0x5851_F42D));
+  let g1 = pcg(g0);
+
   let t_start = Df::new(batch.comet_r_t_hi[3], batch.comet_r_t_lo[3]);
-  let dur = Df::new(batch.comet_v_dur_hi[3], batch.comet_v_dur_lo[3]);
-  // lit time only: dark phases of the jet site get no clusters (full df64 when always lit)
-  let dt_in = if batch.lit[3] == LIT_MODE_PERIODIC {
-    Df::from_f32(lit_time_map(u_t, batch.lit, batch.spin[3], dur.hi + dur.lo))
-  } else {
-    dur.mul_f(u_t)
-  };
+  let dt_in = emission_offset(batch, stream_time_u01(batch, j));
   let t0 = t_start.add(dt_in);
 
-  // jet location at t0 (comet free fall over the sub-interval)
+  // the window-start site position in free fall over the sub-interval (the site's turn is added
+  // below)
   let rc0 = Df3 {
     hi: [
       batch.comet_r_t_hi[0],
@@ -797,15 +2118,20 @@ pub fn emit_cluster(batch: &DustBatch, j: u32) -> DustCluster {
       batch.comet_v_dur_lo[2],
     ],
   };
-  let (rc, vc) = kepler::propagate(&rc0, &vc0, consts::SUN_MU, dt_in);
+  let (rc_start_site, vc) = kepler::propagate(&rc0, &vc0, consts::SUN_MU, dt_in);
 
-  // direction: cone in the particle-system frame, rotated to root with the interpolated attitude
+  // direction: the stream's cone cell (polar stratum in solid angle, golden-ratio azimuth turned
+  // by the key), jittered, rotated to root with the attitude at t0
   let jet = [
     batch.jet_dir_aperture[0],
     batch.jet_dir_aperture[1],
     batch.jet_dir_aperture[2],
   ];
-  let dir_ps = sample_cone(u01(h1), u01(h2), jet, batch.jet_dir_aperture[3]);
+  let aperture = batch.jet_dir_aperture[3];
+  let u_pol = (s as f32 + 0.5 + STREAM_DIR_JITTER * (u01(h2) - 0.5)) / n as f32;
+  let az =
+    u01(pcg(key ^ 0x6A09_E667)) + s as f32 * STREAK_PHI_INV + STREAM_DIR_JITTER * (u01(h1) - 0.5);
+  let dir_ps = sample_cone(az - <f32 as FloatLike>::floor(az), u_pol, jet, aperture);
   // exact nucleus spin from the window start
   let spin = qaxis_angle(
     [batch.spin[0], batch.spin[1], batch.spin[2]],
@@ -814,41 +2140,75 @@ pub fn emit_cluster(batch: &DustBatch, j: u32) -> DustCluster {
   let rot = qmul(spin, batch.rot_start);
   let dir = qrot(rot, dir_ps);
 
-  // grain size: log-uniform proposal, rank-1 lattice (decorrelated from time order)
+  // the site turns with the nucleus: the comet's free fall carries the site's offset at the
+  // window start, the emission is at its offset at t0, with the surface velocity ω × offset
+  let off = [
+    batch.site_offset[0],
+    batch.site_offset[1],
+    batch.site_offset[2],
+  ];
+  let (o_start, o_t0) = (qrot(batch.rot_start, off), qrot(rot, off));
+  let rc = rc_start_site.add(&Df3::from_f32([
+    o_t0[0] - o_start[0],
+    o_t0[1] - o_start[1],
+    o_t0[2] - o_start[2],
+  ]));
+  let w = [
+    batch.spin[0] * batch.spin[3],
+    batch.spin[1] * batch.spin[3],
+    batch.spin[2] * batch.spin[3],
+  ];
+  let v_site = [
+    w[1] * o_t0[2] - w[2] * o_t0[1],
+    w[2] * o_t0[0] - w[0] * o_t0[2],
+    w[0] * o_t0[1] - w[1] * o_t0[0],
+  ];
+
+  // grain size: the stream's size stratum (log-uniform quantile), jittered within it
   let s_min = batch.size_params[0];
   let s_max = batch.size_params[1];
-  let u_s = lattice_u01(j, batch.mass_params[2]);
+  let stratum = stream_stratum(batch, j);
+  let u_s = (stratum as f32 + 0.5 + STREAM_SIZE_JITTER * (u01(h5) - 0.5)) / n as f32;
   let s_um = s_min * <f32 as FloatLike>::pow(s_max / s_min, u_s);
   let beta = batch.vel_params[3] / s_um;
 
-  // importance weight against the mass distribution: m_j = M/N · norm · s^(4−q)
-  let mass_g = batch.mass_params[0] / count
-    * batch.size_params[3]
-    * <f32 as FloatLike>::pow(s_um, batch.size_params[2]);
+  // the stratum's share of the time sample's mass
+  let mass_g = batch.mass_params[0] / samples * size_stratum_mass(batch.size_params, stratum, n);
 
-  // ejection speed: v_ref · sqrt(s_ref / s) · (1 + σ_rel N(0,1)), clamped at 0
+  // ejection speed: v_ref · sqrt(s_ref / s) · (1 + σ_rel (N_stream + jitter N)), clamped at 0
   let v_mean = batch.vel_params[0] * <f32 as FloatLike>::sqrt(batch.vel_params[2] / s_um);
-  let v_ej = (v_mean * (1.0 + batch.vel_params[1] * gauss(u01(h3), u01(h4)))).max(0.0);
-  let sigma_v = (v_mean * batch.vel_params[1]).max(v_mean * CHILD_SIGMA_V_REL);
+  let g = gauss(u01(g0), u01(g1)) + STREAM_SPEED_JITTER * gauss(u01(h3), u01(h4));
+  let v_ej = (v_mean * (1.0 + batch.vel_params[1] * g)).max(0.0);
+  // lateral dispersion of the stream: STREAM_SIGMA_CELLS of its cone cell (angular radius
+  // aperture/√S), at least CHILD_SIGMA_V_REL of the speed
+  let sigma_lat = v_mean
+    * (STREAM_SIGMA_CELLS * aperture / <f32 as FloatLike>::sqrt(n as f32)).max(CHILD_SIGMA_V_REL);
 
   let v0 = vc.add(&Df3::from_f32([
-    dir[0] * v_ej,
-    dir[1] * v_ej,
-    dir[2] * v_ej,
+    dir[0] * v_ej + v_site[0],
+    dir[1] * v_ej + v_site[1],
+    dir[2] * v_ej + v_site[2],
   ]));
 
   // cross-section per gram: π s² / (4/3 π s³ ρ) = 3 / (4 ρ s)  [s in m, ρ in g/m³]
   let rho_g_m3 = batch.mass_params[1] * 1.0e6;
   let xsec_per_g = 3.0 / (4.0 * rho_g_m3 * s_um * 1.0e-6);
-  // children spread β over this cluster's size stratum: Δln s = ln(s_max/s_min) / N
-  let dbeta = beta * 0.5 * <f32 as FloatLike>::ln(s_max / s_min) / count;
+  // children spread β over the stream's size stratum: Δln s = ln(s_max/s_min) / S; the low
+  // mantissa bits carry the child-pattern id, the sign bit the stream break
+  let dbeta = beta * 0.5 * <f32 as FloatLike>::ln(s_max / s_min) / n as f32;
+  let dbeta = pack_child_id(dbeta, pcg(h0 ^ 0x2C1B_3C6D));
+  let dbeta = if stream_breaks_before(batch, j) {
+    f32::from_bits(dbeta.to_bits() | STREAM_BREAK_BIT)
+  } else {
+    dbeta
+  };
 
   DustCluster {
     r0_t0_hi: [rc.hi[0], rc.hi[1], rc.hi[2], t0.hi],
     r0_t0_lo: [rc.lo[0], rc.lo[1], rc.lo[2], t0.lo],
     v0_hi_beta: [v0.hi[0], v0.hi[1], v0.hi[2], beta],
     v0_lo_mass: [v0.lo[0], v0.lo[1], v0.lo[2], mass_g],
-    misc: [sigma_v, s_um, xsec_per_g, dbeta],
+    misc: [sigma_lat, s_um, xsec_per_g, dbeta],
   }
 }
 
@@ -883,7 +2243,12 @@ pub fn evaluate_cluster(c: &DustCluster, slot: u32, frame: &DustFrame) -> DustRe
   let flux = c.mass_g() * c.misc[2] * fade;
   DustRenderCluster {
     pos_size: [local[0], local[1], local[2], size],
-    age_id_dbeta_flux: [age_f, f32::from_bits(slot), c.misc[3], flux],
+    age_id_dbeta_flux: [
+      age_f,
+      f32::from_bits(render_word(slot, frame.ttl[3] as u32)),
+      c.misc[3],
+      flux,
+    ],
   }
 }
 
@@ -1054,7 +2419,7 @@ pub fn batch_params(
   start_velocity_mean: f32,
   start_velocity_std: f32,
   mass_g: f64,
-  low_discrepancy_shift: f32,
+  stream_key: f32,
 ) -> ([f32; 4], [f32; 4], [f32; 4]) {
   let (e, mass_norm) = dist.mass_weight_params();
   let s_ref = (grain_diameter_um * 0.5).max(1e-3);
@@ -1074,7 +2439,7 @@ pub fn batch_params(
       mass_norm as f32,
     ],
     [v_ref, v_std_rel, s_ref, beta_s],
-    [mass_g as f32, density_gcm3, low_discrepancy_shift, 0.0],
+    [mass_g as f32, density_gcm3, stream_key, 0.0],
   )
 }
 
@@ -1257,6 +2622,11 @@ pub struct RingState {
   pub tail: u64,
   /// live batches, oldest first
   pub batches: alloc::collections::VecDeque<LiveBatch>,
+  /// [`Self::drawable`] as of the last point with nothing pending ([`Self::publish`]): what the
+  /// renderer draws. The live value drops the batches of a tick between its emission and
+  /// [`Self::mark_submitted`], and the renderer reads the ring concurrently with the logic tick: the
+  /// newest window would flicker.
+  pub published: Option<(u32, u32, u64)>,
 }
 
 impl RingState {
@@ -1267,6 +2637,7 @@ impl RingState {
       head: 0,
       tail: 0,
       batches: alloc::collections::VecDeque::new(),
+      published: None,
     }
   }
   #[inline]
@@ -1316,12 +2687,21 @@ impl RingState {
         b.ready = value;
       }
     }
+    self.publish();
+  }
+  /// Records [`Self::drawable`] for the renderer ([`Self::published`]) unless a batch is pending
+  /// (emitted, not submitted yet): the renderer keeps the previous range until it is.
+  pub fn publish(&mut self) {
+    if !self.batches.iter().any(|b| b.ready == READY_PENDING) {
+      self.published = Some(self.drawable());
+    }
   }
   /// marks the whole ring content invalid (after a scene restore)
   pub fn invalidate_gpu(&mut self) {
     for b in self.batches.iter_mut() {
       b.ready = READY_NEEDS_EMIT;
     }
+    self.published = None;
   }
   /// up to `max` oldest batches needing re-emission, marked [`READY_PENDING`]
   pub fn take_reemit(&mut self, max: usize) -> alloc::vec::Vec<DustBatch> {
@@ -1414,6 +2794,10 @@ pub struct JetState {
   /// nucleus spin, unit axis (root frame) + ω ≥ 0 (rad/s). `None`: estimated by
   /// [`DustHostState::tick`] from consecutive attitudes ([`spin_from_attitudes`])
   pub spin: Option<[f64; 4]>,
+  /// jet site offset from the nucleus centre (m, particle-system frame): `r_m` is the nucleus
+  /// centre plus `rot · site_offset_m`. Emission turns it with the spin over a window
+  /// ([`emit_cluster`]); zero for a jet at the centre.
+  pub site_offset_m: [f32; 3],
 }
 
 impl JetState {
@@ -1446,6 +2830,12 @@ impl JetState {
 /// Everything the renderer needs to evaluate and draw one system this frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DustDrawState {
+  /// heliocentric render anchor (m): the jet position of the last emission tick, a fixed point
+  /// (precision only). The draw translation is `anchor − eye` from heliocentric values, never the
+  /// jet / comet entity transforms: particles are not children of the comet.
+  pub anchor_m: [f64; 3],
+  /// index of the age tier in its system (LOD header slot, `< LOD_MAX_TIERS`)
+  pub tier: u32,
   /// first slot of the tier's sub-ring in the system buffers (`first_slot` is relative to it)
   pub ring_base: u32,
   pub first_slot: u32,
@@ -1459,6 +2849,15 @@ pub struct DustDrawState {
   pub anti_sun_g: [f32; 4],
   /// exposure reference optical depth ([`DustEmitConfig::tau_ref`], 0 = unknown)
   pub tau_ref: f32,
+}
+
+impl DustDrawState {
+  /// Evaluation at `t_s` (the time of the scene snapshot the camera comes from), same anchor and
+  /// band. Clusters emitted after `t_s` get a negative age and are culled.
+  pub fn at_time(mut self, t_s: f64) -> Self {
+    self.frame = self.frame.at_time(t_s);
+    self
+  }
 }
 
 /// Emission inputs of one system for one tick (see `ParticleSystemEmitParams::dust_emit_config`).
@@ -1502,8 +2901,9 @@ impl DustEmitConfig {
 
 /// Age band of one dust tier, as multiples of the TTL: the tier draws clusters aged
 /// `[min_ttl · TTL, max_ttl · TTL)` on its own emission grid of `WINDOWS_PER_TTL` windows over the
-/// band. Older tiers have longer windows (fewer, heavier clusters per scaled day) and keep only the
-/// larger grains (`s_min_factor`): long history at the same memory.
+/// band. Older tiers have longer windows (fewer, heavier clusters per scaled day): long history at
+/// the same memory. `s_min_factor` can drop small grains from a tier (unused by default: they carry
+/// most of the optical depth).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TierBand {
   pub min_ttl: f64,
@@ -1524,11 +2924,22 @@ impl TierBand {
   };
 }
 
+/// Seed of emission window `k` (full i64) of tier `tier`: every (config seed, tier, window) draws
+/// independent clusters. (Formerly `seed ^ pcg(k as u32 ^ c)`: no tier, so the three tiers drew
+/// the same clusters for the same window index, and `k` truncated to 32 bits.)
+pub fn window_seed(cfg_seed: u32, tier: u32, k: i64) -> u32 {
+  let k = k as u64;
+  pcg(cfg_seed ^ pcg(k as u32 ^ pcg((k >> 32) as u32 ^ pcg(tier ^ 0x5DEE_CE66))))
+}
+
 #[derive(Debug, Clone)]
 pub struct DustHostState {
   pub ring: RingState,
   /// first slot of this tier's sub-ring in the system's cluster / render buffers
   pub ring_base: u32,
+  /// index of the tier in its system (0 = youngest): part of every window seed, so tiers never
+  /// draw the same clusters for the same window index
+  pub tier: u32,
   /// age band (see [`TierBand`])
   pub band: TierBand,
   /// emit windows before the start epoch (`jet_at` must cover negative times), so the history
@@ -1562,6 +2973,7 @@ impl DustHostState {
     Self {
       ring: RingState::new(capacity),
       ring_base,
+      tier: 0,
       band,
       prestart,
       upload_seq: 0,
@@ -1575,9 +2987,16 @@ impl DustHostState {
     }
   }
 
+  /// the same tier with system index `tier` (window seeds, see [`window_seed`])
+  pub fn with_tier(mut self, tier: u32) -> Self {
+    self.tier = tier;
+    self
+  }
+
   /// forgets every cluster and the emission history (simulation reset)
   pub fn reset(&mut self) {
-    *self = Self::with_band(self.ring.capacity, self.ring_base, self.band, self.prestart);
+    *self = Self::with_band(self.ring.capacity, self.ring_base, self.band, self.prestart)
+      .with_tier(self.tier);
   }
 
   /// `(min, max)` age (scaled s) of this tier for a TTL
@@ -1590,17 +3009,31 @@ impl DustHostState {
     (ttl_s / WINDOWS_PER_TTL).max(1.0)
   }
 
-  /// Clusters per closed window: the steady-state budget spread over one TTL of windows.
-  pub fn clusters_per_window(&self) -> u32 {
+  /// Clusters per closed window, before rounding to whole time samples
+  fn raw_clusters_per_window(&self) -> u32 {
     ((self.ring.capacity as f64 * BUDGET_SAFETY / WINDOWS_PER_TTL) as u32).max(1)
+  }
+
+  /// `log₂` of the tier's streams: as many as [`DUST_STREAMS`] while a full window still holds
+  /// [`STREAM_MIN_SAMPLES`] time samples (64 on a 131 072-slot tier, 8 on 16 384, 2 on 4 096).
+  pub fn stream_shift(&self) -> u32 {
+    let n = (self.raw_clusters_per_window() / STREAM_MIN_SAMPLES).clamp(1, DUST_STREAMS);
+    31 - n.leading_zeros()
+  }
+
+  /// Clusters per closed window: the steady-state budget spread over one TTL of windows, whole
+  /// time samples of every stream.
+  pub fn clusters_per_window(&self) -> u32 {
+    let n = 1 << self.stream_shift();
+    (self.raw_clusters_per_window() / n).max(1) * n
   }
 
   /// One logic tick of host-side emission at scaled time `t_now_s`, **deterministic in time**:
   /// emission happens on a fixed scaled-time grid of windows `[kΔ, (k+1)Δ)`,
   /// `Δ = ttl / WINDOWS_PER_TTL`, and window `k` always produces the same batch (jet state at
-  /// `kΔ` from `jet_at`, mass `q(r)·lit time`, budgeted count, seed from `k`). The dust at any
-  /// epoch is a pure function of the parameters and the epoch, so playing, pausing, changing the
-  /// speed or seeking all give the same result:
+  /// `kΔ` from `jet_at`, mass `q(r)·lit time`, budgeted count, seed from `(tier, k)`). The dust at
+  /// any epoch is a pure function of the parameters and the epoch, so playing, pausing, changing
+  /// the speed or seeking all give the same result:
   ///
   /// - the provisional batch of the previous tick is dropped;
   /// - time scrubbed backwards drops the batches ending after `t_now_s`;
@@ -1696,6 +3129,8 @@ impl DustHostState {
         }
       }
     }
+    // retired / rewound batches with nothing new emitted: the renderer sees it now
+    self.ring.publish();
     out
   }
 
@@ -1737,15 +3172,29 @@ impl DustHostState {
     if !(mass_g > 0.0) {
       return None;
     }
+    // whole time samples: every batch count a multiple of the streams (streak predecessors)
+    let shift = self.stream_shift();
+    let n = 1u32 << shift;
     let full = self.clusters_per_window() as f64;
     let want = (-<f64 as FloatLike>::floor(-full * (dur / dt_w).clamp(0.0, 1.0))).max(1.0) as u32;
-    let count = want.min(self.emit_free_slots());
+    let count = want.div_ceil(n) * n;
+    let count = count.min(self.emit_free_slots()) / n * n;
     if count == 0 {
       return None;
     }
+    // the streams continue from the youngest batch of the ring only if it is the previous window
+    // (an empty ring: nothing precedes, the first samples draw no streak anyway; keeps the
+    // descriptor a function of the window whatever the emission history)
+    let break_before = self.ring.batches.back().is_some_and(|b| b.window != k - 1);
     let mut desc: DustBatch = bytemuck::Zeroable::zeroed();
     desc.set_comet(jet0.r_m, jet0.v_ms, t0, dur);
     desc.rot_start = jet0.rot;
+    desc.site_offset = [
+      jet0.site_offset_m[0],
+      jet0.site_offset_m[1],
+      jet0.site_offset_m[2],
+      0.0,
+    ];
     let spin = jet0.spin_or_still();
     desc.spin = [
       spin[0] as f32,
@@ -1760,7 +3209,8 @@ impl DustHostState {
       cfg.jet_dir[2],
       cfg.aperture_rad,
     ];
-    let shift = (k as f64 * 0.618_033_988_749_895).rem_euclid(1.0) as f32;
+    // independent per (seed, tier, window), see `window_seed`; the streams are per jet
+    let seed = window_seed(cfg.seed, self.tier, k);
     let (size_params, vel_params, mass_params) = batch_params(
       &dist,
       cfg.diameter_um,
@@ -1769,13 +3219,18 @@ impl DustHostState {
       cfg.v_mean,
       cfg.v_std,
       mass_g,
-      shift,
+      stream_key(cfg.seed),
     );
     desc.size_params = size_params;
     desc.vel_params = vel_params;
     desc.mass_params = mass_params;
+    // size rotation of the first sample: the tier's samples are numbered on the window grid
+    // (closed windows hold `full / n` samples each), so a stream steps one stratum per sample
+    // across windows too
+    let rotation = (k.rem_euclid(n as i64) * ((full as u32 / n) as i64 % n as i64)).rem_euclid(n as i64) as u32;
+    desc.mass_params[3] = batch_word(shift, break_before, dur < dt_w, rotation);
     desc.count = count;
-    desc.seed = cfg.seed ^ pcg(k as u32 ^ 0x5DEE_CE66);
+    desc.seed = seed;
     Some(self.ring.push_window_batch(desc, t0 + dur, mass_g, k))
   }
 
@@ -1787,7 +3242,7 @@ impl DustHostState {
   /// render-side view of the current state, `None` before the first tick or when empty
   pub fn draw_state(&self) -> Option<DustDrawState> {
     let jet = self.jet?;
-    let (first_slot, live_count, compute_wait) = self.ring.drawable();
+    let (first_slot, live_count, compute_wait) = self.ring.published?;
     if live_count == 0 {
       return None;
     }
@@ -1795,13 +3250,16 @@ impl DustHostState {
     let g = SUN_MU_M3_S2 / (rn * rn);
     let (min_age, max_age) = self.age_band_s(self.ttl_s);
     Some(DustDrawState {
+      anchor_m: jet.r_m,
+      tier: 0,
       ring_base: self.ring_base,
       first_slot,
       live_count,
       capacity: self.ring.capacity,
       compute_wait,
       frame: DustFrame::new(jet.r_m, jet.t_s, [0.0, 0.0, 0.0, 1.0], max_age as f32)
-        .with_band(min_age as f32, self.band.fade),
+        .with_band(min_age as f32, self.band.fade)
+        .with_streams(self.stream_shift()),
       anti_sun_g: [
         (jet.r_m[0] / rn) as f32,
         (jet.r_m[1] / rn) as f32,
@@ -1821,8 +3279,12 @@ pub fn dust_tier_count() -> usize {
     .clamp(1, DUST_TIERS_DEFAULT)
 }
 
+/// clusters sampled by [`DustSystemState::coma_radius_m`]
+pub const COMA_SAMPLES: usize = 256;
+
 /// default age tiers: `[0, 1)`, `[1, 8)`, `[8, 64)` TTL (30 d → 240 d → ~5.3 yr)
 pub const DUST_TIERS_DEFAULT: usize = 3;
+const _: () = assert!(DUST_TIERS_DEFAULT <= LOD_MAX_TIERS as usize);
 /// emission passes that fill every tier from scratch (seek), `MAX_WINDOWS_PER_TICK` windows each
 pub const MAX_SEEK_PASSES: usize =
   DUST_TIERS_DEFAULT * (WINDOWS_PER_TTL as usize).div_ceil(MAX_WINDOWS_PER_TICK) + 1;
@@ -1854,6 +3316,13 @@ pub struct DustSystemState {
   /// exposure reference ([`DustEmitConfig::tau_ref`] at the jet's current distance, the last
   /// positive one beyond the production cutoff), set by the emission tick
   pub tau_ref: f64,
+  /// the emission inputs changed (rotation model, jet parameters): the next [`Self::tick`] drops
+  /// the history and re-emits it with the new ones ([`Self::request_reemit`])
+  pub reemit: bool,
+  /// nucleus rotation model the history was emitted with (`None` = not ticked yet): a change seen
+  /// by the emission tick itself re-emits, whatever the order of the UI updates
+  /// ([`Self::track_spin_model`])
+  pub spin_model: Option<Option<crate::scene::BodyRotationalModel>>,
 }
 
 impl DustSystemState {
@@ -1864,8 +3333,11 @@ impl DustSystemState {
 
   pub fn with_tiers(capacity: u32, tiers: usize) -> Self {
     let n = tiers.clamp(1, DUST_TIERS_DEFAULT);
+    // (min, max) age in TTL, size cut. No size cut: the small, high-β grains carry most of the
+    // optical depth (cross-section ∝ s^-0.5 per log size for n ∝ s^-3.5) and draw the
+    // anti-sunward tail; a former ×8 / ×32 cut removed ~72 % / ~91 % of old dust's brightness.
     const BANDS: [(f64, f64, f64); DUST_TIERS_DEFAULT] =
-      [(0.0, 1.0, 1.0), (1.0, 8.0, 8.0), (8.0, 64.0, 32.0)];
+      [(0.0, 1.0, 1.0), (1.0, 8.0, 1.0), (8.0, 64.0, 1.0)];
     let caps: alloc::vec::Vec<u32> = match n {
       1 => alloc::vec![capacity],
       2 => alloc::vec![capacity / 2, capacity / 2],
@@ -1881,7 +3353,7 @@ impl DustSystemState {
           s_min_factor,
           fade: k + 1 == n,
         };
-        let t = DustHostState::with_band(caps[k].max(1), base, band, n > 1);
+        let t = DustHostState::with_band(caps[k].max(1), base, band, n > 1).with_tier(k as u32);
         base += caps[k];
         t
       })
@@ -1890,6 +3362,8 @@ impl DustSystemState {
       tiers,
       upload_seq: 0,
       tau_ref: 0.0,
+      reemit: false,
+      spin_model: None,
     }
   }
 
@@ -1902,6 +3376,23 @@ impl DustSystemState {
     for t in &mut self.tiers {
       t.reset();
     }
+  }
+
+  /// The nucleus rotation or a jet parameter changed: every window was emitted with the old ones
+  /// (the dust history would show the old spin until it ages out, up to the oldest tier's band).
+  /// The next tick resets and refills the tiers deterministically, youngest first, like a seek.
+  pub fn request_reemit(&mut self) {
+    self.reemit = true;
+  }
+
+  /// The rotation model the next [`Self::tick`] emits with: a different one than the history's
+  /// requests a re-emit ([`Self::request_reemit`]). The emission tick calls it with the model it
+  /// reads, so the history always matches the model actually used.
+  pub fn track_spin_model(&mut self, model: Option<crate::scene::BodyRotationalModel>) {
+    if self.spin_model.is_some_and(|prev| prev != model) {
+      self.reemit = true;
+    }
+    self.spin_model = Some(model);
   }
 
   pub fn invalidate_gpu(&mut self) {
@@ -1924,6 +3415,10 @@ impl DustSystemState {
     jet_at: &dyn Fn(f64) -> Option<JetState>,
     cfg_at: &dyn Fn(&JetState) -> DustEmitConfig,
   ) -> alloc::vec::Vec<(u32, DustBatch, u64)> {
+    if self.reemit {
+      self.reemit = false;
+      self.reset();
+    }
     let mut budget = MAX_WINDOWS_PER_TICK;
     let mut out = alloc::vec::Vec::new();
     for t in &mut self.tiers {
@@ -1939,12 +3434,58 @@ impl DustSystemState {
   /// flux over the live clusters used to set the exposure: filling the old tiers with heavy
   /// clusters dimmed the whole system 10×, `initial_burst.rdc` vs `late_*.rdc`.)
   pub fn draw_states(&self) -> alloc::vec::Vec<DustDrawState> {
-    let mut states: alloc::vec::Vec<DustDrawState> =
-      self.tiers.iter().filter_map(|t| t.draw_state()).collect();
+    let mut states: alloc::vec::Vec<DustDrawState> = self
+      .tiers
+      .iter()
+      .enumerate()
+      .filter_map(|(i, t)| {
+        t.draw_state().map(|mut s| {
+          s.tier = i as u32;
+          s
+        })
+      })
+      .collect();
     for s in &mut states {
       s.tau_ref = self.tau_ref as f32;
     }
     states
+  }
+
+  /// Radius (m) of the visible coma: the flux-weighted 90th percentile distance from the jet of
+  /// the youngest tier's clusters, from ≤ [`COMA_SAMPLES`] clusters evaluated on the host
+  /// (`emit_cluster` + `evaluate_cluster`, the reference path). `None` without drawable dust.
+  /// Used to frame the comet (Earth observer tracking preset).
+  pub fn coma_radius_m(&self) -> Option<f64> {
+    let tier = self.tiers.first()?;
+    let frame = tier.draw_state()?.frame;
+    let total: u64 = tier.ring.batches.iter().map(|b| b.count as u64).sum();
+    let stride = (total / COMA_SAMPLES as u64).max(1) as usize;
+    let mut samples: alloc::vec::Vec<(f64, f64)> = alloc::vec::Vec::new();
+    for b in tier.ring.batches.iter() {
+      for j in (0..b.count).step_by(stride) {
+        let c = emit_cluster(&b.desc, j);
+        let e = evaluate_cluster(&c, 0, &frame);
+        let flux = e.age_id_dbeta_flux[3] as f64;
+        if flux > 0.0 {
+          let p = e.pos_size;
+          let d = ((p[0] as f64).powi(2) + (p[1] as f64).powi(2) + (p[2] as f64).powi(2)).sqrt();
+          samples.push((d, flux));
+        }
+      }
+    }
+    if samples.is_empty() {
+      return None;
+    }
+    samples.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let total_flux: f64 = samples.iter().map(|s| s.1).sum();
+    let mut acc = 0.0;
+    for (d, w) in &samples {
+      acc += w;
+      if acc >= 0.9 * total_flux {
+        return Some(*d);
+      }
+    }
+    samples.last().map(|s| s.0)
   }
 
   /// per-tier history summary (diagnostic)

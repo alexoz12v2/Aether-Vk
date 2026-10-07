@@ -263,8 +263,14 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool SetJetPreviewVisibility(ulong psId, bool visibility) => true;
 
   public bool SetCometIndicatorVisible(bool visible) => true;
+  public double DustComaRadiusKm() => 0.0;
+  public EarthObserverStatus? EarthObserverStatus() => null;
+  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, AetherVk.Logic.Utils.Quaterniond look) => true;
 
   public bool SetReferenceErrorVisible(bool visible) => true;
+  public bool SetDustSoftening(float softening) => true;
+  public bool SetDustViewFlags(uint flags) => true;
+  public bool SetDustFlowSpeed(float speed) => true;
 
   public void RemoveViewport(ulong presentationEngineId) { }
 
@@ -407,6 +413,24 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public Task<ulong> ImportModelAsync(string path) => Task.FromResult(5UL);
 
   public void UnloadModel(ulong modelId) { }
+
+  public bool ImportAsset(ulong requestId, string path, string cacheDir) => false;
+
+  public bool RemoveAsset(ulong requestId, ulong assetId) => false;
+
+  public AetherVk.Logic.Models.ImportedAsset[]? GetAssets() => [];
+
+  public AetherVk.Logic.Models.AssetThumbnail? GetAssetThumbnail(ulong assetId) => null;
+
+  public AetherVk.Logic.Models.CometAppearanceStatus SetCometAppearance(
+    AetherVk.Logic.Models.CometAppearanceDto appearance
+  ) => AetherVk.Logic.Models.CometAppearanceStatus.NotAvailable;
+
+  public bool GetCometAppearance(out AetherVk.Logic.Models.CometAppearanceDto appearance)
+  {
+    appearance = default;
+    return false;
+  }
 
   public ulong AddScreenSpaceBillboard(string imagePath, ScreenSpaceBillboard billboard) => 6;
 

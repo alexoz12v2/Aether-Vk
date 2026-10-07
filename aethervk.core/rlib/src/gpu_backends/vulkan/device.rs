@@ -3672,22 +3672,49 @@ impl RenderDevice for Device {
 
           let ptr = create_resource_state.staging_arena_ptr;
           let discard_pool_ptr = create_resource_state.discard_pool_ptr;
+          let dedicated_staging =
+            core::cell::RefCell::new(alloc::vec::Vec::<resources::DedicatedStaging>::new());
           let transient_res = self.run_transient_commands(|transient_cmd| {
             let staging_arena = unsafe { ptr.as_ref().unwrap() };
             let discard_pool = unsafe { discard_pool_ptr.as_ref().unwrap() };
             let mut texture_flags: TextureFlags = TextureFlags::empty();
+            // Textures larger than the per-frame staging arena get a buffer of their own, kept
+            // alive until the (fence-waited) transient submission below has completed.
+            let upload_texture = |t: &crate::simulation::comet::Texture, label: &str| {
+              let name = alloc::format!("{}_{}", label, debug_name);
+              let res = if t.data.len() > resources::DedicatedStaging::ARENA_BYPASS_THRESHOLD {
+                Image::new_2d_dedicated(
+                  &self.device,
+                  allocator,
+                  transient_cmd,
+                  t,
+                  vk::ImageUsageFlags::SAMPLED,
+                  &name,
+                )
+                .map(|(img, staging)| {
+                  dedicated_staging.borrow_mut().push(staging);
+                  img
+                })
+              } else {
+                Image::new_2d(
+                  &self.device,
+                  allocator,
+                  transient_cmd,
+                  staging_arena,
+                  t,
+                  vk::ImageUsageFlags::SAMPLED,
+                  &name,
+                )
+              };
+              res
+                .map_err(|e| aethervk_oshal_rlib::log!("texture upload '{}' failed: {:?}", name, e))
+                .ok()
+            };
             let albedo_image = component.mesh.albedo_map.as_ref().and_then(|t| {
+              let img = upload_texture(t, "TextureAlbedo")?;
+              // only flag channels whose image exists: a flagged channel without an image
+              // samples the black dummy texture
               texture_flags |= TextureFlags::ALBEDO;
-              let img = Image::new_2d(
-                &self.device,
-                allocator,
-                transient_cmd,
-                staging_arena,
-                &t,
-                vk::ImageUsageFlags::SAMPLED,
-                &alloc::format!("TextureAlbedo_{}", debug_name),
-              )
-              .ok()?;
               let img_h = img.image.get();
               let view_h = img.image_view.get();
               let mut alloc_h = img.allocation;
@@ -3699,17 +3726,10 @@ impl RenderDevice for Device {
             });
 
             let normal_image = component.mesh.normal_map.as_ref().and_then(|t| {
+              let img = upload_texture(t, "TextureNormal")?;
+              // only flag channels whose image exists: a flagged channel without an image
+              // samples the black dummy texture
               texture_flags |= TextureFlags::NORMAL;
-              let img = Image::new_2d(
-                &self.device,
-                allocator,
-                transient_cmd,
-                staging_arena,
-                &t,
-                vk::ImageUsageFlags::SAMPLED,
-                &alloc::format!("TextureNormal_{}", debug_name),
-              )
-              .ok()?;
               let img_h = img.image.get();
               let view_h = img.image_view.get();
               let mut alloc_h = img.allocation;
@@ -3721,17 +3741,10 @@ impl RenderDevice for Device {
             });
 
             let roughness_image = component.mesh.roughness_map.as_ref().and_then(|t| {
+              let img = upload_texture(t, "TextureRoughness")?;
+              // only flag channels whose image exists: a flagged channel without an image
+              // samples the black dummy texture
               texture_flags |= TextureFlags::ROUGHNESS;
-              let img = Image::new_2d(
-                &self.device,
-                allocator,
-                transient_cmd,
-                staging_arena,
-                &t,
-                vk::ImageUsageFlags::SAMPLED,
-                &alloc::format!("TextureRoughness_{}", debug_name),
-              )
-              .ok()?;
               let img_h = img.image.get();
               let view_h = img.image_view.get();
               let mut alloc_h = img.allocation;
@@ -3743,17 +3756,10 @@ impl RenderDevice for Device {
             });
 
             let ao_image = component.mesh.ao_map.as_ref().and_then(|t| {
+              let img = upload_texture(t, "TextureAO")?;
+              // only flag channels whose image exists: a flagged channel without an image
+              // samples the black dummy texture
               texture_flags |= TextureFlags::AO;
-              let img = Image::new_2d(
-                &self.device,
-                allocator,
-                transient_cmd,
-                staging_arena,
-                &t,
-                vk::ImageUsageFlags::SAMPLED,
-                &alloc::format!("TextureAO_{}", debug_name),
-              )
-              .ok()?;
               let img_h = img.image.get();
               let view_h = img.image_view.get();
               let mut alloc_h = img.allocation;
@@ -3868,7 +3874,13 @@ impl RenderDevice for Device {
             resource_opt = Some(resource);
             texture_flags_out = texture_flags;
             Ok(())
-          })?;
+          });
+          // `run_transient_commands` waits on its fence (or failed before/at submit), so no
+          // GPU work can still read the dedicated staging buffers.
+          for staging in dedicated_staging.into_inner() {
+            unsafe { staging.destroy() };
+          }
+          let transient_res = transient_res?;
           let timeline =
             DebugTrackedRwLock::read(&*self.res).get_timeline_semaphore_cached_value() + 1;
           let discard_pool = unsafe { discard_pool_ptr.as_ref().unwrap() };
@@ -9150,3 +9162,5 @@ mod test_commands;
 mod test_dust;
 #[cfg(test)]
 mod test_pipelines;
+#[cfg(test)]
+mod test_texture_upload;

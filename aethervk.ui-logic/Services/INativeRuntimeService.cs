@@ -201,8 +201,35 @@ public interface INativeRuntimeService : IDisposable
   /// <summary>Shows or hides the comet label (shown only in Earth observer mode).</summary>
   bool SetCometIndicatorVisible(bool visible);
 
+  /// <summary>
+  /// Native Earth observer: the core poses the Earth-parented camera inside every commit that moves
+  /// the Earth and the comet, so no frame shows a stale aim. <paramref name="mode"/> is the
+  /// <c>EarthObserverOrientationMode</c> value, or -1 to clear (the UI poses the camera again).
+  /// <paramref name="look"/>: the free inertial look, or the lock-in body-fixed look.
+  /// </summary>
+  bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, Quaterniond look);
+
+  /// <summary>Radius (km) of the visible dust coma (0 without dust): frames the comet in Earth
+  /// observer lock-in / tracking.</summary>
+  double DustComaRadiusKm();
+
+  /// <summary>Native Earth observer status (null when the UI poses the camera).</summary>
+  EarthObserverStatus? EarthObserverStatus();
+
   /// <summary>Enables the comet's reference-position error lines (cross-track, same-epoch).</summary>
   bool SetReferenceErrorVisible(bool visible);
+
+  /// <summary>Dust display stretch softening ("dust visibility"): smaller shows fainter dust
+  /// (asinh stretch of the accumulated optical depth); clamped natively to [1e-7, 1].</summary>
+  bool SetDustSoftening(float softening);
+
+  /// <summary>Dust view aids: bit 0 tracers (bright dots on real particles), bit 1 flow animation
+  /// (pulses travelling outward). Visual only.</summary>
+  bool SetDustViewFlags(uint flags);
+
+  /// <summary>Time-lapse factor of the dust flow marks: 1 = the marks move with the dust, K = that
+  /// many times faster in its direction (clamped to [1, 10 000] natively). Visual only.</summary>
+  bool SetDustFlowSpeed(float speed);
 
   /// <summary>
   /// Function responsible to cleanup/reset the state of the selected particle system. This means
@@ -300,6 +327,41 @@ public interface INativeRuntimeService : IDisposable
   // external state management with transient
   Task<ulong> ImportModelAsync(string path);
   void UnloadModel(ulong modelId);
+
+  // ── Asset library (Imports tab) ─────────────────────────────────────────
+
+  /// <summary>
+  /// Starts an asynchronous import of a mesh (obj, ply, gltf, glb) or a texture (png, jpg,
+  /// jpeg, ktx2). Completion arrives as <see cref="ExternalStateType.AssetImported"/> carrying
+  /// <paramref name="requestId"/>. Decoded data is cached (memory mapped) under
+  /// <paramref name="cacheDir"/>. Returns <c>false</c> if the request could not be queued.
+  /// </summary>
+  bool ImportAsset(ulong requestId, string path, string cacheDir);
+
+  /// <summary>
+  /// Snapshot of the asset library (meshes first), without thumbnails. <c>null</c> while an
+  /// import holds the library.
+  /// </summary>
+  Models.ImportedAsset[]? GetAssets();
+
+  /// <summary>
+  /// Starts unloading an asset (refused natively while the simulation plays). A comet showing it
+  /// is ejected to the procedural sphere (mesh) or has the channel cleared (texture). Completion
+  /// arrives as <see cref="ExternalStateType.AssetRemoved"/> carrying <paramref name="requestId"/>.
+  /// </summary>
+  bool RemoveAsset(ulong requestId, ulong assetId);
+
+  /// <summary>RGBA8 thumbnail of an asset, or <c>null</c> if unknown / library busy.</summary>
+  Models.AssetThumbnail? GetAssetThumbnail(ulong assetId);
+
+  /// <summary>
+  /// Requests a comet appearance change (validated synchronously, applied by the logic thread
+  /// before the next frame). Mesh/texture wiring changes are refused while the simulation plays.
+  /// </summary>
+  Models.CometAppearanceStatus SetCometAppearance(Models.CometAppearanceDto appearance);
+
+  /// <summary>Current comet appearance as last applied natively.</summary>
+  bool GetCometAppearance(out Models.CometAppearanceDto appearance);
 
   // ==========================================
   // Screen Space Billboards (UI Overlays)
@@ -804,6 +866,59 @@ internal unsafe static class PInvokeAetherVkCore
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_importModel(nint ctx, byte* utf8Path);
 
+  // ── Asset library / comet appearance (aethervk.core/cdylib/src/ffi_assets.rs) ──
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_importAsset(
+    nint ctx,
+    ulong requestId,
+    byte* utf8Path,
+    byte* utf8CacheDir
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_removeAsset(nint ctx, ulong requestId, ulong assetId);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSimulationContext_getAssetCount(nint ctx);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_getAssetInfo(
+    nint ctx,
+    uint index,
+    CAssetInfoDTO* outInfo,
+    byte* label,
+    uint labelLen,
+    uint* outLabelLen,
+    byte* key,
+    uint keyLen,
+    uint* outKeyLen
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_copyAssetThumbnail(
+    nint ctx,
+    ulong assetId,
+    byte* outRgba,
+    uint outLen,
+    uint* outWidth,
+    uint* outHeight
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern int avkSimulationContext_setCometAppearance(
+    nint ctx,
+    ulong sceneId,
+    Models.CometAppearanceDto* appearance
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_getCometAppearance(
+    nint ctx,
+    ulong sceneId,
+    Models.CometAppearanceDto* outAppearance
+  );
+
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern ulong avkSimulationContext_initEarth();
 
@@ -1012,10 +1127,43 @@ internal unsafe static class PInvokeAetherVkCore
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setDustSoftening(nint ctx, ulong sceneId, float softening);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setDustViewFlags(nint ctx, ulong sceneId, uint flags);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setDustFlowSpeed(nint ctx, ulong sceneId, float speed);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_setReferenceErrorVisible(
     nint ctx,
     ulong sceneId,
     [MarshalAs(UnmanagedType.U1)] bool visible
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern double avkSimulationContext_dustComaRadiusKm(nint ctx, ulong sceneId);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern unsafe bool avkSimulationContext_earthObserverStatus(nint ctx, ulong sceneId, CEarthObserverStatusDTO* outStatus);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setEarthObserver(
+    nint ctx,
+    ulong sceneId,
+    ulong cameraId,
+    uint mode,
+    ulong earthId,
+    ulong cometId,
+    double latDeg,
+    double lonDeg,
+    [In] double[] look
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -2035,8 +2183,35 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public bool SetReferenceErrorVisible(bool visible) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setReferenceErrorVisible(_ctx, _sceneId, visible);
 
+  public bool SetDustSoftening(float softening) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustSoftening(_ctx, _sceneId, softening);
+
+  public bool SetDustViewFlags(uint flags) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustViewFlags(_ctx, _sceneId, flags);
+
+  public bool SetDustFlowSpeed(float speed) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustFlowSpeed(_ctx, _sceneId, speed);
+
   public bool SetCometIndicatorVisible(bool visible) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setCometIndicatorVisible(_ctx, _sceneId, visible);
+
+  public unsafe EarthObserverStatus? EarthObserverStatus()
+  {
+    if (_ctx == 0)
+      return null;
+    CEarthObserverStatusDTO dto;
+    if (!PInvokeAetherVkCore.avkSimulationContext_earthObserverStatus(_ctx, _sceneId, &dto) || dto.Active == 0)
+      return null;
+    return new EarthObserverStatus((int)dto.Mode, dto.AimErrorRad, dto.TargetElevationRad);
+  }
+
+  public double DustComaRadiusKm() =>
+    _ctx != 0 ? PInvokeAetherVkCore.avkSimulationContext_dustComaRadiusKm(_ctx, _sceneId) : 0.0;
+
+  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, Quaterniond look) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setEarthObserver(
+      _ctx, _sceneId, cameraId, mode < 0 ? uint.MaxValue : (uint)mode, earthId, cometId, latDeg, lonDeg,
+      new[] { look.X, look.Y, look.Z, look.W });
 
   public bool SetJetPreviewVisibility(ulong jetEntityId, bool isVisible) =>
     PInvokeAetherVkCore.avkSimulationContext_setJetPreviewVisibility(
@@ -2184,6 +2359,92 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public void UnloadModel(ulong modelId)
   {
     throw new NotImplementedException();
+  }
+
+  // ── INativeRuntimeService — Asset library / comet appearance ─────────────
+
+  public unsafe bool ImportAsset(ulong requestId, string path, string cacheDir)
+  {
+    if (_ctx == 0) return false;
+    fixed (byte* p = NullTerminatedUtf8(path))
+    fixed (byte* c = NullTerminatedUtf8(cacheDir))
+      return PInvokeAetherVkCore.avkSimulationContext_importAsset(_ctx, requestId, p, c);
+  }
+
+  public unsafe Models.ImportedAsset[]? GetAssets()
+  {
+    if (_ctx == 0) return [];
+    uint count = PInvokeAetherVkCore.avkSimulationContext_getAssetCount(_ctx);
+    if (count == uint.MaxValue) return null; // an import holds the library
+
+    var result = new Models.ImportedAsset[count];
+    Span<byte> label = stackalloc byte[256];
+    Span<byte> key = stackalloc byte[1024];
+    for (uint i = 0; i < count; i++)
+    {
+      CAssetInfoDTO info;
+      uint labelLen, keyLen;
+      fixed (byte* l = label)
+      fixed (byte* k = key)
+      {
+        if (!PInvokeAetherVkCore.avkSimulationContext_getAssetInfo(
+              _ctx, i, &info, l, (uint)label.Length, &labelLen, k, (uint)key.Length, &keyLen))
+          return null; // library changed underneath (concurrent import): caller retries
+      }
+      result[i] = new Models.ImportedAsset(
+        info.Id,
+        (Models.AssetKind)info.Kind,
+        DecodeTruncated(label, labelLen),
+        DecodeTruncated(key, keyLen),
+        info.A,
+        info.B,
+        [info.Bundled0, info.Bundled1, info.Bundled2, info.Bundled3],
+        info.ChannelHint < 0 ? null : (Models.TextureChannel)info.ChannelHint,
+        null
+      ) { OrientationFix = (Models.OrientationFix)info.OrientationFix };
+    }
+    return result;
+
+    static string DecodeTruncated(ReadOnlySpan<byte> buffer, uint fullLen)
+    {
+      int len = (int)Math.Min(fullLen, (uint)buffer.Length - 1);
+      fixed (byte* p = buffer)
+        return Encoding.UTF8.GetString(p, len);
+    }
+  }
+
+  public bool RemoveAsset(ulong requestId, ulong assetId) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_removeAsset(_ctx, requestId, assetId);
+
+  public unsafe Models.AssetThumbnail? GetAssetThumbnail(ulong assetId)
+  {
+    if (_ctx == 0) return null;
+    uint w, h;
+    if (!PInvokeAetherVkCore.avkSimulationContext_copyAssetThumbnail(_ctx, assetId, null, 0, &w, &h))
+      return null;
+    var rgba = new byte[checked((int)(w * h * 4))];
+    fixed (byte* p = rgba)
+    {
+      if (!PInvokeAetherVkCore.avkSimulationContext_copyAssetThumbnail(
+            _ctx, assetId, p, (uint)rgba.Length, &w, &h))
+        return null;
+    }
+    return new Models.AssetThumbnail((int)w, (int)h, rgba);
+  }
+
+  public unsafe Models.CometAppearanceStatus SetCometAppearance(Models.CometAppearanceDto appearance)
+  {
+    if (_ctx == 0) return Models.CometAppearanceStatus.NotAvailable;
+    return (Models.CometAppearanceStatus)
+      PInvokeAetherVkCore.avkSimulationContext_setCometAppearance(_ctx, _sceneId, &appearance);
+  }
+
+  public unsafe bool GetCometAppearance(out Models.CometAppearanceDto appearance)
+  {
+    appearance = default;
+    if (_ctx == 0) return false;
+    fixed (Models.CometAppearanceDto* p = &appearance)
+      return PInvokeAetherVkCore.avkSimulationContext_getCometAppearance(_ctx, _sceneId, p);
   }
 
   // ── INativeRuntimeService — Screen Space Billboards ──────────────────────
@@ -2592,6 +2853,18 @@ public enum ExternalStateType : uint
   /// <summary>Emitted after a RestoreSceneDump command completes (success or failure).</summary>
   SceneRestored = 8,
 
+  /// <summary>
+  /// Emitted when an asset import completes (success or failure).
+  /// Payload: <see cref="CAssetImportedDTO"/>. Mirrors Rust <c>CAssetImported</c> (state id = 10).
+  /// </summary>
+  AssetImported = 10,
+
+  /// <summary>
+  /// Emitted when an asset unload completes (success or refusal).
+  /// Payload: <see cref="CAssetRemovedDTO"/>. Mirrors Rust <c>CAssetRemoved</c> (state id = 11).
+  /// </summary>
+  AssetRemoved = 11,
+
 #if DEBUG
   /// <summary>
   /// Emitted after each Micro-layer render (debug builds only).
@@ -2717,6 +2990,59 @@ internal unsafe struct CModelImportedDTO
   }
 }
 
+/// <summary>
+/// Payload of <see cref="ExternalStateType.AssetImported"/>. Mirrors Rust
+/// <c>external_state::CAssetImported</c> (24 bytes).
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct CAssetImportedDTO
+{
+  public ulong RequestId;
+
+  /// <summary>Mesh asset produced by the import, 0 if none.</summary>
+  public ulong MeshId;
+
+  /// <summary>1 = imported (or already present), 0 = failed (reason sent as breadcrumb).</summary>
+  public uint Success;
+
+  /// <summary>Assets that did not exist before this import.</summary>
+  public uint AddedCount;
+}
+
+/// <summary>
+/// Payload of <see cref="ExternalStateType.AssetRemoved"/>. Mirrors Rust
+/// <c>external_state::CAssetRemoved</c> (24 bytes).
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct CAssetRemovedDTO
+{
+  public ulong RequestId;
+  public ulong AssetId;
+
+  /// <summary>1 = removed, 0 = refused (playing, import in progress, unknown id).</summary>
+  public uint Success;
+
+  /// <summary>Comets whose appearance changed (ejected to the sphere / channel cleared).</summary>
+  public uint Ejected;
+}
+
+/// <summary>Mirrors Rust <c>ffi_assets::CAssetInfoDTO</c> (72 bytes).</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct CAssetInfoDTO
+{
+  public ulong Id;
+  public ulong A;
+  public ulong B;
+  public ulong Bundled0;
+  public ulong Bundled1;
+  public ulong Bundled2;
+  public ulong Bundled3;
+  public uint Kind;
+  public int ChannelHint;
+  public uint OrientationFix;
+  private uint _pad;
+}
+
 [StructLayout(LayoutKind.Sequential)]
 internal unsafe struct CTime
 {
@@ -2767,6 +3093,20 @@ internal readonly struct CometPositionDTO
   public readonly double Y;
   public readonly double Z;
 }
+
+/// <summary>Mirrors Rust <c>CEarthObserverStatus</c> (ffi.rs), 24 bytes.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct CEarthObserverStatusDTO
+{
+  public uint Active;
+  public uint Mode;
+  public double AimErrorRad;
+  public double TargetElevationRad;
+}
+
+/// <summary>Native Earth observer: the submode (<c>EarthObserverOrientationMode</c> value), the
+/// view-axis error to the target and the target elevation (rad) at the last commit.</summary>
+public sealed record EarthObserverStatus(int Mode, double AimErrorRad, double TargetElevationRad);
 
 /// <summary>Mirrors Rust <c>CDustTierStats</c> (ffi.rs), 48 bytes.</summary>
 [StructLayout(LayoutKind.Sequential)]

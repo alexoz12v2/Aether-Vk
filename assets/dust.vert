@@ -1,27 +1,34 @@
 // @assets/dust.vert
 //
-// Dust v3 renderer: instanced camera-facing quads. Instance = cluster * children + child.
-// Each cluster (super-particle) is amplified into `children` sub-splats at render time (8..64,
-// more while the ring is sparse, chosen by the host within a fixed instance budget) with a
-// linearized perturbation relative to the cluster's exact Keplerian position:
-//   dx_k = sigma_v * age * N3(0,1)              (ejection velocity dispersion)
-//        + 1/2 * dbeta_k * g_sun * age^2 * (-sun) (size spread within the cluster's beta stratum)
-// Pixels show the dust optical depth: each child spreads its cross-section over its drawn area, so
-// the brightness of a dust column is independent of zoom, distance, the children count and the
-// pixel clamps (mirror: `dust::splat_footprint` / `dust::splat_opacity`).
+// Dust v3 renderer: instanced camera-facing quads, drawn indirectly from the tier's LOD instance
+// list (dust_lod.comp): instance -> (cluster, child). Every child is a DUST_CHILD_PX dot: what grows
+// on screen is split into more children by the LOD, the dots never grow.
+// Streaklines: a cluster with a stream predecessor (r - S: the same stream's previous time
+// sample, dust_streak_pred) draws the dust emitted between them along the segment, on the part
+// the LOD found visible (dust_streak_clip, rebuilt here from the same mvp):
+//   x_c = lerp(P, P_pred, t_c) + sigma(t_c) (N e1 + N' e2)   (stream dispersion, perpendicular)
+//       + 1/2 * dbeta_c * g_sun * age(t_c)^2 * (-sun)         (size spread within the stratum)
+// with t_c = t0 + (t1 - t0) fract(u_id + c phi^-1). On a spinning nucleus consecutive samples of a
+// stream sweep the jet around the pole, so the streaks draw spirals and arcs. Without a
+// predecessor the cluster is a point spread (dust_child_offset).
+// Children are keyed by the cluster's child-pattern id (low bits of the dbeta field, hashed from
+// the emission record), never by its ring slot.
+// Pixels show the dust optical depth: each child spreads its cross-section (the LOD wrote the
+// flux per child) over its drawn area, so the brightness of a dust column is independent of zoom,
+// distance and the children count (mirror: `dust::splat_footprint` / `dust::splat_opacity`).
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
 #include "sim/dust_common.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
-    DustRenderBuffer render;  // 0
-    uint children;            // 8: render-time children per cluster (DUST_CHILDREN..DUST_MAX_CHILDREN);
-                              //    bit 31 (DUST_DITHER_FLAG): 8-bit target, stochastic rounding
-    uint liveCount;           // 12
+    DustRenderBuffer render;  // 0: flux per child (dust_lod.comp)
+    DustUintBuffer header;    // 8: the tier's LOD header: instance list (cluster | child <<
+                              //    DUST_LOD_CLUSTER_BITS) at DUST_LOD_HEADER_LIST, flow clock, flags
     mat4 mvp;                 // 16: particle-system local metres -> clip
-    vec4 color;               // 80: rgb stream color, a = exposure (gain / reference optical depth)
+    vec4 color;               // 80: rgb stream color, a = exposure (gain / (tau_ref * white point))
     vec4 antiSunG;            // 96: unit anti-sun direction (ps frame), w = solar gravity at comet (m/s^2)
-    vec4 params;              // 112: x units per metre, y P00, z P11, w 2/viewport_height
+    vec4 params;              // 112: x units per metre, y P00, z P11, w +-2/viewport_height
+                              //      (negative: 8-bit target, stochastic rounding)
 } pc;                         // 128 bytes
 
 layout(location = 0) out vec3 v_color;   // stream color: the saturation ceiling
@@ -29,14 +36,6 @@ layout(location = 1) out vec2 v_uv;
 layout(location = 2) out float v_opacity; // peak opacity of this splat (before the gaussian)
 // 8-bit target: per-splat stochastic rounding offset in [0, 1); < 0 = float target, no rounding
 layout(location = 3) flat out float v_dither;
-
-const float MIN_PX = 1.5;
-const float MAX_PX = 48.0;
-// child footprint radius as a fraction of the cluster spread (the 8 children already scatter over
-// the spread; a footprint as large as the whole spread smears each cluster into a faint disc)
-const float CHILD_RADIUS_FRAC = 0.5;
-// stride of the child hash: keeps children decorrelated for any `children` <= this
-const uint DUST_MAX_CHILDREN = 64u;
 
 const vec2 CORNERS[6] = vec2[6](
     vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(1.0, 1.0),
@@ -52,35 +51,48 @@ void cull() {
 }
 
 void main() {
-    uint inst = uint(gl_InstanceIndex);
-    uint k = clamp(pc.children & 0x7FFFFFFFu, 1u, DUST_MAX_CHILDREN);
-    bool dither = (pc.children & 0x80000000u) != 0u;
-    uint cluster = inst / k;
-    uint child = inst - cluster * k;
-    if (cluster >= pc.liveCount) { cull(); return; }
-    // render buffer is compact (index = live-range offset); y carries the stable ring slot
+    DustUintBuffer list = DustUintBuffer(uvec2(pc.header.v[DUST_LOD_HEADER_LIST], pc.header.v[DUST_LOD_HEADER_LIST + 1u]));
+    uint flags = pc.header.v[DUST_LOD_HEADER_FLAGS];
+    float flowTHi = uintBitsToFloat(pc.header.v[DUST_LOD_HEADER_T_HI]);
+    float flowTLo = uintBitsToFloat(pc.header.v[DUST_LOD_HEADER_T_LO]);
+    float lodLambda = uintBitsToFloat(pc.header.v[DUST_LOD_HEADER_LAMBDA]);
+    uint entry = list.v[gl_InstanceIndex];
+    uint cluster = entry & DUST_LOD_CLUSTER_MASK;
+    uint child = entry >> DUST_LOD_CLUSTER_BITS;
+    bool dither = pc.params.w < 0.0;
     DustRenderCluster R = pc.render.c[cluster];
-    uint slot = floatBitsToUint(R.age_id_dbeta_flux.y);
+    // child pattern from the emission record (not the ring slot: same children after a seek)
+    uint id = dust_child_id(R.age_id_dbeta_flux.z);
     float flux = R.age_id_dbeta_flux.w;
     if (!(flux > 0.0)) { cull(); return; }
 
     float age = R.age_id_dbeta_flux.x;
     float spread = R.pos_size.w;
-
-    // deterministic child perturbation
-    uint h0 = dust_pcg(slot * DUST_MAX_CHILDREN + child + 0x9E3779B9u);
-    uint h1 = dust_pcg(h0);
-    uint h2 = dust_pcg(h1);
-    uint h3 = dust_pcg(h2);
-    uint h4 = dust_pcg(h3);
-    vec3 n3 = vec3(
-        dust_gauss(dust_u01(h0), dust_u01(h1)),
-        dust_gauss(dust_u01(h1 ^ 0x68E31DA4u), dust_u01(h2)),
-        dust_gauss(dust_u01(h3), dust_u01(h4))
-    );
-    float dbeta = R.age_id_dbeta_flux.z * (2.0 * dust_u01(dust_pcg(h4)) - 1.0);
-    vec3 offset = spread * n3 + (0.5 * dbeta * pc.antiSunG.w * age * age) * pc.antiSunG.xyz;
-    vec3 pos_m = R.pos_size.xyz + offset;
+    vec3 pos_m;
+    bool tracer = child == DUST_TRACER_CHILD;
+    float dotAge = age;
+    float want = 1.0; // the cluster's LOD demand (dust_lod.comp): the drawn radius keeps its footprint
+    int pred = tracer ? -1 : dust_streak_pred(pc.render, cluster);
+    if (tracer) {
+        // a real particle, at its exact position (dust::child_sample)
+        pos_m = R.pos_size.xyz;
+    } else if (pred >= 0) {
+        DustRenderCluster RQ = pc.render.c[pred];
+        vec4 Q = RQ.pos_size;
+        float aq = RQ.age_id_dbeta_flux.x;
+        // the LOD saw it: a disagreement can only come from rounding at the view edge (same
+        // footprints, dust_extent; the dots themselves keep the stream spread)
+        vec4 S;
+        if (!dust_streak_clip(pc.mvp, R.pos_size.xyz, Q.xyz, dust_extent(R, pc.antiSunG.w), dust_extent(RQ, pc.antiSunG.w), pc.params, S)) S = vec4(0.0, 1.0, 0.0, 0.0);
+        pos_m = dust_streak_child(R.pos_size.xyz, Q.xyz, spread, Q.w, age, aq, S.x, S.y, id, child,
+                                  R.age_id_dbeta_flux.z, pc.antiSunG);
+        dotAge = age + (aq - age) * dust_streak_dot_t(S.x, S.y, id, child);
+        want = dust_streak_want(S.z, S.w);
+    } else {
+        pos_m = R.pos_size.xyz + dust_child_offset(id, child, spread, R.age_id_dbeta_flux.z, age, pc.antiSunG);
+        float cw = (pc.mvp * vec4(R.pos_size.xyz, 1.0)).w;
+        if (cw > 0.0) want = dust_lod_want(dust_extent(R, pc.antiSunG.w) * pc.params.x * pc.params.z / cw / abs(pc.params.w));
+    }
 
     vec4 clip = pc.mvp * vec4(pos_m, 1.0);
     if (!(clip.w > 0.0) || !(pc.params.y > 0.0) || !(pc.params.z > 0.0)) { cull(); return; }
@@ -89,20 +101,25 @@ void main() {
     // occluded by the comet through the depth test (reverse Z: 0 = far, w = near).
     clip.z = clamp(clip.z, 0.0, clip.w);
 
-    // child footprint: physical radius, clamped to [MIN_PX, MAX_PX] pixels
+    // footprint: DUST_CHILD_PX dots, larger when the LOD drew fewer than the cluster asks for
+    // (dust_splat_radius: still covering it, energy exact), and the same radius in metres here
     float units_per_m = pc.params.x;
-    float px_to_ndc_y = pc.params.w;
+    float px_to_ndc_y = abs(pc.params.w);
     float px_to_ndc_x = px_to_ndc_y * (pc.params.y / pc.params.z);
-    float r_units = max(spread * CHILD_RADIUS_FRAC, 1.0) * units_per_m;
     float px_per_unit = pc.params.z / clip.w / px_to_ndc_y;
-    float r_px = clamp(r_units * px_per_unit, MIN_PX, MAX_PX);
-    // the drawn radius back in metres: the clamps change the footprint, never the energy
+    float r_px = tracer ? DUST_TRACER_PX : dust_splat_radius(want, dust_lod_children(want, lodLambda));
     float r_draw_m = r_px / px_per_unit / units_per_m;
 
     // Optical depth: the child's cross-section (m^2) over its drawn area (the frag gaussian
-    // integrates to 1 over the unit disc), times the exposure. A former 1/r_px display stretch made
-    // the dust fainter the nearer the camera (late_near.rdc vs late_far.rdc).
-    float intensity = pc.color.a * (flux / float(k)) / max(r_draw_m * r_draw_m, 1e-30);
+    // integrates to 1 over the unit disc), times the exposure. A tracer is a highlight at a fixed
+    // level of the view's white point instead (the accumulation is relative to it): visible at any
+    // zoom, sparse enough not to matter for the white point. The flow modulates the dust around its
+    // mean with marks on synchrones: Lagrangian timelines riding the particles, K x faster on the
+    // flow clock T (held on pause, so paused frames are identical; dust::flow_factor).
+    float intensity = tracer ? DUST_TRACER_LEVEL : pc.color.a * flux / max(r_draw_m * r_draw_m, 1e-30);
+    if (!tracer && (flags & DUST_VIEW_FLOW) != 0u) {
+        intensity *= dust_flow_factor(dotAge, flowTHi, flowTLo);
+    }
 
     vec2 corner = CORNERS[gl_VertexIndex % 6];
     clip.xy += corner * r_px * vec2(px_to_ndc_x, px_to_ndc_y) * clip.w;
@@ -111,5 +128,5 @@ void main() {
     v_opacity = intensity;
     v_uv = corner;
     // decorrelates the splats covering a pixel: all rounding the same way would bias the sum
-    v_dither = dither ? dust_u01(dust_pcg(inst ^ 0xA511E9B3u)) : -1.0;
+    v_dither = dither ? dust_u01(dust_pcg(uint(gl_InstanceIndex) ^ 0xA511E9B3u)) : -1.0;
 }

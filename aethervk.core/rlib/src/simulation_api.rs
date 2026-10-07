@@ -23,6 +23,7 @@ pub mod comet_appearance;
 pub mod components_api;
 pub mod core_api;
 pub mod debug_perf;
+pub mod earth_observer;
 pub mod logic_thread;
 pub mod misc_api;
 pub mod render_stall_watcher;
@@ -711,6 +712,8 @@ pub mod external_state {
     CameraMatrices(CCameraMatrices),
     /// Emitted when an `ImportAsset` command completes (success or failure).
     AssetImported(CAssetImported),
+    /// Emitted when a `RemoveAsset` command completes (success or failure).
+    AssetRemoved(CAssetRemoved),
   }
 
   impl ExternalState {
@@ -727,6 +730,7 @@ pub mod external_state {
         #[cfg(debug_assertions)]
         Self::CameraMatrices(_) => 9,
         Self::AssetImported(_) => 10,
+        Self::AssetRemoved(_) => 11,
       }
     }
   }
@@ -744,6 +748,19 @@ pub mod external_state {
     pub success: u32,
     /// Number of assets (mesh + textures) that did not exist before.
     pub added_count: u32,
+  }
+
+  /// Payload for [`ExternalState::AssetRemoved`].
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, PartialEq, Eq, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct CAssetRemoved {
+    /// Id passed to `avkSimulationContext_removeAsset`.
+    pub request_id: u64,
+    pub asset_id: u64,
+    /// `1` = removed, `0` = refused (simulation playing, import in progress, unknown id).
+    pub success: u32,
+    /// Number of comets whose appearance changed (ejected to the sphere / channel cleared).
+    pub ejected: u32,
   }
 
   /// Payload for [`ExternalState::SceneDumped`].
@@ -804,6 +821,7 @@ pub fn emit_external_state_change(external_state: &external_state::ExternalState
         bytemuck::bytes_of(m).as_ptr().cast::<core::ffi::c_void>()
       }
       ExternalState::AssetImported(a) => bytemuck::bytes_of(a).as_ptr().cast::<core::ffi::c_void>(),
+      ExternalState::AssetRemoved(a) => bytemuck::bytes_of(a).as_ptr().cast::<core::ffi::c_void>(),
     };
     unsafe { cb(id, bytes_ptr) };
   }

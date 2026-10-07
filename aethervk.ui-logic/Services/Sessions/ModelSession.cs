@@ -16,6 +16,12 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   /// trigger the push of the shared model to every jet.
   /// </summary>
   public bool ShowReferencePositionError { get; set; }
+  /// <summary>Dust display stretch softening (Model tab "dust visibility"), visual only.</summary>
+  public double DustSoftening { get; set; } = ModelTabDefaults.DustSoftening;
+  /// <summary>Dust tracers: bright dots on a sparse set of real particles (Model tab), visual only.</summary>
+  public bool DustTracers { get; set; } = true;
+  /// <summary>Time-lapse factor of the dust flow marks (Model tab), 1 = real motion, visual only.</summary>
+  public double DustFlowSpeed { get; set; } = 1.0;
 
   // ── Jet list ───────────────────────────────────────────────────────────────────
 

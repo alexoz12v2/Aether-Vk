@@ -1109,6 +1109,10 @@ pub struct Scene {
   pub texture_cache:
     alloc::sync::Arc<parking_lot::RwLock<crate::simulation::texture_cache::TextureCache>>,
   pub foreign_registry: parking_lot::RwLock<hashbrown::HashMap<u64, ForeignVTable>>,
+  /// scaled simulation time (s, f64 bits) of the committed body / frame transforms, written in the
+  /// same scene write as them (`u64::MAX` = never committed). The renderer evaluates dust at this
+  /// time, so particles and the camera come from one snapshot (see `Scene::sim_time_s`).
+  sim_time_bits: core::sync::atomic::AtomicU64,
 }
 
 impl Clone for Scene {
@@ -1121,6 +1125,9 @@ impl Clone for Scene {
       names: RwLock::new(self.names.read().clone()),
       texture_cache: alloc::sync::Arc::clone(&self.texture_cache),
       foreign_registry: parking_lot::RwLock::new(self.foreign_registry.read().clone()),
+      sim_time_bits: core::sync::atomic::AtomicU64::new(
+        self.sim_time_bits.load(core::sync::atomic::Ordering::Acquire),
+      ),
     }
   }
 }
@@ -1208,7 +1215,22 @@ impl Scene {
       names: RwLock::new(HashMap::new()),
       texture_cache,
       foreign_registry: parking_lot::RwLock::new(hashbrown::HashMap::with_capacity(64)),
+      sim_time_bits: core::sync::atomic::AtomicU64::new(u64::MAX),
     }
+  }
+
+  /// Scaled simulation time (s) of the committed transforms, `None` before the first commit.
+  /// Written by the logic thread together with the body / frame transforms (tick commit, seek),
+  /// read by the render extraction under the same scene lock: dust drawn from one snapshot never
+  /// sees the comet one tick behind its own evaluation time.
+  pub fn sim_time_s(&self) -> Option<f64> {
+    let b = self.sim_time_bits.load(core::sync::atomic::Ordering::Acquire);
+    (b != u64::MAX).then(|| f64::from_bits(b))
+  }
+
+  /// See [`Self::sim_time_s`]. Call in the same scene write that commits the transforms.
+  pub fn set_sim_time_s(&self, t_s: f64) {
+    self.sim_time_bits.store(t_s.to_bits(), core::sync::atomic::Ordering::Release);
   }
 
   pub fn get_root(&self) -> Option<EntityId> {
@@ -1271,6 +1293,9 @@ impl Scene {
       names: RwLock::new(self.names.read().clone()),
       texture_cache: alloc::sync::Arc::clone(&self.texture_cache),
       foreign_registry: parking_lot::RwLock::new(self.foreign_registry.read().clone()),
+      sim_time_bits: core::sync::atomic::AtomicU64::new(
+        self.sim_time_bits.load(core::sync::atomic::Ordering::Acquire),
+      ),
     }
   }
 

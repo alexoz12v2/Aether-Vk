@@ -21,7 +21,8 @@ layout(push_constant, std430) uniform PushConstants {
     vec4 ps_r_t_hi;              // 32: particle-system heliocentric position (m), w = t_now (s); df64 hi
     vec4 ps_r_t_lo;              // 48: ... low part
     vec4 rot_inv;                // 64: root -> particle-system quaternion (xyzw)
-    vec4 ttl;                    // 80: age band: x max age = TTL (s), y min age (s), z 1 = no fade
+    vec4 ttl;                    // 80: age band: x max age = TTL (s), y min age (s), z 1 = no fade,
+                                 //     w the tier's stream shift
 } pc;                            // 96 bytes
 
 void main() {
@@ -53,7 +54,10 @@ void main() {
         // fade the last 10% of the lifetime (oldest tier only)
         float fade = pc.ttl.z > 0.5 ? 1.0 : clamp((1.0 - age_f / ttl) * 10.0, 0.0, 1.0);
         R.pos_size = vec4(local, C.misc.x * age_f);
-        R.age_id_dbeta_flux = vec4(age_f, uintBitsToFloat(slot), C.misc.w, C.v0_lo_mass.w * C.misc.z * fade);
+        // z: the beta half-spread with the child-pattern id in its low bits, copied bit for bit
+        // y: slot, the tier's stream shift and the live bit (dust::render_word): streak predecessors
+        R.age_id_dbeta_flux = vec4(age_f, uintBitsToFloat(dust_render_word(slot, uint(pc.ttl.w))), C.misc.w,
+                                   C.v0_lo_mass.w * C.misc.z * fade);
     }
     pc.render.c[i] = R;
 }

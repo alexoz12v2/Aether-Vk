@@ -15,4 +15,6 @@ public partial interface ISettingsTabViewModel
   bool HasActiveViewport { get; }
 
   System.Collections.ObjectModel.ObservableCollection<ViewportSettingsViewModel> ActiveViewports { get; }
+
+  CometAppearanceViewModel CometAppearance { get; }
 }

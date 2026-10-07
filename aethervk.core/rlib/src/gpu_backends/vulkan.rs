@@ -212,6 +212,95 @@ impl RenderContext for VulkanRenderContext {
     index: usize,
     additional_params: &DeviceAdditionalParams,
   ) -> GpuResult<RenderDeviceHandle> {
+    // A device created right after another process destroyed its own (back-to-back test processes,
+    // an app relaunch) can fail transiently while the driver still tears the old one down
+    // (`vkCreateDevice` → VK_ERROR_INITIALIZATION_FAILED / DEVICE_LOST in the NVIDIA ICD). That is
+    // back-pressure, not a configuration error: back off exponentially (with jitter) and retry.
+    let attempts = device_init_attempts();
+    let mut attempt = 0u32;
+    loop {
+      CREATING_DEVICE.store(true, core::sync::atomic::Ordering::Release);
+      let res = self.init_device_once(index, additional_params);
+      CREATING_DEVICE.store(false, core::sync::atomic::Ordering::Release);
+      match res {
+        Err(e) if attempt + 1 < attempts && is_transient_device_init_error(&e) => {
+          let delay_ms = device_init_backoff_ms(attempt);
+          aethervk_oshal_rlib::log!(
+            "[Vulkan] device creation failed transiently ({e}), retry {}/{} in {delay_ms} ms",
+            attempt + 1,
+            attempts - 1
+          );
+          aethervk_oshal_rlib::os::native::this_thread::sleep_for(
+            core::time::Duration::from_millis(delay_ms),
+          );
+          attempt += 1;
+        }
+        other => return other,
+      }
+    }
+  }
+
+  fn deref_device_and(
+    &self,
+    dev_handle: RenderDeviceHandle,
+    p_user_data: *mut ffi::c_void,
+    f: fn(dev: &dyn RenderDevice, p_user_data: *mut ffi::c_void) -> GpuResult<()>,
+  ) -> Option<GpuResult<()>> {
+    let core = self.core.read();
+    // SAFETY: if it exists in the map, it was inserted with `init_device`
+    core
+      .live_devices
+      .get(&dev_handle)
+      .map(|device| unsafe { f(device.assume_init_ref(), p_user_data) })
+  }
+
+  #[cfg(target_os = "linux")]
+  fn linux_surface_support(&self) -> instance::LinuxSurfaceSupport {
+    self.core.read().instance.linux_surface_support
+  }
+}
+
+/// `vkCreateDevice` (and the setup around it) is running: the debug messenger reports the loader's
+/// `terminator_CreateDevice` failure of a transient attempt as a log line instead of forwarding it
+/// to the (test: panicking) validation callback, so [`VulkanRenderContext::init_device`] can retry.
+pub(crate) static CREATING_DEVICE: core::sync::atomic::AtomicBool =
+  core::sync::atomic::AtomicBool::new(false);
+
+/// Device creation attempts (`AETHERVK_DEVICE_INIT_ATTEMPTS`, default 6: ~3 s of backoff in all).
+pub fn device_init_attempts() -> u32 {
+  aethervk_oshal_rlib::os::env::var("AETHERVK_DEVICE_INIT_ATTEMPTS")
+    .and_then(|s| s.trim().parse::<u32>().ok())
+    .unwrap_or(6)
+    .clamp(1, 20)
+}
+
+/// Failures of device creation worth retrying: the driver is busy tearing down another device.
+pub fn is_transient_device_init_error(e: &GpuError) -> bool {
+  match e {
+    GpuError::DeviceLost | GpuError::OutOfMemory => true,
+    GpuError::BackendSpecific(s) => {
+      s.contains("ERROR_INITIALIZATION_FAILED")
+        || s.contains("Initialization of an object has failed")
+    }
+    _ => false,
+  }
+}
+
+/// Exponential backoff with jitter: 100 ms · 2^attempt, ±25 %, capped at 2 s.
+pub fn device_init_backoff_ms(attempt: u32) -> u64 {
+  let base = (100u64 << attempt.min(5)).min(2000);
+  let t = aethervk_oshal_rlib::os::time::get_monotonic_time() as u64;
+  let jitter = (t ^ (t >> 17)).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 54; // 0..1023
+  base * (768 + jitter / 2) / 1024
+}
+
+impl VulkanRenderContext {
+  /// One device creation attempt (see the retrying [`RenderContext::init_device`]).
+  fn init_device_once(
+    &mut self,
+    index: usize,
+    additional_params: &DeviceAdditionalParams,
+  ) -> GpuResult<RenderDeviceHandle> {
     let handle = self.device_id_from_index(index);
     let mut query_input = PhysicalDeviceQueryInput::from_params(additional_params)
       .ok_or(GpuError::InvalidArgument("vulkan.rs:128".to_string()))?;
@@ -272,25 +361,6 @@ impl RenderContext for VulkanRenderContext {
 
     Ok(handle)
   }
-
-  fn deref_device_and(
-    &self,
-    dev_handle: RenderDeviceHandle,
-    p_user_data: *mut ffi::c_void,
-    f: fn(dev: &dyn RenderDevice, p_user_data: *mut ffi::c_void) -> GpuResult<()>,
-  ) -> Option<GpuResult<()>> {
-    let core = self.core.read();
-    // SAFETY: if it exists in the map, it was inserted with `init_device`
-    core
-      .live_devices
-      .get(&dev_handle)
-      .map(|device| unsafe { f(device.assume_init_ref(), p_user_data) })
-  }
-
-  #[cfg(target_os = "linux")]
-  fn linux_surface_support(&self) -> instance::LinuxSurfaceSupport {
-    self.core.read().instance.linux_surface_support
-  }
 }
 
 #[derive(Clone, Copy)]
@@ -345,4 +415,42 @@ fn allocate_primary_vk_command_buffer(
   Err(GpuError::BackendSpecific(
     "Couldn't allocate command buffer within deadline. OOM".to_string(),
   ))
+}
+
+#[cfg(test)]
+mod device_init_retry_tests {
+  use super::*;
+
+  /// Only "driver busy" failures are retried; configuration errors fail at once.
+  #[test]
+  fn transient_device_init_errors_are_classified() {
+    assert!(is_transient_device_init_error(&GpuError::DeviceLost));
+    assert!(is_transient_device_init_error(&GpuError::BackendSpecific(
+      "Initialization of an object has failed".to_string()
+    )));
+    assert!(is_transient_device_init_error(&GpuError::BackendSpecific(
+      "ERROR_INITIALIZATION_FAILED".to_string()
+    )));
+    assert!(!is_transient_device_init_error(
+      &GpuError::UnsupportedFeature
+    ));
+    assert!(!is_transient_device_init_error(&GpuError::InvalidArgument(
+      "x".to_string()
+    )));
+  }
+
+  /// Backoff grows exponentially (±25 % jitter), capped at 2 s; the default budget is ~3 s.
+  #[test]
+  fn device_init_backoff_is_exponential_with_jitter() {
+    for a in 0..10u32 {
+      let base = (100u64 << a.min(5)).min(2000);
+      let d = device_init_backoff_ms(a);
+      assert!(
+        d >= base * 3 / 4 - 1 && d <= base * 5 / 4 + 1,
+        "attempt {a}: {d} ms (base {base})"
+      );
+    }
+    let total: u64 = (0..device_init_attempts() - 1).map(|a| (100u64 << a).min(2000)).sum();
+    assert!(total >= 1500 && total <= 6000, "{total} ms");
+  }
 }

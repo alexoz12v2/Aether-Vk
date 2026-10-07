@@ -60,6 +60,8 @@ pub struct PhysicsPipelines {
   pub dust_emit: vk::Pipeline,
   /// per-frame closed-form Kepler evaluation of the live ring range (`dust_propagate.comp`, wg 64)
   pub dust_propagate: vk::Pipeline,
+  /// per-frame render LOD + white-point tiles of one tier (`dust_lod.comp`, wg 64)
+  pub dust_lod: vk::Pipeline,
 
   /// SPIR-V-reflected push constant block size per pipeline.
   /// Used by `debug_assert!` in dispatch helpers to catch size mismatches
@@ -471,6 +473,7 @@ impl PhysicsPipelines {
         // ── Dust v3 ──────────────────────────────────────────────────────────────
         dust_emit: mk!("dust_emit.comp.spv"),
         dust_propagate: mk!("dust_propagate.comp.spv"),
+        dust_lod: mk!("dust_lod.comp.spv"),
         pc_sizes,
         wg_sizes,
         subgroup_size,
@@ -508,6 +511,7 @@ impl PhysicsPipelines {
   pub fn discard(&mut self, discard_pool: &resources::DiscardPool, timeline: u64) {
     discard_pool.discard_pipeline(self.dust_emit, timeline);
     discard_pool.discard_pipeline(self.dust_propagate, timeline);
+    discard_pool.discard_pipeline(self.dust_lod, timeline);
 
     discard_pool.discard_pipeline_layout(self.pipeline_layout, timeline);
   }

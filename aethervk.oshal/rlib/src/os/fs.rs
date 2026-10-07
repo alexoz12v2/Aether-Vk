@@ -763,23 +763,38 @@ pub fn write<T: IntoPathBuf>(path: T, content: &[u8]) -> Result<(), FsError> {
 /// Lets callers emit a header followed by a large payload without first concatenating them into
 /// one heap buffer (e.g. the asset cache writes a 4 KiB header plus tens of MiB of texels).
 pub fn write_parts<T: IntoPathBuf>(path: T, parts: &[&[u8]]) -> Result<(), FsError> {
+  write_parts_mode(path, parts, false)
+}
+
+/// Appends the concatenation of `parts` to `path` (created if missing), looping on short writes.
+pub fn append_parts<T: IntoPathBuf>(path: T, parts: &[&[u8]]) -> Result<(), FsError> {
+  write_parts_mode(path, parts, true)
+}
+
+fn write_parts_mode<T: IntoPathBuf>(path: T, parts: &[&[u8]], append: bool) -> Result<(), FsError> {
   #[cfg(windows)]
   {
     use windows::Win32::{
       Foundation::{CloseHandle, GENERIC_WRITE, INVALID_HANDLE_VALUE},
       Storage::FileSystem::{
-        CREATE_ALWAYS, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, WriteFile,
+        CREATE_ALWAYS, CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
+        OPEN_ALWAYS, WriteFile,
       },
     };
 
     let mut path_buf = path.into_pathbuf();
+    let (access, disposition) = if append {
+      (FILE_APPEND_DATA.0, OPEN_ALWAYS)
+    } else {
+      (GENERIC_WRITE.0, CREATE_ALWAYS)
+    };
     let handle = unsafe {
       CreateFileW(
         windows::core::PCWSTR(path_buf.as_ptr_mut()),
-        GENERIC_WRITE.0,
+        access,
         FILE_SHARE_READ,
         None,
-        CREATE_ALWAYS,
+        disposition,
         FILE_ATTRIBUTE_NORMAL,
         None,
       )
@@ -819,11 +834,12 @@ pub fn write_parts<T: IntoPathBuf>(path: T, parts: &[&[u8]]) -> Result<(), FsErr
   }
   #[cfg(not(windows))]
   {
-    use libc::{O_CREAT, O_TRUNC, O_WRONLY, close, open};
+    use libc::{O_APPEND, O_CREAT, O_TRUNC, O_WRONLY, close, open};
 
     let mut path_buf = path.into_pathbuf();
+    let mode = if append { O_APPEND } else { O_TRUNC };
     // 0o666 = read and write for owner, group, and others
-    let fd = unsafe { open(path_buf.as_ptr_mut(), O_WRONLY | O_CREAT | O_TRUNC, 0o666) };
+    let fd = unsafe { open(path_buf.as_ptr_mut(), O_WRONLY | O_CREAT | mode, 0o666) };
     if fd < 0 {
       return Err(FsError::CouldNotCreateFile);
     }

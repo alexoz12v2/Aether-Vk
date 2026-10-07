@@ -11,6 +11,7 @@ use bitflags::bitflags;
 use core::{ffi, hash::Hash};
 use heapless::index_map::FnvIndexMap;
 
+pub mod dust_trace;
 pub mod frame;
 pub mod scene_conversion;
 
@@ -318,7 +319,10 @@ pub struct CompositePushConstants {
   /// 1 when the camera uses an orthographic projection (linear reverse-Z depth), 0 for
   /// perspective (hyperbolic reverse-Z depth). Selects the depth linearisation in composite.frag.
   pub is_orthographic: u32,
-  pub _pad: u32,
+  /// asinh softening of the dust display stretch (`dust::display_stretch`), 0 = linear
+  pub dust_softening: f32,
+  /// black point of the dust display stretch, relative to the white point
+  pub dust_black_point: f32,
 }
 
 #[repr(C)]

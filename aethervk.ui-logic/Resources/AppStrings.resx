@@ -124,6 +124,54 @@
   <data name="Tabs_Settings_General" xml:space="preserve">
     <value>General</value>
   </data>
+  <data name="Tabs_Settings_CometAppearance" xml:space="preserve">
+    <value>Comet Appearance</value>
+  </data>
+  <data name="Tabs_Settings_DisplayMode" xml:space="preserve">
+    <value>Display mode</value>
+  </data>
+  <data name="Tabs_Settings_DisplayModeDefault" xml:space="preserve">
+    <value>Procedural sphere</value>
+  </data>
+  <data name="Tabs_Settings_DisplayModeCustom" xml:space="preserve">
+    <value>Custom mesh</value>
+  </data>
+  <data name="Tabs_Settings_CustomMesh" xml:space="preserve">
+    <value>Custom mesh</value>
+  </data>
+  <data name="Tabs_Settings_Mesh" xml:space="preserve">
+    <value>Mesh</value>
+  </data>
+  <data name="Tabs_Settings_ChannelAlbedo" xml:space="preserve">
+    <value>Albedo</value>
+  </data>
+  <data name="Tabs_Settings_ChannelNormal" xml:space="preserve">
+    <value>Normal</value>
+  </data>
+  <data name="Tabs_Settings_ChannelRoughness" xml:space="preserve">
+    <value>Roughness</value>
+  </data>
+  <data name="Tabs_Settings_ChannelAo" xml:space="preserve">
+    <value>Ambient occlusion</value>
+  </data>
+  <data name="Tabs_Settings_TextureNone" xml:space="preserve">
+    <value>None</value>
+  </data>
+  <data name="Tabs_Settings_Rotation" xml:space="preserve">
+    <value>Rotation (yaw, pitch, roll) °</value>
+  </data>
+  <data name="Tabs_Settings_Translation" xml:space="preserve">
+    <value>Offset (nucleus radii)</value>
+  </data>
+  <data name="Tabs_Settings_ResetPlacement" xml:space="preserve">
+    <value>Reset placement</value>
+  </data>
+  <data name="Tabs_Settings_AppearanceLockedHint" xml:space="preserve">
+    <value>Pause the simulation to change display mode, mesh and textures</value>
+  </data>
+  <data name="Tabs_Settings_NoMeshesHint" xml:space="preserve">
+    <value>Import a mesh in the Imports tab to use it here</value>
+  </data>
   <data name="Tabs_Settings_CometName" xml:space="preserve">
     <value>Comet Name</value>
   </data>
@@ -177,6 +225,15 @@
 
   <!-- Model Tab -->
   <!-- Model Tab: Sun Expander -->
+  <data name="Tabs_Model_DustVisibility" xml:space="preserve">
+    <value>Dust visibility</value>
+  </data>
+  <data name="Tabs_Model_DustTracers" xml:space="preserve">
+    <value>Particle tracers</value>
+  </data>
+  <data name="Tabs_Model_DustFlowSpeed" xml:space="preserve">
+    <value>Flow time-lapse</value>
+  </data>
   <data name="Tabs_Model_ShowReferenceError" xml:space="preserve">
     <value>show reference-position error</value>
   </data>
@@ -261,6 +318,51 @@
   <!-- Imports Tab -->
   <data name="Tabs_Imports_Title" xml:space="preserve">
     <value>Imports</value>
+  </data>
+  <data name="Tabs_Imports_Meshes" xml:space="preserve">
+    <value>Meshes</value>
+  </data>
+  <data name="Tabs_Imports_Textures" xml:space="preserve">
+    <value>Textures</value>
+  </data>
+  <data name="Tabs_Imports_Import" xml:space="preserve">
+    <value>Import…</value>
+  </data>
+  <data name="Tabs_Imports_DialogTitle" xml:space="preserve">
+    <value>Import mesh or texture</value>
+  </data>
+  <data name="Tabs_Imports_Hint" xml:space="preserve">
+    <value>Meshes: OBJ, PLY, glTF, GLB · Textures: PNG, JPEG, KTX2. Textures embedded in a mesh are listed separately.</value>
+  </data>
+  <data name="Tabs_Imports_EmptyMeshes" xml:space="preserve">
+    <value>No meshes imported yet</value>
+  </data>
+  <data name="Tabs_Imports_EmptyTextures" xml:space="preserve">
+    <value>No textures imported yet</value>
+  </data>
+  <data name="Tabs_Imports_Importing" xml:space="preserve">
+    <value>Importing…</value>
+  </data>
+  <data name="Tabs_Imports_StatusImported" xml:space="preserve">
+    <value>Imported</value>
+  </data>
+  <data name="Tabs_Imports_StatusAlreadyImported" xml:space="preserve">
+    <value>Already imported</value>
+  </data>
+  <data name="Tabs_Imports_StatusFailed" xml:space="preserve">
+    <value>Import failed (see console)</value>
+  </data>
+  <data name="Tabs_Imports_StatusUnsupported" xml:space="preserve">
+    <value>Unsupported file type</value>
+  </data>
+  <data name="Tabs_Imports_Unload" xml:space="preserve">
+    <value>Unload</value>
+  </data>
+  <data name="Tabs_Imports_StatusUnloaded" xml:space="preserve">
+    <value>Unloaded</value>
+  </data>
+  <data name="Tabs_Imports_StatusUnloadFailed" xml:space="preserve">
+    <value>Unload refused (pause the simulation first)</value>
   </data>
 
   <!-- Timeline Tab -->

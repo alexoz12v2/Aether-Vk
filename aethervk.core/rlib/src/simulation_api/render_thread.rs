@@ -378,6 +378,9 @@ fn process_command(
               // SnapshotScene / RestoreSnapshot to time out.
               // build_render_scene is an extension method on Arc<Scene> and reads no
               // other SceneContext fields, so releasing the guard here is safe.
+              let mut dust_softening = crate::scene::dust::DUST_SOFTENING_DEFAULT;
+              let mut dust_view_flags = 0u32;
+              let mut dust_flow = crate::scene::dust::DustFlowClock::default();
               let (
                 scene_arc,
                 unscaled_time_us,
@@ -402,6 +405,17 @@ fn process_command(
                   )
                 };
                 let debug_name = scene_context_read.debug_name.clone();
+                dust_softening = f32::from_bits(
+                  scene_context_read.dust_softening.load(core::sync::atomic::Ordering::Relaxed),
+                );
+                dust_view_flags =
+                  scene_context_read.dust_view_flags.load(core::sync::atomic::Ordering::Relaxed);
+                // flow: advances while the sim runs, held on pause (identical paused frames)
+                {
+                  let mut clock = scene_context_read.dust_flow_clock.lock();
+                  clock.sync(unscaled_time_us, scaled_time_us);
+                  dust_flow = *clock;
+                }
                 let scene_arc = alloc::sync::Arc::clone(&scene_context_read.scene);
                 // scene_context_read guard dropped here — before any GPU work
                 (
@@ -436,6 +450,9 @@ fn process_command(
                   aethervk_oshal_rlib::log!("[render tasklet] build_render_scene failed: {:?}", e);
                   e
                 })?;
+              render_scene.dust_softening = dust_softening;
+              render_scene.dust_view_flags = dust_view_flags;
+              render_scene.dust_flow = dust_flow;
 
               // Dust v3: evaluate clusters before the render pass; the draw must wait for the
               // compute submit that emitted the newest drawn clusters

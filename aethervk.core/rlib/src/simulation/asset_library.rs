@@ -127,6 +127,8 @@ pub enum AssetError {
   CacheIo,
   /// The mesh has no triangles.
   EmptyMesh,
+  /// No asset with the given id.
+  UnknownAsset,
 }
 
 impl From<CometLoadError> for AssetError {
@@ -148,6 +150,7 @@ impl AssetError {
       AssetError::NoCacheDir => "asset cache directory not configured".to_string(),
       AssetError::CacheIo => "could not write or map the asset cache file".to_string(),
       AssetError::EmptyMesh => "mesh has no triangles".to_string(),
+      AssetError::UnknownAsset => "unknown asset".to_string(),
     }
   }
 }
@@ -166,6 +169,7 @@ impl From<AssetError> for EngineError {
       AssetError::NoCacheDir => EngineError::InvalidOperation("AssetError::NoCacheDir"),
       AssetError::CacheIo => EngineError::InvalidOperation("AssetError::CacheIo"),
       AssetError::EmptyMesh => EngineError::InvalidOperation("AssetError::EmptyMesh"),
+      AssetError::UnknownAsset => EngineError::InvalidOperation("AssetError::UnknownAsset"),
     }
   }
 }
@@ -183,8 +187,11 @@ pub struct MeshAsset {
   pub bounding_radius: f32,
   /// Textures that came bundled with the mesh (glTF material / OBJ mtl), per channel.
   pub bundled_textures: [Option<AssetId>; 4],
+  /// Winding repair applied at import (see [`orient_outward`]).
+  pub orientation_fix: OrientationFix,
   pub thumbnail: Thumbnail,
   content_hash: u64,
+  cache_path: String,
   /// `Vertex[vertex_count]` followed by `u32[index_count]`.
   payload: bytes::Bytes,
 }
@@ -199,6 +206,7 @@ pub struct TextureAsset {
   pub channel_hint: Option<TextureChannel>,
   pub thumbnail: Thumbnail,
   content_hash: u64,
+  cache_path: String,
   /// `data` is a slice of the mapped cache file.
   texture: Texture,
 }
@@ -235,6 +243,23 @@ pub struct AssetInfo {
   pub b: u64,
   pub channel_hint: Option<TextureChannel>,
   pub bundled_textures: [Option<AssetId>; 4],
+  /// Mesh only.
+  pub orientation_fix: OrientationFix,
+}
+
+/// Winding repair applied to an imported mesh so that front faces (CCW, culled as back faces
+/// otherwise) point outwards. See [`orient_outward`].
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OrientationFix {
+  /// Winding already consistent with the normals / outward.
+  #[default]
+  None = 0,
+  /// Triangle winding disagreed with the vertex normals and was reversed.
+  WindingFlipped = 1,
+  /// Closed mesh inside-out (winding and normals both inward): winding reversed and normals
+  /// negated.
+  InsideOutFixed = 2,
 }
 
 /// Result of a single [`AssetLibrary::import_file`] call.
@@ -245,6 +270,8 @@ pub struct ImportOutcome {
   pub textures: Vec<AssetId>,
   /// Subset of the above ids that did not exist before this import.
   pub added: Vec<AssetId>,
+  /// Winding repair applied to a newly imported mesh.
+  pub orientation_fix: OrientationFix,
 }
 
 /// Memory accounting of the library itself (not of the GPU copies).
@@ -272,6 +299,9 @@ pub struct AssetLibrary {
   by_hash: BTreeMap<u64, Vec<AssetId>>,
   /// Cache files written by this library (deleted on [`Self::clear`]).
   cache_files: Vec<String>,
+  /// Cache files of removed assets that could not be deleted yet (still mapped elsewhere on
+  /// Windows); retried on every [`Self::remove`] / [`Self::clear`].
+  pending_deletes: Vec<String>,
 }
 
 impl Default for AssetLibrary {
@@ -291,6 +321,7 @@ impl AssetLibrary {
       by_key: BTreeMap::new(),
       by_hash: BTreeMap::new(),
       cache_files: Vec::new(),
+      pending_deletes: Vec::new(),
     }
   }
 
@@ -352,6 +383,7 @@ impl AssetLibrary {
       b: m.index_count,
       channel_hint: None,
       bundled_textures: m.bundled_textures,
+      orientation_fix: m.orientation_fix,
     });
     let textures = self.textures.values().map(|t| AssetInfo {
       id: t.id,
@@ -363,6 +395,7 @@ impl AssetLibrary {
       b: t.texture.height as u64,
       channel_hint: t.channel_hint,
       bundled_textures: [None; 4],
+      orientation_fix: OrientationFix::None,
     });
     meshes.chain(textures).collect()
   }
@@ -465,6 +498,47 @@ impl AssetLibrary {
     for f in self.cache_files.drain(..) {
       let _ = fs::remove_file(f.as_str());
     }
+    for f in self.pending_deletes.drain(..) {
+      let _ = fs::remove_file(f.as_str());
+    }
+  }
+
+  /// Unloads asset `id` (Imports tab "unload").
+  ///
+  /// - Every key aliasing the asset is forgotten, so its source can be imported again.
+  /// - Removing a mesh keeps its bundled textures (they are independent assets).
+  /// - Removing a texture unbundles it from every mesh.
+  /// - The cache file is unmapped once the last `Texture` clone is dropped and deleted best
+  ///   effort (on Windows a still-mapped file cannot be deleted: it is retried later).
+  ///
+  /// Callers must first stop displaying the asset (see `LogicCommand::RemoveAsset`).
+  pub fn remove(&mut self, id: AssetId) -> Result<AssetKind, AssetError> {
+    let (kind, hash, cache_path) = if let Some(m) = self.meshes.remove(&id) {
+      (AssetKind::Mesh, m.content_hash, m.cache_path)
+    } else if let Some(t) = self.textures.remove(&id) {
+      for m in self.meshes.values_mut() {
+        for slot in m.bundled_textures.iter_mut() {
+          if *slot == Some(id) {
+            *slot = None;
+          }
+        }
+      }
+      (AssetKind::Texture, t.content_hash, t.cache_path)
+    } else {
+      return Err(AssetError::UnknownAsset);
+    };
+
+    self.by_key.retain(|_, v| *v != id);
+    if let Some(ids) = self.by_hash.get_mut(&hash) {
+      ids.retain(|v| *v != id);
+      if ids.is_empty() {
+        self.by_hash.remove(&hash);
+      }
+    }
+    self.cache_files.retain(|f| *f != cache_path);
+    self.pending_deletes.push(cache_path);
+    self.pending_deletes.retain(|f| fs::remove_file(f.as_str()).is_err());
+    Ok(kind)
   }
 
   // ------------------------------------------------------------------------------------------
@@ -500,7 +574,7 @@ impl AssetLibrary {
       }
     };
 
-    let (vertices, indices) = match ext {
+    let (mut vertices, mut indices) = match ext {
       "gltf" | "glb" => {
         let file = comet::GltfFile::open(path)?;
         let geometry = comet::read_gltf_geometry(&file)?;
@@ -567,6 +641,13 @@ impl AssetLibrary {
       return Err(AssetError::EmptyMesh);
     }
 
+    // Front faces must point outwards: the mesh pipeline culls back faces (CCW = front).
+    let orientation_fix = orient_outward(&mut vertices, &mut indices);
+    if orientation_fix != OrientationFix::None {
+      oshal::log!("'{}': {:?} applied at import", path, orientation_fix);
+    }
+    outcome.orientation_fix = orientation_fix;
+
     let (bounding_center, bounding_radius) = bounding_sphere(&vertices);
     let thumbnail = thumbnail::mesh_thumbnail(
       &vertices,
@@ -610,7 +691,7 @@ impl AssetLibrary {
     };
     let cache_path = self.cache_path(hash, "avkm")?;
     let payload = write_and_map(&cache_path, &header, &[vbytes, ibytes])?;
-    self.cache_files.push(cache_path);
+    self.cache_files.push(cache_path.clone());
     let vertex_count = vertices.len() as u64;
     let index_count = indices.len() as u64;
     drop(vertices);
@@ -629,8 +710,10 @@ impl AssetLibrary {
         bounding_center,
         bounding_radius,
         bundled_textures: bundled,
+        orientation_fix,
         thumbnail,
         content_hash: hash,
+        cache_path,
         payload,
       },
     );
@@ -717,7 +800,7 @@ impl AssetLibrary {
     };
     let cache_path = self.cache_path(hash, "avkt")?;
     let data = write_and_map(&cache_path, &header, &[&tex.data[..]])?;
-    self.cache_files.push(cache_path);
+    self.cache_files.push(cache_path.clone());
     let mapped = Texture { data, ..tex };
 
     let id = self.alloc_id();
@@ -731,6 +814,7 @@ impl AssetLibrary {
         channel_hint: hint,
         thumbnail,
         content_hash: hash,
+        cache_path,
         texture: mapped,
       },
     );
@@ -880,6 +964,113 @@ fn content_hash(parts: &[&[u8]], extra: [u64; 3]) -> u64 {
   z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
   z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
   z ^ (z >> 31)
+}
+
+/// Makes front faces (CCW) of an imported mesh point outwards.
+///
+/// 1. **Normals are authoritative.** If most non-degenerate triangles have a CCW face normal
+///    opposite to the sum of their vertex normals (e.g. `assets/Comet2.glb`, exported with
+///    inverted winding), every triangle's winding is reversed.
+/// 2. **Closed mesh still inside-out** (signed volume < 0 about the bounding-box centre, normals
+///    agreeing with the inward winding): winding reversed and normals negated.
+///
+/// Open meshes only go through rule 1 (their signed volume is meaningless). Tangents are
+/// regenerated after any change so the bitangent sign stays consistent.
+pub fn orient_outward(vertices: &mut [Vertex], indices: &mut [u32]) -> OrientationFix {
+  let n = vertices.len();
+  let valid = |t: &[u32]| t.iter().all(|&i| (i as usize) < n);
+  let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  let cross = |a: [f32; 3], b: [f32; 3]| {
+    [
+      a[1] * b[2] - a[2] * b[1],
+      a[2] * b[0] - a[0] * b[2],
+      a[0] * b[1] - a[1] * b[0],
+    ]
+  };
+  let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  let flip_winding = |indices: &mut [u32]| {
+    for t in indices.chunks_exact_mut(3) {
+      t.swap(1, 2);
+    }
+  };
+
+  let mut fix = OrientationFix::None;
+
+  // Rule 1
+  let (mut agree, mut disagree) = (0usize, 0usize);
+  for t in indices.chunks_exact(3).filter(|t| valid(t)) {
+    let (a, b, c) = (
+      &vertices[t[0] as usize],
+      &vertices[t[1] as usize],
+      &vertices[t[2] as usize],
+    );
+    let face = cross(sub(b.position, a.position), sub(c.position, a.position));
+    let vn = [
+      a.normal[0] + b.normal[0] + c.normal[0],
+      a.normal[1] + b.normal[1] + c.normal[1],
+      a.normal[2] + b.normal[2] + c.normal[2],
+    ];
+    let d = dot(face, vn);
+    if d > 0.0 {
+      agree += 1;
+    } else if d < 0.0 {
+      disagree += 1;
+    }
+  }
+  if disagree > agree {
+    flip_winding(indices);
+    fix = OrientationFix::WindingFlipped;
+  }
+
+  // Rule 2
+  if is_closed(indices) {
+    let mut lo = [f32::MAX; 3];
+    let mut hi = [f32::MIN; 3];
+    for v in vertices.iter() {
+      for k in 0..3 {
+        lo[k] = lo[k].min(v.position[k]);
+        hi[k] = hi[k].max(v.position[k]);
+      }
+    }
+    let o = [
+      (lo[0] + hi[0]) * 0.5,
+      (lo[1] + hi[1]) * 0.5,
+      (lo[2] + hi[2]) * 0.5,
+    ];
+    let mut volume = 0.0f64;
+    for t in indices.chunks_exact(3).filter(|t| valid(t)) {
+      let a = sub(vertices[t[0] as usize].position, o);
+      let b = sub(vertices[t[1] as usize].position, o);
+      let c = sub(vertices[t[2] as usize].position, o);
+      volume += dot(a, cross(b, c)) as f64;
+    }
+    if volume < 0.0 {
+      flip_winding(indices);
+      for v in vertices.iter_mut() {
+        v.normal = [-v.normal[0], -v.normal[1], -v.normal[2]];
+      }
+      // (if rule 1 flipped too, the winding is back to the original: only the normals were
+      // pointing inwards)
+      fix = OrientationFix::InsideOutFixed;
+    }
+  }
+
+  if fix != OrientationFix::None {
+    comet::generate_tangents(vertices, indices);
+  }
+  fix
+}
+
+/// Every undirected edge shared by exactly two triangles (watertight, manifold).
+fn is_closed(indices: &[u32]) -> bool {
+  let mut edges: BTreeMap<(u32, u32), u32> = BTreeMap::new();
+  for t in indices.chunks_exact(3) {
+    for i in 0..3 {
+      let (u, v) = (t[i], t[(i + 1) % 3]);
+      *edges.entry(if u < v { (u, v) } else { (v, u) }).or_insert(0) += 1;
+    }
+  }
+  !edges.is_empty() && edges.values().all(|&c| c == 2)
 }
 
 /// Ritter bounding sphere followed by a growth pass, so every vertex is contained.

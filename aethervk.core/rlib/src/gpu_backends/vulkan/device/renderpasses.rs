@@ -29,7 +29,7 @@ enum RenderPassAttachment {
   ),
 }
 
-pub(super) const MAX_ATTACHMENTS: usize = 8;
+pub(super) const MAX_ATTACHMENTS: usize = 9;
 const VK_SUBPASS_EXTERNAL: u32 = 0xFFFFFFFF;
 
 struct RenderPassBundle {
@@ -209,7 +209,7 @@ impl RenderPassSpecification {
   pub fn num_attachments(&self) -> usize {
     match self {
       Self::ColorDepthSingleSubpass { .. } => 2,
-      Self::ColorDepthCompositing { .. } => 8,
+      Self::ColorDepthCompositing { .. } => 9,
     }
   }
 }
@@ -553,8 +553,8 @@ impl RenderPasses {
       return Ok(());
     }
 
-    // Only compositing bundles should have this — verify we have 8 attachments
-    if bundle.attachments.len() < 8 {
+    // Only compositing bundles should have this — verify we have 9 attachments
+    if bundle.attachments.len() < 9 {
       return Err(crate::gpu_err!(
         "init_composite_pipeline called on non-compositing bundle"
       ));
@@ -592,6 +592,12 @@ impl RenderPasses {
         .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+      // dustAccum
+      vk::DescriptorSetLayoutBinding::default()
+        .binding(6)
+        .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
 
     let layout_ci = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
@@ -599,7 +605,7 @@ impl RenderPasses {
       NonZeroHandle::new_unchecked(device.create_descriptor_set_layout(&layout_ci, None)?)
     };
 
-    // Push constant range for CompositePushConstants (16 bytes, fragment stage)
+    // Push constant range for CompositePushConstants (36 bytes, fragment stage)
     let push_constant_range = vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::FRAGMENT)
       .offset(0)
@@ -621,7 +627,7 @@ impl RenderPasses {
     // Create descriptor pool with capacity for 6 INPUT_ATTACHMENT descriptors
     let pool_size = vk::DescriptorPoolSize::default()
       .ty(vk::DescriptorType::INPUT_ATTACHMENT)
-      .descriptor_count(6);
+      .descriptor_count(7);
     let pool_ci = vk::DescriptorPoolCreateInfo::default()
       .max_sets(1)
       .pool_sizes(core::slice::from_ref(&pool_size));
@@ -636,7 +642,7 @@ impl RenderPasses {
 
     // Write descriptor set to point at the 6 transient attachment image views
     // For depth attachments, we MUST use depth-only views (DEPTH aspect only).
-    let mut image_views = [vk::ImageView::null(); 6];
+    let mut image_views = [vk::ImageView::null(); 7];
 
     // [0] macroColor
     match &bundle.attachments[1] {
@@ -668,8 +674,13 @@ impl RenderPasses {
       RenderPassAttachment::ColorAttachment(_, _, view) => image_views[5] = view.get(),
       _ => return Err(crate::gpu_err!("expected ColorAttachment at index 6")),
     }
+    // [6] dustAccum
+    match &bundle.attachments[8] {
+      RenderPassAttachment::ColorAttachment(_, _, view) => image_views[6] = view.get(),
+      _ => return Err(crate::gpu_err!("expected ColorAttachment at index 8")),
+    }
 
-    let image_infos: [vk::DescriptorImageInfo; 6] = core::array::from_fn(|i| {
+    let image_infos: [vk::DescriptorImageInfo; 7] = core::array::from_fn(|i| {
       let layout = match i {
         1 | 4 => vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
         _ => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -679,7 +690,7 @@ impl RenderPasses {
         .image_view(image_views[i])
     });
 
-    let writes: [vk::WriteDescriptorSet; 6] = core::array::from_fn(|i| {
+    let writes: [vk::WriteDescriptorSet; 7] = core::array::from_fn(|i| {
       vk::WriteDescriptorSet::default()
         .dst_set(descriptor_set)
         .dst_binding(i as u32)
@@ -1337,6 +1348,46 @@ impl RenderPasses {
       ));
     }
 
+    // [8] dustAccum — linear dust optical depth (micro-color format: RGBA16F, RGBA8 fallback),
+    // transient. Written additively by dust in the micro subpass, stretched by the composite.
+    let (dust_img, dust_alloc) = {
+      #[cfg(test)]
+      {
+        create_test_attachment(
+          allocator,
+          ext2d,
+          micro_color_format,
+          color_transient_usage,
+          vk::SampleCountFlags::TYPE_1,
+        )?
+      }
+      #[cfg(not(test))]
+      {
+        create_transient_attachment(
+          allocator,
+          ext2d,
+          micro_color_format,
+          color_transient_usage,
+          vk::SampleCountFlags::TYPE_1,
+        )?
+      }
+    };
+    {
+      let ih = dust_img.get();
+      let mut ac = dust_alloc;
+      rollback.defer(move |_| unsafe { allocator.destroy_image(ih, &mut ac) });
+    }
+    let dust_view = Self::create_color_view(device, dust_img, micro_color_format)?;
+    {
+      let vh = dust_view.get();
+      rollback.defer(move |dev| unsafe { dev.destroy_image_view(vh, None) });
+    }
+    unsafe {
+      attachments.push_unchecked(RenderPassAttachment::ColorAttachment(
+        dust_img, dust_alloc, dust_view,
+      ));
+    }
+
     // Create depth-only image views for input attachment descriptors.
     // Vulkan requires that input attachment descriptors for D32S8 images use
     // views with a single aspect (DEPTH), not DEPTH|STENCIL.
@@ -1368,6 +1419,7 @@ impl RenderPasses {
       micro_depth_view.get(),  // [5]
       micro_gdepth_view.get(), // [6]
       final_gdepth_view.get(), // [7]
+      dust_view.get(),         // [8]
     ];
 
     let mut framebuffer = heapless::Vec::new();
@@ -1381,6 +1433,7 @@ impl RenderPasses {
         shared_views[4],  // [5] microDepth
         shared_views[5],  // [6] microGlobalDepth
         shared_views[6],  // [7] finalGlobalDepth
+        shared_views[7],  // [8] dustAccum
       ];
       let framebuffer_create_info = vk::FramebufferCreateInfo::default()
         .render_pass(render_pass.get())
@@ -1431,6 +1484,7 @@ impl RenderPasses {
       clear_value.push_unchecked(depth_clear); // [5] microDepth
       clear_value.push_unchecked(mrt_clear); // [6] microGlobalDepth
       clear_value.push_unchecked(mrt_clear); // [7] finalGlobalDepth
+      clear_value.push_unchecked(black_transparent); // [8] dustAccum
     }
 
     Ok(RenderPassBundle {
@@ -1809,8 +1863,8 @@ impl RenderPasses {
   ///   [7] finalGlobalDepth— R32G32_SFLOAT, STORED
   ///
   /// Subpass 0 (macro):     color=[1, 3], depth=[2]
-  /// Subpass 1 (micro):     color=[4, 6], depth=[5]
-  /// Subpass 2 (composite): color=[0, 7], input=[1, 2, 3, 4, 5, 6]
+  /// Subpass 1 (micro):     color=[4, 6, 8], depth=[5]
+  /// Subpass 2 (composite): color=[0, 7], input=[1, 2, 3, 4, 5, 6, 8]
   /// ```
   #[named]
   fn create_compositing_render_pass(
@@ -1905,6 +1959,16 @@ impl RenderPasses {
         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+      // [8] dustAccum — transient, additive linear optical depth
+      vk::AttachmentDescription2::default()
+        .format(micro_color_format)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
     ];
 
     let sp0_color_refs = [
@@ -1933,6 +1997,10 @@ impl RenderPasses {
         .aspect_mask(vk::ImageAspectFlags::COLOR),
       vk::AttachmentReference2::default()
         .attachment(6) // microGlobalDepth MRT
+        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .aspect_mask(vk::ImageAspectFlags::COLOR),
+      vk::AttachmentReference2::default()
+        .attachment(8) // dustAccum (location 2, see pipelines.rs compositing variants)
         .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
         .aspect_mask(vk::ImageAspectFlags::COLOR),
     ];
@@ -1978,6 +2046,10 @@ impl RenderPasses {
         .aspect_mask(vk::ImageAspectFlags::DEPTH),
       vk::AttachmentReference2::default()
         .attachment(6) // microGlobalDepth
+        .layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .aspect_mask(vk::ImageAspectFlags::COLOR),
+      vk::AttachmentReference2::default()
+        .attachment(8) // dustAccum
         .layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         .aspect_mask(vk::ImageAspectFlags::COLOR),
     ];

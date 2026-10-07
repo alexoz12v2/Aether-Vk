@@ -119,6 +119,85 @@ public class ModelTabViewModelTests
   // ── tests ─────────────────────────────────────────────────────────────────────
 
   /// <summary>
+  /// Dust view aids: tracers default on; the toggle sends the native flags with the flow bit always
+  /// set (the flow runs while simulating and freezes on pause), is stored in the model session,
+  /// and is visual only.
+  /// </summary>
+  [Fact]
+  public void DustTracers_SendFlagsWithFlowAndPersist_WithoutRestore()
+  {
+    var s = new TestSetup();
+    s.Runtime.Invocations.Clear();
+    Assert.True(s.Vm.DustTracers);
+
+    s.Vm.DustTracers = false;
+    s.Runtime.Verify(r => r.SetDustViewFlags(2u), Times.Once);
+    Assert.False(s.Session.DustTracers);
+
+    s.Vm.DustTracers = true;
+    s.Runtime.Verify(r => r.SetDustViewFlags(3u), Times.Once);
+    Assert.Equal(3u, ModelTabViewModel.DustViewFlags(true));
+    s.Runtime.Verify(r => r.RestoreSnapshotSync(), Times.Never);
+  }
+
+  /// <summary>
+  /// Flow time-lapse factor: goes to the runtime, is clamped to the native range [1, 10 000],
+  /// is stored in the model session (restored on a session switch), and is visual only.
+  /// </summary>
+  [Fact]
+  public void DustFlowSpeed_SendsClampedValueAndPersists_WithoutRestore()
+  {
+    var s = new TestSetup();
+    s.Runtime.Invocations.Clear();
+    Assert.Equal(1.0, s.Vm.DustFlowSpeed);
+
+    s.Vm.DustFlowSpeed = 100.0;
+    s.Runtime.Verify(r => r.SetDustFlowSpeed(100f), Times.Once);
+    Assert.Equal(100.0, s.Session.DustFlowSpeed);
+
+    s.Vm.DustFlowSpeed = 0.0;
+    Assert.Equal(1.0, s.Vm.DustFlowSpeed);
+    s.Runtime.Verify(r => r.SetDustFlowSpeed(1f), Times.Once);
+    s.Vm.DustFlowSpeed = 1e9;
+    Assert.Equal(10_000.0, s.Vm.DustFlowSpeed);
+    s.Runtime.Verify(r => r.SetDustFlowSpeed(10_000f), Times.Once);
+    Assert.Equal(1.0, ModelTabViewModel.ClampDustFlowSpeed(double.NaN));
+    s.Runtime.Verify(r => r.RestoreSnapshotSync(), Times.Never);
+  }
+
+  /// <summary>
+  /// "Dust visibility": the softening of the dust display stretch goes to the runtime, is clamped
+  /// to [1e-7, 1], is stored in the model session, and is visual only (no snapshot restore,
+  /// no jet re-push).
+  /// </summary>
+  [Fact]
+  public void DustSoftening_IsSentClampedAndPersisted_WithoutRestore()
+  {
+    var s = new TestSetup();
+    s.Runtime.Invocations.Clear();
+    Assert.Equal(ModelTabDefaults.DustSoftening, s.Vm.DustSoftening);
+
+    s.Vm.DustSoftening = 1e-3;
+    s.Runtime.Verify(r => r.SetDustSoftening(1e-3f), Times.Once);
+    Assert.Equal(1e-3, s.Session.DustSoftening);
+
+    s.Vm.DustSoftening = 50.0;
+    Assert.Equal(ModelTabDefaults.DustSofteningMax, s.Vm.DustSoftening);
+    s.Runtime.Verify(r => r.SetDustSoftening((float)ModelTabDefaults.DustSofteningMax), Times.Once);
+    s.Vm.DustSoftening = double.NaN;
+    Assert.Equal(ModelTabDefaults.DustSoftening, s.Vm.DustSoftening);
+    // a value persisted under the former absolute range (1e-7) clamps into the relative one
+    s.Vm.DustSoftening = 1e-7;
+    Assert.Equal(ModelTabDefaults.DustSofteningMin, s.Vm.DustSoftening);
+    Assert.Equal(ModelTabDefaults.DustSofteningMin, s.Session.DustSoftening);
+
+    s.Runtime.Verify(r => r.RestoreSnapshotSync(), Times.Never);
+    s.Runtime.Verify(
+      r => r.ModifyParticleSystem(It.IsAny<ulong>(), It.IsAny<ParticleSystemModel>(), It.IsAny<ParticleSystemJet>(), out It.Ref<ParticleSystemComputedProperties>.IsAny),
+      Times.Never);
+  }
+
+  /// <summary>
   /// AddJetCommand must be disabled when no comet is committed, even if a nucleus
   /// radius is available. This prevents a silent FFI no-op.
   /// </summary>

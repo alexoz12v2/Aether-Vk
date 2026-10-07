@@ -143,7 +143,9 @@ pub fn spawn_comet_visual(scene: &Scene, body: EntityId) -> EntityId {
 /// Nucleus radius as configured on the body (the sphere gizmo is kept at 2× radius).
 pub fn nucleus_radius_km(scene: &Scene, body: EntityId) -> f32 {
   scene
-    .with_component(body, |g: &crate::scene::SphereGizmoComponent| g.radius * 0.5)
+    .with_component(body, |g: &crate::scene::SphereGizmoComponent| {
+      g.radius * 0.5
+    })
     .filter(|r| *r > 0.0)
     .unwrap_or(DEFAULT_NUCLEUS_RADIUS_KM)
 }
@@ -167,8 +169,7 @@ pub fn custom_visual_transform(
   let q = offset.rotation();
   let c = Vec3f32::from_components(center[0], center[1], center[2]);
   let t = offset.translation_radii;
-  let position =
-    q.rotate_vector(c * (-s)) + Vec3f32::from_components(t[0], t[1], t[2]) * radius_km;
+  let position = q.rotate_vector(c * (-s)) + Vec3f32::from_components(t[0], t[1], t[2]) * radius_km;
   TransformComponent {
     position,
     rotation: q,
@@ -274,13 +275,56 @@ pub fn apply_comet_appearance(
   }
 
   let transform = if next.shows_custom_mesh() {
-    custom_visual_transform(next.bounding_center, next.bounding_radius, radius_km, &offset)
+    custom_visual_transform(
+      next.bounding_center,
+      next.bounding_radius,
+      radius_km,
+      &offset,
+    )
   } else {
     TransformComponent::default()
   };
   let _ = scene.with_component_mut(visual, |t: &mut TransformComponent| *t = transform);
   let _ = scene.with_component_mut(visual, |a: &mut CometAppearanceComponent| *a = next);
   Ok(())
+}
+
+/// Stops displaying asset `asset_id` before it is unloaded: a wired mesh ejects the comet to
+/// the procedural sphere (default wiring), a wired texture has its channel(s) cleared. The
+/// placement offset is kept. Returns whether the appearance changed.
+pub fn unwire_asset(
+  scene: &Scene,
+  visual: EntityId,
+  radius_km: f32,
+  asset_id: AssetId,
+  library: &AssetLibrary,
+) -> Result<bool, AppearanceError> {
+  let current = scene
+    .with_component(visual, |a: &CometAppearanceComponent| *a)
+    .ok_or(AppearanceError::NoVisualEntity)?;
+  let mut wiring = current.wiring;
+  if wiring.mesh == Some(asset_id) {
+    wiring = CometAppearanceWiring::default();
+  }
+  for slot in wiring.textures.iter_mut() {
+    if *slot == Some(asset_id) {
+      *slot = None;
+    }
+  }
+  if wiring == current.wiring {
+    return Ok(false);
+  }
+  // only reached while paused (RemoveAsset is refused while playing)
+  apply_comet_appearance(
+    scene,
+    visual,
+    radius_km,
+    wiring,
+    current.offset,
+    library,
+    false,
+  )?;
+  Ok(true)
 }
 
 /// Recomputes the custom-mesh transform after a nucleus radius change. Returns `true` when the

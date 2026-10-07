@@ -116,6 +116,18 @@ public sealed record CameraProjectionState(
 );
 
 /// <summary>
+/// Where an Earth observer tracking target stands for the current surface point:
+/// <paramref name="ElevationDeg"/> above the local horizon (negative: the Earth is in the way),
+/// and the surface point that has it at the zenith right now.
+/// </summary>
+public sealed record EarthObserverTargetVisibility(
+  EarthObserverTarget Target,
+  double ElevationDeg,
+  double SuggestedLatDeg,
+  double SuggestedLonDeg
+);
+
+/// <summary>
 /// Validates camera movement commands against the current <see cref="CameraMode"/>, submits
 /// approved commands to <see cref="INativeRuntimeService"/>, and exposes the runtime's
 /// authoritative camera state as <see cref="System.Reactive"/> observables.
@@ -205,6 +217,10 @@ public sealed class CameraService : IDisposable
 
   // Observer latitude (degrees): its sign picks the ecliptic pole the view "up" leans towards.
   private float _observerLatDeg;
+  private float _observerLonDeg;
+  /// <summary>True while the core poses the Earth observer camera in its commits
+  /// (<see cref="PushNativeObserver"/>): the UI then never writes the pose per tick.</summary>
+  private bool _nativeObserverActive;
 
   // Projection preset of the active lock-in / tracking submode (target spans 10% of the view);
   // null in Free mode. Exposed to enable "Restore preset projection".
@@ -487,6 +503,7 @@ public sealed class CameraService : IDisposable
           _runtimeService.SetCameraParentToComet(camId2, enabled: false);
         else if (previous == CameraMode.EarthPosition)
         {
+          lock (_earthPosLock) { ClearNativeObserver(); }
           ulong earthId = _runtimeService.EarthEntityId ?? 0;
           if (earthId != 0)
             _runtimeService.SetCameraParent(camId2, earthId, enabled: false);
@@ -648,7 +665,7 @@ public sealed class CameraService : IDisposable
   public bool IsZoomAllowed() =>
     _modeSubject.Value switch
     {
-      CameraMode.EarthPosition  => false, // surface-anchored — zoom not meaningful
+      CameraMode.EarthPosition  => true,  // telescope zoom: field of view / ortho extents
       CameraMode.CometOrbiting  => true,
       CameraMode.UpZenith       => false,
       _ => false,
@@ -744,6 +761,7 @@ public sealed class CameraService : IDisposable
           _runtimeService.SetCameraParent(camId.Value, earthId, enabled: true);
           RotoTranslateDirect(targetPos.X, targetPos.Y, targetPos.Z, targetRot, pivotEntityId.Value);
           _bodyCameraParented = true;
+          lock (_earthPosLock) { PushNativeObserver(); }
         }
       }
     }
@@ -787,6 +805,7 @@ public sealed class CameraService : IDisposable
                 _runtimeService.SetCameraParent(camIdVal, earthId2, enabled: true);
                 lock (_earthPosLock) { SnapCameraToEarth(_lastEarthPos); }
                 _bodyCameraParented = true;
+                lock (_earthPosLock) { PushNativeObserver(); }
               }
             }
           }
@@ -1030,9 +1049,17 @@ public sealed class CameraService : IDisposable
         // Apply the rotation directly without animation: CameraSetRotoTranslate succeeds
         // in EarthPosition mode because no tracking animation is permanently in-flight.
         // This gives the user instant 1:1 response (no 0.4 s animation lag).
-        var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
-        var camPos       = _lastEarthPos + surfaceWorld;
-        RotoTranslateDirect(camPos.X, camPos.Y, camPos.Z, newRot);
+        if (_nativeObserverActive)
+        {
+          // the core poses the camera from the new look (and keeps doing so every commit)
+          PushNativeObserver();
+        }
+        else
+        {
+          var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
+          var camPos       = _lastEarthPos + surfaceWorld;
+          RotoTranslateDirect(camPos.X, camPos.Y, camPos.Z, newRot);
+        }
       }
       return true;
     }
@@ -1168,6 +1195,28 @@ public sealed class CameraService : IDisposable
       return true;
     }
 
+    if (_modeSubject.Value == CameraMode.EarthPosition)
+    {
+      // Telescope zoom: the observer stays on the surface (the core keeps it aimed while tracking),
+      // only the field changes, keeping near / far.
+      float shift = mods.HasFlag(InputModifiers.Shift) ? ShiftFactor : 1f;
+      float scaleFactor = ZoomScaleFactor(pixelDy, shift);
+      var proj = _projectionSubject.Value;
+      if (proj is { IsPerspective: false } && proj.Top > 0f)
+      {
+        float newHalfH = proj.Top * scaleFactor;
+        float newHalfW = newHalfH * _viewportAspect;
+        RequestOrthographicProjection(-newHalfW, newHalfW, -newHalfH, newHalfH, proj.Near, proj.Far);
+      }
+      else if (proj is { IsPerspective: true })
+      {
+        // from arcseconds (nucleus) to 2 rad (wide sky)
+        float fov = Math.Min(2.0f, Math.Max(1e-9f, proj.Fov * scaleFactor));
+        RequestPerspectiveProjection(fov, _viewportAspect, proj.Near, proj.Far);
+      }
+      return true;
+    }
+
     return false;
   }
 
@@ -1197,8 +1246,12 @@ public sealed class CameraService : IDisposable
     {
       _earthSurfacePointBf = bfUnit * EarthRadiusAu;
       _observerLatDeg = latDeg;
+      _observerLonDeg = lonDeg;
       if (_modeSubject.Value == CameraMode.EarthPosition)
+      {
         SnapCameraToEarth(_lastEarthPos);
+        PushNativeObserver();
+      }
     }
   }
 
@@ -1243,17 +1296,74 @@ public sealed class CameraService : IDisposable
       _earthOrientationMode = mode;
       _earthOrientationModeSubject.OnNext(mode);
 
-      // Preset projection: the target spans 10% of the viewport.
+      // Preset projection: the target (the comet with its visible coma) spans 10% of the viewport.
       _earthPresetProjection = targetPos is { } tp && mode != EarthObserverOrientationMode.Free
-        ? ComputeTargetPresetProjection(EarthObserverTargetRadiusAu(mode.Target()!.Value), (float)(tp - camPos).Length())
+        ? ComputeTargetPresetProjection(EarthObserverFramingRadiusAu(mode.Target()!.Value), (float)(tp - camPos).Length())
         : null;
       _earthPresetSubject.OnNext(_earthPresetProjection);
       if (_earthPresetProjection is not null && _modeSubject.Value == CameraMode.EarthPosition)
         ApplyEarthPresetProjection();
 
       if (_modeSubject.Value == CameraMode.EarthPosition)
+      {
         SnapCameraToEarth(_lastEarthPos);
+        PushNativeObserver();
+      }
     }
+  }
+
+  /// <summary>
+  /// Hands the Earth observer to the core (call under <c>_earthPosLock</c>): it then poses the
+  /// Earth-parented camera inside every commit that moves the Earth and the comet, from this mode,
+  /// surface point and look. Re-aiming here, after the commit's callbacks, left frames with a stale
+  /// aim, fatal at a telescope field (comet_tracking.rdc). Only while parented in Earth observer
+  /// mode; otherwise clears it.
+  /// </summary>
+  private void PushNativeObserver()
+  {
+    ulong cam = CameraEntityId ?? 0;
+    ulong earth = _runtimeService.EarthEntityId ?? 0;
+    if (_modeSubject.Value != CameraMode.EarthPosition || !_bodyCameraParented || cam == 0 || earth == 0)
+    {
+      ClearNativeObserver();
+      return;
+    }
+    var mode = _earthOrientationMode;
+    var look = mode.IsLockIn() ? _earthFixedLookDir : _inertialLookDir;
+    ulong comet = mode.Target() == EarthObserverTarget.Comet ? _runtimeService.CometEntityId ?? 0 : 0;
+    _nativeObserverActive = _runtimeService.SetEarthObserver(
+      cam, (int)mode, earth, comet, _observerLatDeg, _observerLonDeg, look);
+    if (!_nativeObserverActive)
+      Console.WriteLine($"[CameraService] native Earth observer refused ({mode}, earth {earth}, comet {comet}): the UI poses the camera");
+  }
+
+  /// <summary>Takes the Earth observer back from the core (call under <c>_earthPosLock</c>).</summary>
+  private void ClearNativeObserver()
+  {
+    if (!_nativeObserverActive)
+      return;
+    _runtimeService.SetEarthObserver(CameraEntityId ?? 0, -1, 0, 0, 0, 0, Quaterniond.Identity);
+    _nativeObserverActive = false;
+  }
+
+  /// <summary>
+  /// "Restore preset projection": re-measures the target (the coma grows as the dust history fills)
+  /// and the distance, then applies the preset of the current lock-in / tracking submode.
+  /// </summary>
+  public void RestoreEarthPresetProjection()
+  {
+    lock (_earthPosLock)
+    {
+      var mode = _earthOrientationMode;
+      if (mode.Target() is { } target && ResolveEarthObserverTarget(target) is { } tp)
+      {
+        var camPos = _lastEarthPos + Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
+        _earthPresetProjection = ComputeTargetPresetProjection(
+          EarthObserverFramingRadiusAu(target), (float)(tp - camPos).Length());
+        _earthPresetSubject.OnNext(_earthPresetProjection);
+      }
+    }
+    ApplyEarthPresetProjection();
   }
 
   /// <summary>Re-applies the preset projection of the current lock-in / tracking submode.</summary>
@@ -1303,6 +1413,26 @@ public sealed class CameraService : IDisposable
     return p.IsPerspective ? !Close(p.Fov, preset.Fov) : !Close(p.Top, preset.Top);
   }
 
+  /// <summary>
+  /// Radius the preset frames: the Sun, or the comet's nucleus and its visible dust coma
+  /// (<see cref="ComaFramingMargin"/> × the coma radius the core measures fills the view height),
+  /// so tracking shows the comet rather than a field ~100 km wide filled by its dust.
+  /// </summary>
+  internal double EarthObserverFramingRadiusAu(EarthObserverTarget t)
+  {
+    const double AuToKm = 149_597_870.7;
+    double r = EarthObserverTargetRadiusAu(t);
+    if (t != EarthObserverTarget.Comet)
+      return r;
+    double comaKm = _runtimeService.DustComaRadiusKm();
+    if (!(comaKm > 0.0) || double.IsInfinity(comaKm))
+      return r;
+    return Math.Max(r, ComaFramingMargin * EarthObserverTargetViewFraction * comaKm / AuToKm);
+  }
+
+  /// <summary>Coma radius × this = preset half-height (the coma edge stays inside the view).</summary>
+  internal const double ComaFramingMargin = 1.2;
+
   private double EarthObserverTargetRadiusAu(EarthObserverTarget t)
   {
     const double AuToKm = 149_597_870.7;
@@ -1321,6 +1451,45 @@ public sealed class CameraService : IDisposable
       return null;
     // f64: the float position is ~10 km coarse at 1 AU, wider than a telescope field on the nucleus
     return _cometTracker.LastKnownCometPositionF64 is { } p ? new Vector3d(p.X, p.Y, p.Z) : null;
+  }
+
+  /// <summary>
+  /// Elevation of the tracked target above the observer's horizon and the surface point that has
+  /// it at the zenith (same frames as <see cref="SnapCameraToEarth"/>). Null outside a tracking
+  /// submode of the Earth observer, or without a target.
+  /// </summary>
+  public EarthObserverTargetVisibility? GetEarthObserverTargetVisibility()
+  {
+    lock (_earthPosLock)
+    {
+      var mode = _earthOrientationMode;
+      if (_modeSubject.Value != CameraMode.EarthPosition || !mode.IsTracking())
+        return null;
+      var target = mode.Target()!.Value;
+      if (ResolveEarthObserverTarget(target) is not { } targetPos)
+        return null;
+      var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
+      var zenith = Vector3d.Normalize(surfaceWorld);
+      var toTarget = Vector3d.Normalize(targetPos - (_lastEarthPos + surfaceWorld));
+      double elevationDeg = Math.Asin(Math.Max(-1.0, Math.Min(1.0, Vector3d.Dot(toTarget, zenith)))) * 180.0 / Math.PI;
+      var (lat, lon) = SubTargetLatLon(_lastEarthPos, _earthBodyRot, targetPos);
+      return new EarthObserverTargetVisibility(target, elevationDeg, lat, lon);
+    }
+  }
+
+  /// <summary>
+  /// Geodetic latitude / longitude (degrees, <see cref="SetEarthObserverLatLon"/> convention) of the
+  /// surface point under <paramref name="targetPos"/>: the target is at its zenith (parallax of the
+  /// Earth radius aside).
+  /// </summary>
+  internal static (double LatDeg, double LonDeg) SubTargetLatLon(
+    Vector3d earthPos, Quaterniond earthBodyRot, Vector3d targetPos)
+  {
+    var bf = Vector3d.Transform(
+      Vector3d.Normalize(targetPos - earthPos), Quaterniond.Inverse(Quaterniond.Normalize(earthBodyRot)));
+    double lat = Math.Asin(Math.Max(-1.0, Math.Min(1.0, bf.Z)));
+    double lon = Math.Atan2(bf.Y, bf.X);
+    return (lat * 180.0 / Math.PI, lon * 180.0 / Math.PI);
   }
 
   /// <summary>
@@ -1835,24 +2004,10 @@ dump_context()
             }
         } // end if (!inTransit)
     }
-    else if (_modeSubject.Value == CameraMode.EarthPosition)
-    {
-        bool inTransit = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() < Volatile.Read(ref _invariantSuppressUntilMs);
-        if (!inTransit)
-        {
-            lock (_earthPosLock)
-            {
-                double dx = dto.PosX - _lastEarthPos.X;
-                double dy = dto.PosY - _lastEarthPos.Y;
-                double dz = dto.PosZ - _lastEarthPos.Z;
-                double currentDistance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-                double expectedDistance = EarthRadiusAu;
-
-                System.Diagnostics.Debug.Assert(Math.Abs(currentDistance - expectedDistance) < 1e-5,
-                    $"Earth observer mode invariant broken! Expected dist: {expectedDistance}, Actual dist: {currentDistance}, Diff: {Math.Abs(currentDistance - expectedDistance)}");
-            }
-        }
-    }
+    // The Earth observer invariant (|camera − earth| = EarthRadiusAu) is checked in the core
+    // (logic_thread `check_earth_observer_invariant`), on one scene snapshot. Here the camera and
+    // the Earth arrive in separate callbacks, asynchronously to mode changes, so a camera could be
+    // compared against another tick's Earth (0.13 AU off after a multi-day step).
 #endif
 
     // BehaviorSubject.OnNext is not thread-safe for concurrent calls; marshal to the UI thread.
@@ -1955,8 +2110,18 @@ dump_context()
     {
       // Re-aim every tick unless the target is below the local horizon: for an observer on the
       // sphere the line of sight crosses the Earth exactly then. Hold, and snap back once clear.
+      // Below the horizon the Earth is in the way: face the horizon under the target's azimuth
+      // (mirror of the native observer, `earth_observer::pose`).
       var toTarget = targetPos - camPos;
-      camRot = IsBelowHorizon(toTarget, zenith) ? _earthRotation : EarthObserverLookAt(toTarget);
+      if (IsBelowHorizon(toTarget, zenith))
+      {
+        var h = toTarget - Vector3d.Dot(toTarget, zenith) * zenith;
+        camRot = h.LengthSquared() > 1e-30 ? EarthObserverLookAt(h) : _earthRotation;
+      }
+      else
+      {
+        camRot = EarthObserverLookAt(toTarget);
+      }
     }
     else if (mode.IsLockIn())
     {
@@ -1970,6 +2135,11 @@ dump_context()
     // Camera assertions: right vector in the ecliptic plane, up towards the latitude's pole.
     camRot = EarthObserverOrient(camRot, _observerLatDeg);
     _earthRotation = camRot;
+
+    // The core poses the camera in its own commits (same scene write as the Earth and the comet):
+    // writing here, a callback later, would only put a stale aim back.
+    if (_nativeObserverActive)
+      return;
 
     // When the camera is ECS-parented to the earth entity: write local surface offset directly.
     // ECS propagates world pos = earth_world + surfaceOffset automatically.

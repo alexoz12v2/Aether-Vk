@@ -53,6 +53,7 @@ fn run(
       // sub-solar site, no spin: always lit
       site_normal: [-r[0] / r_norm(r), -r[1] / r_norm(r), -r[2] / r_norm(r)],
       spin: Some([0.0, 0.0, 1.0, 0.0]),
+      site_offset_m: [0.0; 3],
     })
   };
   let cfg_at = |j: &JetState| params.dust_emit_config((r_norm(j.r_m) / AU_M) as f32, TTL_US);

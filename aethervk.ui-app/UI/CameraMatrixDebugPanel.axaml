@@ -44,6 +44,17 @@
 
   </Grid>
 
+  <!-- Native Earth observer (mode, aim error, target elevation) -->
+  <StackPanel Spacing="1" IsVisible="{ReflectionBinding EarthObserver, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+    <TextBlock Text="EARTH OBSERVER"
+               FontWeight="Bold" FontSize="9"
+               Foreground="{DynamicResource Accent.Primary}"
+               Margin="0,0,0,3"/>
+    <TextBlock Text="{ReflectionBinding EarthObserver}"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Primary}"/>
+  </StackPanel>
+
   <!-- Dust history per age tier (live/capacity, age span present, band) -->
   <StackPanel Spacing="1" IsVisible="{ReflectionBinding DustHistory, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
     <TextBlock Text="DUST HISTORY"

@@ -1471,3 +1471,485 @@ fn test_rotation_at_matches_step_rotation() {
   let q = AlmanacPlanet { naif_id: 1000012 }.rotation_at(early, &almanac, None);
   assert_eq!(q, aethervk_oshal_rlib::math::vector::vec4::Quat::identity());
 }
+
+static ASSET_SENDER: parking_lot::Mutex<
+  Option<mpsc::Sender<crate::simulation_api::external_state::CAssetImported>>,
+> = parking_lot::Mutex::new(None);
+
+unsafe extern "C" fn asset_imported_cb(state_id: u32, data_ptr: *const core::ffi::c_void) {
+  if state_id == 10 {
+    let ev = unsafe { *(data_ptr as *const crate::simulation_api::external_state::CAssetImported) };
+    if let Some(sender) = ASSET_SENDER.lock().as_ref() {
+      let _ = sender.send(ev);
+    }
+  }
+}
+
+/// End to end through the logic thread: `ImportAsset` (thread pool) fills the scene context's
+/// asset library with the mesh and its embedded texture, reports completion through the
+/// `AssetImported` external state, a second import of the same file adds nothing, and
+/// `SetCometAppearance` puts the imported mesh + texture on the comet's visual child.
+#[test]
+fn test_import_asset_command_fills_library_without_duplicates_and_wires_comet() {
+  use crate::simulation_api::comet_appearance::{
+    CometAppearanceWiring, CometDisplayMode, CometVisualOffset,
+  };
+  let glb =
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test_assets/BoxTextured.glb");
+  let cache_dir = std::env::temp_dir().join(format!("avk_import_cmd_{}", std::process::id()));
+  let _ = std::fs::remove_dir_all(&cache_dir);
+
+  let ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
+  let (tx, rx) = mpsc::channel();
+  *ASSET_SENDER.lock() = Some(tx);
+  set_external_state_simulation_callback(Some(asset_imported_cb));
+
+  let start = Epoch::from_gregorian_utc(2025, 10, 15, 0, 0, 0, 0);
+  let scene_id = ctx
+    .create_empty_scene2(false, start, start + Duration::from_days(10.0))
+    .expect("scene")
+    .scene_id;
+
+  let import = |request_id: u64| {
+    ctx
+      .threads
+      .logic_thread
+      .tx()
+      .try_send(LogicCommand::ImportAsset {
+        request_id,
+        path: glb.to_str().unwrap().to_string(),
+        cache_dir: cache_dir.to_str().unwrap().to_string(),
+      })
+      .expect("queue ImportAsset");
+    rx.recv_timeout(std::time::Duration::from_secs(20))
+      .expect("AssetImported event")
+  };
+
+  let first = import(41);
+  assert_eq!(first.request_id, 41);
+  assert_eq!(first.success, 1);
+  assert_eq!(first.added_count, 2, "mesh + embedded base colour texture");
+  assert_ne!(first.mesh_id, 0);
+
+  let library = alloc::sync::Arc::clone(&ctx.scenes.read().asset_library);
+  let (stats, albedo) = {
+    let lib = library.read();
+    let mesh = lib.mesh(first.mesh_id).expect("mesh registered");
+    let albedo = mesh.bundled_textures[0].expect("albedo registered");
+    assert!(lib.texture(albedo).is_some());
+    (lib.stats(), albedo)
+  };
+  assert_eq!((stats.mesh_count, stats.texture_count), (1, 1));
+
+  let second = import(42);
+  assert_eq!(second.request_id, 42);
+  assert_eq!(second.success, 1);
+  assert_eq!(second.added_count, 0, "re-import must not add assets");
+  assert_eq!(second.mesh_id, first.mesh_id);
+  assert_eq!(library.read().stats(), stats);
+
+  // wire it on the comet (scene is paused)
+  ctx
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(LogicCommand::SetCometAppearance {
+      scene_id,
+      wiring: CometAppearanceWiring {
+        mode: CometDisplayMode::Custom,
+        mesh: Some(first.mesh_id),
+        textures: [Some(albedo), None, None, None],
+      },
+      offset: CometVisualOffset::default(),
+    })
+    .expect("queue SetCometAppearance");
+
+  let visual = ctx.get_scene(scene_id).unwrap().read().comet.unwrap().visual.unwrap();
+  let mut wired = None;
+  for _ in 0..200 {
+    let scene_arc = ctx.get_scene(scene_id).unwrap();
+    let g = scene_arc.read();
+    wired = g
+      .scene
+      .with_component(visual, |m: &crate::scene::StaticMeshComponent| m.clone())
+      .filter(|m| m.asset_path.starts_with("asset:"));
+    if wired.is_some() {
+      break;
+    }
+    drop(g);
+    std::thread::sleep(std::time::Duration::from_millis(10));
+  }
+  let mesh = wired.expect("custom mesh applied to Comet_visual");
+  assert_eq!(mesh.mesh.vertices.len(), 24);
+  let tex = mesh.mesh.albedo_map.as_ref().expect("albedo wired");
+  assert_eq!((tex.width, tex.height), (256, 256));
+
+  set_external_state_simulation_callback(None);
+  *ASSET_SENDER.lock() = None;
+  drop(ctx);
+  let _ = std::fs::remove_dir_all(&cache_dir);
+}
+
+static REMOVED_SENDER: parking_lot::Mutex<
+  Option<mpsc::Sender<crate::simulation_api::external_state::CAssetRemoved>>,
+> = parking_lot::Mutex::new(None);
+
+unsafe extern "C" fn asset_events_cb(state_id: u32, data_ptr: *const core::ffi::c_void) {
+  match state_id {
+    10 => unsafe { asset_imported_cb(state_id, data_ptr) },
+    11 => {
+      let ev =
+        unsafe { *(data_ptr as *const crate::simulation_api::external_state::CAssetRemoved) };
+      if let Some(sender) = REMOVED_SENDER.lock().as_ref() {
+        let _ = sender.send(ev);
+      }
+    }
+    _ => {}
+  }
+}
+
+/// `RemoveAsset` on a live context: refused while playing; while paused the comet showing the
+/// mesh is ejected to the procedural sphere, the mesh leaves the library, its bundled texture
+/// stays, and `AssetRemoved` reports it.
+#[test]
+fn test_remove_asset_command_ejects_comet_and_is_locked_while_playing() {
+  use crate::simulation_api::comet_appearance::{
+    CometAppearanceComponent, CometAppearanceWiring, CometDisplayMode, CometVisualOffset,
+    DEFAULT_COMET_ASSET_PATH,
+  };
+  let glb =
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test_assets/BoxTextured.glb");
+  let cache_dir = std::env::temp_dir().join(format!("avk_remove_cmd_{}", std::process::id()));
+  let _ = std::fs::remove_dir_all(&cache_dir);
+
+  let ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
+  let (itx, irx) = mpsc::channel();
+  let (rtx, rrx) = mpsc::channel();
+  *ASSET_SENDER.lock() = Some(itx);
+  *REMOVED_SENDER.lock() = Some(rtx);
+  set_external_state_simulation_callback(Some(asset_events_cb));
+
+  let start = Epoch::from_gregorian_utc(2025, 10, 15, 0, 0, 0, 0);
+  let scene_id = ctx
+    .create_empty_scene2(false, start, start + Duration::from_days(10.0))
+    .expect("scene")
+    .scene_id;
+  let send = |cmd: LogicCommand| ctx.threads.logic_thread.tx().try_send(cmd).expect("queue");
+  let timeout = std::time::Duration::from_secs(20);
+
+  send(LogicCommand::ImportAsset {
+    request_id: 1,
+    path: glb.to_str().unwrap().to_string(),
+    cache_dir: cache_dir.to_str().unwrap().to_string(),
+  });
+  let imported = irx.recv_timeout(timeout).expect("AssetImported");
+  let mesh_id = imported.mesh_id;
+  let library = alloc::sync::Arc::clone(&ctx.scenes.read().asset_library);
+  let albedo = library.read().mesh(mesh_id).unwrap().bundled_textures[0].unwrap();
+
+  send(LogicCommand::SetCometAppearance {
+    scene_id,
+    wiring: CometAppearanceWiring {
+      mode: CometDisplayMode::Custom,
+      mesh: Some(mesh_id),
+      textures: [Some(albedo), None, None, None],
+    },
+    offset: CometVisualOffset::default(),
+  });
+  let visual = ctx.get_scene(scene_id).unwrap().read().comet.unwrap().visual.unwrap();
+  let asset_path = || {
+    ctx
+      .get_scene(scene_id)
+      .unwrap()
+      .read()
+      .scene
+      .with_component(visual, |m: &crate::scene::StaticMeshComponent| {
+        m.asset_path.clone()
+      })
+      .unwrap()
+  };
+  for _ in 0..200 {
+    if asset_path().starts_with("asset:") {
+      break;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(10));
+  }
+  assert!(asset_path().starts_with("asset:"), "custom mesh displayed");
+
+  // playing: refused, nothing changes
+  ctx.get_scene(scene_id).unwrap().read().time_state.write().speed =
+    aethervk_oshal_rlib::os::time::v2::SimSpeed::Realtime;
+  send(LogicCommand::RemoveAsset {
+    request_id: 7,
+    asset_id: mesh_id,
+  });
+  let refused = rrx.recv_timeout(timeout).expect("AssetRemoved");
+  assert_eq!((refused.request_id, refused.success), (7, 0));
+  assert!(library.read().mesh(mesh_id).is_some());
+  assert!(asset_path().starts_with("asset:"));
+
+  // paused: ejected + removed
+  ctx.get_scene(scene_id).unwrap().read().time_state.write().speed =
+    aethervk_oshal_rlib::os::time::v2::SimSpeed::Paused;
+  send(LogicCommand::RemoveAsset {
+    request_id: 8,
+    asset_id: mesh_id,
+  });
+  let removed = rrx.recv_timeout(timeout).expect("AssetRemoved");
+  assert_eq!((removed.request_id, removed.asset_id), (8, mesh_id));
+  assert_eq!((removed.success, removed.ejected), (1, 1));
+  assert_eq!(asset_path(), DEFAULT_COMET_ASSET_PATH);
+  let appearance = ctx
+    .get_scene(scene_id)
+    .unwrap()
+    .read()
+    .scene
+    .with_component(visual, |a: &CometAppearanceComponent| *a)
+    .unwrap();
+  assert_eq!(appearance.wiring, CometAppearanceWiring::default());
+  let stats = library.read().stats();
+  assert_eq!((stats.mesh_count, stats.texture_count), (0, 1));
+
+  set_external_state_simulation_callback(None);
+  *ASSET_SENDER.lock() = None;
+  *REMOVED_SENDER.lock() = None;
+  drop(ctx);
+  let _ = std::fs::remove_dir_all(&cache_dir);
+}
+
+/// The "dust visibility" softening is per scene, clamped, and read by the render thread.
+#[test]
+fn test_set_dust_softening_clamps_and_stores() {
+  let mut ctx = startup_with_planets();
+  let start = Epoch::from_gregorian_utc(2025, 10, 1, 0, 0, 0, 0);
+  let scene_id = ctx
+    .create_empty_scene2(true, start, start + Duration::from_days(10.0))
+    .unwrap()
+    .scene_id;
+  let read = |ctx: &SimulationContext| {
+    let scenes = ctx.scenes.read();
+    let scene_arc = scenes.get_scene(scene_id).unwrap();
+    let g = scene_arc.read();
+    f32::from_bits(g.dust_softening.load(core::sync::atomic::Ordering::Relaxed))
+  };
+  assert_eq!(read(&ctx), crate::scene::dust::DUST_SOFTENING_DEFAULT);
+  assert_eq!(ctx.set_dust_softening(scene_id, 1e-3), Some(1e-3));
+  assert_eq!(read(&ctx), 1e-3);
+  assert_eq!(
+    ctx.set_dust_softening(scene_id, 0.0),
+    Some(crate::scene::dust::DUST_SOFTENING_MIN)
+  );
+  assert_eq!(ctx.set_dust_softening(scene_id + 999, 1e-3), None);
+}
+
+/// The change stream lists parents before children whatever their entity ids: a camera spawned
+/// before the Earth (lower id) used to be streamed first, so C# compared this tick's camera with the
+/// previous tick's Earth (0.13 AU apart after a multi-day step: "Earth observer mode invariant
+/// broken").
+#[test]
+fn test_change_stream_lists_parents_before_children() {
+  let scene = crate::scene::Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
+    crate::simulation::texture_cache::TextureCache::new("parents_first"),
+  )));
+  let camera = scene.spawn_entity("camera");
+  let other = scene.spawn_entity("other");
+  let frame = scene.spawn_entity("earth_subtree");
+  let earth = scene.spawn_entity("earth");
+  scene.set_parent(earth, Some(frame));
+  scene.set_parent(camera, Some(earth));
+  assert!(
+    camera.as_ffi() < earth.as_ffi(),
+    "the camera must sort first by id for this test"
+  );
+
+  // entity id order, as `changed_entities` (a BTreeMap) yields it
+  let mut changes: Vec<(u64, u64, ())> = [camera, other, frame, earth]
+    .iter()
+    .map(|e| {
+      (
+        e.as_ffi(),
+        ComponentForeignId::HighResTransform.as_u64(),
+        (),
+      )
+    })
+    .collect();
+  changes.sort_by_key(|c| c.0);
+  utils::sort_parents_first(&mut changes, &scene.hierarchy.read());
+
+  let order: Vec<u64> = changes.iter().map(|c| c.0).collect();
+  let pos = |e: crate::scene::EntityId| order.iter().position(|&id| id == e.as_ffi()).unwrap();
+  assert!(
+    pos(frame) < pos(earth) && pos(earth) < pos(camera),
+    "{order:?}"
+  );
+  // roots keep id order among themselves (stable sort)
+  assert!(pos(other) < pos(frame), "{order:?}");
+}
+
+/// Angle (rad) between the camera's view axis (engine forward = local −Y) and `target − camera`,
+/// read back from the scene graph exactly as the renderer does.
+fn camera_aim_error(
+  g: &crate::simulation_api::structs::SceneContext,
+  cam: EntityId,
+  target: [f64; 3],
+) -> f64 {
+  use aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64;
+  let t = g.scene.global_transform_f64(cam).unwrap();
+  let p: [f64; 3] = t.position.into();
+  let fwd: [f64; 3] = t.rotation.rotate_vector(Vec3f64::from_components(0.0, -1.0, 0.0)).into();
+  let to = [target[0] - p[0], target[1] - p[1], target[2] - p[2]];
+  let c = [
+    fwd[1] * to[2] - fwd[2] * to[1],
+    fwd[2] * to[0] - fwd[0] * to[2],
+    fwd[0] * to[1] - fwd[1] * to[0],
+  ];
+  let d = fwd[0] * to[0] + fwd[1] * to[1] + fwd[2] * to[2];
+  (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt().atan2(d)
+}
+
+/// The app's real scene (almanac Earth with its BPC rotation, the scene camera parented to the
+/// Earth like the C# does): the native Earth observer aims at the Sun when a Sun submode is set
+/// (lock-in and tracking) and, tracking, keeps aiming at it in every commit while the simulation
+/// plays at 1 h/s (the Earth turns ~15° per second).
+#[test]
+fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
+  use crate::simulation_api::earth_observer::EarthObserverMode;
+  use aethervk_oshal_rlib::os::time::v2::SimSpeed;
+  let ctx = startup_with_planets();
+  let start = Epoch::from_gregorian_utc(2025, 10, 1, 0, 0, 0, 0);
+  let scene_id = ctx
+    .create_empty_scene2(true, start, start + Duration::from_days(10.0))
+    .unwrap()
+    .scene_id;
+  let (cam, earth) = {
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    let cam = g.scene.get_entity_by_name("camera").expect("scene camera");
+    let earth = g.earth.unwrap().body;
+    g.scene.set_parent(cam, Some(earth));
+    (cam, earth)
+  };
+  let sun = [0.0, 0.0, 0.0];
+  // observer near the sub-solar point (Sun high above the horizon), from the Earth's real rotation
+  let (lat_deg, lon_deg) = {
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    let e = g.scene.global_transform_f64(earth).unwrap();
+    let er = crate::simulation_api::earth_observer::qnormalize([
+      e.rotation[0],
+      e.rotation[1],
+      e.rotation[2],
+      e.rotation[3],
+    ]);
+    let ep: [f64; 3] = e.position.into();
+    let n = (ep[0] * ep[0] + ep[1] * ep[1] + ep[2] * ep[2]).sqrt();
+    let bf = crate::simulation_api::earth_observer::rotate(
+      crate::simulation_api::earth_observer::qinverse(er),
+      [-ep[0] / n, -ep[1] / n, -ep[2] / n],
+    );
+    (bf[2].asin().to_degrees(), bf[1].atan2(bf[0]).to_degrees())
+  };
+  let read_error = || {
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    camera_aim_error(&g, cam, sun)
+  };
+
+  // lock-in aims when set (the C# computes the body-fixed look the same way)
+  for mode in [EarthObserverMode::SunTracking, EarthObserverMode::SunLockIn] {
+    let look = {
+      let scenes = ctx.scenes.read();
+      let g = scenes.get_scene(scene_id).unwrap();
+      let g = g.read();
+      let e = g.scene.global_transform_f64(earth).unwrap();
+      let er = [e.rotation[0], e.rotation[1], e.rotation[2], e.rotation[3]];
+      let (lat, lon) = (lat_deg.to_radians(), lon_deg.to_radians());
+      let r = crate::simulation_api::earth_observer::EARTH_RADIUS_AU;
+      let surf = [
+        r * lat.cos() * lon.cos(),
+        r * lat.cos() * lon.sin(),
+        r * lat.sin(),
+      ];
+      let ep: [f64; 3] = e.position.into();
+      let sw = crate::simulation_api::earth_observer::rotate(
+        crate::simulation_api::earth_observer::qnormalize(er),
+        surf,
+      );
+      let cam_pos = [ep[0] + sw[0], ep[1] + sw[1], ep[2] + sw[2]];
+      let aimed = crate::simulation_api::earth_observer::look_at(
+        [-cam_pos[0], -cam_pos[1], -cam_pos[2]],
+        lat_deg,
+      );
+      crate::simulation_api::earth_observer::qnormalize(
+        crate::simulation_api::earth_observer::qmul(
+          crate::simulation_api::earth_observer::qinverse(
+            crate::simulation_api::earth_observer::qnormalize(er),
+          ),
+          aimed,
+        ),
+      )
+    };
+    assert!(
+      ctx.set_earth_observer(
+        scene_id,
+        cam.as_ffi(),
+        Some(mode),
+        earth.as_ffi(),
+        0,
+        lat_deg,
+        lon_deg,
+        look
+      ),
+      "{mode:?}: native observer refused"
+    );
+    let e = read_error();
+    assert!(e < 1e-6, "{mode:?} when set: Sun {e} rad off the view axis");
+  }
+
+  // tracking while playing: every commit re-aims
+  assert!(ctx.set_earth_observer(
+    scene_id,
+    cam.as_ffi(),
+    Some(EarthObserverMode::SunTracking),
+    earth.as_ffi(),
+    0,
+    lat_deg,
+    lon_deg,
+    [0.0, 0.0, 0.0, 1.0]
+  ));
+  assert!(ctx.start_simulation(scene_id, SimSpeed::OneHourPerSec));
+  let mut worst = 0.0f64;
+  let mut samples = 0;
+  let t0 = std::time::Instant::now();
+  while t0.elapsed() < std::time::Duration::from_millis(1500) {
+    std::thread::sleep(std::time::Duration::from_millis(25));
+    let e = read_error();
+    // below the horizon the observer holds its last aim (the Earth is in the way)
+    let above = {
+      let scenes = ctx.scenes.read();
+      let g = scenes.get_scene(scene_id).unwrap();
+      let g = g.read();
+      let c: [f64; 3] = g.scene.global_transform_f64(cam).unwrap().position.into();
+      let ep: [f64; 3] = g.scene.global_transform_f64(earth).unwrap().position.into();
+      let z = [c[0] - ep[0], c[1] - ep[1], c[2] - ep[2]];
+      -(z[0] * c[0] + z[1] * c[1] + z[2] * c[2]) > 0.0
+    };
+    if above {
+      worst = worst.max(e);
+      samples += 1;
+    }
+  }
+  let _ = ctx.pause_simulation_sync(scene_id);
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+  assert!(
+    samples > 5,
+    "the Sun must be above the horizon for part of the run ({samples})"
+  );
+  assert!(
+    worst < 1e-6,
+    "tracking while playing: Sun up to {worst} rad off the view axis"
+  );
+}

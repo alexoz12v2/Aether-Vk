@@ -314,6 +314,14 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
       })
       .AddDisposableTo(_disposables);
 
+    // Tracking below the horizon faces the horizon: explain it and suggest a site that sees the target.
+    Observable
+      .Timer(TimeSpan.Zero, TimeSpan.FromMilliseconds(500), schedulerProvider.Background)
+      .Select(_ => _cameraService.GetEarthObserverTargetVisibility())
+      .ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(UpdateObserverHorizon)
+      .AddDisposableTo(_disposables);
+
     _cameraService.ViewportResized += OnViewportResized;
   }
 
@@ -459,7 +467,69 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   private bool _isEarthPresetProjectionModified;
 
   [RelayCommand(CanExecute = nameof(IsEarthPresetProjectionModified))]
-  private void RestoreEarthPresetProjection() => _cameraService.ApplyEarthPresetProjection();
+  private void RestoreEarthPresetProjection() => _cameraService.RestoreEarthPresetProjection();
+
+  /// <summary>True while a tracking target is below the observer's horizon (the Earth is in the way).</summary>
+  [ObservableProperty]
+  private bool _isObserverTargetBelowHorizon;
+
+  /// <summary>Explains the below-horizon hold and suggests <see cref="SuggestedObserverLatDeg"/> /
+  /// <see cref="SuggestedObserverLonDeg"/>.</summary>
+  [ObservableProperty]
+  private string _observerHorizonMessage = string.Empty;
+
+  /// <summary>Latitude (°N) that has the tracked target at the zenith right now.</summary>
+  [ObservableProperty]
+  private double _suggestedObserverLatDeg;
+
+  /// <summary>Longitude (°E) that has the tracked target at the zenith right now.</summary>
+  [ObservableProperty]
+  private double _suggestedObserverLonDeg;
+
+  internal void UpdateObserverHorizon(EarthObserverTargetVisibility? v)
+  {
+    if (v is null || v.ElevationDeg >= 0.0)
+    {
+      IsObserverTargetBelowHorizon = false;
+      return;
+    }
+    SuggestedObserverLatDeg = v.SuggestedLatDeg;
+    SuggestedObserverLonDeg = v.SuggestedLonDeg;
+    ObserverHorizonMessage = FormatObserverHorizonMessage(v);
+    IsObserverTargetBelowHorizon = true;
+  }
+
+  internal static string FormatObserverHorizonMessage(EarthObserverTargetVisibility v)
+  {
+    var inv = System.Globalization.CultureInfo.InvariantCulture;
+    string body = v.Target == EarthObserverTarget.Sun ? "Sun" : "comet";
+    string lat = string.Format(inv, "{0:0.0}°{1}", Math.Abs(v.SuggestedLatDeg), v.SuggestedLatDeg >= 0.0 ? "N" : "S");
+    string lon = string.Format(inv, "{0:0.0}°{1}", Math.Abs(v.SuggestedLonDeg), v.SuggestedLonDeg >= 0.0 ? "E" : "W");
+    return string.Format(inv,
+      "The {0} is {1:0.0}° below your horizon: the Earth is in the way, so tracking faces the horizon "
+      + "where it will rise. It is overhead now at {2}, {3} (this spot drifts west ~15°/h as the Earth turns).",
+      body, -v.ElevationDeg, lat, lon);
+  }
+
+  /// <summary>Moves the observer to the suggested site, where the tracked target is overhead.</summary>
+  [RelayCommand]
+  private void ApplySuggestedObserverSite()
+  {
+    double lat = SuggestedObserverLatDeg, lon = SuggestedObserverLonDeg;
+    // one push with both coordinates (setting them one at a time would pose an intermediate site)
+    _isUpdatingFromRuntime = true;
+    try
+    {
+      EarthObserverLatDeg = lat;
+      EarthObserverLonDeg = lon;
+    }
+    finally
+    {
+      _isUpdatingFromRuntime = false;
+    }
+    _cameraService.SetEarthObserverLatLon((float)lat, (float)lon);
+    UpdateObserverHorizon(_cameraService.GetEarthObserverTargetVisibility());
+  }
 
   private void DispatchPerspective()
   {
