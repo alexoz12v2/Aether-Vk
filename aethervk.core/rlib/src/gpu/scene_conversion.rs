@@ -244,6 +244,10 @@ impl SceneConversionExt2 for Scene {
       cursor_call: None,
       ui_call: None,
       text2_call: None,
+      dust_softening: crate::scene::dust::DUST_SOFTENING_DEFAULT,
+      dust_view_flags: 0,
+      dust_flow: Default::default(),
+      dust_white: 1.0,
     };
 
     // ------ 3. Zero-Copy GPU Upload Abstraction Macro -------------------------------------
@@ -772,34 +776,12 @@ impl SceneConversionExt2 for Scene {
       }
     };
 
-    // 9. Particles (dust v3): ranges and evaluation parameters come from the host state the
-    // logic thread maintains; positions are evaluated by `frame::prepare_dust` before the pass
-    // one draw call per age tier (see `dust::DustSystemState`)
-    let dust_calls = extract!(ParticleSystemComponent, |id, ps| {
-      let states = ps.dust.lock().draw_states();
-      if states.is_empty() {
-        return None;
-      }
-      compute_rte(self, id).map(|(layer_idx, rte)| {
-        let units_per_m = if layer_idx == 0 {
-          1.0 / crate::scene::dust::AU_M
-        } else {
-          1.0e-3 // micro layers are in km
-        };
-        let calls: alloc::vec::Vec<DustDrawCall> = states
-          .into_iter()
-          .map(|state| DustDrawCall {
-            entity_id: id,
-            rte_position: [rte.position.x(), rte.position.y(), rte.position.z()],
-            units_per_m,
-            stream_color: ps.draw_params.stream_color,
-            state,
-            render_address: 0,
-          })
-          .collect();
-        (layer_idx, calls)
-      })
-    });
+    // 9. Particles (dust v3), see `Scene::dust_draw_calls`: not children of the comet
+    let dust_calls: alloc::vec::Vec<(u32, alloc::vec::Vec<DustDrawCall>)> = self
+      .dust_draw_calls(camera_entity)
+      .into_iter()
+      .filter(|(layer_idx, _)| camera_in_frames.contains_key(layer_idx))
+      .collect();
     if !dust_calls.is_empty() {
       for (layer_idx, calls) in dust_calls {
         get_or_create_layer!(layer_idx).dust_calls.extend(calls);
@@ -1595,6 +1577,91 @@ fn segment_to_ui_quad(
 /// parented inside a micro frame (CometOrbiting, EarthPosition) carries that frame's 1/AU_TO_KM in
 /// its global scale, and dividing by it blew every macro object (trajectories, cursor, ...) up by
 /// ~1.5e8 (no_trajectories.rdc: trajectory NDC ~1e15).
+impl Scene {
+  /// Dust draw calls of the frame, `(depth layer, one call per age tier)` per visible particle
+  /// system. Ranges and evaluation parameters come from the host state the logic thread maintains;
+  /// positions are evaluated by `frame::prepare_dust` before the pass.
+  ///
+  /// Particles are NOT children of the comet: the jet entity (child of the comet body) only places
+  /// the emission. The draw translation is `anchor − eye` from heliocentric values (the anchor is
+  /// a fixed point, `DustDrawState::anchor_m`), evaluated at the time of the committed transforms
+  /// the camera comes from ([`Scene::sim_time_s`]). Neither the comet nor the jet transforms enter:
+  /// moving them never moves an emitted particle. The entity only picks the depth layer
+  /// (occlusion against the nucleus) and the stream color.
+  pub fn dust_draw_calls(
+    &self,
+    camera_entity: EntityId,
+  ) -> alloc::vec::Vec<(u32, alloc::vec::Vec<DustDrawCall>)> {
+    let Some(cam) = self.global_transform_f64(camera_entity) else {
+      return alloc::vec::Vec::new();
+    };
+    let au = crate::scene::dust::AU_M;
+    let eye_m = [
+      cam.position.x() * au,
+      cam.position.y() * au,
+      cam.position.z() * au,
+    ];
+    let scene_time_s = self.sim_time_s();
+    // no nested scene lookups inside the query callback (see the deadlock note above)
+    let mut systems = alloc::vec::Vec::new();
+    self.query1_without::<ParticleSystemComponent, HiddenComponent, _>(|id, ps| {
+      let states = ps.dust.lock().draw_states();
+      if !states.is_empty() {
+        systems.push((id, states, ps.draw_params.stream_color));
+      }
+    });
+    systems
+      .into_iter()
+      .map(|(id, states, stream_color)| {
+        let layer_idx = self.ancestor_depth_layer(id);
+        // diagnostics only (dust trace): the nucleus never enters the draw
+        let nucleus_m = self.get_parent(id).and_then(|p| self.global_transform_f64(p)).map(|t| {
+          [
+            t.position.x() * au,
+            t.position.y() * au,
+            t.position.z() * au,
+          ]
+        });
+        let units_per_m = if layer_idx == 0 {
+          1.0 / au
+        } else {
+          1.0e-3 // micro layers are in km
+        };
+        let calls = states
+          .into_iter()
+          .map(|state| {
+            let state = match scene_time_s {
+              Some(t) => state.at_time(t),
+              None => state,
+            };
+            DustDrawCall {
+              entity_id: id,
+              rte_position: dust_rte_position(state.anchor_m, eye_m, units_per_m),
+              units_per_m,
+              stream_color,
+              state,
+              lod: Default::default(),
+              eye_m,
+              nucleus_m,
+            }
+          })
+          .collect();
+        (layer_idx, calls)
+      })
+      .collect()
+  }
+}
+
+/// Dust draw translation in layer units: `(anchor − eye) · units_per_m`, both heliocentric metres
+/// (f64). The drawn particle is at `(r − anchor) + (anchor − eye) = r − eye` whatever the anchor.
+pub fn dust_rte_position(anchor_m: [f64; 3], eye_m: [f64; 3], units_per_m: f64) -> [f64; 3] {
+  [
+    (anchor_m[0] - eye_m[0]) * units_per_m,
+    (anchor_m[1] - eye_m[1]) * units_per_m,
+    (anchor_m[2] - eye_m[2]) * units_per_m,
+  ]
+}
+
 pub fn rte_relative_to_camera(
   object_position: aethervk_oshal_rlib::math::vector::vec3f64::DVec3,
   object_rotation: aethervk_oshal_rlib::math::vector::vec4f64::Quat64,

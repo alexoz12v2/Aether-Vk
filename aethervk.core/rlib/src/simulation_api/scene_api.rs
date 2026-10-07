@@ -261,8 +261,8 @@ impl SimulationContext {
 
       // Comet appearance is decoupled from the physical body: the default procedural sphere
       // (and later any custom mesh) lives on a `Comet_visual` child, see `comet_appearance`.
-      let visual = is_comet
-        .then(|| crate::simulation_api::comet_appearance::spawn_comet_visual(&scene, body));
+      let visual =
+        is_comet.then(|| crate::simulation_api::comet_appearance::spawn_comet_visual(&scene, body));
 
       crate::simulation_api::structs::SubtreeEntities {
         subtree,
@@ -661,6 +661,135 @@ impl SimulationContext {
       .store(visible, core::sync::atomic::Ordering::Relaxed);
     crate::simulation_api::logic_thread::update_reference_errors(&guard, epoch);
     true
+  }
+
+  /// Sets the dust display stretch softening ("dust visibility"), clamped to
+  /// `[DUST_SOFTENING_MIN, DUST_SOFTENING_MAX]`. Returns the value applied, or `None` without
+  /// the scene. Visual only: picked up by the next rendered frame.
+  pub fn set_dust_softening(&self, scene_id: u64, softening: f32) -> Option<f32> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let s = crate::scene::dust::clamp_dust_softening(softening);
+    scene_arc
+      .read()
+      .dust_softening
+      .store(s.to_bits(), core::sync::atomic::Ordering::Relaxed);
+    Some(s)
+  }
+
+  /// Sets the dust view aids: [`crate::scene::dust::DUST_VIEW_TRACERS`] (bright dots on a sparse
+  /// set of real particles) and [`crate::scene::dust::DUST_VIEW_FLOW`] (synchrone pulses travelling
+  /// outward). Other bits are ignored. Returns the flags applied, or `None` without the scene.
+  /// Visual only: picked up by the next rendered frame.
+  pub fn set_dust_view_flags(&self, scene_id: u64, flags: u32) -> Option<u32> {
+    use crate::scene::dust::{DUST_VIEW_FLOW, DUST_VIEW_TRACERS};
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let f = flags & (DUST_VIEW_TRACERS | DUST_VIEW_FLOW);
+    scene_arc.read().dust_view_flags.store(f, core::sync::atomic::Ordering::Relaxed);
+    Some(f)
+  }
+
+  /// Sets the time-lapse factor `K` of the dust flow marks ([`crate::scene::dust::DustFlowClock`]):
+  /// 1 = the marks move with the dust, `K` = `K ×` faster in its direction; clamped to
+  /// `[FLOW_SPEED_MIN, FLOW_SPEED_MAX]`. Returns the value applied, or `None` without the scene.
+  /// Visual only, continuous (the phase is kept): picked up by the next rendered frame.
+  pub fn set_dust_flow_speed(&self, scene_id: u64, k: f64) -> Option<f64> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let applied = scene_arc.read().dust_flow_clock.lock().set_speed(k);
+    Some(applied)
+  }
+
+  /// Sets (or, with `mode = None`, clears) the native Earth observer of `scene_id` and poses the
+  /// camera right away (it is re-posed in every commit afterwards, see `earth_observer`).
+  /// `look` (xyzw): the Free inertial world look, or the lock-in body-fixed look. The observer
+  /// stands on the Earth surface at geodetic `lat_deg` / `lon_deg` (radius
+  /// [`earth_observer::EARTH_RADIUS_AU`]). Returns false when the scene or an entity is missing.
+  #[allow(clippy::too_many_arguments)]
+  pub fn set_earth_observer(
+    &self,
+    scene_id: u64,
+    camera: u64,
+    mode: Option<crate::simulation_api::earth_observer::EarthObserverMode>,
+    earth: u64,
+    comet: u64,
+    lat_deg: f64,
+    lon_deg: f64,
+    look: [f64; 4],
+  ) -> bool {
+    use crate::simulation_api::earth_observer::{EARTH_RADIUS_AU, EarthObserverState};
+    let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
+      return false;
+    };
+    let mut guard = scene_arc.write();
+    let Some(mode) = mode else {
+      guard.earth_observer = None;
+      return true;
+    };
+    let camera = EntityId::from_ffi(camera);
+    let Some(cam) = guard.scene.global_transform_f64(camera) else {
+      return false;
+    };
+    let (lat, lon) = (lat_deg.to_radians(), lon_deg.to_radians());
+    let mut state = EarthObserverState {
+      mode,
+      camera,
+      earth: EntityId::from_ffi(earth),
+      comet: (comet != 0).then(|| EntityId::from_ffi(comet)),
+      surface_bf_au: [
+        EARTH_RADIUS_AU * lat.cos() * lon.cos(),
+        EARTH_RADIUS_AU * lat.cos() * lon.sin(),
+        EARTH_RADIUS_AU * lat.sin(),
+      ],
+      lat_deg,
+      look,
+      last: [
+        cam.rotation[0],
+        cam.rotation[1],
+        cam.rotation[2],
+        cam.rotation[3],
+      ],
+      last_error: 0.0,
+      last_elevation: 0.0,
+    };
+    if crate::simulation_api::earth_observer::apply(&guard.scene, &mut state).is_none() {
+      return false;
+    }
+    guard.earth_observer = Some(state);
+    guard.mark_component_changed(
+      camera.as_ffi(),
+      <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
+    );
+    true
+  }
+
+  /// Native Earth observer status of `scene_id`: `(mode, aim error rad, target elevation rad)` of
+  /// the last pose, `None` when the UI poses the camera (not handed over).
+  pub fn earth_observer_status(
+    &self,
+    scene_id: u64,
+  ) -> Option<(
+    crate::simulation_api::earth_observer::EarthObserverMode,
+    f64,
+    f64,
+  )> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let g = scene_arc.read();
+    g.earth_observer.map(|o| (o.mode, o.last_error, o.last_elevation))
+  }
+
+  /// Radius (km) of the visible dust coma of `scene_id` (largest over its particle systems, see
+  /// `DustSystemState::coma_radius_m`), 0 without drawable dust.
+  pub fn dust_coma_radius_km(&self, scene_id: u64) -> f64 {
+    let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
+      return 0.0;
+    };
+    let guard = scene_arc.read();
+    let mut r = 0.0f64;
+    guard.scene.query1(|_, ps: &crate::scene::particles::ParticleSystemComponent| {
+      if let Some(m) = ps.dust.lock().coma_radius_m() {
+        r = r.max(m * 1e-3);
+      }
+    });
+    r
   }
 
   /// Shows or hides the comet label (`comet_indicator`), e.g. while in Earth observer mode.

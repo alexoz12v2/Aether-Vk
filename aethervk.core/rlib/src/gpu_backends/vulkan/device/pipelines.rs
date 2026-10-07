@@ -139,6 +139,95 @@ bitflags! {
     /// ≈ `c·(1 − e^(−Σa))`: linear when faint, saturating at exactly `c` (never white), and order
     /// independent for a single color.
     const PREMULTIPLIED_BLEND = 1 << 9;
+    /// Opaque geometry that hides the dust behind it (meshes): in the micro subpass its fragment
+    /// output `location 2 = (0, 0, 0, 1)` blends `ZERO, ONE_MINUS_SRC_ALPHA` into the dust
+    /// accumulation attachment, erasing dust drawn earlier (farther layers) under it.
+    const OCCLUDES_DUST = 1 << 10;
+    /// Dust: in the micro subpass it writes only the dust accumulation attachment (`location 2`,
+    /// additive `ONE, ONE`: linear optical depth, stretched by the composite); in the macro subpass
+    /// it keeps premultiplied over on attachment 0.
+    const DUST_ACCUM = 1 << 11;
+  }
+}
+
+/// Color attachments of each compositing subpass (`renderpasses.rs`): macro `[1, 3]`,
+/// micro `[4, 6, 8]` (the third is the dust accumulation), composite `[0, 7]`.
+pub fn compositing_color_count(subpass: u32) -> usize {
+  if subpass == 1 { 3 } else { 2 }
+}
+
+/// Pads `out` to the color attachment count of compositing `subpass` (blend attachment states
+/// must match it). Extra attachments are write-masked off, except the dust accumulation one for
+/// `OCCLUDES_DUST` / `DUST_ACCUM` pipelines; a `DUST_ACCUM` pipeline in the micro subpass writes
+/// only that one.
+pub(super) fn pad_compositing_outputs(out: &mut FragmentOut, flags: PipelineFlags, subpass: u32) {
+  let count = compositing_color_count(subpass);
+  if out.color_write_masks.len() < out.color_attachment_formats.len() {
+    out.color_write_masks.resize(
+      out.color_attachment_formats.len(),
+      vk::ColorComponentFlags::RGBA,
+    );
+  }
+  while out.color_attachment_formats.len() < count {
+    let i = out.color_attachment_formats.len();
+    // metadata only: the render pass defines the attachment formats
+    out.color_attachment_formats.push(vk::Format::R16G16B16A16_SFLOAT);
+    let dust = i == 2 && flags.intersects(PipelineFlags::OCCLUDES_DUST | PipelineFlags::DUST_ACCUM);
+    out.color_write_masks.push(if dust {
+      vk::ColorComponentFlags::RGBA
+    } else {
+      vk::ColorComponentFlags::empty()
+    });
+  }
+  if subpass == 1 && flags.contains(PipelineFlags::DUST_ACCUM) {
+    for m in out.color_write_masks.iter_mut().take(2) {
+      *m = vk::ColorComponentFlags::empty();
+    }
+  }
+}
+
+/// Blend state of color attachment `i`: attachment 0 as the pipeline flags say (over or
+/// premultiplied over), 1 never blended, 2 (dust accumulation) additive for `DUST_ACCUM`, erasing
+/// for `OCCLUDES_DUST`, otherwise untouched (write mask).
+pub(super) fn blend_attachment_state(
+  flags: PipelineFlags,
+  i: usize,
+  write_mask: vk::ColorComponentFlags,
+) -> vk::PipelineColorBlendAttachmentState {
+  let state = vk::PipelineColorBlendAttachmentState::default()
+    .color_write_mask(write_mask)
+    .color_blend_op(vk::BlendOp::ADD)
+    .alpha_blend_op(vk::BlendOp::ADD);
+  match i {
+    0 => {
+      let (src_color, dst_color) = if flags.contains(PipelineFlags::PREMULTIPLIED_BLEND) {
+        (vk::BlendFactor::ONE, vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+      } else {
+        (
+          vk::BlendFactor::SRC_ALPHA,
+          vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+        )
+      };
+      state
+        .blend_enable(!flags.contains(PipelineFlags::NO_BLEND))
+        .src_color_blend_factor(src_color)
+        .dst_color_blend_factor(dst_color)
+        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+        .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+    }
+    2 if flags.contains(PipelineFlags::DUST_ACCUM) => state
+      .blend_enable(true)
+      .src_color_blend_factor(vk::BlendFactor::ONE)
+      .dst_color_blend_factor(vk::BlendFactor::ONE)
+      .src_alpha_blend_factor(vk::BlendFactor::ONE)
+      .dst_alpha_blend_factor(vk::BlendFactor::ONE),
+    2 if flags.contains(PipelineFlags::OCCLUDES_DUST) => state
+      .blend_enable(true)
+      .src_color_blend_factor(vk::BlendFactor::ZERO)
+      .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+      .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+      .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA),
+    _ => state.blend_enable(false),
   }
 }
 
@@ -755,43 +844,21 @@ struct RawGraphicsInfo<'a> {
 
 impl<'a> From<&'a GraphicsInfo> for RawGraphicsInfo<'a> {
   fn from(graphics_info: &'a GraphicsInfo) -> Self {
-    let mut color_blend_attachments = Vec::with_capacity(
-      if graphics_info.fragment_out.color_attachment_formats.is_empty() {
-        1
-      } else {
-        graphics_info.fragment_out.color_attachment_formats.len()
-      },
-    );
-    let blend_enable = !graphics_info.pipeline_flags.contains(PipelineFlags::NO_BLEND);
-    let premultiplied = graphics_info.pipeline_flags.contains(PipelineFlags::PREMULTIPLIED_BLEND);
-    let (src_color, dst_color) = if premultiplied {
-      (vk::BlendFactor::ONE, vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-    } else {
-      (
-        vk::BlendFactor::SRC_ALPHA,
-        vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
-      )
-    };
-    let (src_alpha, dst_alpha) = (vk::BlendFactor::ONE, vk::BlendFactor::ONE_MINUS_SRC_ALPHA);
-    for i in 0..color_blend_attachments.capacity() {
+    // one blend state per color attachment (`Vec::capacity` is only a lower bound: count it)
+    let blend_count = graphics_info.fragment_out.color_attachment_formats.len().max(1);
+    let mut color_blend_attachments = Vec::with_capacity(blend_count);
+    for i in 0..blend_count {
       let write_mask = graphics_info
         .fragment_out
         .color_write_masks
         .get(i)
         .copied()
         .unwrap_or(vk::ColorComponentFlags::RGBA);
-      // over operator blending (premultiplied source with `PREMULTIPLIED_BLEND`)
-      color_blend_attachments.push(
-        vk::PipelineColorBlendAttachmentState::default()
-          .color_write_mask(write_mask)
-          .blend_enable(if i == 0 { blend_enable } else { false })
-          .src_color_blend_factor(src_color)
-          .dst_color_blend_factor(dst_color)
-          .color_blend_op(vk::BlendOp::ADD)
-          .src_alpha_blend_factor(src_alpha)
-          .dst_alpha_blend_factor(dst_alpha)
-          .alpha_blend_op(vk::BlendOp::ADD),
-      );
+      color_blend_attachments.push(blend_attachment_state(
+        graphics_info.pipeline_flags,
+        i,
+        write_mask,
+      ));
     }
 
     let mut dynamic_states = Vec::with_capacity(3);
@@ -1153,6 +1220,12 @@ impl PipelinePool {
     let mut compositing_info = info.clone();
     compositing_info.render_pass = compositing_render_pass;
     compositing_info.subpass = subpass;
+    // blend attachment states must match the subpass color attachments (micro: + dust accum)
+    pad_compositing_outputs(
+      &mut compositing_info.fragment_out,
+      info.pipeline_flags,
+      subpass,
+    );
 
     let key = compositing_info.pipeline_key();
 
@@ -1255,5 +1328,99 @@ impl DeviceResource for PipelinePool {
 
       device.destroy_pipeline_cache(self.vk_pipeline_cache.get(), None);
     }
+  }
+}
+
+#[cfg(test)]
+mod dust_accum_blend_tests {
+  use super::*;
+
+  fn padded(flags: PipelineFlags, subpass: u32) -> FragmentOut {
+    // what archetypes are compiled with: [presentation format, R32G32 global depth]
+    let mut out = FragmentOut::default()
+      .add_color_attachment_format(vk::Format::B8G8R8A8_SRGB)
+      .add_color_attachment_format(vk::Format::R32G32_SFLOAT);
+    out.color_write_masks = alloc::vec![
+      vk::ColorComponentFlags::RGBA,
+      vk::ColorComponentFlags::R | vk::ColorComponentFlags::G
+    ];
+    pad_compositing_outputs(&mut out, flags, subpass);
+    out
+  }
+
+  /// Compositing variants carry one blend state per color attachment of their subpass: the micro
+  /// subpass has the dust accumulation as a third one. Ordinary pipelines leave it untouched,
+  /// meshes erase dust behind them, dust writes only there (additively).
+  #[test]
+  fn micro_subpass_variants_cover_the_dust_attachment() {
+    let none = vk::ColorComponentFlags::empty();
+    let rgba = vk::ColorComponentFlags::RGBA;
+    assert_eq!(compositing_color_count(0), 2);
+    assert_eq!(compositing_color_count(1), 3);
+    assert_eq!(compositing_color_count(2), 2);
+
+    let plain = padded(PipelineFlags::empty(), 1);
+    assert_eq!(plain.color_attachment_formats.len(), 3);
+    assert_eq!(plain.color_write_masks[2], none);
+    assert_eq!(
+      blend_attachment_state(PipelineFlags::empty(), 2, none).blend_enable,
+      vk::FALSE
+    );
+
+    let mesh_flags = PipelineFlags::STENCIL_ENABLE | PipelineFlags::OCCLUDES_DUST;
+    let mesh = padded(mesh_flags, 1);
+    assert_eq!(
+      mesh.color_write_masks,
+      alloc::vec![
+        rgba,
+        vk::ColorComponentFlags::R | vk::ColorComponentFlags::G,
+        rgba
+      ]
+    );
+    let b = blend_attachment_state(mesh_flags, 2, rgba);
+    assert_eq!(b.blend_enable, vk::TRUE);
+    assert_eq!(
+      (b.src_color_blend_factor, b.dst_color_blend_factor),
+      (vk::BlendFactor::ZERO, vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+    );
+    assert_eq!(
+      (b.src_alpha_blend_factor, b.dst_alpha_blend_factor),
+      (vk::BlendFactor::ZERO, vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+    );
+
+    let dust_flags = PipelineFlags::NO_DEPTH_WRITE
+      | PipelineFlags::PREMULTIPLIED_BLEND
+      | PipelineFlags::DUST_ACCUM;
+    let dust = padded(dust_flags, 1);
+    assert_eq!(
+      dust.color_write_masks,
+      alloc::vec![none, none, rgba],
+      "dust writes only the accumulation"
+    );
+    let b = blend_attachment_state(dust_flags, 2, rgba);
+    assert_eq!(b.blend_enable, vk::TRUE);
+    assert_eq!(
+      (b.src_color_blend_factor, b.dst_color_blend_factor),
+      (vk::BlendFactor::ONE, vk::BlendFactor::ONE)
+    );
+    assert_eq!(
+      (b.src_alpha_blend_factor, b.dst_alpha_blend_factor),
+      (vk::BlendFactor::ONE, vk::BlendFactor::ONE)
+    );
+
+    // macro subpass: dust keeps premultiplied over on attachment 0, nothing is padded
+    let macro_dust = padded(dust_flags, 0);
+    assert_eq!(macro_dust.color_attachment_formats.len(), 2);
+    assert_eq!(macro_dust.color_write_masks[0], rgba);
+    let b0 = blend_attachment_state(dust_flags, 0, rgba);
+    assert_eq!(
+      (b0.src_color_blend_factor, b0.dst_color_blend_factor),
+      (vk::BlendFactor::ONE, vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+    );
+    // attachment 1 (global depth) is never blended
+    assert_eq!(
+      blend_attachment_state(dust_flags, 1, rgba).blend_enable,
+      vk::FALSE
+    );
   }
 }

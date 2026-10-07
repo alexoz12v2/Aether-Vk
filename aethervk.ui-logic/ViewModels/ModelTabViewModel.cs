@@ -380,6 +380,11 @@ public partial class ModelTabViewModel
   {
     // tabs are scoped: a reopened tab gets a new VM over the same session (native still has it on)
     ShowReferencePositionError = session.ShowReferencePositionError;
+    DustSoftening = session.DustSoftening;
+    DustTracers = session.DustTracers;
+    PushDustViewFlags();
+    DustFlowSpeed = session.DustFlowSpeed;
+    _runtimeService?.SetDustFlowSpeed((float)DustFlowSpeed);
 
     _modelChangeSub.Disposable = Observable
       .FromEventPattern<PropertyChangedEventHandler, PropertyChangedEventArgs>(
@@ -420,6 +425,81 @@ public partial class ModelTabViewModel
   /// <summary>Draws the comet's reference-position error lines (cross-track, same-epoch).</summary>
   [ObservableProperty]
   private bool _showReferencePositionError;
+
+  /// <summary>
+  /// Dust display stretch softening ("dust visibility"). Dust accumulates linear optical depth;
+  /// the composite maps it through asinh(τ/s)/asinh(1/s): a smaller <c>s</c> lifts the faint, old
+  /// tail (1e4× fainter than the coma) while the coma saturates. Visual only (no restore).
+  /// </summary>
+  [ObservableProperty]
+  private double _dustSoftening = ModelTabDefaults.DustSoftening;
+
+  partial void OnDustSofteningChanged(double value)
+  {
+    double s = ModelTabDefaults.ClampDustSoftening(value);
+    if (s != value)
+    {
+      DustSoftening = s;
+      return;
+    }
+    if (CurrentSession is { } session)
+      session.DustSoftening = s;
+    _runtimeService?.SetDustSoftening((float)s);
+  }
+
+  /// <summary>
+  /// Dust tracers: one particle in 256 is also drawn as a bright dot at its exact position. In a
+  /// wide view the dust moves far less than a pixel per second at low sim speed (it drifts at
+  /// 2–150 m/s while a pixel spans tens of km): the tracers are real particles to follow, visible
+  /// through the fog of the coma. Visual only.
+  /// </summary>
+  [ObservableProperty]
+  private bool _dustTracers = true;
+
+  partial void OnDustTracersChanged(bool value)
+  {
+    if (CurrentSession is { } session)
+      session.DustTracers = value;
+    PushDustViewFlags();
+  }
+
+  /// <summary>
+  /// Time-lapse factor K of the dust flow marks (brightness marks riding the dust): 1 = the marks
+  /// move with the dust, K = that many times faster in its direction, so the swarm keeps its true
+  /// velocity field at a readable pace from afar. Stored in the model session; visual only.
+  /// </summary>
+  [ObservableProperty]
+  private double _dustFlowSpeed = DustFlowSpeedDefault;
+
+  public const double DustFlowSpeedDefault = 1.0;
+  public const double DustFlowSpeedMin = 1.0;
+  public const double DustFlowSpeedMax = 10_000.0;
+
+  partial void OnDustFlowSpeedChanged(double value)
+  {
+    var clamped = ClampDustFlowSpeed(value);
+    if (clamped != value)
+    {
+      DustFlowSpeed = clamped;
+      return;
+    }
+    if (CurrentSession is { } session)
+      session.DustFlowSpeed = value;
+    _runtimeService?.SetDustFlowSpeed((float)value);
+  }
+
+  /// <summary>Native range of the flow time-lapse factor (<c>dust::FLOW_SPEED_MIN/MAX</c>).</summary>
+  internal static double ClampDustFlowSpeed(double k) =>
+    double.IsNaN(k) ? DustFlowSpeedDefault : System.Math.Clamp(k, DustFlowSpeedMin, DustFlowSpeedMax);
+
+  /// <summary>
+  /// Native dust view flags (<c>dust::DUST_VIEW_*</c>): bit 0 tracers, bit 1 flow. The flow is
+  /// always on: it runs while the sim runs and freezes in place on pause (no toggle).
+  /// </summary>
+  internal static uint DustViewFlags(bool tracers) => (tracers ? 1u : 0u) | 2u;
+
+  private void PushDustViewFlags() =>
+    _runtimeService?.SetDustViewFlags(DustViewFlags(DustTracers));
 
   partial void OnShowReferencePositionErrorChanged(bool value)
   {

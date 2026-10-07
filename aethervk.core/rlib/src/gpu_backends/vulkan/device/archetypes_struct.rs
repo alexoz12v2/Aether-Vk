@@ -766,7 +766,10 @@ impl Archetypes {
       // (screen right = camera local -X, see `gpu::frame::camera_screen_axes`), so outward faces
       // rasterise COUNTER_CLOCKWISE, the default front face. Before that fix the view was
       // mirrored and this pipeline needed INVERT_FRONT_FACE (why_comet_cut.rdc).
-      .with_pipeline_flags(PipelineFlags::STENCIL_ENABLE | PipelineFlags::CULL_BACK)
+      // opaque: hides the dust drawn behind it (farther micro layers), see `OCCLUDES_DUST`
+      .with_pipeline_flags(
+        PipelineFlags::STENCIL_ENABLE | PipelineFlags::CULL_BACK | PipelineFlags::OCCLUDES_DUST,
+      )
       .with_stencil_compare_op(StencilCompareOp::Always)
       .with_stencil_logic_op(StencilLogicOp::Replace)
       .with_stencil_reference(1)
@@ -1192,7 +1195,9 @@ impl Archetypes {
           .with_fragment_module(fragment_shader.module.get()),
       )
       .with_pipeline_flags(
-        pipelines::PipelineFlags::NO_DEPTH_WRITE | pipelines::PipelineFlags::PREMULTIPLIED_BLEND,
+        pipelines::PipelineFlags::NO_DEPTH_WRITE
+          | pipelines::PipelineFlags::PREMULTIPLIED_BLEND
+          | pipelines::PipelineFlags::DUST_ACCUM,
       );
     let pipeline_graphics_info = {
       let mut gi = graphics_info.apply_presentation_defaults(

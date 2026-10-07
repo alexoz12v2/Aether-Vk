@@ -13,6 +13,8 @@ layout(input_attachment_index = 2, set = 0, binding = 2) uniform subpassInput ma
 layout(input_attachment_index = 3, set = 0, binding = 3) uniform subpassInput microColor;
 layout(input_attachment_index = 4, set = 0, binding = 4) uniform subpassInput microDepth;
 layout(input_attachment_index = 5, set = 0, binding = 5) uniform subpassInput microGlobalDepth;
+// linear exposure-scaled dust optical depth (c·tau, tau), additive, from the micro subpass
+layout(input_attachment_index = 6, set = 0, binding = 6) uniform subpassInput dustAccum;
 
 layout(push_constant, std430) uniform CompositePush {
     float macroNear;
@@ -22,8 +24,19 @@ layout(push_constant, std430) uniform CompositePush {
     float macroScale;
     float microScale;
     uint  isOrthographic; // 1 = orthographic (linear depth), 0 = perspective
-    uint  _pad;
+    float dustSoftening;  // asinh stretch softening s (dust::display_stretch), 0 = linear
+    float dustBlackPoint; // dust::DUST_BLACK_POINT (0 with AETHERVK_DUST_EXPOSURE=fixed)
 };
+
+// Mirror: dust::display_stretch. Opacity of a dust optical depth `tau` relative to the view's
+// white point (the dust exposure divides by it): 0 up to the black point b, linear below `s`,
+// logarithmic above, 1 at the white point, so dust 1e4 fainter than the brightest still shows.
+float displayStretch(float tau, float b, float s) {
+    tau -= max(b, 0.0);
+    if (!(tau > 0.0)) return 0.0;
+    if (!(s > 0.0)) return min(tau, 1.0);
+    return min(asinh(tau / s) / asinh(1.0 / s), 1.0);
+}
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
@@ -79,5 +92,14 @@ void main() {
     } else {
         outColor = cMicro;
         finalGlobalDepth = gdMicro;
+    }
+
+    // Dust last, over everything (geometry in front of it already erased it in the accumulation:
+    // depth test in its own layer, PipelineFlags::OCCLUDES_DUST for nearer micro layers).
+    vec4 dust = subpassLoad(dustAccum);
+    float a = displayStretch(dust.a, dustBlackPoint, dustSoftening);
+    if (a > 0.0) {
+        vec3 hue = dust.rgb / max(dust.a, 1e-30);
+        outColor = vec4(hue * a + outColor.rgb * (1.0 - a), max(outColor.a, a));
     }
 }

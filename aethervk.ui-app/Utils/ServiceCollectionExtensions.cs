@@ -59,6 +59,8 @@ public static class ServiceCollectionExtensions
     // CometConfigService only depends on INativeRuntimeService + ISchedulerProvider,
     // both of which are registered in both the real and mock paths above.
     collection.AddSingleton<CometConfigService>();
+    // Asset library mirror (Imports tab, Settings > Comet Appearance)
+    collection.AddSingleton<AssetLibraryService>();
     collection.AddSingleton<INativeInputHandlerFactory, NativeInputHandlerFactory>();
     collection.AddSingleton<IWindowInputRouter, GlobalInputRouter>();
     collection.AddSingleton<IPlatformWindowService, PlatformWindowService>();

@@ -271,6 +271,14 @@ pub(super) unsafe extern "system" fn debug_utils_messenger_user_callback(
   let s = msg.to_string_lossy();
 
   if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
+    // A transient device creation failure is retried (`VulkanRenderContext::init_device`): the
+    // loader's message is a log line, not a validation error for the (test: panicking) callback.
+    if s.contains("CreateDevice")
+      && crate::gpu_backends::vulkan::CREATING_DEVICE.load(core::sync::atomic::Ordering::Acquire)
+    {
+      aethervk_oshal_rlib::log!("VULKAN (device creation, will retry): {}", s);
+      return vk::FALSE;
+    }
     #[cfg(test)]
     {
       extern crate std;

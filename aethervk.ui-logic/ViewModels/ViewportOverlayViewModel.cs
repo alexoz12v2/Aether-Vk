@@ -407,25 +407,20 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
           double min_km = min_au * 1.495978707e8;
           if (min_km < 1.0)
           {
-            double min_m = min_km * 1000.0;
-            double nice_m = GetNiceNumber(min_m);
-            MeasurementIndicatorWidth = nice_m * (_viewportVm.Width / (W_au * 1.495978707e11));
-            MeasurementIndicatorText = $"{FormatNiceNumber(nice_m)} m";
+            double nice_m = GetNiceNumber(min_km * 1000.0);
+            SetMeasurement(nice_m, nice_m * (_viewportVm.Width / (W_au * 1.495978707e11)), "m");
           }
           else
           {
             double nice_km = GetNiceNumber(min_km);
-            MeasurementIndicatorWidth = nice_km * (_viewportVm.Width / (W_au * 1.495978707e8));
-            MeasurementIndicatorText = $"{FormatNiceNumber(nice_km)} km";
+            SetMeasurement(nice_km, nice_km * (_viewportVm.Width / (W_au * 1.495978707e8)), "km");
           }
         }
         else
         {
           double nice_au = GetNiceNumber(min_au);
-          MeasurementIndicatorWidth = nice_au * (_viewportVm.Width / W_au);
-          MeasurementIndicatorText = $"{FormatNiceNumber(nice_au)} AU";
+          SetMeasurement(nice_au, nice_au * (_viewportVm.Width / W_au), "AU");
         }
-        ShowMeasurementIndicator = true;
       }
       else
       {
@@ -444,25 +439,19 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
 
         if (min_arcsec >= 3600.0)
         {
-          double min_deg = min_arcsec / 3600.0;
-          double nice_deg = GetNiceNumber(min_deg);
-          MeasurementIndicatorWidth = nice_deg * 3600.0 * (_viewportVm.Width / W_arcsec);
-          MeasurementIndicatorText = $"{FormatNiceNumber(nice_deg)} deg";
+          double nice_deg = GetNiceNumber(min_arcsec / 3600.0);
+          SetMeasurement(nice_deg, nice_deg * 3600.0 * (_viewportVm.Width / W_arcsec), "deg");
         }
         else if (min_arcsec >= 60.0)
         {
-          double min_min = min_arcsec / 60.0;
-          double nice_min = GetNiceNumber(min_min);
-          MeasurementIndicatorWidth = nice_min * 60.0 * (_viewportVm.Width / W_arcsec);
-          MeasurementIndicatorText = $"{FormatNiceNumber(nice_min)} arcmin";
+          double nice_min = GetNiceNumber(min_arcsec / 60.0);
+          SetMeasurement(nice_min, nice_min * 60.0 * (_viewportVm.Width / W_arcsec), "arcmin");
         }
         else
         {
           double nice_arcsec = GetNiceNumber(min_arcsec);
-          MeasurementIndicatorWidth = nice_arcsec * (_viewportVm.Width / W_arcsec);
-          MeasurementIndicatorText = $"{FormatNiceNumber(nice_arcsec)} arcsec";
+          SetMeasurement(nice_arcsec, nice_arcsec * (_viewportVm.Width / W_arcsec), "arcsec");
         }
-        ShowMeasurementIndicator = true;
       }
       else
       {
@@ -471,7 +460,21 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     }
   }
 
-  private double GetNiceNumber(double value)
+  /// Shows the scale bar, or hides it when the projection produced a degenerate value
+  /// (NaN/∞ bounds), so the label can never read "0 AU" or "NaN km".
+  private void SetMeasurement(double nice, double widthPx, string unit)
+  {
+    if (!(nice > 0) || double.IsInfinity(nice) || !(widthPx > 0) || double.IsInfinity(widthPx))
+    {
+      ShowMeasurementIndicator = false;
+      return;
+    }
+    MeasurementIndicatorWidth = widthPx;
+    MeasurementIndicatorText = $"{FormatNiceNumber(nice)} {unit}";
+    ShowMeasurementIndicator = true;
+  }
+
+  internal static double GetNiceNumber(double value)
   {
     if (value <= 0)
       return 1.0;
@@ -491,10 +494,12 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     return niceFraction * Math.Pow(10, exponent);
   }
 
-  private string FormatNiceNumber(double value)
+  internal static string FormatNiceNumber(double value)
   {
     if (value >= 1.0)
       return value.ToString("0");
-    return value.ToString("0.#####");
+    // value = m × 10^e with m ∈ {1,2,5}: -e decimals keep the leading digit, so it never prints "0".
+    int decimals = (int)Math.Ceiling(-Math.Log10(value) - 1e-9);
+    return value.ToString("F" + decimals);
   }
 }

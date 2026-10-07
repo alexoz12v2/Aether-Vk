@@ -17,11 +17,33 @@ public partial class DesignSettingsTabViewModel
   public string CameraModeName  { get; } = "Up Zenith";
   public bool HasActiveViewport { get; } = true;
 
+  public CometAppearanceViewModel CometAppearance { get; } = new DesignCometAppearanceViewModel();
+
   public System.Collections.ObjectModel.ObservableCollection<ViewportSettingsViewModel> ActiveViewports { get; } = new()
   {
       new DesignViewportSettingsViewModel("Viewport 1 (Perspective)", true),
       new DesignViewportSettingsViewModel("Viewport 2 (Orthographic)", false)
   };
+}
+
+public class DesignCometAppearanceViewModel : CometAppearanceViewModel
+{
+  public DesignCometAppearanceViewModel()
+  {
+    var mesh = new Models.ImportedAsset(
+      1, Models.AssetKind.Mesh, "67P_churyumov", "/mock/67P.glb", 24_000, 144_000, [2, 0, 0, 0], null, null);
+    var albedo = new Models.ImportedAsset(
+      2, Models.AssetKind.Texture, "regolith_albedo", "/mock/67P.glb#image0", 2048, 2048, [], Models.TextureChannel.Albedo, null);
+    MeshOptions.Add(mesh);
+    TextureOptions.Add(new TextureOption(null, "None"));
+    TextureOptions.Add(new TextureOption(albedo, albedo.Label));
+    HasMeshes = true;
+    IsCustomMode = true;
+    SelectedMesh = mesh;
+    SelectedAlbedo = TextureOptions[1];
+    SelectedNormal = SelectedRoughness = SelectedAo = TextureOptions[0];
+    Yaw = 30;
+  }
 }
 
 public class DesignViewportSettingsViewModel : ViewportSettingsViewModel

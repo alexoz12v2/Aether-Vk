@@ -179,6 +179,64 @@ pub(crate) struct CmdBufDiscard {
 
 /// Structure associated to the main Timeline Semaphore provided by Device
 /// Note: this must not outlive device, hence don't expose it outside
+/// Host-visible staging buffer owned by a single upload, used for payloads too large for the
+/// per-frame staging arena (see [`Image::new_2d_dedicated`]).
+pub struct DedicatedStaging {
+  pub buffer: vk::Buffer,
+  allocation: vk_mem::Allocation,
+  allocator: vk_mem::AllocatorView,
+}
+
+impl DedicatedStaging {
+  /// Payloads above this size bypass the 32 MiB per-frame staging arena, which they would
+  /// otherwise exhaust (or not fit in at all).
+  pub const ARENA_BYPASS_THRESHOLD: usize = 8 * 1024 * 1024;
+
+  pub fn new(
+    device: &LogicalDevice,
+    allocator: vk_mem::AllocatorView,
+    data: &[u8],
+    debug_name: &str,
+  ) -> GpuResult<Self> {
+    if data.is_empty() {
+      return Err(crate::gpu_invalid_arg!("empty staging payload"));
+    }
+    let info = vk::BufferCreateInfo::default()
+      .size(data.len() as u64)
+      .usage(vk::BufferUsageFlags::TRANSFER_SRC);
+    let mut alloc_info = vk_mem::AllocationCreateInfo {
+      usage: vk_mem::MemoryUsage::AutoPreferHost,
+      flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+        | vk_mem::AllocationCreateFlags::MAPPED,
+      required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+        | vk::MemoryPropertyFlags::HOST_COHERENT,
+      ..Default::default()
+    };
+    crate::apply_test_dedicated_alloc!(alloc_info);
+    let (buffer, mut allocation, res) =
+      unsafe { allocator.create_buffer_get_info(&info, &alloc_info) }
+        .with_name(device, &alloc::format!("DedicatedStaging_{}", debug_name))?;
+    let mapped = res.mapped_data as *mut u8;
+    if mapped.is_null() {
+      unsafe { allocator.destroy_buffer(buffer, &mut allocation) };
+      return Err(crate::gpu_err_device!());
+    }
+    // HOST_COHERENT: no flush needed.
+    unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), mapped, data.len()) };
+    Ok(Self {
+      buffer,
+      allocation,
+      allocator,
+    })
+  }
+
+  /// # Safety
+  /// No pending GPU work may still read the buffer.
+  pub unsafe fn destroy(mut self) {
+    unsafe { self.allocator.destroy_buffer(self.buffer, &mut self.allocation) };
+  }
+}
+
 pub struct DiscardPool {
   items: crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex<TimelineQueue<DiscardItem>>,
   #[cfg(debug_assertions)]
@@ -684,6 +742,68 @@ impl Image {
     }
     // memory is HOST_COHERENT.
 
+    Self::new_2d_from_staging(
+      device,
+      allocator,
+      command_buffer,
+      staging_arena.buffer,
+      staging_offset as vk::DeviceSize,
+      texture,
+      usage,
+      debug_name,
+    )
+  }
+
+  /// Like [`Self::new_2d`], but stages through a buffer of its own instead of the per-frame
+  /// [`FrameStagingArena`](device::memory::FrameStagingArena), so textures larger than the
+  /// arena (32 MiB: a single 4K RGBA texture is 64 MiB) can be uploaded. The texels are read
+  /// straight from `texture.data` (for imported assets a file-backed mapping, faulted in once).
+  ///
+  /// The returned [`DedicatedStaging`] must outlive the GPU execution of `command_buffer`.
+  pub fn new_2d_dedicated(
+    device: &LogicalDevice,
+    allocator: vk_mem::AllocatorView,
+    command_buffer: vk::CommandBuffer,
+    texture: &Texture,
+    usage: vk::ImageUsageFlags,
+    debug_name: &str,
+  ) -> GpuResult<(Self, DedicatedStaging)> {
+    let staging = DedicatedStaging::new(device, allocator, &texture.data, debug_name)?;
+    match Self::new_2d_from_staging(
+      device,
+      allocator,
+      command_buffer,
+      staging.buffer,
+      0,
+      texture,
+      usage,
+      debug_name,
+    ) {
+      Ok(image) => Ok((image, staging)),
+      Err(e) => {
+        unsafe { staging.destroy() };
+        Err(e)
+      }
+    }
+  }
+
+  /// Records layout transitions + a buffer→image copy from `src_buffer[src_offset..]`, which
+  /// must already hold `texture.data`.
+  #[named]
+  pub fn new_2d_from_staging(
+    device: &LogicalDevice,
+    allocator: vk_mem::AllocatorView,
+    command_buffer: vk::CommandBuffer,
+    src_buffer: vk::Buffer,
+    src_offset: vk::DeviceSize,
+    texture: &Texture,
+    usage: vk::ImageUsageFlags,
+    debug_name: &str,
+  ) -> GpuResult<Self> {
+    if texture.data.is_empty() {
+      return Err(crate::gpu_invalid_arg!("invalid argument"));
+    }
+
     // 2. Create device image
     let image_info = vk::ImageCreateInfo::default()
       .image_type(vk::ImageType::TYPE_2D)
@@ -769,7 +889,7 @@ impl Image {
 
     // 4. Copy buffer to image
     let buffer_image_copy = vk::BufferImageCopy::default()
-      .buffer_offset(staging_offset as vk::DeviceSize)
+      .buffer_offset(src_offset)
       .buffer_row_length(0)
       .buffer_image_height(0)
       .image_subresource(vk::ImageSubresourceLayers {
@@ -788,7 +908,7 @@ impl Image {
     unsafe {
       device.cmd_copy_buffer_to_image(
         command_buffer,
-        staging_arena.buffer,
+        src_buffer,
         image,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         &[buffer_image_copy],

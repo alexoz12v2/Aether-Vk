@@ -3,7 +3,9 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:AetherVk.Logic.ViewModels"
+             xmlns:models="using:AetherVk.Logic.Models"
              xmlns:view="using:AetherVk.Views"
+             xmlns:converters="using:AetherVk.Converters"
              mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
              x:Class="AetherVk.Views.ImportsTabView"
              x:DataType="vm:IImportsTabViewModel">
@@ -16,14 +18,140 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="../Styles/Colors.axaml" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- One card per asset: small preview + label (file name, or image name for
+                 textures embedded in a glTF/GLB) + details. The key is in the tooltip. -->
+            <DataTemplate x:Key="AssetCard" x:DataType="models:ImportedAsset">
+                <Border Classes="asset-card" ToolTip.Tip="{Binding Key}">
+                    <Grid ColumnDefinitions="Auto,10,*,Auto">
+                        <Border Grid.Column="0" Classes="asset-preview">
+                            <Image Source="{Binding Thumbnail, Converter={x:Static converters:ThumbnailToBitmapConverter.Instance}}"
+                                   Stretch="Uniform" />
+                        </Border>
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="2">
+                            <TextBlock Classes="asset-label" Text="{Binding Label}" />
+                            <TextBlock Classes="asset-details" Text="{Binding Details}" />
+                        </StackPanel>
+                        <!-- Unload: disabled while the simulation plays (command CanExecute) -->
+                        <Button Grid.Column="3" Classes="asset-unload" Content="✕"
+                                VerticalAlignment="Top"
+                                ToolTip.Tip="{ReflectionBinding $parent[UserControl].DataContext.StrUnload}"
+                                Command="{ReflectionBinding $parent[UserControl].DataContext.RemoveAssetCommand}"
+                                CommandParameter="{Binding}" />
+                    </Grid>
+                </Border>
+            </DataTemplate>
         </ResourceDictionary>
     </UserControl.Resources>
 
-    <!-- TODO: implement ImportsTabView -->
-    <Border Background="{DynamicResource Bg.Canvas}" Padding="16">
-        <TextBlock Text="TODO: implement ImportsTabView"
-                   Foreground="{DynamicResource Text.Secondary}"
-                   HorizontalAlignment="Center"
-                   VerticalAlignment="Center" />
-    </Border>
+    <UserControl.Styles>
+        <Style Selector="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}" />
+        </Style>
+        <Style Selector="TextBlock.section-title">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style Selector="TextBlock.secondary">
+            <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="Border.section">
+            <Setter Property="Background" Value="{DynamicResource Bg.Surface}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Bg.Outline}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="12" />
+        </Style>
+        <Style Selector="Border.asset-card">
+            <Setter Property="Width" Value="232" />
+            <Setter Property="Margin" Value="0,0,8,8" />
+            <Setter Property="Padding" Value="6" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Background" Value="{DynamicResource Bg.Subtle}" />
+        </Style>
+        <Style Selector="Border.asset-card:pointerover">
+            <Setter Property="Background" Value="{DynamicResource Bg.Hover}" />
+        </Style>
+        <Style Selector="Border.asset-preview">
+            <Setter Property="Width" Value="56" />
+            <Setter Property="Height" Value="56" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="ClipToBounds" Value="True" />
+            <Setter Property="Background" Value="{DynamicResource Bg.Canvas}" />
+        </Style>
+        <Style Selector="TextBlock.asset-label">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style Selector="Button.asset-unload">
+            <Setter Property="Padding" Value="4,0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}" />
+        </Style>
+        <Style Selector="TextBlock.asset-details">
+            <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+    </UserControl.Styles>
+
+    <DockPanel Background="{DynamicResource Bg.Canvas}">
+        <!-- Toolbar -->
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,12,*" Margin="16,16,16,8">
+            <Button Grid.Column="0" Classes="accent"
+                    Content="{Binding StrImport}"
+                    Command="{Binding ImportCommand}" />
+            <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="2">
+                <TextBlock Classes="secondary" Text="{Binding StrHint}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <ProgressBar IsIndeterminate="True" Width="80" MinWidth="80"
+                                 IsVisible="{Binding IsImporting}" />
+                    <TextBlock Classes="secondary" Text="{Binding StatusMessage}" />
+                </StackPanel>
+            </StackPanel>
+        </Grid>
+
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <!-- Two sections: columns on wide panes, rows on narrow ones (see code-behind) -->
+            <Grid x:Name="SectionsGrid" Margin="16,8,16,16"
+                  ColumnDefinitions="*,12,*" RowDefinitions="Auto,0,Auto">
+                <Border x:Name="MeshSection" Classes="section" Grid.Column="0" Grid.Row="0">
+                    <StackPanel>
+                        <TextBlock Classes="section-title" Text="{Binding StrMeshes}" />
+                        <TextBlock Classes="secondary" Text="{Binding StrEmptyMeshes}"
+                                   IsVisible="{Binding !HasMeshes}" />
+                        <ItemsControl ItemsSource="{Binding MeshAssets}"
+                                      ItemTemplate="{StaticResource AssetCard}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="TextureSection" Classes="section" Grid.Column="2" Grid.Row="0">
+                    <StackPanel>
+                        <TextBlock Classes="section-title" Text="{Binding StrTextures}" />
+                        <TextBlock Classes="secondary" Text="{Binding StrEmptyTextures}"
+                                   IsVisible="{Binding !HasTextures}" />
+                        <ItemsControl ItemsSource="{Binding TextureAssets}"
+                                      ItemTemplate="{StaticResource AssetCard}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </ScrollViewer>
+    </DockPanel>
 </UserControl>

@@ -17,3 +17,7 @@ threads-required = "num-test-threads"
 filter = 'test(gpu_backends::vulkan) | test(simulation_api) | test(test_dust_config) | test(logic_thread_tests)'
 test-group = "vulkan-tests"
 threads-required = "num-test-threads"
+# Safety net: device creation already backs off and retries in-process (`init_device`); anything
+# still lost to the driver (a device lost mid-test while the previous process tears down) is
+# retried after a pause and reported as FLAKY, not FAIL.
+retries = { backoff = "exponential", count = 2, delay = "2s", jitter = true }

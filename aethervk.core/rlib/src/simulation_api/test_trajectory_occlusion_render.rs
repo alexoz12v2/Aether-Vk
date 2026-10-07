@@ -1,15 +1,17 @@
 //! Integration test: macro-layer trajectories are depth-ordered against micro-layer meshes.
 //!
-//! Scene (camera at 100 AU, forward = -Y, screen up = +Z):
+//! Scene (camera at (1, 1, 0) AU, Sun hidden, forward = -Y, screen up = +Z):
 //! - a green emissive sphere (r = 300 km) in micro layer 1, 2000 km ahead;
 //! - a red track (macro layer, AU control points) 1000 km ahead, 100 km above the sphere centre:
 //!   in front of the sphere;
-//! - a blue track 3000 km ahead, 100 km below the sphere centre: behind the sphere.
+//! - a blue track 3000 km ahead, 100 km below the sphere centre: behind the sphere;
+//! - before them, a trajectory without segments (skipped by the upload).
 //!
 //! Asserts:
 //!  1. The red track is drawn over the sphere (trajectories write depth; before, the composite
 //!     let any depth-writing micro fragment win over a macro trajectory).
 //!  2. The blue track is hidden by the sphere but drawn beside it.
+//!     Both colours also check that each track reads its own TrajectoryGpu after the skipped one.
 //!  3. GlobalDepth: sphere pixels carry (layer 1, distance), trajectory and sky pixels the
 //!     (-1, -1) sentinel (MRT 1 is opt-in per archetype; trajectory.frag writes the sentinel).
 
@@ -73,8 +75,10 @@ fn wait_and_download(
   }
   let tid = TASK_ID.load(Ordering::Acquire);
   for _ in 0..max_polls {
-    if !matches!(ctx.get_task_status(tid), crate::simulation_api::structs::TaskStatusCode::Pending)
-    {
+    if !matches!(
+      ctx.get_task_status(tid),
+      crate::simulation_api::structs::TaskStatusCode::Pending
+    ) {
       break;
     }
     std::thread::sleep(poll);
@@ -87,7 +91,10 @@ fn wait_and_download(
   if !unsafe { ctx.download_global_depth_image(tid, gdepth.as_mut_ptr(), gdepth.len()) } {
     return None;
   }
-  Some((color, bytemuck::cast_slice::<u8, [f32; 2]>(&gdepth).to_vec()))
+  Some((
+    color,
+    bytemuck::cast_slice::<u8, [f32; 2]>(&gdepth).to_vec(),
+  ))
 }
 
 // BGRA8 pixel classification
@@ -106,7 +113,11 @@ fn straight_track(a: [f64; 3], b: [f64; 3]) -> alloc::vec::Vec<[f64; 3]> {
   (0..4)
     .map(|k| {
       let t = k as f64 / 3.0;
-      [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+      [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+      ]
     })
     .collect()
 }
@@ -128,14 +139,19 @@ fn test_trajectory_depth_order_against_micro_mesh() {
     fn drop(&mut self) {
       unsafe {
         let _ = (*self.ctx).threads.logic_thread.tx().try_send(
-          crate::simulation_api::structs::LogicCommand::PauseScene { scene_id: self.scene_id },
+          crate::simulation_api::structs::LogicCommand::PauseScene {
+            scene_id: self.scene_id,
+          },
         );
         std::thread::sleep(std::time::Duration::from_millis(100));
         let _ = alloc::boxed::Box::from_raw(self.ctx);
       }
     }
   }
-  let mut guard = PauseCtxGuard { ctx: ctx_ptr, scene_id: 0 };
+  let mut guard = PauseCtxGuard {
+    ctx: ctx_ptr,
+    scene_id: 0,
+  };
 
   unsafe {
     let ctx = &mut *ctx_ptr;
@@ -213,6 +229,14 @@ fn test_trajectory_depth_order_against_micro_mesh() {
         },
       );
 
+      // The Sun layer is hidden: in this scene it paints every pixel near-white (micro colour
+      // without depth composites over the macro layer), which would hide the tracks entirely.
+      let mut suns = alloc::vec::Vec::new();
+      g.scene.query1(|id, _s: &crate::scene::SunComponent| suns.push(id));
+      for id in suns {
+        let _ = g.scene.add_component(id, crate::scene::HiddenComponent {});
+      }
+
       // ── tracks: children of root (macro layer), absolute AU control points ──
       // A trajectory without segments first: the upload skips it, and the following ones must
       // still index their own TrajectoryGpu (they used the input index, i.e. the next one's).
@@ -236,7 +260,13 @@ fn test_trajectory_depth_order_against_micro_mesh() {
         let e = g.scene.spawn_entity(name);
         g.scene.set_parent(e, Some(root));
         let _ = g.scene.add_component(e, crate::scene::TransformComponent::default());
-        let p = |x_km: f64| [CAM_AU + x_km / AU_TO_KM, CAM_Y_AU - fwd / AU_TO_KM, up / AU_TO_KM];
+        let p = |x_km: f64| {
+          [
+            CAM_AU + x_km / AU_TO_KM,
+            CAM_Y_AU - fwd / AU_TO_KM,
+            up / AU_TO_KM,
+          ]
+        };
         let _ = g.scene.add_component(
           e,
           crate::scene::trajectory::TrajectoryComponent::from_f64(
@@ -332,19 +362,6 @@ fn test_trajectory_depth_order_against_micro_mesh() {
       "sphere expected under the hidden blue track at column {cx}"
     );
     let beside = cx + r_px as u32 + 40;
-    {
-      let blue: alloc::vec::Vec<(u32, u32)> = (0..H)
-        .flat_map(|y| (0..W).map(move |x| (x, y)))
-        .filter(|&(x, y)| is_blue(px(x, y)))
-        .collect();
-      println!("[occlusion_test] blue pixels: {} e.g. {:?}", blue.len(), &blue[..blue.len().min(8)]);
-      for y in back_row.saturating_sub(8)..back_row + 8 {
-        println!("[occlusion_test] col {beside} row {y}: {:?}", px(beside, y));
-      }
-      for (x, y) in [(4, 4), (4, 500), (500, 4), (cx, 4), (cx, 500), (4, cy), (beside, front_row), (cx, red_y)] {
-        println!("[occlusion_test] px({x},{y}) = {:?} gd={:?}", px(x, y), gd(x, y));
-      }
-    }
     assert!(
       find_row(beside, back_row, is_blue).is_some(),
       "blue track not rendered beside the sphere at column {beside}, rows {back_row}±6"
@@ -353,15 +370,24 @@ fn test_trajectory_depth_order_against_micro_mesh() {
     // 3. GlobalDepth
     let sentinel = |v: [f32; 2]| v[0] == -1.0 && v[1] == -1.0;
     let g_red = gd(cx, red_y);
-    assert!(sentinel(g_red), "trajectory pixel GlobalDepth {g_red:?}, expected (-1, -1)");
+    assert!(
+      sentinel(g_red),
+      "trajectory pixel GlobalDepth {g_red:?}, expected (-1, -1)"
+    );
     let sphere_y = (cy as f64 + r_px * 0.5) as u32; // between the tracks, sphere only
-    assert!(is_green(px(cx, sphere_y)), "expected a sphere-only pixel at ({cx},{sphere_y})");
+    assert!(
+      is_green(px(cx, sphere_y)),
+      "expected a sphere-only pixel at ({cx},{sphere_y})"
+    );
     let g_sphere = gd(cx, sphere_y);
     assert!(
       (g_sphere[0] - 1.0).abs() < 0.5 && (g_sphere[1] - 1750.0).abs() < 300.0,
       "sphere pixel GlobalDepth {g_sphere:?}, expected (1, ~1750 km)"
     );
     let g_sky = gd(4, 4);
-    assert!(sentinel(g_sky), "sky pixel GlobalDepth {g_sky:?}, expected (-1, -1)");
+    assert!(
+      sentinel(g_sky),
+      "sky pixel GlobalDepth {g_sky:?}, expected (-1, -1)"
+    );
   }
 }

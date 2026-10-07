@@ -29,18 +29,29 @@ public partial class SettingsTabViewModel
 
   public ObservableCollection<ViewportSettingsViewModel> ActiveViewports { get; } = new();
 
+  /// <summary>Comet Appearance section (display mode, custom mesh wiring and placement).</summary>
+  public CometAppearanceViewModel CometAppearance { get; }
+
   public SettingsTabViewModel(
     ITranslationService translationService,
     ISchedulerProvider schedulerProvider,
     ITabStateService<SettingsSession> sessionService,
     ICameraServiceRegistry cameraServiceRegistry,
-    INativeRuntimeService runtimeService
+    INativeRuntimeService runtimeService,
+    AssetLibraryService assetLibrary,
+    TimelineService timelineService
   )
     : base("Settings", sessionService)
   {
     _translationService = translationService;
     _runtimeService = runtimeService;
     _schedulerProvider = schedulerProvider;
+    CometAppearance = new CometAppearanceViewModel(
+      runtimeService,
+      assetLibrary,
+      timelineService,
+      translationService,
+      schedulerProvider);
 
     Icon = "⚙";
 
@@ -86,6 +97,13 @@ public partial class SettingsTabViewModel
         HasActiveViewport = ActiveViewports.Count > 0;
       })
       .AddDisposableTo(_disposables);
+  }
+
+  public override void Dispose()
+  {
+    CometAppearance.Dispose();
+    _disposables.Dispose();
+    base.Dispose();
   }
 
   private void SubscribeToStrings(ISchedulerProvider schedulerProvider)

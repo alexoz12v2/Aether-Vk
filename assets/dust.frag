@@ -15,6 +15,9 @@ layout(location = 2) in float v_opacity;
 layout(location = 3) flat in float v_dither;
 
 layout(location = 0) out vec4 fragColor;
+// micro subpass (PipelineFlags::DUST_ACCUM): linear exposure-scaled optical depth (c·tau, tau),
+// accumulated additively without saturation; composite.frag applies the asinh display stretch.
+layout(location = 2) out vec4 dustAccum;
 
 // 1 / integral of exp(-4 r^2) over the unit disc = 1 / (pi/4 (1 - e^-4))
 const float GAUSS_NORM = 1.297;
@@ -22,7 +25,9 @@ const float GAUSS_NORM = 1.297;
 void main() {
     float r2 = dot(v_uv, v_uv);
     if (r2 > 1.0) discard;
-    float a = clamp(v_opacity * exp(-4.0 * r2) * GAUSS_NORM, 0.0, 1.0);
+    float tau = v_opacity * exp(-4.0 * r2) * GAUSS_NORM;
+    vec4 acc = vec4(v_color * tau, tau);
+    float a = clamp(tau, 0.0, 1.0);
     vec4 c = vec4(v_color * a, a);
     if (v_dither >= 0.0) {
         // 8-bit target (RGBA16F unsupported, or the macro layer): optical depth below 1/255 per
@@ -32,6 +37,8 @@ void main() {
         float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
         float u = fract(ign + v_dither);
         c = clamp(floor(c * 255.0 + u) / 255.0, 0.0, 1.0);
+        acc = clamp(floor(acc * 255.0 + u) / 255.0, 0.0, 1.0);
     }
     fragColor = c;
+    dustAccum = acc;
 }

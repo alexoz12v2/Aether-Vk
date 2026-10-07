@@ -123,11 +123,22 @@ fn body_frame_positions(f: &Fixture) -> Vec<[f32; 3]> {
     .collect()
 }
 
+/// Axis-aligned bounding box centre (a vertex centroid would be biased by the UV sphere's
+/// duplicated seam/pole vertices) and the max distance of any point from it.
 fn centroid_and_max_dist(points: &[[f32; 3]]) -> ([f32; 3], f32) {
-  let n = points.len() as f32;
-  let c = points.iter().fold([0.0f32; 3], |a, p| {
-    [a[0] + p[0] / n, a[1] + p[1] / n, a[2] + p[2] / n]
-  });
+  let mut lo = [f32::MAX; 3];
+  let mut hi = [f32::MIN; 3];
+  for p in points {
+    for i in 0..3 {
+      lo[i] = lo[i].min(p[i]);
+      hi[i] = hi[i].max(p[i]);
+    }
+  }
+  let c = [
+    (lo[0] + hi[0]) * 0.5,
+    (lo[1] + hi[1]) * 0.5,
+    (lo[2] + hi[2]) * 0.5,
+  ];
   let r = points
     .iter()
     .map(|p| ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt())
@@ -489,4 +500,143 @@ fn visual_entity_is_excluded_from_scene_dumps() {
   let visual_ffi = f.visual.as_ffi();
   assert!(entities.iter().all(|e| e.ffi_id != visual_ffi));
   assert!(entities.iter().any(|e| e.ffi_id == f.body.as_ffi()));
+}
+
+/// The renderer places micro-frame meshes with `ancestor_depth_layer` +
+/// `get_relative_transform_f64(mesh, frame)`: the visual child must land in the comet's layer
+/// and compose the (almanac-driven) body transform with the appearance offset.
+#[test]
+fn renderer_transform_path_composes_body_and_visual_offset() {
+  use crate::scene::{ReferenceFrameComponent, ReferenceFrameType};
+  use aethervk_oshal_rlib::math::{matrix::MatrixVectorMul, vector::vec3f64::Vec3f64};
+
+  let mut f = fixture("render_path");
+  let frame = f.scene.spawn_entity("Comet_subtree");
+  f.scene
+    .add_component(
+      frame,
+      ReferenceFrameComponent {
+        frame_type: ReferenceFrameType::Micro,
+        scale: 1.0 / 149_597_870.7,
+        soi_radius: 1.0,
+        depth_layer: 1,
+      },
+    )
+    .unwrap();
+  f.scene.add_component(frame, TransformComponent::default()).unwrap();
+  f.scene.set_parent(f.body, Some(frame));
+  // body as the reposition step would leave it: km residual + spin
+  let body_rot = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), 90f32.to_radians());
+  let _ = f.scene.with_component_mut(f.body, |t: &mut TransformComponent| {
+    t.position = Vec3f32::from_components(100.0, 0.0, 0.0);
+    t.rotation = body_rot;
+  });
+
+  let mesh = import_offset_sphere(&mut f, [5.0, 5.0, 0.0], 4.0);
+  let offset = CometVisualOffset {
+    yaw_pitch_roll_deg: [0.0; 3],
+    translation_radii: [1.0, 0.0, 0.0],
+  };
+  apply_comet_appearance(
+    &f.scene,
+    f.visual,
+    2.0,
+    custom(mesh),
+    offset,
+    &f.library,
+    false,
+  )
+  .unwrap();
+
+  assert_eq!(f.scene.ancestor_depth_layer(f.visual), 1);
+  let rel = f.scene.get_relative_transform_f64(f.visual, frame).unwrap();
+  // scale: R / bounding radius
+  let s = rel.scale.x();
+  let br = f.library.mesh(mesh).unwrap().bounding_radius;
+  assert!((s - 2.0 / br).abs() < 1e-5, "scale {s}");
+  // bounding-sphere centre → body position + body_rot · (1 R along +X) = (100, 2, 0)
+  let c = f.library.mesh(mesh).unwrap().bounding_center;
+  let m = rel.to_mat4_f64();
+  let p = m.mul_vector(
+    aethervk_oshal_rlib::math::vector::vec4f64::Vec4f64::from_components(
+      c[0] as f64,
+      c[1] as f64,
+      c[2] as f64,
+      1.0,
+    ),
+  );
+  let expected = Vec3f64::from_components(100.0, 2.0, 0.0);
+  assert!(
+    (p[0] - expected.x()).abs() < 1e-3 && (p[1] - expected.y()).abs() < 1e-3 && p[2].abs() < 1e-3,
+    "centre at ({}, {}, {})",
+    p[0],
+    p[1],
+    p[2]
+  );
+}
+
+#[test]
+fn unwiring_the_displayed_mesh_ejects_to_the_sphere_and_keeps_placement() {
+  let mut f = fixture("unwire_mesh");
+  let mesh = import_offset_sphere(&mut f, [0.0; 3], 1.0);
+  let albedo = import_png(&mut f, "a.png", [10, 20, 30, 255]);
+  let mut w = custom(mesh);
+  w.textures[TextureChannel::Albedo as usize] = Some(albedo);
+  let offset = CometVisualOffset {
+    yaw_pitch_roll_deg: [5.0, 0.0, 0.0],
+    translation_radii: [0.2, 0.0, 0.0],
+  };
+  apply_comet_appearance(&f.scene, f.visual, 3.0, w, offset, &f.library, false).unwrap();
+
+  // unrelated asset: nothing happens
+  let other = import_png(&mut f, "b.png", [1, 1, 1, 255]);
+  assert_eq!(
+    unwire_asset(&f.scene, f.visual, 3.0, other, &f.library),
+    Ok(false)
+  );
+
+  assert_eq!(
+    unwire_asset(&f.scene, f.visual, 3.0, mesh, &f.library),
+    Ok(true)
+  );
+  let a = f.scene.with_component(f.visual, |a: &CometAppearanceComponent| *a).unwrap();
+  assert_eq!(a.wiring, CometAppearanceWiring::default());
+  assert_eq!(a.offset, offset, "placement survives the eject");
+  assert_eq!(mesh_of(&f).asset_path, DEFAULT_COMET_ASSET_PATH);
+  assert_eq!(transform_of(&f), TransformComponent::default());
+  let expected = generate_uv_sphere(3.0, 16, 16, 1.0, false);
+  assert_eq!(
+    mesh_of(&f).mesh.vertices[5].position,
+    expected.vertices[5].position
+  );
+}
+
+#[test]
+fn unwiring_a_texture_only_clears_its_channel() {
+  let mut f = fixture("unwire_tex");
+  let mesh = import_offset_sphere(&mut f, [0.0; 3], 1.0);
+  let albedo = import_png(&mut f, "a.png", [10, 20, 30, 255]);
+  let mut w = custom(mesh);
+  w.textures[TextureChannel::Albedo as usize] = Some(albedo);
+  w.textures[TextureChannel::Ao as usize] = Some(albedo);
+  apply_comet_appearance(
+    &f.scene,
+    f.visual,
+    2.0,
+    w,
+    Default::default(),
+    &f.library,
+    false,
+  )
+  .unwrap();
+
+  assert_eq!(
+    unwire_asset(&f.scene, f.visual, 2.0, albedo, &f.library),
+    Ok(true)
+  );
+  let a = f.scene.with_component(f.visual, |a: &CometAppearanceComponent| *a).unwrap();
+  assert_eq!(a.wiring.mesh, Some(mesh));
+  assert_eq!(a.wiring.textures, [None; 4]);
+  assert!(mesh_of(&f).mesh.albedo_map.is_none());
+  assert!(mesh_of(&f).asset_path.starts_with("asset:"));
 }

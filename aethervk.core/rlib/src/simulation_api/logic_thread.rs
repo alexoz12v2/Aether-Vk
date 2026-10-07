@@ -107,6 +107,7 @@ fn logic_command_desc(cmd: &LogicCommand) -> alloc::string::String {
     // Data/Asset Commands
     LogicCommand::ImportModel { path, .. } => alloc::format!("Import model {}", path),
     LogicCommand::ImportAsset { path, .. } => alloc::format!("Import asset {}", path),
+    LogicCommand::RemoveAsset { asset_id, .. } => alloc::format!("Remove asset {}", asset_id),
     LogicCommand::SetCometAppearance { .. } => "SetCometAppearance".to_string(),
     LogicCommand::LoadAlmanac { path, .. } => alloc::format!("Load almanac {}", path),
     LogicCommand::UnloadAlmanac { path, .. } => alloc::format!("Unload almanac {}", path),
@@ -2044,14 +2045,37 @@ fn process_command_internal(
       let library = alloc::sync::Arc::clone(&ctx.scenes.read().asset_library);
       let result = import_asset(&library, &path, &cache_dir);
       let payload = match &result {
-        Ok(outcome) => crate::simulation_api::external_state::CAssetImported {
-          request_id,
-          mesh_id: outcome.mesh.unwrap_or(0),
-          success: 1,
-          added_count: outcome.added.len() as u32,
-        },
+        Ok(outcome) => {
+          use crate::simulation::asset_library::OrientationFix;
+          match outcome.orientation_fix {
+            OrientationFix::None => {}
+            OrientationFix::WindingFlipped => emit_breadcrumb(
+              1,
+              &alloc::format!(
+                "{}: triangle winding was inverted relative to its normals and has been fixed",
+                crate::simulation::asset_library::file_stem(&path)
+              ),
+            ),
+            OrientationFix::InsideOutFixed => emit_breadcrumb(
+              1,
+              &alloc::format!(
+                "{}: mesh was inside-out (normals pointing inwards) and has been fixed",
+                crate::simulation::asset_library::file_stem(&path)
+              ),
+            ),
+          }
+          crate::simulation_api::external_state::CAssetImported {
+            request_id,
+            mesh_id: outcome.mesh.unwrap_or(0),
+            success: 1,
+            added_count: outcome.added.len() as u32,
+          }
+        }
         Err(e) => {
-          emit_breadcrumb(3, &alloc::format!("Import of '{}' failed: {}", path, e.message()));
+          emit_breadcrumb(
+            3,
+            &alloc::format!("Import of '{}' failed: {}", path, e.message()),
+          );
           crate::simulation_api::external_state::CAssetImported {
             request_id,
             mesh_id: 0,
@@ -2064,14 +2088,39 @@ fn process_command_internal(
       result.map(|_| ()).map_err(EngineError::from)
     }
 
+    LogicCommand::RemoveAsset {
+      request_id,
+      asset_id,
+    } => {
+      let result = remove_asset(ctx, asset_id);
+      let (success, ejected) = match &result {
+        Ok(ejected) => (1, *ejected),
+        Err(e) => {
+          emit_breadcrumb(3, &alloc::format!("Unloading asset failed: {e}"));
+          (0, 0)
+        }
+      };
+      emit_external_state_change(&ExternalState::AssetRemoved(
+        crate::simulation_api::external_state::CAssetRemoved {
+          request_id,
+          asset_id,
+          success,
+          ejected,
+        },
+      ));
+      result.map(|_| ())
+    }
+
     LogicCommand::SetCometAppearance {
       scene_id,
       wiring,
       offset,
     } => {
       let scenes = ctx.scenes.read();
-      let scene_arc =
-        crate::expect_scene!(scenes.get_scene(scene_id), "SetCometAppearance: scene not found");
+      let scene_arc = crate::expect_scene!(
+        scenes.get_scene(scene_id),
+        "SetCometAppearance: scene not found"
+      );
       let library = alloc::sync::Arc::clone(&scenes.asset_library);
       let scene_guard = scene_arc.read();
       let comet = scene_guard.comet.ok_or(EngineError::InvalidOperation(
@@ -2565,20 +2614,20 @@ fn process_command_internal(
         scene_guard.scene.with_component_mut(
           visual,
           |mesh_comp: &mut crate::scene::StaticMeshComponent| {
-          let original_id = mesh_comp.mesh.id;
-          if let Some(m) = alloc::sync::Arc::get_mut(&mut mesh_comp.mesh) {
-            // Fast path: we are the sole owner — mutate in place, zero allocation.
-            crate::simulation::comet::update_uv_sphere_radius_in_place(m, radius_km);
-          } else {
-            // Fallback: someone else holds a reference (e.g. a render thread read).
-            // Clone, mutate, and preserve the original id so the GPU cache key is unchanged.
-            let mut copy = (*mesh_comp.mesh).clone();
-            crate::simulation::comet::update_uv_sphere_radius_in_place(&mut copy, radius_km);
-            copy.id = original_id; // critical: must not change the cache key
-            mesh_comp.mesh = alloc::sync::Arc::new(copy);
-          }
-          original_id
-        },
+            let original_id = mesh_comp.mesh.id;
+            if let Some(m) = alloc::sync::Arc::get_mut(&mut mesh_comp.mesh) {
+              // Fast path: we are the sole owner — mutate in place, zero allocation.
+              crate::simulation::comet::update_uv_sphere_radius_in_place(m, radius_km);
+            } else {
+              // Fallback: someone else holds a reference (e.g. a render thread read).
+              // Clone, mutate, and preserve the original id so the GPU cache key is unchanged.
+              let mut copy = (*mesh_comp.mesh).clone();
+              crate::simulation::comet::update_uv_sphere_radius_in_place(&mut copy, radius_km);
+              copy.id = original_id; // critical: must not change the cache key
+              mesh_comp.mesh = alloc::sync::Arc::new(copy);
+            }
+            original_id
+          },
         )
       };
 
@@ -2621,17 +2670,14 @@ fn process_command_internal(
         // Collect the flat position array from the (now-updated) CPU mesh.
         let position_data: alloc::vec::Vec<f32> = scene_guard
           .scene
-          .with_component(
-            visual,
-            |mesh_comp: &crate::scene::StaticMeshComponent| {
-              mesh_comp
-                .mesh
-                .vertices
-                .iter()
-                .flat_map(|v| v.position.iter().copied())
-                .collect()
-            },
-          )
+          .with_component(visual, |mesh_comp: &crate::scene::StaticMeshComponent| {
+            mesh_comp
+              .mesh
+              .vertices
+              .iter()
+              .flat_map(|v| v.position.iter().copied())
+              .collect()
+          })
           .unwrap_or_default();
 
         let _ = ctx.kernels.0.with_device(ctx.kernels.1, |device| {
@@ -2939,6 +2985,8 @@ fn execute_simulation_tick_fixed_update_phase(
     {
       // 1. upgrade to a write lock to start applying updates
       let mut scene_write = parking_lot::RwLockUpgradableReadGuard::upgrade(scene);
+      // the time of the transforms committed below, in the same write (dust is evaluated at it)
+      scene_write.scene.set_sim_time_s(now_scaled_us as f64 * 1e-6);
 
       let mut start_time_unscaled_us = get_monotonic_time();
       for (idx, kv_ref) in cartesian_state_cache
@@ -3019,6 +3067,9 @@ fn execute_simulation_tick_fixed_update_phase(
           }
         }
       }
+      // Earth observer: posed in this same write, from the transforms just committed, so no frame
+      // ever shows a stale aim (see `earth_observer`)
+      utils::apply_earth_observer(&mut *scene_write);
       // write Lock automatically dropped/downgraded here
       scene = parking_lot::RwLockWriteGuard::downgrade_to_upgradable(scene_write);
 
@@ -3215,6 +3266,7 @@ fn execute_simulation_tick_clear_changed_entities_phase(
       }
     }
   }
+  utils::sort_parents_first(&mut changes_to_stream, &scene.scene.hierarchy.read());
   drop(scene);
 
   // - pass this vector's ownership into a tasklet and let it acquire a readlock on the callback to
@@ -3535,6 +3587,65 @@ mod utils {
   /// Keeps a camera parented below a spinning body at its inertial pose: undoes the body's rotation
   /// change `old_rot → new_rot` on the camera's local transform. In f64: the f32 body rotations
   /// upcast exactly, so nothing is rounded (an f32 quaternion costs ~1e-7 rad, ~15 km at 1 AU).
+  /// Poses the native Earth observer camera (if set) from the scene's current transforms and marks
+  /// it changed. Call inside the scene write that committed the Earth / comet transforms.
+  pub fn apply_earth_observer(scene: &mut SceneContext) {
+    let Some(mut obs) = scene.earth_observer else {
+      return;
+    };
+    if crate::simulation_api::earth_observer::apply(&scene.scene, &mut obs).is_some() {
+      scene.earth_observer = Some(obs);
+      check_earth_observer_invariant(&scene.scene, &obs);
+      mark_component_changed::<crate::scene::HighResTransformComponent>(scene, obs.camera);
+    }
+  }
+
+  /// Orders a change stream `(external entity id, component id, data)` parents before children
+  /// (stable: entity id order otherwise). A listener that combines a body with a camera parented
+  /// below it (C# Earth observer / comet orbit) must not see this tick's camera against the
+  /// previous tick's body.
+  pub fn sort_parents_first<T>(
+    changes: &mut [(u64, u64, T)],
+    hierarchy: &crate::scene::SceneHierarchy,
+  ) {
+    let depth = |ext_id: u64| {
+      let mut current = EntityId::from_ffi(ext_id);
+      let mut d = 0u32;
+      while let Some(&parent) = hierarchy.parents.get(&current) {
+        current = parent;
+        d += 1;
+      }
+      d
+    };
+    changes.sort_by_cached_key(|(ext_id, _, _)| depth(*ext_id));
+  }
+
+  /// The observer sits on the Earth's surface: `|camera − earth| = EARTH_RADIUS_AU` (world, f64).
+  /// Checked here, on one scene snapshot: C# receives the camera and the Earth in separate callbacks
+  /// and could only compare a camera against the previous tick's Earth.
+  fn check_earth_observer_invariant(
+    scene: &crate::scene::Scene,
+    obs: &crate::simulation_api::earth_observer::EarthObserverState,
+  ) {
+    use crate::simulation_api::earth_observer::EARTH_RADIUS_AU;
+    let (Some(cam), Some(earth)) = (
+      scene.global_transform_f64(obs.camera),
+      scene.global_transform_f64(obs.earth),
+    ) else {
+      return;
+    };
+    let d = cam.position - earth.position;
+    let dist = (d.x() * d.x() + d.y() * d.y() + d.z() * d.z()).sqrt();
+    // f64 at 1 AU resolves ~1e-16 AU; the f32 Earth rotation's norm error scales R by ~1e-8
+    if (dist - EARTH_RADIUS_AU).abs() > 1e-10 {
+      let msg = alloc::format!(
+        "Earth observer invariant broken: |camera - earth| = {dist:e} AU, expected {EARTH_RADIUS_AU:e}"
+      );
+      emit_breadcrumb(3, &msg);
+      debug_assert!(false, "{msg}");
+    }
+  }
+
   pub fn compensate_body_spin(
     h: &mut crate::scene::HighResTransformComponent,
     old_rot: aethervk_oshal_rlib::math::vector::vec4::Quat,
@@ -3761,6 +3872,8 @@ mod utils {
     insert_almanac_bodies_into_cache(scene_write, scene_id, cache);
     step_cartesian_cache(cache, scene_id, epoch, almanac);
     commit_cartesian_cache(scene_write, scene_id, cache);
+    scene_write.scene.set_sim_time_s(scaled_us as f64 * 1e-6);
+    apply_earth_observer(scene_write);
     // the recorded comet path belongs to the previous timeline position
     clear_effective_trajectory(scene_write);
     // every age tier from scratch (shared per-tick window budget)
@@ -3997,6 +4110,11 @@ mod utils {
           }
         };
         let rot = (body_rot * jet_local.rotation).0;
+        // the site offset in the particle-system frame (rot = body_rot · jet rotation)
+        let site_offset_m = {
+          let o = jet_local.rotation.conjugate().rotate_vector(jet_local.position);
+          [o.x() * 1000.0, o.y() * 1000.0, o.z() * 1000.0]
+        };
         Some(JetState {
           t_s: t,
           r_m: [
@@ -4004,7 +4122,7 @@ mod utils {
             (pos_km.y() + off_km.y() as f64) * 1000.0,
             (pos_km.z() + off_km.z() as f64) * 1000.0,
           ],
-          // nucleus rotation velocity (ω × r, < 1 m/s) is neglected
+          // the nucleus centre's velocity: emission adds the site's ω × r (`dust::emit_cluster`)
           v_ms: [
             vel_kms.x() * 1000.0,
             vel_kms.y() * 1000.0,
@@ -4013,6 +4131,7 @@ mod utils {
           rot: [rot.x(), rot.y(), rot.z(), rot.w()],
           site_normal,
           spin,
+          site_offset_m,
         })
       };
       let Some(jet) = jet_at(t_s) else {
@@ -4028,6 +4147,7 @@ mod utils {
             ps.emission_params.dust_emit_config(r as f32, ps.ttl_us)
           };
           let mut sys = ps.dust.lock();
+          sys.track_spin_model(rot_model);
           // exposure reference from the current activity (smooth along the orbit, independent of
           // the history and the camera); kept while the jet is beyond its production cutoff
           let tau_ref = cfg_at(&jet).tau_ref();
@@ -4075,12 +4195,25 @@ mod utils {
               )
             })
             .collect();
+          // the spin the emission used: tells a missing rotation model from a polar jet
+          let spin_h = batches
+            .last()
+            .map(|b| b.1.spin[3])
+            .filter(|w| *w > 0.0)
+            .map(|w| 2.0 * core::f32::consts::PI / w / 3600.0);
           oshal::log!(
-            "[Dust] r={:.3} AU tiers [{}] last batch={} clusters, mass {:.3e} g",
+            "[Dust] r={:.3} AU tiers [{}] last batch={} clusters, mass {:.3e} g, spin {} ({}), lit {}",
             r_au,
             tiers.join(" | "),
             batches.last().map(|b| b.1.count).unwrap_or(0),
             batches.last().map(|b| b.1.mass_params[0]).unwrap_or(0.0),
+            spin_h.map_or(alloc::string::String::from("none"), |h| alloc::format!("{h:.2} h")),
+            if rot_model.is_some() { "model" } else { "estimated" },
+            batches.last().map_or("-", |b| match b.1.lit[3] {
+              m if m == crate::scene::dust::LIT_MODE_PERIODIC => "periodic",
+              _ if b.1.lit[1] > 0.0 => "always",
+              _ => "dark",
+            }),
           );
         });
       }
@@ -4395,4 +4528,43 @@ pub(crate) fn import_asset(
     library.set_cache_dir(cache_dir)?;
   }
   library.import_file(path)
+}
+
+/// Body of [`LogicCommand::RemoveAsset`]: refuses while any scene plays or an import holds the
+/// library, ejects every comet displaying the asset, then unloads it. Returns how many comets
+/// changed appearance.
+fn remove_asset(ctx: &LogicThreadContext, asset_id: u64) -> EngineResult<u32> {
+  use crate::simulation_api::comet_appearance;
+  let scenes = ctx.scenes.read();
+  let library_arc = alloc::sync::Arc::clone(&scenes.asset_library);
+  let mut library = library_arc.try_write().ok_or(EngineError::InvalidOperation(
+    "RemoveAsset: asset import in progress",
+  ))?;
+  if library.kind_of(asset_id).is_none() {
+    return Err(EngineError::InvalidOperation("RemoveAsset: unknown asset"));
+  }
+  let scene_arcs: alloc::vec::Vec<_> = scenes.scenes.values().cloned().collect();
+  for scene_arc in &scene_arcs {
+    if scene_arc.read().time_state.read().speed
+      != aethervk_oshal_rlib::os::time::v2::SimSpeed::Paused
+    {
+      return Err(EngineError::InvalidOperation(
+        "RemoveAsset: pause the simulation to unload assets",
+      ));
+    }
+  }
+  let mut ejected = 0;
+  for scene_arc in &scene_arcs {
+    let guard = scene_arc.read();
+    let Some(comet) = guard.comet else { continue };
+    let Some(visual) = comet.visual else { continue };
+    let radius_km = comet_appearance::nucleus_radius_km(&guard.scene, comet.body);
+    if comet_appearance::unwire_asset(&guard.scene, visual, radius_km, asset_id, &library)
+      .map_err(EngineError::from)?
+    {
+      ejected += 1;
+    }
+  }
+  library.remove(asset_id).map_err(EngineError::from)?;
+  Ok(ejected)
 }

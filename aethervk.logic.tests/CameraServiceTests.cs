@@ -102,13 +102,13 @@ public class CameraServiceTests
   }
 
   [Fact]
-  public void EarthPosition_AllowsOrbitAndRejectsPanAndZoom()
+  public void EarthPosition_AllowsOrbitAndZoomAndRejectsPan()
   {
     var (service, _, _) = BuildService();
     service.SetCameraMode(CameraMode.EarthPosition);
 
     Assert.True(service.IsOrbitAllowed());
-    Assert.False(service.IsZoomAllowed());
+    Assert.True(service.IsZoomAllowed()); // telescope zoom (field of view)
     Assert.False(service.IsPanAllowed());
   }
 
@@ -125,18 +125,78 @@ public class CameraServiceTests
 
 
 
+  /// Earth observer zoom is a telescope zoom: the field of view scales, the observer stays put.
   [Fact]
-  public void EarthPosition_RequestZoom_IsRejected()
+  public void EarthPosition_RequestZoom_ScalesTheFieldOfView()
   {
     var (service, runtime, _) = BuildService();
     service.SetCameraMode(CameraMode.EarthPosition);
-
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var subject = (System.Reactive.Subjects.BehaviorSubject<CameraProjectionState?>)typeof(CameraService)
+      .GetField("_projectionSubject", flags)!.GetValue(service)!;
+    subject.OnNext(new CameraProjectionState(true, 1e-5f, 4f / 3f, 1e-6f, 2f, 0f, 0f, 0f, 0f, 1f));
     runtime.Invocations.Clear();
+    float? fov = null;
+    runtime.Setup(r => r.CameraSetPerspective(It.IsAny<ulong>(), It.IsAny<float>(), It.IsAny<float>(), It.IsAny<float>(), It.IsAny<float>()))
+      .Callback<ulong, float, float, float, float>((_, f, _, _, _) => fov = f).Returns(true);
 
-    bool result = service.RequestZoom(100f, InputModifiers.None);
+    Assert.True(service.RequestZoom(-100f, InputModifiers.None)); // drag up: zoom out
 
-    Assert.False(result);
-    runtime.Verify(r => r.AddCameraAnimation(100UL, It.IsAny<AnimationTarget>()), Times.Never);
+    Assert.NotNull(fov);
+    Assert.True(fov > 1e-5f, $"fov {fov} should widen");
+    runtime.Verify(r => r.AddCameraAnimation(It.IsAny<ulong>(), It.IsAny<AnimationTarget>()), Times.Never);
+  }
+
+  /// Once parented in Earth observer mode the core owns the pose: a submode change hands it the
+  /// mode, Earth, comet, surface point and look; the per-tick Earth callback no longer writes the
+  /// camera (a write a callback later re-applied a stale aim, comet_tracking.rdc); leaving the mode
+  /// takes it back.
+  [Fact]
+  public void EarthObserver_IsPosedNativelyOnceParented()
+  {
+    var (service, runtime, _) = BuildService();
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    runtime.Setup(r => r.CometEntityId).Returns(77UL);
+    var calls = new System.Collections.Generic.List<(int Mode, ulong Earth, ulong Comet)>();
+    runtime.Setup(r => r.SetEarthObserver(It.IsAny<ulong>(), It.IsAny<int>(), It.IsAny<ulong>(), It.IsAny<ulong>(),
+        It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>()))
+      .Callback<ulong, int, ulong, ulong, double, double, Quaterniond>((_, m, e, c, _, _, _) => calls.Add((m, e, c)))
+      .Returns(true);
+    var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
+    ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
+      .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!).OnNext(true);
+    var tracker = typeof(CameraService).GetField("_cometTracker", flags)!.GetValue(service)!;
+    tracker.GetType().GetField("_lastKnownCometPositionF64", flags)!
+      .SetValue(tracker, ((double X, double Y, double Z)?)(1.3, -0.4, 0.05));
+
+    service.SetCameraMode(CameraMode.EarthPosition);
+    typeof(CameraService).GetField("_bodyCameraParented", flags)!.SetValue(service, true);
+    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.CometTracking);
+
+    Assert.Contains(((int)EarthObserverOrientationMode.CometTracking, 42UL, 77UL), calls);
+
+    // per-tick Earth callback: no camera write from the UI any more
+    runtime.Invocations.Clear();
+    var dto = new MutableHighResTransformDTO { PosX = 0.98, PosY = 0.17, RotW = 1, ScaleX = 1, ScaleY = 1, ScaleZ = 1 };
+    nint ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(System.Runtime.InteropServices.Marshal.SizeOf(dto));
+    try
+    {
+      System.Runtime.InteropServices.Marshal.StructureToPtr(dto, ptr, false);
+      typeof(CameraService).GetMethod("HandleEarthTransformCallback", flags)!.Invoke(service, new object[] { ptr });
+    }
+    finally
+    {
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+    }
+    runtime.Verify(r => r.CameraSetRotoTranslate(It.IsAny<ulong>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(),
+      It.IsAny<Quaterniond>(), It.IsAny<ulong>()), Times.Never);
+    runtime.Verify(r => r.AddCameraAnimation(It.IsAny<ulong>(), It.IsAny<AnimationTarget>()), Times.Never);
+
+    // lock-in hands over the body-fixed look; leaving the mode clears it
+    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.CometLockIn);
+    Assert.Equal((int)EarthObserverOrientationMode.CometLockIn, calls[^1].Mode);
+    service.SetCameraMode(CameraMode.UpZenith);
+    Assert.Equal(-1, calls[^1].Mode);
   }
 
   [System.Runtime.InteropServices.StructLayout(
@@ -722,6 +782,52 @@ public class CameraServiceTests
     Assert.True(Vector3d.Dot(fwd, want) > 0 && err < 1e-12, $"aim error {err:E2} rad");
   }
 
+  /// Comet tracking frames the visible coma, not only the nucleus: with a 5,000 km coma at 1 AU the
+  /// preset field's half-height covers 1.2× the coma (the nucleus-only preset was ~100 km wide, so
+  /// the dust filled every frame, broken_earth.rdc).
+  [Fact]
+  public void CometTrackingPreset_FramesTheComa()
+  {
+    var (service, runtime, _) = BuildService();
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    runtime.Setup(r => r.DustComaRadiusKm()).Returns(5000.0);
+    var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
+    ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
+      .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!).OnNext(true);
+    var tracker = typeof(CameraService).GetField("_cometTracker", flags)!.GetValue(service)!;
+    tracker.GetType().GetField("_lastKnownCometPositionF64", flags)!
+      .SetValue(tracker, ((double X, double Y, double Z)?)(1.0, 0.0, 0.0)); // 1 AU from the Earth at the origin
+    service.SetCameraMode(CameraMode.EarthPosition);
+    CameraProjectionState? preset = null;
+    using var _p = service.EarthObserverPresetProjection.Subscribe(p => preset = p);
+
+    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.CometTracking);
+
+    Assert.NotNull(preset);
+    const double AuToKm = 149_597_870.7;
+    double d = preset!.FocusDistance;
+    double halfHeightKm = preset.IsPerspective
+      ? Math.Tan(preset.Fov / 2.0) * d * AuToKm
+      : preset.Top * AuToKm;
+    Assert.InRange(halfHeightKm, 1.2 * 5000.0 * 0.99, 1.2 * 5000.0 * 1.01);
+  }
+
+  /// The debug panel line for the native Earth observer: aim error and target elevation, or the
+  /// below-horizon state where tracking faces the target's azimuth; empty when the UI poses.
+  [Fact]
+  public void EarthObserverStatus_FormatsAimAndBelowHorizon()
+  {
+    Assert.Equal(string.Empty, AetherVk.Logic.ViewModels.Debug.CameraMatrixDebugViewModel.FormatEarthObserver(null));
+    var aimed = AetherVk.Logic.ViewModels.Debug.CameraMatrixDebugViewModel.FormatEarthObserver(
+      new EarthObserverStatus((int)EarthObserverOrientationMode.SunTracking, 2e-10, 0.5));
+    Assert.StartsWith("SunTracking · aim", aimed);
+    Assert.Contains("+28.6°", aimed);
+    var below = AetherVk.Logic.ViewModels.Debug.CameraMatrixDebugViewModel.FormatEarthObserver(
+      new EarthObserverStatus((int)EarthObserverOrientationMode.CometTracking, 0.2, -0.2));
+    Assert.Contains("below horizon: facing its azimuth", below);
+    Assert.Equal(24, System.Runtime.InteropServices.Marshal.SizeOf<CEarthObserverStatusDTO>());
+  }
+
   /// A comet submode without a committed comet ejects to Free and warns with a breadcrumb.
   [Fact]
   public void CometSubmode_WithoutComet_EjectsToFreeWithBreadcrumb()
@@ -775,6 +881,80 @@ public class CameraServiceTests
     var zenith = Vector3d.UnitX;
     Assert.True(CameraService.IsBelowHorizon(new Vector3d(-1, 0.2, 0), zenith));
     Assert.False(CameraService.IsBelowHorizon(new Vector3d(0.1, 1, 0), zenith));
+  }
+
+  /// The suggested site has the target at its zenith: the surface point's local vertical (from the
+  /// Earth's centre) points at the target, whatever the Earth's rotation.
+  [Fact]
+  public void SubTargetLatLon_PutsTheTargetOverhead()
+  {
+    var rng = new Random(11);
+    var earth = new Vector3d(0.98, 0.17, -1e-5);
+    for (int k = 0; k < 100; k++)
+    {
+      var rot = Quaterniond.Normalize(new Quaterniond(
+        rng.NextDouble() - 0.5, rng.NextDouble() - 0.5, rng.NextDouble() - 0.5, rng.NextDouble() - 0.5));
+      var target = new Vector3d(rng.NextDouble() * 4 - 2, rng.NextDouble() * 4 - 2, rng.NextDouble() - 0.5);
+      var (latDeg, lonDeg) = CameraService.SubTargetLatLon(earth, rot, target);
+      double lat = latDeg * Math.PI / 180.0, lon = lonDeg * Math.PI / 180.0;
+      // SetEarthObserverLatLon's body-fixed convention
+      var bf = new Vector3d(Math.Cos(lat) * Math.Cos(lon), Math.Cos(lat) * Math.Sin(lon), Math.Sin(lat));
+      var zenith = Vector3d.Transform(bf, rot);
+      var want = Vector3d.Normalize(target - earth);
+      Assert.True(Vector3d.Cross(zenith, want).Length() < 1e-12 && Vector3d.Dot(zenith, want) > 0,
+        $"zenith {zenith} vs target direction {want}");
+    }
+  }
+
+  /// Comet tracking with the comet below the horizon: the viewport settings explain the hold and
+  /// suggest the site that has the comet overhead; moving there clears the message.
+  [Fact]
+  public void CometTrackingBelowHorizon_SuggestsASiteThatSeesTheComet()
+  {
+    var (service, runtime, _) = BuildService();
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
+    ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
+      .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!).OnNext(true);
+    var tracker = typeof(CameraService).GetField("_cometTracker", flags)!.GetValue(service)!;
+    // Earth at its default (1, 0, 0), observer at (0°N, 0°E) on its +X side: a comet towards −X is
+    // below the horizon
+    tracker.GetType().GetField("_lastKnownCometPositionF64", flags)!
+      .SetValue(tracker, ((double X, double Y, double Z)?)(-1.0, 0.0, 0.2));
+    service.SetCameraMode(CameraMode.EarthPosition);
+    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.CometTracking);
+
+    var schedulers = new AetherVk.Logic.Tests.Mocks.TestSchedulerProvider();
+    var vm = new AetherVk.Logic.ViewModels.ViewportSettingsViewModel(100UL, 0, runtime.Object, schedulers, service);
+    var v = service.GetEarthObserverTargetVisibility();
+    Assert.NotNull(v);
+    Assert.True(v!.ElevationDeg < 0.0, $"elevation {v.ElevationDeg}");
+    vm.UpdateObserverHorizon(v);
+
+    Assert.True(vm.IsObserverTargetBelowHorizon);
+    double wantLat = Math.Atan2(0.2, 2.0) * 180.0 / Math.PI; // comet − Earth = (−2, 0, 0.2)
+    Assert.Equal(wantLat, vm.SuggestedObserverLatDeg, 9);
+    Assert.Equal(180.0, Math.Abs(vm.SuggestedObserverLonDeg), 9);
+    Assert.Contains("comet", vm.ObserverHorizonMessage);
+    Assert.Contains("below your horizon", vm.ObserverHorizonMessage);
+    Assert.Contains(wantLat.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "°N", vm.ObserverHorizonMessage);
+
+    vm.ApplySuggestedObserverSiteCommand.Execute(null);
+
+    Assert.Equal(wantLat, vm.EarthObserverLatDeg, 9);
+    Assert.False(vm.IsObserverTargetBelowHorizon);
+    Assert.True(service.GetEarthObserverTargetVisibility()!.ElevationDeg > 89.0);
+  }
+
+  /// Outside tracking there is nothing to explain.
+  [Fact]
+  public void TargetVisibility_IsNullOutsideTracking()
+  {
+    var (service, _, _) = BuildService();
+    Assert.Null(service.GetEarthObserverTargetVisibility()); // not an Earth observer
+    service.SetCameraMode(CameraMode.EarthPosition);
+    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.SunLockIn);
+    Assert.Null(service.GetEarthObserverTargetVisibility());
   }
 
   /// Lock-in / tracking preset: the target spans 10% of the view; a changed fov enables "Restore".

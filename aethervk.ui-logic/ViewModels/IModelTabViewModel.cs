@@ -40,6 +40,11 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
 
   /// <summary>Draws the comet's reference-position error lines (cross-track and same-epoch).</summary>
   bool ShowReferencePositionError { get; set; }
+  double DustSoftening { get; set; }
+  /// <summary>Bright dots on a sparse, stable set of real dust particles (their true positions).</summary>
+  bool DustTracers { get; set; }
+  /// <summary>Time-lapse factor of the flow marks: 1 = they move with the dust, K = K× faster.</summary>
+  double DustFlowSpeed { get; set; }
 
   /// <summary>
   /// <c>true</c> when a comet has been committed to the native runtime.

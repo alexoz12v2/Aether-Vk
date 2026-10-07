@@ -595,6 +595,102 @@ pub unsafe extern "C" fn avkSimulationContext_setCometIndicatorVisible(
   ctx_ref.set_comet_indicator_visible(scene_id, visible)
 }
 
+/// Sets the native Earth observer (camera posed in every logic commit, see
+/// `simulation_api::earth_observer`): `mode` 0 Free, 1 CometLockIn, 2 CometTracking, 3 SunLockIn,
+/// 4 SunTracking (C# `EarthObserverOrientationMode`), `u32::MAX` clears it (C# poses the camera).
+/// `look` points to 4 f64 (xyzw): Free inertial world look, or lock-in body-fixed look.
+///
+/// # Safety
+/// FFI Contract: `look` is null or points to 4 readable f64
+#[unsafe(no_mangle)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub unsafe extern "C" fn avkSimulationContext_setEarthObserver(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  camera_id: u64,
+  mode: u32,
+  earth_id: u64,
+  comet_id: u64,
+  lat_deg: f64,
+  lon_deg: f64,
+  look: *const f64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let look = if look.is_null() {
+    [0.0, 0.0, 0.0, 1.0]
+  } else {
+    let l = unsafe { core::slice::from_raw_parts(look, 4) };
+    [l[0], l[1], l[2], l[3]]
+  };
+  let mode = aethervk_core_rlib::simulation_api::earth_observer::EarthObserverMode::from_u32(mode);
+  ctx_ref.set_earth_observer(
+    scene_id, camera_id, mode, earth_id, comet_id, lat_deg, lon_deg, look,
+  )
+}
+
+/// Native Earth observer status (`avkSimulationContext_earthObserverStatus`). 24 bytes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CEarthObserverStatus {
+  /// 1 when the core poses the camera
+  pub active: u32,
+  /// `EarthObserverOrientationMode` value
+  pub mode: u32,
+  /// angle between the view axis and the target (rad) at the last commit
+  pub aim_error_rad: f64,
+  /// target elevation above the observer's horizon (rad); negative: tracking faces its azimuth
+  pub target_elevation_rad: f64,
+}
+const _: () = assert!(core::mem::size_of::<CEarthObserverStatus>() == 24);
+
+/// Writes the native Earth observer status of `scene_id` into `out` (`active` 0 when the UI poses
+/// the camera). Returns false when `out` is null.
+///
+/// # Safety
+/// FFI Contract: `out` points to one writable `CEarthObserverStatus`
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_earthObserverStatus(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  out: *mut CEarthObserverStatus,
+) -> bool {
+  if ctx.is_null() || out.is_null() {
+    return false;
+  }
+  let status = match unsafe { &*ctx }.earth_observer_status(scene_id) {
+    Some((mode, err, elev)) => CEarthObserverStatus {
+      active: 1,
+      mode: mode as u32,
+      aim_error_rad: err,
+      target_elevation_rad: elev,
+    },
+    None => CEarthObserverStatus::default(),
+  };
+  unsafe { out.write(status) };
+  true
+}
+
+/// Radius (km) of the visible dust coma (flux-weighted p90 distance of the youngest dust from the
+/// jet), 0 without drawable dust. Frames the comet in Earth observer tracking.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_dustComaRadiusKm(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+) -> f64 {
+  if ctx.is_null() {
+    return 0.0;
+  }
+  unsafe { &*ctx }.dust_coma_radius_km(scene_id)
+}
+
 /// One dust age tier, summed over the scene's particle systems (see `dust_stats`). 48 bytes.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -612,6 +708,65 @@ pub struct CDustTierStats {
   pub _pad: u32,
 }
 const _: () = assert!(core::mem::size_of::<CDustTierStats>() == 48);
+
+/// Sets the dust display stretch softening ("dust visibility" slider), clamped to
+/// `[1e-7, 1]`; returns false without the scene.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setDustSoftening(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  softening: f32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_dust_softening(scene_id, softening).is_some()
+}
+
+/// Sets the dust view aids of `scene_id`: bit 0 tracers (bright dots on a sparse set of real
+/// particles), bit 1 flow animation (synchrone pulses travelling outward); other bits are ignored.
+/// Returns false without the scene.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setDustViewFlags(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  flags: u32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_dust_view_flags(scene_id, flags).is_some()
+}
+
+/// Sets the time-lapse factor of the dust flow marks of `scene_id`: 1 = the marks move with the
+/// dust, `speed` = that many times faster in its direction (clamped to [1, 10 000]). Returns false
+/// without the scene.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setDustFlowSpeed(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  speed: f32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_dust_flow_speed(scene_id, speed as f64).is_some()
+}
 
 /// Writes up to `max` dust tier summaries of `scene_id` into `out`; returns how many tiers exist.
 ///
@@ -1492,6 +1647,20 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
 
   let jet_eid = aethervk_core_rlib::scene::EntityId::from_ffi(ps_id);
   let comet = scene_guard.comet.as_ref().unwrap();
+  // emission inputs before the change (jet site, emission and common parameters)
+  let emission_inputs = |scene: &aethervk_core_rlib::scene::Scene| {
+    let mut v = alloc::vec::Vec::new();
+    scene.query1(
+      |id, ps: &aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
+        let pos = scene.with_component(id, |t: &aethervk_core_rlib::scene::TransformComponent| {
+          t.position
+        });
+        v.push((id, ps.emission_params, pos));
+      },
+    );
+    v
+  };
+  let inputs_before = emission_inputs(&scene_guard.scene);
 
   let lat = ps_dto.latitude_rad;
   let lon = ps_dto.longitude_rad;
@@ -1563,6 +1732,18 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
 
   if let Some(comet) = scene_guard.comet {
     propagate_common_params(&scene_guard.scene, comet.body, ps_dto, jet_eid);
+  }
+  // a jet whose emission changed re-emits its dust history (next emission tick)
+  let inputs_after = emission_inputs(&scene_guard.scene);
+  for after in &inputs_after {
+    if !inputs_before.contains(after) {
+      scene_guard.scene.with_component(
+        after.0,
+        |ps: &aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
+          ps.dust.lock().request_reemit()
+        },
+      );
+    }
   }
   true
 }
@@ -1722,7 +1903,6 @@ pub unsafe extern "C" fn avkSimulationContext_setBodyRotationalModel(
         // Component absent — add it
         let _ = scene_guard.scene.add_component(entity_id, model);
       }
-
       let mut cache_exists = false;
       // Update the 1-way binding directly into the cartesian cache for immediate effect
       let key =
@@ -1733,6 +1913,17 @@ pub unsafe extern "C" fn avkSimulationContext_setBodyRotationalModel(
           comet_state.body_rotational_model = Some(model);
         }
       }
+
+      // the dust history was emitted with the old spin: re-emit it (next emission tick). After
+      // the cache write: the dust reads the model from the cache, a tick in between would rebuild
+      // the history with the old one and nothing would re-emit it again
+      scene_guard.scene.query1(
+        |ps_id, ps: &aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
+          if scene_guard.scene.get_parent(ps_id) == Some(entity_id) {
+            ps.dust.lock().request_reemit();
+          }
+        },
+      );
 
       // If the simulation is NOT running, or the cache entry doesn't exist (not animating),
       // instantly snap the transform so the UI slider updates take effect immediately

@@ -1,0 +1,160 @@
+// @assets/sim/dust_lod.comp
+//
+// Dust v3 render LOD + white-point measurement: one thread per live cluster of one age tier, after
+// dust_propagate.comp, before the render pass. Mirror of `dust::lod_evaluate`.
+//
+// Particles split, they never grow: every child is a DUST_CHILD_PX dot. A cluster with a stream
+// predecessor (r - S, dust_streak_pred) draws the dust emitted between them as a streak: the
+// segment is clipped to the view (dust_streak_clip) and gets want = visible length / DUST_CHILD_PX
+// x lateral width in dots, each dot carrying flux * visible fraction / k. Without one (first
+// samples, stream breaks) the cluster is a point spread of k = lambda * (spread_px /
+// DUST_CHILD_PX)^2 dots. Off-screen clusters get none, so the whole tier budget goes to what is in
+// view. The host steers lambda from the last frame's attempted total (`dust::lod_lambda`): no
+// prefix scan, only core SSBO atomics (Mali-G52 friendly).
+//
+// Outputs:
+//  - header: VkDrawIndirectCommand (instanceCount = children written, never above the budget),
+//    [4] demand and [14] clusters on screen (pass A), [5] attempted children (including clusters
+//    dropped at the budget), [13] the budget share (pass B)
+// Two passes per tier (dust::lod_evaluate): pass A (lambda < 0) sums this frame's demand, pass B
+// derives the budget share from it (dust::lod_lambda_from) and splits: no feedback lag, no ramp
+// after a view change.
+//  - list: `cluster | child << 22` per instance, read by dust.vert through the indirect draw
+//  - render flux (w only, other threads read x..z of their predecessors): rewritten per child
+//    (0 when off screen or dropped)
+//  - tiles: exposure-scaled cross-section density of DUST_TILE_SAMPLES child samples per cluster,
+//    fixed point; the host takes a high percentile as the view's white point
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+#include "dust_common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    DustRenderBuffer render;  // 0
+    DustUintBuffer header;    // 8: this tier's header (dust::LOD_HEADER_WORDS)
+    DustUintBuffer tiles;     // 16: the system's tile grid (DUST_TILES_X * DUST_TILES_Y)
+    DustUintBuffer list;      // 24: this tier's instance list (budget entries)
+    uint liveCount;           // 32
+    uint budget;              // 36
+    float lambda;             // 40: budget share
+    float tileScale;          // 44: tile counts per (exposure-scaled) m^2/m^2
+    mat4 mvp;                 // 48: particle-system local metres -> clip
+    vec4 params;              // 112: x units per metre, y P00, z P11, w 2/viewport_height
+} pc;                         // 128 bytes
+
+uint tileCounts(float v) {
+    if (!(v > 0.0)) return 0u;
+    return uint(min(v + 0.5, 1e8));
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    // pass A (lambda < 0): this frame's demand only; pass B: the budget share from it, then the LOD
+    bool demandPass = pc.lambda < 0.0;
+    float lambda = demandPass ? 0.0
+        : dust_lod_lambda(pc.header, pc.budget, pc.header.v[DUST_LOD_HEADER_ON_SCREEN], pc.lambda);
+    // dust.vert finds the tier's instance list and the share through the header
+    if (i == 0u && !demandPass) {
+        uvec2 a = uvec2(pc.list);
+        pc.header.v[DUST_LOD_HEADER_LIST] = a.x;
+        pc.header.v[DUST_LOD_HEADER_LIST + 1u] = a.y;
+        pc.header.v[DUST_LOD_HEADER_LAMBDA] = floatBitsToUint(lambda);
+    }
+    if (i >= pc.liveCount) return;
+    DustRenderCluster R = pc.render.c[i];
+    float flux = R.age_id_dbeta_flux.w;
+    if (!(flux > 0.0)) return;
+
+    float spread = R.pos_size.w;
+    float units = pc.params.x, p00 = pc.params.y, p11 = pc.params.z;
+    // footprints include the beta spread of the size stratum (dust::dust_extent)
+    float sunG = uintBitsToFloat(pc.header.v[DUST_LOD_HEADER_SUN_G]);
+    float extP = dust_extent(R, sunG);
+    // mirror of dust::lod_plan
+    int pred = dust_streak_pred(pc.render, i);
+    vec3 q = vec3(0.0);
+    float sq = 0.0, aq = 0.0;
+    vec4 S = vec4(0.0);
+    float want;
+    float fluxIn = flux;
+    if (pred >= 0) {
+        vec4 Q = pc.render.c[pred].pos_size;
+        q = Q.xyz;
+        sq = Q.w;
+        aq = pc.render.c[pred].age_id_dbeta_flux.x;
+        float extQ = dust_extent(pc.render.c[pred], sunG);
+        if (!dust_streak_clip(pc.mvp, R.pos_size.xyz, q, extP, extQ, pc.params, S)) {
+            if (!demandPass) pc.render.c[i].age_id_dbeta_flux.w = 0.0;
+            return;
+        }
+        want = dust_streak_want(S.z, S.w);
+        fluxIn = flux * (S.y - S.x);
+    } else {
+        // point spread, mirror of dust::lod_cluster_children
+        vec4 clip = pc.mvp * vec4(R.pos_size.xyz, 1.0);
+        bool on = clip.w > 0.0 && p00 > 0.0 && p11 > 0.0;
+        float su = 0.0;
+        if (on) {
+            su = extP * units / clip.w;
+            vec2 ndc = clip.xy / clip.w;
+            on = abs(ndc.x) <= 1.0 + 3.0 * su * p00 && abs(ndc.y) <= 1.0 + 3.0 * su * p11;
+        }
+        if (!on) {
+            if (!demandPass) pc.render.c[i].age_id_dbeta_flux.w = 0.0;
+            return;
+        }
+        want = dust_lod_want(su * p11 / pc.params.w);
+    }
+    if (demandPass) {
+        uint d = dust_lod_demand(want);
+        uint b = dust_lod_hist_bin(d);
+        atomicAdd(pc.header.v[4], min(d, DUST_TRACER_CHILD));
+        atomicAdd(pc.header.v[DUST_LOD_HEADER_ON_SCREEN], 1u);
+        atomicAdd(pc.header.v[DUST_LOD_HEADER_HIST + 2u * b], 1u);
+        atomicAdd(pc.header.v[DUST_LOD_HEADER_HIST + 2u * b + 1u], dust_lod_hist_add(d));
+        return;
+    }
+    uint k = dust_lod_children(want, lambda);
+    // the tracer dot: one more entry of the reservation (dust::lod_evaluate)
+    bool tracer = (pc.header.v[DUST_LOD_HEADER_FLAGS] & DUST_VIEW_TRACERS) != 0u
+        && dust_is_tracer(dust_child_id(R.age_id_dbeta_flux.z));
+    uint n = k + (tracer ? 1u : 0u);
+    atomicAdd(pc.header.v[5], n);
+    // Reserve k entries; a reservation past the budget is handed back. The final count is the sum
+    // of the successful reservations, each of which ended within the budget, so it never exceeds
+    // it (a transient overshoot can only make a later reservation fail, never succeed wrongly).
+    uint base = atomicAdd(pc.header.v[1], n);
+    if (base + n > pc.budget || base + n < base) {
+        atomicAdd(pc.header.v[1], uint(-int(n)));
+        pc.render.c[i].age_id_dbeta_flux.w = 0.0;
+    } else {
+        for (uint c = 0u; c < k; ++c) {
+            pc.list.v[base + c] = i | (c << DUST_LOD_CLUSTER_BITS);
+        }
+        if (tracer) pc.list.v[base + k] = i | (DUST_TRACER_CHILD << DUST_LOD_CLUSTER_BITS);
+        pc.render.c[i].age_id_dbeta_flux.w = fluxIn / float(k);
+    }
+
+    // white point: the cluster's cross-section over the tiles its first children land in
+    // (mirror of dust::tile_sample)
+    uint id = dust_child_id(R.age_id_dbeta_flux.z);
+    float age = R.age_id_dbeta_flux.x;
+    for (uint s = 0u; s < DUST_TILE_SAMPLES; ++s) {
+        // the dbeta term needs antiSunG, which does not fit the push constants: tiles only
+        // need the spatial scatter, so samples use the isotropic part
+        vec3 p = pred >= 0
+            ? dust_streak_child(R.pos_size.xyz, q, spread, sq, age, aq, S.x, S.y, id, s, 0.0, vec4(0.0))
+            : R.pos_size.xyz + dust_child_offset(id, s, spread, 0.0, age, vec4(0.0));
+        vec4 c = pc.mvp * vec4(p, 1.0);
+        if (!(c.w > 0.0)) continue;
+        vec2 n = c.xy / c.w;
+        float tx = floor((n.x * 0.5 + 0.5) * float(DUST_TILES_X));
+        float ty = floor((n.y * 0.5 + 0.5) * float(DUST_TILES_Y));
+        if (!(tx >= 0.0 && tx < float(DUST_TILES_X) && ty >= 0.0 && ty < float(DUST_TILES_Y))) continue;
+        float m_per_ndc2 = (c.w * c.w) / (p00 * p11 * units * units);
+        float area = 4.0 / float(DUST_TILES_X * DUST_TILES_Y) * m_per_ndc2;
+        float v = pc.tileScale * fluxIn / float(DUST_TILE_SAMPLES) / max(area, 1e-30);
+        atomicAdd(pc.tiles.v[uint(ty) * DUST_TILES_X + uint(tx)], tileCounts(v));
+    }
+}

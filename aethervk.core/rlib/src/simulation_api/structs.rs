@@ -819,6 +819,13 @@ pub enum LogicCommand {
     /// Directory for the decoded, memory-mapped cache files (the .NET session folder).
     cache_dir: String,
   },
+  /// Unloads an imported asset (paused only). A comet displaying it is first ejected to the
+  /// procedural sphere (mesh) or has the channel cleared (texture). Completion is reported
+  /// through `ExternalState::AssetRemoved` carrying `request_id`.
+  RemoveAsset {
+    request_id: u64,
+    asset_id: u64,
+  },
   /// Changes the comet nucleus appearance (see `comet_appearance`).
   SetCometAppearance {
     scene_id: u64,
@@ -1338,6 +1345,18 @@ pub struct SceneContext {
   /// of root, hidden unless enabled and the error exceeds 10 nucleus radii).
   pub reference_error_entities: Option<[EntityId; 2]>,
   pub reference_error_enabled: Arc<AtomicBool>,
+  /// asinh softening (f32 bits) of the dust display stretch, see `dust::display_stretch`
+  /// ("dust visibility" slider, `AETHERVK_DUST_SOFTENING` default override)
+  pub dust_softening: Arc<core::sync::atomic::AtomicU32>,
+  /// dust view aids (`dust::DUST_VIEW_TRACERS` | `dust::DUST_VIEW_FLOW`), see
+  /// `SimulationContext::set_dust_view_flags`
+  pub dust_view_flags: Arc<core::sync::atomic::AtomicU32>,
+  /// dust flow clock (time-lapse phase, eased sim rate), advanced by the render thread, held while
+  /// paused (`dust::DustFlowClock`)
+  pub dust_flow_clock: Arc<spin::Mutex<crate::scene::dust::DustFlowClock>>,
+  /// Earth observer posed natively in every commit (`earth_observer::apply`), `None` = C# poses
+  /// the camera (other modes, fly-in). Set through `SimulationContext::set_earth_observer`.
+  pub earth_observer: Option<crate::simulation_api::earth_observer::EarthObserverState>,
 }
 
 impl Drop for SceneContext {
@@ -1423,6 +1442,18 @@ impl SceneContext {
       comet_indicator: None,
       reference_error_entities: None,
       reference_error_enabled: Arc::new(AtomicBool::new(false)),
+      dust_softening: Arc::new(core::sync::atomic::AtomicU32::new(
+        aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SOFTENING")
+          .and_then(|v| v.trim().parse::<f32>().ok())
+          .map(crate::scene::dust::clamp_dust_softening)
+          .unwrap_or(crate::scene::dust::DUST_SOFTENING_DEFAULT)
+          .to_bits(),
+      )),
+      dust_view_flags: Arc::new(core::sync::atomic::AtomicU32::new(
+        crate::scene::dust::dust_view_flags_default(),
+      )),
+      dust_flow_clock: Arc::new(spin::Mutex::new(Default::default())),
+      earth_observer: None,
     }
   }
 

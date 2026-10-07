@@ -16,6 +16,9 @@ layout(location = 4) in vec3 inBitangent;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec2 outGlobalDepth; // MRT: (layer_index_f32, local_distance)
+// micro subpass only (dust accumulation, PipelineFlags::OCCLUDES_DUST): blended
+// ZERO, ONE_MINUS_SRC_ALPHA, so this surface erases the dust drawn behind it. Discarded elsewhere.
+layout(location = 2) out vec4 outDustOcclusion;
 
 layout(binding = 0) uniform sampler2D albedoMap;
 layout(binding = 1) uniform sampler2D normalMap;
@@ -58,6 +61,7 @@ vec2 octEncode(vec3 v) {
 }
 
 void main() {
+    outDustOcclusion = vec4(0.0, 0.0, 0.0, 1.0);
     MaterialData mat = push.material;
     SceneData scene  = push.scene;
 
@@ -132,6 +136,7 @@ void main() {
             
             if (alpha < 0.01) discard;
             outColor = vec4(color, alpha);
+            outDustOcclusion = vec4(0.0, 0.0, 0.0, alpha);
             outGlobalDepth = vec2(-1.0, -1.0);
             return;
         }

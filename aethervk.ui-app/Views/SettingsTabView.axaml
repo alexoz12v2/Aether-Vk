@@ -7,6 +7,7 @@
              xmlns:controls="using:AetherVk.Controls"
              xmlns:converters="using:AetherVk.Converters"
              xmlns:services="using:AetherVk.Logic.Services"
+             xmlns:models="using:AetherVk.Logic.Models"
              xmlns:i="clr-namespace:Avalonia.Xaml.Interactivity;assembly=Avalonia.Xaml.Interactivity"
              xmlns:b="using:AetherVk.Behaviors"
              mc:Ignorable="d" d:DesignWidth="450" d:DesignHeight="800"
@@ -25,6 +26,13 @@
         <ResourceInclude Source="../Styles/Colors.axaml" />
       </ResourceDictionary.MergedDictionaries>
       <converters:EnumToBoolConverter x:Key="EnumToBool" />
+      <DataTemplate x:Key="TextureOptionTemplate" x:DataType="vm:TextureOption">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <Image Width="24" Height="24" Stretch="Uniform"
+                 Source="{Binding Thumbnail, Converter={x:Static converters:ThumbnailToBitmapConverter.Instance}}" />
+          <TextBlock Text="{Binding Label}" />
+        </StackPanel>
+      </DataTemplate>
     </ResourceDictionary>
   </UserControl.Resources>
 
@@ -163,6 +171,129 @@
 
 
           </Grid>
+        </Expander>
+      </Border>
+
+      <!-- Comet Appearance: aesthetic only (simulation unaffected). Display mode, mesh and
+           texture wiring lock while the simulation plays; the placement offset stays live. -->
+      <Border Classes="accordion">
+        <Expander Header="{Binding StrCometAppearance}">
+          <StackPanel Spacing="12" Margin="12,8,12,12">
+            <TextBlock Text="{Binding StrAppearanceLockedHint}"
+                       IsVisible="{Binding CometAppearance.IsWiringLocked}"
+                       Foreground="{DynamicResource Sem.Warning}"
+                       TextWrapping="Wrap" />
+
+            <Grid ColumnDefinitions="Auto,16,*">
+              <TextBlock Grid.Column="0" Text="{Binding StrDisplayMode}" />
+              <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16"
+                          IsEnabled="{Binding CometAppearance.IsWiringEnabled}">
+                <RadioButton GroupName="CometDisplayMode"
+                             Content="{Binding StrDisplayModeDefault}"
+                             IsChecked="{Binding CometAppearance.IsDefaultMode}" />
+                <RadioButton GroupName="CometDisplayMode"
+                             Content="{Binding StrDisplayModeCustom}"
+                             IsChecked="{Binding CometAppearance.IsCustomMode}"
+                             IsEnabled="{Binding CometAppearance.IsCustomModeAvailable}"
+                             ToolTip.Tip="{Binding StrNoMeshesHint}"
+                             ToolTip.ShowOnDisabled="True" />
+              </StackPanel>
+            </Grid>
+
+            <!-- Custom mesh: only in custom display mode -->
+            <Expander Header="{Binding StrCustomMesh}" IsExpanded="True"
+                      IsVisible="{Binding CometAppearance.IsCustomMode}">
+              <StackPanel Spacing="10" Margin="4,8,4,4">
+                <TextBlock Text="{Binding StrNoMeshesHint}" TextWrapping="Wrap"
+                           IsVisible="{Binding !CometAppearance.HasMeshes}" />
+
+                <!-- Mesh + texture channels (physical_mesh2 bindings 0..3) -->
+                <Grid ColumnDefinitions="Auto,16,*"
+                      RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                      IsEnabled="{Binding CometAppearance.IsWiringEnabled}">
+                  <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrMesh}" />
+                  <ComboBox Grid.Row="0" Grid.Column="2" HorizontalAlignment="Stretch"
+                            ItemsSource="{Binding CometAppearance.MeshOptions}"
+                            SelectedItem="{Binding CometAppearance.SelectedMesh}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate x:DataType="models:ImportedAsset">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                          <Image Width="24" Height="24" Stretch="Uniform"
+                                 Source="{Binding Thumbnail, Converter={x:Static converters:ThumbnailToBitmapConverter.Instance}}" />
+                          <TextBlock Text="{Binding Label}" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+
+                  <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding StrChannelAlbedo}" />
+                  <ComboBox Grid.Row="2" Grid.Column="2" HorizontalAlignment="Stretch"
+                            ItemsSource="{Binding CometAppearance.TextureOptions}"
+                            SelectedItem="{Binding CometAppearance.SelectedAlbedo}"
+                            ItemTemplate="{StaticResource TextureOptionTemplate}" />
+
+                  <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrChannelNormal}" />
+                  <ComboBox Grid.Row="4" Grid.Column="2" HorizontalAlignment="Stretch"
+                            ItemsSource="{Binding CometAppearance.TextureOptions}"
+                            SelectedItem="{Binding CometAppearance.SelectedNormal}"
+                            ItemTemplate="{StaticResource TextureOptionTemplate}" />
+
+                  <TextBlock Grid.Row="6" Grid.Column="0" Text="{Binding StrChannelRoughness}" />
+                  <ComboBox Grid.Row="6" Grid.Column="2" HorizontalAlignment="Stretch"
+                            ItemsSource="{Binding CometAppearance.TextureOptions}"
+                            SelectedItem="{Binding CometAppearance.SelectedRoughness}"
+                            ItemTemplate="{StaticResource TextureOptionTemplate}" />
+
+                  <TextBlock Grid.Row="8" Grid.Column="0" Text="{Binding StrChannelAo}" />
+                  <ComboBox Grid.Row="8" Grid.Column="2" HorizontalAlignment="Stretch"
+                            ItemsSource="{Binding CometAppearance.TextureOptions}"
+                            SelectedItem="{Binding CometAppearance.SelectedAo}"
+                            ItemTemplate="{StaticResource TextureOptionTemplate}" />
+                </Grid>
+
+                <!-- Placement in the comet body frame (always editable) -->
+                <TextBlock Text="{Binding StrRotation}" />
+                <UniformGrid Columns="3" ColumnSpacing="6">
+                  <controls:UnboundedSlider Value="{Binding CometAppearance.Yaw}"
+                                            IsWrapped="True" WrapMin="-180" WrapMax="180"
+                                            Step="1" DragSensitivity="2.0" DisplayFormat="F1"
+                                            ToolTip.Tip="Yaw (about the body Z axis)" />
+                  <controls:UnboundedSlider Value="{Binding CometAppearance.Pitch}"
+                                            IsWrapped="True" WrapMin="-180" WrapMax="180"
+                                            Step="1" DragSensitivity="2.0" DisplayFormat="F1"
+                                            ToolTip.Tip="Pitch (about the body Y axis)" />
+                  <controls:UnboundedSlider Value="{Binding CometAppearance.Roll}"
+                                            IsWrapped="True" WrapMin="-180" WrapMax="180"
+                                            Step="1" DragSensitivity="2.0" DisplayFormat="F1"
+                                            ToolTip.Tip="Roll (about the body X axis)" />
+                </UniformGrid>
+
+                <TextBlock Text="{Binding StrTranslation}" />
+                <UniformGrid Columns="3" ColumnSpacing="6">
+                  <controls:UnboundedSlider Value="{Binding CometAppearance.TranslationX}"
+                                            HasBounds="True" MinBound="-5" MaxBound="5"
+                                            Step="0.01" DragSensitivity="5.0" DisplayFormat="F2"
+                                            ToolTip.Tip="X (nucleus radii)" />
+                  <controls:UnboundedSlider Value="{Binding CometAppearance.TranslationY}"
+                                            HasBounds="True" MinBound="-5" MaxBound="5"
+                                            Step="0.01" DragSensitivity="5.0" DisplayFormat="F2"
+                                            ToolTip.Tip="Y (nucleus radii)" />
+                  <controls:UnboundedSlider Value="{Binding CometAppearance.TranslationZ}"
+                                            HasBounds="True" MinBound="-5" MaxBound="5"
+                                            Step="0.01" DragSensitivity="5.0" DisplayFormat="F2"
+                                            ToolTip.Tip="Z (nucleus radii)" />
+                </UniformGrid>
+
+                <Button Content="{Binding StrResetPlacement}"
+                        Command="{Binding CometAppearance.ResetPlacementCommand}"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+              </StackPanel>
+            </Expander>
+
+            <TextBlock Text="{Binding CometAppearance.StatusMessage}"
+                       Foreground="{DynamicResource Sem.Warning}" TextWrapping="Wrap"
+                       IsVisible="{Binding CometAppearance.StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          </StackPanel>
         </Expander>
       </Border>
 
@@ -361,7 +492,7 @@
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=CometLockIn}" />
                       <RadioButton Grid.Row="2" Content="Comet tracking"
-                                   ToolTip.Tip="Follows the comet; holds while it is below the horizon"
+                                   ToolTip.Tip="Follows the comet; faces the horizon where it will rise while it is below it"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=CometTracking}" />
@@ -371,7 +502,7 @@
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=SunLockIn}" />
                       <RadioButton Grid.Row="4" Content="Sun tracking"
-                                   ToolTip.Tip="Follows the Sun; holds while it is below the horizon"
+                                   ToolTip.Tip="Follows the Sun; faces the horizon where it will rise while it is below it"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=SunTracking}" />
@@ -380,6 +511,20 @@
                               ToolTip.Tip="Re-applies the lock-in / tracking projection where the target spans 10% of the view"
                               HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </Grid>
+
+                    <!-- Tracking target below the horizon: explain the hold, suggest a site -->
+                    <Border IsVisible="{Binding IsObserverTargetBelowHorizon}"
+                            Background="{DynamicResource Accent.Subtle}"
+                            BorderBrush="{DynamicResource Accent.Primary}"
+                            BorderThickness="1" CornerRadius="4" Padding="8">
+                      <StackPanel Spacing="8">
+                        <TextBlock Text="{Binding ObserverHorizonMessage}" TextWrapping="Wrap" />
+                        <Button Content="Move observer there"
+                                Command="{Binding ApplySuggestedObserverSiteCommand}"
+                                ToolTip.Tip="Moves the observer to the latitude / longitude where the target is overhead now"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                      </StackPanel>
+                    </Border>
                   </StackPanel>
 
                 </StackPanel>
