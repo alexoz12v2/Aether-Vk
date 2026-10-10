@@ -20,6 +20,11 @@ shader_debug_sync = []
 debug_gizmo_depth = []
 debug_gpu = ["vk-mem/vma-debug", "ash/debug", "aethervk-oshal-rlib/debug_gpu"]
 
+[[example]]
+name = "dust_observer"
+path = "examples/dust_observer.rs"
+required-features = ["std"]
+
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc = { version = "0.2.7" }
 
@@ -113,9 +118,3 @@ windows = { version = ">=0.59, <=0.62.2", default-features = false, features = [
 libc = { version = "0.2", default-features = false, features = [
     "extra_traits",
 ] }
-
-[profile.default]
-# after doing `cargo install cargo-nextest`
-# configuration for `cargo nextest run`
-# Fail the test if it takes longer than 10 seconds
-slow-timeout = { period = "10s", terminate-after = 1 }

@@ -11,9 +11,24 @@ fn main() {
   let assets_dir = root_dir.join("assets");
   println!("cargo:rerun-if-changed={}", assets_dir.display());
 
-  // Check if any .spv file is older than its source
+  // Check if any .spv file is older than its source, or than any included .glsl (a shader that
+  // only includes a changed `dust_common.glsl` is stale too: the compute shaders went un-rebuilt
+  // for a day of `dust_common.glsl` edits before this check)
   let mut needs_recompile = false;
   let dirs_to_check = [assets_dir.clone(), assets_dir.join("sim")];
+  let mut include_time: Option<std::time::SystemTime> = None;
+  for dir in &dirs_to_check {
+    if let Ok(entries) = fs::read_dir(dir) {
+      for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("glsl") {
+          if let Ok(t) = fs::metadata(&path).and_then(|m| m.modified()) {
+            include_time = Some(include_time.map_or(t, |u| u.max(t)));
+          }
+        }
+      }
+    }
+  }
 
   for dir in &dirs_to_check {
     if let Ok(entries) = fs::read_dir(dir) {
@@ -33,7 +48,7 @@ fn main() {
 
               if let (Ok(src_meta), Ok(spv_meta)) = (fs::metadata(&path), fs::metadata(&spv_path)) {
                 if let (Ok(src_time), Ok(spv_time)) = (src_meta.modified(), spv_meta.modified()) {
-                  if spv_time < src_time {
+                  if spv_time < src_time || include_time.is_some_and(|t| spv_time < t) {
                     needs_recompile = true;
                     break;
                   }

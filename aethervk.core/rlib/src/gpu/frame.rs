@@ -855,8 +855,8 @@ pub struct SphereGizmoBatchCall {
   pub data_ptr: u64,
 }
 
-/// Dust v3 draw of one particle system. Cluster positions are metres relative to the jet, in root
-/// (= reference frame) axes, so the model matrix is translation × uniform scale only.
+/// Dust draw of one particle system (one age tier). Cluster positions are metres relative to the
+/// jet, in root (= reference frame) axes, so the model matrix is translation × uniform scale only.
 #[derive(Clone)]
 pub struct DustDrawCall {
   pub entity_id: EntityId,
@@ -866,8 +866,6 @@ pub struct DustDrawCall {
   pub units_per_m: f64,
   pub stream_color: [f32; 4],
   pub state: crate::scene::dust::DustDrawState,
-  /// render buffer, instance list and draw of this frame, filled by [`prepare_dust`]
-  pub lod: crate::gpu_backends::vulkan::device::dust::DustLodDraw,
   /// camera heliocentric position (m) the translation was computed from (dust trace)
   pub eye_m: [f64; 3],
   /// nucleus (the jet entity's parent) heliocentric position from the scene graph (dust trace
@@ -881,9 +879,9 @@ impl DustDrawCall {
     dust_gain() * self.stream_color[3] / self.state.tau_ref.max(1e-30)
   }
 
-  /// `(mvp, params)` shared by `dust_lod.comp` and `dust.vert`: particle-system local metres →
-  /// clip (Large World Coordinates: Proj · ViewRot · Translate(jet RTE) · Scale(units per metre),
-  /// composed in f64) and `[units per metre, P00, P11, 2 / viewport height]`.
+  /// `(mvp, params)` of `dust_splat.comp`: particle-system local metres → clip (Large World
+  /// Coordinates: Proj · ViewRot · Translate(jet RTE) · Scale(units per metre), composed in f64)
+  /// and `[units per metre, P00, P11, 2 / viewport height]`.
   pub fn mvp_params(
     &self,
     camera: &CameraRenderData,
@@ -911,6 +909,16 @@ impl DustDrawCall {
       mvp_f64.to_mat4_f32().into(),
       [u as f32, p00, p11, 2.0 / window_extent[1].max(1) as f32],
     )
+  }
+
+  /// the eye in particle-system local metres (`−rte / units_per_m`)
+  pub fn eye_local_m(&self) -> [f32; 3] {
+    let u = self.units_per_m.max(1e-300);
+    [
+      (-self.rte_position[0] / u) as f32,
+      (-self.rte_position[1] / u) as f32,
+      (-self.rte_position[2] / u) as f32,
+    ]
   }
 }
 
@@ -942,16 +950,20 @@ pub fn dust_projection_scales(
 }
 
 /// Evaluates every dust system of the frame (compute dispatches on the graphics command buffer,
-/// or CPU evaluation in CPU particle mode), runs the render LOD of every tier with its layer's
-/// camera and fills `lod` of each call and `render_scene.dust_white`. Must be recorded before the
-/// render pass begins. Returns the compute timeline value the graphics submit must wait on (0 =
-/// none): the newest emission included in the drawn ranges.
+/// or the reference evaluation in CPU particle mode) and splats every tier with its layer's
+/// camera into the view's pyramid (`dust_splat.comp`), which the composite reads
+/// (`render_scene.dust_view`). Must be recorded before the render pass begins. Returns the
+/// compute timeline value the graphics submit must wait on (0 = none): the newest emission
+/// included in the drawn ranges.
 pub fn prepare_dust(
   device: &crate::gpu_backends::vulkan::device::Device,
   cmd: ash::vk::CommandBuffer,
   render_scene: &mut RenderScene,
+  pe: PresentationEngineHandle,
 ) -> GpuResult<u64> {
+  use crate::gpu_backends::vulkan::device::dust::DustViewParams;
   let mut wait = 0u64;
+  render_scene.dust_view = DustViewParams::default();
   let mut systems: Vec<u64> = Vec::new();
   for layer in render_scene.depth_layers.iter() {
     for call in layer.dust_calls.iter() {
@@ -964,36 +976,46 @@ pub fn prepare_dust(
   if systems.is_empty() {
     return Ok(0);
   }
+  device.cmd_checkpoint(cmd, c"dust: frame begin");
   device.cmd_dust_pre_propagate_barrier(cmd);
-  let mut white = 0.0f32;
+  // the flow marks synchrones at the sim time the propagate evaluates (the emission epochs)
+  let t_sim = render_scene
+    .depth_layers
+    .iter()
+    .flat_map(|l| l.dust_calls.iter())
+    .next()
+    .map(|c| c.state.frame.t_now_s())
+    .unwrap_or(0.0);
+  let flow = crate::scene::dust::DustFlowUniform::new(&render_scene.dust_flow, t_sim);
+  let flags = render_scene.dust_view_flags;
+  let view = if dust_debug_skip("zero") {
+    device.dust_view_params(pe).unwrap_or_default()
+  } else {
+    device.cmd_dust_frame_begin(cmd, pe, render_scene.window_extent, flags, flow)?
+  };
   for &id in &systems {
-    // the flow marks synchrones at the sim time the propagate evaluates (the emission epochs)
-    let t_sim = render_scene
-      .depth_layers
-      .iter()
-      .flat_map(|l| l.dust_calls.iter())
-      .find(|c| c.entity_id.as_ffi() == id)
-      .map(|c| c.state.frame.t_now_s())
-      .unwrap_or(0.0);
-    let flow = crate::scene::dust::DustFlowUniform::new(&render_scene.dust_flow, t_sim);
-    // solar gravity at the jet, as in the draw push constants (`dust_extent`)
-    let sun_g = render_scene
-      .depth_layers
-      .iter()
-      .flat_map(|l| l.dust_calls.iter())
-      .find(|c| c.entity_id.as_ffi() == id)
-      .map(|c| c.state.anti_sun_g[3])
-      .unwrap_or(0.0);
-    match device.cmd_dust_lod_begin(cmd, id, render_scene.dust_view_flags, flow, sun_g) {
-      Ok(w) => white = white.max(w),
-      Err(e) => aethervk_oshal_rlib::log!("[Dust] LOD reset failed for {id}: {e}"),
+    if let Err(e) = device.cmd_dust_system_begin(id, flags, flow) {
+      aethervk_oshal_rlib::log!("[Dust] frame begin failed for {id}: {e}");
     }
   }
-  let mut renders: Vec<Option<u64>> = Vec::new();
+  device.cmd_checkpoint(cmd, c"dust: propagate");
+  let mut buffers: Vec<Option<(u64, u64)>> = Vec::new();
   for layer in render_scene.depth_layers.iter() {
     for call in layer.dust_calls.iter() {
       let s = &call.state;
-      renders.push(
+      if dust_debug_skip("propagate") {
+        buffers.push(None);
+        continue;
+      }
+      // AETHERVK_DUST_DEBUG_AGE_MAX=<s> (diagnostics): every tier's age band is capped there,
+      // so a frame holds the dust younger than that only (the observer's near-frame truths)
+      let mut frame = s.frame;
+      if let Some(cap) = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_DEBUG_AGE_MAX")
+        .and_then(|v| v.trim().parse::<f32>().ok())
+      {
+        frame.ttl[0] = frame.ttl[0].min(cap);
+      }
+      buffers.push(
         match device.cmd_dust_propagate(
           cmd,
           call.entity_id.as_ffi(),
@@ -1001,11 +1023,11 @@ pub fn prepare_dust(
           s.capacity,
           s.first_slot,
           s.live_count,
-          &s.frame,
+          &frame,
         ) {
-          Ok(addr) => {
+          Ok(addrs) => {
             wait = wait.max(s.compute_wait);
-            Some(addr)
+            Some(addrs)
           }
           Err(e) => {
             aethervk_oshal_rlib::log!("[Dust] propagate failed for {:?}: {}", call.entity_id, e);
@@ -1015,7 +1037,8 @@ pub fn prepare_dust(
       );
     }
   }
-  device.cmd_dust_pre_lod_barrier(cmd);
+  device.cmd_dust_pre_splat_barrier(cmd);
+  device.cmd_checkpoint(cmd, c"dust: splat");
   let extent = render_scene.window_extent;
   // dust trace (`gpu::dust_trace`): every `trace_every` frames, what was drawn
   static FRAME: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -1023,34 +1046,70 @@ pub fn prepare_dust(
   let tracing = crate::gpu::dust_trace::trace_path().is_some()
     && frame_no % crate::gpu::dust_trace::trace_every() == 0;
   let mut traced: Vec<(u64, crate::gpu::dust_trace::TraceFrameMeta, Vec<u32>)> = Vec::new();
-  let mut renders = renders.into_iter();
+  let mut buffers = buffers.into_iter();
+  let inv_unit = if view.unit > 0.0 {
+    1.0 / view.unit
+  } else {
+    0.0
+  };
   for layer in render_scene.depth_layers.iter_mut() {
     let camera =
       render_scene
         .camera_data
         .rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
     for call in layer.dust_calls.iter_mut() {
-      call.lod = Default::default();
-      let Some(render) = renders.next().flatten() else {
+      let Some((render, moments)) = buffers.next().flatten() else {
         call.state.live_count = 0;
         continue;
       };
       let (mvp, params) = call.mvp_params(&camera, extent);
       let s = &call.state;
-      match device.cmd_dust_lod(
-        cmd,
-        call.entity_id.as_ffi(),
-        s.tier,
-        s.ring_base,
-        s.capacity,
-        render,
-        s.live_count.min(s.capacity),
-        call.raw_exposure(),
-        mvp,
-        params,
+      let eye = call.eye_local_m();
+      let debug_env = |name: &str| {
+        aethervk_oshal_rlib::os::env::var(name).and_then(|v| v.trim().parse::<u32>().ok())
+      };
+      let flags = match (
+        debug_env("AETHERVK_DUST_DEBUG_STREAM"),
+        debug_env("AETHERVK_DUST_DEBUG_SAMPLE_MOD"),
       ) {
-        Ok(lod) => {
-          call.lod = lod;
+        (Some(v), _) => flags | crate::scene::dust::DUST_VIEW_DEBUG_STREAM | ((v & 0xFF) << 20),
+        (None, Some(v)) => flags | crate::scene::dust::DUST_VIEW_DEBUG_SAMPLE | ((v & 0xFF) << 20),
+        (None, None) => flags,
+      };
+      let pc = crate::scene::dust::DustSplatPushConstants {
+        moments: 0,
+        render: 0,
+        pyramid: 0,
+        live_count: s.live_count.min(s.capacity),
+        flags,
+        exposure: call.raw_exposure(),
+        inv_unit,
+        color: crate::scene::dust::pack_color(call.stream_color),
+        units_per_m: params[0],
+        mvp,
+        eye_local: [eye[0], eye[1], eye[2], 0.0],
+      };
+      // AETHERVK_DUST_DEBUG_SKIP=splat|composite|readback: bisection aids (no production use);
+      // AETHERVK_DUST_DEBUG_TIER=<k>: only tier k is splatted (which tier draws a feature)
+      let skip_splat = dust_debug_skip("splat")
+        || aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_DEBUG_TIER")
+          .and_then(|v| v.trim().parse::<u32>().ok())
+          .is_some_and(|k| k != s.tier);
+      let splat = if skip_splat {
+        Ok(())
+      } else {
+        device.cmd_dust_splat(
+          cmd,
+          pe,
+          call.entity_id.as_ffi(),
+          s.ring_base,
+          render,
+          moments,
+          pc,
+        )
+      };
+      match splat {
+        Ok(()) => {
           if tracing {
             use crate::gpu::dust_trace::{TraceFrameMeta, TraceTierMeta, sample_slots};
             let id = call.entity_id.as_ffi();
@@ -1087,34 +1146,47 @@ pub fn prepare_dust(
           }
         }
         Err(e) => {
-          aethervk_oshal_rlib::log!("[Dust] LOD failed for {:?}: {}", call.entity_id, e);
+          aethervk_oshal_rlib::log!("[Dust] splat failed for {:?}: {}", call.entity_id, e);
           call.state.live_count = 0;
         }
       }
     }
   }
-  device.cmd_dust_post_propagate_barrier(cmd);
+  device.cmd_dust_post_splat_barrier(cmd);
+  device.cmd_checkpoint(cmd, c"dust: trace + readback");
   for (id, meta, ring_bases) in traced {
     if let Err(e) = device.cmd_dust_trace(cmd, id, meta, &ring_bases) {
       aethervk_oshal_rlib::log!("[Dust trace] failed for {id}: {e}");
     }
   }
-  for &id in &systems {
-    if let Err(e) = device.cmd_dust_lod_end(cmd, id) {
-      aethervk_oshal_rlib::log!("[Dust] LOD readback failed for {id}: {e}");
+  if !dust_debug_skip("readback") {
+    if let Err(e) = device.cmd_dust_frame_end(cmd, pe) {
+      aethervk_oshal_rlib::log!("[Dust] readback failed for view {}: {e}", pe.0);
     }
   }
-  // CPU mode folds its measurement in during the LOD: take the freshest value
   for &id in &systems {
-    white = white.max(device.dust_white_point(id));
+    let _ = device.cmd_dust_system_end(id);
   }
-  // damped view adaptation: halfway (log) between the system's fixed exposure and the view's
-  render_scene.dust_white = if crate::scene::dust::dust_exposure_fixed() {
-    1.0
-  } else {
-    crate::scene::dust::display_white(white)
-  };
+  render_scene.dust_view = view;
+  if dust_debug_skip("composite") {
+    render_scene.dust_view.pyramid = 0;
+  }
   Ok(wait)
+}
+
+/// `AETHERVK_DUST_DEBUG_SKIP` contains `what` (comma separated): skips that part of the dust
+/// frame, for bisecting GPU faults in headless runs
+fn dust_debug_skip(what: &str) -> bool {
+  aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_DEBUG_SKIP")
+    .is_some_and(|v| v.split(',').any(|p| p.trim() == what))
+}
+
+/// `AETHERVK_RENDER_DEBUG_SKIP` contains `what` (comma separated: `background`, `sky`, `meshes`,
+/// `measurements`, `markers`, `trajectories`, `sun`): skips that layer draw phase, for bisecting
+/// GPU faults in headless runs
+fn render_debug_skip(what: &str) -> bool {
+  aethervk_oshal_rlib::os::env::var("AETHERVK_RENDER_DEBUG_SKIP")
+    .is_some_and(|v| v.split(',').any(|p| p.trim() == what))
 }
 
 impl RenderLayer {
@@ -1210,9 +1282,8 @@ pub struct RenderScene {
   pub dust_view_flags: u32,
   /// dust flow clock of this frame (`SceneContext::dust_flow_clock`)
   pub dust_flow: crate::scene::dust::DustFlowClock,
-  /// white point of the dust exposure (measured by the LOD, see [`prepare_dust`]), 1 = the jet's
-  /// reference optical depth
-  pub dust_white: f32,
+  /// the view's dust pyramid of this frame (filled by [`prepare_dust`]; pyramid 0 = no dust)
+  pub dust_view: crate::gpu_backends::vulkan::device::dust::DustViewParams,
 }
 
 impl RenderScene {
@@ -1236,7 +1307,7 @@ impl RenderScene {
       dust_softening: crate::scene::dust::DUST_SOFTENING_DEFAULT,
       dust_view_flags: 0,
       dust_flow: Default::default(),
-      dust_white: 1.0,
+      dust_view: Default::default(),
     }
   }
 }
@@ -1694,61 +1765,6 @@ pub fn do_draw_background(
   device.draw(cmd_buffer, 3)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn do_draw_dust_batch(
-  device: &crate::gpu_backends::vulkan::device::Device,
-  cmd_buffer: gpu::CommandBufferHandle,
-  handle: PresentationEngineHandle,
-  camera: &CameraRenderData,
-  draw_calls: &[DustDrawCall],
-  window_extent: [u32; 2],
-  dither: bool,
-  white: f32,
-) -> GpuResult<()> {
-  if draw_calls.is_empty() {
-    return Ok(());
-  }
-
-  // 1. Fetch the pipeline key dynamically we only want to bind the pipeline once
-  let pipeline_key = device.get_pipeline_key(handle, gpu::ArchetypeId::Particles)?;
-  device.bind_pipeline(cmd_buffer, pipeline_key)?;
-
-  let cmd = device.get_cmd(cmd_buffer)?;
-  let white = if white > 0.0 { white } else { 1.0 };
-  for call in draw_calls {
-    if call.state.live_count == 0 || call.lod.render == 0 {
-      continue;
-    }
-    let (mvp, mut params) = call.mvp_params(camera, window_extent);
-    if dither {
-      params[3] = -params[3];
-    }
-    // exposure from the jet configuration (not the live clusters, not the camera) over the view's
-    // white point: the accumulation holds optical depth relative to the brightest dust in view
-    let pc = crate::scene::dust::DustDrawPushConstants {
-      render: call.lod.render,
-      lod_header: call.lod.header,
-      mvp,
-      color: [
-        call.stream_color[0],
-        call.stream_color[1],
-        call.stream_color[2],
-        call.raw_exposure() / white,
-      ],
-      anti_sun_g: call.state.anti_sun_g,
-      params,
-    };
-    if let Err(e) = device.cmd_dust_draw(cmd, &pc, &call.lod) {
-      aethervk_oshal_rlib::log!(
-        "Skipping dust draw call for {:?} due to error: '{}'",
-        call.entity_id,
-        e
-      );
-    }
-  }
-  Ok(())
-}
-
 // TODO: all of the do_draw_* functions should have a rollback mechanism
 // TODO trait type for internal command buffer so that you get it once
 /// TODO: Document this item
@@ -1868,11 +1884,47 @@ pub fn render_frame(
       render_scene.camera_data.projection_params,
       CameraProjectionParams::Orthographic { .. }
     ) as u32,
-    dust_softening: render_scene.dust_softening,
+    // the dust display stretch: full view adaptation (white = the measured p99 texel), the auto
+    // softening (the median texel) times the user's "dust visibility" factor
+    // the user's "dust visibility" value is a factor relative to its former absolute default
+    // (1e-2 → ×1), so the slider and its default stay as they are
+    dust_softening: if crate::scene::dust::dust_exposure_fixed() {
+      render_scene.dust_softening
+    } else {
+      crate::scene::dust::clamp_dust_softening(
+        render_scene.dust_view.softening
+          * (render_scene.dust_softening / crate::scene::dust::DUST_SOFTENING_DEFAULT),
+      )
+    },
     dust_black_point: if crate::scene::dust::dust_exposure_fixed() {
       0.0
     } else {
       crate::scene::dust::DUST_BLACK_POINT
+    },
+    _pad0: 0,
+    dust_pyramid: render_scene.dust_view.pyramid,
+    dust_white: if crate::scene::dust::dust_exposure_fixed() {
+      1.0
+    } else {
+      render_scene.dust_view.white
+    },
+    dust_levels: render_scene.dust_view.levels,
+    dust_unit: render_scene.dust_view.unit,
+    _pad1: 0,
+    layer_unit_au: {
+      // AU per unit of each layer's global depth: the macro layer is in AU, micro layers in km
+      // (`frame_scale` = AU per layer unit)
+      let mut t = [1.0f32; 8];
+      for l in render_scene.depth_layers.iter() {
+        if (l.layer_index as usize) < 8 {
+          t[l.layer_index as usize] = if l.layer_index == 0 {
+            1.0
+          } else {
+            l.frame_scale
+          };
+        }
+      }
+      t
     },
   };
   device.draw_composite(cmd_buffer, handle, &constants)?;
@@ -2007,18 +2059,21 @@ fn draw_layer_content(
       .camera_data
       .rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
 
-  if let Some(draw_call) = &layer.background_call {
+  if let Some(draw_call) =
+    layer.background_call.as_ref().filter(|_| !render_debug_skip("background"))
+  {
     device.debug_label_insert(cmd_buffer, c"Background", [0.15, 0.15, 0.15, 1.0]);
     do_draw_background(device, cmd_buffer, handle, draw_call)?;
   }
-  if let Some(draw_call) = &layer.sky_call {
+  if let Some(draw_call) = layer.sky_call.as_ref().filter(|_| !render_debug_skip("sky")) {
     device.debug_label_insert(cmd_buffer, c"Sky", [0.2, 0.4, 0.9, 1.0]);
     do_draw_sky(device, cmd_buffer, handle, draw_call)?;
   }
-  if !layer.draw_calls.is_empty() {
+  let skip_meshes = render_debug_skip("meshes");
+  if !layer.draw_calls.is_empty() && !skip_meshes {
     device.debug_label_insert(cmd_buffer, c"Static Meshes", [0.7, 0.7, 0.7, 1.0]);
   }
-  for draw_call in &layer.draw_calls {
+  for draw_call in layer.draw_calls.iter().filter(|_| !skip_meshes) {
     // Compute the body-fixed sun direction for this mesh.
     // For directional lights: both sunPos_RTE and the mesh center (center_rte_f64) are in
     // the same RTE frame and rotate together as the camera orbits.  Their difference
@@ -2100,21 +2155,25 @@ fn draw_layer_content(
     )?;
   }
 
-  if !layer.measurement_calls.is_empty() {
+  let skip_measurements = render_debug_skip("measurements");
+  if !layer.measurement_calls.is_empty() && !skip_measurements {
     device.debug_label_insert(cmd_buffer, c"Measurements", [0.6, 0.9, 0.6, 1.0]);
   }
-  for measurement_call in &layer.measurement_calls {
+  for measurement_call in layer.measurement_calls.iter().filter(|_| !skip_measurements) {
     do_draw_measurement(device, &layer_camera, cmd_buffer, handle, measurement_call)?;
   }
 
-  if !layer.marker_calls.is_empty() {
+  let skip_markers = render_debug_skip("markers");
+  if !layer.marker_calls.is_empty() && !skip_markers {
     device.debug_label_insert(cmd_buffer, c"Markers", [0.9, 0.9, 0.4, 1.0]);
   }
-  for marker_call in &layer.marker_calls {
+  for marker_call in layer.marker_calls.iter().filter(|_| !skip_markers) {
     do_draw_marker(device, &layer_camera, cmd_buffer, handle, marker_call)?;
   }
 
-  if let Some(draw_call) = &layer.trajectory_call {
+  if let Some(draw_call) =
+    layer.trajectory_call.as_ref().filter(|_| !render_debug_skip("trajectories"))
+  {
     device.debug_label_insert(cmd_buffer, c"Trajectories", [0.0, 0.8, 0.5, 1.0]);
     do_draw_trajectory_batch(
       device,
@@ -2131,28 +2190,11 @@ fn draw_layer_content(
 
   // End of opaque stuff, beginning semitransparent/transparent stuff
 
-  // particles here (transparency)
-  if !layer.dust_calls.is_empty() {
-    device.debug_label_insert(cmd_buffer, c"Particles", [0.8, 0.3, 0.1, 1.0]);
-    let vk_device: &crate::gpu_backends::vulkan::device::Device =
-      device.as_any().downcast_ref().unwrap();
-    // 8-bit targets: the macro layer always, the micro layer where RGBA16F is unsupported
-    let dither = layer.layer_index == 0
-      || vk_device.micro_color_format() != ash::vk::Format::R16G16B16A16_SFLOAT;
-    do_draw_dust_batch(
-      vk_device,
-      cmd_buffer,
-      handle,
-      &layer_camera,
-      &layer.dust_calls,
-      render_scene.window_extent,
-      dither,
-      render_scene.dust_white,
-    )?;
-  }
+  // dust: splatted before the render pass into the view's pyramid (`prepare_dust`), composited
+  // by `composite.frag`; nothing is drawn per layer
 
   // Draw Sun Volume after opaque meshes so it properly blends over them instead of being overwritten
-  if let Some(draw_call) = &layer.sun_call {
+  if let Some(draw_call) = layer.sun_call.as_ref().filter(|_| !render_debug_skip("sun")) {
     device.debug_label_insert(cmd_buffer, c"Sun", [1.0, 0.9, 0.1, 1.0]);
     do_draw_sun(device, &layer_camera, cmd_buffer, handle, draw_call)?;
   }

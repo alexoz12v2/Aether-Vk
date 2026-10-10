@@ -43,6 +43,7 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
   double DustSoftening { get; set; }
   /// <summary>Bright dots on a sparse, stable set of real dust particles (their true positions).</summary>
   bool DustTracers { get; set; }
+  bool DustFlow { get; set; }
   /// <summary>Time-lapse factor of the flow marks: 1 = they move with the dust, K = K× faster.</summary>
   double DustFlowSpeed { get; set; }
 

@@ -714,6 +714,10 @@ pub mod external_state {
     AssetImported(CAssetImported),
     /// Emitted when a `RemoveAsset` command completes (success or failure).
     AssetRemoved(CAssetRemoved),
+    /// Emitted once when the Vulkan device is lost (`VK_ERROR_DEVICE_LOST`, e.g. an NVIDIA
+    /// Xid 13): the engine stops submitting GPU work; the CPU-side scene is intact and can be
+    /// dumped. Carries the fault diagnostics (`gpu_backends::vulkan::device::fault`).
+    GpuDeviceLost(CGpuDeviceLost),
   }
 
   impl ExternalState {
@@ -731,6 +735,7 @@ pub mod external_state {
         Self::CameraMatrices(_) => 9,
         Self::AssetImported(_) => 10,
         Self::AssetRemoved(_) => 11,
+        Self::GpuDeviceLost(_) => 12,
       }
     }
   }
@@ -761,6 +766,22 @@ pub mod external_state {
     pub success: u32,
     /// Number of comets whose appearance changed (ejected to the sphere / channel cleared).
     pub ejected: u32,
+  }
+
+  /// Payload for [`ExternalState::GpuDeviceLost`] (144 B).
+  #[repr(C)]
+  #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+  pub struct CGpuDeviceLost {
+    /// 1 = device lost
+    pub reason: u32,
+    /// 1 when `VK_EXT_device_fault` returned a fault description
+    pub has_fault_info: u32,
+    /// the first faulting address reported (0 = none)
+    pub fault_address: u64,
+    /// the registered buffer that address falls in ("name + offset"), NUL-terminated UTF-8
+    pub matched: [u8; 64],
+    /// the last diagnostic checkpoint the graphics queue reached, NUL-terminated UTF-8
+    pub last_checkpoint: [u8; 64],
   }
 
   /// Payload for [`ExternalState::SceneDumped`].
@@ -822,6 +843,7 @@ pub fn emit_external_state_change(external_state: &external_state::ExternalState
       }
       ExternalState::AssetImported(a) => bytemuck::bytes_of(a).as_ptr().cast::<core::ffi::c_void>(),
       ExternalState::AssetRemoved(a) => bytemuck::bytes_of(a).as_ptr().cast::<core::ffi::c_void>(),
+      ExternalState::GpuDeviceLost(g) => bytemuck::bytes_of(g).as_ptr().cast::<core::ffi::c_void>(),
     };
     unsafe { cb(id, bytes_ptr) };
   }

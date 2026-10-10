@@ -119,24 +119,48 @@ public class ModelTabViewModelTests
   // ── tests ─────────────────────────────────────────────────────────────────────
 
   /// <summary>
-  /// Dust view aids: tracers default on; the toggle sends the native flags with the flow bit always
-  /// set (the flow runs while simulating and freezes on pause), is stored in the model session,
-  /// and is visual only.
+  /// Dust view aids: tracers default off; the toggle sends the native flags with the flow bit
+  /// always set (the flow runs while simulating and freezes on pause), is stored in the model
+  /// session, and is visual only.
   /// </summary>
   [Fact]
-  public void DustTracers_SendFlagsWithFlowAndPersist_WithoutRestore()
+  public void DustTracers_SendFlagsAndPersist_WithoutRestore()
   {
     var s = new TestSetup();
     s.Runtime.Invocations.Clear();
-    Assert.True(s.Vm.DustTracers);
-
-    s.Vm.DustTracers = false;
-    s.Runtime.Verify(r => r.SetDustViewFlags(2u), Times.Once);
+    Assert.False(s.Vm.DustTracers);
     Assert.False(s.Session.DustTracers);
+    Assert.False(s.Vm.DustFlow);
+    Assert.False(s.Session.DustFlow);
 
     s.Vm.DustTracers = true;
+    s.Runtime.Verify(r => r.SetDustViewFlags(1u), Times.Once);
+    Assert.True(s.Session.DustTracers);
+
+    s.Vm.DustTracers = false;
+    s.Runtime.Verify(r => r.SetDustViewFlags(0u), Times.Once);
+    Assert.Equal(0u, ModelTabViewModel.DustViewFlags(false, false));
+    s.Runtime.Verify(r => r.RestoreSnapshotSync(), Times.Never);
+  }
+
+  /// <summary>
+  /// The flow pulses are a toggle, off by default (they drew the far-scale "rays" of the tail):
+  /// on sends flag 2 with the tracers' bit, off clears it, and the session keeps the choice.
+  /// </summary>
+  [Fact]
+  public void DustFlow_IsOffByDefault_ToggleSendsFlagAndPersists()
+  {
+    var s = new TestSetup();
+    s.Runtime.Invocations.Clear();
+    s.Vm.DustFlow = true;
+    s.Runtime.Verify(r => r.SetDustViewFlags(2u), Times.Once);
+    Assert.True(s.Session.DustFlow);
+    s.Vm.DustTracers = true;
     s.Runtime.Verify(r => r.SetDustViewFlags(3u), Times.Once);
-    Assert.Equal(3u, ModelTabViewModel.DustViewFlags(true));
+    s.Vm.DustFlow = false;
+    s.Runtime.Verify(r => r.SetDustViewFlags(1u), Times.Once);
+    Assert.False(s.Session.DustFlow);
+    Assert.Equal(3u, ModelTabViewModel.DustViewFlags(true, true));
     s.Runtime.Verify(r => r.RestoreSnapshotSync(), Times.Never);
   }
 

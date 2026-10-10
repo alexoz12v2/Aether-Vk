@@ -1686,7 +1686,9 @@ impl SceneDump {
   /// 2: current epoch + compatibility JSON, rotational model / trajectory / frame / Sun data.
   /// 3: f64 `HighResTransformComponent` rotation.
   /// 4: nucleus mesh moved from `Comet_body` to the `Comet_visual` child, which is not dumped.
-  pub const CURRENT_VERSION: u32 = 4;
+  /// 5: `SerializedParticleSystemConfig::emission_start_us` (the jet's ignition epoch) replaces
+  ///    the legacy `last_emission` / `last_compaction` pair.
+  pub const CURRENT_VERSION: u32 = 5;
 }
 
 /// Serialized representation of a single scene entity.
@@ -1833,8 +1835,9 @@ pub struct SerializedParticleSystemConfig {
   pub emission_params: crate::scene::particles::v2::ParticleSystemEmitParams,
   pub stream_color: [f32; 4],
   pub ttl_us: i64,
-  pub last_emission: i64,
-  pub last_compaction: i64,
+  /// ignition epoch, TDB µs since J2000 (`particles::EMISSION_START_PREEXISTING` = pre-existing
+  /// tail); the restore seeks to the dumped epoch and the history is rebuilt from it
+  pub emission_start_us: i64,
 }
 
 /// Serialized `AlmanacPlanet` component.

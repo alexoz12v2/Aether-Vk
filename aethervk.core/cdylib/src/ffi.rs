@@ -705,9 +705,14 @@ pub struct CDustTierStats {
   pub band_max_s: f64,
   /// 1 when every window due so far is emitted
   pub caught_up: u32,
+  /// windows that produced nothing (unlit jet site / no production) since the last reset
+  pub unlit_windows: u32,
+  /// 1 when the last tick could not evaluate the jet (the comet is not in the cartesian cache):
+  /// the system emits nothing and is not building
+  pub jet_unavailable: u32,
   pub _pad: u32,
 }
-const _: () = assert!(core::mem::size_of::<CDustTierStats>() == 48);
+const _: () = assert!(core::mem::size_of::<CDustTierStats>() == 56);
 
 /// Sets the dust display stretch softening ("dust visibility" slider), clamped to
 /// `[1e-7, 1]`; returns false without the scene.
@@ -796,6 +801,8 @@ pub unsafe extern "C" fn avkSimulationContext_dustStats(
         band_min_s: s.band_min_s,
         band_max_s: s.band_max_s,
         caught_up: s.caught_up as u32,
+        unlit_windows: s.unlit_windows,
+        jet_unavailable: s.jet_unavailable as u32,
         _pad: 0,
       };
     }
@@ -1579,6 +1586,19 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
   };
   let render_device_handle = ctx_ref.render_device_handle();
 
+  // ignition: "now" = the scene's current epoch, so the tail is built from the moment the jet
+  // is added (nothing exists before it; a seek before it shows no dust)
+  let emission_start_us = match ps_dto.emission_start_us {
+    aethervk_core_rlib::scene::particles::EMISSION_START_NOW => scenes
+      .time_managers
+      .get(&scene_id)
+      .map(|t| {
+        aethervk_core_rlib::scene::particles::emission_start_us_from_epoch(t.current_epoch())
+      })
+      .unwrap_or(aethervk_core_rlib::scene::particles::EMISSION_START_PREEXISTING),
+    us => us,
+  };
+
   let ps_component = match aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(
     render_frontend,
     render_device_handle,
@@ -1586,6 +1606,7 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
     emit_params,
     draw_params,
     JET_TTL_US,
+    emission_start_us,
   ) {
     Ok(c) => c,
     Err(e) => {

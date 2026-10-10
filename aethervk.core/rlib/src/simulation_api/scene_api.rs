@@ -792,6 +792,24 @@ impl SimulationContext {
     r
   }
 
+  /// Diagnostic / observer: the dust splat pyramid of presentation engine `pe` as written by the
+  /// last completed frame (`dust::PyramidLayout`: the first `PYRAMID_HEADER_WORDS` words are the
+  /// header, then the levels). Waits for the graphics queue; `None` without a view or a device.
+  pub fn download_dust_pyramid(
+    &self,
+    pe: crate::gpu::PresentationEngineHandle,
+  ) -> Option<alloc::vec::Vec<u32>> {
+    use crate::gpu::WeakRenderFrontendExt;
+    let frontend = self.render_proxy.0.as_frontend()?;
+    frontend
+      .with_device(self.render_proxy.1, |device| {
+        let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+          device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
+        vulkan_device.download_dust_pyramid(pe)
+      })
+      .ok()
+  }
+
   /// Shows or hides the comet label (`comet_indicator`), e.g. while in Earth observer mode.
   /// Synchronous `HiddenComponent` toggle; returns false when the scene or label is missing.
   pub fn set_comet_indicator_visible(&self, scene_id: u64, visible: bool) -> bool {
@@ -830,6 +848,8 @@ impl SimulationContext {
         let o = &mut out[k];
         o.live_clusters += t.live_clusters;
         o.capacity += t.capacity;
+        o.unlit_windows += t.unlit_windows;
+        o.jet_unavailable |= t.jet_unavailable;
         if t.live_clusters > 0 {
           o.youngest_age_s = o.youngest_age_s.min(t.youngest_age_s);
           o.oldest_age_s = o.oldest_age_s.max(t.oldest_age_s);

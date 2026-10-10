@@ -1,10 +1,14 @@
 // @assets/sim/dust_propagate.comp
 //
-// Dust v3 per-frame evaluation: one thread per live cluster. Closed-form Kepler propagation
+// Dust v3/v4 per-frame evaluation: one thread per live cluster. Closed-form Kepler propagation
 // with mu = GM_sun (1 - beta) from the emission record, then df64 subtraction of the particle
 // system's current heliocentric position -> f32 particle-system local metres.
-// Mirror of `dust::evaluate_cluster`. Reads ring slot (firstSlot + i) & ringMask, writes render
-// index i (compact), so the renderer needs no ring arithmetic.
+// Mirror of `dust::evaluate_cluster` (the render cluster) and `dust::packet_moments` (the second
+// moments of the cluster's grains, transported by secants over the real spreads: the lateral
+// dispersion sigma_lat across the ejection axis and the speed spread sigma_rad along it, 3
+// solves; and the size polyline: DUST_SIZE_EDGES bin edges of equal cross-section, each at its
+// own beta and speed, one solve each).
+// Reads ring slot (firstSlot + i) & ringMask, writes render / moments index i (compact).
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
 #include "dust_common.glsl"
@@ -14,16 +18,26 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 layout(push_constant, std430) uniform PushConstants {
     DustClusterBuffer clusters;  // 0
     DustRenderBuffer  render;    // 8
-    uint firstSlot;              // 16
-    uint liveCount;              // 20
-    uint ringMask;               // 24
-    uint _pad0;                  // 28
-    vec4 ps_r_t_hi;              // 32: particle-system heliocentric position (m), w = t_now (s); df64 hi
-    vec4 ps_r_t_lo;              // 48: ... low part
-    vec4 rot_inv;                // 64: root -> particle-system quaternion (xyzw)
-    vec4 ttl;                    // 80: age band: x max age = TTL (s), y min age (s), z 1 = no fade,
+    DustMomentsBuffer moments;   // 16
+    uint firstSlot;              // 24
+    uint liveCount;              // 28
+    uint ringMask;               // 32
+    uint _pad0;                  // 36
+    uvec2 _pad1;                 // 40 (std430: the vec4 below is 16-aligned)
+    vec4 ps_r_t_hi;              // 48: particle-system heliocentric position (m), w = t_now (s); df64 hi
+    vec4 ps_r_t_lo;              // 64: ... low part
+    vec4 rot_inv;                // 80: root -> particle-system quaternion (xyzw)
+    vec4 ttl;                    // 96: age band: x max age = TTL (s), y min age (s), z 1 = no fade,
                                  //     w the tier's stream shift
-} pc;                            // 96 bytes
+} pc;                            // 112 bytes
+
+// K(r0, v0 + dv, mu, dt) - r, rotated into the particle-system frame
+vec3 secant_v(Df3 r0, Df3 v0, vec3 dv, vec2 mu, vec2 dt, Df3 r) {
+    Df3 v = df3_add(v0, df3_from_f32(dv));
+    Df3 rr, vv;
+    dust_kepler(r0, v, mu, dt, rr, vv);
+    return dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(rr, r)));
+}
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
@@ -34,6 +48,11 @@ void main() {
     DustRenderCluster R;
     R.pos_size = vec4(0.0);
     R.age_id_dbeta_flux = vec4(0.0, uintBitsToFloat(slot), 0.0, 0.0);
+    DustMoments M;
+    M.mean_flux = vec4(0.0);
+    M.cov_a = vec4(0.0);
+    M.cov_b_age_id = vec4(0.0);
+    for (uint k = 0u; k < DUST_SIZE_EDGES; ++k) M.edges[k] = vec4(0.0);
 
     vec2 t_now = vec2(pc.ps_r_t_hi.w, pc.ps_r_t_lo.w);
     vec2 age = df_sub(t_now, vec2(C.r0_t0_hi.w, C.r0_t0_lo.w));
@@ -53,11 +72,43 @@ void main() {
         vec3 local = dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(r, ps)));
         // fade the last 10% of the lifetime (oldest tier only)
         float fade = pc.ttl.z > 0.5 ? 1.0 : clamp((1.0 - age_f / ttl) * 10.0, 0.0, 1.0);
+        float flux = C.v0_lo_mass.w * C.misc.z * fade;
         R.pos_size = vec4(local, C.misc.x * age_f);
         // z: the beta half-spread with the child-pattern id in its low bits, copied bit for bit
         // y: slot, the tier's stream shift and the live bit (dust::render_word): streak predecessors
-        R.age_id_dbeta_flux = vec4(age_f, uintBitsToFloat(dust_render_word(slot, uint(pc.ttl.w))), C.misc.w,
-                                   C.v0_lo_mass.w * C.misc.z * fade);
+        R.age_id_dbeta_flux = vec4(age_f, uintBitsToFloat(dust_render_word(slot, uint(pc.ttl.w))), C.misc.w, flux);
+
+        if (flux > 0.0 && uvec2(pc.moments) != uvec2(0u)) {
+            // velocity dispersion: sigma_lat across the ejection axis, sigma_rad along it, secants
+            // over the real spreads
+            vec3 e1, e2, e3;
+            dust_dispersion_frame(C.eject.xyz, e1, e2, e3);
+            float sigmaLat = max(C.misc.x, 0.0), sigmaRad = max(C.misc.y, 0.0);
+            vec3 a0 = secant_v(r0, v0, e1 * sigmaLat, mu, age, r);
+            vec3 a1 = secant_v(r0, v0, e2 * sigmaLat, mu, age, r);
+            vec3 a2 = secant_v(r0, v0, e3 * sigmaRad, mu, age, r);
+            // the size polyline: every bin edge at its own beta and speed (v ~ s^-1/2)
+            float sqrtBeta = sqrt(max(beta, 0.0));
+            float range = dust_size_range_factor(C);
+            for (uint k = 0u; k < DUST_SIZE_EDGES; ++k) {
+                float sb = dust_size_edge_sqrt_beta(beta, range, k);
+                float betaK = sb * sb;
+                float factor = sqrtBeta > 0.0 ? sb / sqrtBeta : 1.0;
+                Df3 vK = df3_add(v0, df3_from_f32(C.eject.xyz * (factor - 1.0)));
+                Df3 rK, vvK;
+                dust_kepler(r0, vK, df_mul(DF_SUN_MU, df_two_sum(1.0, -betaK)), age, rK, vvK);
+                M.edges[k] = vec4(dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(rK, ps))), factor);
+            }
+            M.mean_flux = vec4(local, flux);
+            M.cov_a = vec4(a0.x * a0.x + a1.x * a1.x + a2.x * a2.x,
+                           a0.x * a0.y + a1.x * a1.y + a2.x * a2.y,
+                           a0.x * a0.z + a1.x * a1.z + a2.x * a2.z,
+                           a0.y * a0.y + a1.y * a1.y + a2.y * a2.y);
+            M.cov_b_age_id = vec4(a0.y * a0.z + a1.y * a1.z + a2.y * a2.z,
+                                  a0.z * a0.z + a1.z * a1.z + a2.z * a2.z,
+                                  age_f, uintBitsToFloat(dust_child_id(C.misc.w)));
+        }
     }
     pc.render.c[i] = R;
+    if (uvec2(pc.moments) != uvec2(0u)) pc.moments.m[i] = M;
 }

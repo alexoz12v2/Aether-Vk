@@ -134,6 +134,10 @@ mod tests {
       host_query_reset: None,
       handle: device.clone(),
       submission_lock: spin::Mutex::new(()),
+      device_fault: None,
+      checkpoints: None,
+      single_queue: false,
+      lost: core::sync::atomic::AtomicBool::new(false),
       #[cfg(target_vendor = "apple")]
       metal_objects: ash::ext::metal_objects::Device::new(&instance.instance, &device),
       #[cfg(debug_assertions)]

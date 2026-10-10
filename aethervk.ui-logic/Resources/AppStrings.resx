@@ -228,6 +228,9 @@
   <data name="Tabs_Model_DustVisibility" xml:space="preserve">
     <value>Dust visibility</value>
   </data>
+  <data name="Tabs_Model_DustFlow" xml:space="preserve">
+    <value>Flow pulses</value>
+  </data>
   <data name="Tabs_Model_DustTracers" xml:space="preserve">
     <value>Particle tracers</value>
   </data>

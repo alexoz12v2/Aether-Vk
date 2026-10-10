@@ -169,15 +169,92 @@ impl GlobalDeviceAllocator {
   // TODO: allocate buffer, image, ...
 }
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use vk_mem::Alloc;
 
-/// TODO: Document this item
+/// The frame staging arena's reuse policy: two halves of one buffer, one per frame in flight.
+///
+/// A frame bump-allocates from the current half. `advance(last_submit)` records the graphics
+/// timeline value of the last submission that could have used the half and switches to the other
+/// one; `wait_value_for_next_half(completed)` says which timeline value the GPU must have reached
+/// before that other half may be overwritten (`None` when it already has). Without this gate a
+/// frame whose GPU work is delayed (a long dust fill on the compute queue, say) still had its
+/// staging bytes — trajectory tables, scene/material/object data, gizmo uploads — overwritten by
+/// the next frame's CPU work before its copies executed: the copies then moved zeros/garbage into
+/// device buffers, the trajectory shader followed a null segment pointer and the GPU faulted
+/// (Xid 31, `GPCCLIENT_T1 faulted @ 0x0`, 3/3 observer runs; 0/3 with the trajectory draw skipped).
+pub struct StagingRing {
+  pub half_capacity: usize,
+  /// 0 or 1
+  pub half: AtomicUsize,
+  /// absolute bump pointer inside the current half
+  pub offset: AtomicUsize,
+  /// the graphics timeline value of the last submission that may have read each half
+  pub used_until: [AtomicU64; 2],
+}
+
+impl StagingRing {
+  pub fn new(half_capacity: usize) -> Self {
+    Self {
+      half_capacity,
+      half: AtomicUsize::new(0),
+      offset: AtomicUsize::new(0),
+      used_until: [AtomicU64::new(0), AtomicU64::new(0)],
+    }
+  }
+
+  pub fn base(&self) -> usize {
+    self.half.load(Ordering::Relaxed) * self.half_capacity
+  }
+
+  /// Bump-allocates `size` bytes at `alignment` inside the current half; absolute offset.
+  pub fn allocate(&self, size: usize, alignment: usize) -> Option<usize> {
+    let end = self.base() + self.half_capacity;
+    let mut current = self.offset.load(Ordering::Relaxed);
+    loop {
+      let padding = (alignment - (current % alignment)) % alignment;
+      let aligned = current + padding;
+      let next = aligned + size;
+      if next > end {
+        return None;
+      }
+      match self
+        .offset
+        .compare_exchange_weak(current, next, Ordering::SeqCst, Ordering::Relaxed)
+      {
+        Ok(_) => return Some(aligned),
+        Err(val) => current = val,
+      }
+    }
+  }
+
+  /// The timeline value the GPU must reach before the next half can be reused, if it has not.
+  pub fn wait_value_for_next_half(&self, completed: u64) -> Option<u64> {
+    let next = 1 - self.half.load(Ordering::Relaxed);
+    let needed = self.used_until[next].load(Ordering::Relaxed);
+    (needed > completed).then_some(needed)
+  }
+
+  /// Ends the current frame's use of the arena: the current half is busy until the GPU passes
+  /// `last_submit_value`; the next half becomes current and empty. Caller: once the wait of
+  /// `wait_value_for_next_half` is satisfied.
+  pub fn advance(&self, last_submit_value: u64) {
+    let cur = self.half.load(Ordering::Relaxed);
+    self.used_until[cur].fetch_max(last_submit_value, Ordering::Relaxed);
+    let next = 1 - cur;
+    self.half.store(next, Ordering::Relaxed);
+    self.offset.store(next * self.half_capacity, Ordering::Relaxed);
+  }
+}
+
+/// Host-visible scratch for the frame's uploads (copies and device-address reads recorded into
+/// the frame's command buffers): two halves rotated per frame, see [`StagingRing`].
 pub struct FrameStagingArena {
   pub buffer: vk::Buffer,
   pub mapped_ptr: *mut u8,
+  /// the whole buffer: two halves of `ring.half_capacity`
   pub capacity: usize,
-  pub offset: AtomicUsize,
+  pub ring: StagingRing,
   pub allocation: vk_mem::Allocation,
 }
 
@@ -199,7 +276,9 @@ macro_rules! apply_test_dedicated_alloc {
 impl FrameStagingArena {
   /// TODO: Document this item
   #[named]
-  pub fn new(allocator: &vk_mem::Allocator, capacity: usize) -> GpuResult<Self> {
+  pub fn new(allocator: &vk_mem::Allocator, per_frame_capacity: usize) -> GpuResult<Self> {
+    // two halves: one per frame in flight (see `StagingRing`)
+    let capacity = per_frame_capacity * 2;
     aethervk_oshal_rlib::log!("FrameStagingArena::new called! capacity={}", capacity);
     let buffer_info = vk::BufferCreateInfo::default()
       .size(capacity as u64)
@@ -227,36 +306,30 @@ impl FrameStagingArena {
       buffer,
       mapped_ptr: alloc_info_res.mapped_data as *mut u8,
       capacity,
-      offset: AtomicUsize::new(0),
+      ring: StagingRing::new(per_frame_capacity),
       allocation,
     })
   }
 
-  /// TODO: Document this item
-  pub fn reset(&self) {
-    self.offset.store(0, Ordering::Relaxed);
+  /// The graphics timeline value the GPU must reach before the next frame may reuse its half of
+  /// the arena (`None`: already reached). `completed` = the current counter value.
+  pub fn wait_value_for_next_frame(&self, completed: u64) -> Option<u64> {
+    self.ring.wait_value_for_next_half(completed)
   }
 
-  /// TODO: Document this item
+  /// Switches to the other half for the next frame; `last_submit_value` = the value of the last
+  /// graphics submission issued so far (`next_submit_value - 1`), which bounds every submission
+  /// that may read the half being left. The caller has waited for `wait_value_for_next_frame`.
+  pub fn advance(&self, last_submit_value: u64) {
+    self.ring.advance(last_submit_value);
+  }
+
+  /// Bump-allocates `size` bytes at `alignment` in this frame's half: (absolute offset, host ptr).
   pub fn allocate(&self, size: usize, alignment: usize) -> Option<(usize, *mut u8)> {
-    let mut current = self.offset.load(Ordering::Relaxed);
-    loop {
-      let padding = (alignment - (current % alignment)) % alignment;
-      let aligned = current + padding;
-      let next = aligned + size;
-
-      if next > self.capacity {
-        return None;
-      }
-
-      match self
-        .offset
-        .compare_exchange_weak(current, next, Ordering::SeqCst, Ordering::Relaxed)
-      {
-        Ok(_) => return Some((aligned, unsafe { self.mapped_ptr.add(aligned) })),
-        Err(val) => current = val,
-      }
-    }
+    self
+      .ring
+      .allocate(size, alignment)
+      .map(|aligned| (aligned, unsafe { self.mapped_ptr.add(aligned) }))
   }
 
   /// TODO: Document this item
@@ -266,6 +339,7 @@ impl FrameStagingArena {
       self.buffer,
       self.allocation.get_raw()
     );
+    super::fault::unregister_address_range("FrameStagingArena");
     unsafe {
       vk_mem::ffi::vmaDestroyBuffer(allocator.get_raw(), self.buffer, self.allocation.get_raw());
       core::ptr::drop_in_place(&mut self.allocation);
@@ -291,5 +365,56 @@ impl DeviceResource for GlobalDeviceAllocator {
       aethervk_oshal_rlib::os::memory::tracking::drain_vma_events();
       aethervk_oshal_rlib::os::memory::tracking::report_leaked_gpu_allocations();
     }
+  }
+}
+
+#[cfg(test)]
+mod staging_ring_tests {
+  use super::StagingRing;
+
+  /// Two frames alternate halves; a half is reusable only once the GPU passed the submission
+  /// that used it; offsets of consecutive frames never overlap.
+  #[test]
+  fn staging_ring_alternates_halves_and_waits_for_the_gpu() {
+    let ring = StagingRing::new(1024);
+    // frame A (half 0)
+    let a = ring.allocate(100, 16).unwrap();
+    assert!(a < 1024);
+    assert!(
+      ring.allocate(2000, 16).is_none(),
+      "a frame cannot exceed its half"
+    );
+    // frame A submitted as value 1; nothing completed yet
+    assert_eq!(
+      ring.wait_value_for_next_half(0),
+      None,
+      "half 1 was never used"
+    );
+    ring.advance(1);
+    // frame B (half 1)
+    let b = ring.allocate(100, 16).unwrap();
+    assert!(b >= 1024 && b < 2048);
+    // frame B submitted as value 2; the GPU has completed nothing: half 0 (frame A) is busy
+    assert_eq!(ring.wait_value_for_next_half(0), Some(1));
+    // the GPU finished frame A
+    assert_eq!(ring.wait_value_for_next_half(1), None);
+    ring.advance(2);
+    // frame C (half 0 again), starts at the half's base
+    let c = ring.allocate(100, 16).unwrap();
+    assert_eq!(c, 0);
+    // frame C submitted as value 3; the GPU is two frames behind: half 1 (frame B) is busy
+    assert_eq!(ring.wait_value_for_next_half(1), Some(2));
+    assert_eq!(ring.wait_value_for_next_half(2), None);
+  }
+
+  #[test]
+  fn staging_ring_alignment_and_exhaustion() {
+    let ring = StagingRing::new(256);
+    assert_eq!(ring.allocate(1, 16).unwrap(), 0);
+    assert_eq!(ring.allocate(1, 16).unwrap(), 16);
+    assert_eq!(ring.allocate(200, 8).unwrap(), 24);
+    assert!(ring.allocate(100, 8).is_none());
+    ring.advance(7);
+    assert_eq!(ring.allocate(1, 16).unwrap(), 256);
   }
 }

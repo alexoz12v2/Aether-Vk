@@ -175,6 +175,10 @@ pub(crate) struct CmdBufDiscard {
   manager: sync::Arc<commands::CommandPools>,
   id: CommandBufferId,
   queue_family_index: u32,
+  /// the timeline the submission signals, and the value it signals: recycling before that
+  /// counter reaches `signal_value` is an early recycle ([`super::fault::EARLY_RECYCLES`])
+  own_timeline: vk::Semaphore,
+  signal_value: u64,
 }
 
 /// Structure associated to the main Timeline Semaphore provided by Device
@@ -318,6 +322,8 @@ impl DiscardPool {
     queue_family_index: u32,
     manager: sync::Arc<commands::CommandPools>,
     timeline: u64,
+    own_timeline: vk::Semaphore,
+    signal_value: u64,
   ) {
     debug_assert!(sync::Arc::strong_count(&manager) > 1);
     self.push_item(
@@ -328,6 +334,8 @@ impl DiscardPool {
         manager,
         id: command_buffer_id,
         queue_family_index,
+        own_timeline,
+        signal_value,
       }),
     );
   }
@@ -393,6 +401,16 @@ impl DiscardPool {
     device: &super::LogicalDevice,
     items: impl IntoIterator<Item = DiscardItem>,
   ) {
+    Self::destroy_items_lock_free_impl(device, items, true)
+  }
+
+  /// `measure`: poll each command buffer's own timeline to report early recycles. Off at
+  /// teardown, where the device is idle and the compute timeline may already be destroyed.
+  fn destroy_items_lock_free_impl(
+    device: &super::LogicalDevice,
+    items: impl IntoIterator<Item = DiscardItem>,
+    measure: bool,
+  ) {
     for item in items {
       match item {
         DiscardItem::Buffer(BufferDiscard {
@@ -432,7 +450,24 @@ impl DiscardPool {
           manager,
           id,
           queue_family_index,
+          own_timeline,
+          signal_value,
         }) => {
+          // measure, don't change: has the submission's own queue finished with this buffer?
+          if measure && own_timeline != vk::Semaphore::null() {
+            if let Ok(counter) =
+              unsafe { device.timeline_semaphore.get_semaphore_counter_value(own_timeline) }
+            {
+              if counter < signal_value {
+                let n = super::fault::EARLY_RECYCLES
+                  .fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+                  + 1;
+                aethervk_oshal_rlib::log!(
+                  "[recycle] command buffer {command_buffer:?} (family {queue_family_index}) recycled early: own counter {counter} < {signal_value} (#{n})"
+                );
+              }
+            }
+          }
           let _x = manager.recycle(device, thread_id, queue_family_index, command_buffer);
           #[cfg(debug_assertions)]
           {
@@ -474,7 +509,7 @@ impl DiscardPool {
       "destroy_discarded_resources_all popping {} items",
       items.len()
     );
-    Self::destroy_items_lock_free(device, items);
+    Self::destroy_items_lock_free_impl(device, items, false);
   }
 }
 
@@ -1607,6 +1642,7 @@ impl ArchetypeArenaCreate for Text2RenderResourceArchetypeArena {
 
     let addr_info = ash::vk::BufferDeviceAddressInfo::default().buffer(glyphs_buffer);
     let glyphs_ptr = unsafe { device.buffer_device_address.get_buffer_device_address(&addr_info) };
+    super::fault::register_address_range("MegaBuffer_TextGlyphs", glyphs_ptr, buffer_size);
 
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
@@ -1813,6 +1849,7 @@ impl ArchetypeArenaCreate for SphereGizmoRenderResourceArchetypeArena {
 
       let addr_info = ash::vk::BufferDeviceAddressInfo::default().buffer(data_buffer);
       let data_ptr = device.buffer_device_address.get_buffer_device_address(&addr_info);
+      super::fault::register_address_range("MegaBuffer_SphereGizmoData", data_ptr, buffer_size);
 
       Ok(Self {
         pipeline_layout: NonZeroHandle::new_unchecked(pipeline_layout),
@@ -2200,6 +2237,7 @@ impl ArchetypeArenaCreate for UiRenderResourceArchetypeArena {
         })
     };
 
+    super::fault::register_address_range("UiElements", elements_ptr, elements_size);
     Ok(Self {
       pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
       set_0_layout: unsafe { NonZeroHandle::new_unchecked(set_0_layout) },
@@ -2364,6 +2402,7 @@ impl ArchetypeArenaCreate for TrajectoryRenderResourceArchetypeArena {
 
         let addr_info = ash::vk::BufferDeviceAddressInfo::default().buffer(buffer);
         let ptr = unsafe { device.buffer_device_address.get_buffer_device_address(&addr_info) };
+        super::fault::register_address_range(debug_name, ptr, size);
         Ok((unsafe { NonZeroHandle::new_unchecked(buffer) }, alloc, ptr))
       };
 
@@ -2404,6 +2443,13 @@ impl TrajectoryRenderResourceArchetypeArena {
     discard_pool.discard_descriptor_set_layout(self.set_0_layout.get(), timeline);
     unsafe {
       device.destroy_descriptor_pool(self.descriptor_pool.get(), None);
+    }
+    for name in [
+      "MegaBuffer_TrajectorySegments",
+      "MegaBuffer_Trajectories",
+      "MegaBuffer_TrajectoryMaps",
+    ] {
+      super::fault::unregister_address_range(name);
     }
     discard_pool.discard_buffer(
       self.allocator_raw,
@@ -3643,56 +3689,3 @@ macro_rules! impl_font_atlas_arena_transactional {
 }
 
 impl_font_atlas_arena_transactional!(Text2RenderResourceArchetypeArena);
-
-/// Archetype for `dust.vert/frag` shaders
-pub(super) struct DustRenderArchetype {
-  pub arena: alloc::sync::Weak<DebugTrackedRwLock<DustRenderArchetypeArena>>,
-  pub pipeline_key: PipelineKey,
-  pub graphics_info: GraphicsInfo,
-}
-
-impl DustRenderArchetype {
-  pub fn discard(&mut self, _device: &LogicalDevice, _pool: &DiscardPool, _timeline: u64) {
-    // Purposefully do nothing.
-  }
-}
-
-/// Archetype arena for `dust.vert/frag` shaders
-pub(super) struct DustRenderArchetypeArena {
-  pub pipeline_layout: NonZeroHandle<vk::PipelineLayout>,
-  // no descriptor sets
-}
-
-impl ArchetypeArenaCreate for DustRenderArchetypeArena {
-  fn new_arena(ctx: &mut ArenaCreationContext) -> GpuResult<Self> {
-    let push_constant_range = vk::PushConstantRange::default()
-      .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
-      .offset(0)
-      .size(core::mem::size_of::<crate::scene::dust::DustDrawPushConstants>() as _);
-    let create_info = vk::PipelineLayoutCreateInfo::default()
-      .push_constant_ranges(core::slice::from_ref(&push_constant_range));
-
-    // create pipeline layout
-    let pipeline_layout = unsafe {
-      ctx
-        .device
-        .create_pipeline_layout(&create_info, None)
-        .with_name(ctx.device, "VkPipelineLayout_DustRenderArchetypeArena")?
-    };
-    ctx.rollback.defer(move |dev| unsafe {
-      dev.destroy_pipeline_layout(pipeline_layout, None);
-    });
-
-    Ok(Self {
-      pipeline_layout: unsafe { NonZeroHandle::new_unchecked(pipeline_layout) },
-    })
-  }
-}
-
-impl DustRenderArchetypeArena {
-  pub fn discard(&mut self, _device: &LogicalDevice, discard_pool: &DiscardPool, timeline: u64) {
-    discard_pool.discard_pipeline_layout(self.pipeline_layout.get(), timeline);
-  }
-}
-
-impl_deref_archetype!(DustRenderArchetype, DustRenderArchetypeArena);

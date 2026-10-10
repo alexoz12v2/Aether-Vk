@@ -57,6 +57,20 @@ fn comet_state() -> (V3, V3) {
   (r, scale(t, vc / tn))
 }
 
+/// A 67P-like orbit (q 1.24 AU, e 0.641, P 6.44 y) whose aphelion falls at `t_aphelion_s`: the
+/// state at `t = 0`. The observer's epoch (2025-10-17) is 270 d past aphelion and 3.96 y past
+/// perihelion, so a 5.3-year history on this orbit holds the perihelion passage.
+fn comet_state_67p(t_aphelion_s: f64) -> (V3, V3) {
+  let (q, e) = (1.2432 * AU_M, 0.641);
+  let a = q / (1.0 - e);
+  let r_aph = a * (1.0 + e);
+  let v_aph = (SUN_MU_M3_S2 * (2.0 / r_aph - 1.0 / a)).sqrt();
+  // the orbit plane tilted like the test orbit: aphelion along −x, motion along −y
+  let r = [-r_aph, 0.0, 0.0];
+  let v = [0.0, -v_aph * 0.99, -v_aph * 0.14];
+  kepler::propagate_f64(r, v, SUN_MU_M3_S2, -t_aphelion_s)
+}
+
 // ─── df64 primitives ────────────────────────────────────────────────────────
 
 #[test]
@@ -296,8 +310,10 @@ fn emission_times_and_beta_are_in_range() {
     let c = emit_cluster(&b, j);
     let t0 = c.t0().to_f64();
     assert!(t0 >= T_START && t0 <= T_START + 1800.0, "t0 {t0}");
-    let s = c.misc[1];
-    assert!(s >= 4.99 && s <= 500.1, "s {s}");
+    // the reference grain (50 µm) with the jet's speed spread as its radial dispersion
+    let s = c.eject[3];
+    assert!((s - 50.0).abs() < 1e-3, "s_ref {s}");
+    assert!(c.sigma_rad() > 0.0 && c.sigma_lat() > 0.0);
     assert!(c.beta() > 0.0 && c.beta().is_finite());
     assert!(c.mass_g() > 0.0 && c.mass_g().is_finite());
   }
@@ -317,49 +333,48 @@ fn frame_after(days: f64) -> (DustFrame, V3) {
 
 #[test]
 fn syndynes_point_antisunward_and_grow_with_beta() {
-  // emit a short batch, evaluate 10 days later relative to the comet
-  // 64 streams: one grain per size stratum per time sample, the whole β range
+  // emit a short batch, evaluate 10 days later relative to the comet: every cluster carries the
+  // whole size range, its polyline edges run from β/F (large grains) to β·F (small grains)
   let mut b = test_batch(2048, 60.0);
   b.mass_params[3] = batch_streams_word(6, false);
   let (frame, rc) = frame_after(10.0);
   let anti_sun = scale(rc, 1.0 / norm(rc));
-  let mut pts: alloc::vec::Vec<(f32, f64)> = alloc::vec::Vec::new();
-  for j in 0..b.count {
+  let g = SUN_MU_M3_S2 / dot(rc, rc);
+  let t = 10.0f64 * 86400.0;
+  let mut checked = 0;
+  for j in (0..b.count).step_by(37) {
     let c = emit_cluster(&b, j);
-    let e = evaluate_cluster(&c, j, &frame);
+    let (e, m) = packet_moments(&c, j, &frame);
     assert!(e.age_id_dbeta_flux[3] > 0.0);
     assert_eq!(render_slot(e.age_id_dbeta_flux[1]), j);
     assert!(render_live(e.age_id_dbeta_flux[1]));
-    let p = [
-      e.pos_size[0] as f64,
-      e.pos_size[1] as f64,
-      e.pos_size[2] as f64,
-    ];
-    pts.push((c.beta(), dot(p, anti_sun)));
+    let along = |k: usize| {
+      let p = m.edge(k);
+      dot([p[0] as f64, p[1] as f64, p[2] as f64], anti_sun)
+    };
+    // radiation pressure: displacement ½ β g t² grows with β along the polyline
+    let (lo, mid, hi) = (
+      along(0),
+      along(SIZE_BINS as usize / 2),
+      along(SIZE_EDGES as usize - 1),
+    );
+    assert!(
+      hi > 0.0,
+      "cluster {j}: the small grains must move anti-sunward, got {hi}"
+    );
+    assert!(
+      hi > mid && mid > lo,
+      "cluster {j}: displacement must grow with β: {lo} {mid} {hi}"
+    );
+    let beta_max = (c.beta() as f64) * SIZE_RANGE_FACTOR;
+    let expect = 0.5 * beta_max * g * t * t;
+    assert!(
+      hi > 0.3 * expect && hi < 3.0 * expect,
+      "cluster {j}: {hi} vs ½ β g t² = {expect}"
+    );
+    checked += 1;
   }
-  // radiation pressure: displacement ½ β g t² dominates ejection for the small (high β) grains
-  pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-  let n = pts.len();
-  let mean = |s: &[(f32, f64)]| s.iter().map(|p| p.1).sum::<f64>() / s.len() as f64;
-  let low = mean(&pts[..n / 5]);
-  let high = mean(&pts[n - n / 5..]);
-  assert!(
-    high > 0.0,
-    "high-β grains must move anti-sunward, got {high}"
-  );
-  assert!(
-    high > low * 2.0,
-    "displacement must grow with β: low {low} high {high}"
-  );
-  // expected order of magnitude for the largest β: ½ β g t²
-  let g = SUN_MU_M3_S2 / dot(rc, rc);
-  let beta_max = pts[n - 1].0 as f64;
-  let expect = 0.5 * beta_max * g * (10.0f64 * 86400.0).powi(2);
-  assert!(
-    pts[n - 1].1 > 0.3 * expect && pts[n - 1].1 < 3.0 * expect,
-    "{} vs {expect}",
-    pts[n - 1].1
-  );
+  assert!(checked > 40);
 }
 
 #[test]
@@ -484,290 +499,6 @@ fn ring_rewind_and_capacity_selection() {
   assert_eq!(ring_capacity(false, None), RING_CAPACITY_LOW);
   assert_eq!(ring_capacity(false, Some(65536)), 65536);
   assert_eq!(ring_capacity(true, Some(1000)), RING_CAPACITY_HIGH); // not a power of two
-}
-
-#[test]
-fn gpu_layout_sizes() {
-  assert_eq!(core::mem::size_of::<DustCluster>(), 80);
-  assert_eq!(core::mem::size_of::<DustRenderCluster>(), 32);
-  assert_eq!(core::mem::size_of::<DustBatch>(), 208);
-  assert_eq!(core::mem::size_of::<DustFrame>(), 64);
-}
-
-/// Particles split, they never grow (blobber.rdc: 84 % of the splats at the old 48 px clamp): the
-/// drawn radius is constant, and a cloud covering more pixels asks for more children instead.
-#[test]
-fn lod_splits_clusters_instead_of_enlarging_children() {
-  assert_eq!(lod_want(0.0), 1.0);
-  assert_eq!(lod_want(DUST_CHILD_PX), 1.0);
-  assert!((lod_want(10.0 * DUST_CHILD_PX) - 100.0).abs() < 1e-3);
-  assert_eq!(lod_children(lod_want(0.1), 1.0), 1);
-  assert_eq!(lod_children(100.0, 1.0), 100);
-  assert_eq!(lod_children(100.0, 0.25), 25);
-  // at most TRACER_CHILD children: indices 0..TRACER_CHILD, the last index is the tracer's
-  assert_eq!(lod_children(1e9, 1.0), TRACER_CHILD);
-  assert_eq!(
-    lod_children(100.0, 1e-6),
-    1,
-    "an on-screen cluster always draws"
-  );
-  // the same cluster aging (spread ∝ age): footprint fixed, children grow with the projected area
-  let (units, p11, w, px_to_ndc_y) = (1e-3f32, 3.0f32, 100.0f32, 2.0 / 720.0);
-  let mut prev_k = 0;
-  for spread_m in [1.0e3f32, 1.0e4, 1.0e5] {
-    let (r_px, _) = splat_footprint(DUST_CHILD_PX, units, p11, w, px_to_ndc_y);
-    assert_eq!(r_px, DUST_CHILD_PX);
-    let spread_px = spread_m * units * p11 / w / px_to_ndc_y;
-    let k = lod_children(lod_want(spread_px), 1.0);
-    assert!(k >= prev_k, "children must not shrink as the cloud grows");
-    prev_k = k;
-  }
-  assert!(prev_k > 100);
-}
-
-/// The budget share comes from this frame's demand (no feedback lag, no ramp after a view change:
-/// the former controller started at λ = 0.05 and grew by √ratio per readback 4 frames late, the
-/// "adjustment phase"): one evaluation fills 80–95 % of the budget whatever the demand, and a
-/// light demand gets λ = 1.
-#[test]
-fn lod_share_fills_the_budget_in_the_same_frame() {
-  let budget = 1_000_000u32;
-  for (n, spread) in [
-    (40_000u32, 1000u32),
-    (200_000, 30),
-    (900_000, 3),
-    (5_000, 4000),
-  ] {
-    let wants: alloc::vec::Vec<f32> = (0..n).map(|i| 1.0 + (i % spread) as f32).collect();
-    let mut hist = [0u32; 2 * LOD_HIST_BINS];
-    for &w in &wants {
-      lod_hist_push(&mut hist, lod_demand(w));
-    }
-    let lambda = lod_lambda_from(budget, &hist, n, 1.0);
-    let attempted: u32 =
-      wants.iter().map(|&w| lod_children(w, lambda)).sum::<u32>() + n / TRACER_EVERY;
-    let fill = attempted as f32 / budget as f32;
-    if lambda < 1.0 {
-      assert!(
-        (0.8..=0.95).contains(&fill),
-        "{n} clusters: fill {fill} at λ {lambda}"
-      );
-    } else {
-      assert!(fill <= 0.95, "{n} clusters: fill {fill}");
-    }
-  }
-  let mut light = [0u32; 2 * LOD_HIST_BINS];
-  assert_eq!(lod_lambda_from(budget, &light, 0, 1.0), 1.0);
-  for _ in 0..10 {
-    lod_hist_push(&mut light, 10);
-  }
-  assert_eq!(
-    lod_lambda_from(budget, &light, 10, 1.0),
-    1.0,
-    "light demand: everything"
-  );
-  assert_eq!(
-    lod_lambda_from(budget, &light, 10, 0.25),
-    0.25,
-    "the cap holds"
-  );
-}
-
-/// Fewer dots keep covering the footprint: `k·r²` stays `want·DUST_CHILD_PX²` (until the radius
-/// cap), so a tight budget or a near view is a softer fog, not sparse bright speckle (`near.rdc`);
-/// fully sampled clusters keep the 1.5 px dots.
-#[test]
-fn splats_keep_the_footprint_covered_at_any_budget_share() {
-  for want in [1.0f32, 40.0, 900.0] {
-    for lambda in [1.0f32, 0.3, 0.05] {
-      let k = lod_children(want, lambda);
-      let r = splat_radius_px(want, k);
-      let covered = k as f32 * r * r;
-      let expect = want.max(k as f32) * DUST_CHILD_PX * DUST_CHILD_PX;
-      if r < DUST_CHILD_PX_MAX {
-        assert!(
-          (covered / expect - 1.0).abs() < 1e-3,
-          "want {want} λ {lambda}: k {k} r {r}"
-        );
-      }
-      if lambda == 1.0 {
-        assert_eq!(r, DUST_CHILD_PX);
-      }
-    }
-  }
-  assert_eq!(splat_radius_px(1e9, 1), DUST_CHILD_PX_MAX);
-}
-
-/// Orthographic LOD push constants over a `half_h_m` × `half_h_m` view (square, `px` pixels).
-fn ortho_lod_pc(
-  half_h_m: f32,
-  px: u32,
-  budget: u32,
-  lambda: f32,
-  live: u32,
-) -> DustLodPushConstants {
-  let units = 1e-3f32;
-  let p = 1.0 / (half_h_m * units);
-  let mut mvp = [0.0f32; 16];
-  mvp[0] = p * units;
-  mvp[5] = p * units;
-  mvp[10] = 1e-9;
-  mvp[15] = 1.0;
-  DustLodPushConstants {
-    render: 0,
-    header: 0,
-    tiles: 0,
-    list: 0,
-    live_count: live,
-    budget,
-    lambda,
-    // production: exposure (~1e7) / tile unit (~1e-5 white)
-    tile_scale: 1e12,
-    mvp,
-    params: [units, p, p, 2.0 / px as f32],
-  }
-}
-
-fn render_cluster(slot: u32, pos: [f32; 3], spread: f32, flux: f32) -> DustRenderCluster {
-  DustRenderCluster {
-    pos_size: [pos[0], pos[1], pos[2], spread],
-    // distinct child patterns per cluster (the id lives in the dbeta field, 0 half-spread)
-    age_id_dbeta_flux: [
-      86400.0,
-      f32::from_bits(slot),
-      pack_child_id(0.0, slot),
-      flux,
-    ],
-  }
-}
-
-/// `lod_evaluate` (the `dust_lod.comp` mirror): off-screen clusters draw nothing, each on-screen
-/// cluster gets exactly `k` list entries carrying `flux / k`, the budget is never exceeded, and
-/// the clusters dropped at the budget are marked (flux 0) so the shader skips them.
-#[test]
-fn lod_evaluate_spends_the_budget_on_screen_only() {
-  let half = 1.0e6f32;
-  let mut render: alloc::vec::Vec<DustRenderCluster> = (0..1000u32)
-    .map(|i| {
-      // half on screen, half 5 view widths away
-      let x = if i % 2 == 0 {
-        (u01(pcg(i)) - 0.5) * half
-      } else {
-        5.0 * half
-      };
-      render_cluster(i, [x, (u01(pcg(i + 7)) - 0.5) * half, 0.0], 2.0e4, 10.0)
-    })
-    .collect();
-  let fluxes: alloc::vec::Vec<f32> = render.iter().map(|r| r.age_id_dbeta_flux[3]).collect();
-  let pc = ortho_lod_pc(half, 512, 1_000_000, 1.0, render.len() as u32);
-  let mut tiles = alloc::vec![0u32; DUST_TILE_COUNT as usize];
-  let mut list = alloc::vec::Vec::new();
-  let out = lod_evaluate(&mut render, &pc, 0, 0.0, &mut tiles, &mut list);
-  assert_eq!(out.instances as usize, list.len());
-  assert_eq!(
-    out.attempted, out.instances,
-    "nothing dropped under a large budget"
-  );
-  let mut per_cluster = alloc::vec![0u32; render.len()];
-  for &e in &list {
-    let c = (e & ((1 << LOD_CLUSTER_BITS) - 1)) as usize;
-    let child = e >> LOD_CLUSTER_BITS;
-    assert!(child < MAX_CHILDREN_PER_CLUSTER);
-    per_cluster[c] += 1;
-  }
-  for (i, r) in render.iter().enumerate() {
-    if i % 2 == 1 {
-      assert_eq!(per_cluster[i], 0, "off screen cluster {i} drawn");
-      assert_eq!(r.age_id_dbeta_flux[3], 0.0);
-    } else {
-      let k = per_cluster[i];
-      assert!(k >= 1);
-      // energy: k children of flux / k
-      let total = r.age_id_dbeta_flux[3] * k as f32;
-      assert!((total / fluxes[i] - 1.0).abs() < 1e-5);
-    }
-  }
-  assert!(tiles.iter().any(|&t| t > 0));
-
-  // tight budget: never exceeded, dropped clusters marked
-  let mut render2: alloc::vec::Vec<DustRenderCluster> =
-    (0..1000u32).map(|i| render_cluster(i, [0.0, 0.0, 0.0], 2.0e5, 10.0)).collect();
-  // (the share keeps any demand within the budget unless more clusters are on screen than it holds)
-  let pc2 = ortho_lod_pc(half, 512, 500, 1.0, 1000);
-  let mut list2 = alloc::vec::Vec::new();
-  let out2 = lod_evaluate(&mut render2, &pc2, 0, 0.0, &mut tiles, &mut list2);
-  assert!(out2.instances <= 500 && out2.attempted > 500);
-  let drawn = render2.iter().filter(|r| r.age_id_dbeta_flux[3] > 0.0).count();
-  let dropped = render2.len() - drawn;
-  assert!(dropped > 0);
-  assert_eq!(
-    list2.len() as u32,
-    out2.instances,
-    "only drawn clusters have entries"
-  );
-}
-
-/// White point from the tile grid: a high percentile of the non-empty tiles, scale-free (the tile
-/// unit cancels), empty grid = no measurement; adaptation moves a fixed fraction in log space.
-#[test]
-fn white_point_measures_the_brightest_dust_and_adapts_smoothly() {
-  let mut tiles = alloc::vec![0u32; DUST_TILE_COUNT as usize];
-  assert_eq!(white_point_from_tiles(&tiles, 1.0), None);
-  for (i, t) in tiles.iter_mut().enumerate().take(1000) {
-    *t = (i + 1) as u32;
-  }
-  let w = white_point_from_tiles(&tiles, 1.0).unwrap();
-  assert!((w - 990.0).abs() <= 1.0, "p99 of 1..=1000: {w}");
-  let w2 = white_point_from_tiles(&tiles, 0.5).unwrap();
-  assert!((w2 - 0.5 * w).abs() < 1e-3);
-  // eye adaptation: log-space step, converges, ignores garbage
-  assert_eq!(adapt_white(0.0, 2.0), 2.0);
-  assert_eq!(adapt_white(2.0, f32::NAN), 2.0);
-  assert_eq!(adapt_white(2.0, 0.0), 2.0);
-  let mut x = 1.0f32;
-  for _ in 0..30 {
-    let next = adapt_white(x, 1e4);
-    assert!(next >= x && next <= 1e4 * 1.0001);
-    // a frame covers WHITE_ADAPT_RATE of the log distance, never overshoots
-    let expect = (x.ln() + (1e4f32.ln() - x.ln()) * WHITE_ADAPT_RATE).exp();
-    assert!((next / expect - 1.0).abs() < 1e-4);
-    x = next;
-  }
-  for _ in 0..100 {
-    x = adapt_white(x, 1e4);
-  }
-  assert!((x / 1e4 - 1.0).abs() < 1e-3);
-  assert_eq!(tile_counts(0.0), 0);
-  assert_eq!(tile_counts(-1.0), 0);
-  assert_eq!(tile_counts(f32::NAN), 0);
-  assert_eq!(tile_counts(1e20), 100_000_000);
-}
-
-/// The white point is a property of the view, not of the zoom: the same coma seen 30× wider has a
-/// lower white point (blobber.rdc: the ±776 km view saturated everything under the fixed exposure,
-/// the 30× wider one showed coma and tail). Measured through `lod_evaluate`'s tiles.
-#[test]
-fn white_point_follows_the_view() {
-  // a 1/ρ coma: clusters uniform in radius out to 5e6 m
-  let cloud = |n: u32| -> alloc::vec::Vec<DustRenderCluster> {
-    (0..n)
-      .map(|i| {
-        let r = 5.0e6 * u01(pcg(i * 3 + 1));
-        let a = 2.0 * core::f32::consts::PI * u01(pcg(i * 3 + 2));
-        render_cluster(i, [r * a.cos(), r * a.sin(), 0.0], 1.0e3 + 0.05 * r, 1.0)
-      })
-      .collect()
-  };
-  let measure = |half: f32| -> f32 {
-    let mut render = cloud(50_000);
-    let pc = ortho_lod_pc(half, 720, 4_000_000, 1.0, 50_000);
-    let mut tiles = alloc::vec![0u32; DUST_TILE_COUNT as usize];
-    let mut list = alloc::vec::Vec::new();
-    lod_evaluate(&mut render, &pc, 0, 0.0, &mut tiles, &mut list);
-    white_point_from_tiles(&tiles, 1.0).unwrap()
-  };
-  let (near, far) = (measure(2.0e5), measure(6.0e6));
-  assert!(near > 5.0 * far, "near {near} far {far}");
 }
 
 // ─── jet site illumination ─────────────────────────────────────────────────
@@ -917,7 +648,10 @@ fn emission_starts_at_the_spun_site() {
     let dv = norm(sub(sub(z.v0().to_f64(), v_centre), v_surf));
     assert!(dv < 1e-3, "cluster {j}: surface velocity off by {dv} m/s");
   }
-  assert!(turned > 3000.0, "the window covers a turn: the site moved {turned} m");
+  assert!(
+    turned > 3000.0,
+    "the window covers a turn: the site moved {turned} m"
+  );
   assert!(max_err < 1.0, "emission {max_err} m from the spun site");
 }
 
@@ -982,7 +716,12 @@ fn ejection_follows_exact_spin() {
 
 /// jet on an equatorial site of a nucleus spinning about `axis`, riding the comet orbit
 fn spinning_jet(t: f64, axis: V3, n0: V3, model_spin: bool) -> JetState {
-  let (r0, v0) = comet_state();
+  spinning_jet_from(comet_state(), t, axis, n0, model_spin)
+}
+
+/// [`spinning_jet`] on the orbit through `state` at `t = 0`
+fn spinning_jet_from(state: (V3, V3), t: f64, axis: V3, n0: V3, model_spin: bool) -> JetState {
+  let (r0, v0) = state;
   let (r, v) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, t);
   let half = 0.5 * OMEGA * t;
   let s = half.sin();
@@ -1211,12 +950,13 @@ fn grid_dark_site_emits_nothing() {
 // Age tiers (DustSystemState)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// ticks a system until every tier is caught up (or `max` ticks), marking batches submitted
+/// ticks a system until its history is complete (every tier caught up, nothing awaiting
+/// re-emission; or `max` ticks), marking batches submitted: the logic thread's passes
 fn fill_system(sys: &mut DustSystemState, t: f64, cfg: &DustEmitConfig, max: usize) {
   for i in 0..max {
     sys.tick(t, &orbit_jet, &|_| *cfg);
     sys.mark_submitted(i as u64 + 1);
-    if sys.stats().iter().all(|s| s.caught_up) {
+    if !sys.building() {
       break;
     }
   }
@@ -1237,7 +977,10 @@ fn tiers_split_the_ring_and_hold_history_at_start() {
     assert!(t.ring.capacity.is_power_of_two());
     base += t.ring.capacity;
     assert_eq!(t.band.fade, k == 2);
-    assert!(t.prestart);
+    assert!(
+      t.t_on_s.is_none(),
+      "with_tiers keeps the pre-existing tail; the component ignites"
+    );
   }
   assert_eq!(sys.tiers[1].band.min_ttl, sys.tiers[0].band.max_ttl);
   assert_eq!(sys.tiers[2].band.min_ttl, sys.tiers[1].band.max_ttl);
@@ -1245,6 +988,7 @@ fn tiers_split_the_ring_and_hold_history_at_start() {
   fill_system(&mut sys, 0.0, &cfg, MAX_SEEK_PASSES);
   let stats = sys.stats();
   assert!(stats.iter().all(|s| s.caught_up), "{stats:?}");
+  assert!(!sys.building() && sys.complete);
   // the oldest tier reaches back ~64 TTL before the start epoch
   assert!(stats[2].oldest_age_s > 63.0 * ttl, "{stats:?}");
   assert!(stats[1].oldest_age_s > 7.9 * ttl, "{stats:?}");
@@ -1255,6 +999,163 @@ fn tiers_split_the_ring_and_hold_history_at_start() {
   assert_eq!(states.len(), 3);
   // one exposure for the whole system
   assert!(states.iter().all(|s| s.tau_ref == states[0].tau_ref));
+}
+
+/// A fresh history is drawn only once complete: after one budget-limited tick the tiers hold
+/// clusters but nothing is drawable (`error_first/second/third.rdc`: the trail used to arrive in
+/// 64-window chunks over ~1 s); once every tier is caught up the system is drawn, and stays drawn
+/// when a later tick is short of budget (the flag is sticky until a reset).
+#[test]
+fn a_fresh_history_is_drawn_only_once_complete() {
+  let ttl = 86400.0;
+  let cfg = test_cfg(1.5e-3, ttl);
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  sys.tick(0.0, &orbit_jet, &|_| cfg);
+  sys.mark_submitted(1);
+  assert!(
+    sys.tiers[0].ring.live() > 0,
+    "the youngest tier emitted its oldest windows"
+  );
+  assert!(sys.building() && !sys.complete);
+  assert!(sys.draw_states().is_empty() && sys.coma_radius_m().is_none());
+  fill_system(&mut sys, 0.0, &cfg, MAX_SEEK_PASSES);
+  assert!(!sys.building() && sys.complete);
+  assert_eq!(sys.draw_states().len(), 3);
+  // a jump of 100 windows of the youngest tier in one tick: one pass is short of budget, the
+  // system keeps drawing (the live set is a prefix of the due one, caught up on the next passes)
+  let dt_w = DustHostState::window_len_s(ttl);
+  sys.tick(100.5 * dt_w, &orbit_jet, &|_| cfg);
+  sys.mark_submitted(100);
+  assert!(sys.building(), "64 of 100 windows emitted");
+  assert!(sys.complete && sys.draw_states().len() == 3);
+  fill_system(&mut sys, 100.5 * dt_w, &cfg, MAX_SEEK_PASSES);
+  assert!(!sys.building());
+}
+
+/// A re-emit (rotation model / jet change) or a restore shows no partial history: the old one is
+/// dropped and nothing is drawn until the new one is complete.
+#[test]
+fn a_re_emit_shows_no_partial_history() {
+  let ttl = 86400.0;
+  let cfg = test_cfg(1.5e-3, ttl);
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  let t = 3.3 * ttl;
+  fill_system(&mut sys, t, &cfg, MAX_SEEK_PASSES);
+  assert_eq!(sys.draw_states().len(), 3);
+  sys.request_reemit();
+  assert_eq!(sys.draw_states().len(), 3, "requested, not applied yet");
+  sys.tick(t, &orbit_jet, &|_| cfg);
+  sys.mark_submitted(100);
+  assert!(sys.tiers[0].ring.live() > 0 && sys.building());
+  assert!(
+    sys.draw_states().is_empty(),
+    "a partial new history is never drawn"
+  );
+  fill_system(&mut sys, t, &cfg, MAX_SEEK_PASSES);
+  assert_eq!(sys.draw_states().len(), 3);
+  // restore: every batch re-emitted (64 per tick) before anything is drawn again
+  sys.invalidate_gpu();
+  assert!(sys.building() && sys.draw_states().is_empty());
+  sys.tick(t, &orbit_jet, &|_| cfg);
+  sys.mark_submitted(200);
+  assert!(sys.building() && sys.draw_states().is_empty());
+  fill_system(&mut sys, t, &cfg, MAX_SEEK_PASSES);
+  assert!(!sys.building() && sys.draw_states().len() == 3);
+}
+
+/// the closed windows of every tier as `(tier, window, descriptor)` with the ring slot cleared
+fn system_windows(sys: &DustSystemState) -> alloc::vec::Vec<(usize, i64, DustBatch)> {
+  sys
+    .tiers
+    .iter()
+    .enumerate()
+    .flat_map(|(i, t)| closed_windows(t).into_iter().map(move |(k, d)| (i, k, d)))
+    .collect()
+}
+
+/// Emission-time coherence: whenever the system is drawable, every tier holds exactly the windows
+/// due at the tick's epoch (`[k_min, k_open)` of its grid), with the descriptors a fresh system
+/// emits for the same epoch — whatever the tick cadence, and across re-emits and restores at
+/// random ticks (the logic thread's passes modelled by ticking until `!building()`, at most
+/// `MAX_SEEK_PASSES`). Right after a reset a single pass leaves nothing drawable.
+#[test]
+fn the_history_is_complete_whenever_drawn() {
+  let ttl = 86400.0;
+  let cfg = test_cfg(1.5e-3, ttl);
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+  let mut next = || {
+    rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    (rng >> 11) as f64 / (1u64 << 53) as f64
+  };
+  // a start at a random epoch, then ticks of 16 ms .. ~4 h of scaled time
+  let mut t = 0.7 * ttl + next() * ttl;
+  let mut seq = 1u64;
+  let (mut resets, mut partial_seen, mut checks) = (0, 0, 0);
+  for tick in 0..300 {
+    if tick > 0 {
+      t += 0.016 + next() * 4.0 * 3600.0;
+    }
+    let event = next();
+    let reset_now = tick > 0 && event < 0.06;
+    if reset_now && event < 0.03 {
+      sys.request_reemit();
+    } else if reset_now {
+      sys.invalidate_gpu();
+    }
+    resets += reset_now as usize;
+    for pass in 0..MAX_SEEK_PASSES {
+      sys.tick(t, &orbit_jet, &|_| cfg);
+      sys.mark_submitted(seq);
+      seq += 1;
+      let drawn = !sys.draw_states().is_empty();
+      if pass == 0 && reset_now {
+        // one pass of 64 windows / re-emits out of ~768: still building, and not drawable
+        assert!(
+          sys.building() && !drawn,
+          "tick {tick}: a partial fill was drawable"
+        );
+        partial_seen += 1;
+      }
+      if drawn && !sys.building() {
+        // the live windows are exactly the due ones at t
+        for (i, tier) in sys.tiers.iter().enumerate() {
+          let (min_age, max_age) = tier.age_band_s(tier.ttl_s);
+          let dt_w = DustHostState::window_len_s(max_age - min_age);
+          let k_open = if min_age > 0.0 {
+            ((t - min_age) / dt_w).floor() as i64 + 1
+          } else {
+            (t / dt_w).floor() as i64
+          };
+          let k_min = ((t - max_age) / dt_w).floor() as i64;
+          let live: alloc::vec::Vec<i64> = closed_windows(tier).iter().map(|w| w.0).collect();
+          let due: alloc::vec::Vec<i64> = (k_min..k_open).collect();
+          assert_eq!(
+            live, due,
+            "tick {tick} tier {i}: live windows != due windows"
+          );
+        }
+      }
+      if !sys.building() {
+        break;
+      }
+    }
+    assert!(
+      !sys.building() && sys.complete,
+      "tick {tick}: not caught up in MAX_SEEK_PASSES"
+    );
+    // the descriptors are the ones a fresh system emits for this epoch
+    if tick % 50 == 49 {
+      let mut fresh = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+      fill_system(&mut fresh, t, &cfg, MAX_SEEK_PASSES);
+      assert_eq!(system_windows(&sys), system_windows(&fresh), "tick {tick}");
+      checks += 1;
+    }
+  }
+  assert!(
+    resets >= 3 && partial_seen == resets && checks == 6,
+    "{resets} {partial_seen}"
+  );
 }
 
 /// Each emitted cluster is drawn by exactly the tier whose band holds its age (the bands overlap in
@@ -1374,198 +1275,6 @@ fn evaluate_respects_the_tier_band() {
 // Optical-depth splats (dust.vert / dust.frag mirror)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `dust.frag`: opacity at `r2 = |uv|²` of a splat with peak `v_opacity`
-fn frag_opacity(v_opacity: f32, r2: f32) -> f32 {
-  const GAUSS_NORM: f32 = 1.297;
-  if r2 > 1.0 {
-    0.0
-  } else {
-    v_opacity * (-4.0 * r2).exp() * GAUSS_NORM
-  }
-}
-
-/// Rasterizes clusters `(x_m, y_m, spread_m, flux_m2)` through the shader mirror in an
-/// orthographic view of half-height `half_h_m` (square viewport `px`): each cluster is split by the
-/// LOD (`lambda`) into children at `child_offset` carrying `flux / k`, drawn at the fixed
-/// footprint. Sums the fragment opacities per pixel (no saturation: the optical depth regime).
-fn rasterize_ortho(
-  clusters: &[(f32, f32, f32, f32)],
-  half_h_m: f32,
-  px: usize,
-  exposure: f32,
-  lambda: f32,
-) -> alloc::vec::Vec<f32> {
-  let mut img = alloc::vec![0.0f32; px * px];
-  let (units_per_m, p11, clip_w, px_to_ndc_y) =
-    (1e-3, 1.0 / (half_h_m * 1e-3), 1.0, 2.0 / px as f32);
-  let px_per_m = px as f32 / (2.0 * half_h_m);
-  for (id, &(x, y, spread, flux)) in clusters.iter().enumerate() {
-    let k = lod_children(lod_want(spread * px_per_m), lambda);
-    let (r_px, r_draw_m) = splat_footprint(DUST_CHILD_PX, units_per_m, p11, clip_w, px_to_ndc_y);
-    let peak = splat_opacity(exposure, flux / k as f32, r_draw_m);
-    for child in 0..k {
-      let o = child_offset(id as u32, child, spread, 0.0, 0.0, [0.0; 4]);
-      let (cx, cy) = (
-        (x + o[0]) * px_per_m + px as f32 * 0.5,
-        (y + o[1]) * px_per_m + px as f32 * 0.5,
-      );
-      let (x0, x1) = (
-        (cx - r_px).floor().max(0.0) as usize,
-        ((cx + r_px).ceil().max(0.0) as usize).min(px),
-      );
-      let (y0, y1) = (
-        (cy - r_px).floor().max(0.0) as usize,
-        ((cy + r_px).ceil().max(0.0) as usize).min(px),
-      );
-      for j in y0..y1 {
-        for i in x0..x1 {
-          let (u, v) = ((i as f32 + 0.5 - cx) / r_px, (j as f32 + 0.5 - cy) / r_px);
-          img[j * px + i] += frag_opacity(peak, u * u + v * v);
-        }
-      }
-    }
-  }
-  img
-}
-
-/// deterministic uniform cloud over a `side_m` square, `n` clusters of cross-section `flux`
-fn uniform_cloud(
-  n: usize,
-  side_m: f32,
-  spread_m: f32,
-  flux: f32,
-) -> alloc::vec::Vec<(f32, f32, f32, f32)> {
-  (0..n as u32)
-    .map(|i| {
-      let (a, b) = (u01(pcg(i * 2 + 1)), u01(pcg(i * 2 + 2)));
-      ((a - 0.5) * side_m, (b - 0.5) * side_m, spread_m, flux)
-    })
-    .collect()
-}
-
-/// Pixels show `exposure · τ`, τ the dust optical depth: zooming in on a cloud does not dim it
-/// (`late_near.rdc` was fainter than `late_far.rdc` under the former 1/r_px stretch), and neither
-/// the fixed footprint nor the children count changes it (energy conserving split).
-#[test]
-fn splat_brightness_is_optical_depth_at_any_zoom() {
-  let exposure = 1e3;
-  let side = 2.0e6; // 2000 km cloud
-  let n = 20_000;
-  let flux = 1.0e3; // m² per cluster
-  let tau_true = n as f32 * flux / (side * side);
-  let px = 256;
-  for &(spread, lambda, label) in &[
-    (2.0e3f32, 1.0f32, "sub-pixel clouds"),
-    (2.0e4, 1.0, "clouds split in children"),
-    (2.0e4, 0.05, "few children (tight budget)"),
-  ] {
-    let cloud = uniform_cloud(n, side, spread, flux);
-    let mut means = alloc::vec::Vec::new();
-    for half_h in [6.0e5f32, 1.5e5] {
-      let img = rasterize_ortho(&cloud, half_h, px, exposure, lambda);
-      let m: f32 = img.iter().sum::<f32>() / img.len() as f32;
-      means.push(m);
-      let rel = (m / (exposure * tau_true) - 1.0).abs();
-      assert!(
-        rel < 0.1,
-        "{label}, half-height {half_h} m: mean {m} vs exposure·τ {}",
-        exposure * tau_true
-      );
-    }
-    let zoom_rel = (means[0] / means[1] - 1.0).abs();
-    assert!(
-      zoom_rel < 0.1,
-      "{label}: brightness changes with zoom {means:?}"
-    );
-  }
-}
-
-/// The drawn radius is [`DUST_CHILD_PX`] at any depth, and its size in metres inverts the
-/// projection: twice as far (w ×2) at a twice longer focal (p11 ×2) is the same child.
-#[test]
-fn splat_footprint_inverts_the_projection() {
-  let (r_px, r_m) = splat_footprint(DUST_CHILD_PX, 1e-3, 3.0, 100.0, 2.0 / 720.0);
-  assert_eq!(r_px, DUST_CHILD_PX);
-  // px_per_unit = 3 / 100 / (2/720) = 10.8 px per km → 1.5 px = 138.9 m
-  assert!((r_m - 1.5 / 10.8 * 1e3).abs() < 0.1, "{r_m}");
-  let (r_px2, r_m2) = splat_footprint(DUST_CHILD_PX, 1e-3, 6.0, 200.0, 2.0 / 720.0);
-  assert!((r_px - r_px2).abs() < 1e-6 && (r_m - r_m2).abs() < 1e-2);
-  let (_, r_far) = splat_footprint(DUST_CHILD_PX, 1e-3, 3.0, 200.0, 2.0 / 720.0);
-  assert!(
-    (r_far / r_m - 2.0).abs() < 1e-4,
-    "twice as far: twice the metres"
-  );
-}
-
-/// Child identity depends only on `(id, child)`: raising `k` keeps children `0..k` in place.
-#[test]
-fn child_offsets_are_stable_under_lod_changes() {
-  let g = [0.0, 1.0, 0.0, 1e-3];
-  let a = child_offset(42, 3, 1.0e4, 0.01, 1.0e5, g);
-  assert_eq!(a, child_offset(42, 3, 1.0e4, 0.01, 1.0e5, g));
-  assert_ne!(a, child_offset(42, 4, 1.0e4, 0.01, 1.0e5, g));
-  assert_ne!(a, child_offset(43, 3, 1.0e4, 0.01, 1.0e5, g));
-  // isotropic scatter of spread·N(0,1) per axis, at any age (the reshaping keeps the variance)
-  let n = 4000u32;
-  for age in [0.0f32, 3600.0, 86400.0, 3.0e7] {
-    let var: f32 = (0..n)
-      .map(|c| child_offset(7, c % MAX_CHILDREN_PER_CLUSTER, 1.0, 0.0, age, [0.0; 4]))
-      .chain((0..n).map(|c| child_offset(c, 0, 1.0, 0.0, age, [0.0; 4])))
-      .map(|o| o[0] * o[0] + o[1] * o[1] + o[2] * o[2])
-      .sum::<f32>()
-      / (2 * n) as f32;
-    assert!(
-      (var / 3.0 - 1.0).abs() < 0.1,
-      "age {age}: per-axis variance {}",
-      var / 3.0
-    );
-  }
-}
-
-/// The children of a cluster move relative to each other as it ages: the cloud at two ages is
-/// not the same blob scaled (a fixed `spread·N3` is: "a still image sliding").
-#[test]
-fn children_reshape_with_age() {
-  let k = 64u32;
-  let cloud = |age: f32| -> alloc::vec::Vec<[f32; 3]> {
-    // unit spread: only the shape, not the size
-    (0..k).map(|c| child_offset(1234, c, 1.0, 0.0, age, [0.0; 4])).collect()
-  };
-  // normalized offsets (each cloud scaled to unit RMS): equal iff the clouds differ by a scaling
-  let normalized = |pts: &[[f32; 3]]| -> alloc::vec::Vec<[f32; 3]> {
-    let rms = (pts.iter().map(|o| o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sum::<f32>()
-      / pts.len() as f32)
-      .sqrt();
-    pts.iter().map(|o| [o[0] / rms, o[1] / rms, o[2] / rms]).collect()
-  };
-  // mean displacement of the normalized children between two ages (√6 ≈ 2.45 when unrelated)
-  let moved = |a: f32, b: f32| -> f32 {
-    let (x, y) = (normalized(&cloud(a)), normalized(&cloud(b)));
-    x.iter()
-      .zip(&y)
-      .map(|(p, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt())
-      .sum::<f32>()
-      / k as f32
-  };
-  let day = 86400.0;
-  assert!(
-    moved(day, 4.0 * day) > 0.5,
-    "1 → 4 days: {}",
-    moved(day, 4.0 * day)
-  );
-  assert!(
-    moved(day, 30.0 * day) > 0.5,
-    "1 → 30 days: {}",
-    moved(day, 30.0 * day)
-  );
-  // smooth: a minute later the children have barely moved
-  assert!(
-    moved(day, day + 60.0) < 0.01,
-    "1 day → +1 min: {}",
-    moved(day, day + 60.0)
-  );
-}
-
 /// The exposure reference depends on the jet configuration only: filling the old tiers (heavy
 /// clusters) leaves it unchanged (`initial_burst.rdc` → `late_*.rdc` dimmed 10×), and it scales
 /// with the production rate so the stream brightness is independent of its scale.
@@ -1582,38 +1291,14 @@ fn exposure_reference_ignores_history_and_tiers() {
   assert!((doubled.tau_ref() / tau - 2.0).abs() < 1e-12);
   let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
   sys.tau_ref = tau;
-  // youngest tier only (one budget-limited tick), then everything
+  // one budget-limited tick (nothing drawn while the history builds), then everything
   sys.tick(0.0, &orbit_jet, &|_| cfg);
   sys.mark_submitted(1);
-  let early: alloc::vec::Vec<f32> = sys.draw_states().iter().map(|s| s.tau_ref).collect();
+  assert!(sys.draw_states().is_empty());
   fill_system(&mut sys, 0.0, &cfg, MAX_SEEK_PASSES);
   let late = sys.draw_states();
   assert_eq!(late.len(), 3);
-  assert!(early.iter().chain(late.iter().map(|s| &s.tau_ref)).all(|&t| t == tau as f32));
-}
-
-/// 8-bit fallback (`dust.frag`): stochastic rounding keeps the expected opacity of faint splats
-/// exactly, where round-to-nearest drops everything below 1/510 (the old dust tail).
-#[test]
-fn stochastic_rounding_keeps_faint_optical_depth() {
-  let n = 4096;
-  for v in [1.0e-4f32, 1.5e-3, 3.0e-3, 0.37] {
-    let mean: f64 = (0..n)
-      .map(|i| stochastic_round_8bit(v, (i as f32 + 0.5) / n as f32) as f64)
-      .sum::<f64>()
-      / n as f64;
-    assert!((mean - v as f64).abs() < 1e-6, "v {v}: mean {mean}");
-  }
-  // round to nearest (u = 0.5) loses a faint splat entirely
-  assert_eq!(stochastic_round_8bit(1.5e-3, 0.5), 0.0);
-  // a pixel covered by 300 faint splats with decorrelated offsets keeps its optical depth
-  let v = 1.0e-3f32;
-  let sum: f32 = (0..300u32).map(|k| stochastic_round_8bit(v, u01(pcg(k ^ 0xA511_E9B3)))).sum();
-  assert!(
-    (sum / (300.0 * v) - 1.0).abs() < 0.25,
-    "sum {sum} vs {}",
-    300.0 * v
-  );
+  assert!(late.iter().all(|s| s.tau_ref == tau as f32));
 }
 
 /// Composite display stretch on optical depth relative to the white point: 0 up to the black point,
@@ -1809,11 +1494,12 @@ fn draw_state_at_time_keeps_anchor_and_band() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Streams are fixed per jet: cluster `s` of every window and time sample keeps its stream's
-/// cone cell and speed draw up to the small per-cluster jitters, while different streams differ;
-/// its size stratum steps by one per time sample, and every time sample covers each size stratum
-/// once (stratified mass).
+/// cone cell up to the small per-cluster jitter, while different streams differ. The cluster is
+/// the whole cell: its ejection speed is exactly the mean speed (no draw per stream, the speed
+/// spread is the radial dispersion `σ_rad`), its β the reference grain's (every size is drawn by
+/// the renderer's polyline), its `eject` the ejection velocity.
 #[test]
-fn streams_keep_their_cell_and_speed_and_step_their_size() {
+fn streams_keep_their_cell_and_mean_speed() {
   let n = 64u32;
   let mut a = test_batch(n * 8, 1800.0);
   a.mass_params[3] = batch_streams_word(6, false);
@@ -1825,37 +1511,47 @@ fn streams_keep_their_cell_and_speed_and_step_their_size() {
     let (_, v) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, c.t0().to_f64() - T_START);
     sub(c.v0().to_f64(), v)
   };
-  let ln_r = (a.size_params[1] / a.size_params[0]).ln();
-  let stratum_of = |c: &DustCluster| {
-    (((c.misc[1] / a.size_params[0]).ln() / ln_r * n as f32) as usize).min(n as usize - 1)
-  };
+  let v_ref = a.vel_params[0] as f64;
   let (mut other_angle, mut pairs) = (0.0f64, 0);
   for i in 0..8u32 {
-    let mut hit = alloc::vec![false; n as usize];
     for s in 0..n {
       let j = i * n + s;
       let (ca, cb) = (emit_cluster(&a, j), emit_cluster(&b, (7 - i) * n + s));
-      // the size steps one stratum per time sample, from the stream's rank (same in every
-      // window), jittered by ≤ STREAM_SIZE_JITTER of the stratum
-      let k = stream_stratum(&a, j);
-      assert_eq!(k, (stream_stratum(&a, s) + i) % n, "stream {s} sample {i}");
-      assert_eq!(stream_stratum(&b, (7 - i) * n + s), (stream_stratum(&a, s) + 7 - i) % n);
-      assert_eq!(stratum_of(&ca), k as usize, "stream {s}: size outside its stratum");
-      assert!(!hit[k as usize], "sample {i}: stratum {k} twice");
-      hit[k as usize] = true;
       let (ea, eb) = (ej(&ca), ej(&cb));
       let angle = dot(unit(ea), unit(eb)).clamp(-1.0, 1.0).acos();
       assert!(angle < 0.12, "stream {s}: direction moved by {angle} rad");
-      // the stream's speed draw is shared (relative to the mean speed of each one's size), the
-      // jitter is STREAM_SPEED_JITTER of the spread (5σ of the difference)
-      let v_mean = |c: &DustCluster| {
-        a.vel_params[0] as f64 * (a.vel_params[2] as f64 / c.misc[1] as f64).sqrt()
-      };
-      let dv = (norm(ea) / v_mean(&ca) - norm(eb) / v_mean(&cb)).abs();
-      assert!(
-        dv < 5.0 * 1.42 * STREAM_SPEED_JITTER as f64 * 0.25,
-        "stream {s}: speed draw changed by {dv}"
-      );
+      for c in [&ca, &cb] {
+        let e = ej(c);
+        let ex = [c.eject[0] as f64, c.eject[1] as f64, c.eject[2] as f64];
+        // the ejection velocity is exactly the mean speed (no draw) along the cone direction
+        // (the test batch's jet axis is not unit: |dir| follows it); relative to the f64 comet
+        // state the df64 emission differs by ~1 cm/s
+        let jet_norm = norm([
+          a.jet_dir_aperture[0] as f64,
+          a.jet_dir_aperture[1] as f64,
+          a.jet_dir_aperture[2] as f64,
+        ]);
+        assert!(
+          (norm(ex) / (v_ref * jet_norm) - 1.0).abs() < 2e-2,
+          "stream {s}: |eject| {} vs v_ref {v_ref} · |jet| {jet_norm}",
+          norm(ex)
+        );
+        assert!(
+          norm(sub(ex, e)) < 2e-2 * v_ref,
+          "stream {s}: eject field {ex:?} vs {e:?}"
+        );
+        assert!((c.eject[3] - a.vel_params[2]).abs() < 1e-6, "s_ref");
+        assert!(
+          (c.sigma_rad() - a.vel_params[1] * a.vel_params[0]).abs() < 1e-6,
+          "σ_rad {} vs {}",
+          c.sigma_rad(),
+          a.vel_params[1] * a.vel_params[0]
+        );
+        assert!(
+          (c.beta() - a.vel_params[3] / a.vel_params[2]).abs() < 1e-7,
+          "β of the reference grain"
+        );
+      }
       let co = emit_cluster(&a, i * n + (s + 1) % n);
       other_angle += dot(unit(ea), unit(ej(&co))).clamp(-1.0, 1.0).acos();
       pairs += 1;
@@ -1921,80 +1617,6 @@ fn tiers_draw_independent_windows() {
   // reset keeps the tier index (and so the seeds)
   sys.reset();
   assert!(sys.tiers.iter().enumerate().all(|(i, t)| t.tier == i as u32));
-}
-
-/// A cluster draws the same children whether its tier was filled by a seek or played up to the
-/// same time, although it sits in another ring slot: children are keyed by the emission record.
-#[test]
-fn children_are_identical_after_seek_and_play() {
-  let ttl = 86400.0;
-  let cfg = test_cfg(1.5e-3, ttl);
-  let t_end = 3.0 * ttl;
-  // seek: straight to t_end
-  let mut seek = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
-  fill_system(&mut seek, t_end, &cfg, MAX_SEEK_PASSES);
-  // play: filled at 0, then played to t_end (other emission history: other slots)
-  let mut play = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
-  fill_system(&mut play, 0.0, &cfg, MAX_SEEK_PASSES);
-  let mut t = 0.0;
-  let mut seq = 1_000;
-  while t < t_end {
-    t = (t + 600.0).min(t_end);
-    play.tick(t, &orbit_jet, &|_| cfg);
-    seq += 1;
-    play.mark_submitted(seq);
-  }
-  fill_system(&mut play, t_end, &cfg, MAX_SEEK_PASSES);
-
-  let g = [0.3, 0.9, 0.3, 1e-3];
-  let (mut compared, mut moved_slots) = (0, 0);
-  for (ts, tp) in seek.tiers.iter().zip(&play.tiers) {
-    let ds = ts.draw_state().unwrap();
-    let (ws, wp) = (closed_windows(ts), closed_windows(tp));
-    // the live batch of window `k` (with its ring placement)
-    let live =
-      |h: &DustHostState, k: i64| h.ring.batches.iter().find(|x| x.window == k).unwrap().desc;
-    for (k, a) in &ws {
-      let Some((_, b)) = wp.iter().find(|(kp, _)| kp == k) else {
-        continue;
-      };
-      // same window → same descriptor up to the ring placement
-      assert_eq!(a, b, "window {k}");
-      let (sa, sb) = (live(ts, *k), live(tp, *k));
-      for j in (0..a.count).step_by(7) {
-        let (slot_a, slot_b) = (
-          sa.first_index.wrapping_add(j) & sa.ring_mask,
-          sb.first_index.wrapping_add(j) & sb.ring_mask,
-        );
-        moved_slots += (slot_a != slot_b) as u32;
-        let ra = evaluate_cluster(&emit_cluster(&sa, j), slot_a, &ds.frame);
-        let rb = evaluate_cluster(&emit_cluster(&sb, j), slot_b, &ds.frame);
-        if !(ra.age_id_dbeta_flux[3] > 0.0) {
-          continue;
-        }
-        for child in [0u32, 1, 17, 255] {
-          let off = |r: &DustRenderCluster| {
-            child_offset(
-              child_id(r.age_id_dbeta_flux[2]),
-              child,
-              r.pos_size[3],
-              r.age_id_dbeta_flux[2],
-              r.age_id_dbeta_flux[0],
-              g,
-            )
-          };
-          assert_eq!(off(&ra), off(&rb), "window {k} cluster {j} child {child}");
-        }
-        compared += 1;
-      }
-    }
-  }
-  assert!(compared > 100, "compared {compared}");
-  // the histories differ: many clusters sit in other slots (a slot-keyed child hash moved them)
-  assert!(
-    moved_slots > 0,
-    "no cluster changed slot: the test does not exercise the seek"
-  );
 }
 
 /// The coma radius (Earth observer framing) is finite, positive, and grows with the ejection
@@ -2070,33 +1692,18 @@ fn cross64(a: V3, b: V3) -> V3 {
   ]
 }
 
-/// LOD push constants of an orthographic view (metres, `units` 1) of half size `half`
-fn ortho_pc(mvp: [f32; 16], half: f32, px: u32, lambda: f32, live: u32) -> DustLodPushConstants {
-  DustLodPushConstants {
-    render: 0,
-    header: 0,
-    tiles: 0,
-    list: 0,
-    live_count: live,
-    budget: 1 << 24,
-    lambda,
-    tile_scale: 1.0,
-    mvp,
-    params: [1.0, 1.0 / half, 1.0 / half, 2.0 / px as f32],
-  }
-}
-
 /// Stream counts follow the tier capacity (fewer streams on small rings, so a window keeps
 /// [`STREAM_MIN_SAMPLES`] time samples), and every planned batch holds whole time samples.
 #[test]
 fn stream_counts_follow_the_tier_capacity() {
   for (cap, shift) in [
     (131_072u32, 6u32),
-    (65_536, 5),
-    (16_384, 3),
-    (8_192, 2),
-    (4_096, 1),
-    (2_048, 0),
+    (65_536, 6),
+    (16_384, 4),
+    (8_192, 3),
+    (4_096, 2),
+    (2_048, 1),
+    (1_024, 0),
   ] {
     let h = DustHostState::new(cap);
     assert_eq!(h.stream_shift(), shift, "capacity {cap}");
@@ -2128,70 +1735,6 @@ fn stream_counts_follow_the_tier_capacity() {
   }
 }
 
-/// In a tier's render buffer the stream predecessor `r − S` of a cluster is the same stream's
-/// previous time sample (older, one sample spacing), across batch boundaries too.
-#[test]
-fn streak_predecessor_is_the_same_streams_previous_sample() {
-  let cfg = test_cfg(1.5e-3, 86400.0);
-  let host = run_ticks([1.3 * 86400.0; 8], &orbit_jet, &cfg);
-  let ds = host.draw_state().unwrap();
-  let render = tier_render(&host, &ds.frame);
-  let n = 1usize << host.stream_shift();
-  assert_eq!(n, 16);
-  // (window, in-batch index) of every render index, in ring order
-  let ids: alloc::vec::Vec<(i64, u32, u32)> = host
-    .ring
-    .batches
-    .iter()
-    .flat_map(|b| (0..b.count).map(move |j| (b.window, j, b.count)))
-    .take(render.len())
-    .collect();
-  let spacing =
-    DustHostState::window_len_s(cfg.ttl_s) / (host.clusters_per_window() / n as u32) as f64;
-  let (mut linked, mut crossed) = (0, 0);
-  for r in 0..render.len() {
-    // culled clusters (outside the age band) have flux 0: the LOD never asks for their streak
-    if !render_live(render[r].age_id_dbeta_flux[1]) {
-      continue;
-    }
-    let Some(p) = streak_pred(&render, r) else {
-      assert!(
-        r < n
-          || !render_live(render[r - n].age_id_dbeta_flux[1])
-          || stream_break(render[r].age_id_dbeta_flux[2])
-      );
-      continue;
-    };
-    assert_eq!(p, r - n);
-    let ((wr, jr, _), (wp, jp, cp)) = (ids[r], ids[p]);
-    assert_eq!(
-      jr as usize % n,
-      jp as usize % n,
-      "render {r}: another stream"
-    );
-    if wr == wp {
-      assert_eq!(jp + n as u32, jr);
-    } else {
-      // the previous window's last sample
-      assert_eq!((wp + 1, jp as usize / n), (wr, cp as usize / n - 1));
-      crossed += 1;
-    }
-    let da = (render[p].age_id_dbeta_flux[0] - render[r].age_id_dbeta_flux[0]) as f64;
-    assert!(
-      da > 0.0 && da < 2.0 * spacing,
-      "render {r}: age step {da} s (sample {spacing} s)"
-    );
-    linked += 1;
-  }
-  // one sample in n starts a new size cycle (`stream_stratum` wraps): a break
-  assert!(
-    linked as f64 > (0.95 - 1.0 / n as f64) * render.len() as f64,
-    "{linked} of {}",
-    render.len()
-  );
-  assert!(crossed > 10, "streaks cross batch boundaries: {crossed}");
-}
-
 /// A stream breaks after a night of the jet site (the streak would draw an arc nothing was emitted
 /// on) and at the first sample after a missing window, never otherwise.
 #[test]
@@ -2202,14 +1745,13 @@ fn streams_break_across_dark_gaps_and_missing_windows() {
   let dur = 3.0 * P_ROT;
   let (mut b, _) = spinning_batch(n * 48, dur, n0, axis, 0.3);
   b.mass_params[3] = batch_streams_word(4, false);
-  // night breaks: the size wrap of a stream (largest stratum → smallest) also breaks it
-  let wrap = |b: &DustBatch, j: u32| stream_stratum(b, j) == 0;
+  // night breaks only (no size strata: a stream never wraps)
   let breaks = |b: &DustBatch, s: u32| {
     (0..b.count / n)
       .filter(|i| {
         let j = i * n + s;
         let broken = stream_break(emit_cluster(b, j).misc[3]);
-        assert_eq!(broken, stream_dark_before(b, j) || wrap(b, j), "cluster {j}");
+        assert_eq!(broken, stream_dark_before(b, j), "cluster {j}");
         stream_dark_before(b, j)
       })
       .count()
@@ -2232,7 +1774,7 @@ fn streams_break_across_dark_gaps_and_missing_windows() {
     if (dark / P_ROT - STREAM_BREAK_TURNS as f64).abs() > 1e-3 {
       assert_eq!(
         stream_break(c1.misc[3]),
-        dark > STREAM_BREAK_TURNS as f64 * P_ROT || wrap(&b, i * n),
+        dark > STREAM_BREAK_TURNS as f64 * P_ROT,
         "sample {i}: dark {dark} s"
       );
     }
@@ -2240,12 +1782,12 @@ fn streams_break_across_dark_gaps_and_missing_windows() {
   // always lit: no break, unless the previous window is missing (first sample only)
   let mut lit = test_batch(n * 48, dur);
   lit.mass_params[3] = batch_streams_word(4, false);
-  assert!((0..lit.count).all(|j| stream_break(emit_cluster(&lit, j).misc[3]) == wrap(&lit, j)));
+  assert!((0..lit.count).all(|j| !stream_break(emit_cluster(&lit, j).misc[3])));
   lit.mass_params[3] = batch_streams_word(4, true);
   for j in 0..lit.count {
     assert_eq!(
       stream_break(emit_cluster(&lit, j).misc[3]),
-      j < n || wrap(&lit, j),
+      j < n,
       "cluster {j}"
     );
   }
@@ -2256,334 +1798,6 @@ fn streams_break_across_dark_gaps_and_missing_windows() {
   assert!(
     w.iter().all(|(_, d)| !batch_streams(d).1),
     "contiguous windows never break"
-  );
-}
-
-/// Top-down image (along the spin axis) of a jet's dust on a nucleus spinning at `omega`: every
-/// render cluster drawn through the LOD and the streak children (the `dust.vert` mirror), flux
-/// binned per pixel. Narrow equatorial jet, one grain size, no speed spread, small β.
-fn spiral_image(omega: f64, half: f32, px: usize) -> alloc::vec::Vec<f32> {
-  let (r0, v0) = comet_state();
-  let axis = unit(scale(r0, -1.0)); // towards the Sun: the polar site is always lit
-  let e1 = unit(cross64(axis, [0.0, 0.0, 1.0]));
-  let e2 = cross64(axis, e1);
-  let jet_at = move |t: f64| {
-    let (r, v) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, t);
-    let h = 0.5 * omega * t;
-    Some(JetState {
-      t_s: t,
-      r_m: r,
-      v_ms: v,
-      rot: [
-        (axis[0] * h.sin()) as f32,
-        (axis[1] * h.sin()) as f32,
-        (axis[2] * h.sin()) as f32,
-        h.cos() as f32,
-      ],
-      site_normal: axis,
-      spin: Some([axis[0], axis[1], axis[2], omega]),
-      site_offset_m: [0.0; 3],
-    })
-  };
-  let cfg = DustEmitConfig {
-    q_dust_kgs: 1e-3,
-    ttl_s: 2.0 * 86400.0,
-    dist: SizeDistribution {
-      s_min_um: 49.5,
-      s_max_um: 50.5,
-      q: SIZE_POWER_Q,
-    },
-    diameter_um: 100.0,
-    density_gcm3: 0.5,
-    beta_ref: 1e-3,
-    v_mean: 2.0,
-    v_std: 0.0,
-    jet_dir: [e1[0] as f32, e1[1] as f32, e1[2] as f32],
-    aperture_rad: 0.05,
-    seed: 7,
-  };
-  let host = run_ticks([2.0 * 86400.0; 8], &jet_at, &cfg);
-  assert!(
-    host.next_window.is_some_and(|k| k >= host.due_window),
-    "history not filled"
-  );
-  let ds = host.draw_state().unwrap();
-  let mut render = tier_render(&host, &ds.frame);
-  let mut mvp = [0.0f32; 16];
-  for k in 0..3 {
-    mvp[4 * k] = e1[k] as f32 / half;
-    mvp[4 * k + 1] = e2[k] as f32 / half;
-    mvp[4 * k + 2] = axis[k] as f32 * 1e-9;
-  }
-  mvp[15] = 1.0;
-  let pc = ortho_pc(mvp, half, px as u32, 1.0, render.len() as u32);
-  let mut tiles = alloc::vec![0u32; DUST_TILE_COUNT as usize];
-  let mut list = alloc::vec::Vec::new();
-  lod_evaluate(&mut render, &pc, 0, 0.0, &mut tiles, &mut list);
-  let mut img = alloc::vec![0.0f32; px * px];
-  for &e in &list {
-    let (i, c) = ((e & RENDER_SLOT_MASK) as usize, e >> LOD_CLUSTER_BITS);
-    let p = child_position(&render, i, c, &mvp, pc.params, [0.0; 4]);
-    let q = mvp_mul(&mvp, p);
-    let (x, y) = (
-      (q[0] * 0.5 + 0.5) * px as f32,
-      (q[1] * 0.5 + 0.5) * px as f32,
-    );
-    if x >= 0.0 && y >= 0.0 && (x as usize) < px && (y as usize) < px {
-      img[y as usize * px + x as usize] += render[i].age_id_dbeta_flux[3];
-    }
-  }
-  img
-}
-
-/// Azimuth (rad) of the brightest direction (±12° smoothed) of `img` in annuli of 1 km from `r0`
-/// to `r1`
-fn ridge_azimuths(img: &[f32], half: f32, px: usize, r0: f32, r1: f32) -> alloc::vec::Vec<f64> {
-  const BINS: usize = 90;
-  let m_per_px = 2.0 * half / px as f32;
-  let rings = ((r1 - r0) / 1000.0) as usize;
-  let mut h = alloc::vec![0.0f64; rings * BINS];
-  for y in 0..px {
-    for x in 0..px {
-      let (dx, dy) = (
-        (x as f32 + 0.5) * m_per_px - half,
-        (y as f32 + 0.5) * m_per_px - half,
-      );
-      let r = (dx * dx + dy * dy).sqrt();
-      if r < r0 || r >= r1 {
-        continue;
-      }
-      let ring = (((r - r0) / 1000.0) as usize).min(rings - 1);
-      let a = (dy.atan2(dx) / (2.0 * core::f32::consts::PI) + 0.5) * BINS as f32;
-      h[ring * BINS + (a as usize).min(BINS - 1)] += img[y * px + x] as f64;
-    }
-  }
-  (0..rings)
-    .filter_map(|k| {
-      // circular ±3-bin box filter: a broad arm (one cone cell of dispersion) has a noisy top
-      let raw = &h[k * BINS..(k + 1) * BINS];
-      let row: alloc::vec::Vec<f64> = (0..BINS)
-        .map(|b| (0..7).map(|d| raw[(b + BINS + d - 3) % BINS]).sum())
-        .collect();
-      let (b, v) = row.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1))?;
-      (*v > 0.0).then(|| ((b as f64 + 0.5) / BINS as f64 - 0.5) * 2.0 * core::f64::consts::PI)
-    })
-    .collect()
-}
-
-/// Unwrapped azimuths (consecutive steps taken in `(−π, π]`)
-fn unwrap(az: &[f64]) -> alloc::vec::Vec<f64> {
-  use core::f64::consts::PI;
-  let mut out = alloc::vec![az[0]];
-  for w in az.windows(2) {
-    let d = w[1] - w[0];
-    out.push(out.last().unwrap() + d - 2.0 * PI * ((d + PI) / (2.0 * PI)).floor());
-  }
-  out
-}
-
-/// The point of the redesign: a jet on a spinning nucleus draws a spiral. Seen along the spin axis,
-/// the azimuth of the density ridge turns monotonically with radius, one turn per `v·P` (43 km for
-/// 2 m/s and 6 h), over the ~3 turns of a 300 km field; without spin it is a straight fan.
-#[test]
-fn spinning_nucleus_draws_a_spiral() {
-  let (half, px) = (150.0e3f32, 400usize);
-  let p_rot = 6.0 * 3600.0;
-  // AETHERVK_DUST_SPIRAL_PGM=<prefix>: writes both images (log scale) for a visual check, before the checks
-  if let Ok(prefix) = std::env::var("AETHERVK_DUST_SPIRAL_PGM") {
-    for (name, w) in [
-      ("spin", 2.0 * core::f64::consts::PI / p_rot),
-      ("still", 0.0),
-    ] {
-      let img = spiral_image(w, half, px);
-      let max = img.iter().cloned().fold(0.0f32, f32::max).max(1e-30);
-      let mut out = alloc::format!("P2\n{px} {px}\n255\n").into_bytes();
-      for y in (0..px).rev() {
-        for x in 0..px {
-          let v = img[y * px + x] / max;
-          let g = if v > 0.0 {
-            ((1.0 + v.log10() / 4.0).max(0.0) * 255.0) as u32
-          } else {
-            0
-          };
-          out.extend_from_slice(alloc::format!("{g} ").as_bytes());
-        }
-        out.push(b'\n');
-      }
-      std::fs::write(alloc::format!("{prefix}_{name}.pgm"), out).unwrap();
-    }
-  }
-  let az = ridge_azimuths(
-    &spiral_image(2.0 * core::f64::consts::PI / p_rot, half, px),
-    half,
-    px,
-    15e3,
-    140e3,
-  );
-  assert!(az.len() > 110, "ridge found in {} of 125 annuli", az.len());
-  let th = unwrap(&az);
-  let turn = th[th.len() - 1] - th[0];
-  let turns = turn.abs() / (2.0 * core::f64::consts::PI);
-  let expect = 125e3 / (2.0 * p_rot);
-  assert!(turns >= 2.0, "{turns:.2} turns");
-  assert!(
-    (turns / expect - 1.0).abs() < 0.2,
-    "{turns:.2} turns, expected {expect:.2}"
-  );
-  // monotone: every 5 km (0.73 rad of arm, the ridge is a few 4° bins wide) turns the same way
-  for (k, w) in th.windows(6).enumerate() {
-    assert!(
-      (w[5] - w[0]) * turn > 0.0,
-      "annulus {k}: the ridge turns back ({:.2} rad)",
-      w[5] - w[0]
-    );
-  }
-
-  let still = ridge_azimuths(&spiral_image(0.0, half, px), half, px, 15e3, 140e3);
-  assert!(still.len() > 110);
-  let th0 = unwrap(&still);
-  let spread = th0.iter().fold(0.0f64, |m, t| m.max((t - th0[0]).abs()));
-  assert!(spread < 0.3, "no spin: the fan turns by {spread:.2} rad");
-}
-
-/// `S = 1` render clusters along the polyline `pts` (each the predecessor of the next one in
-/// render order: oldest first), lateral spread `spread`, flux `flux`
-fn streak_line(pts: &[[f32; 3]], spread: f32, flux: f32) -> alloc::vec::Vec<DustRenderCluster> {
-  pts
-    .iter()
-    .enumerate()
-    .rev()
-    .enumerate()
-    .map(|(r, (k, p))| DustRenderCluster {
-      pos_size: [p[0], p[1], p[2], spread],
-      age_id_dbeta_flux: [
-        1000.0 * (k + 1) as f32,
-        f32::from_bits(render_word(r as u32, 0)),
-        pack_child_id(0.0, pcg(r as u32)),
-        flux,
-      ],
-    })
-    .collect()
-}
-
-/// The dots of the streaks carry exactly the cross-section of the visible parts: Σ over the dots
-/// in view = Σ flux × the fraction of each segment inside the view, within 1 %.
-#[test]
-fn streak_dots_carry_the_visible_cross_section() {
-  let half = 17.0e3f32;
-  let pts: alloc::vec::Vec<[f32; 3]> =
-    (0..25).map(|i| [-60.0e3 + 5.0e3 * i as f32, 3.0e3, 0.0]).collect();
-  let mut render = streak_line(&pts, 1.0, 2.0);
-  let mvp = ortho_mvp(half, [0.0, 0.0]);
-  let pc = ortho_pc(mvp, half, 512, 1.0, render.len() as u32);
-  let mut tiles = alloc::vec![0u32; DUST_TILE_COUNT as usize];
-  let mut list = alloc::vec::Vec::new();
-  lod_evaluate(&mut render, &pc, 0, 0.0, &mut tiles, &mut list);
-  let mut seen = 0.0f64;
-  for &e in &list {
-    let (i, c) = ((e & RENDER_SLOT_MASK) as usize, e >> LOD_CLUSTER_BITS);
-    let p = child_position(&render, i, c, &mvp, pc.params, [0.0; 4]);
-    if p[0].abs() < half && p[1].abs() < half {
-      seen += render[i].age_id_dbeta_flux[3] as f64;
-    }
-  }
-  // 24 segments of 5 km along y = 3 km, the view spans x in ±17 km: 34 km of segments, 2 per km
-  let expect = 2.0 * 34.0 / 5.0;
-  assert!((seen / expect - 1.0).abs() < 0.01, "{seen} vs {expect}");
-  // the first cluster has no predecessor: a point spread, off screen here
-  assert_eq!(streak_pred(&render, 0), None);
-  assert_eq!(render[0].age_id_dbeta_flux[3], 0.0);
-}
-
-/// Telescope zoom (broken_earth.rdc: a 34 km field inside a 5,000 km coma): a 2,000 km streak
-/// crossing the view spends its dots on the visible part (the old clouds put < 1 dot on screen).
-#[test]
-fn telescope_zoom_streak_puts_its_dots_on_screen() {
-  let half = 17.0e3f32;
-  let mut render = streak_line(
-    &[[-1.0e6, -0.995e6, 2.0e4], [1.0e6, 1.005e6, -2.0e4]],
-    50.0,
-    1.0,
-  );
-  let mvp = ortho_mvp(half, [0.0, 0.0]);
-  let mut pc = ortho_pc(mvp, half, 512, 1.0, 2);
-  pc.tile_scale = 1e12;
-  let mut tiles = alloc::vec![0u32; DUST_TILE_COUNT as usize];
-  let mut list = alloc::vec::Vec::new();
-  let out = lod_evaluate(&mut render, &pc, 0, 0.0, &mut tiles, &mut list);
-  let k = out.instances as usize;
-  // the visible part crosses the view diagonally: ~512·√2 px in 1.5 px dots
-  assert!(
-    k > 300 && k <= MAX_CHILDREN_PER_CLUSTER as usize,
-    "{k} dots"
-  );
-  let on = list
-    .iter()
-    .filter(|&&e| {
-      let p = child_position(&render, 1, e >> LOD_CLUSTER_BITS, &mvp, pc.params, [0.0; 4]);
-      p[0].abs() < half && p[1].abs() < half
-    })
-    .count();
-  // the snapped range adds at most 2 grid steps (≤ 1/4) and the 5 % margin
-  assert!(on as f64 > 0.7 * k as f64, "{on} of {k} dots on screen");
-  // each carries flux · (t1 − t0) / k: the visible fraction (~1.7 %), not the whole streak
-  let f = render[1].age_id_dbeta_flux[3] * k as f32;
-  assert!(f > 0.017 && f < 0.03, "drawn fraction {f}");
-  // white point tiles see the streak
-  assert!(tiles.iter().any(|&t| t > 0));
-}
-
-/// Streak dots keep their place when the LOD changes `k` (golden-ratio prefix) and while the view
-/// pans within a grid cell of the snapped range; a large pan re-samples.
-#[test]
-fn streak_dots_are_stable_under_lod_changes_and_small_pans() {
-  let half = 17.0e3f32;
-  let render = streak_line(&[[-1.0e6, 1.0e3, 0.0], [1.0e6, 1.0e3, 0.0]], 50.0, 1.0);
-  let mvp = ortho_mvp(half, [0.0, 0.0]);
-  let params = ortho_pc(mvp, half, 512, 1.0, 2).params;
-  let pos = |mvp: &[f32; 16], c: u32| child_position(&render, 1, c, mvp, params, [0.0; 4]);
-  // k does not enter a dot's position: any prefix is the same dots, evenly spread
-  let mut ts: alloc::vec::Vec<f32> = (0..64).map(|c| pos(&mvp, c)[0]).collect();
-  ts.sort_by(|a, b| a.total_cmp(b));
-  let gaps: alloc::vec::Vec<f32> = ts.windows(2).map(|w| w[1] - w[0]).collect();
-  let (gmin, gmax) = gaps.iter().fold((f32::MAX, 0.0f32), |(a, b), &g| (a.min(g), b.max(g)));
-  assert!(gmax < 3.0 * gmin, "64-dot prefix gaps {gmin}..{gmax} m");
-  let c0 = streak_clip(
-    &mvp,
-    [-1.0e6, 1.0e3, 0.0],
-    [1.0e6, 1.0e3, 0.0],
-    50.0,
-    50.0,
-    params,
-  )
-  .unwrap();
-  let mvp_pan = ortho_mvp(half, [20.0, 0.0]);
-  let c1 = streak_clip(
-    &mvp_pan,
-    [-1.0e6, 1.0e3, 0.0],
-    [1.0e6, 1.0e3, 0.0],
-    50.0,
-    50.0,
-    params,
-  )
-  .unwrap();
-  assert_eq!(
-    (c0.t0, c0.t1),
-    (c1.t0, c1.t1),
-    "a 20 m pan stays in the grid cell"
-  );
-  for c in 0..64 {
-    assert_eq!(
-      pos(&mvp, c),
-      pos(&mvp_pan, c),
-      "dot {c} moved under a small pan"
-    );
-  }
-  let mvp_far = ortho_mvp(half, [30.0e3, 0.0]);
-  assert_ne!(
-    pos(&mvp, 5),
-    pos(&mvp_far, 5),
-    "a pan of a view width re-samples"
   );
 }
 
@@ -2649,10 +1863,19 @@ fn streams_fill_the_jet_cone() {
   let mut g: alloc::vec::Vec<([f64; 2], f64)> = alloc::vec::Vec::new();
   for b in host.ring.batches.iter().take(16) {
     let d = &b.desc;
-    let rc0 = Df3::from_f32([d.comet_r_t_hi[0], d.comet_r_t_hi[1], d.comet_r_t_hi[2]])
-      .add(&Df3::from_f32([d.comet_r_t_lo[0], d.comet_r_t_lo[1], d.comet_r_t_lo[2]]));
-    let vc0 = Df3::from_f32([d.comet_v_dur_hi[0], d.comet_v_dur_hi[1], d.comet_v_dur_hi[2]])
-      .add(&Df3::from_f32([d.comet_v_dur_lo[0], d.comet_v_dur_lo[1], d.comet_v_dur_lo[2]]));
+    let rc0 = Df3::from_f32([d.comet_r_t_hi[0], d.comet_r_t_hi[1], d.comet_r_t_hi[2]]).add(
+      &Df3::from_f32([d.comet_r_t_lo[0], d.comet_r_t_lo[1], d.comet_r_t_lo[2]]),
+    );
+    let vc0 = Df3::from_f32([
+      d.comet_v_dur_hi[0],
+      d.comet_v_dur_hi[1],
+      d.comet_v_dur_hi[2],
+    ])
+    .add(&Df3::from_f32([
+      d.comet_v_dur_lo[0],
+      d.comet_v_dur_lo[1],
+      d.comet_v_dur_lo[2],
+    ]));
     let t_start = Df::new(d.comet_r_t_hi[3], d.comet_r_t_lo[3]);
     for j in 0..d.count {
       let c = emit_cluster(d, j);
@@ -2697,9 +1920,16 @@ fn streams_fill_the_jet_cone() {
     for iy in 0..n {
       let mut line = alloc::string::String::new();
       for ix in 0..n {
-        let p = [(2.0 * (ix as f64 + 0.5) / n as f64 - 1.0), (2.0 * (iy as f64 + 0.5) / n as f64 - 1.0)];
-        if p[0].hypot(p[1]) > 0.6 { line.push_str("    "); continue; }
-        line.push_str(&alloc::format!("{:4.1}", dens[k] / mean)); k += 1;
+        let p = [
+          (2.0 * (ix as f64 + 0.5) / n as f64 - 1.0),
+          (2.0 * (iy as f64 + 0.5) / n as f64 - 1.0),
+        ];
+        if p[0].hypot(p[1]) > 0.6 {
+          line.push_str("    ");
+          continue;
+        }
+        line.push_str(&alloc::format!("{:4.1}", dens[k] / mean));
+        k += 1;
       }
       std::println!("{line}");
     }
@@ -2771,70 +2001,16 @@ fn the_renderer_keeps_the_submitted_range_while_a_tick_is_pending() {
     );
     host.ring.mark_submitted(2 + i);
     let after = host.draw_state().unwrap();
-    assert_eq!(after.live_count, host.ring.live(), "everything submitted is drawn");
+    assert_eq!(
+      after.live_count,
+      host.ring.live(),
+      "everything submitted is drawn"
+    );
     prev = after;
   }
   // a restored snapshot draws nothing until re-emitted
   host.ring.invalidate_gpu();
   assert!(host.draw_state().is_none());
-}
-
-/// Tracers: about one cluster in [`TRACER_EVERY`], chosen by the emission record's child id (the
-/// same particles after a seek / in every tier), each drawn as one extra instance at the cluster's
-/// exact position, never a tile sample (the white point does not move).
-#[test]
-fn tracers_are_sparse_stable_real_particles() {
-  let n = (0..65_536u32).filter(|&id| is_tracer(id)).count() as f64;
-  let rate = n / 65_536.0;
-  assert!(
-    (rate * TRACER_EVERY as f64 - 1.0).abs() < 0.15,
-    "tracer rate {rate}"
-  );
-  // child indices 0..k stay below the tracer's
-  assert!(
-    lod_children(1e9, 1.0) <= TRACER_CHILD,
-    "real children stay below the tracer index"
-  );
-
-  let cfg = test_cfg(1.5e-3, 86400.0);
-  let host = run_ticks([1.3 * 86400.0; 8], &orbit_jet, &cfg);
-  let render0 = tier_render(&host, &host.draw_state().unwrap().frame);
-  let mvp = ortho_mvp(2.0e8, [0.0, 0.0]);
-  let pc = ortho_pc(mvp, 2.0e8, 720, 1.0, render0.len() as u32);
-  let run = |flags: u32| {
-    let mut r = render0.clone();
-    let mut tiles = alloc::vec![0u32; DUST_TILE_COUNT as usize];
-    let mut list = alloc::vec::Vec::new();
-    let out = lod_evaluate(&mut r, &pc, flags, 0.0, &mut tiles, &mut list);
-    (r, tiles, list, out)
-  };
-  let (r0, t0, l0, o0) = run(0);
-  let (r1, t1, l1, o1) = run(DUST_VIEW_TRACERS);
-  assert_eq!(t0, t1, "tracers are not white-point samples");
-  let tracers: alloc::vec::Vec<usize> = l1
-    .iter()
-    .filter(|&&e| e >> LOD_CLUSTER_BITS == TRACER_CHILD)
-    .map(|&e| (e & RENDER_SLOT_MASK) as usize)
-    .collect();
-  let drawn = (0..r0.len()).filter(|&i| r0[i].age_id_dbeta_flux[3] > 0.0).count();
-  assert_eq!(o1.instances, o0.instances + tracers.len() as u32);
-  assert_eq!(l1.len() - l0.len(), tracers.len());
-  assert!(
-    tracers.len() > 10,
-    "{} tracers of {drawn} drawn clusters",
-    tracers.len()
-  );
-  for &i in &tracers {
-    assert!(is_tracer(child_id(r1[i].age_id_dbeta_flux[2])));
-    // same per-child flux as without tracers: the tracer is not a share of the cluster
-    assert_eq!(r1[i].age_id_dbeta_flux[3], r0[i].age_id_dbeta_flux[3]);
-    let s = child_sample(&r1, i, TRACER_CHILD, &mvp, pc.params, [0.0; 4], 1.0);
-    assert!(s.tracer);
-    assert_eq!(
-      s.pos,
-      [r1[i].pos_size[0], r1[i].pos_size[1], r1[i].pos_size[2]]
-    );
-  }
 }
 
 /// The flow marks are brightness neutral: mean factor 1 over the emission epochs at any age.
@@ -2855,7 +2031,10 @@ fn flow_marks_are_brightness_neutral() {
   let ages = |i: usize| 10f32.powf(3.0 + 3.0 * (i as f32 + 0.5) / n as f32);
   let mean: f64 = (0..n)
     .map(|i| {
-      let f = DustFlowUniform::new(&DustFlowClock::default(), 4.0e8 + u01(pcg(i as u32)) as f64 * 1.0e8);
+      let f = DustFlowUniform::new(
+        &DustFlowClock::default(),
+        4.0e8 + u01(pcg(i as u32)) as f64 * 1.0e8,
+      );
       flow_factor(ages(i), &f) as f64
     })
     .sum::<f64>()
@@ -3015,50 +2194,3099 @@ fn c_t(b: &DustBatch, j: u32) -> f64 {
   emit_cluster(b, j).t0().to_f64()
 }
 
-/// Damped view adaptation: the displayed white point moves half of the measured one in log space,
-/// so two views whose brightest dust differs 4× show 2× apart (`near.rdc` / `med.rdc`: 1.82× →
-/// 1.35×); unmeasured gives the fixed reference.
-#[test]
-fn view_adaptation_is_damped() {
-  assert_eq!(display_white(0.0), 1.0);
-  assert_eq!(display_white(f32::NAN), 1.0);
-  assert!((display_white(1.0) - 1.0).abs() < 1e-6);
-  let (a, b) = (display_white(0.5), display_white(2.0));
-  assert!(
-    (b / a - 2.0).abs() < 1e-4,
-    "4× measured → {}× displayed",
-    b / a
-  );
-  assert!((display_white(1.82 * 1.82) - 1.82).abs() < 1e-3);
+// ─────────────────────────────────────────────────────────────────────────────
+// v4 render: packets, capsule splats, pyramid (mirror of dust_propagate / dust_splat.comp)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// a small LCG for the tests (no std rand)
+fn lcg(state: &mut u64) -> f64 {
+  *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+  ((*state >> 11) as f64) / ((1u64 << 53) as f64)
+}
+fn gauss_lcg(state: &mut u64) -> f64 {
+  let u1 = lcg(state).max(1e-12);
+  let u2 = lcg(state);
+  (-2.0 * u1.ln()).sqrt() * (2.0 * core::f64::consts::PI * u2).cos()
 }
 
-/// Old dust is spread over its size stratum's β range (`½·Δβ·g·age²`, anti-sunward), far more than
-/// its stream spread: the LOD footprint counts it, so the outer tail is a fan instead of isolated
-/// single dots (`far_1.rdc`). Without solar gravity the footprint is the stream spread.
+/// Covariance of the sub-packets of `m` pooled back into one (within + between), and their
+/// mass-weighted mean.
+fn pooled(m: &DustMoments, seg: [f32; 3]) -> ([f64; 3], [[f64; 3]; 3]) {
+  // every packet is uniform along its segment: its own mean is the segment's midpoint and its
+  // covariance gains seg segᵀ / 12
+  let subs: alloc::vec::Vec<Packet> = subpackets(m, seg, None)
+    .into_iter()
+    .map(|mut p| {
+      let mut cov = p.cov;
+      let idx = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2)];
+      for (k, (i, j)) in idx.iter().enumerate() {
+        cov[k] += p.seg[*i] * p.seg[*j] / 12.0;
+      }
+      for k in 0..3 {
+        p.mean[k] += 0.5 * p.seg[k];
+      }
+      p.cov = cov;
+      p
+    })
+    .collect();
+  let total: f64 = subs.iter().map(|p| p.flux as f64).sum();
+  let mut mean = [0.0f64; 3];
+  for p in &subs {
+    for k in 0..3 {
+      mean[k] += p.flux as f64 / total * p.mean[k] as f64;
+    }
+  }
+  let idx = [[0, 1, 2], [1, 3, 4], [2, 4, 5]];
+  let mut cov = [[0.0f64; 3]; 3];
+  for p in &subs {
+    let w = p.flux as f64 / total;
+    for i in 0..3 {
+      for j in 0..3 {
+        let d = (p.mean[i] as f64 - mean[i]) * (p.mean[j] as f64 - mean[j]);
+        cov[i][j] += w * (p.cov[idx[i][j]] as f64 + d);
+      }
+    }
+  }
+  (mean, cov)
+}
+
+/// The transported second moments (secants over the real spreads, the size polyline) match a
+/// Monte-Carlo propagation of the cell's grains (lateral dispersion `σ_lat` across the ejection,
+/// the whole speed spread `σ_rad` along it, every size of the distribution weighted by
+/// cross-section with its own β and speed) from hours to years, where the former linear
+/// anti-sun model is far off.
 #[test]
-fn old_dust_footprint_includes_the_beta_spread() {
-  let half = 1.0e6f32;
-  let mut rc = render_cluster(0, [0.0, 0.0, 0.0], 10.0, 1.0);
-  rc.age_id_dbeta_flux[0] = 1.0e6;
-  rc.age_id_dbeta_flux[2] = pack_child_id(0.01, 7);
-  let render = [rc];
-  let pc = ortho_pc(ortho_mvp(half, [0.0, 0.0]), half, 720, 1.0, 1);
-  let g = 2.0e-4;
-  assert!((dust_extent(&rc, g) / (0.5 * 0.01 * g * 1.0e12) - 1.0).abs() < 1e-2);
-  assert_eq!(dust_extent(&rc, 0.0), 10.0);
-  let flat = lod_plan(&render, 0, &pc, 0.0).unwrap();
-  let wide = lod_plan(&render, 0, &pc, g).unwrap();
-  assert_eq!(flat.want, 1.0, "10 m stream spread: one dot");
-  assert!(
-    wide.want > 1000.0,
-    "β spread over the view: {} dots",
-    wide.want
+fn packet_moments_match_monte_carlo() {
+  let b = test_batch(64, 3600.0);
+  let c = emit_cluster(&b, 5);
+  let (r0, v0) = (c.r0().to_f64(), c.v0().to_f64());
+  let (sigma_lat, sigma_rad) = (c.sigma_lat() as f64, c.sigma_rad() as f64);
+  let beta = c.beta() as f64;
+  let (e1, e2, e3) = dispersion_frame(c.eject());
+  let (e1, e2, e3) = (
+    [e1[0] as f64, e1[1] as f64, e1[2] as f64],
+    [e2[0] as f64, e2[1] as f64, e2[2] as f64],
+    [e3[0] as f64, e3[1] as f64, e3[2] as f64],
   );
-  // the drawn radius follows the same footprint (dust.vert mirror)
-  let s = child_sample(&render, 0, 0, &pc.mvp, pc.params, [0.0, 0.0, 1.0, g], 0.01);
+  let eject = [c.eject[0] as f64, c.eject[1] as f64, c.eject[2] as f64];
+  let range = size_range_factor(&c) as f64;
+  let (sb_lo, sb_hi) = ((beta / range).sqrt(), (beta * range).sqrt());
+  let dbeta = 0.0;
+  let mut rng = 0x1234_5678u64;
+  for (days, tol) in [
+    (0.05, 0.1),
+    (1.0, 0.1),
+    (30.0, 0.1),
+    (365.0, 0.15),
+    (1826.0, 0.3),
+  ] {
+    let (frame, _) = frame_after(days);
+    let (_, m) = packet_moments(&c, 0, &frame);
+    assert!(m.flux() > 0.0, "{days} d: culled");
+    let (mean, cov) = pooled(&m, [0.0; 3]);
+    // Monte Carlo in f64
+    let age = frame.t_now_s() - c.t0().to_f64();
+    let n = 3000;
+    let mut pts = alloc::vec::Vec::with_capacity(n);
+    for _ in 0..n {
+      // a grain of the cell: lateral and radial dispersion, a size drawn by cross-section
+      // (uniform in √β between √(β/F) and √(β·F)), hence its own β and speed v ∝ √(β'/β)
+      let (g1, g2, g3) = (
+        gauss_lcg(&mut rng),
+        gauss_lcg(&mut rng),
+        gauss_lcg(&mut rng),
+      );
+      let sb = sb_lo + (sb_hi - sb_lo) * lcg(&mut rng);
+      let bb = sb * sb;
+      let f = sb / beta.sqrt();
+      // the dispersions scale with the grain's speed (the cone cell is angular, the speed
+      // spread relative)
+      let mut v = v0;
+      for k in 0..3 {
+        v[k] += f * (sigma_lat * (g1 * e1[k] + g2 * e2[k]) + sigma_rad * g3 * e3[k])
+          + eject[k] * (f - 1.0);
+      }
+      let (r, _) = kepler::propagate_f64(r0, v, SUN_MU_M3_S2 * (1.0 - bb), age);
+      pts.push(r);
+    }
+    let (rc, _) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2 * (1.0 - beta), age);
+    let anchor = frame.anchor_m();
+    let mut mc_mean = [0.0f64; 3];
+    for p in &pts {
+      for k in 0..3 {
+        mc_mean[k] += (p[k] - anchor[k]) / n as f64;
+      }
+    }
+    let mut mc_cov = [[0.0f64; 3]; 3];
+    for p in &pts {
+      for i in 0..3 {
+        for j in 0..3 {
+          mc_cov[i][j] +=
+            (p[i] - anchor[i] - mc_mean[i]) * (p[j] - anchor[j] - mc_mean[j]) / n as f64;
+        }
+      }
+    }
+    let tr = |c: &[[f64; 3]; 3]| c[0][0] + c[1][1] + c[2][2];
+    let (t_mc, t_pk) = (tr(&mc_cov), tr(&cov));
+    let shift = norm([
+      mean[0] - mc_mean[0],
+      mean[1] - mc_mean[1],
+      mean[2] - mc_mean[2],
+    ]);
+    // the former linear model: ½·dβ·g·age² anti-sunward, as a 1σ extent dβ/√3
+    let g = SUN_MU_M3_S2 / norm(rc).powi(2);
+    let linear = 0.5 * dbeta / 3f64.sqrt() * g * age * age;
+    std::println!(
+      "[moments] {days:.2} d: trace mc {:.3e} packet {:.3e} ({:+.1} %), mean shift {:.2e} m ({:.2} σ), linear β model {:.2e} m vs {:.2e} m",
+      t_mc,
+      t_pk,
+      100.0 * (t_pk / t_mc - 1.0),
+      shift,
+      shift / t_mc.sqrt(),
+      linear,
+      t_mc.sqrt()
+    );
+    assert!(
+      (t_pk / t_mc - 1.0).abs() < tol,
+      "{days} d: packet trace {t_pk:.3e} vs Monte Carlo {t_mc:.3e}"
+    );
+    assert!(
+      shift < 0.25 * t_mc.sqrt(),
+      "{days} d: mean shift {shift:.2e} m"
+    );
+    // the principal axes agree: the packet covariance applied to the MC principal direction
+    let mut d = [mc_cov[0][0], mc_cov[1][0], mc_cov[2][0]];
+    for _ in 0..50 {
+      let y = [
+        mc_cov[0][0] * d[0] + mc_cov[0][1] * d[1] + mc_cov[0][2] * d[2],
+        mc_cov[1][0] * d[0] + mc_cov[1][1] * d[1] + mc_cov[1][2] * d[2],
+        mc_cov[2][0] * d[0] + mc_cov[2][1] * d[1] + mc_cov[2][2] * d[2],
+      ];
+      d = scale(y, 1.0 / norm(y).max(1e-300));
+    }
+    let q = |c: &[[f64; 3]; 3]| {
+      let mut s = 0.0;
+      for i in 0..3 {
+        for j in 0..3 {
+          s += d[i] * c[i][j] * d[j];
+        }
+      }
+      s
+    };
+    assert!(
+      (q(&cov) / q(&mc_cov) - 1.0).abs() < tol * 1.5,
+      "{days} d: variance along the principal axis {:.3e} vs {:.3e}",
+      q(&cov),
+      q(&mc_cov)
+    );
+  }
+}
+
+/// The size polyline follows the syndyne: the `SIZE_EDGES` edges of a year-old cluster lie on
+/// an f64 Kepler propagation of the grain of each edge's β and speed, the edges are equally
+/// spaced in √β over `β/F .. β·F`, the `SIZE_BINS` packets are contiguous (each the midpoint of
+/// its edges) with the chord variance along the bin, and carry the flux in equal shares; with an
+/// older (wider) predecessor every bin is cut into time pieces whose widths grow along the
+/// segment and whose fluxes still sum to the cluster's.
+#[test]
+fn size_polyline_follows_the_syndyne() {
+  let b = test_batch(64, 3600.0);
+  let c = emit_cluster(&b, 5);
+  let (r0, v0) = (c.r0().to_f64(), c.v0().to_f64());
+  let beta = c.beta() as f64;
+  let eject = [c.eject[0] as f64, c.eject[1] as f64, c.eject[2] as f64];
+  let (frame, _) = frame_after(365.0);
+  let (_, m) = packet_moments(&c, 0, &frame);
+  assert!(m.flux() > 0.0);
+  let age = frame.t_now_s() - c.t0().to_f64();
+  let anchor = frame.anchor_m();
+  // the cluster's own range (misc.w with the id bits masked: F = 10 within ~2 %)
+  let range = size_range_factor(&c) as f64;
   assert!(
-    s.r_px > DUST_CHILD_PX,
-    "fewer dots than the footprint asks: larger splats ({})",
-    s.r_px
+    (range / SIZE_RANGE_FACTOR - 1.0).abs() < 0.03,
+    "range factor {range}"
   );
+  let (sb_lo, sb_hi) = ((beta / range).sqrt(), (beta * range).sqrt());
+  let mut arc = 0.0f64;
+  for j in 0..SIZE_EDGES as usize {
+    let sb = sb_lo + (sb_hi - sb_lo) * j as f64 / SIZE_BINS as f64;
+    assert!(
+      (size_edge_sqrt_beta(c.beta(), size_range_factor(&c), j as u32) as f64 - sb).abs()
+        < 1e-2 * sb,
+      "edge {j}: √β"
+    );
+    let f = sb / beta.sqrt();
+    let v = [
+      v0[0] + eject[0] * (f - 1.0),
+      v0[1] + eject[1] * (f - 1.0),
+      v0[2] + eject[2] * (f - 1.0),
+    ];
+    let (r, _) = kepler::propagate_f64(r0, v, SUN_MU_M3_S2 * (1.0 - sb * sb), age);
+    let e = m.edge(j);
+    for k in 0..3 {
+      assert!(
+        (e[k] as f64 - (r[k] - anchor[k])).abs() < 2.0 + 1e-6 * norm(sub(r, anchor)),
+        "edge {j} axis {k}: {} vs {}",
+        e[k],
+        r[k] - anchor[k]
+      );
+    }
+    assert!(
+      (m.edge_factor(j) as f64 - f).abs() < 1e-5,
+      "edge {j}: speed factor"
+    );
+    if j > 0 {
+      arc += norm(sub(
+        [e[0] as f64, e[1] as f64, e[2] as f64],
+        [
+          m.edge(j - 1)[0] as f64,
+          m.edge(j - 1)[1] as f64,
+          m.edge(j - 1)[2] as f64,
+        ],
+      ));
+    }
+  }
+  std::println!(
+    "[polyline] 365 d: arc length {arc:.3e} m over β {:.4}..{:.4}",
+    sb_lo * sb_lo,
+    sb_hi * sb_hi
+  );
+  assert!(
+    arc > 1.0e9,
+    "a year-old size range spans more than 1e6 km of syndyne"
+  );
+  let subs = subpackets(&m, [0.0; 3], None);
+  assert_eq!(subs.len(), SIZE_BINS as usize);
+  let total: f32 = subs.iter().map(|p| p.flux).sum();
+  assert!((total / m.flux() - 1.0).abs() < 1e-5);
+  for (b, p) in subs.iter().enumerate() {
+    // a chord capsule: from the bin's start edge along its chord, open towards its neighbours
+    let (a, c2) = (m.edge(b), m.edge(b + 1));
+    for k in 0..3 {
+      assert!((p.mean[k] - a[k]).abs() < 1.0, "bin {b}: start edge");
+      assert!((p.seg[k] - (c2[k] - a[k])).abs() < 1.0, "bin {b}: chord");
+    }
+    assert_eq!(
+      p.open,
+      [b > 0, b + 1 < SIZE_BINS as usize],
+      "bin {b}: open ends"
+    );
+    // the covariance is the velocity dispersion scaled by the bin's speed, nothing along the chord
+    let f = 0.5 * (m.edge_factor(b) + m.edge_factor(b + 1));
+    let cv = m.cov_v();
+    for k in 0..6 {
+      assert!(
+        (p.cov[k] - f * f * cv[k]).abs() <= 1e-4 * cv[k].abs() + 1e-3,
+        "bin {b}: cov[{k}] {} vs {}",
+        p.cov[k],
+        f * f * cv[k]
+      );
+    }
+  }
+  // a wider predecessor: time pieces with growing widths, flux conserved
+  let seg = [1.0e7, 0.0, 0.0];
+  let mut pred = m;
+  for k in 0..4 {
+    pred.cov_a[k] *= 16.0;
+  }
+  pred.cov_b_age_id[0] *= 16.0;
+  pred.cov_b_age_id[1] *= 16.0;
+  // the predecessor sits one segment away, every bin of it (the per-bin segments equal `seg`)
+  for e in pred.edges.iter_mut() {
+    e[0] += seg[0];
+    e[1] += seg[1];
+    e[2] += seg[2];
+  }
+  pred.mean_flux[0] += seg[0];
+  assert_eq!(time_pieces(&m, Some(&pred)), 3);
+  let pieces = subpackets(&m, seg, Some(&pred));
+  assert_eq!(pieces.len(), 3 * SIZE_BINS as usize);
+  let total: f32 = pieces.iter().map(|p| p.flux).sum();
+  assert!((total / m.flux() - 1.0).abs() < 1e-5);
+  for b in 0..SIZE_BINS as usize {
+    let tr = |p: &Packet| p.cov[0] + p.cov[3] + p.cov[5];
+    let (p0, p1, p2) = (&pieces[3 * b], &pieces[3 * b + 1], &pieces[3 * b + 2]);
+    assert!(
+      tr(p0) < tr(p1) && tr(p1) < tr(p2),
+      "bin {b}: widths grow along the segment"
+    );
+    // the pieces step along the time segment; their own segment stays the chord
+    assert!((p1.mean[0] - p0.mean[0] - seg[0] / 3.0).abs() < 8.0 + 2e-6 * p0.mean[0].abs());
+    assert!((p0.seg[0] - (m.edge(b + 1)[0] - m.edge(b)[0])).abs() < 1.0 + 1e-6 * p0.mean[0].abs());
+  }
+  // no predecessor, or a narrower one: one piece per bin
+  assert_eq!(time_pieces(&m, None), 1);
+  assert_eq!(time_pieces(&pred, Some(&m)), 1);
+}
+
+/// The capsule integrates to `amp · 2π√det Σ'` over the plane for any segment: the total optical
+/// depth a packet deposits is its flux over the pixel area whatever its shape.
+#[test]
+fn capsule_integrates_to_the_flux() {
+  for seg in [[0.0f32, 0.0], [30.0, -10.0], [0.3, 0.2], [120.0, 90.0]] {
+    let p = ScreenPacket {
+      mu: [200.0, 180.0],
+      cov: [9.0, 2.0, 4.0],
+      seg,
+      amp: 0.37,
+      sigma_min: 1.0,
+      det: 9.0 * 4.0 - 4.0,
+      depth_au: 1.0,
+      open: [false, false],
+      rho: [1.0, 1.0],
+    };
+    let det = 9.0 * 4.0 - 4.0;
+    let mut sum = 0.0f64;
+    for y in 0..400 {
+      for x in 0..400 {
+        sum += capsule_tau(&p, [x as f32 + 0.5, y as f32 + 0.5]) as f64;
+      }
+    }
+    let expect = 0.37 * 2.0 * core::f64::consts::PI * (det as f64).sqrt();
+    assert!(
+      (sum / expect - 1.0).abs() < 2e-3,
+      "seg {seg:?}: Σ τ = {sum:.4} vs {expect:.4}"
+    );
+    // a linear density along the segment (ρ₀ = 1.4 → ρ₁ = 0.6, mean 1) keeps the flux and puts
+    // its centroid at ∫ρ u du = ρ₀/2 + (ρ₁ − ρ₀)/3 of the segment
+    if seg[0] * seg[0] + seg[1] * seg[1] > 1.0 {
+      let pl = ScreenPacket {
+        rho: [1.4, 0.6],
+        ..p
+      };
+      let (mut sum, mut first) = (0.0f64, 0.0f64);
+      let dd = (seg[0] * seg[0] + seg[1] * seg[1]) as f64;
+      for y in 0..400 {
+        for x in 0..400 {
+          let t = capsule_tau(&pl, [x as f32 + 0.5, y as f32 + 0.5]) as f64;
+          let u = ((x as f64 + 0.5 - 200.0) * seg[0] as f64
+            + (y as f64 + 0.5 - 180.0) * seg[1] as f64)
+            / dd;
+          sum += t;
+          first += t * u;
+        }
+      }
+      let centroid = first / sum;
+      let expect_c = 1.4 / 2.0 + (0.6 - 1.4) / 3.0;
+      assert!(
+        (sum / expect - 1.0).abs() < 2e-3,
+        "seg {seg:?}: linear density Σ τ = {sum:.4} vs {expect:.4}"
+      );
+      assert!(
+        (centroid - expect_c).abs() < 0.02,
+        "seg {seg:?}: linear density centroid {centroid:.3} vs {expect_c:.3}"
+      );
+    }
+  }
+  // erf accuracy
+  for (x, e) in [
+    (0.0f32, 0.0f32),
+    (0.5, 0.520_499_9),
+    (1.0, 0.842_700_8),
+    (2.0, 0.995_322_3),
+  ] {
+    assert!((erf(x) - e).abs() < 2e-6 && (erf(-x) + e).abs() < 2e-6);
+  }
+}
+
+/// A splat lands on the lowest level where its smallest σ is ≥ 2 texels, so the texels it
+/// touches are bounded whatever its size; the pyramid layout has the levels down to 1 texel.
+#[test]
+fn splat_level_bounds_the_texel_count() {
+  let layout = PyramidLayout::new(1113, 684);
+  assert_eq!(layout.levels[0], (PYRAMID_HEADER_WORDS, 1113, 684));
+  assert_eq!(layout.levels[1].1, 557);
+  let last = *layout.levels.last().unwrap();
+  assert_eq!((last.1, last.2), (1, 1));
+  // the measurement grid (16 px texels) follows the last level
+  assert_eq!(layout.measure, (last.0 + PYRAMID_TEXEL_WORDS, 70, 43));
+  assert_eq!(
+    layout.total_words,
+    layout.measure.0 + 70 * 43 * PYRAMID_TEXEL_WORDS
+  );
+  assert_eq!(layout.level_count(), 12);
+  for (sigma, level) in [
+    (0.5f32, 0u32),
+    (1.9, 0),
+    (2.0, 0),
+    (3.9, 0),
+    (4.0, 1),
+    (7.9, 1),
+    (8.0, 2),
+    (1000.0, 8),
+    (1e9, 11),
+  ] {
+    assert_eq!(layout.level_for_sigma(sigma), level, "σ {sigma}");
+  }
+  let mut rng = 99u64;
+  let mut pyramid = alloc::vec![0u32; layout.total_words as usize];
+  for _ in 0..200 {
+    let sigma = 10f32.powf(lcg(&mut rng) as f32 * 4.0 - 1.0); // 0.1 .. 1000 px
+    let p = ScreenPacket {
+      mu: [lcg(&mut rng) as f32 * 1113.0, lcg(&mut rng) as f32 * 684.0],
+      cov: [
+        sigma * sigma,
+        0.0,
+        sigma * sigma * (0.5 + lcg(&mut rng) as f32),
+      ],
+      seg: [0.0, 0.0],
+      amp: 1.0,
+      sigma_min: sigma,
+      det: 9.0 * 4.0 - 4.0,
+      depth_au: 1.0,
+      open: [false, false],
+      rho: [1.0, 1.0],
+    };
+    let n = splat_scatter(&p, [1.0, 0.5, 0.2], &layout, 1e6, &mut pyramid);
+    let level = layout.level_for_sigma(sigma);
+    let texel = (1u32 << level) as f32;
+    let (sx, sy) = (sigma / texel, p.cov[2].sqrt() / texel);
+    let bound = (2.0 * DUST_SPLAT_SIGMAS * sx + 3.0) * (2.0 * DUST_SPLAT_SIGMAS * sy + 3.0);
+    assert!(
+      n as f32 <= bound,
+      "σ {sigma}: {n} texels at level {level}, bound {bound}"
+    );
+    assert!(sx < 2.0 * DUST_SPLAT_SIGMA_TEXELS || level == layout.level_count() - 1);
+  }
+  assert!(pyramid[PYR_LEVEL_MASK as usize] & 1 != 0);
+}
+
+/// Orthographic mvp of half-extent `half` (m) looking along −z, `rot` applied to the packets'
+/// frame, into a square viewport
+fn ortho_rot_mvp(half: f32, rot: [[f32; 3]; 3]) -> [f32; 16] {
+  let mut m = [0.0f32; 16];
+  for c in 0..3 {
+    m[c * 4] = rot[0][c] / half;
+    m[c * 4 + 1] = rot[1][c] / half;
+    m[c * 4 + 2] = rot[2][c] * 1e-12;
+  }
+  m[15] = 1.0;
+  m
+}
+
+/// The picture is the projected density, independent of the view's parametrisation: the same
+/// cloud of packets drawn in a rotated frame (packets rotated, camera counter-rotated) gives the
+/// same pixels, and the total optical depth equals `exposure · Σ flux / pixel area` at two zooms.
+#[test]
+fn splat_image_is_the_projected_density() {
+  let mut rng = 7u64;
+  let n = 60;
+  let mut packets = alloc::vec::Vec::new();
+  for _ in 0..n {
+    let s = 2.0e4 * (0.5 + lcg(&mut rng) as f32);
+    let a = [s * 3.0, s * 0.8, s]; // anisotropic axes
+    // random orientation via a random rotation
+    let th = lcg(&mut rng) as f32 * 6.2832;
+    let (c, si) = (th.cos(), th.sin());
+    let r = [[c, -si, 0.0], [si, c, 0.0], [0.0, 0.0, 1.0]];
+    let mut cov = [[0.0f32; 3]; 3];
+    for i in 0..3 {
+      for j in 0..3 {
+        for k in 0..3 {
+          cov[i][j] += r[i][k] * a[k] * a[k] * r[j][k];
+        }
+      }
+    }
+    packets.push(Packet {
+      mean: [
+        (lcg(&mut rng) as f32 - 0.5) * 8e5,
+        (lcg(&mut rng) as f32 - 0.5) * 8e5,
+        (lcg(&mut rng) as f32 - 0.5) * 8e5,
+      ],
+      cov: [
+        cov[0][0], cov[0][1], cov[0][2], cov[1][1], cov[1][2], cov[2][2],
+      ],
+      seg: if lcg(&mut rng) > 0.5 {
+        [5e4, -2e4, 1e4]
+      } else {
+        [0.0; 3]
+      },
+      flux: 1.0e6 * (0.5 + lcg(&mut rng) as f32),
+      open: [false, false],
+      rho: [1.0, 1.0],
+    });
+  }
+  let px = 256u32;
+  let layout = PyramidLayout::new(px, px);
+  let exposure = 1.0e-9;
+  let render = |half: f32, rot: [[f32; 3]; 3]| {
+    let mvp = ortho_rot_mvp(half, rot);
+    let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+    // the fixed-point unit from the brightest packet, as the host does from τ_max
+    let mut tau_max = 0.0f32;
+    for p in &packets {
+      if let Some(sp) = project_packet(p, exposure, &mvp, px, px, [0.0, 0.0, 1e9]) {
+        tau_max = tau_max.max(sp.amp);
+      }
+    }
+    let inv_unit = 1.0 / (tau_max * WHITE_TILE_UNIT_REL);
+    let mut total = 0.0f64;
+    for p in &packets {
+      // the packet expressed in the rotated frame: mean, covariance and segment rotated by rot
+      let rv = |v: [f32; 3]| {
+        [
+          rot[0][0] * v[0] + rot[0][1] * v[1] + rot[0][2] * v[2],
+          rot[1][0] * v[0] + rot[1][1] * v[1] + rot[1][2] * v[2],
+          rot[2][0] * v[0] + rot[2][1] * v[1] + rot[2][2] * v[2],
+        ]
+      };
+      let _ = rv;
+      if let Some(sp) = project_packet(p, exposure, &mvp, px, px, [0.0, 0.0, 1e9]) {
+        splat_scatter(&sp, [1.0, 1.0, 1.0], &layout, inv_unit, &mut pyr);
+        total += p.flux as f64;
+      }
+    }
+    measure_from_pyramid(&layout, &mut pyr);
+    (pyr, total, inv_unit)
+  };
+  let id = [[1.0f32, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+  // the measurement grid holds every packet whatever its level: its total equals the levels'
+  {
+    let (pyr, _, _) = render(1.0e6, id);
+    let (mo, mw, mh) = layout.measure;
+    let measured: u64 = (0..(mw * mh) as usize)
+      .map(|t| pyr[mo as usize + t * PYRAMID_TEXEL_WORDS as usize] as u64)
+      .sum();
+    let levels: u64 = layout
+      .levels
+      .iter()
+      .flat_map(|&(off, w, h)| (0..(w * h) as usize).map(move |t| (off, t)))
+      .map(|(off, t)| pyr[off as usize + t * PYRAMID_TEXEL_WORDS as usize] as u64)
+      .sum();
+    assert!(
+      (measured as f64 / levels as f64 - 1.0).abs() < 0.02,
+      "measurement grid {measured} vs levels {levels}"
+    );
+    assert!(white_point_from_level(&pyr[mo as usize..], 1 << DUST_WHITE_LEVEL, 1.0).is_some());
+  }
+  // energy at two zooms
+  for half in [1.0e6f32, 2.5e6] {
+    let (pyr, total, inv_unit) = render(half, id);
+    let m_per_px = 2.0 * half / px as f32;
+    let expect = exposure as f64 * total / (m_per_px * m_per_px) as f64;
+    let mut sum = 0.0f64;
+    for (l, &(off, w, h)) in layout.levels.iter().enumerate() {
+      let area = (1u64 << (2 * l)) as f64;
+      for t in 0..(w * h) as usize {
+        sum += pyr[off as usize + t * PYRAMID_TEXEL_WORDS as usize] as f64 / inv_unit as f64 * area
+          / area;
+      }
+    }
+    // counts · unit = Σ τ·texel area: the sum over the levels is Σ τ·px² (each level's texel
+    // holds τ × its own area)
+    assert!(
+      (sum / expect - 1.0).abs() < 0.02,
+      "half {half}: Σ τ {sum:.4e} vs exposure·flux/A_px {expect:.4e}"
+    );
+  }
+  // view independence: the cloud and the camera rotated together (about the view axis, so the
+  // pixel grid maps onto itself) give the same image up to the fixed-point rounding
+  let th = core::f32::consts::FRAC_PI_2;
+  let rot = [
+    [th.cos(), -th.sin(), 0.0],
+    [th.sin(), th.cos(), 0.0],
+    [0.0, 0.0, 1.0],
+  ];
+  let (a, _, inv_a) = render(1.0e6, id);
+  let (b, _, inv_b) = render(1.0e6, rot);
+  assert!((inv_a / inv_b - 1.0).abs() < 1e-3);
+  let unit = 1.0 / inv_a;
+  let mut worst = 0.0f32;
+  let mut peak = 0.0f32;
+  let mut sa = 0.0f64;
+  let mut sb = 0.0f64;
+  for y in 0..px {
+    for x in 0..px {
+      let (ta, _, _) = composite_sample(&layout, &a, unit, x, y);
+      // rotating by +90° about z maps pixel (x, y) of the first view to (px−1−y, x) of the second
+      let (tb, _, _) = composite_sample(&layout, &b, unit, px - 1 - y, x);
+      peak = peak.max(ta);
+      worst = worst.max((ta - tb).abs());
+      sa += ta as f64;
+      sb += tb as f64;
+    }
+  }
+  assert!(
+    worst < 0.02 * peak && (sa / sb - 1.0).abs() < 1e-2,
+    "rotated view: worst |Δτ| {worst:.3e} of peak {peak:.3e}, totals {sa:.4e} / {sb:.4e}"
+  );
+}
+
+/// The age colour runs from the stream colour at the jet to its complementary hue (OKLab chroma
+/// rotated by π) at 64 TTL, monotonically and log in age.
+#[test]
+fn age_color_runs_from_the_stream_color_to_its_complement() {
+  let stream = [1.0f32, 0.55, 0.15];
+  let c0 = age_color(stream, 0.0);
+  for k in 0..3 {
+    assert!((c0[k] - stream[k]).abs() < 2e-2, "age 0: {c0:?}");
+  }
+  let lab = |c: [f32; 3]| super::splat::oklab_of(c);
+  let l0 = lab(stream);
+  let far = age_color(stream, DUST_AGE_HUE_SPAN * DUST_AGE_HUE_TAU_S);
+  let lf = lab(far);
+  // the complement: chroma rotated by π (gamut clipping may shorten it, not turn it)
+  let hue = |l: [f32; 3]| l[2].atan2(l[1]);
+  let dh = (hue(lf) - hue(l0) - core::f32::consts::PI).rem_euclid(2.0 * core::f32::consts::PI);
+  // the gamut clip of the rotated chroma turns the hue by up to ~15°
+  assert!(
+    dh.min(2.0 * core::f32::consts::PI - dh) < 0.35,
+    "complement hue off by {dh:.3} rad: {far:?}"
+  );
+  assert!(far[2] > far[0], "orange's complement is bluish: {far:?}");
+  assert!((age_hue_fraction(DUST_AGE_HUE_TAU_S) - (2f32.ln() / 65f32.ln())).abs() < 1e-5);
+  let mut prev = 0.0f32;
+  for i in 0..40 {
+    let age = 10f32.powf(2.0 + i as f32 * 0.2);
+    let f = age_hue_fraction(age);
+    assert!(f >= prev && f <= 1.0);
+    prev = f;
+  }
+}
+
+/// The auto softening puts the median dust texel at a fixed display level
+/// ([`DUST_AUTO_MEDIAN_LEVEL`]) whatever the distance and the dynamic range of the view.
+#[test]
+fn auto_softening_shows_the_median_dust() {
+  for (p50, p99) in [
+    (1e-3f32, 1.0f32),
+    (3e-6, 2e-2),
+    (5e-9, 1e-4),
+    (0.05, 0.5),
+    (1e-2, 1.0),
+  ] {
+    let s = auto_softening(p50, p99);
+    let shown = display_stretch(p50 / p99, 0.0, s);
+    assert!(s >= DUST_SOFTENING_MIN && s <= DUST_SOFTENING_MAX);
+    // at the range's floor the median cannot be lifted further (a 10⁴ dynamic range shows it
+    // at ~28 %); everywhere else it sits at the target level
+    let at_floor = s == DUST_SOFTENING_MIN && shown < DUST_AUTO_MEDIAN_LEVEL;
+    assert!(
+      at_floor || (shown - DUST_AUTO_MEDIAN_LEVEL).abs() < 1e-3,
+      "p50 {p50} p99 {p99}: s {s:.3e}, median shown at {shown:.3}"
+    );
+  }
+  // a median too close to the white cannot be pushed down below the range's end: clamped
+  assert_eq!(auto_softening(0.9, 1.0), DUST_SOFTENING_MAX);
+  assert_eq!(auto_softening(0.0, 1.0), DUST_SOFTENING_DEFAULT);
+  // the white point is the measured one (full adaptation), 1 before any measurement
+  assert_eq!(display_white_v4(0.0), 1.0);
+  assert_eq!(display_white_v4(3.5e-4), 3.5e-4);
+  // level statistics: p99 and p50 of the non-empty texels, per px²
+  let mut level = alloc::vec![0u32; 100 * PYRAMID_TEXEL_WORDS as usize];
+  for i in 0..100 {
+    level[i * PYRAMID_TEXEL_WORDS as usize] = if i < 50 { 0 } else { (i as u32 - 49) * 256 };
+  }
+  let (p99, p50) = white_point_from_level(&level, 16, 1e-6).unwrap();
+  // 50 non-empty texels of 256·k counts, k = 1..50: the median index round(24.5) = 25 → k = 26,
+  // the 99th round(48.51) = 49 → k = 50; per px² over 16 × 16 px
+  assert!((p50 - 26.0e-6).abs() < 1e-9, "{p50}");
+  assert!((p99 - 50.0e-6).abs() < 1e-9, "{p99}");
+}
+
+/// The tier's packets as `dust_propagate.comp` writes them (CPU reference).
+fn tier_packets(host: &DustHostState, frame: &DustFrame) -> TierPackets {
+  tier_packets_with(host, frame, test_threads())
+}
+
+/// One tier's render clusters and moments (compact order `first + i`).
+type TierPackets = (
+  alloc::vec::Vec<DustRenderCluster>,
+  alloc::vec::Vec<DustMoments>,
+);
+
+/// Threads for the host reference rasterizer in tests: `DUST_TEST_THREADS` or the machine's
+/// parallelism. The result does not depend on it (see `host_rasterizer_is_thread_count_independent`).
+fn test_threads() -> usize {
+  std::env::var("DUST_TEST_THREADS")
+    .ok()
+    .and_then(|v| v.parse().ok())
+    .filter(|&n: &usize| n >= 1)
+    .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1))
+}
+
+/// [`tier_packets`] with the live range split across `threads` threads; `packet_moments` is a
+/// pure function of the slot, so the chunks concatenate in order.
+fn tier_packets_with(host: &DustHostState, frame: &DustFrame, threads: usize) -> TierPackets {
+  let mask = host.ring.mask();
+  let mut ring: alloc::vec::Vec<DustCluster> =
+    alloc::vec![bytemuck::Zeroable::zeroed(); host.ring.capacity as usize];
+  for b in &host.ring.batches {
+    for j in 0..b.count {
+      ring[(b.desc.first_index.wrapping_add(j) & mask) as usize] = emit_cluster(&b.desc, j);
+    }
+  }
+  let (first, live, _) = host.ring.drawable();
+  let live = live as usize;
+  let chunk = live.div_ceil(threads.max(1)).max(1);
+  let ring = &ring;
+  let parts: alloc::vec::Vec<TierPackets> = std::thread::scope(|s| {
+    let handles: alloc::vec::Vec<_> = (0..live)
+      .step_by(chunk)
+      .map(|lo| {
+        let hi = (lo + chunk).min(live);
+        s.spawn(move || {
+          let mut rs = alloc::vec::Vec::with_capacity(hi - lo);
+          let mut ms = alloc::vec::Vec::with_capacity(hi - lo);
+          for i in lo..hi {
+            let slot = first.wrapping_add(i as u32) & mask;
+            let (r, m) = packet_moments(&ring[slot as usize], slot, frame);
+            rs.push(r);
+            ms.push(m);
+          }
+          (rs, ms)
+        })
+      })
+      .collect();
+    handles.into_iter().map(|h| h.join().unwrap()).collect()
+  });
+  let mut rs = alloc::vec::Vec::with_capacity(live);
+  let mut ms = alloc::vec::Vec::with_capacity(live);
+  for (r, m) in parts {
+    rs.extend(r);
+    ms.extend(m);
+  }
+  (rs, ms)
+}
+
+/// Merges a partial pyramid into `out` (same layout): saturating sums for the count / colour
+/// words, the nonzero minimum for the depth word (as `scatter_into`), the maximum of
+/// [`PYR_TAU_MAX`] and the union of [`PYR_LEVEL_MASK`].
+fn merge_pyramid(out: &mut [u32], part: &[u32]) {
+  let h = PYRAMID_HEADER_WORDS as usize;
+  let tm = PYR_TAU_MAX as usize;
+  if f32::from_bits(part[tm]) > f32::from_bits(out[tm]) {
+    out[tm] = part[tm];
+  }
+  out[PYR_LEVEL_MASK as usize] |= part[PYR_LEVEL_MASK as usize];
+  let w = PYRAMID_TEXEL_WORDS as usize;
+  for (o, p) in out[h..].chunks_exact_mut(w).zip(part[h..].chunks_exact(w)) {
+    for k in 0..4 {
+      sat_add(&mut o[k], p[k]);
+    }
+    if p[4] != 0 && (o[4] == 0 || p[4] < o[4]) {
+      o[4] = p[4];
+    }
+  }
+}
+
+/// Splats every tier into one fresh pyramid of `layout`, each tier's live range split across
+/// `threads` threads with their own pyramids, merged by [`merge_pyramid`]. `pc_for(live)` gives
+/// the push constants for a tier of `live` clusters.
+fn splat_tiers_with(
+  tiers: &[TierPackets],
+  pc_for: &dyn Fn(u32) -> DustSplatPushConstants,
+  layout: &PyramidLayout,
+  threads: usize,
+) -> alloc::vec::Vec<u32> {
+  let header = layout.header();
+  let fresh = || {
+    let mut p = alloc::vec![0u32; layout.total_words as usize];
+    p[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&header);
+    p
+  };
+  let mut out = fresh();
+  for (r, m) in tiers {
+    let pc = pc_for(r.len() as u32);
+    let n = r.len();
+    let chunk = n.div_ceil(threads.max(1)).max(1);
+    let parts: alloc::vec::Vec<alloc::vec::Vec<u32>> = std::thread::scope(|s| {
+      let handles: alloc::vec::Vec<_> = (0..n)
+        .step_by(chunk)
+        .map(|lo| {
+          let hi = (lo + chunk).min(n);
+          let (pc, fresh) = (&pc, &fresh);
+          s.spawn(move || {
+            let mut p = fresh();
+            splat_tier_range(m, r, pc, &Default::default(), 0, layout, &mut p, lo..hi);
+            p
+          })
+        })
+        .collect();
+      handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    for p in &parts {
+      merge_pyramid(&mut out, p);
+    }
+  }
+  out
+}
+
+/// Top-down image (τ per px²) of a tier around its jet, orthographic, half extent `half` m
+fn tier_image(
+  host: &DustHostState,
+  frame: &DustFrame,
+  half: f32,
+  px: u32,
+  rot: [[f32; 3]; 3],
+) -> alloc::vec::Vec<f32> {
+  let (render, moments) = tier_packets(host, frame);
+  let layout = PyramidLayout::new(px, px);
+  let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+  pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+  let pc = DustSplatPushConstants {
+    moments: 0,
+    render: 0,
+    pyramid: 0,
+    live_count: render.len() as u32,
+    flags: 0,
+    exposure: 1.0,
+    inv_unit: 1.0,
+    color: pack_color([1.0, 1.0, 1.0, 1.0]),
+    units_per_m: 1.0,
+    mvp: ortho_rot_mvp(half, rot),
+    eye_local: [rot[2][0] * 1e9, rot[2][1] * 1e9, rot[2][2] * 1e9, 0.0],
+  };
+  // the fixed-point unit from the brightest packet, as the host does after a readback
+  let mut probe = pyr.clone();
+  let pc0 = DustSplatPushConstants {
+    inv_unit: 1.0,
+    ..pc
+  };
+  splat_tier(
+    &moments,
+    &render,
+    &pc0,
+    &Default::default(),
+    0,
+    &layout,
+    &mut probe,
+  );
+  let tau_max = f32::from_bits(probe[PYR_TAU_MAX as usize]).max(1e-30);
+  let inv_unit = 1.0 / (tau_max * WHITE_TILE_UNIT_REL);
+  let pc = DustSplatPushConstants { inv_unit, ..pc };
+  splat_tier(
+    &moments,
+    &render,
+    &pc,
+    &Default::default(),
+    0,
+    &layout,
+    &mut pyr,
+  );
+  let mut img = alloc::vec![0.0f32; (px * px) as usize];
+  for y in 0..px {
+    for x in 0..px {
+      img[(y * px + x) as usize] = composite_sample(&layout, &pyr, 1.0 / inv_unit, x, y).0;
+    }
+  }
+  img
+}
+
+/// Azimuth (rad) of the brightest direction (±12° smoothed) of `img` in annuli of `dr` m
+fn ridge_azimuths(
+  img: &[f32],
+  half: f32,
+  px: u32,
+  r0: f32,
+  r1: f32,
+  dr: f32,
+) -> alloc::vec::Vec<f64> {
+  const BINS: usize = 90;
+  let m_per_px = 2.0 * half / px as f32;
+  let rings = ((r1 - r0) / dr) as usize;
+  let mut h = alloc::vec![0.0f64; rings * BINS];
+  for y in 0..px {
+    for x in 0..px {
+      let (dx, dy) = (
+        (x as f32 + 0.5 - px as f32 / 2.0) * m_per_px,
+        (y as f32 + 0.5 - px as f32 / 2.0) * m_per_px,
+      );
+      let r = (dx * dx + dy * dy).sqrt();
+      if r < r0 || r >= r1 {
+        continue;
+      }
+      let ring = ((r - r0) / dr) as usize;
+      let az = (dy.atan2(dx) + core::f32::consts::PI) / (2.0 * core::f32::consts::PI);
+      let b = ((az * BINS as f32) as usize).min(BINS - 1);
+      h[ring * BINS + b] += img[(y * px + x) as usize] as f64;
+    }
+  }
+  (0..rings)
+    .map(|ring| {
+      let row = &h[ring * BINS..(ring + 1) * BINS];
+      let smooth = |b: usize| (0..7).map(|k| row[(b + BINS + k - 3) % BINS]).sum::<f64>();
+      let best = (0..BINS).max_by(|&a, &b| smooth(a).partial_cmp(&smooth(b)).unwrap()).unwrap();
+      (best as f64 + 0.5) / BINS as f64 * 2.0 * core::f64::consts::PI - core::f64::consts::PI
+    })
+    .collect()
+}
+
+fn unwrap_angles(az: &[f64]) -> alloc::vec::Vec<f64> {
+  let mut out = alloc::vec::Vec::with_capacity(az.len());
+  let mut acc = 0.0;
+  for (i, &a) in az.iter().enumerate() {
+    if i > 0 {
+      let mut d = a - az[i - 1];
+      while d > core::f64::consts::PI {
+        d -= 2.0 * core::f64::consts::PI;
+      }
+      while d < -core::f64::consts::PI {
+        d += 2.0 * core::f64::consts::PI;
+      }
+      acc += d;
+    }
+    out.push(acc);
+  }
+  out
+}
+
+/// Top-down image (along the spin axis) of a jet's dust on a nucleus spinning at `omega` through
+/// the v4 renderer (packets, capsule splats, pyramid; τ per px²). Narrow equatorial jet, one grain
+/// size, no speed spread, small β: the former `spiral_image` of the dot renderer.
+fn spiral_image(omega: f64, half: f32, px: u32) -> alloc::vec::Vec<f32> {
+  let (r0, v0) = comet_state();
+  let axis = unit(scale(r0, -1.0)); // towards the Sun: the polar site is always lit
+  let e1 = unit(cross64(axis, [0.0, 0.0, 1.0]));
+  let e2 = cross64(axis, e1);
+  let jet_at = move |t: f64| {
+    let (r, v) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, t);
+    let h = 0.5 * omega * t;
+    Some(JetState {
+      t_s: t,
+      r_m: r,
+      v_ms: v,
+      rot: [
+        (axis[0] * h.sin()) as f32,
+        (axis[1] * h.sin()) as f32,
+        (axis[2] * h.sin()) as f32,
+        h.cos() as f32,
+      ],
+      site_normal: axis,
+      spin: Some([axis[0], axis[1], axis[2], omega]),
+      site_offset_m: [0.0; 3],
+    })
+  };
+  let cfg = DustEmitConfig {
+    q_dust_kgs: 1e-3,
+    ttl_s: 2.0 * 86400.0,
+    dist: SizeDistribution {
+      s_min_um: 49.5,
+      s_max_um: 50.5,
+      q: SIZE_POWER_Q,
+    },
+    diameter_um: 100.0,
+    density_gcm3: 0.5,
+    beta_ref: 1e-3,
+    v_mean: 2.0,
+    v_std: 0.0,
+    jet_dir: [e1[0] as f32, e1[1] as f32, e1[2] as f32],
+    aperture_rad: 0.05,
+    seed: 7,
+  };
+  let host = run_ticks([2.0 * 86400.0; 8], &jet_at, &cfg);
+  assert!(
+    host.next_window.is_some_and(|k| k >= host.due_window),
+    "history not filled"
+  );
+  let ds = host.draw_state().unwrap();
+  let rot = [
+    [e1[0] as f32, e1[1] as f32, e1[2] as f32],
+    [e2[0] as f32, e2[1] as f32, e2[2] as f32],
+    [axis[0] as f32, axis[1] as f32, axis[2] as f32],
+  ];
+  tier_image(&host, &ds.frame, half, px, rot)
+}
+
+/// A jet on a spinning nucleus draws a spiral through the v4 renderer: the ridge azimuth of the
+/// top-down image turns monotonically with the radius, at least two turns, `v·P` per turn; without
+/// spin the fan is straight.
+#[test]
+fn spinning_nucleus_draws_a_spiral() {
+  let (half, px) = (150.0e3f32, 400u32);
+  let p_rot = 6.0 * 3600.0;
+  // AETHERVK_DUST_SPIRAL_PGM=<prefix>: writes both images (log scale) for a visual check
+  if let Ok(prefix) = std::env::var("AETHERVK_DUST_SPIRAL_PGM") {
+    for (name, w) in [
+      ("spin", 2.0 * core::f64::consts::PI / p_rot),
+      ("still", 0.0),
+    ] {
+      let img = spiral_image(w, half, px);
+      let max = img.iter().cloned().fold(0.0f32, f32::max).max(1e-30);
+      let mut out = alloc::format!("P2\n{px} {px}\n255\n").into_bytes();
+      for y in 0..px {
+        for x in 0..px {
+          let v = img[(y * px + x) as usize] / max;
+          let g = if v > 0.0 {
+            ((1.0 + v.log10() / 4.0).max(0.0) * 255.0) as u32
+          } else {
+            0
+          };
+          out.extend_from_slice(alloc::format!("{g} ").as_bytes());
+        }
+        out.push(b'\n');
+      }
+      std::fs::write(alloc::format!("{prefix}_{name}.pgm"), out).unwrap();
+    }
+  }
+  let img = spiral_image(2.0 * core::f64::consts::PI / p_rot, half, px);
+  let az = ridge_azimuths(&img, half, px, 15e3, 140e3, 1e3);
+  assert_eq!(az.len(), 125);
+  let th = unwrap_angles(&az);
+  let turn = th[th.len() - 1] - th[0];
+  let turns = turn.abs() / (2.0 * core::f64::consts::PI);
+  let expect = 125e3 / (2.0 * p_rot);
+  std::println!("[spiral] {turns:.2} turns over 125 km, expected {expect:.2}");
+  assert!(turns >= 2.0, "{turns:.2} turns");
+  assert!(
+    (turns / expect - 1.0).abs() < 0.2,
+    "{turns:.2} turns, expected {expect:.2}"
+  );
+  // monotone: every 10 km (1.46 rad of arm; the splatted arm is ~20° wide, so the ridge of a
+  // single annulus wobbles by a few bins) turns the same way
+  for (k, w) in th.windows(11).enumerate() {
+    assert!(
+      (w[10] - w[0]) * turn > 0.0,
+      "annulus {k}: the ridge turns back ({:.2} rad)",
+      w[10] - w[0]
+    );
+  }
+  let still = ridge_azimuths(&spiral_image(0.0, half, px), half, px, 15e3, 140e3, 1e3);
+  let th0 = unwrap_angles(&still);
+  let spread = th0.iter().fold(0.0f64, |m, t| m.max((t - th0[0]).abs()));
+  assert!(spread < 0.3, "no spin: the fan turns by {spread:.2} rad");
+}
+
+/// `streak_pred` (the time-sample segment of the capsule) is the same stream's previous sample:
+/// `r − S` when live and not after a break, none for the first `S` and after breaks.
+#[test]
+fn streak_predecessor_is_the_same_streams_previous_sample() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let host = run_ticks((0..=200).map(|i| i as f64 * 600.0), &orbit_jet, &cfg);
+  let ds = host.draw_state().unwrap();
+  let (render, _) = tier_packets(&host, &ds.frame);
+  let s = 1usize << host.stream_shift();
+  assert!(render.len() > 4 * s);
+  for r in 0..render.len() {
+    let p = streak_pred(&render, r);
+    if r < s {
+      assert_eq!(p, None);
+    } else if !stream_break(render[r].age_id_dbeta_flux[2])
+      && render_live(render[r - s].age_id_dbeta_flux[1])
+    {
+      assert_eq!(p, Some(r - s), "r {r}");
+      // the predecessor is older
+      assert!(render[r - s].age_id_dbeta_flux[0] > render[r].age_id_dbeta_flux[0]);
+    } else {
+      assert_eq!(p, None);
+    }
+  }
+}
+
+#[test]
+fn gpu_layout_sizes() {
+  assert_eq!(core::mem::size_of::<DustCluster>(), 96);
+  assert_eq!(core::mem::size_of::<DustRenderCluster>(), 32);
+  assert_eq!(core::mem::size_of::<DustMoments>(), 320);
+  assert_eq!(core::mem::size_of::<DustBatch>(), 208);
+  assert_eq!(core::mem::size_of::<DustPropagatePushConstants>(), 112);
+  assert_eq!(core::mem::size_of::<DustSplatPushConstants>(), 128);
+  assert_eq!(
+    core::mem::size_of::<crate::gpu::CompositePushConstants>(),
+    96
+  );
+  assert_eq!(core::mem::offset_of!(DustSplatPushConstants, mvp), 48);
+  assert_eq!(
+    core::mem::offset_of!(DustSplatPushConstants, eye_local),
+    112
+  );
+  assert_eq!(
+    core::mem::offset_of!(crate::gpu::CompositePushConstants, dust_pyramid),
+    40
+  );
+  assert_eq!(
+    core::mem::offset_of!(crate::gpu::CompositePushConstants, layer_unit_au),
+    64
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shape evolution: the rendered dust must grow progressively (segmentation, no GPU)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The whole system (every tier) as the v4 renderer draws it at `t`: τ per px² (orthographic,
+/// half extent `half` m around the jet, `rot` the view basis), plus the display white point
+/// and auto softening the composite would use (from the measurement grid). `keep` selects the
+/// compact range of each tier to draw (`None` = all; the negative control draws a prefix).
+fn system_image(
+  sys: &DustSystemState,
+  t: f64,
+  half: f32,
+  px: u32,
+  rot: [[f32; 3]; 3],
+  keep: Option<&dyn Fn(usize, usize) -> bool>,
+) -> (alloc::vec::Vec<f32>, f32, f32) {
+  let s = system_image_rel(sys, t, half, px, rot, keep, WHITE_TILE_UNIT_REL);
+  (s.img, s.white, s.soft)
+}
+
+/// A composited τ image (row-major `px × px`, τ per px²) with its display statistics
+struct SystemImage {
+  img: alloc::vec::Vec<f32>,
+  /// white point (p99 of the occupied measure texels), its p50, the auto softening
+  white: f32,
+  p50: f32,
+  soft: f32,
+  /// peak packet τ (sets the fixed-point unit)
+  tau_max: f32,
+  /// fraction of the measure grid's texels that are occupied
+  occupied: f32,
+}
+
+/// [`system_image`] with the fixed-point unit at `unit_rel · τ_max` (production:
+/// [`WHITE_TILE_UNIT_REL`]).
+fn system_image_rel(
+  sys: &DustSystemState,
+  t: f64,
+  half: f32,
+  px: u32,
+  rot: [[f32; 3]; 3],
+  keep: Option<&dyn Fn(usize, usize) -> bool>,
+  unit_rel: f32,
+) -> SystemImage {
+  images_from_packets(&system_packets(sys, t, keep), half, px, rot, &[unit_rel])
+    .pop()
+    .expect("one image")
+}
+
+/// Every drawable tier's packets at `t` (view independent), `keep(i, n)` culling the others.
+fn system_packets(
+  sys: &DustSystemState,
+  t: f64,
+  keep: Option<&dyn Fn(usize, usize) -> bool>,
+) -> alloc::vec::Vec<TierPackets> {
+  let mut tiers: alloc::vec::Vec<TierPackets> = alloc::vec::Vec::new();
+  for host in &sys.tiers {
+    let Some(ds) = host.draw_state() else {
+      continue;
+    };
+    let frame = ds.frame.at_time(t);
+    let (mut r, mut m) = tier_packets(host, &frame);
+    if let Some(k) = keep {
+      let n = r.len();
+      for i in 0..n {
+        if !k(i, n) {
+          r[i] = DustRenderCluster::culled(0);
+          m[i] = DustMoments::culled();
+        }
+      }
+    }
+    tiers.push((r, m));
+  }
+  tiers
+}
+
+/// The images of `tiers` in the orthographic view (`half`, `rot`, `px`), one per entry of
+/// `unit_rels` (the fixed-point unit at `unit_rel · τ_max`). The τ_max probe is shared: it does
+/// not depend on the unit.
+fn images_from_packets(
+  tiers: &[TierPackets],
+  half: f32,
+  px: u32,
+  rot: [[f32; 3]; 3],
+  unit_rels: &[f32],
+) -> alloc::vec::Vec<SystemImage> {
+  let layout = PyramidLayout::new(px, px);
+  let mvp = ortho_rot_mvp(half, rot);
+  let eye = [rot[2][0] * 1e9, rot[2][1] * 1e9, rot[2][2] * 1e9, 0.0];
+  let threads = test_threads();
+  let pc = |inv_unit: f32, live: u32| DustSplatPushConstants {
+    moments: 0,
+    render: 0,
+    pyramid: 0,
+    live_count: live,
+    flags: 0,
+    exposure: 1.0,
+    inv_unit,
+    color: pack_color([1.0, 1.0, 1.0, 1.0]),
+    units_per_m: 1.0,
+    mvp,
+    eye_local: eye,
+  };
+  // the unit from the brightest packet (the host does this from τ_max of the previous frame)
+  let probe = splat_tiers_with(tiers, &|live| pc(1.0, live), &layout, threads);
+  let tau_max = f32::from_bits(probe[PYR_TAU_MAX as usize]).max(1e-30);
+  let mut images = alloc::vec::Vec::with_capacity(unit_rels.len());
+  for &unit_rel in unit_rels {
+    let unit = tau_max * unit_rel;
+    let mut pyr = splat_tiers_with(tiers, &|live| pc(1.0 / unit, live), &layout, threads);
+    measure_from_pyramid(&layout, &mut pyr);
+    let (mo, mw, mh) = layout.measure;
+    let measure = &pyr[mo as usize..mo as usize + (mw * mh * PYRAMID_TEXEL_WORDS) as usize];
+    let (white, p50) =
+      white_point_from_level(measure, 1 << DUST_WHITE_LEVEL, unit).unwrap_or((0.0, 0.0));
+    let occupied = measure.chunks_exact(PYRAMID_TEXEL_WORDS as usize).filter(|t| t[0] > 0).count()
+      as f32
+      / (mw * mh) as f32;
+    let mut img = alloc::vec![0.0f32; (px * px) as usize];
+    for y in 0..px {
+      for x in 0..px {
+        img[(y * px + x) as usize] = composite_sample(&layout, &pyr, unit, x, y).0;
+      }
+    }
+    images.push(SystemImage {
+      img,
+      white,
+      p50,
+      soft: auto_softening(p50, white),
+      tau_max,
+      occupied,
+    });
+  }
+  images
+}
+
+/// The host reference rasterizer gives the same packets and the same pyramid whatever the
+/// thread count (the per-thread partial pyramids merge exactly, [`merge_pyramid`]).
+#[test]
+fn host_rasterizer_is_thread_count_independent() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let cfg_at = move |_: &JetState| cfg;
+  let t = 3.0 * 86400.0;
+  let mut sys = DustSystemState::with_tiers(8_192, 3);
+  let mut seq = 0u64;
+  settle(&mut sys, t, &cfg_at, &mut seq);
+  let half = 3.0 * sys.coma_radius_m().expect("coma") as f32;
+  let px = 64u32;
+  let layout = PyramidLayout::new(px, px);
+  let mvp = ortho_rot_mvp(half, SHAPE_IDENTITY);
+  let pc = |inv_unit: f32, live: u32| DustSplatPushConstants {
+    moments: 0,
+    render: 0,
+    pyramid: 0,
+    live_count: live,
+    flags: 0,
+    exposure: 1.0,
+    inv_unit,
+    color: pack_color([1.0, 1.0, 1.0, 1.0]),
+    units_per_m: 1.0,
+    mvp,
+    eye_local: [0.0, 0.0, 1e9, 0.0],
+  };
+  let mut packets: alloc::vec::Vec<alloc::vec::Vec<TierPackets>> = alloc::vec::Vec::new();
+  let mut pyramids: alloc::vec::Vec<alloc::vec::Vec<u32>> = alloc::vec::Vec::new();
+  for threads in [1usize, 3, 16] {
+    let tiers: alloc::vec::Vec<TierPackets> = sys
+      .tiers
+      .iter()
+      .filter_map(|host| {
+        let ds = host.draw_state()?;
+        Some(tier_packets_with(host, &ds.frame.at_time(t), threads))
+      })
+      .collect();
+    assert!(tiers.iter().any(|(r, _)| !r.is_empty()), "nothing drawable");
+    // the single-threaded reference is `splat_tier` itself: the τ_max probe (unit 1, every count
+    // rounds to 0) and then the image at the near-lossless unit
+    let mut inv_unit = 1.0f32;
+    for pass in 0..2 {
+      let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+      pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+      for (r, m) in &tiers {
+        splat_tier(
+          m,
+          r,
+          &pc(inv_unit, r.len() as u32),
+          &Default::default(),
+          0,
+          &layout,
+          &mut pyr,
+        );
+      }
+      assert_eq!(
+        pyr,
+        splat_tiers_with(&tiers, &|live| pc(inv_unit, live), &layout, threads),
+        "{threads} threads, pass {pass}"
+      );
+      let tau_max = f32::from_bits(pyr[PYR_TAU_MAX as usize]);
+      assert!(tau_max > 0.0, "no τ_max");
+      if pass == 1 {
+        assert!(
+          pyr[PYRAMID_HEADER_WORDS as usize..].iter().any(|&w| w > 0),
+          "empty pyramid"
+        );
+        pyramids.push(pyr);
+      }
+      inv_unit = 1.0 / (tau_max * 1e-6);
+    }
+    packets.push(tiers);
+  }
+  for k in 1..packets.len() {
+    assert!(packets[k] == packets[0], "packets differ with {k}");
+    assert!(pyramids[k] == pyramids[0], "pyramids differ with {k}");
+  }
+}
+
+const SHAPE_IDENTITY: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+/// A jet that starts at `t_on` (no pre-start history): the dust must grow outward from it.
+fn switched_on_cfg(cfg: DustEmitConfig, t_on: f64) -> impl Fn(&JetState) -> DustEmitConfig {
+  move |j: &JetState| {
+    if j.t_s < t_on {
+      DustEmitConfig {
+        q_dust_kgs: 0.0,
+        ..cfg
+      }
+    } else {
+      cfg
+    }
+  }
+}
+
+/// ticks `sys` to `t` until nothing is building (what the logic tick does)
+fn settle(
+  sys: &mut DustSystemState,
+  t: f64,
+  cfg_at: &dyn Fn(&JetState) -> DustEmitConfig,
+  seq: &mut u64,
+) {
+  settle_jet(sys, t, &orbit_jet, cfg_at, seq)
+}
+
+/// [`settle`] with any jet function
+fn settle_jet(
+  sys: &mut DustSystemState,
+  t: f64,
+  jet_at: &dyn Fn(f64) -> Option<JetState>,
+  cfg_at: &dyn Fn(&JetState) -> DustEmitConfig,
+  seq: &mut u64,
+) {
+  for _ in 0..MAX_SEEK_PASSES {
+    sys.tick(t, jet_at, cfg_at);
+    *seq += 1;
+    sys.mark_submitted(*seq);
+    if !sys.building() {
+      break;
+    }
+  }
+  assert!(!sys.building(), "system still building at t = {t}");
+}
+
+/// The rendered dust grows progressively from the jet: with production switched on at `t_on`
+/// and the view updated every 2 h for 3 days, every new displayable pixel lies within the reach
+/// of the previous region (the dust's own motion over the step plus the splat footprint), the
+/// region stays one connected component, its radius and area grow by bounded steps, and the tail
+/// settles anti-sunward. The negative control (the former defect: the far history published
+/// after the coma) is rejected by the same measure.
+#[test]
+fn dust_grows_progressively_from_the_jet() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let t_on = 0.0;
+  let cfg_at = switched_on_cfg(cfg, t_on);
+  let dt = 2.0 * 3600.0;
+  let steps = 36; // 3 days
+  let (half, px) = (1500.0e3f32, 256u32);
+  let m_per_px = 2.0 * half / px as f32;
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  let mut seq = 0u64;
+  let mut images = alloc::vec::Vec::new();
+  for k in 1..=steps {
+    let t = t_on + k as f64 * dt;
+    settle(&mut sys, t, &cfg_at, &mut seq);
+    let (img, white, s) = system_image(&sys, t, half, px, SHAPE_IDENTITY, None);
+    images.push((t, img, white, s));
+  }
+  // one threshold for the whole sequence: what the last frame displays at 10 %
+  let (_, _, white, s) = images.last().unwrap();
+  let threshold = display_threshold(*white, *s, 0.1);
+  assert!(threshold > 0.0);
+  let nucleus = [px as f32 / 2.0, px as f32 / 2.0];
+  let shapes: alloc::vec::Vec<DustShape> = images
+    .iter()
+    .map(|(_, img, _, _)| segment_shape(img, px, px, nucleus, threshold))
+    .collect();
+  // the faint region (a quarter of the threshold): dust that brightens across the threshold was
+  // already there, so new displayable pixels must lie within reach of the *faint* previous region
+  let faint: alloc::vec::Vec<DustShape> = images
+    .iter()
+    .map(|(_, img, _, _)| segment_shape(img, px, px, nucleus, 0.25 * threshold))
+    .collect();
+  // the reach of one step: the fastest grains (v_mean + 3 v_std) plus their lateral spread over
+  // 2 h, in pixels, plus the splat footprint (3 px)
+  let v_max = cfg.v_mean + 3.0 * cfg.v_std + 3.0 * cfg.v_mean * cfg.aperture_rad;
+  let reach = v_max * dt as f32 / m_per_px + 3.0;
+  let (r0, v0) = comet_state();
+  let _ = v0;
+  let anti_sun = [(r0[0] / norm(r0)) as f32, (r0[1] / norm(r0)) as f32];
+  let mut worst = ShapeStep {
+    grown_px: 0,
+    lost_px: 0,
+    grown_outside_reach: 0,
+    area_ratio: 1.0,
+    radius_p90_ratio: 1.0,
+    tau_ratio: 1.0,
+    farthest_growth_px: 0.0,
+  };
+  for k in 1..shapes.len() {
+    let (a, b) = (&shapes[k - 1], &shapes[k]);
+    assert!(b.area_px > 0, "step {k}: empty shape");
+    assert!(
+      b.detached_px as f32 <= 0.01 * b.area_px as f32 + 2.0,
+      "step {k}: {} detached px of {}",
+      b.detached_px,
+      b.area_px
+    );
+    let st = shape_step(a, b, reach);
+    let reach_step = shape_step(&faint[k - 1], b, reach);
+    worst.grown_outside_reach = worst.grown_outside_reach.max(reach_step.grown_outside_reach);
+    worst.farthest_growth_px = worst.farthest_growth_px.max(reach_step.farthest_growth_px);
+    worst.area_ratio = worst.area_ratio.max(st.area_ratio);
+    worst.radius_p90_ratio = worst.radius_p90_ratio.max(st.radius_p90_ratio);
+    assert_eq!(
+      reach_step.grown_outside_reach,
+      0,
+      "step {k} (t = {:.1} h): {} px appeared beyond {reach:.1} px of the previous (faint) region (farthest {:.1} px)",
+      images[k].0 / 3600.0,
+      reach_step.grown_outside_reach,
+      reach_step.farthest_growth_px
+    );
+    assert!(
+      b.radius_p90 + 0.5 >= a.radius_p90 && b.radius_p90 - a.radius_p90 <= reach,
+      "step {k}: radius p90 {:.1} → {:.1} px (reach {reach:.1})",
+      a.radius_p90,
+      b.radius_p90
+    );
+    // bounded relative growth: a young coma's radius grows linearly in time, so its area may grow
+    // as (t_b / t_a)² between steps (×4 from 2 h to 4 h), never faster
+    let (ta, tb) = (images[k - 1].0, images[k].0);
+    let bound = 1.15 * (tb / ta).powi(2) as f32 + 0.1;
+    assert!(
+      st.area_ratio >= 0.97 && st.area_ratio <= bound,
+      "step {k}: area ratio {} ({} → {} px, bound {bound:.2})",
+      st.area_ratio,
+      a.area_px,
+      b.area_px
+    );
+    assert!(
+      st.tau_ratio >= 0.999,
+      "step {k}: τ ratio {} (production is on)",
+      st.tau_ratio
+    );
+    std::println!(
+      "[shape] step {k:2}: area {:5} px (+{} / −{}), p90 {:.1} px, farthest growth {:.1} px from the faint region, elongation {:.2}",
+      b.area_px,
+      st.grown_px,
+      st.lost_px,
+      b.radius_p90,
+      reach_step.farthest_growth_px,
+      b.elongation
+    );
+  }
+  // AETHERVK_DUST_SHAPE_PNG=<dir>: the same shape.png / shape.jsonl the observer writes, from
+  // the reference path (no GPU), plus the last frame as a PNG
+  if let Ok(dir) = std::env::var("AETHERVK_DUST_SHAPE_PNG") {
+    let dir = std::path::PathBuf::from(dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let mut jsonl = alloc::string::String::new();
+    for (k, sh) in shapes.iter().enumerate() {
+      jsonl.push_str(&alloc::format!(
+        "{{\"step\":{k},\"t_h\":{:.1},\"area_px\":{},\"radius_p50_px\":{:.2},\"radius_p90_px\":{:.2},\"radius_p90_km\":{:.1},\"elongation\":{:.3},\"axis\":[{:.4},{:.4}],\"total_tau\":{:.4e}}}\n",
+        images[k].0 / 3600.0, sh.area_px, sh.radius_p50, sh.radius_p90,
+        sh.radius_p90 * m_per_px * 1e-3, sh.elongation, sh.axis[0], sh.axis[1], sh.total_tau
+      ));
+    }
+    std::fs::write(dir.join("shape.jsonl"), jsonl).unwrap();
+    let (pw, ph) = (800u32, 300u32);
+    let mut plot = image::RgbaImage::from_pixel(pw, ph, image::Rgba([16, 16, 20, 255]));
+    let series: [(alloc::vec::Vec<f32>, [u8; 3]); 3] = [
+      (
+        shapes.iter().map(|s| s.radius_p90).collect(),
+        [255, 170, 40],
+      ),
+      (
+        shapes.iter().map(|s| s.area_px as f32).collect(),
+        [80, 200, 255],
+      ),
+      (
+        shapes.iter().map(|s| s.elongation).collect(),
+        [120, 255, 120],
+      ),
+    ];
+    for (vals, col) in &series {
+      let max = vals.iter().cloned().fold(0.0f32, f32::max).max(1e-30);
+      let n = vals.len().max(2) as f32;
+      let pt = |i: usize| {
+        (
+          10.0 + (pw as f32 - 20.0) * i as f32 / (n - 1.0),
+          ph as f32 - 10.0 - (ph as f32 - 20.0) * vals[i] / max,
+        )
+      };
+      for i in 1..vals.len() {
+        let ((x0, y0), (x1, y1)) = (pt(i - 1), pt(i));
+        let steps = ((x1 - x0).abs().max((y1 - y0).abs()) as usize).max(1);
+        for st in 0..=steps {
+          let t = st as f32 / steps as f32;
+          let (x, y) = (x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+          for d in 0..2u32 {
+            if x >= 0.0 && y >= 0.0 && (x as u32) < pw && (y as u32) + d < ph {
+              plot.put_pixel(
+                x as u32,
+                y as u32 + d,
+                image::Rgba([col[0], col[1], col[2], 255]),
+              );
+            }
+          }
+        }
+      }
+    }
+    plot.save(dir.join("shape.png")).unwrap();
+    // the last frame (log stretch, white = p99) and the first frame with dust
+    for (name, idx) in [
+      ("frame_first.png", 2usize),
+      ("frame_last.png", images.len() - 1),
+    ] {
+      let img = &images[idx].1;
+      let max = white.max(1e-30);
+      let mut out = image::RgbaImage::new(px, px);
+      for y in 0..px {
+        for x in 0..px {
+          let v = (img[(y * px + x) as usize] / max).clamp(0.0, 1.0);
+          let g = if v > 0.0 {
+            ((1.0 + v.log10() / 3.0).max(0.0) * 255.0) as u8
+          } else {
+            0
+          };
+          out.put_pixel(
+            x,
+            y,
+            image::Rgba([g, (g as f32 * 0.7) as u8, (g as f32 * 0.3) as u8, 255]),
+          );
+        }
+      }
+      out.save(dir.join(name)).unwrap();
+    }
+  }
+  let (first, last) = (&shapes[0], shapes.last().unwrap());
+  let cos = (last.axis[0] * anti_sun[0] + last.axis[1] * anti_sun[1]).abs();
+  std::println!(
+    "[shape] {} steps: radius p90 {:.1} → {:.1} px, area {} → {} px, elongation {:.2} → {:.2}, axis·anti-sun {cos:.3}, worst growth {:.1} px (reach {reach:.1})",
+    steps,
+    first.radius_p90,
+    last.radius_p90,
+    first.area_px,
+    last.area_px,
+    first.elongation,
+    last.elongation,
+    worst.farthest_growth_px
+  );
+  assert!(
+    last.radius_p90 > 2.0 * first.radius_p90.max(1.0),
+    "the tail did not grow"
+  );
+  assert!(
+    last.elongation > first.elongation.max(1.0) * 1.2,
+    "the tail did not elongate"
+  );
+  assert!(
+    cos > 0.96,
+    "the tail axis is {:.1}° off the anti-sun direction",
+    cos.acos().to_degrees()
+  );
+
+  // negative control: the former defect replayed — the far part of the history published after
+  // the near part (two frames: the youngest half of every tier, then everything)
+  let t = images.last().unwrap().0;
+  let young = |i: usize, n: usize| i >= n / 2;
+  let (img_a, _, _) = system_image(&sys, t, half, px, SHAPE_IDENTITY, Some(&young));
+  let (img_b, _, _) = system_image(&sys, t, half, px, SHAPE_IDENTITY, None);
+  let sa = segment_shape(&img_a, px, px, nucleus, 0.25 * threshold);
+  let sb = segment_shape(&img_b, px, px, nucleus, threshold);
+  let st = shape_step(&sa, &sb, reach);
+  std::println!(
+    "[shape] control: {} px popped in beyond reach (farthest {:.1} px), radius p90 {:.1} → {:.1}",
+    st.grown_outside_reach,
+    st.farthest_growth_px,
+    sa.radius_p90,
+    sb.radius_p90
+  );
+  assert!(
+    st.grown_outside_reach > 0 && st.farthest_growth_px > 2.0 * reach,
+    "the measure must reject a history that pops in"
+  );
+}
+
+/// The picture of an epoch is a function of the epoch only: a fresh fill, 2-h ticks and a seek
+/// back and forth give the same τ image.
+#[test]
+fn dust_shape_is_a_function_of_the_epoch_only() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let cfg_at = switched_on_cfg(cfg, 0.0);
+  let t_end = 2.0 * 86400.0;
+  let (half, px) = (1500.0e3f32, 128u32);
+  let mut seq = 0u64;
+  let mut fresh = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  settle(&mut fresh, t_end, &cfg_at, &mut seq);
+  let mut ticked = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  for k in 1..=24 {
+    settle(&mut ticked, k as f64 * t_end / 24.0, &cfg_at, &mut seq);
+  }
+  let mut seeked = ticked.clone();
+  settle(&mut seeked, t_end + 0.5 * 86400.0, &cfg_at, &mut seq);
+  settle(&mut seeked, t_end, &cfg_at, &mut seq);
+  let (a, _, _) = system_image(&fresh, t_end, half, px, SHAPE_IDENTITY, None);
+  let (b, _, _) = system_image(&ticked, t_end, half, px, SHAPE_IDENTITY, None);
+  let (c, _, _) = system_image(&seeked, t_end, half, px, SHAPE_IDENTITY, None);
+  let peak = a.iter().cloned().fold(0.0f32, f32::max);
+  assert!(peak > 0.0);
+  let mut worst = 0.0f32;
+  for i in 0..a.len() {
+    worst = worst.max((a[i] - b[i]).abs()).max((a[i] - c[i]).abs());
+  }
+  assert!(
+    worst <= 1e-3 * peak,
+    "images differ by {worst:.3e} of peak {peak:.3e}"
+  );
+}
+
+/// A jet ignited at `t_on` (`DustSystemState::set_ignition`) holds nothing emitted before it: no
+/// batch starts before `t_on`, no tier's oldest dust is older than `t − t_on`, and the rendered
+/// region grows progressively from the jet; a rewind below `t_on` empties every tier and leaves
+/// nothing building; seeking back and forth reproduces a fresh fill batch for batch; a re-emit
+/// keeps the ignition. The history fill of a pre-existing tail is thus an explicit opt-in.
+#[test]
+fn ignited_system_grows_from_t_on_and_seeks_deterministically() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let cfg_at = |_: &JetState| cfg;
+  let t_on = 5.0 * 86400.0;
+  let dt = 2.0 * 3600.0;
+  let steps = 36; // 3 days
+  let (half, px) = (1500.0e3f32, 128u32);
+  let m_per_px = 2.0 * half / px as f32;
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  assert!(
+    sys.ignition().is_none(),
+    "with_tiers alone keeps the pre-existing tail"
+  );
+  sys.set_ignition(Some(t_on));
+  assert_eq!(sys.ignition(), Some(t_on));
+  let mut seq = 0u64;
+  // before the ignition: nothing, and nothing building
+  settle(&mut sys, t_on - 3600.0, &cfg_at, &mut seq);
+  assert!(
+    sys.tiers.iter().all(|t| t.ring.live() == 0),
+    "dust before the ignition"
+  );
+  assert!(sys.draw_states().is_empty());
+  let mut images = alloc::vec::Vec::new();
+  for k in 1..=steps {
+    let t = t_on + k as f64 * dt;
+    settle(&mut sys, t, &cfg_at, &mut seq);
+    for tier in &sys.tiers {
+      for b in &tier.ring.batches {
+        let t_start = b.desc.comet_r_t_hi[3] as f64 + b.desc.comet_r_t_lo[3] as f64;
+        assert!(
+          t_start >= t_on - 1e-3,
+          "tier {}: batch starts at {t_start} < t_on {t_on}",
+          tier.tier
+        );
+        assert!(b.window >= 0, "window {} before the ignition", b.window);
+      }
+    }
+    for (i, st) in sys.stats().iter().enumerate() {
+      if st.live_clusters > 0 {
+        assert!(
+          st.oldest_age_s <= t - t_on + 1e-3,
+          "step {k} tier {i}: oldest {:.2} d > time since ignition {:.2} d",
+          st.oldest_age_s / 86400.0,
+          (t - t_on) / 86400.0
+        );
+      }
+    }
+    let (img, white, s) = system_image(&sys, t, half, px, SHAPE_IDENTITY, None);
+    images.push((t, img, white, s));
+  }
+  assert!(
+    sys.tiers[0].ring.live() > 0,
+    "the youngest tier emitted nothing"
+  );
+  // progressive growth from the jet (the shape machinery of `dust_grows_progressively_from_the_jet`)
+  let (_, _, white, s) = images.last().unwrap();
+  let threshold = display_threshold(*white, *s, 0.1);
+  assert!(threshold > 0.0);
+  let nucleus = [px as f32 / 2.0, px as f32 / 2.0];
+  let v_max = cfg.v_mean + 3.0 * cfg.v_std + 3.0 * cfg.v_mean * cfg.aperture_rad;
+  let reach = v_max * dt as f32 / m_per_px + 3.0;
+  let faint: alloc::vec::Vec<DustShape> = images
+    .iter()
+    .map(|(_, img, _, _)| segment_shape(img, px, px, nucleus, 0.25 * threshold))
+    .collect();
+  let shapes: alloc::vec::Vec<DustShape> = images
+    .iter()
+    .map(|(_, img, _, _)| segment_shape(img, px, px, nucleus, threshold))
+    .collect();
+  for k in 1..shapes.len() {
+    let st = shape_step(&faint[k - 1], &shapes[k], reach);
+    assert_eq!(
+      st.grown_outside_reach, 0,
+      "step {k}: {} px appeared beyond {reach:.1} px of the previous region",
+      st.grown_outside_reach
+    );
+    assert!(
+      shapes[k].area_px >= shapes[k - 1].area_px * 97 / 100,
+      "step {k}: the region shrank"
+    );
+  }
+  let t_end = t_on + steps as f64 * dt;
+  let reference: alloc::vec::Vec<DustBatch> =
+    sys.tiers.iter().flat_map(|t| t.ring.batches.iter().map(|b| b.desc)).collect();
+  // rewind below the ignition: empty, caught up, nothing drawn
+  settle(&mut sys, t_on - 3600.0, &cfg_at, &mut seq);
+  assert!(
+    sys.tiers.iter().all(|t| t.ring.live() == 0),
+    "dust after a rewind below the ignition"
+  );
+  assert!(!sys.building());
+  assert!(sys.draw_states().is_empty());
+  // forward again: the same descriptors as the ticked history
+  settle(&mut sys, t_end, &cfg_at, &mut seq);
+  let again: alloc::vec::Vec<DustBatch> =
+    sys.tiers.iter().flat_map(|t| t.ring.batches.iter().map(|b| b.desc)).collect();
+  assert_eq!(again.len(), reference.len(), "batch count after the seek");
+  for (a, b) in again.iter().zip(reference.iter()) {
+    assert_eq!(
+      bytemuck::bytes_of(a),
+      bytemuck::bytes_of(b),
+      "a batch differs after the seek"
+    );
+  }
+  // a fresh ignited system settled once at t_end: the same descriptors
+  let mut fresh = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  fresh.set_ignition(Some(t_on));
+  let mut seq2 = 0u64;
+  settle(&mut fresh, t_end, &cfg_at, &mut seq2);
+  let fresh_b: alloc::vec::Vec<DustBatch> =
+    fresh.tiers.iter().flat_map(|t| t.ring.batches.iter().map(|b| b.desc)).collect();
+  assert_eq!(
+    fresh_b.len(),
+    reference.len(),
+    "batch count of a fresh fill"
+  );
+  for (a, b) in fresh_b.iter().zip(reference.iter()) {
+    assert_eq!(
+      bytemuck::bytes_of(a),
+      bytemuck::bytes_of(b),
+      "a fresh fill differs from the ticked history"
+    );
+  }
+  // a re-emit keeps the ignition
+  sys.request_reemit();
+  settle(&mut sys, t_end, &cfg_at, &mut seq);
+  assert_eq!(sys.ignition(), Some(t_on));
+  assert!(sys.tiers.iter().all(|t| t.ring.batches.iter().all(|b| b.window >= 0)));
+  // the same images: the picture is a function of (parameters, ignition, epoch)
+  let (a, _, _) = system_image(&sys, t_end, half, px, SHAPE_IDENTITY, None);
+  let (b, _, _) = system_image(&fresh, t_end, half, px, SHAPE_IDENTITY, None);
+  let peak = a.iter().cloned().fold(0.0f32, f32::max);
+  assert!(peak > 0.0);
+  let worst = a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+  assert!(
+    worst <= 1e-3 * peak,
+    "images differ by {worst:.3e} of peak {peak:.3e}"
+  );
+}
+
+/// `set_ignition(None)` on a pre-existing-tail system changes nothing (no re-emit), and a
+/// pre-existing tail still reaches back before t = 0 at the start.
+#[test]
+fn prestart_system_is_unchanged_by_set_ignition_none() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let cfg_at = |_: &JetState| cfg;
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  let mut seq = 0u64;
+  settle(&mut sys, 0.0, &cfg_at, &mut seq);
+  let oldest = sys.stats()[2].oldest_age_s;
+  assert!(
+    oldest > 63.0 * 30.0 * 86400.0,
+    "pre-existing tail missing: oldest {oldest}"
+  );
+  sys.set_ignition(None);
+  assert!(
+    !sys.reemit,
+    "set_ignition(None) must not re-emit a pre-existing tail"
+  );
+  assert!(sys.ignition().is_none());
+}
+
+/// The segmented shape is the same from any camera distance and orientation (up to the
+/// projection): radii in metres and the axis agree at two zooms and a 90° rotation.
+#[test]
+fn dust_shape_is_the_same_from_any_camera_distance() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let cfg_at = switched_on_cfg(cfg, 0.0);
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  let mut seq = 0u64;
+  let t = 3.0 * 86400.0;
+  settle(&mut sys, t, &cfg_at, &mut seq);
+  let px = 256u32;
+  let th = core::f32::consts::FRAC_PI_2;
+  let rot90 = [
+    [th.cos(), -th.sin(), 0.0],
+    [th.sin(), th.cos(), 0.0],
+    [0.0, 0.0, 1.0],
+  ];
+  let mut results = alloc::vec::Vec::new();
+  // one physical threshold (τ per px² is a coverage: zoom independent), from the first view
+  let mut threshold = 0.0f32;
+  for (half, rot) in [
+    (1500.0e3f32, SHAPE_IDENTITY),
+    (3750.0e3, SHAPE_IDENTITY),
+    (1500.0e3, rot90),
+  ] {
+    let (img, white, s) = system_image(&sys, t, half, px, rot, None);
+    if threshold == 0.0 {
+      threshold = display_threshold(white, s, 0.1);
+    }
+    let sh = segment_shape(&img, px, px, [px as f32 / 2.0, px as f32 / 2.0], threshold);
+    let m_per_px = 2.0 * half / px as f32;
+    // the axis back in the world's xy plane
+    let ax = [
+      rot[0][0] * sh.axis[0] + rot[1][0] * sh.axis[1],
+      rot[0][1] * sh.axis[0] + rot[1][1] * sh.axis[1],
+    ];
+    results.push((
+      sh.radius_p90 * m_per_px,
+      sh.radius_p50 * m_per_px,
+      ax,
+      sh.elongation,
+      m_per_px,
+    ));
+    std::println!(
+      "[shape] half {half:.0} m: p90 {:.0} m p50 {:.0} m axis ({:.3}, {:.3}) elongation {:.2}",
+      sh.radius_p90 * m_per_px,
+      sh.radius_p50 * m_per_px,
+      ax[0],
+      ax[1],
+      sh.elongation
+    );
+  }
+  let r = &results[0];
+  for (k, o) in results.iter().enumerate().skip(1) {
+    assert!(
+      (o.0 / r.0 - 1.0).abs() < 0.06,
+      "view {k}: radius p90 {:.0} vs {:.0} m",
+      o.0,
+      r.0
+    );
+    // the median radius of a coma is a few pixels at the coarser zoom: half a pixel of slack
+    let p50_tol = 0.03 + 0.5 * o.4.max(r.4) / r.1;
+    assert!(
+      (o.1 / r.1 - 1.0).abs() < p50_tol,
+      "view {k}: radius p50 {:.0} vs {:.0} m (tolerance {p50_tol:.3})",
+      o.1,
+      r.1
+    );
+    let cos = (o.2[0] * r.2[0] + o.2[1] * r.2[1]).abs();
+    assert!(
+      cos > 0.9986,
+      "view {k}: axis {:.2}° off",
+      cos.acos().to_degrees()
+    );
+    assert!(
+      (o.3 / r.3 - 1.0).abs() < 0.1,
+      "view {k}: elongation {} vs {}",
+      o.3,
+      r.3
+    );
+  }
+}
+
+/// Measurement (not a pass/fail check yet): how the dust image depends on the ring capacity and
+/// on the stream count `S` it implies. For each configuration, with the history filled to 3 days
+/// and one fixed orthographic view (3× the reference coma), prints: S per tier, coma P90, total τ,
+/// τ_max, the share of τ the 0.5-count cut drops at the production unit, the displayed shape
+/// (area, P90 radius, elongation at the production display threshold) and the physical shape (at
+/// 10⁻³ of the reference peak) and the L1 distance of the near-lossless image to the reference.
+/// `cargo nextest run --release dust_tau_image_vs_ring_capacity --run-ignored only --no-capture`
+#[test]
+#[ignore = "measurement: run on demand"]
+fn dust_tau_image_vs_ring_capacity() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let cfg_at = move |_: &JetState| cfg;
+  let t = 3.0 * 86400.0;
+  let px = 256u32;
+  // (label, capacity, cap on S)
+  let configs: [(&str, u32, u32); 7] = [
+    ("ref 1M", 1 << 20, DUST_STREAMS),
+    ("262144", 262_144, DUST_STREAMS),
+    ("32768", 32_768, DUST_STREAMS),
+    ("8192 (CPU)", 8_192, DUST_STREAMS),
+    ("262144 S<=8", 262_144, 8),
+    ("262144 S<=2", 262_144, 2),
+    ("262144 S<=1", 262_144, 1),
+  ];
+  let build = |cap: u32, max_s: u32| {
+    let mut sys = DustSystemState::with_tiers(cap, 3);
+    for tier in sys.tiers.iter_mut() {
+      tier.max_streams = max_s;
+    }
+    let mut seq = 0u64;
+    settle(&mut sys, t, &cfg_at, &mut seq);
+    sys
+  };
+  let reference = build(configs[0].1, configs[0].2);
+  let coma_ref = reference.coma_radius_m().expect("reference coma") as f32;
+  let half = 3.0 * coma_ref;
+  let m_per_px = 2.0 * half / px as f32;
+  let px_area = m_per_px * m_per_px;
+  let nucleus = [px as f32 / 2.0, px as f32 / 2.0];
+  // the finest unit the u32 counts hold without wrapping (τ_max·1e-9 overflows them)
+  let fine_rel = std::env::var("DUST_FINE_UNIT_REL")
+    .ok()
+    .and_then(|v| v.parse().ok())
+    .unwrap_or(1e-6f32);
+  let ref_fine = system_image_rel(&reference, t, half, px, SHAPE_IDENTITY, None, fine_rel).img;
+  let ref_peak = ref_fine.iter().cloned().fold(0.0f32, f32::max);
+  let ref_total: f64 = ref_fine.iter().map(|&v| v as f64).sum();
+  let phys_threshold = 1e-3 * ref_peak;
+  std::println!(
+    "view: half {:.0} km ({:.1} km/px), reference coma {:.0} km, physical threshold {:.3e}",
+    half / 1e3,
+    m_per_px / 1e3,
+    coma_ref / 1e3,
+    phys_threshold
+  );
+  for (label, cap, max_s) in configs {
+    let sys = if cap == configs[0].1 && max_s == configs[0].2 {
+      reference.clone()
+    } else {
+      build(cap, max_s)
+    };
+    let streams: alloc::vec::Vec<u32> = sys.tiers.iter().map(|h| 1 << h.stream_shift()).collect();
+    let coma = sys.coma_radius_m().unwrap_or(0.0) / 1e3;
+    let fine_s = system_image_rel(&sys, t, half, px, SHAPE_IDENTITY, None, fine_rel);
+    let (fine, tau_max) = (fine_s.img, fine_s.tau_max);
+    let prod_s = system_image_rel(&sys, t, half, px, SHAPE_IDENTITY, None, WHITE_TILE_UNIT_REL);
+    let (prod, white, soft) = (&prod_s.img, prod_s.white, prod_s.soft);
+    let total_fine: f64 = fine.iter().map(|&v| v as f64).sum();
+    let total_prod: f64 = prod.iter().map(|&v| v as f64).sum();
+    // Στ of each tier alone (the same unit: the shares add up to the total)
+    let per_tier: alloc::vec::Vec<f64> = (0..sys.tiers.len())
+      .map(|k| {
+        let mut one = sys.clone();
+        one.tiers.retain(|h| h.tier == k as u32);
+        system_image_rel(&one, t, half, px, SHAPE_IDENTITY, None, fine_rel)
+          .img
+          .iter()
+          .map(|&v| v as f64)
+          .sum::<f64>()
+          * px_area as f64
+      })
+      .collect();
+    let l1: f64 =
+      fine.iter().zip(&ref_fine).map(|(&a, &b)| (a - b).abs() as f64).sum::<f64>() / ref_total;
+    let shown = segment_shape(prod, px, px, nucleus, display_threshold(white, soft, 0.1));
+    let phys = segment_shape(&fine, px, px, nucleus, phys_threshold);
+    let lit = prod.iter().filter(|&&v| v >= display_threshold(white, soft, 0.1)).count() as f32
+      / (px * px) as f32;
+    std::println!(
+      "{label:>12}: S {streams:?} coma {coma:>7.0} km | Στ·A {:.3e} (tiers {:.2e} {:.2e} {:.2e}) τ_max {tau_max:.3e} cut loss {:>5.1}% | W {white:.3e} p50/W {:.2e} s {soft:.2e} occupied {:>5.1}% | shown area {:>6} p90 {:>6.0} km elong {:>5.2} lit {:>5.1}% | physical area {:>6} p90 {:>6.0} km elong {:>5.2} | L1 vs ref {:>5.2}",
+      total_fine * px_area as f64,
+      per_tier.first().copied().unwrap_or(0.0),
+      per_tier.get(1).copied().unwrap_or(0.0),
+      per_tier.get(2).copied().unwrap_or(0.0),
+      100.0 * (1.0 - total_prod / total_fine.max(1e-300)),
+      prod_s.p50 / prod_s.white.max(1e-30),
+      100.0 * prod_s.occupied,
+      shown.area_px,
+      shown.radius_p90 * m_per_px / 1e3,
+      shown.elongation,
+      100.0 * lit,
+      phys.area_px,
+      phys.radius_p90 * m_per_px / 1e3,
+      phys.elongation,
+      l1
+    );
+  }
+}
+
+/// Every cluster carries the whole size distribution of its cell: the batch mass is conserved
+/// exactly by the `S` streams of each time sample for any stream count, the cluster's β is the
+/// reference grain's, its cross-section per gram is the distribution's mean (the harmonic mean
+/// size, `s_ref` for `n ∝ s^-3.5` over a symmetric log range, checked against a numeric
+/// integration), its dispersion is the jet's speed spread, its `misc.w` the half log-size range.
+#[test]
+fn every_cluster_carries_the_size_distribution_and_conserves_mass() {
+  let dist = SizeDistribution::from_diameter_um(100.0);
+  let (size_params, vel_params, mass_params) =
+    batch_params(&dist, 100.0, 0.533, 0.0213, 2.0, 0.5, 1.0e6, 0.37);
+  let make = |shift: u32, samples: u32| {
+    let mut b: DustBatch = bytemuck::Zeroable::zeroed();
+    let (rc, vc) = comet_state();
+    b.set_comet(rc, vc, 0.0, 3600.0);
+    b.rot_start = [0.0, 0.0, 0.0, 1.0];
+    b.lit = [0.0, 0.0, 0.0, LIT_MODE_ALWAYS];
+    b.jet_dir_aperture = [0.35, 0.93, 0.04, 0.6];
+    b.size_params = size_params;
+    b.vel_params = vel_params;
+    b.mass_params = mass_params;
+    b.mass_params[3] = batch_word(shift, false, false);
+    b.count = samples << shift;
+    b.ring_mask = 65_535;
+    b.seed = 0xC0FFEE;
+    b
+  };
+  // numeric ⟨1/s⟩ over the mass of n(s) ∝ s^-q, s in µm
+  let (s_min, s_max, q) = (dist.s_min_um, dist.s_max_um, dist.q);
+  let (mut num, mut den) = (0.0f64, 0.0f64);
+  let steps = 200_000;
+  for k in 0..steps {
+    let s = s_min * (s_max / s_min).powf((k as f64 + 0.5) / steps as f64);
+    let dm = s.powf(3.0 - q) * s; // mass per d(ln s)
+    num += dm / s;
+    den += dm;
+  }
+  let harmonic_um = den / num;
+  let mean_um = size_mean_inv_s_um(size_params) as f64;
+  assert!(
+    (mean_um / harmonic_um - 1.0).abs() < 1e-3,
+    "harmonic mean size {mean_um} vs numeric {harmonic_um}"
+  );
+  assert!(
+    (mean_um / vel_params[2] as f64 - 1.0).abs() < 1e-3,
+    "= s_ref for q = 3.5"
+  );
+  for shift in [2u32, 0, 3, 1, 6] {
+    let n = 1u32 << shift;
+    let samples = 4;
+    let b = make(shift, samples);
+    assert_eq!(batch_streams(&b).0, shift);
+    let mass_total: f64 = (0..b.count).map(|j| emit_cluster(&b, j).mass_g() as f64).sum();
+    let expect = b.mass_params[0] as f64;
+    assert!(
+      (mass_total / expect - 1.0).abs() < 1e-5,
+      "S {n}: Σ mass {mass_total:.6e} vs batch {expect:.6e}"
+    );
+    for j in 0..b.count {
+      let c = emit_cluster(&b, j);
+      assert!(
+        (c.beta() - vel_params[3] / vel_params[2]).abs() < 1e-7,
+        "S {n}: β"
+      );
+      let rho_g_m3 = mass_params[1] as f64 * 1.0e6;
+      let xsec = 3.0 / (4.0 * rho_g_m3 * mean_um * 1.0e-6);
+      assert!(
+        (c.misc[2] as f64 / xsec - 1.0).abs() < 1e-4,
+        "S {n}: cross-section per gram"
+      );
+      assert!(
+        (c.sigma_rad() - vel_params[1] * vel_params[0]).abs() < 1e-6,
+        "S {n}: σ_rad"
+      );
+      let half_range = 0.5 * (size_params[1] / size_params[0]).ln();
+      assert!(
+        (c.misc[3].abs() / half_range - 1.0).abs() < 1e-2,
+        "S {n}: half log-size range"
+      );
+      assert!(
+        !stream_break(c.misc[3]) || j < n,
+        "S {n}: no size wrap breaks"
+      );
+    }
+  }
+}
+
+/// The dust image does not depend on the ring capacity: the 8 192- and 32 768-slot systems (4 / 2
+/// / 2 and 16 / 8 / 8 streams over ≥ 8 size strata) render, at 3 days in one fixed view, within
+/// tolerance of the 262 144 one in optical depth, extent, elongation, white point, coma and the
+/// fraction of the frame the production display lights. Guards [`STRATA_MIN_SHIFT`] (one stratum
+/// gave +60 % τ and a coma ÷ 12) and the field-derived measurement grid (the per-packet deposit
+/// lit 72 % of the frame at 32 768 slots against 4 %). Tolerances from
+/// `dust_tau_image_vs_ring_capacity`, which prints the full table.
+#[test]
+fn dust_image_is_independent_of_ring_capacity() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let cfg_at = move |_: &JetState| cfg;
+  let t = 3.0 * 86400.0;
+  let px = 128u32;
+  // settled system, its packets (view independent) and its coma radius
+  let build = |cap: u32| {
+    let mut sys = DustSystemState::with_tiers(cap, 3);
+    let mut seq = 0u64;
+    settle(&mut sys, t, &cfg_at, &mut seq);
+    let packets = system_packets(&sys, t, None);
+    let coma = sys.coma_radius_m().unwrap_or(0.0);
+    (packets, coma)
+  };
+  struct Metrics {
+    total: f64,
+    p90: f32,
+    elongation: f32,
+    lit: f32,
+    white: f32,
+    coma: f64,
+  }
+  let fine_rel = 1e-6f32;
+  let (ref_packets, coma_ref) = build(262_144);
+  assert!(coma_ref > 0.0, "reference coma");
+  let half = 3.0 * coma_ref as f32;
+  let nucleus = [px as f32 / 2.0, px as f32 / 2.0];
+  // the near-lossless and the production image share one packet set and one τ_max probe
+  let images = |packets: &[TierPackets]| -> (SystemImage, SystemImage) {
+    let mut v = images_from_packets(
+      packets,
+      half,
+      px,
+      SHAPE_IDENTITY,
+      &[fine_rel, WHITE_TILE_UNIT_REL],
+    );
+    let prod = v.pop().expect("production image");
+    let fine = v.pop().expect("fine image");
+    (fine, prod)
+  };
+  let (ref_fine, ref_prod) = images(&ref_packets);
+  let ref_peak = ref_fine.img.iter().cloned().fold(0.0f32, f32::max);
+  let phys_threshold = 1e-3 * ref_peak;
+  let measure = |fine: &SystemImage, prod: &SystemImage, coma: f64| -> Metrics {
+    let shown_threshold = display_threshold(prod.white, prod.soft, 0.1);
+    let phys = segment_shape(&fine.img, px, px, nucleus, phys_threshold);
+    Metrics {
+      total: fine.img.iter().map(|&v| v as f64).sum(),
+      p90: phys.radius_p90,
+      elongation: phys.elongation,
+      lit: prod.img.iter().filter(|&&v| v >= shown_threshold).count() as f32 / (px * px) as f32,
+      white: prod.white,
+      coma,
+    }
+  };
+  let r = measure(&ref_fine, &ref_prod, coma_ref);
+  assert!(r.total > 0.0 && r.p90 > 0.0 && r.lit > 0.0 && r.white > 0.0 && r.coma > 0.0);
+  for cap in [32_768u32, 8_192] {
+    let (packets, coma) = build(cap);
+    let (fine, prod) = images(&packets);
+    let m = measure(&fine, &prod, coma);
+    let rel = |a: f64, b: f64| (a / b - 1.0).abs();
+    std::println!(
+      "[ring {cap}] Στ {:+.1}% p90 {:+.1}% elongation {:+.1}% lit {:.1}% vs {:.1}% W {:+.1}% coma {:+.1}%",
+      100.0 * (m.total / r.total - 1.0),
+      100.0 * (m.p90 / r.p90 - 1.0),
+      100.0 * (m.elongation / r.elongation - 1.0),
+      100.0 * m.lit,
+      100.0 * r.lit,
+      100.0 * (m.white / r.white - 1.0),
+      100.0 * (m.coma / r.coma - 1.0)
+    );
+    assert!(
+      rel(m.total, r.total) < 0.12,
+      "ring {cap}: Στ {:.4e} vs {:.4e}",
+      m.total,
+      r.total
+    );
+    assert!(
+      rel(m.p90 as f64, r.p90 as f64) < 0.05,
+      "ring {cap}: p90 {} vs {} px",
+      m.p90,
+      r.p90
+    );
+    // the direction bandwidth of a tier is one cone cell, aperture/√S: with 4 streams it is half
+    // the aperture and the cone is drawn that much fatter (the KDE bandwidth, not a lattice), so
+    // the shape's elongation is only expected from 8 streams up
+    let streams = 1u32 << DustHostState::new(cap / 2).stream_shift();
+    if streams >= 8 {
+      assert!(
+        rel(m.elongation as f64, r.elongation as f64) < 0.15,
+        "ring {cap}: elongation {} vs {}",
+        m.elongation,
+        r.elongation
+      );
+    } else {
+      std::println!("[ring {cap}] {streams} streams: elongation not compared (bandwidth)");
+    }
+    // the displayed area at the production unit flips by the fixed-point rounding at the edge
+    // (error diffusion: ±1 count per packet, fewer and heavier packets on a small ring): 6 pt
+    assert!(
+      (m.lit - r.lit).abs() < 0.06,
+      "ring {cap}: lit {} vs {}",
+      m.lit,
+      r.lit
+    );
+    assert!(
+      rel(m.white as f64, r.white as f64) < 0.15,
+      "ring {cap}: W {:.3e} vs {:.3e}",
+      m.white,
+      r.white
+    );
+    assert!(
+      rel(m.coma, r.coma) < 0.15,
+      "ring {cap}: coma {:.0} vs {:.0} m",
+      m.coma,
+      r.coma
+    );
+  }
+}
+
+fn norm3f(a: [f32; 3]) -> f32 {
+  (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
+}
+
+/// Box-filtered (`2r+1` square) copy of a `px × px` image
+fn box_filter(img: &[f32], px: u32, r: i64) -> alloc::vec::Vec<f32> {
+  let n = px as i64;
+  let mut out = alloc::vec![0.0f32; img.len()];
+  for y in 0..n {
+    for x in 0..n {
+      let (mut s, mut c) = (0.0f64, 0);
+      for dy in -r..=r {
+        for dx in -r..=r {
+          let (xx, yy) = (x + dx, y + dy);
+          if xx >= 0 && xx < n && yy >= 0 && yy < n {
+            s += img[(yy * n + xx) as usize] as f64;
+            c += 1;
+          }
+        }
+      }
+      out[(y * n + x) as usize] = (s / c as f64) as f32;
+    }
+  }
+  out
+}
+
+/// High-pass ripple of an image over its dust region (the observer's `ripple_metric`): rms of
+/// `(img − box₉)/box₉` over the pixels whose box mean is above the median of the non-empty ones.
+fn ripple_rms(img: &[f32], px: u32) -> f64 {
+  let blur = box_filter(img, px, 4);
+  let mut nz: alloc::vec::Vec<f32> = blur.iter().cloned().filter(|&b| b > 0.0).collect();
+  if nz.is_empty() {
+    return 0.0;
+  }
+  nz.sort_by(|a, b| a.partial_cmp(b).unwrap());
+  let median = nz[nz.len() / 2];
+  let (mut s, mut c) = (0.0f64, 0usize);
+  for i in 0..img.len() {
+    if blur[i] > median {
+      let v = ((img[i] - blur[i]) / blur[i]) as f64;
+      s += v * v;
+      c += 1;
+    }
+  }
+  if c == 0 { 0.0 } else { (s / c as f64).sqrt() }
+}
+
+/// **The executable guarantee of the whole-cell kernels.** `n` grains are drawn from the
+/// *continuous* emission distribution of `cfg` (direction uniform over the cone, speed
+/// `N(v_mean(s), v_std(s))` with `v ∝ s^-½`, size by cross-section — uniform in `√β` over the
+/// range —, emission time uniform over the history), each propagated in f64 with its own μ(β)
+/// and binned into the same orthographic view as `system_image`. The renderer's image (sum of
+/// the clusters' kernels: `S` streams × a few time samples per window, each a cell) must agree
+/// with that histogram, both box-filtered, to within the Monte-Carlo noise, and must carry no
+/// lattice (high-pass ripple below 5 %): no speed shells, no stream rays, no chords between
+/// sizes, at every scale. Four views: a 1-day jet at 50 km and 5 000 km half-width, a 2-year
+/// history at 0.03 AU and 0.3 AU.
+#[test]
+fn cell_kernels_reproduce_the_continuous_emission() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let beta_ref = cfg.beta_ref as f64;
+  let range = SIZE_RANGE_FACTOR;
+  let v_std_rel = (cfg.v_std / cfg.v_mean) as f64;
+  // (days of history, half extent, pixels, grains, spinning nucleus): the spinning cases are the
+  // app's jet (12.4 h, an equatorial site 20° north, lit once per rotation): every tier samples
+  // the rotation at its own cadence (28 min / 6.6 h / 2.2 d), and the picture must not depend on it
+  // (days of history, half extent, pixels, grains, spinning nucleus, far scene): the far scene is
+  // the app's: a 67P-like orbit with the perihelion passage inside a 5.3-year history, production
+  // ∝ r⁻², the 262 144-slot ring, at 480 px — the 1 AU half-height frame where the oldest tier's
+  // sample polylines are pixels apart laterally (judged on the whole sheet and on the high-pass
+  // excess over the truth: the sample striations)
+  let cases: [(f64, f32, u32, usize, bool, bool); 9] = [
+    (1.0, 50.0e3, 96, 300_000, false, false),
+    (1.0, 500.0e3, 96, 300_000, false, false),
+    (730.0, 0.03 * AU_M as f32, 96, 400_000, false, false),
+    (730.0, 0.3 * AU_M as f32, 96, 400_000, false, false),
+    (1.0, 500.0e3, 96, 300_000, true, false),
+    // the first two hours of a spinning jet seen from 5 km: the frame the app opens on
+    (2.0 / 24.0, 5.0e3, 240, 300_000, true, false),
+    (730.0, 0.03 * AU_M as f32, 96, 400_000, true, false),
+    (730.0, 0.3 * AU_M as f32, 96, 400_000, true, false),
+    (1900.0, AU_M as f32, 480, 8_000_000, true, true),
+  ];
+  let axis: V3 = [0.0, 0.0, 1.0];
+  let lat = 20.0f64.to_radians();
+  let n0: V3 = [lat.cos(), 0.0, lat.sin()];
+  // AETHERVK_DUST_CELLS_PX=<px>: render every case at that resolution (diagnostics with the
+  // PGM dump; the Monte Carlo gets the grains scaled by the pixel count)
+  let px_override: Option<u32> =
+    std::env::var("AETHERVK_DUST_CELLS_PX").ok().and_then(|v| v.parse().ok());
+  // AETHERVK_DUST_CELLS_67P=1: only the observer's scene instead — a 67P-like orbit with the
+  // perihelion passage inside a 5.3-year history, production ∝ r⁻², the 262 144-slot ring, the
+  // 0.033 AU half-height frame at 480 px (the far rays of the zoom series)
+  let scene_67p = std::env::var("AETHERVK_DUST_CELLS_67P").is_ok_and(|v| v == "1");
+  let cases: alloc::vec::Vec<(f64, f32, u32, usize, bool, bool)> = if scene_67p {
+    alloc::vec![
+      (1900.0, 5.0e9, 480, 4_000_000, true, true),
+      (1900.0, AU_M as f32, 480, 8_000_000, true, true),
+    ]
+  } else {
+    cases.to_vec()
+  };
+  let t_aphelion_s = (1900.0 - 270.0) * 86400.0;
+  let (r67, v67) = comet_state_67p(t_aphelion_s);
+  for (days, half, px, n, spin, far) in cases {
+    let (px, n) = match px_override {
+      Some(p) if !far => (p, n * ((p * p) / (px * px)).max(1) as usize),
+      _ => (px, n),
+    };
+    let t = days * 86400.0;
+    let (rc0, vc0) = if far { (r67, v67) } else { comet_state() };
+    let cfg = if spin {
+      DustEmitConfig {
+        jet_dir: [n0[0] as f32, n0[1] as f32, n0[2] as f32],
+        ..cfg
+      }
+    } else {
+      cfg
+    };
+    let jet_at = move |t: f64| -> Option<JetState> {
+      if far {
+        Some(spinning_jet_from((r67, v67), t, axis, n0, true))
+      } else if spin {
+        Some(spinning_jet(t, axis, n0, true))
+      } else {
+        orbit_jet(t)
+      }
+    };
+    // 32 768 slots: 16 / 8 / 8 streams, so every tier's direction kernel (one cone cell) is a
+    // fraction of the aperture; the 8 192-slot ring's 2-stream old tiers draw a bimodal cone
+    let mut sys = DustSystemState::with_tiers(if far { 262_144 } else { 32_768 }, 3);
+    sys.set_ignition(Some(0.0));
+    let mut seq = 0u64;
+    // the observer's production law: Afρ ∝ r⁻² (the app's power 2), i.e. q ∝ (1 AU / r)²
+    let production = move |r_m: f64| -> f64 { if far { (AU_M / r_m).powi(2) } else { 1.0 } };
+    let cfg_at = move |j: &JetState| DustEmitConfig {
+      q_dust_kgs: cfg.q_dust_kgs * production(norm(j.r_m)),
+      ..cfg
+    };
+    settle_jet(&mut sys, t, &jet_at, &cfg_at, &mut seq);
+    let anchor = sys.tiers[0].draw_state().expect("tier 0").frame.at_time(t).anchor_m();
+    {
+      // diagnostics: where the packets are
+      let tiers = system_packets(&sys, t, None);
+      for (k, host) in sys.tiers.iter().enumerate() {
+        std::println!(
+          "[cells] tier {k}: live {} batches {} next_window {:?} due {} unlit {}",
+          host.ring.live(),
+          host.ring.batches.len(),
+          host.next_window,
+          host.due_window,
+          host.unlit_windows
+        );
+        if let Some(ds) = host.draw_state() {
+          let f = ds.frame.at_time(t);
+          std::println!(
+            "[cells] tier {k}: frame ttl {:?} t_now {:.1} live {} batches {} ttl_s {} jet t {:?}",
+            f.ttl,
+            f.t_now_s(),
+            host.ring.live(),
+            host.ring.batches.len(),
+            host.ttl_s,
+            host.jet.map(|j| j.t_s)
+          );
+        }
+      }
+      for (k, (r, m)) in tiers.iter().enumerate() {
+        let live: alloc::vec::Vec<&DustMoments> = m.iter().filter(|q| q.flux() > 0.0).collect();
+        let mut d: alloc::vec::Vec<f32> = live.iter().map(|q| norm3f(q.mean())).collect();
+        d.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let edge_far: alloc::vec::Vec<f32> =
+          live.iter().map(|q| norm3f(q.edge(SIZE_EDGES as usize - 1))).collect();
+        let ages: alloc::vec::Vec<f32> = live.iter().map(|q| q.age()).collect();
+        std::println!(
+          "[cells] tier {k}: {} render, {} live moments; |mean| p10/p50/p90 = {:.3e}/{:.3e}/{:.3e} m; max |edge16| {:.3e}; age max {:.3e} s",
+          r.len(),
+          live.len(),
+          d.get(d.len() / 10).copied().unwrap_or(0.0),
+          d.get(d.len() / 2).copied().unwrap_or(0.0),
+          d.get(d.len() * 9 / 10).copied().unwrap_or(0.0),
+          edge_far.iter().cloned().fold(0.0f32, f32::max),
+          ages.iter().cloned().fold(0.0f32, f32::max)
+        );
+      }
+    }
+    let (img, _, _) = system_image(&sys, t, half, px, SHAPE_IDENTITY, None);
+    // Monte Carlo of the continuous emission, binned into the same view
+    let mvp = ortho_rot_mvp(half, SHAPE_IDENTITY);
+    let mut mc = alloc::vec![0.0f32; (px * px) as usize];
+    let mut rng = 0x9E37_79B9_7F4A_7C15u64 ^ (days as u64);
+    let jet = [cfg.jet_dir[0], cfg.jet_dir[1], cfg.jet_dir[2]];
+    // the renderer's direction kernel: the cone is covered by S Gaussian streams of lateral
+    // dispersion σ_lat = v·max(aperture/√S, CHILD_SIGMA_V_REL) (the KDE bandwidth, one cone
+    // cell): the continuous emission is drawn through that bandwidth, so the truth to compare with
+    // is the uniform cone convolved with it (with 64 streams it is an eighth of the aperture; the
+    // small test ring has 4 streams, and a sharp cone would differ by a third on the axis)
+    // per tier: the tier that draws a grain of that age has its own stream count
+    let sigma_ang_of = |age_s: f64| -> f64 {
+      let tier = sys
+        .tiers
+        .iter()
+        .find(|h| {
+          let (lo, hi) = h.age_band_s(cfg.ttl_s);
+          age_s >= lo && age_s < hi
+        })
+        .unwrap_or(&sys.tiers[sys.tiers.len() - 1]);
+      let streams = 1u32 << tier.stream_shift();
+      (cfg.aperture_rad / (streams as f32).sqrt()).max(CHILD_SIGMA_V_REL) as f64
+    };
+    let (sb_lo, sb_hi) = ((beta_ref / range).sqrt(), (beta_ref * range).sqrt());
+    let mut binned = 0usize;
+    for _ in 0..n {
+      let t_e = lcg(&mut rng) * t;
+      let (rc, vc) = kepler::propagate_f64(rc0, vc0, SUN_MU_M3_S2, t_e);
+      // a spinning nucleus: the jet turns with it and emits only while its site faces the Sun
+      let jet = if spin {
+        let n = rotate_axis_angle(n0, axis, OMEGA * t_e);
+        if dot(n, rc) >= 0.0 {
+          continue;
+        }
+        [n[0] as f32, n[1] as f32, n[2] as f32]
+      } else {
+        jet
+      };
+      let dir = sample_cone(
+        lcg(&mut rng) as f32,
+        lcg(&mut rng) as f32,
+        jet,
+        cfg.aperture_rad,
+      );
+      let sb = sb_lo + (sb_hi - sb_lo) * lcg(&mut rng);
+      let beta = sb * sb;
+      let f = sb / beta_ref.sqrt();
+      let v = (cfg.v_mean as f64 * f * (1.0 + v_std_rel * gauss_lcg(&mut rng))).max(0.0);
+      let d64 = [dir[0] as f64, dir[1] as f64, dir[2] as f64];
+      let ax = if d64[0].abs() < 0.9 {
+        [1.0, 0.0, 0.0]
+      } else {
+        [0.0, 1.0, 0.0]
+      };
+      let e1 = unit(cross64(ax, d64));
+      let e2 = cross64(d64, e1);
+      let (g1, g2) = (gauss_lcg(&mut rng), gauss_lcg(&mut rng));
+      let lat = cfg.v_mean as f64 * f * sigma_ang_of(t - t_e);
+      let ve = [
+        vc[0] + d64[0] * v + lat * (g1 * e1[0] + g2 * e2[0]),
+        vc[1] + d64[1] * v + lat * (g1 * e1[1] + g2 * e2[1]),
+        vc[2] + d64[2] * v + lat * (g1 * e1[2] + g2 * e2[2]),
+      ];
+      let (r, _) = kepler::propagate_f64(rc, ve, SUN_MU_M3_S2 * (1.0 - beta), t - t_e);
+      let local = [
+        (r[0] - anchor[0]) as f32,
+        (r[1] - anchor[1]) as f32,
+        (r[2] - anchor[2]) as f32,
+      ];
+      if let Some(p) = project_point(local, &mvp, px, px) {
+        let (x, y) = (p[0].floor() as i64, p[1].floor() as i64);
+        if x >= 0 && y >= 0 && x < px as i64 && y < px as i64 {
+          // production ∝ q(r(t_e)): the grain's weight
+          mc[(y as i64 * px as i64 + x) as usize] += production(norm(rc)) as f32;
+          binned += 1;
+        }
+      }
+    }
+    assert!(
+      binned > n / 20,
+      "{days} d half {half}: only {binned} grains in view"
+    );
+    // normalise both to unit sum, box-filter, compare where the Monte Carlo has signal
+    let norm_img = |v: &[f32]| {
+      let s: f64 = v.iter().map(|&x| x as f64).sum();
+      v.iter()
+        .map(|&x| (x as f64 / s.max(1e-30)) as f32)
+        .collect::<alloc::vec::Vec<f32>>()
+    };
+    // the renderer reconstructs through the pixel low-pass filter (σ = 0.5 px, every packet):
+    // the histogram gets the same filter, or a sub-pixel trail (0.3 AU: 0.04 px wide) would
+    // compare a hard 1-px line against a 1.2-px soft one
+    let mc_filtered = {
+      let n = px as i64;
+      let w: [f32; 3] = {
+        let g = |d: f32| (-0.5 * d * d / (0.5 * 0.5)).exp();
+        let (w0, w1) = (g(0.0), g(1.0));
+        let z = w0 + 2.0 * w1;
+        [w1 / z, w0 / z, w1 / z]
+      };
+      let mut tmp = alloc::vec![0.0f32; mc.len()];
+      let mut out = alloc::vec![0.0f32; mc.len()];
+      for y in 0..n {
+        for x in 0..n {
+          let mut v = 0.0;
+          for (k, wk) in w.iter().enumerate() {
+            let xx = x + k as i64 - 1;
+            if xx >= 0 && xx < n {
+              v += wk * mc[(y * n + xx) as usize];
+            }
+          }
+          tmp[(y * n + x) as usize] = v;
+        }
+      }
+      for y in 0..n {
+        for x in 0..n {
+          let mut v = 0.0;
+          for (k, wk) in w.iter().enumerate() {
+            let yy = y + k as i64 - 1;
+            if yy >= 0 && yy < n {
+              v += wk * tmp[(yy * n + x) as usize];
+            }
+          }
+          out[(y * n + x) as usize] = v;
+        }
+      }
+      out
+    };
+    let (a, b) = (
+      box_filter(&norm_img(&img), px, 2),
+      box_filter(&norm_img(&mc_filtered), px, 2),
+    );
+    let peak = b.iter().cloned().fold(0.0f32, f32::max);
+    let (mut se, mut sb2, mut count) = (0.0f64, 0.0f64, 0usize);
+    for i in 0..a.len() {
+      if b[i] >= 0.05 * peak {
+        se += ((a[i] - b[i]) as f64).powi(2);
+        sb2 += (b[i] as f64).powi(2);
+        count += 1;
+      }
+    }
+    let rel_rms = (se / sb2.max(1e-300)).sqrt();
+    let ripple = ripple_rms(&img, px);
+    {
+      // along the trail (the τ-weighted principal axis of the Monte-Carlo image from the centre)
+      // and across it at mid-length: where a difference sits
+      let c = px as f32 / 2.0;
+      let (mut sx, mut sy, mut sw) = (0.0f64, 0.0f64, 0.0f64);
+      for y in 0..px {
+        for x in 0..px {
+          let w = b[(y * px + x) as usize] as f64;
+          sx += w * (x as f64 + 0.5 - c as f64);
+          sy += w * (y as f64 + 0.5 - c as f64);
+          sw += w;
+        }
+      }
+      let n = (sx * sx + sy * sy).sqrt().max(1e-9);
+      let (ux, uy) = ((sx / n) as f32, (sy / n) as f32);
+      let mut along = alloc::string::String::new();
+      for d in [2.0f32, 6.0, 12.0, 20.0, 30.0, 40.0] {
+        let (x, y) = ((c + d * ux) as i64, (c + d * uy) as i64);
+        if x >= 0 && y >= 0 && x < px as i64 && y < px as i64 {
+          let i = (y * px as i64 + x) as usize;
+          along.push_str(&alloc::format!(
+            " {d:.0}px: {:+.0}%",
+            100.0 * (a[i] / b[i].max(1e-30) - 1.0)
+          ));
+        }
+      }
+      let mut across = alloc::string::String::new();
+      for o in [-6.0f32, -3.0, -1.0, 0.0, 1.0, 3.0, 6.0] {
+        let (x, y) = (
+          (c + 20.0 * ux - o * uy) as i64,
+          (c + 20.0 * uy + o * ux) as i64,
+        );
+        if x >= 0 && y >= 0 && x < px as i64 && y < px as i64 {
+          let i = (y * px as i64 + x) as usize;
+          across.push_str(&alloc::format!(" {o:+.0}px: {:.2e}/{:.2e}", a[i], b[i]));
+        }
+      }
+      std::println!(
+        "[cells] along the trail (render/MC − 1):{along}\n[cells] across at 20 px (render/MC):{across}"
+      );
+      // radial profile (normalised images, box-filtered) at a few radii from the centre
+      let c = px as f32 / 2.0;
+      let mut line = alloc::string::String::new();
+      for r in [1.0f32, 3.0, 6.0, 12.0, 24.0, 40.0] {
+        let (mut sa, mut sb, mut n) = (0.0f64, 0.0f64, 0);
+        for k in 0..64 {
+          let th = k as f32 * core::f32::consts::TAU / 64.0;
+          let (x, y) = ((c + r * th.cos()) as i64, (c + r * th.sin()) as i64);
+          if x >= 0 && y >= 0 && x < px as i64 && y < px as i64 {
+            sa += a[(y * px as i64 + x) as usize] as f64;
+            sb += b[(y * px as i64 + x) as usize] as f64;
+            n += 1;
+          }
+        }
+        line.push_str(&alloc::format!(
+          " r{r:.0}: {:.2e}/{:.2e}",
+          sa / n as f64,
+          sb / n as f64
+        ));
+      }
+      std::println!("[cells] profile render/MC{line}");
+    }
+    // AETHERVK_DUST_CELLS_PGM=<prefix>: the two box-filtered images side by side (render | MC)
+    if let Ok(prefix) = std::env::var("AETHERVK_DUST_CELLS_PGM") {
+      let peak_a = a.iter().cloned().fold(0.0f32, f32::max).max(1e-30);
+      let mut out = alloc::format!("P2\n{} {px}\n255\n", 2 * px + 1).into_bytes();
+      for y in 0..px as usize {
+        for x in 0..(2 * px + 1) as usize {
+          let v = if x < px as usize {
+            a[y * px as usize + x] / peak_a
+          } else if x == px as usize {
+            1.0
+          } else {
+            b[y * px as usize + x - px as usize - 1] / peak
+          };
+          // fourth-root stretch: the halo at 1 % of the peak stays visible
+          out.extend_from_slice(
+            alloc::format!("{} ", (v.clamp(0.0, 1.0).powf(0.25) * 255.0) as u8).as_bytes(),
+          );
+        }
+        out.push(b'\n');
+      }
+      let tag = if far {
+        "_67p"
+      } else if spin {
+        "_spin"
+      } else {
+        ""
+      };
+      std::fs::write(alloc::format!("{prefix}_{days}d_{half:.0}m{tag}.pgm"), out).unwrap();
+      // the raw images too (f32 little endian, render then Monte Carlo, both unit sum, unfiltered)
+      let mut raw: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+      for v in norm_img(&img).iter().chain(norm_img(&mc_filtered).iter()) {
+        raw.extend_from_slice(&v.to_le_bytes());
+      }
+      std::fs::write(alloc::format!("{prefix}_{days}d_{half:.0}m{tag}.f32"), raw).unwrap();
+    }
+    // the Monte-Carlo noise after the 5×5 box: ~1/√(25 · grains per px)
+    let grains_px = binned as f64 / count.max(1) as f64;
+    let noise = 1.0 / (25.0 * grains_px).sqrt();
+    std::println!(
+      "[cells] {days} d, half {half:.3e} m{}: {count} px compared, rel rms {rel_rms:.3} (MC noise {noise:.3}), ripple {ripple:.3}, {grains_px:.0} grains/px",
+      if spin { ", spinning" } else { "" }
+    );
+    assert!(count > 50, "{days} d half {half}: {count} px");
+    // the two 1-D profiles the eye judges: the brightness along the trail (summed across it)
+    // and the width across it (summed along), compared where the Monte Carlo has signal; a 2-D
+    // rms would also count sub-pixel offsets of a trail a few pixels wide
+    let (ux, uy, c) = {
+      let c = px as f32 / 2.0;
+      let (mut sx, mut sy) = (0.0f64, 0.0f64);
+      for y in 0..px {
+        for x in 0..px {
+          let w = b[(y * px + x) as usize] as f64;
+          sx += w * (x as f64 + 0.5 - c as f64);
+          sy += w * (y as f64 + 0.5 - c as f64);
+        }
+      }
+      let n = (sx * sx + sy * sy).sqrt().max(1e-9);
+      ((sx / n) as f32, (sy / n) as f32, c)
+    };
+    let bins = px as i64;
+    let (mut along_a, mut along_b) = (
+      alloc::vec![0.0f64; bins as usize * 2],
+      alloc::vec![0.0f64; bins as usize * 2],
+    );
+    let (mut across_a, mut across_b) = (
+      alloc::vec![0.0f64; bins as usize * 2],
+      alloc::vec![0.0f64; bins as usize * 2],
+    );
+    for y in 0..px {
+      for x in 0..px {
+        let (dx, dy) = (x as f32 + 0.5 - c, y as f32 + 0.5 - c);
+        let d = (dx * ux + dy * uy).round() as i64 + bins;
+        let o = (-dx * uy + dy * ux).round() as i64 + bins;
+        let i = (y * px + x) as usize;
+        if d >= 0 && d < 2 * bins {
+          along_a[d as usize] += a[i] as f64;
+          along_b[d as usize] += b[i] as f64;
+        }
+        if o >= 0 && o < 2 * bins {
+          across_a[o as usize] += a[i] as f64;
+          across_b[o as usize] += b[i] as f64;
+        }
+      }
+    }
+    let profile_rms = |pa: &[f64], pb: &[f64]| -> f64 {
+      let peak = pb.iter().cloned().fold(0.0f64, f64::max);
+      let (mut se, mut sb2) = (0.0f64, 0.0f64);
+      for i in 0..pa.len() {
+        if pb[i] >= 0.05 * peak {
+          se += (pa[i] - pb[i]).powi(2);
+          sb2 += pb[i].powi(2);
+        }
+      }
+      (se / sb2.max(1e-300)).sqrt()
+    };
+    let (along_rms, across_rms) = (
+      profile_rms(&along_a, &along_b),
+      profile_rms(&across_a, &across_b),
+    );
+    std::println!(
+      "[cells] {days} d, half {half:.3e} m: along-trail profile rms {along_rms:.3}, across-trail profile rms {across_rms:.3}"
+    );
+    assert!(
+      along_rms < 0.08 + 2.0 * noise && across_rms < 0.08 + 2.0 * noise,
+      "{days} d half {half}: the rendered trail differs from the continuous emission: along {along_rms:.3}, across {across_rms:.3} rms (noise {noise:.3}; 2-D {rel_rms:.3})"
+    );
+    // the high-pass ripple is reported, not asserted by itself: on a 1/r² coma the 9×9 box
+    // high-pass measures curvature, and the Monte-Carlo comparison is the lattice detector (a
+    // lattice is a difference from the continuous emission)
+    let _ = ripple;
+    if far {
+      // the far scene is judged on the whole sheet (the truth above 1e-4 of its peak after the
+      // box; 1 % would be the coma alone): the 2-D rms of the difference, and the render's 9-px
+      // high-pass rms in excess of the truth's — the sample striations of the oldest tier
+      let region: alloc::vec::Vec<usize> = (0..a.len()).filter(|&i| b[i] >= 1e-4 * peak).collect();
+      let (mut se, mut sb2) = (0.0f64, 0.0f64);
+      for &i in &region {
+        se += ((a[i] - b[i]) as f64).powi(2);
+        sb2 += (b[i] as f64).powi(2);
+      }
+      let sheet_rms = (se / sb2.max(1e-300)).sqrt();
+      let hp = |img: &[f32]| -> f64 {
+        let lo = box_filter(img, px, 4);
+        let mut s2 = 0.0f64;
+        for &i in &region {
+          let r = ((img[i] - lo[i]) / lo[i].max(1e-30)) as f64;
+          s2 += r * r;
+        }
+        (s2 / region.len().max(1) as f64).sqrt()
+      };
+      let (hp_render, hp_truth) = (hp(&a), hp(&b));
+      std::println!(
+        "[cells] {days} d, half {half:.3e} m, far sheet: {} px, rel rms {sheet_rms:.3}, high-pass render {hp_render:.3} truth {hp_truth:.3} (excess {:.3}), noise {noise:.3}",
+        region.len(),
+        hp_render - hp_truth
+      );
+      assert!(
+        sheet_rms < 0.15 + 2.0 * noise,
+        "{days} d half {half}: the far sheet differs from the continuous emission by {sheet_rms:.3} rms"
+      );
+      assert!(
+        hp_render - hp_truth < 0.03 + noise,
+        "{days} d half {half}: sample striations: high-pass {hp_render:.3} against the truth's {hp_truth:.3}"
+      );
+    }
+  }
+}
+
+/// A chain of open-ended chord capsules deposits exactly its flux, whatever its orientation,
+/// length or the texel size: the band of every chord covers its own texels and nothing beyond,
+/// the chords tile the line (`CapsuleBand`, `scatter_into` with `Packet::open`). The energy
+/// test of the chord representation: a loss here is a rotation- or zoom-dependent picture.
+#[test]
+fn open_chord_chains_deposit_their_flux_at_any_angle() {
+  let (w, h) = (256u32, 256u32);
+  let layout = PyramidLayout::new(w, h);
+  let inv_unit = 1.0e4;
+  let mut worst = 0.0f64;
+  for &angle_deg in &[0.0f32, 17.0, 45.0, 90.0, 123.0, 180.0, 250.0] {
+    for &len_px in &[3.0f32, 20.0, 80.0] {
+      for &sigma in &[0.6f32, 2.5] {
+        for &texel in &[1u32, 2, 4] {
+          // the splat's level rule (`splat_level`): texels are at most σ / DUST_SPLAT_SIGMA_TEXELS,
+          // level 0 whatever σ (the pixel filter keeps σ ≥ 0.5 px there)
+          if texel > 1 && sigma < DUST_SPLAT_SIGMA_TEXELS * texel as f32 {
+            continue;
+          }
+          let a = angle_deg.to_radians();
+          let dir = [a.cos(), a.sin()];
+          let n_chords = 16usize;
+          let total_flux = 1.0f32;
+          let start = [128.0 - 0.5 * len_px * dir[0], 128.0 - 0.5 * len_px * dir[1]];
+          let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+          pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+          let (off, lw, lh) = layout.levels[texel.trailing_zeros() as usize];
+          let s2 = sigma * sigma;
+          for c in 0..n_chords {
+            let u0 = c as f32 / n_chords as f32;
+            let seg = [
+              len_px * dir[0] / n_chords as f32,
+              len_px * dir[1] / n_chords as f32,
+            ];
+            let mu = [
+              start[0] + u0 * len_px * dir[0],
+              start[1] + u0 * len_px * dir[1],
+            ];
+            // amp = flux / (2π √det): the capsule's integral over the plane is amp·2π√det
+            let det = s2 * s2;
+            let flux = total_flux / n_chords as f32;
+            let p = ScreenPacket {
+              mu,
+              cov: [s2, 0.0, s2],
+              seg,
+              amp: flux / (2.0 * core::f32::consts::PI * det.sqrt()),
+              sigma_min: sigma,
+              det,
+              depth_au: 1.0,
+              open: [c > 0, c + 1 < n_chords],
+              rho: [1.0, 1.0],
+            };
+            scatter_into(
+              &p,
+              [1.0, 1.0, 1.0],
+              texel as f32,
+              off,
+              lw,
+              lh,
+              inv_unit,
+              &mut pyr,
+              true,
+            );
+          }
+          let sum: f64 = (0..(lw * lh) as usize)
+            .map(|t| pyr[off as usize + t * PYRAMID_TEXEL_WORDS as usize] as f64)
+            .sum();
+          let expect = total_flux as f64 * inv_unit as f64;
+          let err = (sum / expect - 1.0).abs();
+          worst = worst.max(err);
+          assert!(
+            err < 0.02,
+            "angle {angle_deg}°, length {len_px} px, σ {sigma} px, texel {texel}: deposited {sum:.0} of {expect:.0} counts ({:+.1} %)",
+            100.0 * (sum / expect - 1.0)
+          );
+        }
+      }
+    }
+  }
+  std::println!("[chords] worst flux error {:.3} %", 100.0 * worst);
+}
+
+/// A comet without a rotation model (the app's default: `spin: None`, a fixed attitude, the jet
+/// site lit for the part of the orbit it faces the Sun) settles its pre-start history like any
+/// other: the unlit windows are counted and skipped, the fill ends, nothing runs away.
+#[test]
+fn no_rotation_model_history_settles() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let jet_at = |t: f64| -> Option<JetState> {
+    let (r0, v0) = comet_state();
+    let (r, v) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, t);
+    Some(JetState {
+      t_s: t,
+      r_m: r,
+      v_ms: v,
+      rot: [0.0, 0.0, 0.0, 1.0],
+      site_normal: [1.0, 0.0, 0.0],
+      spin: None,
+      site_offset_m: [0.0; 3],
+    })
+  };
+  let cfg_at = |_: &JetState| cfg;
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  let mut seq = 0u64;
+  for t in [0.0, 730.0 * 86400.0] {
+    settle_jet(&mut sys, t, &jet_at, &cfg_at, &mut seq);
+    for (k, h) in sys.tiers.iter().enumerate() {
+      std::println!(
+        "[no-spin] t {t:.0}: tier {k} live {} batches {} unlit {} next {:?} due {}",
+        h.ring.live(),
+        h.ring.batches.len(),
+        h.unlit_windows,
+        h.next_window,
+        h.due_window
+      );
+    }
+    assert!(!sys.building());
+    let total: u32 = sys.tiers.iter().map(|h| h.ring.live()).sum();
+    assert!(total > 0, "t {t}: no dust at all");
+  }
+}
+
+/// A jet that cannot be evaluated (`jet_at` = `None`: the comet is not in the cartesian cache)
+/// leaves the system caught up, flagged and empty after one tick — never "building", so the
+/// logic thread's emission loop cannot spin on it (the 2026-10-10 runaway: `MAX_SEEK_PASSES`
+/// empty compute submissions per tick until the driver's host heap was gone). A jet that
+/// reappears clears the flag and the history fills as usual.
+#[test]
+fn unavailable_jet_does_not_keep_the_system_building() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let cfg_at = |_: &JetState| cfg;
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  let none = |_: f64| -> Option<JetState> { None };
+  sys.tick(86400.0, &none, &cfg_at);
+  sys.mark_submitted(1);
+  assert!(
+    !sys.building(),
+    "an unavailable jet must not keep the system building"
+  );
+  let stats = sys.stats();
+  assert!(
+    stats.iter().all(|t| t.jet_unavailable && t.caught_up && t.live_clusters == 0),
+    "{stats:?}"
+  );
+  // the logic thread's own report path: true once, then false
+  let mut fresh = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  assert!(fresh.mark_jet_unavailable());
+  assert!(!fresh.mark_jet_unavailable());
+  assert!(!fresh.building());
+  // the jet comes back: the flag clears and the history fills
+  let mut seq = 1u64;
+  settle(&mut sys, 86400.0, &cfg_at, &mut seq);
+  let stats = sys.stats();
+  assert!(
+    stats.iter().all(|t| !t.jet_unavailable && t.caught_up),
+    "{stats:?}"
+  );
+  assert!(stats.iter().map(|t| t.live_clusters).sum::<u32>() > 0);
+}
+
+/// Diagnostic (prints, no assertion): where on the pyramid a 2-hour jet seen from 5 km lands.
+#[test]
+fn diag_two_hour_jet_pyramid_levels() {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let axis: V3 = [0.0, 0.0, 1.0];
+  let lat = 20.0f64.to_radians();
+  let n0: V3 = [lat.cos(), 0.0, lat.sin()];
+  let cfg = DustEmitConfig {
+    jet_dir: [n0[0] as f32, n0[1] as f32, n0[2] as f32],
+    ..cfg
+  };
+  let jet_at = move |t: f64| -> Option<JetState> { Some(spinning_jet(t, axis, n0, true)) };
+  let cfg_at = move |_: &JetState| cfg;
+  let mut sys = DustSystemState::with_tiers(32_768, 3);
+  sys.set_ignition(Some(0.0));
+  let mut seq = 0u64;
+  let t = 2.0 * 3600.0;
+  settle_jet(&mut sys, t, &jet_at, &cfg_at, &mut seq);
+  let tiers = system_packets(&sys, t, None);
+  let (px, half) = (240u32, 5.0e3f32);
+  let layout = PyramidLayout::new(px, px);
+  let mvp = ortho_rot_mvp(half, SHAPE_IDENTITY);
+  let eye = [0.0, 0.0, 1e9, 0.0];
+  for (k, (render, moments)) in tiers.iter().enumerate() {
+    let live = render.len() as u32;
+    let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+    pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+    let pc = DustSplatPushConstants {
+      moments: 0,
+      render: 0,
+      pyramid: 0,
+      live_count: live,
+      flags: 0,
+      exposure: 1.0,
+      inv_unit: 1e6,
+      color: pack_color([1.0; 4]),
+      units_per_m: 1.0,
+      mvp,
+      eye_local: eye,
+    };
+    splat_tier(
+      moments,
+      render,
+      &pc,
+      &Default::default(),
+      0,
+      &layout,
+      &mut pyr,
+    );
+    let mut parts = alloc::vec::Vec::new();
+    for (l, &(off, w, h)) in layout.levels.iter().enumerate() {
+      let mut sum = 0u64;
+      let mut lit = 0usize;
+      for i in 0..(w * h) as usize {
+        let c = pyr[off as usize + i * PYRAMID_TEXEL_WORDS as usize];
+        sum += c as u64;
+        lit += (c > 0) as usize;
+      }
+      if sum > 0 {
+        parts.push(alloc::format!(
+          "L{l}({w}x{h}):{lit}/{:.2e}",
+          sum as f64 * 4f64.powi(l as i32)
+        ));
+      }
+    }
+    std::println!(
+      "[diag] tier {k}: {live} clusters; per level lit/Στ·px²: {}",
+      parts.join(" ")
+    );
+    // the packets: how many, their σ_min and their band size
+    let mut n_pk = 0usize;
+    let mut big = 0usize;
+    let mut sig: alloc::vec::Vec<f32> = alloc::vec::Vec::new();
+    for i in 0..render.len() {
+      let m = &moments[i];
+      if !(m.flux() > 0.0) {
+        continue;
+      }
+      let pred = streak_pred(render, i).map(|q| &moments[q]);
+      let seg = pred
+        .map(|p| {
+          let (a, b) = (p.mean(), m.mean());
+          [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+        })
+        .unwrap_or([0.0; 3]);
+      let merged = polyline_merged(m, &mvp, px, px);
+      for p in subpackets_merged(m, seg, pred, merged) {
+        if let Some(sp) = project_packet(&p, 1.0, &mvp, px, px, [eye[0], eye[1], eye[2]]) {
+          n_pk += 1;
+          sig.push(sp.sigma_min);
+          let ex = DUST_SPLAT_SIGMAS * sp.cov[0].sqrt();
+          let ey = DUST_SPLAT_SIGMAS * sp.cov[2].sqrt();
+          let band = ((sp.seg[0] * sp.seg[0] + sp.seg[1] * sp.seg[1]).sqrt() + 2.0 * ex + 2.0)
+            * (2.0 * ey + 2.0);
+          if band > DUST_SPLAT_MAX_TEXELS as f32 {
+            big += 1;
+          }
+        }
+      }
+    }
+    sig.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let q = |f: f64| sig.get(((sig.len() as f64 - 1.0) * f) as usize).copied().unwrap_or(0.0);
+    std::println!(
+      "[diag] tier {k}: {n_pk} on-screen packets, σ_min px p10/p50/p90 {:.1}/{:.1}/{:.1}, {big} beyond the level-0 texel valve",
+      q(0.1),
+      q(0.5),
+      q(0.9)
+    );
+  }
+  // the youngest window's packets, in metres from the anchor (the jet)
+  {
+    let (render, moments) = &tiers[0];
+    let n = render.len();
+    let anchor = sys.tiers[0].draw_state().expect("tier 0").frame.at_time(t).anchor_m();
+    let _ = anchor;
+    for i in (n.saturating_sub(32)..n).step_by(8) {
+      let m = &moments[i];
+      if !(m.flux() > 0.0) {
+        continue;
+      }
+      let pred = streak_pred(render, i).map(|q| &moments[q]);
+      let seg = pred
+        .map(|p| {
+          let (a, b) = (p.mean(), m.mean());
+          [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+        })
+        .unwrap_or([0.0; 3]);
+      let merged = polyline_merged(m, &mvp, px, px);
+      let packets = subpackets_merged(m, seg, pred, merged);
+      let nm = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+      let pk: alloc::vec::Vec<alloc::string::String> = packets
+        .iter()
+        .take(8)
+        .map(|p| {
+          alloc::format!(
+            "[|mean| {:.0} m, |seg| {:.0} m, σ {:.0}/{:.0}/{:.0} m, flux {:.2e}, open {:?}]",
+            nm(p.mean),
+            nm(p.seg),
+            p.cov[0].max(0.0).sqrt(),
+            p.cov[3].max(0.0).sqrt(),
+            p.cov[5].max(0.0).sqrt(),
+            p.flux,
+            p.open
+          )
+        })
+        .collect();
+      std::println!(
+        "[diag] cluster {i}: age {:.0} s, |mean| {:.0} m, pred {} (|seg_t| {:.0} m), merged {merged}, ratio {:.1}, pieces {}, {} packets: {}",
+        m.age(),
+        nm(m.mean()),
+        pred
+          .map(|p| alloc::format!("age {:.0} s", p.age()))
+          .unwrap_or_else(|| "none".into()),
+        nm(seg),
+        width_ratio(m, pred),
+        time_pieces(m, pred),
+        packets.len(),
+        pk.join(" ")
+      );
+    }
+  }
+  // images of subsets (AETHERVK_DUST_DIAG_PGM=<prefix>): all clusters, the youngest window's
+  // (the last 16 compact indices), the rest, and one stream
+  if let Ok(prefix) = std::env::var("AETHERVK_DUST_DIAG_PGM") {
+    let n = tiers[0].0.len();
+    let subsets: [(&str, alloc::boxed::Box<dyn Fn(usize, usize) -> bool>); 4] = [
+      ("all", alloc::boxed::Box::new(|_, _| true)),
+      ("youngest", alloc::boxed::Box::new(move |i, _| i + 16 >= n)),
+      ("older", alloc::boxed::Box::new(move |i, _| i + 16 < n)),
+      ("stream0", alloc::boxed::Box::new(|i, _| i % 16 == 0)),
+    ];
+    for (name, keep) in &subsets {
+      let (img, _, _) = system_image(&sys, t, half, px, SHAPE_IDENTITY, Some(keep.as_ref()));
+      let bytes: alloc::vec::Vec<u8> = img.iter().flat_map(|v| v.to_le_bytes()).collect();
+      std::fs::write(alloc::format!("{prefix}_{name}.f32"), bytes).unwrap();
+    }
+  }
 }

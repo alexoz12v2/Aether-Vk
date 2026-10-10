@@ -320,7 +320,6 @@ impl RenderArchetype for resources::SphereGizmoRenderResourceArchetype {
   }
 }
 impl_render_archetype!(GizmoRenderResourceArchetype);
-impl_render_archetype!(DustRenderArchetype);
 
 pub struct PreparedArchetypeUpdate {
   pub main_graphics_info: crate::gpu_backends::vulkan::device::pipelines::GraphicsInfo,
@@ -1148,83 +1147,6 @@ impl Archetypes {
     };
     registry.insert(ArchetypeId::Gizmo, Box::new(res));
 
-    Ok(())
-  }
-
-  #[named]
-  pub fn create_dust_archetype(
-    &self,
-    device: &LogicalDevice,
-    vertex_shader: &shader_manager::Shader,
-    fragment_shader: &shader_manager::Shader,
-    depth_stencil_format: vk::Format,
-    color_format: vk::Format,
-    _allocator: vk_mem::AllocatorView,
-    _discard_pool: &resources::DiscardPool,
-    renderpasses: &renderpasses::RenderPasses,
-    pipeline_pool_lock: &pipelines::PipelinePool,
-    _timeline: u64,
-    arena: alloc::sync::Arc<DebugTrackedRwLock<resources::DustRenderArchetypeArena>>,
-    rollback: &mut utils::RollbackContext<'_>,
-  ) -> GpuResult<()> {
-    let mut registry = self.registry.write();
-    if registry.contains_key(&ArchetypeId::Particles) {
-      return Err(crate::gpu_err_device!());
-    }
-    let layout = arena.read().pipeline_layout.get();
-    let render_pass = renderpasses
-      .get_pipeline_render_pass_mrt(
-        color_format,
-        ash::vk::Format::R32G32_SFLOAT,
-        depth_stencil_format,
-      )?
-      .get();
-
-    let graphics_info = pipelines::GraphicsInfo::default()
-      .with_pre_rasterization(
-        PreRasterization::default().with_vertex_module(vertex_shader.module.get()),
-      )
-      // dust v3: instanced camera-facing quads (6 vertices per instance), premultiplied-over
-      // splats saturating at the stream color
-      .with_vertex_in(VertexIn::default().with_topology(vk::PrimitiveTopology::TRIANGLE_LIST))
-      .with_rasterization_polygon_mode(vk::PolygonMode::FILL)
-      .with_fragment_shader(
-        FragmentShader::default()
-          .add_viewport(ignored_viewport())
-          .add_scissors(ignored_scissor())
-          .with_fragment_module(fragment_shader.module.get()),
-      )
-      .with_pipeline_flags(
-        pipelines::PipelineFlags::NO_DEPTH_WRITE
-          | pipelines::PipelineFlags::PREMULTIPLIED_BLEND
-          | pipelines::PipelineFlags::DUST_ACCUM,
-      );
-    let pipeline_graphics_info = {
-      let mut gi = graphics_info.apply_presentation_defaults(
-        color_format,
-        depth_stencil_format,
-        layout,
-        render_pass,
-      );
-      gi.fragment_out.color_write_masks.push(ash::vk::ColorComponentFlags::RGBA);
-      gi.fragment_out.color_write_masks.push(ash::vk::ColorComponentFlags::empty());
-      gi.fragment_out.color_attachment_formats.push(ash::vk::Format::R32G32_SFLOAT);
-      gi
-    };
-
-    pipeline_pool_lock.get_or_create_graphics_pipeline(
-      device,
-      &pipeline_graphics_info,
-      rollback,
-    )?;
-    let pipeline_key = pipeline_graphics_info.pipeline_key();
-
-    let res = resources::DustRenderArchetype {
-      arena: alloc::sync::Arc::downgrade(&arena),
-      pipeline_key,
-      graphics_info: pipeline_graphics_info,
-    };
-    registry.insert(ArchetypeId::Particles, Box::new(res));
     Ok(())
   }
 }

@@ -114,7 +114,13 @@ impl TimelineManager {
   #[named]
   pub fn refresh_cached_value(&self) -> GpuResult<u64> {
     let gpu_value = unsafe { self.sem_device.get_semaphore_counter_value(self.semaphore.get()) }
-      .map_err(|_| crate::gpu_err_device!())?;
+      .map_err(|e| {
+        if e == ash::vk::Result::ERROR_DEVICE_LOST {
+          GpuError::from(e)
+        } else {
+          crate::gpu_err_device!()
+        }
+      })?;
 
     self.cached_completed_value.fetch_max(gpu_value, Ordering::Relaxed);
     Ok(gpu_value)
@@ -122,6 +128,11 @@ impl TimelineManager {
 
   pub fn get_next_submit_value(&self) -> u64 {
     self.next_submit_value.load(Ordering::SeqCst)
+  }
+
+  /// The graphics timeline semaphore (for host waits on a submit value).
+  pub fn semaphore(&self) -> ash::vk::Semaphore {
+    self.semaphore.get()
   }
 
   /// Gets a unique, strictly increasing sequence number for a new submission.

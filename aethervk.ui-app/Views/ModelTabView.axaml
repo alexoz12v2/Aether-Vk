@@ -259,7 +259,11 @@
                                         ToolTip.Tip="Display stretch of the dust (softening of an asinh curve over the accumulated optical depth, relative to the brightest dust in view, which adapts to the view like an eye).&#x0A;Smaller: the faint, old tail and trail (thousands of times fainter than the coma) become visible while the coma saturates.&#x0A;1: close to linear, physically proportional brightness.&#x0A;Visual only." />
             </Grid>
 
-            <!-- ──── Dust tracers (real particles); the flow marks are always on while simulating ── -->
+            <!-- ──── Dust view aids: tracers (real particles) and flow pulses (marks on synchrones) ── -->
+            <CheckBox Margin="12,10,12,0"
+                      Content="{Binding StrDustFlow}"
+                      IsChecked="{Binding DustFlow}"
+                      ToolTip.Tip="Brightness marks riding the dust along synchrones (the dust of one emission instant), a motion cue near the nucleus: peak 4x, trough 0.15x, mean 1.&#x0A;Off by default: seen from 0.03 AU and beyond the marks are the synchrone fan itself, hard rays through the nucleus that the physical optical depth does not show.&#x0A;Visual only." />
             <CheckBox Margin="12,10,12,0"
                       Content="{Binding StrDustTracers}"
                       IsChecked="{Binding DustTracers}"

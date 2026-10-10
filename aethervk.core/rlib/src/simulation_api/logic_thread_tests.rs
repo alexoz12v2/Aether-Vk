@@ -1953,3 +1953,546 @@ fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
     "tracking while playing: Sun up to {worst} rad off the view axis"
   );
 }
+
+/// Device loss: every scene's CPU state is dumped without any GPU synchronisation, the dump is
+/// the `DumpScene` format (restorable), and `latest` names the directory for the host.
+#[test]
+fn test_device_loss_dumps_every_scene_without_the_gpu() {
+  use crate::simulation_api::structs::SceneDump;
+  let mut ctx = startup_with_planets();
+  let start = Epoch::from_gregorian_utc(2025, 10, 1, 0, 0, 0, 0);
+  let a = ctx
+    .create_empty_scene2(true, start, start + Duration::from_days(30.0))
+    .unwrap()
+    .scene_id;
+  let b = ctx
+    .create_empty_scene2(true, start, start + Duration::from_days(31.0))
+    .unwrap()
+    .scene_id;
+  assert!(ctx.seek_epoch_sync(a, start + Duration::from_days(4.0)));
+
+  let root = std::env::temp_dir().join(format!("aethervk_gpu_lost_test_{}", std::process::id()));
+  let _ = std::fs::remove_dir_all(&root);
+  let base = root.join("4242");
+  let base_s = base.to_str().unwrap().to_string();
+  let results = {
+    let scenes = ctx.scenes.read();
+    utils::dump_scenes_on_device_loss(&scenes, &base_s)
+  };
+  assert_eq!(results.len(), 2, "{results:?}");
+  for (scene_id, r) in &results {
+    let dir = r.as_ref().expect("dump failed");
+    assert_eq!(dir, &format!("{base_s}/scene_{scene_id}"));
+    let (dump, _): (SceneDump, usize) = bincode::serde::decode_from_slice(
+      &std::fs::read(format!("{dir}/scene.bin")).unwrap(),
+      bincode::config::standard(),
+    )
+    .unwrap();
+    assert_eq!(dump.version, SceneDump::CURRENT_VERSION);
+    assert_eq!(dump.scene_id, *scene_id);
+  }
+  // the dumped epoch is the scene's current epoch (scene a was moved 4 days in)
+  let (dump_a, _): (SceneDump, usize) = bincode::serde::decode_from_slice(
+    &std::fs::read(format!("{base_s}/scene_{a}/scene.bin")).unwrap(),
+    bincode::config::standard(),
+  )
+  .unwrap();
+  let epoch_a = Epoch::from_tdb_duration(Duration::from_parts(
+    dump_a.current_epoch_parts.0,
+    dump_a.current_epoch_parts.1,
+  ));
+  assert!(
+    (epoch_a - (start + Duration::from_days(4.0))).to_seconds().abs() < 1e-3,
+    "{epoch_a}"
+  );
+  let _ = b;
+  assert_eq!(
+    std::fs::read_to_string(root.join("latest")).unwrap(),
+    base_s,
+    "latest must name the dump directory"
+  );
+  // the env override wins over $HOME
+  unsafe { std::env::set_var("AETHERVK_GPU_LOST_DUMP_DIR", "/tmp/aethervk_override") };
+  assert_eq!(utils::gpu_lost_dump_dir(), "/tmp/aethervk_override");
+  unsafe { std::env::remove_var("AETHERVK_GPU_LOST_DUMP_DIR") };
+  assert!(
+    utils::gpu_lost_dump_dir().ends_with(&format!("/.aethervk/gpu_lost/{}", std::process::id()))
+  );
+  let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A jet ignited at `start + 2 d` through the real seek path (`seek_epoch_sync` →
+/// `apply_seek` → `fill_dust_history`): at `start + 5 d` no tier holds dust older than 3 d (plus
+/// one emission window), at `start + 1 d` every tier is empty and caught up, and seeking forward
+/// again reproduces the same live counts (the history is a function of the parameters, the
+/// ignition and the epoch). Needs the 67P SPK (cache or Horizons) and a GPU.
+#[test]
+fn test_jet_ignition_bounds_dust_age_across_seeks() {
+  use crate::scene::{
+    BodyRotationalModel, StaticMeshComponent, TransformComponent,
+    particles::{
+      ParticleSystemComponent, ParticleSystemDrawParams, ParticleSystemEmitParams,
+      emission_start_us_from_epoch,
+    },
+  };
+  use aethervk_oshal_rlib::math::{
+    quaternion::Quaternion,
+    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
+  };
+  let Some(spk_path) = fetch_67p_spk("1000012_ignition.bsp") else {
+    println!("Skipping: Horizons unreachable");
+    return;
+  };
+  let mut ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
+  let Some(render_frontend) = ctx.render_frontend() else {
+    println!("Skipping: no GPU");
+    return;
+  };
+  let (tx, rx) = mpsc::channel();
+  *MOCK_SENDER.lock() = Some(tx);
+  crate::simulation_api::set_external_state_simulation_callback(Some(mock_external_state_cb));
+  {
+    let mut logic_state = ctx.logic_state.write();
+    for f in [
+      "../../assets/planets/pck00011.pca",
+      "../../assets/planets/gm_de431.pca",
+      "../../assets/planets/de442.bsp",
+    ] {
+      logic_state.almanac_data.load_almanac(f).expect(f);
+    }
+    logic_state
+      .almanac_data
+      .load_almanac(spk_path.to_str().unwrap())
+      .expect("Failed to load fetched SPK");
+  }
+  // inside the SPK the helper downloads (2025-10-01 .. 11-02), 30 d (the startup minimum)
+  let start = Epoch::from_gregorian_utc(2025, 10, 2, 0, 0, 0, 0);
+  let end = start + Duration::from_days(30.0);
+  let scene_id = ctx
+    .create_empty_scene2(false, start, end)
+    .expect("Failed to create empty scene")
+    .scene_id;
+  ctx
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(LogicCommand::TryInitComet {
+      scene_id,
+      spk_id: 1000012,
+      proposed_start: start,
+      proposed_end: end,
+      keplerian_elements: KeplerianElements {
+        eccentricity: 0.6402,
+        perihelion_distance_au: 1.2432,
+        inclination_deg: 3.871,
+        longitude_of_ascending_node_deg: 36.33,
+        argument_of_perihelion_deg: 22.15,
+        time_of_perihelion_jd_tdb: f64::NAN,
+      },
+      reference_mode: Default::default(),
+    })
+    .unwrap();
+  let result = rx
+    .recv_timeout(std::time::Duration::from_secs(30))
+    .expect("Timeout waiting for TryInitComet");
+  assert_eq!(result.success, 1, "TryInitComet failed");
+
+  // the comet spins (12.4 h, pole +Z) so the jet is lit every rotation, as the observer does
+  let comet_body = {
+    let scene_ctx = ctx.scenes.read().get(&scene_id).cloned().unwrap();
+    let body = scene_ctx.read().comet.unwrap().body;
+    body
+  };
+  let model = BodyRotationalModel {
+    pole_ra: 0.0,
+    pole_dec: 90.0,
+    prime_meridian: 0.0,
+    pole_ra_rate: 0.0,
+    pole_dec_rate: 0.0,
+    rotation_rate: 360.0 * 24.0 / 12.4,
+    body_fixed_orientation: true,
+  };
+  {
+    let scenes = ctx.scenes.read();
+    let scene_arc = scenes.get_scene(scene_id).unwrap();
+    let g = scene_arc.read();
+    if g
+      .scene
+      .with_component_mut(comet_body, |m: &mut BodyRotationalModel| *m = model)
+      .is_none()
+    {
+      let _ = g.scene.add_component(comet_body, model);
+    }
+    let key = crate::simulation_api::structs::SceneEntityId::new(scene_id, comet_body);
+    if let Some(mut state) = scenes.cartesian_state_cache.get_mut(&key) {
+      if let Some(ref mut cs) = state.comet_state {
+        cs.body_rotational_model = Some(model);
+      }
+    }
+  }
+
+  // the jet (the `avkSimulationContext_addParticleSystem` recipe), ignited at start + 2 d
+  let t_on = start + Duration::from_days(2.0);
+  {
+    let scenes = ctx.scenes.read();
+    let scene_arc = scenes.get_scene(scene_id).unwrap();
+    let g = scene_arc.read();
+    let parent_scale = g
+      .scene
+      .with_component(comet_body, |t: &TransformComponent| t.scale.x())
+      .unwrap_or(1.0);
+    let (lat, lon) = (20.0_f32.to_radians(), 0.0f32);
+    let local_r = 2.0 / parent_scale;
+    let pos = Vec3f32::from_components(
+      local_r * lat.cos() * lon.cos(),
+      local_r * lat.cos() * lon.sin(),
+      local_r * lat.sin(),
+    );
+    let jet = g.scene.spawn_entity("jet");
+    g.scene.set_parent(jet, Some(comet_body));
+    let _ = g.scene.add_component(
+      jet,
+      TransformComponent {
+        position: pos,
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(0.04, 0.04, 0.04),
+      },
+    );
+    let sphere = alloc::sync::Arc::new(crate::simulation::comet::generate_uv_sphere(
+      1.0, 8, 8, 1.0, false,
+    ));
+    let _ = g.scene.add_component(
+      jet,
+      StaticMeshComponent {
+        asset_path: alloc::string::String::from("__internal_jet__"),
+        mesh: sphere,
+        emissive_color: [1.0, 0.6, 0.2, 1.0],
+        is_visible: true,
+      },
+    );
+    let ps = ParticleSystemComponent::new(
+      render_frontend,
+      ctx.render_device_handle(),
+      jet,
+      ParticleSystemEmitParams {
+        latitude_rad: lat,
+        longitude_rad: lon,
+        aperture_rad: 0.5,
+        start_velocity_mean: 2.0,
+        start_velocity_std: 0.5,
+        mass_variability_perc: 0.0,
+        seed: 7,
+        diametre_um: 100.0,
+        density_gcm3: 0.533,
+        scattering_efficiency: 1.0,
+        afrho_0_cm: 100.0,
+        afrho_power: 2.0,
+        afrho_cutoff_au: 15.0,
+        afrho_max_value_cm: 100_000.0,
+      },
+      ParticleSystemDrawParams {
+        stream_color: [1.0, 0.6, 0.2, 1.0],
+      },
+      30 * 86_400 * 1_000_000i64,
+      emission_start_us_from_epoch(t_on),
+    )
+    .expect("ParticleSystemComponent::new");
+    let _ = g.scene.add_component(jet, ps);
+  }
+
+  let wait_caught_up = |ctx: &SimulationContext| {
+    let t0 = std::time::Instant::now();
+    loop {
+      let busy = ctx
+        .get_scene(scene_id)
+        .map(|s| s.read().active_physics_task.load(core::sync::atomic::Ordering::Acquire))
+        .unwrap_or(false);
+      let tiers = ctx.dust_stats(scene_id);
+      if !busy && !tiers.is_empty() && tiers.iter().all(|t| t.caught_up) {
+        return tiers;
+      }
+      assert!(
+        t0.elapsed().as_secs_f64() < 120.0,
+        "dust never caught up: {tiers:?}"
+      );
+      std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+  };
+  let window_s =
+    |t: &crate::scene::dust::DustTierStats| ((t.band_max_s - t.band_min_s) / 256.0).max(1.0);
+
+  // 3 days after the ignition: dust, none older than that
+  assert!(
+    ctx.seek_epoch_sync(scene_id, start + Duration::from_days(5.0)),
+    "seek +5 d"
+  );
+  let at5 = wait_caught_up(&ctx);
+  println!("at start + 5 d: {at5:?}");
+  assert!(
+    at5[0].live_clusters > 0,
+    "the youngest tier emitted nothing: {at5:?}"
+  );
+  for (k, t) in at5.iter().enumerate() {
+    if t.live_clusters > 0 {
+      assert!(
+        t.oldest_age_s <= 3.0 * 86_400.0 + window_s(t),
+        "tier {k}: oldest {:.2} d > 3 d since the ignition",
+        t.oldest_age_s / 86_400.0
+      );
+    }
+  }
+  // one day before the ignition: nothing, caught up
+  assert!(
+    ctx.seek_epoch_sync(scene_id, start + Duration::from_days(1.0)),
+    "seek +1 d"
+  );
+  let at1 = wait_caught_up(&ctx);
+  println!("at start + 1 d: {at1:?}");
+  assert!(
+    at1.iter().all(|t| t.live_clusters == 0),
+    "dust before the ignition: {at1:?}"
+  );
+  // forward again: the same history
+  assert!(
+    ctx.seek_epoch_sync(scene_id, start + Duration::from_days(5.0)),
+    "seek +5 d again"
+  );
+  let again = wait_caught_up(&ctx);
+  println!("at start + 5 d again: {again:?}");
+  for (k, (a, b)) in at5.iter().zip(again.iter()).enumerate() {
+    assert_eq!(
+      a.live_clusters, b.live_clusters,
+      "tier {k}: live count differs after the seeks"
+    );
+    assert!(
+      (a.oldest_age_s - b.oldest_age_s).abs() < 1.0,
+      "tier {k}: oldest age differs"
+    );
+  }
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}
+
+#[test]
+fn test_jet_without_rotation_model_emits_and_settles() {
+  use crate::scene::{
+    BodyRotationalModel, StaticMeshComponent, TransformComponent,
+    particles::{ParticleSystemComponent, ParticleSystemDrawParams, ParticleSystemEmitParams},
+  };
+  use aethervk_oshal_rlib::math::{
+    quaternion::Quaternion,
+    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
+  };
+  let Some(spk_path) = fetch_67p_spk("1000012_ignition.bsp") else {
+    println!("Skipping: Horizons unreachable");
+    return;
+  };
+  let mut ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
+  let Some(render_frontend) = ctx.render_frontend() else {
+    println!("Skipping: no GPU");
+    return;
+  };
+  let (tx, rx) = mpsc::channel();
+  *MOCK_SENDER.lock() = Some(tx);
+  crate::simulation_api::set_external_state_simulation_callback(Some(mock_external_state_cb));
+  {
+    let mut logic_state = ctx.logic_state.write();
+    for f in [
+      "../../assets/planets/pck00011.pca",
+      "../../assets/planets/gm_de431.pca",
+      "../../assets/planets/de442.bsp",
+    ] {
+      logic_state.almanac_data.load_almanac(f).expect(f);
+    }
+    logic_state
+      .almanac_data
+      .load_almanac(spk_path.to_str().unwrap())
+      .expect("Failed to load fetched SPK");
+  }
+  // inside the SPK the helper downloads (2025-10-01 .. 11-02), 30 d (the startup minimum)
+  let start = Epoch::from_gregorian_utc(2025, 10, 2, 0, 0, 0, 0);
+  let end = start + Duration::from_days(30.0);
+  let scene_id = ctx
+    .create_empty_scene2(false, start, end)
+    .expect("Failed to create empty scene")
+    .scene_id;
+  ctx
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(LogicCommand::TryInitComet {
+      scene_id,
+      spk_id: 1000012,
+      proposed_start: start,
+      proposed_end: end,
+      keplerian_elements: KeplerianElements {
+        eccentricity: 0.6402,
+        perihelion_distance_au: 1.2432,
+        inclination_deg: 3.871,
+        longitude_of_ascending_node_deg: 36.33,
+        argument_of_perihelion_deg: 22.15,
+        time_of_perihelion_jd_tdb: f64::NAN,
+      },
+      // the committed reference orbit covers the pre-start history (`jet_at(t < 0)`), as the
+      // observer's recipe does
+      reference_mode: crate::simulation_api::structs::ReferenceOrbitMode::OsculatingAtStart,
+    })
+    .unwrap();
+  let result = rx
+    .recv_timeout(std::time::Duration::from_secs(30))
+    .expect("Timeout waiting for TryInitComet");
+  assert_eq!(result.success, 1, "TryInitComet failed");
+
+  // no rotation model at all (a restored scene, the observer's `--spin-hours 0`): a still
+  // nucleus whose jet site faces one direction, lit for the part of the orbit it faces the Sun.
+  // Until 2026-10-10 such a comet never entered the cartesian cache, its jet had no state, the
+  // dust was "building" for ever and the logic thread submitted empty compute passes until the
+  // driver's host heap was gone
+  let comet_body = {
+    let scene_ctx = ctx.scenes.read().get(&scene_id).cloned().unwrap();
+    let body = scene_ctx.read().comet.unwrap().body;
+    body
+  };
+  {
+    let scenes = ctx.scenes.read();
+    let scene_arc = scenes.get_scene(scene_id).unwrap();
+    let g = scene_arc.read();
+    assert!(
+      g.scene.with_component(comet_body, |_: &BodyRotationalModel| ()).is_none(),
+      "the fresh comet must not carry a rotation model for this test"
+    );
+  }
+
+  // the jet (the `avkSimulationContext_addParticleSystem` recipe), ignited at start + 2 d
+  {
+    let scenes = ctx.scenes.read();
+    let scene_arc = scenes.get_scene(scene_id).unwrap();
+    let g = scene_arc.read();
+    let parent_scale = g
+      .scene
+      .with_component(comet_body, |t: &TransformComponent| t.scale.x())
+      .unwrap_or(1.0);
+    let (lat, lon) = (20.0_f32.to_radians(), 0.0f32);
+    let local_r = 2.0 / parent_scale;
+    let pos = Vec3f32::from_components(
+      local_r * lat.cos() * lon.cos(),
+      local_r * lat.cos() * lon.sin(),
+      local_r * lat.sin(),
+    );
+    let jet = g.scene.spawn_entity("jet");
+    g.scene.set_parent(jet, Some(comet_body));
+    let _ = g.scene.add_component(
+      jet,
+      TransformComponent {
+        position: pos,
+        rotation: Quat::identity(),
+        scale: Vec3f32::from_components(0.04, 0.04, 0.04),
+      },
+    );
+    let sphere = alloc::sync::Arc::new(crate::simulation::comet::generate_uv_sphere(
+      1.0, 8, 8, 1.0, false,
+    ));
+    let _ = g.scene.add_component(
+      jet,
+      StaticMeshComponent {
+        asset_path: alloc::string::String::from("__internal_jet__"),
+        mesh: sphere,
+        emissive_color: [1.0, 0.6, 0.2, 1.0],
+        is_visible: true,
+      },
+    );
+    let ps = ParticleSystemComponent::new(
+      render_frontend,
+      ctx.render_device_handle(),
+      jet,
+      ParticleSystemEmitParams {
+        latitude_rad: lat,
+        longitude_rad: lon,
+        aperture_rad: 0.5,
+        start_velocity_mean: 2.0,
+        start_velocity_std: 0.5,
+        mass_variability_perc: 0.0,
+        seed: 7,
+        diametre_um: 100.0,
+        density_gcm3: 0.533,
+        scattering_efficiency: 1.0,
+        afrho_0_cm: 100.0,
+        afrho_power: 2.0,
+        afrho_cutoff_au: 15.0,
+        afrho_max_value_cm: 100_000.0,
+      },
+      ParticleSystemDrawParams {
+        stream_color: [1.0, 0.6, 0.2, 1.0],
+      },
+      30 * 86_400 * 1_000_000i64,
+      crate::scene::particles::EMISSION_START_PREEXISTING,
+    )
+    .expect("ParticleSystemComponent::new");
+    let _ = g.scene.add_component(jet, ps);
+  }
+
+  let wait_caught_up = |ctx: &SimulationContext| {
+    let t0 = std::time::Instant::now();
+    loop {
+      let busy = ctx
+        .get_scene(scene_id)
+        .map(|s| s.read().active_physics_task.load(core::sync::atomic::Ordering::Acquire))
+        .unwrap_or(false);
+      let tiers = ctx.dust_stats(scene_id);
+      if !busy && !tiers.is_empty() && tiers.iter().all(|t| t.caught_up) {
+        return tiers;
+      }
+      assert!(
+        t0.elapsed().as_secs_f64() < 120.0,
+        "dust never caught up: {tiers:?}"
+      );
+      std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+  };
+  let window_s =
+    |t: &crate::scene::dust::DustTierStats| ((t.band_max_s - t.band_min_s) / 256.0).max(1.0);
+
+  let _ = window_s;
+  // a seek: the history fills (lit and dark windows), every tier catches up, nothing is building
+  assert!(
+    ctx.seek_epoch_sync(scene_id, start + Duration::from_days(5.0)),
+    "seek +5 d"
+  );
+  let at5 = wait_caught_up(&ctx);
+  println!("no rotation model, at start + 5 d: {at5:?}");
+  assert!(
+    at5.iter().all(|t| !t.jet_unavailable),
+    "the jet state must be available: {at5:?}"
+  );
+  assert!(
+    at5.iter().map(|t| t.live_clusters).sum::<u32>() > 0,
+    "a still nucleus must still emit on the lit part of its orbit: {at5:?}"
+  );
+  assert!(
+    at5.iter().map(|t| t.unlit_windows).sum::<u32>() > 0,
+    "a still nucleus keeps its site in night for part of the orbit: {at5:?}"
+  );
+  // every batch carries a still spin and the constant lit mode, and no tier is building
+  {
+    let scenes = ctx.scenes.read();
+    let scene_arc = scenes.get_scene(scene_id).unwrap();
+    let g = scene_arc.read();
+    let mut batches = 0usize;
+    g.scene.query1(|_, ps: &ParticleSystemComponent| {
+      let sys = ps.dust.lock();
+      assert!(!sys.building(), "still building after the seek");
+      for t in &sys.tiers {
+        for b in &t.ring.batches {
+          batches += 1;
+          assert_eq!(b.desc.spin[3], 0.0, "spin rate of a still nucleus");
+          assert_eq!(
+            b.desc.lit[3],
+            crate::scene::dust::LIT_MODE_ALWAYS,
+            "lit mode of a still nucleus"
+          );
+        }
+      }
+    });
+    assert!(batches > 0);
+  }
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}

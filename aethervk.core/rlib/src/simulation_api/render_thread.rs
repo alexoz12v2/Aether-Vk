@@ -208,6 +208,12 @@ pub fn start_render_thread(
   .map_err(<NativeError as Into<EngineError>>::into)
 }
 
+/// a frame recorded and submitted: the failure backoff of the render loop starts over
+fn render_failure_streak_reset() {
+  RENDER_FAILURE_STREAK.store(0, core::sync::atomic::Ordering::Relaxed);
+}
+static RENDER_FAILURE_STREAK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 fn process_command(
   cmd: RenderCommand,
   render_device: &dyn RenderDevice,
@@ -337,6 +343,13 @@ fn process_command(
             let result = frontend.with_device(handle, |render_device| {
               let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
                 render_device.as_any().downcast_ref().unwrap();
+              if vulkan_device.is_lost() {
+                // the device is gone (`Device::report_device_lost` said why): no more frames
+                aethervk_oshal_rlib::os::native::this_thread::sleep_for(
+                  core::time::Duration::from_millis(50),
+                );
+                return Err(crate::types::GpuError::DeviceLost);
+              }
               let task_id = render_device.create_task();
 
               let present_guard = gpu::FrameCancelGuard::new(
@@ -456,11 +469,12 @@ fn process_command(
 
               // Dust v3: evaluate clusters before the render pass; the draw must wait for the
               // compute submit that emitted the newest drawn clusters
-              let dust_wait = gpu::frame::prepare_dust(vulkan_device, cmd, &mut render_scene)
-                .unwrap_or_else(|e| {
-                  aethervk_oshal_rlib::log!("[render tasklet] prepare_dust failed: {:?}", e);
-                  0
-                });
+              let dust_wait =
+                gpu::frame::prepare_dust(vulkan_device, cmd, &mut render_scene, pe_handle)
+                  .unwrap_or_else(|e| {
+                    aethervk_oshal_rlib::log!("[render tasklet] prepare_dust failed: {:?}", e);
+                    0
+                  });
               if dust_wait > 0 {
                 use ash::vk::Handle;
                 cmd_scope.add_sync_info(gpu::CommandBufferSyncInfo {
@@ -640,12 +654,23 @@ fn process_command(
             acquire_result,
           ));
         } else {
-          aethervk_oshal_rlib::log!(
-            "[render thread] Queue submission failed for PE '{:?}' with error {}",
-            pe_handle,
-            unsafe { res.unwrap_err_unchecked() }
-          );
+          // consecutive failures back off (50 ms doubling to 1 s) and are logged every 100th
+          // time: a frame that cannot be recorded (out of memory, 2026-10-10) must not be
+          // re-attempted at 40 Hz with a log line per attempt
+          let streak = RENDER_FAILURE_STREAK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+          if streak == 0 || streak % 100 == 99 {
+            aethervk_oshal_rlib::log!(
+              "[render thread] Queue submission failed for PE '{:?}' with error {} ({} consecutive)",
+              pe_handle,
+              unsafe { res.unwrap_err_unchecked() },
+              streak + 1
+            );
+          }
           task_id_feedback_err.store(u64::MAX, core::sync::atomic::Ordering::Release);
+          let ms = 50u64.saturating_mul(1u64 << streak.min(4)).min(1000);
+          aethervk_oshal_rlib::os::native::this_thread::sleep_for(
+            core::time::Duration::from_millis(ms),
+          );
         }
       }
 
@@ -654,6 +679,7 @@ fn process_command(
         if is_first_render {
           *unsafe { first_render_map.get_mut(&pe_handle).unwrap_unchecked() } = false;
         }
+        render_failure_streak_reset();
         // Shutdown guard: if the main thread set `skip_present` (early in
         // SimulationThreads::drop), skip vkQueuePresentKHR for this PE.
         //

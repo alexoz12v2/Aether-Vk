@@ -228,6 +228,9 @@
   <data name="Tabs_Model_DustVisibility" xml:space="preserve">
     <value>Visibilità polvere</value>
   </data>
+  <data name="Tabs_Model_DustFlow" xml:space="preserve">
+    <value>Impulsi del flusso</value>
+  </data>
   <data name="Tabs_Model_DustTracers" xml:space="preserve">
     <value>Particelle traccianti</value>
   </data>

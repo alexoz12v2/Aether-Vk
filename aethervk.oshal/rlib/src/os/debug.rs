@@ -492,6 +492,162 @@ mod unix_debug {
   #[cfg(not(all(target_os = "linux", feature = "debug_gpu")))]
   pub fn append_debug_printf(_msg: &str) {}
 
+  // ── External captures: gdb backtraces, nvidia-smi, kernel log ─────────────
+
+  /// Runs `argv` (looked up on PATH) with stdout and stderr redirected to `out_path` (appended
+  /// when `append`, truncated otherwise), kills it after `timeout_s` seconds and returns what this
+  /// run wrote. `None` if the fork failed or nothing could be read back; a missing program yields
+  /// an empty string (exit 127).
+  ///
+  /// The child only calls async-signal-safe functions (`read`, `open`, `dup2`, `execvp`, `_exit`),
+  /// so it is safe to call from a multi-threaded process. Before the child execs, the parent names
+  /// it its tracer (`PR_SET_PTRACER`): under Yama `ptrace_scope = 1` a child may not otherwise
+  /// attach to its parent, which is what `gdb --pid <self>` does. Linux only.
+  #[cfg(target_os = "linux")]
+  pub fn run_capture(
+    argv: &[&str],
+    out_path: &str,
+    append: bool,
+    timeout_s: i64,
+  ) -> Option<alloc::string::String> {
+    use alloc::ffi::CString;
+    use alloc::vec::Vec;
+
+    if argv.is_empty() {
+      return None;
+    }
+    let path = CString::new(out_path).ok()?;
+    let args: Vec<CString> = argv.iter().filter_map(|a| CString::new(*a).ok()).collect();
+    if args.len() != argv.len() {
+      return None;
+    }
+    let mut arg_ptrs: Vec<*const libc::c_char> = args.iter().map(|a| a.as_ptr()).collect();
+    arg_ptrs.push(core::ptr::null());
+
+    // where this run's output starts in the file
+    let start = if append {
+      let mut st: libc::stat = unsafe { core::mem::zeroed() };
+      if unsafe { libc::stat(path.as_ptr(), &mut st) } == 0 { st.st_size as i64 } else { 0 }
+    } else {
+      0
+    };
+    let flags =
+      libc::O_CREAT | libc::O_WRONLY | if append { libc::O_APPEND } else { libc::O_TRUNC };
+
+    // the child waits on this pipe until the parent has allowed it to ptrace us
+    let mut go = [-1i32; 2];
+    if unsafe { libc::pipe2(go.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+      return None;
+    }
+    let child = unsafe { libc::fork() };
+    if child < 0 {
+      crate::log!("[Capture] fork() failed, errno={}", unsafe { *libc::__errno_location() });
+      unsafe {
+        libc::close(go[0]);
+        libc::close(go[1]);
+      }
+      return None;
+    }
+    if child == 0 {
+      unsafe {
+        let mut byte = 0u8;
+        libc::read(go[0], (&mut byte as *mut u8).cast(), 1);
+        let fd = libc::open(path.as_ptr(), flags, 0o644u32);
+        if fd >= 0 {
+          libc::dup2(fd, libc::STDOUT_FILENO);
+          libc::dup2(fd, libc::STDERR_FILENO);
+          libc::close(fd);
+        }
+        libc::execvp(arg_ptrs[0], arg_ptrs.as_ptr());
+        libc::_exit(127); // exec failed
+      }
+    }
+
+    // ── parent: allow the child to trace us, release it, reap it with a wall-clock timeout ──
+    unsafe {
+      libc::prctl(libc::PR_SET_PTRACER, child as libc::c_ulong, 0, 0, 0);
+      libc::close(go[0]);
+      libc::write(go[1], b"g".as_ptr().cast(), 1);
+      libc::close(go[1]);
+      let deadline = libc::time(core::ptr::null_mut()) + timeout_s;
+      loop {
+        let mut status = 0i32;
+        if libc::waitpid(child, &mut status, libc::WNOHANG) != 0 {
+          break;
+        }
+        if libc::time(core::ptr::null_mut()) >= deadline {
+          libc::kill(child, libc::SIGKILL);
+          libc::waitpid(child, &mut status, 0);
+          crate::log!("[Capture] `{}` killed after {} s", argv[0], timeout_s);
+          break;
+        }
+        libc::usleep(100_000);
+      }
+      libc::prctl(libc::PR_SET_PTRACER, 0 as libc::c_ulong, 0, 0, 0);
+    }
+
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY, 0) };
+    if fd < 0 {
+      return None;
+    }
+    unsafe { libc::lseek(fd, start as libc::off_t, libc::SEEK_SET) };
+    let mut out = Vec::<u8>::new();
+    let mut buf = [0u8; 4096];
+    loop {
+      let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+      if n <= 0 {
+        break;
+      }
+      out.extend_from_slice(&buf[..n as usize]);
+    }
+    unsafe { libc::close(fd) };
+    Some(alloc::string::String::from_utf8_lossy(&out).into_owned())
+  }
+
+  /// Appends `text` to `out_path` (created if missing). Linux only.
+  #[cfg(target_os = "linux")]
+  pub fn append_to_file(out_path: &str, text: &str) {
+    let Ok(path) = alloc::ffi::CString::new(out_path) else {
+      return;
+    };
+    unsafe {
+      let fd = libc::open(
+        path.as_ptr(),
+        libc::O_CREAT | libc::O_WRONLY | libc::O_APPEND,
+        0o644u32,
+      );
+      if fd >= 0 {
+        libc::write(fd, text.as_ptr().cast(), text.len());
+        libc::close(fd);
+      }
+    }
+  }
+
+  /// `gdb --pid <self> --batch -ex "thread apply all bt"` into `out_path` (see [`run_capture`]),
+  /// returning the backtraces. Linux only.
+  #[cfg(target_os = "linux")]
+  pub fn capture_all_thread_backtraces_gdb(
+    out_path: &str,
+    append: bool,
+  ) -> Option<alloc::string::String> {
+    let pid = alloc::format!("{}", unsafe { libc::getpid() });
+    run_capture(
+      &[
+        "gdb",
+        "--pid",
+        &pid,
+        "--batch",
+        "-ex",
+        "set pagination off",
+        "-ex",
+        "thread apply all bt",
+      ],
+      out_path,
+      append,
+      15,
+    )
+  }
+
   // ── Stall-watcher: automatic GDB backtrace dump ───────────────────────────
 
   /// Forks a child that exec's `gdb --pid <self> --batch -ex "thread apply all bt"`,
@@ -502,105 +658,19 @@ mod unix_debug {
   /// Only available on Linux debug builds.
   #[cfg(all(target_os = "linux", debug_assertions))]
   pub fn dump_all_thread_backtraces_gdb() {
-    use alloc::format;
-
     let pid = unsafe { libc::getpid() };
-    let out_path = format!("/tmp/aethervk_stall_{}.txt\0", pid);
+    let out_path = alloc::format!("/tmp/aethervk_stall_{}.txt", pid);
 
     crate::log!(
       "[StallWatcher] Render stall detected — launching gdb on PID {}",
       pid
     );
-
-    let pid_str = alloc::ffi::CString::new(format!("{}", pid)).unwrap();
-    let argv: [*const libc::c_char; 9] = [
-      b"gdb\0".as_ptr().cast(),
-      b"--pid\0".as_ptr().cast(),
-      pid_str.as_ptr(),
-      b"--batch\0".as_ptr().cast(),
-      b"-ex\0".as_ptr().cast(),
-      b"set pagination off\0".as_ptr().cast(),
-      b"-ex\0".as_ptr().cast(),
-      b"thread apply all bt\0".as_ptr().cast(),
-      core::ptr::null(),
-    ];
-
-    let child = unsafe { libc::fork() };
-    if child < 0 {
-      crate::log!("[StallWatcher] fork() failed, errno={}", unsafe {
-        *libc::__errno_location()
-      });
-      return;
-    }
-
-    if child == 0 {
-      unsafe {
-        let fd = libc::open(
-          out_path.as_ptr().cast(),
-          libc::O_CREAT | libc::O_WRONLY | libc::O_TRUNC,
-          0o644u32,
-        );
-        if fd >= 0 {
-          libc::dup2(fd, libc::STDOUT_FILENO);
-          libc::dup2(fd, libc::STDERR_FILENO);
-          libc::close(fd);
-        }
-        libc::execvp(b"gdb\0".as_ptr().cast(), argv.as_ptr());
-        libc::_exit(127); // exec failed
+    if let Some(dump) = capture_all_thread_backtraces_gdb(&out_path, false) {
+      for line in dump.lines() {
+        crate::log!("[GDB] {}", line);
       }
     }
-
-    // ── parent: wait for gdb to finish, then read the file ──
-    unsafe {
-      // Reap child with 15 s wall-clock timeout.
-      let deadline = libc::time(core::ptr::null_mut()) + 15;
-      loop {
-        let mut status = 0i32;
-        let r = libc::waitpid(child, &mut status, libc::WNOHANG);
-        if r != 0 {
-          break;
-        }
-        if libc::time(core::ptr::null_mut()) >= deadline {
-          libc::kill(child, libc::SIGKILL);
-          break;
-        }
-        libc::usleep(100_000);
-      }
-    }
-
-    let file_fd = unsafe { libc::open(out_path.as_ptr().cast(), libc::O_RDONLY, 0) };
-    if file_fd >= 0 {
-      let mut buf = [0u8; 256];
-      let mut line_buf = alloc::vec::Vec::<u8>::new();
-      loop {
-        let n = unsafe { libc::read(file_fd, buf.as_mut_ptr().cast(), buf.len()) };
-        if n <= 0 {
-          break;
-        }
-        let chunk = &buf[..n as usize];
-        for &byte in chunk {
-          if byte == b'\n' {
-            if let Ok(s) = core::str::from_utf8(&line_buf) {
-              crate::log!("[GDB] {}", s);
-            }
-            line_buf.clear();
-          } else {
-            line_buf.push(byte);
-          }
-        }
-      }
-      if !line_buf.is_empty() {
-        if let Ok(s) = core::str::from_utf8(&line_buf) {
-          crate::log!("[GDB] {}", s);
-        }
-      }
-      unsafe { libc::close(file_fd) };
-    }
-
-    crate::log!(
-      "[StallWatcher] GDB dump complete → /tmp/aethervk_stall_{}.txt",
-      pid
-    );
+    crate::log!("[StallWatcher] GDB dump complete → {}", out_path);
   }
 
   /// No-op on non-Linux or release builds.

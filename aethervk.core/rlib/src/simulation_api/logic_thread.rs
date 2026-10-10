@@ -213,6 +213,8 @@ pub fn start_logic_thread(
     let mut last_discard_unscaled_us: timeus_t = 0;
     const DISCARD_DELTA_UNSCALED_US: timeus_t = oshal::os::time::timeus_milliseconds(500);
     let mut last_gpu_recycled_val: u64 = 0;
+    // the device-loss dump runs once per process
+    let mut gpu_lost_dumped = false;
 
     loop {
       let mut core_logic = || -> bool {
@@ -245,7 +247,6 @@ pub fn start_logic_thread(
         // 2. Submit pressure is high (e.g., >= 16 submits in-flight), risking pool exhaustion (max pools is 24).
         let time_exceeded = now - last_discard_unscaled_us > DISCARD_DELTA_UNSCALED_US;
         let pressure_exceeded = submit_pressure >= 16;
-
         if (time_exceeded && submit_pressure > 0) || pressure_exceeded {
           last_discard_unscaled_us = now;
           let _ = context.kernels.0.with_device(context.kernels.1, |dyn_device| {
@@ -255,7 +256,12 @@ pub fn start_logic_thread(
                 vulkan_device.device.timeline_semaphore.get_semaphore_counter_value(
                     vulkan_device.kernels.timeline
                 )
-            }.unwrap_or(last_gpu_recycled_val);
+            }.unwrap_or_else(|e| {
+                if e == ash::vk::Result::ERROR_DEVICE_LOST {
+                    vulkan_device.report_device_lost("logic thread compute timeline read");
+                }
+                last_gpu_recycled_val
+            });
 
             // Update our cached recycled value
             last_gpu_recycled_val = gpu_timeline_val;
@@ -266,6 +272,29 @@ pub fn start_logic_thread(
             }
             Ok(())
           });
+        }
+
+        // device lost (reported by whichever thread saw it first): save every scene's CPU state
+        // once, so the host can restore it on a new device
+        if !gpu_lost_dumped {
+          let lost = context
+            .kernels
+            .0
+            .with_device(context.kernels.1, |dyn_device| {
+              Ok(
+                dyn_device
+                  .as_any()
+                  .downcast_ref::<vulkan::device::Device>()
+                  .is_some_and(|d| d.is_lost()),
+              )
+            })
+            .unwrap_or(false);
+          if lost {
+            gpu_lost_dumped = true;
+            let base_dir = utils::gpu_lost_dump_dir();
+            let scenes = context.scenes.read();
+            let _ = utils::dump_scenes_on_device_loss(&scenes, &base_dir);
+          }
         }
 
         let scene_ids: alloc::vec::Vec<u64> = {
@@ -1402,7 +1431,6 @@ fn process_command_internal(
       use crate::simulation_api::{
         emit_external_state_change,
         external_state::{CSceneDumped, ExternalState},
-        structs::SceneDump,
       };
       use oshal::os::time::get_monotonic_time;
 
@@ -1422,59 +1450,8 @@ fn process_command_internal(
           &ctx.render_tx,
           now,
           elapsed,
-          |vulkan_device, scene_write, _render_tx| -> EngineResult<()> {
-            // 1. dust clusters are not serialized (they regrow from the restored parameters)
-            let particle_snapshot = None;
-            let _ = vulkan_device;
-
-            // 2. Walk ECS
-            let entities = crate::simulation_api::scene_dump::serialize_scene(&scene_write.scene);
-
-            // 3. Epoch range from time_manager
-            let (start_epoch_parts, end_epoch_parts) = {
-              let tm =
-                scenes.time_managers.get(&scene_id).ok_or(EngineError::InvalidNullArgument)?;
-              let start = tm.start_epoch.to_tdb_duration().to_parts();
-              let end = tm.end_epoch.to_tdb_duration().to_parts();
-              ((start.0, start.1), (end.0, end.1))
-            };
-
-            let (current_epoch_parts, compatibility) = {
-              let tm =
-                scenes.time_managers.get(&scene_id).ok_or(EngineError::InvalidNullArgument)?;
-              let now = tm.current_epoch().to_tdb_duration().to_parts();
-              (
-                (now.0, now.1),
-                crate::simulation_api::scene_dump::compatibility_json(
-                  scene_write,
-                  tm.start_epoch,
-                  tm.end_epoch,
-                ),
-              )
-            };
-
-            let dump = SceneDump {
-              version: SceneDump::CURRENT_VERSION,
-              scene_id,
-              start_epoch_parts,
-              end_epoch_parts,
-              current_epoch_parts,
-              compatibility,
-              entities,
-              particle_snapshot,
-            };
-
-            // 4. Encode
-            let bytes = bincode::serde::encode_to_vec(&dump, bincode::config::standard())
-              .map_err(|_| EngineError::InvalidOperation("DumpScene: bincode encode failed"))?;
-
-            // 5. Write to <base_dir>/scene_<scene_id>/scene.bin
-            let dir = alloc::format!("{}/scene_{}", base_dir, scene_id);
-            fs::create_dir_all(&dir)
-              .and_then(|_| fs::write(alloc::format!("{}/scene.bin", dir), bytes.as_ref()))
-              .map_err(|_| EngineError::InvalidOperation("DumpScene: file write failed"))?;
-
-            Ok(())
+          |_vulkan_device, scene_write, _render_tx| -> EngineResult<()> {
+            utils::write_scene_dump(&scenes, scene_id, scene_write, &base_dir).map(|_| ())
           },
         ) {
           let success = result.is_ok();
@@ -2964,7 +2941,7 @@ fn execute_simulation_tick_fixed_update_phase(
     // Dust v3: emission (GPU only). Its failure must not prevent the commit below.
     // ------------------------------------------------------------------------------------
     let gpu_sync: EngineResult<Option<PhysicsDeviceSelfSync>> = match vulkan_device {
-      Some(device) => utils::emit_and_submit_dust(
+      Some(device) => utils::fill_dust_history(
         device,
         &scene.scene,
         scene_id,
@@ -2974,8 +2951,7 @@ fn execute_simulation_tick_fixed_update_phase(
         now_scaled_us,
         scene.comet_reference_elements,
         CAPTURE_COMPUTE_ONCE.swap(false, core::sync::atomic::Ordering::Relaxed),
-      )
-      .map(Some),
+      ),
       None => Ok(None),
     };
 
@@ -3320,6 +3296,17 @@ mod utils {
   /// Truth source for the jet = almanac comet state of this tick (f64, already stepped in the
   /// cartesian cache) + the jet offset rotated by the body rotation, the same one used by the
   /// per-frame evaluation, so clusters and comet stay consistent to df64 precision.
+  /// Largest number of batch descriptors one tick may record before it waits for its earlier
+  /// submission: the host-visible descriptor ring has `DUST_BATCH_SLOTS` slots written at record
+  /// time and read by the GPU at execution, so the slots of a submission still in flight must
+  /// not be rewritten. Ticks start only after the previous tick's submission completed
+  /// (`physics_done`), and a seek waits on the GPU before it applies, so only this tick's own
+  /// submissions can be in flight.
+  const DUST_BATCHES_PER_TICK: usize =
+    crate::gpu_backends::vulkan::device::dust::DUST_BATCH_SLOTS as usize - 256;
+
+  /// One emission pass submitted on its own: the single-pass case of [`fill_dust_history`].
+  #[allow(clippy::too_many_arguments)]
   pub fn emit_and_submit_dust(
     vulkan_device: &Device,
     scene: &crate::scene::Scene,
@@ -3334,13 +3321,8 @@ mod utils {
     reference: Option<crate::simulation_api::structs::KeplerianElements>,
     capture_this_tick: bool,
   ) -> EngineResult<PhysicsDeviceSelfSync> {
-    use crate::gpu_backends::vulkan::device::QueueRole;
-    let (cmd_handle, cmd) = vulkan_device.get_command_buffer_and_native_all(QueueRole::Compute)?;
-    let mut cmd_scope = ScopedComputeCommand::new(vulkan_device, cmd_handle, cmd)?;
-
-    let dust_systems = record_dust_emissions(
+    fill_dust_history_passes(
       vulkan_device,
-      cmd,
       scene,
       scene_id,
       cartesian_state_cache,
@@ -3348,46 +3330,244 @@ mod utils {
       start_epoch,
       now_scaled_us,
       reference,
-    );
+      capture_this_tick,
+      1,
+    )
+    .and_then(|s| s.ok_or(EngineError::InvalidOperation("dust: nothing submitted")))
+  }
 
-    #[cfg(debug_assertions)]
-    if capture_this_tick {
-      unsafe {
-        crate::gpu_backends::vulkan::renderdoc::start_frame_capture(
-          core::ptr::null_mut(),
-          core::ptr::null_mut(),
+  /// Dust emission of one logic tick, run to completion: emission passes while a particle system
+  /// is still building its history (`DustSystemState::building`: due windows not emitted, batches
+  /// awaiting re-emission), up to `MAX_SEEK_PASSES` passes. A fresh fill (scenario start, re-emit
+  /// after a rotation-model / jet change, restore, seek) is at most 3 × 257 windows < 13 × 64, so
+  /// it always completes within the tick and the renderer never sees it window by window
+  /// (`error_first/second/third.rdc`: the tier-2 trail used to arrive in chunks over ~1 s).
+  ///
+  /// All passes of the tick are recorded into **one** compute command buffer (a compute→compute
+  /// barrier between passes orders the provisional window's rewrite of its ring slots) and
+  /// submitted once, so a tick costs one command buffer whatever the number of passes (13 per
+  /// tick exhausted the command pools, see `submit_command_buffer_generic`). A tick that records
+  /// more than `DUST_BATCHES_PER_TICK` descriptors submits and waits for that submission before
+  /// it reuses the descriptor ring. Returns the last submission's sync (`None` when nothing was
+  /// submitted); an error on a later pass keeps the earlier sync.
+  #[allow(clippy::too_many_arguments)]
+  pub fn fill_dust_history(
+    vulkan_device: &Device,
+    scene: &crate::scene::Scene,
+    scene_id: u64,
+    cartesian_state_cache: &dashmap::DashMap<
+      crate::simulation_api::structs::SceneEntityId,
+      CartesianState,
+    >,
+    almanac: &AlmanacPackedData,
+    start_epoch: anise::time::Epoch,
+    now_scaled_us: timeus_t,
+    reference: Option<crate::simulation_api::structs::KeplerianElements>,
+    capture_first: bool,
+  ) -> EngineResult<Option<PhysicsDeviceSelfSync>> {
+    fill_dust_history_passes(
+      vulkan_device,
+      scene,
+      scene_id,
+      cartesian_state_cache,
+      almanac,
+      start_epoch,
+      now_scaled_us,
+      reference,
+      capture_first,
+      crate::scene::dust::MAX_SEEK_PASSES,
+    )
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  fn fill_dust_history_passes(
+    vulkan_device: &Device,
+    scene: &crate::scene::Scene,
+    scene_id: u64,
+    cartesian_state_cache: &dashmap::DashMap<
+      crate::simulation_api::structs::SceneEntityId,
+      CartesianState,
+    >,
+    almanac: &AlmanacPackedData,
+    start_epoch: anise::time::Epoch,
+    now_scaled_us: timeus_t,
+    reference: Option<crate::simulation_api::structs::KeplerianElements>,
+    capture_first: bool,
+    max_passes: usize,
+  ) -> EngineResult<Option<PhysicsDeviceSelfSync>> {
+    use crate::{
+      gpu_backends::vulkan::device::QueueRole, scene::particles::ParticleSystemComponent,
+    };
+    let building = || {
+      let mut any = false;
+      scene.query1(|_, ps: &ParticleSystemComponent| any |= ps.dust.lock().building());
+      any
+    };
+    let mut systems = 0usize;
+    scene.query1(|_, _: &ParticleSystemComponent| systems += 1);
+    // what one pass can record at most: windows + re-emits + one provisional batch per tier
+    let pass_bound = systems
+      * (crate::scene::dust::MAX_WINDOWS_PER_TICK
+        + crate::scene::dust::REEMIT_PER_TICK
+        + crate::scene::dust::LOD_MAX_TIERS as usize);
+
+    if vulkan_device.is_lost() {
+      return Err(EngineError::Gpu(crate::types::GpuError::DeviceLost));
+    }
+    let mut last_sync: Option<PhysicsDeviceSelfSync> = None;
+    let mut passes = 0usize;
+    let mut submissions = 0usize;
+    let mut batches_this_tick = 0usize;
+    while passes < max_passes {
+      // the descriptor ring: wait for the earlier submission of this tick before its slots are
+      // rewritten
+      if batches_this_tick + pass_bound > DUST_BATCHES_PER_TICK {
+        if let Some(sync) = last_sync.as_ref() {
+          if let Err(e) = vulkan_device.device.wait_for_semaphore_value(
+            sync.timeline_handle,
+            sync.timeline_value,
+            2_000_000_000,
+          ) {
+            oshal::log!("[Dust] descriptor ring wait failed: {e:?}");
+            break;
+          }
+        }
+        batches_this_tick = 0;
+      }
+      let scope = vulkan_device
+        .get_command_buffer_and_native_all(QueueRole::Compute)
+        .map_err(EngineError::from)
+        .and_then(|(h, c)| {
+          ScopedComputeCommand::new(vulkan_device, h, c).map_err(EngineError::from)
+        });
+      let cmd_scope = match scope {
+        Ok(s) => s,
+        Err(e) if last_sync.is_some() => {
+          oshal::log!("[Dust] emission pass {} failed: {e}", passes + 1);
+          break;
+        }
+        Err(e) => return Err(e),
+      };
+      let cmd = cmd_scope.cmd;
+      let capture = capture_first && submissions == 0;
+      let mut recorded_systems: alloc::vec::Vec<EntityId> = alloc::vec::Vec::new();
+      let mut batches_in_submit = 0usize;
+      loop {
+        if batches_in_submit > 0 {
+          // the next pass may rewrite the ring slots of the previous provisional window
+          let _ = vulkan_device.cmd_dispatch_global_memory_barrier(cmd);
+        }
+        vulkan_device.cmd_checkpoint(cmd, c"dust: emission pass");
+        let (ids, n) = record_dust_emissions(
+          vulkan_device,
+          cmd,
+          scene,
+          scene_id,
+          cartesian_state_cache,
+          almanac,
+          start_epoch,
+          now_scaled_us,
+          reference,
         );
-        aethervk_oshal_rlib::log!("[RenderDoc] Triggered manual compute queue capture");
+        passes += 1;
+        batches_in_submit += n;
+        batches_this_tick += n;
+        for id in ids {
+          if !recorded_systems.contains(&id) {
+            recorded_systems.push(id);
+          }
+        }
+        // AETHERVK_DUST_FILL_SPLIT=1: one submission per pass (bisection aid)
+        let split = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_FILL_SPLIT")
+          .is_some_and(|v| v.trim() == "1");
+        // a pass that recorded nothing ends the tick whatever `building()` says: a system
+        // that cannot progress must never turn the loop into `max_passes` empty submissions
+        // per tick (the 2026-10-10 runaway)
+        let stalled = n == 0 && building();
+        if stalled {
+          static STALL_LOGGED: core::sync::atomic::AtomicBool =
+            core::sync::atomic::AtomicBool::new(false);
+          if !STALL_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+            oshal::log!(
+              "[Dust] emission: a pass recorded nothing while a system is still building"
+            );
+          }
+        }
+        if passes >= max_passes
+          || !building()
+          || n == 0
+          || batches_this_tick + pass_bound > DUST_BATCHES_PER_TICK
+          || split
+        {
+          break;
+        }
+      }
+
+      #[cfg(debug_assertions)]
+      if capture {
+        unsafe {
+          crate::gpu_backends::vulkan::renderdoc::start_frame_capture(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+          );
+          oshal::log!("[RenderDoc] Triggered manual compute queue capture");
+        }
+      }
+      #[cfg(not(debug_assertions))]
+      let _ = capture;
+
+      let submitted = cmd_scope.submit();
+
+      #[cfg(debug_assertions)]
+      if capture {
+        unsafe {
+          crate::gpu_backends::vulkan::renderdoc::end_frame_capture(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+          );
+        }
+      }
+
+      match submitted {
+        Ok((compute_semaphore, compute_signal_value)) => {
+          // batches recorded above become drawable once the render submit waits on this value
+          for ps_id in &recorded_systems {
+            let _ = scene.with_component(*ps_id, |ps: &ParticleSystemComponent| {
+              ps.dust.lock().mark_submitted(compute_signal_value);
+            });
+          }
+          last_sync = Some(PhysicsDeviceSelfSync::new(
+            compute_semaphore,
+            compute_signal_value,
+          ));
+          submissions += 1;
+        }
+        Err(e) => {
+          // the batches recorded into the failed command buffer never reach the GPU
+          for ps_id in &recorded_systems {
+            let _ = scene.with_component(*ps_id, |ps: &ParticleSystemComponent| {
+              ps.dust.lock().invalidate_gpu();
+            });
+          }
+          if last_sync.is_some() {
+            oshal::log!("[Dust] emission submit failed after {passes} passes: {e}");
+            break;
+          }
+          return Err(e.into());
+        }
+      }
+      if !building() {
+        break;
       }
     }
-    #[cfg(not(debug_assertions))]
-    let _ = capture_this_tick;
-
-    let (compute_semaphore, compute_signal_value) = cmd_scope.submit()?;
-    // batches recorded above become drawable once the render submit waits on this value
-    for ps_id in &dust_systems {
-      let _ = scene.with_component(
-        *ps_id,
-        |ps: &crate::scene::particles::ParticleSystemComponent| {
-          ps.dust.lock().mark_submitted(compute_signal_value);
-        },
+    if passes > 1 {
+      oshal::log!(
+        "[Dust] history built in {passes} passes, {submissions} submission{}{}",
+        if submissions == 1 { "" } else { "s" },
+        if building() { " (still building)" } else { "" }
       );
     }
-
-    #[cfg(debug_assertions)]
-    if capture_this_tick {
-      unsafe {
-        crate::gpu_backends::vulkan::renderdoc::end_frame_capture(
-          core::ptr::null_mut(),
-          core::ptr::null_mut(),
-        );
-      }
-    }
-
-    Ok(PhysicsDeviceSelfSync::new(
-      compute_semaphore,
-      compute_signal_value,
-    ))
+    Ok(last_sync)
   }
 
   pub use crate::scene::trajectory::{
@@ -3829,15 +4009,14 @@ mod utils {
     #[inline(always)]
     fn debug_log_query4_match(_: EntityId) {}
 
-    // insert into cache if absent all active comets
-    scene.scene.query4(
-      |e_id,
-       t: &TransformComponent,
-       _m: &CometMarkerComponent,
-       ap: &AlmanacPlanet,
-       iau_rot: &BodyRotationalModel| {
+    // insert into cache if absent all active comets. The rotational model is optional: a comet
+    // without one (a restored scene, the observer's `--spin-hours 0`) is a still nucleus, and
+    // leaving it out of the cache left its jets without a jet state for ever (`jet_unavailable`)
+    scene.scene.query3(
+      |e_id, t: &TransformComponent, _m: &CometMarkerComponent, ap: &AlmanacPlanet| {
         debug_log_query4_match(e_id);
-        insert_into_cache(e_id, *t, Some(*iau_rot), *ap)
+        let iau_rot = scene.scene.with_component(e_id, |m: &BodyRotationalModel| *m);
+        insert_into_cache(e_id, *t, iau_rot, *ap)
       },
     );
 
@@ -3877,28 +4056,22 @@ mod utils {
     // the recorded comet path belongs to the previous timeline position
     clear_effective_trajectory(scene_write);
     // every age tier from scratch (shared per-tick window budget)
-    let passes = crate::scene::dust::MAX_SEEK_PASSES;
     let reference = scene_write.comet_reference_elements;
-    let mut last_sync = None;
-    for _ in 0..passes {
-      match emit_and_submit_dust(
-        vulkan_device,
-        &scene_write.scene,
-        scene_id,
-        cache,
-        almanac,
-        start_epoch,
-        scaled_us,
-        reference,
-        false,
-      ) {
-        Ok(sync) => last_sync = Some(sync),
-        Err(e) => {
-          oshal::log!("[Seek] dust emission failed: {e}");
-          break;
-        }
-      }
-    }
+    let last_sync = fill_dust_history(
+      vulkan_device,
+      &scene_write.scene,
+      scene_id,
+      cache,
+      almanac,
+      start_epoch,
+      scaled_us,
+      reference,
+      false,
+    )
+    .unwrap_or_else(|e| {
+      oshal::log!("[Seek] dust emission failed: {e}");
+      None
+    });
     if let Some(sync) = last_sync {
       scene_write.latest_physics_sync = Some(sync);
       scene_write
@@ -4029,16 +4202,19 @@ mod utils {
     start_epoch: anise::time::Epoch,
     now_scaled_us: timeus_t,
     reference: Option<crate::simulation_api::structs::KeplerianElements>,
-  ) -> alloc::vec::Vec<EntityId> {
+  ) -> (alloc::vec::Vec<EntityId>, usize) {
     use crate::scene::{
       dust::{AU_M, JetState},
-      particles::ParticleSystemComponent,
+      particles::{
+        EMISSION_START_PREEXISTING, ParticleSystemComponent, epoch_from_emission_start_us,
+      },
     };
     use aethervk_oshal_rlib::math::quaternion::Quaternion as _;
     let t_s = now_scaled_us as f64 * 1e-6;
     let mut ps_ids = alloc::vec::Vec::new();
     scene.query1(|id, _: &ParticleSystemComponent| ps_ids.push(id));
     let mut recorded = alloc::vec::Vec::new();
+    let mut batches_recorded = 0usize;
     for ps_id in ps_ids {
       // the jet is a direct child of the comet body (see `avkSimulationContext_addParticleSystem`)
       let Some(body_id) = scene.get_parent(ps_id) else {
@@ -4051,6 +4227,20 @@ mod utils {
         ))
         .and_then(|c| c.comet_state.as_ref().map(|b| (b.almanac_planet, b.body_rotational_model)))
       else {
+        // no jet state: the system is caught up by definition, never "building" (see
+        // `DustHostState::jet_unavailable`); said once per system
+        let first = scene
+          .with_component(ps_id, |ps: &ParticleSystemComponent| {
+            ps.dust.lock().mark_jet_unavailable()
+          })
+          .unwrap_or(false);
+        if first {
+          oshal::log!(
+            "[Dust] system {}: jet state unavailable (comet {} not in the cartesian cache), no emission",
+            ps_id.as_ffi(),
+            body_id.as_ffi()
+          );
+        }
         continue;
       };
       let Some(jet_local) = scene.with_component(ps_id, |t: &TransformComponent| *t) else {
@@ -4147,6 +4337,12 @@ mod utils {
             ps.emission_params.dust_emit_config(r as f32, ps.ttl_us)
           };
           let mut sys = ps.dust.lock();
+          // the jet's ignition on the scaled-time axis (a change re-emits, like a seek)
+          sys.set_ignition(if ps.emission_start_us == EMISSION_START_PREEXISTING {
+            None
+          } else {
+            Some((epoch_from_emission_start_us(ps.emission_start_us) - start_epoch).to_seconds())
+          });
           sys.track_spin_model(rot_model);
           // exposure reference from the current activity (smooth along the orbit, independent of
           // the history and the camera); kept while the jet is beyond its production cutoff
@@ -4167,6 +4363,7 @@ mod utils {
           ok = false;
           break;
         }
+        batches_recorded += 1;
       }
       if ok {
         recorded.push(ps_id);
@@ -4186,12 +4383,17 @@ mod utils {
             .iter()
             .map(|t| {
               alloc::format!(
-                "{}/{} {:.1}-{:.1} d{}",
+                "{}/{} {:.1}-{:.1} d{}{}",
                 t.live_clusters,
                 t.capacity,
                 t.youngest_age_s / 86400.0,
                 t.oldest_age_s / 86400.0,
-                if t.caught_up { "" } else { " (building)" }
+                if t.caught_up { "" } else { " (building)" },
+                if t.unlit_windows > 0 {
+                  alloc::format!(" ({} unlit windows)", t.unlit_windows)
+                } else {
+                  alloc::string::String::new()
+                }
               )
             })
             .collect();
@@ -4201,9 +4403,14 @@ mod utils {
             .map(|b| b.1.spin[3])
             .filter(|w| *w > 0.0)
             .map(|w| 2.0 * core::f32::consts::PI / w / 3600.0);
+          let ignition = host.ignition().map_or(
+            alloc::string::String::from("pre-existing tail"),
+            |t_on| alloc::format!("ignited {:.2} d ago", (t_s - t_on) / 86400.0),
+          );
           oshal::log!(
-            "[Dust] r={:.3} AU tiers [{}] last batch={} clusters, mass {:.3e} g, spin {} ({}), lit {}",
+            "[Dust] r={:.3} AU {} tiers [{}] last batch={} clusters, mass {:.3e} g, spin {} ({}), lit {}",
             r_au,
+            ignition,
             tiers.join(" | "),
             batches.last().map(|b| b.1.count).unwrap_or(0),
             batches.last().map(|b| b.1.mass_params[0]).unwrap_or(0.0),
@@ -4218,7 +4425,7 @@ mod utils {
         });
       }
     }
-    recorded
+    (recorded, batches_recorded)
   }
 
   /// Time Boundary,Step Size (Precision Loss),What it means for your data
@@ -4428,6 +4635,100 @@ mod utils {
   /// Utility function to wait and consume self synchronization and do something when task is
   /// consumed
   /// Render Frontend and device handle should point to a vulkan device
+  /// Serialises `scene_ctx` (ECS entities, epoch range, current epoch, compatibility JSON; dust
+  /// is not serialised, it regrows from the restored parameters) to
+  /// `<base_dir>/scene_<scene_id>/scene.bin` and returns that directory. Shared by
+  /// `LogicCommand::DumpScene` and the device-loss dump ([`dump_scenes_on_device_loss`]).
+  pub fn write_scene_dump(
+    scenes: &SimulationSceneData,
+    scene_id: u64,
+    scene_ctx: &SceneContext,
+    base_dir: &str,
+  ) -> EngineResult<alloc::string::String> {
+    use crate::simulation_api::structs::SceneDump;
+    let entities = crate::simulation_api::scene_dump::serialize_scene(&scene_ctx.scene);
+    let tm = scenes.time_managers.get(&scene_id).ok_or(EngineError::InvalidNullArgument)?;
+    let start = tm.start_epoch.to_tdb_duration().to_parts();
+    let end = tm.end_epoch.to_tdb_duration().to_parts();
+    let now = tm.current_epoch().to_tdb_duration().to_parts();
+    let compatibility = crate::simulation_api::scene_dump::compatibility_json(
+      scene_ctx,
+      tm.start_epoch,
+      tm.end_epoch,
+    );
+    drop(tm);
+    let dump = SceneDump {
+      version: SceneDump::CURRENT_VERSION,
+      scene_id,
+      start_epoch_parts: (start.0, start.1),
+      end_epoch_parts: (end.0, end.1),
+      current_epoch_parts: (now.0, now.1),
+      compatibility,
+      entities,
+      particle_snapshot: None,
+    };
+    let bytes = bincode::serde::encode_to_vec(&dump, bincode::config::standard())
+      .map_err(|_| EngineError::InvalidOperation("DumpScene: bincode encode failed"))?;
+    let dir = alloc::format!("{}/scene_{}", base_dir, scene_id);
+    fs::create_dir_all(&dir)
+      .and_then(|_| fs::write(alloc::format!("{}/scene.bin", dir), bytes.as_ref()))
+      .map_err(|_| EngineError::InvalidOperation("DumpScene: file write failed"))?;
+    Ok(dir)
+  }
+
+  /// Where the device-loss dump goes: `AETHERVK_GPU_LOST_DUMP_DIR`, else
+  /// `$HOME/.aethervk/gpu_lost/<pid>`.
+  pub fn gpu_lost_dump_dir() -> alloc::string::String {
+    if let Some(d) = oshal::os::env::var("AETHERVK_GPU_LOST_DUMP_DIR") {
+      if !d.trim().is_empty() {
+        return d;
+      }
+    }
+    let home = oshal::os::env::var("HOME").unwrap_or_else(|| alloc::string::String::from("/tmp"));
+    let pid = unsafe { libc::getpid() };
+    alloc::format!("{home}/.aethervk/gpu_lost/{pid}")
+  }
+
+  /// The device is lost: the CPU state is intact, so every scene is dumped under `base_dir`
+  /// (no GPU synchronisation: nothing in flight can complete any more), `<base_dir>/../latest`
+  /// names the directory for the host, and `ExternalState::SceneDumped` fires per scene. Returns
+  /// `(scene_id, directory or error)` per scene.
+  pub fn dump_scenes_on_device_loss(
+    scenes: &SimulationSceneData,
+    base_dir: &str,
+  ) -> alloc::vec::Vec<(u64, EngineResult<alloc::string::String>)> {
+    use crate::simulation_api::{
+      emit_external_state_change,
+      external_state::{CSceneDumped, ExternalState},
+    };
+    let ids: alloc::vec::Vec<u64> = scenes.keys().copied().collect();
+    let mut out = alloc::vec::Vec::with_capacity(ids.len());
+    for scene_id in ids {
+      let r = match scenes.get(&scene_id) {
+        Some(arc) => {
+          let scene_ctx = arc.read();
+          write_scene_dump(scenes, scene_id, &scene_ctx, base_dir)
+        }
+        None => Err(EngineError::InvalidNullArgument),
+      };
+      match &r {
+        Ok(dir) => oshal::log!("[GPU lost] scene {scene_id} dumped to {dir}"),
+        Err(e) => oshal::log!("[GPU lost] scene {scene_id} dump failed: {e:?}"),
+      }
+      emit_external_state_change(&ExternalState::SceneDumped(CSceneDumped {
+        success: r.is_ok() as u32,
+      }));
+      out.push((scene_id, r));
+    }
+    if out.iter().any(|(_, r)| r.is_ok()) {
+      if let Some(parent) = base_dir.rsplit_once('/').map(|(p, _)| p) {
+        let _ = fs::create_dir_all(parent)
+          .and_then(|_| fs::write(alloc::format!("{parent}/latest"), base_dir.as_bytes()));
+      }
+    }
+    out
+  }
+
   /// Return
   /// - `None` if there were problems, silently swalloed,
   /// - `None` if task wasn't finished within established deadline

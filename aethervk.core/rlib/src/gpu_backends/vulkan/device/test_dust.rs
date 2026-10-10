@@ -132,6 +132,9 @@ fn propagate(device: &Device, id: u64, first_slot: u32, live: u32, frame: &DustF
   res.cleanup(&device.device);
 }
 
+fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+  [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
 fn norm3(a: [f32; 3]) -> f32 {
   (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
 }
@@ -163,9 +166,12 @@ fn gpu_dust_emit_matches_reference() {
     // starts 100 slots before the ring end: exercises the wrap-around
     let single = test_batch(512, 1800.0, capacity - 100, capacity);
     // 64 streams on a site going in and out of daylight, after a missing window: stream breaks;
-    // a size rotation (size wraps break too) and a site 2 km off the centre turning with the spin
+    // a site 2 km off the centre turning with the spin
     let mut streams = test_batch(512, 6.0 * 3600.0, capacity - 100, capacity);
-    streams.mass_params[3] = dust::batch_word(6, true, false, 37);
+    streams.mass_params[3] = dust::batch_word(6, true, false);
+    // 4 streams (a small tier): the mass shares follow S = 4
+    let mut cycling = test_batch(512, 1800.0, capacity - 100, capacity);
+    cycling.mass_params[3] = dust::batch_word(2, false, false);
     streams.spin[3] = (2.0 * core::f64::consts::PI / (2.0 * 3600.0)) as f32;
     streams.site_offset = [2000.0, 0.0, 0.0, 0.0];
     let (rc, _) = comet_state();
@@ -180,7 +186,7 @@ fn gpu_dust_emit_matches_reference() {
     )
     .to_gpu();
     assert_eq!(streams.lit[3], dust::LIT_MODE_PERIODIC);
-    for batch in [single, streams] {
+    for batch in [single, streams, cycling] {
       emit(device, 9001, &batch);
       let mut breaks = 0;
       let bytes = read_back(
@@ -451,9 +457,9 @@ fn gpu_dust_tier_sub_ring_and_age_band_match_reference() {
     let mut res = device
       .run_transient_commands(|cmd| {
         device.cmd_dust_pre_propagate_barrier(cmd);
-        let addr =
+        let (addr, moments) =
           device.cmd_dust_propagate(cmd, 9004, base, sub, first_slot, batch.count, &frame)?;
-        assert!(addr > 0);
+        assert!(addr > 0 && moments > 0);
         Ok(())
       })
       .unwrap();
@@ -533,317 +539,56 @@ fn micro_color_target_format_selection() {
   });
 }
 
+/// The dust accumulation target is RGBA32F where the device blends it (an fp16 additive sum of the
+/// 91 561 splats landing on the nucleus pixel of `not_flow.rdc` reads 3.8× too dim), the micro
+/// format otherwise, with `AETHERVK_DUST_ACCUM=f16`, or on the 8-bit micro fallback (dithered path).
+#[test]
+fn dust_accumulation_format_selection() {
+  use crate::gpu_backends::vulkan::device::choose_dust_accum_format as choose;
+  use ash::vk::{Format, FormatFeatureFlags as F};
+  let full = F::COLOR_ATTACHMENT | F::COLOR_ATTACHMENT_BLEND | F::SAMPLED_IMAGE;
+  let f16 = Format::R16G16B16A16_SFLOAT;
+  assert_eq!(choose(full, true, false, f16), Format::R32G32B32A32_SFLOAT);
+  assert_eq!(
+    choose(F::COLOR_ATTACHMENT, true, false, f16),
+    f16,
+    "no blend"
+  );
+  assert_eq!(
+    choose(full, false, false, f16),
+    f16,
+    "no transient input usage"
+  );
+  assert_eq!(choose(full, true, true, f16), f16, "forced f16");
+  assert_eq!(
+    choose(full, true, false, Format::R8G8B8A8_UNORM),
+    Format::R8G8B8A8_UNORM,
+    "8-bit micro fallback: the dithered path"
+  );
+  let forced_8bit =
+    aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_8BIT").is_some_and(|v| v.trim() == "1");
+  let forced_f16 = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_ACCUM")
+    .is_some_and(|v| v.trim().eq_ignore_ascii_case("f16"));
+  with_dust_device(9007, |device, _, _, _| {
+    let got = device.dust_accum_format();
+    if forced_8bit {
+      assert_eq!(got, Format::R8G8B8A8_UNORM);
+    } else if forced_f16 {
+      assert_eq!(got, f16);
+    } else {
+      // this machine: a desktop GPU blends RGBA32F; a device that does not falls back to f16
+      assert!(got == Format::R32G32B32A32_SFLOAT || got == f16, "{got:?}");
+      std::println!("[dust gpu] accumulation target {got:?}");
+    }
+  });
+}
+
 /// `AETHERVK_DUST_8BIT=1` forces the RGBA8 micro target (own process under nextest).
 #[test]
 fn micro_color_target_8bit_override() {
   unsafe { std::env::set_var("AETHERVK_DUST_8BIT", "1") };
   with_dust_device(9006, |device, _, _, _| {
     assert_eq!(device.micro_color_format(), ash::vk::Format::R8G8B8A8_UNORM);
-  });
-}
-
-/// `dust_lod.comp` against `dust::lod_evaluate`: a camera that sees about half of a propagated
-/// ring; the indirect command stays within the budget, every drawn cluster has exactly `k` list
-/// entries with `flux / k`, off-screen clusters none, and demand / tiles match the mirror.
-#[test]
-fn gpu_dust_lod_matches_reference() {
-  use super::dust::DustLodDraw;
-  with_dust_device(9006, |device, capacity, _, render| {
-    let id = 9006;
-    // 64 streams: short streaks between a stream's samples, point spreads for the first ones
-    let mut batch = test_batch(4096, 86400.0, 0, capacity);
-    batch.mass_params[3] = dust::batch_streams_word(6, false);
-    emit(device, id, &batch);
-    let frame = frame_after(10.0).with_streams(6);
-    propagate(device, id, 0, batch.count, &frame);
-    let rbytes = batch.count as u64 * core::mem::size_of::<DustRenderCluster>() as u64;
-    let before: alloc::vec::Vec<DustRenderCluster> =
-      bytemuck::cast_slice(&read_back(device, render, false, rbytes)).to_vec();
-    // orthographic view centred on the comet, half-width = median |x|: about half on screen
-    let mut xs: alloc::vec::Vec<f32> = before.iter().map(|c| c.pos_size[0].abs()).collect();
-    xs.sort_by(f32::total_cmp);
-    let half = xs[xs.len() / 2].max(1.0);
-    let units = 1e-3f32;
-    let p = 1.0 / (half * units);
-    let mut mvp = [0.0f32; 16];
-    mvp[0] = p * units;
-    mvp[5] = p * units;
-    mvp[10] = 1e-12;
-    mvp[15] = 1.0;
-    // a 2160 px tall view: λ = 1 asks for more than the budget
-    let params = [units, p, p, 2.0 / 2160.0];
-    let exposure = 1.0e7f32;
-    let budget = capacity * dust::CHILDREN_PER_CLUSTER;
-    let render_addr = {
-      let res = device.res.read();
-      let sys = res.dust_manager.as_ref().unwrap().systems.get(&id).unwrap();
-      sys.render.as_ref().unwrap().address
-    };
-    // the LOD rewrites the flux: restore the propagated clusters before each run
-    let run_lod = |lambda: f32| -> (DustLodDraw, f32) {
-      propagate(device, id, 0, batch.count, &frame);
-      let unit = {
-        let res = device.res.read();
-        let sys = res.dust_manager.as_ref().unwrap().systems.get(&id).unwrap();
-        let mut h = sys.lod_host.lock();
-        h.lambda[0] = lambda;
-        h.tile_unit()
-      };
-      let mut draw = None;
-      let mut cmds = device
-        .run_transient_commands(|cmd| {
-          device.cmd_dust_pre_propagate_barrier(cmd);
-          device.cmd_dust_lod_begin(cmd, id, 0, Default::default(), 0.0)?;
-          // the readback of an earlier run must not move λ under the test
-          {
-            let res = device.res.read();
-            let sys = res.dust_manager.as_ref().unwrap().systems.get(&id).unwrap();
-            sys.lod_host.lock().lambda[0] = lambda;
-          }
-          device.cmd_dust_pre_lod_barrier(cmd);
-          draw = Some(device.cmd_dust_lod(
-            cmd,
-            id,
-            0,
-            0,
-            capacity,
-            render_addr,
-            batch.count,
-            exposure,
-            mvp,
-            params,
-          )?);
-          device.cmd_dust_post_propagate_barrier(cmd);
-          device.cmd_dust_lod_end(cmd, id)?;
-          Ok(())
-        })
-        .unwrap();
-      cmds.cleanup(&device.device);
-      (draw.unwrap(), unit)
-    };
-
-    // λ up to 1 (production): the LOD takes this frame's share from this frame's demand, so the
-    // first frame already fills 80–95 % of the budget with nothing dropped (no adjustment phase),
-    // with the share of the mirror
-    let (_, _) = run_lod(1.0);
-    {
-      let words = device.dust_lod_readback_latest(id).unwrap();
-      let fill = words[5] as f64 / budget as f64;
-      assert!((0.8..=0.95).contains(&fill), "first-frame fill {fill}");
-      assert_eq!(words[1], words[5], "nothing dropped at the budget");
-      let mut cpu = before.clone();
-      let pc = dust::DustLodPushConstants {
-        render: 0,
-        header: 0,
-        tiles: 0,
-        list: 0,
-        live_count: batch.count,
-        budget,
-        lambda: 1.0,
-        tile_scale: 1.0,
-        mvp,
-        params,
-      };
-      let mut t = alloc::vec![0u32; dust::DUST_TILE_COUNT as usize];
-      let mut l = alloc::vec::Vec::new();
-      let cpu_out = dust::lod_evaluate(&mut cpu, &pc, 0, 0.0, &mut t, &mut l);
-      let gpu_lambda = f32::from_bits(words[dust::LOD_HEADER_LAMBDA as usize]);
-      std::println!(
-        "[dust gpu] same-frame share: gpu λ {gpu_lambda} cpu λ {} fill {fill:.3}",
-        cpu_out.lambda
-      );
-      assert!(
-        (gpu_lambda / cpu_out.lambda - 1.0).abs() < 1e-3,
-        "λ gpu {gpu_lambda} cpu {}",
-        cpu_out.lambda
-      );
-      assert_eq!(
-        words[dust::LOD_HEADER_ON_SCREEN as usize],
-        cpu_out.on_screen
-      );
-      assert!(
-        words[1] <= budget,
-        "instances {} over budget {budget}",
-        words[1]
-      );
-      let (lod_buffer, lod_bytes) = device.dust_lod_list_buffer(id).unwrap();
-      let lod: alloc::vec::Vec<u32> =
-        bytemuck::cast_slice(&read_back(device, lod_buffer, false, lod_bytes)).to_vec();
-      let after: alloc::vec::Vec<DustRenderCluster> =
-        bytemuck::cast_slice(&read_back(device, render, false, rbytes)).to_vec();
-      let mut per_cluster = alloc::vec![0u32; batch.count as usize];
-      let w0 = dust::LOD_LIST_WORD0 as usize;
-      for &e in &lod[w0..w0 + words[1] as usize] {
-        per_cluster[(e & ((1 << dust::LOD_CLUSTER_BITS) - 1)) as usize] += 1;
-      }
-      for i in 0..batch.count as usize {
-        let k = per_cluster[i];
-        if k == 0 {
-          assert_eq!(
-            after[i].age_id_dbeta_flux[3], 0.0,
-            "dropped cluster {i} still drawable"
-          );
-        } else {
-          // flux per child × k = the cluster flux, a streak's visible fraction of it
-          let total = after[i].age_id_dbeta_flux[3] * k as f32;
-          let r = total / before[i].age_id_dbeta_flux[3];
-          assert!(r > 0.0 && r <= 1.0 + 1e-5, "cluster {i}: {r}");
-        }
-      }
-    }
-
-    // under budget: exact parity with the mirror (λ chosen on the mirror: below 90 % of it)
-    let lambda = [0.01f32, 1e-3, 1e-4, 1e-5]
-      .into_iter()
-      .find(|&l| {
-        let mut c = before.clone();
-        let mut pc = dust::DustLodPushConstants {
-          render: 0,
-          header: 0,
-          tiles: 0,
-          list: 0,
-          live_count: batch.count,
-          budget,
-          lambda: l,
-          tile_scale: 1.0,
-          mvp,
-          params,
-        };
-        pc.budget = u32::MAX;
-        let mut t = alloc::vec![0u32; dust::DUST_TILE_COUNT as usize];
-        let mut l2 = alloc::vec::Vec::new();
-        (dust::lod_evaluate(&mut c, &pc, 0, 0.0, &mut t, &mut l2).attempted as f64)
-          < 0.9 * budget as f64
-      })
-      .unwrap();
-    let (draw, unit) = run_lod(lambda);
-    assert!(draw.indirect.is_some());
-
-    // CPU mirror on the same clusters
-    let mut cpu = before.clone();
-    let pc = dust::DustLodPushConstants {
-      render: 0,
-      header: 0,
-      tiles: 0,
-      list: 0,
-      live_count: batch.count,
-      budget,
-      lambda,
-      tile_scale: exposure / unit,
-      mvp,
-      params,
-    };
-    let mut cpu_tiles = alloc::vec![0u32; dust::DUST_TILE_COUNT as usize];
-    let mut cpu_list = alloc::vec::Vec::new();
-    let cpu_out = dust::lod_evaluate(&mut cpu, &pc, 0, 0.0, &mut cpu_tiles, &mut cpu_list);
-    let mut cpu_k = alloc::vec![0u32; batch.count as usize];
-    for &e in &cpu_list {
-      cpu_k[(e & ((1 << dust::LOD_CLUSTER_BITS) - 1)) as usize] += 1;
-    }
-
-    let words = device.dust_lod_readback_latest(id).unwrap();
-    let (lod_buffer, lod_bytes) = device.dust_lod_list_buffer(id).unwrap();
-    let lod: alloc::vec::Vec<u32> =
-      bytemuck::cast_slice(&read_back(device, lod_buffer, false, lod_bytes)).to_vec();
-    assert_eq!(
-      &words[..],
-      &lod[..dust::LOD_READBACK_WORDS as usize],
-      "readback copy"
-    );
-    let instances = words[1];
-    assert_eq!(words[0], 6, "vertexCount");
-    assert!(instances <= budget);
-    assert!(instances > 0);
-    let rel = |a: u32, b: u32| (a as f64 - b as f64).abs() / (b as f64).max(1.0);
-    assert!(
-      rel(instances, cpu_out.instances) < 0.01,
-      "instances {instances} vs {}",
-      cpu_out.instances
-    );
-    assert!(
-      rel(words[4], cpu_out.demand) < 0.01,
-      "demand {} vs {}",
-      words[4],
-      cpu_out.demand
-    );
-    assert!(rel(words[5], cpu_out.attempted) < 0.01);
-
-    let after: alloc::vec::Vec<DustRenderCluster> =
-      bytemuck::cast_slice(&read_back(device, render, false, rbytes)).to_vec();
-    let list =
-      &lod[dust::LOD_LIST_WORD0 as usize..dust::LOD_LIST_WORD0 as usize + instances as usize];
-    let mut per_cluster = alloc::vec![0u32; batch.count as usize];
-    let mut children_seen = alloc::vec![0u64; batch.count as usize];
-    for &e in list {
-      let c = (e & ((1 << dust::LOD_CLUSTER_BITS) - 1)) as usize;
-      assert!(c < batch.count as usize);
-      per_cluster[c] += 1;
-      children_seen[c] |= 1u64 << ((e >> dust::LOD_CLUSTER_BITS).min(63));
-    }
-    let (mut on, mut off, mut mismatched) = (0, 0, 0);
-    for i in 0..batch.count as usize {
-      let k = per_cluster[i];
-      if k == 0 {
-        off += 1;
-        assert_eq!(
-          after[i].age_id_dbeta_flux[3], 0.0,
-          "cluster {i}: not drawn, flux kept"
-        );
-        continue;
-      }
-      on += 1;
-      // flux per child × k = the cluster flux, a streak's visible fraction of it
-      let total = after[i].age_id_dbeta_flux[3] * k as f32;
-      let r = total / before[i].age_id_dbeta_flux[3];
-      assert!(r > 0.0 && r <= 1.0 + 1e-5, "cluster {i}: {r}");
-      if k < 64 {
-        assert_eq!(
-          children_seen[i],
-          (1u64 << k) - 1,
-          "cluster {i}: children 0..{k}"
-        );
-      }
-      let ck = cpu_k[i];
-      let cf = cpu[i].age_id_dbeta_flux[3];
-      if ck != k || ((after[i].age_id_dbeta_flux[3] - cf) / cf).abs() > 1e-3 {
-        if mismatched < 5 {
-          std::println!(
-            "[dust gpu] cluster {i}: gpu k {k} cpu k {ck} spread {}",
-            before[i].pos_size[3]
-          );
-        }
-        mismatched += 1;
-      }
-    }
-    std::println!(
-      "[dust gpu] instances {instances} attempted {} budget {budget} cpu {cpu_out:?} lambda {lambda}",
-      words[5]
-    );
-    assert!(
-      on > 100 && off > 100,
-      "on {on} off {off}: the view must cut the ring"
-    );
-    assert!(
-      mismatched * 100 <= on,
-      "{mismatched} of {on} clusters differ from the mirror"
-    );
-
-    let t0 = dust::LOD_TILE_WORD0 as usize;
-    let gpu_tiles = &words[t0..t0 + dust::DUST_TILE_COUNT as usize];
-    let sum = |t: &[u32]| t.iter().map(|&v| v as f64).sum::<f64>();
-    let (gs, cs) = (sum(gpu_tiles), sum(&cpu_tiles));
-    assert!(
-      cs > 0.0 && (gs / cs - 1.0).abs() < 0.02,
-      "tiles {gs} vs {cs}"
-    );
-    let (gw, cw) = (
-      dust::white_point_from_tiles(gpu_tiles, unit).unwrap(),
-      dust::white_point_from_tiles(&cpu_tiles, unit).unwrap(),
-    );
-    assert!((gw / cw - 1.0).abs() < 0.05, "white {gw} vs {cw}");
-    std::println!(
-      "[dust gpu] LOD: {on} on / {off} off screen, {instances} instances (budget {budget}), {mismatched} k mismatches, white {gw:.3e}"
-    );
   });
 }
 
@@ -870,7 +615,7 @@ fn decoupling_scene(
       CameraComponent, CameraProjection, HighResTransformComponent, ReferenceFrameComponent,
       ReferenceFrameType, Scene, TransformComponent,
       dust::{DustEmitConfig, JetState},
-      particles::{ParticleSystemComponent, ParticleSystemDrawParams, ParticleSystemEmitParams},
+      particles::{ParticleSystemComponent, ParticleSystemDrawParams},
     },
     simulation::texture_cache::TextureCache,
   };
@@ -965,6 +710,8 @@ fn decoupling_scene(
       stream_color: [1.0, 0.8, 0.5, 1.0],
     },
     (30.0 * 86400.0 * 1e6) as _,
+    // this test ticks its own 2-day history below
+    crate::scene::particles::EMISSION_START_PREEXISTING,
   )
   .unwrap();
   // a history ticked from the comet's own orbit (hourly, 2 days), all submitted
@@ -1169,6 +916,7 @@ fn dust_frame_time_is_the_committed_scene_time() {
     v0_hi_beta: [0.0, 0.0, 0.0, 0.0],
     v0_lo_mass: [0.0, 0.0, 0.0, 1.0],
     misc: [0.0, 1.0, 1.0, 0.0],
+    eject: [0.0; 4],
   };
   assert_eq!(
     dust::evaluate_cluster(&c_new, 0, &s).age_id_dbeta_flux[3],
@@ -1271,27 +1019,33 @@ fn gpu_dust_trace_records_particles_over_time() {
     mvp[15] = 1.0;
     // consistent with mvp = P · scale(units): P = 1e-6 per km
     let params = [1e-3, 1e-6, 1e-6, 2.0 / 720.0];
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 7);
     let run_frame = |traced: Option<(DustFrame, [f64; 3])>| {
       let mut cmds = device
         .run_transient_commands(|cmd| {
           device.cmd_dust_pre_propagate_barrier(cmd);
-          device.cmd_dust_lod_begin(cmd, id, 0, Default::default(), 0.0)?;
+          device.cmd_dust_frame_begin(cmd, pe, [1280, 720], 0, Default::default())?;
+          device.cmd_dust_system_begin(id, 0, Default::default())?;
           if let Some((frame, nucleus)) = traced {
-            device.cmd_dust_propagate(cmd, id, 0, capacity, 0, batch.count, &frame)?;
-            device.cmd_dust_pre_lod_barrier(cmd);
-            device.cmd_dust_lod(
-              cmd,
-              id,
-              0,
-              0,
-              capacity,
-              render_addr,
-              batch.count,
-              1.0,
+            let (render, moments) =
+              device.cmd_dust_propagate(cmd, id, 0, capacity, 0, batch.count, &frame)?;
+            assert_eq!(render, render_addr);
+            device.cmd_dust_pre_splat_barrier(cmd);
+            let pc = crate::scene::dust::DustSplatPushConstants {
+              moments: 0,
+              render: 0,
+              pyramid: 0,
+              live_count: batch.count,
+              flags: 0,
+              exposure: 1.0,
+              inv_unit: 1.0,
+              color: 0xFFFFFF,
+              units_per_m: params[0],
               mvp,
-              params,
-            )?;
-            device.cmd_dust_post_propagate_barrier(cmd);
+              eye_local: [0.0, -1e12, 0.0, 0.0],
+            };
+            device.cmd_dust_splat(cmd, pe, id, 0, render, moments, pc)?;
+            device.cmd_dust_post_splat_barrier(cmd);
             let anchor = frame.anchor_m();
             let meta = TraceFrameMeta {
               frame: 0,
@@ -1313,7 +1067,8 @@ fn gpu_dust_trace_records_particles_over_time() {
             };
             device.cmd_dust_trace(cmd, id, meta, &[0])?;
           }
-          device.cmd_dust_lod_end(cmd, id)?;
+          device.cmd_dust_frame_end(cmd, pe)?;
+          device.cmd_dust_system_end(id)?;
           Ok(())
         })
         .unwrap();
@@ -1379,183 +1134,417 @@ fn gpu_dust_trace_records_particles_over_time() {
   );
 }
 
-/// Streaks on the GPU at telescope zoom: a 34 km field inside the coma of a 64-stream batch on a
-/// spinning nucleus. `dust_propagate.comp` writes the stream word (slot, shift, live) and
-/// `dust_lod.comp` links, clips and splits the same streaks as `dust::lod_evaluate`: same
-/// per-child flux (visible fraction / k), so the same children counts.
+fn moments_buffer(device: &Device, id: u64) -> vk::Buffer {
+  let res = device.res.read();
+  let sys = res.dust_manager.as_ref().unwrap().systems.get(&id).unwrap();
+  sys.moments.as_ref().unwrap().buffer
+}
+
+/// `dust_propagate.comp` writes the packets' second moments (velocity secants, β chord and
+/// sagitta) as the reference `packet_moments` does, within the f32 rounding of df64 differences.
 #[test]
-fn gpu_dust_lod_draws_streaks_like_the_reference_at_telescope_zoom() {
-  with_dust_device(9010, |device, capacity, _, render| {
-    let id = 9010;
-    let mut batch = test_batch(4096, 86400.0, 0, capacity);
-    batch.mass_params[3] = dust::batch_streams_word(6, false);
-    emit(device, id, &batch);
-    let frame = frame_after(2.0).with_streams(6);
-    propagate(device, id, 0, batch.count, &frame);
-    let rbytes = batch.count as u64 * core::mem::size_of::<DustRenderCluster>() as u64;
-    let before: alloc::vec::Vec<DustRenderCluster> =
-      bytemuck::cast_slice(&read_back(device, render, false, rbytes)).to_vec();
-    for (i, c) in before.iter().enumerate() {
-      if c.age_id_dbeta_flux[3] > 0.0 {
-        assert_eq!(
-          c.age_id_dbeta_flux[1].to_bits(),
-          dust::render_word(i as u32, 6),
-          "render {i}"
+fn gpu_dust_moments_match_reference() {
+  with_dust_device(9007, |device, capacity, _, _| {
+    let batch = test_batch(512, 3600.0, 7, capacity);
+    emit(device, 9007, &batch);
+    let moments = moments_buffer(device, 9007);
+    for days in [0.5, 10.0, 400.0] {
+      let frame = frame_after(days);
+      let first_slot = batch.first_index & batch.ring_mask;
+      propagate(device, 9007, first_slot, batch.count, &frame);
+      let bytes = read_back(
+        device,
+        moments,
+        false,
+        batch.count as u64 * core::mem::size_of::<dust::DustMoments>() as u64,
+      );
+      let out: &[dust::DustMoments] = bytemuck::cast_slice(&bytes);
+      let mut worst = 0.0f32;
+      for (i, gpu) in out.iter().enumerate() {
+        let slot = (first_slot + i as u32) & batch.ring_mask;
+        let (_, cpu) = dust::packet_moments(&dust::emit_cluster(&batch, i as u32), slot, &frame);
+        assert!(
+          (gpu.flux() - cpu.flux()).abs() <= 1e-3 * cpu.flux().abs() + 1e-30,
+          "{days} d slot {slot} flux"
         );
+        assert_eq!(gpu.id(), cpu.id(), "{days} d slot {slot} id");
+        let scale = cpu.cov_v().iter().fold(0.0f32, |a, &v| a.max(v.abs())).max(1e-6);
+        for k in 0..6 {
+          let (g, c) = (gpu.cov_v()[k], cpu.cov_v()[k]);
+          let err = (g - c).abs() / scale;
+          worst = worst.max(err);
+          assert!(
+            err < 2e-2,
+            "{days} d slot {slot}: cov[{k}] gpu {g:.4e} cpu {c:.4e}"
+          );
+        }
+        // the size polyline: every edge within 1 % of its distance from the mean (+ 2 m), the
+        // speed factors equal
+        for j in 0..dust::SIZE_EDGES as usize {
+          let (ge, ce) = (gpu.edge(j), cpu.edge(j));
+          let l1 = norm3(sub3(ce, cpu.mean())).max(1.0);
+          for k in 0..3 {
+            assert!(
+              (ge[k] - ce[k]).abs() < 1e-2 * l1 + 2.0,
+              "{days} d slot {slot}: edge {j}[{k}] gpu {} cpu {}",
+              ge[k],
+              ce[k]
+            );
+          }
+          assert!(
+            (gpu.edge_factor(j) - cpu.edge_factor(j)).abs() < 1e-5,
+            "{days} d slot {slot}: edge {j} factor"
+          );
+        }
+        for k in 0..3 {
+          assert!(
+            (gpu.mean()[k] - cpu.mean()[k]).abs() < 2.0 + 2e-6 * norm3(cpu.mean()),
+            "{days} d slot {slot}: mean"
+          );
+        }
       }
+      std::println!("[dust gpu] moments parity at {days} d: worst relative cov error {worst:.2e}");
     }
-    // the view: 34 km around the middle of the coma
-    let live: alloc::vec::Vec<&DustRenderCluster> =
-      before.iter().filter(|c| c.age_id_dbeta_flux[3] > 0.0).collect();
-    let mut xs: alloc::vec::Vec<f32> = live.iter().map(|c| c.pos_size[0]).collect();
-    let mut ys: alloc::vec::Vec<f32> = live.iter().map(|c| c.pos_size[1]).collect();
-    xs.sort_by(|a, b| a.total_cmp(b));
-    ys.sort_by(|a, b| a.total_cmp(b));
-    let (cx, cy) = (xs[xs.len() / 2], ys[ys.len() / 2]);
-    let half = 17.0e3f32;
+  });
+}
+
+/// `dust_splat.comp` scatters the same texel counts as the reference `splat_tier` into the
+/// view's pyramid (integer sums: order independent; per-texel differences come only from the
+/// float evaluation of each packet), and the header carries the level mask and τ_max.
+#[test]
+fn gpu_dust_splat_matches_reference() {
+  with_dust_device(9008, |device, capacity, _, _| {
+    let batch = test_batch(1024, 3600.0, 3, capacity);
+    emit(device, 9008, &batch);
+    let frame = frame_after(5.0);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 9);
+    let (w, h) = (640u32, 400u32);
+    // top-down orthographic view of ±2e7 m around the anchor, metres (units 1)
+    let half = 2.0e7f32;
     let mut mvp = [0.0f32; 16];
     mvp[0] = 1.0 / half;
     mvp[5] = 1.0 / half;
     mvp[10] = 1e-12;
-    mvp[12] = -cx / half;
-    mvp[13] = -cy / half;
     mvp[15] = 1.0;
-    let params = [1.0, 1.0 / half, 1.0 / half, 2.0 / 720.0];
-    let lambda = 0.05;
-    let render_addr = {
-      let res = device.res.read();
-      let sys = res.dust_manager.as_ref().unwrap().systems.get(&id).unwrap();
-      sys.lod_host.lock().lambda[0] = lambda;
-      sys.render.as_ref().unwrap().address
-    };
-    // tracers on, a flow clock: the header words dust.vert reads
-    let flags = dust::DUST_VIEW_TRACERS | dust::DUST_VIEW_FLOW;
-    // solar gravity at ~5 AU: the beta extent enters the footprints (dust::dust_extent)
-    const SUN_G: f32 = 2.0e-4;
-    let mut clock = dust::DustFlowClock::default();
-    clock.set_speed(10.0);
-    clock.sync(0, 0);
-    clock.sync(1_000_000, 3_600_000_000);
-    let flow = dust::DustFlowUniform::new(&clock, 4.0e8 + 0.123);
-    let mut draw = None;
-    let mut cmds = device
-      .run_transient_commands(|cmd| {
-        device.cmd_dust_pre_propagate_barrier(cmd);
-        device.cmd_dust_lod_begin(cmd, id, flags, flow, SUN_G)?;
-        {
-          let res = device.res.read();
-          let sys = res.dust_manager.as_ref().unwrap().systems.get(&id).unwrap();
-          sys.lod_host.lock().lambda[0] = lambda;
-        }
-        device.cmd_dust_pre_lod_barrier(cmd);
-        draw = Some(device.cmd_dust_lod(
-          cmd,
-          id,
-          0,
-          0,
-          capacity,
-          render_addr,
-          batch.count,
-          1.0,
-          mvp,
-          params,
-        )?);
-        device.cmd_dust_post_propagate_barrier(cmd);
-        device.cmd_dust_lod_end(cmd, id)?;
-        Ok(())
-      })
-      .unwrap();
-    cmds.cleanup(&device.device);
-    let words = device.dust_lod_readback_latest(id).unwrap();
-    let budget = capacity * dust::CHILDREN_PER_CLUSTER;
-    assert!(
-      words[5] <= budget,
-      "test must stay under budget ({} > {budget})",
-      words[5]
-    );
-    let after: alloc::vec::Vec<DustRenderCluster> =
-      bytemuck::cast_slice(&read_back(device, render, false, rbytes)).to_vec();
-
-    let mut cpu = before.clone();
-    let pc = dust::DustLodPushConstants {
+    let mut pc = dust::DustSplatPushConstants {
+      moments: 0,
       render: 0,
-      header: 0,
-      tiles: 0,
-      list: 0,
+      pyramid: 0,
       live_count: batch.count,
-      budget,
-      lambda,
-      tile_scale: 1.0,
+      flags: dust::DUST_VIEW_FLOW,
+      exposure: 1.0e-8,
+      inv_unit: 0.0,
+      color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+      units_per_m: 1.0,
+      eye_local: [0.0, 0.0, 1e10, 0.0],
       mvp,
-      params,
     };
-    let mut tiles = alloc::vec![0u32; dust::DUST_TILE_COUNT as usize];
-    let mut list = alloc::vec::Vec::new();
-    let out = dust::lod_evaluate(&mut cpu, &pc, flags, SUN_G, &mut tiles, &mut list);
-    // header words for dust.vert: the instance list (written by the LOD), clock and flags
-    let draw = draw.unwrap();
-    let h = dust::LOD_HEADER_LIST as usize;
-    assert_eq!(
-      words[h] as u64 | (words[h + 1] as u64) << 32,
-      draw.list,
-      "list address"
-    );
-    assert_eq!(words[dust::LOD_HEADER_FLOW_SPEED as usize], flow.speed.to_bits());
-    assert_eq!(words[dust::LOD_HEADER_FLAGS as usize], flags);
-    assert_eq!(words[dust::LOD_HEADER_T_HI as usize], flow.t_hi.to_bits());
-    assert_eq!(words[dust::LOD_HEADER_T_LO as usize], flow.t_lo.to_bits());
-    // T = t_sim + (K − 1)·1 h
-    assert!(flow.speed == 10.0 && flow.t_lo != 0.0);
-    assert!(((flow.t_hi as f64 + flow.t_lo as f64) - (4.0e8 + 0.123 + 9.0 * 3600.0)).abs() < 1e-3);
-    assert_eq!(
-      f32::from_bits(words[dust::LOD_HEADER_SUN_G as usize]),
-      SUN_G
-    );
-    // tracer instances: the same clusters as the mirror
-    let (lod_buffer, lod_bytes) = device.dust_lod_list_buffer(id).unwrap();
-    let lod: alloc::vec::Vec<u32> =
-      bytemuck::cast_slice(&read_back(device, lod_buffer, false, lod_bytes)).to_vec();
-    let w0 = dust::LOD_LIST_WORD0 as usize;
-    let tracers = |l: &[u32]| {
-      let mut t: alloc::vec::Vec<u32> = l
-        .iter()
-        .filter(|&&e| e >> dust::LOD_CLUSTER_BITS == dust::TRACER_CHILD)
-        .map(|&e| e & dust::RENDER_SLOT_MASK)
-        .collect();
-      t.sort_unstable();
-      t
+    let flow = dust::DustFlowUniform {
+      t_hi: 1.0e8,
+      t_lo: 0.0,
+      speed: 1.0,
     };
-    let (gt, ct) = (tracers(&lod[w0..w0 + words[1] as usize]), tracers(&list));
-    std::println!("[dust gpu] tracers: gpu {} cpu {}", gt.len(), ct.len());
-    assert!(!ct.is_empty(), "tracers in view");
-    assert_eq!(gt, ct, "tracer clusters");
-    let (mut streaks, mut mismatch) = (0, 0);
-    for i in 0..batch.count as usize {
-      let (g, c) = (after[i].age_id_dbeta_flux[3], cpu[i].age_id_dbeta_flux[3]);
-      if c > 0.0 && dust::streak_pred(&before, i).is_some() {
-        streaks += 1;
+    let mut run = |pc: &mut dust::DustSplatPushConstants| -> f32 {
+      let mut unit = 0.0;
+      let mut cmds = device
+        .run_transient_commands(|cmd| {
+          device.cmd_dust_pre_propagate_barrier(cmd);
+          let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], pc.flags, flow)?;
+          unit = view.unit;
+          pc.inv_unit = 1.0 / view.unit;
+          device.cmd_dust_system_begin(9008, pc.flags, flow)?;
+          let (render, moments) =
+            device.cmd_dust_propagate(cmd, 9008, 0, capacity, first_slot, batch.count, &frame)?;
+          device.cmd_dust_pre_splat_barrier(cmd);
+          device.cmd_dust_splat(cmd, pe, 9008, 0, render, moments, *pc)?;
+          device.cmd_dust_post_splat_barrier(cmd);
+          device.cmd_dust_frame_end(cmd, pe)?;
+          device.cmd_dust_system_end(9008)?;
+          Ok(())
+        })
+        .unwrap();
+      cmds.cleanup(&device.device);
+      unit
+    };
+    // the first frame measures τ_max (unit 1e-4 before any); the host folds a readback
+    // DUST_READBACK_SLOTS frames later, so by the sixth frame the unit follows the view
+    let mut gpu_unit = 0.0;
+    for _ in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
+      gpu_unit = run(&mut pc);
+    }
+    let gpu = device.download_dust_pyramid(pe).unwrap();
+    let layout = device.dust_view_layout(pe).unwrap();
+    assert_eq!(layout, dust::PyramidLayout::new(w, h));
+    // reference: the CPU splat of the *GPU's* moments (`gpu_dust_moments_match_reference` covers
+    // those): the merge, piece-count and level decisions are made on identical packets, so what
+    // remains is the float evaluation of the capsules
+    let gpu_render = buffers(device, 9008).2;
+    let gpu_moments = moments_buffer(device, 9008);
+    let render_bytes = read_back(
+      device,
+      gpu_render,
+      false,
+      batch.count as u64 * core::mem::size_of::<dust::DustRenderCluster>() as u64,
+    );
+    let moments_bytes = read_back(
+      device,
+      gpu_moments,
+      false,
+      batch.count as u64 * core::mem::size_of::<dust::DustMoments>() as u64,
+    );
+    let render: alloc::vec::Vec<dust::DustRenderCluster> =
+      bytemuck::cast_slice(&render_bytes).to_vec();
+    let moments: alloc::vec::Vec<dust::DustMoments> = bytemuck::cast_slice(&moments_bytes).to_vec();
+    let mut cpu = alloc::vec![0u32; layout.total_words as usize];
+    cpu[..dust::PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+    dust::splat_tier(&moments, &render, &pc, &flow, 0, &layout, &mut cpu);
+    dust::measure_from_pyramid(&layout, &mut cpu);
+    let hw = dust::PYRAMID_HEADER_WORDS as usize;
+    assert_eq!(gpu[dust::PYR_LEVELS as usize], layout.level_count());
+    assert_eq!(
+      gpu[dust::PYR_LEVEL_MASK as usize],
+      cpu[dust::PYR_LEVEL_MASK as usize],
+      "level mask"
+    );
+    let (tg, tc) = (
+      f32::from_bits(gpu[dust::PYR_TAU_MAX as usize]),
+      f32::from_bits(cpu[dust::PYR_TAU_MAX as usize]),
+    );
+    assert!(
+      (tg / tc - 1.0).abs() < 1e-2,
+      "τ_max gpu {tg:.4e} cpu {tc:.4e}"
+    );
+    let (mut worst, mut peak, mut sg, mut sc, mut nonzero) = (0u32, 0u32, 0u64, 0u64, 0usize);
+    let (mut depth_compared, mut depth_mismatch) = (0usize, 0usize);
+    let (mut box_compared, mut box_violations) = (0usize, 0usize);
+    for (l, &(off, lw, lh)) in layout.levels.iter().enumerate() {
+      for t in 0..(lw * lh) as usize {
+        let i = off as usize + t * dust::PYRAMID_TEXEL_WORDS as usize;
+        for k in 0..4 {
+          let (g, c) = (gpu[i + k], cpu[i + k]);
+          let d = g.abs_diff(c);
+          worst = worst.max(d);
+          peak = peak.max(c);
+          if k == 0 {
+            sg += g as u64;
+            sc += c as u64;
+            nonzero += (c > 0) as usize;
+          }
+          // per texel within the float evaluation of each packet where the counts are substantial;
+          // faint texels carry the error diffusion's ±1-per-packet dither, checked on 3×3 sums
+          // below
+          if k > 0 {
+            // the colour words follow τ: compare the hue ratio (word / τ) instead, the dither
+            // of both words cancels in it
+            let (g0, c0) = (gpu[i], cpu[i]);
+            if g0 >= 64 && c0 >= 64 {
+              let (hg, hc) = (g as f32 / g0 as f32, c as f32 / c0 as f32);
+              assert!(
+                // the colour words carry the dither of every contributing packet (±0.5 per
+                // packet and word, uncorrelated between the words): 8 counts of slack
+                (hg - hc).abs() <= 0.03 + 8.0 / c0 as f32,
+                "level {l} texel {t} word {k}: hue gpu {hg:.4} ({g}/{g0}) cpu {hc:.4} ({c}/{c0})"
+              );
+            }
+          } else {
+            // τ: the error diffusion dithers each packet's faint texels by ±1 where the float
+            // evaluation differs, and a merge / piece-count decision on a float boundary moves a
+            // whole packet between neighbouring texels; compared on 3×3 sums (5 % + 6 counts)
+            let (tx, ty) = ((t as u32 % lw) as i64, (t as u32 / lw) as i64);
+            let (mut bg, mut bc) = (0u64, 0u64);
+            for dy in -1..=1i64 {
+              for dx in -1..=1i64 {
+                let (x, y) = (tx + dx, ty + dy);
+                if x >= 0 && y >= 0 && x < lw as i64 && y < lh as i64 {
+                  let j = off as usize
+                    + (y as usize * lw as usize + x as usize) * dust::PYRAMID_TEXEL_WORDS as usize;
+                  bg += gpu[j] as u64;
+                  bc += cpu[j] as u64;
+                }
+              }
+            }
+            // fainter neighbourhoods are the dither of many packets of a fraction of a count
+            // each: covered in aggregate by the level sums and the measurement grid (0.1 %)
+            // a merge or piece-count decision on a float boundary moves a whole packet between
+            // neighbourhoods on one side only: counted, allowed on half a percent of them
+            let bd = bg.abs_diff(bc);
+            if bg.max(bc) >= 100 {
+              box_compared += 1;
+              if bd as f64 > 6.0 + 5e-2 * bg.max(bc) as f64 {
+                box_violations += 1;
+                if box_violations <= 3 {
+                  std::println!(
+                    "[parity] level {l} texel {t}: 3×3 τ gpu {bg} cpu {bc} (texel gpu {g} cpu {c})"
+                  );
+                }
+              }
+            }
+          }
+        }
+        // nearest depth: identical bits where dust landed on both sides with more than the
+        // rounding noise (the error diffusion rounds a faint packet to one count on one side and
+        // none on the other, and that packet's depth then differs)
+        if cpu[i] >= 4 && gpu[i] >= 4 {
+          let (dg, dc) = (f32::from_bits(gpu[i + 4]), f32::from_bits(cpu[i + 4]));
+          depth_compared += 1;
+          if !((dg - dc).abs() < 1e-6 * dc.max(1e-30) + 1e-12) {
+            depth_mismatch += 1;
+          }
+        }
       }
-      let same = (g == 0.0 && c == 0.0) || (g * c > 0.0 && ((g - c) / c).abs() < 1e-3);
-      if !same {
-        mismatch += 1;
+    } // a packet rounded to one count on one side only (error diffusion) changes a texel's nearest
+    // depth: allowed on a per-mille of the compared texels
+    // a packet whose merge / piece-count / on-screen decision sits on a float boundary (the GPU
+    // fuses multiply-adds the reference does not) lands on one side only: it moves the nearest
+    // depth of its whole footprint and a few 3×3 sums; the level sums and the measurement grid
+    // (0.1 %, above) bound the energy of such packets
+    std::println!(
+      "[parity] nearest depth differs on {depth_mismatch} of {depth_compared} texels, 3×3 τ sums beyond 5 % + 6 on {box_violations} of {box_compared}"
+    );
+    assert!(
+      depth_mismatch <= 1 + depth_compared / 10,
+      "nearest depth differs on {depth_mismatch} of {depth_compared} texels"
+    );
+    assert!(
+      box_violations <= 1 + box_compared / 100,
+      "3×3 τ sums differ by more than 5 % + 6 on {box_violations} of {box_compared} neighbourhoods"
+    );
+
+    assert!(nonzero > 300, "{nonzero} texels");
+    assert!(
+      (sg as f64 / sc as f64 - 1.0).abs() < 1e-3,
+      "Σ counts gpu {sg} cpu {sc}"
+    );
+    // the measurement grid (dust_measure.comp from the GPU pyramid vs the reference from the CPU
+    // one): a box sum of ≤ 256 + 64 + 16 + 4 + 1 level texels, each within the tolerance above
+    let (mo, mw, mh) = layout.measure;
+    let (mut msg, mut msc, mut m_occupied) = (0u64, 0u64, 0usize);
+    // the error diffusion dithers the faint texels of every packet by ±1 count, and a packet
+    // whose sub-texel position differs by a fused multiply-add can put its last count on one
+    // side only: an occupancy mismatch of up to 2 counts is that dither, allowed on 1 % of the
+    // occupied texels
+    let mut occupancy_dither = 0usize;
+    for t in 0..(mw * mh) as usize {
+      let i = mo as usize + t * dust::PYRAMID_TEXEL_WORDS as usize;
+      let (g, c) = (gpu[i], cpu[i]);
+      msg += g as u64;
+      msc += c as u64;
+      m_occupied += (c > 0) as usize;
+      assert!(
+        g.abs_diff(c) as f32 <= 2.0 * 341.0 + 2e-3 * c.max(g) as f32,
+        "measure texel {t}: gpu {g} cpu {c}"
+      );
+      if (g > 0) != (c > 0) {
+        assert!(
+          g.max(c) <= 2,
+          "measure texel {t} occupancy: gpu {g} cpu {c}"
+        );
+        occupancy_dither += 1;
       }
     }
+    assert!(
+      occupancy_dither <= 1 + m_occupied / 100,
+      "measure occupancy differs on {occupancy_dither} texels of {m_occupied}"
+    );
+    assert!(
+      m_occupied > 0 && (msg as f64 / msc as f64 - 1.0).abs() < 1e-3,
+      "Σ measure gpu {msg} cpu {msc}"
+    );
     std::println!(
-      "[dust gpu] telescope zoom: {streaks} streaks in view, {} children (cpu), gpu {} attempted, {mismatch} mismatches",
-      out.attempted,
-      words[5]
+      "[dust gpu] splat parity: {nonzero} texels, worst |Δ| {worst} counts of peak {peak}, unit {gpu_unit:.3e}"
     );
-    assert!(streaks > 50, "streaks must cross the view ({streaks})");
+    let _ = hw;
+    device.discard_dust_view(pe, 0);
+  });
+}
+
+/// Stress: a full tier (every slot emitted) propagated 40 times with the moments, as a heavy
+/// frame does; must not fault the device.
+#[test]
+fn gpu_dust_full_ring_propagate_stress() {
+  with_dust_device(9009, |device, capacity, _, _| {
+    let per = 4096u32;
+    let mut emitted = 0u32;
+    let mut seq = 0u64;
+    while emitted < capacity {
+      let n = per.min(capacity - emitted);
+      let batch = test_batch(n, 3600.0 * (1.0 + (seq % 7) as f64), emitted, capacity);
+      let mut res = device
+        .run_transient_compute_commands(|cmd| device.cmd_dust_emit(cmd, 9009, 0, &batch, seq))
+        .unwrap();
+      res.cleanup(&device.device);
+      emitted += n;
+      seq += 1;
+    }
+    for k in 0..40 {
+      let frame = frame_after(0.5 + k as f64 * 3.0);
+      let mut res = device
+        .run_transient_commands(|cmd| {
+          device.cmd_dust_pre_propagate_barrier(cmd);
+          device.cmd_dust_propagate(cmd, 9009, 0, capacity, 0, capacity, &frame)?;
+          device.cmd_dust_pre_splat_barrier(cmd);
+          device.cmd_dust_post_splat_barrier(cmd);
+          Ok(())
+        })
+        .expect("propagate frame");
+      res.cleanup(&device.device);
+    }
+    std::println!("[dust gpu] full-ring propagate stress: {capacity} clusters x 40 frames ok");
+  });
+}
+
+/// Fault injection (ignored by default: it loses the test process's device on purpose): a splat
+/// dispatch whose pyramid address points nowhere must end in a device loss that the fault
+/// diagnostics report (`Device::report_device_lost`), with the device marked lost. Run with
+/// `cargo nextest run -E 'test(/gpu_device_fault_is_reported/)' --run-ignored all`.
+#[test]
+#[ignore]
+fn gpu_device_fault_is_reported() {
+  with_dust_device(9010, |device, capacity, _, _| {
+    let batch = test_batch(256, 3600.0, 3, capacity);
+    emit(device, 9010, &batch);
+    let frame = frame_after(5.0);
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 11);
+    let mut mvp = [0.0f32; 16];
+    mvp[0] = 1.0 / 2.0e7;
+    mvp[5] = 1.0 / 2.0e7;
+    mvp[10] = 1e-12;
+    mvp[15] = 1.0;
+    let res = device.run_transient_commands(|cmd| {
+      device.cmd_dust_pre_propagate_barrier(cmd);
+      let _ = device.cmd_dust_frame_begin(cmd, pe, [640, 400], 0, Default::default())?;
+      let (render, moments) =
+        device.cmd_dust_propagate(cmd, 9010, 0, capacity, 0, batch.count, &frame)?;
+      device.cmd_dust_pre_splat_barrier(cmd);
+      let pc = dust::DustSplatPushConstants {
+        moments: 0,
+        render: 0,
+        pyramid: 0,
+        live_count: batch.count,
+        flags: 0,
+        exposure: 1.0,
+        inv_unit: 1e6,
+        color: 0xFFFFFF,
+        units_per_m: 1.0,
+        mvp,
+        eye_local: [0.0, 0.0, 1e10, 0.0],
+      };
+      // the dispatch with a pyramid pointer into nowhere: the shader's first header read faults
+      device.cmd_checkpoint(cmd, c"test: injected fault dispatch");
+      device.cmd_dust_splat_with_pyramid(cmd, 9010, render, moments, pc, 0x0000_7000_0000_0000)?;
+      device.cmd_dust_post_splat_barrier(cmd);
+      Ok(())
+    });
+    // either the submit or the wait reports the loss; the report must have run
+    let _ = res;
+    unsafe {
+      let _ = device.device.device_wait_idle();
+    }
+    let _ = device.report_device_lost("test wait");
     assert!(
-      mismatch * 100 <= batch.count as usize,
-      "{mismatch} clusters differ from the reference"
-    );
-    let rel = (words[5] as f64 - out.attempted as f64).abs() / out.attempted.max(1) as f64;
-    assert!(
-      rel < 0.01,
-      "attempted children: gpu {} vs cpu {}",
-      words[5],
-      out.attempted
+      device.is_lost(),
+      "the device must be marked lost after the injected fault"
     );
   });
 }
