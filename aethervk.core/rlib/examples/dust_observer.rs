@@ -241,6 +241,12 @@ struct Args {
   view_flags: u32,
   /// `--check`: the largest allowed 2-D rms of the frame against its Monte-Carlo truth
   mc_max: f64,
+  /// `--afrho-aperture-km R`: the aperture Afρ of the render and of the truth inside R km of the
+  /// nucleus pixel, against the recipe's Afρ(r_h)·Φ(α) (meaningful for `--isotropic`)
+  afrho_aperture_km: Option<f64>,
+  /// `--isotropic`: the jet emits over the whole sphere (aperture π) from a non-rotating nucleus
+  /// (always lit): the geometry of the Afρ closure
+  isotropic: bool,
 }
 
 fn usage() -> ! {
@@ -249,7 +255,8 @@ fn usage() -> ! {
      \x20      [--pose up-zenith|anti-sun|earth] [--play SECONDS] [--reemit-every N] [--check]\n\
      \x20      [--half-height-km KM] [--fov-deg DEG] [--start YYYY-MM-DD] [--spk FILE.bsp]\n\
      \x20      [--quiet] [--settle-frames N] [--no-jet] [--hide-sun] [--full-teardown]\n\
-     \x20      [--ignite-days D] [--prestart] [--ripple-max R] [--spin-hours H] [--mc N] [--mc-max R] [--view-flags F]"
+     \x20      [--ignite-days D] [--prestart] [--ripple-max R] [--spin-hours H] [--mc N] [--mc-max R] [--view-flags F]\n\
+     \x20      [--afrho-aperture-km R] [--isotropic]"
   );
   std::process::exit(2);
 }
@@ -278,6 +285,8 @@ fn parse_args() -> Args {
     prestart: false,
     ripple_max: None,
     spin_hours: ROTATION_PERIOD_H,
+    afrho_aperture_km: None,
+    isotropic: false,
     mc: 0,
     mc_max: 0.15,
     view_flags: 0,
@@ -325,6 +334,13 @@ fn parse_args() -> Args {
       "--mc-tier" => a.mc_tier = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--mc-age-max" => a.mc_age_max = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--mc-max" => a.mc_max = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--afrho-aperture-km" => {
+        a.afrho_aperture_km = Some(next(&mut i).parse().unwrap_or_else(|_| usage()))
+      }
+      "--isotropic" => {
+        a.isotropic = true;
+        a.spin_hours = 0.0;
+      }
       "--half-height-km" => {
         a.half_height_km = Some(next(&mut i).parse().unwrap_or_else(|_| usage()))
       }
@@ -481,6 +497,401 @@ struct FrameRec {
   passes_logged: String,
   /// the frame against its Monte-Carlo truth (`--mc`)
   mc: Option<McRec>,
+  /// the view's exposure: white point (radiance factor), V mag/arcsec², EV, softening
+  exposure: Option<aethervk_core_rlib::scene::dust::DustExposure>,
+  /// the displayed hue along the tail axis ([`hue_ramp_samples`])
+  hue: Vec<HueSample>,
+}
+
+/// One sample of the displayed hue ramp along the tail axis (the on-screen anti-solar direction
+/// from the nucleus), a 5×5 box mean of the frame's pixels. The headless render target is
+/// `R8G8B8A8_UNORM` (`device.rs` `render_target_format`): the bytes are linear light, no sRGB
+/// decode (the app's swapchain is `B8G8R8A8_SRGB` and encodes on write; decoding these bytes
+/// as sRGB turned the stream's hue by −17° and inflated its chroma 1.6×)
+#[derive(Clone, Debug)]
+struct HueSample {
+  px: (f64, f64),
+  /// display level: luma of the 8-bit pixel over 255 (the composite rolls off to white above 0.8)
+  level: f64,
+  /// OKLab hue (degrees) and chroma over lightness relative to the stream colour's (the display
+  /// level scales OKLab's L, a and b together, so C/L is what the age colour sets)
+  hue_deg: f64,
+  chroma_rel: f64,
+  dark: bool,
+  highlight: bool,
+  /// display level below [`HUE_FAINT_LEVEL`]: the colour words' dither (one-count deposits) is
+  /// visible in a 9×9 box, reported but not judged
+  faint: bool,
+  /// the Monte-Carlo truth's radiance-weighted mean age and age spread at the sample, in TTL
+  age_ttl: Option<f64>,
+  age_spread_ttl: Option<f64>,
+  /// the truth's own colour at the sample: the radiance-weighted mean of its grains' age colours
+  /// (linear RGB, the mixture the render claims), as OKLab hue and relative chroma
+  truth_hue_deg: Option<f64>,
+  truth_chroma_rel: Option<f64>,
+  /// the render's accumulated colour at the sample: the pyramid's colour words over its τ in the
+  /// 9×9 box (every level, per pixel area), the quantity the check judges — the displayed pixel
+  /// also holds whatever the scene shows behind the dust (the orbit line under the 1 AU tail)
+  pyr_hue_deg: Option<f64>,
+  pyr_chroma_rel: Option<f64>,
+  /// τ counts of that box (per pixel area): below [`HUE_PYR_FAINT_COUNTS`] the sample is faint
+  pyr_tau: f64,
+  /// render over truth of the box's τ (both unit-sum images): outside [`HUE_TAU_RATIO`] the box
+  /// is haze — dust the render has where the truth has little (the old tiers' pooled packets
+  /// spread over a near frame) — and its colour is reported, not judged
+  tau_ratio: Option<f64>,
+}
+
+/// the render/truth τ ratio of a box within which its colour is judged
+const HUE_TAU_RATIO: f64 = 2.0;
+
+/// τ counts (per pixel area, summed over the 9×9 box) below which the pyramid colour is faint
+const HUE_PYR_FAINT_COUNTS: f64 = 50.0;
+
+/// The pyramid's colour at a pixel box: Σ over the levels of the texel words per pixel area
+/// (mirror of the composite's sum without the bilinear weights), as (τ counts, linear colour)
+fn pyramid_colour_at(pyr: &[u32], px: (f64, f64), r: i64) -> (f64, Option<[f32; 3]>) {
+  use aethervk_core_rlib::scene::dust as d;
+  let levels = pyr[d::PYR_LEVELS as usize] as usize;
+  let (ix, iy) = (px.0.round() as i64, px.1.round() as i64);
+  let (mut tau, mut rgb) = (0.0f64, [0.0f64; 3]);
+  for l in 0..levels {
+    let off = pyr[d::PYR_TABLE as usize + 3 * l] as i64;
+    let lw = pyr[d::PYR_TABLE as usize + 3 * l + 1] as i64;
+    let lh = pyr[d::PYR_TABLE as usize + 3 * l + 2] as i64;
+    let s = 1i64 << l;
+    let area = (s * s) as f64;
+    for y in iy - r..=iy + r {
+      for x in ix - r..=ix + r {
+        let (tx, ty) = (x >> l, y >> l);
+        if tx < 0 || ty < 0 || tx >= lw || ty >= lh {
+          continue;
+        }
+        let i = (off + (ty * lw + tx) * d::PYRAMID_TEXEL_WORDS as i64) as usize;
+        let c = pyr[i] as f64;
+        if c == 0.0 {
+          continue;
+        }
+        tau += c / area;
+        for k in 0..3 {
+          rgb[k] += pyr[i + 1 + k] as f64 / area;
+        }
+      }
+    }
+  }
+  if tau > 0.0 {
+    let k = 1.0 / (tau * d::DUST_COLOR_SCALE as f64);
+    (
+      tau,
+      Some([
+        (rgb[0] * k) as f32,
+        (rgb[1] * k) as f32,
+        (rgb[2] * k) as f32,
+      ]),
+    )
+  } else {
+    (0.0, None)
+  }
+}
+
+/// samples of the hue ramp per frame
+const HUE_SAMPLES: usize = 10;
+/// `--check`: the hue within this of the truth's; the chroma kept over the truth's at least
+/// this as the frame's median over its judged samples (the guarantee) and this per sample (the
+/// outlier guard: 8-bit frame bytes — the orange's blue channel at display level 0.2 is 10
+/// counts, half a count is 5 % — and a 9×9 box across an age gradient; the month run's 135
+/// judged samples: median 0.98, 5th percentile 0.87, least 0.80)
+const HUE_TOL_DEG: f64 = 15.0;
+const HUE_CHROMA_MIN: f64 = 0.75;
+const HUE_CHROMA_MEDIAN_MIN: f64 = 0.9;
+/// the colour box half-width (px) and the display level below which a sample is faint (not
+/// judged: the colour words' dither and the 8-bit quantisation)
+const HUE_BOX_R: i64 = 4;
+const HUE_FAINT_LEVEL: f64 = 0.2;
+/// the composite rolls the hue off towards white above this stretch value
+/// (`DUST_HIGHLIGHT_START`): a sample whose level over its colour's luma exceeds it is a
+/// highlight, not judged
+const HUE_HIGHLIGHT_A: f64 = 0.8;
+
+/// Rec. 709 luma of a linear colour
+fn luma_of(c: [f32; 3]) -> f64 {
+  (0.2126 * c[0] as f64 + 0.7152 * c[1] as f64 + 0.0722 * c[2] as f64).max(1e-6)
+}
+
+/// OKLab hue (degrees) and chroma over lightness of a linear colour
+fn oklab_hue_cl(lin: [f32; 3]) -> (f64, f64) {
+  let lab = aethervk_core_rlib::scene::dust::oklab_of(lin);
+  let c = ((lab[1] * lab[1] + lab[2] * lab[2]) as f64).sqrt();
+  (
+    (lab[2] as f64).atan2(lab[1] as f64).to_degrees(),
+    c / (lab[0] as f64).max(1e-6),
+  )
+}
+
+/// The hue ramp's ray: from the nucleus pixel along the on-screen anti-solar direction (pixel
+/// axes, unit), from `r0` px out
+#[derive(Clone, Copy, Debug)]
+struct HueRay {
+  from: (f64, f64),
+  dir: (f64, f64),
+  r0: f64,
+}
+
+impl HueRay {
+  /// how far the ray can run inside the frame (px)
+  fn reach(&self, width: u32, height: u32) -> f64 {
+    let (w, h) = (width as f64, height as f64);
+    let mut reach = f64::INFINITY;
+    if self.dir.0 > 1e-9 {
+      reach = reach.min((w - 3.0 - self.from.0) / self.dir.0);
+    }
+    if self.dir.0 < -1e-9 {
+      reach = reach.min((2.0 - self.from.0) / self.dir.0);
+    }
+    if self.dir.1 > 1e-9 {
+      reach = reach.min((h - 3.0 - self.from.1) / self.dir.1);
+    }
+    if self.dir.1 < -1e-9 {
+      reach = reach.min((2.0 - self.from.1) / self.dir.1);
+    }
+    reach.max(self.r0)
+  }
+  fn at(&self, t: f64) -> (f64, f64) {
+    (self.from.0 + self.dir.0 * t, self.from.1 + self.dir.1 * t)
+  }
+  /// `HUE_SAMPLES` pixels from `r0` to `t_end` (at least 9 px out)
+  fn samples(&self, t_end: f64) -> Vec<(f64, f64)> {
+    let t_end = t_end.max(self.r0 + 9.0);
+    (0..HUE_SAMPLES)
+      .map(|k| self.at(self.r0 + (t_end - self.r0) * k as f64 / (HUE_SAMPLES - 1) as f64))
+      .collect()
+  }
+}
+
+/// The end of the lit dust along the ray on the displayed frame (the last 3×3 box above the
+/// dark level): the fallback without `--mc` (the truth's region places the samples otherwise —
+/// a stray lit pixel or a slightly different exposure moved this scan between two runs of one
+/// frame)
+fn hue_ray_extent_display(rgba: &[u8], width: u32, height: u32, ray: &HueRay) -> f64 {
+  let (w, h) = (width as i64, height as i64);
+  let luma_at = |cx: f64, cy: f64, r: i64| -> f64 {
+    let (ix, iy) = (cx.round() as i64, cy.round() as i64);
+    let (mut l, mut n) = (0.0f64, 0.0f64);
+    for y in iy - r..=iy + r {
+      for x in ix - r..=ix + r {
+        if x < 0 || y < 0 || x >= w || y >= h {
+          continue;
+        }
+        let o = ((y * w + x) * 4) as usize;
+        l += (0.2126 * rgba[o] as f64 + 0.7152 * rgba[o + 1] as f64 + 0.0722 * rgba[o + 2] as f64)
+          / 255.0;
+        n += 1.0;
+      }
+    }
+    l / n.max(1.0)
+  };
+  let reach = ray.reach(width, height);
+  let mut t_end = ray.r0;
+  let mut t = ray.r0;
+  while t <= reach {
+    let (cx, cy) = ray.at(t);
+    if luma_at(cx, cy, 1) >= 8.0 / 255.0 {
+      t_end = t;
+    }
+    t += 1.0;
+  }
+  t_end
+}
+
+/// The displayed colour at a sample pixel: the hue and relative chroma of the 9×9 box mean of
+/// the frame's linear bytes, the display level, and the dark / faint / highlight flags
+fn hue_sample_at(
+  rgba: &[u8],
+  width: u32,
+  height: u32,
+  px: (f64, f64),
+  stream: [f32; 3],
+) -> HueSample {
+  let (w, h) = (width as i64, height as i64);
+  let (_, stream_cl) = oklab_hue_cl(stream);
+  let (ix, iy) = (px.0.round() as i64, px.1.round() as i64);
+  let (mut lin, mut luma, mut n) = ([0.0f64; 3], 0.0f64, 0.0f64);
+  for y in iy - HUE_BOX_R..=iy + HUE_BOX_R {
+    for x in ix - HUE_BOX_R..=ix + HUE_BOX_R {
+      if x < 0 || y < 0 || x >= w || y >= h {
+        continue;
+      }
+      let o = ((y * w + x) * 4) as usize;
+      let p = [
+        rgba[o] as f64 / 255.0,
+        rgba[o + 1] as f64 / 255.0,
+        rgba[o + 2] as f64 / 255.0,
+      ];
+      luma += 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+      for k in 0..3 {
+        lin[k] += p[k];
+      }
+      n += 1.0;
+    }
+  }
+  let n = n.max(1.0);
+  let level = luma / n;
+  let (hue_deg, cl) = oklab_hue_cl([
+    (lin[0] / n) as f32,
+    (lin[1] / n) as f32,
+    (lin[2] / n) as f32,
+  ]);
+  HueSample {
+    px,
+    level,
+    hue_deg,
+    chroma_rel: cl / stream_cl.max(1e-6),
+    dark: level < 8.0 / 255.0,
+    // provisional: the stretch value over the stream colour's luma (the truth colour's when known)
+    highlight: level / luma_of(stream) > HUE_HIGHLIGHT_A,
+    faint: level < HUE_FAINT_LEVEL,
+    age_ttl: None,
+    age_spread_ttl: None,
+    truth_hue_deg: None,
+    truth_chroma_rel: None,
+    pyr_hue_deg: None,
+    pyr_chroma_rel: None,
+    pyr_tau: 0.0,
+    tau_ratio: None,
+  }
+}
+
+/// the signed turn of `hue` from `from`, in (−180, 180]
+fn hue_turn_deg(hue: f64, from: f64) -> f64 {
+  let d = (hue - from).rem_euclid(360.0);
+  if d > 180.0 { d - 360.0 } else { d }
+}
+
+/// The hue ramp's log line and `--check` failures. A sample whose pyramid box holds at least
+/// [`HUE_PYR_FAINT_COUNTS`] τ counts and has a truth colour must accumulate that colour: the
+/// render's hue within [`HUE_TOL_DEG`] of the truth's and its relative chroma at least
+/// [`HUE_CHROMA_MIN`] of the truth's per sample, [`HUE_CHROMA_MEDIAN_MIN`] as the frame's median
+/// (the truth mixes its grains' age colours exactly as the render claims to: a pixel of one age
+/// keeps the stream's chroma, a pixel of many ages greys by their hue spread); and the render's
+/// turn from the stream colour must not fall by more than 10° between consecutive judged
+/// samples of increasing truth age. A box whose render/truth τ is beyond [`HUE_TAU_RATIO`] is
+/// haze (the render's dust where the truth has little): counted, its colour not judged. The
+/// displayed colour (the pixel, with whatever the scene shows behind the dust) and the age
+/// colour of the truth's mean age (the clock) are logged.
+fn hue_report(
+  i: u32,
+  hue: &[HueSample],
+  stream_hue_deg: f64,
+  check: bool,
+) -> (String, Vec<String>) {
+  let mut problems = Vec::new();
+  let (mut dark, mut highlight, mut faint, mut haze, mut judged) =
+    (0usize, 0usize, 0usize, 0usize, 0usize);
+  let mut chroma_min = f64::INFINITY;
+  let mut chroma_ratios: Vec<f64> = Vec::new();
+  let mut prev: Option<(f64, f64)> = None;
+  for (k, s) in hue.iter().enumerate() {
+    dark += s.dark as usize;
+    highlight += s.highlight as usize;
+    let (Some(age), Some(th), Some(tc), Some(ph), Some(pc)) = (
+      s.age_ttl,
+      s.truth_hue_deg,
+      s.truth_chroma_rel,
+      s.pyr_hue_deg,
+      s.pyr_chroma_rel,
+    ) else {
+      continue;
+    };
+    if s.pyr_tau < HUE_PYR_FAINT_COUNTS {
+      faint += 1;
+      continue;
+    }
+    if !s.tau_ratio.is_some_and(|r| r >= 1.0 / HUE_TAU_RATIO && r <= HUE_TAU_RATIO) {
+      haze += 1;
+      continue;
+    }
+    judged += 1;
+    let chroma_ratio = pc / tc.max(1e-6);
+    chroma_min = chroma_min.min(chroma_ratio);
+    chroma_ratios.push(chroma_ratio);
+    let turn = hue_turn_deg(ph, stream_hue_deg).rem_euclid(360.0);
+    let off = hue_turn_deg(ph, th);
+    if check && off.abs() > HUE_TOL_DEG {
+      problems.push(format!(
+        "frame {i}: hue sample {k} at ({:.0}, {:.0}) : the render's colour turned {turn:.0}° from the stream, the truth's colour mix turns {:.0}° (mean age {age:.2} TTL; tolerance {HUE_TOL_DEG:.0}°)",
+        s.px.0,
+        s.px.1,
+        hue_turn_deg(th, stream_hue_deg).rem_euclid(360.0)
+      ));
+    }
+    if check && chroma_ratio < HUE_CHROMA_MIN {
+      problems.push(format!(
+        "frame {i}: hue sample {k} at ({:.0}, {:.0}) keeps {:.2} of the truth's chroma ({:.2} vs {:.2} of the stream's; mean age {age:.2} TTL, spread {:.2}; minimum {HUE_CHROMA_MIN})",
+        s.px.0,
+        s.px.1,
+        chroma_ratio,
+        pc,
+        tc,
+        s.age_spread_ttl.unwrap_or(0.0)
+      ));
+    }
+    if let Some((pa, pt)) = prev
+      && check
+      && age > pa
+      && turn < pt - 10.0
+    {
+      problems.push(format!(
+        "frame {i}: hue sample {k} turns {turn:.0}° after {pt:.0}° at a younger sample (the ramp runs backwards)"
+      ));
+    }
+    prev = Some((age, turn));
+  }
+  let chroma_median = if chroma_ratios.is_empty() {
+    f64::NAN
+  } else {
+    chroma_ratios.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    chroma_ratios[chroma_ratios.len() / 2]
+  };
+  if check && chroma_median.is_finite() && chroma_median < HUE_CHROMA_MEDIAN_MIN {
+    problems.push(format!(
+      "frame {i}: the median of the render's chroma over the truth's is {chroma_median:.2} across {judged} judged samples (minimum {HUE_CHROMA_MEDIAN_MIN})"
+    ));
+  }
+  let lit: Vec<&HueSample> = hue.iter().filter(|s| !s.dark && !s.highlight).collect();
+  let line = if lit.is_empty() {
+    format!("[observer] hue frame {i}: no lit sample ({dark} dark, {highlight} highlight)")
+  } else {
+    let t = |h: f64| hue_turn_deg(h, stream_hue_deg).rem_euclid(360.0);
+    let (f, l) = (lit[0], lit[lit.len() - 1]);
+    let truth = match (f.truth_hue_deg, l.truth_hue_deg) {
+      (Some(a), Some(b)) => format!(", truth {:.0}° → {:.0}°", t(a), t(b)),
+      _ => String::new(),
+    };
+    let render = match (f.pyr_hue_deg, l.pyr_hue_deg) {
+      (Some(a), Some(b)) => format!(", render {:.0}° → {:.0}°", t(a), t(b)),
+      _ => String::new(),
+    };
+    let clock = match (f.age_ttl, l.age_ttl) {
+      (Some(a), Some(b)) => format!(
+        ", clock {:.0}° → {:.0}° (ages {a:.2} → {b:.2} TTL)",
+        180.0 * a.clamp(0.0, 1.0),
+        180.0 * b.clamp(0.0, 1.0)
+      ),
+      _ => String::new(),
+    };
+    format!(
+      "[observer] hue frame {i}: display {:.0}° → {:.0}°{render}{truth}{clock} over {} lit samples ({dark} dark, {highlight} highlight; {faint} faint in the pyramid, {haze} haze: render/truth τ beyond 2×), render chroma over the truth's {} ({judged} judged)",
+      t(f.hue_deg),
+      t(l.hue_deg),
+      lit.len(),
+      if chroma_min.is_finite() {
+        format!("median {chroma_median:.2} min {chroma_min:.2}")
+      } else {
+        "n/a".to_string()
+      }
+    )
+  };
+  (line, problems)
 }
 
 /// The frame's τ image against the Monte-Carlo truth of the same emission ([`monte_carlo_truth`])
@@ -496,6 +907,10 @@ struct McRec {
   /// the Monte-Carlo noise taken out of it (rms over the judged region)
   noise: f64,
   core_px: usize,
+  /// the truth's and the render's peak pixels and the nucleus radius on screen (px)
+  peak_px: (f64, f64),
+  render_peak_px: (f64, f64),
+  nucleus_px_radius: f64,
   /// 9-px high-pass ripple rms over the region: the render and the truth
   ripple_render: f64,
   ripple_truth: f64,
@@ -509,6 +924,22 @@ struct McRec {
   nucleus_ok: bool,
   grains: usize,
   batches: usize,
+  /// Σ render / Σ truth of the radiance-factor images (absolute photometry; 1 = closure)
+  abs_ratio: f64,
+  /// `--afrho-aperture-km`: the aperture Afρ (cm) of the render, of the truth (drawn through
+  /// the renderer's direction bandwidth) and the recipe's analytic `Afρ(r_h)·Φ(α)` (isotropic
+  /// geometry; the bandwidth leaks a fixed fraction of a 1/r coma past any aperture)
+  afrho: Option<(f64, f64, f64)>,
+  /// the hue samples along `McView::hue_ray`, placed over the truth's region, and per sample
+  /// the truth's radiance-weighted mean age and age spread (s) and its mean linear colour (the
+  /// grains' age colours mixed by radiance) in a 5×5 box, `None` where the truth is empty
+  hue_px: Vec<(f64, f64)>,
+  hue_truth: Vec<Option<(f64, f64, [f64; 3])>>,
+  /// per hue sample: the render's over the truth's τ in the 5×5 box (unit-sum images)
+  hue_tau_ratio: Vec<Option<f64>>,
+  /// the render's τ outside the truth's region over its total: the haze the τ check does not
+  /// judge (the old tiers' pooled packets spread over a near frame)
+  haze_frac: f64,
 }
 
 fn json_v3(v: V3) -> String {
@@ -544,7 +975,7 @@ impl FrameRec {
       })
       .collect();
     format!(
-      "{{\"frame\":{},\"epoch\":\"{}\",\"epoch_target\":\"{}\",\"since_ignition_s\":{},\"seek_ok\":{},\"r_helio_au\":{:.6},\"comet_au\":{},\"tiers\":[{}],\"coma_radius_km\":{:.3},\"camera\":{{\"pos_au\":{},\"quat_xyzw\":[{:.9},{:.9},{:.9},{:.9}],\"half_height_au\":{:.9},\"half_height_km\":{:.1}}},\"nucleus_px\":[{:.2},{:.2}],\"nucleus_rgb\":[{},{},{}],\"mean_luminance\":{:.4},\"p99_luminance\":{:.2},\"nonblack_fraction\":{:.6},\"mc\":{},\"render_task\":{},\"dust_log\":\"{}\"}}",
+      "{{\"frame\":{},\"epoch\":\"{}\",\"epoch_target\":\"{}\",\"since_ignition_s\":{},\"seek_ok\":{},\"r_helio_au\":{:.6},\"comet_au\":{},\"tiers\":[{}],\"coma_radius_km\":{:.3},\"camera\":{{\"pos_au\":{},\"quat_xyzw\":[{:.9},{:.9},{:.9},{:.9}],\"half_height_au\":{:.9},\"half_height_km\":{:.1}}},\"nucleus_px\":[{:.2},{:.2}],\"nucleus_rgb\":[{},{},{}],\"mean_luminance\":{:.4},\"p99_luminance\":{:.2},\"nonblack_fraction\":{:.6},\"mc\":{},\"exposure\":{},\"hue_ramp\":[{}],\"render_task\":{},\"dust_log\":\"{}\"}}",
       self.index,
       self.epoch,
       self.epoch_target,
@@ -573,10 +1004,32 @@ impl FrameRec {
         .mc
         .as_ref()
         .map(|m| format!(
-          "{{\"rel_rms\":{:.4},\"rel_rms_judged\":{:.4},\"noise\":{:.4},\"core_px\":{},\"ripple_render\":{:.4},\"ripple_truth\":{:.4},\"region_px\":{},\"grains_px\":{:.1},\"ratio_p05\":{:.3},\"ratio_p95\":{:.3},\"nucleus_ok\":{},\"grains\":{},\"batches\":{}}}",
-          m.rel_rms, m.rel_rms_judged, m.noise, m.core_px, m.ripple_render, m.ripple_truth, m.region_px, m.grains_px, m.ratio_p05, m.ratio_p95, m.nucleus_ok, m.grains, m.batches
+          "{{\"rel_rms\":{:.4},\"rel_rms_judged\":{:.4},\"noise\":{:.4},\"core_px\":{},\"ripple_render\":{:.4},\"ripple_truth\":{:.4},\"region_px\":{},\"grains_px\":{:.1},\"ratio_p05\":{:.3},\"ratio_p95\":{:.3},\"nucleus_ok\":{},\"grains\":{},\"batches\":{},\"abs_ratio\":{:.4},\"haze_frac\":{:.4},\"afrho_cm\":{}}}",
+          m.rel_rms, m.rel_rms_judged, m.noise, m.core_px, m.ripple_render, m.ripple_truth, m.region_px, m.grains_px, m.ratio_p05, m.ratio_p95, m.nucleus_ok, m.grains, m.batches, m.abs_ratio, m.haze_frac,
+          m.afrho.map(|(r, t, a)| format!("{{\"render\":{r:.4},\"truth\":{t:.4},\"analytic\":{a:.4}}}")).unwrap_or_else(|| "null".to_string())
         ))
         .unwrap_or_else(|| "null".to_string()),
+      self
+        .exposure
+        .map(|e| {
+          format!(
+            "{{\"white_rf\":{:.4e},\"p50_rf\":{:.4e},\"mag_arcsec2\":{:.3},\"ev\":{:.3},\"softening\":{:.4e},\"fixed\":{}}}",
+            e.white, e.p50, e.mag_arcsec2, e.ev, e.softening, e.fixed
+          )
+        })
+        .unwrap_or_else(|| "null".to_string()),
+      self
+        .hue
+        .iter()
+        .map(|s| {
+          let opt = |v: Option<f64>| v.map(|x| format!("{x:.4}")).unwrap_or_else(|| "null".to_string());
+          format!(
+            "{{\"px\":[{:.1},{:.1}],\"level\":{:.4},\"hue_deg\":{:.1},\"chroma_rel\":{:.3},\"dark\":{},\"faint\":{},\"highlight\":{},\"age_ttl\":{},\"age_spread_ttl\":{},\"truth_hue_deg\":{},\"truth_chroma_rel\":{},\"pyr_hue_deg\":{},\"pyr_chroma_rel\":{},\"pyr_tau\":{:.1},\"tau_ratio\":{}}}",
+            s.px.0, s.px.1, s.level, s.hue_deg, s.chroma_rel, s.dark, s.faint, s.highlight, opt(s.age_ttl), opt(s.age_spread_ttl), opt(s.truth_hue_deg), opt(s.truth_chroma_rel), opt(s.pyr_hue_deg), opt(s.pyr_chroma_rel), s.pyr_tau, opt(s.tau_ratio.filter(|r| r.is_finite()))
+          )
+        })
+        .collect::<Vec<_>>()
+        .join(","),
       self.render_task,
       self.passes_logged.replace('"', "'"),
     )
@@ -660,18 +1113,22 @@ fn set_rotational_model(ctx: &SimulationContext, scene_id: u64, body: EntityId, 
   });
 }
 
-fn jet_params(seed: u32) -> ParticleSystemEmitParams {
+fn jet_params(seed: u32, isotropic: bool) -> ParticleSystemEmitParams {
   ParticleSystemEmitParams {
     latitude_rad: 20.0_f32.to_radians(),
     longitude_rad: 0.0,
-    aperture_rad: 0.5,
+    aperture_rad: if isotropic {
+      core::f32::consts::PI
+    } else {
+      0.5
+    },
     start_velocity_mean: 2.0,
     start_velocity_std: 0.5,
-    mass_variability_perc: 0.0,
     seed,
     diametre_um: 100.0,
     density_gcm3: 0.533,
     scattering_efficiency: 1.0,
+    geometric_albedo: 0.04,
     afrho_0_cm: 100.0,
     afrho_power: 2.0,
     afrho_cutoff_au: 15.0,
@@ -786,6 +1243,9 @@ fn wait_caught_up(ctx: &SimulationContext, scene_id: u64, timeout_s: f64) -> boo
 
 /// `test_trajectory_occlusion_render::wait_and_download`: a few distinct render generations,
 /// then the swapchain download (BGRA8).
+/// extra render generations a frame may wait for its exposure to settle (see the frame loop)
+const EXPOSURE_SETTLE_MAX: u32 = 24;
+
 fn wait_and_download(
   ctx: &SimulationContext,
   width: u32,
@@ -1004,7 +1464,7 @@ fn main() {
   // one jet, ignited at `start + ignite_days` (nothing before it) unless `--prestart`
   let ignition: Option<Epoch> =
     (!args.prestart).then(|| args.start + Duration::from_days(args.ignite_days));
-  let emit = jet_params(7);
+  let emit = jet_params(7, args.isotropic);
   let jet_color = [1.0, 0.6, 0.2, 1.0];
   if args.no_jet {
     log_line("no jet (--no-jet): dust-free scene");
@@ -1276,12 +1736,37 @@ fn main() {
     }
     // settle: the pose/seek reach the renderer on the next extraction
     let t_dl = Instant::now();
-    let dl = wait_and_download(&ctx, args.width, args.height, args.frames_to_wait, 60_000);
-    // the render cost: `frames_to_wait` distinct render generations were waited for
-    let render_ms = t_dl.elapsed().as_secs_f64() * 1e3 / args.frames_to_wait.max(1) as f64;
+    let mut dl = wait_and_download(&ctx, args.width, args.height, args.frames_to_wait, 60_000);
+    // the exposure settles: the white point adapts by half its log gap per frame
+    // (`WHITE_ADAPT_RATE`) from the seed (20 mag/arcsec²) or the previous epoch's value — a far
+    // frame is 20 mag from the seed and its first generations are under-exposed; one more
+    // generation at a time until two in a row agree within 2 %, at most `EXPOSURE_SETTLE_MAX`
+    let mut settle_extra = 0u32;
+    if dl.is_some() {
+      let white_of = || ctx.dust_exposure(pe).map(|e| (e.white, e.fixed));
+      let mut prev = white_of();
+      while settle_extra < EXPOSURE_SETTLE_MAX && !matches!(prev, Some((_, true))) {
+        let Some(next) = wait_and_download(&ctx, args.width, args.height, 1, 30_000) else {
+          break;
+        };
+        dl = Some(next);
+        settle_extra += 1;
+        let now = white_of();
+        let done = match (prev, now) {
+          (Some((a, _)), Some((b, _))) if a > 0.0 && b > 0.0 => (b / a).ln().abs() < 0.02,
+          _ => true,
+        };
+        prev = now;
+        if done {
+          break;
+        }
+      }
+    }
+    // the render cost: distinct render generations were waited for
+    let generations = args.frames_to_wait + settle_extra;
+    let render_ms = t_dl.elapsed().as_secs_f64() * 1e3 / generations.max(1) as f64;
     log_line(&format!(
-      "[observer] render ≈ {render_ms:.1} ms/frame ({} generations)",
-      args.frames_to_wait
+      "[observer] render ≈ {render_ms:.1} ms/frame ({generations} generations, {settle_extra} to settle the exposure)"
     ));
     let (mut rgba, tid) = match dl {
       Some(x) => x,
@@ -1318,6 +1803,33 @@ fn main() {
     let o = ((iy * args.width + ix) * 4) as usize;
     let rgb = (rgba[o], rgba[o + 1], rgba[o + 2]);
     let (mean_l, p99_l, nonblack) = luminance_stats(&rgba);
+    // the hue ramp along the tail axis: the on-screen anti-solar direction from the nucleus
+    // (pixel y runs against `up`), from two nucleus radii (at least 8 px: the box must clear the
+    // nucleus's pixels) to the end of the lit dust
+    let stream_rgb = [
+      jet_color[0] as f32,
+      jet_color[1] as f32,
+      jet_color[2] as f32,
+    ];
+    let (stream_hue_deg, _) = oklab_hue_cl(stream_rgb);
+    let nucleus_px_radius =
+      NUCLEUS_RADIUS_KM as f64 / (2.0 * half_height_au * AU_KM / args.height as f64);
+    let hue_ray = {
+      let anti = normalize(comet);
+      let v = (dot(anti, right), -dot(anti, up));
+      let n = (v.0 * v.0 + v.1 * v.1).sqrt();
+      HueRay {
+        from: (px, py),
+        dir: if n > 1e-6 {
+          (v.0 / n, v.1 / n)
+        } else {
+          (1.0, 0.0)
+        },
+        // the 9×9 box must clear the nucleus's pixels
+        r0: (2.0 * nucleus_px_radius + 3.0).max(14.0),
+      }
+    };
+    let mut hue: Vec<HueSample> = Vec::new();
 
     let path = args.out.join(format!("frame_{i:03}.png"));
     image::save_buffer(
@@ -1346,17 +1858,39 @@ fn main() {
           aspect,
           perspective_tan_h: (args.pose == Pose::Earth)
             .then(|| (args.fov_deg.to_radians() / 2.0).tan()),
+          near_au: cam_height_au * 0.01,
+          far_au: cam_height_au * 50.0,
           comet_au: comet,
           nucleus_px: (px, py),
           mc_tier: args.mc_tier,
           mc_age_max: args.mc_age_max,
           nucleus_px_radius: NUCLEUS_RADIUS_KM as f64
             / (2.0 * half_height_au * AU_KM / args.height as f64),
+          hue_ray,
+          stream: stream_rgb,
+          ttl_s: JET_TTL_US as f64 * 1e-6,
+          afrho_aperture_km: args.afrho_aperture_km,
+          afrho_in_cm: {
+            let p = jet_params(7, args.isotropic);
+            let r_h = norm(comet) as f32;
+            (p.afrho_0_cm * r_h.powf(-p.afrho_power)).min(p.afrho_max_value_cm) as f64
+          },
+          isotropic: args.isotropic,
         };
-        match monte_carlo_truth(&ctx, scene_id, &pyr, &view, args.mc) {
+        let saturated = pyramid_saturated_texels(&pyr, args.width, args.height);
+        if saturated > 0 {
+          log_line(&format!(
+            "[observer] frame {i}: pyramid saturated on {saturated} texels (the fixed-point unit lags the previous frame's τ_max: the frame after the ignition), Monte-Carlo comparison skipped"
+          ));
+        }
+        match if saturated > 0 {
+          None
+        } else {
+          monte_carlo_truth(&ctx, scene_id, &pyr, &view, args.mc)
+        } {
           Some((rec, render_img, truth_img)) => {
             log_line(&format!(
-              "[observer] mc frame {i}: rel rms {:.3} (judged {:.3} after noise {:.3}, core {} px) over {} px, ripple render {:.3} truth {:.3}, ratio p05/p95 {:.2}/{:.2}, {:.0} grains/px ({} grains, {} batches), nucleus {}, {:.1} s",
+              "[observer] mc frame {i}: rel rms {:.3} (judged {:.3} after noise {:.3}, core {} px) over {} px, ripple render {:.3} truth {:.3}, ratio p05/p95 {:.2}/{:.2}, absolute render/truth {:.3}, haze {:.3}, {:.0} grains/px ({} grains, {} batches), nucleus {}, {:.1} s",
               rec.rel_rms,
               rec.rel_rms_judged,
               rec.noise,
@@ -1366,6 +1900,8 @@ fn main() {
               rec.ripple_truth,
               rec.ratio_p05,
               rec.ratio_p95,
+              rec.abs_ratio,
+              rec.haze_frac,
               rec.grains_px,
               rec.grains,
               rec.batches,
@@ -1386,7 +1922,42 @@ fn main() {
               .flat_map(|v| v.to_le_bytes())
               .collect();
             let _ = std::fs::write(args.out.join(format!("mc_{i:03}.f32")), raw);
-            if args.check && rec.region_px >= 2000 && rec.rel_rms_judged > args.mc_max {
+            if let Some((r, t, a)) = rec.afrho {
+              log_line(&format!(
+                "[observer] afrho frame {i}: aperture {:.0} km: render {r:.3} cm, truth through the kernel {t:.3} cm, analytic Afρ(r_h)·Φ(α) {a:.3} cm{}",
+                view.afrho_aperture_km.unwrap_or(0.0),
+                if view.isotropic {
+                  ""
+                } else {
+                  " (cone jet: the isotropic analytic value is indicative only)"
+                }
+              ));
+              if args.check && view.isotropic && t > 0.0 && !((r / t - 1.0).abs() < 0.05) {
+                problems.push(format!(
+                  "frame {i}: aperture Afρ render {r:.3} cm vs truth {t:.3} cm (5 % expected)"
+                ));
+              }
+            }
+            // absolute photometry: the render's radiance factors must sum to the truth's within
+            // 10 % (the sample-count dither and the pilot allocation are the tolerance)
+            // (the isotropic recipe is the Afρ closure diagnostic: its whole-frame comparison is
+            // reported, the aperture closure above is what `--check` enforces — a jet covering
+            // the sphere with 64 Gaussian cells sits 18 % below its truth in the far field)
+            if args.check
+              && !view.isotropic
+              && rec.region_px >= 2000
+              && !(rec.abs_ratio > 0.9 && rec.abs_ratio < 1.1)
+            {
+              problems.push(format!(
+                "frame {i}: absolute render/truth {:.3} (0.90–1.10 expected)",
+                rec.abs_ratio
+              ));
+            }
+            if args.check
+              && !view.isotropic
+              && rec.region_px >= 2000
+              && rec.rel_rms_judged > args.mc_max
+            {
               problems.push(format!(
                 "frame {i}: {:.3} rms from the Monte-Carlo truth (limit {:.3}) over {} px{}",
                 rec.rel_rms_judged,
@@ -1400,8 +1971,42 @@ fn main() {
               ));
             }
             if args.check && !rec.nucleus_ok {
-              problems.push(format!("frame {i}: the Monte-Carlo truth's peak is not at the nucleus pixel (frame mapping)"));
+              problems.push(format!(
+                "frame {i}: the Monte-Carlo truth's core centroid ({:.0}, {:.0}) is not the render's ({:.0}, {:.0}) within {:.0} px (frame mapping)",
+                rec.peak_px.0, rec.peak_px.1, rec.render_peak_px.0, rec.render_peak_px.1, 3.0 + 1.5 * rec.nucleus_px_radius + 0.02 * args.height as f64
+              ));
             }
+            // the hue samples where the truth put them, the display measured there
+            let ttl_s = JET_TTL_US as f64 * 1e-6;
+            hue = rec
+              .hue_px
+              .iter()
+              .zip(rec.hue_truth.iter().zip(rec.hue_tau_ratio.iter()))
+              .map(|(&p, (t, ratio))| {
+                let mut s = hue_sample_at(&rgba, args.width, args.height, p, stream_rgb);
+                s.tau_ratio = *ratio;
+                if let Some((m, sd, rgb)) = t {
+                  s.age_ttl = Some(m / ttl_s);
+                  s.age_spread_ttl = Some(sd / ttl_s);
+                  let rgb32 = [rgb[0] as f32, rgb[1] as f32, rgb[2] as f32];
+                  let (th, tcl) = oklab_hue_cl(rgb32);
+                  let (_, scl) = oklab_hue_cl(stream_rgb);
+                  s.truth_hue_deg = Some(th);
+                  s.truth_chroma_rel = Some(tcl / scl.max(1e-6));
+                  // the stretch value from the truth colour's luma: the white roll-off
+                  s.highlight = s.level / luma_of(rgb32) > HUE_HIGHLIGHT_A;
+                }
+                let (tau, col) = pyramid_colour_at(&pyr, p, HUE_BOX_R);
+                s.pyr_tau = tau;
+                if let Some(c) = col {
+                  let (ph, pcl) = oklab_hue_cl(c);
+                  let (_, scl) = oklab_hue_cl(stream_rgb);
+                  s.pyr_hue_deg = Some(ph);
+                  s.pyr_chroma_rel = Some(pcl / scl.max(1e-6));
+                }
+                s
+              })
+              .collect();
             mc_rec = Some(rec);
           }
           None => log_line(&format!(
@@ -1434,10 +2039,25 @@ fn main() {
         per_level.join(" ")
       ));
     }
+    if hue.is_empty() {
+      // no truth: the samples along the displayed dust
+      let t_end = hue_ray_extent_display(&rgba, args.width, args.height, &hue_ray);
+      hue = hue_ray
+        .samples(t_end)
+        .into_iter()
+        .map(|p| hue_sample_at(&rgba, args.width, args.height, p, stream_rgb))
+        .collect();
+    }
     let img = image::RgbaImage::from_raw(args.width, args.height, rgba).unwrap();
     frames_rgba.push(img);
 
     let tiers = tiers_now(&ctx, scene_id);
+    {
+      let (line, hue_problems) =
+        hue_report(i, &hue, stream_hue_deg, args.check && mc_rec.is_some());
+      log_line(&line);
+      problems.extend(hue_problems);
+    }
     let rec = FrameRec {
       index: i,
       epoch: format!("{actual}"),
@@ -1459,6 +2079,8 @@ fn main() {
       render_task: tid,
       passes_logged: String::new(),
       mc: mc_rec,
+      exposure: ctx.dust_exposure(pe),
+      hue,
     };
     let _ = writeln!(stats, "{}", rec.to_json());
     let _ = stats.flush();
@@ -1528,7 +2150,9 @@ fn main() {
     };
     for (k, t) in r.tiers.iter().enumerate() {
       let window_s = ((t.band_max_s - t.band_min_s) / 256.0).max(1.0);
-      if since <= 0.0 && t.live > 0 {
+      // one second of slack: the provisional window's pinned sample sits at the ignition
+      // instant itself (f32 rounding of the window end)
+      if since < -1.0 && t.live > 0 {
         check_failures.push(format!(
           "frame {}: tier {k} holds {} clusters {:.2} d before the ignition",
           r.index,
@@ -1624,6 +2248,70 @@ fn main() {
           .as_ref()
           .map(|m| format!(" | mc rms {:.3} judged {:.3} (ripple {:.3} vs {:.3}, {} px)", m.rel_rms, m.rel_rms_judged, m.ripple_render, m.ripple_truth, m.region_px))
           .unwrap_or_default()
+      ));
+    }
+    md.push_str("\n## hue ramp\n\nOKLab turn from the stream colour along the tail axis (10 samples outwards; dark and highlight samples skipped) of the displayed pixel, of the render's accumulated colour (the pyramid: the judged quantity, the pixel also shows the scene behind the dust) and of the truth's colour mix, the truth's mean age at the first and last lit sample (TTL, `--mc`), and the least render chroma over the truth's among the samples with dust in the pyramid.\n\n| # | display turn first → last (°) | render turn (°) | truth turn (°) | age first → last (TTL) | lit / dark / highlight | render chroma over truth min |\n|---|---|---|---|---|---|---|\n");
+    for r in &records {
+      let lit: Vec<&HueSample> = r.hue.iter().filter(|s| !s.dark && !s.highlight).collect();
+      let (dark, highlight) = (
+        r.hue.iter().filter(|s| s.dark).count(),
+        r.hue.iter().filter(|s| s.highlight).count(),
+      );
+      let (stream_hue_deg, _) = oklab_hue_cl([
+        jet_color[0] as f32,
+        jet_color[1] as f32,
+        jet_color[2] as f32,
+      ]);
+      let turn = |s: &HueSample| hue_turn_deg(s.hue_deg, stream_hue_deg).rem_euclid(360.0);
+      let age =
+        |s: &HueSample| s.age_ttl.map(|a| format!("{a:.2}")).unwrap_or_else(|| "–".to_string());
+      let chroma_min = lit
+        .iter()
+        .filter(|s| s.pyr_tau >= HUE_PYR_FAINT_COUNTS)
+        .filter_map(|s| match (s.pyr_chroma_rel, s.truth_chroma_rel) {
+          (Some(pc), Some(tc)) => Some(pc / tc.max(1e-6)),
+          _ => None,
+        })
+        .fold(f64::INFINITY, f64::min);
+      let rturn = |s: &HueSample| {
+        s.pyr_hue_deg
+          .map(|h| format!("{:.0}", hue_turn_deg(h, stream_hue_deg).rem_euclid(360.0)))
+          .unwrap_or_else(|| "–".to_string())
+      };
+      let tturn = |s: &HueSample| {
+        s.truth_hue_deg
+          .map(|h| format!("{:.0}", hue_turn_deg(h, stream_hue_deg).rem_euclid(360.0)))
+          .unwrap_or_else(|| "–".to_string())
+      };
+      md.push_str(&format!(
+        "| {} | {} | {} | {} | {} | {} / {dark} / {highlight} | {} |\n",
+        r.index,
+        if lit.is_empty() {
+          "–".to_string()
+        } else {
+          format!("{:.0} → {:.0}", turn(lit[0]), turn(lit[lit.len() - 1]))
+        },
+        if lit.is_empty() {
+          "–".to_string()
+        } else {
+          format!("{} → {}", rturn(lit[0]), rturn(lit[lit.len() - 1]))
+        },
+        if lit.is_empty() {
+          "–".to_string()
+        } else {
+          format!("{} → {}", tturn(lit[0]), tturn(lit[lit.len() - 1]))
+        },
+        if lit.is_empty() {
+          "–".to_string()
+        } else {
+          format!("{} → {}", age(lit[0]), age(lit[lit.len() - 1]))
+        },
+        lit.len(),
+        if chroma_min.is_finite() {
+          format!("{chroma_min:.2}")
+        } else {
+          "–".to_string()
+        }
       ));
     }
     md.push_str("\n## checks\n\n");
@@ -1758,6 +2446,10 @@ fn shape_analysis(args: &Args, records: &[FrameRec], beta_ref: f64) -> Result<Ve
       .chunks_exact(4)
       .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
       .collect();
+    if pyramid_saturated_texels(&words, w, h) > 0 {
+      // a saturated frame (the unit lag after the ignition) has no shape to judge
+      continue;
+    }
     if words.len() < layout.total_words as usize
       || words[d::PYR_LEVELS as usize] != layout.level_count()
     {
@@ -1781,6 +2473,14 @@ fn shape_analysis(args: &Args, records: &[FrameRec], beta_ref: f64) -> Result<Ve
       unit,
     )
     .unwrap_or((0.0, 0.0));
+    // the white point the composite showed this frame with (the adapted one), when the header
+    // carries it; the recomputed instantaneous p99 otherwise
+    let header_white = f32::from_bits(words[d::PYR_WHITE as usize]);
+    let white = if header_white > 0.0 && header_white.is_finite() {
+      header_white
+    } else {
+      white
+    };
     let mut img = vec![0.0f32; (w * h) as usize];
     for y in 0..h {
       for x in 0..w {
@@ -1823,7 +2523,26 @@ fn shape_analysis(args: &Args, records: &[FrameRec], beta_ref: f64) -> Result<Ve
     // SIZE_RANGE_FACTOR × β_ref: they lead the tail's tip
     let v_max = v_eject + beta_ref * d::SIZE_RANGE_FACTOR * g_ms2 * age_max_s;
     let reach = (v_max * dt_s / m_per_px) as f32 + 3.0;
-    let nucleus = [r.nucleus_px.0 as f32, r.nucleus_px.1 as f32];
+    // the dust region is seeded at the jet site, not the nucleus pixel: the nucleus is an
+    // opaque disc (12 px at 50 km, the whole frame's centre at 5 km) and the dust leaves its
+    // limb, so the seed is the brightest τ pixel within 1.5 nucleus radii of the nucleus pixel
+    let nucleus = {
+      let r_px = NUCLEUS_RADIUS_KM as f64 * 1e3 / m_per_px;
+      let reach = 1.5 * r_px + 3.0;
+      let (cx, cy) = r.nucleus_px;
+      let (wu, hu) = (w as usize, h as usize);
+      let (mut best, mut seed) = (0.0f32, [cx as f32, cy as f32]);
+      for y in 0..hu {
+        for x in 0..wu {
+          let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
+          if dx * dx + dy * dy <= reach * reach && img[y * wu + x] > best {
+            best = img[y * wu + x];
+            seed = [x as f32, y as f32];
+          }
+        }
+      }
+      seed
+    };
     let sh = d::segment_shape(img, w, h, nucleus, threshold);
     // the lattice detector: high-pass residual of the τ image over the dust region; a cloud of
     // a few hundred pixels is all edge, the metric only means something once the region is
@@ -1934,9 +2653,12 @@ fn shape_analysis(args: &Args, records: &[FrameRec], beta_ref: f64) -> Result<Ve
         _ => 1.5,
       }
       .max(1.5);
-      // 16 px of slack: a coma of a hundred pixels is quantised by its threshold contour
+      // slack for the threshold contour's quantisation: one pixel along a perimeter of ~4√area
+      // (a 200-px coma at 960×600 grew 4.9× from day 1 to day 2 against the 4.7 bound, on the
+      // GPU and the CPU alike), plus 16 px
+      let slack = 16.0 + 4.0 * (prev.area_px as f32).sqrt();
       if prev.area_px >= 64
-        && (st.area_ratio < 0.8 || sh.area_px as f32 > area_bound * prev.area_px as f32 + 16.0)
+        && (st.area_ratio < 0.8 || sh.area_px as f32 > area_bound * prev.area_px as f32 + slack)
       {
         failures.push(format!(
           "frame {index}: area ratio {:.2} ({} → {} px, bound {area_bound:.2})",
@@ -2048,6 +2770,11 @@ struct McView {
   aspect: f64,
   /// `Some(tan(fov/2))` for the perspective Earth pose
   perspective_tan_h: Option<f64>,
+  /// the render camera's near and far planes (AU, along the view direction): the orthographic
+  /// poses clip there too (the camera stands one half-height above the comet, and at 5 km the
+  /// fast young grains pass it; the truth must not count what the render clips)
+  near_au: f64,
+  far_au: f64,
   comet_au: V3,
   nucleus_px: (f64, f64),
   /// the truth holds this tier only (`--mc-tier`)
@@ -2057,6 +2784,15 @@ struct McView {
   /// nucleus radius on screen (px): the truth's peak is the jet site, up to this far from the
   /// nucleus pixel
   nucleus_px_radius: f64,
+  /// the aperture Afρ (km) and the recipe's Afρ(r_h) (cm), `--afrho-aperture-km`
+  afrho_aperture_km: Option<f64>,
+  afrho_in_cm: f64,
+  isotropic: bool,
+  /// the hue ramp's ray: the truth places the samples along it and gives its age moments and
+  /// colour there (`McRec::hue_px`, `hue_truth`); the stream colour and TTL of the age colour
+  hue_ray: HueRay,
+  stream: [f32; 3],
+  ttl_s: f64,
 }
 
 fn mc_qmul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
@@ -2113,6 +2849,24 @@ fn mc_gauss(state: &mut u64) -> f64 {
   let u1 = mc_rng(state).max(1e-300);
   let u2 = mc_rng(state);
   (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+}
+
+/// Level-0 texels of a pyramid dump whose count saturated the 32-bit word: the fixed-point unit
+/// follows the previous frame's largest packet, and the first frame after the ignition (the
+/// pinned sample alone, 1e-5 g) leaves the next frame's unit 1e9 too small — that frame's counts
+/// are clipped and its τ image, shape and photometry mean nothing (the view recovers a frame
+/// later from the frame's own τ_max). Returns the number of saturated texels.
+fn pyramid_saturated_texels(words: &[u32], w: u32, h: u32) -> usize {
+  use aethervk_core_rlib::scene::dust as d;
+  let layout = d::PyramidLayout::new(w, h);
+  if words.len() < layout.total_words as usize {
+    return 0;
+  }
+  let (off, lw, lh) = layout.levels[0];
+  let n = (lw * lh) as usize;
+  (0..n)
+    .filter(|&t| words[off as usize + t * d::PYRAMID_TEXEL_WORDS as usize] >= u32::MAX - 1)
+    .count()
 }
 
 /// The τ image (per px, the levels composited) of a pyramid dump, as `shape_analysis` builds it
@@ -2205,10 +2959,14 @@ fn monte_carlo_truth(
     tier: u32,
   }
   let mut batches: Vec<B> = Vec::new();
-  // (t_now, the nucleus centre's heliocentric position now): the jet state's `r_m` is the
-  // site's, the body centre sits one rotated site offset behind it, and the frame's `comet_au`
-  // is the centre (the 2-km offset is 120 px at the 5-km frame)
+  // (t_now, the nucleus centre's heliocentric position at the tick): the frame's `comet_au` is
+  // the body centre, so the truth is placed relative to the centre (`JetState::centre_m`, the
+  // render's anchor), not the jet site: the site sits one rotated offset away (2 km = 120 px at
+  // the 5-km frame; placed at the site, the truth's apex sat on the centre pixel while the
+  // render's dust left the limb)
   let mut jet_now: Option<(f64, V3)> = None;
+  // the dust's geometric albedo (the render's radiance weight; ≤ 0 = unweighted τ)
+  let mut albedo = 0.0f32;
   {
     let scene_arc = ctx.get_scene(scene_id)?;
     let g = scene_arc.read();
@@ -2216,10 +2974,8 @@ fn monte_carlo_truth(
       let sys = ps.dust.lock();
       for t in &sys.tiers {
         if let Some(j) = t.jet {
-          // the render's anchor is the jet state's `r_m`, and the frame is centred where the
-          // render puts the dust's apex: the same point (checked at 5 km: subtracting the site
-          // offset moved the truth's apex 140 px off the render's)
-          jet_now = Some((j.t_s, j.r_m));
+          jet_now = Some((j.t_s, j.centre_m()));
+          albedo = sys.albedo;
         }
         let band = t.age_band_s(t.ttl_s);
         let frame = t.jet.and_then(|j| t.draw_state().map(|ds| ds.frame.at_time(j.t_s)));
@@ -2236,7 +2992,7 @@ fn monte_carlo_truth(
       }
     });
   }
-  let (t_now, r_jet_now) = jet_now?;
+  let (t_now, r_centre_now) = jet_now?;
   if let Some(k) = view.mc_tier {
     batches.retain(|b| b.tier == k);
   }
@@ -2484,10 +3240,16 @@ fn monte_carlo_truth(
           h as f64 / 2.0 * (1.0 - sy / depth / tan_h),
         )
       }
-      None => (
-        w as f64 / 2.0 * (1.0 + sx / (view.half_height_au * view.aspect)),
-        h as f64 / 2.0 * (1.0 - sy / view.half_height_au),
-      ),
+      None => {
+        let depth = dot(dd, forward);
+        if depth < view.near_au || depth > view.far_au {
+          return None;
+        }
+        (
+          w as f64 / 2.0 * (1.0 + sx / (view.half_height_au * view.aspect)),
+          h as f64 / 2.0 * (1.0 - sy / view.half_height_au),
+        )
+      }
     };
     if px >= 0.0 && py >= 0.0 && px < w as f64 && py < h as f64 {
       Some((px as usize, py as usize))
@@ -2500,321 +3262,456 @@ fn monte_carlo_truth(
   let indexed: Vec<(usize, &B)> = batches.iter().enumerate().collect();
   // one threaded pass over the batches with `alloc(batch index)` grains each: the histogram,
   // the age-weighted histogram, the grains drawn and the grains in view per batch
-  let run =
-    |alloc: &(dyn Fn(usize) -> usize + Sync)| -> (Vec<f64>, Vec<f64>, usize, Vec<usize>, Vec<f64>) {
-      let mut truth = vec![0.0f64; w * h];
-      let mut age_sum = vec![0.0f64; w * h];
-      let mut drawn = 0usize;
-      let mut inview = vec![0usize; batches.len()];
-      let mut counts = vec![0.0f64; w * h];
-      std::thread::scope(|sc| {
-        let handles: Vec<_> = indexed
-          .chunks(chunk)
-          .map(|part| {
-            let project = &project;
-            sc.spawn(move || {
-              let mut hist = vec![0.0f64; w * h];
-              let mut age_hist = vec![0.0f64; w * h];
-              let mut cnt_hist = vec![0.0f64; w * h];
-              let mut n_drawn = 0usize;
-              let mut seen: Vec<(usize, usize)> = Vec::with_capacity(part.len());
-              for &(bi, b) in part {
-                let desc = &b.desc;
-                let mass = desc.mass_params[0] as f64;
-                let n_b = alloc(bi);
-                let drawn_before = n_drawn;
-                let wgt = mass / n_b as f64;
-                let mut rng = (desc.seed as u64 ^ 0x9E37_79B9_7F4A_7C15).max(1);
-                let rc0 = [
-                  desc.comet_r_t_hi[0] as f64 + desc.comet_r_t_lo[0] as f64,
-                  desc.comet_r_t_hi[1] as f64 + desc.comet_r_t_lo[1] as f64,
-                  desc.comet_r_t_hi[2] as f64 + desc.comet_r_t_lo[2] as f64,
-                ];
-                let vc0 = [
-                  desc.comet_v_dur_hi[0] as f64 + desc.comet_v_dur_lo[0] as f64,
-                  desc.comet_v_dur_hi[1] as f64 + desc.comet_v_dur_lo[1] as f64,
-                  desc.comet_v_dur_hi[2] as f64 + desc.comet_v_dur_lo[2] as f64,
-                ];
-                let t_start = desc.comet_r_t_hi[3] as f64 + desc.comet_r_t_lo[3] as f64;
-                let dur = desc.comet_v_dur_hi[3] as f64 + desc.comet_v_dur_lo[3] as f64;
-                let rot_start = [
-                  desc.rot_start[0] as f64,
-                  desc.rot_start[1] as f64,
-                  desc.rot_start[2] as f64,
-                  desc.rot_start[3] as f64,
-                ];
-                let axis = [
-                  desc.spin[0] as f64,
-                  desc.spin[1] as f64,
-                  desc.spin[2] as f64,
-                ];
-                let omega = desc.spin[3] as f64;
-                let jet_dir = [
-                  desc.jet_dir_aperture[0] as f64,
-                  desc.jet_dir_aperture[1] as f64,
-                  desc.jet_dir_aperture[2] as f64,
-                ];
-                let aperture = desc.jet_dir_aperture[3] as f64;
-                let (s_min, s_max, e) = (
-                  desc.size_params[0] as f64,
-                  desc.size_params[1] as f64,
-                  desc.size_params[2] as f64,
-                );
-                let (v_ref, v_std_rel, s_ref, beta_s) = (
-                  desc.vel_params[0] as f64,
-                  desc.vel_params[1] as f64,
-                  desc.vel_params[2] as f64,
-                  desc.vel_params[3] as f64,
-                );
-                let beta_ref = beta_s / s_ref;
-                let off = [
-                  desc.site_offset[0] as f64,
-                  desc.site_offset[1] as f64,
-                  desc.site_offset[2] as f64,
-                ];
-                let o_start = mc_qrot(rot_start, off);
-                // OBSERVER_MC_MODEL=chords (diagnostic): grains on the moments stage's size polyline
-                // exactly as the splat draws it — a bin picked uniformly (equal cross-section), a
-                // uniform position along its straight chord, the dispersion Gaussian of the bin's
-                // speed factor across — but binned by their exact f64 projection, no splat: tells the
-                // chord representation from the splat's drawing of it
-                if std::env::var("OBSERVER_MC_MODEL").is_ok_and(|v| v == "chords") {
-                  let Some(frame) = b.frame.as_ref() else {
+  let run = |alloc: &(dyn Fn(usize) -> usize + Sync)| -> (
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    usize,
+    Vec<usize>,
+    Vec<f64>,
+  ) {
+    let mut truth = vec![0.0f64; w * h];
+    let mut age_sum = vec![0.0f64; w * h];
+    let mut age2_sum = vec![0.0f64; w * h];
+    let mut col_sum = vec![0.0f64; 3 * w * h];
+    let mut drawn = 0usize;
+    let mut inview = vec![0usize; batches.len()];
+    let mut counts = vec![0.0f64; w * h];
+    std::thread::scope(|sc| {
+      let handles: Vec<_> = indexed
+        .chunks(chunk)
+        .map(|part| {
+          let project = &project;
+          sc.spawn(move || {
+            let mut hist = vec![0.0f64; w * h];
+            let mut age_hist = vec![0.0f64; w * h];
+            let mut age2_hist = vec![0.0f64; w * h];
+            let mut col_hist = vec![0.0f64; 3 * w * h];
+            let mut cnt_hist = vec![0.0f64; w * h];
+            let mut n_drawn = 0usize;
+            let mut seen: Vec<(usize, usize)> = Vec::with_capacity(part.len());
+            for &(bi, b) in part {
+              let desc = &b.desc;
+              let mass = desc.mass_params[0] as f64;
+              let n_b = alloc(bi);
+              let drawn_before = n_drawn;
+              // the grain's share of the batch's cross-section (m²): mass × the distribution's
+              // cross-section per gram (`emit_cluster`); the radiance weight is per grain below
+              let rho_g_m3 = desc.mass_params[1] as f64 * 1.0e6;
+              let xsec_per_g =
+                3.0 / (4.0 * rho_g_m3 * d::size_mean_inv_s_um(desc.size_params) as f64 * 1.0e-6);
+              let wgt = mass * xsec_per_g / n_b as f64;
+              let mut rng = (desc.seed as u64 ^ 0x9E37_79B9_7F4A_7C15).max(1);
+              let rc0 = [
+                desc.comet_r_t_hi[0] as f64 + desc.comet_r_t_lo[0] as f64,
+                desc.comet_r_t_hi[1] as f64 + desc.comet_r_t_lo[1] as f64,
+                desc.comet_r_t_hi[2] as f64 + desc.comet_r_t_lo[2] as f64,
+              ];
+              let vc0 = [
+                desc.comet_v_dur_hi[0] as f64 + desc.comet_v_dur_lo[0] as f64,
+                desc.comet_v_dur_hi[1] as f64 + desc.comet_v_dur_lo[1] as f64,
+                desc.comet_v_dur_hi[2] as f64 + desc.comet_v_dur_lo[2] as f64,
+              ];
+              let t_start = desc.comet_r_t_hi[3] as f64 + desc.comet_r_t_lo[3] as f64;
+              let dur = desc.comet_v_dur_hi[3] as f64 + desc.comet_v_dur_lo[3] as f64;
+              let rot_start = [
+                desc.rot_start[0] as f64,
+                desc.rot_start[1] as f64,
+                desc.rot_start[2] as f64,
+                desc.rot_start[3] as f64,
+              ];
+              let axis = [
+                desc.spin[0] as f64,
+                desc.spin[1] as f64,
+                desc.spin[2] as f64,
+              ];
+              let omega = desc.spin[3] as f64;
+              let jet_dir = [
+                desc.jet_dir_aperture[0] as f64,
+                desc.jet_dir_aperture[1] as f64,
+                desc.jet_dir_aperture[2] as f64,
+              ];
+              let aperture = desc.jet_dir_aperture[3] as f64;
+              let (s_min, s_max, e) = (
+                desc.size_params[0] as f64,
+                desc.size_params[1] as f64,
+                desc.size_params[2] as f64,
+              );
+              let (v_ref, v_std_rel, s_ref, beta_s) = (
+                desc.vel_params[0] as f64,
+                desc.vel_params[1] as f64,
+                desc.vel_params[2] as f64,
+                desc.vel_params[3] as f64,
+              );
+              let beta_ref = beta_s / s_ref;
+              let off = [
+                desc.site_offset[0] as f64,
+                desc.site_offset[1] as f64,
+                desc.site_offset[2] as f64,
+              ];
+              let o_start = mc_qrot(rot_start, off);
+              // OBSERVER_MC_MODEL=chords (diagnostic): grains on the moments stage's size polyline
+              // exactly as the splat draws it — a bin picked uniformly (equal cross-section), a
+              // uniform position along its straight chord, the dispersion Gaussian of the bin's
+              // speed factor across — but binned by their exact f64 projection, no splat: tells the
+              // chord representation from the splat's drawing of it
+              if std::env::var("OBSERVER_MC_MODEL").is_ok_and(|v| v == "chords") {
+                let Some(frame) = b.frame.as_ref() else {
+                  continue;
+                };
+                let anchor = frame.anchor_m();
+                let per = (n_b / desc.count.max(1) as usize).max(4);
+                for j in 0..desc.count {
+                  let c = d::emit_cluster(desc, j);
+                  let (_, m) = d::packet_moments(&c, j, frame);
+                  if !(m.flux() > 0.0) {
                     continue;
+                  }
+                  let cv = m.cov_v();
+                  // Cholesky of Σ_v (xx, xy, xz, yy, yz, zz)
+                  let l11 = (cv[0] as f64).max(0.0).sqrt();
+                  let l21 = if l11 > 0.0 { cv[1] as f64 / l11 } else { 0.0 };
+                  let l31 = if l11 > 0.0 { cv[2] as f64 / l11 } else { 0.0 };
+                  let l22 = (cv[3] as f64 - l21 * l21).max(0.0).sqrt();
+                  let l32 = if l22 > 0.0 {
+                    (cv[4] as f64 - l31 * l21) / l22
+                  } else {
+                    0.0
                   };
-                  let anchor = frame.anchor_m();
-                  let per = (n_b / desc.count.max(1) as usize).max(4);
-                  for j in 0..desc.count {
-                    let c = d::emit_cluster(desc, j);
-                    let (_, m) = d::packet_moments(&c, j, frame);
-                    if !(m.flux() > 0.0) {
-                      continue;
-                    }
-                    let cv = m.cov_v();
-                    // Cholesky of Σ_v (xx, xy, xz, yy, yz, zz)
-                    let l11 = (cv[0] as f64).max(0.0).sqrt();
-                    let l21 = if l11 > 0.0 { cv[1] as f64 / l11 } else { 0.0 };
-                    let l31 = if l11 > 0.0 { cv[2] as f64 / l11 } else { 0.0 };
-                    let l22 = (cv[3] as f64 - l21 * l21).max(0.0).sqrt();
-                    let l32 = if l22 > 0.0 {
-                      (cv[4] as f64 - l31 * l21) / l22
-                    } else {
-                      0.0
-                    };
-                    let l33 = (cv[5] as f64 - l31 * l31 - l32 * l32).max(0.0).sqrt();
-                    let m_c = c.v0_lo_mass[3] as f64;
-                    let wgt_c = m_c / per as f64;
-                    for _ in 0..per {
-                      let bin = (mc_rng(&mut rng) * 16.0).floor().min(15.0) as usize;
-                      let u = mc_rng(&mut rng);
-                      let (a0, a1) = (m.edge(bin), m.edge(bin + 1));
-                      let f = (m.edge_factor(bin) as f64 + m.edge_factor(bin + 1) as f64) * 0.5;
-                      let (g1, g2, g3) =
-                        (mc_gauss(&mut rng), mc_gauss(&mut rng), mc_gauss(&mut rng));
-                      let dx = f * (l11 * g1);
-                      let dy = f * (l21 * g1 + l22 * g2);
-                      let dz = f * (l31 * g1 + l32 * g2 + l33 * g3);
-                      let local = [
-                        a0[0] as f64 + u * (a1[0] as f64 - a0[0] as f64) + dx,
-                        a0[1] as f64 + u * (a1[1] as f64 - a0[1] as f64) + dy,
-                        a0[2] as f64 + u * (a1[2] as f64 - a0[2] as f64) + dz,
-                      ];
-                      let global = [
-                        view.comet_au[0] + (anchor[0] + local[0] - r_jet_now[0]) / d::AU_M,
-                        view.comet_au[1] + (anchor[1] + local[1] - r_jet_now[1]) / d::AU_M,
-                        view.comet_au[2] + (anchor[2] + local[2] - r_jet_now[2]) / d::AU_M,
-                      ];
-                      if let Some((x, y)) = project(global) {
-                        hist[y * w + x] += wgt_c;
-                        n_drawn += 1;
-                      }
+                  let l33 = (cv[5] as f64 - l31 * l31 - l32 * l32).max(0.0).sqrt();
+                  let m_c = c.v0_lo_mass[3] as f64;
+                  let wgt_c = m_c / per as f64;
+                  for _ in 0..per {
+                    let bin = (mc_rng(&mut rng) * 16.0).floor().min(15.0) as usize;
+                    let u = mc_rng(&mut rng);
+                    let (a0, a1) = (m.edge(bin), m.edge(bin + 1));
+                    let f = (m.edge_factor(bin) as f64 + m.edge_factor(bin + 1) as f64) * 0.5;
+                    let (g1, g2, g3) = (mc_gauss(&mut rng), mc_gauss(&mut rng), mc_gauss(&mut rng));
+                    let dx = f * (l11 * g1);
+                    let dy = f * (l21 * g1 + l22 * g2);
+                    let dz = f * (l31 * g1 + l32 * g2 + l33 * g3);
+                    let local = [
+                      a0[0] as f64 + u * (a1[0] as f64 - a0[0] as f64) + dx,
+                      a0[1] as f64 + u * (a1[1] as f64 - a0[1] as f64) + dy,
+                      a0[2] as f64 + u * (a1[2] as f64 - a0[2] as f64) + dz,
+                    ];
+                    let global = [
+                      view.comet_au[0] + (anchor[0] + local[0] - r_centre_now[0]) / d::AU_M,
+                      view.comet_au[1] + (anchor[1] + local[1] - r_centre_now[1]) / d::AU_M,
+                      view.comet_au[2] + (anchor[2] + local[2] - r_centre_now[2]) / d::AU_M,
+                    ];
+                    if let Some((x, y)) = project(global) {
+                      hist[y * w + x] += wgt_c;
+                      n_drawn += 1;
                     }
                   }
-                  seen.push((bi, n_drawn - drawn_before));
-                  continue;
                 }
-                // OBSERVER_MC_MODEL=clusters (diagnostic): grains from the renderer's own clusters and
-                // kernels (`emit_cluster`: the mean velocity with the σ_lat / σ_rad Gaussian, the size
-                // polyline uniform in √β over β/F..β·F, no time spread) instead of the continuous
-                // emission: tells the kernels' width from the splat's drawing of them
-                if std::env::var("OBSERVER_MC_MODEL").is_ok_and(|v| v == "clusters") {
-                  let per = (n_b / desc.count.max(1) as usize).max(4);
-                  for j in 0..desc.count {
-                    let c = d::emit_cluster(desc, j);
-                    let t0 = c.r0_t0_hi[3] as f64 + c.r0_t0_lo[3] as f64;
-                    let age = t_now - t0;
-                    if !(age >= b.band.0 && age < b.band.1) {
-                      continue;
-                    }
-                    let r0 = [
-                      c.r0_t0_hi[0] as f64 + c.r0_t0_lo[0] as f64,
-                      c.r0_t0_hi[1] as f64 + c.r0_t0_lo[1] as f64,
-                      c.r0_t0_hi[2] as f64 + c.r0_t0_lo[2] as f64,
-                    ];
-                    let v0 = [
-                      c.v0_hi_beta[0] as f64 + c.v0_lo_mass[0] as f64,
-                      c.v0_hi_beta[1] as f64 + c.v0_lo_mass[1] as f64,
-                      c.v0_hi_beta[2] as f64 + c.v0_lo_mass[2] as f64,
-                    ];
-                    let beta_c = c.v0_hi_beta[3] as f64;
-                    let m_c = c.v0_lo_mass[3] as f64;
-                    let (sl, sr) = (c.misc[0] as f64, c.misc[1] as f64);
-                    let ej = [c.eject[0] as f64, c.eject[1] as f64, c.eject[2] as f64];
-                    let e3 = normalize(ej);
-                    let ax = if e3[0].abs() < 0.9 {
-                      [1.0, 0.0, 0.0]
-                    } else {
-                      [0.0, 1.0, 0.0]
-                    };
-                    let e1 = normalize(cross(ax, e3));
-                    let e2 = cross(e3, e1);
-                    let fr = d::size_range_factor(&c) as f64;
-                    let (sb_lo, sb_hi) = ((beta_c / fr).sqrt(), (beta_c * fr).sqrt());
-                    let wgt_c = m_c / per as f64;
-                    for _ in 0..per {
-                      let sb = sb_lo + (sb_hi - sb_lo) * mc_rng(&mut rng);
-                      let beta = sb * sb;
-                      let f = sb / beta_c.sqrt();
-                      let (g1, g2, g3) =
-                        (mc_gauss(&mut rng), mc_gauss(&mut rng), mc_gauss(&mut rng));
-                      let v = [
-                        v0[0]
-                          + ej[0] * (f - 1.0)
-                          + sl * (g1 * e1[0] + g2 * e2[0])
-                          + sr * g3 * e3[0],
-                        v0[1]
-                          + ej[1] * (f - 1.0)
-                          + sl * (g1 * e1[1] + g2 * e2[1])
-                          + sr * g3 * e3[1],
-                        v0[2]
-                          + ej[2] * (f - 1.0)
-                          + sl * (g1 * e1[2] + g2 * e2[2])
-                          + sr * g3 * e3[2],
-                      ];
-                      let (r, _) =
-                        d::kepler::propagate_f64(r0, v, d::SUN_MU_M3_S2 * (1.0 - beta), age);
-                      let global = [
-                        view.comet_au[0] + (r[0] - r_jet_now[0]) / d::AU_M,
-                        view.comet_au[1] + (r[1] - r_jet_now[1]) / d::AU_M,
-                        view.comet_au[2] + (r[2] - r_jet_now[2]) / d::AU_M,
-                      ];
-                      if let Some((x, y)) = project(global) {
-                        hist[y * w + x] += wgt_c;
-                        n_drawn += 1;
-                      }
-                    }
-                  }
-                  seen.push((bi, n_drawn - drawn_before));
-                  continue;
-                }
-                // cross-section weighted size: pdf ∝ s^(e−2), CDF exponent p = e − 1
-                let p = e - 1.0;
-                // OBSERVER_MC_QUANTISE_PHASE=1 (diagnostic): the ejection direction is taken at the
-                // instant of the cluster the grain falls into (the renderer's model: one attitude per
-                // time sample) instead of the grain's own instant
-                let quantise = std::env::var("OBSERVER_MC_QUANTISE_PHASE").is_ok_and(|v| v == "1");
-                let samples = (desc.count >> d::batch_streams(desc).0).max(1) as f64;
-                for _ in 0..n_b {
-                  let u = mc_rng(&mut rng);
-                  let dt = d::lit_time_map(u as f32, desc.lit, desc.spin[3], dur as f32) as f64;
-                  let t0 = t_start + dt;
+                seen.push((bi, n_drawn - drawn_before));
+                continue;
+              }
+              // OBSERVER_MC_MODEL=clusters (diagnostic): grains from the renderer's own clusters and
+              // kernels (`emit_cluster`: the mean velocity with the σ_lat / σ_rad Gaussian, the size
+              // polyline uniform in √β over β/F..β·F, no time spread) instead of the continuous
+              // emission: tells the kernels' width from the splat's drawing of them
+              if std::env::var("OBSERVER_MC_MODEL").is_ok_and(|v| v == "clusters") {
+                let per = (n_b / desc.count.max(1) as usize).max(4);
+                for j in 0..desc.count {
+                  let c = d::emit_cluster(desc, j);
+                  let t0 = c.r0_t0_hi[3] as f64 + c.r0_t0_lo[3] as f64;
                   let age = t_now - t0;
                   if !(age >= b.band.0 && age < b.band.1) {
                     continue;
                   }
-                  let (rc, vc) = d::kepler::propagate_f64(rc0, vc0, d::SUN_MU_M3_S2, dt);
-                  let dt_dir = if quantise {
-                    let uq = ((u * samples).floor() + 1.0) / samples;
-                    d::lit_time_map(uq.min(1.0) as f32, desc.lit, desc.spin[3], dur as f32) as f64
-                  } else {
-                    dt
-                  };
-                  let q = mc_qmul(mc_qaxis_angle(axis, omega * dt_dir), rot_start);
-                  let dir = mc_qrot(
-                    q,
-                    mc_sample_cone(mc_rng(&mut rng), mc_rng(&mut rng), jet_dir, aperture),
-                  );
-                  let o_t0 = mc_qrot(q, off);
-                  let v_site = cross([axis[0] * omega, axis[1] * omega, axis[2] * omega], o_t0);
-                  let us = mc_rng(&mut rng);
-                  let s = if p.abs() > 1e-9 {
-                    (s_min.powf(p) + us * (s_max.powf(p) - s_min.powf(p))).powf(1.0 / p)
-                  } else {
-                    s_min * (s_max / s_min).powf(us)
-                  };
-                  let beta = beta_s / s;
-                  let f = (beta / beta_ref).sqrt();
-                  let v = (v_ref * f * (1.0 + v_std_rel * mc_gauss(&mut rng))).max(0.0);
                   let r0 = [
-                    rc[0] + o_t0[0] - o_start[0],
-                    rc[1] + o_t0[1] - o_start[1],
-                    rc[2] + o_t0[2] - o_start[2],
+                    c.r0_t0_hi[0] as f64 + c.r0_t0_lo[0] as f64,
+                    c.r0_t0_hi[1] as f64 + c.r0_t0_lo[1] as f64,
+                    c.r0_t0_hi[2] as f64 + c.r0_t0_lo[2] as f64,
                   ];
                   let v0 = [
-                    vc[0] + dir[0] * v + v_site[0],
-                    vc[1] + dir[1] * v + v_site[1],
-                    vc[2] + dir[2] * v + v_site[2],
+                    c.v0_hi_beta[0] as f64 + c.v0_lo_mass[0] as f64,
+                    c.v0_hi_beta[1] as f64 + c.v0_lo_mass[1] as f64,
+                    c.v0_hi_beta[2] as f64 + c.v0_lo_mass[2] as f64,
                   ];
-                  let (r, _) =
-                    d::kepler::propagate_f64(r0, v0, d::SUN_MU_M3_S2 * (1.0 - beta), age);
-                  let global = [
-                    view.comet_au[0] + (r[0] - r_jet_now[0]) / d::AU_M,
-                    view.comet_au[1] + (r[1] - r_jet_now[1]) / d::AU_M,
-                    view.comet_au[2] + (r[2] - r_jet_now[2]) / d::AU_M,
-                  ];
-                  // the renderer's age fade of the oldest tier (part of the model: the TTL end)
-                  let wf = if b.fade {
-                    wgt * ((1.0 - age / b.band.1) * 10.0).clamp(0.0, 1.0)
+                  let beta_c = c.v0_hi_beta[3] as f64;
+                  let m_c = c.v0_lo_mass[3] as f64;
+                  let (sl, sr) = (c.misc[0] as f64, c.misc[1] as f64);
+                  let ej = [c.eject[0] as f64, c.eject[1] as f64, c.eject[2] as f64];
+                  let e3 = normalize(ej);
+                  let ax = if e3[0].abs() < 0.9 {
+                    [1.0, 0.0, 0.0]
                   } else {
-                    wgt
+                    [0.0, 1.0, 0.0]
                   };
-                  if let Some((x, y)) = project(global) {
-                    hist[y * w + x] += wf;
-                    age_hist[y * w + x] += wf * age;
-                    cnt_hist[y * w + x] += 1.0;
-                    n_drawn += 1;
+                  let e1 = normalize(cross(ax, e3));
+                  let e2 = cross(e3, e1);
+                  let fr = d::size_range_factor(&c) as f64;
+                  let (sb_lo, sb_hi) = ((beta_c / fr).sqrt(), (beta_c * fr).sqrt());
+                  let wgt_c = m_c / per as f64;
+                  for _ in 0..per {
+                    let sb = sb_lo + (sb_hi - sb_lo) * mc_rng(&mut rng);
+                    let beta = sb * sb;
+                    let f = sb / beta_c.sqrt();
+                    let (g1, g2, g3) = (mc_gauss(&mut rng), mc_gauss(&mut rng), mc_gauss(&mut rng));
+                    let v = [
+                      v0[0] + ej[0] * (f - 1.0) + sl * (g1 * e1[0] + g2 * e2[0]) + sr * g3 * e3[0],
+                      v0[1] + ej[1] * (f - 1.0) + sl * (g1 * e1[1] + g2 * e2[1]) + sr * g3 * e3[1],
+                      v0[2] + ej[2] * (f - 1.0) + sl * (g1 * e1[2] + g2 * e2[2]) + sr * g3 * e3[2],
+                    ];
+                    let (r, _) =
+                      d::kepler::propagate_f64(r0, v, d::SUN_MU_M3_S2 * (1.0 - beta), age);
+                    let global = [
+                      view.comet_au[0] + (r[0] - r_centre_now[0]) / d::AU_M,
+                      view.comet_au[1] + (r[1] - r_centre_now[1]) / d::AU_M,
+                      view.comet_au[2] + (r[2] - r_centre_now[2]) / d::AU_M,
+                    ];
+                    if let Some((x, y)) = project(global) {
+                      hist[y * w + x] += wgt_c;
+                      n_drawn += 1;
+                    }
                   }
                 }
                 seen.push((bi, n_drawn - drawn_before));
+                continue;
               }
-              (hist, age_hist, cnt_hist, n_drawn, seen)
-            })
+              // cross-section weighted size: pdf ∝ s^(e−2), CDF exponent p = e − 1
+              let p = e - 1.0;
+              // OBSERVER_MC_QUANTISE_PHASE=1 (diagnostic): the ejection direction is taken at the
+              // instant of the cluster the grain falls into (the renderer's model: one attitude per
+              // time sample) instead of the grain's own instant
+              let quantise = std::env::var("OBSERVER_MC_QUANTISE_PHASE").is_ok_and(|v| v == "1");
+              let samples = (desc.count >> d::batch_streams(desc).0).max(1) as f64;
+              let streams = (1u32 << d::batch_streams(desc).0) as f64;
+              let sigma_ang = (aperture / streams.sqrt()).max(d::CHILD_SIGMA_V_REL as f64);
+              for _ in 0..n_b {
+                let u = mc_rng(&mut rng);
+                let dt = d::lit_time_map(u as f32, desc.lit, desc.spin[3], dur as f32) as f64;
+                let t0 = t_start + dt;
+                let age = t_now - t0;
+                if !(age >= b.band.0 && age < b.band.1) {
+                  continue;
+                }
+                let (rc, vc) = d::kepler::propagate_f64(rc0, vc0, d::SUN_MU_M3_S2, dt);
+                let dt_dir = if quantise {
+                  let uq = ((u * samples).floor() + 1.0) / samples;
+                  d::lit_time_map(uq.min(1.0) as f32, desc.lit, desc.spin[3], dur as f32) as f64
+                } else {
+                  dt
+                };
+                let q = mc_qmul(mc_qaxis_angle(axis, omega * dt_dir), rot_start);
+                let dir = mc_qrot(
+                  q,
+                  mc_sample_cone(mc_rng(&mut rng), mc_rng(&mut rng), jet_dir, aperture),
+                );
+                // the renderer's direction kernel: the cone is covered by S Gaussian stream
+                // cells of lateral dispersion σ_lat = v·max(aperture/√S, CHILD_SIGMA_V_REL)
+                // (the KDE bandwidth, one cone cell), so the continuous emission is drawn
+                // through that bandwidth and the truth is the cone convolved with it (as in
+                // `cell_kernels_reproduce_the_continuous_emission`): a sharp cone edge would
+                // differ by a third at the rim of the 5-km frame
+                let (g1, g2) = (mc_gauss(&mut rng), mc_gauss(&mut rng));
+                let lat_ax = if dir[0].abs() < 0.9 {
+                  [1.0, 0.0, 0.0]
+                } else {
+                  [0.0, 1.0, 0.0]
+                };
+                let e1 = normalize(cross(lat_ax, dir));
+                let e2 = cross(dir, e1);
+                let lat = [
+                  sigma_ang * (g1 * e1[0] + g2 * e2[0]),
+                  sigma_ang * (g1 * e1[1] + g2 * e2[1]),
+                  sigma_ang * (g1 * e1[2] + g2 * e2[2]),
+                ];
+                let o_t0 = mc_qrot(q, off);
+                let v_site = cross([axis[0] * omega, axis[1] * omega, axis[2] * omega], o_t0);
+                let us = mc_rng(&mut rng);
+                let s = if p.abs() > 1e-9 {
+                  (s_min.powf(p) + us * (s_max.powf(p) - s_min.powf(p))).powf(1.0 / p)
+                } else {
+                  s_min * (s_max / s_min).powf(us)
+                };
+                let beta = beta_s / s;
+                let f = (beta / beta_ref).sqrt();
+                let v = (v_ref * f * (1.0 + v_std_rel * mc_gauss(&mut rng))).max(0.0);
+                let r0 = [
+                  rc[0] + o_t0[0] - o_start[0],
+                  rc[1] + o_t0[1] - o_start[1],
+                  rc[2] + o_t0[2] - o_start[2],
+                ];
+                let v0 = [
+                  vc[0] + (dir[0] + lat[0]) * v + v_site[0],
+                  vc[1] + (dir[1] + lat[1]) * v + v_site[1],
+                  vc[2] + (dir[2] + lat[2]) * v + v_site[2],
+                ];
+                let (r, _) = d::kepler::propagate_f64(r0, v0, d::SUN_MU_M3_S2 * (1.0 - beta), age);
+                // physical photometry: p · Φ(α) / r_h² of this grain (the render weights each
+                // texel the same way at the dust it holds). The orthographic poses' eye is at
+                // infinity along the view axis (the comet → camera line), like the render's: a
+                // point eye at the camera lit the dust beside the camera at α → 180°
+                let w_rad = if albedo > 0.0 {
+                  let rn = norm(r);
+                  let sun = [
+                    (-r[0] / rn) as f32,
+                    (-r[1] / rn) as f32,
+                    (-r[2] / rn) as f32,
+                  ];
+                  let to_eye = if view.perspective_tan_h.is_some() {
+                    [
+                      (view.cam_pos[0] * d::AU_M - r[0]) as f32,
+                      (view.cam_pos[1] * d::AU_M - r[1]) as f32,
+                      (view.cam_pos[2] * d::AU_M - r[2]) as f32,
+                    ]
+                  } else {
+                    let e = normalize(sub(view.cam_pos, view.comet_au));
+                    [e[0] as f32, e[1] as f32, e[2] as f32]
+                  };
+                  d::radiance_weight(albedo, sun, to_eye, (rn / d::AU_M) as f32) as f64
+                } else {
+                  1.0
+                };
+                let global = [
+                  view.comet_au[0] + (r[0] - r_centre_now[0]) / d::AU_M,
+                  view.comet_au[1] + (r[1] - r_centre_now[1]) / d::AU_M,
+                  view.comet_au[2] + (r[2] - r_centre_now[2]) / d::AU_M,
+                ];
+                // the renderer's age fade of the oldest tier (part of the model: the TTL end)
+                let wf = if b.fade {
+                  wgt * ((1.0 - age / b.band.1) * 10.0).clamp(0.0, 1.0)
+                } else {
+                  wgt
+                };
+                if let Some((x, y)) = project(global) {
+                  hist[y * w + x] += wf * w_rad;
+                  // the ages carry the radiance weight too: the display mixes colours by it
+                  age_hist[y * w + x] += wf * w_rad * age;
+                  age2_hist[y * w + x] += wf * w_rad * age * age;
+                  // the grain's age colour, mixed by radiance like the render's texel words
+                  let rgb = d::age_color(view.stream, age as f32, view.ttl_s as f32);
+                  for k in 0..3 {
+                    col_hist[3 * (y * w + x) + k] += wf * w_rad * rgb[k] as f64;
+                  }
+                  cnt_hist[y * w + x] += 1.0;
+                  n_drawn += 1;
+                }
+              }
+              seen.push((bi, n_drawn - drawn_before));
+            }
+            (hist, age_hist, age2_hist, col_hist, cnt_hist, n_drawn, seen)
           })
-          .collect();
-        for hd in handles {
-          let (hist, ah, ch, n, seen) = hd.join().expect("mc thread");
-          for (a, b) in counts.iter_mut().zip(ch.iter()) {
-            *a += *b;
-          }
-          for (a, b) in truth.iter_mut().zip(hist.iter()) {
-            *a += *b;
-          }
-          for (a, b) in age_sum.iter_mut().zip(ah.iter()) {
-            *a += *b;
-          }
-          for (bi, k) in seen {
-            inview[bi] = k;
-          }
-          drawn += n;
+        })
+        .collect();
+      for hd in handles {
+        let (hist, ah, a2h, colh, ch, n, seen) = hd.join().expect("mc thread");
+        for (a, b) in counts.iter_mut().zip(ch.iter()) {
+          *a += *b;
         }
-      });
-      (truth, age_sum, drawn, inview, counts)
-    };
+        for (a, b) in truth.iter_mut().zip(hist.iter()) {
+          *a += *b;
+        }
+        for (a, b) in age_sum.iter_mut().zip(ah.iter()) {
+          *a += *b;
+        }
+        for (a, b) in age2_sum.iter_mut().zip(a2h.iter()) {
+          *a += *b;
+        }
+        for (a, b) in col_sum.iter_mut().zip(colh.iter()) {
+          *a += *b;
+        }
+        for (bi, k) in seen {
+          inview[bi] = k;
+        }
+        drawn += n;
+      }
+    });
+    (truth, age_sum, age2_sum, col_sum, drawn, inview, counts)
+  };
   // importance allocation: a pilot of 64 grains per batch measures the fraction landing in the
   // frame; the grains are then allotted by mass × that fraction (floor 1/32: no batch starved).
   // The weight per grain stays mass / n_b, so the estimate is unbiased whatever n_b; a near
   // frame holds a few windows of the youngest tier and would otherwise spend 99 % of the
   // grains out of view
-  let (_, _, _, pilot, _) = run(&|_| 64usize);
+  let (_, _, _, _, _, pilot, _) = run(&|_| 64usize);
   let weights: Vec<f64> = batches
     .iter()
     .zip(pilot.iter())
     .map(|(b, &k)| b.desc.mass_params[0] as f64 * (k as f64 / 64.0))
     .collect();
   let weight_total: f64 = weights.iter().sum::<f64>().max(1e-300);
-  let (truth, age_sum, drawn, _, counts) =
-    run(&|bi| ((grains as f64 * weights[bi] / weight_total).round() as usize).max(64));
-  // OBSERVER_MC_AGE=<file>: the truth-weighted mean age per pixel (f32 seconds, 0 where empty)
+  let n_of = |bi: usize| ((grains as f64 * weights[bi] / weight_total).round() as usize).max(64);
+  // OBSERVER_MC_YOUNG=1 (diagnostic): the youngest batches (ending within 2 h of now) with
+  // their lit map at u = 1 (the engine's pinned sample), pilot hits and grain allotment
+  if std::env::var("OBSERVER_MC_YOUNG").is_ok_and(|v| v == "1") {
+    for (bi, b) in batches.iter().enumerate() {
+      let d = &b.desc;
+      let t_start = d.comet_r_t_hi[3] as f64 + d.comet_r_t_lo[3] as f64;
+      let dur = d.comet_v_dur_hi[3] as f64 + d.comet_v_dur_lo[3] as f64;
+      if t_start + dur < t_now - 7200.0 {
+        continue;
+      }
+      let map1 = d::lit_time_map(1.0, d.lit, d.spin[3], dur as f32);
+      log_line(&format!(
+        "[observer] mc young batch {bi}: tier {} t_end-now {:.0} s dur {:.0} s count {} mass {:.1} g lit {:?} (mode {}) provisional {} map(u=1) {:.0} s pilot {} alloc {}",
+        b.tier,
+        t_start + dur - t_now,
+        dur,
+        d.count,
+        d.mass_params[0],
+        [d.lit[0], d.lit[1], d.lit[2]],
+        d.lit[3],
+        d::batch_provisional(d),
+        map1,
+        pilot[bi],
+        n_of(bi)
+      ));
+    }
+  }
+  let (truth, age_sum, age2_sum, col_sum, drawn, _, counts) = run(&n_of);
+  // absolute photometry: the render's radiance factors (per px², `PYR_UNIT` makes the pyramid
+  // absolute) against the truth's Σ cross-section × weight per pixel area
+  let abs_ratio = {
+    let m_per_px = 2.0 * view.half_height_au * d::AU_M / h as f64;
+    let truth_sum: f64 = truth.iter().sum::<f64>() / (m_per_px * m_per_px);
+    let render_sum: f64 = render.iter().map(|&v| v as f64).sum();
+    if truth_sum > 0.0 {
+      render_sum / truth_sum
+    } else {
+      0.0
+    }
+  };
+  // the aperture Afρ: `4 r_h² / (π ρ) · Σ_{within ρ} RF · A_px` (A'Hearn et al. 1984 with Δ
+  // cancelling in the orthographic view; the image's RF already carries 1/r_h²), the truth the
+  // same from its Σ cross-section × weight, and the recipe's Afρ(r_h)·Φ(α_c) at the comet
+  let afrho = view.afrho_aperture_km.map(|rho_km| {
+    let m_per_px = 2.0 * view.half_height_au * d::AU_M / h as f64;
+    let rho = rho_km * 1e3;
+    let (cx, cy) = view.nucleus_px;
+    let (mut s_r, mut s_t) = (0.0f64, 0.0f64);
+    for y in 0..h {
+      for x in 0..w {
+        let (dx, dy) = (
+          (x as f64 + 0.5 - cx) * m_per_px,
+          (y as f64 + 0.5 - cy) * m_per_px,
+        );
+        if dx * dx + dy * dy <= rho * rho {
+          s_r += render[y * w + x] as f64 * m_per_px * m_per_px;
+          s_t += truth[y * w + x];
+        }
+      }
+    }
+    let r_h = norm(view.comet_au);
+    let to_afrho = |s: f64| 4.0 * r_h * r_h / (core::f64::consts::PI * rho) * s * 100.0;
+    let sun = [
+      -view.comet_au[0] / r_h,
+      -view.comet_au[1] / r_h,
+      -view.comet_au[2] / r_h,
+    ];
+    let to_eye = normalize(sub(view.cam_pos, view.comet_au));
+    let alpha = dot(sun, to_eye).clamp(-1.0, 1.0).acos();
+    let analytic = view.afrho_in_cm * d::phase_function(alpha as f32) as f64;
+    (to_afrho(s_r), to_afrho(s_t), analytic)
+  });
+  // OBSERVER_MC_AGE=<file>: the truth's radiance-weighted mean age per pixel (f32 seconds, 0
+  // where empty)
   if let Ok(path) = std::env::var("OBSERVER_MC_AGE") {
     let bytes: Vec<u8> = truth
       .iter()
@@ -2836,6 +3733,85 @@ fn monte_carlo_truth(
   // the region: where the truth is above 1e-4 of its peak (the coma peak is thousands of times
   // the tail; 1 % would judge the coma alone)
   let region: Vec<usize> = (0..w * h).filter(|&i| b[i] >= MC_REGION_REL * peak).collect();
+  // the hue samples: along the ray to the end of the truth's region, the truth's age moments
+  // and colour mix in a 5×5 box at each
+  let (hue_px, hue_truth, hue_tau_ratio) = {
+    let ray = &view.hue_ray;
+    let reach = ray.reach(view.width, view.height);
+    let mut t_end = ray.r0;
+    let mut t = ray.r0;
+    while t <= reach {
+      let (cx, cy) = ray.at(t);
+      let (ix, iy) = (cx.round() as i64, cy.round() as i64);
+      if ix >= 0
+        && iy >= 0
+        && ix < w as i64
+        && iy < h as i64
+        && b[iy as usize * w + ix as usize] >= MC_REGION_REL * peak
+      {
+        t_end = t;
+      }
+      t += 1.0;
+    }
+    let px = ray.samples(t_end);
+    let ratio_at: Vec<Option<f64>> = px
+      .iter()
+      .map(|&(cx, cy)| {
+        let (ix, iy) = (cx.round() as i64, cy.round() as i64);
+        let (mut sa, mut sb) = (0.0f64, 0.0f64);
+        for y in iy - 2..=iy + 2 {
+          for x in ix - 2..=ix + 2 {
+            if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
+              continue;
+            }
+            let i = (y * w as i64 + x) as usize;
+            sa += a[i];
+            sb += b[i];
+          }
+        }
+        (sa > 0.0 || sb > 0.0).then(|| if sb > 0.0 { sa / sb } else { f64::INFINITY })
+      })
+      .collect();
+    let truth_at: Vec<Option<(f64, f64, [f64; 3])>> = px
+      .iter()
+      .map(|&(cx, cy)| {
+        let (ix, iy) = (cx.round() as i64, cy.round() as i64);
+        let (mut st, mut sa, mut sa2, mut sc) = (0.0f64, 0.0f64, 0.0f64, [0.0f64; 3]);
+        for y in iy - 2..=iy + 2 {
+          for x in ix - 2..=ix + 2 {
+            if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
+              continue;
+            }
+            let i = (y * w as i64 + x) as usize;
+            st += truth[i];
+            sa += age_sum[i];
+            sa2 += age2_sum[i];
+            for k in 0..3 {
+              sc[k] += col_sum[3 * i + k];
+            }
+          }
+        }
+        (st > 0.0).then(|| {
+          let m = sa / st;
+          (
+            m,
+            (sa2 / st - m * m).max(0.0).sqrt(),
+            [sc[0] / st, sc[1] / st, sc[2] / st],
+          )
+        })
+      })
+      .collect();
+    (px, truth_at, ratio_at)
+  };
+  let haze_frac = {
+    let total: f64 = a.iter().sum();
+    let inside: f64 = region.iter().map(|&i| a[i]).sum();
+    if total > 0.0 {
+      (total - inside) / total
+    } else {
+      0.0
+    }
+  };
   let core_px = region.iter().filter(|&&i| b[i] >= 0.01 * peak).count();
   let core_unresolved = core_px < MC_CORE_RESOLVED_PX;
   // the Monte-Carlo noise of the box-filtered truth: 1/√n per pixel with n the grains in its
@@ -2875,18 +3851,36 @@ fn monte_carlo_truth(
     }
     (s2 / region.len().max(1) as f64).sqrt()
   };
-  // the truth's peak against the nucleus pixel
-  let (mut best, mut bi) = (0.0, 0usize);
-  for (i, &v) in b.iter().enumerate() {
-    if v > best {
-      best = v;
-      bi = i;
+  // the frame mapping: the τ-weighted centroids of the truth's and the render's cores (the
+  // pixels above 1 % of the truth's peak, box filtered) coincide within a nucleus radius plus
+  // 2 % of the frame (the peak itself is a weak statistic on a weighted haze: with the phase
+  // function the brightest box can sit at the forward-scattering edge of a near view)
+  let centroid_of = |img: &[f64]| {
+    let (mut sx, mut sy, mut st) = (0.0f64, 0.0f64, 0.0f64);
+    for &i in &region {
+      if b[i] >= 0.01 * peak {
+        let v = img[i].max(0.0);
+        sx += v * ((i % w) as f64 + 0.5);
+        sy += v * ((i / w) as f64 + 0.5);
+        st += v;
+      }
     }
-  }
-  let (bx, by) = ((bi % w) as f64 + 0.5, (bi / w) as f64 + 0.5);
-  let tol = 3.0 + view.nucleus_px_radius;
-  let nucleus_ok = (bx - view.nucleus_px.0).abs() <= tol && (by - view.nucleus_px.1).abs() <= tol;
+    if st > 0.0 {
+      (sx / st, sy / st)
+    } else {
+      (0.0, 0.0)
+    }
+  };
+  let (bx, by) = centroid_of(&b);
+  let (ax, ay) = centroid_of(&a);
+  let tol = 3.0 + 1.5 * view.nucleus_px_radius + 0.02 * h as f64;
+  let nucleus_ok = (bx - ax).abs() <= tol && (by - ay).abs() <= tol;
   let rec = McRec {
+    abs_ratio,
+    afrho,
+    peak_px: (bx, by),
+    render_peak_px: (ax, ay),
+    nucleus_px_radius: view.nucleus_px_radius,
     rel_rms: (se / sb2.max(1e-300)).sqrt(),
     rel_rms_judged: (rel_j_raw * rel_j_raw - noise_j * noise_j).max(0.0).sqrt(),
     noise: noise_j,
@@ -2900,6 +3894,10 @@ fn monte_carlo_truth(
     nucleus_ok,
     grains: drawn,
     batches: batches.len(),
+    hue_px,
+    hue_truth,
+    hue_tau_ratio,
+    haze_frac,
   };
   let truth32: Vec<f32> = b.iter().map(|&x| x as f32).collect();
   let render32: Vec<f32> = a.iter().map(|&x| x as f32).collect();

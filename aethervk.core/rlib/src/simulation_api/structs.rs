@@ -1688,7 +1688,9 @@ impl SceneDump {
   /// 4: nucleus mesh moved from `Comet_body` to the `Comet_visual` child, which is not dumped.
   /// 5: `SerializedParticleSystemConfig::emission_start_us` (the jet's ignition epoch) replaces
   ///    the legacy `last_emission` / `last_compaction` pair.
-  pub const CURRENT_VERSION: u32 = 5;
+  /// 6: `ParticleSystemEmitParams::geometric_albedo` (physical photometry, WP1) and the removal of
+  ///    `mass_variability_perc` (bincode is positional: older dumps are refused).
+  pub const CURRENT_VERSION: u32 = 6;
 }
 
 /// Serialized representation of a single scene entity.

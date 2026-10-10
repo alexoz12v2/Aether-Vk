@@ -20,7 +20,9 @@
 #![allow(clippy::excessive_precision)]
 
 pub mod df;
+pub mod phase;
 pub mod splat;
+pub use phase::*;
 pub use splat::*;
 
 use aethervk_oshal_rlib::math::FloatLike;
@@ -136,9 +138,6 @@ pub fn clamp_dust_softening(s: f32) -> f32 {
     DUST_SOFTENING_DEFAULT
   }
 }
-
-/// age of the dust column that defines the exposure reference ([`DustEmitConfig::tau_ref`])
-pub const TAU_REF_AGE_S: f64 = 86400.0;
 
 // ─── View aids: tracers and flow (`first_particles.rdc` / `second_particles.rdc`) ───
 // In the wide view (25 km/px) dust moves 2–150 m/s relative to the nucleus: 63 s of sim time moved
@@ -346,20 +345,85 @@ pub fn adapt_white(prev: f32, measured: f32) -> f32 {
   (prev.ln() + (measured.ln() - prev.ln()) * WHITE_ADAPT_RATE).exp()
 }
 
-/// `AETHERVK_DUST_EXPOSURE=fixed`: no view adaptation (white point 1 = the jet's `tau_ref`, no
-/// black point), the dust brightness then depends on the zoom.
-pub fn dust_exposure_fixed() -> bool {
-  use core::sync::atomic::{AtomicU8, Ordering};
-  static FIXED: AtomicU8 = AtomicU8::new(2);
-  match FIXED.load(Ordering::Relaxed) {
-    0 => false,
-    1 => true,
-    _ => {
-      let f = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_EXPOSURE")
-        .is_some_and(|s| s.trim().eq_ignore_ascii_case("fixed"));
-      FIXED.store(f as u8, Ordering::Relaxed);
-      f
+/// V-band surface brightness (mag/arcsec²) of a radiance factor of 1: a white Lambert surface at
+/// 1 AU. `μ = m☉,V − 2.5 log10(RF · Ω_arcsec² / π)` with `m☉,V = −26.76` (Willmer 2018, ApJS 236,
+/// 47) and `Ω_arcsec² = (π/648 000)² = 2.3504e-11 sr`: `−26.76 + 27.815 = 1.055`. Sanity: the full
+/// Moon's p ≈ 0.12 gives 3.36, its measured ~3.4 mag/arcsec².
+pub const DUST_MAG_ZERO_RF: f32 = 1.055;
+/// surface brightness (V mag/arcsec²) of a radiance factor (`τ · p · Φ(α) / r_h²`)
+pub fn white_to_mag_arcsec2(rf: f32) -> f32 {
+  DUST_MAG_ZERO_RF - 2.5 * <f32 as FloatLike>::ln(rf.max(1e-30)) / core::f32::consts::LN_10
+}
+/// the radiance factor of a surface brightness (V mag/arcsec²)
+pub fn mag_arcsec2_to_white(mag: f32) -> f32 {
+  <f32 as FloatLike>::pow(10.0, (DUST_MAG_ZERO_RF - mag) / 2.5)
+}
+/// exposure value of a white point: `log2(1 / white)` (0 = a white Lambert surface at 1 AU maps
+/// to white; +10 = a thousand times more sensitive)
+pub fn exposure_ev(white_rf: f32) -> f32 {
+  -<f32 as FloatLike>::ln(white_rf.max(1e-30)) / core::f32::consts::LN_2
+}
+/// The surface brightness a fresh view adapts from (mag/arcsec²), also the `fixed` mode's default:
+/// the first readback replaces it (`adapt_white`).
+pub const DUST_WHITE_SEED_MAG: f32 = 20.0;
+
+/// What a view's exposure is ([`white_to_mag_arcsec2`], [`exposure_ev`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DustExposure {
+  /// white point: the radiance factor shown as white
+  pub white: f32,
+  /// the median dust texel (radiance factor)
+  pub p50: f32,
+  /// auto softening in use
+  pub softening: f32,
+  /// the white point as a V surface brightness (mag/arcsec²)
+  pub mag_arcsec2: f32,
+  /// `log2(1 / white)`
+  pub ev: f32,
+  /// `AETHERVK_DUST_EXPOSURE=fixed` in force
+  pub fixed: bool,
+}
+
+impl DustExposure {
+  pub fn of(white: f32, p50: f32, softening: f32, fixed: bool) -> Self {
+    Self {
+      white,
+      p50,
+      softening,
+      mag_arcsec2: white_to_mag_arcsec2(white),
+      ev: exposure_ev(white),
+      fixed,
     }
+  }
+}
+
+/// `AETHERVK_DUST_EXPOSURE=fixed[:μ]`: no view adaptation, the white point is the radiance
+/// factor of the surface brightness μ (V mag/arcsec², [`DUST_WHITE_SEED_MAG`] when omitted) and
+/// there is no black point; `None` otherwise (auto exposure).
+pub fn dust_exposure_fixed() -> Option<f32> {
+  use core::sync::atomic::{AtomicU32, Ordering};
+  const UNSET: u32 = u32::MAX;
+  const AUTO: u32 = u32::MAX - 1;
+  static WHITE_BITS: AtomicU32 = AtomicU32::new(UNSET);
+  match WHITE_BITS.load(Ordering::Relaxed) {
+    AUTO => None,
+    UNSET => {
+      let w = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_EXPOSURE").and_then(|s| {
+        let s = s.trim();
+        if s.eq_ignore_ascii_case("fixed") {
+          Some(mag_arcsec2_to_white(DUST_WHITE_SEED_MAG))
+        } else {
+          s.strip_prefix("fixed:")
+            .or_else(|| s.strip_prefix("FIXED:"))
+            .and_then(|m| m.trim().parse::<f32>().ok())
+            .filter(|m| m.is_finite())
+            .map(mag_arcsec2_to_white)
+        }
+      });
+      WHITE_BITS.store(w.map_or(AUTO, f32::to_bits), Ordering::Relaxed);
+      w
+    }
+    bits => Some(f32::from_bits(bits)),
   }
 }
 
@@ -838,7 +902,7 @@ impl DustBatch {
   }
 }
 
-/// Per-frame evaluation parameters (the tail of the propagate push constants). 64 bytes.
+/// Per-frame evaluation parameters (the tail of the propagate push constants). 80 bytes.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct DustFrame {
@@ -855,8 +919,12 @@ pub struct DustFrame {
   /// at the max age (an older tier takes over), `w` the tier's stream shift (written to the render
   /// clusters, [`render_word`])
   pub ttl: [f32; 4],
+  /// nucleus spin `axis · ω` (rad/s, particle-system axes), `w` unused: the splat's spiral
+  /// interpolation about the anchor ([`DustHostState::draw_state`] anchors at the nucleus
+  /// centre; the propagate pass stores it in the moments, [`DustMoments::spin_axis`])
+  pub spin: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<DustFrame>() == 64);
+const _: () = assert!(core::mem::size_of::<DustFrame>() == 80);
 
 impl DustFrame {
   pub fn new(ps_r: V3, t_now_s: f64, rot_inv: [f32; 4], ttl_s: f32) -> Self {
@@ -866,7 +934,26 @@ impl DustFrame {
       ps_r_t_lo: [r.lo[0], r.lo[1], r.lo[2], t.lo],
       rot_inv,
       ttl: [ttl_s, 0.0, 0.0, 0.0],
+      spin: [0.0; 4],
     }
+  }
+  /// the nucleus spin (unit axis in root axes + ω, [`JetState::spin_or_still`]) in the frame's
+  /// particle-system axes
+  pub fn with_spin(mut self, spin: [f64; 4]) -> Self {
+    let w = qrot(
+      self.rot_inv,
+      [
+        (spin[0] * spin[3]) as f32,
+        (spin[1] * spin[3]) as f32,
+        (spin[2] * spin[3]) as f32,
+      ],
+    );
+    self.spin = [w[0], w[1], w[2], 0.0];
+    self
+  }
+  /// `axis · ω` (rad/s, particle-system axes)
+  pub fn spin_vector(&self) -> [f32; 3] {
+    [self.spin[0], self.spin[1], self.spin[2]]
   }
   /// the same anchor and band evaluated at another time (`t_now`)
   pub fn at_time(mut self, t_now_s: f64) -> Self {
@@ -911,7 +998,7 @@ pub struct DustEmitPushConstants {
 }
 const _: () = assert!(core::mem::size_of::<DustEmitPushConstants>() == 16);
 
-/// `dust_propagate.comp` push constants. 112 bytes.
+/// `dust_propagate.comp` push constants. 128 bytes (the guaranteed push-constant size).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct DustPropagatePushConstants {
@@ -927,7 +1014,7 @@ pub struct DustPropagatePushConstants {
   pub _pad1: [u32; 2],
   pub frame: DustFrame,
 }
-const _: () = assert!(core::mem::size_of::<DustPropagatePushConstants>() == 112);
+const _: () = assert!(core::mem::size_of::<DustPropagatePushConstants>() == 128);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Streaklines. Mirror of `dust_common.glsl` `dust_streak_*`
@@ -1018,8 +1105,13 @@ fn qaxis_angle(axis: [f32; 3], angle: f32) -> [f32; 4] {
   ]
 }
 
-/// Emission offset `dt ∈ [0, dur]` (s) of the stratified sample `u ∈ [0, 1)`, uniform over the
-/// *lit* time of the batch window (see [`LitWindow`]). `omega` = `spin.w`.
+/// An arc end in [`lit_time_map`] is reached within this fraction of an arc (f32 rounding of the
+/// lit angle against the arc sums). Mirror of `DUST_LIT_ARC_END_EPS`.
+pub const LIT_ARC_END_EPS: f32 = 1e-5;
+
+/// Emission offset `dt ∈ [0, dur]` (s) of the stratified sample `u ∈ [0, 1]`, uniform over the
+/// *lit* time of the batch window (see [`LitWindow`]). `omega` = `spin.w`. `u = 1` is the last
+/// lit instant of the window (the pinned sample of a provisional batch), not the window end.
 #[inline]
 pub fn lit_time_map(u: f32, lit: [f32; 4], omega: f32, dur: f32) -> f32 {
   const TWO_PI: f32 = 2.0 * core::f32::consts::PI;
@@ -1038,13 +1130,23 @@ pub fn lit_time_map(u: f32, lit: [f32; 4], omega: f32, dur: f32) -> f32 {
   };
   let seg_len = arc_start + arc - seg_start;
   let m = u * lit[2];
-  let psi = if m < seg_len {
-    seg_start + m
+  // the ends of the lit arcs are inclusive: `u = 1` (the pinned last sample of a provisional
+  // window) is the *end* of the last lit arc, never the start of the next one (which the
+  // clamp turned into the window end: a fresh sample at a dark site, the dust of the night)
+  // (`LIT_ARC_END_EPS` of an arc: the lit angle `lit[2]` and the arc ends come from separate
+  // f32 sums and differ in the last bits)
+  let eps = LIT_ARC_END_EPS * arc;
+  let psi = if m <= seg_len + eps {
+    seg_start + m.min(seg_len)
   } else {
     let m = m - seg_len;
     let k = <f32 as FloatLike>::floor(m / arc);
     let r = m - k * arc;
-    arc_start + TWO_PI + k * TWO_PI + r
+    if r <= eps {
+      arc_start + k * TWO_PI + arc
+    } else {
+      arc_start + TWO_PI + k * TWO_PI + r
+    }
   };
   ((psi - ps) / omega).clamp(0.0, dur)
 }
@@ -1556,6 +1658,27 @@ impl SizeDistribution {
     };
     (e, l / z)
   }
+  /// `f_v = ⟨√(s/s_ref)⟩_σ`: the cross-section-weighted mean of the speed factor `√(s_ref/s)`'s
+  /// inverse over the distribution (`v(s) = v_ref √(s_ref/s)`), i.e. the factor by which the
+  /// cross-section-weighted `⟨1/v⟩` exceeds `1/v_ref` — the Afρ closure
+  /// (`ParticleSystemEmitParams::dust_production_rate_kgs`). With `n(s) ∝ s^-q` the weights are
+  /// `s^(2−q)`: `f_v = ∫ s^(2.5−q) ds / (√s_ref ∫ s^(2−q) ds)` over `[s_min, s_max]`; for q = 3.5
+  /// over `s_ref/F .. s_ref F` this is `ln F / (√F − 1/√F)` (0.809 at F = 10). `s_ref` is the
+  /// geometric centre of the range.
+  pub fn mean_speed_factor(&self) -> f64 {
+    let s_ref = <f64 as FloatLike>::sqrt(self.s_min_um * self.s_max_um);
+    let int = |a: f64| -> f64 {
+      // ∫ s^a ds over the range
+      if (if a + 1.0 < 0.0 { -(a + 1.0) } else { a + 1.0 }) < 1e-9 {
+        <f64 as FloatLike>::ln(self.s_max_um / self.s_min_um)
+      } else {
+        (<f64 as FloatLike>::pow(self.s_max_um, a + 1.0)
+          - <f64 as FloatLike>::pow(self.s_min_um, a + 1.0))
+          / (a + 1.0)
+      }
+    };
+    int(2.5 - self.q) / (<f64 as FloatLike>::sqrt(s_ref) * int(2.0 - self.q))
+  }
 }
 
 /// Per-system host emission state (persisted in the ECS component between ticks).
@@ -2044,6 +2167,15 @@ impl JetState {
   pub fn spin_or_still(&self) -> [f64; 4] {
     self.spin.unwrap_or([0.0, 0.0, 1.0, 0.0])
   }
+  /// the nucleus centre (m): `r_m` less the rotated site offset
+  pub fn centre_m(&self) -> V3 {
+    let o = qrot(self.rot, self.site_offset_m);
+    [
+      self.r_m[0] - o[0] as f64,
+      self.r_m[1] - o[1] as f64,
+      self.r_m[2] - o[2] as f64,
+    ]
+  }
   /// illumination of the site over `[t_s, t_s + dur_s]`
   pub fn lit_window(&self, dur_s: f64) -> LitWindow {
     let w = self.spin_or_still();
@@ -2060,9 +2192,10 @@ impl JetState {
 /// Everything the renderer needs to evaluate and draw one system this frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DustDrawState {
-  /// heliocentric render anchor (m): the jet position of the last emission tick, a fixed point
-  /// (precision only). The draw translation is `anchor − eye` from heliocentric values, never the
-  /// jet / comet entity transforms: particles are not children of the comet.
+  /// heliocentric render anchor (m): the nucleus centre at the last emission tick, a fixed point
+  /// (precision, and the origin of the splat's spiral interpolation). The draw translation is
+  /// `anchor − eye` from heliocentric values, never the jet / comet entity transforms: particles
+  /// are not children of the comet.
   pub anchor_m: [f64; 3],
   /// index of the age tier in its system (LOD header slot, `< LOD_MAX_TIERS`)
   pub tier: u32,
@@ -2075,10 +2208,10 @@ pub struct DustDrawState {
   /// compute timeline value the graphics submit must wait on (0 = none)
   pub compute_wait: u64,
   pub frame: DustFrame,
-  /// unit anti-sun direction (root axes), w = solar gravity at the jet (m/s²)
-  pub anti_sun_g: [f32; 4],
-  /// exposure reference optical depth ([`DustEmitConfig::tau_ref`], 0 = unknown)
-  pub tau_ref: f32,
+  /// geometric albedo of the dust (the splat's radiance weight; `≤ 0` = unweighted optical depth)
+  pub albedo: f32,
+  /// the system's cluster lifetime (s): the age clock of the hue ramp (`age_color`)
+  pub ttl_s: f32,
 }
 
 impl DustDrawState {
@@ -2102,6 +2235,9 @@ pub struct DustEmitConfig {
   pub density_gcm3: f32,
   /// β at the configured grain size
   pub beta_ref: f32,
+  /// geometric albedo `p` of the dust (the radiance factor at zero phase; `≤ 0` renders the
+  /// unweighted optical depth, diagnostics only)
+  pub albedo: f32,
   /// ejection speed mean / std at the configured grain size (m/s)
   pub v_mean: f32,
   pub v_std: f32,
@@ -2109,24 +2245,6 @@ pub struct DustEmitConfig {
   pub jet_dir: [f32; 3],
   pub aperture_rad: f32,
   pub seed: u32,
-}
-
-impl DustEmitConfig {
-  /// Exposure reference optical depth: one day of production (`q`, at the heliocentric distance
-  /// this config was made for) spread over a disc of radius `v_mean · 1 day`. Depends only on the
-  /// jet configuration: never on the history, the tiers or the camera, so the brightness of a
-  /// given dust column is stable (see `dust.vert`: pixels show `exposure · τ`).
-  pub fn tau_ref(&self) -> f64 {
-    let t = TAU_REF_AGE_S;
-    let sigma_m2 = self.q_dust_kgs.max(0.0) * 1e3 * self.xsec_per_g_ref() as f64 * t;
-    let r_m = (self.v_mean as f64).max(1e-3) * t;
-    sigma_m2 / (core::f64::consts::PI * r_m * r_m)
-  }
-  /// cross-section per gram at the configured grain radius (m²/g)
-  pub fn xsec_per_g_ref(&self) -> f32 {
-    let s_m = (self.diameter_um * 0.5).max(1e-3) * 1e-6;
-    3.0 / (4.0 * self.density_gcm3.max(1e-3) * 1e6 * s_m)
-  }
 }
 
 /// Age band of one dust tier, as multiples of the TTL: the tier draws clusters aged
@@ -2182,8 +2300,6 @@ pub struct DustHostState {
   pub jet: Option<JetState>,
   /// TTL (scaled s) of the latest tick
   pub ttl_s: f64,
-  /// cross-section per gram at the reference grain size (m²/g)
-  pub xsec_per_g_ref: f32,
   /// next closed window to emit (None: derive it from the ring / the TTL)
   pub next_window: Option<i64>,
   /// the youngest ring batch is the provisional preview of the open window
@@ -2226,7 +2342,6 @@ impl DustHostState {
       upload_seq: 0,
       jet: None,
       ttl_s: 0.0,
-      xsec_per_g_ref: 0.0,
       next_window: None,
       provisional: false,
       grid_s: 0.0,
@@ -2338,7 +2453,6 @@ impl DustHostState {
     // after the reset (which clears them): a system filled in one pass is drawn with this tick's
     // band, not a zero one (every cluster but the newest was culled)
     self.ttl_s = cfg_now.ttl_s;
-    self.xsec_per_g_ref = cfg_now.xsec_per_g_ref();
     if self.provisional {
       if let Some(b) = self.ring.batches.pop_back() {
         self.ring.head = b.first;
@@ -2517,27 +2631,24 @@ impl DustHostState {
     if live_count == 0 {
       return None;
     }
-    let rn = norm(jet.r_m);
-    let g = SUN_MU_M3_S2 / (rn * rn);
     let (min_age, max_age) = self.age_band_s(self.ttl_s);
+    // the anchor is the nucleus centre at the tick (the jet site less its rotated offset): the
+    // splat's spiral interpolation of a sample's time segment turns about the local origin
+    let centre = jet.centre_m();
     Some(DustDrawState {
-      anchor_m: jet.r_m,
+      anchor_m: centre,
       tier: 0,
       ring_base: self.ring_base,
       first_slot,
       live_count,
       capacity: self.ring.capacity,
       compute_wait,
-      frame: DustFrame::new(jet.r_m, jet.t_s, [0.0, 0.0, 0.0, 1.0], max_age as f32)
+      frame: DustFrame::new(centre, jet.t_s, [0.0, 0.0, 0.0, 1.0], max_age as f32)
         .with_band(min_age as f32, self.band.fade)
-        .with_streams(self.stream_shift()),
-      anti_sun_g: [
-        (jet.r_m[0] / rn) as f32,
-        (jet.r_m[1] / rn) as f32,
-        (jet.r_m[2] / rn) as f32,
-        g as f32,
-      ],
-      tau_ref: 0.0,
+        .with_streams(self.stream_shift())
+        .with_spin(jet.spin_or_still()),
+      albedo: 0.0,
+      ttl_s: self.ttl_s as f32,
     })
   }
 }
@@ -2589,9 +2700,8 @@ pub struct DustSystemState {
   pub tiers: alloc::vec::Vec<DustHostState>,
   /// monotonic batch descriptor upload counter of the system (selects the descriptor slot)
   pub upload_seq: u64,
-  /// exposure reference ([`DustEmitConfig::tau_ref`] at the jet's current distance, the last
-  /// positive one beyond the production cutoff), set by the emission tick
-  pub tau_ref: f64,
+  /// geometric albedo of the dust ([`DustEmitConfig::albedo`]), set by the emission tick
+  pub albedo: f32,
   /// the emission inputs changed (rotation model, jet parameters): the next [`Self::tick`] drops
   /// the history and re-emits it with the new ones ([`Self::request_reemit`])
   pub reemit: bool,
@@ -2647,7 +2757,7 @@ impl DustSystemState {
     Self {
       tiers,
       upload_seq: 0,
-      tau_ref: 0.0,
+      albedo: 0.0,
       reemit: false,
       spin_model: None,
       complete: false,
@@ -2785,7 +2895,7 @@ impl DustSystemState {
       })
       .collect();
     for s in &mut states {
-      s.tau_ref = self.tau_ref as f32;
+      s.albedo = self.albedo;
     }
     states
   }

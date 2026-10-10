@@ -289,6 +289,12 @@
   <data name="Tabs_Model_Albedo" xml:space="preserve">
     <value>Albedo</value>
   </data>
+  <data name="Tabs_Model_ScatteringEfficiency" xml:space="preserve">
+    <value>Radiation pressure Q_pr</value>
+  </data>
+  <data name="Tabs_Model_GeometricAlbedo" xml:space="preserve">
+    <value>Geometric albedo p</value>
+  </data>
   <data name="Tabs_Model_Beta" xml:space="preserve">
     <value>Beta</value>
   </data>

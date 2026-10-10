@@ -773,6 +773,58 @@ pub unsafe extern "C" fn avkSimulationContext_setDustFlowSpeed(
   ctx_ref.set_dust_flow_speed(scene_id, speed as f64).is_some()
 }
 
+/// A view's dust exposure (see `dust::DustExposure`). 32 bytes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CDustExposure {
+  /// white point: the radiance factor (`τ · p · Φ(α) / r_h²`) shown as white
+  pub white_rf: f32,
+  /// the median dust texel (radiance factor)
+  pub p50_rf: f32,
+  /// auto softening in use
+  pub softening: f32,
+  /// the white point as a V surface brightness (mag/arcsec²)
+  pub mag_arcsec2: f32,
+  /// `log2(1 / white_rf)`
+  pub ev: f32,
+  /// 1 when `AETHERVK_DUST_EXPOSURE=fixed[:μ]` is in force
+  pub fixed: u32,
+  pub _pad: [u32; 2],
+}
+const _: () = assert!(core::mem::size_of::<CDustExposure>() == 32);
+
+/// Writes the dust exposure of the view `pe_id` into `out`; false without a view or a device.
+///
+/// # Safety
+/// FFI Contract: `out` points to a writable `CDustExposure`
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_dustExposure(
+  ctx: *mut SimulationContext,
+  pe_id: u64,
+  out: *mut CDustExposure,
+) -> bool {
+  if ctx.is_null() || out.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let Some(e) = ctx_ref.dust_exposure(gpu::PresentationEngineHandle(pe_id)) else {
+    return false;
+  };
+  unsafe {
+    *out = CDustExposure {
+      white_rf: e.white,
+      p50_rf: e.p50,
+      softening: e.softening,
+      mag_arcsec2: e.mag_arcsec2,
+      ev: e.ev,
+      fixed: e.fixed as u32,
+      _pad: [0; 2],
+    };
+  }
+  true
+}
+
 /// Writes up to `max` dust tier summaries of `scene_id` into `out`; returns how many tiers exist.
 ///
 /// # Safety
@@ -1325,7 +1377,7 @@ pub unsafe extern "C" fn avkSimulationContext_startSimulation(
 /// (other children of `parent_entity` that have a `ParticleSystemComponent`), excluding
 /// `skip_entity` (the jet just created or currently being modified).
 ///
-/// Common params: mass_variability_perc, diametre_um, density_gcm3, scattering_efficiency,
+/// Common params: diametre_um, density_gcm3, scattering_efficiency, geometric_albedo,
 /// afrho_0_cm, afrho_power, afrho_cutoff_au, afrho_max_value_cm.
 fn propagate_common_params(
   scene: &aethervk_core_rlib::scene::Scene,
@@ -1345,10 +1397,10 @@ fn propagate_common_params(
       child,
       |ps: &mut aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
         let ep = &mut ps.emission_params;
-        ep.mass_variability_perc = ps_dto.mass_variability_perc;
         ep.diametre_um = ps_dto.diametre_um;
         ep.density_gcm3 = ps_dto.density_gcm3;
         ep.scattering_efficiency = ps_dto.scattering_efficiency;
+        ep.geometric_albedo = ps_dto.geometric_albedo;
         ep.afrho_0_cm = ps_dto.afrho_0_cm;
         ep.afrho_power = ps_dto.afrho_power;
         ep.afrho_cutoff_au = ps_dto.afrho_cutoff_au;
@@ -1547,10 +1599,10 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
   );
 
   let emit_params = aethervk_core_rlib::scene::particles::ParticleSystemEmitParams {
-    mass_variability_perc: ps_dto.mass_variability_perc,
     diametre_um: ps_dto.diametre_um,
     density_gcm3: ps_dto.density_gcm3,
     scattering_efficiency: ps_dto.scattering_efficiency,
+    geometric_albedo: ps_dto.geometric_albedo,
     afrho_0_cm: ps_dto.afrho_0_cm,
     afrho_power: ps_dto.afrho_power,
     afrho_cutoff_au: ps_dto.afrho_cutoff_au,
@@ -1587,16 +1639,24 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
   let render_device_handle = ctx_ref.render_device_handle();
 
   // ignition: "now" = the scene's current epoch, so the tail is built from the moment the jet
-  // is added (nothing exists before it; a seek before it shows no dust)
-  let emission_start_us = match ps_dto.emission_start_us {
-    aethervk_core_rlib::scene::particles::EMISSION_START_NOW => scenes
-      .time_managers
-      .get(&scene_id)
-      .map(|t| {
-        aethervk_core_rlib::scene::particles::emission_start_us_from_epoch(t.current_epoch())
-      })
-      .unwrap_or(aethervk_core_rlib::scene::particles::EMISSION_START_PREEXISTING),
-    us => us,
+  // is added (nothing exists before it; a seek before it shows no dust). The clock is created
+  // with the scene and never removed: a scene without one is broken, and the jet is refused
+  // rather than given a silent pre-existing tail
+  let clock = scenes.time_managers.get(&scene_id).map(|t| t.current_epoch());
+  let emission_start_us = match aethervk_core_rlib::scene::particles::resolve_emission_start_us(
+    ps_dto.emission_start_us,
+    clock,
+  ) {
+    Some(us) => us,
+    None => {
+      aethervk_oshal_rlib::log!("[Dust] scene {scene_id} has no clock: jet refused");
+      emit_breadcrumb(
+        1,
+        "avkSimulationContext_addParticleSystem: scene has no clock",
+      );
+      scene_guard.scene.remove_entity(jet_entity);
+      return false;
+    }
   };
 
   let ps_component = match aethervk_core_rlib::scene::particles::ParticleSystemComponent::new(
@@ -1719,10 +1779,10 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
   );
 
   let emit_params = aethervk_core_rlib::scene::particles::ParticleSystemEmitParams {
-    mass_variability_perc: ps_dto.mass_variability_perc,
     diametre_um: ps_dto.diametre_um,
     density_gcm3: ps_dto.density_gcm3,
     scattering_efficiency: ps_dto.scattering_efficiency,
+    geometric_albedo: ps_dto.geometric_albedo,
     afrho_0_cm: ps_dto.afrho_0_cm,
     afrho_power: ps_dto.afrho_power,
     afrho_cutoff_au: ps_dto.afrho_cutoff_au,

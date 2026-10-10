@@ -46,7 +46,9 @@
 //! independent of the thread order up to the float rounding of each packet's own evaluation.
 //!
 //! Colour. The age rotates the stream colour's hue in OKLab (Ottosson 2020) from itself (at the
-//! jet) to its complement (at [`DUST_AGE_HUE_SPAN`] TTL), log in age ([`age_color`]).
+//! jet) to its complement at one TTL of the system, linear in age, constant beyond
+//! ([`age_color`]); the rotated colour is brought back into the sRGB gamut by reducing its chroma
+//! ([`oklab_to_gamut`]), never by clamping channels (that turns the hue).
 use super::{
   CHILD_ID_MASK, DUST_VIEW_FLOW, DUST_VIEW_TRACERS, DustCluster, DustFlowUniform, DustFrame,
   DustRenderCluster, TRACER_PX, child_id, consts,
@@ -59,9 +61,16 @@ use aethervk_oshal_rlib::math::FloatLike;
 // ─── Constants (mirror of dust_common.glsl DUST_PYR_* / DUST_SPLAT_*) ───────
 
 /// words of the pyramid header (level table, this frame's maxima and the view words)
-pub const PYRAMID_HEADER_WORDS: u32 = 64;
-/// words per pyramid texel: `τ`, `τ·r`, `τ·g`, `τ·b` (fixed point), nearest dust depth (AU, f32 bits)
+pub const PYRAMID_HEADER_WORDS: u32 = 256;
+/// words per pyramid texel: `τ`, `τ·r`, `τ·g`, `τ·b` (fixed point, the colour words at
+/// [`DUST_COLOR_SCALE`] times the τ counts), nearest dust depth (AU, f32 bits)
 pub const PYRAMID_TEXEL_WORDS: u32 = 5;
+/// the colour words' fixed point over the τ counts': a one-count deposit writes `16 · c` ± the
+/// dither, not a colour corner (at one count per texel the hashed rounding of `counts · c` left
+/// every faint texel a pure (1, 1, 0) / (1, 0, 0) / (0, 1, 0) speckle, unbiased in the mean but
+/// visible); the composite divides the colour sums by it (`composite_sample`, `composite.frag`).
+/// Mirror of `DUST_COLOR_SCALE`.
+pub const DUST_COLOR_SCALE: f32 = 16.0;
 /// header words
 pub const PYR_LEVELS: u32 = 0;
 pub const PYR_WIDTH: u32 = 1;
@@ -78,6 +87,16 @@ pub const PYR_T_LO: u32 = 6;
 pub const PYR_LEVEL_MASK: u32 = 7;
 /// tracer dot height in counts (f32 bits): `TRACER_LEVEL · white / unit`
 pub const PYR_TRACER_COUNTS: u32 = 8;
+/// f32 bits: the white point (radiance factor) the composite shows this frame with (host-written,
+/// for dump readers: `.pyr` dumps are self-describing)
+pub const PYR_WHITE: u32 = 9;
+/// f32 bits: the auto softening of this frame (host-written)
+pub const PYR_SOFTENING: u32 = 10;
+/// the dust phase function Φ(α) at integer degrees 0..=180 ([`PHASE_HM_0DEG`], f32 bits, 181
+/// words, host-written with the header): the splat's radiance weight reads it from here — a
+/// `const float[181]` in the shader with a dynamic index changed the GPU's splats even when
+/// the weight was off
+pub const PYR_PHASE_LUT: u32 = 64;
 /// the measurement grid `(offset, width, height)` ([`PyramidLayout::measure`])
 pub const PYR_MEASURE: u32 = 12;
 /// the fixed-point unit this frame's counts were written with (f32 bits, host-written; 0 when
@@ -85,7 +104,7 @@ pub const PYR_MEASURE: u32 = 12;
 pub const PYR_UNIT: u32 = 15;
 /// per level `ℓ`: `(offset in words, width, height)` at `PYR_TABLE + 3ℓ`
 pub const PYR_TABLE: u32 = 16;
-pub const PYRAMID_MAX_LEVELS: u32 = (PYRAMID_HEADER_WORDS - PYR_TABLE) / 3;
+pub const PYRAMID_MAX_LEVELS: u32 = (PYR_PHASE_LUT - PYR_TABLE) / 3;
 /// a splat is scattered at the lowest level where its smallest screen σ is this many texels
 pub const DUST_SPLAT_SIGMA_TEXELS: f32 = 2.0;
 /// variance of the pixel low-pass filter added to every projected covariance (px²)
@@ -131,11 +150,6 @@ pub const DUST_SPLAT_MAX_TEXELS: u32 = 16384;
 /// pyramid level the white point and the auto softening are measured on (texels of 16 px, the
 /// former 64 × 36 tile grid at 1080p)
 pub const DUST_WHITE_LEVEL: u32 = 4;
-/// age at which the hue ramp reaches the complement, in TTL ([`DUST_AGE_HUE_TAU_S`]): the oldest
-/// tier's end
-pub const DUST_AGE_HUE_SPAN: f32 = 64.0;
-/// age scale of the hue ramp (s): the jet TTL (30 d)
-pub const DUST_AGE_HUE_TAU_S: f32 = 30.0 * 86400.0;
 /// metres per AU (`dust::AU_M` is f64)
 const AU_M_F32: f32 = 1.495_978_707e11;
 
@@ -155,7 +169,12 @@ pub struct DustMoments {
   /// yz, zz, `z` age (s), `w` child-pattern id (u32 bits)
   pub cov_b_age_id: [f32; 4],
   /// the size polyline: `xyz` local position (m) of size-bin edge `j` (`β_j` from `β/F` to
-  /// `β·F`, equal cross-section bins), `w` its speed factor `√(β_j/β)` (scales the dispersion)
+  /// `β·F`, equal cross-section bins). `w`: edges 0 and 16 hold their speed factors `√(β_j/β)`
+  /// (the factors are linear in `j`, [`DustMoments::edge_factor`]); edge 1 holds the nucleus
+  /// spin rate ω (rad/s) and edges 2..=4 its unit axis (particle-system axes), the spiral
+  /// interpolation of the splat ([`spiral_point`]); edge 5 the cluster's heliocentric distance
+  /// (AU) and edges 6..=8 the unit direction to the Sun (particle-system axes), the radiance
+  /// weight ([`radiance_weight`])
   pub edges: [[f32; 4]; SIZE_EDGES as usize],
 }
 const _: () = assert!(core::mem::size_of::<DustMoments>() == 320);
@@ -202,9 +221,27 @@ impl DustMoments {
   pub fn edge(&self, j: usize) -> [f32; 3] {
     [self.edges[j][0], self.edges[j][1], self.edges[j][2]]
   }
-  /// speed factor `√(β_j/β)` of edge `j`
+  /// speed factor `√(β_j/β)` of edge `j`: linear in `j` ([`size_edge_sqrt_beta`]), from the
+  /// stored factors of the first and last edge. Mirror of `dust_edge_factor`.
   pub fn edge_factor(&self, j: usize) -> f32 {
-    self.edges[j][3]
+    let (lo, hi) = (self.edges[0][3], self.edges[SIZE_BINS as usize][3]);
+    lo + (hi - lo) * (j as f32 / SIZE_BINS as f32)
+  }
+  /// nucleus spin rate ω (rad/s), 0 without rotation
+  pub fn spin_rate(&self) -> f32 {
+    self.edges[1][3]
+  }
+  /// unit spin axis (particle-system axes)
+  pub fn spin_axis(&self) -> [f32; 3] {
+    [self.edges[2][3], self.edges[3][3], self.edges[4][3]]
+  }
+  /// heliocentric distance of the cluster's mean (AU)
+  pub fn helio_au(&self) -> f32 {
+    self.edges[5][3]
+  }
+  /// unit direction from the cluster to the Sun (particle-system axes)
+  pub fn sun_dir(&self) -> [f32; 3] {
+    [self.edges[6][3], self.edges[7][3], self.edges[8][3]]
   }
   /// `tr(Σ_v)/3`: the mean variance of the velocity dispersion (m²)
   pub fn mean_var(&self) -> f32 {
@@ -250,17 +287,20 @@ pub struct DustSplatPushConstants {
   pub live_count: u32,
   /// view flags ([`DUST_VIEW_FLOW`], [`DUST_VIEW_TRACERS`])
   pub flags: u32,
-  /// raw dust exposure: gain / reference optical depth (the white point is applied by the composite)
+  /// exposure: the stream colour's alpha (1 = photometric: the pyramid holds radiance factors
+  /// `τ · p · Φ(α) / r_h²`; the white point is applied by the composite)
   pub exposure: f32,
   /// counts per unit of exposure-scaled optical depth × px² (1 / fixed-point unit)
   pub inv_unit: f32,
   /// stream colour, 8 bits per channel (`r | g << 8 | b << 16`)
   pub color: u32,
-  /// layer units per metre (the mvp maps local metres × this to clip)
-  pub units_per_m: f32,
+  /// geometric albedo of the dust: every cluster's flux is weighted by `p · Φ(α) / r_h²`
+  /// ([`radiance_weight`]); `≤ 0` draws the unweighted optical depth (tests, diagnostics)
+  pub albedo: f32,
   /// particle-system local metres → clip
   pub mvp: [f32; 16],
-  /// eye position in particle-system local metres (depth of the packets), `w` spare
+  /// eye position in particle-system local metres (depth of the packets); `w` = the system's TTL
+  /// (s), the age clock of the hue ramp ([`age_color`]; `≤ 0` = the stream colour)
   pub eye_local: [f32; 4],
 }
 const _: () = assert!(core::mem::size_of::<DustSplatPushConstants>() == 128);
@@ -325,6 +365,9 @@ impl PyramidLayout {
       h[PYR_TABLE as usize + 3 * l] = off;
       h[PYR_TABLE as usize + 3 * l + 1] = w;
       h[PYR_TABLE as usize + 3 * l + 2] = hh;
+    }
+    for (i, v) in super::phase::PHASE_HM_0DEG.iter().enumerate() {
+      h[PYR_PHASE_LUT as usize + i] = v.to_bits();
     }
     h
   }
@@ -427,6 +470,27 @@ pub fn packet_moments(
     let local = qrot(rot, r_j.sub(&ps).to_f32());
     *e = [local[0], local[1], local[2], factor];
   }
+  // the nucleus spin in the spare `w` lanes (the factors are linear in `j`: the first and last
+  // edge keep theirs, `DustMoments::edge_factor`)
+  let w = frame.spin_vector();
+  let omega = <f32 as FloatLike>::sqrt(dot3(w, w));
+  let axis = if omega > 0.0 {
+    scale3(w, 1.0 / omega)
+  } else {
+    [0.0, 0.0, 1.0]
+  };
+  edges[1][3] = omega;
+  edges[2][3] = axis[0];
+  edges[3][3] = axis[1];
+  edges[4][3] = axis[2];
+  // the heliocentric distance and the Sun direction of the mean, for the radiance weight
+  let r_m = r.to_f32();
+  let r_n = <f32 as FloatLike>::sqrt(dot3(r_m, r_m)).max(1.0);
+  let sun = qrot(rot, scale3(r_m, -1.0 / r_n));
+  edges[5][3] = r_n / super::AU_M as f32;
+  edges[6][3] = sun[0];
+  edges[7][3] = sun[1];
+  edges[8][3] = sun[2];
   let m = DustMoments {
     mean_flux: [
       rc.pos_size[0],
@@ -623,18 +687,19 @@ pub fn bin_chord_packet(m: &DustMoments, b: usize, seg_t: [f32; 3]) -> Packet {
   }
 }
 
-/// The time segment of a sample is treated as an **arc about the jet** when it is at least this
-/// fraction of the predecessor's distance from the jet: young dust near the source, where the
-/// nucleus turns between two samples (13° per 28-min sample at 12.4 h) and the dust emitted in
-/// between lies on a spiral from the sample's direction to the predecessor's, not on the chord
-/// (the chord from the nucleus to the predecessor sat at the predecessor's direction all along,
-/// a third of the cone's width off at 5 km). Far from the source the segment is a sliver of the
-/// radius and a straight segment is exact.
-pub const ARC_MIN_FRACTION: f32 = 0.1;
-/// ... and only within this many sample intervals of the emission: an old cluster whose mean
-/// happens to pass near the jet (the trail runs through the comet) must not have its pieces
-/// swung about the jet by the random angle between two of its samples' directions.
-pub const ARC_MAX_AGE_SAMPLES: f32 = 8.0;
+/// The time segment of a sample is drawn as a **spiral about the nucleus centre** (the local
+/// origin, [`spiral_point`]) when the nucleus turns by more than this angle (rad) between the
+/// sample and its predecessor: young dust near the source, where the nucleus turns 13° per
+/// 28-min sample at 12.4 h and the dust emitted in between lies on the spiral from the sample's
+/// direction to the predecessor's, not on the chord (the chord sat at the predecessor's
+/// direction all along, a third of the cone's width off at 5 km). Below it the straight
+/// segment is the spiral to within `R·θ²/8`.
+pub const SPIRAL_MIN_TURN: f32 = 0.01;
+/// ... and only within this many sample intervals of the emission: the spiral identity holds
+/// while the dust moves with the emitter's rotation; the radiation-pressure drift
+/// (½·β·g·age², not turned by the spin) is ≤ 1 % of the spiral radius `v·age` within 8 samples
+/// of 28 min, and grows without bound beyond.
+pub const SPIRAL_MAX_AGE_SAMPLES: f32 = 8.0;
 
 /// Rodrigues rotation of `v` by `angle` about the unit `axis`
 fn rotate3(v: [f32; 3], axis: [f32; 3], angle: f32) -> [f32; 3] {
@@ -651,57 +716,36 @@ fn rotate3(v: [f32; 3], axis: [f32; 3], angle: f32) -> [f32; 3] {
   ]
 }
 
-/// The directions (from the jet) of a sample and its predecessor when their time segment is an
-/// arc ([`ARC_MIN_FRACTION`]): `None` for a straight segment. A sample too close to the jet to
-/// have a direction of its own (the one pinned at "now") takes the rotation seen from the
-/// predecessor's predecessor `pp`, continued one step. Mirror of `dust_arc_dirs`.
-pub fn arc_dirs(
+/// The spiral of a rigidly rotating emitter. The nucleus turns by `ω` about `axis` through the
+/// local origin; its site `s` and jet direction `d` turn with it, so the dust of age `τ` (speed
+/// `v`, now) sits at `R(−ωτ)·(s + vτ·d)` with `s`, `d` the site and direction *now*: a point
+/// linear in `τ` once un-spun by `R(+ωτ)`. Two samples of ages `age_o` (`own`) and `age_p`
+/// (`pred`) are un-spun, interpolated linearly in `τ(u) = age_o + u·(age_p − age_o)`, and
+/// re-spun by `R(−ω·τ(u))`: exact for that emitter (the ejection speed and the site offset
+/// enter only through the two samples; proof in `dust_v3.md`), and the straight segment when
+/// `ω = 0`. Mirror of `dust_spiral_point`.
+pub fn spiral_point(
   own: [f32; 3],
   pred: [f32; 3],
-  pp: Option<[f32; 3]>,
-) -> Option<([f32; 3], [f32; 3])> {
-  let sq = <f32 as FloatLike>::sqrt;
-  let rp = sq(dot3(pred, pred));
-  let seg = sub3(pred, own);
-  if !(rp > 0.0) || sq(dot3(seg, seg)) < ARC_MIN_FRACTION * rp {
-    return None;
-  }
-  let d_p = scale3(pred, 1.0 / rp);
-  let ro = sq(dot3(own, own));
-  let d_o = if ro > ARC_MIN_FRACTION * rp {
-    scale3(own, 1.0 / ro)
-  } else {
-    match pp {
-      Some(q) => {
-        let rq = sq(dot3(q, q));
-        if !(rq > 0.0) {
-          return Some((d_p, d_p));
-        }
-        let d_q = scale3(q, 1.0 / rq);
-        let ax = cross3(d_q, d_p);
-        let sn = sq(dot3(ax, ax));
-        if sn < 1e-6 {
-          return Some((d_p, d_p));
-        }
-        let angle = <f32 as FloatLike>::atan2(sn, dot3(d_q, d_p));
-        rotate3(d_p, scale3(ax, 1.0 / sn), angle)
-      }
-      None => d_p,
-    }
-  };
-  Some((d_o, d_p))
+  age_o: f32,
+  age_p: f32,
+  axis: [f32; 3],
+  omega: f32,
+  u: f32,
+) -> [f32; 3] {
+  let l_o = rotate3(own, axis, omega * age_o);
+  let l_p = rotate3(pred, axis, omega * age_p);
+  let l = add3(l_o, scale3(sub3(l_p, l_o), u));
+  rotate3(l, axis, -omega * (age_o + u * (age_p - age_o)))
 }
 
-/// The point at fraction `u` of the arc from `own` (u = 0) to `pred` (u = 1): the direction
-/// interpolated between `d_o` and `d_p`, the distance from the jet linearly. Mirror of
-/// `dust_arc_point`.
-pub fn arc_point(own: [f32; 3], pred: [f32; 3], d_o: [f32; 3], d_p: [f32; 3], u: f32) -> [f32; 3] {
-  let sq = <f32 as FloatLike>::sqrt;
-  let (ro, rp) = (sq(dot3(own, own)), sq(dot3(pred, pred)));
-  let r = ro + u * (rp - ro);
-  let d = add3(scale3(d_o, 1.0 - u), scale3(d_p, u));
-  let n = sq(dot3(d, d)).max(1e-12);
-  scale3(d, r / n)
+/// The spiral gate of a sample with a predecessor ([`SPIRAL_MIN_TURN`],
+/// [`SPIRAL_MAX_AGE_SAMPLES`]): `Some((axis, ω))` when its time pieces follow the spiral.
+pub fn spiral_of(m: &DustMoments, p: &DustMoments) -> Option<([f32; 3], f32)> {
+  let omega = m.spin_rate();
+  let d_age = (p.age() - m.age()).max(0.0);
+  (omega * d_age > SPIRAL_MIN_TURN && m.age() <= SPIRAL_MAX_AGE_SAMPLES * d_age)
+    .then(|| (m.spin_axis(), omega))
 }
 
 /// Sweep count of a bin ([`TIME_SWEEP_MAX`]): the larger displacement of its two edges to the
@@ -769,7 +813,7 @@ pub fn subpackets_merged(
   pred: Option<&DustMoments>,
   merged: bool,
 ) -> alloc::vec::Vec<Packet> {
-  subpackets_swept(m, seg, pred, merged, true, None, None)
+  subpackets_swept(m, seg, pred, merged, true, None)
 }
 
 /// [`subpackets_merged`] with the time sweep decided on screen through `px`.
@@ -780,14 +824,18 @@ pub fn subpackets_swept(
   merged: bool,
   pred_merged: bool,
   px: Option<&dyn Fn([f32; 3]) -> Option<[f32; 2]>>,
-  pp: Option<&DustMoments>,
 ) -> alloc::vec::Vec<Packet> {
-  // the arc of a rotating jet (`arc_dirs`): the pieces then follow it, and there are enough of
-  // them to draw it
-  let arc = pred
-    .filter(|p| m.age() <= ARC_MAX_AGE_SAMPLES * (p.age() - m.age()).max(0.0))
-    .and_then(|p| arc_dirs(m.mean(), p.mean(), pp.map(|q| q.mean())));
-  let n_t = if arc.is_some() {
+  // the spiral of a rotating nucleus (`spiral_of`): the pieces then follow it, and there are
+  // enough of them to draw it
+  let spiral = pred.and_then(|p| spiral_of(m, p));
+  let (age_o, age_p) = (m.age(), pred.map_or(m.age(), |p| p.age()));
+  let along = |start: [f32; 3], end: [f32; 3], u: f32| -> [f32; 3] {
+    match spiral {
+      Some((axis, omega)) => spiral_point(start, end, age_o, age_p, axis, omega, u),
+      None => add3(start, scale3(sub3(end, start), u)),
+    }
+  };
+  let n_t = if spiral.is_some() {
     TIME_PIECES_MAX
   } else {
     time_pieces(m, pred)
@@ -823,13 +871,8 @@ pub fn subpackets_swept(
         let u0 = t as f32 * inv;
         let sc = r0 + (1.0 - r0) * (u0 + 0.5 * inv);
         let sc2 = sc * sc;
-        let (mean, seg_t) = match arc {
-          Some((d_o, d_p)) => {
-            let a = arc_point(p.mean, pm, d_o, d_p, u0);
-            (a, sub3(arc_point(p.mean, pm, d_o, d_p, u0 + inv), a))
-          }
-          None => (add3(p.mean, scale3(seg, u0)), scale3(seg, inv)),
-        };
+        let mean = along(p.mean, pm, u0);
+        let seg_t = sub3(along(p.mean, pm, u0 + inv), mean);
         out.push(Packet {
           mean,
           cov: [
@@ -890,13 +933,8 @@ pub fn subpackets_swept(
         let u0 = t as f32 * inv;
         let sc = r0 + (1.0 - r0) * (u0 + 0.5 * inv);
         let sc2 = sc * sc;
-        let (mean, seg_p) = match arc {
-          Some((d_o, d_p)) => {
-            let a = arc_point(own.mean, pm, d_o, d_p, u0);
-            (a, sub3(arc_point(own.mean, pm, d_o, d_p, u0 + inv), a))
-          }
-          None => (add3(own.mean, scale3(seg_t, u0)), scale3(seg_t, inv)),
-        };
+        let mean = along(own.mean, pm, u0);
+        let seg_p = sub3(along(own.mean, pm, u0 + inv), mean);
         out.push(Packet {
           mean,
           cov: [
@@ -930,10 +968,7 @@ pub fn subpackets_swept(
         let u0 = t as f32 * inv;
         let sc = r0 + (1.0 - r0) * (u0 + 0.5 * inv);
         let sc2 = sc * sc * f2;
-        let shift = match arc {
-          Some((d_o, d_p)) => sub3(arc_point(mid, mid_p, d_o, d_p, u0), mid),
-          None => scale3(seg_t, u0),
-        };
+        let shift = sub3(along(mid, mid_p, u0), mid);
         out.push(Packet {
           mean: add3(own.mean, shift),
           cov: [
@@ -1038,6 +1073,62 @@ pub struct ScreenPacket {
   pub open: [bool; 2],
   /// density at the segment's ends, mean 1 (see [`Packet::rho`])
   pub rho: [f32; 2],
+  /// photometry (`albedo > 0`): the packet's mean (local m), the in-plane local offset per pixel
+  /// along x and y (`d = dx·kx + dy·ky`, the inverse of the projection's Jacobian within the
+  /// view plane), the unit Sun direction and r_h (AU) at the mean, the eye, and the radiance
+  /// weight at the mean (`PYR_TAU_MAX`): every texel then gets its own `p · Φ(α) / r_h²` at the
+  /// dust it holds ([`texel_weight`]) — a packet wide against the eye distance spans a range of
+  /// phase angles (the haze of a near perspective view). The eye is homogeneous: the direction
+  /// to it from a point `x` is `eye − eye_w · x` — a perspective projection's eye point (local m,
+  /// `eye_w` = 1) or an orthographic projection's eye at infinity along the view axis (the unit
+  /// direction, `eye_w` = 0: an orthographic camera has no position, only a near plane, and a
+  /// point eye at the camera's position lit the dust beside the camera at α → 180°, a forward
+  /// glare no telescope sees)
+  pub mean: [f32; 3],
+  pub kx: [f32; 3],
+  pub ky: [f32; 3],
+  pub sun: [f32; 3],
+  pub r_h_au: f32,
+  pub eye: [f32; 3],
+  pub eye_w: f32,
+  pub albedo: f32,
+  pub w_mean: f32,
+}
+
+/// The photometry of a cluster's packets: the dust's albedo (`≤ 0`: none), the unit Sun
+/// direction and r_h (AU) at the cluster's mean ([`DustMoments::sun_dir`], [`DustMoments::helio_au`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Photometry {
+  pub albedo: f32,
+  pub sun: [f32; 3],
+  pub r_h_au: f32,
+}
+
+impl Photometry {
+  pub const NONE: Self = Self {
+    albedo: 0.0,
+    sun: [0.0, 0.0, 1.0],
+    r_h_au: 1.0,
+  };
+}
+
+/// The radiance weight at the dust a texel holds: the packet's mean displaced by the texel's
+/// in-plane offset (`kx`, `ky`), the Sun direction and r_h moved with it (first order: the
+/// packet is small against r_h), the phase angle to the eye. Mirror of `dust_texel_weight`.
+pub fn texel_weight(p: &ScreenPacket, x: [f32; 2]) -> f32 {
+  let (dx, dy) = (x[0] - p.mu[0], x[1] - p.mu[1]);
+  let d = add3(scale3(p.kx, dx), scale3(p.ky, dy));
+  let pos = add3(p.mean, d);
+  // the heliocentric vector at the dust: −sun · r_h + d
+  let r_vec = add3(scale3(p.sun, -p.r_h_au * AU_M_F32), d);
+  let rn = <f32 as FloatLike>::sqrt(dot3(r_vec, r_vec)).max(1.0);
+  let sun = scale3(r_vec, -1.0 / rn);
+  super::phase::radiance_weight(
+    p.albedo,
+    sun,
+    sub3(p.eye, scale3(pos, p.eye_w)),
+    rn / AU_M_F32,
+  )
 }
 
 /// Projects a packet with the Jacobian of `mvp` at its mean (`units_per_m` scales local metres to
@@ -1050,6 +1141,28 @@ pub fn project_packet(
   width: u32,
   height: u32,
   eye_local: [f32; 3],
+) -> Option<ScreenPacket> {
+  project_packet_lit(
+    p,
+    exposure,
+    mvp,
+    width,
+    height,
+    eye_local,
+    &Photometry::NONE,
+  )
+}
+
+/// [`project_packet`] with the radiance weight ([`Photometry`]): the texels get
+/// `p · Φ(α) / r_h²` at their own position ([`texel_weight`]). Mirror of `dust_project_packet`.
+pub fn project_packet_lit(
+  p: &Packet,
+  exposure: f32,
+  mvp: &[f32; 16],
+  width: u32,
+  height: u32,
+  eye_local: [f32; 3],
+  phot: &Photometry,
 ) -> Option<ScreenPacket> {
   let m = |r: usize, c: usize| mvp[c * 4 + r];
   let row = |r: usize| [m(r, 0), m(r, 1), m(r, 2)];
@@ -1083,6 +1196,18 @@ pub fn project_packet(
   let seg = [dot3(jx, p.seg), dot3(jy, p.seg)];
   // pixel area at the packet's depth: 1 / sqrt(det(J Jᵀ)) m² per px²
   let g = [dot3(jx, jx), dot3(jx, jy), dot3(jy, jy)];
+  // local metres per pixel within the view plane: the inverse of the Jacobian's Gram matrix
+  let (kx, ky) = {
+    let detg = g[0] * g[2] - g[1] * g[1];
+    if detg > 1e-30 {
+      (
+        scale3(sub3(scale3(jx, g[2]), scale3(jy, g[1])), 1.0 / detg),
+        scale3(sub3(scale3(jy, g[0]), scale3(jx, g[1])), 1.0 / detg),
+      )
+    } else {
+      ([0.0; 3], [0.0; 3])
+    }
+  };
   let det_g = (g[0] * g[2] - g[1] * g[1]).max(0.0);
   let half = 0.5 * (cov[0] + cov[2]);
   let dd = <f32 as FloatLike>::sqrt(
@@ -1126,6 +1251,63 @@ pub fn project_packet(
   {
     return None;
   }
+  // the view direction: the depth gradient of the projection (the w row when perspective, the
+  // clip-z row when orthographic), oriented so that the scene's origin lies in front of the eye
+  let perspective = dot3(r3, r3) > 0.0;
+  let fwd = {
+    let fwd_raw = if perspective { r3 } else { row(2) };
+    let fn2 = dot3(fwd_raw, fwd_raw);
+    if fn2 > 0.0 {
+      let f = scale3(fwd_raw, 1.0 / <f32 as FloatLike>::sqrt(fn2));
+      if dot3(scale3(eye_local, -1.0), f) < 0.0 {
+        scale3(f, -1.0)
+      } else {
+        f
+      }
+    } else {
+      [0.0; 3]
+    }
+  };
+  // the photometric eye: the eye point when perspective, at infinity along the view axis when
+  // orthographic (see `ScreenPacket::eye_w`)
+  let (eye_h, eye_w) = if perspective || dot3(fwd, fwd) == 0.0 {
+    (eye_local, 1.0)
+  } else {
+    (scale3(fwd, -1.0), 0.0)
+  };
+  let w_mean = if phot.albedo > 0.0 {
+    super::phase::radiance_weight(
+      phot.albedo,
+      phot.sun,
+      sub3(eye_h, scale3(p.mean, eye_w)),
+      phot.r_h_au,
+    )
+  } else {
+    1.0
+  };
+  // the part of the packet in front of the eye: a Gaussian along the view direction, cut at the
+  // eye's plane (the orthographic projection would draw the dust behind the camera too: the
+  // fountain of a near view rises through it; the truth clips at the camera's near plane)
+  let amp = {
+    if dot3(fwd, fwd) > 0.0 {
+      let depth = dot3(sub3(p.mean, eye_local), fwd);
+      let c = &p.cov;
+      let var_v = c[0] * fwd[0] * fwd[0]
+        + c[3] * fwd[1] * fwd[1]
+        + c[5] * fwd[2] * fwd[2]
+        + 2.0 * (c[1] * fwd[0] * fwd[1] + c[2] * fwd[0] * fwd[2] + c[4] * fwd[1] * fwd[2]);
+      let sigma_v = <f32 as FloatLike>::sqrt(var_v.max(0.0));
+      if sigma_v > 0.0 {
+        amp * 0.5 * (1.0 + erf(depth / (sigma_v * core::f32::consts::SQRT_2)))
+      } else if depth >= 0.0 {
+        amp
+      } else {
+        0.0
+      }
+    } else {
+      amp
+    }
+  };
   Some(ScreenPacket {
     mu,
     cov,
@@ -1136,6 +1318,15 @@ pub fn project_packet(
     depth_au,
     open: p.open,
     rho: p.rho,
+    mean: p.mean,
+    kx,
+    ky,
+    sun: phot.sun,
+    r_h_au: phot.r_h_au,
+    eye: eye_h,
+    eye_w,
+    albedo: phot.albedo,
+    w_mean,
   })
 }
 
@@ -1204,11 +1395,16 @@ pub fn capsule_tau(p: &ScreenPacket, x: [f32; 2]) -> f32 {
 
 // ─── Colour (mirror of dust_age_color) ──────────────────────────────────────
 
-/// Hue ramp position of an age: `ln(1 + age/τ) / ln(1 + span)` in `[0, 1]`.
-pub fn age_hue_fraction(age_s: f32) -> f32 {
-  let f = <f32 as FloatLike>::ln(1.0 + age_s.max(0.0) / DUST_AGE_HUE_TAU_S)
-    / <f32 as FloatLike>::ln(1.0 + DUST_AGE_HUE_SPAN);
-  f.clamp(0.0, 1.0)
+/// Hue ramp position of an age: `clamp(age / TTL, 0, 1)` — a linear clock (a viewer reads the hue
+/// back to an age; smoothstep would hide the first and last 15 % of a TTL), the complement at one
+/// TTL of the system and constant beyond (the older tiers are all complement). A TTL `≤ 0` means no
+/// rotation (the stream colour). Mirror of `dust_age_hue_fraction`.
+pub fn age_hue_fraction(age_s: f32, ttl_s: f32) -> f32 {
+  if ttl_s > 0.0 {
+    (age_s / ttl_s).clamp(0.0, 1.0)
+  } else {
+    0.0
+  }
 }
 
 /// OKLab coordinates of a linear colour (tests)
@@ -1230,6 +1426,11 @@ fn oklab_from_linear(c: [f32; 3]) -> [f32; 3] {
   ]
 }
 
+/// the plain OKLab → linear conversion, unclamped (tests)
+pub fn linear_from_oklab_pub(lab: [f32; 3]) -> [f32; 3] {
+  linear_from_oklab(lab)
+}
+
 /// OKLab → linear sRGB (Ottosson 2020).
 fn linear_from_oklab(lab: [f32; 3]) -> [f32; 3] {
   let l = lab[0] + 0.396_337_78 * lab[1] + 0.215_803_76 * lab[2];
@@ -1243,24 +1444,57 @@ fn linear_from_oklab(lab: [f32; 3]) -> [f32; 3] {
   ]
 }
 
-/// Colour of dust of age `age_s`: the stream colour's hue rotated in OKLab by `π · f(age)`
-/// ([`age_hue_fraction`]): the stream colour at the jet, its complement at the oldest ages,
-/// lightness and chroma kept, gamut-clipped to `[0, 1]`. Mirror of `dust_age_color`.
-pub fn age_color(stream: [f32; 3], age_s: f32) -> [f32; 3] {
-  let lab = oklab_from_linear([
-    stream[0].clamp(0.0, 1.0),
-    stream[1].clamp(0.0, 1.0),
-    stream[2].clamp(0.0, 1.0),
-  ]);
-  let th = core::f32::consts::PI * age_hue_fraction(age_s);
-  let (s, c) = (<f32 as FloatLike>::sin(th), <f32 as FloatLike>::cos(th));
-  let rot = [lab[0], c * lab[1] - s * lab[2], s * lab[1] + c * lab[2]];
-  let rgb = linear_from_oklab(rot);
+/// Linear sRGB of an OKLab colour brought into the `[0, 1]` gamut by reducing its chroma —
+/// lightness and hue kept — with 8 bisection steps on the chroma scale (no early exit: both
+/// mirrors run the same instructions), then clamped. A colour already in gamut comes back as the
+/// plain conversion. Mirror of `dust_oklab_to_gamut`.
+pub fn oklab_to_gamut(lab: [f32; 3]) -> [f32; 3] {
+  let inside = |c: [f32; 3]| {
+    c[0] >= -1e-4
+      && c[0] <= 1.0 + 1e-4
+      && c[1] >= -1e-4
+      && c[1] <= 1.0 + 1e-4
+      && c[2] >= -1e-4
+      && c[2] <= 1.0 + 1e-4
+  };
+  let full = linear_from_oklab(lab);
+  let mut rgb = full;
+  if !inside(full) {
+    // k ∈ [lo, hi]: lo is always in gamut (k = 0 is the grey of lightness L, inside for L in [0, 1])
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    let mut best = linear_from_oklab([lab[0], 0.0, 0.0]);
+    for _ in 0..8 {
+      let k = 0.5 * (lo + hi);
+      let c = linear_from_oklab([lab[0], k * lab[1], k * lab[2]]);
+      if inside(c) {
+        lo = k;
+        best = c;
+      } else {
+        hi = k;
+      }
+    }
+    rgb = best;
+  }
   [
     rgb[0].clamp(0.0, 1.0),
     rgb[1].clamp(0.0, 1.0),
     rgb[2].clamp(0.0, 1.0),
   ]
+}
+
+/// Colour of dust of age `age_s` in a system of TTL `ttl_s`: the stream colour's hue rotated in
+/// OKLab by `π · f(age)` ([`age_hue_fraction`]): the stream colour at the jet, its complement from
+/// one TTL on, lightness kept, chroma kept where the gamut allows ([`oklab_to_gamut`]). Mirror of
+/// `dust_age_color`.
+pub fn age_color(stream: [f32; 3], age_s: f32, ttl_s: f32) -> [f32; 3] {
+  let lab = oklab_from_linear([
+    stream[0].clamp(0.0, 1.0),
+    stream[1].clamp(0.0, 1.0),
+    stream[2].clamp(0.0, 1.0),
+  ]);
+  let th = core::f32::consts::PI * age_hue_fraction(age_s, ttl_s);
+  let (s, c) = (<f32 as FloatLike>::sin(th), <f32 as FloatLike>::cos(th));
+  oklab_to_gamut([lab[0], c * lab[1] - s * lab[2], s * lab[1] + c * lab[2]])
 }
 
 /// `r | g << 8 | b << 16` of a stream colour (the splat push constant)
@@ -1424,8 +1658,9 @@ pub fn splat_scatter(
   // the peak is measured whatever the unit (a view fainter than the unit must still move it:
   // `not_flow.rdc`), before any texel test
   let cur = f32::from_bits(pyramid[PYR_TAU_MAX as usize]);
-  if !(cur >= p.amp) {
-    pyramid[PYR_TAU_MAX as usize] = p.amp.to_bits();
+  let peak = p.amp * p.w_mean;
+  if !(cur >= peak) {
+    pyramid[PYR_TAU_MAX as usize] = peak.to_bits();
   }
   let mut level = layout.level_for_sigma(p.sigma_min);
   let ex = DUST_SPLAT_SIGMAS * <f32 as FloatLike>::sqrt(p.cov[0]);
@@ -1459,6 +1694,17 @@ pub fn splat_scatter(
     pyramid[PYR_LEVEL_MASK as usize] |= 1 << level;
   }
   written
+}
+
+/// 32-bit integer hash (lowbias32): the colour words' rounding threshold per texel, the same
+/// integer arithmetic on both mirrors. Mirror of `dust_hash32`.
+pub fn dust_hash32(mut x: u32) -> u32 {
+  x ^= x >> 16;
+  x = x.wrapping_mul(0x7feb_352d);
+  x ^= x >> 15;
+  x = x.wrapping_mul(0x846c_a68b);
+  x ^= x >> 16;
+  x
 }
 
 /// `dust_measure.comp` push constants: the view's pyramid. 16 bytes.
@@ -1531,7 +1777,16 @@ pub fn measure_texel(layout: &PyramidLayout, pyramid: &[u32], mask: u32, tx: u32
 /// The capsule of `p` into one grid of `w × h` texels of `s` px at word `off`: for each texel row
 /// only the x-range the segment's lateral band covers is visited, counts
 /// `round(τ · texel area · inv_unit)` (≤ [`DUST_COUNT_MAX_PER_ADD`]) by saturating adds; with
-/// `full` the colour and the nearest depth too. Mirror of `scatter_into` in `dust_splat.comp`.
+/// `full` the colour and the nearest depth too. The colour words are `⌊16 · counts · c + h⌋`
+/// ([`DUST_COLOR_SCALE`]) with a
+/// hashed threshold `h ∈ [0, 1)` per texel (an ordered dither): rounding `counts · c + 0.5` per
+/// deposit turned every faint texel (one-count deposits) into (1, 1, 0) whatever the age — r and
+/// g rounded up, b down — and the tail's faint regions read 30° off their hue; with the threshold
+/// a packet's faint deposits round up at some texels and down at others, so every box of texels
+/// averages to the colour. The threshold is a function of the texel alone: a per-cluster seed
+/// (the compact index or the cluster id) put the two mirrors' words 10 % apart at faint texels,
+/// and an error-diffusion carry coupled a texel's words to dithered counts elsewhere in the
+/// packet's loop; both failed the GPU parity. Mirror of `scatter_into` in `dust_splat.comp`.
 #[allow(clippy::too_many_arguments)]
 pub fn scatter_into(
   p: &ScreenPacket,
@@ -1570,7 +1825,10 @@ pub fn scatter_into(
     };
     for tx in x0..=x1 {
       let x = [(tx as f32 + 0.5) * s, yc];
-      let tau = capsule_tau(p, x) * area * inv_unit;
+      let mut tau = capsule_tau(p, x) * area * inv_unit;
+      if p.albedo > 0.0 {
+        tau *= texel_weight(p, x);
+      }
       if !(tau >= 0.0) || !tau.is_finite() {
         continue;
       }
@@ -1583,10 +1841,11 @@ pub fn scatter_into(
       let i = (off + (ty as u32 * w + tx as u32) * PYRAMID_TEXEL_WORDS) as usize;
       sat_add(&mut pyramid[i], counts);
       if full {
+        let hf = (dust_hash32(i as u32) >> 8) as f32 * (1.0 / 16_777_216.0);
         for k in 0..3 {
           sat_add(
             &mut pyramid[i + 1 + k],
-            (counts as f32 * color[k] + 0.5) as u32,
+            (counts as f32 * color[k] * DUST_COLOR_SCALE + hf) as u32,
           );
         }
         if pyramid[i + 4] == 0 || depth_bits < pyramid[i + 4] {
@@ -1617,8 +1876,12 @@ pub fn splat_tracer(mu: [f32; 2], counts: u32, layout: &PyramidLayout, pyramid: 
         continue;
       }
       let i = (off + (ty as u32 * w + tx as u32) * PYRAMID_TEXEL_WORDS) as usize;
-      for k in 0..4 {
-        sat_add(&mut pyramid[i + k], counts);
+      sat_add(&mut pyramid[i], counts);
+      for k in 1..4 {
+        sat_add(
+          &mut pyramid[i + k],
+          counts.saturating_mul(DUST_COLOR_SCALE as u32),
+        );
       }
     }
   }
@@ -1677,7 +1940,6 @@ pub fn splat_tier_range(
     }
     let pred_i = streak_pred(render, i);
     let pred = pred_i.map(|q| &moments[q]);
-    let pp = pred_i.and_then(|q| streak_pred(render, q)).map(|q| &moments[q]);
     let seg = match pred {
       Some(p) => sub3(p.mean(), m.mean()),
       None => [0.0; 3],
@@ -1686,7 +1948,13 @@ pub fn splat_tier_range(
     if pc.flags & DUST_VIEW_FLOW != 0 {
       exposure *= flow_factor(m.age(), flow);
     }
-    let color = age_color(stream, m.age());
+    // physical photometry: every texel of the packets gets `p · Φ(α) / r_h²` at the dust it holds
+    let phot = Photometry {
+      albedo: pc.albedo,
+      sun: m.sun_dir(),
+      r_h_au: m.helio_au(),
+    };
+    let color = age_color(stream, m.age(), pc.eye_local[3]);
     let mut first: Option<[f32; 2]> = None;
     // pooled only when the predecessor's polyline is below a pixel too: a just-emitted sample is
     // a point whose time pieces are shaped by its predecessor, and a predecessor whose sizes
@@ -1695,8 +1963,16 @@ pub fn splat_tier_range(
     let pred_merged = pred.is_none_or(|p| polyline_merged(p, &pc.mvp, layout.width, layout.height));
     let merged = polyline_merged(m, &pc.mvp, layout.width, layout.height) && pred_merged;
     let px = |q: [f32; 3]| project_point(q, &pc.mvp, layout.width, layout.height);
-    for p in subpackets_swept(m, seg, pred, merged, pred_merged, Some(&px), pp) {
-      if let Some(sp) = project_packet(&p, exposure, &pc.mvp, layout.width, layout.height, eye) {
+    for p in subpackets_swept(m, seg, pred, merged, pred_merged, Some(&px)) {
+      if let Some(sp) = project_packet_lit(
+        &p,
+        exposure,
+        &pc.mvp,
+        layout.width,
+        layout.height,
+        eye,
+        &phot,
+      ) {
         splat_scatter(&sp, color, layout, pc.inv_unit, pyramid);
         first.get_or_insert(sp.mu);
       }
@@ -1825,7 +2101,7 @@ pub fn composite_sample(
       }
       tau += wgt * c as f32 * scale;
       for k in 0..3 {
-        rgb[k] += wgt * pyramid[i + 1 + k] as f32 * scale;
+        rgb[k] += wgt * pyramid[i + 1 + k] as f32 * (scale / DUST_COLOR_SCALE);
       }
       let d = f32::from_bits(pyramid[i + 4]);
       if d < depth {
@@ -1847,7 +2123,7 @@ pub fn display_white_v4(measured: f32) -> f32 {
 }
 
 #[allow(dead_code)]
-const _USED: (u32, f32) = (CHILD_ID_MASK, DUST_AGE_HUE_SPAN);
+const _USED: u32 = CHILD_ID_MASK;
 
 // ─── Shape analysis: segmentation of a τ image and the progressiveness of its growth ─────
 // Used by the tests (`dust_grows_progressively_from_the_jet`) and the headless observer

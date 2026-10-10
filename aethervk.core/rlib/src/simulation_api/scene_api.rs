@@ -810,6 +810,30 @@ impl SimulationContext {
       .ok()
   }
 
+  /// The dust exposure of a view (`dust::DustExposure`: the white point as a radiance factor and
+  /// in V mag/arcsec², the EV, the auto softening); `None` without a view or a device.
+  pub fn dust_exposure(
+    &self,
+    pe: crate::gpu::PresentationEngineHandle,
+  ) -> Option<crate::scene::dust::DustExposure> {
+    use crate::gpu::WeakRenderFrontendExt;
+    let frontend = self.render_proxy.0.as_frontend()?;
+    let params = frontend
+      .with_device(self.render_proxy.1, |device| {
+        let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+          device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
+        vulkan_device.dust_view_params(pe).ok_or(crate::gpu_err!("no dust view"))
+      })
+      .ok()?;
+    let fixed = crate::scene::dust::dust_exposure_fixed();
+    Some(crate::scene::dust::DustExposure::of(
+      fixed.unwrap_or(params.white),
+      params.p50,
+      params.softening,
+      fixed.is_some(),
+    ))
+  }
+
   /// Shows or hides the comet label (`comet_indicator`), e.g. while in Earth observer mode.
   /// Synchronous `HiddenComponent` toggle; returns false when the scene or label is missing.
   pub fn set_comet_indicator_visible(&self, scene_id: u64, visible: bool) -> bool {

@@ -150,6 +150,7 @@ mod tests {
         .max_per_stage_descriptor_samplers,
       max_descriptor_set_update_after_bind_samplers: phys_device
         .max_descriptor_set_update_after_bind_samplers,
+      #[cfg(debug_assertions)]
       telemetry_query_pool: None,
     };
 

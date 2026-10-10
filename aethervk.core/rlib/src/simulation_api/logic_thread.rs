@@ -4344,12 +4344,8 @@ mod utils {
             Some((epoch_from_emission_start_us(ps.emission_start_us) - start_epoch).to_seconds())
           });
           sys.track_spin_model(rot_model);
-          // exposure reference from the current activity (smooth along the orbit, independent of
-          // the history and the camera); kept while the jet is beyond its production cutoff
-          let tau_ref = cfg_at(&jet).tau_ref();
-          if tau_ref > 0.0 && tau_ref.is_finite() {
-            sys.tau_ref = tau_ref;
-          }
+          // the dust's albedo: the splat's radiance weight (physical photometry, WP1)
+          sys.albedo = cfg_at(&jet).albedo;
           sys.tick(t_s, &jet_at, &cfg_at)
         })
         .unwrap_or_default();

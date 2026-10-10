@@ -324,6 +324,769 @@ fn emission_times_and_beta_are_in_range() {
   assert!(norm(sub(c.r0().to_f64(), r_expect)) < 0.05);
 }
 
+/// β is the radiation-pressure-to-gravity ratio of the configured grain, and the engine's
+/// `μ(1 − β)` propagation is the two-force motion (solar gravity + radiation pressure) of that
+/// grain: an independent two-force RK4 built from L☉, c, Q_pr, s and ρ — no β anywhere — lands
+/// where `kepler::propagate_f64(μ(1 − β))` and the emitted cluster land, and the early
+/// displacement from the comet is the syndyne limit ½·β·g☉·t² anti-sunward.
+#[test]
+fn beta_is_radiation_pressure_from_first_principles() {
+  use crate::scene::particles::ParticleSystemEmitParams;
+  const L_SUN_W: f64 = 3.828e26;
+  const C_M_S: f64 = 299_792_458.0;
+  let (d_um, rho_gcm3, q_pr) = (100.0f32, 0.533f32, 1.0f32);
+  let ep = ParticleSystemEmitParams {
+    diametre_um: d_um,
+    density_gcm3: rho_gcm3,
+    scattering_efficiency: q_pr,
+    ..bytemuck::Zeroable::zeroed()
+  };
+  let beta = ep.beta() as f64;
+  // β = 3 L Q_pr / (16 π c G M☉ ρ s): the composed constant and the value for this grain
+  let composed = 3.0 * L_SUN_W / (16.0 * core::f64::consts::PI * C_M_S * SUN_MU_M3_S2);
+  assert!(
+    (composed - 5.742e-4).abs() < 2e-7,
+    "composed constant {composed:.4e} kg/m²"
+  );
+  let (s_m, rho) = (d_um as f64 * 0.5e-6, rho_gcm3 as f64 * 1000.0);
+  let beta_expect = composed * q_pr as f64 / (rho * s_m);
+  assert!(
+    (beta - 0.021547).abs() < 1e-5,
+    "β {beta:.6} (expected {beta_expect:.6})"
+  );
+  assert!(
+    (beta - beta_expect).abs() < 1e-6,
+    "β {beta:.7} vs first principles {beta_expect:.7}"
+  );
+
+  // two separate forces on a grain of radius s and mass 4/3 π s³ ρ: gravity and the momentum
+  // flux of sunlight on its cross-section π s², Q_pr of it transferred
+  let mass_kg = 4.0 / 3.0 * core::f64::consts::PI * s_m * s_m * s_m * rho;
+  let rad_k = L_SUN_W * q_pr as f64 * core::f64::consts::PI * s_m * s_m
+    / (4.0 * core::f64::consts::PI * C_M_S * mass_kg);
+  let acc = |r: V3| -> V3 {
+    let d = norm(r);
+    add(
+      scale(r, -SUN_MU_M3_S2 / (d * d * d)),
+      scale(r, rad_k / (d * d * d)),
+    )
+  };
+  let rk4_two_force = |r0: V3, v0: V3, dt_total: f64, h: f64| -> V3 {
+    let (mut r, mut v) = (r0, v0);
+    let n = (dt_total / h).ceil() as usize;
+    let h = dt_total / n as f64;
+    for _ in 0..n {
+      let k1v = acc(r);
+      let k1r = v;
+      let k2v = acc(add(r, scale(k1r, h / 2.0)));
+      let k2r = add(v, scale(k1v, h / 2.0));
+      let k3v = acc(add(r, scale(k2r, h / 2.0)));
+      let k3r = add(v, scale(k2v, h / 2.0));
+      let k4v = acc(add(r, scale(k3r, h)));
+      let k4r = add(v, scale(k3v, h));
+      r = add(
+        r,
+        scale(
+          add(add(k1r, scale(k2r, 2.0)), add(scale(k3r, 2.0), k4r)),
+          h / 6.0,
+        ),
+      );
+      v = add(
+        v,
+        scale(
+          add(add(k1v, scale(k2v, 2.0)), add(scale(k3v, 2.0), k4v)),
+          h / 6.0,
+        ),
+      );
+    }
+    r
+  };
+  let (rc, vc) = comet_state();
+  let dt = 30.0 * 86400.0;
+  let r_forces = rk4_two_force(rc, vc, dt, 60.0);
+  let (r_engine, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2 * (1.0 - beta), dt);
+  let (r_comet, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, dt);
+  let drift = norm(sub(r_forces, r_comet));
+  let err = norm(sub(r_forces, r_engine));
+  std::println!("[β] 30 d: drift from the comet {drift:.3e} m, engine vs two forces {err:.3} m");
+  assert!(drift > 1.0e7, "the grain barely moved: {drift} m");
+  assert!(
+    err < 1.0,
+    "μ(1 − β) is not the two-force motion: {err} m apart"
+  );
+
+  // the emitted cluster: no ejection speed, no site, so r0 = comet, v0 = comet, β = this β
+  let dist = SizeDistribution::from_diameter_um(d_um);
+  let (size_params, vel_params, mass_params) =
+    batch_params(&dist, d_um, rho_gcm3, beta as f32, 0.0, 0.0, 1.0e6, 0.37);
+  let mut b = test_batch(1, 0.0);
+  b.size_params = size_params;
+  b.vel_params = vel_params;
+  b.mass_params = mass_params;
+  b.set_comet(rc, vc, T_START, 0.0);
+  let c = emit_cluster(&b, 0);
+  assert!(
+    (c.beta() as f64 - beta).abs() < 1e-6,
+    "cluster β {}",
+    c.beta()
+  );
+  assert!((c.t0().to_f64() - T_START).abs() < 1e-6);
+  assert!(
+    norm(sub(c.v0().to_f64(), vc)) < 1e-6,
+    "cluster v0 differs from the comet"
+  );
+  let frame = DustFrame::new(r_comet, T_START + dt, [0.0, 0.0, 0.0, 1.0], 1.0e9);
+  let rcl = evaluate_cluster(&c, 0, &frame);
+  assert!(rcl.age_id_dbeta_flux[3] > 0.0, "culled");
+  let r_cluster = add(
+    r_comet,
+    [
+      rcl.pos_size[0] as f64,
+      rcl.pos_size[1] as f64,
+      rcl.pos_size[2] as f64,
+    ],
+  );
+  // the local position is f32 relative to the anchor: resolution 2⁻²³ of 1.4e7 m ≈ 1.7 m
+  let err_cl = norm(sub(r_cluster, r_forces));
+  std::println!("[β] cluster vs two forces {err_cl:.3} m (f32 local of {drift:.3e} m)");
+  assert!(
+    err_cl < 4.0,
+    "cluster path {err_cl} m from the two-force motion"
+  );
+  let mu_cl = consts::SUN_MU.mul(two_sum_one_minus(c.beta()));
+  let (r_df, _) = kepler::propagate(&c.r0(), &c.v0(), mu_cl, Df::from_f64(dt));
+  let err_df = norm(sub(r_df.to_f64(), r_forces));
+  assert!(
+    err_df < 1.0,
+    "df64 cluster path {err_df} m from the two-force motion"
+  );
+
+  // syndyne limit: early on the grain falls behind the comet anti-sunward by ½·β·g☉·t²
+  let t1 = 86400.0;
+  let r_g1 = rk4_two_force(rc, vc, t1, 60.0);
+  let (r_c1, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t1);
+  let disp = sub(r_g1, r_c1);
+  let (dn, rn) = (norm(disp), norm(rc));
+  let g_sun = SUN_MU_M3_S2 / (rn * rn);
+  let expect = 0.5 * beta * g_sun * t1 * t1;
+  let cos_anti = dot(disp, rc) / (dn * rn);
+  std::println!(
+    "[β] 1 d: displacement {dn:.1} m (½βg t² = {expect:.1} m), cos to anti-sun {cos_anti:.6}"
+  );
+  assert!(cos_anti > 0.999, "not anti-sunward: cos {cos_anti}");
+  assert!(
+    (dn - expect).abs() < 0.01 * expect,
+    "{dn} m vs ½βg t² = {expect} m"
+  );
+}
+
+/// The spiral interpolation ([`spiral_point`]) is exact for a rigidly rotating emitter: a site
+/// `s` and jet direction `d` turning with the nucleus (ω about `axis` through the local origin)
+/// put the dust of age τ at `R(−ωτ)·(s + vτ·d)`, and the interpolation between two samples of
+/// it reproduces every point in between (the chord does not); it is the straight segment when
+/// ω = 0. Then against the engine: three clusters emitted 14 min apart from a site 2 km off the
+/// centre, evaluated in a frame anchored at the centre with the spin — the spiral between the
+/// outer two passes through the middle one.
+#[test]
+fn spiral_interpolation_matches_the_rotating_emitter() {
+  let axis = unit([0.2, 0.1, 0.97]);
+  let axis_f = [axis[0] as f32, axis[1] as f32, axis[2] as f32];
+  let omega = 2.0 * core::f64::consts::PI / (12.4 * 3600.0);
+  let s_now: V3 = [1800.0, 600.0, -300.0];
+  let d_now = unit([1.0, 0.3, 0.1]);
+  let v = 2.0;
+  let exact =
+    |tau: f64| -> V3 { rotate_axis_angle(add(s_now, scale(d_now, v * tau)), axis, -omega * tau) };
+  let f3 = |p: V3| [p[0] as f32, p[1] as f32, p[2] as f32];
+  for (age_o, age_p) in [(600.0, 2280.0), (0.0, 1680.0), (3000.0, 4680.0)] {
+    let (own, pred) = (f3(exact(age_o)), f3(exact(age_p)));
+    for u in [0.25f32, 0.5, 0.75] {
+      let tau = age_o + u as f64 * (age_p - age_o);
+      let want = exact(tau);
+      let got = spiral_point(
+        own,
+        pred,
+        age_o as f32,
+        age_p as f32,
+        axis_f,
+        omega as f32,
+        u,
+      );
+      let err = norm(sub([got[0] as f64, got[1] as f64, got[2] as f64], want));
+      let chord = add(
+        exact(age_o),
+        scale(sub(exact(age_p), exact(age_o)), u as f64),
+      );
+      let chord_err = norm(sub(chord, want));
+      assert!(
+        err < 1e-2 * chord_err.max(1.0) && err < 1.0,
+        "ages {age_o}..{age_p} u {u}: spiral {err:.2} m off (chord {chord_err:.1} m)"
+      );
+      assert!(
+        chord_err > 50.0,
+        "the chord is {chord_err} m off: the case does not discriminate"
+      );
+    }
+    // no rotation: the straight segment
+    let got = spiral_point(own, pred, age_o as f32, age_p as f32, axis_f, 0.0, 0.5);
+    let mid = [
+      0.5 * (own[0] + pred[0]),
+      0.5 * (own[1] + pred[1]),
+      0.5 * (own[2] + pred[2]),
+    ];
+    assert!(norm3f(sub3f(got, mid)) < 1e-2, "ω = 0 is not the chord");
+  }
+
+  // against the engine's emission and evaluation
+  let (rc, vc) = comet_state();
+  let n0 = unit([1.0, -0.3, 0.1]);
+  let off = scale(n0, 2000.0);
+  let dt = 840.0;
+  let cluster_at = |t_rel: f64| -> DustCluster {
+    let mut b = test_batch(1, 0.0);
+    let (centre, v_c) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_rel);
+    let turned = rotate_axis_angle(off, axis, omega * t_rel);
+    b.spin = [axis_f[0], axis_f[1], axis_f[2], omega as f32];
+    b.rot_start = qaxis_angle(axis_f, (omega * t_rel) as f32);
+    b.site_offset = [off[0] as f32, off[1] as f32, off[2] as f32, 0.0];
+    b.jet_dir_aperture = [n0[0] as f32, n0[1] as f32, n0[2] as f32, 0.0];
+    b.lit = [0.0, 0.0, 0.0, LIT_MODE_ALWAYS];
+    b.set_comet(add(centre, turned), v_c, T_START + t_rel, 0.0);
+    emit_cluster(&b, 0)
+  };
+  let (a, m, o) = (cluster_at(0.0), cluster_at(dt), cluster_at(2.0 * dt));
+  let t_now = T_START + 2.0 * dt + 600.0;
+  let (centre_now, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_now - T_START);
+  let frame = DustFrame::new(centre_now, t_now, [0.0, 0.0, 0.0, 1.0], 1.0e9)
+    .with_spin([axis[0], axis[1], axis[2], omega]);
+  let local = |c: &DustCluster| {
+    let r = evaluate_cluster(c, 0, &frame);
+    assert!(r.age_id_dbeta_flux[3] > 0.0, "culled");
+    (
+      [r.pos_size[0], r.pos_size[1], r.pos_size[2]],
+      r.age_id_dbeta_flux[0],
+    )
+  };
+  let ((la, age_a), (lm, _), (lo, age_o)) = (local(&a), local(&m), local(&o));
+  let got = spiral_point(lo, la, age_o, age_a, axis_f, omega as f32, 0.5);
+  let chord = [
+    0.5 * (lo[0] + la[0]),
+    0.5 * (lo[1] + la[1]),
+    0.5 * (lo[2] + la[2]),
+  ];
+  let (err, chord_err) = (norm3f(sub3f(got, lm)), norm3f(sub3f(chord, lm)));
+  std::println!(
+    "[spiral] engine: spiral {err:.2} m from the middle cluster, chord {chord_err:.1} m; ages {age_o:.0}..{age_a:.0} s"
+  );
+  assert!(
+    chord_err > 100.0,
+    "the chord is {chord_err} m off: the case does not discriminate"
+  );
+  assert!(
+    err < 2.0,
+    "the spiral misses the middle cluster by {err} m (chord {chord_err} m)"
+  );
+}
+
+fn sub3f(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+  [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+/// `lit_time_map(1, …)` of a window that ends in the dark is the last lit instant, not the
+/// window end: the provisional batch's pinned sample (`u = 1`) sat at "now" on a dark site (the
+/// `m < seg_len` boundary took the next arc's start, clamped to the window end), so the render
+/// drew fresh dust out of the night while the truth (u < 1) stopped at dusk — the 5-km frame of
+/// the observer with a spinning nucleus. The map is monotone and continuous in `u`, every arc
+/// end included.
+#[test]
+fn lit_time_map_ends_at_the_last_lit_instant() {
+  let omega = 2.0 * core::f32::consts::PI / 44_640.0;
+  // the observer's window: lit from ψ = 1.04 to ψ0 = 1.73 (4930 s of 5400 s), then dark
+  let lit = [1.040_462, 1.734_671_8, 0.694_209_8, LIT_MODE_PERIODIC];
+  let dur = 5400.0f32;
+  let end = lit_time_map(1.0, lit, omega, dur);
+  let want = lit[2] / omega;
+  assert!(
+    (end - want).abs() < 1.0,
+    "u = 1 maps to {end} s, the last lit instant is {want} s (window {dur} s)"
+  );
+  let before = lit_time_map(1.0 - 1e-6, lit, omega, dur);
+  assert!(
+    end >= before && end - before < 1.0,
+    "discontinuous at u = 1: {before} → {end}"
+  );
+  // a window of three rotations, lit twice per turn: monotone, continuous at every arc end
+  let lit3 = [0.5f32, 0.9, 0.0, LIT_MODE_PERIODIC];
+  let dur3 = 3.0 * 44_640.0f32;
+  // lit angle: the rest of the first arc (0.9 − 0.5) plus two more full arcs (2·0.9 each) and
+  // part of a fourth would exceed the window; take exactly 0.4 + 2·1.8 = 4.0
+  let lit3 = [lit3[0], lit3[1], 4.0, lit3[3]];
+  let mut prev = -1.0f32;
+  for i in 0..=4000 {
+    let u = i as f32 / 4000.0;
+    let t = lit_time_map(u, lit3, omega, dur3);
+    assert!(t >= prev - 1e-3, "not monotone at u {u}: {prev} → {t}");
+    prev = t;
+  }
+  // the exact arc ends: 0.4 (end of the first arc), 0.4 + 1.8 (end of the second), 4.0 (last)
+  for (m, psi_end) in [
+    (0.4f32, 0.9f32),
+    (2.2, 0.9 + 2.0 * core::f32::consts::PI),
+    (4.0, 0.9 + 4.0 * core::f32::consts::PI),
+  ] {
+    let u = m / 4.0;
+    let t = lit_time_map(u, lit3, omega, dur3);
+    let want = (psi_end - 0.5) / omega;
+    assert!(
+      (t - want).abs() < 2.0,
+      "arc end m {m}: {t} s, want {want} s"
+    );
+    let just_before = lit_time_map(u - 1e-6, lit3, omega, dur3);
+    assert!(
+      (t - just_before).abs() < 2.0,
+      "discontinuous at m {m}: {just_before} → {t}"
+    );
+  }
+}
+
+/// The dust phase function: the Lowell composite table (Φ(0) = 1, 0.5375 at 90°, 1231.17 at 180°),
+/// linear between degrees; the table rides in every pyramid header (`PYR_PHASE_LUT`) bit for bit,
+/// where the GPU splat reads it (a `const float[181]` in the shader with a dynamic index changed
+/// the GPU's splats even with the weight off), and the GLSL reader exists.
+#[test]
+fn phase_lut_rides_in_the_pyramid_header() {
+  let deg = |d: f32| phase_function(d.to_radians());
+  assert_eq!(PHASE_HM_0DEG.len(), 181);
+  assert!((deg(0.0) - 1.0).abs() < 1e-7);
+  assert!((deg(90.0) - 0.5375).abs() < 1e-6);
+  assert!((deg(60.0) - 0.3450).abs() < 1e-6);
+  assert!((deg(180.0) - 1231.1735).abs() < 1e-3);
+  assert!((deg(10.0) - 0.6871).abs() < 1e-6 && (deg(120.0) - 1.4389).abs() < 1e-6);
+  // linear between the table's degrees, clamped outside
+  let mid = 0.5 * (PHASE_HM_0DEG[30] + PHASE_HM_0DEG[31]);
+  assert!((deg(30.5) - mid).abs() < 1e-6);
+  assert!((deg(-5.0) - 1.0).abs() < 1e-7 && (deg(200.0) - PHASE_HM_0DEG[180]).abs() < 1e-3);
+  // back-scattering minimum near 50°, forward scattering beyond 90°
+  for i in 0..50 {
+    assert!(
+      PHASE_HM_0DEG[i + 1] < PHASE_HM_0DEG[i],
+      "not decreasing at {i}°"
+    );
+  }
+  for i in 90..180 {
+    assert!(
+      PHASE_HM_0DEG[i + 1] > PHASE_HM_0DEG[i],
+      "not increasing at {i}°"
+    );
+  }
+  // the pyramid header carries the table after the level table, before the levels
+  assert!(PYR_PHASE_LUT >= PYR_TABLE + 3 * PYRAMID_MAX_LEVELS);
+  assert!(PYR_PHASE_LUT + 181 <= PYRAMID_HEADER_WORDS);
+  let h = PyramidLayout::new(960, 600).header();
+  for (i, v) in PHASE_HM_0DEG.iter().enumerate() {
+    assert_eq!(
+      h[PYR_PHASE_LUT as usize + i],
+      v.to_bits(),
+      "header word {i}"
+    );
+  }
+  let glsl = include_str!("../../../../../assets/sim/dust_common.glsl");
+  assert!(glsl.contains("const uint  DUST_PYR_PHASE_LUT        = 64u;"));
+  assert!(glsl.contains("float dust_phase_function(DustUintBuffer pyr, float alphaRad)"));
+  assert!(
+    !glsl.contains("DUST_PHASE_HM["),
+    "no constant table in the shader"
+  );
+}
+
+/// The photometry helpers: the speed-factor mean of the size distribution against a numeric
+/// integral, the magnitude conversions (a white Lambert surface at 1 AU is 1.055 mag/arcsec², the
+/// full Moon's albedo 0.12 gives 3.36 against its measured ~3.4), the exposure value, and the
+/// radiance weight's phase and distance scaling.
+#[test]
+fn photometry_helpers_are_consistent() {
+  let dist = SizeDistribution::from_diameter_um(100.0);
+  // ⟨√(s/s_ref)⟩ weighted by cross-section × n(s) ∝ s^(2−q), numeric on a fine log grid
+  let (s0, s1, q) = (dist.s_min_um, dist.s_max_um, dist.q);
+  let s_ref = (s0 * s1).sqrt();
+  let n = 200_000;
+  let (mut num, mut den) = (0.0f64, 0.0f64);
+  for i in 0..n {
+    let s = s0 * (s1 / s0).powf((i as f64 + 0.5) / n as f64);
+    let w = s.powf(2.0 - q) * s; // × s: the log grid's measure ds = s d(ln s)
+    num += w * (s / s_ref).sqrt();
+    den += w;
+  }
+  let f_v = dist.mean_speed_factor();
+  assert!(
+    (f_v - num / den).abs() < 1e-4,
+    "f_v {f_v} vs numeric {}",
+    num / den
+  );
+  let closed = 10f64.ln() / (10f64.sqrt() - 1.0 / 10f64.sqrt());
+  assert!((f_v - closed).abs() < 1e-6 && (f_v - 0.809).abs() < 1e-3);
+  // magnitudes
+  assert!((white_to_mag_arcsec2(1.0) - 1.055).abs() < 1e-5);
+  assert!((white_to_mag_arcsec2(0.12) - 3.357).abs() < 2e-3);
+  let w20 = mag_arcsec2_to_white(20.0);
+  assert!((white_to_mag_arcsec2(w20) - 20.0).abs() < 1e-4 && w20 > 2e-8 && w20 < 3e-8);
+  assert!((exposure_ev(1.0)).abs() < 1e-6 && (exposure_ev(1.0 / 1024.0) - 10.0).abs() < 1e-5);
+  let e = DustExposure::of(w20, 0.0, 1e-2, false);
+  assert!((e.mag_arcsec2 - 20.0).abs() < 1e-4 && e.ev > 25.0 && !e.fixed);
+  // the radiance weight: Φ(α) at the eye's phase angle, 1/r_h²
+  let sun = [1.0f32, 0.0, 0.0];
+  let w0 = radiance_weight(0.04, sun, [5.0, 0.0, 0.0], 1.0);
+  assert!((w0 - 0.04).abs() < 1e-7, "α = 0: {w0}");
+  let w60 = radiance_weight(0.04, sun, [0.5, 0.75f32.sqrt(), 0.0], 1.0);
+  assert!((w60 / w0 - 0.3450).abs() < 1e-4, "Φ(60°) {}", w60 / w0);
+  let w120 = radiance_weight(0.04, sun, [-0.5, 0.75f32.sqrt(), 0.0], 1.0);
+  assert!((w120 / w0 - 1.4389).abs() < 1e-3, "Φ(120°) {}", w120 / w0);
+  let (w12, w5) = (
+    radiance_weight(0.04, sun, [1.0, 0.0, 0.0], 1.2),
+    radiance_weight(0.04, sun, [1.0, 0.0, 0.0], 5.0),
+  );
+  assert!(
+    (w12 / w5 - (5.0f32 / 1.2).powi(2)).abs() < 1e-3,
+    "r_h⁻²: {}",
+    w12 / w5
+  );
+  assert!(
+    (radiance_weight(0.04, sun, [0.0; 3], 1.0) - 0.04).abs() < 1e-7,
+    "zero to-eye = α 0"
+  );
+}
+
+/// The moments carry each cluster's heliocentric distance and Sun direction, and the rendered
+/// radiance falls as `r_h⁻²`: one cluster on circular orbits at 1.2, 2, 3 and 5 AU, seen with the
+/// eye towards the Sun (α = 0), gives Σ image ∝ r_h⁻² within 2 % (the fixed-point unit is the
+/// only error source).
+#[test]
+fn radiance_falls_as_the_inverse_square_of_r_h() {
+  let mut sums = alloc::vec::Vec::new();
+  for &r_au in &[1.2f64, 2.0, 3.0, 5.0] {
+    let r = [r_au * AU_M, 0.0, 0.0];
+    let v = [0.0, (SUN_MU_M3_S2 / norm(r)).sqrt(), 0.0];
+    let mut b = test_batch(1, 0.0);
+    b.set_comet(r, v, T_START, 0.0);
+    let c = emit_cluster(&b, 0);
+    let age = 3600.0;
+    let (rc, _) = kepler::propagate_f64(r, v, SUN_MU_M3_S2, age);
+    let frame = DustFrame::new(rc, T_START + age, [0.0, 0.0, 0.0, 1.0], 1.0e9);
+    let (render, m) = packet_moments(&c, 0, &frame);
+    assert!(m.flux() > 0.0, "culled at {r_au} AU");
+    let r_now = norm(add(
+      rc,
+      [m.mean()[0] as f64, m.mean()[1] as f64, m.mean()[2] as f64],
+    ));
+    assert!(
+      ((m.helio_au() as f64 - r_now / AU_M) / r_au).abs() < 1e-4,
+      "{r_au} AU: lane r_h {} vs {}",
+      m.helio_au(),
+      r_now / AU_M
+    );
+    let sun = m.sun_dir();
+    let want = scale(rc, -1.0 / norm(rc));
+    for k in 0..3 {
+      assert!(
+        (sun[k] as f64 - want[k]).abs() < 1e-3,
+        "{r_au} AU: sun dir[{k}] {} vs {}",
+        sun[k],
+        want[k]
+      );
+    }
+    // the view axis towards the Sun: the eye far along −r̂, α = 0
+    let z = [want[0] as f32, want[1] as f32, want[2] as f32];
+    let x = [0.0f32, 0.0, 1.0];
+    let y = [
+      z[1] * x[2] - z[2] * x[1],
+      z[2] * x[0] - z[0] * x[2],
+      z[0] * x[1] - z[1] * x[0],
+    ];
+    let rot = [x, y, z];
+    let tiers: alloc::vec::Vec<TierPackets> = alloc::vec![(alloc::vec![render], alloc::vec![m])];
+    let img = images_from_packets_lit(&tiers, 2.0e4, 64, rot, &[WHITE_TILE_UNIT_REL], 1e13, 1.0)
+      .pop()
+      .unwrap();
+    let sum: f64 = img.img.iter().map(|&v| v as f64).sum();
+    assert!(sum > 0.0);
+    sums.push((r_au, sum));
+  }
+  let (r0, s0) = sums[0];
+  for &(r, sm) in &sums[1..] {
+    let want = (r0 / r).powi(2);
+    let got = sm / s0;
+    std::println!("[r_h] {r} AU: Σ ratio {got:.4} vs r_h⁻² {want:.4}");
+    assert!(
+      (got / want - 1.0).abs() < 2e-2,
+      "{r} AU: Σ ratio {got} vs {want}"
+    );
+  }
+}
+
+/// An isotropic, always-lit, non-spinning jet settled for a lifetime: the sampler of the Afρ and
+/// phase tests (`cell_kernels_reproduce_the_continuous_emission`'s machinery, aperture π).
+fn isotropic_system(ttl_s: f64, albedo: f32, q: f64) -> (DustSystemState, DustEmitConfig, f64) {
+  let cfg = DustEmitConfig {
+    aperture_rad: core::f32::consts::PI,
+    albedo,
+    ..test_cfg(q, ttl_s)
+  };
+  let mut sys = DustSystemState::with_tiers(32_768, 3);
+  sys.set_ignition(Some(0.0));
+  sys.albedo = albedo;
+  let t = ttl_s;
+  let mut seq = 0u64;
+  let cfg_at = move |_: &JetState| cfg;
+  settle_jet(&mut sys, t, &orbit_jet, &cfg_at, &mut seq);
+  (sys, cfg, t)
+}
+
+/// The same cloud seen at phase angles 0°, 60° and 120° (the eye far along a turned view axis)
+/// has total fluxes in the ratios of the phase function: Φ(60)/Φ(0) = 0.3450, Φ(120)/Φ(0) =
+/// 1.4389, within 2 % (identical packets, only α changes per cluster; the cloud spans 0.001 AU
+/// so α varies by < 0.1° over it at an eye 1e13 m away).
+#[test]
+fn phase_function_sets_total_flux() {
+  let (sys, _, t) = isotropic_system(5.0 * 86400.0, 0.04, 1.5e-3);
+  let tiers = system_packets(&sys, t, None);
+  let (rc, _) = comet_state();
+  let (rc, _) = kepler::propagate_f64(rc, comet_state().1, SUN_MU_M3_S2, t);
+  let sun = scale(rc, -1.0 / norm(rc));
+  let u = unit(cross64(sun, [0.0, 0.0, 1.0]));
+  let mut sums = alloc::vec::Vec::new();
+  for theta_deg in [0.0f64, 60.0, 120.0] {
+    let (s, c) = theta_deg.to_radians().sin_cos();
+    let z = add(scale(sun, c), scale(u, s));
+    let zf = [z[0] as f32, z[1] as f32, z[2] as f32];
+    let xv = unit(cross64(z, [0.0, 0.0, 1.0]));
+    let xf = [xv[0] as f32, xv[1] as f32, xv[2] as f32];
+    let yf = [
+      zf[1] * xf[2] - zf[2] * xf[1],
+      zf[2] * xf[0] - zf[0] * xf[2],
+      zf[0] * xf[1] - zf[1] * xf[0],
+    ];
+    let img = images_from_packets_lit(
+      &tiers,
+      0.05 * AU_M as f32,
+      128,
+      [xf, yf, zf],
+      &[WHITE_TILE_UNIT_REL],
+      1e13,
+      0.04,
+    )
+    .pop()
+    .unwrap();
+    sums.push(img.img.iter().map(|&v| v as f64).sum::<f64>());
+  }
+  for (k, want) in [(1usize, 0.3450f64), (2, 1.4389)] {
+    let got = sums[k] / sums[0];
+    std::println!(
+      "[phase] {}°: Σ ratio {got:.4} vs Φ {want:.4}",
+      [0, 60, 120][k]
+    );
+    assert!(
+      (got / want - 1.0).abs() < 2e-2,
+      "{}°: {got} vs {want}",
+      [0, 60, 120][k]
+    );
+  }
+}
+
+/// **Afρ closure.** A steady isotropic coma (always lit, no spin, 60-day lifetime, Afρ₀ = 100 cm
+/// at `comet_state()`'s 5.51 AU → Afρ(r_h) = 3.29 cm) rendered as radiance factors; in an
+/// aperture of ρ = 100 km (ρ ≪ v²/a: radiation pressure bends the outflow by 5 % there, and
+/// ρ ≪ v_min·TTL) `Afρ = 4 r_h²/(π ρ) · Σ RF_px · A_px` of (b) the Monte-Carlo grains of the
+/// continuous emission (cross-section × the grain's own `p Φ(α)/r_h²`) equals the analytic
+/// `Afρ(r_h) · Φ(α)` within 10 % — the chain Afρ → Q_d (`dust_production_rate_kgs`) → mass →
+/// cross-section per gram → radiance closes (0.2 % measured) — and (a) the render equals the
+/// same grains drawn through the renderer's direction bandwidth (σ = aperture/√S per stream,
+/// the kernel of `cell_kernels_reproduce_the_continuous_emission`) within 5 %. The render's own
+/// aperture Afρ sits below the analytic one by the bandwidth's leak across the aperture edge
+/// (σ_lat/ρ = σ_ang whatever ρ: 28 % for an isotropic jet at 64 streams, a few % for the app's
+/// 0.5-rad cones), a model property, printed. Negative control: the pre-WP1 conversion (Q_pr in
+/// place of p, no `f_v`, no speed-spread factor) misses (b) by > 15 %.
+#[test]
+fn afrho_closure_from_a_steady_isotropic_coma() {
+  use crate::scene::particles::ParticleSystemEmitParams;
+  let (rc0, vc0) = comet_state();
+  let r_h = norm(rc0) / AU_M;
+  let ep = ParticleSystemEmitParams {
+    diametre_um: 100.0,
+    density_gcm3: 0.533,
+    scattering_efficiency: 1.0,
+    geometric_albedo: 0.04,
+    afrho_0_cm: 100.0,
+    afrho_power: 2.0,
+    afrho_cutoff_au: 15.0,
+    afrho_max_value_cm: 1.0e6,
+    start_velocity_mean: 2.0,
+    start_velocity_std: 0.5,
+    aperture_rad: core::f32::consts::PI,
+    ..bytemuck::Zeroable::zeroed()
+  };
+  let q = ep.dust_production_rate_kgs(r_h as f32) as f64;
+  let afrho_in_cm = 100.0 * r_h.powf(-2.0);
+  let ttl = 60.0 * 86400.0;
+  let (sys, cfg, t) = isotropic_system(ttl, 0.04, q);
+  assert!((cfg.q_dust_kgs - q).abs() < 1e-12);
+  // the view: top-down (`SHAPE_IDENTITY`), the Sun direction gives the phase angle
+  let (rc, _) = kepler::propagate_f64(rc0, vc0, SUN_MU_M3_S2, t);
+  let sun = scale(rc, -1.0 / norm(rc));
+  let alpha = (sun[2]).clamp(-1.0, 1.0).acos();
+  let phi = phase_function(alpha as f32) as f64;
+  let (half, px) = (600.0e3f32, 256u32);
+  let m_per_px = 2.0 * half as f64 / px as f64;
+  let tiers = system_packets(&sys, t, None);
+  let img = images_from_packets_lit(
+    &tiers,
+    half,
+    px,
+    SHAPE_IDENTITY,
+    &[WHITE_TILE_UNIT_REL],
+    1e13,
+    0.04,
+  )
+  .pop()
+  .unwrap();
+  let anchor = sys.tiers[0].draw_state().expect("tier 0").frame.at_time(t).anchor_m();
+  let c = px as f64 / 2.0;
+  let in_aperture = |x: u32, y: u32, rho_m: f64| {
+    let (dx, dy) = (
+      (x as f64 + 0.5 - c) * m_per_px,
+      (y as f64 + 0.5 - c) * m_per_px,
+    );
+    dx * dx + dy * dy <= rho_m * rho_m
+  };
+  // Monte Carlo of the continuous isotropic emission, each grain its cross-section and its own
+  // radiance weight, binned into the same pixels
+  let n = 2_000_000usize;
+  let mut rng = 0x5DEE_CE66_D1CE_F00Du64;
+  let (beta_ref, range) = (cfg.beta_ref as f64, SIZE_RANGE_FACTOR);
+  let (sb_lo, sb_hi) = ((beta_ref / range).sqrt(), (beta_ref * range).sqrt());
+  let v_std_rel = cfg.v_std as f64 / cfg.v_mean as f64;
+  let xsec_per_g = 3.0 / (4.0 * cfg.density_gcm3 as f64 * 1e6 * cfg.dist.s_min_um * 1e-6 * range);
+  let sigma_per_grain = q * 1e3 * xsec_per_g * t / n as f64; // m² of cross-section per grain
+  // the renderer's direction kernel: the tier that draws a grain of that age covers the sphere
+  // with S Gaussian stream cells of σ_ang = max(aperture/√S, CHILD_SIGMA_V_REL)
+  let sigma_ang_of = |age_s: f64| -> f64 {
+    let tier = sys
+      .tiers
+      .iter()
+      .find(|h| {
+        let (lo, hi) = h.age_band_s(cfg.ttl_s);
+        age_s >= lo && age_s < hi
+      })
+      .unwrap_or(&sys.tiers[sys.tiers.len() - 1]);
+    let streams = 1u32 << tier.stream_shift();
+    (cfg.aperture_rad / (streams as f32).sqrt()).max(CHILD_SIGMA_V_REL) as f64
+  };
+  // two histograms: the continuous emission as it is (the closure) and drawn through the
+  // renderer's bandwidth (what the render can reproduce)
+  let mut mc = alloc::vec![0.0f64; (px * px) as usize];
+  let mut mc_kernel = alloc::vec![0.0f64; (px * px) as usize];
+  let mvp = ortho_rot_mvp(half, SHAPE_IDENTITY);
+  let eye = [0.0f64, 0.0, 1e13];
+  let mut bin = |hist: &mut [f64], r: V3| {
+    let local = [
+      (r[0] - anchor[0]) as f32,
+      (r[1] - anchor[1]) as f32,
+      (r[2] - anchor[2]) as f32,
+    ];
+    if let Some(p) = project_point(local, &mvp, px, px) {
+      let (x, y) = (p[0].floor() as i64, p[1].floor() as i64);
+      if x >= 0 && y >= 0 && x < px as i64 && y < px as i64 {
+        let rn = norm(r);
+        let sun_g = [
+          (-r[0] / rn) as f32,
+          (-r[1] / rn) as f32,
+          (-r[2] / rn) as f32,
+        ];
+        let to_eye = [
+          (eye[0] + anchor[0] - r[0]) as f32,
+          (eye[1] + anchor[1] - r[1]) as f32,
+          (eye[2] + anchor[2] - r[2]) as f32,
+        ];
+        let w = radiance_weight(0.04, sun_g, to_eye, (rn / AU_M) as f32) as f64;
+        hist[(y as u32 * px + x as u32) as usize] += sigma_per_grain * w;
+      }
+    }
+  };
+  for _ in 0..n {
+    let t_e = lcg(&mut rng) * t;
+    let (rce, vce) = kepler::propagate_f64(rc0, vc0, SUN_MU_M3_S2, t_e);
+    let z = 2.0 * lcg(&mut rng) - 1.0;
+    let ph = core::f64::consts::TAU * lcg(&mut rng);
+    let st = (1.0 - z * z).max(0.0).sqrt();
+    let dir = [st * ph.cos(), st * ph.sin(), z];
+    let sb = sb_lo + (sb_hi - sb_lo) * lcg(&mut rng);
+    let beta = sb * sb;
+    let f = sb / beta_ref.sqrt();
+    let v = (cfg.v_mean as f64 * f * (1.0 + v_std_rel * gauss_lcg(&mut rng))).max(0.0);
+    let ve = add(vce, scale(dir, v));
+    let (r, _) = kepler::propagate_f64(rce, ve, SUN_MU_M3_S2 * (1.0 - beta), t - t_e);
+    bin(&mut mc, r);
+    // the same grain with the stream cell's lateral dispersion
+    let ax = if dir[0].abs() < 0.9 {
+      [1.0, 0.0, 0.0]
+    } else {
+      [0.0, 1.0, 0.0]
+    };
+    let e1 = unit(cross64(ax, dir));
+    let e2 = cross64(dir, e1);
+    let (g1, g2) = (gauss_lcg(&mut rng), gauss_lcg(&mut rng));
+    let lat = cfg.v_mean as f64 * f * sigma_ang_of(t - t_e);
+    let vk = [
+      ve[0] + lat * (g1 * e1[0] + g2 * e2[0]),
+      ve[1] + lat * (g1 * e1[1] + g2 * e2[1]),
+      ve[2] + lat * (g1 * e1[2] + g2 * e2[2]),
+    ];
+    let (rk, _) = kepler::propagate_f64(rce, vk, SUN_MU_M3_S2 * (1.0 - beta), t - t_e);
+    bin(&mut mc_kernel, rk);
+  }
+  let a_px = m_per_px * m_per_px;
+  for rho_km in [100.0f64, 300.0] {
+    let rho = rho_km * 1e3;
+    let (mut s_render, mut s_mc, mut s_mck) = (0.0f64, 0.0f64, 0.0f64);
+    for y in 0..px {
+      for x in 0..px {
+        if in_aperture(x, y, rho) {
+          s_render += img.img[(y * px + x) as usize] as f64 * a_px;
+          s_mc += mc[(y * px + x) as usize];
+          s_mck += mc_kernel[(y * px + x) as usize];
+        }
+      }
+    }
+    let to_afrho = |s: f64| 4.0 * r_h * r_h / (core::f64::consts::PI * rho) * s * 100.0;
+    let (afrho_meas_cm, afrho_mc_cm, afrho_mck_cm) =
+      (to_afrho(s_render), to_afrho(s_mc), to_afrho(s_mck));
+    let afrho_expect_cm = afrho_in_cm * phi;
+    std::println!(
+      "[afrho] ρ {rho_km:.0} km, α {:.1}°, Φ {phi:.4}: render {afrho_meas_cm:.3} cm, Monte Carlo through the kernel {afrho_mck_cm:.3} cm, Monte Carlo {afrho_mc_cm:.3} cm, analytic Afρ(r_h)·Φ {afrho_expect_cm:.3} cm (Afρ(r_h) {afrho_in_cm:.3} cm, q {q:.3e} kg/s; the kernel leaks {:.0} % past the aperture)",
+      alpha.to_degrees(),
+      100.0 * (1.0 - afrho_mck_cm / afrho_mc_cm)
+    );
+    // 5 %: the time pieces' width staircase and the sample-count dither inside a 100-km
+    // aperture (the whole-cell kernels are pinned to 8 % + 2·noise on the profiles)
+    assert!(
+      (afrho_meas_cm / afrho_mck_cm - 1.0).abs() < 5e-2,
+      "ρ {rho_km} km: render {afrho_meas_cm} vs Monte Carlo through the kernel {afrho_mck_cm} cm"
+    );
+    if rho_km < 150.0 {
+      assert!(
+        (afrho_mc_cm / afrho_expect_cm - 1.0).abs() < 0.10,
+        "ρ {rho_km} km: Monte Carlo {afrho_mc_cm} vs analytic {afrho_expect_cm} cm"
+      );
+      // negative control: the former conversion (Q_pr as the albedo, no distribution factors)
+      let q_old = (2.0 * 533.0 * 50e-6 * 2.0 * (afrho_in_cm / 100.0)) / (3.0 * 1.0);
+      let afrho_old_cm = afrho_mc_cm * q_old / q;
+      assert!(
+        (afrho_old_cm / afrho_expect_cm - 1.0).abs() > 0.15,
+        "the former conversion would have closed too: {afrho_old_cm} vs {afrho_expect_cm}"
+      );
+    }
+  }
+}
+
 fn frame_after(days: f64) -> (DustFrame, V3) {
   let t_now = T_START + days * 86400.0;
   let (rc0, vc0) = comet_state();
@@ -432,6 +1195,7 @@ fn test_cfg(q: f64, ttl_s: f64) -> DustEmitConfig {
     diameter_um: 100.0,
     density_gcm3: 0.533,
     beta_ref: 0.0213,
+    albedo: 0.0,
     v_mean: 2.0,
     v_std: 0.5,
     jet_dir: [0.0, 0.0, 1.0],
@@ -997,8 +1761,8 @@ fn tiers_split_the_ring_and_hold_history_at_start() {
   }
   let states = sys.draw_states();
   assert_eq!(states.len(), 3);
-  // one exposure for the whole system
-  assert!(states.iter().all(|s| s.tau_ref == states[0].tau_ref));
+  // one albedo for the whole system
+  assert!(states.iter().all(|s| s.albedo == states[0].albedo));
 }
 
 /// A fresh history is drawn only once complete: after one budget-limited tick the tiers hold
@@ -1274,32 +2038,6 @@ fn evaluate_respects_the_tier_band() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Optical-depth splats (dust.vert / dust.frag mirror)
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// The exposure reference depends on the jet configuration only: filling the old tiers (heavy
-/// clusters) leaves it unchanged (`initial_burst.rdc` → `late_*.rdc` dimmed 10×), and it scales
-/// with the production rate so the stream brightness is independent of its scale.
-#[test]
-fn exposure_reference_ignores_history_and_tiers() {
-  let ttl = 86400.0;
-  let cfg = test_cfg(1.5e-3, ttl);
-  let tau = cfg.tau_ref();
-  assert!(tau > 0.0 && tau.is_finite());
-  let doubled = DustEmitConfig {
-    q_dust_kgs: cfg.q_dust_kgs * 2.0,
-    ..cfg
-  };
-  assert!((doubled.tau_ref() / tau - 2.0).abs() < 1e-12);
-  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
-  sys.tau_ref = tau;
-  // one budget-limited tick (nothing drawn while the history builds), then everything
-  sys.tick(0.0, &orbit_jet, &|_| cfg);
-  sys.mark_submitted(1);
-  assert!(sys.draw_states().is_empty());
-  fill_system(&mut sys, 0.0, &cfg, MAX_SEEK_PASSES);
-  let late = sys.draw_states();
-  assert_eq!(late.len(), 3);
-  assert!(late.iter().all(|s| s.tau_ref == tau as f32));
-}
 
 /// Composite display stretch on optical depth relative to the white point: 0 up to the black point,
 /// monotone, 1 at the white point; at the default softening dust 100× fainter than the brightest
@@ -2534,6 +3272,15 @@ fn capsule_integrates_to_the_flux() {
       depth_au: 1.0,
       open: [false, false],
       rho: [1.0, 1.0],
+      mean: [0.0; 3],
+      kx: [0.0; 3],
+      ky: [0.0; 3],
+      sun: [0.0, 0.0, 1.0],
+      r_h_au: 1.0,
+      eye: [0.0; 3],
+      eye_w: 1.0,
+      albedo: 0.0,
+      w_mean: 1.0,
     };
     let det = 9.0 * 4.0 - 4.0;
     let mut sum = 0.0f64;
@@ -2636,6 +3383,15 @@ fn splat_level_bounds_the_texel_count() {
       depth_au: 1.0,
       open: [false, false],
       rho: [1.0, 1.0],
+      mean: [0.0; 3],
+      kx: [0.0; 3],
+      ky: [0.0; 3],
+      sun: [0.0, 0.0, 1.0],
+      r_h_au: 1.0,
+      eye: [0.0; 3],
+      eye_w: 1.0,
+      albedo: 0.0,
+      w_mean: 1.0,
     };
     let n = splat_scatter(&p, [1.0, 0.5, 0.2], &layout, 1e6, &mut pyramid);
     let level = layout.level_for_sigma(sigma);
@@ -2813,35 +3569,140 @@ fn splat_image_is_the_projected_density() {
 }
 
 /// The age colour runs from the stream colour at the jet to its complementary hue (OKLab chroma
-/// rotated by π) at 64 TTL, monotonically and log in age.
+/// rotated by π) at one TTL of the system, linear in age, constant beyond; the gamut mapping keeps
+/// the hue and the lightness and gives up chroma only (reported).
 #[test]
 fn age_color_runs_from_the_stream_color_to_its_complement() {
-  let stream = [1.0f32, 0.55, 0.15];
-  let c0 = age_color(stream, 0.0);
+  let ttl = 30.0 * 86400.0f32;
+  // the clock
+  assert_eq!(age_hue_fraction(0.0, ttl), 0.0);
+  assert!((age_hue_fraction(0.5 * ttl, ttl) - 0.5).abs() < 1e-6);
+  assert_eq!(age_hue_fraction(ttl, ttl), 1.0);
+  assert_eq!(age_hue_fraction(5.0 * ttl, ttl), 1.0);
+  assert_eq!(age_hue_fraction(-1.0, ttl), 0.0);
+  assert_eq!(age_hue_fraction(ttl, 0.0), 0.0, "no TTL: no rotation");
+  let mut prev = 0.0f32;
+  for i in 0..=200 {
+    let f = age_hue_fraction(i as f32 * 0.01 * ttl, ttl);
+    assert!(f >= prev && f <= 1.0);
+    prev = f;
+  }
+  // the colours of the observer recipe's stream
+  let stream = [1.0f32, 0.6, 0.2];
+  let c0 = age_color(stream, 0.0, ttl);
   for k in 0..3 {
     assert!((c0[k] - stream[k]).abs() < 2e-2, "age 0: {c0:?}");
   }
   let lab = |c: [f32; 3]| super::splat::oklab_of(c);
   let l0 = lab(stream);
-  let far = age_color(stream, DUST_AGE_HUE_SPAN * DUST_AGE_HUE_TAU_S);
-  let lf = lab(far);
-  // the complement: chroma rotated by π (gamut clipping may shorten it, not turn it)
   let hue = |l: [f32; 3]| l[2].atan2(l[1]);
-  let dh = (hue(lf) - hue(l0) - core::f32::consts::PI).rem_euclid(2.0 * core::f32::consts::PI);
-  // the gamut clip of the rotated chroma turns the hue by up to ~15°
+  let chroma = |l: [f32; 3]| (l[1] * l[1] + l[2] * l[2]).sqrt();
+  let turn = |l: [f32; 3]| {
+    let d = (hue(l) - hue(l0)).rem_euclid(2.0 * core::f32::consts::PI);
+    d.min(2.0 * core::f32::consts::PI - d)
+  };
+  let at_ttl = age_color(stream, ttl, ttl);
+  let lf = lab(at_ttl);
   assert!(
-    dh.min(2.0 * core::f32::consts::PI - dh) < 0.35,
-    "complement hue off by {dh:.3} rad: {far:?}"
+    (turn(lf) - core::f32::consts::PI).abs() < 0.02,
+    "complement hue off: turn {:.3} rad, {at_ttl:?}",
+    turn(lf)
   );
-  assert!(far[2] > far[0], "orange's complement is bluish: {far:?}");
-  assert!((age_hue_fraction(DUST_AGE_HUE_TAU_S) - (2f32.ln() / 65f32.ln())).abs() < 1e-5);
-  let mut prev = 0.0f32;
-  for i in 0..40 {
-    let age = 10f32.powf(2.0 + i as f32 * 0.2);
-    let f = age_hue_fraction(age);
-    assert!(f >= prev && f <= 1.0);
-    prev = f;
+  assert!(
+    (lf[0] - l0[0]).abs() < 1e-2,
+    "lightness {} vs {}",
+    lf[0],
+    l0[0]
+  );
+  let chroma_ratio = chroma(lf) / chroma(l0);
+  std::println!(
+    "[age colour] the complement of {stream:?} is {at_ttl:?}: chroma kept {chroma_ratio:.3}"
+  );
+  assert!(
+    chroma_ratio >= 0.4 && chroma_ratio <= 1.0 + 1e-3,
+    "chroma ratio {chroma_ratio}"
+  );
+  assert!(
+    at_ttl[2] > at_ttl[0],
+    "orange's complement is bluish: {at_ttl:?}"
+  );
+  assert_eq!(
+    age_color(stream, 2.0 * ttl, ttl),
+    at_ttl,
+    "constant beyond one TTL"
+  );
+  let half = lab(age_color(stream, 0.5 * ttl, ttl));
+  assert!(
+    (turn(half) - core::f32::consts::FRAC_PI_2).abs() < 0.02,
+    "half a TTL: turn {:.3} rad",
+    turn(half)
+  );
+}
+
+/// The gamut mapping of the rotated colour keeps the OKLab lightness and hue of the rotation and
+/// gives up chroma only; a colour already inside the gamut is the plain conversion, bit for bit.
+#[test]
+fn age_color_gamut_mapping_keeps_hue_and_lightness() {
+  let ttl = 1.0f32;
+  let hue = |l: [f32; 3]| l[2].atan2(l[1]);
+  let chroma = |l: [f32; 3]| (l[1] * l[1] + l[2] * l[2]).sqrt();
+  let (mut mapped, mut plain) = (0usize, 0usize);
+  let steps = [0.0f32, 0.25, 0.5, 0.75, 1.0];
+  for &r in &steps {
+    for &g in &steps {
+      for &b in &steps {
+        // the cube's faces
+        if !(r == 0.0 || r == 1.0 || g == 0.0 || g == 1.0 || b == 0.0 || b == 1.0) {
+          continue;
+        }
+        let stream = [r, g, b];
+        let l0 = super::splat::oklab_of(stream);
+        for f in [0.25f32, 0.5, 0.75, 1.0] {
+          let c = age_color(stream, f, ttl);
+          assert!(
+            c.iter().all(|v| (0.0..=1.0).contains(v)),
+            "{stream:?} f {f}: {c:?}"
+          );
+          let th = core::f32::consts::PI * f;
+          let rot = [
+            l0[0],
+            th.cos() * l0[1] - th.sin() * l0[2],
+            th.sin() * l0[1] + th.cos() * l0[2],
+          ];
+          let lc = super::splat::oklab_of(c);
+          assert!(
+            (lc[0] - rot[0]).abs() < 1e-3,
+            "{stream:?} f {f}: L {} vs {}",
+            lc[0],
+            rot[0]
+          );
+          if chroma(rot) > 1e-3 && chroma(lc) > 1e-3 {
+            let d = (hue(lc) - hue(rot)).rem_euclid(2.0 * core::f32::consts::PI);
+            let d = d.min(2.0 * core::f32::consts::PI - d);
+            assert!(d < 1e-2, "{stream:?} f {f}: hue off by {d:.4} rad ({c:?})");
+          }
+          assert!(
+            chroma(lc) <= chroma(rot) * (1.0 + 1e-3) + 1e-4,
+            "{stream:?} f {f}: chroma grew"
+          );
+          let direct = super::splat::oklab_to_gamut(rot);
+          assert_eq!(direct, c);
+          // in gamut: the plain conversion
+          let plain_rgb = super::splat::linear_from_oklab_pub(rot);
+          if plain_rgb.iter().all(|v| (-1e-4..=1.0 + 1e-4).contains(v)) {
+            for k in 0..3 {
+              assert_eq!(c[k], plain_rgb[k].clamp(0.0, 1.0));
+            }
+            plain += 1;
+          } else {
+            mapped += 1;
+          }
+        }
+      }
+    }
   }
+  std::println!("[age colour] gamut: {mapped} rotations mapped, {plain} inside");
+  assert!(mapped > 0 && plain > 0);
 }
 
 /// The auto softening puts the median dust texel at a fixed display level
@@ -3033,7 +3894,7 @@ fn tier_image(
     exposure: 1.0,
     inv_unit: 1.0,
     color: pack_color([1.0, 1.0, 1.0, 1.0]),
-    units_per_m: 1.0,
+    albedo: 0.0,
     mvp: ortho_rot_mvp(half, rot),
     eye_local: [rot[2][0] * 1e9, rot[2][1] * 1e9, rot[2][2] * 1e9, 0.0],
   };
@@ -3168,6 +4029,7 @@ fn spiral_image(omega: f64, half: f32, px: u32) -> alloc::vec::Vec<f32> {
     diameter_um: 100.0,
     density_gcm3: 0.5,
     beta_ref: 1e-3,
+    albedo: 0.0,
     v_mean: 2.0,
     v_std: 0.0,
     jet_dir: [e1[0] as f32, e1[1] as f32, e1[2] as f32],
@@ -3279,7 +4141,7 @@ fn gpu_layout_sizes() {
   assert_eq!(core::mem::size_of::<DustRenderCluster>(), 32);
   assert_eq!(core::mem::size_of::<DustMoments>(), 320);
   assert_eq!(core::mem::size_of::<DustBatch>(), 208);
-  assert_eq!(core::mem::size_of::<DustPropagatePushConstants>(), 112);
+  assert_eq!(core::mem::size_of::<DustPropagatePushConstants>(), 128);
   assert_eq!(core::mem::size_of::<DustSplatPushConstants>(), 128);
   assert_eq!(
     core::mem::size_of::<crate::gpu::CompositePushConstants>(),
@@ -3386,9 +4248,30 @@ fn images_from_packets(
   rot: [[f32; 3]; 3],
   unit_rels: &[f32],
 ) -> alloc::vec::Vec<SystemImage> {
+  // the eye far beyond any test cloud (6 700 AU): the projection cuts the dust behind the eye's
+  // plane (`project_packet_lit`), and a 2-year trail in a 1 AU frame reaches past 1e9 m
+  images_from_packets_lit(tiers, half, px, rot, unit_rels, 1e15, 0.0)
+}
+
+/// [`images_from_packets`] with the eye `eye_dist` m along the view axis (the phase angle of the
+/// radiance weight) and the dust's `albedo` (`≤ 0`: the unweighted optical depth).
+fn images_from_packets_lit(
+  tiers: &[TierPackets],
+  half: f32,
+  px: u32,
+  rot: [[f32; 3]; 3],
+  unit_rels: &[f32],
+  eye_dist: f32,
+  albedo: f32,
+) -> alloc::vec::Vec<SystemImage> {
   let layout = PyramidLayout::new(px, px);
   let mvp = ortho_rot_mvp(half, rot);
-  let eye = [rot[2][0] * 1e9, rot[2][1] * 1e9, rot[2][2] * 1e9, 0.0];
+  let eye = [
+    rot[2][0] * eye_dist,
+    rot[2][1] * eye_dist,
+    rot[2][2] * eye_dist,
+    0.0,
+  ];
   let threads = test_threads();
   let pc = |inv_unit: f32, live: u32| DustSplatPushConstants {
     moments: 0,
@@ -3399,7 +4282,7 @@ fn images_from_packets(
     exposure: 1.0,
     inv_unit,
     color: pack_color([1.0, 1.0, 1.0, 1.0]),
-    units_per_m: 1.0,
+    albedo,
     mvp,
     eye_local: eye,
   };
@@ -3459,7 +4342,7 @@ fn host_rasterizer_is_thread_count_independent() {
     exposure: 1.0,
     inv_unit,
     color: pack_color([1.0, 1.0, 1.0, 1.0]),
-    units_per_m: 1.0,
+    albedo: 0.0,
     mvp,
     eye_local: [0.0, 0.0, 1e9, 0.0],
   };
@@ -3781,6 +4664,27 @@ fn dust_grows_progressively_from_the_jet() {
     "the tail axis is {:.1}° off the anti-sun direction",
     cos.acos().to_degrees()
   );
+  // signed: the τ-weighted centroid lies on the anti-sun side of the nucleus. Image axes follow
+  // the local frame (`ortho_rot_mvp` with the identity, `project_point` maps ndc to pixel rows
+  // without a flip: +row = +y), so `anti_sun` in local xy is the anti-sun direction in pixels.
+  let off = [last.centroid[0] - nucleus[0], last.centroid[1] - nucleus[1]];
+  let off_n = (off[0] * off[0] + off[1] * off[1]).sqrt();
+  let along = off[0] * anti_sun[0] + off[1] * anti_sun[1];
+  std::println!(
+    "[shape] centroid offset {off_n:.1} px, {:.1} px along the anti-sun direction",
+    along
+  );
+  assert!(
+    along > 0.5 * off_n && off_n > 1.0,
+    "the tail is not anti-sunward: centroid offset ({:.1}, {:.1}) px, anti-sun ({:.2}, {:.2})",
+    off[0],
+    off[1],
+    anti_sun[0],
+    anti_sun[1]
+  );
+  // negative control: the sunward direction fails the same test
+  let sunward = [-anti_sun[0], -anti_sun[1]];
+  assert!(off[0] * sunward[0] + off[1] * sunward[1] < -0.5 * off_n);
 
   // negative control: the former defect replayed — the far part of the history published after
   // the near part (two frames: the youngest half of every tier, then everything)
@@ -4484,17 +5388,20 @@ fn cell_kernels_reproduce_the_continuous_emission() {
   // ∝ r⁻², the 262 144-slot ring, at 480 px — the 1 AU half-height frame where the oldest tier's
   // sample polylines are pixels apart laterally (judged on the whole sheet and on the high-pass
   // excess over the truth: the sample striations)
-  let cases: [(f64, f32, u32, usize, bool, bool); 9] = [
-    (1.0, 50.0e3, 96, 300_000, false, false),
-    (1.0, 500.0e3, 96, 300_000, false, false),
-    (730.0, 0.03 * AU_M as f32, 96, 400_000, false, false),
-    (730.0, 0.3 * AU_M as f32, 96, 400_000, false, false),
-    (1.0, 500.0e3, 96, 300_000, true, false),
+  // (days, half-height m, px, grains, spinning, far 67P scene, jet site offset m)
+  let cases: [(f64, f32, u32, usize, bool, bool, f64); 10] = [
+    (1.0, 50.0e3, 96, 300_000, false, false, 0.0),
+    (1.0, 500.0e3, 96, 300_000, false, false, 0.0),
+    (730.0, 0.03 * AU_M as f32, 96, 400_000, false, false, 0.0),
+    (730.0, 0.3 * AU_M as f32, 96, 400_000, false, false, 0.0),
+    (1.0, 500.0e3, 96, 300_000, true, false, 0.0),
     // the first two hours of a spinning jet seen from 5 km: the frame the app opens on
-    (2.0 / 24.0, 5.0e3, 240, 300_000, true, false),
-    (730.0, 0.03 * AU_M as f32, 96, 400_000, true, false),
-    (730.0, 0.3 * AU_M as f32, 96, 400_000, true, false),
-    (1900.0, AU_M as f32, 480, 8_000_000, true, true),
+    (2.0 / 24.0, 5.0e3, 240, 300_000, true, false, 0.0),
+    // ... with the app's site 2 km off the centre, turning with the nucleus: the spiral pieces
+    (2.0 / 24.0, 5.0e3, 240, 300_000, true, false, 2000.0),
+    (730.0, 0.03 * AU_M as f32, 96, 400_000, true, false, 0.0),
+    (730.0, 0.3 * AU_M as f32, 96, 400_000, true, false, 0.0),
+    (1900.0, AU_M as f32, 480, 8_000_000, true, true, 0.0),
   ];
   let axis: V3 = [0.0, 0.0, 1.0];
   let lat = 20.0f64.to_radians();
@@ -4507,17 +5414,17 @@ fn cell_kernels_reproduce_the_continuous_emission() {
   // perihelion passage inside a 5.3-year history, production ∝ r⁻², the 262 144-slot ring, the
   // 0.033 AU half-height frame at 480 px (the far rays of the zoom series)
   let scene_67p = std::env::var("AETHERVK_DUST_CELLS_67P").is_ok_and(|v| v == "1");
-  let cases: alloc::vec::Vec<(f64, f32, u32, usize, bool, bool)> = if scene_67p {
+  let cases: alloc::vec::Vec<(f64, f32, u32, usize, bool, bool, f64)> = if scene_67p {
     alloc::vec![
-      (1900.0, 5.0e9, 480, 4_000_000, true, true),
-      (1900.0, AU_M as f32, 480, 8_000_000, true, true),
+      (1900.0, 5.0e9, 480, 4_000_000, true, true, 0.0),
+      (1900.0, AU_M as f32, 480, 8_000_000, true, true, 0.0),
     ]
   } else {
     cases.to_vec()
   };
   let t_aphelion_s = (1900.0 - 270.0) * 86400.0;
   let (r67, v67) = comet_state_67p(t_aphelion_s);
-  for (days, half, px, n, spin, far) in cases {
+  for (days, half, px, n, spin, far, site_m) in cases {
     let (px, n) = match px_override {
       Some(p) if !far => (p, n * ((p * p) / (px * px)).max(1) as usize),
       _ => (px, n),
@@ -4532,11 +5439,20 @@ fn cell_kernels_reproduce_the_continuous_emission() {
     } else {
       cfg
     };
+    // the jet site: `site_m` along the jet axis at t = 0, turning with the nucleus (the jet
+    // state's `r_m` is the site, its `site_offset_m` the particle-system offset)
+    let off: V3 = scale(n0, site_m);
     let jet_at = move |t: f64| -> Option<JetState> {
       if far {
         Some(spinning_jet_from((r67, v67), t, axis, n0, true))
       } else if spin {
-        Some(spinning_jet(t, axis, n0, true))
+        let j = spinning_jet(t, axis, n0, true);
+        let turned = rotate_axis_angle(off, axis, OMEGA * t);
+        Some(JetState {
+          r_m: add(j.r_m, turned),
+          site_offset_m: [off[0] as f32, off[1] as f32, off[2] as f32],
+          ..j
+        })
       } else {
         orbit_jet(t)
       }
@@ -4627,6 +5543,9 @@ fn cell_kernels_reproduce_the_continuous_emission() {
     for _ in 0..n {
       let t_e = lcg(&mut rng) * t;
       let (rc, vc) = kepler::propagate_f64(rc0, vc0, SUN_MU_M3_S2, t_e);
+      // the grain leaves from the site at its emission time, with the site's surface velocity
+      let site = rotate_axis_angle(off, axis, OMEGA * t_e);
+      let (rc, vc) = (add(rc, site), add(vc, cross64(scale(axis, OMEGA), site)));
       // a spinning nucleus: the jet turns with it and emits only while its site faces the Sun
       let jet = if spin {
         let n = rotate_axis_angle(n0, axis, OMEGA * t_e);
@@ -4826,6 +5745,8 @@ fn cell_kernels_reproduce_the_continuous_emission() {
       }
       let tag = if far {
         "_67p"
+      } else if spin && site_m > 0.0 {
+        "_site"
       } else if spin {
         "_spin"
       } else {
@@ -4843,8 +5764,9 @@ fn cell_kernels_reproduce_the_continuous_emission() {
     let grains_px = binned as f64 / count.max(1) as f64;
     let noise = 1.0 / (25.0 * grains_px).sqrt();
     std::println!(
-      "[cells] {days} d, half {half:.3e} m{}: {count} px compared, rel rms {rel_rms:.3} (MC noise {noise:.3}), ripple {ripple:.3}, {grains_px:.0} grains/px",
-      if spin { ", spinning" } else { "" }
+      "[cells] {days} d, half {half:.3e} m{}{}: {count} px compared, rel rms {rel_rms:.3} (MC noise {noise:.3}), ripple {ripple:.3}, {grains_px:.0} grains/px",
+      if spin { ", spinning" } else { "" },
+      if site_m > 0.0 { ", site offset" } else { "" }
     );
     assert!(count > 50, "{days} d half {half}: {count} px");
     // the two 1-D profiles the eye judges: the brightness along the trail (summed across it)
@@ -5003,6 +5925,15 @@ fn open_chord_chains_deposit_their_flux_at_any_angle() {
               depth_au: 1.0,
               open: [c > 0, c + 1 < n_chords],
               rho: [1.0, 1.0],
+              mean: [0.0; 3],
+              kx: [0.0; 3],
+              ky: [0.0; 3],
+              sun: [0.0, 0.0, 1.0],
+              r_h_au: 1.0,
+              eye: [0.0; 3],
+              eye_w: 1.0,
+              albedo: 0.0,
+              w_mean: 1.0,
             };
             scatter_into(
               &p,
@@ -5148,7 +6079,7 @@ fn diag_two_hour_jet_pyramid_levels() {
       exposure: 1.0,
       inv_unit: 1e6,
       color: pack_color([1.0; 4]),
-      units_per_m: 1.0,
+      albedo: 0.0,
       mvp,
       eye_local: eye,
     };
@@ -5288,5 +6219,184 @@ fn diag_two_hour_jet_pyramid_levels() {
       let bytes: alloc::vec::Vec<u8> = img.iter().flat_map(|v| v.to_le_bytes()).collect();
       std::fs::write(alloc::format!("{prefix}_{name}.f32"), bytes).unwrap();
     }
+  }
+}
+
+/// An orthographic projection's photometric eye is at infinity along the view axis
+/// (`ScreenPacket::eye_w` = 0): the phase angle is the same at every texel and does not depend on
+/// where the camera stands — a point eye at the camera lit the dust beside it at α → 180° (the
+/// 500 km zoom frame held a forward glare with 13 % of its light that no telescope sees).
+#[test]
+fn orthographic_eye_is_at_infinity_along_the_view_axis() {
+  let packet = splat::Packet {
+    mean: [0.0; 3],
+    cov: [300.0 * 300.0, 0.0, 0.0, 300.0 * 300.0, 0.0, 1.0],
+    seg: [0.0; 3],
+    flux: 1.0,
+    open: [false; 2],
+    rho: [1.0; 2],
+  };
+  let sun = [1.0f32, 0.0, 0.0];
+  let phot = splat::Photometry {
+    albedo: 0.04,
+    sun,
+    r_h_au: 1.0,
+  };
+  let mvp = ortho_mvp(1000.0, [0.0, 0.0]);
+  let (w, h) = (200u32, 200u32);
+  let d = 1000.0f32;
+  let expect = phase::radiance_weight(0.04, sun, [0.0, 0.0, 1.0], 1.0);
+  for eye in [[0.0, 0.0, d], [500.0, 0.0, d], [-400.0, 300.0, 2.0 * d]] {
+    let p = splat::project_packet_lit(&packet, 1.0, &mvp, w, h, eye, &phot).expect("on screen");
+    assert_eq!(p.eye_w, 0.0, "eye {eye:?}");
+    assert!(
+      (p.eye[0]).abs() < 1e-6 && (p.eye[1]).abs() < 1e-6 && (p.eye[2] - 1.0).abs() < 1e-6,
+      "eye {eye:?}: direction {:?}",
+      p.eye
+    );
+    assert!(
+      (p.w_mean / expect - 1.0).abs() < 1e-6,
+      "w_mean {} vs {expect}",
+      p.w_mean
+    );
+    // every texel: the same phase angle (the Sun direction shifts by d / r_h, nothing at 1 AU)
+    for x in [
+      [p.mu[0] + 80.0, p.mu[1]],
+      [p.mu[0], p.mu[1] - 90.0],
+      [p.mu[0] - 60.0, p.mu[1] + 60.0],
+    ] {
+      let wt = splat::texel_weight(&p, x);
+      assert!(
+        (wt / expect - 1.0).abs() < 1e-4,
+        "texel {x:?}: {wt} vs {expect}"
+      );
+    }
+  }
+}
+
+/// A perspective projection keeps the eye point (`eye_w` = 1) and the texels resolve the phase
+/// angle across the packet: a texel 50 px from the mean of a 90°-field camera 1000 m away holds
+/// dust 500 m aside, at α = 116.6° against 90° at the mean (`kx`, `ky`: the inverse Gram matrix
+/// of the projection's Jacobian).
+#[test]
+fn perspective_texels_resolve_the_phase_angle() {
+  let packet = splat::Packet {
+    mean: [0.0; 3],
+    cov: [300.0 * 300.0, 0.0, 0.0, 300.0 * 300.0, 0.0, 1.0],
+    seg: [0.0; 3],
+    flux: 1.0,
+    open: [false; 2],
+    rho: [1.0; 2],
+  };
+  let sun = [1.0f32, 0.0, 0.0];
+  let phot = splat::Photometry {
+    albedo: 0.04,
+    sun,
+    r_h_au: 1.0,
+  };
+  // camera at (0, 0, D) looking along −z, 90° field: x_clip = x, y_clip = y, w_clip = D − z
+  let d = 1000.0f32;
+  let mut mvp = [0.0f32; 16];
+  mvp[0] = 1.0; // r0 = (1, 0, 0)
+  mvp[5] = 1.0; // r1 = (0, 1, 0)
+  mvp[10] = -1e-3; // r2: any depth row
+  mvp[11] = -1.0; // r3 = (0, 0, −1)
+  mvp[15] = d; // w = D − z
+  let (w, h) = (200u32, 200u32);
+  let eye = [0.0, 0.0, d];
+  let p = splat::project_packet_lit(&packet, 1.0, &mvp, w, h, eye, &phot).expect("on screen");
+  assert_eq!(p.eye_w, 1.0);
+  assert_eq!(p.eye, eye);
+  let at_mean = phase::radiance_weight(0.04, sun, [0.0, 0.0, d], 1.0);
+  assert!((p.w_mean / at_mean - 1.0).abs() < 1e-6);
+  // +50 px → ndc +0.5 → 500 m along +x at the packet's depth
+  let x = [p.mu[0] + 50.0, p.mu[1]];
+  let wt = splat::texel_weight(&p, x);
+  let expect = phase::radiance_weight(0.04, sun, [-500.0, 0.0, d], 1.0);
+  let alpha = (-500.0f32 / (500.0f32 * 500.0 + d * d).sqrt()).acos().to_degrees();
+  assert!((alpha - 116.57).abs() < 0.05, "α {alpha}");
+  assert!(
+    (wt / expect - 1.0).abs() < 1e-3,
+    "texel {x:?}: {wt} vs {expect} (ratio to the mean {})",
+    wt / at_mean
+  );
+  assert!(
+    (wt / at_mean
+      - phase::phase_function(alpha.to_radians())
+        / phase::phase_function(core::f32::consts::FRAC_PI_2))
+    .abs()
+      < 1e-3
+  );
+}
+
+/// The colour words of faint deposits average to the packet's colour: with the per-deposit
+/// rounding `counts · c + 0.5` every one-count deposit wrote (1, 1, 0) for an orange, so the
+/// faint tail turned yellow; the hashed per-texel threshold rounds up at some texels and down at
+/// others, and the sums come out unbiased.
+#[test]
+fn faint_colour_words_average_to_the_packet_colour() {
+  let layout = PyramidLayout::new(1200, 700);
+  let mut pyramid = alloc::vec![0u32; layout.total_words as usize];
+  let color = [0.84f32, 0.66, 0.2];
+  let mut rng = 7u64;
+  let sigma = 6.0f32;
+  for _ in 0..400 {
+    let p = ScreenPacket {
+      mu: [
+        lcg(&mut rng) as f32 * 1100.0 + 50.0,
+        lcg(&mut rng) as f32 * 600.0 + 50.0,
+      ],
+      cov: [sigma * sigma, 0.0, sigma * sigma],
+      seg: [0.0, 0.0],
+      amp: 1.0,
+      sigma_min: sigma,
+      det: sigma * sigma * sigma * sigma,
+      depth_au: 1.0,
+      open: [false, false],
+      rho: [1.0, 1.0],
+      mean: [0.0; 3],
+      kx: [0.0; 3],
+      ky: [0.0; 3],
+      sun: [0.0, 0.0, 1.0],
+      r_h_au: 1.0,
+      eye: [0.0; 3],
+      eye_w: 1.0,
+      albedo: 0.0,
+      w_mean: 1.0,
+    };
+    // the σ = 6 px packets land on level 1 (2-px texels, area 4): peak 1.5 counts, the deposits
+    // are one or two counts each
+    splat_scatter(&p, color, &layout, 0.375, &mut pyramid);
+  }
+  let (mut tau, mut sum, mut max) = (0u64, [0u64; 3], 0u32);
+  for &(off, lw, lh) in layout.levels.iter() {
+    for t in 0..(lw * lh) as usize {
+      let i = off as usize + t * PYRAMID_TEXEL_WORDS as usize;
+      let c = pyramid[i];
+      if c == 0 {
+        continue;
+      }
+      tau += c as u64;
+      max = max.max(c);
+      for k in 0..3 {
+        sum[k] += pyramid[i + 1 + k] as u64;
+      }
+    }
+  }
+  assert!(
+    tau > 20_000 && max <= 6,
+    "τ {tau} counts, max {max} per texel"
+  );
+  for k in 0..3 {
+    let ratio = sum[k] as f64 / tau as f64 / DUST_COLOR_SCALE as f64;
+    std::println!(
+      "[faint colour] channel {k}: Σ word / (16 Σ τ) = {ratio:.4} for c = {}",
+      color[k]
+    );
+    assert!(
+      (ratio - color[k] as f64).abs() < 0.02,
+      "channel {k}: {ratio:.4} vs {} (the per-deposit rounding gave 1, 1, 0)",
+      color[k]
+    );
   }
 }

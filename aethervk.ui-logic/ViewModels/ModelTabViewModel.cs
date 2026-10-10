@@ -350,10 +350,10 @@ public partial class ModelTabViewModel
   // ── Helpers ─────────────────────────────────────────────────────────────────────
 
   private static ParticleSystemModel BuildModel(ModelSession s) => new(
-    MassVariabilityPerc: s.MassVariabilityPerc,
     DiametreUm:          s.DiametreUm,
     DensityGCm3:         s.DensityGCm3,
     ScatteringEfficiency: s.ScatteringEfficiency,
+    GeometricAlbedo:     s.GeometricAlbedo,
     Afrho0Cm:            s.Afrho0Cm,
     AfrhoPower:          s.AfrhoPower,
     AfrhoCutoffAu:       s.AfrhoCutoffAu,

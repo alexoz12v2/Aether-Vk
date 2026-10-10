@@ -112,10 +112,10 @@ fn propagate_common_params_leaves_jet_specific_fields_intact() {
 
   // A DTO representing the update from the triggering jet (new common values).
   let mut dto = ParticleSystemDTO::zeroed();
-  dto.mass_variability_perc = 0.35;
   dto.diametre_um = 20.0;
   dto.density_gcm3 = 0.8;
   dto.scattering_efficiency = 1.1;
+  dto.geometric_albedo = 0.05;
   dto.afrho_0_cm = 800.0;
   dto.afrho_power = 2.2;
   dto.afrho_cutoff_au = 5.5;
@@ -129,10 +129,10 @@ fn propagate_common_params_leaves_jet_specific_fields_intact() {
   sibling.latitude_rad = 1.2; // per-jet — must be preserved
 
   // Apply common params exactly as propagate_common_params does:
-  sibling.mass_variability_perc = dto.mass_variability_perc;
   sibling.diametre_um = dto.diametre_um;
   sibling.density_gcm3 = dto.density_gcm3;
   sibling.scattering_efficiency = dto.scattering_efficiency;
+  sibling.geometric_albedo = dto.geometric_albedo;
   sibling.afrho_0_cm = dto.afrho_0_cm;
   sibling.afrho_power = dto.afrho_power;
   sibling.afrho_cutoff_au = dto.afrho_cutoff_au;
@@ -142,11 +142,11 @@ fn propagate_common_params_leaves_jet_specific_fields_intact() {
   assert_eq!(sibling.diametre_um, 20.0);
   assert_eq!(sibling.density_gcm3, 0.8);
   assert_eq!(sibling.scattering_efficiency, 1.1);
+  assert_eq!(sibling.geometric_albedo, 0.05);
   assert_eq!(sibling.afrho_0_cm, 800.0);
   assert_eq!(sibling.afrho_power, 2.2);
   assert_eq!(sibling.afrho_cutoff_au, 5.5);
   assert_eq!(sibling.afrho_max_value_cm, 150_000.0);
-  assert_eq!(sibling.mass_variability_perc, 0.35);
   assert_eq!(
     sibling.latitude_rad, 1.2,
     "latitude_rad is a per-jet property and must not be propagated by propagate_common_params"
