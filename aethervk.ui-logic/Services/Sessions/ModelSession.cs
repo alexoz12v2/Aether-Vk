@@ -37,14 +37,6 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   // See ParticleSystemEmitParams in particles.rs for units and valid ranges.
 
   /// <summary>
-  /// Percentage [0,1] variability of grain mass.
-  /// 0 = all grains have identical mass; 1 = std equals mean.
-  /// Corresponds to <c>ParticleSystemEmitParams.mass_variability_perc</c>.
-  /// </summary>
-  [ObservableProperty]
-  private float _massVariabilityPerc = 0.30f;
-
-  /// <summary>
   /// Diameter of a single dust grain in micrometres (μm).
   /// Physically reasonable range: 0.1–1000 μm. Typical: 1–100 μm.
   /// 67P default: 100 μm (significant large grain population).
@@ -63,12 +55,21 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   private float _densityGCm3 = 0.533f;
 
   /// <summary>
-  /// Radiation pressure scattering efficiency Q_pr.
+  /// Radiation pressure efficiency Q_pr (enters β only, not the brightness).
   /// Valid range: 0.5–2.0. Default: 1.0 (grey body).
   /// Corresponds to <c>ParticleSystemEmitParams.scattering_efficiency</c>.
   /// </summary>
   [ObservableProperty]
   private float _scatteringEfficiency = 1.0f;
+
+  /// <summary>
+  /// Geometric albedo p of the dust: the reflected radiance factor at zero phase (A(0) = 4p of
+  /// the Afρ literature). Cometary dust 0.03–0.06; valid range 0.01–0.5. Default: 0.04.
+  /// Enters the brightness (τ · p · Φ(α) / r_h²) and the Afρ → production conversion.
+  /// Corresponds to <c>ParticleSystemEmitParams.geometric_albedo</c>.
+  /// </summary>
+  [ObservableProperty]
+  private float _geometricAlbedo = 0.04f;
 
   /// <summary>
   /// Afρ photometric parameter at 1 AU heliocentric distance, in cm.

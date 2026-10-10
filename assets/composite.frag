@@ -31,6 +31,7 @@ const uint  DUST_PYR_TAU_MAX     = 3u;
 const uint  DUST_PYR_LEVEL_MASK  = 7u;
 const uint  DUST_PYR_TABLE       = 16u;
 const uint  DUST_PYR_TEXEL_WORDS = 5u;
+const float DUST_COLOR_SCALE     = 16.0; // the colour words over the tau counts (dust::DUST_COLOR_SCALE)
 
 layout(push_constant, std430) uniform CompositePush {
     float macroNear;        // 0
@@ -148,7 +149,8 @@ void main() {
                 uint c = dustPyramid.v[i];
                 if (c == 0u) continue;
                 tau += wgt * float(c) * scale;
-                rgb += wgt * vec3(float(dustPyramid.v[i + 1u]), float(dustPyramid.v[i + 2u]), float(dustPyramid.v[i + 3u])) * scale;
+                // the colour words are DUST_COLOR_SCALE times the tau counts (dust::DUST_COLOR_SCALE)
+                rgb += wgt * vec3(float(dustPyramid.v[i + 1u]), float(dustPyramid.v[i + 2u]), float(dustPyramid.v[i + 3u])) * (scale / DUST_COLOR_SCALE);
                 float dz = uintBitsToFloat(dustPyramid.v[i + 4u]);
                 depthMin = min(depthMin, dz);
             }

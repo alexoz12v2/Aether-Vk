@@ -28,12 +28,12 @@ layout(push_constant, std430) uniform PushConstants {
     DustUintBuffer    pyramid;  // 16: header + levels
     uint  liveCount;            // 24
     uint  flags;                // 28: DUST_VIEW_*
-    float exposure;             // 32: raw exposure (gain / tau_ref)
+    float exposure;             // 32: the stream colour's alpha (1 = photometric)
     float invUnit;              // 36: counts per (tau * px^2)
     uint  color;                // 40: stream colour r | g << 8 | b << 16
-    float unitsPerM;            // 44
+    float albedo;               // 44: geometric albedo (the radiance weight), <= 0 = unweighted
     mat4  mvp;                  // 48: particle-system local metres -> clip
-    vec4  eyeLocal;             // 112: eye in local metres
+    vec4  eyeLocal;             // 112: eye in local metres; w = the system's TTL (s), the hue clock
 } pc;                           // 128 bytes
 
 // The capsule of P into one grid of w x h texels of s px at word off (dust::scatter_into): for
@@ -59,6 +59,7 @@ bool scatter_into(DustScreenPacket P, vec3 color, float s, uint off, uint w, uin
         for (int tx = x0; tx <= x1; ++tx) {
             vec2 x = vec2((float(tx) + 0.5) * s, yc);
             float tau = dust_capsule_tau(P, x) * area * pc.invUnit;
+            if (P.albedo > 0.0) tau *= dust_texel_weight(P, x);
             if (!(tau >= 0.0) || isinf(tau)) continue;
             float tauC = min(tau, DUST_COUNT_MAX_PER_ADD) + carry;
             uint counts = uint(tauC + 0.5);
@@ -67,9 +68,14 @@ bool scatter_into(DustScreenPacket P, vec3 color, float s, uint off, uint w, uin
             uint i = off + (uint(ty) * w + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
             dust_atomic_add_sat(pc.pyramid, i, counts);
             if (full) {
-                dust_atomic_add_sat(pc.pyramid, i + 1u, uint(float(counts) * color.r + 0.5));
-                dust_atomic_add_sat(pc.pyramid, i + 2u, uint(float(counts) * color.g + 0.5));
-                dust_atomic_add_sat(pc.pyramid, i + 3u, uint(float(counts) * color.b + 0.5));
+                // colour words floor(counts * c + h), h a hashed threshold per texel, an ordered
+                // dither (dust::scatter_into): rounding counts * c + 0.5 per deposit turned every
+                // faint texel into (1, 1, 0)
+                float hf = float(dust_hash32(i) >> 8u) * (1.0 / 16777216.0);
+                uvec3 n = uvec3(float(counts) * color * DUST_COLOR_SCALE + hf);
+                dust_atomic_add_sat(pc.pyramid, i + 1u, n.r);
+                dust_atomic_add_sat(pc.pyramid, i + 2u, n.g);
+                dust_atomic_add_sat(pc.pyramid, i + 3u, n.b);
                 // nearest dust: 0 means "no dust yet" (positive f32 bits order as uints)
                 uint cur = pc.pyramid.v[i + 4u];
                 if (cur == 0u || depthBits < cur) {
@@ -86,7 +92,7 @@ bool scatter_into(DustScreenPacket P, vec3 color, float s, uint off, uint w, uin
 void scatter(DustScreenPacket P, vec3 color, uint levels) {
     // the peak is measured whatever the unit (a view fainter than the unit must still move it:
     // not_flow.rdc), before any texel test
-    atomicMax(pc.pyramid.v[DUST_PYR_TAU_MAX], floatBitsToUint(P.amp));
+    atomicMax(pc.pyramid.v[DUST_PYR_TAU_MAX], floatBitsToUint(P.amp * P.wMean));
     uint level = dust_splat_level(P.sigmaMin, levels);
     float ex = DUST_SPLAT_SIGMAS * sqrt(P.cov.x), ey = DUST_SPLAT_SIGMAS * sqrt(P.cov.z);
     // safety valve against runaway threads: a packet whose capsule band would visit more than
@@ -131,21 +137,26 @@ void main() {
     DustMoments P = pred >= 0 ? pc.moments.m[pred] : M;
     vec3 seg = pred >= 0 ? P.mean_flux.xyz - M.mean_flux.xyz : vec3(0.0);
     float ratio = dust_width_ratio(M, pred >= 0, P);
-    // the arc of a rotating jet (dust::arc_dirs): the pieces follow it, and there are enough
-    int pp = pred >= 0 ? dust_streak_pred(pc.render, uint(pred)) : -1;
-    vec3 ppMean = pp >= 0 ? pc.moments.m[pp].mean_flux.xyz : vec3(0.0);
-    vec3 dO, dP;
-    bool young = pred >= 0 && M.cov_b_age_id.z <= DUST_ARC_MAX_AGE_SAMPLES * max(P.cov_b_age_id.z - M.cov_b_age_id.z, 0.0);
-    bool arc = young && dust_arc_dirs(M.mean_flux.xyz, P.mean_flux.xyz, pp >= 0, ppMean, dO, dP);
-    uint nT = arc ? DUST_TIME_PIECES_MAX : dust_time_pieces(ratio);
+    // the spiral of a rotating nucleus (dust::spiral_of): the pieces follow it, and there are
+    // enough of them to draw it
+    vec3 spAxis; float spOmega;
+    bool spiral = pred >= 0 && dust_spiral_of(M, P, spAxis, spOmega);
+    float ageO = M.cov_b_age_id.z, ageP = pred >= 0 ? P.cov_b_age_id.z : ageO;
+    uint nT = spiral ? DUST_TIME_PIECES_MAX : dust_time_pieces(ratio);
     float invT = 1.0 / float(nT);
     float exposure = pc.exposure;
     if ((pc.flags & DUST_VIEW_FLOW) != 0u) {
         exposure *= dust_flow_factor(age, uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_HI]),
                                      uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_LO]));
     }
+    // physical photometry: every texel of the packets gets p * Phi(alpha) / r_h^2 at the dust it
+    // holds (dust_texel_weight); the cluster's Sun direction and r_h, the phase table
+    dust_phot_albedo = pc.albedo;
+    dust_phot_sun = dust_sun_dir(M);
+    dust_phot_rh = dust_helio_au(M);
+    dust_phot_lut = pc.pyramid;
     vec3 stream = vec3(float(pc.color & 0xFFu), float((pc.color >> 8u) & 0xFFu), float((pc.color >> 16u) & 0xFFu)) / 255.0;
-    vec3 color = dust_age_color(stream, age);
+    vec3 color = dust_age_color(stream, age, pc.eyeLocal.w);
     // a polyline below a pixel is one pooled packet (dust_polyline_merged), uniform along the time
     // segment; otherwise every size bin is a capsule along its own chord, open towards its
     // neighbours, with the bin's time segment as a Gaussian (dust::subpackets_merged)
@@ -170,8 +181,8 @@ void main() {
             float sc2 = sc * sc;
             float St[6];
             for (int k = 0; k < 6; ++k) St[k] = base[k] * sc2;
-            vec3 m0 = arc ? dust_arc_point(mean, pm, dO, dP, u0) : mean + seg * u0;
-            vec3 s0 = arc ? dust_arc_point(mean, pm, dO, dP, u0 + invT) - m0 : seg * invT;
+            vec3 m0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0) : mean + seg * u0;
+            vec3 s0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0 + invT) - m0 : seg * invT;
             DustScreenPacket SP;
             if (dust_project_packet(m0, St, s0, flux * invT, exposure, pc.mvp, W, H, pc.eyeLocal.xyz, false, false, vec2(1.0), SP)) {
                 scatter(SP, color, levels);
@@ -200,8 +211,8 @@ void main() {
                     float sc2 = sc * sc;
                     float St[6];
                     for (int k = 0; k < 6; ++k) St[k] = base[k] * sc2;
-                    vec3 m0 = arc ? dust_arc_point(mean, pm, dO, dP, u0) : mean + segT * u0;
-                    vec3 s0 = arc ? dust_arc_point(mean, pm, dO, dP, u0 + invT) - m0 : segT * invT;
+                    vec3 m0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0) : mean + segT * u0;
+                    vec3 s0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0 + invT) - m0 : segT * invT;
                     DustScreenPacket SP;
                     if (dust_project_packet(m0, St, s0, flux * invT, exposure, pc.mvp, W, H, pc.eyeLocal.xyz, false, false, vec2(1.0), SP)) {
                         scatter(SP, color, levels);
@@ -211,7 +222,7 @@ void main() {
                 // the time cell of the bin is the quadrilateral between its chord and the
                 // predecessor's: swept when its edges are pixels apart (dust::time_sweep)
                 uint nS = pred >= 0 ? dust_time_sweep(M, P, b, pc.mvp, W, H) : 1u;
-                vec2 rho = dust_bin_density_ends(M.edges[b].w, M.edges[b + 1u].w);
+                vec2 rho = dust_bin_density_ends(dust_edge_factor(M, b), dust_edge_factor(M, b + 1u));
                 if (nS == 1u) {
                     vec3 mean, chord; float S[6]; float flux;
                     dust_bin_chord(M, b, segT, mean, chord, S, flux);
@@ -234,8 +245,8 @@ void main() {
                 // covariance scaled from the cluster's width to the predecessor's
                 vec3 mean, chord; float S[6]; float flux;
                 dust_bin_chord(M, b, vec3(0.0), mean, chord, S, flux);
-                vec2 rho = dust_bin_density_ends(M.edges[b].w, M.edges[b + 1u].w);
-                float f = 0.5 * (M.edges[b].w + M.edges[b + 1u].w);
+                vec2 rho = dust_bin_density_ends(dust_edge_factor(M, b), dust_edge_factor(M, b + 1u));
+                float f = 0.5 * (dust_edge_factor(M, b) + dust_edge_factor(M, b + 1u));
                 float f2 = f * f;
                 vec3 hs = 0.5 * invT * segT;
                 float k = DUST_CHORD_VAR_FACTOR;
@@ -245,7 +256,7 @@ void main() {
                     float u0 = float(t) * invT;
                     float sc = r0 + (1.0 - r0) * (u0 + 0.5 * invT);
                     float sc2 = sc * sc * f2;
-                    vec3 shift = arc ? dust_arc_point(mid, midP, dO, dP, u0) - mid : segT * u0;
+                    vec3 shift = spiral ? dust_spiral_point(mid, midP, ageO, ageP, spAxis, spOmega, u0) - mid : segT * u0;
                     float St[6];
                     St[0] = P.cov_a.x * sc2 + k * hs.x * hs.x;
                     St[1] = P.cov_a.y * sc2 + k * hs.x * hs.y;
@@ -278,7 +289,8 @@ void main() {
                     vec2 dxy = vec2(tx, ty) + 0.5 - mu;
                     if (dot(dxy, dxy) > r * r) continue;
                     uint k = off + (uint(ty) * w + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
-                    for (uint c = 0u; c < 4u; ++c) dust_atomic_add_sat(pc.pyramid, k + c, counts);
+                    dust_atomic_add_sat(pc.pyramid, k, counts);
+                    for (uint c = 1u; c < 4u; ++c) dust_atomic_add_sat(pc.pyramid, k + c, counts * uint(DUST_COLOR_SCALE));
                 }
             }
             atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u);

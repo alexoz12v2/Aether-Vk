@@ -891,31 +891,6 @@ pub fn choose_micro_color_format(
   }
 }
 
-/// Dust accumulation target format: `R32G32B32A32_SFLOAT` when the device supports it as a
-/// blendable color attachment usable as a transient input attachment (`image_ok`), unless
-/// `force_f16` (`AETHERVK_DUST_ACCUM=f16`, A/B) or the micro target is the 8-bit fallback (the
-/// dithered 8-bit path then covers the dust too); else the micro-layer format. An fp16 additive
-/// sum stalls after ~2–4 k equal splats (11-bit significand) while ~10⁵ land in one pixel in a
-/// telescope view (`not_flow.rdc`): the nucleus pixel read 20–40× too dim.
-pub fn choose_dust_accum_format(
-  optimal_features: vk::FormatFeatureFlags,
-  image_ok: bool,
-  force_f16: bool,
-  micro_color_format: vk::Format,
-) -> vk::Format {
-  let needed =
-    vk::FormatFeatureFlags::COLOR_ATTACHMENT | vk::FormatFeatureFlags::COLOR_ATTACHMENT_BLEND;
-  if !force_f16
-    && image_ok
-    && optimal_features.contains(needed)
-    && micro_color_format == vk::Format::R16G16B16A16_SFLOAT
-  {
-    vk::Format::R32G32B32A32_SFLOAT
-  } else {
-    micro_color_format
-  }
-}
-
 /// Compositing context stored per-command-buffer when inside a compositing
 /// render pass. Used by `bind_pipeline` to transparently create compositing-
 /// compatible pipeline variants.
@@ -1186,8 +1161,6 @@ pub struct Device {
   depth_stencil_format: vk::Format,
   /// micro-layer color target of the compositing pass, see [`choose_micro_color_format`]
   micro_color_format: vk::Format,
-  /// dust accumulation target of the compositing pass, see [`choose_dust_accum_format`]
-  dust_accum_format: vk::Format,
   /// Recording command buffers
   recording_command_buffers:
     dashmap::DashMap<(CommandBufferHandle, QueueRole), RecordingCmdBufferData>,
@@ -2114,33 +2087,6 @@ impl Device {
       aethervk_oshal_rlib::log!("[Device] micro-layer color target: {:?}", chosen);
       chosen
     };
-    // Dust accumulation: RGBA32F where it blends (not in the required-format table: queried)
-    let dust_accum_format = {
-      let f = vk::Format::R32G32B32A32_SFLOAT;
-      let features =
-        unsafe { instance.instance.get_physical_device_format_properties(physical_device, f) }
-          .optimal_tiling_features;
-      let usage = vk::ImageUsageFlags::COLOR_ATTACHMENT
-        | vk::ImageUsageFlags::INPUT_ATTACHMENT
-        | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT;
-      let image_ok = unsafe {
-        instance.instance.get_physical_device_image_format_properties(
-          physical_device,
-          f,
-          vk::ImageType::TYPE_2D,
-          vk::ImageTiling::OPTIMAL,
-          usage,
-          vk::ImageCreateFlags::empty(),
-        )
-      }
-      .is_ok();
-      let force_f16 = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_ACCUM")
-        .is_some_and(|v| v.trim().eq_ignore_ascii_case("f16"));
-      let chosen = choose_dust_accum_format(features, image_ok, force_f16, micro_color_format);
-      aethervk_oshal_rlib::log!("[Device] dust accumulation target: {:?}", chosen);
-      chosen
-    };
-
     let create_renderpass2 = ash::khr::create_renderpass2::Device::new(&instance.instance, &device);
     let synchronization2 = ash::khr::synchronization2::Device::new(&instance.instance, &device);
     let buffer_device_address =
@@ -2300,7 +2246,6 @@ impl Device {
       instance,
       depth_stencil_format,
       micro_color_format,
-      dust_accum_format,
       recording_command_buffers: dashmap::DashMap::with_capacity(32),
       pending_mesh_updates: locks::DebugTrackedMutex::new(alloc::vec::Vec::new()),
     })
@@ -8018,7 +7963,6 @@ impl Device {
           &wpresentation_engine,
           self.depth_stencil_format,
           self.micro_color_format,
-          self.dust_accum_format,
         )
       } else {
         RenderPassSpecification::single_pass(&wpresentation_engine, self.depth_stencil_format)

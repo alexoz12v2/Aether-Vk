@@ -19,12 +19,8 @@
 const uint  DUST_CHILDREN          = 8u;
 // LOD (mirror of dust::LOD_* / DUST_CHILD_PX / DUST_TILES_*): children of every on-screen
 // cluster are DUST_CHILD_PX dots, as many as cover its projected cloud, within the tier budget
-const uint  DUST_MAX_CHILDREN      = 1024u;
-const uint  DUST_LOD_CLUSTER_BITS  = 22u;
-const uint  DUST_LOD_CLUSTER_MASK  = (1u << 22u) - 1u;
 // stable child-pattern id in the low mantissa bits of the beta half-spread (dust::CHILD_ID_BITS)
 const uint  DUST_CHILD_ID_MASK     = (1u << 16u) - 1u;
-const float DUST_CHILD_RESHAPE_TAU = 3600.0;  // dust::CHILD_RESHAPE_TAU_S
 const float DUST_CHILD_PX          = 1.5;
 const uint  DUST_TILES_X           = 64u;
 const uint  DUST_TILES_Y           = 36u;
@@ -64,27 +60,15 @@ const float DUST_TRACER_LEVEL        = 0.5;
 const float DUST_FLOW_SHARE          = 0.85;
 const float DUST_FLOW_KAPPA          = 4.0;
 const float DUST_FLOW_I0_KAPPA       = 11.301922;
-const uint  DUST_LOD_HEADER_LIST     = 6u;  // u64 (2 words), written by dust_lod.comp
-const uint  DUST_LOD_HEADER_FLOW_SPEED = 8u; // the host's flow uniform (dust::DustFlowUniform):
-const uint  DUST_LOD_HEADER_FLAGS    = 9u;  //   time-lapse factor K (diagnostics), DUST_VIEW_* flags,
-const uint  DUST_LOD_HEADER_T_HI     = 10u; //   flow clock T hi / lo (exact emission epochs)
-const uint  DUST_LOD_HEADER_T_LO     = 11u;
-const uint  DUST_LOD_HEADER_TAU_MAX  = 12u; // largest cluster optical depth in tile units (pass A, atomicMax of f32 bits)
-const uint  DUST_LOD_HEADER_LAMBDA   = 13u; // this frame's budget share (pass B, for dust.vert)
-const uint  DUST_LOD_HEADER_ON_SCREEN = 14u; // clusters on screen (pass A)
-const uint  DUST_LOD_HEADER_SUN_G    = 15u; // solar gravity at the jet (host): footprint beta extent
-const uint  DUST_LOD_HEADER_HIST     = 16u; // demand histogram: count, sum per bin (pass A)
-const uint  DUST_LOD_HIST_BINS       = 21u;
-const float DUST_LOD_DEMAND_PASS     = -1.0; // DustLodPushConstants::lambda of pass A
-const float DUST_LOD_TARGET_FILL     = 0.9;
 const float DUST_CHILD_PX_MAX        = 12.0;
 // render cluster y word: ring slot | stream shift << 27 | live << 31 (dust::render_word)
 const uint  DUST_RENDER_SLOT_MASK    = (1u << 22u) - 1u;
 const uint  DUST_RENDER_SHIFT_BIT0   = 27u;
 const uint  DUST_RENDER_LIVE_BIT     = 0x80000000u;
 // ─── v4 render (mirror of dust::splat::*): Gaussian packets, capsule splats, pyramid ───
-const uint  DUST_PYRAMID_HEADER_WORDS = 64u;
+const uint  DUST_PYRAMID_HEADER_WORDS = 256u;
 const uint  DUST_PYRAMID_TEXEL_WORDS  = 5u;   // tau, tau*r, tau*g, tau*b (fixed point), nearest depth (AU bits)
+const float DUST_COLOR_SCALE          = 16.0; // the colour words over the tau counts (dust::DUST_COLOR_SCALE)
 const uint  DUST_PYR_LEVELS           = 0u;
 const uint  DUST_PYR_WIDTH            = 1u;
 const uint  DUST_PYR_HEIGHT           = 2u;
@@ -94,6 +78,9 @@ const uint  DUST_PYR_T_HI             = 5u;   // flow clock
 const uint  DUST_PYR_T_LO             = 6u;
 const uint  DUST_PYR_LEVEL_MASK       = 7u;   // bit l: level l was touched (atomicOr)
 const uint  DUST_PYR_TRACER_COUNTS    = 8u;   // tracer dot height in counts (f32 bits)
+const uint  DUST_PYR_WHITE            = 9u;   // f32 bits: this frame's white point (radiance factor, host-written)
+const uint  DUST_PYR_SOFTENING        = 10u;  // f32 bits: this frame's auto softening (host-written)
+const uint  DUST_PYR_PHASE_LUT        = 64u;  // 181 f32 bits: the dust phase function at 0..180 degrees (dust::PYR_PHASE_LUT)
 const uint  DUST_PYR_MEASURE          = 12u;  // the white-point measurement grid: offset, width, height
 const uint  DUST_PYR_UNIT             = 15u;  // f32 bits: the fixed-point unit of this frame's counts (host-written, for dump readers)
 const uint  DUST_WHITE_LEVEL          = 4u;
@@ -108,15 +95,14 @@ const float DUST_SIZE_RANGE_FACTOR    = 10.0;   // dust::SIZE_RANGE_FACTOR (size
 const float DUST_CHORD_VAR_FACTOR     = 1.21;
 const uint  DUST_TIME_PIECES_MAX      = 4u;
 const uint  DUST_TIME_SWEEP_MAX       = 4u;    // dust::TIME_SWEEP_MAX
-const float DUST_ARC_MIN_FRACTION     = 0.1;   // dust::ARC_MIN_FRACTION
-const float DUST_ARC_MAX_AGE_SAMPLES  = 8.0;   // dust::ARC_MAX_AGE_SAMPLES
+const float DUST_LIT_ARC_END_EPS      = 1e-5;  // dust::LIT_ARC_END_EPS
+const float DUST_SPIRAL_MIN_TURN      = 0.01;  // dust::SPIRAL_MIN_TURN (rad)
+const float DUST_SPIRAL_MAX_AGE_SAMPLES = 8.0; // dust::SPIRAL_MAX_AGE_SAMPLES
 const float DUST_TIME_SWEEP_STEP_PX   = 1.0;   // dust::TIME_SWEEP_STEP_PX
 const float DUST_MERGE_PX             = 1.0;    // dust::DUST_MERGE_PX
 const float DUST_DET_ANISO_FLOOR      = 1e-6;   // dust::DUST_DET_ANISO_FLOOR
 const float DUST_COUNT_MAX_PER_ADD    = 16777216.0;
 const float DUST_SPLAT_MAX_TEXELS     = 16384.0;
-const float DUST_AGE_HUE_SPAN         = 64.0;
-const float DUST_AGE_HUE_TAU_S        = 2592000.0;
 const float DUST_AU_M                 = 1.495978707e11;
 
 // ─── df64 primitives (mirror of dust::df) ──────────────────────────────────
@@ -314,8 +300,19 @@ struct DustMoments {
     vec4 mean_flux;      // ps local mean of the reference grain (m), w flux (m^2, 0 = culled)
     vec4 cov_a;          // Sigma_v xx xy xz yy (m^2)
     vec4 cov_b_age_id;   // yz zz, z age (s), w child-pattern id (uint bits)
-    vec4 edges[DUST_SIZE_EDGES]; // size polyline: xyz local position of bin edge j (m), w speed factor sqrt(beta_j/beta)
+    vec4 edges[DUST_SIZE_EDGES]; // size polyline: xyz local position of bin edge j (m); w: edges 0 and 16 their
+                                 // speed factor sqrt(beta_j/beta) (linear in j, dust_edge_factor), edge 1 the
+                                 // nucleus spin rate (rad/s), edges 2..4 its unit axis (dust_spiral_point)
 };
+// speed factor sqrt(beta_j/beta) of edge j (dust::DustMoments::edge_factor)
+float dust_edge_factor(DustMoments M, uint j) {
+    float lo = M.edges[0].w, hi = M.edges[DUST_SIZE_BINS].w;
+    return lo + (hi - lo) * (float(j) / float(DUST_SIZE_BINS));
+}
+float dust_spin_rate(DustMoments M) { return M.edges[1].w; }
+vec3 dust_spin_axis(DustMoments M) { return vec3(M.edges[2].w, M.edges[3].w, M.edges[4].w); }
+float dust_helio_au(DustMoments M) { return M.edges[5].w; }
+vec3 dust_sun_dir(DustMoments M) { return vec3(M.edges[6].w, M.edges[7].w, M.edges[8].w); }
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer DustMomentsBuffer {
     DustMoments m[];
 };
@@ -391,13 +388,17 @@ float dust_lit_time_map(float u, vec4 lit, float omega, float dur) {
     precise float seg_len = arc_start + arc - seg_start;
     precise float m = u * lit.z;
     precise float psi;
-    if (m < seg_len) {
-        psi = seg_start + m;
+    // the ends of the lit arcs are inclusive (dust::lit_time_map): u = 1 is the end of the
+    // last lit arc, never the start of the next one
+    precise float eps = DUST_LIT_ARC_END_EPS * arc;
+    if (m <= seg_len + eps) {
+        psi = seg_start + min(m, seg_len);
     } else {
         precise float mr = m - seg_len;
         precise float k = floor(mr / arc);
         precise float r = mr - k * arc;
-        psi = arc_start + TWO_PI + k * TWO_PI + r;
+        if (r <= eps) psi = arc_start + k * TWO_PI + arc;
+        else          psi = arc_start + TWO_PI + k * TWO_PI + r;
     }
     precise float dt = (psi - ps) / omega;
     return clamp(dt, 0.0, dur);
@@ -419,40 +420,6 @@ float dust_gauss(float u1, float u2) {
     return sqrt(-2.0 * log(max(u1, 1e-7))) * cos(2.0 * DUST_PI_F32 * u2);
 }
 
-// 3 independent N(0,1) from the hash chain started at h0 (mirror of `dust::gauss3`); h4 = last hash
-vec3 dust_gauss3(uint h0, out uint h4) {
-    uint h1 = dust_pcg(h0);
-    uint h2 = dust_pcg(h1);
-    uint h3 = dust_pcg(h2);
-    h4 = dust_pcg(h3);
-    return vec3(
-        dust_gauss(dust_u01(h0), dust_u01(h1)),
-        dust_gauss(dust_u01(h1 ^ 0x68E31DA4u), dust_u01(h2)),
-        dust_gauss(dust_u01(h3), dust_u01(h4))
-    );
-}
-
-// Child-pattern id of a cluster from its beta half-spread field (mirror of `dust::child_id`)
-uint dust_child_id(float dbetaField) { return floatBitsToUint(dbetaField) & DUST_CHILD_ID_MASK; }
-
-// Offset of child `child` of the cluster with child-pattern id `id` from the cluster centre (mirror
-// of `dust::child_offset`):
-//   spread * (cos(th) N3 + sin(th) N3')   ejection velocity dispersion; th = rate * pi/2 *
-//                                          log2(1 + age / tau) reshapes the cloud as it ages
-//                                          (per-axis variance stays spread^2)
-// + 1/2 dbeta g age^2 anti-sun             size spread within the cluster's beta stratum
-// Depends only on (id, child): children 0..k keep their place when the LOD changes k, and the id
-// comes from the emission record, so a seek draws the same children as playback.
-vec3 dust_child_offset(uint id, uint child, float spread, float dbetaHalf, float age, vec4 antiSunG) {
-    uint h4, m4;
-    vec3 n3 = dust_gauss3(dust_pcg((id & DUST_CHILD_ID_MASK) * DUST_MAX_CHILDREN + child + 0x9E3779B9u), h4);
-    uint h5 = dust_pcg(h4);
-    float dbeta = abs(dbetaHalf) * (2.0 * dust_u01(h5) - 1.0);
-    vec3 m3 = dust_gauss3(dust_pcg(h5 ^ 0x5BD1E995u), m4);
-    float rate = 0.5 + dust_u01(dust_pcg(m4));
-    float th = rate * (0.5 * DUST_PI_F32 * 1.4426950408889634) * log(1.0 + max(age, 0.0) * (1.0 / DUST_CHILD_RESHAPE_TAU));
-    return spread * (cos(th) * n3 + sin(th) * m3) + (0.5 * dbeta * antiSunG.w * age * age) * antiSunG.xyz;
-}
 
 // ─── Streams (mirror of dust::batch_streams / stream_* / size_stratum_mass) ───
 // (stream shift, break before the batch) of a batch
@@ -567,161 +534,38 @@ int dust_streak_pred(DustRenderBuffer render, uint r) {
     return dust_render_live(render.c[r - n].age_id_dbeta_flux.y) ? int(r - n) : -1;
 }
 
-// Footprint extent (m) of a render cluster for the LOD: its stream spread or, larger, the beta
-// spread of its size stratum 1/2 dbeta g age^2 that its children are scattered over (mirror of
-// dust::dust_extent)
-float dust_extent(DustRenderCluster C, float sunG) {
-    return max(C.pos_size.w, 0.5 * abs(C.age_id_dbeta_flux.z) * sunG * C.age_id_dbeta_flux.x * C.age_id_dbeta_flux.x);
-}
-
-// One Liang-Barsky plane f0 + t fd >= 0 on [a, b]; false when nothing is left
-bool dust_lb(float f0, float fd, inout float a, inout float b) {
-    if (fd == 0.0) return f0 >= 0.0;
-    float t = -f0 / fd;
-    if (fd > 0.0) { if (t > a) a = t; }
-    else if (t < b) b = t;
-    return a <= b;
-}
-
-// [a, b] snapped outwards to a power-of-two grid of step in (len/16, len/8] (exact, bit ops)
-vec2 dust_snap_range(float a, float b) {
-    float len = max(b - a, 1e-30);
-    uint bits = floatBitsToUint(len);
-    int cl = int((bits >> 23u) & 0xFFu) - 127 + ((bits & 0x7FFFFFu) != 0u ? 1 : 0);
-    int e = clamp(cl - 3, -126, 0);
-    float step = uintBitsToFloat(uint(e + 127) << 23u);
-    return vec2(max(floor(a / step) * step, 0.0), min(-floor(-b / step) * step, 1.0));
-}
-
-// Visible part of the streak p -> q (lateral sigma sp at p, sq at q): Liang-Barsky in homogeneous
-// clip space against w > 0 and |x|, |y| <= (1 + m) w, m = margin + 3 sigma (ndc). Out:
-// x, y the snapped parameter range, z the on-screen length (px), w the lateral width (px).
-bool dust_streak_clip(mat4 mvp, vec3 p, vec3 q, float sp, float sq, vec4 params, out vec4 S) {
-    S = vec4(0.0);
-    float units = params.x, p00 = params.y, p11 = params.z, pxn = abs(params.w);
-    if (!(p00 > 0.0) || !(p11 > 0.0) || !(pxn > 0.0)) return false;
-    vec4 c0 = mvp * vec4(p, 1.0);
-    vec4 c1 = mvp * vec4(q, 1.0);
-    vec4 d = c1 - c0;
-    float a = 0.0, b = 1.0;
-    float eps = 1e-6 * (abs(c0.w) + abs(c1.w));
-    if (!dust_lb(c0.w - eps, d.w, a, b)) return false;
-    float wNear = min(c0.w + a * d.w, c0.w + b * d.w);
-    if (!(wNear > 0.0)) return false;
-    float sigma = max(sp, sq) * units;
-    float m = 1.0 + min(DUST_STREAK_MARGIN + 3.0 * sigma * max(p00, p11) / wNear, DUST_STREAK_MARGIN_MAX);
-    for (int k = 0; k < 2; ++k) {
-        if (!dust_lb(m * c0.w - c0[k], m * d.w - d[k], a, b)) return false;
-        if (!dust_lb(m * c0.w + c0[k], m * d.w + d[k], a, b)) return false;
-    }
-    float wa = c0.w + a * d.w, wb = c0.w + b * d.w;
-    float pxX = pxn * (p00 / p11);
-    float dx = (c0.x + b * d.x) / wb - (c0.x + a * d.x) / wa;
-    float dy = (c0.y + b * d.y) / wb - (c0.y + a * d.y) / wa;
-    float lenPx = sqrt((dx / pxX) * (dx / pxX) + (dy / pxn) * (dy / pxn));
-    float widthPx = min(sigma * p11 / min(wa, wb) / pxn, 2.0 / pxn);
-    S = vec4(dust_snap_range(a, b), lenPx, widthPx);
-    return true;
-}
-
-// Children a streak asks for: DUST_CHILD_PX dots along its visible length, times its lateral width
-// in dots (mirror of dust::streak_want)
-float dust_streak_want(float lenPx, float widthPx) {
-    return max(max(lenPx, widthPx) / DUST_CHILD_PX, 1.0) * max(widthPx / DUST_CHILD_PX, 1.0);
-}
-
-// Parameter of streak dot `child` on [t0, t1] (mirror of dust::streak_dot_t)
-float dust_streak_dot_t(float t0, float t1, uint id, uint child) {
-    precise float x = dust_u01(dust_pcg((id & DUST_CHILD_ID_MASK) ^ 0x1B873593u)) + float(child) * DUST_STREAK_PHI_INV;
-    return t0 + (t1 - t0) * (x - floor(x));
-}
-
-// Child `child` of the streak p -> q on [t0, t1] (mirror of dust::streak_child): at
-// t = t0 + (t1 - t0) fract(u_id + child phi^-1) (any prefix 0..k evenly spread, stable when k
-// changes), lateral gaussian of sigma lerp(sp, sq, t) perpendicular to the streak, plus the
-// beta-stratum term at age lerp(ap, aq, t)
-vec3 dust_streak_child(vec3 p, vec3 q, float sp, float sq, float ap, float aq, float t0, float t1,
-                       uint id, uint child, float dbetaField, vec4 antiSunG) {
-    id &= DUST_CHILD_ID_MASK;
-    float t = dust_streak_dot_t(t0, t1, id, child);
-    vec3 d = q - p;
-    float dl = length(d);
-    vec3 dn = dl > 0.0 ? d / dl : d;
-    vec3 up = abs(dn.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
-    vec3 c = cross(up, dn);
-    float cl = length(c);
-    vec3 e1 = cl > 0.0 ? c / cl : c;
-    vec3 e2 = cross(dn, e1);
-    uint h0 = dust_pcg((id * DUST_MAX_CHILDREN + child) ^ 0x7F4A7C15u);
-    uint h1 = dust_pcg(h0);
-    uint h2 = dust_pcg(h1);
-    uint h3 = dust_pcg(h2);
-    uint h4 = dust_pcg(h3);
-    float n1 = dust_gauss(dust_u01(h0), dust_u01(h1));
-    float n2 = dust_gauss(dust_u01(h2), dust_u01(h3));
-    float sigma = sp + (sq - sp) * t;
-    float age = ap + (aq - ap) * t;
-    float dbeta = abs(dbetaField) * (2.0 * dust_u01(h4) - 1.0);
-    return p + d * t + sigma * (n1 * e1 + n2 * e2) + (0.5 * dbeta * antiSunG.w * age * age) * antiSunG.xyz;
-}
-
-// Children wanted by a cluster whose spread covers `spreadPx` pixels (mirror of dust::lod_want)
-float dust_lod_want(float spreadPx) {
-    float r = spreadPx / DUST_CHILD_PX;
-    return max(r * r, 1.0);
-}
-
-// Children drawn under the budget share `lambda`, below the tracer's child index (mirror of
-// dust::lod_children)
-uint dust_lod_children(float want, float lambda) {
-    return uint(clamp(floor(lambda * want + 0.5), 1.0, float(DUST_TRACER_CHILD)));
-}
-
-// A cluster's demand: ceil(want), at most 2^20 (mirror of dust::lod_demand)
-uint dust_lod_demand(float want) { return clamp(uint(ceil(want)), 1u, 1u << 20u); }
-
-// Demand histogram bin: floor(log2(d)), d = dust_lod_demand (mirror of dust::lod_hist_bin)
-uint dust_lod_hist_bin(uint d) { return min(uint(findMSB(max(d, 1u))), DUST_LOD_HIST_BINS - 1u); }
-// d / 2^bin in 1/256 (mirror of dust::lod_hist_add)
-uint dust_lod_hist_add(uint d) { return (max(d, 1u) << 8u) >> dust_lod_hist_bin(d); }
-
-// Cost of share l: sum over bins of count * max(1, l * mean demand) (dust::lod_lambda_from)
-float dust_lod_cost(DustUintBuffer header, float l) {
-    float c = 0.0;
-    for (uint b = 0u; b < DUST_LOD_HIST_BINS; ++b) {
-        float n = float(header.v[DUST_LOD_HEADER_HIST + 2u * b]);
-        float s = float(header.v[DUST_LOD_HEADER_HIST + 2u * b + 1u]);
-        if (n > 0.0) {
-            float mean = s / n * (uintBitsToFloat((b + 127u) << 23u) * (1.0 / 256.0));
-            c += n * clamp(l * mean, 1.0, float(DUST_TRACER_CHILD));
-        }
-    }
-    return c;
-}
-
-// This frame's budget share from this frame's demand histogram: bisection in log space of
-// sum count * max(1, l * mean) = fill * budget (mirror of dust::lod_lambda_from)
-float dust_lod_lambda(DustUintBuffer header, uint budget, uint onScreen, float lambdaMax) {
-    float lmax = max(lambdaMax, 1e-6);
-    float target = DUST_LOD_TARGET_FILL * float(budget) - float(onScreen / DUST_TRACER_EVERY);
-    if (dust_lod_cost(header, lmax) <= target) return lmax;
-    float lo = -19.93, hi = log(lmax) * 1.4426950408889634;
-    for (int it = 0; it < 24; ++it) {
-        float mid = 0.5 * (lo + hi);
-        if (dust_lod_cost(header, exp(mid * 0.6931471805599453)) <= target) lo = mid; else hi = mid;
-    }
-    return clamp(exp(lo * 0.6931471805599453), 1e-6, lmax);
-}
-
-// Drawn radius (px) of k children asking for want: they keep covering the footprint, softer when
-// fewer (mirror of dust::splat_radius_px)
-float dust_splat_radius(float want, uint k) {
-    return min(DUST_CHILD_PX * sqrt(max(want / float(max(k, 1u)), 1.0)), DUST_CHILD_PX_MAX);
-}
-
+// The stable child-pattern id in the low bits of the beta half-spread field (mirror of
+// dust::child_id)
+uint dust_child_id(float dbetaField) { return floatBitsToUint(dbetaField) & DUST_CHILD_ID_MASK; }
 // The cluster with child-pattern id `id` carries a tracer dot (mirror of dust::is_tracer)
 bool dust_is_tracer(uint id) {
     return dust_pcg((id & DUST_CHILD_ID_MASK) ^ 0x7AC312E5u) % DUST_TRACER_EVERY == 0u;
+}
+
+// PHASE-LUT-BEGIN (generated by scripts/gen_phase_lut.py; the 181 values of
+// assets/sim/data/dustphaseHM_table.txt, the Lowell composite dust phase function, Schleicher 2010,
+// normalised to 1 at 0 degrees, are dust::phase::PHASE_HM_0DEG and travel in the pyramid header at
+// DUST_PYR_PHASE_LUT: a const float[181] in the shader with a dynamic index changed the splat's
+// results on the GPU even when unused. Do not edit by hand.)
+// Phi(alpha) for a phase angle in radians (clamped to 0..pi), linear between the table's degrees
+// (dust::phase::phase_function)
+float dust_phase_function(DustUintBuffer pyr, float alphaRad) {
+    float deg = clamp(alphaRad * (180.0 / DUST_PI_F32), 0.0, 180.0);
+    uint i = min(uint(deg), 179u);
+    float f = deg - float(i);
+    float a = uintBitsToFloat(pyr.v[DUST_PYR_PHASE_LUT + i]);
+    float b = uintBitsToFloat(pyr.v[DUST_PYR_PHASE_LUT + i + 1u]);
+    return a + (b - a) * f;
+}
+// PHASE-LUT-END
+// The radiance weight of a packet, p * Phi(alpha) / r_h^2 (dust::radiance_weight): sunDir the unit
+// direction to the Sun, toEye the vector to the eye (any length, zero = alpha 0), r_h in AU
+float dust_radiance_weight(DustUintBuffer pyr, float albedo, vec3 sunDir, vec3 toEye, float rhAu) {
+    float n = dot(toEye, toEye);
+    float cosA = n > 0.0 ? dot(sunDir, toEye) / sqrt(n) : 1.0;
+    float alpha = acos(clamp(cosA, -1.0, 1.0));
+    float r = max(rhAu, 1e-6);
+    return albedo * dust_phase_function(pyr, alpha) / (r * r);
 }
 
 // ─── Flow (mirror of dust::flow_*): brightness marks on synchrones (dust of one emission instant),
@@ -777,9 +621,10 @@ uint dust_splat_level(float sigmaPx, uint levels) {
     return min(uint(max(l, 0.0)), max(levels, 1u) - 1u);
 }
 
-// Hue ramp position of an age (dust::age_hue_fraction)
-float dust_age_hue_fraction(float age) {
-    return clamp(log(1.0 + max(age, 0.0) / DUST_AGE_HUE_TAU_S) / log(1.0 + DUST_AGE_HUE_SPAN), 0.0, 1.0);
+// Hue ramp position of an age: clamp(age / TTL, 0, 1), a linear clock to the complement at one TTL
+// of the system, constant beyond; TTL <= 0 = no rotation (dust::age_hue_fraction)
+float dust_age_hue_fraction(float age, float ttl) {
+    return ttl > 0.0 ? clamp(age / ttl, 0.0, 1.0) : 0.0;
 }
 
 vec3 dust_oklab_from_linear(vec3 c) {
@@ -801,14 +646,45 @@ vec3 dust_linear_from_oklab(vec3 lab) {
                 -0.004196086 * l - 0.7034186 * m + 1.7076147 * s);
 }
 
-// Colour of dust of age `age`: the stream colour's hue rotated in OKLab by pi * f(age), gamut
-// clipped (dust::age_color)
-vec3 dust_age_color(vec3 stream, float age) {
+// Linear sRGB of an OKLab colour brought into the [0, 1] gamut by reducing its chroma (lightness
+// and hue kept), 8 bisection steps on the chroma scale without early exit, then clamped; a colour
+// in gamut is the plain conversion (dust::oklab_to_gamut)
+bool dust_in_gamut(vec3 c) {
+    return all(greaterThanEqual(c, vec3(-1e-4))) && all(lessThanEqual(c, vec3(1.0 + 1e-4)));
+}
+vec3 dust_oklab_to_gamut(vec3 lab) {
+    vec3 full = dust_linear_from_oklab(lab);
+    vec3 rgb = full;
+    if (!dust_in_gamut(full)) {
+        float lo = 0.0, hi = 1.0;
+        vec3 best = dust_linear_from_oklab(vec3(lab.x, 0.0, 0.0));
+        for (int i = 0; i < 8; ++i) {
+            float k = 0.5 * (lo + hi);
+            vec3 c = dust_linear_from_oklab(vec3(lab.x, k * lab.y, k * lab.z));
+            if (dust_in_gamut(c)) { lo = k; best = c; } else { hi = k; }
+        }
+        rgb = best;
+    }
+    return clamp(rgb, 0.0, 1.0);
+}
+
+// Colour of dust of age `age` in a system of TTL `ttl`: the stream colour's hue rotated in OKLab
+// by pi * f(age), the complement from one TTL on, chroma reduced to the gamut (dust::age_color)
+vec3 dust_age_color(vec3 stream, float age, float ttl) {
     vec3 lab = dust_oklab_from_linear(clamp(stream, 0.0, 1.0));
-    float th = DUST_PI_F32 * dust_age_hue_fraction(age);
+    float th = DUST_PI_F32 * dust_age_hue_fraction(age, ttl);
     float s = sin(th), c = cos(th);
-    vec3 rot = vec3(lab.x, c * lab.y - s * lab.z, s * lab.y + c * lab.z);
-    return clamp(dust_linear_from_oklab(rot), 0.0, 1.0);
+    return dust_oklab_to_gamut(vec3(lab.x, c * lab.y - s * lab.z, s * lab.y + c * lab.z));
+}
+
+// 32-bit integer hash (lowbias32; dust::dust_hash32)
+uint dust_hash32(uint x) {
+    x ^= x >> 16u;
+    x *= 0x7feb352du;
+    x ^= x >> 15u;
+    x *= 0x846ca68bu;
+    x ^= x >> 16u;
+    return x;
 }
 
 // a + b saturating at 0xFFFFFFFF (no saturating atomics in core GLSL): compare-and-swap loop
@@ -836,7 +712,36 @@ struct DustScreenPacket {
     bool  openStart; // the capsule continues into the neighbouring bin: no cap (dust::Packet::open)
     bool  openEnd;
     vec2  rho;       // density at the segment's ends, mean 1, linear between (dust::Packet::rho)
+    // photometry (albedo > 0, dust::ScreenPacket): the mean (local m), local metres per pixel
+    // within the view plane (d = dx kx + dy ky), the Sun direction and r_h at the mean, the
+    // homogeneous eye (the direction to it from x is eye.xyz - eye.w * x: the eye point when
+    // perspective, w = 1; the unit view axis when orthographic, w = 0: that eye is at infinity),
+    // the weight at the mean (the peak word); every texel gets its own weight (dust_texel_weight)
+    vec3  mean;
+    vec3  kx;
+    vec3  ky;
+    vec3  sun;
+    float rhAu;
+    vec4  eye;
+    float albedo;
+    float wMean;
 };
+// the photometry of the cluster being splatted (set per cluster by dust_splat.comp; albedo <= 0:
+// none) and the pyramid that carries the phase table
+float dust_phot_albedo = 0.0;
+vec3  dust_phot_sun = vec3(0.0, 0.0, 1.0);
+float dust_phot_rh = 1.0;
+DustUintBuffer dust_phot_lut;
+// the radiance weight at the dust a texel holds (dust::texel_weight): the packet's mean displaced
+// by the texel's in-plane offset, the Sun direction and r_h moved with it, the phase angle to the eye
+float dust_texel_weight(DustScreenPacket P, vec2 x) {
+    vec2 dxy = x - P.mu;
+    vec3 d = P.kx * dxy.x + P.ky * dxy.y;
+    vec3 pos = P.mean + d;
+    vec3 rVec = P.sun * (-P.rhAu * DUST_AU_M) + d;
+    float rn = max(length(rVec), 1.0);
+    return dust_radiance_weight(dust_phot_lut, P.albedo, rVec * (-1.0 / rn), P.eye.xyz - P.eye.w * pos, rn / DUST_AU_M);
+}
 
 // the relative density at the two ends of a size bin's chord with edge speed factors f0 <= f1:
 // (f0 + f1)/(2 f0) and (f0 + f1)/(2 f1), mean 1 over the chord (dust::bin_density_ends)
@@ -872,6 +777,38 @@ bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposu
     P.seg = vec2(dot(jx, d), dot(jy, d));
     float g00 = dot(jx, jx), g01 = dot(jx, jy), g11 = dot(jy, jy);
     float detG = max(g00 * g11 - g01 * g01, 0.0);
+    // local metres per pixel within the view plane (dust::project_packet_lit)
+    if (detG > 1e-30) {
+        P.kx = (jx * g11 - jy * g01) / detG;
+        P.ky = (jy * g00 - jx * g01) / detG;
+    } else {
+        P.kx = vec3(0.0);
+        P.ky = vec3(0.0);
+    }
+    // the view direction: the depth gradient of the projection (the w row when perspective, the
+    // clip-z row when orthographic), oriented so that the scene's origin lies in front of the eye
+    bool perspective = dot(r3, r3) > 0.0;
+    vec3 fwd = vec3(0.0);
+    {
+        vec3 r2 = vec3(mvp[0][2], mvp[1][2], mvp[2][2]);
+        vec3 fwdRaw = perspective ? r3 : r2;
+        float fn2 = dot(fwdRaw, fwdRaw);
+        if (fn2 > 0.0) {
+            fwd = fwdRaw / sqrt(fn2);
+            if (dot(-eyeLocal, fwd) < 0.0) fwd = -fwd;
+        }
+    }
+    // the photometric eye: the eye point when perspective, at infinity along the view axis when
+    // orthographic (dust::ScreenPacket::eye_w)
+    P.eye = (perspective || dot(fwd, fwd) == 0.0) ? vec4(eyeLocal, 1.0) : vec4(-fwd, 0.0);
+    P.mean = mean;
+    P.sun = dust_phot_sun;
+    P.rhAu = dust_phot_rh;
+    P.albedo = dust_phot_albedo;
+    P.wMean = dust_phot_albedo > 0.0
+        ? dust_radiance_weight(dust_phot_lut, dust_phot_albedo, dust_phot_sun, P.eye.xyz - P.eye.w * mean, dust_phot_rh)
+        : 1.0;
+
     // `precise`: no fused multiply-add here, so the cancelling determinant rounds exactly as the
     // CPU reference's (an fma changes it by the whole cancellation error, and with it the
     // packet's amplitude and level: whole packets differed between the two)
@@ -883,6 +820,18 @@ bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposu
     float detC = max(max(detRaw, DUST_DET_ANISO_FLOOR * lamMax * lamMax), 1e-30);
     P.det = detC;
     P.amp = exposure * flux * sqrt(detG) / (2.0 * DUST_PI_F32 * sqrt(detC));
+    // the part of the packet in front of the eye (dust::project_packet_lit): a Gaussian along the
+    // view direction cut at the eye's plane
+    {
+        if (dot(fwd, fwd) > 0.0) {
+            float depth = dot(mean - eyeLocal, fwd);
+            float varV = S[0] * fwd.x * fwd.x + S[3] * fwd.y * fwd.y + S[5] * fwd.z * fwd.z
+                       + 2.0 * (S[1] * fwd.x * fwd.y + S[2] * fwd.x * fwd.z + S[4] * fwd.y * fwd.z);
+            float sigmaV = sqrt(max(varV, 0.0));
+            if (sigmaV > 0.0) P.amp *= 0.5 * (1.0 + dust_erf(depth / (sigmaV * 1.4142135623730951)));
+            else if (depth < 0.0) P.amp = 0.0;
+        }
+    }
     if (!(P.amp > 0.0) || isinf(P.amp)) return false;
     // the smallest sigma from the floored determinant, never from the cancelling half - dd
     P.sigmaMin = sqrt(max(detC / lamMax, DUST_PIXEL_FILTER_VAR * 0.5));
@@ -954,7 +903,7 @@ void dust_bin_packet(DustMoments M, uint b, out vec3 mean, out float S[6], out f
     vec3 a = M.edges[b].xyz, c = M.edges[b + 1u].xyz;
     mean = 0.5 * (a + c);
     vec3 h = 0.5 * (c - a);
-    float f = 0.5 * (M.edges[b].w + M.edges[b + 1u].w);
+    float f = 0.5 * (dust_edge_factor(M, b) + dust_edge_factor(M, b + 1u));
     float f2 = f * f, k = DUST_CHORD_VAR_FACTOR;
     S[0] = f2 * M.cov_a.x + k * h.x * h.x;
     S[1] = f2 * M.cov_a.y + k * h.x * h.y;
@@ -973,7 +922,7 @@ void dust_bin_chord(DustMoments M, uint b, vec3 segT, out vec3 mean, out vec3 ch
     mean = a;
     chord = c - a;
     vec3 h = 0.5 * segT;
-    float f = 0.5 * (M.edges[b].w + M.edges[b + 1u].w);
+    float f = 0.5 * (dust_edge_factor(M, b) + dust_edge_factor(M, b + 1u));
     float f2 = f * f, k = DUST_CHORD_VAR_FACTOR;
     S[0] = f2 * M.cov_a.x + k * h.x * h.x;
     S[1] = f2 * M.cov_a.y + k * h.x * h.y;
@@ -1007,7 +956,7 @@ void dust_bin_sweep(DustMoments M, DustMoments P, uint b, uint k, uint nS, out v
     vec3 dmax = dot(da, da) > dot(dc, dc) ? da : dc;
     float u = (float(k) + 0.5) / float(nS);
     vec3 ak = a + da * u, ck = c + dc * u;
-    float f = 0.5 * (M.edges[b].w + M.edges[b + 1u].w);
+    float f = 0.5 * (dust_edge_factor(M, b) + dust_edge_factor(M, b + 1u));
     float f2 = f * f;
     float kv = DUST_CHORD_VAR_FACTOR;
     vec3 h = dmax * (0.5 / float(nS));
@@ -1026,38 +975,21 @@ vec3 dust_rotate3(vec3 v, vec3 axis, float angle) {
     float s = sin(angle), c = cos(angle);
     return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
 }
-// the directions (from the jet) of a sample and its predecessor when their time segment is an
-// arc (dust::arc_dirs): false for a straight segment. A sample too close to the jet to have a
-// direction (the one pinned at "now") takes the rotation seen from the predecessor's predecessor,
-// continued one step
-bool dust_arc_dirs(vec3 own, vec3 pred, bool hasPP, vec3 pp, out vec3 dO, out vec3 dP) {
-    float rp = length(pred);
-    vec3 seg = pred - own;
-    if (!(rp > 0.0) || length(seg) < DUST_ARC_MIN_FRACTION * rp) return false;
-    dP = pred / rp;
-    float ro = length(own);
-    if (ro > DUST_ARC_MIN_FRACTION * rp) {
-        dO = own / ro;
-    } else if (hasPP) {
-        float rq = length(pp);
-        if (!(rq > 0.0)) { dO = dP; return true; }
-        vec3 dQ = pp / rq;
-        vec3 ax = cross(dQ, dP);
-        float sn = length(ax);
-        if (sn < 1e-6) { dO = dP; return true; }
-        float angle = atan(sn, dot(dQ, dP));
-        dO = dust_rotate3(dP, ax / sn, angle);
-    } else {
-        dO = dP;
-    }
-    return true;
+// the spiral of a rigidly rotating emitter (dust::spiral_point): the two samples (ages ageO,
+// ageP) un-spun by R(+omega age) are linear in age, interpolated, and re-spun by R(-omega age(u));
+// the straight segment when omega = 0
+vec3 dust_spiral_point(vec3 own, vec3 pred, float ageO, float ageP, vec3 axis, float omega, float u) {
+    vec3 lO = dust_rotate3(own, axis, omega * ageO);
+    vec3 lP = dust_rotate3(pred, axis, omega * ageP);
+    vec3 l = lO + (lP - lO) * u;
+    return dust_rotate3(l, axis, -omega * (ageO + u * (ageP - ageO)));
 }
-// the point at fraction u of the arc from own (u = 0) to pred (u = 1) (dust::arc_point)
-vec3 dust_arc_point(vec3 own, vec3 pred, vec3 dO, vec3 dP, float u) {
-    float ro = length(own), rp = length(pred);
-    float r = ro + u * (rp - ro);
-    vec3 d = dO * (1.0 - u) + dP * u;
-    return d * (r / max(length(d), 1e-12));
+// the spiral gate of a sample with a predecessor (dust::spiral_of)
+bool dust_spiral_of(DustMoments M, DustMoments P, out vec3 axis, out float omega) {
+    omega = dust_spin_rate(M);
+    axis = dust_spin_axis(M);
+    float dAge = max(P.cov_b_age_id.z - M.cov_b_age_id.z, 0.0);
+    return omega * dAge > DUST_SPIRAL_MIN_TURN && M.cov_b_age_id.z <= DUST_SPIRAL_MAX_AGE_SAMPLES * dAge;
 }
 
 // The whole polyline as one packet (dust::pooled_packet): the bins' mean, their mean covariance

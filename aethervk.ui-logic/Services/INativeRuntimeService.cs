@@ -413,6 +413,9 @@ public interface INativeRuntimeService : IDisposable
   /// Dust history per age tier, summed over the scene's particle systems (overlay diagnostic).
   System.Collections.Generic.IReadOnlyList<DustTierStats> DustStats();
 
+  /// The dust exposure of a view (white point in V mag/arcsec², EV): null without a view.
+  DustExposure? DustExposure(ulong presentationEngineId);
+
   /// Camera world position (AU) and rotation, for the overlay position tracker (all builds).
   bool DebugCameraState(
     ulong cameraEntityId,
@@ -934,6 +937,13 @@ internal unsafe static class PInvokeAetherVkCore
     uint command, // 1,2,3
     nint inDto,
     nint outDto
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_dustExposure(
+    nint ctx,
+    ulong peHandle,
+    CDustExposureDTO* outExposure
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -2469,6 +2479,16 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     throw new NotImplementedException();
   }
 
+  public unsafe DustExposure? DustExposure(ulong presentationEngineId)
+  {
+    if (_ctx == 0)
+      return null;
+    CDustExposureDTO e;
+    if (!PInvokeAetherVkCore.avkSimulationContext_dustExposure(_ctx, presentationEngineId, &e))
+      return null;
+    return new DustExposure(e.WhiteRf, e.P50Rf, e.Softening, e.MagArcsec2, e.Ev, e.Fixed != 0);
+  }
+
   public unsafe System.Collections.Generic.IReadOnlyList<DustTierStats> DustStats()
   {
     if (_ctx == 0)
@@ -2643,10 +2663,10 @@ public record AnimationTarget(
 /// Common members among all dust jets
 /// </summary>
 public record ParticleSystemModel(
-  float MassVariabilityPerc,
   float DiametreUm,
   float DensityGCm3,
   float ScatteringEfficiency,
+  float GeometricAlbedo,
   float Afrho0Cm,
   float AfrhoPower,
   float AfrhoCutoffAu,
@@ -2775,10 +2795,10 @@ internal readonly struct AnimationTargetDTO
 internal readonly struct ParticleSystemDTO(ParticleSystemModel model, ParticleSystemJet jet)
 {
   // -- start of jet common properties --
-  public readonly float MassVariabilityPerc = model.MassVariabilityPerc;
   public readonly float DiametreUm = model.DiametreUm;
   public readonly float DensityGCm3 = model.DensityGCm3;
   public readonly float ScatteringEfficiency = model.ScatteringEfficiency;
+  public readonly float GeometricAlbedo = model.GeometricAlbedo;
 
   public readonly float Afrho0Cm = model.Afrho0Cm;
   public readonly float AfrhoPower = model.AfrhoPower;
@@ -3118,6 +3138,32 @@ internal struct CEarthObserverStatusDTO
 /// <summary>Native Earth observer: the submode (<c>EarthObserverOrientationMode</c> value), the
 /// view-axis error to the target and the target elevation (rad) at the last commit.</summary>
 public sealed record EarthObserverStatus(int Mode, double AimErrorRad, double TargetElevationRad);
+
+/// <summary>Mirrors Rust <c>CDustExposure</c> (ffi.rs), 32 bytes.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal readonly struct CDustExposureDTO
+{
+  public readonly float WhiteRf;
+  public readonly float P50Rf;
+  public readonly float Softening;
+  public readonly float MagArcsec2;
+  public readonly float Ev;
+  public readonly uint Fixed;
+  public readonly uint _pad0;
+  public readonly uint _pad1;
+}
+
+/// <summary>A view's dust exposure: the white point as a radiance factor
+/// (τ · p · Φ(α) / r_h²) and as a V surface brightness (mag/arcsec²), the exposure value
+/// log2(1 / white), the median texel and the auto softening.</summary>
+public sealed record DustExposure(
+  float WhiteRf,
+  float P50Rf,
+  float Softening,
+  float MagArcsec2,
+  float Ev,
+  bool Fixed
+);
 
 /// <summary>Mirrors Rust <c>CDustTierStats</c> (ffi.rs), 56 bytes.</summary>
 [StructLayout(LayoutKind.Sequential)]

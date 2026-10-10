@@ -536,10 +536,17 @@
                 <TextBlock Classes="unit-of-measurement" Text="μm" />
               </Panel>
 
-              <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrAlbedo}" />
+              <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrScatteringEfficiency}" />
               <TextBox Grid.Row="4" Grid.Column="2">
                 <i:Interaction.Behaviors>
                   <b:NumericTextBoxBehavior Value="{Binding CurrentSession.ScatteringEfficiency}" Minimum="0.5" Maximum="2" />
+                </i:Interaction.Behaviors>
+              </TextBox>
+
+              <TextBlock Grid.Row="10" Grid.Column="0" Text="{Binding StrGeometricAlbedo}" />
+              <TextBox Grid.Row="10" Grid.Column="2">
+                <i:Interaction.Behaviors>
+                  <b:NumericTextBoxBehavior Value="{Binding CurrentSession.GeometricAlbedo}" Minimum="0.01" Maximum="0.5" />
                 </i:Interaction.Behaviors>
               </TextBox>
 

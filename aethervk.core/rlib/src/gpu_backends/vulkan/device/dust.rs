@@ -132,7 +132,7 @@ unsafe impl Sync for DustGpuSystem {}
 /// Host side of one view's splat pyramid: the white point feedback (`dust::white_point_from_level`),
 /// the auto softening and the fixed-point unit.
 pub struct DustViewHost {
-  /// white point (exposure-scaled optical depth per px², raw exposure), 0 = not measured yet
+  /// white point (radiance factor per px²), seeded at `DUST_WHITE_SEED_MAG` until measured
   pub white: f32,
   /// median dust texel of the last measured frame (same units), 0 = none
   pub p50: f32,
@@ -148,7 +148,7 @@ pub struct DustViewHost {
 impl Default for DustViewHost {
   fn default() -> Self {
     Self {
-      white: 0.0,
+      white: dust::mag_arcsec2_to_white(dust::DUST_WHITE_SEED_MAG),
       p50: 0.0,
       tau_max: 0.0,
       frame: 0,
@@ -302,8 +302,10 @@ pub struct DustViewParams {
   pub levels: u32,
   /// exposure-scaled optical depth × px² per count
   pub unit: f32,
-  /// white point (1 before any measurement)
+  /// white point (the seed surface brightness before any measurement)
   pub white: f32,
+  /// the median dust texel (0 before any measurement)
+  pub p50: f32,
   /// auto softening (`dust::auto_softening`)
   pub softening: f32,
 }
@@ -313,12 +315,6 @@ impl Device {
   /// where unsupported).
   pub fn micro_color_format(&self) -> vk::Format {
     self.micro_color_format
-  }
-
-  /// Dust accumulation target of the compositing pass (unused by the v4 renderer, kept until the
-  /// attachment is removed; see `choose_dust_accum_format`).
-  pub fn dust_accum_format(&self) -> vk::Format {
-    self.dust_accum_format
   }
 
   /// Ring capacity for this device: high tier on discrete GPUs, low tier otherwise, small in CPU
@@ -853,6 +849,7 @@ impl Device {
     let unit = host.unit();
     host.slot_unit[slot] = unit;
     let (white, softening) = host.display();
+    let p50 = host.p50;
     drop(host);
     let _ = (lvl_off, lw, lh);
     // the header: level table + this frame's view words
@@ -869,6 +866,9 @@ impl Device {
     header[dust::PYR_TRACER_COUNTS as usize] = tracer_counts.to_bits();
     // the unit this frame's counts are written with, for dump readers (`download_dust_pyramid`)
     header[dust::PYR_UNIT as usize] = unit.to_bits();
+    // the white point and softening this frame is shown with (dump readers)
+    header[dust::PYR_WHITE as usize] = white.to_bits();
+    header[dust::PYR_SOFTENING as usize] = softening.to_bits();
     *view.frame_words.lock() = header;
     if cpu {
       // host-written pyramid: zero it and write the header now; the splats follow on the host
@@ -899,6 +899,7 @@ impl Device {
       levels: view.layout.level_count(),
       unit,
       white,
+      p50,
       softening,
     })
   }
@@ -1067,7 +1068,9 @@ impl Device {
       .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
       .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
       .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-      .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::SHADER_STORAGE_WRITE);
+      .dst_access_mask(
+        vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::SHADER_STORAGE_WRITE,
+      );
     let to_copy = vk::MemoryBarrier2::default()
       .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
       .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
@@ -1127,6 +1130,7 @@ impl Device {
       levels: view.layout.level_count(),
       unit: host.unit(),
       white,
+      p50: host.p50,
       softening,
     })
   }

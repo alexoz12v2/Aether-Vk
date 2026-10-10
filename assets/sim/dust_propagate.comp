@@ -29,7 +29,8 @@ layout(push_constant, std430) uniform PushConstants {
     vec4 rot_inv;                // 80: root -> particle-system quaternion (xyzw)
     vec4 ttl;                    // 96: age band: x max age = TTL (s), y min age (s), z 1 = no fade,
                                  //     w the tier's stream shift
-} pc;                            // 112 bytes
+    vec4 spin;                   // 112: nucleus spin axis * omega (rad/s, particle-system axes), w unused
+} pc;                            // 128 bytes
 
 // K(r0, v0 + dv, mu, dt) - r, rotated into the particle-system frame
 vec3 secant_v(Df3 r0, Df3 v0, vec3 dv, vec2 mu, vec2 dt, Df3 r) {
@@ -99,6 +100,22 @@ void main() {
                 dust_kepler(r0, vK, df_mul(DF_SUN_MU, df_two_sum(1.0, -betaK)), age, rK, vvK);
                 M.edges[k] = vec4(dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(rK, ps))), factor);
             }
+            // the nucleus spin in the spare w lanes (the factors are linear in k: edges 0 and 16
+            // keep theirs, dust_edge_factor)
+            float omega = length(pc.spin.xyz);
+            vec3 axis = omega > 0.0 ? pc.spin.xyz / omega : vec3(0.0, 0.0, 1.0);
+            M.edges[1].w = omega;
+            M.edges[2].w = axis.x;
+            M.edges[3].w = axis.y;
+            M.edges[4].w = axis.z;
+            // the heliocentric distance and the Sun direction of the mean (dust::packet_moments)
+            vec3 rM = df3_to_f32(r);
+            float rN = max(length(rM), 1.0);
+            vec3 sun = dust_qrot(pc.rot_inv, rM * (-1.0 / rN));
+            M.edges[5].w = rN / DUST_AU_M;
+            M.edges[6].w = sun.x;
+            M.edges[7].w = sun.y;
+            M.edges[8].w = sun.z;
             M.mean_flux = vec4(local, flux);
             M.cov_a = vec4(a0.x * a0.x + a1.x * a1.x + a2.x * a2.x,
                            a0.x * a0.y + a1.x * a1.y + a2.x * a2.y,

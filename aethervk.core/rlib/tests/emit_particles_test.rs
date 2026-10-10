@@ -22,6 +22,7 @@ fn default_params() -> ParticleSystemEmitParams {
   params.afrho_cutoff_au = 15.0;
   params.afrho_max_value_cm = 100_000.0;
   params.scattering_efficiency = 1.0;
+  params.geometric_albedo = 0.04;
   params
 }
 
@@ -75,7 +76,7 @@ fn production_rate_and_config_are_sane() {
   let cfg = p.dust_emit_config(5.5, TTL_US);
   assert_eq!(cfg.q_dust_kgs, q as f64);
   assert!((cfg.ttl_s - 30.0 * 86_400.0).abs() < 1e-6);
-  assert!(cfg.beta_ref > 0.0 && cfg.xsec_per_g_ref() > 0.0);
+  assert!(cfg.beta_ref > 0.0 && cfg.albedo > 0.0 && cfg.dist.mean_speed_factor() > 0.0);
   let d = (cfg.jet_dir[0].powi(2) + cfg.jet_dir[1].powi(2) + cfg.jet_dir[2].powi(2)).sqrt();
   assert!((d - 1.0).abs() < 1e-5);
 }

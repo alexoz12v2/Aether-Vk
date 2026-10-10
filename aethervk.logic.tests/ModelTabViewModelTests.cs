@@ -398,10 +398,10 @@ public class ModelTabViewModelTests
   public void ModelSession_DefaultValues_ArePhysicallyReasonable()
   {
     var session = new ModelSession();
-    Assert.Equal(0.30f, session.MassVariabilityPerc);
     Assert.Equal(100f, session.DiametreUm);
     Assert.Equal(0.533f, session.DensityGCm3, 3);
     Assert.Equal(1.0f, session.ScatteringEfficiency);
+    Assert.Equal(0.04f, session.GeometricAlbedo);
     Assert.Equal(100f, session.Afrho0Cm);
     Assert.Equal(2.0f, session.AfrhoPower);
     Assert.Equal(15.0f, session.AfrhoCutoffAu);
@@ -421,8 +421,8 @@ public class ModelTabViewModelTests
 
     session.DiametreUm = 25.0f;
     session.DensityGCm3 = 1.1f;
-    session.MassVariabilityPerc = 0.4f;
     session.ScatteringEfficiency = 1.5f;
+    session.GeometricAlbedo = 0.06f;
     session.Afrho0Cm = 1000f;
     session.AfrhoPower = 3.0f;
     session.AfrhoCutoffAu = 6.0f;
@@ -430,8 +430,8 @@ public class ModelTabViewModelTests
 
     Assert.Contains(nameof(ModelSession.DiametreUm), raised);
     Assert.Contains(nameof(ModelSession.DensityGCm3), raised);
-    Assert.Contains(nameof(ModelSession.MassVariabilityPerc), raised);
     Assert.Contains(nameof(ModelSession.ScatteringEfficiency), raised);
+    Assert.Contains(nameof(ModelSession.GeometricAlbedo), raised);
     Assert.Contains(nameof(ModelSession.Afrho0Cm), raised);
     Assert.Contains(nameof(ModelSession.AfrhoPower), raised);
     Assert.Contains(nameof(ModelSession.AfrhoCutoffAu), raised);

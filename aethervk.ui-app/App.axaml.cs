@@ -325,6 +325,8 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public System.Collections.Generic.IReadOnlyList<DustTierStats> DustStats() =>
     System.Array.Empty<DustTierStats>();
 
+  public DustExposure? DustExposure(ulong presentationEngineId) => null;
+
   public bool CameraSetRotoTranslate(
     ulong cameraId,
     double posX,

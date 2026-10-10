@@ -196,7 +196,7 @@ impl Instance {
     // =========================================================================
     // 3. Setup Validation Features & Debug Messenger
     // =========================================================================
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, test))]
     let mut printf_features = alloc::vec![];
 
     #[cfg(any(debug_assertions, test))]
@@ -400,8 +400,9 @@ impl Instance {
 
         match result {
           Ok(inst) => {
-            // RenderDoc layer is now loaded into the process. We can safely unmute it.
-            #[cfg(any(debug_assertions, test))]
+            // RenderDoc layer is now loaded into the process. We can safely unmute it (the
+            // renderdoc module is debug-only: a release test build has no layer to unmute).
+            #[cfg(debug_assertions)]
             if crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
               .load(core::sync::atomic::Ordering::Relaxed)
             {
@@ -694,7 +695,8 @@ impl Instance {
         }
         // checkpoints cost a little on every marker: debug builds, or AETHERVK_GPU_CHECKPOINTS=1
         let want_checkpoints = cfg!(debug_assertions)
-          || aethervk_oshal_rlib::os::env::var("AETHERVK_GPU_CHECKPOINTS").is_some_and(|v| v.trim() == "1");
+          || aethervk_oshal_rlib::os::env::var("AETHERVK_GPU_CHECKPOINTS")
+            .is_some_and(|v| v.trim() == "1");
         if want_checkpoints && has_ext(ash::nv::device_diagnostic_checkpoints::NAME) {
           optional_extensions.insert(utils::OptionalExtensionSupportFlags::DIAGNOSTIC_CHECKPOINTS);
         }

@@ -33,17 +33,22 @@ pub mod v2 {
     pub start_velocity_mean: f32,
     /// m/s std σ of the normally distributed initial velocity
     pub start_velocity_std: f32,
-    /// percentage from 0 to 1 about mass variability. 100% (1) means std = mean in a normal
-    /// distribution
-    pub mass_variability_perc: f32,
     /// random number generation (PCG) initial seed
     pub seed: u32,
-    /// radius of a *single* dust grain in μm
+    /// diameter of a *single* dust grain in μm
     pub diametre_um: f32,
     /// from 1 to 7, in g/cm3, volume density
     pub density_gcm3: f32,
-    /// `Q_pr`, value between 0.5 to 2
+    /// radiation-pressure efficiency `Q_pr` (0.5 to 2): the grain's momentum coupling to sunlight,
+    /// enters β only ([`ParticleSystemEmitParams::beta`]); not an albedo
     pub scattering_efficiency: f32,
+    /// geometric albedo `p` of the dust (0.01 to 0.5; cometary dust 0.03–0.06, default 0.04): the
+    /// reflected radiance factor at zero phase is `p`, the Bond-like `A(0) = 4p` of the Afρ
+    /// literature (A'Hearn et al. 1984, AJ 89, 579; Hanner & Newburn 1989, AJ 97, 254: 0.02–0.06 at
+    /// small phase; the 67P coma grains 0.04–0.05, Fornasier et al. 2015). Enters the brightness
+    /// (`τ · p · Φ(α) / r_h²`) and the Afρ → production conversion
+    /// ([`ParticleSystemEmitParams::dust_production_rate_kgs`])
+    pub geometric_albedo: f32,
     /// "Af-rho" photometric parameter. measures comet's dust activity, equal to product of - dust albedo - filling factor - size of viewing area .
     ///
     /// It is dependant on the
@@ -131,10 +136,22 @@ pub mod v2 {
     ///    Where to look: See equation 7.4 on page 167. It explicitly states the rearranged
     ///    relation used to mod3el intersetellar comet 2I/Borisov: $ Afρ = 3 A Q_d / ( 2 ρ_d v_d s_0 )$
     ///    using $s_0$ as the radius
+    ///
+    /// Closure used here (proof in `dust_v3.md`, "Photometry"): for a steady outflow the aperture
+    /// of radius ρ holds `π Q_n ρ / (2 v)` grains, so with the A'Hearn definition
+    /// `Afρ = (2 Δ r_h)² / ρ · F_c / F☉` and the reflected flux `F = F☉ p Φ(α) σ / (π r_h² Δ²)` per
+    /// grain, `Afρ = 2 p Φ(0) · Q_d · xsec_per_g · ⟨1/v⟩_σ` (cross-section-weighted mean of 1/v).
+    /// The engine's grains have `v(s) = v_ref √(s_ref/s)` over the size distribution and a
+    /// relative speed spread `v_std/v_ref`, hence the two factors below: `f_v = ⟨√(s/s_ref)⟩_σ`
+    /// ([`crate::scene::dust::SizeDistribution::mean_speed_factor`], 0.809 for the default range)
+    /// and `1 + (v_std/v_ref)²` (second order). With `xsec_per_g = 3/(4 ρ_d s_ref)` (the harmonic
+    /// mean size of the q = 3.5 distribution is `s_ref`) this is the thesis / Agarwal form
+    /// `Q_d = 2 ρ_d s_ref v_ref Afρ / (3 p f_v (1 + v_std_rel²))`. Verified by
+    /// `afrho_closure_from_a_steady_isotropic_coma`.
     pub fn dust_production_rate_kgs(&self, r_helio_au: f32) -> f32 {
       use aethervk_oshal_rlib::math::FloatLike;
       // clamp to cutoff distance
-      if r_helio_au >= self.afrho_cutoff_au {
+      if r_helio_au >= self.afrho_cutoff_au || !(self.geometric_albedo > 0.0) {
         return 0.0_f32;
       }
 
@@ -144,61 +161,18 @@ pub mod v2 {
       let afrho_m = clamped_afrho_cm / 100_f32;
       let radius_m = self.diametre_um * 0.5e-6_f32;
       let density_kgm3 = self.density_gcm3 * 1e3_f32;
+      let dist = crate::scene::dust::SizeDistribution::from_diameter_um(self.diametre_um);
+      let f_v = dist.mean_speed_factor() as f32;
+      let v_ref = self.start_velocity_mean.max(0.0);
+      let v_std_rel = if v_ref > 0.0 {
+        (self.start_velocity_std / v_ref).max(0.0)
+      } else {
+        0.0
+      };
 
-      // does dust velocity depend on heliocentric distance? Probably, but we don't care as godot
-      // version doesn't care too
-      (2.0 * density_kgm3 * radius_m * self.start_velocity_mean * afrho_m)
-        / (3.0 * self.scattering_efficiency)
-    }
-
-    pub fn cluster_params(
-      &self,
-      mean_intra_grains_distance_mm: f32,
-      min_cumulated_mass_g: f32,
-    ) -> ParticleSystemEmitClusterParams {
-      const PI: f32 = core::f32::consts::PI;
-
-      // 1. Calculate the mass of a single grain
-      // radius in cm: 1 μm = 10^-4 cm
-      let radius_cm = (self.diametre_um * 0.5) * 1e-4;
-      let volume_cm3 = (4.0 / 3.0) * PI * radius_cm.powi(3);
-      let single_grain_mass_g = volume_cm3 * self.density_gcm3;
-
-      // 2. Calculate how many grains we need to reach the minimum mass
-      let num_spots = (min_cumulated_mass_g / single_grain_mass_g).ceil();
-      let total_mass_g = num_spots * single_grain_mass_g;
-
-      // 3. Calculate the radius of the macro-particle (cluster)
-      // Assume grains are spaced out in a spherical volume.
-      // The volume dedicated to one spot is a sphere with radius (mean_intra_grains_distance_mm / 2)
-      let spot_radius_mm = mean_intra_grains_distance_mm * 0.5;
-      // Total cluster volume in mm3 = num_spots * single_spot_volume
-      // Since V = 4/3 * PI * R^3, R_cluster = R_spot * cbrt(num_spots)
-      let cluster_radius_mm = spot_radius_mm * num_spots.powf(1.0 / 3.0);
-      let cluster_radius_m = cluster_radius_mm * 1e-3;
-
-      ParticleSystemEmitClusterParams {
-        num_spots: num_spots as u32,
-        radius_m: cluster_radius_m,
-        mass_g: total_mass_g,
-      }
-    }
-  }
-
-  #[derive(Debug, Clone, Copy, PartialEq)]
-  pub struct ParticleSystemEmitClusterParams {
-    /// number of dust grains to render for our simulated cluster-particle
-    pub num_spots: u32,
-    /// radius of the sphere which represents the cluster-particle
-    pub radius_m: f32,
-    ///cumulated mass of the cluster particle, assuming uniform distribution
-    pub mass_g: f32,
-  }
-
-  impl ParticleSystemEmitClusterParams {
-    pub fn mass_std(&self, mass_variability_perc: f32) -> f32 {
-      debug_assert!(mass_variability_perc >= 0.0 && mass_variability_perc <= 1.0);
-      self.mass_g * mass_variability_perc
+      // the ejection speed does not depend on the heliocentric distance (as the Godot version)
+      (2.0 * density_kgm3 * radius_m * v_ref * afrho_m)
+        / (3.0 * self.geometric_albedo * f_v * (1.0 + v_std_rel * v_std_rel))
     }
   }
 
@@ -265,6 +239,21 @@ pub mod v2 {
     (epoch.to_tdb_duration().total_nanoseconds() / 1000) as i64
   }
 
+  /// The DTO's `emission_start_us` resolved against the scene's clock: [`EMISSION_START_NOW`]
+  /// becomes the clock's current epoch, and is `None` without a clock (the jet is refused: the
+  /// clock is created with the scene, so a scene without one is broken and must not get a silent
+  /// pre-existing tail); every other value, [`EMISSION_START_PREEXISTING`] included, passes
+  /// through.
+  pub fn resolve_emission_start_us(
+    requested: i64,
+    clock: Option<anise::time::Epoch>,
+  ) -> Option<i64> {
+    match requested {
+      EMISSION_START_NOW => clock.map(emission_start_us_from_epoch),
+      us => Some(us),
+    }
+  }
+
   /// Inverse of [`emission_start_us_from_epoch`].
   pub fn epoch_from_emission_start_us(us: i64) -> anise::time::Epoch {
     anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_total_nanoseconds(
@@ -294,6 +283,7 @@ pub mod v2 {
         diameter_um: self.diametre_um,
         density_gcm3: self.density_gcm3,
         beta_ref: self.beta(),
+        albedo: self.geometric_albedo,
         v_mean: self.start_velocity_mean,
         v_std: self.start_velocity_std,
         jet_dir: [dir.x(), dir.y(), dir.z()],

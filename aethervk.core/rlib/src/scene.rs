@@ -4965,10 +4965,10 @@ pub mod particles_dto {
   #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
   pub struct ParticleSystemDTO {
     // -- start of jet common properties --
-    pub mass_variability_perc: f32,
     pub diametre_um: f32,
     pub density_gcm3: f32,
     pub scattering_efficiency: f32,
+    pub geometric_albedo: f32,
 
     pub afrho_0_cm: f32, // new values with respect to AetherVk Web
     pub afrho_power: f32,
@@ -4991,6 +4991,7 @@ pub mod particles_dto {
     /// `particles::EMISSION_START_PREEXISTING` = a pre-existing tail
     pub emission_start_us: i64,
   }
+  const _: () = assert!(core::mem::size_of::<ParticleSystemDTO>() == 88);
 }
 
 pub use particles_dto::*;

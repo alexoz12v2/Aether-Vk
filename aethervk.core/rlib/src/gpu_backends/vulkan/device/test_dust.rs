@@ -539,50 +539,6 @@ fn micro_color_target_format_selection() {
   });
 }
 
-/// The dust accumulation target is RGBA32F where the device blends it (an fp16 additive sum of the
-/// 91 561 splats landing on the nucleus pixel of `not_flow.rdc` reads 3.8× too dim), the micro
-/// format otherwise, with `AETHERVK_DUST_ACCUM=f16`, or on the 8-bit micro fallback (dithered path).
-#[test]
-fn dust_accumulation_format_selection() {
-  use crate::gpu_backends::vulkan::device::choose_dust_accum_format as choose;
-  use ash::vk::{Format, FormatFeatureFlags as F};
-  let full = F::COLOR_ATTACHMENT | F::COLOR_ATTACHMENT_BLEND | F::SAMPLED_IMAGE;
-  let f16 = Format::R16G16B16A16_SFLOAT;
-  assert_eq!(choose(full, true, false, f16), Format::R32G32B32A32_SFLOAT);
-  assert_eq!(
-    choose(F::COLOR_ATTACHMENT, true, false, f16),
-    f16,
-    "no blend"
-  );
-  assert_eq!(
-    choose(full, false, false, f16),
-    f16,
-    "no transient input usage"
-  );
-  assert_eq!(choose(full, true, true, f16), f16, "forced f16");
-  assert_eq!(
-    choose(full, true, false, Format::R8G8B8A8_UNORM),
-    Format::R8G8B8A8_UNORM,
-    "8-bit micro fallback: the dithered path"
-  );
-  let forced_8bit =
-    aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_8BIT").is_some_and(|v| v.trim() == "1");
-  let forced_f16 = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_ACCUM")
-    .is_some_and(|v| v.trim().eq_ignore_ascii_case("f16"));
-  with_dust_device(9007, |device, _, _, _| {
-    let got = device.dust_accum_format();
-    if forced_8bit {
-      assert_eq!(got, Format::R8G8B8A8_UNORM);
-    } else if forced_f16 {
-      assert_eq!(got, f16);
-    } else {
-      // this machine: a desktop GPU blends RGBA32F; a device that does not falls back to f16
-      assert!(got == Format::R32G32B32A32_SFLOAT || got == f16, "{got:?}");
-      std::println!("[dust gpu] accumulation target {got:?}");
-    }
-  });
-}
-
 /// `AETHERVK_DUST_8BIT=1` forces the RGBA8 micro target (own process under nextest).
 #[test]
 fn micro_color_target_8bit_override() {
@@ -723,6 +679,7 @@ fn decoupling_scene(
       diameter_um: 100.0,
       density_gcm3: 0.533,
       beta_ref: 0.0213,
+      albedo: 0.0,
       v_mean: 2.0,
       v_std: 0.5,
       jet_dir: [0.0, 0.0, 1.0],
@@ -1040,7 +997,7 @@ fn gpu_dust_trace_records_particles_over_time() {
               exposure: 1.0,
               inv_unit: 1.0,
               color: 0xFFFFFF,
-              units_per_m: params[0],
+              albedo: 0.0,
               mvp,
               eye_local: [0.0, -1e12, 0.0, 0.0],
             };
@@ -1148,8 +1105,15 @@ fn gpu_dust_moments_match_reference() {
     let batch = test_batch(512, 3600.0, 7, capacity);
     emit(device, 9007, &batch);
     let moments = moments_buffer(device, 9007);
+    // a spinning nucleus: the frame's spin lands in the moments' spare lanes
+    let spin = [
+      0.267_261_24,
+      0.534_522_48,
+      0.801_783_73,
+      2.0 * core::f64::consts::PI / 44_640.0,
+    ];
     for days in [0.5, 10.0, 400.0] {
-      let frame = frame_after(days);
+      let frame = frame_after(days).with_spin(spin);
       let first_slot = batch.first_index & batch.ring_mask;
       propagate(device, 9007, first_slot, batch.count, &frame);
       let bytes = read_back(
@@ -1196,6 +1160,23 @@ fn gpu_dust_moments_match_reference() {
             "{days} d slot {slot}: edge {j} factor"
           );
         }
+        // the spin lanes: ω and the unit axis, bit-close on both sides
+        assert!(
+          (gpu.spin_rate() - cpu.spin_rate()).abs() < 1e-9
+            && (cpu.spin_rate() - spin[3] as f32).abs() < 1e-9,
+          "{days} d slot {slot}: spin rate gpu {} cpu {}",
+          gpu.spin_rate(),
+          cpu.spin_rate()
+        );
+        for k in 0..3 {
+          assert!(
+            (gpu.spin_axis()[k] - cpu.spin_axis()[k]).abs() < 1e-6
+              && (cpu.spin_axis()[k] - spin[k] as f32).abs() < 1e-6,
+            "{days} d slot {slot}: spin axis[{k}] gpu {} cpu {}",
+            gpu.spin_axis()[k],
+            cpu.spin_axis()[k]
+          );
+        }
         for k in 0..3 {
           assert!(
             (gpu.mean()[k] - cpu.mean()[k]).abs() < 2.0 + 2e-6 * norm3(cpu.mean()),
@@ -1210,18 +1191,25 @@ fn gpu_dust_moments_match_reference() {
 
 /// `dust_splat.comp` scatters the same texel counts as the reference `splat_tier` into the
 /// view's pyramid (integer sums: order independent; per-texel differences come only from the
-/// float evaluation of each packet), and the header carries the level mask and τ_max.
-#[test]
-fn gpu_dust_splat_matches_reference() {
-  with_dust_device(9008, |device, capacity, _, _| {
-    let batch = test_batch(1024, 3600.0, 3, capacity);
-    emit(device, 9008, &batch);
-    let frame = frame_after(5.0);
+/// float evaluation of each packet), and the header carries the level mask and τ_max: the GPU
+/// splat of `batch` (emitted into system `id`) evaluated at `frame`, seen top-down over
+/// ±`half` m around the anchor, against the CPU splat of the GPU's own moments.
+fn splat_parity(
+  id: u64,
+  batch_of: &dyn Fn(u32) -> DustBatch,
+  frame: DustFrame,
+  half: f32,
+  exposure: f32,
+  expect_spiral: bool,
+  albedo: f32,
+) {
+  with_dust_device(id, |device, capacity, _, _| {
+    let batch = batch_of(capacity);
+    emit(device, id, &batch);
     let first_slot = batch.first_index & batch.ring_mask;
     let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 9);
     let (w, h) = (640u32, 400u32);
     // top-down orthographic view of ±2e7 m around the anchor, metres (units 1)
-    let half = 2.0e7f32;
     let mut mvp = [0.0f32; 16];
     mvp[0] = 1.0 / half;
     mvp[5] = 1.0 / half;
@@ -1233,11 +1221,11 @@ fn gpu_dust_splat_matches_reference() {
       pyramid: 0,
       live_count: batch.count,
       flags: dust::DUST_VIEW_FLOW,
-      exposure: 1.0e-8,
+      exposure,
       inv_unit: 0.0,
       color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
-      units_per_m: 1.0,
-      eye_local: [0.0, 0.0, 1e10, 0.0],
+      albedo,
+      eye_local: [0.0, 0.0, 1e10, 30.0 * 86400.0], // w = TTL: the hue ramp is exercised
       mvp,
     };
     let flow = dust::DustFlowUniform {
@@ -1253,14 +1241,14 @@ fn gpu_dust_splat_matches_reference() {
           let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], pc.flags, flow)?;
           unit = view.unit;
           pc.inv_unit = 1.0 / view.unit;
-          device.cmd_dust_system_begin(9008, pc.flags, flow)?;
+          device.cmd_dust_system_begin(id, pc.flags, flow)?;
           let (render, moments) =
-            device.cmd_dust_propagate(cmd, 9008, 0, capacity, first_slot, batch.count, &frame)?;
+            device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
           device.cmd_dust_pre_splat_barrier(cmd);
-          device.cmd_dust_splat(cmd, pe, 9008, 0, render, moments, *pc)?;
+          device.cmd_dust_splat(cmd, pe, id, 0, render, moments, *pc)?;
           device.cmd_dust_post_splat_barrier(cmd);
           device.cmd_dust_frame_end(cmd, pe)?;
-          device.cmd_dust_system_end(9008)?;
+          device.cmd_dust_system_end(id)?;
           Ok(())
         })
         .unwrap();
@@ -1279,8 +1267,8 @@ fn gpu_dust_splat_matches_reference() {
     // reference: the CPU splat of the *GPU's* moments (`gpu_dust_moments_match_reference` covers
     // those): the merge, piece-count and level decisions are made on identical packets, so what
     // remains is the float evaluation of the capsules
-    let gpu_render = buffers(device, 9008).2;
-    let gpu_moments = moments_buffer(device, 9008);
+    let gpu_render = buffers(device, id).2;
+    let gpu_moments = moments_buffer(device, id);
     let render_bytes = read_back(
       device,
       gpu_render,
@@ -1296,6 +1284,30 @@ fn gpu_dust_splat_matches_reference() {
     let render: alloc::vec::Vec<dust::DustRenderCluster> =
       bytemuck::cast_slice(&render_bytes).to_vec();
     let moments: alloc::vec::Vec<dust::DustMoments> = bytemuck::cast_slice(&moments_bytes).to_vec();
+    // how many live samples draw their time segment as the spiral (`spiral_of`): the case that
+    // expects it must exercise the GLSL mirror on most of them
+    let (mut live, mut spiral) = (0usize, 0usize);
+    for (i, m) in moments.iter().enumerate() {
+      if !(m.flux() > 0.0) {
+        continue;
+      }
+      live += 1;
+      if let Some(q) = dust::streak_pred(&render, i) {
+        if dust::spiral_of(m, &moments[q]).is_some() {
+          spiral += 1;
+        }
+      }
+    }
+    std::println!("[dust gpu] splat parity: {spiral} of {live} live samples on the spiral");
+    if expect_spiral {
+      // the youngest 8 samples of each of the 16 streams
+      assert!(
+        spiral >= 64,
+        "only {spiral} of {live} samples on the spiral"
+      );
+    } else {
+      assert_eq!(spiral, 0, "{spiral} samples on the spiral without a spin");
+    }
     let mut cpu = alloc::vec![0u32; layout.total_words as usize];
     cpu[..dust::PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
     dust::splat_tier(&moments, &render, &pc, &flow, 0, &layout, &mut cpu);
@@ -1339,7 +1351,10 @@ fn gpu_dust_splat_matches_reference() {
             // of both words cancels in it
             let (g0, c0) = (gpu[i], cpu[i]);
             if g0 >= 64 && c0 >= 64 {
-              let (hg, hc) = (g as f32 / g0 as f32, c as f32 / c0 as f32);
+              let (hg, hc) = (
+                g as f32 / g0 as f32 / dust::DUST_COLOR_SCALE,
+                c as f32 / c0 as f32 / dust::DUST_COLOR_SCALE,
+              );
               assert!(
                 // the colour words carry the dither of every contributing packet (±0.5 per
                 // packet and word, uncorrelated between the words): 8 counts of slack
@@ -1424,7 +1439,20 @@ fn gpu_dust_splat_matches_reference() {
     // whose sub-texel position differs by a fused multiply-add can put its last count on one
     // side only: an occupancy mismatch of up to 2 counts is that dither, allowed on 1 % of the
     // occupied texels
+    // a packet whose footprint edge sits on a float boundary (the GPU fuses multiply-adds the
+    // reference does not) puts its fringe column on one side only: a one-sided texel below
+    // 1e-4 of the grid's peak is that fringe (the 3×3 and level rules above bound its energy);
+    // counted with the dither against the 1 % cap
+    let measure_peak = (0..(mw * mh) as usize)
+      .map(|t| {
+        let i = mo as usize + t * dust::PYRAMID_TEXEL_WORDS as usize;
+        gpu[i].max(cpu[i])
+      })
+      .max()
+      .unwrap_or(0);
+    let fringe_cap = 2u32.max((measure_peak as f64 * 1e-4) as u32);
     let mut occupancy_dither = 0usize;
+    let mut occupancy_bad: alloc::vec::Vec<(usize, u32, u32)> = alloc::vec::Vec::new();
     for t in 0..(mw * mh) as usize {
       let i = mo as usize + t * dust::PYRAMID_TEXEL_WORDS as usize;
       let (g, c) = (gpu[i], cpu[i]);
@@ -1433,18 +1461,49 @@ fn gpu_dust_splat_matches_reference() {
       m_occupied += (c > 0) as usize;
       assert!(
         g.abs_diff(c) as f32 <= 2.0 * 341.0 + 2e-3 * c.max(g) as f32,
-        "measure texel {t}: gpu {g} cpu {c}"
+        "case {id}: measure texel {t}: gpu {g} cpu {c}"
       );
       if (g > 0) != (c > 0) {
-        assert!(
-          g.max(c) <= 2,
-          "measure texel {t} occupancy: gpu {g} cpu {c}"
-        );
+        if g.max(c) > fringe_cap {
+          occupancy_bad.push((t, g, c));
+        }
         occupancy_dither += 1;
       }
     }
+    // what the differing measure texels hold, level by level (the pyramid texels inside each
+    // 16-px box: a faint whole packet on one side only, or a spread difference?)
+    for &(t, _, _) in occupancy_bad.iter().take(4) {
+      let (bx, by) = ((t % mw as usize) as u32, (t / mw as usize) as u32);
+      for (l, &(off, lw, lh)) in layout.levels.iter().enumerate() {
+        let size = 1u32 << l;
+        let (x0, y0) = (bx * 16 / size, by * 16 / size);
+        let (x1, y1) = (
+          ((bx + 1) * 16).div_ceil(size).min(lw),
+          ((by + 1) * 16).div_ceil(size).min(lh),
+        );
+        for y in y0..y1 {
+          for x in x0..x1 {
+            let i = off as usize + (y * lw + x) as usize * dust::PYRAMID_TEXEL_WORDS as usize;
+            if gpu[i] > 0 || cpu[i] > 0 {
+              std::println!(
+                "[parity] measure texel {t} ({bx},{by}): level {l} texel ({x},{y}) gpu {} cpu {}",
+                gpu[i],
+                cpu[i]
+              );
+            }
+          }
+        }
+      }
+    }
     assert!(
-      occupancy_dither <= 1 + m_occupied / 100,
+      occupancy_bad.is_empty(),
+      "case {id}: measure occupancy differs beyond the dither and the fringe cap {fringe_cap} (peak {measure_peak}) on {} texels (grid {mw}×{mh}): {:?}",
+      occupancy_bad.len(),
+      &occupancy_bad[..occupancy_bad.len().min(12)]
+    );
+    // the dither on 1 % of the occupied texels plus one float-boundary fringe
+    assert!(
+      occupancy_dither <= 2 + m_occupied / 100,
       "measure occupancy differs on {occupancy_dither} texels of {m_occupied}"
     );
     assert!(
@@ -1452,11 +1511,65 @@ fn gpu_dust_splat_matches_reference() {
       "Σ measure gpu {msg} cpu {msc}"
     );
     std::println!(
-      "[dust gpu] splat parity: {nonzero} texels, worst |Δ| {worst} counts of peak {peak}, unit {gpu_unit:.3e}"
+      "[dust gpu] splat parity: {nonzero} texels, worst |Δ| {worst} counts of peak {peak}, unit {gpu_unit:.3e}, measure peak {measure_peak}, one-sided measure texels {occupancy_dither} of {m_occupied}"
     );
     let _ = hw;
     device.discard_dust_view(pe, 0);
   });
+}
+
+#[test]
+fn gpu_dust_splat_matches_reference() {
+  // five days of a one-hour window seen over ±2e7 m: the sweep and the size polyline
+  // the radiance weight on (`dust_radiance_weight`: the phase LUT and 1/r_h² on the GPU)
+  splat_parity(
+    9008,
+    &|cap| test_batch(1024, 3600.0, 3, cap),
+    frame_after(5.0),
+    2.0e7,
+    1.0,
+    false,
+    0.04,
+  );
+}
+
+/// The spiral pieces (`dust_spiral_point`): a site 2 km off the centre of a nucleus turning
+/// once in 2 h, the first two hours of its emission seen from 5 km with the spin in the frame
+/// (every young sample's time segment is drawn as the spiral about the anchor).
+#[test]
+fn gpu_dust_splat_matches_reference_spinning_site() {
+  let axis = [0.0f64, 0.0, 1.0];
+  let omega = 2.0 * core::f64::consts::PI / (2.0 * 3600.0);
+  let off = [2000.0f32, 0.0, 0.0];
+  let (rc, vc) = comet_state();
+  let batch_of = move |cap: u32| {
+    let mut b = test_batch(1024, 7200.0, 3, cap);
+    // 16 streams: 64 samples per stream 112 s apart, the nucleus turning 5.6° between them
+    // (the spiral gate: > 0.01 rad, and the youngest 8 samples of every stream)
+    b.mass_params[3] = dust::batch_streams_word(4, false);
+    b.spin = [axis[0] as f32, axis[1] as f32, axis[2] as f32, omega as f32];
+    b.site_offset = [off[0], off[1], off[2], 0.0];
+    b.jet_dir_aperture = [1.0, 0.0, 0.0, 0.3];
+    // the site at the window start (rot_start = identity): the batch's comet is the site
+    b.set_comet(
+      [
+        rc[0] + off[0] as f64,
+        rc[1] + off[1] as f64,
+        rc[2] + off[2] as f64,
+      ],
+      vc,
+      T_START,
+      7200.0,
+    );
+    b
+  };
+  // the frame two hours in, anchored at the nucleus centre with the spin
+  let t_now = T_START + 7200.0;
+  let (centre, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, 7200.0);
+  let frame = DustFrame::new(centre, t_now, [0.0, 0.0, 0.0, 1.0], 1.0e9)
+    .with_streams(4)
+    .with_spin([axis[0], axis[1], axis[2], omega]);
+  splat_parity(9010, &batch_of, frame, 5.0e3, 1.0e-6, true, 0.0);
 }
 
 /// Stress: a full tier (every slot emitted) propagated 40 times with the moments, as a heavy
@@ -1526,9 +1639,9 @@ fn gpu_device_fault_is_reported() {
         exposure: 1.0,
         inv_unit: 1e6,
         color: 0xFFFFFF,
-        units_per_m: 1.0,
+        albedo: 0.0,
         mvp,
-        eye_local: [0.0, 0.0, 1e10, 0.0],
+        eye_local: [0.0, 0.0, 1e10, 30.0 * 86400.0], // w = TTL: the hue ramp is exercised
       };
       // the dispatch with a pyramid pointer into nowhere: the shader's first header read faults
       device.cmd_checkpoint(cmd, c"test: injected fault dispatch");

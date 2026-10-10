@@ -874,9 +874,10 @@ pub struct DustDrawCall {
 }
 
 impl DustDrawCall {
-  /// Raw dust exposure: gain / reference optical depth, before the view's white point.
+  /// Dust exposure before the view's white point: the stream colour's alpha (1 = photometric,
+  /// the pyramid then holds radiance factors `τ · p · Φ(α) / r_h²`).
   pub fn raw_exposure(&self) -> f32 {
-    dust_gain() * self.stream_color[3] / self.state.tau_ref.max(1e-30)
+    self.stream_color[3]
   }
 
   /// `(mvp, params)` of `dust_splat.comp`: particle-system local metres → clip (Large World
@@ -920,23 +921,6 @@ impl DustDrawCall {
       (-self.rte_position[2] / u) as f32,
     ]
   }
-}
-
-/// Dust exposure gain (`AETHERVK_DUST_GAIN`, default 0.7): the opacity a column of the reference
-/// optical depth (`DustEmitConfig::tau_ref`) adds, before the stream color alpha.
-fn dust_gain() -> f32 {
-  use core::sync::atomic::{AtomicU32, Ordering};
-  static GAIN_BITS: AtomicU32 = AtomicU32::new(u32::MAX);
-  let bits = GAIN_BITS.load(Ordering::Relaxed);
-  if bits != u32::MAX {
-    return f32::from_bits(bits);
-  }
-  let g = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_GAIN")
-    .and_then(|s| s.trim().parse::<f32>().ok())
-    .filter(|g| g.is_finite() && *g > 0.0)
-    .unwrap_or(0.7);
-  GAIN_BITS.store(g.to_bits(), Ordering::Relaxed);
-  g
 }
 
 /// `(|x scale|, |y scale|)` of an engine projection matrix (clip units per view unit at depth 1,
@@ -1085,9 +1069,9 @@ pub fn prepare_dust(
         exposure: call.raw_exposure(),
         inv_unit,
         color: crate::scene::dust::pack_color(call.stream_color),
-        units_per_m: params[0],
+        albedo: s.albedo,
         mvp,
-        eye_local: [eye[0], eye[1], eye[2], 0.0],
+        eye_local: [eye[0], eye[1], eye[2], s.ttl_s],
       };
       // AETHERVK_DUST_DEBUG_SKIP=splat|composite|readback: bisection aids (no production use);
       // AETHERVK_DUST_DEBUG_TIER=<k>: only tier k is splatted (which tier draws a feature)
@@ -1888,7 +1872,7 @@ pub fn render_frame(
     // softening (the median texel) times the user's "dust visibility" factor
     // the user's "dust visibility" value is a factor relative to its former absolute default
     // (1e-2 → ×1), so the slider and its default stay as they are
-    dust_softening: if crate::scene::dust::dust_exposure_fixed() {
+    dust_softening: if crate::scene::dust::dust_exposure_fixed().is_some() {
       render_scene.dust_softening
     } else {
       crate::scene::dust::clamp_dust_softening(
@@ -1896,17 +1880,16 @@ pub fn render_frame(
           * (render_scene.dust_softening / crate::scene::dust::DUST_SOFTENING_DEFAULT),
       )
     },
-    dust_black_point: if crate::scene::dust::dust_exposure_fixed() {
+    dust_black_point: if crate::scene::dust::dust_exposure_fixed().is_some() {
       0.0
     } else {
       crate::scene::dust::DUST_BLACK_POINT
     },
     _pad0: 0,
     dust_pyramid: render_scene.dust_view.pyramid,
-    dust_white: if crate::scene::dust::dust_exposure_fixed() {
-      1.0
-    } else {
-      render_scene.dust_view.white
+    dust_white: match crate::scene::dust::dust_exposure_fixed() {
+      Some(white) => white,
+      None => render_scene.dust_view.white,
     },
     dust_levels: render_scene.dust_view.levels,
     dust_unit: render_scene.dust_view.unit,
