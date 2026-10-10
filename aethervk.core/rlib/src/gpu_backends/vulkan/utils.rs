@@ -42,6 +42,10 @@ bitflags! {
     const VULKAN_MEMORY_MODEL = 1 << 3;
     /// Host Query Reset feature (VK_EXT_host_query_reset).
     const HOST_QUERY_RESET = 1 << 4;
+    /// `VK_EXT_device_fault`: fault addresses after a device loss (`device/fault.rs`)
+    const DEVICE_FAULT = 1 << 5;
+    /// `VK_NV_device_diagnostic_checkpoints`: the last command markers each queue reached
+    const DIAGNOSTIC_CHECKPOINTS = 1 << 6;
   }
 }
 
@@ -249,6 +253,12 @@ impl PhysicalDeviceQueryResult {
       .contains(OptionalExtensionSupportFlags::HOST_QUERY_RESET)
     {
       the_vec.push(ash::ext::host_query_reset::NAME.as_ptr());
+    }
+    if self.optional_extensions.contains(OptionalExtensionSupportFlags::DEVICE_FAULT) {
+      the_vec.push(c"VK_EXT_device_fault".as_ptr());
+    }
+    if self.optional_extensions.contains(OptionalExtensionSupportFlags::DIAGNOSTIC_CHECKPOINTS) {
+      the_vec.push(ash::nv::device_diagnostic_checkpoints::NAME.as_ptr());
     }
 
     the_vec
@@ -1170,7 +1180,11 @@ impl RequiredFeatures<'_> {
 impl From<vk::Result> for GpuError {
   fn from(err: vk::Result) -> Self {
     match err {
-      vk::Result::ERROR_DEVICE_LOST => GpuError::DeviceLost,
+      vk::Result::ERROR_DEVICE_LOST => {
+        // every Vulkan result funnels through here: dump the host side of the loss once
+        super::device::fault::capture_host_diagnostics("VK_ERROR_DEVICE_LOST result", "");
+        GpuError::DeviceLost
+      }
       vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => GpuError::OutOfMemory,
       _ => GpuError::BackendSpecific(err.to_string()),
     }
@@ -1290,8 +1304,10 @@ pub(super) fn create_transient_attachment(
     .map_err(|e| e.into())
 }
 
-#[cfg(test)]
-pub(super) fn create_test_attachment(
+/// A device-local attachment whose contents outlive the render pass (STORE op, then copied or
+/// sampled): exactly `usage`, no `TRANSIENT_ATTACHMENT` and no lazily allocated memory, which
+/// Vulkan forbids together with `TRANSFER_SRC` and which may not keep the contents anyway.
+pub(super) fn create_stored_attachment(
   allocator: vk_mem::AllocatorView,
   extent: vk::Extent2D,
   format: vk::Format,
@@ -1324,6 +1340,18 @@ pub(super) fn create_test_attachment(
   unsafe { allocator.create_image(&image_create_info, &allocation_info) }
     .map(|(i, a)| (unsafe { NonZeroHandle::new_unchecked(i) }, a))
     .map_err(|e| e.into())
+}
+
+/// Tests read every attachment back, so none of them is transient
+#[cfg(test)]
+pub(super) fn create_test_attachment(
+  allocator: vk_mem::AllocatorView,
+  extent: vk::Extent2D,
+  format: vk::Format,
+  usage: vk::ImageUsageFlags,
+  samples: vk::SampleCountFlags,
+) -> GpuResult<(NonZeroHandle<vk::Image>, vk_mem::Allocation)> {
+  create_stored_attachment(allocator, extent, format, usage, samples)
 }
 
 // -------------------------------- Vulkan Transaction --------------------------

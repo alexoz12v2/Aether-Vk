@@ -2481,7 +2481,7 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     {
       var d = buf[i];
       list[i] = new DustTierStats(
-        d.LiveClusters, d.Capacity, d.YoungestAgeS, d.OldestAgeS, d.BandMinS, d.BandMaxS, d.CaughtUp != 0);
+        d.LiveClusters, d.Capacity, d.YoungestAgeS, d.OldestAgeS, d.BandMinS, d.BandMaxS, d.CaughtUp != 0, d.UnlitWindows, d.JetUnavailable != 0);
     }
     return list;
   }
@@ -2801,6 +2801,15 @@ internal readonly struct ParticleSystemDTO(ParticleSystemModel model, ParticleSy
 
   public readonly float NucleusRadiusKm = jet.NucleusRadiusKm;
   public readonly uint Seed = jet.Seed;
+
+  // explicit padding before the 8-byte field (mirrors the Rust `_pad`)
+  public readonly uint _pad = 0;
+  /// <summary>
+  /// Ignition epoch, TDB microseconds since J2000. <c>long.MaxValue</c> = the scene's current
+  /// epoch when the jet is added (the tail is built from then on), <c>long.MinValue</c> = a
+  /// pre-existing tail (history filled back before the scene start).
+  /// </summary>
+  public readonly long EmissionStartUs = long.MaxValue;
 }
 
 /// <summary>
@@ -2864,6 +2873,8 @@ public enum ExternalStateType : uint
   /// Payload: <see cref="CAssetRemovedDTO"/>. Mirrors Rust <c>CAssetRemoved</c> (state id = 11).
   /// </summary>
   AssetRemoved = 11,
+  /// <summary>The Vulkan device was lost (e.g. an NVIDIA Xid 13); the engine stopped submitting GPU work. Payload: CGpuDeviceLost (144 B).</summary>
+  GpuDeviceLost = 12,
 
 #if DEBUG
   /// <summary>
@@ -3108,7 +3119,7 @@ internal struct CEarthObserverStatusDTO
 /// view-axis error to the target and the target elevation (rad) at the last commit.</summary>
 public sealed record EarthObserverStatus(int Mode, double AimErrorRad, double TargetElevationRad);
 
-/// <summary>Mirrors Rust <c>CDustTierStats</c> (ffi.rs), 48 bytes.</summary>
+/// <summary>Mirrors Rust <c>CDustTierStats</c> (ffi.rs), 56 bytes.</summary>
 [StructLayout(LayoutKind.Sequential)]
 internal readonly struct CDustTierStatsDTO
 {
@@ -3119,7 +3130,11 @@ internal readonly struct CDustTierStatsDTO
   public readonly double BandMinS;
   public readonly double BandMaxS;
   public readonly uint CaughtUp;
-  private readonly uint _pad;
+  /// <summary>Windows that produced nothing (unlit jet site / no production) since the last reset.</summary>
+  public readonly uint UnlitWindows;
+  /// <summary>1 when the last tick could not evaluate the jet (comet not in the cartesian cache): nothing is emitted, not building.</summary>
+  public readonly uint JetUnavailable;
+  public readonly uint _pad;
 }
 
 /// <summary>Dust history of one age tier (all particle systems of the scene).</summary>
@@ -3130,7 +3145,9 @@ public sealed record DustTierStats(
   double OldestAgeS,
   double BandMinS,
   double BandMaxS,
-  bool CaughtUp
+  bool CaughtUp,
+  uint UnlitWindows = 0,
+  bool JetUnavailable = false
 );
 
 /// <summary>

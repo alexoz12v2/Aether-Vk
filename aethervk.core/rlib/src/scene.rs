@@ -4984,6 +4984,12 @@ pub mod particles_dto {
     pub stream_color: [f32; 4],
     pub nucleus_radius_km: f32,
     pub seed: u32,
+    /// explicit padding (`Pod` forbids implicit padding before the 8-byte field)
+    pub _pad: u32,
+    /// ignition epoch, TDB µs since J2000 (`particles::emission_start_us_from_epoch`);
+    /// `particles::EMISSION_START_NOW` = the scene's current epoch when the jet is added,
+    /// `particles::EMISSION_START_PREEXISTING` = a pre-existing tail
+    pub emission_start_us: i64,
   }
 }
 

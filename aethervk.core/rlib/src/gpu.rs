@@ -323,7 +323,19 @@ pub struct CompositePushConstants {
   pub dust_softening: f32,
   /// black point of the dust display stretch, relative to the white point
   pub dust_black_point: f32,
+  pub _pad0: u32,
+  /// the view's dust splat pyramid (`dust::PyramidLayout`, buffer device address; 0 = no dust)
+  pub dust_pyramid: u64,
+  /// white point the pyramid's optical depth is divided by
+  pub dust_white: f32,
+  pub dust_levels: u32,
+  /// exposure-scaled optical depth × px² per pyramid count
+  pub dust_unit: f32,
+  pub _pad1: u32,
+  /// AU per unit of each depth layer's global depth (`layer_index` → scale): dust occlusion
+  pub layer_unit_au: [f32; 8],
 }
+const _: () = assert!(core::mem::size_of::<CompositePushConstants>() == 96);
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

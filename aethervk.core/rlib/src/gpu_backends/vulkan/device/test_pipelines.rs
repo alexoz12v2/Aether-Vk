@@ -82,6 +82,10 @@ mod tests {
       timeline_semaphore: ash::khr::timeline_semaphore::Device::new(&instance.instance, &device),
       create_renderpass2: ash::khr::create_renderpass2::Device::new(&instance.instance, &device),
       swapchain_maintenance1: None,
+      device_fault: None,
+      checkpoints: None,
+      single_queue: false,
+      lost: core::sync::atomic::AtomicBool::new(false),
       buffer_device_address: ash::khr::buffer_device_address::Device::new(
         &instance.instance,
         &device,

@@ -1,0 +1,67 @@
+// @assets/sim/dust_measure.comp
+//
+// Dust v4 render: the white-point measurement grid (DUST_PYR_MEASURE, texels of 2^DUST_WHITE_LEVEL
+// px, tau only) from the finished pyramid, once per frame after every tier's dust_splat.comp and
+// before the readback copy. Mirror of `dust::measure_from_pyramid`.
+//
+// One thread per measure texel: the counts of the tau the composite displays over its footprint,
+// summed over the touched levels. The finer levels' texels inside the footprint add up (a count is
+// tau x the texel area, so their sum is tau x the footprint); a coarser level contributes the
+// covering texel's count scaled to the footprint's share of it (>> 2 per level). The grid is thus
+// a box filter of the displayed tau field, a function of the dust alone: the white point (p99 of
+// its occupied texels) and the auto softening (p50) no longer follow how many packets drew the
+// field or how wide they were.
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+#include "dust_common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    DustUintBuffer pyramid;     // 0: header + levels + measure grid
+    uvec2 pad;                  // 8
+} pc;                           // 16 bytes
+
+void main() {
+    uint mo = pc.pyramid.v[DUST_PYR_MEASURE];
+    uint mw = pc.pyramid.v[DUST_PYR_MEASURE + 1u];
+    uint mh = pc.pyramid.v[DUST_PYR_MEASURE + 2u];
+    uint t = gl_GlobalInvocationID.x;
+    if (t >= mw * mh) return;
+    uint tx = t % mw, ty = t / mw;
+    uint levels = pc.pyramid.v[DUST_PYR_LEVELS];
+    uint mask = pc.pyramid.v[DUST_PYR_LEVEL_MASK];
+    // 64-bit sum as (hi, lo) to saturate like the reference
+    uint lo = 0u, hi = 0u;
+    for (uint l = 0u; l < levels; ++l) {
+        if ((mask & (1u << l)) == 0u) continue;
+        uint off = pc.pyramid.v[DUST_PYR_TABLE + 3u * l];
+        uint w = pc.pyramid.v[DUST_PYR_TABLE + 3u * l + 1u];
+        uint h = pc.pyramid.v[DUST_PYR_TABLE + 3u * l + 2u];
+        if (l <= DUST_WHITE_LEVEL) {
+            uint n = 1u << (DUST_WHITE_LEVEL - l);
+            for (uint dy = 0u; dy < n; ++dy) {
+                uint ly = ty * n + dy;
+                if (ly >= h) break;
+                for (uint dx = 0u; dx < n; ++dx) {
+                    uint lx = tx * n + dx;
+                    if (lx >= w) break;
+                    uint c = pc.pyramid.v[off + (ly * w + lx) * DUST_PYRAMID_TEXEL_WORDS];
+                    uint s = lo + c;
+                    if (s < lo) hi += 1u;
+                    lo = s;
+                }
+            }
+        } else {
+            uint shift = l - DUST_WHITE_LEVEL;
+            uint lx = min(tx >> shift, w - 1u), ly = min(ty >> shift, h - 1u);
+            uint c = pc.pyramid.v[off + (ly * w + lx) * DUST_PYRAMID_TEXEL_WORDS] >> (2u * shift);
+            uint s = lo + c;
+            if (s < lo) hi += 1u;
+            lo = s;
+        }
+    }
+    uint i = mo + t * DUST_PYRAMID_TEXEL_WORDS;
+    pc.pyramid.v[i] = hi != 0u ? 0xFFFFFFFFu : lo;
+    for (uint k = 1u; k < DUST_PYRAMID_TEXEL_WORDS; ++k) pc.pyramid.v[i + k] = 0u;
+}

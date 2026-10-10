@@ -122,7 +122,7 @@ public partial class ModelTabViewModel
       .Throttle(TimeSpan.FromMilliseconds(250), schedulerProvider.MainThread)
       .Subscribe(r => _cometConfigService.SetNucleusRadiusKm(r))
       .AddDisposableTo(_disposables);
-      
+
     // Push the UI default value at startup so the engine doesn't fall back to 50 km
     _radiusChanges.OnNext(EffectiveNucleusRadiusKm);
 
@@ -137,7 +137,7 @@ public partial class ModelTabViewModel
     IsCometCommitted = cometConfigService.IsAlmanacCommittedValue;
     cometConfigService.IsAlmanacCommitted
       .ObserveOn(schedulerProvider.MainThread)
-      .Subscribe(committed => 
+      .Subscribe(committed =>
       {
         IsCometCommitted = committed;
         var session = CurrentSession;
@@ -382,6 +382,7 @@ public partial class ModelTabViewModel
     ShowReferencePositionError = session.ShowReferencePositionError;
     DustSoftening = session.DustSoftening;
     DustTracers = session.DustTracers;
+    DustFlow = session.DustFlow;
     PushDustViewFlags();
     DustFlowSpeed = session.DustFlowSpeed;
     _runtimeService?.SetDustFlowSpeed((float)DustFlowSpeed);
@@ -454,12 +455,28 @@ public partial class ModelTabViewModel
   /// through the fog of the coma. Visual only.
   /// </summary>
   [ObservableProperty]
-  private bool _dustTracers = true;
+  private bool _dustTracers = false;
 
   partial void OnDustTracersChanged(bool value)
   {
     if (CurrentSession is { } session)
       session.DustTracers = value;
+    PushDustViewFlags();
+  }
+
+  /// <summary>
+  /// Flow pulses: brightness marks riding the dust along synchrones (peak 4×, trough 0.15×), a
+  /// motion cue near the nucleus. Off by default: from 0.03 AU out the marks are the synchrone fan
+  /// itself, hard rays through the nucleus that the physical optical depth does not have. Stored
+  /// in the model session; visual only.
+  /// </summary>
+  [ObservableProperty]
+  private bool _dustFlow = false;
+
+  partial void OnDustFlowChanged(bool value)
+  {
+    if (CurrentSession is { } session)
+      session.DustFlow = value;
     PushDustViewFlags();
   }
 
@@ -490,16 +507,16 @@ public partial class ModelTabViewModel
 
   /// <summary>Native range of the flow time-lapse factor (<c>dust::FLOW_SPEED_MIN/MAX</c>).</summary>
   internal static double ClampDustFlowSpeed(double k) =>
-    double.IsNaN(k) ? DustFlowSpeedDefault : System.Math.Clamp(k, DustFlowSpeedMin, DustFlowSpeedMax);
+    double.IsNaN(k) ? DustFlowSpeedDefault : Math.Min(Math.Max(k, DustFlowSpeedMin), DustFlowSpeedMax);
 
   /// <summary>
   /// Native dust view flags (<c>dust::DUST_VIEW_*</c>): bit 0 tracers, bit 1 flow. The flow is
   /// always on: it runs while the sim runs and freezes in place on pause (no toggle).
   /// </summary>
-  internal static uint DustViewFlags(bool tracers) => (tracers ? 1u : 0u) | 2u;
+  internal static uint DustViewFlags(bool tracers, bool flow) => (tracers ? 1u : 0u) | (flow ? 2u : 0u);
 
   private void PushDustViewFlags() =>
-    _runtimeService?.SetDustViewFlags(DustViewFlags(DustTracers));
+    _runtimeService?.SetDustViewFlags(DustViewFlags(DustTracers, DustFlow));
 
   partial void OnShowReferencePositionErrorChanged(bool value)
   {
@@ -536,7 +553,7 @@ public partial class ModelTabViewModel
         // ring only re-emits on simulation ticks, so the tail vanished while paused.
         if (!VisualOnlyJetProperties.Contains(name))
         {
-            _dispatcher.Dispatch(() => 
+            _dispatcher.Dispatch(() =>
             {
                 if (!_timelineService.IsSimulationRunningValue && _snapshotExists)
                 {

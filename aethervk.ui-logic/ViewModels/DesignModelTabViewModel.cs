@@ -52,7 +52,8 @@ public partial class DesignModelTabViewModel
   public bool IsNucleusRadiusUnknown => ManualNucleusRadiusKm == 0f;
   public bool ShowReferencePositionError { get; set; }
   public double DustSoftening { get; set; } = AetherVk.Logic.Services.ModelTabDefaults.DustSoftening;
-  public bool DustTracers { get; set; } = true;
+  public bool DustTracers { get; set; } = false;
+  public bool DustFlow { get; set; } = false;
   public double DustFlowSpeed { get; set; } = 1.0;
   public bool IsCometCommitted { get; } = false;
   public bool EnableLegacyExpanders { get; set; } = false;

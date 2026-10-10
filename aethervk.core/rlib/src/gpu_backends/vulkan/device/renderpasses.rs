@@ -6,7 +6,7 @@ use crate::{
   gpu::PresentationEngineHandle,
   gpu_backends::vulkan::{
     device::{DeviceResource, resources::DiscardPool, swapchain, swapchain::PresentationState},
-    utils::{NonZeroHandle, create_transient_attachment},
+    utils::{NonZeroHandle, create_stored_attachment, create_transient_attachment},
   },
   types::GpuResult,
 };
@@ -87,6 +87,9 @@ pub(super) enum RenderPassSpecification {
     /// micro-layer color target (`[4]`): RGBA16F when supported, see
     /// `Device::micro_color_format`
     micro_color_format: vk::Format,
+    /// dust accumulation target (`[8]`): RGBA32F when the device blends it, see
+    /// `Device::dust_accum_format`
+    dust_accum_format: vk::Format,
     final_layout: vk::ImageLayout,
     extent: (u32, u32),
     swapchain_generation: u64,
@@ -101,6 +104,16 @@ impl RenderPassSpecification {
       Self::ColorDepthCompositing {
         micro_color_format, ..
       } => *micro_color_format,
+      Self::ColorDepthSingleSubpass { .. } => vk::Format::R8G8B8A8_UNORM,
+    }
+  }
+
+  /// dust accumulation format of a compositing pass (`R8G8B8A8_UNORM` otherwise)
+  pub fn dust_accum_format(&self) -> vk::Format {
+    match self {
+      Self::ColorDepthCompositing {
+        dust_accum_format, ..
+      } => *dust_accum_format,
       Self::ColorDepthSingleSubpass { .. } => vk::Format::R8G8B8A8_UNORM,
     }
   }
@@ -133,6 +146,7 @@ impl RenderPassSpecification {
     presentation_engine: &PresentationState,
     d: vk::Format,
     micro_color_format: vk::Format,
+    dust_accum_format: vk::Format,
   ) -> Self {
     let final_layout = match presentation_engine {
       PresentationState::Windowed(_) => vk::ImageLayout::PRESENT_SRC_KHR,
@@ -150,6 +164,7 @@ impl RenderPassSpecification {
       color_format: presentation_engine.format(),
       depth_stencil_format: d,
       micro_color_format,
+      dust_accum_format,
       final_layout,
       extent: presentation_engine.extent(),
       swapchain_generation: presentation_engine.swapchain_generation(),
@@ -471,6 +486,7 @@ impl RenderPasses {
     ) = ty.fields();
     let image_views = image_views.clone();
     let micro_color_format = ty.micro_color_format();
+    let dust_accum_format = ty.dust_accum_format();
     let is_compositing = matches!(ty, RenderPassSpecification::ColorDepthCompositing { .. });
 
     if let Some(bundle) =
@@ -503,6 +519,7 @@ impl RenderPasses {
             color_format,
             depth_stencil_format,
             micro_color_format,
+            dust_accum_format,
             final_layout,
             extent,
             swapchain_generation,
@@ -1015,6 +1032,7 @@ impl RenderPasses {
     color_format: vk::Format,
     depth_stencil_format: vk::Format,
     micro_color_format: vk::Format,
+    dust_accum_format: vk::Format,
     final_layout: vk::ImageLayout,
     extent: (u32, u32),
     swapchain_generation: u64,
@@ -1025,6 +1043,7 @@ impl RenderPasses {
       color_format,
       depth_stencil_format,
       micro_color_format,
+      dust_accum_format,
       final_layout,
     )?;
     let rp_h = render_pass.get();
@@ -1306,29 +1325,15 @@ impl RenderPasses {
     // [7] finalGlobalDepth — R32G32_SFLOAT, STORED
     let final_gdepth_usage = vk::ImageUsageFlags::COLOR_ATTACHMENT
       | vk::ImageUsageFlags::TRANSFER_SRC
-      | vk::ImageUsageFlags::INPUT_ATTACHMENT; // not transient
-    let (final_gdepth_img, final_gdepth_alloc) = {
-      #[cfg(test)]
-      {
-        create_test_attachment(
-          allocator,
-          ext2d,
-          vk::Format::R32G32_SFLOAT,
-          final_gdepth_usage,
-          vk::SampleCountFlags::TYPE_1,
-        )?
-      }
-      #[cfg(not(test))]
-      {
-        create_transient_attachment(
-          allocator,
-          ext2d,
-          vk::Format::R32G32_SFLOAT,
-          final_gdepth_usage,
-          vk::SampleCountFlags::TYPE_1,
-        )?
-      }
-    };
+      | vk::ImageUsageFlags::INPUT_ATTACHMENT;
+    // stored and copied out: not transient (TRANSIENT_ATTACHMENT forbids TRANSFER_SRC)
+    let (final_gdepth_img, final_gdepth_alloc) = create_stored_attachment(
+      allocator,
+      ext2d,
+      vk::Format::R32G32_SFLOAT,
+      final_gdepth_usage,
+      vk::SampleCountFlags::TYPE_1,
+    )?;
     {
       let ih = final_gdepth_img.get();
       let mut ac = final_gdepth_alloc;
@@ -1348,15 +1353,17 @@ impl RenderPasses {
       ));
     }
 
-    // [8] dustAccum — linear dust optical depth (micro-color format: RGBA16F, RGBA8 fallback),
-    // transient. Written additively by dust in the micro subpass, stretched by the composite.
+    // [8] dustAccum — linear dust optical depth (RGBA32F where the device blends it: ~10⁵ splats
+    // land in one pixel in far views, an fp16 sum stalls after ~2–4 k; else the micro-color
+    // format), transient. Written additively by dust in the micro subpass, stretched by the
+    // composite.
     let (dust_img, dust_alloc) = {
       #[cfg(test)]
       {
         create_test_attachment(
           allocator,
           ext2d,
-          micro_color_format,
+          dust_accum_format,
           color_transient_usage,
           vk::SampleCountFlags::TYPE_1,
         )?
@@ -1366,7 +1373,7 @@ impl RenderPasses {
         create_transient_attachment(
           allocator,
           ext2d,
-          micro_color_format,
+          dust_accum_format,
           color_transient_usage,
           vk::SampleCountFlags::TYPE_1,
         )?
@@ -1377,7 +1384,7 @@ impl RenderPasses {
       let mut ac = dust_alloc;
       rollback.defer(move |_| unsafe { allocator.destroy_image(ih, &mut ac) });
     }
-    let dust_view = Self::create_color_view(device, dust_img, micro_color_format)?;
+    let dust_view = Self::create_color_view(device, dust_img, dust_accum_format)?;
     {
       let vh = dust_view.get();
       rollback.defer(move |dev| unsafe { dev.destroy_image_view(vh, None) });
@@ -1872,6 +1879,7 @@ impl RenderPasses {
     color_format: vk::Format,
     depth_stencil_format: vk::Format,
     micro_color_format: vk::Format,
+    dust_accum_format: vk::Format,
     final_color_layout: vk::ImageLayout,
   ) -> GpuResult<NonZeroHandle<vk::RenderPass>> {
     // --- Attachment descriptions ---
@@ -1959,9 +1967,9 @@ impl RenderPasses {
         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-      // [8] dustAccum — transient, additive linear optical depth
+      // [8] dustAccum — transient, additive linear optical depth (RGBA32F where blendable)
       vk::AttachmentDescription2::default()
-        .format(micro_color_format)
+        .format(dust_accum_format)
         .samples(vk::SampleCountFlags::TYPE_1)
         .load_op(vk::AttachmentLoadOp::CLEAR)
         .store_op(vk::AttachmentStoreOp::DONT_CARE)

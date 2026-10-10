@@ -19,7 +19,9 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   /// <summary>Dust display stretch softening (Model tab "dust visibility"), visual only.</summary>
   public double DustSoftening { get; set; } = ModelTabDefaults.DustSoftening;
   /// <summary>Dust tracers: bright dots on a sparse set of real particles (Model tab), visual only.</summary>
-  public bool DustTracers { get; set; } = true;
+  public bool DustTracers { get; set; } = false;
+  /// <summary>Flow pulses (brightness marks on synchrones), a visual aid; off by default.</summary>
+  public bool DustFlow { get; set; } = false;
   /// <summary>Time-lapse factor of the dust flow marks (Model tab), 1 = real motion, visual only.</summary>
   public double DustFlowSpeed { get; set; } = 1.0;
 

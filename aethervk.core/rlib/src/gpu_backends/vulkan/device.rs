@@ -354,6 +354,7 @@ pub(super) mod commands;
 pub(super) mod debug_labels;
 pub(super) mod descriptors;
 pub mod dust;
+pub mod fault;
 #[cfg(any(debug_assertions, test))]
 pub mod hooks;
 pub(super) mod locks;
@@ -512,8 +513,6 @@ pub struct DeviceResources {
     Option<alloc::sync::Arc<DebugTrackedRwLock<resources::UiRenderResourceArchetypeArena>>>,
   background_render_archetype_arena:
     Option<alloc::sync::Arc<DebugTrackedRwLock<resources::BackgroundRenderResourceArchetypeArena>>>,
-  dust_render_archetype_arena:
-    Option<alloc::sync::Arc<DebugTrackedRwLock<resources::DustRenderArchetypeArena>>>,
 
   /// Dust system v3 per-system GPU resources (see [`dust`])
   pub dust_manager: Option<dust::DustManager>,
@@ -590,7 +589,6 @@ impl DeviceResources {
     discard_arena!(trajectory_render_archetype_arena);
     discard_arena!(ui_render_archetype_arena);
     discard_arena!(background_render_archetype_arena);
-    discard_arena!(dust_render_archetype_arena);
 
     // all discardable resources should have been already discarded
     if self.has_discardables() {
@@ -854,7 +852,6 @@ impl DeviceResources {
       trajectory_render_archetype_arena: None,
       ui_render_archetype_arena: None,
       background_render_archetype_arena: None,
-      dust_render_archetype_arena: None,
       dust_manager: Some(dust_manager),
       main_thread_cleanup_queue: alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new())),
     })
@@ -891,6 +888,31 @@ pub fn choose_micro_color_format(
     vk::Format::R16G16B16A16_SFLOAT
   } else {
     vk::Format::R8G8B8A8_UNORM
+  }
+}
+
+/// Dust accumulation target format: `R32G32B32A32_SFLOAT` when the device supports it as a
+/// blendable color attachment usable as a transient input attachment (`image_ok`), unless
+/// `force_f16` (`AETHERVK_DUST_ACCUM=f16`, A/B) or the micro target is the 8-bit fallback (the
+/// dithered 8-bit path then covers the dust too); else the micro-layer format. An fp16 additive
+/// sum stalls after ~2–4 k equal splats (11-bit significand) while ~10⁵ land in one pixel in a
+/// telescope view (`not_flow.rdc`): the nucleus pixel read 20–40× too dim.
+pub fn choose_dust_accum_format(
+  optimal_features: vk::FormatFeatureFlags,
+  image_ok: bool,
+  force_f16: bool,
+  micro_color_format: vk::Format,
+) -> vk::Format {
+  let needed =
+    vk::FormatFeatureFlags::COLOR_ATTACHMENT | vk::FormatFeatureFlags::COLOR_ATTACHMENT_BLEND;
+  if !force_f16
+    && image_ok
+    && optimal_features.contains(needed)
+    && micro_color_format == vk::Format::R16G16B16A16_SFLOAT
+  {
+    vk::Format::R32G32B32A32_SFLOAT
+  } else {
+    micro_color_format
   }
 }
 
@@ -945,6 +967,7 @@ impl RecordingCmdBufferData {
     cmd_pools: Arc<commands::CommandPools>,
     family_index: u32,
     timeline: u64,
+    own_timeline: vk::Semaphore,
   ) {
     let tid = this_thread::id();
     if self.has_begun {
@@ -954,6 +977,8 @@ impl RecordingCmdBufferData {
         self.command_buffer.get(),
         family_index,
         cmd_pools,
+        timeline,
+        own_timeline,
         timeline,
       );
     } else {
@@ -976,6 +1001,14 @@ pub struct LogicalDevice {
   pub synchronization2: ash::khr::synchronization2::Device,
 
   pub swapchain_maintenance1: Option<ash::ext::swapchain_maintenance1::Device>,
+  /// `vkGetDeviceFaultInfoEXT` when `VK_EXT_device_fault` is enabled (`device/fault.rs`)
+  pub device_fault: Option<vk::PFN_vkGetDeviceFaultInfoEXT>,
+  /// `VK_NV_device_diagnostic_checkpoints` when enabled
+  pub checkpoints: Option<ash::nv::device_diagnostic_checkpoints::Device>,
+  /// `AETHERVK_SINGLE_QUEUE=1`: every role submits to the graphics queue under one lock
+  pub single_queue: bool,
+  /// set by the first `VK_ERROR_DEVICE_LOST` (`Device::report_device_lost`)
+  pub lost: core::sync::atomic::AtomicBool,
 
   #[cfg(debug_assertions)]
   pub debug_utils: ash::ext::debug_utils::Device,
@@ -1045,13 +1078,22 @@ impl LogicalDevice {
   }
 
   #[named]
+  /// the lock of compute submissions: the graphics one in single-queue mode (one `VkQueue`)
+  pub fn compute_submission_lock(&self) -> &spin::Mutex<()> {
+    if self.single_queue {
+      &self.submission_lock
+    } else {
+      &self.submission_lock_compute
+    }
+  }
+
   pub fn locked_queue_submit_compute(
     &self,
     queue: vk::Queue,
     submits: &[vk::SubmitInfo],
     fence: vk::Fence,
   ) -> ash::prelude::VkResult<()> {
-    let _guard = self.submission_lock_compute.lock();
+    let _guard = self.compute_submission_lock().lock();
     unsafe { self.handle.queue_submit(queue, submits, fence) }
   }
 
@@ -1144,6 +1186,8 @@ pub struct Device {
   depth_stencil_format: vk::Format,
   /// micro-layer color target of the compositing pass, see [`choose_micro_color_format`]
   micro_color_format: vk::Format,
+  /// dust accumulation target of the compositing pass, see [`choose_dust_accum_format`]
+  dust_accum_format: vk::Format,
   /// Recording command buffers
   recording_command_buffers:
     dashmap::DashMap<(CommandBufferHandle, QueueRole), RecordingCmdBufferData>,
@@ -1247,6 +1291,13 @@ impl Queues {
           }
         }
 
+        // AETHERVK_SINGLE_QUEUE=1: every role on the graphics queue (one VkQueue, one lock)
+        let single = aethervk_oshal_rlib::os::env::var("AETHERVK_SINGLE_QUEUE")
+          .is_some_and(|v| v.trim() == "1");
+        if single && let Some(&g) = queue_ref_map.get(&QueueId::GRAPHICS) {
+          let _ = queue_ref_map.insert(QueueId::COMPUTE, g);
+          let _ = queue_ref_map.insert(QueueId::TRANSFER, g);
+        }
         queue_ref_map
       },
     }
@@ -1524,7 +1575,7 @@ impl Device {
           let _guard = if is_graphics {
             self.device.submission_lock.lock()
           } else {
-            self.device.submission_lock_compute.lock()
+            self.device.compute_submission_lock().lock()
           };
 
           let next_timeline_value = if let Some(timeline_manager_ptr_) = timeline_manager_ptr {
@@ -1571,7 +1622,15 @@ impl Device {
                   .unwrap_or(vk::Fence::null()),
               )
               .map_err(|e| {
-                aethervk_oshal_rlib::log!("Queue submit failed: {:?}", e);
+                if e == vk::Result::ERROR_DEVICE_LOST {
+                  self.report_device_lost(if is_graphics {
+                    "graphics submit"
+                  } else {
+                    "compute submit"
+                  });
+                } else {
+                  aethervk_oshal_rlib::log!("Queue submit failed: {:?}", e);
+                }
                 GpuError::from(e)
               })?;
           }
@@ -1642,14 +1701,33 @@ impl Device {
           }
         }
 
-        // Discard resources now that submission is safely recorded
+        // Discard resources now that submission is safely recorded.
+        //
+        // Compute command buffers are discarded into the *graphics* discard pool (keyed by their
+        // own compute timeline value): the render thread's `start_frame` then recycles them once
+        // the graphics counter passes that value, which in practice is at the next frame. That is
+        // early (the compute work may still run), and safe only because the next compute command
+        // buffer of a logic tick is recorded after the previous submission completed
+        // (`physics_done`; `fill_dust_history` records a whole tick into one command buffer).
+        // Routing them into `kernels.discard_pool` and recycling on the logic thread against the
+        // completed compute counter (`AETHERVK_COMPUTE_DISCARD_ROLE=1`) is the correct design, but
+        // on the GTX 1070 it faults the GPU (Xid 13, 3D class) within a frame whenever the frame
+        // does real dust work (4/4 runs, 0/3 with this routing; headless `dust_observer`) — an
+        // open investigation (see dust_v3.md, *v4 render*).
+        let role_routing = aethervk_oshal_rlib::os::env::var("AETHERVK_COMPUTE_DISCARD_ROLE")
+          .is_some_and(|v| v.trim() == "1");
         data.discard(
           &self.device,
           cmd_buffer.into(),
-          &state.discard_pool,
+          if is_graphics || !role_routing {
+            &state.discard_pool
+          } else {
+            &self.kernels.discard_pool
+          },
           cmd_pools,
           queue.family_index,
           next_timeline_value,
+          timeline_sem,
         );
 
         if is_resize_required {
@@ -1749,8 +1827,16 @@ impl Device {
       } else {
         &res_guard.discard_pool
       });
+      // the *completed* counter of the role's queue: the allocation retry loop recycles the
+      // command buffers discarded at or below it, so it must never be a value still in flight
       let current_timeline = if is_compute {
-        self.kernels.next_submit_value.load(core::sync::atomic::Ordering::Relaxed)
+        unsafe {
+          self
+            .device
+            .timeline_semaphore
+            .get_semaphore_counter_value(self.kernels.timeline)
+        }
+        .unwrap_or(0)
       } else {
         res_guard.get_timeline_semaphore_cached_value()
       };
@@ -1945,6 +2031,14 @@ impl Device {
     {
       device_create_info = device_create_info.push_next(&mut host_query_reset_features);
     }
+    let mut device_fault_features =
+      vk::PhysicalDeviceFaultFeaturesEXT::default().device_fault(true);
+    if chosen_physical_device_query_result
+      .optional_extensions
+      .contains(utils::OptionalExtensionSupportFlags::DEVICE_FAULT)
+    {
+      device_create_info = device_create_info.push_next(&mut device_fault_features);
+    }
 
     #[cfg(any(debug_assertions, test))]
     let device = unsafe {
@@ -2020,6 +2114,32 @@ impl Device {
       aethervk_oshal_rlib::log!("[Device] micro-layer color target: {:?}", chosen);
       chosen
     };
+    // Dust accumulation: RGBA32F where it blends (not in the required-format table: queried)
+    let dust_accum_format = {
+      let f = vk::Format::R32G32B32A32_SFLOAT;
+      let features =
+        unsafe { instance.instance.get_physical_device_format_properties(physical_device, f) }
+          .optimal_tiling_features;
+      let usage = vk::ImageUsageFlags::COLOR_ATTACHMENT
+        | vk::ImageUsageFlags::INPUT_ATTACHMENT
+        | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT;
+      let image_ok = unsafe {
+        instance.instance.get_physical_device_image_format_properties(
+          physical_device,
+          f,
+          vk::ImageType::TYPE_2D,
+          vk::ImageTiling::OPTIMAL,
+          usage,
+          vk::ImageCreateFlags::empty(),
+        )
+      }
+      .is_ok();
+      let force_f16 = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_ACCUM")
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("f16"));
+      let chosen = choose_dust_accum_format(features, image_ok, force_f16, micro_color_format);
+      aethervk_oshal_rlib::log!("[Device] dust accumulation target: {:?}", chosen);
+      chosen
+    };
 
     let create_renderpass2 = ash::khr::create_renderpass2::Device::new(&instance.instance, &device);
     let synchronization2 = ash::khr::synchronization2::Device::new(&instance.instance, &device);
@@ -2069,6 +2189,37 @@ impl Device {
 
     #[cfg(target_vendor = "apple")]
     let metal_objects = ash::ext::metal_objects::Device::new(&instance.instance, &device);
+    let device_fault = if chosen_physical_device_query_result
+      .optional_extensions
+      .contains(utils::OptionalExtensionSupportFlags::DEVICE_FAULT)
+    {
+      let name = c"vkGetDeviceFaultInfoEXT";
+      let p = unsafe { instance.instance.get_device_proc_addr(device.handle(), name.as_ptr()) };
+      p.map(|f| unsafe {
+        core::mem::transmute::<unsafe extern "system" fn(), vk::PFN_vkGetDeviceFaultInfoEXT>(f)
+      })
+    } else {
+      None
+    };
+    let checkpoints = if chosen_physical_device_query_result
+      .optional_extensions
+      .contains(utils::OptionalExtensionSupportFlags::DIAGNOSTIC_CHECKPOINTS)
+    {
+      Some(ash::nv::device_diagnostic_checkpoints::Device::new(
+        &instance.instance,
+        &device,
+      ))
+    } else {
+      None
+    };
+    let single_queue =
+      aethervk_oshal_rlib::os::env::var("AETHERVK_SINGLE_QUEUE").is_some_and(|v| v.trim() == "1");
+    aethervk_oshal_rlib::log!(
+      "[Vulkan] fault diagnostics: device_fault {}, checkpoints {}; single queue {}",
+      device_fault.is_some(),
+      checkpoints.is_some(),
+      single_queue
+    );
     let device = LogicalDevice {
       timeline_semaphore,
       handle: device,
@@ -2078,6 +2229,10 @@ impl Device {
       synchronization2,
       buffer_device_address,
       swapchain_maintenance1,
+      device_fault,
+      checkpoints,
+      single_queue,
+      lost: core::sync::atomic::AtomicBool::new(false),
       #[cfg(target_vendor = "apple")]
       metal_objects,
       #[cfg(debug_assertions)]
@@ -2145,6 +2300,7 @@ impl Device {
       instance,
       depth_stencil_format,
       micro_color_format,
+      dust_accum_format,
       recording_command_buffers: dashmap::DashMap::with_capacity(32),
       pending_mesh_updates: locks::DebugTrackedMutex::new(alloc::vec::Vec::new()),
     })
@@ -2865,32 +3021,55 @@ impl RenderDevice for Device {
 
   #[named]
   fn start_frame(&self) -> GpuResult<()> {
-    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
-      .prepare_read((), |state, _| {
-        // 1. Refresh timeline and extract items ready for destruction
-        let timeline_val = state.timeline_manager.refresh_cached_value()?;
-        let items_to_destroy = state.discard_pool.pop_ready_items(timeline_val);
-        state.allocator.set_current_frame_index(timeline_val);
+    // a closure so that a loss seen by the `?` below still reaches `report_device_lost`
+    let result = (|| {
+      crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
+        .prepare_read((), |state, _| {
+          // 1. Refresh timeline and extract items ready for destruction
+          let timeline_val = state.timeline_manager.refresh_cached_value()?;
+          let items_to_destroy = state.discard_pool.pop_ready_items(timeline_val);
+          state.allocator.set_current_frame_index(timeline_val);
 
-        Ok(items_to_destroy)
-      })?
-      .execute(|items_to_destroy, _rollback| {
-        // 2. Lock-free execution of Vulkan drop calls
-        // (Note: No rollback defer is needed here because we are permanently destroying data, not creating it)
-        resources::DiscardPool::destroy_items_lock_free(&self.device, items_to_destroy);
+          // the staging half this frame will use: still read by a frame the GPU has not finished?
+          let staging_wait = state
+            .frame_staging_arena
+            .read()
+            .as_ref()
+            .and_then(|a| a.wait_value_for_next_frame(timeline_val))
+            .map(|value| (state.timeline_manager.semaphore(), value));
 
-        Ok(())
-      })
-      .commit_read(|state, execute_result| {
-        execute_result?;
+          Ok((items_to_destroy, staging_wait))
+        })?
+        .execute(|(items_to_destroy, staging_wait), _rollback| {
+          // 2. Lock-free execution of Vulkan drop calls
+          // (Note: No rollback defer is needed here because we are permanently destroying data, not creating it)
+          resources::DiscardPool::destroy_items_lock_free(&self.device, items_to_destroy);
 
-        // 3. Reset the staging arena safely while we have the state context
-        if let Some(arena) = locks::DebugTrackedRwLock::write(&state.frame_staging_arena).as_mut() {
-          arena.reset();
-        }
+          // the GPU is two frames behind: wait for the frame that last used our staging half
+          // (its copies and device-address reads of the arena) before overwriting it
+          if let Some((semaphore, value)) = staging_wait {
+            self.device.wait_for_semaphore_value(semaphore, value, 10_000_000_000)?;
+          }
 
-        Ok(())
-      })
+          Ok(())
+        })
+        .commit_read(|state, execute_result| {
+          execute_result?;
+
+          // 3. Rotate the staging arena to the half this frame owns; the half we leave stays busy
+          // until the last submission issued so far completes
+          if let Some(arena) = locks::DebugTrackedRwLock::write(&state.frame_staging_arena).as_mut()
+          {
+            arena.advance(state.timeline_manager.get_next_submit_value().saturating_sub(1));
+          }
+
+          Ok(())
+        })
+    })();
+    if let Err(GpuError::DeviceLost) = &result {
+      self.report_device_lost("start_frame graphics timeline read");
+    }
+    result
   }
 
   fn enqueue_mesh_position_update(&self, mesh_id: u64, position_data: alloc::vec::Vec<f32>) {
@@ -3001,7 +3180,6 @@ impl RenderDevice for Device {
       >,
       gizmo:
         Option<alloc::sync::Arc<DebugTrackedRwLock<resources::GizmoRenderResourceArchetypeArena>>>,
-      dust: Option<alloc::sync::Arc<DebugTrackedRwLock<resources::DustRenderArchetypeArena>>>,
     }
 
     let queue = self.queues.get_graphics_queue();
@@ -3034,7 +3212,6 @@ impl RenderDevice for Device {
           text2: state.text2_render_archetype_arena.clone(),
           sphere_gizmo: state.sphere_gizmo_render_archetype_arena.clone(),
           gizmo: state.gizmo_render_archetype_arena.clone(),
-          dust: state.dust_render_archetype_arena.clone(),
         };
 
         Ok::<_, GpuError>((pe, timeline, vma, discard_pool_ptr, renderpasses_ptr, shader_manager_ptr, pipeline_pool_ptr, frame_staging_arena_ptr, arenas))
@@ -3158,7 +3335,6 @@ impl RenderDevice for Device {
         init_arch!(text2, ensure_text2_shader_modules, ArchetypeId::Text, Text2RenderResourceArchetypeArena, create_text2_archetype, text);
         init_arch!(sphere_gizmo, ensure_sphere_gizmo_shader_modules, ArchetypeId::SphereGizmo, SphereGizmoRenderResourceArchetypeArena, create_sphere_gizmo_archetype);
         init_arch!(gizmo, ensure_gizmo_shader_modules, ArchetypeId::Gizmo, GizmoRenderResourceArchetypeArena, create_gizmo_archetype);
-        init_arch!(dust, ensure_dust_shader_modules, ArchetypeId::Particles, DustRenderArchetypeArena, create_dust_archetype);
 
 
         Ok((pe, arenas))
@@ -3184,7 +3360,6 @@ impl RenderDevice for Device {
         state.text2_render_archetype_arena = arenas.text2;
         state.sphere_gizmo_render_archetype_arena = arenas.sphere_gizmo;
         state.gizmo_render_archetype_arena = arenas.gizmo;
-        state.dust_render_archetype_arena = arenas.dust;
 
         Ok(())
       })?;
@@ -3300,6 +3475,10 @@ impl RenderDevice for Device {
 
     // Discard using the next submit value to ensure all currently queued frames are completed
     res_write.discard_pool.discard_type_erased(presentation_engine, timeline);
+    drop(pending_downloads);
+    drop(res_write);
+    // the view's dust splat pyramid
+    self.discard_dust_view(handle, timeline);
 
     Ok(())
   }
@@ -3999,6 +4178,7 @@ impl RenderDevice for Device {
             .buffer_device_address
             .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(arena.buffer))
         };
+        fault::register_address_range("FrameStagingArena", base_addr, arena.capacity as u64);
 
         Ok::<_, GpuError>((
           pos_buf,
@@ -6242,6 +6422,7 @@ impl RenderDevice for Device {
               let bda_info = vk::BufferDeviceAddressInfo::default().buffer(params_buffer);
               let buffer_address =
                 unsafe { self.device.buffer_device_address.get_buffer_device_address(&bda_info) };
+              fault::register_address_range("SunGenParams", buffer_address, 256);
 
               // 6. Record Dispatch synchronously to ensure layout transitions happen before any other camera tries to draw
               let transient_res = self.run_transient_commands(|transient_cmd| {
@@ -6938,6 +7119,7 @@ impl RenderDevice for Device {
     color: [f32; 4],
   ) {
     if let Ok(cmd) = self.get_cmd(cmd_buffer) {
+      self.cmd_checkpoint(cmd, name);
       #[cfg(debug_assertions)]
       {
         let label = ash::vk::DebugUtilsLabelEXT::default().label_name(name).color(color);
@@ -6961,13 +7143,16 @@ impl RenderDevice for Device {
     name: &'static core::ffi::CStr,
     color: [f32; 4],
   ) {
-    #[cfg(debug_assertions)]
-    {
-      if let Ok(cmd) = self.get_cmd(cmd_buffer) {
+    if let Ok(cmd) = self.get_cmd(cmd_buffer) {
+      self.cmd_checkpoint(cmd, name);
+      #[cfg(debug_assertions)]
+      {
         let label = ash::vk::DebugUtilsLabelEXT::default().label_name(name).color(color);
         unsafe { self.device.debug_utils.cmd_insert_debug_utils_label(cmd, &label) };
       }
     }
+    #[cfg(not(debug_assertions))]
+    let _ = color;
   }
 
   fn next_subpass(&self, cmd_buffer: crate::gpu::CommandBufferHandle) -> GpuResult<()> {
@@ -7654,7 +7839,7 @@ impl Device {
 
     // locked submit with synchronization2
     unsafe {
-      let _lock = self.device.submission_lock_compute.lock();
+      let _lock = self.device.compute_submission_lock().lock();
       self.device.synchronization2.queue_submit2(
         queue.handle,
         core::slice::from_ref(&submit_info),
@@ -7833,6 +8018,7 @@ impl Device {
           &wpresentation_engine,
           self.depth_stencil_format,
           self.micro_color_format,
+          self.dust_accum_format,
         )
       } else {
         RenderPassSpecification::single_pass(&wpresentation_engine, self.depth_stencil_format)
@@ -8804,33 +8990,6 @@ fn ensure_gizmo_shader_modules(
 }
 
 // TODO refactor in utils
-
-fn ensure_dust_shader_modules(
-  device: &LogicalDevice,
-  shader_manager: &mut shader_manager::ShaderManager,
-) -> GpuResult<(shader_manager::ShaderKey, shader_manager::ShaderKey)> {
-  let vert_path: aethervk_oshal_rlib::os::fs::PathBuf;
-  let frag_path: aethervk_oshal_rlib::os::fs::PathBuf;
-
-  let assets_dir = shaders_asset_dir()?;
-  vert_path = assets_dir.join("dust.vert.spv");
-  frag_path = assets_dir.join("dust.frag.spv");
-
-  let vkey = shader_manager.get_or_load(
-    device,
-    vert_path.as_ref(),
-    "main",
-    spirv::ExecutionModel::Vertex,
-  )?;
-  let fkey = shader_manager.get_or_load(
-    device,
-    frag_path.as_ref(),
-    "main",
-    spirv::ExecutionModel::Fragment,
-  )?;
-
-  Ok((vkey, fkey))
-}
 
 fn ensure_sphere_gizmo_shader_modules(
   device: &LogicalDevice,

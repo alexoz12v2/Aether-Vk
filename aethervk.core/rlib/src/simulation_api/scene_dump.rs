@@ -218,10 +218,7 @@ fn ps_to_serial(
     emission_params: ps.emission_params,
     stream_color: ps.draw_params.stream_color,
     ttl_us: ps.ttl_us,
-    // legacy field: emission is on a scaled-time grid now (deterministic, nothing to save)
-    last_emission: 0,
-    // dust v3 has no compaction; kept for dump format compatibility
-    last_compaction: 0,
+    emission_start_us: ps.emission_start_us,
   }
 }
 
@@ -386,6 +383,7 @@ pub fn deserialize_scene(
               stream_color: psc.stream_color,
             };
             ps.ttl_us = psc.ttl_us;
+            ps.emission_start_us = psc.emission_start_us;
             ps.dust.get_mut().reset();
           });
         }

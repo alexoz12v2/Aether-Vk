@@ -29,17 +29,18 @@ void main() {
     uint h5 = dust_pcg(h4);
 
     // cluster j = i*S + s: time sample i of stream s (dust::emit_cluster). The stream fixes the cone
-    // cell and the speed draw (keyed per jet), its size stratum steps by one per time sample
-    // (dust_stream_stratum); the cluster only jitters them.
+    // cell (keyed per jet), jittered per cluster; the cluster is the whole cell: the mean speed with
+    // the full speed spread as its radial dispersion, the full size distribution, 1/S of the sample
     uint shift = dust_batch_streams(B).x;
     uint n = 1u << shift;
     uint s = j & (n - 1u);
     float samples = float(max(B.count >> shift, 1u));
     uint key = uint(B.mass_params.z * 16777216.0);
-    uint g0 = dust_pcg(key ^ dust_pcg(s ^ 0x5851F42Du));
-    uint g1 = dust_pcg(g0);
 
     float u_t = dust_stream_time_u01(B, j);
+    // the sample's share of the window's lit time (dust::emit_cluster)
+    float u_prev = (j >> shift) == 0u ? 0.0 : dust_stream_time_u01(B, j - n);
+    float share = max(u_t - u_prev, 0.0);
     vec2 t_start = vec2(B.comet_r_t_hi.w, B.comet_r_t_lo.w);
     vec2 dur = vec2(B.comet_v_dur_hi.w, B.comet_v_dur_lo.w);
     // lit time only: dark phases of the jet site get no clusters (full df64 when always lit)
@@ -74,34 +75,36 @@ void main() {
     Df3 rc = df3_add(rcStart, df3_from_f32(oT0 - oStart));
     vec3 vSite = cross(B.spin.xyz * B.spin.w, oT0);
 
-    // grain size: the sample's size stratum (log-uniform quantile), jittered within it
+    // the reference grain: the batch's s_ref; the cluster carries every size of the distribution
+    // (beta ~ 1/s), the renderer spreads it along the syndyne
     float s_min = B.size_params.x;
     float s_max = B.size_params.y;
-    uint stratum = dust_stream_stratum(B, j);
-    precise float us = float(stratum) + 0.5 + DUST_STREAM_SIZE_JITTER * (dust_u01(h5) - 0.5);
-    float u_s = us / float(n);
-    float s_um = s_min * pow(s_max / s_min, u_s);
-    float beta = B.vel_params.w / s_um;
+    float s_ref = B.vel_params.z;
+    float beta = B.vel_params.w / s_ref;
 
-    // the stratum's share of the time sample's mass
-    float mass_g = B.mass_params.x / samples * dust_size_stratum_mass(B.size_params, stratum, n);
+    // the stream's share of the time sample's mass: all sizes, 1/S of the sample
+    float mass_g = B.mass_params.x * share / float(n);
 
-    // ejection speed: the stream's draw plus a small per-cluster jitter
-    float v_mean = B.vel_params.x * sqrt(B.vel_params.z / s_um);
-    precise float g = dust_gauss(dust_u01(g0), dust_u01(g1))
-        + DUST_STREAM_SPEED_JITTER * dust_gauss(dust_u01(h3), dust_u01(h4));
-    float v_ej = max(v_mean * (1.0 + B.vel_params.y * g), 0.0);
+    // ejection speed: the mean speed of the reference grain, no draw (the speed spread is the
+    // packet's radial dispersion sigma_rad: the S streams of a cell sum to one smooth cone of
+    // every speed instead of S speed shells)
+    float v_ref = B.vel_params.x;
+    float v_ej = max(v_ref, 0.0);
     // lateral dispersion of the stream: DUST_STREAM_SIGMA_CELLS of its cone cell, at least
     // DUST_CHILD_SIGMA_V_REL of the speed (dust::STREAM_SIGMA_CELLS)
-    float sigma_lat = v_mean * max(DUST_STREAM_SIGMA_CELLS * aperture / sqrt(float(n)), DUST_CHILD_SIGMA_V_REL);
+    float sigma_lat = v_ej * max(DUST_STREAM_SIGMA_CELLS * aperture / sqrt(float(n)), DUST_CHILD_SIGMA_V_REL);
+    // radial dispersion: the whole speed distribution of the jet
+    float sigma_rad = v_ej * max(B.vel_params.y, 0.0);
 
-    Df3 v0 = df3_add(vc, df3_from_f32(dir * v_ej + vSite));
+    vec3 eject = dir * v_ej;
+    Df3 v0 = df3_add(vc, df3_from_f32(eject + vSite));
 
+    // mean cross-section per gram of the size distribution (dust::size_mean_inv_s_um)
     float rho_g_m3 = B.mass_params.y * 1.0e6;
-    float xsec_per_g = 3.0 / (4.0 * rho_g_m3 * s_um * 1.0e-6);
-    float dbeta = beta * 0.5 * log(s_max / s_min) / float(n);
-    // low mantissa bits: the child-pattern id, hashed from (seed, j) (dust::pack_child_id); sign
-    // bit: the stream is interrupted before this cluster
+    float xsec_per_g = 3.0 / (4.0 * rho_g_m3 * dust_size_mean_inv_s_um(B.size_params) * 1.0e-6);
+    // the half log-size range; low mantissa bits: the child-pattern id, hashed from (seed, j)
+    // (dust::pack_child_id); sign bit: the stream is interrupted before this cluster
+    float dbeta = 0.5 * log(s_max / s_min);
     uint db = (floatBitsToUint(dbeta) & ~DUST_CHILD_ID_MASK) | (dust_pcg(h0 ^ 0x2C1B3C6Du) & DUST_CHILD_ID_MASK);
     if (dust_stream_breaks_before(B, j)) db |= DUST_STREAM_BREAK_BIT;
     dbeta = uintBitsToFloat(db);
@@ -111,6 +114,7 @@ void main() {
     C.r0_t0_lo   = vec4(rc.lo, t0.y);
     C.v0_hi_beta = vec4(v0.hi, beta);
     C.v0_lo_mass = vec4(v0.lo, mass_g);
-    C.misc       = vec4(sigma_lat, s_um, xsec_per_g, dbeta);
+    C.misc       = vec4(sigma_lat, sigma_rad, xsec_per_g, dbeta);
+    C.eject      = vec4(eject, s_ref);
     pc.clusters.c[global & B.ring_mask] = C;
 }

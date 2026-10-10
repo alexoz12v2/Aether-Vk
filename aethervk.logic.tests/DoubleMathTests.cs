@@ -41,6 +41,6 @@ public class DoubleMathTests
     Assert.Equal(72, Marshal.SizeOf<HighResTransformDTO>());
     Assert.Equal(80, Marshal.SizeOf<AnimationTargetDTO>());
     Assert.Equal(64, Marshal.SizeOf<CRotoTranslateDTO>());
-    Assert.Equal(48, Marshal.SizeOf<CDustTierStatsDTO>());
+    Assert.Equal(56, Marshal.SizeOf<CDustTierStatsDTO>());
   }
 }

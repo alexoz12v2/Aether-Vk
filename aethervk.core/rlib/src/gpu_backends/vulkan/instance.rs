@@ -569,12 +569,17 @@ impl Instance {
           },
         )? as u32;
 
+        // AETHERVK_NO_ASYNC_COMPUTE=1: the compute queue on the graphics family (bisection aid)
+        let no_async = aethervk_oshal_rlib::os::env::var("AETHERVK_NO_ASYNC_COMPUTE")
+          .is_some_and(|v| v.trim() == "1");
         let compute_queue_family_index = queue_family_properties
           .iter()
           .position(|queue_props| {
             // try to find async compute ...
             let flags = queue_props.queue_family_properties.queue_flags;
-            flags.contains(vk::QueueFlags::COMPUTE) && !flags.contains(vk::QueueFlags::GRAPHICS)
+            !no_async
+              && flags.contains(vk::QueueFlags::COMPUTE)
+              && !flags.contains(vk::QueueFlags::GRAPHICS)
           })
           .or_else(|| {
             queue_family_properties.iter().position(|queue_props| {
@@ -669,6 +674,29 @@ impl Instance {
           && required_features.vulkan_memory_model.vulkan_memory_model_device_scope == ash::vk::TRUE
         {
           optional_extensions.insert(utils::OptionalExtensionSupportFlags::VULKAN_MEMORY_MODEL);
+        }
+
+        // fault diagnostics (device/fault.rs): both optional, both no-ops when absent
+        let has_ext = |name: &core::ffi::CStr| {
+          device_extension_properties
+            .iter()
+            .any(|prop| prop.extension_name_as_c_str().unwrap() == name)
+        };
+        // the extension alone is not enough: enabling an unsupported `deviceFault` feature fails
+        // device creation with VK_ERROR_FEATURE_NOT_PRESENT
+        if has_ext(c"VK_EXT_device_fault") {
+          let mut fault_features = vk::PhysicalDeviceFaultFeaturesEXT::default();
+          let mut features2 = vk::PhysicalDeviceFeatures2::default().push_next(&mut fault_features);
+          unsafe { self.instance.get_physical_device_features2(physical_device, &mut features2) };
+          if fault_features.device_fault == vk::TRUE {
+            optional_extensions.insert(utils::OptionalExtensionSupportFlags::DEVICE_FAULT);
+          }
+        }
+        // checkpoints cost a little on every marker: debug builds, or AETHERVK_GPU_CHECKPOINTS=1
+        let want_checkpoints = cfg!(debug_assertions)
+          || aethervk_oshal_rlib::os::env::var("AETHERVK_GPU_CHECKPOINTS").is_some_and(|v| v.trim() == "1");
+        if want_checkpoints && has_ext(ash::nv::device_diagnostic_checkpoints::NAME) {
+          optional_extensions.insert(utils::OptionalExtensionSupportFlags::DIAGNOSTIC_CHECKPOINTS);
         }
 
         #[cfg(debug_assertions)]

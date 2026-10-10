@@ -245,6 +245,31 @@ pub mod v2 {
     pub emission_params: ParticleSystemEmitParams,
     /// Draw parameters
     pub draw_params: ParticleSystemDrawParams,
+    /// Ignition: the epoch the jet starts emitting at (TDB µs since J2000,
+    /// [`emission_start_us_from_epoch`]). The dust at any epoch is what was emitted between the
+    /// ignition and that epoch; nothing exists before it. [`EMISSION_START_PREEXISTING`] = a
+    /// pre-existing tail (history back to 64 TTL before the current epoch), an explicit opt-in.
+    pub emission_start_us: i64,
+  }
+
+  /// `emission_start_us` of a pre-existing tail: the history is filled back 64 TTL before the
+  /// current epoch, before the scene start too. An explicit opt-in, never a default.
+  pub const EMISSION_START_PREEXISTING: i64 = i64::MIN;
+  /// DTO sentinel: ignite at the scene's current epoch when the jet is added.
+  pub const EMISSION_START_NOW: i64 = i64::MAX;
+
+  /// TDB microseconds since J2000 of `epoch`, the unit of
+  /// [`ParticleSystemComponent::emission_start_us`] (absolute: the scene's epoch range may move,
+  /// the jet's birth must not).
+  pub fn emission_start_us_from_epoch(epoch: anise::time::Epoch) -> i64 {
+    (epoch.to_tdb_duration().total_nanoseconds() / 1000) as i64
+  }
+
+  /// Inverse of [`emission_start_us_from_epoch`].
+  pub fn epoch_from_emission_start_us(us: i64) -> anise::time::Epoch {
+    anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_total_nanoseconds(
+      us as i128 * 1000,
+    ))
   }
 
   /// Non physically based draw parameters
@@ -296,6 +321,7 @@ pub mod v2 {
         ttl_us: self.ttl_us,
         emission_params: self.emission_params,
         draw_params: self.draw_params.clone(),
+        emission_start_us: self.emission_start_us,
       }
     }
   }
@@ -308,6 +334,7 @@ pub mod v2 {
       emission_params: ParticleSystemEmitParams,
       draw_params: ParticleSystemDrawParams,
       ttl_us: timeus_t,
+      emission_start_us: i64,
     ) -> EngineResult<Self> {
       let entity_u64 = entity_id.as_ffi();
       render_frontend
@@ -326,6 +353,7 @@ pub mod v2 {
           ttl_us,
           emission_params,
           draw_params,
+          emission_start_us,
         })
     }
   }

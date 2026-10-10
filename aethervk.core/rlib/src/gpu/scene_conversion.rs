@@ -247,7 +247,7 @@ impl SceneConversionExt2 for Scene {
       dust_softening: crate::scene::dust::DUST_SOFTENING_DEFAULT,
       dust_view_flags: 0,
       dust_flow: Default::default(),
-      dust_white: 1.0,
+      dust_view: Default::default(),
     };
 
     // ------ 3. Zero-Copy GPU Upload Abstraction Macro -------------------------------------
@@ -1640,7 +1640,6 @@ impl Scene {
               units_per_m,
               stream_color,
               state,
-              lod: Default::default(),
               eye_m,
               nucleus_m,
             }

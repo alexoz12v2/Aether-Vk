@@ -3,6 +3,15 @@
 # during rapid test setups/teardowns by disabling dynamic library unloading.
 env = { VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING = "1" }
 test-threads = 8
+# A test is reported SLOW after 1 min and killed after 5 (a hung Vulkan test or a runaway
+# host-rasterizer test); the Vulkan group's retries still apply after a termination.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[[profile.default.overrides]]
+# The host reference rasterizer renders a 262 144-slot system on the CPU: ~1.5 min in a debug
+# build on 16 cores, minutes on fewer (`DUST_TEST_THREADS`), so it gets a longer kill limit.
+filter = 'test(dust_image_is_independent_of_ring_capacity)'
+slow-timeout = { period = "60s", terminate-after = 20 }
 
 [test-groups]
 vulkan-tests = { max-threads = 1 }
