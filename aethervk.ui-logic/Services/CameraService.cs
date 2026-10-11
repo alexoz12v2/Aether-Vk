@@ -218,6 +218,8 @@ public sealed class CameraService : IDisposable
   // Observer latitude (degrees): its sign picks the ecliptic pole the view "up" leans towards.
   private float _observerLatDeg;
   private float _observerLonDeg;
+  /// <summary>Observer height above the WGS84 ellipsoid (m), native observer only (0 by default).</summary>
+  private double _observerElevM;
   /// <summary>True while the core poses the Earth observer camera in its commits
   /// (<see cref="PushNativeObserver"/>): the UI then never writes the pose per tick.</summary>
   private bool _nativeObserverActive;
@@ -1256,6 +1258,21 @@ public sealed class CameraService : IDisposable
   }
 
   /// <summary>
+  /// Sets the observer's height above the WGS84 ellipsoid (metres, e.g. a FITS <c>SITEELEV</c>).
+  /// Only the native observer uses it (the UI's own spherical pose ignores it); re-pushed right
+  /// away in Earth observer mode.
+  /// </summary>
+  public void SetEarthObserverElevation(double elevM)
+  {
+    lock (_earthPosLock)
+    {
+      _observerElevM = elevM;
+      if (_modeSubject.Value == CameraMode.EarthPosition)
+        PushNativeObserver();
+    }
+  }
+
+  /// <summary>
   /// Switches the Earth Observer orientation sub-mode.
   /// Snapshots the current look direction into the new mode's anchor before switching.
   /// </summary>
@@ -1313,6 +1330,30 @@ public sealed class CameraService : IDisposable
   }
 
   /// <summary>
+  /// "Lock to image" (sky image overlay): the telescope lock-in (the Earth-fixed anchor of
+  /// <see cref="EarthObserverOrientationMode.CometLockIn"/>) aimed at a world direction (ecliptic
+  /// J2000, e.g. a telescope image's CRVAL) instead of the comet; it then turns with the Earth like
+  /// a ground telescope. Only in <see cref="CameraMode.EarthPosition"/>: returns <c>false</c>
+  /// otherwise.
+  /// </summary>
+  public bool LockEarthObserverToDirection(Vector3d worldDirection)
+  {
+    lock (_earthPosLock)
+    {
+      if (_modeSubject.Value != CameraMode.EarthPosition || !(worldDirection.Length() > 1e-12))
+        return false;
+      var aimed = EarthObserverLookAt(worldDirection);
+      _earthRotation = aimed;
+      _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, aimed);
+      _earthOrientationMode = EarthObserverOrientationMode.CometLockIn;
+      _earthOrientationModeSubject.OnNext(_earthOrientationMode);
+      SnapCameraToEarth(_lastEarthPos);
+      PushNativeObserver();
+      return true;
+    }
+  }
+
+  /// <summary>
   /// Hands the Earth observer to the core (call under <c>_earthPosLock</c>): it then poses the
   /// Earth-parented camera inside every commit that moves the Earth and the comet, from this mode,
   /// surface point and look. Re-aiming here, after the commit's callbacks, left frames with a stale
@@ -1332,7 +1373,7 @@ public sealed class CameraService : IDisposable
     var look = mode.IsLockIn() ? _earthFixedLookDir : _inertialLookDir;
     ulong comet = mode.Target() == EarthObserverTarget.Comet ? _runtimeService.CometEntityId ?? 0 : 0;
     _nativeObserverActive = _runtimeService.SetEarthObserver(
-      cam, (int)mode, earth, comet, _observerLatDeg, _observerLonDeg, look);
+      cam, (int)mode, earth, comet, _observerLatDeg, _observerLonDeg, _observerElevM, look);
     if (!_nativeObserverActive)
       Console.WriteLine($"[CameraService] native Earth observer refused ({mode}, earth {earth}, comet {comet}): the UI poses the camera");
   }
@@ -1342,7 +1383,7 @@ public sealed class CameraService : IDisposable
   {
     if (!_nativeObserverActive)
       return;
-    _runtimeService.SetEarthObserver(CameraEntityId ?? 0, -1, 0, 0, 0, 0, Quaterniond.Identity);
+    _runtimeService.SetEarthObserver(CameraEntityId ?? 0, -1, 0, 0, 0, 0, 0, Quaterniond.Identity);
     _nativeObserverActive = false;
   }
 

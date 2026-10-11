@@ -1193,7 +1193,9 @@ fn gpu_dust_moments_match_reference() {
 /// view's pyramid (integer sums: order independent; per-texel differences come only from the
 /// float evaluation of each packet), and the header carries the level mask and τ_max: the GPU
 /// splat of `batch` (emitted into system `id`) evaluated at `frame`, seen top-down over
-/// ±`half` m around the anchor, against the CPU splat of the GPU's own moments.
+/// ±`half` m around the anchor (or through `camera`: an mvp and the eye in local metres, for
+/// the perspective case of the split), against the CPU splat of the GPU's own moments.
+#[allow(clippy::too_many_arguments)]
 fn splat_parity(
   id: u64,
   batch_of: &dyn Fn(u32) -> DustBatch,
@@ -1202,6 +1204,8 @@ fn splat_parity(
   exposure: f32,
   expect_spiral: bool,
   albedo: f32,
+  camera: Option<([f32; 16], [f32; 3])>,
+  shell: Option<f32>,
 ) {
   with_dust_device(id, |device, capacity, _, _| {
     let batch = batch_of(capacity);
@@ -1215,6 +1219,11 @@ fn splat_parity(
     mvp[5] = 1.0 / half;
     mvp[10] = 1e-12;
     mvp[15] = 1.0;
+    let mut eye = [0.0f32, 0.0, 1e10];
+    if let Some((m, e)) = camera {
+      mvp = m;
+      eye = e;
+    }
     let mut pc = dust::DustSplatPushConstants {
       moments: 0,
       render: 0,
@@ -1225,7 +1234,7 @@ fn splat_parity(
       inv_unit: 0.0,
       color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
       albedo,
-      eye_local: [0.0, 0.0, 1e10, 30.0 * 86400.0], // w = TTL: the hue ramp is exercised
+      eye_local: [eye[0], eye[1], eye[2], 30.0 * 86400.0], // w = TTL: the hue ramp is exercised
       mvp,
     };
     let flow = dust::DustFlowUniform {
@@ -1258,8 +1267,12 @@ fn splat_parity(
     // the first frame measures τ_max (unit 1e-4 before any); the host folds a readback
     // DUST_READBACK_SLOTS frames later, so by the sixth frame the unit follows the view
     let mut gpu_unit = 0.0;
-    for _ in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
+    for i in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
       gpu_unit = run(&mut pc);
+      if i == 0 {
+        // the speck shell's radius in the next frames' headers (the view exists now)
+        device.dust_set_shell_override(pe, shell);
+      }
     }
     let gpu = device.download_dust_pyramid(pe).unwrap();
     let layout = device.dust_view_layout(pe).unwrap();
@@ -1310,6 +1323,23 @@ fn splat_parity(
     }
     let mut cpu = alloc::vec![0u32; layout.total_words as usize];
     cpu[..dust::PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+    // the host-written split depth and volume level bias the GPU frame drew with (the host
+    // lowers / raises them from the previous frames' words): the reference uses the same
+    cpu[dust::PYR_SPLIT_DEPTH as usize] = gpu[dust::PYR_SPLIT_DEPTH as usize];
+    // and the speck shell's radius: the continuum gives that mass up on both mirrors
+    let dmax_word = dust::specks::PYR_SPECKS_DMAX as usize;
+    cpu[dmax_word] = gpu[dmax_word];
+    std::println!(
+      "[dust gpu] splat parity: speck shell {} m",
+      f32::from_bits(gpu[dmax_word])
+    );
+    if let Some(d) = shell {
+      assert_eq!(
+        f32::from_bits(gpu[dmax_word]),
+        d,
+        "the shell override reached the header"
+      );
+    }
     dust::splat_tier(&moments, &render, &pc, &flow, 0, &layout, &mut cpu);
     dust::measure_from_pyramid(&layout, &mut cpu);
     let hw = dust::PYRAMID_HEADER_WORDS as usize;
@@ -1326,6 +1356,56 @@ fn splat_parity(
     assert!(
       (tg / tc - 1.0).abs() < 1e-2,
       "τ_max gpu {tg:.4e} cpu {tc:.4e}"
+    );
+    // the split words (`split_packet` / `dust_split_step`): the same rules on identical packets
+    // to the same host-written depth (no run-time gate: the children count is informational and
+    // thread-order free); a decision on a float boundary moves a node between split and kept,
+    // so the children made agree to 2 % + 4, the largest dropped flux to 1 % (a different packet
+    // dropped on one side only would show as a different maximum)
+    let (cg, cc) = (
+      gpu[dust::PYR_SPLIT_CHILDREN as usize],
+      cpu[dust::PYR_SPLIT_CHILDREN as usize],
+    );
+    let (dg, dc) = (
+      f32::from_bits(gpu[dust::PYR_SPLIT_DROPPED_FLUX as usize]),
+      f32::from_bits(cpu[dust::PYR_SPLIT_DROPPED_FLUX as usize]),
+    );
+    // the volume evaluations (`PYR_VOLUME_EVALS`): the same plans on identical packets; a plan
+    // decision on a float boundary (a level or a piece merge) moves one packet's count: 2 % + 16
+    let (eg, ec) = (
+      gpu[dust::PYR_VOLUME_EVALS as usize],
+      cpu[dust::PYR_VOLUME_EVALS as usize],
+    );
+    let (sg_, vg) = (dust::SplitStats::load(&gpu), dust::VolumeStats::load(&gpu));
+    std::println!(
+      "[dust gpu] split: depth {} (volume bias {}), children gpu {cg} cpu {cc} (budget {}, overflow {}), dropped flux gpu {dg:.4e} cpu {dc:.4e}, volume evaluations gpu {eg} cpu {ec}",
+      sg_.depth,
+      vg.bias,
+      dust::DUST_SPLIT_BUDGET,
+      sg_.overflow()
+    );
+    assert!(
+      cg.abs_diff(cc) as f32 <= 4.0 + 0.02 * cc.max(cg) as f32,
+      "split children gpu {cg} cpu {cc}"
+    );
+    assert!(
+      eg.abs_diff(ec) as f32 <= 16.0 + 0.02 * ec.max(eg) as f32,
+      "volume evaluations gpu {eg} cpu {ec}"
+    );
+    assert!(
+      (dg == 0.0 && dc == 0.0) || (dg / dc - 1.0).abs() < 1e-2,
+      "dropped flux gpu {dg:.4e} cpu {dc:.4e}"
+    );
+    // the EWA texels planned (`PYR_EWA_TEXELS`): the same level choices on identical packets; a
+    // level on a float boundary moves one packet's count: 2 % + 16 units
+    let (tg_, tc_) = (
+      gpu[dust::PYR_EWA_TEXELS as usize],
+      cpu[dust::PYR_EWA_TEXELS as usize],
+    );
+    std::println!("[dust gpu] EWA texel units gpu {tg_} cpu {tc_}");
+    assert!(
+      tg_.abs_diff(tc_) as f32 <= 16.0 + 0.02 * tc_.max(tg_) as f32,
+      "EWA texel units gpu {tg_} cpu {tc_}"
     );
     let (mut worst, mut peak, mut sg, mut sc, mut nonzero) = (0u32, 0u32, 0u64, 0u64, 0usize);
     let (mut depth_compared, mut depth_mismatch) = (0usize, 0usize);
@@ -1530,6 +1610,101 @@ fn gpu_dust_splat_matches_reference() {
     1.0,
     false,
     0.04,
+    None,
+    None,
+  );
+}
+
+/// The perspective split (`dust_project_split_scatter`: chords clipped at the eye plane, the
+/// Gaussians sliced by depth, the leaves projected one by one) on both mirrors: a 60° camera
+/// inside the five-day cloud, 200 m from the anchor, looking along −z through it; the packets
+/// are kilometres to thousands of kilometres across, so nearly every one is split, clipped or
+/// dropped (about 1.1·10⁶ children at depth 4, above the host's 2²⁰ budget target: there is no
+/// gate, the count is informational), and the split words of the header must agree too. The
+/// packets that hold the eye or are near it (`√tr Σ > 0.2 · dist`) are drawn by their exact ray
+/// integral (`dust_volume_scatter`, whole frame at a coarse level): that path is compared here
+/// too, under the same tolerance rules.
+/// The perspective split from a camera inside the cloud looking **away** from the anchor (at
+/// (0, 0, 200 m) along +z, the anchor behind it): the eye plane is the camera's on both mirrors
+/// (`dust_view_forward` no longer turns a perspective view towards the scene's origin), so the
+/// dust in front is drawn and the dust between the camera and the anchor is cut or dropped.
+#[test]
+fn gpu_dust_splat_matches_reference_perspective_away() {
+  let (w, h) = (640.0f32, 400.0f32);
+  let d = 200.0f32;
+  let tan_h = (30.0f32).to_radians().tan();
+  // w_clip = z − D: in front is +z, away from the anchor
+  let mut mvp = [0.0f32; 16];
+  mvp[0] = h / (w * tan_h);
+  mvp[5] = 1.0 / tan_h;
+  mvp[10] = -1e-3;
+  mvp[11] = 1.0;
+  mvp[15] = -d;
+  splat_parity(
+    9012,
+    &|cap| test_batch(1024, 3600.0, 3, cap),
+    frame_after(5.0),
+    2.0e7,
+    1.0,
+    false,
+    0.04,
+    Some((mvp, [0.0, 0.0, d])),
+    None,
+  );
+}
+
+/// The speck shell's hand-over on both mirrors: the perspective camera of
+/// `gpu_dust_splat_matches_reference_perspective` with a 20-km shell in the header
+/// (`dust_set_shell_override`): the leaves inside it are left to the specks, those across it
+/// split once more or scaled by their outside fraction (`dust_shell_classify`,
+/// `dust_shell_outside_fraction`), and the splat pyramids still match.
+#[test]
+fn gpu_dust_splat_matches_reference_perspective_shell() {
+  let (w, h) = (640.0f32, 400.0f32);
+  let d = 200.0f32;
+  let tan_h = (30.0f32).to_radians().tan();
+  let mut mvp = [0.0f32; 16];
+  mvp[0] = h / (w * tan_h);
+  mvp[5] = 1.0 / tan_h;
+  mvp[10] = -1e-3;
+  mvp[11] = -1.0;
+  mvp[15] = d;
+  splat_parity(
+    9013,
+    &|cap| test_batch(1024, 3600.0, 3, cap),
+    frame_after(5.0),
+    2.0e7,
+    1.0,
+    false,
+    0.04,
+    Some((mvp, [0.0, 0.0, d])),
+    Some(2.0e4),
+  );
+}
+
+#[test]
+fn gpu_dust_splat_matches_reference_perspective() {
+  let (w, h) = (640.0f32, 400.0f32);
+  let d = 200.0f32;
+  let tan_h = (30.0f32).to_radians().tan();
+  // camera at (0, 0, D) looking along −z: x_clip = x · (H/W) / tan(30°), y_clip = y / tan(30°),
+  // w_clip = D − z (square pixels, 60° vertical field)
+  let mut mvp = [0.0f32; 16];
+  mvp[0] = h / (w * tan_h);
+  mvp[5] = 1.0 / tan_h;
+  mvp[10] = -1e-3;
+  mvp[11] = -1.0;
+  mvp[15] = d;
+  splat_parity(
+    9011,
+    &|cap| test_batch(1024, 3600.0, 3, cap),
+    frame_after(5.0),
+    2.0e7,
+    1.0,
+    false,
+    0.04,
+    Some((mvp, [0.0, 0.0, d])),
+    None,
   );
 }
 
@@ -1569,7 +1744,7 @@ fn gpu_dust_splat_matches_reference_spinning_site() {
   let frame = DustFrame::new(centre, t_now, [0.0, 0.0, 0.0, 1.0], 1.0e9)
     .with_streams(4)
     .with_spin([axis[0], axis[1], axis[2], omega]);
-  splat_parity(9010, &batch_of, frame, 5.0e3, 1.0e-6, true, 0.0);
+  splat_parity(9010, &batch_of, frame, 5.0e3, 1.0e-6, true, 0.0, None, None);
 }
 
 /// Stress: a full tier (every slot emitted) propagated 40 times with the moments, as a heavy

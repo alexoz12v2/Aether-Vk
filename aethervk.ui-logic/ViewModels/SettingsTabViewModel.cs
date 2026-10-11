@@ -20,6 +20,7 @@ public partial class SettingsTabViewModel
   private readonly CompositeDisposable _disposables = [];
   private readonly INativeRuntimeService _runtimeService;
   private readonly ISchedulerProvider _schedulerProvider;
+  private readonly IFileDialogService? _fileDialogService;
 
   [ObservableProperty]
   private string _cameraModeName = "Up Zenith";
@@ -39,11 +40,13 @@ public partial class SettingsTabViewModel
     ICameraServiceRegistry cameraServiceRegistry,
     INativeRuntimeService runtimeService,
     AssetLibraryService assetLibrary,
-    TimelineService timelineService
+    TimelineService timelineService,
+    IFileDialogService? fileDialogService = null
   )
     : base("Settings", sessionService)
   {
     _translationService = translationService;
+    _fileDialogService = fileDialogService;
     _runtimeService = runtimeService;
     _schedulerProvider = schedulerProvider;
     CometAppearance = new CometAppearanceViewModel(
@@ -67,7 +70,9 @@ public partial class SettingsTabViewModel
           schedulerProvider.MainThread.Schedule(() =>
           {
             int nextIndex = ActiveViewports.Count;
-            var vm = new ViewportSettingsViewModel(cameraId, nextIndex, _runtimeService, _schedulerProvider, cameraService);
+            var vm = new ViewportSettingsViewModel(
+              cameraId, nextIndex, _runtimeService, _schedulerProvider, cameraService,
+              _fileDialogService, _translationService);
             ActiveViewports.Add(vm);
             HasActiveViewport = true;
 

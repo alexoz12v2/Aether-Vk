@@ -3045,7 +3045,7 @@ fn execute_simulation_tick_fixed_update_phase(
       }
       // Earth observer: posed in this same write, from the transforms just committed, so no frame
       // ever shows a stale aim (see `earth_observer`)
-      utils::apply_earth_observer(&mut *scene_write);
+      utils::apply_earth_observer(&mut *scene_write, scene_id, cartesian_state_cache);
       // write Lock automatically dropped/downgraded here
       scene = parking_lot::RwLockWriteGuard::downgrade_to_upgradable(scene_write);
 
@@ -3769,10 +3769,17 @@ mod utils {
   /// upcast exactly, so nothing is rounded (an f32 quaternion costs ~1e-7 rad, ~15 km at 1 AU).
   /// Poses the native Earth observer camera (if set) from the scene's current transforms and marks
   /// it changed. Call inside the scene write that committed the Earth / comet transforms.
-  pub fn apply_earth_observer(scene: &mut SceneContext) {
+  /// The comet's heliocentric velocity of this commit (light time, see `earth_observer`) comes
+  /// from `cache`, the SPK states just committed.
+  pub fn apply_earth_observer(
+    scene: &mut SceneContext,
+    scene_id: u64,
+    cache: &dashmap::DashMap<crate::simulation_api::structs::SceneEntityId, CartesianState>,
+  ) {
     let Some(mut obs) = scene.earth_observer else {
       return;
     };
+    obs.refresh_comet_velocity(scene_id, cache);
     if crate::simulation_api::earth_observer::apply(&scene.scene, &mut obs).is_some() {
       scene.earth_observer = Some(obs);
       check_earth_observer_invariant(&scene.scene, &obs);
@@ -3800,14 +3807,14 @@ mod utils {
     changes.sort_by_cached_key(|(ext_id, _, _)| depth(*ext_id));
   }
 
-  /// The observer sits on the Earth's surface: `|camera − earth| = EARTH_RADIUS_AU` (world, f64).
+  /// The observer sits on its WGS84 site: `|camera − earth| = |surface_bf_au|` (world, f64).
   /// Checked here, on one scene snapshot: C# receives the camera and the Earth in separate callbacks
   /// and could only compare a camera against the previous tick's Earth.
   fn check_earth_observer_invariant(
     scene: &crate::scene::Scene,
     obs: &crate::simulation_api::earth_observer::EarthObserverState,
   ) {
-    use crate::simulation_api::earth_observer::EARTH_RADIUS_AU;
+    let radius_au = obs.surface_radius_au();
     let (Some(cam), Some(earth)) = (
       scene.global_transform_f64(obs.camera),
       scene.global_transform_f64(obs.earth),
@@ -3817,9 +3824,9 @@ mod utils {
     let d = cam.position - earth.position;
     let dist = (d.x() * d.x() + d.y() * d.y() + d.z() * d.z()).sqrt();
     // f64 at 1 AU resolves ~1e-16 AU; the f32 Earth rotation's norm error scales R by ~1e-8
-    if (dist - EARTH_RADIUS_AU).abs() > 1e-10 {
+    if (dist - radius_au).abs() > 1e-10 {
       let msg = alloc::format!(
-        "Earth observer invariant broken: |camera - earth| = {dist:e} AU, expected {EARTH_RADIUS_AU:e}"
+        "Earth observer invariant broken: |camera - earth| = {dist:e} AU, expected {radius_au:e}"
       );
       emit_breadcrumb(3, &msg);
       debug_assert!(false, "{msg}");
@@ -4052,7 +4059,7 @@ mod utils {
     step_cartesian_cache(cache, scene_id, epoch, almanac);
     commit_cartesian_cache(scene_write, scene_id, cache);
     scene_write.scene.set_sim_time_s(scaled_us as f64 * 1e-6);
-    apply_earth_observer(scene_write);
+    apply_earth_observer(scene_write, scene_id, cache);
     // the recorded comet path belongs to the previous timeline position
     clear_effective_trajectory(scene_write);
     // every age tier from scratch (shared per-tick window budget)
@@ -4346,6 +4353,9 @@ mod utils {
           sys.track_spin_model(rot_model);
           // the dust's albedo: the splat's radiance weight (physical photometry, WP1)
           sys.albedo = cfg_at(&jet).albedo;
+          // the size law of the speck counts (WP3b)
+          sys.s_ref_um = 0.5 * ps.emission_params.diametre_um;
+          sys.size_q = ps.emission_params.size_q();
           sys.tick(t_s, &jet_at, &cfg_at)
         })
         .unwrap_or_default();

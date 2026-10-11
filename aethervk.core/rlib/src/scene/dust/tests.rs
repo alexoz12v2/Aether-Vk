@@ -3460,6 +3460,7 @@ fn splat_image_is_the_projected_density() {
       flux: 1.0e6 * (0.5 + lcg(&mut rng) as f32),
       open: [false, false],
       rho: [1.0, 1.0],
+      seg_t: [0.0; 3],
     });
   }
   let px = 256u32;
@@ -3812,7 +3813,8 @@ fn tier_packets_with(host: &DustHostState, frame: &DustFrame, threads: usize) ->
 
 /// Merges a partial pyramid into `out` (same layout): saturating sums for the count / colour
 /// words, the nonzero minimum for the depth word (as `scatter_into`), the maximum of
-/// [`PYR_TAU_MAX`] and the union of [`PYR_LEVEL_MASK`].
+/// [`PYR_TAU_MAX`] and the union of [`PYR_LEVEL_MASK`]; the split counters summed, the largest
+/// dropped flux by maximum ([`SplitStats`]).
 fn merge_pyramid(out: &mut [u32], part: &[u32]) {
   let h = PYRAMID_HEADER_WORDS as usize;
   let tm = PYR_TAU_MAX as usize;
@@ -3820,6 +3822,16 @@ fn merge_pyramid(out: &mut [u32], part: &[u32]) {
     out[tm] = part[tm];
   }
   out[PYR_LEVEL_MASK as usize] |= part[PYR_LEVEL_MASK as usize];
+  let ch = PYR_SPLIT_CHILDREN as usize;
+  out[ch] = out[ch].saturating_add(part[ch]);
+  let ve = PYR_VOLUME_EVALS as usize;
+  out[ve] = out[ve].wrapping_add(part[ve]);
+  let et = PYR_EWA_TEXELS as usize;
+  out[et] = out[et].wrapping_add(part[et]);
+  let df = PYR_SPLIT_DROPPED_FLUX as usize;
+  if f32::from_bits(part[df]) > f32::from_bits(out[df]) {
+    out[df] = part[df];
+  }
   let w = PYRAMID_TEXEL_WORDS as usize;
   for (o, p) in out[h..].chunks_exact_mut(w).zip(part[h..].chunks_exact(w)) {
     for k in 0..4 {
@@ -6129,16 +6141,24 @@ fn diag_two_hour_jet_pyramid_levels() {
         })
         .unwrap_or([0.0; 3]);
       let merged = polyline_merged(m, &mvp, px, px);
+      let view = SplitView::of(&mvp, [eye[0], eye[1], eye[2]]);
+      let mut leaves = SplitLeaves::default();
+      let mut stats = SplitStats::default();
       for p in subpackets_merged(m, seg, pred, merged) {
-        if let Some(sp) = project_packet(&p, 1.0, &mvp, px, px, [eye[0], eye[1], eye[2]]) {
-          n_pk += 1;
-          sig.push(sp.sigma_min);
-          let ex = DUST_SPLAT_SIGMAS * sp.cov[0].sqrt();
-          let ey = DUST_SPLAT_SIGMAS * sp.cov[2].sqrt();
-          let band = ((sp.seg[0] * sp.seg[0] + sp.seg[1] * sp.seg[1]).sqrt() + 2.0 * ex + 2.0)
-            * (2.0 * ey + 2.0);
-          if band > DUST_SPLAT_MAX_TEXELS as f32 {
-            big += 1;
+        leaves.clear();
+        split_packet(&p, &view, &mut leaves, &mut stats);
+        // the EWA leaves (the volumetric ones, near the eye, have no screen σ)
+        for p in &leaves.ewa {
+          if let Some(sp) = project_packet(p, 1.0, &mvp, px, px, [eye[0], eye[1], eye[2]]) {
+            n_pk += 1;
+            sig.push(sp.sigma_min);
+            let ex = DUST_SPLAT_SIGMAS * sp.cov[0].sqrt();
+            let ey = DUST_SPLAT_SIGMAS * sp.cov[2].sqrt();
+            let band = ((sp.seg[0] * sp.seg[0] + sp.seg[1] * sp.seg[1]).sqrt() + 2.0 * ex + 2.0)
+              * (2.0 * ey + 2.0);
+            if band > DUST_SPLAT_MAX_TEXELS as f32 {
+              big += 1;
+            }
           }
         }
       }
@@ -6235,6 +6255,7 @@ fn orthographic_eye_is_at_infinity_along_the_view_axis() {
     flux: 1.0,
     open: [false; 2],
     rho: [1.0; 2],
+    seg_t: [0.0; 3],
   };
   let sun = [1.0f32, 0.0, 0.0];
   let phot = splat::Photometry {
@@ -6287,6 +6308,7 @@ fn perspective_texels_resolve_the_phase_angle() {
     flux: 1.0,
     open: [false; 2],
     rho: [1.0; 2],
+    seg_t: [0.0; 3],
   };
   let sun = [1.0f32, 0.0, 0.0];
   let phot = splat::Photometry {
@@ -6399,4 +6421,1752 @@ fn faint_colour_words_average_to_the_packet_colour() {
       color[k]
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Perspective split (split_packet / dust_split_step)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A random positive-definite covariance `A Aᵀ + 0.01 scale² I` with entries of order `scale²`
+fn random_cov(rng: &mut u64, scale: f32) -> [f32; 6] {
+  let mut a = [[0.0f32; 3]; 3];
+  for row in a.iter_mut() {
+    for v in row.iter_mut() {
+      *v = (lcg(rng) as f32 - 0.5) * 2.0 * scale;
+    }
+  }
+  let mut c = [[0.0f32; 3]; 3];
+  for i in 0..3 {
+    for j in 0..3 {
+      for k in 0..3 {
+        c[i][j] += a[i][k] * a[j][k];
+      }
+    }
+    c[i][i] += 0.01 * scale * scale;
+  }
+  [c[0][0], c[0][1], c[0][2], c[1][1], c[1][2], c[2][2]]
+}
+
+/// First and second moments (f64) of a chord packet of uniform density: mean `μ + seg/2`,
+/// covariance `Σ + seg segᵀ / 12`, and its flux
+fn chord_moments(p: &Packet) -> ([f64; 3], [[f64; 3]; 3], f64) {
+  let seg = [p.seg[0] as f64, p.seg[1] as f64, p.seg[2] as f64];
+  let mean = [
+    p.mean[0] as f64 + 0.5 * seg[0],
+    p.mean[1] as f64 + 0.5 * seg[1],
+    p.mean[2] as f64 + 0.5 * seg[2],
+  ];
+  let c = &p.cov;
+  let mut cov = [
+    [c[0] as f64, c[1] as f64, c[2] as f64],
+    [c[1] as f64, c[3] as f64, c[4] as f64],
+    [c[2] as f64, c[4] as f64, c[5] as f64],
+  ];
+  for i in 0..3 {
+    for j in 0..3 {
+      cov[i][j] += seg[i] * seg[j] / 12.0;
+    }
+  }
+  (mean, cov, p.flux as f64)
+}
+
+/// The mixture of the split's leaves has the packet's mean, covariance and flux (the proof in
+/// `split_step`: `½N(μ−h, Σ−hhᵀ) + ½N(μ+h, Σ−hhᵀ)` per level, the chord halves tiling the
+/// chord), after four forced levels on random covariances and chords; a depth-sliced child's
+/// variance along the view direction is `(1 − a²)` = 0.36 of its parent's.
+#[test]
+fn split_keeps_the_moments_and_the_flux() {
+  let mut rng = 11u64;
+  let view = SplitView {
+    eye: [0.0, 0.0, 1.0e5],
+    fwd: [0.0, 0.0, -1.0],
+    perspective: true,
+    volumetric: true,
+    shell: 0.0,
+  };
+  let scale = 1.0e3f32;
+  let mut leaves = SplitLeaves::default();
+  for case in 0..24 {
+    let cov = random_cov(&mut rng, scale);
+    let seg = if case % 3 == 0 {
+      [0.0; 3]
+    } else {
+      [
+        (lcg(&mut rng) as f32 - 0.5) * 8.0 * scale,
+        (lcg(&mut rng) as f32 - 0.5) * 8.0 * scale,
+        (lcg(&mut rng) as f32 - 0.5) * 8.0 * scale,
+      ]
+    };
+    let p = Packet {
+      mean: [
+        (lcg(&mut rng) as f32 - 0.5) * scale,
+        (lcg(&mut rng) as f32 - 0.5) * scale,
+        (lcg(&mut rng) as f32 - 0.5) * scale,
+      ],
+      cov,
+      seg,
+      flux: 1.0 + lcg(&mut rng) as f32,
+      open: [case % 2 == 0, case % 4 == 1],
+      rho: [1.0, 1.0],
+      seg_t: [0.0; 3],
+    };
+    leaves.clear();
+    let mut stats = SplitStats::default();
+    split_packet_with(&p, &view, true, &mut leaves, &mut stats);
+    assert_eq!(leaves.ewa.len(), 1 << DUST_SPLIT_DEPTH_MAX, "case {case}");
+    assert!(
+      leaves.volume.is_empty(),
+      "case {case}: forced splits are never volumetric"
+    );
+    assert_eq!(stats.children, (1 << (DUST_SPLIT_DEPTH_MAX + 1)) - 2);
+    assert_eq!(stats.overflow(), 0);
+    let (m0, c0, f0) = chord_moments(&p);
+    let tr = c0[0][0] + c0[1][1] + c0[2][2];
+    let (mut fsum, mut msum, mut csum) = (0.0f64, [0.0f64; 3], [[0.0f64; 3]; 3]);
+    let sv0 = var_along(&p.cov, view.fwd) as f64;
+    for l in &leaves.ewa {
+      let (m, c, f) = chord_moments(l);
+      fsum += f;
+      for i in 0..3 {
+        msum[i] += f * m[i];
+        for j in 0..3 {
+          csum[i][j] += f * (c[i][j] + m[i] * m[j]);
+        }
+      }
+      // a depth slice keeps the chord and shrinks σ_v by 0.6 per level: after four levels
+      // every leaf's σ_v² is 0.36⁴ of the packet's (a chord packet may have been bisected
+      // instead: its σ_v is then the parent's)
+      let sv = var_along(&l.cov, view.fwd) as f64;
+      assert!(
+        sv <= sv0 * (1.0 + 1e-4),
+        "case {case}: leaf σ_v² {sv} above the packet's {sv0}"
+      );
+      if p.seg == [0.0; 3] {
+        assert!(
+          (sv / (sv0 * 0.36f64.powi(DUST_SPLIT_DEPTH_MAX as i32)) - 1.0).abs() < 1e-3,
+          "case {case}: leaf σ_v² {sv} vs 0.36⁴ · {sv0}"
+        );
+      }
+    }
+    assert!(
+      ((fsum - f0) / f0).abs() < 1e-6,
+      "case {case}: flux {fsum} vs {f0}"
+    );
+    for i in 0..3 {
+      msum[i] /= fsum;
+      assert!(
+        (msum[i] - m0[i]).abs() < 1e-5 * tr.sqrt(),
+        "case {case}: mean[{i}] {} vs {}",
+        msum[i],
+        m0[i]
+      );
+    }
+    for i in 0..3 {
+      for j in 0..3 {
+        let c = csum[i][j] / fsum - msum[i] * msum[j];
+        assert!(
+          (c - c0[i][j]).abs() < 1e-5 * tr,
+          "case {case}: cov[{i}][{j}] {c} vs {} (tr {tr})",
+          c0[i][j]
+        );
+      }
+    }
+  }
+}
+
+/// How [`packets_image`] draws its packets
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Draw {
+  /// each packet whole by the EWA
+  Whole,
+  /// each packet whole by the exact ray integral ([`volume_scatter`])
+  Volume,
+  /// split ([`split_packet_with`]): forced to the depth limit or by the production rules, with
+  /// or without the volumetric leaves (`SplitView::volumetric`)
+  Split { force: bool, volumetric: bool },
+}
+
+/// `τ` image (`px × px`) of `packets` under `mvp` from `eye`, drawn as `draw` says, at the
+/// fixed-point unit `unit`; with the split counters.
+fn packets_image(
+  packets: &[Packet],
+  mvp: &[f32; 16],
+  eye: [f32; 3],
+  px: u32,
+  unit: f32,
+  draw: Draw,
+) -> (alloc::vec::Vec<f32>, SplitStats) {
+  let layout = PyramidLayout::new(px, px);
+  let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+  pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+  let mut view = SplitView::of(mvp, eye);
+  let mut stats = SplitStats::default();
+  let mut leaves = SplitLeaves::default();
+  for p in packets {
+    leaves.clear();
+    match draw {
+      Draw::Split { force, volumetric } => {
+        view.volumetric = volumetric && view.perspective;
+        split_packet_with(p, &view, force, &mut leaves, &mut stats);
+      }
+      Draw::Whole => leaves.ewa.push(*p),
+      Draw::Volume => leaves.volume.push(*p),
+    }
+    for l in &leaves.ewa {
+      if let Some(sp) = project_packet(l, 1.0, mvp, px, px, eye) {
+        splat_scatter(&sp, [1.0, 1.0, 1.0], &layout, 1.0 / unit, &mut pyr);
+      }
+    }
+    for l in &leaves.volume {
+      volume_scatter(
+        l,
+        1.0,
+        mvp,
+        &view,
+        &Photometry::NONE,
+        [1.0, 1.0, 1.0],
+        &layout,
+        1.0 / unit,
+        &mut pyr,
+      );
+    }
+  }
+  measure_from_pyramid(&layout, &mut pyr);
+  let img = (0..px * px)
+    .map(|i| composite_sample(&layout, &pyr, unit, i % px, i / px).0)
+    .collect();
+  (img, stats)
+}
+
+/// The fixed-point unit of a scene: [`WHITE_TILE_UNIT_REL`] of the brightest packet's peak
+fn unit_of(packets: &[Packet], mvp: &[f32; 16], eye: [f32; 3], px: u32) -> f32 {
+  let mut tau_max = 0.0f32;
+  for p in packets {
+    if let Some(sp) = project_packet(p, 1.0, mvp, px, px, eye) {
+      tau_max = tau_max.max(sp.amp);
+    }
+  }
+  tau_max.max(1e-30) * WHITE_TILE_UNIT_REL
+}
+
+/// rms of `a − b` over `b²`, both 5×5-box-filtered, on the pixels where the filtered `b` is
+/// above 1 % of its peak
+fn image_rel_rms(a: &[f32], b: &[f32], px: u32) -> f64 {
+  let (fa, fb) = (box_filter(a, px, 2), box_filter(b, px, 2));
+  let peak = fb.iter().cloned().fold(0.0f32, f32::max);
+  let (mut se, mut sb) = (0.0f64, 0.0f64);
+  for (x, y) in fa.iter().zip(fb.iter()) {
+    if *y > 0.01 * peak {
+      se += ((*x - *y) as f64).powi(2);
+      sb += (*y as f64).powi(2);
+    }
+  }
+  (se / sb.max(1e-300)).sqrt()
+}
+
+/// An orthographic image of a packet wholly in front of the eye is the same whether the packet
+/// is drawn whole or forced through four split levels: the total within 0.5 %, the 5×5-box
+/// rms below 5 % — a chord bisected into open halves exactly, a Gaussian whose lateral position
+/// is moderately correlated with its depth (0.5) within a percent. A strongly correlated one
+/// (0.9: a tilted thin slab) ripples, the printed, documented limit of the two-point slice.
+#[test]
+fn split_image_matches_the_unsplit_packet() {
+  let (half, px) = (2.0e5f32, 256u32);
+  let mvp = ortho_rot_mvp(half, SHAPE_IDENTITY);
+  let eye = [0.0f32, 0.0, 1.0e9];
+  let (sx, sy, sz) = (3.0e4f32, 2.0e4f32, 4.0e4f32);
+  let gauss = |rho: f32| Packet {
+    mean: [1.0e4, -2.0e4, 0.0],
+    cov: [sx * sx, 0.0, rho * sx * sz, sy * sy, 0.0, sz * sz],
+    seg: [0.0; 3],
+    flux: 1.0e6,
+    open: [false; 2],
+    rho: [1.0; 2],
+    seg_t: [0.0; 3],
+  };
+  let chord = Packet {
+    mean: [-5.0e4, 2.0e4, 0.0],
+    cov: [6.4e7, 0.0, 0.0, 6.4e7, 0.0, 6.4e7],
+    seg: [9.0e4, -3.0e4, 5.0e4],
+    flux: 1.0e6,
+    open: [false; 2],
+    rho: [1.4, 0.6],
+    seg_t: [0.0; 3],
+  };
+  for (name, p, limit) in [
+    ("gaussian ρ 0.5", gauss(0.5), 0.05),
+    ("chord", chord, 0.05),
+    ("gaussian ρ 0.9", gauss(0.9), 0.2),
+  ] {
+    let unit = unit_of(&[p], &mvp, eye, px);
+    let (whole, _) = packets_image(&[p], &mvp, eye, px, unit, Draw::Whole);
+    let (split, stats) = packets_image(
+      &[p],
+      &mvp,
+      eye,
+      px,
+      unit,
+      Draw::Split {
+        force: true,
+        volumetric: true,
+      },
+    );
+    assert_eq!(stats.children, 30, "{name}");
+    let (sw, ss) = (
+      whole.iter().map(|&v| v as f64).sum::<f64>(),
+      split.iter().map(|&v| v as f64).sum::<f64>(),
+    );
+    let rms = image_rel_rms(&split, &whole, px);
+    std::println!(
+      "[split image] {name}: Σ whole {sw:.4e} split {ss:.4e} (ratio {:.4}), 5×5-box rel rms {rms:.4}",
+      ss / sw
+    );
+    assert!(
+      sw > 0.0 && (ss / sw - 1.0).abs() < 5e-3,
+      "{name}: Σ {ss} vs {sw}"
+    );
+    assert!(rms < limit, "{name}: rel rms {rms}");
+  }
+}
+
+/// A capsule crossing the eye plane keeps the fraction of its chord in front of it: the image
+/// sum (times the pixel area) is that fraction of the flux within 1 %, for a chord entering the
+/// plane and for one leaving it; a chord wholly behind draws nothing and is counted as dropped,
+/// one wholly in front draws its whole flux.
+#[test]
+fn chord_clipped_at_the_eye_plane_keeps_the_in_front_flux() {
+  let (half, px) = (2.0e5f32, 256u32);
+  let mvp = ortho_rot_mvp(half, SHAPE_IDENTITY);
+  let e = 1.0e4f32;
+  let eye = [0.0f32, 0.0, e];
+  // the view looks along −z: depth = e − z
+  let view = SplitView::of(&mvp, eye);
+  assert_eq!(view.fwd, [0.0, 0.0, -1.0]);
+  assert!(!view.perspective);
+  let a_px = (2.0 * half / px as f32) as f64 * (2.0 * half / px as f32) as f64;
+  let lateral = [2.5e7f32, 0.0, 0.0, 2.5e7, 0.0, 1.0];
+  let cases: [(&str, Packet, f64); 4] = [
+    (
+      "entering (start in front, 1/4 in front)",
+      Packet {
+        mean: [-6.0e4, -2.0e4, e - 50.0],
+        cov: lateral,
+        seg: [6.0e4, 2.0e4, 200.0],
+        flux: 1.0e6,
+        open: [false; 2],
+        rho: [1.0; 2],
+        seg_t: [0.0; 3],
+      },
+      0.25,
+    ),
+    (
+      "leaving (start behind, 1/4 in front)",
+      Packet {
+        mean: [0.0, 0.0, e + 150.0],
+        cov: lateral,
+        seg: [6.0e4, 2.0e4, -200.0],
+        flux: 1.0e6,
+        open: [false; 2],
+        rho: [1.0; 2],
+        seg_t: [0.0; 3],
+      },
+      0.25,
+    ),
+    (
+      "wholly behind",
+      Packet {
+        mean: [3.0e4, 3.0e4, e + 10.0],
+        cov: lateral,
+        seg: [2.0e4, -4.0e4, 100.0],
+        flux: 1.0e6,
+        open: [false; 2],
+        rho: [1.0; 2],
+        seg_t: [0.0; 3],
+      },
+      0.0,
+    ),
+    (
+      "wholly in front",
+      Packet {
+        mean: [-3.0e4, 5.0e4, e - 1000.0],
+        cov: lateral,
+        seg: [2.0e4, -4.0e4, 100.0],
+        flux: 1.0e6,
+        open: [false; 2],
+        rho: [1.0; 2],
+        seg_t: [0.0; 3],
+      },
+      1.0,
+    ),
+  ];
+  for (name, p, expect) in cases {
+    let unit = unit_of(&[cases[3].1], &mvp, eye, px);
+    let (img, stats) = packets_image(
+      &[p],
+      &mvp,
+      eye,
+      px,
+      unit,
+      Draw::Split {
+        force: false,
+        volumetric: true,
+      },
+    );
+    let total = img.iter().map(|&v| v as f64).sum::<f64>() * a_px / p.flux as f64;
+    std::println!(
+      "[chord clip] {name}: image flux fraction {total:.4} (expected {expect}), children {}, dropped flux {:.3e}",
+      stats.children,
+      stats.dropped_flux
+    );
+    assert!((total - expect).abs() < 0.01, "{name}: {total} vs {expect}");
+    if expect == 0.0 {
+      assert_eq!(stats.dropped_flux, p.flux, "{name}");
+    } else {
+      assert_eq!(stats.dropped_flux, 0.0, "{name}");
+    }
+  }
+}
+
+/// `erf` in f64 (Abramowitz & Stegun 7.1.26, |error| < 1.5e-7) for the tests' truths
+fn erf64(x: f64) -> f64 {
+  let s = if x < 0.0 { -1.0 } else { 1.0 };
+  let x = x.abs();
+  let t = 1.0 / (1.0 + 0.327_591_1 * x);
+  let y = 1.0
+    - (((((1.061_405_429 * t - 1.453_152_027) * t) + 1.421_413_741) * t - 0.284_496_736) * t
+      + 0.254_829_592)
+      * t
+      * (-x * x).exp();
+  s * y
+}
+
+/// The optical depth of a Gaussian cloud `N(μ, Σ)` of cross-section `flux` along the ray
+/// `eye + s u` (`u` unit), `s ≥ 0`: `flux · N_⊥ · Φ(s*√a)` with `M = Σ⁻¹`, `a = uᵀMu`,
+/// `b = uᵀM(eye − μ)`, `c = (eye − μ)ᵀM(eye − μ)`, `s* = −b/a`.
+fn gaussian_ray_tau(
+  mu: [f64; 3],
+  m: &[[f64; 3]; 3],
+  det: f64,
+  flux: f64,
+  eye: [f64; 3],
+  u: [f64; 3],
+) -> f64 {
+  let d = [eye[0] - mu[0], eye[1] - mu[1], eye[2] - mu[2]];
+  let q = |x: [f64; 3], y: [f64; 3]| {
+    let mut s = 0.0;
+    for i in 0..3 {
+      for j in 0..3 {
+        s += x[i] * m[i][j] * y[j];
+      }
+    }
+    s
+  };
+  let (a, b, c) = (q(u, u), q(u, d), q(d, d));
+  let s_star = -b / a;
+  let phi = 0.5 * (1.0 + erf64(s_star * a.sqrt() / core::f64::consts::SQRT_2));
+  flux / ((2.0 * core::f64::consts::PI).powf(1.5) * det.sqrt())
+    * (2.0 * core::f64::consts::PI / a).sqrt()
+    * (-0.5 * (c - b * b / a)).exp()
+    * phi
+}
+
+/// A Gaussian packet 200 m from a 60° perspective camera with a depth extent comparable to its
+/// distance (σ_v = 80 m along the view, 30 m across): the EWA projection at the mean alone is
+/// 30 % off the exact ray integral of the Gaussian (the pixel scale and the pixel area vary
+/// across its depth: the near part is brighter and larger); sliced by depth (`split_packet`,
+/// a = 0.8, ≤ 4 levels, the volumetric leaves off) the image is within 5 % (5×5-box rms). An
+/// isotropic 50-m packet is printed too: its residual is the lateral obliquity of the EWA,
+/// `(σ_lateral/depth)²`-sized, not removed by the depth slice. Under the production rules both
+/// packets are near enough (`√tr Σ > 0.2 · 200 m`) to be drawn whole by the exact ray integral
+/// ([`volume_scatter`]): within 3 %. The analytic truth is cross-checked by a Monte-Carlo draw
+/// of 10⁶ and 4·10⁶ grains, each grain `flux/N` of cross-section over the pixel column's
+/// cross-section at its depth **perpendicular to the ray**, `A_px(depth) · cos θ_px` (the column
+/// of an off-axis pixel is oblique to the z-planes the pixel area is measured on; without the
+/// `cos θ` the draw read 10 % low at the field's edge, a bias, not noise). What remains is
+/// noise, but far above the Poisson estimate `4πσ_px² / (25 N)` (1.8 % at 10⁶ for the 26-px
+/// packet): a grain's weight goes as `1/depth²`, and the packet reaches the eye plane (σ_v = 80 m
+/// at 200 m), so the few grains drawn near it carry most of the variance — measured 0.109 at
+/// 10⁶ grains and 0.058 at 4·10⁶. The cross-check therefore asserts what separates noise from a
+/// bias: the rms falls with N (ratio ≥ 1.6 for ×4, 2 expected; a bias would hold it at a floor)
+/// and the 4·10⁶ draw is within 8 % of the analytic truth.
+#[test]
+fn perspective_split_converges_to_the_truth() {
+  let (d, px) = (200.0f32, 200u32);
+  let tan_h = (30.0f32).to_radians().tan();
+  // camera at (0, 0, D) looking along −z, 60° field: x_clip = x / tan(30°), w_clip = D − z
+  let mut mvp = [0.0f32; 16];
+  mvp[0] = 1.0 / tan_h;
+  mvp[5] = 1.0 / tan_h;
+  mvp[10] = -1e-3;
+  mvp[11] = -1.0;
+  mvp[15] = d;
+  let eye = [0.0f32, 0.0, d];
+  let view = SplitView::of(&mvp, eye);
+  assert!(view.perspective);
+  assert_eq!(view.fwd, [0.0, 0.0, -1.0]);
+  let truth = |cov: [f64; 3], flux: f64| -> alloc::vec::Vec<f32> {
+    let m = [
+      [1.0 / cov[0], 0.0, 0.0],
+      [0.0, 1.0 / cov[1], 0.0],
+      [0.0, 0.0, 1.0 / cov[2]],
+    ];
+    let det = cov[0] * cov[1] * cov[2];
+    let eye64 = [0.0, 0.0, d as f64];
+    let th = tan_h as f64;
+    (0..px * px)
+      .map(|i| {
+        let (x, y) = ((i % px) as f64, (i / px) as f64);
+        let ndc = [
+          (x + 0.5) / (0.5 * px as f64) - 1.0,
+          (y + 0.5) / (0.5 * px as f64) - 1.0,
+        ];
+        let v = [ndc[0] * th, ndc[1] * th, -1.0];
+        let n = (v[0] * v[0] + v[1] * v[1] + 1.0).sqrt();
+        gaussian_ray_tau(
+          [0.0; 3],
+          &m,
+          det,
+          flux,
+          eye64,
+          [v[0] / n, v[1] / n, v[2] / n],
+        ) as f32
+      })
+      .collect()
+  };
+  // the Monte-Carlo draw: grains at N(0, Σ) projected exactly, each τ = (flux/N) / (A_px(depth)
+  // · cos θ_px), the pixel column's cross-section perpendicular to its ray
+  let mc = |cov: [f64; 3], flux: f64, n: usize| -> alloc::vec::Vec<f32> {
+    let mut rng = 5u64;
+    let mut img = alloc::vec![0.0f64; (px * px) as usize];
+    for _ in 0..n {
+      let g = [
+        gauss_lcg(&mut rng) * cov[0].sqrt(),
+        gauss_lcg(&mut rng) * cov[1].sqrt(),
+        gauss_lcg(&mut rng) * cov[2].sqrt(),
+      ];
+      let w = d as f64 - g[2];
+      if !(w > 0.0) {
+        continue;
+      }
+      let sx = (g[0] / (w * tan_h as f64) * 0.5 + 0.5) * px as f64;
+      let sy = (g[1] / (w * tan_h as f64) * 0.5 + 0.5) * px as f64;
+      if sx < 0.0 || sy < 0.0 || sx >= px as f64 || sy >= px as f64 {
+        continue;
+      }
+      let side = 2.0 * w * tan_h as f64 / px as f64;
+      let (nx, ny) = (g[0] / w, g[1] / w);
+      let inv_cos = (1.0 + nx * nx + ny * ny).sqrt();
+      img[(sy as u32 * px + sx as u32) as usize] += flux / n as f64 / (side * side) * inv_cos;
+    }
+    img.into_iter().map(|v| v as f32).collect()
+  };
+  let flux = 1.0e3f32;
+  for (name, sig, limit) in [
+    ("σ (30, 30, 80) m", [30.0f32, 30.0, 80.0], 0.05),
+    ("σ 50 m isotropic", [50.0f32, 50.0, 50.0], 0.08),
+  ] {
+    let p = Packet {
+      mean: [0.0; 3],
+      cov: [
+        sig[0] * sig[0],
+        0.0,
+        0.0,
+        sig[1] * sig[1],
+        0.0,
+        sig[2] * sig[2],
+      ],
+      seg: [0.0; 3],
+      flux,
+      open: [false; 2],
+      rho: [1.0; 2],
+      seg_t: [0.0; 3],
+    };
+    let cov64 = [
+      (sig[0] * sig[0]) as f64,
+      (sig[1] * sig[1]) as f64,
+      (sig[2] * sig[2]) as f64,
+    ];
+    let exact = truth(cov64, flux as f64);
+    let mc_rms_1m = image_rel_rms(&mc(cov64, flux as f64, 1_000_000), &exact, px);
+    let mc_rms = image_rel_rms(&mc(cov64, flux as f64, 4_000_000), &exact, px);
+    let unit = unit_of(&[p], &mvp, eye, px);
+    let (whole, _) = packets_image(&[p], &mvp, eye, px, unit, Draw::Whole);
+    // the split alone (the volumetric leaves off), and the production rules: both packets are
+    // near enough to be drawn by the exact ray integral
+    let (split, stats) = packets_image(
+      &[p],
+      &mvp,
+      eye,
+      px,
+      unit,
+      Draw::Split {
+        force: false,
+        volumetric: false,
+      },
+    );
+    let (prod, prod_stats) = packets_image(
+      &[p],
+      &mvp,
+      eye,
+      px,
+      unit,
+      Draw::Split {
+        force: false,
+        volumetric: true,
+      },
+    );
+    let (r_whole, r_split, r_prod) = (
+      image_rel_rms(&whole, &exact, px),
+      image_rel_rms(&split, &exact, px),
+      image_rel_rms(&prod, &exact, px),
+    );
+    std::println!(
+      "[perspective split] {name}: production (volumetric) rel rms {r_prod:.4}, Σ ratio {:.4}",
+      prod.iter().map(|&x| x as f64).sum::<f64>() / exact.iter().map(|&x| x as f64).sum::<f64>()
+    );
+    assert!(
+      is_volumetric(&p, &SplitView::of(&mvp, eye)) && prod_stats.children == 0,
+      "{name}: the packet should be drawn whole by its ray integral"
+    );
+    assert!(r_prod < 0.03, "{name}: volumetric rel rms {r_prod}");
+    let sum = |v: &[f32]| v.iter().map(|&x| x as f64).sum::<f64>();
+    std::println!(
+      "[perspective split] {name} at {d} m, 60°: unsplit rel rms {r_whole:.3} (Σ ratio {:.3}), split rel rms {r_split:.3} (Σ ratio {:.3}, {} leaves made of {} children), draw vs analytic {mc_rms_1m:.4} at 10⁶ grains, {mc_rms:.4} at 4·10⁶ (noise ∝ 1/√N: ratio {:.2}, 2 expected)",
+      sum(&whole) / sum(&exact),
+      sum(&split) / sum(&exact),
+      stats.children / 2 + 1,
+      stats.children,
+      mc_rms_1m / mc_rms.max(1e-9)
+    );
+    assert!(
+      mc_rms < 0.08 && mc_rms_1m / mc_rms.max(1e-9) >= 1.6,
+      "{name}: the 4·10⁶-grain draw differs from the analytic truth by {mc_rms} (10⁶: {mc_rms_1m}): not falling as noise"
+    );
+    assert!(stats.children >= 4, "{name}: {} children", stats.children);
+    assert!(
+      r_split < limit,
+      "{name}: split image rel rms {r_split} (unsplit {r_whole})"
+    );
+    assert!(
+      r_split < 0.5 * r_whole,
+      "{name}: the split did not halve the error ({r_split} vs {r_whole})"
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Volumetric packets (volume_scatter / dust_volume_scatter)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Camera at (0, 0, `d`) looking along −z with a 60° field into a square viewport:
+/// `x_clip = x / tan 30°`, `w_clip = d − z`.
+fn perspective_mvp_60(d: f32) -> [f32; 16] {
+  let tan_h = (30.0f32).to_radians().tan();
+  let mut mvp = [0.0f32; 16];
+  mvp[0] = 1.0 / tan_h;
+  mvp[5] = 1.0 / tan_h;
+  mvp[10] = -1e-3;
+  mvp[11] = -1.0;
+  mvp[15] = d;
+  mvp
+}
+
+/// The exact image (τ per pixel centre, `px × px`) of a Gaussian packet seen by
+/// [`perspective_mvp_60`] from (0, 0, `d`): [`gaussian_ray_tau`] along every pixel centre's ray.
+fn ray_truth_image(p: &Packet, d: f32, px: u32) -> alloc::vec::Vec<f32> {
+  let c = p.cov.map(|v| v as f64);
+  let s = [[c[0], c[1], c[2]], [c[1], c[3], c[4]], [c[2], c[4], c[5]]];
+  let det = s[0][0] * (s[1][1] * s[2][2] - s[1][2] * s[2][1])
+    - s[0][1] * (s[1][0] * s[2][2] - s[1][2] * s[2][0])
+    + s[0][2] * (s[1][0] * s[2][1] - s[1][1] * s[2][0]);
+  let mut m = [[0.0f64; 3]; 3];
+  for i in 0..3 {
+    for j in 0..3 {
+      let (i1, i2, j1, j2) = ((i + 1) % 3, (i + 2) % 3, (j + 1) % 3, (j + 2) % 3);
+      // the cofactor of (j, i) over det: the inverse of a symmetric matrix
+      m[i][j] = (s[j1][i1] * s[j2][i2] - s[j1][i2] * s[j2][i1]) / det;
+    }
+  }
+  let mean = p.mean.map(|v| v as f64);
+  let th = (30.0f64).to_radians().tan();
+  let eye = [0.0, 0.0, d as f64];
+  (0..px * px)
+    .map(|i| {
+      let (x, y) = ((i % px) as f64, (i / px) as f64);
+      let ndc = [
+        (x + 0.5) / (0.5 * px as f64) - 1.0,
+        (y + 0.5) / (0.5 * px as f64) - 1.0,
+      ];
+      let v = [ndc[0] * th, ndc[1] * th, -1.0];
+      let n = (v[0] * v[0] + v[1] * v[1] + 1.0).sqrt();
+      gaussian_ray_tau(
+        mean,
+        &m,
+        det,
+        p.flux as f64,
+        eye,
+        [v[0] / n, v[1] / n, v[2] / n],
+      ) as f32
+    })
+    .collect()
+}
+
+/// A Gaussian packet of standard deviations `sig` rotated by `angle` about y, at `mean`
+fn rotated_packet(mean: [f32; 3], sig: [f32; 3], angle: f32) -> Packet {
+  let (c, s) = (angle.cos(), angle.sin());
+  let r = [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]];
+  let mut cov = [[0.0f32; 3]; 3];
+  for i in 0..3 {
+    for j in 0..3 {
+      for k in 0..3 {
+        cov[i][j] += r[i][k] * sig[k] * sig[k] * r[j][k];
+      }
+    }
+  }
+  Packet {
+    mean,
+    cov: [
+      cov[0][0], cov[0][1], cov[0][2], cov[1][1], cov[1][2], cov[2][2],
+    ],
+    seg: [0.0; 3],
+    flux: 1.0e3,
+    open: [false; 2],
+    rho: [1.0; 2],
+    seg_t: [0.0; 3],
+  }
+}
+
+/// With the eye inside a packet (or within 3 σ of it), the production rules draw it whole by its
+/// exact ray integral (no split, no EWA: one Jacobian at the mean means nothing there) over the
+/// whole frame, and the image is the ray integral of the Gaussian from the eye along every
+/// pixel's ray: 5×5-box rel rms < 3 % (the texel centres sample the exact integral at 4 texels
+/// per angular σ, the composite interpolates bilinearly: 1.2 % expected), the total within 1 %.
+#[test]
+fn volumetric_packet_matches_the_ray_integral() {
+  let (d, px) = (200.0f32, 200u32);
+  let mvp = perspective_mvp_60(d);
+  let eye = [0.0f32, 0.0, d];
+  let view = SplitView::of(&mvp, eye);
+  for (name, p) in [
+    (
+      "eye inside (0.65 σ)",
+      rotated_packet([10.0, -20.0, d - 30.0], [60.0, 40.0, 80.0], 0.0),
+    ),
+    (
+      "eye at 1.9 σ",
+      rotated_packet([0.0, 0.0, d - 150.0], [60.0, 60.0, 80.0], 0.0),
+    ),
+    (
+      "tilted, eye at 2.7 σ",
+      rotated_packet([30.0, 0.0, d - 50.0], [20.0, 70.0, 100.0], 0.6),
+    ),
+  ] {
+    assert!(is_volumetric(&p, &view), "{name}: not volumetric");
+    let exact = ray_truth_image(&p, d, px);
+    let peak = exact.iter().cloned().fold(0.0f32, f32::max);
+    let unit = peak * WHITE_TILE_UNIT_REL;
+    let (img, stats) = packets_image(
+      &[p],
+      &mvp,
+      eye,
+      px,
+      unit,
+      Draw::Split {
+        force: false,
+        volumetric: true,
+      },
+    );
+    let sum = |v: &[f32]| v.iter().map(|&x| x as f64).sum::<f64>();
+    let (ratio, rms) = (sum(&img) / sum(&exact), image_rel_rms(&img, &exact, px));
+    std::println!(
+      "[volumetric] {name}: Σ render / Σ ray integral {ratio:.4}, 5×5-box rel rms {rms:.4}, children {}",
+      stats.children
+    );
+    assert_eq!(stats.children, 0, "{name}: split instead of drawn whole");
+    assert!((ratio - 1.0).abs() < 0.01, "{name}: Σ ratio {ratio}");
+    assert!(rms < 0.03, "{name}: rel rms {rms}");
+  }
+}
+
+/// A small packet far from the eye (σ 5 m at 200 m, and a 32-m chord of linear density) draws
+/// the same image by the ray integral as by the EWA: the two agree to `O((σ/depth)²)` and the
+/// ray integral carries the EWA's pixel filter, so the switch between them changes nothing for
+/// a far packet: totals within 1 %, 5×5-box rel rms < 3 % for both — the ray integral is
+/// sampled at texel centres with `DUST_VOLUME_TEXELS_PER_SIGMA` = 4 texels per angular σ, worth
+/// ~2.5 % rms on a packet a few pixels wide (measured 2.48 %; the eye-inside case, which is what
+/// the mode exists for, 1.2 %), and the chord is Gaussian pieces against the EWA's exact capsule.
+/// Production never draws such a packet volumetrically (`tr Σ > 0.2² dist²` selects it).
+#[test]
+fn volumetric_and_ewa_agree_for_a_far_packet() {
+  let (d, px) = (200.0f32, 200u32);
+  let mvp = perspective_mvp_60(d);
+  let eye = [0.0f32, 0.0, d];
+  let gauss = rotated_packet([20.0, -10.0, 0.0], [5.0, 5.0, 5.0], 0.0);
+  let chord = Packet {
+    mean: [-20.0, 10.0, 0.0],
+    seg: [30.0, 10.0, 0.0],
+    rho: [1.3, 0.7],
+    ..rotated_packet([0.0; 3], [3.0, 3.0, 3.0], 0.0)
+  };
+  for (name, p, limit) in [("σ 5 m", gauss, 0.03), ("chord", chord, 0.03)] {
+    let view = SplitView::of(&mvp, eye);
+    assert!(
+      !is_volumetric(&p, &view),
+      "{name}: a far packet is drawn by the EWA"
+    );
+    let unit = unit_of(&[p], &mvp, eye, px);
+    let (ewa, _) = packets_image(&[p], &mvp, eye, px, unit, Draw::Whole);
+    let (vol, _) = packets_image(&[p], &mvp, eye, px, unit, Draw::Volume);
+    let sum = |v: &[f32]| v.iter().map(|&x| x as f64).sum::<f64>();
+    let (ratio, rms) = (sum(&vol) / sum(&ewa), image_rel_rms(&vol, &ewa, px));
+    std::println!(
+      "[volumetric vs EWA] {name} at {d} m: Σ ratio {ratio:.4}, 5×5-box rel rms {rms:.4}"
+    );
+    assert!(
+      sum(&ewa) > 0.0 && (ratio - 1.0).abs() < 0.01,
+      "{name}: Σ ratio {ratio}"
+    );
+    assert!(rms < limit, "{name}: rel rms {rms}");
+  }
+}
+
+/// A packet moving along the view axis from 60 m to 330 m (σ 25 m) crosses the classification
+/// threshold (`√tr Σ = DUST_VOLUME_RATIO · dist`, at 216 m): volumetric before, the EWA with the
+/// split after. The image total over the exact ray integral's moves by less than 5 % between
+/// neighbouring positions (3 % expected at the switch: the EWA's error there), and the
+/// volumetric side is exact to 1 %.
+#[test]
+fn classification_is_continuous() {
+  let (d, px) = (200.0f32, 200u32);
+  let mvp = perspective_mvp_60(d);
+  let eye = [0.0f32, 0.0, d];
+  let view = SplitView::of(&mvp, eye);
+  let mut prev: Option<(f32, f64, bool)> = None;
+  let (mut n_vol, mut n_ewa) = (0, 0);
+  for k in 0..19 {
+    let dist = 60.0 + 15.0 * k as f32;
+    let p = rotated_packet([0.0, 0.0, d - dist], [25.0, 25.0, 25.0], 0.0);
+    let vol = is_volumetric(&p, &view);
+    if vol {
+      n_vol += 1;
+    } else {
+      n_ewa += 1;
+    }
+    let exact = ray_truth_image(&p, d, px);
+    let unit = exact.iter().cloned().fold(0.0f32, f32::max) * WHITE_TILE_UNIT_REL;
+    let (img, stats) = packets_image(
+      &[p],
+      &mvp,
+      eye,
+      px,
+      unit,
+      Draw::Split {
+        force: false,
+        volumetric: true,
+      },
+    );
+    let ratio =
+      img.iter().map(|&x| x as f64).sum::<f64>() / exact.iter().map(|&x| x as f64).sum::<f64>();
+    std::println!(
+      "[classification] {dist:.0} m: {}, Σ render / Σ ray integral {ratio:.4} ({} children)",
+      if vol { "volumetric" } else { "EWA + split" },
+      stats.children
+    );
+    if vol {
+      assert!(
+        (ratio - 1.0).abs() < 0.01,
+        "{dist} m: volumetric Σ ratio {ratio}"
+      );
+    }
+    if let Some((pd, pr, pv)) = prev {
+      assert!(
+        (ratio - pr).abs() < 0.05,
+        "{pd} m ({}) → {dist} m ({}): Σ ratio {pr:.4} → {ratio:.4}",
+        if pv { "volumetric" } else { "EWA" },
+        if vol { "volumetric" } else { "EWA" }
+      );
+    }
+    prev = Some((dist, ratio, vol));
+  }
+  assert!(
+    n_vol >= 3 && n_ewa >= 3,
+    "{n_vol} volumetric, {n_ewa} EWA positions"
+  );
+}
+
+/// The work of a volumetric packet is bounded whatever its shape: the eye 12 m from a 400-m
+/// chord of σ 8 m in a 480×300 60° view would take 3.5·10⁴ ray integrals at its natural level
+/// (16 pieces × the whole frame at 4-px texels); the plan coarsens the level until
+/// texels × pieces ≤ [`DUST_VOLUME_MAX_EVALS`] (about 2.4·10³ at 16-px texels expected), the
+/// evaluations made are exactly the plan's ([`PYR_VOLUME_EVALS`]), and the image total stays
+/// within 2 % of the ray integral (0.1 % expected; 5×5-box rel rms 1.7 % printed). A level bias
+/// of 2 (the host's response to a frame over [`DUST_VOLUME_FRAME_BUDGET`]) coarsens it further
+/// and the words round-trip through the header without touching the split depth.
+#[test]
+fn volume_work_is_bounded() {
+  let (w, h, d) = (480u32, 300u32, 200.0f32);
+  let tan_h = (30.0f32).to_radians().tan();
+  // camera at (0, 0, d) looking along −z, 60° vertical field, square pixels
+  let mut mvp = [0.0f32; 16];
+  mvp[0] = h as f32 / (w as f32 * tan_h);
+  mvp[5] = 1.0 / tan_h;
+  mvp[10] = -1e-3;
+  mvp[11] = -1.0;
+  mvp[15] = d;
+  let eye = [0.0f32, 0.0, d];
+  let view = SplitView::of(&mvp, eye);
+  let layout = PyramidLayout::new(w, h);
+  let p = Packet {
+    mean: [-200.0, 12.0, d - 30.0],
+    cov: [64.0, 0.0, 0.0, 64.0, 0.0, 64.0],
+    seg: [400.0, 0.0, -60.0],
+    flux: 1.0e3,
+    open: [false; 2],
+    rho: [1.0; 2],
+    seg_t: [0.0; 3],
+  };
+  assert!(is_volumetric(&p, &view));
+  let free = volume_plan(
+    &p,
+    &mvp,
+    &view,
+    &layout,
+    0,
+    DUST_VOLUME_AXIS_CHORD,
+    u32::MAX,
+  )
+  .expect("on screen");
+  let plan = volume_plan(
+    &p,
+    &mvp,
+    &view,
+    &layout,
+    0,
+    DUST_VOLUME_AXIS_CHORD,
+    DUST_VOLUME_MAX_EVALS,
+  )
+  .expect("on screen");
+  let biased = volume_plan(
+    &p,
+    &mvp,
+    &view,
+    &layout,
+    2,
+    DUST_VOLUME_AXIS_CHORD,
+    DUST_VOLUME_MAX_EVALS,
+  )
+  .expect("on screen");
+  std::println!(
+    "[volume work] uncapped {free:?}, capped {plan:?}, bias 2 {biased:?} (cap {DUST_VOLUME_MAX_EVALS})"
+  );
+  assert!(
+    free.evals > DUST_VOLUME_MAX_EVALS,
+    "the cap does not bind: {free:?}"
+  );
+  assert!(plan.evals <= DUST_VOLUME_MAX_EVALS && plan.level > free.level);
+  assert!(biased.evals <= plan.evals && biased.level >= plan.level);
+  // the truth: the chord as 600 exact-moment pieces, each by its ray integral per pixel centre
+  let pieces = 600usize;
+  let piece = |k: usize| -> (Packet, [[f64; 3]; 3], f64) {
+    let uk = (k as f32 + 0.5) / pieces as f32;
+    let hs = [
+      p.seg[0] / pieces as f32,
+      p.seg[1] / pieces as f32,
+      p.seg[2] / pieces as f32,
+    ];
+    let mut c = [[0.0f64; 3]; 3];
+    for i in 0..3 {
+      for j in 0..3 {
+        c[i][j] = (if i == j { 64.0 } else { 0.0 }) + (hs[i] * hs[j]) as f64 / 12.0;
+      }
+    }
+    let det = c[0][0] * (c[1][1] * c[2][2] - c[1][2] * c[2][1])
+      - c[0][1] * (c[1][0] * c[2][2] - c[1][2] * c[2][0])
+      + c[0][2] * (c[1][0] * c[2][1] - c[1][1] * c[2][0]);
+    let mut m = [[0.0f64; 3]; 3];
+    for i in 0..3 {
+      for j in 0..3 {
+        let (i1, i2, j1, j2) = ((i + 1) % 3, (i + 2) % 3, (j + 1) % 3, (j + 2) % 3);
+        m[i][j] = (c[j1][i1] * c[j2][i2] - c[j1][i2] * c[j2][i1]) / det;
+      }
+    }
+    let mut q = p;
+    q.mean = [
+      p.mean[0] + p.seg[0] * uk,
+      p.mean[1] + p.seg[1] * uk,
+      p.mean[2] + p.seg[2] * uk,
+    ];
+    (q, m, det)
+  };
+  let geo: alloc::vec::Vec<_> = (0..pieces).map(piece).collect();
+  let th = tan_h as f64;
+  let aspect = w as f64 / h as f64;
+  let exact: alloc::vec::Vec<f32> = (0..w * h)
+    .map(|i| {
+      let (x, y) = ((i % w) as f64, (i / w) as f64);
+      let ndc = [
+        (x + 0.5) / (0.5 * w as f64) - 1.0,
+        (y + 0.5) / (0.5 * h as f64) - 1.0,
+      ];
+      let v = [ndc[0] * th * aspect, ndc[1] * th, -1.0];
+      let n = (v[0] * v[0] + v[1] * v[1] + 1.0).sqrt();
+      let u = [v[0] / n, v[1] / n, v[2] / n];
+      geo
+        .iter()
+        .map(|(q, m, det)| {
+          gaussian_ray_tau(
+            q.mean.map(|v| v as f64),
+            m,
+            *det,
+            p.flux as f64 / pieces as f64,
+            [0.0, 0.0, d as f64],
+            u,
+          )
+        })
+        .sum::<f64>() as f32
+    })
+    .collect();
+  let unit = exact.iter().cloned().fold(0.0f32, f32::max) * WHITE_TILE_UNIT_REL;
+  let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+  pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+  volume_scatter(
+    &p,
+    1.0,
+    &mvp,
+    &view,
+    &Photometry::NONE,
+    [1.0, 1.0, 1.0],
+    &layout,
+    1.0 / unit,
+    &mut pyr,
+  );
+  let stats = VolumeStats::load(&pyr);
+  assert_eq!(
+    stats.evals, plan.evals,
+    "the evaluations made are the plan's"
+  );
+  measure_from_pyramid(&layout, &mut pyr);
+  let img: alloc::vec::Vec<f32> = (0..w * h)
+    .map(|i| composite_sample(&layout, &pyr, unit, i % w, i / w).0)
+    .collect();
+  let sum = |v: &[f32]| v.iter().map(|&x| x as f64).sum::<f64>();
+  let ratio = sum(&img) / sum(&exact);
+  // the 5×5-box rms on the 480×300 frame (box_filter is square: rows and columns of the
+  // rectangle are filtered the same way through a row-major copy)
+  let rms = {
+    let (mut se, mut sb) = (0.0f64, 0.0f64);
+    let peak = exact.iter().cloned().fold(0.0f32, f32::max);
+    let at = |v: &[f32], x: i64, y: i64| -> f64 {
+      let (mut s, mut c) = (0.0f64, 0.0f64);
+      for dy in -2..=2i64 {
+        for dx in -2..=2i64 {
+          let (xx, yy) = (x + dx, y + dy);
+          if xx >= 0 && yy >= 0 && xx < w as i64 && yy < h as i64 {
+            s += v[(yy * w as i64 + xx) as usize] as f64;
+            c += 1.0;
+          }
+        }
+      }
+      s / c
+    };
+    for y in 0..h as i64 {
+      for x in 0..w as i64 {
+        let (a, b) = (at(&img, x, y), at(&exact, x, y));
+        if b > 0.01 * peak as f64 {
+          se += (a - b) * (a - b);
+          sb += b * b;
+        }
+      }
+    }
+    (se / sb.max(1e-300)).sqrt()
+  };
+  std::println!(
+    "[volume work] {} evaluations (cap {DUST_VOLUME_MAX_EVALS}): Σ render / Σ ray integral {ratio:.4}, 5×5-box rel rms {rms:.4}",
+    stats.evals
+  );
+  assert!((ratio - 1.0).abs() < 0.02, "Σ ratio {ratio}");
+  assert!(rms < 0.05, "rel rms {rms}");
+  // the header words: the bias rides in bits 8–15 of the split depth word
+  let mut hdr = layout.header();
+  SplitStats {
+    children: 7,
+    dropped_flux: 0.0,
+    depth: 3,
+    gates_off: false,
+  }
+  .store(&mut hdr);
+  VolumeStats {
+    evals: DUST_VOLUME_FRAME_BUDGET + 1,
+    bias: 2,
+    axis: 0,
+  }
+  .store(&mut hdr);
+  assert_eq!(SplitStats::load(&hdr).depth, 3);
+  let vs = VolumeStats::load(&hdr);
+  assert_eq!((vs.evals, vs.bias), (DUST_VOLUME_FRAME_BUDGET + 1, 2));
+  assert_eq!(vs.suggested_bias(), 3);
+  assert_eq!(
+    VolumeStats {
+      evals: 0,
+      bias: 2,
+      axis: 0
+    }
+    .suggested_bias(),
+    1
+  );
+  assert_eq!(
+    VolumeStats {
+      evals: 0,
+      bias: 0,
+      axis: 0
+    }
+    .suggested_bias(),
+    0
+  );
+}
+
+/// A chord a hundred frames long crossing the view (σ 2 px, a 256-px frame) is drawn at its own
+/// resolution: the scatter valve estimates the band from the part of the segment inside the
+/// frame expanded by 3σ (`visible_fraction`), not from its whole length (26 000 px, which put it
+/// on 32-px texels and smeared old chords' τ and colour over the young pixels of the 500 km
+/// zoom frame). The level equals that of the chord cut to the frame (open ends: the same line),
+/// and the images agree within 1 % rms and 0.5 % in total.
+#[test]
+fn long_chord_stays_at_its_resolution() {
+  let px = 256u32;
+  let layout = PyramidLayout::new(px, px);
+  let sigma = 2.0f32;
+  let cov = [sigma * sigma, 0.0, sigma * sigma];
+  let seg = [25_600.0f32, 6_000.0];
+  // through the frame centre at u = ½
+  let mu = [128.0 - 0.5 * seg[0], 128.0 - 0.5 * seg[1]];
+  let screen = |mu: [f32; 2], seg: [f32; 2], amp: f32, open: [bool; 2]| ScreenPacket {
+    mu,
+    cov,
+    seg,
+    amp,
+    sigma_min: sigma,
+    det: sigma * sigma * sigma * sigma,
+    depth_au: 1.0,
+    open,
+    rho: [1.0, 1.0],
+    mean: [0.0; 3],
+    kx: [0.0; 3],
+    ky: [0.0; 3],
+    sun: [0.0, 0.0, 1.0],
+    r_h_au: 1.0,
+    eye: [0.0; 3],
+    eye_w: 1.0,
+    albedo: 0.0,
+    w_mean: 1.0,
+  };
+  // peak τ of the line ≈ amp · σ √(2π) / |seg| ≈ 1
+  let len = (seg[0] * seg[0] + seg[1] * seg[1]).sqrt();
+  let amp = len / (sigma * (2.0 * core::f32::consts::PI).sqrt());
+  let long = screen(mu, seg, amp, [false, false]);
+  // the same line cut to the frame expanded by the band's margin: u ∈ [u0, u1]
+  let e = DUST_SPLAT_SIGMAS * sigma;
+  let frac = visible_fraction(mu, seg, e, e, px as f32, px as f32);
+  assert!(frac > 0.0 && frac < 0.05, "visible fraction {frac}");
+  let u0 = {
+    // the entry parameter: the larger of the two lower bounds (x and y)
+    let tx = -(mu[0] + e) / seg[0];
+    let ty = -(mu[1] + e) / seg[1];
+    tx.max(ty).max(0.0)
+  };
+  let short = screen(
+    [mu[0] + u0 * seg[0], mu[1] + u0 * seg[1]],
+    [frac * seg[0], frac * seg[1]],
+    amp * frac,
+    [true, true],
+  );
+  // the unclipped estimate would have coarsened it: (26 000 + 14) × 14 texels at level 0
+  let old_band = (len + 2.0 * e + 2.0) * (2.0 * e + 2.0);
+  assert!(old_band > DUST_SPLAT_MAX_TEXELS as f32);
+  let draw = |p: &ScreenPacket| {
+    let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+    pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+    splat_scatter(p, [1.0, 1.0, 1.0], &layout, 1.0e4, &mut pyr);
+    let mask = pyr[PYR_LEVEL_MASK as usize];
+    measure_from_pyramid(&layout, &mut pyr);
+    let img: alloc::vec::Vec<f32> = (0..px * px)
+      .map(|i| composite_sample(&layout, &pyr, 1.0e-4, i % px, i / px).0)
+      .collect();
+    (mask, img)
+  };
+  let (mask_long, img_long) = draw(&long);
+  let (mask_short, img_short) = draw(&short);
+  let sum = |v: &[f32]| v.iter().map(|&x| x as f64).sum::<f64>();
+  let (ratio, rms) = (
+    sum(&img_long) / sum(&img_short),
+    image_rel_rms(&img_long, &img_short, px),
+  );
+  std::println!(
+    "[long chord] levels long {mask_long:#b} short {mask_short:#b} (σ level {}), Σ ratio {ratio:.5}, rel rms {rms:.5}",
+    layout.level_for_sigma(sigma)
+  );
+  assert_eq!(
+    mask_long, mask_short,
+    "the long chord went to another level"
+  );
+  assert_eq!(mask_long, 1 << layout.level_for_sigma(sigma));
+  assert!((ratio - 1.0).abs() < 5e-3, "Σ ratio {ratio}");
+  assert!(rms < 0.01, "rel rms {rms}");
+}
+
+/// A perspective camera's eye plane is the camera's (`w > 0` in front), not the one that puts the
+/// scene's origin in front: a camera at (0, 0, 200 m) looking along +z, away from the anchor at
+/// the origin, draws a packet 100 m in front of it with its full flux (the same amplitude as the
+/// mirrored camera looking at the anchor draws the mirrored packet) and drops a packet 100 m
+/// behind it (between it and the anchor). Orienting the view direction towards the origin
+/// reversed the plane: the in-front cut zeroed the packet in front and the split kept the one
+/// behind.
+#[test]
+fn eye_plane_follows_the_camera_not_the_origin() {
+  let d = 200.0f32;
+  let tan_h = (30.0f32).to_radians().tan();
+  // looking along +z from (0, 0, d): w = z − d; looking along −z from (0, 0, d): w = d − z
+  let camera = |sign: f32| {
+    let mut mvp = [0.0f32; 16];
+    mvp[0] = 1.0 / tan_h;
+    mvp[5] = 1.0 / tan_h;
+    mvp[10] = -1e-3;
+    mvp[11] = sign;
+    mvp[15] = -sign * d;
+    mvp
+  };
+  let (away, toward) = (camera(1.0), camera(-1.0));
+  let eye = [0.0f32, 0.0, d];
+  let packet = |z: f32| Packet {
+    mean: [5.0, -3.0, z],
+    cov: [4.0, 0.0, 0.0, 4.0, 0.0, 9.0],
+    seg: [0.0; 3],
+    flux: 1.0e3,
+    open: [false; 2],
+    rho: [1.0; 2],
+    seg_t: [0.0; 3],
+  };
+  let view = SplitView::of(&away, eye);
+  assert!(view.perspective);
+  assert_eq!(
+    view.fwd,
+    [0.0, 0.0, 1.0],
+    "the camera's forward, not the origin's"
+  );
+  // in front of the away camera: drawn whole, with the mirrored camera's amplitude
+  let front = packet(d + 100.0);
+  let mut leaves = SplitLeaves::default();
+  let mut stats = SplitStats::default();
+  split_packet(&front, &view, &mut leaves, &mut stats);
+  assert_eq!(stats.dropped_flux, 0.0);
+  assert_eq!(leaves.ewa.len() + leaves.volume.len(), 1);
+  let a = project_packet(&front, 1.0, &away, 200, 200, eye).expect("in front: drawn");
+  let mirrored = Packet {
+    mean: [-5.0, -3.0, d - 100.0],
+    ..front
+  };
+  let b = project_packet(&mirrored, 1.0, &toward, 200, 200, eye).expect("in front: drawn");
+  std::println!(
+    "[eye plane] away camera amp {:.6e}, mirrored camera amp {:.6e}",
+    a.amp,
+    b.amp
+  );
+  assert!(
+    (a.amp / b.amp - 1.0).abs() < 1e-5,
+    "amp {} vs {}",
+    a.amp,
+    b.amp
+  );
+  // behind the away camera (between it and the anchor): dropped
+  let behind = packet(d - 100.0);
+  assert_eq!(
+    split_step(&behind, false, 0, DUST_SPLIT_DEPTH_MAX, &view, false),
+    SplitStep::Drop
+  );
+  assert!(project_packet(&behind, 1.0, &away, 200, 200, eye).is_none());
+  leaves.clear();
+  let mut stats = SplitStats::default();
+  split_packet(&behind, &view, &mut leaves, &mut stats);
+  assert_eq!(stats.dropped_flux, behind.flux);
+  assert!(leaves.ewa.is_empty() && leaves.volume.is_empty());
+}
+
+/// The continuum gives the speck shell's mass up (`split_packet_with` with `SplitView::shell`, the
+/// GLSL branch of `dust_project_split_scatter`): the 16-bin cluster of the specks' conservation
+/// test (a 600-m syndyne along +x, σ 15 m) seen by a 60° perspective camera 400 m behind its
+/// start, looking along it, with a 650-m shell in the header. The handed part is drawn three
+/// ways and printed: (a) the uncut minus the cut continuum as the production EWA draws them,
+/// (b) the specks, (c) the same production leaves through the exact ray integral, (d) a Monte
+/// Carlo of the leaves' own mass. The first runs read cut + specks 3.6 % below the uncut
+/// continuum: the syndyne lies along the line of sight, a point on screen, and was pooled into
+/// one Gaussian 175 m deep ((b)/(d_in) 0.932); a deep polyline is no longer pooled in perspective
+/// (`polyline_merged`), the 16 bin chords are drawn. Asserted: cut + specks = cut + exact handed
+/// within 1 %; the uncut comparison is printed. A packet wholly inside the shell leaves nothing, one wholly outside is untouched.
+#[test]
+fn shell_hand_over_matches_the_cut() {
+  use super::specks::{
+    DustSpecksPushConstants, PYR_SPECKS, SIZE_Q, SpeckHeader, pack_size_fade, specks_tier,
+  };
+  let (w, h) = (128u32, 128u32);
+  let layout = PyramidLayout::new(w, h);
+  let mut m = DustMoments::default();
+  let sigma = 15.0f32;
+  let flux = 8.0e-3f32;
+  m.mean_flux = [300.0, 0.0, 0.0, flux];
+  m.cov_a = [sigma * sigma, 0.0, 0.0, sigma * sigma];
+  m.cov_b_age_id = [0.0, sigma * sigma, 3600.0, f32::from_bits(0x1234)];
+  for j in 0..=SIZE_BINS as usize {
+    m.edges[j] = [600.0 * j as f32 / SIZE_BINS as f32, 0.0, 0.0, 0.0];
+  }
+  let f = 2.0f32;
+  m.edges[0][3] = 1.0 / f.sqrt();
+  m.edges[SIZE_BINS as usize][3] = f.sqrt();
+  m.edges[5][3] = 1.0; // r_h
+  m.edges[8][3] = 1.0; // sun along +z
+  let moments = [m];
+  let slot = 5u32;
+  let render = [DustRenderCluster {
+    pos_size: [300.0, 0.0, 0.0, 0.0],
+    age_id_dbeta_flux: [3600.0, f32::from_bits(render_word(slot, 0)), 0.0, flux],
+  }];
+  let eye = [-400.0f32, 0.0, 0.0];
+  // perspective along +x from the eye, 60°: x_clip = y / tan 30°, y_clip = z / tan 30°, w = x + 400
+  let tan_h = (30.0f32).to_radians().tan();
+  let mut mvp = [0.0f32; 16];
+  mvp[4] = 1.0 / tan_h;
+  mvp[9] = 1.0 / tan_h;
+  mvp[2] = -1e-3;
+  mvp[3] = 1.0;
+  mvp[15] = -eye[0];
+  let d_max = 650.0f32;
+  let s_ref = 50.0f32;
+  let budget = 1u32 << 24;
+  let splat_pc = |inv_unit: f32| DustSplatPushConstants {
+    moments: 0,
+    render: 0,
+    pyramid: 0,
+    live_count: 1,
+    flags: 0,
+    exposure: 1.0,
+    inv_unit,
+    color: pack_color([1.0, 1.0, 1.0, 1.0]),
+    albedo: 0.0,
+    mvp,
+    eye_local: [eye[0], eye[1], eye[2], 1.0e9],
+  };
+  let pyramid = |d: f32| {
+    let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+    let mut header = layout.header();
+    SpeckHeader::write(&mut header, d, budget);
+    pyr[..header.len()].copy_from_slice(&header);
+    pyr
+  };
+  // the unit from the continuum's peak
+  let mut probe = pyramid(0.0);
+  splat_tier(
+    &moments,
+    &render,
+    &splat_pc(1.0),
+    &DustFlowUniform::default(),
+    0,
+    &layout,
+    &mut probe,
+  );
+  let unit = f32::from_bits(probe[PYR_TAU_MAX as usize]).max(1e-30) / 4000.0;
+  let total = |pyr: &[u32]| -> f64 {
+    (0..w * h)
+      .map(|i| composite_sample(&layout, pyr, unit, i % w, i / w).0 as f64)
+      .sum()
+  };
+  let mut uncut = pyramid(0.0);
+  splat_tier(
+    &moments,
+    &render,
+    &splat_pc(1.0 / unit),
+    &DustFlowUniform::default(),
+    0,
+    &layout,
+    &mut uncut,
+  );
+  let t0 = total(&uncut);
+  let mut cut = pyramid(d_max);
+  splat_tier(
+    &moments,
+    &render,
+    &splat_pc(1.0 / unit),
+    &DustFlowUniform::default(),
+    0,
+    &layout,
+    &mut cut,
+  );
+  let t1 = total(&cut);
+  // the specks: the eye-relative mvp (`M (x − eye) + (M eye + t)`)
+  let mut mvp_rel = mvp;
+  for r in 0..4 {
+    mvp_rel[12 + r] = (mvp[12 + r] as f64
+      + mvp[r] as f64 * eye[0] as f64
+      + mvp[4 + r] as f64 * eye[1] as f64
+      + mvp[8 + r] as f64 * eye[2] as f64) as f32;
+  }
+  let speck_pc = DustSpecksPushConstants {
+    moments: 0,
+    render: 0,
+    pyramid: 0,
+    live_count: 1,
+    size_fade: pack_size_fade(s_ref, 0.0),
+    exposure: 1.0,
+    inv_unit: 1.0 / unit,
+    color: pack_color([1.0, 1.0, 1.0, 1.0]),
+    albedo: 0.0,
+    mvp: mvp_rel,
+    eye_local: [eye[0], eye[1], eye[2], 1.0e9],
+  };
+  let _ = SIZE_Q;
+  let st = specks_tier(
+    &moments,
+    &render,
+    &speck_pc,
+    &DustFlowUniform::default(),
+    &layout,
+    &mut cut,
+  );
+  let t2 = total(&cut);
+  std::println!(
+    "[shell hand-over] continuum {t0:.4e}, cut {t1:.4e} ({:.1} % handed), + specks {t2:.4e} ({:+.2} %); {} specks drawn, split children cut {} uncut {}",
+    100.0 * (1.0 - t1 / t0),
+    100.0 * (t2 / t0 - 1.0),
+    cut[PYR_SPECKS as usize],
+    cut[PYR_SPLIT_CHILDREN as usize],
+    uncut[PYR_SPLIT_CHILDREN as usize]
+  );
+  assert!(
+    st.drawn > 1000 && t1 < 0.9 * t0,
+    "the shell must hand a share over"
+  );
+  // the handed part three ways: (a) uncut − cut as the production EWA draws them, (b) the
+  // specks, (c) the same production leaves through the exact ray integral (`volume_scatter`)
+  let leaves_of = |shell: f32| {
+    let mut view = SplitView::of(&mvp, eye);
+    view.shell = shell;
+    let px = |q: [f32; 3]| project_point(q, &mvp, w, h);
+    let merged = polyline_merged(&m, &mvp, w, h);
+    let mut all = alloc::vec::Vec::new();
+    for p in subpackets_swept(&m, [0.0; 3], None, merged, true, Some(&px)) {
+      let mut lv = SplitLeaves::default();
+      let mut st = SplitStats::default();
+      split_packet(&p, &view, &mut lv, &mut st);
+      all.extend(lv.ewa);
+      all.extend(lv.volume);
+    }
+    all
+  };
+  let exact_total = |leaves: &[Packet]| {
+    let mut pyr = pyramid(0.0);
+    let view = SplitView::of(&mvp, eye);
+    for l in leaves {
+      volume_scatter(
+        l,
+        1.0,
+        &mvp,
+        &view,
+        &Photometry::NONE,
+        [1.0, 1.0, 1.0],
+        &layout,
+        1.0 / unit,
+        &mut pyr,
+      );
+    }
+    total(&pyr)
+  };
+  let (v0, v1) = (exact_total(&leaves_of(0.0)), exact_total(&leaves_of(d_max)));
+  let (a, b, c) = (t0 - t1, t2 - t1, v0 - v1);
+  // (d) an independent truth of the continuum's own mass: 6·10⁴ points per production leaf
+  // (uniform along its chord with the linear density ρ, Gaussian across), each `flux/K ·
+  // √det(JJᵀ)` = the τ·px² it puts in the image (`(f/z)² / cos θ`), in the frustum; summed
+  // inside the ball and in all. (d_in) ≈ (c) says the cut and the drawing are right and a gap
+  // to (b) is the specks' sampling of a different shape (Gaussian bins, `speck_gaussian`) than
+  // the continuum's chords; (d_in) ≈ (b) says the cut or the drawing is wrong.
+  let f_px = 0.5 * w as f64 / tan_h as f64;
+  let (mut mc_in, mut mc_all) = (0.0f64, 0.0f64);
+  let mut rng = 97u64;
+  let per_leaf = 60_000usize;
+  for l in leaves_of(0.0) {
+    let lc = cholesky3(&l.cov);
+    let (r0, r1) = (l.rho[0] as f64, l.rho[1] as f64);
+    let wgt = l.flux as f64 / per_leaf as f64;
+    for _ in 0..per_leaf {
+      let r = lcg(&mut rng);
+      let u = if (r1 - r0).abs() < 1e-9 {
+        r
+      } else {
+        (-r0 + (r0 * r0 + 2.0 * (r1 - r0) * r).max(0.0).sqrt()) / (r1 - r0)
+      };
+      let g = [
+        gauss_lcg(&mut rng),
+        gauss_lcg(&mut rng),
+        gauss_lcg(&mut rng),
+      ];
+      let lf = lc.map(|v| v as f64);
+      let off = [
+        lf[0] * g[0],
+        lf[1] * g[0] + lf[3] * g[1],
+        lf[2] * g[0] + lf[4] * g[1] + lf[5] * g[2],
+      ];
+      let p = [
+        l.mean[0] as f64 + l.seg[0] as f64 * u + off[0] - eye[0] as f64,
+        l.mean[1] as f64 + l.seg[1] as f64 * u + off[1] - eye[1] as f64,
+        l.mean[2] as f64 + l.seg[2] as f64 * u + off[2] - eye[2] as f64,
+      ];
+      let z = p[0];
+      if !(z > 0.0) || p[1].abs() > z * tan_h as f64 || p[2].abs() > z * tan_h as f64 {
+        continue;
+      }
+      let dist = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+      let t = wgt * f_px * f_px * dist / (z * z * z);
+      mc_all += t;
+      if dist < d_max as f64 {
+        mc_in += t;
+      }
+    }
+  }
+  // the composite totals are Σ over pixels of τ: the MC's units
+  std::println!(
+    "[shell hand-over] (d) MC of the continuum's leaves: inside {mc_in:.4e}, all {mc_all:.4e}; (c)/(d_in) {:.4}, (b)/(d_in) {:.4}, exact uncut / (d_all) {:.4}",
+    c / mc_in,
+    b / mc_in,
+    v0 / mc_all
+  );
+  std::println!(
+    "[shell hand-over] handed τ: (a) EWA uncut − cut {a:.4e}, (b) specks {b:.4e}, (c) exact ray integral {c:.4e}; (a)/(c) {:.4}, (b)/(c) {:.4}; exact continuum uncut {v0:.4e} cut {v1:.4e} (EWA/exact {:.4} / {:.4}); cut + specks vs uncut {:+.2} % (printed), vs cut + exact handed {:+.2} %",
+    a / c,
+    b / c,
+    t0 / v0,
+    t1 / v1,
+    100.0 * (t2 / t0 - 1.0),
+    100.0 * (t2 / (t1 + c) - 1.0)
+  );
+  // the EWA's own error on the handed (near, deep) chords: the Jacobian and the pixel area are
+  // taken at the chord's midpoint, so the error is second order in the chord's depth span over its
+  // depth (≤ 0.1 after the split). It read 1.081 with the Jacobian at the chord's start
+  assert!(
+    (a / c - 1.0).abs() <= 0.03,
+    "(a)/(c) {}: the EWA over-draws the deep chords",
+    a / c
+  );
+  // the hand-over itself: the specks draw what the exact integral of the handed leaves draws
+  // (the uncut comparison also carries the EWA's error on the near packets, printed above)
+  assert!(
+    (t2 / (t1 + c) - 1.0).abs() < 0.01,
+    "cut + specks {t2} vs cut + exact handed {} ((b) {b} vs (c) {c})",
+    t1 + c
+  );
+  // a packet wholly inside the shell leaves nothing; wholly outside, untouched
+  let mut view = SplitView::of(&mvp, eye);
+  view.shell = d_max;
+  let small = |x: f32| Packet {
+    mean: [x, 0.0, 0.0],
+    cov: [1.0, 0.0, 0.0, 1.0, 0.0, 1.0],
+    seg: [0.0; 3],
+    flux: 1.0,
+    open: [false; 2],
+    rho: [1.0; 2],
+    seg_t: [0.0; 3],
+  };
+  let mut leaves = SplitLeaves::default();
+  let mut stats = SplitStats::default();
+  split_packet(&small(0.0), &view, &mut leaves, &mut stats);
+  assert!(
+    leaves.ewa.is_empty() && leaves.volume.is_empty(),
+    "inside: {leaves:?}"
+  );
+  assert_eq!(stats.dropped_flux, 0.0, "handed over, not dropped");
+  split_packet(&small(600.0), &view, &mut leaves, &mut stats);
+  assert_eq!(leaves.ewa, alloc::vec![small(600.0)]);
+}
+
+/// A size polyline along the line of sight is a point on screen but hundreds of metres deep:
+/// in perspective it is not pooled into one Gaussian (its depth distribution would be wrong),
+/// in an orthographic view it still is (the depth extent changes nothing there), and from far
+/// away (600 m deep at 1 000 km) it is shallow and pooled again.
+#[test]
+fn deep_polyline_is_not_pooled() {
+  let (w, h) = (128u32, 128u32);
+  let mut m = DustMoments::default();
+  m.mean_flux = [300.0, 0.0, 0.0, 1.0];
+  for j in 0..=SIZE_BINS as usize {
+    m.edges[j] = [600.0 * j as f32 / SIZE_BINS as f32, 0.0, 0.0, 0.0];
+  }
+  let tan_h = (30.0f32).to_radians().tan();
+  // perspective along +x from (−e, 0, 0): x_clip = y / tan 30°, y_clip = z / tan 30°, w = x + e
+  let persp = |e: f32| {
+    let mut mvp = [0.0f32; 16];
+    mvp[4] = 1.0 / tan_h;
+    mvp[9] = 1.0 / tan_h;
+    mvp[2] = -1e-3;
+    mvp[3] = 1.0;
+    mvp[15] = e;
+    mvp
+  };
+  // orthographic along +x
+  let mut ortho = [0.0f32; 16];
+  ortho[4] = 1.0 / 64.0;
+  ortho[9] = 1.0 / 64.0;
+  ortho[2] = 1e-12;
+  ortho[15] = 1.0;
+  let near = polyline_merged(&m, &persp(400.0), w, h);
+  let far = polyline_merged(&m, &persp(1.0e6), w, h);
+  let ortho_merged = polyline_merged(&m, &ortho, w, h);
+  std::println!(
+    "[deep polyline] perspective 400 m: {near}, 1 000 km: {far}, orthographic: {ortho_merged}"
+  );
+  assert!(!near, "a 600-m-deep polyline 400 m away is pooled");
+  assert!(far, "600 m deep at 1 000 km is shallow");
+  assert!(
+    ortho_merged,
+    "orthographic: the depth extent changes nothing"
+  );
+  // the time segment: a predecessor 600 m further along the view is deep at 400 m
+  let mut p = m;
+  p.mean_flux[0] += 600.0;
+  assert!(!time_shallow(&m, &p, &persp(400.0)));
+  assert!(time_shallow(&m, &p, &persp(1.0e6)));
+  assert!(time_shallow(&m, &p, &ortho));
+}
+
+/// The in-frame gates ([`DUST_FRAME_HARD_FACTOR`]): with a frame's counter already past its hard
+/// limit, the next packet takes the cheap path — the EWA and the volumetric packet at least
+/// [`gate_level`], the split no node below the one that found the limit — and with the counter
+/// at 0 the same packet draws as before (the gates change nothing below the limit). A chord sent
+/// coarse (gate or EWA bias) is widened to its texels and keeps its light (Σ counts within 10 %;
+/// point-sampled it was lost). Firing a gate
+/// for real needs ~10⁹ texels; the counters are preloaded instead. Also the host's EWA bias rule:
+/// the measured cold start inside the coma (1.19·10¹⁰ texels at bias 0) goes to bias 3, which the
+/// texels ∝ 4^−bias model puts under the budget on the next frame.
+#[test]
+fn frame_gates_bound_the_work() {
+  let (d, px) = (200.0f32, 200u32);
+  let mvp = perspective_mvp_60(d);
+  let eye = [0.0f32, 0.0, d];
+  let layout = PyramidLayout::new(px, px);
+  let fresh = || {
+    let mut p = alloc::vec![0u32; layout.total_words as usize];
+    p[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+    p
+  };
+  // Σ counts over every level: τ × texel area, the packet's integral whatever its level
+  let total = |p: &[u32]| -> f64 {
+    p[PYRAMID_HEADER_WORDS as usize..]
+      .chunks_exact(PYRAMID_TEXEL_WORDS as usize)
+      .map(|t| t[0] as f64)
+      .sum()
+  };
+  // EWA: a thin chord in the middle of the view, 600 m deep (±14 px): its blur at the gate's
+  // 64-px texels stays inside the level's grid, so Σ counts compares like for like (a chord
+  // across the frame is clipped at 200 px on level 0 and at 256 px on the coarse grid)
+  let chord = Packet {
+    mean: [-50.0, 0.0, -400.0],
+    cov: [0.25, 0.0, 0.0, 0.25, 0.0, 0.25],
+    seg: [100.0, 0.0, 0.0],
+    flux: 1.0,
+    open: [false; 2],
+    rho: [1.0; 2],
+    seg_t: [0.0; 3],
+  };
+  let sp = project_packet(&chord, 1.0, &mvp, px, px, eye).expect("on screen");
+  let inv_unit = 1.0 / (sp.amp * WHITE_TILE_UNIT_REL);
+  let mut a = fresh();
+  splat_scatter(&sp, [1.0; 3], &layout, inv_unit, &mut a);
+  let mask_a = a[PYR_LEVEL_MASK as usize];
+  let units_a = a[PYR_EWA_TEXELS as usize];
+  let mut b = fresh();
+  let limit = DUST_FRAME_HARD_FACTOR * (DUST_EWA_FRAME_BUDGET / DUST_EWA_TEXEL_UNIT as u32);
+  b[PYR_EWA_TEXELS as usize] = limit + 1;
+  splat_scatter(&sp, [1.0; 3], &layout, inv_unit, &mut b);
+  let mut c = fresh();
+  EwaStats::store_bias(DUST_EWA_BIAS_MAX, &mut c);
+  splat_scatter(&sp, [1.0; 3], &layout, inv_unit, &mut c);
+  std::println!(
+    "[frame gates] EWA chord: level mask {mask_a:#x} ({units_a} units) fresh, {:#x} past the limit, {:#x} at bias {DUST_EWA_BIAS_MAX}",
+    b[PYR_LEVEL_MASK as usize],
+    c[PYR_LEVEL_MASK as usize]
+  );
+  assert!(units_a > 0 && mask_a != 0);
+  let gate = gate_level(layout.level_count());
+  assert!(mask_a < 1 << gate, "the fresh chord must sit below the gate level");
+  assert_eq!(b[PYR_LEVEL_MASK as usize], 1 << gate, "past the limit: the gate level");
+  assert!(
+    c[PYR_LEVEL_MASK as usize] > mask_a,
+    "the bias moves the chord coarser"
+  );
+  // widened to the coarse texels, the chord keeps its light (point-sampled it was lost)
+  let (ta, tb, tc) = (total(&a), total(&b), total(&c));
+  std::println!("[frame gates] EWA chord Σ counts: fresh {ta:.4e}, past the limit {tb:.4e}, bias {DUST_EWA_BIAS_MAX} {tc:.4e}");
+  assert!((tb / ta - 1.0).abs() < 0.1, "gated chord Σ {tb} vs {ta}");
+  assert!((tc / ta - 1.0).abs() < 0.1, "biased chord Σ {tc} vs {ta}");
+  // volumetric: a packet around the eye
+  let view = SplitView::of(&mvp, eye);
+  let cloud = rotated_packet([10.0, -20.0, d - 30.0], [60.0, 40.0, 80.0], 0.0);
+  assert!(is_volumetric(&cloud, &view));
+  let inv_unit = 1.0 / (unit_of(&[cloud], &mvp, eye, px) * 1e-3);
+  let mut a = fresh();
+  volume_scatter(&cloud, 1.0, &mvp, &view, &Photometry::NONE, [1.0; 3], &layout, inv_unit, &mut a);
+  let mut b = fresh();
+  b[PYR_VOLUME_EVALS as usize] = DUST_FRAME_HARD_FACTOR * DUST_VOLUME_FRAME_BUDGET + 1;
+  volume_scatter(&cloud, 1.0, &mvp, &view, &Photometry::NONE, [1.0; 3], &layout, inv_unit, &mut b);
+  std::println!(
+    "[frame gates] volumetric: level mask {:#x} fresh ({} evaluations), {:#x} past the limit",
+    a[PYR_LEVEL_MASK as usize],
+    a[PYR_VOLUME_EVALS as usize],
+    b[PYR_LEVEL_MASK as usize]
+  );
+  assert!(a[PYR_LEVEL_MASK as usize] < 1 << gate);
+  assert!(
+    b[PYR_LEVEL_MASK as usize] >= 1 << gate,
+    "past the limit: at least the gate level"
+  );
+  // split: a packet deep along the view splits to the depth limit fresh, once past the limit
+  let deep = Packet {
+    mean: [0.0, 0.0, 0.0],
+    cov: [1.0, 0.0, 0.0, 1.0, 0.0, 900.0],
+    seg: [0.0; 3],
+    flux: 1.0,
+    open: [false; 2],
+    rho: [1.0; 2],
+    seg_t: [0.0; 3],
+  };
+  let mut leaves = SplitLeaves::default();
+  let mut fresh_stats = SplitStats::default();
+  fresh_stats.depth = DUST_SPLIT_DEPTH_MAX;
+  split_packet(&deep, &view, &mut leaves, &mut fresh_stats);
+  let n_fresh = fresh_stats.children;
+  let start = DUST_FRAME_HARD_FACTOR * DUST_SPLIT_BUDGET + 1;
+  let mut gated = SplitStats {
+    children: start,
+    ..fresh_stats
+  };
+  gated.depth = DUST_SPLIT_DEPTH_MAX;
+  leaves.clear();
+  split_packet(&deep, &view, &mut leaves, &mut gated);
+  std::println!(
+    "[frame gates] split: {n_fresh} children fresh, {} past the limit",
+    gated.children - start
+  );
+  assert!(n_fresh > 2, "the deep packet must split more than once fresh");
+  assert!(gated.children - start <= 2, "past the limit: one split at most");
+  // the host's EWA bias rule from the measured cold start
+  let cold = EwaStats {
+    texels: 11_870_000_000,
+    bias: 0,
+  };
+  let next = cold.suggested_bias();
+  assert_eq!(next, 3);
+  assert!(cold.texels as f64 / 4f64.powi(next as i32) <= DUST_EWA_FRAME_BUDGET as f64);
+  assert_eq!(
+    EwaStats {
+      texels: 1000,
+      bias: 2
+    }
+    .suggested_bias(),
+    1
+  );
 }

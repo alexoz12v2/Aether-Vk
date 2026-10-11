@@ -255,12 +255,20 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   }
 #endif
 
+  /// <summary>
+  /// Telescope image overlay of the Earth observer panel (<c>null</c> without a file dialog /
+  /// translation service, e.g. in tests that do not need it).
+  /// </summary>
+  public SkyImageOverlayViewModel? SkyImage { get; }
+
   public ViewportSettingsViewModel(
     ulong cameraId,
     int index,
     INativeRuntimeService runtimeService,
     ISchedulerProvider schedulerProvider,
-    CameraService cameraService
+    CameraService cameraService,
+    IFileDialogService? fileDialogService = null,
+    ITranslationService? translationService = null
   )
   {
     _runtimeService = runtimeService;
@@ -268,6 +276,16 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     _cameraService = cameraService;
     CameraId = cameraId;
     ViewportName = $"Viewport {index + 1}";
+    if (fileDialogService is not null && translationService is not null)
+    {
+      SkyImage = new SkyImageOverlayViewModel(
+        runtimeService,
+        fileDialogService,
+        translationService,
+        schedulerProvider,
+        ApplyObserverSiteFromHeader,
+        cameraService.LockEarthObserverToDirection);
+    }
 
     _projectionListenerToken = _runtimeService.RegisterSimulationListener(
       cameraId,
@@ -580,8 +598,29 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     );
   }
 
+  /// <summary>"Use site from header" of the sky image overlay: the elevation first (it is
+  /// pushed with the next coordinates), then one push with both coordinates.</summary>
+  private void ApplyObserverSiteFromHeader(double lat, double lon, double? elevM)
+  {
+    if (elevM is { } elev)
+      _cameraService.SetEarthObserverElevation(elev);
+    _isUpdatingFromRuntime = true;
+    try
+    {
+      EarthObserverLatDeg = lat;
+      EarthObserverLonDeg = lon;
+    }
+    finally
+    {
+      _isUpdatingFromRuntime = false;
+    }
+    _cameraService.SetEarthObserverLatLon((float)lat, (float)lon);
+    UpdateObserverHorizon(_cameraService.GetEarthObserverTargetVisibility());
+  }
+
   public void Dispose()
   {
+    SkyImage?.Dispose();
     _cameraService.ViewportResized -= OnViewportResized;
     _projectionListenerToken?.Dispose();
     _disposables.Dispose();

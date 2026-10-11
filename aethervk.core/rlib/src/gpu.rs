@@ -14,6 +14,7 @@ use heapless::index_map::FnvIndexMap;
 pub mod dust_trace;
 pub mod frame;
 pub mod scene_conversion;
+pub mod sky_image_draw;
 
 pub use self::frame::RenderScene;
 

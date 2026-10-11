@@ -205,9 +205,12 @@ public interface INativeRuntimeService : IDisposable
   /// Native Earth observer: the core poses the Earth-parented camera inside every commit that moves
   /// the Earth and the comet, so no frame shows a stale aim. <paramref name="mode"/> is the
   /// <c>EarthObserverOrientationMode</c> value, or -1 to clear (the UI poses the camera again).
-  /// <paramref name="look"/>: the free inertial look, or the lock-in body-fixed look.
+  /// <paramref name="look"/>: the free inertial look, or the lock-in body-fixed look. The site is
+  /// geodetic <paramref name="latDeg"/> / <paramref name="lonDeg"/> on the WGS84 ellipsoid,
+  /// <paramref name="elevM"/> metres above it. With a comet, the core draws the comet and its dust
+  /// at the light-time retarded epoch.
   /// </summary>
-  bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, Quaterniond look);
+  bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, double elevM, Quaterniond look);
 
   /// <summary>Radius (km) of the visible dust coma (0 without dust): frames the comet in Earth
   /// observer lock-in / tracking.</summary>
@@ -362,6 +365,23 @@ public interface INativeRuntimeService : IDisposable
 
   /// <summary>Current comet appearance as last applied natively.</summary>
   bool GetCometAppearance(out Models.CometAppearanceDto appearance);
+
+  // ── Sky image overlay (Earth-observer panel HUD) ────────────────────────
+
+  /// <summary>
+  /// Loads a telescope image (FITS, or PNG / JPEG with a WCS sidecar; <paramref name="sidecarPath"/>
+  /// <c>null</c>: a PNG / JPEG looks for <c>&lt;stem&gt;.wcs</c>) as the scene's sky overlay,
+  /// replacing any. Synchronous (decode + statistics): call it off the UI thread. <c>null</c> when
+  /// the file cannot be read; an image without a usable TAN WCS returns <see cref="SkyImageInfo.HasWcs"/>
+  /// <c>false</c> and is not drawn.
+  /// </summary>
+  SkyImageInfo? LoadSkyImage(string path, string? sidecarPath);
+
+  /// <summary>Overlay display: opacity [0, 1], asinh stretch (0 = linear), visibility.</summary>
+  bool SetSkyImageParams(float opacity, float stretch, bool visible);
+
+  /// <summary>Removes the scene's sky overlay.</summary>
+  bool RemoveSkyImage();
 
   // ==========================================
   // Screen Space Billboards (UI Overlays)
@@ -882,6 +902,29 @@ internal unsafe static class PInvokeAetherVkCore
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_removeAsset(nint ctx, ulong requestId, ulong assetId);
 
+  // ── Sky image overlay (aethervk.core/cdylib/src/ffi_assets.rs) ──
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_loadSkyImage(
+    nint ctx,
+    ulong sceneId,
+    byte* utf8Path,
+    byte* utf8SidecarOrNull,
+    CSkyImageInfo* outInfo
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_setSkyImageParams(
+    nint ctx,
+    ulong sceneId,
+    float opacity,
+    float stretch,
+    uint visible
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_removeSkyImage(nint ctx, ulong sceneId);
+
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern uint avkSimulationContext_getAssetCount(nint ctx);
 
@@ -1173,6 +1216,7 @@ internal unsafe static class PInvokeAetherVkCore
     ulong cometId,
     double latDeg,
     double lonDeg,
+    double elevM,
     [In] double[] look
   );
 
@@ -2218,9 +2262,9 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public double DustComaRadiusKm() =>
     _ctx != 0 ? PInvokeAetherVkCore.avkSimulationContext_dustComaRadiusKm(_ctx, _sceneId) : 0.0;
 
-  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, Quaterniond look) =>
+  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, double elevM, Quaterniond look) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setEarthObserver(
-      _ctx, _sceneId, cameraId, mode < 0 ? uint.MaxValue : (uint)mode, earthId, cometId, latDeg, lonDeg,
+      _ctx, _sceneId, cameraId, mode < 0 ? uint.MaxValue : (uint)mode, earthId, cometId, latDeg, lonDeg, elevM,
       new[] { look.X, look.Y, look.Z, look.W });
 
   public bool SetJetPreviewVisibility(ulong jetEntityId, bool isVisible) =>
@@ -2457,6 +2501,36 @@ public sealed class NativeRuntimeService : INativeRuntimeService
       return PInvokeAetherVkCore.avkSimulationContext_getCometAppearance(_ctx, _sceneId, p);
   }
 
+  // ── INativeRuntimeService — Sky image overlay ─────────────────────────────
+
+  public unsafe SkyImageInfo? LoadSkyImage(string path, string? sidecarPath)
+  {
+    if (_ctx == 0) return null;
+    CSkyImageInfo info = default;
+    bool ok;
+    fixed (byte* p = NullTerminatedUtf8(path))
+    {
+      if (sidecarPath is null)
+      {
+        ok = PInvokeAetherVkCore.avkSimulationContext_loadSkyImage(_ctx, _sceneId, p, null, &info);
+      }
+      else
+      {
+        fixed (byte* sc = NullTerminatedUtf8(sidecarPath))
+          ok = PInvokeAetherVkCore.avkSimulationContext_loadSkyImage(_ctx, _sceneId, p, sc, &info);
+      }
+    }
+    return ok ? SkyImageInfo.FromNative(info) : null;
+  }
+
+  public bool SetSkyImageParams(float opacity, float stretch, bool visible) =>
+    _ctx != 0
+    && PInvokeAetherVkCore.avkSimulationContext_setSkyImageParams(
+      _ctx, _sceneId, opacity, stretch, visible ? 1u : 0u);
+
+  public bool RemoveSkyImage() =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_removeSkyImage(_ctx, _sceneId);
+
   // ── INativeRuntimeService — Screen Space Billboards ──────────────────────
 
   public ulong AddScreenSpaceBillboard(string imagePath, ScreenSpaceBillboard billboard)
@@ -2667,6 +2741,8 @@ public record ParticleSystemModel(
   float DensityGCm3,
   float ScatteringEfficiency,
   float GeometricAlbedo,
+  float SizeQ,
+  float SizeRange,
   float Afrho0Cm,
   float AfrhoPower,
   float AfrhoCutoffAu,
@@ -2799,6 +2875,8 @@ internal readonly struct ParticleSystemDTO(ParticleSystemModel model, ParticleSy
   public readonly float DensityGCm3 = model.DensityGCm3;
   public readonly float ScatteringEfficiency = model.ScatteringEfficiency;
   public readonly float GeometricAlbedo = model.GeometricAlbedo;
+  public readonly float SizeQ = model.SizeQ;
+  public readonly float SizeRange = model.SizeRange;
 
   public readonly float Afrho0Cm = model.Afrho0Cm;
   public readonly float AfrhoPower = model.AfrhoPower;
@@ -3299,3 +3377,71 @@ internal struct CKeplerianElementsDTO
   public uint Pad;
 }
 
+/// <summary>
+/// Mirrors Rust <c>CSkyImageInfo</c> (<c>ffi_assets.rs</c>), 80 bytes: <c>has_wcs, nx, ny, _pad</c>
+/// (4 × u32), <c>date_obs_us</c> (i64, TDB µs since J2000 TDB), <c>exptime_s, site_lat_deg,
+/// site_lon_deg, site_elev_m, crval_ra_deg, crval_dec_deg</c> (6 × f64), <c>flags, _pad2</c> (2 × u32).
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct CSkyImageInfo
+{
+  public uint HasWcs;
+  public uint Nx;
+  public uint Ny;
+  public uint Pad;
+  public long DateObsUs;
+  public double ExptimeS;
+  public double SiteLatDeg;
+  public double SiteLonDeg;
+  public double SiteElevM;
+  public double CrvalRaDeg;
+  public double CrvalDecDeg;
+  public uint Flags;
+  public uint Pad2;
+}
+
+/// <summary>
+/// Facts of a loaded sky image. Optional header fields are <c>null</c> when their
+/// <see cref="Flags"/> bit is clear (the offers that need them stay disabled).
+/// </summary>
+public sealed record SkyImageInfo(
+  bool HasWcs,
+  uint Nx,
+  uint Ny,
+  long? DateObsTdbUs,
+  double? ExptimeS,
+  double? SiteLatDeg,
+  double? SiteLonDeg,
+  double? SiteElevM,
+  double CrvalRaDeg,
+  double CrvalDecDeg,
+  uint Flags)
+{
+  // CSkyImageInfo.flags (scene::sky_image::SKY_FLAG_*)
+  public const uint FlagDateObs = 1u << 0;
+  public const uint FlagExptime = 1u << 1;
+  public const uint FlagSiteLat = 1u << 2;
+  public const uint FlagSiteLon = 1u << 3;
+  public const uint FlagSiteElev = 1u << 4;
+  public const uint FlagSipIgnored = 1u << 5;
+  public const uint FlagRaster = 1u << 6;
+  public const uint FlagWcsSidecar = 1u << 7;
+  public const uint FlagFrameAssumed = 1u << 8;
+  public const uint FlagTimesysAssumed = 1u << 9;
+
+  public bool SipIgnored => (Flags & FlagSipIgnored) != 0;
+  public bool IsRaster => (Flags & FlagRaster) != 0;
+
+  internal static SkyImageInfo FromNative(in CSkyImageInfo c) => new(
+    c.HasWcs != 0,
+    c.Nx,
+    c.Ny,
+    (c.Flags & FlagDateObs) != 0 ? c.DateObsUs : null,
+    (c.Flags & FlagExptime) != 0 ? c.ExptimeS : null,
+    (c.Flags & FlagSiteLat) != 0 ? c.SiteLatDeg : null,
+    (c.Flags & FlagSiteLon) != 0 ? c.SiteLonDeg : null,
+    (c.Flags & FlagSiteElev) != 0 ? c.SiteElevM : null,
+    c.CrvalRaDeg,
+    c.CrvalDecDeg,
+    c.Flags);
+}

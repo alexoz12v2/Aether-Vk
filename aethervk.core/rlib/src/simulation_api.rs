@@ -19,6 +19,7 @@ use oshal::math::{
 };
 use parking_lot::RwLock;
 
+pub mod astrometry;
 pub mod comet_appearance;
 pub mod components_api;
 pub mod core_api;

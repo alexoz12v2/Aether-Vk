@@ -475,6 +475,13 @@ fn process_command(
                     aethervk_oshal_rlib::log!("[render tasklet] prepare_dust failed: {:?}", e);
                     0
                   });
+              // HUD sky image: upload on this command buffer when the scene's image changed
+              gpu::sky_image_draw::prepare_sky_image(
+                vulkan_device,
+                cmd,
+                pe_handle,
+                crate::scene::sky_image::scene_key(&render_frame.scene),
+              );
               if dust_wait > 0 {
                 use ash::vk::Handle;
                 cmd_scope.add_sync_info(gpu::CommandBufferSyncInfo {

@@ -402,6 +402,8 @@ public class ModelTabViewModelTests
     Assert.Equal(0.533f, session.DensityGCm3, 3);
     Assert.Equal(1.0f, session.ScatteringEfficiency);
     Assert.Equal(0.04f, session.GeometricAlbedo);
+    Assert.Equal(3.5f, session.SizeQ);
+    Assert.Equal(10f, session.SizeRange);
     Assert.Equal(100f, session.Afrho0Cm);
     Assert.Equal(2.0f, session.AfrhoPower);
     Assert.Equal(15.0f, session.AfrhoCutoffAu);
@@ -423,6 +425,8 @@ public class ModelTabViewModelTests
     session.DensityGCm3 = 1.1f;
     session.ScatteringEfficiency = 1.5f;
     session.GeometricAlbedo = 0.06f;
+    session.SizeQ = 3.0f;
+    session.SizeRange = 20f;
     session.Afrho0Cm = 1000f;
     session.AfrhoPower = 3.0f;
     session.AfrhoCutoffAu = 6.0f;
@@ -432,6 +436,8 @@ public class ModelTabViewModelTests
     Assert.Contains(nameof(ModelSession.DensityGCm3), raised);
     Assert.Contains(nameof(ModelSession.ScatteringEfficiency), raised);
     Assert.Contains(nameof(ModelSession.GeometricAlbedo), raised);
+    Assert.Contains(nameof(ModelSession.SizeQ), raised);
+    Assert.Contains(nameof(ModelSession.SizeRange), raised);
     Assert.Contains(nameof(ModelSession.Afrho0Cm), raised);
     Assert.Contains(nameof(ModelSession.AfrhoPower), raised);
     Assert.Contains(nameof(ModelSession.AfrhoCutoffAu), raised);

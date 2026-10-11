@@ -42,7 +42,10 @@ public class DoubleMathTests
     Assert.Equal(80, Marshal.SizeOf<AnimationTargetDTO>());
     Assert.Equal(64, Marshal.SizeOf<CRotoTranslateDTO>());
     Assert.Equal(56, Marshal.SizeOf<CDustTierStatsDTO>());
-    Assert.Equal(88, Marshal.SizeOf<ParticleSystemDTO>());
+    Assert.Equal(96, Marshal.SizeOf<ParticleSystemDTO>());
+    // the common block grew by SizeQ / SizeRange: the Rust offsets (scene.rs asserts 24 and 88)
+    Assert.Equal(24, (int)Marshal.OffsetOf<ParticleSystemDTO>(nameof(ParticleSystemDTO.Afrho0Cm)));
+    Assert.Equal(88, (int)Marshal.OffsetOf<ParticleSystemDTO>(nameof(ParticleSystemDTO.EmissionStartUs)));
     Assert.Equal(32, Marshal.SizeOf<CDustExposureDTO>());
   }
 }

@@ -170,11 +170,43 @@ impl SceneConversionExt2 for Scene {
       );
       entries
     };
+    // Earth observer light time (`earth_observer::LightTimeViewComponent`): the comet's micro
+    // layer is drawn where the telescope sees it, `x(t_r) = x(t) + offset`, by moving that layer's
+    // camera by `−offset` (the committed comet transform is the geometric one). A comet on the
+    // macro layer is not displaced (it would move everything); its dust is retarded in
+    // `dust_draw_calls` either way.
+    let light_time = self
+      .with_component(
+        camera_entity,
+        |l: &crate::simulation_api::earth_observer::LightTimeViewComponent| *l,
+      )
+      .map(|l| (self.ancestor_depth_layer(l.comet), l))
+      .filter(|(layer, _)| *layer > 0);
     // Phase 2 — `archetypes.read()` from `query1_without` is now released.
     // Safe to call `get_relative_transform_f64` which re-acquires `archetypes.read()`.
     for entry in frame_entries {
       layer_frame_entities.insert(entry.depth_layer, entry.id);
-      if let Some(cam_in_frame_f64) = self.get_relative_transform_f64(camera_entity, entry.id) {
+      if let Some(mut cam_in_frame_f64) = self.get_relative_transform_f64(camera_entity, entry.id) {
+        if let Some((_, lt)) = light_time.filter(|(layer, _)| *layer == entry.depth_layer) {
+          if let Some(frame) = self.global_transform_f64(entry.id) {
+            use crate::simulation_api::earth_observer::{qinverse, qnormalize, rotate};
+            let r = qnormalize([
+              frame.rotation[0],
+              frame.rotation[1],
+              frame.rotation[2],
+              frame.rotation[3],
+            ]);
+            // world units (AU) per local unit of the frame's children
+            let k = frame.scale.x() as f64 * entry.scale as f64;
+            let o = rotate(qinverse(r), lt.offset_au);
+            cam_in_frame_f64.position = cam_in_frame_f64.position
+              - aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+                o[0] / k,
+                o[1] / k,
+                o[2] / k,
+              );
+          }
+        }
         camera_in_frames.insert(entry.depth_layer, cam_in_frame_f64);
 
         let dist_local = cam_in_frame_f64.position.length();
@@ -1601,7 +1633,17 @@ impl Scene {
       cam.position.y() * au,
       cam.position.z() * au,
     ];
-    let scene_time_s = self.sim_time_s();
+    // Earth observer light time: the dust is evaluated at the retarded epoch `t − delay` (one
+    // epoch for the whole cloud, the nucleus': the spread of Δ across a tail is ≪ 1 s), drawn
+    // from the true eye. Clusters emitted after `t − delay` get a negative age and are culled:
+    // their light has not arrived yet. The simulation clock is untouched.
+    let delay_s = self
+      .with_component(
+        camera_entity,
+        |l: &crate::simulation_api::earth_observer::LightTimeViewComponent| l.delay_s,
+      )
+      .unwrap_or(0.0);
+    let scene_time_s = self.sim_time_s().map(|t| t - delay_s);
     // no nested scene lookups inside the query callback (see the deadlock note above)
     let mut systems = alloc::vec::Vec::new();
     self.query1_without::<ParticleSystemComponent, HiddenComponent, _>(|id, ps| {

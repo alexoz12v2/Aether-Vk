@@ -159,8 +159,8 @@ public class CameraServiceTests
     runtime.Setup(r => r.CometEntityId).Returns(77UL);
     var calls = new System.Collections.Generic.List<(int Mode, ulong Earth, ulong Comet)>();
     runtime.Setup(r => r.SetEarthObserver(It.IsAny<ulong>(), It.IsAny<int>(), It.IsAny<ulong>(), It.IsAny<ulong>(),
-        It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>()))
-      .Callback<ulong, int, ulong, ulong, double, double, Quaterniond>((_, m, e, c, _, _, _) => calls.Add((m, e, c)))
+        It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>()))
+      .Callback<ulong, int, ulong, ulong, double, double, double, Quaterniond>((_, m, e, c, _, _, _, _) => calls.Add((m, e, c)))
       .Returns(true);
     var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
     ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)

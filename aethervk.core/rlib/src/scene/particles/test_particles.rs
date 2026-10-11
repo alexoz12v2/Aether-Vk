@@ -22,7 +22,7 @@ fn beta_computation() {
 
 #[test]
 fn propagate_common_params_field_count() {
-  // Documents the exact set of 8 "Jet Common Parameters" that propagate_common_params
+  // Documents the exact set of 10 "Jet Common Parameters" that propagate_common_params
   // applies to sibling particle systems. If this list changes, the FFI propagation
   // function in ffi.rs must be updated in lockstep.
   let expected_common_fields: &[&str] = &[
@@ -30,6 +30,8 @@ fn propagate_common_params_field_count() {
     "density_gcm3",
     "scattering_efficiency",
     "geometric_albedo",
+    "size_q",
+    "size_range",
     "afrho_0_cm",
     "afrho_power",
     "afrho_cutoff_au",
@@ -37,8 +39,8 @@ fn propagate_common_params_field_count() {
   ];
   assert_eq!(
     expected_common_fields.len(),
-    8,
-    "there must be exactly 8 common (model-level) particle system parameters"
+    10,
+    "there must be exactly 10 common (model-level) particle system parameters"
   );
 }
 
@@ -52,6 +54,8 @@ fn particle_system_emit_params_common_field_roundtrip() {
   ep.density_gcm3 = 0.8;
   ep.scattering_efficiency = 1.1;
   ep.geometric_albedo = 0.05;
+  ep.size_q = 3.25;
+  ep.size_range = 30.0;
   ep.afrho_0_cm = 800.0;
   ep.afrho_power = 2.2;
   ep.afrho_cutoff_au = 5.5;
@@ -63,6 +67,8 @@ fn particle_system_emit_params_common_field_roundtrip() {
     density_gcm3: ep.density_gcm3,
     scattering_efficiency: ep.scattering_efficiency,
     geometric_albedo: ep.geometric_albedo,
+    size_q: ep.size_q,
+    size_range: ep.size_range,
     afrho_0_cm: ep.afrho_0_cm,
     afrho_power: ep.afrho_power,
     afrho_cutoff_au: ep.afrho_cutoff_au,
@@ -74,6 +80,8 @@ fn particle_system_emit_params_common_field_roundtrip() {
   assert_eq!(ep2.density_gcm3, 0.8);
   assert_eq!(ep2.scattering_efficiency, 1.1);
   assert_eq!(ep2.geometric_albedo, 0.05);
+  assert_eq!(ep2.size_q, 3.25);
+  assert_eq!(ep2.size_range, 30.0);
   assert_eq!(ep2.afrho_0_cm, 800.0);
   assert_eq!(ep2.afrho_power, 2.2);
   assert_eq!(ep2.afrho_cutoff_au, 5.5);
@@ -107,4 +115,29 @@ fn emission_start_now_resolves_to_the_clock_or_refuses() {
   // the resolved value round-trips through the epoch conversion
   let us = resolve_emission_start_us(EMISSION_START_NOW, Some(now)).unwrap();
   assert!((epoch_from_emission_start_us(us) - now).abs().to_seconds() < 1e-5);
+}
+
+/// The size law parameters read through their validating accessors: a zeroed (or pre-v7)
+/// record gets the defaults 3.5 / 10, out-of-range values too; the range reaches the size
+/// distribution (radii `r/F .. r·F`), the exponent does not (the continuum keeps 3.5).
+#[test]
+fn size_law_params_default_and_validate() {
+  use super::v2::*;
+  let mut ep = ParticleSystemEmitParams::zeroed();
+  ep.diametre_um = 100.0;
+  assert_eq!(ep.size_q(), 3.5);
+  assert_eq!(ep.size_range(), 10.0);
+  ep.size_q = 3.0;
+  ep.size_range = 20.0;
+  assert_eq!(ep.size_q(), 3.0);
+  assert_eq!(ep.size_range(), 20.0);
+  let d = ep.size_distribution();
+  assert!((d.s_min_um - 2.5).abs() < 1e-9 && (d.s_max_um - 1000.0).abs() < 1e-9);
+  assert_eq!(d.q, 3.5, "the continuum keeps q = 3.5");
+  for (q, f) in [(1.5f32, 0.5f32), (6.0, 2000.0), (f32::NAN, f32::INFINITY)] {
+    ep.size_q = q;
+    ep.size_range = f;
+    assert_eq!(ep.size_q(), 3.5, "q {q}");
+    assert_eq!(ep.size_range(), 10.0, "F {f}");
+  }
 }

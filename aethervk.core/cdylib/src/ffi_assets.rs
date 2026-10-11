@@ -464,6 +464,162 @@ pub unsafe extern "C" fn avkSimulationContext_getCometAppearance(
   true
 }
 
+// ── Sky image overlay (HUD, Earth-observer panel) ────────────────────────────
+
+/// Facts of a loaded sky image (`avkSimulationContext_loadSkyImage`). `flags` holds a bit per
+/// header fact (`aethervk_core_rlib::scene::sky_image::SKY_FLAG_*`): a field whose bit is clear is
+/// zero and must not be offered (DATE-OBS bit 0, EXPTIME 1, SITELAT 2, SITELONG 3, SITEELEV 4,
+/// SIP ignored 5, PNG / JPEG source 6, WCS from a sidecar 7, frame assumed ICRS 8, TIMESYS assumed
+/// UTC 9).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct CSkyImageInfo {
+  /// `1` = a TAN WCS was read: the image is registered and drawn
+  pub has_wcs: u32,
+  pub nx: u32,
+  pub ny: u32,
+  pub _pad: u32,
+  /// start of the exposure: TDB microseconds since J2000 TDB (the scale `seekEpochSync` takes)
+  pub date_obs_us: i64,
+  pub exptime_s: f64,
+  pub site_lat_deg: f64,
+  /// east positive
+  pub site_lon_deg: f64,
+  pub site_elev_m: f64,
+  /// `CRVAL1/2` (ICRS / FK5 J2000), the "lock to image" aim
+  pub crval_ra_deg: f64,
+  pub crval_dec_deg: f64,
+  pub flags: u32,
+  pub _pad2: u32,
+}
+const _: () = assert!(core::mem::size_of::<CSkyImageInfo>() == 80);
+
+fn sky_image_info(img: &aethervk_core_rlib::scene::sky_image::SkyImage) -> CSkyImageInfo {
+  let m = &img.meta;
+  CSkyImageInfo {
+    has_wcs: img.wcs.is_some() as u32,
+    nx: img.nx,
+    ny: img.ny,
+    _pad: 0,
+    date_obs_us: m.date_obs_tdb_us.unwrap_or(0),
+    exptime_s: m.exptime_s.unwrap_or(0.0),
+    site_lat_deg: m.site_lat_deg.unwrap_or(0.0),
+    site_lon_deg: m.site_lon_deg.unwrap_or(0.0),
+    site_elev_m: m.site_elev_m.unwrap_or(0.0),
+    crval_ra_deg: img.wcs.map(|w| w.crval_deg[0]).unwrap_or(0.0),
+    crval_dec_deg: img.wcs.map(|w| w.crval_deg[1]).unwrap_or(0.0),
+    flags: img.flags,
+    _pad2: 0,
+  }
+}
+
+/// Store key of scene `scene_id` (`None`: no such scene).
+fn sky_image_key(ctx: *mut SimulationContext, scene_id: u64) -> Option<usize> {
+  if ctx.is_null() {
+    return None;
+  }
+  let scene = unsafe { &*ctx }.get_scene(scene_id)?;
+  Some(aethervk_core_rlib::scene::sky_image::scene_key(&scene))
+}
+
+/// Loads a telescope image (FITS, or PNG / JPEG with a WCS sidecar; `sidecar` may be null: a
+/// PNG / JPEG then looks for `<stem>.wcs`) as scene `scene_id`'s sky overlay, replacing any.
+/// Synchronous (decode + percentiles: call it off the UI thread). Returns `false` when the file
+/// cannot be read or decoded (the reason is logged). An image without a usable TAN WCS returns
+/// `true` with `has_wcs = 0` and removes the previous overlay (nothing to register).
+///
+/// # Safety
+/// FFI Contract: `path` (and `sidecar` when not null) are NUL-terminated UTF-8; `out` is valid.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_loadSkyImage(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  path: *const c_char,
+  sidecar: *const c_char,
+  out: *mut CSkyImageInfo,
+) -> bool {
+  use aethervk_core_rlib::scene::sky_image;
+  if path.is_null() || out.is_null() {
+    return false;
+  }
+  let Some(key) = sky_image_key(ctx, scene_id) else {
+    return false;
+  };
+  let Ok(path) = unsafe { CStr::from_ptr(path) }.to_str() else {
+    return false;
+  };
+  let sidecar = if sidecar.is_null() {
+    None
+  } else {
+    match unsafe { CStr::from_ptr(sidecar) }.to_str() {
+      Ok(s) => Some(s),
+      Err(_) => return false,
+    }
+  };
+  let img = match sky_image::SkyImage::load(path, sidecar) {
+    Ok(img) => img,
+    Err(e) => {
+      aethervk_oshal_rlib::log!("[SkyImage] {path}: {e}");
+      return false;
+    }
+  };
+  if let Some(e) = &img.wcs_error {
+    aethervk_oshal_rlib::log!("[SkyImage] {path}: WCS refused: {e}");
+  }
+  if !sky_image::store_insert(key, &img) {
+    sky_image::store_remove(key);
+  }
+  unsafe { out.write(sky_image_info(&img)) };
+  true
+}
+
+/// Display parameters of scene `scene_id`'s sky overlay: `opacity` in `[0, 1]`, `stretch` the
+/// asinh softening (`0` = linear, larger = more of the faint end), `visible` `0` / `1`. `false`
+/// without an overlay.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setSkyImageParams(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  opacity: f32,
+  stretch: f32,
+  visible: u32,
+) -> bool {
+  use aethervk_core_rlib::scene::sky_image;
+  let Some(key) = sky_image_key(ctx, scene_id) else {
+    return false;
+  };
+  sky_image::store_set_params(
+    key,
+    sky_image::SkyImageParams {
+      opacity,
+      stretch,
+      visible: visible != 0,
+    },
+  )
+}
+
+/// Removes scene `scene_id`'s sky overlay (its GPU resources are retired by the next frame).
+/// `false` when there was none.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_removeSkyImage(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+) -> bool {
+  let Some(key) = sky_image_key(ctx, scene_id) else {
+    return false;
+  };
+  aethervk_core_rlib::scene::sky_image::store_remove(key)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -477,6 +633,9 @@ mod tests {
       24
     );
     assert_eq!(core::mem::size_of::<CCometAppearanceDTO>(), 72);
+    assert_eq!(core::mem::size_of::<CSkyImageInfo>(), 80);
+    assert_eq!(core::mem::offset_of!(CSkyImageInfo, date_obs_us), 16);
+    assert_eq!(core::mem::offset_of!(CSkyImageInfo, flags), 72);
     assert_eq!(core::mem::size_of::<CAssetLibraryStatsDTO>(), 24);
     assert_eq!(
       core::mem::size_of::<aethervk_core_rlib::simulation_api::external_state::CAssetImported>(),

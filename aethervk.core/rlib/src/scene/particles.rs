@@ -49,6 +49,21 @@ pub mod v2 {
     /// (`τ · p · Φ(α) / r_h²`) and the Afρ → production conversion
     /// ([`ParticleSystemEmitParams::dust_production_rate_kgs`])
     pub geometric_albedo: f32,
+    /// exponent `q` of the differential size law `n(s) ∝ s^-q` (2 to 5, default 3.5: Fulle 2004
+    /// for 67P-like dust, Agarwal et al. 2010). **Enters the speck counts only**
+    /// (`dust::specks`: grains per size bin and the drawn sizes); the continuum's size polyline
+    /// (equal-cross-section bins equally spaced in `√β`, `size_edge_sqrt_beta`, with the speed
+    /// factors linear in the bin index and `bin_density_ends`) and the mass → cross-section
+    /// conversion (`size_mean_inv_s_um`) are laid out for q = 3.5, the law for which the
+    /// cumulative cross-section `∝ s^(3−q)` is `√β`; another q would redistribute the flux along
+    /// the syndyne (the propagate / splat mirrors), which is not done. 0 or out of range reads
+    /// as 3.5 ([`Self::size_q`]).
+    pub size_q: f32,
+    /// size range factor `F` of the grains: radii `r/F .. r·F` about the configured radius (1 to
+    /// 1000, default 10). Enters everything: the clusters' size polyline (`β/F .. β·F`), the
+    /// mass → cross-section conversion, the Afρ closure and the speck counts. 0 or out of range
+    /// reads as 10 ([`Self::size_range`]).
+    pub size_range: f32,
     /// "Af-rho" photometric parameter. measures comet's dust activity, equal to product of - dust albedo - filling factor - size of viewing area .
     ///
     /// It is dependant on the
@@ -82,6 +97,33 @@ pub mod v2 {
   }
 
   impl ParticleSystemEmitParams {
+    /// the size law exponent in force: [`Self::size_q`] when within 2..=5, else 3.5 (a zeroed or
+    /// pre-v7 record)
+    pub fn size_q(&self) -> f32 {
+      if self.size_q.is_finite() && (2.0..=5.0).contains(&self.size_q) {
+        self.size_q
+      } else {
+        crate::scene::dust::SIZE_POWER_Q as f32
+      }
+    }
+
+    /// the size range factor in force: [`Self::size_range`] when within 1..=1000, else 10
+    pub fn size_range(&self) -> f32 {
+      if self.size_range.is_finite() && (1.0..=1000.0).contains(&self.size_range) {
+        self.size_range
+      } else {
+        crate::scene::dust::SIZE_RANGE_FACTOR as f32
+      }
+    }
+
+    /// the grain size distribution of the parameters (radius range from [`Self::size_range`])
+    pub fn size_distribution(&self) -> crate::scene::dust::SizeDistribution {
+      crate::scene::dust::SizeDistribution::from_diameter_um_range(
+        self.diametre_um,
+        self.size_range() as f64,
+      )
+    }
+
     /// computes the Finson-Probstein model ratio between radiation pressure force and sun
     /// gravitation
     pub fn beta(&self) -> f32 {
@@ -161,7 +203,7 @@ pub mod v2 {
       let afrho_m = clamped_afrho_cm / 100_f32;
       let radius_m = self.diametre_um * 0.5e-6_f32;
       let density_kgm3 = self.density_gcm3 * 1e3_f32;
-      let dist = crate::scene::dust::SizeDistribution::from_diameter_um(self.diametre_um);
+      let dist = self.size_distribution();
       let f_v = dist.mean_speed_factor() as f32;
       let v_ref = self.start_velocity_mean.max(0.0);
       let v_std_rel = if v_ref > 0.0 {
@@ -279,7 +321,7 @@ pub mod v2 {
       crate::scene::dust::DustEmitConfig {
         q_dust_kgs: self.dust_production_rate_kgs(r_helio_au) as f64,
         ttl_s: ttl_us.max(0) as f64 * 1e-6,
-        dist: crate::scene::dust::SizeDistribution::from_diameter_um(self.diametre_um),
+        dist: self.size_distribution(),
         diameter_um: self.diametre_um,
         density_gcm3: self.density_gcm3,
         beta_ref: self.beta(),
