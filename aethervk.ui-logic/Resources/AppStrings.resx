@@ -295,6 +295,12 @@
   <data name="Tabs_Model_GeometricAlbedo" xml:space="preserve">
     <value>Geometric albedo p</value>
   </data>
+  <data name="Tabs_Model_SizeQ" xml:space="preserve">
+    <value>Size law exponent q (specks)</value>
+  </data>
+  <data name="Tabs_Model_SizeRange" xml:space="preserve">
+    <value>Size range factor F</value>
+  </data>
   <data name="Tabs_Model_Beta" xml:space="preserve">
     <value>Beta</value>
   </data>
@@ -409,5 +415,73 @@
   <data name="Status_LoadedFile" xml:space="preserve">
     <value>Loaded model: {Name}</value>
     <comment>NamedFormatter: Name = file/model name string</comment>
+  </data>
+
+  <!--====================== Sky image overlay (Earth-observer panel) =================-->
+  <data name="Panels_SkyImage_Header" xml:space="preserve">
+    <value>Telescope image overlay</value>
+  </data>
+  <data name="Panels_SkyImage_LoadButton" xml:space="preserve">
+    <value>Overlay image…</value>
+  </data>
+  <data name="Panels_SkyImage_LoadTip" xml:space="preserve">
+    <value>Load a FITS image, or a PNG / JPEG with its astrometry.net .wcs sidecar: it is registered on the sky by its WCS</value>
+  </data>
+  <data name="Panels_SkyImage_DialogTitle" xml:space="preserve">
+    <value>Choose a telescope image</value>
+  </data>
+  <data name="Panels_SkyImage_Opacity" xml:space="preserve">
+    <value>Opacity</value>
+  </data>
+  <data name="Panels_SkyImage_Stretch" xml:space="preserve">
+    <value>Stretch (asinh)</value>
+  </data>
+  <data name="Panels_SkyImage_Visible" xml:space="preserve">
+    <value>Show overlay</value>
+  </data>
+  <data name="Panels_SkyImage_SeekButton" xml:space="preserve">
+    <value>Seek to DATE-OBS + EXPTIME/2</value>
+  </data>
+  <data name="Panels_SkyImage_SeekTip" xml:space="preserve">
+    <value>Jumps the simulation to the middle of the exposure</value>
+  </data>
+  <data name="Panels_SkyImage_SiteButton" xml:space="preserve">
+    <value>Use site from header</value>
+  </data>
+  <data name="Panels_SkyImage_SiteTip" xml:space="preserve">
+    <value>Moves the observer to the header's SITELAT / SITELONG</value>
+  </data>
+  <data name="Panels_SkyImage_LockButton" xml:space="preserve">
+    <value>Lock to image</value>
+  </data>
+  <data name="Panels_SkyImage_LockTip" xml:space="preserve">
+    <value>Telescope lock-in aimed at the image centre (CRVAL)</value>
+  </data>
+  <data name="Panels_SkyImage_RemoveButton" xml:space="preserve">
+    <value>Remove overlay</value>
+  </data>
+  <data name="Panels_SkyImage_MissingDate" xml:space="preserve">
+    <value>DATE-OBS / MJD-OBS missing from the header</value>
+  </data>
+  <data name="Panels_SkyImage_MissingSite" xml:space="preserve">
+    <value>SITELAT / SITELONG missing from the header</value>
+  </data>
+  <data name="Panels_SkyImage_MissingWcs" xml:space="preserve">
+    <value>No usable TAN WCS: add the astrometry.net .wcs sidecar next to the image</value>
+  </data>
+  <data name="Panels_SkyImage_StatusFailed" xml:space="preserve">
+    <value>Could not read the image</value>
+  </data>
+  <data name="Panels_SkyImage_StatusLoaded" xml:space="preserve">
+    <value>Loaded</value>
+  </data>
+  <data name="Panels_SkyImage_SipIgnored" xml:space="preserve">
+    <value>SIP distortion ignored: the edges may be off by a few pixels</value>
+  </data>
+  <data name="Panels_SkyImage_SeekFailed" xml:space="preserve">
+    <value>Seek refused: DATE-OBS is outside the simulation's time range</value>
+  </data>
+  <data name="Panels_SkyImage_LockFailed" xml:space="preserve">
+    <value>Switch to the Earth observer view to lock onto the image</value>
   </data>
 </root>

@@ -103,6 +103,32 @@ const float DUST_MERGE_PX             = 1.0;    // dust::DUST_MERGE_PX
 const float DUST_DET_ANISO_FLOOR      = 1e-6;   // dust::DUST_DET_ANISO_FLOOR
 const float DUST_COUNT_MAX_PER_ADD    = 16777216.0;
 const float DUST_SPLAT_MAX_TEXELS     = 16384.0;
+const uint  DUST_PYR_SPLIT_CHILDREN   = 11u;   // children made by the perspective split (atomicAdd; dust::PYR_SPLIT_CHILDREN)
+const uint  DUST_PYR_VOLUME_EVALS    = 245u;  // atomicAdd: ray-integral evaluations of the volumetric packets (dust::PYR_VOLUME_EVALS)
+const uint  DUST_PYR_EWA_TEXELS        = 63u;   // atomicAdd: floor(band / DUST_EWA_TEXEL_UNIT) + 1 per EWA packet (dust::PYR_EWA_TEXELS)
+const float DUST_EWA_TEXEL_UNIT        = 64.0;  // dust::DUST_EWA_TEXEL_UNIT
+const uint  DUST_EWA_FRAME_BUDGET     = 268435456u; // dust::DUST_EWA_FRAME_BUDGET (1 << 28 texels): the host's target for the EWA bias
+const uint  DUST_EWA_BIAS_MAX         = 6u;     // dust::DUST_EWA_BIAS_MAX
+const uint  DUST_FRAME_HARD_FACTOR    = 4u;     // dust::DUST_FRAME_HARD_FACTOR: the in-frame gates at this many budgets
+const uint  DUST_PYR_SPLIT_DROPPED_FLUX = 246u; // f32 bits atomicMax: largest flux dropped behind the eye (dust::PYR_SPLIT_DROPPED_FLUX)
+const uint  DUST_PYR_SPLIT_DEPTH      = 247u;  // host-written: bits 0-7 the split depth limit, bits 8-15 the volume level bias, 16-17 the volume axis, 18-21 the EWA bias (dust::PYR_SPLIT_DEPTH)
+const float DUST_SPLIT_EPS            = 0.1;    // dust::DUST_SPLIT_EPS
+const float DUST_SPLIT_A              = 0.8;    // dust::DUST_SPLIT_A
+const uint  DUST_SPLIT_DEPTH_MAX      = 4u;     // dust::DUST_SPLIT_DEPTH_MAX
+const uint  DUST_SPLIT_BUDGET         = 1048576u; // dust::DUST_SPLIT_BUDGET (1 << 20): the host's target; the in-frame gate at DUST_FRAME_HARD_FACTOR of it
+const float DUST_SPLIT_CLIP_EPS       = 1e-3;   // dust::DUST_SPLIT_CLIP_EPS
+const float DUST_VOLUME_RATIO         = 0.2;    // dust::DUST_VOLUME_RATIO
+const float DUST_VOLUME_SIGMAS        = 3.0;    // dust::DUST_VOLUME_SIGMAS
+const float DUST_VOLUME_TEXELS_PER_SIGMA = 4.0; // dust::DUST_VOLUME_TEXELS_PER_SIGMA
+const uint  DUST_VOLUME_MIN_LEVEL     = 3u;     // dust::DUST_VOLUME_MIN_LEVEL
+const uint  DUST_VOLUME_PIECES_MAX    = 16u;    // dust::DUST_VOLUME_PIECES_MAX
+const float DUST_VOLUME_PIECE_SIGMAS  = 2.0;    // dust::DUST_VOLUME_PIECE_SIGMAS
+const float DUST_VOLUME_PIECE_VAR_CAPPED = 0.3025; // dust::DUST_VOLUME_PIECE_VAR_CAPPED
+const uint  DUST_VOLUME_AXIS_CHORD    = 0u;     // dust::DUST_VOLUME_AXIS_CHORD (bits 16-17 of DUST_PYR_SPLIT_DEPTH)
+const uint  DUST_VOLUME_AXIS_TIME     = 1u;     // dust::DUST_VOLUME_AXIS_TIME
+const uint  DUST_VOLUME_AXIS_GRID     = 2u;     // dust::DUST_VOLUME_AXIS_GRID
+const uint  DUST_VOLUME_MAX_EVALS     = 4096u;  // dust::DUST_VOLUME_MAX_EVALS: texels x pieces per volumetric packet
+const uint  DUST_VOLUME_FRAME_BUDGET  = 67108864u; // dust::DUST_VOLUME_FRAME_BUDGET (1 << 26): the in-frame gate at DUST_FRAME_HARD_FACTOR of it
 const float DUST_AU_M                 = 1.495978707e11;
 
 // ─── df64 primitives (mirror of dust::df) ──────────────────────────────────
@@ -729,6 +755,8 @@ struct DustScreenPacket {
 // the photometry of the cluster being splatted (set per cluster by dust_splat.comp; albedo <= 0:
 // none) and the pyramid that carries the phase table
 float dust_phot_albedo = 0.0;
+// the frame's DUST_PYR_SPLIT_DEPTH word, set by the splat pass (diagnostic bits; 0 elsewhere)
+uint dust_pyr_split_word = 0u;
 vec3  dust_phot_sun = vec3(0.0, 0.0, 1.0);
 float dust_phot_rh = 1.0;
 DustUintBuffer dust_phot_lut;
@@ -751,8 +779,233 @@ vec2 dust_bin_density_ends(float f0, float f1) {
     return vec2(s / (2.0 * f0), s / (2.0 * f1));
 }
 
+// The view direction of `mvp` (dust::view_forward): the depth gradient of the projection, unit;
+// zero for a degenerate matrix. Perspective: the w row as it is (w > 0 in front of the camera,
+// whatever side of it the scene's origin is on); orthographic: the clip-z row, oriented so that
+// the scene's origin lies in front of the eye. The projection and the split use the same direction.
+vec3 dust_view_forward(mat4 mvp, vec3 eyeLocal, out bool perspective) {
+    vec3 r3 = vec3(mvp[0][3], mvp[1][3], mvp[2][3]);
+    vec3 r2 = vec3(mvp[0][2], mvp[1][2], mvp[2][2]);
+    perspective = dot(r3, r3) > 0.0;
+    vec3 fwdRaw = perspective ? r3 : r2;
+    float fn2 = dot(fwdRaw, fwdRaw);
+    vec3 fwd = vec3(0.0);
+    if (fn2 > 0.0) {
+        fwd = fwdRaw / sqrt(fn2);
+        if (!perspective && dot(-eyeLocal, fwd) < 0.0) fwd = -fwd;
+    }
+    return fwd;
+}
+// f^T S f: the packet's variance along the unit direction f (dust::var_along)
+float dust_var_along(float S[6], vec3 f) {
+    return S[0] * f.x * f.x + S[3] * f.y * f.y + S[5] * f.z * f.z
+         + 2.0 * (S[1] * f.x * f.y + S[2] * f.x * f.z + S[4] * f.y * f.z);
+}
+
+// A packet to splat (dust::Packet): start of the segment (local m), covariance, segment, flux,
+// open ends, density at the ends (mean 1, linear between)
+struct DustPacket {
+    vec3  mean;
+    float S[6];
+    vec3  seg;
+    float flux;
+    bool  openStart;
+    bool  openEnd;
+    vec2  rho;
+    vec3  segT;   // the leaf's Gaussianised bounded axis (dust::Packet::seg_t; the EWA ignores it)
+};
+// the sub-chord u0 <= u <= u1 of a chord packet (dust::sub_chord): start moved along the segment,
+// segment and flux scaled by the kept part (linear density: kept length times the mean density
+// there), rho re-interpolated and renormalised to mean 1, the ends as given
+DustPacket dust_sub_chord(DustPacket p, float u0, float u1, bool openStart, bool openEnd) {
+    float ra = p.rho.x + (p.rho.y - p.rho.x) * u0;
+    float rb = p.rho.x + (p.rho.y - p.rho.x) * u1;
+    float rm = max(0.5 * (ra + rb), 1e-6);
+    DustPacket q;
+    q.mean = p.mean + p.seg * u0;
+    q.S = p.S;
+    q.seg = p.seg * (u1 - u0);
+    q.flux = p.flux * (u1 - u0) * rm;
+    q.openStart = openStart;
+    q.openEnd = openEnd;
+    q.rho = vec2(ra / rm, rb / rm);
+    q.segT = p.segT;
+    return q;
+}
+const int DUST_SPLIT_DROP  = 0;
+const int DUST_SPLIT_KEEP  = 1;
+const int DUST_SPLIT_CLIP  = 2;   // a replaces p at the same level
+const int DUST_SPLIT_SPLIT = 3;   // a and b, half the flux each
+const int DUST_SPLIT_VOLUME = 4;  // the eye inside or near it: the exact ray integral (dust_volume_scatter)
+
+// the parameter in [0, 1] of the point of the segment d (from the origin) nearest to q
+// (dust::segment_param)
+float dust_segment_param(vec3 q, vec3 d) {
+    float dd = dot(d, d);
+    return dd > 0.0 ? clamp(dot(q, d) / dd, 0.0, 1.0) : 0.0;
+}
+// whether a packet is drawn by the exact ray integral (dust::is_volumetric; perspective views
+// only): tr S > DUST_VOLUME_RATIO^2 dist^2, dist from the eye to the packet's segment
+bool dust_is_volumetric(DustPacket p, vec3 eye) {
+    vec3 q = eye - p.mean;
+    vec3 r = q - p.seg * dust_segment_param(q, p.seg);
+    float tr = p.S[0] + p.S[3] + p.S[5];
+    return tr > DUST_VOLUME_RATIO * DUST_VOLUME_RATIO * dot(r, r);
+}
+// lower Cholesky factor l00 l10 l20 l11 l21 l22, pivots^2 floored at DUST_DET_ANISO_FLOOR tr S
+// (dust::cholesky3)
+void dust_cholesky3(float S[6], out float L[6]) {
+    precise float fl = DUST_DET_ANISO_FLOOR * max(S[0] + S[3] + S[5], 1e-30);
+    precise float l00 = sqrt(max(S[0], fl));
+    precise float l10 = S[1] / l00;
+    precise float l20 = S[2] / l00;
+    precise float l11 = sqrt(max(S[3] - l10 * l10, fl));
+    precise float l21 = (S[4] - l20 * l10) / l11;
+    precise float l22 = sqrt(max(S[5] - l20 * l20 - l21 * l21, fl));
+    L[0] = l00; L[1] = l10; L[2] = l20; L[3] = l11; L[4] = l21; L[5] = l22;
+}
+// L^-1 x, forward substitution (dust::cholesky_solve3)
+vec3 dust_cholesky_solve3(float L[6], vec3 x) {
+    precise float y0 = x.x / L[0];
+    precise float y1 = (x.y - L[1] * y0) / L[3];
+    precise float y2 = (x.z - L[2] * y0 - L[4] * y1) / L[5];
+    return vec3(y0, y1, y2);
+}
+// pyramid level of a volumetric packet of angular sigma thetaPx (dust::volume_level)
+uint dust_volume_level(float thetaPx, uint levels) {
+    float r = thetaPx / DUST_VOLUME_TEXELS_PER_SIGMA;
+    if (!(r > 1.0)) return 0u;
+    float l = floor(log2(r));
+    return min(uint(max(l, 0.0)), max(levels, 1u) - 1u);
+}
+// the radiance weight of the dust at x seen along the ray u from the eye (dust::volume_weight)
+float dust_volume_weight(vec3 meanRef, vec3 x, vec3 u) {
+    vec3 d = x - meanRef;
+    vec3 rVec = dust_phot_sun * (-dust_phot_rh * DUST_AU_M) + d;
+    float rn = max(sqrt(dot(rVec, rVec)), 1.0);
+    return dust_radiance_weight(dust_phot_lut, dust_phot_albedo, rVec * (-1.0 / rn), -u, rn / DUST_AU_M);
+}
+// One step of the perspective split (dust::split_step; the rules, the proof and the numbers are
+// documented there). depth = (mean - eye).f of the chord's start, sigma_v^2 = f^T S f, span = seg.f:
+// (1) depth + 3 sigma_v + max(0, span) < 0: drop (wholly behind the eye plane);
+// (2) the chord's ends on both sides of the plane: clip to the in-front part less
+//     DUST_SPLIT_CLIP_EPS of it (the kept start strictly in front), the cut end closed;
+// (2b) perspective, the eye inside or near the packet (dust_is_volumetric): drawn by its exact
+//     ray integral (dust_volume_scatter);
+// (3) 3 sigma_v > depth (the ellipsoid crosses the plane) or, in perspective only (the EWA is
+//     exact for an orthographic projection), sigma_v > DUST_SPLIT_EPS depth or
+//     |span| > DUST_SPLIT_EPS depth, below the frame's depth limit depthMax (DUST_PYR_SPLIT_DEPTH):
+//     bisect the chord (inner ends open) when |span| > 3 sigma_v, else slice the Gaussian by
+//     depth: h = DUST_SPLIT_A S f / sigma_v, children N(mean -+ h, S - h h^T), flux / 2 each
+//     (mean and covariance of the mixture are the packet's; S - h h^T is PSD: Schur complement);
+// (4) else keep.
+int dust_split_step(DustPacket p, bool clipped, uint level, uint depthMax, vec3 eye, vec3 fwd, bool perspective, bool force, out DustPacket a, out DustPacket b) {
+    a = p; b = p;
+    if (!(dot(fwd, fwd) > 0.0)) return DUST_SPLIT_KEEP;
+    float depth = dot(p.mean - eye, fwd);
+    float sigmaV = sqrt(max(dust_var_along(p.S, fwd), 0.0));
+    float spanS = dot(p.seg, fwd);
+    float span = abs(spanS);
+    if (depth + 3.0 * sigmaV + max(spanS, 0.0) < 0.0) return DUST_SPLIT_DROP;
+    float d1 = depth + spanS;
+    if (!clipped && span > 0.0 && (depth < 0.0) != (d1 < 0.0)) {
+        float uStar = -depth / spanS;
+        if (depth < 0.0) {
+            float uLo = uStar + DUST_SPLIT_CLIP_EPS * (1.0 - uStar);
+            a = dust_sub_chord(p, uLo, 1.0, false, p.openEnd);
+            return DUST_SPLIT_CLIP;
+        }
+        float uHi = uStar * (1.0 - DUST_SPLIT_CLIP_EPS);
+        a = dust_sub_chord(p, 0.0, uHi, p.openStart, false);
+        return DUST_SPLIT_CLIP;
+    }
+    // (2b) the eye inside or near the packet: the exact ray integral, no split, no EWA
+    if (!force && perspective && dust_is_volumetric(p, eye)) return DUST_SPLIT_VOLUME;
+    bool want = force || 3.0 * sigmaV > depth
+             || (perspective && (sigmaV > DUST_SPLIT_EPS * depth || span > DUST_SPLIT_EPS * depth));
+    if (want && level < min(depthMax, DUST_SPLIT_DEPTH_MAX)) {
+        if (span > 3.0 * sigmaV) {
+            a = dust_sub_chord(p, 0.0, 0.5, p.openStart, true);
+            b = dust_sub_chord(p, 0.5, 1.0, true, p.openEnd);
+            return DUST_SPLIT_SPLIT;
+        }
+        if (sigmaV > 0.0) {
+            float k = DUST_SPLIT_A / sigmaV;
+            vec3 h = vec3((p.S[0] * fwd.x + p.S[1] * fwd.y + p.S[2] * fwd.z) * k,
+                          (p.S[1] * fwd.x + p.S[3] * fwd.y + p.S[4] * fwd.z) * k,
+                          (p.S[2] * fwd.x + p.S[4] * fwd.y + p.S[5] * fwd.z) * k);
+            a.S[0] = p.S[0] - h.x * h.x;
+            a.S[1] = p.S[1] - h.x * h.y;
+            a.S[2] = p.S[2] - h.x * h.z;
+            a.S[3] = p.S[3] - h.y * h.y;
+            a.S[4] = p.S[4] - h.y * h.z;
+            a.S[5] = p.S[5] - h.z * h.z;
+            a.flux = 0.5 * p.flux;
+            // the sliced covariance no longer holds seg_t's 1.21 term (dust::Packet::seg_t)
+            a.segT = vec3(0.0);
+            b.S = a.S;
+            b.flux = a.flux;
+            b.segT = vec3(0.0);
+            a.mean = p.mean - h;
+            b.mean = p.mean + h;
+            return DUST_SPLIT_SPLIT;
+        }
+    }
+    // (4) still too deep for one Jacobian at the depth limit: the exact ray integral (dust::split_step)
+    if (want && !force && perspective) return DUST_SPLIT_VOLUME;
+    return DUST_SPLIT_KEEP;
+}
+
+// The speck shell's hand-over (dust::specks::ShellCut, same arithmetic): the ball of radius dMax
+// (local m) about the eye whose grains the speck pass draws; dMax <= 0 or not finite: none
+const int DUST_SHELL_OUTSIDE   = 0;
+const int DUST_SHELL_INSIDE    = 1;
+const int DUST_SHELL_STRADDLES = 2;
+bool dust_shell_active(float dMax) { return dMax > 0.0 && !isinf(dMax); }
+// wholly inside / outside / straddling, conservatively: the packet's centre (its segment's
+// midpoint), its 3-sigma reach sqrt(tr S) plus half its segment (ShellCut::classify)
+int dust_shell_classify(DustPacket p, vec3 eye, float dMax) {
+    if (!dust_shell_active(dMax)) return DUST_SHELL_OUTSIDE;
+    vec3 centre = p.mean + p.seg * 0.5;
+    vec3 dd = centre - eye;
+    float dist = sqrt(dot(dd, dd));
+    float tr = max(p.S[0] + p.S[3] + p.S[5], 0.0);
+    float reach = 3.0 * sqrt(tr) + 0.5 * sqrt(dot(p.seg, p.seg));
+    if (dist + reach < dMax) return DUST_SHELL_INSIDE;
+    if (dist - reach > dMax) return DUST_SHELL_OUTSIDE;
+    return DUST_SHELL_STRADDLES;
+}
+// the fraction of a straddling packet's mass outside the ball (ShellCut::outside_fraction: the
+// radial erf about the eye times the transverse disc term times kappa, documented there)
+float dust_shell_outside_fraction(DustPacket p, vec3 eye, float dMax) {
+    if (!dust_shell_active(dMax)) return 1.0;
+    vec3 centre = p.mean + p.seg * 0.5;
+    vec3 d = centre - eye;
+    float dist = sqrt(dot(d, d));
+    float c0 = p.S[0] + p.seg.x * p.seg.x / 12.0;
+    float c1 = p.S[1] + p.seg.x * p.seg.y / 12.0;
+    float c2 = p.S[2] + p.seg.x * p.seg.z / 12.0;
+    float c3 = p.S[3] + p.seg.y * p.seg.y / 12.0;
+    float c4 = p.S[4] + p.seg.y * p.seg.z / 12.0;
+    float c5 = p.S[5] + p.seg.z * p.seg.z / 12.0;
+    float tr = max(c0 + c3 + c5, 1e-30);
+    vec3 rh = dist > 0.0 ? d * (1.0 / dist) : vec3(0.0, 0.0, 1.0);
+    float varR = max(c0 * rh.x * rh.x + c3 * rh.y * rh.y + c5 * rh.z * rh.z
+                     + 2.0 * (c1 * rh.x * rh.y + c2 * rh.x * rh.z + c4 * rh.y * rh.z), 0.0);
+    float sigmaR = max(sqrt(varR), 1e-20);
+    float varT = max((tr - varR) * 0.5, 1e-30);
+    float radial = 0.5 * (dust_erf((dMax - dist) / (sigmaR * 1.4142135623730951))
+                        - dust_erf((-dMax - dist) / (sigmaR * 1.4142135623730951)));
+    float eT = exp(-dMax * dMax / (2.0 * varT));
+    float transverse = 1.0 - eT;
+    float kappa = 1.0 - eT / 3.0;
+    return clamp(1.0 - clamp(radial * transverse * kappa, 0.0, 1.0), 0.0, 1.0);
+}
+
 // Projects a packet (mean m, covariance S = xx xy xz yy yz zz m^2, segment d m, flux) with the
-// Jacobian of `mvp` at its mean (dust::project_packet). false: behind the camera or off screen.
+// Jacobian of `mvp` at its chord's midpoint (dust::project_packet). false: the start behind the camera (a
+// guard: dust_split_step drops, clips or slices a packet before it gets here), nothing in front
+// of the eye plane, or off screen.
 bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposure, mat4 mvp,
                          float W, float H, vec3 eyeLocal, bool openStart, bool openEnd, vec2 rho,
                          out DustScreenPacket P) {
@@ -767,8 +1020,19 @@ bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposu
     vec3 r0 = vec3(mvp[0][0], mvp[1][0], mvp[2][0]);
     vec3 r1 = vec3(mvp[0][1], mvp[1][1], mvp[2][1]);
     vec3 r3 = vec3(mvp[0][3], mvp[1][3], mvp[2][3]);
-    vec3 jx = (r0 - ndc.x * r3) * (0.5 * W / clip.w);
-    vec3 jy = (r1 - ndc.y * r3) * (0.5 * H / clip.w);
+    // the Jacobian at the chord's midpoint (the start when the midpoint is not in front of the
+    // eye; dust::project_packet_lit): exact to second order in the chord's depth span
+    // only for a chord whose depth span is within DUST_SPLIT_EPS of its depth (|w_end - w| <= eps w;
+    // a deeper chord keeps the start, dust::project_packet_lit); bit 23 of DUST_PYR_SPLIT_DEPTH
+    // (diagnostics, AETHERVK_DUST_JACOBIAN_AT_START=1): always at the start
+    float wEnd = dot(r3, mean + d) + mvp[3][3];
+    bool shallow = abs(wEnd - clip.w) <= DUST_SPLIT_EPS * clip.w;
+    float jAt = (shallow && ((dust_pyr_split_word >> 23u) & 1u) == 0u) ? 0.5 : 0.0;
+    vec4 clipJ = mvp * vec4(mean + jAt * d, 1.0);
+    if (!(clipJ.w > 0.0)) clipJ = clip;
+    vec2 ndcJ = clipJ.xy / clipJ.w;
+    vec3 jx = (r0 - ndcJ.x * r3) * (0.5 * W / clipJ.w);
+    vec3 jy = (r1 - ndcJ.y * r3) * (0.5 * H / clipJ.w);
     mat3 Sm = mat3(S[0], S[1], S[2],
                    S[1], S[3], S[4],
                    S[2], S[4], S[5]);
@@ -785,19 +1049,9 @@ bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposu
         P.kx = vec3(0.0);
         P.ky = vec3(0.0);
     }
-    // the view direction: the depth gradient of the projection (the w row when perspective, the
-    // clip-z row when orthographic), oriented so that the scene's origin lies in front of the eye
-    bool perspective = dot(r3, r3) > 0.0;
-    vec3 fwd = vec3(0.0);
-    {
-        vec3 r2 = vec3(mvp[0][2], mvp[1][2], mvp[2][2]);
-        vec3 fwdRaw = perspective ? r3 : r2;
-        float fn2 = dot(fwdRaw, fwdRaw);
-        if (fn2 > 0.0) {
-            fwd = fwdRaw / sqrt(fn2);
-            if (dot(-eyeLocal, fwd) < 0.0) fwd = -fwd;
-        }
-    }
+    // the view direction (dust_view_forward: the same one the split uses)
+    bool perspective;
+    vec3 fwd = dust_view_forward(mvp, eyeLocal, perspective);
     // the photometric eye: the eye point when perspective, at infinity along the view axis when
     // orthographic (dust::ScreenPacket::eye_w)
     P.eye = (perspective || dot(fwd, fwd) == 0.0) ? vec4(eyeLocal, 1.0) : vec4(-fwd, 0.0);
@@ -820,14 +1074,13 @@ bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposu
     float detC = max(max(detRaw, DUST_DET_ANISO_FLOOR * lamMax * lamMax), 1e-30);
     P.det = detC;
     P.amp = exposure * flux * sqrt(detG) / (2.0 * DUST_PI_F32 * sqrt(detC));
-    // the part of the packet in front of the eye (dust::project_packet_lit): a Gaussian along the
-    // view direction cut at the eye's plane
+    // the part of the packet in front of the eye (dust::project_packet_lit): its Gaussian along
+    // the view direction, centred on the capsule's middle, cut at the eye's plane (1 for the
+    // split's leaves; it matters for the leaves left straddling the plane)
     {
         if (dot(fwd, fwd) > 0.0) {
-            float depth = dot(mean - eyeLocal, fwd);
-            float varV = S[0] * fwd.x * fwd.x + S[3] * fwd.y * fwd.y + S[5] * fwd.z * fwd.z
-                       + 2.0 * (S[1] * fwd.x * fwd.y + S[2] * fwd.x * fwd.z + S[4] * fwd.y * fwd.z);
-            float sigmaV = sqrt(max(varV, 0.0));
+            float depth = dot(mean + 0.5 * d - eyeLocal, fwd);
+            float sigmaV = sqrt(max(dust_var_along(S, fwd), 0.0));
             if (sigmaV > 0.0) P.amp *= 0.5 * (1.0 + dust_erf(depth / (sigmaV * 1.4142135623730951)));
             else if (depth < 0.0) P.amp = 0.0;
         }
@@ -862,7 +1115,10 @@ float dust_capsule_tau(DustScreenPacket P, vec2 x) {
     float phiEnd = P.openEnd ? 1.0 : 0.5 * (1.0 + dust_erf((1.0 - u0) * sa * 0.70710678));
     float phiStart = P.openStart ? 0.0 : 0.5 * (1.0 + dust_erf(-u0 * sa * 0.70710678));
     float span = phiEnd - phiStart;
-    float q = max(c - b * b / a, 0.0);
+    // the squared distance to the line from the residual e - u0 d, not c - b^2/a (catastrophic
+    // cancellation for a chord whose start is far off screen; dust::capsule_tau)
+    precise vec2 r = e - u0 * d;
+    precise float q = max(m00 * r.x * r.x + 2.0 * m01 * r.x * r.y + m11 * r.y * r.y, 0.0);
     // a linear density along the segment (dust::capsule_tau): the integral of u exp(-a(u-u0)^2/2)
     // over it is u0 I0 + (E_start - E_end)/a with the Gaussian's values at the closed ends
     float i0 = sqrt(2.0 * DUST_PI_F32 / a) * span;
@@ -1099,6 +1355,25 @@ bool dust_band_columns(DustBand B, float yc, float s, uint w, out int x0, out in
     return x0 <= x1;
 }
 
+// The fraction u1 - u0 of the screen segment mu + u seg, u in [0, 1], inside the frame
+// [-ex, w + ex] x [-ey, h + ey] (Liang-Barsky; 0 when it misses it): the drawable length of a
+// chord for the texel estimate of the scatter valve (dust::visible_fraction)
+float dust_visible_fraction(vec2 mu, vec2 seg, float ex, float ey, float w, float h) {
+    float u0 = 0.0, u1 = 1.0;
+    float pk[4] = float[4](-seg.x, seg.x, -seg.y, seg.y);
+    float qk[4] = float[4](mu.x + ex, w + ex - mu.x, mu.y + ey, h + ey - mu.y);
+    for (int k = 0; k < 4; ++k) {
+        if (pk[k] == 0.0) {
+            if (qk[k] < 0.0) return 0.0;
+        } else {
+            float t = qk[k] / pk[k];
+            if (pk[k] < 0.0) u0 = max(u0, t);
+            else u1 = min(u1, t);
+        }
+    }
+    return u1 > u0 ? u1 - u0 : 0.0;
+}
+
 // Pixel position of a local point (w <= 0: behind the camera, returns false)
 bool dust_project_point(vec3 p, mat4 mvp, float W, float H, out vec2 px) {
     vec4 clip = mvp * vec4(p, 1.0);
@@ -1106,8 +1381,14 @@ bool dust_project_point(vec3 p, mat4 mvp, float W, float H, out vec2 px) {
     px = (clip.xy / clip.w * 0.5 + 0.5) * vec2(W, H);
     return true;
 }
-// Whether the size polyline is below DUST_MERGE_PX on screen (dust::polyline_merged): the two end
-// edges and the middle one all within it of the mean
+// clip w of a local point (dust::clip_w): the depth along the view in perspective, 1 orthographic
+float dust_clip_w(vec3 p, mat4 mvp) {
+    return mvp[0][3] * p.x + mvp[1][3] * p.y + mvp[2][3] * p.z + mvp[3][3];
+}
+// Whether the size polyline is one pooled packet (dust::polyline_merged): the two end edges and
+// the middle one within DUST_MERGE_PX of the mean on screen, and (perspective) the 17 edges' depth
+// span below DUST_SPLIT_EPS of the depth at the mean (a syndyne along the line of sight is a
+// point on screen but deep: not a pooled Gaussian)
 bool dust_polyline_merged(DustMoments M, mat4 mvp, float W, float H) {
     vec2 c, p;
     if (!dust_project_point(M.mean_flux.xyz, mvp, W, H, c)) return false;
@@ -1117,7 +1398,19 @@ bool dust_polyline_merged(DustMoments M, mat4 mvp, float W, float H) {
         vec2 d = p - c;
         if (!(dot(d, d) < DUST_MERGE_PX * DUST_MERGE_PX)) return false;
     }
-    return true;
+    float wm = dust_clip_w(M.mean_flux.xyz, mvp);
+    float lo = wm, hi = wm;
+    for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) {
+        float we = dust_clip_w(M.edges[j].xyz, mvp);
+        lo = min(lo, we);
+        hi = max(hi, we);
+    }
+    return hi - lo < DUST_SPLIT_EPS * wm;
+}
+// whether the time segment to the predecessor is shallow enough to pool (dust::time_shallow)
+bool dust_time_shallow(DustMoments M, DustMoments P, mat4 mvp) {
+    float wm = dust_clip_w(M.mean_flux.xyz, mvp), wp = dust_clip_w(P.mean_flux.xyz, mvp);
+    return abs(wp - wm) < DUST_SPLIT_EPS * wm || wp == wm;
 }
 
 // ─── Kepler (universal variables, Laguerre-Conway). Mirror of `dust::kepler` ─

@@ -116,6 +116,8 @@ fn propagate_common_params_leaves_jet_specific_fields_intact() {
   dto.density_gcm3 = 0.8;
   dto.scattering_efficiency = 1.1;
   dto.geometric_albedo = 0.05;
+  dto.size_q = 3.0;
+  dto.size_range = 20.0;
   dto.afrho_0_cm = 800.0;
   dto.afrho_power = 2.2;
   dto.afrho_cutoff_au = 5.5;
@@ -133,6 +135,8 @@ fn propagate_common_params_leaves_jet_specific_fields_intact() {
   sibling.density_gcm3 = dto.density_gcm3;
   sibling.scattering_efficiency = dto.scattering_efficiency;
   sibling.geometric_albedo = dto.geometric_albedo;
+  sibling.size_q = dto.size_q;
+  sibling.size_range = dto.size_range;
   sibling.afrho_0_cm = dto.afrho_0_cm;
   sibling.afrho_power = dto.afrho_power;
   sibling.afrho_cutoff_au = dto.afrho_cutoff_au;
@@ -143,6 +147,8 @@ fn propagate_common_params_leaves_jet_specific_fields_intact() {
   assert_eq!(sibling.density_gcm3, 0.8);
   assert_eq!(sibling.scattering_efficiency, 1.1);
   assert_eq!(sibling.geometric_albedo, 0.05);
+  assert_eq!(sibling.size_q, 3.0);
+  assert_eq!(sibling.size_range, 20.0);
   assert_eq!(sibling.afrho_0_cm, 800.0);
   assert_eq!(sibling.afrho_power, 2.2);
   assert_eq!(sibling.afrho_cutoff_au, 5.5);

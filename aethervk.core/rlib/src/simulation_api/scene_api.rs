@@ -701,8 +701,11 @@ impl SimulationContext {
   /// Sets (or, with `mode = None`, clears) the native Earth observer of `scene_id` and poses the
   /// camera right away (it is re-posed in every commit afterwards, see `earth_observer`).
   /// `look` (xyzw): the Free inertial world look, or the lock-in body-fixed look. The observer
-  /// stands on the Earth surface at geodetic `lat_deg` / `lon_deg` (radius
-  /// [`earth_observer::EARTH_RADIUS_AU`]). Returns false when the scene or an entity is missing.
+  /// stands on the WGS84 ellipsoid at geodetic `lat_deg` / `lon_deg`, `elev_m` metres above it
+  /// ([`crate::simulation_api::astrometry::wgs84_surface_point_bf`]). With a comet, the comet and
+  /// its dust are drawn at the light-time retarded epoch (the comet's velocity is taken from the
+  /// almanac at the scene's current epoch here, then from every commit). Returns false when the
+  /// scene or an entity is missing.
   #[allow(clippy::too_many_arguments)]
   pub fn set_earth_observer(
     &self,
@@ -713,43 +716,73 @@ impl SimulationContext {
     comet: u64,
     lat_deg: f64,
     lon_deg: f64,
+    elev_m: f64,
     look: [f64; 4],
   ) -> bool {
-    use crate::simulation_api::earth_observer::{EARTH_RADIUS_AU, EarthObserverState};
-    let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
-      return false;
+    use crate::simulation_api::earth_observer::{EarthObserverState, clear_light_time_view};
+    let (scene_arc, epoch) = {
+      let scenes = self.scenes.read();
+      let Some(scene_arc) = scenes.get_scene(scene_id) else {
+        return false;
+      };
+      (
+        scene_arc,
+        scenes.time_managers.get(&scene_id).map(|t| t.current_epoch()),
+      )
+    };
+    let comet = (comet != 0).then(|| EntityId::from_ffi(comet));
+    // the comet's heliocentric velocity now (light time until the next commit refreshes it): its
+    // SPK id from the scene, then the almanac, with no scene lock held
+    let comet_naif = comet.and_then(|c| {
+      scene_arc
+        .read()
+        .scene
+        .with_component(c, |p: &crate::scene::AlmanacPlanet| p.naif_id)
+    });
+    let comet_vel_km_s = match (comet_naif, epoch) {
+      (Some(naif), Some(epoch)) => {
+        let frame = crate::simulation::almanac::SUN_ECLIPJ2000;
+        self
+          .logic_state
+          .read()
+          .almanac_data
+          .get_cartesian_state(naif, frame.orientation_id, frame.ephemeris_id, epoch, false)
+          .ok()
+          .map(|s| [s.velocity_km_s[0], s.velocity_km_s[1], s.velocity_km_s[2]])
+      }
+      _ => None,
     };
     let mut guard = scene_arc.write();
     let Some(mode) = mode else {
-      guard.earth_observer = None;
+      if let Some(old) = guard.earth_observer.take() {
+        clear_light_time_view(&guard.scene, old.camera);
+      }
       return true;
     };
     let camera = EntityId::from_ffi(camera);
     let Some(cam) = guard.scene.global_transform_f64(camera) else {
       return false;
     };
-    let (lat, lon) = (lat_deg.to_radians(), lon_deg.to_radians());
-    let mut state = EarthObserverState {
+    if let Some(old) = guard.earth_observer.filter(|o| o.camera != camera) {
+      clear_light_time_view(&guard.scene, old.camera);
+    }
+    let mut state = EarthObserverState::new(
       mode,
       camera,
-      earth: EntityId::from_ffi(earth),
-      comet: (comet != 0).then(|| EntityId::from_ffi(comet)),
-      surface_bf_au: [
-        EARTH_RADIUS_AU * lat.cos() * lon.cos(),
-        EARTH_RADIUS_AU * lat.cos() * lon.sin(),
-        EARTH_RADIUS_AU * lat.sin(),
-      ],
+      EntityId::from_ffi(earth),
+      comet,
       lat_deg,
+      lon_deg,
+      elev_m,
       look,
-      last: [
+      [
         cam.rotation[0],
         cam.rotation[1],
         cam.rotation[2],
         cam.rotation[3],
       ],
-      last_error: 0.0,
-      last_elevation: 0.0,
-    };
+    );
+    state.comet_vel_km_s = comet_vel_km_s;
     if crate::simulation_api::earth_observer::apply(&guard.scene, &mut state).is_none() {
       return false;
     }

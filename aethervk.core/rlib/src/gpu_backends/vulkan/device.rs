@@ -363,6 +363,7 @@ pub(super) mod pipelines;
 pub(super) mod renderpasses;
 pub(super) mod resources;
 pub(super) mod shader_manager;
+pub mod sky_overlay;
 pub(super) mod swapchain;
 pub(super) mod timeline_manager;
 
@@ -378,6 +379,27 @@ pub struct TaskEntry {
 const TASK_STATUS_PENDING: u32 = 0;
 const TASK_STATUS_SUCCESS: u32 = 1;
 const TASK_STATUS_FAILED: u32 = 2;
+
+/// default bound of `start_frame`'s wait for the frame that last used the staging half
+const STAGING_WAIT_DEFAULT_NS: u64 = 10_000_000_000;
+/// `AETHERVK_STAGING_WAIT_MS`, read once (0 = not read yet)
+static STAGING_WAIT_NS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// The bound of the staging wait: `AETHERVK_STAGING_WAIT_MS=<ms>` raises it for slow runs (GPU-AV
+/// makes a frame ~15 s, past the 10 s default, and the frame is skipped)
+fn staging_wait_ns() -> u64 {
+  use core::sync::atomic::Ordering;
+  let cached = STAGING_WAIT_NS.load(Ordering::Relaxed);
+  if cached != 0 {
+    return cached;
+  }
+  let ns = aethervk_oshal_rlib::os::env::var("AETHERVK_STAGING_WAIT_MS")
+    .and_then(|v| v.trim().parse::<u64>().ok())
+    .filter(|&ms| ms > 0)
+    .map_or(STAGING_WAIT_DEFAULT_NS, |ms| ms.saturating_mul(1_000_000));
+  STAGING_WAIT_NS.store(ns, Ordering::Relaxed);
+  ns
+}
 
 pub struct TimelinePollingWorkload {
   timeline_sem_device: ash::khr::timeline_semaphore::Device,
@@ -516,6 +538,8 @@ pub struct DeviceResources {
 
   /// Dust system v3 per-system GPU resources (see [`dust`])
   pub dust_manager: Option<dust::DustManager>,
+  /// Sky image overlay (HUD) resources (see [`sky_overlay`])
+  pub sky_overlay: sky_overlay::SkyOverlayManager,
 
   /// Queue of window-system cleanup tasks that must execute on the main thread.
   /// On macOS, MoltenVK requires `CAMetalLayer` teardown on the main UI thread.
@@ -546,6 +570,7 @@ impl DeviceResources {
     }
 
     let _ = self.dust_manager.take();
+    self.sky_overlay.cleanup(device, &self.allocator.allocator.as_allocator_view());
 
     // BUG FIX (2025-05): The original code called pe_state.value_mut().cleanup(device) HERE
     // in addition to the removal loop at the bottom of this function.  That caused every
@@ -853,6 +878,7 @@ impl DeviceResources {
       ui_render_archetype_arena: None,
       background_render_archetype_arena: None,
       dust_manager: Some(dust_manager),
+      sky_overlay: Default::default(),
       main_thread_cleanup_queue: alloc::sync::Arc::new(spin::Mutex::new(alloc::vec::Vec::new())),
     })
   }
@@ -2993,7 +3019,7 @@ impl RenderDevice for Device {
           // the GPU is two frames behind: wait for the frame that last used our staging half
           // (its copies and device-address reads of the arena) before overwriting it
           if let Some((semaphore, value)) = staging_wait {
-            self.device.wait_for_semaphore_value(semaphore, value, 10_000_000_000)?;
+            self.device.wait_for_semaphore_value(semaphore, value, staging_wait_ns())?;
           }
 
           Ok(())
@@ -5441,118 +5467,134 @@ impl RenderDevice for Device {
 
     // SCOPE 2: Lock briefly to allocate resource memory
     let graphics_queue = self.queues.get_graphics_queue();
-    let (staging_buffer, alloc, command_pool, command_buffer, alloc_info_res) = {
+    let (staging_buffer, mut alloc, alloc_info_res) = {
       let res_guard = DebugTrackedRwLock::read(&self.res);
       let (staging_buffer, alloc) =
         unsafe { res_guard.allocator.allocator.create_buffer(&buffer_info, &alloc_info) }?;
       let alloc_info_res = res_guard.allocator.allocator.get_allocation_info(&alloc);
+      (staging_buffer, alloc, alloc_info_res)
+    }; // <-- Locks dropped again
 
+    // every fallible step after the staging allocation runs in this closure, so the staging
+    // buffer, command pool and fence are released below on the error paths too
+    let mut command_pool: Option<vk::CommandPool> = None;
+    let mut fence: Option<vk::Fence> = None;
+    let mut in_flight = false;
+    let out: GpuResult<()> = (|| {
       let command_pool_info = vk::CommandPoolCreateInfo::default()
         .queue_family_index(graphics_queue.family_index)
         .flags(vk::CommandPoolCreateFlags::TRANSIENT);
-      let command_pool = unsafe { self.device.create_command_pool(&command_pool_info, None) }?;
+      let pool = unsafe { self.device.create_command_pool(&command_pool_info, None) }?;
+      command_pool = Some(pool);
 
       let command_buffer_info = vk::CommandBufferAllocateInfo::default()
-        .command_pool(command_pool)
+        .command_pool(pool)
         .level(vk::CommandBufferLevel::PRIMARY)
         .command_buffer_count(1);
       let command_buffer =
         unsafe { self.device.allocate_command_buffers(&command_buffer_info) }?[0];
 
-      (
-        staging_buffer,
-        alloc,
-        command_pool,
-        command_buffer,
-        alloc_info_res,
-      )
-    }; // <-- Locks dropped again
-
-    let begin_info =
-      vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-    unsafe {
-      self.device.begin_command_buffer(command_buffer, &begin_info)?;
-
-      let image_barrier = vk::ImageMemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-        .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-        .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-        .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-        .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-        .image(image.get())
-        .subresource_range(
-          vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .base_mip_level(0)
-            .level_count(1)
-            .base_array_layer(0)
-            .layer_count(1),
-        );
-      let dep_info =
-        vk::DependencyInfo::default().image_memory_barriers(core::slice::from_ref(&image_barrier));
-      self.device.synchronization2.cmd_pipeline_barrier2(command_buffer, &dep_info);
-
-      let region = vk::BufferImageCopy::default()
-        .image_subresource(
-          vk::ImageSubresourceLayers::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .mip_level(0)
-            .base_array_layer(0)
-            .layer_count(1),
-        )
-        .image_extent(vk::Extent3D {
-          width,
-          height,
-          depth: 1,
-        });
-
-      self.device.cmd_copy_image_to_buffer(
-        command_buffer,
-        image.get(),
-        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-        staging_buffer,
-        &[region],
-      );
-
-      self.device.end_command_buffer(command_buffer)?;
-    }
-
-    let submit_info =
-      vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&command_buffer));
-    let fence = unsafe { self.device.create_fence(&vk::FenceCreateInfo::default(), None)? };
-
-    self
-      .device
-      .locked_queue_submit(graphics_queue.handle, &[submit_info], fence)
-      .map_err(GpuError::from)?;
-
-    oshal::log!("DEBUG RUST: waiting for fences");
-    // BLOCKING WAIT 2 (Safe, locks are dropped)
-    unsafe {
-      self.device.wait_for_fences(&[fence], true, u64::MAX)?;
-      oshal::log!("DEBUG RUST: fences done");
-      self.device.destroy_fence(fence, None);
-      self.device.destroy_command_pool(command_pool, None);
-    };
-
-    // SCOPE 3: Lock briefly to invalidate mapped memory and run cleanup
-    let mapped_ptr = alloc_info_res.mapped_data as *const u8;
-    if !mapped_ptr.is_null() {
-      let res_guard = DebugTrackedRwLock::read(&self.res);
-      res_guard.allocator.allocator.invalidate_allocation(&alloc, 0, vk::WHOLE_SIZE)?;
+      let begin_info =
+        vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
       unsafe {
-        core::ptr::copy_nonoverlapping(mapped_ptr, buffer.as_mut_ptr(), buffer_size as usize);
+        self.device.begin_command_buffer(command_buffer, &begin_info)?;
+
+        let image_barrier = vk::ImageMemoryBarrier2::default()
+          .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+          .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+          .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+          .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+          .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+          .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+          .image(image.get())
+          .subresource_range(
+            vk::ImageSubresourceRange::default()
+              .aspect_mask(vk::ImageAspectFlags::COLOR)
+              .base_mip_level(0)
+              .level_count(1)
+              .base_array_layer(0)
+              .layer_count(1),
+          );
+        let dep_info = vk::DependencyInfo::default()
+          .image_memory_barriers(core::slice::from_ref(&image_barrier));
+        self.device.synchronization2.cmd_pipeline_barrier2(command_buffer, &dep_info);
+
+        let region = vk::BufferImageCopy::default()
+          .image_subresource(
+            vk::ImageSubresourceLayers::default()
+              .aspect_mask(vk::ImageAspectFlags::COLOR)
+              .mip_level(0)
+              .base_array_layer(0)
+              .layer_count(1),
+          )
+          .image_extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+          });
+
+        self.device.cmd_copy_image_to_buffer(
+          command_buffer,
+          image.get(),
+          vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+          staging_buffer,
+          &[region],
+        );
+
+        self.device.end_command_buffer(command_buffer)?;
+      }
+
+      let submit_info =
+        vk::SubmitInfo::default().command_buffers(core::slice::from_ref(&command_buffer));
+      let submit_fence =
+        unsafe { self.device.create_fence(&vk::FenceCreateInfo::default(), None)? };
+      fence = Some(submit_fence);
+
+      self
+        .device
+        .locked_queue_submit(graphics_queue.handle, &[submit_info], submit_fence)
+        .map_err(GpuError::from)?;
+      in_flight = true;
+
+      oshal::log!("DEBUG RUST: waiting for fences");
+      // BLOCKING WAIT 2 (Safe, locks are dropped)
+      unsafe { self.device.wait_for_fences(&[submit_fence], true, u64::MAX)? };
+      in_flight = false;
+      oshal::log!("DEBUG RUST: fences done");
+
+      // SCOPE 3: Lock briefly to invalidate mapped memory
+      let mapped_ptr = alloc_info_res.mapped_data as *const u8;
+      if !mapped_ptr.is_null() {
+        let res_guard = DebugTrackedRwLock::read(&self.res);
+        res_guard.allocator.allocator.invalidate_allocation(&alloc, 0, vk::WHOLE_SIZE)?;
+        unsafe {
+          core::ptr::copy_nonoverlapping(mapped_ptr, buffer.as_mut_ptr(), buffer_size as usize);
+        }
+      }
+      Ok(())
+    })();
+
+    if in_flight {
+      // the copy was submitted and its wait failed: the GPU may still read the command buffer,
+      // write the staging buffer and signal the fence, so they are leaked rather than freed
+      // under it (a use-after-free otherwise)
+      oshal::log!(
+        "download_windowless_image: the copy did not complete; staging buffer ({} bytes), command pool and fence leaked",
+        buffer_size
+      );
+    } else {
+      unsafe {
+        if let Some(f) = fence {
+          self.device.destroy_fence(f, None);
+        }
+        if let Some(p) = command_pool {
+          self.device.destroy_command_pool(p, None);
+        }
+        let res_guard = DebugTrackedRwLock::read(&self.res);
+        res_guard.allocator.allocator.destroy_buffer(staging_buffer, &mut alloc);
       }
     }
-
-    unsafe {
-      let mut mut_alloc = alloc;
-      let res_guard = DebugTrackedRwLock::read(&self.res);
-      res_guard.allocator.allocator.destroy_buffer(staging_buffer, &mut mut_alloc);
-    }
-
-    Ok(())
+    out
   }
 
   #[named]
@@ -9265,5 +9307,7 @@ mod test_commands;
 mod test_dust;
 #[cfg(test)]
 mod test_pipelines;
+#[cfg(test)]
+mod test_specks;
 #[cfg(test)]
 mod test_texture_upload;

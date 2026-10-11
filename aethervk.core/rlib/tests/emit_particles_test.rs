@@ -23,6 +23,8 @@ fn default_params() -> ParticleSystemEmitParams {
   params.afrho_max_value_cm = 100_000.0;
   params.scattering_efficiency = 1.0;
   params.geometric_albedo = 0.04;
+  params.size_q = 3.5;
+  params.size_range = 10.0;
   params
 }
 

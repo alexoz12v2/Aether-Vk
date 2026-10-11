@@ -354,6 +354,8 @@ public partial class ModelTabViewModel
     DensityGCm3:         s.DensityGCm3,
     ScatteringEfficiency: s.ScatteringEfficiency,
     GeometricAlbedo:     s.GeometricAlbedo,
+    SizeQ:               s.SizeQ,
+    SizeRange:           s.SizeRange,
     Afrho0Cm:            s.Afrho0Cm,
     AfrhoPower:          s.AfrhoPower,
     AfrhoCutoffAu:       s.AfrhoCutoffAu,

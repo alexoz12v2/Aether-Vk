@@ -214,6 +214,14 @@ pub fn hash_path(path: &str) -> u64 {
   hasher.finish()
 }
 
+/// Texel format of the pixels `png_decoder::decode` returns for a PNG of colour type
+/// `_color_type`: the decoder expands every colour type (grey, grey + alpha, RGB, palette) to
+/// `[u8; 4]` RGBA, so the data is always RGBA8. (Tagging non-RGBA PNGs `R8_UNORM` made the byte
+/// size a quarter of the data and the upload read a grey image as RGBA rows.)
+pub fn png_texel_format(_color_type: png_decoder::ColorType) -> TexelFormat {
+  TexelFormat::R8G8B8A8_UNORM
+}
+
 pub trait TexelFormatExt {
   fn to_u32(&self) -> u32;
   fn from_u32(val: u32) -> Self;
@@ -427,11 +435,7 @@ impl TextureCache {
       "png" => {
         let (header, image_data) = png_decoder::decode(file_data).map_err(|_| "PNG Decode")?;
         (
-          if header.color_type == png_decoder::ColorType::RgbAlpha {
-            TexelFormat::R8G8B8A8_UNORM
-          } else {
-            TexelFormat::R8_UNORM
-          },
+          png_texel_format(header.color_type),
           header.width,
           header.height,
           image_data.into_flattened(),

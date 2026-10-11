@@ -525,6 +525,59 @@
                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                       </StackPanel>
                     </Border>
+
+                    <!-- ── Telescope image overlay (HUD, WP5) ───────────────── -->
+                    <StackPanel Spacing="8"
+                                IsVisible="{Binding SkyImage, Converter={x:Static ObjectConverters.IsNotNull}}">
+                      <Separator />
+                      <TextBlock Text="{Binding SkyImage.StrHeader}" FontWeight="SemiBold" />
+                      <Grid ColumnDefinitions="*,6,Auto">
+                        <Button Grid.Column="0" Content="{Binding SkyImage.StrLoadButton}"
+                                Command="{Binding SkyImage.LoadImageCommand}"
+                                ToolTip.Tip="{Binding SkyImage.StrLoadTip}"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <Button Grid.Column="2" Content="{Binding SkyImage.StrRemoveButton}"
+                                Command="{Binding SkyImage.RemoveImageCommand}" />
+                      </Grid>
+                      <TextBlock Text="{Binding SkyImage.ImageName}" TextWrapping="Wrap"
+                                 IsVisible="{Binding SkyImage.HasImage}" />
+                      <TextBlock Text="{Binding SkyImage.StatusMessage}" TextWrapping="Wrap" Opacity="0.8"
+                                 IsVisible="{Binding SkyImage.StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                      <StackPanel Spacing="8" IsVisible="{Binding SkyImage.HasImage}">
+                        <CheckBox Content="{Binding SkyImage.StrVisible}"
+                                  IsChecked="{Binding SkyImage.IsOverlayVisible}" />
+                        <Grid ColumnDefinitions="Auto,16,*">
+                          <TextBlock Grid.Column="0" Text="{Binding SkyImage.StrOpacity}" VerticalAlignment="Center" />
+                          <Slider Grid.Column="2" Minimum="0" Maximum="1" SmallChange="0.05" LargeChange="0.1"
+                                  Value="{Binding SkyImage.Opacity}" />
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,16,*">
+                          <TextBlock Grid.Column="0" Text="{Binding SkyImage.StrStretch}" VerticalAlignment="Center" />
+                          <Slider Grid.Column="2" Minimum="0" Maximum="100" SmallChange="1" LargeChange="10"
+                                  Value="{Binding SkyImage.Stretch}" />
+                        </Grid>
+                        <Button Content="{Binding SkyImage.StrSeekButton}"
+                                Command="{Binding SkyImage.SeekToDateObsCommand}"
+                                ToolTip.Tip="{Binding SkyImage.SeekToolTip}" ToolTip.ShowOnDisabled="True"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <Button Content="{Binding SkyImage.StrSiteButton}"
+                                Command="{Binding SkyImage.UseSiteFromHeaderCommand}"
+                                ToolTip.Tip="{Binding SkyImage.SiteToolTip}" ToolTip.ShowOnDisabled="True"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <Button Content="{Binding SkyImage.StrLockButton}"
+                                Command="{Binding SkyImage.LockToImageCommand}"
+                                ToolTip.Tip="{Binding SkyImage.LockToolTip}" ToolTip.ShowOnDisabled="True"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <!-- breadcrumb: the header facts the offers need and the image lacks -->
+                        <Border IsVisible="{Binding SkyImage.HasMissingHeader}"
+                                Background="{DynamicResource Accent.Subtle}"
+                                BorderBrush="{DynamicResource Accent.Primary}"
+                                BorderThickness="1" CornerRadius="4" Padding="8">
+                          <TextBlock Text="{Binding SkyImage.MissingHeaderMessage}" TextWrapping="Wrap" />
+                        </Border>
+                      </StackPanel>
+                    </StackPanel>
                   </StackPanel>
 
                 </StackPanel>

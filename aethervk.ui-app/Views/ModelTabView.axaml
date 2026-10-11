@@ -513,7 +513,7 @@
             </Border>
 
             <Grid ColumnDefinitions="*,12,1.6*"
-                  RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                  RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                   Margin="12,8,12,12">
 
               <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrDustDensity}" />
@@ -547,6 +547,20 @@
               <TextBox Grid.Row="10" Grid.Column="2">
                 <i:Interaction.Behaviors>
                   <b:NumericTextBoxBehavior Value="{Binding CurrentSession.GeometricAlbedo}" Minimum="0.01" Maximum="0.5" />
+                </i:Interaction.Behaviors>
+              </TextBox>
+
+              <TextBlock Grid.Row="12" Grid.Column="0" Text="{Binding StrSizeQ}" />
+              <TextBox Grid.Row="12" Grid.Column="2">
+                <i:Interaction.Behaviors>
+                  <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeQ}" Minimum="2" Maximum="5" />
+                </i:Interaction.Behaviors>
+              </TextBox>
+
+              <TextBlock Grid.Row="14" Grid.Column="0" Text="{Binding StrSizeRange}" />
+              <TextBox Grid.Row="14" Grid.Column="2">
+                <i:Interaction.Behaviors>
+                  <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeRange}" Minimum="1" Maximum="1000" />
                 </i:Interaction.Behaviors>
               </TextBox>
 

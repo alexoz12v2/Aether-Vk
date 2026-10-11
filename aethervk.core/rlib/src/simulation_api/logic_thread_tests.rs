@@ -1866,13 +1866,7 @@ fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
       let g = g.read();
       let e = g.scene.global_transform_f64(earth).unwrap();
       let er = [e.rotation[0], e.rotation[1], e.rotation[2], e.rotation[3]];
-      let (lat, lon) = (lat_deg.to_radians(), lon_deg.to_radians());
-      let r = crate::simulation_api::earth_observer::EARTH_RADIUS_AU;
-      let surf = [
-        r * lat.cos() * lon.cos(),
-        r * lat.cos() * lon.sin(),
-        r * lat.sin(),
-      ];
+      let surf = crate::simulation_api::astrometry::wgs84_surface_point_bf(lat_deg, lon_deg, 0.0);
       let ep: [f64; 3] = e.position.into();
       let sw = crate::simulation_api::earth_observer::rotate(
         crate::simulation_api::earth_observer::qnormalize(er),
@@ -1901,6 +1895,7 @@ fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
         0,
         lat_deg,
         lon_deg,
+        0.0,
         look
       ),
       "{mode:?}: native observer refused"
@@ -1918,6 +1913,7 @@ fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
     0,
     lat_deg,
     lon_deg,
+    0.0,
     [0.0, 0.0, 0.0, 1.0]
   ));
   assert!(ctx.start_simulation(scene_id, SimSpeed::OneHourPerSec));
@@ -2185,6 +2181,8 @@ fn test_jet_ignition_bounds_dust_age_across_seeks() {
         density_gcm3: 0.533,
         scattering_efficiency: 1.0,
         geometric_albedo: 0.04,
+        size_q: 3.5,
+        size_range: 10.0,
         afrho_0_cm: 100.0,
         afrho_power: 2.0,
         afrho_cutoff_au: 15.0,
@@ -2415,6 +2413,8 @@ fn test_jet_without_rotation_model_emits_and_settles() {
         density_gcm3: 0.533,
         scattering_efficiency: 1.0,
         geometric_albedo: 0.04,
+        size_q: 3.5,
+        size_range: 10.0,
         afrho_0_cm: 100.0,
         afrho_power: 2.0,
         afrho_cutoff_au: 15.0,
@@ -2495,4 +2495,166 @@ fn test_jet_without_rotation_model_emits_and_settles() {
     assert!(batches > 0);
   }
   ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}
+
+/// Network-gated (the 67P SPK comes from Horizons, like `test_reosculated_67p_reference_tracks_spk`):
+/// the engine's topocentric **astrometric** RA/Dec of 67P (light time on, no aberration, ICRF axes
+/// = `ecliptic_to_equatorial_j2000` of the world frame) for an observer at geodetic 45° N, 0° E,
+/// 0 m on WGS84 matches JPL Horizons within 1″ at three epochs of 2025-10. Built from the engine's
+/// own pieces: the almanac's Earth (de442) and comet (SPK) positions, the Earth's committed ITRF93
+/// rotation (`AlmanacPlanet::rotation_at`, f32 like the app), `earth_observer::observer_position`
+/// on `astrometry::wgs84_surface_point_bf`, `astrometry::topocentric_astrometric`; and the render
+/// path's two-body light-time displacement (`earth_observer::comet_light_time`) is checked too.
+/// Without light time the error is the comet's transverse motion over Δ/c (≈ 50 min at 6.1 AU,
+/// ~7 km/s heliocentric near aphelion): printed, expected a few arcseconds.
+///
+/// Fixture, fetched once (2026-10-10) with:
+/// `https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='90000703;'&OBJ_DATA='NO'&
+/// MAKE_EPHEM='YES'&EPHEM_TYPE='OBSERVER'&CENTER='coord@399'&COORD_TYPE='GEODETIC'&
+/// SITE_COORD='0,45,0'&TLIST_TYPE='JD'&TIME_TYPE='UT'&TLIST='2460953.5''2460963.5''2460973.5'&
+/// QUANTITIES='1,20'&CSV_FORMAT='YES'&ANG_FORMAT='DEG'&EXTRA_PREC='YES'` (URL-encoded in
+/// `HORIZONS_QUERY`). Response header: target 67P/Churyumov-Gerasimenko {source: JPL#K284/1},
+/// center geodetic 0.0, 45.0, 0.0 (E-lon, lat, alt km), center pole/equ ITRF93, center radii
+/// 6378.137, 6378.137, 6356.752 km, EOP eop.261009.p270105; columns "Date (UT), , , R.A. (ICRF),
+/// DEC (ICRF), delta (au), deldot (km/s)", "Astrometric right ascension and declination ...
+/// Compensated for down-leg light-time delay aberration":
+/// ```text
+///  2025-Oct-05 00:00:00.000, ,m, 239.212494656, -22.397018588,  6.09647697394479, 18.9953114,
+///  2025-Oct-15 00:00:00.000, ,m, 240.831623116, -22.686385440,  6.19656839318032, 16.0006300,
+///  2025-Oct-25 00:00:00.000, , , 242.601085529, -22.991292158,  6.27838268597518, 12.6008355,
+/// ```
+#[test]
+fn comet_67p_topocentric_ra_dec_matches_horizons() {
+  use crate::simulation_api::{astrometry, earth_observer};
+  use aethervk_oshal_rlib::math::vector::{Vector3, vec4f64::Quat64};
+  #[allow(dead_code)]
+  const HORIZONS_QUERY: &str = "https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND=%2790000703%3B%27&OBJ_DATA=%27NO%27&MAKE_EPHEM=%27YES%27&EPHEM_TYPE=%27OBSERVER%27&CENTER=%27coord%40399%27&COORD_TYPE=%27GEODETIC%27&SITE_COORD=%270%2C45%2C0%27&TLIST_TYPE=%27JD%27&TIME_TYPE=%27UT%27&TLIST=%272460953.5%272460963.5%272460973.5%27&QUANTITIES=%271%2C20%27&CSV_FORMAT=%27YES%27&ANG_FORMAT=%27DEG%27&EXTRA_PREC=%27YES%27";
+  // (UTC y, m, d), RA°, Dec°, delta (au)
+  const FIXTURE: [((i32, u8, u8), f64, f64, f64); 3] = [
+    (
+      (2025, 10, 5),
+      239.212494656,
+      -22.397018588,
+      6.09647697394479,
+    ),
+    (
+      (2025, 10, 15),
+      240.831623116,
+      -22.686385440,
+      6.19656839318032,
+    ),
+    (
+      (2025, 10, 25),
+      242.601085529,
+      -22.991292158,
+      6.27838268597518,
+    ),
+  ];
+  let (lat_deg, lon_deg, elev_m) = (45.0, 0.0, 0.0);
+
+  let Some(spk) = fetch_67p_spk("1000012_astrometry.bsp") else {
+    println!("Skipping: Horizons unreachable");
+    return;
+  };
+  let mut almanac = load_planet_almanac();
+  almanac.load_almanac(spk.to_str().unwrap()).expect("load 67P SPK");
+  let naif_id = almanac
+    .almanac
+    .spk_domains()
+    .ok()
+    .and_then(|d| d.into_iter().map(|(id, _)| id).find(|&id| id != 0 && !(1..=999).contains(&id)))
+    .expect("small-body segment in the SPK");
+  let comet = AlmanacPlanet { naif_id };
+  let earth = AlmanacPlanet { naif_id: 399 };
+  let au = astrometry::AU_KM;
+  let v3 = |v: aethervk_oshal_rlib::math::vector::vec3f64::DVec3| [v.x(), v.y(), v.z()];
+  let sep_arcsec = |a: [f64; 3], b: [f64; 3]| {
+    let c = [
+      a[1] * b[2] - a[2] * b[1],
+      a[2] * b[0] - a[0] * b[2],
+      a[0] * b[1] - a[1] * b[0],
+    ];
+    let (n, d) = (
+      (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt(),
+      a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+    );
+    n.atan2(d) / astrometry::ARCSEC_RAD
+  };
+  let site_bf = astrometry::wgs84_surface_point_bf(lat_deg, lon_deg, elev_m);
+
+  let mut worst = 0.0f64;
+  let mut worst_render = 0.0f64;
+  for ((y, m, d), ra_h, dec_h, delta_h) in FIXTURE {
+    let t = Epoch::from_gregorian_utc(y, m, d, 0, 0, 0, 0);
+    let (earth_km, _, earth_rot) = earth.step_with_velocity(t, &almanac, None).unwrap();
+    let q = Quat64::from_quat(earth_rot);
+    let earth_rot = earth_observer::qnormalize([q[0], q[1], q[2], q[3]]);
+    let earth_au = v3(earth_km).map(|c| c / au);
+    let obs_au = earth_observer::observer_position(earth_au, earth_rot, site_bf);
+    let obs_km = obs_au.map(|c| c * au);
+    let comet_km_at = |dt: f64| {
+      v3(
+        comet
+          .step_with_velocity(t + Duration::from_seconds(dt), &almanac, None)
+          .unwrap()
+          .0,
+      )
+    };
+    let horizons = astrometry::dir_of_ra_dec(ra_h.to_radians(), dec_h.to_radians());
+
+    // light time on (the guarantee)
+    let (dir, t_r, dist_km) = astrometry::topocentric_astrometric(obs_km, 0.0, comet_km_at);
+    let (ra, dec) = astrometry::ra_dec_of(astrometry::ecliptic_to_equatorial_j2000(dir));
+    let err = sep_arcsec(astrometry::dir_of_ra_dec(ra, dec), horizons);
+    // light time off (geometric), for the record
+    let g = comet_km_at(0.0);
+    let geo = [g[0] - obs_km[0], g[1] - obs_km[1], g[2] - obs_km[2]];
+    let err_geo = sep_arcsec(astrometry::ecliptic_to_equatorial_j2000(geo), horizons);
+    // the render path: two-body displacement from the comet's velocity at t
+    let (_, v_km_s, _) = comet.step_with_velocity(t, &almanac, None).unwrap();
+    let lt = earth_observer::comet_light_time(obs_au, g.map(|c| c / au), v3(v_km_s));
+    let seen = [
+      g[0] / au + lt.offset_au[0] - obs_au[0],
+      g[1] / au + lt.offset_au[1] - obs_au[1],
+      g[2] / au + lt.offset_au[2] - obs_au[2],
+    ];
+    let err_render = sep_arcsec(astrometry::ecliptic_to_equatorial_j2000(seen), horizons);
+    let spk_retarded = comet_km_at(t_r);
+    let render_vs_spk_km = ((0..3)
+      .map(|i| (g[i] + lt.offset_au[i] * au - spk_retarded[i]).powi(2))
+      .sum::<f64>())
+    .sqrt();
+    println!(
+      "{y}-{m:02}-{d:02}: RA {:.9}° Dec {:.9}° (Horizons {ra_h} {dec_h}) err {err:.4}″ | no light \
+       time {err_geo:.3}″ | render path {err_render:.4}″ ({render_vs_spk_km:.3} km from the SPK \
+       x(t_r)) | Δ {:.9} au (Horizons {delta_h}), delay {:.3} s vs render {:.3} s",
+      ra.to_degrees(),
+      dec.to_degrees(),
+      dist_km / au,
+      -t_r,
+      lt.delay_s
+    );
+    assert!(
+      (dist_km / au - delta_h).abs() < 1e-6,
+      "range {} au vs Horizons {delta_h}",
+      dist_km / au
+    );
+    assert!(
+      err_geo > err,
+      "light time must reduce the error ({err_geo}″ without it, {err}″ with it)"
+    );
+    assert!((lt.delay_s + t_r).abs() < 1e-3, "render delay vs SPK delay");
+    assert!(
+      render_vs_spk_km < 1.0,
+      "render displacement off the SPK by {render_vs_spk_km} km"
+    );
+    worst = worst.max(err);
+    worst_render = worst_render.max(err_render);
+  }
+  println!("worst astrometric error {worst:.4}″, render path {worst_render:.4}″");
+  assert!(worst < 1.0, "astrometric RA/Dec off Horizons by {worst}″");
+  assert!(
+    worst_render < 1.0,
+    "render-path RA/Dec off Horizons by {worst_render}″"
+  );
 }

@@ -11,12 +11,31 @@
 //! `StripRoll`, `EarthObserverOrient`, `EarthObserverLookAt`, `IsBelowHorizon`). Engine camera
 //! convention: forward = local −Y, basis columns (right, backward, up). Positions are world (root)
 //! AU, heliocentric ecliptic.
+//!
+//! **Site.** The observer stands at a geodetic latitude / longitude / height on the WGS84 ellipsoid
+//! ([`super::astrometry::wgs84_surface_point_bf`], Earth body-fixed = ITRF93, the frame of the
+//! Earth rotation the almanac commits); the horizon is the ellipsoid's tangent plane (geodetic
+//! zenith, [`EarthObserverState::zenith_bf`]).
+//!
+//! **Light time.** With a comet set, every pose also computes where the telescope *sees* the
+//! comet: at the retarded epoch `t_r = t − Δ/c` ([`comet_light_time`], Δ topocentric, two
+//! iterations of [`super::astrometry::retarded_epoch`]). Tracking aims at that astrometric
+//! position, and the pose leaves a [`LightTimeViewComponent`] on the camera for the renderer: the
+//! comet's micro layer is drawn displaced by `x(t_r) − x(t)` and its dust is evaluated at
+//! `t − delay` (`gpu::scene_conversion`). The committed comet transform and the simulation clock
+//! are untouched (planets and the Sun stay geometric). The displacement is a two-body back
+//! propagation of the committed comet over the delay from its heliocentric velocity
+//! ([`EarthObserverState::comet_vel_km_s`], refreshed from the SPK state at every commit and on
+//! `set_earth_observer`): < 1 m from the SPK over an hour. The nucleus' spin is not retarded (it
+//! is ≪ 1 px from the Earth). No aberration (see `astrometry`'s module doc).
 use crate::scene::{EntityId, Scene};
 use aethervk_oshal_rlib::math::vector::{vec3f64::Vec3f64, vec4f64::Quat64};
 
 type V3 = [f64; 3];
 
-/// observer's distance from the Earth's centre (AU), mirror of C# `CameraService.EarthRadiusAu`
+/// mean Earth radius (AU), mirror of C# `CameraService.EarthRadiusAu` (the UI's spherical pose).
+/// The native observer stands on the WGS84 ellipsoid instead
+/// ([`EarthObserverState::surface_radius_au`]).
 pub const EARTH_RADIUS_AU: f64 = 4.26e-5;
 type Q = [f64; 4]; // x, y, z, w
 
@@ -64,9 +83,16 @@ pub struct EarthObserverState {
   pub earth: EntityId,
   /// comet body (comet submodes); the Sun is the origin
   pub comet: Option<EntityId>,
-  /// surface point in the Earth body-fixed frame (AU)
+  /// surface point in the Earth body-fixed frame (AU): WGS84 at `lat_deg`, `lon_deg`, `elev_m`
   pub surface_bf_au: V3,
+  /// geodetic latitude (deg)
   pub lat_deg: f64,
+  /// longitude (deg, east positive)
+  pub lon_deg: f64,
+  /// height above the WGS84 ellipsoid (m)
+  pub elev_m: f64,
+  /// unit geodetic zenith (ellipsoid normal), Earth body-fixed: the horizon plane
+  pub zenith_bf: V3,
   /// Free: inertial world look rotation; lock-in: body-fixed look (world = earth_rot · look)
   pub look: Q,
   /// last applied rotation (kept when the target is straight below, at the nadir)
@@ -75,6 +101,119 @@ pub struct EarthObserverState {
   /// below the horizon when tracking faces the horizon) and the target elevation (rad)
   pub last_error: f64,
   pub last_elevation: f64,
+  /// heliocentric velocity of the comet (km/s, world axes) at the last commit: the light-time
+  /// displacement's input (`None`: no light time, the comet is drawn geometric)
+  pub comet_vel_km_s: Option<V3>,
+  /// light time of the last pose (`None` without a comet or its velocity)
+  pub light_time: Option<LightTime>,
+}
+
+impl EarthObserverState {
+  /// An observer at geodetic `lat_deg` / `lon_deg` / `elev_m` (WGS84). `last`: the camera's
+  /// current rotation (held while a target is unknown).
+  #[allow(clippy::too_many_arguments)]
+  pub fn new(
+    mode: EarthObserverMode,
+    camera: EntityId,
+    earth: EntityId,
+    comet: Option<EntityId>,
+    lat_deg: f64,
+    lon_deg: f64,
+    elev_m: f64,
+    look: Q,
+    last: Q,
+  ) -> Self {
+    Self {
+      mode,
+      camera,
+      earth,
+      comet,
+      surface_bf_au: super::astrometry::wgs84_surface_point_bf(lat_deg, lon_deg, elev_m),
+      lat_deg,
+      lon_deg,
+      elev_m,
+      zenith_bf: super::astrometry::wgs84_zenith_bf(lat_deg, lon_deg),
+      look,
+      last,
+      last_error: 0.0,
+      last_elevation: 0.0,
+      comet_vel_km_s: None,
+      light_time: None,
+    }
+  }
+
+  /// distance of the site from the Earth's centre (AU): the invariant `|camera − earth|`
+  pub fn surface_radius_au(&self) -> f64 {
+    dot(self.surface_bf_au, self.surface_bf_au).sqrt()
+  }
+
+  /// Takes the comet's heliocentric velocity from the SPK state the logic thread just stepped
+  /// (`CartesianStateComet::helio_state_km`), when the comet is in the cache.
+  pub fn refresh_comet_velocity(
+    &mut self,
+    scene_id: u64,
+    cache: &dashmap::DashMap<
+      crate::simulation_api::structs::SceneEntityId,
+      crate::simulation_api::structs::CartesianState,
+    >,
+  ) {
+    let Some(comet) = self.comet else {
+      return;
+    };
+    let state = cache
+      .get(&crate::simulation_api::structs::SceneEntityId::new(
+        scene_id, comet,
+      ))
+      .and_then(|c| c.comet_state.as_ref().and_then(|b| b.helio_state_km));
+    if let Some((_, v)) = state {
+      self.comet_vel_km_s = Some(v.into());
+    }
+  }
+}
+
+/// Light time of the comet seen by the observer (see the module doc).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct LightTime {
+  /// `t − t_r` (s)
+  pub delay_s: f64,
+  /// `x(t_r) − x(t)`: where the comet is seen minus where it is (world AU)
+  pub offset_au: V3,
+}
+
+/// Light time of a comet at `comet_au` (world, heliocentric AU) moving at `comet_vel_km_s`, seen
+/// from `observer_au` at the same instant: `t_r` from two iterations of
+/// [`super::astrometry::retarded_epoch`] on the comet's two-body path
+/// ([`super::astrometry::two_body_propagate`]).
+pub fn comet_light_time(observer_au: V3, comet_au: V3, comet_vel_km_s: V3) -> LightTime {
+  use super::astrometry::{AU_KM, retarded_epoch, two_body_propagate};
+  let (r_km, o_km) = (scale(comet_au, AU_KM), scale(observer_au, AU_KM));
+  let at = |dt: f64| two_body_propagate(r_km, comet_vel_km_s, dt).0;
+  let t_r = retarded_epoch(0.0, |dt| {
+    let d = sub(at(dt), o_km);
+    dot(d, d).sqrt()
+  });
+  LightTime {
+    delay_s: -t_r,
+    offset_au: scale(sub(at(t_r), r_km), 1.0 / AU_KM),
+  }
+}
+
+/// Left on the Earth observer's camera by every pose with a light time ([`apply`]); read by the
+/// renderer (`gpu::scene_conversion`): the comet's micro layer is drawn at `x + offset_au` and its
+/// dust is evaluated at the snapshot time minus `delay_s`. Removed when the observer is cleared.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LightTimeViewComponent {
+  /// the comet body whose micro layer is displaced
+  pub comet: EntityId,
+  pub delay_s: f64,
+  pub offset_au: V3,
+}
+
+impl crate::scene::Component for LightTimeViewComponent {}
+
+/// Removes the light-time view from `camera` (observer cleared or moved to another camera).
+pub fn clear_light_time_view(scene: &Scene, camera: EntityId) {
+  let _ = scene.remove_component::<LightTimeViewComponent>(camera);
 }
 
 // ─── vector / quaternion helpers (f64) ──────────────────────────────────────
@@ -202,13 +341,18 @@ pub fn below_horizon(direction: V3, zenith: V3) -> bool {
   dot(direction, zenith) < 0.0
 }
 
+/// World position (AU) of the site `surface_bf_au` (Earth body-fixed) on an Earth at `earth_pos`
+/// turned by `earth_rot` (body-fixed → world): the camera position of [`pose`].
+pub fn observer_position(earth_pos: V3, earth_rot: Q, surface_bf_au: V3) -> V3 {
+  add(earth_pos, rotate(earth_rot, surface_bf_au))
+}
+
 /// Camera pose for the observer: `(world position, world rotation)`, from the Earth's world
 /// position / rotation and the target's world position (`None`: no target known). Mirrors
-/// `CameraService.SnapCameraToEarth`.
+/// `CameraService.SnapCameraToEarth`, with the geodetic zenith.
 pub fn pose(s: &EarthObserverState, earth_pos: V3, earth_rot: Q, target: Option<V3>) -> (V3, Q) {
-  let surface_world = rotate(earth_rot, s.surface_bf_au);
-  let zenith = normalize(surface_world);
-  let cam_pos = add(earth_pos, surface_world);
+  let zenith = normalize(rotate(earth_rot, s.zenith_bf));
+  let cam_pos = observer_position(earth_pos, earth_rot, s.surface_bf_au);
   let rot = if s.mode.is_tracking() {
     match target {
       Some(t) => {
@@ -244,18 +388,27 @@ fn q(q: Quat64) -> Q {
 }
 
 /// Poses the observer camera from the scene's current Earth / target transforms (call inside the
-/// scene write that committed them). Returns the applied rotation (stored as `last`), `None` when
+/// scene write that committed them), computes the comet's light time and leaves it on the camera
+/// ([`LightTimeViewComponent`]). Returns the applied pose (rotation stored as `last`), `None` when
 /// an entity is missing.
 pub fn apply(scene: &Scene, s: &mut EarthObserverState) -> Option<(V3, Q)> {
   let earth = scene.global_transform_f64(s.earth)?;
+  // the Earth's rotation is committed in f32: renormalize (|q|² − 1 ~ 1e-8 scales the surface
+  // offset by ~0.1 m otherwise)
+  let earth_rot = qnormalize(q(earth.rotation));
+  let site = observer_position(v3(earth.position), earth_rot, s.surface_bf_au);
+  let comet_geometric = s.comet.and_then(|c| scene.global_transform_f64(c)).map(|t| v3(t.position));
+  s.light_time = match (comet_geometric, s.comet_vel_km_s) {
+    (Some(c), Some(v)) => Some(comet_light_time(site, c, v)),
+    _ => None,
+  };
   let target = if s.mode.targets_comet() {
-    s.comet.and_then(|c| scene.global_transform_f64(c)).map(|t| v3(t.position))
+    // astrometric: where the telescope sees the comet
+    comet_geometric.map(|c| add(c, s.light_time.map_or([0.0; 3], |l| l.offset_au)))
   } else {
     Some([0.0, 0.0, 0.0])
   };
-  // the Earth's rotation is committed in f32: renormalize (|q|² − 1 ~ 1e-8 scales the surface
-  // offset by ~0.1 m otherwise)
-  let (pos, rot) = pose(s, v3(earth.position), qnormalize(q(earth.rotation)), target);
+  let (pos, rot) = pose(s, v3(earth.position), earth_rot, target);
   scene
     .set_global_transform_f64(
       s.camera,
@@ -265,9 +418,32 @@ pub fn apply(scene: &Scene, s: &mut EarthObserverState) -> Option<(V3, Q)> {
     .ok()?;
   let _ = scene.remove_component::<crate::scene::animation::TransformAnimationComponent>(s.camera);
   s.last = rot;
+  match (s.light_time, s.comet) {
+    (Some(l), Some(comet)) => {
+      let view = LightTimeViewComponent {
+        comet,
+        delay_s: l.delay_s,
+        offset_au: l.offset_au,
+      };
+      if scene
+        .with_component_mut(s.camera, |c: &mut LightTimeViewComponent| *c = view)
+        .is_none()
+      {
+        // not in `register_all_crate_components`: registered on first use (an unregistered type
+        // is refused with `ComponentNotRegistered`)
+        if let Err(crate::scene::AddComponentError::ComponentNotRegistered) =
+          scene.add_component(s.camera, view)
+        {
+          scene.register_component::<LightTimeViewComponent>(&[]);
+          let _ = scene.add_component(s.camera, view);
+        }
+      }
+    }
+    _ => clear_light_time_view(scene, s.camera),
+  }
   if let Some(t) = target {
     let to = sub(t, pos);
-    let zenith = normalize(sub(pos, v3(earth.position)));
+    let zenith = normalize(rotate(earth_rot, s.zenith_bf));
     let fwd = rotate(rot, [0.0, -1.0, 0.0]);
     let c = cross(fwd, to);
     s.last_error = dot(c, c).sqrt().atan2(dot(fwd, to));
@@ -318,25 +494,17 @@ mod tests {
   }
 
   fn state(mode: EarthObserverMode) -> EarthObserverState {
-    let lat = 40.0f64.to_radians();
-    let lon = 10.0f64.to_radians();
-    let r_au = 6371.0 / 149_597_870.7;
-    EarthObserverState {
+    EarthObserverState::new(
       mode,
-      camera: EntityId::default(),
-      earth: EntityId::default(),
-      comet: None,
-      surface_bf_au: [
-        r_au * lat.cos() * lon.cos(),
-        r_au * lat.cos() * lon.sin(),
-        r_au * lat.sin(),
-      ],
-      lat_deg: 40.0,
-      look: [0.0, 0.0, 0.0, 1.0],
-      last: [0.0, 0.0, 0.0, 1.0],
-      last_error: 0.0,
-      last_elevation: 0.0,
-    }
+      EntityId::default(),
+      EntityId::default(),
+      None,
+      40.0,
+      10.0,
+      350.0,
+      [0.0, 0.0, 0.0, 1.0],
+      [0.0, 0.0, 0.0, 1.0],
+    )
   }
 
   fn spin(t: f64) -> Q {
@@ -365,7 +533,7 @@ mod tests {
       let comet = add(comet0, scale([1.0e-4, 2.0e-4, 0.0], k as f64));
       let (pos, rot) = pose(&s, earth, spin(t), Some(comet));
       let to = sub(comet, pos);
-      let zenith = normalize(rotate(spin(t), s.surface_bf_au));
+      let zenith = normalize(rotate(spin(t), s.zenith_bf));
       if below_horizon(to, zenith) {
         // faces the horizon under the target's azimuth
         let h = sub(to, scale(zenith, dot(to, zenith)));
@@ -419,10 +587,13 @@ mod tests {
     let (p0, r0) = pose(&s, [1.0, 0.0, 0.0], spin(0.0), None);
     let (p1, r1) = pose(&s, [1.0, 0.0, 0.0], spin(5000.0), None);
     assert!(angle(forward(r0), forward(r1)) < 1e-12);
+    // on the WGS84 ellipsoid at 40°, 350 m up: N(40°)·… ≈ 6369.3 km from the centre
+    let r = dot(sub(p0, [1.0, 0.0, 0.0]), sub(p0, [1.0, 0.0, 0.0])).sqrt();
+    assert!((r - s.surface_radius_au()).abs() < 1e-15);
     assert!(
-      (dot(sub(p0, [1.0, 0.0, 0.0]), sub(p0, [1.0, 0.0, 0.0])).sqrt() - 6371.0 / 149_597_870.7)
-        .abs()
-        < 1e-15
+      (r * 149_597_870.7 - 6369.69).abs() < 0.1,
+      "{} km",
+      r * 149_597_870.7
     );
     assert!(
       dot(sub(p0, p1), sub(p0, p1)) > 0.0,
@@ -534,24 +705,17 @@ mod scene_tests {
   #[test]
   fn earth_observer_tracking_is_consistent_in_every_frame() {
     let (scene, earth, cam, comet) = scene();
-    let lat = 40.0f64;
-    let (la, lo) = (lat.to_radians(), 10.0f64.to_radians());
-    let mut s = EarthObserverState {
-      mode: EarthObserverMode::CometTracking,
-      camera: cam,
+    let mut s = EarthObserverState::new(
+      EarthObserverMode::CometTracking,
+      cam,
       earth,
-      comet: Some(comet),
-      surface_bf_au: [
-        EARTH_RADIUS_AU * la.cos() * lo.cos(),
-        EARTH_RADIUS_AU * la.cos() * lo.sin(),
-        EARTH_RADIUS_AU * la.sin(),
-      ],
-      lat_deg: lat,
-      look: [0.0, 0.0, 0.0, 1.0],
-      last: [0.0, 0.0, 0.0, 1.0],
-      last_error: 0.0,
-      last_elevation: 0.0,
-    };
+      Some(comet),
+      40.0,
+      10.0,
+      0.0,
+      [0.0, 0.0, 0.0, 1.0],
+      [0.0, 0.0, 0.0, 1.0],
+    );
     let mut aimed = 0;
     for k in 0..240 {
       let t = k as f64 * 360.0; // 1 day/s at 60 Hz ≈ 1440 s per commit; 6 min is plenty and denser
@@ -576,10 +740,10 @@ mod scene_tests {
       // metres matter nothing to the aim at 1 AU (1 m ≈ 7e-12 rad); the scene graph composes with
       // the raw f32 Earth rotation, ~1e-8 off unit length
       assert!(
-        (dot(r, r).sqrt() / EARTH_RADIUS_AU - 1.0).abs() < 1e-7,
+        (dot(r, r).sqrt() / s.surface_radius_au() - 1.0).abs() < 1e-7,
         "commit {k}: camera off the surface: {} vs {} AU, pos round trip {}",
         dot(r, r).sqrt(),
-        EARTH_RADIUS_AU,
+        s.surface_radius_au(),
         dot(sub(gp, pos), sub(gp, pos)).sqrt()
       );
       assert!(
@@ -587,7 +751,10 @@ mod scene_tests {
         "commit {k}: position round trip"
       );
       let to: V3 = sub(comet_pos.into(), gp);
-      let zenith = normalize(r);
+      let zenith = normalize(rotate(
+        qnormalize([e.rotation[0], e.rotation[1], e.rotation[2], e.rotation[3]]),
+        s.zenith_bf,
+      ));
       if !below_horizon(to, zenith) {
         let fwd = rotate(
           [g.rotation[0], g.rotation[1], g.rotation[2], g.rotation[3]],
@@ -600,5 +767,60 @@ mod scene_tests {
       }
     }
     assert!(aimed > 50, "{aimed}");
+
+    // light time: with the comet's velocity the pose aims at x(t_r), leaves the view component on
+    // the camera, and the displacement is −v·delay to first order
+    let v = [20.0, -12.0, 1.5];
+    s.comet_vel_km_s = Some(v);
+    // a comet above the horizon of the last pose
+    let (pos, _) = apply(&scene, &mut s).expect("posed");
+    let lt = s.light_time.expect("light time with a comet velocity");
+    let comet_pos: V3 = scene.global_transform_f64(comet).unwrap().position.into();
+    let d_km = dot(sub(comet_pos, pos), sub(comet_pos, pos)).sqrt() * AU_TO_KM;
+    let retarded = add(comet_pos, lt.offset_au);
+    let d_r_km = dot(sub(retarded, pos), sub(retarded, pos)).sqrt() * AU_TO_KM;
+    assert!(
+      (lt.delay_s - d_r_km / super::super::astrometry::C_KM_S).abs() < 1e-4,
+      "delay {} s vs Δ/c {} s",
+      lt.delay_s,
+      d_r_km / super::super::astrometry::C_KM_S
+    );
+    assert!((lt.delay_s - d_km / super::super::astrometry::C_KM_S).abs() < 1.0);
+    let first_order = scale(v, -lt.delay_s / AU_TO_KM);
+    assert!(
+      dot(
+        sub(lt.offset_au, first_order),
+        sub(lt.offset_au, first_order)
+      )
+      .sqrt()
+        * AU_TO_KM
+        < 1.0,
+      "offset {:?} vs −v·τ {:?}",
+      lt.offset_au,
+      first_order
+    );
+    let view = scene
+      .with_component(cam, |c: &LightTimeViewComponent| *c)
+      .expect("light-time view on the camera");
+    assert_eq!(view.comet, comet);
+    assert_eq!(view.delay_s, lt.delay_s);
+    if s.last_elevation > 0.0 {
+      let g = scene.global_transform_f64(cam).unwrap();
+      let fwd = rotate(
+        [g.rotation[0], g.rotation[1], g.rotation[2], g.rotation[3]],
+        [0.0, -1.0, 0.0],
+      );
+      let to = sub(retarded, v3(g.position));
+      let c = cross(fwd, to);
+      assert!(
+        dot(c, c).sqrt().atan2(dot(fwd, to)) < 1e-9,
+        "aims at x(t_r)"
+      );
+    }
+    // without a velocity: geometric, and the view component is gone
+    s.comet_vel_km_s = None;
+    apply(&scene, &mut s).expect("posed");
+    assert!(s.light_time.is_none());
+    assert!(scene.with_component(cam, |_: &LightTimeViewComponent| ()).is_none());
   }
 }

@@ -598,7 +598,9 @@ pub unsafe extern "C" fn avkSimulationContext_setCometIndicatorVisible(
 /// Sets the native Earth observer (camera posed in every logic commit, see
 /// `simulation_api::earth_observer`): `mode` 0 Free, 1 CometLockIn, 2 CometTracking, 3 SunLockIn,
 /// 4 SunTracking (C# `EarthObserverOrientationMode`), `u32::MAX` clears it (C# poses the camera).
-/// `look` points to 4 f64 (xyzw): Free inertial world look, or lock-in body-fixed look.
+/// `look` points to 4 f64 (xyzw): Free inertial world look, or lock-in body-fixed look. The site
+/// is geodetic `lat_deg` / `lon_deg` (east positive) on the WGS84 ellipsoid, `elev_m` metres above
+/// it. With a comet, the comet and its dust are drawn at the light-time retarded epoch.
 ///
 /// # Safety
 /// FFI Contract: `look` is null or points to 4 readable f64
@@ -613,6 +615,7 @@ pub unsafe extern "C" fn avkSimulationContext_setEarthObserver(
   comet_id: u64,
   lat_deg: f64,
   lon_deg: f64,
+  elev_m: f64,
   look: *const f64,
 ) -> bool {
   if ctx.is_null() {
@@ -627,7 +630,7 @@ pub unsafe extern "C" fn avkSimulationContext_setEarthObserver(
   };
   let mode = aethervk_core_rlib::simulation_api::earth_observer::EarthObserverMode::from_u32(mode);
   ctx_ref.set_earth_observer(
-    scene_id, camera_id, mode, earth_id, comet_id, lat_deg, lon_deg, look,
+    scene_id, camera_id, mode, earth_id, comet_id, lat_deg, lon_deg, elev_m, look,
   )
 }
 
@@ -1377,8 +1380,8 @@ pub unsafe extern "C" fn avkSimulationContext_startSimulation(
 /// (other children of `parent_entity` that have a `ParticleSystemComponent`), excluding
 /// `skip_entity` (the jet just created or currently being modified).
 ///
-/// Common params: diametre_um, density_gcm3, scattering_efficiency, geometric_albedo,
-/// afrho_0_cm, afrho_power, afrho_cutoff_au, afrho_max_value_cm.
+/// Common params: diametre_um, density_gcm3, scattering_efficiency, geometric_albedo, size_q,
+/// size_range, afrho_0_cm, afrho_power, afrho_cutoff_au, afrho_max_value_cm.
 fn propagate_common_params(
   scene: &aethervk_core_rlib::scene::Scene,
   parent_entity: aethervk_core_rlib::scene::EntityId,
@@ -1401,6 +1404,8 @@ fn propagate_common_params(
         ep.density_gcm3 = ps_dto.density_gcm3;
         ep.scattering_efficiency = ps_dto.scattering_efficiency;
         ep.geometric_albedo = ps_dto.geometric_albedo;
+        ep.size_q = ps_dto.size_q;
+        ep.size_range = ps_dto.size_range;
         ep.afrho_0_cm = ps_dto.afrho_0_cm;
         ep.afrho_power = ps_dto.afrho_power;
         ep.afrho_cutoff_au = ps_dto.afrho_cutoff_au;
@@ -1603,6 +1608,8 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
     density_gcm3: ps_dto.density_gcm3,
     scattering_efficiency: ps_dto.scattering_efficiency,
     geometric_albedo: ps_dto.geometric_albedo,
+    size_q: ps_dto.size_q,
+    size_range: ps_dto.size_range,
     afrho_0_cm: ps_dto.afrho_0_cm,
     afrho_power: ps_dto.afrho_power,
     afrho_cutoff_au: ps_dto.afrho_cutoff_au,
@@ -1783,6 +1790,8 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
     density_gcm3: ps_dto.density_gcm3,
     scattering_efficiency: ps_dto.scattering_efficiency,
     geometric_albedo: ps_dto.geometric_albedo,
+    size_q: ps_dto.size_q,
+    size_range: ps_dto.size_range,
     afrho_0_cm: ps_dto.afrho_0_cm,
     afrho_power: ps_dto.afrho_power,
     afrho_cutoff_au: ps_dto.afrho_cutoff_au,

@@ -29,7 +29,7 @@ public static class SimulationTestHarness
 
         for (int i = 0; i < numParticleSystems; i++)
         {
-            var model = new ParticleSystemModel(1f, 1f, 1f, 1f, 1f, 1f, 1f, 1f);
+            var model = new ParticleSystemModel(1f, 1f, 1f, 1f, 3.5f, 10f, 1f, 1f, 1f, 1f);
             var jet = new ParticleSystemJet(0f, 0f, 0f, 10f, 1f, new Vector4(1,1,1,1), 1f, 123u);
             
             if (i == 0)

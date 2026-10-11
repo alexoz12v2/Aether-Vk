@@ -72,6 +72,23 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   private float _geometricAlbedo = 0.04f;
 
   /// <summary>
+  /// Exponent q of the differential grain size law n(s) ∝ s^-q. Valid range 2–5; default 3.5.
+  /// Enters the physical speck counts (grains per size bin and their sizes) only: the continuum's
+  /// size layout stays the q = 3.5 one.
+  /// Corresponds to <c>ParticleSystemEmitParams.size_q</c>.
+  /// </summary>
+  [ObservableProperty]
+  private float _sizeQ = 3.5f;
+
+  /// <summary>
+  /// Size range factor F: grain radii from r/F to r·F about the configured radius. Valid range
+  /// 1–1000; default 10. Enters the size distribution of every cluster.
+  /// Corresponds to <c>ParticleSystemEmitParams.size_range</c>.
+  /// </summary>
+  [ObservableProperty]
+  private float _sizeRange = 10f;
+
+  /// <summary>
   /// Afρ photometric parameter at 1 AU heliocentric distance, in cm.
   /// Range: ~8–1,000,000 cm. Typical active comet: 500–50,000 cm.
   /// 67P default: 100 cm (relatively low activity).

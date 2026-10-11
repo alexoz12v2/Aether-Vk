@@ -104,7 +104,35 @@ pub const PYR_MEASURE: u32 = 12;
 pub const PYR_UNIT: u32 = 15;
 /// per level `ℓ`: `(offset in words, width, height)` at `PYR_TABLE + 3ℓ`
 pub const PYR_TABLE: u32 = 16;
-pub const PYRAMID_MAX_LEVELS: u32 = (PYR_PHASE_LUT - PYR_TABLE) / 3;
+pub const PYRAMID_MAX_LEVELS: u32 = (PYR_EWA_TEXELS - PYR_TABLE) / 3;
+/// the texels the EWA packets of this frame planned to visit, in units of
+/// [`DUST_EWA_TEXEL_UNIT`] (`atomicAdd` of `⌊band / unit⌋ + 1` per packet after the level choice; the
+/// host mirror adds, a merge sums): the near-field frame cost (a packet near the eye crosses the
+/// screen; each is capped at [`DUST_SPLAT_MAX_TEXELS`], the frame was not)
+pub const PYR_EWA_TEXELS: u32 = 63;
+/// texels per count of [`PYR_EWA_TEXELS`] (a frame of 3·10⁶ packets at the per-packet cap stays
+/// below 2³²)
+pub const DUST_EWA_TEXEL_UNIT: f32 = 64.0;
+/// children made by the perspective split this frame (`atomicAdd`; [`split_packet`])
+pub const PYR_SPLIT_CHILDREN: u32 = 11;
+/// the ray-integral evaluations (texels × pieces) the volumetric packets of this frame made
+/// (`atomicAdd`; the host mirror adds, a merge sums): the host raises the volume level bias of
+/// the next frames when it passes [`DUST_VOLUME_FRAME_BUDGET`] ([`VolumeStats::suggested_bias`])
+pub const PYR_VOLUME_EVALS: u32 = 245;
+/// formerly the split overflow; the word is [`PYR_VOLUME_EVALS`] now
+#[deprecated(
+  note = "word 245 is PYR_VOLUME_EVALS; the split overflow is SplitStats::overflow(), computed from the children"
+)]
+pub const PYR_SPLIT_OVERFLOW: u32 = PYR_VOLUME_EVALS;
+/// f32 bits (`atomicMax`): the largest flux of a packet dropped as wholly behind the eye plane
+pub const PYR_SPLIT_DROPPED_FLUX: u32 = 246;
+/// host-written: bits 0–7 the split depth limit of this frame (`≤ DUST_SPLIT_DEPTH_MAX`; the
+/// header's default is the maximum, [`SplitStats::suggested_depth`] lowers it after a frame over
+/// the budget), bits 8–15 the volume level bias ([`VolumeStats`]: levels added to every
+/// volumetric packet's before its evaluation cap; 0 by default). Every packet splits and plans
+/// its volume work deterministically from these: no run-time gate, so the splat stays
+/// independent of the thread order
+pub const PYR_SPLIT_DEPTH: u32 = 247;
 /// a splat is scattered at the lowest level where its smallest screen σ is this many texels
 pub const DUST_SPLAT_SIGMA_TEXELS: f32 = 2.0;
 /// variance of the pixel low-pass filter added to every projected covariance (px²)
@@ -150,6 +178,113 @@ pub const DUST_SPLAT_MAX_TEXELS: u32 = 16384;
 /// pyramid level the white point and the auto softening are measured on (texels of 16 px, the
 /// former 64 × 36 tile grid at 1080p)
 pub const DUST_WHITE_LEVEL: u32 = 4;
+/// a packet is split while its σ along the view direction exceeds this fraction of its depth
+/// from the eye (the EWA linearisation error ∝ σ_v / depth), or its chord's depth span exceeds
+/// it ([`split_packet`]; the EWA takes a chord's pixel area at its start, so the chord's error is
+/// first order in span / depth: at 0.2 a chord along the view over-drew by 8 %, the shell
+/// hand-over's (a)/(c) 1.081)
+pub const DUST_SPLIT_EPS: f32 = 0.1;
+/// the depth slice's offset of the two children along the regression direction `Σ f / σ_v`, in
+/// units of it: `σ_v` shrinks by `√(1 − a²)` = 0.6 per level ([`split_step`])
+pub const DUST_SPLIT_A: f32 = 0.8;
+/// split levels per packet (at most `2^n` leaves)
+pub const DUST_SPLIT_DEPTH_MAX: u32 = 4;
+/// children per frame the host aims below by lowering the next frame's depth limit
+/// ([`SplitStats::suggested_depth`], [`PYR_SPLIT_DEPTH`]); never a run-time gate
+pub const DUST_SPLIT_BUDGET: u32 = 1 << 20;
+/// a chord crossing the eye plane keeps `1 − ε` of its in-front part: the kept start is strictly
+/// in front of the eye, where the perspective projection is finite
+pub const DUST_SPLIT_CLIP_EPS: f32 = 1e-3;
+/// a packet is drawn by the exact ray integral ([`volume_scatter`]) instead of the EWA when
+/// `√tr Σ > DUST_VOLUME_RATIO · dist`, `dist` the distance from the eye to its capsule (the
+/// eye inside it or near it: [`is_volumetric`]). The EWA's error grows with the packet's angular
+/// size (the pixel scale and area vary across it): measured against the ray integral, 3 % of the
+/// total at the switch (an isotropic packet 8.7 σ away), 7 % at 3 σ, so the switch is continuous
+/// to 3 % (`classification_is_continuous`)
+pub const DUST_VOLUME_RATIO: f32 = 0.2;
+/// a volumetric packet whose capsule holds the eye within this many Mahalanobis σ covers the
+/// whole frame
+pub const DUST_VOLUME_SIGMAS: f32 = 3.0;
+/// the volumetric texel is at most `1 /` this of the packet's angular σ (texel centres sample the
+/// exact integral, the composite interpolates bilinearly: 1.2 % rms for an eye inside a packet)
+pub const DUST_VOLUME_TEXELS_PER_SIGMA: f32 = 4.0;
+/// the finest level a whole-frame volumetric packet is drawn at (texels of 8 px)
+pub const DUST_VOLUME_MIN_LEVEL: u32 = 3;
+/// a volumetric chord is integrated as at most this many Gaussian pieces along it
+pub const DUST_VOLUME_PIECES_MAX: u32 = 16;
+/// the pieces of a volumetric chord are this many Mahalanobis σ apart (at most): with the exact
+/// `1/12` spacing² of a uniform piece added to each, σ_piece ≥ 1.15 σ, the ripple along the chord
+/// below `2 exp(−2π²/3)` = 0.3 %
+pub const DUST_VOLUME_PIECE_SIGMAS: f32 = 2.0;
+/// a piece's variance along the chord in units of its length², when the chord needs more than
+/// [`DUST_VOLUME_PIECES_MAX`] pieces (or the evaluation cap merged them): σ = 0.55 of the spacing
+/// (ripple < 1 %) instead of the exact `1/12` (ripple 38 % at large spacings)
+pub const DUST_VOLUME_PIECE_VAR_CAPPED: f32 = 0.3025;
+/// ray-integral evaluations (Σ over the pieces of the texels each covers) one volumetric packet
+/// may make: the level is coarsened, then the pieces merged in pairs, until the plan fits
+/// ([`volume_plan`]). A shader thread draws at most 64 packets: ≤ 2.6·10⁵ evaluations (an
+/// unbounded packet made 1.6·10⁷ in one thread and took the machine down)
+pub const DUST_VOLUME_MAX_EVALS: u32 = 4096;
+/// evaluations per frame above which the host coarsens every volumetric packet by one more level
+/// ([`VolumeStats::suggested_bias`])
+pub const DUST_VOLUME_FRAME_BUDGET: u32 = 1 << 26;
+/// the largest volume level bias
+pub const DUST_VOLUME_BIAS_MAX: u32 = 15;
+/// texels per frame the EWA packets may plan ([`PYR_EWA_TEXELS`]) before the host raises the
+/// EWA bias of the next frames ([`EwaStats::suggested_bias`])
+pub const DUST_EWA_FRAME_BUDGET: u32 = 1 << 28;
+/// the largest EWA bias: the per-packet texel cap is `DUST_SPLAT_MAX_TEXELS / 4^bias` (4 at 6)
+pub const DUST_EWA_BIAS_MAX: u32 = 6;
+/// the in-frame gates of the split, the volumetric and the EWA work sit at this many frame
+/// budgets: past it a packet takes the cheapest path at once (no further split, the coarsest
+/// level), so a frame the host feedback has not caught up with — a cold start or a jump inside
+/// the coma — is bounded by construction. The one place the splat depends on the dispatch
+/// order, only in such frames
+pub const DUST_FRAME_HARD_FACTOR: u32 = 4;
+/// bit of [`PYR_SPLIT_DEPTH`] that turns the in-frame gates off (host-written from
+/// `AETHERVK_DUST_FRAME_GATES=0`; diagnostics: the frame's work is then unbounded)
+pub const DUST_FRAME_GATES_OFF_BIT: u32 = 22;
+
+/// `AETHERVK_DUST_JACOBIAN_AT_START=1` (diagnostics, host only: the CPU mirror reads the
+/// process environment, the GPU bit 23 of [`PYR_SPLIT_DEPTH`]): the EWA linearisation at the
+/// chord's start, as before the midpoint fix
+pub fn jacobian_at_start() -> bool {
+  #[cfg(feature = "std")]
+  {
+    std::env::var("AETHERVK_DUST_JACOBIAN_AT_START").is_ok_and(|v| v == "1")
+  }
+  #[cfg(not(feature = "std"))]
+  {
+    false
+  }
+}
+
+/// Whether this frame's in-frame gates ([`DUST_FRAME_HARD_FACTOR`]) are on (bit
+/// [`DUST_FRAME_GATES_OFF_BIT`] of [`PYR_SPLIT_DEPTH`] clear). Mirror of `dust_frame_gates_on`.
+pub fn frame_gates_on(pyramid: &[u32]) -> bool {
+  (pyramid[PYR_SPLIT_DEPTH as usize] >> DUST_FRAME_GATES_OFF_BIT) & 1 == 0
+}
+/// volumetric axis mode (bits 16–17 of [`PYR_SPLIT_DEPTH`], host-written from
+/// `AETHERVK_DUST_VOLUME_AXIS`; [`volume_axis_from_str`]): pieces along the size chord only, the
+/// leaf's other bounded axis kept as its `1.21·(L/2)²` Gaussian (today's behaviour, the default)
+pub const DUST_VOLUME_AXIS_CHORD: u32 = 0;
+/// pieces along the leaf's Gaussianised axis [`Packet::seg_t`] instead (uniform, centred as the
+/// Gaussian was), the chord then as its own `1.21·(L/2)²` Gaussian about its ρ-weighted centre
+pub const DUST_VOLUME_AXIS_TIME: u32 = 1;
+/// pieces on both bounded axes: `n_c` along the chord × `n_t` along [`Packet::seg_t`], each the
+/// leaf's covariance less the `seg_t` Gaussian plus the uniform pieces' variances; at most
+/// [`DUST_VOLUME_PIECES_MAX`] in all, the evaluation cap reducing `n_t` first, then `n_c`
+pub const DUST_VOLUME_AXIS_GRID: u32 = 2;
+
+/// The volumetric axis mode of an `AETHERVK_DUST_VOLUME_AXIS` value: `time`, `grid`, else the
+/// chord ([`DUST_VOLUME_AXIS_CHORD`]).
+pub fn volume_axis_from_str(v: &str) -> u32 {
+  match v.trim() {
+    "time" => DUST_VOLUME_AXIS_TIME,
+    "grid" => DUST_VOLUME_AXIS_GRID,
+    _ => DUST_VOLUME_AXIS_CHORD,
+  }
+}
 /// metres per AU (`dust::AU_M` is f64)
 const AU_M_F32: f32 = 1.495_978_707e11;
 
@@ -369,6 +504,7 @@ impl PyramidLayout {
     for (i, v) in super::phase::PHASE_HM_0DEG.iter().enumerate() {
       h[PYR_PHASE_LUT as usize + i] = v.to_bits();
     }
+    h[PYR_SPLIT_DEPTH as usize] = DUST_SPLIT_DEPTH_MAX;
     h
   }
 
@@ -558,6 +694,13 @@ pub struct Packet {
   /// is linear in `β`, so the density along the chord falls as `1/√β` ([`bin_density_ends`]);
   /// a uniform capsule stair-stepped the syndyne by 30–40 % at the large-grain end
   pub rho: [f32; 2],
+  /// the leaf's own bounded axis that its covariance carries as a Gaussian, `1.21·(L/2)(L/2)ᵀ`
+  /// centred on the capsule ([`CHORD_VAR_FACTOR`]): `L` = the time segment of a chord-major,
+  /// sweep or cone-piece leaf, the size chord of a time-major leaf (scaled with its cone), zero
+  /// for pooled leaves (their time axis is the exact capsule) and for depth-sliced children (their
+  /// covariance no longer holds the term). The EWA ignores it; the volumetric path can integrate
+  /// that axis as uniform pieces instead ([`DUST_VOLUME_AXIS_TIME`], [`DUST_VOLUME_AXIS_GRID`]).
+  pub seg_t: [f32; 3],
 }
 
 /// The relative density at the two ends of a size bin's chord whose edges have the speed
@@ -608,6 +751,7 @@ pub fn bin_packet(m: &DustMoments, b: usize, seg: [f32; 3]) -> Packet {
     flux: m.flux() / SIZE_BINS as f32,
     open: [false, false],
     rho: [1.0, 1.0],
+    seg_t: scale3(h, 2.0),
   }
 }
 
@@ -637,6 +781,7 @@ pub fn pooled_packet(m: &DustMoments, seg: [f32; 3]) -> Packet {
     flux: m.flux(),
     open: [false, false],
     rho: [1.0, 1.0],
+    seg_t: [0.0; 3],
   }
 }
 
@@ -684,6 +829,7 @@ pub fn bin_chord_packet(m: &DustMoments, b: usize, seg_t: [f32; 3]) -> Packet {
     flux: m.flux() / SIZE_BINS as f32,
     open: [b > 0, b + 1 < SIZE_BINS as usize],
     rho: bin_density_ends(m.edge_factor(b), m.edge_factor(b + 1)),
+    seg_t: scale3(h, 2.0),
   }
 }
 
@@ -802,6 +948,7 @@ pub fn bin_sweep_packet(m: &DustMoments, p: &DustMoments, b: usize, k: u32, n_s:
     flux: m.flux() / (SIZE_BINS * n_s) as f32,
     open: [b > 0, b + 1 < SIZE_BINS as usize],
     rho: bin_density_ends(m.edge_factor(b), m.edge_factor(b + 1)),
+    seg_t: scale3(h, 2.0),
   }
 }
 
@@ -887,6 +1034,7 @@ pub fn subpackets_swept(
           flux: p.flux * inv,
           open: [false, false],
           rho: [1.0, 1.0],
+          seg_t: [0.0; 3],
         });
       }
     }
@@ -927,7 +1075,8 @@ pub fn subpackets_swept(
       // the cone along the time capsule, as for a pooled packet
       let own = bin_packet(m, b, seg_t);
       let p = pred.expect("pieces need a predecessor");
-      let base = bin_packet(p, b, seg_t).cov;
+      let base_packet = bin_packet(p, b, seg_t);
+      let base = base_packet.cov;
       let pm = add3(own.mean, seg_t);
       for t in 0..n_t {
         let u0 = t as f32 * inv;
@@ -949,6 +1098,7 @@ pub fn subpackets_swept(
           flux: own.flux * inv,
           open: [false, false],
           rho: [1.0, 1.0],
+          seg_t: scale3(base_packet.seg_t, sc),
         });
       }
     } else {
@@ -983,6 +1133,7 @@ pub fn subpackets_swept(
           flux: own.flux * inv,
           open: own.open,
           rho: own.rho,
+          seg_t: scale3(hseg, 2.0),
         });
       }
     }
@@ -1005,8 +1156,22 @@ pub fn project_point(p: [f32; 3], mvp: &[f32; 16], width: u32, height: u32) -> O
   ])
 }
 
-/// Whether the size polyline of `m` is below [`DUST_MERGE_PX`] on screen (mirror of
-/// `dust_polyline_merged`): the two end edges and the middle one all within it of the mean.
+/// The clip `w` of a local point under `mvp` (the depth along the view in a perspective
+/// projection, up to the scale of the w row; constant 1 in an orthographic one). Mirror of
+/// `dust_clip_w`.
+pub fn clip_w(p: [f32; 3], mvp: &[f32; 16]) -> f32 {
+  mvp[3] * p[0] + mvp[7] * p[1] + mvp[11] * p[2] + mvp[15]
+}
+
+/// Whether the size polyline of `m` is drawn as one pooled packet (mirror of
+/// `dust_polyline_merged`): the two end edges and the middle one within [`DUST_MERGE_PX`] of the
+/// mean on screen, **and** (perspective only) the 17 edges' depth span below
+/// [`DUST_SPLIT_EPS`] of the depth at the mean. A syndyne along the line of sight is a point on
+/// screen but hundreds of metres deep: pooled into one Gaussian ~175 m deep, its depth
+/// distribution (pixel area, eye-plane cut, speck shell, phase angle) was wrong — the shell
+/// hand-over read 7 % of its τ off (`deep_polyline_is_not_pooled`,
+/// `shell_hand_over_matches_the_cut`). In an orthographic view `w` is constant and the depth
+/// extent changes nothing.
 pub fn polyline_merged(m: &DustMoments, mvp: &[f32; 16], width: u32, height: u32) -> bool {
   let Some(c) = project_point(m.mean(), mvp, width, height) else {
     return false;
@@ -1020,7 +1185,23 @@ pub fn polyline_merged(m: &DustMoments, mvp: &[f32; 16], width: u32, height: u32
       return false;
     }
   }
-  true
+  // the depth span of the edges (0 in an orthographic view: w is constant)
+  let wm = clip_w(m.mean(), mvp);
+  let (mut lo, mut hi) = (wm, wm);
+  for j in 0..SIZE_EDGES as usize {
+    let we = clip_w(m.edge(j), mvp);
+    lo = lo.min(we);
+    hi = hi.max(we);
+  }
+  hi - lo < DUST_SPLIT_EPS * wm
+}
+
+/// Whether the time segment from `m` to its predecessor `p` is shallow enough to be pooled with
+/// the polylines (perspective: its depth span below [`DUST_SPLIT_EPS`] of the depth at `m`'s
+/// mean; always in an orthographic view). Mirror of `dust_time_shallow`.
+pub fn time_shallow(m: &DustMoments, p: &DustMoments, mvp: &[f32; 16]) -> bool {
+  let (wm, wp) = (clip_w(m.mean(), mvp), clip_w(p.mean(), mvp));
+  fabs(wp - wm) < DUST_SPLIT_EPS * wm || wp == wm
 }
 
 /// `σ_pred / σ_self` of the velocity dispersion (1 without a predecessor or when it is narrower;
@@ -1153,8 +1334,51 @@ pub fn project_packet(
   )
 }
 
+/// The view direction of `mvp`: the depth gradient of the projection, unit; zero for a
+/// degenerate matrix. Perspective: the `w` row as it is (`w > 0` in front of the camera by
+/// definition: a camera inside the tail looking away from the nucleus has the scene's origin
+/// behind it, and orienting the direction towards the origin reversed the eye plane there — the
+/// in-front cut, the chord clip and the split kept the dust behind the camera and dropped the
+/// dust in front). Orthographic: the clip-z row, whose sign says nothing about the camera, oriented
+/// so that the scene's origin lies in front of the eye. The second value is `perspective`. The
+/// projection ([`project_packet_lit`]) and the split ([`split_packet`]) use the same direction.
+/// Mirror of `dust_view_forward`.
+pub fn view_forward(mvp: &[f32; 16], eye_local: [f32; 3]) -> ([f32; 3], bool) {
+  let m = |r: usize, c: usize| mvp[c * 4 + r];
+  let row = |r: usize| [m(r, 0), m(r, 1), m(r, 2)];
+  let r3 = row(3);
+  let perspective = dot3(r3, r3) > 0.0;
+  let fwd_raw = if perspective { r3 } else { row(2) };
+  let fn2 = dot3(fwd_raw, fwd_raw);
+  let fwd = if fn2 > 0.0 {
+    let f = scale3(fwd_raw, 1.0 / <f32 as FloatLike>::sqrt(fn2));
+    if !perspective && dot3(scale3(eye_local, -1.0), f) < 0.0 {
+      scale3(f, -1.0)
+    } else {
+      f
+    }
+  } else {
+    [0.0; 3]
+  };
+  (fwd, perspective)
+}
+
+/// `fᵀ Σ f`: the variance of the packet's Gaussian along the unit direction `f`. Mirror of
+/// `dust_var_along`.
+pub fn var_along(cov: &[f32; 6], f: [f32; 3]) -> f32 {
+  cov[0] * f[0] * f[0]
+    + cov[3] * f[1] * f[1]
+    + cov[5] * f[2] * f[2]
+    + 2.0 * (cov[1] * f[0] * f[1] + cov[2] * f[0] * f[2] + cov[4] * f[1] * f[2])
+}
+
 /// [`project_packet`] with the radiance weight ([`Photometry`]): the texels get
 /// `p · Φ(α) / r_h²` at their own position ([`texel_weight`]). Mirror of `dust_project_packet`.
+///
+/// `None` when the packet's start is behind the eye (`w ≤ 0`: the projection is not finite
+/// there; the split rules of [`split_packet`] drop, clip or slice a packet before it gets here,
+/// so this is a guard, not the behind-the-eye rule), when nothing of it is in front of the eye
+/// plane, or when it is entirely off screen.
 pub fn project_packet_lit(
   p: &Packet,
   exposure: f32,
@@ -1175,10 +1399,30 @@ pub fn project_packet_lit(
   let ndc = [cx / w, cy / w];
   let (wf, hf) = (width as f32, height as f32);
   let mu = [(ndc[0] * 0.5 + 0.5) * wf, (ndc[1] * 0.5 + 0.5) * hf];
-  // Jacobian of pixel(mean): d(px)/dμ = (W/2)·(M₀ − ndc.x·M₃)/w, likewise y with M₁ and H/2
+  // Jacobian of pixel(x): d(px)/dx = (W/2)·(M₀ − ndc.x·M₃)/w, likewise y with M₁ and H/2, taken
+  // at the chord's midpoint when its depth span is within DUST_SPLIT_EPS of its depth (|w_end −
+  // w| ≤ ε·w: the split's own bound): the screen segment, the footprint and the pixel-area factor
+  // √det(J Jᵀ) ∝ 1/w² are then exact to second order in the span (at the start they over-drew
+  // such chords by the span's first-order term, 8 %). A deeper chord — one the split could not
+  // shorten, its depth limit lowered by the children budget inside the coma — keeps the start:
+  // no single linearisation holds for it, and the midpoint concentrated its light (1 km inside:
+  // render/truth 1.42 → 1.94). Orthographic: M₃ = 0, w constant, the same bits at any point
   let (r0, r1, r3) = (row(0), row(1), row(3));
-  let jx = scale3(sub3(r0, scale3(r3, ndc[0])), 0.5 * wf / w);
-  let jy = scale3(sub3(r1, scale3(r3, ndc[1])), 0.5 * hf / w);
+  let w_end = dot3(r3, add3(p.mean, p.seg)) + m(3, 3);
+  let shallow = (w_end - w).abs() <= DUST_SPLIT_EPS * w;
+  let mid = add3(
+    p.mean,
+    scale3(p.seg, if shallow && !jacobian_at_start() { 0.5 } else { 0.0 }),
+  );
+  let wm = dot3(r3, mid) + m(3, 3);
+  let (cj, wj) = if wm > 0.0 {
+    ([dot3(r0, mid) + m(0, 3), dot3(r1, mid) + m(1, 3)], wm)
+  } else {
+    ([cx, cy], w)
+  };
+  let ndcj = [cj[0] / wj, cj[1] / wj];
+  let jx = scale3(sub3(r0, scale3(r3, ndcj[0])), 0.5 * wf / wj);
+  let jy = scale3(sub3(r1, scale3(r3, ndcj[1])), 0.5 * hf / wj);
   let s = &p.cov;
   let sv = |v: [f32; 3]| -> [f32; 3] {
     [
@@ -1209,6 +1453,24 @@ pub fn project_packet_lit(
     }
   };
   let det_g = (g[0] * g[2] - g[1] * g[1]).max(0.0);
+  // the view direction and the photometric eye: the eye point when perspective, at infinity
+  // along the view axis when orthographic (see `ScreenPacket::eye_w`)
+  let (fwd, perspective) = view_forward(mvp, eye_local);
+  let (eye_h, eye_w) = if perspective || dot3(fwd, fwd) == 0.0 {
+    (eye_local, 1.0)
+  } else {
+    (scale3(fwd, -1.0), 0.0)
+  };
+  let w_mean = if phot.albedo > 0.0 {
+    super::phase::radiance_weight(
+      phot.albedo,
+      phot.sun,
+      sub3(eye_h, scale3(p.mean, eye_w)),
+      phot.r_h_au,
+    )
+  } else {
+    1.0
+  };
   let half = 0.5 * (cov[0] + cov[2]);
   let dd = <f32 as FloatLike>::sqrt(
     (0.5 * (cov[0] - cov[2])) * (0.5 * (cov[0] - cov[2])) + cov[1] * cov[1],
@@ -1218,9 +1480,24 @@ pub fn project_packet_lit(
   let det_c = (cov[0] * cov[2] - cov[1] * cov[1])
     .max(DUST_DET_ANISO_FLOOR * lam_max * lam_max)
     .max(1e-30);
-  let amp = exposure * p.flux * <f32 as FloatLike>::sqrt(det_g)
+  let mut amp = exposure * p.flux * <f32 as FloatLike>::sqrt(det_g)
     / (2.0 * core::f32::consts::PI * <f32 as FloatLike>::sqrt(det_c));
-  if !(amp > 0.0) || !amp.is_finite() {
+  // the part of the packet in front of the eye: its Gaussian along the view direction, centred
+  // on the capsule's middle, cut at the eye's plane (the orthographic projection would draw the
+  // dust behind the camera too: the fountain of a near view rises through it; the truth clips
+  // at the camera's near plane). After the split rules a leaf has σ_v ≤ DUST_SPLIT_EPS · depth
+  // and the cut is 1; it matters for the leaves the split budget or depth left straddling the
+  // plane
+  if dot3(fwd, fwd) > 0.0 {
+    let depth = dot3(sub3(add3(p.mean, scale3(p.seg, 0.5)), eye_local), fwd);
+    let sigma_v = <f32 as FloatLike>::sqrt(var_along(&p.cov, fwd).max(0.0));
+    if sigma_v > 0.0 {
+      amp *= 0.5 * (1.0 + erf(depth / (sigma_v * core::f32::consts::SQRT_2)));
+    } else if depth < 0.0 {
+      amp = 0.0;
+    }
+  }
+  if !(amp > 0.0) || amp.is_infinite() {
     return None;
   }
   // the smallest σ from the floored determinant, never from the cancelling `half − dd`
@@ -1251,63 +1528,6 @@ pub fn project_packet_lit(
   {
     return None;
   }
-  // the view direction: the depth gradient of the projection (the w row when perspective, the
-  // clip-z row when orthographic), oriented so that the scene's origin lies in front of the eye
-  let perspective = dot3(r3, r3) > 0.0;
-  let fwd = {
-    let fwd_raw = if perspective { r3 } else { row(2) };
-    let fn2 = dot3(fwd_raw, fwd_raw);
-    if fn2 > 0.0 {
-      let f = scale3(fwd_raw, 1.0 / <f32 as FloatLike>::sqrt(fn2));
-      if dot3(scale3(eye_local, -1.0), f) < 0.0 {
-        scale3(f, -1.0)
-      } else {
-        f
-      }
-    } else {
-      [0.0; 3]
-    }
-  };
-  // the photometric eye: the eye point when perspective, at infinity along the view axis when
-  // orthographic (see `ScreenPacket::eye_w`)
-  let (eye_h, eye_w) = if perspective || dot3(fwd, fwd) == 0.0 {
-    (eye_local, 1.0)
-  } else {
-    (scale3(fwd, -1.0), 0.0)
-  };
-  let w_mean = if phot.albedo > 0.0 {
-    super::phase::radiance_weight(
-      phot.albedo,
-      phot.sun,
-      sub3(eye_h, scale3(p.mean, eye_w)),
-      phot.r_h_au,
-    )
-  } else {
-    1.0
-  };
-  // the part of the packet in front of the eye: a Gaussian along the view direction, cut at the
-  // eye's plane (the orthographic projection would draw the dust behind the camera too: the
-  // fountain of a near view rises through it; the truth clips at the camera's near plane)
-  let amp = {
-    if dot3(fwd, fwd) > 0.0 {
-      let depth = dot3(sub3(p.mean, eye_local), fwd);
-      let c = &p.cov;
-      let var_v = c[0] * fwd[0] * fwd[0]
-        + c[3] * fwd[1] * fwd[1]
-        + c[5] * fwd[2] * fwd[2]
-        + 2.0 * (c[1] * fwd[0] * fwd[1] + c[2] * fwd[0] * fwd[2] + c[4] * fwd[1] * fwd[2]);
-      let sigma_v = <f32 as FloatLike>::sqrt(var_v.max(0.0));
-      if sigma_v > 0.0 {
-        amp * 0.5 * (1.0 + erf(depth / (sigma_v * core::f32::consts::SQRT_2)))
-      } else if depth >= 0.0 {
-        amp
-      } else {
-        0.0
-      }
-    } else {
-      amp
-    }
-  };
   Some(ScreenPacket {
     mu,
     cov,
@@ -1328,6 +1548,1094 @@ pub fn project_packet_lit(
     albedo: phot.albedo,
     w_mean,
   })
+}
+
+// ─── Perspective split (mirror of dust_split_step / dust_project_split_scatter) ─
+
+/// The split words of a frame, kept in the pyramid header: the children made
+/// ([`PYR_SPLIT_CHILDREN`], `atomicAdd` on the GPU, informational), the largest dropped flux
+/// ([`PYR_SPLIT_DROPPED_FLUX`], `atomicMax`) and the host-written depth limit
+/// ([`PYR_SPLIT_DEPTH`]). The host mirror loads and stores them around each packet; a host
+/// pyramid split across threads keeps one per partial pyramid and the merge sums the children
+/// and takes the maximum of the dropped flux ([`PYR_SPLIT_OVERFLOW`] is derived, never summed).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SplitStats {
+  pub children: u32,
+  pub dropped_flux: f32,
+  /// this frame's split depth limit (`≤ DUST_SPLIT_DEPTH_MAX`)
+  pub depth: u32,
+  /// the in-frame gates are off this frame ([`frame_gates_on`]; diagnostics)
+  pub gates_off: bool,
+}
+
+impl Default for SplitStats {
+  fn default() -> Self {
+    Self {
+      children: 0,
+      dropped_flux: 0.0,
+      depth: DUST_SPLIT_DEPTH_MAX,
+      gates_off: false,
+    }
+  }
+}
+
+impl SplitStats {
+  pub fn load(pyramid: &[u32]) -> Self {
+    Self {
+      children: pyramid[PYR_SPLIT_CHILDREN as usize],
+      dropped_flux: f32::from_bits(pyramid[PYR_SPLIT_DROPPED_FLUX as usize]),
+      depth: (pyramid[PYR_SPLIT_DEPTH as usize] & 0xFF).min(DUST_SPLIT_DEPTH_MAX),
+      gates_off: !frame_gates_on(pyramid),
+    }
+  }
+
+  pub fn store(&self, pyramid: &mut [u32]) {
+    pyramid[PYR_SPLIT_CHILDREN as usize] = self.children;
+    pyramid[PYR_SPLIT_DROPPED_FLUX as usize] = self.dropped_flux.to_bits();
+    let w = &mut pyramid[PYR_SPLIT_DEPTH as usize];
+    *w = (*w & !0xFF) | self.depth.min(0xFF);
+  }
+
+  /// children beyond [`DUST_SPLIT_BUDGET`] this frame (0 within it; computed, not stored)
+  pub fn overflow(&self) -> u32 {
+    self.children.saturating_sub(DUST_SPLIT_BUDGET)
+  }
+
+  /// The depth limit for the next frame: one less when this frame's children exceeded the
+  /// budget, one more (up to [`DUST_SPLIT_DEPTH_MAX`]) when they stayed below a quarter of it,
+  /// else unchanged. The host writes it into [`PYR_SPLIT_DEPTH`] with the header (to be wired in
+  /// `device/dust.rs` next to the τ_max readback); a frame's splat is then a pure function of its
+  /// header, whatever the dispatch order.
+  pub fn suggested_depth(&self) -> u32 {
+    if self.children > DUST_SPLIT_BUDGET {
+      self.depth.saturating_sub(1)
+    } else if self.children < DUST_SPLIT_BUDGET / 4 {
+      (self.depth + 1).min(DUST_SPLIT_DEPTH_MAX)
+    } else {
+      self.depth
+    }
+  }
+}
+
+/// The volume words of a frame: the ray-integral evaluations made ([`PYR_VOLUME_EVALS`]) and
+/// the host-written level bias (bits 8–15 of [`PYR_SPLIT_DEPTH`]). The host mirror adds to the
+/// evaluations as the GPU does; a merge of partial pyramids sums them.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct VolumeStats {
+  pub evals: u32,
+  pub bias: u32,
+  /// the volumetric axis mode ([`DUST_VOLUME_AXIS_CHORD`], bits 16–17 of word 247)
+  pub axis: u32,
+}
+
+impl VolumeStats {
+  pub fn load(pyramid: &[u32]) -> Self {
+    let w = pyramid[PYR_SPLIT_DEPTH as usize];
+    Self {
+      evals: pyramid[PYR_VOLUME_EVALS as usize],
+      bias: (w >> 8) & 0xFF,
+      axis: (w >> 16) & 0x3,
+    }
+  }
+
+  /// writes the evaluations, the bias (bits 8–15 of word 247) and the axis mode (bits 16–17);
+  /// the depth bits are kept
+  pub fn store(&self, pyramid: &mut [u32]) {
+    pyramid[PYR_VOLUME_EVALS as usize] = self.evals;
+    let w = &mut pyramid[PYR_SPLIT_DEPTH as usize];
+    *w = (*w & !0x3_FF00) | (self.bias.min(0xFF) << 8) | ((self.axis & 0x3) << 16);
+  }
+
+  /// The level bias for the next frame: one more when this frame's evaluations passed
+  /// [`DUST_VOLUME_FRAME_BUDGET`] (up to [`DUST_VOLUME_BIAS_MAX`]; a level quarters a packet's
+  /// texels), one less (down to 0) below an eighth of it, else unchanged.
+  pub fn suggested_bias(&self) -> u32 {
+    if self.evals > DUST_VOLUME_FRAME_BUDGET {
+      (self.bias + 1).min(DUST_VOLUME_BIAS_MAX)
+    } else if self.evals < DUST_VOLUME_FRAME_BUDGET / 8 {
+      self.bias.saturating_sub(1)
+    } else {
+      self.bias
+    }
+  }
+}
+
+/// The view the split sees: the eye (local m), the unit view direction ([`view_forward`]),
+/// whether the projection is perspective (orthographic projections split only to cut at the eye
+/// plane: the EWA is exact for them) and whether packets near the eye are drawn by the exact ray
+/// integral ([`is_volumetric`]; the perspective projections, where the eye is a point: always
+/// on in production, off in the tests of the split alone).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SplitView {
+  pub eye: [f32; 3],
+  pub fwd: [f32; 3],
+  pub perspective: bool,
+  pub volumetric: bool,
+  /// the radius (local m) of the camera-centred shell whose grains the speck pass draws
+  /// (`specks::PYR_SPECKS_DMAX`; ≤ 0: none): the continuum gives that mass up
+  /// ([`split_packet_with`], `specks::ShellCut`)
+  pub shell: f32,
+}
+
+impl SplitView {
+  pub fn of(mvp: &[f32; 16], eye_local: [f32; 3]) -> Self {
+    let (fwd, perspective) = view_forward(mvp, eye_local);
+    Self {
+      eye: eye_local,
+      fwd,
+      perspective,
+      volumetric: perspective,
+      shell: 0.0,
+    }
+  }
+}
+
+/// The leaves of a split: drawn by the EWA ([`project_packet_lit`]) or by the exact ray integral
+/// ([`volume_scatter`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SplitLeaves {
+  pub ewa: alloc::vec::Vec<Packet>,
+  pub volume: alloc::vec::Vec<Packet>,
+}
+
+impl SplitLeaves {
+  pub fn clear(&mut self) {
+    self.ewa.clear();
+    self.volume.clear();
+  }
+}
+
+/// The parameter of the point of the segment `d` (from the origin) nearest to `q`, in `[0, 1]`.
+/// Mirror of `dust_segment_param`.
+pub fn segment_param(q: [f32; 3], d: [f32; 3]) -> f32 {
+  let dd = dot3(d, d);
+  if dd > 0.0 {
+    (dot3(q, d) / dd).clamp(0.0, 1.0)
+  } else {
+    0.0
+  }
+}
+
+/// Whether a packet is drawn by the exact ray integral: the view has an eye point
+/// (`view.volumetric`) and `tr Σ > DUST_VOLUME_RATIO² · dist²`, `dist` the distance from the eye
+/// to the packet's segment (the eye inside or near it, where one Jacobian at the mean cannot
+/// stand for the projection). Implies the eye within 3 Mahalanobis σ (`|q|² < 9 λ_max ≤ 9 tr`)
+/// and `σ_v > depth` (`σ_v² ≤ tr`, `depth ≤ dist`). Mirror of `dust_is_volumetric`.
+pub fn is_volumetric(p: &Packet, view: &SplitView) -> bool {
+  if !view.volumetric {
+    return false;
+  }
+  let q = sub3(view.eye, p.mean);
+  let r = sub3(q, scale3(p.seg, segment_param(q, p.seg)));
+  let tr = p.cov[0] + p.cov[3] + p.cov[5];
+  tr > DUST_VOLUME_RATIO * DUST_VOLUME_RATIO * dot3(r, r)
+}
+
+/// The lower Cholesky factor `L` of a covariance (`xx xy xz yy yz zz`) as `l00 l10 l20 l11 l21
+/// l22`, every pivot² floored at [`DUST_DET_ANISO_FLOOR`] · tr Σ. Mirror of `dust_cholesky3`.
+pub fn cholesky3(s: &[f32; 6]) -> [f32; 6] {
+  let fl = DUST_DET_ANISO_FLOOR * (s[0] + s[3] + s[5]).max(1e-30);
+  let l00 = <f32 as FloatLike>::sqrt(s[0].max(fl));
+  let l10 = s[1] / l00;
+  let l20 = s[2] / l00;
+  let l11 = <f32 as FloatLike>::sqrt((s[3] - l10 * l10).max(fl));
+  let l21 = (s[4] - l20 * l10) / l11;
+  let l22 = <f32 as FloatLike>::sqrt((s[5] - l20 * l20 - l21 * l21).max(fl));
+  [l00, l10, l20, l11, l21, l22]
+}
+
+/// `L⁻¹ x` (forward substitution): `x` whitened by the covariance whose factor is `l`. Mirror of
+/// `dust_cholesky_solve3`.
+pub fn cholesky_solve3(l: &[f32; 6], x: [f32; 3]) -> [f32; 3] {
+  let y0 = x[0] / l[0];
+  let y1 = (x[1] - l[1] * y0) / l[3];
+  let y2 = (x[2] - l[2] * y0 - l[4] * y1) / l[5];
+  [y0, y1, y2]
+}
+
+/// Pyramid level of a volumetric packet of angular σ `theta_px` (px): texels of `2^ℓ` px with
+/// [`DUST_VOLUME_TEXELS_PER_SIGMA`] per σ, the last level at most. Mirror of `dust_volume_level`.
+pub fn volume_level(theta_px: f32, levels: u32) -> u32 {
+  let r = theta_px / DUST_VOLUME_TEXELS_PER_SIGMA;
+  if !(r > 1.0) {
+    return 0;
+  }
+  let l = <f32 as FloatLike>::floor(<f32 as FloatLike>::ln(r) * core::f32::consts::LOG2_E);
+  (l.max(0.0) as u32).min(levels.saturating_sub(1))
+}
+
+/// The radiance weight of the dust at `x` seen along the ray `u` (unit, from the eye): the Sun
+/// direction and r_h moved by `x − mean_ref` as [`texel_weight`] does. Mirror of
+/// `dust_volume_weight`.
+fn volume_weight(phot: &Photometry, mean_ref: [f32; 3], x: [f32; 3], u: [f32; 3]) -> f32 {
+  let d = sub3(x, mean_ref);
+  let r_vec = add3(scale3(phot.sun, -phot.r_h_au * AU_M_F32), d);
+  let rn = <f32 as FloatLike>::sqrt(dot3(r_vec, r_vec)).max(1.0);
+  let sun = scale3(r_vec, -1.0 / rn);
+  super::phase::radiance_weight(phot.albedo, sun, scale3(u, -1.0), rn / AU_M_F32)
+}
+
+/// One Gaussian piece of a volumetric packet: its Cholesky factor, the eye whitened by it
+/// (`L⁻¹(eye − mean)`), `exposure · flux / (2π √det Σ)`, its projected ±3σ box (px: x0 x1 y0 y1),
+/// whether it covers the whole frame (the eye within [`DUST_VOLUME_SIGMAS`] of it or a box corner
+/// not in front of the eye) and whether it is on screen.
+#[derive(Debug, Clone, Copy, Default)]
+struct VolumePiece {
+  l: [f32; 6],
+  qw: [f32; 3],
+  k: f32,
+  bbox: [f32; 4],
+  full: bool,
+  on: bool,
+}
+
+/// The EWA words of a frame: the texels planned ([`PYR_EWA_TEXELS`], in units of
+/// [`DUST_EWA_TEXEL_UNIT`]) and the frame's EWA bias (bits 18–21 of [`PYR_SPLIT_DEPTH`],
+/// host-written: the per-packet texel cap is `DUST_SPLAT_MAX_TEXELS / 4^bias`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct EwaStats {
+  /// texels (not units)
+  pub texels: u64,
+  pub bias: u32,
+}
+
+impl EwaStats {
+  pub fn load(pyramid: &[u32]) -> Self {
+    Self {
+      texels: pyramid[PYR_EWA_TEXELS as usize] as u64 * DUST_EWA_TEXEL_UNIT as u64,
+      bias: ((pyramid[PYR_SPLIT_DEPTH as usize] >> 18) & 0xF).min(DUST_EWA_BIAS_MAX),
+    }
+  }
+
+  /// writes the bias (bits 18–21 of [`PYR_SPLIT_DEPTH`]); the other bits are kept
+  pub fn store_bias(bias: u32, pyramid: &mut [u32]) {
+    let w = &mut pyramid[PYR_SPLIT_DEPTH as usize];
+    *w = (*w & !(0xF << 18)) | (bias.min(DUST_EWA_BIAS_MAX) << 18);
+  }
+
+  /// The bias for the next frame: over [`DUST_EWA_FRAME_BUDGET`], up by `⌈log₄(texels /
+  /// budget)⌉` at once (a level quarters a capped packet's texels); below an eighth of it, one
+  /// down; else unchanged.
+  pub fn suggested_bias(&self) -> u32 {
+    let budget = DUST_EWA_FRAME_BUDGET as u64;
+    if self.texels > budget {
+      let ratio = self.texels as f64 / budget as f64;
+      let up = (ratio.ln() / 4f64.ln()).ceil().max(1.0) as u32;
+      (self.bias + up).min(DUST_EWA_BIAS_MAX)
+    } else if self.texels < budget / 8 {
+      self.bias.saturating_sub(1)
+    } else {
+      self.bias
+    }
+  }
+}
+
+/// The work plan of a volumetric packet ([`volume_plan`]): its level, its pieces and the
+/// evaluations they make there (Σ over the pieces of the texels in each one's range).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VolumePlan {
+  pub level: u32,
+  pub pieces: u32,
+  pub evals: u32,
+}
+
+/// The axes a volumetric packet is integrated along (`volume_plan_pieces`): the base point and
+/// covariance (pixel filter included, the gridded Gaussian axis removed), axis `a` (the chord:
+/// uniform with the ρ ramp, from the base point) with `n_a` pieces of variance `cvar_a`·spacing²,
+/// and when `has_b` axis `b` ([`Packet::seg_t`]: uniform, centred on the base point) likewise.
+#[derive(Debug, Clone, Copy)]
+struct VolumeAxes {
+  mean: [f32; 3],
+  s: [f32; 6],
+  seg_a: [f32; 3],
+  n_a: u32,
+  cvar_a: f32,
+  seg_b: [f32; 3],
+  n_b: u32,
+  cvar_b: f32,
+  has_b: bool,
+}
+
+/// Builds the `n_a · n_b` pieces of a volumetric packet (piece `i · n_b + j`). Without axis `b`
+/// the arithmetic is exactly the chord-only pieces'. Mirror of `dust_volume_pieces`.
+#[allow(clippy::too_many_arguments)]
+fn volume_pieces(
+  p: &Packet,
+  exposure: f32,
+  ax: &VolumeAxes,
+  eye: [f32; 3],
+  mvp: &[f32; 16],
+  wf: f32,
+  hf: f32,
+  out: &mut [VolumePiece; DUST_VOLUME_PIECES_MAX as usize],
+) {
+  let m = |r: usize, c: usize| mvp[c * 4 + r];
+  let row = |r: usize| [m(r, 0), m(r, 1), m(r, 2)];
+  let (r0, r1, r3) = (row(0), row(1), row(3));
+  let s = &ax.s;
+  let cvar = ax.cvar_a;
+  let inv_n = 1.0 / ax.n_a as f32;
+  let h = scale3(ax.seg_a, inv_n);
+  let inv_b = 1.0 / ax.n_b as f32;
+  let hb = scale3(ax.seg_b, inv_b);
+  for k in 0..(ax.n_a * ax.n_b) as usize {
+    let pc = &mut out[k];
+    let (i, j) = (k / ax.n_b as usize, k % ax.n_b as usize);
+    let uk = (i as f32 + 0.5) * inv_n;
+    let mut mean_k = add3(ax.mean, scale3(ax.seg_a, uk));
+    let mut sk = [
+      s[0] + cvar * h[0] * h[0],
+      s[1] + cvar * h[0] * h[1],
+      s[2] + cvar * h[0] * h[2],
+      s[3] + cvar * h[1] * h[1],
+      s[4] + cvar * h[1] * h[2],
+      s[5] + cvar * h[2] * h[2],
+    ];
+    let mut flux_k = p.flux * (p.rho[0] + (p.rho[1] - p.rho[0]) * uk) * inv_n;
+    if ax.has_b {
+      let vk = (j as f32 + 0.5) * inv_b - 0.5;
+      mean_k = add3(mean_k, scale3(ax.seg_b, vk));
+      let cb = ax.cvar_b;
+      sk[0] += cb * hb[0] * hb[0];
+      sk[1] += cb * hb[0] * hb[1];
+      sk[2] += cb * hb[0] * hb[2];
+      sk[3] += cb * hb[1] * hb[1];
+      sk[4] += cb * hb[1] * hb[2];
+      sk[5] += cb * hb[2] * hb[2];
+      flux_k *= inv_b;
+    }
+    let lk = cholesky3(&sk);
+    let qw = cholesky_solve3(&lk, sub3(eye, mean_k));
+    let mut full = dot3(qw, qw) < DUST_VOLUME_SIGMAS * DUST_VOLUME_SIGMAS;
+    let ext = [
+      3.0 * <f32 as FloatLike>::sqrt(sk[0]),
+      3.0 * <f32 as FloatLike>::sqrt(sk[3]),
+      3.0 * <f32 as FloatLike>::sqrt(sk[5]),
+    ];
+    let (mut x0, mut x1, mut y0, mut y1) = (1e30f32, -1e30f32, 1e30f32, -1e30f32);
+    if !full {
+      for c in 0..8u32 {
+        let sg = |bit: u32, v: f32| if c & bit != 0 { v } else { -v };
+        let pt = [
+          mean_k[0] + sg(1, ext[0]),
+          mean_k[1] + sg(2, ext[1]),
+          mean_k[2] + sg(4, ext[2]),
+        ];
+        let w = dot3(r3, pt) + m(3, 3);
+        if !(w > 0.0) {
+          full = true;
+          break;
+        }
+        let px = ((dot3(r0, pt) + m(0, 3)) / w * 0.5 + 0.5) * wf;
+        let py = ((dot3(r1, pt) + m(1, 3)) / w * 0.5 + 0.5) * hf;
+        x0 = x0.min(px);
+        x1 = x1.max(px);
+        y0 = y0.min(py);
+        y1 = y1.max(py);
+      }
+    }
+    let on = full || !(x1 < 0.0 || y1 < 0.0 || x0 > wf || y0 > hf || !(x0 <= x1) || !(y0 <= y1));
+    *pc = VolumePiece {
+      l: lk,
+      qw,
+      k: exposure * flux_k / (2.0 * core::f32::consts::PI * (lk[0] * lk[3] * lk[5])),
+      bbox: [x0, x1, y0, y1],
+      full,
+      on,
+    };
+  }
+}
+
+/// The texel range `(x0, x1, y0, y1)` of a piece at `level` (empty when off screen, the whole
+/// grid when full). Mirror of `dust_volume_range`.
+fn volume_range(pc: &VolumePiece, level: u32, layout: &PyramidLayout) -> (i32, i32, i32, i32) {
+  let (_, lw, lh) = layout.levels[level as usize];
+  if !pc.on {
+    return (0, -1, 0, -1);
+  }
+  if pc.full {
+    return (0, lw as i32 - 1, 0, lh as i32 - 1);
+  }
+  let sz = (1u32 << level) as f32;
+  (
+    fl(pc.bbox[0] / sz).max(0.0) as i32,
+    ce(pc.bbox[1] / sz).min((lw - 1) as f32) as i32,
+    fl(pc.bbox[2] / sz).max(0.0) as i32,
+    ce(pc.bbox[3] / sz).min((lh - 1) as f32) as i32,
+  )
+}
+
+/// Σ over the first `n` pieces of the texels in their ranges at `level`. Mirror of
+/// `dust_volume_evals`.
+fn volume_evals(
+  pieces: &[VolumePiece; DUST_VOLUME_PIECES_MAX as usize],
+  n: u32,
+  level: u32,
+  layout: &PyramidLayout,
+) -> u32 {
+  let mut total = 0u32;
+  for pc in pieces.iter().take(n as usize) {
+    let (x0, x1, y0, y1) = volume_range(pc, level, layout);
+    total = total.wrapping_add(((x1 - x0 + 1).max(0) * (y1 - y0 + 1).max(0)) as u32);
+  }
+  total
+}
+
+/// Plans a volumetric packet's work and builds its pieces: one piece per
+/// [`DUST_VOLUME_PIECE_SIGMAS`] Mahalanobis σ of the chord (≤ [`DUST_VOLUME_PIECES_MAX`]); the
+/// level from the angular σ ([`DUST_VOLUME_TEXELS_PER_SIGMA`]), at least
+/// [`DUST_VOLUME_MIN_LEVEL`] when a piece covers the whole frame, plus the frame's `bias`; then
+/// coarsened until the evaluations fit `max_evals`, and at the last level the pieces merged in
+/// pairs (with the capped piece variance) until they do. `None` when nothing is on screen.
+/// Mirror of the planning part of `dust_volume_scatter`.
+#[allow(clippy::too_many_arguments)]
+fn volume_plan_pieces(
+  p: &Packet,
+  exposure: f32,
+  mvp: &[f32; 16],
+  view: &SplitView,
+  layout: &PyramidLayout,
+  bias: u32,
+  axis: u32,
+  max_evals: u32,
+  pieces: &mut [VolumePiece; DUST_VOLUME_PIECES_MAX as usize],
+) -> Option<VolumePlan> {
+  let m = |r: usize, c: usize| mvp[c * 4 + r];
+  let row = |r: usize| [m(r, 0), m(r, 1), m(r, 2)];
+  let (r0, r1, r3) = (row(0), row(1), row(3));
+  let (wf, hf) = (layout.width as f32, layout.height as f32);
+  let eye = view.eye;
+  let n3 = dot3(r3, r3);
+  if !(n3 > 0.0) {
+    return None;
+  }
+  // the focal length (px per radian at the centre)
+  let f_px = 0.5
+    * (wf * <f32 as FloatLike>::sqrt(dot3(r0, r0)))
+      .min(hf * <f32 as FloatLike>::sqrt(dot3(r1, r1)))
+    / <f32 as FloatLike>::sqrt(n3);
+  if !(f_px > 0.0) {
+    return None;
+  }
+  let q0 = sub3(eye, p.mean);
+  let r_seg = sub3(q0, scale3(p.seg, segment_param(q0, p.seg)));
+  let dist = <f32 as FloatLike>::sqrt(dot3(r_seg, r_seg));
+  let rel = dist / f_px;
+  let var_f = DUST_PIXEL_FILTER_VAR * rel * rel;
+  let s = [
+    p.cov[0] + var_f,
+    p.cov[1],
+    p.cov[2],
+    p.cov[3] + var_f,
+    p.cov[4],
+    p.cov[5] + var_f,
+  ];
+  let l = cholesky3(&s);
+  // the axes: the chord only (default), or the leaf's Gaussianised axis `seg_t` as uniform
+  // pieces instead of its 1.21 Gaussian (time: the chord then Gaussianised; grid: both gridded)
+  let mode = if axis != DUST_VOLUME_AXIS_CHORD && dot3(p.seg_t, p.seg_t) > 0.0 {
+    axis
+  } else {
+    DUST_VOLUME_AXIS_CHORD
+  };
+  let kf = CHORD_VAR_FACTOR;
+  let ht = scale3(p.seg_t, 0.5);
+  let less_t = [
+    s[0] - kf * ht[0] * ht[0],
+    s[1] - kf * ht[0] * ht[1],
+    s[2] - kf * ht[0] * ht[2],
+    s[3] - kf * ht[1] * ht[1],
+    s[4] - kf * ht[1] * ht[2],
+    s[5] - kf * ht[2] * ht[2],
+  ];
+  let mut ax = if mode == DUST_VOLUME_AXIS_TIME {
+    // the chord as its 1.21 Gaussian about its ρ-weighted centre (∫ u ρ(u) du)
+    let hc = scale3(p.seg, 0.5);
+    let ubar = p.rho[0] * 0.5 + (p.rho[1] - p.rho[0]) / 3.0;
+    VolumeAxes {
+      mean: add3(p.mean, scale3(p.seg, ubar)),
+      s: [
+        less_t[0] + kf * hc[0] * hc[0],
+        less_t[1] + kf * hc[0] * hc[1],
+        less_t[2] + kf * hc[0] * hc[2],
+        less_t[3] + kf * hc[1] * hc[1],
+        less_t[4] + kf * hc[1] * hc[2],
+        less_t[5] + kf * hc[2] * hc[2],
+      ],
+      seg_a: [0.0; 3],
+      n_a: 1,
+      cvar_a: 1.0 / 12.0,
+      seg_b: p.seg_t,
+      n_b: 1,
+      cvar_b: 1.0 / 12.0,
+      has_b: true,
+    }
+  } else if mode == DUST_VOLUME_AXIS_GRID {
+    VolumeAxes {
+      mean: p.mean,
+      s: less_t,
+      seg_a: p.seg,
+      n_a: 1,
+      cvar_a: 1.0 / 12.0,
+      seg_b: p.seg_t,
+      n_b: 1,
+      cvar_b: 1.0 / 12.0,
+      has_b: true,
+    }
+  } else {
+    VolumeAxes {
+      mean: p.mean,
+      s,
+      seg_a: p.seg,
+      n_a: 1,
+      cvar_a: 1.0 / 12.0,
+      seg_b: [0.0; 3],
+      n_b: 1,
+      cvar_b: 1.0 / 12.0,
+      has_b: false,
+    }
+  };
+  // pieces per axis: one per DUST_VOLUME_PIECE_SIGMAS Mahalanobis σ of the base covariance
+  let lb = cholesky3(&ax.s);
+  let count = |seg: [f32; 3]| -> (u32, f32) {
+    let dw = cholesky_solve3(&lb, seg);
+    let len_w = <f32 as FloatLike>::sqrt(dot3(dw, dw)) / DUST_VOLUME_PIECE_SIGMAS;
+    if len_w > DUST_VOLUME_PIECES_MAX as f32 {
+      (DUST_VOLUME_PIECES_MAX, DUST_VOLUME_PIECE_VAR_CAPPED)
+    } else {
+      ((ce(len_w) as u32).max(1), 1.0 / 12.0)
+    }
+  };
+  (ax.n_a, ax.cvar_a) = count(ax.seg_a);
+  if ax.has_b {
+    (ax.n_b, ax.cvar_b) = count(ax.seg_b);
+  }
+  // at most DUST_VOLUME_PIECES_MAX pieces in all: fewer along `seg_t` first
+  while ax.n_a * ax.n_b > DUST_VOLUME_PIECES_MAX {
+    if ax.n_b > 1 {
+      ax.n_b = ax.n_b.div_ceil(2);
+      ax.cvar_b = DUST_VOLUME_PIECE_VAR_CAPPED;
+    } else {
+      ax.n_a = ax.n_a.div_ceil(2);
+      ax.cvar_a = DUST_VOLUME_PIECE_VAR_CAPPED;
+    }
+  }
+  // the level from the angular σ
+  let tr = s[0] + s[3] + s[5];
+  let sig_small = 2.0 * (l[0] * l[3] * l[5]) / tr;
+  let den = dist.max(sig_small);
+  let theta = if den > 0.0 { sig_small / den } else { 1.0 };
+  let levels = layout.level_count();
+  let mut level = volume_level(theta * f_px, levels);
+  volume_pieces(p, exposure, &ax, eye, mvp, wf, hf, pieces);
+  let (mut any_full, mut any_on) = (false, false);
+  for pc in pieces.iter().take((ax.n_a * ax.n_b) as usize) {
+    any_full |= pc.full;
+    any_on |= pc.on;
+  }
+  if !any_on {
+    return None;
+  }
+  if any_full {
+    level = level.max(DUST_VOLUME_MIN_LEVEL).min(levels - 1);
+  }
+  level = (level + bias).min(levels - 1);
+  // the evaluation cap: a coarser level first, then fewer pieces (along `seg_t` first)
+  loop {
+    if volume_evals(pieces, ax.n_a * ax.n_b, level, layout) <= max_evals || level + 1 >= levels {
+      break;
+    }
+    level += 1;
+  }
+  while volume_evals(pieces, ax.n_a * ax.n_b, level, layout) > max_evals {
+    if ax.n_b > 1 {
+      ax.n_b = ax.n_b.div_ceil(2);
+      ax.cvar_b = DUST_VOLUME_PIECE_VAR_CAPPED;
+    } else if ax.n_a > 1 {
+      ax.n_a = ax.n_a.div_ceil(2);
+      ax.cvar_a = DUST_VOLUME_PIECE_VAR_CAPPED;
+    } else {
+      break;
+    }
+    volume_pieces(p, exposure, &ax, eye, mvp, wf, hf, pieces);
+  }
+  let n = ax.n_a * ax.n_b;
+  Some(VolumePlan {
+    level,
+    pieces: n,
+    evals: volume_evals(pieces, n, level, layout),
+  })
+}
+
+/// The work plan [`volume_scatter`] makes for `p` with the level bias `bias` under the cap
+/// `max_evals` ([`DUST_VOLUME_MAX_EVALS`] in production; tests pass `u32::MAX` to see the
+/// uncapped work). `None` when nothing is on screen.
+pub fn volume_plan(
+  p: &Packet,
+  mvp: &[f32; 16],
+  view: &SplitView,
+  layout: &PyramidLayout,
+  bias: u32,
+  axis: u32,
+  max_evals: u32,
+) -> Option<VolumePlan> {
+  let mut pieces = [VolumePiece::default(); DUST_VOLUME_PIECES_MAX as usize];
+  volume_plan_pieces(
+    p,
+    1.0,
+    mvp,
+    view,
+    layout,
+    bias,
+    axis,
+    max_evals,
+    &mut pieces,
+  )
+}
+
+/// Draws a packet by the **exact ray integral** of its density (mirror of `dust_volume_scatter`):
+/// per texel of one pyramid level, the optical depth along the ray from the eye through the
+/// texel centre, `τ = flux ∫₀^∞ G(eye + s u) ds` (the column of cross-section, the same unit as
+/// the EWA's `τ`: a pixel's cone holds `∫ n Ω s² ds` grains, each `σ / (Ω s²)` of its angular
+/// area). In closed form with `L Lᵀ = Σ`, `u' = L⁻¹u`, `q' = L⁻¹(eye − μ)`, `a = |u'|²`,
+/// `b = u'·q'`: `τ = flux / (2π √det Σ √a) · exp(−½ |q' − (b/a) u'|²) · Φ(−b/√a)` — the half-line
+/// `s ≥ 0` is the cut at the eye (a ray from the eye sees nothing behind it). A chord is
+/// integrated as Gaussian pieces along it ([`DUST_VOLUME_PIECE_SIGMAS`] apart; each
+/// `Σ + c (d/N)(d/N)ᵀ`, `c = 1/12` (exact moments) or [`DUST_VOLUME_PIECE_VAR_CAPPED`]; flux
+/// `ρ(u_k)/N`: the linear density by the midpoint rule, exact). The pixel filter of the EWA,
+/// `(0.5 px)²`, is added isotropically at the packet's distance, so a far packet draws the same
+/// image either way (`volumetric_and_ewa_agree_for_a_far_packet`). The work is planned first
+/// ([`volume_plan`]: level, pieces, the frame's level bias from the header, the evaluation cap
+/// [`DUST_VOLUME_MAX_EVALS`]); each piece is then evaluated over its own texel range only (its
+/// projected ±3σ box, the whole frame when the eye is near it), so the evaluations made are
+/// exactly the plan's, added to [`PYR_VOLUME_EVALS`]. Counts, colour words, depth word, error
+/// diffusion and the peak word (per piece, as per EWA packet) as [`scatter_into`] /
+/// [`splat_scatter`]. Returns the texel deposits made.
+#[allow(clippy::too_many_arguments)]
+pub fn volume_scatter(
+  p: &Packet,
+  exposure: f32,
+  mvp: &[f32; 16],
+  view: &SplitView,
+  phot: &Photometry,
+  color: [f32; 3],
+  layout: &PyramidLayout,
+  inv_unit: f32,
+  pyramid: &mut [u32],
+) -> u32 {
+  let vs = VolumeStats::load(pyramid);
+  let (bias, axis) = (vs.bias, vs.axis);
+  let mut pieces = [VolumePiece::default(); DUST_VOLUME_PIECES_MAX as usize];
+  let Some(plan) = volume_plan_pieces(
+    p,
+    exposure,
+    mvp,
+    view,
+    layout,
+    bias,
+    axis,
+    DUST_VOLUME_MAX_EVALS,
+    &mut pieces,
+  ) else {
+    return 0;
+  };
+  let ev = &mut pyramid[PYR_VOLUME_EVALS as usize];
+  let before = *ev;
+  *ev = ev.wrapping_add(plan.evals);
+  let m = |r: usize, c: usize| mvp[c * 4 + r];
+  let row = |r: usize| [m(r, 0), m(r, 1), m(r, 2)];
+  let (r0, r1, r3) = (row(0), row(1), row(3));
+  let (wf, hf) = (layout.width as f32, layout.height as f32);
+  let eye = view.eye;
+  // the in-frame gate (mirror of `dust_volume_scatter`): past DUST_FRAME_HARD_FACTOR budgets this
+  // frame, at least [`gate_level`] (the evaluations only shrink)
+  let level = if frame_gates_on(pyramid) && before > DUST_FRAME_HARD_FACTOR * DUST_VOLUME_FRAME_BUDGET {
+    plan.level.max(gate_level(layout.level_count()))
+  } else {
+    plan.level
+  };
+  let (off, lw, _) = layout.levels[level as usize];
+  let sz = (1u32 << level) as f32;
+  let area = sz * sz;
+  let depth_bits = (<f32 as FloatLike>::sqrt(dot3(sub3(eye, p.mean), sub3(eye, p.mean)))
+    / AU_M_F32)
+    .max(0.0)
+    .to_bits();
+  let mut written = 0u32;
+  let mut carry = 0.0f32;
+  let mut peak = 0.0f32;
+  for pc in pieces.iter().take(plan.pieces as usize) {
+    let (tx0, tx1, ty0, ty1) = volume_range(pc, level, layout);
+    for ty in ty0..=ty1 {
+      let yc = (ty as f32 + 0.5) * sz;
+      let ny = 2.0 * yc / hf - 1.0;
+      let b_row = sub3(r1, scale3(r3, ny));
+      for tx in tx0..=tx1 {
+        let xc = (tx as f32 + 0.5) * sz;
+        let nx = 2.0 * xc / wf - 1.0;
+        let a_row = sub3(r0, scale3(r3, nx));
+        // the ray through the texel centre: on both planes of constant ndc, in front of the eye
+        let mut v = cross3(a_row, b_row);
+        if dot3(v, r3) < 0.0 {
+          v = scale3(v, -1.0);
+        }
+        let vn = <f32 as FloatLike>::sqrt(dot3(v, v));
+        if !(vn > 0.0) {
+          continue;
+        }
+        let u = scale3(v, 1.0 / vn);
+        let uw = cholesky_solve3(&pc.l, u);
+        let a = dot3(uw, uw);
+        let b = dot3(uw, pc.qw);
+        let rr = sub3(pc.qw, scale3(uw, b / a));
+        let sa = <f32 as FloatLike>::sqrt(a);
+        let mut tau_px = pc.k / sa
+          * <f32 as FloatLike>::exp(-0.5 * dot3(rr, rr))
+          * (0.5 * (1.0 + erf(-b / (sa * core::f32::consts::SQRT_2))));
+        if phot.albedo > 0.0 {
+          let x = add3(eye, scale3(u, (-b / a).max(0.0)));
+          tau_px *= volume_weight(phot, p.mean, x, u);
+        }
+        if !(tau_px >= 0.0) || !tau_px.is_finite() {
+          continue;
+        }
+        if tau_px > peak {
+          peak = tau_px;
+        }
+        let tau = tau_px * area * inv_unit;
+        let tau_c = tau.min(DUST_COUNT_MAX_PER_ADD as f32) + carry;
+        let counts = (tau_c + 0.5) as u32;
+        carry = tau_c - counts as f32;
+        if counts == 0 {
+          continue;
+        }
+        let i = (off + (ty as u32 * lw + tx as u32) * PYRAMID_TEXEL_WORDS) as usize;
+        sat_add(&mut pyramid[i], counts);
+        let hfr = (dust_hash32(i as u32) >> 8) as f32 * (1.0 / 16_777_216.0);
+        for k in 0..3 {
+          sat_add(
+            &mut pyramid[i + 1 + k],
+            (counts as f32 * color[k] * DUST_COLOR_SCALE + hfr) as u32,
+          );
+        }
+        if pyramid[i + 4] == 0 || depth_bits < pyramid[i + 4] {
+          pyramid[i + 4] = depth_bits;
+        }
+        written += 1;
+      }
+    }
+  }
+  let cur = f32::from_bits(pyramid[PYR_TAU_MAX as usize]);
+  if peak > 0.0 && !(cur >= peak) {
+    pyramid[PYR_TAU_MAX as usize] = peak.to_bits();
+  }
+  if written > 0 {
+    pyramid[PYR_LEVEL_MASK as usize] |= 1 << level;
+  }
+  written
+}
+
+/// What [`split_step`] decided for a packet.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SplitStep {
+  /// wholly behind the eye plane
+  Drop,
+  /// a leaf: project and scatter it
+  Keep,
+  /// the chord crossed the eye plane: the in-front part replaces the packet (same level)
+  Clip(Packet),
+  /// two children of half the flux each
+  Split(Packet, Packet),
+  /// the eye is inside or near it: drawn by the exact ray integral ([`volume_scatter`])
+  Volume,
+}
+
+/// The sub-chord `u0 ≤ u ≤ u1` of a chord packet: start moved along the segment, the segment and
+/// the flux scaled by the kept part (the density is linear along the chord, so the flux is the
+/// kept length times the mean density there), `rho` re-interpolated and renormalised to mean 1,
+/// the ends as given. Mirror of `dust_sub_chord`.
+pub fn sub_chord(p: &Packet, u0: f32, u1: f32, open_start: bool, open_end: bool) -> Packet {
+  let r = |u: f32| p.rho[0] + (p.rho[1] - p.rho[0]) * u;
+  let (ra, rb) = (r(u0), r(u1));
+  let rm = (0.5 * (ra + rb)).max(1e-6);
+  Packet {
+    mean: add3(p.mean, scale3(p.seg, u0)),
+    cov: p.cov,
+    seg: scale3(p.seg, u1 - u0),
+    flux: p.flux * (u1 - u0) * rm,
+    open: [open_start, open_end],
+    rho: [ra / rm, rb / rm],
+    seg_t: p.seg_t,
+  }
+}
+
+/// One step of the perspective split of a packet at split level `level` (`clipped`: it is the
+/// in-front part of a chord already cut at the eye plane), seen from `view.eye` along the unit
+/// view direction `view.fwd` ([`view_forward`]). With `depth = (mean − eye)·f` the depth of the
+/// chord's start, `σ_v² = fᵀΣf` and `span = seg·f` the chord's signed depth span, the rules in
+/// order:
+///
+/// 1. wholly behind the eye plane, `depth + 3σ_v + max(0, span) < 0`: [`SplitStep::Drop`];
+/// 2. the chord crosses the plane (its ends on both sides): [`SplitStep::Clip`] to the part in
+///    front, less [`DUST_SPLIT_CLIP_EPS`] of it so the kept start is strictly in front (the
+///    perspective projection diverges on the plane); the cut end is closed (a Gaussian cap);
+/// 3. `3σ_v > depth` (the ellipsoid crosses the plane: the one-sided cut of
+///    [`project_packet_lit`] is then a poor estimate of the part in front) or, in perspective
+///    only (the EWA is exact for an orthographic projection), `σ_v > DUST_SPLIT_EPS · depth`
+///    (the EWA linearisation error) or `|span| > DUST_SPLIT_EPS · depth`, while
+///    `level < depth_max` (the frame's limit, [`PYR_SPLIT_DEPTH`] ≤ [`DUST_SPLIT_DEPTH_MAX`]):
+///    [`SplitStep::Split`] — the chord bisected (inner ends open,
+///    `rho` linear: the two halves tile the same capsule exactly) when `|span| > 3σ_v`, else the
+///    Gaussian **sliced by depth**: with `g = Σf / σ_v` (the mean lateral position regressed on
+///    the depth coordinate) and `h = a·g`, `a` = [`DUST_SPLIT_A`], the children are
+///    `N(μ ∓ h, Σ − hhᵀ)` with half the flux each;
+/// 4. wanting a split at the depth limit in perspective: [`SplitStep::Volume`] (the exact ray
+///    integral; no single Jacobian holds for it);
+/// 5. else [`SplitStep::Keep`].
+///
+/// Proof of 3 (the mixture has the packet's moments): the mean of `½N(μ−h, Σ') + ½N(μ+h, Σ')` is
+/// `μ`, its covariance `Σ' + hhᵀ = Σ`; the flux halves sum exactly. `Σ' = Σ − a²(Σf)(Σf)ᵀ/(fᵀΣf)`
+/// is positive semidefinite: `Σ − (Σf)(Σf)ᵀ/(fᵀΣf)` is the covariance of the Gaussian
+/// conditional on its depth coordinate (a Schur complement, ⪰ 0) and the rest is
+/// `(1 − a²)(Σf)(Σf)ᵀ/(fᵀΣf) ⪰ 0`. The children's depth variance is `σ_v²(1 − a²)`: `σ_v`
+/// shrinks by 0.6 per level and the EWA error (∝ depth extent / depth, the pixel scale and area
+/// varying across the packet's depth) with it; the two-point rule is exact to the third moment
+/// and the image does not resolve depth, so the mixture's bimodality along `f` is invisible.
+/// The lateral extent is not split: the EWA integrates every texel along the central ray, which
+/// leaves an obliquity error of order `(σ_lateral / depth)²` (6 % of the flux for
+/// `σ_lateral / depth` = 0.25, measured by `perspective_split_converges_to_the_truth`). A
+/// packet whose lateral position is strongly correlated with its depth (a tilted thin slab) has
+/// children offset laterally too, and their image ripples: 3 % of the flux at a correlation of
+/// 0.7, 11 % at 0.9 after four forced levels (`split_image_matches_the_unsplit_packet` prints
+/// them); an uncorrelated or depth-aligned packet projects to the same picture exactly.
+/// Mirror of `dust_split_step` (same arithmetic, same order).
+pub fn split_step(
+  p: &Packet,
+  clipped: bool,
+  level: u32,
+  depth_max: u32,
+  view: &SplitView,
+  force: bool,
+) -> SplitStep {
+  let (eye, fwd) = (view.eye, view.fwd);
+  if !(dot3(fwd, fwd) > 0.0) {
+    return SplitStep::Keep;
+  }
+  let depth = dot3(sub3(p.mean, eye), fwd);
+  let sigma_v = <f32 as FloatLike>::sqrt(var_along(&p.cov, fwd).max(0.0));
+  let span_s = dot3(p.seg, fwd);
+  let span = fabs(span_s);
+  // (1) wholly behind the eye plane
+  if depth + 3.0 * sigma_v + span_s.max(0.0) < 0.0 {
+    return SplitStep::Drop;
+  }
+  // (2) the chord crosses the plane: keep the part in front, its start a margin inside
+  let d1 = depth + span_s;
+  if !clipped && span > 0.0 && (depth < 0.0) != (d1 < 0.0) {
+    let u_star = -depth / span_s;
+    if depth < 0.0 {
+      let u_lo = u_star + DUST_SPLIT_CLIP_EPS * (1.0 - u_star);
+      return SplitStep::Clip(sub_chord(p, u_lo, 1.0, false, p.open[1]));
+    }
+    let u_hi = u_star * (1.0 - DUST_SPLIT_CLIP_EPS);
+    return SplitStep::Clip(sub_chord(p, 0.0, u_hi, p.open[0], false));
+  }
+  // (2b) the eye inside or near the packet: the exact ray integral, no split, no EWA
+  if !force && is_volumetric(p, view) {
+    return SplitStep::Volume;
+  }
+  // (3) too deep for one Jacobian: bisect the chord or slice the Gaussian by depth
+  let want = force
+    || 3.0 * sigma_v > depth
+    || (view.perspective && (sigma_v > DUST_SPLIT_EPS * depth || span > DUST_SPLIT_EPS * depth));
+  if want && level < depth_max.min(DUST_SPLIT_DEPTH_MAX) {
+    if span > 3.0 * sigma_v {
+      return SplitStep::Split(
+        sub_chord(p, 0.0, 0.5, p.open[0], true),
+        sub_chord(p, 0.5, 1.0, true, p.open[1]),
+      );
+    }
+    if sigma_v > 0.0 {
+      let c = &p.cov;
+      let k = DUST_SPLIT_A / sigma_v;
+      let h = [
+        (c[0] * fwd[0] + c[1] * fwd[1] + c[2] * fwd[2]) * k,
+        (c[1] * fwd[0] + c[3] * fwd[1] + c[4] * fwd[2]) * k,
+        (c[2] * fwd[0] + c[4] * fwd[1] + c[5] * fwd[2]) * k,
+      ];
+      let cov = [
+        c[0] - h[0] * h[0],
+        c[1] - h[0] * h[1],
+        c[2] - h[0] * h[2],
+        c[3] - h[1] * h[1],
+        c[4] - h[1] * h[2],
+        c[5] - h[2] * h[2],
+      ];
+      let child = |mean: [f32; 3]| Packet {
+        mean,
+        cov,
+        seg: p.seg,
+        flux: 0.5 * p.flux,
+        open: p.open,
+        rho: p.rho,
+        seg_t: [0.0; 3],
+      };
+      return SplitStep::Split(child(sub3(p.mean, h)), child(add3(p.mean, h)));
+    }
+  }
+  // (4) still too deep for one Jacobian at the depth limit (inside the coma the children budget
+  // lowers the limit to 0): the exact ray integral instead of a wrong linearisation (the EWA at
+  // the start or the midpoint of such a chord drew 1.42× / 1.94× the truth at 1 km)
+  if want && !force && view.perspective && view.volumetric {
+    return SplitStep::Volume;
+  }
+  SplitStep::Keep
+}
+
+/// The leaves of the perspective split of `p` ([`split_step`] applied depth first to
+/// `stats.depth` levels; with the speck shell `view.shell` > 0, the leaves wholly inside it are
+/// the specks' and left out, those across it split once more while the depth allows, else kept
+/// with `flux × outside_fraction`: `specks::ShellCut`, mirror of the same branch of
+/// `dust_project_split_scatter`).
+///
+/// In full: [`split_step`] applied depth first to
+/// `stats.depth` levels, the frame's limit), pushed onto `out` in a fixed order; `stats` counts
+/// the children made and the largest dropped flux. The host lowers the next frame's depth when
+/// a frame passes the budget ([`SplitStats::suggested_depth`]); the one run-time gate is at
+/// [`DUST_FRAME_HARD_FACTOR`] budgets (the children counted before a split: past it, no further
+/// split), which depends on the order only in frames the feedback has not caught up with (a
+/// cold start inside the coma made 5.5·10⁷ children). `force` splits every node to the
+/// depth limit (tests). An explicit stack of `DUST_SPLIT_DEPTH_MAX + 1` nodes, the same loop as
+/// the GLSL mirror `dust_project_split_scatter`, which scatters each leaf as it is found.
+pub fn split_packet_with(
+  p: &Packet,
+  view: &SplitView,
+  force: bool,
+  out: &mut SplitLeaves,
+  stats: &mut SplitStats,
+) {
+  const N: usize = (DUST_SPLIT_DEPTH_MAX + 1) as usize;
+  let mut stack = [(*p, 0u32, false); N];
+  let mut n = 1usize;
+  // the in-frame gate (mirror of `dust_project_split_scatter`): once a split finds the frame's
+  // children past DUST_FRAME_HARD_FACTOR budgets, this packet's nodes split no further
+  let mut depth = stats.depth;
+  while n > 0 {
+    n -= 1;
+    let (q, level, clipped) = stack[n];
+    match split_step(&q, clipped, level, depth, view, force) {
+      SplitStep::Drop => {
+        if !(stats.dropped_flux >= q.flux) {
+          stats.dropped_flux = q.flux;
+        }
+      }
+      step @ (SplitStep::Keep | SplitStep::Volume) => {
+        // the speck shell's hand-over: a leaf wholly inside is the specks' (not drawn), one
+        // across the boundary is split once more while the depth allows, else drawn with the
+        // fraction of its mass outside
+        let push = |out: &mut SplitLeaves, r: Packet| {
+          if matches!(step, SplitStep::Volume) {
+            out.volume.push(r);
+          } else {
+            out.ewa.push(r);
+          }
+        };
+        let shell = super::specks::ShellCut::new(view.eye, view.shell);
+        match shell.classify(&q) {
+          super::specks::ShellClass::Outside => push(out, q),
+          super::specks::ShellClass::Inside => {}
+          super::specks::ShellClass::Straddles => {
+            let forced = if level < depth.min(DUST_SPLIT_DEPTH_MAX) {
+              split_step(&q, clipped, level, depth, view, true)
+            } else {
+              SplitStep::Keep
+            };
+            if let SplitStep::Split(a, b) = forced {
+              if !stats.gates_off && stats.children > DUST_FRAME_HARD_FACTOR * DUST_SPLIT_BUDGET {
+                depth = 0;
+              }
+              stats.children += 2;
+              stack[n] = (b, level + 1, false);
+              stack[n + 1] = (a, level + 1, false);
+              n += 2;
+            } else {
+              let mut r = q;
+              r.flux *= shell.outside_fraction(&q);
+              if r.flux > 0.0 {
+                push(out, r);
+              }
+            }
+          }
+        }
+      }
+      SplitStep::Clip(a) => {
+        stack[n] = (a, level, true);
+        n += 1;
+      }
+      SplitStep::Split(a, b) => {
+        if !stats.gates_off && stats.children > DUST_FRAME_HARD_FACTOR * DUST_SPLIT_BUDGET {
+          depth = 0;
+        }
+        stats.children += 2;
+        stack[n] = (b, level + 1, false);
+        stack[n + 1] = (a, level + 1, false);
+        n += 2;
+      }
+    }
+  }
+}
+
+/// [`split_packet_with`] under the production rules (no forcing).
+pub fn split_packet(p: &Packet, view: &SplitView, out: &mut SplitLeaves, stats: &mut SplitStats) {
+  split_packet_with(p, view, false, out, stats)
+}
+
+/// Splits `p` ([`split_packet`]), projects every EWA leaf ([`project_packet_lit`]) and scatters
+/// it ([`splat_scatter`]), draws every volumetric leaf by its ray integral ([`volume_scatter`]);
+/// the split counters live in the pyramid header. `scratch` is reused between packets. Returns
+/// the leaves drawn. Mirror of `dust_project_split_scatter` (which draws each leaf as it is
+/// found: the deposits are order-free sums).
+#[allow(clippy::too_many_arguments)]
+pub fn project_split_scatter(
+  p: &Packet,
+  exposure: f32,
+  mvp: &[f32; 16],
+  view: &SplitView,
+  phot: &Photometry,
+  color: [f32; 3],
+  layout: &PyramidLayout,
+  inv_unit: f32,
+  pyramid: &mut [u32],
+  scratch: &mut SplitLeaves,
+) -> u32 {
+  scratch.clear();
+  let mut stats = SplitStats::load(pyramid);
+  split_packet(p, view, scratch, &mut stats);
+  stats.store(pyramid);
+  let mut scattered = 0;
+  for leaf in scratch.volume.iter() {
+    if volume_scatter(
+      leaf, exposure, mvp, view, phot, color, layout, inv_unit, pyramid,
+    ) > 0
+    {
+      scattered += 1;
+    }
+  }
+  for leaf in scratch.ewa.iter() {
+    if let Some(sp) = project_packet_lit(
+      leaf,
+      exposure,
+      mvp,
+      layout.width,
+      layout.height,
+      view.eye,
+      phot,
+    ) {
+      splat_scatter(&sp, color, layout, inv_unit, pyramid);
+      scattered += 1;
+    }
+  }
+  scattered
 }
 
 /// `erf` by Abramowitz & Stegun 7.1.26 (|error| < 1.5e-7). Mirror of `dust_erf`.
@@ -1368,7 +2676,11 @@ pub fn capsule_tau(p: &ScreenPacket, x: [f32; 2]) -> f32 {
   let phi_end = if p.open[1] { 1.0 } else { phi((1.0 - u0) * sa) };
   let phi_start = if p.open[0] { 0.0 } else { phi(-u0 * sa) };
   let span = phi_end - phi_start;
-  let q = (c - b * b / a).max(0.0);
+  // the squared distance to the line, from the residual `e − u₀ d` (not `c − b²/a`: for a chord
+  // whose start is 10⁴ px off screen both terms are ~10⁷ and their f32 difference was off by ~10,
+  // τ by up to e⁵ on screen; the residual's error is |e|·ε ≈ 10⁻³ px)
+  let r = [e[0] - u0 * d[0], e[1] - u0 * d[1]];
+  let q = (m00 * r[0] * r[0] + 2.0 * m01 * r[0] * r[1] + m11 * r[1] * r[1]).max(0.0);
   // the density along the segment is linear, ρ(u) = ρ₀ + (ρ₁ − ρ₀) u: the integral of
   // u · exp(−a(u − u₀)²/2) over the segment is u₀ · I₀ + (E_start − E_end)/a with the
   // Gaussian's values at the closed ends (I₀ = √(2π/a) · span)
@@ -1644,6 +2956,35 @@ impl CapsuleBand {
   }
 }
 
+/// The fraction `u1 − u0` of the screen segment `mu + u · seg`, `u ∈ [0, 1]`, inside the frame
+/// `[−ex, w + ex] × [−ey, h + ey]` (Liang–Barsky; 0 when it misses it): the length of a chord
+/// the band can draw, for the texel estimate of [`splat_scatter`]'s valve. Mirror of
+/// `dust_visible_fraction`.
+pub fn visible_fraction(mu: [f32; 2], seg: [f32; 2], ex: f32, ey: f32, w: f32, h: f32) -> f32 {
+  let (mut u0, mut u1) = (0.0f32, 1.0f32);
+  let clips = [
+    (-seg[0], mu[0] + ex),
+    (seg[0], w + ex - mu[0]),
+    (-seg[1], mu[1] + ey),
+    (seg[1], h + ey - mu[1]),
+  ];
+  for (pk, qk) in clips {
+    if pk == 0.0 {
+      if qk < 0.0 {
+        return 0.0;
+      }
+    } else {
+      let t = qk / pk;
+      if pk < 0.0 {
+        u0 = u0.max(t);
+      } else {
+        u1 = u1.min(t);
+      }
+    }
+  }
+  if u1 > u0 { u1 - u0 } else { 0.0 }
+}
+
 /// Scatters one screen packet of colour `color` into the pyramid: texels of the level chosen by
 /// its smallest σ, within [`DUST_SPLAT_SIGMAS`] of the capsule, counts
 /// `round(τ · texel area · inv_unit)` (≤ [`DUST_COUNT_MAX_PER_ADD`]) into `τ` and `τ·rgb`, the
@@ -1665,19 +3006,66 @@ pub fn splat_scatter(
   let mut level = layout.level_for_sigma(p.sigma_min);
   let ex = DUST_SPLAT_SIGMAS * <f32 as FloatLike>::sqrt(p.cov[0]);
   let ey = DUST_SPLAT_SIGMAS * <f32 as FloatLike>::sqrt(p.cov[2]);
-  // safety valve against runaway threads: a packet whose capsule band would visit more than
-  // DUST_SPLAT_MAX_TEXELS texels goes to a coarser level (blur, never a stall)
-  loop {
+  // the part of the segment the band can draw: inside the frame expanded by the band's own
+  // margin (the rows and columns clip the drawn texels to the frame; the estimate must too, or
+  // a chord thousands of pixels long is pushed to 16–32-px texels for its off-screen length and
+  // smears its τ and colour onto the young pixels around it)
+  let seg_len = <f32 as FloatLike>::sqrt(p.seg[0] * p.seg[0] + p.seg[1] * p.seg[1])
+    * visible_fraction(
+      p.mu,
+      p.seg,
+      ex,
+      ey,
+      layout.width as f32,
+      layout.height as f32,
+    );
+  // safety valve against runaway threads: a packet whose capsule band would visit more than its
+  // cap goes to a coarser level (blur, never a stall). The cap is DUST_SPLAT_MAX_TEXELS
+  // quartered per level of the frame's EWA bias ([`EwaStats`], host-fed from
+  // [`PYR_EWA_TEXELS`]: inside the coma ~10⁶ packets cross the whole screen)
+  let ewa_bias = EwaStats::load(pyramid).bias;
+  let cap = DUST_SPLAT_MAX_TEXELS as f32 / (1u32 << (2 * ewa_bias)) as f32;
+  let band_at = |level: u32| {
     let s = (1u32 << level) as f32;
-    let band = (<f32 as FloatLike>::sqrt(p.seg[0] * p.seg[0] + p.seg[1] * p.seg[1]) / s
-      + 2.0 * ex / s
-      + 2.0)
-      * (2.0 * ey / s + 2.0);
-    if band <= DUST_SPLAT_MAX_TEXELS as f32 || level + 1 >= layout.level_count() {
-      break;
-    }
+    (seg_len / s + 2.0 * ex / s + 2.0) * (2.0 * ey / s + 2.0)
+  };
+  let mut band = band_at(level);
+  while band > DUST_SPLAT_MAX_TEXELS as f32 && level + 1 < layout.level_count() {
     level += 1;
+    band = band_at(level);
   }
+  // the level the per-packet valve alone gives: beyond it (the bias, the gate) the packet is
+  // widened to half its texels below, so it blurs instead of missing every texel centre
+  let level_valve = level;
+  // the bias stops at the gate level (≤ 16 texels a packet there; the 1 × 1 level loses a widened
+  // packet's light off its single texel)
+  while band > cap && level + 1 < layout.level_count() && level < gate_level(layout.level_count()) {
+    level += 1;
+    band = band_at(level);
+  }
+  // the band's texels inside the level (the rows and columns clip to it): the work counted, and
+  // the in-frame gate (mirror of `scatter`): past DUST_FRAME_HARD_FACTOR budgets this frame, at
+  // least [`gate_level`] (a frame the host feedback has not caught up with is bounded at once)
+  {
+    let (_, lw0, lh0) = layout.levels[level as usize];
+    let work = band.min(lw0 as f32 * lh0 as f32);
+    let t = &mut pyramid[PYR_EWA_TEXELS as usize];
+    let before = *t;
+    *t = t.wrapping_add((work / DUST_EWA_TEXEL_UNIT) as u32 + 1);
+    if frame_gates_on(pyramid)
+      && before > DUST_FRAME_HARD_FACTOR * (DUST_EWA_FRAME_BUDGET / DUST_EWA_TEXEL_UNIT as u32)
+    {
+      level = level.max(gate_level(layout.level_count()));
+    }
+  }
+  let widened;
+  let p = if level > level_valve {
+    let s = (1u32 << level) as f32;
+    widened = widen_screen_packet(p, 0.25 * s * s);
+    &widened
+  } else {
+    p
+  };
   let (off, w, h) = layout.levels[level as usize];
   let written = scatter_into(
     p,
@@ -1694,6 +3082,38 @@ pub fn splat_scatter(
     pyramid[PYR_LEVEL_MASK as usize] |= 1 << level;
   }
   written
+}
+
+/// The level a packet past an in-frame gate ([`DUST_FRAME_HARD_FACTOR`]) is drawn at least at:
+/// two below the coarsest, a grid of ~4 × 3 texels at any resolution (≤ 16 texels a packet; the
+/// 1 × 1 level spread a widened packet mostly off the frame)
+pub fn gate_level(levels: u32) -> u32 {
+  levels.saturating_sub(3)
+}
+
+/// `p` with `v` px² added to both axes of its screen covariance, its integral kept (`amp ×
+/// √(det / det′)`, the determinant floored as in [`project_packet_lit`]): a packet the EWA bias
+/// or the in-frame gate sends to texels of `s` px coarser than its width is drawn with
+/// `v = s²/4` (σ ≥ s/2: the texel-centre sum is its integral within `2·exp(−π²/2)` ≈ 1.4 %),
+/// not point-sampled at their centres (a thin chord at a coarse level missed them all and its
+/// light was lost).
+/// Mirror of `dust_widen_screen_packet`.
+pub fn widen_screen_packet(p: &ScreenPacket, v: f32) -> ScreenPacket {
+  let mut q = *p;
+  q.cov[0] += v;
+  q.cov[2] += v;
+  let half = 0.5 * (q.cov[0] + q.cov[2]);
+  let dd = <f32 as FloatLike>::sqrt(
+    (0.5 * (q.cov[0] - q.cov[2])) * (0.5 * (q.cov[0] - q.cov[2])) + q.cov[1] * q.cov[1],
+  );
+  let lam_max = (half + dd).max(DUST_PIXEL_FILTER_VAR);
+  let det = (q.cov[0] * q.cov[2] - q.cov[1] * q.cov[1])
+    .max(DUST_DET_ANISO_FLOOR * lam_max * lam_max)
+    .max(1e-30);
+  q.amp = p.amp * <f32 as FloatLike>::sqrt(p.det / det);
+  q.det = det;
+  q.sigma_min = <f32 as FloatLike>::sqrt((det / lam_max).max(DUST_PIXEL_FILTER_VAR * 0.5));
+  q
 }
 
 /// 32-bit integer hash (lowbias32): the colour words' rounding threshold per texel, the same
@@ -1932,12 +3352,113 @@ pub fn splat_tier_range(
 ) {
   let stream = unpack_color(pc.color);
   let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+  // the speck shell of the frame, read once per tier (0 when there is none: orthographic
+  // views, the specks off)
+  let mut view = SplitView::of(&pc.mvp, eye);
+  view.shell = super::specks::ShellCut::from_header(pyramid, eye).d_max;
+  let mut scratch = SplitLeaves::default();
   let n = (pc.live_count as usize).min(moments.len()).min(render.len());
+  // `AETHERVK_DUST_PROBE="x,y;x,y"` (diagnostics, CPU particle mode): per cluster, the τ it adds
+  // at those pixels (composite read before and after), the largest contributors logged per tier
+  #[cfg(feature = "std")]
+  let probes = probe_pixels();
+  #[cfg(feature = "std")]
+  let unit = if pc.inv_unit > 0.0 { 1.0 / pc.inv_unit } else { 1.0 };
+  #[cfg(feature = "std")]
+  let mut probe_log: alloc::vec::Vec<alloc::vec::Vec<(f32, usize)>> =
+    alloc::vec![alloc::vec::Vec::new(); probes.len()];
+  #[cfg(feature = "std")]
+  let mut probe_total = alloc::vec![0.0f32; probes.len()];
   for i in range.start..range.end.min(n) {
     let m = &moments[i];
     if !(m.flux() > 0.0) {
       continue;
     }
+    #[cfg(feature = "std")]
+    let before: alloc::vec::Vec<f32> = probes
+      .iter()
+      .map(|&(x, y)| composite_sample(layout, pyramid, unit, x, y).0)
+      .collect();
+    splat_cluster_inner(
+      moments, render, pc, flow, tracer_counts, layout, pyramid, &view, &mut scratch, stream, eye,
+      i,
+    );
+    #[cfg(feature = "std")]
+    for (k, &(x, y)) in probes.iter().enumerate() {
+      let d = composite_sample(layout, pyramid, unit, x, y).0 - before[k];
+      if d > 0.0 {
+        probe_total[k] += d;
+        probe_log[k].push((d, i));
+      }
+    }
+  }
+  #[cfg(feature = "std")]
+  for (k, &(x, y)) in probes.iter().enumerate() {
+    let log = &mut probe_log[k];
+    log.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(core::cmp::Ordering::Equal));
+    let tot = probe_total[k].max(1e-30);
+    let mut line = alloc::format!(
+      "[Dust probe] tier live {} pixel ({x},{y}): τ {:.4e} from {} clusters; top:",
+      n,
+      probe_total[k],
+      log.len()
+    );
+    for &(d, i) in log.iter().take(8) {
+      let m = &moments[i];
+      let dm = sub3(m.mean(), eye);
+      let dist = <f32 as FloatLike>::sqrt(dot3(dm, dm));
+      let fwd = view.fwd;
+      let depth = dot3(dm, fwd);
+      let cv = m.cov_v();
+      let tr = cv[0] + cv[3] + cv[5];
+      line += &alloc::format!(
+        " [{:.1}% idx {i} age {:.0}s dist {:.0}m depth {:.0}m σ̄_v {:.0}m pred {}]",
+        100.0 * d / tot,
+        m.age(),
+        dist,
+        depth,
+        <f32 as FloatLike>::sqrt((tr / 3.0).max(0.0)),
+        streak_pred(render, i).is_some()
+      );
+    }
+    aethervk_oshal_rlib::log!("{}", line);
+  }
+}
+
+/// `AETHERVK_DUST_PROBE="x,y;x,y"`: the probe pixels of [`splat_tier_range`] (diagnostics)
+#[cfg(feature = "std")]
+fn probe_pixels() -> alloc::vec::Vec<(u32, u32)> {
+  std::env::var("AETHERVK_DUST_PROBE")
+    .ok()
+    .map(|v| {
+      v.split(';')
+        .filter_map(|p| {
+          let mut it = p.split(',');
+          Some((it.next()?.trim().parse().ok()?, it.next()?.trim().parse().ok()?))
+        })
+        .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// One cluster of [`splat_tier_range`] (its body; split out for the probe).
+#[allow(clippy::too_many_arguments)]
+fn splat_cluster_inner(
+  moments: &[DustMoments],
+  render: &[DustRenderCluster],
+  pc: &DustSplatPushConstants,
+  flow: &DustFlowUniform,
+  tracer_counts: u32,
+  layout: &PyramidLayout,
+  pyramid: &mut [u32],
+  view: &SplitView,
+  scratch: &mut SplitLeaves,
+  stream: [f32; 3],
+  eye: [f32; 3],
+  i: usize,
+) {
+  {
+    let m = &moments[i];
     let pred_i = streak_pred(render, i);
     let pred = pred_i.map(|q| &moments[q]);
     let seg = match pred {
@@ -1955,27 +3476,31 @@ pub fn splat_tier_range(
       r_h_au: m.helio_au(),
     };
     let color = age_color(stream, m.age(), pc.eye_local[3]);
-    let mut first: Option<[f32; 2]> = None;
     // pooled only when the predecessor's polyline is below a pixel too: a just-emitted sample is
     // a point whose time pieces are shaped by its predecessor, and a predecessor whose sizes
     // already span kilometres must be drawn bin by bin (the halo behind the nucleus of the 5-km
     // frame came from its pooled covariance)
     let pred_merged = pred.is_none_or(|p| polyline_merged(p, &pc.mvp, layout.width, layout.height));
-    let merged = polyline_merged(m, &pc.mvp, layout.width, layout.height) && pred_merged;
+    // (perspective: neither the polylines nor the time segment between them may be deep)
+    let merged = polyline_merged(m, &pc.mvp, layout.width, layout.height)
+      && pred_merged
+      && pred.is_none_or(|p| time_shallow(m, p, &pc.mvp));
     let px = |q: [f32; 3]| project_point(q, &pc.mvp, layout.width, layout.height);
+    // every sub-packet is split for the perspective (clipped at the eye plane, sliced by depth:
+    // `split_packet`) and its leaves are projected and scattered one by one
     for p in subpackets_swept(m, seg, pred, merged, pred_merged, Some(&px)) {
-      if let Some(sp) = project_packet_lit(
+      project_split_scatter(
         &p,
         exposure,
         &pc.mvp,
-        layout.width,
-        layout.height,
-        eye,
+        view,
         &phot,
-      ) {
-        splat_scatter(&sp, color, layout, pc.inv_unit, pyramid);
-        first.get_or_insert(sp.mu);
-      }
+        color,
+        layout,
+        pc.inv_unit,
+        pyramid,
+        scratch,
+      );
     }
     if pc.flags & DUST_VIEW_TRACERS != 0 && is_tracer(m.id()) {
       // the tracer sits at the exact cluster position
@@ -1986,12 +3511,12 @@ pub fn splat_tier_range(
         flux: 1.0,
         open: [false, false],
         rho: [1.0, 1.0],
+        seg_t: [0.0; 3],
       };
       if let Some(sp) = project_packet(&p, 1.0, &pc.mvp, layout.width, layout.height, eye) {
         splat_tracer(sp.mu, tracer_counts, layout, pyramid);
       }
     }
-    let _ = first;
   }
 }
 

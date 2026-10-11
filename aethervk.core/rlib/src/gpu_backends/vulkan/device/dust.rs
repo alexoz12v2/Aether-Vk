@@ -29,6 +29,7 @@ use super::*;
 use crate::scene::dust::{
   self, DustBatch, DustCluster, DustEmitPushConstants, DustFrame, DustMoments,
   DustPropagatePushConstants, DustRenderCluster, DustSplatPushConstants, PyramidLayout,
+  specks::{self, DustSpecksPushConstants, ShellUpdate, SpeckHeader},
 };
 
 /// batch descriptor slots per system; a slot is reused after this many emissions (a tick records
@@ -44,6 +45,21 @@ const DUST_WG: u32 = 64;
 pub const DUST_READBACK_SLOTS: usize = 4;
 /// alias kept for the dust trace
 pub const LOD_READBACK_SLOTS: usize = DUST_READBACK_SLOTS;
+
+/// `AETHERVK_DUST_SPECKS=1` turns the speck shell on (off by default) (the pass still measures the density at
+/// the eye); on by default.
+fn specks_enabled() -> bool {
+  // off by default until the speck pass has a GPU parity test and an observer validation
+  // (2026-10-11): `AETHERVK_DUST_SPECKS=1` turns it on
+  aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPECKS").is_some_and(|v| v.trim() == "1")
+}
+
+/// `AETHERVK_DUST_SPECKS_BUDGET=<n>`: specks per frame, `specks::DUST_SPECKS_BUDGET` by default.
+fn specks_budget() -> u32 {
+  aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPECKS_BUDGET")
+    .and_then(|v| v.trim().parse::<u32>().ok())
+    .unwrap_or(specks::DUST_SPECKS_BUDGET)
+}
 
 /// Memory of a dust buffer.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -143,6 +159,45 @@ pub struct DustViewHost {
   /// per readback slot: the unit when it was recorded
   slot_unit: [f32; DUST_READBACK_SLOTS],
   slot_valid: [bool; DUST_READBACK_SLOTS],
+  /// the view's pixel solid angle (sr; 0 = orthographic or unknown: no speck shell), set by
+  /// [`Device::dust_set_shell_camera`] every frame
+  pub omega_px_sr: f64,
+  /// the speck shell of the last measured frame (`specks::ShellUpdate`): the density at the eye,
+  /// the specks drawn / overflowed and the radius the next frame draws with
+  pub shell: ShellUpdate,
+  /// a fixed shell radius (local m) that replaces the measured one, whatever
+  /// `AETHERVK_DUST_SPECKS` says ([`Device::dust_set_shell_override`]; tests, diagnostics)
+  pub shell_override: Option<f32>,
+  /// the packet split's depth limit the next frame draws with (`PYR_SPLIT_DEPTH`): lowered by
+  /// `log2(children / budget)` levels when a measured frame made more children than
+  /// `DUST_SPLIT_BUDGET` (each level at most doubles them), raised one level when it made fewer
+  /// than a quarter; `AETHERVK_DUST_SPLIT_DEPTH` caps it (diagnostics)
+  pub split_depth: u32,
+  /// the smallest split depth seen over the budget (`u32::MAX`: none): the depth is never raised
+  /// to it again (at depth 0 a frame makes no children and says nothing about depth 1, which
+  /// made the feedback oscillate 0 ↔ 1 with 11 M children every other frame)
+  pub split_depth_over: u32,
+  /// the volumetric packets' level bias the next frame draws with (`PYR_SPLIT_DEPTH` bits 8–15):
+  /// one coarser when a measured frame spent more than `DUST_VOLUME_FRAME_BUDGET` ray-integral
+  /// evaluations, one finer below an eighth of it (`VolumeStats::suggested_bias`)
+  pub volume_bias: u32,
+  /// the EWA packets' bias the next frame draws with (`PYR_SPLIT_DEPTH` bits 18–21: the
+  /// per-packet texel cap is `DUST_SPLAT_MAX_TEXELS / 4^bias`), from the texels a measured frame
+  /// planned (`EwaStats::suggested_bias`)
+  pub ewa_bias: u32,
+}
+
+/// how long the pyramid download (diagnostics, `download_dust_pyramid`) waits for the graphics
+/// queue: the frames already in flight complete first, and a perspective frame inside the coma
+/// takes seconds (5 s lost every dump of the near-field runs)
+const DUST_DOWNLOAD_WAIT_NS: u64 = 60_000_000_000;
+
+/// `AETHERVK_DUST_SPLIT_DEPTH=<n>`: caps the packet split's depth (0 = no split; diagnostics)
+fn split_depth_cap() -> u32 {
+  aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPLIT_DEPTH")
+    .and_then(|v| v.trim().parse::<u32>().ok())
+    .unwrap_or(dust::DUST_SPLIT_DEPTH_MAX)
+    .min(dust::DUST_SPLIT_DEPTH_MAX)
 }
 
 impl Default for DustViewHost {
@@ -154,6 +209,20 @@ impl Default for DustViewHost {
       frame: 0,
       slot_unit: [0.0; DUST_READBACK_SLOTS],
       slot_valid: [false; DUST_READBACK_SLOTS],
+      omega_px_sr: 0.0,
+      shell: ShellUpdate {
+        n_eye_m3: 0.0,
+        specks: 0,
+        overflow: 0,
+        truncated: 0,
+        nodes: 0,
+        d_max_m: 0.0,
+      },
+      shell_override: None,
+      split_depth: dust::DUST_SPLIT_DEPTH_MAX,
+      split_depth_over: u32::MAX,
+      volume_bias: 0,
+      ewa_bias: 0,
     }
   }
 }
@@ -181,6 +250,94 @@ impl DustViewHost {
     let v = f32::from_bits(header[dust::PYR_TAU_MAX as usize]);
     if v.is_finite() && v > 0.0 {
       self.tau_max = v;
+    }
+    // the packet split's depth for the next frames: down by log2(children / budget) levels when
+    // over the budget (a level at most doubles the children), up one level below a quarter of it
+    let split = dust::SplitStats::load(header);
+    if split.children > dust::DUST_SPLIT_BUDGET {
+      self.split_depth_over = self.split_depth_over.min(split.depth);
+    }
+    let next = if split.children > dust::DUST_SPLIT_BUDGET {
+      let ratio = split.children as f32 / dust::DUST_SPLIT_BUDGET as f32;
+      let down = (<f32 as aethervk_oshal_rlib::math::FloatLike>::ln(ratio)
+        / core::f32::consts::LN_2)
+        .ceil() as u32;
+      split.depth.saturating_sub(down.max(1))
+    } else {
+      let up = split.suggested_depth();
+      if up >= self.split_depth_over {
+        split.depth
+      } else {
+        up
+      }
+    };
+    if next != self.split_depth {
+      aethervk_oshal_rlib::log!(
+        "[Dust split] {} children at depth {} (budget {}): depth {} for the next frames",
+        split.children,
+        split.depth,
+        dust::DUST_SPLIT_BUDGET,
+        next
+      );
+    }
+    self.split_depth = next;
+    let vol = dust::VolumeStats::load(header);
+    // over the budget: coarser by log4(evals / budget) levels at once (a level divides the
+    // texels by 4; inside the coma the first frame asks ~45× the budget, and one level per
+    // readback took four slow frames to settle); else the one-step rule
+    let bias = if vol.evals > dust::DUST_VOLUME_FRAME_BUDGET {
+      let ratio = vol.evals as f64 / dust::DUST_VOLUME_FRAME_BUDGET as f64;
+      let up = (ratio.ln() / 4f64.ln()).ceil().max(1.0) as u32;
+      (vol.bias + up).min(dust::DUST_VOLUME_BIAS_MAX)
+    } else {
+      vol.suggested_bias()
+    };
+    if bias != self.volume_bias {
+      aethervk_oshal_rlib::log!(
+        "[Dust volume] {} ray-integral evaluations at bias {} (budget {}): bias {} for the next frames",
+        vol.evals,
+        vol.bias,
+        dust::DUST_VOLUME_FRAME_BUDGET,
+        bias
+      );
+    }
+    self.volume_bias = bias;
+    let ewa = dust::EwaStats::load(header);
+    let ewa_bias = ewa.suggested_bias();
+    if ewa_bias != self.ewa_bias {
+      aethervk_oshal_rlib::log!(
+        "[Dust EWA] {:.3e} texels at bias {} (budget {:.3e}): bias {} for the next frames",
+        ewa.texels as f64,
+        ewa.bias,
+        dust::DUST_EWA_FRAME_BUDGET as f64,
+        ewa_bias
+      );
+    }
+    self.ewa_bias = ewa_bias;
+    // the speck shell: the density at the eye → the next radius; inward on a budget overflow,
+    // outward toward half of it under a quarter, from DUST_SPECKS_START_M before any (a cold start
+    // inside the coma cannot overflow)
+    let prev = if self.shell.d_max_m > 0.0 {
+      self.shell.d_max_m
+    } else {
+      crate::scene::dust::specks::DUST_SPECKS_START_M
+    };
+    self.shell = ShellUpdate::from_header(header, self.omega_px_sr, prev);
+    if self.shell.truncated > 0 {
+      aethervk_oshal_rlib::log!(
+        "[Dust specks] {} walks stopped by a node cap ({} nodes): their specks are missing",
+        self.shell.truncated,
+        self.shell.nodes
+      );
+    }
+    if self.shell.overflow > 0 {
+      aethervk_oshal_rlib::log!(
+        "[Dust specks] budget overflow: {} specks refused by the budget ({} drawn), shell {:.3} m → {:.3} m",
+        self.shell.overflow,
+        self.shell.specks,
+        prev,
+        self.shell.d_max_m
+      );
     }
   }
 
@@ -308,6 +465,13 @@ pub struct DustViewParams {
   pub p50: f32,
   /// auto softening (`dust::auto_softening`)
   pub softening: f32,
+  /// the speck shell radius this frame draws with (local m, 0 = no specks)
+  pub d_max_m: f32,
+  /// the number density at the eye of the last measured frame (m⁻³)
+  pub n_eye_m3: f32,
+  /// specks drawn / beyond the budget in the last measured frame
+  pub specks: u32,
+  pub specks_overflow: u32,
 }
 
 impl Device {
@@ -459,16 +623,26 @@ impl Device {
       .remove(&id)
       .ok_or(gpu_err!("particle system with id {} not found", id))?;
     let allocator = res.allocator.allocator.as_allocator_view();
-    // clusters: written by compute, read by graphics. Wait (bounded) for the last compute submit,
-    // then retire it with the graphics frames that may still read it. Discards are rare.
-    if let Some(b) = sys.clusters.take() {
-      let last_compute = comp_timeline.saturating_sub(1);
-      if last_compute > 0 {
-        let _ =
-          self
-            .device
-            .wait_for_semaphore_value(self.kernels.timeline, last_compute, 1_000_000_000);
-      }
+    // clusters, render, moments: written by compute, read by graphics. Wait (bounded) for the last
+    // compute submit, then retire them with the graphics frames that may still read them. If the
+    // compute work has not completed within the bound (a heavy frame, GPU-AV), they are leaked
+    // instead: freeing them under the compute queue is a use-after-free (a plausible Xid 13/32).
+    // Discards are rare.
+    let last_compute = comp_timeline.saturating_sub(1);
+    let compute_done = last_compute == 0
+      || self
+        .device
+        .wait_for_semaphore_value(self.kernels.timeline, last_compute, 1_000_000_000)
+        .is_ok();
+    if !compute_done {
+      aethervk_oshal_rlib::log!(
+        "[Dust] particle system {} removed while its compute work is still in flight: its compute-written buffers are leaked",
+        id
+      );
+    }
+    if let Some(b) = sys.clusters.take()
+      && compute_done
+    {
       res.discard_pool.discard_buffer(
         allocator.as_allocator_view(),
         b.buffer,
@@ -485,7 +659,13 @@ impl Device {
       );
     }
     let trace = sys.trace_rb.get_mut().take().map(|(b, _)| b);
-    for b in [sys.render.take(), sys.moments.take(), trace].into_iter().flatten() {
+    let (render, moments) = (sys.render.take(), sys.moments.take());
+    let compute_written = if compute_done {
+      [render, moments]
+    } else {
+      [None, None]
+    };
+    for b in compute_written.into_iter().chain([trace]).flatten() {
       res.discard_pool.discard_buffer(
         allocator.as_allocator_view(),
         b.buffer,
@@ -850,11 +1030,47 @@ impl Device {
     host.slot_unit[slot] = unit;
     let (white, softening) = host.display();
     let p50 = host.p50;
+    let shell = host.shell;
+    let shell_override = host.shell_override;
+    let split_depth = host.split_depth.min(split_depth_cap());
+    // `AETHERVK_DUST_VOLUME_BIAS=<n>`: a fixed volumetric level bias (diagnostics: measures what the
+    // frame budget's coarsening costs in accuracy; the per-packet evaluation cap still bounds work)
+    let volume_bias = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VOLUME_BIAS")
+      .and_then(|v| v.trim().parse::<u32>().ok())
+      .unwrap_or(host.volume_bias)
+      .min(255);
+    // `AETHERVK_DUST_EWA_BIAS=<n>`: a fixed EWA bias (diagnostics)
+    let ewa_bias = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_EWA_BIAS")
+      .and_then(|v| v.trim().parse::<u32>().ok())
+      .unwrap_or(host.ewa_bias)
+      .min(dust::DUST_EWA_BIAS_MAX);
     drop(host);
     let _ = (lvl_off, lw, lh);
     // the header: level table + this frame's view words
     let mut header = view.layout.header();
     header[dust::PYR_FLAGS as usize] = flags;
+    // `AETHERVK_DUST_VOLUME_AXIS=chord|time|grid`: the volumetric packets' piece axes (bits 16–17)
+    let volume_axis = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VOLUME_AXIS")
+      .map(|v| dust::volume_axis_from_str(&v))
+      .unwrap_or(dust::DUST_VOLUME_AXIS_CHORD);
+    // `AETHERVK_DUST_FRAME_GATES=0`: the in-frame gates off (diagnostics: unbounded frame work)
+    let gates_off = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_FRAME_GATES")
+      .is_some_and(|v| v.trim() == "0");
+    header[dust::PYR_SPLIT_DEPTH as usize] = split_depth
+      | (volume_bias << 8)
+      | (volume_axis << 16)
+      | (ewa_bias << 18)
+      | ((gates_off as u32) << dust::DUST_FRAME_GATES_OFF_BIT)
+      | ((dust::jacobian_at_start() as u32) << 23);
+    // the speck shell of this frame (`AETHERVK_DUST_SPECKS=1` turns the specks on; a test's or a
+    // diagnostic's override wins) and the budget (`AETHERVK_DUST_SPECKS_BUDGET`); the size law is
+    // per system, in the speck push constants
+    let d_max = match shell_override {
+      Some(d) => d,
+      None if specks_enabled() => shell.d_max_m,
+      None => 0.0,
+    };
+    SpeckHeader::write(&mut header, d_max, specks_budget());
     header[dust::PYR_T_HI as usize] = flow.t_hi.to_bits();
     header[dust::PYR_T_LO as usize] = flow.t_lo.to_bits();
     // tracer dot: a fixed level of the white point, in counts (area 1 px²)
@@ -901,7 +1117,123 @@ impl Device {
       white,
       p50,
       softening,
+      d_max_m: d_max,
+      n_eye_m3: shell.n_eye_m3 as f32,
+      specks: shell.specks,
+      specks_overflow: shell.overflow,
     })
+  }
+
+  /// Sets the view's pixel solid angle (sr) for the speck shell: `(3 / (n_eye Ω_px))^{1/3}` is
+  /// computed when the header is read back ([`DustViewHost::absorb`]). 0 (an orthographic camera)
+  /// disables the shell. After [`Self::cmd_dust_frame_begin`] (the view exists then); it is used
+  /// from the next readback on.
+  pub fn dust_set_shell_camera(&self, pe: gpu::PresentationEngineHandle, omega_px_sr: f64) {
+    let res = self.res.read();
+    let Some(mgr) = res.dust_manager.as_ref() else {
+      return;
+    };
+    if let Some(view) = mgr.views.get(&pe) {
+      view.host.lock().omega_px_sr = if omega_px_sr.is_finite() && omega_px_sr > 0.0 {
+        omega_px_sr
+      } else {
+        0.0
+      };
+    }
+  }
+
+  /// Fixes the speck shell radius (local m) of view `pe` from its next frame on, whatever the
+  /// measurement and `AETHERVK_DUST_SPECKS` (`None` returns to the measured shell). The view
+  /// must exist (after the first [`Self::cmd_dust_frame_begin`]). Tests and diagnostics.
+  pub fn dust_set_shell_override(&self, pe: gpu::PresentationEngineHandle, d_max: Option<f32>) {
+    let res = self.res.read();
+    let Some(mgr) = res.dust_manager.as_ref() else {
+      return;
+    };
+    if let Some(view) = mgr.views.get(&pe) {
+      view.host.lock().shell_override = d_max.filter(|d| d.is_finite() && *d >= 0.0);
+    }
+  }
+
+  /// Records (GPU) or performs (CPU mode) the speck pass of one tier of system `id` into the
+  /// pyramid of `pe` (see `dust_specks.comp`, mirror `dust::specks::specks_tier`): after the
+  /// tier's splat ([`Self::cmd_dust_splat`]), before [`Self::cmd_dust_post_splat_barrier`]; the
+  /// two passes only add into the pyramid (atomics), so they need no barrier between them. The
+  /// pass always runs (it measures the density at the eye for the next frame's shell); it draws
+  /// only when the header's shell radius is positive.
+  #[allow(clippy::too_many_arguments)]
+  pub fn cmd_dust_specks(
+    &self,
+    cmd: vk::CommandBuffer,
+    pe: gpu::PresentationEngineHandle,
+    id: u64,
+    ring_base: u32,
+    render: u64,
+    moments: u64,
+    mut pc: DustSpecksPushConstants,
+  ) -> GpuResult<()> {
+    let res = self.res.read();
+    let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
+    let sys = mgr.systems.get(&id).ok_or(gpu_err!("dust system {} not found", id))?;
+    let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
+    let frame_no = view.host.lock().frame;
+    let (pyramid, pyramid_mapped) = if sys.cpu_ring.is_some() {
+      view.cpu_pyramid(frame_no).ok_or(gpu_err!("dust view has no pyramid"))?
+    } else {
+      (
+        view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?,
+        core::ptr::null_mut(),
+      )
+    };
+    pc.render = render;
+    pc.moments = moments;
+    pc.pyramid = pyramid.address;
+    if sys.cpu_ring.is_some() {
+      let cpu = sys.cpu_render.lock();
+      let Some((clusters, moms)) = cpu.get(&ring_base) else {
+        return Ok(());
+      };
+      let flow = sys.host.lock().flow;
+      let words = unsafe {
+        core::slice::from_raw_parts_mut(
+          pyramid_mapped.cast::<u32>(),
+          view.layout.total_words as usize,
+        )
+      };
+      pc.live_count = pc.live_count.min(clusters.len() as u32);
+      let stats = specks::specks_tier(moms, clusters, &pc, &flow, &view.layout, words);
+      if stats.truncated > 0 {
+        aethervk_oshal_rlib::log!(
+          "[Dust specks] {} (cluster, bin) walks hit the node cap ({} drawn)",
+          stats.truncated,
+          stats.drawn
+        );
+      }
+      res.allocator.allocator.as_allocator_view().flush_allocation(
+        &pyramid.alloc,
+        0,
+        view.layout.total_words as u64 * 4,
+      )?;
+      return Ok(());
+    }
+    if pc.live_count == 0 {
+      return Ok(());
+    }
+    let pipeline = self.kernels.pipelines.dust_specks;
+    self.kernels.pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&pc));
+    let threads = pc.live_count.saturating_mul(dust::SIZE_BINS);
+    unsafe {
+      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
+      self.device.cmd_push_constants(
+        cmd,
+        self.kernels.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytemuck::bytes_of(&pc),
+      );
+      self.device.cmd_dispatch(cmd, threads.div_ceil(DUST_WG), 1, 1);
+    }
+    Ok(())
   }
 
   /// Records (GPU) or performs (CPU mode) the splat pass of one tier of system `id` into the
@@ -1132,6 +1464,10 @@ impl Device {
       white,
       p50: host.p50,
       softening,
+      d_max_m: host.shell.d_max_m,
+      n_eye_m3: host.shell.n_eye_m3 as f32,
+      specks: host.shell.specks,
+      specks_overflow: host.shell.overflow,
     })
   }
 
@@ -1166,7 +1502,7 @@ impl Device {
       self.begin_command_buffer_all(handle, QueueRole::Graphics)?;
       let (sem, value) =
         self.submit_command_buffer_generic(handle, None, &[], &[], QueueRole::Graphics)?;
-      self.device.wait_for_semaphore_value(sem, value, 5_000_000_000)?;
+      self.device.wait_for_semaphore_value(sem, value, DUST_DOWNLOAD_WAIT_NS)?;
       let v = unsafe { core::slice::from_raw_parts(ptr.cast::<u32>(), words as usize) }.to_vec();
       return Ok(v);
     }
@@ -1180,6 +1516,7 @@ impl Device {
       vk::BufferUsageFlags::TRANSFER_DST,
       "DustPyramidDownload",
     )?;
+    let mut in_flight = false;
     let out: GpuResult<alloc::vec::Vec<u32>> = (|| {
       let (handle, cmd) = self.get_command_buffer_and_native()?;
       self.begin_command_buffer_all(handle, QueueRole::Graphics)?;
@@ -1210,12 +1547,24 @@ impl Device {
       }
       let (sem, value) =
         self.submit_command_buffer_generic(handle, None, &[], &[], QueueRole::Graphics)?;
-      self.device.wait_for_semaphore_value(sem, value, 5_000_000_000)?;
+      in_flight = true;
+      self.device.wait_for_semaphore_value(sem, value, DUST_DOWNLOAD_WAIT_NS)?;
+      in_flight = false;
       allocator.invalidate_allocation(&staging.alloc, 0, words as u64 * 4)?;
       Ok(unsafe { core::slice::from_raw_parts(mapped.cast::<u32>(), words as usize) }.to_vec())
     })();
-    let mut a = staging.alloc;
-    unsafe { allocator.destroy_buffer(staging.buffer, &mut a) };
+    if in_flight {
+      // the copy was submitted and its wait failed or timed out: the GPU may still write the
+      // staging buffer, so it is leaked rather than freed under it (a use-after-free and a
+      // plausible GPU fault otherwise); a diagnostics-only path
+      aethervk_oshal_rlib::log!(
+        "[Dust] pyramid download: the copy did not complete; staging buffer leaked ({} bytes)",
+        words as u64 * 4
+      );
+    } else {
+      let mut a = staging.alloc;
+      unsafe { allocator.destroy_buffer(staging.buffer, &mut a) };
+    }
     out
   }
 

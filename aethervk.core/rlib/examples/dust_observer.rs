@@ -195,7 +195,21 @@ enum Pose {
   UpZenith,
   AntiSun,
   Earth,
+  /// `--pose inside`: a perspective camera `--inside-m D` sunward of the nucleus on the
+  /// anti-solar axis, looking through the nucleus down the tail (the near field, WP3)
+  Inside,
 }
+
+impl Pose {
+  /// the perspective poses (the Monte-Carlo truth weights each grain by its pixel footprint at
+  /// its depth and the per-pixel scale is taken at the nucleus' depth)
+  fn is_perspective(self) -> bool {
+    matches!(self, Pose::Earth | Pose::Inside)
+  }
+}
+
+/// `--pose inside`: the camera's field of view (full, degrees) unless `--fov-deg` is given
+const INSIDE_FOV_DEG: f64 = 60.0;
 
 struct Args {
   out: PathBuf,
@@ -208,7 +222,22 @@ struct Args {
   reemit_every: u32,
   check: bool,
   half_height_km: Option<f64>,
-  fov_deg: f64,
+  /// `--fov-deg`: the perspective poses' full field of view (default 2° for `earth`,
+  /// [`INSIDE_FOV_DEG`] for `inside`)
+  fov_deg: Option<f64>,
+  /// `--inside-m D` / `--inside-km D`: the `inside` camera's distance from the nucleus surface
+  /// (metres; default 1000; the centre distance is D + 2 km)
+  inside_m: f64,
+  /// `--lat`, `--lon` (degrees) and `--elev` (metres above the WGS84 ellipsoid): the `earth`
+  /// pose's observing site (default 45°, 0°, 0 m)
+  lat_deg: f64,
+  /// `None` (`--lon auto`, the default): the longitude where the comet transits at the first
+  /// frame's epoch (a fixed longitude at UTC midnight puts it below the horizon half the year)
+  lon_deg: Option<f64>,
+  elev_m: f64,
+  /// `--sky-image-check` (`--pose earth`): per frame, a synthetic FITS of crosses at known RA/Dec
+  /// loaded as the sky overlay, rendered, the crosses found within 1 px of their WCS pixels
+  sky_image_check: bool,
   start: Epoch,
   spk: Option<PathBuf>,
   quiet: bool,
@@ -216,6 +245,9 @@ struct Args {
   no_jet: bool,
   hide_sun: bool,
   full_teardown: bool,
+  /// `--no-sheet`: no contact sheet, so no frame kept in memory (W·H·4 bytes each: a soak run's
+  /// process memory is then the engine's)
+  no_sheet: bool,
   /// ignition `start + ignite_days` (default 0: the jet starts emitting at the start epoch)
   ignite_days: f64,
   /// pre-existing tail (history back 64 TTL before the start): the legacy behaviour
@@ -236,6 +268,9 @@ struct Args {
   /// frames: a 5-km frame shows the last hour of the jet while the older dust's kernels cover it
   /// as a background the Monte Carlo cannot sample)
   mc_age_max: Option<f64>,
+  /// `--mc-age-min S`: the truth (and, through `AETHERVK_DUST_DEBUG_AGE_MIN`, the render once the
+  /// engine honours it) hold the dust older than S seconds only
+  mc_age_min: Option<f64>,
   /// `--view-flags F`: dust view flags (`DUST_VIEW_TRACERS` 1, `DUST_VIEW_FLOW` 2; default 0, the
   /// plain optical depth, what the Monte-Carlo truth compares with and the app's default)
   view_flags: u32,
@@ -252,10 +287,10 @@ struct Args {
 fn usage() -> ! {
   eprintln!(
     "usage: dust_observer --out DIR [--days 30] [--step-hours 24] [--size 1280x800]\n\
-     \x20      [--pose up-zenith|anti-sun|earth] [--play SECONDS] [--reemit-every N] [--check]\n\
-     \x20      [--half-height-km KM] [--fov-deg DEG] [--start YYYY-MM-DD] [--spk FILE.bsp]\n\
-     \x20      [--quiet] [--settle-frames N] [--no-jet] [--hide-sun] [--full-teardown]\n\
-     \x20      [--ignite-days D] [--prestart] [--ripple-max R] [--spin-hours H] [--mc N] [--mc-max R] [--view-flags F]\n\
+     \x20      [--pose up-zenith|anti-sun|earth|inside] [--play SECONDS] [--reemit-every N] [--check]\n\
+     \x20      [--half-height-km KM] [--fov-deg DEG] [--inside-m D | --inside-km D] [--lat DEG --lon DEG --elev M] [--sky-image-check] [--start YYYY-MM-DD] [--spk FILE.bsp]\n\
+     \x20      [--quiet] [--settle-frames N] [--no-jet] [--hide-sun] [--full-teardown] [--no-sheet]\n\
+     \x20      [--ignite-days D] [--prestart] [--ripple-max R] [--spin-hours H] [--mc N] [--mc-max R] [--mc-age-min S] [--view-flags F]\n\
      \x20      [--afrho-aperture-km R] [--isotropic]"
   );
   std::process::exit(2);
@@ -273,7 +308,12 @@ fn parse_args() -> Args {
     reemit_every: 0,
     check: false,
     half_height_km: None,
-    fov_deg: 2.0,
+    fov_deg: None,
+    inside_m: 1000.0,
+    lat_deg: 45.0,
+    lon_deg: None,
+    elev_m: 0.0,
+    sky_image_check: false,
     start: Epoch::from_gregorian_utc(2025, 10, 2, 0, 0, 0, 0),
     spk: None,
     quiet: false,
@@ -281,6 +321,7 @@ fn parse_args() -> Args {
     no_jet: false,
     hide_sun: false,
     full_teardown: false,
+    no_sheet: false,
     ignite_days: 0.0,
     prestart: false,
     ripple_max: None,
@@ -292,6 +333,7 @@ fn parse_args() -> Args {
     view_flags: 0,
     mc_tier: None,
     mc_age_max: None,
+    mc_age_min: None,
   };
   let argv: Vec<String> = std::env::args().skip(1).collect();
   let mut i = 0;
@@ -315,15 +357,19 @@ fn parse_args() -> Args {
           "up-zenith" | "zenith" => Pose::UpZenith,
           "anti-sun" | "antisun" => Pose::AntiSun,
           "earth" => Pose::Earth,
+          "inside" => Pose::Inside,
           _ => usage(),
         }
       }
+      "--inside-m" => a.inside_m = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--inside-km" => a.inside_m = next(&mut i).parse::<f64>().unwrap_or_else(|_| usage()) * 1e3,
       "--play" => a.play_seconds = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--reemit-every" => a.reemit_every = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--check" => a.check = true,
       "--quiet" => a.quiet = true,
       "--no-jet" => a.no_jet = true,
       "--full-teardown" => a.full_teardown = true,
+      "--no-sheet" => a.no_sheet = true,
       "--hide-sun" => a.hide_sun = true,
       "--prestart" => a.prestart = true,
       "--ignite-days" => a.ignite_days = next(&mut i).parse().unwrap_or_else(|_| usage()),
@@ -333,10 +379,12 @@ fn parse_args() -> Args {
       "--view-flags" => a.view_flags = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--mc-tier" => a.mc_tier = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--mc-age-max" => a.mc_age_max = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
+      "--mc-age-min" => a.mc_age_min = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--mc-max" => a.mc_max = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--afrho-aperture-km" => {
         a.afrho_aperture_km = Some(next(&mut i).parse().unwrap_or_else(|_| usage()))
       }
+      "--sky-image-check" => a.sky_image_check = true,
       "--isotropic" => {
         a.isotropic = true;
         a.spin_hours = 0.0;
@@ -344,7 +392,15 @@ fn parse_args() -> Args {
       "--half-height-km" => {
         a.half_height_km = Some(next(&mut i).parse().unwrap_or_else(|_| usage()))
       }
-      "--fov-deg" => a.fov_deg = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--lat" => a.lat_deg = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--lon" => {
+        a.lon_deg = match next(&mut i).as_str() {
+          "auto" => None,
+          v => Some(v.parse().unwrap_or_else(|_| usage())),
+        }
+      }
+      "--elev" => a.elev_m = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--fov-deg" => a.fov_deg = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--settle-frames" => a.frames_to_wait = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--start" => {
         let s = next(&mut i);
@@ -365,6 +421,16 @@ fn parse_args() -> Args {
   }
   if a.out.as_os_str().is_empty() {
     eprintln!("--out DIR is required");
+    usage();
+  }
+  if a.sky_image_check && a.pose != Pose::Earth {
+    eprintln!(
+      "--sky-image-check needs --pose earth (the overlay is drawn for perspective cameras)"
+    );
+    usage();
+  }
+  if !(a.inside_m > 0.0 && a.inside_m.is_finite()) {
+    eprintln!("--inside-m / --inside-km: the distance from the surface must be positive");
     usage();
   }
   a
@@ -488,6 +554,10 @@ struct FrameRec {
   cam_au: V3,
   cam_quat: Q,
   half_height_au: f64,
+  /// metres per pixel at the nucleus' depth: `2·half_height/h` for the orthographic poses,
+  /// `2·depth·tan(fov/2)/h` for the perspective ones — every per-pixel scale (nucleus radius on
+  /// screen, the shape analysis, the moments diagnostics) derives from it
+  m_per_px_nucleus: f64,
   nucleus_px: (f64, f64),
   nucleus_rgb: (u8, u8, u8),
   mean_lum: f64,
@@ -501,6 +571,20 @@ struct FrameRec {
   exposure: Option<aethervk_core_rlib::scene::dust::DustExposure>,
   /// the displayed hue along the tail axis ([`hue_ramp_samples`])
   hue: Vec<HueSample>,
+  /// the speck pass's header words of the frame's pyramid dump (WP3b), `None` without a dump
+  specks: Option<SpeckRec>,
+}
+
+/// The speck header words (`dust::specks`): the shell radius `d_max` (m, f32 bits of
+/// `PYR_SPECKS_DMAX`; 0 = no shell, the first ~4 frames lag the readback), the specks drawn
+/// (`PYR_SPECKS`) and refused by the budget (`PYR_SPECKS_OVERFLOW`), and the number density at
+/// the eye (`PYR_N_EYE` | `PYR_N_EYE_HI` << 32, 2⁻³⁶ m⁻³ per count)
+#[derive(Clone, Copy, Debug)]
+struct SpeckRec {
+  d_max_m: f32,
+  specks: u32,
+  overflow: u32,
+  n_eye_m3: f64,
 }
 
 /// One sample of the displayed hue ramp along the tail axis (the on-screen anti-solar direction
@@ -551,11 +635,31 @@ const HUE_PYR_FAINT_COUNTS: f64 = 50.0;
 /// The pyramid's colour at a pixel box: Σ over the levels of the texel words per pixel area
 /// (mirror of the composite's sum without the bilinear weights), as (τ counts, linear colour)
 fn pyramid_colour_at(pyr: &[u32], px: (f64, f64), r: i64) -> (f64, Option<[f32; 3]>) {
+  // `OBSERVER_HUE_LEVEL0=1`: the judged colour from level 0 only (diagnostic)
+  let level0_only = std::env::var("OBSERVER_HUE_LEVEL0").as_deref() == Ok("1");
+  let (mut tau, mut rgb) = (0.0f64, [0.0f64; 3]);
+  for (l, (t, c)) in pyramid_levels_at(pyr, px, r).into_iter().enumerate() {
+    if level0_only && l > 0 {
+      break;
+    }
+    tau += t;
+    for k in 0..3 {
+      rgb[k] += c[k];
+    }
+  }
+  (tau, colour_of_words(tau, rgb))
+}
+
+/// Per pyramid level, the τ counts (per pixel area) and the colour words (per pixel area)
+/// summed over the `(2r+1)²` pixel box mapped to that level's texels: the terms
+/// [`pyramid_colour_at`] adds up
+fn pyramid_levels_at(pyr: &[u32], px: (f64, f64), r: i64) -> Vec<(f64, [f64; 3])> {
   use aethervk_core_rlib::scene::dust as d;
   let levels = pyr[d::PYR_LEVELS as usize] as usize;
   let (ix, iy) = (px.0.round() as i64, px.1.round() as i64);
-  let (mut tau, mut rgb) = (0.0f64, [0.0f64; 3]);
+  let mut out = Vec::with_capacity(levels);
   for l in 0..levels {
+    let (mut tau, mut rgb) = (0.0f64, [0.0f64; 3]);
     let off = pyr[d::PYR_TABLE as usize + 3 * l] as i64;
     let lw = pyr[d::PYR_TABLE as usize + 3 * l + 1] as i64;
     let lh = pyr[d::PYR_TABLE as usize + 3 * l + 2] as i64;
@@ -578,20 +682,46 @@ fn pyramid_colour_at(pyr: &[u32], px: (f64, f64), r: i64) -> (f64, Option<[f32; 
         }
       }
     }
+    out.push((tau, rgb));
   }
+  out
+}
+
+/// The linear colour of summed colour words: words over `DUST_COLOR_SCALE · τ`
+fn colour_of_words(tau: f64, rgb: [f64; 3]) -> Option<[f32; 3]> {
+  use aethervk_core_rlib::scene::dust as d;
   if tau > 0.0 {
     let k = 1.0 / (tau * d::DUST_COLOR_SCALE as f64);
-    (
-      tau,
-      Some([
-        (rgb[0] * k) as f32,
-        (rgb[1] * k) as f32,
-        (rgb[2] * k) as f32,
-      ]),
-    )
+    Some([
+      (rgb[0] * k) as f32,
+      (rgb[1] * k) as f32,
+      (rgb[2] * k) as f32,
+    ])
   } else {
-    (0.0, None)
+    None
   }
+}
+
+/// `OBSERVER_HUE_LEVELS=1`: one log line per hue sample with each level's τ and colour
+fn hue_levels_line(i: u32, k: usize, pyr: &[u32], px: (f64, f64), stream: [f32; 3]) -> String {
+  let (_, scl) = oklab_hue_cl(stream);
+  let parts: Vec<String> = pyramid_levels_at(pyr, px, HUE_BOX_R)
+    .into_iter()
+    .enumerate()
+    .map(|(l, (t, c))| match colour_of_words(t, c) {
+      Some(rgb) => {
+        let (h, cl) = oklab_hue_cl(rgb);
+        format!("L{l} τ={t:.1} hue={h:.1}° C/L={:.3}", cl / scl.max(1e-6))
+      }
+      None => format!("L{l} τ=0"),
+    })
+    .collect();
+  format!(
+    "[observer] hue levels frame {i} sample {k} at ({:.0}, {:.0}): {}",
+    px.0,
+    px.1,
+    parts.join(" | ")
+  )
 }
 
 /// samples of the hue ramp per frame
@@ -975,7 +1105,7 @@ impl FrameRec {
       })
       .collect();
     format!(
-      "{{\"frame\":{},\"epoch\":\"{}\",\"epoch_target\":\"{}\",\"since_ignition_s\":{},\"seek_ok\":{},\"r_helio_au\":{:.6},\"comet_au\":{},\"tiers\":[{}],\"coma_radius_km\":{:.3},\"camera\":{{\"pos_au\":{},\"quat_xyzw\":[{:.9},{:.9},{:.9},{:.9}],\"half_height_au\":{:.9},\"half_height_km\":{:.1}}},\"nucleus_px\":[{:.2},{:.2}],\"nucleus_rgb\":[{},{},{}],\"mean_luminance\":{:.4},\"p99_luminance\":{:.2},\"nonblack_fraction\":{:.6},\"mc\":{},\"exposure\":{},\"hue_ramp\":[{}],\"render_task\":{},\"dust_log\":\"{}\"}}",
+      "{{\"frame\":{},\"epoch\":\"{}\",\"epoch_target\":\"{}\",\"since_ignition_s\":{},\"seek_ok\":{},\"r_helio_au\":{:.6},\"comet_au\":{},\"tiers\":[{}],\"coma_radius_km\":{:.3},\"camera\":{{\"pos_au\":{},\"quat_xyzw\":[{:.9},{:.9},{:.9},{:.9}],\"half_height_au\":{:.9},\"half_height_km\":{:.1},\"m_per_px_nucleus\":{:.6e}}},\"nucleus_px\":[{:.2},{:.2}],\"nucleus_rgb\":[{},{},{}],\"mean_luminance\":{:.4},\"p99_luminance\":{:.2},\"nonblack_fraction\":{:.6},\"mc\":{},\"specks\":{},\"exposure\":{},\"hue_ramp\":[{}],\"render_task\":{},\"dust_log\":\"{}\"}}",
       self.index,
       self.epoch,
       self.epoch_target,
@@ -992,6 +1122,7 @@ impl FrameRec {
       self.cam_quat[3],
       self.half_height_au,
       self.half_height_au * AU_KM,
+      self.m_per_px_nucleus,
       self.nucleus_px.0,
       self.nucleus_px.1,
       self.nucleus_rgb.0,
@@ -1007,6 +1138,16 @@ impl FrameRec {
           "{{\"rel_rms\":{:.4},\"rel_rms_judged\":{:.4},\"noise\":{:.4},\"core_px\":{},\"ripple_render\":{:.4},\"ripple_truth\":{:.4},\"region_px\":{},\"grains_px\":{:.1},\"ratio_p05\":{:.3},\"ratio_p95\":{:.3},\"nucleus_ok\":{},\"grains\":{},\"batches\":{},\"abs_ratio\":{:.4},\"haze_frac\":{:.4},\"afrho_cm\":{}}}",
           m.rel_rms, m.rel_rms_judged, m.noise, m.core_px, m.ripple_render, m.ripple_truth, m.region_px, m.grains_px, m.ratio_p05, m.ratio_p95, m.nucleus_ok, m.grains, m.batches, m.abs_ratio, m.haze_frac,
           m.afrho.map(|(r, t, a)| format!("{{\"render\":{r:.4},\"truth\":{t:.4},\"analytic\":{a:.4}}}")).unwrap_or_else(|| "null".to_string())
+        ))
+        .unwrap_or_else(|| "null".to_string()),
+      self
+        .specks
+        .map(|k| format!(
+          "{{\"d_max_m\":{},\"specks\":{},\"specks_overflow\":{},\"n_eye_m3\":{}}}",
+          json_f(k.d_max_m as f64),
+          k.specks,
+          k.overflow,
+          json_f(k.n_eye_m3)
         ))
         .unwrap_or_else(|| "null".to_string()),
       self
@@ -1129,6 +1270,8 @@ fn jet_params(seed: u32, isotropic: bool) -> ParticleSystemEmitParams {
     density_gcm3: 0.533,
     scattering_efficiency: 1.0,
     geometric_albedo: 0.04,
+    size_q: 3.5,
+    size_range: 10.0,
     afrho_0_cm: 100.0,
     afrho_power: 2.0,
     afrho_cutoff_au: 15.0,
@@ -1245,6 +1388,9 @@ fn wait_caught_up(ctx: &SimulationContext, scene_id: u64, timeout_s: f64) -> boo
 /// then the swapchain download (BGRA8).
 /// extra render generations a frame may wait for its exposure to settle (see the frame loop)
 const EXPOSURE_SETTLE_MAX: u32 = 24;
+/// extra render generations a frame may wait for the work feedback (split depth, volume and EWA
+/// biases) to settle after a cold start or a jump inside the coma
+const WORK_SETTLE_MAX: u32 = 12;
 
 fn wait_and_download(
   ctx: &SimulationContext,
@@ -1394,6 +1540,7 @@ fn main() {
   let scene_ret = ctx.create_empty_scene2(false, start, end).expect("create_empty_scene2");
   let scene_id = scene_ret.scene_id;
   let comet_body = EntityId::from_ffi(scene_ret.comet_body);
+  let earth_body = EntityId::from_ffi(scene_ret.earth_body);
   log_line(&format!(
     "scene {scene_id} comet_body {} earth_body {}",
     scene_ret.comet_body, scene_ret.earth_body
@@ -1524,6 +1671,17 @@ fn main() {
       "[observer] dust younger than {a} s only (--mc-age-max): render and truth"
     ));
   }
+  if let Some(a) = args.mc_age_min {
+    // the render side of `--mc-age-min`: every tier's band minimum (`DustFrame::ttl[1]`) raised
+    // there — by `AETHERVK_DUST_DEBUG_AGE_MIN`, which the engine reads only once `gpu/frame.rs`
+    // mirrors its `AETHERVK_DUST_DEBUG_AGE_MAX` hook (`frame.ttl[1] = frame.ttl[1].max(min)`);
+    // without the hook only the truth is filtered and the comparison is truth(older than S) vs
+    // render(all ages): the residual is then the young dust's share, not an error
+    unsafe { std::env::set_var("AETHERVK_DUST_DEBUG_AGE_MIN", format!("{a}")) };
+    log_line(&format!(
+      "[observer] dust older than {a} s only (--mc-age-min): the truth; the render only where the engine honours AETHERVK_DUST_DEBUG_AGE_MIN (gpu/frame.rs)"
+    ));
+  }
   ctx.set_dust_flow_speed(scene_id, 1.0);
   ctx.set_dust_softening(scene_id, 1e-2);
 
@@ -1533,15 +1691,44 @@ fn main() {
     .expect("create_presentation_engine");
   PE_ID.store(pe.0 as u64, Ordering::Release);
   let aspect = args.width as f64 / args.height as f64;
+  // the perspective poses' field of view and `tan(fov/2)` (the observer's own projection of the
+  // nucleus pixel and the Monte-Carlo truth share it with the render)
+  let fov_deg = args.fov_deg.unwrap_or(match args.pose {
+    Pose::Inside => INSIDE_FOV_DEG,
+    _ => 2.0,
+  });
+  let persp_tan_h: Option<f64> =
+    args.pose.is_perspective().then(|| (fov_deg.to_radians() / 2.0).tan());
+  // `--pose inside`: D is the camera's distance from the nucleus SURFACE (the camera sits in
+  // the dust, never inside the 2 km nucleus mesh), so the centre distance is D + 2 km (AU); the
+  // camera asks for a near plane of `D·1e-3`, which the engine floors at 1 m
+  // (`scene_conversion.rs` `DEPTH_NEAR_FLOOR`), so the truth clips at `max(D·1e-3, 1 m)`; the
+  // far plane is `max(1e4·D, 2·coma radius)`, re-applied every frame with the coma radius of
+  // the moment (0 until the first rendered frame)
+  let inside_d_au = args.inside_m / aethervk_core_rlib::scene::dust::AU_M;
+  let inside_au = inside_d_au + NUCLEUS_RADIUS_KM as f64 / AU_KM;
+  let inside_near_au = inside_d_au * 1e-3;
+  let inside_truth_near_au = inside_near_au.max(1.0 / aethervk_core_rlib::scene::dust::AU_M);
+  let inside_far_au = |coma_km: f64| (1e4 * inside_d_au).max(2.0 * coma_km / AU_KM);
   let cam_id = match args.pose {
     Pose::Earth => ctx
       .add_perspective_camera(
         scene_id,
         pe,
         "observer_cam",
-        args.fov_deg.to_radians() as f32,
+        fov_deg.to_radians() as f32,
         1e-5,
         20.0,
+      )
+      .expect("add_perspective_camera"),
+    Pose::Inside => ctx
+      .add_perspective_camera(
+        scene_id,
+        pe,
+        "observer_cam",
+        fov_deg.to_radians() as f32,
+        inside_near_au as f32,
+        inside_far_au(0.0) as f32,
       )
       .expect("add_perspective_camera"),
     _ => ctx
@@ -1549,6 +1736,25 @@ fn main() {
       .expect("add_orthographic_camera"),
   };
   let cam = EntityId::from_ffi(cam_id.get());
+  // `--pose inside`: the perspective projection with the far plane of the moment (AU)
+  let send_inside_projection = |far_au: f64| {
+    ctx
+      .threads
+      .logic_thread
+      .tx()
+      .try_send(LogicCommand::SetCameraTransform {
+        scene_id,
+        camera_id: cam.as_ffi(),
+        transform: None,
+        projection: Some(CameraProjection::Perspective {
+          fov: fov_deg.to_radians() as f32,
+          aspect_ratio: aspect as f32,
+          near: inside_near_au as f32,
+          far: far_au as f32,
+        }),
+      })
+      .expect("SetCameraTransform send");
+  };
 
   // first seek: coma radius + comet distance are needed for the framing
   let mut problems: Vec<String> = Vec::new();
@@ -1582,8 +1788,23 @@ fn main() {
     cam_height_au * AU_KM
   ));
 
+  // `--pose inside`: the near/far of the frame being rendered (AU): the truth clips there too
+  let mut inside_far_now = inside_far_au(coma0_km);
+  if args.pose == Pose::Inside {
+    send_inside_projection(inside_far_now);
+    log_line(&format!(
+      "inside pose: camera {:.6} m from the surface ({:.6} m from the centre) sunward on the anti-solar axis, fov {fov_deg:.1}°, near {:.6} m (truth clips at {:.6} m: the engine floors the near plane at 1 m), far {:.3} km, {:.6} m/px at the nucleus",
+      args.inside_m,
+      inside_au * aethervk_core_rlib::scene::dust::AU_M,
+      inside_near_au * aethervk_core_rlib::scene::dust::AU_M,
+      inside_truth_near_au * aethervk_core_rlib::scene::dust::AU_M,
+      inside_far_now * AU_KM,
+      2.0 * inside_au * aethervk_core_rlib::scene::dust::AU_M * persp_tan_h.unwrap_or(1.0)
+        / args.height as f64
+    ));
+  }
   // projection (AU, like the C# RequestOrthographicProjection)
-  if args.pose != Pose::Earth {
+  if !args.pose.is_perspective() {
     let hw = (half_height_au * aspect) as f32;
     let hh = half_height_au as f32;
     let near = (cam_height_au * 0.01) as f32;
@@ -1633,6 +1854,23 @@ fn main() {
         )
       }
       Pose::Earth => (comet, [0.0, 0.0, 0.0, 1.0]),
+      Pose::Inside => {
+        // the anti-solar axis is the comet's heliocentric direction (the hue ray's `anti`): the
+        // camera stands D sunward of the nucleus surface (D + 2 km from the centre) on it and
+        // looks along it, through the nucleus, down the tail; up = ecliptic north (+Z), the
+        // nucleus at the frame centre
+        let anti = normalize(comet);
+        let rel = [
+          -anti[0] * inside_au,
+          -anti[1] * inside_au,
+          -anti[2] * inside_au,
+        ];
+        let pos = [comet[0] + rel[0], comet[1] + rel[1], comet[2] + rel[2]];
+        (
+          pos,
+          earth_observer::look_at_origin_from(rel, Some([0.0, 0.0, 1.0])),
+        )
+      }
     }
   };
   if args.pose == Pose::Earth {
@@ -1641,17 +1879,56 @@ fn main() {
       earth_observer::look_at_origin_from([0.0, 0.0, cam_height_au], None),
     );
     set_camera_pose(&ctx, scene_id, cam, p, q);
+    // `--lon auto`: the site's meridian through the comet at the first epoch (hour angle 0: the
+    // comet at its highest for the latitude), from the Earth's body-fixed frame (+X Greenwich)
+    let lon_deg = args.lon_deg.unwrap_or_else(|| {
+      let earth_rot = ctx.get_scene(scene_id).and_then(|sc| {
+        let g = sc.read();
+        g.scene.global_transform_f64(earth_body).map(|t| {
+          (
+            [t.position.x(), t.position.y(), t.position.z()],
+            earth_observer::qnormalize([
+              t.rotation.0.x(),
+              t.rotation.0.y(),
+              t.rotation.0.z(),
+              t.rotation.0.w(),
+            ]),
+          )
+        })
+      });
+      match earth_rot {
+        Some((e, q)) => {
+          let bf = earth_observer::rotate(earth_observer::qinverse(q), sub(comet0, e));
+          let lon = bf[1].atan2(bf[0]).to_degrees();
+          let dec = (bf[2] / norm(bf)).asin().to_degrees();
+          log_line(&format!(
+            "earth site --lon auto: the comet transits at longitude {lon:.3}° (body-fixed declination {dec:.2}°: elevation at transit ≈ {:.1}° for latitude {:.1}°)",
+            90.0 - (args.lat_deg - dec).abs(),
+            args.lat_deg
+          ));
+          lon
+        }
+        None => {
+          log_line("earth site --lon auto: no Earth transform, longitude 0");
+          0.0
+        }
+      }
+    });
     let ok = ctx.set_earth_observer(
       scene_id,
       cam.as_ffi(),
       Some(earth_observer::EarthObserverMode::CometTracking),
       scene_ret.earth_body,
       scene_ret.comet_body,
-      45.0,
-      0.0,
+      args.lat_deg,
+      lon_deg,
+      args.elev_m,
       [0.0, 0.0, 0.0, 1.0],
     );
-    log_line(&format!("earth observer (comet tracking) set: {ok}"));
+    log_line(&format!(
+      "earth observer (comet tracking) set: {ok}, site lat {:.4}° lon {:.4}° elev {:.1} m",
+      args.lat_deg, lon_deg, args.elev_m
+    ));
   } else {
     let (p, q) = pose_for(comet0);
     set_camera_pose(&ctx, scene_id, cam, p, q);
@@ -1730,13 +2007,67 @@ fn main() {
     let actual = current_epoch(&ctx, scene_id).unwrap_or(target);
 
     let comet = comet_position_au(&ctx, scene_id, comet_body).unwrap_or([0.0; 3]);
+    if args.pose == Pose::Inside {
+      // the far plane follows the coma radius (`max(1e4·D, 2·coma)`): re-applied when it moves
+      let far = inside_far_au(ctx.dust_coma_radius_km(scene_id));
+      if far != inside_far_now {
+        log_line(&format!(
+          "frame {i}: inside far plane {:.3} km → {:.3} km (coma {:.1} km)",
+          inside_far_now * AU_KM,
+          far * AU_KM,
+          ctx.dust_coma_radius_km(scene_id)
+        ));
+        inside_far_now = far;
+        send_inside_projection(far);
+      }
+    }
     if args.pose != Pose::Earth {
       let (p, q) = pose_for(comet);
       set_camera_pose(&ctx, scene_id, cam, p, q);
     }
+    if args.pose == Pose::Earth {
+      log_line(
+        &earth_pose_diag(
+          &ctx,
+          scene_id,
+          cam,
+          comet_body,
+          earth_body,
+          i,
+          "before settle",
+        )
+        .0,
+      );
+    }
     // settle: the pose/seek reach the renderer on the next extraction
     let t_dl = Instant::now();
     let mut dl = wait_and_download(&ctx, args.width, args.height, args.frames_to_wait, 60_000);
+    // the frame's work settles: the host moves the split depth and the volume / EWA biases
+    // (header word `PYR_SPLIT_DEPTH`) after a frame over a budget — a cold start or a jump inside
+    // the coma draws its first frames under the in-frame gates (`DUST_FRAME_HARD_FACTOR`); one
+    // generation at a time until the word repeats, at most `WORK_SETTLE_MAX`, before the exposure
+    // settles on the settled image
+    let mut work_extra = 0u32;
+    if dl.is_some() {
+      let word_of = || {
+        ctx
+          .download_dust_pyramid(pe)
+          .and_then(|p| p.get(aethervk_core_rlib::scene::dust::PYR_SPLIT_DEPTH as usize).copied())
+      };
+      let mut prev = word_of();
+      while work_extra < WORK_SETTLE_MAX {
+        let Some(next) = wait_and_download(&ctx, args.width, args.height, 1, 60_000) else {
+          break;
+        };
+        dl = Some(next);
+        work_extra += 1;
+        let now = word_of();
+        if now == prev {
+          break;
+        }
+        prev = now;
+      }
+    }
     // the exposure settles: the white point adapts by half its log gap per frame
     // (`WHITE_ADAPT_RATE`) from the seed (20 mag/arcsec²) or the previous epoch's value — a far
     // frame is 20 mag from the seed and its first generations are under-exposed; one more
@@ -1762,11 +2093,51 @@ fn main() {
         }
       }
     }
+    // the speck shell settles: the host moves `d_max` inward after a frame over the speck budget
+    // and outward under a quarter of it, so a frame whose pyramid reports a speck overflow or a
+    // moving shell is not judged; one generation at a time until the overflow word is 0 and the
+    // radius repeats, sharing the `EXPOSURE_SETTLE_MAX` extra generations
+    let mut speck_extra = 0u32;
+    if dl.is_some() {
+      use aethervk_core_rlib::scene::dust::specks as sp;
+      let overflow_of = || {
+        ctx
+          .download_dust_pyramid(pe)
+          .and_then(|p| p.get(sp::PYR_SPECKS_OVERFLOW as usize).copied())
+          .unwrap_or(0)
+      };
+      // and until the shell radius stops moving (it starts at 1 m and grows toward half the
+      // budget, ≤ ×2 a readback): the judged frame draws the settled shell
+      let d_max_of = || {
+        ctx
+          .download_dust_pyramid(pe)
+          .and_then(|p| p.get(sp::PYR_SPECKS_DMAX as usize).copied())
+          .map(f32::from_bits)
+          .unwrap_or(0.0)
+      };
+      let mut prev_d = d_max_of();
+      while settle_extra + speck_extra < EXPOSURE_SETTLE_MAX {
+        if overflow_of() == 0 && speck_extra > 0 {
+          let d = d_max_of();
+          if d == prev_d {
+            break;
+          }
+          prev_d = d;
+        } else if overflow_of() == 0 && prev_d == 0.0 {
+          break;
+        }
+        let Some(next) = wait_and_download(&ctx, args.width, args.height, 1, 30_000) else {
+          break;
+        };
+        dl = Some(next);
+        speck_extra += 1;
+      }
+    }
     // the render cost: distinct render generations were waited for
-    let generations = args.frames_to_wait + settle_extra;
+    let generations = args.frames_to_wait + work_extra + settle_extra + speck_extra;
     let render_ms = t_dl.elapsed().as_secs_f64() * 1e3 / generations.max(1) as f64;
     log_line(&format!(
-      "[observer] render ≈ {render_ms:.1} ms/frame ({generations} generations, {settle_extra} to settle the exposure)"
+      "[observer] render ≈ {render_ms:.1} ms/frame ({generations} generations, {work_extra} to settle the work, {settle_extra} to settle the exposure, {speck_extra} to settle the speck shell)"
     ));
     let (mut rgba, tid) = match dl {
       Some(x) => x,
@@ -1777,6 +2148,45 @@ fn main() {
       }
     };
     bgra_to_rgba(&mut rgba);
+    if args.pose == Pose::Earth {
+      let (line, elev) = earth_pose_diag(
+        &ctx,
+        scene_id,
+        cam,
+        comet_body,
+        earth_body,
+        i,
+        "after settle",
+      );
+      log_line(&line);
+      if let Some(e) = elev.filter(|e| *e < 0.0) {
+        problems.push(format!(
+          "frame {i}: the comet is {:.1}° below the site's horizon: the tracking camera faces the horizon (choose --lon auto or another site / epoch)",
+          -e
+        ));
+      }
+    }
+    // the Earth observer's light-time view (`LightTimeViewComponent` on the camera): the render
+    // draws the comet's micro layer at the astrometric place `x + offset_au` (the dust evaluated
+    // `delay_s` earlier): the nucleus pixel and the truth's placement follow it
+    let comet = match ctx.get_scene(scene_id).and_then(|sc| {
+      let g = sc.read();
+      g.scene.with_component(cam, |l: &earth_observer::LightTimeViewComponent| *l)
+    }) {
+      Some(l) if args.pose == Pose::Earth => {
+        log_line(&format!(
+          "frame {i}: light-time view: delay {:.1} s, offset {:.1} km",
+          l.delay_s,
+          norm(l.offset_au) * AU_KM
+        ));
+        [
+          comet[0] + l.offset_au[0],
+          comet[1] + l.offset_au[1],
+          comet[2] + l.offset_au[2],
+        ]
+      }
+      _ => comet,
+    };
 
     let (cam_pos, cam_q) =
       camera_pose(&ctx, scene_id, cam).unwrap_or(([0.0; 3], [0.0, 0.0, 0.0, 1.0]));
@@ -1784,17 +2194,22 @@ fn main() {
     let d = sub(comet, cam_pos);
     let (sx, sy) = (dot(d, right), dot(d, up));
     let depth = dot(d, forward);
-    let (px, py) = if args.pose == Pose::Earth {
-      let tan_h = (args.fov_deg.to_radians() / 2.0).tan();
-      (
+    let (px, py) = match persp_tan_h {
+      Some(tan_h) => (
         args.width as f64 / 2.0 * (1.0 + sx / depth.max(1e-12) / (tan_h * aspect)),
         args.height as f64 / 2.0 * (1.0 - sy / depth.max(1e-12) / tan_h),
-      )
-    } else {
-      (
+      ),
+      None => (
         args.width as f64 / 2.0 * (1.0 + sx / (half_height_au * aspect)),
         args.height as f64 / 2.0 * (1.0 - sy / half_height_au),
-      )
+      ),
+    };
+    // metres per pixel at the nucleus' depth: the per-pixel scale every analysis uses
+    let m_per_px_nucleus = match persp_tan_h {
+      Some(tan_h) => {
+        2.0 * depth.max(1e-12) * aethervk_core_rlib::scene::dust::AU_M * tan_h / args.height as f64
+      }
+      None => 2.0 * half_height_au * AU_KM * 1e3 / args.height as f64,
     };
     let (ix, iy) = (
       px.round().clamp(0.0, args.width as f64 - 1.0) as u32,
@@ -1812,8 +2227,7 @@ fn main() {
       jet_color[2] as f32,
     ];
     let (stream_hue_deg, _) = oklab_hue_cl(stream_rgb);
-    let nucleus_px_radius =
-      NUCLEUS_RADIUS_KM as f64 / (2.0 * half_height_au * AU_KM / args.height as f64);
+    let nucleus_px_radius = NUCLEUS_RADIUS_KM as f64 * 1e3 / m_per_px_nucleus;
     let hue_ray = {
       let anti = normalize(comet);
       let v = (dot(anti, right), -dot(anti, up));
@@ -1843,6 +2257,7 @@ fn main() {
     // the dust pyramid of this frame (raw u32 words, header first: dust::PyramidLayout) and a
     // one-line summary of it, for offline analysis without RenderDoc
     let mut mc_rec: Option<McRec> = None;
+    let mut specks_rec: Option<SpeckRec> = None;
     if let Some(pyr) = ctx.download_dust_pyramid(pe) {
       use aethervk_core_rlib::scene::dust as d;
       let words: Vec<u8> = pyr.iter().flat_map(|w| w.to_le_bytes()).collect();
@@ -1855,17 +2270,27 @@ fn main() {
           cam_pos,
           cam_q,
           half_height_au,
+          m_per_px_nucleus,
           aspect,
-          perspective_tan_h: (args.pose == Pose::Earth)
-            .then(|| (args.fov_deg.to_radians() / 2.0).tan()),
-          near_au: cam_height_au * 0.01,
-          far_au: cam_height_au * 50.0,
+          perspective_tan_h: persp_tan_h,
+          // the render camera's planes: the orthographic poses' from the projection above, the
+          // Earth pose's from `add_perspective_camera`, the inside pose's of this frame
+          near_au: match args.pose {
+            Pose::Earth => 1e-5,
+            Pose::Inside => inside_truth_near_au,
+            _ => cam_height_au * 0.01,
+          },
+          far_au: match args.pose {
+            Pose::Earth => 20.0,
+            Pose::Inside => inside_far_now,
+            _ => cam_height_au * 50.0,
+          },
           comet_au: comet,
           nucleus_px: (px, py),
           mc_tier: args.mc_tier,
           mc_age_max: args.mc_age_max,
-          nucleus_px_radius: NUCLEUS_RADIUS_KM as f64
-            / (2.0 * half_height_au * AU_KM / args.height as f64),
+          mc_age_min: args.mc_age_min,
+          nucleus_px_radius,
           hue_ray,
           stream: stream_rgb,
           ttl_s: JET_TTL_US as f64 * 1e-6,
@@ -1978,11 +2403,16 @@ fn main() {
             }
             // the hue samples where the truth put them, the display measured there
             let ttl_s = JET_TTL_US as f64 * 1e-6;
+            let hue_levels = std::env::var("OBSERVER_HUE_LEVELS").as_deref() == Ok("1");
             hue = rec
               .hue_px
               .iter()
               .zip(rec.hue_truth.iter().zip(rec.hue_tau_ratio.iter()))
-              .map(|(&p, (t, ratio))| {
+              .enumerate()
+              .map(|(k_s, (&p, (t, ratio)))| {
+                if hue_levels {
+                  log_line(&hue_levels_line(i, k_s, &pyr, p, stream_rgb));
+                }
                 let mut s = hue_sample_at(&rgba, args.width, args.height, p, stream_rgb);
                 s.tau_ratio = *ratio;
                 if let Some((m, sd, rgb)) = t {
@@ -2031,13 +2461,57 @@ fn main() {
         }
         per_level.push(format!("L{l}:{nz}/{sum}/{max}"));
       }
+      // the perspective split's header words (WP3, `splat.rs`): the children made
+      // (`PYR_SPLIT_CHILDREN`), the children over the budget (computed: `SplitStats::overflow`),
+      // f32 bits of the largest flux dropped wholly behind the eye (`PYR_SPLIT_DROPPED_FLUX`),
+      // the host-written depth limit of the frame (`PYR_SPLIT_DEPTH` bits 0–7) and the
+      // volumetric packets' ray-integral evaluations and level bias (`VolumeStats`)
+      let word = |k: u32| pyr.get(k as usize).copied().unwrap_or(0);
+      let split = d::SplitStats::load(&pyr);
+      let vol = d::VolumeStats::load(&pyr);
+      let split_children = split.children;
+      let split_overflow = split.overflow();
+      let split_dropped = split.dropped_flux;
+      let split_depth = split.depth;
+      // the speck pass's words (WP3b, `dust::specks`): the shell radius, the specks drawn and
+      // refused, the number density at the eye (64-bit fixed point, 2⁻³⁶ m⁻³ per count)
+      let sk = {
+        use aethervk_core_rlib::scene::dust::specks as sp;
+        SpeckRec {
+          d_max_m: f32::from_bits(word(sp::PYR_SPECKS_DMAX)),
+          specks: word(sp::PYR_SPECKS),
+          overflow: word(sp::PYR_SPECKS_OVERFLOW),
+          n_eye_m3: (((word(sp::PYR_N_EYE_HI) as u64) << 32) | word(sp::PYR_N_EYE) as u64) as f64
+            * (-36.0f64).exp2(),
+        }
+      };
+      specks_rec = Some(sk);
       log_line(&format!(
-        "[observer] pyramid frame {i}: levels {levels} tau_max {:.3e} mask {:#x} tracer {:.1} (texels/Σcounts/max) {}",
+        "[observer] pyramid frame {i}: levels {levels} tau_max {:.3e} mask {:#x} tracer {:.1} split children {split_children} overflow {split_overflow} dropped flux {split_dropped:.3e} depth {split_depth} volume evals {} bias {} ewa texels {:.4e} ewa bias {} specks {} overflow {} d_max {:.4e} m n_eye {:.4e} m⁻³ (texels/Σcounts/max) {}",
         f32::from_bits(pyr[d::PYR_TAU_MAX as usize]),
         pyr[d::PYR_LEVEL_MASK as usize],
         f32::from_bits(pyr[d::PYR_TRACER_COUNTS as usize]),
+        vol.evals,
+        vol.bias,
+        d::EwaStats::load(&pyr).texels as f64,
+        d::EwaStats::load(&pyr).bias,
+        sk.specks,
+        sk.overflow,
+        sk.d_max_m,
+        sk.n_eye_m3,
         per_level.join(" ")
       ));
+      if args.check && split_overflow > 0 {
+        problems.push(format!(
+          "frame {i}: split budget overflow {split_overflow} children"
+        ));
+      }
+      if args.check && sk.overflow > 0 {
+        problems.push(format!(
+          "frame {i}: speck budget overflow {} specks",
+          sk.overflow
+        ));
+      }
     }
     if hue.is_empty() {
       // no truth: the samples along the displayed dust
@@ -2048,8 +2522,15 @@ fn main() {
         .map(|p| hue_sample_at(&rgba, args.width, args.height, p, stream_rgb))
         .collect();
     }
+    if args.sky_image_check {
+      problems.extend(sky_image_check(
+        &ctx, scene_id, cam, comet_body, &args, i, fov_deg,
+      ));
+    }
     let img = image::RgbaImage::from_raw(args.width, args.height, rgba).unwrap();
-    frames_rgba.push(img);
+    if !args.no_sheet {
+      frames_rgba.push(img);
+    }
 
     let tiers = tiers_now(&ctx, scene_id);
     {
@@ -2071,6 +2552,7 @@ fn main() {
       cam_au: cam_pos,
       cam_quat: cam_q,
       half_height_au,
+      m_per_px_nucleus,
       nucleus_px: (px, py),
       nucleus_rgb: rgb,
       mean_lum: mean_l,
@@ -2081,6 +2563,7 @@ fn main() {
       mc: mc_rec,
       exposure: ctx.dust_exposure(pe),
       hue,
+      specks: specks_rec,
     };
     let _ = writeln!(stats, "{}", rec.to_json());
     let _ = stats.flush();
@@ -2111,7 +2594,7 @@ fn main() {
   }
 
   // ───── contact sheet ─────
-  {
+  if !args.no_sheet {
     let per_row = 6u32;
     let (tw, th) = (args.width / 4, args.height / 4);
     let rows = (n_frames + per_row - 1) / per_row;
@@ -2211,6 +2694,23 @@ fn main() {
       cam_height_au * AU_KM,
       t_run.elapsed().as_secs_f64()
     ));
+    if args.pose.is_perspective() {
+      md.push_str(&format!(
+        "- perspective: fov {fov_deg:.2}°{}; metres per pixel at the nucleus per frame in `stats.jsonl` (`camera.m_per_px_nucleus`)\n\n",
+        if args.pose == Pose::Inside {
+          format!(
+            ", camera {:.6} m from the nucleus surface ({:.6} m from the centre) sunward on the anti-solar axis looking down the tail, near {:.6} m (truth {:.6} m: the engine's 1 m floor), far {:.3} km",
+            args.inside_m,
+            inside_au * aethervk_core_rlib::scene::dust::AU_M,
+            inside_near_au * aethervk_core_rlib::scene::dust::AU_M,
+            inside_truth_near_au * aethervk_core_rlib::scene::dust::AU_M,
+            inside_far_now * AU_KM
+          )
+        } else {
+          String::new()
+        }
+      ));
+    }
     md.push_str("| # | epoch | r (AU) | tiers live/cap (age d) | coma km | nucleus px | nucleus RGB | mean L | p99 L | non-black | seek |\n|---|---|---|---|---|---|---|---|---|---|---|\n");
     for r in &records {
       let tiers = r
@@ -2516,7 +3016,8 @@ fn shape_analysis(args: &Args, records: &[FrameRec], beta_ref: f64) -> Result<Ve
   for (k, (pos, img, white_k, soft_k)) in frames.iter().enumerate() {
     let r = &records[*pos];
     let index = r.index;
-    let m_per_px = 2.0 * r.half_height_au * d::AU_M / h as f64;
+    // metres per pixel at the nucleus' depth (the perspective poses' scale there)
+    let m_per_px = r.m_per_px_nucleus;
     let g_ms2 = 1.327_124_400_18e20 / (r.r_helio_au * d::AU_M).powi(2);
     let age_max_s = r.tiers.iter().map(|t| t.oldest_s).fold(0.0, f64::max);
     // the smallest grains of the size range (s_ref / SIZE_RANGE_FACTOR) carry
@@ -2767,12 +3268,18 @@ struct McView {
   cam_pos: V3,
   cam_q: Q,
   half_height_au: f64,
+  /// metres per pixel at the nucleus' depth (`FrameRec::m_per_px_nucleus`): the orthographic
+  /// poses' constant pixel scale, the perspective poses' scale at the nucleus
+  m_per_px_nucleus: f64,
   aspect: f64,
-  /// `Some(tan(fov/2))` for the perspective Earth pose
+  /// `Some(tan(fov/2))` for the perspective poses (`earth`, `inside`): the truth weights each
+  /// grain by `1 / A_px(depth)`, `A_px = (2·depth·tan_h/h)²` m², the τ per pixel area at its
+  /// depth; the phase eye is the camera point
   perspective_tan_h: Option<f64>,
-  /// the render camera's near and far planes (AU, along the view direction): the orthographic
-  /// poses clip there too (the camera stands one half-height above the comet, and at 5 km the
-  /// fast young grains pass it; the truth must not count what the render clips)
+  /// the render camera's near and far planes (AU, along the view direction): every pose clips
+  /// there (the orthographic camera stands one half-height above the comet, and at 5 km the
+  /// fast young grains pass it; the inside camera's near plane is D·1e-3; the truth must not
+  /// count what the render clips)
   near_au: f64,
   far_au: f64,
   comet_au: V3,
@@ -2781,6 +3288,8 @@ struct McView {
   mc_tier: Option<u32>,
   /// the truth holds the dust younger than this only (`--mc-age-max`, s)
   mc_age_max: Option<f64>,
+  /// the truth holds the dust older than this only (`--mc-age-min`, s)
+  mc_age_min: Option<f64>,
   /// nucleus radius on screen (px): the truth's peak is the jet site, up to this far from the
   /// nucleus pixel
   nucleus_px_radius: f64,
@@ -3003,6 +3512,13 @@ fn monte_carlo_truth(
     }
     batches.retain(|b| b.band.0 < b.band.1);
   }
+  if let Some(a) = view.mc_age_min {
+    // every tier's band minimum raised there: every model gates its grains by `band.0`
+    for b in &mut batches {
+      b.band.0 = b.band.0.max(a);
+    }
+    batches.retain(|b| b.band.0 < b.band.1);
+  }
   if batches.is_empty() {
     return None;
   }
@@ -3067,7 +3583,7 @@ fn monte_carlo_truth(
     // the moments stage on a sample of the oldest tier's clusters: the chord length of the size
     // polyline and the dispersion across it, in pixels (the kernel the splat is handed)
     {
-      let m_per_px = 2.0 * view.half_height_au * d::AU_M / view.height as f64;
+      let m_per_px = view.m_per_px_nucleus;
       let (mut chords, mut s1s, mut s2s, mut expect) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
       // the time axis: how many clusters have no stream predecessor (a break), and the time
@@ -3226,33 +3742,41 @@ fn monte_carlo_truth(
   // per batch; its fraction has a floor so no batch is starved.
 
   let (right, forward, up) = camera_axes(view.cam_q);
-  let project = |global_au: V3| -> Option<(usize, usize)> {
+  // the orthographic pixel area (m²): one constant for the whole frame
+  let ortho_inv_a_px = 1.0 / (view.m_per_px_nucleus * view.m_per_px_nucleus);
+  // a grain's pixel and `1 / A_px` at its depth (1/m²): the truth's histogram is τ per pixel
+  // area, so a grain's cross-section is divided by the area one pixel covers where it is —
+  // constant `m_per_px²` in the orthographic view, `(2·depth·tan_h/h)²` in perspective (a grain
+  // near the camera covers more of its pixel). In perspective the pixel's column is oblique to
+  // the z-planes `A_px` is measured on: the optical depth along the pixel's ray is
+  // Σ σ / (A_px(depth) · cos θ_px), θ_px the angle between the pixel's ray and the camera
+  // forward axis (cos θ_px = depth / |grain − camera|; 10–15 % at the edge of a 60° field).
+  // Grains outside the camera's near/far are clipped like the render's.
+  let project = |global_au: V3| -> Option<(usize, usize, f64)> {
     let dd = sub(global_au, view.cam_pos);
     let (sx, sy) = (dot(dd, right), dot(dd, up));
-    let (px, py) = match view.perspective_tan_h {
+    let depth = dot(dd, forward);
+    if !(depth >= view.near_au && depth <= view.far_au) {
+      return None;
+    }
+    let (px, py, inv_a_px) = match view.perspective_tan_h {
       Some(tan_h) => {
-        let depth = dot(dd, forward);
-        if depth <= 0.0 {
-          return None;
-        }
+        let px_m = 2.0 * depth * d::AU_M * tan_h / h as f64;
+        let cos_theta = depth / norm(dd).max(1e-300);
         (
           w as f64 / 2.0 * (1.0 + sx / depth / (tan_h * view.aspect)),
           h as f64 / 2.0 * (1.0 - sy / depth / tan_h),
+          1.0 / (px_m * px_m * cos_theta),
         )
       }
-      None => {
-        let depth = dot(dd, forward);
-        if depth < view.near_au || depth > view.far_au {
-          return None;
-        }
-        (
-          w as f64 / 2.0 * (1.0 + sx / (view.half_height_au * view.aspect)),
-          h as f64 / 2.0 * (1.0 - sy / view.half_height_au),
-        )
-      }
+      None => (
+        w as f64 / 2.0 * (1.0 + sx / (view.half_height_au * view.aspect)),
+        h as f64 / 2.0 * (1.0 - sy / view.half_height_au),
+        ortho_inv_a_px,
+      ),
     };
     if px >= 0.0 && py >= 0.0 && px < w as f64 && py < h as f64 {
-      Some((px as usize, py as usize))
+      Some((px as usize, py as usize, inv_a_px))
     } else {
       None
     }
@@ -3291,6 +3815,63 @@ fn monte_carlo_truth(
             let mut cnt_hist = vec![0.0f64; w * h];
             let mut n_drawn = 0usize;
             let mut seen: Vec<(usize, usize)> = Vec::with_capacity(part.len());
+            // one grain into the histograms — the single deposit every model goes through (the
+            // physical grains and the `OBSERVER_MC_MODEL` diagnostics alike, so they cannot
+            // drift): `r` the grain's heliocentric position (m), `age` (s), `wgt` its
+            // cross-section (m²). Physical photometry: p · Φ(α) / r_h² at the grain (the render
+            // weights each texel the same way at the dust it holds); the orthographic poses' eye
+            // is at infinity along the view axis (the comet → camera line), like the render's (a
+            // point eye at the camera lit the dust beside the camera at α → 180°), the
+            // perspective poses' the camera point. The oldest tier's age fade (the TTL end), the
+            // camera's near/far clip and τ per pixel area (`project`: 1/(A_px(depth)·cos θ_px)
+            // in perspective, 1/m_per_px² orthographic); the ages and the age colour carry the
+            // radiance weight (the display mixes colours by it). `true` when the grain landed.
+            let mut deposit = |r: V3, age: f64, wgt: f64, b: &B| -> bool {
+              let w_rad = if albedo > 0.0 {
+                let rn = norm(r);
+                let sun = [
+                  (-r[0] / rn) as f32,
+                  (-r[1] / rn) as f32,
+                  (-r[2] / rn) as f32,
+                ];
+                let to_eye = if view.perspective_tan_h.is_some() {
+                  [
+                    (view.cam_pos[0] * d::AU_M - r[0]) as f32,
+                    (view.cam_pos[1] * d::AU_M - r[1]) as f32,
+                    (view.cam_pos[2] * d::AU_M - r[2]) as f32,
+                  ]
+                } else {
+                  let e = normalize(sub(view.cam_pos, view.comet_au));
+                  [e[0] as f32, e[1] as f32, e[2] as f32]
+                };
+                d::radiance_weight(albedo, sun, to_eye, (rn / d::AU_M) as f32) as f64
+              } else {
+                1.0
+              };
+              let global = [
+                view.comet_au[0] + (r[0] - r_centre_now[0]) / d::AU_M,
+                view.comet_au[1] + (r[1] - r_centre_now[1]) / d::AU_M,
+                view.comet_au[2] + (r[2] - r_centre_now[2]) / d::AU_M,
+              ];
+              let wf = if b.fade {
+                wgt * ((1.0 - age / b.band.1) * 10.0).clamp(0.0, 1.0)
+              } else {
+                wgt
+              };
+              let Some((x, y, inv_a_px)) = project(global) else {
+                return false;
+              };
+              let wv = wf * w_rad * inv_a_px;
+              hist[y * w + x] += wv;
+              age_hist[y * w + x] += wv * age;
+              age2_hist[y * w + x] += wv * age * age;
+              let rgb = d::age_color(view.stream, age as f32, view.ttl_s as f32);
+              for k in 0..3 {
+                col_hist[3 * (y * w + x) + k] += wv * rgb[k] as f64;
+              }
+              cnt_hist[y * w + x] += 1.0;
+              true
+            };
             for &(bi, b) in part {
               let desc = &b.desc;
               let mass = desc.mass_params[0] as f64;
@@ -3380,8 +3961,15 @@ fn monte_carlo_truth(
                     0.0
                   };
                   let l33 = (cv[5] as f64 - l31 * l31 - l32 * l32).max(0.0).sqrt();
+                  // the cluster's age gates it into its tier's band like the render's
+                  let t0 = c.r0_t0_hi[3] as f64 + c.r0_t0_lo[3] as f64;
+                  let age = t_now - t0;
+                  if !(age >= b.band.0 && age < b.band.1) {
+                    continue;
+                  }
+                  // the cluster's cross-section (m²) shared by its grains
                   let m_c = c.v0_lo_mass[3] as f64;
-                  let wgt_c = m_c / per as f64;
+                  let wgt_c = m_c * xsec_per_g / per as f64;
                   for _ in 0..per {
                     let bin = (mc_rng(&mut rng) * 16.0).floor().min(15.0) as usize;
                     let u = mc_rng(&mut rng);
@@ -3396,13 +3984,13 @@ fn monte_carlo_truth(
                       a0[1] as f64 + u * (a1[1] as f64 - a0[1] as f64) + dy,
                       a0[2] as f64 + u * (a1[2] as f64 - a0[2] as f64) + dz,
                     ];
-                    let global = [
-                      view.comet_au[0] + (anchor[0] + local[0] - r_centre_now[0]) / d::AU_M,
-                      view.comet_au[1] + (anchor[1] + local[1] - r_centre_now[1]) / d::AU_M,
-                      view.comet_au[2] + (anchor[2] + local[2] - r_centre_now[2]) / d::AU_M,
+                    // heliocentric (m): the anchor is the frame's heliocentric origin
+                    let r = [
+                      anchor[0] + local[0],
+                      anchor[1] + local[1],
+                      anchor[2] + local[2],
                     ];
-                    if let Some((x, y)) = project(global) {
-                      hist[y * w + x] += wgt_c;
+                    if deposit(r, age, wgt_c, b) {
                       n_drawn += 1;
                     }
                   }
@@ -3447,26 +4035,25 @@ fn monte_carlo_truth(
                   let e2 = cross(e3, e1);
                   let fr = d::size_range_factor(&c) as f64;
                   let (sb_lo, sb_hi) = ((beta_c / fr).sqrt(), (beta_c * fr).sqrt());
-                  let wgt_c = m_c / per as f64;
+                  // the cluster's cross-section (m²) shared by its grains
+                  let wgt_c = m_c * xsec_per_g / per as f64;
                   for _ in 0..per {
                     let sb = sb_lo + (sb_hi - sb_lo) * mc_rng(&mut rng);
                     let beta = sb * sb;
                     let f = sb / beta_c.sqrt();
                     let (g1, g2, g3) = (mc_gauss(&mut rng), mc_gauss(&mut rng), mc_gauss(&mut rng));
+                    // the dispersion scales with the grain's speed factor f, as the render's
+                    // (`bin_packet`: Σ_v · f²) and the physical truth's (σ · v with v ∝ f); unscaled,
+                    // the largest grains (f ≈ 0.3) got 3× their spread and ~10 % went backward
+                    let (slf, srf) = (sl * f, sr * f);
                     let v = [
-                      v0[0] + ej[0] * (f - 1.0) + sl * (g1 * e1[0] + g2 * e2[0]) + sr * g3 * e3[0],
-                      v0[1] + ej[1] * (f - 1.0) + sl * (g1 * e1[1] + g2 * e2[1]) + sr * g3 * e3[1],
-                      v0[2] + ej[2] * (f - 1.0) + sl * (g1 * e1[2] + g2 * e2[2]) + sr * g3 * e3[2],
+                      v0[0] + ej[0] * (f - 1.0) + slf * (g1 * e1[0] + g2 * e2[0]) + srf * g3 * e3[0],
+                      v0[1] + ej[1] * (f - 1.0) + slf * (g1 * e1[1] + g2 * e2[1]) + srf * g3 * e3[1],
+                      v0[2] + ej[2] * (f - 1.0) + slf * (g1 * e1[2] + g2 * e2[2]) + srf * g3 * e3[2],
                     ];
                     let (r, _) =
                       d::kepler::propagate_f64(r0, v, d::SUN_MU_M3_S2 * (1.0 - beta), age);
-                    let global = [
-                      view.comet_au[0] + (r[0] - r_centre_now[0]) / d::AU_M,
-                      view.comet_au[1] + (r[1] - r_centre_now[1]) / d::AU_M,
-                      view.comet_au[2] + (r[2] - r_centre_now[2]) / d::AU_M,
-                    ];
-                    if let Some((x, y)) = project(global) {
-                      hist[y * w + x] += wgt_c;
+                    if deposit(r, age, wgt_c, b) {
                       n_drawn += 1;
                     }
                   }
@@ -3544,53 +4131,7 @@ fn monte_carlo_truth(
                   vc[2] + (dir[2] + lat[2]) * v + v_site[2],
                 ];
                 let (r, _) = d::kepler::propagate_f64(r0, v0, d::SUN_MU_M3_S2 * (1.0 - beta), age);
-                // physical photometry: p · Φ(α) / r_h² of this grain (the render weights each
-                // texel the same way at the dust it holds). The orthographic poses' eye is at
-                // infinity along the view axis (the comet → camera line), like the render's: a
-                // point eye at the camera lit the dust beside the camera at α → 180°
-                let w_rad = if albedo > 0.0 {
-                  let rn = norm(r);
-                  let sun = [
-                    (-r[0] / rn) as f32,
-                    (-r[1] / rn) as f32,
-                    (-r[2] / rn) as f32,
-                  ];
-                  let to_eye = if view.perspective_tan_h.is_some() {
-                    [
-                      (view.cam_pos[0] * d::AU_M - r[0]) as f32,
-                      (view.cam_pos[1] * d::AU_M - r[1]) as f32,
-                      (view.cam_pos[2] * d::AU_M - r[2]) as f32,
-                    ]
-                  } else {
-                    let e = normalize(sub(view.cam_pos, view.comet_au));
-                    [e[0] as f32, e[1] as f32, e[2] as f32]
-                  };
-                  d::radiance_weight(albedo, sun, to_eye, (rn / d::AU_M) as f32) as f64
-                } else {
-                  1.0
-                };
-                let global = [
-                  view.comet_au[0] + (r[0] - r_centre_now[0]) / d::AU_M,
-                  view.comet_au[1] + (r[1] - r_centre_now[1]) / d::AU_M,
-                  view.comet_au[2] + (r[2] - r_centre_now[2]) / d::AU_M,
-                ];
-                // the renderer's age fade of the oldest tier (part of the model: the TTL end)
-                let wf = if b.fade {
-                  wgt * ((1.0 - age / b.band.1) * 10.0).clamp(0.0, 1.0)
-                } else {
-                  wgt
-                };
-                if let Some((x, y)) = project(global) {
-                  hist[y * w + x] += wf * w_rad;
-                  // the ages carry the radiance weight too: the display mixes colours by it
-                  age_hist[y * w + x] += wf * w_rad * age;
-                  age2_hist[y * w + x] += wf * w_rad * age * age;
-                  // the grain's age colour, mixed by radiance like the render's texel words
-                  let rgb = d::age_color(view.stream, age as f32, view.ttl_s as f32);
-                  for k in 0..3 {
-                    col_hist[3 * (y * w + x) + k] += wf * w_rad * rgb[k] as f64;
-                  }
-                  cnt_hist[y * w + x] += 1.0;
+                if deposit(r, age, wgt, b) {
                   n_drawn += 1;
                 }
               }
@@ -3667,10 +4208,10 @@ fn monte_carlo_truth(
   }
   let (truth, age_sum, age2_sum, col_sum, drawn, _, counts) = run(&n_of);
   // absolute photometry: the render's radiance factors (per px², `PYR_UNIT` makes the pyramid
-  // absolute) against the truth's Σ cross-section × weight per pixel area
+  // absolute) against the truth's Σ cross-section × weight / A_px(depth) — both τ per pixel
+  // area, in perspective the pixel area taken at each grain's depth (no frame-wide `m_per_px`)
   let abs_ratio = {
-    let m_per_px = 2.0 * view.half_height_au * d::AU_M / h as f64;
-    let truth_sum: f64 = truth.iter().sum::<f64>() / (m_per_px * m_per_px);
+    let truth_sum: f64 = truth.iter().sum::<f64>();
     let render_sum: f64 = render.iter().map(|&v| v as f64).sum();
     if truth_sum > 0.0 {
       render_sum / truth_sum
@@ -3680,36 +4221,47 @@ fn monte_carlo_truth(
   };
   // the aperture Afρ: `4 r_h² / (π ρ) · Σ_{within ρ} RF · A_px` (A'Hearn et al. 1984 with Δ
   // cancelling in the orthographic view; the image's RF already carries 1/r_h²), the truth the
-  // same from its Σ cross-section × weight, and the recipe's Afρ(r_h)·Φ(α_c) at the comet
-  let afrho = view.afrho_aperture_km.map(|rho_km| {
-    let m_per_px = 2.0 * view.half_height_au * d::AU_M / h as f64;
-    let rho = rho_km * 1e3;
-    let (cx, cy) = view.nucleus_px;
-    let (mut s_r, mut s_t) = (0.0f64, 0.0f64);
-    for y in 0..h {
-      for x in 0..w {
-        let (dx, dy) = (
-          (x as f64 + 0.5 - cx) * m_per_px,
-          (y as f64 + 0.5 - cy) * m_per_px,
-        );
-        if dx * dx + dy * dy <= rho * rho {
-          s_r += render[y * w + x] as f64 * m_per_px * m_per_px;
-          s_t += truth[y * w + x];
+  // same from its Σ cross-section × weight, and the recipe's Afρ(r_h)·Φ(α_c) at the comet.
+  // Orthographic poses only: a perspective frame has no single pixel area to turn the aperture's
+  // RF sum back into a cross-section
+  if view.afrho_aperture_km.is_some() && view.perspective_tan_h.is_some() {
+    log_line(
+      "[observer] afrho: the aperture Afρ is reported for the orthographic poses only (skipped)",
+    );
+  }
+  let afrho = view
+    .afrho_aperture_km
+    .filter(|_| view.perspective_tan_h.is_none())
+    .map(|rho_km| {
+      let m_per_px = view.m_per_px_nucleus;
+      let a_px = m_per_px * m_per_px;
+      let rho = rho_km * 1e3;
+      let (cx, cy) = view.nucleus_px;
+      let (mut s_r, mut s_t) = (0.0f64, 0.0f64);
+      for y in 0..h {
+        for x in 0..w {
+          let (dx, dy) = (
+            (x as f64 + 0.5 - cx) * m_per_px,
+            (y as f64 + 0.5 - cy) * m_per_px,
+          );
+          if dx * dx + dy * dy <= rho * rho {
+            s_r += render[y * w + x] as f64 * a_px;
+            s_t += truth[y * w + x] * a_px;
+          }
         }
       }
-    }
-    let r_h = norm(view.comet_au);
-    let to_afrho = |s: f64| 4.0 * r_h * r_h / (core::f64::consts::PI * rho) * s * 100.0;
-    let sun = [
-      -view.comet_au[0] / r_h,
-      -view.comet_au[1] / r_h,
-      -view.comet_au[2] / r_h,
-    ];
-    let to_eye = normalize(sub(view.cam_pos, view.comet_au));
-    let alpha = dot(sun, to_eye).clamp(-1.0, 1.0).acos();
-    let analytic = view.afrho_in_cm * d::phase_function(alpha as f32) as f64;
-    (to_afrho(s_r), to_afrho(s_t), analytic)
-  });
+      let r_h = norm(view.comet_au);
+      let to_afrho = |s: f64| 4.0 * r_h * r_h / (core::f64::consts::PI * rho) * s * 100.0;
+      let sun = [
+        -view.comet_au[0] / r_h,
+        -view.comet_au[1] / r_h,
+        -view.comet_au[2] / r_h,
+      ];
+      let to_eye = normalize(sub(view.cam_pos, view.comet_au));
+      let alpha = dot(sun, to_eye).clamp(-1.0, 1.0).acos();
+      let analytic = view.afrho_in_cm * d::phase_function(alpha as f32) as f64;
+      (to_afrho(s_r), to_afrho(s_t), analytic)
+    });
   // OBSERVER_MC_AGE=<file>: the truth's radiance-weighted mean age per pixel (f32 seconds, 0
   // where empty)
   if let Ok(path) = std::env::var("OBSERVER_MC_AGE") {
@@ -3931,4 +4483,289 @@ fn write_mc_triptych(path: &Path, render: &[f32], truth: &[f32], w: u32, h: u32)
     }
   }
   let _ = image::save_buffer(path, &out, w * 3, h, image::ColorType::Rgb8);
+}
+
+// ───────────────────────────── sky-image registration check ─────────────────────────────
+
+/// `--sky-image-check`: the synthetic image's size (px) and its crosses: a 3×3 grid at these
+/// FITS pixels (1-based, the pixel centres), arms ±`SKY_CHECK_ARM` px, 3 px thick (symmetric:
+/// the centroid is the centre; 9 crosses cover 1.3 % of the image, above the 99.5th-percentile
+/// white point the loader takes)
+const SKY_CHECK_N: u32 = 256;
+const SKY_CHECK_AT: [f64; 3] = [64.0, 128.0, 192.0];
+const SKY_CHECK_ARM: i64 = 8;
+/// the largest allowed distance (frame px) between a detected cross and its WCS pixel
+const SKY_CHECK_TOL_PX: f64 = 1.0;
+
+/// A primary-HDU FITS file, BITPIX −32, `nx × ny`, `data` row-major from `p2 = 1`, with `cards`
+/// (key, value already formatted) after the mandatory ones.
+fn fits_f32(nx: u32, ny: u32, data: &[f32], cards: &[(&str, String)]) -> Vec<u8> {
+  let mut h = String::new();
+  let mut card = |k: &str, v: &str| {
+    let c = format!("{k:<8}= {v:>20}");
+    h.push_str(&format!("{c:<80}"));
+  };
+  card("SIMPLE", "T");
+  card("BITPIX", "-32");
+  card("NAXIS", "2");
+  card("NAXIS1", &nx.to_string());
+  card("NAXIS2", &ny.to_string());
+  for (k, v) in cards {
+    card(k, v);
+  }
+  h.push_str(&format!("{:<80}", "END"));
+  while h.len() % 2880 != 0 {
+    h.push(' ');
+  }
+  let mut out = h.into_bytes();
+  for v in data {
+    out.extend_from_slice(&v.to_be_bytes());
+  }
+  while out.len() % 2880 != 0 {
+    out.push(0);
+  }
+  out
+}
+
+/// `--sky-image-check` for frame `i`: writes `sky_check_NNN.fits` (TAN WCS centred on the
+/// camera → comet direction's RA/Dec, `CDELT` so the image spans half the frame height, north up
+/// and east left), loads it as the scene's sky overlay (opacity 1, linear), renders, saves
+/// `sky_check_NNN.png`, removes the overlay, and finds each cross's luminance centroid in a
+/// window around the pixel the observer's own perspective maths gives its WCS direction. Returns
+/// the `--check` failures (a cross missing or farther than [`SKY_CHECK_TOL_PX`]).
+fn sky_image_check(
+  ctx: &SimulationContext,
+  scene_id: u64,
+  cam: EntityId,
+  comet_body: EntityId,
+  args: &Args,
+  i: u32,
+  fov_deg: f64,
+) -> Vec<String> {
+  use aethervk_core_rlib::{
+    scene::sky_image as sk,
+    simulation_api::astrometry::{
+      ecliptic_to_equatorial_j2000, equatorial_to_ecliptic_j2000, ra_dec_of,
+    },
+  };
+  let mut problems = Vec::new();
+  let (w, h) = (args.width as usize, args.height as usize);
+  let tan_h = (fov_deg.to_radians() / 2.0).tan();
+  let aspect = args.width as f64 / args.height as f64;
+  let Some((cam_pos, _)) = camera_pose(ctx, scene_id, cam) else {
+    return vec![format!("frame {i}: sky-image check: no camera pose")];
+  };
+  let Some(comet) = comet_position_au(ctx, scene_id, comet_body) else {
+    return vec![format!("frame {i}: sky-image check: no comet position")];
+  };
+  // the image's centre: the camera → comet direction's astrometric RA/Dec (rad → degrees)
+  let (ra, dec) = ra_dec_of(ecliptic_to_equatorial_j2000(sub(comet, cam_pos)));
+  let (ra_deg, dec_deg) = (ra.to_degrees(), dec.to_degrees());
+  // degrees per image pixel: the image spans half the frame's vertical field
+  let cdelt = fov_deg / 2.0 / SKY_CHECK_N as f64;
+  let n = SKY_CHECK_N as i64;
+  let mut data = vec![0.0f32; (n * n) as usize];
+  for &cy in &SKY_CHECK_AT {
+    for &cx in &SKY_CHECK_AT {
+      let (x0, y0) = (cx as i64 - 1, cy as i64 - 1); // 0-based storage index of the centre
+      for a in -SKY_CHECK_ARM..=SKY_CHECK_ARM {
+        for t in -1..=1 {
+          for (x, y) in [(x0 + a, y0 + t), (x0 + t, y0 + a)] {
+            if x >= 0 && y >= 0 && x < n && y < n {
+              data[(y * n + x) as usize] = 1.0;
+            }
+          }
+        }
+      }
+    }
+  }
+  let crpix = (SKY_CHECK_N as f64 + 1.0) / 2.0;
+  let cards = [
+    ("CTYPE1", "'RA---TAN'".to_string()),
+    ("CTYPE2", "'DEC--TAN'".to_string()),
+    ("RADESYS", "'ICRS'".to_string()),
+    ("CRVAL1", format!("{ra_deg:.12}")),
+    ("CRVAL2", format!("{dec_deg:.12}")),
+    ("CRPIX1", format!("{crpix:.3}")),
+    ("CRPIX2", format!("{crpix:.3}")),
+    ("CDELT1", format!("{:.12E}", -cdelt)),
+    ("CDELT2", format!("{:.12E}", cdelt)),
+  ];
+  let path = args.out.join(format!("sky_check_{i:03}.fits"));
+  if let Err(e) = std::fs::write(&path, fits_f32(SKY_CHECK_N, SKY_CHECK_N, &data, &cards)) {
+    return vec![format!(
+      "frame {i}: sky-image check: cannot write {}: {e}",
+      path.display()
+    )];
+  }
+  let img = match sk::SkyImage::load(&path.to_string_lossy(), None) {
+    Ok(img) => img,
+    Err(e) => return vec![format!("frame {i}: sky-image check: load failed: {e}")],
+  };
+  let Some(wcs) = img.wcs else {
+    return vec![format!(
+      "frame {i}: sky-image check: the loader refused the WCS: {:?}",
+      img.wcs_error
+    )];
+  };
+  let Some(scene) = ctx.get_scene(scene_id) else {
+    return vec![format!("frame {i}: sky-image check: no scene")];
+  };
+  let key = sk::scene_key(&scene);
+  drop(scene);
+  if !sk::store_insert(key, &img) {
+    return vec![format!(
+      "frame {i}: sky-image check: store_insert refused the image"
+    )];
+  }
+  sk::store_set_params(
+    key,
+    sk::SkyImageParams {
+      opacity: 1.0,
+      stretch: 0.0,
+      visible: true,
+    },
+  );
+  let dl = wait_and_download(ctx, args.width, args.height, args.frames_to_wait, 60_000);
+  sk::store_remove(key);
+  let Some((mut rgba, _)) = dl else {
+    return vec![format!(
+      "frame {i}: sky-image check: render download failed"
+    )];
+  };
+  bgra_to_rgba(&mut rgba);
+  let _ = image::save_buffer(
+    args.out.join(format!("sky_check_{i:03}.png")),
+    &rgba,
+    args.width,
+    args.height,
+    image::ColorType::Rgba8,
+  );
+  // the pose the overlay was drawn with (the Earth observer re-aims every tick: read it now)
+  // (directions at infinity: the rotation alone places them)
+  let Some((_, cam_q)) = camera_pose(ctx, scene_id, cam) else {
+    return vec![format!(
+      "frame {i}: sky-image check: no camera pose after the render"
+    )];
+  };
+  let (right, forward, up) = camera_axes(cam_q);
+  let lum = |x: usize, y: usize| -> f64 {
+    let o = (y * w + x) * 4;
+    0.2126 * rgba[o] as f64 + 0.7152 * rgba[o + 1] as f64 + 0.0722 * rgba[o + 2] as f64
+  };
+  // one image pixel in frame pixels, and the search window (half the cross spacing)
+  let img_px = (h as f64 / 2.0) / SKY_CHECK_N as f64;
+  let win = ((SKY_CHECK_AT[1] - SKY_CHECK_AT[0]) * img_px / 2.0).max(6.0);
+  let mut worst = 0.0f64;
+  let mut k = 0;
+  for &cy in &SKY_CHECK_AT {
+    for &cx in &SKY_CHECK_AT {
+      k += 1;
+      // the WCS direction of the cross's centre → the frame pixel (directions at infinity)
+      let dir = equatorial_to_ecliptic_j2000(wcs.pixel_to_equatorial(cx, cy));
+      let (sx, sy, depth) = (dot(dir, right), dot(dir, up), dot(dir, forward));
+      if !(depth > 0.0) {
+        problems.push(format!(
+          "frame {i}: sky cross {k} ({cx}, {cy}) behind the camera"
+        ));
+        continue;
+      }
+      let px = w as f64 / 2.0 * (1.0 + sx / depth / (tan_h * aspect));
+      let py = h as f64 / 2.0 * (1.0 - sy / depth / tan_h);
+      // the window's background (its 20th percentile) and the luminance centroid of what stands
+      // above half way to its peak
+      let (x0, x1) = (
+        (px - win).floor().max(0.0) as usize,
+        ((px + win).ceil() as usize).min(w),
+      );
+      let (y0, y1) = (
+        (py - win).floor().max(0.0) as usize,
+        ((py + win).ceil() as usize).min(h),
+      );
+      if x0 >= x1 || y0 >= y1 {
+        problems.push(format!(
+          "frame {i}: sky cross {k} predicted at ({px:.2}, {py:.2}) is off the frame"
+        ));
+        continue;
+      }
+      let mut vals: Vec<f64> = Vec::new();
+      for y in y0..y1 {
+        for x in x0..x1 {
+          vals.push(lum(x, y));
+        }
+      }
+      vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+      let bg = vals[vals.len() / 5];
+      let peak = *vals.last().unwrap();
+      if peak - bg < 32.0 {
+        problems.push(format!(
+          "frame {i}: sky cross {k} not found near ({px:.2}, {py:.2}) (peak {peak:.0} over background {bg:.0})"
+        ));
+        continue;
+      }
+      let thr = bg + 0.5 * (peak - bg);
+      let (mut sx_, mut sy_, mut st) = (0.0f64, 0.0f64, 0.0f64);
+      for y in y0..y1 {
+        for x in x0..x1 {
+          let v = lum(x, y) - bg;
+          if v + bg >= thr {
+            sx_ += v * (x as f64 + 0.5);
+            sy_ += v * (y as f64 + 0.5);
+            st += v;
+          }
+        }
+      }
+      let (fx, fy) = (sx_ / st, sy_ / st);
+      let err = ((fx - px).powi(2) + (fy - py).powi(2)).sqrt();
+      worst = worst.max(err);
+      log_line(&format!(
+        "[observer] sky cross frame {i} #{k} (FITS {cx}, {cy}): predicted ({px:.2}, {py:.2}), found ({fx:.2}, {fy:.2}), error {err:.3} px"
+      ));
+      if err > SKY_CHECK_TOL_PX {
+        problems.push(format!(
+          "frame {i}: sky cross {k} (FITS {cx}, {cy}) {err:.2} px from its WCS pixel (tolerance {SKY_CHECK_TOL_PX} px)"
+        ));
+      }
+    }
+  }
+  log_line(&format!(
+    "[observer] sky-image check frame {i}: centre RA {ra_deg:.6}° Dec {dec_deg:.6}°, {cdelt:.3e}°/px ({img_px:.3} frame px per image px), worst error {worst:.3} px"
+  ));
+  problems
+}
+
+/// `--pose earth`: the camera position, its forward axis, the camera → comet direction, the angle
+/// between them and the comet's elevation above the site's (geocentric) horizon
+fn earth_pose_diag(
+  ctx: &SimulationContext,
+  scene_id: u64,
+  cam: EntityId,
+  comet_body: EntityId,
+  earth_body: EntityId,
+  i: u32,
+  tag: &str,
+) -> (String, Option<f64>) {
+  let (Some((cp, cq)), Some(c), Some(e)) = (
+    camera_pose(ctx, scene_id, cam),
+    comet_position_au(ctx, scene_id, comet_body),
+    comet_position_au(ctx, scene_id, earth_body),
+  ) else {
+    return (
+      format!("earth pose frame {i} ({tag}): camera/comet/Earth transform missing"),
+      None,
+    );
+  };
+  let (_, fwd, _) = camera_axes(cq);
+  let to = normalize(sub(c, cp));
+  let zenith = normalize(sub(cp, e));
+  let angle = dot(fwd, to).clamp(-1.0, 1.0).acos().to_degrees();
+  let elev = dot(to, zenith).clamp(-1.0, 1.0).asin().to_degrees();
+  let line = format!(
+    "earth pose frame {i} ({tag}): camera {} AU ({:.1} km from the Earth centre), forward {}, to comet {}, angle {angle:.4}°, comet elevation {elev:.2}°",
+    json_v3(cp),
+    norm(sub(cp, e)) * AU_KM,
+    json_v3(fwd),
+    json_v3(to)
+  );
+  (line, Some(elev))
 }

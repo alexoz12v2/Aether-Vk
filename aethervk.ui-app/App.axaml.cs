@@ -265,7 +265,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool SetCometIndicatorVisible(bool visible) => true;
   public double DustComaRadiusKm() => 0.0;
   public EarthObserverStatus? EarthObserverStatus() => null;
-  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, AetherVk.Logic.Utils.Quaterniond look) => true;
+  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, double elevM, AetherVk.Logic.Utils.Quaterniond look) => true;
 
   public bool SetReferenceErrorVisible(bool visible) => true;
   public bool SetDustSoftening(float softening) => true;
@@ -433,6 +433,12 @@ public class MockNativeRuntimeService : INativeRuntimeService
     appearance = default;
     return false;
   }
+
+  public SkyImageInfo? LoadSkyImage(string path, string? sidecarPath) => null;
+
+  public bool SetSkyImageParams(float opacity, float stretch, bool visible) => false;
+
+  public bool RemoveSkyImage() => false;
 
   public ulong AddScreenSpaceBillboard(string imagePath, ScreenSpaceBillboard billboard) => 6;
 

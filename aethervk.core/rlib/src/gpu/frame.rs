@@ -912,6 +912,25 @@ impl DustDrawCall {
     )
   }
 
+  /// The speck pass's mvp (`dust_specks.comp`): **eye-relative** particle-system metres → clip,
+  /// `Proj · ViewRot · Scale(units per metre)` without the translation (the specks form their
+  /// offsets from the eye in df64, `dust::specks::SpeckCluster::offset_df`; a translation of
+  /// the eye's size would cancel against them in f32). Same composition as [`Self::mvp_params`].
+  pub fn mvp_params_eye_relative(&self, camera: &CameraRenderData) -> [f32; 16] {
+    use aethervk_oshal_rlib::math::{matrix::mat4f64::Mat4x4f64, vector::vec4f64::Vec4f64};
+    let mut view_rot_only_f64 = camera.view_f64;
+    view_rot_only_f64.cols[3] = Vec4f64::from_components(0.0, 0.0, 0.0, 1.0);
+    let view_proj_f64 = camera.proj_f64 * view_rot_only_f64;
+    let u = self.units_per_m;
+    let model = Mat4x4f64::from_cols(
+      Vec4f64::from_components(u, 0.0, 0.0, 0.0),
+      Vec4f64::from_components(0.0, u, 0.0, 0.0),
+      Vec4f64::from_components(0.0, 0.0, u, 0.0),
+      Vec4f64::from_components(0.0, 0.0, 0.0, 1.0),
+    );
+    (view_proj_f64 * model).to_mat4_f32().into()
+  }
+
   /// the eye in particle-system local metres (`−rte / units_per_m`)
   pub fn eye_local_m(&self) -> [f32; 3] {
     let u = self.units_per_m.max(1e-300);
@@ -977,6 +996,20 @@ pub fn prepare_dust(
   } else {
     device.cmd_dust_frame_begin(cmd, pe, render_scene.window_extent, flags, flow)?
   };
+  // the speck shell's pixel solid angle (perspective cameras; 0 = no shell): used from the next
+  // readback on (`dust::specks::shell_radius_m`)
+  let omega_px_sr = match render_scene.camera_data.projection_params {
+    CameraProjectionParams::Perspective { fov, aspect_ratio } => {
+      crate::scene::dust::specks::pixel_solid_angle_sr(
+        fov as f64,
+        aspect_ratio as f64,
+        render_scene.window_extent[0],
+        render_scene.window_extent[1],
+      )
+    }
+    CameraProjectionParams::Orthographic { .. } => 0.0,
+  };
+  device.dust_set_shell_camera(pe, omega_px_sr);
   for &id in &systems {
     if let Err(e) = device.cmd_dust_system_begin(id, flags, flow) {
       aethervk_oshal_rlib::log!("[Dust] frame begin failed for {id}: {e}");
@@ -1030,6 +1063,7 @@ pub fn prepare_dust(
   let tracing = crate::gpu::dust_trace::trace_path().is_some()
     && frame_no % crate::gpu::dust_trace::trace_every() == 0;
   let mut traced: Vec<(u64, crate::gpu::dust_trace::TraceFrameMeta, Vec<u32>)> = Vec::new();
+  let specks_buffers = buffers.clone();
   let mut buffers = buffers.into_iter();
   let inv_unit = if view.unit > 0.0 {
     1.0 / view.unit
@@ -1132,6 +1166,74 @@ pub fn prepare_dust(
         Err(e) => {
           aethervk_oshal_rlib::log!("[Dust] splat failed for {:?}: {}", call.entity_id, e);
           call.state.live_count = 0;
+        }
+      }
+    }
+  }
+  // the physical specks (`dust_specks.comp`, WP3b): one pass per tier on the same pyramid, after
+  // its splat; always recorded (it measures the density at the eye), it draws only inside the
+  // header's shell radius. `AETHERVK_DUST_DEBUG_SKIP=specks` skips it. The size law is the
+  // system's (`DustDrawState::s_ref_um` / `size_q`, from `ParticleSystemEmitParams`); a state
+  // without one (0) falls back to `AETHERVK_DUST_SPECKS_SREF_UM` or 50 µm, and q = 3.5.
+  if !dust_debug_skip("specks") {
+    device.cmd_checkpoint(cmd, c"dust: specks");
+    let s_ref_fallback = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPECKS_SREF_UM")
+      .and_then(|v| v.trim().parse::<f32>().ok())
+      .filter(|v| v.is_finite() && *v > 0.0)
+      .unwrap_or(50.0);
+    let mut specks_buffers = specks_buffers.into_iter();
+    for layer in render_scene.depth_layers.iter() {
+      let camera =
+        render_scene
+          .camera_data
+          .rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
+      for call in layer.dust_calls.iter() {
+        let Some((render, moments)) = specks_buffers.next().flatten() else {
+          continue;
+        };
+        let s = &call.state;
+        if s.live_count == 0 {
+          continue;
+        }
+        let mvp = call.mvp_params_eye_relative(&camera);
+        let eye = call.eye_local_m();
+        let s_ref_um = if s.s_ref_um > 0.0 {
+          s.s_ref_um
+        } else {
+          s_ref_fallback
+        };
+        // the tier's fade ratio: the band's max age over the TTL when the tier fades
+        let fade_ratio = if s.frame.ttl[2] > 0.5 || !(s.ttl_s > 0.0) {
+          0.0
+        } else {
+          s.frame.ttl[0] / s.ttl_s
+        };
+        let pc = crate::scene::dust::specks::DustSpecksPushConstants {
+          moments: 0,
+          render: 0,
+          pyramid: 0,
+          live_count: s.live_count.min(s.capacity),
+          size_fade: crate::scene::dust::specks::pack_size_fade(s_ref_um, fade_ratio),
+          exposure: call.raw_exposure(),
+          inv_unit,
+          color: crate::scene::dust::specks::pack_color_q(
+            crate::scene::dust::pack_color(call.stream_color),
+            s.size_q,
+          ),
+          albedo: s.albedo,
+          mvp,
+          eye_local: [eye[0], eye[1], eye[2], s.ttl_s],
+        };
+        if let Err(e) = device.cmd_dust_specks(
+          cmd,
+          pe,
+          call.entity_id.as_ffi(),
+          s.ring_base,
+          render,
+          moments,
+          pc,
+        ) {
+          aethervk_oshal_rlib::log!("[Dust specks] failed for {:?}: {}", call.entity_id, e);
         }
       }
     }
@@ -1911,6 +2013,9 @@ pub fn render_frame(
     },
   };
   device.draw_composite(cmd_buffer, handle, &constants)?;
+
+  // HUD: the user's telescope image registered on the sky, above the scene, below the UI
+  crate::gpu::sky_image_draw::draw_sky_image(device, cmd_buffer, handle, render_scene)?;
 
   // Draw cursor after composite (always on top of both layers)
   if let Some(cursor_call) = &render_scene.cursor_call {

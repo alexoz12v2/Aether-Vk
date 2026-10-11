@@ -21,6 +21,7 @@
 
 pub mod df;
 pub mod phase;
+pub mod specks;
 pub mod splat;
 pub use phase::*;
 pub use splat::*;
@@ -1613,10 +1614,22 @@ pub struct SizeDistribution {
 
 impl SizeDistribution {
   pub fn from_diameter_um(diameter_um: f32) -> Self {
+    Self::from_diameter_um_range(diameter_um, SIZE_RANGE_FACTOR)
+  }
+  /// The distribution of radii `r/F .. r·F` about the configured radius `r`
+  /// (`ParticleSystemEmitParams::size_range`, ≥ 1). The exponent stays [`SIZE_POWER_Q`]: the
+  /// continuum's size polyline is laid out for it (`size_edge_sqrt_beta`); the Model's `size_q`
+  /// enters the speck counts only (`ParticleSystemEmitParams::size_q`).
+  pub fn from_diameter_um_range(diameter_um: f32, range: f64) -> Self {
     let r = (diameter_um as f64 * 0.5).max(1e-3);
+    let f = if range.is_finite() && range >= 1.0 {
+      range
+    } else {
+      SIZE_RANGE_FACTOR
+    };
     Self {
-      s_min_um: r / SIZE_RANGE_FACTOR,
-      s_max_um: r * SIZE_RANGE_FACTOR,
+      s_min_um: r / f,
+      s_max_um: r * f,
       q: SIZE_POWER_Q,
     }
   }
@@ -2212,6 +2225,11 @@ pub struct DustDrawState {
   pub albedo: f32,
   /// the system's cluster lifetime (s): the age clock of the hue ramp (`age_color`)
   pub ttl_s: f32,
+  /// the reference grain radius (µm, the configured diameter / 2) and the size law exponent of
+  /// the system, for the speck counts (`specks::DustSpecksPushConstants`); 0 = unknown (the
+  /// speck pass's defaults)
+  pub s_ref_um: f32,
+  pub size_q: f32,
 }
 
 impl DustDrawState {
@@ -2649,6 +2667,8 @@ impl DustHostState {
         .with_spin(jet.spin_or_still()),
       albedo: 0.0,
       ttl_s: self.ttl_s as f32,
+      s_ref_um: 0.0,
+      size_q: 0.0,
     })
   }
 }
@@ -2702,6 +2722,10 @@ pub struct DustSystemState {
   pub upload_seq: u64,
   /// geometric albedo of the dust ([`DustEmitConfig::albedo`]), set by the emission tick
   pub albedo: f32,
+  /// the reference grain radius (µm) and the size law exponent `q`
+  /// (`ParticleSystemEmitParams::size_q`), set by the emission tick: the speck counts
+  pub s_ref_um: f32,
+  pub size_q: f32,
   /// the emission inputs changed (rotation model, jet parameters): the next [`Self::tick`] drops
   /// the history and re-emits it with the new ones ([`Self::request_reemit`])
   pub reemit: bool,
@@ -2758,6 +2782,8 @@ impl DustSystemState {
       tiers,
       upload_seq: 0,
       albedo: 0.0,
+      s_ref_um: 0.0,
+      size_q: 0.0,
       reemit: false,
       spin_model: None,
       complete: false,
@@ -2896,6 +2922,8 @@ impl DustSystemState {
       .collect();
     for s in &mut states {
       s.albedo = self.albedo;
+      s.s_ref_um = self.s_ref_um;
+      s.size_q = self.size_q;
     }
     states
   }

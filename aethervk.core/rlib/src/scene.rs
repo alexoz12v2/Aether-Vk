@@ -46,6 +46,7 @@ pub mod interaction;
 pub mod particles;
 pub mod referential_indicator;
 pub mod script_components;
+pub mod sky_image;
 pub mod text;
 pub mod trajectory;
 pub mod trajectory_indicator;
@@ -1643,6 +1644,9 @@ impl Scene {
     self.register_component::<CameraComponent>(&highres_type_id);
     self.register_component::<CursorComponent>(&highres_type_id);
     self.register_component::<MarkersComponent>(&transform_type_id);
+    // the Earth observer's light-time view (simulation_api::earth_observer: the comet and its
+    // dust drawn at the retarded epoch)
+    self.register_component::<crate::simulation_api::earth_observer::LightTimeViewComponent>(&[]);
 
     self.register_component::<StaticMeshComponent>(&transform_type_id);
 
@@ -4969,6 +4973,10 @@ pub mod particles_dto {
     pub density_gcm3: f32,
     pub scattering_efficiency: f32,
     pub geometric_albedo: f32,
+    /// size law exponent `q` (`ParticleSystemEmitParams::size_q`, default 3.5)
+    pub size_q: f32,
+    /// size range factor `F` (`ParticleSystemEmitParams::size_range`, default 10)
+    pub size_range: f32,
 
     pub afrho_0_cm: f32, // new values with respect to AetherVk Web
     pub afrho_power: f32,
@@ -4991,7 +4999,10 @@ pub mod particles_dto {
     /// `particles::EMISSION_START_PREEXISTING` = a pre-existing tail
     pub emission_start_us: i64,
   }
-  const _: () = assert!(core::mem::size_of::<ParticleSystemDTO>() == 88);
+  // 10 common f32 (40 B) + jet 5 f32 + colour 4 f32 + radius + seed (44 B) + `_pad` + i64
+  const _: () = assert!(core::mem::size_of::<ParticleSystemDTO>() == 96);
+  const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, emission_start_us) == 88);
+  const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, afrho_0_cm) == 24);
 }
 
 pub use particles_dto::*;

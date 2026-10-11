@@ -1690,7 +1690,9 @@ impl SceneDump {
   ///    the legacy `last_emission` / `last_compaction` pair.
   /// 6: `ParticleSystemEmitParams::geometric_albedo` (physical photometry, WP1) and the removal of
   ///    `mass_variability_perc` (bincode is positional: older dumps are refused).
-  pub const CURRENT_VERSION: u32 = 6;
+  /// 7: `ParticleSystemEmitParams::size_q` and `size_range` (the size law as Model parameters,
+  ///    WP3b; positional again: v6 dumps are refused).
+  pub const CURRENT_VERSION: u32 = 7;
 }
 
 /// Serialized representation of a single scene entity.
