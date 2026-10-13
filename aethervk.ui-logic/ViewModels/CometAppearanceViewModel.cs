@@ -159,6 +159,16 @@ public partial class CometAppearanceViewModel : ObservableObject, IDisposable
       .Subscribe(v => IsImporting = v)
       .AddDisposableTo(_disposables);
 
+    _assetLibrary.AppearanceChanged
+      .ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(applied =>
+      {
+        // queued natively: the runtime may not report it yet
+        _applied = applied;
+        LoadFrom(_applied);
+      })
+      .AddDisposableTo(_disposables);
+
     _assetLibrary.Meshes
       .CombineLatest(_assetLibrary.Textures)
       .Subscribe(t =>

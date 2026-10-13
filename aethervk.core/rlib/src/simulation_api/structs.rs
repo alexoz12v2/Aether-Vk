@@ -155,8 +155,9 @@ pub struct SubtreeEntities {
   pub subtree: EntityId,
   /// The body entity (km scale, parent = subtree). Holds AlmanacPlanet when driven.
   pub body: EntityId,
-  /// Comet only: child of `body` rendering the nucleus (`StaticMeshComponent` +
-  /// `CometAppearanceComponent`), see `simulation_api::comet_appearance`. `None` for planets.
+  /// Child of `body` rendering it: the comet nucleus (`StaticMeshComponent` +
+  /// `CometAppearanceComponent`, see `simulation_api::comet_appearance`) or the Earth globe
+  /// (`simulation_api::earth_visual`). `None` for bodies without one.
   pub visual: Option<EntityId>,
   /// The orbit trajectory entity (AU scale, parent = root_entity). Holds TrajectoryComponent.
   /// NOTE: orbit must be a child of root (depth_layer=0) so its AU control points are rendered
@@ -961,11 +962,12 @@ pub enum LogicCommand {
   },
 
   /// Serialize the current scene ECS + GPU particle state to disk.
-  /// Writes to `<base_dir>/scene_<scene_id>/scene.bin`.
+  /// Writes to `file` when given (savefile states), else `<base_dir>/scene_<scene_id>/scene.bin`.
   /// Result is reported via `ExternalState::SceneDumped`.
   DumpScene {
     scene_id: u64,
     base_dir: alloc::string::String,
+    file: Option<alloc::string::String>,
   },
 
   /// Restore a scene from a decoded `SceneDump`.
@@ -1692,7 +1694,10 @@ impl SceneDump {
   ///    `mass_variability_perc` (bincode is positional: older dumps are refused).
   /// 7: `ParticleSystemEmitParams::size_q` and `size_range` (the size law as Model parameters,
   ///    WP3b; positional again: v6 dumps are refused).
-  pub const CURRENT_VERSION: u32 = 7;
+  /// 8: `SerializedCamera` keeps the aspect ratio, the orthographic extents and the focus distance
+  ///    (a restore used to reset them to 16:9, ±1 and 10); the compatibility JSON lists jets
+  ///    without entity ids (savefile states must match across application runs).
+  pub const CURRENT_VERSION: u32 = 8;
 }
 
 /// Serialized representation of a single scene entity.
@@ -1787,6 +1792,11 @@ pub struct SerializedCamera {
   pub near: f32,
   pub far: f32,
   pub is_perspective: bool,
+  /// Perspective only.
+  pub aspect_ratio: f32,
+  /// Orthographic only: left, right, bottom, top.
+  pub ortho_extents: [f32; 4],
+  pub focus_distance: f32,
 }
 
 /// Serialized `StaticMeshComponent`.

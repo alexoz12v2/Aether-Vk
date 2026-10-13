@@ -55,18 +55,33 @@ public static class ServiceCollectionExtensions
       collection.AddSingleton<ImportedModelsTrackerService>();
       collection.AddSingleton<ICameraServiceRegistry, CameraServiceRegistry>();
       collection.AddScoped<CameraService>();
+      // File › New / Open / Save (docs/savefile.md)
+      collection.AddSingleton<Logic.SaveFile.ISystemClock, Logic.SaveFile.SystemClock>();
+      collection.AddSingleton<Logic.SaveFile.ISaveFileHost, Logic.SaveFile.AppSaveFileHost>();
+      collection.AddSingleton(sp => new Logic.SaveFile.SaveFileService(
+        sp.GetRequiredService<Logic.SaveFile.ISaveFileHost>(),
+        sp.GetRequiredService<Logic.SaveFile.ISystemClock>(),
+        sp.GetRequiredService<PreferencesService>(),
+        typeof(App).Assembly.GetName().Version?.ToString(3) ?? ""));
     }
+    collection.AddSingleton<IUnsavedChangesPrompt, AvaloniaUnsavedChangesPrompt>();
     // CometConfigService only depends on INativeRuntimeService + ISchedulerProvider,
     // both of which are registered in both the real and mock paths above.
     collection.AddSingleton<CometConfigService>();
     // Asset library mirror (Imports tab, Settings > Comet Appearance)
     collection.AddSingleton<AssetLibraryService>();
+    collection.AddSingleton<DesktopBillboardService>();
+    collection.AddSingleton<Logic.ViewModels.IScreenInfoProvider, UI.AvaloniaScreenInfoProvider>();
+    collection.AddSingleton<UI.DesktopBillboardWindowManager>();
     collection.AddSingleton<INativeInputHandlerFactory, NativeInputHandlerFactory>();
     collection.AddSingleton<IWindowInputRouter, GlobalInputRouter>();
     collection.AddSingleton<IPlatformWindowService, PlatformWindowService>();
     var inputRegistry = new InputRegistry();
     inputRegistry.RegisterViewportDefaults();
+    // the bindings editor resets to these; preferences.json overlays the user's table at startup
+    inputRegistry.CaptureDefaults();
     collection.AddSingleton<InputRegistry>(_ => inputRegistry);
+    collection.AddSingleton<PreferencesService>();
     collection.AddSingleton<ITranslationService, TranslationService>(provider =>
     {
       // if this is used elsewhere then add it as a singleton

@@ -84,6 +84,22 @@ impl TexelFormat {
     }
   }
 
+  /// The sRGB-encoded twin of [`Self::to_vk_format`]: sampling decodes sRGB to linear (albedo maps
+  /// are authored in sRGB). Formats without an sRGB variant are returned unchanged.
+  pub fn to_vk_format_srgb(self) -> ash::vk::Format {
+    use ash::vk;
+    match self {
+      TexelFormat::R8_UNORM => vk::Format::R8_SRGB,
+      TexelFormat::R8G8_UNORM => vk::Format::R8G8_SRGB,
+      TexelFormat::R8G8B8_UNORM => vk::Format::R8G8B8_SRGB,
+      TexelFormat::R8G8B8A8_UNORM => vk::Format::R8G8B8A8_SRGB,
+      TexelFormat::BC7_UNORM_BLOCK => vk::Format::BC7_SRGB_BLOCK,
+      TexelFormat::ETC2_R8G8B8_UNORM_BLOCK => vk::Format::ETC2_R8G8B8_SRGB_BLOCK,
+      TexelFormat::ASTC_4x4_UNORM_BLOCK => vk::Format::ASTC_4X4_SRGB_BLOCK,
+      other => other.to_vk_format(),
+    }
+  }
+
   /// TODO: Document this item
   pub fn from_vk_format(vk_format: u32) -> Self {
     use ash::vk;
@@ -545,6 +561,32 @@ pub(crate) fn read_gltf_geometry(file: &GltfFile) -> Result<GltfGeometry, CometL
 }
 
 /// Decodes image `image_index` of `file`.
+/// The encoded bytes (PNG / JPEG / KTX2) of image `image_index` embedded in a glTF/GLB buffer
+/// view, with its file extension; `None` for images referenced by URI (they are files of their
+/// own) or with an unknown MIME type.
+pub(crate) fn gltf_embedded_image_bytes(
+  file: &GltfFile,
+  image_index: usize,
+) -> Result<Option<(Vec<u8>, &'static str)>, CometLoadError> {
+  let image = file.document.images().nth(image_index).ok_or(CometLoadError::TextureNotFound)?;
+  let gltf::image::Source::View { view, mime_type } = image.source() else {
+    return Ok(None);
+  };
+  let Some(buffer) = file.buffer_data(view.buffer().index()) else {
+    return Ok(None);
+  };
+  let bytes = buffer
+    .get(view.offset()..view.offset() + view.length())
+    .ok_or(CometLoadError::MissingBuffer)?;
+  let ext = match EncodedImageKind::from_mime(mime_type) {
+    Some(EncodedImageKind::Png) => "png",
+    Some(EncodedImageKind::Jpeg) => "jpg",
+    Some(EncodedImageKind::Ktx2) => "ktx2",
+    None => return Ok(None),
+  };
+  Ok(Some((bytes.to_vec(), ext)))
+}
+
 pub(crate) fn decode_gltf_image(
   file: &GltfFile,
   image_index: usize,

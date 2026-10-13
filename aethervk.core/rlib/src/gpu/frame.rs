@@ -1904,7 +1904,8 @@ pub fn render_frame(
     for (i, layer) in micro_layers.iter().enumerate() {
       if i > 0 {
         // Clear depth before each subsequent layer so that the hardware Z-buffer
-        // handles intra-layer occlusion correctly within this new layer.
+        // handles intra-layer occlusion correctly within this new layer; stencil too, so the
+        // layer's sphere gizmos see only this layer's meshes (stencil 1) and nothing else.
         device.clear_depth(cmd_buffer, handle)?;
       }
       draw_layer_content(

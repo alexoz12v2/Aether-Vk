@@ -64,6 +64,34 @@ public class CameraServiceTests
     return (cameraService, runtime, scheduler);
   }
 
+  /// <summary>
+  /// A disposed camera (closed viewport, ended DI scope) stops reacting to the singleton comet
+  /// service: a later radius change or decommit used to run its handlers on disposed subjects
+  /// and throw ObjectDisposedException into the caller (seen through a savefile commit).
+  /// </summary>
+  [Fact]
+  public void DisposedCamera_IgnoresLaterCometChanges()
+  {
+    var (_, runtime, scheduler) = BuildService();
+    var schedulers = MakeTestSchedulers(scheduler);
+    var breadcrumb = new BreadcrumbService();
+    var cometConfig = new CometConfigService(runtime.Object, schedulers);
+    var timeline = new TimelineService(runtime.Object, schedulers, cometConfig, breadcrumb);
+    var cometTracker = new CometPositionTrackerService(runtime.Object, schedulers, timeline);
+    var camera = new CameraService(runtime.Object, schedulers, cometTracker, cometConfig, breadcrumb,
+      Mock.Of<ICometMessenger>(), new CameraServiceRegistry());
+    camera.OnViewportReady(100UL, 800, 600);
+    scheduler.AdvanceBy(1);
+    camera.Dispose();
+
+    var error = Record.Exception(() =>
+    {
+      cometConfig.SetNucleusRadiusKm(3.0f);
+      scheduler.AdvanceBy(TimeSpan.FromSeconds(1).Ticks);
+    });
+    Assert.Null(error);
+  }
+
   [Fact]
   public void MultipleInstances_RegisterIndependently_AndEmitEvents()
   {
@@ -1150,6 +1178,105 @@ public class CameraServiceTests
     Assert.Equal(false, last);
     Assert.True(CameraService.ShowsCometLabel(CameraMode.UpZenith));
     Assert.False(CameraService.ShowsCometLabel(CameraMode.CometOrbiting));
+  }
+
+  /// Plan A-9: every mode transition sends this viewport camera's render mask; only UpZenith draws
+  /// the UpZenith-only layer (the Earth globe, its axis and labels).
+  [Fact]
+  public void RenderMask_FollowsTheCameraMode()
+  {
+    const uint def = CameraService.RenderLayerDefault;
+    const uint up = CameraService.RenderLayerDefault | CameraService.RenderLayerUpZenithOnly;
+    Assert.Equal(1u, CameraService.RenderLayerDefault);
+    Assert.Equal(2u, CameraService.RenderLayerUpZenithOnly);
+    Assert.Equal(up, CameraService.RenderMaskFor(CameraMode.UpZenith));
+    Assert.Equal(def, CameraService.RenderMaskFor(CameraMode.EarthPosition));
+    Assert.Equal(def, CameraService.RenderMaskFor(CameraMode.CometOrbiting));
+
+    var (service, runtime, _) = BuildService();
+    // the viewport became ready in UpZenith (the initial mode): its camera got the UpZenith mask
+    runtime.Verify(r => r.SetCameraRenderMask(100UL, up), Times.Once);
+
+    var sent = new List<(ulong, uint)>();
+    runtime
+      .Setup(r => r.SetCameraRenderMask(It.IsAny<ulong>(), It.IsAny<uint>()))
+      .Callback<ulong, uint>((c, m) => sent.Add((c, m)))
+      .Returns(true);
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
+    ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
+      .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!).OnNext(true);
+
+    service.SetCameraMode(CameraMode.EarthPosition);
+    service.SetCameraMode(CameraMode.CometOrbiting);
+    service.SetCameraMode(CameraMode.UpZenith);
+    service.SetCameraMode(CameraMode.UpZenith); // no transition: nothing sent
+    service.CycleCameraMode(); // UpZenith → CometOrbiting
+    Assert.Equal(CameraMode.CometOrbiting, service.CurrentMode);
+    // sent on change only: EarthPosition → CometOrbiting keeps the default mask
+    Assert.Equal(new List<(ulong, uint)> { (100UL, def), (100UL, up), (100UL, def) }, sent);
+  }
+
+  /// A refused mask (no native scene yet) is sent again on the next transition.
+  [Fact]
+  public void RenderMask_IsResentAfterARefusal()
+  {
+    var (service, runtime, _) = BuildService();
+    int calls = 0;
+    runtime
+      .Setup(r => r.SetCameraRenderMask(It.IsAny<ulong>(), It.IsAny<uint>()))
+      .Callback(() => calls++)
+      .Returns(false);
+    service.SetCameraMode(CameraMode.EarthPosition);
+    service.SetCameraMode(CameraMode.UpZenith);
+    Assert.Equal(2, calls);
+  }
+
+  /// The savefile's view of a viewport camera: mode, observer site and orientation.
+  [Fact]
+  public void PersistedState_ReportsModeAndObserverSettings()
+  {
+    var (service, _, _) = BuildService();
+    service.SetEarthObserverLatLon(45.5f, 9.25f);
+    service.SetEarthObserverElevation(120.0);
+    var st = service.GetPersistedState();
+    Assert.Equal(service.CurrentMode, st.Mode);
+    Assert.Equal(45.5f, st.ObserverLatDeg);
+    Assert.Equal(9.25f, st.ObserverLonDeg);
+    Assert.Equal(120.0, st.ObserverElevationM);
+    Assert.Equal(EarthObserverOrientationMode.Free, st.ObserverOrientation);
+    Assert.Equal(4, st.ObserverInertialLook.Length);
+  }
+
+  /// A restore lands UpZenith on the saved pose (not the Sun default) and re-applies the observer
+  /// site and orbit offset.
+  [Fact]
+  public void RestorePersistedState_LandsOnTheSavedPose()
+  {
+    var (service, runtime, _) = BuildService();
+    var saved = new CameraPersistedState(
+      CameraMode.UpZenith,
+      new CameraTransformState(0.25, -0.5, 0.125, 0, 0, 0.6, 0.8),
+      null,
+      new System.Numerics.Vector3(1e-5f, 2e-5f, 0),
+      -33.5f, 151.25f, 42.0,
+      EarthObserverOrientationMode.Free,
+      [0, 0, 0, 1], [0, 0, 0, 1]);
+    runtime.Invocations.Clear();
+    service.RestorePersistedState(saved);
+    runtime.Verify(r => r.AddCameraAnimation(100UL, It.Is<AnimationTarget>(t =>
+      Math.Abs(t.PosX - 0.25) < 1e-12 && Math.Abs(t.PosY + 0.5) < 1e-12 && Math.Abs(t.PosZ - 0.125) < 1e-12
+      && t.PivotEntityId == null)), Times.Once);
+    var st = service.GetPersistedState();
+    Assert.Equal(-33.5f, st.ObserverLatDeg);
+    Assert.Equal(151.25f, st.ObserverLonDeg);
+    Assert.Equal(42.0, st.ObserverElevationM);
+    Assert.Equal(new System.Numerics.Vector3(1e-5f, 2e-5f, 0), st.OrbitOffsetAu);
+    // a later plain switch back into UpZenith uses the default again (the restore is consumed)
+    service.SetCameraMode(CameraMode.EarthPosition);
+    runtime.Invocations.Clear();
+    service.SetCameraMode(CameraMode.UpZenith);
+    runtime.Verify(r => r.AddCameraAnimation(100UL, It.Is<AnimationTarget>(t => Math.Abs(t.PosX - 0.25) < 1e-12)), Times.Never);
   }
 
   /// Decommitting the comet while snapped above it in UpZenith flies back above the Sun.

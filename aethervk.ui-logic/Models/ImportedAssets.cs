@@ -64,6 +64,12 @@ public enum CometAppearanceStatus
   Busy = 5,
 }
 
+/// <summary>An asset source written into a save folder (<c>exportAsset</c>).</summary>
+/// <param name="FileName"><c>&lt;content_hash&gt;_&lt;label&gt;.&lt;ext&gt;</c> inside the destination directory.</param>
+/// <param name="ContentHash">The native dedup hash of the decoded content.</param>
+/// <param name="Reused">The file was already there (nothing written).</param>
+public sealed record ExportedAssetFile(string FileName, ulong ContentHash, bool Reused);
+
 /// <summary>Tightly packed RGBA8 preview image produced natively at import.</summary>
 public sealed record AssetThumbnail(int Width, int Height, byte[] Rgba);
 
@@ -91,6 +97,9 @@ public sealed record ImportedAsset(
 {
   /// <summary>Mesh only: winding repair applied at import.</summary>
   public OrientationFix OrientationFix { get; init; }
+
+  /// <summary>Texture only: uncompressed texels, so a desktop billboard can show it.</summary>
+  public bool IsDisplayable { get; init; }
 
   /// <summary>Short secondary line for list items.</summary>
   public string Details =>

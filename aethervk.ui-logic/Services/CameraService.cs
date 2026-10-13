@@ -89,6 +89,21 @@ public static class EarthObserverOrientationModeExtensions
 /// <summary>
 /// Immutable snapshot of the camera transform state, emitted via <c>SIMULATION_CALLBACK</c>.
 /// </summary>
+/// <summary>A viewport camera as a savefile records it (<see cref="CameraService.GetPersistedState"/>).</summary>
+public sealed record CameraPersistedState(
+  CameraMode Mode,
+  CameraTransformState? Transform,
+  CameraProjectionState? Projection,
+  Vector3 OrbitOffsetAu,
+  float ObserverLatDeg,
+  float ObserverLonDeg,
+  double ObserverElevationM,
+  EarthObserverOrientationMode ObserverOrientation,
+  /// <summary>Earth observer look in the inertial frame, quaternion x, y, z, w.</summary>
+  double[] ObserverInertialLook,
+  /// <summary>Earth observer look in the Earth body-fixed frame, quaternion x, y, z, w.</summary>
+  double[] ObserverBodyFixedLook);
+
 public sealed record CameraTransformState(
   double PosX,
   double PosY,
@@ -266,6 +281,59 @@ public sealed class CameraService : IDisposable
 
   private readonly Dictionary<CameraMode, ModeSnapshot> _modeSnapshots = new();
 
+  /// <summary>
+  /// What a savefile records of this viewport camera: the mode, the per-mode remembered
+  /// (transform, projection) snapshots, the current confirmed transform / projection, and the
+  /// Earth observer site and orientation.
+  /// </summary>
+  public CameraPersistedState GetPersistedState()
+  {
+    lock (_earthPosLock)
+    {
+      return new(
+        _modeSubject.Value,
+        _lastConfirmedTransform,
+        _projectionSubject.Value,
+        GetOrbitOffset(),
+        _observerLatDeg,
+        _observerLonDeg,
+        _observerElevM,
+        _earthOrientationMode,
+        [_inertialLookDir.X, _inertialLookDir.Y, _inertialLookDir.Z, _inertialLookDir.W],
+        [_earthFixedLookDir.X, _earthFixedLookDir.Y, _earthFixedLookDir.Z, _earthFixedLookDir.W]);
+    }
+  }
+
+  // A saved pose the next transition into its mode lands on (instead of the mode's default).
+  private CameraPersistedState? _pendingRestore;
+
+  /// <summary>
+  /// Puts the camera back as <see cref="GetPersistedState"/> saw it (savefile): the observer site,
+  /// orbit offset, then the mode, landing on the saved pose and projection instead of the mode's
+  /// defaults, and finally the observer orientation sub-mode. CometOrbiting needs a committed comet
+  /// (otherwise the camera stays in UpZenith, as <see cref="SetCameraMode"/> refuses).
+  /// </summary>
+  public void RestorePersistedState(CameraPersistedState state)
+  {
+    SetEarthObserverLatLon(state.ObserverLatDeg, state.ObserverLonDeg);
+    SetEarthObserverElevation(state.ObserverElevationM);
+    SetOrbitOffset(state.OrbitOffsetAu);
+    lock (_earthPosLock)
+    {
+      if (state.ObserverInertialLook is { Length: 4 } a)
+        _inertialLookDir = Quaterniond.Normalize(new Quaterniond(a[0], a[1], a[2], a[3]));
+      if (state.ObserverBodyFixedLook is { Length: 4 } b)
+        _earthFixedLookDir = Quaterniond.Normalize(new Quaterniond(b[0], b[1], b[2], b[3]));
+    }
+    _pendingRestore = state;
+    if (_modeSubject.Value == state.Mode)
+      TriggerModeTransitionAnimation(state.Mode, snapImmediate: true);
+    else
+      SetCameraMode(state.Mode);
+    if (state.Mode == CameraMode.EarthPosition && state.ObserverOrientation != EarthObserverOrientationMode.Free)
+      SetEarthObserverOrientationMode(state.ObserverOrientation);
+  }
+
   // Aspect ratio (W/H) of the Vulkan render target — set by OnViewportReady.
   private float _viewportAspect = 1f;
 
@@ -347,13 +415,14 @@ public sealed class CameraService : IDisposable
     _cameraServiceRegistry = cameraServiceRegistry;
 
     // Comet decommitted: views anchored to it have nothing left to show.
-    _cometConfigService.IsAlmanacCommitted
+    // (the services outlive this camera: Dispose ends these subscriptions)
+    _serviceSubscriptions.Add(_cometConfigService.IsAlmanacCommitted
       .Where(committed => !committed)
-      .Subscribe(_ => OnCometDecommitted());
+      .Subscribe(_ => OnCometDecommitted()));
     // The comet label follows the commit state too (no comet: nothing to label).
-    _cometConfigService.IsAlmanacCommitted.Subscribe(_ => RefreshCometIndicator());
+    _serviceSubscriptions.Add(_cometConfigService.IsAlmanacCommitted.Subscribe(_ => RefreshCometIndicator()));
 
-    _cometConfigService.NucleusRadiusKm.Subscribe(radius =>
+    _serviceSubscriptions.Add(_cometConfigService.NucleusRadiusKm.Subscribe(radius =>
     {
       _lastKnownNucleusRadiusKm = radius;
       Console.WriteLine($"[CameraService] NucleusRadius updated: {radius:F2} km");
@@ -390,7 +459,7 @@ public sealed class CameraService : IDisposable
           RequestOrthographicProjection(-halfWidthAu, halfWidthAu, -halfHeightAu, halfHeightAu, nearC, farC);
         }
       }
-    });
+    }));
   }
 
   // ── Observables ────────────────────────────────────────────────────────────
@@ -491,6 +560,7 @@ public sealed class CameraService : IDisposable
     _modeSubject.OnNext(mode);
 
     RefreshCometIndicator();
+    RefreshRenderMask();
 
     // World-preserving unparent when leaving a body-anchored mode.
     // Rust reads global_transform_f64 BEFORE removing the parent, then writes
@@ -688,6 +758,10 @@ public sealed class CameraService : IDisposable
     // Projection to apply after the animation completes (null = no change).
     Action? deferredProjection = null;
 
+    // A savefile restore lands on its saved pose / projection (consumed once, for its own mode).
+    var restore = _pendingRestore is { } pr && pr.Mode == mode ? pr : null;
+    _pendingRestore = null;
+
     // 1. Determine Target (Offset or Global)
     if (mode == CameraMode.CometOrbiting)
     {
@@ -703,7 +777,9 @@ public sealed class CameraService : IDisposable
       lock (_orbitOffsetLock)
       {
          var dir = _orbitOffset.Length() > 1e-10f ? Vector3.Normalize(_orbitOffset) : new Vector3(1f, 0f, 0f);
-         _orbitOffset = dir * autoOrbitDistanceAu;
+         // a restore keeps the saved distance; a plain switch starts at 3 nucleus radii
+         if (restore is null || _orbitOffset.Length() <= 1e-12f)
+           _orbitOffset = dir * autoOrbitDistanceAu;
          InitOrbitAnglesFromOffset(_orbitOffset);
          targetPos = _orbitOffset; // Use the local offset
       }
@@ -722,10 +798,18 @@ public sealed class CameraService : IDisposable
       lock (_earthPosLock)
       {
         var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
-        // look at the Sun, levelled to the ecliptic (camera assertions)
-        _earthRotation = EarthObserverLookAt(-(_lastEarthPos + surfaceWorld));
-        _inertialLookDir = _earthRotation;
-        _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, _earthRotation);
+        if (restore is not null)
+        {
+          // the saved inertial look (lock-in / tracking sub-modes re-aim when they are re-applied)
+          _earthRotation = _inertialLookDir;
+        }
+        else
+        {
+          // look at the Sun, levelled to the ecliptic (camera assertions)
+          _earthRotation = EarthObserverLookAt(-(_lastEarthPos + surfaceWorld));
+          _inertialLookDir = _earthRotation;
+          _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, _earthRotation);
+        }
         targetPos = surfaceWorld; // Use the local offset
         targetRot = _earthRotation;
       }
@@ -734,16 +818,28 @@ public sealed class CameraService : IDisposable
     else if (mode == CameraMode.UpZenith)
     {
       // above the Sun, which fills 30% of the view (same geometry as SnapAbove(SnapTarget.Sun))
-      var sunPose = ComputeSnapAbove(SunRadiusAu);
-      targetPos = sunPose.Offset;
-      targetRot = sunPose.Rotation;
+      if (restore?.Transform is { } t)
+      {
+        targetPos = new Vector3d(t.PosX, t.PosY, t.PosZ);
+        targetRot = Quaterniond.Normalize(new Quaterniond(t.RotX, t.RotY, t.RotZ, t.RotW));
+      }
+      else
+      {
+        var sunPose = ComputeSnapAbove(SunRadiusAu);
+        targetPos = sunPose.Offset;
+        targetRot = sunPose.Rotation;
+      }
       deferredProjection = ApplyUpZenithDefaultProjection;
     }
     else
     {
       return;
     }
-    
+
+    // a restore applies its saved projection instead of the mode default
+    if (restore?.Projection is { } savedProjection)
+      deferredProjection = () => ApplyProjectionSnapshot(savedProjection);
+
     // 2. Dispatch
     float animDuration = snapImmediate ? 0.01f : ModeSwitchAnimationSeconds;
 
@@ -1686,6 +1782,33 @@ public sealed class CameraService : IDisposable
   /// Comet decommitted: UpZenith snapped above it flies back to the Sun (the comet resets to its
   /// placeholder position, leaving an empty view); an Earth observer comet submode ejects to Free.
   /// </summary>
+  /// <summary>Render layer bit every camera draws (native <c>RENDER_LAYER_DEFAULT</c>).</summary>
+  internal const uint RenderLayerDefault = 1u << 0;
+
+  /// <summary>Content only UpZenith cameras draw: the Earth globe, its polar axis and N/S labels,
+  /// the "Earth" label (native <c>RENDER_LAYER_UPZENITH_ONLY</c>).</summary>
+  internal const uint RenderLayerUpZenithOnly = 1u << 1;
+
+  /// <summary>The render layers a camera in <paramref name="mode"/> draws.</summary>
+  internal static uint RenderMaskFor(CameraMode mode) =>
+    mode == CameraMode.UpZenith ? RenderLayerDefault | RenderLayerUpZenithOnly : RenderLayerDefault;
+
+  // last (camera, mask) the runtime accepted (null: unknown, resend)
+  private (ulong Camera, uint Mask)? _renderMaskSent;
+
+  /// <summary>Sends this viewport camera's render mask for the current mode; sends on change.</summary>
+  private void RefreshRenderMask()
+  {
+    ulong cam = CameraEntityId ?? 0;
+    if (cam == 0)
+      return;
+    uint mask = RenderMaskFor(_modeSubject.Value);
+    if (_renderMaskSent == (cam, mask))
+      return;
+    if (_runtimeService.SetCameraRenderMask(cam, mask))
+      _renderMaskSent = (cam, mask);
+  }
+
   /// <summary>Modes where the comet is far or small enough to need a label.</summary>
   internal static bool ShowsCometLabel(CameraMode mode) =>
     mode is CameraMode.EarthPosition or CameraMode.UpZenith;
@@ -1870,6 +1993,7 @@ public sealed class CameraService : IDisposable
     RegisterSimListeners(cameraEntityId);
     RegisterEarthListener();
     RefreshCometIndicator();
+    RefreshRenderMask();
     // Snap immediately on first viewport-ready so the camera starts at the
     // correct mode position from frame 1 rather than animating over 2.5 s.
     TriggerModeTransitionAnimation(_modeSubject.Value, snapImmediate: true);
@@ -2222,8 +2346,12 @@ dump_context()
 
   // ── IDisposable ────────────────────────────────────────────────────────────
 
+  // subscriptions to singleton services; a disposed camera must stop reacting to them
+  private readonly System.Reactive.Disposables.CompositeDisposable _serviceSubscriptions = new();
+
   public void Dispose()
   {
+    _serviceSubscriptions.Dispose();
     if (CameraEntityId.HasValue)
     {
       _cameraServiceRegistry.UnregisterSelf(CameraEntityId.Value);

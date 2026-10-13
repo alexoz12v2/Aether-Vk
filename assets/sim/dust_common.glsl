@@ -93,7 +93,7 @@ const uint  DUST_SIZE_BINS            = 16u;
 const uint  DUST_SIZE_EDGES           = 17u;
 const float DUST_SIZE_RANGE_FACTOR    = 10.0;   // dust::SIZE_RANGE_FACTOR (sizes s_ref/F .. s_ref*F)
 const float DUST_CHORD_VAR_FACTOR     = 1.21;
-const uint  DUST_TIME_PIECES_MAX      = 4u;
+const uint  DUST_TIME_PIECES_MAX      = 8u;
 const uint  DUST_TIME_SWEEP_MAX       = 4u;    // dust::TIME_SWEEP_MAX
 const float DUST_LIT_ARC_END_EPS      = 1e-5;  // dust::LIT_ARC_END_EPS
 const float DUST_SPIRAL_MIN_TURN      = 0.01;  // dust::SPIRAL_MIN_TURN (rad)
@@ -755,6 +755,13 @@ struct DustScreenPacket {
 // the photometry of the cluster being splatted (set per cluster by dust_splat.comp; albedo <= 0:
 // none) and the pyramid that carries the phase table
 float dust_phot_albedo = 0.0;
+// the packet's physical support (dust::Photometry::support): the half-space n.x >= w (xyz = n,
+// zero = none) its cell's grains lie in front of; set per packet by dust_splat.comp
+vec4 dust_phot_support = vec4(0.0);
+// the packet's cell origin along the support's normal, n.o (dust::Photometry::origin; the apex of
+// its cone of grains): valid when dust_phot_has_origin (Rust: not NaN); set with the support
+bool dust_phot_has_origin = false;
+float dust_phot_origin = 0.0;
 // the frame's DUST_PYR_SPLIT_DEPTH word, set by the splat pass (diagnostic bits; 0 elsewhere)
 uint dust_pyr_split_word = 0u;
 vec3  dust_phot_sun = vec3(0.0, 0.0, 1.0);
@@ -777,6 +784,28 @@ vec2 dust_bin_density_ends(float f0, float f1) {
     f0 = max(f0, 1e-6); f1 = max(f1, 1e-6);
     float s = f0 + f1;
     return vec2(s / (2.0 * f0), s / (2.0 * f1));
+}
+// the polyline's slow end bin is drawn as DUST_END_SUBBINS sub-bins (dust::DUST_END_SUBBINS,
+// dust::bin_subbins): there the chord's Gaussian and the mid-factor width reach past the slowest grain
+const uint DUST_END_SUBBINS = 2u;
+uint dust_bin_subbins(uint b) { return b == 0u ? DUST_END_SUBBINS : 1u; }
+// sub-bin j of nj of size bin b (dust::sub_edges): the bin's chord and speed-factor range cut into
+// nj equal parts, the bin's own edges exactly at its ends
+void dust_sub_edges(DustMoments M, uint b, uint j, uint nj, out vec3 a, out vec3 c, out float fa, out float fc) {
+    vec3 e0 = M.edges[b].xyz, e1 = M.edges[b + 1u].xyz;
+    float f0 = dust_edge_factor(M, b), f1 = dust_edge_factor(M, b + 1u);
+    if (j == 0u) { a = e0; fa = f0; }
+    else { float u = float(j) / float(nj); a = e0 + (e1 - e0) * u; fa = f0 + (f1 - f0) * u; }
+    if (j + 1u == nj) { c = e1; fc = f1; }
+    else { float u = float(j + 1u) / float(nj); c = e0 + (e1 - e0) * u; fc = f0 + (f1 - f0) * u; }
+}
+// the share of size bin b's flux in its sub-bin j of nj (dust::sub_share): the bin's 1/f density
+// ramp integrated over the sub-bin, over the bin (1 for one sub-bin)
+float dust_sub_share(DustMoments M, uint b, uint j, uint nj) {
+    if (nj <= 1u) return 1.0;
+    vec2 r = dust_bin_density_ends(dust_edge_factor(M, b), dust_edge_factor(M, b + 1u));
+    float u0 = float(j) / float(nj), u1 = float(j + 1u) / float(nj);
+    return (u1 - u0) * (r.x + (r.y - r.x) * 0.5 * (u0 + u1)) / (0.5 * (r.x + r.y));
 }
 
 // The view direction of `mvp` (dust::view_forward): the depth gradient of the projection, unit;
@@ -802,6 +831,26 @@ float dust_var_along(float S[6], vec3 f) {
          + 2.0 * (S[1] * f.x * f.y + S[2] * f.x * f.z + S[4] * f.y * f.z);
 }
 
+// the support constants (dust::DUST_SUPPORT_MASS_MIN / DUST_SUPPORT_CUT_MIN)
+const float DUST_SUPPORT_MASS_MIN = 0.05;
+const float DUST_SUPPORT_CUT_MIN = 1.0e-3;
+bool dust_has_support(vec4 s) { return s.x != 0.0 || s.y != 0.0 || s.z != 0.0; }
+// the share of a ray's Gaussian (centre -b/a, variance 1/a in t along eye + t u) in front of the
+// eye and of the support (dust::ray_kept)
+float dust_ray_kept(float a, float b, vec3 eye, vec3 u, vec4 s) {
+    float sa = sqrt(a);
+    float tStar = -b / a;
+    float k = sa * 0.7071067811865476;
+    // P(t >= lo) in the upper-tail form
+    if (!dust_has_support(s)) return 0.5 * (1.0 + dust_erf((tStar - 0.0) * k));
+    float nu = dot(s.xyz, u), ne = dot(s.xyz, eye) - s.w;
+    if (abs(nu) < 1e-12) return ne >= 0.0 ? 0.5 * (1.0 + dust_erf((tStar - 0.0) * k)) : 0.0;
+    float tPlane = -ne / nu;
+    if (nu > 0.0) return 0.5 * (1.0 + dust_erf((tStar - max(tPlane, 0.0)) * k));
+    if (tPlane <= 0.0) return 0.0;
+    return max(0.5 * (dust_erf((tPlane - tStar) * k) - dust_erf((0.0 - tStar) * k)), 0.0);
+}
+
 // A packet to splat (dust::Packet): start of the segment (local m), covariance, segment, flux,
 // open ends, density at the ends (mean 1, linear between)
 struct DustPacket {
@@ -814,6 +863,23 @@ struct DustPacket {
     vec2  rho;
     vec3  segT;   // the leaf's Gaussianised bounded axis (dust::Packet::seg_t; the EWA ignores it)
 };
+// the mass of p in front of its support s: the normal marginal averaged over the capsule with its
+// linear density, 16 midpoints (dust::support_mass); 1 without a support
+float dust_support_mass(DustPacket p, vec4 s) {
+    if (!dust_has_support(s)) return 1.0;
+    float sig = sqrt(max(dust_var_along(p.S, s.xyz), 0.0));
+    float m0 = dot(s.xyz, p.mean) - s.w, ds = dot(s.xyz, p.seg);
+    float acc = 0.0, wsum = 0.0;
+    for (int k = 0; k < 16; ++k) {
+        float u = (float(k) + 0.5) / 16.0;
+        float w = p.rho.x + (p.rho.y - p.rho.x) * u;
+        float x = m0 + ds * u;
+        float f = sig > 0.0 ? 0.5 * (1.0 + dust_erf(x / (sig * 1.4142135623730951))) : (x >= 0.0 ? 1.0 : 0.0);
+        acc += w * f;
+        wsum += w;
+    }
+    return wsum > 0.0 ? acc / wsum : 1.0;
+}
 // the sub-chord u0 <= u <= u1 of a chord packet (dust::sub_chord): start moved along the segment,
 // segment and flux scaled by the kept part (linear density: kept length times the mean density
 // there), rho re-interpolated and renormalised to mean 1, the ends as given
@@ -831,6 +897,148 @@ DustPacket dust_sub_chord(DustPacket p, float u0, float u1, bool openStart, bool
     q.rho = vec2(ra / rm, rb / rm);
     q.segT = p.segT;
     return q;
+}
+// A cut packet the eye is not near, as the moments of its truncation (dust::support_truncated):
+// DUST_SUPPORT_TRUNC_PIECES sub-chords (shared out over the chord's run through the plane's +-3
+// sigma zone, one each before and after it; interior ends closed), each cut along the plane's
+// normal into DUST_SUPPORT_TRUNC_SLABS slabs replaced by their doubly truncated moments
+const uint DUST_SUPPORT_TRUNC_PIECES = 8u;
+const uint DUST_SUPPORT_TRUNC_SLABS = 4u;
+// the slabs' inner edges past the plane in deviations of the truncated marginal
+// (dust::DUST_SUPPORT_SLAB_EDGES)
+float dust_support_slab_edge(uint e) { return e == 0u ? 0.5 : (e == 1u ? 1.2 : 2.2); }
+float dust_npdf(float z) { return exp(-0.5 * z * z) * 0.3989423; }
+float dust_nupper(float z) { return 0.5 * (1.0 - dust_erf(z * 0.7071067811865476)); }
+// the sub-chords' bounds (dust::support_truncated)
+void dust_support_trunc_bounds(DustPacket p, vec4 s, float v0, out float bounds[DUST_SUPPORT_TRUNC_PIECES + 1u]) {
+    float k = float(DUST_SUPPORT_TRUNC_PIECES);
+    for (uint j = 0u; j <= DUST_SUPPORT_TRUNC_PIECES; ++j) bounds[j] = float(j) / k;
+    float dn = dot(s.xyz, p.seg);
+    if (abs(dn) > 0.0) {
+        float half_ = 3.0 * sqrt(v0) / abs(dn);
+        float ux = (s.w - dot(s.xyz, p.mean)) / dn;
+        float za = max(ux - half_, 0.0), zb = min(ux + half_, 1.0);
+        if (zb > za && (za > 0.0 || zb < 1.0)) {
+            uint before = za > 0.0 ? 1u : 0u, after = zb < 1.0 ? 1u : 0u;
+            uint inner = DUST_SUPPORT_TRUNC_PIECES - before - after;
+            bounds[0] = 0.0;
+            for (uint i = 0u; i <= inner; ++i) bounds[before + i] = za + (zb - za) * float(i) / float(inner);
+            bounds[DUST_SUPPORT_TRUNC_PIECES] = 1.0;
+        }
+    }
+}
+// slab e of sub-chord j (dust::support_truncated): false when it holds nothing; q the slab's
+// packet, w its kept flux (before the renormalisation over the packet)
+bool dust_support_trunc_piece(DustPacket p, vec4 s, vec3 sn, float v0, float u0, float u1, uint j, uint e,
+                              out DustPacket q, out float w) {
+    w = 0.0;
+    q = p;
+    if (!(u1 > u0)) return false;
+    q = dust_sub_chord(p, u0, u1, j == 0u && p.openStart, j + 1u == DUST_SUPPORT_TRUNC_PIECES && p.openEnd);
+    vec3 n = s.xyz;
+    float ra = q.rho.x, rb = q.rho.y;
+    float uc = ra + rb > 0.0 ? (ra + 2.0 * rb) / (3.0 * (ra + rb)) : 0.5;
+    float ds = dot(n, q.seg);
+    float m = dot(n, q.mean + q.seg * uc) - s.w;
+    float v = v0 + ds * ds / 12.0;
+    if (!(v > 0.0)) {
+        if (e != 0u || !(m >= 0.0)) return false;
+        w = q.flux;
+        return true;
+    }
+    float sig = sqrt(v);
+    float alpha = -m / sig;
+    float pk = dust_nupper(alpha);
+    if (!(pk > 1e-6)) return false;
+    float lam = dust_npdf(alpha) / pk;
+    float t = sqrt(max(1.0 + alpha * lam - lam * lam, 1e-4));
+    vec3 se = (sn + q.seg * (ds / 12.0)) * (1.0 / sig);
+    float za = e == 0u ? alpha : alpha + dust_support_slab_edge(e - 1u) * t;
+    bool last = e + 1u == DUST_SUPPORT_TRUNC_SLABS;
+    float pa = dust_npdf(za), qa = dust_nupper(za);
+    float pb = 0.0, qb = 0.0, bpb = 0.0;
+    if (!last) {
+        float zb = alpha + dust_support_slab_edge(e) * t;
+        pb = dust_npdf(zb); qb = dust_nupper(zb); bpb = zb * pb;
+    }
+    float ps = qa - qb;
+    if (!(ps > 1e-9)) return false;
+    float mu = (pa - pb) / ps;
+    float var_ = clamp(1.0 + (za * pa - bpb) / ps - mu * mu, 0.0, 1.0);
+    float cv = (1.0 - var_) / v;
+    q.S[0] -= cv * sn.x * sn.x;
+    q.S[1] -= cv * sn.x * sn.y;
+    q.S[2] -= cv * sn.x * sn.z;
+    q.S[3] -= cv * sn.y * sn.y;
+    q.S[4] -= cv * sn.y * sn.z;
+    q.S[5] -= cv * sn.z * sn.z;
+    q.mean += se * mu;
+    w = q.flux * ps;
+    return true;
+}
+// A packet of a young cell as its cone of grains (dust::conic_slabs): DUST_SUPPORT_TRUNC_PIECES
+// equal sub-chords, each cut along the support's normal into slabs (edges -1, 0, 1 sigma of its
+// normal marginal, the first from the plane when it cuts the packet), each slab's covariance mapped
+// by the apex nn^T + s_k (I - nn^T) about the origin plane wO and its lateral shift scaled by s_k
+const float DUST_CONIC_FAR = 1.0e4;
+float dust_conic_slab_edge(uint i) { return i == 0u ? -1.0 : (i == 1u ? 0.0 : 1.0); }
+vec3 dust_apex_map(vec3 x, vec3 n, float sk) {
+    float xn = dot(n, x);
+    return n * xn + (x - n * xn) * sk;
+}
+// slab e of sub-chord j (dust::conic_slabs): false when it does not exist or holds nothing; q the
+// slab's packet, w its kept flux (before the renormalisation over the packet). sn = S n, v0 = n.S n,
+// dC the packet centre's distance from the origin plane, cut whether the plane cuts the packet
+bool dust_conic_piece(DustPacket p, vec4 s, float wO, vec3 sn, float v0, float dC, bool cut, uint j, uint e,
+                      out DustPacket q, out float w) {
+    w = 0.0;
+    vec3 n = s.xyz;
+    float k = float(DUST_SUPPORT_TRUNC_PIECES);
+    float u0 = float(j) / k, u1 = float(j + 1u) / k;
+    q = dust_sub_chord(p, u0, u1, j == 0u && p.openStart, j + 1u == DUST_SUPPORT_TRUNC_PIECES && p.openEnd);
+    float qa = q.rho.x, qb = q.rho.y;
+    float uc = qa + qb > 0.0 ? (qa + 2.0 * qb) / (3.0 * (qa + qb)) : 0.5;
+    vec3 qc = q.mean + q.seg * uc;
+    float ds = dot(n, q.seg);
+    float v = v0 + ds * ds / 12.0;
+    float sig = sqrt(max(v, 1e-30));
+    float alpha = cut ? max((s.w - dot(n, qc)) / sig, -DUST_CONIC_FAR) : -DUST_CONIC_FAR;
+    vec3 se = (sn + q.seg * (ds / 12.0)) * (1.0 / sig);
+    // the slab edges above alpha: a suffix of (-1, 0, 1)
+    uint c = 0u;
+    for (uint i = 0u; i < DUST_SUPPORT_TRUNC_SLABS - 1u; ++i) if (dust_conic_slab_edge(i) > alpha) c++;
+    uint ne = c + 1u;
+    if (e >= ne) return false;
+    uint first = DUST_SUPPORT_TRUNC_SLABS - 1u - c;
+    float za = e == 0u ? alpha : dust_conic_slab_edge(first + e - 1u);
+    float zb = e + 1u == ne ? DUST_CONIC_FAR : dust_conic_slab_edge(first + e);
+    float pa = dust_npdf(za), qa_ = dust_nupper(za), apa = za * dust_npdf(za);
+    float pb = dust_npdf(zb), qb_ = dust_nupper(zb), bpb = zb * dust_npdf(zb);
+    float ps = qa_ - qb_;
+    if (!(ps > 1e-9)) return false;
+    float mu = (pa - pb) / ps;
+    float var_ = clamp(1.0 + (apa - bpb) / ps - mu * mu, 0.0, 1.0);
+    float cv = (1.0 - var_) / max(v, 1e-30);
+    float C0 = q.S[0] - cv * sn.x * sn.x;
+    float C1 = q.S[1] - cv * sn.x * sn.y;
+    float C2 = q.S[2] - cv * sn.x * sn.z;
+    float C3 = q.S[3] - cv * sn.y * sn.y;
+    float C4 = q.S[4] - cv * sn.y * sn.z;
+    float C5 = q.S[5] - cv * sn.z * sn.z;
+    vec3 mean = q.mean + se * mu;
+    float sk = max((dot(n, mean + q.seg * uc) - wO) / dC, 0.0);
+    vec3 c0 = dust_apex_map(vec3(C0, C1, C2), n, sk);
+    vec3 c1 = dust_apex_map(vec3(C1, C3, C4), n, sk);
+    vec3 c2 = dust_apex_map(vec3(C2, C4, C5), n, sk);
+    vec3 r0 = dust_apex_map(vec3(c0.x, c1.x, c2.x), n, sk);
+    vec3 r1 = dust_apex_map(vec3(c0.y, c1.y, c2.y), n, sk);
+    vec3 r2 = dust_apex_map(vec3(c0.z, c1.z, c2.z), n, sk);
+    q.S[0] = r0.x; q.S[1] = r0.y; q.S[2] = r0.z; q.S[3] = r1.y; q.S[4] = r1.z; q.S[5] = r2.z;
+    vec3 off = se * mu;
+    vec3 lat = off - n * dot(n, off);
+    q.mean = mean + lat * (sk - 1.0);
+    w = q.flux * ps;
+    return true;
 }
 const int DUST_SPLIT_DROP  = 0;
 const int DUST_SPLIT_KEEP  = 1;
@@ -1147,6 +1355,14 @@ float dust_width_ratio(DustMoments M, bool hasPred, DustMoments P) {
     if (!(own > 0.0)) return DUST_WIDTH_RATIO_MAX;
     return min(sqrt(dust_mean_var(P) / own), DUST_WIDTH_RATIO_MAX);
 }
+// bound k of n time pieces of a segment whose width grows ratio-fold (dust::piece_bound): every
+// piece the same width ratio, (ratio^(k/n) - 1)/(ratio - 1); equal steps when ratio ~ 1
+float dust_piece_bound(uint k, uint n, float ratio) {
+    if (k >= n) return 1.0;
+    if (!(ratio > 1.0001)) return float(k) / float(n);
+    float e = exp(log(ratio) * (float(k) / float(n)));
+    return clamp((e - 1.0) / (ratio - 1.0), 0.0, 1.0);
+}
 // pieces a capsule is cut into: clamp(ceil(ratio) - 1, 1, DUST_TIME_PIECES_MAX) (dust::time_pieces)
 uint dust_time_pieces(float ratio) {
     uint c = uint(max(ceil(ratio), 1.0));
@@ -1155,11 +1371,12 @@ uint dust_time_pieces(float ratio) {
 // Packet of size bin b of a cluster (dust::subpackets): uniform along the bin's chord (a Gaussian
 // of DUST_CHORD_VAR_FACTOR half-chords^2 along it), Sigma_v scaled by the bin's speed factor,
 // 1/DUST_SIZE_BINS of the flux
-void dust_bin_packet(DustMoments M, uint b, out vec3 mean, out float S[6], out float flux) {
-    vec3 a = M.edges[b].xyz, c = M.edges[b + 1u].xyz;
+void dust_bin_packet_sub(DustMoments M, uint b, uint j, uint nj, out vec3 mean, out float S[6], out float flux) {
+    vec3 a, c; float fa, fc;
+    dust_sub_edges(M, b, j, nj, a, c, fa, fc);
     mean = 0.5 * (a + c);
     vec3 h = 0.5 * (c - a);
-    float f = 0.5 * (dust_edge_factor(M, b) + dust_edge_factor(M, b + 1u));
+    float f = 0.5 * (fa + fc);
     float f2 = f * f, k = DUST_CHORD_VAR_FACTOR;
     S[0] = f2 * M.cov_a.x + k * h.x * h.x;
     S[1] = f2 * M.cov_a.y + k * h.x * h.y;
@@ -1167,18 +1384,22 @@ void dust_bin_packet(DustMoments M, uint b, out vec3 mean, out float S[6], out f
     S[3] = f2 * M.cov_a.w + k * h.y * h.y;
     S[4] = f2 * M.cov_b_age_id.x + k * h.y * h.z;
     S[5] = f2 * M.cov_b_age_id.y + k * h.z * h.z;
-    flux = M.mean_flux.w / float(DUST_SIZE_BINS);
+    flux = M.mean_flux.w / float(DUST_SIZE_BINS) * dust_sub_share(M, b, j, nj);
+}
+void dust_bin_packet(DustMoments M, uint b, out vec3 mean, out float S[6], out float flux) {
+    dust_bin_packet_sub(M, b, 0u, 1u, mean, S, flux);
 }
 
 // The packet drawn for size bin b (dust::bin_chord_packet): uniform along its chord (mean = the
 // start edge, seg = the chord), Sigma_v scaled by the bin's speed factor plus the bin's time
 // segment segT as a Gaussian of DUST_CHORD_VAR_FACTOR half-segments^2, 1/DUST_SIZE_BINS of the flux
-void dust_bin_chord(DustMoments M, uint b, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
-    vec3 a = M.edges[b].xyz, c = M.edges[b + 1u].xyz;
+void dust_bin_chord_sub(DustMoments M, uint b, uint j, uint nj, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
+    vec3 a, c; float fa, fc;
+    dust_sub_edges(M, b, j, nj, a, c, fa, fc);
     mean = a;
     chord = c - a;
     vec3 h = 0.5 * segT;
-    float f = 0.5 * (dust_edge_factor(M, b) + dust_edge_factor(M, b + 1u));
+    float f = 0.5 * (fa + fc);
     float f2 = f * f, k = DUST_CHORD_VAR_FACTOR;
     S[0] = f2 * M.cov_a.x + k * h.x * h.x;
     S[1] = f2 * M.cov_a.y + k * h.x * h.y;
@@ -1186,7 +1407,10 @@ void dust_bin_chord(DustMoments M, uint b, vec3 segT, out vec3 mean, out vec3 ch
     S[3] = f2 * M.cov_a.w + k * h.y * h.y;
     S[4] = f2 * M.cov_b_age_id.x + k * h.y * h.z;
     S[5] = f2 * M.cov_b_age_id.y + k * h.z * h.z;
-    flux = M.mean_flux.w / float(DUST_SIZE_BINS);
+    flux = M.mean_flux.w / float(DUST_SIZE_BINS) * dust_sub_share(M, b, j, nj);
+}
+void dust_bin_chord(DustMoments M, uint b, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
+    dust_bin_chord_sub(M, b, 0u, 1u, segT, mean, chord, S, flux);
 }
 
 bool dust_project_point(vec3 p, mat4 mvp, float W, float H, out vec2 px);
@@ -1206,13 +1430,15 @@ uint dust_time_sweep(DustMoments M, DustMoments P, uint b, mat4 mvp, float W, fl
 // u = (k + 1/2)/nS between the bin's own edges and the predecessor's, Sigma_v scaled by the
 // bin's speed factor plus the residual Gaussian of the larger edge displacement / 2 nS along it,
 // 1/(DUST_SIZE_BINS nS) of the flux
-void dust_bin_sweep(DustMoments M, DustMoments P, uint b, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
-    vec3 a = M.edges[b].xyz, c = M.edges[b + 1u].xyz;
-    vec3 da = P.edges[b].xyz - a, dc = P.edges[b + 1u].xyz - c;
+void dust_bin_sweep_sub(DustMoments M, DustMoments P, uint b, uint j, uint nj, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
+    vec3 a, c, pa, pc; float fa, fc, pfa, pfc;
+    dust_sub_edges(M, b, j, nj, a, c, fa, fc);
+    dust_sub_edges(P, b, j, nj, pa, pc, pfa, pfc);
+    vec3 da = pa - a, dc = pc - c;
     vec3 dmax = dot(da, da) > dot(dc, dc) ? da : dc;
     float u = (float(k) + 0.5) / float(nS);
     vec3 ak = a + da * u, ck = c + dc * u;
-    float f = 0.5 * (dust_edge_factor(M, b) + dust_edge_factor(M, b + 1u));
+    float f = 0.5 * (fa + fc);
     float f2 = f * f;
     float kv = DUST_CHORD_VAR_FACTOR;
     vec3 h = dmax * (0.5 / float(nS));
@@ -1224,12 +1450,36 @@ void dust_bin_sweep(DustMoments M, DustMoments P, uint b, uint k, uint nS, out v
     S[3] = f2 * M.cov_a.w + kv * h.y * h.y;
     S[4] = f2 * M.cov_b_age_id.x + kv * h.y * h.z;
     S[5] = f2 * M.cov_b_age_id.y + kv * h.z * h.z;
-    flux = M.mean_flux.w / float(DUST_SIZE_BINS * nS);
+    flux = M.mean_flux.w / float(DUST_SIZE_BINS * nS) * dust_sub_share(M, b, j, nj);
+}
+void dust_bin_sweep(DustMoments M, DustMoments P, uint b, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
+    dust_bin_sweep_sub(M, P, b, 0u, 1u, k, nS, mean, chord, S, flux);
 }
 // Rodrigues rotation of v by angle about the unit axis
 vec3 dust_rotate3(vec3 v, vec3 axis, float angle) {
     float s = sin(angle), c = cos(angle);
     return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+}
+// R S R^T for the rotation by angle about the unit axis (dust::rotate_cov; S as xx, xy, xz, yy,
+// yz, zz): the cone pieces' predecessor covariance turned to the piece's emission direction
+void dust_rotate_cov(inout float S[6], vec3 axis, float angle) {
+    vec3 r[3];
+    r[0] = dust_rotate3(vec3(1.0, 0.0, 0.0), axis, angle);
+    r[1] = dust_rotate3(vec3(0.0, 1.0, 0.0), axis, angle);
+    r[2] = dust_rotate3(vec3(0.0, 0.0, 1.0), axis, angle);
+    mat3 m = mat3(S[0], S[1], S[2], S[1], S[3], S[4], S[2], S[4], S[5]);
+    float o[6];
+    uint idx = 0u;
+    for (int a = 0; a < 3; ++a) {
+        for (int b = a; b < 3; ++b) {
+            float acc = 0.0;
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < 3; ++j) acc += r[i][a] * m[i][j] * r[j][b];
+            }
+            o[idx++] = acc;
+        }
+    }
+    for (int k = 0; k < 6; ++k) S[k] = o[k];
 }
 // the spiral of a rigidly rotating emitter (dust::spiral_point): the two samples (ages ageO,
 // ageP) un-spun by R(+omega age) are linear in age, interpolated, and re-spun by R(-omega age(u));
@@ -1239,6 +1489,69 @@ vec3 dust_spiral_point(vec3 own, vec3 pred, float ageO, float ageP, vec3 axis, f
     vec3 lP = dust_rotate3(pred, axis, omega * ageP);
     vec3 l = lO + (lP - lO) * u;
     return dust_rotate3(l, axis, -omega * (ageO + u * (ageP - ageO)));
+}
+// the cell line of a sample (dust::cell_line): its size polyline o + f c in the speed factor f;
+// false once radiation pressure bent it (the middle edge > 5 % of the chord off the line)
+bool dust_cell_line(DustMoments M, out vec3 o, out vec3 c) {
+    uint nb = DUST_SIZE_BINS;
+    vec3 e0 = M.edges[0].xyz, e1 = M.edges[nb].xyz;
+    float f0 = dust_edge_factor(M, 0u), f1 = dust_edge_factor(M, nb);
+    o = vec3(0.0); c = vec3(0.0);
+    if (!(f1 > f0)) return false;
+    c = (e1 - e0) * (1.0 / (f1 - f0));
+    o = e0 - c * f0;
+    vec3 d = M.edges[nb / 2u].xyz - (o + c * dust_edge_factor(M, nb / 2u));
+    vec3 ch = e1 - e0;
+    return dot(ch, ch) > 0.0 && !(dot(d, d) > 0.0025 * dot(ch, ch));
+}
+// the support plane of a cell line (dust::support_plane): normal along c, through the slowest
+// grain (f_lo three relative speed spreads slow, at the origin when <= 0)
+vec4 dust_support_plane(vec3 o, vec3 c, float vStd, float fLo) {
+    float cn = sqrt(dot(c, c));
+    if (!(cn > 0.0)) return vec4(0.0);
+    vec3 n = c * (1.0 / cn);
+    float s0 = max(fLo * (1.0 - 3.0 * vStd), 0.0);
+    vec3 x = o + n * (cn * s0);
+    return vec4(n, dot(n, x));
+}
+// a cone piece's support (dust::subpackets_supported): from the cell line at the piece's centre
+// age uc — the two samples' lines interpolated along the spiral, the predecessor's direction
+// turned to the piece's emission and scaled with the age; the sample's own without both lines
+// or with a single piece
+vec4 dust_piece_support(bool pieces, bool lineM, bool lineP, vec3 oM, vec3 cM, vec3 oP, vec3 cP,
+                        bool spiral, vec3 axis, float omega, float ageO, float ageP, float uc,
+                        float vStd, float fLo, vec4 ownSup) {
+    if (!pieces || !lineM || !lineP) return ownSup;
+    float ageU = ageO + uc * (ageP - ageO);
+    vec3 o, c;
+    if (spiral) {
+        o = dust_spiral_point(oM, oP, ageO, ageP, axis, omega, uc);
+        c = dust_rotate3(cP, axis, omega * (ageP - ageU)) * (ageU / max(ageP, 1e-30));
+    } else {
+        o = oM + (oP - oM) * uc;
+        c = cM + (cP - cM) * uc;
+    }
+    return dust_support_plane(o, c, vStd, fLo);
+}
+// dust_piece_support with the cell origin along the plane's normal (dust::subpackets_cells:
+// has = the plane is set, wO = n.o): the own cell's (ownSup, ownHas, ownO) when not a piece
+vec4 dust_piece_support_o(bool pieces, bool lineM, bool lineP, vec3 oM, vec3 cM, vec3 oP, vec3 cP,
+                          bool spiral, vec3 axis, float omega, float ageO, float ageP, float uc,
+                          float vStd, float fLo, vec4 ownSup, bool ownHas, float ownO, out bool has, out float wO) {
+    if (!pieces || !lineM || !lineP) { has = ownHas; wO = ownO; return ownSup; }
+    float ageU = ageO + uc * (ageP - ageO);
+    vec3 o, c;
+    if (spiral) {
+        o = dust_spiral_point(oM, oP, ageO, ageP, axis, omega, uc);
+        c = dust_rotate3(cP, axis, omega * (ageP - ageU)) * (ageU / max(ageP, 1e-30));
+    } else {
+        o = oM + (oP - oM) * uc;
+        c = cM + (cP - cM) * uc;
+    }
+    vec4 sp = dust_support_plane(o, c, vStd, fLo);
+    has = dust_has_support(sp);
+    wO = dot(sp.xyz, o);
+    return sp;
 }
 // the spiral gate of a sample with a predecessor (dust::spiral_of)
 bool dust_spiral_of(DustMoments M, DustMoments P, out vec3 axis, out float omega) {

@@ -104,4 +104,16 @@ public interface IPlatformWindowService
   /// On Linux this is the XID; on Windows the HWND; on macOS the NSWindow pointer.
   /// </param>
   void SetWindowInputPassthrough(nint windowHandle);
+
+  /// <summary>
+  /// Restricts the pointer-sensitive area of a window to <paramref name="rects"/> (window-local
+  /// physical pixels); clicks anywhere else fall through to the windows behind. Used by desktop
+  /// billboards: their window is larger than the image (room for the gizmo handles) and the
+  /// transparent margin must not swallow clicks.
+  /// <para>
+  /// On Linux/X11: an XFixes region of the rectangles as the <c>ShapeInput</c> shape.
+  /// On Windows/macOS: no-op (the whole window stays clickable).
+  /// </para>
+  /// </summary>
+  void SetWindowInputRegion(nint windowHandle, System.Collections.Generic.IReadOnlyList<Utils.RectI> rects);
 }

@@ -102,8 +102,12 @@ impl SceneConversionExt2 for Scene {
     } else {
       self.query1_res::<HiddenComponent, _, _>(|id, _| Some(id))
     };
+    // Subtrees outside this camera's render layers (`RenderLayerComponent` vs
+    // `CameraRenderMaskComponent`) are hidden for this camera only: the Earth globe, axis, labels
+    // and indicator exist for UpZenith cameras alone.
+    let masked_roots = crate::simulation_api::earth_visual::masked_roots(self, camera_entity);
     let mut hidden_set = hashbrown::HashSet::with_capacity(128);
-    for (root_id, _) in hidden_roots {
+    for root_id in hidden_roots.into_iter().map(|(id, _)| id).chain(masked_roots) {
       self.traverse_dfs_pre_order(
         root_id,
         &mut hidden_set,
@@ -390,9 +394,33 @@ impl SceneConversionExt2 for Scene {
           [rte.position.x(), rte.position.y(), rte.position.z()],
           sg.radius,
           sg.subdivisions,
+          gpu::SPHERE_GIZMO_STYLE_SPHERE,
+          0.0f32,
         )
       })
     });
+    // Dashed polar axes (`earth_visual::PolarAxisGizmoComponent`) ride the same instanced
+    // pipeline in the polar-axis style: radius = half length of the axis, km, scale forced to 1.
+    let mut extracted_sg = extracted_sg;
+    extracted_sg.extend(extract!(
+      crate::simulation_api::earth_visual::PolarAxisGizmoComponent,
+      |id, axis| {
+        compute_rte(self, id).map(|(layer_idx, rte)| {
+          let mut rte_for_gizmo = rte;
+          rte_for_gizmo.scale = Vec3f32::from_components(1.0, 1.0, 1.0);
+          (
+            layer_idx,
+            id,
+            rte_for_gizmo.to_transform().to_mat4::<Mat4x4f32>(),
+            [rte.position.x(), rte.position.y(), rte.position.z()],
+            axis.radius_km * axis.length_factor,
+            0.0f32,
+            gpu::SPHERE_GIZMO_STYLE_POLAR_AXIS,
+            axis.dash_count,
+          )
+        })
+      }
+    ));
 
     // ------ Depth fitting pass -------------------------------------------------------
     // Refits micro-layer near/far from actual draw-call geometry rather than the
@@ -548,7 +576,7 @@ impl SceneConversionExt2 for Scene {
       // (line 151). The full gizmo bounding sphere is therefore `radius * 1.7` km.
       // -> scratch that, it seems that the yellow one is still cut. Trying out 2.1 km
       // extracted_sg tuple: (layer_idx, id, mat, center, rad, sub)
-      for (layer_idx, _id, _mat, _center, rad, _sub) in &extracted_sg {
+      for (layer_idx, _id, _mat, _center, rad, _sub, style, _dash) in &extracted_sg {
         if *layer_idx == 0 {
           continue;
         }
@@ -569,8 +597,12 @@ impl SceneConversionExt2 for Scene {
           -view_pos.y()
         };
 
-        // Bounding radius: full axis + arrowhead envelope.
-        let gizmo_radius = (*rad as f64) * 2.1;
+        // Bounding radius: full axis + arrowhead envelope; a polar axis ends at `rad`.
+        let gizmo_radius = if *style == gpu::SPHERE_GIZMO_STYLE_POLAR_AXIS {
+          *rad as f64
+        } else {
+          (*rad as f64) * 2.1
+        };
 
         let au_scale = 1.0 / AU_TO_KM as f64;
         if !sphere_in_frustum(
@@ -760,11 +792,11 @@ impl SceneConversionExt2 for Scene {
     // 6. Sphere Gizmos (Batched - deferred upload)
     let mut sg_batch_buffers = hashbrown::HashMap::<
       u32,
-      alloc::vec::Vec<(EntityId, Mat4x4f32, [f64; 3], f32, f32)>,
+      alloc::vec::Vec<(EntityId, Mat4x4f32, [f64; 3], f32, f32, f32, f32)>,
     >::with_capacity(16);
-    for (layer_idx, id, mat, center, rad, sub) in extracted_sg {
+    for (layer_idx, id, mat, center, rad, sub, style, dash) in extracted_sg {
       get_or_create_layer!(layer_idx);
-      sg_batch_buffers.entry(layer_idx).or_default().push((id, mat, center, rad, sub));
+      sg_batch_buffers.entry(layer_idx).or_default().push((id, mat, center, rad, sub, style, dash));
     }
 
     // 7. Trajectories (Batched - deferred upload)
@@ -1429,6 +1461,64 @@ impl SceneConversionExt2 for Scene {
             }
           },
         );
+
+      // Pole labels ("N" / "S" at the ends of a dashed polar axis, `earth_visual`).
+      const POLE_LABEL_PT: f32 = 16.0;
+      const POLE_LABEL_GAP_PX: f32 = 4.0;
+      self.query1_without::<crate::simulation_api::earth_visual::PoleLabelsComponent, HiddenComponent, _>(
+        |id, labels| {
+          if hidden_set.contains(&id) {
+            return;
+          }
+          let Some([centre, north, south]) = crate::simulation_api::earth_visual::pole_points_global(
+            self,
+            id,
+            labels.radius_km,
+            labels.length_factor,
+          ) else {
+            return;
+          };
+          let Some(c) = to_px(centre) else {
+            return;
+          };
+          let Ok(desc) = device.allocate_rasterized_font_atlas(
+            cmd_buffer,
+            labels.font_hash,
+            labels.font_atlas.clone(),
+          ) else {
+            return;
+          };
+          let style = text::TextStyle {
+            size_pt: POLE_LABEL_PT,
+            color: labels.text_color,
+            style_flags: 2,
+          };
+          for (end, label) in [(north, "N"), (south, "S")] {
+            let Some(e) = to_px(end) else {
+              continue;
+            };
+            let tw = text::text_width_px(label, POLE_LABEL_PT, &labels.font_atlas);
+            // capitals span the ascent above the baseline, which is where `push_text_to_batch`
+            // puts its start position
+            let ascent = labels.font_atlas.ascent * POLE_LABEL_PT / labels.font_atlas.scale.y;
+            let top_left = crate::simulation_api::earth_visual::label_top_left(
+              c,
+              e,
+              tw,
+              ascent,
+              POLE_LABEL_GAP_PX,
+            );
+            text::push_text_to_batch(
+              label,
+              [top_left[0], top_left[1] + ascent],
+              &style,
+              &labels.font_atlas,
+              desc,
+              &mut text_batch,
+            );
+          }
+        },
+      );
     }
 
     if !gpu_ui.is_empty() {
@@ -1448,7 +1538,7 @@ impl SceneConversionExt2 for Scene {
             render_scene.camera_data.rebuild_for_layer(l.near, l.far, l.frame_scale);
           let sg_data: alloc::vec::Vec<_> = sg_list
             .into_iter()
-            .filter_map(|(id, m, center, r, sub)| {
+            .filter_map(|(id, m, center, r, sub, style, dash_count)| {
               device.allocate_sphere_gizmo_instance(id).ok().map(|idx| {
                 (
                   idx,
@@ -1456,7 +1546,8 @@ impl SceneConversionExt2 for Scene {
                     model: m.into(),
                     radius: r,
                     subdivisions: sub,
-                    _pad: [0.0; 2],
+                    style,
+                    dash_count,
                     center_clip: crate::gpu::frame::center_clip_f64(&layer_camera, center),
                   },
                 )

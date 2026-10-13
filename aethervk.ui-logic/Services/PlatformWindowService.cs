@@ -222,6 +222,41 @@ public sealed class PlatformWindowService : IPlatformWindowService
   }
 
   /// <inheritdoc/>
+  public void SetWindowInputRegion(nint windowHandle, System.Collections.Generic.IReadOnlyList<Utils.RectI> rects)
+  {
+#if TARGET_IS_LINUX
+    if (windowHandle == 0) return;
+    nint disp = PInvokeX11.XOpenDisplay(0);
+    if (disp == 0) return;
+    var xr = new PInvokeXFixes.XRectangle[rects.Count];
+    for (int i = 0; i < rects.Count; i++)
+    {
+      var r = rects[i];
+      xr[i] = new PInvokeXFixes.XRectangle
+      {
+        X = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, r.X)),
+        Y = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, r.Y)),
+        Width = (ushort)Math.Max(0, Math.Min(ushort.MaxValue, r.Width)),
+        Height = (ushort)Math.Max(0, Math.Min(ushort.MaxValue, r.Height)),
+      };
+    }
+    var pin = GCHandle.Alloc(xr, GCHandleType.Pinned);
+    try
+    {
+      nint region = PInvokeXFixes.XFixesCreateRegion(disp, pin.AddrOfPinnedObject(), xr.Length);
+      PInvokeXFixes.XFixesSetWindowShapeRegion(disp, windowHandle, 2 /*ShapeInput*/, 0, 0, region);
+      PInvokeXFixes.XFixesDestroyRegion(disp, region);
+      PInvokeX11.XFlush(disp);
+    }
+    finally
+    {
+      pin.Free();
+      PInvokeX11.XCloseDisplay(disp);
+    }
+#endif
+  }
+
+  /// <inheritdoc/>
   public void SetWindowInputPassthrough(nint windowHandle)
   {
 #if TARGET_IS_LINUX

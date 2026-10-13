@@ -159,6 +159,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
       base.OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(SpeedOptions)));
     if (e.PropertyName == nameof(CurrentSession))
     {
+      HookRestored(CurrentSession);
       Restore();
       RefreshCommittedState();
       RefreshProposedState();
@@ -222,6 +223,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
       .AddDisposableTo(_disposables);
 
     SubscribeToStrings(schedulerProvider);
+    HookRestored(CurrentSession);
     Restore();
     
     IsActive = true;
@@ -353,6 +355,31 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     IsProposedDifferentFromCommitted =
       StartEpoch != CurrentSession.CommittedStartEpoch ||
       EndEpoch   != CurrentSession.CommittedEndEpoch;
+  }
+
+  private TimelineSession? _restoredHooked;
+
+  /// <summary>A savefile open replaces the session's values: re-read them (see <see cref="TimelineSession.Restored"/>).</summary>
+  private void HookRestored(TimelineSession? session)
+  {
+    if (ReferenceEquals(_restoredHooked, session)) return;
+    if (_restoredHooked is not null) _restoredHooked.Restored -= OnSessionRestored;
+    if (session is not null) session.Restored += OnSessionRestored;
+    _restoredHooked = session;
+  }
+
+  private void OnSessionRestored()
+  {
+    Restore();
+    RefreshCommittedState();
+    RefreshProposedState();
+  }
+
+  public override void Dispose()
+  {
+    HookRestored(null);
+    _disposables.Dispose();
+    base.Dispose();
   }
 
   private void Restore()

@@ -56,7 +56,8 @@ const float DUST_SPECKS_SIGMA_PX       = 0.5;
 const int   DUST_SPECKS_FOOTPRINT      = 2;
 const uint  DUST_SPECKS_MAX_LEVEL      = 60u;
 const uint  DUST_SPECKS_COUNT_BITS     = 13u;
-const uint  DUST_SPECKS_STACK          = 70u;   // DUST_SPECKS_MAX_LEVEL + 2 + 8 jump-start nodes (dust::specks::DUST_SPECKS_STACK)
+const uint  DUST_SPECKS_JUMP_STARTS    = 16u;   // dust::specks::DUST_SPECKS_JUMP_STARTS
+const uint  DUST_SPECKS_STACK          = 78u;   // DUST_SPECKS_MAX_LEVEL + 2 + 16 jump-start nodes (dust::specks::DUST_SPECKS_STACK)
 const float DUST_SPECKS_JUMP_W_TOL     = 2.0e-5; // dust::specks::DUST_SPECKS_JUMP_W_TOL
 const uint  DUST_SPECKS_JUMP_MAX_SPLITS = 20u;   // dust::specks::DUST_SPECKS_JUMP_MAX_SPLITS
 const float DUST_SPECKS_TWO_PI_32      = 15.74960994572242; // (2 pi)^(3/2)
@@ -398,7 +399,7 @@ vec3 dust_specks_coords(vec3 w, float kappa, vec2 rho) {
 // (me = mean - eye) with the f32 rounding slack, the box widened by the quantiles' tolerance
 bool dust_specks_node_meets(vec3 c0, vec3 c1, vec3 c2, vec3 colNorm, float kappa, vec2 rho,
                             vec3 me, vec3 lo, vec3 width,
-                            vec3 yEye, float sigmaLo, float dMax, bool hasPlane, vec3 fwd) {
+                            vec3 yEye, float sigmaLo, vec3 rowN, float dMax, bool hasPlane, vec3 fwd) {
     vec3 a = dust_specks_coords(lo, kappa, rho);
     vec3 b = dust_specks_coords(lo + width, kappa, rho);
     vec3 mid = 0.5 * (a + b);
@@ -417,6 +418,13 @@ bool dust_specks_node_meets(vec3 c0, vec3 c1, vec3 c2, vec3 colNorm, float kappa
     if (sigmaLo > 0.0) {
         vec3 o = max(abs(yEye - mid) - half_ - 8.0 * DUST_SPECKS_EPS * (abs(yEye) + abs(mid)), vec3(0.0));
         if (sigmaLo * length(o) > dMax) return false;
+        // the exact per-axis bound of the ball's preimage (dust::specks::SpeckCluster::node_meets)
+        for (int k = 0; k < 3; ++k) {
+            float h0 = dMax * rowN[k];
+            float hk = h0 + 1.0e-4 * (abs(yEye[k]) + h0);
+            float ok = abs(yEye[k] - mid[k]) - half_[k] - 8.0 * DUST_SPECKS_EPS * (abs(yEye[k]) + abs(mid[k]));
+            if (ok > hk) return false;
+        }
     }
     if (hasPlane && dot(d, fwd) + r < 0.0) return false;
     return true;
@@ -575,13 +583,27 @@ void dust_specks_split(SpeckNode node, out SpeckNode left, out SpeckNode right) 
     right.hash = dust_hash32(node.hash ^ 0x6C8E9CF5u);
 }
 
+// the cells of a level meeting the box [bLo, bHi] of the probability cube: their first index and
+// count per axis (dust::specks::SpeckCluster::start_nodes)
+void dust_specks_cells_at(uint level, vec3 bLo, vec3 bHi, out uvec3 loI, out uvec3 nI) {
+    for (int k = 0; k < 3; ++k) {
+        uint m = min((level + 2u - uint(k)) / 3u, 31u);
+        uint cells = 1u << m;
+        float scale = float(cells);
+        uint a = min(uint(bLo[k] * scale), cells - 1u);
+        uint b = min(uint(bHi[k] * scale), cells - 1u);
+        loI[k] = a;
+        nI[k] = b - a + 1u;
+    }
+}
+
 // The walk's start nodes (dust::specks::SpeckCluster::start_nodes, the jump start): the box of
 // the ball's preimage y_eye +- dMax |row_k(M^-1)| (widened), through the coordinates' CDFs to the
 // probability cube; at the deepest level whose cells are as wide as the box, the <= 2 cells per
 // axis meeting it, each reached by its path from the root (stopping at an empty node or a leaf,
 // duplicates merged). The walk from them finds exactly the root walk's specks.
 uint dust_specks_start_nodes(SpeckNode root, float mi[9], vec3 yEye, float sigmaLo, float dMax,
-                             float kappa, vec2 rho, out SpeckNode starts[8]) {
+                             float kappa, vec2 rho, out SpeckNode starts[DUST_SPECKS_JUMP_STARTS]) {
     if (!(sigmaLo > 0.0) || !(dMax > 0.0)) { starts[0] = root; return 1u; }
     vec3 bLo, bHi;
     for (int k = 0; k < 3; ++k) {
@@ -600,7 +622,8 @@ uint dust_specks_start_nodes(SpeckNode root, float mi[9], vec3 yEye, float sigma
         bLo[k] = clamp(cl - DUST_SPECKS_JUMP_W_TOL, 0.0, 1.0);
         bHi[k] = clamp(ch + DUST_SPECKS_JUMP_W_TOL, 0.0, 1.0);
     }
-    // the deepest level whose cells are as wide as the box: L <= 3 M_k + k
+    // the start level (dust::specks::SpeckCluster::start_nodes): from the deepest whose cells are
+    // as wide as the box (L <= 3 M_k + k), deeper while at most DUST_SPECKS_JUMP_STARTS cells meet it
     uint level = DUST_SPECKS_MAX_LEVEL;
     for (int k = 0; k < 3; ++k) {
         float w = bHi[k] - bLo[k];
@@ -609,15 +632,12 @@ uint dust_specks_start_nodes(SpeckNode root, float mi[9], vec3 yEye, float sigma
         level = min(level, 3u * m + uint(k));
     }
     uvec3 loI, nI;
-    for (int k = 0; k < 3; ++k) {
-        uint m = (level + 2u - uint(k)) / 3u;
-        uint cells = 1u << m;
-        float scale = float(cells);
-        uint a = min(uint(bLo[k] * scale), cells - 1u);
-        uint b = min(uint(bHi[k] * scale), cells - 1u);
-        loI[k] = a;
-        nI[k] = min(b - a + 1u, 2u);
+    while (level < DUST_SPECKS_MAX_LEVEL && 3u * DUST_SPECKS_JUMP_MAX_SPLITS > level) {
+        dust_specks_cells_at(level + 1u, bLo, bHi, loI, nI);
+        if (nI.x * nI.y * nI.z > DUST_SPECKS_JUMP_STARTS) break;
+        level++;
     }
+    dust_specks_cells_at(level, bLo, bHi, loI, nI);
     uint n = 0u;
     for (uint c = 0u; c < nI.x * nI.y * nI.z; ++c) {
         uvec3 idx = uvec3(loI.x + c % nI.x, loI.y + (c / nI.x) % nI.y, loI.z + c / (nI.x * nI.y));
@@ -704,12 +724,15 @@ void main() {
     }
     if (!(dMax > 0.0) || cq.x == 0u) return;
     // the eye in coordinate space and the bound of M's smallest singular value
-    vec3 yEye = vec3(0.0); float sigmaLo = 0.0;
+    vec3 yEye = vec3(0.0); float sigmaLo = 0.0; vec3 rowN = vec3(0.0);
     float mi[9];
     if (dust_specks_inv3(c0, c1, c2, mi)) {
         float fro2 = 0.0;
         for (int k = 0; k < 9; ++k) fro2 += mi[k] * mi[k];
         sigmaLo = 1.0 / sqrt(fro2);
+        rowN = vec3(sqrt(mi[0] * mi[0] + mi[1] * mi[1] + mi[2] * mi[2]),
+                    sqrt(mi[3] * mi[3] + mi[4] * mi[4] + mi[5] * mi[5]),
+                    sqrt(mi[6] * mi[6] + mi[7] * mi[7] + mi[8] * mi[8]));
         vec3 dd = -me;
         yEye = vec3(mi[0] * dd.x + mi[1] * dd.y + mi[2] * dd.z,
                     mi[3] * dd.x + mi[4] * dd.y + mi[5] * dd.z,
@@ -717,7 +740,7 @@ void main() {
     }
     // the whole bin against the shell
     if (!dust_specks_node_meets(c0, c1, c2, colNorm, kappa, rho, me, vec3(0.0), vec3(1.0),
-                                yEye, sigmaLo, dMax, false, vec3(0.0))) return;
+                                yEye, sigmaLo, rowN, dMax, false, vec3(0.0))) return;
     // photometry and colour of the cluster
     if ((flags & DUST_VIEW_FLOW) != 0u) {
         V.exposure *= dust_flow_factor(age, uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_HI]),
@@ -738,7 +761,7 @@ void main() {
     SpeckNode root;
     root.level = 0u; root.lo = uvec3(0u); root.mant = cq.x; root.exp = cq.y; root.hash = rootHash;
     // the jump start (dust::specks::SpeckCluster::walk): pushed in reverse, the first visited first
-    SpeckNode starts[8];
+    SpeckNode starts[DUST_SPECKS_JUMP_STARTS];
     uint nStarts = dust_specks_start_nodes(root, mi, yEye, sigmaLo, dMax, kappa, rho, starts);
     uint sp = 0u;
     for (uint k = nStarts; k > 0u; --k) { stack[sp] = starts[k - 1u]; sp++; }
@@ -758,7 +781,7 @@ void main() {
         vec3 lo, width; uvec3 half_;
         node_cell(node.level, node.lo, lo, width, half_);
         if (!dust_specks_node_meets(c0, c1, c2, colNorm, kappa, rho, me, lo, width,
-                                    yEye, sigmaLo, dMax, hasPlane, V.fwd)) continue;
+                                    yEye, sigmaLo, rowN, dMax, hasPlane, V.fwd)) continue;
         bool leaf = (node.mant == 1u && node.exp == 0u) || node.level >= DUST_SPECKS_MAX_LEVEL;
         if (leaf) {
             uint n = node.exp == 0u ? min(node.mant, 64u) : 64u;

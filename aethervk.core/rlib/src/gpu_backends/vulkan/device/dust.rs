@@ -364,6 +364,43 @@ pub struct DustView {
   pub host: spin::Mutex<DustViewHost>,
   /// this frame's view words (flags, flow, tracer counts), written into the header
   frame_words: spin::Mutex<[u32; dust::PYRAMID_HEADER_WORDS as usize]>,
+  /// what the GPU splat passes drew (diagnostics, [`Device::download_dust_snapshot`]): the
+  /// frame being recorded and the last fully recorded one, `(frame, records)` each
+  splat_records: spin::Mutex<[(u64, alloc::vec::Vec<DustSplatRecord>); 2]>,
+}
+
+/// `bytes` as a vector of `T` (an aligned copy; trailing bytes of a partial element dropped)
+fn pod_vec<T: bytemuck::Pod>(bytes: &[u8]) -> alloc::vec::Vec<T> {
+  let n = bytes.len() / core::mem::size_of::<T>();
+  let mut v = alloc::vec![T::zeroed(); n];
+  bytemuck::cast_slice_mut::<T, u8>(&mut v).copy_from_slice(&bytes[..n * core::mem::size_of::<T>()]);
+  v
+}
+
+/// One tier's GPU splat pass as recorded (host memory only): which buffers and ranges it read
+/// and its push constants, so a diagnostic can download the same clusters and replay the frame
+/// on the CPU mirror ([`Device::download_dust_snapshot`]).
+#[derive(Clone, Copy, Debug)]
+pub struct DustSplatRecord {
+  pub system: u64,
+  pub ring_base: u32,
+  pub render: vk::Buffer,
+  pub render_offset: u64,
+  pub moments: vk::Buffer,
+  pub moments_offset: u64,
+  pub pc: DustSplatPushConstants,
+  pub flow: dust::DustFlowUniform,
+  pub tracer_counts: u32,
+}
+
+/// A recorded tier with its clusters downloaded ([`Device::download_dust_snapshot`]).
+#[derive(Clone, Debug)]
+pub struct DustSplatSnapshot {
+  pub pc: DustSplatPushConstants,
+  pub flow: dust::DustFlowUniform,
+  pub tracer_counts: u32,
+  pub render: alloc::vec::Vec<dust::DustRenderCluster>,
+  pub moments: alloc::vec::Vec<dust::DustMoments>,
 }
 
 // SAFETY: the mapped pointers point into persistently mapped VMA allocations owned by this struct
@@ -989,6 +1026,10 @@ impl Device {
           readback_mapped: rmapped,
           host: spin::Mutex::new(DustViewHost::default()),
           frame_words: spin::Mutex::new([0; dust::PYRAMID_HEADER_WORDS as usize]),
+          splat_records: spin::Mutex::new([
+            (u64::MAX, alloc::vec::Vec::new()),
+            (u64::MAX, alloc::vec::Vec::new()),
+          ]),
         },
       );
     }
@@ -1061,7 +1102,17 @@ impl Device {
       | (volume_axis << 16)
       | (ewa_bias << 18)
       | ((gates_off as u32) << dust::DUST_FRAME_GATES_OFF_BIT)
-      | ((dust::jacobian_at_start() as u32) << 23);
+      | ((dust::jacobian_at_start() as u32) << 23)
+      // `AETHERVK_DUST_HARD_AXIS=<n>` (diagnostics): hard-edged Gaussianised axes, n pieces
+      | (aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_HARD_AXIS")
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+        .min(15)
+        << 24)
+      // `AETHERVK_DUST_TIME_CELL=1` (diagnostics): time Gaussians centred on their cells
+      | ((aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_TIME_CELL").is_some_and(|v| v.trim() == "1")
+        as u32)
+        << 28);
     // the speck shell of this frame (`AETHERVK_DUST_SPECKS=1` turns the specks on; a test's or a
     // diagnostic's override wins) and the budget (`AETHERVK_DUST_SPECKS_BUDGET`); the size law is
     // per system, in the speck push constants
@@ -1267,6 +1318,30 @@ impl Device {
     pc.render = render;
     pc.moments = moments;
     pc.pyramid = pyramid.address;
+    // the record of this pass (diagnostics: `download_dust_snapshot`)
+    if sys.cpu_ring.is_none()
+      && let (Some(rb), Some(mb)) = (sys.render.as_ref(), sys.moments.as_ref())
+    {
+      let rec = DustSplatRecord {
+        system: id,
+        ring_base,
+        render: rb.buffer,
+        render_offset: render.wrapping_sub(rb.address),
+        moments: mb.buffer,
+        moments_offset: moments.wrapping_sub(mb.address),
+        pc,
+        flow: sys.host.lock().flow,
+        tracer_counts: f32::from_bits(view.frame_words.lock()[dust::PYR_TRACER_COUNTS as usize])
+          as u32,
+      };
+      let mut r = view.splat_records.lock();
+      if r[0].0 != frame_no {
+        // a new frame: the one being recorded becomes the last complete one
+        let cur = core::mem::replace(&mut r[0], (frame_no, alloc::vec::Vec::new()));
+        r[1] = cur;
+      }
+      r[0].1.push(rec);
+    }
     if sys.cpu_ring.is_some() {
       // CPU mode: the reference splat on the clusters propagate evaluated, straight into the
       // host-visible pyramid of this frame
@@ -1506,21 +1581,36 @@ impl Device {
       let v = unsafe { core::slice::from_raw_parts(ptr.cast::<u32>(), words as usize) }.to_vec();
       return Ok(v);
     }
+    let bytes = self.dust_download_bytes(buffer, 0, words as u64 * 4)?;
+    Ok(pod_vec(&bytes))
+  }
+
+  /// `size` bytes of `buffer` from `offset` (diagnostics): a graphics-queue copy after the last
+  /// frame's splats and composite into a host-read staging buffer, waited for
+  /// ([`DUST_DOWNLOAD_WAIT_NS`]); a copy whose wait failed leaks its staging buffer rather than
+  /// freeing it under the GPU. Shared by [`Self::download_dust_pyramid`] and
+  /// [`Self::download_dust_snapshot`].
+  fn dust_download_bytes(
+    &self,
+    buffer: vk::Buffer,
+    offset: u64,
+    size: u64,
+  ) -> GpuResult<alloc::vec::Vec<u8>> {
     let res = self.res.read();
     let allocator = res.allocator.allocator.as_allocator_view();
     let (staging, mapped) = self.dust_create_buffer(
       &allocator,
-      words as u64 * 4,
+      size,
       DustMem::HostRead,
       false,
       vk::BufferUsageFlags::TRANSFER_DST,
-      "DustPyramidDownload",
+      "DustDiagDownload",
     )?;
     let mut in_flight = false;
-    let out: GpuResult<alloc::vec::Vec<u32>> = (|| {
+    let out: GpuResult<alloc::vec::Vec<u8>> = (|| {
       let (handle, cmd) = self.get_command_buffer_and_native()?;
       self.begin_command_buffer_all(handle, QueueRole::Graphics)?;
-      let region = vk::BufferCopy::default().size(words as u64 * 4);
+      let region = vk::BufferCopy::default().src_offset(offset).size(size);
       // in-order on the graphics queue after the last frame's splats and composite
       let pre = vk::MemoryBarrier2::default()
         .src_stage_mask(
@@ -1550,22 +1640,66 @@ impl Device {
       in_flight = true;
       self.device.wait_for_semaphore_value(sem, value, DUST_DOWNLOAD_WAIT_NS)?;
       in_flight = false;
-      allocator.invalidate_allocation(&staging.alloc, 0, words as u64 * 4)?;
-      Ok(unsafe { core::slice::from_raw_parts(mapped.cast::<u32>(), words as usize) }.to_vec())
+      allocator.invalidate_allocation(&staging.alloc, 0, size)?;
+      Ok(unsafe { core::slice::from_raw_parts(mapped.cast::<u8>(), size as usize) }.to_vec())
     })();
     if in_flight {
       // the copy was submitted and its wait failed or timed out: the GPU may still write the
       // staging buffer, so it is leaked rather than freed under it (a use-after-free and a
       // plausible GPU fault otherwise); a diagnostics-only path
       aethervk_oshal_rlib::log!(
-        "[Dust] pyramid download: the copy did not complete; staging buffer leaked ({} bytes)",
-        words as u64 * 4
+        "[Dust] download: the copy did not complete; staging buffer leaked ({} bytes)",
+        size
       );
     } else {
       let mut a = staging.alloc;
       unsafe { allocator.destroy_buffer(staging.buffer, &mut a) };
     }
     out
+  }
+
+  /// What the GPU's splat passes of the last fully recorded frame of `pe` drew: per tier the push
+  /// constants, the flow clock, the tracer height and the render clusters and moments they read,
+  /// downloaded (diagnostics: the observer's `--probe` replays them on the CPU mirror,
+  /// `dust::splat_tier_probed`). The simulation must be paused (the render thread re-draws the
+  /// same epoch every frame, so the buffers hold what that frame read). Empty in CPU particle mode.
+  pub fn download_dust_snapshot(
+    &self,
+    pe: gpu::PresentationEngineHandle,
+  ) -> GpuResult<alloc::vec::Vec<DustSplatSnapshot>> {
+    let records = {
+      let res = self.res.read();
+      let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
+      let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
+      let r = view.splat_records.lock();
+      if r[1].1.is_empty() {
+        r[0].1.clone()
+      } else {
+        r[1].1.clone()
+      }
+    };
+    let mut out = alloc::vec::Vec::with_capacity(records.len());
+    for rec in records {
+      let n = rec.pc.live_count as u64;
+      let rb = self.dust_download_bytes(
+        rec.render,
+        rec.render_offset,
+        n * core::mem::size_of::<dust::DustRenderCluster>() as u64,
+      )?;
+      let mb = self.dust_download_bytes(
+        rec.moments,
+        rec.moments_offset,
+        n * core::mem::size_of::<dust::DustMoments>() as u64,
+      )?;
+      out.push(DustSplatSnapshot {
+        pc: rec.pc,
+        flow: rec.flow,
+        tracer_counts: rec.tracer_counts,
+        render: pod_vec(&rb),
+        moments: pod_vec(&mb),
+      });
+    }
+    Ok(out)
   }
 
   /// Traces this frame of system `id` (`gpu::dust_trace`): between the splat passes' post barrier

@@ -279,6 +279,31 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   // ── Session restore ───────────────────────────────────────────────────────
 
   private bool _restoringFromSession;
+  private CometSession? _restoredHooked;
+
+  /// <summary>A savefile open replaces the session's values: re-read them (see <see cref="CometSession.Restored"/>).</summary>
+  private void HookRestored(CometSession? session)
+  {
+    if (ReferenceEquals(_restoredHooked, session)) return;
+    if (_restoredHooked is not null) _restoredHooked.Restored -= OnSessionRestored;
+    if (session is not null) session.Restored += OnSessionRestored;
+    _restoredHooked = session;
+  }
+
+  private void OnSessionRestored()
+  {
+    if (CurrentSession is { } session)
+      RestoreFromSession(session);
+  }
+
+  public override void Dispose()
+  {
+    HookRestored(null);
+    // a closed tab must stop reacting (it pushed its stale rotation on every later commit)
+    _rotDebounceToken?.Dispose();
+    _disposables.Dispose();
+    base.Dispose();
+  }
 
   /// <summary>
   /// Reloads the form from <paramref name="session"/>: tabs are scoped, so reopening the Comet tab
@@ -317,8 +342,12 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     base.OnPropertyChanged(e);
 
     // tabs are scoped: a reopened tab gets a new VM over the same session
-    if (e.PropertyName == nameof(CurrentSession) && CurrentSession is { } session)
-      RestoreFromSession(session);
+    if (e.PropertyName == nameof(CurrentSession))
+    {
+      HookRestored(CurrentSession);
+      if (CurrentSession is { } session)
+        RestoreFromSession(session);
+    }
 
     bool isRotProp =
       e.PropertyName

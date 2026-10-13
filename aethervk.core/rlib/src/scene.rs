@@ -765,6 +765,24 @@ impl Component for GridComponent {}
 pub struct HiddenComponent {}
 impl Component for HiddenComponent {}
 
+/// Render layer bit every entity belongs to unless it carries a [`RenderLayerComponent`].
+pub const RENDER_LAYER_DEFAULT: u32 = 1 << 0;
+/// Drawn only by cameras in the UpZenith mode (the Earth body, its axis, labels and indicator).
+pub const RENDER_LAYER_UPZENITH_ONLY: u32 = 1 << 1;
+
+/// The render layers an entity (and its whole subtree) belongs to. A camera draws the subtree only
+/// if `layers & camera mask != 0` ([`CameraRenderMaskComponent`]). Unlike [`HiddenComponent`],
+/// which hides a subtree for every viewport, this is decided per camera, so two viewports in
+/// different camera modes can disagree.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RenderLayerComponent(pub u32);
+impl Component for RenderLayerComponent {}
+
+/// The render layers a camera draws. A camera without it draws [`RENDER_LAYER_DEFAULT`] only.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CameraRenderMaskComponent(pub u32);
+impl Component for CameraRenderMaskComponent {}
+
 /// A component that stores debug render states for BVH nodes
 #[derive(Clone, Debug)]
 pub struct BvhDebugComponent {
@@ -1662,6 +1680,8 @@ impl Scene {
     self.register_component::<SphereGizmoComponent>(&transform_type_id);
     self.register_component::<GridComponent>(&transform_type_id);
     self.register_component::<HiddenComponent>(&[]);
+    self.register_component::<RenderLayerComponent>(&[]);
+    self.register_component::<CameraRenderMaskComponent>(&[]);
 
     // TODO remove
     self.register_component::<BvhDebugComponent>(&transform_type_id);
@@ -1681,6 +1701,7 @@ impl Scene {
     );
     self.register_component::<PlanetMarkerComponent>(&transform_type_id);
     self.register_component::<BodyRotationalModel>(&transform_type_id);
+    crate::simulation_api::earth_visual::register_components(self);
 
     // ui module
     self.register_component::<ui::Transform2DComponent>(&[]);

@@ -1747,6 +1747,53 @@ fn gpu_dust_splat_matches_reference_spinning_site() {
   splat_parity(9010, &batch_of, frame, 5.0e3, 1.0e-6, true, 0.0, None, None);
 }
 
+/// The support cut (`dust_phot_support`, `dust_ray_kept`, `dust_support_mass`): the spinning
+/// site's first two hours (`gpu_dust_splat_matches_reference_spinning_site`) seen in perspective
+/// from 4 km above the nucleus (60°, looking down −z through it): the young cone is near and deep,
+/// its turned cone pieces carry support planes, and the ones a plane cuts are drawn whole by the
+/// exact ray integral over the half-space on both mirrors.
+#[test]
+fn gpu_dust_splat_matches_reference_spinning_site_perspective() {
+  let axis = [0.0f64, 0.0, 1.0];
+  let omega = 2.0 * core::f64::consts::PI / (2.0 * 3600.0);
+  let off = [2000.0f32, 0.0, 0.0];
+  let (rc, vc) = comet_state();
+  let batch_of = move |cap: u32| {
+    let mut b = test_batch(1024, 7200.0, 3, cap);
+    b.mass_params[3] = dust::batch_streams_word(4, false);
+    b.spin = [axis[0] as f32, axis[1] as f32, axis[2] as f32, omega as f32];
+    b.site_offset = [off[0], off[1], off[2], 0.0];
+    b.jet_dir_aperture = [1.0, 0.0, 0.0, 0.3];
+    b.set_comet(
+      [
+        rc[0] + off[0] as f64,
+        rc[1] + off[1] as f64,
+        rc[2] + off[2] as f64,
+      ],
+      vc,
+      T_START,
+      7200.0,
+    );
+    b
+  };
+  let t_now = T_START + 7200.0;
+  let (centre, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, 7200.0);
+  let frame = DustFrame::new(centre, t_now, [0.0, 0.0, 0.0, 1.0], 1.0e9)
+    .with_streams(4)
+    .with_spin([axis[0], axis[1], axis[2], omega]);
+  let (w, h) = (640.0f32, 400.0f32);
+  let d = 4000.0f32;
+  let tan_h = (30.0f32).to_radians().tan();
+  // camera at (0, 0, D) looking along −z (w_clip = D − z)
+  let mut mvp = [0.0f32; 16];
+  mvp[0] = h / (w * tan_h);
+  mvp[5] = 1.0 / tan_h;
+  mvp[10] = -1e-3;
+  mvp[11] = -1.0;
+  mvp[15] = d;
+  splat_parity(9016, &batch_of, frame, 5.0e3, 1.0e-6, true, 0.0, Some((mvp, [0.0, 0.0, d])), None);
+}
+
 /// Stress: a full tier (every slot emitted) propagated 40 times with the moments, as a heavy
 /// frame does; must not fault the device.
 #[test]

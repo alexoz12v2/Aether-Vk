@@ -105,6 +105,14 @@ public sealed class AssetLibraryService : IDisposable
 
   public bool IsBusyValue => _pendingOperations.Value > 0;
 
+  /// <summary>The comet appearance was set from outside the Settings tab (savefile open / New): re-read it.</summary>
+  public IObservable<CometAppearanceDto> AppearanceChanged => _appearanceChanged;
+
+  /// <param name="applied">The appearance just queued to the runtime.</param>
+  public void NotifyAppearanceChanged(CometAppearanceDto applied) => _appearanceChanged.OnNext(applied);
+
+  private readonly System.Reactive.Subjects.Subject<CometAppearanceDto> _appearanceChanged = new();
+
   public ImmutableArray<ImportedAsset> CurrentMeshes => _meshes.Value;
   public ImmutableArray<ImportedAsset> CurrentTextures => _textures.Value;
 

@@ -461,4 +461,96 @@ mod scene_dump_tests {
       "the Sun must not be zeroed on restore"
     );
   }
+
+  /// Dump format 8: a camera comes back with its aspect ratio, orthographic extents and focus
+  /// distance (v7 and earlier reset them to 16:9, ±1 and 10).
+  /// The savefile hashes the compatibility JSON, so the jets part must not depend on entity ids
+  /// or on the order the jets were created in: the same jets in any order give identical JSON,
+  /// one changed parameter (or TTL) gives a different one.
+  #[test]
+  fn test_jets_compatibility_json_is_order_and_id_free() {
+    use crate::scene::particles::v2::ParticleSystemEmitParams;
+    use crate::simulation_api::scene_dump::jets_compatibility_json;
+    let jet = |lat: f32, seed: u32| ParticleSystemEmitParams {
+      latitude_rad: lat,
+      seed,
+      ..bytemuck::Zeroable::zeroed()
+    };
+    let a = (jet(0.1, 7), 1_000_000);
+    let b = (jet(-0.4, 9), 2_000_000);
+    let c = (jet(0.1, 7), 3_000_000);
+    let one = jets_compatibility_json([a, b, c]);
+    for order in [[b, c, a], [c, a, b], [c, b, a]] {
+      assert_eq!(jets_compatibility_json(order), one);
+    }
+    assert!(!one.contains("\"id\""), "{one}");
+    assert_eq!(one.matches("ttl_us").count(), 3);
+    assert_ne!(jets_compatibility_json([a, b, (jet(0.1, 8), 3_000_000)]), one);
+    assert_ne!(jets_compatibility_json([a, b, (jet(0.1, 7), 3_000_001)]), one);
+    assert_eq!(jets_compatibility_json([]), "");
+  }
+
+  #[test]
+  fn test_camera_projection_round_trips_exactly() {
+    use crate::scene::{CameraComponent, CameraProjection};
+    use aethervk_oshal_rlib::math::{
+      quaternion::Quaternion,
+      vector::{Vector, Vector3, vec3::Vec3f32, vec3f64::Vec3f64, vec4f64::Quat64},
+    };
+    for original in [
+      CameraComponent {
+        projection: CameraProjection::Perspective { fov: 0.7, aspect_ratio: 1.25, near: 1e-6, far: 12.0 },
+        focus_distance: 42.5,
+      },
+      CameraComponent {
+        projection: CameraProjection::Orthographic {
+          left: -3.5,
+          right: 4.25,
+          bottom: -2.0,
+          top: 2.5,
+          near: -1.0,
+          far: 9.0,
+        },
+        focus_distance: 0.125,
+      },
+    ] {
+      let mut scene = make_test_scene();
+      let cam = scene.spawn_entity("cam");
+      scene
+        .add_component(
+          cam,
+          HighResTransformComponent {
+            position: Vec3f64::from_components(1.0, 2.0, 3.0),
+            rotation: Quat64::identity(),
+            scale: Vec3f32::one(),
+          },
+        )
+        .unwrap();
+      scene.add_component(cam, original).unwrap();
+      let dumped = serialize_scene(&scene);
+      // the dump survives bincode
+      let dump = SceneDump {
+        version: SceneDump::CURRENT_VERSION,
+        scene_id: 1,
+        start_epoch_parts: (0, 0),
+        end_epoch_parts: (0, 0),
+        current_epoch_parts: (0, 0),
+        compatibility: String::new(),
+        entities: dumped,
+        particle_snapshot: None,
+      };
+      let bytes = bincode::serde::encode_to_vec(&dump, bincode::config::standard()).unwrap();
+      let (back, _): (SceneDump, _) =
+        bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
+      // clobber, then restore
+      let _ = scene.with_component_mut(cam, |c: &mut CameraComponent| {
+        *c = CameraComponent::new_persp(1.0, 16.0 / 9.0, 0.1, 1.0)
+      });
+      let _ = deserialize_scene(&mut scene, &back.entities, &AssetCache::new());
+      let restored = scene.with_component(cam, |c: &CameraComponent| *c).unwrap();
+      assert_eq!(format!("{:?}", restored.projection), format!("{:?}", original.projection));
+      assert_eq!(restored.focus_distance, original.focus_distance);
+    }
+    assert_eq!(SceneDump::CURRENT_VERSION, 8);
+  }
 }

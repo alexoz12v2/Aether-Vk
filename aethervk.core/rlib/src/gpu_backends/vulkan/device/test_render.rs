@@ -207,7 +207,8 @@ fn test_render_all_archetypes_windowless() {
           model: Mat4x4f32::identity().into(),
           radius: 1.0,
           subdivisions: 12.0,
-          _pad: [0.0, 0.0],
+          style: 0.0,
+          dash_count: 0.0,
           center_clip: [0.0; 4],
         },
       )];
@@ -358,7 +359,8 @@ fn test_render_sphere_gizmo_windowless() {
           model: model.into(),
           radius: 2.0,
           subdivisions: 12.0,
-          _pad: [0.0, 0.0],
+          style: 0.0,
+          dash_count: 0.0,
         },
       )];
 

@@ -25,6 +25,7 @@ pub mod components_api;
 pub mod core_api;
 pub mod debug_perf;
 pub mod earth_observer;
+pub mod earth_visual;
 pub mod logic_thread;
 pub mod misc_api;
 pub mod render_stall_watcher;
@@ -973,6 +974,9 @@ pub mod test_lca_render;
 
 #[cfg(test)]
 pub mod test_multi_micro_render;
+
+#[cfg(test)]
+mod test_earth_render;
 
 #[cfg(test)]
 mod tests;

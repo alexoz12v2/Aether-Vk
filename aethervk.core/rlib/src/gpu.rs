@@ -278,13 +278,22 @@ pub struct GridPushConstants {
   pub _pad2: f32,
 }
 
+/// `SphereGizmoDataGpu::style`: wireframe sphere, body axes, sun axis (the comet gizmo).
+pub const SPHERE_GIZMO_STYLE_SPHERE: f32 = 0.0;
+/// `SphereGizmoDataGpu::style`: a dashed line along local Z, `±radius` (the Earth's polar axis).
+pub const SPHERE_GIZMO_STYLE_POLAR_AXIS: f32 = 1.0;
+
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct SphereGizmoDataGpu {
   pub model: [f32; 16],
   pub radius: f32,
   pub subdivisions: f32,
-  pub _pad: [f32; 2],
+  /// [`SPHERE_GIZMO_STYLE_SPHERE`] (wireframe + axes) or [`SPHERE_GIZMO_STYLE_POLAR_AXIS`] (only
+  /// the dashed local Z axis from `−radius` to `+radius`, see `earth_visual`).
+  pub style: f32,
+  /// Polar-axis style: dashes (dash + gap) along the whole axis.
+  pub dash_count: f32,
   /// Clip position of the gizmo center composed in f64 (see `ObjectData::center_clip`); all zero:
   /// computed by the shader in f32.
   pub center_clip: [f32; 4],
@@ -793,6 +802,7 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     ui_elements: &[crate::gpu::UiElementGpu],
   ) -> GpuResult<Option<crate::gpu::UiBatchCall>>;
 
+  /// Clears depth (reverse-Z: to 0) and stencil (to 0) of the current subpass's attachment.
   fn clear_depth(
     &self,
     cmd_buffer: CommandBufferHandle,

@@ -595,6 +595,27 @@ pub unsafe extern "C" fn avkSimulationContext_setCometIndicatorVisible(
   ctx_ref.set_comet_indicator_visible(scene_id, visible)
 }
 
+/// Sets the render layers `camera_entity` draws (`CameraRenderMaskComponent`): bit 0 default,
+/// bit 1 UpZenith-only content (the Earth globe, its axis, labels and indicator). Returns false when
+/// the scene is missing or the entity is not a camera.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setCameraRenderMask(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  camera_entity: u64,
+  mask: u32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_camera_render_mask(scene_id, camera_entity, mask)
+}
+
 /// Sets the native Earth observer (camera posed in every logic commit, see
 /// `simulation_api::earth_observer`): `mode` 0 Free, 1 CometLockIn, 2 CometTracking, 3 SunLockIn,
 /// 4 SunTracking (C# `EarthObserverOrientationMode`), `u32::MAX` clears it (C# poses the camera).
@@ -3025,8 +3046,110 @@ pub unsafe extern "C" fn avkSimulationContext_dumpScene(
     .try_send(LogicCommand::DumpScene {
       scene_id,
       base_dir: base_dir_str,
+      file: None,
     })
     .is_ok()
+}
+
+/// The scene dump format this engine writes and restores (`SceneDump::CURRENT_VERSION`). A
+/// savefile records it per cached state and skips states of another version.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn avkSceneDumpVersion() -> u32 {
+  aethervk_core_rlib::simulation_api::structs::SceneDump::CURRENT_VERSION
+}
+
+/// Like [`avkSimulationContext_dumpScene`], but writes exactly `file` (UTF-8 path; its directory is
+/// created): the savefile's `states/<hash>/scene.bin`. Completion: `ExternalState::SceneDumped`.
+///
+/// # Safety
+/// FFI contract: `ctx` valid; `file` a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_dumpSceneToFile(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  file: *const core::ffi::c_char,
+) -> bool {
+  if ctx.is_null() || file.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
+  let file = unsafe { core::ffi::CStr::from_ptr(file) }.to_string_lossy().into_owned();
+  ctx_ref
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(LogicCommand::DumpScene {
+      scene_id,
+      base_dir: alloc::string::String::new(),
+      file: Some(file),
+    })
+    .is_ok()
+}
+
+/// Like [`avkSimulationContext_restoreScene`], from exactly `file`. `false` when the file is
+/// unreadable, undecodable or of another dump version (the savefile then seeks instead).
+/// Completion: `ExternalState::SceneRestored` (a configuration mismatch also reports failure).
+///
+/// # Safety
+/// FFI contract: `ctx` valid; `file` a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_restoreSceneFromFile(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  file: *const core::ffi::c_char,
+) -> bool {
+  if ctx.is_null() || file.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
+  let path = unsafe { core::ffi::CStr::from_ptr(file) }.to_string_lossy().into_owned();
+  restore_scene_from_path(ctx_ref, scene_id, &path)
+}
+
+/// The engine's compatibility JSON of the scene (`scene_dump::compatibility_json`): what a saved
+/// state must match to be restored. Written NUL-terminated into `out` (truncated to `out_len`);
+/// `out_needed` receives the full byte length. `false` when the scene does not exist.
+///
+/// # Safety
+/// FFI contract: `ctx` valid; `out` valid for `out_len` bytes when non-null; `out_needed` null
+/// or writable.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getCompatibilityJson(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  out: *mut core::ffi::c_char,
+  out_len: u32,
+  out_needed: *mut u32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
+  let scenes = ctx_ref.scenes.read();
+  let Some(scene_arc) = scenes.get_scene(scene_id) else {
+    return false;
+  };
+  let Some((start, end)) = scenes.time_managers.get(&scene_id).map(|tm| (tm.start_epoch, tm.end_epoch))
+  else {
+    return false;
+  };
+  let json = aethervk_core_rlib::simulation_api::scene_dump::compatibility_json(&scene_arc.read(), start, end);
+  let bytes = json.as_bytes();
+  if !out.is_null() && out_len > 0 {
+    let n = bytes.len().min(out_len as usize - 1);
+    unsafe {
+      core::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), n);
+      *out.add(n) = 0;
+    }
+  }
+  if !out_needed.is_null() {
+    unsafe { *out_needed = bytes.len() as u32 };
+  }
+  true
 }
 
 /// Restore a scene from a previously dumped save file.
@@ -3052,6 +3175,12 @@ pub unsafe extern "C" fn avkSimulationContext_restoreScene(
   let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
   let base_dir_str = unsafe { core::ffi::CStr::from_ptr(base_dir) }.to_string_lossy();
   let path = alloc::format!("{}/scene_{}/scene.bin", base_dir_str, scene_id);
+  restore_scene_from_path(ctx_ref, scene_id, &path)
+}
+
+/// Reads and decodes the scene dump at `path` and queues its restore (shared by the restore
+/// entry points). `false` when unreadable, undecodable or of another version.
+fn restore_scene_from_path(ctx_ref: &SimulationContext, scene_id: u64, path: &str) -> bool {
 
   let bytes = match fs::read(&path) {
     Ok(b) => b,
@@ -3112,6 +3241,80 @@ pub unsafe extern "C" fn avkSimulationContext_restoreScene(
 mod tests {
   use super::*;
   use anise::time::{Duration, Epoch};
+
+  /// Savefile path through the FFI (skipped without a Vulkan device): `dumpSceneToFile` writes the
+  /// named file with the engine's version and compatibility JSON, `restoreSceneFromFile` brings
+  /// the clock back to the dumped epoch, and an undecodable file is refused up front.
+  #[test]
+  fn dump_to_file_then_restore_from_file() {
+    extern crate std;
+    let assets = alloc::format!("{}/../../assets", env!("CARGO_MANIFEST_DIR"));
+    SimulationContext::set_asset_path(&assets);
+    let Ok(ctx) = SimulationContext::startup(None) else {
+      std::println!("Skipping: no Vulkan device");
+      return;
+    };
+    {
+      let mut logic = ctx.logic_state.write();
+      for f in ["planets/pck00011.pca", "planets/gm_de431.pca", "planets/de442.bsp", "earth_latest_high_prec.bpc"] {
+        logic.almanac_data.load_almanac(alloc::format!("{assets}/{f}").as_str()).unwrap();
+      }
+    }
+    let start = Epoch::from_gregorian_utc(2025, 10, 1, 0, 0, 0, 0);
+    let mut ctx = ctx;
+    let scene_id = ctx.create_empty_scene2(true, start, start + Duration::from_days(30.0)).unwrap().scene_id;
+    let dumped_at = start + Duration::from_days(10.0);
+    assert!(ctx.seek_epoch_sync(scene_id, dumped_at));
+
+    let dir = std::env::temp_dir().join(alloc::format!("avk_ffi_dumpfile_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let file = dir.join("states").join("0123456789abcdef").join("scene.bin");
+    let c_file = std::ffi::CString::new(file.to_str().unwrap()).unwrap();
+    let ctx_ptr = alloc::boxed::Box::into_raw(ctx);
+    let clock = |ptr: *mut SimulationContext| unsafe {
+      (*ptr).scenes.read().time_managers.get(&scene_id).unwrap().current_epoch()
+    };
+    unsafe {
+      assert_eq!(avkSceneDumpVersion(), aethervk_core_rlib::simulation_api::structs::SceneDump::CURRENT_VERSION);
+      assert!(avkSimulationContext_dumpSceneToFile(ctx_ptr, scene_id, c_file.as_ptr()));
+      let t0 = std::time::Instant::now();
+      while !file.exists() {
+        assert!(t0.elapsed().as_secs() < 10, "dump not written");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+      }
+      std::thread::sleep(std::time::Duration::from_millis(100));
+      let (dump, _): (aethervk_core_rlib::simulation_api::structs::SceneDump, usize) =
+        bincode::serde::decode_from_slice(&std::fs::read(&file).unwrap(), bincode::config::standard()).unwrap();
+      assert_eq!(dump.version, avkSceneDumpVersion());
+      // the live configuration's JSON is the dumped one (what the savefile hashes)
+      let mut needed = 0u32;
+      assert!(avkSimulationContext_getCompatibilityJson(ctx_ptr, scene_id, core::ptr::null_mut(), 0, &mut needed));
+      let mut buf = alloc::vec![0 as core::ffi::c_char; needed as usize + 1];
+      assert!(avkSimulationContext_getCompatibilityJson(ctx_ptr, scene_id, buf.as_mut_ptr(), buf.len() as u32, &mut needed));
+      let live = core::ffi::CStr::from_ptr(buf.as_ptr()).to_str().unwrap();
+      assert_eq!(live, dump.compatibility);
+
+      // move away, restore from the file: back to the dumped epoch
+      let moved = start + Duration::from_days(3.0);
+      assert!((*ctx_ptr).seek_epoch_sync(scene_id, moved));
+      assert!(avkSimulationContext_restoreSceneFromFile(ctx_ptr, scene_id, c_file.as_ptr()));
+      let t0 = std::time::Instant::now();
+      while (clock(ctx_ptr) - dumped_at).to_seconds().abs() > 1e-3 {
+        assert!(t0.elapsed().as_secs() < 10, "restore did not return to the dumped epoch");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+      }
+
+      // garbage and missing files are refused before anything is queued
+      let junk = dir.join("junk.bin");
+      std::fs::write(&junk, b"not a dump").unwrap();
+      let c_junk = std::ffi::CString::new(junk.to_str().unwrap()).unwrap();
+      assert!(!avkSimulationContext_restoreSceneFromFile(ctx_ptr, scene_id, c_junk.as_ptr()));
+      let c_missing = std::ffi::CString::new(dir.join("missing.bin").to_str().unwrap()).unwrap();
+      assert!(!avkSimulationContext_restoreSceneFromFile(ctx_ptr, scene_id, c_missing.as_ptr()));
+      drop(alloc::boxed::Box::from_raw(ctx_ptr));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+  }
 
   #[test]
   fn test_epoch_from_tdb_duration_is_j2000() {

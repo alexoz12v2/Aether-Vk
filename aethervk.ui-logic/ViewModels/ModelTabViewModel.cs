@@ -152,12 +152,8 @@ public partial class ModelTabViewModel
         }
         else
         {
-          bool isFirst = true;
-          foreach (var jet in session.Jets)
-          {
-            AddJetNatively(jet, session, isFirst);
-            isFirst = false;
-          }
+          // idempotent: a savefile open may have created them already
+          JetNativeSync.EnsureNative(_runtimeService, session, EffectiveNucleusRadiusKm);
         }
       })
       .AddDisposableTo(_disposables);
@@ -224,6 +220,8 @@ public partial class ModelTabViewModel
   /// </summary>
   partial void OnManualNucleusRadiusKmChanged(float value)
   {
+    if (CurrentSession is { } s)
+      s.ManualNucleusRadiusKm = value;
     OnPropertyChanged(nameof(ManualNucleusRadiusKmNullable));
     OnPropertyChanged(nameof(IsNucleusRadiusUnknown));
     // Publish to the debounced subject — the subscription in the constructor
@@ -309,6 +307,7 @@ public partial class ModelTabViewModel
     }
 
     // Subscribe to this jet's property changes to push updates to native
+    _subscribedJets.Add(jet);
     SubscribeJetChanges(jet, session);
   }
 
@@ -349,27 +348,9 @@ public partial class ModelTabViewModel
 
   // ── Helpers ─────────────────────────────────────────────────────────────────────
 
-  private static ParticleSystemModel BuildModel(ModelSession s) => new(
-    DiametreUm:          s.DiametreUm,
-    DensityGCm3:         s.DensityGCm3,
-    ScatteringEfficiency: s.ScatteringEfficiency,
-    GeometricAlbedo:     s.GeometricAlbedo,
-    SizeQ:               s.SizeQ,
-    SizeRange:           s.SizeRange,
-    Afrho0Cm:            s.Afrho0Cm,
-    AfrhoPower:          s.AfrhoPower,
-    AfrhoCutoffAu:       s.AfrhoCutoffAu,
-    AfrhoMaxValueCm:     s.AfrhoMaxValueCm);
+  private static ParticleSystemModel BuildModel(ModelSession s) => JetNativeSync.BuildModel(s);
 
-  private ParticleSystemJet BuildJet(JetViewModel j) => new(
-    LatitudeRad:         j.LatitudeRad,
-    LongitudeRad:        j.LongitudeRad,
-    ApertureRad:         j.ApertureRad,
-    StartVelocityMean:   j.StartVelocityMeanMs,
-    StartVelocityStd:    j.StartVelocityStdMs,
-    StreamColor:         j.StreamColor,
-    NucleusRadiusKm:     EffectiveNucleusRadiusKm,
-    Seed:                j.Seed);
+  private ParticleSystemJet BuildJet(JetViewModel j) => JetNativeSync.BuildJet(j, EffectiveNucleusRadiusKm);
 
   /// <summary>
   /// Subscribes to <paramref name="session"/>'s <see cref="System.ComponentModel.INotifyPropertyChanged"/>
@@ -378,8 +359,55 @@ public partial class ModelTabViewModel
   /// The subscription is stored in <see cref="_modelChangeSub"/> which disposes the previous
   /// subscription automatically when this is called again on a session switch.
   /// </summary>
+  // jets whose property changes are forwarded natively (each subscribed once)
+  private readonly System.Collections.Generic.HashSet<JetViewModel> _subscribedJets = new();
+  private ModelSession? _restoredHooked;
+
+  /// <summary>Forwards edits of every session jet not yet subscribed (restored jets, a reopened tab).</summary>
+  private void EnsureJetSubscriptions(ModelSession session)
+  {
+    // the base constructor wires the session before this class's services exist: the
+    // constructor wires it again once they do
+    if (_schedulerProvider is null || _dispatcher is null)
+      return;
+    for (int i = 0; i < session.Jets.Count; i++)
+    {
+      var jet = session.Jets[i];
+      jet.DisplayIndex = i + 1;
+      if (_subscribedJets.Add(jet))
+        SubscribeJetChanges(jet, session);
+    }
+  }
+
+  public override void Dispose()
+  {
+    if (_restoredHooked is not null)
+      _restoredHooked.Restored -= OnSessionRestored;
+    _restoredHooked = null;
+    _disposables.Dispose();
+    base.Dispose();
+  }
+
+  private void OnSessionRestored()
+  {
+    _dispatcher.Dispatch(() =>
+    {
+      if (CurrentSession is { } s)
+        WireModelSessionChanges(s);
+    });
+  }
+
   private void WireModelSessionChanges(ModelSession session)
   {
+    if (!ReferenceEquals(_restoredHooked, session))
+    {
+      if (_restoredHooked is not null)
+        _restoredHooked.Restored -= OnSessionRestored;
+      session.Restored += OnSessionRestored;
+      _restoredHooked = session;
+    }
+    ManualNucleusRadiusKm = session.ManualNucleusRadiusKm;
+    EnsureJetSubscriptions(session);
     // tabs are scoped: a reopened tab gets a new VM over the same session (native still has it on)
     ShowReferencePositionError = session.ShowReferencePositionError;
     DustSoftening = session.DustSoftening;

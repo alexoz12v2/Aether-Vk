@@ -165,8 +165,11 @@ pub const DUST_SPECKS_START_M: f32 = 1.0;
 /// the shell radius is capped here (m): beyond it, the dust is the continuum's whatever `n_eye`
 pub const DUST_SPECKS_DMAX_MAX: f32 = 1.0e5;
 /// the walk's stack: a depth-first path of `DUST_SPECKS_MAX_LEVEL + 2` nodes plus the jump
-/// start's up to 8 start nodes
-pub const DUST_SPECKS_STACK: usize = (DUST_SPECKS_MAX_LEVEL + 2) as usize + 8;
+/// start's up to `DUST_SPECKS_JUMP_STARTS` start nodes
+pub const DUST_SPECKS_STACK: usize = (DUST_SPECKS_MAX_LEVEL + 2) as usize + DUST_SPECKS_JUMP_STARTS;
+/// the jump start's largest number of start cells (it goes deeper while the cells meeting the
+/// shell's box stay within this)
+pub const DUST_SPECKS_JUMP_STARTS: usize = 16;
 /// the jump start's widening of its probability box (above the quantiles' round trip
 /// `|F(Q(w)) − w| ≤ 8·10⁻⁶`, [`zeta_cdf`])
 pub const DUST_SPECKS_JUMP_W_TOL: f32 = 2.0e-5;
@@ -1477,6 +1480,19 @@ impl SpeckCluster {
       if sigma_lo * sqrtf(q) > d_max {
         return false;
       }
+      // the exact per-axis bound of the ball's preimage `y_eye + M⁻¹·ball`: coordinate k within
+      // `d_max·‖row_k(M⁻¹)‖` of `y_eye` (widened 10⁻⁴ for the f32 inverse; the start box's own
+      // bound) — tight for needle-shaped leaves, where the two bounds above are loose and the walk
+      // descended cells no speck of the shell can be in
+      for k in 0..3 {
+        let r = [self.minv[3 * k], self.minv[3 * k + 1], self.minv[3 * k + 2]];
+        let h0 = d_max * norm3(r);
+        let hk = h0 + 1.0e-4 * (fabs(y_eye[k]) + h0);
+        let o = fabs(y_eye[k] - mid[k]) - half[k] - 8.0 * f32::EPSILON * (fabs(y_eye[k]) + fabs(mid[k]));
+        if o > hk {
+          return false;
+        }
+      }
     }
     if let Some(f) = fwd
       && dot3(d, f) + r < 0.0
@@ -1490,9 +1506,9 @@ impl SpeckCluster {
   /// the ellipsoid `y_eye + M⁻¹·ball` in coordinate space, whose box is `y_eye ± d_max·‖row_k(M⁻¹)‖`
   /// (widened by [`DUST_SPECKS_XI_TOL`] and a relative 10⁻⁴ for the f32 inverse), and through
   /// the coordinates' CDFs (`Φ`, [`zeta_cdf`]; widened by [`DUST_SPECKS_JUMP_W_TOL`], above their
-  /// quantiles' round-trip error) to a box `B` of the probability cube. At the deepest level
-  /// whose cells are at least `B`'s width on every axis, at most 2 cells per axis meet `B`;
-  /// each is reached by its path from the root (`split_node` along its bits: the same counts and
+  /// quantiles' round-trip error) to a box `B` of the probability cube. From the deepest level
+  /// whose cells are at least `B`'s width on every axis (≤ 2 cells per axis meet `B`), deeper
+  /// while at most [`DUST_SPECKS_JUMP_STARTS`] cells meet it; each is reached by its path from the root (`split_node` along its bits: the same counts and
   /// hashes the full walk computes, no bound test, no sibling), stopping early at an empty node
   /// or a leaf (duplicates of such an ancestor merged). Every grain within the ball lies in a
   /// cell meeting `B`, so the walk from these nodes finds exactly the specks of the walk from the
@@ -1500,8 +1516,13 @@ impl SpeckCluster {
   /// ~2·log₂N ≈ 80–300 visits even holding ≪ 1 grain near the eye: 10⁸ visits a frame inside
   /// the coma). Without a usable `M⁻¹` (`sigma_lo = 0`), the root. Mirror of
   /// `dust_specks_start_nodes`.
-  fn start_nodes(&self, y_eye: [f32; 3], sigma_lo: f32, d_max: f32) -> ([Node; 8], usize) {
-    let mut out = [Node::default(); 8];
+  fn start_nodes(
+    &self,
+    y_eye: [f32; 3],
+    sigma_lo: f32,
+    d_max: f32,
+  ) -> ([Node; DUST_SPECKS_JUMP_STARTS], usize) {
+    let mut out = [Node::default(); DUST_SPECKS_JUMP_STARTS];
     let root = Node {
       level: 0,
       lo: [0; 3],
@@ -1531,8 +1552,25 @@ impl SpeckCluster {
       b_lo[k] = (cdf(y - h) - DUST_SPECKS_JUMP_W_TOL).clamp(0.0, 1.0);
       b_hi[k] = (cdf(y + h) + DUST_SPECKS_JUMP_W_TOL).clamp(0.0, 1.0);
     }
-    // the deepest level whose cells are as wide as the box on every axis: dim k has m_k(L) =
-    // (L + 2 − k) / 3 splits at level L, so m_k ≤ M_k (cells of 2^−M_k ≥ the box) ⟺ L ≤ 3 M_k + k
+    // the start level: from the deepest whose cells are as wide as the box on every axis (dim k
+    // has m_k(L) = (L + 2 − k) / 3 splits at level L, so m_k ≤ M_k ⟺ L ≤ 3 M_k + k: ≤ 2 cells per
+    // axis), deeper while at most DUST_SPECKS_JUMP_STARTS cells meet the box — a box narrow on
+    // one axis and wide on another needs the narrow axes split further, or the walk descends
+    // them node by node (50 visits a bin at a 100 m shell)
+    let cells_at = |level: u32| -> ([u32; 3], [u32; 3]) {
+      let mut lo_i = [0u32; 3];
+      let mut n_i = [1u32; 3];
+      for k in 0..3 {
+        let m = ((level + 2 - k as u32) / 3).min(31);
+        let cells = 1u32 << m;
+        let scale = cells as f32;
+        let a = ((b_lo[k] * scale) as u32).min(cells - 1);
+        let b = ((b_hi[k] * scale) as u32).min(cells - 1);
+        lo_i[k] = a;
+        n_i[k] = b - a + 1;
+      }
+      (lo_i, n_i)
+    };
     let mut level = DUST_SPECKS_MAX_LEVEL;
     for k in 0..3 {
       let w = b_hi[k] - b_lo[k];
@@ -1542,18 +1580,14 @@ impl SpeckCluster {
       }
       level = level.min(3 * m + k as u32);
     }
-    // the cells of that level meeting the box: ≤ 2 per axis
-    let mut lo_i = [0u32; 3];
-    let mut n_i = [1u32; 3];
-    for k in 0..3 {
-      let m = (level + 2 - k as u32) / 3;
-      let cells = 1u32 << m;
-      let scale = cells as f32;
-      let a = ((b_lo[k] * scale) as u32).min(cells - 1);
-      let b = ((b_hi[k] * scale) as u32).min(cells - 1);
-      lo_i[k] = a;
-      n_i[k] = (b - a + 1).min(2);
+    while level < DUST_SPECKS_MAX_LEVEL && 3 * DUST_SPECKS_JUMP_MAX_SPLITS > level {
+      let (_, n_i) = cells_at(level + 1);
+      if n_i[0] * n_i[1] * n_i[2] > DUST_SPECKS_JUMP_STARTS as u32 {
+        break;
+      }
+      level += 1;
     }
+    let (lo_i, n_i) = cells_at(level);
     let mut n = 0usize;
     for c in 0..(n_i[0] * n_i[1] * n_i[2]) {
       let idx = [lo_i[0] + c % n_i[0], lo_i[1] + (c / n_i[0]) % n_i[1], lo_i[2] + c / (n_i[0] * n_i[1])];
@@ -1660,6 +1694,7 @@ impl SpeckCluster {
     // the jump start: the ≤ 8 nodes whose cells meet the ball's box, reached by their path
     // (`start_nodes`), pushed in reverse so the first is visited first
     let (starts, n_starts) = self.start_nodes(y_eye, if jump { sigma_lo } else { 0.0 }, d_max);
+    st.starts = n_starts as u32;
     let mut sp = 0usize;
     for k in (0..n_starts).rev() {
       stack[sp] = starts[k];
@@ -1837,6 +1872,8 @@ pub struct Speck {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct EnumStats {
   pub nodes: u32,
+  /// the jump start's start nodes ([`SpeckCluster::start_nodes`])
+  pub starts: u32,
   pub specks: u32,
   /// the node cap was hit
   pub truncated: bool,

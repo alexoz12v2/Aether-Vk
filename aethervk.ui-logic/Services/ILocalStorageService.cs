@@ -14,9 +14,8 @@ public interface ILocalStorageService : IDisposable
   string GetSessionPath(string relativePath);
 
   /// <summary>
-  /// Returns the absolute path for a file in the OS "Downloads" directory
-  /// (e.g. <c>~/Downloads/{fileName}</c> on Linux/macOS).
-  /// Creates the directory if it doesn't exist.
+  /// Returns the absolute path for a downloaded file (SPK kernels): <c>&lt;session&gt;/spk/{fileName}</c>,
+  /// removed with the session (saves copy what they need).
   /// </summary>
   string GetDownloadsPath(string fileName);
 
