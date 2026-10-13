@@ -28,6 +28,14 @@ namespace AetherVk.Logic.Services;
 /// <seealso cref="CometPositionTrackerService" />
 /// <seealso cref="TimelineService" />
 /// <seealso cref="ImportedModelsTrackerService" />
+/// <summary>The inputs of a successful <see cref="CometConfigService.CommitCometAsync"/>.</summary>
+public sealed record CommittedCometInputs(
+  string SpkFilePath,
+  int NaifId,
+  TimeRange Range,
+  Models.SmallBodyDataComponent SmallBody,
+  Models.ReferenceOrbitMode ReferenceMode);
+
 public sealed class CometConfigService : IDisposable
 {
   private readonly INativeRuntimeService _runtimeService;
@@ -60,6 +68,12 @@ public sealed class CometConfigService : IDisposable
   // Last committed values (used for decommit)
   private int _lastCommittedSpkId;
   private string? _lastCommittedFilePath;
+
+  /// <summary>
+  /// What the current comet was committed with (null when none): exactly the inputs
+  /// <see cref="CommitCometAsync"/> needs to commit it again (a savefile records them).
+  /// </summary>
+  public CommittedCometInputs? CommittedInputs { get; private set; }
 
   // ── Listener token ────────────────────────────────────────────────────────
 
@@ -209,6 +223,7 @@ public sealed class CometConfigService : IDisposable
 
     _lastCommittedSpkId = 0;
     _lastCommittedFilePath = null;
+    CommittedInputs = null;
     _isCommittedSubject.OnNext(false);
     _committedSpkIdSubject.OnNext(null);
 
@@ -291,6 +306,8 @@ public sealed class CometConfigService : IDisposable
     {
       _lastCommittedSpkId = PendingSpkId;
       _lastCommittedFilePath = PendingFilePath;
+      if (Volatile.Read(ref _pendingState) is { FilePath: { } path, ProposedRange: { } range, SbData: { } sb } st)
+        CommittedInputs = new CommittedCometInputs(path, st.SpkId, range, sb, st.ReferenceMode);
       _isCommittedSubject.OnNext(true);
       _committedSpkIdSubject.OnNext(PendingSpkId);
       pending.TrySetResult(true);

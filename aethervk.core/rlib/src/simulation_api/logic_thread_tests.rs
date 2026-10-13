@@ -1271,6 +1271,7 @@ fn test_dump_restore_returns_to_dumped_epoch_and_checks_compatibility() {
     .try_send(LogicCommand::DumpScene {
       scene_id,
       base_dir: dir.to_str().unwrap().to_string(),
+      file: None,
     })
     .unwrap();
   let file = dir.join(format!("scene_{scene_id}")).join("scene.bin");

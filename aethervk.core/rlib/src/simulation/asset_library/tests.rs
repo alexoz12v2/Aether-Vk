@@ -1235,3 +1235,150 @@ fn removing_a_texture_unbundles_it_and_forgets_its_aliases() {
 
   assert!(matches!(lib.remove(tex), Err(AssetError::UnknownAsset)));
 }
+
+// ── desktop billboards: RGBA8 texel export (plan B-1, B-2) ────────────────────────────────────
+
+/// Inserts a raw texture of `format` (`bpp` bytes per texel) with texel `i` = `f(i)`.
+fn raw_texture(lib: &mut AssetLibrary, tag: &str, format: TexelFormat, w: u32, h: u32, bpp: usize) -> AssetId {
+  let data: Vec<u8> = (0..(w * h) as usize * bpp).map(|i| (i * 37 % 251) as u8).collect();
+  let tex = Texture {
+    data: bytes::Bytes::from(data),
+    format,
+    width: w,
+    height: h,
+    has_mipmaps: false,
+  };
+  lib
+    .insert_texture(tex, format!("raw:{tag}"), tag.into(), String::new(), None)
+    .unwrap()
+    .0
+}
+
+#[test]
+fn rgba8_export_expands_every_uncompressed_format() {
+  let scratch = Scratch::new("texels");
+  let mut lib = scratch.library();
+  let (w, h) = (5u32, 3u32);
+  let src = |i: usize| (i * 37 % 251) as u8;
+  for (format, bpp) in [
+    (TexelFormat::R8_UNORM, 1usize),
+    (TexelFormat::R8G8_UNORM, 2),
+    (TexelFormat::R8G8B8_UNORM, 3),
+    (TexelFormat::R8G8B8A8_UNORM, 4),
+  ] {
+    let id = raw_texture(&mut lib, &format!("{format:?}"), format, w, h, bpp);
+    assert_eq!(lib.copy_texture_rgba8(id, None), Ok((w, h)), "{format:?} sizing");
+    let mut out = vec![0u8; (w * h * 4) as usize];
+    assert_eq!(lib.copy_texture_rgba8(id, Some(&mut out)), Ok((w, h)));
+    for t in 0..(w * h) as usize {
+      let s = |c: usize| src(t * bpp + c);
+      let want = match bpp {
+        1 => [s(0), s(0), s(0), 255],
+        2 => [s(0), s(0), s(0), s(1)],
+        3 => [s(0), s(1), s(2), 255],
+        _ => [s(0), s(1), s(2), s(3)],
+      };
+      assert_eq!(out[t * 4..t * 4 + 4], want, "{format:?} texel {t}");
+    }
+    assert!(lib.assets().iter().any(|a| a.id == id && a.displayable), "{format:?} is displayable");
+  }
+}
+
+#[test]
+fn rgba8_export_of_a_decoded_png_equals_the_decoder_output() {
+  let scratch = Scratch::new("texels_png");
+  let mut lib = scratch.library();
+  let path = scratch.path("grad.png");
+  write_png(&path, 7, 4, |x, y| [x as u8 * 30, y as u8 * 60, 200, 255 - x as u8]);
+  let id = lib.import_file(path.to_str().unwrap()).unwrap().textures[0];
+  let decoded = crate::simulation::comet::load_texture_from_file(path.to_str().unwrap()).unwrap();
+  assert_eq!(decoded.format, TexelFormat::R8G8B8A8_UNORM);
+  let mut out = vec![0u8; 7 * 4 * 4];
+  assert_eq!(lib.copy_texture_rgba8(id, Some(&mut out)), Ok((7, 4)));
+  assert_eq!(&out[..], &decoded.data[..]);
+}
+
+#[test]
+fn rgba8_export_refuses_compressed_unknown_and_short_buffers() {
+  let scratch = Scratch::new("texels_err");
+  let mut lib = scratch.library();
+  // one BC7 4×4 block = 16 bytes
+  let tex = Texture {
+    data: bytes::Bytes::from(vec![0u8; 16]),
+    format: TexelFormat::BC7_UNORM_BLOCK,
+    width: 4,
+    height: 4,
+    has_mipmaps: false,
+  };
+  let bc7 = lib.insert_texture(tex, "raw:bc7".into(), "bc7".into(), String::new(), None).unwrap().0;
+  assert_eq!(lib.copy_texture_rgba8(bc7, None), Err(TexelsError::Compressed));
+  assert!(lib.assets().iter().any(|a| a.id == bc7 && !a.displayable));
+  assert_eq!(lib.copy_texture_rgba8(9_999, None), Err(TexelsError::UnknownAsset));
+  let rgb = raw_texture(&mut lib, "short", TexelFormat::R8G8B8_UNORM, 4, 4, 3);
+  let mut short = vec![7u8; 4 * 4 * 4 - 1];
+  assert_eq!(lib.copy_texture_rgba8(rgb, Some(&mut short)), Err(TexelsError::BufferTooSmall));
+  assert!(short.iter().all(|&b| b == 7), "nothing written on refusal");
+  // meshes are never displayable
+  let obj = scratch.path("tetra.obj");
+  std::fs::write(&obj, TETRA_OBJ).unwrap();
+  let mesh = lib.import_file(obj.to_str().unwrap()).unwrap().mesh.unwrap();
+  assert!(lib.assets().iter().any(|a| a.id == mesh && !a.displayable));
+  assert_eq!(lib.copy_texture_rgba8(mesh, None), Err(TexelsError::UnknownAsset));
+}
+
+// ── savefile: asset source export ─────────────────────────────────────────────────────────────
+
+#[test]
+fn export_copies_standalone_sources_verbatim_and_reuses_them() {
+  let s = Scratch::new("export_png");
+  let mut lib = s.library();
+  let png = s.path("tail image.png");
+  write_png(&png, 6, 3, |x, y| [x as u8 * 40, y as u8 * 80, 7, 255]);
+  let id = lib.import_file(png.to_str().unwrap()).unwrap().textures[0];
+  let dest = s.path("save/assets/textures");
+  let out = lib.export_asset(id, dest.to_str().unwrap()).unwrap();
+  let hash = lib.content_hash_of(id).unwrap();
+  assert_eq!(out.content_hash, hash);
+  assert_eq!(out.file_name, format!("{hash:016x}_tail_image.png"));
+  assert!(!out.reused);
+  let written = std::fs::read(dest.join(&out.file_name)).unwrap();
+  assert_eq!(written, std::fs::read(&png).unwrap(), "byte-identical copy");
+  // second export: the complete file is reused
+  assert!(lib.export_asset(id, dest.to_str().unwrap()).unwrap().reused);
+  // a truncated leftover (interrupted save) is rewritten
+  std::fs::write(dest.join(&out.file_name), &written[..10]).unwrap();
+  assert!(!lib.export_asset(id, dest.to_str().unwrap()).unwrap().reused);
+  assert_eq!(std::fs::read(dest.join(&out.file_name)).unwrap(), written);
+  // re-importing the exported file dedups to the same content
+  let again = lib.import_file(dest.join(&out.file_name).to_str().unwrap()).unwrap();
+  assert_eq!(lib.content_hash_of(again.textures[0]), Some(hash));
+  assert!(matches!(lib.export_asset(9_999, dest.to_str().unwrap()), Err(AssetError::UnknownAsset)));
+}
+
+#[test]
+fn export_extracts_images_embedded_in_glb() {
+  let s = Scratch::new("export_glb");
+  let mut lib = s.library();
+  let embedded_png = png_bytes(4, 4, red);
+  let glb = s.path("tetra.glb");
+  std::fs::write(&glb, tetra_glb(Some("surface_color"), &embedded_png)).unwrap();
+  let out = lib.import_file(glb.to_str().unwrap()).unwrap();
+  let (mesh, tex) = (out.mesh.unwrap(), out.textures[0]);
+  let dir = s.path("save/assets");
+  let t = lib.export_asset(tex, dir.join("textures").to_str().unwrap()).unwrap();
+  assert!(t.file_name.ends_with("_surface_color.png"));
+  assert_eq!(std::fs::read(dir.join("textures").join(&t.file_name)).unwrap(), embedded_png,
+    "the buffer view's bytes, not a re-encoding");
+  let m = lib.export_asset(mesh, dir.join("meshes").to_str().unwrap()).unwrap();
+  assert!(m.file_name.ends_with("_tetra.glb"));
+  assert_eq!(std::fs::read(dir.join("meshes").join(&m.file_name)).unwrap(), std::fs::read(&glb).unwrap());
+  // a fresh library importing both exports gets the same content back (the extracted texture
+  // dedups with the copy embedded in the exported mesh)
+  let s2 = Scratch::new("export_glb_reload");
+  let mut lib2 = s2.library();
+  let m2 = lib2.import_file(dir.join("meshes").join(&m.file_name).to_str().unwrap()).unwrap();
+  let t2 = lib2.import_file(dir.join("textures").join(&t.file_name).to_str().unwrap()).unwrap();
+  assert_eq!(lib2.content_hash_of(m2.mesh.unwrap()), lib.content_hash_of(mesh));
+  assert_eq!(lib2.content_hash_of(t2.textures[0]), lib.content_hash_of(tex));
+  assert_eq!(t2.textures[0], m2.textures[0], "deduplicated by content");
+}

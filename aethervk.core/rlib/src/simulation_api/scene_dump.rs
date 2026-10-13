@@ -75,6 +75,16 @@ pub fn serialize_scene(scene: &Scene) -> alloc::vec::Vec<SerializedEntity> {
     {
       continue;
     }
+    // Same for the Earth globe / axis / labels (`earth_visual`): respawned with every scene.
+    if scene
+      .with_component(
+        entity,
+        |_: &crate::simulation_api::earth_visual::EarthVisualComponent| (),
+      )
+      .is_some()
+    {
+      continue;
+    }
     let mut components = alloc::vec::Vec::new();
 
     scene.with_component(entity, |t: &HighResTransformComponent| {
@@ -252,17 +262,35 @@ fn tr_to_serial(t: &TransformComponent) -> SerializedTransform {
 
 fn cam_to_serial(c: &CameraComponent) -> SerializedCamera {
   match &c.projection {
-    CameraProjection::Perspective { fov, near, far, .. } => SerializedCamera {
+    CameraProjection::Perspective {
+      fov,
+      aspect_ratio,
+      near,
+      far,
+    } => SerializedCamera {
       fov_y_rad: *fov,
       near: *near,
       far: *far,
       is_perspective: true,
+      aspect_ratio: *aspect_ratio,
+      ortho_extents: [0.0; 4],
+      focus_distance: c.focus_distance,
     },
-    CameraProjection::Orthographic { near, far, .. } => SerializedCamera {
+    CameraProjection::Orthographic {
+      left,
+      right,
+      bottom,
+      top,
+      near,
+      far,
+    } => SerializedCamera {
       fov_y_rad: 0.0,
       near: *near,
       far: *far,
       is_perspective: false,
+      aspect_ratio: 0.0,
+      ortho_extents: [*left, *right, *bottom, *top],
+      focus_distance: c.focus_distance,
     },
   }
 }
@@ -335,17 +363,17 @@ pub fn deserialize_scene(
           let projection = if sc.is_perspective {
             CameraProjection::Perspective {
               fov: sc.fov_y_rad,
-              // aspect_ratio is determined by the window at runtime; restore a safe default
-              aspect_ratio: 16.0 / 9.0,
+              aspect_ratio: sc.aspect_ratio,
               near: sc.near,
               far: sc.far,
             }
           } else {
+            let [left, right, bottom, top] = sc.ortho_extents;
             CameraProjection::Orthographic {
-              left: -1.0,
-              right: 1.0,
-              bottom: -1.0,
-              top: 1.0,
+              left,
+              right,
+              bottom,
+              top,
               near: sc.near,
               far: sc.far,
             }
@@ -354,7 +382,7 @@ pub fn deserialize_scene(
             entity,
             CameraComponent {
               projection,
-              focus_distance: 10.0,
+              focus_distance: sc.focus_distance,
             },
           );
         }
@@ -524,8 +552,9 @@ pub(crate) fn serial_to_texture(st: &SerializedTexture) -> Texture {
 /// Compatibility "hash" of a scene: a deterministic JSON object of everything that shapes the
 /// simulation, so a dump is only restored into a scene configured the same way (and, later, so a
 /// cached state can be looked up by configuration). Floats use Rust's shortest round-trip
-/// formatting; jets are ordered by entity id. Drawing options (stream colour, labels, camera) are
-/// not part of it.
+/// formatting. Jets are listed without their entity ids, ordered by their parameters and TTL: ids
+/// differ between runs of the application, so a saved state must match a scene rebuilt from the
+/// same settings. Drawing options (stream colour, labels, camera) are not part of it.
 pub fn compatibility_json(
   scene_ctx: &crate::simulation_api::structs::SceneContext,
   start: hifitime::Epoch,
@@ -575,24 +604,30 @@ pub fn compatibility_json(
     .replace("NaN", "null")
   });
   let mut jets = alloc::vec::Vec::new();
-  scene.query1(|id, ps: &ParticleSystemComponent| {
-    jets.push((id.as_ffi(), format!("{:?}", ps.emission_params), ps.ttl_us));
+  scene.query1(|_id, ps: &ParticleSystemComponent| {
+    jets.push((ps.emission_params, ps.ttl_us));
   });
-  jets.sort_by_key(|j| j.0);
-  let jets: alloc::vec::Vec<String> = jets
-    .into_iter()
-    .map(|(id, p, ttl)| {
-      format!(
-        "{{\"id\":{id},\"ttl_us\":{ttl},\"params\":\"{}\"}}",
-        p.replace('"', "'")
-      )
-    })
-    .collect();
+  let jets = jets_compatibility_json(jets);
   format!(
     "{{\"version\":{},\"start\":[{sc},{sn}],\"end\":[{ec},{en}],\"comet_naif\":{naif},\"nucleus_radius_km\":{radius},\"rotation\":{rotation},\"reference_elements\":{elements},\"dust_tiers\":{},\"jets\":[{}]}}",
     crate::simulation_api::structs::SceneDump::CURRENT_VERSION,
     // the age tiers decide which dust history a restore reproduces
     crate::scene::dust::dust_tier_count(),
-    jets.join(",")
+    jets
   )
+}
+
+/// The `jets` entries of [`compatibility_json`]: each jet's emission parameters and TTL, sorted,
+/// **without entity ids** (they differ between runs, and the savefile hashes this JSON).
+pub fn jets_compatibility_json(
+  jets: impl IntoIterator<Item = (crate::scene::particles::v2::ParticleSystemEmitParams, aethervk_oshal_rlib::os::time::timeus_t)>,
+) -> alloc::string::String {
+  use alloc::{format, string::String, vec::Vec};
+  let mut jets: Vec<(String, _)> = jets.into_iter().map(|(p, ttl)| (format!("{p:?}"), ttl)).collect();
+  jets.sort();
+  let jets: Vec<String> = jets
+    .into_iter()
+    .map(|(p, ttl)| format!("{{\"ttl_us\":{ttl},\"params\":\"{}\"}}", p.replace('"', "'")))
+    .collect();
+  jets.join(",")
 }

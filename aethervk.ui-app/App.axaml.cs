@@ -125,8 +125,11 @@ public partial class App : Application
               ServiceProviderServiceExtensions.GetRequiredService<Logic.Input.InputRegistry>(
                 Host!.Services
               );
-            // TODO LOAD INPUT BINDIINGS INTO INPUT REGISTRY
-            // Configure the singleton before instantiating main window view model
+            // preferences.json: the user's bindings replace the defaults, the theme is restored
+            // (before the main window view model reads either)
+            var preferences = ServiceProviderServiceExtensions.GetRequiredService<PreferencesService>(Host!.Services);
+            preferences.Load();
+            _ = inputRegistry;
 
             var mainWindowViewModel =
               ServiceProviderServiceExtensions.GetRequiredService<MainWindowViewModel>(
@@ -161,6 +164,19 @@ public partial class App : Application
                   };
                 }
               }
+            };
+
+            mainWindowViewModel.CurrentTheme = preferences.Theme;
+            Current!.RequestedThemeVariant = preferences.Theme switch
+            {
+              AppTheme.Light => ThemeVariant.Light,
+              AppTheme.Dark => ThemeVariant.Dark,
+              _ => ThemeVariant.Default,
+            };
+            mainWindowViewModel.PropertyChanged += (_, a) =>
+            {
+              if (a.PropertyName == nameof(MainWindowViewModel.CurrentTheme))
+                preferences.SetTheme(mainWindowViewModel.CurrentTheme);
             };
 
             desktop.MainWindow = mainWindow;
@@ -263,6 +279,14 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool SetJetPreviewVisibility(ulong psId, bool visibility) => true;
 
   public bool SetCometIndicatorVisible(bool visible) => true;
+  public bool SetCameraRenderMask(ulong cameraEntityId, uint mask) => true;
+  public Logic.Models.AssetThumbnail? CopyAssetTexels(ulong assetId) => null;
+  public bool DumpSceneToFile(string file) => true;
+  public bool RestoreSceneFromFile(string file) => true;
+  public string? GetCompatibilityJson() => "{}";
+  public Logic.Models.ExportedAssetFile? ExportAsset(ulong assetId, string destDir) => null;
+  public ulong? GetAssetContentHash(ulong assetId) => null;
+  public uint SceneDumpVersion => 0;
   public double DustComaRadiusKm() => 0.0;
   public EarthObserverStatus? EarthObserverStatus() => null;
   public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, double elevM, AetherVk.Logic.Utils.Quaterniond look) => true;

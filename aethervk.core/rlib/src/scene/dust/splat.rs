@@ -26,8 +26,9 @@
 //! σ = 0.55 of the chord, so neighbouring bins overlap into a smooth arc, ripple < 1 %) with
 //! `Σ_v` scaled by the bin's speed ([`subpackets`]); and the time sample, uniform between the
 //! cluster and its stream predecessor `r − S` (the capsule), with the width growing from the
-//! predecessor's to the cluster's (time pieces, [`TIME_PIECES_MAX`]: the youngest samples are
-//! cones, not sticks).
+//! predecessor's to the cluster's (time pieces, [`TIME_PIECES_MAX`], at equal width ratios
+//! [`piece_bound`] and turned with the nucleus spiral: the youngest samples are cones, not
+//! sticks; each piece is the sample that would have been taken at its centre age).
 //!
 //! Splat. The packet (mean `μ`, covariance `Σ`, segment `d` to its predecessor, flux) is projected
 //! with the Jacobian of the perspective map at `μ` (EWA splatting, Zwicker et al. 2001; 3D
@@ -148,8 +149,9 @@ pub const SIZE_EDGES: u32 = SIZE_BINS + 1;
 /// `2·exp(−2π²σ²/d²)` ≈ 0.5 %); the uniform bin's own variance would be a third (ripple 39 %)
 pub const CHORD_VAR_FACTOR: f32 = 1.21;
 /// pieces a capsule is cut into when its width grows along the segment (the predecessor is older
-/// and wider): each piece carries the interpolated width
-pub const TIME_PIECES_MAX: u32 = 4;
+/// and wider): each piece carries the interpolated width. 8: at 1 km inside the coma the young
+/// cone (468 s → 2300 s, width ratio 4.9) judged 0.118 with 4 pieces, 0.102 with 8 (replay lab)
+pub const TIME_PIECES_MAX: u32 = 8;
 /// Sub-capsules a size bin is swept into between its own chord and the predecessor's same chord
 /// (the time cell of the bin is that quadrilateral, not a line): one per [`TIME_SWEEP_STEP_PX`]
 /// of the larger edge displacement on screen, at most this many. From 0.3 AU out the oldest
@@ -256,6 +258,85 @@ pub fn jacobian_at_start() -> bool {
   #[cfg(not(feature = "std"))]
   {
     false
+  }
+}
+
+/// The replay lab's CPU-only knobs (`dust_observer --lab`; std builds, read from the process
+/// environment, never on the GPU): `AETHERVK_DUST_LAB_NO_TIME_CELL=1` draws every sample without
+/// its time cell, `AETHERVK_DUST_LAB_PIECES=<n>` overrides [`TIME_PIECES_MAX`],
+/// `AETHERVK_DUST_LAB_SIGMA=<s>` scales every packet's covariance by `s²`,
+/// `AETHERVK_DUST_LAB_NO_SUPPORT=1` draws every packet without its support plane.
+#[cfg(feature = "std")]
+fn lab_knob(name: &str) -> Option<f32> {
+  std::env::var(name).ok().and_then(|v| v.trim().parse::<f32>().ok())
+}
+#[cfg(not(feature = "std"))]
+fn lab_knob(_name: &str) -> Option<f32> {
+  None
+}
+
+/// A cached lab flag (0 unread, 1 off, 2 on): read once per process (`split_step` is hot).
+static LAB_ALL_VOLUME: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+static LAB_NO_VOLUME: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+fn lab_flag(cell: &core::sync::atomic::AtomicU8, name: &str) -> bool {
+  use core::sync::atomic::Ordering::Relaxed;
+  match cell.load(Relaxed) {
+    0 => {
+      let on = lab_knob(name).is_some_and(|v| v > 0.0);
+      cell.store(if on { 2 } else { 1 }, Relaxed);
+      on
+    }
+    v => v == 2,
+  }
+}
+
+/// Bit 28 of [`PYR_SPLIT_DEPTH`] (host-written from `AETHERVK_DUST_TIME_CELL=1`, diagnostics):
+/// a chord-major leaf's time Gaussian is centred on its time cell — half a segment from its chord
+/// towards the stream predecessor — instead of on its chord (the single chord leaf and the cone
+/// pieces; the sweep pieces are centred already). Mirror of `cellOff` in `dust_splat.comp`.
+pub fn time_cell_offset(pyramid: &[u32]) -> bool {
+  (pyramid[PYR_SPLIT_DEPTH as usize] >> 28) & 1 != 0
+}
+
+/// the frame's [`time_cell_offset`] for [`subpackets_swept`] (set per cluster by the splat from the
+/// header; a diagnostic, so a process-wide flag rather than a parameter through every caller)
+static TIME_CELL_OFFSET: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Bits 24–27 of [`PYR_SPLIT_DEPTH`] (host-written from `AETHERVK_DUST_HARD_AXIS=<n>`,
+/// diagnostics): a leaf's Gaussianised axis ([`Packet::seg_t`], `1.21·(L/2)²`) is drawn as `n`
+/// sub-leaves spread uniformly over `[−L/2, L/2]` about the leaf, each with `1.21·(L/2n)²` — a
+/// hard-edged cell instead of a Gaussian's tails; 0 or 1: off. Mirror of `dust_hard_axis_pieces`.
+pub fn hard_axis_pieces(pyramid: &[u32]) -> u32 {
+  (pyramid[PYR_SPLIT_DEPTH as usize] >> 24) & 0xF
+}
+
+/// `p` as the `n` sub-leaves of [`hard_axis_pieces`] (the leaf itself when `n ≤ 1` or it has no
+/// Gaussianised axis). The covariance's `1.21·hhᵀ` term (`h = seg_t / 2`) becomes `1.21·(h/n)(h/n)ᵀ`,
+/// the means `μ + (−1 + (2j + 1)/n)·h`, the flux split evenly. Mirror of `dust_hard_axis_leaf`.
+pub fn hard_axis_leaf(p: &Packet, n: u32, j: u32) -> Packet {
+  let h = scale3(p.seg_t, 0.5);
+  if n <= 1 || !(dot3(h, h) > 0.0) {
+    return *p;
+  }
+  let k = CHORD_VAR_FACTOR;
+  let q = 1.0 - 1.0 / (n * n) as f32;
+  let c = &p.cov;
+  let off = -1.0 + (2 * j + 1) as f32 / n as f32;
+  Packet {
+    mean: add3(p.mean, scale3(h, off)),
+    cov: [
+      c[0] - k * q * h[0] * h[0],
+      c[1] - k * q * h[0] * h[1],
+      c[2] - k * q * h[0] * h[2],
+      c[3] - k * q * h[1] * h[1],
+      c[4] - k * q * h[1] * h[2],
+      c[5] - k * q * h[2] * h[2],
+    ],
+    seg: p.seg,
+    flux: p.flux / n as f32,
+    open: p.open,
+    rho: p.rho,
+    seg_t: scale3(p.seg_t, 1.0 / n as f32),
   }
 }
 
@@ -716,8 +797,8 @@ pub fn bin_density_ends(f0: f32, f1: f32) -> [f32; 2] {
 /// uniform along its chord (a Gaussian of [`CHORD_VAR_FACTOR`] half-chords² along it) with
 /// `Σ_v` scaled by the bin's speed factor, `1/SIZE_BINS` of the flux each; and when the stream
 /// predecessor `pred` is wider (older), every bin is cut into `n_t ≤ TIME_PIECES_MAX` pieces along
-/// the segment, each with the width interpolated between the cluster's and the predecessor's
-/// (the capsule is a cone, not a stick of the newest width).
+/// the segment ([`piece_bound`]), each with the width interpolated between the cluster's and the
+/// predecessor's (the capsule is a cone, not a stick of the newest width).
 pub fn subpackets(
   m: &DustMoments,
   seg: [f32; 3],
@@ -730,11 +811,52 @@ pub fn subpackets(
 /// by the bin's speed factor plus [`CHORD_VAR_FACTOR`] half-chords² along the chord, `1/SIZE_BINS`
 /// of the flux.
 pub fn bin_packet(m: &DustMoments, b: usize, seg: [f32; 3]) -> Packet {
+  bin_packet_sub(m, b, 0, 1, seg)
+}
+
+/// Sub-bin `j` of `nj` of size bin `b`: the bin's straight chord and its speed-factor range cut
+/// into `nj` equal parts ([`sub_edges`]). A grain's spread scales with **its own** speed factor
+/// (`f²Σ_v`), so one width at the bin's mid factor, plus the chord's Gaussian of
+/// [`CHORD_VAR_FACTOR`] half-chords², reaches past the slowest grain at the polyline's slow end;
+/// sub-bins carry their own factor and a chord `nj` times shorter.
+pub fn sub_edges(m: &DustMoments, b: usize, j: usize, nj: usize) -> ([f32; 3], [f32; 3], f32, f32) {
+  let (e0, e1) = (m.edge(b), m.edge(b + 1));
+  let (f0, f1) = (m.edge_factor(b), m.edge_factor(b + 1));
+  // the bin's own edges exactly at its ends (one sub-bin is the bin, bit for bit)
+  let at = |k: usize| -> ([f32; 3], f32) {
+    if k == 0 {
+      (e0, f0)
+    } else if k == nj {
+      (e1, f1)
+    } else {
+      let u = k as f32 / nj as f32;
+      (add3(e0, scale3(sub3(e1, e0), u)), f0 + (f1 - f0) * u)
+    }
+  };
+  let ((a, fa), (c, fc)) = (at(j), at(j + 1));
+  (a, c, fa, fc)
+}
+
+/// The share of size bin `b`'s flux in its sub-bin `j` of `nj`: the bin's density ramp
+/// ([`bin_density_ends`], ∝ 1/f) integrated over the sub-bin, over the whole bin (exactly 1 for
+/// one sub-bin)
+pub fn sub_share(m: &DustMoments, b: usize, j: usize, nj: usize) -> f32 {
+  if nj <= 1 {
+    return 1.0;
+  }
+  let [r0, r1] = bin_density_ends(m.edge_factor(b), m.edge_factor(b + 1));
+  let (u0, u1) = (j as f32 / nj as f32, (j + 1) as f32 / nj as f32);
+  (u1 - u0) * (r0 + (r1 - r0) * 0.5 * (u0 + u1)) / (0.5 * (r0 + r1))
+}
+
+/// [`bin_packet`] of sub-bin `j` of `nj` ([`sub_edges`]), its share of the bin's flux
+/// ([`sub_share`])
+pub fn bin_packet_sub(m: &DustMoments, b: usize, j: usize, nj: usize, seg: [f32; 3]) -> Packet {
   let cv = m.cov_v();
-  let (a, c) = (m.edge(b), m.edge(b + 1));
+  let (a, c, fa, fc) = sub_edges(m, b, j, nj);
   let mid = scale3(add3(a, c), 0.5);
   let h = scale3(sub3(c, a), 0.5);
-  let f = 0.5 * (m.edge_factor(b) + m.edge_factor(b + 1));
+  let f = 0.5 * (fa + fc);
   let f2 = f * f;
   let k = CHORD_VAR_FACTOR;
   Packet {
@@ -748,7 +870,7 @@ pub fn bin_packet(m: &DustMoments, b: usize, seg: [f32; 3]) -> Packet {
       f2 * cv[5] + k * h[2] * h[2],
     ],
     seg,
-    flux: m.flux() / SIZE_BINS as f32,
+    flux: m.flux() / SIZE_BINS as f32 * sub_share(m, b, j, nj),
     open: [false, false],
     rho: [1.0, 1.0],
     seg_t: scale3(h, 2.0),
@@ -809,9 +931,14 @@ pub fn pooled_within_cov(m: &DustMoments, seg: [f32; 3]) -> [f32; 6] {
 /// `1/SIZE_BINS` of the flux. The chord is exact (no Gaussian smear, no end caps between bins):
 /// the polyline costs its own length in texels.
 pub fn bin_chord_packet(m: &DustMoments, b: usize, seg_t: [f32; 3]) -> Packet {
+  bin_chord_packet_sub(m, b, 0, 1, seg_t)
+}
+
+/// [`bin_chord_packet`] of sub-bin `j` of `nj` ([`sub_edges`])
+pub fn bin_chord_packet_sub(m: &DustMoments, b: usize, j: usize, nj: usize, seg_t: [f32; 3]) -> Packet {
   let cv = m.cov_v();
-  let (a, c) = (m.edge(b), m.edge(b + 1));
-  let f = 0.5 * (m.edge_factor(b) + m.edge_factor(b + 1));
+  let (a, c, fa, fc) = sub_edges(m, b, j, nj);
+  let f = 0.5 * (fa + fc);
   let f2 = f * f;
   let k = CHORD_VAR_FACTOR;
   let h = scale3(seg_t, 0.5);
@@ -826,9 +953,9 @@ pub fn bin_chord_packet(m: &DustMoments, b: usize, seg_t: [f32; 3]) -> Packet {
       f2 * cv[5] + k * h[2] * h[2],
     ],
     seg: sub3(c, a),
-    flux: m.flux() / SIZE_BINS as f32,
-    open: [b > 0, b + 1 < SIZE_BINS as usize],
-    rho: bin_density_ends(m.edge_factor(b), m.edge_factor(b + 1)),
+    flux: m.flux() / SIZE_BINS as f32 * sub_share(m, b, j, nj),
+    open: [b > 0 || j > 0, b + 1 < SIZE_BINS as usize || j + 1 < nj],
+    rho: bin_density_ends(fa, fc),
     seg_t: scale3(h, 2.0),
   }
 }
@@ -885,6 +1012,28 @@ pub fn spiral_point(
   rotate3(l, axis, -omega * (age_o + u * (age_p - age_o)))
 }
 
+/// `R Σ Rᵀ` for the rotation by `angle` about the unit `axis` (`Σ` as xx, xy, xz, yy, yz, zz;
+/// mirror of `dust_rotate_cov`)
+pub fn rotate_cov(c: [f32; 6], axis: [f32; 3], angle: f32) -> [f32; 6] {
+  let r = [
+    rotate3([1.0, 0.0, 0.0], axis, angle),
+    rotate3([0.0, 1.0, 0.0], axis, angle),
+    rotate3([0.0, 0.0, 1.0], axis, angle),
+  ];
+  // columns of R are r[j]; (R Σ Rᵀ)_ab = Σ_ij R_ai Σ_ij R_bj
+  let m = [[c[0], c[1], c[2]], [c[1], c[3], c[4]], [c[2], c[4], c[5]]];
+  let at = |a: usize, b: usize| {
+    let mut acc = 0.0f32;
+    for i in 0..3 {
+      for j in 0..3 {
+        acc += r[i][a] * m[i][j] * r[j][b];
+      }
+    }
+    acc
+  };
+  [at(0, 0), at(0, 1), at(0, 2), at(1, 1), at(1, 2), at(2, 2)]
+}
+
 /// The spiral gate of a sample with a predecessor ([`SPIRAL_MIN_TURN`],
 /// [`SPIRAL_MAX_AGE_SAMPLES`]): `Some((axis, ω))` when its time pieces follow the spiral.
 pub fn spiral_of(m: &DustMoments, p: &DustMoments) -> Option<([f32; 3], f32)> {
@@ -924,13 +1073,19 @@ pub fn time_sweep(
 /// displacement / 2 n_s)² along it (the residual between sub-capsules), `1/(SIZE_BINS · n_s)` of
 /// the flux, open towards the neighbouring bins.
 pub fn bin_sweep_packet(m: &DustMoments, p: &DustMoments, b: usize, k: u32, n_s: u32) -> Packet {
+  bin_sweep_packet_sub(m, p, b, 0, 1, k, n_s)
+}
+
+/// [`bin_sweep_packet`] of sub-bin `j` of `nj` ([`sub_edges`], the predecessor's alike)
+pub fn bin_sweep_packet_sub(m: &DustMoments, p: &DustMoments, b: usize, j: usize, nj: usize, k: u32, n_s: u32) -> Packet {
   let cv = m.cov_v();
-  let (a, c) = (m.edge(b), m.edge(b + 1));
-  let (da, dc) = (sub3(p.edge(b), a), sub3(p.edge(b + 1), c));
+  let (a, c, fa, fc) = sub_edges(m, b, j, nj);
+  let (pa, pc, _, _) = sub_edges(p, b, j, nj);
+  let (da, dc) = (sub3(pa, a), sub3(pc, c));
   let dmax = if dot3(da, da) > dot3(dc, dc) { da } else { dc };
   let u = (k as f32 + 0.5) / n_s as f32;
   let (ak, ck) = (add3(a, scale3(da, u)), add3(c, scale3(dc, u)));
-  let f = 0.5 * (m.edge_factor(b) + m.edge_factor(b + 1));
+  let f = 0.5 * (fa + fc);
   let f2 = f * f;
   let kv = CHORD_VAR_FACTOR;
   let h = scale3(dmax, 0.5 / n_s as f32);
@@ -945,9 +1100,9 @@ pub fn bin_sweep_packet(m: &DustMoments, p: &DustMoments, b: usize, k: u32, n_s:
       f2 * cv[5] + kv * h[2] * h[2],
     ],
     seg: sub3(ck, ak),
-    flux: m.flux() / (SIZE_BINS * n_s) as f32,
-    open: [b > 0, b + 1 < SIZE_BINS as usize],
-    rho: bin_density_ends(m.edge_factor(b), m.edge_factor(b + 1)),
+    flux: m.flux() / (SIZE_BINS * n_s) as f32 * sub_share(m, b, j, nj),
+    open: [b > 0 || j > 0, b + 1 < SIZE_BINS as usize || j + 1 < nj],
+    rho: bin_density_ends(fa, fc),
     seg_t: scale3(h, 2.0),
   }
 }
@@ -964,14 +1119,27 @@ pub fn subpackets_merged(
 }
 
 /// [`subpackets_merged`] with the time sweep decided on screen through `px`.
-pub fn subpackets_swept(
+pub fn subpackets_supported(
   m: &DustMoments,
   seg: [f32; 3],
   pred: Option<&DustMoments>,
   merged: bool,
   pred_merged: bool,
   px: Option<&dyn Fn([f32; 3]) -> Option<[f32; 2]>>,
-) -> alloc::vec::Vec<Packet> {
+) -> alloc::vec::Vec<(Packet, [f32; 4])> {
+  subpackets_cells(m, seg, pred, merged, pred_merged, px).into_iter().map(|(p, s, _)| (p, s)).collect()
+}
+
+/// [`subpackets_supported`] with each packet's cell origin as its plane offset along the support's
+/// normal, `w_o = n·o` (the apex of its cone of grains; `NaN` without a cell line)
+pub fn subpackets_cells(
+  m: &DustMoments,
+  seg: [f32; 3],
+  pred: Option<&DustMoments>,
+  merged: bool,
+  pred_merged: bool,
+  px: Option<&dyn Fn([f32; 3]) -> Option<[f32; 2]>>,
+) -> alloc::vec::Vec<(Packet, [f32; 4], f32)> {
   // the spiral of a rotating nucleus (`spiral_of`): the pieces then follow it, and there are
   // enough of them to draw it
   let spiral = pred.and_then(|p| spiral_of(m, p));
@@ -982,14 +1150,73 @@ pub fn subpackets_swept(
       None => add3(start, scale3(sub3(end, start), u)),
     }
   };
+  // lab (`AETHERVK_DUST_LAB_OLD_PIECES=1`, CPU only): the rule before 2026-10-12 — 4 equal
+  // pieces, the predecessor's covariance unturned — for A/B replays of captured frames
+  let old_rule = lab_knob("AETHERVK_DUST_LAB_OLD_PIECES").is_some_and(|v| v > 0.0);
   let n_t = if spiral.is_some() {
-    TIME_PIECES_MAX
+    lab_knob("AETHERVK_DUST_LAB_PIECES").map_or(if old_rule { 4 } else { TIME_PIECES_MAX }, |v| (v as u32).max(1))
+  } else if old_rule {
+    time_pieces(m, pred).min(4)
   } else {
     time_pieces(m, pred)
   };
+  // the predecessor's covariance (and its chord axis) turned with the spiral to the emission
+  // direction of the piece's centre: by ω·(age_p − age(u_c)), the turn `spiral_point` gives the
+  // piece's mean. Unturned, the radial σ (4× the lateral at 1 km) lay along the predecessor's
+  // ejection direction, 0.26 rad off, and doubled the cone's lateral spread (judged 0.216 → 0.145)
+  let turn_angle = |uc: f32| -> Option<([f32; 3], f32)> {
+    spiral.filter(|_| !old_rule).map(|(axis, omega)| (axis, omega * (age_p - (age_o + uc * (age_p - age_o)))))
+  };
+  let turn = |c: [f32; 6], uc: f32| -> [f32; 6] {
+    match turn_angle(uc) {
+      Some((axis, a)) => rotate_cov(c, axis, a),
+      None => c,
+    }
+  };
+  let turn_vec = |v: [f32; 3], uc: f32| -> [f32; 3] {
+    match turn_angle(uc) {
+      Some((axis, a)) => rotate3(v, axis, a),
+      None => v,
+    }
+  };
   let ratio = width_ratio(m, pred);
-  let inv = 1.0 / n_t as f32;
   let r0 = 1.0 / ratio; // σ_self / σ_pred ≤ 1
+  let bound = |k: u32| piece_bound(k, n_t, if old_rule { 1.0 } else { ratio });
+  // the support planes ([`cell_support`]): the sample's own for its bins, the cone piece's from
+  // the cell line at the piece's centre age — the two samples' lines interpolated along the
+  // spiral, the predecessor's direction turned to the piece's emission like its covariance
+  let line_m = cell_line(m);
+  let line_p = pred.and_then(cell_line);
+  let v_std = line_m.map_or(0.0, |(_, c)| {
+    let cn2 = dot3(c, c);
+    if cn2 > 0.0 {
+      <f32 as FloatLike>::sqrt(var_along(&m.cov_v(), scale3(c, 1.0 / <f32 as FloatLike>::sqrt(cn2))).max(0.0) / cn2)
+    } else {
+      0.0
+    }
+  });
+  let f_lo = m.edge_factor(0);
+  // the support plane and the origin's offset along its normal (`NaN` without a line)
+  let with_origin = |o: [f32; 3], c: [f32; 3]| -> ([f32; 4], f32) {
+    let sp = support_plane(o, c, v_std, f_lo);
+    (sp, if has_support(&sp) { dot3([sp[0], sp[1], sp[2]], o) } else { f32::NAN })
+  };
+  let own_sup = line_m.map_or(([0.0; 4], f32::NAN), |(o, c)| with_origin(o, c));
+  let piece_sup = |uc: f32| -> ([f32; 4], f32) {
+    let (Some((o_m, c_m)), Some((o_p, c_p)), Some(_)) = (line_m, line_p, pred) else {
+      return own_sup;
+    };
+    let age_u = age_o + uc * (age_p - age_o);
+    let (o, c) = match spiral {
+      Some((axis, omega)) => (
+        spiral_point(o_m, o_p, age_o, age_p, axis, omega, uc),
+        scale3(rotate3(c_p, axis, omega * (age_p - age_u)), age_u / age_p.max(1e-30)),
+      ),
+      None => (add3(o_m, scale3(sub3(o_p, o_m), uc)), add3(c_m, scale3(sub3(c_p, c_m), uc))),
+    };
+    with_origin(o, c)
+  };
+  let mut sup: alloc::vec::Vec<([f32; 4], f32)> = alloc::vec::Vec::new();
   let mut out = alloc::vec::Vec::with_capacity(if merged {
     n_t as usize
   } else {
@@ -1001,6 +1228,7 @@ pub fn subpackets_swept(
     let p = pooled_packet(m, seg);
     if n_t == 1 {
       out.push(p);
+      sup.push(own_sup);
     } else {
       // the predecessor's width for the pieces: pooled with its midpoint scatter only when it
       // is a point on screen too, else the mean of its bins (`pooled_within_cov`)
@@ -1015,11 +1243,14 @@ pub fn subpackets_swept(
         .unwrap_or(p.cov);
       let pm = add3(p.mean, seg);
       for t in 0..n_t {
-        let u0 = t as f32 * inv;
-        let sc = r0 + (1.0 - r0) * (u0 + 0.5 * inv);
+        let (u0, u1) = (bound(t), bound(t + 1));
+        let uc = 0.5 * (u0 + u1);
+        let sc = r0 + (1.0 - r0) * uc;
         let sc2 = sc * sc;
         let mean = along(p.mean, pm, u0);
-        let seg_t = sub3(along(p.mean, pm, u0 + inv), mean);
+        let seg_t = sub3(along(p.mean, pm, u1), mean);
+        let base = turn(base, uc);
+        sup.push(piece_sup(uc));
         out.push(Packet {
           mean,
           cov: [
@@ -1031,59 +1262,76 @@ pub fn subpackets_swept(
             base[5] * sc2,
           ],
           seg: seg_t,
-          flux: p.flux * inv,
+          flux: p.flux * (u1 - u0),
           open: [false, false],
           rho: [1.0, 1.0],
           seg_t: [0.0; 3],
         });
       }
     }
-    return out;
+    return out.into_iter().zip(sup).map(|(p, (s, w))| (p, s, w)).collect();
   }
+  // the polyline's slow end bin as [`DUST_END_SUBBINS`] sub-bins ([`bin_subbins`], [`sub_edges`]):
+  // there the chord's Gaussian and the mid-factor width reach past the slowest grain
+  // (`AETHERVK_DUST_LAB_SUBBINS=J`, CPU only: every bin as J sub-bins; 1 the former packets)
+  let nj_lab = lab_knob("AETHERVK_DUST_LAB_SUBBINS").map(|v| (v as usize).clamp(1, 16));
   for b in 0..SIZE_BINS as usize {
+  let nj = nj_lab.unwrap_or_else(|| bin_subbins(b));
+  for j in 0..nj {
+    let (ea, ec, _, _) = sub_edges(m, b, j, nj);
     // the time segment of this bin: to the *same bin* of the predecessor (its own sizes: a young
     // cluster's fast grains are ten times farther along than its slow ones)
     let seg_t = match pred {
-      Some(p) => sub3(
-        scale3(add3(p.edge(b), p.edge(b + 1)), 0.5),
-        scale3(add3(m.edge(b), m.edge(b + 1)), 0.5),
-      ),
+      Some(p) => {
+        let (pa, pc, _, _) = sub_edges(p, b, j, nj);
+        sub3(scale3(add3(pa, pc), 0.5), scale3(add3(ea, ec), 0.5))
+      }
       None => [0.0; 3],
     };
     // the longer of the bin's two axes is the exact (uniform) capsule, the other a Gaussian:
     // young dust has a time segment longer than its chords (the sample's own emission interval
     // reaches past its polyline), old dust a chord longer than its time segment
-    let chord = sub3(m.edge(b + 1), m.edge(b));
+    let chord = sub3(ec, ea);
     let time_major = dot3(seg_t, seg_t) > dot3(chord, chord);
     if n_t == 1 {
       if time_major {
-        out.push(bin_packet(m, b, seg_t));
+        out.push(bin_packet_sub(m, b, j, nj, seg_t));
+        sup.push(own_sup);
       } else {
         // the time cell of the bin is the quadrilateral between its chord and the
         // predecessor's: swept when its edges are pixels apart on screen
         let n_s = time_sweep(m, pred, b, px);
         if n_s == 1 {
-          out.push(bin_chord_packet(m, b, seg_t));
+          let mut p = bin_chord_packet_sub(m, b, j, nj, seg_t);
+          if TIME_CELL_OFFSET.load(core::sync::atomic::Ordering::Relaxed) {
+            p.mean = add3(p.mean, scale3(seg_t, 0.5));
+          }
+          out.push(p);
+          sup.push(own_sup);
         } else {
           let p = pred.expect("a sweep needs a predecessor");
           for k in 0..n_s {
-            out.push(bin_sweep_packet(m, p, b, k, n_s));
+            out.push(bin_sweep_packet_sub(m, p, b, j, nj, k, n_s));
+            sup.push(own_sup);
           }
         }
       }
     } else if time_major {
       // the cone along the time capsule, as for a pooled packet
-      let own = bin_packet(m, b, seg_t);
+      let own = bin_packet_sub(m, b, j, nj, seg_t);
       let p = pred.expect("pieces need a predecessor");
-      let base_packet = bin_packet(p, b, seg_t);
+      let base_packet = bin_packet_sub(p, b, j, nj, seg_t);
       let base = base_packet.cov;
       let pm = add3(own.mean, seg_t);
       for t in 0..n_t {
-        let u0 = t as f32 * inv;
-        let sc = r0 + (1.0 - r0) * (u0 + 0.5 * inv);
+        let (u0, u1) = (bound(t), bound(t + 1));
+        let uc = 0.5 * (u0 + u1);
+        let sc = r0 + (1.0 - r0) * uc;
         let sc2 = sc * sc;
         let mean = along(own.mean, pm, u0);
-        let seg_p = sub3(along(own.mean, pm, u0 + inv), mean);
+        let seg_p = sub3(along(own.mean, pm, u1), mean);
+        let base = turn(base, uc);
+        sup.push(piece_sup(uc));
         out.push(Packet {
           mean,
           cov: [
@@ -1095,10 +1343,10 @@ pub fn subpackets_swept(
             base[5] * sc2,
           ],
           seg: seg_p,
-          flux: own.flux * inv,
+          flux: own.flux * (u1 - u0),
           open: [false, false],
           rho: [1.0, 1.0],
-          seg_t: scale3(base_packet.seg_t, sc),
+          seg_t: turn_vec(scale3(base_packet.seg_t, sc), uc),
         });
       }
     } else {
@@ -1106,21 +1354,30 @@ pub fn subpackets_swept(
       // covariance scaled from the cluster's width (zero for the sample pinned at "now") to the
       // predecessor's, and the piece's own time Gaussian
       let p = pred.expect("pieces need a predecessor");
-      let own = bin_chord_packet(m, b, [0.0; 3]);
+      let own = bin_chord_packet_sub(m, b, j, nj, [0.0; 3]);
       let cvp = p.cov_v();
-      let f = 0.5 * (m.edge_factor(b) + m.edge_factor(b + 1));
+      let (_, _, fa, fc) = sub_edges(m, b, j, nj);
+      let f = 0.5 * (fa + fc);
       let f2 = f * f;
-      let hseg = scale3(seg_t, 0.5 * inv);
       let k = CHORD_VAR_FACTOR;
-      let mid = scale3(add3(m.edge(b), m.edge(b + 1)), 0.5);
+      let mid = scale3(add3(ea, ec), 0.5);
       let mid_p = add3(mid, seg_t);
       for t in 0..n_t {
-        let u0 = t as f32 * inv;
-        let sc = r0 + (1.0 - r0) * (u0 + 0.5 * inv);
+        let (u0, u1) = (bound(t), bound(t + 1));
+        let uc = 0.5 * (u0 + u1);
+        let hseg = scale3(seg_t, 0.5 * (u1 - u0));
+        let sc = r0 + (1.0 - r0) * uc;
         let sc2 = sc * sc * f2;
         let shift = sub3(along(mid, mid_p, u0), mid);
+        let cvp = turn(cvp, uc);
+        let cell = if TIME_CELL_OFFSET.load(core::sync::atomic::Ordering::Relaxed) {
+          hseg
+        } else {
+          [0.0; 3]
+        };
+        sup.push(piece_sup(uc));
         out.push(Packet {
-          mean: add3(own.mean, shift),
+          mean: add3(add3(own.mean, shift), cell),
           cov: [
             cvp[0] * sc2 + k * hseg[0] * hseg[0],
             cvp[1] * sc2 + k * hseg[0] * hseg[1],
@@ -1130,7 +1387,7 @@ pub fn subpackets_swept(
             cvp[5] * sc2 + k * hseg[2] * hseg[2],
           ],
           seg: own.seg,
-          flux: own.flux * inv,
+          flux: own.flux * (u1 - u0),
           open: own.open,
           rho: own.rho,
           seg_t: scale3(hseg, 2.0),
@@ -1138,7 +1395,56 @@ pub fn subpackets_swept(
       }
     }
   }
-  out
+  }
+  out.into_iter().zip(sup).map(|(p, (s, w))| (p, s, w)).collect()
+}
+
+/// [`subpackets_supported`] without the support planes.
+pub fn subpackets_swept(
+  m: &DustMoments,
+  seg: [f32; 3],
+  pred: Option<&DustMoments>,
+  merged: bool,
+  pred_merged: bool,
+  px: Option<&dyn Fn([f32; 3]) -> Option<[f32; 2]>>,
+) -> alloc::vec::Vec<Packet> {
+  subpackets_supported(m, seg, pred, merged, pred_merged, px).into_iter().map(|(p, _)| p).collect()
+}
+
+/// The cell line of a sample (mirror of `dust_cell_line`): its size polyline is `o + f·c` in
+/// the speed factor f (positions ∝ speed while radiation pressure has not bent the syndyne:
+/// young to days-old dust), `o` the point its grains leave from (site plus drift), `c` the
+/// reference grain's travel. `None` once bent: the middle edge more than 5 % of the chord off
+/// that line, or a degenerate polyline.
+pub fn cell_line(m: &DustMoments) -> Option<([f32; 3], [f32; 3])> {
+  let nb = SIZE_BINS as usize;
+  let (e0, e1) = (m.edge(0), m.edge(nb));
+  let (f0, f1) = (m.edge_factor(0), m.edge_factor(nb));
+  if !(f1 > f0) {
+    return None;
+  }
+  let c = scale3(sub3(e1, e0), 1.0 / (f1 - f0));
+  let o = sub3(e0, scale3(c, f0));
+  let d = sub3(m.edge(nb / 2), add3(o, scale3(c, m.edge_factor(nb / 2))));
+  let ch = sub3(e1, e0);
+  if !(dot3(ch, ch) > 0.0) || dot3(d, d) > 0.0025 * dot3(ch, ch) {
+    return None;
+  }
+  Some((o, c))
+}
+
+/// The support plane of a cell line ([`Photometry::support`], mirror of `dust_support_plane`):
+/// normal along the motion `c`, through the slowest grain — the smallest speed factor `f_lo`
+/// three relative speed spreads `v_std` slow (at the origin when that is ≤ 0): `[n, n·x]`
+pub fn support_plane(o: [f32; 3], c: [f32; 3], v_std: f32, f_lo: f32) -> [f32; 4] {
+  let cn = <f32 as FloatLike>::sqrt(dot3(c, c));
+  if !(cn > 0.0) {
+    return [0.0; 4];
+  }
+  let n = scale3(c, 1.0 / cn);
+  let s0 = (f_lo * (1.0 - 3.0 * v_std)).max(0.0);
+  let x = add3(o, scale3(n, cn * s0));
+  [n[0], n[1], n[2], dot3(n, x)]
 }
 
 /// Pixel position of a local point under `mvp` (`None` behind the camera): the merge test of the
@@ -1220,6 +1526,22 @@ pub fn width_ratio(m: &DustMoments, pred: Option<&DustMoments>) -> f32 {
   }
 }
 
+/// Bound `k` of `n` time pieces along a segment whose width grows `ratio`-fold (mirror of
+/// `dust_piece_bound`): `(ratio^(k/n) − 1)/(ratio − 1)`, every piece the same width ratio (the
+/// width ∝ `1/ratio + (1 − 1/ratio)·u` is linear in age). Equal steps left the first piece of a
+/// young cone twice as wide at its old end as at its young one: its centre width smeared light
+/// past the apex, where no grain is younger than the sample. Equal steps when `ratio ≈ 1`.
+pub fn piece_bound(k: u32, n: u32, ratio: f32) -> f32 {
+  if k >= n {
+    return 1.0;
+  }
+  if !(ratio > 1.0001) {
+    return k as f32 / n as f32;
+  }
+  let e = <f32 as FloatLike>::exp(<f32 as FloatLike>::ln(ratio) * (k as f32 / n as f32));
+  ((e - 1.0) / (ratio - 1.0)).clamp(0.0, 1.0)
+}
+
 /// largest `σ_pred / σ_self` the cone pieces resolve (a zero-width cluster gets this)
 pub const WIDTH_RATIO_MAX: f32 = 1024.0;
 
@@ -1227,7 +1549,8 @@ pub const WIDTH_RATIO_MAX: f32 = 1024.0;
 /// `dust_time_pieces`): one while the width changes by less than itself along the segment.
 pub fn time_pieces(m: &DustMoments, pred: Option<&DustMoments>) -> u32 {
   let r = width_ratio(m, pred);
-  ((ce(r) as u32).saturating_sub(1)).clamp(1, TIME_PIECES_MAX)
+  let max = lab_knob("AETHERVK_DUST_LAB_PIECES").map_or(TIME_PIECES_MAX, |v| (v as u32).max(1));
+  ((ce(r) as u32).saturating_sub(1)).clamp(1, max)
 }
 
 // ─── Projection and capsule (mirror of dust_project_packet / dust_capsule_tau) ──
@@ -1283,6 +1606,17 @@ pub struct Photometry {
   pub albedo: f32,
   pub sun: [f32; 3],
   pub r_h_au: f32,
+  /// the packet's physical support (local metres): the half-space `n·x ≥ w` (`xyz` = n, unit;
+  /// zero = none) in front of which its cell's grains lie — no grain is behind the slowest grain
+  /// of its cell along the motion ([`cell_support`]). A perspective packet the plane cuts is drawn
+  /// by the exact ray integral over the half-space ([`volume_scatter`]) when the eye is near it,
+  /// else as its truncation's moments ([`support_truncated`]), its flux renormalised by the kept
+  /// mass. Mirror of `dust_phot_support`.
+  pub support: [f32; 4],
+  /// the packet's cell origin along the support's normal, `n·o` (the apex of its cone of grains,
+  /// [`subpackets_cells`]; `NaN` = none): a perspective packet with a cell is drawn as its cone
+  /// ([`conic_slabs`]). Mirror of `dust_phot_origin`.
+  pub origin: f32,
 }
 
 impl Photometry {
@@ -1290,7 +1624,347 @@ impl Photometry {
     albedo: 0.0,
     sun: [0.0, 0.0, 1.0],
     r_h_au: 1.0,
+    support: [0.0; 4],
+    origin: f32::NAN,
   };
+}
+
+/// Whether a support plane is set ([`Photometry::support`])
+pub fn has_support(s: &[f32; 4]) -> bool {
+  s[0] != 0.0 || s[1] != 0.0 || s[2] != 0.0
+}
+
+/// The mass of packet `p` in front of its support `s` (`n·x ≥ w`): the Gaussian's normal
+/// marginal `Φ((n·x − w)/σ_n)` averaged over the capsule with its linear density, 16 midpoints
+/// (mirror of `dust_support_mass`). 1 without a support.
+pub fn support_mass(p: &Packet, s: &[f32; 4]) -> f32 {
+  if !has_support(s) {
+    return 1.0;
+  }
+  let n = [s[0], s[1], s[2]];
+  let sig = <f32 as FloatLike>::sqrt(var_along(&p.cov, n).max(0.0));
+  let (m0, ds) = (dot3(n, p.mean) - s[3], dot3(n, p.seg));
+  let (mut acc, mut wsum) = (0.0f32, 0.0f32);
+  for k in 0..16 {
+    let u = (k as f32 + 0.5) / 16.0;
+    let w = p.rho[0] + (p.rho[1] - p.rho[0]) * u;
+    let x = m0 + ds * u;
+    let f = if sig > 0.0 {
+      0.5 * (1.0 + erf(x / (sig * core::f32::consts::SQRT_2)))
+    } else if x >= 0.0 {
+      1.0
+    } else {
+      0.0
+    };
+    acc += w * f;
+    wsum += w;
+  }
+  if wsum > 0.0 { acc / wsum } else { 1.0 }
+}
+
+/// The least kept mass a cut packet is renormalised by: a packet almost wholly behind its
+/// support (the young end of a cone piece near the apex) keeps at most 20× its density
+pub const DUST_SUPPORT_MASS_MIN: f32 = 0.05;
+/// A packet whose support cuts more than this share of its mass is drawn by the exact ray
+/// integral over the half-space (perspective views)
+pub const DUST_SUPPORT_CUT_MIN: f32 = 1.0e-3;
+
+/// The share of a ray's Gaussian in front of the eye and of the support: the ray `eye + t·u`
+/// (t ≥ 0), its Gaussian in `t` centred at `−b/a` with variance `1/a` (whitened `a = |L⁻¹u|²`,
+/// `b = L⁻¹u · L⁻¹(eye − μ)`), restricted to the half-space `n·x ≥ w` when `s` is set — an
+/// interval in `t`, the difference of two Φ. Mirror of `dust_ray_kept`.
+pub fn ray_kept(a: f32, b: f32, eye: [f32; 3], u: [f32; 3], s: &[f32; 4]) -> f32 {
+  let sa = <f32 as FloatLike>::sqrt(a);
+  let t_star = -b / a;
+  let k = sa * core::f32::consts::FRAC_1_SQRT_2;
+  // P(t ≥ lo), in the upper-tail form (no cancellation where it is small)
+  let upper = |lo: f32| 0.5 * (1.0 + erf((t_star - lo) * k));
+  if !has_support(s) {
+    return upper(0.0);
+  }
+  let n = [s[0], s[1], s[2]];
+  let (nu, ne) = (dot3(n, u), dot3(n, eye) - s[3]);
+  if fabs(nu) < 1e-12 {
+    return if ne >= 0.0 { upper(0.0) } else { 0.0 };
+  }
+  let t_plane = -ne / nu;
+  if nu > 0.0 {
+    upper(t_plane.max(0.0))
+  } else if t_plane <= 0.0 {
+    0.0
+  } else {
+    (0.5 * (erf((t_plane - t_star) * k) - erf((0.0 - t_star) * k))).max(0.0)
+  }
+}
+
+/// Sub-chords a cut packet the eye is not near is drawn as ([`support_truncated`])
+pub const DUST_SUPPORT_TRUNC_PIECES: usize = 8;
+/// Slabs along the support's normal per sub-chord ([`support_truncated`])
+pub const DUST_SUPPORT_TRUNC_SLABS: usize = 4;
+/// Packets [`support_truncated`] makes at most
+pub const DUST_SUPPORT_TRUNC_MAX: usize = DUST_SUPPORT_TRUNC_PIECES * DUST_SUPPORT_TRUNC_SLABS;
+/// The slabs' inner edges past the plane in standard deviations of the truncated marginal
+/// ([`support_truncated`]); the last slab runs to infinity
+const DUST_SUPPORT_SLAB_EDGES: [f32; DUST_SUPPORT_TRUNC_SLABS - 1] = [0.5, 1.2, 2.2];
+
+/// A packet its support `s` cuts, as [`DUST_SUPPORT_TRUNC_PIECES`] sub-chords (shared out over
+/// the chord's run through the plane's ±3σ zone, one each before and after it; interior ends
+/// closed, Gaussian caps: the capsule integral splits exactly; open, each integrates its Gaussian
+/// to infinity and relies on its neighbour's clip plane, which its own projection tilts — a
+/// 4-px sub-chord of a 28-px-wide packet drew 1.7× its flux), each cut along the plane's normal
+/// into [`DUST_SUPPORT_TRUNC_SLABS`] slabs replaced by their moments. The sub-chord's normal
+/// marginal (the covariance's plus its uniform spread `(n·seg)²/12`), standardised, is kept for
+/// `z ≥ α = −m/σ`; the slabs are `[α, α + e₁t)`, …, `[α + e₃t, ∞)` with `t` the truncated
+/// marginal's deviation `√(1 + αλ − λ²)`, `λ = φ(α)/Φ(−α)` ([`DUST_SUPPORT_SLAB_EDGES`]). A slab
+/// `[a, b)` holds `P = Φ(b) − Φ(a)`, its mean is `μ = (φ(a) − φ(b))/P` and its variance
+/// `1 + (aφ(a) − bφ(b))/P − μ²`: the sub-chord moved by `μ·Σ_e n/σ` (`Σ_e` the covariance plus
+/// the sub-chord's spread) and its covariance narrowed by `(1 − var)·(Σn)(Σn)ᵀ/σ²`. One Gaussian
+/// for the whole truncation spread a quarter of its light back behind the plane (100 m: Σ 2.49
+/// against ~1.8 for the exact cut). The fluxes are the kept shares renormalised over the packet
+/// (its grains all lie in front; floor [`DUST_SUPPORT_MASS_MIN`]). The far side of the exact cut:
+/// a small packet routed to the ray integral was point-sampled on the volume path's coarse texels
+/// (1 km: Σ render/truth 1.14 → 0.42). Returns how many of `out` it filled (slabs with no mass
+/// are dropped). Mirror of `dust_support_truncated`.
+pub fn support_truncated(p: &Packet, s: &[f32; 4], out: &mut [Packet; DUST_SUPPORT_TRUNC_MAX]) -> usize {
+  let n = [s[0], s[1], s[2]];
+  let sn = [
+    p.cov[0] * n[0] + p.cov[1] * n[1] + p.cov[2] * n[2],
+    p.cov[1] * n[0] + p.cov[3] * n[1] + p.cov[4] * n[2],
+    p.cov[2] * n[0] + p.cov[4] * n[1] + p.cov[5] * n[2],
+  ];
+  let v0 = dot3(n, sn).max(0.0);
+  let k = DUST_SUPPORT_TRUNC_PIECES;
+  // the standard normal's density and upper tail
+  let pdf = |z: f32| <f32 as FloatLike>::exp(-0.5 * z * z) * 0.398_942_3;
+  let upper = |z: f32| 0.5 * (1.0 - erf(z * core::f32::consts::FRAC_1_SQRT_2));
+  let mut kept = [0.0f32; DUST_SUPPORT_TRUNC_MAX];
+  let mut total = 0.0f32;
+  let mut cnt = 0usize;
+  // the sub-chords' bounds: where the chord runs through the plane's zone (its centre line
+  // within 3 normal σ of the plane) the sub-chords share it equally, one each for the parts
+  // before and after; equal when the zone holds the whole chord. A sub-chord's own extent along
+  // the normal enters its marginal as a Gaussian spread: 4 equal sub-chords of a chord 9 σ long
+  // across the plane read 10 % rms
+  let mut bounds = [0.0f32; DUST_SUPPORT_TRUNC_PIECES + 1];
+  for (j, b) in bounds.iter_mut().enumerate() {
+    *b = j as f32 / k as f32;
+  }
+  let dn = dot3(n, p.seg);
+  if fabs(dn) > 0.0 {
+    let half = 3.0 * <f32 as FloatLike>::sqrt(v0) / fabs(dn);
+    let u_x = (s[3] - dot3(n, p.mean)) / dn;
+    let (za, zb) = ((u_x - half).max(0.0), (u_x + half).min(1.0));
+    if zb > za && (za > 0.0 || zb < 1.0) {
+      let (before, after) = ((za > 0.0) as usize, (zb < 1.0) as usize);
+      let inner = k - before - after;
+      bounds[0] = 0.0;
+      for i in 0..=inner {
+        bounds[before + i] = za + (zb - za) * i as f32 / inner as f32;
+      }
+      bounds[k] = 1.0;
+    }
+  }
+  for j in 0..k {
+    let (u0, u1) = (bounds[j], bounds[j + 1]);
+    if !(u1 > u0) {
+      continue;
+    }
+    let q = sub_chord(p, u0, u1, j == 0 && p.open[0], j + 1 == k && p.open[1]);
+    // the ρ-weighted centre of the sub-chord and its normal marginal
+    let (ra, rb) = (q.rho[0], q.rho[1]);
+    let uc = if ra + rb > 0.0 { (ra + 2.0 * rb) / (3.0 * (ra + rb)) } else { 0.5 };
+    let ds = dot3(n, q.seg);
+    let m = dot3(n, add3(q.mean, scale3(q.seg, uc))) - s[3];
+    let v = v0 + ds * ds / 12.0;
+    if !(v > 0.0) {
+      if m >= 0.0 {
+        kept[cnt] = q.flux;
+        total += q.flux;
+        out[cnt] = q;
+        cnt += 1;
+      }
+      continue;
+    }
+    let sig = <f32 as FloatLike>::sqrt(v);
+    let alpha = -m / sig;
+    let pk = upper(alpha);
+    if !(pk > 1e-6) {
+      continue;
+    }
+    let lam = pdf(alpha) / pk;
+    let t = <f32 as FloatLike>::sqrt((1.0 + alpha * lam - lam * lam).max(1e-4));
+    // Σ_e n over σ: the direction a standard unit along the normal moves the sub-chord
+    let se = scale3(add3(sn, scale3(q.seg, ds / 12.0)), 1.0 / sig);
+    for e in 0..DUST_SUPPORT_TRUNC_SLABS {
+      let za = if e == 0 { alpha } else { alpha + DUST_SUPPORT_SLAB_EDGES[e - 1] * t };
+      let last = e + 1 == DUST_SUPPORT_TRUNC_SLABS;
+      let (pa, qa) = (pdf(za), upper(za));
+      let (pb, qb, bpb) = if last {
+        (0.0, 0.0, 0.0)
+      } else {
+        let zb = alpha + DUST_SUPPORT_SLAB_EDGES[e] * t;
+        (pdf(zb), upper(zb), zb * pdf(zb))
+      };
+      let ps = qa - qb;
+      if !(ps > 1e-9) {
+        continue;
+      }
+      let mu = (pa - pb) / ps;
+      let var = (1.0 + (za * pa - bpb) / ps - mu * mu).clamp(0.0, 1.0);
+      let cv = (1.0 - var) / v;
+      let cov = [
+        q.cov[0] - cv * sn[0] * sn[0],
+        q.cov[1] - cv * sn[0] * sn[1],
+        q.cov[2] - cv * sn[0] * sn[2],
+        q.cov[3] - cv * sn[1] * sn[1],
+        q.cov[4] - cv * sn[1] * sn[2],
+        q.cov[5] - cv * sn[2] * sn[2],
+      ];
+      kept[cnt] = q.flux * ps;
+      total += q.flux * ps;
+      out[cnt] = Packet { mean: add3(q.mean, scale3(se, mu)), cov, ..q };
+      cnt += 1;
+    }
+  }
+  let renorm = if p.flux > 0.0 { 1.0 / (total / p.flux).max(DUST_SUPPORT_MASS_MIN) } else { 0.0 };
+  for j in 0..cnt {
+    out[j].flux = kept[j] * renorm;
+  }
+  cnt
+}
+
+/// Sub-bins of the polyline's slow end bin ([`subpackets_cells`], [`sub_edges`]): the chord's
+/// Gaussian ([`CHORD_VAR_FACTOR`]) and the bin's mid-factor width reached past the slowest grain
+/// (100 m: the young slow end 1.4–28× the truth; 4 sub-bins: 0.81–0.99×). The fast end's gave
+/// nothing measurable and cost 3× the CPU splat at 100 m, and its extra split children dropped a
+/// near frame's split depth (the shell's parity case)
+pub const DUST_END_SUBBINS: usize = 2;
+
+/// The sub-bins size bin `b` is drawn as ([`DUST_END_SUBBINS`] for the slow end bin, else 1)
+pub fn bin_subbins(b: usize) -> usize {
+  if b == 0 { DUST_END_SUBBINS } else { 1 }
+}
+
+/// The index of size bin `b`'s first packet in a cluster's list ([`subpackets_cells`]) when every
+/// sub-bin has `per` packets (its time pieces or sweeps); `b = SIZE_BINS`: the list's length
+pub fn bin_first_packet(b: usize, per: usize) -> usize {
+  (0..b).map(bin_subbins).sum::<usize>() * per
+}
+
+/// The slab edges of [`conic_slabs`] in standard deviations of a sub-chord's normal marginal: the
+/// last slab runs to infinity, the first from the support plane (or −∞ when the plane is below
+/// the first edge)
+const DUST_CONIC_SLAB_EDGES: [f32; DUST_SUPPORT_TRUNC_SLABS - 1] = [-1.0, 0.0, 1.0];
+/// "Infinity" of [`conic_slabs`]' slab edges, in standard deviations (the normal's density and
+/// tail are exactly 0 and 1 there in f32)
+const DUST_CONIC_FAR: f32 = 1.0e4;
+
+/// A packet of a young cell as its **cone of grains** (mirror of `dust_conic_piece`): the
+/// grains' lateral spread grows with their distance from the cell's origin (their own speed), a
+/// packet carries one width along its length. Cut into the sub-chords and normal slabs of
+/// [`support_truncated`] (the slab edges [`DUST_CONIC_SLAB_EDGES`], cut at the support plane `s`
+/// where it cuts the packet), each slab's covariance mapped by the apex `A = nnᵀ + s_k(I − nnᵀ)`
+/// (`Σ' = A Σ Aᵀ`) and its lateral shift (the Gaussian's tilt to the normal) scaled by `s_k`, where
+/// `s_k = (n·μ_k − w_o)/(n·μ_c − w_o)` is the slab's distance from the origin plane `w_o` over
+/// the packet centre's. The fluxes renormalised over the packet. Returns the count; 0 when the
+/// packet has no cell (`w_o` not finite, or its centre not ahead of the origin).
+pub fn conic_slabs(p: &Packet, s: &[f32; 4], w_o: f32, out: &mut [Packet; DUST_SUPPORT_TRUNC_MAX]) -> usize {
+  if !has_support(s) || !w_o.is_finite() {
+    return 0;
+  }
+  let n = [s[0], s[1], s[2]];
+  let (ra, rb) = (p.rho[0], p.rho[1]);
+  let uc_p = if ra + rb > 0.0 { (ra + 2.0 * rb) / (3.0 * (ra + rb)) } else { 0.5 };
+  let centre = add3(p.mean, scale3(p.seg, uc_p));
+  let d_c = dot3(n, centre) - w_o;
+  if !(d_c > 0.0) {
+    return 0;
+  }
+  let sn = [
+    p.cov[0] * n[0] + p.cov[1] * n[1] + p.cov[2] * n[2],
+    p.cov[1] * n[0] + p.cov[3] * n[1] + p.cov[4] * n[2],
+    p.cov[2] * n[0] + p.cov[4] * n[1] + p.cov[5] * n[2],
+  ];
+  let v0 = dot3(n, sn).max(0.0);
+  let cut = support_mass(p, s) < 1.0 - DUST_SUPPORT_CUT_MIN;
+  let k = DUST_SUPPORT_TRUNC_PIECES;
+  let pdf = |z: f32| <f32 as FloatLike>::exp(-0.5 * z * z) * 0.398_942_3;
+  let upper = |z: f32| 0.5 * (1.0 - erf(z * core::f32::consts::FRAC_1_SQRT_2));
+  let mut kept = [0.0f32; DUST_SUPPORT_TRUNC_MAX];
+  let mut total = 0.0f32;
+  let mut cnt = 0usize;
+  for j in 0..k {
+    let (u0, u1) = (j as f32 / k as f32, (j + 1) as f32 / k as f32);
+    let q = sub_chord(p, u0, u1, j == 0 && p.open[0], j + 1 == k && p.open[1]);
+    let (qa, qb) = (q.rho[0], q.rho[1]);
+    let uc = if qa + qb > 0.0 { (qa + 2.0 * qb) / (3.0 * (qa + qb)) } else { 0.5 };
+    let qc = add3(q.mean, scale3(q.seg, uc));
+    let ds = dot3(n, q.seg);
+    let v = v0 + ds * ds / 12.0;
+    let sig = <f32 as FloatLike>::sqrt(v.max(1e-30));
+    // the sub-chord's normal coordinate z of the plane (−DUST_CONIC_FAR when it does not cut: the
+    // normal's density and tail are exactly 0 and 1 there, no special case)
+    let alpha = if cut { ((s[3] - dot3(n, qc)) / sig).max(-DUST_CONIC_FAR) } else { -DUST_CONIC_FAR };
+    let se = scale3(add3(sn, scale3(q.seg, ds / 12.0)), 1.0 / sig);
+    // the slab edges above α
+    let mut edges = [0.0f32; DUST_SUPPORT_TRUNC_SLABS + 1];
+    edges[0] = alpha;
+    let mut ne = 1;
+    for &e in DUST_CONIC_SLAB_EDGES.iter() {
+      if e > alpha {
+        edges[ne] = e;
+        ne += 1;
+      }
+    }
+    edges[ne] = DUST_CONIC_FAR;
+    for e in 0..ne {
+      let (za, zb) = (edges[e], edges[e + 1]);
+      let (pa, qa_, apa) = (pdf(za), upper(za), za * pdf(za));
+      let (pb, qb_, bpb) = (pdf(zb), upper(zb), zb * pdf(zb));
+      let ps = qa_ - qb_;
+      if !(ps > 1e-9) {
+        continue;
+      }
+      let mu = (pa - pb) / ps;
+      let var = (1.0 + (apa - bpb) / ps - mu * mu).clamp(0.0, 1.0);
+      let cv = (1.0 - var) / v.max(1e-30);
+      let cov = [
+        q.cov[0] - cv * sn[0] * sn[0],
+        q.cov[1] - cv * sn[0] * sn[1],
+        q.cov[2] - cv * sn[0] * sn[2],
+        q.cov[3] - cv * sn[1] * sn[1],
+        q.cov[4] - cv * sn[1] * sn[2],
+        q.cov[5] - cv * sn[2] * sn[2],
+      ];
+      let mean = add3(q.mean, scale3(se, mu));
+      // the apex map at the slab's centre
+      let sk = ((dot3(n, add3(mean, scale3(q.seg, uc))) - w_o) / d_c).max(0.0);
+      let a = |x: [f32; 3]| -> [f32; 3] {
+        let xn = dot3(n, x);
+        add3(scale3(n, xn), scale3(sub3(x, scale3(n, xn)), sk))
+      };
+      let cols = [a([cov[0], cov[1], cov[2]]), a([cov[1], cov[3], cov[4]]), a([cov[2], cov[4], cov[5]])];
+      // A Σ Aᵀ: rows of A Σ are a(Σ's columns) (Σ symmetric), then A on the rows
+      let r0 = a([cols[0][0], cols[1][0], cols[2][0]]);
+      let r1 = a([cols[0][1], cols[1][1], cols[2][1]]);
+      let r2 = a([cols[0][2], cols[1][2], cols[2][2]]);
+      let cov = [r0[0], r0[1], r0[2], r1[1], r1[2], r2[2]];
+      // the slab's lateral shift (the Gaussian's tilt to the normal), scaled; the sub-chord's
+      // own place along the capsule stays
+      let off = scale3(se, mu);
+      let lat = sub3(off, scale3(n, dot3(n, off)));
+      let mean = add3(mean, scale3(lat, sk - 1.0));
+      kept[cnt] = q.flux * ps;
+      total += q.flux * ps;
+      out[cnt] = Packet { mean, cov, ..q };
+      cnt += 1;
+    }
+  }
+  let renorm = if p.flux > 0.0 { 1.0 / (total / p.flux).max(DUST_SUPPORT_MASS_MIN) } else { 0.0 };
+  for j in 0..cnt {
+    out[j].flux = kept[j] * renorm;
+  }
+  cnt
 }
 
 /// The radiance weight at the dust a texel holds: the packet's mean displaced by the texel's
@@ -2264,6 +2938,12 @@ pub fn volume_scatter(
   let mut written = 0u32;
   let mut carry = 0.0f32;
   let mut peak = 0.0f32;
+  // the support's cut: the packet's flux over its kept mass (the grains it holds all lie in front)
+  let renorm = if has_support(&phot.support) {
+    1.0 / support_mass(p, &phot.support).max(DUST_SUPPORT_MASS_MIN)
+  } else {
+    1.0
+  };
   for pc in pieces.iter().take(plan.pieces as usize) {
     let (tx0, tx1, ty0, ty1) = volume_range(pc, level, layout);
     for ty in ty0..=ty1 {
@@ -2289,9 +2969,9 @@ pub fn volume_scatter(
         let b = dot3(uw, pc.qw);
         let rr = sub3(pc.qw, scale3(uw, b / a));
         let sa = <f32 as FloatLike>::sqrt(a);
-        let mut tau_px = pc.k / sa
+        let mut tau_px = pc.k * renorm / sa
           * <f32 as FloatLike>::exp(-0.5 * dot3(rr, rr))
-          * (0.5 * (1.0 + erf(-b / (sa * core::f32::consts::SQRT_2))));
+          * ray_kept(a, b, eye, u, &phot.support);
         if phot.albedo > 0.0 {
           let x = add3(eye, scale3(u, (-b / a).max(0.0)));
           tau_px *= volume_weight(phot, p.mean, x, u);
@@ -2440,8 +3120,13 @@ pub fn split_step(
     let u_hi = u_star * (1.0 - DUST_SPLIT_CLIP_EPS);
     return SplitStep::Clip(sub_chord(p, 0.0, u_hi, p.open[0], false));
   }
+  // the lab's knobs (CPU only, `dust_observer --lab`): every leaf volumetric / none
+  if !force && view.perspective && lab_flag(&LAB_ALL_VOLUME, "AETHERVK_DUST_LAB_ALL_VOLUME") {
+    return SplitStep::Volume;
+  }
+  let lab_no_volume = lab_flag(&LAB_NO_VOLUME, "AETHERVK_DUST_LAB_NO_VOLUME");
   // (2b) the eye inside or near the packet: the exact ray integral, no split, no EWA
-  if !force && is_volumetric(p, view) {
+  if !force && !lab_no_volume && is_volumetric(p, view) {
     return SplitStep::Volume;
   }
   // (3) too deep for one Jacobian: bisect the chord or slice the Gaussian by depth
@@ -2486,7 +3171,7 @@ pub fn split_step(
   // (4) still too deep for one Jacobian at the depth limit (inside the coma the children budget
   // lowers the limit to 0): the exact ray integral instead of a wrong linearisation (the EWA at
   // the start or the midpoint of such a chord drew 1.42× / 1.94× the truth at 1 km)
-  if want && !force && view.perspective && view.volumetric {
+  if want && !force && view.perspective && view.volumetric && !lab_no_volume {
     return SplitStep::Volume;
   }
   SplitStep::Keep
@@ -2609,6 +3294,53 @@ pub fn project_split_scatter(
   scratch: &mut SplitLeaves,
 ) -> u32 {
   scratch.clear();
+  // a perspective packet with a cell the eye is not near: its cone of grains ([`conic_slabs`], the
+  // support's cut baked in), each slab drawn uncut; not with a speck shell, whose hand-over is the
+  // split's. The eye near it: the exact ray integral below (32 slabs each drawn by the ray
+  // integral made 3.8·10⁹ evaluations in one frame of the shell's parity case)
+  // (`AETHERVK_DUST_LAB_APEX=0`, CPU only: the former drawing, for A/B replays)
+  if view.perspective
+    && view.volumetric
+    && !(view.shell > 0.0)
+    && has_support(&phot.support)
+    && phot.origin.is_finite()
+    && !is_volumetric(p, view)
+    && !lab_knob("AETHERVK_DUST_LAB_APEX").is_some_and(|v| v <= 0.0)
+  {
+    let mut parts = [*p; DUST_SUPPORT_TRUNC_MAX];
+    let n = conic_slabs(p, &phot.support, phot.origin, &mut parts);
+    if n > 0 {
+      let free = Photometry { support: [0.0; 4], origin: f32::NAN, ..*phot };
+      let mut drawn = 0;
+      for q in parts.iter().take(n) {
+        drawn += project_split_scatter(q, exposure, mvp, view, &free, color, layout, inv_unit, pyramid, scratch);
+      }
+      return drawn;
+    }
+  }
+  // a perspective packet its support cuts: drawn whole by the exact ray integral over the
+  // half-space (the eye plane too, per ray) when the eye is near it ([`is_volumetric`]), else
+  // as its truncation's moments ([`support_truncated`]); not with a speck shell, whose hand-over
+  // is the split's
+  if view.perspective
+    && view.volumetric
+    && !(view.shell > 0.0)
+    && has_support(&phot.support)
+    && support_mass(p, &phot.support) < 1.0 - DUST_SUPPORT_CUT_MIN
+  {
+    if is_volumetric(p, view) {
+      return (volume_scatter(p, exposure, mvp, view, phot, color, layout, inv_unit, pyramid) > 0) as u32;
+    }
+    // the eye not near: its truncation's moments, drawn as uncut packets
+    let mut parts = [*p; DUST_SUPPORT_TRUNC_MAX];
+    let n = support_truncated(p, &phot.support, &mut parts);
+    let free = Photometry { support: [0.0; 4], origin: f32::NAN, ..*phot };
+    let mut drawn = 0;
+    for q in parts.iter().take(n) {
+      drawn += project_split_scatter(q, exposure, mvp, view, &free, color, layout, inv_unit, pyramid, scratch);
+    }
+    return drawn;
+  }
   let mut stats = SplitStats::load(pyramid);
   split_packet(p, view, scratch, &mut stats);
   stats.store(pyramid);
@@ -3334,6 +4066,95 @@ pub fn splat_tier(
   );
 }
 
+/// Merges a partial pyramid into `out` (same layout): saturating sums for the count / colour
+/// words, the nonzero minimum for the depth word (as `scatter_into`), the maximum of
+/// [`PYR_TAU_MAX`] and the union of [`PYR_LEVEL_MASK`]; the split counters summed, the largest
+/// dropped flux by maximum ([`SplitStats`]).
+pub fn merge_pyramid(out: &mut [u32], part: &[u32]) {
+  let h = PYRAMID_HEADER_WORDS as usize;
+  let tm = PYR_TAU_MAX as usize;
+  if f32::from_bits(part[tm]) > f32::from_bits(out[tm]) {
+    out[tm] = part[tm];
+  }
+  out[PYR_LEVEL_MASK as usize] |= part[PYR_LEVEL_MASK as usize];
+  let ch = PYR_SPLIT_CHILDREN as usize;
+  out[ch] = out[ch].saturating_add(part[ch]);
+  let ve = PYR_VOLUME_EVALS as usize;
+  out[ve] = out[ve].wrapping_add(part[ve]);
+  let et = PYR_EWA_TEXELS as usize;
+  out[et] = out[et].wrapping_add(part[et]);
+  let df = PYR_SPLIT_DROPPED_FLUX as usize;
+  if f32::from_bits(part[df]) > f32::from_bits(out[df]) {
+    out[df] = part[df];
+  }
+  let w = PYRAMID_TEXEL_WORDS as usize;
+  for (o, p) in out[h..].chunks_exact_mut(w).zip(part[h..].chunks_exact(w)) {
+    for k in 0..4 {
+      sat_add(&mut o[k], p[k]);
+    }
+    if p[4] != 0 && (o[4] == 0 || p[4] < o[4]) {
+      o[4] = p[4];
+    }
+  }
+}
+
+/// [`splat_tier`] on `threads` threads (host replays: the observer's lab). Each thread splats
+/// blocks of clusters, handed out dynamically (a young near cluster splits far deeper than an old
+/// one), into its own pyramid carrying `pyramid`'s header with the counters zeroed; the parts
+/// merge into `pyramid` by [`merge_pyramid`] — order-free, so the result is bit-identical to
+/// [`splat_tier`] (`host_rasterizer_is_thread_count_independent`). One thread, or the
+/// `AETHERVK_DUST_PROBE` diagnostics (reports per call), runs [`splat_tier`] itself.
+#[cfg(feature = "std")]
+#[allow(clippy::too_many_arguments)]
+pub fn splat_tier_parallel(
+  moments: &[DustMoments],
+  render: &[DustRenderCluster],
+  pc: &DustSplatPushConstants,
+  flow: &DustFlowUniform,
+  tracer_counts: u32,
+  layout: &PyramidLayout,
+  pyramid: &mut [u32],
+  threads: usize,
+) {
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  const BLOCK: usize = 64;
+  let n = (pc.live_count as usize).min(moments.len()).min(render.len());
+  let threads = threads.min(n.div_ceil(BLOCK)).max(1);
+  if threads == 1 || std::env::var_os("AETHERVK_DUST_PROBE").is_some() {
+    splat_tier(moments, render, pc, flow, tracer_counts, layout, pyramid);
+    return;
+  }
+  let hn = PYRAMID_HEADER_WORDS as usize;
+  let mut header = pyramid[..hn].to_vec();
+  for wd in [PYR_TAU_MAX, PYR_LEVEL_MASK, PYR_SPLIT_CHILDREN, PYR_VOLUME_EVALS, PYR_EWA_TEXELS, PYR_SPLIT_DROPPED_FLUX] {
+    header[wd as usize] = 0;
+  }
+  let (next, len) = (AtomicUsize::new(0), pyramid.len());
+  let parts: alloc::vec::Vec<alloc::vec::Vec<u32>> = std::thread::scope(|s| {
+    let handles: alloc::vec::Vec<_> = (0..threads)
+      .map(|_| {
+        let (header, next) = (&header, &next);
+        s.spawn(move || {
+          let mut p = alloc::vec![0u32; len];
+          p[..hn].copy_from_slice(header);
+          loop {
+            let lo = next.fetch_add(BLOCK, Ordering::Relaxed);
+            if lo >= n {
+              break;
+            }
+            splat_tier_range(moments, render, pc, flow, tracer_counts, layout, &mut p, lo..(lo + BLOCK).min(n));
+          }
+          p
+        })
+      })
+      .collect();
+    handles.into_iter().map(|h| h.join().unwrap()).collect()
+  });
+  for p in &parts {
+    merge_pyramid(pyramid, p);
+  }
+}
+
 /// [`splat_tier`] restricted to the compact indices in `range` (clipped to the live count). The
 /// predecessor lookup still reads the whole `moments` / `render` slices, so a tier can be split
 /// across threads into separate pyramids: the scatter is a saturating sum per texel word, a
@@ -3358,71 +4179,195 @@ pub fn splat_tier_range(
   view.shell = super::specks::ShellCut::from_header(pyramid, eye).d_max;
   let mut scratch = SplitLeaves::default();
   let n = (pc.live_count as usize).min(moments.len()).min(render.len());
-  // `AETHERVK_DUST_PROBE="x,y;x,y"` (diagnostics, CPU particle mode): per cluster, the τ it adds
-  // at those pixels (composite read before and after), the largest contributors logged per tier
+  // `AETHERVK_DUST_PROBE="x,y;x,y"` (diagnostics, CPU particle mode): the clusters' τ at those
+  // pixels, the largest contributors logged per tier ([`splat_tier_probed`])
   #[cfg(feature = "std")]
   let probes = probe_pixels();
-  #[cfg(feature = "std")]
+  #[cfg(not(feature = "std"))]
+  let probes: alloc::vec::Vec<(u32, u32)> = alloc::vec::Vec::new();
+  let reports = splat_range_probed(
+    moments, render, pc, flow, tracer_counts, layout, pyramid, &view, &mut scratch, stream, eye,
+    range.start..range.end.min(n), &probes,
+  );
+  for r in &reports {
+    let mut line = alloc::format!(
+      "[Dust probe] tier live {n} pixel ({},{}): τ {:.4e} from {} clusters; top:",
+      r.pixel.0,
+      r.pixel.1,
+      r.total,
+      r.clusters
+    );
+    for h in r.hits.iter().take(8) {
+      line += &alloc::format!(" [{h}]");
+    }
+    aethervk_oshal_rlib::log!("{}", line);
+  }
+}
+
+/// One cluster's share of a probe pixel ([`splat_tier_probed`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProbeHit {
+  /// the τ (per px², exposure-scaled) it added at the pixel
+  pub tau: f32,
+  /// the share of the pixel's τ
+  pub share: f32,
+  pub index: usize,
+  pub age_s: f32,
+  /// its mean's distance from the eye and depth along the view (m)
+  pub dist_m: f32,
+  pub depth_m: f32,
+  /// `√(tr Σ_v / 3)` (m)
+  pub sigma_m: f32,
+  /// the size polyline's extent (m: the farthest edge from the mean)
+  pub chord_m: f32,
+  /// the time segment to the stream predecessor (m; 0 without one)
+  pub tseg_m: f32,
+  pub pred: bool,
+  pub merged: bool,
+}
+
+impl core::fmt::Display for ProbeHit {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    write!(
+      f,
+      "{:.1}% idx {} age {:.0}s dist {:.0}m depth {:.0}m σ {:.0}m chord {:.0}m tseg {:.0}m pred {} pooled {}",
+      100.0 * self.share,
+      self.index,
+      self.age_s,
+      self.dist_m,
+      self.depth_m,
+      self.sigma_m,
+      self.chord_m,
+      self.tseg_m,
+      self.pred,
+      self.merged
+    )
+  }
+}
+
+/// A probe pixel's attribution ([`splat_tier_probed`]): the τ the tier drew there, how many
+/// clusters drew some, the largest contributors (descending, at most 32).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProbeReport {
+  pub pixel: (u32, u32),
+  pub total: f32,
+  pub clusters: usize,
+  pub hits: alloc::vec::Vec<ProbeHit>,
+}
+
+/// [`splat_tier`] with a per-pixel attribution (diagnostics): for every probe pixel, the τ each
+/// cluster adds there (the composite read before and after the cluster, [`composite_sample`]),
+/// with the cluster's age, distance, width, chord and pooling — which clusters draw a feature of
+/// the frame. The pyramid is the same as [`splat_tier`]'s.
+#[allow(clippy::too_many_arguments)]
+pub fn splat_tier_probed(
+  moments: &[DustMoments],
+  render: &[DustRenderCluster],
+  pc: &DustSplatPushConstants,
+  flow: &DustFlowUniform,
+  tracer_counts: u32,
+  layout: &PyramidLayout,
+  pyramid: &mut [u32],
+  probes: &[(u32, u32)],
+) -> alloc::vec::Vec<ProbeReport> {
+  let stream = unpack_color(pc.color);
+  let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+  let mut view = SplitView::of(&pc.mvp, eye);
+  view.shell = super::specks::ShellCut::from_header(pyramid, eye).d_max;
+  let mut scratch = SplitLeaves::default();
+  let n = (pc.live_count as usize).min(moments.len()).min(render.len());
+  splat_range_probed(
+    moments, render, pc, flow, tracer_counts, layout, pyramid, &view, &mut scratch, stream, eye,
+    0..n, probes,
+  )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn splat_range_probed(
+  moments: &[DustMoments],
+  render: &[DustRenderCluster],
+  pc: &DustSplatPushConstants,
+  flow: &DustFlowUniform,
+  tracer_counts: u32,
+  layout: &PyramidLayout,
+  pyramid: &mut [u32],
+  view: &SplitView,
+  scratch: &mut SplitLeaves,
+  stream: [f32; 3],
+  eye: [f32; 3],
+  range: core::ops::Range<usize>,
+  probes: &[(u32, u32)],
+) -> alloc::vec::Vec<ProbeReport> {
   let unit = if pc.inv_unit > 0.0 { 1.0 / pc.inv_unit } else { 1.0 };
-  #[cfg(feature = "std")]
-  let mut probe_log: alloc::vec::Vec<alloc::vec::Vec<(f32, usize)>> =
+  let mut hits: alloc::vec::Vec<alloc::vec::Vec<(f32, usize)>> =
     alloc::vec![alloc::vec::Vec::new(); probes.len()];
-  #[cfg(feature = "std")]
-  let mut probe_total = alloc::vec![0.0f32; probes.len()];
-  for i in range.start..range.end.min(n) {
+  let mut before = alloc::vec![0.0f32; probes.len()];
+  for i in range {
     let m = &moments[i];
     if !(m.flux() > 0.0) {
       continue;
     }
-    #[cfg(feature = "std")]
-    let before: alloc::vec::Vec<f32> = probes
-      .iter()
-      .map(|&(x, y)| composite_sample(layout, pyramid, unit, x, y).0)
-      .collect();
+    for (k, &(x, y)) in probes.iter().enumerate() {
+      before[k] = composite_sample(layout, pyramid, unit, x, y).0;
+    }
     splat_cluster_inner(
-      moments, render, pc, flow, tracer_counts, layout, pyramid, &view, &mut scratch, stream, eye,
-      i,
+      moments, render, pc, flow, tracer_counts, layout, pyramid, view, scratch, stream, eye, i,
     );
-    #[cfg(feature = "std")]
     for (k, &(x, y)) in probes.iter().enumerate() {
       let d = composite_sample(layout, pyramid, unit, x, y).0 - before[k];
       if d > 0.0 {
-        probe_total[k] += d;
-        probe_log[k].push((d, i));
+        hits[k].push((d, i));
       }
     }
   }
-  #[cfg(feature = "std")]
-  for (k, &(x, y)) in probes.iter().enumerate() {
-    let log = &mut probe_log[k];
-    log.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(core::cmp::Ordering::Equal));
-    let tot = probe_total[k].max(1e-30);
-    let mut line = alloc::format!(
-      "[Dust probe] tier live {} pixel ({x},{y}): τ {:.4e} from {} clusters; top:",
-      n,
-      probe_total[k],
-      log.len()
-    );
-    for &(d, i) in log.iter().take(8) {
-      let m = &moments[i];
-      let dm = sub3(m.mean(), eye);
-      let dist = <f32 as FloatLike>::sqrt(dot3(dm, dm));
-      let fwd = view.fwd;
-      let depth = dot3(dm, fwd);
-      let cv = m.cov_v();
-      let tr = cv[0] + cv[3] + cv[5];
-      line += &alloc::format!(
-        " [{:.1}% idx {i} age {:.0}s dist {:.0}m depth {:.0}m σ̄_v {:.0}m pred {}]",
-        100.0 * d / tot,
-        m.age(),
-        dist,
-        depth,
-        <f32 as FloatLike>::sqrt((tr / 3.0).max(0.0)),
-        streak_pred(render, i).is_some()
-      );
-    }
-    aethervk_oshal_rlib::log!("{}", line);
-  }
+  probes
+    .iter()
+    .zip(hits)
+    .map(|(&pixel, mut h)| {
+      h.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(core::cmp::Ordering::Equal));
+      let total: f32 = h.iter().map(|x| x.0).sum();
+      let clusters = h.len();
+      let top = h
+        .iter()
+        .take(32)
+        .map(|&(tau, i)| {
+          let m = &moments[i];
+          let dm = sub3(m.mean(), eye);
+          let cv = m.cov_v();
+          let mut chord = 0.0f32;
+          for j in 0..=SIZE_BINS as usize {
+            let e = sub3(m.edge(j), m.mean());
+            chord = chord.max(<f32 as FloatLike>::sqrt(dot3(e, e)));
+          }
+          let pred = streak_pred(render, i);
+          ProbeHit {
+            tau,
+            share: tau / total.max(1e-30),
+            index: i,
+            age_s: m.age(),
+            dist_m: <f32 as FloatLike>::sqrt(dot3(dm, dm)),
+            depth_m: dot3(dm, view.fwd),
+            sigma_m: <f32 as FloatLike>::sqrt(((cv[0] + cv[3] + cv[5]) / 3.0).max(0.0)),
+            chord_m: chord,
+            tseg_m: pred
+              .map(|q| {
+                let d = sub3(moments[q].mean(), m.mean());
+                <f32 as FloatLike>::sqrt(dot3(d, d))
+              })
+              .unwrap_or(0.0),
+            pred: pred.is_some(),
+            merged: polyline_merged(m, &pc.mvp, layout.width, layout.height),
+          }
+        })
+        .collect();
+      ProbeReport {
+        pixel,
+        total,
+        clusters,
+        hits: top,
+      }
+    })
+    .collect()
 }
 
 /// `AETHERVK_DUST_PROBE="x,y;x,y"`: the probe pixels of [`splat_tier_range`] (diagnostics)
@@ -3474,6 +4419,8 @@ fn splat_cluster_inner(
       albedo: pc.albedo,
       sun: m.sun_dir(),
       r_h_au: m.helio_au(),
+      support: [0.0; 4],
+      origin: f32::NAN,
     };
     let color = age_color(stream, m.age(), pc.eye_local[3]);
     // pooled only when the predecessor's polyline is below a pixel too: a just-emitted sample is
@@ -3488,8 +4435,26 @@ fn splat_cluster_inner(
     let px = |q: [f32; 3]| project_point(q, &pc.mvp, layout.width, layout.height);
     // every sub-packet is split for the perspective (clipped at the eye plane, sliced by depth:
     // `split_packet`) and its leaves are projected and scattered one by one
-    for p in subpackets_swept(m, seg, pred, merged, pred_merged, Some(&px)) {
-      project_split_scatter(
+    let n_hard = hard_axis_pieces(pyramid);
+    TIME_CELL_OFFSET.store(time_cell_offset(pyramid), core::sync::atomic::Ordering::Relaxed);
+    // the lab's knobs (CPU only)
+    let no_cell = lab_knob("AETHERVK_DUST_LAB_NO_TIME_CELL").is_some_and(|v| v > 0.0);
+    let sig2 = lab_knob("AETHERVK_DUST_LAB_SIGMA").map(|v| v * v);
+    let no_support = lab_knob("AETHERVK_DUST_LAB_NO_SUPPORT").is_some_and(|v| v > 0.0);
+    let (seg, pred) = if no_cell { ([0.0; 3], None) } else { (seg, pred) };
+    for (p0, support, w_o) in subpackets_cells(m, seg, pred, merged, pred_merged, Some(&px)) {
+      let support = if no_support { [0.0; 4] } else { support };
+      let phot = Photometry { support, origin: w_o, ..phot };
+      let p0 = match sig2 {
+        Some(k) => Packet {
+          cov: [p0.cov[0] * k, p0.cov[1] * k, p0.cov[2] * k, p0.cov[3] * k, p0.cov[4] * k, p0.cov[5] * k],
+          ..p0
+        },
+        None => p0,
+      };
+      for j in 0..n_hard.max(1) {
+        let p = hard_axis_leaf(&p0, n_hard, j);
+        project_split_scatter(
         &p,
         exposure,
         &pc.mvp,
@@ -3501,6 +4466,7 @@ fn splat_cluster_inner(
         pyramid,
         scratch,
       );
+      }
     }
     if pc.flags & DUST_VIEW_TRACERS != 0 && is_tracer(m.id()) {
       // the tracer sits at the exact cluster position

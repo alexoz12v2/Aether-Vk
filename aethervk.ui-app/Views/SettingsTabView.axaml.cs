@@ -1,4 +1,6 @@
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 
 namespace AetherVk.Views;
 
@@ -7,6 +9,34 @@ public partial class SettingsTabView : UserControl
   public SettingsTabView()
   {
     InitializeComponent();
+    // tunnel: the capture sees the chord before focused controls (buttons, text boxes) do
+    AddHandler(KeyDownEvent, OnKeyDownCapture, RoutingStrategies.Tunnel);
+  }
+
+  /// <summary>
+  /// While the input-bindings editor is capturing, the next key chord becomes the binding (named as
+  /// the input registry names keys: Avalonia's <see cref="Key"/> names) and Esc cancels.
+  /// Modifier keys alone do not end the capture.
+  /// </summary>
+  internal void OnKeyDownCapture(object? sender, KeyEventArgs e)
+  {
+    if (DataContext is not Logic.ViewModels.ISettingsTabViewModel vm || !vm.InputBindings.IsCapturing)
+      return;
+    e.Handled = true;
+    if (e.Key == Key.Escape)
+    {
+      vm.InputBindings.CancelCapture();
+      return;
+    }
+    if (e.Key is Key.LeftShift or Key.RightShift or Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
+        or Key.LWin or Key.RWin)
+      return;
+    var m = e.KeyModifiers;
+    vm.InputBindings.SubmitCapturedChord(new Logic.Input.InputChord(
+      Key: e.Key.ToString(),
+      Shift: m.HasFlag(KeyModifiers.Shift),
+      Ctrl: m.HasFlag(KeyModifiers.Control),
+      Alt: m.HasFlag(KeyModifiers.Alt)));
   }
 }
 

@@ -119,6 +119,32 @@ public class ModelTabViewModelTests
   // ── tests ─────────────────────────────────────────────────────────────────────
 
   /// <summary>
+  /// Savefile restore: the session is replaced from outside and <see cref="ModelSession.NotifyRestored"/>
+  /// raised; the live tab re-reads the manual radius and forwards edits of the restored jets.
+  /// </summary>
+  [Fact]
+  public void RestoredSession_IsPickedUp_ByTheLiveTab()
+  {
+    var s = new TestSetup();
+    var jet = new JetViewModel(10, 20, 30, 2, 0.5f, new System.Numerics.Vector4(1, 1, 1, 1), true, 77u);
+    s.Session.Jets.Clear();
+    s.Session.Jets.Add(jet);
+    s.Session.ManualNucleusRadiusKm = 3.5f;
+    s.Session.NotifyRestored();
+    Assert.Equal(3.5f, s.Vm.ManualNucleusRadiusKm);
+    Assert.Equal(1, jet.DisplayIndex);
+
+    jet.NativePsId = 42;
+    s.Runtime.Invocations.Clear();
+    jet.LatitudeDeg = 11;
+    s.Runtime.Verify(r => r.ModifyParticleSystem(42ul, It.IsAny<ParticleSystemModel>(),
+      It.Is<ParticleSystemJet>(j => j.Seed == 77u), out It.Ref<ParticleSystemComputedProperties>.IsAny), Times.Once);
+    // and the tab writes its manual radius back into the session
+    s.Vm.ManualNucleusRadiusKm = 4.25f;
+    Assert.Equal(4.25f, s.Session.ManualNucleusRadiusKm);
+  }
+
+  /// <summary>
   /// Dust view aids: tracers default off; the toggle sends the native flags with the flow bit
   /// always set (the flow runs while simulating and freezes on pause), is stored in the model
   /// session, and is visual only.

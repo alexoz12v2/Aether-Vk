@@ -752,7 +752,6 @@ impl Image {
     })
   }
 
-  #[named]
   pub fn new_2d(
     device: &LogicalDevice,
     allocator: vk_mem::AllocatorView,
@@ -760,6 +759,32 @@ impl Image {
     staging_arena: &device::memory::FrameStagingArena,
     texture: &Texture,
     usage: vk::ImageUsageFlags,
+    debug_name: &str,
+  ) -> GpuResult<Self> {
+    Self::new_2d_color(
+      device,
+      allocator,
+      command_buffer,
+      staging_arena,
+      texture,
+      usage,
+      false,
+      debug_name,
+    )
+  }
+
+  /// [`Self::new_2d`] with the texels' colour encoding: `srgb` picks the format's sRGB twin
+  /// ([`TexelFormat::to_vk_format_srgb`](crate::simulation::comet::TexelFormat::to_vk_format_srgb)),
+  /// so sampling returns linear values (albedo maps).
+  #[named]
+  pub fn new_2d_color(
+    device: &LogicalDevice,
+    allocator: vk_mem::AllocatorView,
+    command_buffer: vk::CommandBuffer,
+    staging_arena: &device::memory::FrameStagingArena,
+    texture: &Texture,
+    usage: vk::ImageUsageFlags,
+    srgb: bool,
     debug_name: &str,
   ) -> GpuResult<Self> {
     let image_size = (texture.data.len()) as vk::DeviceSize;
@@ -785,6 +810,7 @@ impl Image {
       staging_offset as vk::DeviceSize,
       texture,
       usage,
+      srgb,
       debug_name,
     )
   }
@@ -803,6 +829,27 @@ impl Image {
     usage: vk::ImageUsageFlags,
     debug_name: &str,
   ) -> GpuResult<(Self, DedicatedStaging)> {
+    Self::new_2d_dedicated_color(
+      device,
+      allocator,
+      command_buffer,
+      texture,
+      usage,
+      false,
+      debug_name,
+    )
+  }
+
+  /// [`Self::new_2d_dedicated`] with the texels' colour encoding (see [`Self::new_2d_color`]).
+  pub fn new_2d_dedicated_color(
+    device: &LogicalDevice,
+    allocator: vk_mem::AllocatorView,
+    command_buffer: vk::CommandBuffer,
+    texture: &Texture,
+    usage: vk::ImageUsageFlags,
+    srgb: bool,
+    debug_name: &str,
+  ) -> GpuResult<(Self, DedicatedStaging)> {
     let staging = DedicatedStaging::new(device, allocator, &texture.data, debug_name)?;
     match Self::new_2d_from_staging(
       device,
@@ -812,6 +859,7 @@ impl Image {
       0,
       texture,
       usage,
+      srgb,
       debug_name,
     ) {
       Ok(image) => Ok((image, staging)),
@@ -833,11 +881,18 @@ impl Image {
     src_offset: vk::DeviceSize,
     texture: &Texture,
     usage: vk::ImageUsageFlags,
+    srgb: bool,
     debug_name: &str,
   ) -> GpuResult<Self> {
     if texture.data.is_empty() {
       return Err(crate::gpu_invalid_arg!("invalid argument"));
     }
+
+    let vk_format = if srgb {
+      texture.format.to_vk_format_srgb()
+    } else {
+      texture.format.to_vk_format()
+    };
 
     // 2. Create device image
     let image_info = vk::ImageCreateInfo::default()
@@ -849,7 +904,7 @@ impl Image {
       })
       .mip_levels(1)
       .array_layers(1)
-      .format(texture.format.to_vk_format())
+      .format(vk_format)
       .tiling(vk::ImageTiling::OPTIMAL)
       .initial_layout(vk::ImageLayout::UNDEFINED)
       .usage(usage | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
@@ -872,7 +927,7 @@ impl Image {
     let image_view_info = vk::ImageViewCreateInfo::default()
       .image(image)
       .view_type(vk::ImageViewType::TYPE_2D)
-      .format(texture.format.to_vk_format())
+      .format(vk_format)
       .components(vk::ComponentMapping::default())
       .subresource_range(
         vk::ImageSubresourceRange::default()
@@ -1424,6 +1479,9 @@ pub(super) struct Text2RenderResourceArchetypeArena {
 
   pub glyphs_buffer: NonZeroHandle<vk::Buffer>,
   pub glyphs_alloc: vk_mem::Allocation,
+  /// Unused since glyph batches moved to the frame staging arena (`Device::stage_for_device_read`);
+  /// the buffer is still registered for fault attribution.
+  #[allow(dead_code)]
   pub glyphs_ptr: u64,
 }
 

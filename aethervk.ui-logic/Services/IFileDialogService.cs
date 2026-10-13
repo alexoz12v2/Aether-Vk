@@ -10,5 +10,9 @@ namespace AetherVk.Logic.Services
       string defaultExtension,
       string[]? filters = null
     );
+
+    /// <summary>Picks (or creates, where the platform dialog allows) a folder: the save folder of
+    /// <i>File › Save As…</i>. Null when cancelled.</summary>
+    Task<string?> PickFolderAsync(string title);
   }
 }

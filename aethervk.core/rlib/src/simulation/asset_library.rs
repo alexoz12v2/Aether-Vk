@@ -245,6 +245,45 @@ pub struct AssetInfo {
   pub bundled_textures: [Option<AssetId>; 4],
   /// Mesh only.
   pub orientation_fix: OrientationFix,
+  /// Texture only: uncompressed texels a UI can draw ([`AssetLibrary::copy_texture_rgba8`]).
+  pub displayable: bool,
+}
+
+/// Bytes [`AssetLibrary::export_asset`] writes: extracted (owned) or the mapped source file.
+enum Exported {
+  Owned(Vec<u8>),
+  Mapped(MappedFile),
+}
+
+impl Exported {
+  fn bytes(&self) -> &[u8] {
+    match self {
+      Exported::Owned(b) => b,
+      Exported::Mapped(m) => m,
+    }
+  }
+}
+
+/// A source file written by [`AssetLibrary::export_asset`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportedAsset {
+  /// `<content_hash:016x>_<label>.<ext>`, inside the destination directory.
+  pub file_name: String,
+  /// Hash of the decoded content (the library's dedup hash).
+  pub content_hash: u64,
+  /// The file already existed (same content hash and label): nothing was written.
+  pub reused: bool,
+}
+
+/// Why [`AssetLibrary::copy_texture_rgba8`] returned no texels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TexelsError {
+  /// No texture with this id.
+  UnknownAsset,
+  /// Block-compressed (BC7 / ETC2 / ASTC): no CPU decoder.
+  Compressed,
+  /// The output buffer is smaller than `width · height · 4` bytes.
+  BufferTooSmall,
 }
 
 /// Winding repair applied to an imported mesh so that front faces (CCW, culled as back faces
@@ -371,6 +410,109 @@ impl AssetLibrary {
     self.by_key.get(&normalize_key(key)).copied()
   }
 
+  /// The texels of texture `id` as tightly packed RGBA8 (desktop billboards draw them), into
+  /// `out` when given; returns `(width, height)` either way. Expansion: grey (R8) → `(r, r, r, 255)`,
+  /// grey + alpha (RG8) → `(r, r, r, g)`, RGB8 → `(r, g, b, 255)`, RGBA8 copied as is.
+  /// `out` = `None` only sizes the result (`width · height · 4` bytes).
+  pub fn copy_texture_rgba8(
+    &self,
+    id: AssetId,
+    out: Option<&mut [u8]>,
+  ) -> Result<(u32, u32), TexelsError> {
+    let t = self.textures.get(&id).ok_or(TexelsError::UnknownAsset)?;
+    let (w, h) = (t.texture.width, t.texture.height);
+    let bpp = bytes_per_texel(t.texture.format).ok_or(TexelsError::Compressed)?;
+    let Some(out) = out else {
+      return Ok((w, h));
+    };
+    let n = w as usize * h as usize;
+    if out.len() < n * 4 {
+      return Err(TexelsError::BufferTooSmall);
+    }
+    let src = &t.texture.data[..n * bpp];
+    match bpp {
+      4 => out[..n * 4].copy_from_slice(src),
+      3 => {
+        for (d, s) in out.chunks_exact_mut(4).zip(src.chunks_exact(3)) {
+          d.copy_from_slice(&[s[0], s[1], s[2], 255]);
+        }
+      }
+      2 => {
+        for (d, s) in out.chunks_exact_mut(4).zip(src.chunks_exact(2)) {
+          d.copy_from_slice(&[s[0], s[0], s[0], s[1]]);
+        }
+      }
+      _ => {
+        for (d, &g) in out.chunks_exact_mut(4).zip(src.iter()) {
+          d.copy_from_slice(&[g, g, g, 255]);
+        }
+      }
+    }
+    Ok((w, h))
+  }
+
+  /// Hash of the decoded content of asset `id` (what imports deduplicate by).
+  pub fn content_hash_of(&self, id: AssetId) -> Option<u64> {
+    self
+      .meshes
+      .get(&id)
+      .map(|m| m.content_hash)
+      .or_else(|| self.textures.get(&id).map(|t| t.content_hash))
+  }
+
+  /// Writes the *source* of asset `id` into `dest_dir` as `<content_hash>_<label>.<ext>` (the
+  /// savefile's `assets/meshes|textures/` layout): the original file copied verbatim, or, for an
+  /// image embedded in a glTF/GLB (`key = <path>#image<N>`), its encoded bytes extracted from
+  /// the buffer view, so the texture never depends on the mesh file it came from. An existing
+  /// file of that name is reused (same content hash ⇒ same content).
+  pub fn export_asset(&self, id: AssetId, dest_dir: &str) -> Result<ExportedAsset, AssetError> {
+    let (key, label, source, hash) = if let Some(m) = self.meshes.get(&id) {
+      (&m.key, &m.label, &m.source_path, m.content_hash)
+    } else if let Some(t) = self.textures.get(&id) {
+      (&t.key, &t.label, &t.source_path, t.content_hash)
+    } else {
+      return Err(AssetError::UnknownAsset);
+    };
+    let safe_label: String = label
+      .chars()
+      .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+      .collect();
+    fs::create_dir_all(dest_dir).map_err(|_| AssetError::CacheIo)?;
+    let embedded = key
+      .rsplit_once("#image")
+      .and_then(|(_, n)| n.parse::<usize>().ok());
+    // the bytes to write: the embedded image's, or the source file's (mapped, not copied twice)
+    let mapped;
+    let (bytes, ext): (&[u8], String) = match embedded {
+      Some(index) => {
+        let file = comet::GltfFile::open(source)?;
+        let (b, ext) = comet::gltf_embedded_image_bytes(&file, index)?
+          .ok_or(AssetError::Load(CometLoadError::TextureNotFound))?;
+        mapped = Exported::Owned(b);
+        (mapped.bytes(), ext.to_string())
+      }
+      None => {
+        let ext = source.rsplit('.').next().unwrap_or("bin").to_ascii_lowercase();
+        mapped = Exported::Mapped(
+          MappedFile::new(&fs::PathBuf::from(source.as_str()))
+            .map_err(|_| AssetError::Load(CometLoadError::PathNotFound))?,
+        );
+        (mapped.bytes(), ext)
+      }
+    };
+    let file_name = format!("{hash:016x}_{safe_label}.{ext}");
+    let dest = format!("{}/{}", dest_dir.trim_end_matches('/'), file_name);
+    // same name = same content hash and label; reused only when complete (an interrupted write
+    // leaves a shorter file, which is rewritten)
+    if let Ok(existing) = MappedFile::new(&fs::PathBuf::from(dest.as_str())) {
+      if existing.len() == bytes.len() {
+        return Ok(ExportedAsset { file_name, content_hash: hash, reused: true });
+      }
+    }
+    fs::write(dest.as_str(), bytes).map_err(|_| AssetError::CacheIo)?;
+    Ok(ExportedAsset { file_name, content_hash: hash, reused: false })
+  }
+
   /// All assets, meshes first, each group in import order.
   pub fn assets(&self) -> Vec<AssetInfo> {
     let meshes = self.meshes.values().map(|m| AssetInfo {
@@ -384,6 +526,7 @@ impl AssetLibrary {
       channel_hint: None,
       bundled_textures: m.bundled_textures,
       orientation_fix: m.orientation_fix,
+      displayable: false,
     });
     let textures = self.textures.values().map(|t| AssetInfo {
       id: t.id,
@@ -396,6 +539,7 @@ impl AssetLibrary {
       channel_hint: t.channel_hint,
       bundled_textures: [None; 4],
       orientation_fix: OrientationFix::None,
+      displayable: bytes_per_texel(t.texture.format).is_some(),
     });
     meshes.chain(textures).collect()
   }

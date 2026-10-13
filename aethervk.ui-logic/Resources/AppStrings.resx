@@ -484,4 +484,61 @@
   <data name="Panels_SkyImage_LockFailed" xml:space="preserve">
     <value>Switch to the Earth observer view to lock onto the image</value>
   </data>
+  <data name="Tabs_Settings_Billboards" xml:space="preserve">
+    <value>Billboards</value>
+  </data>
+  <data name="Tabs_Settings_BillboardsHint" xml:space="preserve">
+    <value>Show an imported texture in its own window over the desktop. Drag it with the left button; right click cycles the move, rotate and scale handles, which you drag with the right button (Ctrl snaps the rotation, Shift keeps the aspect).</value>
+  </data>
+  <data name="Tabs_Settings_BillboardsNoTextures" xml:space="preserve">
+    <value>Import a PNG, JPEG or uncompressed KTX2 texture in the Imports tab first.</value>
+  </data>
+  <data name="Tabs_Settings_BillboardTexture" xml:space="preserve">
+    <value>Texture</value>
+  </data>
+  <data name="Tabs_Settings_CreateBillboard" xml:space="preserve">
+    <value>Create billboard</value>
+  </data>
+  <data name="Tabs_Settings_BillboardPosition" xml:space="preserve">
+    <value>Centre (desktop px)</value>
+  </data>
+  <data name="Tabs_Settings_BillboardSize" xml:space="preserve">
+    <value>Size (px)</value>
+  </data>
+  <data name="Tabs_Settings_BillboardAspectLock" xml:space="preserve">
+    <value>Keep aspect</value>
+  </data>
+  <data name="Tabs_Settings_BillboardAlpha" xml:space="preserve">
+    <value>Opacity</value>
+  </data>
+  <data name="Tabs_Settings_BillboardRotation" xml:space="preserve">
+    <value>Rotation (°)</value>
+  </data>
+  <data name="Tabs_Settings_BillboardVisible" xml:space="preserve">
+    <value>Visible</value>
+  </data>
+  <data name="Tabs_Settings_BillboardDelete" xml:space="preserve">
+    <value>Delete</value>
+  </data>
+  <data name="Tabs_Settings_BillboardMissing" xml:space="preserve">
+    <value>Texture not loaded: import it again to show it.</value>
+  </data>
+  <data name="Tabs_Settings_InputBindings" xml:space="preserve">
+    <value>Input bindings</value>
+  </data>
+  <data name="Tabs_Settings_InputBindingsHint" xml:space="preserve">
+    <value>Rebind captures the next key chord (Esc cancels). Changes apply at once and are saved.</value>
+  </data>
+  <data name="Tabs_Settings_AddChord" xml:space="preserve">
+    <value>Add</value>
+  </data>
+  <data name="Tabs_Settings_Rebind" xml:space="preserve">
+    <value>Rebind</value>
+  </data>
+  <data name="Tabs_Settings_RemoveChord" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="Tabs_Settings_ResetBindings" xml:space="preserve">
+    <value>Reset to defaults</value>
+  </data>
 </root>

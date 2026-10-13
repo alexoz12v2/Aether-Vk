@@ -19,6 +19,20 @@ public partial class DesignSettingsTabViewModel
 
   public CometAppearanceViewModel CometAppearance { get; } = new DesignCometAppearanceViewModel();
 
+  public DesktopBillboardsViewModel Billboards { get; } = new DesignDesktopBillboardsViewModel();
+
+  public InputBindingsViewModel InputBindings { get; } = DesignBindings();
+
+  private static InputBindingsViewModel DesignBindings()
+  {
+    var r = new Input.InputRegistry();
+    r.Register("Viewport", new Input.InputChord(Key: "V"), new Input.AppAction("viewport.switch_camera_mode"));
+    r.Register("Viewport", new Input.InputChord(Key: "Tab"), new Input.AppAction("viewport.switch_camera_mode"));
+    r.Register("Viewport", new Input.InputChord(Key: "NumPad5"), new Input.AppAction("viewport.toggle_projection"));
+    r.CaptureDefaults();
+    return new InputBindingsViewModel(r, null);
+  }
+
   public System.Collections.ObjectModel.ObservableCollection<ViewportSettingsViewModel> ActiveViewports { get; } = new()
   {
       new DesignViewportSettingsViewModel("Viewport 1 (Perspective)", true),
@@ -43,6 +57,19 @@ public class DesignCometAppearanceViewModel : CometAppearanceViewModel
     SelectedAlbedo = TextureOptions[1];
     SelectedNormal = SelectedRoughness = SelectedAo = TextureOptions[0];
     Yaw = 30;
+  }
+}
+
+public class DesignDesktopBillboardsViewModel : DesktopBillboardsViewModel
+{
+  public DesignDesktopBillboardsViewModel()
+  {
+    var tex = new Models.ImportedAsset(
+      5, Models.AssetKind.Texture, "67P_2026-03-01_rosetta", "/mock/67P_tail.png", 2048, 1365, [], null, null)
+    { IsDisplayable = true };
+    TextureOptions.Add(tex);
+    SelectedTexture = tex;
+    HasTextures = true;
   }
 }
 

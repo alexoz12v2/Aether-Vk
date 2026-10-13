@@ -10,7 +10,8 @@ struct SphereGizmoData {
     mat4 model;
     float radius;
     float subdivisions; // E.g. 12.0 for every 30 degrees (360/30)
-    vec2 _pad;
+    float style;        // 0 = sphere wireframe + axes, 1 = dashed polar axis (local Z, ±radius)
+    float dashCount;    // style 1: dashes (dash + gap) along the whole axis
     vec4 centerClip;    // P*V*center composed in f64 on the CPU; all zero = compute it here
 };
 
@@ -28,11 +29,40 @@ layout(push_constant, std430) uniform PushConstants {
 
 layout(location = 0) out vec3 fragColor;
 layout(location = 1) out float outAlpha;
+// x: position along the dash pattern (style 1: 0 at the south end, dashCount + ½ at the north end),
+// y: 1 = dashed line (the fragment shader cuts the gaps), 0 = solid
+layout(location = 2) out vec2 outDash;
 
 const float PI = 3.14159265359;
 
 void main() {
     mat4 model = push.gizmoPtr.gizmos[gl_InstanceIndex].model;
+    outDash = vec2(0.0);
+
+    if (push.gizmoPtr.gizmos[gl_InstanceIndex].style > 0.5) {
+        // ── Dashed polar axis: one line, local Z from -radius (south) to +radius (north) ─────
+        // The same draw issues the sphere's vertex count: every vertex past the first two is
+        // pushed outside clip space.
+        if (gl_VertexIndex > 1) {
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+            outAlpha = 0.0;
+            fragColor = vec3(0.0);
+            return;
+        }
+        vec4 axisCenterClip = push.gizmoPtr.gizmos[gl_InstanceIndex].centerClip;
+        if (axisCenterClip == vec4(0.0)) axisCenterClip = push.viewProj * vec4(model[3].xyz, 1.0);
+        float halfLength = push.gizmoPtr.gizmos[gl_InstanceIndex].radius;
+        float t = float(gl_VertexIndex); // 0 = south end, 1 = north end
+        vec3 axisLocal = vec3(0.0, 0.0, mix(-halfLength, halfLength, t));
+        gl_Position = axisCenterClip + push.viewProj * vec4(mat3(model) * axisLocal, 0.0);
+        // Reverse-Z: pull forward like the comet gizmo's axes so it wins over its own globe
+        gl_Position.z = min(gl_Position.z + 0.001 * gl_Position.w, gl_Position.w);
+        outAlpha = 1.0;
+        // N + ½ periods: the line starts and ends on a dash, so both poles are marked
+        outDash = vec2(t * (push.gizmoPtr.gizmos[gl_InstanceIndex].dashCount + 0.5), 1.0);
+        fragColor = vec3(0.85, 0.9, 1.0);
+        return;
+    }
 
     vec4 centerClip = push.gizmoPtr.gizmos[gl_InstanceIndex].centerClip;
     if (centerClip == vec4(0.0)) centerClip = push.viewProj * vec4(model[3].xyz, 1.0);

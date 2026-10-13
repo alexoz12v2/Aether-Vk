@@ -38,8 +38,13 @@ pub struct CAssetInfoDTO {
   /// Mesh only: `OrientationFix` applied at import (`0` none, `1` winding flipped,
   /// `2` inside-out fixed).
   pub orientation_fix: u32,
-  pub _pad: u32,
+  /// Bit 0 ([`ASSET_FLAG_DISPLAYABLE`]): texture with uncompressed texels
+  /// ([`avkSimulationContext_copyAssetTexels`] works).
+  pub flags: u32,
 }
+
+/// [`CAssetInfoDTO::flags`]: the texture's texels can be copied as RGBA8.
+pub const ASSET_FLAG_DISPLAYABLE: u32 = 1 << 0;
 
 /// Comet appearance, both directions.
 #[repr(C)]
@@ -140,7 +145,7 @@ fn info_to_dto(info: &AssetInfo) -> CAssetInfoDTO {
     kind: info.kind as u32,
     channel_hint: info.channel_hint.map_or(-1, |c: TextureChannel| c as i32),
     orientation_fix: info.orientation_fix as u32,
-    _pad: 0,
+    flags: if info.displayable { ASSET_FLAG_DISPLAYABLE } else { 0 },
   }
 }
 
@@ -301,6 +306,158 @@ pub unsafe extern "C" fn avkSimulationContext_copyAssetThumbnail(
   }
   unsafe { core::ptr::copy_nonoverlapping(thumb.rgba.as_ptr(), out_rgba, thumb.rgba.len()) };
   true
+}
+
+/// Result of [`avkSimulationContext_copyAssetTexels`].
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TexelsStatus {
+  /// Copied (or, with a null buffer, sized).
+  Ok = 0,
+  /// Null context or size pointers.
+  InvalidArgument = 1,
+  /// No texture with this id.
+  UnknownAsset = 2,
+  /// Block-compressed texture: no CPU decoder.
+  Compressed = 3,
+  /// `out_len` < `width · height · 4`; the sizes are written.
+  BufferTooSmall = 4,
+  /// An import or unload holds the library; retry.
+  Busy = 5,
+}
+
+/// Copies texture `asset_id` as tightly packed RGBA8 (desktop billboards draw it): grey → grey
+/// opaque, grey + alpha, RGB → opaque, RGBA as is. With `out_rgba = null` only the size is written
+/// (`out_width · out_height · 4` bytes). Returns a [`TexelsStatus`].
+///
+/// # Safety
+/// FFI Contract: `out_rgba` is valid for `out_len` bytes when non-null.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_copyAssetTexels(
+  ctx: *mut SimulationContext,
+  asset_id: u64,
+  out_rgba: *mut u8,
+  out_len: u64,
+  out_width: *mut u32,
+  out_height: *mut u32,
+) -> i32 {
+  if ctx.is_null() || out_width.is_null() || out_height.is_null() {
+    return TexelsStatus::InvalidArgument as i32;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let library = alloc::sync::Arc::clone(&ctx_ref.scenes.read().asset_library);
+  let Some(library) = library.try_read() else {
+    return TexelsStatus::Busy as i32;
+  };
+  let sized = match library.copy_texture_rgba8(asset_id, None) {
+    Ok(wh) => wh,
+    Err(e) => return texels_status(e) as i32,
+  };
+  unsafe {
+    *out_width = sized.0;
+    *out_height = sized.1;
+  }
+  if out_rgba.is_null() {
+    return TexelsStatus::Ok as i32;
+  }
+  let out = unsafe { core::slice::from_raw_parts_mut(out_rgba, out_len as usize) };
+  match library.copy_texture_rgba8(asset_id, Some(out)) {
+    Ok(_) => TexelsStatus::Ok as i32,
+    Err(e) => texels_status(e) as i32,
+  }
+}
+
+fn texels_status(e: aethervk_core_rlib::simulation::asset_library::TexelsError) -> TexelsStatus {
+  use aethervk_core_rlib::simulation::asset_library::TexelsError;
+  match e {
+    TexelsError::UnknownAsset => TexelsStatus::UnknownAsset,
+    TexelsError::Compressed => TexelsStatus::Compressed,
+    TexelsError::BufferTooSmall => TexelsStatus::BufferTooSmall,
+  }
+}
+
+/// Writes the source of asset `asset_id` into `dest_dir` (UTF-8, NUL-terminated) as
+/// `<content_hash>_<label>.<ext>`: the original file copied verbatim, or the encoded bytes of an
+/// image embedded in a glTF/GLB (savefile `assets/` folders). `out_name` receives the file name
+/// (NUL-terminated, truncated to `out_name_len`; `out_name_needed` = its full byte length) and
+/// `out_hash` the content hash. Returns `0` written, `1` reused (already there), negative on
+/// failure: `-1` bad arguments, `-2` unknown asset, `-3` source unreadable, `-4` write failed,
+/// `-5` library busy.
+///
+/// # Safety
+/// FFI Contract: `dest_dir` is a valid C string; `out_name` is valid for `out_name_len` bytes
+/// when non-null; `out_name_needed` / `out_hash` are null or writable.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_exportAsset(
+  ctx: *mut SimulationContext,
+  asset_id: u64,
+  dest_dir: *const c_char,
+  out_name: *mut c_char,
+  out_name_len: u32,
+  out_name_needed: *mut u32,
+  out_hash: *mut u64,
+) -> i32 {
+  use aethervk_core_rlib::simulation::asset_library::AssetError;
+  if ctx.is_null() || dest_dir.is_null() {
+    return -1;
+  }
+  let Ok(dir) = (unsafe { CStr::from_ptr(dest_dir) }).to_str() else {
+    return -1;
+  };
+  let ctx_ref = unsafe { &*ctx };
+  let library = alloc::sync::Arc::clone(&ctx_ref.scenes.read().asset_library);
+  let Some(library) = library.try_read() else {
+    return -5;
+  };
+  match library.export_asset(asset_id, dir) {
+    Ok(e) => {
+      unsafe {
+        let n = write_c_string(&e.file_name, out_name, out_name_len);
+        if !out_name_needed.is_null() {
+          *out_name_needed = n;
+        }
+        if !out_hash.is_null() {
+          *out_hash = e.content_hash;
+        }
+      }
+      if e.reused { 1 } else { 0 }
+    }
+    Err(AssetError::UnknownAsset) => -2,
+    Err(AssetError::Load(_)) => -3,
+    Err(_) => -4,
+  }
+}
+
+/// The content hash of asset `asset_id` (the library's dedup hash of the decoded data), written to
+/// `out_hash`. `false` for an unknown asset or while an import holds the library. A savefile maps
+/// its saved assets to the ids they get when re-imported by this hash.
+///
+/// # Safety
+/// FFI Contract: `out_hash` is writable.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getAssetContentHash(
+  ctx: *mut SimulationContext,
+  asset_id: u64,
+  out_hash: *mut u64,
+) -> bool {
+  if ctx.is_null() || out_hash.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let library = alloc::sync::Arc::clone(&ctx_ref.scenes.read().asset_library);
+  let Some(library) = library.try_read() else {
+    return false;
+  };
+  match library.content_hash_of(asset_id) {
+    Some(h) => {
+      unsafe { *out_hash = h };
+      true
+    }
+    None => false,
+  }
 }
 
 /// Asset library memory accounting (mapped vs heap bytes).
@@ -668,6 +825,105 @@ mod tests {
     let mut nan = dto;
     nan.yaw_pitch_roll_deg[1] = f32::NAN;
     assert!(dto_to_appearance(&nan).is_none());
+  }
+
+  #[test]
+  fn displayable_flag_rides_in_the_former_padding_word() {
+    // C# reads it at the same offset the padding had: the DTO size is unchanged (72)
+    assert_eq!(core::mem::offset_of!(CAssetInfoDTO, flags), 68);
+    let mut info = AssetInfo {
+      id: 3,
+      kind: AssetKind::Texture,
+      key: "k".into(),
+      label: "l".into(),
+      source_path: String::new(),
+      a: 4,
+      b: 2,
+      channel_hint: None,
+      bundled_textures: [None; 4],
+      orientation_fix: Default::default(),
+      displayable: true,
+    };
+    assert_eq!(info_to_dto(&info).flags, ASSET_FLAG_DISPLAYABLE);
+    info.displayable = false;
+    assert_eq!(info_to_dto(&info).flags, 0);
+  }
+
+  #[test]
+  fn texels_status_codes() {
+    use aethervk_core_rlib::simulation::asset_library::TexelsError;
+    assert_eq!(texels_status(TexelsError::UnknownAsset) as i32, 2);
+    assert_eq!(texels_status(TexelsError::Compressed) as i32, 3);
+    assert_eq!(texels_status(TexelsError::BufferTooSmall) as i32, 4);
+    let (mut w, mut h) = (0u32, 0u32);
+    let st = unsafe {
+      avkSimulationContext_copyAssetTexels(core::ptr::null_mut(), 1, core::ptr::null_mut(), 0, &mut w, &mut h)
+    };
+    assert_eq!(st, TexelsStatus::InvalidArgument as i32);
+  }
+
+  /// End to end through a real context (skipped without a Vulkan device): an imported 2×1 RGB PNG
+  /// comes back as RGBA8 through the FFI; the size query, a short buffer and an unknown id.
+  #[test]
+  fn copy_asset_texels_through_a_context() {
+    extern crate std;
+    const PNG_2X1_RGB: &[u8] = &[
+      137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 2, 0,
+      0, 0, 123, 64, 232, 221, 0, 0, 0, 15, 73, 68, 65, 84, 120, 156, 99, 224, 18, 145, 59, 49, 45,
+      5, 0, 5, 7, 1, 255, 6, 124, 182, 253, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+    let asset_dir = alloc::format!("{}/../../assets", env!("CARGO_MANIFEST_DIR"));
+    SimulationContext::set_asset_path(&asset_dir);
+    let Ok(ctx) = SimulationContext::startup(None) else {
+      std::println!("Skipping: no Vulkan device");
+      return;
+    };
+    let dir = std::env::temp_dir().join(alloc::format!("avk_ffi_texels_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("two.png");
+    std::fs::write(&png, PNG_2X1_RGB).unwrap();
+    let id = {
+      let lib = alloc::sync::Arc::clone(&ctx.scenes.read().asset_library);
+      let mut lib = lib.write();
+      lib.set_cache_dir(dir.join("cache").to_str().unwrap()).unwrap();
+      lib.import_file(png.to_str().unwrap()).unwrap().textures[0]
+    };
+    let ctx_ptr = alloc::boxed::Box::into_raw(ctx);
+    let (mut w, mut h) = (0u32, 0u32);
+    unsafe {
+      let st = avkSimulationContext_copyAssetTexels(ctx_ptr, id, core::ptr::null_mut(), 0, &mut w, &mut h);
+      assert_eq!((st, w, h), (TexelsStatus::Ok as i32, 2, 1));
+      let mut out = [0u8; 8];
+      let st = avkSimulationContext_copyAssetTexels(ctx_ptr, id, out.as_mut_ptr(), 8, &mut w, &mut h);
+      assert_eq!(st, TexelsStatus::Ok as i32);
+      assert_eq!(out, [10, 20, 30, 255, 200, 150, 100, 255]);
+      let mut short = [0u8; 7];
+      let st = avkSimulationContext_copyAssetTexels(ctx_ptr, id, short.as_mut_ptr(), 7, &mut w, &mut h);
+      assert_eq!(st, TexelsStatus::BufferTooSmall as i32);
+      let st = avkSimulationContext_copyAssetTexels(ctx_ptr, id + 1000, core::ptr::null_mut(), 0, &mut w, &mut h);
+      assert_eq!(st, TexelsStatus::UnknownAsset as i32);
+      // the listing flags it displayable
+      let mut dto = CAssetInfoDTO::default();
+      let ok = avkSimulationContext_getAssetInfo(
+        ctx_ptr, 0, &mut dto, core::ptr::null_mut(), 0, core::ptr::null_mut(), core::ptr::null_mut(), 0, core::ptr::null_mut(),
+      );
+      assert!(ok && dto.id == id && dto.flags & ASSET_FLAG_DISPLAYABLE != 0);
+      // the content hash a savefile maps re-imported assets by: the library's, unknown ids refused
+      let mut hash = 0u64;
+      assert!(avkSimulationContext_getAssetContentHash(ctx_ptr, id, &mut hash));
+      let want = alloc::sync::Arc::clone(&(*ctx_ptr).scenes.read().asset_library).read().content_hash_of(id);
+      assert_eq!(Some(hash), want);
+      assert_ne!(hash, 0);
+      assert!(!avkSimulationContext_getAssetContentHash(ctx_ptr, id + 1000, &mut hash));
+      assert!(!avkSimulationContext_getAssetContentHash(ctx_ptr, id, core::ptr::null_mut()));
+      {
+        let lib = alloc::sync::Arc::clone(&(*ctx_ptr).scenes.read().asset_library);
+        lib.write().clear();
+      }
+      drop(alloc::boxed::Box::from_raw(ctx_ptr));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
   }
 
   #[test]

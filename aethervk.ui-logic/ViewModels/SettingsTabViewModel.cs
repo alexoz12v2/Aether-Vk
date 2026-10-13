@@ -33,6 +33,12 @@ public partial class SettingsTabViewModel
   /// <summary>Comet Appearance section (display mode, custom mesh wiring and placement).</summary>
   public CometAppearanceViewModel CometAppearance { get; }
 
+  /// <summary>Billboards section (imported textures shown in their own desktop windows).</summary>
+  public DesktopBillboardsViewModel Billboards { get; }
+
+  /// <summary>Input bindings section (rebind / add / remove chords, reset; saved to preferences.json).</summary>
+  public InputBindingsViewModel InputBindings { get; }
+
   public SettingsTabViewModel(
     ITranslationService translationService,
     ISchedulerProvider schedulerProvider,
@@ -41,6 +47,10 @@ public partial class SettingsTabViewModel
     INativeRuntimeService runtimeService,
     AssetLibraryService assetLibrary,
     TimelineService timelineService,
+    DesktopBillboardService billboardService,
+    IScreenInfoProvider screenInfoProvider,
+    Input.InputRegistry inputRegistry,
+    PreferencesService preferences,
     IFileDialogService? fileDialogService = null
   )
     : base("Settings", sessionService)
@@ -54,6 +64,12 @@ public partial class SettingsTabViewModel
       assetLibrary,
       timelineService,
       translationService,
+      schedulerProvider);
+    InputBindings = new InputBindingsViewModel(inputRegistry, preferences);
+    Billboards = new DesktopBillboardsViewModel(
+      billboardService,
+      assetLibrary,
+      screenInfoProvider,
       schedulerProvider);
 
     Icon = "⚙";

@@ -485,4 +485,61 @@
   <data name="Panels_SkyImage_LockFailed" xml:space="preserve">
     <value>Passa alla vista osservatore terrestre per agganciarti all'immagine</value>
   </data>
+  <data name="Tabs_Settings_Billboards" xml:space="preserve">
+    <value>Billboard</value>
+  </data>
+  <data name="Tabs_Settings_BillboardsHint" xml:space="preserve">
+    <value>Mostra una texture importata in una finestra propria sopra il desktop. Trascinala con il tasto sinistro; il clic destro alterna le maniglie di spostamento, rotazione e scala, da trascinare con il tasto destro (Ctrl aggancia la rotazione, Maiusc mantiene le proporzioni).</value>
+  </data>
+  <data name="Tabs_Settings_BillboardsNoTextures" xml:space="preserve">
+    <value>Importa prima una texture PNG, JPEG o KTX2 non compressa nella scheda Importazioni.</value>
+  </data>
+  <data name="Tabs_Settings_BillboardTexture" xml:space="preserve">
+    <value>Texture</value>
+  </data>
+  <data name="Tabs_Settings_CreateBillboard" xml:space="preserve">
+    <value>Crea billboard</value>
+  </data>
+  <data name="Tabs_Settings_BillboardPosition" xml:space="preserve">
+    <value>Centro (px desktop)</value>
+  </data>
+  <data name="Tabs_Settings_BillboardSize" xml:space="preserve">
+    <value>Dimensioni (px)</value>
+  </data>
+  <data name="Tabs_Settings_BillboardAspectLock" xml:space="preserve">
+    <value>Mantieni proporzioni</value>
+  </data>
+  <data name="Tabs_Settings_BillboardAlpha" xml:space="preserve">
+    <value>Opacità</value>
+  </data>
+  <data name="Tabs_Settings_BillboardRotation" xml:space="preserve">
+    <value>Rotazione (°)</value>
+  </data>
+  <data name="Tabs_Settings_BillboardVisible" xml:space="preserve">
+    <value>Visibile</value>
+  </data>
+  <data name="Tabs_Settings_BillboardDelete" xml:space="preserve">
+    <value>Elimina</value>
+  </data>
+  <data name="Tabs_Settings_BillboardMissing" xml:space="preserve">
+    <value>Texture non caricata: importala di nuovo per mostrarla.</value>
+  </data>
+  <data name="Tabs_Settings_InputBindings" xml:space="preserve">
+    <value>Scorciatoie</value>
+  </data>
+  <data name="Tabs_Settings_InputBindingsHint" xml:space="preserve">
+    <value>Riassegna cattura la prossima combinazione di tasti (Esc annulla). Le modifiche valgono subito e vengono salvate.</value>
+  </data>
+  <data name="Tabs_Settings_AddChord" xml:space="preserve">
+    <value>Aggiungi</value>
+  </data>
+  <data name="Tabs_Settings_Rebind" xml:space="preserve">
+    <value>Riassegna</value>
+  </data>
+  <data name="Tabs_Settings_RemoveChord" xml:space="preserve">
+    <value>Rimuovi</value>
+  </data>
+  <data name="Tabs_Settings_ResetBindings" xml:space="preserve">
+    <value>Ripristina predefinite</value>
+  </data>
 </root>

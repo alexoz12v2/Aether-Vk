@@ -1,0 +1,248 @@
+using System;
+using System.Collections.Generic;
+using System.Text.Json.Serialization;
+
+namespace AetherVk.Logic.SaveFile;
+
+// The save index, format 1 (docs/savefile.md). Plain mutable DTOs: the JSON is the contract, the
+// services map them to and from the live state. Epochs are TAI parts [centuries, nanoseconds].
+
+/// <summary>A TAI epoch as engine parts, serialized as <c>[centuries, nanoseconds]</c>.</summary>
+public sealed class EpochParts
+{
+  public short Centuries { get; set; }
+  public ulong Nanoseconds { get; set; }
+
+  public EpochParts() { }
+
+  public EpochParts(short centuries, ulong nanoseconds)
+  {
+    Centuries = centuries;
+    Nanoseconds = nanoseconds;
+  }
+}
+
+public sealed class SaveIndex
+{
+  public const int CurrentFormatVersion = 1;
+  public const string FileName = "aethervk_index.json";
+
+  public int FormatVersion { get; set; } = CurrentFormatVersion;
+  public string AppVersion { get; set; } = "";
+  public DateTimeOffset CreatedAt { get; set; }
+  public DateTimeOffset ModifiedAt { get; set; }
+  public TimelineDto Timeline { get; set; } = new();
+  public List<SpkDto> Spk { get; set; } = [];
+  public List<StateDto> States { get; set; } = [];
+  public ModelDto Model { get; set; } = new();
+  public List<JetDto> Jets { get; set; } = [];
+  public List<ViewportDto> Viewports { get; set; } = [];
+  public List<AssetDto> Assets { get; set; } = [];
+  public CometAppearanceIndexDto? CometAppearance { get; set; }
+  public List<BillboardDto> Billboards { get; set; } = [];
+}
+
+public sealed class TimelineDto
+{
+  public EpochParts? CommittedStart { get; set; }
+  public EpochParts? CommittedEnd { get; set; }
+  public string? ProposedStart { get; set; }
+  public string? ProposedEnd { get; set; }
+  public EpochParts? CurrentEpoch { get; set; }
+  public bool StartPaused { get; set; }
+}
+
+public sealed class SpkDto
+{
+  public string File { get; set; } = "";
+  public int NaifId { get; set; }
+  public string Designation { get; set; } = "";
+  public string FullName { get; set; } = "";
+  public string RecordId { get; set; } = "";
+  public CoverageDto? Coverage { get; set; }
+  public SbdbDto? Sbdb { get; set; }
+  public string ReferenceOrbitMode { get; set; } = "sbdb";
+  public float NucleusRadiusKm { get; set; }
+  public RotationDto? Rotation { get; set; }
+  public DateTimeOffset CreatedAt { get; set; }
+  public DateTimeOffset LastUsedAt { get; set; }
+  public bool Committed { get; set; }
+}
+
+public sealed class CoverageDto
+{
+  public EpochParts Start { get; set; } = new();
+  public EpochParts End { get; set; } = new();
+}
+
+public sealed class SbdbDto
+{
+  public int SpkId { get; set; }
+  public string Designation { get; set; } = "";
+  public string FullName { get; set; } = "";
+  public string Kind { get; set; } = "";
+  public string Prefix { get; set; } = "";
+  public string OrbitClassName { get; set; } = "";
+  public string OrbitClassCode { get; set; } = "";
+  public bool IsNeo { get; set; }
+  public bool IsPha { get; set; }
+  public string OrbitId { get; set; } = "";
+  public double? Tp { get; set; }
+  public double? ElementsEpochJd { get; set; }
+  public double? E { get; set; }
+  public double? Q { get; set; }
+  public double? I { get; set; }
+  public double? Om { get; set; }
+  public double? W { get; set; }
+}
+
+public sealed class RotationDto
+{
+  public double PoleRaDeg { get; set; }
+  public double PoleDecDeg { get; set; } = 90;
+  public double PrimeMeridianDeg { get; set; }
+  public double PoleRaRateDegCen { get; set; }
+  public double PoleDecRateDegCen { get; set; }
+  public double RateDegDay { get; set; }
+  public bool BodyFixedOrientation { get; set; } = true;
+}
+
+public sealed class StateDto
+{
+  public string CompatHash { get; set; } = "";
+  public string CompatibilityJson { get; set; } = "";
+  public string File { get; set; } = "";
+  public uint DumpVersion { get; set; }
+  public DateTimeOffset CreatedAt { get; set; }
+  public DateTimeOffset ModifiedAt { get; set; }
+  public DateTimeOffset LastUsedAt { get; set; }
+  public bool Latest { get; set; }
+}
+
+public sealed class ModelDto
+{
+  public float DiametreUm { get; set; } = 100;
+  public float DensityGCm3 { get; set; } = 0.533f;
+  public float ScatteringEfficiency { get; set; } = 1;
+  public float GeometricAlbedo { get; set; } = 0.04f;
+  public float SizeQ { get; set; } = 3.5f;
+  public float SizeRange { get; set; } = 10;
+  public float Afrho0Cm { get; set; } = 100;
+  public float AfrhoPower { get; set; } = 2;
+  public float AfrhoCutoffAu { get; set; } = 15;
+  public float AfrhoMaxValueCm { get; set; } = 100000;
+  public double DustSoftening { get; set; } = 0.01;
+  public bool DustTracers { get; set; }
+  public bool DustFlow { get; set; }
+  public double DustFlowSpeed { get; set; } = 1;
+  public bool ShowReferencePositionError { get; set; }
+  /// <summary>The Model tab's manual nucleus radius (used when Horizons has none).</summary>
+  public float ManualNucleusRadiusKm { get; set; } = 2;
+}
+
+public sealed class JetDto
+{
+  public float LatitudeDeg { get; set; }
+  public float LongitudeDeg { get; set; }
+  public float ApertureDeg { get; set; }
+  public float VelocityMeanMs { get; set; }
+  public float VelocityStdMs { get; set; }
+  public float[] StreamColor { get; set; } = [1, 1, 1, 1];
+  public bool PreviewVisible { get; set; } = true;
+  public uint Seed { get; set; }
+}
+
+/// <summary>
+/// One viewport camera (CameraService's persisted state): the mode, the last confirmed pose and
+/// projection, the comet-orbit offset and the Earth observer. Restoring lands on the saved pose.
+/// </summary>
+public sealed class ViewportDto
+{
+  /// <summary>earth_position | up_zenith | comet_orbiting.</summary>
+  public string Mode { get; set; } = "up_zenith";
+  public CameraSnapshotDto? Camera { get; set; }
+  /// <summary>Camera offset from the comet in comet-orbiting mode, AU.</summary>
+  public double[] OrbitOffsetAu { get; set; } = [0, 0, 0];
+  public ObserverDto? Observer { get; set; }
+}
+
+public sealed class CameraSnapshotDto
+{
+  /// <summary>x, y, z (AU) then the rotation quaternion x, y, z, w.</summary>
+  public double[] Transform { get; set; } = [0, 0, 0, 0, 0, 0, 1];
+  public ProjectionDto? Projection { get; set; }
+}
+
+public sealed class ProjectionDto
+{
+  public bool IsPerspective { get; set; } = true;
+  public float Fov { get; set; }
+  public float Aspect { get; set; }
+  public float Near { get; set; }
+  public float Far { get; set; }
+  public float Left { get; set; }
+  public float Right { get; set; }
+  public float Bottom { get; set; }
+  public float Top { get; set; }
+  public float FocusDistance { get; set; }
+}
+
+public sealed class ObserverDto
+{
+  public float LatDeg { get; set; }
+  public float LonDeg { get; set; }
+  public double ElevationM { get; set; }
+  /// <summary>free | comet_lock_in | comet_tracking | sun_lock_in | … (EarthObserverOrientationMode, snake_case).</summary>
+  public string Orientation { get; set; } = "free";
+  /// <summary>Look quaternion x, y, z, w in the inertial frame.</summary>
+  public double[] InertialLook { get; set; } = [0, 0, 0, 1];
+  /// <summary>Look quaternion x, y, z, w in the Earth body-fixed frame.</summary>
+  public double[] BodyFixedLook { get; set; } = [0, 0, 0, 1];
+}
+
+public sealed class AssetDto
+{
+  public string Key { get; set; } = "";
+  public string Kind { get; set; } = "texture";
+  public string Label { get; set; } = "";
+  public string OriginalSource { get; set; } = "";
+  public string StoredFile { get; set; } = "";
+  public string ContentHash { get; set; } = "";
+  public DateTimeOffset ImportedAt { get; set; }
+  public string? ChannelHint { get; set; }
+  public Dictionary<string, string?>? BundledTextures { get; set; }
+}
+
+public sealed class CometAppearanceIndexDto
+{
+  public string Mode { get; set; } = "default";
+  public string? MeshKey { get; set; }
+  public string? AlbedoKey { get; set; }
+  public string? NormalKey { get; set; }
+  public string? RoughnessKey { get; set; }
+  public string? AoKey { get; set; }
+  public float[] YawPitchRollDeg { get; set; } = [0, 0, 0];
+  public float[] TranslationRadii { get; set; } = [0, 0, 0];
+}
+
+public sealed class BillboardDto
+{
+  public Guid Id { get; set; }
+  public string TextureKey { get; set; } = "";
+  public double CenterX { get; set; }
+  public double CenterY { get; set; }
+  public double WidthPx { get; set; }
+  public double HeightPx { get; set; }
+  public double Alpha { get; set; } = 0.6;
+  public double RotationDeg { get; set; }
+  public bool Visible { get; set; } = true;
+}
+
+/// <summary>Source-generated (AOT-friendly) JSON metadata for the save index, snake_case keys.</summary>
+[JsonSourceGenerationOptions(
+  PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
+  WriteIndented = true,
+  DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+  Converters = [typeof(EpochPartsConverter)])]
+[JsonSerializable(typeof(SaveIndex))]
+public partial class SaveIndexJsonContext : JsonSerializerContext;

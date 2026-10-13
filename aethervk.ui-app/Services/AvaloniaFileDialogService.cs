@@ -64,5 +64,15 @@ namespace AetherVk.Services
       var result = await dialog.ShowAsync(mainWindow);
       return result;
     }
+
+    public async Task<string?> PickFolderAsync(string title)
+    {
+      var mainWindow = GetMainWindow();
+      if (mainWindow == null)
+        return null;
+      var folders = await mainWindow.StorageProvider.OpenFolderPickerAsync(
+        new Avalonia.Platform.Storage.FolderPickerOpenOptions { Title = title, AllowMultiple = false });
+      return folders.Count > 0 ? Avalonia.Platform.Storage.StorageProviderExtensions.TryGetLocalPath(folders[0]) : null;
+    }
   }
 }

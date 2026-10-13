@@ -17,4 +17,8 @@ public partial interface ISettingsTabViewModel
   System.Collections.ObjectModel.ObservableCollection<ViewportSettingsViewModel> ActiveViewports { get; }
 
   CometAppearanceViewModel CometAppearance { get; }
+
+  DesktopBillboardsViewModel Billboards { get; }
+
+  InputBindingsViewModel InputBindings { get; }
 }

@@ -25,6 +25,20 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   /// <summary>Time-lapse factor of the dust flow marks (Model tab), 1 = real motion, visual only.</summary>
   public double DustFlowSpeed { get; set; } = 1.0;
 
+  /// <summary>
+  /// The Model tab's manual nucleus radius (km; 0 = use the comet's catalogue radius). Plain
+  /// property: the tab pushes it itself (debounced); kept here so it survives the tab and saves.
+  /// </summary>
+  public float ManualNucleusRadiusKm { get; set; } = 2.0f;
+
+  /// <summary>
+  /// Raised after the whole session was replaced from outside (savefile open / New): a live Model
+  /// tab re-reads every value and subscribes to the restored jets.
+  /// </summary>
+  public event System.Action? Restored;
+
+  public void NotifyRestored() => Restored?.Invoke();
+
   // ── Jet list ───────────────────────────────────────────────────────────────────
 
   /// <summary>

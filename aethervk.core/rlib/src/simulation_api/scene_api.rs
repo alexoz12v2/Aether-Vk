@@ -423,7 +423,17 @@ impl SimulationContext {
     // Must be called BEFORE Arc::new(scene) on the next line, because the closure borrows `scene`
     // by shared reference and Rust NLL requires the last use of the borrow to precede the move.
     // layer 2 is the Sun's micro frame
-    let earth = create_subtree("Earth", false, false, EARTH_DEPTH_LAYER);
+    let mut earth = create_subtree("Earth", false, false, EARTH_DEPTH_LAYER);
+    // The Earth globe, its dashed polar axis with N/S labels and the "Earth" label: UpZenith
+    // cameras only (`earth_visual`, `RenderLayerComponent`).
+    let earth_visual = crate::simulation_api::earth_visual::spawn_earth_visual(
+      &scene,
+      root_entity,
+      earth.body,
+      Some(asset_dir.as_str()),
+      label_font.as_ref(),
+    );
+    earth.visual = Some(earth_visual.visual);
     let comet = create_subtree("Comet", true, true, COMET_DEPTH_LAYER);
 
     // Empty container for the path the comet actually follows during a run (logic thread adds an
@@ -843,6 +853,25 @@ impl SimulationContext {
       .ok()
   }
 
+  /// Diagnostic / observer: what the GPU splat passes of the last recorded frame of `pe` drew —
+  /// per tier the push constants and the render clusters and moments they read
+  /// (`Device::download_dust_snapshot`), for a CPU-mirror replay. The simulation should be paused.
+  /// `None` without a view or a device; empty in CPU particle mode.
+  pub fn download_dust_snapshot(
+    &self,
+    pe: crate::gpu::PresentationEngineHandle,
+  ) -> Option<alloc::vec::Vec<crate::gpu_backends::vulkan::device::dust::DustSplatSnapshot>> {
+    use crate::gpu::WeakRenderFrontendExt;
+    let frontend = self.render_proxy.0.as_frontend()?;
+    frontend
+      .with_device(self.render_proxy.1, |device| {
+        let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+          device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
+        vulkan_device.download_dust_snapshot(pe)
+      })
+      .ok()
+  }
+
   /// The dust exposure of a view (`dust::DustExposure`: the white point as a radiance factor and
   /// in V mag/arcsec², the EV, the auto softening); `None` without a view or a device.
   pub fn dust_exposure(
@@ -881,6 +910,33 @@ impl SimulationContext {
       let _ = guard.scene.remove_component::<crate::scene::HiddenComponent>(e);
     } else {
       let _ = guard.scene.add_component(e, crate::scene::HiddenComponent {});
+    }
+    true
+  }
+
+  /// Sets the render layers the camera `camera_entity` (FFI id) draws
+  /// (`CameraRenderMaskComponent`, bits `crate::scene::RENDER_LAYER_*`): the UI gives an UpZenith
+  /// camera `RENDER_LAYER_DEFAULT | RENDER_LAYER_UPZENITH_ONLY` and every other camera
+  /// `RENDER_LAYER_DEFAULT`. Synchronous; false when the scene is missing or the entity has no
+  /// camera.
+  pub fn set_camera_render_mask(&self, scene_id: u64, camera_entity: u64, mask: u32) -> bool {
+    let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
+      return false;
+    };
+    let guard = scene_arc.read();
+    let camera: EntityId = slotmap::KeyData::from_ffi(camera_entity).into();
+    if guard.scene.has_component::<crate::scene::CameraComponent>(camera)
+      != crate::scene::HasComponentResultEnum::EntityHasComponent
+    {
+      return false;
+    }
+    let component = crate::scene::CameraRenderMaskComponent(mask);
+    if guard
+      .scene
+      .with_component_mut(camera, |m: &mut crate::scene::CameraRenderMaskComponent| *m = component)
+      .is_none()
+    {
+      let _ = guard.scene.add_component(camera, component);
     }
     true
   }

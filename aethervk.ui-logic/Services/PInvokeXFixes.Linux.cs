@@ -13,6 +13,16 @@ internal static class PInvokeXFixes
 {
   private const string Lib = "libXfixes.so.3";
 
+  /// <summary>Xlib <c>XRectangle</c>: short x, y; unsigned short width, height.</summary>
+  [StructLayout(LayoutKind.Sequential)]
+  internal struct XRectangle
+  {
+    public short X;
+    public short Y;
+    public ushort Width;
+    public ushort Height;
+  }
+
   /// <summary>
   /// Creates a new server-side region from an array of <paramref name="nrects"/> rectangles.
   /// Pass <c>rects = 0</c> and <c>nrects = 0</c> to create an <b>empty</b> region (no area).

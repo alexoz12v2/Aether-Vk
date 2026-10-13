@@ -71,5 +71,12 @@ public sealed class CometSession : ITabSession
   /// Zero means "unknown" — <c>AddJetCommand</c> is disabled until this is &gt; 0.
   /// </summary>
   public float NucleusRadiusKm { get; set; } = 0f;
-}
 
+  /// <summary>
+  /// Raised (on the UI thread) after the whole session was replaced from outside (savefile open /
+  /// New): a live tab re-reads every value.
+  /// </summary>
+  public event System.Action? Restored;
+
+  public void NotifyRestored() => Restored?.Invoke();
+}

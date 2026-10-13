@@ -297,6 +297,157 @@
         </Expander>
       </Border>
 
+      <!-- Billboards: imported textures in their own desktop windows (compare a real image with the
+           simulated dust). Edits here and drags of the windows go through DesktopBillboardService. -->
+      <Border Classes="accordion">
+        <Expander Header="{Binding StrBillboards}">
+          <StackPanel Spacing="12" Margin="12,8,12,12">
+            <TextBlock Text="{Binding StrBillboardsHint}" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding StrBillboardsNoTextures}" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Sem.Warning}"
+                       IsVisible="{Binding !Billboards.HasTextures}" />
+
+            <Grid ColumnDefinitions="Auto,16,*,8,Auto">
+              <TextBlock Grid.Column="0" Text="{Binding StrBillboardTexture}" />
+              <ComboBox Grid.Column="2" HorizontalAlignment="Stretch"
+                        x:Name="BillboardTexturePicker"
+                        ItemsSource="{Binding Billboards.TextureOptions}"
+                        SelectedItem="{Binding Billboards.SelectedTexture}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="models:ImportedAsset">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <Image Width="24" Height="24" Stretch="Uniform"
+                             Source="{Binding Thumbnail, Converter={x:Static converters:ThumbnailToBitmapConverter.Instance}}" />
+                      <TextBlock Text="{Binding Label}" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <Button Grid.Column="4" x:Name="CreateBillboardButton"
+                      Content="{Binding StrCreateBillboard}"
+                      Command="{Binding Billboards.CreateCommand}" />
+            </Grid>
+
+            <ItemsControl x:Name="BillboardList" ItemsSource="{Binding Billboards.Items}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <StackPanel Spacing="8" />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:DesktopBillboardItemViewModel">
+                  <Expander IsExpanded="True">
+                    <Expander.Header>
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="20" Height="20" Stretch="Uniform"
+                               Source="{Binding Thumbnail, Converter={x:Static converters:ThumbnailToBitmapConverter.Instance}}" />
+                        <TextBlock Text="{Binding TextureLabel}" />
+                        <TextBlock Text="{Binding DisplayLabel}" Opacity="0.7" />
+                      </StackPanel>
+                    </Expander.Header>
+                    <Grid ColumnDefinitions="Auto,16,*" RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                          Margin="4,8,4,4">
+                      <TextBlock Grid.Row="0" Grid.ColumnSpan="3" TextWrapping="Wrap"
+                                 Foreground="{DynamicResource Sem.Warning}"
+                                 Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardMissing}"
+                                 IsVisible="{Binding IsMissing}" />
+
+                      <TextBlock Grid.Row="2" Grid.Column="0"
+                                 Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardPosition}" />
+                      <UniformGrid Grid.Row="2" Grid.Column="2" Columns="2" ColumnSpacing="6">
+                        <NumericUpDown Value="{Binding X}" Increment="1" FormatString="F0" ToolTip.Tip="X" />
+                        <NumericUpDown Value="{Binding Y}" Increment="1" FormatString="F0" ToolTip.Tip="Y" />
+                      </UniformGrid>
+
+                      <TextBlock Grid.Row="4" Grid.Column="0"
+                                 Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardSize}" />
+                      <StackPanel Grid.Row="4" Grid.Column="2" Spacing="4">
+                        <UniformGrid Columns="2" ColumnSpacing="6">
+                          <NumericUpDown Value="{Binding Width}" Minimum="16" Increment="1" FormatString="F0" ToolTip.Tip="W" />
+                          <NumericUpDown Value="{Binding Height}" Minimum="16" Increment="1" FormatString="F0" ToolTip.Tip="H" />
+                        </UniformGrid>
+                        <CheckBox IsChecked="{Binding IsAspectLocked}"
+                                  Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardAspectLock}" />
+                      </StackPanel>
+
+                      <TextBlock Grid.Row="6" Grid.Column="0"
+                                 Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardAlpha}" />
+                      <Slider Grid.Row="6" Grid.Column="2" Minimum="0" Maximum="1" Value="{Binding Alpha}" />
+
+                      <TextBlock Grid.Row="8" Grid.Column="0"
+                                 Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardRotation}" />
+                      <controls:UnboundedSlider Grid.Row="8" Grid.Column="2" Value="{Binding Rotation}"
+                                                IsWrapped="True" WrapMin="-180" WrapMax="180"
+                                                Step="1" DragSensitivity="2.0" DisplayFormat="F1" />
+
+                      <CheckBox Grid.Row="10" Grid.Column="2" IsChecked="{Binding IsVisible}"
+                                Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardVisible}" />
+
+                      <Button Grid.Row="12" Grid.Column="2" HorizontalAlignment="Right"
+                              Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardDelete}"
+                              Command="{Binding DeleteCommand}" />
+                    </Grid>
+                  </Expander>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Expander>
+      </Border>
+
+      <!-- Input bindings: edited live, saved to ~/.aethervk/preferences.json -->
+      <Border Classes="accordion">
+        <Expander Header="{Binding StrInputBindings}" x:Name="InputBindingsSection">
+          <StackPanel Spacing="10" Margin="12,8,12,12">
+            <TextBlock Text="{Binding StrInputBindingsHint}" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding InputBindings.CaptureHint}" Foreground="{DynamicResource Sem.Warning}"
+                       TextWrapping="Wrap" IsVisible="{Binding InputBindings.IsCapturing}" />
+            <TextBlock Text="{Binding InputBindings.ConflictMessage}" Foreground="{DynamicResource Sem.Warning}"
+                       TextWrapping="Wrap"
+                       IsVisible="{Binding InputBindings.ConflictMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <ItemsControl ItemsSource="{Binding InputBindings.Contexts}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:BindingContextViewModel">
+                  <StackPanel Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto">
+                      <TextBlock Text="{Binding Context}" FontWeight="SemiBold" />
+                      <Button Grid.Column="1" Command="{Binding ResetCommand}"
+                              Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrResetBindings}" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding Actions}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:BindingActionViewModel">
+                          <Grid ColumnDefinitions="160,*,Auto" Margin="0,2">
+                            <TextBlock Text="{Binding Name}" TextWrapping="Wrap" />
+                            <ItemsControl Grid.Column="1" ItemsSource="{Binding Chords}">
+                              <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                              </ItemsControl.ItemsPanel>
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:BindingChordViewModel">
+                                  <StackPanel Orientation="Horizontal" Spacing="2" Margin="0,0,8,4">
+                                    <Button Classes="binding-rebind" Content="{Binding Text}" Command="{Binding RebindCommand}"
+                                            ToolTip.Tip="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrRebind}" />
+                                    <Button Content="✕" Command="{Binding RemoveCommand}"
+                                            ToolTip.Tip="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrRemoveChord}" />
+                                  </StackPanel>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Button Grid.Column="2" Command="{Binding AddChordCommand}"
+                                    Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrAddChord}" />
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Expander>
+      </Border>
+
       <!-- Camera Projection Parameters per Viewport -->
       <ItemsControl ItemsSource="{Binding ActiveViewports}">
         <ItemsControl.ItemTemplate>

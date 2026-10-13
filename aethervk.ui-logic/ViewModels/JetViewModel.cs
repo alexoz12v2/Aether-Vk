@@ -145,6 +145,30 @@ public sealed partial class JetViewModel : ObservableObject
     Seed = BitConverter.ToUInt32(buf, 0);
   }
 
+  /// <summary>
+  /// Restores a jet exactly as saved (savefile): every property and the PCG <paramref name="seed"/>,
+  /// so the dust it emits — and the scene's compatibility JSON — match the saved one.
+  /// </summary>
+  public JetViewModel(
+    float latitudeDeg,
+    float longitudeDeg,
+    float apertureDeg,
+    float startVelocityMeanMs,
+    float startVelocityStdMs,
+    Vector4 streamColor,
+    bool isPreviewVisible,
+    uint seed)
+  {
+    _latitudeDeg = latitudeDeg;
+    _longitudeDeg = longitudeDeg;
+    _apertureDeg = apertureDeg;
+    _startVelocityMeanMs = startVelocityMeanMs;
+    _startVelocityStdMs = startVelocityStdMs;
+    _streamColor = streamColor;
+    _isPreviewVisible = isPreviewVisible;
+    Seed = seed;
+  }
+
   // ── Private helpers ───────────────────────────────────────────────────────────
 
   /// <summary>Converts HSL (h in [0,360], s,l in [0,1]) to RGBA Vector4 with alpha=1.</summary>

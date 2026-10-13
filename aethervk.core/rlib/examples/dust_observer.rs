@@ -271,6 +271,19 @@ struct Args {
   /// `--mc-age-min S`: the truth (and, through `AETHERVK_DUST_DEBUG_AGE_MIN`, the render once the
   /// engine honours it) hold the dust older than S seconds only
   mc_age_min: Option<f64>,
+  /// `--probe "x,y;x,y"`: replay the judged frame's GPU clusters on the CPU mirror and attribute
+  /// the τ at those pixels to clusters (`dust::splat_tier_probed`; `probe_NNN.txt`)
+  probe: Vec<(u32, u32)>,
+  /// `--save-snapshot`: the judged frames' GPU clusters, push constants and header to
+  /// `snapshot_NNN.bin` (for `--lab`; set `OBSERVER_MC_RAW=<out>/mc_NNN` too for the truth)
+  save_snapshot: bool,
+  /// `--lab DIR [--lab-frame N]`: no GPU; replay `DIR/snapshot_NNN.bin` on the CPU mirror and
+  /// score it against `DIR/mc_NNN_truth.f32` (the offline replay lab)
+  lab: Option<PathBuf>,
+  lab_frame: u32,
+  /// `--lab-truth N`: the lab draws its own truth (N grains) from `truth_NNN.bin` instead of
+  /// reading `mc_NNN_truth.f32`; `OBSERVER_LAB_AGE=lo,hi` (s) then gates both sides by age
+  lab_truth: usize,
   /// `--view-flags F`: dust view flags (`DUST_VIEW_TRACERS` 1, `DUST_VIEW_FLOW` 2; default 0, the
   /// plain optical depth, what the Monte-Carlo truth compares with and the app's default)
   view_flags: u32,
@@ -334,6 +347,11 @@ fn parse_args() -> Args {
     mc_tier: None,
     mc_age_max: None,
     mc_age_min: None,
+    probe: Vec::new(),
+    save_snapshot: false,
+    lab: None,
+    lab_frame: 1,
+    lab_truth: 0,
   };
   let argv: Vec<String> = std::env::args().skip(1).collect();
   let mut i = 0;
@@ -380,6 +398,19 @@ fn parse_args() -> Args {
       "--mc-tier" => a.mc_tier = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--mc-age-max" => a.mc_age_max = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--mc-age-min" => a.mc_age_min = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
+      "--save-snapshot" => a.save_snapshot = true,
+      "--lab" => a.lab = Some(PathBuf::from(next(&mut i))),
+      "--lab-frame" => a.lab_frame = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--lab-truth" => a.lab_truth = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--probe" => {
+        a.probe = next(&mut i)
+          .split(';')
+          .filter_map(|p| {
+            let mut it = p.split(',');
+            Some((it.next()?.trim().parse().ok()?, it.next()?.trim().parse().ok()?))
+          })
+          .collect()
+      }
       "--mc-max" => a.mc_max = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--afrho-aperture-km" => {
         a.afrho_aperture_km = Some(next(&mut i).parse().unwrap_or_else(|_| usage()))
@@ -1269,7 +1300,11 @@ fn jet_params(seed: u32, isotropic: bool) -> ParticleSystemEmitParams {
     diametre_um: 100.0,
     density_gcm3: 0.533,
     scattering_efficiency: 1.0,
-    geometric_albedo: 0.04,
+    // `OBSERVER_ALBEDO=<p>` (diagnostics): 0 turns the radiance weight off on both sides (plain τ)
+    geometric_albedo: std::env::var("OBSERVER_ALBEDO")
+      .ok()
+      .and_then(|v| v.trim().parse().ok())
+      .unwrap_or(0.04),
     size_q: 3.5,
     size_range: 10.0,
     afrho_0_cm: 100.0,
@@ -1463,6 +1498,10 @@ fn luminance_stats(rgba: &[u8]) -> (f64, f64, f64) {
 
 fn main() {
   let args = parse_args();
+  if let Some(dir) = args.lab.clone() {
+    // the offline replay lab: no GPU, no simulation
+    std::process::exit(run_lab(&dir, args.lab_frame, args.lab_truth));
+  }
   std::fs::create_dir_all(&args.out).expect("create --out");
   *LOG_FILE.lock().unwrap() = Some(File::create(args.out.join("log.txt")).expect("log.txt"));
   LOG_ECHO.store(!args.quiet, Ordering::Relaxed);
@@ -2262,6 +2301,12 @@ fn main() {
       use aethervk_core_rlib::scene::dust as d;
       let words: Vec<u8> = pyr.iter().flat_map(|w| w.to_le_bytes()).collect();
       std::fs::write(args.out.join(format!("frame_{i:03}.pyr")), &words).expect("save pyr");
+      if args.save_snapshot {
+        save_snapshot(&ctx, pe, &pyr, &args, i as usize);
+      }
+      if !args.probe.is_empty() {
+        probe_replay(&ctx, pe, &pyr, &args, i as usize);
+      }
       if args.mc > 0 && !args.no_jet {
         let t_mc = Instant::now();
         let view = McView {
@@ -2302,6 +2347,9 @@ fn main() {
           },
           isotropic: args.isotropic,
         };
+        if args.save_snapshot {
+          save_truth_inputs(&ctx, scene_id, &view, &args.out.join(format!("truth_{i:03}.bin")));
+        }
         let saturated = pyramid_saturated_texels(&pyr, args.width, args.height);
         if saturated > 0 {
           log_line(&format!(
@@ -3354,6 +3402,30 @@ fn mc_rng(state: &mut u64) -> f64 {
   *state ^= *state << 17;
   (*state >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
 }
+/// `OBSERVER_MC_KICK_MAX=<k>`: the bound on a grain's whitened kicks (the speed noise and the
+/// direction bandwidth's, or a packet's Gaussian across its capsule), in σ: the triple is redrawn
+/// until `|g| ≤ k` — the 3-D standard normal truncated to the ball, as the kernels draw it
+/// (`DUST_KICK_SIGMAS`). Default 3; `0` unbounded (the former draws, bit for bit)
+fn mc_kick_max() -> f64 {
+  static K: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+  *K.get_or_init(|| {
+    std::env::var("OBSERVER_MC_KICK_MAX")
+      .ok()
+      .and_then(|v| v.trim().parse::<f64>().ok())
+      .unwrap_or(3.0)
+  })
+}
+
+/// `g` redrawn from `state` until `|g| ≤ k` ([`mc_kick_max`]; `k ≤ 0`: unchanged)
+fn mc_bound_kick(mut g: [f64; 3], k: f64, state: &mut u64) -> [f64; 3] {
+  if k > 0.0 {
+    while g[0] * g[0] + g[1] * g[1] + g[2] * g[2] > k * k {
+      g = [mc_gauss(state), mc_gauss(state), mc_gauss(state)];
+    }
+  }
+  g
+}
+
 fn mc_gauss(state: &mut u64) -> f64 {
   let u1 = mc_rng(state).max(1e-300);
   let u2 = mc_rng(state);
@@ -3442,39 +3514,38 @@ fn mc_box(img: &[f64], w: usize, h: usize, r: usize) -> Vec<f64> {
 /// tier's age band, and binned with the batch mass into the observer's own projection. The
 /// renderer's τ image (the pyramid dump) and that histogram, both unit-sum and 5×5 box filtered,
 /// are compared where the truth is above 1 % of its peak. Returns the record and both images.
-fn monte_carlo_truth(
-  ctx: &SimulationContext,
-  scene_id: u64,
-  pyr: &[u32],
-  view: &McView,
-  grains: usize,
-) -> Option<(McRec, Vec<f32>, Vec<f32>)> {
+/// One emission batch the truth draws from: its descriptor, its tier's age band, the tier's
+/// frame now (the diagnostic models only), the oldest tier's age fade and the tier.
+#[derive(Clone, Copy)]
+struct TruthBatch {
+  desc: aethervk_core_rlib::scene::dust::DustBatch,
+  band: (f64, f64),
+  frame: Option<aethervk_core_rlib::scene::dust::DustFrame>,
+  /// the oldest tier fades its dust over the last 10 % of the band (`dust_propagate.comp`:
+  /// `clamp((1 − age/ttl)·10, 0, 1)` when `ttl.z` = 0); the younger tiers hand over sharply
+  fade: bool,
+  tier: u32,
+}
+
+/// Everything [`monte_carlo_truth_from`] reads of the live scene: the batches, the jet's time and
+/// the nucleus centre now (m, heliocentric), the dust's geometric albedo (≤ 0 = unweighted τ).
+/// `--save-snapshot` stores it (`truth_NNN.bin`) so the replay lab draws the same truth offline.
+struct TruthInputs {
+  batches: Vec<TruthBatch>,
+  t_now: f64,
+  r_centre_now: V3,
+  albedo: f32,
+}
+
+fn gather_truth_inputs(ctx: &SimulationContext, scene_id: u64) -> Option<TruthInputs> {
   use aethervk_core_rlib::scene::dust as d;
-  let (w, h) = (view.width as usize, view.height as usize);
-  let render = tau_image_of_pyramid(pyr, view.width, view.height)?;
-  if !render.iter().any(|&v| v > 0.0) {
-    // the pyramid of this frame is empty (the first frame's readback lags the draw): nothing
-    // to compare, the next frame will
-    return None;
-  }
-  // the batches, each with its tier's age band, and the jet state now
-  struct B {
-    desc: d::DustBatch,
-    band: (f64, f64),
-    frame: Option<d::DustFrame>,
-    /// the oldest tier fades its dust over the last 10 % of the band (`dust_propagate.comp`:
-    /// `clamp((1 − age/ttl)·10, 0, 1)` when `ttl.z` = 0); the younger tiers hand over sharply
-    fade: bool,
-    tier: u32,
-  }
-  let mut batches: Vec<B> = Vec::new();
+  let mut batches: Vec<TruthBatch> = Vec::new();
   // (t_now, the nucleus centre's heliocentric position at the tick): the frame's `comet_au` is
   // the body centre, so the truth is placed relative to the centre (`JetState::centre_m`, the
   // render's anchor), not the jet site: the site sits one rotated offset away (2 km = 120 px at
   // the 5-km frame; placed at the site, the truth's apex sat on the centre pixel while the
   // render's dust left the limb)
   let mut jet_now: Option<(f64, V3)> = None;
-  // the dust's geometric albedo (the render's radiance weight; ≤ 0 = unweighted τ)
   let mut albedo = 0.0f32;
   {
     let scene_arc = ctx.get_scene(scene_id)?;
@@ -3487,10 +3558,11 @@ fn monte_carlo_truth(
           albedo = sys.albedo;
         }
         let band = t.age_band_s(t.ttl_s);
-        let frame = t.jet.and_then(|j| t.draw_state().map(|ds| ds.frame.at_time(j.t_s)));
+        let frame: Option<d::DustFrame> =
+          t.jet.and_then(|j| t.draw_state().map(|ds| ds.frame.at_time(j.t_s)));
         let fade = frame.as_ref().is_some_and(|f| f.ttl[2] < 0.5);
         for b in &t.ring.batches {
-          batches.push(B {
+          batches.push(TruthBatch {
             desc: b.desc,
             band,
             frame,
@@ -3502,6 +3574,40 @@ fn monte_carlo_truth(
     });
   }
   let (t_now, r_centre_now) = jet_now?;
+  Some(TruthInputs { batches, t_now, r_centre_now, albedo })
+}
+
+/// The truth's raw images besides the scored ones: τ per pixel (unboxed) and grains per pixel.
+type McOut = (McRec, Vec<f32>, Vec<f32>, Vec<f64>, Vec<f64>);
+
+fn monte_carlo_truth(
+  ctx: &SimulationContext,
+  scene_id: u64,
+  pyr: &[u32],
+  view: &McView,
+  grains: usize,
+) -> Option<(McRec, Vec<f32>, Vec<f32>)> {
+  let inputs = gather_truth_inputs(ctx, scene_id)?;
+  monte_carlo_truth_from(pyr, &inputs, view, grains).map(|(r, a, b, _, _)| (r, a, b))
+}
+
+fn monte_carlo_truth_from(
+  pyr: &[u32],
+  inputs: &TruthInputs,
+  view: &McView,
+  grains: usize,
+) -> Option<McOut> {
+  use aethervk_core_rlib::scene::dust as d;
+  let (w, h) = (view.width as usize, view.height as usize);
+  let render = tau_image_of_pyramid(pyr, view.width, view.height)?;
+  if !render.iter().any(|&v| v > 0.0) {
+    // the pyramid of this frame is empty (the first frame's readback lags the draw): nothing
+    // to compare, the next frame will
+    return None;
+  }
+  type B = TruthBatch;
+  let mut batches: Vec<B> = inputs.batches.clone();
+  let (t_now, r_centre_now, albedo) = (inputs.t_now, inputs.r_centre_now, inputs.albedo);
   if let Some(k) = view.mc_tier {
     batches.retain(|b| b.tier == k);
   }
@@ -3781,9 +3887,9 @@ fn monte_carlo_truth(
       None
     }
   };
-  let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 32);
-  let chunk = batches.len().div_ceil(threads);
-  let indexed: Vec<(usize, &B)> = batches.iter().enumerate().collect();
+  let threads = observer_threads();
+  // the diagnostic models draw per cluster of the whole batch: a batch is one piece there
+  let whole_batches = std::env::var("OBSERVER_MC_MODEL").is_ok_and(|v| v == "chords" || v == "clusters");
   // one threaded pass over the batches with `alloc(batch index)` grains each: the histogram,
   // the age-weighted histogram, the grains drawn and the grains in view per batch
   let run = |alloc: &(dyn Fn(usize) -> usize + Sync)| -> (
@@ -3794,6 +3900,7 @@ fn monte_carlo_truth(
     usize,
     Vec<usize>,
     Vec<f64>,
+    Vec<f64>,
   ) {
     let mut truth = vec![0.0f64; w * h];
     let mut age_sum = vec![0.0f64; w * h];
@@ -3801,20 +3908,90 @@ fn monte_carlo_truth(
     let mut col_sum = vec![0.0f64; 3 * w * h];
     let mut drawn = 0usize;
     let mut inview = vec![0usize; batches.len()];
+    // per batch: Σ of its deposits' squared weights (the variance it adds: Neyman allocation)
+    let mut sqs = vec![0.0f64; batches.len()];
     let mut counts = vec![0.0f64; w * h];
+    // the work in fixed units of ~[`MC_UNIT_GRAINS`] grains, cut from the batches in order (small
+    // batches packed together, large ones split into pieces of their grain range, each piece its
+    // own stream: [`mc_piece_seed`]), whatever the thread count: the Neyman allocation gives a few
+    // batches nearly all grains, and one thread per fixed share of the batches drew them alone
+    // `OBSERVER_MC_UNIT_GRAINS=<n>` (diagnostic): another unit size (≥ every batch's grains: no
+    // batch split, the streams of the former per-batch draw)
+    let unit_grains = std::env::var("OBSERVER_MC_UNIT_GRAINS")
+      .ok()
+      .and_then(|v| v.trim().parse::<usize>().ok())
+      .filter(|&n| n >= 1)
+      .unwrap_or(MC_UNIT_GRAINS);
+    let mut units: Vec<Vec<(usize, usize, usize)>> = Vec::new();
+    {
+      let (mut cur, mut cur_n) = (Vec::new(), 0usize);
+      for bi in 0..batches.len() {
+        let n_b = alloc(bi);
+        if n_b == 0 {
+          cur.push((bi, 0, 0));
+          continue;
+        }
+        let step = if whole_batches { n_b } else { unit_grains };
+        let mut lo = 0;
+        while lo < n_b {
+          let hi = (lo + step).min(n_b);
+          cur.push((bi, lo, hi));
+          cur_n += hi - lo;
+          lo = hi;
+          if cur_n >= unit_grains {
+            units.push(core::mem::take(&mut cur));
+            cur_n = 0;
+          }
+        }
+      }
+      if !cur.is_empty() {
+        units.push(cur);
+      }
+    }
+    // the units' histograms are summed in unit order (bit-identical at any thread count); a
+    // worker waits before starting a unit more than `window` past the next one to sum, which
+    // bounds the finished-but-unsummed units held in memory
+    let window = threads + 2;
+    let next_unit = std::sync::atomic::AtomicUsize::new(0);
+    let order = std::sync::Mutex::new((0usize, std::collections::BTreeMap::new()));
+    let ready = std::sync::Condvar::new();
+    let mut rhist_sum = vec![0.0f64; 0];
+    let rhist_on = std::env::var("OBSERVER_LAB_RHIST").is_ok_and(|v| v == "1");
+    let sink = std::sync::Mutex::new((
+      &mut truth,
+      &mut age_sum,
+      &mut age2_sum,
+      &mut col_sum,
+      &mut counts,
+      &mut drawn,
+      &mut inview,
+      &mut sqs,
+      &mut rhist_sum,
+    ));
     std::thread::scope(|sc| {
-      let handles: Vec<_> = indexed
-        .chunks(chunk)
-        .map(|part| {
-          let project = &project;
-          sc.spawn(move || {
+      for _ in 0..threads.min(units.len()).max(1) {
+        let (project, units, next_unit, order, ready, sink, batches) = (&project, &units, &next_unit, &order, &ready, &sink, &batches);
+        sc.spawn(move || loop {
+          let u = next_unit.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+          if u >= units.len() {
+            break;
+          }
+          {
+            let mut g = order.lock().unwrap();
+            while u >= g.0 + window {
+              g = ready.wait(g).unwrap();
+            }
+          }
+          let pieces = &units[u];
+          let out = {
             let mut hist = vec![0.0f64; w * h];
             let mut age_hist = vec![0.0f64; w * h];
             let mut age2_hist = vec![0.0f64; w * h];
             let mut col_hist = vec![0.0f64; 3 * w * h];
             let mut cnt_hist = vec![0.0f64; w * h];
             let mut n_drawn = 0usize;
-            let mut seen: Vec<(usize, usize)> = Vec::with_capacity(part.len());
+            let mut seen: Vec<(usize, usize, f64)> = Vec::with_capacity(pieces.len());
+            let sq = core::cell::Cell::new(0.0f64);
             // one grain into the histograms — the single deposit every model goes through (the
             // physical grains and the `OBSERVER_MC_MODEL` diagnostics alike, so they cannot
             // drift): `r` the grain's heliocentric position (m), `age` (s), `wgt` its
@@ -3826,7 +4003,64 @@ fn monte_carlo_truth(
             // camera's near/far clip and τ per pixel area (`project`: 1/(A_px(depth)·cos θ_px)
             // in perspective, 1/m_per_px² orthographic); the ages and the age colour carry the
             // radiance weight (the display mixes colours by it). `true` when the grain landed.
+            let mut rhist = vec![0.0f64; if rhist_on { RHIST_BINS } else { 0 }];
+            // `OBSERVER_LAB_RHIST_INVIEW=1`: the histogram of the light that lands in view (its τ
+            // weight) instead of every grain's cross-section
+            let rhist_inview = std::env::var("OBSERVER_LAB_RHIST_INVIEW").is_ok_and(|v| v == "1");
+            // the grain's cell coordinates for [`lab_cell_mode`]: its speed along the jet's axis at
+            // emission over v_ref, and its angle off that axis (°); set by the physical grains
+            let cell_tag = core::cell::Cell::new([f64::NAN; 4]);
+            let cell_mode = lab_cell_mode();
             let mut deposit = |r: V3, age: f64, wgt: f64, b: &B| -> bool {
+              let mut rk = None;
+              if rhist_on {
+                // `OBSERVER_LAB_RHIST_MODE`: `eye` the distance from the camera, `theta` / `phi`
+                // the direction from the centre (polar angle to the spin axis, azimuth from the
+                // Sun about it, 4° bins), else the distance from the nucleus centre
+                let dr = sub(r, r_centre_now);
+                let rn = norm(r_centre_now);
+                let sun = [-r_centre_now[0] / rn, -r_centre_now[1] / rn, -r_centre_now[2] / rn];
+                let ax = [b.desc.spin[0] as f64, b.desc.spin[1] as f64, b.desc.spin[2] as f64];
+                let k = match std::env::var("OBSERVER_LAB_RHIST_MODE").as_deref() {
+                  _ if cell_mode.is_some() => {
+                    let cm = cell_mode.unwrap();
+                    let t = cell_tag.get();
+                    let view_angle = || {
+                      let fwd = camera_axes(view.cam_q).1;
+                      let dc = sub(r, [view.cam_pos[0] * d::AU_M, view.cam_pos[1] * d::AU_M, view.cam_pos[2] * d::AU_M]);
+                      (dot(dc, fwd) / norm(dc).max(1e-30)).clamp(-1.0, 1.0).acos().to_degrees()
+                    };
+                    lab_cell_bin(
+                      match cm.0 {
+                        "speed" => t[0],
+                        "off" => t[1],
+                        "tail" => t[2],
+                        "fbin" => t[3].log10(),
+                        "view" => view_angle(),
+                        _ => age,
+                      },
+                      cm,
+                    )
+                  }
+                  Ok("eye") => {
+                    let dc = norm(sub(r, [view.cam_pos[0] * d::AU_M, view.cam_pos[1] * d::AU_M, view.cam_pos[2] * d::AU_M]));
+                    ((dc / RHIST_BIN_M) as usize).min(RHIST_BINS - 1)
+                  }
+                  Ok(m @ ("theta" | "phi")) => lab_angle_bin(m == "theta", [dr[0], dr[1], dr[2]], ax, sun),
+                  _ => ((norm(dr) / RHIST_BIN_M) as usize).min(RHIST_BINS - 1),
+                };
+                let gated = lab_view_max().is_some_and(|g| {
+                  let fwd = camera_axes(view.cam_q).1;
+                  let dc = sub(r, [view.cam_pos[0] * d::AU_M, view.cam_pos[1] * d::AU_M, view.cam_pos[2] * d::AU_M]);
+                  (dot(dc, fwd) / norm(dc).max(1e-30)).clamp(-1.0, 1.0).acos().to_degrees() > g
+                });
+                if gated {
+                } else if rhist_inview {
+                  rk = Some(k);
+                } else {
+                  rhist[k] += if b.fade { wgt * ((1.0 - age / b.band.1) * 10.0).clamp(0.0, 1.0) } else { wgt };
+                }
+              }
               let w_rad = if albedo > 0.0 {
                 let rn = norm(r);
                 let sun = [
@@ -3862,6 +4096,10 @@ fn monte_carlo_truth(
                 return false;
               };
               let wv = wf * w_rad * inv_a_px;
+              if let Some(k) = rk {
+                rhist[k] += wv;
+              }
+              sq.set(sq.get() + wv * wv);
               hist[y * w + x] += wv;
               age_hist[y * w + x] += wv * age;
               age2_hist[y * w + x] += wv * age * age;
@@ -3872,18 +4110,25 @@ fn monte_carlo_truth(
               cnt_hist[y * w + x] += 1.0;
               true
             };
-            for &(bi, b) in part {
+            for &(bi, lo, hi) in pieces {
+              let b = &batches[bi];
               let desc = &b.desc;
               let mass = desc.mass_params[0] as f64;
               let n_b = alloc(bi);
               let drawn_before = n_drawn;
+              let sq_before = sq.get();
+              if n_b == 0 {
+                // not drawn in this pass (a pilot escalation of other batches)
+                seen.push((bi, 0, 0.0));
+                continue;
+              }
               // the grain's share of the batch's cross-section (m²): mass × the distribution's
               // cross-section per gram (`emit_cluster`); the radiance weight is per grain below
               let rho_g_m3 = desc.mass_params[1] as f64 * 1.0e6;
               let xsec_per_g =
                 3.0 / (4.0 * rho_g_m3 * d::size_mean_inv_s_um(desc.size_params) as f64 * 1.0e-6);
               let wgt = mass * xsec_per_g / n_b as f64;
-              let mut rng = (desc.seed as u64 ^ 0x9E37_79B9_7F4A_7C15).max(1);
+              let mut rng = mc_piece_seed(desc.seed, lo / unit_grains);
               let rc0 = [
                 desc.comet_r_t_hi[0] as f64 + desc.comet_r_t_lo[0] as f64,
                 desc.comet_r_t_hi[1] as f64 + desc.comet_r_t_lo[1] as f64,
@@ -3975,7 +4220,8 @@ fn monte_carlo_truth(
                     let u = mc_rng(&mut rng);
                     let (a0, a1) = (m.edge(bin), m.edge(bin + 1));
                     let f = (m.edge_factor(bin) as f64 + m.edge_factor(bin + 1) as f64) * 0.5;
-                    let (g1, g2, g3) = (mc_gauss(&mut rng), mc_gauss(&mut rng), mc_gauss(&mut rng));
+                    let [g1, g2, g3] =
+                      mc_bound_kick([mc_gauss(&mut rng), mc_gauss(&mut rng), mc_gauss(&mut rng)], mc_kick_max(), &mut rng);
                     let dx = f * (l11 * g1);
                     let dy = f * (l21 * g1 + l22 * g2);
                     let dz = f * (l31 * g1 + l32 * g2 + l33 * g3);
@@ -3995,7 +4241,7 @@ fn monte_carlo_truth(
                     }
                   }
                 }
-                seen.push((bi, n_drawn - drawn_before));
+                seen.push((bi, n_drawn - drawn_before, sq.get() - sq_before));
                 continue;
               }
               // OBSERVER_MC_MODEL=clusters (diagnostic): grains from the renderer's own clusters and
@@ -4041,7 +4287,8 @@ fn monte_carlo_truth(
                     let sb = sb_lo + (sb_hi - sb_lo) * mc_rng(&mut rng);
                     let beta = sb * sb;
                     let f = sb / beta_c.sqrt();
-                    let (g1, g2, g3) = (mc_gauss(&mut rng), mc_gauss(&mut rng), mc_gauss(&mut rng));
+                    let [g1, g2, g3] =
+                      mc_bound_kick([mc_gauss(&mut rng), mc_gauss(&mut rng), mc_gauss(&mut rng)], mc_kick_max(), &mut rng);
                     // the dispersion scales with the grain's speed factor f, as the render's
                     // (`bin_packet`: Σ_v · f²) and the physical truth's (σ · v with v ∝ f); unscaled,
                     // the largest grains (f ≈ 0.3) got 3× their spread and ~10 % went backward
@@ -4058,7 +4305,7 @@ fn monte_carlo_truth(
                     }
                   }
                 }
-                seen.push((bi, n_drawn - drawn_before));
+                seen.push((bi, n_drawn - drawn_before, sq.get() - sq_before));
                 continue;
               }
               // cross-section weighted size: pdf ∝ s^(e−2), CDF exponent p = e − 1
@@ -4067,10 +4314,27 @@ fn monte_carlo_truth(
               // instant of the cluster the grain falls into (the renderer's model: one attitude per
               // time sample) instead of the grain's own instant
               let quantise = std::env::var("OBSERVER_MC_QUANTISE_PHASE").is_ok_and(|v| v == "1");
+              let lat_coupled = !std::env::var("OBSERVER_MC_LAT_COUPLED").is_ok_and(|v| v == "0");
+              let kick_max = mc_kick_max();
               let samples = (desc.count >> d::batch_streams(desc).0).max(1) as f64;
               let streams = (1u32 << d::batch_streams(desc).0) as f64;
-              let sigma_ang = (aperture / streams.sqrt()).max(d::CHILD_SIGMA_V_REL as f64);
-              for _ in 0..n_b {
+              // `OBSERVER_MC_SIGMA_ANG=<rad>` (diagnostic): the direction bandwidth instead of the
+              // renderer's stream cell (0: the hard-edged cone, the emission model itself)
+              let sigma_ang = std::env::var("OBSERVER_MC_SIGMA_ANG")
+                .ok()
+                .and_then(|v| v.trim().parse::<f64>().ok())
+                .unwrap_or((aperture / streams.sqrt()).max(d::CHILD_SIGMA_V_REL as f64));
+              if cell_mode.is_some() {
+                static ONCE: std::sync::Once = std::sync::Once::new();
+                ONCE.call_once(|| {
+                  let (f_lo, f_hi) = ((beta_s / s_max / beta_ref).sqrt(), (beta_s / s_min / beta_ref).sqrt());
+                  println!(
+                    "lab: truth jet: aperture {aperture:.4} rad, |jet_dir| {:.4}, σ_ang {sigma_ang:.4}, streams {streams}, v_ref {v_ref:.3} m/s, σ_v/v {v_std_rel:.3}, f {f_lo:.4}..{f_hi:.4}, ω {omega:.3e}",
+                    norm(jet_dir)
+                  );
+                });
+              }
+              for _ in lo..hi {
                 let u = mc_rng(&mut rng);
                 let dt = d::lit_time_map(u as f32, desc.lit, desc.spin[3], dur as f32) as f64;
                 let t0 = t_start + dt;
@@ -4104,11 +4368,6 @@ fn monte_carlo_truth(
                 };
                 let e1 = normalize(cross(lat_ax, dir));
                 let e2 = cross(dir, e1);
-                let lat = [
-                  sigma_ang * (g1 * e1[0] + g2 * e2[0]),
-                  sigma_ang * (g1 * e1[1] + g2 * e2[1]),
-                  sigma_ang * (g1 * e1[2] + g2 * e2[2]),
-                ];
                 let o_t0 = mc_qrot(q, off);
                 let v_site = cross([axis[0] * omega, axis[1] * omega, axis[2] * omega], o_t0);
                 let us = mc_rng(&mut rng);
@@ -4119,64 +4378,182 @@ fn monte_carlo_truth(
                 };
                 let beta = beta_s / s;
                 let f = (beta / beta_ref).sqrt();
-                let v = (v_ref * f * (1.0 + v_std_rel * mc_gauss(&mut rng))).max(0.0);
+                let n_v = mc_gauss(&mut rng);
+                // the speed noise and the bandwidth's kick bounded together (`mc_kick_max`)
+                let [g1, g2, n_v] = mc_bound_kick([g1, g2, n_v], kick_max, &mut rng);
+                let lat = [
+                  sigma_ang * (g1 * e1[0] + g2 * e2[0]),
+                  sigma_ang * (g1 * e1[1] + g2 * e2[1]),
+                  sigma_ang * (g1 * e1[2] + g2 * e2[2]),
+                ];
+                let v = (v_ref * f * (1.0 + v_std_rel * n_v)).max(0.0);
                 let r0 = [
                   rc[0] + o_t0[0] - o_start[0],
                   rc[1] + o_t0[1] - o_start[1],
                   rc[2] + o_t0[2] - o_start[2],
                 ];
-                let v0 = [
-                  vc[0] + (dir[0] + lat[0]) * v + v_site[0],
-                  vc[1] + (dir[1] + lat[1]) * v + v_site[1],
-                  vc[2] + (dir[2] + lat[2]) * v + v_site[2],
-                ];
+                // `OBSERVER_MC_LAT_COUPLED=0` (diagnostic): the bandwidth's kick at the bin's
+                // mean speed `v_ref·f` instead of the grain's own — a cell's lateral width then
+                // no longer grows with its distance from the site (the packets' assumption)
+                let v0 = if lat_coupled {
+                  [
+                    vc[0] + (dir[0] + lat[0]) * v + v_site[0],
+                    vc[1] + (dir[1] + lat[1]) * v + v_site[1],
+                    vc[2] + (dir[2] + lat[2]) * v + v_site[2],
+                  ]
+                } else {
+                  let v_lat = v_ref * f;
+                  [
+                    vc[0] + dir[0] * v + lat[0] * v_lat + v_site[0],
+                    vc[1] + dir[1] * v + lat[1] * v_lat + v_site[1],
+                    vc[2] + dir[2] * v + lat[2] * v_lat + v_site[2],
+                  ]
+                };
+                if cell_mode.is_some() {
+                  let ax_e = mc_qrot(q, jet_dir);
+                  let u_rel = sub(sub(v0, vc), v_site);
+                  let along = dot(u_rel, ax_e);
+                  cell_tag.set([
+                    along / v_ref,
+                    (along / norm(u_rel).max(1e-30)).clamp(-1.0, 1.0).acos().to_degrees(),
+                    (n_v * n_v + g1 * g1 + g2 * g2).sqrt(),
+                    f,
+                  ]);
+                }
                 let (r, _) = d::kepler::propagate_f64(r0, v0, d::SUN_MU_M3_S2 * (1.0 - beta), age);
                 if deposit(r, age, wgt, b) {
                   n_drawn += 1;
                 }
               }
-              seen.push((bi, n_drawn - drawn_before));
+              seen.push((bi, n_drawn - drawn_before, sq.get() - sq_before));
             }
-            (hist, age_hist, age2_hist, col_hist, cnt_hist, n_drawn, seen)
-          })
-        })
-        .collect();
-      for hd in handles {
-        let (hist, ah, a2h, colh, ch, n, seen) = hd.join().expect("mc thread");
-        for (a, b) in counts.iter_mut().zip(ch.iter()) {
-          *a += *b;
-        }
-        for (a, b) in truth.iter_mut().zip(hist.iter()) {
-          *a += *b;
-        }
-        for (a, b) in age_sum.iter_mut().zip(ah.iter()) {
-          *a += *b;
-        }
-        for (a, b) in age2_sum.iter_mut().zip(a2h.iter()) {
-          *a += *b;
-        }
-        for (a, b) in col_sum.iter_mut().zip(colh.iter()) {
-          *a += *b;
-        }
-        for (bi, k) in seen {
-          inview[bi] = k;
-        }
-        drawn += n;
+            (hist, age_hist, age2_hist, col_hist, cnt_hist, n_drawn, seen, rhist)
+          };
+          let mut g = order.lock().unwrap();
+          g.1.insert(u, out);
+          while let Some((hist, ah, a2h, colh, ch, n, seen, rh)) = {
+            let k = g.0;
+            g.1.remove(&k)
+          } {
+            let mut acc = sink.lock().unwrap();
+            let (truth, age_sum, age2_sum, col_sum, counts, drawn, inview, sqs, rhist_sum) = &mut *acc;
+            for (a, b) in counts.iter_mut().zip(ch.iter()) {
+              *a += *b;
+            }
+            for (a, b) in truth.iter_mut().zip(hist.iter()) {
+              *a += *b;
+            }
+            for (a, b) in age_sum.iter_mut().zip(ah.iter()) {
+              *a += *b;
+            }
+            for (a, b) in age2_sum.iter_mut().zip(a2h.iter()) {
+              *a += *b;
+            }
+            for (a, b) in col_sum.iter_mut().zip(colh.iter()) {
+              *a += *b;
+            }
+            // a batch split over units: its pieces' in-view grains and Σw² add up
+            for (bi, k, q) in seen {
+              inview[bi] += k;
+              sqs[bi] += q;
+            }
+            **drawn += n;
+            if rhist_on {
+              rhist_sum.resize(RHIST_BINS, 0.0);
+              for (a, b) in rhist_sum.iter_mut().zip(rh.iter()) {
+                *a += *b;
+              }
+            }
+            g.0 += 1;
+          }
+          drop(g);
+          ready.notify_all();
+        });
       }
     });
-    (truth, age_sum, age2_sum, col_sum, drawn, inview, counts)
+    drop(sink);
+    if rhist_on {
+      let mut g = RHIST.lock().unwrap();
+      g.resize(RHIST_BINS, 0.0);
+      for (a, b) in g.iter_mut().zip(rhist_sum.iter()) {
+        *a += *b;
+      }
+    }
+    (truth, age_sum, age2_sum, col_sum, drawn, inview, counts, sqs)
   };
   // importance allocation: a pilot of 64 grains per batch measures the fraction landing in the
   // frame; the grains are then allotted by mass × that fraction (floor 1/32: no batch starved).
   // The weight per grain stays mass / n_b, so the estimate is unbiased whatever n_b; a near
   // frame holds a few windows of the youngest tier and would otherwise spend 99 % of the
   // grains out of view
-  let (_, _, _, _, _, pilot, _) = run(&|_| 64usize);
+  let (_, _, _, _, _, mut pilot, _, mut pilot_sq) = run(&|_| 64usize);
+  // the pilot's grains per batch: a batch whose pilot landed nothing in the frame is drawn again
+  // with 64× the grains (4 096, 262 144, …) while the pilots stay within a quarter of the budget.
+  // With one 64-grain pilot such a batch got the 64-grain floor: inside the coma at 100 m the
+  // young cone's edge reaches the field with p ≈ 7.5·10⁻⁶ per grain, every young pilot missed it
+  // and the truth held **no** young dust (a third of the real light there)
+  let mut pilot_n = vec![64usize; batches.len()];
+  {
+    let mut spent = 64 * batches.len();
+    let mut n_next = 64usize * 64;
+    loop {
+      let blind: Vec<usize> = (0..batches.len()).filter(|&bi| pilot[bi] == 0).collect();
+      if blind.is_empty() || spent + blind.len() * n_next > grains / 4 {
+        break;
+      }
+      let is_blind: Vec<bool> = (0..batches.len()).map(|bi| pilot[bi] == 0).collect();
+      let (_, _, _, _, _, hits, _, sq) = run(&|bi| if is_blind[bi] { n_next } else { 0 });
+      for &bi in &blind {
+        pilot[bi] = hits[bi];
+        pilot_sq[bi] = sq[bi];
+        pilot_n[bi] = n_next;
+      }
+      spent += blind.len() * n_next;
+      n_next *= 64;
+    }
+    let blind = (0..batches.len()).filter(|&bi| pilot[bi] == 0).count();
+    if pilot_n.iter().any(|&n| n > 64) {
+      log_line(&format!(
+        "mc pilots: {} batches needed a larger pilot (up to {} grains), {blind} still saw nothing in the frame",
+        pilot_n.iter().filter(|&&n| n > 64).count(),
+        pilot_n.iter().max().copied().unwrap_or(64)
+      ));
+    }
+  }
+  RHIST.lock().unwrap().clear();
   let weights: Vec<f64> = batches
     .iter()
-    .zip(pilot.iter())
-    .map(|(b, &k)| b.desc.mass_params[0] as f64 * (k as f64 / 64.0))
+    .zip(pilot.iter().zip(pilot_n.iter()))
+    .map(|(b, (&k, &n))| b.desc.mass_params[0] as f64 * (k as f64 / n as f64))
     .collect();
+  // half of the grains by the rule above, half by each batch's standard deviation √Σw² from the
+  // pilot (Neyman: the variance of Σ (mass/n_b)·g is mass²·E[g²]/n_b) — in a perspective view
+  // inside the coma a few old grains near the camera carry 1/d² weights and dominated the noise
+  // (1 km: the background read 0.9 % of the truth's light instead of ~40 %, judged rms 51 →
+  // 0.216 with it); still unbiased (the weight per grain is mass/n_b). `OBSERVER_MC_ALLOC=mass`:
+  // the former allocation alone
+  let weights: Vec<f64> = if !std::env::var("OBSERVER_MC_ALLOC").is_ok_and(|v| v == "mass") {
+    let wt: f64 = weights.iter().sum::<f64>().max(1e-300);
+    // √(n·Σw²) is the batch's standard deviation whatever its pilot size (Σw² ∝ 1/n); scaled by
+    // n/64 so the common case (every pilot 64) is unchanged bit for bit
+    let sd: Vec<f64> = pilot_sq
+      .iter()
+      .zip(pilot_n.iter())
+      .map(|(q, &n)| (q.max(0.0) * (n as f64 / 64.0)).sqrt())
+      .collect();
+    let st: f64 = sd.iter().sum::<f64>().max(1e-300);
+    weights.iter().zip(sd.iter()).map(|(a, b)| 0.5 * a / wt + 0.5 * b / st).collect()
+  } else {
+    weights
+  };
+  // `OBSERVER_MC_ALLOC=uniform` (diagnostic): the same grains per batch whatever the pilot saw —
+  // a check that a batch whose 64-grain pilot missed the frame (weight 0: the 64-grain floor)
+  // really holds nothing in view
+  let weights: Vec<f64> = if std::env::var("OBSERVER_MC_ALLOC").is_ok_and(|v| v == "uniform") {
+    vec![1.0; batches.len()]
+  } else {
+    weights
+  };
   let weight_total: f64 = weights.iter().sum::<f64>().max(1e-300);
   let n_of = |bi: usize| ((grains as f64 * weights[bi] / weight_total).round() as usize).max(64);
   // OBSERVER_MC_YOUNG=1 (diagnostic): the youngest batches (ending within 2 h of now) with
@@ -4191,7 +4568,10 @@ fn monte_carlo_truth(
       }
       let map1 = d::lit_time_map(1.0, d.lit, d.spin[3], dur as f32);
       log_line(&format!(
-        "[observer] mc young batch {bi}: tier {} t_end-now {:.0} s dur {:.0} s count {} mass {:.1} g lit {:?} (mode {}) provisional {} map(u=1) {:.0} s pilot {} alloc {}",
+        "[observer] mc young batch {bi}: vel_params {:?} size_params {:?} aperture {:.4} tier {} t_end-now {:.0} s dur {:.0} s count {} mass {:.1} g lit {:?} (mode {}) provisional {} map(u=1) {:.0} s pilot {} alloc {}",
+        d.vel_params,
+        d.size_params,
+        d.jet_dir_aperture[3],
         b.tier,
         t_start + dur - t_now,
         dur,
@@ -4206,7 +4586,14 @@ fn monte_carlo_truth(
       ));
     }
   }
-  let (truth, age_sum, age2_sum, col_sum, drawn, _, counts) = run(&n_of);
+  let (truth, age_sum, age2_sum, col_sum, drawn, _, counts, _) = run(&n_of);
+  // `OBSERVER_MC_RAW=<prefix>` (the replay lab): the truth's raw τ image and grains per pixel,
+  // f32 little endian, `<prefix>_truth.f32` / `<prefix>_counts.f32`
+  if let Ok(prefix) = std::env::var("OBSERVER_MC_RAW") {
+    let f = |v: &[f64]| -> Vec<u8> { v.iter().flat_map(|&x| (x as f32).to_le_bytes()).collect() };
+    let _ = std::fs::write(format!("{prefix}_truth.f32"), f(&truth));
+    let _ = std::fs::write(format!("{prefix}_counts.f32"), f(&counts));
+  }
   // absolute photometry: the render's radiance factors (per px², `PYR_UNIT` makes the pyramid
   // absolute) against the truth's Σ cross-section × weight / A_px(depth) — both τ per pixel
   // area, in perspective the pixel area taken at each grain's depth (no frame-wide `m_per_px`)
@@ -4453,7 +4840,7 @@ fn monte_carlo_truth(
   };
   let truth32: Vec<f32> = b.iter().map(|&x| x as f32).collect();
   let render32: Vec<f32> = a.iter().map(|&x| x as f32).collect();
-  Some((rec, render32, truth32))
+  Some((rec, render32, truth32, truth, counts))
 }
 
 /// `mc_NNN.png`: render | truth (fourth-root stretch, each to its own peak) | ratio (grey = 1,
@@ -4768,4 +5155,1575 @@ fn earth_pose_diag(
     json_v3(to)
   );
   (line, Some(elev))
+}
+
+/// `--probe`: the judged frame's GPU clusters (`download_dust_snapshot`) replayed tier by tier on
+/// the CPU mirror into a fresh pyramid with the GPU frame's header (its host-written words; the
+/// counters zeroed), with the τ at the probe pixels attributed to clusters. First the fidelity of
+/// the replay: its composite τ against the GPU's over the frame (the attribution is only as good
+/// as that); then per pixel the largest contributors. Written to `probe_NNN.txt` and the log.
+fn probe_replay(
+  ctx: &SimulationContext,
+  pe: aethervk_core_rlib::gpu::PresentationEngineHandle,
+  gpu_pyr: &[u32],
+  args: &Args,
+  i: usize,
+) {
+  use aethervk_core_rlib::scene::dust as d;
+  let Some(snap) = ctx.download_dust_snapshot(pe) else {
+    log_line(&format!("[observer] probe frame {i}: no snapshot (no view or device)"));
+    return;
+  };
+  if snap.is_empty() {
+    log_line(&format!("[observer] probe frame {i}: empty snapshot (CPU particle mode?)"));
+    return;
+  }
+  let layout = d::PyramidLayout::new(args.width, args.height);
+  if layout.total_words as usize != gpu_pyr.len() {
+    log_line(&format!(
+      "[observer] probe frame {i}: layout {} words vs the GPU pyramid's {}",
+      layout.total_words,
+      gpu_pyr.len()
+    ));
+    return;
+  }
+  let h = d::PYRAMID_HEADER_WORDS as usize;
+  let mut pyr = vec![0u32; gpu_pyr.len()];
+  pyr[..h].copy_from_slice(&gpu_pyr[..h]);
+  // the counters the passes accumulate start at zero (the host-written words are kept)
+  {
+    use aethervk_core_rlib::scene::dust::specks as sp;
+    for w in [
+      d::PYR_TAU_MAX,
+      d::PYR_LEVEL_MASK,
+      d::PYR_SPLIT_CHILDREN,
+      d::PYR_VOLUME_EVALS,
+      d::PYR_EWA_TEXELS,
+      d::PYR_SPLIT_DROPPED_FLUX,
+      sp::PYR_SPECKS,
+      sp::PYR_SPECKS_OVERFLOW,
+      sp::PYR_SPECKS_TRUNCATED,
+      sp::PYR_N_EYE,
+      sp::PYR_N_EYE_HI,
+      sp::PYR_SPECKS_NODES,
+      sp::PYR_SPECKS_COUNTS,
+    ] {
+      pyr[w as usize] = 0;
+    }
+  }
+  let t0 = Instant::now();
+  let mut reports: Vec<(usize, d::ProbeReport)> = Vec::new();
+  for (k, t) in snap.iter().enumerate() {
+    let r = d::splat_tier_probed(
+      &t.moments,
+      &t.render,
+      &t.pc,
+      &t.flow,
+      t.tracer_counts,
+      &layout,
+      &mut pyr,
+      &args.probe,
+    );
+    reports.extend(r.into_iter().map(|x| (k, x)));
+  }
+  // fidelity: the replay's composite τ against the GPU frame's (the same unit: the same pc)
+  let unit = snap
+    .first()
+    .map(|t| if t.pc.inv_unit > 0.0 { 1.0 / t.pc.inv_unit } else { 1.0 })
+    .unwrap_or(1.0);
+  let (mut se, mut s2, mut sa, mut sb, mut peak) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+  let mut px = Vec::with_capacity((args.width * args.height) as usize);
+  for y in 0..args.height {
+    for x in 0..args.width {
+      let a = d::composite_sample(&layout, &pyr, unit, x, y).0 as f64;
+      let b = d::composite_sample(&layout, gpu_pyr, unit, x, y).0 as f64;
+      peak = peak.max(b);
+      px.push((a, b));
+    }
+  }
+  for &(a, b) in &px {
+    sa += a;
+    sb += b;
+    if b > 0.01 * peak {
+      se += (a - b) * (a - b);
+      s2 += b * b;
+    }
+  }
+  let mut out = format!(
+    "probe frame {i}: replay of {} tiers in {:.1} s; fidelity: Στ replay/GPU {:.4}, rel rms over the pixels above 1 % of the peak {:.4}\n",
+    snap.len(),
+    t0.elapsed().as_secs_f64(),
+    sa / sb.max(1e-300),
+    (se / s2.max(1e-300)).sqrt()
+  );
+  for &(x, y) in &args.probe {
+    let gpu_tau = d::composite_sample(&layout, gpu_pyr, unit, x, y).0;
+    let tiers: Vec<&(usize, d::ProbeReport)> =
+      reports.iter().filter(|(_, r)| r.pixel == (x, y)).collect();
+    let total: f32 = tiers.iter().map(|(_, r)| r.total).sum();
+    out += &format!("pixel ({x},{y}): GPU τ {gpu_tau:.4e}, replay Σ cluster τ {total:.4e}\n");
+    let mut all: Vec<(usize, d::ProbeHit)> = tiers
+      .iter()
+      .flat_map(|(k, r)| r.hits.iter().map(move |h| (*k, *h)))
+      .collect();
+    all.sort_by(|a, b| b.1.tau.partial_cmp(&a.1.tau).unwrap_or(std::cmp::Ordering::Equal));
+    for (k, h) in all.iter().take(10) {
+      out += &format!(
+        "  tier {k}: {:.1}% {}\n",
+        100.0 * h.tau / total.max(1e-30),
+        h
+      );
+    }
+    for (k, r) in &tiers {
+      out += &format!("  tier {k} total {:.4e} from {} clusters\n", r.total, r.clusters);
+    }
+  }
+  for l in out.lines() {
+    log_line(&format!("[observer] {l}"));
+  }
+  let _ = std::fs::write(args.out.join(format!("probe_{i:03}.txt")), out);
+}
+
+// ───── the offline replay lab ─────
+
+const SNAPSHOT_MAGIC: &[u8; 4] = b"DSNP";
+
+/// `--save-snapshot`: the frame's GPU splat input (`download_dust_snapshot`) and the GPU
+/// pyramid's header, to `snapshot_NNN.bin`: magic, version 1, width, height, tier count, the 256
+/// header words, then per tier the push constants, the flow clock (3 f32), the tracer counts,
+/// the render clusters and the moments (counts then raw bytes).
+fn save_snapshot(
+  ctx: &SimulationContext,
+  pe: aethervk_core_rlib::gpu::PresentationEngineHandle,
+  gpu_pyr: &[u32],
+  args: &Args,
+  i: usize,
+) {
+  use aethervk_core_rlib::scene::dust as d;
+  let Some(snap) = ctx.download_dust_snapshot(pe) else {
+    log_line(&format!("[observer] snapshot frame {i}: no view or device"));
+    return;
+  };
+  let mut b: Vec<u8> = Vec::new();
+  let u32le = |b: &mut Vec<u8>, v: u32| b.extend_from_slice(&v.to_le_bytes());
+  b.extend_from_slice(SNAPSHOT_MAGIC);
+  u32le(&mut b, 1);
+  u32le(&mut b, args.width);
+  u32le(&mut b, args.height);
+  u32le(&mut b, snap.len() as u32);
+  for w in &gpu_pyr[..d::PYRAMID_HEADER_WORDS as usize] {
+    u32le(&mut b, *w);
+  }
+  for t in &snap {
+    b.extend_from_slice(bytemuck::bytes_of(&t.pc));
+    for v in [t.flow.t_hi, t.flow.t_lo, t.flow.speed] {
+      b.extend_from_slice(&v.to_le_bytes());
+    }
+    u32le(&mut b, t.tracer_counts);
+    u32le(&mut b, t.render.len() as u32);
+    b.extend_from_slice(bytemuck::cast_slice(&t.render));
+    u32le(&mut b, t.moments.len() as u32);
+    b.extend_from_slice(bytemuck::cast_slice(&t.moments));
+  }
+  let path = args.out.join(format!("snapshot_{i:03}.bin"));
+  match std::fs::write(&path, &b) {
+    Ok(()) => log_line(&format!(
+      "[observer] snapshot frame {i}: {} tiers, {:.1} MB → {}",
+      snap.len(),
+      b.len() as f64 / 1e6,
+      path.display()
+    )),
+    Err(e) => log_line(&format!("[observer] snapshot frame {i}: {e}")),
+  }
+}
+
+/// The tiers of a loaded snapshot: push constants, flow, tracer count, render clusters, moments.
+type LabTiers = Vec<(
+  aethervk_core_rlib::scene::dust::DustSplatPushConstants,
+  aethervk_core_rlib::scene::dust::DustFlowUniform,
+  u32,
+  Vec<aethervk_core_rlib::scene::dust::DustRenderCluster>,
+  Vec<aethervk_core_rlib::scene::dust::DustMoments>,
+)>;
+
+/// A loaded snapshot: `(width, height, header, tiers)`.
+type LabSnapshot = (
+  u32,
+  u32,
+  Vec<u32>,
+  Vec<(
+    aethervk_core_rlib::scene::dust::DustSplatPushConstants,
+    aethervk_core_rlib::scene::dust::DustFlowUniform,
+    u32,
+    Vec<aethervk_core_rlib::scene::dust::DustRenderCluster>,
+    Vec<aethervk_core_rlib::scene::dust::DustMoments>,
+  )>,
+);
+
+fn load_snapshot(path: &Path) -> Option<LabSnapshot> {
+  use aethervk_core_rlib::scene::dust as d;
+  let b = std::fs::read(path).ok()?;
+  let mut o = 0usize;
+  let mut take = |n: usize| -> Option<&[u8]> {
+    let s = b.get(o..o + n)?;
+    o += n;
+    Some(s)
+  };
+  if take(4)? != SNAPSHOT_MAGIC {
+    return None;
+  }
+  let rd = |s: &[u8]| u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+  let _version = rd(take(4)?);
+  let (w, h, nt) = (rd(take(4)?), rd(take(4)?), rd(take(4)?));
+  let header: Vec<u32> = (0..d::PYRAMID_HEADER_WORDS).map(|_| take(4).map(rd)).collect::<Option<_>>()?;
+  let mut tiers = Vec::new();
+  for _ in 0..nt {
+    let pc: d::DustSplatPushConstants =
+      bytemuck::pod_read_unaligned(take(core::mem::size_of::<d::DustSplatPushConstants>())?);
+    let f = |s: &[u8]| f32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+    let flow = d::DustFlowUniform {
+      t_hi: f(take(4)?),
+      t_lo: f(take(4)?),
+      speed: f(take(4)?),
+    };
+    let tracer = rd(take(4)?);
+    let nr = rd(take(4)?) as usize;
+    let rs = core::mem::size_of::<d::DustRenderCluster>();
+    let render: Vec<d::DustRenderCluster> = take(nr * rs)?
+      .chunks_exact(rs)
+      .map(bytemuck::pod_read_unaligned)
+      .collect();
+    let nm = rd(take(4)?) as usize;
+    let ms = core::mem::size_of::<d::DustMoments>();
+    let moments: Vec<d::DustMoments> = take(nm * ms)?
+      .chunks_exact(ms)
+      .map(bytemuck::pod_read_unaligned)
+      .collect();
+    tiers.push((pc, flow, tracer, render, moments));
+  }
+  Some((w, h, header, tiers))
+}
+
+fn read_f32_file(path: &Path) -> Option<Vec<f64>> {
+  let b = std::fs::read(path).ok()?;
+  Some(
+    b.chunks_exact(4)
+      .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64)
+      .collect(),
+  )
+}
+
+const TRUTH_MAGIC: &[u8; 4] = b"DTRU";
+
+/// `OBSERVER_LAB_RHIST=1` (the replay lab): the truth's cross-section by distance from the
+/// nucleus centre (every grain drawn, in view or not; [`RHIST_BIN_M`] bins), for the packets'
+/// same histogram ([`lab_packet_mc`])
+static RHIST: std::sync::Mutex<Vec<f64>> = std::sync::Mutex::new(Vec::new());
+const RHIST_BIN_M: f64 = 250.0;
+const RHIST_BINS: usize = 90;
+
+/// The cell-coordinate modes of `OBSERVER_LAB_RHIST_MODE` (the young cone's own coordinates, the
+/// packets' and the truth's alike): `speed` the distance along the cell's axis in units of the
+/// reference speed's travel (the speed factor f, 0.02 bins from −0.5: behind the origin is
+/// negative), `off` the angle off the axis (1° bins), `age` the age (30 s bins; the packets' at
+/// their piece's centre age), `tail` the draw's whitened 3-D deviation (0.1 bins: the truth's
+/// √(N² + g₁² + g₂²) of its speed and direction kicks, the packets' |g| of their Gaussian across
+/// the capsule), `view` the angle from the camera's forward axis (1° bins: the frame's edge),
+/// `fbin` log₁₀ of the speed factor (0.05 bins from −0.5: the truth's grain's own f, the packets'
+/// size bin's mid f). A value that is not finite (a grain of a diagnostic model, a packet without a cell) lands in the last bin
+fn lab_cell_mode() -> Option<(&'static str, f64)> {
+  match std::env::var("OBSERVER_LAB_RHIST_MODE").as_deref() {
+    Ok("speed") => Some(("speed", 0.02)),
+    Ok("off") => Some(("off", 1.0)),
+    Ok("age") => Some(("age", 30.0)),
+    Ok("tail") => Some(("tail", 0.1)),
+    Ok("view") => Some(("view", 1.0)),
+    Ok("fbin") => Some(("fbin", 0.05)),
+    _ => None,
+  }
+}
+
+/// The bin of `x` in the cell mode `(name, width)` ([`lab_cell_mode`]; `speed` from −0.5)
+fn lab_cell_bin(x: f64, (name, width): (&str, f64)) -> usize {
+  let x = x + lab_cell_first(name);
+  if x.is_finite() { ((x.max(0.0) / width) as usize).min(RHIST_BINS - 1) } else { RHIST_BINS - 1 }
+}
+
+/// The lower edge of the first bin of a cell mode, negated
+fn lab_cell_first(name: &str) -> f64 {
+  if name == "speed" || name == "fbin" { 0.5 } else { 0.0 }
+}
+
+/// `OBSERVER_LAB_VIEW_MAX=<deg>`: the histograms (both sides) count only what lies within this
+/// angle of the camera's forward axis — the part of a cluster at the frame's edge
+fn lab_view_max() -> Option<f64> {
+  static G: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+  *G.get_or_init(|| std::env::var("OBSERVER_LAB_VIEW_MAX").ok().and_then(|v| v.trim().parse::<f64>().ok()))
+}
+
+/// The direction bin of `p` (from the nucleus centre): `theta` the polar angle to the unit spin
+/// `axis` in 2° bins, else the azimuth about it from the Sun's projection in 4° bins
+fn lab_angle_bin(theta: bool, p: V3, axis: V3, sun: V3) -> usize {
+  let pn = normalize(p);
+  let c = dot(pn, axis).clamp(-1.0, 1.0);
+  if theta {
+    return ((c.acos().to_degrees() / 2.0) as usize).min(RHIST_BINS - 1);
+  }
+  let s0 = normalize(sub(sun, [axis[0] * dot(sun, axis), axis[1] * dot(sun, axis), axis[2] * dot(sun, axis)]));
+  let s1 = cross(axis, s0);
+  let phi = dot(pn, s1).atan2(dot(pn, s0)).to_degrees().rem_euclid(360.0);
+  ((phi / 4.0) as usize).min(RHIST_BINS - 1)
+}
+
+/// `--save-snapshot`: the truth's inputs ([`TruthInputs`]) and the frame's [`McView`] to
+/// `truth_NNN.bin`, so `--lab --lab-truth N` draws the same truth offline (any grain count, any
+/// age gate). Every scalar as f64 LE (NaN = none), the descriptors and frames as their Pod bytes.
+fn save_truth_inputs(ctx: &SimulationContext, scene_id: u64, view: &McView, path: &Path) {
+  let Some(inp) = gather_truth_inputs(ctx, scene_id) else {
+    log_line(&format!("truth inputs: no jet now, {} not written", path.display()));
+    return;
+  };
+  let mut b: Vec<u8> = Vec::new();
+  b.extend_from_slice(TRUTH_MAGIC);
+  b.extend_from_slice(&1u32.to_le_bytes());
+  let o = |v: Option<f64>| v.unwrap_or(f64::NAN);
+  let mut f: Vec<f64> = vec![view.width as f64, view.height as f64];
+  f.extend_from_slice(&view.cam_pos);
+  f.extend_from_slice(&view.cam_q);
+  f.extend_from_slice(&[
+    view.half_height_au,
+    view.m_per_px_nucleus,
+    view.aspect,
+    o(view.perspective_tan_h),
+    view.near_au,
+    view.far_au,
+  ]);
+  f.extend_from_slice(&view.comet_au);
+  f.extend_from_slice(&[
+    view.nucleus_px.0,
+    view.nucleus_px.1,
+    o(view.mc_tier.map(|t| t as f64)),
+    o(view.mc_age_max),
+    o(view.mc_age_min),
+    view.nucleus_px_radius,
+    o(view.afrho_aperture_km),
+    view.afrho_in_cm,
+    view.isotropic as u8 as f64,
+    view.hue_ray.from.0,
+    view.hue_ray.from.1,
+    view.hue_ray.dir.0,
+    view.hue_ray.dir.1,
+    view.hue_ray.r0,
+    view.stream[0] as f64,
+    view.stream[1] as f64,
+    view.stream[2] as f64,
+    view.ttl_s,
+    inp.t_now,
+  ]);
+  f.extend_from_slice(&inp.r_centre_now);
+  f.push(inp.albedo as f64);
+  b.extend_from_slice(&(f.len() as u32).to_le_bytes());
+  for v in &f {
+    b.extend_from_slice(&v.to_le_bytes());
+  }
+  b.extend_from_slice(&(inp.batches.len() as u32).to_le_bytes());
+  for t in &inp.batches {
+    b.extend_from_slice(bytemuck::bytes_of(&t.desc));
+    b.extend_from_slice(&t.band.0.to_le_bytes());
+    b.extend_from_slice(&t.band.1.to_le_bytes());
+    for v in [t.fade as u32, t.tier, t.frame.is_some() as u32] {
+      b.extend_from_slice(&v.to_le_bytes());
+    }
+    let fr = t.frame.unwrap_or_else(bytemuck::Zeroable::zeroed);
+    b.extend_from_slice(bytemuck::bytes_of(&fr));
+  }
+  match std::fs::write(path, &b) {
+    Ok(()) => log_line(&format!(
+      "truth inputs: {} batches, {:.1} MB → {}",
+      inp.batches.len(),
+      b.len() as f64 / 1e6,
+      path.display()
+    )),
+    Err(e) => log_line(&format!("truth inputs: {e}")),
+  }
+}
+
+fn load_truth_inputs(path: &Path) -> Option<(TruthInputs, McView)> {
+  use aethervk_core_rlib::scene::dust as d;
+  let b = std::fs::read(path).ok()?;
+  let mut o = 0usize;
+  let mut take = |n: usize| -> Option<&[u8]> {
+    let s = b.get(o..o + n)?;
+    o += n;
+    Some(s)
+  };
+  if take(4)? != TRUTH_MAGIC {
+    return None;
+  }
+  let rd = |s: &[u8]| u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+  let rf = |s: &[u8]| f64::from_le_bytes(s.try_into().unwrap());
+  let _version = rd(take(4)?);
+  let nf = rd(take(4)?) as usize;
+  let f: Vec<f64> = (0..nf).map(|_| take(8).map(rf)).collect::<Option<_>>()?;
+  if nf != 41 {
+    return None;
+  }
+  let o_ = |v: f64| if v.is_nan() { None } else { Some(v) };
+  let view = McView {
+    width: f[0] as u32,
+    height: f[1] as u32,
+    cam_pos: [f[2], f[3], f[4]],
+    cam_q: [f[5], f[6], f[7], f[8]],
+    half_height_au: f[9],
+    m_per_px_nucleus: f[10],
+    aspect: f[11],
+    perspective_tan_h: o_(f[12]),
+    near_au: f[13],
+    far_au: f[14],
+    comet_au: [f[15], f[16], f[17]],
+    nucleus_px: (f[18], f[19]),
+    mc_tier: o_(f[20]).map(|t| t as u32),
+    mc_age_max: o_(f[21]),
+    mc_age_min: o_(f[22]),
+    nucleus_px_radius: f[23],
+    afrho_aperture_km: o_(f[24]),
+    afrho_in_cm: f[25],
+    isotropic: f[26] != 0.0,
+    hue_ray: HueRay {
+      from: (f[27], f[28]),
+      dir: (f[29], f[30]),
+      r0: f[31],
+    },
+    stream: [f[32] as f32, f[33] as f32, f[34] as f32],
+    ttl_s: f[35],
+  };
+  let (t_now, r_centre_now, albedo) = (f[36], [f[37], f[38], f[39]], f[40] as f32);
+  let nb = rd(take(4)?) as usize;
+  let mut batches = Vec::with_capacity(nb);
+  for _ in 0..nb {
+    let desc: d::DustBatch = bytemuck::pod_read_unaligned(take(core::mem::size_of::<d::DustBatch>())?);
+    let band = (rf(take(8)?), rf(take(8)?));
+    let (fade, tier, has_frame) = (rd(take(4)?), rd(take(4)?), rd(take(4)?));
+    let fr: d::DustFrame = bytemuck::pod_read_unaligned(take(core::mem::size_of::<d::DustFrame>())?);
+    batches.push(TruthBatch {
+      desc,
+      band,
+      frame: (has_frame != 0).then_some(fr),
+      fade: fade != 0,
+      tier,
+    });
+  }
+  Some((TruthInputs { batches, t_now, r_centre_now, albedo }, view))
+}
+
+/// Clusters per tier are split into this many blocks for [`lab_packet_mc`] (fixed, not per
+/// thread: the block-ordered sum is then the same at any thread count).
+const LAB_MC_BLOCKS: usize = 64;
+
+/// One block's accumulators of [`lab_packet_mc`].
+struct LabMcAcc {
+  img: Vec<f64>,
+  rh: Vec<f64>,
+  cat: Vec<(f64, f64)>,
+  sup: [[f64; 5]; 2],
+  sup_cat: Vec<f64>,
+  /// `OBSERVER_LAB_PACKET_DRAW=1`: per packet [its MC in-view Σ (τ units), the drawing's Σ, class,
+  /// eye distance (m), √(tr Σ/3) (m), kept mass, cluster, age (s)]
+  pk: Vec<[f64; 8]>,
+}
+
+impl LabMcAcc {
+  fn add(&mut self, o: &LabMcAcc) {
+    for (a, b) in self.img.iter_mut().zip(&o.img) {
+      *a += b;
+    }
+    for (a, b) in self.rh.iter_mut().zip(&o.rh) {
+      *a += b;
+    }
+    for (a, b) in self.cat.iter_mut().zip(&o.cat) {
+      a.0 += b.0;
+      a.1 += b.1;
+    }
+    for (a, b) in self.sup.iter_mut().flatten().zip(o.sup.iter().flatten()) {
+      *a += b;
+    }
+    for (a, b) in self.sup_cat.iter_mut().zip(&o.sup_cat) {
+      *a += b;
+    }
+    self.pk.extend_from_slice(&o.pk);
+  }
+}
+
+/// The packet MC's stream of one (tier, cluster, packet, piece): splitmix64 of the indices,
+/// nonzero (the xorshift state of [`mc_rng`]).
+fn lab_mc_seed(tier: usize, cluster: usize, packet: usize, piece: usize) -> u64 {
+  let mut z = 0x1234_5678_9ABC_DEF1u64
+    ^ ((tier as u64) << 56)
+    ^ ((cluster as u64) << 20)
+    ^ ((packet as u64) << 4)
+    ^ piece as u64;
+  z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+  z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+  z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+  (z ^ (z >> 31)).max(1)
+}
+
+/// Grains per work unit of the Monte-Carlo truth ([`monte_carlo_truth_from`]): the unit of
+/// load balance and of the ordered sum (one unit's histograms are held until summed).
+const MC_UNIT_GRAINS: usize = 1 << 22;
+
+/// The stream of a batch's `piece`-th grain range of [`MC_UNIT_GRAINS`]: piece 0 is the batch's
+/// own stream (a batch within one piece draws what it always drew), the others splitmix64 of it.
+fn mc_piece_seed(seed: u32, piece: usize) -> u64 {
+  let base = (seed as u64 ^ 0x9E37_79B9_7F4A_7C15).max(1);
+  if piece == 0 {
+    return base;
+  }
+  let mut z = base ^ (piece as u64).wrapping_mul(0xD1B5_4A32_D192_ED03);
+  z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+  z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+  z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+  (z ^ (z >> 31)).max(1)
+}
+
+/// `OBSERVER_THREADS=<n>`: the lab's CPU threads (the splat, the packet MC); default the
+/// machine's parallelism, clamped to 1..=32. Results are the same at any count.
+fn observer_threads() -> usize {
+  std::env::var("OBSERVER_THREADS")
+    .ok()
+    .and_then(|v| v.trim().parse::<usize>().ok())
+    .filter(|&n| n >= 1)
+    .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 32))
+}
+
+/// `OBSERVER_LAB_PACKET_MC=<k>` (the replay lab): the render's own packets ([`d::subpackets_swept`]
+/// with the splat's pooling decisions) sampled as grains, `k` per packet — uniform along the
+/// capsule (its linear density ramp), the covariance's Gaussian across — and deposited with the
+/// truth's weighting: flux × radiance weight / (depth² · cos θ) at the sample (τ per pixel area,
+/// up to one constant). The image the packets *are*, without the splat's drawing of them.
+fn lab_packet_mc(tiers: &LabTiers, header: &[u32], w: u32, h: u32, k: usize, outside: Option<&[bool]>) -> Vec<f64> {
+  use aethervk_core_rlib::scene::dust as d;
+  let (wu, hu) = (w as usize, h as usize);
+  // per (size bin, piece) of the clusters' packet lists: the image weight in total and outside
+  // the truth's region (`outside`), when every bin has the same number of packets
+  // `OBSERVER_LAB_SUPPORT=1`: every in-view sample classified in its cell's own coordinates — the
+  // emission origin (the size polyline, linear in the speed factor f, extrapolated to f = 0), the
+  // coordinate along the motion in units of f, the angle off the cell's axis in lateral bandwidths
+  // — [young (cluster < 500 s), older] × [behind the origin, slower than the slowest grain,
+  // faster than the fastest, > 3 bandwidths off the axis, physical]; and the young in-view light
+  // by size bin × piece
+  // `OBSERVER_LAB_SUPPORT_CUT=plane|cone`: each packet's samples outside the support are
+  // rejected and its flux renormalised over the rest — `plane` behind the slowest grain (along the
+  // motion), `cone` that and > 3 lateral bandwidths off the cell's axis: what a truncated kernel
+  // would draw; `kernel` the exact cut at the kernel's own planes (renormalised by
+  // `support_mass`), `trunc` the kernel's truncated packets (`support_truncated`)
+  let cut = std::env::var("OBSERVER_LAB_SUPPORT_CUT").ok();
+  // the cell-coordinate histograms ([`lab_cell_mode`]) need the support's cells
+  let cell_mode = lab_cell_mode();
+  let support = std::env::var("OBSERVER_LAB_SUPPORT").is_ok_and(|v| v == "1") || cut.is_some() || cell_mode.is_some();
+  // `OBSERVER_LAB_RHIST_INVIEW=1`: the histogram of the in-view light (as the truth's)
+  let rhist_inview = std::env::var("OBSERVER_LAB_RHIST_INVIEW").is_ok_and(|v| v == "1");
+  // the accumulators: a fixed number of cluster blocks per tier ([`LAB_MC_BLOCKS`], whatever the
+  // thread count), each into its own, summed in block order — bit-identical at any
+  // `OBSERVER_THREADS`
+  let fresh = || LabMcAcc {
+    img: vec![0.0f64; wu * hu],
+    rh: vec![0.0f64; RHIST_BINS],
+    cat: vec![(0.0f64, 0.0f64); 16 * 8],
+    sup: [[0.0f64; 5]; 2],
+    sup_cat: vec![0.0f64; 16 * 8],
+    pk: Vec::new(),
+  };
+  // `OBSERVER_LAB_PACKET_DRAW=1` (with `_SUPPORT_CUT=kernel`): every packet also drawn alone, as
+  // the splat draws it (`project_split_scatter` under the lab's header: its volume bias, gates,
+  // the `AETHERVK_DUST_LAB_*` knobs), on a fresh pyramid, against its own grains — which packets
+  // the drawing over- or under-fills. The MC side is τ per pixel: (h / 2 tan(fov/2))² per unit
+  let draw_cmp = std::env::var("OBSERVER_LAB_PACKET_DRAW").is_ok_and(|v| v == "1");
+  // the kernel's cone of grains (`conic_slabs`, perspective views; `AETHERVK_DUST_LAB_APEX=0`:
+  // the former drawing), sampled as the splat draws it
+  let apex_lab = !std::env::var("AETHERVK_DUST_LAB_APEX").ok().and_then(|v| v.trim().parse::<f32>().ok()).is_some_and(|v| v <= 0.0);
+  // the kernel's sub-bins per size bin (the splat's lab knob): a bin's packets are `sub_bins` runs
+  // of its time pieces
+  let sub_bins = std::env::var("AETHERVK_DUST_LAB_SUBBINS")
+    .ok()
+    .and_then(|v| v.trim().parse::<f32>().ok())
+    .map_or(1, |v| (v as usize).clamp(1, 16));
+  // (unset: the end bins' `DUST_END_SUBBINS` sub-bins make the bins' runs unequal; the per-bin
+  // diagnostics then see no regular layout and use the cluster's own cell)
+  // `OBSERVER_LAB_PIECE_AGE=lo,hi` (s): only the packets whose piece's centre age is in [lo, hi)
+  // (with `_SUPPORT_CUT` or a cell mode: the piece ages come with the support's cells)
+  let piece_gate = std::env::var("OBSERVER_LAB_PIECE_AGE").ok().and_then(|v| {
+    let mut it = v.split(',').map(|x| x.trim().parse::<f64>().ok());
+    Some((it.next()??, it.next()??))
+  });
+  let layout = d::PyramidLayout::new(w, h);
+  let mut total = fresh();
+  let threads = observer_threads();
+  let cell_of = |q: &d::DustMoments| -> (V3, V3) {
+    let (e0, e1) = (q.edge(0), q.edge(d::SIZE_BINS as usize));
+    let (f0, f1) = (q.edge_factor(0) as f64, q.edge_factor(d::SIZE_BINS as usize) as f64);
+    let c = [
+      (e1[0] - e0[0]) as f64 / (f1 - f0),
+      (e1[1] - e0[1]) as f64 / (f1 - f0),
+      (e1[2] - e0[2]) as f64 / (f1 - f0),
+    ];
+    (
+      [e0[0] as f64 - f0 * c[0], e0[1] as f64 - f0 * c[1], e0[2] as f64 - f0 * c[2]],
+      c,
+    )
+  };
+  for (ti, (pc, _, _, render, moments)) in tiers.iter().enumerate() {
+    let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+    let view = d::SplitView::of(&pc.mvp, eye);
+    let n = (pc.live_count as usize).min(moments.len()).min(render.len());
+    // one cluster's packets into `a`; each packet draws from its own stream (tier, cluster,
+    // packet, piece), so no draw depends on another cluster's
+    let cluster = |i: usize, a: &mut LabMcAcc| {
+      let LabMcAcc { img, rh, cat, sup, sup_cat, pk } = a;
+      let m = &moments[i];
+      if !(m.flux() > 0.0) {
+        return;
+      }
+      let pred = d::streak_pred(render, i).map(|q| &moments[q]);
+      let seg = match pred {
+        Some(p) => {
+          let (a, b) = (p.mean(), m.mean());
+          [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+        }
+        None => [0.0; 3],
+      };
+      let pred_merged = pred.is_none_or(|p| d::polyline_merged(p, &pc.mvp, w, h));
+      let merged = d::polyline_merged(m, &pc.mvp, w, h)
+        && pred_merged
+        && pred.is_none_or(|p| d::time_shallow(m, p, &pc.mvp));
+      let px = |q: [f32; 3]| d::project_point(q, &pc.mvp, w, h);
+      let sun = m.sun_dir();
+      // `kernel` / `trunc`: the kernel's own support planes (`subpackets_supported`)
+      let kernel_cut = matches!(cut.as_deref(), Some("kernel") | Some("trunc"));
+      let packets: Vec<(d::Packet, [f32; 4], f32)> = if kernel_cut {
+        d::subpackets_cells(m, seg, pred, merged, pred_merged, Some(&px))
+      } else {
+        d::subpackets_swept(m, seg, pred, merged, pred_merged, Some(&px)).into_iter().map(|p| (p, [0.0; 4], f32::NAN)).collect()
+      };
+      let per_bin = if !merged && packets.len() % 16 == 0 { packets.len() / 16 } else { 0 };
+      // the support classification's cell: own (origin, c per unit f), the lateral bandwidth
+      // σ_ang and the relative speed spread from its Σ_v, the speed range
+      let young = m.age() < 500.0;
+      let (o_m, c_m) = cell_of(m);
+      let cn_m = norm(c_m);
+      let (sig_ang, v_std) = {
+        let u = normalize(c_m);
+        let cv = m.cov_v().map(|v| v as f64);
+        let q = cv[0] * u[0] * u[0] + cv[3] * u[1] * u[1] + cv[5] * u[2] * u[2]
+          + 2.0 * (cv[1] * u[0] * u[1] + cv[2] * u[0] * u[2] + cv[4] * u[1] * u[2]);
+        let tr = cv[0] + cv[3] + cv[5];
+        (((tr - q) * 0.5).max(0.0).sqrt() / cn_m.max(1e-30), q.max(0.0).sqrt() / cn_m.max(1e-30))
+      };
+      let (f_lo, f_hi) = (m.edge_factor(0) as f64, m.edge_factor(d::SIZE_BINS as usize) as f64);
+      // `OBSERVER_LAB_CELL_PRINT=1`: the young cells' speed range, relative speed spread and
+      // lateral bandwidth (from Σ_v), and their first bins' packets along the axis (f units)
+      if young && std::env::var("OBSERVER_LAB_CELL_PRINT").is_ok_and(|v| v == "1") && i % 16 == 0 {
+        let pk0: Vec<String> = packets
+          .iter()
+          .take(3)
+          .map(|(p, _, _)| {
+            let cn = norm(c_m).max(1e-30);
+            let u = [c_m[0] / cn, c_m[1] / cn, c_m[2] / cn];
+            let a0 = dot(sub([p.mean[0] as f64, p.mean[1] as f64, p.mean[2] as f64], o_m), u) / cn;
+            let a1 = a0 + dot([p.seg[0] as f64, p.seg[1] as f64, p.seg[2] as f64], u) / cn;
+            let cv = p.cov.map(|v| v as f64);
+            let q = cv[0] * u[0] * u[0] + cv[3] * u[1] * u[1] + cv[5] * u[2] * u[2]
+              + 2.0 * (cv[1] * u[0] * u[1] + cv[2] * u[0] * u[2] + cv[4] * u[1] * u[2]);
+            format!("[{a0:.3}..{a1:.3} σ {:.3}]", q.max(0.0).sqrt() / cn)
+          })
+          .collect();
+        println!(
+          "lab: cell {i} age {:.0} s: f {f_lo:.4}..{f_hi:.4}, σ_v/v {v_std:.4}, σ_ang {sig_ang:.4}, edges f {:?}, packets {}",
+          m.age(),
+          (0..=d::SIZE_BINS as usize).step_by(4).map(|b| m.edge_factor(b)).collect::<Vec<_>>(),
+          pk0.join(" ")
+        );
+      }
+      let spiral = pred.and_then(|q| d::spiral_of(m, q));
+      let ratio = d::width_ratio(m, pred);
+      for (pi, (p_whole, ksup, w_o)) in packets.into_iter().enumerate() {
+        let ci = if per_bin > 0 && per_bin <= 8 { Some((pi / per_bin) * 8 + pi % per_bin) } else { None };
+        // the piece's cell: interpolated (spiral-turned, scaled with age) to its centre age
+        let (o_u, c_u, age_u) = match (pred, per_bin) {
+          (Some(q), nb) if support && nb / sub_bins > 1 && !merged => {
+            // a bin's packets are its sub-bins' (`AETHERVK_DUST_LAB_SUBBINS`) runs of pieces
+            let nb = nb / sub_bins;
+            let t = ((pi % per_bin) % nb) as u32;
+            let uc = 0.5 * (d::piece_bound(t, nb as u32, ratio) + d::piece_bound(t + 1, nb as u32, ratio));
+            let (age_o, age_p) = (m.age() as f64, q.age() as f64);
+            let age_u = age_o + uc as f64 * (age_p - age_o);
+            let (o_p, c_p) = cell_of(q);
+            match spiral {
+              Some((ax, om)) => {
+                let f3 = |v: V3| [v[0] as f32, v[1] as f32, v[2] as f32];
+                let o = d::spiral_point(f3(o_m), f3(o_p), age_o as f32, age_p as f32, ax, om, uc);
+                let rq = mc_qaxis_angle([ax[0] as f64, ax[1] as f64, ax[2] as f64], om as f64 * (age_p - age_u));
+                let c = mc_qrot(rq, c_p);
+                ([o[0] as f64, o[1] as f64, o[2] as f64], [c[0] * age_u / age_p, c[1] * age_u / age_p, c[2] * age_u / age_p], age_u)
+              }
+              None => {
+                let l = uc as f64;
+                (
+                  [o_m[0] + l * (o_p[0] - o_m[0]), o_m[1] + l * (o_p[1] - o_m[1]), o_m[2] + l * (o_p[2] - o_m[2])],
+                  [c_m[0] + l * (c_p[0] - c_m[0]), c_m[1] + l * (c_p[1] - c_m[1]), c_m[2] + l * (c_p[2] - c_m[2])],
+                  age_u,
+                )
+              }
+            }
+          }
+          _ => (o_m, c_m, m.age() as f64),
+        };
+        if let Some((lo, hi)) = piece_gate
+          && !(age_u >= lo && age_u < hi)
+        {
+          continue;
+        }
+        // `trunc`: the kernel's truncation's moments (`support_truncated`), drawn uncut
+        let mut subs = [p_whole; d::DUST_SUPPORT_TRUNC_MAX];
+        let cut_here = d::has_support(&ksup) && d::support_mass(&p_whole, &ksup) < 1.0 - d::DUST_SUPPORT_CUT_MIN;
+        // `AETHERVK_DUST_LAB_APEX=1` (the splat's lab knob): the cone of grains (`conic_slabs`), the
+        // cut baked in
+        let apex_n = if apex_lab && view.perspective { d::conic_slabs(&p_whole, &ksup, w_o, &mut subs) } else { 0 };
+        let ns = if apex_n > 0 {
+          apex_n
+        } else if cut.as_deref() == Some("trunc") && cut_here {
+          d::support_truncated(&p_whole, &ksup, &mut subs)
+        } else {
+          1
+        };
+        let cut_here = cut_here && apex_n == 0;
+        let mut pk_mc = 0.0f64;
+        // the in-view samples' nearest distance and depth, their weighted mean depth, the count
+        let mut pk_near = [f64::INFINITY, f64::INFINITY, 0.0, 0.0];
+        for (si, p) in subs.into_iter().take(ns).enumerate() {
+        let mut rng = lab_mc_seed(ti, i, pi, si);
+        let c = p.cov.map(|v| v as f64);
+        let l11 = c[0].max(0.0).sqrt();
+        let l21 = if l11 > 0.0 { c[1] / l11 } else { 0.0 };
+        let l31 = if l11 > 0.0 { c[2] / l11 } else { 0.0 };
+        let l22 = (c[3] - l21 * l21).max(0.0).sqrt();
+        let l32 = if l22 > 0.0 { (c[4] - l31 * l21) / l22 } else { 0.0 };
+        let l33 = (c[5] - l31 * l31 - l32 * l32).max(0.0).sqrt();
+        let (r0, r1) = (p.rho[0] as f64, p.rho[1] as f64);
+        // the sample's support class (see `support` above)
+        let classify = |q: V3| -> usize {
+          let cn = norm(c_u).max(1e-30);
+          let dv = sub(q, o_u);
+          let along_m = dot(dv, c_u) / cn;
+          let along = along_m / cn;
+          let lat = (dot(dv, dv) - along_m * along_m).max(0.0).sqrt();
+          let off = lat.atan2(along_m) / sig_ang.max(1e-9);
+          if along < 0.0 {
+            0
+          } else if along < f_lo * (1.0 - 3.0 * v_std) {
+            1
+          } else if along > f_hi * (1.0 + 3.0 * v_std) {
+            2
+          } else if off > 3.0 {
+            3
+          } else {
+            4
+          }
+        };
+        let rejected = |class: usize| match cut.as_deref() {
+          Some("plane") | Some("apex") => class <= 1,
+          Some("cone") => class <= 1 || class == 3,
+          _ => false,
+        };
+        // one draw of the packet: a uniform position along the capsule (its density ramp) and the
+        // covariance's Gaussian across (its whitened deviation kept for the `tail` histogram)
+        let last_chi = core::cell::Cell::new(0.0f64);
+        // bounded as the kernels draw it (`mc_kick_max`)
+        let kick_max = mc_kick_max();
+        let draw = |rng: &mut u64| -> V3 {
+          // linear density r0 → r1 along the capsule (mean 1): inverse CDF of (r0 + (r1 − r0) t)/1
+          let x = mc_rng(rng);
+          let t = if (r1 - r0).abs() < 1e-9 {
+            x
+          } else {
+            let a = 0.5 * (r1 - r0);
+            ((-r0 + (r0 * r0 + 4.0 * a * x).max(0.0).sqrt()) / (2.0 * a)).clamp(0.0, 1.0)
+          };
+          let [g1, g2, g3] = mc_bound_kick([mc_gauss(rng), mc_gauss(rng), mc_gauss(rng)], kick_max, rng);
+          last_chi.set((g1 * g1 + g2 * g2 + g3 * g3).sqrt());
+          [
+            p.mean[0] as f64 + t * p.seg[0] as f64 + l11 * g1,
+            p.mean[1] as f64 + t * p.seg[1] as f64 + l21 * g1 + l22 * g2,
+            p.mean[2] as f64 + t * p.seg[2] as f64 + l31 * g1 + l32 * g2 + l33 * g3,
+          ]
+        };
+        // with a cut, the kept share first (the same draws again below)
+        // `kernel`: the exact cut at the kernel's plane, renormalised by its kept mass as the
+        // kernel's ray integral is (`support_mass`, floor DUST_SUPPORT_MASS_MIN)
+        let behind = |q: V3| -> bool {
+          cut.as_deref() == Some("kernel")
+            && cut_here
+            && (ksup[0] as f64 * q[0] + ksup[1] as f64 * q[1] + ksup[2] as f64 * q[2]) < ksup[3] as f64
+        };
+        let wf = if kernel_cut {
+          let mass = if cut.as_deref() == Some("kernel") && cut_here { d::support_mass(&p, &ksup).max(d::DUST_SUPPORT_MASS_MIN) } else { 1.0 };
+          p.flux as f64 / (k as f64 * mass as f64)
+        } else if cut.is_some() {
+          let mut r2 = rng;
+          let kept = (0..k).filter(|_| !rejected(classify(draw(&mut r2)))).count();
+          if kept == 0 {
+            continue;
+          }
+          p.flux as f64 / kept as f64
+        } else {
+          p.flux as f64 / k as f64
+        };
+        // `apex`: the lateral offset from the cell's axis scaled by the sample's distance along it
+        // over the packet centre's (grains fan out from the origin: their lateral spread grows
+        // with distance; a packet carries one width along its length)
+        let a_c = {
+          let pc3 = [
+            p.mean[0] as f64 + 0.5 * p.seg[0] as f64,
+            p.mean[1] as f64 + 0.5 * p.seg[1] as f64,
+            p.mean[2] as f64 + 0.5 * p.seg[2] as f64,
+          ];
+          dot(sub(pc3, o_u), c_u) / norm(c_u).max(1e-30)
+        };
+        let apex = |q: V3| -> V3 {
+          if cut.as_deref() != Some("apex") || !(a_c > 0.0) {
+            return q;
+          }
+          let cn = normalize(c_u);
+          let dv = sub(q, o_u);
+          let al = dot(dv, cn);
+          let lat = sub(dv, [cn[0] * al, cn[1] * al, cn[2] * al]);
+          let k = (al / a_c).max(0.0);
+          [o_u[0] + cn[0] * al + lat[0] * k, o_u[1] + cn[1] * al + lat[1] * k, o_u[2] + cn[2] * al + lat[2] * k]
+        };
+        for _ in 0..k {
+          let q = apex(draw(&mut rng));
+          let class = if support { classify(q) } else { 4 };
+          if (!kernel_cut && rejected(class)) || behind(q) {
+            continue;
+          }
+          let kb = match std::env::var("OBSERVER_LAB_RHIST_MODE").as_deref() {
+            _ if cell_mode.is_some() => {
+              let cm = cell_mode.unwrap();
+              let cn = norm(c_u).max(1e-30);
+              let dv = sub(q, o_u);
+              let along_m = dot(dv, c_u) / cn;
+              let x = match cm.0 {
+                "tail" => last_chi.get(),
+                "fbin" => {
+                  if per_bin > 0 {
+                    let b = pi / per_bin;
+                    (0.5 * (m.edge_factor(b) + m.edge_factor(b + 1)) as f64).log10()
+                  } else {
+                    f64::NAN
+                  }
+                }
+                "view" => {
+                  let de = [q[0] - eye[0] as f64, q[1] - eye[1] as f64, q[2] - eye[2] as f64];
+                  let f = [view.fwd[0] as f64, view.fwd[1] as f64, view.fwd[2] as f64];
+                  (dot(de, f) / norm(de).max(1e-30)).clamp(-1.0, 1.0).acos().to_degrees()
+                }
+                "speed" => along_m / cn,
+                "off" => (along_m / norm(dv).max(1e-30)).clamp(-1.0, 1.0).acos().to_degrees(),
+                _ => age_u,
+              };
+              lab_cell_bin(x, cm)
+            }
+            Ok("eye") => {
+              let e = [q[0] - eye[0] as f64, q[1] - eye[1] as f64, q[2] - eye[2] as f64];
+              (((e[0] * e[0] + e[1] * e[1] + e[2] * e[2]).sqrt() / RHIST_BIN_M) as usize).min(RHIST_BINS - 1)
+            }
+            Ok(md @ ("theta" | "phi")) => {
+              let ax = m.spin_axis();
+              lab_angle_bin(md == "theta", q, [ax[0] as f64, ax[1] as f64, ax[2] as f64], [sun[0] as f64, sun[1] as f64, sun[2] as f64])
+            }
+            _ => (((q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt() / RHIST_BIN_M) as usize).min(RHIST_BINS - 1),
+          };
+          let view_gated = lab_view_max().is_some_and(|g| {
+            let de = [q[0] - eye[0] as f64, q[1] - eye[1] as f64, q[2] - eye[2] as f64];
+            let f = [view.fwd[0] as f64, view.fwd[1] as f64, view.fwd[2] as f64];
+            (dot(de, f) / norm(de).max(1e-30)).clamp(-1.0, 1.0).acos().to_degrees() > g
+          });
+          if !rhist_inview && !view_gated {
+            rh[kb] += wf;
+          }
+          let de = [q[0] - eye[0] as f64, q[1] - eye[1] as f64, q[2] - eye[2] as f64];
+          let depth = de[0] * view.fwd[0] as f64 + de[1] * view.fwd[1] as f64 + de[2] * view.fwd[2] as f64;
+          if !(depth > 0.0) {
+            continue;
+          }
+          let qf = [q[0] as f32, q[1] as f32, q[2] as f32];
+          let Some(s) = d::project_point(qf, &pc.mvp, w, h) else {
+            continue;
+          };
+          if !(s[0] >= 0.0 && s[1] >= 0.0 && (s[0] as usize) < wu && (s[1] as usize) < hu) {
+            continue;
+          }
+          let dist = (de[0] * de[0] + de[1] * de[1] + de[2] * de[2]).sqrt();
+          let to_eye = [-de[0] as f32, -de[1] as f32, -de[2] as f32];
+          let wr = if pc.albedo > 0.0 {
+            d::radiance_weight(pc.albedo, sun, to_eye, m.helio_au()) as f64
+          } else {
+            1.0
+          };
+          let wv = wf * wr * dist / (depth * depth * depth);
+          if rhist_inview && !view_gated {
+            rh[kb] += wv;
+          }
+          let ix = s[1] as usize * wu + s[0] as usize;
+          img[ix] += wv;
+          pk_mc += wv;
+          pk_near = [pk_near[0].min(dist), pk_near[1].min(depth), pk_near[2] + wv * depth, pk_near[3] + 1.0];
+          if support {
+            sup[if young { 0 } else { 1 }][class] += wv;
+            if young && let Some(c) = ci {
+              sup_cat[c] += wv;
+            }
+          }
+          if let (Some(c), Some(o)) = (ci, outside) {
+            cat[c].0 += wv;
+            if o[ix] {
+              cat[c].1 += wv;
+            }
+          }
+        }
+        }
+        if draw_cmp {
+          // the packet alone on a fresh pyramid carrying the lab's header (its counters zeroed)
+          let mut pyr = vec![0u32; layout.total_words as usize];
+          pyr[..header.len()].copy_from_slice(header);
+          for w in [d::PYR_VOLUME_EVALS, d::PYR_EWA_TEXELS, d::PYR_SPLIT_CHILDREN, d::PYR_SPLIT_DROPPED_FLUX, d::PYR_TAU_MAX, d::PYR_LEVEL_MASK] {
+            pyr[w as usize] = 0;
+          }
+          let mut view_d = view.clone();
+          view_d.shell = d::specks::ShellCut::from_header(&pyr, eye).d_max;
+          let phot = d::Photometry { albedo: pc.albedo, sun, r_h_au: m.helio_au(), support: ksup, origin: w_o };
+          let mut scratch = d::SplitLeaves::default();
+          let n_hard = d::hard_axis_pieces(&pyr);
+          // as the splat draws it (its cone of grains included, `Photometry::origin`)
+          for j in 0..n_hard.max(1) {
+            let q = d::hard_axis_leaf(&p_whole, n_hard, j);
+            d::project_split_scatter(&q, 1.0, &pc.mvp, &view_d, &phot, [1.0; 3], &layout, pc.inv_unit, &mut pyr, &mut scratch);
+          }
+          let counts: f64 = pyr[d::PYRAMID_HEADER_WORDS as usize..]
+            .chunks_exact(d::PYRAMID_TEXEL_WORDS as usize)
+            .map(|t| t[0] as f64)
+            .sum();
+          let drawn = counts / pc.inv_unit as f64;
+          // the MC's τ per pixel: the focal length in px squared per unit of its weight, measured
+          // on the projection 1 km ahead (1 m across)
+          let px_k = {
+            let f = [view.fwd[0] as f64, view.fwd[1] as f64, view.fwd[2] as f64];
+            let a = if f[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+            let up = normalize(cross(f, a));
+            let p0 = [eye[0] as f64 + 1e3 * f[0], eye[1] as f64 + 1e3 * f[1], eye[2] as f64 + 1e3 * f[2]];
+            let p1 = [p0[0] + up[0], p0[1] + up[1], p0[2] + up[2]];
+            let pr = |q: V3| d::project_point([q[0] as f32, q[1] as f32, q[2] as f32], &pc.mvp, w, h);
+            match (pr(p0), pr(p1)) {
+              (Some(a), Some(b)) => (((b[0] - a[0]) as f64).powi(2) + ((b[1] - a[1]) as f64).powi(2)) * 1e6,
+              _ => f64::NAN,
+            }
+          };
+          let cls = match (cut_here, d::is_volumetric(&p_whole, &view_d)) {
+            (false, true) => 0.0,
+            (false, false) => 1.0,
+            (true, true) => 2.0,
+            (true, false) => 3.0,
+          };
+          let de = sub([p_whole.mean[0] as f64 + 0.5 * p_whole.seg[0] as f64, p_whole.mean[1] as f64 + 0.5 * p_whole.seg[1] as f64, p_whole.mean[2] as f64 + 0.5 * p_whole.seg[2] as f64], [eye[0] as f64, eye[1] as f64, eye[2] as f64]);
+          let cv = p_whole.cov;
+          // `OBSERVER_LAB_PACKET_PROBE=<cluster>`: its packets the drawing under-fills, in full
+          if std::env::var("OBSERVER_LAB_PACKET_PROBE").ok().and_then(|v| v.trim().parse::<usize>().ok()) == Some(i)
+            && drawn < 0.5 * pk_mc * px_k
+          {
+            scratch.clear();
+            let mut st = d::SplitStats::default();
+            d::split_packet(&p_whole, &view_d, &mut scratch, &mut st);
+            println!(
+              "lab: probe cluster {i} packet {pi}: MC {:.3e} drawn {drawn:.3e}; mean {:?} seg {:?} cov {:?} open {:?} rho {:?} flux {:.3e}; eye {:?} fwd {:?}; volumetric {}; in-view samples {} nearest {:.0} m depth ≥ {:.0} m, weighted mean depth {:.0} m; split leaves {} volume {} EWA",
+              pk_mc * px_k,
+              p_whole.mean,
+              p_whole.seg,
+              p_whole.cov,
+              p_whole.open,
+              p_whole.rho,
+              p_whole.flux,
+              eye,
+              view_d.fwd,
+              d::is_volumetric(&p_whole, &view_d),
+              pk_near[3],
+              pk_near[0],
+              pk_near[1],
+              pk_near[2] / pk_mc.max(1e-300),
+              scratch.volume.len(),
+              scratch.ewa.len()
+            );
+          }
+          pk.push([
+            pk_mc * px_k,
+            drawn,
+            cls + if view_d.shell > 0.0 { 10.0 } else { 0.0 },
+            norm(de),
+            ((cv[0] + cv[3] + cv[5]) as f64 / 3.0).max(0.0).sqrt(),
+            if cut_here { d::support_mass(&p_whole, &ksup) as f64 } else { 1.0 },
+            i as f64,
+            m.age() as f64,
+          ]);
+        }
+      }
+    };
+    let bsz = n.div_ceil(LAB_MC_BLOCKS).max(1);
+    let nb = n.div_ceil(bsz);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut parts: Vec<(usize, LabMcAcc)> = std::thread::scope(|s| {
+      let handles: Vec<_> = (0..threads.min(nb).max(1))
+        .map(|_| {
+          let (cluster, next, fresh) = (&cluster, &next, &fresh);
+          s.spawn(move || {
+            let mut out = Vec::new();
+            loop {
+              let b = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+              if b >= nb {
+                break;
+              }
+              let mut a = fresh();
+              for i in b * bsz..((b + 1) * bsz).min(n) {
+                cluster(i, &mut a);
+              }
+              out.push((b, a));
+            }
+            out
+          })
+        })
+        .collect();
+      handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+    parts.sort_by_key(|p| p.0);
+    for (_, a) in &parts {
+      total.add(a);
+    }
+  }
+  let LabMcAcc { img, rh, cat, sup, sup_cat, pk } = total;
+  if draw_cmp && !pk.is_empty() {
+    let names = ["uncut, eye near (volume)", "uncut, split", "cut, eye near (volume, ray_kept)", "cut, truncated"];
+    let (tm, td): (f64, f64) = pk.iter().fold((0.0, 0.0), |a, r| (a.0 + r[0], a.1 + r[1]));
+    println!(
+      "lab: packets drawn alone: {} packets, MC Σ {tm:.4e}, drawn Σ {td:.4e} (drawn/MC {:.3}), speck shell {}",
+      pk.len(),
+      td / tm.max(1e-300),
+      if pk.iter().any(|r| r[2] >= 10.0) { "on (the support cut is skipped)" } else { "off" }
+    );
+    for (c, name) in names.iter().enumerate() {
+      let rows: Vec<&[f64; 8]> = pk.iter().filter(|r| (r[2] as usize) % 10 == c).collect();
+      let (m, dr): (f64, f64) = rows.iter().fold((0.0, 0.0), |a, r| (a.0 + r[0], a.1 + r[1]));
+      println!(
+        "lab:   {name:34}: {:6} packets, MC {:.4e} ({:.3} of it), drawn {:.4e}, drawn/MC {:.3}",
+        rows.len(),
+        m,
+        m / tm.max(1e-300),
+        dr,
+        dr / m.max(1e-300)
+      );
+    }
+    println!("lab:   the largest differences per class (drawn − MC, share of the MC total): eye distance, σ, kept mass, cluster, age");
+    let by: Vec<&[f64; 8]> = (0..4)
+      .flat_map(|c| {
+        let mut v: Vec<&[f64; 8]> = pk.iter().filter(|r| (r[2] as usize) % 10 == c).collect();
+        v.sort_by(|a, b| (b[1] - b[0]).abs().total_cmp(&(a[1] - a[0]).abs()));
+        v.truncate(6);
+        v
+      })
+      .collect();
+    for r in by.iter() {
+      println!(
+        "lab:     {:+.4}  MC {:.3e} drawn {:.3e}  class {} dist {:.0} m σ {:.0} m mass {:.3} cluster {} age {:.0} s",
+        (r[1] - r[0]) / tm.max(1e-300),
+        r[0],
+        r[1],
+        r[2],
+        r[3],
+        r[4],
+        r[5],
+        r[6],
+        r[7]
+      );
+    }
+  }
+  if support {
+    let all: f64 = sup.iter().flatten().sum();
+    for (k, name) in ["young (< 500 s)", "older"].iter().enumerate() {
+      let t: f64 = sup[k].iter().sum();
+      println!(
+        "lab: support {name}: {:.4} of the in-view light; of it behind the origin {:.4}, slower than the slowest {:.4}, faster than the fastest {:.4}, > 3 bandwidths off axis {:.4}, physical {:.4}",
+        t / all.max(1e-300),
+        sup[k][0] / t.max(1e-300),
+        sup[k][1] / t.max(1e-300),
+        sup[k][2] / t.max(1e-300),
+        sup[k][3] / t.max(1e-300),
+        sup[k][4] / t.max(1e-300)
+      );
+    }
+    let yt: f64 = sup_cat.iter().sum();
+    println!("lab: support: the young in-view light by size bin (rows, 0 = slow) × piece (cols, 0 = young end), share");
+    for b in 0..16 {
+      let mut line = format!("lab:   bin {b:2}:");
+      for t in 0..8 {
+        line += &format!(" {:.3}", sup_cat[b * 8 + t] / yt.max(1e-300));
+      }
+      println!("{line}");
+    }
+  }
+  if outside.is_some() {
+    let tot: f64 = cat.iter().map(|c| c.0).sum();
+    let out: f64 = cat.iter().map(|c| c.1).sum();
+    println!("lab: packets outside the truth's 5 % region: {:.4} of their light; by size bin (rows, 0 = slow/large) and piece (cols, 0 = young end): share of all outside light | outside fraction of the cell", out / tot.max(1e-300));
+    for b in 0..16 {
+      let mut line = format!("lab:   bin {b:2}:");
+      for t in 0..8 {
+        let c = cat[b * 8 + t];
+        if c.0 > 0.0 {
+          line += &format!("  {:.3}|{:.3}", c.1 / out.max(1e-300), c.1 / c.0);
+        }
+      }
+      println!("{line}");
+    }
+  }
+  // the 3-D check: the packets' and the truth's cross-section by distance from the centre
+  let th = RHIST.lock().unwrap().clone();
+  if th.len() == RHIST_BINS {
+    let (sp, st): (f64, f64) = (rh.iter().sum(), th.iter().sum());
+    let (mut cp, mut ct) = (0.0, 0.0);
+    println!("lab: histogram ({}; distances in km, angles in bins of 2° θ / 4° φ): packets' share / truth's share, cumulative packets / truth; totals packets {sp:.6e} truth {st:.6e}", std::env::var("OBSERVER_LAB_RHIST_MODE").unwrap_or_else(|_| "centre".into()));
+    for k in 0..RHIST_BINS {
+      let (a, b) = (rh[k] / sp.max(1e-300), th[k] / st.max(1e-300));
+      cp += a;
+      ct += b;
+      if a > 1e-4 || b > 1e-4 {
+        println!(
+          "lab:   {:5.2}-{:5.2}  {:.4} / {:.4}  ratio {:6.2}   cum {:.3} / {:.3}",
+          k as f64 * cell_mode.map_or(RHIST_BIN_M / 1e3, |c| c.1) - cell_mode.map_or(0.0, |c| lab_cell_first(c.0)),
+          (k + 1) as f64 * cell_mode.map_or(RHIST_BIN_M / 1e3, |c| c.1) - cell_mode.map_or(0.0, |c| lab_cell_first(c.0)),
+          a,
+          b,
+          a / b.max(1e-300),
+          cp,
+          ct
+        );
+      }
+    }
+  }
+  img
+}
+
+/// `--lab DIR`: replay `snapshot_NNN.bin` on the CPU mirror into a fresh pyramid carrying its
+/// header (the counters zeroed; `OBSERVER_LAB_HARD=<n>` / `OBSERVER_LAB_TIME_CELL=1` override the
+/// diagnostic header bits, the engine's own `AETHERVK_DUST_*` CPU switches apply as in the
+/// engine), build the τ image as the observer does, and score it against `mc_NNN_truth.f32` with
+/// the observer's formulas: Σ ratio, rel rms over the 10⁻⁴ region of the 5×5-boxed unit-sum
+/// images, the judged rms (the unresolved-core rule, the 1/√n noise from `mc_NNN_counts.f32`
+/// taken out in quadrature), the ratio by truth level and the light outside the truth's 5 %
+/// region; plus the replay's Σ against the GPU frame (`frame_NNN.pyr`) as a fidelity check.
+fn run_lab(dir: &Path, frame: u32, lab_truth: usize) -> i32 {
+  use aethervk_core_rlib::scene::dust as d;
+  let t0 = Instant::now();
+  let Some((w, h, mut header, mut tiers)) = load_snapshot(&dir.join(format!("snapshot_{frame:03}.bin"))) else {
+    eprintln!("lab: no snapshot_{frame:03}.bin in {}", dir.display());
+    return 2;
+  };
+  // `OBSERVER_LAB_AGE=lo,hi` (s): only the dust of that age on both sides — the render's clusters
+  // by their age (flux 0 outside), the drawn truth by the grains' (`--lab-truth` only)
+  let age_gate: Option<(f64, f64)> = std::env::var("OBSERVER_LAB_AGE").ok().and_then(|v| {
+    let (a, b) = v.split_once(',')?;
+    Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+  });
+  let drawn_inputs = if lab_truth > 0 {
+    let Some(x) = load_truth_inputs(&dir.join(format!("truth_{frame:03}.bin"))) else {
+      eprintln!("lab: --lab-truth needs truth_{frame:03}.bin (an observer run with --save-snapshot)");
+      return 2;
+    };
+    Some(x)
+  } else {
+    if age_gate.is_some() {
+      eprintln!("lab: OBSERVER_LAB_AGE needs --lab-truth (the stored truth holds every age)");
+      return 2;
+    }
+    None
+  };
+  let (stored_truth, stored_counts) = if drawn_inputs.is_none() {
+    let Some(t) = read_f32_file(&dir.join(format!("mc_{frame:03}_truth.f32"))) else {
+      eprintln!("lab: no mc_{frame:03}_truth.f32 (run with OBSERVER_MC_RAW=<out>/mc_{frame:03})");
+      return 2;
+    };
+    (t, read_f32_file(&dir.join(format!("mc_{frame:03}_counts.f32"))).unwrap_or_default())
+  } else {
+    (Vec::new(), Vec::new())
+  };
+  let env_u32 = |k: &str| std::env::var(k).ok().and_then(|v| v.trim().parse::<u32>().ok());
+  let sd = d::PYR_SPLIT_DEPTH as usize;
+  if let Some(n) = env_u32("OBSERVER_LAB_HARD") {
+    header[sd] = (header[sd] & !(0xF << 24)) | ((n.min(15)) << 24);
+  }
+  if let Some(n) = env_u32("OBSERVER_LAB_VBIAS") {
+    header[sd] = (header[sd] & !(0xFF << 8)) | ((n.min(255)) << 8);
+  }
+  if let Some(n) = env_u32("OBSERVER_LAB_GATES_OFF") {
+    header[sd] = (header[sd] & !(1 << d::DUST_FRAME_GATES_OFF_BIT)) | ((n & 1) << d::DUST_FRAME_GATES_OFF_BIT);
+  }
+  if let Some(n) = env_u32("OBSERVER_LAB_DEPTH") {
+    header[sd] = (header[sd] & !0xFF) | n.min(d::DUST_SPLIT_DEPTH_MAX);
+  }
+  println!(
+    "lab: header split depth {} volume bias {} EWA bias {}",
+    header[sd] & 0xFF,
+    (header[sd] >> 8) & 0xFF,
+    (header[sd] >> 18) & 0xF
+  );
+  if let Some(n) = env_u32("OBSERVER_LAB_TIME_CELL") {
+    header[sd] = (header[sd] & !(1 << 28)) | ((n & 1) << 28);
+  }
+  // `OBSERVER_LAB_SRAD=<s>` / `OBSERVER_LAB_SLAT=<s>`: every cluster's Σ_v scaled by `s` along
+  // its size polyline's direction (the motion: radial) and across it (lateral), `S Σ S` with
+  // `S = s_rad uuᵀ + s_lat (I − uuᵀ)` — which part of the kernel's width is off
+  let lab_f = |k: &str| std::env::var(k).ok().and_then(|v| v.trim().parse::<f32>().ok());
+  if let (sr, sl) = (lab_f("OBSERVER_LAB_SRAD"), lab_f("OBSERVER_LAB_SLAT"))
+    && (sr.is_some() || sl.is_some())
+  {
+    let (sr, sl) = (sr.unwrap_or(1.0), sl.unwrap_or(1.0));
+    for t in tiers.iter_mut() {
+      for m in t.4.iter_mut() {
+        let (e0, e1) = (m.edge(0), m.edge(d::SIZE_BINS as usize));
+        let mut u = [e1[0] - e0[0], e1[1] - e0[1], e1[2] - e0[2]];
+        let n = (u[0] * u[0] + u[1] * u[1] + u[2] * u[2]).sqrt();
+        if !(n > 0.0) {
+          continue;
+        }
+        u = [u[0] / n, u[1] / n, u[2] / n];
+        let c = m.cov_v();
+        let cm = [[c[0], c[1], c[2]], [c[1], c[3], c[4]], [c[2], c[4], c[5]]];
+        let mut sm = [[0.0f32; 3]; 3];
+        for i in 0..3 {
+          for j in 0..3 {
+            let id = if i == j { 1.0 } else { 0.0 };
+            sm[i][j] = sr * u[i] * u[j] + sl * (id - u[i] * u[j]);
+          }
+        }
+        let mut o = [[0.0f32; 3]; 3];
+        for i in 0..3 {
+          for j in 0..3 {
+            let mut acc = 0.0f32;
+            for k in 0..3 {
+              for l in 0..3 {
+                acc += sm[i][k] * cm[k][l] * sm[l][j];
+              }
+            }
+            o[i][j] = acc;
+          }
+        }
+        m.cov_a = [o[0][0], o[0][1], o[0][2], o[1][1]];
+        m.cov_b_age_id[0] = o[1][2];
+        m.cov_b_age_id[1] = o[2][2];
+      }
+    }
+  }
+  // `OBSERVER_LAB_AGES=1`: the render's clusters by age (log bins): count, Σ flux, per tier
+  if std::env::var("OBSERVER_LAB_AGES").is_ok_and(|v| v == "1") {
+    let edges = [0.0, 60.0, 240.0, 468.0, 900.0, 1800.0, 3600.0, 7200.0, 21600.0, 86400.0, 4.0 * 86400.0, 1e12];
+    for (ti, t) in tiers.iter().enumerate() {
+      let mut rows = String::new();
+      for k in 0..edges.len() - 1 {
+        let (mut n, mut fl) = (0usize, 0.0f64);
+        for m in t.4.iter().filter(|m| m.flux() > 0.0) {
+          let a = m.age() as f64;
+          if a >= edges[k] && a < edges[k + 1] {
+            n += 1;
+            fl += m.flux() as f64;
+          }
+        }
+        if n > 0 {
+          rows.push_str(&format!(" [{:.0},{:.0}) n {n} flux {fl:.3e};", edges[k], edges[k + 1]));
+        }
+      }
+      println!("lab: tier {ti} clusters by age:{rows}");
+      let mut young: Vec<f32> = t.4.iter().filter(|m| m.flux() > 0.0 && m.age() < 4000.0).map(|m| m.age()).collect();
+      young.sort_by(|a, b| a.partial_cmp(b).unwrap());
+      young.dedup();
+      if !young.is_empty() {
+        println!("lab: tier {ti} distinct cluster ages < 4000 s: {:?}", &young[..young.len().min(6)]);
+      }
+      // the eye against the youngest clusters (local frame): along each one's polyline u from
+      // its slow end (edge 0), and across
+      let eye = [t.0.eye_local[0], t.0.eye_local[1], t.0.eye_local[2]];
+      let mut ys: Vec<(f32, f32, f32, f32, f32, f32)> = Vec::new();
+      for m in t.4.iter().filter(|m| m.flux() > 0.0 && m.age() < 500.0) {
+        let (e0, e1) = (m.edge(0), m.edge(d::SIZE_BINS as usize));
+        let ch = [e1[0] - e0[0], e1[1] - e0[1], e1[2] - e0[2]];
+        let len = (ch[0] * ch[0] + ch[1] * ch[1] + ch[2] * ch[2]).sqrt();
+        let u = [ch[0] / len, ch[1] / len, ch[2] / len];
+        let de = [eye[0] - e0[0], eye[1] - e0[1], eye[2] - e0[2]];
+        let al = de[0] * u[0] + de[1] * u[1] + de[2] * u[2];
+        let lat = ((de[0] * de[0] + de[1] * de[1] + de[2] * de[2]) - al * al).max(0.0).sqrt();
+        let e0n = (e0[0] * e0[0] + e0[1] * e0[1] + e0[2] * e0[2]).sqrt();
+        let c = m.cov_v();
+        let q = c[0] * u[0] * u[0] + c[3] * u[1] * u[1] + c[5] * u[2] * u[2]
+          + 2.0 * (c[1] * u[0] * u[1] + c[2] * u[0] * u[2] + c[4] * u[1] * u[2]);
+        ys.push((al, lat, len, e0n, q.max(0.0).sqrt() * m.edge_factor(0), m.flux()));
+      }
+      if !ys.is_empty() {
+        let en = (eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]).sqrt();
+        ys.sort_by(|a, b| b.5.partial_cmp(&a.5).unwrap());
+        println!("lab: tier {ti} eye {eye:?} |eye| {en:.0} m; youngest clusters (by flux): eye along u from edge0, across, chord, |edge0|, f0·σ_rad (m)");
+        for y in ys.iter().take(8) {
+          println!("lab:   along {:.0} across {:.0} chord {:.0} |e0| {:.0} f0σ {:.0} flux {:.3e}", y.0, y.1, y.2, y.3, y.4, y.5);
+        }
+      }
+      // the moments of a few young clusters: along the polyline u (radial) and across it
+      let mut shown = 0;
+      for m in t.4.iter().filter(|m| m.flux() > 0.0 && (m.age() < 500.0 || (m.age() > 2290.0 && m.age() < 2400.0))) {
+        if shown >= 6 {
+          break;
+        }
+        shown += 1;
+        let (e0, e1) = (m.edge(0), m.edge(d::SIZE_BINS as usize));
+        let ch = [e1[0] - e0[0], e1[1] - e0[1], e1[2] - e0[2]];
+        let len = (ch[0] * ch[0] + ch[1] * ch[1] + ch[2] * ch[2]).sqrt();
+        let u = [ch[0] / len, ch[1] / len, ch[2] / len];
+        let c = m.cov_v();
+        let q = |w: [f32; 3]| {
+          c[0] * w[0] * w[0] + c[3] * w[1] * w[1] + c[5] * w[2] * w[2]
+            + 2.0 * (c[1] * w[0] * w[1] + c[2] * w[0] * w[2] + c[4] * w[1] * w[2])
+        };
+        let mn = m.mean();
+        let r = (mn[0] * mn[0] + mn[1] * mn[1] + mn[2] * mn[2]).sqrt();
+        let tr = c[0] + c[3] + c[5];
+        let srad = q(u).max(0.0).sqrt();
+        let slat = ((tr - q(u)) * 0.5).max(0.0).sqrt();
+        // the reference grain's travel: the mean minus the site's position is not known here;
+        // the mid edge (f = 1) distance from the centre is
+        let mid = m.edge(8);
+        let rmid = (mid[0] * mid[0] + mid[1] * mid[1] + mid[2] * mid[2]).sqrt();
+        println!(
+          "lab:   age {:.0} s |mean| {r:.0} m |edge8| {rmid:.0} m chord {len:.0} m f0 {:.3} f16 {:.3} σ_rad {srad:.1} m σ_lat {slat:.1} m σ_rad/age {:.4} m/s σ_lat/age {:.4} m/s",
+          m.age(),
+          m.edge_factor(0),
+          m.edge_factor(d::SIZE_BINS as usize),
+          srad / m.age(),
+          slat / m.age()
+        );
+      }
+    }
+  }
+  if let Some((lo, hi)) = age_gate {
+    for t in tiers.iter_mut() {
+      for m in t.4.iter_mut() {
+        let a = m.age() as f64;
+        if !(a >= lo && a < hi) {
+          m.mean_flux[3] = 0.0;
+        }
+      }
+    }
+  }
+  let layout = d::PyramidLayout::new(w, h);
+  let mut pyr = vec![0u32; layout.total_words as usize];
+  let hn = d::PYRAMID_HEADER_WORDS as usize;
+  pyr[..hn].copy_from_slice(&header);
+  {
+    use aethervk_core_rlib::scene::dust::specks as sp;
+    for wd in [
+      d::PYR_TAU_MAX,
+      d::PYR_LEVEL_MASK,
+      d::PYR_SPLIT_CHILDREN,
+      d::PYR_VOLUME_EVALS,
+      d::PYR_EWA_TEXELS,
+      d::PYR_SPLIT_DROPPED_FLUX,
+      sp::PYR_SPECKS,
+      sp::PYR_SPECKS_OVERFLOW,
+      sp::PYR_SPECKS_TRUNCATED,
+      sp::PYR_N_EYE,
+      sp::PYR_N_EYE_HI,
+      sp::PYR_SPECKS_NODES,
+      sp::PYR_SPECKS_COUNTS,
+    ] {
+      pyr[wd as usize] = 0;
+    }
+  }
+  // `OBSERVER_THREADS=<n>`: the replay's splat threads (default: the machine's parallelism; 1 =
+  // the serial splat). The result is bit-identical for any count: compare the hash line.
+  let threads = observer_threads();
+  let t_splat = Instant::now();
+  for (pc, flow, tracer, render, moments) in &tiers {
+    d::splat_tier_parallel(moments, render, pc, flow, *tracer, &layout, &mut pyr, threads);
+  }
+  let clusters: usize = tiers.iter().map(|t| (t.0.live_count as usize).min(t.3.len()).min(t.4.len())).sum();
+  // FNV-1a over the replayed pyramid's words: equal hashes = the same splat, any thread count
+  let hash = pyr.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &w| (h ^ w as u64).wrapping_mul(0x100_0000_01b3));
+  println!(
+    "lab: splat {clusters} clusters on {threads} threads, {:.1} s; replay pyramid hash {hash:016x}",
+    t_splat.elapsed().as_secs_f64()
+  );
+  let Some(render) = tau_image_of_pyramid(&pyr, w, h) else {
+    eprintln!("lab: the replayed pyramid has no τ image");
+    return 2;
+  };
+  let (wu, hu) = (w as usize, h as usize);
+  let (truth, counts) = match drawn_inputs {
+    Some((inputs, mut view)) => {
+      // `OBSERVER_LAB_AGE_T=lo,hi`: the truth's own gate (default `OBSERVER_LAB_AGE`): a cluster
+      // draws the pieces to its older predecessor, so its light holds grains older than it
+      let truth_gate = std::env::var("OBSERVER_LAB_AGE_T")
+        .ok()
+        .and_then(|v| {
+          let (a, b) = v.split_once(',')?;
+          Some((a.trim().parse::<f64>().ok()?, b.trim().parse::<f64>().ok()?))
+        })
+        .or(age_gate);
+      if let Some((lo, hi)) = truth_gate {
+        view.mc_age_min = Some(view.mc_age_min.map_or(lo, |a| a.max(lo)));
+        view.mc_age_max = Some(view.mc_age_max.map_or(hi, |a| a.min(hi)));
+      }
+      let t1 = Instant::now();
+      let Some((rec, _, _, t, c)) = monte_carlo_truth_from(&pyr, &inputs, &view, lab_truth) else {
+        eprintln!("lab: the truth draw returned nothing (empty render or no batch in the gate)");
+        return 2;
+      };
+      println!(
+        "lab: drew the truth: {} grains, {} batches, observer's judged {:.4} (Σ render/truth {:.4}), {:.1} s",
+        rec.grains,
+        rec.batches,
+        rec.rel_rms_judged,
+        rec.abs_ratio,
+        t1.elapsed().as_secs_f64()
+      );
+      (t, c)
+    }
+    None => (stored_truth, stored_counts),
+  };
+  if truth.len() != wu * hu {
+    eprintln!("lab: truth has {} px, the frame {}", truth.len(), wu * hu);
+    return 2;
+  }
+  // fidelity: the replay against the GPU frame (only meaningful without overrides)
+  if let Ok(gb) = std::fs::read(dir.join(format!("frame_{frame:03}.pyr"))) {
+    let gw: Vec<u32> = gb.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+    if let Some(g) = tau_image_of_pyramid(&gw, w, h) {
+      let (sa, sg): (f64, f64) = (
+        render.iter().map(|&v| v as f64).sum(),
+        g.iter().map(|&v| v as f64).sum(),
+      );
+      println!("lab: replay Στ / GPU frame Στ {:.4}", sa / sg.max(1e-300));
+    }
+  }
+  println!(
+    "lab: absolute Στ render {:.4e} truth {:.4e}",
+    render.iter().map(|&v| v as f64).sum::<f64>(),
+    truth.iter().sum::<f64>()
+  );
+  // the observer's comparison
+  let mut render64: Vec<f64> = render.iter().map(|&x| x as f64).collect();
+  if let Some(k) = std::env::var("OBSERVER_LAB_PACKET_MC").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+    let t1 = Instant::now();
+    let outside: Vec<bool> = {
+      let st: f64 = truth.iter().sum();
+      let tn: Vec<f64> = truth.iter().map(|x| x / st.max(1e-300)).collect();
+      let bt = mc_box(&tn, wu, hu, 2);
+      let tp = bt.iter().cloned().fold(0.0f64, f64::max);
+      bt.iter().map(|&v| v < 0.05 * tp).collect()
+    };
+    let pm = lab_packet_mc(&tiers, &header, w, h, k, Some(&outside));
+    // the drawing against the packets: unit-sum, 5×5 boxed, rel rms over the packets' 10⁻⁴ region
+    let norm1 = |v: &[f64]| -> Vec<f64> {
+      let s: f64 = v.iter().sum();
+      v.iter().map(|x| x / s.max(1e-300)).collect()
+    };
+    let (a, b) = (mc_box(&norm1(&render64), wu, hu, 2), mc_box(&norm1(&pm), wu, hu, 2));
+    let pk = b.iter().cloned().fold(0.0f64, f64::max);
+    let (mut se, mut sb) = (0.0, 0.0);
+    for i in 0..wu * hu {
+      if b[i] >= MC_REGION_REL * pk {
+        se += (a[i] - b[i]).powi(2);
+        sb += b[i] * b[i];
+      }
+    }
+    println!(
+      "lab: packet MC ({k}/packet, {:.1} s): the splat's image against its packets' rel rms {:.4}; scoring the packets' image against the truth below",
+      t1.elapsed().as_secs_f64(),
+      (se / sb.max(1e-300)).sqrt()
+    );
+    // the absolute scale: the packets' image carries the render's units up to a constant; keep
+    // the render's Σ so the Σ ratio stays the render's
+    let (sr, sp): (f64, f64) = (render64.iter().sum(), pm.iter().sum());
+    let hash = pm.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, x| (h ^ x.to_bits()).wrapping_mul(0x100_0000_01b3));
+    println!("lab: packet MC raw Σ {sp:.6e} (the splat's Σ {sr:.6e} in its own units), image hash {hash:016x}");
+    render64 = pm.iter().map(|x| x * sr / sp.max(1e-300)).collect();
+  }
+  let abs_ratio = render64.iter().sum::<f64>() / truth.iter().sum::<f64>().max(1e-300);
+  let norm = |v: &[f64]| -> Vec<f64> {
+    let s: f64 = v.iter().sum();
+    v.iter().map(|x| x / s.max(1e-300)).collect()
+  };
+  let a = mc_box(&norm(&render64), wu, hu, 2);
+  let b = mc_box(&norm(&truth), wu, hu, 2);
+  // `OBSERVER_LAB_DUMP=<prefix>`: the two boxed unit-sum images (f32 LE): `_render.f32`, `_truth.f32`
+  if let Ok(prefix) = std::env::var("OBSERVER_LAB_DUMP") {
+    let f = |v: &[f64]| -> Vec<u8> { v.iter().flat_map(|&x| (x as f32).to_le_bytes()).collect() };
+    let _ = std::fs::write(format!("{prefix}_render.f32"), f(&a));
+    let _ = std::fs::write(format!("{prefix}_truth.f32"), f(&b));
+  }
+  let peak = b.iter().cloned().fold(0.0f64, f64::max);
+  let region: Vec<usize> = (0..wu * hu).filter(|&i| b[i] >= MC_REGION_REL * peak).collect();
+  let core_px = region.iter().filter(|&&i| b[i] >= 0.01 * peak).count();
+  let core_unresolved = core_px < MC_CORE_RESOLVED_PX;
+  let n5 = if counts.len() == wu * hu { mc_box(&counts, wu, hu, 2) } else { vec![1e9; wu * hu] };
+  let (mut se, mut sb2, mut se_j, mut sb2_j, mut sn_j) = (0.0, 0.0, 0.0, 0.0, 0.0);
+  for &i in &region {
+    let d2 = (a[i] - b[i]).powi(2);
+    se += d2;
+    sb2 += b[i].powi(2);
+    if !(core_unresolved && b[i] >= 0.01 * peak) {
+      se_j += d2;
+      sb2_j += b[i].powi(2);
+      sn_j += b[i].powi(2) / (n5[i] * 25.0).max(1.0);
+    }
+  }
+  let noise = (sn_j / sb2_j.max(1e-300)).sqrt();
+  let rel_j = (se_j / sb2_j.max(1e-300)).sqrt();
+  let judged = (rel_j * rel_j - noise * noise).max(0.0).sqrt();
+  // the ratio by truth level and the light outside the truth's 5 % region (boxed, absolute)
+  let tm = b.iter().cloned().fold(0.0f64, f64::max);
+  let mut lv = [(0.0f64, 0.0f64); 4];
+  let (mut in_r, mut in_t) = (0.0f64, 0.0f64);
+  for i in 0..wu * hu {
+    let (ra, tb) = (a[i] * abs_ratio, b[i]);
+    let f = tb / tm.max(1e-300);
+    let k = if f >= 0.6 { 3 } else if f >= 0.3 { 2 } else if f >= 0.1 { 1 } else if f >= 0.05 { 0 } else { 9 };
+    if k < 4 {
+      lv[k].0 += ra;
+      lv[k].1 += tb;
+      in_r += ra;
+      in_t += tb;
+    }
+  }
+  let tot_r: f64 = a.iter().sum::<f64>() * abs_ratio;
+  let tot_t: f64 = b.iter().sum();
+  println!(
+    "lab: rel rms {:.4} (judged {:.4} after noise {:.4}, core {core_px} px) over {} px, Σ render/truth {abs_ratio:.4}",
+    (se / sb2.max(1e-300)).sqrt(),
+    judged,
+    noise,
+    region.len()
+  );
+  println!(
+    "lab: ratio by truth level 0.05-0.1 {:.3}, 0.1-0.3 {:.3}, 0.3-0.6 {:.3}, 0.6-1 {:.3} | outside the truth's 5 % region: render {:.4}, truth {:.4} | {:.1} s",
+    lv[0].0 / lv[0].1.max(1e-300),
+    lv[1].0 / lv[1].1.max(1e-300),
+    lv[2].0 / lv[2].1.max(1e-300),
+    lv[3].0 / lv[3].1.max(1e-300),
+    (tot_r - in_r) / tot_r.max(1e-300),
+    (tot_t - in_t) / tot_t.max(1e-300),
+    t0.elapsed().as_secs_f64()
+  );
+  0
 }

@@ -21,4 +21,12 @@ public sealed class TimelineSession : ITabSession
   public string SnapshotStartEpoch  { get; set; } = string.Empty;
   /// <summary>ISO string of the end epoch at simulation start.</summary>
   public string SnapshotEndEpoch    { get; set; } = string.Empty;
+
+  /// <summary>
+  /// Raised (on the UI thread) after the whole session was replaced from outside (savefile open /
+  /// New): a live tab re-reads every value.
+  /// </summary>
+  public event System.Action? Restored;
+
+  public void NotifyRestored() => Restored?.Invoke();
 }

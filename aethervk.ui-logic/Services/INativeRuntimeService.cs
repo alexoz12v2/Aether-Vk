@@ -117,6 +117,31 @@ public interface INativeRuntimeService : IDisposable
   /// arrives as <see cref="ExternalStateType.SceneRestored"/>.
   /// </summary>
   bool RestoreScene(string baseDir);
+
+  /// <summary>Dumps the scene to exactly <paramref name="file"/> (savefile <c>states/&lt;hash&gt;/scene.bin</c>);
+  /// completion: <see cref="ExternalStateType.SceneDumped"/>.</summary>
+  bool DumpSceneToFile(string file);
+
+  /// <summary>Restores the scene from exactly <paramref name="file"/>; false when unreadable or of
+  /// another dump version (seek instead). Completion: <see cref="ExternalStateType.SceneRestored"/>.</summary>
+  bool RestoreSceneFromFile(string file);
+
+  /// <summary>The engine's compatibility JSON of the scene (what a saved state must match); null
+  /// without a scene.</summary>
+  string? GetCompatibilityJson();
+
+  /// <summary>The scene dump format the engine writes and restores (<c>SceneDump::CURRENT_VERSION</c>).</summary>
+  uint SceneDumpVersion { get; }
+
+  /// <summary>
+  /// Writes the source of asset <paramref name="assetId"/> into <paramref name="destDir"/> as
+  /// <c>&lt;content_hash&gt;_&lt;label&gt;.&lt;ext&gt;</c> (copied verbatim, or an embedded glTF image
+  /// extracted). Null on failure.
+  /// </summary>
+  Models.ExportedAssetFile? ExportAsset(ulong assetId, string destDir);
+
+  /// <summary>Content hash of asset <paramref name="assetId"/> (the native dedup hash); null when unknown.</summary>
+  ulong? GetAssetContentHash(ulong assetId);
   bool SnapshotSceneSync();
   bool RestoreSnapshotSync();
   bool PauseSimulationSync();
@@ -200,6 +225,13 @@ public interface INativeRuntimeService : IDisposable
 
   /// <summary>Shows or hides the comet label (shown only in Earth observer mode).</summary>
   bool SetCometIndicatorVisible(bool visible);
+
+  /// <summary>
+  /// Render layers the camera <paramref name="cameraEntityId"/> draws (bit 0: everything by default,
+  /// bit 1: UpZenith-only content, i.e. the Earth globe, its polar axis, N/S labels and label).
+  /// Decided per camera, so viewports in different modes disagree. False: no scene or not a camera.
+  /// </summary>
+  bool SetCameraRenderMask(ulong cameraEntityId, uint mask);
 
   /// <summary>
   /// Native Earth observer: the core poses the Earth-parented camera inside every commit that moves
@@ -356,6 +388,12 @@ public interface INativeRuntimeService : IDisposable
 
   /// <summary>RGBA8 thumbnail of an asset, or <c>null</c> if unknown / library busy.</summary>
   Models.AssetThumbnail? GetAssetThumbnail(ulong assetId);
+
+  /// <summary>
+  /// Full-resolution texels of texture <paramref name="assetId"/> as RGBA8 (desktop billboards
+  /// draw them). Null when the asset is unknown, block-compressed, or the library is busy.
+  /// </summary>
+  Models.AssetThumbnail? CopyAssetTexels(ulong assetId);
 
   /// <summary>
   /// Requests a comet appearance change (validated synchronously, applied by the logic thread
@@ -942,6 +980,40 @@ internal unsafe static class PInvokeAetherVkCore
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern unsafe bool avkSimulationContext_dumpSceneToFile(nint ctx, ulong sceneId, byte* utf8File);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern unsafe bool avkSimulationContext_restoreSceneFromFile(nint ctx, ulong sceneId, byte* utf8File);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern unsafe bool avkSimulationContext_getCompatibilityJson(
+    nint ctx, ulong sceneId, byte* outUtf8, uint outLen, uint* outNeeded);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern uint avkSceneDumpVersion();
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern unsafe bool avkSimulationContext_getAssetContentHash(nint ctx, ulong assetId, ulong* outHash);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern unsafe int avkSimulationContext_exportAsset(
+    nint ctx, ulong assetId, byte* utf8DestDir, byte* outName, uint outNameLen, uint* outNameNeeded, ulong* outHash);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern unsafe int avkSimulationContext_copyAssetTexels(
+    nint ctx,
+    ulong assetId,
+    byte* outRgba,
+    ulong outLen,
+    uint* outWidth,
+    uint* outHeight
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_copyAssetThumbnail(
     nint ctx,
     ulong assetId,
@@ -1218,6 +1290,15 @@ internal unsafe static class PInvokeAetherVkCore
     double lonDeg,
     double elevM,
     [In] double[] look
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setCameraRenderMask(
+    nint ctx,
+    ulong sceneId,
+    ulong cameraEntity,
+    uint mask
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -2249,6 +2330,10 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public bool SetCometIndicatorVisible(bool visible) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setCometIndicatorVisible(_ctx, _sceneId, visible);
 
+  public bool SetCameraRenderMask(ulong cameraEntityId, uint mask) =>
+    _ctx != 0
+    && PInvokeAetherVkCore.avkSimulationContext_setCameraRenderMask(_ctx, _sceneId, cameraEntityId, mask);
+
   public unsafe EarthObserverStatus? EarthObserverStatus()
   {
     if (_ctx == 0)
@@ -2455,7 +2540,11 @@ public sealed class NativeRuntimeService : INativeRuntimeService
         [info.Bundled0, info.Bundled1, info.Bundled2, info.Bundled3],
         info.ChannelHint < 0 ? null : (Models.TextureChannel)info.ChannelHint,
         null
-      ) { OrientationFix = (Models.OrientationFix)info.OrientationFix };
+      )
+      {
+        OrientationFix = (Models.OrientationFix)info.OrientationFix,
+        IsDisplayable = (info.Flags & 1u) != 0,
+      };
     }
     return result;
 
@@ -2481,6 +2570,74 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     {
       if (!PInvokeAetherVkCore.avkSimulationContext_copyAssetThumbnail(
             _ctx, assetId, p, (uint)rgba.Length, &w, &h))
+        return null;
+    }
+    return new Models.AssetThumbnail((int)w, (int)h, rgba);
+  }
+
+  public unsafe bool DumpSceneToFile(string file)
+  {
+    if (_ctx == 0) return false;
+    fixed (byte* p = NullTerminatedUtf8(file))
+      return PInvokeAetherVkCore.avkSimulationContext_dumpSceneToFile(_ctx, _sceneId, p);
+  }
+
+  public unsafe bool RestoreSceneFromFile(string file)
+  {
+    if (_ctx == 0) return false;
+    fixed (byte* p = NullTerminatedUtf8(file))
+      return PInvokeAetherVkCore.avkSimulationContext_restoreSceneFromFile(_ctx, _sceneId, p);
+  }
+
+  public uint SceneDumpVersion => PInvokeAetherVkCore.avkSceneDumpVersion();
+
+  public unsafe string? GetCompatibilityJson()
+  {
+    if (_ctx == 0) return null;
+    uint needed;
+    if (!PInvokeAetherVkCore.avkSimulationContext_getCompatibilityJson(_ctx, _sceneId, null, 0, &needed))
+      return null;
+    var buf = new byte[needed + 1];
+    fixed (byte* p = buf)
+    {
+      if (!PInvokeAetherVkCore.avkSimulationContext_getCompatibilityJson(_ctx, _sceneId, p, (uint)buf.Length, &needed))
+        return null;
+    }
+    return Encoding.UTF8.GetString(buf, 0, (int)needed);
+  }
+
+  public unsafe ulong? GetAssetContentHash(ulong assetId)
+  {
+    if (_ctx == 0) return null;
+    ulong h;
+    return PInvokeAetherVkCore.avkSimulationContext_getAssetContentHash(_ctx, assetId, &h) ? h : null;
+  }
+
+  public unsafe Models.ExportedAssetFile? ExportAsset(ulong assetId, string destDir)
+  {
+    if (_ctx == 0) return null;
+    var name = new byte[512];
+    uint needed;
+    ulong hash;
+    int status;
+    fixed (byte* d = NullTerminatedUtf8(destDir))
+    fixed (byte* n = name)
+      status = PInvokeAetherVkCore.avkSimulationContext_exportAsset(_ctx, assetId, d, n, (uint)name.Length, &needed, &hash);
+    if (status < 0 || needed >= name.Length) return null;
+    return new Models.ExportedAssetFile(Encoding.UTF8.GetString(name, 0, (int)needed), hash, status == 1);
+  }
+
+  public unsafe Models.AssetThumbnail? CopyAssetTexels(ulong assetId)
+  {
+    if (_ctx == 0) return null;
+    uint w, h;
+    if (PInvokeAetherVkCore.avkSimulationContext_copyAssetTexels(_ctx, assetId, null, 0, &w, &h) != 0)
+      return null;
+    var rgba = new byte[checked((int)(w * h * 4))];
+    fixed (byte* p = rgba)
+    {
+      if (PInvokeAetherVkCore.avkSimulationContext_copyAssetTexels(
+            _ctx, assetId, p, (ulong)rgba.Length, &w, &h) != 0)
         return null;
     }
     return new Models.AssetThumbnail((int)w, (int)h, rgba);
@@ -3149,7 +3306,8 @@ internal struct CAssetInfoDTO
   public uint Kind;
   public int ChannelHint;
   public uint OrientationFix;
-  private uint _pad;
+  /// <summary>Bit 0: texture with uncompressed texels (<c>CopyAssetTexels</c> works).</summary>
+  public uint Flags;
 }
 
 [StructLayout(LayoutKind.Sequential)]

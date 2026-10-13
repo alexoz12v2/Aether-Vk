@@ -1329,6 +1329,35 @@ pub enum QueueRole {
 static GRAPHICS_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 impl Device {
+  /// Copies `len` bytes from `src` into this frame's half of the frame staging arena and returns
+  /// their device address, for shaders that read per-draw data through a buffer reference.
+  ///
+  /// Every caller gets its own slice, alive until the GPU has passed the frame (`StagingRing`),
+  /// so batches recorded for different depth layers or presentation engines in the same frame
+  /// cannot overwrite each other, and the next frame cannot overwrite data still being read.
+  /// (A single persistently-mapped buffer written at offset 0 per batch did both: a second
+  /// viewport's labels, indicator lines and gizmos replaced the first one's.) The arena memory is
+  /// HOST_COHERENT: the writes are visible to the queue submission that follows.
+  pub(crate) fn stage_for_device_read(
+    &self,
+    src: *const u8,
+    len: usize,
+    alignment: usize,
+  ) -> GpuResult<u64> {
+    let res = self.res.read();
+    let staging_arena = res.frame_staging_arena.read();
+    let staging = staging_arena.as_ref().ok_or(gpu_err!("missing frame staging arena"))?;
+    let (offset, ptr) = staging.allocate(len.max(1), alignment).ok_or(GpuError::OutOfMemory)?;
+    unsafe { core::ptr::copy_nonoverlapping(src, ptr, len) };
+    let base = unsafe {
+      self
+        .device
+        .buffer_device_address
+        .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(staging.buffer))
+    };
+    Ok(base + offset as u64)
+  }
+
   // TODO delete other pipeline key getters
   pub fn get_archetype_pipeline_key(
     &self,
@@ -3830,15 +3859,18 @@ impl RenderDevice for Device {
             let mut texture_flags: TextureFlags = TextureFlags::empty();
             // Textures larger than the per-frame staging arena get a buffer of their own, kept
             // alive until the (fence-waited) transient submission below has completed.
-            let upload_texture = |t: &crate::simulation::comet::Texture, label: &str| {
+            // `srgb`: albedo maps are sRGB-encoded (decoded to linear by the sampler); normal,
+            // roughness and AO maps hold linear data.
+            let upload_texture = |t: &crate::simulation::comet::Texture, label: &str, srgb: bool| {
               let name = alloc::format!("{}_{}", label, debug_name);
               let res = if t.data.len() > resources::DedicatedStaging::ARENA_BYPASS_THRESHOLD {
-                Image::new_2d_dedicated(
+                Image::new_2d_dedicated_color(
                   &self.device,
                   allocator,
                   transient_cmd,
                   t,
                   vk::ImageUsageFlags::SAMPLED,
+                  srgb,
                   &name,
                 )
                 .map(|(img, staging)| {
@@ -3846,13 +3878,14 @@ impl RenderDevice for Device {
                   img
                 })
               } else {
-                Image::new_2d(
+                Image::new_2d_color(
                   &self.device,
                   allocator,
                   transient_cmd,
                   staging_arena,
                   t,
                   vk::ImageUsageFlags::SAMPLED,
+                  srgb,
                   &name,
                 )
               };
@@ -3861,7 +3894,7 @@ impl RenderDevice for Device {
                 .ok()
             };
             let albedo_image = component.mesh.albedo_map.as_ref().and_then(|t| {
-              let img = upload_texture(t, "TextureAlbedo")?;
+              let img = upload_texture(t, "TextureAlbedo", true)?;
               // only flag channels whose image exists: a flagged channel without an image
               // samples the black dummy texture
               texture_flags |= TextureFlags::ALBEDO;
@@ -3876,7 +3909,7 @@ impl RenderDevice for Device {
             });
 
             let normal_image = component.mesh.normal_map.as_ref().and_then(|t| {
-              let img = upload_texture(t, "TextureNormal")?;
+              let img = upload_texture(t, "TextureNormal", false)?;
               // only flag channels whose image exists: a flagged channel without an image
               // samples the black dummy texture
               texture_flags |= TextureFlags::NORMAL;
@@ -3891,7 +3924,7 @@ impl RenderDevice for Device {
             });
 
             let roughness_image = component.mesh.roughness_map.as_ref().and_then(|t| {
-              let img = upload_texture(t, "TextureRoughness")?;
+              let img = upload_texture(t, "TextureRoughness", false)?;
               // only flag channels whose image exists: a flagged channel without an image
               // samples the black dummy texture
               texture_flags |= TextureFlags::ROUGHNESS;
@@ -3906,7 +3939,7 @@ impl RenderDevice for Device {
             });
 
             let ao_image = component.mesh.ao_map.as_ref().and_then(|t| {
-              let img = upload_texture(t, "TextureAO")?;
+              let img = upload_texture(t, "TextureAO", false)?;
               // only flag channels whose image exists: a flagged channel without an image
               // samples the black dummy texture
               texture_flags |= TextureFlags::AO;
@@ -5092,58 +5125,23 @@ impl RenderDevice for Device {
       return Ok(None);
     }
 
-    let res_guard = self.res.read();
-    let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
-    let live_pes = &res_guard.live_presentation_engines;
-    let pe_lock = wait_for_pe_mut_direct!(live_pes, handle)?;
-    let mut pe = pe_lock;
-    let archetype_guard = pe.archetypes_mut().registry.read();
-    archetype_guard.get(&ArchetypeId::Ui).ok_or(gpu_err_archetype_absent!())?;
-    let arena_lock = res_guard.ui_render_archetype_arena.as_ref().unwrap();
-
-    let elements_ptr = unsafe {
-      let mut arena_write = arena_lock.write();
-      let data_ptr = res_guard.allocator.allocator.map_memory(&mut arena_write.elements_alloc)?;
-
-      core::ptr::copy_nonoverlapping(
-        ui_elements.as_ptr() as *const u8,
-        data_ptr as *mut u8,
-        ui_elements.len() * core::mem::size_of::<crate::gpu::UiElementGpu>(),
-      );
-
-      let valid_size =
-        (ui_elements.len() * core::mem::size_of::<crate::gpu::UiElementGpu>()) as u64;
-      let _ =
-        res_guard
-          .allocator
-          .allocator
-          .flush_allocation(&arena_write.elements_alloc, 0, valid_size);
-
-      res_guard.allocator.allocator.unmap_memory(&mut arena_write.elements_alloc);
-
-      let barrier = vk::BufferMemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::HOST)
-        .src_access_mask(vk::AccessFlags2::HOST_WRITE)
-        .dst_stage_mask(
-          vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT | vk::PipelineStageFlags2::VERTEX_SHADER,
-        )
-        .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::VERTEX_ATTRIBUTE_READ)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .buffer(arena_write.elements_buffer.get())
-        .offset(0)
-        .size(valid_size);
-
-      let dep_info =
-        vk::DependencyInfo::default().buffer_memory_barriers(core::slice::from_ref(&barrier));
-      let elements_ptr = arena_write.elements_ptr;
-      arena_write.tick += 1;
-      drop(arena_write); // drop lock before vulkan call
-
-      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
-
-      elements_ptr
-    };
+    {
+      let res_guard = self.res.read();
+      let (_cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
+      let pe = wait_for_pe_direct!(&res_guard.live_presentation_engines, handle)?;
+      let archetype_guard = pe.archetypes().registry.read();
+      archetype_guard.get(&ArchetypeId::Ui).ok_or(gpu_err_archetype_absent!())?;
+      if let Some(arena_lock) = res_guard.ui_render_archetype_arena.as_ref() {
+        arena_lock.write().tick += 1;
+      }
+    }
+    // per-batch staging slice (`stage_for_device_read`): one viewport's indicator lines no longer
+    // replace another's
+    let elements_ptr = self.stage_for_device_read(
+      ui_elements.as_ptr() as *const u8,
+      core::mem::size_of_val(ui_elements),
+      16,
+    )?;
 
     Ok(Some(crate::gpu::UiBatchCall {
       elements_ptr,
@@ -5161,58 +5159,20 @@ impl RenderDevice for Device {
       return Ok(None);
     }
 
-    let res_guard = self.res.read();
-    let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
-    let live_pes = &res_guard.live_presentation_engines;
-    let pe_lock = wait_for_pe_mut_direct!(live_pes, handle)?;
-    let mut pe = pe_lock;
-    let archetype_guard = pe.archetypes_mut().registry.read();
-    archetype_guard.get(&ArchetypeId::Text).ok_or(gpu_err_archetype_absent!())?;
-    let arena_lock = res_guard.text2_render_archetype_arena.as_ref().unwrap();
-
-    let glyphs_ptr = unsafe {
-      let mut arena_write = arena_lock.write();
-      let data_ptr = res_guard.allocator.allocator.map_memory(&mut arena_write.glyphs_alloc)?;
-
-      core::ptr::copy_nonoverlapping(
-        glyphs.as_ptr() as *const u8,
-        data_ptr as *mut u8,
-        glyphs.len() * core::mem::size_of::<crate::gpu::TextGlyphGpu>(),
-      );
-
-      let valid_size = (glyphs.len() * core::mem::size_of::<crate::gpu::TextGlyphGpu>()) as u64;
-      let _ =
-        res_guard
-          .allocator
-          .allocator
-          .flush_allocation(&arena_write.glyphs_alloc, 0, valid_size);
-
-      res_guard.allocator.allocator.unmap_memory(&mut arena_write.glyphs_alloc);
-
-      let barrier = vk::BufferMemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::HOST)
-        .src_access_mask(vk::AccessFlags2::HOST_WRITE)
-        .dst_stage_mask(
-          vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT
-            | vk::PipelineStageFlags2::VERTEX_SHADER
-            | vk::PipelineStageFlags2::FRAGMENT_SHADER,
-        )
-        .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::VERTEX_ATTRIBUTE_READ)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .buffer(arena_write.glyphs_buffer.get())
-        .offset(0)
-        .size(valid_size);
-
-      let dep_info =
-        vk::DependencyInfo::default().buffer_memory_barriers(core::slice::from_ref(&barrier));
-      let glyphs_ptr = arena_write.glyphs_ptr;
-      drop(arena_write); // drop lock before vulkan call
-
-      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
-
-      glyphs_ptr
-    };
+    {
+      let res_guard = self.res.read();
+      let (_cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
+      let pe = wait_for_pe_direct!(&res_guard.live_presentation_engines, handle)?;
+      let archetype_guard = pe.archetypes().registry.read();
+      archetype_guard.get(&ArchetypeId::Text).ok_or(gpu_err_archetype_absent!())?;
+    }
+    // per-batch staging slice (`stage_for_device_read`): one viewport's labels no longer replace
+    // another's
+    let glyphs_ptr = self.stage_for_device_read(
+      glyphs.as_ptr() as *const u8,
+      core::mem::size_of_val(glyphs),
+      16,
+    )?;
 
     Ok(Some(crate::gpu::Text2BatchCall {
       glyphs_ptr,
@@ -6675,80 +6635,30 @@ impl RenderDevice for Device {
       return Ok(None);
     }
 
-    let _total_gizmos = gizmos.len() as u32;
+    // Every batch (one per depth layer and presentation engine) gets its own slice of the frame
+    // staging arena (`stage_for_device_read`). Copying every batch into the shared `data_buffer`
+    // at offset 0 made the batches overwrite each other before any of them was drawn: a second
+    // gizmo layer (the Earth's polar axis) or a second viewport (whose `center_clip` differs)
+    // clobbered the first, and which one survived depended on hash-map order.
+    let total_capacity = (gizmos.iter().map(|(idx, _)| *idx).max().unwrap_or(0) + 1) as usize;
+    let data_size = total_capacity * core::mem::size_of::<crate::gpu::SphereGizmoDataGpu>();
 
-    let (cmd, staging_offset, staging_ptr, data_buffer, staging_buffer, data_ptr, pipeline) = {
+    let pipeline = {
       let res = self.res.read();
-      let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
+      let (_cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
       let pe = wait_for_pe_direct!(&res.live_presentation_engines, handle)?;
       let archetype_lock = pe.archetypes().registry.read();
-      let archetype = archetype_lock
+      archetype_lock
         .get(&ArchetypeId::SphereGizmo)
-        .ok_or(gpu_err_archetype_absent!())?;
-
-      let mut staging_arena = res.frame_staging_arena.write();
-      let staging = staging_arena.as_mut().ok_or(gpu_err!("SphereGizmo missing staging arena"))?;
-
-      let arena_arc = res
-        .sphere_gizmo_render_archetype_arena
-        .as_ref()
-        .ok_or(gpu_err!("arena absent"))?;
-      let arena = arena_arc.read();
-
-      let max_idx = gizmos.iter().map(|(idx, _)| *idx).max().unwrap_or(0);
-      let total_capacity = (max_idx + 1) as usize;
-      let data_size =
-        (total_capacity * core::mem::size_of::<crate::gpu::SphereGizmoDataGpu>()) as u64;
-
-      let (staging_offset, staging_ptr) =
-        staging.allocate(data_size as usize, 16).ok_or(GpuError::OutOfMemory)?;
-
-      (
-        cmd,
-        staging_offset,
-        staging_ptr,
-        arena.data_buffer.get(),
-        staging.buffer,
-        arena.data_ptr,
-        archetype.pipeline_key(),
-      )
-    }; // <-- all locks dropped
-
-    let total_capacity = (gizmos.iter().map(|(idx, _)| *idx).max().unwrap_or(0) + 1) as usize;
-    let data_size =
-      (total_capacity * core::mem::size_of::<crate::gpu::SphereGizmoDataGpu>()) as u64;
-
-    unsafe {
-      core::ptr::write_bytes(staging_ptr, 0, data_size as usize); // zero init
-      let typed_ptr = staging_ptr as *mut crate::gpu::SphereGizmoDataGpu;
-      for (idx, data) in gizmos {
-        core::ptr::write(typed_ptr.add(*idx as usize), *data);
-      }
+        .ok_or(gpu_err_archetype_absent!())?
+        .pipeline_key()
+    };
+    // unused slots stay zero: zero radius, no lines
+    let mut data = alloc::vec![crate::gpu::SphereGizmoDataGpu::default(); total_capacity];
+    for (idx, d) in gizmos {
+      data[*idx as usize] = *d;
     }
-
-    let copy_region = vk::BufferCopy::default()
-      .size(data_size)
-      .src_offset(staging_offset as u64)
-      .dst_offset(0);
-
-    unsafe {
-      self.device.cmd_copy_buffer(cmd, staging_buffer, data_buffer, &[copy_region]);
-
-      let barrier = vk::BufferMemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-        .dst_stage_mask(
-          vk::PipelineStageFlags2::VERTEX_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER,
-        )
-        .dst_access_mask(vk::AccessFlags2::SHADER_READ)
-        .buffer(data_buffer)
-        .offset(0)
-        .size(data_size);
-
-      let dependency_info =
-        vk::DependencyInfo::default().buffer_memory_barriers(core::slice::from_ref(&barrier));
-      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dependency_info);
-    }
+    let data_ptr = self.stage_for_device_read(data.as_ptr() as *const u8, data_size, 16)?;
 
     // Always allocate enough vertices for the maximum LOD (36 subdivisions).
     // 4 axes: X(red), Y(green), Z(blue), Sun(yellow). Each axis: 2 vertices.
@@ -7588,8 +7498,12 @@ impl RenderDevice for Device {
         stencil: 0,
       },
     };
+    // Stencil too: pipelines leave 255 (trajectories, UI, markers …) or 1 (meshes) behind, and
+    // the sphere-gizmo passes of the next layer test stencil == 1 / == 0, so a stale value from a
+    // farther layer hid that layer's gizmos (the Earth's polar axis behind the Sun's layer).
+    // The depth-stencil format always has a stencil aspect (D32_SFLOAT_S8 / D24_S8).
     let clear_attachment = ash::vk::ClearAttachment {
-      aspect_mask: ash::vk::ImageAspectFlags::DEPTH,
+      aspect_mask: ash::vk::ImageAspectFlags::DEPTH | ash::vk::ImageAspectFlags::STENCIL,
       color_attachment: 0,
       clear_value,
     };

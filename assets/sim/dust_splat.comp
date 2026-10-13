@@ -403,6 +403,9 @@ void dust_volume_scatter(DustPacket p, float exposure, vec3 color, uint levels, 
     bool any_ = false;
     float carry = 0.0;
     float peak = 0.0;
+    // the support's cut: the flux over the kept mass (dust::volume_scatter)
+    float renorm = dust_has_support(dust_phot_support)
+        ? 1.0 / max(dust_support_mass(p, dust_phot_support), DUST_SUPPORT_MASS_MIN) : 1.0;
     for (uint k = 0u; k < n; ++k) {
         ivec4 r = dust_volume_range(pieces[k], level, lw, lh);
         for (int ty = r.z; ty <= r.w; ++ty) {
@@ -424,8 +427,8 @@ void dust_volume_scatter(DustPacket p, float exposure, vec3 color, uint levels, 
                 float b = dot(uw, pieces[k].qw);
                 precise vec3 rr = pieces[k].qw - uw * (b / a);
                 float sa = sqrt(a);
-                float tauPx = pieces[k].k / sa * exp(-0.5 * dot(rr, rr))
-                            * (0.5 * (1.0 + dust_erf(-b / (sa * 1.4142135623730951))));
+                float tauPx = pieces[k].k * renorm / sa * exp(-0.5 * dot(rr, rr))
+                            * dust_ray_kept(a, b, eye, u, dust_phot_support);
                 if (dust_phot_albedo > 0.0) {
                     vec3 x = eye + u * max(-b / a, 0.0);
                     tauPx *= dust_volume_weight(p.mean, x, u);
@@ -467,20 +470,104 @@ void dust_volume_scatter(DustPacket p, float exposure, vec3 color, uint levels, 
 // the one run-time gate, so it depends on the dispatch order, only in frames the feedback has
 // not caught up with (a cold start inside the coma made 5.5e7 children). A dropped packet's flux
 // is atomicMax'ed into DUST_PYR_SPLIT_DROPPED_FLUX.
-void dust_project_split_scatter(vec3 mean, float S[6], vec3 d, float flux, float exposure,
+void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, float exposure,
                                 bool openStart, bool openEnd, vec2 rho, vec3 segT, vec3 color, uint levels,
                                 float W, float H, vec3 fwd, bool perspective, uint depthMax, uint volumeBias,
                                 float shellDMax, uint volumeAxis) {
     DustPacket stack[DUST_SPLIT_DEPTH_MAX + 1u];
     uint levelOf[DUST_SPLIT_DEPTH_MAX + 1u];
     bool clippedOf[DUST_SPLIT_DEPTH_MAX + 1u];
-    stack[0].mean = mean; stack[0].S = S; stack[0].seg = d; stack[0].flux = flux;
-    stack[0].openStart = openStart; stack[0].openEnd = openEnd; stack[0].rho = rho; stack[0].segT = segT;
-    levelOf[0] = 0u; clippedOf[0] = false;
-    uint n = 1u;
+    DustPacket p0;
+    p0.mean = mean; p0.S = S; p0.seg = d; p0.flux = flux;
+    p0.openStart = openStart; p0.openEnd = openEnd; p0.rho = rho; p0.segT = segT;
+    // a perspective packet its support cuts (dust::project_split_scatter; not with a speck shell,
+    // the split's hand-over): drawn whole by the exact ray integral over the half-space when the
+    // eye is near it, else as its truncation's moments (dust_support_trunc_piece), uncut
+    vec4 sup = dust_phot_support;
+    bool hasO = dust_phot_has_origin;
+    float wO = dust_phot_origin;
+    // a perspective packet with a cell the eye is not near: its cone of grains (dust_conic_piece,
+    // the cut baked in), each slab drawn uncut; not with a speck shell (dust::project_split_scatter)
+    bool conic = false;
+    vec3 csn = vec3(0.0);
+    float cv0 = 0.0, cDC = 0.0;
+    bool cCut = false;
+    float renorm = 1.0;
+    // (the eye near it: the exact ray integral below, the work bounded per packet)
+    if (perspective && !(shellDMax > 0.0) && dust_has_support(sup) && hasO && !dust_is_volumetric(p0, pc.eyeLocal.xyz)) {
+        float ra = p0.rho.x, rb = p0.rho.y;
+        float ucp = ra + rb > 0.0 ? (ra + 2.0 * rb) / (3.0 * (ra + rb)) : 0.5;
+        cDC = dot(sup.xyz, p0.mean + p0.seg * ucp) - wO;
+        if (cDC > 0.0) {
+            csn = vec3(S[0] * sup.x + S[1] * sup.y + S[2] * sup.z,
+                       S[1] * sup.x + S[3] * sup.y + S[4] * sup.z,
+                       S[2] * sup.x + S[4] * sup.y + S[5] * sup.z);
+            cv0 = max(dot(sup.xyz, csn), 0.0);
+            cCut = dust_support_mass(p0, sup) < 1.0 - DUST_SUPPORT_CUT_MIN;
+            float total = 0.0;
+            uint cnt = 0u;
+            for (uint it = 0u; it < DUST_SUPPORT_TRUNC_PIECES * DUST_SUPPORT_TRUNC_SLABS; ++it) {
+                DustPacket q; float w;
+                if (dust_conic_piece(p0, sup, wO, csn, cv0, cDC, cCut, it / DUST_SUPPORT_TRUNC_SLABS, it % DUST_SUPPORT_TRUNC_SLABS, q, w)) {
+                    total += w;
+                    cnt++;
+                }
+            }
+            if (cnt > 0u) {
+                conic = true;
+                renorm = p0.flux > 0.0 ? 1.0 / max(total / p0.flux, DUST_SUPPORT_MASS_MIN) : 0.0;
+                dust_phot_support = vec4(0.0);
+                dust_phot_has_origin = false;
+            }
+        }
+    }
+    bool trunc = false;
+    if (!conic && perspective && !(shellDMax > 0.0) && dust_has_support(sup)
+        && dust_support_mass(p0, sup) < 1.0 - DUST_SUPPORT_CUT_MIN) {
+        if (dust_is_volumetric(p0, pc.eyeLocal.xyz)) {
+            dust_volume_scatter(p0, exposure, color, levels, W, H, volumeBias, volumeAxis);
+            return;
+        }
+        trunc = true;
+    }
+    float bounds[DUST_SUPPORT_TRUNC_PIECES + 1u];
+    vec3 sn = vec3(0.0);
+    float v0 = 0.0;
+    if (trunc) {
+        sn = vec3(S[0] * sup.x + S[1] * sup.y + S[2] * sup.z,
+                  S[1] * sup.x + S[3] * sup.y + S[4] * sup.z,
+                  S[2] * sup.x + S[4] * sup.y + S[5] * sup.z);
+        v0 = max(dot(sup.xyz, sn), 0.0);
+        dust_support_trunc_bounds(p0, sup, v0, bounds);
+        // the kept shares, renormalised over the packet (floor DUST_SUPPORT_MASS_MIN)
+        float total = 0.0;
+        for (uint it = 0u; it < DUST_SUPPORT_TRUNC_PIECES * DUST_SUPPORT_TRUNC_SLABS; ++it) {
+            uint j = it / DUST_SUPPORT_TRUNC_SLABS, e = it % DUST_SUPPORT_TRUNC_SLABS;
+            DustPacket q; float w;
+            if (dust_support_trunc_piece(p0, sup, sn, v0, bounds[j], bounds[j + 1u], j, e, q, w)) total += w;
+        }
+        renorm = p0.flux > 0.0 ? 1.0 / max(total / p0.flux, DUST_SUPPORT_MASS_MIN) : 0.0;
+        dust_phot_support = vec4(0.0);
+    }
+    uint nItems = (trunc || conic) ? DUST_SUPPORT_TRUNC_PIECES * DUST_SUPPORT_TRUNC_SLABS : 1u;
     // the in-frame gate (dust::split_packet_with): once a split of this thread finds the frame's
     // children past DUST_FRAME_HARD_FACTOR budgets, its packets split no further (depth 0)
     uint dMax = depthMax;
+    for (uint it = 0u; it < nItems; ++it) {
+    if (conic) {
+        float w;
+        if (!dust_conic_piece(p0, sup, wO, csn, cv0, cDC, cCut, it / DUST_SUPPORT_TRUNC_SLABS, it % DUST_SUPPORT_TRUNC_SLABS, stack[0], w)) continue;
+        stack[0].flux = w * renorm;
+    } else if (trunc) {
+        uint j = it / DUST_SUPPORT_TRUNC_SLABS, e = it % DUST_SUPPORT_TRUNC_SLABS;
+        float w;
+        if (!dust_support_trunc_piece(p0, sup, sn, v0, bounds[j], bounds[j + 1u], j, e, stack[0], w)) continue;
+        stack[0].flux = w * renorm;
+    } else {
+        stack[0] = p0;
+    }
+    levelOf[0] = 0u; clippedOf[0] = false;
+    uint n = 1u;
     while (n > 0u) {
         n--;
         DustPacket q = stack[n];
@@ -533,6 +620,36 @@ void dust_project_split_scatter(vec3 mean, float S[6], vec3 d, float flux, float
             }
         }
     }
+    }
+    dust_phot_support = sup;
+    dust_phot_has_origin = hasO;
+}
+
+// dust_project_split_scatter_one for every hard-axis sub-leaf (dust::hard_axis_leaf: bits 24-27 of
+// DUST_PYR_SPLIT_DEPTH, diagnostics; n <= 1: the leaf itself): the Gaussianised axis segT drawn as
+// n sub-leaves uniform over [-segT/2, segT/2], each with 1.21 (segT/2n)^2
+void dust_project_split_scatter(vec3 mean, float S[6], vec3 d, float flux, float exposure,
+                                bool openStart, bool openEnd, vec2 rho, vec3 segT, vec3 color, uint levels,
+                                float W, float H, vec3 fwd, bool perspective, uint depthMax, uint volumeBias,
+                                float shellDMax, uint volumeAxis) {
+    uint n = (pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] >> 24u) & 0xFu;
+    vec3 h = 0.5 * segT;
+    if (n <= 1u || !(dot(h, h) > 0.0)) {
+        dust_project_split_scatter_one(mean, S, d, flux, exposure, openStart, openEnd, rho, segT, color, levels,
+                                       W, H, fwd, perspective, depthMax, volumeBias, shellDMax, volumeAxis);
+        return;
+    }
+    float k = DUST_CHORD_VAR_FACTOR;
+    float q = 1.0 - 1.0 / float(n * n);
+    float Sh[6];
+    Sh[0] = S[0] - k * q * h.x * h.x; Sh[1] = S[1] - k * q * h.x * h.y; Sh[2] = S[2] - k * q * h.x * h.z;
+    Sh[3] = S[3] - k * q * h.y * h.y; Sh[4] = S[4] - k * q * h.y * h.z; Sh[5] = S[5] - k * q * h.z * h.z;
+    for (uint jj = 0u; jj < n; ++jj) {
+        float off = -1.0 + float(2u * jj + 1u) / float(n);
+        dust_project_split_scatter_one(mean + h * off, Sh, d, flux / float(n), exposure, openStart, openEnd, rho,
+                                       segT * (1.0 / float(n)), color, levels, W, H, fwd, perspective, depthMax,
+                                       volumeBias, shellDMax, volumeAxis);
+    }
 }
 
 void main() {
@@ -566,7 +683,6 @@ void main() {
     bool spiral = pred >= 0 && dust_spiral_of(M, P, spAxis, spOmega);
     float ageO = M.cov_b_age_id.z, ageP = pred >= 0 ? P.cov_b_age_id.z : ageO;
     uint nT = spiral ? DUST_TIME_PIECES_MAX : dust_time_pieces(ratio);
-    float invT = 1.0 / float(nT);
     float exposure = pc.exposure;
     if ((pc.flags & DUST_VIEW_FLOW) != 0u) {
         exposure *= dust_flow_factor(age, uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_HI]),
@@ -597,9 +713,30 @@ void main() {
     uint volumeBias = (splitWord >> 8u) & 0xFFu;
     // bits 16-17: the volumetric axis mode (AETHERVK_DUST_VOLUME_AXIS, host-written)
     uint volumeAxis = (splitWord >> 16u) & 0x3u;
+    // bit 28 (diagnostics, AETHERVK_DUST_TIME_CELL=1, dust::time_cell_offset): a chord-major leaf's
+    // time Gaussian centred on its cell (half a segment towards the predecessor), not on its chord
+    bool cellOff = ((splitWord >> 28u) & 1u) != 0u;
     // the speck shell's radius (0: none; orthographic views and the specks off)
     float shellDMax = uintBitsToFloat(pc.pyramid.v[DUST_PYR_SPECKS_DMAX]);
     float r0 = 1.0 / ratio;
+    // the support planes (dust::subpackets_supported): the sample's own for its bins, a cone
+    // piece's from the cell line at its centre age (the two lines interpolated along the spiral,
+    // the predecessor's direction turned like its covariance)
+    vec3 oM, cM, oP, cP;
+    bool lineM = dust_cell_line(M, oM, cM);
+    bool lineP = pred >= 0 && dust_cell_line(P, oP, cP);
+    float vStd = 0.0;
+    if (lineM && dot(cM, cM) > 0.0) {
+        float Sv[6];
+        Sv[0] = M.cov_a.x; Sv[1] = M.cov_a.y; Sv[2] = M.cov_a.z;
+        Sv[3] = M.cov_a.w; Sv[4] = M.cov_b_age_id.x; Sv[5] = M.cov_b_age_id.y;
+        vStd = sqrt(max(dust_var_along(Sv, cM * (1.0 / sqrt(dot(cM, cM)))), 0.0) / dot(cM, cM));
+    }
+    float fLo = dust_edge_factor(M, 0u);
+    vec4 ownSup = lineM ? dust_support_plane(oM, cM, vStd, fLo) : vec4(0.0);
+    // the own cell's origin along its plane's normal (dust::subpackets_cells)
+    bool ownHas = lineM && dust_has_support(ownSup);
+    float ownO = dot(ownSup.xyz, oM);
     if (merged) {
         vec3 mean; float S[6]; float flux;
         dust_pooled_packet(M, mean, S, flux);
@@ -613,60 +750,90 @@ void main() {
         }
         vec3 pm = mean + seg;
         for (uint t = 0u; t < nT; ++t) {
-            float u0 = float(t) * invT;
-            float sc = nT > 1u ? r0 + (1.0 - r0) * (u0 + 0.5 * invT) : 1.0;
+            // the pieces at equal width ratios (dust_piece_bound), the predecessor's covariance
+            // turned with the spiral to the piece's centre (dust::subpackets_swept)
+            float u0 = dust_piece_bound(t, nT, ratio), u1 = dust_piece_bound(t + 1u, nT, ratio);
+            float uc = 0.5 * (u0 + u1);
+            float sc = nT > 1u ? r0 + (1.0 - r0) * uc : 1.0;
             float sc2 = sc * sc;
             float St[6];
             for (int k = 0; k < 6; ++k) St[k] = base[k] * sc2;
+            if (spiral) dust_rotate_cov(St, spAxis, spOmega * (ageP - (ageO + uc * (ageP - ageO))));
+            dust_phot_support = dust_piece_support_o(nT > 1u, lineM, lineP, oM, cM, oP, cP, spiral, spAxis, spOmega, ageO, ageP, uc, vStd, fLo, ownSup, ownHas, ownO, dust_phot_has_origin, dust_phot_origin);
             vec3 m0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0) : mean + seg * u0;
-            vec3 s0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0 + invT) - m0 : seg * invT;
-            dust_project_split_scatter(m0, St, s0, flux * invT, exposure, false, false, vec2(1.0), vec3(0.0), color, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
+            vec3 s0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u1) - m0 : seg * (u1 - u0);
+            dust_project_split_scatter(m0, St, s0, flux * (u1 - u0), exposure, false, false, vec2(1.0), vec3(0.0), color, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
         }
     } else {
         for (uint b = 0u; b < DUST_SIZE_BINS; ++b) {
+          // the polyline's slow end bin as DUST_END_SUBBINS sub-bins (dust::subpackets_cells)
+          uint nj = dust_bin_subbins(b);
+          for (uint j = 0u; j < nj; ++j) {
+            vec3 ea, ec; float fa, fc;
+            dust_sub_edges(M, b, j, nj, ea, ec, fa, fc);
             // the time segment of this bin: to the same bin of the predecessor
             vec3 segT = vec3(0.0);
-            if (pred >= 0) segT = 0.5 * (P.edges[b].xyz + P.edges[b + 1u].xyz) - 0.5 * (M.edges[b].xyz + M.edges[b + 1u].xyz);
-            bool openStart = b > 0u, openEnd = b + 1u < DUST_SIZE_BINS;
+            if (pred >= 0) {
+                vec3 pa, pc; float pfa, pfc;
+                dust_sub_edges(P, b, j, nj, pa, pc, pfa, pfc);
+                segT = 0.5 * (pa + pc) - 0.5 * (ea + ec);
+            }
+            bool openStart = b > 0u || j > 0u, openEnd = b + 1u < DUST_SIZE_BINS || j + 1u < nj;
             // the longer of the bin's two axes is the exact capsule, the other a Gaussian
             // (dust::subpackets_merged)
-            vec3 chordV = M.edges[b + 1u].xyz - M.edges[b].xyz;
+            vec3 chordV = ec - ea;
             bool timeMajor = dot(segT, segT) > dot(chordV, chordV);
             if (timeMajor) {
                 vec3 mean; float S[6]; float flux;
-                dust_bin_packet(M, b, mean, S, flux);
+                dust_bin_packet_sub(M, b, j, nj, mean, S, flux);
                 float base[6];
                 for (int k = 0; k < 6; ++k) base[k] = S[k];
-                if (nT > 1u) { vec3 mp; float fp; dust_bin_packet(P, b, mp, base, fp); }
+                if (nT > 1u) { vec3 mp; float fp; dust_bin_packet_sub(P, b, j, nj, mp, base, fp); }
                 vec3 pm = mean + segT;
                 for (uint t = 0u; t < nT; ++t) {
-                    float u0 = float(t) * invT;
-                    float sc = nT > 1u ? r0 + (1.0 - r0) * (u0 + 0.5 * invT) : 1.0;
+                    float u0 = dust_piece_bound(t, nT, ratio), u1 = dust_piece_bound(t + 1u, nT, ratio);
+                    float uc = 0.5 * (u0 + u1);
+                    float sc = nT > 1u ? r0 + (1.0 - r0) * uc : 1.0;
                     float sc2 = sc * sc;
                     float St[6];
                     for (int k = 0; k < 6; ++k) St[k] = base[k] * sc2;
+                    float turn = spOmega * (ageP - (ageO + uc * (ageP - ageO)));
+                    if (spiral) dust_rotate_cov(St, spAxis, turn);
                     vec3 m0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0) : mean + segT * u0;
-                    vec3 s0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0 + invT) - m0 : segT * invT;
-                    // seg_t: the size chord of the bin packet the cone is built from, scaled with it
-                    vec3 chordB = nT > 1u ? P.edges[b + 1u].xyz - P.edges[b].xyz : M.edges[b + 1u].xyz - M.edges[b].xyz;
+                    vec3 s0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u1) - m0 : segT * (u1 - u0);
+                    // seg_t: the size chord of the bin packet the cone is built from, scaled and
+                    // turned with it
+                    vec3 chordB;
+                    {
+                        vec3 qa, qc; float qfa, qfc;
+                        if (nT > 1u) dust_sub_edges(P, b, j, nj, qa, qc, qfa, qfc); else { qa = ea; qc = ec; }
+                        chordB = qc - qa;
+                    }
                     vec3 segTB = ((0.5 * chordB) * 2.0) * sc;
-                    dust_project_split_scatter(m0, St, s0, flux * invT, exposure, false, false, vec2(1.0), segTB, color, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
+                    if (spiral) segTB = dust_rotate3(segTB, spAxis, turn);
+                    dust_phot_support = dust_piece_support_o(nT > 1u, lineM, lineP, oM, cM, oP, cP, spiral, spAxis, spOmega, ageO, ageP, uc, vStd, fLo, ownSup, ownHas, ownO, dust_phot_has_origin, dust_phot_origin);
+                    dust_project_split_scatter(m0, St, s0, flux * (u1 - u0), exposure, false, false, vec2(1.0), segTB, color, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
                 }
             } else if (nT == 1u) {
+                dust_phot_support = ownSup;
+                dust_phot_has_origin = ownHas;
+                dust_phot_origin = ownO;
                 // the time cell of the bin is the quadrilateral between its chord and the
                 // predecessor's: swept when its edges are pixels apart (dust::time_sweep)
                 uint nS = pred >= 0 ? dust_time_sweep(M, P, b, pc.mvp, W, H) : 1u;
-                vec2 rho = dust_bin_density_ends(dust_edge_factor(M, b), dust_edge_factor(M, b + 1u));
+                vec2 rho = dust_bin_density_ends(fa, fc);
                 if (nS == 1u) {
                     vec3 mean, chord; float S[6]; float flux;
-                    dust_bin_chord(M, b, segT, mean, chord, S, flux);
-                    dust_project_split_scatter(mean, S, chord, flux, exposure, openStart, openEnd, rho, (0.5 * segT) * 2.0, color, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
+                    dust_bin_chord_sub(M, b, j, nj, segT, mean, chord, S, flux);
+                    dust_project_split_scatter(mean + (cellOff ? 0.5 * segT : vec3(0.0)), S, chord, flux, exposure, openStart, openEnd, rho, (0.5 * segT) * 2.0, color, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
                 } else {
                     for (uint k = 0u; k < nS; ++k) {
                         vec3 mean, chord; float S[6]; float flux;
-                        dust_bin_sweep(M, P, b, k, nS, mean, chord, S, flux);
+                        dust_bin_sweep_sub(M, P, b, j, nj, k, nS, mean, chord, S, flux);
                         // seg_t: the sweep slab's Gaussianised width (dust::bin_sweep_packet)
-                        vec3 da = P.edges[b].xyz - M.edges[b].xyz, dc = P.edges[b + 1u].xyz - M.edges[b + 1u].xyz;
+                        vec3 pa, pc; float pfa, pfc;
+                        dust_sub_edges(P, b, j, nj, pa, pc, pfa, pfc);
+                        vec3 da = pa - ea, dc = pc - ec;
                         vec3 dmax = dot(da, da) > dot(dc, dc) ? da : dc;
                         vec3 segTS = (dmax * (0.5 / float(nS))) * 2.0;
                         dust_project_split_scatter(mean, S, chord, flux, exposure, openStart, openEnd, rho, segTS, color, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
@@ -676,29 +843,38 @@ void main() {
                 // the cone: nT pieces along the time segment with the predecessor's lateral
                 // covariance scaled from the cluster's width to the predecessor's
                 vec3 mean, chord; float S[6]; float flux;
-                dust_bin_chord(M, b, vec3(0.0), mean, chord, S, flux);
-                vec2 rho = dust_bin_density_ends(dust_edge_factor(M, b), dust_edge_factor(M, b + 1u));
-                float f = 0.5 * (dust_edge_factor(M, b) + dust_edge_factor(M, b + 1u));
+                dust_bin_chord_sub(M, b, j, nj, vec3(0.0), mean, chord, S, flux);
+                vec2 rho = dust_bin_density_ends(fa, fc);
+                float f = 0.5 * (fa + fc);
                 float f2 = f * f;
-                vec3 hs = 0.5 * invT * segT;
                 float k = DUST_CHORD_VAR_FACTOR;
-                vec3 mid = 0.5 * (M.edges[b].xyz + M.edges[b + 1u].xyz);
+                vec3 mid = 0.5 * (ea + ec);
                 vec3 midP = mid + segT;
                 for (uint t = 0u; t < nT; ++t) {
-                    float u0 = float(t) * invT;
-                    float sc = r0 + (1.0 - r0) * (u0 + 0.5 * invT);
+                    float u0 = dust_piece_bound(t, nT, ratio), u1 = dust_piece_bound(t + 1u, nT, ratio);
+                    float uc = 0.5 * (u0 + u1);
+                    vec3 hs = 0.5 * (u1 - u0) * segT;
+                    float sc = r0 + (1.0 - r0) * uc;
                     float sc2 = sc * sc * f2;
                     vec3 shift = spiral ? dust_spiral_point(mid, midP, ageO, ageP, spAxis, spOmega, u0) - mid : segT * u0;
+                    // the predecessor's covariance turned to the piece's centre, then its time
+                    // Gaussian (dust::subpackets_swept)
+                    float Sp[6];
+                    Sp[0] = P.cov_a.x; Sp[1] = P.cov_a.y; Sp[2] = P.cov_a.z;
+                    Sp[3] = P.cov_a.w; Sp[4] = P.cov_b_age_id.x; Sp[5] = P.cov_b_age_id.y;
+                    if (spiral) dust_rotate_cov(Sp, spAxis, spOmega * (ageP - (ageO + uc * (ageP - ageO))));
+                    dust_phot_support = dust_piece_support_o(nT > 1u, lineM, lineP, oM, cM, oP, cP, spiral, spAxis, spOmega, ageO, ageP, uc, vStd, fLo, ownSup, ownHas, ownO, dust_phot_has_origin, dust_phot_origin);
                     float St[6];
-                    St[0] = P.cov_a.x * sc2 + k * hs.x * hs.x;
-                    St[1] = P.cov_a.y * sc2 + k * hs.x * hs.y;
-                    St[2] = P.cov_a.z * sc2 + k * hs.x * hs.z;
-                    St[3] = P.cov_a.w * sc2 + k * hs.y * hs.y;
-                    St[4] = P.cov_b_age_id.x * sc2 + k * hs.y * hs.z;
-                    St[5] = P.cov_b_age_id.y * sc2 + k * hs.z * hs.z;
-                    dust_project_split_scatter(mean + shift, St, chord, flux * invT, exposure, openStart, openEnd, rho, hs * 2.0, color, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
+                    St[0] = Sp[0] * sc2 + k * hs.x * hs.x;
+                    St[1] = Sp[1] * sc2 + k * hs.x * hs.y;
+                    St[2] = Sp[2] * sc2 + k * hs.x * hs.z;
+                    St[3] = Sp[3] * sc2 + k * hs.y * hs.y;
+                    St[4] = Sp[4] * sc2 + k * hs.y * hs.z;
+                    St[5] = Sp[5] * sc2 + k * hs.z * hs.z;
+                    dust_project_split_scatter(mean + shift + (cellOff ? hs : vec3(0.0)), St, chord, flux * (u1 - u0), exposure, openStart, openEnd, rho, hs * 2.0, color, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
                 }
             }
+          }
         }
     }
     if ((pc.flags & DUST_VIEW_TRACERS) != 0u && dust_is_tracer(floatBitsToUint(M.cov_b_age_id.w))) {

@@ -1,3 +1,4 @@
+using System.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
@@ -10,6 +11,9 @@ public interface ICameraServiceRegistry
     void RegisterSelf(ulong cameraId, CameraService cameraService);
     void UnregisterSelf(ulong cameraId);
     CameraService? Get(ulong cameraId);
+
+    /// <summary>The registered cameras in viewport creation order (camera ids increase).</summary>
+    System.Collections.Generic.IReadOnlyList<CameraService> All { get; }
     
     IObservable<ulong> ViewportCreated { get; }
     IObservable<ulong> ViewportDestroyed { get; }
@@ -49,6 +53,9 @@ public sealed class CameraServiceRegistry : ICameraServiceRegistry, IDisposable
     {
         return _services.TryGetValue(cameraId, out var service) ? service : null;
     }
+
+    public System.Collections.Generic.IReadOnlyList<CameraService> All =>
+        _services.OrderBy(kv => kv.Key).Select(kv => kv.Value).ToList();
 
     public void Dispose()
     {

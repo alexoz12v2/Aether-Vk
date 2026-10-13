@@ -10,6 +10,7 @@ public partial class MainWindow : Window
 {
   private UI.BreadcrumbWindow?    _breadcrumbWindow;
   private UI.OverlaySynchronizer? _breadcrumbSynchronizer;
+  private UI.DesktopBillboardWindowManager? _billboards;
 
   public MainWindow()
   {
@@ -44,11 +45,42 @@ public partial class MainWindow : Window
         nativeHost: this,                     // follow full MainWindow, not the viewport
         platformWindowService: vm.PlatformWindowService
       );
+
+      // Desktop billboards: one window per visible billboard of DesktopBillboardService.
+      if (App.Host?.Services.GetService(typeof(UI.DesktopBillboardWindowManager)) is UI.DesktopBillboardWindowManager billboards)
+      {
+        _billboards = billboards;
+        billboards.Attach(this);
+      }
     }
+  }
+
+  // set once the user answered the unsaved-changes prompt: the next Close goes through
+  private bool _closeConfirmed;
+
+  /// <summary>Unsaved changes: cancels this close, asks Save / Don't save / Cancel, then closes again.</summary>
+  protected override void OnClosing(WindowClosingEventArgs e)
+  {
+    if (!_closeConfirmed && DataContext is Logic.ViewModels.MainWindowViewModel vm && vm.HasUnsavedChanges)
+    {
+      e.Cancel = true;
+      _ = ConfirmAndCloseAsync(vm);
+    }
+    base.OnClosing(e);
+  }
+
+  private async System.Threading.Tasks.Task ConfirmAndCloseAsync(Logic.ViewModels.MainWindowViewModel vm)
+  {
+    if (!await vm.ConfirmDiscardAsync()) return;
+    _closeConfirmed = true;
+    Close();
   }
 
   protected override void OnClosed(EventArgs e)
   {
+    _billboards?.Dispose();
+    _billboards = null;
+
     // Dispose breadcrumb overlay first — OverlaySynchronizer.Dispose() closes the window.
     _breadcrumbSynchronizer?.Dispose();
     _breadcrumbSynchronizer = null;

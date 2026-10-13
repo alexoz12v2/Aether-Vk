@@ -514,7 +514,7 @@ pub fn start_logic_thread(
               );
 
               if send_res.is_ok() {
-                for (idx, (task_id, is_windowless, pe_handle)) in last_tasks.iter().enumerate() {
+                for (task_id, is_windowless, pe_handle) in last_tasks.iter() {
                   // Fire-and-forget: do NOT spin-wait for the render tasklet to call
                   // create_task() and write back the task_id.  The old spin (with 1ms
                   // sleeps) blocked the logic thread for the full render frame duration
@@ -532,7 +532,9 @@ pub fn start_logic_thread(
                   // We can't know the final task_id yet because the render thread hasn't
                   // processed the frame. Instead, we just pass the feedback Arc directly
                   // to the scene context. The cross-sync guard will poll it later.
-                  if let Some(scene_arc) = context.scenes.read().get(&scene_ids[idx]) {
+                  // `idx` enumerates this scene's presentation engines, not `scene_ids`
+                  // (indexing `scene_ids` with it panicked with a second viewport)
+                  if let Some(scene_arc) = context.scenes.read().get(scene_id) {
                     scene_arc
                       .write()
                       .last_render_task = alloc::sync::Arc::clone(task_id);
@@ -1427,7 +1429,11 @@ fn process_command_internal(
     }
 
     // ─── DumpScene ──────────────────────────────────────────────────────────
-    LogicCommand::DumpScene { scene_id, base_dir } => {
+    LogicCommand::DumpScene {
+      scene_id,
+      base_dir,
+      file,
+    } => {
       use crate::simulation_api::{
         emit_external_state_change,
         external_state::{CSceneDumped, ExternalState},
@@ -1451,7 +1457,10 @@ fn process_command_internal(
           now,
           elapsed,
           |_vulkan_device, scene_write, _render_tx| -> EngineResult<()> {
-            utils::write_scene_dump(&scenes, scene_id, scene_write, &base_dir).map(|_| ())
+            match &file {
+              Some(f) => utils::write_scene_dump_file(&scenes, scene_id, scene_write, f),
+              None => utils::write_scene_dump(&scenes, scene_id, scene_write, &base_dir).map(|_| ()),
+            }
           },
         ) {
           let success = result.is_ok();
@@ -4645,12 +4654,30 @@ mod utils {
   /// is not serialised, it regrows from the restored parameters) to
   /// `<base_dir>/scene_<scene_id>/scene.bin` and returns that directory. Shared by
   /// `LogicCommand::DumpScene` and the device-loss dump ([`dump_scenes_on_device_loss`]).
-  pub fn write_scene_dump(
+  /// Writes the scene dump to exactly `file` (its directory is created): savefile states.
+  pub fn write_scene_dump_file(
     scenes: &SimulationSceneData,
     scene_id: u64,
     scene_ctx: &SceneContext,
-    base_dir: &str,
-  ) -> EngineResult<alloc::string::String> {
+    file: &str,
+  ) -> EngineResult<()> {
+    let bytes = encode_scene_dump(scenes, scene_id, scene_ctx)?;
+    if let Some((dir, _)) = file.rsplit_once('/') {
+      if !dir.is_empty() {
+        fs::create_dir_all(dir)
+          .map_err(|_| EngineError::InvalidOperation("DumpScene: cannot create directory"))?;
+      }
+    }
+    fs::write(file, bytes.as_ref())
+      .map_err(|_| EngineError::InvalidOperation("DumpScene: file write failed"))
+  }
+
+  /// The bincode bytes of the scene's `SceneDump`.
+  pub fn encode_scene_dump(
+    scenes: &SimulationSceneData,
+    scene_id: u64,
+    scene_ctx: &SceneContext,
+  ) -> EngineResult<alloc::vec::Vec<u8>> {
     use crate::simulation_api::structs::SceneDump;
     let entities = crate::simulation_api::scene_dump::serialize_scene(&scene_ctx.scene);
     let tm = scenes.time_managers.get(&scene_id).ok_or(EngineError::InvalidNullArgument)?;
@@ -4673,8 +4700,17 @@ mod utils {
       entities,
       particle_snapshot: None,
     };
-    let bytes = bincode::serde::encode_to_vec(&dump, bincode::config::standard())
-      .map_err(|_| EngineError::InvalidOperation("DumpScene: bincode encode failed"))?;
+    bincode::serde::encode_to_vec(&dump, bincode::config::standard())
+      .map_err(|_| EngineError::InvalidOperation("DumpScene: bincode encode failed"))
+  }
+
+  pub fn write_scene_dump(
+    scenes: &SimulationSceneData,
+    scene_id: u64,
+    scene_ctx: &SceneContext,
+    base_dir: &str,
+  ) -> EngineResult<alloc::string::String> {
+    let bytes = encode_scene_dump(scenes, scene_id, scene_ctx)?;
     let dir = alloc::format!("{}/scene_{}", base_dir, scene_id);
     fs::create_dir_all(&dir)
       .and_then(|_| fs::write(alloc::format!("{}/scene.bin", dir), bytes.as_ref()))

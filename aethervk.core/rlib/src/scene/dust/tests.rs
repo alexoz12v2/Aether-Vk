@@ -480,6 +480,207 @@ fn beta_is_radiation_pressure_from_first_principles() {
   );
 }
 
+/// The cone pieces of a turning sample are the samples that would have been taken at their
+/// centre ages ([`subpackets_swept`], [`piece_bound`]): the engine's own clusters from a site 2 km
+/// off the centre of a nucleus turning 0.26 rad between a sample at 468 s and its predecessor at
+/// 2300 s (the young cone of the 1 km frame inside the coma, width ratio ≈ 5), and for every
+/// time-major bin and piece the cluster emitted at the piece's centre age: the piece's covariance
+/// within 10 % (Frobenius) of that cluster's bin packet and its major axis within 0.02 rad. The
+/// predecessor's covariance unturned (the former rule) is checked to miss by far more: its radial
+/// σ, 4× the lateral, lay along the predecessor's ejection direction and doubled the cone's
+/// lateral spread (replay lab, 1 km: judged 0.216 → 0.145 with the turn, 0.102 with the 8
+/// geometric pieces).
+#[test]
+fn turning_pieces_equal_the_sample_at_their_centre() {
+  let axis = unit([0.2, 0.1, 0.97]);
+  let axis_f = [axis[0] as f32, axis[1] as f32, axis[2] as f32];
+  let omega = 2.0 * core::f64::consts::PI / (12.4 * 3600.0);
+  let (rc, vc) = comet_state();
+  let n0 = unit([1.0, -0.3, 0.1]);
+  let off = scale(n0, 2000.0);
+  let (age_o, age_p) = (468.0f64, 2300.0f64);
+  let t_now = T_START + age_p + 10.0;
+  let (centre_now, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_now - T_START);
+  let frame = DustFrame::new(centre_now, t_now, [0.0, 0.0, 0.0, 1.0], 1.0e9)
+    .with_spin([axis[0], axis[1], axis[2], omega]);
+  // the cluster emitted `age` before now from the turning site (as in
+  // `spiral_interpolation_matches_the_rotating_emitter`), its moments in the centre's frame
+  let moments_aged = |age: f64| -> DustMoments {
+    let t_rel = t_now - T_START - age;
+    let mut b = test_batch(1, 0.0);
+    let (centre, v_c) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_rel);
+    let turned = rotate_axis_angle(off, axis, omega * t_rel);
+    b.spin = [axis_f[0], axis_f[1], axis_f[2], omega as f32];
+    b.rot_start = qaxis_angle(axis_f, (omega * t_rel) as f32);
+    b.site_offset = [off[0] as f32, off[1] as f32, off[2] as f32, 0.0];
+    b.jet_dir_aperture = [n0[0] as f32, n0[1] as f32, n0[2] as f32, 0.0];
+    b.lit = [0.0, 0.0, 0.0, LIT_MODE_ALWAYS];
+    b.set_comet(add(centre, turned), v_c, T_START + t_rel, 0.0);
+    let (_, m) = packet_moments(&emit_cluster(&b, 0), 0, &frame);
+    assert!(m.flux() > 0.0, "age {age}: culled");
+    m
+  };
+  let (m, p) = (moments_aged(age_o), moments_aged(age_p));
+  let (sp_axis, sp_omega) = spiral_of(&m, &p).expect("the case turns: a spiral");
+  let seg = sub3f(p.mean(), m.mean());
+  let pieces = subpackets_swept(&m, seg, Some(&p), false, false, None);
+  let n_t = TIME_PIECES_MAX as usize;
+  assert_eq!(pieces.len(), bin_first_packet(SIZE_BINS as usize, n_t));
+  let ratio = width_ratio(&m, Some(&p));
+  assert!(ratio > 4.0, "width ratio {ratio}: not a young cone");
+  // the relative Frobenius distance and the angle between the major axes (power iteration)
+  let full = |c: [f32; 6]| -> [[f64; 3]; 3] {
+    let c = c.map(|v| v as f64);
+    [[c[0], c[1], c[2]], [c[1], c[3], c[4]], [c[2], c[4], c[5]]]
+  };
+  let frob = |a: [f32; 6], b: [f32; 6]| -> f64 {
+    let (a, b) = (full(a), full(b));
+    let (mut d, mut n) = (0.0, 0.0);
+    for i in 0..3 {
+      for j in 0..3 {
+        d += (a[i][j] - b[i][j]).powi(2);
+        n += b[i][j].powi(2);
+      }
+    }
+    (d / n.max(1e-300)).sqrt()
+  };
+  let major = |c: [f32; 6]| -> V3 {
+    let a = full(c);
+    let mut v = unit([1.0, 0.7, 0.3]);
+    for _ in 0..200 {
+      v = unit([
+        a[0][0] * v[0] + a[0][1] * v[1] + a[0][2] * v[2],
+        a[1][0] * v[0] + a[1][1] * v[1] + a[1][2] * v[2],
+        a[2][0] * v[0] + a[2][1] * v[1] + a[2][2] * v[2],
+      ]);
+    }
+    v
+  };
+  let angle = |a: V3, b: V3| dot(a, b).abs().min(1.0).acos();
+  let (mut worst, mut worst_axis, mut worst_old, mut checked) = (0.0f64, 0.0f64, 0.0f64, 0usize);
+  for b in 0..SIZE_BINS as usize {
+    let nj = bin_subbins(b);
+    for j in 0..nj {
+    let mid = |q: &DustMoments| {
+      let (a, c, _, _) = sub_edges(q, b, j, nj);
+      [0.5 * (a[0] + c[0]), 0.5 * (a[1] + c[1]), 0.5 * (a[2] + c[2])]
+    };
+    let (ea, ec, _, _) = sub_edges(&m, b, j, nj);
+    let (seg_t, chord) = (sub3f(mid(&p), mid(&m)), sub3f(ec, ea));
+    if !(norm3f(seg_t) > norm3f(chord)) {
+      continue;
+    }
+    for t in 0..n_t {
+      let uc = 0.5 * (piece_bound(t as u32, n_t as u32, ratio) + piece_bound(t as u32 + 1, n_t as u32, ratio));
+      let age_c = age_o + uc as f64 * (age_p - age_o);
+      let want = bin_packet_sub(&moments_aged(age_c), b, j, nj, [0.0; 3]).cov;
+      let got = pieces[bin_first_packet(b, n_t) + j * n_t + t].cov;
+      // the former rule: the same piece with the predecessor's orientation
+      let old = rotate_cov(got, sp_axis, -sp_omega * (age_p - age_c) as f32);
+      let (e, e_old) = (frob(got, want), frob(old, want));
+      let ax = angle(major(got), major(want));
+      worst = worst.max(e);
+      worst_axis = worst_axis.max(ax);
+      worst_old = worst_old.max(e_old);
+      checked += 1;
+    }
+    }
+  }
+  std::println!(
+    "[turning pieces] {checked} pieces: covariance within {:.1} % (unturned {:.1} %), major axis within {:.4} rad",
+    100.0 * worst,
+    100.0 * worst_old,
+    worst_axis
+  );
+  assert!(checked >= 8 * n_t, "only {checked} time-major pieces: the case does not discriminate");
+  assert!(worst <= 0.10, "a piece's covariance is {:.1} % off its centre sample's", 100.0 * worst);
+  assert!(worst_axis <= 0.02, "a piece's major axis is {worst_axis:.4} rad off");
+  assert!(worst_old > 3.0 * worst.max(0.02), "the unturned rule is not worse ({worst_old:.3}): no discrimination");
+}
+
+/// The support planes of a young turning cell ([`subpackets_supported`], [`cell_line`],
+/// [`support_plane`]) hold its grains and exclude the space behind them: the case of
+/// `turning_pieces_equal_the_sample_at_their_centre` (468 s → 2 300 s, a site 2 km off the
+/// centre turning 0.26 rad). For every packet the plane is set; for every cone piece the cluster
+/// actually emitted at the piece's centre age has every size edge in front of the piece's plane,
+/// its emission origin (its cell line at f = 0) behind it, and its slowest grain (f_lo, 3 σ
+/// slow) within 2 % of the cell's reach of the plane — the plane is where the grains begin. And a
+/// month-old cell, its syndyne bent by radiation pressure, has no cell line (no support).
+#[test]
+fn young_cell_supports_hold_its_grains() {
+  let axis = unit([0.2, 0.1, 0.97]);
+  let axis_f = [axis[0] as f32, axis[1] as f32, axis[2] as f32];
+  let omega = 2.0 * core::f64::consts::PI / (12.4 * 3600.0);
+  let (rc, vc) = comet_state();
+  let n0 = unit([1.0, -0.3, 0.1]);
+  let off = scale(n0, 2000.0);
+  let (age_o, age_p) = (468.0f64, 2300.0f64);
+  let month = 30.0 * 86400.0;
+  let t_now = T_START + month + 10.0;
+  let (centre_now, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_now - T_START);
+  let frame = DustFrame::new(centre_now, t_now, [0.0, 0.0, 0.0, 1.0], 1.0e9)
+    .with_spin([axis[0], axis[1], axis[2], omega]);
+  let moments_aged = |age: f64| -> DustMoments {
+    let t_rel = t_now - T_START - age;
+    let mut b = test_batch(1, 0.0);
+    let (centre, v_c) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_rel);
+    let turned = rotate_axis_angle(off, axis, omega * t_rel);
+    b.spin = [axis_f[0], axis_f[1], axis_f[2], omega as f32];
+    b.rot_start = qaxis_angle(axis_f, (omega * t_rel) as f32);
+    b.site_offset = [off[0] as f32, off[1] as f32, off[2] as f32, 0.0];
+    b.jet_dir_aperture = [n0[0] as f32, n0[1] as f32, n0[2] as f32, 0.0];
+    b.lit = [0.0, 0.0, 0.0, LIT_MODE_ALWAYS];
+    b.set_comet(add(centre, turned), v_c, T_START + t_rel, 0.0);
+    let (_, m) = packet_moments(&emit_cluster(&b, 0), 0, &frame);
+    assert!(m.flux() > 0.0, "age {age}: culled");
+    m
+  };
+  let (m, p) = (moments_aged(age_o), moments_aged(age_p));
+  assert!(spiral_of(&m, &p).is_some(), "the case turns");
+  let seg = sub3f(p.mean(), m.mean());
+  let packets = subpackets_supported(&m, seg, Some(&p), false, false, None);
+  let n_t = TIME_PIECES_MAX as usize;
+  assert_eq!(packets.len(), bin_first_packet(SIZE_BINS as usize, n_t));
+  let ratio = width_ratio(&m, Some(&p));
+  let side = |s: &[f32; 4], x: [f32; 3]| s[0] * x[0] + s[1] * x[1] + s[2] * x[2] - s[3];
+  let (mut worst_front, mut worst_origin, mut worst_gap) = (f32::INFINITY, f32::NEG_INFINITY, 0.0f32);
+  for t in 0..n_t {
+    let sup = packets[t].1;
+    assert!(has_support(&sup), "piece {t}: no support");
+    for b in 0..SIZE_BINS as usize {
+      for j in 0..bin_subbins(b) {
+        assert_eq!(
+          packets[bin_first_packet(b, n_t) + j * n_t + t].1,
+          sup,
+          "bin {b}.{j} piece {t}: the pieces of a time share one plane"
+        );
+      }
+    }
+    let uc = 0.5 * (piece_bound(t as u32, n_t as u32, ratio) + piece_bound(t as u32 + 1, n_t as u32, ratio));
+    let s = moments_aged(age_o + uc as f64 * (age_p - age_o));
+    let (o, c) = cell_line(&s).expect("a young cell is a straight line in f");
+    let reach = norm3f(c) * s.edge_factor(SIZE_BINS as usize);
+    for j in 0..=SIZE_BINS as usize {
+      worst_front = worst_front.min(side(&sup, s.edge(j)) / reach);
+    }
+    worst_origin = worst_origin.max(side(&sup, o) / reach);
+    // the slowest grain: f_lo, three relative speed spreads slow, along the cell's own line
+    let cn = norm3f(c);
+    let v_std = var_along(&s.cov_v(), [c[0] / cn, c[1] / cn, c[2] / cn]).sqrt() / cn;
+    let f_s = s.edge_factor(0) * (1.0 - 3.0 * v_std);
+    let slowest = [o[0] + c[0] * f_s, o[1] + c[1] * f_s, o[2] + c[2] * f_s];
+    worst_gap = worst_gap.max((side(&sup, slowest) / reach).abs());
+  }
+  std::println!(
+    "[young support] edges in front by ≥ {worst_front:.4} of the reach, origin behind by ≥ {:.4}, slowest grain within {worst_gap:.4} of the plane",
+    -worst_origin
+  );
+  assert!(worst_front > 0.0, "an edge of the cell lies behind its plane ({worst_front})");
+  assert!(worst_origin < 0.0, "the emission origin is in front of the plane ({worst_origin})");
+  assert!(worst_gap < 0.02, "the plane is {worst_gap} of the reach off the slowest grain");
+  assert!(cell_line(&moments_aged(month - 3600.0)).is_none(), "a month-old syndyne is not straight in f");
+}
+
 /// The spiral interpolation ([`spiral_point`]) is exact for a rigidly rotating emitter: a site
 /// `s` and jet direction `d` turning with the nucleus (ω about `axis` through the local origin)
 /// put the dust of age τ at `R(−ωτ)·(s + vτ·d)`, and the interpolation between two samples of
@@ -3194,31 +3395,37 @@ fn size_polyline_follows_the_syndyne() {
     "a year-old size range spans more than 1e6 km of syndyne"
   );
   let subs = subpackets(&m, [0.0; 3], None);
-  assert_eq!(subs.len(), SIZE_BINS as usize);
+  assert_eq!(subs.len(), bin_first_packet(SIZE_BINS as usize, 1));
   let total: f32 = subs.iter().map(|p| p.flux).sum();
   assert!((total / m.flux() - 1.0).abs() < 1e-5);
-  for (b, p) in subs.iter().enumerate() {
-    // a chord capsule: from the bin's start edge along its chord, open towards its neighbours
-    let (a, c2) = (m.edge(b), m.edge(b + 1));
-    for k in 0..3 {
-      assert!((p.mean[k] - a[k]).abs() < 1.0, "bin {b}: start edge");
-      assert!((p.seg[k] - (c2[k] - a[k])).abs() < 1.0, "bin {b}: chord");
-    }
-    assert_eq!(
-      p.open,
-      [b > 0, b + 1 < SIZE_BINS as usize],
-      "bin {b}: open ends"
-    );
-    // the covariance is the velocity dispersion scaled by the bin's speed, nothing along the chord
-    let f = 0.5 * (m.edge_factor(b) + m.edge_factor(b + 1));
-    let cv = m.cov_v();
-    for k in 0..6 {
-      assert!(
-        (p.cov[k] - f * f * cv[k]).abs() <= 1e-4 * cv[k].abs() + 1e-3,
-        "bin {b}: cov[{k}] {} vs {}",
-        p.cov[k],
-        f * f * cv[k]
+  for b in 0..SIZE_BINS as usize {
+    let nj = bin_subbins(b);
+    for j in 0..nj {
+      let p = &subs[bin_first_packet(b, 1) + j];
+      // a chord capsule: from the (sub-)bin's start edge along its chord, open towards its
+      // neighbours
+      let (a, c2, fa, fc) = sub_edges(&m, b, j, nj);
+      for k in 0..3 {
+        assert!((p.mean[k] - a[k]).abs() < 1.0, "bin {b}.{j}: start edge");
+        assert!((p.seg[k] - (c2[k] - a[k])).abs() < 1.0, "bin {b}.{j}: chord");
+      }
+      assert_eq!(
+        p.open,
+        [b > 0 || j > 0, b + 1 < SIZE_BINS as usize || j + 1 < nj],
+        "bin {b}.{j}: open ends"
       );
+      // the covariance is the velocity dispersion scaled by the (sub-)bin's speed, nothing along
+      // the chord
+      let f = 0.5 * (fa + fc);
+      let cv = m.cov_v();
+      for k in 0..6 {
+        assert!(
+          (p.cov[k] - f * f * cv[k]).abs() <= 1e-4 * cv[k].abs() + 1e-3,
+          "bin {b}.{j}: cov[{k}] {} vs {}",
+          p.cov[k],
+          f * f * cv[k]
+        );
+      }
     }
   }
   // a wider predecessor: time pieces with growing widths, flux conserved
@@ -3238,19 +3445,29 @@ fn size_polyline_follows_the_syndyne() {
   pred.mean_flux[0] += seg[0];
   assert_eq!(time_pieces(&m, Some(&pred)), 3);
   let pieces = subpackets(&m, seg, Some(&pred));
-  assert_eq!(pieces.len(), 3 * SIZE_BINS as usize);
+  assert_eq!(pieces.len(), 3 * bin_first_packet(SIZE_BINS as usize, 1));
   let total: f32 = pieces.iter().map(|p| p.flux).sum();
   assert!((total / m.flux() - 1.0).abs() < 1e-5);
   for b in 0..SIZE_BINS as usize {
+    let nj = bin_subbins(b);
+    for j in 0..nj {
     let tr = |p: &Packet| p.cov[0] + p.cov[3] + p.cov[5];
-    let (p0, p1, p2) = (&pieces[3 * b], &pieces[3 * b + 1], &pieces[3 * b + 2]);
+    let i0 = bin_first_packet(b, 3) + 3 * j;
+    let (p0, p1, p2) = (&pieces[i0], &pieces[i0 + 1], &pieces[i0 + 2]);
+    let (a, c2, _, _) = sub_edges(&m, b, j, nj);
     assert!(
       tr(p0) < tr(p1) && tr(p1) < tr(p2),
       "bin {b}: widths grow along the segment"
     );
-    // the pieces step along the time segment; their own segment stays the chord
-    assert!((p1.mean[0] - p0.mean[0] - seg[0] / 3.0).abs() < 8.0 + 2e-6 * p0.mean[0].abs());
-    assert!((p0.seg[0] - (m.edge(b + 1)[0] - m.edge(b)[0])).abs() < 1.0 + 1e-6 * p0.mean[0].abs());
+    // the pieces step along the time segment at equal width ratios ([`piece_bound`]: the width
+    // ratio is 4, the first piece covers (4^⅓ − 1)/3 of it); their own segment stays the chord
+    let u1 = piece_bound(1, 3, width_ratio(&m, Some(&pred)));
+    assert!((u1 - (4.0f32.powf(1.0 / 3.0) - 1.0) / 3.0).abs() < 1e-4, "bound {u1}");
+    assert!((p1.mean[0] - p0.mean[0] - seg[0] * u1).abs() < 8.0 + 2e-6 * p0.mean[0].abs());
+    // flux in proportion to the piece's share of the segment
+    assert!((p0.flux / (m.flux() / SIZE_BINS as f32 * sub_share(&m, b, j, nj)) - u1).abs() < 1e-4);
+    assert!((p0.seg[0] - (c2[0] - a[0])).abs() < 1.0 + 1e-6 * p0.mean[0].abs());
+    }
   }
   // no predecessor, or a narrower one: one piece per bin
   assert_eq!(time_pieces(&m, None), 1);
@@ -3809,38 +4026,6 @@ fn tier_packets_with(host: &DustHostState, frame: &DustFrame, threads: usize) ->
     ms.extend(m);
   }
   (rs, ms)
-}
-
-/// Merges a partial pyramid into `out` (same layout): saturating sums for the count / colour
-/// words, the nonzero minimum for the depth word (as `scatter_into`), the maximum of
-/// [`PYR_TAU_MAX`] and the union of [`PYR_LEVEL_MASK`]; the split counters summed, the largest
-/// dropped flux by maximum ([`SplitStats`]).
-fn merge_pyramid(out: &mut [u32], part: &[u32]) {
-  let h = PYRAMID_HEADER_WORDS as usize;
-  let tm = PYR_TAU_MAX as usize;
-  if f32::from_bits(part[tm]) > f32::from_bits(out[tm]) {
-    out[tm] = part[tm];
-  }
-  out[PYR_LEVEL_MASK as usize] |= part[PYR_LEVEL_MASK as usize];
-  let ch = PYR_SPLIT_CHILDREN as usize;
-  out[ch] = out[ch].saturating_add(part[ch]);
-  let ve = PYR_VOLUME_EVALS as usize;
-  out[ve] = out[ve].wrapping_add(part[ve]);
-  let et = PYR_EWA_TEXELS as usize;
-  out[et] = out[et].wrapping_add(part[et]);
-  let df = PYR_SPLIT_DROPPED_FLUX as usize;
-  if f32::from_bits(part[df]) > f32::from_bits(out[df]) {
-    out[df] = part[df];
-  }
-  let w = PYRAMID_TEXEL_WORDS as usize;
-  for (o, p) in out[h..].chunks_exact_mut(w).zip(part[h..].chunks_exact(w)) {
-    for k in 0..4 {
-      sat_add(&mut o[k], p[k]);
-    }
-    if p[4] != 0 && (o[4] == 0 || p[4] < o[4]) {
-      o[4] = p[4];
-    }
-  }
 }
 
 /// Splats every tier into one fresh pyramid of `layout`, each tier's live range split across
@@ -6262,6 +6447,8 @@ fn orthographic_eye_is_at_infinity_along_the_view_axis() {
     albedo: 0.04,
     sun,
     r_h_au: 1.0,
+    support: [0.0; 4],
+    origin: f32::NAN,
   };
   let mvp = ortho_mvp(1000.0, [0.0, 0.0]);
   let (w, h) = (200u32, 200u32);
@@ -6315,6 +6502,8 @@ fn perspective_texels_resolve_the_phase_angle() {
     albedo: 0.04,
     sun,
     r_h_au: 1.0,
+    support: [0.0; 4],
+    origin: f32::NAN,
   };
   // camera at (0, 0, D) looking along −z, 90° field: x_clip = x, y_clip = y, w_clip = D − z
   let d = 1000.0f32;
@@ -7185,6 +7374,136 @@ fn volumetric_packet_matches_the_ray_integral() {
     assert_eq!(stats.children, 0, "{name}: split instead of drawn whole");
     assert!((ratio - 1.0).abs() < 0.01, "{name}: Σ ratio {ratio}");
     assert!(rms < 0.03, "{name}: rel rms {rms}");
+  }
+}
+
+/// A packet cut by its support (`Photometry::support`, the half-space `n·x ≥ w` its grains lie
+/// in) is drawn by the exact ray integral over the half-space with its flux renormalised by the
+/// kept mass ([`volume_scatter`], [`ray_kept`], [`support_mass`]): against an independent
+/// numerical integration of the truncated Gaussian along every pixel's ray (2 000 steps from
+/// the eye, the density times the indicator, over the kept mass `Φ((n·μ − w)/σ_n)`), the 5×5-box
+/// rel rms < 3 % and the totals within 1 %; the plane behind the eye, ahead of it and tilted
+/// across the view, the eye inside and outside the packet. The routing too: a cut perspective
+/// packet goes whole to the volumetric path ([`project_split_scatter`]).
+#[test]
+fn support_cut_matches_the_truncated_ray_integral() {
+  let (d, px) = (200.0f32, 200u32);
+  let mvp = perspective_mvp_60(d);
+  let eye = [0.0f32, 0.0, d];
+  let unit3 = |v: [f32; 3]| {
+    let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    [v[0] / n, v[1] / n, v[2] / n]
+  };
+  for (name, p, n, off) in [
+    (
+      "eye inside, plane across the view",
+      rotated_packet([10.0, -20.0, d - 30.0], [60.0, 40.0, 80.0], 0.0),
+      unit3([0.0, 0.0, -1.0]),
+      -20.0f32,
+    ),
+    (
+      "eye outside, tilted plane through the mean",
+      rotated_packet([0.0, 0.0, d - 150.0], [60.0, 60.0, 80.0], 0.0),
+      unit3([0.6, 0.2, -0.77]),
+      0.0,
+    ),
+    (
+      "plane along the view, cutting one side",
+      rotated_packet([30.0, 0.0, d - 50.0], [20.0, 70.0, 100.0], 0.6),
+      unit3([0.0, 1.0, 0.0]),
+      -30.0,
+    ),
+  ] {
+    // the plane through the mean shifted by `off` along n
+    let support = [n[0], n[1], n[2], n[0] * p.mean[0] + n[1] * p.mean[1] + n[2] * p.mean[2] + off];
+    let phot = Photometry { support, ..Photometry::NONE };
+    let kept = support_mass(&p, &support);
+    assert!(kept > 0.05 && kept < 0.95, "{name}: the plane keeps {kept}");
+    // the exact truncated ray integral, numerically
+    let c = p.cov.map(|v| v as f64);
+    let sm = [[c[0], c[1], c[2]], [c[1], c[3], c[4]], [c[2], c[4], c[5]]];
+    let det = sm[0][0] * (sm[1][1] * sm[2][2] - sm[1][2] * sm[2][1])
+      - sm[0][1] * (sm[1][0] * sm[2][2] - sm[1][2] * sm[2][0])
+      + sm[0][2] * (sm[1][0] * sm[2][1] - sm[1][1] * sm[2][0]);
+    let mut inv = [[0.0f64; 3]; 3];
+    for i in 0..3 {
+      for j in 0..3 {
+        let (i1, i2, j1, j2) = ((i + 1) % 3, (i + 2) % 3, (j + 1) % 3, (j + 2) % 3);
+        inv[i][j] = (sm[j1][i1] * sm[j2][i2] - sm[j1][i2] * sm[j2][i1]) / det;
+      }
+    }
+    let mu = p.mean.map(|v| v as f64);
+    let nn = n.map(|v| v as f64);
+    let sig_n = {
+      let mut v = 0.0;
+      for i in 0..3 {
+        for j in 0..3 {
+          v += nn[i] * sm[i][j] * nn[j];
+        }
+      }
+      v.sqrt()
+    };
+    let kept_exact = 0.5 * (1.0 + erf64((nn[0] * mu[0] + nn[1] * mu[1] + nn[2] * mu[2] - support[3] as f64) / (sig_n * core::f64::consts::SQRT_2)));
+    let norm_c = p.flux as f64 / ((2.0 * core::f64::consts::PI).powf(1.5) * det.sqrt()) / kept_exact;
+    let th = (30.0f64).to_radians().tan();
+    let e = [0.0, 0.0, d as f64];
+    let t_max = 2.0 * (d as f64 + 1000.0);
+    let exact: alloc::vec::Vec<f32> = (0..px * px)
+      .map(|i| {
+        let (x, y) = ((i % px) as f64, (i / px) as f64);
+        let ndc = [(x + 0.5) / (0.5 * px as f64) - 1.0, (y + 0.5) / (0.5 * px as f64) - 1.0];
+        let v = [ndc[0] * th, ndc[1] * th, -1.0];
+        let vn = (v[0] * v[0] + v[1] * v[1] + 1.0).sqrt();
+        let u = [v[0] / vn, v[1] / vn, v[2] / vn];
+        let steps = 2000;
+        let dt = t_max / steps as f64;
+        let mut acc = 0.0;
+        for k in 0..steps {
+          let t = (k as f64 + 0.5) * dt;
+          let xr = [e[0] + t * u[0], e[1] + t * u[1], e[2] + t * u[2]];
+          if nn[0] * xr[0] + nn[1] * xr[1] + nn[2] * xr[2] < support[3] as f64 {
+            continue;
+          }
+          let dd = [xr[0] - mu[0], xr[1] - mu[1], xr[2] - mu[2]];
+          let mut q = 0.0;
+          for a in 0..3 {
+            for b in 0..3 {
+              q += dd[a] * inv[a][b] * dd[b];
+            }
+          }
+          acc += (-0.5 * q).exp() * dt;
+        }
+        // τ per pixel area: the line integral of the density (the volumetric path's unit)
+        (norm_c * acc) as f32
+      })
+      .collect();
+    let peak = exact.iter().cloned().fold(0.0f32, f32::max);
+    let unit = peak * WHITE_TILE_UNIT_REL;
+    let layout = PyramidLayout::new(px, px);
+    let view = SplitView::of(&mvp, eye);
+    let render = |route: bool| -> alloc::vec::Vec<f32> {
+      let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+      pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+      if route {
+        let mut scratch = SplitLeaves::default();
+        project_split_scatter(&p, 1.0, &mvp, &view, &phot, [1.0; 3], &layout, 1.0 / unit, &mut pyr, &mut scratch);
+      } else {
+        volume_scatter(&p, 1.0, &mvp, &view, &phot, [1.0; 3], &layout, 1.0 / unit, &mut pyr);
+      }
+      measure_from_pyramid(&layout, &mut pyr);
+      (0..px * px).map(|i| composite_sample(&layout, &pyr, unit, i % px, i / px).0).collect()
+    };
+    let (img, routed) = (render(false), render(true));
+    let sum = |v: &[f32]| v.iter().map(|&x| x as f64).sum::<f64>();
+    let (ratio, rms) = (sum(&img) / sum(&exact), image_rel_rms(&img, &exact, px));
+    let route_rms = image_rel_rms(&routed, &img, px);
+    std::println!(
+      "[support cut] {name}: kept {kept:.3} (exact {kept_exact:.3}), Σ render / Σ exact {ratio:.4}, 5×5-box rel rms {rms:.4}, routed vs volumetric {route_rms:.2e}"
+    );
+    assert!(((kept as f64) / kept_exact - 1.0).abs() < 0.01, "{name}: kept mass {kept} vs {kept_exact}");
+    assert!((ratio - 1.0).abs() < 0.01, "{name}: Σ ratio {ratio}");
+    assert!(rms < 0.03, "{name}: rel rms {rms}");
+    assert!(route_rms < 1e-6, "{name}: the cut packet was not drawn by the volumetric path ({route_rms})");
   }
 }
 
@@ -8169,4 +8488,284 @@ fn frame_gates_bound_the_work() {
     .suggested_bias(),
     1
   );
+}
+
+
+/// A packet its support cuts that the eye is not near ([`is_volumetric`] false) is drawn as the
+/// moments of its truncation ([`support_truncated`]: 8 sub-chords with closed interior ends,
+/// shared out over the chord's run through the plane's ±3σ zone, 4 slabs each along the
+/// plane's normal) by the EWA ([`project_split_scatter`]): against an
+/// independent numerical integration of the truncated capsule along every pixel's ray (the
+/// chord as 16 points of its linear density, the density times the half-space indicator, over
+/// the kept mass), the totals within 2 % and the 5×5-box rel rms < 6 %; the plane through the
+/// mean, 1 σ ahead of it (16 % kept), tilted across a chord, and a chord the plane crosses
+/// lengthwise. The sub-chords alone (no cut) conserve the image: an open interior end
+/// integrates its Gaussian to infinity and leans on the neighbour's clip plane, which the
+/// neighbour's own projection tilts (a 4-px sub-chord of a 28-px-wide packet drew 1.7× its
+/// flux at the 1 km view's frame edge); closed, the capsule integral splits exactly.
+#[test]
+fn support_truncation_matches_the_truncated_ray_integral() {
+  let (d, px) = (200.0f32, 100u32);
+  let mvp = perspective_mvp_60(d);
+  let eye = [0.0f32, 0.0, d];
+  let view = SplitView::of(&mvp, eye);
+  let unit3 = |v: [f32; 3]| {
+    let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    [v[0] / n, v[1] / n, v[2] / n]
+  };
+  let chord = |mean: [f32; 3], seg: [f32; 3], sig: [f32; 3], angle: f32| Packet {
+    mean,
+    seg,
+    rho: [1.3, 0.7],
+    ..rotated_packet([0.0; 3], sig, angle)
+  };
+  for (name, p, n, off_sig) in [
+    ("Gaussian, plane through the mean", rotated_packet([20.0, -10.0, d - 600.0], [30.0, 20.0, 40.0], 0.4), unit3([0.3, 0.2, 0.93]), 0.0f32),
+    ("Gaussian, plane 1 σ ahead", rotated_packet([-30.0, 20.0, d - 650.0], [30.0, 25.0, 35.0], 0.2), unit3([0.8, 0.1, 0.59]), 1.0),
+    ("chord, tilted plane across it", chord([-60.0, -10.0, d - 600.0], [110.0, 30.0, -40.0], [12.0, 10.0, 15.0], 0.3), unit3([0.9, 0.3, -0.3]), 0.0),
+    ("chord, the plane along it", chord([-60.0, -10.0, d - 600.0], [110.0, 30.0, -40.0], [12.0, 10.0, 15.0], 0.3), unit3([-0.2, 0.95, 0.24]), 0.5),
+  ] {
+    assert!(!is_volumetric(&p, &view), "{name}: the eye is near it");
+    // the plane through the capsule's ρ-weighted centre, `off_sig` normal σ ahead
+    let uc = (p.rho[0] + 2.0 * p.rho[1]) / (3.0 * (p.rho[0] + p.rho[1]));
+    let centre = [p.mean[0] + uc * p.seg[0], p.mean[1] + uc * p.seg[1], p.mean[2] + uc * p.seg[2]];
+    let sig_n = var_along(&p.cov, n).sqrt();
+    let support = [n[0], n[1], n[2], n[0] * centre[0] + n[1] * centre[1] + n[2] * centre[2] + off_sig * sig_n];
+    let phot = Photometry { support, ..Photometry::NONE };
+    let kept = support_mass(&p, &support);
+    assert!(kept > 0.05 && kept < 1.0 - DUST_SUPPORT_CUT_MIN, "{name}: the plane keeps {kept}");
+    // the exact truncated ray integral, numerically: the chord as 16 points of its density
+    let c = p.cov.map(|v| v as f64);
+    let sm = [[c[0], c[1], c[2]], [c[1], c[3], c[4]], [c[2], c[4], c[5]]];
+    let det = sm[0][0] * (sm[1][1] * sm[2][2] - sm[1][2] * sm[2][1])
+      - sm[0][1] * (sm[1][0] * sm[2][2] - sm[1][2] * sm[2][0])
+      + sm[0][2] * (sm[1][0] * sm[2][1] - sm[1][1] * sm[2][0]);
+    let mut inv = [[0.0f64; 3]; 3];
+    for i in 0..3 {
+      for j in 0..3 {
+        let (i1, i2, j1, j2) = ((i + 1) % 3, (i + 2) % 3, (j + 1) % 3, (j + 2) % 3);
+        inv[i][j] = (sm[j1][i1] * sm[j2][i2] - sm[j1][i2] * sm[j2][i1]) / det;
+      }
+    }
+    let nu = 16;
+    let pts: alloc::vec::Vec<([f64; 3], f64)> = (0..nu)
+      .map(|k| {
+        let u = (k as f64 + 0.5) / nu as f64;
+        let w = (p.rho[0] as f64 + (p.rho[1] - p.rho[0]) as f64 * u) / nu as f64;
+        ([0, 1, 2].map(|i| p.mean[i] as f64 + u * p.seg[i] as f64), w)
+      })
+      .collect();
+    let nn = n.map(|v| v as f64);
+    let ws = support[3] as f64;
+    // the kept mass of the 16-point capsule, exactly
+    let kept_exact: f64 = pts
+      .iter()
+      .map(|(m, w)| w * 0.5 * (1.0 + erf64((nn[0] * m[0] + nn[1] * m[1] + nn[2] * m[2] - ws) / (sig_n as f64 * core::f64::consts::SQRT_2))))
+      .sum();
+    let norm_c = p.flux as f64 / ((2.0 * core::f64::consts::PI).powf(1.5) * det.sqrt()) / kept_exact;
+    let th = (30.0f64).to_radians().tan();
+    let e = [0.0, 0.0, d as f64];
+    let (t0, t1, steps) = (300.0f64, 1100.0f64, 1600);
+    let dt = (t1 - t0) / steps as f64;
+    let exact: alloc::vec::Vec<f32> = (0..px * px)
+      .map(|i| {
+        let (x, y) = ((i % px) as f64, (i / px) as f64);
+        let ndc = [(x + 0.5) / (0.5 * px as f64) - 1.0, (y + 0.5) / (0.5 * px as f64) - 1.0];
+        let v = [ndc[0] * th, ndc[1] * th, -1.0];
+        let vn = (v[0] * v[0] + v[1] * v[1] + 1.0).sqrt();
+        let u = [v[0] / vn, v[1] / vn, v[2] / vn];
+        let mut acc = 0.0;
+        for k in 0..steps {
+          let t = t0 + (k as f64 + 0.5) * dt;
+          let xr = [e[0] + t * u[0], e[1] + t * u[1], e[2] + t * u[2]];
+          if nn[0] * xr[0] + nn[1] * xr[1] + nn[2] * xr[2] < ws {
+            continue;
+          }
+          for (m, w) in &pts {
+            let dd = [xr[0] - m[0], xr[1] - m[1], xr[2] - m[2]];
+            let mut q = 0.0;
+            for a in 0..3 {
+              for b in 0..3 {
+                q += dd[a] * inv[a][b] * dd[b];
+              }
+            }
+            if q < 60.0 {
+              acc += w * (-0.5 * q).exp() * dt;
+            }
+          }
+        }
+        (norm_c * acc) as f32
+      })
+      .collect();
+    let peak = exact.iter().cloned().fold(0.0f32, f32::max);
+    let unit = peak * WHITE_TILE_UNIT_REL;
+    let layout = PyramidLayout::new(px, px);
+    let render = |phot: &Photometry, parts: &[Packet]| -> alloc::vec::Vec<f32> {
+      let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+      pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+      let mut scratch = SplitLeaves::default();
+      for q in parts {
+        project_split_scatter(q, 1.0, &mvp, &view, phot, [1.0; 3], &layout, 1.0 / unit, &mut pyr, &mut scratch);
+      }
+      measure_from_pyramid(&layout, &mut pyr);
+      (0..px * px).map(|i| composite_sample(&layout, &pyr, unit, i % px, i / px).0).collect()
+    };
+    let img = render(&phot, &[p]);
+    let sum = |v: &[f32]| v.iter().map(|&x| x as f64).sum::<f64>();
+    let (ratio, rms) = (sum(&img) / sum(&exact), image_rel_rms(&img, &exact, px));
+    // the sub-chords alone conserve the whole packet's image
+    let subs: alloc::vec::Vec<Packet> = (0..DUST_SUPPORT_TRUNC_PIECES)
+      .map(|j| {
+        let k = DUST_SUPPORT_TRUNC_PIECES as f32;
+        sub_chord(&p, j as f32 / k, (j + 1) as f32 / k, j == 0 && p.open[0], j + 1 == DUST_SUPPORT_TRUNC_PIECES && p.open[1])
+      })
+      .collect();
+    let (whole, split) = (render(&Photometry::NONE, &[p]), render(&Photometry::NONE, &subs));
+    let split_ratio = sum(&split) / sum(&whole);
+    std::println!(
+      "[support truncation] {name}: kept {kept:.3} (exact {kept_exact:.3}), Σ render / Σ exact {ratio:.4}, 5×5-box rel rms {rms:.4}; sub-chords / whole {split_ratio:.4}, rms {:.4}",
+      image_rel_rms(&split, &whole, px)
+    );
+    assert!((ratio - 1.0).abs() < 0.02, "{name}: Σ ratio {ratio}");
+    assert!(rms < 0.06, "{name}: rel rms {rms}");
+    assert!((split_ratio - 1.0).abs() < 0.01, "{name}: the sub-chords drew {split_ratio} of the whole");
+  }
+}
+
+/// The slow end bin's sub-bins ([`bin_subbins`], [`sub_edges`], [`sub_share`]): a grain's speed
+/// spread is a fraction of its own speed factor, while a bin packet carries one width at its mid
+/// factor plus its chord's Gaussian, which reached past the slowest grain (the 100 m view: the
+/// young slow end 1.4–28× the truth). One sub-bin is the bin, bit for bit; the sub-bins tile the
+/// bin's chord and factor range exactly, their flux shares (the bin's 1/f ramp) sum to 1 with the
+/// slow side heavier; each carries its own factor's width; and together they put less mass
+/// behind the slowest grain's plane than the whole bin.
+#[test]
+fn slow_end_sub_bins_tile_the_bin() {
+  let (rc, vc) = comet_state();
+  let age = 468.0f64;
+  let t_now = T_START + age + 10.0;
+  let (centre_now, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_now - T_START);
+  let frame = DustFrame::new(centre_now, t_now, [0.0, 0.0, 0.0, 1.0], 1.0e9);
+  let mut b = test_batch(1, 0.0);
+  let t_rel = t_now - T_START - age;
+  let (centre, v_c) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_rel);
+  b.lit = [0.0, 0.0, 0.0, LIT_MODE_ALWAYS];
+  b.set_comet(centre, v_c, T_START + t_rel, 0.0);
+  let (_, m) = packet_moments(&emit_cluster(&b, 0), 0, &frame);
+  assert!(m.flux() > 0.0, "culled");
+  let (o, c) = cell_line(&m).expect("a young cell is a straight line in f");
+  // one sub-bin is the bin, bit for bit
+  for bin in 0..SIZE_BINS as usize {
+    let seg = [3.0, -2.0, 1.0];
+    assert_eq!(sub_edges(&m, bin, 0, 1), (m.edge(bin), m.edge(bin + 1), m.edge_factor(bin), m.edge_factor(bin + 1)));
+    assert_eq!(bin_packet_sub(&m, bin, 0, 1, seg), bin_packet(&m, bin, seg), "bin {bin}");
+    assert_eq!(bin_chord_packet_sub(&m, bin, 0, 1, seg), bin_chord_packet(&m, bin, seg), "bin {bin}");
+  }
+  // the layout: the slow end bin as DUST_END_SUBBINS sub-bins, every other bin whole
+  let subs = subpackets(&m, [0.0; 3], None);
+  assert_eq!(subs.len(), SIZE_BINS as usize - 1 + DUST_END_SUBBINS);
+  assert_eq!(bin_first_packet(SIZE_BINS as usize, 1), subs.len());
+  let total: f32 = subs.iter().map(|p| p.flux).sum();
+  assert!((total / m.flux() - 1.0).abs() < 1e-5, "flux {total} of {}", m.flux());
+  for nj in [2usize, 4, 8] {
+    let shares: alloc::vec::Vec<f32> = (0..nj).map(|j| sub_share(&m, 0, j, nj)).collect();
+    let s: f32 = shares.iter().sum();
+    assert!((s - 1.0).abs() < 1e-5, "{nj} sub-bins: shares sum to {s}");
+    assert!(shares.windows(2).all(|w| w[0] > w[1]), "{nj} sub-bins: the slow side is not heavier: {shares:?}");
+    // contiguous, from the bin's start edge to its end edge
+    let mut prev = m.edge(0);
+    let mut prev_f = m.edge_factor(0);
+    for j in 0..nj {
+      let (a, e, fa, fc) = sub_edges(&m, 0, j, nj);
+      assert_eq!((a, fa), (prev, prev_f), "{nj} sub-bins: sub-bin {j} does not start where {} ends", j.max(1) - 1);
+      assert!(fc > fa);
+      // its own factor's width: f_j² Σ_v plus its chord's Gaussian
+      let p = bin_packet_sub(&m, 0, j, nj, [0.0; 3]);
+      let f = 0.5 * (fa + fc);
+      let h = [0.5 * (e[0] - a[0]), 0.5 * (e[1] - a[1]), 0.5 * (e[2] - a[2])];
+      let cv = m.cov_v();
+      let want = f * f * cv[0] + CHORD_VAR_FACTOR * h[0] * h[0];
+      assert!((p.cov[0] - want).abs() <= 1e-4 * want.abs(), "{nj} sub-bins: sub-bin {j} cov {} vs {want}", p.cov[0]);
+      prev = e;
+      prev_f = fc;
+    }
+    assert_eq!((prev, prev_f), (m.edge(1), m.edge_factor(1)), "{nj} sub-bins: the last ends at the bin's end edge");
+  }
+  // the mass behind the slowest grain's plane (f_lo, three relative speed spreads slow): the
+  // whole bin's against its sub-bins' (time-major packets: the chord as the Gaussian)
+  let cn = norm3f(c);
+  let n = [c[0] / cn, c[1] / cn, c[2] / cn];
+  let v_std = var_along(&m.cov_v(), n).sqrt() / cn;
+  let f_s = m.edge_factor(0) * (1.0 - 3.0 * v_std);
+  let slowest = [o[0] + c[0] * f_s, o[1] + c[1] * f_s, o[2] + c[2] * f_s];
+  let plane = [n[0], n[1], n[2], n[0] * slowest[0] + n[1] * slowest[1] + n[2] * slowest[2]];
+  let behind = |p: &Packet| p.flux * (1.0 - support_mass(p, &plane));
+  let whole = behind(&bin_packet(&m, 0, [0.0; 3]));
+  let split: f32 = (0..DUST_END_SUBBINS).map(|j| behind(&bin_packet_sub(&m, 0, j, DUST_END_SUBBINS, [0.0; 3]))).sum();
+  std::println!(
+    "[sub-bins] the slow bin's mass behind its slowest grain: whole {:.3e}, {} sub-bins {:.3e} ({:.2}×) of its flux {:.3e}",
+    whole,
+    DUST_END_SUBBINS,
+    split,
+    split / whole,
+    m.flux() / SIZE_BINS as f32
+  );
+  assert!(split < 0.5 * whole, "the sub-bins put {split:.3e} behind the slowest grain, the bin {whole:.3e}");
+}
+
+/// The cone of grains ([`conic_slabs`]): a young cell's grains spread laterally in proportion to
+/// their distance from the cell's origin (their own speed), a packet carries one width along its
+/// length. The slabs conserve the packet's flux and, uncut, its mean along the axis; each slab's
+/// lateral σ over its distance from the origin plane is the packet centre's (the cone's opening);
+/// the radial σ is the slab's own; cut by the support plane, the slabs lie in front of it and still
+/// carry the whole flux. No cell (origin not finite, or the centre not ahead of it): no slabs.
+#[test]
+fn conic_slabs_scale_the_width_with_the_distance() {
+  // the cell's axis along z, its origin plane at z = 0; a chord along the axis from 300 to 700 m
+  // (a young bin), radial σ 60 m, lateral σ 40 m (no cross terms)
+  let n = [0.0f32, 0.0, 1.0];
+  let p = Packet {
+    mean: [10.0, -5.0, 300.0],
+    cov: [1600.0, 0.0, 0.0, 1600.0, 0.0, 3600.0],
+    seg: [0.0, 0.0, 400.0],
+    flux: 2.5,
+    open: [false, false],
+    rho: [1.2, 0.8],
+    seg_t: [0.0; 3],
+  };
+  let uc = (p.rho[0] + 2.0 * p.rho[1]) / (3.0 * (p.rho[0] + p.rho[1]));
+  let d_c = p.mean[2] + uc * p.seg[2];
+  let mut out = [p; DUST_SUPPORT_TRUNC_MAX];
+  assert_eq!(conic_slabs(&p, &[n[0], n[1], n[2], -1.0e4], f32::NAN, &mut out), 0, "no origin: no slabs");
+  assert_eq!(conic_slabs(&p, &[n[0], n[1], n[2], -1.0e4], 1.0e4, &mut out), 0, "the centre behind the origin: no slabs");
+  for (name, w_cut, cut) in [("uncut", -1.0e4f32, false), ("cut 1 σ behind the start", 240.0, true)] {
+    let s = [n[0], n[1], n[2], w_cut];
+    let k = conic_slabs(&p, &s, 0.0, &mut out);
+    assert!(k >= 8, "{name}: {k} slabs");
+    let flux: f32 = out[..k].iter().map(|q| q.flux).sum();
+    assert!((flux / p.flux - 1.0).abs() < 1e-5, "{name}: the slabs carry {flux} of {}", p.flux);
+    let mut worst_open = 0.0f32;
+    let mut mean_z = 0.0f32;
+    for q in &out[..k] {
+      let z = q.mean[2] + 0.5 * q.seg[2];
+      mean_z += q.flux * z / flux;
+      // the lateral σ over the distance from the origin plane: the packet centre's 40 m / d_c
+      let lat = q.cov[0].sqrt();
+      worst_open = worst_open.max((lat / z / (40.0 / d_c) - 1.0).abs());
+      // the axis stays the axis: no lateral–axial cross terms appear
+      assert!(q.cov[2].abs() < 1e-3 * q.cov[0] && q.cov[4].abs() < 1e-3 * q.cov[3], "{name}: cross terms {:?}", q.cov);
+      if cut {
+        assert!(z > w_cut, "{name}: a slab's centre {z} is behind the plane {w_cut}");
+      }
+    }
+    std::println!("[cone slabs] {name}: {k} slabs, lateral σ ∝ distance within {:.2} %, mean along the axis {mean_z:.1} m (packet {:.1} m)", 100.0 * worst_open, p.mean[2] + 0.5 * p.seg[2]);
+    // the slab's lateral σ is the packet's scaled at the slab's own centre: linear in the distance
+    // to within the slab's spread along the axis (its centre is the ρ-weighted one)
+    assert!(worst_open < 0.03, "{name}: lateral σ over distance off the cone's opening by {worst_open}");
+    if !cut {
+      // the packet's mean along the axis (ρ-weighted chord plus the symmetric Gaussian): kept
+      let want = p.mean[2] + (p.rho[0] + 2.0 * p.rho[1]) / (3.0 * (p.rho[0] + p.rho[1])) * p.seg[2];
+      assert!((mean_z - want).abs() < 0.01 * 60.0, "{name}: mean along the axis {mean_z} vs {want}");
+    }
+  }
 }
