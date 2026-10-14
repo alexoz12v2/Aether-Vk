@@ -407,8 +407,22 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
           double min_km = min_au * 1.495978707e8;
           if (min_km < 1.0)
           {
-            double nice_m = GetNiceNumber(min_km * 1000.0);
-            SetMeasurement(nice_m, nice_m * (_viewportVm.Width / (W_au * 1.495978707e11)), "m");
+            double min_m = min_km * 1000.0;
+            if (min_m < 0.01)
+            {
+              double nice_mm = GetNiceNumber(min_m * 1000.0);
+              SetMeasurement(nice_mm, nice_mm * (_viewportVm.Width / (W_au * 1.495978707e14)), "mm");
+            }
+            else if (min_m < 1.0)
+            {
+              double nice_cm = GetNiceNumber(min_m * 100.0);
+              SetMeasurement(nice_cm, nice_cm * (_viewportVm.Width / (W_au * 1.495978707e13)), "cm");
+            }
+            else
+            {
+              double nice_m = GetNiceNumber(min_m);
+              SetMeasurement(nice_m, nice_m * (_viewportVm.Width / (W_au * 1.495978707e11)), "m");
+            }
           }
           else
           {

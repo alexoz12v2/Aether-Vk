@@ -298,6 +298,62 @@ pub fn time_cell_offset(pyramid: &[u32]) -> bool {
   (pyramid[PYR_SPLIT_DEPTH as usize] >> 28) & 1 != 0
 }
 
+/// Bit 29 of [`PYR_SPLIT_DEPTH`] (host-written: `AETHERVK_DUST_LEGACY_KERNEL=1` or
+/// `Device::dust_set_legacy_kernel`): the frame draws the kernel before the cone of grains — no
+/// [`conic_slabs`], no slow-end sub-bins ([`bin_subbins`]) — for measuring what they cost on the
+/// same build. Mirror of `dust_legacy_kernel`.
+pub const DUST_FRAME_LEGACY_KERNEL_BIT: u32 = 29;
+
+/// Bits 30–31 of [`PYR_SPLIT_DEPTH`]: a GPU timing probe (host-written from
+/// `AETHERVK_DUST_TIMING_PROBE`; diagnostics, never set in production, GPU only: the CPU mirror
+/// ignores them), the image wrong by design. 1 = `plain_add`: `dust_atomic_add_sat` is a plain
+/// `atomicAdd` in the splat (what the compare-and-swap loop costs). 2 = `no_volume_writes`: the
+/// volumetric texels are evaluated but not written (the math against the writes). 3 =
+/// `no_volume`: volumetric packets are dropped (what the screen part costs alone).
+pub const DUST_FRAME_PROBE_SHIFT: u32 = 30;
+
+/// The probe bits of `AETHERVK_DUST_TIMING_PROBE` (`plain_add`, `no_volume_writes`, `no_volume`;
+/// [`DUST_FRAME_PROBE_SHIFT`]); 0 when unset or unknown
+pub fn timing_probe_bits(v: &str) -> u32 {
+  let probe = match v.trim() {
+    "plain_add" => 1,
+    "no_volume_writes" => 2,
+    "no_volume" => 3,
+    _ => 0,
+  };
+  probe << DUST_FRAME_PROBE_SHIFT
+}
+
+/// Whether the frame of `pyramid`'s header draws the legacy kernel ([`DUST_FRAME_LEGACY_KERNEL_BIT`])
+pub fn legacy_kernel(pyramid: &[u32]) -> bool {
+  (pyramid[PYR_SPLIT_DEPTH as usize] >> DUST_FRAME_LEGACY_KERNEL_BIT) & 1 != 0
+}
+
+#[cfg(feature = "std")]
+std::thread_local! {
+  /// the legacy-kernel bit of the frame this thread is splatting ([`set_legacy_kernel`]): per
+  /// thread, so a test's legacy frame cannot leak into another test's packets
+  static LEGACY_KERNEL: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+#[cfg(not(feature = "std"))]
+static LEGACY_KERNEL_NO_STD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Sets this thread's legacy-kernel flag (the splat, per cluster, from the frame's header; replays)
+pub fn set_legacy_kernel(on: bool) {
+  #[cfg(feature = "std")]
+  LEGACY_KERNEL.with(|c| c.set(on));
+  #[cfg(not(feature = "std"))]
+  LEGACY_KERNEL_NO_STD.store(on, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// This thread's legacy-kernel flag ([`set_legacy_kernel`])
+pub fn legacy_kernel_on() -> bool {
+  #[cfg(feature = "std")]
+  return LEGACY_KERNEL.with(|c| c.get());
+  #[cfg(not(feature = "std"))]
+  return LEGACY_KERNEL_NO_STD.load(core::sync::atomic::Ordering::Relaxed);
+}
+
 /// the frame's [`time_cell_offset`] for [`subpackets_swept`] (set per cluster by the splat from the
 /// header; a diagnostic, so a process-wide flag rather than a parameter through every caller)
 static TIME_CELL_OFFSET: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -784,6 +840,69 @@ pub struct Packet {
   pub seg_t: [f32; 3],
 }
 
+// ─── Chord groups (8 ms plan: volumetric clusters drawn with fewer, longer packets) ──────────
+// Inside the size-bin loop of [`subpackets_cells`] a "bin" can span `g` consecutive size bins
+// ([`group_bins`]): its edges are `b` and `b + g`, its speed factors theirs, its share `g` bins'
+// flux, its density ramp linear between its end factors ([`bin_density_ends`]). `g` is chosen per
+// cluster ([`cluster_group`]) and is 1 everywhere else.
+#[cfg(feature = "std")]
+std::thread_local! {
+  static GROUP_ACTIVE: core::cell::Cell<usize> = const { core::cell::Cell::new(1) };
+  static GROUP_REQUESTED: core::cell::Cell<usize> = const { core::cell::Cell::new(1) };
+}
+#[cfg(not(feature = "std"))]
+static GROUP_ACTIVE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(1);
+#[cfg(not(feature = "std"))]
+static GROUP_REQUESTED: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(1);
+
+/// The size bins one bin of the loop spans now (1 outside a grouped cluster's bin loop)
+pub fn group_bins() -> usize {
+  #[cfg(feature = "std")]
+  return GROUP_ACTIVE.with(|c| c.get());
+  #[cfg(not(feature = "std"))]
+  return GROUP_ACTIVE.load(core::sync::atomic::Ordering::Relaxed);
+}
+fn set_group_active(g: usize) {
+  #[cfg(feature = "std")]
+  GROUP_ACTIVE.with(|c| c.set(g));
+  #[cfg(not(feature = "std"))]
+  GROUP_ACTIVE.store(g, core::sync::atomic::Ordering::Relaxed);
+}
+/// Requests chord groups of `g` bins for the next [`subpackets_cells`] (the cluster's draw;
+/// [`cluster_group`]); 1 = single bins
+pub fn request_group(g: usize) {
+  let g = if g >= 1 && SIZE_BINS as usize % g == 0 { g } else { 1 };
+  #[cfg(feature = "std")]
+  GROUP_REQUESTED.with(|c| c.set(g));
+  #[cfg(not(feature = "std"))]
+  GROUP_REQUESTED.store(g, core::sync::atomic::Ordering::Relaxed);
+}
+fn requested_group() -> usize {
+  #[cfg(feature = "std")]
+  return GROUP_REQUESTED.with(|c| c.get());
+  #[cfg(not(feature = "std"))]
+  return GROUP_REQUESTED.load(core::sync::atomic::Ordering::Relaxed);
+}
+
+/// The chord group of cluster `m` seen from `view` (mirror of `dust_cluster_group`): `g` when the
+/// view is perspective and both end bins of its polyline — the narrowest, slow end and the fast
+/// end — would be drawn volumetrically from their midpoints ([`is_volumetric`]): the eye is near
+/// or inside every bin, the light is the smooth ray integral, and fewer, longer packets carry it.
+/// 1 otherwise.
+pub fn cluster_group(m: &DustMoments, view: &SplitView, g: usize) -> usize {
+  if g <= 1 || !view.volumetric {
+    return 1;
+  }
+  for b in [0usize, SIZE_BINS as usize - 1] {
+    let mut p = bin_packet(m, b, [0.0; 3]);
+    p.seg = [0.0; 3];
+    if !is_volumetric(&p, view) {
+      return 1;
+    }
+  }
+  g
+}
+
 /// The relative density at the two ends of a size bin's chord whose edges have the speed
 /// factors `f0 ≤ f1` (`√(β_j/β)`): `(f0 + f1) / (2 f0)` and `(f0 + f1) / (2 f1)`, mean 1 over the
 /// chord (position ∝ β, cross-section uniform in √β). Mirror of `dust_bin_density_ends`.
@@ -820,8 +939,9 @@ pub fn bin_packet(m: &DustMoments, b: usize, seg: [f32; 3]) -> Packet {
 /// [`CHORD_VAR_FACTOR`] half-chords², reaches past the slowest grain at the polyline's slow end;
 /// sub-bins carry their own factor and a chord `nj` times shorter.
 pub fn sub_edges(m: &DustMoments, b: usize, j: usize, nj: usize) -> ([f32; 3], [f32; 3], f32, f32) {
-  let (e0, e1) = (m.edge(b), m.edge(b + 1));
-  let (f0, f1) = (m.edge_factor(b), m.edge_factor(b + 1));
+  let g = group_bins();
+  let (e0, e1) = (m.edge(b), m.edge(b + g));
+  let (f0, f1) = (m.edge_factor(b), m.edge_factor(b + g));
   // the bin's own edges exactly at its ends (one sub-bin is the bin, bit for bit)
   let at = |k: usize| -> ([f32; 3], f32) {
     if k == 0 {
@@ -844,7 +964,7 @@ pub fn sub_share(m: &DustMoments, b: usize, j: usize, nj: usize) -> f32 {
   if nj <= 1 {
     return 1.0;
   }
-  let [r0, r1] = bin_density_ends(m.edge_factor(b), m.edge_factor(b + 1));
+  let [r0, r1] = bin_density_ends(m.edge_factor(b), m.edge_factor(b + group_bins()));
   let (u0, u1) = (j as f32 / nj as f32, (j + 1) as f32 / nj as f32);
   (u1 - u0) * (r0 + (r1 - r0) * 0.5 * (u0 + u1)) / (0.5 * (r0 + r1))
 }
@@ -870,7 +990,7 @@ pub fn bin_packet_sub(m: &DustMoments, b: usize, j: usize, nj: usize, seg: [f32;
       f2 * cv[5] + k * h[2] * h[2],
     ],
     seg,
-    flux: m.flux() / SIZE_BINS as f32 * sub_share(m, b, j, nj),
+    flux: m.flux() * group_bins() as f32 / SIZE_BINS as f32 * sub_share(m, b, j, nj),
     open: [false, false],
     rho: [1.0, 1.0],
     seg_t: scale3(h, 2.0),
@@ -953,8 +1073,8 @@ pub fn bin_chord_packet_sub(m: &DustMoments, b: usize, j: usize, nj: usize, seg_
       f2 * cv[5] + k * h[2] * h[2],
     ],
     seg: sub3(c, a),
-    flux: m.flux() / SIZE_BINS as f32 * sub_share(m, b, j, nj),
-    open: [b > 0 || j > 0, b + 1 < SIZE_BINS as usize || j + 1 < nj],
+    flux: m.flux() * group_bins() as f32 / SIZE_BINS as f32 * sub_share(m, b, j, nj),
+    open: [b > 0 || j > 0, b + group_bins() < SIZE_BINS as usize || j + 1 < nj],
     rho: bin_density_ends(fa, fc),
     seg_t: scale3(h, 2.0),
   }
@@ -1055,7 +1175,7 @@ pub fn time_sweep(
     return 1;
   };
   let mut gap = 0.0f32;
-  for e in [b, b + 1] {
+  for e in [b, b + group_bins()] {
     if let (Some(a), Some(c)) = (px(m.edge(e)), px(p.edge(e))) {
       let d = [c[0] - a[0], c[1] - a[1]];
       gap = gap.max(<f32 as FloatLike>::sqrt(d[0] * d[0] + d[1] * d[1]));
@@ -1100,8 +1220,8 @@ pub fn bin_sweep_packet_sub(m: &DustMoments, p: &DustMoments, b: usize, j: usize
       f2 * cv[5] + kv * h[2] * h[2],
     ],
     seg: sub3(ck, ak),
-    flux: m.flux() / (SIZE_BINS * n_s) as f32 * sub_share(m, b, j, nj),
-    open: [b > 0 || j > 0, b + 1 < SIZE_BINS as usize || j + 1 < nj],
+    flux: m.flux() * group_bins() as f32 / (SIZE_BINS * n_s) as f32 * sub_share(m, b, j, nj),
+    open: [b > 0 || j > 0, b + group_bins() < SIZE_BINS as usize || j + 1 < nj],
     rho: bin_density_ends(fa, fc),
     seg_t: scale3(h, 2.0),
   }
@@ -1275,8 +1395,11 @@ pub fn subpackets_cells(
   // there the chord's Gaussian and the mid-factor width reach past the slowest grain
   // (`AETHERVK_DUST_LAB_SUBBINS=J`, CPU only: every bin as J sub-bins; 1 the former packets)
   let nj_lab = lab_knob("AETHERVK_DUST_LAB_SUBBINS").map(|v| (v as usize).clamp(1, 16));
-  for b in 0..SIZE_BINS as usize {
-  let nj = nj_lab.unwrap_or_else(|| bin_subbins(b));
+  // the cluster's chord groups ([`cluster_group`]): `g` bins per packet, no sub-bins then
+  let g = requested_group();
+  set_group_active(g);
+  for b in (0..SIZE_BINS as usize).step_by(g) {
+  let nj = if g > 1 { 1 } else { nj_lab.unwrap_or_else(|| bin_subbins(b)) };
   for j in 0..nj {
     let (ea, ec, _, _) = sub_edges(m, b, j, nj);
     // the time segment of this bin: to the *same bin* of the predecessor (its own sizes: a young
@@ -1396,6 +1519,7 @@ pub fn subpackets_cells(
     }
   }
   }
+  set_group_active(1);
   out.into_iter().zip(sup).map(|(p, (s, w))| (p, s, w)).collect()
 }
 
@@ -1842,7 +1966,7 @@ pub const DUST_END_SUBBINS: usize = 2;
 
 /// The sub-bins size bin `b` is drawn as ([`DUST_END_SUBBINS`] for the slow end bin, else 1)
 pub fn bin_subbins(b: usize) -> usize {
-  if b == 0 { DUST_END_SUBBINS } else { 1 }
+  if b == 0 && !legacy_kernel_on() { DUST_END_SUBBINS } else { 1 }
 }
 
 /// The index of size bin `b`'s first packet in a cluster's list ([`subpackets_cells`]) when every
@@ -2897,6 +3021,10 @@ pub fn volume_scatter(
   inv_unit: f32,
   pyramid: &mut [u32],
 ) -> u32 {
+  // the packet's rounding seed, drawn first (mirror of `dust_volume_scatter`)
+  let seed = next_packet_seed();
+  #[cfg(feature = "std")]
+  VOLUME_CALLS.with(|c| c.set(c.get() + 1));
   let vs = VolumeStats::load(pyramid);
   let (bias, axis) = (vs.bias, vs.axis);
   let mut pieces = [VolumePiece::default(); DUST_VOLUME_PIECES_MAX as usize];
@@ -2944,13 +3072,18 @@ pub fn volume_scatter(
   } else {
     1.0
   };
-  for pc in pieces.iter().take(plan.pieces as usize) {
+  for (k, pc) in pieces.iter().take(plan.pieces as usize).enumerate() {
     let (tx0, tx1, ty0, ty1) = volume_range(pc, level, layout);
+    // each piece's row segments carry their own dither ([`DUST_SEGMENT_TEXELS`])
+    let piece_seed = dust_hash32(seed ^ k as u32);
     for ty in ty0..=ty1 {
       let yc = (ty as f32 + 0.5) * sz;
       let ny = 2.0 * yc / hf - 1.0;
       let b_row = sub3(r1, scale3(r3, ny));
       for tx in tx0..=tx1 {
+        if (tx - tx0) as u32 % DUST_SEGMENT_TEXELS == 0 {
+          carry = segment_carry(piece_seed, (ty as u32) << 16 | tx as u32);
+        }
         let xc = (tx as f32 + 0.5) * sz;
         let nx = 2.0 * xc / wf - 1.0;
         let a_row = sub3(r0, scale3(r3, nx));
@@ -3305,6 +3438,7 @@ pub fn project_split_scatter(
     && has_support(&phot.support)
     && phot.origin.is_finite()
     && !is_volumetric(p, view)
+    && !legacy_kernel_on()
     && !lab_knob("AETHERVK_DUST_LAB_APEX").is_some_and(|v| v <= 0.0)
   {
     let mut parts = [*p; DUST_SUPPORT_TRUNC_MAX];
@@ -3560,6 +3694,186 @@ pub fn unpack_color(w: u32) -> [f32; 3] {
 #[inline]
 pub fn sat_add(a: &mut u32, b: u32) {
   *a = a.saturating_add(b);
+  #[cfg(feature = "std")]
+  SAT_ADDS.with(|c| c.set(c.get() + 1));
+}
+
+// The splat's work per cluster (diagnostics, `AETHERVK_DUST_WORK_LOG=1`): the saturating adds
+// each cluster makes ([`sat_add`]: one compare-and-swap loop each on the GPU) and its split
+// children, volume evaluations and EWA texel units (the header counters' increase), logged by
+// [`splat_tier_range`] and taken by [`take_work_log`]. Off by default: nothing is recorded.
+#[cfg(feature = "std")]
+std::thread_local! {
+  static SAT_ADDS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+  static VOLUME_CALLS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
+}
+#[cfg(feature = "std")]
+static LAB_WORK_LOG: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+#[cfg(feature = "std")]
+static WORK_LOG: std::sync::Mutex<alloc::vec::Vec<ClusterWork>> = std::sync::Mutex::new(alloc::vec::Vec::new());
+
+/// The texel run a dither carry stays within ([`segment_carry`]): a packet's texels are drawn in
+/// row segments of this many columns (from the row's first column), each starting its carry at a
+/// hashed phase, so a segment's counts do not depend on which thread draws it or in what order
+/// (the packet queue draws segments in parallel). The carry keeps a faint packet's flux: a
+/// segment's counts are `⌊Σ τ + u⌋` with `u` uniform, unbiased, where a carry restarting at 0
+/// would drop up to half a count per segment.
+pub const DUST_SEGMENT_TEXELS: u32 = 16;
+
+// ─── The packet queue (GPU only: `dust_scatter.glsl`, `dust_draw_queue.comp`) ───────────────
+// A packet whose band holds more than [`DUST_QUEUE_MIN_TEXELS`] texels is appended to the view's
+// queue by its cluster's thread, as row ranges of at most [`DUST_QUEUE_RECORD_TEXELS`] texels,
+// and drawn by a whole workgroup in `Device::cmd_dust_frame_end` (the row segments shared by the
+// 64 invocations). The drawing is [`scatter_into`]'s, segment for segment ([`DUST_SEGMENT_TEXELS`]),
+// so the CPU mirror needs no queue. The queue lives in the pyramid buffer after
+// `PyramidLayout::total_words`: [`DUST_QUEUE_HEADER_WORDS`] (x, 1, 1 for the indirect dispatch; the
+// raw append counter; a capacity override, 0 = [`DUST_QUEUE_CAPACITY`]) then the records.
+pub const DUST_QUEUE_HEADER_WORDS: u32 = 8;
+pub const DUST_QUEUE_RECORD_WORDS: u32 = 64;
+/// records per frame: 2¹⁸ × 256 B = 64 MiB per view; a fuller queue draws the rest in-thread
+pub const DUST_QUEUE_CAPACITY: u32 = 1 << 18;
+pub const DUST_QUEUE_MIN_TEXELS: f32 = 64.0;
+pub const DUST_QUEUE_RECORD_TEXELS: f32 = 4096.0;
+/// the queue's words after the pyramid
+pub const DUST_QUEUE_WORDS: u32 = DUST_QUEUE_HEADER_WORDS + DUST_QUEUE_CAPACITY * DUST_QUEUE_RECORD_WORDS;
+/// [`PYR_FLAGS`] bits (host-written, `AETHERVK_DUST_QUEUE=0|all` or the device's test hook): no
+/// queue (every packet in-thread, the A/B) / every packet queued (tests)
+pub const DUST_FRAME_QUEUE_OFF: u32 = 1 << 28;
+pub const DUST_FRAME_QUEUE_ALL: u32 = 1 << 29;
+
+// The packet rounding seeds (mirror of `dust_cluster_seed` / `dust_packet_ord`): per cluster
+// (its compact index) and per packet in the order the cluster's thread draws them
+#[cfg(feature = "std")]
+std::thread_local! {
+  static PACKET_SEQ: core::cell::Cell<(u32, u32)> = const { core::cell::Cell::new((0, 0)) };
+}
+#[cfg(not(feature = "std"))]
+static PACKET_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Starts cluster `index`'s packet seeds (mirror of the splat's `main`)
+pub fn begin_cluster_packets(index: u32) {
+  let seed = dust_hash32(index);
+  #[cfg(feature = "std")]
+  PACKET_SEQ.with(|c| c.set((seed, 0)));
+  #[cfg(not(feature = "std"))]
+  PACKET_SEQ.store(seed as u64, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// The next packet's rounding seed (mirror of `dust_next_packet_seed`)
+pub fn next_packet_seed() -> u32 {
+  #[cfg(feature = "std")]
+  let (seed, ord) = PACKET_SEQ.with(|c| {
+    let v = c.get();
+    c.set((v.0, v.1.wrapping_add(1)));
+    v
+  });
+  #[cfg(not(feature = "std"))]
+  let (seed, ord) = {
+    let v = PACKET_SEQ.fetch_add(1 << 32, core::sync::atomic::Ordering::Relaxed);
+    (v as u32, (v >> 32) as u32)
+  };
+  dust_hash32(seed ^ ord.wrapping_mul(0x9E37_79B9))
+}
+
+/// A segment's starting carry, uniform in [−½, ½) (mirror of `dust_segment_carry`); `key` names
+/// the segment within its packet
+pub fn segment_carry(seed: u32, key: u32) -> f32 {
+  (dust_hash32(seed ^ dust_hash32(key)) >> 8) as f32 * (1.0 / 16_777_216.0) - 0.5
+}
+
+/// One cluster's splat work ([`take_work_log`])
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ClusterWork {
+  /// the compact index in its tier, and the tier's live count (which tier it was)
+  pub index: u32,
+  pub live: u32,
+  pub age_s: f32,
+  /// saturating texel-word adds ([`sat_add`])
+  pub adds: u64,
+  pub split_children: u32,
+  pub volume_evals: u32,
+  pub ewa_units: u32,
+  /// volumetric packets drawn ([`volume_scatter`] calls)
+  pub volume_packets: u32,
+  /// the pooling study: the size polyline's largest edge offset from the pooled mean over the
+  /// bins' width along it (rule A), the polyline's largest angle from the eye about its mean (rad,
+  /// rule B), and the mean's distance from the eye (m)
+  pub shape_ratio: f32,
+  pub spread_rad: f32,
+  pub dist_m: f32,
+}
+
+/// The pooling study's shape of cluster `m` seen from `eye` ([`ClusterWork::shape_ratio`] …)
+pub fn pool_study(m: &DustMoments, eye: [f32; 3]) -> ClusterWork {
+  let pooled = pooled_packet(m, [0.0; 3]);
+  let within = pooled_within_cov(m, [0.0; 3]);
+  let mut extent = 0.0f32;
+  let mut dir = [0.0f32; 3];
+  let mut spread = 0.0f32;
+  let to_mean = sub3(pooled.mean, eye);
+  let dm = <f32 as FloatLike>::sqrt(dot3(to_mean, to_mean));
+  for j in 0..=SIZE_BINS as usize {
+    let d = sub3(m.edge(j), pooled.mean);
+    let r = <f32 as FloatLike>::sqrt(dot3(d, d));
+    if r > extent {
+      extent = r;
+      dir = scale3(d, 1.0 / r.max(1e-30));
+    }
+    let to_e = sub3(m.edge(j), eye);
+    let de = <f32 as FloatLike>::sqrt(dot3(to_e, to_e));
+    let c = (dot3(to_e, to_mean) / (de * dm).max(1e-30)).clamp(-1.0, 1.0);
+    spread = spread.max(<f32 as FloatLike>::acos(c));
+  }
+  let sw = <f32 as FloatLike>::sqrt(var_along(&within, dir).max(1e-30));
+  ClusterWork {
+    shape_ratio: if extent > 0.0 { extent / sw } else { 0.0 },
+    spread_rad: spread,
+    dist_m: dm,
+    ..ClusterWork::default()
+  }
+}
+
+/// The work log since the last call ([`ClusterWork`]; empty unless `AETHERVK_DUST_WORK_LOG=1`).
+/// With `AETHERVK_DUST_POOL_STUDY=1` it also logs which clusters' volumetric packets the two
+/// pooling rules would cover: A (shape ratio ≤ 0.25 / 0.5 / 1) and B (spread ≤ 1/8, 1/4, 1/2 rad).
+#[cfg(feature = "std")]
+pub fn take_work_log() -> alloc::vec::Vec<ClusterWork> {
+  let log = core::mem::take(&mut *WORK_LOG.lock().unwrap_or_else(|e| e.into_inner()));
+  if std::env::var("AETHERVK_DUST_POOL_STUDY").is_ok_and(|v| v.trim() == "1") && !log.is_empty() {
+    let vp: u64 = log.iter().map(|c| c.volume_packets as u64).sum();
+    let ve: u64 = log.iter().map(|c| c.volume_evals as u64).sum();
+    aethervk_oshal_rlib::log!("[pool study] {} clusters, {vp} volumetric packets, {ve} evaluations", log.len());
+    for k in [0.25f32, 0.5, 1.0, 2.0] {
+      let a: alloc::vec::Vec<&ClusterWork> = log.iter().filter(|c| c.shape_ratio <= k).collect();
+      aethervk_oshal_rlib::log!(
+        "[pool study] A shape ≤ {k}: {} clusters, {} of the volumetric packets, {} of the evaluations",
+        a.len(),
+        a.iter().map(|c| c.volume_packets as u64).sum::<u64>(),
+        a.iter().map(|c| c.volume_evals as u64).sum::<u64>()
+      );
+    }
+    for k in [0.125f32, 0.25, 0.5, 1.0] {
+      let b: alloc::vec::Vec<&ClusterWork> = log.iter().filter(|c| c.spread_rad <= k).collect();
+      aethervk_oshal_rlib::log!(
+        "[pool study] B spread ≤ {k} rad: {} clusters, {} of the volumetric packets, {} of the evaluations",
+        b.len(),
+        b.iter().map(|c| c.volume_packets as u64).sum::<u64>(),
+        b.iter().map(|c| c.volume_evals as u64).sum::<u64>()
+      );
+    }
+    let mut ratios: alloc::vec::Vec<f32> = log.iter().filter(|c| c.volume_packets > 0).map(|c| c.shape_ratio).collect();
+    ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
+    if !ratios.is_empty() {
+      let q = |p: f32| ratios[((ratios.len() - 1) as f32 * p) as usize];
+      aethervk_oshal_rlib::log!(
+        "[pool study] shape ratio of volumetric clusters: p10 {:.3} p50 {:.3} p90 {:.3}",
+        q(0.1),
+        q(0.5),
+        q(0.9)
+      );
+    }
+  }
+  log
 }
 
 /// The texel band of a screen packet (mirror of `dust_band_*`): the segment's lateral Gaussian
@@ -3965,10 +4279,11 @@ pub fn scatter_into(
   let area = s * s;
   let depth_bits = p.depth_au.max(0.0).to_bits();
   let mut written = 0u32;
-  // error diffusion along the packet's own texel loop (deterministic: one thread, fixed order):
-  // the fraction below one count is carried to the next texel instead of being dropped, so a
-  // packet deposits its whole flux however faint its texels (16 bins of 1/16 flux each would
-  // otherwise lose their outskirts, and the picture would depend on the zoom)
+  // error diffusion along each row segment ([`DUST_SEGMENT_TEXELS`]): the fraction below one
+  // count is carried to the next texel instead of being dropped, from a hashed starting phase,
+  // so a packet deposits its whole flux however faint its texels (16 bins of 1/16 flux each
+  // would otherwise lose their outskirts, and the picture would depend on the zoom)
+  let seed = next_packet_seed();
   let mut carry = 0.0f32;
   for ty in y0..=y1 {
     let yc = (ty as f32 + 0.5) * s;
@@ -3976,6 +4291,9 @@ pub fn scatter_into(
       continue;
     };
     for tx in x0..=x1 {
+      if (tx - x0) as u32 % DUST_SEGMENT_TEXELS == 0 {
+        carry = segment_carry(seed, (ty as u32) << 16 | tx as u32);
+      }
       let x = [(tx as f32 + 0.5) * s, yc];
       let mut tau = capsule_tau(p, x) * area * inv_unit;
       if p.albedo > 0.0 {
@@ -4302,6 +4620,10 @@ fn splat_range_probed(
   let mut hits: alloc::vec::Vec<alloc::vec::Vec<(f32, usize)>> =
     alloc::vec![alloc::vec::Vec::new(); probes.len()];
   let mut before = alloc::vec![0.0f32; probes.len()];
+  #[cfg(feature = "std")]
+  let logging = lab_flag(&LAB_WORK_LOG, "AETHERVK_DUST_WORK_LOG");
+  #[cfg(feature = "std")]
+  let mut log: alloc::vec::Vec<ClusterWork> = alloc::vec::Vec::new();
   for i in range {
     let m = &moments[i];
     if !(m.flux() > 0.0) {
@@ -4310,15 +4632,44 @@ fn splat_range_probed(
     for (k, &(x, y)) in probes.iter().enumerate() {
       before[k] = composite_sample(layout, pyramid, unit, x, y).0;
     }
+    #[cfg(feature = "std")]
+    let v0 = VOLUME_CALLS.with(|c| c.get());
+    #[cfg(feature = "std")]
+    let w0 = logging.then(|| {
+      (
+        SAT_ADDS.with(|c| c.get()),
+        pyramid[PYR_SPLIT_CHILDREN as usize],
+        pyramid[PYR_VOLUME_EVALS as usize],
+        pyramid[PYR_EWA_TEXELS as usize],
+      )
+    });
     splat_cluster_inner(
       moments, render, pc, flow, tracer_counts, layout, pyramid, view, scratch, stream, eye, i,
     );
+    #[cfg(feature = "std")]
+    if let Some((a, c, v, e)) = w0 {
+      log.push(ClusterWork {
+        index: i as u32,
+        live: pc.live_count,
+        age_s: m.age(),
+        adds: SAT_ADDS.with(|x| x.get()) - a,
+        split_children: pyramid[PYR_SPLIT_CHILDREN as usize].wrapping_sub(c),
+        volume_evals: pyramid[PYR_VOLUME_EVALS as usize].wrapping_sub(v),
+        ewa_units: pyramid[PYR_EWA_TEXELS as usize].wrapping_sub(e),
+        volume_packets: VOLUME_CALLS.with(|x| x.get()) - v0,
+        ..pool_study(m, eye)
+      });
+    }
     for (k, &(x, y)) in probes.iter().enumerate() {
       let d = composite_sample(layout, pyramid, unit, x, y).0 - before[k];
       if d > 0.0 {
         hits[k].push((d, i));
       }
     }
+  }
+  #[cfg(feature = "std")]
+  if !log.is_empty() {
+    WORK_LOG.lock().unwrap_or_else(|e| e.into_inner()).extend(log);
   }
   probes
     .iter()
@@ -4402,6 +4753,7 @@ fn splat_cluster_inner(
   eye: [f32; 3],
   i: usize,
 ) {
+  begin_cluster_packets(i as u32);
   {
     let m = &moments[i];
     let pred_i = streak_pred(render, i);
@@ -4437,12 +4789,18 @@ fn splat_cluster_inner(
     // `split_packet`) and its leaves are projected and scattered one by one
     let n_hard = hard_axis_pieces(pyramid);
     TIME_CELL_OFFSET.store(time_cell_offset(pyramid), core::sync::atomic::Ordering::Relaxed);
+    set_legacy_kernel(legacy_kernel(pyramid));
     // the lab's knobs (CPU only)
     let no_cell = lab_knob("AETHERVK_DUST_LAB_NO_TIME_CELL").is_some_and(|v| v > 0.0);
     let sig2 = lab_knob("AETHERVK_DUST_LAB_SIGMA").map(|v| v * v);
     let no_support = lab_knob("AETHERVK_DUST_LAB_NO_SUPPORT").is_some_and(|v| v > 0.0);
     let (seg, pred) = if no_cell { ([0.0; 3], None) } else { (seg, pred) };
-    for (p0, support, w_o) in subpackets_cells(m, seg, pred, merged, pred_merged, Some(&px)) {
+    // chord groups for a cluster whose bins are all drawn volumetrically (`cluster_group`;
+    // `AETHERVK_DUST_LAB_GROUP=g`, CPU lab only for now)
+    request_group(cluster_group(m, view, lab_knob("AETHERVK_DUST_LAB_GROUP").map_or(1, |v| v as usize)));
+    let packets = subpackets_cells(m, seg, pred, merged, pred_merged, Some(&px));
+    request_group(1);
+    for (p0, support, w_o) in packets {
       let support = if no_support { [0.0; 4] } else { support };
       let phot = Photometry { support, origin: w_o, ..phot };
       let p0 = match sig2 {

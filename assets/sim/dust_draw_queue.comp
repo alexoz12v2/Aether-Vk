@@ -1,0 +1,49 @@
+// @assets/sim/dust_draw_queue.comp
+//
+// Dust packet queue: one workgroup per record of the view's queue (dust_scatter.glsl, filled by
+// dust_splat.comp), dispatched indirectly after every tier's splat and before the measurement
+// (Device::cmd_dust_frame_end). The 64 invocations share the record's row segments
+// (dust_scatter_rows with stride 64): the same texels, the same per-segment dither, so the
+// pyramid equals the one the cluster threads would have drawn alone (the sums, the depth minimum
+// and the level mask are order-free). No CPU mirror is needed: dust::scatter_into is the same
+// drawing.
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+#include "dust_common.glsl"
+#include "dust_scatter.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    DustUintBuffer pyramid;  // 0: header + levels + measure grid + queue
+    uint pad0;               // 8
+    uint pad1;               // 12
+} pc;                        // 16 bytes (dust::DustMeasurePushConstants)
+
+void main() {
+    uint base = dust_queue_base(pc.pyramid);
+    uint r = gl_WorkGroupID.x;
+    if (r >= min(pc.pyramid.v[base], dust_queue_capacity(pc.pyramid, base))) return;
+    uint at = base + DUST_QUEUE_HEADER_WORDS + r * DUST_QUEUE_RECORD_WORDS;
+    uint w0 = pc.pyramid.v[at];
+    // the phase table rides in the header; the timing probe bits (plain_add) too
+    dust_phot_lut = pc.pyramid;
+    dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
+    if ((w0 >> 30u) == DUST_QUEUE_EWA) {
+        uint level = w0 & 0xFFu;
+        uint seed = pc.pyramid.v[at + 1u];
+        uint off = pc.pyramid.v[at + 2u];
+        uint w = pc.pyramid.v[at + 3u];
+        uint h = pc.pyramid.v[at + 4u];
+        int rowA = int(pc.pyramid.v[at + 5u]);
+        int rowB = int(pc.pyramid.v[at + 6u]);
+        vec3 color = vec3(dust_queue_get_f(pc.pyramid, at + 7u), dust_queue_get_f(pc.pyramid, at + 8u),
+                          dust_queue_get_f(pc.pyramid, at + 9u));
+        float invUnit = dust_queue_get_f(pc.pyramid, at + 10u);
+        DustScreenPacket P = dust_queue_get_screen_packet(pc.pyramid, at + 11u);
+        if (dust_scatter_rows(pc.pyramid, invUnit, P, color, float(1u << level), off, w, h, seed, rowA, rowB,
+                              true, 64u, gl_LocalInvocationID.x)) {
+            atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << level);
+        }
+    }
+}

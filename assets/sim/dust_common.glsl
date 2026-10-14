@@ -713,9 +713,34 @@ uint dust_hash32(uint x) {
     return x;
 }
 
-// a + b saturating at 0xFFFFFFFF (no saturating atomics in core GLSL): compare-and-swap loop
+// The dither segments (dust::DUST_SEGMENT_TEXELS, dust::segment_carry): a packet's texels are
+// drawn in row segments of 16 columns, each starting its carry at a hashed phase in [-1/2, 1/2),
+// so a segment's counts do not depend on the thread drawing it. The seeds: per cluster (its
+// compact index, set by the splat's main) and per packet in drawing order (dust::next_packet_seed)
+const uint DUST_SEGMENT_TEXELS = 16u;
+uint dust_cluster_seed = 0u;
+uint dust_packet_ord = 0u;
+uint dust_next_packet_seed() {
+    uint s = dust_hash32(dust_cluster_seed ^ (dust_packet_ord * 0x9E3779B9u));
+    dust_packet_ord += 1u;
+    return s;
+}
+float dust_segment_carry(uint seed, uint key) {
+    return float(dust_hash32(seed ^ dust_hash32(key)) >> 8u) * (1.0 / 16777216.0) - 0.5;
+}
+
+// the frame's DUST_PYR_SPLIT_DEPTH word, set by the splat pass (diagnostic bits; 0 elsewhere)
+uint dust_pyr_split_word = 0u;
+// a + b saturating at 0xFFFFFFFF (no saturating atomics in core GLSL): compare-and-swap loop.
+// Timing probe (bits 30-31 of DUST_PYR_SPLIT_DEPTH = 1 via dust_pyr_split_word, set by the splat
+// only; `AETHERVK_DUST_TIMING_PROBE=plain_add`; diagnostics, never in production): a plain atomicAdd,
+// which wraps instead of saturating. What the compare-and-swap loop costs.
 void dust_atomic_add_sat(DustUintBuffer buf, uint i, uint b) {
     if (b == 0u) return;
+    if (((dust_pyr_split_word >> 30u) & 3u) == 1u) {
+        atomicAdd(buf.v[i], b);
+        return;
+    }
     uint old = buf.v[i];
     for (;;) {
         uint sum = old + b;
@@ -762,8 +787,6 @@ vec4 dust_phot_support = vec4(0.0);
 // its cone of grains): valid when dust_phot_has_origin (Rust: not NaN); set with the support
 bool dust_phot_has_origin = false;
 float dust_phot_origin = 0.0;
-// the frame's DUST_PYR_SPLIT_DEPTH word, set by the splat pass (diagnostic bits; 0 elsewhere)
-uint dust_pyr_split_word = 0u;
 vec3  dust_phot_sun = vec3(0.0, 0.0, 1.0);
 float dust_phot_rh = 1.0;
 DustUintBuffer dust_phot_lut;
@@ -788,7 +811,10 @@ vec2 dust_bin_density_ends(float f0, float f1) {
 // the polyline's slow end bin is drawn as DUST_END_SUBBINS sub-bins (dust::DUST_END_SUBBINS,
 // dust::bin_subbins): there the chord's Gaussian and the mid-factor width reach past the slowest grain
 const uint DUST_END_SUBBINS = 2u;
-uint dust_bin_subbins(uint b) { return b == 0u ? DUST_END_SUBBINS : 1u; }
+// bit 29 of the frame's DUST_PYR_SPLIT_DEPTH word (dust::DUST_FRAME_LEGACY_KERNEL_BIT): the
+// kernel before the cone of grains (no dust_conic_piece, no sub-bins), for A/B measurements
+bool dust_legacy_kernel() { return ((dust_pyr_split_word >> 29u) & 1u) != 0u; }
+uint dust_bin_subbins(uint b) { return (b == 0u && !dust_legacy_kernel()) ? DUST_END_SUBBINS : 1u; }
 // sub-bin j of nj of size bin b (dust::sub_edges): the bin's chord and speed-factor range cut into
 // nj equal parts, the bin's own edges exactly at its ends
 void dust_sub_edges(DustMoments M, uint b, uint j, uint nj, out vec3 a, out vec3 c, out float fa, out float fc) {

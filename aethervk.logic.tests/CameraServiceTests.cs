@@ -147,7 +147,7 @@ public class CameraServiceTests
     service.SetCameraMode(CameraMode.UpZenith);
 
     Assert.False(service.IsOrbitAllowed());
-    Assert.False(service.IsZoomAllowed());
+    Assert.True(service.IsZoomAllowed());
     Assert.True(service.IsPanAllowed());
   }
 

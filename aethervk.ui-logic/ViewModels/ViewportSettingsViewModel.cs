@@ -63,9 +63,9 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   {
     get => FovUnitIndex switch
     {
-      1 => Math.Round(PerspFovDeg * 60.0, 6),
-      2 => Math.Round(PerspFovDeg * 3600.0, 6),
-      _ => Math.Round(PerspFovDeg, 6)
+      1 => PerspFovDeg * 60.0,
+      2 => PerspFovDeg * 3600.0,
+      _ => PerspFovDeg
     };
     set => PerspFovDeg = FovUnitIndex switch
     {
@@ -77,9 +77,9 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
 
   public double PerspFovMin => FovUnitIndex switch
   {
-    1 => (1.0 / 60.0),
-    2 => 1.0,
-    _ => (1.0 / 3600.0)
+    1 => (0.02 / 60.0),
+    2 => 0.02,
+    _ => (0.02 / 3600.0)
   };
 
   public double PerspFovMax => FovUnitIndex switch

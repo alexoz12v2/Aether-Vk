@@ -1206,6 +1206,7 @@ fn splat_parity(
   albedo: f32,
   camera: Option<([f32; 16], [f32; 3])>,
   shell: Option<f32>,
+  legacy: bool,
 ) {
   with_dust_device(id, |device, capacity, _, _| {
     let batch = batch_of(capacity);
@@ -1270,8 +1271,10 @@ fn splat_parity(
     for i in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
       gpu_unit = run(&mut pc);
       if i == 0 {
-        // the speck shell's radius in the next frames' headers (the view exists now)
+        // the speck shell's radius and the kernel in the next frames' headers (the view exists
+        // now)
         device.dust_set_shell_override(pe, shell);
+        device.dust_set_legacy_kernel(pe, legacy);
       }
     }
     let gpu = device.download_dust_pyramid(pe).unwrap();
@@ -1612,6 +1615,7 @@ fn gpu_dust_splat_matches_reference() {
     0.04,
     None,
     None,
+    false,
   );
 }
 
@@ -1650,6 +1654,7 @@ fn gpu_dust_splat_matches_reference_perspective_away() {
     0.04,
     Some((mvp, [0.0, 0.0, d])),
     None,
+    false,
   );
 }
 
@@ -1679,6 +1684,7 @@ fn gpu_dust_splat_matches_reference_perspective_shell() {
     0.04,
     Some((mvp, [0.0, 0.0, d])),
     Some(2.0e4),
+    false,
   );
 }
 
@@ -1705,6 +1711,37 @@ fn gpu_dust_splat_matches_reference_perspective() {
     0.04,
     Some((mvp, [0.0, 0.0, d])),
     None,
+    false,
+  );
+}
+
+/// The legacy-kernel bit (`dust::DUST_FRAME_LEGACY_KERNEL_BIT`: no cone of grains, no slow-end
+/// sub-bins; the A/B switch of the timing measurements) keeps the GPU and its CPU mirror in step:
+/// the perspective case with the bit set.
+#[test]
+fn gpu_dust_splat_matches_reference_perspective_legacy_kernel() {
+  let (w, h) = (640.0f32, 400.0f32);
+  let d = 200.0f32;
+  let tan_h = (30.0f32).to_radians().tan();
+  // camera at (0, 0, D) looking along −z: x_clip = x · (H/W) / tan(30°), y_clip = y / tan(30°),
+  // w_clip = D − z (square pixels, 60° vertical field)
+  let mut mvp = [0.0f32; 16];
+  mvp[0] = h / (w * tan_h);
+  mvp[5] = 1.0 / tan_h;
+  mvp[10] = -1e-3;
+  mvp[11] = -1.0;
+  mvp[15] = d;
+  splat_parity(
+    9017,
+    &|cap| test_batch(1024, 3600.0, 3, cap),
+    frame_after(5.0),
+    2.0e7,
+    1.0,
+    false,
+    0.04,
+    Some((mvp, [0.0, 0.0, d])),
+    None,
+    true,
   );
 }
 
@@ -1744,7 +1781,7 @@ fn gpu_dust_splat_matches_reference_spinning_site() {
   let frame = DustFrame::new(centre, t_now, [0.0, 0.0, 0.0, 1.0], 1.0e9)
     .with_streams(4)
     .with_spin([axis[0], axis[1], axis[2], omega]);
-  splat_parity(9010, &batch_of, frame, 5.0e3, 1.0e-6, true, 0.0, None, None);
+  splat_parity(9010, &batch_of, frame, 5.0e3, 1.0e-6, true, 0.0, None, None, false);
 }
 
 /// The support cut (`dust_phot_support`, `dust_ray_kept`, `dust_support_mass`): the spinning
@@ -1791,7 +1828,7 @@ fn gpu_dust_splat_matches_reference_spinning_site_perspective() {
   mvp[10] = -1e-3;
   mvp[11] = -1.0;
   mvp[15] = d;
-  splat_parity(9016, &batch_of, frame, 5.0e3, 1.0e-6, true, 0.0, Some((mvp, [0.0, 0.0, d])), None);
+  splat_parity(9016, &batch_of, frame, 5.0e3, 1.0e-6, true, 0.0, Some((mvp, [0.0, 0.0, d])), None, false);
 }
 
 /// Stress: a full tier (every slot emitted) propagated 40 times with the moments, as a heavy
@@ -1880,6 +1917,543 @@ fn gpu_device_fault_is_reported() {
     assert!(
       device.is_lost(),
       "the device must be marked lost after the injected fault"
+    );
+  });
+}
+
+/// The span arithmetic of [`super::dust::DustGpuTimings`]: ticks × period, a missing or reversed
+/// end is `NaN`, the total is the frame (begin → measured) plus the composite when measured.
+#[test]
+fn dust_timestamp_spans_are_the_tick_differences() {
+  use super::dust::{DUST_TIMESTAMPS, DustGpuTimings, timestamp_span_ms};
+  assert!((timestamp_span_ms(Some(1_000), Some(3_000_000), 1.0) - 2.999).abs() < 1e-12);
+  assert!(timestamp_span_ms(None, Some(5), 1.0).is_nan());
+  assert!(timestamp_span_ms(Some(9), Some(5), 1.0).is_nan());
+  let mut ts = [None; DUST_TIMESTAMPS as usize];
+  // 2 ms propagate, 10 ms splat, 0.5 ms measure at a 0.5 ns tick; no composite
+  ts[0] = Some(0);
+  ts[1] = Some(4_000_000);
+  ts[2] = Some(24_000_000);
+  ts[3] = Some(25_000_000);
+  let t = DustGpuTimings::from_timestamps(&ts, 0.5);
+  assert_eq!((t.propagate_ms, t.splat_ms, t.measure_ms), (2.0, 10.0, 0.5));
+  assert!(t.composite_ms.is_nan());
+  assert_eq!(t.total_ms, 12.5);
+  ts[4] = Some(30_000_000);
+  ts[5] = Some(31_000_000);
+  let t = DustGpuTimings::from_timestamps(&ts, 0.5);
+  assert_eq!((t.composite_ms, t.total_ms), (0.5, 13.0));
+}
+
+/// The packet queue (`dust_draw_queue.comp`, 8 ms plan Q1): a frame drawn with every packet
+/// queued, with none queued, and with a queue of 5 records that overflows (the rest drawn in the
+/// clusters' threads) gives the same pyramid word for word — the per-segment dither makes the
+/// drawing independent of who draws a segment. Both the orthographic and the perspective
+/// (inside the cloud) views of the parity tests.
+#[test]
+fn gpu_dust_queue_draws_the_same_pyramid() {
+  let id = 9034;
+  with_dust_device(id, |device, capacity, _, _| {
+    let batch = test_batch(1024, 3600.0, 3, capacity);
+    emit(device, id, &batch);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 34);
+    let (w, h) = (640u32, 400u32);
+    let flow = dust::DustFlowUniform {
+      t_hi: 1.0e8,
+      t_lo: 0.0,
+      speed: 1.0,
+    };
+    let frame = frame_after(5.0);
+    // the orthographic ±2e7 m view, and the 60° camera 200 m from the anchor inside the cloud
+    let mut ortho = [0.0f32; 16];
+    ortho[0] = 1.0 / 2.0e7;
+    ortho[5] = 1.0 / 2.0e7;
+    ortho[10] = 1e-12;
+    ortho[15] = 1.0;
+    let d = 200.0f32;
+    let tan_h = (30.0f32).to_radians().tan();
+    let mut persp = [0.0f32; 16];
+    persp[0] = h as f32 / (w as f32 * tan_h);
+    persp[5] = 1.0 / tan_h;
+    persp[10] = -1e-3;
+    persp[11] = -1.0;
+    persp[15] = d;
+    for (name, mvp, eye) in [("orthographic", ortho, [0.0, 0.0, 1e10]), ("perspective", persp, [0.0, 0.0, d])] {
+      let base_pc = dust::DustSplatPushConstants {
+        moments: 0,
+        render: 0,
+        pyramid: 0,
+        live_count: batch.count,
+        flags: dust::DUST_VIEW_FLOW,
+        exposure: 1.0,
+        inv_unit: 0.0,
+        color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+        albedo: 0.04,
+        eye_local: [eye[0], eye[1], eye[2], 30.0 * 86400.0],
+        mvp,
+      };
+      // one frame; `inv_unit` 0 = the view's adapting unit
+      let run = |inv_unit: f32| -> (Vec<u32>, f32) {
+        let mut used = inv_unit;
+        let mut cmds = device
+          .run_transient_commands(|cmd| {
+            device.cmd_dust_pre_propagate_barrier(cmd);
+            let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], base_pc.flags, flow)?;
+            let mut pc = base_pc;
+            if !(used > 0.0) {
+              used = 1.0 / view.unit;
+            }
+            pc.inv_unit = used;
+            device.cmd_dust_system_begin(id, pc.flags, flow)?;
+            let (render, moments) =
+              device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+            device.cmd_dust_pre_splat_barrier(cmd);
+            device.cmd_dust_splat(cmd, pe, id, 0, render, moments, pc)?;
+            device.cmd_dust_post_splat_barrier(cmd);
+            device.cmd_dust_frame_end(cmd, pe)?;
+            device.cmd_dust_system_end(id)?;
+            Ok(())
+          })
+          .unwrap();
+        cmds.cleanup(&device.device);
+        let pyr = device.download_dust_pyramid(pe).unwrap();
+        (pyr[dust::PYRAMID_HEADER_WORDS as usize..].to_vec(), used)
+      };
+      device.dust_set_queue_mode(pe, None);
+      device.dust_set_queue_capacity(pe, 0);
+      let mut inv_unit = 0.0;
+      for _ in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
+        inv_unit = run(0.0).1;
+      }
+      let (default, _) = run(inv_unit);
+      let default_counts = device.dust_queue_counts(pe).unwrap();
+      device.dust_set_queue_mode(pe, Some(dust::DUST_FRAME_QUEUE_OFF));
+      let (off, _) = run(inv_unit);
+      let off_counts = device.dust_queue_counts(pe).unwrap();
+      device.dust_set_queue_mode(pe, Some(dust::DUST_FRAME_QUEUE_ALL));
+      let (all, _) = run(inv_unit);
+      let all_counts = device.dust_queue_counts(pe).unwrap();
+      device.dust_set_queue_capacity(pe, 5);
+      let (overflow, _) = run(inv_unit);
+      let overflow_counts = device.dust_queue_counts(pe).unwrap();
+      device.dust_set_queue_mode(pe, None);
+      device.dust_set_queue_capacity(pe, 0);
+      std::println!(
+        "[dust queue] {name}: queue records (drawn, appended): default {default_counts:?}, off {off_counts:?}, all {all_counts:?}, capacity 5 {overflow_counts:?}"
+      );
+      assert!(off.iter().any(|&v| v != 0), "{name}: the frame drew nothing");
+      assert_eq!(off_counts.1, 0, "{name}: the queue was used while off");
+      // the perspective view inside the cloud draws volumetric packets only (never queued)
+      if name == "orthographic" {
+        assert!(all_counts.0 > 0, "{name}: nothing was queued with every packet queued");
+      }
+      if all_counts.1 > 5 {
+        assert_eq!(overflow_counts.0, 5, "{name}: the capped queue did not fill");
+        assert!(overflow_counts.1 > 5, "{name}: the capped queue did not overflow");
+      }
+      let diff = |a: &[u32], b: &[u32]| a.iter().zip(b).filter(|(x, y)| x != y).count();
+      assert_eq!(diff(&all, &off), 0, "{name}: every packet queued drew another pyramid than none queued");
+      assert_eq!(diff(&default, &off), 0, "{name}: the default queue drew another pyramid than none queued");
+      assert_eq!(diff(&overflow, &off), 0, "{name}: an overflowing queue drew another pyramid");
+    }
+  });
+}
+
+/// Image reuse ([`Device::cmd_dust_frame_begin_reusable`], 8 ms plan Step 2): frames with the
+/// same draw inputs reuse the image once the header has settled (the unit and biases follow the
+/// readbacks), and a reused frame's pyramid equals the last drawn one word for word; other inputs,
+/// a changed header (the legacy-kernel bit) or a forgotten frame draw again. The speck pass is
+/// needed only with a shell override here (the specks are off).
+#[test]
+fn gpu_dust_frame_reuses_an_unchanged_image() {
+  let id = 9033;
+  with_dust_device(id, |device, capacity, _, _| {
+    let batch = test_batch(1024, 3600.0, 3, capacity);
+    emit(device, id, &batch);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 33);
+    let (w, h) = (320u32, 200u32);
+    let half = 2.0e7f32;
+    let mut mvp = [0.0f32; 16];
+    mvp[0] = 1.0 / half;
+    mvp[5] = 1.0 / half;
+    mvp[10] = 1e-12;
+    mvp[15] = 1.0;
+    let flow = dust::DustFlowUniform {
+      t_hi: 1.0e8,
+      t_lo: 0.0,
+      speed: 1.0,
+    };
+    let base_pc = dust::DustSplatPushConstants {
+      moments: 0,
+      render: 0,
+      pyramid: 0,
+      live_count: batch.count,
+      flags: dust::DUST_VIEW_FLOW,
+      exposure: 1.0,
+      inv_unit: 0.0,
+      color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+      albedo: 0.04,
+      eye_local: [0.0, 0.0, 1e10, 30.0 * 86400.0],
+      mvp,
+    };
+    let frame = frame_after(5.0);
+    // one frame through the reusable begin: (reused, the pyramid's level words)
+    let run = |inputs: u64| -> (bool, Vec<u32>) {
+      let mut reused = false;
+      let mut cmds = device
+        .run_transient_commands(|cmd| {
+          device.cmd_dust_pre_propagate_barrier(cmd);
+          let (view, reuse) =
+            device.cmd_dust_frame_begin_reusable(cmd, pe, [w, h], base_pc.flags, flow, inputs)?;
+          reused = reuse;
+          device.cmd_dust_system_begin(id, base_pc.flags, flow)?;
+          if !reuse {
+            let mut pc = base_pc;
+            pc.inv_unit = 1.0 / view.unit;
+            let (render, moments) =
+              device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+            device.cmd_dust_pre_splat_barrier(cmd);
+            device.cmd_dust_splat(cmd, pe, id, 0, render, moments, pc)?;
+          }
+          device.cmd_dust_post_splat_barrier(cmd);
+          device.cmd_dust_frame_end(cmd, pe)?;
+          device.cmd_dust_system_end(id)?;
+          Ok(())
+        })
+        .unwrap();
+      cmds.cleanup(&device.device);
+      let pyr = device.download_dust_pyramid(pe).unwrap();
+      (reused, pyr[dust::PYRAMID_HEADER_WORDS as usize..].to_vec())
+    };
+    let mut prev: Option<Vec<u32>> = None;
+    let mut reuses = 0;
+    for k in 0..16 {
+      let (reused, levels) = run(42);
+      // the unit follows the view from the DUST_READBACK_SLOTS-th frame (the seed draws nothing)
+      if k > super::dust::DUST_READBACK_SLOTS + 1 {
+        assert!(levels.iter().any(|&v| v != 0), "frame {k} drew nothing");
+      }
+      if reused {
+        reuses += 1;
+        assert_eq!(Some(&levels), prev.as_ref(), "frame {k} reused another image than the last");
+      }
+      prev = Some(levels);
+    }
+    std::println!("[dust reuse] {reuses} of 16 unchanged frames reused the image");
+    assert!(reuses >= 8, "only {reuses} of 16 unchanged frames reused the image");
+    assert!(run(42).0, "the settled view did not reuse");
+    assert!(!run(43).0, "other draw inputs reused the image");
+    assert!(run(43).0, "the new inputs did not reuse on the next frame");
+    device.dust_forget_drawn(pe);
+    assert!(!run(43).0, "a forgotten frame was reused");
+    device.dust_set_legacy_kernel(pe, true);
+    assert!(!run(43).0, "a changed header reused the image");
+    device.dust_set_legacy_kernel(pe, false);
+    // the speck pass: off without the specks, on with a shell override
+    if std::env::var("AETHERVK_DUST_SPECKS").is_err() && std::env::var("AETHERVK_DUST_EYE_DENSITY").is_err() {
+      assert!(!device.dust_specks_needed(pe), "the speck pass is needed with the specks off");
+    }
+    device.dust_set_shell_override(pe, Some(10.0));
+    assert!(device.dust_specks_needed(pe), "a shell override does not need the speck pass");
+    device.dust_set_shell_override(pe, None);
+  });
+}
+
+/// The propagate skip ([`Device::cmd_dust_propagate_cached`], 8 ms plan Step 2): a frame whose
+/// tier inputs equal the last recorded propagate's skips the dispatch and draws the same pyramid,
+/// bit for bit, as a frame that dispatches; a later emission (a new `emitted`), another time or an
+/// uncached propagate in between makes the next one dispatch again.
+#[test]
+fn gpu_dust_propagate_skips_unchanged_inputs() {
+  let id = 9032;
+  with_dust_device(id, |device, capacity, _, _| {
+    let batch = test_batch(1024, 3600.0, 3, capacity);
+    emit(device, id, &batch);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 32);
+    let (w, h) = (320u32, 200u32);
+    // the orthographic ±2e7 m view of `gpu_dust_splat_matches_reference` (it draws the batch)
+    let half = 2.0e7f32;
+    let mut mvp = [0.0f32; 16];
+    mvp[0] = 1.0 / half;
+    mvp[5] = 1.0 / half;
+    mvp[10] = 1e-12;
+    mvp[15] = 1.0;
+let flow = dust::DustFlowUniform {
+      t_hi: 1.0e8,
+      t_lo: 0.0,
+      speed: 1.0,
+    };
+    let base_pc = dust::DustSplatPushConstants {
+      moments: 0,
+      render: 0,
+      pyramid: 0,
+      live_count: batch.count,
+      flags: dust::DUST_VIEW_FLOW,
+      exposure: 1.0,
+      inv_unit: 0.0,
+      color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+      albedo: 0.04,
+      eye_local: [0.0, 0.0, 1e10, 30.0 * 86400.0],
+      mvp,
+    };
+    // one frame: `Some(emitted)` propagates through the cache, `None` always dispatches; the
+    // pyramid it drew and whether the dispatch was skipped
+    // `inv_unit`: 0 = the view's adapting unit; the compared frames use a fixed one, so their
+    // pyramids compare word for word
+    let run = |frame: &dust::DustFrame, emitted: Option<u64>, inv_unit: f32| -> (Vec<u32>, bool, f32) {
+      let mut skipped = false;
+      let mut used = inv_unit;
+      let mut cmds = device
+        .run_transient_commands(|cmd| {
+          device.cmd_dust_pre_propagate_barrier(cmd);
+          let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], base_pc.flags, flow)?;
+          let mut pc = base_pc;
+          if !(used > 0.0) {
+            used = 1.0 / view.unit;
+          }
+          pc.inv_unit = used;
+          device.cmd_dust_system_begin(id, pc.flags, flow)?;
+          let (render, moments) = match emitted {
+            Some(e) => {
+              let (a, s) = device.cmd_dust_propagate_cached(cmd, id, 0, capacity, first_slot, batch.count, frame, e)?;
+              skipped = s;
+              a
+            }
+            None => device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, frame)?,
+          };
+          device.cmd_dust_pre_splat_barrier(cmd);
+          device.cmd_dust_splat(cmd, pe, id, 0, render, moments, pc)?;
+          device.cmd_dust_post_splat_barrier(cmd);
+          device.cmd_dust_frame_end(cmd, pe)?;
+          device.cmd_dust_system_end(id)?;
+          Ok(())
+        })
+        .unwrap();
+      cmds.cleanup(&device.device);
+      let pyr = device.download_dust_pyramid(pe).unwrap();
+      (pyr, skipped, used)
+    };
+    let hn = dust::PYRAMID_HEADER_WORDS as usize;
+    let f1 = frame_after(5.0);
+    let f2 = frame_after(6.0);
+    // the unit follows the view after DUST_READBACK_SLOTS frames; then it is held
+    let mut inv_unit = 0.0;
+    for _ in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
+      inv_unit = run(&f1, None, 0.0).2;
+    }
+    let run = |frame: &dust::DustFrame, emitted: Option<u64>| {
+      let (p, s, _) = run(frame, emitted, inv_unit);
+      (p, s)
+    };
+    let (dispatched, s0) = run(&f1, None);
+    assert!(!s0, "an uncached propagate reported a skip");
+    assert!(dispatched[hn..].iter().any(|&v| v != 0), "the reference frame drew nothing");
+    let (a, s1) = run(&f1, Some(7));
+    assert!(!s1, "the first cached propagate after an uncached one skipped");
+    let (b, s2) = run(&f1, Some(7));
+    assert!(s2, "unchanged inputs did not skip the propagate");
+    assert_eq!(a[hn..], dispatched[hn..], "the cached propagate drew another pyramid");
+    assert_eq!(b[hn..], dispatched[hn..], "the skipped propagate drew another pyramid");
+    let (_, s3) = run(&f1, Some(8));
+    assert!(!s3, "a later emission did not dispatch");
+    let (c, s4) = run(&f2, Some(8));
+    assert!(!s4, "another time did not dispatch");
+    let (c2, s5) = run(&f2, Some(8));
+    assert!(s5, "unchanged inputs at the new time did not skip");
+    assert_eq!(c2[hn..], c[hn..], "the skipped propagate at the new time drew another pyramid");
+    assert_ne!(c[hn..], dispatched[hn..], "the frames at two times drew the same pyramid");
+  });
+}
+
+/// Real dust frames report their GPU time ([`Device::dust_gpu_timings`]): six frames of the
+/// perspective parity case recorded as the render thread does (frame begin, propagate, the
+/// propagated mark, splat, the splatted mark, frame end), each waited for. The timings of a frame
+/// are read [`DUST_READBACK_SLOTS`](super::dust::DUST_READBACK_SLOTS) frames later; they are
+/// positive, the spans add up to the total, no composite was drawn, and the total is at most the
+/// frame's wall time (a timestamp pair cannot span more than the submission it is part of).
+#[test]
+fn gpu_dust_timings_are_reported() {
+  use super::dust::{DUST_READBACK_SLOTS, DUST_TS_PROPAGATED, DUST_TS_SPLATTED};
+  let id = 9031;
+  with_dust_device(id, |device, capacity, _, _| {
+    if device.query_result.graphics_timestamp_bits == 0 {
+      std::println!("[dust timings] the graphics queue has no timestamps: skipped");
+      return;
+    }
+    let batch = test_batch(1024, 3600.0, 3, capacity);
+    emit(device, id, &batch);
+    let frame = frame_after(5.0);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 31);
+    let (w, h) = (640u32, 400u32);
+    let d = 200.0f32;
+    let tan_h = (30.0f32).to_radians().tan();
+    let mut mvp = [0.0f32; 16];
+    mvp[0] = h as f32 / (w as f32 * tan_h);
+    mvp[5] = 1.0 / tan_h;
+    mvp[10] = -1e-3;
+    mvp[11] = -1.0;
+    mvp[15] = d;
+    let flow = dust::DustFlowUniform {
+      t_hi: 1.0e8,
+      t_lo: 0.0,
+      speed: 1.0,
+    };
+    let mut pc = dust::DustSplatPushConstants {
+      moments: 0,
+      render: 0,
+      pyramid: 0,
+      live_count: batch.count,
+      flags: dust::DUST_VIEW_FLOW,
+      exposure: 1.0,
+      inv_unit: 0.0,
+      color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+      albedo: 0.04,
+      eye_local: [0.0, 0.0, d, 30.0 * 86400.0],
+      mvp,
+    };
+    let mut slowest_wall_ms = 0.0f64;
+    for _ in 0..(DUST_READBACK_SLOTS + 2) {
+      let t0 = std::time::Instant::now();
+      let mut cmds = device
+        .run_transient_commands(|cmd| {
+          device.cmd_dust_pre_propagate_barrier(cmd);
+          let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], pc.flags, flow)?;
+          pc.inv_unit = 1.0 / view.unit;
+          device.cmd_dust_system_begin(id, pc.flags, flow)?;
+          let (render, moments) =
+            device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+          device.cmd_dust_timestamp(cmd, pe, DUST_TS_PROPAGATED);
+          device.cmd_dust_pre_splat_barrier(cmd);
+          device.cmd_dust_splat(cmd, pe, id, 0, render, moments, pc)?;
+          device.cmd_dust_timestamp(cmd, pe, DUST_TS_SPLATTED);
+          device.cmd_dust_post_splat_barrier(cmd);
+          device.cmd_dust_frame_end(cmd, pe)?;
+          device.cmd_dust_system_end(id)?;
+          Ok(())
+        })
+        .unwrap();
+      cmds.cleanup(&device.device);
+      slowest_wall_ms = slowest_wall_ms.max(t0.elapsed().as_secs_f64() * 1e3);
+    }
+    let t = device.dust_gpu_timings(pe).expect("no dust GPU timings after six frames");
+    std::println!(
+      "[dust timings] propagate {:.3} ms, splat {:.3} ms, measure {:.3} ms, total {:.3} ms (frame {}, {}x{}); slowest frame's wall time {:.1} ms",
+      t.propagate_ms, t.splat_ms, t.measure_ms, t.total_ms, t.frame, t.width, t.height, slowest_wall_ms
+    );
+    for (name, v) in [("propagate", t.propagate_ms), ("splat", t.splat_ms), ("measure", t.measure_ms)] {
+      assert!(v.is_finite() && v >= 0.0, "{name}: {v}");
+    }
+    assert!(t.splat_ms > 0.0, "the splat took no time");
+    assert!(t.composite_ms.is_nan(), "a composite was timed without one drawn");
+    // the packet queue's span (after the splats, in `cmd_dust_frame_end`) when it was drawn
+    assert!(t.queue_ms.is_nan() || t.queue_ms >= 0.0, "queue: {}", t.queue_ms);
+    let queue_ms = if t.queue_ms.is_nan() { 0.0 } else { t.queue_ms };
+    assert!(
+      (t.total_ms - (t.propagate_ms + t.splat_ms + queue_ms + t.measure_ms)).abs() <= 1e-9 * t.total_ms.max(1.0),
+      "total {} is not the sum of its spans",
+      t.total_ms
+    );
+    assert!(t.total_ms <= slowest_wall_ms, "GPU {} ms beyond the frame's wall time {slowest_wall_ms} ms", t.total_ms);
+    assert_eq!((t.width, t.height), (w, h));
+    assert!(t.frame >= 1, "frame {}", t.frame);
+  });
+}
+
+/// The app's dust budget (agreed 2026-10-14): a dust frame — propagate, splat + specks, measure,
+/// composite — within this many GPU milliseconds at 1280×800 on the development GPU, at every
+/// pose; the app re-splats every presentation frame (16 ms)
+pub const DUST_FRAME_BUDGET_MS: f64 = 8.0;
+
+/// The dust frame fits [`DUST_FRAME_BUDGET_MS`]: a full tier (every ring slot emitted, mixed ages,
+/// as `gpu_dust_full_ring_propagate_stress`) drawn from inside the dust (the perspective parity
+/// camera) at 1280×800, frames recorded as the render thread does; the GPU timings of the last
+/// measured frame within the budget. Ignored until the splat fits: measured 2026-10-14 the app's
+/// frames cost 330 ms – 4.8 s (`definite_particles.md`, the dust GPU timings table).
+#[test]
+#[ignore = "the dust frame costs 0.33–4.8 s against the 8 ms budget (2026-10-14): the splat's cut is the next plan"]
+fn dust_frame_fits_the_budget() {
+  use super::dust::{DUST_READBACK_SLOTS, DUST_TS_PROPAGATED, DUST_TS_SPLATTED};
+  let id = 9032;
+  with_dust_device(id, |device, capacity, _, _| {
+    if device.query_result.graphics_timestamp_bits == 0 {
+      std::println!("[dust budget] the graphics queue has no timestamps: skipped");
+      return;
+    }
+    let per = 4096u32;
+    let (mut emitted, mut seq) = (0u32, 0u64);
+    while emitted < capacity {
+      let n = per.min(capacity - emitted);
+      let batch = test_batch(n, 3600.0 * (1.0 + (seq % 7) as f64), emitted, capacity);
+      let mut res = device
+        .run_transient_compute_commands(|cmd| device.cmd_dust_emit(cmd, id, 0, &batch, seq))
+        .unwrap();
+      res.cleanup(&device.device);
+      emitted += n;
+      seq += 1;
+    }
+    let frame = frame_after(5.0);
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 32);
+    let (w, h) = (1280u32, 800u32);
+    let d = 200.0f32;
+    let tan_h = (30.0f32).to_radians().tan();
+    let mut mvp = [0.0f32; 16];
+    mvp[0] = h as f32 / (w as f32 * tan_h);
+    mvp[5] = 1.0 / tan_h;
+    mvp[10] = -1e-3;
+    mvp[11] = -1.0;
+    mvp[15] = d;
+    let flow = dust::DustFlowUniform {
+      t_hi: 1.0e8,
+      t_lo: 0.0,
+      speed: 1.0,
+    };
+    let mut pc = dust::DustSplatPushConstants {
+      moments: 0,
+      render: 0,
+      pyramid: 0,
+      live_count: capacity,
+      flags: dust::DUST_VIEW_FLOW,
+      exposure: 1.0,
+      inv_unit: 0.0,
+      color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+      albedo: 0.04,
+      eye_local: [0.0, 0.0, d, 30.0 * 86400.0],
+      mvp,
+    };
+    // enough frames for the budget feedback to settle and the last one to be read back
+    for _ in 0..(3 * DUST_READBACK_SLOTS + 2) {
+      let mut cmds = device
+        .run_transient_commands(|cmd| {
+          device.cmd_dust_pre_propagate_barrier(cmd);
+          let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], pc.flags, flow)?;
+          pc.inv_unit = 1.0 / view.unit;
+          device.cmd_dust_system_begin(id, pc.flags, flow)?;
+          let (render, moments) = device.cmd_dust_propagate(cmd, id, 0, capacity, 0, capacity, &frame)?;
+          device.cmd_dust_timestamp(cmd, pe, DUST_TS_PROPAGATED);
+          device.cmd_dust_pre_splat_barrier(cmd);
+          device.cmd_dust_splat(cmd, pe, id, 0, render, moments, pc)?;
+          device.cmd_dust_timestamp(cmd, pe, DUST_TS_SPLATTED);
+          device.cmd_dust_post_splat_barrier(cmd);
+          device.cmd_dust_frame_end(cmd, pe)?;
+          device.cmd_dust_system_end(id)?;
+          Ok(())
+        })
+        .unwrap();
+      cmds.cleanup(&device.device);
+    }
+    let t = device.dust_gpu_timings(pe).expect("no dust GPU timings");
+    std::println!(
+      "[dust budget] {capacity} clusters at {w}x{h}: propagate {:.2} ms, splat {:.2} ms, measure {:.2} ms, total {:.2} ms (budget {DUST_FRAME_BUDGET_MS} ms)",
+      t.propagate_ms, t.splat_ms, t.measure_ms, t.total_ms
+    );
+    assert!(
+      t.total_ms <= DUST_FRAME_BUDGET_MS,
+      "the dust frame costs {:.2} ms, over the {DUST_FRAME_BUDGET_MS} ms budget",
+      t.total_ms
     );
   });
 }

@@ -351,6 +351,8 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   public DustExposure? DustExposure(ulong presentationEngineId) => null;
 
+  public DustGpuTimings? DustGpuTimings(ulong presentationEngineId) => null;
+
   public bool CameraSetRotoTranslate(
     ulong cameraId,
     double posX,

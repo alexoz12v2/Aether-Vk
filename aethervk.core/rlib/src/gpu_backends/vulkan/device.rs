@@ -569,7 +569,12 @@ impl DeviceResources {
       }
     }
 
-    let _ = self.dust_manager.take();
+    // the dust views' timestamp pools (the device is idle here)
+    if let Some(mgr) = self.dust_manager.take() {
+      for pool in mgr.take_query_pools() {
+        unsafe { device.destroy_query_pool(pool, None) };
+      }
+    }
     self.sky_overlay.cleanup(device, &self.allocator.allocator.as_allocator_view());
 
     // BUG FIX (2025-05): The original code called pe_state.value_mut().cleanup(device) HERE
@@ -7083,6 +7088,8 @@ impl RenderDevice for Device {
     constants: &crate::gpu::CompositePushConstants,
   ) -> GpuResult<()> {
     let cmd = self.get_cmd(cmd_buffer)?;
+    // the dust composite's GPU span (`dust::DustGpuTimings`), outside the resource lock
+    self.cmd_dust_timestamp(cmd, handle, dust::DUST_TS_COMPOSITE_BEGIN);
 
     // Get composite pipeline resources from the render pass bundle
     let res_guard = DebugTrackedRwLock::read(&self.res);
@@ -7129,6 +7136,8 @@ impl RenderDevice for Device {
       // Draw fullscreen triangle (3 vertices, no vertex buffer)
       self.device.cmd_draw(cmd, 3, 1, 0, 0);
     }
+    drop(res_guard);
+    self.cmd_dust_timestamp(cmd, handle, dust::DUST_TS_COMPOSITE_END);
 
     Ok(())
   }

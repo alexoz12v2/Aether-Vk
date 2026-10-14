@@ -64,6 +64,9 @@ pub struct PhysicsPipelines {
   pub dust_splat: vk::Pipeline,
   /// per-frame white-point measurement grid from the finished pyramid (`dust_measure.comp`, wg 64)
   pub dust_measure: vk::Pipeline,
+  /// per-frame packet queue: a workgroup per queued large packet (`dust_draw_queue.comp`, wg 64,
+  /// dispatched indirectly)
+  pub dust_draw_queue: vk::Pipeline,
   /// per-frame physical specks of one tier into the view's pyramid (`dust_specks.comp`, wg 64,
   /// one thread per cluster × size bin)
   pub dust_specks: vk::Pipeline,
@@ -480,6 +483,7 @@ impl PhysicsPipelines {
         dust_propagate: mk!("dust_propagate.comp.spv"),
         dust_splat: mk!("dust_splat.comp.spv"),
         dust_measure: mk!("dust_measure.comp.spv"),
+        dust_draw_queue: mk!("dust_draw_queue.comp.spv"),
         dust_specks: mk!("dust_specks.comp.spv"),
         pc_sizes,
         wg_sizes,
@@ -520,6 +524,7 @@ impl PhysicsPipelines {
     discard_pool.discard_pipeline(self.dust_propagate, timeline);
     discard_pool.discard_pipeline(self.dust_splat, timeline);
     discard_pool.discard_pipeline(self.dust_measure, timeline);
+    discard_pool.discard_pipeline(self.dust_draw_queue, timeline);
     discard_pool.discard_pipeline(self.dust_specks, timeline);
 
     discard_pool.discard_pipeline_layout(self.pipeline_layout, timeline);

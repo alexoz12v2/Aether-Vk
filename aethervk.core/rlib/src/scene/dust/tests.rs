@@ -598,6 +598,54 @@ fn turning_pieces_equal_the_sample_at_their_centre() {
   assert!(worst_old > 3.0 * worst.max(0.02), "the unturned rule is not worse ({worst_old:.3}): no discrimination");
 }
 
+/// Chord groups ([`request_group`], [`cluster_group`]) keep a cluster's light: for every group
+/// size the packets of a young turning cell (the cone pieces along its time segment), of a
+/// month-old one and of one without a predecessor carry the cluster's whole flux, and a group's
+/// chord runs from its first bin's start edge to its last bin's end edge.
+#[test]
+fn chord_groups_keep_the_flux() {
+  let axis = unit([0.2, 0.1, 0.97]);
+  let axis_f = [axis[0] as f32, axis[1] as f32, axis[2] as f32];
+  let omega = 2.0 * core::f64::consts::PI / (12.4 * 3600.0);
+  let (rc, vc) = comet_state();
+  let n0 = unit([1.0, -0.3, 0.1]);
+  let off = scale(n0, 2000.0);
+  let month = 30.0 * 86400.0;
+  let t_now = T_START + month + 10.0;
+  let (centre_now, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_now - T_START);
+  let frame = DustFrame::new(centre_now, t_now, [0.0, 0.0, 0.0, 1.0], 1.0e9)
+    .with_spin([axis[0], axis[1], axis[2], omega]);
+  let moments_aged = |age: f64| -> DustMoments {
+    let t_rel = t_now - T_START - age;
+    let mut b = test_batch(1, 0.0);
+    let (centre, v_c) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_rel);
+    let turned = rotate_axis_angle(off, axis, omega * t_rel);
+    b.spin = [axis_f[0], axis_f[1], axis_f[2], omega as f32];
+    b.rot_start = qaxis_angle(axis_f, (omega * t_rel) as f32);
+    b.site_offset = [off[0] as f32, off[1] as f32, off[2] as f32, 0.0];
+    b.jet_dir_aperture = [n0[0] as f32, n0[1] as f32, n0[2] as f32, 0.0];
+    b.lit = [0.0, 0.0, 0.0, LIT_MODE_ALWAYS];
+    b.set_comet(add(centre, turned), v_c, T_START + t_rel, 0.0);
+    let (_, m) = packet_moments(&emit_cluster(&b, 0), 0, &frame);
+    assert!(m.flux() > 0.0, "age {age}: culled");
+    m
+  };
+  for (name, age_o, age_p) in [("young", 468.0, Some(2300.0)), ("month", 25.0 * 86400.0, Some(25.1 * 86400.0)), ("alone", 3600.0, None)] {
+    let m = moments_aged(age_o);
+    let p = age_p.map(|a| moments_aged(a));
+    let seg = p.as_ref().map_or([0.0; 3], |p| sub3f(p.mean(), m.mean()));
+    for g in [1usize, 2, 4, 8] {
+      request_group(g);
+      let packets = subpackets_cells(&m, seg, p.as_ref(), false, false, None);
+      request_group(1);
+      assert_eq!(group_bins(), 1, "{name} g {g}: the group outlived the cluster");
+      let flux: f32 = packets.iter().map(|(q, _, _)| q.flux).sum();
+      std::println!("[chord groups] {name} g {g}: {} packets, flux {:.6} of {:.6}", packets.len(), flux, m.flux());
+      assert!((flux / m.flux() - 1.0).abs() < 1e-4, "{name} g {g}: the packets carry {flux} of {}", m.flux());
+    }
+  }
+}
+
 /// The support planes of a young turning cell ([`subpackets_supported`], [`cell_line`],
 /// [`support_plane`]) hold its grains and exclude the space behind them: the case of
 /// `turning_pieces_equal_the_sample_at_their_centre` (468 s → 2 300 s, a site 2 km off the

@@ -853,6 +853,42 @@ impl SimulationContext {
       .ok()
   }
 
+  /// The last measured GPU cost of presentation engine `pe`'s dust frame, per pass
+  /// (`dust::DustGpuTimings`, read a few frames after it was recorded); `None` before the first,
+  /// without a view, a device or timestamp queries. Cheap: no queue wait.
+  pub fn dust_gpu_timings(
+    &self,
+    pe: crate::gpu::PresentationEngineHandle,
+  ) -> Option<crate::gpu_backends::vulkan::device::dust::DustGpuTimings> {
+    use crate::gpu::WeakRenderFrontendExt;
+    let frontend = self.render_proxy.0.as_frontend()?;
+    frontend
+      .with_device(self.render_proxy.1, |device| {
+        let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+          device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
+        Ok(vulkan_device.dust_gpu_timings(pe))
+      })
+      .ok()
+      .flatten()
+  }
+  /// [`Self::dust_gpu_timings`] of the last frame that drew (not one that reused the previous
+  /// image): the cost of a changing view
+  pub fn dust_gpu_timings_drawn(
+    &self,
+    pe: crate::gpu::PresentationEngineHandle,
+  ) -> Option<crate::gpu_backends::vulkan::device::dust::DustGpuTimings> {
+    use crate::gpu::WeakRenderFrontendExt;
+    let frontend = self.render_proxy.0.as_frontend()?;
+    frontend
+      .with_device(self.render_proxy.1, |device| {
+        let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+          device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
+        Ok(vulkan_device.dust_gpu_timings_drawn(pe))
+      })
+      .ok()
+      .flatten()
+  }
+
   /// Diagnostic / observer: what the GPU splat passes of the last recorded frame of `pe` drew —
   /// per tier the push constants and the render clusters and moments they read
   /// (`Device::download_dust_snapshot`), for a CPU-mirror replay. The simulation should be paused.

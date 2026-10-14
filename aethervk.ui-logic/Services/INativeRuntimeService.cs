@@ -474,6 +474,10 @@ public interface INativeRuntimeService : IDisposable
   /// The dust exposure of a view (white point in V mag/arcsec², EV): null without a view.
   DustExposure? DustExposure(ulong presentationEngineId);
 
+  /// What a view's dust frame cost on the GPU, per pass (ms, NaN = not measured), as measured a
+  /// few frames ago: null before the first, without a view or without GPU timestamps.
+  DustGpuTimings? DustGpuTimings(ulong presentationEngineId);
+
   /// Camera world position (AU) and rotation, for the overlay position tracker (all builds).
   bool DebugCameraState(
     ulong cameraEntityId,
@@ -1059,6 +1063,14 @@ internal unsafe static class PInvokeAetherVkCore
     nint ctx,
     ulong peHandle,
     CDustExposureDTO* outExposure
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_dustGpuTimings(
+    nint ctx,
+    ulong peHandle,
+    CDustGpuTimingsDTO* outTimings
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -2720,6 +2732,17 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     return new DustExposure(e.WhiteRf, e.P50Rf, e.Softening, e.MagArcsec2, e.Ev, e.Fixed != 0);
   }
 
+  public unsafe DustGpuTimings? DustGpuTimings(ulong presentationEngineId)
+  {
+    if (_ctx == 0)
+      return null;
+    CDustGpuTimingsDTO t;
+    if (!PInvokeAetherVkCore.avkSimulationContext_dustGpuTimings(_ctx, presentationEngineId, &t))
+      return null;
+    return new DustGpuTimings(
+      t.PropagateMs, t.SplatMs, t.MeasureMs, t.CompositeMs, t.TotalMs, t.TotalEmaMs, t.Frame, t.Width, t.Height);
+  }
+
   public unsafe System.Collections.Generic.IReadOnlyList<DustTierStats> DustStats()
   {
     if (_ctx == 0)
@@ -3399,6 +3422,36 @@ public sealed record DustExposure(
   float MagArcsec2,
   float Ev,
   bool Fixed
+);
+
+/// <summary>Mirrors Rust <c>CDustGpuTimings</c> (ffi.rs), 64 bytes.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal readonly struct CDustGpuTimingsDTO
+{
+  public readonly double PropagateMs;
+  public readonly double SplatMs;
+  public readonly double MeasureMs;
+  public readonly double CompositeMs;
+  public readonly double TotalMs;
+  public readonly double TotalEmaMs;
+  public readonly ulong Frame;
+  public readonly uint Width;
+  public readonly uint Height;
+}
+
+/// <summary>A view's dust frame on the GPU, per pass (ms; NaN = that pass was not measured):
+/// the propagates, the splats and specks, the measurement and readback copy, the composite, their
+/// total and its exponential average; the dust frame number and the pyramid's size (pixels).</summary>
+public sealed record DustGpuTimings(
+  double PropagateMs,
+  double SplatMs,
+  double MeasureMs,
+  double CompositeMs,
+  double TotalMs,
+  double TotalEmaMs,
+  ulong Frame,
+  uint Width,
+  uint Height
 );
 
 /// <summary>Mirrors Rust <c>CDustTierStats</c> (ffi.rs), 56 bytes.</summary>
