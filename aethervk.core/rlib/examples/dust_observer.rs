@@ -221,6 +221,10 @@ struct Args {
   play_seconds: Option<f64>,
   reemit_every: u32,
   check: bool,
+  /// `--dust-budget-ms <ms>`: a frame whose dust GPU time (`DustGpuTimings::total_ms`) exceeds this
+  /// is a problem (the app's budget: 8 ms at 1280×800), listed with the others; with `--check` the
+  /// run fails on it
+  dust_budget_ms: Option<f64>,
   half_height_km: Option<f64>,
   /// `--fov-deg`: the perspective poses' full field of view (default 2° for `earth`,
   /// [`INSIDE_FOV_DEG`] for `inside`)
@@ -300,7 +304,7 @@ struct Args {
 fn usage() -> ! {
   eprintln!(
     "usage: dust_observer --out DIR [--days 30] [--step-hours 24] [--size 1280x800]\n\
-     \x20      [--pose up-zenith|anti-sun|earth|inside] [--play SECONDS] [--reemit-every N] [--check]\n\
+     \x20      [--pose up-zenith|anti-sun|earth|inside] [--play SECONDS] [--reemit-every N] [--check] [--dust-budget-ms MS]\n\
      \x20      [--half-height-km KM] [--fov-deg DEG] [--inside-m D | --inside-km D] [--lat DEG --lon DEG --elev M] [--sky-image-check] [--start YYYY-MM-DD] [--spk FILE.bsp]\n\
      \x20      [--quiet] [--settle-frames N] [--no-jet] [--hide-sun] [--full-teardown] [--no-sheet]\n\
      \x20      [--ignite-days D] [--prestart] [--ripple-max R] [--spin-hours H] [--mc N] [--mc-max R] [--mc-age-min S] [--view-flags F]\n\
@@ -320,6 +324,7 @@ fn parse_args() -> Args {
     play_seconds: None,
     reemit_every: 0,
     check: false,
+    dust_budget_ms: None,
     half_height_km: None,
     fov_deg: None,
     inside_m: 1000.0,
@@ -384,6 +389,7 @@ fn parse_args() -> Args {
       "--play" => a.play_seconds = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--reemit-every" => a.reemit_every = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--check" => a.check = true,
+      "--dust-budget-ms" => a.dust_budget_ms = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--quiet" => a.quiet = true,
       "--no-jet" => a.no_jet = true,
       "--full-teardown" => a.full_teardown = true,
@@ -595,6 +601,10 @@ struct FrameRec {
   p99_lum: f64,
   nonblack_frac: f64,
   render_task: u64,
+  /// wall time per render generation (ms) and the dust passes' GPU time
+  /// (`Device::dust_gpu_timings`: the last frame measured before this one was downloaded)
+  render_ms: f64,
+  dust_gpu: Option<aethervk_core_rlib::gpu_backends::vulkan::device::dust::DustGpuTimings>,
   passes_logged: String,
   /// the frame against its Monte-Carlo truth (`--mc`)
   mc: Option<McRec>,
@@ -1136,7 +1146,7 @@ impl FrameRec {
       })
       .collect();
     format!(
-      "{{\"frame\":{},\"epoch\":\"{}\",\"epoch_target\":\"{}\",\"since_ignition_s\":{},\"seek_ok\":{},\"r_helio_au\":{:.6},\"comet_au\":{},\"tiers\":[{}],\"coma_radius_km\":{:.3},\"camera\":{{\"pos_au\":{},\"quat_xyzw\":[{:.9},{:.9},{:.9},{:.9}],\"half_height_au\":{:.9},\"half_height_km\":{:.1},\"m_per_px_nucleus\":{:.6e}}},\"nucleus_px\":[{:.2},{:.2}],\"nucleus_rgb\":[{},{},{}],\"mean_luminance\":{:.4},\"p99_luminance\":{:.2},\"nonblack_fraction\":{:.6},\"mc\":{},\"specks\":{},\"exposure\":{},\"hue_ramp\":[{}],\"render_task\":{},\"dust_log\":\"{}\"}}",
+      "{{\"frame\":{},\"epoch\":\"{}\",\"epoch_target\":\"{}\",\"since_ignition_s\":{},\"seek_ok\":{},\"r_helio_au\":{:.6},\"comet_au\":{},\"tiers\":[{}],\"coma_radius_km\":{:.3},\"camera\":{{\"pos_au\":{},\"quat_xyzw\":[{:.9},{:.9},{:.9},{:.9}],\"half_height_au\":{:.9},\"half_height_km\":{:.1},\"m_per_px_nucleus\":{:.6e}}},\"nucleus_px\":[{:.2},{:.2}],\"nucleus_rgb\":[{},{},{}],\"mean_luminance\":{:.4},\"p99_luminance\":{:.2},\"nonblack_fraction\":{:.6},\"mc\":{},\"specks\":{},\"exposure\":{},\"hue_ramp\":[{}],\"render_task\":{},\"render_ms\":{:.2},\"dust_gpu\":{},\"dust_log\":\"{}\"}}",
       self.index,
       self.epoch,
       self.epoch_target,
@@ -1203,6 +1213,23 @@ impl FrameRec {
         .collect::<Vec<_>>()
         .join(","),
       self.render_task,
+      self.render_ms,
+      self.dust_gpu.map_or(String::from("null"), |t| format!(
+        "{{\"propagate_ms\":{},\"splat_ms\":{},\"splat_only_ms\":{},\"specks_ms\":{},\"call_ms\":[{}],\"measure_ms\":{},\"composite_ms\":{},\"total_ms\":{},\"total_ema_ms\":{},\"frame\":{},\"width\":{},\"height\":{},\"reused\":{}}}",
+        json_f(t.propagate_ms),
+        json_f(t.splat_ms),
+        json_f(t.splat_only_ms),
+        json_f(t.specks_ms),
+        t.call_ms.iter().map(|&c| json_f(c)).collect::<Vec<_>>().join(","),
+        json_f(t.measure_ms),
+        json_f(t.composite_ms),
+        json_f(t.total_ms),
+        json_f(t.total_ema_ms),
+        t.frame,
+        t.width,
+        t.height,
+        t.reused
+      )),
       self.passes_logged.replace('"', "'"),
     )
   }
@@ -1740,14 +1767,17 @@ fn main() {
     args.pose.is_perspective().then(|| (fov_deg.to_radians() / 2.0).tan());
   // `--pose inside`: D is the camera's distance from the nucleus SURFACE (the camera sits in
   // the dust, never inside the 2 km nucleus mesh), so the centre distance is D + 2 km (AU); the
-  // camera asks for a near plane of `D·1e-3`, which the engine floors at 1 m
-  // (`scene_conversion.rs` `DEPTH_NEAR_FLOOR`), so the truth clips at `max(D·1e-3, 1 m)`; the
-  // far plane is `max(1e4·D, 2·coma radius)`, re-applied every frame with the coma radius of
-  // the moment (0 until the first rendered frame)
-  let inside_d_au = args.inside_m / aethervk_core_rlib::scene::dust::AU_M;
+  // camera asks for a near plane of `D·1e-3`, which the engine floors at
+  // `clamp(0.5·D, 0.1 mm, 1 m)` (`scene_conversion.rs` `DEPTH_NEAR_MIN`..`DEPTH_NEAR_FLOOR`), so
+  // the truth clips at `max(D·1e-3, clamp(0.5·D, 0.1 mm, 1 m))`; the far plane is
+  // `max(1e4·D, 2·coma radius)`, re-applied every frame with the coma radius of the moment (0
+  // until the first rendered frame)
+  let au_m = aethervk_core_rlib::scene::dust::AU_M;
+  let inside_d_au = args.inside_m / au_m;
   let inside_au = inside_d_au + NUCLEUS_RADIUS_KM as f64 / AU_KM;
   let inside_near_au = inside_d_au * 1e-3;
-  let inside_truth_near_au = inside_near_au.max(1.0 / aethervk_core_rlib::scene::dust::AU_M);
+  let inside_near_floor_au = (inside_d_au * 0.5).clamp(1.0e-4 / au_m, 1.0 / au_m);
+  let inside_truth_near_au = inside_near_au.max(inside_near_floor_au);
   let inside_far_au = |coma_km: f64| (1e4 * inside_d_au).max(2.0 * coma_km / AU_KM);
   let cam_id = match args.pose {
     Pose::Earth => ctx
@@ -1832,13 +1862,13 @@ fn main() {
   if args.pose == Pose::Inside {
     send_inside_projection(inside_far_now);
     log_line(&format!(
-      "inside pose: camera {:.6} m from the surface ({:.6} m from the centre) sunward on the anti-solar axis, fov {fov_deg:.1}°, near {:.6} m (truth clips at {:.6} m: the engine floors the near plane at 1 m), far {:.3} km, {:.6} m/px at the nucleus",
+      "inside pose: camera {:.6} m from the surface ({:.6} m from the centre) sunward on the anti-solar axis, fov {fov_deg:.1}°, near {:.6} m (truth clips at {:.6} m: the engine near floor), far {:.3} km, {:.6} m/px at the nucleus",
       args.inside_m,
-      inside_au * aethervk_core_rlib::scene::dust::AU_M,
-      inside_near_au * aethervk_core_rlib::scene::dust::AU_M,
-      inside_truth_near_au * aethervk_core_rlib::scene::dust::AU_M,
+      inside_au * au_m,
+      inside_near_au * au_m,
+      inside_truth_near_au * au_m,
       inside_far_now * AU_KM,
-      2.0 * inside_au * aethervk_core_rlib::scene::dust::AU_M * persp_tan_h.unwrap_or(1.0)
+      2.0 * inside_au * au_m * persp_tan_h.unwrap_or(1.0)
         / args.height as f64
     ));
   }
@@ -2084,8 +2114,8 @@ fn main() {
     // the frame's work settles: the host moves the split depth and the volume / EWA biases
     // (header word `PYR_SPLIT_DEPTH`) after a frame over a budget — a cold start or a jump inside
     // the coma draws its first frames under the in-frame gates (`DUST_FRAME_HARD_FACTOR`); one
-    // generation at a time until the word repeats, at most `WORK_SETTLE_MAX`, before the exposure
-    // settles on the settled image
+    // generation at a time until the word repeats across all `DUST_READBACK_SLOTS` slots, at most
+    // `WORK_SETTLE_MAX`, before the exposure settles on the settled image
     let mut work_extra = 0u32;
     if dl.is_some() {
       let word_of = || {
@@ -2094,6 +2124,7 @@ fn main() {
           .and_then(|p| p.get(aethervk_core_rlib::scene::dust::PYR_SPLIT_DEPTH as usize).copied())
       };
       let mut prev = word_of();
+      let mut same_streak = 0usize;
       while work_extra < WORK_SETTLE_MAX {
         let Some(next) = wait_and_download(&ctx, args.width, args.height, 1, 60_000) else {
           break;
@@ -2102,7 +2133,12 @@ fn main() {
         work_extra += 1;
         let now = word_of();
         if now == prev {
-          break;
+          same_streak += 1;
+          if same_streak >= aethervk_core_rlib::gpu_backends::vulkan::device::dust::DUST_READBACK_SLOTS {
+            break;
+          }
+        } else {
+          same_streak = 0;
         }
         prev = now;
       }
@@ -2178,6 +2214,47 @@ fn main() {
     log_line(&format!(
       "[observer] render ≈ {render_ms:.1} ms/frame ({generations} generations, {work_extra} to settle the work, {settle_extra} to settle the exposure, {speck_extra} to settle the speck shell)"
     ));
+    // the dust passes' GPU time of the last measured frame (`DustGpuTimings`)
+    let dust_gpu = ctx.dust_gpu_timings(pe);
+    match dust_gpu {
+      Some(t) => {
+        log_line(&format!(
+          "[observer] dust GPU: propagate {:.2} ms, splat+specks {:.2} ms, measure {:.2} ms, composite {:.2} ms, total {:.2} ms (average {:.2} ms) at {}x{}{}",
+          t.propagate_ms, t.splat_ms, t.measure_ms, t.composite_ms, t.total_ms, t.total_ema_ms, t.width, t.height,
+          if t.reused { " (image reused)" } else { "" }
+        ));
+        let calls: Vec<String> =
+          t.call_ms.iter().filter(|c| !c.is_nan()).map(|c| format!("{c:.2}")).collect();
+        log_line(&format!(
+          "[observer] dust GPU: splats {:.2} ms (per dispatch, layer then tier: {} ms), specks {:.2} ms",
+          t.splat_only_ms,
+          calls.join(" / "),
+          t.specks_ms
+        ));
+      }
+      None => log_line("[observer] dust GPU: no timings (no timestamp queries, or none measured yet)"),
+    }
+    // the last frame that drew (a still view reuses its image at ~0 ms; a moving one draws:
+    // the budget holds for the drawn frame)
+    let dust_gpu_drawn = ctx.dust_gpu_timings_drawn(pe);
+    if let Some(t) = dust_gpu_drawn.filter(|_| dust_gpu.is_some_and(|l| l.reused)) {
+      log_line(&format!(
+        "[observer] dust GPU: the last frame reused the image; the last drawn one (frame {}): propagate {:.2} ms, splat+specks {:.2} ms, total {:.2} ms",
+        t.frame, t.propagate_ms, t.splat_ms, t.total_ms
+      ));
+    }
+    // the dust frame budget (`--dust-budget-ms`): the app re-splats every presentation frame
+    // whose view changed; checked on the last frame that drew
+    if let Some(budget) = args.dust_budget_ms {
+      match dust_gpu_drawn.or(dust_gpu) {
+        Some(t) if t.total_ms > budget => problems.push(format!(
+          "frame {i}: dust GPU {:.2} ms over the {budget} ms budget (splat+specks {:.2} ms, propagate {:.2} ms) at {}x{}",
+          t.total_ms, t.splat_ms, t.propagate_ms, t.width, t.height
+        )),
+        Some(_) => {}
+        None => problems.push(format!("frame {i}: dust GPU time not measured (the budget cannot be checked)")),
+      }
+    }
     let (mut rgba, tid) = match dl {
       Some(x) => x,
       None => {
@@ -2607,6 +2684,8 @@ fn main() {
       p99_lum: p99_l,
       nonblack_frac: nonblack,
       render_task: tid,
+      render_ms,
+      dust_gpu,
       passes_logged: String::new(),
       mc: mc_rec,
       exposure: ctx.dust_exposure(pe),
@@ -2724,8 +2803,18 @@ fn main() {
   {
     let mut md = String::new();
     md.push_str("# dust_observer run\n\n");
+    let flow_on = if args.view_flags & aethervk_core_rlib::scene::dust::DUST_VIEW_FLOW != 0 {
+      "on"
+    } else {
+      "off"
+    };
+    let tracers_on = if args.view_flags & aethervk_core_rlib::scene::dust::DUST_VIEW_TRACERS != 0 {
+      "on"
+    } else {
+      "off"
+    };
     md.push_str(&format!(
-      "- start: `{start}`  scene range end: `{end}`\n- frames: {n_frames} every {} h ({} days)\n- size: {}x{}  pose: {:?}\n- play mode: {:?}  reemit-every: {}\n- SPK: `{}`\n- CPU particles: {}\n- jet: lat 20°, lon 0°, aperture 0.5 rad, v 2.0±0.5 m/s, d 100 µm, ρ 0.533 g/cm³, Afρ₀ 100 cm, power 2, cutoff 15 AU, nucleus 2 km, seed 7, colour (1.0, 0.6, 0.2)\n- rotation: pole RA 0°, Dec 90°, period {ROTATION_PERIOD_H} h, body-fixed\n- ignition: {}\n- view: dust flags 2 (flow on, tracers off), flow speed 1.0, softening 1e-2\n- framing: half-height {half_height_km:.1} km = {half_height_au:.6} AU (3·coma {:.1} km vs β·g·T² {:.1} km, β_ref {:.4}, r₀ {r0_au:.4} AU), camera {:.1} km above the comet along +Z\n- Vulkan validation errors: {vk_errors}\n- wall time: {:.1} s\n\n",
+      "- start: `{start}`  scene range end: `{end}`\n- frames: {n_frames} every {} h ({} days)\n- size: {}x{}  pose: {:?}\n- play mode: {:?}  reemit-every: {}\n- SPK: `{}`\n- CPU particles: {}\n- jet: lat 20°, lon 0°, aperture 0.5 rad, v 2.0±0.5 m/s, d 100 µm, ρ 0.533 g/cm³, Afρ₀ 100 cm, power 2, cutoff 15 AU, nucleus 2 km, seed 7, colour (1.0, 0.6, 0.2)\n- rotation: pole RA 0°, Dec 90°, period {ROTATION_PERIOD_H} h, body-fixed\n- ignition: {}\n- view: dust flags {} (flow {flow_on}, tracers {tracers_on}), flow speed 1.0, softening 1e-2\n- framing: half-height {half_height_km:.1} km = {half_height_au:.6} AU (3·coma {:.1} km vs β·g·T² {:.1} km, β_ref {:.4}, r₀ {r0_au:.4} AU), camera {:.1} km above the comet along +Z\n- Vulkan validation errors: {vk_errors}\n- wall time: {:.1} s\n\n",
       args.step_hours,
       args.days,
       args.width,
@@ -2736,6 +2825,7 @@ fn main() {
       spk.display(),
       std::env::var("AETHERVK_PARTICLES_CPU").as_deref() == Ok("1"),
       ignition.map_or(String::from("pre-existing tail (--prestart)"), |t| format!("{t} (start + {:.2} d)", args.ignite_days)),
+      args.view_flags,
       3.0 * coma0_km,
       tail_km,
       cfg0.beta_ref,
@@ -2747,11 +2837,11 @@ fn main() {
         "- perspective: fov {fov_deg:.2}°{}; metres per pixel at the nucleus per frame in `stats.jsonl` (`camera.m_per_px_nucleus`)\n\n",
         if args.pose == Pose::Inside {
           format!(
-            ", camera {:.6} m from the nucleus surface ({:.6} m from the centre) sunward on the anti-solar axis looking down the tail, near {:.6} m (truth {:.6} m: the engine's 1 m floor), far {:.3} km",
+            ", camera {:.6} m from the nucleus surface ({:.6} m from the centre) sunward on the anti-solar axis looking down the tail, near {:.6} m (truth {:.6} m: the engine near floor), far {:.3} km",
             args.inside_m,
-            inside_au * aethervk_core_rlib::scene::dust::AU_M,
-            inside_near_au * aethervk_core_rlib::scene::dust::AU_M,
-            inside_truth_near_au * aethervk_core_rlib::scene::dust::AU_M,
+            inside_au * au_m,
+            inside_near_au * au_m,
+            inside_truth_near_au * au_m,
             inside_far_now * AU_KM
           )
         } else {
@@ -5688,6 +5778,58 @@ fn mc_piece_seed(seed: u32, piece: usize) -> u64 {
 
 /// `OBSERVER_THREADS=<n>`: the lab's CPU threads (the splat, the packet MC); default the
 /// machine's parallelism, clamped to 1..=32. Results are the same at any count.
+/// The spread of the splat's work over the clusters (`AETHERVK_DUST_WORK_LOG=1`, replay lab):
+/// per counter (texel adds, split children, volume evaluations, EWA texel units) the total, the
+/// clusters doing any, the quantiles per cluster and the share of the top 0.1 % / 1 % / 10 %
+/// clusters; then the 8 costliest clusters by texel adds. Nothing without a log.
+fn print_work_log(log: &[aethervk_core_rlib::scene::dust::ClusterWork]) {
+  if log.is_empty() {
+    return;
+  }
+  let n = log.len();
+  let counters: [(&str, fn(&aethervk_core_rlib::scene::dust::ClusterWork) -> u64); 4] = [
+    ("texel adds", |c| c.adds),
+    ("split children", |c| c.split_children as u64),
+    ("volume evals", |c| c.volume_evals as u64),
+    ("ewa units", |c| c.ewa_units as u64),
+  ];
+  println!("lab: work over {n} clusters (AETHERVK_DUST_WORK_LOG)");
+  for (name, get) in counters {
+    let mut v: Vec<u64> = log.iter().map(get).collect();
+    v.sort_unstable_by(|a, b| b.cmp(a));
+    let total: u64 = v.iter().sum();
+    if total == 0 {
+      println!("lab:   {name}: 0");
+      continue;
+    }
+    let any = v.iter().filter(|&&x| x > 0).count();
+    let top = |frac: f64| {
+      let k = ((n as f64 * frac).ceil() as usize).clamp(1, n);
+      v[..k].iter().sum::<u64>() as f64 / total as f64
+    };
+    let q = |p: f64| v[((1.0 - p) * (n - 1) as f64).round() as usize];
+    println!(
+      "lab:   {name}: total {total} ({any} clusters > 0); per cluster p50 {} p90 {} p99 {} p99.9 {} max {}; top 0.1% {:.1}% top 1% {:.1}% top 10% {:.1}%",
+      q(0.5),
+      q(0.9),
+      q(0.99),
+      q(0.999),
+      v[0],
+      100.0 * top(0.001),
+      100.0 * top(0.01),
+      100.0 * top(0.1)
+    );
+  }
+  let mut by_adds: Vec<&aethervk_core_rlib::scene::dust::ClusterWork> = log.iter().collect();
+  by_adds.sort_unstable_by(|a, b| b.adds.cmp(&a.adds));
+  for c in by_adds.iter().take(8) {
+    println!(
+      "lab:   costliest: index {} of {} age {:.0} s adds {} children {} evals {} ewa {}",
+      c.index, c.live, c.age_s, c.adds, c.split_children, c.volume_evals, c.ewa_units
+    );
+  }
+}
+
 fn observer_threads() -> usize {
   std::env::var("OBSERVER_THREADS")
     .ok()
@@ -5779,6 +5921,8 @@ fn lab_packet_mc(tiers: &LabTiers, header: &[u32], w: u32, h: u32, k: usize, out
     // one cluster's packets into `a`; each packet draws from its own stream (tier, cluster,
     // packet, piece), so no draw depends on another cluster's
     let cluster = |i: usize, a: &mut LabMcAcc| {
+      // the frame's kernel (`DUST_FRAME_LEGACY_KERNEL_BIT`), on this thread
+      d::set_legacy_kernel(d::legacy_kernel(header));
       let LabMcAcc { img, rh, cat, sup, sup_cat, pk } = a;
       let m = &moments[i];
       if !(m.flux() > 0.0) {
@@ -6564,6 +6708,9 @@ fn run_lab(dir: &Path, frame: u32, lab_truth: usize) -> i32 {
     "lab: splat {clusters} clusters on {threads} threads, {:.1} s; replay pyramid hash {hash:016x}",
     t_splat.elapsed().as_secs_f64()
   );
+  // `AETHERVK_DUST_WORK_LOG=1`: the splat's work per cluster (`d::take_work_log`): how it spreads
+  // over the clusters (does a long tail of a few clusters carry the frame's GPU time?)
+  print_work_log(&d::take_work_log());
   let Some(render) = tau_image_of_pyramid(&pyr, w, h) else {
     eprintln!("lab: the replayed pyramid has no τ image");
     return 2;

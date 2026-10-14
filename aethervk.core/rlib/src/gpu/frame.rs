@@ -991,10 +991,24 @@ pub fn prepare_dust(
     .unwrap_or(0.0);
   let flow = crate::scene::dust::DustFlowUniform::new(&render_scene.dust_flow, t_sim);
   let flags = render_scene.dust_view_flags;
-  let view = if dust_debug_skip("zero") {
-    device.dust_view_params(pe).unwrap_or_default()
+  // dust trace (`gpu::dust_trace`): every `trace_every` frames, what was drawn
+  static FRAME: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+  let frame_no = FRAME.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+  let tracing = crate::gpu::dust_trace::trace_path().is_some()
+    && frame_no % crate::gpu::dust_trace::trace_every() == 0;
+  let specks_needed = device.dust_specks_needed(pe);
+  // an unchanged frame keeps the last frame's image (`cmd_dust_frame_begin_reusable`): no
+  // propagate, splat or specks; a traced frame always draws
+  let (view, reuse) = if dust_debug_skip("zero") {
+    (device.dust_view_params(pe).unwrap_or_default(), false)
+  } else if tracing
+    || aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_NO_REUSE").is_some_and(|v| v.trim() == "1")
+  {
+    // `AETHERVK_DUST_NO_REUSE=1` (diagnostics, A/B): every frame draws
+    (device.cmd_dust_frame_begin(cmd, pe, render_scene.window_extent, flags, flow)?, false)
   } else {
-    device.cmd_dust_frame_begin(cmd, pe, render_scene.window_extent, flags, flow)?
+    let inputs = dust_draw_inputs(render_scene, flags, &flow, specks_needed);
+    device.cmd_dust_frame_begin_reusable(cmd, pe, render_scene.window_extent, flags, flow, inputs)?
   };
   // the speck shell's pixel solid angle (perspective cameras; 0 = no shell): used from the next
   // readback on (`dust::specks::shell_radius_m`)
@@ -1020,6 +1034,10 @@ pub fn prepare_dust(
   for layer in render_scene.depth_layers.iter() {
     for call in layer.dust_calls.iter() {
       let s = &call.state;
+      if reuse {
+        wait = wait.max(s.compute_wait);
+        continue;
+      }
       if dust_debug_skip("propagate") {
         buffers.push(None);
         continue;
@@ -1032,8 +1050,22 @@ pub fn prepare_dust(
       {
         frame.ttl[0] = frame.ttl[0].min(cap);
       }
-      buffers.push(
-        match device.cmd_dust_propagate(
+      // AETHERVK_DUST_DEBUG_AGE_MIN=<s> (diagnostics, the observer's `--mc-age-min`): every
+      // tier's age band starts there at least, so a frame holds the dust older than that only
+      if let Some(lo) = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_DEBUG_AGE_MIN")
+        .and_then(|v| v.trim().parse::<f32>().ok())
+      {
+        frame.ttl[1] = frame.ttl[1].max(lo);
+      }
+      // unchanged inputs (a paused or still frame, a second view): the buffers already hold this
+      // propagate's output and the dispatch is skipped (`cmd_dust_propagate_cached`;
+      // `AETHERVK_DUST_NO_REUSE=1` dispatches every frame)
+      let propagated = if aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_NO_REUSE").is_some_and(|v| v.trim() == "1") {
+        device
+          .cmd_dust_propagate(cmd, call.entity_id.as_ffi(), s.ring_base, s.capacity, s.first_slot, s.live_count, &frame)
+          .map(|a| (a, false))
+      } else {
+        device.cmd_dust_propagate_cached(
           cmd,
           call.entity_id.as_ffi(),
           s.ring_base,
@@ -1041,36 +1073,40 @@ pub fn prepare_dust(
           s.first_slot,
           s.live_count,
           &frame,
-        ) {
-          Ok(addrs) => {
+          s.compute_wait,
+        )
+      };
+      buffers.push(
+        match propagated {
+          Ok((addrs, _skipped)) => {
             wait = wait.max(s.compute_wait);
             Some(addrs)
           }
           Err(e) => {
             aethervk_oshal_rlib::log!("[Dust] propagate failed for {:?}: {}", call.entity_id, e);
+            device.dust_forget_drawn(pe);
             None
           }
         },
       );
     }
   }
+  device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_PROPAGATED);
   device.cmd_dust_pre_splat_barrier(cmd);
   device.cmd_checkpoint(cmd, c"dust: splat");
   let extent = render_scene.window_extent;
-  // dust trace (`gpu::dust_trace`): every `trace_every` frames, what was drawn
-  static FRAME: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-  let frame_no = FRAME.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-  let tracing = crate::gpu::dust_trace::trace_path().is_some()
-    && frame_no % crate::gpu::dust_trace::trace_every() == 0;
   let mut traced: Vec<(u64, crate::gpu::dust_trace::TraceFrameMeta, Vec<u32>)> = Vec::new();
   let specks_buffers = buffers.clone();
   let mut buffers = buffers.into_iter();
+  // the splat dispatches recorded so far: a timestamp after each of the first `DUST_TS_CALLS`
+  // (`DustGpuTimings::call_ms`)
+  let mut splat_calls = 0u32;
   let inv_unit = if view.unit > 0.0 {
     1.0 / view.unit
   } else {
     0.0
   };
-  for layer in render_scene.depth_layers.iter_mut() {
+  for layer in render_scene.depth_layers.iter_mut().filter(|_| !reuse) {
     let camera =
       render_scene
         .camera_data
@@ -1128,6 +1164,13 @@ pub fn prepare_dust(
       };
       match splat {
         Ok(()) => {
+          if !skip_splat {
+            use crate::gpu_backends::vulkan::device::dust::{DUST_TS_CALL0, DUST_TS_CALLS};
+            if (splat_calls as usize) < DUST_TS_CALLS {
+              device.cmd_dust_timestamp(cmd, pe, DUST_TS_CALL0 + splat_calls);
+            }
+            splat_calls += 1;
+          }
           if tracing {
             use crate::gpu::dust_trace::{TraceFrameMeta, TraceTierMeta, sample_slots};
             let id = call.entity_id.as_ffi();
@@ -1166,16 +1209,20 @@ pub fn prepare_dust(
         Err(e) => {
           aethervk_oshal_rlib::log!("[Dust] splat failed for {:?}: {}", call.entity_id, e);
           call.state.live_count = 0;
+          device.dust_forget_drawn(pe);
         }
       }
     }
   }
+  device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_SPLATS_DONE);
   // the physical specks (`dust_specks.comp`, WP3b): one pass per tier on the same pyramid, after
-  // its splat; always recorded (it measures the density at the eye), it draws only inside the
-  // header's shell radius. `AETHERVK_DUST_DEBUG_SKIP=specks` skips it. The size law is the
+  // its splat; it measures the density at the eye and draws only inside the header's shell
+  // radius. `AETHERVK_DUST_DEBUG_SKIP=specks` skips it. The size law is the
   // system's (`DustDrawState::s_ref_um` / `size_q`, from `ParticleSystemEmitParams`); a state
   // without one (0) falls back to `AETHERVK_DUST_SPECKS_SREF_UM` or 50 µm, and q = 3.5.
-  if !dust_debug_skip("specks") {
+  // skipped when nothing needs it (`Device::dust_specks_needed`: the specks off and no eye
+  // density asked for)
+  if !reuse && !dust_debug_skip("specks") && specks_needed {
     device.cmd_checkpoint(cmd, c"dust: specks");
     let s_ref_fallback = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPECKS_SREF_UM")
       .and_then(|v| v.trim().parse::<f32>().ok())
@@ -1234,10 +1281,12 @@ pub fn prepare_dust(
           pc,
         ) {
           aethervk_oshal_rlib::log!("[Dust specks] failed for {:?}: {}", call.entity_id, e);
+          device.dust_forget_drawn(pe);
         }
       }
     }
   }
+  device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_SPLATTED);
   device.cmd_dust_post_splat_barrier(cmd);
   device.cmd_checkpoint(cmd, c"dust: trace + readback");
   for (id, meta, ring_bases) in traced {
@@ -1258,6 +1307,82 @@ pub fn prepare_dust(
     render_scene.dust_view.pyramid = 0;
   }
   Ok(wait)
+}
+
+/// A fingerprint (FNV-1a) of everything a dust frame's propagates, splats and specks read
+/// besides the pyramid header (`Device::cmd_dust_frame_begin_reusable` compares the header):
+/// the viewport, the view flags and flow, whether the specks are recorded, the diagnostics that
+/// change the drawing, and per call (layer by layer) its system, tier state (frame constants,
+/// drawn range, newest emission), colour and exposure and both of its view matrices.
+fn dust_draw_inputs(
+  render_scene: &RenderScene,
+  flags: u32,
+  flow: &crate::scene::dust::DustFlowUniform,
+  specks_needed: bool,
+) -> u64 {
+  struct Fnv(u64);
+  impl Fnv {
+    fn bytes(&mut self, b: &[u8]) {
+      for &x in b {
+        self.0 = (self.0 ^ x as u64).wrapping_mul(0x100_0000_01b3);
+      }
+    }
+    fn u64(&mut self, v: u64) {
+      self.bytes(&v.to_le_bytes());
+    }
+    fn f32s(&mut self, v: &[f32]) {
+      for x in v {
+        self.bytes(&x.to_bits().to_le_bytes());
+      }
+    }
+    fn f64s(&mut self, v: &[f64]) {
+      for x in v {
+        self.u64(x.to_bits());
+      }
+    }
+  }
+  let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+  h.u64(render_scene.window_extent[0] as u64 | (render_scene.window_extent[1] as u64) << 32);
+  h.u64(flags as u64 | (specks_needed as u64) << 32);
+  h.f32s(&[flow.t_hi, flow.t_lo, flow.speed]);
+  for name in [
+    "AETHERVK_DUST_DEBUG_STREAM",
+    "AETHERVK_DUST_DEBUG_SAMPLE_MOD",
+    "AETHERVK_DUST_DEBUG_TIER",
+    "AETHERVK_DUST_DEBUG_SKIP",
+    "AETHERVK_DUST_DEBUG_AGE_MAX",
+    "AETHERVK_DUST_DEBUG_AGE_MIN",
+    "AETHERVK_DUST_SPECKS_SREF_UM",
+  ] {
+    let v = aethervk_oshal_rlib::os::env::var(name).unwrap_or_default();
+    h.bytes(v.as_bytes());
+    h.bytes(&[0xff]);
+  }
+  for layer in render_scene.depth_layers.iter() {
+    let camera = render_scene
+      .camera_data
+      .rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
+    h.u64(layer.dust_calls.len() as u64);
+    for call in layer.dust_calls.iter() {
+      let s = &call.state;
+      h.u64(call.entity_id.as_ffi());
+      h.f64s(&call.rte_position);
+      h.f64s(&[call.units_per_m]);
+      h.f32s(&call.stream_color);
+      h.f64s(&s.anchor_m);
+      h.u64(s.tier as u64 | (s.ring_base as u64) << 32);
+      h.u64(s.first_slot as u64 | (s.live_count as u64) << 32);
+      h.u64(s.capacity as u64);
+      h.u64(s.compute_wait);
+      h.bytes(bytemuck::bytes_of(&s.frame));
+      h.f32s(&[s.albedo, s.ttl_s, s.s_ref_um, s.size_q]);
+      let (mvp, params) = call.mvp_params(&camera, render_scene.window_extent);
+      h.f32s(&mvp);
+      h.f32s(&params);
+      h.f32s(&call.mvp_params_eye_relative(&camera));
+    }
+  }
+  h.0
 }
 
 /// `AETHERVK_DUST_DEBUG_SKIP` contains `what` (comma separated): skips that part of the dust

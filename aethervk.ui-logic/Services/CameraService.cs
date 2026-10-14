@@ -739,7 +739,7 @@ public sealed class CameraService : IDisposable
     {
       CameraMode.EarthPosition  => true,  // telescope zoom: field of view / ortho extents
       CameraMode.CometOrbiting  => true,
-      CameraMode.UpZenith       => false,
+      CameraMode.UpZenith       => true,  // ortho extents / field of view zoom
       _ => false,
     };
 
@@ -1293,9 +1293,9 @@ public sealed class CameraService : IDisposable
       return true;
     }
 
-    if (_modeSubject.Value == CameraMode.EarthPosition)
+    if (_modeSubject.Value is CameraMode.EarthPosition or CameraMode.UpZenith)
     {
-      // Telescope zoom: the observer stays on the surface (the core keeps it aimed while tracking),
+      // Telescope / ortho-extent zoom: the camera pose stays fixed,
       // only the field changes, keeping near / far.
       float shift = mods.HasFlag(InputModifiers.Shift) ? ShiftFactor : 1f;
       float scaleFactor = ZoomScaleFactor(pixelDy, shift);

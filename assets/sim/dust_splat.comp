@@ -19,6 +19,7 @@
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
 #include "dust_common.glsl"
+#include "dust_scatter.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -40,63 +41,16 @@ layout(push_constant, std430) uniform PushConstants {
     vec4  eyeLocal;             // 112: eye in local metres; w = the system's TTL (s), the hue clock
 } pc;                           // 128 bytes
 
-// The capsule of P into one grid of w x h texels of s px at word off (dust::scatter_into): for
-// each texel row only the x-range the segment's lateral band covers is visited; `full` adds the
-// colour and the nearest depth too
-bool scatter_into(DustScreenPacket P, vec3 color, float s, uint off, uint w, uint h, bool full) {
-    // a segment shorter than two texels at this level may miss every texel centre with open
-    // ends: drawn closed (Gaussian caps), so its flux lands on the texels around it
-    if (dot(P.seg, P.seg) < 4.0 * s * s) { P.openStart = false; P.openEnd = false; }
-    DustBand B = dust_band_new(P);
-    int y0, y1;
-    if (!dust_band_rows(B, s, h, y0, y1)) return false;
-    float area = s * s;
-    uint depthBits = floatBitsToUint(max(P.depthAu, 0.0));
-    bool any_ = false;
-    // error diffusion along this thread's texel loop (dust::scatter_into): the fraction below one
-    // count is carried to the next texel, so a packet deposits its whole flux however faint
-    float carry = 0.0;
-    for (int ty = y0; ty <= y1; ++ty) {
-        float yc = (float(ty) + 0.5) * s;
-        int x0, x1;
-        if (!dust_band_columns(B, yc, s, w, x0, x1)) continue;
-        for (int tx = x0; tx <= x1; ++tx) {
-            vec2 x = vec2((float(tx) + 0.5) * s, yc);
-            float tau = dust_capsule_tau(P, x) * area * pc.invUnit;
-            if (P.albedo > 0.0) tau *= dust_texel_weight(P, x);
-            if (!(tau >= 0.0) || isinf(tau)) continue;
-            float tauC = min(tau, DUST_COUNT_MAX_PER_ADD) + carry;
-            uint counts = uint(tauC + 0.5);
-            carry = tauC - float(counts);
-            if (counts == 0u) continue;
-            uint i = off + (uint(ty) * w + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
-            dust_atomic_add_sat(pc.pyramid, i, counts);
-            if (full) {
-                // colour words floor(counts * c + h), h a hashed threshold per texel, an ordered
-                // dither (dust::scatter_into): rounding counts * c + 0.5 per deposit turned every
-                // faint texel into (1, 1, 0)
-                float hf = float(dust_hash32(i) >> 8u) * (1.0 / 16777216.0);
-                uvec3 n = uvec3(float(counts) * color * DUST_COLOR_SCALE + hf);
-                dust_atomic_add_sat(pc.pyramid, i + 1u, n.r);
-                dust_atomic_add_sat(pc.pyramid, i + 2u, n.g);
-                dust_atomic_add_sat(pc.pyramid, i + 3u, n.b);
-                // nearest dust: 0 means "no dust yet" (positive f32 bits order as uints)
-                uint cur = pc.pyramid.v[i + 4u];
-                if (cur == 0u || depthBits < cur) {
-                    uint seen = atomicCompSwap(pc.pyramid.v[i + 4u], 0u, depthBits);
-                    if (seen != 0u) atomicMin(pc.pyramid.v[i + 4u], depthBits);
-                }
-            }
-            any_ = true;
-        }
-    }
-    return any_;
-}
-
 // whether this frame's in-frame gates are on (bit 22 of DUST_PYR_SPLIT_DEPTH clear; dust::frame_gates_on)
 bool dust_frame_gates_on() {
     return ((pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] >> 22u) & 1u) == 0u;
 }
+
+// Timing probes (bits 30-31 of DUST_PYR_SPLIT_DEPTH, host `AETHERVK_DUST_TIMING_PROBE`;
+// diagnostics only, never set in production, no CPU mirror): 1 = plain_add (dust_atomic_add_sat),
+// 2 = no_volume_writes (the volumetric texels are evaluated but not written: one add per packet
+// into its level's first texel), 3 = no_volume (volumetric packets are dropped)
+uint dust_probe() { return (dust_pyr_split_word >> 30u) & 3u; }
 
 // the level a packet past an in-frame gate is drawn at least at (dust::gate_level)
 uint dust_gate_level(uint levels) {
@@ -170,99 +124,68 @@ void scatter(DustScreenPacket P, vec3 color, uint levels) {
     uint off = pc.pyramid.v[DUST_PYR_TABLE + 3u * level];
     uint w = pc.pyramid.v[DUST_PYR_TABLE + 3u * level + 1u];
     uint h = pc.pyramid.v[DUST_PYR_TABLE + 3u * level + 2u];
-    if (scatter_into(P, color, float(1u << level), off, w, h, true)) {
-        atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << level);
-    }
-    // the white-point measurement grid is derived from the finished pyramid (dust_measure.comp)
-}
-
-// One Gaussian piece of a volumetric packet (dust::VolumePiece)
-struct DustVolumePiece {
-    float l[6];   // Cholesky factor of its covariance
-    vec3  qw;     // L^-1 (eye - mean)
-    float k;      // exposure * flux / (2 pi sqrt(det S))
-    vec4  bbox;   // projected 3-sigma box (px): x0 x1 y0 y1
-    bool  full;   // the whole frame (the eye near it, or a box corner not in front of the eye)
-    bool  on;     // on screen
-};
-
-// The n pieces of a volumetric packet (dust::volume_pieces): covariance S (pixel filter
-// included), piece variance cvar of the spacing^2
-// (the axes: base point axMean and covariance S, axis a = segA (the chord, rho ramp, from the base
-// point) with nA pieces of variance cvarA spacing^2, axis b = segB (dust::Packet::seg_t, uniform,
-// centred) with nB pieces when hasB; piece i * nB + j; without axis b the chord-only arithmetic)
-void dust_volume_pieces(DustPacket p, float exposure, vec3 axMean, float S[6], vec3 segA, uint nA, float cvarA,
-                        vec3 segB, uint nB, float cvarB, bool hasB, float W, float H,
-                        inout DustVolumePiece pieces[DUST_VOLUME_PIECES_MAX]) {
-    vec3 r0 = vec3(pc.mvp[0][0], pc.mvp[1][0], pc.mvp[2][0]);
-    vec3 r1 = vec3(pc.mvp[0][1], pc.mvp[1][1], pc.mvp[2][1]);
-    vec3 r3 = vec3(pc.mvp[0][3], pc.mvp[1][3], pc.mvp[2][3]);
-    float t0 = pc.mvp[3][0], t1 = pc.mvp[3][1], t3 = pc.mvp[3][3];
-    vec3 eye = pc.eyeLocal.xyz;
-    float cvar = cvarA;
-    float invN = 1.0 / float(nA);
-    vec3 h = segA * invN;
-    float invB = 1.0 / float(nB);
-    vec3 hb = segB * invB;
-    for (uint k = 0u; k < nA * nB; ++k) {
-        uint i = k / nB, j = k % nB;
-        float uk = (float(i) + 0.5) * invN;
-        vec3 meanK = axMean + segA * uk;
-        float Sk[6];
-        Sk[0] = S[0] + cvar * h.x * h.x;
-        Sk[1] = S[1] + cvar * h.x * h.y;
-        Sk[2] = S[2] + cvar * h.x * h.z;
-        Sk[3] = S[3] + cvar * h.y * h.y;
-        Sk[4] = S[4] + cvar * h.y * h.z;
-        Sk[5] = S[5] + cvar * h.z * h.z;
-        float fluxK = p.flux * (p.rho.x + (p.rho.y - p.rho.x) * uk) * invN;
-        if (hasB) {
-            float vk = (float(j) + 0.5) * invB - 0.5;
-            meanK = meanK + segB * vk;
-            Sk[0] += cvarB * hb.x * hb.x;
-            Sk[1] += cvarB * hb.x * hb.y;
-            Sk[2] += cvarB * hb.x * hb.z;
-            Sk[3] += cvarB * hb.y * hb.y;
-            Sk[4] += cvarB * hb.y * hb.z;
-            Sk[5] += cvarB * hb.z * hb.z;
-            fluxK *= invB;
+    float s = float(1u << level);
+    // a segment shorter than two texels at this level may miss every texel centre with open
+    // ends: drawn closed (Gaussian caps), so its flux lands on the texels around it
+    if (dot(P.seg, P.seg) < 4.0 * s * s) { P.openStart = false; P.openEnd = false; }
+    DustBand B = dust_band_new(P);
+    int y0, y1;
+    if (!dust_band_rows(B, s, h, y0, y1)) return;
+    uint seed = dust_next_packet_seed();
+    // a large packet goes to the queue (dust_draw_queue.comp: a workgroup per record of at most
+    // DUST_QUEUE_RECORD_TEXELS texels, row ranges of the band); a full queue leaves the rest here
+    uint qflags = pc.pyramid.v[DUST_PYR_FLAGS];
+    float bandAt = dust_band_at(segLen, ex, ey, level);
+    bool queued = (qflags & DUST_FRAME_QUEUE_OFF) == 0u
+        && ((qflags & DUST_FRAME_QUEUE_ALL) != 0u || bandAt > DUST_QUEUE_MIN_TEXELS);
+    int ya = y0;
+    if (queued) {
+        uint base = dust_queue_base(pc.pyramid);
+        float perRow = max(bandAt / float(y1 - y0 + 1), 1.0);
+        int rowsPer = max(1, int(DUST_QUEUE_RECORD_TEXELS / perRow));
+        for (; ya <= y1; ya += rowsPer) {
+            uint at = dust_queue_append(pc.pyramid, base);
+            if (at == 0xFFFFFFFFu) break;
+            dust_queue_put_ewa(pc.pyramid, at, level, seed, off, w, h, ya, min(ya + rowsPer - 1, y1), color, pc.invUnit, P);
         }
-        float Lk[6];
-        dust_cholesky3(Sk, Lk);
-        vec3 qw = dust_cholesky_solve3(Lk, eye - meanK);
-        bool full = dot(qw, qw) < DUST_VOLUME_SIGMAS * DUST_VOLUME_SIGMAS;
-        vec3 ext = vec3(3.0 * sqrt(Sk[0]), 3.0 * sqrt(Sk[3]), 3.0 * sqrt(Sk[5]));
-        float x0 = 1e30, x1 = -1e30, y0 = 1e30, y1 = -1e30;
-        if (!full) {
-            for (uint c = 0u; c < 8u; ++c) {
-                vec3 pt = vec3(meanK.x + ((c & 1u) != 0u ? ext.x : -ext.x),
-                               meanK.y + ((c & 2u) != 0u ? ext.y : -ext.y),
-                               meanK.z + ((c & 4u) != 0u ? ext.z : -ext.z));
-                float w = dot(r3, pt) + t3;
-                if (!(w > 0.0)) { full = true; break; }
-                float px = ((dot(r0, pt) + t0) / w * 0.5 + 0.5) * W;
-                float py = ((dot(r1, pt) + t1) / w * 0.5 + 0.5) * H;
-                x0 = min(x0, px); x1 = max(x1, px);
-                y0 = min(y0, py); y1 = max(y1, py);
+    }
+    // the rows left to this thread: drawn inline (dust_scatter_segment's arithmetic, segment for
+    // segment; a struct argument per segment call cost the in-thread path 2-3x)
+    bool any_ = false;
+    float area = s * s;
+    uint depthBits = floatBitsToUint(max(P.depthAu, 0.0));
+    for (int ty = ya; ty <= y1; ++ty) {
+        float yc = (float(ty) + 0.5) * s;
+        int x0, x1;
+        if (!dust_band_columns(B, yc, s, w, x0, x1)) continue;
+        float carry = 0.0;
+        for (int tx = x0; tx <= x1; ++tx) {
+            if (uint(tx - x0) % DUST_SEGMENT_TEXELS == 0u) carry = dust_segment_carry(seed, (uint(ty) << 16u) | uint(tx));
+            vec2 x = vec2((float(tx) + 0.5) * s, yc);
+            float tau = dust_capsule_tau(P, x) * area * pc.invUnit;
+            if (P.albedo > 0.0) tau *= dust_texel_weight(P, x);
+            if (!(tau >= 0.0) || isinf(tau)) continue;
+            float tauC = min(tau, DUST_COUNT_MAX_PER_ADD) + carry;
+            uint counts = uint(tauC + 0.5);
+            carry = tauC - float(counts);
+            if (counts == 0u) continue;
+            uint i = off + (uint(ty) * w + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
+            dust_atomic_add_sat(pc.pyramid, i, counts);
+            float hf = float(dust_hash32(i) >> 8u) * (1.0 / 16777216.0);
+            uvec3 n = uvec3(float(counts) * color * DUST_COLOR_SCALE + hf);
+            dust_atomic_add_sat(pc.pyramid, i + 1u, n.r);
+            dust_atomic_add_sat(pc.pyramid, i + 2u, n.g);
+            dust_atomic_add_sat(pc.pyramid, i + 3u, n.b);
+            uint cur = pc.pyramid.v[i + 4u];
+            if (cur == 0u || depthBits < cur) {
+                uint seen = atomicCompSwap(pc.pyramid.v[i + 4u], 0u, depthBits);
+                if (seen != 0u) atomicMin(pc.pyramid.v[i + 4u], depthBits);
             }
+            any_ = true;
         }
-        pieces[k].l = Lk;
-        pieces[k].qw = qw;
-        pieces[k].k = exposure * fluxK / (2.0 * DUST_PI_F32 * (Lk[0] * Lk[3] * Lk[5]));
-        pieces[k].bbox = vec4(x0, x1, y0, y1);
-        pieces[k].full = full;
-        pieces[k].on = full || !(x1 < 0.0 || y1 < 0.0 || x0 > W || y0 > H || !(x0 <= x1) || !(y0 <= y1));
     }
-}
-
-// texel range of a piece at a level of lw x lh texels (dust::volume_range): empty off screen, the
-// whole grid when full
-ivec4 dust_volume_range(DustVolumePiece q, uint level, uint lw, uint lh) {
-    if (!q.on) return ivec4(0, -1, 0, -1);
-    if (q.full) return ivec4(0, int(lw) - 1, 0, int(lh) - 1);
-    float sz = float(1u << level);
-    return ivec4(int(max(floor(q.bbox.x / sz), 0.0)), int(min(ceil(q.bbox.y / sz), float(lw - 1u))),
-                 int(max(floor(q.bbox.z / sz), 0.0)), int(min(ceil(q.bbox.w / sz), float(lh - 1u))));
+    if (any_) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << level);
+    // the white-point measurement grid is derived from the finished pyramid (dust_measure.comp)
 }
 
 // sum over the first n pieces of the texels in their ranges at a level (dust::volume_evals)
@@ -288,91 +211,25 @@ uint dust_volume_evals(DustVolumePiece pieces[DUST_VOLUME_PIECES_MAX], uint n, u
 // of their texel ranges) fit DUST_VOLUME_MAX_EVALS, then the pieces merged in pairs; each piece is
 // evaluated over its own range only, so the work is exactly the plan's (DUST_PYR_VOLUME_EVALS).
 void dust_volume_scatter(DustPacket p, float exposure, vec3 color, uint levels, float W, float H, uint bias, uint axis) {
+    // the packet's rounding seed, drawn first (dust::volume_scatter)
+    uint seed = dust_next_packet_seed();
+    if (dust_probe() == 3u) return;
     vec3 r0 = vec3(pc.mvp[0][0], pc.mvp[1][0], pc.mvp[2][0]);
     vec3 r1 = vec3(pc.mvp[0][1], pc.mvp[1][1], pc.mvp[2][1]);
     vec3 r3 = vec3(pc.mvp[0][3], pc.mvp[1][3], pc.mvp[2][3]);
+    vec3 tv = vec3(pc.mvp[3][0], pc.mvp[3][1], pc.mvp[3][3]);
     vec3 eye = pc.eyeLocal.xyz;
-    float n3 = dot(r3, r3);
-    if (!(n3 > 0.0)) return;
-    float fPx = 0.5 * min(W * sqrt(dot(r0, r0)), H * sqrt(dot(r1, r1))) / sqrt(n3);
-    if (!(fPx > 0.0)) return;
-    vec3 q0 = eye - p.mean;
-    vec3 rSeg = q0 - p.seg * dust_segment_param(q0, p.seg);
-    float dist = sqrt(dot(rSeg, rSeg));
-    float rel = dist / fPx;
-    float varF = DUST_PIXEL_FILTER_VAR * rel * rel;
-    float S[6];
-    S[0] = p.S[0] + varF; S[1] = p.S[1]; S[2] = p.S[2];
-    S[3] = p.S[3] + varF; S[4] = p.S[4]; S[5] = p.S[5] + varF;
-    float L[6];
-    dust_cholesky3(S, L);
-    // the axes (dust::volume_plan_pieces): the chord only (default), or seg_t as uniform pieces
-    // instead of its 1.21 Gaussian (time: the chord then Gaussianised; grid: both gridded)
-    uint mode = (axis != DUST_VOLUME_AXIS_CHORD && dot(p.segT, p.segT) > 0.0) ? axis : DUST_VOLUME_AXIS_CHORD;
-    float kf = DUST_CHORD_VAR_FACTOR;
-    vec3 ht = p.segT * 0.5;
-    float lessT[6];
-    lessT[0] = S[0] - kf * ht.x * ht.x;
-    lessT[1] = S[1] - kf * ht.x * ht.y;
-    lessT[2] = S[2] - kf * ht.x * ht.z;
-    lessT[3] = S[3] - kf * ht.y * ht.y;
-    lessT[4] = S[4] - kf * ht.y * ht.z;
-    lessT[5] = S[5] - kf * ht.z * ht.z;
-    vec3 axMean = p.mean;
-    float axS[6];
-    vec3 segA = p.seg, segB = vec3(0.0);
-    bool hasB = false;
-    if (mode == DUST_VOLUME_AXIS_TIME) {
-        // the chord as its 1.21 Gaussian about its rho-weighted centre
-        vec3 hc = p.seg * 0.5;
-        float ubar = p.rho.x * 0.5 + (p.rho.y - p.rho.x) / 3.0;
-        axMean = p.mean + p.seg * ubar;
-        axS[0] = lessT[0] + kf * hc.x * hc.x;
-        axS[1] = lessT[1] + kf * hc.x * hc.y;
-        axS[2] = lessT[2] + kf * hc.x * hc.z;
-        axS[3] = lessT[3] + kf * hc.y * hc.y;
-        axS[4] = lessT[4] + kf * hc.y * hc.z;
-        axS[5] = lessT[5] + kf * hc.z * hc.z;
-        segA = vec3(0.0);
-        segB = p.segT;
-        hasB = true;
-    } else if (mode == DUST_VOLUME_AXIS_GRID) {
-        axS = lessT;
-        segB = p.segT;
-        hasB = true;
-    } else {
-        axS = S;
-    }
-    // pieces per axis: one per DUST_VOLUME_PIECE_SIGMAS Mahalanobis sigma of the base covariance
-    float Lb[6];
-    dust_cholesky3(axS, Lb);
-    vec3 dw = dust_cholesky_solve3(Lb, segA);
-    float lenW = sqrt(dot(dw, dw)) / DUST_VOLUME_PIECE_SIGMAS;
-    bool capped = lenW > float(DUST_VOLUME_PIECES_MAX);
-    uint nA = capped ? DUST_VOLUME_PIECES_MAX : max(uint(ceil(lenW)), 1u);
-    float cvarA = capped ? DUST_VOLUME_PIECE_VAR_CAPPED : 1.0 / 12.0;
-    uint nB = 1u;
-    float cvarB = 1.0 / 12.0;
-    if (hasB) {
-        vec3 dwb = dust_cholesky_solve3(Lb, segB);
-        float lenB = sqrt(dot(dwb, dwb)) / DUST_VOLUME_PIECE_SIGMAS;
-        bool cappedB = lenB > float(DUST_VOLUME_PIECES_MAX);
-        nB = cappedB ? DUST_VOLUME_PIECES_MAX : max(uint(ceil(lenB)), 1u);
-        cvarB = cappedB ? DUST_VOLUME_PIECE_VAR_CAPPED : 1.0 / 12.0;
-    }
-    // at most DUST_VOLUME_PIECES_MAX pieces in all: fewer along seg_t first
-    while (nA * nB > DUST_VOLUME_PIECES_MAX) {
-        if (nB > 1u) { nB = (nB + 1u) / 2u; cvarB = DUST_VOLUME_PIECE_VAR_CAPPED; }
-        else { nA = (nA + 1u) / 2u; cvarA = DUST_VOLUME_PIECE_VAR_CAPPED; }
-    }
-    // the level from the angular sigma
-    float tr = S[0] + S[3] + S[5];
-    float sigSmall = 2.0 * (L[0] * L[3] * L[5]) / tr;
-    float den = max(dist, sigSmall);
-    float theta = den > 0.0 ? sigSmall / den : 1.0;
-    uint level = dust_volume_level(theta * fPx, levels);
+    DustVolumePlan pl;
+    if (!dust_volume_plan_axes(p, r0, r1, r3, eye, W, H, levels, axis, pl)) return;
+    vec3 axMean = pl.axMean;
+    float axS[6] = pl.axS;
+    vec3 segA = pl.segA, segB = pl.segB;
+    bool hasB = pl.hasB;
+    uint nA = pl.nA, nB = pl.nB;
+    float cvarA = pl.cvarA, cvarB = pl.cvarB;
+    uint level = pl.level;
     DustVolumePiece pieces[DUST_VOLUME_PIECES_MAX];
-    dust_volume_pieces(p, exposure, axMean, axS, segA, nA, cvarA, segB, nB, cvarB, hasB, W, H, pieces);
+    dust_volume_pieces(p.flux, p.rho, exposure, axMean, axS, segA, nA, cvarA, segB, nB, cvarB, hasB, W, H, r0, r1, r3, tv, eye, pieces);
     bool anyFull = false, anyOn = false;
     for (uint k = 0u; k < nA * nB; ++k) { anyFull = anyFull || pieces[k].full; anyOn = anyOn || pieces[k].on; }
     if (!anyOn) return;
@@ -387,7 +244,7 @@ void dust_volume_scatter(DustPacket p, float exposure, vec3 color, uint levels, 
         if (nB > 1u) { nB = (nB + 1u) / 2u; cvarB = DUST_VOLUME_PIECE_VAR_CAPPED; }
         else if (nA > 1u) { nA = (nA + 1u) / 2u; cvarA = DUST_VOLUME_PIECE_VAR_CAPPED; }
         else break;
-        dust_volume_pieces(p, exposure, axMean, axS, segA, nA, cvarA, segB, nB, cvarB, hasB, W, H, pieces);
+        dust_volume_pieces(p.flux, p.rho, exposure, axMean, axS, segA, nA, cvarA, segB, nB, cvarB, hasB, W, H, r0, r1, r3, tv, eye, pieces);
     }
     uint n = nA * nB;
     // the in-frame gate (dust::volume_scatter): past DUST_FRAME_HARD_FACTOR budgets this frame,
@@ -397,62 +254,24 @@ void dust_volume_scatter(DustPacket p, float exposure, vec3 color, uint levels, 
     uint off = pc.pyramid.v[DUST_PYR_TABLE + 3u * level];
     uint lw = pc.pyramid.v[DUST_PYR_TABLE + 3u * level + 1u];
     uint lh = pc.pyramid.v[DUST_PYR_TABLE + 3u * level + 2u];
-    float sz = float(1u << level);
-    float area = sz * sz;
     uint depthBits = floatBitsToUint(max(sqrt(dot(eye - p.mean, eye - p.mean)) / DUST_AU_M, 0.0));
-    bool any_ = false;
-    float carry = 0.0;
-    float peak = 0.0;
     // the support's cut: the flux over the kept mass (dust::volume_scatter)
     float renorm = dust_has_support(dust_phot_support)
         ? 1.0 / max(dust_support_mass(p, dust_phot_support), DUST_SUPPORT_MASS_MIN) : 1.0;
+    // the row segments piece by piece (dust_volume_segment; one piece at a time: an array
+    // argument is copied per call in GLSL)
+    float peak = 0.0;
+    bool any_ = false;
+    float sz = float(1u << level);
     for (uint k = 0u; k < n; ++k) {
         ivec4 r = dust_volume_range(pieces[k], level, lw, lh);
+        if (r.y < r.x) continue;
+        uint pieceSeed = dust_hash32(seed ^ k);
         for (int ty = r.z; ty <= r.w; ++ty) {
-            float yc = (float(ty) + 0.5) * sz;
-            float ny = 2.0 * yc / H - 1.0;
-            vec3 bRow = r1 - r3 * ny;
-            for (int tx = r.x; tx <= r.y; ++tx) {
-                float xc = (float(tx) + 0.5) * sz;
-                float nx = 2.0 * xc / W - 1.0;
-                vec3 aRow = r0 - r3 * nx;
-                // the ray through the texel centre: on both planes of constant ndc, in front of the eye
-                precise vec3 v = cross(aRow, bRow);
-                if (dot(v, r3) < 0.0) v = -v;
-                float vn = sqrt(dot(v, v));
-                if (!(vn > 0.0)) continue;
-                vec3 u = v * (1.0 / vn);
-                vec3 uw = dust_cholesky_solve3(pieces[k].l, u);
-                float a = dot(uw, uw);
-                float b = dot(uw, pieces[k].qw);
-                precise vec3 rr = pieces[k].qw - uw * (b / a);
-                float sa = sqrt(a);
-                float tauPx = pieces[k].k * renorm / sa * exp(-0.5 * dot(rr, rr))
-                            * dust_ray_kept(a, b, eye, u, dust_phot_support);
-                if (dust_phot_albedo > 0.0) {
-                    vec3 x = eye + u * max(-b / a, 0.0);
-                    tauPx *= dust_volume_weight(p.mean, x, u);
-                }
-                if (!(tauPx >= 0.0) || isinf(tauPx)) continue;
-                peak = max(peak, tauPx);
-                float tau = tauPx * area * pc.invUnit;
-                float tauC = min(tau, DUST_COUNT_MAX_PER_ADD) + carry;
-                uint counts = uint(tauC + 0.5);
-                carry = tauC - float(counts);
-                if (counts == 0u) continue;
-                uint i = off + (uint(ty) * lw + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
-                dust_atomic_add_sat(pc.pyramid, i, counts);
-                float hf = float(dust_hash32(i) >> 8u) * (1.0 / 16777216.0);
-                uvec3 cw = uvec3(float(counts) * color * DUST_COLOR_SCALE + hf);
-                dust_atomic_add_sat(pc.pyramid, i + 1u, cw.r);
-                dust_atomic_add_sat(pc.pyramid, i + 2u, cw.g);
-                dust_atomic_add_sat(pc.pyramid, i + 3u, cw.b);
-                uint cur = pc.pyramid.v[i + 4u];
-                if (cur == 0u || depthBits < cur) {
-                    uint seen = atomicCompSwap(pc.pyramid.v[i + 4u], 0u, depthBits);
-                    if (seen != 0u) atomicMin(pc.pyramid.v[i + 4u], depthBits);
-                }
-                any_ = true;
+            for (int xa = r.x; xa <= r.y; xa += int(DUST_SEGMENT_TEXELS)) {
+                int xb = min(xa + int(DUST_SEGMENT_TEXELS) - 1, r.y);
+                any_ = dust_volume_segment(pc.pyramid, pc.invUnit, pieces[k], renorm, p.mean, eye, r0, r1, r3, W, H, sz,
+                                           color, depthBits, off, lw, pieceSeed, ty, xa, xb, peak) || any_;
             }
         }
     }
@@ -494,7 +313,7 @@ void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, f
     bool cCut = false;
     float renorm = 1.0;
     // (the eye near it: the exact ray integral below, the work bounded per packet)
-    if (perspective && !(shellDMax > 0.0) && dust_has_support(sup) && hasO && !dust_is_volumetric(p0, pc.eyeLocal.xyz)) {
+    if (perspective && !(shellDMax > 0.0) && dust_has_support(sup) && hasO && !dust_is_volumetric(p0, pc.eyeLocal.xyz) && !dust_legacy_kernel()) {
         float ra = p0.rho.x, rb = p0.rho.y;
         float ucp = ra + rb > 0.0 ? (ra + 2.0 * rb) / (3.0 * (ra + rb)) : 0.5;
         cDC = dot(sup.xyz, p0.mean + p0.seg * ucp) - wO;
@@ -692,6 +511,9 @@ void main() {
     // holds (dust_texel_weight); the cluster's Sun direction and r_h, the phase table
     dust_phot_albedo = pc.albedo;
     dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
+    // the packet rounding seeds of this cluster (dust::begin_cluster_packets)
+    dust_cluster_seed = dust_hash32(i);
+    dust_packet_ord = 0u;
     dust_phot_sun = dust_sun_dir(M);
     dust_phot_rh = dust_helio_au(M);
     dust_phot_lut = pc.pyramid;

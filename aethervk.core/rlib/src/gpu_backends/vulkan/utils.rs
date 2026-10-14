@@ -195,6 +195,9 @@ pub struct PhysicalDeviceQueryResult {
   pub graphics_queue_family_index: u32,
   pub compute_queue_family_index: u32,
   pub transfer_queue_family_index: u32,
+  /// the graphics and compute queue families' `timestampValidBits` (0: no timestamps)
+  pub graphics_timestamp_bits: u32,
+  pub compute_timestamp_bits: u32,
   pub subgroup_size: u32,
   /// True when the physical device is a CPU (e.g. Lavapipe / llvmpipe).
   /// Used to select CPU-optimised SPIR-V variants and reduced workgroup sizes.

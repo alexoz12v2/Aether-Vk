@@ -106,28 +106,14 @@ pub fn start_render_thread(
             }
             if do_main_queue_cleanup {
               use core::sync::atomic::Ordering;
-              // Spin-wait with a 200 ms timeout.
-              // If the UI thread is not pumping its event loop (e.g. blocked in a condvar),
-              // the posted action can never execute and the render thread deadlocks.
-              // On timeout we restore signal_done to `true` and skip this cleanup cycle;
-              // it will be retried on the next 500 ms CLEANUP_DELTA_UNSCALED_US interval.
-              const SPIN_TIMEOUT_US: u64 = 200_000; // 200 ms
-              let spin_deadline = get_monotonic_time() + SPIN_TIMEOUT_US as i64;
-              let signal_acquired = loop {
-                if main_thread_cb_signal_done.load(Ordering::Acquire) {
-                  break true;
-                }
-                if get_monotonic_time() >= spin_deadline {
-                  oshal::log!(
-                    "[WARN] render_thread: main-thread cleanup timed out after 200 ms \
-                     (UI thread may be blocked). Skipping this cycle."
-                  );
-                  break false;
-                }
-                core::hint::spin_loop();
-              };
-              if signal_acquired {
-                main_thread_cb_signal_done.store(false, Ordering::Release);
+              // Non-blocking check: if `main_thread_cb_signal_done` is still `false`, a previous
+              // cleanup callback is already queued on the UI dispatcher and has not completed yet.
+              // Never busy-spin on the render thread waiting for the UI thread; skip posting
+              // a duplicate callback and retry on a subsequent CLEANUP_DELTA_UNSCALED_US interval.
+              if main_thread_cb_signal_done
+                .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+              {
                 unsafe {
                   invoke_main_thread_process_cleanup(vulkan_device, &main_thread_cb_signal_done)
                 };

@@ -849,6 +849,60 @@ pub unsafe extern "C" fn avkSimulationContext_dustExposure(
   true
 }
 
+/// The GPU cost of a view's dust frame, per pass (ms; `NaN` = that pass was not measured), as
+/// measured a few frames ago (`DustGpuTimings`). 64 bytes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CDustGpuTimings {
+  pub propagate_ms: f64,
+  pub splat_ms: f64,
+  pub measure_ms: f64,
+  pub composite_ms: f64,
+  pub total_ms: f64,
+  /// exponential average of `total_ms` (weight 1/8 per frame)
+  pub total_ema_ms: f64,
+  /// the view's dust frame number these are of
+  pub frame: u64,
+  /// the dust pyramid's size (the view's pixels)
+  pub width: u32,
+  pub height: u32,
+}
+const _: () = assert!(core::mem::size_of::<CDustGpuTimings>() == 64);
+
+/// The last measured dust GPU timings of presentation engine `pe_id`; false before the first,
+/// without a view or without GPU timestamp support. Release builds too; cheap (no queue wait).
+///
+/// # Safety
+/// FFI Contract: `out` points to a writable `CDustGpuTimings`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn avkSimulationContext_dustGpuTimings(
+  ctx: *mut SimulationContext,
+  pe_id: u64,
+  out: *mut CDustGpuTimings,
+) -> bool {
+  if ctx.is_null() || out.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let Some(t) = ctx_ref.dust_gpu_timings(gpu::PresentationEngineHandle(pe_id)) else {
+    return false;
+  };
+  unsafe {
+    *out = CDustGpuTimings {
+      propagate_ms: t.propagate_ms,
+      splat_ms: t.splat_ms,
+      measure_ms: t.measure_ms,
+      composite_ms: t.composite_ms,
+      total_ms: t.total_ms,
+      total_ema_ms: t.total_ema_ms,
+      frame: t.frame,
+      width: t.width,
+      height: t.height,
+    };
+  }
+  true
+}
+
 /// Writes up to `max` dust tier summaries of `scene_id` into `out`; returns how many tiers exist.
 ///
 /// # Safety

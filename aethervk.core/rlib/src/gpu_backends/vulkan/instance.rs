@@ -722,6 +722,12 @@ impl Instance {
           graphics_queue_family_index,
           compute_queue_family_index,
           transfer_queue_family_index,
+          graphics_timestamp_bits: queue_family_properties[graphics_queue_family_index as usize]
+            .queue_family_properties
+            .timestamp_valid_bits,
+          compute_timestamp_bits: queue_family_properties[compute_queue_family_index as usize]
+            .queue_family_properties
+            .timestamp_valid_bits,
           subgroup_size,
           is_cpu,
           score,

@@ -441,6 +441,7 @@ impl SceneConversionExt2 for Scene {
     //   DEPTH_MARGIN     — 5% padding on both sides to prevent near/far edge clipping
     {
       const DEPTH_NEAR_FLOOR: f64 = 0.001; // km (= 1 m)
+      const DEPTH_NEAR_MIN: f64 = 1.0e-7; // km (= 0.1 mm) when within 2 m of the surface
       const DEPTH_MARGIN: f64 = 1.05;
 
       // Frustum plane extraction via Gribb-Hartmann from VP in f64.
@@ -506,8 +507,13 @@ impl SceneConversionExt2 for Scene {
           (depth - r * DEPTH_MARGIN, depth + r * DEPTH_MARGIN)
         } else {
           let d = depth.abs();
+          let surface_floor = if d > r {
+            ((d - r) * 0.5).clamp(DEPTH_NEAR_MIN, DEPTH_NEAR_FLOOR)
+          } else {
+            DEPTH_NEAR_FLOOR
+          };
           (
-            (d - r * DEPTH_MARGIN).max(DEPTH_NEAR_FLOOR),
+            (d - r * DEPTH_MARGIN).max(surface_floor),
             d + r * DEPTH_MARGIN,
           )
         }

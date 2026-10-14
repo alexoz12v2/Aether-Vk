@@ -3465,6 +3465,8 @@ mod utils {
         if batches_in_submit > 0 {
           // the next pass may rewrite the ring slots of the previous provisional window
           let _ = vulkan_device.cmd_dispatch_global_memory_barrier(cmd);
+          // Briefly relax between passes so a render thread spinning on `ps.dust` can acquire it.
+          core::hint::spin_loop();
         }
         vulkan_device.cmd_checkpoint(cmd, c"dust: emission pass");
         let (ids, n) = record_dust_emissions(
@@ -3661,6 +3663,24 @@ mod utils {
       simulation_api::reposition::{AU_TO_KM, KM_TO_AU},
     };
     use aethervk_oshal_rlib::math::vector::{Vector3, vec3f64::DVec3};
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct RefErrorCache {
+      scene_ptr: usize,
+      cross_e: EntityId,
+      epoch_e: EntityId,
+      comet_body: EntityId,
+      comet_orbit: EntityId,
+      p_bits: [u64; 3],
+      epoch_bits: u64,
+      radius_bits: u64,
+      orbit_sig: Option<(usize, usize, [u64; 3], [u64; 3])>,
+      el_bits: Option<[u64; 6]>,
+      cross_hidden: bool,
+      epoch_hidden: bool,
+    }
+    static LAST_REF_ERROR: spin::Mutex<Option<RefErrorCache>> = spin::Mutex::new(None);
+
     let Some([cross_e, epoch_e]) = scene_ctx.reference_error_entities else {
       return;
     };
@@ -3692,6 +3712,7 @@ mod utils {
     ) else {
       set(cross_e, None);
       set(epoch_e, None);
+      *LAST_REF_ERROR.lock() = None;
       return;
     };
     let radius_km = scene
@@ -3699,6 +3720,58 @@ mod utils {
       .unwrap_or(0.0);
     let threshold_km = 10.0 * radius_km;
     let p = [comet_au.x(), comet_au.y(), comet_au.z()];
+    let p_bits = [p[0].to_bits(), p[1].to_bits(), p[2].to_bits()];
+    let epoch_jde = epoch.to_jde_tdb_days();
+    let orbit_sig = scene.with_component(comet.orbit, |t: &TrajectoryComponent| {
+      let cps = &t.control_points_f64;
+      let first = cps.first().copied().unwrap_or([0.0; 3]);
+      let last = cps.last().copied().unwrap_or([0.0; 3]);
+      (
+        cps.len(),
+        cps.as_ptr() as usize,
+        [first[0].to_bits(), first[1].to_bits(), first[2].to_bits()],
+        [last[0].to_bits(), last[1].to_bits(), last[2].to_bits()],
+      )
+    });
+    let el_bits = scene_ctx.comet_reference_elements.map(|el| {
+      [
+        el.eccentricity.to_bits(),
+        el.perihelion_distance_au.to_bits(),
+        el.inclination_deg.to_bits(),
+        el.longitude_of_ascending_node_deg.to_bits(),
+        el.argument_of_perihelion_deg.to_bits(),
+        el.time_of_perihelion_jd_tdb.to_bits(),
+      ]
+    });
+    let cross_now_hidden = scene.with_component(cross_e, |_: &HiddenComponent| ()).is_some();
+    let epoch_now_hidden = scene.with_component(epoch_e, |_: &HiddenComponent| ()).is_some();
+    let cross_from_matches = cross_now_hidden
+      || scene
+        .with_component(cross_e, |m: &ScreenMeasurementComponent| m.from_au == comet_au)
+        .unwrap_or(false);
+    let epoch_from_matches = epoch_now_hidden
+      || scene
+        .with_component(epoch_e, |m: &ScreenMeasurementComponent| m.from_au == comet_au)
+        .unwrap_or(false);
+    if cross_from_matches && epoch_from_matches {
+      let probe = RefErrorCache {
+        scene_ptr: (scene as &crate::scene::Scene) as *const crate::scene::Scene as usize,
+        cross_e,
+        epoch_e,
+        comet_body: comet.body,
+        comet_orbit: comet.orbit,
+        p_bits,
+        epoch_bits: epoch_jde.to_bits(),
+        radius_bits: radius_km.to_bits(),
+        orbit_sig,
+        el_bits,
+        cross_hidden: cross_now_hidden,
+        epoch_hidden: epoch_now_hidden,
+      };
+      if *LAST_REF_ERROR.lock() == Some(probe) {
+        return;
+      }
+    }
 
     let cross = scene
       .with_component(comet.orbit, |t: &TrajectoryComponent| {
@@ -3715,11 +3788,12 @@ mod utils {
           )
         })
       });
+    let cross_hidden = cross.is_none();
     set(cross_e, cross);
 
     let same_epoch = scene_ctx
       .comet_reference_elements
-      .and_then(|el| state_from_elements(&el, MU_SUN_KM3_S2, epoch.to_jde_tdb_days()))
+      .and_then(|el| state_from_elements(&el, MU_SUN_KM3_S2, epoch_jde))
       .and_then(|(r, _)| {
         let ref_au = DVec3::from_components(r[0], r[1], r[2]) * KM_TO_AU;
         let km = (ref_au - comet_au).length() * AU_TO_KM;
@@ -3731,7 +3805,23 @@ mod utils {
           )
         })
       });
+    let epoch_hidden = same_epoch.is_none();
     set(epoch_e, same_epoch);
+
+    *LAST_REF_ERROR.lock() = Some(RefErrorCache {
+      scene_ptr: (scene as &crate::scene::Scene) as *const crate::scene::Scene as usize,
+      cross_e,
+      epoch_e,
+      comet_body: comet.body,
+      comet_orbit: comet.orbit,
+      p_bits,
+      epoch_bits: epoch_jde.to_bits(),
+      radius_bits: radius_km.to_bits(),
+      orbit_sig,
+      el_bits,
+      cross_hidden,
+      epoch_hidden,
+    });
   }
 
   /// Removes the effective trajectory (components only, the container entity stays): simulation
