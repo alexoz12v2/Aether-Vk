@@ -3,12 +3,19 @@
 // Dust packet queue: one workgroup per record of the view's queue (dust_scatter.glsl, filled by
 // dust_splat.comp), dispatched indirectly after every tier's splat and before the measurement
 // (Device::cmd_dust_frame_end). The 64 invocations share the record's row segments
-// (dust_scatter_rows with stride 64): the same texels, the same per-segment dither, so the
+// (dust_scatter_rows_wg: the rows' column ranges once in shared memory, the segments shared out
+// by number): the same texels, the same per-segment dither, so the
 // pyramid equals the one the cluster threads would have drawn alone (the sums, the depth minimum
 // and the level mask are order-free). No CPU mirror is needed: dust::scatter_into is the same
 // drawing.
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
+#ifdef DUST_PROFILE
+#extension GL_ARB_shader_clock : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
+#define DUST_QUEUE_WORKGROUP 1
 #include "dust_common.glsl"
 #include "dust_scatter.glsl"
 
@@ -21,6 +28,9 @@ layout(push_constant, std430) uniform PushConstants {
 } pc;                        // 16 bytes (dust::DustMeasurePushConstants)
 
 void main() {
+    // the profiler (dust_profile.glsl): the record's load and band setup, then the rows
+    DUST_PROF_BEGIN(qthread)
+    DUST_PROF_BEGIN(qload)
     uint base = dust_queue_base(pc.pyramid);
     uint r = gl_WorkGroupID.x;
     if (r >= min(pc.pyramid.v[base], dust_queue_capacity(pc.pyramid, base))) return;
@@ -41,9 +51,13 @@ void main() {
                           dust_queue_get_f(pc.pyramid, at + 9u));
         float invUnit = dust_queue_get_f(pc.pyramid, at + 10u);
         DustScreenPacket P = dust_queue_get_screen_packet(pc.pyramid, at + 11u);
-        if (dust_scatter_rows(pc.pyramid, invUnit, P, color, float(1u << level), off, w, h, seed, rowA, rowB,
-                              true, 64u, gl_LocalInvocationID.x)) {
+        DUST_PROF_END(qload)
+        if (dust_scatter_rows_wg(pc.pyramid, invUnit, P, color, float(1u << level), off, w, h, seed, rowA, rowB,
+                                 64u, gl_LocalInvocationID.x)) {
             atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << level);
         }
+        // every lane of the workgroup reaches this (the record is uniform over it)
+        DUST_PROF_END(qthread)
+        DUST_PROF_FLUSH_QUEUE(pc.pyramid, base)
     }
 }

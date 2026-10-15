@@ -1,0 +1,147 @@
+// @assets/sim/dust_split.comp
+//
+// The sub-packet queue's splitter: a workgroup per cluster of the chunk (dust_scatter.glsl
+// DUST_SQUEUE_*, filled by dust_splat.comp with the cluster's packets in its sub-packet order),
+// the lanes sharing the cluster's records. Every record goes through the leaf path of the former
+// per-cluster thread (dust_leaf.glsl: the perspective split, the EWA leaves in-thread or to the
+// EWA queue, the volumetric packets to the volume queue): a counting pass finds the rounding
+// seeds each record draws, a shared-memory prefix in record order gives it its ordinal base, and
+// the drawing pass draws with the seed the per-cluster thread drew, so the pyramid is the same
+// word for word. The same push constants as the splat (dust::DustSplatPushConstants). No CPU
+// mirror: dust::splat_tier is the same drawing.
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+#ifdef DUST_PROFILE
+#extension GL_ARB_shader_clock : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
+#include "dust_common.glsl"
+#include "dust_scatter.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    DustMomentsBuffer moments;  // 0
+    DustRenderBuffer  render;   // 8
+    DustUintBuffer    pyramid;  // 16: header + levels + measure grid + the queues
+    uint  liveCount;            // 24
+    uint  flags;                // 28
+    float exposure;             // 32
+    float invUnit;              // 36
+    uint  color;                // 40
+    float albedo;               // 44
+    mat4  mvp;                  // 48
+    vec4  eyeLocal;             // 112
+} pc;                           // 128 bytes
+
+#include "dust_volume_draw.glsl"
+#include "dust_leaf.glsl"
+
+// the speck shell's radius word (dust_splat.comp defines it too; the include guards keep it out
+// of dust_common.glsl)
+const uint DUST_PYR_SPECKS_DMAX = 252u;
+
+// the records' seed counts, then their exclusive prefix (DUST_SQUEUE_PER_CLUSTER at most)
+shared uint dust_rec_seeds[DUST_SQUEUE_PER_CLUSTER];
+
+// record r of the cluster (its index in the chunk's queue `recs + r`) through the leaf path:
+// counting (dust_counting) or drawing from the ordinal `ord`
+void dust_split_record(uint recs, uint r, uint ord, uint levels, float W, float H, vec3 fwd, bool perspective,
+                       uint splitDepth, uint volumeBias, float shellDMax, uint volumeAxis) {
+    vec3 mean, d, segT, color, sun;
+    float S[6];
+    float flux, exposure, origin, rh;
+    bool openStart, openEnd, hasO;
+    vec2 rho;
+    vec4 support;
+    uint i;
+    DUST_SQUEUE_GET(pc.pyramid, recs, r, mean, S, d, flux, exposure, openStart, openEnd, rho, segT, color, support, hasO, origin, sun, rh, i)
+    dust_phot_support = support;
+    dust_phot_has_origin = hasO;
+    dust_phot_origin = origin;
+    dust_phot_sun = sun;
+    dust_phot_rh = rh;
+    dust_cluster_seed = dust_hash32(i);
+    dust_packet_ord = ord;
+    dust_project_split_scatter(mean, S, d, flux, exposure, openStart, openEnd, rho, segT, color, levels,
+                               W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
+}
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint sbase = dust_squeue_base(pc.pyramid);
+    uint t = dust_squeue_table(sbase) + gl_WorkGroupID.x * DUST_SQUEUE_TABLE_WORDS;
+    uint recBase = pc.pyramid.v[t];
+    uint total = pc.pyramid.v[t + 1u];
+    uint recs = dust_squeue_records(sbase);
+#ifdef DUST_PROFILE
+    DUST_PROF_BEGIN(thread)
+#endif
+    // the per-cluster frame words (as dust_splat.comp's lanes have them)
+    dust_mom = pc.moments;
+    dust_phot_albedo = pc.albedo;
+    dust_phot_lut = pc.pyramid;
+    dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
+    dust_vqueue_on = (pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_VQUEUE_OFF) == 0u;
+    uint levels = pc.pyramid.v[DUST_PYR_LEVELS];
+    float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
+    float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
+    bool perspective;
+    vec3 fwd = dust_view_forward(pc.mvp, pc.eyeLocal.xyz, perspective);
+    uint splitDepth = min(dust_pyr_split_word & 0xFFu, DUST_SPLIT_DEPTH_MAX);
+    uint volumeBias = (dust_pyr_split_word >> 8u) & 0xFFu;
+    uint volumeAxis = (dust_pyr_split_word >> 16u) & 0x3u;
+    float shellDMax = uintBitsToFloat(pc.pyramid.v[DUST_PYR_SPECKS_DMAX]);
+    uint n = min(total, DUST_SQUEUE_PER_CLUSTER);
+    // the serial reference (DUST_FRAME_SPLIT_SERIAL): lane 0 walks the records in order, the
+    // ordinal running on as the per-cluster thread's did
+    if ((pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_SPLIT_SERIAL) != 0u) {
+        bool ranS = false;
+        if (lane == 0u) {
+            uint ord = 0u;
+            for (uint r = 0u; r < n; ++r) {
+                dust_split_record(recs, recBase + r, ord, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
+                ord = dust_packet_ord;
+                ranS = true;
+            }
+        }
+#ifdef DUST_PROFILE
+        DUST_PROF_END(thread)
+        DUST_PROF_FLUSH_SPLIT(pc.pyramid, dust_queue_base(pc.pyramid), ranS)
+#endif
+        return;
+    }
+    // the counting pass: the seeds each record draws
+    DUST_PROF_BEGIN_AS(cnt)
+    dust_counting = true;
+    for (uint r = lane; r < n; r += 64u) {
+        dust_seed_count = 0u;
+        dust_split_record(recs, recBase + r, 0u, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
+        dust_rec_seeds[r] = dust_seed_count;
+    }
+    dust_counting = false;
+    DUST_PROF_END_AS(count, cnt)
+    barrier();
+    // the exclusive prefix in record order (lane 0)
+    if (lane == 0u) {
+        uint acc = 0u;
+        for (uint r = 0u; r < n; ++r) {
+            uint c = dust_rec_seeds[r];
+            dust_rec_seeds[r] = acc;
+            acc += c;
+        }
+    }
+    barrier();
+    // the drawing pass
+    bool ran = false;
+    for (uint r = lane; r < n; r += 64u) {
+        dust_split_record(recs, recBase + r, dust_rec_seeds[r], levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
+        ran = true;
+    }
+#ifdef DUST_PROFILE
+    DUST_PROF_END(thread)
+    // every lane reaches this (0 for one without a record): the subgroup reductions need them all
+    DUST_PROF_FLUSH_SPLIT(pc.pyramid, dust_queue_base(pc.pyramid), ran)
+#endif
+}

@@ -242,8 +242,8 @@ float dust_specks_q(uint color) {
 }
 
 // the cluster's size range factor from its moments (dust::specks::moments_size_range)
-float dust_specks_range(DustMoments M) {
-    float a = M.edges[0].w, b = M.edges[DUST_SIZE_BINS].w;
+float dust_specks_range(uint mi) {
+    float a = dust_mom.m[mi].edges[0].w, b = dust_mom.m[mi].edges[DUST_SIZE_BINS].w;
     float f = b / a;
     return (a > 0.0 && !isinf(f) && !isnan(f) && f >= 1.0) ? f : 1.0;
 }
@@ -264,18 +264,18 @@ vec3 dust_specks_offset(vec2 me[3], vec3 c0, vec3 c1, vec3 c2, vec3 co) {
 // the leaf of size bin b the continuum draws (dust::specks::speck_leaf): the longer of the chord
 // and the time segment is the uniform axis (seg from mean, density ramp rho), the other a Gaussian
 // of DUST_CHORD_VAR_FACTOR half-lengths^2 in S with the bin's f^2 Sigma_v
-void dust_specks_leaf(DustMoments M, uint b, vec3 segT, out vec3 mean, out float S[6], out vec3 seg,
+void dust_specks_leaf(uint mi, uint b, vec3 segT, out vec3 mean, out float S[6], out vec3 seg,
                       out vec2 rho, out float flux) {
-    vec3 chordV = M.edges[b + 1u].xyz - M.edges[b].xyz;
+    vec3 chordV = dust_mom.m[mi].edges[b + 1u].xyz - dust_mom.m[mi].edges[b].xyz;
     if (dot(segT, segT) > dot(chordV, chordV)) {
-        dust_bin_packet(M, b, mean, S, flux);
+        dust_bin_packet(mi, b, mean, S, flux);
         seg = segT;
         rho = vec2(1.0);
     } else {
         vec3 chord;
-        dust_bin_chord(M, b, segT, mean, chord, S, flux);
+        dust_bin_chord(mi, b, segT, mean, chord, S, flux);
         seg = chord;
-        rho = dust_bin_density_ends(dust_edge_factor(M, b), dust_edge_factor(M, b + 1u));
+        rho = dust_bin_density_ends(dust_edge_factor(mi, b), dust_edge_factor(mi, b + 1u));
     }
 }
 
@@ -667,37 +667,39 @@ uint dust_specks_start_nodes(SpeckNode root, float mi[9], vec3 yEye, float sigma
 }
 
 void main() {
+    // the moments every dust_common function reads by index (dust_mom.m[mi])
+    dust_mom = pc.moments;
     uint tid = gl_GlobalInvocationID.x;
     uint i = tid / DUST_SIZE_BINS;
     uint b = tid % DUST_SIZE_BINS;
     if (i >= pc.liveCount) return;
-    DustMoments M = pc.moments.m[i];
-    if (!(M.mean_flux.w > 0.0)) return;
+    uint mi = i;
+    if (!(dust_mom.m[mi].mean_flux.w > 0.0)) return;
     float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
     float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
     uint flags = pc.pyramid.v[DUST_PYR_FLAGS];
     float dMax = uintBitsToFloat(pc.pyramid.v[DUST_PYR_SPECKS_DMAX]);
     float sizeQ = dust_specks_q(pc.color);
-    float sizeF = dust_specks_range(M);
+    float sizeF = dust_specks_range(mi);
     uint budget = pc.pyramid.v[DUST_PYR_SPECKS_BUDGET];
     vec2 sf = unpackHalf2x16(pc.sizeFade);
     float sRef = sf.x, fadeRatio = sf.y, ttl = pc.eyeLocal.w;
-    float age = M.cov_b_age_id.z;
+    float age = dust_mom.m[mi].cov_b_age_id.z;
     // the bin's time segment to the same bin of the stream predecessor, the ring slot (identity)
     int pred = dust_streak_pred(pc.render, i);
     vec3 segT = vec3(0.0);
     if (pred >= 0) {
-        DustMoments P = pc.moments.m[pred];
-        segT = 0.5 * (P.edges[b].xyz + P.edges[b + 1u].xyz) - 0.5 * (M.edges[b].xyz + M.edges[b + 1u].xyz);
+        uint pi = uint(pred);
+        segT = 0.5 * (dust_mom.m[pi].edges[b].xyz + dust_mom.m[pi].edges[b + 1u].xyz) - 0.5 * (dust_mom.m[mi].edges[b].xyz + dust_mom.m[mi].edges[b + 1u].xyz);
     }
     uint slot = floatBitsToUint(pc.render.c[i].age_id_dbeta_flux.y) & DUST_RENDER_SLOT_MASK;
     // the continuum's leaf of the bin as a map, its count (dust::specks::SpeckCluster::new)
     vec3 mean; float S[6]; vec3 seg; vec2 rho; float flux;
-    dust_specks_leaf(M, b, segT, mean, S, seg, rho, flux);
+    dust_specks_leaf(mi, b, segT, mean, S, seg, rho, flux);
     float fade = max(dust_specks_age_fade(age, ttl, fadeRatio), 1e-6);
     float xsecMean = max(dust_specks_mean_xsec(sRef, sizeQ, sizeF, b), 1e-30);
     float count = flux / fade / xsecMean;
-    uint rootHash = dust_hash32(dust_hash32(slot * 0x9E3779B9u ^ floatBitsToUint(M.cov_b_age_id.w)) + b * 0x85EBCA6Bu);
+    uint rootHash = dust_hash32(dust_hash32(slot * 0x9E3779B9u ^ floatBitsToUint(dust_mom.m[mi].cov_b_age_id.w)) + b * 0x85EBCA6Bu);
     float keep;
     uvec2 cq = dust_specks_bound(count, keep);
     vec3 c0, c1, c2; float kappa;
@@ -723,20 +725,20 @@ void main() {
         n_eye_add(uint(hiF), uint(loF + 0.5));
     }
     if (!(dMax > 0.0) || cq.x == 0u) return;
-    // the eye in coordinate space and the bound of M's smallest singular value
+    // the eye in coordinate space and the bound of M's smallest singular value (M: the coordinate map)
     vec3 yEye = vec3(0.0); float sigmaLo = 0.0; vec3 rowN = vec3(0.0);
-    float mi[9];
-    if (dust_specks_inv3(c0, c1, c2, mi)) {
+    float minv[9];
+    if (dust_specks_inv3(c0, c1, c2, minv)) {
         float fro2 = 0.0;
-        for (int k = 0; k < 9; ++k) fro2 += mi[k] * mi[k];
+        for (int k = 0; k < 9; ++k) fro2 += minv[k] * minv[k];
         sigmaLo = 1.0 / sqrt(fro2);
-        rowN = vec3(sqrt(mi[0] * mi[0] + mi[1] * mi[1] + mi[2] * mi[2]),
-                    sqrt(mi[3] * mi[3] + mi[4] * mi[4] + mi[5] * mi[5]),
-                    sqrt(mi[6] * mi[6] + mi[7] * mi[7] + mi[8] * mi[8]));
+        rowN = vec3(sqrt(minv[0] * minv[0] + minv[1] * minv[1] + minv[2] * minv[2]),
+                    sqrt(minv[3] * minv[3] + minv[4] * minv[4] + minv[5] * minv[5]),
+                    sqrt(minv[6] * minv[6] + minv[7] * minv[7] + minv[8] * minv[8]));
         vec3 dd = -me;
-        yEye = vec3(mi[0] * dd.x + mi[1] * dd.y + mi[2] * dd.z,
-                    mi[3] * dd.x + mi[4] * dd.y + mi[5] * dd.z,
-                    mi[6] * dd.x + mi[7] * dd.y + mi[8] * dd.z);
+        yEye = vec3(minv[0] * dd.x + minv[1] * dd.y + minv[2] * dd.z,
+                    minv[3] * dd.x + minv[4] * dd.y + minv[5] * dd.z,
+                    minv[6] * dd.x + minv[7] * dd.y + minv[8] * dd.z);
     }
     // the whole bin against the shell
     if (!dust_specks_node_meets(c0, c1, c2, colNorm, kappa, rho, me, vec3(0.0), vec3(1.0),
@@ -746,8 +748,8 @@ void main() {
         V.exposure *= dust_flow_factor(age, uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_HI]),
                                        uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_LO]));
     }
-    vec3 sun = dust_sun_dir(M);
-    float rhAu = dust_helio_au(M);
+    vec3 sun = dust_sun_dir(mi);
+    float rhAu = dust_helio_au(mi);
     vec3 stream = vec3(float(pc.color & 0xFFu), float((pc.color >> 8u) & 0xFFu), float((pc.color >> 16u) & 0xFFu)) / 255.0;
     vec3 color = dust_age_color(stream, age, ttl);
     // the bin's speed factors from the size range (dust::specks::SpeckCluster::new)
@@ -762,7 +764,7 @@ void main() {
     root.level = 0u; root.lo = uvec3(0u); root.mant = cq.x; root.exp = cq.y; root.hash = rootHash;
     // the jump start (dust::specks::SpeckCluster::walk): pushed in reverse, the first visited first
     SpeckNode starts[DUST_SPECKS_JUMP_STARTS];
-    uint nStarts = dust_specks_start_nodes(root, mi, yEye, sigmaLo, dMax, kappa, rho, starts);
+    uint nStarts = dust_specks_start_nodes(root, minv, yEye, sigmaLo, dMax, kappa, rho, starts);
     uint sp = 0u;
     for (uint k = nStarts; k > 0u; --k) { stack[sp] = starts[k - 1u]; sp++; }
     uint nodes = 0u;

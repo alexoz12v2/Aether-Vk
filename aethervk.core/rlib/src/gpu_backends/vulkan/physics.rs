@@ -12,6 +12,19 @@ use ash::vk;
 // Disabled by default: Enabling PRINTF shaders under Lavapipe (ARM64) dramatically increases
 // register pressure in the llvmpipe JIT compiler. This leads to register spilling bugs that
 // overwrite the stack-saved link register (x30), causing a SIGSEGV upon kernel return.
+/// The dust profiler request (`AETHERVK_DUST_PROFILE=1`, or this override set before the device
+/// is created: tests): the device enables `VK_KHR_shader_clock` and
+/// `VK_KHR_pipeline_executable_properties` when it has them, the `.prof` variants of the dust
+/// splat and queue shaders are built (`dust_profile.glsl`) and used while the request is on
+/// (`dust_profile_requested`, read per dispatch), and the dust pipelines' compiled statistics
+/// are logged once (`log_pipeline_statistics`).
+pub static DUST_PROFILE_OVERRIDE: core::sync::atomic::AtomicBool =
+  core::sync::atomic::AtomicBool::new(false);
+pub fn dust_profile_requested() -> bool {
+  DUST_PROFILE_OVERRIDE.load(core::sync::atomic::Ordering::Relaxed)
+    || aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PROFILE").is_some_and(|v| v.trim() == "1")
+}
+
 #[cfg(all(
   any(debug_assertions, test, feature = "shader_debug_sync"),
   not(target_vendor = "apple")
@@ -70,6 +83,18 @@ pub struct PhysicsPipelines {
   /// per-frame physical specks of one tier into the view's pyramid (`dust_specks.comp`, wg 64,
   /// one thread per cluster × size bin)
   pub dust_specks: vk::Pipeline,
+  /// the shader-clock profiler variants of the splat and the queue draw (`dust_profile.glsl`;
+  /// `None` without `VK_KHR_shader_clock` or the request, [`dust_profile_requested`])
+  pub dust_splat_prof: Option<vk::Pipeline>,
+  pub dust_draw_queue_prof: Option<vk::Pipeline>,
+  /// per-chunk volume packet queue consumer: a lane per queued volumetric packet
+  /// (`dust_draw_volume.comp`, wg 64, dispatched indirectly after each producer chunk)
+  pub dust_draw_volume: vk::Pipeline,
+  pub dust_draw_volume_prof: Option<vk::Pipeline>,
+  /// per-chunk sub-packet queue splitter: a workgroup per cluster over its records
+  /// (`dust_split.comp`, wg 64; the leaf path of the former per-cluster splat thread)
+  pub dust_split: vk::Pipeline,
+  pub dust_split_prof: Option<vk::Pipeline>,
 
   /// SPIR-V-reflected push constant block size per pipeline.
   /// Used by `debug_assert!` in dispatch helpers to catch size mismatches
@@ -95,6 +120,8 @@ impl PhysicsPipelines {
     is_cpu: bool,
     has_native_float16: bool,
     has_vulkan_memory_model: bool,
+    has_shader_clock: bool,
+    capture_statistics: bool,
   ) -> GpuResult<Self> {
     if has_native_float16 {
       aethervk_oshal_rlib::log!(
@@ -126,6 +153,14 @@ impl PhysicsPipelines {
       })?;
 
     let mut created_pipelines = alloc::vec::Vec::new();
+    // the executable statistics (`log_pipeline_statistics`): only with the feature on, else a
+    // validation error
+    let pipeline_flags = if capture_statistics {
+      vk::PipelineCreateFlags::CAPTURE_STATISTICS_KHR
+        | vk::PipelineCreateFlags::CAPTURE_INTERNAL_REPRESENTATIONS_KHR
+    } else {
+      vk::PipelineCreateFlags::empty()
+    };
 
     let mut create_pipeline = |spv_path: &str| -> GpuResult<(vk::Pipeline, u32, [u32; 3])> {
       let mut spv_code = aethervk_oshal_rlib::os::fs::read(spv_path)
@@ -233,6 +268,7 @@ impl PhysicsPipelines {
         .specialization_info(&spec_info);
 
       let compute_info = vk::ComputePipelineCreateInfo::default()
+        .flags(pipeline_flags)
         .stage(stage_info)
         .layout(pipeline_layout);
 
@@ -485,6 +521,28 @@ impl PhysicsPipelines {
         dust_measure: mk!("dust_measure.comp.spv"),
         dust_draw_queue: mk!("dust_draw_queue.comp.spv"),
         dust_specks: mk!("dust_specks.comp.spv"),
+        dust_splat_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_splat.comp.prof.spv"))
+        } else {
+          None
+        },
+        dust_draw_queue_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_draw_queue.comp.prof.spv"))
+        } else {
+          None
+        },
+        dust_draw_volume: mk!("dust_draw_volume.comp.spv"),
+        dust_draw_volume_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_draw_volume.comp.prof.spv"))
+        } else {
+          None
+        },
+        dust_split: mk!("dust_split.comp.spv"),
+        dust_split_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_split.comp.prof.spv"))
+        } else {
+          None
+        },
         pc_sizes,
         wg_sizes,
         subgroup_size,
@@ -526,8 +584,145 @@ impl PhysicsPipelines {
     discard_pool.discard_pipeline(self.dust_measure, timeline);
     discard_pool.discard_pipeline(self.dust_draw_queue, timeline);
     discard_pool.discard_pipeline(self.dust_specks, timeline);
+    if let Some(p) = self.dust_splat_prof {
+      discard_pool.discard_pipeline(p, timeline);
+    }
+    if let Some(p) = self.dust_draw_queue_prof {
+      discard_pool.discard_pipeline(p, timeline);
+    }
+    discard_pool.discard_pipeline(self.dust_draw_volume, timeline);
+    if let Some(p) = self.dust_draw_volume_prof {
+      discard_pool.discard_pipeline(p, timeline);
+    }
+    discard_pool.discard_pipeline(self.dust_split, timeline);
+    if let Some(p) = self.dust_split_prof {
+      discard_pool.discard_pipeline(p, timeline);
+    }
 
     discard_pool.discard_pipeline_layout(self.pipeline_layout, timeline);
+  }
+
+  /// The dust pipelines' compiled statistics (`VK_KHR_pipeline_executable_properties`:
+  /// registers, local memory and whatever else the driver reports, by the driver's names), logged
+  /// once at device creation under `AETHERVK_DUST_PROFILE=1`; the internal representations
+  /// (NVIDIA: the SASS text) are written to `AETHERVK_DUST_PROFILE_DIR` when it is set, and a
+  /// text one's local-memory loads and stores (`LDL` / `STL`) are counted.
+  pub fn log_pipeline_statistics(&self, instance: &ash::Instance, device: &ash::Device) {
+    let ext = ash::khr::pipeline_executable_properties::Device::new(instance, device);
+    let dir = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PROFILE_DIR");
+    let named: [(&str, Option<vk::Pipeline>); 12] = [
+      ("dust_splat", Some(self.dust_splat)),
+      ("dust_splat_prof", self.dust_splat_prof),
+      ("dust_split", Some(self.dust_split)),
+      ("dust_split_prof", self.dust_split_prof),
+      ("dust_draw_queue", Some(self.dust_draw_queue)),
+      ("dust_draw_queue_prof", self.dust_draw_queue_prof),
+      ("dust_draw_volume", Some(self.dust_draw_volume)),
+      ("dust_draw_volume_prof", self.dust_draw_volume_prof),
+      ("dust_specks", Some(self.dust_specks)),
+      ("dust_propagate", Some(self.dust_propagate)),
+      ("dust_emit", Some(self.dust_emit)),
+      ("dust_measure", Some(self.dust_measure)),
+    ];
+    let cstr = |a: &[core::ffi::c_char]| -> alloc::string::String {
+      unsafe { core::ffi::CStr::from_ptr(a.as_ptr()) }.to_string_lossy().into_owned()
+    };
+    for (name, pipeline) in named {
+      let Some(pipeline) = pipeline else { continue };
+      let info = vk::PipelineInfoKHR::default().pipeline(pipeline);
+      let props = match unsafe { ext.get_pipeline_executable_properties(&info) } {
+        Ok(p) => p,
+        Err(e) => {
+          aethervk_oshal_rlib::log!("[dust profile] {name}: executable properties failed: {e:?}");
+          continue;
+        }
+      };
+      for (k, prop) in props.iter().enumerate() {
+        let exec = vk::PipelineExecutableInfoKHR::default()
+          .pipeline(pipeline)
+          .executable_index(k as u32);
+        let mut line = alloc::format!(
+          "[dust profile] {name}[{k}] {} ({}; subgroup {}):",
+          cstr(&prop.name),
+          cstr(&prop.description),
+          prop.subgroup_size
+        );
+        if let Ok(stats) = unsafe { ext.get_pipeline_executable_statistics(&exec) } {
+          for s in &stats {
+            let v = match s.format {
+              vk::PipelineExecutableStatisticFormatKHR::BOOL32 => {
+                alloc::format!("{}", unsafe { s.value.b32 } == vk::TRUE)
+              }
+              vk::PipelineExecutableStatisticFormatKHR::INT64 => {
+                alloc::format!("{}", unsafe { s.value.i64 })
+              }
+              vk::PipelineExecutableStatisticFormatKHR::UINT64 => {
+                alloc::format!("{}", unsafe { s.value.u64 })
+              }
+              vk::PipelineExecutableStatisticFormatKHR::FLOAT64 => {
+                alloc::format!("{}", unsafe { s.value.f64 })
+              }
+              _ => alloc::string::String::from("?"),
+            };
+            line.push_str(&alloc::format!(" {} = {v};", cstr(&s.name)));
+          }
+        }
+        aethervk_oshal_rlib::log!("{line}");
+        // the internal representations: ash's two-call wrapper reports the sizes (p_data null);
+        // a third call with buffers fetches the data
+        let Ok(mut reprs) = (unsafe { ext.get_pipeline_executable_internal_representations(&exec) })
+        else {
+          continue;
+        };
+        let mut buffers: alloc::vec::Vec<alloc::vec::Vec<u8>> =
+          reprs.iter().map(|r| alloc::vec![0u8; r.data_size]).collect();
+        for (r, b) in reprs.iter_mut().zip(buffers.iter_mut()) {
+          r.p_data = b.as_mut_ptr().cast();
+        }
+        let mut count = reprs.len() as u32;
+        let res = unsafe {
+          (ext.fp().get_pipeline_executable_internal_representations_khr)(
+            device.handle(),
+            &exec,
+            &mut count,
+            reprs.as_mut_ptr(),
+          )
+        };
+        if res != vk::Result::SUCCESS && res != vk::Result::INCOMPLETE {
+          continue;
+        }
+        for (r, b) in reprs.iter().zip(buffers.iter()) {
+          let rname = cstr(&r.name);
+          let mut note = alloc::format!(
+            "[dust profile] {name}[{k}] representation '{rname}' ({}): {} bytes{}",
+            cstr(&r.description),
+            r.data_size,
+            if r.is_text == vk::TRUE { ", text" } else { ", binary" }
+          );
+          if r.is_text == vk::TRUE {
+            let text = alloc::string::String::from_utf8_lossy(b);
+            let count_op = |op: &str| text.lines().filter(|l| l.split_whitespace().any(|w| w == op || w.starts_with(&alloc::format!("{op}.")))).count();
+            note.push_str(&alloc::format!(
+              "; LDL {} STL {} (local-memory loads / stores in the text)",
+              count_op("LDL"),
+              count_op("STL")
+            ));
+          }
+          #[cfg(feature = "std")]
+          if let Some(dir) = dir.as_deref() {
+            let safe: alloc::string::String =
+              rname.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+            let ext_ = if r.is_text == vk::TRUE { "txt" } else { "bin" };
+            let path = alloc::format!("{dir}/{name}_{k}_{safe}.{ext_}");
+            match std::fs::write(&path, b) {
+              Ok(()) => note.push_str(&alloc::format!("; written to {path}")),
+              Err(e) => note.push_str(&alloc::format!("; not written to {path}: {e}")),
+            }
+          }
+          aethervk_oshal_rlib::log!("{note}");
+        }
+      }
+    }
   }
 }
 
@@ -548,6 +743,8 @@ impl VulkanComputeKernels {
     is_cpu: bool,
     has_native_float16: bool,
     has_vulkan_memory_model: bool,
+    has_shader_clock: bool,
+    capture_statistics: bool,
   ) -> GpuResult<Self> {
     let pipelines = PhysicsPipelines::new(
       device,
@@ -556,6 +753,8 @@ impl VulkanComputeKernels {
       is_cpu,
       has_native_float16,
       has_vulkan_memory_model,
+      has_shader_clock,
+      capture_statistics,
     )?;
 
     let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()

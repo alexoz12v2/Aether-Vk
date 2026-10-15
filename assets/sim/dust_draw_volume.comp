@@ -1,0 +1,85 @@
+// @assets/sim/dust_draw_volume.comp
+//
+// The volume packet queue's consumer: one lane per record of the chunk's queue
+// (dust_scatter.glsl DUST_VQUEUE_*, filled by dust_splat.comp dust_volume_emit), dispatched
+// indirectly after each chunk's producer dispatch (Device::cmd_dust_splat). Every lane runs the
+// same code on its own packet (dust_volume_draw.glsl, the arithmetic the producer would have run
+// in its cluster's thread, with the packet's own rounding seed), so the pyramid is the producer's
+// word for word and the lanes stay coherent, which the per-cluster thread's walk is not. The same
+// push constants as the splat (dust::DustSplatPushConstants). No CPU mirror: dust::volume_scatter
+// is the same drawing.
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+#ifdef DUST_PROFILE
+#extension GL_ARB_shader_clock : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
+#include "dust_common.glsl"
+#include "dust_scatter.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    DustMomentsBuffer moments;  // 0
+    DustRenderBuffer  render;   // 8
+    DustUintBuffer    pyramid;  // 16: header + levels + measure grid + the queues
+    uint  liveCount;            // 24
+    uint  flags;                // 28
+    float exposure;             // 32
+    float invUnit;              // 36
+    uint  color;                // 40
+    float albedo;               // 44
+    mat4  mvp;                  // 48
+    vec4  eyeLocal;             // 112
+} pc;                           // 128 bytes
+
+#include "dust_volume_draw.glsl"
+
+// the record r of the chunk's queue (false: none)
+bool dust_draw_volume_record(uint r) {
+    uint base = dust_vqueue_base(pc.pyramid);
+    uint raw = pc.pyramid.v[base + 3u];
+    uint cap = dust_vqueue_capacity(pc.pyramid, base);
+    uint n = min(raw, cap);
+    // the frame's counts (one lane per chunk): records drawn here, overflowed (drawn in-thread)
+    if (r == 0u) {
+        atomicAdd(pc.pyramid.v[base + DUST_VQUEUE_DRAWN], n);
+        atomicAdd(pc.pyramid.v[base + DUST_VQUEUE_OVERFLOWED], raw - n);
+    }
+    if (r >= n) return false;
+    DustPacket p;
+    uint seed;
+    float exposure, rh;
+    vec3 color, sun;
+    vec4 support;
+    DUST_VQUEUE_GET(pc.pyramid, base, cap, r, p, seed, exposure, color, support, sun, rh)
+    // the per-packet globals dust_volume_draw reads (set per cluster by the producer)
+    dust_phot_support = support;
+    dust_phot_sun = sun;
+    dust_phot_rh = rh;
+    dust_phot_albedo = pc.albedo;
+    dust_phot_lut = pc.pyramid;
+    dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
+    uint levels = pc.pyramid.v[DUST_PYR_LEVELS];
+    float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
+    float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
+    // bits 8-15: the volume level bias; 16-17: the volumetric axis mode (as dust_splat.comp)
+    uint volumeBias = (dust_pyr_split_word >> 8u) & 0xFFu;
+    uint volumeAxis = (dust_pyr_split_word >> 16u) & 0x3u;
+    dust_volume_draw(p, seed, exposure, color, levels, W, H, volumeBias, volumeAxis);
+    return true;
+}
+
+void main() {
+    uint r = gl_GlobalInvocationID.x;
+#ifdef DUST_PROFILE
+    DUST_PROF_BEGIN(thread)
+#endif
+    bool ran = dust_draw_volume_record(r);
+#ifdef DUST_PROFILE
+    DUST_PROF_END(thread)
+    // every lane reaches this (0 for one without a record): the subgroup reductions need them all
+    DUST_PROF_FLUSH_VOLUME(pc.pyramid, dust_queue_base(pc.pyramid), ran)
+#endif
+}

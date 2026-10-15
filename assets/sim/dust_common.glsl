@@ -330,18 +330,22 @@ struct DustMoments {
                                  // speed factor sqrt(beta_j/beta) (linear in j, dust_edge_factor), edge 1 the
                                  // nucleus spin rate (rad/s), edges 2..4 its unit axis (dust_spiral_point)
 };
-// speed factor sqrt(beta_j/beta) of edge j (dust::DustMoments::edge_factor)
-float dust_edge_factor(DustMoments M, uint j) {
-    float lo = M.edges[0].w, hi = M.edges[DUST_SIZE_BINS].w;
-    return lo + (hi - lo) * (float(j) / float(DUST_SIZE_BINS));
-}
-float dust_spin_rate(DustMoments M) { return M.edges[1].w; }
-vec3 dust_spin_axis(DustMoments M) { return vec3(M.edges[2].w, M.edges[3].w, M.edges[4].w); }
-float dust_helio_au(DustMoments M) { return M.edges[5].w; }
-vec3 dust_sun_dir(DustMoments M) { return vec3(M.edges[6].w, M.edges[7].w, M.edges[8].w); }
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer DustMomentsBuffer {
     DustMoments m[];
 };
+// the moments of the pass (set by the shader's main): the functions below read a cluster's
+// moments by index through it (dust_mom.m[mi]), never a by-value copy of its 80 floats
+DustMomentsBuffer dust_mom;
+// speed factor sqrt(beta_j/beta) of edge j (dust::DustMoments::edge_factor)
+float dust_edge_factor(uint mi, uint j) {
+    float lo = dust_mom.m[mi].edges[0].w, hi = dust_mom.m[mi].edges[DUST_SIZE_BINS].w;
+    return lo + (hi - lo) * (float(j) / float(DUST_SIZE_BINS));
+}
+float dust_spin_rate(uint mi) { return dust_mom.m[mi].edges[1].w; }
+vec3 dust_spin_axis(uint mi) { return vec3(dust_mom.m[mi].edges[2].w, dust_mom.m[mi].edges[3].w, dust_mom.m[mi].edges[4].w); }
+float dust_helio_au(uint mi) { return dust_mom.m[mi].edges[5].w; }
+vec3 dust_sun_dir(uint mi) { return vec3(dust_mom.m[mi].edges[6].w, dust_mom.m[mi].edges[7].w, dust_mom.m[mi].edges[8].w); }
+
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer DustUintBuffer {
     uint v[];
 };
@@ -720,6 +724,10 @@ uint dust_hash32(uint x) {
 const uint DUST_SEGMENT_TEXELS = 16u;
 uint dust_cluster_seed = 0u;
 uint dust_packet_ord = 0u;
+// the counting pass of dust_splat.comp (a lane per sub-packet): the walk up to every seed draw
+// without drawing, touching the pyramid or its counters; dust_seed_count the seeds it would draw
+bool dust_counting = false;
+uint dust_seed_count = 0u;
 uint dust_next_packet_seed() {
     uint s = dust_hash32(dust_cluster_seed ^ (dust_packet_ord * 0x9E3779B9u));
     dust_packet_ord += 1u;
@@ -731,24 +739,20 @@ float dust_segment_carry(uint seed, uint key) {
 
 // the frame's DUST_PYR_SPLIT_DEPTH word, set by the splat pass (diagnostic bits; 0 elsewhere)
 uint dust_pyr_split_word = 0u;
-// a + b saturating at 0xFFFFFFFF (no saturating atomics in core GLSL): compare-and-swap loop.
+// a + b saturating at 0xFFFFFFFF (no saturating atomics in core GLSL): one atomicAdd, and when
+// it wrapped (old + b < old) an atomicMax to the ceiling. Every interleaving ends saturated once
+// any add wrapped: an add that lands on a saturated word wraps and re-saturates it, and an add
+// that lands between a wrap and its max is overridden by the max; a word no add wrapped is
+// exact. Same final state as the compare-and-swap loop this replaces (profile 2026-10-15: the
+// loops were ~58 % of the volume texel cost and ~30 % of the queue draw under contention).
 // Timing probe (bits 30-31 of DUST_PYR_SPLIT_DEPTH = 1 via dust_pyr_split_word, set by the splat
-// only; `AETHERVK_DUST_TIMING_PROBE=plain_add`; diagnostics, never in production): a plain atomicAdd,
-// which wraps instead of saturating. What the compare-and-swap loop costs.
+// only; `AETHERVK_DUST_TIMING_PROBE=plain_add`; diagnostics, never in production): a plain
+// atomicAdd, which wraps instead of saturating. What the saturation costs.
 void dust_atomic_add_sat(DustUintBuffer buf, uint i, uint b) {
     if (b == 0u) return;
-    if (((dust_pyr_split_word >> 30u) & 3u) == 1u) {
-        atomicAdd(buf.v[i], b);
-        return;
-    }
-    uint old = buf.v[i];
-    for (;;) {
-        uint sum = old + b;
-        if (sum < old) sum = 0xFFFFFFFFu;
-        uint seen = atomicCompSwap(buf.v[i], old, sum);
-        if (seen == old) return;
-        old = seen;
-    }
+    uint old = atomicAdd(buf.v[i], b);
+    if (((dust_pyr_split_word >> 30u) & 3u) == 1u) return;
+    if (old + b < old) atomicMax(buf.v[i], 0xFFFFFFFFu);
 }
 
 // A screen packet (dust::ScreenPacket)
@@ -817,9 +821,9 @@ bool dust_legacy_kernel() { return ((dust_pyr_split_word >> 29u) & 1u) != 0u; }
 uint dust_bin_subbins(uint b) { return (b == 0u && !dust_legacy_kernel()) ? DUST_END_SUBBINS : 1u; }
 // sub-bin j of nj of size bin b (dust::sub_edges): the bin's chord and speed-factor range cut into
 // nj equal parts, the bin's own edges exactly at its ends
-void dust_sub_edges(DustMoments M, uint b, uint j, uint nj, out vec3 a, out vec3 c, out float fa, out float fc) {
-    vec3 e0 = M.edges[b].xyz, e1 = M.edges[b + 1u].xyz;
-    float f0 = dust_edge_factor(M, b), f1 = dust_edge_factor(M, b + 1u);
+void dust_sub_edges(uint mi, uint b, uint j, uint nj, out vec3 a, out vec3 c, out float fa, out float fc) {
+    vec3 e0 = dust_mom.m[mi].edges[b].xyz, e1 = dust_mom.m[mi].edges[b + 1u].xyz;
+    float f0 = dust_edge_factor(mi, b), f1 = dust_edge_factor(mi, b + 1u);
     if (j == 0u) { a = e0; fa = f0; }
     else { float u = float(j) / float(nj); a = e0 + (e1 - e0) * u; fa = f0 + (f1 - f0) * u; }
     if (j + 1u == nj) { c = e1; fc = f1; }
@@ -827,9 +831,9 @@ void dust_sub_edges(DustMoments M, uint b, uint j, uint nj, out vec3 a, out vec3
 }
 // the share of size bin b's flux in its sub-bin j of nj (dust::sub_share): the bin's 1/f density
 // ramp integrated over the sub-bin, over the bin (1 for one sub-bin)
-float dust_sub_share(DustMoments M, uint b, uint j, uint nj) {
+float dust_sub_share(uint mi, uint b, uint j, uint nj) {
     if (nj <= 1u) return 1.0;
-    vec2 r = dust_bin_density_ends(dust_edge_factor(M, b), dust_edge_factor(M, b + 1u));
+    vec2 r = dust_bin_density_ends(dust_edge_factor(mi, b), dust_edge_factor(mi, b + 1u));
     float u0 = float(j) / float(nj), u1 = float(j + 1u) / float(nj);
     return (u1 - u0) * (r.x + (r.y - r.x) * 0.5 * (u0 + u1)) / (0.5 * (r.x + r.y));
 }
@@ -1369,17 +1373,17 @@ float dust_capsule_tau(DustScreenPacket P, vec2 x) {
 }
 
 // tr(Sigma_v)/3 of a cluster's moments
-float dust_mean_var(DustMoments M) {
-    return (M.cov_a.x + M.cov_a.w + M.cov_b_age_id.y) / 3.0;
+float dust_mean_var(uint mi) {
+    return (dust_mom.m[mi].cov_a.x + dust_mom.m[mi].cov_a.w + dust_mom.m[mi].cov_b_age_id.y) / 3.0;
 }
 // sigma_pred / sigma_self of the velocity dispersion (1 without a wider predecessor)
 // (dust::width_ratio)
 const float DUST_WIDTH_RATIO_MAX = 1024.0;  // dust::WIDTH_RATIO_MAX
-float dust_width_ratio(DustMoments M, bool hasPred, DustMoments P) {
-    float own = dust_mean_var(M);
-    if (!hasPred || !(dust_mean_var(P) > max(own, 0.0))) return 1.0;
+float dust_width_ratio(uint mi, bool hasPred, uint pi) {
+    float own = dust_mean_var(mi);
+    if (!hasPred || !(dust_mean_var(pi) > max(own, 0.0))) return 1.0;
     if (!(own > 0.0)) return DUST_WIDTH_RATIO_MAX;
-    return min(sqrt(dust_mean_var(P) / own), DUST_WIDTH_RATIO_MAX);
+    return min(sqrt(dust_mean_var(pi) / own), DUST_WIDTH_RATIO_MAX);
 }
 // bound k of n time pieces of a segment whose width grows ratio-fold (dust::piece_bound): every
 // piece the same width ratio, (ratio^(k/n) - 1)/(ratio - 1); equal steps when ratio ~ 1
@@ -1397,56 +1401,56 @@ uint dust_time_pieces(float ratio) {
 // Packet of size bin b of a cluster (dust::subpackets): uniform along the bin's chord (a Gaussian
 // of DUST_CHORD_VAR_FACTOR half-chords^2 along it), Sigma_v scaled by the bin's speed factor,
 // 1/DUST_SIZE_BINS of the flux
-void dust_bin_packet_sub(DustMoments M, uint b, uint j, uint nj, out vec3 mean, out float S[6], out float flux) {
+void dust_bin_packet_sub(uint mi, uint b, uint j, uint nj, out vec3 mean, out float S[6], out float flux) {
     vec3 a, c; float fa, fc;
-    dust_sub_edges(M, b, j, nj, a, c, fa, fc);
+    dust_sub_edges(mi, b, j, nj, a, c, fa, fc);
     mean = 0.5 * (a + c);
     vec3 h = 0.5 * (c - a);
     float f = 0.5 * (fa + fc);
     float f2 = f * f, k = DUST_CHORD_VAR_FACTOR;
-    S[0] = f2 * M.cov_a.x + k * h.x * h.x;
-    S[1] = f2 * M.cov_a.y + k * h.x * h.y;
-    S[2] = f2 * M.cov_a.z + k * h.x * h.z;
-    S[3] = f2 * M.cov_a.w + k * h.y * h.y;
-    S[4] = f2 * M.cov_b_age_id.x + k * h.y * h.z;
-    S[5] = f2 * M.cov_b_age_id.y + k * h.z * h.z;
-    flux = M.mean_flux.w / float(DUST_SIZE_BINS) * dust_sub_share(M, b, j, nj);
+    S[0] = f2 * dust_mom.m[mi].cov_a.x + k * h.x * h.x;
+    S[1] = f2 * dust_mom.m[mi].cov_a.y + k * h.x * h.y;
+    S[2] = f2 * dust_mom.m[mi].cov_a.z + k * h.x * h.z;
+    S[3] = f2 * dust_mom.m[mi].cov_a.w + k * h.y * h.y;
+    S[4] = f2 * dust_mom.m[mi].cov_b_age_id.x + k * h.y * h.z;
+    S[5] = f2 * dust_mom.m[mi].cov_b_age_id.y + k * h.z * h.z;
+    flux = dust_mom.m[mi].mean_flux.w / float(DUST_SIZE_BINS) * dust_sub_share(mi, b, j, nj);
 }
-void dust_bin_packet(DustMoments M, uint b, out vec3 mean, out float S[6], out float flux) {
-    dust_bin_packet_sub(M, b, 0u, 1u, mean, S, flux);
+void dust_bin_packet(uint mi, uint b, out vec3 mean, out float S[6], out float flux) {
+    dust_bin_packet_sub(mi, b, 0u, 1u, mean, S, flux);
 }
 
 // The packet drawn for size bin b (dust::bin_chord_packet): uniform along its chord (mean = the
 // start edge, seg = the chord), Sigma_v scaled by the bin's speed factor plus the bin's time
 // segment segT as a Gaussian of DUST_CHORD_VAR_FACTOR half-segments^2, 1/DUST_SIZE_BINS of the flux
-void dust_bin_chord_sub(DustMoments M, uint b, uint j, uint nj, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
+void dust_bin_chord_sub(uint mi, uint b, uint j, uint nj, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
     vec3 a, c; float fa, fc;
-    dust_sub_edges(M, b, j, nj, a, c, fa, fc);
+    dust_sub_edges(mi, b, j, nj, a, c, fa, fc);
     mean = a;
     chord = c - a;
     vec3 h = 0.5 * segT;
     float f = 0.5 * (fa + fc);
     float f2 = f * f, k = DUST_CHORD_VAR_FACTOR;
-    S[0] = f2 * M.cov_a.x + k * h.x * h.x;
-    S[1] = f2 * M.cov_a.y + k * h.x * h.y;
-    S[2] = f2 * M.cov_a.z + k * h.x * h.z;
-    S[3] = f2 * M.cov_a.w + k * h.y * h.y;
-    S[4] = f2 * M.cov_b_age_id.x + k * h.y * h.z;
-    S[5] = f2 * M.cov_b_age_id.y + k * h.z * h.z;
-    flux = M.mean_flux.w / float(DUST_SIZE_BINS) * dust_sub_share(M, b, j, nj);
+    S[0] = f2 * dust_mom.m[mi].cov_a.x + k * h.x * h.x;
+    S[1] = f2 * dust_mom.m[mi].cov_a.y + k * h.x * h.y;
+    S[2] = f2 * dust_mom.m[mi].cov_a.z + k * h.x * h.z;
+    S[3] = f2 * dust_mom.m[mi].cov_a.w + k * h.y * h.y;
+    S[4] = f2 * dust_mom.m[mi].cov_b_age_id.x + k * h.y * h.z;
+    S[5] = f2 * dust_mom.m[mi].cov_b_age_id.y + k * h.z * h.z;
+    flux = dust_mom.m[mi].mean_flux.w / float(DUST_SIZE_BINS) * dust_sub_share(mi, b, j, nj);
 }
-void dust_bin_chord(DustMoments M, uint b, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
-    dust_bin_chord_sub(M, b, 0u, 1u, segT, mean, chord, S, flux);
+void dust_bin_chord(uint mi, uint b, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
+    dust_bin_chord_sub(mi, b, 0u, 1u, segT, mean, chord, S, flux);
 }
 
 bool dust_project_point(vec3 p, mat4 mvp, float W, float H, out vec2 px);
 // sweep count of bin b (dust::time_sweep): the larger screen displacement of its two edges to
 // the predecessor's per DUST_TIME_SWEEP_STEP_PX, at most DUST_TIME_SWEEP_MAX
-uint dust_time_sweep(DustMoments M, DustMoments P, uint b, mat4 mvp, float W, float H) {
+uint dust_time_sweep(uint mi, uint pi, uint b, mat4 mvp, float W, float H) {
     float gap = 0.0;
     for (uint e = b; e <= b + 1u; ++e) {
         vec2 a, c;
-        if (dust_project_point(M.edges[e].xyz, mvp, W, H, a) && dust_project_point(P.edges[e].xyz, mvp, W, H, c))
+        if (dust_project_point(dust_mom.m[mi].edges[e].xyz, mvp, W, H, a) && dust_project_point(dust_mom.m[pi].edges[e].xyz, mvp, W, H, c))
             gap = max(gap, length(c - a));
     }
     if (isinf(gap) || isnan(gap)) return 1u;
@@ -1456,10 +1460,10 @@ uint dust_time_sweep(DustMoments M, DustMoments P, uint b, mat4 mvp, float W, fl
 // u = (k + 1/2)/nS between the bin's own edges and the predecessor's, Sigma_v scaled by the
 // bin's speed factor plus the residual Gaussian of the larger edge displacement / 2 nS along it,
 // 1/(DUST_SIZE_BINS nS) of the flux
-void dust_bin_sweep_sub(DustMoments M, DustMoments P, uint b, uint j, uint nj, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
+void dust_bin_sweep_sub(uint mi, uint pi, uint b, uint j, uint nj, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
     vec3 a, c, pa, pc; float fa, fc, pfa, pfc;
-    dust_sub_edges(M, b, j, nj, a, c, fa, fc);
-    dust_sub_edges(P, b, j, nj, pa, pc, pfa, pfc);
+    dust_sub_edges(mi, b, j, nj, a, c, fa, fc);
+    dust_sub_edges(pi, b, j, nj, pa, pc, pfa, pfc);
     vec3 da = pa - a, dc = pc - c;
     vec3 dmax = dot(da, da) > dot(dc, dc) ? da : dc;
     float u = (float(k) + 0.5) / float(nS);
@@ -1470,16 +1474,16 @@ void dust_bin_sweep_sub(DustMoments M, DustMoments P, uint b, uint j, uint nj, u
     vec3 h = dmax * (0.5 / float(nS));
     mean = ak;
     chord = ck - ak;
-    S[0] = f2 * M.cov_a.x + kv * h.x * h.x;
-    S[1] = f2 * M.cov_a.y + kv * h.x * h.y;
-    S[2] = f2 * M.cov_a.z + kv * h.x * h.z;
-    S[3] = f2 * M.cov_a.w + kv * h.y * h.y;
-    S[4] = f2 * M.cov_b_age_id.x + kv * h.y * h.z;
-    S[5] = f2 * M.cov_b_age_id.y + kv * h.z * h.z;
-    flux = M.mean_flux.w / float(DUST_SIZE_BINS * nS) * dust_sub_share(M, b, j, nj);
+    S[0] = f2 * dust_mom.m[mi].cov_a.x + kv * h.x * h.x;
+    S[1] = f2 * dust_mom.m[mi].cov_a.y + kv * h.x * h.y;
+    S[2] = f2 * dust_mom.m[mi].cov_a.z + kv * h.x * h.z;
+    S[3] = f2 * dust_mom.m[mi].cov_a.w + kv * h.y * h.y;
+    S[4] = f2 * dust_mom.m[mi].cov_b_age_id.x + kv * h.y * h.z;
+    S[5] = f2 * dust_mom.m[mi].cov_b_age_id.y + kv * h.z * h.z;
+    flux = dust_mom.m[mi].mean_flux.w / float(DUST_SIZE_BINS * nS) * dust_sub_share(mi, b, j, nj);
 }
-void dust_bin_sweep(DustMoments M, DustMoments P, uint b, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
-    dust_bin_sweep_sub(M, P, b, 0u, 1u, k, nS, mean, chord, S, flux);
+void dust_bin_sweep(uint mi, uint pi, uint b, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
+    dust_bin_sweep_sub(mi, pi, b, 0u, 1u, k, nS, mean, chord, S, flux);
 }
 // Rodrigues rotation of v by angle about the unit axis
 vec3 dust_rotate3(vec3 v, vec3 axis, float angle) {
@@ -1518,15 +1522,15 @@ vec3 dust_spiral_point(vec3 own, vec3 pred, float ageO, float ageP, vec3 axis, f
 }
 // the cell line of a sample (dust::cell_line): its size polyline o + f c in the speed factor f;
 // false once radiation pressure bent it (the middle edge > 5 % of the chord off the line)
-bool dust_cell_line(DustMoments M, out vec3 o, out vec3 c) {
+bool dust_cell_line(uint mi, out vec3 o, out vec3 c) {
     uint nb = DUST_SIZE_BINS;
-    vec3 e0 = M.edges[0].xyz, e1 = M.edges[nb].xyz;
-    float f0 = dust_edge_factor(M, 0u), f1 = dust_edge_factor(M, nb);
+    vec3 e0 = dust_mom.m[mi].edges[0].xyz, e1 = dust_mom.m[mi].edges[nb].xyz;
+    float f0 = dust_edge_factor(mi, 0u), f1 = dust_edge_factor(mi, nb);
     o = vec3(0.0); c = vec3(0.0);
     if (!(f1 > f0)) return false;
     c = (e1 - e0) * (1.0 / (f1 - f0));
     o = e0 - c * f0;
-    vec3 d = M.edges[nb / 2u].xyz - (o + c * dust_edge_factor(M, nb / 2u));
+    vec3 d = dust_mom.m[mi].edges[nb / 2u].xyz - (o + c * dust_edge_factor(mi, nb / 2u));
     vec3 ch = e1 - e0;
     return dot(ch, ch) > 0.0 && !(dot(d, d) > 0.0025 * dot(ch, ch));
 }
@@ -1580,23 +1584,23 @@ vec4 dust_piece_support_o(bool pieces, bool lineM, bool lineP, vec3 oM, vec3 cM,
     return sp;
 }
 // the spiral gate of a sample with a predecessor (dust::spiral_of)
-bool dust_spiral_of(DustMoments M, DustMoments P, out vec3 axis, out float omega) {
-    omega = dust_spin_rate(M);
-    axis = dust_spin_axis(M);
-    float dAge = max(P.cov_b_age_id.z - M.cov_b_age_id.z, 0.0);
-    return omega * dAge > DUST_SPIRAL_MIN_TURN && M.cov_b_age_id.z <= DUST_SPIRAL_MAX_AGE_SAMPLES * dAge;
+bool dust_spiral_of(uint mi, uint pi, out vec3 axis, out float omega) {
+    omega = dust_spin_rate(mi);
+    axis = dust_spin_axis(mi);
+    float dAge = max(dust_mom.m[pi].cov_b_age_id.z - dust_mom.m[mi].cov_b_age_id.z, 0.0);
+    return omega * dAge > DUST_SPIRAL_MIN_TURN && dust_mom.m[mi].cov_b_age_id.z <= DUST_SPIRAL_MAX_AGE_SAMPLES * dAge;
 }
 
 // The whole polyline as one packet (dust::pooled_packet): the bins' mean, their mean covariance
 // plus the scatter of their midpoints, the whole flux
-void dust_pooled_packet(DustMoments M, out vec3 mean, out float S[6], out float flux) {
+void dust_pooled_packet(uint mi, out vec3 mean, out float S[6], out float flux) {
     float n = float(DUST_SIZE_BINS);
     mean = vec3(0.0);
-    for (uint b = 0u; b < DUST_SIZE_BINS; ++b) mean += 0.5 * (M.edges[b].xyz + M.edges[b + 1u].xyz) / n;
+    for (uint b = 0u; b < DUST_SIZE_BINS; ++b) mean += 0.5 * (dust_mom.m[mi].edges[b].xyz + dust_mom.m[mi].edges[b + 1u].xyz) / n;
     for (int k = 0; k < 6; ++k) S[k] = 0.0;
     for (uint b = 0u; b < DUST_SIZE_BINS; ++b) {
         vec3 mb; float Sb[6]; float fb;
-        dust_bin_packet(M, b, mb, Sb, fb);
+        dust_bin_packet(mi, b, mb, Sb, fb);
         vec3 d = mb - mean;
         S[0] += (Sb[0] + d.x * d.x) / n;
         S[1] += (Sb[1] + d.x * d.y) / n;
@@ -1605,16 +1609,16 @@ void dust_pooled_packet(DustMoments M, out vec3 mean, out float S[6], out float 
         S[4] += (Sb[4] + d.y * d.z) / n;
         S[5] += (Sb[5] + d.z * d.z) / n;
     }
-    flux = M.mean_flux.w;
+    flux = dust_mom.m[mi].mean_flux.w;
 }
 // the mean covariance of the bins alone, without the scatter of their midpoints
 // (dust::pooled_within_cov): the width a predecessor hands to the pieces of a point sample
-void dust_pooled_within(DustMoments M, out float S[6]) {
+void dust_pooled_within(uint mi, out float S[6]) {
     float n = float(DUST_SIZE_BINS);
     for (int k = 0; k < 6; ++k) S[k] = 0.0;
     for (uint b = 0u; b < DUST_SIZE_BINS; ++b) {
         vec3 mb; float Sb[6]; float fb;
-        dust_bin_packet(M, b, mb, Sb, fb);
+        dust_bin_packet(mi, b, mb, Sb, fb);
         for (int k = 0; k < 6; ++k) S[k] += Sb[k] / n;
     }
 }
@@ -1728,27 +1732,27 @@ float dust_clip_w(vec3 p, mat4 mvp) {
 // the middle one within DUST_MERGE_PX of the mean on screen, and (perspective) the 17 edges' depth
 // span below DUST_SPLIT_EPS of the depth at the mean (a syndyne along the line of sight is a
 // point on screen but deep: not a pooled Gaussian)
-bool dust_polyline_merged(DustMoments M, mat4 mvp, float W, float H) {
+bool dust_polyline_merged(uint mi, mat4 mvp, float W, float H) {
     vec2 c, p;
-    if (!dust_project_point(M.mean_flux.xyz, mvp, W, H, c)) return false;
+    if (!dust_project_point(dust_mom.m[mi].mean_flux.xyz, mvp, W, H, c)) return false;
     uint idx[3] = uint[3](0u, DUST_SIZE_BINS / 2u, DUST_SIZE_BINS);
     for (int k = 0; k < 3; ++k) {
-        if (!dust_project_point(M.edges[idx[k]].xyz, mvp, W, H, p)) return false;
+        if (!dust_project_point(dust_mom.m[mi].edges[idx[k]].xyz, mvp, W, H, p)) return false;
         vec2 d = p - c;
         if (!(dot(d, d) < DUST_MERGE_PX * DUST_MERGE_PX)) return false;
     }
-    float wm = dust_clip_w(M.mean_flux.xyz, mvp);
+    float wm = dust_clip_w(dust_mom.m[mi].mean_flux.xyz, mvp);
     float lo = wm, hi = wm;
     for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) {
-        float we = dust_clip_w(M.edges[j].xyz, mvp);
+        float we = dust_clip_w(dust_mom.m[mi].edges[j].xyz, mvp);
         lo = min(lo, we);
         hi = max(hi, we);
     }
     return hi - lo < DUST_SPLIT_EPS * wm;
 }
 // whether the time segment to the predecessor is shallow enough to pool (dust::time_shallow)
-bool dust_time_shallow(DustMoments M, DustMoments P, mat4 mvp) {
-    float wm = dust_clip_w(M.mean_flux.xyz, mvp), wp = dust_clip_w(P.mean_flux.xyz, mvp);
+bool dust_time_shallow(uint mi, uint pi, mat4 mvp) {
+    float wm = dust_clip_w(dust_mom.m[mi].mean_flux.xyz, mvp), wp = dust_clip_w(dust_mom.m[pi].mean_flux.xyz, mvp);
     return abs(wp - wm) < DUST_SPLIT_EPS * wm || wp == wm;
 }
 

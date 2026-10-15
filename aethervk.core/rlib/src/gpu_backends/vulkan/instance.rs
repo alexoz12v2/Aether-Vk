@@ -700,6 +700,44 @@ impl Instance {
         if want_checkpoints && has_ext(ash::nv::device_diagnostic_checkpoints::NAME) {
           optional_extensions.insert(utils::OptionalExtensionSupportFlags::DIAGNOSTIC_CHECKPOINTS);
         }
+        // the dust profiler (`AETHERVK_DUST_PROFILE=1`, physics::dust_profile_requested): the
+        // subgroup clock for the `.prof` shader variants (they also reduce over the subgroup), and
+        // the pipelines' executable statistics; both features queried, not assumed
+        if crate::gpu_backends::vulkan::physics::dust_profile_requested() {
+          if has_ext(ash::khr::shader_clock::NAME) {
+            let mut clock = vk::PhysicalDeviceShaderClockFeaturesKHR::default();
+            let mut features2 = vk::PhysicalDeviceFeatures2::default().push_next(&mut clock);
+            unsafe { self.instance.get_physical_device_features2(physical_device, &mut features2) };
+            let subgroup_ops = subgroup_props
+              .supported_operations
+              .contains(vk::SubgroupFeatureFlags::BASIC | vk::SubgroupFeatureFlags::ARITHMETIC)
+              && subgroup_props.supported_stages.contains(vk::ShaderStageFlags::COMPUTE);
+            if clock.shader_subgroup_clock == vk::TRUE && subgroup_ops {
+              optional_extensions.insert(utils::OptionalExtensionSupportFlags::SHADER_CLOCK);
+            } else {
+              aethervk_oshal_rlib::log!(
+                "[dust profile] VK_KHR_shader_clock present but shaderSubgroupClock {} / subgroup arithmetic {}: no profiler shaders",
+                clock.shader_subgroup_clock == vk::TRUE,
+                subgroup_ops
+              );
+            }
+          } else {
+            aethervk_oshal_rlib::log!("[dust profile] no VK_KHR_shader_clock: no profiler shaders");
+          }
+          if has_ext(ash::khr::pipeline_executable_properties::NAME) {
+            let mut pep = vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default();
+            let mut features2 = vk::PhysicalDeviceFeatures2::default().push_next(&mut pep);
+            unsafe { self.instance.get_physical_device_features2(physical_device, &mut features2) };
+            if pep.pipeline_executable_info == vk::TRUE {
+              optional_extensions
+                .insert(utils::OptionalExtensionSupportFlags::PIPELINE_EXECUTABLE_PROPERTIES);
+            }
+          } else {
+            aethervk_oshal_rlib::log!(
+              "[dust profile] no VK_KHR_pipeline_executable_properties: no pipeline statistics"
+            );
+          }
+        }
 
         #[cfg(debug_assertions)]
         {

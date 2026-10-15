@@ -605,6 +605,8 @@ struct FrameRec {
   /// (`Device::dust_gpu_timings`: the last frame measured before this one was downloaded)
   render_ms: f64,
   dust_gpu: Option<aethervk_core_rlib::gpu_backends::vulkan::device::dust::DustGpuTimings>,
+  /// the shader-clock profiler's counters of the last drawn frame (`AETHERVK_DUST_PROFILE=1`)
+  dust_profile: Option<aethervk_core_rlib::scene::dust::DustProfileCounters>,
   passes_logged: String,
   /// the frame against its Monte-Carlo truth (`--mc`)
   mc: Option<McRec>,
@@ -1146,7 +1148,7 @@ impl FrameRec {
       })
       .collect();
     format!(
-      "{{\"frame\":{},\"epoch\":\"{}\",\"epoch_target\":\"{}\",\"since_ignition_s\":{},\"seek_ok\":{},\"r_helio_au\":{:.6},\"comet_au\":{},\"tiers\":[{}],\"coma_radius_km\":{:.3},\"camera\":{{\"pos_au\":{},\"quat_xyzw\":[{:.9},{:.9},{:.9},{:.9}],\"half_height_au\":{:.9},\"half_height_km\":{:.1},\"m_per_px_nucleus\":{:.6e}}},\"nucleus_px\":[{:.2},{:.2}],\"nucleus_rgb\":[{},{},{}],\"mean_luminance\":{:.4},\"p99_luminance\":{:.2},\"nonblack_fraction\":{:.6},\"mc\":{},\"specks\":{},\"exposure\":{},\"hue_ramp\":[{}],\"render_task\":{},\"render_ms\":{:.2},\"dust_gpu\":{},\"dust_log\":\"{}\"}}",
+      "{{\"frame\":{},\"epoch\":\"{}\",\"epoch_target\":\"{}\",\"since_ignition_s\":{},\"seek_ok\":{},\"r_helio_au\":{:.6},\"comet_au\":{},\"tiers\":[{}],\"coma_radius_km\":{:.3},\"camera\":{{\"pos_au\":{},\"quat_xyzw\":[{:.9},{:.9},{:.9},{:.9}],\"half_height_au\":{:.9},\"half_height_km\":{:.1},\"m_per_px_nucleus\":{:.6e}}},\"nucleus_px\":[{:.2},{:.2}],\"nucleus_rgb\":[{},{},{}],\"mean_luminance\":{:.4},\"p99_luminance\":{:.2},\"nonblack_fraction\":{:.6},\"mc\":{},\"specks\":{},\"exposure\":{},\"hue_ramp\":[{}],\"render_task\":{},\"render_ms\":{:.2},\"dust_gpu\":{},\"dust_profile\":{},\"dust_log\":\"{}\"}}",
       self.index,
       self.epoch,
       self.epoch_target,
@@ -1230,9 +1232,270 @@ impl FrameRec {
         t.height,
         t.reused
       )),
+      self.dust_profile.as_ref().map_or(String::from("null"), dust_profile_json),
       self.passes_logged.replace('"', "'"),
     )
   }
+}
+
+// ───────────────────────────── the dust profiler ─────────────────────────────
+
+/// `AETHERVK_DUST_PROFILE=1`: the `.prof` dust shaders and their counters (`dust_profile.glsl`)
+fn dust_profile_on() -> bool {
+  std::env::var("AETHERVK_DUST_PROFILE").is_ok_and(|v| v.trim() == "1")
+}
+
+/// the GPU's SM clock (MHz) from `nvidia-smi`, sampled once (`None` without it); converts the
+/// profiler's cycles to time. `AETHERVK_GPU_SM_MHZ` overrides it.
+fn sm_clock_mhz() -> Option<f64> {
+  static MHZ: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+  *MHZ.get_or_init(|| {
+    if let Some(v) = std::env::var("AETHERVK_GPU_SM_MHZ").ok().and_then(|v| v.trim().parse::<f64>().ok()) {
+      return Some(v);
+    }
+    let out = std::process::Command::new("nvidia-smi")
+      .args(["--query-gpu=clocks.sm", "--format=csv,noheader,nounits"])
+      .output()
+      .ok()?;
+    String::from_utf8_lossy(&out.stdout).lines().next()?.trim().parse::<f64>().ok()
+  })
+}
+
+/// the GPU's streaming multiprocessors (15 on a GTX 1070; 64 resident warps each at most on
+/// Pascal) for the occupancy reading; `AETHERVK_GPU_SMS` overrides
+fn gpu_sms() -> f64 {
+  std::env::var("AETHERVK_GPU_SMS").ok().and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(15.0)
+}
+
+/// The exclusive stage cycles of a profiled splat frame (`dust_profile.glsl`): the timers nest,
+/// `split` holds every leaf-level stage (project, scprep ⊃ qput, ewa, vplan, vdraw), `packet`
+/// holds cone and split, `subpk` holds packet, `thread` holds setup, subpk and tracer.
+/// Returns (name, exclusive cycles, per-unit name, units) in the printing order.
+fn dust_profile_exclusive(p: &aethervk_core_rlib::scene::dust::DustProfileCounters) -> Vec<(&'static str, u64, &'static str, u64)> {
+  use aethervk_core_rlib::scene::dust as d;
+  let s = |name: &str| p.stage(d::DUST_PROF_STAGE_NAMES.iter().position(|n| *n == name).unwrap());
+  let threads = p.word(d::DUST_PROF_THREADS) as u64;
+  let packets = p.word(d::DUST_PROF_PACKETS) as u64;
+  let cone = p.word(d::DUST_PROF_CONE) as u64;
+  let leaves = p.word(d::DUST_PROF_LEAVES) as u64;
+  let records = p.word(d::DUST_PROF_RECORDS) as u64;
+  let volume = p.word(d::DUST_PROF_VOLUME) as u64;
+  let nodes = p.word(d::DUST_PROF_NODES) as u64;
+  let ewa_texels = p.u64_at(d::DUST_PROF_EWA_TEXELS);
+  let volume_texels = p.u64_at(d::DUST_PROF_VOLUME_TEXELS);
+  let leafsum = s("project") + s("scprep") + s("ewa") + s("vplan") + s("vdraw");
+  // the enumerator's stages (dust_splat.comp: setup subpk ecount tracer, within `thread`) and the
+  // splitter's (dust_split.comp: count packet cone split project scprep qput vemit ewa vplan
+  // vdraw, within its own lane cycles)
+  vec![
+    ("setup", s("setup"), "cluster", threads),
+    ("subpk", s("subpk"), "packet", packets),
+    ("ecount", s("ecount"), "lane (the record-counting pass)", threads),
+    ("packet'", s("packet").saturating_sub(s("cone") + s("split")), "packet", packets),
+    ("cone", s("cone"), "cone packet", cone),
+    ("split'", s("split").saturating_sub(leafsum), "node", nodes),
+    ("project", s("project"), "leaf", leaves),
+    ("scprep'", s("scprep").saturating_sub(s("qput")), "leaf", leaves),
+    ("qput", s("qput"), "record", records),
+    ("vemit", s("vemit"), "volume packet", volume),
+    ("ewa", s("ewa"), "inline texel", ewa_texels),
+    ("vplan", s("vplan"), "volume packet", volume),
+    ("vdraw", s("vdraw"), "volume texel", volume_texels),
+    ("tracer", s("tracer"), "cluster", threads),
+    ("count", s("count"), "record (the splitter's seed-counting pass)", packets),
+    ("(rest)", s("thread").saturating_sub(s("setup") + s("subpk") + s("tracer") + s("ecount")), "cluster", threads),
+  ]
+}
+
+/// The profile report lines (`[observer] dust profile ...`): the stages' shares and per-unit
+/// cycles, the thread tail from the histogram, the perfect-occupancy work against the measured
+/// splat time, the queue draw's split.
+fn dust_profile_report(
+  p: &aethervk_core_rlib::scene::dust::DustProfileCounters,
+  t: Option<&aethervk_core_rlib::gpu_backends::vulkan::device::dust::DustGpuTimings>,
+  mhz: Option<f64>,
+) -> Vec<String> {
+  use aethervk_core_rlib::scene::dust as d;
+  let mut out = Vec::new();
+  let thread = p.stage(0);
+  let threads = p.word(d::DUST_PROF_THREADS) as u64;
+  let hz = mhz.map(|m| m * 1e6);
+  let ms = |cycles: u64| hz.map_or(String::from("?"), |hz| format!("{:.1}", cycles as f64 / hz * 1e3));
+  out.push(format!(
+    "[observer] dust profile (frame {}, {} threads, {} packets, {} leaves, {} volume packets, {} queue records; SM clock {}):",
+    p.frame,
+    threads,
+    p.word(d::DUST_PROF_PACKETS),
+    p.word(d::DUST_PROF_LEAVES),
+    p.word(d::DUST_PROF_VOLUME),
+    p.word(d::DUST_PROF_RECORDS),
+    mhz.map_or(String::from("unknown"), |m| format!("{m:.0} MHz"))
+  ));
+  out.push(format!("[observer]   {:<9} {:>13} {:>7} {:>10} {:>12}  per unit", "stage", "cycles", "share", "/thread", "cycles/unit"));
+  for (name, cycles, unit, units) in dust_profile_exclusive(p) {
+    out.push(format!(
+      "[observer]   {:<9} {:>13} {:>6.1}% {:>10.0} {:>12}  {}",
+      name,
+      cycles,
+      if thread > 0 { 100.0 * cycles as f64 / thread as f64 } else { 0.0 },
+      if threads > 0 { cycles as f64 / threads as f64 } else { 0.0 },
+      if units > 0 { format!("{:.0}", cycles as f64 / units as f64) } else { String::from("-") },
+      unit
+    ));
+  }
+  // the tail: the histogram's log2 buckets
+  let hist: Vec<u64> = (0..32).map(|k| p.word(d::DUST_PROF_HIST + k) as u64).collect();
+  let total: u64 = hist.iter().sum();
+  let quantile = |q: f64| -> u32 {
+    let target = (q * total as f64).ceil() as u64;
+    let mut acc = 0u64;
+    for (k, &n) in hist.iter().enumerate() {
+      acc += n;
+      if acc >= target.max(1) {
+        return k as u32;
+      }
+    }
+    31
+  };
+  out.push(format!(
+    "[observer]   thread    {:>13}  100.0% {:>10.0}  tail: p50 ≥2^{} p90 ≥2^{} p99 ≥2^{} p99.9 ≥2^{} cycles, slowest {} cycles ({} ms)",
+    thread,
+    if threads > 0 { thread as f64 / threads as f64 } else { 0.0 },
+    quantile(0.5),
+    quantile(0.9),
+    quantile(0.99),
+    quantile(0.999),
+    p.word(d::DUST_PROF_MAX_THREAD),
+    ms(p.word(d::DUST_PROF_MAX_THREAD) as u64)
+  ));
+  // the occupancy reading: a thread's cycles are wall cycles while it is resident (the
+  // subgroup clock runs while other warps issue), so Σ thread cycles / (f × the splats' time) is
+  // the average number of resident threads over the dispatches: per SM, in warps of 32, against
+  // Pascal's 64 — the register-limited residency (65536 / (registers × 32) warps per SM)
+  let sms = gpu_sms();
+  match (hz, t) {
+    (Some(hz), Some(t)) if t.splat_only_ms.is_finite() && t.splat_only_ms > 0.0 => {
+      let resident = thread as f64 / (hz * t.splat_only_ms * 1e-3);
+      let life_ms = if threads > 0 { thread as f64 / threads as f64 / hz * 1e3 } else { 0.0 };
+      out.push(format!(
+        "[observer]   occupancy: Σ thread cycles / ({:.0} MHz × {:.1} ms splats) = {resident:.0} resident threads on average = {:.1} warps per SM ({sms:.0} SMs; 64 at most); mean thread life {life_ms:.2} ms, {} threads",
+        hz / 1e6,
+        t.splat_only_ms,
+        resident / 32.0 / sms,
+        threads
+      ));
+    }
+    _ => out.push(String::from("[observer]   occupancy: no SM clock or no splat timing (set AETHERVK_GPU_SM_MHZ)")),
+  }
+  // the splitter (dust_split.comp): its own lane cycles against the enumerator's `thread`
+  let sthread = p.u64_at(d::DUST_PROF_STHREAD);
+  if sthread > 0 {
+    let slanes = p.word(d::DUST_PROF_SLANES) as u64;
+    out.push(format!(
+      "[observer]   splitter: {sthread} lane-cycles ({:.2}× the enumerator's), count {:.1}% packet {:.1}%; {slanes} lanes, slowest {} cycles ({} ms){}",
+      if thread > 0 { sthread as f64 / thread as f64 } else { 0.0 },
+      100.0 * p.stage(d::DUST_PROF_STAGE_NAMES.iter().position(|n| *n == "count").unwrap()) as f64 / sthread as f64,
+      100.0 * p.stage(d::DUST_PROF_STAGE_NAMES.iter().position(|n| *n == "packet").unwrap()) as f64 / sthread as f64,
+      p.word(d::DUST_PROF_SMAX),
+      ms(p.word(d::DUST_PROF_SMAX) as u64),
+      match (hz, t) {
+        (Some(hz), Some(t)) if t.splat_only_ms > 0.0 => format!(
+          "; {:.0} resident lanes on average over the splats' {:.1} ms",
+          sthread as f64 / (hz * t.splat_only_ms * 1e-3),
+          t.splat_only_ms
+        ),
+        _ => String::new(),
+      }
+    ));
+  }
+  // the volume consumer (dust_draw_volume.comp)
+  let cthread = p.u64_at(d::DUST_PROF_CTHREAD);
+  if cthread > 0 {
+    let cpackets = p.word(d::DUST_PROF_CPACKETS) as u64;
+    let ctexels = p.u64_at(d::DUST_PROF_CTEXELS);
+    let cvplan = p.u64_at(d::DUST_PROF_CVPLAN);
+    let cvdraw = p.u64_at(d::DUST_PROF_CVDRAW);
+    out.push(format!(
+      "[observer]   volume consumer: {cthread} lane-cycles, cvplan {:.1}% ({:.0} per packet), cvdraw {:.1}% ({:.0} per texel); {cpackets} packets, {ctexels} texels, slowest lane {} cycles ({} ms){}",
+      100.0 * cvplan as f64 / cthread as f64,
+      if cpackets > 0 { cvplan as f64 / cpackets as f64 } else { 0.0 },
+      100.0 * cvdraw as f64 / cthread as f64,
+      if ctexels > 0 { cvdraw as f64 / ctexels as f64 } else { 0.0 },
+      p.word(d::DUST_PROF_CMAX),
+      ms(p.word(d::DUST_PROF_CMAX) as u64),
+      match (hz, t) {
+        (Some(hz), Some(t)) if t.splat_only_ms > 0.0 => format!(
+          "; {:.0} resident lanes on average over the splats' {:.1} ms",
+          cthread as f64 / (hz * t.splat_only_ms * 1e-3),
+          t.splat_only_ms
+        ),
+        _ => String::new(),
+      }
+    ));
+  }
+  // the queue draw
+  let q: Vec<u64> = (0..4).map(|k| p.qstage(k)).collect();
+  let qrecords = p.word(d::DUST_PROF_QRECORDS) as u64;
+  let qtexels = p.u64_at(d::DUST_PROF_QTEXELS);
+  if q[3] > 0 {
+    let share = |c: u64| 100.0 * c as f64 / q[3] as f64;
+    out.push(format!(
+      "[observer]   queue draw: qload {:.1}% qrows' {:.1}% qseg {:.1}% of {} lane-cycles; {} records, {} texels ({:.0} per record, {:.0} cycles per texel in qseg), slowest workgroup {} cycles ({} ms); {}queue_ms measured",
+      share(q[0]),
+      share(q[1].saturating_sub(q[2])),
+      share(q[2]),
+      q[3],
+      qrecords,
+      qtexels,
+      if qrecords > 0 { qtexels as f64 / qrecords as f64 } else { 0.0 },
+      if qtexels > 0 { q[2] as f64 / qtexels as f64 } else { 0.0 },
+      p.word(d::DUST_PROF_QMAX_WG),
+      ms(p.word(d::DUST_PROF_QMAX_WG) as u64),
+      t.map_or(String::new(), |t| format!("{:.1} ms ", t.queue_ms))
+    ));
+  }
+  out
+}
+
+/// the counters as JSON for `stats.jsonl`
+fn dust_profile_json(p: &aethervk_core_rlib::scene::dust::DustProfileCounters) -> String {
+  use aethervk_core_rlib::scene::dust as d;
+  let stages: Vec<String> = d::DUST_PROF_STAGE_NAMES
+    .iter()
+    .enumerate()
+    .map(|(k, n)| format!("\"{n}\":{}", p.stage(k)))
+    .collect();
+  let excl: Vec<String> = dust_profile_exclusive(p)
+    .iter()
+    .map(|(n, c, _, _)| format!("\"{}\":{c}", n.replace('\'', "_x").replace("(rest)", "rest")))
+    .collect();
+  let qstages: Vec<String> = d::DUST_PROF_QSTAGE_NAMES
+    .iter()
+    .enumerate()
+    .map(|(k, n)| format!("\"{n}\":{}", p.qstage(k)))
+    .collect();
+  let hist: Vec<String> = (0..32).map(|k| p.word(d::DUST_PROF_HIST + k).to_string()).collect();
+  format!(
+    "{{\"frame\":{},\"stages\":{{{}}},\"exclusive\":{{{}}},\"threads\":{},\"max_thread\":{},\"packets\":{},\"cone\":{},\"leaves\":{},\"records\":{},\"volume\":{},\"nodes\":{},\"ewa_texels\":{},\"volume_texels\":{},\"hist\":[{}],\"queue\":{{{},\"records\":{},\"texels\":{},\"max_wg\":{}}}}}",
+    p.frame,
+    stages.join(","),
+    excl.join(","),
+    p.word(d::DUST_PROF_THREADS),
+    p.word(d::DUST_PROF_MAX_THREAD),
+    p.word(d::DUST_PROF_PACKETS),
+    p.word(d::DUST_PROF_CONE),
+    p.word(d::DUST_PROF_LEAVES),
+    p.word(d::DUST_PROF_RECORDS),
+    p.word(d::DUST_PROF_VOLUME),
+    p.word(d::DUST_PROF_NODES),
+    p.u64_at(d::DUST_PROF_EWA_TEXELS),
+    p.u64_at(d::DUST_PROF_VOLUME_TEXELS),
+    hist.join(","),
+    qstages.join(","),
+    p.word(d::DUST_PROF_QRECORDS),
+    p.u64_at(d::DUST_PROF_QTEXELS),
+    p.word(d::DUST_PROF_QMAX_WG),
+  )
 }
 
 // ───────────────────────────── engine helpers ─────────────────────────────
@@ -1531,6 +1794,11 @@ fn main() {
   }
   std::fs::create_dir_all(&args.out).expect("create --out");
   *LOG_FILE.lock().unwrap() = Some(File::create(args.out.join("log.txt")).expect("log.txt"));
+  // the dust profiler (`AETHERVK_DUST_PROFILE=1`): the pipelines' internal representations go
+  // next to the frames
+  if dust_profile_on() {
+    unsafe { std::env::set_var("AETHERVK_DUST_PROFILE_DIR", &args.out) };
+  }
   LOG_ECHO.store(!args.quiet, Ordering::Relaxed);
   let t_run = Instant::now();
 
@@ -2008,6 +2276,7 @@ fn main() {
   let mut records: Vec<FrameRec> = Vec::new();
   let mut frames_rgba: Vec<image::RgbaImage> = Vec::new();
   let mut rot_toggle = false;
+  let mut dust_profile_last: Option<aethervk_core_rlib::scene::dust::DustProfileCounters> = None;
 
   for i in 0..n_frames {
     if DEVICE_LOST.load(Ordering::Relaxed) {
@@ -2242,6 +2511,29 @@ fn main() {
         "[observer] dust GPU: the last frame reused the image; the last drawn one (frame {}): propagate {:.2} ms, splat+specks {:.2} ms, total {:.2} ms",
         t.frame, t.propagate_ms, t.splat_ms, t.total_ms
       ));
+    }
+    // the volume packet queue of the last drawn frame (`dust::DUST_VQUEUE_*`): what the consumer
+    // drew, what overflowed into the producers' threads, the chunks
+    if let Some((drawn, overflowed, chunks)) = ctx.dust_vqueue_counts(pe) {
+      log_line(&format!(
+        "[observer] dust volume queue: {drawn} packets drawn by the consumer, {overflowed} overflowed (drawn in-thread), {chunks} chunks"
+      ));
+    }
+    // the shader-clock profiler's counters of the last drawn frame (`AETHERVK_DUST_PROFILE=1`,
+    // `dust_profile.glsl`): the stages' shares, the per-unit costs, the thread tail, the
+    // occupancy verdict against the measured splat time
+    if dust_profile_on() {
+      match ctx.dust_profile_counters(pe) {
+        Some(p) if p.any() => {
+          let t = dust_gpu_drawn.or(dust_gpu);
+          for line in dust_profile_report(&p, t.as_ref(), sm_clock_mhz()) {
+            log_line(&line);
+          }
+          dust_profile_last = Some(p);
+        }
+        Some(_) => log_line("[observer] dust profile: all counters zero (the device lacks VK_KHR_shader_clock or subgroup arithmetic, or nothing was drawn)"),
+        None => log_line("[observer] dust profile: no counters (no view)"),
+      }
     }
     // the dust frame budget (`--dust-budget-ms`): the app re-splats every presentation frame
     // whose view changed; checked on the last frame that drew
@@ -2686,6 +2978,7 @@ fn main() {
       render_task: tid,
       render_ms,
       dust_gpu,
+      dust_profile: dust_profile_last,
       passes_logged: String::new(),
       mc: mc_rec,
       exposure: ctx.dust_exposure(pe),

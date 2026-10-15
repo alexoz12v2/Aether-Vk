@@ -2064,6 +2064,24 @@ impl Device {
     {
       device_create_info = device_create_info.push_next(&mut host_query_reset_features);
     }
+    // the dust profiler's features (`AETHERVK_DUST_PROFILE=1`; flags set only when queried TRUE)
+    let mut shader_clock_features =
+      vk::PhysicalDeviceShaderClockFeaturesKHR::default().shader_subgroup_clock(true);
+    if chosen_physical_device_query_result
+      .optional_extensions
+      .contains(utils::OptionalExtensionSupportFlags::SHADER_CLOCK)
+    {
+      device_create_info = device_create_info.push_next(&mut shader_clock_features);
+    }
+    let mut pipeline_executable_features =
+      vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default()
+        .pipeline_executable_info(true);
+    if chosen_physical_device_query_result
+      .optional_extensions
+      .contains(utils::OptionalExtensionSupportFlags::PIPELINE_EXECUTABLE_PROPERTIES)
+    {
+      device_create_info = device_create_info.push_next(&mut pipeline_executable_features);
+    }
     let mut device_fault_features =
       vk::PhysicalDeviceFaultFeaturesEXT::default().device_fault(true);
     if chosen_physical_device_query_result
@@ -2282,8 +2300,23 @@ impl Device {
       chosen_physical_device_query_result
         .optional_extensions
         .contains(utils::OptionalExtensionSupportFlags::VULKAN_MEMORY_MODEL),
+      chosen_physical_device_query_result
+        .optional_extensions
+        .contains(utils::OptionalExtensionSupportFlags::SHADER_CLOCK),
+      chosen_physical_device_query_result
+        .optional_extensions
+        .contains(utils::OptionalExtensionSupportFlags::PIPELINE_EXECUTABLE_PROPERTIES),
     ) {
-      Ok(k) => k,
+      Ok(k) => {
+        // the dust pipelines' compiled statistics, once (`AETHERVK_DUST_PROFILE=1`)
+        if chosen_physical_device_query_result
+          .optional_extensions
+          .contains(utils::OptionalExtensionSupportFlags::PIPELINE_EXECUTABLE_PROPERTIES)
+        {
+          k.pipelines.log_pipeline_statistics(&instance.instance, &device.handle);
+        }
+        k
+      }
       Err(e) => {
         aethervk_oshal_rlib::log!(
           "Device::new error in VulkanComputeKernels::new, destroying device!"

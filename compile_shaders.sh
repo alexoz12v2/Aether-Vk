@@ -41,6 +41,11 @@ if [ ! -x "$SPIRV_VAL" ]; then
     echo "ERROR: spirv-val not found or not executable at $SPIRV_VAL" >&2
     exit 1
 fi
+SPIRV_OPT="$VULKAN_SDK/bin/spirv-opt"
+if [ ! -x "$SPIRV_OPT" ]; then
+    echo "ERROR: spirv-opt not found or not executable at $SPIRV_OPT" >&2
+    exit 1
+fi
 
 COMMON_FLAGS="-x glsl --target-env=vulkan1.1 --target-spv=spv1.4 -std=450core"
 WG_SIZES=(4 8 16 32 64 128 256)
@@ -113,11 +118,34 @@ is_float16_variant() {
     return 1
 }
 
+# spirv-opt's performance passes on the dust shaders (`AETHERVK_SPIRV_OPT=1`; off by default):
+# exhaustive inlining, scalar replacement of the struct / array / matrix temporaries glslang
+# makes for every by-value argument, SSA rewriting, CCP, redundancy elimination; no fast-math,
+# `precise` kept. Measured 2026-10-15 (definite_particles.md, WP3a "SPIR-V optimisation"): the
+# GPU time does not move (the NVIDIA compiler already does this work itself), the splat blob
+# grows 6.8x and the first run pays a shader-cache miss, so it stays an opt-in experiment.
+# Never applied to the -DDEBUG_SHADERS twins.
+opt_flags() {
+    if [ "${AETHERVK_SPIRV_OPT:-0}" = "1" ]; then
+        case "$1" in
+            dust_*.comp) echo "-O" ;;
+            *) echo "" ;;
+        esac
+    fi
+}
+
 compile_one() {
     local file="$1" stage="$2" extra_flags="${3:-}" out="$4"
-    echo "  glslc $extra_flags -> $(basename "$out")"
+    # `-O` is handled here, not by glslc: shaderc's built-in optimiser targets SPIR-V 1.3 under
+    # vulkan1.1 and refuses the 1.4 blob; spirv-opt with the explicit 1.4 target env does it.
+    local opt=0
+    case " $extra_flags " in *" -O "*) opt=1; extra_flags="${extra_flags//-O/}" ;; esac
+    echo "  glslc $extra_flags$([ "$opt" -eq 1 ] && echo ' + spirv-opt -O') -> $(basename "$out")"
     # shellcheck disable=SC2086
     "$GLSLC" $COMMON_FLAGS -fshader-stage="$stage" $extra_flags -o "$out" "$file"
+    if [ "$opt" -eq 1 ]; then
+        "$SPIRV_OPT" -O --target-env=vulkan1.1spv1.4 -o "$out" "$out"
+    fi
     "$SPIRV_VAL" "$out"
 }
 
@@ -180,8 +208,17 @@ for file in assets/*.comp assets/sim/*.comp; do
             fi
         else
             # Single-variant (specialization-constant or always-single-thread)
-            compile_one "$file" comp "$vmm_flag" "${file%.comp}.comp${vmm_infix}.spv"
+            compile_one "$file" comp "$(opt_flags "$base") $vmm_flag" "${file%.comp}.comp${vmm_infix}.spv"
             compile_one "$file" comp "-DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp${vmm_infix}.d.spv"
+            # The dust profiler variants (assets/sim/dust_profile.glsl; loaded only with
+            # AETHERVK_DUST_PROFILE=1 on a device with VK_KHR_shader_clock): `.prof` before the
+            # vmm infix, as PhysicsPipelines' mk!() rewrites the name.
+            case "$base" in
+                dust_splat.comp|dust_draw_queue.comp|dust_draw_volume.comp|dust_split.comp)
+                    compile_one "$file" comp "-DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
+                    ;;
+            esac
         fi
     done
 done
