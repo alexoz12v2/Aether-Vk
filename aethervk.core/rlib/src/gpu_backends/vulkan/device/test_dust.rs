@@ -2060,6 +2060,290 @@ fn gpu_dust_queue_draws_the_same_pyramid() {
   });
 }
 
+/// The volume packet queue (`dust_draw_volume.comp`, `dust::DUST_VQUEUE_*`): a frame drawn with
+/// the volumetric packets queued per chunk and drawn by the consumer (default), with them drawn
+/// in-thread (the queue off), with a chunk queue of 5 records that overflows (the rest in-thread)
+/// and with a forced chunk of 100 clusters (many chunks) gives the same pyramid word for word:
+/// the packet's seed travels with its record and the pyramid's atomics are order-free. The
+/// perspective view inside the cloud draws volumetric packets only; the orthographic one none.
+#[test]
+fn gpu_dust_volume_queue_draws_the_same_pyramid() {
+  let id = 9037;
+  with_dust_device(id, |device, capacity, _, _| {
+    let batch = test_batch(1024, 3600.0, 3, capacity);
+    emit(device, id, &batch);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 37);
+    let (w, h) = (640u32, 400u32);
+    let flow = dust::DustFlowUniform {
+      t_hi: 1.0e8,
+      t_lo: 0.0,
+      speed: 1.0,
+    };
+    let frame = frame_after(5.0);
+    let mut ortho = [0.0f32; 16];
+    ortho[0] = 1.0 / 2.0e7;
+    ortho[5] = 1.0 / 2.0e7;
+    ortho[10] = 1e-12;
+    ortho[15] = 1.0;
+    let d = 200.0f32;
+    let tan_h = (30.0f32).to_radians().tan();
+    let mut persp = [0.0f32; 16];
+    persp[0] = h as f32 / (w as f32 * tan_h);
+    persp[5] = 1.0 / tan_h;
+    persp[10] = -1e-3;
+    persp[11] = -1.0;
+    persp[15] = d;
+    for (name, mvp, eye) in [("orthographic", ortho, [0.0, 0.0, 1e10]), ("perspective", persp, [0.0, 0.0, d])] {
+      let base_pc = dust::DustSplatPushConstants {
+        moments: 0,
+        render: 0,
+        pyramid: 0,
+        live_count: batch.count,
+        flags: dust::DUST_VIEW_FLOW,
+        exposure: 1.0,
+        inv_unit: 0.0,
+        color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+        albedo: 0.04,
+        eye_local: [eye[0], eye[1], eye[2], 30.0 * 86400.0],
+        mvp,
+      };
+      let run = |inv_unit: f32| -> (Vec<u32>, f32) {
+        let mut used = inv_unit;
+        let mut cmds = device
+          .run_transient_commands(|cmd| {
+            device.cmd_dust_pre_propagate_barrier(cmd);
+            let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], base_pc.flags, flow)?;
+            let mut pc = base_pc;
+            if !(used > 0.0) {
+              used = 1.0 / view.unit;
+            }
+            pc.inv_unit = used;
+            device.cmd_dust_system_begin(id, pc.flags, flow)?;
+            let (render, moments) =
+              device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+            device.cmd_dust_pre_splat_barrier(cmd);
+            device.cmd_dust_splat(cmd, pe, id, 0, render, moments, pc)?;
+            device.cmd_dust_post_splat_barrier(cmd);
+            device.cmd_dust_frame_end(cmd, pe)?;
+            device.cmd_dust_system_end(id)?;
+            Ok(())
+          })
+          .unwrap();
+        cmds.cleanup(&device.device);
+        let pyr = device.download_dust_pyramid(pe).unwrap();
+        (pyr[dust::PYRAMID_HEADER_WORDS as usize..].to_vec(), used)
+      };
+      device.dust_set_vqueue_mode(pe, None);
+      device.dust_set_vqueue_capacity(pe, 0);
+      device.dust_set_vqueue_chunk(pe, 0);
+      let mut inv_unit = 0.0;
+      for _ in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
+        inv_unit = run(0.0).1;
+      }
+      let (default, _) = run(inv_unit);
+      let default_counts = device.dust_vqueue_counts(pe).unwrap();
+      device.dust_set_vqueue_mode(pe, Some(dust::DUST_FRAME_VQUEUE_OFF));
+      let (off, _) = run(inv_unit);
+      let off_counts = device.dust_vqueue_counts(pe).unwrap();
+      device.dust_set_vqueue_mode(pe, None);
+      device.dust_set_vqueue_capacity(pe, 5);
+      let (overflow, _) = run(inv_unit);
+      let overflow_counts = device.dust_vqueue_counts(pe).unwrap();
+      device.dust_set_vqueue_capacity(pe, 0);
+      device.dust_set_vqueue_chunk(pe, 100);
+      let (chunked, _) = run(inv_unit);
+      let chunked_counts = device.dust_vqueue_counts(pe).unwrap();
+      device.dust_set_vqueue_chunk(pe, 0);
+      // the splitter's serial reference: one lane per cluster, the records in order
+      device.dust_set_vqueue_mode(pe, Some(dust::DUST_FRAME_SPLIT_SERIAL));
+      let (serial, _) = run(inv_unit);
+      let (srecords, soverflow) = device.dust_squeue_counts(pe).unwrap();
+      device.dust_set_vqueue_mode(pe, None);
+      std::println!(
+        "[dust vqueue] {name}: (drawn by the consumer, overflowed, chunks): default {default_counts:?}, off {off_counts:?}, capacity 5 {overflow_counts:?}, chunk 100 {chunked_counts:?}"
+      );
+      assert!(off.iter().any(|&v| v != 0), "{name}: the frame drew nothing");
+      assert_eq!((off_counts.0, off_counts.1), (0, 0), "{name}: the volume queue was used while off");
+      assert_eq!(off_counts.2, 1, "{name}: more than one chunk with the queue off");
+      if name == "perspective" {
+        assert!(default_counts.0 > 0, "{name}: no volumetric packet was queued inside the cloud");
+        assert_eq!(default_counts.1, 0, "{name}: the default queue overflowed");
+        assert!(overflow_counts.0 >= 5 && overflow_counts.1 > 0, "{name}: the capped queue did not overflow");
+        assert_eq!(chunked_counts.0, default_counts.0, "{name}: the chunked frame drew another count of packets");
+      } else {
+        assert_eq!(default_counts.0, 0, "{name}: an orthographic view queued volumetric packets");
+      }
+      assert_eq!(chunked_counts.2, (batch.count as u32).div_ceil(100), "{name}: chunk count");
+      let diff = |a: &[u32], b: &[u32]| a.iter().zip(b).filter(|(x, y)| x != y).count();
+      assert_eq!(diff(&default, &off), 0, "{name}: the queued volume packets drew another pyramid than in-thread");
+      assert_eq!(diff(&overflow, &off), 0, "{name}: an overflowing volume queue drew another pyramid");
+      assert_eq!(diff(&chunked, &off), 0, "{name}: the chunked frame drew another pyramid");
+      assert!(srecords > 0 && soverflow == 0, "{name}: sub-packet records {srecords}, overflowed {soverflow}");
+      assert_eq!(diff(&serial, &off), 0, "{name}: the splitter's counting pass and prefix differ from the serial order");
+    }
+  });
+}
+
+/// The shader-clock profiler (`dust_profile.glsl`, `AETHERVK_DUST_PROFILE=1`): with the request
+/// on before the device is created, the `.prof` splat and queue shaders run and their counters
+/// are consistent (the thread count is the live count, the nested timers contain their parts,
+/// the residual outside the stages is small, the histogram holds every thread), and the pyramid
+/// they draw equals the production shaders' word for word (the probes change no arithmetic).
+/// Skipped with a notice on a device without `VK_KHR_shader_clock`.
+#[test]
+fn gpu_dust_profile_counters_are_consistent() {
+  use crate::gpu_backends::vulkan::physics::DUST_PROFILE_OVERRIDE;
+  let id = 9036;
+  DUST_PROFILE_OVERRIDE.store(true, core::sync::atomic::Ordering::Relaxed);
+  with_dust_device(id, |device, capacity, _, _| {
+    if device.kernels.pipelines.dust_splat_prof.is_none() {
+      std::println!("[dust profile] no VK_KHR_shader_clock on this device: the profiler test is skipped");
+      DUST_PROFILE_OVERRIDE.store(false, core::sync::atomic::Ordering::Relaxed);
+      return;
+    }
+    let batch = test_batch(1024, 3600.0, 3, capacity);
+    emit(device, id, &batch);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 36);
+    let (w, h) = (640u32, 400u32);
+    let flow = dust::DustFlowUniform {
+      t_hi: 1.0e8,
+      t_lo: 0.0,
+      speed: 1.0,
+    };
+    let frame = frame_after(5.0);
+    let mut ortho = [0.0f32; 16];
+    ortho[0] = 1.0 / 2.0e7;
+    ortho[5] = 1.0 / 2.0e7;
+    ortho[10] = 1e-12;
+    ortho[15] = 1.0;
+    let d = 200.0f32;
+    let tan_h = (30.0f32).to_radians().tan();
+    let mut persp = [0.0f32; 16];
+    persp[0] = h as f32 / (w as f32 * tan_h);
+    persp[5] = 1.0 / tan_h;
+    persp[10] = -1e-3;
+    persp[11] = -1.0;
+    persp[15] = d;
+    for (name, mvp, eye) in [("orthographic", ortho, [0.0, 0.0, 1e10]), ("perspective", persp, [0.0, 0.0, d])] {
+      let base_pc = dust::DustSplatPushConstants {
+        moments: 0,
+        render: 0,
+        pyramid: 0,
+        live_count: batch.count,
+        flags: dust::DUST_VIEW_FLOW,
+        exposure: 1.0,
+        inv_unit: 0.0,
+        color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+        albedo: 0.04,
+        eye_local: [eye[0], eye[1], eye[2], 30.0 * 86400.0],
+        mvp,
+      };
+      let run = |inv_unit: f32| -> (Vec<u32>, f32) {
+        let mut used = inv_unit;
+        let mut cmds = device
+          .run_transient_commands(|cmd| {
+            device.cmd_dust_pre_propagate_barrier(cmd);
+            let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], base_pc.flags, flow)?;
+            let mut pc = base_pc;
+            if !(used > 0.0) {
+              used = 1.0 / view.unit;
+            }
+            pc.inv_unit = used;
+            device.cmd_dust_system_begin(id, pc.flags, flow)?;
+            let (render, moments) =
+              device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+            device.cmd_dust_pre_splat_barrier(cmd);
+            device.cmd_dust_splat(cmd, pe, id, 0, render, moments, pc)?;
+            device.cmd_dust_post_splat_barrier(cmd);
+            device.cmd_dust_frame_end(cmd, pe)?;
+            device.cmd_dust_system_end(id)?;
+            Ok(())
+          })
+          .unwrap();
+        cmds.cleanup(&device.device);
+        let pyr = device.download_dust_pyramid(pe).unwrap();
+        (pyr[dust::PYRAMID_HEADER_WORDS as usize..].to_vec(), used)
+      };
+      // every packet queued: the queue draw's counters are exercised too
+      device.dust_set_queue_mode(pe, Some(dust::DUST_FRAME_QUEUE_ALL));
+      let mut inv_unit = 0.0;
+      for _ in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
+        inv_unit = run(0.0).1;
+      }
+      DUST_PROFILE_OVERRIDE.store(true, core::sync::atomic::Ordering::Relaxed);
+      let (profiled, _) = run(inv_unit);
+      let p = device.dust_profile_counters(pe).unwrap();
+      let vq = device.dust_vqueue_counts(pe).unwrap();
+      DUST_PROFILE_OVERRIDE.store(false, core::sync::atomic::Ordering::Relaxed);
+      let (production, _) = run(inv_unit);
+      let p_off = device.dust_profile_counters(pe).unwrap();
+      DUST_PROFILE_OVERRIDE.store(true, core::sync::atomic::Ordering::Relaxed);
+      device.dust_set_queue_mode(pe, None);
+      let s = |k: usize| p.stage(k);
+      let names = dust::DUST_PROF_STAGE_NAMES;
+      let idx = |n: &str| names.iter().position(|x| *x == n).unwrap();
+      std::println!(
+        "[dust profile] {name}: threads {} packets {} cone {} leaves {} records {} volume {} nodes {}; cycles thread {} setup {} subpk {} packet {} cone {} split {} project {} scprep {} qput {} ewa {} vplan {} vdraw {} tracer {}; max thread {}; queue {:?} records {} texels {}",
+        p.word(dust::DUST_PROF_THREADS), p.word(dust::DUST_PROF_PACKETS), p.word(dust::DUST_PROF_CONE),
+        p.word(dust::DUST_PROF_LEAVES), p.word(dust::DUST_PROF_RECORDS), p.word(dust::DUST_PROF_VOLUME),
+        p.word(dust::DUST_PROF_NODES),
+        s(0), s(1), s(2), s(3), s(4), s(5), s(6), s(7), s(8), s(9), s(10), s(11), s(12),
+        p.word(dust::DUST_PROF_MAX_THREAD),
+        (0..4).map(|k| p.qstage(k)).collect::<Vec<_>>(),
+        p.word(dust::DUST_PROF_QRECORDS), p.u64_at(dust::DUST_PROF_QTEXELS)
+      );
+      assert!(p.any(), "{name}: the profiler recorded nothing");
+      assert!(!p_off.any(), "{name}: the production shaders wrote profiler counters");
+      // the threads are the lanes with a sub-packet that drew (a warp per cluster,
+      // `dust::DUST_SPLAT_LANES`): at most one per sub-packet of every cluster
+      let threads = p.word(dust::DUST_PROF_THREADS);
+      assert!(threads > 0 && threads <= batch.count * dust::DUST_SPLAT_LANES, "{name}: thread count {threads}");
+      let hist: u64 = (0..32).map(|k| p.word(dust::DUST_PROF_HIST + k) as u64).sum();
+      assert_eq!(hist, threads as u64, "{name}: the histogram does not hold every thread");
+      assert!(p.word(dust::DUST_PROF_PACKETS) > 0 && p.word(dust::DUST_PROF_NODES) > 0, "{name}: no packets");
+      assert!(p.word(dust::DUST_PROF_MAX_THREAD) as u64 <= s(0), "{name}: the slowest thread exceeds the sum");
+      // the nesting: each timer holds its parts (the enumerator's stages within its thread, the
+      // splitter's within its own lane cycles)
+      let thread = s(idx("thread"));
+      let inner = s(idx("setup")) + s(idx("subpk")) + s(idx("tracer")) + s(idx("ecount"));
+      assert!(inner <= thread, "{name}: setup + subpk + tracer + ecount {inner} > thread {thread}");
+      // (the rest is the enumerator's barriers and prefix between its two passes, unprobed)
+      assert!((thread - inner) as f64 <= 0.50 * thread as f64, "{name}: {} cycles outside the stages of {thread}", thread - inner);
+      let sthread = p.u64_at(dust::DUST_PROF_STHREAD);
+      assert!(s(idx("count")) + s(idx("packet")) <= sthread, "{name}: count + packet > the splitter's cycles {sthread}");
+      assert!(p.word(dust::DUST_PROF_SLANES) > 0, "{name}: the splitter drew nothing");
+      let (srecords, soverflow) = device.dust_squeue_counts(pe).unwrap();
+      assert!(srecords > 0 && soverflow == 0, "{name}: sub-packet queue records {srecords}, overflowed {soverflow}");
+      assert!(s(idx("cone")) + s(idx("split")) <= s(idx("packet")), "{name}: cone + split > packet");
+      let leaves = s(idx("project")) + s(idx("scprep")) + s(idx("ewa")) + s(idx("vplan")) + s(idx("vdraw"));
+      assert!(leaves <= s(idx("split")), "{name}: the leaf stages {leaves} > split {}", s(idx("split")));
+      assert!(s(idx("qput")) <= s(idx("scprep")), "{name}: qput > scprep");
+      if name == "orthographic" {
+        assert!(p.word(dust::DUST_PROF_LEAVES) > 0 && p.word(dust::DUST_PROF_RECORDS) > 0, "{name}: no leaves or records");
+        assert!(p.word(dust::DUST_PROF_QRECORDS) > 0 && p.qstage(3) > 0, "{name}: the queue draw recorded nothing");
+        assert!(p.qstage(0) + p.qstage(1) <= p.qstage(3), "{name}: qload + qrows > qthread");
+        assert!(p.qstage(2) <= p.qstage(1), "{name}: qseg > qrows");
+      } else {
+        assert!(p.word(dust::DUST_PROF_VOLUME) > 0, "{name}: no volume packets inside the cloud");
+        // the consumer (dust_draw_volume.comp.prof): its records are the queue's drawn count
+        assert_eq!(p.word(dust::DUST_PROF_CPACKETS), vq.0, "{name}: the consumer's packet count");
+        assert!(p.word(dust::DUST_PROF_CPACKETS) > 0, "{name}: the consumer drew nothing");
+        assert!(
+          p.u64_at(dust::DUST_PROF_CVPLAN) + p.u64_at(dust::DUST_PROF_CVDRAW) <= p.u64_at(dust::DUST_PROF_CTHREAD),
+          "{name}: the consumer's stages exceed its thread cycles"
+        );
+        assert!(p.word(dust::DUST_PROF_CMAX) as u64 <= p.u64_at(dust::DUST_PROF_CTHREAD), "{name}: the consumer's slowest lane");
+      }
+      // the probes change no arithmetic
+      let diff = profiled.iter().zip(&production).filter(|(x, y)| x != y).count();
+      assert_eq!(diff, 0, "{name}: the profiled frame drew another pyramid than the production shaders");
+    }
+  });
+  DUST_PROFILE_OVERRIDE.store(false, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// Image reuse ([`Device::cmd_dust_frame_begin_reusable`], 8 ms plan Step 2): frames with the
 /// same draw inputs reuse the image once the header has settled (the unit and biases follow the
 /// readbacks), and a reused frame's pyramid equals the last drawn one word for word; other inputs,

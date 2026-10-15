@@ -2526,6 +2526,15 @@ pub fn is_volumetric(p: &Packet, view: &SplitView) -> bool {
   let q = sub3(view.eye, p.mean);
   let r = sub3(q, scale3(p.seg, segment_param(q, p.seg)));
   let tr = p.cov[0] + p.cov[3] + p.cov[5];
+  // lab (`AETHERVK_DUST_LAB_VOLUME_THIN=k`, CPU only): the rule on the packet's *thin* axis —
+  // its smallest σ (2 det(L) / tr Σ, the volume plan's estimate) above `k` × the ratio × the
+  // distance: a long needle seen from afar stays on the EWA split path
+  if let Some(k) = lab_knob("AETHERVK_DUST_LAB_VOLUME_THIN").filter(|k| *k > 0.0) {
+    let l = cholesky3(&p.cov);
+    let sig_small = 2.0 * (l[0] * l[3] * l[5]) / tr.max(1e-30);
+    let lim = k * DUST_VOLUME_RATIO;
+    return sig_small * sig_small > lim * lim * dot3(r, r);
+  }
   tr > DUST_VOLUME_RATIO * DUST_VOLUME_RATIO * dot3(r, r)
 }
 
@@ -2958,11 +2967,79 @@ fn volume_plan_pieces(
     volume_pieces(p, exposure, &ax, eye, mvp, wf, hf, pieces);
   }
   let n = ax.n_a * ax.n_b;
-  Some(VolumePlan {
-    level,
-    pieces: n,
-    evals: volume_evals(pieces, n, level, layout),
-  })
+  let evals = volume_evals(pieces, n, level, layout);
+  #[cfg(feature = "std")]
+  sky_study_record(theta, n, any_full, evals);
+  Some(VolumePlan { level, pieces: n, evals })
+}
+
+// The sky-map study (diagnostics, `AETHERVK_DUST_SKYMAP_STUDY=1` with `AETHERVK_DUST_WORK_LOG=1`
+// in the replay lab): per volumetric packet its angular σ, pieces and screen evaluations, and the
+// evaluations an octahedral map of base [`SKY_STUDY_BASE`]² would make at
+// [`DUST_VOLUME_TEXELS_PER_SIGMA`] texels per σ (a piece's 3σ cone, the whole sphere when the eye
+// is inside it), capped at [`DUST_VOLUME_MAX_EVALS`] per packet as on screen
+#[cfg(feature = "std")]
+const SKY_STUDY_BASE: f32 = 128.0;
+#[cfg(feature = "std")]
+#[derive(Clone, Copy, Default)]
+struct SkyStudy {
+  packets: u64,
+  full: u64,
+  screen_evals: u64,
+  map_evals: u64,
+  /// packets by angular σ: < 0.01, 0.01–0.03, 0.03–0.1, 0.1–0.3, 0.3–1, ≥ 1 rad
+  theta_bins: [u64; 6],
+  theta_min: f32,
+}
+#[cfg(feature = "std")]
+std::thread_local! {
+  static SKY_STUDY: core::cell::Cell<SkyStudy> = const { core::cell::Cell::new(SkyStudy {
+    packets: 0, full: 0, screen_evals: 0, map_evals: 0, theta_bins: [0; 6], theta_min: f32::INFINITY,
+  }) };
+}
+#[cfg(feature = "std")]
+static SKY_STUDY_TOTAL: std::sync::Mutex<Option<SkyStudy>> = std::sync::Mutex::new(None);
+#[cfg(feature = "std")]
+static LAB_SKY_STUDY: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+#[cfg(feature = "std")]
+fn sky_study_record(theta: f32, n: u32, full: bool, evals: u32) {
+  if !lab_flag(&LAB_SKY_STUDY, "AETHERVK_DUST_SKYMAP_STUDY") {
+    return;
+  }
+  let texel_min = <f32 as FloatLike>::sqrt(4.0 * core::f32::consts::PI) / SKY_STUDY_BASE;
+  let texel = (theta / DUST_VOLUME_TEXELS_PER_SIGMA).max(texel_min);
+  let sphere = 4.0 * core::f32::consts::PI / (texel * texel);
+  let cone = core::f32::consts::PI * (3.0 * theta) * (3.0 * theta) / (texel * texel);
+  let per_piece = if full { sphere } else { cone.min(sphere) };
+  let map = (per_piece * n as f32).min(DUST_VOLUME_MAX_EVALS as f32) as u64;
+  let bin = [0.01f32, 0.03, 0.1, 0.3, 1.0].iter().position(|&b| theta < b).unwrap_or(5);
+  SKY_STUDY.with(|c| {
+    let mut v = c.get();
+    v.packets += 1;
+    v.full += full as u64;
+    v.screen_evals += evals as u64;
+    v.map_evals += map;
+    v.theta_bins[bin] += 1;
+    v.theta_min = v.theta_min.min(theta);
+    c.set(v);
+  });
+}
+#[cfg(feature = "std")]
+fn sky_study_flush() {
+  let v = SKY_STUDY.with(|c| c.replace(SkyStudy { theta_min: f32::INFINITY, ..SkyStudy::default() }));
+  if v.packets == 0 {
+    return;
+  }
+  let mut t = SKY_STUDY_TOTAL.lock().unwrap_or_else(|e| e.into_inner());
+  let a = t.get_or_insert(SkyStudy { theta_min: f32::INFINITY, ..SkyStudy::default() });
+  a.packets += v.packets;
+  a.full += v.full;
+  a.screen_evals += v.screen_evals;
+  a.map_evals += v.map_evals;
+  for k in 0..6 {
+    a.theta_bins[k] += v.theta_bins[k];
+  }
+  a.theta_min = a.theta_min.min(v.theta_min);
 }
 
 /// The work plan [`volume_scatter`] makes for `p` with the level bias `bias` under the cap
@@ -3727,8 +3804,88 @@ pub const DUST_SEGMENT_TEXELS: u32 = 16;
 // 64 invocations). The drawing is [`scatter_into`]'s, segment for segment ([`DUST_SEGMENT_TEXELS`]),
 // so the CPU mirror needs no queue. The queue lives in the pyramid buffer after
 // `PyramidLayout::total_words`: [`DUST_QUEUE_HEADER_WORDS`] (x, 1, 1 for the indirect dispatch; the
-// raw append counter; a capacity override, 0 = [`DUST_QUEUE_CAPACITY`]) then the records.
-pub const DUST_QUEUE_HEADER_WORDS: u32 = 8;
+// raw append counter; a capacity override, 0 = [`DUST_QUEUE_CAPACITY`]; words 8.. the profiler's
+// counters, [`DUST_PROF_STAGE0`]) then the records.
+pub const DUST_QUEUE_HEADER_WORDS: u32 = 128;
+
+// ─── The shader-clock profiler (GPU only: `dust_profile.glsl`, `AETHERVK_DUST_PROFILE=1`) ───
+// The `.prof` variants of `dust_splat.comp` and `dust_draw_queue.comp` sum the cycles of each
+// stage of a thread's work and flush them into the queue header's words 8..127 (64-bit sums as
+// (lo, hi) pairs), read back with the queue counts (`Device::dust_profile_counters`). The
+// constants mirror `dust_profile.glsl`'s; the words are offsets from the queue base.
+/// the words after the queue's own 8 (the counter block), as read back
+pub const DUST_PROFILE_WORDS: usize = (DUST_QUEUE_HEADER_WORDS - 8) as usize;
+/// 16 × (lo, hi) stage cycle sums of the splat, [`DUST_PROF_STAGE_NAMES`] in order
+pub const DUST_PROF_STAGE0: usize = 8;
+pub const DUST_PROF_STAGE_NAMES: [&str; 16] = [
+  "thread", "setup", "subpk", "packet", "cone", "split", "project", "scprep", "qput", "ewa",
+  "vplan", "vdraw", "tracer", "vemit", "count", "ecount",
+];
+pub const DUST_PROF_MAX_THREAD: usize = 40;
+pub const DUST_PROF_THREADS: usize = 41;
+pub const DUST_PROF_PACKETS: usize = 42;
+pub const DUST_PROF_CONE: usize = 43;
+pub const DUST_PROF_LEAVES: usize = 44;
+pub const DUST_PROF_RECORDS: usize = 45;
+pub const DUST_PROF_VOLUME: usize = 46;
+pub const DUST_PROF_NODES: usize = 47;
+/// (lo, hi)
+pub const DUST_PROF_EWA_TEXELS: usize = 48;
+/// (lo, hi)
+pub const DUST_PROF_VOLUME_TEXELS: usize = 50;
+/// 32 log2 buckets of the threads' cycles
+pub const DUST_PROF_HIST: usize = 52;
+/// 4 × (lo, hi) stage cycle sums of the queue draw, [`DUST_PROF_QSTAGE_NAMES`] in order
+pub const DUST_PROF_QSTAGE0: usize = 84;
+pub const DUST_PROF_QSTAGE_NAMES: [&str; 4] = ["qload", "qrows", "qseg", "qthread"];
+pub const DUST_PROF_QRECORDS: usize = 92;
+/// (lo, hi)
+pub const DUST_PROF_QTEXELS: usize = 93;
+pub const DUST_PROF_QMAX_WG: usize = 95;
+/// the volume consumer (`dust_draw_volume.comp`): (lo, hi) lane cycles, its vplan, its vdraw,
+/// records drawn, (lo, hi) texels, the slowest lane
+pub const DUST_PROF_CTHREAD: usize = 96;
+pub const DUST_PROF_CVPLAN: usize = 98;
+pub const DUST_PROF_CVDRAW: usize = 100;
+pub const DUST_PROF_CPACKETS: usize = 102;
+pub const DUST_PROF_CTEXELS: usize = 103;
+pub const DUST_PROF_CMAX: usize = 105;
+/// the splitter (`dust_split.comp`): (lo, hi) lane cycles, its lanes with a record, the slowest
+pub const DUST_PROF_STHREAD: usize = 106;
+pub const DUST_PROF_SLANES: usize = 108;
+pub const DUST_PROF_SMAX: usize = 109;
+
+/// The counter block of one drawn frame ([`Device::dust_profile_counters`]): words 8..128 of the
+/// queue header, indexed by the `DUST_PROF_*` offsets (from the queue base) through [`Self::word`]
+/// / [`Self::u64_at`]; all zero on a frame drawn by the production shaders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DustProfileCounters {
+  pub words: [u32; DUST_PROFILE_WORDS],
+  /// the frame the counters belong to (the last drawn one)
+  pub frame: u64,
+}
+impl DustProfileCounters {
+  /// the word at queue-base offset `at` (≥ 8)
+  pub fn word(&self, at: usize) -> u32 {
+    self.words[at - 8]
+  }
+  /// the (lo, hi) pair at queue-base offset `at`
+  pub fn u64_at(&self, at: usize) -> u64 {
+    self.word(at) as u64 | ((self.word(at + 1) as u64) << 32)
+  }
+  /// cycles of splat stage `k` ([`DUST_PROF_STAGE_NAMES`])
+  pub fn stage(&self, k: usize) -> u64 {
+    self.u64_at(DUST_PROF_STAGE0 + 2 * k)
+  }
+  /// cycles of queue stage `k` ([`DUST_PROF_QSTAGE_NAMES`])
+  pub fn qstage(&self, k: usize) -> u64 {
+    self.u64_at(DUST_PROF_QSTAGE0 + 2 * k)
+  }
+  /// whether anything was recorded (the profiler variant ran)
+  pub fn any(&self) -> bool {
+    self.words.iter().any(|&w| w != 0)
+  }
+}
 pub const DUST_QUEUE_RECORD_WORDS: u32 = 64;
 /// records per frame: 2¹⁸ × 256 B = 64 MiB per view; a fuller queue draws the rest in-thread
 pub const DUST_QUEUE_CAPACITY: u32 = 1 << 18;
@@ -3740,6 +3897,62 @@ pub const DUST_QUEUE_WORDS: u32 = DUST_QUEUE_HEADER_WORDS + DUST_QUEUE_CAPACITY 
 /// queue (every packet in-thread, the A/B) / every packet queued (tests)
 pub const DUST_FRAME_QUEUE_OFF: u32 = 1 << 28;
 pub const DUST_FRAME_QUEUE_ALL: u32 = 1 << 29;
+
+// ─── The volume packet queue (GPU only: `dust_scatter.glsl`, `dust_draw_volume.comp`) ─────────
+// A volumetric packet is no longer drawn in its cluster's thread: the thread emits it, with its
+// rounding seed, to a queue after the EWA queue, and `dust_draw_volume.comp` draws the records
+// one lane per packet with the same arithmetic (`dust_volume_draw.glsl`), so the pyramid is the
+// same word for word while the lanes stay coherent. The whole frame's packets (9.4 M at 1 km) do
+// not fit, so `Device::cmd_dust_splat` runs a tier in chunks of clusters: per chunk it writes the
+// queue header (the range [first, end), the counters), dispatches the producer over the range,
+// then the consumer indirectly; the chunk is sized from the previous frames' packets per cluster
+// and a full chunk draws the rest in-thread (the EWA queue's overflow rule).
+/// `dust_splat.comp`'s lanes per cluster: a warp, a lane per sub-packet (the slow end bin's
+/// [`DUST_END_SUBBINS`] sub-bins, then a bin each: 17 of 32; a merged polyline's time pieces)
+pub const DUST_SPLAT_LANES: u32 = 32;
+pub const DUST_VQUEUE_HEADER_WORDS: u32 = 16;
+pub const DUST_VQUEUE_RECORD_WORDS: u32 = 32;
+/// records per chunk: 2¹⁸ × 128 B = 32 MiB per view
+pub const DUST_VQUEUE_CAPACITY: u32 = 1 << 18;
+pub const DUST_VQUEUE_WORDS: u32 = DUST_VQUEUE_HEADER_WORDS + DUST_VQUEUE_CAPACITY * DUST_VQUEUE_RECORD_WORDS;
+/// the automatic chunk's bounds in clusters (`Device::cmd_dust_splat`: the queue's records over
+/// twice the packets per cluster, clamped; 1024 measured best at 1 km). The maximum is also the
+/// sub-packet queue's clusters per chunk ([`DUST_SQUEUE_CLUSTERS`]): every chunk is clamped to it.
+pub const DUST_VQUEUE_CHUNK_MIN: u32 = 256;
+pub const DUST_VQUEUE_CHUNK_MAX: u32 = 1024;
+
+// ─── The sub-packet queue (GPU only: `dust_scatter.glsl`, `dust_split.comp`) ─────────────────
+// After the volume queue: per chunk, the packets `dust_splat.comp`'s lanes construct (one record
+// per `dust_project_split_scatter` call of the former per-cluster thread, in its sub-packet
+// order; the enumerator), split and drawn by `dust_split.comp` (a workgroup per cluster; the
+// splitter: the leaf path, `dust_leaf.glsl`). A header, a table of the chunk's clusters (first
+// record, count, index), then structure-of-arrays records. A cluster makes at most
+// [`DUST_SQUEUE_PER_CLUSTER`] records (17 sub-packets × [`DUST_TIME_PIECES_MAX`]), so a chunk of
+// [`DUST_SQUEUE_CLUSTERS`] clusters cannot overflow it: 20 MiB per view, fixed.
+pub const DUST_SQUEUE_HEADER_WORDS: u32 = 16;
+pub const DUST_SQUEUE_TABLE_WORDS: u32 = 4;
+pub const DUST_SQUEUE_CLUSTERS: u32 = DUST_VQUEUE_CHUNK_MAX;
+pub const DUST_SQUEUE_PER_CLUSTER: u32 = 136;
+pub const DUST_SQUEUE_CAPACITY: u32 = DUST_SQUEUE_CLUSTERS * DUST_SQUEUE_PER_CLUSTER;
+pub const DUST_SQUEUE_RECORD_WORDS: u32 = 36;
+pub const DUST_SQUEUE_WORDS: u32 = DUST_SQUEUE_HEADER_WORDS
+  + DUST_SQUEUE_CLUSTERS * DUST_SQUEUE_TABLE_WORDS
+  + DUST_SQUEUE_CAPACITY * DUST_SQUEUE_RECORD_WORDS;
+/// header word 2: records a chunk could not hold (never by construction; the test asserts 0)
+pub const DUST_SQUEUE_OVERFLOWED: usize = 2;
+/// header words: the chunk's cluster range, the frame's records drawn by the consumer and
+/// overflowed (drawn in-thread)
+pub const DUST_VQUEUE_FIRST: usize = 5;
+pub const DUST_VQUEUE_END: usize = 6;
+pub const DUST_VQUEUE_DRAWN: usize = 7;
+pub const DUST_VQUEUE_OVERFLOWED: usize = 8;
+/// [`PYR_FLAGS`] bit (host-written, `AETHERVK_DUST_VQUEUE=0` or the device's test hook): the
+/// volume packets drawn in-thread (the A/B)
+pub const DUST_FRAME_VQUEUE_OFF: u32 = 1 << 30;
+/// [`PYR_FLAGS`] bit (a test hook through `Device::dust_set_vqueue_mode`): `dust_split.comp`
+/// walks a cluster's records in one lane with a running ordinal (the former per-cluster thread's
+/// order), the word-identical reference for its counting pass and prefix
+pub const DUST_FRAME_SPLIT_SERIAL: u32 = 1 << 31;
 
 // The packet rounding seeds (mirror of `dust_cluster_seed` / `dust_packet_ord`): per cluster
 // (its compact index) and per packet in the order the cluster's thread draws them
@@ -3839,6 +4052,13 @@ pub fn pool_study(m: &DustMoments, eye: [f32; 3]) -> ClusterWork {
 #[cfg(feature = "std")]
 pub fn take_work_log() -> alloc::vec::Vec<ClusterWork> {
   let log = core::mem::take(&mut *WORK_LOG.lock().unwrap_or_else(|e| e.into_inner()));
+  if let Some(v) = SKY_STUDY_TOTAL.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    aethervk_oshal_rlib::log!(
+      "[sky study] {} volumetric packets ({} with the eye inside a piece's 3σ), screen evaluations {}, map evaluations at {} texels/σ on a {}² octahedron {} ({:.1}×); angular σ min {:.4} rad, by bins <0.01 / 0.01-0.03 / 0.03-0.1 / 0.1-0.3 / 0.3-1 / ≥1 rad: {:?}",
+      v.packets, v.full, v.screen_evals, DUST_VOLUME_TEXELS_PER_SIGMA, SKY_STUDY_BASE, v.map_evals,
+      v.map_evals as f64 / v.screen_evals.max(1) as f64, v.theta_min, v.theta_bins
+    );
+  }
   if std::env::var("AETHERVK_DUST_POOL_STUDY").is_ok_and(|v| v.trim() == "1") && !log.is_empty() {
     let vp: u64 = log.iter().map(|c| c.volume_packets as u64).sum();
     let ve: u64 = log.iter().map(|c| c.volume_evals as u64).sum();
@@ -4671,6 +4891,8 @@ fn splat_range_probed(
   if !log.is_empty() {
     WORK_LOG.lock().unwrap_or_else(|e| e.into_inner()).extend(log);
   }
+  #[cfg(feature = "std")]
+  sky_study_flush();
   probes
     .iter()
     .zip(hits)

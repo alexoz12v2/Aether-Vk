@@ -871,6 +871,40 @@ impl SimulationContext {
       .ok()
       .flatten()
   }
+  /// The shader-clock profiler's counters of the last drawn dust frame of `pe`
+  /// (`dust::DustProfileCounters`; `AETHERVK_DUST_PROFILE=1` on a device with
+  /// `VK_KHR_shader_clock`, else all zero); `None` without a view or a device
+  pub fn dust_profile_counters(
+    &self,
+    pe: crate::gpu::PresentationEngineHandle,
+  ) -> Option<crate::scene::dust::DustProfileCounters> {
+    use crate::gpu::WeakRenderFrontendExt;
+    let frontend = self.render_proxy.0.as_frontend()?;
+    frontend
+      .with_device(self.render_proxy.1, |device| {
+        let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+          device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
+        vulkan_device.dust_profile_counters(pe)
+      })
+      .ok()
+  }
+  /// The volume packet queue of `pe`'s last drawn frame (`dust::DUST_VQUEUE_*`): records drawn
+  /// by the consumer, packets that overflowed (drawn in-thread), chunks; `None` without a view or
+  /// a device. Waits for the GPU (diagnostics).
+  pub fn dust_vqueue_counts(
+    &self,
+    pe: crate::gpu::PresentationEngineHandle,
+  ) -> Option<(u32, u32, u32)> {
+    use crate::gpu::WeakRenderFrontendExt;
+    let frontend = self.render_proxy.0.as_frontend()?;
+    frontend
+      .with_device(self.render_proxy.1, |device| {
+        let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+          device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
+        vulkan_device.dust_vqueue_counts(pe)
+      })
+      .ok()
+  }
   /// [`Self::dust_gpu_timings`] of the last frame that drew (not one that reused the previous
   /// image): the cost of a changing view
   pub fn dust_gpu_timings_drawn(

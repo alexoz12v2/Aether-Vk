@@ -46,6 +46,12 @@ bitflags! {
     const DEVICE_FAULT = 1 << 5;
     /// `VK_NV_device_diagnostic_checkpoints`: the last command markers each queue reached
     const DIAGNOSTIC_CHECKPOINTS = 1 << 6;
+    /// `VK_KHR_shader_clock` (`shaderSubgroupClock`) with subgroup arithmetic: the dust
+    /// profiler's `.prof` shader variants (`AETHERVK_DUST_PROFILE=1`, `dust_profile.glsl`)
+    const SHADER_CLOCK = 1 << 7;
+    /// `VK_KHR_pipeline_executable_properties`: the dust pipelines' compiled statistics
+    /// (registers, local memory; `AETHERVK_DUST_PROFILE=1`, `physics::log_pipeline_statistics`)
+    const PIPELINE_EXECUTABLE_PROPERTIES = 1 << 8;
   }
 }
 
@@ -262,6 +268,15 @@ impl PhysicalDeviceQueryResult {
     }
     if self.optional_extensions.contains(OptionalExtensionSupportFlags::DIAGNOSTIC_CHECKPOINTS) {
       the_vec.push(ash::nv::device_diagnostic_checkpoints::NAME.as_ptr());
+    }
+    if self.optional_extensions.contains(OptionalExtensionSupportFlags::SHADER_CLOCK) {
+      the_vec.push(ash::khr::shader_clock::NAME.as_ptr());
+    }
+    if self
+      .optional_extensions
+      .contains(OptionalExtensionSupportFlags::PIPELINE_EXECUTABLE_PROPERTIES)
+    {
+      the_vec.push(ash::khr::pipeline_executable_properties::NAME.as_ptr());
     }
 
     the_vec
