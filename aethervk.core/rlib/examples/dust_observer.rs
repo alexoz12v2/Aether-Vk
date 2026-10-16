@@ -6080,13 +6080,32 @@ fn print_work_log(log: &[aethervk_core_rlib::scene::dust::ClusterWork]) {
     return;
   }
   let n = log.len();
-  let counters: [(&str, fn(&aethervk_core_rlib::scene::dust::ClusterWork) -> u64); 4] = [
+  let counters: [(&str, fn(&aethervk_core_rlib::scene::dust::ClusterWork) -> u64); 6] = [
     ("texel adds", |c| c.adds),
     ("split children", |c| c.split_children as u64),
     ("volume evals", |c| c.volume_evals as u64),
     ("ewa units", |c| c.ewa_units as u64),
+    ("packets", |c| c.packets as u64),
+    ("volume packets", |c| c.volume_packets as u64),
   ];
   println!("lab: work over {n} clusters (AETHERVK_DUST_WORK_LOG)");
+  // per tier (the tier's live count tells them apart): the packets the level of detail lowers
+  {
+    let mut tiers: Vec<u32> = log.iter().map(|c| c.live).collect();
+    tiers.sort_unstable();
+    tiers.dedup();
+    for live in tiers {
+      let t: Vec<_> = log.iter().filter(|c| c.live == live).collect();
+      println!(
+        "lab:   tier of {live} live: {} clusters, {} packets ({:.1} per cluster), {} volume packets, {} volume evals",
+        t.len(),
+        t.iter().map(|c| c.packets as u64).sum::<u64>(),
+        t.iter().map(|c| c.packets as f64).sum::<f64>() / t.len().max(1) as f64,
+        t.iter().map(|c| c.volume_packets as u64).sum::<u64>(),
+        t.iter().map(|c| c.volume_evals as u64).sum::<u64>()
+      );
+    }
+  }
   for (name, get) in counters {
     let mut v: Vec<u64> = log.iter().map(get).collect();
     v.sort_unstable_by(|a, b| b.cmp(a));
@@ -6216,6 +6235,8 @@ fn lab_packet_mc(tiers: &LabTiers, header: &[u32], w: u32, h: u32, k: usize, out
     let cluster = |i: usize, a: &mut LabMcAcc| {
       // the frame's kernel (`DUST_FRAME_LEGACY_KERNEL_BIT`), on this thread
       d::set_legacy_kernel(d::legacy_kernel(header));
+      d::set_lod_px_active(d::lod_px(header));
+      d::set_lod_view_active(view.perspective.then_some((view.eye, view.fwd)));
       let LabMcAcc { img, rh, cat, sup, sup_cat, pk } = a;
       let m = &moments[i];
       if !(m.flux() > 0.0) {
@@ -6813,11 +6834,16 @@ fn run_lab(dir: &Path, frame: u32, lab_truth: usize) -> i32 {
   if let Some(n) = env_u32("OBSERVER_LAB_DEPTH") {
     header[sd] = (header[sd] & !0xFF) | n.min(d::DUST_SPLIT_DEPTH_MAX);
   }
+  // `OBSERVER_LAB_LOD=<px>`: the cluster level of detail's pixels per drawn segment (`d::PYR_LOD`)
+  if let Some(v) = std::env::var("OBSERVER_LAB_LOD").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
+    header[d::PYR_LOD as usize] = v.max(0.0).to_bits();
+  }
   println!(
-    "lab: header split depth {} volume bias {} EWA bias {}",
+    "lab: header split depth {} volume bias {} EWA bias {} lod {} px",
     header[sd] & 0xFF,
     (header[sd] >> 8) & 0xFF,
-    (header[sd] >> 18) & 0xF
+    (header[sd] >> 18) & 0xF,
+    d::lod_px(&header)
   );
   if let Some(n) = env_u32("OBSERVER_LAB_TIME_CELL") {
     header[sd] = (header[sd] & !(1 << 28)) | ((n & 1) << 28);

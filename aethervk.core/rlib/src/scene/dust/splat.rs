@@ -100,6 +100,16 @@ pub const PYR_SOFTENING: u32 = 10;
 pub const PYR_PHASE_LUT: u32 = 64;
 /// the measurement grid `(offset, width, height)` ([`PyramidLayout::measure`])
 pub const PYR_MEASURE: u32 = 12;
+/// f32 bits: the cluster level of detail's pixels per drawn segment ([`lod_px`]; 0 = off, every
+/// cluster at full detail), host-written per frame (the budget loop, `AETHERVK_DUST_LOD_PX`)
+pub const PYR_LOD: u32 = 61;
+/// the level of detail's resting value (the user's gate of 2026-10-16: the lab matrix is unchanged
+/// to four digits at 1 km / 100 m / 10 m up to 4 px with 23 % fewer packets; 8 px degrades 100 m):
+/// what the host writes to [`PYR_LOD`] when `AETHERVK_DUST_LOD_PX` is unset and the budget loop
+/// is at rest
+pub const DUST_LOD_PX_DEFAULT: f32 = 4.0;
+/// the budget loop's ceiling for a moving frame (the last acceptable point of the matrix)
+pub const DUST_LOD_PX_MAX: f32 = 8.0;
 /// the fixed-point unit this frame's counts were written with (f32 bits, host-written; 0 when
 /// unknown): what a dump reader needs to turn counts back into optical depth
 pub const PYR_UNIT: u32 = 15;
@@ -884,6 +894,182 @@ fn requested_group() -> usize {
   return GROUP_REQUESTED.load(core::sync::atomic::Ordering::Relaxed);
 }
 
+// ─── The cluster level of detail (mirror of dust_lod_*: `PYR_LOD`) ──────────────────────────
+// `lod_px` pixels per drawn segment. A polyline whose bins are shorter than that on screen is
+// drawn as chord groups of 2, 4, 8 or 16 bins (the smallest power of two whose group chord is
+// at least `lod_px`; 16 = one chord along the whole polyline, which keeps the shape the pooled
+// packet of `polyline_merged` loses); the time pieces are capped at `⌈T / lod_px⌉` with `T` the
+// time segment on screen; the sweeps step by `lod_px` instead of a pixel. Points behind the camera
+// keep full detail (as `polyline_merged`). Groups form only where the group's chord is a few
+// pixels long, where its Gaussianised axis's tails lie within the pixel filter; the near field,
+// whose light is shape-critical, keeps every bin (the chord-group study of 2026-10-14 grouped by
+// a volumetric rule, i.e. near the eye, and doubled the light).
+#[cfg(feature = "std")]
+std::thread_local! {
+  static LOD_PX: core::cell::Cell<f32> = const { core::cell::Cell::new(0.0) };
+}
+#[cfg(not(feature = "std"))]
+static LOD_PX_BITS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// the frame's pixels per drawn segment (0 = off) of the header word [`PYR_LOD`]
+pub fn lod_px(pyramid: &[u32]) -> f32 {
+  let v = f32::from_bits(pyramid[PYR_LOD as usize]);
+  if v.is_finite() && v > 0.0 { v } else { 0.0 }
+}
+/// the level of detail of the cluster being drawn (set by [`splat_cluster_inner`]; 0 = off)
+pub fn lod_px_active() -> f32 {
+  #[cfg(feature = "std")]
+  return LOD_PX.with(|c| c.get());
+  #[cfg(not(feature = "std"))]
+  return f32::from_bits(LOD_PX_BITS.load(core::sync::atomic::Ordering::Relaxed));
+}
+pub fn set_lod_px_active(v: f32) {
+  #[cfg(feature = "std")]
+  LOD_PX.with(|c| c.set(v));
+  #[cfg(not(feature = "std"))]
+  LOD_PX_BITS.store(v.to_bits(), core::sync::atomic::Ordering::Relaxed);
+}
+// The level of detail's depth rule: a group chord or a time piece may not span more depth than
+// the split tolerates for one Jacobian ([`DUST_SPLIT_EPS`] × the depth of the polyline's nearest
+// edge, `split_step`'s own criterion), so the level of detail never makes a packet the split
+// would have to bisect. Without it a foreshortened polyline (pointing at the eye: a few pixels on
+// screen, a depth span comparable to its depth) became one chord drawn with one Jacobian, and
+// at the frames' split depth 0 the 50 000 km pose lost 40 % of its light at 2 px (2026-10-16).
+// The eye and forward of the frame being drawn (a perspective view; `None`: orthographic or
+// unknown, no depth rule), set by [`splat_cluster_inner`].
+#[cfg(feature = "std")]
+std::thread_local! {
+  static LOD_VIEW: core::cell::Cell<Option<([f32; 3], [f32; 3])>> = const { core::cell::Cell::new(None) };
+}
+#[cfg(not(feature = "std"))]
+static LOD_VIEW_BITS: [core::sync::atomic::AtomicU32; 7] = [const { core::sync::atomic::AtomicU32::new(0) }; 7];
+/// the eye and forward of the frame being drawn, for the level of detail's depth rule
+pub fn lod_view_active() -> Option<([f32; 3], [f32; 3])> {
+  #[cfg(feature = "std")]
+  return LOD_VIEW.with(|c| c.get());
+  #[cfg(not(feature = "std"))]
+  {
+    use core::sync::atomic::Ordering::Relaxed;
+    if LOD_VIEW_BITS[6].load(Relaxed) == 0 {
+      return None;
+    }
+    let f = |i: usize| f32::from_bits(LOD_VIEW_BITS[i].load(Relaxed));
+    return Some(([f(0), f(1), f(2)], [f(3), f(4), f(5)]));
+  }
+}
+pub fn set_lod_view_active(v: Option<([f32; 3], [f32; 3])>) {
+  #[cfg(feature = "std")]
+  LOD_VIEW.with(|c| c.set(v));
+  #[cfg(not(feature = "std"))]
+  {
+    use core::sync::atomic::Ordering::Relaxed;
+    match v {
+      Some((e, f)) => {
+        for i in 0..3 {
+          LOD_VIEW_BITS[i].store(e[i].to_bits(), Relaxed);
+          LOD_VIEW_BITS[3 + i].store(f[i].to_bits(), Relaxed);
+        }
+        LOD_VIEW_BITS[6].store(1, Relaxed);
+      }
+      None => LOD_VIEW_BITS[6].store(0, Relaxed),
+    }
+  }
+}
+/// The polyline's depth: `(the depth span per bin, the depth of its nearest edge)` over its 17
+/// edges along `fwd` from `eye` (mirror of `dust_polyline_depth`); `None` when an edge is at or
+/// behind the eye (full detail, as behind the camera)
+pub fn polyline_depth(m: &DustMoments, eye: [f32; 3], fwd: [f32; 3]) -> Option<(f32, f32)> {
+  let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+  for j in 0..SIZE_EDGES as usize {
+    let d = dot3(sub3(m.edge(j), eye), fwd);
+    lo = lo.min(d);
+    hi = hi.max(d);
+  }
+  (lo > 0.0 && hi.is_finite()).then_some(((hi - lo) / SIZE_BINS as f32, lo))
+}
+/// The largest chord group (a power of two ≤ 16) whose chord spans no more depth than the split
+/// tolerates, `g · bin_depth ≤ DUST_SPLIT_EPS · depth_near` (mirror of `dust_lod_group_depth_cap`);
+/// 16 without a depth (`None`: orthographic), 1 when even a bin is too deep
+pub fn lod_group_depth_cap(depth: Option<(f32, f32)>) -> usize {
+  let Some((bin_depth, near)) = depth else { return SIZE_BINS as usize };
+  let lim = DUST_SPLIT_EPS * near;
+  let mut g = 1usize;
+  while g < SIZE_BINS as usize && (2 * g) as f32 * bin_depth <= lim {
+    g *= 2;
+  }
+  g
+}
+/// The fewest time pieces whose depth span the split tolerates, `⌈span / (DUST_SPLIT_EPS ·
+/// depth_near)⌉` for a time segment of depth span `span` (mirror of `dust_time_pieces_depth`);
+/// 1 without a depth
+pub fn time_pieces_depth(span: Option<f32>, depth: Option<(f32, f32)>) -> u32 {
+  match (span, depth) {
+    (Some(s), Some((_, near))) if near > 0.0 => (ce(fabs(s) / (DUST_SPLIT_EPS * near)) as u32).clamp(1, TIME_PIECES_MAX),
+    _ => 1,
+  }
+}
+/// The polyline's on-screen half-extent: the largest distance of its 17 edges from its mean, in
+/// pixels (mirror of `dust_polyline_extent_px`); `None` when a point is behind the camera
+pub fn polyline_extent_px(m: &DustMoments, px: &dyn Fn([f32; 3]) -> Option<[f32; 2]>) -> Option<f32> {
+  let c = px(m.mean())?;
+  let mut ext = 0.0f32;
+  for j in 0..SIZE_EDGES as usize {
+    let p = px(m.edge(j))?;
+    let (dx, dy) = (p[0] - c[0], p[1] - c[1]);
+    ext = ext.max(<f32 as FloatLike>::sqrt(dx * dx + dy * dy));
+  }
+  ext.is_finite().then_some(ext)
+}
+/// The time segment on screen: the distance between the means of `m` and its predecessor, in
+/// pixels (mirror of `dust_time_segment_px`); `None` without a predecessor or behind the camera
+pub fn time_segment_px(
+  m: &DustMoments,
+  pred: Option<&DustMoments>,
+  px: &dyn Fn([f32; 3]) -> Option<[f32; 2]>,
+) -> Option<f32> {
+  let p = pred?;
+  let (a, c) = (px(m.mean())?, px(p.mean())?);
+  let (dx, dy) = (c[0] - a[0], c[1] - a[1]);
+  let t = <f32 as FloatLike>::sqrt(dx * dx + dy * dy);
+  t.is_finite().then_some(t)
+}
+/// The chord group of a polyline of half-extent `ext_px` on screen (mirror of `dust_lod_group`):
+/// 1 when off, unknown (`None`: behind the camera) or when a bin is already `lod_px` long; else
+/// the smallest of 2, 4, 8, 16 whose group chord `g · 2 ext / 16` reaches `lod_px` (16 when none),
+/// and never more than `depth_cap` ([`lod_group_depth_cap`]: the depth the split tolerates)
+pub fn lod_group(ext_px: Option<f32>, lod_px: f32, depth_cap: usize) -> usize {
+  let Some(ext) = ext_px else { return 1 };
+  if !(lod_px > 0.0) {
+    return 1;
+  }
+  let bin_px = 2.0 * ext / SIZE_BINS as f32;
+  if bin_px >= lod_px {
+    return 1;
+  }
+  let mut g = 2usize;
+  while g < SIZE_BINS as usize && (g as f32) * bin_px < lod_px {
+    g *= 2;
+  }
+  let g = g.min(depth_cap.max(1));
+  // lab (`AETHERVK_DUST_LAB_LOD_GMAX=<g>`, CPU only): the largest group, for the far-pose study
+  match lab_knob("AETHERVK_DUST_LAB_LOD_GMAX") {
+    Some(v) if v >= 1.0 => g.min((v as usize).max(1)),
+    _ => g,
+  }
+}
+/// The time pieces after the level of detail (mirror of `dust_time_pieces_lod`): `n_t` when off
+/// or unknown, else `clamp(⌈t_px / lod_px⌉, 1, n_t)`, and at least `depth_min` of them
+/// ([`time_pieces_depth`]: the depth span the split tolerates per piece)
+pub fn time_pieces_lod(n_t: u32, t_px: Option<f32>, lod_px: f32, depth_min: u32) -> u32 {
+  // lab (`AETHERVK_DUST_LAB_LOD_NO_PIECES=1`, CPU only): the pieces uncapped, for the study
+  if lab_knob("AETHERVK_DUST_LAB_LOD_NO_PIECES").is_some_and(|v| v > 0.0) {
+    return n_t;
+  }
+  match t_px {
+    Some(t) if lod_px > 0.0 => (ce(t / lod_px) as u32).max(depth_min).clamp(1, n_t.max(1)),
+    _ => n_t,
+  }
+}
+
 /// The chord group of cluster `m` seen from `view` (mirror of `dust_cluster_group`): `g` when the
 /// view is perspective and both end bins of its polyline — the narrowest, slow end and the fast
 /// end — would be drawn volumetrically from their midpoints ([`is_volumetric`]): the eye is near
@@ -904,12 +1090,19 @@ pub fn cluster_group(m: &DustMoments, view: &SplitView, g: usize) -> usize {
 }
 
 /// The relative density at the two ends of a size bin's chord whose edges have the speed
-/// factors `f0 ≤ f1` (`√(β_j/β)`): `(f0 + f1) / (2 f0)` and `(f0 + f1) / (2 f1)`, mean 1 over the
-/// chord (position ∝ β, cross-section uniform in √β). Mirror of `dust_bin_density_ends`.
+/// factors `f0 ≤ f1` (`√(β_j/β)`): `∝ 1/f` (position ∝ β, cross-section uniform in √β), so
+/// `2 f1 / (f0 + f1)` and `2 f0 / (f0 + f1)`, mean 1 over the chord: every consumer (the
+/// capsule's ramp, the volume samples' flux, the sub-chords' renormalisation) multiplies the
+/// packet's flux by the ramp. (Until 2026-10-16 the ends were the reciprocals,
+/// `(f0 + f1) / (2 f0)` and `(f0 + f1) / (2 f1)`: the same shape and the same first order in
+/// the factor ratio, so a single bin drew 0.5 % high, but a mean of `(f0 + f1)² / (4 f0 f1)`:
+/// a chord group over a 10× factor range drew 3× its flux, which is where the "chord groups
+/// double the light" of 2026-10-14 and the level of detail's 1.7× came from.) Mirror of
+/// `dust_bin_density_ends`.
 pub fn bin_density_ends(f0: f32, f1: f32) -> [f32; 2] {
   let (f0, f1) = (f0.max(1e-6), f1.max(1e-6));
   let s = f0 + f1;
-  [s / (2.0 * f0), s / (2.0 * f1)]
+  [2.0 * f1 / s, 2.0 * f0 / s]
 }
 
 /// The packets of a cluster (mirror of `dust_subpackets`): one per size bin of the polyline,
@@ -1184,7 +1377,9 @@ pub fn time_sweep(
   if !gap.is_finite() {
     return 1;
   }
-  (ce(gap / TIME_SWEEP_STEP_PX) as u32).clamp(1, TIME_SWEEP_MAX)
+  // the level of detail's step ([`lod_px_active`]), at least a pixel
+  let step = lod_px_active().max(TIME_SWEEP_STEP_PX);
+  (ce(gap / step) as u32).clamp(1, TIME_SWEEP_MAX)
 }
 
 /// The `k`-th of `n_s` sweep sub-capsules of bin `b` (mirror of `dust_bin_sweep`): the chord
@@ -1280,6 +1475,14 @@ pub fn subpackets_cells(
   } else {
     time_pieces(m, pred)
   };
+  // the level of detail: no more pieces than the time segment has `lod_px` on screen, no fewer
+  // than its depth span needs ([`time_pieces_depth`])
+  let lod_depth = lod_view_active().and_then(|(eye, fwd)| polyline_depth(m, eye, fwd));
+  let depth_min = time_pieces_depth(
+    pred.and_then(|p| lod_view_active().map(|(_, fwd)| dot3(sub3(p.mean(), m.mean()), fwd))),
+    lod_depth,
+  );
+  let n_t = time_pieces_lod(n_t, px.and_then(|px| time_segment_px(m, pred, px)), lod_px_active(), depth_min);
   // the predecessor's covariance (and its chord axis) turned with the spiral to the emission
   // direction of the piece's centre: by ω·(age_p − age(u_c)), the turn `spiral_point` gives the
   // piece's mean. Unturned, the radial σ (4× the lateral at 1 km) lay along the predecessor's
@@ -1395,8 +1598,13 @@ pub fn subpackets_cells(
   // there the chord's Gaussian and the mid-factor width reach past the slowest grain
   // (`AETHERVK_DUST_LAB_SUBBINS=J`, CPU only: every bin as J sub-bins; 1 the former packets)
   let nj_lab = lab_knob("AETHERVK_DUST_LAB_SUBBINS").map(|v| (v as usize).clamp(1, 16));
-  // the cluster's chord groups ([`cluster_group`]): `g` bins per packet, no sub-bins then
-  let g = requested_group();
+  // the cluster's chord groups: the level of detail's ([`lod_group`] of the polyline on screen,
+  // [`lod_px_active`]) unless a group was requested ([`request_group`]: the lab's rule); `g` bins
+  // per packet, no sub-bins then
+  let g = match requested_group() {
+    1 => px.map_or(1, |px| lod_group(polyline_extent_px(m, px), lod_px_active(), lod_group_depth_cap(lod_depth))),
+    g => g,
+  };
   set_group_active(g);
   for b in (0..SIZE_BINS as usize).step_by(g) {
   let nj = if g > 1 { 1 } else { nj_lab.unwrap_or_else(|| bin_subbins(b)) };
@@ -3598,6 +3806,16 @@ pub fn erf(x: f32) -> f32 {
 /// `M = Σ'⁻¹`, `e = x − μ`, `a = dᵀMd`, `b = dᵀMe`, `c = eᵀMe`:
 /// `A · exp(−½(c − b²/a)) · √(2π/a) · [Φ((1 − b/a)√a) − Φ(−b/√a)]`; a point packet
 /// (`a` ≈ 0) is `A · exp(−½c)`. Mirror of `dust_capsule_tau`.
+/// `exp(x) − 1` without the cancellation at small `x` (mirror of `dust_expm1`: the same
+/// polynomial and threshold on both sides)
+pub fn expm1_f32(x: f32) -> f32 {
+  if fabs(x) < 1e-3 {
+    x * (1.0 + 0.5 * x * (1.0 + x / 3.0))
+  } else {
+    <f32 as FloatLike>::exp(x) - 1.0
+  }
+}
+
 pub fn capsule_tau(p: &ScreenPacket, x: [f32; 2]) -> f32 {
   let det = p.det;
   if !(det > 0.0) {
@@ -3632,17 +3850,37 @@ pub fn capsule_tau(p: &ScreenPacket, x: [f32; 2]) -> f32 {
   let weight = if r1 == r0 {
     r0 * i0
   } else {
-    let e_start = if p.open[0] {
-      0.0
+    // both ends closed: the two Gaussians' values are within a·|1 − 2u₀|/2 of each other when
+    // the chord is far shorter than its σ (a ≪ 1), and their f32 difference over a was off by
+    // tens of per cent (a tiny group chord with the polyline's steep ramp drew 1.7× its light,
+    // 2026-10-16): e_start − e_end = −exp(z₁)·expm1(z₂ − z₁) with z₂ − z₁ = −a(1 − 2u₀)/2
+    let i1 = if !p.open[0] && !p.open[1] {
+      let z1 = -0.5 * a * u0 * u0;
+      let z2 = -0.5 * a * (1.0 - u0) * (1.0 - u0);
+      let dz = z2 - z1;
+      // the expm1 form only where the two Gaussians are close (the cancellation): with a large
+      // `a` (a 10 px closed chord: a ≈ 400) it is exp(−98) · expm1(+80) = 0 · ∞ = NaN past
+      // u₀ ≈ 0.7, and the chord lost its far third (2026-10-16); there the plain difference
+      // has no cancellation (the terms differ by a factor ≥ e)
+      let diff = if fabs(dz) < 1.0 {
+        -<f32 as FloatLike>::exp(z1) * expm1_f32(dz)
+      } else {
+        <f32 as FloatLike>::exp(z1) - <f32 as FloatLike>::exp(z2)
+      };
+      u0 * i0 + diff / a
     } else {
-      <f32 as FloatLike>::exp(-0.5 * a * u0 * u0)
+      let e_start = if p.open[0] {
+        0.0
+      } else {
+        <f32 as FloatLike>::exp(-0.5 * a * u0 * u0)
+      };
+      let e_end = if p.open[1] {
+        0.0
+      } else {
+        <f32 as FloatLike>::exp(-0.5 * a * (1.0 - u0) * (1.0 - u0))
+      };
+      u0 * i0 + (e_start - e_end) / a
     };
-    let e_end = if p.open[1] {
-      0.0
-    } else {
-      <f32 as FloatLike>::exp(-0.5 * a * (1.0 - u0) * (1.0 - u0))
-    };
-    let i1 = u0 * i0 + (e_start - e_end) / a;
     (r0 * i0 + (r1 - r0) * i1).max(0.0)
   };
   p.amp * <f32 as FloatLike>::exp(-0.5 * q) * weight
@@ -3783,6 +4021,7 @@ pub fn sat_add(a: &mut u32, b: u32) {
 std::thread_local! {
   static SAT_ADDS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
   static VOLUME_CALLS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
+  static PACKET_CALLS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
 }
 #[cfg(feature = "std")]
 static LAB_WORK_LOG: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
@@ -4008,6 +4247,8 @@ pub struct ClusterWork {
   pub ewa_units: u32,
   /// volumetric packets drawn ([`volume_scatter`] calls)
   pub volume_packets: u32,
+  /// the cluster's sub-packets ([`subpackets_cells`]: what the level of detail lowers)
+  pub packets: u32,
   /// the pooling study: the size polyline's largest edge offset from the pooled mean over the
   /// bins' width along it (rule A), the polyline's largest angle from the eye about its mean (rad,
   /// rule B), and the mean's distance from the eye (m)
@@ -4854,6 +5095,7 @@ fn splat_range_probed(
     }
     #[cfg(feature = "std")]
     let v0 = VOLUME_CALLS.with(|c| c.get());
+    let p0 = PACKET_CALLS.with(|c| c.get());
     #[cfg(feature = "std")]
     let w0 = logging.then(|| {
       (
@@ -4877,6 +5119,7 @@ fn splat_range_probed(
         volume_evals: pyramid[PYR_VOLUME_EVALS as usize].wrapping_sub(v),
         ewa_units: pyramid[PYR_EWA_TEXELS as usize].wrapping_sub(e),
         volume_packets: VOLUME_CALLS.with(|x| x.get()) - v0,
+        packets: PACKET_CALLS.with(|x| x.get()) - p0,
         ..pool_study(m, eye)
       });
     }
@@ -5017,11 +5260,20 @@ fn splat_cluster_inner(
     let sig2 = lab_knob("AETHERVK_DUST_LAB_SIGMA").map(|v| v * v);
     let no_support = lab_knob("AETHERVK_DUST_LAB_NO_SUPPORT").is_some_and(|v| v > 0.0);
     let (seg, pred) = if no_cell { ([0.0; 3], None) } else { (seg, pred) };
-    // chord groups for a cluster whose bins are all drawn volumetrically (`cluster_group`;
-    // `AETHERVK_DUST_LAB_GROUP=g`, CPU lab only for now)
-    request_group(cluster_group(m, view, lab_knob("AETHERVK_DUST_LAB_GROUP").map_or(1, |v| v as usize)));
+    // the cluster level of detail ([`lod_group`], [`PYR_LOD`]): chord groups for a polyline whose
+    // bins are shorter than `lod_px` on screen; the lab knob `AETHERVK_DUST_LAB_GROUP=g` forces
+    // the 2026-10-14 volumetric rule instead (`cluster_group`)
+    set_lod_px_active(lod_px(pyramid));
+    set_lod_view_active(view.perspective.then_some((view.eye, view.fwd)));
+    if let Some(v) = lab_knob("AETHERVK_DUST_LAB_GROUP") {
+      request_group(cluster_group(m, view, v as usize));
+    }
     let packets = subpackets_cells(m, seg, pred, merged, pred_merged, Some(&px));
     request_group(1);
+    set_lod_px_active(0.0);
+    set_lod_view_active(None);
+    #[cfg(feature = "std")]
+    PACKET_CALLS.with(|c| c.set(c.get() + packets.len() as u32));
     for (p0, support, w_o) in packets {
       let support = if no_support { [0.0; 4] } else { support };
       let phot = Photometry { support, origin: w_o, ..phot };

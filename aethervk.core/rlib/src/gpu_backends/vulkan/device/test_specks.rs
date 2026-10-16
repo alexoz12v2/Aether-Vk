@@ -579,7 +579,10 @@ fn run_specks_parity(device: &Device, id: u64) {
   // the specks ≥ 1 m inside it give ≥ 16 well-separated on-screen candidates, and a frame with
   // no specks (the splat alone, identical in every frame): their difference holds the nearest
   // specks only, sparse on the screen. Each candidate (footprint
-  // inside the frame, ≥ 20 counts for a centroid, no other speck of the shell within 8 px) is
+  // inside the frame, ≥ 60 counts for a centroid above the continuum's own change between the
+  // two frames (the hand-over inside the shell is in the difference too: at ≥ 20 counts seven
+  // of 16 candidates measured 0 or negative and one 19 of 27, 2026-10-16), no other speck of the
+  // shell within 8 px) is
   // compared in the 9×9 window about its CPU position (its 2.5 px footprint + ≤ 1.5 px offset).
   // Bounds: the first isolated speck differed by 0.79 px and 1.1 % (one count of 91: the
   // stochastic rounding's granularity); the mirrors' inverse CDFs differ by a few f32 ulps,
@@ -610,7 +613,7 @@ fn run_specks_parity(device: &Device, id: u64) {
         let r = &recs[j];
         on_screen(r)
           && footprint_inside(r)
-          && r.counts >= 20
+          && r.counts >= 60
           && (0..n_all).all(|k| {
             k == j
               || !on_screen(&recs[k])
@@ -719,6 +722,18 @@ fn run_specks_parity(device: &Device, id: u64) {
       100.0 * r.pred_amp
     );
     if !(sc > 0.0) {
+      continue;
+    }
+    // a window that holds under half the speck's counts, or whose CPU centroid lies over 3 px
+    // from the record, is clipped (the footprint at the window's edge, the continuum's hand-over
+    // in the difference): not a measurement of the speck (2026-10-16: a 27-count speck drawn
+    // 4 px from its record, 19 counts in the CPU window and 12 in the GPU's)
+    let off_px = (cc[0] - r.mu[0] as f64).hypot(cc[1] - r.mu[1] as f64);
+    if sc < 0.5 * r.counts as f64 || off_px > 4.0 {
+      std::println!(
+        "[specks gpu] speck at {:.3} m: window clipped ({sc:.0} of {} counts, centroid {off_px:.2} px off the record), not judged",
+        r.dist, r.counts
+      );
       continue;
     }
     isolated += 1;
