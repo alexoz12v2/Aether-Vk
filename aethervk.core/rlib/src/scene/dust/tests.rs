@@ -642,7 +642,126 @@ fn chord_groups_keep_the_flux() {
       let flux: f32 = packets.iter().map(|(q, _, _)| q.flux).sum();
       std::println!("[chord groups] {name} g {g}: {} packets, flux {:.6} of {:.6}", packets.len(), flux, m.flux());
       assert!((flux / m.flux() - 1.0).abs() < 1e-4, "{name} g {g}: the packets carry {flux} of {}", m.flux());
+      // the geometry: a cell without a predecessor is chord-major with one piece, so its packets
+      // are the group chords themselves, from the first bin's start edge to the last bin's end
+      // edge, with the density ramp of the end factors
+      if name == "alone" && g > 1 {
+        assert_eq!(packets.len(), SIZE_BINS as usize / g, "{name} g {g}: packet count");
+        for (k, (q, _, _)) in packets.iter().enumerate() {
+          let (b0, b1) = (k * g, (k + 1) * g);
+          let end = [q.mean[0] + q.seg[0], q.mean[1] + q.seg[1], q.mean[2] + q.seg[2]];
+          for c in 0..3 {
+            assert!((q.mean[c] - m.edge(b0)[c]).abs() <= 1e-3 * (1.0 + m.edge(b0)[c].abs()), "{name} g {g} chord {k}: start edge");
+            assert!((end[c] - m.edge(b1)[c]).abs() <= 1e-3 * (1.0 + m.edge(b1)[c].abs()), "{name} g {g} chord {k}: end edge");
+          }
+          let rho = bin_density_ends(m.edge_factor(b0), m.edge_factor(b1));
+          assert!((q.rho[0] - rho[0]).abs() < 1e-5 && (q.rho[1] - rho[1]).abs() < 1e-5, "{name} g {g} chord {k}: rho");
+          assert_eq!(q.open, [k > 0, k + 1 < packets.len()], "{name} g {g} chord {k}: open ends");
+        }
+      }
     }
+  }
+}
+
+/// The cluster level of detail ([`lod_group`], [`time_pieces_lod`], [`PYR_LOD`]): the same cells
+/// drawn at full detail when their bins are pixels long on screen, as chord groups and with fewer
+/// time pieces when they are not, and with the knob off exactly as before (the packets equal).
+#[test]
+fn lod_follows_the_screen_size() {
+  let axis = unit([0.2, 0.1, 0.97]);
+  let axis_f = [axis[0] as f32, axis[1] as f32, axis[2] as f32];
+  let omega = 2.0 * core::f64::consts::PI / (12.4 * 3600.0);
+  let (rc, vc) = comet_state();
+  let n0 = unit([1.0, -0.3, 0.1]);
+  let off = scale(n0, 2000.0);
+  let month = 30.0 * 86400.0;
+  let t_now = T_START + month + 10.0;
+  let (centre_now, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_now - T_START);
+  let frame = DustFrame::new(centre_now, t_now, [0.0, 0.0, 0.0, 1.0], 1.0e9)
+    .with_spin([axis[0], axis[1], axis[2], omega]);
+  let moments_aged = |age: f64| -> DustMoments {
+    let t_rel = t_now - T_START - age;
+    let mut b = test_batch(1, 0.0);
+    let (centre, v_c) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_rel);
+    let turned = rotate_axis_angle(off, axis, omega * t_rel);
+    b.spin = [axis_f[0], axis_f[1], axis_f[2], omega as f32];
+    b.rot_start = qaxis_angle(axis_f, (omega * t_rel) as f32);
+    b.site_offset = [off[0] as f32, off[1] as f32, off[2] as f32, 0.0];
+    b.jet_dir_aperture = [n0[0] as f32, n0[1] as f32, n0[2] as f32, 0.0];
+    b.lit = [0.0, 0.0, 0.0, LIT_MODE_ALWAYS];
+    b.set_comet(add(centre, turned), v_c, T_START + t_rel, 0.0);
+    let (_, m) = packet_moments(&emit_cluster(&b, 0), 0, &frame);
+    assert!(m.flux() > 0.0, "age {age}: culled");
+    m
+  };
+  // an orthographic screen: `scale` pixels per metre about the cluster's mean
+  fn view(scale: f32, m: &DustMoments) -> impl Fn([f32; 3]) -> Option<[f32; 2]> {
+    let c = m.mean();
+    move |q: [f32; 3]| Some([(q[0] - c[0]) * scale, (q[1] - c[1]) * scale])
+  }
+  // the rule itself
+  assert_eq!(lod_group(Some(100.0), 2.0, 16), 1, "bins longer than the knob stay");
+  assert_eq!(lod_group(Some(8.0), 2.0, 16), 2, "8 px of half-extent: 1 px bins, groups of 2");
+  assert_eq!(lod_group(Some(1.0), 2.0, 16), 16, "a 2 px polyline: one chord");
+  assert_eq!(lod_group(Some(1.0), 2.0, 4), 4, "the depth cap");
+  assert_eq!(lod_group(Some(1.0), 0.0, 16), 1, "off");
+  assert_eq!(lod_group(None, 2.0, 16), 1, "behind the camera: full detail");
+  assert_eq!(time_pieces_lod(8, Some(3.0), 2.0, 1), 2);
+  assert_eq!(time_pieces_lod(8, Some(3.0), 2.0, 5), 5, "the depth minimum");
+  assert_eq!(time_pieces_lod(8, Some(300.0), 2.0, 1), 8);
+  assert_eq!(time_pieces_lod(3, None, 2.0, 1), 3);
+  assert_eq!(time_pieces_lod(3, Some(0.1), 0.0, 1), 3, "off");
+  // the depth rule: a bin's depth span against DUST_SPLIT_EPS × the nearest depth
+  assert_eq!(lod_group_depth_cap(None), 16, "orthographic: no depth rule");
+  assert_eq!(lod_group_depth_cap(Some((1.0, 1000.0))), 16, "16 bins of 1 m at 1 km: 16 m ≤ 100 m");
+  assert_eq!(lod_group_depth_cap(Some((10.0, 1000.0))), 8, "10 m bins: 8 × 10 ≤ 100 < 16 × 10");
+  assert_eq!(lod_group_depth_cap(Some((60.0, 1000.0))), 1, "60 m bins: even one bin is over");
+  assert_eq!(time_pieces_depth(None, Some((1.0, 1000.0))), 1);
+  assert_eq!(time_pieces_depth(Some(250.0), Some((1.0, 1000.0))), 3, "250 m of depth at 1 km: 3 pieces of ≤ 100 m");
+  assert_eq!(time_pieces_depth(Some(-250.0), Some((1.0, 1000.0))), 3, "either way along the view");
+  assert_eq!(time_pieces_depth(Some(250.0), None), 1);
+  for (name, age_o, age_p) in [("young", 468.0, Some(2300.0)), ("alone", 3600.0, None)] {
+    let m = moments_aged(age_o);
+    let p = age_p.map(|a| moments_aged(a));
+    let seg = p.as_ref().map_or([0.0; 3], |p| sub3f(p.mean(), m.mean()));
+    let draw = |scale: f32, lod: f32, eye_fwd: Option<([f32; 3], [f32; 3])>| -> Vec<(Packet, [f32; 4], f32)> {
+      let px = view(scale, &m);
+      set_lod_px_active(lod);
+      set_lod_view_active(eye_fwd);
+      let packets = subpackets_cells(&m, seg, p.as_ref(), false, false, Some(&px));
+      set_lod_view_active(None);
+      set_lod_px_active(0.0);
+      std::println!("[lod] {name} scale {scale:e} lod {lod} view {}: {} packets", eye_fwd.is_some(), packets.len());
+      packets
+    };
+    let full = draw(1.0, 0.0, None);
+    let near = draw(1.0, 2.0, None);
+    let far = draw(1.0e-9, 2.0, None);
+    assert_eq!(near, full, "{name}: a cluster thousands of pixels wide keeps every packet");
+    assert!(far.len() < full.len(), "{name}: a cluster under a pixel draws fewer packets ({} of {})", far.len(), full.len());
+    let flux = |ps: &[(Packet, [f32; 4], f32)]| -> f32 { ps.iter().map(|(q, _, _)| q.flux).sum() };
+    assert!((flux(&far) / flux(&full) - 1.0).abs() < 1e-4, "{name}: the level of detail keeps the flux");
+    if name == "alone" {
+      assert_eq!(far.len(), 1, "{name}: one chord along the whole polyline");
+    }
+    assert_eq!(draw(1.0e-9, 0.0, None), full, "{name}: the knob off draws every packet whatever the size");
+    // the depth rule: the same tiny screen extent, the polyline pointing at the eye. From a
+    // depth equal to its own length its bins span more depth than the split tolerates for one
+    // Jacobian: full detail; from 1 000 lengths away the screen rule decides again
+    let (e0, e16) = (m.edge(0), m.edge(SIZE_BINS as usize));
+    let along = sub3f(e16, e0);
+    let len = (along[0] * along[0] + along[1] * along[1] + along[2] * along[2]).sqrt();
+    let fwd = [along[0] / len, along[1] / len, along[2] / len];
+    let eye_at = |k: f32| [e0[0] - k * len * fwd[0], e0[1] - k * len * fwd[1], e0[2] - k * len * fwd[2]];
+    let deep = draw(1.0e-9, 2.0, Some((eye_at(1.0), fwd)));
+    assert_eq!(deep, full, "{name}: a polyline as deep as it is far keeps every packet");
+    let shallow = draw(1.0e-9, 2.0, Some((eye_at(1000.0), fwd)));
+    assert_eq!(shallow, far, "{name}: a polyline a thousandth as deep as far groups by the screen rule");
+    // in between, 3 lengths away: a cap of 4 bins per chord (a bin spans 1/16 of a length, the
+    // split tolerates 0.3 of one: 4/16 ≤ 0.3 < 8/16)
+    let mid = draw(1.0e-9, 2.0, Some((eye_at(3.0), fwd)));
+    assert!(mid.len() > far.len() && mid.len() < full.len(), "{name}: a capped group ({} packets between {} and {})", mid.len(), far.len(), full.len());
+    assert!((flux(&mid) / flux(&full) - 1.0).abs() < 1e-4, "{name}: the capped groups keep the flux");
   }
 }
 
@@ -4293,6 +4412,295 @@ fn spiral_image(omega: f64, half: f32, px: u32) -> alloc::vec::Vec<f32> {
     [axis[0] as f32, axis[1] as f32, axis[2] as f32],
   ];
   tier_image(&host, &ds.frame, half, px, rot)
+}
+
+/// The level of detail keeps the drawn light ([`PYR_LOD`]): the spiral jet's tiers drawn
+/// top-down at an extent where every polyline is pixels long (full detail either way) and at
+/// one where the polylines are below a pixel (chord groups of the whole polyline, one time
+/// piece) carry the same total optical depth with the knob at 2 px as at 0, within the dither.
+/// (2026-10-16: the 50 000 km lab lost 29 % of the light with groups; the packets kept it.)
+/// One EWA capsule keeps its flux whatever its chord's length on screen: the sum over the
+/// pyramid of a unit-flux packet (exposure 1, a metre per pixel) is the same for a chord of
+/// 0.05, 0.2, 1, 3 and 10 px at every lateral width and sub-pixel phase, closed at both ends or
+/// tiled as two chords joined by an open end (an open end is half of a tiling: its ramp is
+/// sampled at the texel centres of `[0, 1)` and only the neighbour's samples complete the sum,
+/// so a single open chord alone is 7 % off at 3 px by construction; and it integrates the
+/// half-line, so the tiled chords carry the real chords' along-axis width of
+/// [`CHORD_VAR_FACTOR`] half-chords² and `sigma` is their lateral width: with an along-axis σ
+/// at or above the chord the tail past the pair's far closed end is drawn, 8 %, the known
+/// limit of the tiling at a polyline's last chords). Each packet's `rho` has mean 1 (the [`Packet::rho`]
+/// contract) and the tiled pair's density is continuous through the joint. 2026-10-16: the
+/// closed chord's `expm1` branch overflowed past u₀ ≈ 0.7 at 10 px and drew 0.75 of its flux.
+#[test]
+fn capsule_keeps_its_flux_at_every_length() {
+  let px = 64u32;
+  let layout = PyramidLayout::new(px, px);
+  // orthographic, a metre per pixel, the frame centred on the origin
+  let rot = [[1.0f32, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+  let mvp = ortho_rot_mvp(px as f32 * 0.5, rot);
+  let inv_unit = 1.0e6f32;
+  let total = |pyr: &[u32]| -> f64 {
+    let mut t = 0.0f64;
+    for (l, &(off, w, h)) in layout.levels.iter().enumerate() {
+      let area = (1u64 << (2 * l)) as f64;
+      for i in 0..(w * h) as usize {
+        t += pyr[off as usize + i * PYRAMID_TEXEL_WORDS as usize] as f64 * area;
+      }
+    }
+    t / inv_unit as f64
+  };
+  let mut worst = 0.0f64;
+  for sigma in [0.1f32, 0.3, 1.0, 3.0] {
+    for tiled in [false, true] {
+      for len in [0.05f32, 0.2, 1.0, 3.0, 10.0] {
+        for phase in [0.0f32, 0.37, 0.5] {
+          // the ramp 1.2 → 0.8 over the whole chord; tiled, each half carries its share of the
+          // unit flux (0.55 and 0.45) and continues the ramp through the open joint
+          let whole = if tiled { 2.0 * len } else { len };
+          let parts: Vec<Packet> = if tiled {
+            // along the chord the real packets' Gaussian: CHORD_VAR_FACTOR half-chords²
+            let along = CHORD_VAR_FACTOR * 0.25 * len * len;
+            alloc::vec![
+              Packet {
+                mean: [-0.5 * whole + phase, 0.5 + phase * 0.5, 0.0],
+                cov: [along, 0.0, 0.0, sigma * sigma, 0.0, sigma * sigma],
+                seg: [len, 0.0, 0.0],
+                flux: 0.55,
+                open: [false, true],
+                rho: [1.2 / 1.1, 1.0 / 1.1],
+                seg_t: [0.0; 3],
+              },
+              Packet {
+                mean: [phase, 0.5 + phase * 0.5, 0.0],
+                cov: [along, 0.0, 0.0, sigma * sigma, 0.0, sigma * sigma],
+                seg: [len, 0.0, 0.0],
+                flux: 0.45,
+                open: [true, false],
+                rho: [1.0 / 0.9, 0.8 / 0.9],
+                seg_t: [0.0; 3],
+              },
+            ]
+          } else {
+            alloc::vec![Packet {
+              mean: [-0.5 * whole + phase, 0.5 + phase * 0.5, 0.0],
+              cov: [sigma * sigma, 0.0, 0.0, sigma * sigma, 0.0, sigma * sigma],
+              seg: [len, 0.0, 0.0],
+              flux: 1.0,
+              open: [false, false],
+              rho: [1.2, 0.8],
+              seg_t: [0.0; 3],
+            }]
+          };
+          let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+          pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+          for p in &parts {
+            let Some(sp) = project_packet(p, 1.0, &mvp, px, px, [0.0, 0.0, 1e9]) else {
+              panic!("len {len} sigma {sigma}: not projected");
+            };
+            splat_scatter(&sp, [1.0, 1.0, 1.0], &layout, inv_unit, &mut pyr);
+          }
+          let t = total(&pyr);
+          std::println!(
+            "[capsule flux] sigma {sigma} px, len {len} px, tiled {tiled}, phase {phase}: drawn {t:.4} of 1"
+          );
+          worst = worst.max((t - 1.0).abs());
+        }
+      }
+    }
+  }
+  assert!(worst < 0.03, "a capsule drew {:.1} % off its flux", 100.0 * worst);
+}
+
+fn add3f_(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+  [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+#[test]
+fn lod_keeps_the_drawn_light() {
+  let (r0, v0) = comet_state();
+  let axis = unit(scale(r0, -1.0));
+  let e1 = unit(cross64(axis, [0.0, 0.0, 1.0]));
+  let e2 = cross64(axis, e1);
+  let omega = 2.0 * core::f64::consts::PI / (12.4 * 3600.0);
+  let jet_at = move |t: f64| {
+    let (r, v) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, t);
+    let h = 0.5 * omega * t;
+    Some(JetState {
+      t_s: t,
+      r_m: r,
+      v_ms: v,
+      rot: [(axis[0] * h.sin()) as f32, (axis[1] * h.sin()) as f32, (axis[2] * h.sin()) as f32, h.cos() as f32],
+      site_normal: axis,
+      spin: Some([axis[0], axis[1], axis[2], omega]),
+      site_offset_m: [0.0; 3],
+    })
+  };
+  let cfg = DustEmitConfig {
+    q_dust_kgs: 1e-3,
+    ttl_s: 2.0 * 86400.0,
+    // a wide size range: the polylines are long, so the level of detail has bins to group
+    dist: SizeDistribution { s_min_um: 2.0, s_max_um: 200.0, q: SIZE_POWER_Q },
+    diameter_um: 100.0,
+    density_gcm3: 0.5,
+    beta_ref: 1e-3,
+    albedo: 0.0,
+    v_mean: 2.0,
+    v_std: 0.2,
+    jet_dir: [e1[0] as f32, e1[1] as f32, e1[2] as f32],
+    aperture_rad: 0.05,
+    seed: 7,
+  };
+  let host = run_ticks([2.0 * 86400.0; 8], &jet_at, &cfg);
+  let ds = host.draw_state().unwrap();
+  let rot = [
+    [e1[0] as f32, e1[1] as f32, e1[2] as f32],
+    [e2[0] as f32, e2[1] as f32, e2[2] as f32],
+    [axis[0] as f32, axis[1] as f32, axis[2] as f32],
+  ];
+  let (render, moments) = tier_packets(&host, &ds.frame);
+  let px = 256u32;
+  let layout = PyramidLayout::new(px, px);
+  // the total optical depth of a pyramid: every level's counts times its texel area (a ratio
+  // between two draws at one unit)
+  let total = |pyr: &[u32]| -> f64 {
+    let mut t = 0.0f64;
+    for (l, &(off, w, h)) in layout.levels.iter().enumerate() {
+      let area = (1u64 << (2 * l)) as f64;
+      for i in 0..(w * h) as usize {
+        t += pyr[off as usize + i * PYRAMID_TEXEL_WORDS as usize] as f64 * area;
+      }
+    }
+    t
+  };
+  let draw_scaled = |half: f32, lod: f32, unit_scale: f32| -> (f64, u32) {
+    let fresh = || {
+      let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+      pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+      pyr[PYR_LOD as usize] = lod.to_bits();
+      pyr
+    };
+    let pc = DustSplatPushConstants {
+      moments: 0,
+      render: 0,
+      pyramid: 0,
+      live_count: render.len() as u32,
+      flags: 0,
+      exposure: 1.0,
+      inv_unit: 1.0,
+      color: pack_color([1.0, 1.0, 1.0, 1.0]),
+      albedo: 0.0,
+      mvp: ortho_rot_mvp(half, rot),
+      eye_local: [rot[2][0] * 1e9, rot[2][1] * 1e9, rot[2][2] * 1e9, 0.0],
+    };
+    // the fixed-point unit from the brightest packet, as the host does after a readback (the
+    // same unit for both knob values: from the knob-off probe)
+    let mut probe = fresh();
+    probe[PYR_LOD as usize] = 0;
+    splat_tier(&moments, &render, &pc, &Default::default(), 0, &layout, &mut probe);
+    let tau_max = f32::from_bits(probe[PYR_TAU_MAX as usize]).max(1e-30);
+    let pc = DustSplatPushConstants { inv_unit: unit_scale / (tau_max * WHITE_TILE_UNIT_REL), ..pc };
+    let mut pyr = fresh();
+    splat_tier(&moments, &render, &pc, &Default::default(), 0, &layout, &mut pyr);
+    (total(&pyr), pyr[PYR_LEVEL_MASK as usize])
+  };
+  let draw = |half: f32, lod: f32| draw_scaled(half, lod, 1.0);
+  // the dither regime: the same frames at a unit 100× finer (counts per packet in the tens, not
+  // the tenths): a ratio that moves with the unit is the rounding's, one that stays is the τ's
+  for (name, half) in [("far", 4.0e6f32), ("tiny", 2.0e7f32)] {
+    let (t0, _) = draw_scaled(half, 0.0, 100.0);
+    let (t2, _) = draw_scaled(half, 2.0, 100.0);
+    std::println!("[lod light] {name} at a 100x finer unit: total {t0:.4e} at lod 0, {t2:.4e} at lod 2, ratio {:.4}", t2 / t0);
+  }
+  let mut worst = (0.0f64, "");
+  for (name, half) in [("near", 2.0e5f32), ("far", 4.0e6f32), ("tiny", 2.0e7f32)] {
+    let (t0, m0) = draw(half, 0.0);
+    let (t2, m2) = draw(half, 2.0);
+    std::println!("[lod light] {name} half {half:e} m: total {t0:.4e} (levels {m0:#b}) at lod 0, {t2:.4e} (levels {m2:#b}) at lod 2, ratio {:.4}", t2 / t0);
+    assert!(t0 > 0.0, "{name}: nothing drawn");
+    let dev = (t2 / t0 - 1.0).abs();
+    if dev > worst.0 {
+      worst = (dev, name);
+    }
+  }
+  // the clusters whose drawn light moves most in the two-pixel view, drawn alone, their packets
+  if worst.0 >= 0.03 {
+    let half = 2.0e7f32;
+    let mvp = ortho_rot_mvp(half, rot);
+    let base_pc = DustSplatPushConstants {
+      moments: 0,
+      render: 0,
+      pyramid: 0,
+      live_count: render.len() as u32,
+      flags: 0,
+      exposure: 1.0,
+      inv_unit: 1.0,
+      color: pack_color([1.0, 1.0, 1.0, 1.0]),
+      albedo: 0.0,
+      mvp,
+      eye_local: [rot[2][0] * 1e9, rot[2][1] * 1e9, rot[2][2] * 1e9, 0.0],
+    };
+    let inv_unit = {
+      let mut probe = alloc::vec![0u32; layout.total_words as usize];
+      probe[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+      splat_tier(&moments, &render, &base_pc, &Default::default(), 0, &layout, &mut probe);
+      1.0 / (f32::from_bits(probe[PYR_TAU_MAX as usize]).max(1e-30) * WHITE_TILE_UNIT_REL)
+    };
+    let draw_one = |i: usize, lod: f32| -> Vec<u32> {
+      let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+      pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+      pyr[PYR_LOD as usize] = lod.to_bits();
+      let pc = DustSplatPushConstants { inv_unit, ..base_pc };
+      splat_tier_range(&moments, &render, &pc, &Default::default(), 0, &layout, &mut pyr, i..i + 1);
+      pyr
+    };
+    let n = render.len().min(400);
+    let mut ratios: Vec<(f64, usize, f64, f64)> = (0..n)
+      .map(|i| {
+        let (a, b) = (total(&draw_one(i, 0.0)), total(&draw_one(i, 2.0)));
+        ((b / a.max(1e-9)), i, a, b)
+      })
+      .collect();
+    ratios.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap());
+    // the worst cluster's texels (level 0) at both knob values
+    {
+      let i = ratios[0].1;
+      for lod in [0.0f32, 2.0] {
+        let pyr = draw_one(i, lod);
+        let (off, w, h) = layout.levels[0];
+        let mut cells: Vec<String> = Vec::new();
+        for y in 0..h {
+          for x in 0..w {
+            let c = pyr[off as usize + ((y * w + x) * PYRAMID_TEXEL_WORDS) as usize];
+            if c > 0 {
+              cells.push(format!("({x},{y}):{c}"));
+            }
+          }
+        }
+        std::println!("[lod light] cluster {i} lod {lod} level-0 texels: {}", cells.join(" "));
+      }
+    }
+    let proj = |q: [f32; 3]| project_point(q, &mvp, px, px);
+    for &(r, i, a, b) in ratios.iter().take(3).chain(ratios.iter().rev().take(2)) {
+      let m = &moments[i];
+      let pred = streak_pred(&render, i).map(|k| &moments[k]);
+      let seg = pred.map_or([0.0; 3], |p| sub3f(p.mean(), m.mean()));
+      std::println!("[lod light] cluster {i}: lod0 {a:.3e} lod2 {b:.3e} ratio {r:.3}; age {:.0} s, pred {}, merged {}, extent {:?} px, flux {:.3e}",
+        m.age(), pred.is_some(), polyline_merged(m, &mvp, px, px), polyline_extent_px(m, &proj), m.flux());
+      for lod in [0.0f32, 2.0] {
+        set_lod_px_active(lod);
+        let packets = subpackets_cells(m, seg, pred, false, false, Some(&proj));
+        set_lod_px_active(0.0);
+        std::println!("  lod {lod}: {} packets, flux {:.3e}", packets.len(), packets.iter().map(|(q, _, _)| q.flux).sum::<f32>());
+        for (q, _, _) in packets.iter().take(4) {
+          let (mu0, mu1) = (proj(q.mean), proj(add3f_(q.mean, q.seg)));
+          std::println!("    flux {:.3e} seg {:?}→{:?} px |seg| {:.2e} m open {:?} rho {:?} tr {:.2e} segT {:.2e}",
+            q.flux, mu0, mu1, (q.seg[0] * q.seg[0] + q.seg[1] * q.seg[1] + q.seg[2] * q.seg[2]).sqrt(), q.open, q.rho,
+            q.cov[0] + q.cov[3] + q.cov[5], (q.seg_t[0] * q.seg_t[0] + q.seg_t[1] * q.seg_t[1] + q.seg_t[2] * q.seg_t[2]).sqrt());
+        }
+      }
+    }
+  }
+  assert!(worst.0 < 0.03, "{}: the level of detail changed the drawn light by {:.1} %", worst.1, 100.0 * worst.0);
 }
 
 /// A jet on a spinning nucleus draws a spiral through the v4 renderer: the ridge azimuth of the

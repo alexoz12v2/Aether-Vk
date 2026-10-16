@@ -810,7 +810,9 @@ float dust_texel_weight(DustScreenPacket P, vec2 x) {
 vec2 dust_bin_density_ends(float f0, float f1) {
     f0 = max(f0, 1e-6); f1 = max(f1, 1e-6);
     float s = f0 + f1;
-    return vec2(s / (2.0 * f0), s / (2.0 * f1));
+    // density ∝ 1/f, mean 1 over the chord (dust::bin_density_ends; the reciprocals until
+    // 2026-10-16 drew a chord group over a 10x factor range at 3x its flux)
+    return vec2(2.0 * f1 / s, 2.0 * f0 / s);
 }
 // the polyline's slow end bin is drawn as DUST_END_SUBBINS sub-bins (dust::DUST_END_SUBBINS,
 // dust::bin_subbins): there the chord's Gaussian and the mid-factor width reach past the slowest grain
@@ -1337,6 +1339,12 @@ bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposu
 }
 
 // Optical depth per px^2 of the capsule at pixel x (dust::capsule_tau)
+// exp(x) - 1 without the cancellation at small x (mirror of dust::expm1_f32: the same polynomial
+// and threshold on both sides)
+float dust_expm1(float x) {
+    return abs(x) < 1e-3 ? x * (1.0 + 0.5 * x * (1.0 + x / 3.0)) : exp(x) - 1.0;
+}
+
 float dust_capsule_tau(DustScreenPacket P, vec2 x) {
     float det = P.det;
     if (!(det > 0.0)) return 0.0;
@@ -1364,9 +1372,20 @@ float dust_capsule_tau(DustScreenPacket P, vec2 x) {
     if (P.rho.y == P.rho.x) {
         weight = P.rho.x * i0;
     } else {
-        float eStart = P.openStart ? 0.0 : exp(-0.5 * a * u0 * u0);
-        float eEnd = P.openEnd ? 0.0 : exp(-0.5 * a * (1.0 - u0) * (1.0 - u0));
-        float i1 = u0 * i0 + (eStart - eEnd) / a;
+        float i1;
+        if (!P.openStart && !P.openEnd) {
+            // both ends closed: the Gaussians' difference from expm1 where they are close (the
+            // cancellation at a << 1), the plain difference otherwise (dust::capsule_tau)
+            float z1 = -0.5 * a * u0 * u0;
+            float z2 = -0.5 * a * (1.0 - u0) * (1.0 - u0);
+            float dz = z2 - z1;
+            float diff = abs(dz) < 1.0 ? -exp(z1) * dust_expm1(dz) : exp(z1) - exp(z2);
+            i1 = u0 * i0 + diff / a;
+        } else {
+            float eStart = P.openStart ? 0.0 : exp(-0.5 * a * u0 * u0);
+            float eEnd = P.openEnd ? 0.0 : exp(-0.5 * a * (1.0 - u0) * (1.0 - u0));
+            i1 = u0 * i0 + (eStart - eEnd) / a;
+        }
         weight = max(P.rho.x * i0 + (P.rho.y - P.rho.x) * i1, 0.0);
     }
     return P.amp * exp(-0.5 * q) * weight;
